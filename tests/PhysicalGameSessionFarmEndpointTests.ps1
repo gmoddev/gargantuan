@@ -193,6 +193,71 @@ try {
 		Assert-FairnessEvidence -Path $FairnessPath -LocalRunId $Manifest.RunId
 	} 'native fairness evidence overflow marker'
 	Write-Output '[Qualification:FarmEndpoint] MOCK_TEST_OK'
+	# Both roles must reject paths the .NET copier can handle but the native
+	# package reader cannot, before publishing even an attempt or registry.
+	. (Join-Path $PSScriptRoot 'PhysicalFarmPackageTestFixture.ps1')
+	$NativePathCases = 0
+	foreach ($ProjectionRole in @('Server', 'Clients')) {
+		$ProjectionSource = Join-Path $Root ("PathEnvelope-$ProjectionRole")
+		$FixtureRole = if ($ProjectionRole -eq 'Server') { 'Server' } else { 'Player' }
+		Write-ProjectionTestEnvelope -Root $ProjectionSource -Role $FixtureRole
+		$ProjectionPin = (Get-FileHash -LiteralPath (Join-Path $ProjectionSource 'deployment-sha256.json')).Hash
+		$ProjectionPlan = Get-NativeRuntimePlan -LocalRoot $ProjectionSource -DeploymentSha256 $ProjectionPin `
+			-SourceCommit ('a' * 40) -LocalRole $ProjectionRole
+		$MaximumRelativeLength = ($ProjectionPlan.Files | ForEach-Object { $_.Path.Length } | Measure-Object -Maximum).Maximum
+		$ProjectionRun = '12345678-1234-4234-8234-123456789abc'
+		$ProjectionParent = Join-Path $Root ("PathRegistry-$ProjectionRole")
+		foreach ($AbsoluteLength in @(240, 241, 270)) {
+			$RuntimeSuffix = "$ProjectionRun.$ProjectionRole.runtime"
+			$RegistryLength = $AbsoluteLength - 1 - $MaximumRelativeLength - 1 - $RuntimeSuffix.Length
+			$RegistryLeafLength = $RegistryLength - $ProjectionParent.Length - 1
+			if ($RegistryLeafLength -lt 1 -or $RegistryLeafLength -gt 255) { throw 'native path fixture geometry invalid' }
+			$ProjectionRegistry = Join-Path $ProjectionParent ('r' * $RegistryLeafLength)
+			$ProjectionRuntime = Get-RuntimeProjectionPath -Registry $ProjectionRegistry -LocalRunId $ProjectionRun -LocalRole $ProjectionRole
+			$ActualMaximum = ($ProjectionPlan.Files | ForEach-Object {
+				(Join-Path $ProjectionRuntime $_.Path).Length
+			} | Measure-Object -Maximum).Maximum
+			if ($ActualMaximum -ne $AbsoluteLength) { throw 'native path boundary fixture differs' }
+			if ($AbsoluteLength -eq 240) {
+				# Exercise the actual seven-function AST extraction, without
+				# launching any of the copied harmless mock host bytes.
+				& (Join-Path $PSScriptRoot 'NewPhysicalGameSessionFarmProjection.ps1') `
+					-PackageRoot $ProjectionSource -RunRegistryRoot $ProjectionRegistry -RunId $ProjectionRun `
+					-Role $ProjectionRole -DeploymentSha256 $ProjectionPin -SourceCommit ('a' * 40) | Out-Null
+				$PreparedRuntime = Assert-PreparedRuntimeProjection -LocalRoot $ProjectionSource -Registry $ProjectionRegistry `
+					-LocalRunId $ProjectionRun -LocalRole $ProjectionRole -Plan $ProjectionPlan
+				if ($PreparedRuntime -cne $ProjectionRuntime) {
+					throw 'native boundary projection did not publish and validate'
+				}
+				$NativePathCases++
+			} else {
+				foreach ($Operation in @('New', 'Helper', 'Prepared', 'Content')) {
+					$PathRejected = $false
+					try {
+						switch ($Operation) {
+							'New' { New-RuntimeProjection -LocalRoot $ProjectionSource -Registry $ProjectionRegistry `
+								-LocalRunId $ProjectionRun -LocalRole $ProjectionRole -Plan $ProjectionPlan }
+							'Helper' { & (Join-Path $PSScriptRoot 'NewPhysicalGameSessionFarmProjection.ps1') `
+								-PackageRoot $ProjectionSource -RunRegistryRoot $ProjectionRegistry -RunId $ProjectionRun `
+								-Role $ProjectionRole -DeploymentSha256 $ProjectionPin -SourceCommit ('a' * 40) }
+							'Prepared' { Assert-PreparedRuntimeProjection -LocalRoot $ProjectionSource -Registry $ProjectionRegistry `
+								-LocalRunId $ProjectionRun -LocalRole $ProjectionRole -Plan $ProjectionPlan }
+							'Content' { Assert-RuntimeProjection -LocalRoot $ProjectionSource -RuntimeRoot $ProjectionRuntime -Plan $ProjectionPlan }
+						}
+					} catch {
+						if ($_.Exception.Message -cne 'runtime projection path exceeds native Windows 240-character bound') { throw }
+						$PathRejected = $true
+					}
+					if (-not $PathRejected) { throw "native path accepted by $Operation at $AbsoluteLength" }
+					$NativePathCases++
+				}
+				foreach ($Unpublished in @($ProjectionRegistry, $ProjectionRuntime, ($ProjectionRuntime + '.attempt'), ($ProjectionRuntime + '.json'))) {
+					if (Test-Path -LiteralPath $Unpublished) { throw 'long projection published state before rejection' }
+				}
+			}
+		}
+	}
+	Write-Output "[Qualification:FarmEndpoint] NATIVE_PATH_TEST_OK Cases=$NativePathCases"
 	& (Join-Path $PSScriptRoot 'NewPhysicalGameSessionFarmProjectionTests.ps1')
 } finally {
 	$ResolvedRoot = [IO.Path]::GetFullPath($Root)

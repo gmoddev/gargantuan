@@ -85,6 +85,29 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-04 second Local32 startup attribution: tooling `578edaa4` has all six
+original push/PR Windows, Linux and GNS jobs green. The prior failed run's
+six control secrets were separately retired with independently replayed
+cleanup evidence. Fresh Local run `f0c18bed-722e-4820-86f6-20be1e6f60c1`
+passes staged imports and capture configuration, then exits with native package
+integrity failure before readiness. Its closed runtime contains the same 58
+files and hashes as the passing startup diagnostic, but eight absolute asset
+paths are 270 characters rather than 229. The pinned executable lacks the
+Windows long-path opt-in. A startup-only native regression reproduces exit 3
+with identical bytes at 270 characters and exit 0 for the unchanged Server and
+Player from shorter roots. The exact syscall in the physical failure remains
+**NOT MEASURED**; the native catch reports generic integrity failure.
+
+The qualifier now rejects runtime member/ancestor paths beyond the native
+package builder's existing 240-character limit before publication and during
+prepared validation. Eighteen new boundary/role/helper regressions and the
+existing 23 projection cases pass locally. No native production, admission,
+F1 constant, transport policy, or installed-service change is made. Current
+correction CI, this fresh failed run's exact secret retirement, corrected
+Local32/Node32 provider qualification, and final acceptance remain required.
+Neither historical failure is relabeled PASS. **KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY; no 3M.**
+
 2026-10-04 hosted scheduling attribution: source `3e030710` Native PR
 `37173701281`, Windows job `111351799079`, passes 95 CTest cases but fails
 standalone command 3, FULL `upper` action 17 at 1892.3673 ms against 250 ms.

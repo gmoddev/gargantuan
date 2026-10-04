@@ -173,6 +173,15 @@ the endpoint launches that copy. Original envelopes and all eight manifest pins
 remain unchanged. Stale or partial projections fail closed and remain evidence;
 staging never deletes or retries them. Native package integrity remains enforced.
 
+Projection preparation and prepared-copy validation also enforce the native
+package builder's existing 240-character absolute-path limit for every runtime
+member and its directory ancestors. The .NET copier's long-path support is not
+evidence that the pinned native host can read those paths. Oversized paths are
+rejected before any registry, attempt marker, runtime copy, or receipt is
+published. Choose compact, fresh run/role registry names; retain full run
+identity and exact content hashes. Do not change Windows global long-path
+settings or native package contents to accommodate qualifier naming.
+
 The October 4 Local32 startup failure exposed the missing distinction. It is
 historical failed infrastructure evidence, not a production F1 measurement or a
 provider PASS. Projection preparation does not count as a physical run or

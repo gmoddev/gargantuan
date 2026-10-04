@@ -369,8 +369,22 @@ function Get-RuntimeProjectionPath {
 }
 
 function Assert-RuntimeProjection {
-	param([string]$LocalRoot, [string]$RuntimeRoot, [object]$Plan)
+	param([string]$LocalRoot, [string]$RuntimeRoot, [object]$Plan, [switch]$PathsOnly)
+	# Match PackageBuilder::ValidateStagingPaths, rather than .NET's broader
+	# long-path support: the pinned native host is not longPathAware.
+	$MaximumSupportedStagingPath = 240
+	$Members = @('game.package.json') + @($Plan.Files | ForEach-Object Path)
+	foreach ($Member in $Members) {
+		$Current = [IO.Path]::GetFullPath((Join-Path $RuntimeRoot $Member))
+		while ($Current) {
+			if ($Current.Length -gt $MaximumSupportedStagingPath) {
+				throw 'runtime projection path exceeds native Windows 240-character bound'
+			}
+			$Current = [IO.Path]::GetDirectoryName($Current)
+		}
+	}
 	Assert-ProjectionPlainPath -Path $RuntimeRoot
+	if ($PathsOnly) { return }
 	if (-not (Test-Path -LiteralPath $RuntimeRoot -PathType Container)) { throw 'runtime projection directory absent' }
 	$Expected = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
 	$Directories = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -401,6 +415,7 @@ function New-RuntimeProjection {
 	param([string]$LocalRoot, [string]$Registry, [string]$LocalRunId,
 		[ValidateSet('Server', 'Clients')][string]$LocalRole, [object]$Plan)
 	$RuntimeRoot = Get-RuntimeProjectionPath -Registry $Registry -LocalRunId $LocalRunId -LocalRole $LocalRole
+	Assert-RuntimeProjection -LocalRoot $LocalRoot -RuntimeRoot $RuntimeRoot -Plan $Plan -PathsOnly
 	$CurrentPlan = Get-NativeRuntimePlan -LocalRoot $LocalRoot -DeploymentSha256 $Plan.DeploymentSha256 `
 		-SourceCommit $Plan.SourceCommit -LocalRole $LocalRole
 	if ((ConvertTo-Json -InputObject $CurrentPlan.Files -Depth 8 -Compress) -cne
@@ -450,6 +465,7 @@ function Assert-PreparedRuntimeProjection {
 	param([string]$LocalRoot, [string]$Registry, [string]$LocalRunId,
 		[ValidateSet('Server', 'Clients')][string]$LocalRole, [object]$Plan)
 	$RuntimeRoot = Get-RuntimeProjectionPath -Registry $Registry -LocalRunId $LocalRunId -LocalRole $LocalRole
+	Assert-RuntimeProjection -LocalRoot $LocalRoot -RuntimeRoot $RuntimeRoot -Plan $Plan -PathsOnly
 	$ReceiptPath = $RuntimeRoot + '.json'
 	$AttemptPath = $RuntimeRoot + '.attempt'
 	Assert-ProjectionPlainPath -Path $AttemptPath

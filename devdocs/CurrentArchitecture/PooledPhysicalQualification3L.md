@@ -6,6 +6,47 @@ last_verified: 2026-10-04
 
 # Foundation 3L pooled physical qualification attempt
 
+## Local32 native path-length startup failure (2026-10-04)
+
+Fresh run `f0c18bed-722e-4820-86f6-20be1e6f60c1`, coordinator
+`8400bb71-e929-48b6-93c9-c443467dc0ce`, uses tooling `578edaa4` after
+its six original hosted jobs pass and the earlier `cf89463c` run's six secrets
+are independently confirmed retired. Both staged imports and strict capture
+configuration pass. The worker Server exits 3 before readiness, reporting native
+package integrity failure. Its failed host/role terminals also report child
+reaping false; missing worker capture evidence cannot close the run. No Local
+provider service, recovery, resource, or readiness PASS is claimed.
+
+The runtime projection has exactly the same 58 file paths, sizes and hashes as
+the passing NativeA startup diagnostic below. However, its root is 173 characters
+and eight asset paths reach 270 characters, versus 132/229 in that diagnostic.
+The unchanged Server executable has no `longPathAware` application manifest;
+native package validation uses ordinary unprefixed Windows file APIs.
+
+A separate startup-only regression preserves the package and executable hashes
+and reproduces the exact integrity error/exit 3 at root/member lengths 173/270.
+The same Server bytes at 134/231 and unchanged Player at 136/233 exit 0. All
+three owned children are reaped; original envelopes and runtime inventories are
+unchanged. No bind, connect, capture or farm workload occurs. Receipt:
+`C:\Users\aiden\.codex\artifacts\farm32-f0-path-native-regression-v2\result.json`,
+SHA-256 `c5097a7d850ea5e914d1e7289d8186e3fe9871b2c6c4197b80084f53915c9963`.
+The physical failure's precise syscall/exception is **NOT MEASURED** because the
+native catch reports only integrity failure. The controlled native comparison
+establishes the path-length cause without changing native package validation.
+
+Projection now checks every full member and directory-ancestor path against
+the native package builder's existing 240-character limit before publishing any
+copy/attempt/receipt and again on prepared validation. Eighteen new tests cover
+both roles, the actual AST-extracted helper, 240 acceptance, 241/270 denial, and
+absence of published state after denial. The existing 23 projection cases pass.
+Use shorter fresh run/role registry names for the next candidate; required
+current-source CI and this failed run's exact secret/idle cleanup remain
+separate gates before a fresh provider launch. Historical receipts are preserved.
+
+Retained F1 physical Phase 1 remains PASS. KI-006 remains OPEN; Foundation 3L
+remains B — PARTIALLY READY. Local32, real-TLS Node32 and the final acceptance
+sweep remain **NOT MEASURED** for a qualified completed provider campaign.
+
 ## Local32 package-envelope startup failure (2026-10-04)
 
 The corrected source separates the deployment envelope from a fresh, exact
