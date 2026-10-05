@@ -73,6 +73,24 @@ class MockTransport:
 
 
 class OuterCampaignTests(unittest.TestCase):
+    def test_listener_failure_and_unproven_cleanup_are_both_retained(self):
+        import tempfile
+        Process = mock.Mock()
+        Process.poll.return_value = 1
+        Transport = mock.Mock()
+        Transport.RemoteStart.return_value = Process
+        Cleanup = RuntimeError("[Qualification:FarmOuter] cleanup unproven: missing host terminal")
+        with tempfile.TemporaryDirectory() as Directory, \
+                mock.patch.object(Outer, "ControlProbe"), \
+                mock.patch.object(Outer, "ReapLaunch", side_effect=Cleanup) as Reap:
+            with self.assertRaisesRegex(RuntimeError, "launch failed: TimeoutError.*listener missing.*cleanup unproven") as Raised:
+                Outer.LaunchPrepared(Transport, {"SERVER": r"C:\Sandbox\Codex\PublicMockStage"},
+                    {"Host": {"ListeningPath": r"C:\Sandbox\Codex\PublicMockListening.json"}},
+                    {"RunId": "12345678-1234-4234-8234-123456789abc"}, Path(Directory))
+        self.assertIsInstance(Raised.exception.__cause__, TimeoutError)
+        Reap.assert_called_once()
+        Transport.Remote.assert_not_called()
+
     def test_runtime_projection_fixed_inputs_and_failure_stops_before_client(self):
         import tempfile
         with tempfile.TemporaryDirectory() as Directory:

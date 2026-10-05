@@ -6,6 +6,33 @@ last_verified: 2026-10-04
 
 # Foundation 3L pooled physical qualification attempt
 
+## Local attempt stopped before the coordinator listener (2026-10-05)
+
+Fresh Local run `78b900ef-4784-4cc2-8704-ce5c37edf332`, coordinator
+`fed720f9-703f-4cdd-ba8f-0517f0696092`, consumed execution tooling
+`eaf956be2873855b69eb6a9672dc0beb23f7c10f` and unchanged native `9ae8f68c2`.
+Both staged actual-import and configured checks passed. The worker host stdout
+and stderr files are empty; no host terminal, listening marker, control barrier
+or role launch was recorded. The original wrapper stderr was discarded and is
+**NOT MEASURED**. The original launch summary reports cleanup unproven because
+the host terminal is absent; it does not establish a live descendant or child
+reaping. No provider workload or service metric was measured.
+
+A separate harmless actual-worker `StartOwned` witness reproduced
+`ModuleNotFoundError: dependency`. The fixed helper directory has only the
+adapter and ACL module; the run stage already has the verified dependency,
+lock and 13 pinned Coordinator exports. The bounded adapter correction selects
+those exact stage-owned sources, retains a startup diagnostic without inventing
+reap truth, and reports the original launch error alongside cleanup refusal.
+New source and original hosted CI must qualify before another physical attempt.
+
+The post-failure read-only installed observation passed all eight inventory
+checks and reported no task processes or listeners, with native and Packet
+Monitor capture idle. That observation is not secret-retirement evidence.
+Current failed-run control retirement remains separate and pending. All original
+failure receipts are preserved; Local24, real-TLS Node26 and final54 acceptance
+remain unmeasured. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
+
 ## Local32 correction qualified; client resource preflight blocked (2026-10-04)
 
 Execution-changing tooling `eaf956be2873855b69eb6a9672dc0beb23f7c10f`

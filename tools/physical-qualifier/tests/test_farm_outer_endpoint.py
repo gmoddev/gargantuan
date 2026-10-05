@@ -9,9 +9,11 @@ from contextlib import redirect_stdout
 from pathlib import Path
 import sys
 import subprocess
+import shutil
 import tempfile
 import threading
 import time
+import types
 import unittest
 import uuid
 from unittest import mock
@@ -31,8 +33,30 @@ def Hash(File):
     return hashlib.sha256(File.read_bytes()).hexdigest()
 
 
+def StageCoordinator(Stage):
+    """Use the production lock and exact exports, even in harmless child fixtures."""
+    for Name in ("dependency.py", "upstream.lock.json"):
+        shutil.copyfile(ROOT / Name, Stage / Name)
+    Lock = json.loads((ROOT / "upstream.lock.json").read_text())
+    for Name, Expected in Lock["Files"].items():
+        Source = ROOT / ".agent-coordinator" / Name
+        if Hash(Source) != Expected:
+            raise ValueError("test fixture pinned Coordinator export differs: " + Name)
+        Destination = Stage / ".agent-coordinator" / Name
+        Destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(Source, Destination)
+
+
 class FarmOuterEndpointTests(unittest.TestCase):
     def setUp(self):
+        Names = [Name for Name in sys.modules if Name.startswith("_farm32_stage_agent_coordinator")]
+        Saved = {Name: sys.modules.pop(Name) for Name in Names}
+        def Restore():
+            for Name in list(sys.modules):
+                if Name.startswith("_farm32_stage_agent_coordinator"):
+                    sys.modules.pop(Name)
+            sys.modules.update(Saved)
+        self.addCleanup(Restore)
         if os.name == "nt":
             Source = os.environ.get("GARGANTUAN_TEST_OWNED_SOURCE")
             if Source:
@@ -44,7 +68,8 @@ class FarmOuterEndpointTests(unittest.TestCase):
                 sys.modules[Spec.name] = Package
                 Spec.loader.exec_module(Package)
                 Item = importlib.import_module("_owned_test_snapshot.owned_process")
-                Patch = mock.patch.object(Endpoint, "StartOwned", side_effect=Item.OwnedProcess.Start)
+                Patch = mock.patch.object(Endpoint, "StartOwned",
+                                          side_effect=lambda Args, Directory, Index: Item.OwnedProcess.Start(Args, Directory))
                 Patch.start()
                 self.addCleanup(Patch.stop)
         self.Temporary = tempfile.TemporaryDirectory()
@@ -58,9 +83,11 @@ class FarmOuterEndpointTests(unittest.TestCase):
             "Format": "GargantuanFarm32Campaign", "Version": 1, "Role": "CLIENT",
             "RunId": self.RunId,
         })
+        StageCoordinator(self.Root)
         self.Index = Save(self.Root / "index.json", {"Format": "GargantuanFarm32StageIndex",
             "Version": 1, "Files": [{"Name": File.name, "Sha256": Hash(File)}
-                                  for File in (self.Runner, self.Ticket)]})
+                                  for File in (self.Runner, self.Ticket, self.Root / "dependency.py",
+                                               self.Root / "upstream.lock.json")]})
         self.Launch = Save(self.Root / "launch.json", {
             "Format": "GargantuanFarm32FixedLaunch", "Version": 1, "Action": "role",
             "RunnerName": self.Runner.name, "RunnerSha256": Hash(self.Runner),
@@ -217,15 +244,16 @@ class FarmOuterEndpointTests(unittest.TestCase):
         self.assertEqual(Terminal["ChildExitCode"], 1)
 
     def test_unexported_owned_primitive_cannot_launch(self):
-        with mock.patch("dependency.GetRoot", return_value=self.Root), \
-                mock.patch.object(Endpoint, "ReadJson", return_value={"Files": {}}):
-            # Call the real source function, even when other tests inject the fixture.
-            Module = importlib.util.spec_from_file_location("_outer_unexported", ROOT / "farm_outer_endpoint.py")
-            Instance = importlib.util.module_from_spec(Module)
-            Module.loader.exec_module(Instance)
-            with mock.patch.object(Instance, "ReadJson", return_value={"Files": {}}):
-                with self.assertRaisesRegex(ValueError, "source export is not pinned"):
-                    Instance.StartOwned(["unused"], self.Root)
+        Dependency = self.Root / "dependency.py"
+        Dependency.write_text("from pathlib import Path\ndef GetRoot():\n"
+                              "    return Path(__file__).parent / '.agent-coordinator'\n", encoding="utf-8")
+        Lock = Save(self.Root / "upstream.lock.json", {"Files": {}})
+        Index = {"Files": [{"Name": File.name, "Sha256": Hash(File)} for File in (Dependency, Lock)]}
+        Module = importlib.util.spec_from_file_location("_outer_unexported", ROOT / "farm_outer_endpoint.py")
+        Instance = importlib.util.module_from_spec(Module)
+        Module.loader.exec_module(Instance)
+        with self.assertRaisesRegex(ValueError, "source export is not pinned"):
+            Instance.StartOwned(["unused"], self.Root, Index)
 
     def test_owned_output_is_bounded_while_continuing_to_drain(self):
         Output = io.BytesIO()
@@ -274,8 +302,8 @@ class FarmOuterEndpointTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "Windows persistent Job")
     def test_cleanup_query_failure_still_preserves_false_terminal(self):
         Start = Endpoint.StartOwned.side_effect if isinstance(Endpoint.StartOwned, mock.Mock) else Endpoint.StartOwned
-        def Denied(Args, Directory):
-            Process, Tree = Start(Args, Directory)
+        def Denied(Args, Directory, Index):
+            Process, Tree = Start(Args, Directory, Index)
             Close = Tree.Close
             def Fail():
                 Close()
@@ -300,8 +328,8 @@ class FarmOuterEndpointTests(unittest.TestCase):
         Launch["RunnerSha256"] = Hash(self.Runner)
         Save(self.Launch, Launch)
         Start = Endpoint.StartOwned.side_effect if isinstance(Endpoint.StartOwned, mock.Mock) else Endpoint.StartOwned
-        def Exhausted(Args, Directory):
-            Process, Tree = Start(Args, Directory)
+        def Exhausted(Args, Directory, Index):
+            Process, Tree = Start(Args, Directory, Index)
             Close = Tree.Close
             def Fail():
                 Close()  # Actual harmless children are reaped before the supplied proof failure.
@@ -319,6 +347,114 @@ class FarmOuterEndpointTests(unittest.TestCase):
         Diagnostic = json.loads((self.Root / "role.terminal-diagnostic.json").read_text())
         self.assertIn("timed out", Diagnostic["CleanupError"])
         self.assertLessEqual(len(Diagnostic["CleanupError"]), 512)
+
+    def test_startup_failure_preserves_bounded_stage_diagnostic_without_false_terminal(self):
+        with mock.patch.object(Endpoint, "os", types.SimpleNamespace(name="nt")), \
+                mock.patch.object(Endpoint.subprocess, "CREATE_NO_WINDOW", 0, create=True), \
+                mock.patch.object(Endpoint, "StartOwned", side_effect=ModuleNotFoundError("dependency " + "x" * 2000)):
+            with self.assertRaises(ModuleNotFoundError):
+                Endpoint.Run(self.Root, self.Index, self.Launch, "role")
+        Row = json.loads((self.Root / "role.terminal-diagnostic.json").read_text())
+        self.assertEqual(Row["Phase"], "OWNED_CHILD_STARTUP")
+        self.assertEqual(Row["ErrorType"], "ModuleNotFoundError")
+        self.assertIsNone(Row["ChildPid"])
+        self.assertFalse(Row["ChildTreeReaped"])
+        self.assertLessEqual(len(Row["Error"]), 512)
+        self.assertFalse((self.Root / "role.terminal.json").exists())
+        self.assertEqual((self.Root / "role.stdout.log").stat().st_size, 0)
+
+    def test_startup_drain_error_is_not_masked_by_cleanup_failure(self):
+        Process = mock.Mock(pid=1234)
+        Process.stdin.close.side_effect = OSError("stdin release failed")
+        Process.stdout.closed = Process.stderr.closed = False
+        Tree = mock.Mock()
+        Tree.Close.side_effect = OSError("supplied member query failed")
+        with mock.patch.object(Endpoint, "os", types.SimpleNamespace(name="nt")), \
+                mock.patch.object(Endpoint.subprocess, "CREATE_NO_WINDOW", 0, create=True), \
+                mock.patch.object(Endpoint, "StartOwned", return_value=(Process, Tree)):
+            with self.assertRaisesRegex(OSError, "stdin release failed"):
+                Endpoint.Run(self.Root, self.Index, self.Launch, "role")
+        Row = json.loads((self.Root / "role.terminal-diagnostic.json").read_text())
+        self.assertEqual(Row["ChildPid"], 1234)
+        self.assertFalse(Row["ChildTreeReaped"])
+        self.assertIn("supplied member query failed", Row["CleanupError"])
+        Process.stdout.close.assert_called_once()
+        Process.stderr.close.assert_called_once()
+
+
+class StagedOwnedDependencyTests(unittest.TestCase):
+    """Exercise the actual two-file helper layout, not an ambient dependency import."""
+    def setUp(self):
+        self.Temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.Temporary.cleanup)
+        Base = Path(self.Temporary.name).resolve()
+        self.Stage, self.Helper = Base / "stage", Base / "helper"
+        Endpoint.Prepare(self.Stage)
+        self.Helper.mkdir()
+        for Name in ("farm_outer_endpoint.py", "private_ticket_acl.py"):
+            shutil.copyfile(ROOT / Name, self.Helper / Name)
+        StageCoordinator(self.Stage)
+        self.Runner = self.Stage / "farm_campaign_runner.py"
+        self.Runner.write_text("print('[Qualification:Test] harmless host completed')\n", encoding="utf-8")
+        self.Input = Save(self.Stage / "host-config.json", {"Format": "GargantuanFarm32Campaign", "Version": 1,
+                                                            "RunId": str(uuid.uuid4())})
+        self.Index = Save(self.Stage / "stage-index.json", {"Format": "GargantuanFarm32StageIndex", "Version": 1,
+            "Files": [{"Name": File.name, "Sha256": Hash(File)} for File in
+                      (self.Runner, self.Input, self.Stage / "dependency.py", self.Stage / "upstream.lock.json")]})
+        self.Launch = Save(self.Stage / "host-launch.json", {"Format": "GargantuanFarm32FixedLaunch", "Version": 1,
+            "Action": "host", "RunnerName": self.Runner.name, "RunnerSha256": Hash(self.Runner),
+            "InputName": self.Input.name, "InputSha256": Hash(self.Input)})
+        # Each endpoint invocation owns one stage namespace; remove supplied caches after tests.
+        Names = [Name for Name in sys.modules if Name.startswith("_farm32_stage_agent_coordinator")]
+        self.Saved = {Name: sys.modules.pop(Name) for Name in Names}
+        self.addCleanup(self.RestoreModules)
+        Spec = importlib.util.spec_from_file_location("_two_file_outer", self.Helper / "farm_outer_endpoint.py")
+        self.Endpoint = importlib.util.module_from_spec(Spec)
+        Spec.loader.exec_module(self.Endpoint)
+
+    def RestoreModules(self):
+        for Name in list(sys.modules):
+            if Name.startswith("_farm32_stage_agent_coordinator"):
+                sys.modules.pop(Name)
+        sys.modules.update(self.Saved)
+
+    @unittest.skipUnless(os.name == "nt", "Windows actual owned Job")
+    def test_actual_two_file_helper_launches_and_reaps_harmless_host(self):
+        Result = subprocess.run([sys.executable, "-I", "-B", str(self.Helper / "farm_outer_endpoint.py"),
+            "host", str(self.Stage), str(self.Index), str(self.Launch)], capture_output=True, timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        self.assertEqual(Result.returncode, 0, Result.stderr.decode(errors="replace"))
+        Row = json.loads((self.Stage / "host.terminal.json").read_text())
+        self.assertEqual(Row["Outcome"], "COMPLETED")
+        self.assertTrue(Row["ChildTreeReaped"])
+        self.assertEqual(Row["ChildExitCode"], 0)
+        self.assertIn(b'harmless host completed', (self.Stage / "host.stdout.log").read_bytes())
+        self.assertFalse((self.Helper / "dependency.py").exists())
+
+    def test_stage_bytes_are_rechecked_before_dependency_execution(self):
+        Row = self.Endpoint.Verify(self.Stage, self.Index)
+        (self.Stage / "dependency.py").write_text("raise AssertionError('must not execute')\n")
+        with self.assertRaisesRegex(ValueError, "dependency changed"):
+            self.Endpoint.StartOwned(["unused"], self.Stage, Row)
+
+    def test_missing_stage_dependency_does_not_fall_back_to_helper_or_ambient_module(self):
+        Row = self.Endpoint.Verify(self.Stage, self.Index)
+        Row["Files"] = [Entry for Entry in Row["Files"] if Entry["Name"] != "dependency.py"]
+        with mock.patch.dict(sys.modules, {"dependency": mock.Mock()}):
+            with self.assertRaisesRegex(ValueError, "dependency changed or missing"):
+                self.Endpoint.StartOwned(["unused"], self.Stage, Row)
+
+    def test_changed_export_and_poisoned_stage_namespace_deny_before_launch(self):
+        Row = self.Endpoint.Verify(self.Stage, self.Index)
+        Alias = "_farm32_stage_agent_coordinator"
+        Poison = mock.Mock(__file__=str(self.Helper / "owned_process.py"))
+        with mock.patch.dict(sys.modules, {Alias + ".owned_process": Poison}):
+            with self.assertRaisesRegex(ValueError, "unexpected staged ownership module"):
+                self.Endpoint.StartOwned(["unused"], self.Stage, Row)
+        Export = self.Stage / ".agent-coordinator/agent_coordinator/windows_owned_process.py"
+        Export.write_text("raise AssertionError('must not execute')\n")
+        with self.assertRaisesRegex(ValueError, "Missing/changed pinned library"):
+            self.Endpoint.StartOwned(["unused"], self.Stage, Row)
 
 
 if __name__ == "__main__":

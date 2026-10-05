@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-05 Local attempt `78b900ef-4784-4cc2-8704-ce5c37edf332`
+failed before its host listener or role launch. A separate harmless worker
+ownership witness reproduced `ModuleNotFoundError: dependency`: the fixed helper
+directory contains only the adapter and ACL module, while the verified per-run
+stage owns the pinned dependency and Coordinator exports. The correction loads
+and rechecks those stage-owned sources explicitly and preserves bounded startup
+diagnostics plus the original launch error when cleanup is also unproven.
+The original failed attempt remains failed; source and new original CI
+qualification precede any new physical attempt. **KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY; no 3M.**
+
 2026-10-04 Local32 bootstrap infrastructure failure: all six original hosted
 jobs pass for tooling `929da7d0`; the previous `1aeb7221` failed run is
 separately closed. Fresh run `68bfec9e-1335-4f45-b7ad-9ea502bd2592` proves

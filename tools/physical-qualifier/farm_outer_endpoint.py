@@ -36,23 +36,47 @@ MAX_SECONDS = 3050  # 3000 s capture finish plus 50 s outer cleanup guard; no li
 NODE_TOKEN_NAME = "node-token.secret"
 
 
-def StartOwned(Args, Directory):
+def StartOwned(Args, Directory, Index):
     """Only consume the explicitly exported, hash-verified upstream primitive."""
-    from dependency import GetRoot
-    Root = GetRoot()
-    Lock = ReadJson(Path(__file__).with_name("upstream.lock.json"))
-    Names = ("agent_coordinator/owned_process.py", "agent_coordinator/windows_owned_process.py")
+    Directory = UnlinkedPath(Directory).resolve(strict=True)
+    Members = {Entry["Name"]: Entry["Sha256"] for Entry in Index["Files"]}
+    for Name in ("dependency.py", "upstream.lock.json"):
+        File = UnlinkedPath(Directory / Name)
+        if Name not in Members or Digest(File) != Members[Name]:
+            raise ValueError("[Qualification:FarmOuter] staged owned dependency changed or missing")
+    Spec = importlib.util.spec_from_file_location("farm32_owned_dependency", Directory / "dependency.py")
+    if Spec is None or Spec.loader is None:
+        raise ValueError("[Qualification:FarmOuter] staged owned dependency is unavailable")
+    Dependency = importlib.util.module_from_spec(Spec)
+    Spec.loader.exec_module(Dependency)
+    Root = Dependency.GetRoot()
+    if Root.resolve() != (Directory / ".agent-coordinator").resolve():
+        raise ValueError("[Qualification:FarmOuter] owned dependency escaped its stage")
+    Lock = ReadJson(Directory / "upstream.lock.json")
+    Names = ("agent_coordinator/__init__.py", "agent_coordinator/owned_process.py",
+             "agent_coordinator/windows_owned_process.py")
     if not set(Names).issubset(Lock["Files"]):
         raise ValueError("[Qualification:FarmOuter] owned runner source export is not pinned")
-    sys.path.insert(0, str(Root))
-    from agent_coordinator.owned_process import OwnedProcess
-    Module = sys.modules[OwnedProcess.__module__]
-    if Path(Module.__file__).resolve() != (Root / Names[0]).resolve():
-        raise ValueError("[Qualification:FarmOuter] unexpected owned runner module")
-    Cached = sys.modules.get("agent_coordinator.windows_owned_process")
-    if Cached is not None and Path(Cached.__file__).resolve() != (Root / Names[1]).resolve():
-        raise ValueError("[Qualification:FarmOuter] unexpected Windows ownership module")
-    return OwnedProcess.Start(Args, Directory)
+    Alias = "_farm32_stage_agent_coordinator"
+    for Name, Relative in zip((Alias, Alias + ".owned_process", Alias + ".windows_owned_process"), Names):
+        File = UnlinkedPath(Root / Relative)
+        if Digest(File) != Lock["Files"][Relative]:
+            raise ValueError("[Qualification:FarmOuter] owned runner source changed")
+        Cached = sys.modules.get(Name)
+        if Cached is not None and Path(getattr(Cached, "__file__", "")).resolve() != File:
+            raise ValueError("[Qualification:FarmOuter] unexpected staged ownership module")
+    if Alias not in sys.modules:
+        Spec = importlib.util.spec_from_file_location(Alias, Root / Names[0],
+                                                     submodule_search_locations=[str(Root / "agent_coordinator")])
+        Package = importlib.util.module_from_spec(Spec)
+        sys.modules[Alias] = Package
+        try:
+            Spec.loader.exec_module(Package)
+        except BaseException:
+            sys.modules.pop(Alias, None)
+            raise
+    Module = importlib.import_module(Alias + ".owned_process")
+    return Module.OwnedProcess.Start(Args, Directory)
 
 
 def DrainOwned(Stream, Output, Errors):
@@ -336,21 +360,39 @@ def Run(Root, IndexPath, ConfigPath, Action):
         Tree = None
         Drains, DrainErrors = [], []
         if os.name == "nt":
-            Process, Tree = StartOwned(Args, Root)
+            Process = None
             try:
+                Process, Tree = StartOwned(Args, Root, Index)
                 Process.stdin.close()
                 for Stream, OutputFile in ((Process.stdout, Stdout), (Process.stderr, Stderr)):
                     Thread = threading.Thread(target=DrainOwned, args=(Stream, OutputFile, DrainErrors), daemon=True)
                     Thread.start()
                     Drains.append(Thread)
-            except BaseException:
-                Tree.Close()
+            except BaseException as Failure:
+                CleanupError = None
+                if Tree is not None:
+                    try:
+                        Tree.Close()
+                    except BaseException as CleanupFailure:
+                        CleanupError = str(CleanupFailure)[:512]
                 DrainDeadline = time.monotonic() + 5
                 for Thread in Drains:
                     Thread.join(timeout=max(0, DrainDeadline - time.monotonic()))
-                for Stream in (Process.stdout, Process.stderr):
-                    if not Stream.closed:
-                        Stream.close()
+                if Process is not None:
+                    for Stream in (Process.stdout, Process.stderr):
+                        if not Stream.closed:
+                            try:
+                                Stream.close()
+                            except (OSError, ValueError) as CloseFailure:
+                                CleanupError = ((CleanupError or "") + "; output release: " +
+                                                str(CloseFailure))[:512]
+                Diagnostic = {"Format": "GargantuanFarm32TerminalDiagnostic", "Version": 1,
+                              "RunId": RunId, "Action": Action, "Phase": "OWNED_CHILD_STARTUP",
+                              "ChildPid": Process.pid if Process is not None else None,
+                              "ChildTreeReaped": False, "ErrorType": type(Failure).__name__,
+                              "Error": str(Failure)[:512], "CleanupError": CleanupError}
+                with DiagnosticPath.open("xb") as Stream:
+                    Stream.write((json.dumps(Diagnostic, sort_keys=True) + "\n").encode("utf-8"))
                 raise
         else:
             Process = subprocess.Popen(Args, cwd=str(Root), stdout=Stdout, stderr=Stderr,

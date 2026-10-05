@@ -982,6 +982,7 @@ def LaunchPrepared(TransportInstance, Roots, Spec, Identity, PrivateRoot):
     Host = TransportInstance.RemoteStart("host", Root, Index, HostConfig)
     Launched = [("SERVER", "host", Host)]
     Success = False
+    LaunchError = None
     try:
         Marker = Spec["Host"]["ListeningPath"]
         LocalMarker = PrivateRoot / "worker-listening.json"
@@ -1032,8 +1033,18 @@ def LaunchPrepared(TransportInstance, Roots, Spec, Identity, PrivateRoot):
         if Host.wait(timeout=max(0.1, Deadline - time.monotonic())) != 0:
             raise RuntimeError("[Qualification:FarmOuter] coordinator failed; preserve evidence")
         Success = True
+    except BaseException as Error:
+        LaunchError = Error
+        raise
     finally:
-        ReapLaunch(TransportInstance, Roots, Identity["RunId"], PrivateRoot, Launched, Success)
+        try:
+            ReapLaunch(TransportInstance, Roots, Identity["RunId"], PrivateRoot, Launched, Success)
+        except RuntimeError as CleanupError:
+            if LaunchError is not None:
+                raise RuntimeError("[Qualification:FarmOuter] launch failed: " +
+                                   type(LaunchError).__name__ + ": " + str(LaunchError)[:512] +
+                                   "; " + str(CleanupError)[:2048]) from LaunchError
+            raise
     return 0
 
 

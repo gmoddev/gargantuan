@@ -219,6 +219,22 @@ must preserve the exact project capture hook. Do not alter a live worker's tools
 
 ## Validation and limitations
 
+### Farm32 helper and staged ownership imports
+
+The fixed worker helper directory contains the endpoint adapter and ACL module;
+the per-run stage owns `dependency.py`, `upstream.lock.json` and the exact pinned
+Coordinator exports. The endpoint loads its ownership dependency by that verified
+stage path, rechecks the dependency/lock bytes against the stage index, and checks
+all pinned exports before loading the owned-process modules. A dedicated package
+namespace binds relative ownership imports to the same stage; ambient Python
+imports and a helper-directory dependency cannot supply this authority.
+
+Owned-child startup failures retain a bounded stage-local diagnostic with phase,
+error type and cleanup error. Unknown child ownership remains false and does not
+create a successful terminal receipt. The outer controller reports its original
+listener/launch refusal together with any subsequent cleanup refusal. These are
+qualification infrastructure diagnostics, not provider or Foundation 3L PASS.
+
 ### Farm32 launch, sampling and failed-run evidence
 
 The failed Local32 run `68bfec9e-1335-4f45-b7ad-9ea502bd2592`
