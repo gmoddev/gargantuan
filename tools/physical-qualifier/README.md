@@ -1,15 +1,17 @@
 # Gargantuan physical qualification adapter
 
-Current deployment provenance is recorded in the
-[active F1 source manifest](phase1-f1-source-manifest.json) and the
-[physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
-The funded-ACK candidate requires a fresh four-client qualification before the
-Local/Node provider matrices. Its deployment includes five pinned native DLLs
-and twelve runtime assets. Earlier source/probe hashes and installed-service
-receipts below are historical; they do not override that manifest or qualify a
-new candidate. Required hosted CI includes the original uploaded JUnit evidence,
-not only a successful workflow status. Farm32 capture remains unqualified until
-the corrected stop path passes a fresh complete test near its storage limit.
+The retained F1 physical Phase 1 PASS is run
+`454bf4f8-c8f2-4c18-9866-1b61218da514`, execution source
+`9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad`. The
+[physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
+owns current deployment provenance, capture qualification and subsequent failed
+Local32 infrastructure evidence. Local32, real-TLS Node32 and final Foundation
+3L acceptance remain unqualified. Earlier source/probe hashes, the
+[historical F1 manifest](phase1-f1-source-manifest.json) and installed-service
+receipts below remain deployment history. A new tooling pin requires its own
+source, hosted CI and endpoint preflight; it does not invalidate or rerun the
+retained F1 qualification. Required hosted CI includes the original uploaded
+JUnit evidence, not only a successful workflow status.
 
 The development Phase 1 probe and result analyzer implement the
 [D01/F1 finite-grant drain contract](../../docs/adr/D01-pooled-service-curve.md):
@@ -18,9 +20,9 @@ its finite rate-latency envelope, pass its independent intra-grant running-rate
 check, and participate in a real four-peer first-send overlap. Four native
 all-subinterval peer checks imply the 64 MiB/s running-pool bound on that
 common interval. ACK, retirement, capture, and gameplay gates remain separate.
-Earlier short-window and D01 cross-grant receipts are historical. The installed
-physical probe and capture-service pins remain unchanged until the corrected
-F1 candidate completes deterministic and hosted CI gates. The old staged D01
+Earlier short-window and D01 cross-grant receipts are historical. The deployment
+history below retains the pins and prerequisites that applied to those earlier
+candidates. The old staged D01
 candidate remains pinned separately
 from readiness: probe SHA-256
 `2E543D0983D66895569A0E270905086200C6E478A8C313B206E6BC64C0081ABC`,
@@ -120,8 +122,10 @@ The lifecycle runner performs its own forward/reverse tunnel proof before
 assignment. That worker proof is one-use per stage label: do not call the
 tunnel preflight separately with the same label and then invoke the runner.
 
-[upstream.lock.json](upstream.lock.json) pins commit
-`67b730e6dbf7a0524d4f29d0d9cb19a0abf8a614` and SHA-256 of the consumed sources.
+[upstream.lock.json](upstream.lock.json) pins the exact consumed commit and
+SHA-256 of its sources. The installed Farm32 runtime remains
+`5ee889fab571a9047cbc0f8724f2077c7bb9eb74` until a new pinned bundle completes
+separate endpoint qualification; the published `v0.1.0` tag is unchanged.
 The pinned coordinator and endpoint now share the same listener, source-bind,
 connect, and authenticated `STAGE_READY` path in production and the control-only
 preflight. The latter records the actual child process and token, completes the

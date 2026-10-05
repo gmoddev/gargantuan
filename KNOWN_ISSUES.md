@@ -85,6 +85,24 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-04 Local32 bootstrap infrastructure failure: all six original hosted
+jobs pass for tooling `929da7d0`; the previous `1aeb7221` failed run is
+separately closed. Fresh run `68bfec9e-1335-4f45-b7ad-9ea502bd2592` proves
+the projected Server UDP correction with 28 actual Ready clients, then fails
+`clients_or_manifest_not_ready` at tick 1,201 before workload clock records.
+The client launch loop synchronously samples process and adapter/CIM resources
+between starts; retained same-host native timestamps include 6.357-second and
+5.614-second launch gaps. The exact blocking OS call is **NOT MEASURED**.
+Decouple bounded sampling from launch while preserving startup resource
+coverage, process identity, the bootstrap bound and every acceptance limit.
+The worker's original FAILED/false-reap terminals and missing capture index are
+separate failure-path defects: cleanup truth needs persistent containment
+independent of exit success, and stopped failure captures need explicit
+diagnostic export that strict acceptance still rejects. Preserve the failed
+receipts; separately prove current idle and retire this run's exact secrets.
+See the [physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#local32-bootstrap-launchsampling-failure-2026-10-04).
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
+
 2026-10-04 Local32 game-UDP prerequisite: tooling `7a3e7ea8` passes its six
 original hosted checks and the preceding `f0c18bed` failed run is independently
 closed. Fresh run `1aeb7221-8c47-4ccd-98c1-389d486e1c4c` starts the unchanged

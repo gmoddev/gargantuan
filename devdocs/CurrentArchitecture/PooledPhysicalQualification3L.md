@@ -6,6 +6,75 @@ last_verified: 2026-10-04
 
 # Foundation 3L pooled physical qualification attempt
 
+## Local32 bootstrap launch/sampling failure (2026-10-04)
+
+Tooling `929da7d071029d945a461d9631a97d1b2398f701` passes all six
+original push/PR Windows, Linux and GNS jobs. The preceding `1aeb7221` run is
+separately closed with its six exact control leaves retired and fresh idle
+evidence; its original failed terminals and captures remain unchanged.
+Fresh Local run `68bfec9e-1335-4f45-b7ad-9ea502bd2592`, coordinator
+`ed6d0a59-463f-4a6d-846c-c6b37e924432`, passes staged imports, strict capture
+configuration and exact runtime projection checks. The run-owned projected
+Server UDP permission allows real connectivity: 28 clients reach Ready.
+
+The first causal failure is `clients_or_manifest_not_ready` at server tick
+1,201. No workload clock records are produced. On the server's own monotonic
+clock, ticks 1 through 1,200 span 19,987.143 ms; the 28th client reaches Ready
+14,936.061 ms after tick 1. On the client host's independent clock, slot
+19-to-20 starts are 6,356.758 ms apart and slot 27-to-28 starts are
+5,613.952 ms apart. Slots 0 through 29 span 18,153.388 ms; slots 30/31 have
+no native start record. These clocks are not subtracted across hosts.
+
+Source places a synchronous resource sweep and adapter/CIM queries between
+successive client starts. This is a launcher infrastructure defect: resource
+observation can delay the workload it observes. The precise OS call responsible
+for each retained gap is **NOT MEASURED**; the old supervisor did not timestamp
+each call. The 1,200-tick bootstrap limit, 75-ms startup stagger, role deadlines,
+resource evidence limits and all production service/acceptance gates remain
+unchanged. Correcting the launch/sampling coupling requires independent bounded
+sampling, preserving startup coverage and exact process identity.
+
+The native server exits 7 and retains `Status=FAIL`. The original worker host
+and role terminals remain `FAILED`, exit 1 and `ChildTreeReaped=false`; the
+client terminal is `ABORTED`, exit 1 and `ChildTreeReaped=true`. The outer
+endpoint forces a false reap bit for a naturally exited unsuccessful runner,
+while its exited-PID shortcut cannot independently prove descendant absence.
+A sound correction needs containment evidence separate from workload status.
+The capture controller also rejects failed role evidence before offline export,
+so the original worker `capture-sha256.json` is missing. Failed diagnostic
+export must remain explicitly failed and cannot satisfy capture acceptance.
+
+Original public input index:
+`C:\Users\aiden\.codex\artifacts\farm32-68bf-root-public-evidence-v1\public-input-index.json`,
+SHA-256 `21e14443e34d19c074fec23019d447b1e0dfbd7a619c3a1ce72a02d90ddf5c9e`.
+Independent source/native chronology:
+`C:\Users\aiden\.codex\artifacts\farm32-68bf-bootstrap-independent-attribution-v1\analysis.json`,
+SHA-256 `a5620c986755c4277d25f3c7ee43b7b9dfcb061119bdf456435917fd0ba4e58e`.
+Later read-only absence observations do not rewrite the original terminals.
+Exact fresh failed-run cleanup and correction qualification remain required.
+The source correction separates bounded resource sampling from client launch,
+adopts upstream checked Windows Job containment at
+`cf1628de587ee0ccfbd74742d62946dac1adf522`, and permits explicitly failed
+diagnostic capture export without satisfying success binding. The full
+production-pinned farm suite passes 258 tests without skips. The focused
+ownership, outer endpoint and capture suites pass 24, 14 and 26 tests in both
+normal and optimized Python; an independent review confirms checked release,
+rollback and interruption behavior. A 32-harmless-child sampler regression
+passes with a six-second supplied network query: all owner publications finish
+in 477 ms, initialization in 1,567 ms, with 64 process rows, two host rows and
+retained failure partials. This is source/infrastructure evidence only.
+
+Independent lifecycle review SHA-256:
+`7b57ee6659328fb9186bb498cd1002fcde9b30109d69be3afa8ab03403f6207c`.
+Portable sampler qualification SHA-256:
+`035178ec34d057b8732d4d6827c690ae151d2d880560c4e694f3e5b5199820ab`.
+Required hosted candidate CI, exact cleanup, fresh source closure and endpoint
+preflight must pass before a subsequent provider run. No installed service,
+native production code, admission, resource limit or acceptance gate changes.
+Retained F1 physical PASS is unchanged. **KI-006 OPEN; Foundation 3L B —
+PARTIALLY READY; Local32/real-TLS Node32 and final acceptance remain unqualified;
+no 3M.**
+
 ## Local32 projected-server UDP permission omission (2026-10-04)
 
 Fresh tooling `7a3e7ea8` run `1aeb7221-8c47-4ccd-98c1-389d486e1c4c`,

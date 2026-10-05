@@ -1,7 +1,7 @@
 ---
 status: current-infrastructure-extraction
 owner: qualification-tooling
-last_verified: 2026-09-28
+last_verified: 2026-10-04
 ---
 
 # Physical agent coordination ownership and migration
@@ -36,7 +36,10 @@ part of this dependency.
 
 Use a hash-verified immutable source bootstrap rather than adding a submodule or
 committing a second generic implementation. [The lock](../../tools/physical-qualifier/upstream.lock.json)
-pins `67b730e6dbf7a0524d4f29d0d9cb19a0abf8a614` and consumed-source SHA-256 values.
+pins `cf1628de587ee0ccfbd74742d62946dac1adf522` and the exact consumed
+source SHA-256 values, including the two local owned-process modules. The installed
+Farm32 baseline is `5ee889fab571a9047cbc0f8724f2077c7bb9eb74`; a later source
+pin does not qualify replacement endpoint artifacts or installed services.
 
 The pinned legacy control implementation now exposes a separate, bounded
 control-only preflight through the same lifecycle child-launch path used by
@@ -215,6 +218,43 @@ is separate, uses a fresh evidence root and a different service/pipe name, and
 must preserve the exact project capture hook. Do not alter a live worker's tools.
 
 ## Validation and limitations
+
+### Farm32 launch, sampling and failed-run evidence
+
+The failed Local32 run `68bfec9e-1335-4f45-b7ad-9ea502bd2592`
+reached 28 ready clients and stopped before the workload. Repeated synchronous
+resource queries on the client launch path delayed subsequent process starts.
+The individual blocking operating-system call was not measured. The
+[physical receipt](PooledPhysicalQualification3L.md) retains the original
+failure, incomplete capture collection and unproven worker tree cleanup.
+
+Resource sampling now runs in a separate bounded, hidden endpoint child.
+Startup publishes only the new owner's native process counters and immutable
+PID/start identity; it does not query the NIC or resample prior owners. The
+sampler takes the existing two-second process/host snapshots and retains the
+five-second snapshot-duration, row-count and log bounds. Its seven function
+definitions come from the staged endpoint source; configuration, extracted
+source, runtime, owner identities and partial evidence are hashed and sealed.
+It is stopped and its streams joined before native owner objects are disposed.
+This changes sampling placement, not the bootstrap deadline or resource gates.
+
+The fixed local endpoint adapter uses generic Windows Job containment from
+process creation, including nested child launches. Job membership and checked
+handle release determine cleanup independently of workload exit status.
+Cleanup uses one bounded deadline; output draining has its own bounded phase.
+The existing terminal v1 representation remains unchanged. An optional separate
+terminal diagnostic records cleanup errors without manufacturing a successful
+exit or a tree-reaped result. This local facility adds no wire command or
+arbitrary remote process capability.
+
+A failed workload can retain a `FAILED_DIAGNOSTIC` capture export only after
+owned capture stop, the existing hook/profile checks and zero-loss validation.
+Success binding rejects that classification. Missing or invalid role evidence
+remains missing or invalid; diagnostic recovery cannot repair the original
+provider verdict. Hard-abort capture cleanup still belongs to the existing
+bounded service lease/watchdog. Installed capture services and hooks are not
+changed by these source corrections. A fresh candidate must independently pass
+source, dependency, hosted CI and endpoint preflight before another provider run.
 
 Standalone Python suites cover protocol/auth/replay, strict schema/capability
 denial, assignment freshness/expiry, separated budgets, cleanup and local two-role

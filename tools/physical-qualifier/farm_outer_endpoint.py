@@ -19,6 +19,7 @@ import stat
 import subprocess
 import sys
 import time
+import threading
 import uuid
 
 # The pinned worker Python uses python312._pth and omits the script directory.
@@ -33,6 +34,41 @@ MAX_CONFIG = 65536
 MAX_LOG = 8 * 1024 * 1024
 MAX_SECONDS = 3050  # 3000 s capture finish plus 50 s outer cleanup guard; no live-gate change.
 NODE_TOKEN_NAME = "node-token.secret"
+
+
+def StartOwned(Args, Directory):
+    """Only consume the explicitly exported, hash-verified upstream primitive."""
+    from dependency import GetRoot
+    Root = GetRoot()
+    Lock = ReadJson(Path(__file__).with_name("upstream.lock.json"))
+    Names = ("agent_coordinator/owned_process.py", "agent_coordinator/windows_owned_process.py")
+    if not set(Names).issubset(Lock["Files"]):
+        raise ValueError("[Qualification:FarmOuter] owned runner source export is not pinned")
+    sys.path.insert(0, str(Root))
+    from agent_coordinator.owned_process import OwnedProcess
+    Module = sys.modules[OwnedProcess.__module__]
+    if Path(Module.__file__).resolve() != (Root / Names[0]).resolve():
+        raise ValueError("[Qualification:FarmOuter] unexpected owned runner module")
+    Cached = sys.modules.get("agent_coordinator.windows_owned_process")
+    if Cached is not None and Path(Cached.__file__).resolve() != (Root / Names[1]).resolve():
+        raise ValueError("[Qualification:FarmOuter] unexpected Windows ownership module")
+    return OwnedProcess.Start(Args, Directory)
+
+
+def DrainOwned(Stream, Output, Errors):
+    Total = 0
+    try:
+        while Chunk := Stream.read(65536):
+            Keep = max(0, MAX_LOG + 1 - Total)
+            Output.write(Chunk[:Keep])
+            Output.flush()
+            Total += len(Chunk)
+            if Total > MAX_LOG and not Errors:
+                Errors.append("owned process log bound")
+    except (OSError, ValueError) as Error:
+        Errors.append(str(Error))
+    finally:
+        Stream.close()
 
 
 def Digest(File):
@@ -291,13 +327,34 @@ def Run(Root, IndexPath, ConfigPath, Action):
     Error = Root / (Action + ".stderr.log")
     AbortMarker = Root / (Action + ".abort.request")
     Terminal = Root / (Action + ".terminal.json")
-    if AbortMarker.exists() or Terminal.exists():
+    DiagnosticPath = Root / (Action + ".terminal-diagnostic.json")
+    if AbortMarker.exists() or Terminal.exists() or DiagnosticPath.exists():
         raise ValueError("[Qualification:FarmOuter] stale abort or terminal marker")
     with Output.open("xb") as Stdout, Error.open("xb") as Stderr:
-        Process = subprocess.Popen([sys.executable, "-B", str(Root / Config["RunnerName"]),
-                                    Action, str(Root / Config["InputName"])],
-                                   cwd=str(Root), stdout=Stdout, stderr=Stderr,
-                                   creationflags=Flags)
+        Args = [sys.executable, "-B", str(Root / Config["RunnerName"]),
+                Action, str(Root / Config["InputName"])]
+        Tree = None
+        Drains, DrainErrors = [], []
+        if os.name == "nt":
+            Process, Tree = StartOwned(Args, Root)
+            try:
+                Process.stdin.close()
+                for Stream, OutputFile in ((Process.stdout, Stdout), (Process.stderr, Stderr)):
+                    Thread = threading.Thread(target=DrainOwned, args=(Stream, OutputFile, DrainErrors), daemon=True)
+                    Thread.start()
+                    Drains.append(Thread)
+            except BaseException:
+                Tree.Close()
+                DrainDeadline = time.monotonic() + 5
+                for Thread in Drains:
+                    Thread.join(timeout=max(0, DrainDeadline - time.monotonic()))
+                for Stream in (Process.stdout, Process.stderr):
+                    if not Stream.closed:
+                        Stream.close()
+                raise
+        else:
+            Process = subprocess.Popen(Args, cwd=str(Root), stdout=Stdout, stderr=Stderr,
+                                       creationflags=Flags)
         Deadline = time.monotonic() + MAX_SECONDS
         Outcome = "FAILED"
         try:
@@ -308,7 +365,7 @@ def Run(Root, IndexPath, ConfigPath, Action):
                         raise ValueError("[Qualification:FarmOuter] abort marker identity mismatch")
                     Outcome = "ABORTED"
                     raise RuntimeError("[Qualification:FarmOuter] run-bound abort requested")
-                if time.monotonic() >= Deadline or Output.stat().st_size > MAX_LOG or Error.stat().st_size > MAX_LOG:
+                if DrainErrors or time.monotonic() >= Deadline or Output.stat().st_size > MAX_LOG or Error.stat().st_size > MAX_LOG:
                     Outcome = "BOUND_EXCEEDED"
                     raise TimeoutError("[Qualification:FarmOuter] owned process time or log bound")
                 time.sleep(0.1)
@@ -317,20 +374,44 @@ def Run(Root, IndexPath, ConfigPath, Action):
             Outcome = "COMPLETED"
         finally:
             WasRunning = Process.poll() is None
-            Reaped = StopOwned(Process)
+            Reaped = False
+            CleanupError = None
+            try:
+                Reaped = Tree.Close() if Tree is not None else StopOwned(Process)
+            except (OSError, TimeoutError, subprocess.TimeoutExpired) as Failure:
+                CleanupError = str(Failure)
+            DrainDeadline = time.monotonic() + 5
+            for Thread in Drains:
+                Thread.join(timeout=max(0, DrainDeadline - time.monotonic()))
+            if any(Thread.is_alive() for Thread in Drains):
+                Reaped = False
+                CleanupError = "owned output did not drain"
+            OutputFailed = bool(DrainErrors) or Output.stat().st_size > MAX_LOG or Error.stat().st_size > MAX_LOG
+            if OutputFailed and Outcome == "COMPLETED":
+                Outcome = "BOUND_EXCEEDED"
             # A failed runner that already exited may have left an unowned
             # descendant; PID-tree termination can only prove the live case.
-            if Outcome != "COMPLETED" and not WasRunning:
+            if Tree is None and Outcome != "COMPLETED" and not WasRunning:
                 Reaped = False
             Row = {"Format": "GargantuanFarm32Terminal", "Version": 1,
                    "RunId": RunId, "Action": Action, "ChildPid": Process.pid,
-                   "ChildExitCode": Process.poll(), "ChildTreeReaped": Reaped,
+                   "ChildExitCode": Process.returncode if Tree is not None else Process.poll(), "ChildTreeReaped": Reaped,
                    "Outcome": Outcome,
                    "EndedUtc": datetime.now(timezone.utc).isoformat()}
             with Terminal.open("xb") as Stream:
                 Stream.write((json.dumps(Row, sort_keys=True) + "\n").encode("utf-8"))
+            if CleanupError is not None or OutputFailed:
+                Diagnostic = {"Format": "GargantuanFarm32TerminalDiagnostic", "Version": 1,
+                              "RunId": RunId, "Action": Action, "ChildPid": Process.pid,
+                              "CleanupError": CleanupError[:512] if CleanupError is not None else None,
+                              "OutputError": (DrainErrors[0] if DrainErrors else "owned process log bound")[:512]
+                                             if OutputFailed else None}
+                with DiagnosticPath.open("xb") as Stream:
+                    Stream.write((json.dumps(Diagnostic, sort_keys=True) + "\n").encode("utf-8"))
             if not Reaped:
                 raise RuntimeError("[Qualification:FarmOuter] owned child tree was not reaped")
+            if OutputFailed:
+                raise RuntimeError("[Qualification:FarmOuter] owned process output failed or exceeded log bound")
 
 
 def Main():

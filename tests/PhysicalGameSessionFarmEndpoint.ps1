@@ -52,6 +52,7 @@ $CleanupErrors = [Collections.Generic.List[string]]::new()
 $Failure = $null
 $Result = $null
 $EvidenceCreated = $false
+$ResourceSampler = $null
 $RunId = 'unvalidated'
 
 function Get-TypedFields {
@@ -513,7 +514,8 @@ function Assert-RolePaths {
 
 function Start-EndpointProcess {
 	param([string]$Executable, [string]$WorkingDirectory, [string[]]$Arguments,
-		[string]$Label, [string]$OutputDirectory, [string[]]$RemoveEnvironmentVariables = @())
+		[string]$Label, [string]$OutputDirectory, [string[]]$RemoveEnvironmentVariables = @(), [switch]$SamplerPipes)
+	if ($SamplerPipes -and $Label -cne 'sampler') { throw 'dedicated sampler pipes cannot own a native role process' }
 	$Info = [Diagnostics.ProcessStartInfo]::new()
 	$Info.FileName = $Executable
 	$Info.WorkingDirectory = $WorkingDirectory
@@ -537,8 +539,10 @@ function Start-EndpointProcess {
 			Label = $Label; Pid = $Process.Id; Process = $Process
 			OutputPath = $OutputPath; ErrorPath = $ErrorPath
 			OutputStream = $Output; ErrorStream = $ErrorStream
-			OutputCopy = $Process.StandardOutput.BaseStream.CopyToAsync($Output)
-			ErrorCopy = $Process.StandardError.BaseStream.CopyToAsync($ErrorStream)
+			OutputCopy = $(if ($SamplerPipes) { [FarmSamplerPipeCopy]::Start($Process.StandardOutput.BaseStream, $Output) }
+				else { $Process.StandardOutput.BaseStream.CopyToAsync($Output) })
+			ErrorCopy = $(if ($SamplerPipes) { [FarmSamplerPipeCopy]::Start($Process.StandardError.BaseStream, $ErrorStream) }
+				else { $Process.StandardError.BaseStream.CopyToAsync($ErrorStream) })
 		}
 	} catch {
 		if ($Started -and -not $Process.HasExited) { try { $Process.Kill($true) } catch {} }
@@ -608,7 +612,24 @@ function Initialize-HostResourceCounters {
 	if ('FarmHostNativeCounters' -as [type]) { return }
 	$Source = @'
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+public static class FarmSamplerPipeCopy {
+    // Two owned readers avoid queuing behind native owners' idle pipe reads.
+    // They do not execute PowerShell, commands, or callbacks.
+    public static Task Start(Stream Input, Stream Output) {
+        return Task.Factory.StartNew(() => {
+            byte[] Buffer = new byte[4096]; long Count = 0;
+            int Read;
+            while ((Read = Input.Read(Buffer, 0, Buffer.Length)) != 0) {
+                if (Count + Read > 4194304) throw new IOException("sampler pipe exceeded four MiB");
+                Output.Write(Buffer, 0, Read); Output.Flush(); Count += Read;
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+    }
+}
 public static class FarmHostNativeCounters {
     [StructLayout(LayoutKind.Sequential)]
     public struct MemoryStatus {
@@ -710,6 +731,7 @@ function Add-HostResourceSample {
 
 function Add-TimedResourceSamples {
 	param([object[]]$Owners)
+	if ($null -ne $ResourceSampler) { Assert-EndpointSampler -Sampler $ResourceSampler; return }
 	$Elapsed = $RunClock.ElapsedMilliseconds
 	if ($Elapsed - $script:LastResourceSampleMilliseconds -lt 2000) { return }
 	Add-EndpointResourceSamples -Owners $Owners -LocalRunId $RunId `
@@ -718,6 +740,291 @@ function Add-TimedResourceSamples {
 		-LocalProvider $Manifest.Provider -Interface $HostResourceInterface `
 		-Samples $HostResourceSamples -SupervisorElapsedMilliseconds $Elapsed
 	$script:LastResourceSampleMilliseconds = $Elapsed
+}
+
+# The fixed child is generated from this already hash-pinned endpoint source.
+# It owns only resource observation, never a native farm process or a socket.
+# Immutable owner publications avoid a blocking pipe or a mutable PID roster.
+function Write-EndpointSamplerJson {
+	param([string]$Path, $Value, [int]$MaximumBytes = 16384)
+	$Bytes = [Text.UTF8Encoding]::new($false).GetBytes(($Value | ConvertTo-Json -Depth 8 -Compress))
+	if ($Bytes.Length -gt $MaximumBytes) { throw 'sampler control record exceeds its fixed byte bound' }
+	$Temporary = $Path + '.pending'
+	$Stream = [IO.File]::Open($Temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+	try { $Stream.Write($Bytes); $Stream.Flush($true) } finally { $Stream.Dispose() }
+	[IO.File]::Move($Temporary, $Path)
+}
+
+function Publish-EndpointSamplerOwner {
+	param($Sampler, $Owner)
+	Assert-EndpointSampler -Sampler $Sampler
+	if ($Owner.Label -cnotmatch '^(server|client-(0[0-9]|[12][0-9]|3[01]))$') { throw 'unowned sampler label' }
+	$Owner.Process.Refresh()
+	$StartedTicks = $Owner.Process.StartTime.ToUniversalTime().Ticks
+	# Native per-process counters are a single-owner startup baseline. Expensive
+	# adapter queries and all-owner sweeps belong exclusively to the sampler.
+	$First = [Collections.Generic.List[object]]::new()
+	$Elapsed = [long](([Diagnostics.Stopwatch]::GetTimestamp() - $Sampler.StartedTicks) * 1000 / [Diagnostics.Stopwatch]::Frequency)
+	Add-EndpointResourceSamples -Owners @($Owner) -LocalRunId $Sampler.RunId -Samples $First -SupervisorElapsedMilliseconds $Elapsed
+	if ($First.Count -ne 1) { throw 'new sampler owner lacks its actual startup counter baseline' }
+	Write-EndpointSamplerJson -Path (Join-Path $Sampler.Root ($Owner.Label + '.owner.json')) -Value ([ordered]@{
+		RunId = $Sampler.RunId; Label = $Owner.Label; Pid = $Owner.Pid; ProcessStartedUtcTicks = $StartedTicks; FirstSample = $First[0] })
+}
+
+function Get-EndpointSamplerOwners {
+	param([string]$Root, [string]$LocalRunId, [string]$LocalRole)
+	$Labels = if ($LocalRole -eq 'Server') { @('server') } else { @(0..31 | ForEach-Object { 'client-{0:D2}' -f $_ }) }
+	$Owners = [Collections.Generic.List[object]]::new()
+	try {
+		foreach ($Label in $Labels) {
+			$File = Join-Path $Root ($Label + '.owner.json')
+			if (-not [IO.File]::Exists($File)) { continue }
+			if ((Get-Item -LiteralPath $File).Length -gt 16384) { throw 'sampler owner record oversized' }
+			$Record = Get-Content -LiteralPath $File -Raw | ConvertFrom-Json -AsHashtable
+			$SampleNames = @('RunId','Label','Pid','Utc','SupervisorElapsedMilliseconds','MonotonicTicks','MonotonicFrequency',
+				'WorkingSetBytes','PrivateBytes','CpuMilliseconds','Threads','Handles')
+			if ($Record.Count -ne 5 -or @('RunId','Label','Pid','ProcessStartedUtcTicks','FirstSample' | Where-Object { -not $Record.Contains($_) }).Count -ne 0 -or
+				$Record.RunId -cne $LocalRunId -or $Record.Label -cne $Label -or
+				$Record.Pid -isnot [long] -or $Record.Pid -le 0 -or
+				$Record.ProcessStartedUtcTicks -isnot [long] -or $Record.ProcessStartedUtcTicks -le 0 -or
+				$Record.FirstSample.RunId -cne $LocalRunId -or $Record.FirstSample.Label -cne $Label -or
+				$Record.FirstSample -isnot [Collections.IDictionary] -or $Record.FirstSample.Count -ne $SampleNames.Count -or
+				@($SampleNames | Where-Object { -not $Record.FirstSample.Contains($_) }).Count -ne 0 -or
+				$Record.FirstSample.Pid -ne $Record.Pid -or $Record.FirstSample.MonotonicFrequency -ne [Diagnostics.Stopwatch]::Frequency -or
+				$Record.FirstSample.MonotonicTicks -isnot [long] -or $Record.FirstSample.MonotonicTicks -le 0 -or
+				$Record.FirstSample.SupervisorElapsedMilliseconds -isnot [long] -or $Record.FirstSample.SupervisorElapsedMilliseconds -lt 0) {
+				throw 'sampler owner identity record is invalid'
+			}
+			try { $Process = [Diagnostics.Process]::GetProcessById([int]$Record.Pid) }
+			catch [ArgumentException] { continue } # An already exited owner is not replaced by a guessed PID.
+			try {
+				if ($Process.StartTime.ToUniversalTime().Ticks -ne $Record.ProcessStartedUtcTicks) { throw 'sampler PID generation changed' }
+				$Owners.Add([pscustomobject]@{ Label = $Label; Pid = $Record.Pid; Process = $Process; FirstSample = [pscustomobject]$Record.FirstSample })
+			} catch { $Process.Dispose(); throw }
+		}
+		return ,$Owners
+	} catch { foreach ($Owner in $Owners) { $Owner.Process.Dispose() }; throw }
+}
+
+function Write-EndpointSamplerCsv {
+	param([IO.StreamWriter]$Writer, [object[]]$Rows, [ref]$HeaderWritten)
+	foreach ($Row in $Rows) {
+		$Lines = @($Row | ConvertTo-Csv -NoTypeInformation)
+		if (-not $HeaderWritten.Value) { $Writer.WriteLine($Lines[0]); $HeaderWritten.Value = $true }
+		$Writer.WriteLine($Lines[1])
+	}
+	$Writer.Flush()
+	if ($Writer.BaseStream.Position -gt 16777216) { throw 'sampler raw evidence exceeds 16 MiB' }
+}
+
+function Invoke-EndpointResourceSampler {
+	param([string]$ConfigurationPath)
+	$Config = Get-Content -LiteralPath $ConfigurationPath -Raw | ConvertFrom-Json -AsHashtable
+	$Names = @('RunId','Role','Provider','Interface','StartedTicks','Frequency','TimeoutMilliseconds','ScriptSha256')
+	$InterfaceNames = @('Index','MacAddress','Address','Name','HostName')
+	if ($Config.Count -ne $Names.Count -or @($Names | Where-Object { -not $Config.Contains($_) }).Count -ne 0 -or
+		$Config.RunId -cnotmatch '^[a-f0-9-]{36}$' -or $Config.Role -cnotin @('Server','Clients') -or
+		$Config.Provider -cnotin @('Local','Node') -or $Config.Frequency -ne [Diagnostics.Stopwatch]::Frequency -or
+		$Config.StartedTicks -isnot [long] -or $Config.StartedTicks -le 0 -or $Config.Frequency -isnot [long] -or
+		$Config.TimeoutMilliseconds -isnot [long] -or $Config.TimeoutMilliseconds -lt 30000 -or $Config.TimeoutMilliseconds -gt 900000 -or
+		$Config.Interface -isnot [Collections.IDictionary] -or $Config.Interface.Count -ne 5 -or
+		@($InterfaceNames | Where-Object { -not $Config.Interface.Contains($_) }).Count -ne 0 -or
+		$Config.Interface.Index -isnot [long] -or $Config.Interface.Index -le 0 -or
+		@($InterfaceNames[1..4] | Where-Object { $Config.Interface[$_] -isnot [string] -or [string]::IsNullOrWhiteSpace($Config.Interface[$_]) }).Count -ne 0 -or
+		(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash -ine $Config.ScriptSha256) {
+		throw 'fixed sampler configuration/source differs'
+	}
+	$Root = Split-Path -Parent $ConfigurationPath
+	if ([IO.Path]::GetFileName($ConfigurationPath) -cne 'configuration.json' -or
+		[IO.Path]::GetFullPath($PSCommandPath) -ine [IO.Path]::GetFullPath((Join-Path $Root 'sampler.ps1'))) {
+		throw 'resource sampler entry paths differ from the fixed generated closure'
+	}
+	$ProcessWriter = [IO.StreamWriter]::new([IO.File]::Open((Join-Path $Root 'process-resources.csv'),
+		[IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read), [Text.UTF8Encoding]::new($false))
+	$HostWriter = $null; $Failure = $null; $ProcessCount = 0; $HostCount = 0
+	$ProcessHeader = $false; $HostHeader = $false; $LastElapsed = -2000L
+	$FirstSamples = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	try {
+		$HostWriter = [IO.StreamWriter]::new([IO.File]::Open((Join-Path $Root 'host-resources.csv'),
+			[IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read), [Text.UTF8Encoding]::new($false))
+		Initialize-HostResourceCounters
+		while ($true) {
+			$Elapsed = [long](([Diagnostics.Stopwatch]::GetTimestamp() - $Config.StartedTicks) * 1000 / $Config.Frequency)
+			if ($Elapsed -ge $Config.TimeoutMilliseconds) { throw 'resource sampler runtime deadline elapsed' }
+			if ([IO.File]::Exists((Join-Path $Root 'sampler.stop'))) { break }
+			if ($Elapsed - $LastElapsed -lt 2000) { Start-Sleep -Milliseconds 25; continue }
+			$Sequence = '{0:D4}' -f $HostCount
+			Write-EndpointSamplerJson -Path (Join-Path $Root ($Sequence + '.started.json')) -Value ([ordered]@{
+				RunId = $Config.RunId; Sequence = $HostCount; StartedTicks = [Diagnostics.Stopwatch]::GetTimestamp() })
+			$Owners = Get-EndpointSamplerOwners -Root $Root -LocalRunId $Config.RunId -LocalRole $Config.Role
+			try {
+				$Processes = [Collections.Generic.List[object]]::new()
+				foreach ($Owner in $Owners) {
+					if ($FirstSamples.Add($Owner.Label)) { $Processes.Add($Owner.FirstSample) }
+				}
+				# The roster can grow while it is read. Stamp the actual sweep only
+				# after the immutable snapshot, strictly after each startup baseline.
+				$Elapsed = [long](([Diagnostics.Stopwatch]::GetTimestamp() - $Config.StartedTicks) * 1000 / $Config.Frequency)
+				if (@($Owners | Where-Object { $_.FirstSample.SupervisorElapsedMilliseconds -ge $Elapsed }).Count) {
+					Start-Sleep -Milliseconds 1
+					$Elapsed = [long](([Diagnostics.Stopwatch]::GetTimestamp() - $Config.StartedTicks) * 1000 / $Config.Frequency)
+				}
+				if ($ProcessCount + $Processes.Count + $Owners.Count -gt 20000 -or $HostCount -ge 1000) { throw 'bounded sampler record count exceeded' }
+				Add-EndpointResourceSamples -Owners @($Owners) -LocalRunId $Config.RunId -Samples $Processes -SupervisorElapsedMilliseconds $Elapsed
+				Write-EndpointSamplerCsv -Writer $ProcessWriter -Rows @($Processes) -HeaderWritten ([ref]$ProcessHeader)
+				$ProcessCount += $Processes.Count
+				$Hosts = [Collections.Generic.List[object]]::new()
+				Add-HostResourceSample -Owners @($Owners) -LocalRunId $Config.RunId -LocalRole $Config.Role -LocalProvider $Config.Provider `
+					-Interface ([pscustomobject]$Config.Interface) -Samples $Hosts -SupervisorElapsedMilliseconds $Elapsed
+				if ($Hosts.Count -ne 1) { throw 'host resource sampler did not produce exactly one bracketed observation' }
+				Write-EndpointSamplerCsv -Writer $HostWriter -Rows @($Hosts) -HeaderWritten ([ref]$HostHeader)
+				$HostCount += $Hosts.Count
+				if (($Hosts[0].SampleEndTicks - $Hosts[0].SampleStartTicks) * 1000 / $Config.Frequency -gt 5000) {
+					throw 'host resource snapshot spans over five seconds'
+				}
+				Write-EndpointSamplerJson -Path (Join-Path $Root ($Sequence + '.completed.json')) -Value ([ordered]@{
+					RunId = $Config.RunId; Sequence = $HostCount - 1; EndedTicks = [Diagnostics.Stopwatch]::GetTimestamp() })
+				if ($HostCount -eq 1) { Write-EndpointSamplerJson -Path (Join-Path $Root 'sampler.ready.json') -Value ([ordered]@{ RunId = $Config.RunId; Ready = $true }) }
+				$LastElapsed = $Elapsed
+			} finally { foreach ($Owner in $Owners) { $Owner.Process.Dispose() } }
+		}
+	} catch { $Failure = $_.Exception.Message }
+	finally {
+		$ProcessWriter.Dispose(); if ($null -ne $HostWriter) { $HostWriter.Dispose() }
+		Write-EndpointSamplerJson -Path (Join-Path $Root 'sampler.result.json') -Value ([ordered]@{
+			RunId = $Config.RunId; Role = $Config.Role; Success = ($null -eq $Failure); Failure = $Failure;
+			ProcessSamples = $ProcessCount; HostSamples = $HostCount })
+	}
+	if ($null -ne $Failure) { throw "[Qualification:ResourceSampler] $Failure" }
+}
+
+function Assert-EndpointSampler {
+	param($Sampler)
+	if ($Sampler.Stopped) { return }
+	if ($Sampler.OutputCopy.IsFaulted -or $Sampler.ErrorCopy.IsFaulted) { throw 'bounded sampler output reader failed' }
+	foreach ($Path in @($Sampler.OutputPath,$Sampler.ErrorPath)) {
+		if ((Get-Item -LiteralPath $Path).Length -gt 4194304) { throw 'resource sampler log exceeds four MiB' }
+	}
+	if ($Sampler.Process.HasExited) { throw "resource sampler exited before owned stop: $($Sampler.Process.ExitCode)" }
+	$Now = [Diagnostics.Stopwatch]::GetTimestamp()
+	$Latest = @(Get-ChildItem -LiteralPath $Sampler.Root -Filter '*.started.json' -File | Sort-Object Name | Select-Object -Last 1)
+	if ($Latest.Count) {
+		$Record = Get-Content -LiteralPath $Latest[0].FullName -Raw | ConvertFrom-Json -AsHashtable
+		$Completed = Join-Path $Sampler.Root ($Latest[0].Name.Replace('.started.json','.completed.json'))
+		if (-not [IO.File]::Exists($Completed) -and ($Now - $Record.StartedTicks) * 1000 / [Diagnostics.Stopwatch]::Frequency -gt 5000) {
+			throw 'resource sampler host query exceeded the five-second bound'
+		}
+	}
+}
+
+function Start-EndpointResourceSampler {
+	param([string]$EndpointSource, [string]$OutputDirectory, [string]$LocalRunId, [string]$LocalRole,
+		[string]$LocalProvider, $Interface, [long]$StartedTicks, [int]$TimeoutMilliseconds, [string[]]$SecretVariables = @())
+	$InitializationClock = [Diagnostics.Stopwatch]::StartNew()
+	Initialize-HostResourceCounters
+	$Root = Join-Path $OutputDirectory 'resource-sampler'
+	if (Test-Path -LiteralPath $Root) { throw 'resource sampler directory already exists' }
+	[void][IO.Directory]::CreateDirectory($Root)
+	$Tokens = $null; $Errors = $null
+	$Ast = [Management.Automation.Language.Parser]::ParseFile($EndpointSource, [ref]$Tokens, [ref]$Errors)
+	if ($Errors.Count) { throw 'sampler source syntax is invalid' }
+	$Names = @('Write-EndpointSamplerJson','Get-EndpointSamplerOwners','Write-EndpointSamplerCsv',
+		'Invoke-EndpointResourceSampler','Initialize-HostResourceCounters','Add-EndpointResourceSamples','Add-HostResourceSample')
+	$Definitions = @($Ast.FindAll({ param($Node) $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -cin $Names }, $true))
+	if ($Definitions.Count -ne $Names.Count -or @($Definitions.Name | Sort-Object -Unique).Count -ne $Names.Count) {
+		throw 'fixed sampler source closure differs'
+	}
+	$Script = "param([string]`$ConfigurationPath)`n`$ErrorActionPreference = 'Stop'`n" +
+		(($Definitions | ForEach-Object { $_.Extent.Text }) -join "`n") + "`nInvoke-EndpointResourceSampler -ConfigurationPath `$ConfigurationPath`n"
+	$ScriptPath = Join-Path $Root 'sampler.ps1'
+	$Stream = [IO.File]::Open($ScriptPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+	try { $Stream.Write([Text.UTF8Encoding]::new($false).GetBytes($Script)) } finally { $Stream.Dispose() }
+	$ConfigurationPath = Join-Path $Root 'configuration.json'
+	Write-EndpointSamplerJson -Path $ConfigurationPath -Value ([ordered]@{ RunId = $LocalRunId; Role = $LocalRole;
+		Provider = $LocalProvider; Interface = $Interface; StartedTicks = $StartedTicks; Frequency = [Diagnostics.Stopwatch]::Frequency;
+		TimeoutMilliseconds = $TimeoutMilliseconds; ScriptSha256 = (Get-FileHash -LiteralPath $ScriptPath -Algorithm SHA256).Hash.ToLowerInvariant() })
+	$Runtime = (Get-Process -Id $PID).Path
+	$Arguments = @('-NoLogo','-NoProfile','-NonInteractive','-File',$ScriptPath,'-ConfigurationPath',$ConfigurationPath)
+	$FunctionPins = [ordered]@{}
+	foreach ($Definition in $Definitions) {
+		$FunctionPins[$Definition.Name] = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+			[Text.UTF8Encoding]::new($false).GetBytes($Definition.Extent.Text))).ToLowerInvariant()
+	}
+	Write-EndpointSamplerJson -Path (Join-Path $OutputDirectory 'resource-sampler-source.json') -Value ([ordered]@{
+		Format = 'GargantuanEndpointResourceSamplerSource'; Version = 1; RunId = $LocalRunId; Role = $LocalRole;
+		EndpointSha256 = (Get-FileHash -LiteralPath $EndpointSource -Algorithm SHA256).Hash.ToLowerInvariant();
+		ScriptSha256 = (Get-FileHash -LiteralPath $ScriptPath -Algorithm SHA256).Hash.ToLowerInvariant();
+		RuntimePath = $Runtime; RuntimeSha256 = (Get-FileHash -LiteralPath $Runtime -Algorithm SHA256).Hash.ToLowerInvariant();
+		Arguments = $Arguments; ConfigurationSha256 = (Get-FileHash -LiteralPath $ConfigurationPath -Algorithm SHA256).Hash.ToLowerInvariant();
+		FunctionPins = $FunctionPins; Scope = 'OWNED_RESOURCE_OBSERVATION_ONLY' })
+	$Owner = Start-EndpointProcess -Executable $Runtime -WorkingDirectory $Root -Label 'sampler' -OutputDirectory $Root `
+		-Arguments $Arguments -RemoveEnvironmentVariables $SecretVariables -SamplerPipes
+	$Owner | Add-Member -NotePropertyName Root -NotePropertyValue $Root
+	$Owner | Add-Member -NotePropertyName RunId -NotePropertyValue $LocalRunId
+	$Owner | Add-Member -NotePropertyName Stopped -NotePropertyValue $false
+	$Owner | Add-Member -NotePropertyName StartedTicks -NotePropertyValue $StartedTicks
+	$Owner | Add-Member -NotePropertyName Role -NotePropertyValue $LocalRole
+	$Owner | Add-Member -NotePropertyName ProcessStartedUtcTicks -NotePropertyValue $Owner.Process.StartTime.ToUniversalTime().Ticks
+	try {
+		while (-not [IO.File]::Exists((Join-Path $Root 'sampler.ready.json'))) {
+			Assert-EndpointSampler -Sampler $Owner
+			if ($InitializationClock.ElapsedMilliseconds -ge 5000) { throw 'resource sampler initialization exceeded five seconds' }
+			Start-Sleep -Milliseconds 25
+		}
+		$Ready = Get-Content -LiteralPath (Join-Path $Root 'sampler.ready.json') -Raw | ConvertFrom-Json -AsHashtable
+		if ($Ready.Count -ne 2 -or $Ready.RunId -cne $LocalRunId -or $Ready.Ready -isnot [bool] -or -not $Ready.Ready) {
+			throw 'sampler readiness record is invalid'
+		}
+		if ($InitializationClock.ElapsedMilliseconds -ge 5000) { throw 'resource sampler initialization exceeded five seconds' }
+		$Owner | Add-Member -NotePropertyName InitializationMilliseconds -NotePropertyValue $InitializationClock.ElapsedMilliseconds
+		return $Owner
+	} catch {
+		try { Stop-EndpointResourceSampler -Sampler $Owner -Processes ([Collections.Generic.List[object]]::new()) -Hosts ([Collections.Generic.List[object]]::new()) } catch {}
+		throw
+	}
+}
+
+function Stop-EndpointResourceSampler {
+	param($Sampler, [Collections.Generic.List[object]]$Processes, [Collections.Generic.List[object]]$Hosts)
+	if ($Sampler.Stopped) { return }
+	$Failure = $null
+	$ExitCode = $null; $Joined = $false
+	try {
+		Write-EndpointSamplerJson -Path (Join-Path $Sampler.Root 'sampler.stop') -Value @{ RunId = $Sampler.RunId }
+		if (-not $Sampler.Process.WaitForExit(5000)) { $Failure = 'resource sampler did not finish within owned stop bound' }
+		else { $ExitCode = $Sampler.Process.ExitCode }
+	} finally {
+		try { Stop-EndpointProcess -Owner $Sampler; $Joined = $true }
+		catch { $Failure = $_.Exception.Message }
+		finally { $Sampler.Stopped = $true }
+		# Index the generated closure and every raw partial even when a blocked
+		# sampler required owned termination. This is no native descendant proof.
+		$Files = @(Get-ChildItem -LiteralPath $Sampler.Root -File | Sort-Object Name | ForEach-Object {
+			[ordered]@{ Name = $_.Name; Bytes = $_.Length; Sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+		})
+		Write-EndpointSamplerJson -Path (Join-Path (Split-Path -Parent $Sampler.Root) 'resource-sampler-evidence.json') -Value ([ordered]@{
+			Format = 'GargantuanEndpointResourceSamplerEvidence'; Version = 1; RunId = $Sampler.RunId; Role = $Sampler.Role;
+			Pid = $Sampler.Pid; CooperativeExitCode = $ExitCode; StreamsJoined = $Joined; StopFailure = $Failure;
+			ProcessStartedUtcTicks = $Sampler.ProcessStartedUtcTicks;
+			InitializationMilliseconds = $Sampler.InitializationMilliseconds;
+			Files = $Files; NativeTreeReaped = 'NOT_MEASURED_BY_SAMPLER' }) -MaximumBytes 1048576
+		foreach ($Pair in @(@('process-resources.csv',$Processes),@('host-resources.csv',$Hosts))) {
+			$Path = Join-Path $Sampler.Root $Pair[0]
+			if ([IO.File]::Exists($Path)) {
+				if ((Get-Item -LiteralPath $Path).Length -gt 16777216) { throw 'sampler raw evidence exceeds 16 MiB' }
+				foreach ($Row in @(Import-Csv -LiteralPath $Path)) { $Pair[1].Add($Row) }
+			}
+		}
+	}
+	if ($Failure) { throw $Failure }
+	$ResultPath = Join-Path $Sampler.Root 'sampler.result.json'
+	if (-not [IO.File]::Exists($ResultPath)) { throw 'sampler final receipt absent; raw partials preserved' }
+	$Result = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json -AsHashtable
+	if ($Result.Count -ne 6 -or @('RunId','Role','Success','Failure','ProcessSamples','HostSamples' | Where-Object { -not $Result.Contains($_) }).Count -ne 0 -or
+		$ExitCode -ne 0 -or $Result.RunId -cne $Sampler.RunId -or $Result.Role -cne $Sampler.Role -or
+		$Result.Success -isnot [bool] -or -not $Result.Success -or $null -ne $Result.Failure -or
+		$Result.ProcessSamples -isnot [long] -or $Result.HostSamples -isnot [long] -or
+		$Result.ProcessSamples -ne $Processes.Count -or $Result.HostSamples -ne $Hosts.Count) { throw 'sampler failed or raw counts differ' }
 }
 
 function Assert-FairnessEvidence {
@@ -959,9 +1266,14 @@ try {
 	$Owners = $OwnedProcesses
 	$SecretVariables = @([Environment]::GetEnvironmentVariables().Keys |
 		Where-Object { [string]$_ -match '^GARGANTUAN_ENGINE_ADAPTER_.*TOKEN' })
+	if ($Manifest.Provider -ceq 'Node') { $SecretVariables += [string]$Manifest.NodeTokenEnvironment }
 	$RunStartedUtc = [DateTimeOffset]::UtcNow.ToString('O')
+	$RunStartedTicks = [Diagnostics.Stopwatch]::GetTimestamp()
 	$RunClock = [Diagnostics.Stopwatch]::StartNew()
 	$script:LastResourceSampleMilliseconds = -2000L
+	$ResourceSampler = Start-EndpointResourceSampler -EndpointSource $PSCommandPath -OutputDirectory $Paths.Evidence `
+		-LocalRunId $RunId -LocalRole $Role -LocalProvider $Manifest.Provider -Interface $HostResourceInterface `
+		-StartedTicks $RunStartedTicks -TimeoutMilliseconds $RunTimeoutMilliseconds -SecretVariables $SecretVariables
 	if ($Role -eq 'Server') {
 		$FairnessPath = Join-Path $Paths.Evidence 'admission-fairness.tsv'
 		$PublicationPath = Join-Path $Paths.Evidence 'publication-service.bin'
@@ -981,6 +1293,7 @@ try {
 		$Owner = Start-EndpointProcess -Executable $Executable -WorkingDirectory $RuntimeRoot `
 			-Arguments $Arguments -Label 'server' -OutputDirectory $Paths.Evidence
 		$Owners.Add($Owner)
+		Publish-EndpointSamplerOwner -Sampler $ResourceSampler -Owner $Owner
 		$Clock = [Diagnostics.Stopwatch]::StartNew()
 		while ($Clock.ElapsedMilliseconds -lt $StartupTimeoutMilliseconds -and
 			$RunClock.ElapsedMilliseconds -lt $RunTimeoutMilliseconds) {
@@ -1014,6 +1327,7 @@ try {
 				-Arguments $Arguments -Label ('client-{0:D2}' -f $Slot) -OutputDirectory $Paths.Evidence `
 				-RemoveEnvironmentVariables $SecretVariables
 			$Owners.Add($Owner); $Clients.Add($Owner)
+			Publish-EndpointSamplerOwner -Sampler $ResourceSampler -Owner $Owner
 			Add-TimedResourceSamples -Owners @($Owners)
 			if ($Slot -eq 0) {
 				$Clock = [Diagnostics.Stopwatch]::StartNew()
@@ -1050,6 +1364,7 @@ try {
 		Start-Sleep -Milliseconds 100
 	}
 	if ($RunClock.ElapsedMilliseconds -ge $RunTimeoutMilliseconds) { throw 'role-local runtime deadline elapsed' }
+	Stop-EndpointResourceSampler -Sampler $ResourceSampler -Processes $ResourceSamples -Hosts $HostResourceSamples
 	foreach ($Owner in $Owners) {
 		if (-not $Owner.OutputCopy.Wait(5000) -or -not $Owner.ErrorCopy.Wait(5000)) {
 			throw "$($Owner.Label) redirected output did not drain"
@@ -1088,6 +1403,10 @@ try {
 		CompletedUtc = [DateTimeOffset]::UtcNow.ToString('O')
 	}
 } finally {
+	if ($null -ne $ResourceSampler -and -not $ResourceSampler.Stopped) {
+		try { Stop-EndpointResourceSampler -Sampler $ResourceSampler -Processes $ResourceSamples -Hosts $HostResourceSamples }
+		catch { $CleanupErrors.Add("resource sampler: $($_.Exception.Message)") }
+	}
 	foreach ($Owner in $OwnedProcesses) {
 		try { Stop-EndpointProcess -Owner $Owner }
 		catch { $CleanupErrors.Add("$($Owner.Label): $($_.Exception.Message)") }

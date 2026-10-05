@@ -259,6 +259,7 @@ try {
 	}
 	Write-Output "[Qualification:FarmEndpoint] NATIVE_PATH_TEST_OK Cases=$NativePathCases"
 	& (Join-Path $PSScriptRoot 'NewPhysicalGameSessionFarmProjectionTests.ps1')
+	& (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmSamplerTests.ps1')
 } finally {
 	$ResolvedRoot = [IO.Path]::GetFullPath($Root)
 	$ResolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
