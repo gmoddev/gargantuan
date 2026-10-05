@@ -464,12 +464,21 @@ namespace gargantuan::network {
 						const auto &Record = FrozenJournalRecords[Index];
 						const auto *Name = std::get_if<PropertyUpdatedChange>(&Record.Payload);
 						const auto Accepted = Peer.AcceptedParents.find(Record.Object);
+						const bool NativeName = Name && Name->Replicated && !Name->DeclaringClassSchemaId &&
+							Name->PropertyName == "Name" && std::holds_alternative<std::string>(Name->Value);
+						// Match the producer's zero-operation coverage before its operation
+						// limit. Covered history and an unselected next record cannot make
+						// an otherwise exact Name-only size proof uncertain.
+						if (NativeName && Peer.View.Knows(Record.Object) &&
+							(CurrentNames.contains(Record.Object) || (Accepted != Peer.AcceptedParents.end() &&
+								Record.Sequence < Accepted->second.NameJournalEnd))) continue;
+						if (OperationCount == Transitions) break;
 						const auto Published = Peer.PublicationJournalEnds.find(Record.Object);
 						const auto CatalogObject = Catalog.find(Record.Object);
 						if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId ||
 							Name->PropertyName != "Name" || !std::holds_alternative<std::string>(Name->Value) ||
 							!Peer.View.Knows(Record.Object) || !Peer.View.RelevantObjects.contains(Record.Object) ||
-							Accepted == Peer.AcceptedParents.end() || Record.Sequence < Accepted->second.NameJournalEnd ||
+							Accepted == Peer.AcceptedParents.end() ||
 							(Published != Peer.PublicationJournalEnds.end() && Record.Sequence < Published->second) ||
 							CatalogObject == Catalog.end() || RetiredObjects.contains(Record.Object) ||
 							CatalogObject->second->Publication.Properties.contains("Name")) {
@@ -477,8 +486,7 @@ namespace gargantuan::network {
 							break;
 						}
 						const bool CoalescedName = Record.Sequence >= NameCoalescingBegin;
-						if (CoalescedName && !CurrentNames.insert(Record.Object).second) continue;
-						if (OperationCount == Transitions) break;
+						if (CoalescedName) CurrentNames.insert(Record.Object);
 						const auto &Value = CoalescedName
 							? CatalogObject->second->Publication.Name : std::get<std::string>(Name->Value);
 						const bool Inserted = CoalescedName
@@ -2102,18 +2110,23 @@ namespace gargantuan::network {
 			for (const auto *Record : Records) {
 				const auto *Name = std::get_if<PropertyUpdatedChange>(&Record->Payload);
 				const auto Accepted = Peer->second.AcceptedParents.find(Record->Object);
+				const bool NativeName = Name && Name->Replicated && !Name->DeclaringClassSchemaId &&
+					Name->PropertyName == "Name" && std::holds_alternative<std::string>(Name->Value);
+				if (NativeName && Peer->second.View.Knows(Record->Object) &&
+					(CurrentNames.contains(Record->Object) || (Accepted != Peer->second.AcceptedParents.end() &&
+						Record->Sequence < Accepted->second.NameJournalEnd))) continue;
+				if (OperationCount == MaximumTransitions) break;
 				const auto Published = Peer->second.PublicationJournalEnds.find(Record->Object);
 				const auto Object = Catalog.find(Record->Object);
 				if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId || Name->PropertyName != "Name" ||
 					!std::holds_alternative<std::string>(Name->Value) ||
 					!Peer->second.View.Knows(Record->Object) || !Peer->second.View.RelevantObjects.contains(Record->Object) ||
-					Accepted == Peer->second.AcceptedParents.end() || Record->Sequence < Accepted->second.NameJournalEnd ||
+					Accepted == Peer->second.AcceptedParents.end() ||
 					(Published != Peer->second.PublicationJournalEnds.end() && Record->Sequence < Published->second) ||
 					Object == Catalog.end() || RetiredObjects.contains(Record->Object) ||
 					Object->second->Publication.Properties.contains("Name")) return false;
 				const bool Coalesced = Record->Sequence >= NameCoalescingBegin;
-				if (Coalesced && !CurrentNames.insert(Record->Object).second) continue;
-				if (OperationCount == MaximumTransitions) break;
+				if (Coalesced) CurrentNames.insert(Record->Object);
 				const auto &Value = Coalesced ? Object->second->Publication.Name : std::get<std::string>(Name->Value);
 				if (!Validation.Validated.contains(&Value)) {
 					if (Value.size() > MaximumProtocolStringBytes || Value.find('\0') != std::string::npos ||

@@ -6,6 +6,93 @@ last_verified: 2026-10-05
 
 # Foundation 3L pooled physical qualification attempt
 
+## Actual Local32 recovery convergence failure (2026-10-05)
+
+Tooling `999d3b0ffe03bcb1f71d8f76d96623907169c965` passes all six original
+hosted jobs: both native Windows jobs pass 95 CTest entries and 372 Python
+checks, both native Linux jobs pass 53 entries, and both GNS sanitizer jobs
+pass 10 entries. Native push/PR runs are `37360882888`/`37360890152`;
+GNS push/PR runs are `37360882751`/`37360891066`. No rerun substitutes for an
+original result. The retained original-artifact index SHA-256 is
+`961c4672a44f561cd42fe2ba45f6f5292cc5e114e245e554bf3e9a76978cee84`.
+
+Fresh Local32 run `441c7f4c-870f-4e8f-92c9-66674adc86ff`, coordinator
+`caf625f2-335c-4412-b0eb-ec921ccb952b`, uses unchanged native/package
+`9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad`. Fresh resource preflight reports
+11.42 GiB client available RAM. Actual staging, installed pins, child imports,
+capture configuration and one-use control preflight pass. The run reaches
+production recovery. Its first native failure is
+`recovery_work_did_not_converge_within_bound`; subsequent client connection
+closures are consequences of server shutdown, not the first cause.
+
+At cessation the journal fence is 23,240. The immutable reference totals
+607,606,906 B across 1,604 frames, deriving the unchanged 31,088,518-us
+convergence bound. All 32 source cursors remain below the fence at that
+deadline. At the 37,494,756-us terminal observation only three have converged;
+29 remain incomplete. All 1,466 accepted post-cessation frames match their
+frozen per-peer prefix exactly in sequence, complete bytes, fingerprint and
+cursor coverage. There is no measured live-reference divergence or cancellation
+explaining this miss. Delayed quote sealing does not extend the deadline.
+
+The terminal live ledger records 555,370,399 B accepted, 554,025,459 B uniquely
+first-sent, and 553,795,791 B ACKed/retired, with zero terminal release. This
+is interrupted-run accounting, not terminal convergence. The 644 completed
+recovery ticks consume 37.457 s of measured work, with median 59.519 ms,
+p95 78.351 ms and maximum 90.092 ms. Preparation dominates sampled Session
+work. Source inspection finds Name preflight decisions that reject already
+represented history or an unselected trailing record, forcing avoidable
+oversized candidate copying/encoding. Their exclusive physical time contribution
+is **NOT MEASURED**. A narrow correction requires exact-output regression and
+new execution-changing CI; admission, freshness, recovery and F1 gates remain
+unchanged. No blind physical retry is justified.
+
+The narrow correction aligns both live and frozen Name byte proofs with the
+existing producer: skip transactionally covered native Name history before
+charging an operation, and stop at the selected operation limit before testing
+an unselected trailing record. Selected-string validation remains unchanged.
+On the cached MSVC/GNS worker, baseline `999d3b0f` with the new regression
+performs five encoder calls against the reference's six and fails the intended
+one-encode assertion. The corrected covered invalid-UTF8/embedded-NUL cases
+perform one call against six; the unselected-barrier case performs one against
+two. Deferral, rejected preparation and accepted preparation all retain exact
+bytes, fingerprints, cursors, read charges and transaction results. The selected
+declaring-class guard remains a fallback; its fixture now places that operation
+inside every reduced candidate rather than outside the selected prefix.
+Corrected `gargantuan_replication_relevance` passes at 21:44 UTC (8.31 s), and
+`FrozenRecoveryQuoteTests` passes with the same production source (68.78 s).
+Both CTest entries have zero failures. Initial missing-DLL test startup and the
+intermediate fixture failure remain preserved alongside the final results in
+`farm32-name-preflight-native-999d-v1/worker-logs-v1`. Hosted qualification and a
+new official package are still required; this deterministic improvement does
+not establish corrected Local32 recovery or provider PASS.
+
+The current run's F1 terminal result is **NOT MEASURED**: the recovery exception
+occurs before the normal terminal F1 writer, and the existing reader finds zero
+observations. Fresh feedback observations and ongoing ACK/retirement progress
+are not substitutes for that service-contract verdict. This absent result
+neither invalidates the separate retained F1 Phase 1 PASS nor proves F1 passed
+in this failed provider attempt.
+
+Both capture indices retain the correct identities but are
+`FAILED_DIAGNOSTIC`, so collection correctly refuses provider acceptance. The
+worker owned stop and offline export succeed with zero recorded event/buffer
+losses and 1,759,989 diagnostic frames. Client owned stop/export are unconfirmed;
+its four unsealed files remain diagnostic. Native traces, role logs, resource
+samples, captures and original errors remain preserved under the run's sealed
+roots. Managed terminals report owned child trees reaped, and direct endpoint
+census observes no task processes, owned listeners/firewall rules or active
+capture. All six exact one-run control secrets are retired in order using the
+existing held-object guards, and the final fresh endpoint census passes at
+21:14 UTC. The retained direct cleanup result SHA-256 is
+`24b5575d6ee012f9298c90acd26b6ed1c54a0a8b8052efe7f0535e4064e4c9fa`.
+An earlier cleanup lease refused a temporarily present historical PID before
+any disposition; that refusal remains preserved. Its replacement process
+identity is **NOT MEASURED**. The later census finds every original owner PID
+absent; no unrelated process is terminated or exempted.
+
+**Local32 recovery FAIL; Node32 NOT RUN; KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY.** Retained F1 Phase 1 PASS is unchanged. No 3M or merge.
+
 ## Corrected sampler passes; separate aggregate RPC CI failure (2026-10-05)
 
 Tooling `d66444f3eb2a283e37ab6fb5451d55cab2849f92` passes all 95 native

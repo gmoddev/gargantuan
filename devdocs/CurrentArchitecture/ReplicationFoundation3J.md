@@ -336,6 +336,13 @@ it cannot survive preparation, acceptance or a later public call.
 `tests/NameBytePreflightFixture.hpp` compares this path against the original
 encoder for exact bytes, fingerprints, sequence, cursor, error and work-budget
 results, including rejection, semantic barriers and the complete 512 KiB bound.
+The byte proof follows the producer's selection order: already-covered native
+Name history contributes no operation, then the selected operation limit ends
+the candidate before an unselected next record is inspected. Covered strings
+do not become newly selected validation inputs; every actually selected string
+retains full validation and error precedence. The detached frozen Name proof
+uses the same ordering. This avoids discarded encoder work without changing
+accepted source coverage, output bytes, geometric retry sizes or read charges.
 
 Qualification can capture a detached 3J cessation input on Main after catalog
 refresh reaches the journal tail. The capture copies the bounded retained

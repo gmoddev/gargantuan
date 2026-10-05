@@ -85,6 +85,22 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-05 actual Local32 run `441c7f4c-870f-4e8f-92c9-66674adc86ff`
+reaches production on native `9ae8f68c2` after all six original tooling
+`999d3b0f` hosted jobs pass. It fails recovery convergence at the unchanged
+31,088,518-us workload-derived bound: all 32 cursors are still below cessation
+fence 23,240 at that deadline, and 29 remain incomplete at terminal shutdown.
+All 1,466 post-cessation accepted frames match the frozen per-peer prefix
+exactly. The 644 completed recovery ticks have median 59.519-ms work dominated
+by preparation. Name size-preflight rejects already represented history and
+unselected trailing records, causing avoidable discarded candidate work;
+its exclusive physical contribution is **NOT MEASURED**. Qualify a narrow
+exact-output correction and new native CI before retrying. Do not change
+admission, freshness, recovery deadlines or F1 constants. Failed diagnostic
+captures and shutdown-induced client disconnects do not establish provider
+acceptance. See the [actual receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#actual-local32-recovery-convergence-failure-2026-10-05).
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; Node32 not run; no 3M.**
+
 2026-10-05 tooling `d66444f3` passes the corrected sampler and all 95 native
 CTest entries plus 371 Python checks. Its original push `37275013641` then
 fails five unchanged 150-ms RPC p95 gates in FULL_RESERVATION aggregate

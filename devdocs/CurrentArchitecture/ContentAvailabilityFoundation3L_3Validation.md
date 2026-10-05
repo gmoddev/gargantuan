@@ -1,10 +1,36 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-10-04
+last_verified: 2026-10-05
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Actual Local32 recovery measurement (2026-10-05)
+
+The [actual Local32 receipt](PooledPhysicalQualification3L.md#actual-local32-recovery-convergence-failure-2026-10-05)
+records run `441c7f4c-870f-4e8f-92c9-66674adc86ff` after all six original
+tooling `999d3b0f` hosted jobs pass and fresh endpoint preflight succeeds.
+Native/package `9ae8f68c2` reaches real 32-client recovery and fails the
+unchanged immutable-work convergence bound of 31,088,518 us. All 32 cursors
+remain below cessation fence 23,240 at that deadline; 29 are incomplete at
+terminal shutdown. All 1,466 post-cessation accepted frames match the frozen
+per-peer prefix exactly. This is a production convergence failure, not a
+source-coverage discrepancy or sampler startup failure. Failed diagnostic
+captures cannot establish a completed provider acceptance campaign.
+
+Measured recovery work has a 59.519-ms median across 644 completed ticks.
+Correct only attributable preparation costs with optimized/reference exact
+byte, cursor, validation, budget and transaction regressions; preserve the
+cessation reference, deadlines, admission, fairness, freshness and service
+constants. Corrected native source needs deterministic and original hosted
+qualification before another fresh provider measurement. Node32 and final
+acceptance remain outstanding; retained F1 PASS is unchanged.
+The live/frozen selected-prefix Name proof correction passes the two targeted
+native CTest entries, including exact-output regressions and the frozen oracle.
+New hosted CI, an official current-source package and corrected actual provider
+measurement remain required; deterministic cost reduction is not recovery PASS.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M or merge.**
 
 ## Local32 projected game-UDP permission (2026-10-04)
 

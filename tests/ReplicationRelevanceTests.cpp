@@ -262,6 +262,16 @@ namespace {
 				for (std::size_t Index = 0; Index < LargeObjects.size(); ++Index)
 					LargeObjects[Index]->SetName(std::string(24 * 1024,
 						static_cast<char>('a' + (Round + Index) % 26)));
+			ChangeJournal::Get().Commit(LargeWorld->GetObjectId(), LargeObjects.front()->GetObjectId(),
+				PropertyUpdatedChange{"Name", WireValue(std::string{"\xc0\xaf", 2}), true});
+			// Accept current values before the barrier, so the captured remainder
+			// contains both uncovered Names and legally covered same-object history,
+			// including the malformed value represented by the valid current Name.
+			auto CoveredNames = LiveLarge.ProduceIncremental(LargeConnection, Configuration.PeerQuantum,
+				Limit, Configuration.MaximumJournalRecordsPerPeerTick, Limit);
+			Check(CoveredNames.Frame && CoveredNames.SelectedTransitions == 16 &&
+				LiveLarge.CommitSchedulerAcceptance(LargeConnection, CoveredNames.Frame->Sequence).Succeeded(),
+				"large frozen quote starts with transactional accepted Name coverage inside retained history");
 			Check(LargeObjects[0]->ApplyAttributeMutation("MixedQuoteMarker", WireValue(1),
 				ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success,
 				"large quote includes a mixed record after historical Name updates");
