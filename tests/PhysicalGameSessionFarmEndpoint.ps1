@@ -609,7 +609,9 @@ function Add-EndpointResourceSamples {
 # Resource evidence is sampled on this role's own host and monotonic clock. The
 # process sum is one bounded sweep, not a sum of each process's separate peak.
 function Initialize-HostResourceCounters {
-	if ('FarmHostNativeCounters' -as [type]) { return }
+	param([string]$PreparationRoot, $Preparation, [string]$ExpectedRoot, [string]$EvidenceDirectory)
+	# The fixed source is emitted once before the role clock. A child loads the
+	# exact held bytes, rather than compiling again or reopening a verified path.
 	$Source = @'
 using System;
 using System.IO;
@@ -643,7 +645,131 @@ public static class FarmHostNativeCounters {
     public static extern bool GlobalMemoryStatusEx(ref MemoryStatus status);
 }
 '@
-	Add-Type -TypeDefinition $Source -ErrorAction Stop
+	$SourceSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+		[Text.UTF8Encoding]::new($false).GetBytes($Source))).ToLowerInvariant()
+	$RuntimePath = [IO.Path]::GetFullPath((Get-Process -Id $PID).Path)
+	$RuntimeSha256 = (Get-FileHash -LiteralPath $RuntimePath -Algorithm SHA256).Hash.ToLowerInvariant()
+	$CounterType = 'FarmHostNativeCounters' -as [type]
+	$PipeType = 'FarmSamplerPipeCopy' -as [type]
+	$MemoryType = 'FarmHostNativeCounters+MemoryStatus' -as [type]
+	if ($PreparationRoot) {
+		if ($null -ne $Preparation -or $null -ne $CounterType -or $null -ne $PipeType -or $null -ne $MemoryType) {
+			throw 'counter preparation refuses an existing or foreign loaded type'
+		}
+		$PreparationRoot = [IO.Path]::GetFullPath($PreparationRoot)
+		$ExpectedRoot = $PreparationRoot
+		if (-not $EvidenceDirectory -or -not [IO.Directory]::Exists($EvidenceDirectory) -or
+			([IO.File]::GetAttributes($EvidenceDirectory) -band [IO.FileAttributes]::ReparsePoint)) {
+			throw 'counter preparation evidence directory differs'
+		}
+		if ([IO.Directory]::Exists($PreparationRoot) -or [IO.File]::Exists($PreparationRoot)) {
+			throw 'counter preparation directory already exists'
+		}
+		$Ancestor = [IO.Path]::GetDirectoryName($PreparationRoot)
+		while ($Ancestor) {
+			if ([IO.File]::Exists($Ancestor) -or ([IO.Directory]::Exists($Ancestor) -and
+				([IO.File]::GetAttributes($Ancestor) -band [IO.FileAttributes]::ReparsePoint))) {
+				throw 'counter preparation ancestor redirected'
+			}
+			$Ancestor = [IO.Path]::GetDirectoryName($Ancestor)
+		}
+		[void][IO.Directory]::CreateDirectory($PreparationRoot)
+		$AssemblyPath = Join-Path $PreparationRoot 'counters.dll'
+		# OutputAssembly emits without loading the types. No compile retry/cache.
+		$CompilationFailure = $null
+		try { Add-Type -TypeDefinition $Source -OutputAssembly $AssemblyPath -OutputType Library -ErrorAction Stop }
+		catch { $CompilationFailure = $_.Exception.Message; throw }
+		finally {
+			$Files = @(Get-ChildItem -LiteralPath $PreparationRoot -File | ForEach-Object {
+				if ($_.Name -cne 'counters.dll' -or $_.Length -gt 1048576 -or
+					($_.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'counter preparation output differs' }
+				[ordered]@{ Name = $_.Name; Bytes = $_.Length; Sha256 = (Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant() }
+			})
+			$CollectedAssembly = Join-Path $EvidenceDirectory 'resource-counter-assembly.dll'
+			if ($Files.Count -eq 1) {
+				$HeldPartial = [IO.File]::Open($AssemblyPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+				try {
+					if ($HeldPartial.Length -ne $Files[0].Bytes) { throw 'counter preparation retention size differs' }
+					$Partial = [byte[]]::new([int]$HeldPartial.Length); $HeldPartial.ReadExactly($Partial,0,$Partial.Length)
+					if ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Partial)).ToLowerInvariant() -cne $Files[0].Sha256) {
+						throw 'counter preparation retention hash differs'
+					}
+					$Flat = [IO.File]::Open($CollectedAssembly,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+					try { $Flat.Write($Partial); $Flat.Flush($true) } finally { $Flat.Dispose() }
+				} finally { $HeldPartial.Dispose() }
+			}
+			Write-EndpointSamplerJson -Path (Join-Path $EvidenceDirectory 'resource-counter-preparation.json') -Value ([ordered]@{
+				SourceSha256 = $SourceSha256; RuntimePath = $RuntimePath; RuntimeSha256 = $RuntimeSha256;
+				Files = $Files; CollectedAssemblyName = 'resource-counter-assembly.dll'; CompilationFailure = $CompilationFailure;
+				Scope = 'OWNED_PRE_RUN_COUNTER_ASSEMBLY' })
+		}
+		$Preparation = [pscustomobject]@{
+			Path = $AssemblyPath; Bytes = [long](Get-Item -LiteralPath $AssemblyPath).Length
+			Sha256 = (Get-FileHash -LiteralPath $AssemblyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+			SourceSha256 = $SourceSha256; RuntimePath = $RuntimePath; RuntimeSha256 = $RuntimeSha256
+			FullName = $null; ModuleVersionId = $null; LoadedAssembly = $null
+		}
+	}
+	$Names = @('Path','Bytes','Sha256','SourceSha256','RuntimePath','RuntimeSha256','FullName','ModuleVersionId','LoadedAssembly')
+	if ($null -eq $Preparation -or @($Preparation.PSObject.Properties.Name | Where-Object { $_ -notin $Names }).Count -or
+		@($Names | Where-Object { $null -eq $Preparation.PSObject.Properties[$_] }).Count -or
+		$Preparation.Path -isnot [string] -or -not $ExpectedRoot -or
+		[IO.Path]::GetFullPath($Preparation.Path) -ine [IO.Path]::GetFullPath((Join-Path $ExpectedRoot 'counters.dll')) -or
+		[IO.Path]::GetFileName($Preparation.Path) -cne 'counters.dll' -or
+		[IO.Path]::GetFullPath($Preparation.Path) -cne $Preparation.Path -or
+		$Preparation.Bytes -isnot [long] -or $Preparation.Bytes -le 0 -or $Preparation.Bytes -gt 1048576 -or
+		$Preparation.Sha256 -cnotmatch '^[a-f0-9]{64}$' -or $Preparation.SourceSha256 -cne $SourceSha256 -or
+		$Preparation.RuntimePath -ine $RuntimePath -or $Preparation.RuntimeSha256 -cne $RuntimeSha256 -or
+		(-not $PreparationRoot -and ($Preparation.FullName -isnot [string] -or [string]::IsNullOrWhiteSpace($Preparation.FullName) -or
+			$Preparation.ModuleVersionId -isnot [string] -or $Preparation.ModuleVersionId -cnotmatch '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$'))) {
+		throw 'counter assembly source/runtime/path/size pin differs'
+	}
+	$Ancestor = $Preparation.Path
+	while ($Ancestor) {
+		if (([IO.File]::Exists($Ancestor) -or [IO.Directory]::Exists($Ancestor)) -and
+			([IO.File]::GetAttributes($Ancestor) -band [IO.FileAttributes]::ReparsePoint)) {
+			throw 'counter assembly path redirected'
+		}
+		$Ancestor = [IO.Path]::GetDirectoryName($Ancestor)
+	}
+	$Held = [IO.File]::Open($Preparation.Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+	try {
+		if ($Held.Length -ne $Preparation.Bytes) { throw 'counter assembly held size differs' }
+		$Bytes = [byte[]]::new([int]$Held.Length)
+		$Held.ReadExactly($Bytes,0,$Bytes.Length)
+		if ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant() -cne $Preparation.Sha256) {
+			throw 'counter assembly held hash differs'
+		}
+		if ($null -ne $CounterType -or $null -ne $PipeType -or $null -ne $MemoryType) {
+			if ($null -eq $Preparation.LoadedAssembly -or $null -eq $CounterType -or $null -eq $PipeType -or $null -eq $MemoryType -or
+				-not [object]::ReferenceEquals($CounterType.Assembly,$Preparation.LoadedAssembly) -or
+				-not [object]::ReferenceEquals($PipeType.Assembly,$Preparation.LoadedAssembly) -or
+				-not [object]::ReferenceEquals($MemoryType.Assembly,$Preparation.LoadedAssembly)) {
+				throw 'counter assembly loaded type origin differs'
+			}
+			$Assembly = $Preparation.LoadedAssembly
+		} else {
+			if ($null -ne $Preparation.LoadedAssembly) { throw 'counter assembly loaded identity is not visible' }
+			$Assembly = [Reflection.Assembly]::Load($Bytes)
+		}
+		$CounterType = 'FarmHostNativeCounters' -as [type]
+		$PipeType = 'FarmSamplerPipeCopy' -as [type]
+		$MemoryType = 'FarmHostNativeCounters+MemoryStatus' -as [type]
+		if ($null -eq $CounterType -or $null -eq $PipeType -or $null -eq $MemoryType -or
+			-not [object]::ReferenceEquals($CounterType.Assembly,$Assembly) -or
+			-not [object]::ReferenceEquals($PipeType.Assembly,$Assembly) -or
+			-not [object]::ReferenceEquals($MemoryType.Assembly,$Assembly) -or
+			(@($Assembly.GetExportedTypes().FullName | Sort-Object) -join ',') -cne
+				'FarmHostNativeCounters,FarmHostNativeCounters+MemoryStatus,FarmSamplerPipeCopy' -or
+			($Preparation.FullName -and $Preparation.FullName -cne $Assembly.FullName) -or
+			($Preparation.ModuleVersionId -and $Preparation.ModuleVersionId -cne $Assembly.ManifestModule.ModuleVersionId.ToString())) {
+			throw 'counter assembly type/identity pin differs'
+		}
+		$Result = [pscustomobject]@{ Path = $Preparation.Path; Bytes = $Preparation.Bytes; Sha256 = $Preparation.Sha256;
+			SourceSha256 = $SourceSha256; RuntimePath = $RuntimePath; RuntimeSha256 = $RuntimeSha256;
+			FullName = $Assembly.FullName; ModuleVersionId = $Assembly.ManifestModule.ModuleVersionId.ToString(); LoadedAssembly = $Assembly }
+		return $Result
+	} finally { $Held.Dispose() }
 }
 
 function Get-HostResourceInterface {
@@ -819,14 +945,18 @@ function Write-EndpointSamplerCsv {
 
 function Invoke-EndpointResourceSampler {
 	param([string]$ConfigurationPath)
+	$EntryTicks = [Diagnostics.Stopwatch]::GetTimestamp()
 	$Config = Get-Content -LiteralPath $ConfigurationPath -Raw | ConvertFrom-Json -AsHashtable
-	$Names = @('RunId','Role','Provider','Interface','StartedTicks','Frequency','TimeoutMilliseconds','ScriptSha256')
+	$Names = @('RunId','Role','Provider','Interface','StartedTicks','Frequency','TimeoutMilliseconds','ScriptSha256',
+		'CounterAssembly','InitializationStartedTicks')
 	$InterfaceNames = @('Index','MacAddress','Address','Name','HostName')
 	if ($Config.Count -ne $Names.Count -or @($Names | Where-Object { -not $Config.Contains($_) }).Count -ne 0 -or
 		$Config.RunId -cnotmatch '^[a-f0-9-]{36}$' -or $Config.Role -cnotin @('Server','Clients') -or
 		$Config.Provider -cnotin @('Local','Node') -or $Config.Frequency -ne [Diagnostics.Stopwatch]::Frequency -or
 		$Config.StartedTicks -isnot [long] -or $Config.StartedTicks -le 0 -or $Config.Frequency -isnot [long] -or
 		$Config.TimeoutMilliseconds -isnot [long] -or $Config.TimeoutMilliseconds -lt 30000 -or $Config.TimeoutMilliseconds -gt 900000 -or
+		$Config.InitializationStartedTicks -isnot [long] -or $Config.InitializationStartedTicks -le 0 -or
+		$Config.CounterAssembly -isnot [Collections.IDictionary] -or $null -ne $Config.CounterAssembly.LoadedAssembly -or
 		$Config.Interface -isnot [Collections.IDictionary] -or $Config.Interface.Count -ne 5 -or
 		@($InterfaceNames | Where-Object { -not $Config.Interface.Contains($_) }).Count -ne 0 -or
 		$Config.Interface.Index -isnot [long] -or $Config.Interface.Index -le 0 -or
@@ -839,6 +969,9 @@ function Invoke-EndpointResourceSampler {
 		[IO.Path]::GetFullPath($PSCommandPath) -ine [IO.Path]::GetFullPath((Join-Path $Root 'sampler.ps1'))) {
 		throw 'resource sampler entry paths differ from the fixed generated closure'
 	}
+	Write-EndpointSamplerJson -Path (Join-Path $Root 'child-entry.json') -Value ([ordered]@{
+		RunId = $Config.RunId; Phase = 'CHILD_ENTRY'; StartedTicks = $EntryTicks;
+		EndedTicks = [Diagnostics.Stopwatch]::GetTimestamp(); Frequency = $Config.Frequency })
 	$ProcessWriter = [IO.StreamWriter]::new([IO.File]::Open((Join-Path $Root 'process-resources.csv'),
 		[IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read), [Text.UTF8Encoding]::new($false))
 	$HostWriter = $null; $Failure = $null; $ProcessCount = 0; $HostCount = 0
@@ -847,7 +980,15 @@ function Invoke-EndpointResourceSampler {
 	try {
 		$HostWriter = [IO.StreamWriter]::new([IO.File]::Open((Join-Path $Root 'host-resources.csv'),
 			[IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read), [Text.UTF8Encoding]::new($false))
-		Initialize-HostResourceCounters
+		$LoadStartedTicks = [Diagnostics.Stopwatch]::GetTimestamp()
+		Write-EndpointSamplerJson -Path (Join-Path $Root 'child-counter-load.started.json') -Value ([ordered]@{
+			RunId = $Config.RunId; Phase = 'VERIFIED_COUNTER_LOAD_STARTED'; StartedTicks = $LoadStartedTicks; Frequency = $Config.Frequency })
+		$CounterPreparation = Initialize-HostResourceCounters -Preparation ([pscustomobject]$Config.CounterAssembly) -ExpectedRoot $Root
+		Write-EndpointSamplerJson -Path (Join-Path $Root 'child-counter-load.json') -Value ([ordered]@{
+			RunId = $Config.RunId; Phase = 'VERIFIED_COUNTER_LOAD'; StartedTicks = $LoadStartedTicks;
+			EndedTicks = [Diagnostics.Stopwatch]::GetTimestamp(); Frequency = $Config.Frequency;
+			AssemblySha256 = $CounterPreparation.Sha256; SourceSha256 = $CounterPreparation.SourceSha256;
+			FullName = $CounterPreparation.FullName; ModuleVersionId = $CounterPreparation.ModuleVersionId })
 		while ($true) {
 			$Elapsed = [long](([Diagnostics.Stopwatch]::GetTimestamp() - $Config.StartedTicks) * 1000 / $Config.Frequency)
 			if ($Elapsed -ge $Config.TimeoutMilliseconds) { throw 'resource sampler runtime deadline elapsed' }
@@ -884,7 +1025,12 @@ function Invoke-EndpointResourceSampler {
 				}
 				Write-EndpointSamplerJson -Path (Join-Path $Root ($Sequence + '.completed.json')) -Value ([ordered]@{
 					RunId = $Config.RunId; Sequence = $HostCount - 1; EndedTicks = [Diagnostics.Stopwatch]::GetTimestamp() })
-				if ($HostCount -eq 1) { Write-EndpointSamplerJson -Path (Join-Path $Root 'sampler.ready.json') -Value ([ordered]@{ RunId = $Config.RunId; Ready = $true }) }
+				if ($HostCount -eq 1) {
+					Write-EndpointSamplerJson -Path (Join-Path $Root 'child-first-baseline.json') -Value ([ordered]@{
+						RunId = $Config.RunId; Phase = 'FIRST_REAL_BASELINE'; StartedTicks = $Hosts[0].SampleStartTicks;
+						EndedTicks = $Hosts[0].SampleEndTicks; Frequency = $Config.Frequency; LiveOwnedProcessCount = $Owners.Count })
+					Write-EndpointSamplerJson -Path (Join-Path $Root 'sampler.ready.json') -Value ([ordered]@{ RunId = $Config.RunId; Ready = $true })
+				}
 				$LastElapsed = $Elapsed
 			} finally { foreach ($Owner in $Owners) { $Owner.Process.Dispose() } }
 		}
@@ -907,7 +1053,8 @@ function Assert-EndpointSampler {
 	}
 	if ($Sampler.Process.HasExited) { throw "resource sampler exited before owned stop: $($Sampler.Process.ExitCode)" }
 	$Now = [Diagnostics.Stopwatch]::GetTimestamp()
-	$Latest = @(Get-ChildItem -LiteralPath $Sampler.Root -Filter '*.started.json' -File | Sort-Object Name | Select-Object -Last 1)
+	$Latest = @(Get-ChildItem -LiteralPath $Sampler.Root -Filter '*.started.json' -File |
+		Where-Object Name -cmatch '^[0-9]{4}\.started\.json$' | Sort-Object Name | Select-Object -Last 1)
 	if ($Latest.Count) {
 		$Record = Get-Content -LiteralPath $Latest[0].FullName -Raw | ConvertFrom-Json -AsHashtable
 		$Completed = Join-Path $Sampler.Root ($Latest[0].Name.Replace('.started.json','.completed.json'))
@@ -919,10 +1066,27 @@ function Assert-EndpointSampler {
 
 function Start-EndpointResourceSampler {
 	param([string]$EndpointSource, [string]$OutputDirectory, [string]$LocalRunId, [string]$LocalRole,
-		[string]$LocalProvider, $Interface, [long]$StartedTicks, [int]$TimeoutMilliseconds, [string[]]$SecretVariables = @())
+		[string]$LocalProvider, $Interface, [long]$StartedTicks, [int]$TimeoutMilliseconds, $CounterPreparation,
+		[string]$Registry, [string[]]$SecretVariables = @())
 	$InitializationClock = [Diagnostics.Stopwatch]::StartNew()
-	Initialize-HostResourceCounters
-	$Root = Join-Path $OutputDirectory 'resource-sampler'
+	$InitializationStartedTicks = [Diagnostics.Stopwatch]::GetTimestamp()
+	$VerifiedCounters = Initialize-HostResourceCounters -Preparation $CounterPreparation -ExpectedRoot (Split-Path -Parent $CounterPreparation.Path)
+	$CountersVerifiedTicks = [Diagnostics.Stopwatch]::GetTimestamp()
+	if ($LocalRunId -cnotmatch '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$' -or $LocalRole -cnotin @('Server','Clients') -or -not $Registry) {
+		throw 'resource sampler registry identity differs'
+	}
+	$Registry = [IO.Path]::GetFullPath($Registry)
+	if ($Registry -ieq [IO.Path]::GetFullPath($OutputDirectory) -or
+		$Registry.StartsWith([IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) {
+		throw 'resource sampler registry must remain outside flat evidence'
+	}
+	$Ancestor = $Registry
+	while ($Ancestor) {
+		if ([IO.File]::Exists($Ancestor) -or ([IO.Directory]::Exists($Ancestor) -and
+			([IO.File]::GetAttributes($Ancestor) -band [IO.FileAttributes]::ReparsePoint))) { throw 'resource sampler registry redirected' }
+		$Ancestor = [IO.Path]::GetDirectoryName($Ancestor)
+	}
+	$Root = Join-Path $Registry "$LocalRunId.$LocalRole.resource-sampler"
 	if (Test-Path -LiteralPath $Root) { throw 'resource sampler directory already exists' }
 	[void][IO.Directory]::CreateDirectory($Root)
 	$Tokens = $null; $Errors = $null
@@ -939,10 +1103,25 @@ function Start-EndpointResourceSampler {
 	$ScriptPath = Join-Path $Root 'sampler.ps1'
 	$Stream = [IO.File]::Open($ScriptPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
 	try { $Stream.Write([Text.UTF8Encoding]::new($false).GetBytes($Script)) } finally { $Stream.Dispose() }
+	$AssemblyPath = Join-Path $Root 'counters.dll'
+	$Held = [IO.File]::Open($VerifiedCounters.Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+	try {
+		if ($Held.Length -ne $VerifiedCounters.Bytes) { throw 'counter assembly copy size differs' }
+		$AssemblyBytes = [byte[]]::new([int]$Held.Length); $Held.ReadExactly($AssemblyBytes,0,$AssemblyBytes.Length)
+		if ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($AssemblyBytes)).ToLowerInvariant() -cne $VerifiedCounters.Sha256) {
+			throw 'counter assembly copy hash differs'
+		}
+		$Copy = [IO.File]::Open($AssemblyPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+		try { $Copy.Write($AssemblyBytes); $Copy.Flush($true) } finally { $Copy.Dispose() }
+	} finally { $Held.Dispose() }
+	$CounterPin = [ordered]@{ Path = $AssemblyPath; Bytes = $VerifiedCounters.Bytes; Sha256 = $VerifiedCounters.Sha256;
+		SourceSha256 = $VerifiedCounters.SourceSha256; RuntimePath = $VerifiedCounters.RuntimePath; RuntimeSha256 = $VerifiedCounters.RuntimeSha256;
+		FullName = $VerifiedCounters.FullName; ModuleVersionId = $VerifiedCounters.ModuleVersionId; LoadedAssembly = $null }
 	$ConfigurationPath = Join-Path $Root 'configuration.json'
 	Write-EndpointSamplerJson -Path $ConfigurationPath -Value ([ordered]@{ RunId = $LocalRunId; Role = $LocalRole;
 		Provider = $LocalProvider; Interface = $Interface; StartedTicks = $StartedTicks; Frequency = [Diagnostics.Stopwatch]::Frequency;
-		TimeoutMilliseconds = $TimeoutMilliseconds; ScriptSha256 = (Get-FileHash -LiteralPath $ScriptPath -Algorithm SHA256).Hash.ToLowerInvariant() })
+		TimeoutMilliseconds = $TimeoutMilliseconds; ScriptSha256 = (Get-FileHash -LiteralPath $ScriptPath -Algorithm SHA256).Hash.ToLowerInvariant();
+		CounterAssembly = $CounterPin; InitializationStartedTicks = $InitializationStartedTicks })
 	$Runtime = (Get-Process -Id $PID).Path
 	$Arguments = @('-NoLogo','-NoProfile','-NonInteractive','-File',$ScriptPath,'-ConfigurationPath',$ConfigurationPath)
 	$FunctionPins = [ordered]@{}
@@ -951,21 +1130,29 @@ function Start-EndpointResourceSampler {
 			[Text.UTF8Encoding]::new($false).GetBytes($Definition.Extent.Text))).ToLowerInvariant()
 	}
 	Write-EndpointSamplerJson -Path (Join-Path $OutputDirectory 'resource-sampler-source.json') -Value ([ordered]@{
-		Format = 'GargantuanEndpointResourceSamplerSource'; Version = 1; RunId = $LocalRunId; Role = $LocalRole;
+		Format = 'GargantuanEndpointResourceSamplerSource'; Version = 2; RunId = $LocalRunId; Role = $LocalRole;
 		EndpointSha256 = (Get-FileHash -LiteralPath $EndpointSource -Algorithm SHA256).Hash.ToLowerInvariant();
 		ScriptSha256 = (Get-FileHash -LiteralPath $ScriptPath -Algorithm SHA256).Hash.ToLowerInvariant();
 		RuntimePath = $Runtime; RuntimeSha256 = (Get-FileHash -LiteralPath $Runtime -Algorithm SHA256).Hash.ToLowerInvariant();
 		Arguments = $Arguments; ConfigurationSha256 = (Get-FileHash -LiteralPath $ConfigurationPath -Algorithm SHA256).Hash.ToLowerInvariant();
-		FunctionPins = $FunctionPins; Scope = 'OWNED_RESOURCE_OBSERVATION_ONLY' })
+		FunctionPins = $FunctionPins; CounterAssembly = $CounterPin; Scope = 'OWNED_RESOURCE_OBSERVATION_ONLY' })
+	Write-EndpointSamplerJson -Path (Join-Path $Root 'parent-closure.json') -Value ([ordered]@{
+		RunId = $LocalRunId; Phase = 'PARENT_VERIFIED_SOURCE_CLOSURE'; StartedTicks = $InitializationStartedTicks;
+		CountersVerifiedTicks = $CountersVerifiedTicks; EndedTicks = [Diagnostics.Stopwatch]::GetTimestamp();
+		Frequency = [Diagnostics.Stopwatch]::Frequency })
 	$Owner = Start-EndpointProcess -Executable $Runtime -WorkingDirectory $Root -Label 'sampler' -OutputDirectory $Root `
 		-Arguments $Arguments -RemoveEnvironmentVariables $SecretVariables -SamplerPipes
 	$Owner | Add-Member -NotePropertyName Root -NotePropertyValue $Root
+	$Owner | Add-Member -NotePropertyName EvidenceDirectory -NotePropertyValue $OutputDirectory
 	$Owner | Add-Member -NotePropertyName RunId -NotePropertyValue $LocalRunId
 	$Owner | Add-Member -NotePropertyName Stopped -NotePropertyValue $false
 	$Owner | Add-Member -NotePropertyName StartedTicks -NotePropertyValue $StartedTicks
 	$Owner | Add-Member -NotePropertyName Role -NotePropertyValue $LocalRole
 	$Owner | Add-Member -NotePropertyName ProcessStartedUtcTicks -NotePropertyValue $Owner.Process.StartTime.ToUniversalTime().Ticks
 	try {
+		Write-EndpointSamplerJson -Path (Join-Path $Root 'parent-launch.json') -Value ([ordered]@{
+			RunId = $LocalRunId; Phase = 'PARENT_CHILD_LAUNCH'; EndedTicks = [Diagnostics.Stopwatch]::GetTimestamp();
+			Frequency = [Diagnostics.Stopwatch]::Frequency; Pid = $Owner.Pid })
 		while (-not [IO.File]::Exists((Join-Path $Root 'sampler.ready.json'))) {
 			Assert-EndpointSampler -Sampler $Owner
 			if ($InitializationClock.ElapsedMilliseconds -ge 5000) { throw 'resource sampler initialization exceeded five seconds' }
@@ -975,6 +1162,9 @@ function Start-EndpointResourceSampler {
 		if ($Ready.Count -ne 2 -or $Ready.RunId -cne $LocalRunId -or $Ready.Ready -isnot [bool] -or -not $Ready.Ready) {
 			throw 'sampler readiness record is invalid'
 		}
+		Write-EndpointSamplerJson -Path (Join-Path $Root 'parent-ready.json') -Value ([ordered]@{
+			RunId = $LocalRunId; Phase = 'PARENT_OBSERVED_FIRST_REAL_BASELINE'; EndedTicks = [Diagnostics.Stopwatch]::GetTimestamp();
+			Frequency = [Diagnostics.Stopwatch]::Frequency; InitializationMilliseconds = $InitializationClock.ElapsedMilliseconds })
 		if ($InitializationClock.ElapsedMilliseconds -ge 5000) { throw 'resource sampler initialization exceeded five seconds' }
 		$Owner | Add-Member -NotePropertyName InitializationMilliseconds -NotePropertyValue $InitializationClock.ElapsedMilliseconds
 		return $Owner
@@ -982,6 +1172,47 @@ function Start-EndpointResourceSampler {
 		try { Stop-EndpointResourceSampler -Sampler $Owner -Processes ([Collections.Generic.List[object]]::new()) -Hosts ([Collections.Generic.List[object]]::new()) } catch {}
 		throw
 	}
+}
+
+function Assert-EndpointSamplerArchive {
+	param([string]$Path, [object[]]$Files, [switch]$InventoryOnly)
+	if ($Files.Count -lt 1 -or $Files.Count -gt 2100) { throw 'sampler archive inventory differs' }
+	$Expected = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+	foreach ($File in $Files) {
+		if ($File.Name -cnotmatch '^(?:(?:[0-9]{4}\.(?:started|completed)|client-(?:0[0-9]|[12][0-9]|3[01])\.owner|server\.owner|configuration|sampler\.(?:ready|result)|parent-(?:closure|launch|ready)|child-(?:entry|counter-load(?:\.started)?|first-baseline))\.json(?:\.pending)?|sampler\.(?:ps1|stop|stdout\.log|stderr\.log)|(?:process|host)-resources\.csv|counters\.dll)$' -or
+			$File.Bytes -lt 0 -or $File.Bytes -gt 16777216 -or $File.Sha256 -cnotmatch '^[a-f0-9]{64}$' -or $Expected.ContainsKey($File.Name)) {
+			throw 'sampler archive raw-file pin differs'
+		}
+		$Expected.Add($File.Name,$File)
+	}
+	if ($InventoryOnly) { return }
+	if ([IO.File]::GetAttributes($Path) -band [IO.FileAttributes]::ReparsePoint) { throw 'sampler archive path redirected' }
+	$Held = [IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+	try {
+		if ($Held.Length -gt 16777216) { throw 'sampler archive exceeds 16 MiB' }
+		$Archive = [IO.Compression.ZipArchive]::new($Held,[IO.Compression.ZipArchiveMode]::Read,$true)
+		try {
+			if ($Archive.Entries.Count -ne $Expected.Count) { throw 'sampler archive complete membership differs' }
+			$Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+			foreach ($Entry in $Archive.Entries) {
+				$Pin = $null
+				if (-not $Seen.Add($Entry.FullName) -or -not $Expected.TryGetValue($Entry.FullName,[ref]$Pin) -or
+					$Entry.Length -ne $Pin.Bytes) { throw 'sampler archive entry identity/size differs' }
+				$Input = $Entry.Open(); $Hasher = [Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
+				try {
+					$Buffer = [byte[]]::new(4096); $Total = 0L
+					while (($Count = $Input.Read($Buffer,0,$Buffer.Length)) -ne 0) {
+						$Total += $Count
+						if ($Total -gt $Pin.Bytes) { throw 'sampler archive entry decompression exceeds pinned size' }
+						$Hasher.AppendData($Buffer,0,$Count)
+					}
+					if ($Total -ne $Pin.Bytes -or [Convert]::ToHexString($Hasher.GetHashAndReset()).ToLowerInvariant() -cne $Pin.Sha256) {
+						throw 'sampler archive entry hash differs'
+					}
+				} finally { $Input.Dispose(); $Hasher.Dispose() }
+			}
+		} finally { $Archive.Dispose() }
+	} finally { $Held.Dispose() }
 }
 
 function Stop-EndpointResourceSampler {
@@ -999,15 +1230,61 @@ function Stop-EndpointResourceSampler {
 		finally { $Sampler.Stopped = $true }
 		# Index the generated closure and every raw partial even when a blocked
 		# sampler required owned termination. This is no native descendant proof.
-		$Files = @(Get-ChildItem -LiteralPath $Sampler.Root -File | Sort-Object Name | ForEach-Object {
+		if (@(Get-ChildItem -LiteralPath $Sampler.Root -Force | Where-Object {
+			$_.PSIsContainer -or ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }).Count) { throw 'sampler raw root contains redirected or unindexed directories' }
+		$Files = @(Get-ChildItem -LiteralPath $Sampler.Root -File -Force | Sort-Object Name | ForEach-Object {
+			Assert-EndpointSamplerArchive -Files @([pscustomobject]@{ Name = $_.Name; Bytes = $_.Length; Sha256 = ('0'*64) }) -InventoryOnly
+			$Maximum = if ($_.Name -in @('process-resources.csv','host-resources.csv')) { 16777216 }
+				elseif ($_.Name -in @('sampler.stdout.log','sampler.stderr.log')) { 4194304 }
+				elseif ($_.Name -in @('sampler.ps1','counters.dll')) { 1048576 } else { 16384 }
+			if ($_.Length -gt $Maximum) { throw 'sampler raw file exceeds its fixed bound' }
 			[ordered]@{ Name = $_.Name; Bytes = $_.Length; Sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 		})
-		Write-EndpointSamplerJson -Path (Join-Path (Split-Path -Parent $Sampler.Root) 'resource-sampler-evidence.json') -Value ([ordered]@{
-			Format = 'GargantuanEndpointResourceSamplerEvidence'; Version = 1; RunId = $Sampler.RunId; Role = $Sampler.Role;
+		$ArchivePath = Join-Path $Sampler.EvidenceDirectory 'resource-sampler-raw.zip'
+		$ArchivePin = $null; $ArchiveFailure = $null
+		try {
+			$Output = [IO.File]::Open($ArchivePath,[IO.FileMode]::CreateNew,[IO.FileAccess]::ReadWrite,[IO.FileShare]::Read)
+			try {
+				$Archive = [IO.Compression.ZipArchive]::new($Output,[IO.Compression.ZipArchiveMode]::Create,$true)
+				try {
+					foreach ($File in $Files) {
+						$Input = [IO.File]::Open((Join-Path $Sampler.Root $File.Name),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+						try {
+							if ($Input.Length -ne $File.Bytes) { throw 'sampler archive source held size differs' }
+							$Entry = $Archive.CreateEntry($File.Name,[IO.Compression.CompressionLevel]::Optimal); $Target = $Entry.Open()
+							$Hasher = [Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
+							try {
+								$Buffer = [byte[]]::new(4096); $Total = 0L
+								while (($Count = $Input.Read($Buffer,0,$Buffer.Length)) -ne 0) {
+									$Total += $Count
+									if ($Total -gt $File.Bytes) { throw 'sampler archive source changed during held read' }
+									$Hasher.AppendData($Buffer,0,$Count); $Target.Write($Buffer,0,$Count)
+									if ($Output.Length -gt 16777216) { throw 'sampler archive exceeds 16 MiB' }
+								}
+								if ($Total -ne $File.Bytes -or [Convert]::ToHexString($Hasher.GetHashAndReset()).ToLowerInvariant() -cne $File.Sha256) {
+									throw 'sampler archive source held hash differs'
+								}
+							} finally { $Target.Dispose(); $Hasher.Dispose() }
+						} finally { $Input.Dispose() }
+						if ($Output.Length -gt 16777216) { throw 'sampler archive exceeds 16 MiB' }
+					}
+				} finally { $Archive.Dispose() }
+				$Output.Flush($true)
+				if ($Output.Length -gt 16777216) { throw 'sampler archive exceeds 16 MiB' }
+			} finally { $Output.Dispose() }
+			Assert-EndpointSamplerArchive -Path $ArchivePath -Files $Files
+			$ArchivePin = [ordered]@{ Name = 'resource-sampler-raw.zip'; Bytes = [long](Get-Item -LiteralPath $ArchivePath).Length;
+				Sha256 = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+		} catch {
+			$ArchiveFailure = $_.Exception.Message
+			$Failure = if ($Failure) { "$Failure; archive: $ArchiveFailure" } else { $ArchiveFailure }
+		}
+		Write-EndpointSamplerJson -Path (Join-Path $Sampler.EvidenceDirectory 'resource-sampler-evidence.json') -Value ([ordered]@{
+			Format = 'GargantuanEndpointResourceSamplerEvidence'; Version = 2; RunId = $Sampler.RunId; Role = $Sampler.Role;
 			Pid = $Sampler.Pid; CooperativeExitCode = $ExitCode; StreamsJoined = $Joined; StopFailure = $Failure;
 			ProcessStartedUtcTicks = $Sampler.ProcessStartedUtcTicks;
 			InitializationMilliseconds = $Sampler.InitializationMilliseconds;
-			Files = $Files; NativeTreeReaped = 'NOT_MEASURED_BY_SAMPLER' }) -MaximumBytes 1048576
+			Files = $Files; Archive = $ArchivePin; ArchiveFailure = $ArchiveFailure; NativeTreeReaped = 'NOT_MEASURED_BY_SAMPLER' }) -MaximumBytes 1048576
 		foreach ($Pair in @(@('process-resources.csv',$Processes),@('host-resources.csv',$Hosts))) {
 			$Path = Join-Path $Sampler.Root $Pair[0]
 			if ([IO.File]::Exists($Path)) {
@@ -1224,7 +1501,6 @@ try {
 	$Manifest = Read-PinnedRunManifest -Path $ManifestPath -ExpectedSha256 $ManifestSha256
 	$Network = Assert-RunManifest -Value $Manifest
 	$RunId = $Manifest.RunId
-	Initialize-HostResourceCounters
 	$HostResourceInterface = Get-HostResourceInterface -ServerAddress $Network.Address -LocalRole $Role
 	$Paths = Assert-RolePaths -LocalPackage $PackageRoot -LocalEvidence $EvidenceRoot -LocalRegistry $RunRegistryRoot
 	[void](Assert-LocalPackagePins -LocalRoot $Paths.Package -LocalRole $Role -RunManifest $Manifest)
@@ -1267,13 +1543,16 @@ try {
 	$SecretVariables = @([Environment]::GetEnvironmentVariables().Keys |
 		Where-Object { [string]$_ -match '^GARGANTUAN_ENGINE_ADAPTER_.*TOKEN' })
 	if ($Manifest.Provider -ceq 'Node') { $SecretVariables += [string]$Manifest.NodeTokenEnvironment }
+	$CounterPreparation = Initialize-HostResourceCounters -PreparationRoot (Join-Path $Paths.Registry "$RunId.$Role.counter-preparation") `
+		-EvidenceDirectory $Paths.Evidence
 	$RunStartedUtc = [DateTimeOffset]::UtcNow.ToString('O')
 	$RunStartedTicks = [Diagnostics.Stopwatch]::GetTimestamp()
 	$RunClock = [Diagnostics.Stopwatch]::StartNew()
 	$script:LastResourceSampleMilliseconds = -2000L
 	$ResourceSampler = Start-EndpointResourceSampler -EndpointSource $PSCommandPath -OutputDirectory $Paths.Evidence `
 		-LocalRunId $RunId -LocalRole $Role -LocalProvider $Manifest.Provider -Interface $HostResourceInterface `
-		-StartedTicks $RunStartedTicks -TimeoutMilliseconds $RunTimeoutMilliseconds -SecretVariables $SecretVariables
+		-StartedTicks $RunStartedTicks -TimeoutMilliseconds $RunTimeoutMilliseconds -CounterPreparation $CounterPreparation `
+		-Registry $Paths.Registry -SecretVariables $SecretVariables
 	if ($Role -eq 'Server') {
 		$FairnessPath = Join-Path $Paths.Evidence 'admission-fairness.tsv'
 		$PublicationPath = Join-Path $Paths.Evidence 'publication-service.bin'

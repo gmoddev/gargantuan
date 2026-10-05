@@ -442,6 +442,32 @@ Tests should enforce them where practical.
 101. Host separation does not alter package semantic versions, GRPL, GCHR,
     ordinary Luau authority, EditorHost trust, or generation-safe teardown.
 
+## Qualification and evidence
+
+1. Qualify the qualifier only as far as needed to establish the actual
+   acceptance fact with reasonable confidence. Qualification tooling is a
+   means of obtaining trustworthy acceptance evidence, not a separate product
+   requiring recursively complete qualification.
+2. Preserve canonical production, safety, recovery, provider, client-identity,
+   TLS, fairness, resource, service and convergence requirements. Limiting
+   tooling scope never permits weakening an acceptance gate.
+3. Prefer direct measurements and bounded, reproducible provenance: exact
+   hashes/manifests, run and actual-client identities, required raw evidence,
+   canonical metrics, cleanup state census and retained failure evidence.
+4. Add another tooling verifier, auditor, finalizer or replay layer only when
+   the current tool cannot establish a required acceptance fact, a real failure
+   demonstrates the need, or repository policy explicitly requires it. Identify
+   that concrete need before expanding tooling; evidence about evidence alone
+   is not sufficient justification.
+5. Distinguish harness failure from production failure. For an attributable
+   harness defect, identify the first cause, make the smallest adequate
+   correction, run focused regression checks and required CI/preflight, then
+   return to the actual production measurement. Investigate production failures
+   against their canonical contract.
+6. Retain useful existing infrastructure and historical failures. Once the
+   acceptance fact has sufficient trustworthy evidence, proceed to the next
+   canonical gate rather than continuing redundant tooling qualification.
+
 ## Changes requiring architecture review
 
 Architecture review and usually an ADR are required before:

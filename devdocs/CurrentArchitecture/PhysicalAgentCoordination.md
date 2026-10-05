@@ -251,6 +251,24 @@ sampler takes the existing two-second process/host snapshots and retains the
 five-second snapshot-duration, row-count and log bounds. Its seven function
 definitions come from the staged endpoint source; configuration, extracted
 source, runtime, owner identities and partial evidence are hashed and sealed.
+The role prepares the fixed CPU/memory counter and dedicated pipe-reader C#
+assembly once in its generation/role-owned registry directory before the run
+clock. The separate child loads the bounded, source/runtime/identity-pinned assembly from
+verified held bytes instead of compiling those definitions again. Loaded type
+origins must match that assembly; ambient or replaced types cannot supply the
+counter authority. This is run-owned preparation, not an installed helper or
+shared cache. Startup still includes child launch, verification/loading and
+the complete actual first baseline within five seconds. Bounded phase records
+and the always-retained hosted fixture directory preserve future refusals;
+they do not extend any startup, query or stop deadline.
+Runtime preparation and sampling directories stay outside the sealed flat
+role-evidence root. After joined stop, the role retains the exact bounded
+assembly, preparation/source/index receipts and a complete sampler-raw archive
+as indexed top-level files. The archive obeys the existing 16-MiB member limit;
+overflow is a qualification failure with the original registry raw preserved.
+Every archive entry is joined to its raw byte/hash index. This preserves the
+existing 128-member complete flat-directory acceptance check and worker
+collection instead of exempting sampler directories from coverage.
 It is stopped and its streams joined before native owner objects are disposed.
 This changes sampling placement, not the bootstrap deadline or resource gates.
 

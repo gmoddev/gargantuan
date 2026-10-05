@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-05 original tooling `a4baec83` native push `37267234328` fails
+the five-second resource-sampler startup gate (Windows 94/95; dependent Linux
+skipped). Parent counter preparation is outside the timed startup; exclusive
+child phases are **NOT MEASURED**. The child recompiles fixed C# already
+prepared in its parent, and the workflow omitted the failed fixture's retained
+raw directory. Qualify bounded counter-code preparation/loading and retain
+phase diagnostics without extending startup/query/stop limits. New original
+hosted CI remains mandatory before physical launch; a green PR job cannot
+replace the failed push. Retained F1 PASS is unchanged. **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY; no 3M.**
+
 2026-10-05 Local attempt `78b900ef-4784-4cc2-8704-ce5c37edf332`
 failed before its host listener or role launch. A separate harmless worker
 ownership witness reproduced `ModuleNotFoundError: dependency`: the fixed helper

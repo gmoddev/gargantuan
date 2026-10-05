@@ -202,6 +202,8 @@ jobs:
       - name: Run complete headless CTest contract
         if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
         shell: pwsh
+        env:
+          GARGANTUAN_SAMPLER_TEST_ARTIFACT_ROOT: ${{ github.workspace }}/build-ci/sampler-test-diagnostics
         run: |
           # Complete CTest includes the funded ACK workload/mode/pool gates and
           # one paired native statistics-boundary run; do not duplicate them here.
@@ -319,6 +321,7 @@ jobs:
             build-ci/CMakeFiles/CMakeConfigureLog.yaml
             build-ci/Testing/Temporary/LastTest.log
             build-ci/ctest-results.xml
+            build-ci/sampler-test-diagnostics/
             build-ci/scheduler-trace/
             build-ci/scheduler-trace-ack-stats/
             build-ci/scheduler-trace-aggregate32-structural/

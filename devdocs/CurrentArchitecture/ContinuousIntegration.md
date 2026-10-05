@@ -408,6 +408,12 @@ is subtracted from the measured RPC/Event/action latency.
 
 CTest prints failing output and writes JUnit results. On any failed job, the
 workflow uploads the configure log, CTest log, and JUnit file when available.
+Windows CTest supplies a fixed workspace artifact root for the socket-free
+resource-sampler fixture. Each invocation creates its own fresh GUID directory;
+failed raw counter preparation, generated source, phase records and bounded
+child logs are retained there and included by the always-run diagnostics
+upload. The fixture's original startup/query/stop deadlines remain unchanged.
+Retaining a failed fixture never changes its test or job verdict.
 
 Each bounded RPC/Event record also reports `RemoteResourceSpan` observations
 for that exact latency interval. CPU reads bracket each steady-clock endpoint;

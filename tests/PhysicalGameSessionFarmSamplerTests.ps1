@@ -24,7 +24,16 @@ function Wait-SamplerFile {
 		Start-Sleep -Milliseconds 20
 	}
 }
-$Root = Join-Path ([IO.Path]::GetTempPath()) ('farm-sampler-test-' + [Guid]::NewGuid().ToString('N'))
+$ArtifactRoot = [Environment]::GetEnvironmentVariable('GARGANTUAN_SAMPLER_TEST_ARTIFACT_ROOT')
+$ParentRoot = if ($ArtifactRoot) { [IO.Path]::GetFullPath($ArtifactRoot) } else { [IO.Path]::GetFullPath([IO.Path]::GetTempPath()) }
+$Ancestor = $ParentRoot
+while ($Ancestor) {
+	if ([IO.File]::Exists($Ancestor) -or ([IO.Directory]::Exists($Ancestor) -and
+		([IO.File]::GetAttributes($Ancestor) -band [IO.FileAttributes]::ReparsePoint))) { throw 'sampler fixture artifact parent redirected' }
+	$Ancestor = [IO.Path]::GetDirectoryName($Ancestor)
+}
+$Root = Join-Path $ParentRoot ('farm-sampler-test-' + [Guid]::NewGuid().ToString('N'))
+if (Test-Path -LiteralPath $Root) { throw 'sampler fixture root already exists' }
 [void][IO.Directory]::CreateDirectory($Root)
 $Children = [Collections.Generic.List[object]]::new()
 $Samplers = [Collections.Generic.List[object]]::new()
@@ -32,13 +41,22 @@ $Finished = $false
 $CounterPreparationMilliseconds = 'NOT_MEASURED'
 try {
 	# Match the endpoint's production precondition: Main prepares the counter
-	# types before RunStartedTicks and the timed sampler initialization. The child
-	# still starts cold and must reach its first actual host baseline within 5 s.
+	# assembly before RunStartedTicks and the timed sampler initialization. The
+	# child starts cold, loads verified bytes and reaches a real baseline in 5 s.
 	$CounterPreparationClock = [Diagnostics.Stopwatch]::StartNew()
-	Initialize-HostResourceCounters
+	$CounterEvidence = Join-Path $Root 'CounterEvidence'; [void][IO.Directory]::CreateDirectory($CounterEvidence)
+	$CounterPreparation = Initialize-HostResourceCounters -PreparationRoot (Join-Path $Root 'CounterRegistry') -EvidenceDirectory $CounterEvidence
 	$CounterPreparationMilliseconds = $CounterPreparationClock.ElapsedMilliseconds
 	if (-not ('FarmHostNativeCounters' -as [type]) -or -not ('FarmSamplerPipeCopy' -as [type])) {
 		throw 'production sampler counter preparation did not establish both types'
+	}
+	foreach ($Change in @(@('Sha256',('0'*64),'held hash'),@('SourceSha256',('0'*64),'source/runtime/path/size'),
+		@('RuntimeSha256',('0'*64),'source/runtime/path/size'),@('Path',(Join-Path $Root 'wrong.dll'),'source/runtime/path/size'),
+		@('Bytes',1048577L,'source/runtime/path/size'),@('LoadedAssembly',$null,'loaded type origin'),
+		@('FullName','foreign-assembly','type/identity'),@('ModuleVersionId','00000000-0000-0000-0000-000000000000','type/identity'))) {
+		$Bad = [ordered]@{}; foreach ($Name in $CounterPreparation.PSObject.Properties.Name) { $Bad[$Name] = $CounterPreparation.$Name }
+		$Bad[$Change[0]] = $Change[1]
+		Expect-SamplerRejection { Initialize-HostResourceCounters -Preparation ([pscustomobject]$Bad) -ExpectedRoot (Split-Path $CounterPreparation.Path -Parent) } $Change[2]
 	}
 	$FixtureHost = @'
 function Add-HostResourceSample {
@@ -77,6 +95,9 @@ function Add-HostResourceSample {
 	function Start-TestSampler {
 		param([string]$Name)
 		$Directory = Join-Path $Root $Name; [void][IO.Directory]::CreateDirectory($Directory)
+		foreach ($File in @('resource-counter-assembly.dll','resource-counter-preparation.json')) {
+			[IO.File]::Copy((Join-Path $CounterEvidence $File),(Join-Path $Directory $File),$false)
+		}
 		if (-not ('FarmHostNativeCounters' -as [type]) -or -not ('FarmSamplerPipeCopy' -as [type])) {
 			throw 'timed sampler fixture lacks production counter precondition'
 		}
@@ -86,7 +107,8 @@ function Add-HostResourceSample {
 			$Sampler = Start-EndpointResourceSampler -EndpointSource $FixtureSource -OutputDirectory $Directory `
 				-LocalRunId '12345678-1234-4234-8234-123456789abc' -LocalRole Clients -LocalProvider Local `
 				-Interface ([pscustomobject]@{Index=1;MacAddress='00-11-22-33-44-55';Address='10.253.3.1';Name=$Name;HostName=[Environment]::MachineName}) `
-				-StartedTicks ([Diagnostics.Stopwatch]::GetTimestamp()) -TimeoutMilliseconds 30000 -SecretVariables @('GARGANTUAN_TEST_NODE_SECRET')
+				-StartedTicks ([Diagnostics.Stopwatch]::GetTimestamp()) -TimeoutMilliseconds 30000 -CounterPreparation $CounterPreparation `
+				-Registry (Join-Path $Root ('Registry-'+$Name)) -SecretVariables @('GARGANTUAN_TEST_NODE_SECRET')
 		} finally {
 			# Failure-call elapsed time can include the helper's bounded cleanup;
 			# do not mislabel it as an exclusive startup phase measurement.
@@ -95,7 +117,7 @@ function Add-HostResourceSample {
 				ParentCounterPreparationMilliseconds=$CounterPreparationMilliseconds;
 				StartCallMillisecondsIncludingFailureCleanup=$StartCallMilliseconds;
 				SamplerInitializationMilliseconds=if ($null -ne $Sampler) { $Sampler.InitializationMilliseconds } else { 'NOT_MEASURED' };
-				ChildCounterCompilationMilliseconds='NOT_MEASURED'; ChildPowerShellStartupMilliseconds='NOT_MEASURED';
+				ChildCounterCompilation='NOT_EXECUTED_VERIFIED_ASSEMBLY_LOAD'; ChildPowerShellStartupMilliseconds='SEE_MONOTONIC_PHASE_BREADCRUMBS';
 				SourceParsingAndHashingMilliseconds='NOT_MEASURED'; FirstHostBaselineMilliseconds='NOT_MEASURED' }
 			Write-EndpointSamplerJson -Path (Join-Path $Directory 'fixture-initialization.json') -Value $Diagnostic
 		}
@@ -116,7 +138,23 @@ function Add-HostResourceSample {
 		$Children.Add($Owner)
 		Publish-EndpointSamplerOwner -Sampler $Fast -Owner $Owner
 	}
-	Wait-SamplerFile (Join-Path $Fast.Root '0001.completed.json')
+	# Faster startup can make sweep 0001 precede the last owner publication.
+	# Wait for actual full-role coverage, within the same fixture wait bound.
+	$FullSweepClock = [Diagnostics.Stopwatch]::StartNew()
+	while ($true) {
+		Assert-EndpointSampler -Sampler $Fast
+		$HostPath = Join-Path $Fast.Root 'host-resources.csv'
+		if ((Get-Item -LiteralPath $HostPath).Length -gt 16777216) { throw 'sampler host fixture exceeds raw bound' }
+		$ObservedHosts = @(Import-Csv -LiteralPath $HostPath)
+		$CompleteFullSweep = $false
+		for ($Index=0; $Index -lt $ObservedHosts.Count; $Index++) {
+			if ($ObservedHosts[$Index].LiveOwnedProcessCount -ceq '32' -and
+				[IO.File]::Exists((Join-Path $Fast.Root ('{0:D4}.completed.json' -f $Index)))) { $CompleteFullSweep=$true; break }
+		}
+		if ($CompleteFullSweep) { break }
+		if ($FullSweepClock.ElapsedMilliseconds -ge 4500) { throw 'sampler fixture full32 sweep deadline' }
+		Start-Sleep -Milliseconds 20
+	}
 	$Rows = [Collections.Generic.List[object]]::new(); $Hosts = [Collections.Generic.List[object]]::new()
 	Stop-EndpointResourceSampler -Sampler $Fast -Processes $Rows -Hosts $Hosts
 	if ($Rows.Count -lt 64 -or $Hosts.Count -lt 2 -or @($Hosts | Where-Object LiveOwnedProcessCount -eq 32).Count -lt 1) { throw 'actual owned-child sampler lacks startup/full32 coverage' }
@@ -137,9 +175,58 @@ function Add-HostResourceSample {
 	$HostObservation = Read-HostResourceObservation -Path (Join-Path $Fast.Root 'host-resources.csv') -RunId $Fast.RunId `
 		-Role Clients -Provider Local -ExpectedLiveProcesses 32 -ExpectedCount $Hosts.Count
 	if ($HostObservation.FullRoleSampleCount -lt 1) { throw 'unchanged host resource reader rejected actual native CPU/memory brackets with supplied NIC counters' }
-	$SourceProof = Get-Content -LiteralPath (Join-Path (Split-Path $Fast.Root -Parent) 'resource-sampler-source.json') -Raw | ConvertFrom-Json -AsHashtable
+	foreach ($Name in @('Read-BoundedJson','Assert-IndexedFile','Read-RoleEvidence')) {
+		$Definition = @($AcceptanceAst.FindAll({ param($Node) $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -ceq $Name },$true))[0]
+		. ([scriptblock]::Create($Definition.Extent.Text))
+	}
+	# Only this supplied role envelope is synthetic; resource/assembly/archive
+	# bytes above are actual harmless observations. No farm/provider PASS claim.
+	$Rows | Export-Csv -LiteralPath (Join-Path $Fast.EvidenceDirectory 'process-resources.csv') -NoTypeInformation
+	$Hosts | Export-Csv -LiteralPath (Join-Path $Fast.EvidenceDirectory 'host-resources.csv') -NoTypeInformation
+	Write-EndpointSamplerJson -Path (Join-Path $Fast.EvidenceDirectory 'run-manifest.json') -Value @{RunId=$Fast.RunId;Scope='SUPPLIED_HARMLESS_FIXTURE'}
+	Write-EndpointSamplerJson -Path (Join-Path $Fast.EvidenceDirectory 'result.json') -Value @{RunId=$Fast.RunId;Role='Clients';Status='PASS';Scope='SUPPLIED_HARMLESS_FIXTURE_NOT_PROVIDER_PASS'}
+	Write-EndpointEvidenceHash -Directory $Fast.EvidenceDirectory -LocalRunId $Fast.RunId -LocalRole Clients
+	$Report = @{ RunId=$Fast.RunId;Provider='Local';ManifestSha256=(Get-FileHash (Join-Path $Fast.EvidenceDirectory 'run-manifest.json')).Hash;
+		ClientEvidenceSha256=(Get-FileHash (Join-Path $Fast.EvidenceDirectory 'evidence-sha256.json')).Hash }
+	$FlatRole = Read-RoleEvidence -Root $Fast.EvidenceDirectory -Role Clients -Report $Report
+	if ($FlatRole.IndexedFiles -gt 128 -or @(Get-ChildItem $Fast.EvidenceDirectory -Directory).Count) { throw 'sampler role evidence is not fully flat/bounded' }
+	$Unexpected = Join-Path $Fast.EvidenceDirectory 'unindexed'; [void][IO.Directory]::CreateDirectory($Unexpected)
+	try { Expect-SamplerRejection { Read-RoleEvidence -Root $Fast.EvidenceDirectory -Role Clients -Report $Report } 'complete role-local root' }
+	finally { [IO.Directory]::Delete($Unexpected) }
+	$RawEvidence = Get-Content (Join-Path $Fast.EvidenceDirectory 'resource-sampler-evidence.json') -Raw | ConvertFrom-Json -AsHashtable
+	$ArchivePath = Join-Path $Fast.EvidenceDirectory 'resource-sampler-raw.zip'
+	Assert-EndpointSamplerArchive -Path $ArchivePath -Files $RawEvidence.Files
+	if ($RawEvidence.Archive.Sha256 -ine (Get-FileHash $ArchivePath).Hash -or $RawEvidence.ArchiveFailure) { throw 'sampler archive is not bound to all retained raws' }
+	foreach ($Mode in @('Extra','Missing','Hash')) {
+		$BadArchive = Join-Path $Root ($Mode+'.zip'); [IO.File]::Copy($ArchivePath,$BadArchive,$false)
+		$Zip = [IO.Compression.ZipFile]::Open($BadArchive,[IO.Compression.ZipArchiveMode]::Update)
+		try {
+			if ($Mode -eq 'Extra') { [void]$Zip.CreateEntry('unknown.json') }
+			elseif ($Mode -eq 'Missing') { $Zip.Entries[0].Delete() }
+			else {
+				$Entry = $Zip.GetEntry('parent-ready.json'); $Original = $Entry.Open(); $Memory = [IO.MemoryStream]::new()
+				try { $Original.CopyTo($Memory); $Data=$Memory.ToArray() } finally { $Original.Dispose(); $Memory.Dispose() }
+				$Entry.Delete(); $Changed = $Zip.CreateEntry('parent-ready.json'); $Output = $Changed.Open(); $Data[0]=$Data[0] -bxor 1
+				try { $Output.Write($Data,0,$Data.Length) } finally { $Output.Dispose() }
+			}
+		} finally { $Zip.Dispose() }
+		Expect-SamplerRejection { Assert-EndpointSamplerArchive -Path $BadArchive -Files $RawEvidence.Files } $(if($Mode -eq 'Hash'){'entry hash'}else{'complete membership'})
+	}
+	$Oversized = Join-Path $Root 'Oversized.zip'; $Large = [IO.File]::Open($Oversized,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+	try { $Large.SetLength(16777217) } finally { $Large.Dispose() }
+	Expect-SamplerRejection { Assert-EndpointSamplerArchive -Path $Oversized -Files $RawEvidence.Files } 'exceeds 16 MiB'
+	Expect-SamplerRejection { Assert-EndpointSamplerArchive -Files @([pscustomobject]@{Name='unknown.bin';Bytes=1;Sha256=('0'*64)}) -InventoryOnly } 'raw-file pin'
+	$SourceProof = Get-Content -LiteralPath (Join-Path $Fast.EvidenceDirectory 'resource-sampler-source.json') -Raw | ConvertFrom-Json -AsHashtable
 	if ($SourceProof.FunctionPins.Count -ne 7 -or $SourceProof.EndpointSha256 -ine (Get-FileHash $FixtureSource).Hash -or
-		$SourceProof.ScriptSha256 -ine (Get-FileHash (Join-Path $Fast.Root 'sampler.ps1')).Hash) { throw 'generated sampler source closure not pinned' }
+		$SourceProof.ScriptSha256 -ine (Get-FileHash (Join-Path $Fast.Root 'sampler.ps1')).Hash -or $SourceProof.Version -ne 2 -or
+		$SourceProof.CounterAssembly.Sha256 -cne $CounterPreparation.Sha256 -or
+		(Get-FileHash (Join-Path $Fast.EvidenceDirectory 'resource-counter-assembly.dll')).Hash -ine $CounterPreparation.Sha256) { throw 'generated sampler source closure not pinned' }
+	$LoadPhase = Get-Content (Join-Path $Fast.Root 'child-counter-load.json') -Raw | ConvertFrom-Json -AsHashtable
+	$BaselinePhase = Get-Content (Join-Path $Fast.Root 'child-first-baseline.json') -Raw | ConvertFrom-Json -AsHashtable
+	if ($LoadPhase.AssemblySha256 -cne $CounterPreparation.Sha256 -or $LoadPhase.FullName -cne $CounterPreparation.FullName -or
+		$LoadPhase.ModuleVersionId -cne $CounterPreparation.ModuleVersionId -or $LoadPhase.EndedTicks -lt $LoadPhase.StartedTicks -or
+		$BaselinePhase.StartedTicks -lt $LoadPhase.EndedTicks -or $BaselinePhase.EndedTicks -lt $BaselinePhase.StartedTicks -or
+		$BaselinePhase.LiveOwnedProcessCount -ne 0) { throw 'cold verified load/first actual baseline chronology differs' }
 	foreach ($Name in $SourceProof.FunctionPins.Keys) {
 		$Body = @($Ast.FindAll({ param($Node) $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -ceq $Name }, $true))[0].Extent.Text
 		if ($Name -ceq 'Add-HostResourceSample') { $Body = $FixtureHost }
@@ -147,8 +234,8 @@ function Add-HostResourceSample {
 		if ($SourceProof.FunctionPins[$Name] -cne $Actual) { throw 'sampler extracted function body hash differs' }
 	}
 	$OriginalOwnerBytes = [IO.File]::ReadAllBytes((Join-Path $Fast.Root 'client-00.owner.json'))
-	Write-EndpointEvidenceHash -Directory (Split-Path $Fast.Root -Parent) -LocalRunId $Fast.RunId -LocalRole Clients
-	$RoleIndex = Get-Content -LiteralPath (Join-Path (Split-Path $Fast.Root -Parent) 'evidence-sha256.json') -Raw | ConvertFrom-Json
+	Write-EndpointEvidenceHash -Directory $Fast.EvidenceDirectory -LocalRunId $Fast.RunId -LocalRole Clients
+	$RoleIndex = Get-Content -LiteralPath (Join-Path $Fast.EvidenceDirectory 'evidence-sha256.json') -Raw | ConvertFrom-Json
 	if (@($RoleIndex.Files.Name | Where-Object { $_ -in @('resource-sampler-source.json','resource-sampler-evidence.json') }).Count -ne 2) { throw 'role seal omitted sampler closure' }
 	Expect-SamplerRejection { Publish-EndpointSamplerOwner -Sampler $Fast -Owner $Children[0] } 'already exists'
 	if ([Convert]::ToBase64String($OriginalOwnerBytes) -cne [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $Fast.Root 'client-00.owner.json')))) { throw 'owner duplicate publication changed original bytes' }
@@ -166,10 +253,15 @@ function Add-HostResourceSample {
 		Expect-SamplerRejection { [void]$Copy.Wait(5000) } 'four MiB'
 		if (-not $Copy.IsFaulted -or $PipeOutput.Length -ne 4194304) { throw 'bounded dedicated pipe reader concealed overflow or truncated its allowed prefix' }
 	} finally { $PipeInput.Dispose(); $PipeOutput.Dispose() }
-	Write-EndpointSamplerJson -Path (Join-Path $Fast.Root '0002.started.json') -Value @{
-		RunId=$Fast.RunId;Sequence=2;StartedTicks=([Diagnostics.Stopwatch]::GetTimestamp()-6*[Diagnostics.Stopwatch]::Frequency) }
 	$Probe = [pscustomobject]@{Stopped=$false;OutputCopy=[Threading.Tasks.Task]::CompletedTask;ErrorCopy=[Threading.Tasks.Task]::CompletedTask;
 		OutputPath=$Fast.OutputPath;ErrorPath=$Fast.ErrorPath;Process=$Children[0].Process;Root=$Fast.Root}
+	$PhasePath = Join-Path $Fast.Root 'child-counter-load.started.json'; $PhaseBytes = [IO.File]::ReadAllBytes($PhasePath)
+	try {
+		[IO.File]::WriteAllText($PhasePath, (@{RunId=$Fast.RunId;StartedTicks=([Diagnostics.Stopwatch]::GetTimestamp()-6*[Diagnostics.Stopwatch]::Frequency)} | ConvertTo-Json -Compress))
+		Assert-EndpointSampler -Sampler $Probe # A diagnostic phase is never a host-query clock.
+	} finally { [IO.File]::WriteAllBytes($PhasePath,$PhaseBytes) }
+	Write-EndpointSamplerJson -Path (Join-Path $Fast.Root '0002.started.json') -Value @{
+		RunId=$Fast.RunId;Sequence=2;StartedTicks=([Diagnostics.Stopwatch]::GetTimestamp()-6*[Diagnostics.Stopwatch]::Frequency) }
 	Expect-SamplerRejection { Assert-EndpointSampler -Sampler $Probe } 'five-second bound'
 	$Slow = Start-TestSampler Blocked
 	Publish-EndpointSamplerOwner -Sampler $Slow -Owner $Children[0]
@@ -186,7 +278,7 @@ function Add-HostResourceSample {
 	if (-not $Slow.Stopped -or $PartialRows.Count -lt 2 -or $PartialHosts.Count -ne 1) { throw 'blocked sampler lost raw partials' }
 	$Remaining = Get-Process -Id $Slow.Pid -ErrorAction SilentlyContinue
 	if ($null -ne $Remaining) { $Remaining.Dispose(); throw 'owned blocked sampler remains alive' }
-	$Evidence = Get-Content (Join-Path (Split-Path $Slow.Root -Parent) 'resource-sampler-evidence.json') -Raw | ConvertFrom-Json -AsHashtable
+	$Evidence = Get-Content (Join-Path $Slow.EvidenceDirectory 'resource-sampler-evidence.json') -Raw | ConvertFrom-Json -AsHashtable
 	if (-not $Evidence.StreamsJoined -or $null -eq $Evidence.StopFailure -or $Evidence.NativeTreeReaped -cne 'NOT_MEASURED_BY_SAMPLER' -or
 		@($Evidence.Files | Where-Object Name -ceq 'process-resources.csv').Count -ne 1) { throw 'blocked sampler receipt concealed its failure/partials' }
 	$Throwing = Start-TestSampler Throw
@@ -212,7 +304,8 @@ function Add-HostResourceSample {
 	$InvalidSource = Join-Path $Invalid 'invalid.ps1'
 	[IO.File]::WriteAllText($InvalidSource, [IO.File]::ReadAllText($FixtureSource).Replace('function Write-EndpointSamplerCsv {','function Missing-EndpointSamplerCsv {'))
 	Expect-SamplerRejection { Start-EndpointResourceSampler -EndpointSource $InvalidSource -OutputDirectory $Invalid -LocalRunId $Fast.RunId `
-		-LocalRole Clients -LocalProvider Local -Interface @{} -StartedTicks 1 -TimeoutMilliseconds 30000 } 'source closure differs'
+		-LocalRole Clients -LocalProvider Local -Interface @{} -StartedTicks 1 -TimeoutMilliseconds 30000 -CounterPreparation $CounterPreparation `
+		-Registry (Join-Path $Root 'InvalidRegistry') } 'source closure differs'
 	Write-Output "[Qualification:ResourceSampler] OWNED_CHILD_TEST_OK Children=32 ParentCounterPreparationMilliseconds=$CounterPreparationMilliseconds InitializationMilliseconds=$($Fast.InitializationMilliseconds) PublishWhileBlockedMilliseconds=$PublishMilliseconds ActualProcessRows=$($Rows.Count) HostRows=$($Hosts.Count) FailedPartialRows=$($PartialRows.Count) Adapter=SUPPLIED_FIXTURE Farm=NOT_MEASURED"
 	$Finished = $true
 } finally {
@@ -221,9 +314,10 @@ function Add-HostResourceSample {
 	}
 	foreach ($Child in $Children) { Stop-EndpointProcess -Owner $Child }
 	$Resolved = [IO.Path]::GetFullPath($Root)
-	$Temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\','/')
+	$Temp = $ParentRoot.TrimEnd('\','/')
 	if (-not $Resolved.StartsWith($Temp + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
 		[IO.Path]::GetFileName($Resolved) -cnotmatch '^farm-sampler-test-[a-f0-9]{32}$') { throw 'sampler test cleanup outside owned temp root' }
-	if ($Finished) { Remove-Item -LiteralPath $Resolved -Recurse -Force }
+	if ($Finished -and -not $ArtifactRoot) { Remove-Item -LiteralPath $Resolved -Recurse -Force }
+	elseif ($Finished) { Write-Output "[Qualification:ResourceSampler] OWNED_RAW_RETAINED Root=$Resolved Scope=HARMLESS_FIXTURE_ONLY" }
 	else { Write-Output "[Qualification:ResourceSampler] FAILED_RAW_RETAINED Root=$Resolved ParentCounterPreparationMilliseconds=$CounterPreparationMilliseconds ExclusiveInitializationPhases=NOT_MEASURED" }
 }

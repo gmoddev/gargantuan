@@ -1,10 +1,71 @@
 ---
 status: f1-phase1-pass-later-gates-pending
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-10-04
+last_verified: 2026-10-05
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Original tooling CI sampler startup refusal (2026-10-05)
+
+Execution-changing tooling `a4baec8370328d57244aaec58da7bc69ab84e147`
+does not qualify for physical execution. Original native push `37267234328`,
+Windows job `111626513015`, passes 94 of 95 native tests and fails the
+resource-sampler fixture's unchanged five-second initialization gate. Its
+dependent Linux job `111636804701` is skipped. A successful original PR
+Windows job is separate evidence and cannot replace this failed push. The
+completed original PR jobs pass Windows 95/95, Linux 53/53 and 371 separate
+Windows Python checks; both original GNS jobs pass 10/10. These outcomes
+preserve the failed original push and do not qualify `a4baec83`.
+
+The reported 6,133 ms parent counter preparation occurred before the timed
+startup and is not the failed child initialization duration. The first fixture
+sampler starts before any of its 32 harmless child owners, and uses supplied
+NIC values with actual kernel32 CPU/memory reads. Source inspection establishes
+that the separate sampler child compiles the same fixed C# counter/pipe-reader
+definitions again. Its exclusive compilation, PowerShell startup, source/hash
+preparation and first-baseline times are **NOT MEASURED** in the failed receipt.
+The original artifact upload omitted that retained temporary sampler directory.
+Duplicate compilation is an implementation fact, not a proven exclusive cause
+of the original timeout.
+
+Source review also found a reachable evidence-layout defect: the sampler's
+runtime subdirectory was inside the role-evidence root, while its seal indexed
+only top-level files and canonical acceptance required complete flat coverage.
+The correction keeps run-owned runtime directories in the registry and retains
+their complete bounded raw archive and exact prepared assembly as indexed flat
+role files. It does not exempt a directory, omit raw records or expand the
+128-file/16-MiB acceptance limits.
+
+The failed push JUnit SHA-256 is
+`d351d32b00326fdf437ba54d4262b22dde870458a80ce52b89fa21c0c2ec4763`.
+No physical retry or CI rerun reclassifies the failure. Corrected source must
+retain the five-second startup/query/stop bounds and actual first baseline,
+pass its deterministic checks and new original hosted jobs, and pass fresh
+endpoint preflights before Local32 or real-TLS Node32 execution.
+Retained F1 Phase 1 PASS is unchanged; **KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY; no 3M.**
+
+The corrected focused worker endpoint fixture passes with 32 actual harmless
+children, 64 process rows and two host rows. Counter preparation takes 527 ms
+outside startup; cold sampler startup with verified assembly loading takes
+584 ms. Native-path 18, projection 23 and source-AST nine checks pass, as does
+the separate actual host-resource fixture. The two staging failures (missing
+unchanged projection helper and Windows Python alias selection) are retained;
+they are not production failures. Hosted CI for the corrected source remains
+required. These fixture results do not supply Local32 or Node32 acceptance.
+
+The preceding failed Local run `78b900ef-4784-4cc2-8704-ce5c37edf332`
+has separately completed control retirement. Independent raw replay joins
+12 ordered journals, 51 raw observations and nine original indexed inputs;
+all six exact run-control secrets are absent and both endpoints are observed
+idle. Raw closure SHA-256
+`a019fdccb5ecef362e05bac24f614dde43980ffb9c63b5dddc2085ded59a90eb`;
+independent actual review SHA-256
+`47f4be989ccac144b0041f5e66b01257a115315b748a7d94ffd9ffffbd087e39`.
+This closes that run's cleanup prerequisite and supersedes its earlier pending
+cleanup statement below; it does not change its failed launch or supply a
+provider acceptance result.
 
 ## Local attempt stopped before the coordinator listener (2026-10-05)
 
