@@ -212,10 +212,11 @@ establish a wait reason, change the workload or replace wall-clock acceptance.
 Ordinary qualifying push/PR and default dispatch retain the complete Windows
 CTest/tooling matrix and all five unchanged standalone workloads. The fixed
 `Full` scheduler case wraps the third `--reliable-workload` invocation and
+`Aggregate32` wraps the fourth `--reliable-workload-32` invocation and
 `Aggregate32Structural` wraps the fifth `--reliable-workload-32-structural`
 invocation, each exactly once in its original logical order. Their owned bounded
 ETL, decoded events, child logs, metadata and cleanup evidence are always
-retained when reached. Commands one, two and four remain direct; all five
+retained when reached. Commands one and two remain direct; all five
 logical invocations, dependent Linux and GNS gates
 remain mandatory. Helper compilation and noncapture self-tests precede this
 qualification. Original child failure remains failure; capture, loss, clock
@@ -229,8 +230,11 @@ remain raw in receipts; only returned process status uses the signed equivalent.
 All five normal standalone guards reject any nonzero status, including a negative
 native crash. Helper tests are a distinct mandatory suite, independently checked
 from the existing physical-control/evidence tooling suites. The seven Windows
-tooling suite counts are 12, 21, 4, 1, 228, 32 and 3 (**301 total**); the separate
-scheduler helper suite now contains **33**, for a combined inventory of **334**.
+tooling suite counts are 12, 21, 4, 1, 265, 32 and 3 (**338 total**); the separate
+scheduler helper suite now contains **34**, for a combined inventory of **372**.
+Original `d66444f3` ran 33 helper and 338 other Python checks (371 total) before
+its separate aggregate RPC timing failure. The added helper test covers the
+fourth command's exact fixed-case mapping and substitution denials.
 The historical `c33d573d5` hosted jobs ran 20 helper tests plus 295 tooling tests,
 or 315 total. The local full tooling matrix's 315 tests are a different scope
 and do not replace either hosted suite. New source requires its own original
@@ -245,7 +249,7 @@ Earlier failed runs remain failed, including those without this evidence.
 
 The bounded Full diagnostic preserves original nonzero child exits and stops
 the gate, even when an ordered failed-case evidence prefix is retained.
-The always-run artifact upload preserves both Full and aggregate raw sets plus
+The always-run artifact upload preserves Full and both aggregate raw sets plus
 the fixed helper and workload binaries; a command-three failure may leave the
 later aggregate set absent because that workload was never started.
 
@@ -344,8 +348,12 @@ different policy prevents resume, preserves status 125 and reaps the owned
 process tree. Requested flags, controller class, actual child class and main
 relative priority, query status and pre-resume verification are retained in the
 early child result, final metadata and wrapper. The current-source offline
-validator requires this measured policy. The controller's own scheduling,
-ordinary direct commands, production transport, F1, latency clocks, workload,
+validator requires this measured policy. This includes the fixed fourth
+`Aggregate32` command after original `d66444f3` push timing failed without a
+failing-window trace. Its previous direct child's actual priority is
+**NOT MEASURED**; the extension does not establish priority as the old cause.
+The controller's own scheduling, remaining ordinary direct commands,
+production transport, F1, latency clocks, workload,
 affinity and timer policy remain unchanged. No background task or service is
 disabled or stopped.
 

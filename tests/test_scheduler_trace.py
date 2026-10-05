@@ -61,10 +61,10 @@ class SchedulerTraceTests(unittest.TestCase):
                      start_ns=Begin * 100 + 50, end_ns=Begin * 100 + 60, timestamps_valid=1)
         return Metadata, '\n'.join(Lines), File
 
-    def AggregateFixture(self, Root, Exit=0, SameLocalIdentity=False):
+    def AggregateFixture(self, Root, Exit=0, SameLocalIdentity=False, Case='Aggregate32Structural'):
         Metadata, _ = self.Fixture()
-        Metadata.update(WorkloadCase='Aggregate32Structural', ChildExitCode=Exit, DecodedRows=4,
-                        WorkloadArguments=['--reliable-workload-32-structural'])
+        Metadata.update(WorkloadCase=Case, ChildExitCode=Exit, DecodedRows=4,
+                        WorkloadArguments=['--reliable-workload-32' if Case == 'Aggregate32' else '--reliable-workload-32-structural'])
         Lines = []
         for Index, (Name, Begin, End) in enumerate((('aggregate-baseline', 10, 200), ('aggregate-overload', 300, 600),
                                  ('aggregate-recovery', 700, 900))):
@@ -148,6 +148,27 @@ class SchedulerTraceTests(unittest.TestCase):
             self.assertEqual(VALIDATOR.Validate(Metadata, Prefix,
                 'Aggregate32Structural', File)['State'], 'INCOMPLETE')
 
+    def test_aggregate32_exact_fourth_case_coverage_and_substitution_denial(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.AggregateFixture(Path(Directory), Case='Aggregate32')
+            Result = VALIDATOR.Validate(Metadata, Log, 'Aggregate32', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+            self.assertEqual(Result['FixedWorkloadArgument'], '--reliable-workload-32')
+            self.assertEqual(Result['CompleteAggregatePhases'], 3)
+            self.assertEqual(Result['CausalVerdict'], 'NOT_CLAIMED')
+            for Argument in ('--reliable-workload', '--reliable-workload-32-structural'):
+                self.assertEqual(VALIDATOR.Validate(dict(Metadata, WorkloadArguments=[Argument]),
+                    Log, 'Aggregate32', File)['State'], 'INCOMPLETE')
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log, 'Aggregate32Structural', File)['State'], 'INCOMPLETE')
+            Prefix = Log[:Log.index('[Qualification:ClockAnchor] case=aggregate-overload')].rstrip()
+            self.assertEqual(VALIDATOR.Validate(dict(Metadata, ChildExitCode=17), Prefix,
+                'Aggregate32', File)['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED')
+            self.assertEqual(VALIDATOR.Validate(Metadata, Prefix, 'Aggregate32', File)['State'], 'INCOMPLETE')
+            for Field, Value in (('EventsLost', 1), ('ChildPriorityClass', 16384),
+                                 ('PriorityVerifiedBeforeResume', False), ('ChildTreeReaped', False)):
+                self.assertEqual(VALIDATOR.Validate(dict(Metadata, **{Field: Value}),
+                    Log, 'Aggregate32', File)['State'], 'INCOMPLETE')
+
     def test_aggregate_identity_loss_bounds_case_and_raw_csv_denials(self):
         with tempfile.TemporaryDirectory() as Directory:
             Metadata, Log, File = self.AggregateFixture(Path(Directory))
@@ -172,16 +193,16 @@ class SchedulerTraceTests(unittest.TestCase):
             self.assertEqual(VALIDATOR.Validate(Metadata, Log, 'Aggregate32Structural', None)['State'], 'INCOMPLETE')
 
     def test_aggregate_validator_cli_accepts_only_complete_fixed_case(self):
-        for Valid in (True, False):
+        for Case, Valid in ((Case, Valid) for Case in ('Aggregate32', 'Aggregate32Structural') for Valid in (True, False)):
             with tempfile.TemporaryDirectory() as Directory:
                 Root = Path(Directory)
-                Metadata, Log, _ = self.AggregateFixture(Root)
+                Metadata, Log, _ = self.AggregateFixture(Root, Case=Case)
                 if not Valid:
                     Metadata['WorkloadArguments'] = ['--reliable-workload-32-structural', '--pooled']
                 (Root / 'metadata.json').write_text(json.dumps(Metadata), encoding='utf-8')
                 (Root / 'workload.stdout.txt').write_text(Log, encoding='utf-8')
                 Result = subprocess.run([sys.executable, '-B', str(ROOT / 'tools/ci/SchedulerTraceValidate.py'), '--root', str(Root),
-                    '--case', 'Aggregate32Structural'], text=True, capture_output=True, timeout=30,
+                    '--case', Case], text=True, capture_output=True, timeout=30,
                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 self.assertEqual(Result.returncode, 0 if Valid else 125, Result.stdout + Result.stderr)
                 Coverage = json.loads((Root / 'coverage.json').read_text())
@@ -306,17 +327,18 @@ class SchedulerTraceTests(unittest.TestCase):
         End = Workflow.index('      - name:', Start + 20)
         Commands = Workflow[Start:End]
         for Flags in ('--pooled --reliable-workload\n', '--pooled --reliable-workload-32-structural\n',
-                      'SchedulerTrace.ps1 -Case Full\n', 'tests.exe --reliable-workload-32\n'):
+                      'SchedulerTrace.ps1 -Case Full\n', 'SchedulerTrace.ps1 -Case Aggregate32\n'):
             self.assertEqual(Commands.count(Flags), 1)
         self.assertEqual(Commands.count('SchedulerTrace.ps1 -Case Aggregate32Structural'), 1)
         self.assertEqual(Commands.count('if not %errorlevel%==0 exit /b %errorlevel%'), 5)
         self.assertNotIn('if errorlevel 1', Commands)
         Positions = [Commands.index(Flags) for Flags in ('--pooled --reliable-workload\n',
             '--pooled --reliable-workload-32-structural\n', 'SchedulerTrace.ps1 -Case Full\n',
-            'tests.exe --reliable-workload-32\n', 'SchedulerTrace.ps1 -Case Aggregate32Structural')]
+            'SchedulerTrace.ps1 -Case Aggregate32\n', 'SchedulerTrace.ps1 -Case Aggregate32Structural')]
         self.assertEqual(Positions, sorted(Positions))
         self.assertNotIn('tests.exe --reliable-workload-32-structural', Commands)
         self.assertNotIn('tests.exe --reliable-workload\n', Commands)
+        self.assertNotIn('tests.exe --reliable-workload-32\n', Commands)
         self.assertIn('if not "%SCHEDULER_TRACE%"=="true" (\n            pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Full\n          )', Commands)
         Manual = Workflow[Workflow.index('      - name: Trace one FULL'):Workflow.index('      - name: Trace fixed FULL')]
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.scheduler_trace", Manual)
@@ -331,6 +353,7 @@ class SchedulerTraceTests(unittest.TestCase):
         self.assertIn('        if: always()', Upload)
         self.assertIn('            build-ci/scheduler-trace/\n', Upload)
         self.assertIn('            build-ci/scheduler-trace-aggregate32-structural/', Upload)
+        self.assertIn('            build-ci/scheduler-trace-aggregate32/\n', Upload)
         self.assertEqual(Upload.count('            build-ci/scheduler-trace.exe\n'), 1)
         self.assertEqual(Upload.count('            build-ci/gargantuan_game_session_real_transport_tests.exe\n'), 1)
 
@@ -345,27 +368,27 @@ class SchedulerTraceTests(unittest.TestCase):
             ('build-ci\\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload-32-structural', 'POOLED32'),
             ('build-ci\\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload', 'POOLED'),
             ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Full', 'FULL'),
-            ('build-ci\\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32', 'UNPOOLED32'),
+            ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Aggregate32\n', 'UNPOOLED32\n'),
             ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Aggregate32Structural', 'AGGREGATE'))
         for Command, Label in Replacements:
             self.assertEqual(Commands.count(Command), 1)
             Commands = Commands.replace(Command, 'call :Record ' + Label)
         for Manual in (False, True):
-            for Code in (0, 17, -1073740791):
+            for Code, FailedCase in ((Code, Case) for Code in (0, 17, -1073740791) for Case in ('FULL', 'UNPOOLED32')):
                 with tempfile.TemporaryDirectory() as Directory:
                     Root = Path(Directory)
                     Prelude = '@echo off\nset "SCHEDULER_TRACE=' + str(Manual).lower() + '"\n'
                     if Manual:
                         Prelude += 'call :Record FULL\nif not %errorlevel%==0 exit /b %errorlevel%\n'
                     (Root / 'route.cmd').write_text(Prelude + Commands + '\nexit /b 0\n:Record\n' +
-                        'echo %1>>order.txt\nif "%1"=="FULL" exit /b ' + str(Code) + '\nexit /b 0\n')
+                        'echo %1>>order.txt\nif "%1"=="' + FailedCase + '" exit /b ' + str(Code) + '\nexit /b 0\n')
                     Result = subprocess.run(['cmd', '/d', '/c', str(Root / 'route.cmd')], cwd=Root,
                         text=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
                     self.assertEqual(Result.returncode & 0xffffffff, Code & 0xffffffff, Result.stdout + Result.stderr)
                     Expected = ['FULL', 'POOLED', 'POOLED32', 'UNPOOLED32', 'AGGREGATE'] if Manual else [
                         'POOLED', 'POOLED32', 'FULL', 'UNPOOLED32', 'AGGREGATE']
                     if Code:
-                        Expected = Expected[:Expected.index('FULL') + 1]
+                        Expected = Expected[:Expected.index(FailedCase) + 1]
                     self.assertEqual((Root / 'order.txt').read_text().splitlines(), Expected)
 
     @unittest.skipUnless(os.name == 'nt', 'Windows cmd exit semantics')
@@ -464,7 +487,7 @@ class SchedulerTraceTests(unittest.TestCase):
 
     def test_wrapper_rejects_arbitrary_case_and_pair_case_combination(self):
         for Arguments in (['-Case', 'arbitrary'], ['-Pair', '-Case', 'Full'],
-                          ['-Pair', '-Case', 'Aggregate32Structural']):
+                          ['-Pair', '-Case', 'Aggregate32Structural'], ['-Pair', '-Case', 'Aggregate32']):
             Result = subprocess.run(['pwsh', '-NoProfile', '-File', str(ROOT / 'tools/ci/SchedulerTrace.ps1'), *Arguments],
                 text=True, capture_output=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self.assertNotEqual(Result.returncode, 0)
@@ -798,7 +821,7 @@ class SchedulerTraceTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("SCHEDULER_TRACE_TEST_HELPER"), "native compile-only helper not supplied")
     def test_native_rejects_reserved_guid_before_any_trace(self):
-        for Command in ('--run', '--run-ack-stats', '--run-aggregate32-structural'):
+        for Command in ('--run', '--run-ack-stats', '--run-aggregate32', '--run-aggregate32-structural'):
             Result = subprocess.run(
                 [os.environ["SCHEDULER_TRACE_TEST_HELPER"], Command, str(ROOT), "00000000-0000-0000-0000-000000000000"],
                 text=True, capture_output=True, timeout=30,
@@ -810,7 +833,8 @@ class SchedulerTraceTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("SCHEDULER_TRACE_TEST_HELPER"), "native compile-only helper not supplied")
     def test_native_fixed_case_rejects_arbitrary_flags_before_trace(self):
         for Arguments in (['--run-arbitrary', str(ROOT), '11111111-2222-4333-8444-555555555555'],
-                          ['--run-aggregate32-structural', str(ROOT), '11111111-2222-4333-8444-555555555555', '--pooled']):
+                          ['--run-aggregate32-structural', str(ROOT), '11111111-2222-4333-8444-555555555555', '--pooled'],
+                          ['--run-aggregate32', str(ROOT), '11111111-2222-4333-8444-555555555555', '--pooled']):
             Result = subprocess.run([os.environ['SCHEDULER_TRACE_TEST_HELPER'], *Arguments], text=True,
                 capture_output=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self.assertEqual(Result.returncode, 125)

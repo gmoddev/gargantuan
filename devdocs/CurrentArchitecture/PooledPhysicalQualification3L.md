@@ -6,6 +6,41 @@ last_verified: 2026-10-05
 
 # Foundation 3L pooled physical qualification attempt
 
+## Corrected sampler passes; separate aggregate RPC CI failure (2026-10-05)
+
+Tooling `d66444f3eb2a283e37ab6fb5451d55cab2849f92` passes all 95 native
+CTest entries, including the corrected sampler, and 371 Python tooling checks.
+Original push `37275013641`, Windows job `111650013022`, subsequently fails
+five unchanged RPC p95 gates in the fourth standalone command,
+`--reliable-workload-32`, FULL_RESERVATION aggregate recovery. The failing
+peer p95 values are 162.058, 165.997, 163.524, 165.514 and 166.892 ms against
+150 ms. All eight active peers accept and complete 48 requests each with zero
+errors; structural accepted bytes and the final pending/journal backlog are
+zero. This is separate from the earlier sampler startup refusal.
+
+The third command's Full scheduler trace completes successfully before this
+failure; it does not cover the failing fourth command. The latter's raw
+operation/CPU/sleep spans contain wall-time stalls, but exact blocking versus
+host scheduling and its inherited process priority are **NOT MEASURED**.
+The existing fixed-case diagnostic is extended to the exact fourth command,
+once in original order, with the same bounded owned Job/ETW machinery and
+verified ordinary Normal child scheduling. No argument, sample, latency gate,
+production implementation or F1 constant changes. The original failure remains
+failed; no timing discount or passing PR substitution is permitted.
+
+Original PR Windows passes 95/95 and 371 Python checks, PR Linux passes 53/53,
+and both GNS jobs pass 10/10; push Linux is skipped. The failed original log
+SHA-256 is `8e2282ed193635911ffc03a516232bb95133b9ffe20cb0357216123b8315126d`.
+Corrected-source CI must qualify before fresh Local32 preflight and execution.
+The fixed-case helper compiles with the hosted `/O2 /W4 /WX` contract on the
+worker and passes all 34 focused helper tests with zero skips. The checks
+exercise case binding, original failure/crash propagation, coverage denials,
+ownership and cleanup without starting a kernel session or native workload;
+owned helper/test processes are absent afterward. This is tooling validation,
+not an RPC timing or provider acceptance result.
+Retained F1 Phase 1 PASS is unchanged; **KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY; no Local32/Node32 acceptance or 3M.**
+
 ## Original tooling CI sampler startup refusal (2026-10-05)
 
 Execution-changing tooling `a4baec8370328d57244aaec58da7bc69ab84e147`

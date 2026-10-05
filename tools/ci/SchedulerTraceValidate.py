@@ -90,8 +90,9 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
             Extra.update(ValidateFullEvidence(Metadata, Stdout, ByCase))
         except (OSError, ValueError, KeyError, TypeError, UnicodeError) as Error:
             Errors.append('Full coverage: ' + str(Error))
-    if Case == "Aggregate32Structural":
+    if Case in ("Aggregate32", "Aggregate32Structural"):
         try:
+            Argument = '--reliable-workload-32' if Case == 'Aggregate32' else '--reliable-workload-32-structural'
             Expected = ("aggregate-baseline", "aggregate-overload", "aggregate-recovery")
             Require(list(ByCase) == list(Expected[:len(ByCase)]) and 0 < len(ByCase) <= 3,
                     "aggregate phases missing, unexpected or out of order")
@@ -108,9 +109,9 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
             Require(type(Metadata.get("ChildExitCode")) is int and
                     (Metadata["ChildExitCode"] != 0 or tuple(ByCase) == Expected),
                     "successful aggregate workload must retain all three phases")
-            Require(Metadata.get("WorkloadArguments") == ["--reliable-workload-32-structural"],
-                    "aggregate workload arguments differ from fixed fifth command")
-            Extra = ValidateAggregateCsv(Metadata, CsvPath)
+            Require(Metadata.get("WorkloadArguments") == [Argument],
+                    "aggregate workload arguments differ from fixed case")
+            Extra = ValidateAggregateCsv(Metadata, CsvPath, Argument)
             Extra.update(ValidateAggregateEvidence(Metadata, Stdout, ByCase))
         except (OSError, ValueError, KeyError, TypeError, UnicodeError) as Error:
             Errors.append("aggregate coverage: " + str(Error))
@@ -131,8 +132,8 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
             "Note": "Window retention does not prove a scheduler cause; inspect the exact CSwitch/ReadyThread chain. Unknown lifecycle versions limit other-thread identity attribution.", **Extra}
 
 
-def ValidateAggregateCsv(Metadata, CsvPath):
-    return ValidateSchedulerCsv(Metadata, CsvPath, '--reliable-workload-32-structural')
+def ValidateAggregateCsv(Metadata, CsvPath, Argument):
+    return ValidateSchedulerCsv(Metadata, CsvPath, Argument)
 
 
 def ValidateSchedulerCsv(Metadata, CsvPath, Argument):
@@ -680,7 +681,7 @@ def ValidateStats(Metadata, Stdout, CsvPath, Arms):
 def Main():
     Parser = argparse.ArgumentParser()
     Parser.add_argument("--root", type=Path, required=True)
-    Parser.add_argument("--case", choices=("Full", "AckStats", "Aggregate32Structural"), default="Full")
+    Parser.add_argument("--case", choices=("Full", "AckStats", "Aggregate32", "Aggregate32Structural"), default="Full")
     Args = Parser.parse_args()
     Result = {"State": "INCOMPLETE", "CausalVerdict": "NOT_CLAIMED"}
     try:

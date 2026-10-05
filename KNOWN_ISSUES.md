@@ -85,6 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-05 tooling `d66444f3` passes the corrected sampler and all 95 native
+CTest entries plus 371 Python checks. Its original push `37275013641` then
+fails five unchanged 150-ms RPC p95 gates in FULL_RESERVATION aggregate
+recovery; observed p95 values are 162.058, 165.997, 163.524, 165.514 and
+166.892 ms. All accepted requests complete without errors. The failed fourth
+command `--reliable-workload-32` has no overlapping scheduler trace or measured
+child priority; CPU/wall/sleep observations alone do not establish its cause.
+The passing PR and GNS jobs cannot replace the failed push. Extend the existing
+bounded fixed-case diagnostic to that exact command once, preserving its
+arguments, order, latency gates and original exit; new CI is required before
+Local32. No production/F1/admission change or physical retry is justified by
+this evidence. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+
 2026-10-05 original tooling `a4baec83` native push `37267234328` fails
 the five-second resource-sampler startup gate (Windows 94/95; dependent Linux
 skipped). Parent counter preparation is outside the timed startup; exclusive

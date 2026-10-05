@@ -36,7 +36,7 @@ constexpr GUID ThreadProvider{0x3d6fa8d1, 0xfe05, 0x11d0, {0x9d, 0xda, 0x00, 0xc
 constexpr GUID KernelControl{0x9e814aad, 0x3204, 0x11d2, {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
 constexpr GUID NullGuid{};
 constexpr char CsvHeader[] = "Qpc,Processor,Opcode,Version,HeaderPid,HeaderTid,NewTid,OldTid,TargetTid,TargetPid,OldWaitReason,OldWaitMode,OldState,ReadyAdjustReason,ReadyAdjustIncrement,ReadyFlags\n";
-enum class FixedCase { Full, AckStats, Aggregate32Structural };
+enum class FixedCase { Full, AckStats, Aggregate32, Aggregate32Structural };
 struct CaseSpec {
     const wchar_t *Binary;
     const wchar_t *Output;
@@ -49,6 +49,8 @@ CaseSpec GetCaseSpec(FixedCase Case) {
         return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace", L"--reliable-workload", "Full"};
     case FixedCase::AckStats:
         return {L"build-ci/gargantuan_real_transport_tests.exe", L"build-ci/scheduler-trace-ack-stats", L"--ack-stats-boundary", "AckStats"};
+    case FixedCase::Aggregate32:
+        return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace-aggregate32", L"--reliable-workload-32", "Aggregate32"};
     case FixedCase::Aggregate32Structural:
         return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace-aggregate32-structural", L"--reliable-workload-32-structural", "Aggregate32Structural"};
     }
@@ -367,6 +369,10 @@ int SelfTest() {
         std::wstring(Aggregate.Output) != L"build-ci/scheduler-trace-aggregate32-structural" ||
         std::wstring(Aggregate.Argument) != L"--reliable-workload-32-structural" ||
         std::string(Aggregate.Name) != "Aggregate32Structural" ||
+        std::wstring(GetCaseSpec(FixedCase::Aggregate32).Binary) != L"build-ci/gargantuan_game_session_real_transport_tests.exe" ||
+        std::wstring(GetCaseSpec(FixedCase::Aggregate32).Output) != L"build-ci/scheduler-trace-aggregate32" ||
+        std::wstring(GetCaseSpec(FixedCase::Aggregate32).Argument) != L"--reliable-workload-32" ||
+        std::string(GetCaseSpec(FixedCase::Aggregate32).Name) != "Aggregate32" ||
         std::wstring(GetCaseSpec(FixedCase::Full).Argument) != L"--reliable-workload" ||
         std::wstring(GetCaseSpec(FixedCase::AckStats).Argument) != L"--ack-stats-boundary") return 13;
     try { (void)GetCaseSpec(static_cast<FixedCase>(99)); return 14; } catch (...) {}
@@ -803,6 +809,8 @@ int wmain(int Count, wchar_t **Args) {
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3]);
         if (Count == 4 && std::wstring(Args[1]) == L"--run-ack-stats")
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::AckStats);
+        if (Count == 4 && std::wstring(Args[1]) == L"--run-aggregate32")
+            return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::Aggregate32);
         if (Count == 4 && std::wstring(Args[1]) == L"--run-aggregate32-structural")
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::Aggregate32Structural);
         if (Count == 4 && std::wstring(Args[1]) == L"--cleanup")

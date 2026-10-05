@@ -256,7 +256,7 @@ jobs:
             pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case Full
           )
           if not %errorlevel%==0 exit /b %errorlevel%
-          build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32
+          pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case Aggregate32
           if not %errorlevel%==0 exit /b %errorlevel%
           pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case Aggregate32Structural
           if not %errorlevel%==0 exit /b %errorlevel%
@@ -325,6 +325,7 @@ jobs:
             build-ci/scheduler-trace/
             build-ci/scheduler-trace-ack-stats/
             build-ci/scheduler-trace-aggregate32-structural/
+            build-ci/scheduler-trace-aggregate32/
             build-ci/scheduler-trace.exe
             build-ci/gargantuan_game_session_real_transport_tests.exe
             build-ci/scheduler-trace-pair.json
