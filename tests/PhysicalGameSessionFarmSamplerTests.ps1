@@ -2,6 +2,7 @@
 # Only harmless owned Python sleepers and an owned PowerShell sampler are run.
 # Adapter queries are supplied fixtures; these tests do not qualify a farm/NIC.
 $ErrorActionPreference = 'Stop'
+& (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmSamplerSourceTests.ps1')
 $Endpoint = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmEndpoint.ps1'
 $Tokens = $null; $Errors = $null
 $Ast = [Management.Automation.Language.Parser]::ParseFile($Endpoint, [ref]$Tokens, [ref]$Errors)
@@ -28,7 +29,17 @@ $Root = Join-Path ([IO.Path]::GetTempPath()) ('farm-sampler-test-' + [Guid]::New
 $Children = [Collections.Generic.List[object]]::new()
 $Samplers = [Collections.Generic.List[object]]::new()
 $Finished = $false
+$CounterPreparationMilliseconds = 'NOT_MEASURED'
 try {
+	# Match the endpoint's production precondition: Main prepares the counter
+	# types before RunStartedTicks and the timed sampler initialization. The child
+	# still starts cold and must reach its first actual host baseline within 5 s.
+	$CounterPreparationClock = [Diagnostics.Stopwatch]::StartNew()
+	Initialize-HostResourceCounters
+	$CounterPreparationMilliseconds = $CounterPreparationClock.ElapsedMilliseconds
+	if (-not ('FarmHostNativeCounters' -as [type]) -or -not ('FarmSamplerPipeCopy' -as [type])) {
+		throw 'production sampler counter preparation did not establish both types'
+	}
 	$FixtureHost = @'
 function Add-HostResourceSample {
  param([object[]]$Owners,[string]$LocalRunId,[string]$LocalRole,[string]$LocalProvider,$Interface,
@@ -66,12 +77,29 @@ function Add-HostResourceSample {
 	function Start-TestSampler {
 		param([string]$Name)
 		$Directory = Join-Path $Root $Name; [void][IO.Directory]::CreateDirectory($Directory)
+		if (-not ('FarmHostNativeCounters' -as [type]) -or -not ('FarmSamplerPipeCopy' -as [type])) {
+			throw 'timed sampler fixture lacks production counter precondition'
+		}
 		$Before = [Diagnostics.Stopwatch]::GetTimestamp()
-		$Sampler = Start-EndpointResourceSampler -EndpointSource $FixtureSource -OutputDirectory $Directory `
-			-LocalRunId '12345678-1234-4234-8234-123456789abc' -LocalRole Clients -LocalProvider Local `
-			-Interface ([pscustomobject]@{Index=1;MacAddress='00-11-22-33-44-55';Address='10.253.3.1';Name=$Name;HostName=[Environment]::MachineName}) `
-			-StartedTicks ([Diagnostics.Stopwatch]::GetTimestamp()) -TimeoutMilliseconds 30000 -SecretVariables @('GARGANTUAN_TEST_NODE_SECRET')
-		if (([Diagnostics.Stopwatch]::GetTimestamp() - $Before) * 1000 / [Diagnostics.Stopwatch]::Frequency -ge 5000 -or
+		$Sampler = $null
+		try {
+			$Sampler = Start-EndpointResourceSampler -EndpointSource $FixtureSource -OutputDirectory $Directory `
+				-LocalRunId '12345678-1234-4234-8234-123456789abc' -LocalRole Clients -LocalProvider Local `
+				-Interface ([pscustomobject]@{Index=1;MacAddress='00-11-22-33-44-55';Address='10.253.3.1';Name=$Name;HostName=[Environment]::MachineName}) `
+				-StartedTicks ([Diagnostics.Stopwatch]::GetTimestamp()) -TimeoutMilliseconds 30000 -SecretVariables @('GARGANTUAN_TEST_NODE_SECRET')
+		} finally {
+			# Failure-call elapsed time can include the helper's bounded cleanup;
+			# do not mislabel it as an exclusive startup phase measurement.
+			$StartCallMilliseconds = ([Diagnostics.Stopwatch]::GetTimestamp()-$Before)*1000/[Diagnostics.Stopwatch]::Frequency
+			$Diagnostic = [ordered]@{ Scope='TEST_FIXTURE_ONLY'; ParentCountersPreparedBeforeTimedStart=$true;
+				ParentCounterPreparationMilliseconds=$CounterPreparationMilliseconds;
+				StartCallMillisecondsIncludingFailureCleanup=$StartCallMilliseconds;
+				SamplerInitializationMilliseconds=if ($null -ne $Sampler) { $Sampler.InitializationMilliseconds } else { 'NOT_MEASURED' };
+				ChildCounterCompilationMilliseconds='NOT_MEASURED'; ChildPowerShellStartupMilliseconds='NOT_MEASURED';
+				SourceParsingAndHashingMilliseconds='NOT_MEASURED'; FirstHostBaselineMilliseconds='NOT_MEASURED' }
+			Write-EndpointSamplerJson -Path (Join-Path $Directory 'fixture-initialization.json') -Value $Diagnostic
+		}
+		if ($StartCallMilliseconds -ge 5000 -or
 			$Sampler.InitializationMilliseconds -ge 5000) { throw 'sampler initialization outside five-second bound' }
 		$Samplers.Add($Sampler); return $Sampler
 	}
@@ -185,7 +213,7 @@ function Add-HostResourceSample {
 	[IO.File]::WriteAllText($InvalidSource, [IO.File]::ReadAllText($FixtureSource).Replace('function Write-EndpointSamplerCsv {','function Missing-EndpointSamplerCsv {'))
 	Expect-SamplerRejection { Start-EndpointResourceSampler -EndpointSource $InvalidSource -OutputDirectory $Invalid -LocalRunId $Fast.RunId `
 		-LocalRole Clients -LocalProvider Local -Interface @{} -StartedTicks 1 -TimeoutMilliseconds 30000 } 'source closure differs'
-	Write-Output "[Qualification:ResourceSampler] OWNED_CHILD_TEST_OK Children=32 InitializationMilliseconds=$($Fast.InitializationMilliseconds) PublishWhileBlockedMilliseconds=$PublishMilliseconds ActualProcessRows=$($Rows.Count) HostRows=$($Hosts.Count) FailedPartialRows=$($PartialRows.Count) Adapter=SUPPLIED_FIXTURE Farm=NOT_MEASURED"
+	Write-Output "[Qualification:ResourceSampler] OWNED_CHILD_TEST_OK Children=32 ParentCounterPreparationMilliseconds=$CounterPreparationMilliseconds InitializationMilliseconds=$($Fast.InitializationMilliseconds) PublishWhileBlockedMilliseconds=$PublishMilliseconds ActualProcessRows=$($Rows.Count) HostRows=$($Hosts.Count) FailedPartialRows=$($PartialRows.Count) Adapter=SUPPLIED_FIXTURE Farm=NOT_MEASURED"
 	$Finished = $true
 } finally {
 	foreach ($Sampler in $Samplers) {
@@ -197,5 +225,5 @@ function Add-HostResourceSample {
 	if (-not $Resolved.StartsWith($Temp + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
 		[IO.Path]::GetFileName($Resolved) -cnotmatch '^farm-sampler-test-[a-f0-9]{32}$') { throw 'sampler test cleanup outside owned temp root' }
 	if ($Finished) { Remove-Item -LiteralPath $Resolved -Recurse -Force }
-	else { Write-Output "[Qualification:ResourceSampler] FAILED_RAW_RETAINED Root=$Resolved" }
+	else { Write-Output "[Qualification:ResourceSampler] FAILED_RAW_RETAINED Root=$Resolved ParentCounterPreparationMilliseconds=$CounterPreparationMilliseconds ExclusiveInitializationPhases=NOT_MEASURED" }
 }

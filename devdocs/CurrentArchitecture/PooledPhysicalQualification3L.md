@@ -68,6 +68,26 @@ Independent lifecycle review SHA-256:
 `7b57ee6659328fb9186bb498cd1002fcde9b30109d69be3afa8ab03403f6207c`.
 Portable sampler qualification SHA-256:
 `035178ec34d057b8732d4d6827c690ae151d2d880560c4e694f3e5b5199820ab`.
+The original tooling `ce26e26a` push Windows job `111573334011` passes
+94 of 95 native tests and fails the endpoint fixture's five-second sampler
+initialization check. Its Linux job is skipped; these failed/skipped results
+remain historical and cannot be replaced by the separately passing PR Windows
+job. The fixture omitted production's parent-counter preparation before the
+sampler clock. The correction restores that precondition only in the fixture,
+retains both actual five-second checks and cold child initialization, and adds
+six AST checks plus bounded timing diagnostics. The exclusive slow phase of
+the original CI failure is **NOT MEASURED**.
+
+The corrected standalone sampler and full endpoint fixtures pass locally with
+32 harmless children each, 64 process rows, two host rows, and all 36 recorded
+owned processes exited or absent in each suite. Their six initialization
+measurements range from 1,081 to 1,528 ms. The full endpoint also passes its
+18 native-path and 23 projection cases. Retained qualification SHA-256:
+`dcc04b870be4c645ce67b135bbe444147eb5c87f72047d4e7f8969996625dc64`.
+Production endpoint code, deadlines and acceptance limits are unchanged.
+This fixture correction requires its own original hosted candidate checks;
+local harmless tests do not qualify a physical farm.
+
 Required hosted candidate CI, exact cleanup, fresh source closure and endpoint
 preflight must pass before a subsequent provider run. No installed service,
 native production code, admission, resource limit or acceptance gate changes.
