@@ -6,6 +6,59 @@ last_verified: 2026-10-04
 
 # Foundation 3L pooled physical qualification attempt
 
+## Local32 correction qualified; client resource preflight blocked (2026-10-04)
+
+Execution-changing tooling `eaf956be2873855b69eb6a9672dc0beb23f7c10f`
+passes all six original attempt-1 hosted jobs. Native push `37253600366`
+and PR `37253602633` each pass Windows 95 and Linux 53 native tests,
+plus 364 separate Windows Python checks, with no failed or skipped tests.
+GNS push `37253600339` and PR `37253602820` each pass 10 sanitizer tests.
+Both original Windows Full and Aggregate32Structural traces replay exactly
+against the pinned source. Original checkout head/merge/tree, logs, artifact
+digests and test identities are reconciled without workflow retries.
+The earlier `ce26e26a` failed/skipped push results remain unchanged.
+
+Original raw CI independent review SHA-256:
+`aded719f9b60e21b42ac30962a410f9239279a61611b6de3c9357a7c74bc53d2`.
+The complete source-bound current-CI verifier also passes; its receipt is
+`C:\Users\aiden\.codex\artifacts\farm32-v14-independent-finalization-eaf956be-v1\current-ci-independent-review.json`,
+SHA-256 `ebb27c658ed409933ae579122cffa46b2bd247a0423e5aca622171c95507f759`.
+Independent rejoin review SHA-256:
+`8104a94bd5ee76a9c9af88d8f47d693e48b22172332572d361e4adb21c659a7c`.
+
+Failed Local `68bfec9e` cleanup is independently complete. The original
+four-control STOPPED result and eight journals are preserved. A separately
+qualified, fresh two-control continuation supplies the remaining four journals,
+final six-leaf absence and idle observations. The composite verifier checks
+12 logical journals, 32 raw observations and all 31 original indexed inputs.
+Raw closure SHA-256
+`6d2058f99c23b8caf9243646dbc1be1eb592621c172f475939d08b3efa458fa5`;
+independent actual audit SHA-256
+`a3e3082f1adc2b5b324ead92aeff7b06300d4b1f7e7a7f406513178e4bdd913b`.
+This cleanup evidence does not reclassify the original provider failure.
+
+V14's applied source bindings pass 101 candidate tests and 162 framework tests
+in each of normal and optimized Python, with zero skips. The independent
+refreeze review verifies the six CI literal bindings, byte-exact current
+cleanup reader, all 14 intended source changes and preserved predecessor
+snapshots. Candidate adoption and physical launch remain pending.
+
+Read-only installed observation at `2026-10-05T03:50:15Z` verifies both endpoint
+package and source pins, no observed task processes/listeners, running idle
+capture services, all eight worker service files and four Node/config pins.
+Its resource gate fails: client `DESKTOP-B8V8NAN` has 3.357 GiB available RAM
+against the unchanged 8-GiB floor; worker `HOSTPC` has 19.657 GiB available RAM
+and 36.382 GiB free on C:. This is an installed observation, not a physical
+attempt. Mapped receipt SHA-256:
+`84a4453dbb5796e4ebcecb15ea91673c8dbfd3dadeb97b3f365d27f84f13585e`.
+Fresh full source, installed, resource, projection, capture and lifecycle
+preflights remain mandatory before launch. No unrelated applications are
+stopped to satisfy the resource gate.
+
+Retained F1 PASS is unchanged. Local32, real-TLS Node32 and final acceptance
+remain unqualified; **KI-006 OPEN; Foundation 3L B — PARTIALLY READY**.
+No new physical attempt, Foundation 3M work or merge is performed.
+
 ## Local32 bootstrap launch/sampling failure (2026-10-04)
 
 Tooling `929da7d071029d945a461d9631a97d1b2398f701` passes all six
