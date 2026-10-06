@@ -37,6 +37,8 @@ class SchedulerTraceTests(unittest.TestCase):
 $ErrorActionPreference='Stop'
 $Calls=[Collections.Generic.List[string]]::new()
 $Disabled=$false
+$Killed=$false
+$Gone=$false
 function Get-ScheduledTask {
     [CmdletBinding()] param([string]$TaskPath,[string]$TaskName)
     $Enumerating=(-not $TaskPath -and -not $TaskName)
@@ -46,7 +48,7 @@ function Get-ScheduledTask {
     if($Enumerating) {
         [pscustomobject]@{TaskPath='\Unrelated\';TaskName='Microsoft Compatibility Appraiser';State='Ready'}
         [pscustomobject]@{TaskPath='\Microsoft\Windows\Application Experience\';TaskName='Other task';State='Ready'}
-        if($env:APPRAISAL_TEST_MODE -in @('missing','missing-active','missing-cim-error')) { return }
+        if($env:APPRAISAL_TEST_MODE.StartsWith('missing')) { return }
         $TaskPath='\Microsoft\Windows\Application Experience\'
         $TaskName='Microsoft Compatibility Appraiser'
     }
@@ -70,10 +72,55 @@ function Stop-ScheduledTask {
 }
 function Get-CimInstance {
     [CmdletBinding()] param([string]$ClassName,[string]$Filter)
-    $Calls.Add('Cim')
-    if($ClassName -cne 'Win32_Process' -or $Filter -cne "Name='CompatTelRunner.exe'") { throw 'Wrong census scope' }
-    if($env:APPRAISAL_TEST_MODE -in @('cim-error','missing-cim-error')) { throw 'Supplied CIM failure' }
-    if($env:APPRAISAL_TEST_MODE -in @('persistent','missing-active')) { [pscustomobject]@{Name='CompatTelRunner.exe';ProcessId=123} }
+    if($ClassName -cne 'Win32_Process' -or $Filter -notin @("Name='CompatTelRunner.exe'",'ProcessId=123')) { throw 'Wrong census scope' }
+    $ByPid=$Filter -eq 'ProcessId=123'
+    $Calls.Add($(if($ByPid){'CimPid'}else{'CimName'}))
+    $Mode=$env:APPRAISAL_TEST_MODE
+    if($Mode -in @('cim-error','missing-cim-error') -or ($ByPid -and $Mode -eq 'query-error')) { throw 'Supplied CIM failure' }
+    if($Mode -in @('happy','missing')) { return }
+    if($ByPid -and $Mode -eq 'disappeared') { $script:Gone=$true; return }
+    if(-not $ByPid -and ($Gone -or ($Killed -and $Mode -notin @('persistent','reappearance')))) { return }
+    $Birth=[datetime]'2026-10-06T08:00:00Z'
+    $Image=Join-Path $env:WINDIR 'System32\CompatTelRunner.exe'
+    $Name='CompatTelRunner.exe'
+    $PidValue=123
+    if($Mode -eq 'wrong-path' -or ($ByPid -and $Mode -eq 'changed-path')) {$Image=Join-Path $env:WINDIR 'Other\CompatTelRunner.exe'}
+    if($Mode -eq 'null-birth') {$Birth=$null}
+    if($Mode -eq 'wrong-name' -or ($ByPid -and $Mode -eq 'changed-name')) {$Name='Other.exe'}
+    if($ByPid -and $Mode -eq 'changed-birth') {$Birth=$Birth.AddSeconds(1)}
+    if(($ByPid -and $Mode -eq 'changed-pid') -or ($Killed -and $Mode -eq 'reappearance')) {$PidValue=124}
+    if($Mode -eq 'wrong-pid-type') {$PidValue=$true}
+    [pscustomobject]@{Name=$Name;ProcessId=$PidValue;CreationDate=$Birth;ExecutablePath=$Image}
+}
+function Get-Process {
+    [CmdletBinding()] param([int]$Id)
+    $Calls.Add('Process')
+    if($Id -ne 123) {throw 'Wrong Get-Process PID'}
+    if($env:APPRAISAL_TEST_MODE -eq 'process-error') {throw 'Supplied Get-Process failure'}
+    $Value=[pscustomobject]@{Id=123}
+    $Value|Add-Member ScriptProperty Handle {
+        $Calls.Add('Handle')
+        if($env:APPRAISAL_TEST_MODE -eq 'handle-error') {throw 'Supplied handle failure'}
+        if($env:APPRAISAL_TEST_MODE -eq 'empty-handle') {return [IntPtr]::Zero}
+        return [IntPtr]1
+    }
+    $Value|Add-Member ScriptMethod Kill {
+        $Calls.Add('Kill')
+        if($env:APPRAISAL_TEST_MODE -eq 'kill-error') {throw 'Supplied Kill failure'}
+        $script:Killed=$true
+    }
+    $Value|Add-Member ScriptMethod WaitForExit {
+        param([int]$Milliseconds)
+        $Calls.Add('Wait')
+        if($Milliseconds -le 0 -or $Milliseconds -gt 15000) {throw 'Wait exceeds remaining budget'}
+        if($env:APPRAISAL_TEST_MODE -eq 'wait-error') {throw 'Supplied Wait failure'}
+        return $env:APPRAISAL_TEST_MODE -ne 'timeout'
+    }
+    $Value|Add-Member ScriptMethod Dispose {
+        $Calls.Add('Dispose')
+        if($env:APPRAISAL_TEST_MODE -eq 'dispose-error') {throw 'Supplied Dispose failure'}
+    }
+    return $Value
 }
 $Failed=$false
 $Reason=''
@@ -112,36 +159,52 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
             self.assertEqual(Row['Calls'], [])
 
     def test_hosted_appraisal_exact_task_disabled_and_absent_or_fail_closed(self):
-        Hosted = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Windows')
+        Hosted = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Windows', WINDIR='C:\\Windows')
         Row, Log = self.HostedAppraisal('happy', Hosted)
         self.assertFalse(Row['Failed'], Row)
-        self.assertEqual(Row['Calls'], ['Enumerate', 'Disable', 'Stop', 'Get', 'Cim'])
-        self.assertIn('[CI:HostResources] task_path=\\Microsoft\\Windows\\Application Experience\\ task_name=Microsoft Compatibility Appraiser task_state=Disabled process_count=0', Log)
+        self.assertEqual(Row['Calls'], ['Enumerate', 'Disable', 'Stop', 'Get', 'CimName', 'CimName', 'Get'])
+        self.assertIn('task_state=Disabled process_count=0', Log)
+        self.assertIn('pwsh_version=', Log)
+        self.assertIn('framework=', Log)
         Row, Log = self.HostedAppraisal('missing', Hosted)
         self.assertFalse(Row['Failed'], Row)
-        self.assertEqual(Row['Calls'], ['Enumerate', 'Cim'])
+        self.assertEqual(Row['Calls'], ['Enumerate', 'CimName', 'CimName'])
         self.assertIn('task_state=NOT_REGISTERED process_count=0', Log)
         self.assertNotIn('task_state=Disabled', Log)
-        for Mode in ('missing-active', 'missing-cim-error', 'duplicate', 'get-error', 'readback-wrong',
-                     'enabled', 'disable-error', 'stop-error', 'cim-error', 'persistent'):
+        for Mode in ('missing-cim-error', 'duplicate', 'get-error', 'readback-wrong', 'enabled', 'disable-error', 'stop-error', 'cim-error'):
             with self.subTest(Mode=Mode):
                 Row, _ = self.HostedAppraisal(Mode, Hosted)
                 self.assertTrue(Row['Failed'], Row)
-                if Mode in ('duplicate', 'get-error'):
-                    self.assertEqual(Row['Calls'], ['Enumerate'])
-                if Mode.startswith('missing-'):
-                    self.assertEqual(Row['Calls'], ['Enumerate', 'Cim'])
-                if Mode == 'persistent':
-                    self.assertIn('within 15 seconds; process_count=1', Row['Reason'])
-                    self.assertGreater(Row['Calls'].count('Cim'), 1)
+                self.assertNotIn('Kill', Row['Calls'])
+        for PreTiming in (False, True):
+            Row, Log = self.HostedAppraisal('missing-active', Hosted, PreTiming)
+            self.assertFalse(Row['Failed'], Row)
+            self.assertEqual(Row['Calls'][-7:], ['Process', 'Handle', 'CimPid', 'Kill', 'Wait', 'Dispose', 'CimName'])
+            self.assertIn('action=HELD_IDENTITY_CHECKED_STOP', Log)
+            self.assertIn('pre_timing_process_count=0' if PreTiming else 'task_state=NOT_REGISTERED process_count=0', Log)
+            Row, Log = self.HostedAppraisal('disappeared', Hosted, PreTiming)
+            self.assertFalse(Row['Failed'], Row)
+            self.assertLess(Row['Calls'].index('Handle'), Row['Calls'].index('CimPid'))
+            self.assertIn('Dispose', Row['Calls'])
+            self.assertNotIn('Kill', Row['Calls'])
+            self.assertIn('DISAPPEARED_AFTER_HANDLE_OPEN', Log)
+            for Mode in ('wrong-path', 'null-birth', 'wrong-name', 'wrong-pid-type', 'changed-birth', 'changed-name', 'changed-path',
+                         'changed-pid', 'process-error', 'handle-error', 'empty-handle', 'query-error',
+                         'kill-error', 'wait-error', 'dispose-error', 'timeout', 'persistent', 'reappearance', 'cim-error'):
+                with self.subTest(Mode=Mode, PreTiming=PreTiming):
+                    Row, _ = self.HostedAppraisal(Mode, Hosted, PreTiming)
+                    self.assertTrue(Row['Failed'], Row)
+                    if Mode in ('wrong-path', 'null-birth', 'wrong-name', 'wrong-pid-type', 'changed-birth', 'changed-name',
+                                'changed-path', 'changed-pid', 'process-error', 'handle-error', 'empty-handle', 'query-error', 'cim-error'):
+                        self.assertNotIn('Kill', Row['Calls'])
+                    if Mode in ('wrong-path', 'null-birth', 'wrong-name', 'wrong-pid-type'):
+                        self.assertNotIn('Process', Row['Calls'])
+                    if 'Process' in Row['Calls'] and Mode != 'process-error':
+                        self.assertIn('Dispose', Row['Calls'])
         Row, Log = self.HostedAppraisal('happy', Hosted, PreTiming=True)
         self.assertFalse(Row['Failed'], Row)
-        self.assertEqual(Row['Calls'], ['Cim'])
+        self.assertEqual(Row['Calls'], ['CimName', 'CimName'])
         self.assertIn('[CI:HostResources] pre_timing_process_count=0', Log)
-        for Mode in ('missing-active', 'cim-error'):
-            Row, _ = self.HostedAppraisal(Mode, Hosted, PreTiming=True)
-            self.assertTrue(Row['Failed'])
-            self.assertEqual(Row['Calls'], ['Cim'])
 
     def FullFixture(self, Root, Exit=0, Cases=8, Case='Full'):
         Metadata, Aggregate, File = self.AggregateFixture(Root)

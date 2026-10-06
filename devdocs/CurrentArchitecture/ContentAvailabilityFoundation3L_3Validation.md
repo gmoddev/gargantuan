@@ -6,6 +6,21 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Known hosted competitor remains active (2026-10-06)
+
+[Source `92e3c9b9`](PooledPhysicalQualification3L.md#active-hosted-telemetry-without-a-registered-task-2026-10-06)
+PR Windows correctly fails the resource precondition: exact task absent,
+actual Appraiser process count one. No native build/test/timing or provider
+measurement occurs in that job. The correction terminates only the checked
+Windows System32 Appraiser on the guarded disposable CI VM, using a captured
+process handle plus fresh birth/name/path identity. Remaining-budget wait,
+disposal and fresh zero census are mandatory; unknown identity, errors or
+reappearance fail. The same preparation immediately precedes all five
+unchanged timing workloads. No user endpoint, tree kill, clock, production
+contract or latency-gate change. Two focused mocked tests pass in normal and
+optimized modes, zero skips; all new original CI remain required. **KI-006
+OPEN; 3L B — PARTIALLY READY; Node32 not run**.
+
 ## Absent hosted task lookup stops before measurement (2026-10-06)
 
 [Source `0dd022697`](PooledPhysicalQualification3L.md#hosted-task-absence-is-a-resource-fact-not-a-setup-defect-2026-10-06)

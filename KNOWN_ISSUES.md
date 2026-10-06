@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-06 `92e3c9b9` PR Windows refuses setup because Appraiser count is
+one despite no exact registered task. This is a real resource-precondition
+failure before production measurement. Bounded hosted cleanup now permits
+only the checked System32 Appraiser image, with captured handle and fresh
+PID/birth/name/path identity; final actual absence remains mandatory.
+Unknown identity, API errors and reappearance fail without arbitrary targets
+or retries. [Original refusal](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#active-hosted-telemetry-without-a-registered-task-2026-10-06)
+is preserved. User hosts and all five workload/latency gates are unchanged.
+Fresh original CI/package/preflight/Local32 remain required. **KI-006 OPEN;
+3L B — PARTIALLY READY; Node32 not run**.
+
 2026-10-06 `0dd022697` stops at hosted task lookup on push, PR and official
 dispatch before any native build/test/workload. The image lacks the exact
 registered Appraiser task. The minimal correction requires successful task

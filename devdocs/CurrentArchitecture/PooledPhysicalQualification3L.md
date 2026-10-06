@@ -6,6 +6,45 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Active hosted telemetry without a registered task (2026-10-06)
+
+Source `92e3c9b9627ee4ffb45fc086e1f285e5953ecf72` PR Windows job
+`112181731697`, run `37437173945`, correctly refuses setup at
+`2026-10-06T08:38:10.0921351Z`: successful enumeration finds no exact
+registered task, while the actual `CompatTelRunner.exe` census is one.
+Its raw log SHA-256 is
+`2cde6b41565616af7f9d5a3d5084eef4fa802cfbf1f9c2c8e82df116f6a062be`;
+diagnostics ZIP is `ff8c8ed0962ed4d46b56d3b6f9a001efe1512062a87cce231d861ba172e127e9`.
+PR native build/tests/timing are **NOT RUN** and PR Linux is skipped.
+No resource PASS, package or provider result is inferred. The new instance's
+PID, path and birth were **NOT MEASURED** by that earlier step.
+
+The image can run this competitor independently of the named task. Bounded
+preparation now handles only the exact Windows System32 Appraiser executable
+on the disposable GitHub-hosted VM. Every candidate must have the expected
+name, normalized System32 path, positive PID and nonnull native birth. A
+`System.Diagnostics.Process` object opens its handle before a second successful
+CIM PID/birth/name/path check. Termination and bounded exit wait use that same
+held object; identity change or API/handle error refuses termination, and
+the object is disposed on every path. This avoids reopening an arbitrary PID.
+Successful disappearance permits no kill and still requires a fresh empty
+final census. Reappearance or a persistent process fails; there is no cleanup
+retry loop, tree kill, arbitrary image or user-host operation.
+
+This same closed-target quiescence immediately precedes the five timing
+workloads. Its exit wait consumes only the remaining 15-second monotonic
+budget, and the one-minute outer step still bounds synchronous APIs. Actual
+PowerShell/runtime versions and checked fixed identities are retained in
+host logs. Optional exact-task disabling/stopping and Disabled readback remain
+unchanged. Only exact Appraiser absence is established; unrelated background
+CPU and the old 119-ms blocked API remain **NOT MEASURED**. No latency is
+discounted or production code, workload, priority, affinity, timer, service
+contract or acceptance gate changed. The two focused mocked boundary tests
+pass in normal and optimized modes with zero skips; their driver exits 0 and
+owned test-process census is empty. No real task/process method or native
+workload is exercised by those checks. All new original CI remain prerequisites to Local32. **KI-006 OPEN; 3L B —
+PARTIALLY READY; Node32 not run; no 3M or merge**.
+
 ## Hosted task absence is a resource fact, not a setup defect (2026-10-06)
 
 Source `0dd022697622307fa49f53171a4f25347651ed8c` fails before native

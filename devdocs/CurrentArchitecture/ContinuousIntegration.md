@@ -240,8 +240,8 @@ Original `be949192c` ran 36 helper and 338 other Python checks (374 total).
 Its PR Full/mixed RPC p95 and official first pooled Event/action failures
 remain failed. Two pooled Full case tests bind its exact flags/profile and
 failure prefix; two hosted preparation tests reject other contexts and verify
-exact task scope, disabled state when present, actual absence and fail-closed
-errors. Original `0dd022697` fails lookup before build/tests because the image
+exact task scope, disabled state when present, actual absence, held-process
+identity and fail-closed errors. Original `0dd022697` fails lookup before build/tests because the image
 has no matching registered task; no Windows inventory is claimed for that run.
 Original `09aa075ad` ran 34 helper and 338 other Python checks (372 total)
 before its second direct pooled command failed recovery peer 0's RPC p95.
@@ -420,15 +420,27 @@ task. It requires `GITHUB_ACTIONS=true`, `RUNNER_ENVIRONMENT=github-hosted`
 and `RUNNER_OS=Windows` before any task query or mutation. Successful task
 enumeration is filtered to that exact identity. A present target requires
 disabled readback and actual `CompatTelRunner.exe` process absence. Zero
-matches is accepted only with actual process absence, no task mutation and
-truthful `NOT_REGISTERED` output. Duplicate target, API error, enabled readback,
-persistent process or active Appraiser without the registered target fails
-setup. The monotonic absence observation is bounded to 15 seconds;
+matches causes no task mutation and retains truthful `NOT_REGISTERED` output.
+Original `92e3c9b9` demonstrates that Appraiser can nevertheless be active.
+Only the exact normalized Windows System32 `CompatTelRunner.exe` image may
+then be stopped: validate name/PID/native birth/path, open a Process object's
+handle, requery the same CIM identity, then terminate and wait using that held
+object. Wrong or changed identity and API/handle errors refuse termination.
+The object is disposed on every path. Successful disappearance skips the
+kill but still requires the final fresh census. No tree termination, arbitrary
+image or bare PID-kill fallback is allowed. Duplicate target, enabled task,
+persistent process or reappearance fails setup.
+The monotonic quiescence observation is bounded to 15 seconds;
 the entire preparation step is separately bounded to one minute, including
-synchronous task/CIM calls. There is no arbitrary process-kill fallback.
-Immediately before the five workloads, a separately bounded read-only census
-again requires actual Appraiser absence. Query failure cannot become an empty
-process list. These facts replace `0dd022697`'s unnecessary assumption that
+synchronous APIs, and each exit wait consumes only the remaining budget.
+Actual PowerShell/framework versions are logged. The associated-process
+[.NET implementation](https://github.com/dotnet/runtime/blob/release/10.0/src/libraries/System.Diagnostics.Process/src/System/Diagnostics/Process.Windows.cs)
+reuses an opened handle for termination and wait; it is retained until finally
+disposal rather than reopened by PID. This establishes only the fixed image's
+absence, not descendant cleanup or absence of every background CPU consumer.
+Immediately before the five workloads, a separately bounded instance of this
+same process cleanup again requires actual Appraiser absence. Query failure
+cannot become an empty process list. These facts replace `0dd022697`'s unnecessary assumption that
 the registered task must exist; its original setup failures remain failed.
 
 This preparation changes only the disposable hosted VM. User endpoints,
