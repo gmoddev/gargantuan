@@ -17,9 +17,108 @@ SPEC.loader.exec_module(VALIDATOR)
 
 
 class SchedulerTraceTests(unittest.TestCase):
-    def FullFixture(self, Root, Exit=0, Cases=8):
+    def HostedAppraisal(self, Mode, Environment):
+        Workflow = (ROOT / '.github/workflows/native-ci.yml').read_text()
+        Start = Workflow.index('      - name: Quiesce hosted compatibility appraisal')
+        Step = Workflow[Start:Workflow.index('      - name:', Start + 20)]
+        self.assertIn('        timeout-minutes: 1\n', Step)
+        self.assertLess(Workflow.index('      - name: Verify recursive dependency checkout'), Start)
+        self.assertLess(Start, Workflow.index('      - name: Install pinned repository tools'))
+        Body = Step[Step.index('        run: |\n') + len('        run: |\n'):]
+        Body = '\n'.join(Line[10:] for Line in Body.splitlines())
+        for Forbidden in ('Stop-Process', 'taskkill', 'Set-Service', 'PriorityClass', 'ProcessorAffinity'):
+            self.assertNotIn(Forbidden, Body)
+        Prelude = r'''
+$ErrorActionPreference='Stop'
+$Calls=[Collections.Generic.List[string]]::new()
+$Disabled=$false
+function Get-ScheduledTask {
+    [CmdletBinding()] param([string]$TaskPath,[string]$TaskName)
+    $Calls.Add('Get')
+    if($TaskPath -cne '\Microsoft\Windows\Application Experience\' -or $TaskName -cne 'Microsoft Compatibility Appraiser') { throw 'Wrong task selection' }
+    if($env:APPRAISAL_TEST_MODE -eq 'get-error') { throw 'Supplied task query failure' }
+    if($env:APPRAISAL_TEST_MODE -eq 'missing') { return }
+    $Name=if($env:APPRAISAL_TEST_MODE -eq 'wrong'){'Other task'}else{$TaskName}
+    $State=if($Disabled -and $env:APPRAISAL_TEST_MODE -ne 'enabled'){'Disabled'}else{'Ready'}
+    [pscustomobject]@{TaskPath=$TaskPath;TaskName=$Name;State=$State}
+    if($env:APPRAISAL_TEST_MODE -eq 'duplicate') { [pscustomobject]@{TaskPath=$TaskPath;TaskName=$Name;State=$State} }
+}
+function Disable-ScheduledTask {
+    [CmdletBinding()] param([string]$TaskPath,[string]$TaskName)
+    $Calls.Add('Disable')
+    if($TaskPath -cne '\Microsoft\Windows\Application Experience\' -or $TaskName -cne 'Microsoft Compatibility Appraiser') { throw 'Wrong disable target' }
+    if($env:APPRAISAL_TEST_MODE -eq 'disable-error') { throw 'Supplied disable failure' }
+    $script:Disabled=$true
+}
+function Stop-ScheduledTask {
+    [CmdletBinding()] param([string]$TaskPath,[string]$TaskName)
+    $Calls.Add('Stop')
+    if($TaskPath -cne '\Microsoft\Windows\Application Experience\' -or $TaskName -cne 'Microsoft Compatibility Appraiser') { throw 'Wrong stop target' }
+    if($env:APPRAISAL_TEST_MODE -eq 'stop-error') { throw 'Supplied stop failure' }
+}
+function Get-CimInstance {
+    [CmdletBinding()] param([string]$ClassName,[string]$Filter)
+    $Calls.Add('Cim')
+    if($ClassName -cne 'Win32_Process' -or $Filter -cne "Name='CompatTelRunner.exe'") { throw 'Wrong census scope' }
+    if($env:APPRAISAL_TEST_MODE -eq 'cim-error') { throw 'Supplied CIM failure' }
+    if($env:APPRAISAL_TEST_MODE -eq 'persistent') { [pscustomobject]@{Name='CompatTelRunner.exe';ProcessId=123} }
+}
+$Failed=$false
+$Reason=''
+try {
+'''
+        Trailer = r'''
+} catch { $Failed=$true; $Reason=$_.Exception.Message }
+Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reason;Calls=@($Calls)}|ConvertTo-Json -Compress))
+'''
+        Env = dict(os.environ, APPRAISAL_TEST_MODE=Mode)
+        for Name in ('GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'RUNNER_OS'):
+            Env.pop(Name, None)
+        Env.update(Environment)
+        with tempfile.TemporaryDirectory() as Directory:
+            Script = Path(Directory) / 'mock-host.ps1'
+            Script.write_text(Prelude + Body + Trailer)
+            Result = subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-File', str(Script)],
+                env=Env, text=True, capture_output=True, timeout=30,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.assertEqual(Result.returncode, 0, Result.stdout + Result.stderr)
+        Row = next(Line.removeprefix('HOST_BOUNDARY_RESULT=') for Line in Result.stdout.splitlines()
+                   if Line.startswith('HOST_BOUNDARY_RESULT='))
+        return json.loads(Row), Result.stdout
+
+    def test_hosted_appraisal_guards_precede_all_task_queries_and_mutations(self):
+        Hosted = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Windows')
+        for Name, Bad in (('GITHUB_ACTIONS', 'false'), ('GITHUB_ACTIONS', 'True'),
+                          ('RUNNER_ENVIRONMENT', 'self-hosted'), ('RUNNER_OS', 'Linux')):
+            with self.subTest(Name=Name, Bad=Bad):
+                Row, _ = self.HostedAppraisal('happy', dict(Hosted, **{Name: Bad}))
+                self.assertTrue(Row['Failed'])
+                self.assertEqual(Row['Calls'], [])
+        Row, _ = self.HostedAppraisal('happy', {})
+        self.assertTrue(Row['Failed'])
+        self.assertEqual(Row['Calls'], [])
+
+    def test_hosted_appraisal_exact_task_disabled_and_absent_or_fail_closed(self):
+        Hosted = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Windows')
+        Row, Log = self.HostedAppraisal('happy', Hosted)
+        self.assertFalse(Row['Failed'], Row)
+        self.assertEqual(Row['Calls'], ['Get', 'Disable', 'Stop', 'Get', 'Cim'])
+        self.assertIn('[CI:HostResources] task_path=\\Microsoft\\Windows\\Application Experience\\ task_name=Microsoft Compatibility Appraiser task_state=Disabled process_count=0', Log)
+        for Mode in ('wrong', 'missing', 'duplicate', 'get-error', 'enabled', 'disable-error', 'stop-error', 'cim-error', 'persistent'):
+            with self.subTest(Mode=Mode):
+                Row, _ = self.HostedAppraisal(Mode, Hosted)
+                self.assertTrue(Row['Failed'], Row)
+                if Mode in ('wrong', 'missing', 'duplicate', 'get-error'):
+                    self.assertEqual(Row['Calls'], ['Get'])
+                if Mode == 'persistent':
+                    self.assertIn('within 15 seconds; process_count=1', Row['Reason'])
+                    self.assertGreater(Row['Calls'].count('Cim'), 1)
+
+    def FullFixture(self, Root, Exit=0, Cases=8, Case='Full'):
         Metadata, Aggregate, File = self.AggregateFixture(Root)
-        Metadata.update(WorkloadCase='Full', WorkloadArguments=['--reliable-workload'], ChildExitCode=Exit)
+        Metadata.update(WorkloadCase=Case, WorkloadArguments=['--reliable-workload'], ChildExitCode=Exit)
+        if Case == 'PooledFull':
+            Metadata['WorkloadArguments'].insert(0, '--pooled')
         Templates = {Label: next(dict(Part.split('=', 1) for Part in Line.split()[1:])
             for Line in Aggregate.splitlines() if Line.startswith('[Qualification:' + Label + ']'))
             for Label in ('RemoteSpan', 'RemoteResourceSpan')}
@@ -59,7 +158,42 @@ class SchedulerTraceTests(unittest.TestCase):
                      requested_sleep_ms=0, actual_sleep_ms=0)
                 Emit('WorkloadPhaseSpan', profile='FULL_RESERVATION', phase=Phase, step=1, native_tid=43,
                      start_ns=Begin * 100 + 50, end_ns=Begin * 100 + 60, timestamps_valid=1)
-        return Metadata, '\n'.join(Lines), File
+        Log = '\n'.join(Lines)
+        if Case == 'PooledFull':
+            Log = Log.replace('profile=FULL_RESERVATION', 'profile=POOLED_SERVICE')
+        return Metadata, Log, File
+
+    def test_pooled_full_preserves_failure_prefix_and_strict_case_arguments_profile(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory), Exit=17, Cases=4, Case='PooledFull')
+            Result = VALIDATOR.Validate(Metadata, Log, 'PooledFull', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+            self.assertEqual(Result['CompleteFullCases'], 4)
+            self.assertEqual(Result['FixedWorkloadArgument'], '--pooled --reliable-workload')
+            self.assertEqual(Result['CausalVerdict'], 'NOT_CLAIMED')
+            self.assertEqual(Metadata['ChildExitCode'], 17)
+            self.assertEqual(VALIDATOR.Validate(dict(Metadata, ChildExitCode=0), Log, 'PooledFull', File)['State'], 'INCOMPLETE')
+            for Arguments in (['--reliable-workload'], ['--pooled', '--reliable-workload-32-structural'],
+                              ['--reliable-workload', '--pooled'], ['--pooled', '--reliable-workload', '--extra']):
+                with self.subTest(Arguments=Arguments):
+                    self.assertEqual(VALIDATOR.Validate(dict(Metadata, WorkloadArguments=Arguments), Log,
+                        'PooledFull', File)['State'], 'INCOMPLETE')
+            for Changed in (Log.replace('profile=POOLED_SERVICE', 'profile=FULL_RESERVATION'),
+                            Log.replace('profile=POOLED_SERVICE', 'profile=FULL_RESERVATION', 1)):
+                self.assertEqual(VALIDATOR.Validate(Metadata, Changed, 'PooledFull', File)['State'], 'INCOMPLETE')
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log, 'Full', File)['State'], 'INCOMPLETE')
+
+    def test_pooled_full_complete_success_cannot_substitute_unpooled_profile(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory), Case='PooledFull')
+            Result = VALIDATOR.Validate(Metadata, Log, 'PooledFull', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+            self.assertEqual(Result['CompleteFullCases'], 8)
+            Metadata, Log, File = self.FullFixture(Path(Directory))
+            self.assertEqual(VALIDATOR.Validate(dict(Metadata, WorkloadArguments=['--pooled', '--reliable-workload']),
+                Log, 'Full', File)['State'], 'INCOMPLETE')
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log.replace('profile=FULL_RESERVATION', 'profile=POOLED_SERVICE'),
+                'Full', File)['State'], 'INCOMPLETE')
 
     def AggregateFixture(self, Root, Exit=0, SameLocalIdentity=False, Case='Aggregate32Structural'):
         Metadata, _ = self.Fixture()
@@ -358,13 +492,13 @@ class SchedulerTraceTests(unittest.TestCase):
         Start = Workflow.index('      - name: Run qualified reliable workload timing in Release')
         End = Workflow.index('      - name:', Start + 20)
         Commands = Workflow[Start:End]
-        for Flags in ('--pooled --reliable-workload\n', 'SchedulerTrace.ps1 -Case PooledAggregate32Structural\n',
+        for Flags in ('SchedulerTrace.ps1 -Case PooledFull\n', 'SchedulerTrace.ps1 -Case PooledAggregate32Structural\n',
                       'SchedulerTrace.ps1 -Case Full\n', 'SchedulerTrace.ps1 -Case Aggregate32\n'):
             self.assertEqual(Commands.count(Flags), 1)
         self.assertEqual(Commands.count('SchedulerTrace.ps1 -Case Aggregate32Structural'), 1)
         self.assertEqual(Commands.count('if not %errorlevel%==0 exit /b %errorlevel%'), 5)
         self.assertNotIn('if errorlevel 1', Commands)
-        Positions = [Commands.index(Flags) for Flags in ('--pooled --reliable-workload\n',
+        Positions = [Commands.index(Flags) for Flags in ('SchedulerTrace.ps1 -Case PooledFull\n',
             'SchedulerTrace.ps1 -Case PooledAggregate32Structural\n', 'SchedulerTrace.ps1 -Case Full\n',
             'SchedulerTrace.ps1 -Case Aggregate32\n', 'SchedulerTrace.ps1 -Case Aggregate32Structural')]
         self.assertEqual(Positions, sorted(Positions))
@@ -372,6 +506,7 @@ class SchedulerTraceTests(unittest.TestCase):
         self.assertNotIn('tests.exe --reliable-workload\n', Commands)
         self.assertNotIn('tests.exe --reliable-workload-32\n', Commands)
         self.assertNotIn('tests.exe --pooled --reliable-workload-32-structural', Commands)
+        self.assertNotIn('tests.exe --pooled --reliable-workload', Commands)
         self.assertIn('if not "%SCHEDULER_TRACE%"=="true" (\n            pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Full\n          )', Commands)
         Manual = Workflow[Workflow.index('      - name: Trace one FULL'):Workflow.index('      - name: Trace fixed FULL')]
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.scheduler_trace", Manual)
@@ -388,6 +523,7 @@ class SchedulerTraceTests(unittest.TestCase):
         self.assertIn('            build-ci/scheduler-trace-aggregate32-structural/', Upload)
         self.assertIn('            build-ci/scheduler-trace-aggregate32/\n', Upload)
         self.assertIn('            build-ci/scheduler-trace-pooled-aggregate32-structural/\n', Upload)
+        self.assertIn('            build-ci/scheduler-trace-pooled-full/\n', Upload)
         self.assertEqual(Upload.count('            build-ci/scheduler-trace.exe\n'), 1)
         self.assertEqual(Upload.count('            build-ci/gargantuan_game_session_real_transport_tests.exe\n'), 1)
 
@@ -400,7 +536,7 @@ class SchedulerTraceTests(unittest.TestCase):
         Commands = '\n'.join(Line[10:] for Line in Body.splitlines())
         Replacements = (
             ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case PooledAggregate32Structural', 'POOLED32'),
-            ('build-ci\\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload', 'POOLED'),
+            ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case PooledFull', 'POOLED'),
             ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Full', 'FULL'),
             ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Aggregate32\n', 'UNPOOLED32\n'),
             ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Aggregate32Structural', 'AGGREGATE'))
@@ -408,7 +544,7 @@ class SchedulerTraceTests(unittest.TestCase):
             self.assertEqual(Commands.count(Command), 1)
             Commands = Commands.replace(Command, 'call :Record ' + Label)
         for Manual in (False, True):
-            for Code, FailedCase in ((Code, Case) for Code in (0, 17, -1073740791) for Case in ('POOLED32', 'FULL', 'UNPOOLED32')):
+            for Code, FailedCase in ((Code, Case) for Code in (0, 17, -1073740791) for Case in ('POOLED', 'POOLED32', 'FULL', 'UNPOOLED32')):
                 with tempfile.TemporaryDirectory() as Directory:
                     Root = Path(Directory)
                     Prelude = '@echo off\nset "SCHEDULER_TRACE=' + str(Manual).lower() + '"\n'
@@ -522,7 +658,7 @@ class SchedulerTraceTests(unittest.TestCase):
     def test_wrapper_rejects_arbitrary_case_and_pair_case_combination(self):
         for Arguments in (['-Case', 'arbitrary'], ['-Pair', '-Case', 'Full'],
                           ['-Pair', '-Case', 'Aggregate32Structural'], ['-Pair', '-Case', 'Aggregate32'],
-                          ['-Pair', '-Case', 'PooledAggregate32Structural']):
+                          ['-Pair', '-Case', 'PooledAggregate32Structural'], ['-Pair', '-Case', 'PooledFull']):
             Result = subprocess.run(['pwsh', '-NoProfile', '-File', str(ROOT / 'tools/ci/SchedulerTrace.ps1'), *Arguments],
                 text=True, capture_output=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self.assertNotEqual(Result.returncode, 0)
@@ -856,7 +992,7 @@ class SchedulerTraceTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("SCHEDULER_TRACE_TEST_HELPER"), "native compile-only helper not supplied")
     def test_native_rejects_reserved_guid_before_any_trace(self):
-        for Command in ('--run', '--run-ack-stats', '--run-aggregate32', '--run-aggregate32-structural', '--run-pooled-aggregate32-structural'):
+        for Command in ('--run', '--run-ack-stats', '--run-aggregate32', '--run-aggregate32-structural', '--run-pooled-aggregate32-structural', '--run-pooled-full'):
             Result = subprocess.run(
                 [os.environ["SCHEDULER_TRACE_TEST_HELPER"], Command, str(ROOT), "00000000-0000-0000-0000-000000000000"],
                 text=True, capture_output=True, timeout=30,
@@ -870,7 +1006,8 @@ class SchedulerTraceTests(unittest.TestCase):
         for Arguments in (['--run-arbitrary', str(ROOT), '11111111-2222-4333-8444-555555555555'],
                           ['--run-aggregate32-structural', str(ROOT), '11111111-2222-4333-8444-555555555555', '--pooled'],
                           ['--run-aggregate32', str(ROOT), '11111111-2222-4333-8444-555555555555', '--pooled'],
-                          ['--run-pooled-aggregate32-structural', str(ROOT), '11111111-2222-4333-8444-555555555555', '--extra']):
+                          ['--run-pooled-aggregate32-structural', str(ROOT), '11111111-2222-4333-8444-555555555555', '--extra'],
+                          ['--run-pooled-full', str(ROOT), '11111111-2222-4333-8444-555555555555', '--extra']):
             Result = subprocess.run([os.environ['SCHEDULER_TRACE_TEST_HELPER'], *Arguments], text=True,
                 capture_output=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self.assertEqual(Result.returncode, 125)

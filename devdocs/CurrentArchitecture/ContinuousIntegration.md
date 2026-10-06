@@ -1,7 +1,7 @@
 ---
 status: current
 owner: build-and-test
-last_verified: 2026-09-04
+last_verified: 2026-10-06
 related_code:
   - .github/workflows/native-ci.yml
   - CMakeLists.txt
@@ -218,7 +218,9 @@ invocation, each exactly once in its original logical order. Their owned bounded
 ETL, decoded events, child logs, metadata and cleanup evidence are always
 retained when reached. `PooledAggregate32Structural` now wraps the second
 `--pooled --reliable-workload-32-structural` invocation with the same bounded
-controller. Only the first pooled invocation remains direct; all five
+controller. `PooledFull` wraps the first `--pooled --reliable-workload`
+invocation through that same controller after its real untraced Event/action
+failure. All five
 logical invocations, dependent Linux and GNS gates
 remain mandatory. Helper compilation and noncapture self-tests precede this
 qualification. Original child failure remains failure; capture, loss, clock
@@ -233,7 +235,12 @@ All five normal standalone guards reject any nonzero status, including a negativ
 native crash. Helper tests are a distinct mandatory suite, independently checked
 from the existing physical-control/evidence tooling suites. The seven Windows
 tooling suite counts are 12, 21, 4, 1, 265, 32 and 3 (**338 total**); the separate
-scheduler helper suite now contains **36**, for a combined inventory of **374**.
+scheduler helper suite now contains **40**, for a combined inventory of **378**.
+Original `be949192c` ran 36 helper and 338 other Python checks (374 total).
+Its PR Full/mixed RPC p95 and official first pooled Event/action failures
+remain failed. Two pooled Full case tests bind its exact flags/profile and
+failure prefix; two hosted preparation tests reject other contexts and verify
+exact task scope, disabled state, process absence and fail-closed errors.
 Original `09aa075ad` ran 34 helper and 338 other Python checks (372 total)
 before its second direct pooled command failed recovery peer 0's RPC p95.
 The two new helper cases bind the pooled command and reject substitutions;
@@ -354,7 +361,10 @@ different policy prevents resume, preserves status 125 and reaps the owned
 process tree. Requested flags, controller class, actual child class and main
 relative priority, query status and pre-resume verification are retained in the
 early child result, final metadata and wrapper. The current-source offline
-validator requires this measured policy. This includes the fixed second
+validator requires this measured policy. This includes the fixed first
+`PooledFull` command after original `be949192c` package dispatch failed mixed
+Event/action latency before any trace. That original API priority and precise
+poll wait cause remain **NOT MEASURED**. It also includes the fixed second
 `PooledAggregate32Structural` command after original `09aa075ad` push timing
 failed before any scheduler wrapper was reached. Its original child's API
 priority and precise scheduling/wait cause are **NOT MEASURED**. The raw timing
@@ -364,10 +374,11 @@ It also includes the fixed fourth
 `Aggregate32` command after original `d66444f3` push timing failed without a
 failing-window trace. Its previous direct child's actual priority is
 **NOT MEASURED**; the extension does not establish priority as the old cause.
-The controller's own scheduling, remaining ordinary direct commands,
+The controller's own scheduling,
 production transport, F1, latency clocks, workload,
-affinity and timer policy remain unchanged. No background task or service is
-disabled or stopped.
+affinity and timer policy remain unchanged. The separate hosted telemetry
+preparation below defines the sole task-state change, confined to its
+disposable GitHub VM.
 
 The [Windows process creation contract](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw)
 allows an unspecified child class to inherit an Idle or Below Normal parent.
@@ -392,6 +403,35 @@ its no-child guarantee. Positive API controls and wrong-class/query/missing-
 evidence denials supplement unchanged loss, clock, cleanup and original-exit
 tests. Historical original validators and receipts remain immutable; this
 current-source requirement does not retroactively qualify old jobs.
+
+### Hosted scheduled-telemetry preparation (2026-10-06)
+
+Original `be949192c` PR Full/mixed p95 failure retains loss-free ETL proving
+external `CompatTelRunner.exe` CPU competition during workload ready waits.
+This is a measured environment defect; it does not establish the exclusive
+cause or blocking API of the separate 119-ms wait. The original failed result
+remains failed, and no scheduler duration is deducted from any latency sample.
+
+Before build and tests, the Windows job disables and stops only the exact
+registered `\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser`
+task. It requires `GITHUB_ACTIONS=true`, `RUNNER_ENVIRONMENT=github-hosted`
+and `RUNNER_OS=Windows` before any task query or mutation. It then requires
+disabled readback and actual `CompatTelRunner.exe` process absence. Missing,
+wrong or duplicate task, API error, enabled readback or persistent process
+fails setup. The monotonic absence observation is bounded to 15 seconds;
+the entire preparation step is separately bounded to one minute, including
+synchronous task/CIM calls. There is no arbitrary process-kill fallback.
+
+This preparation changes only the disposable hosted VM. User endpoints,
+installed capture tools, security services, thread priority, affinity, timer
+policy, workload and acceptance clocks are untouched. GitHub documents the
+[runner environment variables](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)
+and [fresh hosted VM scope](https://docs.github.com/en/actions/reference/runners/github-hosted-runners);
+Microsoft documents the fixed
+[disable](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/disable-scheduledtask)
+and [stop](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/stop-scheduledtask)
+operations. All five workload invocations, unchanged latency gates and all
+six original hosted qualification results remain mandatory for the new source.
 
 The decoder recognizes the originally supported CSwitch version 2/24-byte
 layout and the exact observed version 5/28-byte, 64-bit-header layout. The

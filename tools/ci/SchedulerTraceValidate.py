@@ -56,7 +56,7 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
                     Fields["native_tid"] == Metadata.get("ChildMainTid") and Fields["qpc_frequency"] == Frequency,
                     "fixture native identity/clock mismatch")
             Require(Fields.get("profile") == ("ACK_STATS" if Case == "AckStats" else
-                    "POOLED_SERVICE" if Case == "PooledAggregate32Structural" else "FULL_RESERVATION"), "unexpected fixture profile")
+                    "POOLED_SERVICE" if Case in ("PooledAggregate32Structural", "PooledFull") else "FULL_RESERVATION"), "unexpected fixture profile")
             Require(Metadata["BeforeChildResumeQpc"] <= Fields["qpc_before"] <= Fields["qpc_after"] <= Metadata["AfterChildExitQpc"], "fixture anchor outside child interval")
             Require(Metadata["MainFirstQpc"] <= Fields["qpc_before"] <= Fields["qpc_after"] <= Metadata["MainLastQpc"], "target thread events do not bracket fixture anchor")
             Anchors.append(Fields)
@@ -71,24 +71,26 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
         if len(Pair) == 2:
             Require(Pair[0]["qpc_after"] <= Pair[1]["qpc_before"] and Pair[0]["steady_ns"] <= Pair[1]["steady_ns"], "case clock order invalid")
     Extra = {}
-    if Case == "Full":
+    if Case in ("Full", "PooledFull"):
         try:
+            Arguments = ['--pooled', '--reliable-workload'] if Case == 'PooledFull' else ['--reliable-workload']
+            Profile = 'POOLED_SERVICE' if Case == 'PooledFull' else 'FULL_RESERVATION'
             Require([(Value.get('case'), Value.get('boundary')) for Value in Anchors] ==
                     [(Name, Boundary) for Name in FULL_CASES[:len(ByCase)] for Boundary in ('BEGIN', 'END')]
                     and 0 < len(ByCase) <= len(FULL_CASES), 'Full anchors are not a complete ordered case prefix')
             Require(type(Metadata.get('ChildExitCode')) is int and
                     (Metadata['ChildExitCode'] != 0 or tuple(ByCase) == FULL_CASES),
                     'successful Full workload must retain all eight cases')
-            Require(Metadata.get('WorkloadArguments') == ['--reliable-workload'],
-                    'Full workload arguments differ from fixed third command')
+            Require(Metadata.get('WorkloadArguments') == Arguments,
+                    'Full workload arguments differ from fixed case')
             Previous = None
             for Pair in ByCase.values():
                 if Previous is not None and len(Pair) == len(Previous) == 2:
                     Require(Previous[-1]['qpc_after'] <= Pair[0]['qpc_before'] and
                             Previous[-1]['steady_ns'] <= Pair[0]['steady_ns'], 'Full case clocks overlap')
                 Previous = Pair
-            Extra = ValidateSchedulerCsv(Metadata, CsvPath, '--reliable-workload')
-            Extra.update(ValidateFullEvidence(Metadata, Stdout, ByCase))
+            Extra = ValidateSchedulerCsv(Metadata, CsvPath, ' '.join(Arguments))
+            Extra.update(ValidateFullEvidence(Metadata, Stdout, ByCase, Profile))
         except (OSError, ValueError, KeyError, TypeError, UnicodeError) as Error:
             Errors.append('Full coverage: ' + str(Error))
     if Case in ("Aggregate32", "Aggregate32Structural", "PooledAggregate32Structural"):
@@ -181,7 +183,7 @@ def ValidateSchedulerCsv(Metadata, CsvPath, Argument):
             'FixedWorkloadArgument': Argument}
 
 
-def ValidateFullEvidence(Metadata, Stdout, Arms):
+def ValidateFullEvidence(Metadata, Stdout, Arms, Profile='FULL_RESERVATION'):
     """Retain original endpoint joins; neither recompute gates nor attribute waits."""
     def Need(Value, Message):
         if not Value:
@@ -216,7 +218,7 @@ def ValidateFullEvidence(Metadata, Stdout, Arms):
         Row = dict(Parts)
         Need(len(Row) == len(Parts) and Row.get('case') in Arms, 'Full evidence duplicate field/unanchored case')
         if Label not in ('ReliableGameplay', 'WorkloadCpu'):
-            Need(Row.get('profile') == 'FULL_RESERVATION', 'Full evidence profile mismatch')
+            Need(Row.get('profile') == Profile, 'Full evidence profile mismatch')
         Values = Rows[Row['case']].setdefault(Label, [])
         Values.append(Row)
         Need(len(Values) <= Labels[Label], 'Full evidence row cap')
@@ -684,7 +686,7 @@ def ValidateStats(Metadata, Stdout, CsvPath, Arms):
 def Main():
     Parser = argparse.ArgumentParser()
     Parser.add_argument("--root", type=Path, required=True)
-    Parser.add_argument("--case", choices=("Full", "AckStats", "Aggregate32", "Aggregate32Structural", "PooledAggregate32Structural"), default="Full")
+    Parser.add_argument("--case", choices=("Full", "AckStats", "Aggregate32", "Aggregate32Structural", "PooledAggregate32Structural", "PooledFull"), default="Full")
     Args = Parser.parse_args()
     Result = {"State": "INCOMPLETE", "CausalVerdict": "NOT_CLAIMED"}
     try:

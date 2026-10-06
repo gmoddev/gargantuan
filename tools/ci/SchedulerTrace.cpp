@@ -36,7 +36,7 @@ constexpr GUID ThreadProvider{0x3d6fa8d1, 0xfe05, 0x11d0, {0x9d, 0xda, 0x00, 0xc
 constexpr GUID KernelControl{0x9e814aad, 0x3204, 0x11d2, {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
 constexpr GUID NullGuid{};
 constexpr char CsvHeader[] = "Qpc,Processor,Opcode,Version,HeaderPid,HeaderTid,NewTid,OldTid,TargetTid,TargetPid,OldWaitReason,OldWaitMode,OldState,ReadyAdjustReason,ReadyAdjustIncrement,ReadyFlags\n";
-enum class FixedCase { Full, AckStats, Aggregate32, Aggregate32Structural, PooledAggregate32Structural };
+enum class FixedCase { Full, AckStats, Aggregate32, Aggregate32Structural, PooledAggregate32Structural, PooledFull };
 struct CaseSpec {
     const wchar_t *Binary;
     const wchar_t *Output;
@@ -56,6 +56,8 @@ CaseSpec GetCaseSpec(FixedCase Case) {
         return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace-aggregate32-structural", L"--reliable-workload-32-structural", "Aggregate32Structural"};
     case FixedCase::PooledAggregate32Structural:
         return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace-pooled-aggregate32-structural", L"--reliable-workload-32-structural", "PooledAggregate32Structural", true};
+    case FixedCase::PooledFull:
+        return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace-pooled-full", L"--reliable-workload", "PooledFull", true};
     }
     throw std::runtime_error("unsupported fixed workload case");
 }
@@ -367,6 +369,11 @@ int DecodeOnly(const fs::path &Input, const fs::path &Destination, DWORD MainThr
     return Complete ? 0 : 125;
 }
 int SelfTest() {
+    const auto PooledFull = GetCaseSpec(FixedCase::PooledFull);
+    if (std::wstring(PooledFull.Binary) != L"build-ci/gargantuan_game_session_real_transport_tests.exe" ||
+        std::wstring(PooledFull.Output) != L"build-ci/scheduler-trace-pooled-full" ||
+        std::wstring(PooledFull.Argument) != L"--reliable-workload" ||
+        std::string(PooledFull.Name) != "PooledFull" || !PooledFull.Pooled) return 13;
     const auto Pooled = GetCaseSpec(FixedCase::PooledAggregate32Structural);
     if (std::wstring(Pooled.Binary) != L"build-ci/gargantuan_game_session_real_transport_tests.exe" ||
         std::wstring(Pooled.Output) != L"build-ci/scheduler-trace-pooled-aggregate32-structural" ||
@@ -823,6 +830,8 @@ int wmain(int Count, wchar_t **Args) {
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::Aggregate32Structural);
         if (Count == 4 && std::wstring(Args[1]) == L"--run-pooled-aggregate32-structural")
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::PooledAggregate32Structural);
+        if (Count == 4 && std::wstring(Args[1]) == L"--run-pooled-full")
+            return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::PooledFull);
         if (Count == 4 && std::wstring(Args[1]) == L"--cleanup")
             return Cleanup(ParseGuid(Args[2]), Args[3]) == ERROR_SUCCESS ? 0 : 125;
         std::cerr << "[Qualification:SchedulerTrace] invalid arguments\n";

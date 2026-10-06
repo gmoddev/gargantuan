@@ -85,6 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-06 candidate `be949192c` remains CI-disqualified: PR Full/mixed
+RPC p95 232.4581 ms exceeds 150 ms; its loss-free ETL measures scheduled
+compatibility telemetry consuming CPU during main-thread ready waits.
+The blocking API/owner remains **NOT MEASURED**. Official dispatch also fails
+first pooled mixed Event/action latency with a 1.645-second client poll;
+that command lacks a failing-window scheduler trace. Only ephemeral hosted
+VM telemetry preparation and the existing first-command trace/Normal launch
+are corrected; production, workload and latency gates remain unchanged.
+[Both original failures](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#hosted-telemetry-contention-and-pooled-observation-gap-2026-10-06)
+remain failed. Fresh original CI, package and Local32 are still required.
+Client memory now exceeds 8 GiB; no physical run is inferred. **KI-006 OPEN;
+3L B — PARTIALLY READY; Node32 not run; no 3M or merge**.
+
 2026-10-05 source `09aa075ad` passes focused native, GNS and PR Windows
 checks, but original push Windows job `112045140196` fails pooled aggregate
 recovery RPC p95: 170.268 ms >150 ms for peer 0, with 48/48 completed and

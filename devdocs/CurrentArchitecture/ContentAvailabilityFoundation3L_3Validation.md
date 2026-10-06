@@ -1,10 +1,32 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-10-05
+last_verified: 2026-10-06
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Hosted CPU interference and first-command evidence gap (2026-10-06)
+
+The [retained `be949192c` failures](PooledPhysicalQualification3L.md#hosted-telemetry-contention-and-pooled-observation-gap-2026-10-06)
+prevent current qualification despite passing push Windows/Linux and both
+GNS jobs. PR Full/mixed RPC p95 is 232.4581 ms >150 ms. Loss-free ETL proves
+external `CompatTelRunner.exe` CPU competition during ready delays; the
+119-ms blocked API/owner remains **NOT MEASURED**. Official dispatch separately
+fails first pooled mixed Event/action at 2186.4521/2188.0690 ms >250 ms,
+with a 1644.8528-ms client poll and no failing-window scheduler trace.
+No successful same-source result replaces either failed required run.
+
+Only hosted VM preparation and the first fixed trace case change: disable/stop
+the exact telemetry task on the disposable GitHub Windows VM and require
+disabled state plus actual process absence; route the first pooled command
+through the existing Normal launcher. No user endpoint, production semantics,
+clock, workload, order, invocation count or threshold changes. No new verifier
+layer is introduced. Forty normal and forty optimized helper-enabled focused
+checks pass with zero skips; mocked host actions leave endpoints unchanged.
+All new original CI precede package/preflight/actual Local32. RAM passes the preliminary check
+(17.01 GiB), but no new provider measurement is inferred. **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY; Node32 not run; no 3M or merge**.
 
 ## Pooled hosted recovery timing failure before capture (2026-10-05)
 

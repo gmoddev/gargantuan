@@ -1,10 +1,70 @@
 ---
 status: f1-phase1-pass-later-gates-pending
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-10-05
+last_verified: 2026-10-06
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Hosted telemetry contention and pooled observation gap (2026-10-06)
+
+Candidate `be949192ca867b0c5dc07b364187120fcb4a0ea9` does not qualify:
+its six original jobs contain four successes, PR Windows failure and PR Linux
+skipped. Both Windows jobs pass 96 native and 374 Python checks; executed
+Linux has 53 and both GNS jobs have 11, with zero JUnit failures/errors/skips.
+Successful push results do not replace failed PR qualification. Original
+index SHA-256 is `267a4f726d11a178bbbbe7e2d77688e196ce1360e495e6f614663ca08133c5bc`.
+
+PR Windows job `112066581327`, run `37400561278`, fails Full/mixed RPC
+p95: 232.4581 ms >150 ms. All 49 RPCs complete without error; the four
+initial requests at steps 0–4 are the outliers. The loss-free trace retains
+Normal child priority, original exit 1 and successful cleanup. Its p95
+witness has 3.2167 ms scheduled and 229.2414 ms off CPU. Three completed
+fixture sleeps account for 58.4899 ms. Separate UserRequest waits retain
+119.2905 ms waiting and 51.0821 ms ready delay. The larger client-poll
+maximum at step 18 occurs after these RPCs and cannot explain them.
+
+Decoding the original ETL identifies competing PID 5596 as
+`CompatTelRunner.exe`, executing `appraiser.dll/DoScheduledTelemetryRun`.
+During ready delays of 28.8088, 22.2733 and 23.0174 ms, telemetry consumes
+105.425, 66.0638 and 85.8189 logical-CPU-ms across four processors.
+External CPU competition is **MEASURED**. The 119-ms blocking API, lock owner
+and exclusive cause remain **NOT MEASURED**; no delay is subtracted. Original
+ETL SHA-256 is `5bdfd1635b9504b3ddaf4b83734635297d9b08f1bd829ee4b40ddec66376d813`;
+read-only `tracerpt` decode SHA-256 is
+`89886860d459ea372ecb80d155aee6e3fd3082c1ad6d9a50aaa52ee50db7be14`.
+
+Separate official package dispatch `37400664975`, Windows job
+`112066902930`, fails the first direct pooled workload's mixed Event/action
+maxima: 2186.4521/2188.0690 ms >250 ms. Same-batch RPCs complete within
+73 ms; Event and action retain the same steps 120–126 as passing push,
+which observes 92.2021/92.3351 ms. Five completed sleeps consume 533.7300 ms
+versus 76.9633 ms requested, and client poll 126 consumes 1644.8528 ms.
+No thread/process CPU advance is recorded across the Event interval; its
+endpoint CPU-query brackets are only 1.6/2.9 µs. The later 2925.88-ms sleep
+is after completion. This is waiting/descheduling evidence, not a proven
+transport defect. Its exact lock/host cause and direct child priority are
+**NOT MEASURED** because the first command has no scheduler trace. Raw log
+SHA-256 is `b954696fe9277abea9ab8d00e97290c4643b69e628ffbcc7c328fe4327eece3b`;
+diagnostics ZIP is `22a4a5ee167885a4d959f6c4db388f9efe724d608a913e87fe29f290a123b465`.
+No official package is produced or staged.
+
+The bounded correction removes this measured scheduled-telemetry competitor
+only on the disposable GitHub-hosted Windows VM, using its exact registered
+task, disabled readback and actual process absence. It changes no user host,
+security service, production code, priority, affinity, timer or acceptance
+clock. `PooledFull` routes the unchanged first pooled command through the
+existing Normal launcher and trace; all five logical workloads still execute
+once in order. This closes the demonstrated first-command observation gap,
+without adding a verifier framework or declaring either failure repaired.
+The standalone helper builds with MSVC `/W4 /WX`; 40 normal and 40 optimized
+helper-enabled noncapture tests pass with zero skips. Hosted task actions in
+those boundary tests are mocked; no user endpoint task is changed. Both
+drivers exit 0 and final helper/compiler process censuses are empty.
+All new original CI remain required before a
+fresh package/preflight/Local32 measurement. Client RAM has reached 17.01 GiB,
+but fresh preflight remains mandatory. **KI-006 OPEN; 3L B — PARTIALLY READY;
+Node32 not run; no 3M or merge**.
 
 ## Pooled aggregate hosted timing failure before scheduler capture (2026-10-05)
 
