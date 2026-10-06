@@ -6,6 +6,20 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Absent hosted task lookup stops before measurement (2026-10-06)
+
+[Source `0dd022697`](PooledPhysicalQualification3L.md#hosted-task-absence-is-a-resource-fact-not-a-setup-defect-2026-10-06)
+fails the initial task query on both original Windows jobs and package dispatch.
+Native build, Windows tests, workloads and packaging are **NOT RUN**; no new
+physical result is inferred. This is a harness assumption, not production
+failure. Successful task enumeration with zero exact matches is now valid
+only with actual process absence and no task mutation; active process,
+duplicates or API errors still fail. A present target must remain Disabled.
+Fresh read-only absence immediately precedes the unchanged five workloads.
+No gate, clock, fixture or service changes. The two focused host-boundary
+checks pass in normal and optimized modes, zero skips; new original CI still
+precedes Local32. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 ## Hosted CPU interference and first-command evidence gap (2026-10-06)
 
 The [retained `be949192c` failures](PooledPhysicalQualification3L.md#hosted-telemetry-contention-and-pooled-observation-gap-2026-10-06)

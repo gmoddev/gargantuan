@@ -6,6 +6,39 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Hosted task absence is a resource fact, not a setup defect (2026-10-06)
+
+Source `0dd022697622307fa49f53171a4f25347651ed8c` fails before native
+build or measurement. Push/PR Windows jobs `112174997839`/`112175015251`
+and official dispatch Windows `112175377621` reject the initial exact
+Appraiser task lookup: the hosted image reports no matching registered task.
+Disable/Stop, native build, Windows tests, timing and packaging are **NOT RUN**.
+The two downstream original Linux jobs and dispatch Linux are skipped.
+No package, stage, run identity or physical attempt is created. Push/PR logs
+have SHA-256 `a1138b8319bd777003cd517767d48d86aaf8ba6424b3a2e4c9a246c4cde7d9b6` /
+`949b34b16fd532b35814a920ca4d87d501ca1d4801b56674fb74141cb7bbc13e`;
+dispatch log is `0a7ac19acce47ac145daa4b783eb7451d2cc932600f7476aee80279247820a63`.
+
+This is an unnecessary harness requirement: acceptance needs absence of the
+measured CPU competitor, not proof that its scheduled task exists. The minimal
+correction successfully enumerates tasks with terminating errors, then filters
+the exact path/name. Zero matches permits no task mutation and requires an
+actual zero process census, logged **NOT_REGISTERED**, not Disabled. An active
+Appraiser without the registered target, duplicate target or provider error
+fails setup. A present exact target retains Disable→Stop, strict Disabled
+readback and bounded absence. A fresh read-only process census immediately
+before the five timing workloads also requires zero. No errors are swallowed
+as absence and no process-kill fallback is introduced.
+
+The two focused mocked host-boundary tests pass in normal and optimized
+modes with zero skips. Their driver exits 0 and owned test-process census is
+empty; no real task action or native workload is executed. All other
+source, helper, workload and acceptance logic is unchanged. The complete
+hosted inventory remains 40 helper plus 338 other Python checks. Both failed
+source revisions remain failed; fresh original CI and exact-source packaging
+remain required before actual Local32. **KI-006 OPEN; 3L B — PARTIALLY READY;
+Node32 not run; no 3M or merge**.
+
 ## Hosted telemetry contention and pooled observation gap (2026-10-06)
 
 Candidate `be949192ca867b0c5dc07b364187120fcb4a0ea9` does not qualify:

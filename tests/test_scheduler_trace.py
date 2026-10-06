@@ -17,13 +17,18 @@ SPEC.loader.exec_module(VALIDATOR)
 
 
 class SchedulerTraceTests(unittest.TestCase):
-    def HostedAppraisal(self, Mode, Environment):
+    def HostedAppraisal(self, Mode, Environment, PreTiming=False):
         Workflow = (ROOT / '.github/workflows/native-ci.yml').read_text()
-        Start = Workflow.index('      - name: Quiesce hosted compatibility appraisal')
+        Name = 'Verify compatibility appraisal absence before timing' if PreTiming else 'Quiesce hosted compatibility appraisal'
+        Start = Workflow.index('      - name: ' + Name)
         Step = Workflow[Start:Workflow.index('      - name:', Start + 20)]
         self.assertIn('        timeout-minutes: 1\n', Step)
-        self.assertLess(Workflow.index('      - name: Verify recursive dependency checkout'), Start)
-        self.assertLess(Start, Workflow.index('      - name: Install pinned repository tools'))
+        if PreTiming:
+            self.assertLess(Workflow.index('      - name: Verify pinned Farm32 control and evidence tooling'), Start)
+            self.assertLess(Start, Workflow.index('      - name: Run qualified reliable workload timing in Release'))
+        else:
+            self.assertLess(Workflow.index('      - name: Verify recursive dependency checkout'), Start)
+            self.assertLess(Start, Workflow.index('      - name: Install pinned repository tools'))
         Body = Step[Step.index('        run: |\n') + len('        run: |\n'):]
         Body = '\n'.join(Line[10:] for Line in Body.splitlines())
         for Forbidden in ('Stop-Process', 'taskkill', 'Set-Service', 'PriorityClass', 'ProcessorAffinity'):
@@ -34,11 +39,18 @@ $Calls=[Collections.Generic.List[string]]::new()
 $Disabled=$false
 function Get-ScheduledTask {
     [CmdletBinding()] param([string]$TaskPath,[string]$TaskName)
-    $Calls.Add('Get')
-    if($TaskPath -cne '\Microsoft\Windows\Application Experience\' -or $TaskName -cne 'Microsoft Compatibility Appraiser') { throw 'Wrong task selection' }
+    $Enumerating=(-not $TaskPath -and -not $TaskName)
+    $Calls.Add($(if($Enumerating){'Enumerate'}else{'Get'}))
+    if(-not $Enumerating -and ($TaskPath -cne '\Microsoft\Windows\Application Experience\' -or $TaskName -cne 'Microsoft Compatibility Appraiser')) { throw 'Wrong task selection' }
     if($env:APPRAISAL_TEST_MODE -eq 'get-error') { throw 'Supplied task query failure' }
-    if($env:APPRAISAL_TEST_MODE -eq 'missing') { return }
-    $Name=if($env:APPRAISAL_TEST_MODE -eq 'wrong'){'Other task'}else{$TaskName}
+    if($Enumerating) {
+        [pscustomobject]@{TaskPath='\Unrelated\';TaskName='Microsoft Compatibility Appraiser';State='Ready'}
+        [pscustomobject]@{TaskPath='\Microsoft\Windows\Application Experience\';TaskName='Other task';State='Ready'}
+        if($env:APPRAISAL_TEST_MODE -in @('missing','missing-active','missing-cim-error')) { return }
+        $TaskPath='\Microsoft\Windows\Application Experience\'
+        $TaskName='Microsoft Compatibility Appraiser'
+    }
+    $Name=if($env:APPRAISAL_TEST_MODE -eq 'readback-wrong' -and -not $Enumerating){'Other task'}else{$TaskName}
     $State=if($Disabled -and $env:APPRAISAL_TEST_MODE -ne 'enabled'){'Disabled'}else{'Ready'}
     [pscustomobject]@{TaskPath=$TaskPath;TaskName=$Name;State=$State}
     if($env:APPRAISAL_TEST_MODE -eq 'duplicate') { [pscustomobject]@{TaskPath=$TaskPath;TaskName=$Name;State=$State} }
@@ -60,8 +72,8 @@ function Get-CimInstance {
     [CmdletBinding()] param([string]$ClassName,[string]$Filter)
     $Calls.Add('Cim')
     if($ClassName -cne 'Win32_Process' -or $Filter -cne "Name='CompatTelRunner.exe'") { throw 'Wrong census scope' }
-    if($env:APPRAISAL_TEST_MODE -eq 'cim-error') { throw 'Supplied CIM failure' }
-    if($env:APPRAISAL_TEST_MODE -eq 'persistent') { [pscustomobject]@{Name='CompatTelRunner.exe';ProcessId=123} }
+    if($env:APPRAISAL_TEST_MODE -in @('cim-error','missing-cim-error')) { throw 'Supplied CIM failure' }
+    if($env:APPRAISAL_TEST_MODE -in @('persistent','missing-active')) { [pscustomobject]@{Name='CompatTelRunner.exe';ProcessId=123} }
 }
 $Failed=$false
 $Reason=''
@@ -88,31 +100,48 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
 
     def test_hosted_appraisal_guards_precede_all_task_queries_and_mutations(self):
         Hosted = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Windows')
-        for Name, Bad in (('GITHUB_ACTIONS', 'false'), ('GITHUB_ACTIONS', 'True'),
-                          ('RUNNER_ENVIRONMENT', 'self-hosted'), ('RUNNER_OS', 'Linux')):
-            with self.subTest(Name=Name, Bad=Bad):
-                Row, _ = self.HostedAppraisal('happy', dict(Hosted, **{Name: Bad}))
-                self.assertTrue(Row['Failed'])
-                self.assertEqual(Row['Calls'], [])
-        Row, _ = self.HostedAppraisal('happy', {})
-        self.assertTrue(Row['Failed'])
-        self.assertEqual(Row['Calls'], [])
+        for PreTiming in (False, True):
+            for Name, Bad in (('GITHUB_ACTIONS', 'false'), ('GITHUB_ACTIONS', 'True'),
+                              ('RUNNER_ENVIRONMENT', 'self-hosted'), ('RUNNER_OS', 'Linux')):
+                with self.subTest(Name=Name, Bad=Bad, PreTiming=PreTiming):
+                    Row, _ = self.HostedAppraisal('happy', dict(Hosted, **{Name: Bad}), PreTiming)
+                    self.assertTrue(Row['Failed'])
+                    self.assertEqual(Row['Calls'], [])
+            Row, _ = self.HostedAppraisal('happy', {}, PreTiming)
+            self.assertTrue(Row['Failed'])
+            self.assertEqual(Row['Calls'], [])
 
     def test_hosted_appraisal_exact_task_disabled_and_absent_or_fail_closed(self):
         Hosted = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Windows')
         Row, Log = self.HostedAppraisal('happy', Hosted)
         self.assertFalse(Row['Failed'], Row)
-        self.assertEqual(Row['Calls'], ['Get', 'Disable', 'Stop', 'Get', 'Cim'])
+        self.assertEqual(Row['Calls'], ['Enumerate', 'Disable', 'Stop', 'Get', 'Cim'])
         self.assertIn('[CI:HostResources] task_path=\\Microsoft\\Windows\\Application Experience\\ task_name=Microsoft Compatibility Appraiser task_state=Disabled process_count=0', Log)
-        for Mode in ('wrong', 'missing', 'duplicate', 'get-error', 'enabled', 'disable-error', 'stop-error', 'cim-error', 'persistent'):
+        Row, Log = self.HostedAppraisal('missing', Hosted)
+        self.assertFalse(Row['Failed'], Row)
+        self.assertEqual(Row['Calls'], ['Enumerate', 'Cim'])
+        self.assertIn('task_state=NOT_REGISTERED process_count=0', Log)
+        self.assertNotIn('task_state=Disabled', Log)
+        for Mode in ('missing-active', 'missing-cim-error', 'duplicate', 'get-error', 'readback-wrong',
+                     'enabled', 'disable-error', 'stop-error', 'cim-error', 'persistent'):
             with self.subTest(Mode=Mode):
                 Row, _ = self.HostedAppraisal(Mode, Hosted)
                 self.assertTrue(Row['Failed'], Row)
-                if Mode in ('wrong', 'missing', 'duplicate', 'get-error'):
-                    self.assertEqual(Row['Calls'], ['Get'])
+                if Mode in ('duplicate', 'get-error'):
+                    self.assertEqual(Row['Calls'], ['Enumerate'])
+                if Mode.startswith('missing-'):
+                    self.assertEqual(Row['Calls'], ['Enumerate', 'Cim'])
                 if Mode == 'persistent':
                     self.assertIn('within 15 seconds; process_count=1', Row['Reason'])
                     self.assertGreater(Row['Calls'].count('Cim'), 1)
+        Row, Log = self.HostedAppraisal('happy', Hosted, PreTiming=True)
+        self.assertFalse(Row['Failed'], Row)
+        self.assertEqual(Row['Calls'], ['Cim'])
+        self.assertIn('[CI:HostResources] pre_timing_process_count=0', Log)
+        for Mode in ('missing-active', 'cim-error'):
+            Row, _ = self.HostedAppraisal(Mode, Hosted, PreTiming=True)
+            self.assertTrue(Row['Failed'])
+            self.assertEqual(Row['Calls'], ['Cim'])
 
     def FullFixture(self, Root, Exit=0, Cases=8, Case='Full'):
         Metadata, Aggregate, File = self.AggregateFixture(Root)

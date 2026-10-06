@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-06 `0dd022697` stops at hosted task lookup on push, PR and official
+dispatch before any native build/test/workload. The image lacks the exact
+registered Appraiser task. The minimal correction requires successful task
+enumeration and actual process absence; missing target permits no mutation
+and is truthfully NOT_REGISTERED. Active process, duplicate target and API
+error remain failures, and a present target still requires Disabled readback.
+A fresh process census precedes the five unchanged timing workloads.
+[Historical setup failure](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#hosted-task-absence-is-a-resource-fact-not-a-setup-defect-2026-10-06)
+is preserved; no physical result is inferred. New original CI and packaging,
+then fresh Local32, remain required. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 2026-10-06 candidate `be949192c` remains CI-disqualified: PR Full/mixed
 RPC p95 232.4581 ms exceeds 150 ms; its loss-free ETL measures scheduled
 compatibility telemetry consuming CPU during main-thread ready waits.

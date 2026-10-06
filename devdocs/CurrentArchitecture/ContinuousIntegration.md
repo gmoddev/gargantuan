@@ -240,7 +240,9 @@ Original `be949192c` ran 36 helper and 338 other Python checks (374 total).
 Its PR Full/mixed RPC p95 and official first pooled Event/action failures
 remain failed. Two pooled Full case tests bind its exact flags/profile and
 failure prefix; two hosted preparation tests reject other contexts and verify
-exact task scope, disabled state, process absence and fail-closed errors.
+exact task scope, disabled state when present, actual absence and fail-closed
+errors. Original `0dd022697` fails lookup before build/tests because the image
+has no matching registered task; no Windows inventory is claimed for that run.
 Original `09aa075ad` ran 34 helper and 338 other Python checks (372 total)
 before its second direct pooled command failed recovery peer 0's RPC p95.
 The two new helper cases bind the pooled command and reject substitutions;
@@ -415,12 +417,19 @@ remains failed, and no scheduler duration is deducted from any latency sample.
 Before build and tests, the Windows job disables and stops only the exact
 registered `\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser`
 task. It requires `GITHUB_ACTIONS=true`, `RUNNER_ENVIRONMENT=github-hosted`
-and `RUNNER_OS=Windows` before any task query or mutation. It then requires
-disabled readback and actual `CompatTelRunner.exe` process absence. Missing,
-wrong or duplicate task, API error, enabled readback or persistent process
-fails setup. The monotonic absence observation is bounded to 15 seconds;
+and `RUNNER_OS=Windows` before any task query or mutation. Successful task
+enumeration is filtered to that exact identity. A present target requires
+disabled readback and actual `CompatTelRunner.exe` process absence. Zero
+matches is accepted only with actual process absence, no task mutation and
+truthful `NOT_REGISTERED` output. Duplicate target, API error, enabled readback,
+persistent process or active Appraiser without the registered target fails
+setup. The monotonic absence observation is bounded to 15 seconds;
 the entire preparation step is separately bounded to one minute, including
 synchronous task/CIM calls. There is no arbitrary process-kill fallback.
+Immediately before the five workloads, a separately bounded read-only census
+again requires actual Appraiser absence. Query failure cannot become an empty
+process list. These facts replace `0dd022697`'s unnecessary assumption that
+the registered task must exist; its original setup failures remain failed.
 
 This preparation changes only the disposable hosted VM. User endpoints,
 installed capture tools, security services, thread priority, affinity, timer

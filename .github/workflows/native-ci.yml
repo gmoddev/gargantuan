@@ -65,26 +65,32 @@ jobs:
               $env:RUNNER_OS -cne 'Windows') { throw 'Appraiser preparation requires the GitHub-owned ephemeral Windows runner' }
           $TaskPath = '\Microsoft\Windows\Application Experience\'
           $TaskName = 'Microsoft Compatibility Appraiser'
-          $Tasks = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop)
-          if ($Tasks.Count -ne 1 -or $Tasks[0].TaskPath -cne $TaskPath -or $Tasks[0].TaskName -cne $TaskName) {
-            throw 'Exact compatibility appraisal task was not found'
-          }
-          Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
-          Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
-          $Watch = [Diagnostics.Stopwatch]::StartNew()
-          while ($true) {
-            $Tasks = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop)
-            if ($Tasks.Count -ne 1 -or $Tasks[0].TaskPath -cne $TaskPath -or $Tasks[0].TaskName -cne $TaskName -or
-                [string]$Tasks[0].State -cne 'Disabled') { throw 'Compatibility appraisal task did not remain Disabled' }
+          $Tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+            $_.TaskPath -ceq $TaskPath -and $_.TaskName -ceq $TaskName
+          })
+          if ($Tasks.Count -gt 1) { throw 'Duplicate exact compatibility appraisal tasks' }
+          if ($Tasks.Count -eq 0) {
             $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
-            if ($Watch.Elapsed.TotalSeconds -gt 15) {
-              throw "Compatibility appraisal did not become absent within 15 seconds; process_count=$($Processes.Count)"
+            Write-Host "[CI:HostResources] task_path=$TaskPath task_name=$TaskName task_state=NOT_REGISTERED process_count=$($Processes.Count)"
+            if ($Processes.Count -ne 0) { throw 'Unregistered compatibility appraisal task has an active process' }
+          } else {
+            Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+            Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+            $Watch = [Diagnostics.Stopwatch]::StartNew()
+            while ($true) {
+              $Tasks = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop)
+              if ($Tasks.Count -ne 1 -or $Tasks[0].TaskPath -cne $TaskPath -or $Tasks[0].TaskName -cne $TaskName -or
+                  [string]$Tasks[0].State -cne 'Disabled') { throw 'Compatibility appraisal task did not remain Disabled' }
+              $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+              if ($Watch.Elapsed.TotalSeconds -gt 15) {
+                throw "Compatibility appraisal did not become absent within 15 seconds; process_count=$($Processes.Count)"
+              }
+              if ($Processes.Count -eq 0) {
+                Write-Host "[CI:HostResources] task_path=$TaskPath task_name=$TaskName task_state=Disabled process_count=0"
+                break
+              }
+              Start-Sleep -Milliseconds 250
             }
-            if ($Processes.Count -eq 0) {
-              Write-Host "[CI:HostResources] task_path=$TaskPath task_name=$TaskName task_state=Disabled process_count=0"
-              break
-            }
-            Start-Sleep -Milliseconds 250
           }
 
       - name: Install pinned repository tools
@@ -273,6 +279,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Client recovery callback regression failed' }
           & tests/ContentScaleGameplayRecoveryTests.ps1 -ReproduceMissingClientTick
           if ($LASTEXITCODE -ne 0) { throw 'Client recovery negative control failed' }
+
+      - name: Verify compatibility appraisal absence before timing
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:RUNNER_OS -cne 'Windows') { throw 'Appraiser census requires the GitHub-owned ephemeral Windows runner' }
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          Write-Host "[CI:HostResources] pre_timing_process_count=$($Processes.Count)"
+          if ($Processes.Count -ne 0) { throw 'Compatibility appraisal process is active before timing workloads' }
 
       - name: Run qualified reliable workload timing in Release
         if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
