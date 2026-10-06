@@ -17,13 +17,19 @@ SPEC.loader.exec_module(VALIDATOR)
 
 
 class SchedulerTraceTests(unittest.TestCase):
-    def HostedAppraisal(self, Mode, Environment, PreTiming=False):
+    def HostedAppraisal(self, Mode, Environment, PreTiming=False, PreCTest=False):
         Workflow = (ROOT / '.github/workflows/native-ci.yml').read_text()
-        Name = 'Verify compatibility appraisal absence before timing' if PreTiming else 'Quiesce hosted compatibility appraisal'
+        self.assertFalse(PreTiming and PreCTest)
+        Name = ('Verify compatibility appraisal absence before CTest' if PreCTest else
+                'Verify compatibility appraisal absence before timing' if PreTiming else 'Quiesce hosted compatibility appraisal')
         Start = Workflow.index('      - name: ' + Name)
         Step = Workflow[Start:Workflow.index('      - name:', Start + 20)]
         self.assertIn('        timeout-minutes: 1\n', Step)
-        if PreTiming:
+        if PreCTest:
+            self.assertLess(Workflow.index('      - name: Build bounded scheduler diagnostic'), Start)
+            self.assertEqual(Workflow.index('      - name: Run complete headless CTest contract'), Start + len(Step))
+            self.assertIn("        if: \"!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)\"\n", Step)
+        elif PreTiming:
             self.assertLess(Workflow.index('      - name: Verify pinned Farm32 control and evidence tooling'), Start)
             self.assertLess(Start, Workflow.index('      - name: Run qualified reliable workload timing in Release'))
         else:
@@ -31,6 +37,12 @@ class SchedulerTraceTests(unittest.TestCase):
             self.assertLess(Start, Workflow.index('      - name: Install pinned repository tools'))
         Body = Step[Step.index('        run: |\n') + len('        run: |\n'):]
         Body = '\n'.join(Line[10:] for Line in Body.splitlines())
+        if PreCTest:
+            LateStart = Workflow.index('      - name: Verify compatibility appraisal absence before timing')
+            Late = Workflow[LateStart:Workflow.index('      - name:', LateStart + 20)]
+            LateBody = Late[Late.index('        run: |\n') + len('        run: |\n'):]
+            self.assertEqual(Body, '\n'.join(Line[10:] for Line in LateBody.splitlines()),
+                             'pre-CTest quiescence must reuse the exact existing late body')
         for Forbidden in ('Stop-Process', 'taskkill', 'Set-Service', 'PriorityClass', 'ProcessorAffinity'):
             self.assertNotIn(Forbidden, Body)
         Prelude = r'''
@@ -147,14 +159,14 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
 
     def test_hosted_appraisal_guards_precede_all_task_queries_and_mutations(self):
         Hosted = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Windows')
-        for PreTiming in (False, True):
+        for PreTiming, PreCTest in ((False, False), (True, False), (False, True)):
             for Name, Bad in (('GITHUB_ACTIONS', 'false'), ('GITHUB_ACTIONS', 'True'),
                               ('RUNNER_ENVIRONMENT', 'self-hosted'), ('RUNNER_OS', 'Linux')):
-                with self.subTest(Name=Name, Bad=Bad, PreTiming=PreTiming):
-                    Row, _ = self.HostedAppraisal('happy', dict(Hosted, **{Name: Bad}), PreTiming)
+                with self.subTest(Name=Name, Bad=Bad, PreTiming=PreTiming, PreCTest=PreCTest):
+                    Row, _ = self.HostedAppraisal('happy', dict(Hosted, **{Name: Bad}), PreTiming, PreCTest)
                     self.assertTrue(Row['Failed'])
                     self.assertEqual(Row['Calls'], [])
-            Row, _ = self.HostedAppraisal('happy', {}, PreTiming)
+            Row, _ = self.HostedAppraisal('happy', {}, PreTiming, PreCTest)
             self.assertTrue(Row['Failed'])
             self.assertEqual(Row['Calls'], [])
 
@@ -176,13 +188,13 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
                 Row, _ = self.HostedAppraisal(Mode, Hosted)
                 self.assertTrue(Row['Failed'], Row)
                 self.assertNotIn('Kill', Row['Calls'])
-        for PreTiming in (False, True):
-            Row, Log = self.HostedAppraisal('missing-active', Hosted, PreTiming)
+        for PreTiming, PreCTest in ((False, False), (True, False), (False, True)):
+            Row, Log = self.HostedAppraisal('missing-active', Hosted, PreTiming, PreCTest)
             self.assertFalse(Row['Failed'], Row)
             self.assertEqual(Row['Calls'][-7:], ['Process', 'Handle', 'CimPid', 'Kill', 'Wait', 'Dispose', 'CimName'])
             self.assertIn('action=HELD_IDENTITY_CHECKED_STOP', Log)
-            self.assertIn('pre_timing_process_count=0' if PreTiming else 'task_state=NOT_REGISTERED process_count=0', Log)
-            Row, Log = self.HostedAppraisal('disappeared', Hosted, PreTiming)
+            self.assertIn('pre_timing_process_count=0' if PreTiming or PreCTest else 'task_state=NOT_REGISTERED process_count=0', Log)
+            Row, Log = self.HostedAppraisal('disappeared', Hosted, PreTiming, PreCTest)
             self.assertFalse(Row['Failed'], Row)
             self.assertLess(Row['Calls'].index('Handle'), Row['Calls'].index('CimPid'))
             self.assertIn('Dispose', Row['Calls'])
@@ -191,8 +203,8 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
             for Mode in ('wrong-path', 'null-birth', 'wrong-name', 'wrong-pid-type', 'changed-birth', 'changed-name', 'changed-path',
                          'changed-pid', 'process-error', 'handle-error', 'empty-handle', 'query-error',
                          'kill-error', 'wait-error', 'dispose-error', 'timeout', 'persistent', 'reappearance', 'cim-error'):
-                with self.subTest(Mode=Mode, PreTiming=PreTiming):
-                    Row, _ = self.HostedAppraisal(Mode, Hosted, PreTiming)
+                with self.subTest(Mode=Mode, PreTiming=PreTiming, PreCTest=PreCTest):
+                    Row, _ = self.HostedAppraisal(Mode, Hosted, PreTiming, PreCTest)
                     self.assertTrue(Row['Failed'], Row)
                     if Mode in ('wrong-path', 'null-birth', 'wrong-name', 'wrong-pid-type', 'changed-birth', 'changed-name',
                                 'changed-path', 'changed-pid', 'process-error', 'handle-error', 'empty-handle', 'query-error', 'cim-error'):

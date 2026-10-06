@@ -422,6 +422,26 @@ current-source requirement does not retroactively qualify old jobs.
 
 ### Hosted scheduled-telemetry preparation (2026-10-06)
 
+Analyzer B `8c5a22327` PR Windows job `112239065328`, run `37454619898`,
+fails CTest 83 `gargantuan_gns_funded_ack_stats`: the prompt arm's token 36
+conserves and retires all 393,652 bytes, but its maximum running deficit is
+45,011,623,360 byte-us against the unchanged 18,025,216,000 bound. The finite
+shortfall is zero; that does not waive the independent running gate. The
+347 recorded first-send segments reproduce the failure exactly. The largest
+gaps are 2,319 and 1,366 us. No failing-window CPU or scheduler trace was
+retained, so blocking, descheduling and Appraiser presence are NOT MEASURED.
+Native, transport, fixture, workflow and CMake blobs are unchanged from
+qualified execution A `ed09e7126`; the offline parsing change is not a
+production cause. The original B failure remains failed.
+
+Its early Appraiser-zero observation is at 11:12:52.820881 UTC; CTest 83 starts
+at 11:55:03, over 42 minutes later. The prior late guard follows CTest and was
+skipped after this failure. Reusing that exact guarded, held-object, 15-second
+cleanup immediately before CTest closes this host-evidence gap without a new
+helper, native change, deadline, F1 allowance, priority or timer policy. It
+neither proves the old cause nor guarantees a later PASS. New original CI
+remains required for this workflow change; no failed job is rerun or relabeled.
+
 Original `be949192c` PR Full/mixed p95 failure retains loss-free ETL proving
 external `CompatTelRunner.exe` CPU competition during workload ready waits.
 This is a measured environment defect; it does not establish the exclusive
@@ -452,8 +472,10 @@ Actual PowerShell/framework versions are logged. The associated-process
 reuses an opened handle for termination and wait; it is retained until finally
 disposal rather than reopened by PID. This establishes only the fixed image's
 absence, not descendant cleanup or absence of every background CPU consumer.
-Immediately before the five workloads, a separately bounded instance of this
-same process cleanup again requires actual Appraiser absence. Query failure
+Immediately before complete Windows CTest and again before the five standalone
+workloads, separately bounded copies of the exact same closed process cleanup
+require actual Appraiser absence. The pre-CTest copy is skipped only when the
+existing diagnostic-only mode skips CTest; the later guard remains unchanged. Query failure
 cannot become an empty process list. These facts replace `0dd022697`'s unnecessary assumption that
 the registered task must exist; its original setup failures remain failed.
 

@@ -264,6 +264,52 @@ jobs:
           & tools/ci/SchedulerTrace.ps1 -Pair
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify compatibility appraisal absence before CTest
+        if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:RUNNER_OS -cne 'Windows') { throw 'Appraiser census requires the GitHub-owned ephemeral Windows runner' }
+          Write-Host "[CI:HostResources] pwsh_version=$($PSVersionTable.PSVersion) framework=$([Runtime.InteropServices.RuntimeInformation]::FrameworkDescription)"
+          $Watch = [Diagnostics.Stopwatch]::StartNew()
+          $ExpectedImage = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'System32\CompatTelRunner.exe'))
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          foreach ($Row in $Processes) {
+            if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded' }
+            if ($Row.Name -ine 'CompatTelRunner.exe' -or ($Row.ProcessId -isnot [uint32] -and $Row.ProcessId -isnot [int]) -or
+                $Row.ProcessId -le 0 -or $Row.ProcessId -gt [int]::MaxValue -or $Row.CreationDate -isnot [datetime] -or
+                [string]::IsNullOrWhiteSpace($Row.ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Row.ExecutablePath) -or
+                [IO.Path]::GetFullPath($Row.ExecutablePath) -ine $ExpectedImage) { throw 'Unexpected compatibility appraisal process identity' }
+            $AppraiserPid = [int]$Row.ProcessId
+            $Birth = $Row.CreationDate.ToUniversalTime()
+            $Process = Get-Process -Id $AppraiserPid -ErrorAction Stop
+            try {
+              if ($Process.Id -ne $AppraiserPid) { throw 'Compatibility appraisal process object PID differs' }
+              $HeldHandle = $Process.Handle
+              if ($null -eq $HeldHandle -or $HeldHandle -eq [IntPtr]::Zero) { throw 'Compatibility appraisal process handle unavailable' }
+              $Current = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$AppraiserPid" -ErrorAction Stop)
+              if ($Current.Count -eq 0) {
+                Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage state=DISAPPEARED_AFTER_HANDLE_OPEN"
+                continue
+              }
+              if ($Current.Count -ne 1 -or $Current[0].ProcessId -ne $AppraiserPid -or $Current[0].Name -ine 'CompatTelRunner.exe' -or
+                  $Current[0].CreationDate -isnot [datetime] -or $Current[0].CreationDate.ToUniversalTime() -ne $Birth -or
+                  [string]::IsNullOrWhiteSpace($Current[0].ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Current[0].ExecutablePath) -or
+                  [IO.Path]::GetFullPath($Current[0].ExecutablePath) -ine $ExpectedImage) { throw 'Compatibility appraisal identity changed after handle open' }
+              if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded before stop' }
+              Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage action=HELD_IDENTITY_CHECKED_STOP"
+              $Process.Kill()
+              $RemainingMs = [int][Math]::Floor(15000 - $Watch.Elapsed.TotalMilliseconds)
+              if ($RemainingMs -le 0 -or -not $Process.WaitForExit($RemainingMs)) { throw 'Compatibility appraisal process did not exit within remaining 15-second budget' }
+            } finally { $Process.Dispose() }
+          }
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          if ($Watch.Elapsed.TotalSeconds -gt 15) { throw 'Compatibility appraisal final census exceeded 15 seconds' }
+          if ($Processes.Count -ne 0) { throw "Compatibility appraisal process persisted or reappeared; process_count=$($Processes.Count)" }
+          Write-Host "[CI:HostResources] pre_timing_process_count=0"
+
       - name: Run complete headless CTest contract
         if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
         shell: pwsh

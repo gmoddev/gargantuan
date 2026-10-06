@@ -85,6 +85,20 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-06 analyzer B `8c5a22327` PR Windows `112239065328` fails the
+unchanged funded ACK statistics running-service gate at token 36, despite
+exact byte/ACK/retirement conservation. Maximum running deficit is
+45,011,623,360 byte-us >18,025,216,000; finite shortfall is zero. Blocking,
+descheduling and Appraiser presence during this CTest are NOT MEASURED.
+Native and fixture blobs are unchanged from execution A `ed09e7126`. The
+initial host-zero census is over 42 minutes old, and the existing late
+quiescence follows CTest. The minimal CI correction reuses the exact closed
+host preparation immediately before CTest while retaining the later guard.
+No F1 limit, workload, timer, priority or native behavior changes. The B
+failure remains failed; this closes a host-evidence gap, not a proven cause.
+See [CI evidence and scope](devdocs/CurrentArchitecture/ContinuousIntegration.md#hosted-scheduled-telemetry-preparation-2026-10-06).
+**KI-006 OPEN; no new provider PASS, 3M or merge is inferred.**
+
 2026-10-06 execution candidate `ed09e7126` passes all six original CI jobs
 and official dispatch. An offline archive-reader limit rejects aggregate
 expanded bytes of unread diagnostics after retention grows to five trace sets.
