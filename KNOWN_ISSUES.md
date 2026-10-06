@@ -85,6 +85,15 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-06 execution candidate `ed09e7126` passes all six original CI jobs
+and official dispatch. An offline archive-reader limit rejects aggregate
+expanded bytes of unread diagnostics after retention grows to five trace sets.
+The focused analyzer-only correction preserves original ZIP bytes and all
+actual-read/provenance bounds; the existing A/B procedure keeps native/live
+execution and packages pinned to ed09. [Qualified-source checkpoint](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#qualified-execution-source-and-offline-archive-bound-correction-2026-10-06)
+does not establish Local32/Node32. Exact package verification and fresh
+physical measurement remain required. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 2026-10-06 `92e3c9b9` PR Windows refuses setup because Appraiser count is
 one despite no exact registered task. This is a real resource-precondition
 failure before production measurement. Bounded hosted cleanup now permits

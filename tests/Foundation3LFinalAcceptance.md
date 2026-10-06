@@ -1,7 +1,7 @@
 ---
 status: current
 owner: qualification
-last_verified: 2026-10-02
+last_verified: 2026-10-06
 related_code:
   - tests/foundation3l_acceptance.py
   - tests/test_foundation3l_acceptance.py
@@ -9,6 +9,15 @@ related_code:
 ---
 
 # Final Foundation 3L evidence conjunction
+
+CI diagnostics retain all raw trace sets. The reader bounds the original
+compressed ZIP to 128 MiB and its directory to 10,000 members, validates every
+path and duplicate, and reads only one JUnit member (16 MiB cap) and one source
+marker (128-byte cap). The aggregate expanded size of unread members is not a
+reader allocation bound: those members are neither extracted nor decompressed.
+All required source, digest, job, test-identity and outcome checks remain.
+This offline parsing correction uses the A/B procedure below; it does not
+relabel the already-qualified native candidate or require dropping raw traces.
 
 `foundation3l_acceptance.py` is an offline final conjunction for the fixed
 canonical workload in `PhysicalFundingGateReview3L.md`. It does not start a

@@ -274,6 +274,87 @@ class CITests(unittest.TestCase):
         self.assertEqual(Result['State'], 'MEASURED_PASS')
         self.assertEqual(len(Result['Jobs']), 3)
 
+    def DiagnosticMetadataReader(self, Reads, Sizes=None, ExtraNames=('diagnostics/scheduler.etl',), SourceData=None):
+        # Model central-directory expanded sizes without allocating or reading
+        # a large diagnostic payload. Required members remain real ZIP data.
+        OriginalZip = zipfile.ZipFile
+
+        def Open(*Arguments, **Keywords):
+            Zip = OriginalZip(*Arguments, **Keywords)
+            Infos = Zip.infolist()
+            for Info in Infos:
+                if Sizes and Info.filename in Sizes:
+                    Info.file_size = Sizes[Info.filename]
+            for Name in ExtraNames:
+                Info = zipfile.ZipInfo(Name)
+                # Preserve the supplied central-directory name in this mock;
+                # ZipInfo's Windows constructor otherwise normalizes '\\'.
+                Info.filename = Name
+                Info.file_size = 286761989
+                Infos.append(Info)
+            Zip.infolist = mock.Mock(return_value=Infos)
+            OriginalOpen = Zip.open
+
+            def SelectedOpen(Member, *Arguments, **Keywords):
+                Name = Member.filename if isinstance(Member, zipfile.ZipInfo) else Member
+                self.assertIn(Name, ('build/ctest-results.xml', 'qualified-source-commit.txt'),
+                              'unused diagnostic must never be opened')
+                Cap = 128 if Name == 'qualified-source-commit.txt' else 16 * 1024 * 1024
+                self.assertLessEqual(Member.file_size, Cap)
+                Reads.append(Name)
+                Stream = (io.BytesIO(SourceData) if Name == 'qualified-source-commit.txt' and SourceData is not None else
+                          OriginalOpen(Member, *Arguments, **Keywords))
+                Owner = self
+
+                class SelectedStream:
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *Arguments):
+                        Stream.close()
+
+                    def read(self, Maximum):
+                        Owner.assertEqual(Maximum, Cap + 1, 'selected read must have an explicit cap')
+                        return Stream.read(Maximum)
+
+                return SelectedStream()
+
+            Zip.open = SelectedOpen
+            return Zip
+
+        return Open
+
+    def test_large_unused_diagnostic_is_not_read_or_an_expanded_size_gate(self):
+        Reads = []
+        with mock.patch.object(A.zipfile, 'ZipFile', side_effect=self.DiagnosticMetadataReader(Reads)):
+            Result = self.Verify()
+        self.assertEqual(Result['State'], 'MEASURED_PASS')
+        self.assertEqual(len(Result['Jobs']), 3)
+        self.assertEqual(Reads, ['qualified-source-commit.txt', 'build/ctest-results.xml'] * 3)
+
+    def test_required_size_caps_and_all_unused_names_still_reject(self):
+        for Sizes, Names, Error in (
+            ({'build/ctest-results.xml': 16 * 1024 * 1024 + 1}, ('diagnostics/scheduler.etl',), 'JUnit evidence'),
+            ({'qualified-source-commit.txt': 129}, ('diagnostics/scheduler.etl',), 'actual CI checkout'),
+            (None, ('../unused.etl',), 'invalid ZIP member'),
+            (None, ('/unused.etl',), 'invalid ZIP member'),
+            (None, ('C:/unused.etl',), 'invalid ZIP member'),
+            (None, ('diagnostics\\unused.etl',), 'invalid ZIP member'),
+            (None, ('diagnostics/unused.etl', 'diagnostics/unused.etl'), 'duplicate ZIP member'),
+            (None, tuple(f'diagnostics/{Index}.etl' for Index in range(9999)), 'unbounded CI artifact'),
+        ):
+            with self.subTest(Sizes=Sizes, Names=Names[:2]):
+                Reads = []
+                with mock.patch.object(A.zipfile, 'ZipFile', side_effect=self.DiagnosticMetadataReader(Reads, Sizes, Names)):
+                    with self.assertRaisesRegex(A.EvidenceError, Error):
+                        self.Verify()
+                self.assertEqual(Reads, [])
+        Reads = []
+        with mock.patch.object(A.zipfile, 'ZipFile', side_effect=self.DiagnosticMetadataReader(Reads, SourceData=b'x' * 129)):
+            with self.assertRaisesRegex(A.EvidenceError, 'actual CI checkout'):
+                self.Verify()
+        self.assertEqual(Reads, ['qualified-source-commit.txt'])
+
     def test_successful_diagnostic_dispatch_is_not_native_qualification(self):
         # Even a successful diagnostic with the correct source/artifact pins
         # cannot stand in for the complete Windows and Linux qualification.

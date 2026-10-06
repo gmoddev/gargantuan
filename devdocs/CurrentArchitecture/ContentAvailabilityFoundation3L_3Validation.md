@@ -6,6 +6,18 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Execution candidate qualified; offline diagnostics bound corrected (2026-10-06)
+
+[Execution A `ed09e7126`](PooledPhysicalQualification3L.md#qualified-execution-source-and-offline-archive-bound-correction-2026-10-06)
+passes all six original jobs and official package-dispatch jobs. Windows
+96/378, Linux 53 and GNS 11 inventories are verified, zero failures/errors/skips.
+Original source/merge trees and all ten trace exits/drops/cleanup agree.
+Offline collection refuses an unused expanded-size total after five trace
+sets enlarge diagnostics. Corrected analyzer B retains all bounded actual
+reads and provenance checks, preserving exact execution A under the existing
+reviewed-descendant procedure. No native/live-qualifier change, trace removal
+or CI waiver. Package verification, staging/startup, fresh preflight and
+actual Local32 remain next. **KI-006 OPEN; 3L B — PARTIALLY READY**.
 ## Known hosted competitor remains active (2026-10-06)
 
 [Source `92e3c9b9`](PooledPhysicalQualification3L.md#active-hosted-telemetry-without-a-registered-task-2026-10-06)

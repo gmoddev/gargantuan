@@ -254,7 +254,7 @@ def VerifyCI(IndexPath, IndexSha256, ExpectedCommit):
         import io
         with zipfile.ZipFile(io.BytesIO(Archive)) as Zip:
             Infos = Zip.infolist()
-            Require(0 < len(Infos) <= 10000 and sum(Item.file_size for Item in Infos) <= 256 * 1024 * 1024,
+            Require(0 < len(Infos) <= 10000,
                     "unbounded CI artifact")
             Names = [Item.filename for Item in Infos]
             Require(len(Names) == len(set(Names)), "duplicate ZIP member")
@@ -266,10 +266,16 @@ def VerifyCI(IndexPath, IndexSha256, ExpectedCommit):
                    ("ctest-results.xml", "ctest-gns-results.xml")]
             Require(len(Xml) == 1 and Xml[0].file_size <= 16 * 1024 * 1024, "missing/ambiguous JUnit evidence")
             Sources = [Item for Item in Infos if PurePosixPath(Item.filename).name == "qualified-source-commit.txt"]
-            Require(len(Sources) == 1 and Sources[0].file_size <= 128 and
-                    Zip.read(Sources[0]).decode("ascii").strip() == ExpectedCommit,
+            Require(len(Sources) == 1 and Sources[0].file_size <= 128,
                     "actual CI checkout differs from candidate source")
-            Count = ReadJUnit(Zip.read(Xml[0]), Required)
+            with Zip.open(Sources[0]) as File:
+                SourceData = File.read(129)
+            Require(len(SourceData) <= 128 and SourceData.decode("ascii").strip() == ExpectedCommit,
+                    "actual CI checkout differs from candidate source")
+            with Zip.open(Xml[0]) as File:
+                XmlData = File.read(16 * 1024 * 1024 + 1)
+            Require(len(XmlData) <= 16 * 1024 * 1024, "oversized JUnit evidence")
+            Count = ReadJUnit(XmlData, Required)
         Observed.append({"Name": Name, "RunId": Run["id"], "Attempt": Run["run_attempt"],
                          "Event": Run["event"], "StartedUtc": Job["started_at"], "CompletedUtc": Job["completed_at"],
                          "ArtifactId": Metadata["id"], "Tests": Count, "ArchiveSha256": Digest(Archive)})

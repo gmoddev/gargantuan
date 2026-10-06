@@ -6,6 +6,46 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Qualified execution source and offline archive bound correction (2026-10-06)
+
+Execution candidate A is `ed09e7126c158a1b8c0dae3e51081f54cb29339e`.
+All six original jobs pass: Windows 96 native plus 378 Python each, Linux
+53 each and GNS 11 each, with zero failures/errors/skips. Original inventory
+SHA-256 is `9920da45cf0b1b6992e49ed449b139fa644652edbf88590364381095b9675cf0`;
+counts are `6a16e7539d3303a9a9a992cc07fdef453502185dbbb1c460b4a776fb8d393657`;
+checkout reconciliation is
+`9db5f8b30720e47f3b59645f2ddd9ee6aa06050a9ebc843a3571f7a01b87d754`.
+Pushes execute A, PR jobs execute merge `442a48c`, all with tree
+`a4074220e4d8baf86a5ad873750977fe1fa9954e`. Ten trace sets have original
+successful exits, zero drops, exact arguments/Normal priority and cleanup.
+PR late preparation validates and stops only System32 Appraiser PID 1080,
+then records actual absence; no unrelated CPU or old blocked-wait cause is
+inferred.
+
+Official dispatch `37441120894` also passes Windows 96/378 and Linux 53.
+Its Windows log SHA-256 is
+`7eb9cd3019db9b7fbd71ac4354b77a808318443ebcff69166122cc46a00cf107`;
+Linux log is `8e01c0de9079086c16335be45a959df31d936f3e523c3a4b4455adafae48523b`.
+Package collection then refuses the original diagnostics ZIP's 286,761,989
+aggregate expanded bytes against an obsolete 256-MiB reader bound. The ZIP
+is 40,829,539 compressed bytes/270 members, SHA-256
+`52d1acbff744b344b03aa7f29dca50f1020240541b6fe80aba6c75e0b5e92308`.
+Only 64,374-byte JUnit and 42-byte source-marker members are needed; unused
+trace/negative-fixture members are never extracted or decompressed by this
+reader. This is an offline tooling refusal, not CI or production failure.
+
+The minimal later analyzer B removes only that unused aggregate predicate.
+Compressed/member-count/path/duplicate/required-member/digest/source/JUnit
+checks remain. The complete offline acceptance unit suite passes 34 normal
+and 34 optimized tests, zero skips, including unread-large-member and required
+size/path/duplicate/count/source refusals. The existing A/B contract requires clean reviewed descendant
+B and separate focused validation, while native packages, live qualifier,
+CI and physical provenance remain exactly A. Partial collection and original
+ZIPs are preserved; no archive is repacked. Exact-source package verification
+still precedes versioned staging, startup checks and fresh physical preflight.
+No Local32 or Node32 result is inferred. **KI-006 OPEN; 3L B — PARTIALLY READY;
+no 3M or merge**.
+
 ## Active hosted telemetry without a registered task (2026-10-06)
 
 Source `92e3c9b9627ee4ffb45fc086e1f285e5953ecf72` PR Windows job

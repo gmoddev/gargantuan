@@ -169,6 +169,17 @@ must not be reported as having run on the current headless worker.
 
 ## Failure artifacts and hardening
 
+The offline CI reader consumes only bounded JUnit and source-marker members
+from the byte-pinned diagnostics ZIP. It retains the 128-MiB compressed bound,
+10,000-member cap, all path/duplicate checks and required-member bounds; it
+does not reject the aggregate expanded size of members it never reads.
+Five raw scheduler trace sets may legitimately exceed the historical
+256-MiB aggregate limit without increasing the reader's decoded inputs.
+Raw archives remain unchanged. A separately qualified offline analyzer B may
+apply this correction to qualified execution source A under
+`tests/Foundation3LFinalAcceptance.md`; it does not claim B's native runtime
+or hosted jobs were qualified by A's results.
+
 The standalone Release reliable-workload gate emits per-case
 `[Qualification:WorkloadTiming]` maxima for step intervals, each runtime step,
 session poll and session step, fixture observation, and sleep overshoot. These
@@ -234,8 +245,11 @@ remain raw in receipts; only returned process status uses the signed equivalent.
 All five normal standalone guards reject any nonzero status, including a negative
 native crash. Helper tests are a distinct mandatory suite, independently checked
 from the existing physical-control/evidence tooling suites. The seven Windows
-tooling suite counts are 12, 21, 4, 1, 265, 32 and 3 (**338 total**); the separate
-scheduler helper suite now contains **40**, for a combined inventory of **378**.
+tooling suite counts are 12, 21, 4, 1, 267, 32 and 3 (**340 total**); the separate
+scheduler helper suite contains **40**, for a combined inventory of **380**.
+Qualified execution `ed09e7126` ran 40 helper plus 338 other checks (378);
+the two new offline archive-reader tests belong to analyzer B and do not
+retroactively change A's inventory or claim B's hosted/native qualification.
 Original `be949192c` ran 36 helper and 338 other Python checks (374 total).
 Its PR Full/mixed RPC p95 and official first pooled Event/action failures
 remain failed. Two pooled Full case tests bind its exact flags/profile and
