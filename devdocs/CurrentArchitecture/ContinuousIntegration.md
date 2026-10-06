@@ -460,6 +460,20 @@ The original wait APIs, parameters, thinker cutoff, retry policy and F1 bounds
 are unchanged; neither observation overhead nor externally scheduled time is
 subtracted from a failed grant.
 
+Diagnostic source `bc56bbc2491aa5377d80a4d93b80ca7f0fd0306b` passes all six
+original attempt-one jobs: Windows 96 native +382 Python each, Linux 53 each,
+and GNS 11 each, zero failures/errors/skips; original source and merge trees
+agree. Worker and hosted fixed ACK-cycle probes do not reproduce the failure.
+Subsequent pooled-recovery observations reproduce four-grant contention and
+test a scoped ordinary-DATA correction. Native development v8 and its healthy
+control v9 pass their grant certificates, but the correction still requires
+its own original hosted jobs and exact-source package before fresh physical
+acceptance. The active-eight control is refused by the old active-32 coverage
+parser; it is not a coverage PASS. No latency subtraction, failing-result
+substitution, F1 waiver or automatic retry is allowed. The current correction
+changes ASAP normalization and ordinary DATA scheduling; the unchanged-wake
+statement above describes the earlier diagnostic-only revision.
+
 Analyzer B `8c5a22327` PR Windows job `112239065328`, run `37454619898`,
 fails CTest 83 `gargantuan_gns_funded_ack_stats`: the prompt arm's token 36
 conserves and retires all 393,652 bytes, but its maximum running deficit is

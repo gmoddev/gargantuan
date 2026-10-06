@@ -290,8 +290,9 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		PriorSleepProcessCpuMs.reset();
 		const auto Before = Server.GetMetrics();
 		for (auto &Sample : Samples) Sample = {};
-		const std::size_t Active = Overload ? QualificationPeerCount : std::min(8u, QualificationPeerCount);
-		const int Concurrent = Overload ? 16 : 4;
+		const bool HealthyControl = PooledRecoveryEvidence::Current && PooledRecoveryEvidence::HealthyControl();
+		const std::size_t Active = Overload && !HealthyControl ? QualificationPeerCount : std::min(8u, QualificationPeerCount);
+		const int Concurrent = Overload && !HealthyControl ? 16 : 4;
 		std::vector<std::shared_ptr<Part>> Pressure;
 		if (Overload && QualificationAggregateStructural) {
 			for (int Index = 0; Index < PressureCount; ++Index) {
@@ -357,6 +358,33 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 			Step();
 		}
 		const auto Ended = Clock::now();
+		if (Overload && PooledRecoveryEvidence::Current) {
+			auto *Diagnostic = PooledRecoveryEvidence::Current;
+			std::uint64_t Carryover = 0;
+			for (const auto &Sample : Samples) Carryover += Sample.Pending;
+			Diagnostic->Begin(Server.GetMetrics().ReadyPeers, Carryover);
+			// Diagnostic-only moderate addition: 8 x 4 x 3072 B, once in 500 ms.
+			// Prior overload requests remain real and are explicitly reported above.
+			std::array<bool, 8> Submitted{};
+			while (!Disconnected && Clock::now() < Ended + std::chrono::milliseconds(500)) {
+				for (std::size_t Index = 0; !HealthyControl && Index < std::min<std::size_t>(8, Managers.size()); ++Index) {
+					if (Submitted[Index] || Samples[Index].Pending != 0) continue;
+					Submitted[Index] = true;
+					for (int Call = 0; Call < 4; ++Call) {
+						std::vector<WireValue> Arguments{static_cast<int>(Index), std::string(3072 - 62, 'r')};
+						const auto Sent = Managers[Index]->StartRequest(Connections[Index], Function->GetNetworkObjectId(), Arguments,
+							[Diagnostic, Arguments](RemoteRequestResult Result) {
+								Diagnostic->Resolved(Result.Outcome.Status == RemoteRequestTerminalStatus::Success && Result.Results == Arguments);
+							});
+						Diagnostic->Submitted(Sent.Accepted());
+					}
+				}
+				Step();
+			}
+			Diagnostic->End();
+			std::cout << "[Qualification:PooledRecoveryInput] ordinary_profile_control=" << HealthyControl
+				<< " active=" << Active << " concurrent=" << Concurrent << " extra_recovery_rpc=" << !HealthyControl << '\n';
+		}
 		const auto Deadline = Ended + 20s;
 		std::vector<double> ConvergenceMs(QualificationPeerCount, -1);
 		auto Converged = [&]() {

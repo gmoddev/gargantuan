@@ -6,6 +6,49 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Pooled ordinary DATA pacing: native correction checkpoint (2026-10-06)
+
+Bounded worker development runs reproduce grant-scoped F1 failures while
+ordinary callbacks compete with four structural drains. An original failing
+gap overlaps 711 us of the remaining thinker batch and 329 us of 33-socket
+receive processing, with no ETW switch-out in that interval. DPC/ISR time is
+**NOT MEASURED**. Detailed native observations identify many ordinary sender
+visits; a packet quantum alone does not bound their aggregate wire work.
+
+The correction normalizes ASAP insertion to the current native timestamp and
+bounds attributed pooled ordinary DATA while another structural grant is
+partly first-sent. Its shared wire ceiling derives from existing reserves:
+96 - (64 + 8) = 24 MiB/s, with at most one native datagram plus 48 B of credit.
+Own unsent structural work and unmarked FULL/default clients retain their
+paths. Independent ACK/NACK/stat deadlines, FIFO, admission, retirement and
+every F1 constant remain unchanged. Failed/control-only sends refund credit;
+successful DATA, including retransmission, consumes actual native bytes +48.
+
+Corrected native run v8 retains **2,397/2,397** qualified grants across 32 peers,
+zero F1 failures, maximum running deficit **9,652,408,000 byte-us**, and exact
+common-four pool deficit **20,591,981,888 byte-us** over a **7,419-us** overlap.
+Accepted = first-sent = ACKed = retired = **285,820,072 B**, terminal release
+zero. Corrected active-eight ordinary control v9 retains **2,415/2,415**
+qualified grants, 32 valid peers, maximum **10,410,404,352 byte-us**, and exact
+retirement of **288,627,112 B**. Its native child exits zero; the old active-32
+coverage parser rejects the control identity, so wrapper coverage is not PASS.
+Both runs' seven raw files match their recorded lengths and SHA-256 hashes.
+
+The corrected worker compatibility sweep passes all 13 selected native tests:
+real transport, retirement/fairness, retry safety, funded ACK/compatibility/
+four-grant/statistics, packet tails, four-grant/reserve and sanitizer-safety
+fixtures, mixed traffic, observation source contract and pooled feedback
+refresh. The updated pinned mechanism source check passes. The earlier
+12/13 sweep's repeating-timer failure remains preserved; its initial poll
+now fences the native microsecond tick so both normalized ASAP deadlines are
+strictly due, without weakening its existing assertions.
+
+These are development results on an explicitly mixed worker cache, not a
+whole-checkout or provider qualification. The correction requires its own
+original hosted CI, exact-source package and fresh physical acceptance.
+Historical Local `2ca` remains F1 FAIL, Node32 is unrun, KI-006 OPEN and
+Foundation 3L B — PARTIALLY READY. No 3M or merge is authorized.
+
 ## Fresh Local32 recovery passes; F1 running service fails (2026-10-06)
 
 Three fresh Local attempts execute qualified A

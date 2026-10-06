@@ -334,6 +334,17 @@ That distinction remains covered by the service contract.
 
 ### Implemented checkpoint ownership
 
+- Native pooled senders retain the four-packet quantum for their own unsent
+  structural obligation. While any structural grant is partly first-sent,
+  attributed pooled ordinary DATA shares a one-packet wire-credit bucket
+  derived as `BackendCap - StructuralPool - RequiredTransportReserve`.
+  Successful DATA/retry charge is actual native bytes +48; failed/control-only
+  sends refund. ACK/NACK/stat deadlines, FIFO and native per-connection pacing
+  remain independent. ASAP requests become the actual insertion timestamp
+  under the existing thinker-table lock, preserving the due-at-pass-start
+  boundary. This conservative ordinary ceiling does not promise reuse of
+  unused structural capacity or establish the separately reserved ordinary
+  service floors; actual qualification remains required.
 - `ReliableServiceProfile` selects explicit `POOLED_SERVICE`, freezes accepted
   Option C fields and preserves default `FULL_RESERVATION`. The startup CLI
   rejects mixed full-reservation overrides. GNS's physical per-connection

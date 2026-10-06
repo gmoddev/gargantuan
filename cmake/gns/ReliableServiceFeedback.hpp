@@ -72,6 +72,14 @@ struct GargantuanReliableServiceCounters {
 	void AttributeMessage(std::uint64_t Token, std::int64_t MessageNumber,
 		int PayloadBytes = 0, std::uint64_t ActivatedAtMicroseconds = 0) noexcept;
 	void ObserveActiveService(std::uint64_t NowMicroseconds) noexcept;
+	int SenderPacketQuantum(bool OtherStructuralRunning) const noexcept {
+		// Retain the existing structural quantum, including its startup FIFO.
+		if (StructuralActiveGrantBytes > StructuralActiveGrantFirstSentBytes) return 4;
+		// Tokens are private POOLED ownership, never observer state or wire data.
+		// FULL and default clients remain unmarked and keep the original path.
+		if (OtherStructuralRunning && (ActiveAttributedRetirementToken || LastAttributedRetirementToken)) return 1;
+		return 0;
+	}
 	void AckMessage(std::int64_t MessageNumber, int MessageBytes, int PrivateHeaderBytes) noexcept;
 private:
 	void Add(std::uint64_t &Value, int Bytes) noexcept;

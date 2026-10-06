@@ -52,6 +52,30 @@ GargantuanReplaceFeedback("\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.cpp 99e2b190b17993139bd3251f8862b81b58903a119ea456edacfec68f3dd9d65c)
+GargantuanReplaceFeedback("#include \"steamnetworkingsockets_snp.h\"" "#include \"steamnetworkingsockets_snp.h\"\n#include \"ServiceTimingDiagnostics.hpp\"\n#include \"OrdinaryWirePacer.hpp\"")
+GargantuanReplaceFeedback("struct SNPPacketSerializeHelper\n{" [=[struct SNPPacketSerializeHelper
+{
+	GargantuanOrdinaryWirePacer::Permit GargantuanOrdinaryPermit;
+	bool GargantuanHasData = false;]=])
+GargantuanReplaceFeedback("\t\t|| helper.InFlightPkt().m_pTransport != m_pTransport // transport is not the selected transport" [=[		|| helper.InFlightPkt().m_pTransport != m_pTransport // transport is not the selected transport
+		// A control/ASAP wake cannot bypass the actual DATA reservation.  This
+		// precedes native queue mutation and retains the existing ACK-only path.
+		|| (GargantuanOrdinaryDataIsPaced(GargantuanHasRunningStructuralGrant(),
+			m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken,
+			m_senderState.GargantuanFeedback.LastAttributedRetirementToken,
+			m_senderState.GargantuanFeedback.StructuralActiveGrantBytes,
+			m_senderState.GargantuanFeedback.StructuralActiveGrantFirstSentBytes) &&
+			!helper.GargantuanOrdinaryPermit.Reserve(
+				GargantuanSharedOrdinaryWirePacer(k_cbSteamNetworkingSocketsMaxUDPMsgLen), helper.UsecNow()))]=])
+GargantuanReplaceFeedback("\tbool bEmpty = segmentCollector.IsEmpty();" "\tbool bEmpty = segmentCollector.IsEmpty();\n\thelper.GargantuanHasData = !bEmpty;")
+GargantuanReplaceFeedback("SteamNetworkingMicroseconds CSteamNetworkConnectionBase::SNP_ThinkSendState( SteamNetworkingMicroseconds usecNow )\n{" [=[SteamNetworkingMicroseconds CSteamNetworkConnectionBase::SNP_ThinkSendState( SteamNetworkingMicroseconds usecNow )
+{
+	GargantuanServiceTimingSpan GargantuanSender(GargantuanServiceTimingPhase::SnpSender);
+	if (GargantuanSender.Enabled()) {
+		GargantuanSender.SetResult(m_hConnectionSelf); // Observed native handle, never authority.
+		GargantuanSender.SetDetail(m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken);
+		if (GargantuanHasRunningStructuralGrant()) GargantuanSender.AddFlags(1);
+	}]=])
 GargantuanReplaceFeedback("void SSNPSenderState::Shutdown()\n{" "void SSNPSenderState::Shutdown()\n{\n\tGargantuanSetRunningStructuralGrant(GargantuanRunningStructuralGrant, false);\n\tGargantuanFeedback.Purged = true; // Purge is never ACK retirement.")
 GargantuanReplaceFeedback("\t\tpMsg->Unlink();\n\t\tpMsg->Release();" "\t\tif (GargantuanAckTrace) GargantuanAckTrace->Record(GargantuanAckDiagnostics::MessageAcked, SteamNetworkingSockets_GetLocalTimestamp(), pMsg->m_nMessageNumber, pMsg->m_cbSize);\n\t\tGargantuanFeedback.AckMessage(pMsg->m_nMessageNumber, pMsg->m_cbSize, info.m_cbHdr);\n\t\tpMsg->Unlink();\n\t\tpMsg->Release();")
 GargantuanReplaceFeedback("\tAssertLocksHeldByCurrentThread( \"SNP_SendPacket\" );" "\tAssertLocksHeldByCurrentThread( \"SNP_SendPacket\" );\n\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->SerializedAckPacket = 0;")
@@ -127,6 +151,9 @@ GargantuanReplaceFeedback("\t// We sent a packet.  Track it" [=[
 	// failed send leaves the segment on the retry list with EverSent=false;
 	// its later successful retry is unique first-send, not retransmission.
 	m_senderState.GargantuanFeedback.NativePacket(nBytesSent);
+	if (!helper.GargantuanOrdinaryPermit.Complete(nBytesSent, helper.GargantuanHasData))
+		m_senderState.GargantuanFeedback.Invalid = true; // Oversized native packet cannot qualify.
+	GargantuanServiceTimingPacket(nBytesSent, m_hConnectionSelf);
 	if (m_senderState.GargantuanPromptFinalGrantAck && m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken)
 		m_senderState.GargantuanPromptWire.Charge(nBytesSent, 48); // IPv6 + UDP, conservative for IPv4.
 	if (ctx.m_bGargantuanPromptAck && m_senderState.GargantuanAckTrace)
@@ -184,19 +211,63 @@ GargantuanReplaceFeedback("\tint nMaxPacketsPerThinkRemaining = g_cbUDPSocketBuf
 	int nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;
 	int nGargantuanStructuralPacketsThisThink = 0;]=])
 GargantuanReplaceFeedback("\t\t// Sent too many packets in one burst?" [=[
-		// Give other finite structural grants a sender visit before one
-		// connection drains an accumulated pacing burst. Keep this sender's
-		// token bucket and the ordinary traffic packet limit unchanged.
+		// Keep four packets for this structural obligation. Other ordinary
+		// work on an attributed POOLED connection yields after one packet while
+		// another structural obligation runs. Unmarked FULL/client paths stay
+		// unchanged; credit, FIFO and native pacing are never replaced.
 		const auto &GargantuanGrant = m_senderState.GargantuanFeedback;
-		if (GargantuanGrant.StructuralActiveGrantBytes > GargantuanGrant.StructuralActiveGrantFirstSentBytes &&
-			++nGargantuanStructuralPacketsThisThink >= 4)
+		const int nGargantuanPacketQuantum = GargantuanGrant.SenderPacketQuantum(GargantuanHasRunningStructuralGrant());
+		if (nGargantuanPacketQuantum && ++nGargantuanStructuralPacketsThisThink >= nGargantuanPacketQuantum)
 		{
+			GargantuanSender.AddFlags(2); // Selected sender quantum reached.
 			const SteamNetworkingMicroseconds usecReschedule = SteamNetworkingSockets_GetLocalTimestamp();
 			SNP_TokenBucket_Accumulate(usecReschedule);
 			return std::max(usecReschedule + 1, SNP_GetNextThinkTime(usecReschedule));
 		}
 
 		// Sent too many packets in one burst?]=])
+GargantuanReplaceFeedback([=[	// Reliable retry triggered?  Then send it ASAP
+	if ( !m_senderState.m_listReadyRetryReliableRange.IsEmpty() )
+		return 0;
+
+	// Anything queued?
+	SteamNetworkingMicroseconds usecNextSend;
+	if ( m_senderState.m_messagesQueued.empty() )]=] [=[	const bool GargantuanPacedData = GargantuanOrdinaryDataIsPaced(GargantuanHasRunningStructuralGrant(),
+		m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken,
+		m_senderState.GargantuanFeedback.LastAttributedRetirementToken,
+		m_senderState.GargantuanFeedback.StructuralActiveGrantBytes,
+		m_senderState.GargantuanFeedback.StructuralActiveGrantFirstSentBytes);
+	const bool GargantuanRetryData = !m_senderState.m_listReadyRetryReliableRange.IsEmpty();
+	if (GargantuanRetryData && !GargantuanPacedData) return 0; // Original exempt retry path.
+
+	// DATA eligibility is separate from the independent ACK/NACK deadlines.
+	SteamNetworkingMicroseconds usecNextSend;
+	if (GargantuanRetryData) usecNextSend = 0;
+	else if ( m_senderState.m_messagesQueued.empty() )]=])
+GargantuanReplaceFeedback([=[		if ( m_senderState.PendingBytesTotal() >= m_cbMaxPlaintextPayloadSend )
+			// Send it ASAP
+			return 0;
+
+		// We have less than a full packet's worth of data.  Wait until
+		// the Nagle time, if we have one
+		usecNextSend = m_senderState.m_messagesQueued.m_pFirst->SNPSend_UsecNagle();]=] [=[		if ( m_senderState.PendingBytesTotal() >= m_cbMaxPlaintextPayloadSend ) {
+			if (!GargantuanPacedData) return 0; // Original exempt full-packet path.
+			usecNextSend = 0;
+		} else {
+			// Retain the original Nagle deadline for a partial DATA packet.
+			usecNextSend = m_senderState.m_messagesQueued.m_pFirst->SNPSend_UsecNagle();
+		}]=])
+GargantuanReplaceFeedback("\t// Check if the receiver wants to send a NACK." [=[	if (GargantuanPacedData && usecNextSend != k_nThinkTime_Never) {
+		const auto GargantuanNow = SteamNetworkingSockets_GetLocalTimestamp();
+		const auto GargantuanEligible = GargantuanSharedOrdinaryWirePacer(
+			k_cbSteamNetworkingSocketsMaxUDPMsgLen).EligibleAt(GargantuanNow);
+		// Ready DATA keeps the original zero/past Nagle deadline. Retimestamping
+		// it to this query's later clock could defer every otherwise-ready Think.
+		usecNextSend = static_cast<SteamNetworkingMicroseconds>(
+			GargantuanOrdinaryDataDeadline(usecNextSend, GargantuanNow, GargantuanEligible));
+	}
+
+	// Check if the receiver wants to send a NACK.]=])
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b67e44c75c27c10867a863b56e2a0d0ac95849aa116b5274a9ef)
@@ -399,3 +470,6 @@ if(MSVC)
 	target_compile_options(gargantuan_gns_feedback_snapshot PRIVATE $<IF:$<CONFIG:Debug>,/GR,/GR->)
 endif()
 target_sources(GameNetworkingSockets_s PRIVATE $<TARGET_OBJECTS:gargantuan_gns_feedback_snapshot>)
+add_library(gargantuan_gns_ordinary_pacer OBJECT "${GargantuanFeedbackDirectory}/OrdinaryWirePacer.cpp")
+target_compile_features(gargantuan_gns_ordinary_pacer PRIVATE cxx_std_17)
+target_sources(GameNetworkingSockets_s PRIVATE $<TARGET_OBJECTS:gargantuan_gns_ordinary_pacer>)

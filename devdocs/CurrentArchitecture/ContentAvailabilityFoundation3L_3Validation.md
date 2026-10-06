@@ -6,6 +6,18 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Grant-scoped DATA pacing: native development PASS, qualification pending (2026-10-06)
+
+The [native correction checkpoint](PooledPhysicalQualification3L.md#pooled-ordinary-data-pacing-native-correction-checkpoint-2026-10-06)
+records v8: 2,397/2,397 grants qualified, 32 peers with zero F1 failures,
+maximum running deficit 9,652,408,000 byte-us, and exact common-four pool
+deficit 20,591,981,888 byte-us over 7,419 us. All 285,820,072 accepted bytes
+retire; terminal release is zero. The corrected ordinary-profile control v9
+also qualifies 2,415/2,415 grants; its old active-32 coverage parser refuses
+the active-eight identity. Native results do not replace pending original
+CI/package/physical acceptance. Local `2ca` remains F1 FAIL; Node32 is unrun,
+KI-006 OPEN, Foundation 3L B — PARTIALLY READY; no 3M or merge.
+
 ## Fresh Local32 causal recovery passes; F1 remains failed (2026-10-06)
 
 The [current physical receipt](PooledPhysicalQualification3L.md#fresh-local32-recovery-passes-f1-running-service-fails-2026-10-06)

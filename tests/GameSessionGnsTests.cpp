@@ -14,6 +14,7 @@
 #include "../src/host/server/FarmF1Evidence.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/network/ReliableServiceFeedback.hpp"
+#include "PooledRecoveryEvidence.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -76,11 +77,13 @@ namespace {
 	// Only armed after all 32 actual peers and their accepted debt are idle.
 	class DelayedFeedbackTransport final : public IGameTransport {
 		std::shared_ptr<IGameTransport> Delegate;
+		PooledRecoveryEvidence::Recorder *Recovery = nullptr;
 		mutable std::size_t Remaining = 0;
 		bool Recording = false, Withhold = false;
 		bool EnableReliableServiceFeedback() override { return detail::ReliableServiceFeedbackAccess::Enable(*Delegate); }
 		bool ReleaseReliableServiceFeedback(ConnectionId Id) override { return detail::ReliableServiceFeedbackAccess::Release(*Delegate, Id); }
 		std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Id) const override {
+			if (Recovery) return Recovery->Read(*Delegate, Id);
 			if (!Recording) return detail::ReliableServiceFeedbackAccess::Observe(*Delegate, Id);
 			const bool Initial = Remaining != 0;
 			if (Initial && --Remaining == 0) {
@@ -101,7 +104,8 @@ namespace {
 		mutable std::size_t Delays = 0, RefreshQueries = 0;
 		std::size_t StructuralSends = 0;
 		mutable std::vector<std::pair<ConnectionId, std::optional<detail::ReliableServiceFeedback>>> InitialQueries, RefreshedQueries;
-		explicit DelayedFeedbackTransport(std::shared_ptr<IGameTransport> Input) : Delegate(std::move(Input)) {}
+		explicit DelayedFeedbackTransport(std::shared_ptr<IGameTransport> Input,
+			PooledRecoveryEvidence::Recorder *Diagnostic = nullptr) : Delegate(std::move(Input)), Recovery(Diagnostic) {}
 		TransportOperationResult Start(const TransportStartConfiguration &Input) override { return Delegate->Start(Input); }
 		TransportOperationResult Stop(DisconnectInfo Input) override { return Delegate->Stop(std::move(Input)); }
 		TransportOperationResult Disconnect(ConnectionId Id, DisconnectInfo Input) override { return Delegate->Disconnect(Id, std::move(Input)); }
@@ -285,6 +289,13 @@ int main(int ArgumentCount, char **Arguments) {
 			"profiled real GNS fixture uses the approved capacity-compatible candidate");
 	}
 	gargantuan::BootstrapNativeRuntimeSchema();
+	// This holder precedes every transport; borrowed timing storage outlives GNS shutdown/join.
+	std::unique_ptr<PooledRecoveryEvidence::Recorder> RecoveryEvidence;
+	if (QualificationPooled && QualificationAggregateStructural && QualificationPeerCount == 32 &&
+		!QualificationDiagnostic && PooledRecoveryEvidence::Enabled()) {
+		Check(PooledRecoveryEvidence::Recorder::TestSupplied(), "bounded pooled recovery supplied certificates/sink chain");
+		RecoveryEvidence = std::make_unique<PooledRecoveryEvidence::Recorder>();
+	}
 
 	auto ServerWorld = std::make_shared<DataModel>();
 	auto QualificationFunction = std::make_shared<RemoteFunction>();
@@ -400,6 +411,8 @@ end)
 	std::shared_ptr<DelayedFeedbackTransport> FeedbackTransport;
 	std::unique_ptr<host::detail::FarmF1Evidence> FiniteEvidence;
 	if (QualificationPooled) FiniteEvidence = std::make_unique<host::detail::FarmF1Evidence>();
+	std::optional<PooledRecoveryEvidence::Recorder::Chain> RecoveryChain;
+	if (RecoveryEvidence) RecoveryChain.emplace(*RecoveryEvidence);
 	std::unique_ptr<GameSession> Server;
 	std::uint16_t Port = 0;
 	for (std::uint32_t Candidate = 39400; Candidate < 39500; ++Candidate) {
@@ -411,8 +424,8 @@ end)
 		}
 		auto CandidateTransport = std::make_shared<GameNetworkingSocketsTransport>(TransportConfiguration);
 		std::shared_ptr<IGameTransport> SessionTransport = CandidateTransport;
-		if (FeedbackRefresh) {
-			FeedbackTransport = std::make_shared<DelayedFeedbackTransport>(CandidateTransport);
+		if (FeedbackRefresh || RecoveryEvidence) {
+			FeedbackTransport = std::make_shared<DelayedFeedbackTransport>(CandidateTransport, RecoveryEvidence.get());
 			SessionTransport = FeedbackTransport;
 		}
 		auto CandidateSession = std::make_unique<GameSession>(
@@ -537,6 +550,8 @@ end)
 			Check(Server->GetMetrics().ReliableAdmissionPeerStates == 0,
 				"qualification shutdown releases admission peer state");
 			if (QualificationPooled) {
+				if (RecoveryEvidence && FiniteEvidence) FiniteEvidence->Write(std::cout, "pooled-recovery-diagnostic");
+				if (RecoveryEvidence) Check(!RecoveryEvidence->Failed(), "observed recovery grant failed native F1 or diagnostic identity");
 				const auto M = Server->GetMetrics().ReliableAdmission;
 				Check(M.AcceptedBytes == M.VerifiedAttributedRetirement + M.TerminalReleasedBytes + M.OutstandingBytes &&
 					!M.OutstandingBytes && !M.ActiveDrainGrants && M.VerifiedAttributedRetirement,

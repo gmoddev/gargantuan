@@ -130,10 +130,12 @@ jobs:
           AdapterCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_transport | grep -m1 'GameNetworkingSocketsTransport.cpp')"
           FeedbackCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_feedback_counters | grep -m1 'ReliableServiceFeedback.cpp')"
           BridgeCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_feedback_snapshot | grep -m1 'ReliableServiceFeedbackBridge.cpp')"
+          PacerCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_ordinary_pacer | grep -m1 'OrdinaryWirePacer.cpp')"
           printf 'GNS compile command: %s\n' "$GNSCommand"
           printf 'Gargantuan adapter compile command: %s\n' "$AdapterCommand"
           printf 'Gargantuan feedback compile command: %s\n' "$FeedbackCommand"
           printf 'Gargantuan bridge compile command: %s\n' "$BridgeCommand"
+          printf 'Gargantuan ordinary pacer compile command: %s\n' "$PacerCommand"
 
           grep -Fq -- '-fsanitize=address,undefined' <<<"$GNSCommand"
           grep -Fq -- '-fno-sanitize=function' <<<"$GNSCommand"
@@ -146,7 +148,7 @@ jobs:
             exit 1
           fi
 
-          for OwnedCommand in "$FeedbackCommand" "$BridgeCommand"; do
+          for OwnedCommand in "$FeedbackCommand" "$BridgeCommand" "$PacerCommand"; do
             grep -Fq -- '-fsanitize=address,undefined' <<<"$OwnedCommand"
             if grep -Fq -- '-fno-sanitize=' <<<"$OwnedCommand"; then
               echo "GNS-only compatibility exclusions leaked into owned feedback code."

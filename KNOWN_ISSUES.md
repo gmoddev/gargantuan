@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-06 native development checkpoint: scoped pooled ordinary-DATA pacing
+and ASAP timestamp normalization give v8 2,397/2,397 qualified grants across
+32 peers, maximum running deficit 9,652,408,000 byte-us and exact common-four
+pool deficit 20,591,981,888 over 7,419 us. All 285,820,072 B retire with zero
+terminal release. Corrected ordinary-profile control v9 qualifies 2,415/2,415
+grants but its active-eight identity is refused by the old active-32 coverage
+parser. Worker development evidence does not establish original CI, package
+or physical PASS. Local `2ca` remains F1 FAIL; Node32 is unrun.
+[Native checkpoint](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#pooled-ordinary-data-pacing-native-correction-checkpoint-2026-10-06).
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M or merge.**
+
 2026-10-06 execution A `ed09e7126` retains three fresh failed Local attempts:
 `d326` capture/export reserve and `3a5` PackageRoot-case projection mismatch stop
 before native launch; corrected inputs let `2ca` run 32 native clients. All three

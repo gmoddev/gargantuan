@@ -50,6 +50,46 @@ inline bool TestGnsServiceTimingDiagnostics() {
 		Passed = Passed && !Disabled.Enabled();
 	}
 	Passed = Passed && Values.Count == 2;
-	std::cout << "[Qualification:GnsServiceTiming] cases=6 passed=" << Passed << '\n';
+	Values.Count = 0; Values.Overflow = false;
+	Passed = GargantuanSetServiceTimingSink(&Sink) && Passed;
+	{
+		GargantuanServiceTimingSpan Callback(GargantuanServiceTimingPhase::ThinkerCallback);
+		GargantuanServiceTimingSpan Sender(GargantuanServiceTimingPhase::SnpSender);
+		Passed = Passed && !Callback.Enabled() && !Sender.Enabled();
+		GargantuanServiceTimingPacket(99, 9);
+	}
+	Passed = Passed && Values.Count == 0;
+	GargantuanSetServiceTimingSink(nullptr);
+	Sink.DetailedCallbacks = true;
+	Passed = GargantuanSetServiceTimingSink(&Sink) && Passed;
+	{
+		GargantuanServiceTimingSpan Callback(GargantuanServiceTimingPhase::ThinkerCallback);
+		Callback.SetCount(3); Callback.SetDetail(123); Callback.SetResult(456);
+	}
+	{
+		GargantuanServiceTimingSpan Sender(GargantuanServiceTimingPhase::SnpSender);
+		Sender.SetDetail(77); Sender.SetResult(99);
+		GargantuanServiceTimingPacket(10, 99); GargantuanServiceTimingPacket(20, 99);
+	}
+	GargantuanServiceTimingPacket(999, 99); // Outside sender callback: ignored.
+	Passed = Passed && Values.Count == 2 && Values.Records[0].Phase == GargantuanServiceTimingPhase::ThinkerCallback &&
+		Values.Records[0].Count == 3 && Values.Records[0].Detail == 123 && Values.Records[0].Result == 456 &&
+		Values.Records[1].Phase == GargantuanServiceTimingPhase::SnpSender && Values.Records[1].Count == 2 &&
+		Values.Records[1].Bytes == 30 && Values.Records[1].Detail == 77 && Values.Records[1].Result == 99;
+	Values.Count = 0;
+	{
+		GargantuanServiceTimingSpan Outer(GargantuanServiceTimingPhase::SnpSender);
+		Outer.SetResult(1); GargantuanServiceTimingPacket(5, 1);
+		{
+			GargantuanServiceTimingSpan Inner(GargantuanServiceTimingPhase::SnpSender);
+			Inner.SetResult(2); GargantuanServiceTimingPacket(7, 2);
+			GargantuanServiceTimingPacket(999, 1); // Different connection cannot charge this inner visit.
+		}
+		GargantuanServiceTimingPacket(11, 1);
+	}
+	Passed = Passed && Values.Count == 2 && Values.Records[0].Bytes == 7 && Values.Records[0].Count == 1 &&
+		Values.Records[1].Bytes == 16 && Values.Records[1].Count == 2 && GargantuanCurrentSnpTiming == nullptr;
+	GargantuanSetServiceTimingSink(nullptr);
+	std::cout << "[Qualification:GnsServiceTiming] cases=9 passed=" << Passed << '\n';
 	return Passed;
 }
