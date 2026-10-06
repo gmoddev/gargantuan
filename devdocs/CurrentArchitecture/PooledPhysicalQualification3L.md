@@ -6,6 +6,51 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Original hosted ACK statistics fails; exact wake attribution pending (2026-10-06)
+
+Correction `da16d5aba83f2edffe789491aed8e8258a0ca967` is **not CI-qualified**.
+Original push run `37518739890`, Windows job `112458311111`, passes 95/96
+native tests but fails CTest 83, `gargantuan_gns_funded_ack_stats`. Its baseline
+control arm (`prompt=0`) token 24 has 347 unique first-send segments conserving
+393,652 B. The exact first running-bound crossing and maximum are the same
+zero-service interval: post-segment 12 at 2,921,128,165 us to pre-segment 13 at
+2,921,129,274 us, 1,109 us. Its maximum **18,605,932,544 byte-us** exceeds the
+unchanged **18,025,216,000** bound. Finite shortfall is zero; activation to
+completion is 21,818 us against 29,537.874 us allowed. All 1,969,723 cumulative
+accepted bytes first-send, ACK and retire; pending/unacked/active grant are zero
+and retransmission is zero. Those independent successes do not waive F1.
+
+The original job log SHA-256 is
+`251ba38201261b1a8f82669727e376486666d6217eb5e4a6fdd21d764c42a2d9`;
+original diagnostic ZIP artifact `11441327474` is 8,590,822 B with SHA-256
+`b692e1548c044424ba82653804591e359688db9903f7b8906adf86d615852eb3`.
+Both retained segment lists reproduce the same exact curve. The actual reason
+for the gap is **NOT MEASURED**: the original has no wake-phase or ETW record.
+The grant's unsent structural work bypasses the ordinary DATA pacer. Both
+original GNS sanitizer jobs pass 11 tests; successful counterpart/package jobs
+cannot substitute for this failed original.
+
+The existing exact ACK statistics diagnostic now reuses the ACK-cycle
+65,536-record timer/create/wait/lock/receive/thinker buffer under its existing
+opt-in environment. Detailed callbacks stay disabled. Phase recording stops
+after the control pair is destroyed/joined; both full native arms still run,
+and the borrowed buffer lives until their final destruction before rendering.
+Normal CTest/runtime has no added clock reads or allocation. The existing
+parser scopes phase records to the control arm and service thread and rejects
+prompt/inter-arm rows, overflow, missing phases or uncleared ownership. An
+initial worker probe passes both native arms but overflows when recording both;
+that diagnostic refusal is retained and the same buffer is narrowed to control
+without enlarging it. This bounded observation answers a demonstrated missing
+causal fact; it changes no timer, F1 equation or acceptance gate. No fresh
+physical run is made before attributable correction and required CI.
+
+The control-only successor compiles on the worker and passes all 42 existing
+scheduler/helper tests with no skips. Its exact native statistics probe runs
+both complete arms and passes, retaining 42,184 control-phase records with no
+overflow and a loss-free scheduler window. All seven raw files match their
+recorded sizes/hashes. This validates the bounded observation and is a
+**non-reproduction**, not an explanation or replacement of the hosted failure.
+
 ## Pooled ordinary DATA pacing: native correction checkpoint (2026-10-06)
 
 Bounded worker development runs reproduce grant-scoped F1 failures while

@@ -639,10 +639,10 @@ def ValidateStats(Metadata, Stdout, CsvPath, Arms, Cycle=False):
             Snapshots.append(Fields(Line))
         elif Line.startswith("[Qualification:" + Prefix + "Diagnostic] "):
             Summaries.append(Fields(Line))
-        elif Cycle and Line.startswith('[Qualification:AckCycleServiceTiming] '):
+        elif Line.startswith('[Qualification:' + Prefix + 'ServiceTiming] '):
             Need(len(Line) <= 512, 'phase timing line exceeds its fixed buffer derivation')
             Timings.append(Fields(Line))
-        elif Cycle and Line.startswith('[Qualification:AckCycleTimingSummary] '):
+        elif Line.startswith('[Qualification:' + Prefix + 'TimingSummary] '):
             TimingSummaries.append(Fields(Line))
         Need(len(Services) <= 16 and len(Snapshots) <= 16 and len(Summaries) <= 1, "stats evidence cap")
         Need(len(Timings) <= 65536 and len(TimingSummaries) <= 1, 'phase timing evidence cap')
@@ -699,36 +699,39 @@ def ValidateStats(Metadata, Stdout, CsvPath, Arms, Cycle=False):
              "service lifecycle conflicting/reused")
         Used.add(Identity)
     Extra = {}
-    if Cycle:
-        Need(Timings and len(TimingSummaries) == 1, 'native phase timing missing')
-        Summary = TimingSummaries[0]
-        Need(set(Summary) == {'records', 'retained', 'capacity', 'overflow', 'sink_cleared', 'valid'},
-             'native phase timing summary schema')
-        Need(int(Summary['records']) == int(Summary['retained']) == len(Timings) and
-             int(Summary['capacity']) == 65536 and all(int(Summary[K]) == V for K, V in
-                 (('overflow', 0), ('sink_cleared', 1), ('valid', 1))), 'native phase timing overflow/incomplete ownership')
-        Begin, End = Arms['ackcycle-funded']
-        ServiceThreads = {int(Row['native_tid']) for Row in Services}
-        Phases = set()
-        for Index, Row in enumerate(Timings):
-            Need(set(Row) == {'sequence', 'phase', 'pid', 'native_tid', 'clock_valid', 'qpc_begin', 'qpc_end',
-                             'qpc_frequency', 'count', 'bytes', 'detail', 'result', 'error', 'flags'},
-                 'native phase timing record schema')
-            Values = {K: int(V) for K, V in Row.items()}
-            Need(Values['sequence'] == Index and 1 <= Values['phase'] <= 5 and
-                 Values['pid'] == Metadata['ChildPid'] and
-                 (Values['native_tid'] == Metadata['ChildMainTid'] if Values['phase'] == 1 else
-                  Values['native_tid'] in ServiceThreads) and
-                 Values['clock_valid'] == 1 and Values['qpc_frequency'] == Metadata['QpcFrequency'] and
-                 Begin['qpc_before'] <= Values['qpc_begin'] <= Values['qpc_end'] <= End['qpc_after'],
-                 'native phase timing identity/clock outside owned envelope')
-            Need(all(0 <= Values[K] <= (1 << 64) - 1 for K in ('count', 'bytes', 'detail')) and
-                 -(1 << 63) <= Values['result'] < (1 << 63) and
-                 all(0 <= Values[K] <= (1 << 32) - 1 for K in ('error', 'flags')), 'native phase timing field bound')
-            Phases.add(Values['phase'])
-        Need(Phases == {1, 2, 3, 4, 5}, 'timer/create/wait/lock/drain/thinker phases not retained')
-        Extra = {'NativePhaseRecordCount': len(Timings), 'NativePhaseClockMapping': 'OWNED_QPC_NO_TIME_SUBTRACTION',
-                 'NativePhaseOverflow': False}
+    Need(Timings and len(TimingSummaries) == 1, 'native phase timing missing')
+    Summary = TimingSummaries[0]
+    Need(set(Summary) == {'records', 'retained', 'capacity', 'overflow', 'sink_cleared', 'valid'} |
+         (set() if Cycle else {'scope'}),
+         'native phase timing summary schema')
+    Need(Cycle or Summary['scope'] == 'control', 'stats phase timing scope must be control only')
+    Need(int(Summary['records']) == int(Summary['retained']) == len(Timings) and
+         int(Summary['capacity']) == 65536 and all(int(Summary[K]) == V for K, V in
+             (('overflow', 0), ('sink_cleared', 1), ('valid', 1))), 'native phase timing overflow/incomplete ownership')
+    PhaseArms = [Arms['ackcycle-funded'] if Cycle else Arms['ackstats-control']]
+    ServiceThreads = {int(Row['native_tid']) for Row in Services}
+    Phases = set()
+    for Index, Row in enumerate(Timings):
+        Need(set(Row) == {'sequence', 'phase', 'pid', 'native_tid', 'clock_valid', 'qpc_begin', 'qpc_end',
+                         'qpc_frequency', 'count', 'bytes', 'detail', 'result', 'error', 'flags'},
+             'native phase timing record schema')
+        Values = {K: int(V) for K, V in Row.items()}
+        Need(Values['sequence'] == Index and 1 <= Values['phase'] <= 5 and
+             Values['pid'] == Metadata['ChildPid'] and
+             (Values['native_tid'] == Metadata['ChildMainTid'] if Values['phase'] == 1 else
+              Values['native_tid'] in ServiceThreads) and
+             Values['clock_valid'] == 1 and Values['qpc_frequency'] == Metadata['QpcFrequency'] and
+             any(Arm[0]['qpc_before'] <= Values['qpc_begin'] <= Values['qpc_end'] <= Arm[-1]['qpc_after']
+                 and (Values['phase'] == 1 or any(int(Service['native_tid']) == Values['native_tid'] and
+                      Service['case'] == Arm[0]['case'] for Service in Services)) for Arm in PhaseArms),
+             'native phase timing identity/clock outside owned envelope')
+        Need(all(0 <= Values[K] <= (1 << 64) - 1 for K in ('count', 'bytes', 'detail')) and
+             -(1 << 63) <= Values['result'] < (1 << 63) and
+             all(0 <= Values[K] <= (1 << 32) - 1 for K in ('error', 'flags')), 'native phase timing field bound')
+        Phases.add(Values['phase'])
+    Need(Phases == {1, 2, 3, 4, 5}, 'timer/create/wait/lock/drain/thinker phases not retained')
+    Extra = {'NativePhaseRecordCount': len(Timings), 'NativePhaseClockMapping': 'OWNED_QPC_NO_TIME_SUBTRACTION',
+             'NativePhaseOverflow': False}
     return {'ServiceThreadCount': len(Services), 'NativeSnapshotCount': len(Snapshots),
             'NativeClockMapping': 'SNAPSHOT_BRACKETS_ONLY_NO_GLOBAL_OFFSET',
             'FiniteGrantTimestampResolutionNs': 1000, **Extra}

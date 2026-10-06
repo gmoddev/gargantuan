@@ -61,26 +61,31 @@ inline void ServiceThreadStarted() noexcept {
 struct Session {
     bool Active;
     bool Cycle;
+    bool SinkCleared = false;
     std::unique_ptr<ServiceTimingBuffer> Timing;
     SteamNetworkingSocketsLib::GargantuanServiceTimingSink TimingSink{};
     gargantuan::test_detail::WorkloadClockAnchor TimingClock{};
     explicit Session(bool CycleCase = false) : Active(Enabled(CycleCase)), Cycle(CycleCase) {
         if (!Active) return;
-        if (Cycle) {
-            Timing = std::make_unique<ServiceTimingBuffer>();
-            TimingClock = gargantuan::test_detail::WorkloadClockAnchor::Capture();
-            TimingSink = {Timing.get(), ServiceTimingBuffer::Record};
-            if (!SteamNetworkingSocketsLib::GargantuanSetServiceTimingSink(&TimingSink))
-                throw std::runtime_error("ACK cycle timing sink already owned");
-        }
+        Timing = std::make_unique<ServiceTimingBuffer>();
+        TimingClock = gargantuan::test_detail::WorkloadClockAnchor::Capture();
+        TimingSink = {Timing.get(), ServiceTimingBuffer::Record}; // Phases1–5 only, detailed callbacks off.
+        if (!SteamNetworkingSocketsLib::GargantuanSetServiceTimingSink(&TimingSink))
+            throw std::runtime_error("ACK diagnostic timing sink already owned");
         ThreadCount.store(0);
         for (auto &Entry : ServiceStarts) Entry.Ready.store(false);
         SteamNetworkingSockets_SetServiceThreadInitCallback(ServiceThreadStarted);
     }
+    void StopTiming() {
+        if (!Active || SinkCleared) return;
+        // Caller has destroyed/joined the arm's native pairs. Keep the borrowed
+        // sink and buffer alive through Session destruction; never clear in-flight.
+        SinkCleared = SteamNetworkingSocketsLib::GargantuanSetServiceTimingSink(nullptr);
+    }
     ~Session() {
         if (!Active) return;
         // Observe owns/destroys every pair before Run's Session unwinds.
-        const bool SinkCleared = !Cycle || SteamNetworkingSocketsLib::GargantuanSetServiceTimingSink(nullptr);
+        StopTiming();
         SteamNetworkingSockets_SetServiceThreadInitCallback(nullptr);
         const auto Count = ThreadCount.load(std::memory_order_acquire);
         bool Valid = Count > 0 && Count <= ServiceStarts.size();
@@ -97,7 +102,7 @@ struct Session {
         }
         std::cout << (Cycle ? "[Qualification:AckCycleDiagnostic] thread_count=" :
             "[Qualification:AckStatsDiagnostic] thread_count=") << Count << " valid=" << Valid << '\n';
-        if (Cycle) {
+        {
             const auto TimingCount = Timing->Count.load(std::memory_order_acquire);
             const bool Overflow = Timing->Overflow.load(std::memory_order_acquire);
             bool TimingValid = SinkCleared && TimingClock.NativeValid && TimingCount > 0 &&
@@ -105,7 +110,8 @@ struct Session {
             for (std::size_t Index = 0; Index < std::min<std::uint64_t>(TimingCount, Timing->Records.size()); ++Index) {
                 const auto &Entry = Timing->Records[Index];
                 TimingValid = TimingValid && Entry.ClockValid && Entry.BeginQpc > 0 && Entry.EndQpc >= Entry.BeginQpc;
-                std::cout << "[Qualification:AckCycleServiceTiming] sequence=" << Index
+                std::cout << (Cycle ? "[Qualification:AckCycleServiceTiming] sequence=" :
+                    "[Qualification:AckStatsServiceTiming] sequence=") << Index
                     << " phase=" << static_cast<unsigned>(Entry.Phase) << " pid=" << TimingClock.Process
                     << " native_tid=" << Entry.ThreadId << " clock_valid=" << Entry.ClockValid
                     << " qpc_begin=" << Entry.BeginQpc << " qpc_end=" << Entry.EndQpc
@@ -113,10 +119,13 @@ struct Session {
                     << " bytes=" << Entry.Bytes << " detail=" << Entry.Detail << " result=" << Entry.Result
                     << " error=" << Entry.Error << " flags=" << Entry.Flags << '\n';
             }
-            std::cout << "[Qualification:AckCycleTimingSummary] records=" << TimingCount
+            std::cout << (Cycle ? "[Qualification:AckCycleTimingSummary] records=" :
+                "[Qualification:AckStatsTimingSummary] records=") << TimingCount
                 << " retained=" << std::min<std::uint64_t>(TimingCount, Timing->Records.size())
                 << " capacity=" << Timing->Records.size() << " overflow=" << Overflow
-                << " sink_cleared=" << SinkCleared << " valid=" << TimingValid << '\n';
+                << " sink_cleared=" << SinkCleared << " valid=" << TimingValid;
+            if (!Cycle) std::cout << " scope=control";
+            std::cout << '\n';
         }
     }
 };

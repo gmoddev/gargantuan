@@ -695,6 +695,11 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
         Log += '\n[Qualification:AckStatsServiceThread] case=ackstats-control sequence=0 pid=42 native_tid=44 native_valid=1 qpc_before=30 qpc_after=31 qpc_frequency=10000000'
         Log += '\n[Qualification:AckStatsNativeSnapshot] case=ackstats-control stage=grant-failure side=sender token=7 available=1 native_us=3000000050000 pid=42 native_tid=43 native_valid=1 qpc_before=400 qpc_after=402 qpc_frequency=10000000'
         Log += '\n[Qualification:AckStatsDiagnostic] thread_count=1 valid=1'
+        for Index, Phase in enumerate(range(1, 6)):
+            Log += '\n[Qualification:AckStatsServiceTiming] sequence=' + str(Index) + ' phase=' + str(Phase) + \
+                ' pid=42 native_tid=' + ('43' if Phase == 1 else '44') + \
+                ' clock_valid=1 qpc_begin=100 qpc_end=110 qpc_frequency=10000000 count=1 bytes=0 detail=3 result=0 error=0 flags=0'
+        Log += '\n[Qualification:AckStatsTimingSummary] records=5 retained=5 capacity=65536 overflow=0 sink_cleared=1 valid=1 scope=control'
         File = Root / 'scheduler.csv'
         with File.open('w', encoding='ascii', newline='') as Stream:
             Writer = csv.DictWriter(Stream, fieldnames=VALIDATOR.CSV_FIELDS)
@@ -711,18 +716,23 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
             self.assertEqual(Result['ServiceThreadCount'], 1)
             self.assertEqual(Result['NativeClockMapping'], 'SNAPSHOT_BRACKETS_ONLY_NO_GLOBAL_OFFSET')
             self.assertEqual(Result['FiniteGrantTimestampResolutionNs'], 1000)
+            self.assertEqual(Result['NativePhaseRecordCount'], 5)
+            for Old, New in (('phase=5', 'phase=6'), ('sink_cleared=1', 'sink_cleared=0'),
+                             ('scope=control', 'scope=prompt'),
+                             ('records=5 retained=5', 'records=6 retained=5'),
+                             ('overflow=0 sink_cleared=1', 'overflow=1 sink_cleared=1'),
+                             ('qpc_begin=100', 'qpc_begin=999'),
+                             ('phase=3 pid=42 native_tid=44', 'phase=3 pid=42 native_tid=43')):
+                self.assertEqual(VALIDATOR.Validate(Metadata, Log.replace(Old, New), 'AckStats', File)['State'], 'INCOMPLETE')
+            Missing = '\n'.join(Line for Line in Log.splitlines() if 'ServiceTiming]' not in Line and 'TimingSummary]' not in Line)
+            self.assertEqual(VALIDATOR.Validate(Metadata, Missing, 'AckStats', File)['State'], 'INCOMPLETE')
 
     def test_funded_ack_cycle_exact_arguments_and_service_lifecycle_without_workload(self):
         with tempfile.TemporaryDirectory() as Directory:
             Metadata, Log, File = self.StatsFixture(Path(Directory))
             Metadata.update(WorkloadCase='AckCycleFunded', WorkloadArguments=['--ack-cycle-funded', '1348'])
             Log = Log.replace('AckStats', 'AckCycle').replace('ackstats-control', 'ackcycle-funded').replace(
-                'profile=ACK_STATS', 'profile=ACK_CYCLE_FUNDED')
-            for Index, Phase in enumerate(range(1, 6)):
-                Log += '\n[Qualification:AckCycleServiceTiming] sequence=' + str(Index) + ' phase=' + str(Phase) + \
-                    ' pid=42 native_tid=' + ('43' if Phase == 1 else '44') + \
-                    ' clock_valid=1 qpc_begin=100 qpc_end=110 qpc_frequency=10000000 count=1 bytes=0 detail=3 result=0 error=0 flags=0'
-            Log += '\n[Qualification:AckCycleTimingSummary] records=5 retained=5 capacity=65536 overflow=0 sink_cleared=1 valid=1'
+                'profile=ACK_STATS', 'profile=ACK_CYCLE_FUNDED').replace(' scope=control', '')
             Result = VALIDATOR.Validate(Metadata, Log, 'AckCycleFunded', File)
             self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
             self.assertEqual(Result['ServiceThreadCount'], 1)
@@ -775,10 +785,19 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
         self.assertIn('AckStatsTimingEvidence::Arm DiagnosticArm(Prompt, true)', Cycle)
         self.assertIn('const auto &Event = Sample.LastCompletedStructuralSegmentEvents[Index]', Cycle)
         Observer = (ROOT / 'tests/AckStatsTimingEvidence.hpp').read_text()
-        Clear = Observer.index('const bool SinkCleared = !Cycle ||')
+        Clear = Observer.index('SinkCleared = SteamNetworkingSocketsLib::GargantuanSetServiceTimingSink(nullptr)')
         self.assertLess(Clear, Observer.index('[Qualification:AckCycleServiceTiming]'))
         self.assertIn('if (Index >= Buffer.Records.size())', Observer)
         self.assertIn('Timing = std::make_unique<ServiceTimingBuffer>()', Observer)
+        Constructor = Observer[Observer.index('explicit Session('):Observer.index('~Session()')]
+        self.assertLess(Constructor.index('if (!Active) return;'), Constructor.index('std::make_unique<ServiceTimingBuffer>()'))
+        self.assertNotIn('if (Cycle)', Constructor)
+        self.assertIn('[Qualification:AckStatsServiceTiming]', Observer)
+        self.assertIn('[Qualification:AckStatsTimingSummary]', Observer)
+        Stats = (ROOT / 'tests/GnsAckStatsBoundaryFixture.hpp').read_text()
+        Run = Stats[Stats.index('inline bool Run()'):]
+        self.assertLess(Run.index('Observe(false);'), Run.index('Diagnostic.StopTiming();'))
+        self.assertLess(Run.index('Diagnostic.StopTiming();'), Run.index('Observe(true);'))
 
     def test_ack_stats_bad_snapshots_lifecycle_and_bounds_fail(self):
         with tempfile.TemporaryDirectory() as Directory:
@@ -817,7 +836,7 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
                     'qpc_before=30 qpc_after=31', 'qpc_before=520 qpc_after=521'),
                 Lines[3].replace('ackstats-control', 'ackstats-prompt').replace(
                     'qpc_before=400 qpc_after=402', 'qpc_before=600 qpc_after=602'),
-                Lines[4].replace('thread_count=1', 'thread_count=2')])
+                Lines[4].replace('thread_count=1', 'thread_count=2')] + Lines[5:11])
             with File.open('w', encoding='ascii', newline='') as Stream:
                 Writer = csv.DictWriter(Stream, fieldnames=VALIDATOR.CSV_FIELDS)
                 Writer.writeheader()
@@ -826,6 +845,11 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
             Result = VALIDATOR.Validate(Metadata, Log, 'AckStats', File)
             self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
             self.assertEqual(Result['ServiceThreadCount'], 2)
+            self.assertEqual(Result['NativePhaseRecordCount'], 5)
+            Gap = Log.replace('qpc_begin=100 qpc_end=110', 'qpc_begin=480 qpc_end=490')
+            self.assertEqual(VALIDATOR.Validate(Metadata, Gap, 'AckStats', File)['State'], 'INCOMPLETE')
+            PromptRows = Log.replace('qpc_begin=100 qpc_end=110', 'qpc_begin=600 qpc_end=610')
+            self.assertEqual(VALIDATOR.Validate(Metadata, PromptRows, 'AckStats', File)['State'], 'INCOMPLETE')
 
     def test_wrapper_rejects_arbitrary_case_and_pair_case_combination(self):
         for Arguments in (['-Case', 'arbitrary'], ['-Pair', '-Case', 'Full'],

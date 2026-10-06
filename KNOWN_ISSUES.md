@@ -85,6 +85,15 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-06 `da16d5aba` original push Windows job `112458311111` fails ACK
+statistics F1 (95/96 native tests pass): control token 24, 393,652 B, has a
+1,109-us zero-first-send gap, exact running deficit 18,605,932,544 byte-us over
+18,025,216,000. Finite shortfall is zero and ACK/retirement conserve exactly.
+The original gap's cause is NOT MEASURED. Existing bounded wake observation
+is reused for the exact statistics diagnostic; no timer/F1/acceptance change.
+[Original receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#original-hosted-ack-statistics-fails-exact-wake-attribution-pending-2026-10-06).
+**Correction not CI-qualified; no fresh physical run; KI-006 OPEN.**
+
 2026-10-06 native development checkpoint: scoped pooled ordinary-DATA pacing
 and ASAP timestamp normalization give v8 2,397/2,397 qualified grants across
 32 peers, maximum running deficit 9,652,408,000 byte-us and exact common-four

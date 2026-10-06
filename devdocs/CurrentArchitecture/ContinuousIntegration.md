@@ -474,6 +474,17 @@ substitution, F1 waiver or automatic retry is allowed. The current correction
 changes ASAP normalization and ordinary DATA scheduling; the unchanged-wake
 statement above describes the earlier diagnostic-only revision.
 
+`da16d5aba` original push Windows job `112458311111`, run `37518739890`,
+fails ACK statistics CTest 83 (95/96 native pass). Control token 24's 347
+segments exactly reproduce 18,605,932,544 >18,025,216,000 byte-us from a
+1,109-us zero-service gap. Finite/ACK/retirement pass; actual wake/scheduler
+cause is NOT MEASURED. Both GNS sanitizer jobs pass 11 but cannot replace the
+failed Windows original. The exact statistics diagnostic reuses the bounded
+ACK-cycle phase buffer under its existing opt-in environment; no normal
+runtime clock/allocation, timer policy or F1 acceptance changes. Its parser
+retains per-arm/thread scope and all existing bounds. A later passing probe
+does not retroactively explain or qualify this original failure.
+
 Analyzer B `8c5a22327` PR Windows job `112239065328`, run `37454619898`,
 fails CTest 83 `gargantuan_gns_funded_ack_stats`: the prompt arm's token 36
 conserves and retires all 393,652 bytes, but its maximum running deficit is

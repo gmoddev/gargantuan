@@ -251,7 +251,12 @@ inline void Observe(bool Prompt) {
 
 inline bool Run() {
     AckStatsTimingEvidence::Session Diagnostic;
-	try { Observe(false); Observe(true); return true; }
+	try {
+		Observe(false);
+		Diagnostic.StopTiming(); // Control pair is destroyed/joined; both native arms still run.
+		Observe(true);
+		return true;
+	}
 	catch (const std::exception &Error) {
 		std::cerr << "[Network:AckStatsBoundary] FAIL " << Error.what() << '\n'; return false;
 	}

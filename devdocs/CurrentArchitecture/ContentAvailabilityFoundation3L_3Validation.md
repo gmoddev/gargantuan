@@ -6,6 +6,17 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Original hosted control-grant F1 failure remains authoritative (2026-10-06)
+
+The [exact ACK statistics receipt](PooledPhysicalQualification3L.md#original-hosted-ack-statistics-fails-exact-wake-attribution-pending-2026-10-06)
+retains `da16d5aba` push Windows job `112458311111`: 95/96 native tests pass,
+but control token 24 has a 1,109-us first-send plateau and exact running maximum
+18,605,932,544 >18,025,216,000 byte-us. Finite, ACK and retirement checks pass;
+the cause of the plateau is NOT MEASURED. A bounded existing wake recorder is
+enabled for the exact statistics diagnostic, with normal runtime unchanged.
+Passing counterparts do not replace the original failure. No new physical
+attempt; KI-006 OPEN, Foundation 3L B — PARTIALLY READY, Node32 unrun.
+
 ## Grant-scoped DATA pacing: native development PASS, qualification pending (2026-10-06)
 
 The [native correction checkpoint](PooledPhysicalQualification3L.md#pooled-ordinary-data-pacing-native-correction-checkpoint-2026-10-06)
