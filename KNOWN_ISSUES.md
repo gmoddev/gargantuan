@@ -85,6 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-05 source `09aa075ad` passes focused native, GNS and PR Windows
+checks, but original push Windows job `112045140196` fails pooled aggregate
+recovery RPC p95: 170.268 ms >150 ms for peer 0, with 48/48 completed and
+zero errors. All scheduler wrappers were downstream and never reached.
+Exact wait/scheduler cause and original API priority are **NOT MEASURED**;
+successful same-source checks do not replace the failed original. Only that
+second logical command is now routed through the existing bounded trace and
+verified Normal launcher, preserving flags, clocks, gates and one execution.
+[Raw failed evidence](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#pooled-aggregate-hosted-timing-failure-before-scheduler-capture-2026-10-05)
+remains historical failure. Focused helper and new original hosted checks,
+then fresh resource preflight and Local32, remain required. **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY; Node32 not run; no 3M or merge**.
+
 2026-10-05 qualified Name candidate `b9f8ded29` reaches 32 actual clients
 in fresh run `1072bd82-e3b6-4956-b919-778caa5dcaab` and still fails recovery.
 All 32 cursors are below fence 23,246 at the unchanged 35,112,557-us bound;

@@ -65,6 +65,8 @@ class SchedulerTraceTests(unittest.TestCase):
         Metadata, _ = self.Fixture()
         Metadata.update(WorkloadCase=Case, ChildExitCode=Exit, DecodedRows=4,
                         WorkloadArguments=['--reliable-workload-32' if Case == 'Aggregate32' else '--reliable-workload-32-structural'])
+        if Case == 'PooledAggregate32Structural':
+            Metadata['WorkloadArguments'].insert(0, '--pooled')
         Lines = []
         for Index, (Name, Begin, End) in enumerate((('aggregate-baseline', 10, 200), ('aggregate-overload', 300, 600),
                                  ('aggregate-recovery', 700, 900))):
@@ -127,7 +129,37 @@ class SchedulerTraceTests(unittest.TestCase):
                         {'Qpc': 998, 'Opcode': 50, 'Version': 2, 'TargetTid': 43},
                         {'Qpc': 999, 'Opcode': 2, 'Version': 3, 'TargetTid': 43, 'TargetPid': 42}):
                 Writer.writerow(Row)
-        return Metadata, '\n'.join(Lines), File
+        Log = '\n'.join(Lines)
+        if Case == 'PooledAggregate32Structural':
+            Log = Log.replace('profile=FULL_RESERVATION', 'profile=POOLED_SERVICE')
+        return Metadata, Log, File
+
+    def test_pooled_fixed_case_retains_exact_arguments_profile_and_failure(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.AggregateFixture(Path(Directory), Exit=17, Case='PooledAggregate32Structural')
+            Result = VALIDATOR.Validate(Metadata, Log, 'PooledAggregate32Structural', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+            self.assertEqual(Result['FixedWorkloadArgument'], '--pooled --reliable-workload-32-structural')
+            self.assertEqual(Result['CompleteRpcRecords'], 576)
+            self.assertEqual(Metadata['ChildExitCode'], 17)
+            self.assertEqual(Result['CausalVerdict'], 'NOT_CLAIMED')
+            for Arguments in (['--reliable-workload-32-structural'], ['--pooled', '--reliable-workload-32'],
+                              ['--reliable-workload-32-structural', '--pooled'], ['--pooled', '--reliable-workload-32-structural', '--extra']):
+                with self.subTest(Arguments=Arguments):
+                    self.assertEqual(VALIDATOR.Validate(dict(Metadata, WorkloadArguments=Arguments), Log,
+                        'PooledAggregate32Structural', File)['State'], 'INCOMPLETE')
+            for Changed in (Log.replace('profile=POOLED_SERVICE', 'profile=FULL_RESERVATION'),
+                            Log.replace('profile=POOLED_SERVICE', 'profile=FULL_RESERVATION', 1)):
+                self.assertEqual(VALIDATOR.Validate(Metadata, Changed, 'PooledAggregate32Structural', File)['State'], 'INCOMPLETE')
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log, 'Aggregate32Structural', File)['State'], 'INCOMPLETE')
+
+    def test_unpooled_fixed_case_rejects_pooled_substitution(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.AggregateFixture(Path(Directory))
+            self.assertEqual(VALIDATOR.Validate(dict(Metadata, WorkloadArguments=['--pooled', '--reliable-workload-32-structural']),
+                Log, 'Aggregate32Structural', File)['State'], 'INCOMPLETE')
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log.replace('profile=FULL_RESERVATION', 'profile=POOLED_SERVICE'),
+                'Aggregate32Structural', File)['State'], 'INCOMPLETE')
 
     def test_aggregate_fixed_case_raw_coverage_and_original_failure(self):
         with tempfile.TemporaryDirectory() as Directory:
@@ -326,19 +358,20 @@ class SchedulerTraceTests(unittest.TestCase):
         Start = Workflow.index('      - name: Run qualified reliable workload timing in Release')
         End = Workflow.index('      - name:', Start + 20)
         Commands = Workflow[Start:End]
-        for Flags in ('--pooled --reliable-workload\n', '--pooled --reliable-workload-32-structural\n',
+        for Flags in ('--pooled --reliable-workload\n', 'SchedulerTrace.ps1 -Case PooledAggregate32Structural\n',
                       'SchedulerTrace.ps1 -Case Full\n', 'SchedulerTrace.ps1 -Case Aggregate32\n'):
             self.assertEqual(Commands.count(Flags), 1)
         self.assertEqual(Commands.count('SchedulerTrace.ps1 -Case Aggregate32Structural'), 1)
         self.assertEqual(Commands.count('if not %errorlevel%==0 exit /b %errorlevel%'), 5)
         self.assertNotIn('if errorlevel 1', Commands)
         Positions = [Commands.index(Flags) for Flags in ('--pooled --reliable-workload\n',
-            '--pooled --reliable-workload-32-structural\n', 'SchedulerTrace.ps1 -Case Full\n',
+            'SchedulerTrace.ps1 -Case PooledAggregate32Structural\n', 'SchedulerTrace.ps1 -Case Full\n',
             'SchedulerTrace.ps1 -Case Aggregate32\n', 'SchedulerTrace.ps1 -Case Aggregate32Structural')]
         self.assertEqual(Positions, sorted(Positions))
         self.assertNotIn('tests.exe --reliable-workload-32-structural', Commands)
         self.assertNotIn('tests.exe --reliable-workload\n', Commands)
         self.assertNotIn('tests.exe --reliable-workload-32\n', Commands)
+        self.assertNotIn('tests.exe --pooled --reliable-workload-32-structural', Commands)
         self.assertIn('if not "%SCHEDULER_TRACE%"=="true" (\n            pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Full\n          )', Commands)
         Manual = Workflow[Workflow.index('      - name: Trace one FULL'):Workflow.index('      - name: Trace fixed FULL')]
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.scheduler_trace", Manual)
@@ -354,6 +387,7 @@ class SchedulerTraceTests(unittest.TestCase):
         self.assertIn('            build-ci/scheduler-trace/\n', Upload)
         self.assertIn('            build-ci/scheduler-trace-aggregate32-structural/', Upload)
         self.assertIn('            build-ci/scheduler-trace-aggregate32/\n', Upload)
+        self.assertIn('            build-ci/scheduler-trace-pooled-aggregate32-structural/\n', Upload)
         self.assertEqual(Upload.count('            build-ci/scheduler-trace.exe\n'), 1)
         self.assertEqual(Upload.count('            build-ci/gargantuan_game_session_real_transport_tests.exe\n'), 1)
 
@@ -365,7 +399,7 @@ class SchedulerTraceTests(unittest.TestCase):
         Body = Block[Block.index('        run: |\n') + len('        run: |\n'):]
         Commands = '\n'.join(Line[10:] for Line in Body.splitlines())
         Replacements = (
-            ('build-ci\\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload-32-structural', 'POOLED32'),
+            ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case PooledAggregate32Structural', 'POOLED32'),
             ('build-ci\\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload', 'POOLED'),
             ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Full', 'FULL'),
             ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Aggregate32\n', 'UNPOOLED32\n'),
@@ -374,7 +408,7 @@ class SchedulerTraceTests(unittest.TestCase):
             self.assertEqual(Commands.count(Command), 1)
             Commands = Commands.replace(Command, 'call :Record ' + Label)
         for Manual in (False, True):
-            for Code, FailedCase in ((Code, Case) for Code in (0, 17, -1073740791) for Case in ('FULL', 'UNPOOLED32')):
+            for Code, FailedCase in ((Code, Case) for Code in (0, 17, -1073740791) for Case in ('POOLED32', 'FULL', 'UNPOOLED32')):
                 with tempfile.TemporaryDirectory() as Directory:
                     Root = Path(Directory)
                     Prelude = '@echo off\nset "SCHEDULER_TRACE=' + str(Manual).lower() + '"\n'
@@ -487,7 +521,8 @@ class SchedulerTraceTests(unittest.TestCase):
 
     def test_wrapper_rejects_arbitrary_case_and_pair_case_combination(self):
         for Arguments in (['-Case', 'arbitrary'], ['-Pair', '-Case', 'Full'],
-                          ['-Pair', '-Case', 'Aggregate32Structural'], ['-Pair', '-Case', 'Aggregate32']):
+                          ['-Pair', '-Case', 'Aggregate32Structural'], ['-Pair', '-Case', 'Aggregate32'],
+                          ['-Pair', '-Case', 'PooledAggregate32Structural']):
             Result = subprocess.run(['pwsh', '-NoProfile', '-File', str(ROOT / 'tools/ci/SchedulerTrace.ps1'), *Arguments],
                 text=True, capture_output=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self.assertNotEqual(Result.returncode, 0)
@@ -821,7 +856,7 @@ class SchedulerTraceTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("SCHEDULER_TRACE_TEST_HELPER"), "native compile-only helper not supplied")
     def test_native_rejects_reserved_guid_before_any_trace(self):
-        for Command in ('--run', '--run-ack-stats', '--run-aggregate32', '--run-aggregate32-structural'):
+        for Command in ('--run', '--run-ack-stats', '--run-aggregate32', '--run-aggregate32-structural', '--run-pooled-aggregate32-structural'):
             Result = subprocess.run(
                 [os.environ["SCHEDULER_TRACE_TEST_HELPER"], Command, str(ROOT), "00000000-0000-0000-0000-000000000000"],
                 text=True, capture_output=True, timeout=30,
@@ -834,7 +869,8 @@ class SchedulerTraceTests(unittest.TestCase):
     def test_native_fixed_case_rejects_arbitrary_flags_before_trace(self):
         for Arguments in (['--run-arbitrary', str(ROOT), '11111111-2222-4333-8444-555555555555'],
                           ['--run-aggregate32-structural', str(ROOT), '11111111-2222-4333-8444-555555555555', '--pooled'],
-                          ['--run-aggregate32', str(ROOT), '11111111-2222-4333-8444-555555555555', '--pooled']):
+                          ['--run-aggregate32', str(ROOT), '11111111-2222-4333-8444-555555555555', '--pooled'],
+                          ['--run-pooled-aggregate32-structural', str(ROOT), '11111111-2222-4333-8444-555555555555', '--extra']):
             Result = subprocess.run([os.environ['SCHEDULER_TRACE_TEST_HELPER'], *Arguments], text=True,
                 capture_output=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self.assertEqual(Result.returncode, 125)

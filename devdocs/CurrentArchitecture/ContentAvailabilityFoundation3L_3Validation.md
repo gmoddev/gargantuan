@@ -6,6 +6,23 @@ last_verified: 2026-10-05
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Pooled hosted recovery timing failure before capture (2026-10-05)
+
+The [retained hosted failure](PooledPhysicalQualification3L.md#pooled-aggregate-hosted-timing-failure-before-scheduler-capture-2026-10-05)
+records original `09aa075ad` push Windows job `112045140196`: native 96/96
+and Python 372/372 pass, then the second direct pooled 32-peer workload fails
+recovery peer 0's RPC p95, 170.268 ms >150 ms. Its downstream Linux is skipped.
+All requests complete, but this remains a required timing failure; successful
+same-source PR/package checks cannot substitute for it. Exact wait/scheduler
+attribution and original API priority are **NOT MEASURED**.
+
+The smallest evidence correction routes only that command through the existing
+bounded scheduler tracer and verified Normal launcher. Workload, invocation
+count, order, clocks and all production/F1/admission/latency bounds remain
+unchanged. Focused helper regression and new original hosted checks remain
+prerequisites to fresh Local32. No new provider measurement, Node32 or final
+acceptance is inferred. **KI-006 OPEN; 3L B — PARTIALLY READY; no 3M or merge**.
+
 ## Qualified Name candidate: fresh Local32 recovery FAIL (2026-10-05)
 
 The [fresh receipt](PooledPhysicalQualification3L.md#corrected-name-candidate-actual-local32-still-fails-recovery-2026-10-05)

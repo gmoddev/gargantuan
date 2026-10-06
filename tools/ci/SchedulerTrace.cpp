@@ -36,12 +36,13 @@ constexpr GUID ThreadProvider{0x3d6fa8d1, 0xfe05, 0x11d0, {0x9d, 0xda, 0x00, 0xc
 constexpr GUID KernelControl{0x9e814aad, 0x3204, 0x11d2, {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
 constexpr GUID NullGuid{};
 constexpr char CsvHeader[] = "Qpc,Processor,Opcode,Version,HeaderPid,HeaderTid,NewTid,OldTid,TargetTid,TargetPid,OldWaitReason,OldWaitMode,OldState,ReadyAdjustReason,ReadyAdjustIncrement,ReadyFlags\n";
-enum class FixedCase { Full, AckStats, Aggregate32, Aggregate32Structural };
+enum class FixedCase { Full, AckStats, Aggregate32, Aggregate32Structural, PooledAggregate32Structural };
 struct CaseSpec {
     const wchar_t *Binary;
     const wchar_t *Output;
     const wchar_t *Argument;
     const char *Name;
+    bool Pooled = false;
 };
 CaseSpec GetCaseSpec(FixedCase Case) {
     switch (Case) {
@@ -53,6 +54,8 @@ CaseSpec GetCaseSpec(FixedCase Case) {
         return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace-aggregate32", L"--reliable-workload-32", "Aggregate32"};
     case FixedCase::Aggregate32Structural:
         return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace-aggregate32-structural", L"--reliable-workload-32-structural", "Aggregate32Structural"};
+    case FixedCase::PooledAggregate32Structural:
+        return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace-pooled-aggregate32-structural", L"--reliable-workload-32-structural", "PooledAggregate32Structural", true};
     }
     throw std::runtime_error("unsupported fixed workload case");
 }
@@ -364,6 +367,11 @@ int DecodeOnly(const fs::path &Input, const fs::path &Destination, DWORD MainThr
     return Complete ? 0 : 125;
 }
 int SelfTest() {
+    const auto Pooled = GetCaseSpec(FixedCase::PooledAggregate32Structural);
+    if (std::wstring(Pooled.Binary) != L"build-ci/gargantuan_game_session_real_transport_tests.exe" ||
+        std::wstring(Pooled.Output) != L"build-ci/scheduler-trace-pooled-aggregate32-structural" ||
+        std::wstring(Pooled.Argument) != L"--reliable-workload-32-structural" ||
+        std::string(Pooled.Name) != "PooledAggregate32Structural" || !Pooled.Pooled) return 13;
     const auto Aggregate = GetCaseSpec(FixedCase::Aggregate32Structural);
     if (std::wstring(Aggregate.Binary) != L"build-ci/gargantuan_game_session_real_transport_tests.exe" ||
         std::wstring(Aggregate.Output) != L"build-ci/scheduler-trace-aggregate32-structural" ||
@@ -620,7 +628,7 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
         std::ofstream Failure(Output / "metadata.json", std::ios::binary);
         Failure << "{\"Format\":\"GargantuanSchedulerTrace\",\"Version\":1,\"DiagnosticComplete\":false,"
             << "\"WorkloadCase\":" << JsonString(Selection.Name)
-            << ",\"WorkloadArguments\":[" << JsonString(Utf8(Selection.Argument)) << "],"
+            << ",\"WorkloadArguments\":[" << (Selection.Pooled ? "\"--pooled\"," : "") << JsonString(Utf8(Selection.Argument)) << "],"
             << "\"State\":\"CAPTURE_UNAVAILABLE\",\"ChildLaunchAttempts\":0,\"ChildResumed\":false,"
             << "\"CausalVerdict\":\"NOT_CLAIMED\",\"StartStatus\":" << Recording.StartStatus
             << ",\"SessionGuid\":" << JsonString(Utf8(GuidText)) << ",\"EtlPath\":" << JsonString(Utf8(Etl.wstring())) << "}\n";
@@ -644,7 +652,7 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
     Startup.StartupInfo.hStdInput = Input.Value;
     Startup.lpAttributeList = Attributes;
     PROCESS_INFORMATION Child{};
-    std::wstring Command = L"\"" + Binary.wstring() + L"\" " + Selection.Argument;
+    std::wstring Command = L"\"" + Binary.wstring() + L"\" " + (Selection.Pooled ? L"--pooled " : L"") + Selection.Argument;
     const BOOL Created = CreateProcessW(Binary.c_str(), Command.data(), nullptr, nullptr, TRUE,
         WorkloadCreationFlags, nullptr, Root.c_str(),
         &Startup.StartupInfo, &Child);
@@ -755,7 +763,7 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
     std::ofstream Metadata(Output / "metadata.json", std::ios::binary);
     Metadata << "{\n\"Format\":\"GargantuanSchedulerTrace\",\"Version\":1,\n"
         << "\"WorkloadCase\":" << JsonString(Selection.Name)
-        << ",\"WorkloadArguments\":[" << JsonString(Utf8(Selection.Argument)) << "],\n"
+        << ",\"WorkloadArguments\":[" << (Selection.Pooled ? "\"--pooled\"," : "") << JsonString(Utf8(Selection.Argument)) << "],\n"
         << "\"SessionName\":" << JsonString(Utf8(SessionName)) << ",\"SessionGuid\":" << JsonString(Utf8(GuidText))
         << ",\"EtlPath\":" << JsonString(Utf8(Etl.wstring())) << ",\n"
         << "\"DiagnosticComplete\":" << (DiagnosticComplete ? "true" : "false") << ",\"CausalVerdict\":\"NOT_CLAIMED\",\n"
@@ -813,6 +821,8 @@ int wmain(int Count, wchar_t **Args) {
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::Aggregate32);
         if (Count == 4 && std::wstring(Args[1]) == L"--run-aggregate32-structural")
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::Aggregate32Structural);
+        if (Count == 4 && std::wstring(Args[1]) == L"--run-pooled-aggregate32-structural")
+            return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::PooledAggregate32Structural);
         if (Count == 4 && std::wstring(Args[1]) == L"--cleanup")
             return Cleanup(ParseGuid(Args[2]), Args[3]) == ERROR_SUCCESS ? 0 : 125;
         std::cerr << "[Qualification:SchedulerTrace] invalid arguments\n";

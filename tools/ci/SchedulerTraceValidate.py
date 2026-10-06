@@ -55,7 +55,8 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
             Require(Fields["native_valid"] == 1 and Fields["pid"] == Metadata.get("ChildPid") and
                     Fields["native_tid"] == Metadata.get("ChildMainTid") and Fields["qpc_frequency"] == Frequency,
                     "fixture native identity/clock mismatch")
-            Require(Fields.get("profile") == ("ACK_STATS" if Case == "AckStats" else "FULL_RESERVATION"), "unexpected fixture profile")
+            Require(Fields.get("profile") == ("ACK_STATS" if Case == "AckStats" else
+                    "POOLED_SERVICE" if Case == "PooledAggregate32Structural" else "FULL_RESERVATION"), "unexpected fixture profile")
             Require(Metadata["BeforeChildResumeQpc"] <= Fields["qpc_before"] <= Fields["qpc_after"] <= Metadata["AfterChildExitQpc"], "fixture anchor outside child interval")
             Require(Metadata["MainFirstQpc"] <= Fields["qpc_before"] <= Fields["qpc_after"] <= Metadata["MainLastQpc"], "target thread events do not bracket fixture anchor")
             Anchors.append(Fields)
@@ -90,9 +91,11 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
             Extra.update(ValidateFullEvidence(Metadata, Stdout, ByCase))
         except (OSError, ValueError, KeyError, TypeError, UnicodeError) as Error:
             Errors.append('Full coverage: ' + str(Error))
-    if Case in ("Aggregate32", "Aggregate32Structural"):
+    if Case in ("Aggregate32", "Aggregate32Structural", "PooledAggregate32Structural"):
         try:
             Argument = '--reliable-workload-32' if Case == 'Aggregate32' else '--reliable-workload-32-structural'
+            Arguments = ['--pooled', Argument] if Case == 'PooledAggregate32Structural' else [Argument]
+            Profile = 'POOLED_SERVICE' if Case == 'PooledAggregate32Structural' else 'FULL_RESERVATION'
             Expected = ("aggregate-baseline", "aggregate-overload", "aggregate-recovery")
             Require(list(ByCase) == list(Expected[:len(ByCase)]) and 0 < len(ByCase) <= 3,
                     "aggregate phases missing, unexpected or out of order")
@@ -109,10 +112,10 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
             Require(type(Metadata.get("ChildExitCode")) is int and
                     (Metadata["ChildExitCode"] != 0 or tuple(ByCase) == Expected),
                     "successful aggregate workload must retain all three phases")
-            Require(Metadata.get("WorkloadArguments") == [Argument],
+            Require(Metadata.get("WorkloadArguments") == Arguments,
                     "aggregate workload arguments differ from fixed case")
-            Extra = ValidateAggregateCsv(Metadata, CsvPath, Argument)
-            Extra.update(ValidateAggregateEvidence(Metadata, Stdout, ByCase))
+            Extra = ValidateAggregateCsv(Metadata, CsvPath, ' '.join(Arguments))
+            Extra.update(ValidateAggregateEvidence(Metadata, Stdout, ByCase, Profile))
         except (OSError, ValueError, KeyError, TypeError, UnicodeError) as Error:
             Errors.append("aggregate coverage: " + str(Error))
     if Case == "AckStats":
@@ -366,7 +369,7 @@ def ValidateFullEvidence(Metadata, Stdout, Arms):
             'ObservationBoundary': 'POST_END_ANCHOR_NO_LATENCY_SUBTRACTION', 'UnknownResourceFields': sorted(Unknown)}
 
 
-def ValidateAggregateEvidence(Metadata, Stdout, Arms):
+def ValidateAggregateEvidence(Metadata, Stdout, Arms, Profile='FULL_RESERVATION'):
     """Check bounded fixture evidence completeness, never latency or causation."""
     def Need(Value, Message):
         if not Value:
@@ -407,7 +410,7 @@ def ValidateAggregateEvidence(Metadata, Stdout, Arms):
                 # Earlier single-peer diagnostic cases have separate ownership.
                 Need(not str(Name).startswith('aggregate-'), 'unexpected aggregate evidence case')
                 continue
-            Need(Name == Current and Row.get('profile') == 'FULL_RESERVATION' and
+            Need(Name == Current and Row.get('profile') == Profile and
                  Row.get('phase_index') == Arms[Name][0]['phase_index'], 'aggregate evidence phase/profile mismatch')
         Rows[Name].setdefault(Label, []).append(Row)
         Limit = 32 * 208 if Label in ('RemoteSpan', 'RemoteResourceSpan') else 64 * 99 + 99
@@ -681,7 +684,7 @@ def ValidateStats(Metadata, Stdout, CsvPath, Arms):
 def Main():
     Parser = argparse.ArgumentParser()
     Parser.add_argument("--root", type=Path, required=True)
-    Parser.add_argument("--case", choices=("Full", "AckStats", "Aggregate32", "Aggregate32Structural"), default="Full")
+    Parser.add_argument("--case", choices=("Full", "AckStats", "Aggregate32", "Aggregate32Structural", "PooledAggregate32Structural"), default="Full")
     Args = Parser.parse_args()
     Result = {"State": "INCOMPLETE", "CausalVerdict": "NOT_CLAIMED"}
     try:

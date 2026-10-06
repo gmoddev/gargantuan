@@ -6,6 +6,42 @@ last_verified: 2026-10-05
 
 # Foundation 3L pooled physical qualification attempt
 
+## Pooled aggregate hosted timing failure before scheduler capture (2026-10-05)
+
+Source `09aa075ad420c1ff1c647a8cf8a207cdb18e00e7` passes the four focused
+native regressions, both original GNS jobs and the PR Windows checks. Its
+original push `37393893089`, Windows job `112045140196`, nevertheless fails
+the second direct command, `--pooled --reliable-workload-32-structural`.
+At `2026-10-06T01:19:46.6824650Z`, aggregate-recovery peer 0's RPC p95 is
+170.268 ms against the unchanged 150-ms bound. All 48 requests complete with
+zero errors; p99/max are 178.411 ms. Native JUnit is 96/96 with zero
+failures/errors/skips and Python is 372/372. Push Linux is skipped. Successful
+PR or package-dispatch results do not replace this failed required original.
+
+The retained raw log SHA-256 is
+`4513c708b20a8cd1ae1002d322f5033f6401a11b85f6f1caac137510f8bc425c`;
+original diagnostic ZIP SHA-256 is
+`6cca2c70f10c086eebad8837ad717c7e13952f005a32a760ad9a3f8e2ecbc48b`.
+RPC 24 and RPCs 25–28 exceed the p95 bound. Their wall/CPU observations
+support an off-CPU or blocking contribution, but cannot distinguish native
+lock waits from host descheduling. Larger intervening tick stalls do not
+directly explain those request intervals. All scheduler wrappers were later
+commands and never ran: failing-window scheduler evidence and the original
+child's API priority are **NOT MEASURED**. No production cause is inferred.
+
+Only that second command now uses the existing bounded scheduler controller
+and verified Normal child launch. Its pooled flags, workload, logical order,
+single execution, original wall clocks and acceptance gates are unchanged.
+No new verifier or replay layer is introduced. The helper builds with
+MSVC `/W4 /WX`; 36 normal and 36 optimized focused noncapture checks pass
+with zero skips. The final helper/compiler process census is empty. The
+driver's earlier nonzero status from matching its SSH ancestor is retained;
+it does not replace the measured test exits or final process census.
+New original hosted qualification precedes another actual Local32 measurement;
+the failed job is preserved and not rerun. No fresh physical run is consumed
+at this checkpoint. Retained F1 PASS remains valid; **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY; Node32 not run; no 3M or merge**.
+
 ## Corrected Name candidate: actual Local32 still fails recovery (2026-10-05)
 
 Candidate `b9f8ded29dcd3e9b1be805f5e76b03e901c9c162` passes all six

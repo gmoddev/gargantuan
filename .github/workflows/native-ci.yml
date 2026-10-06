@@ -249,7 +249,7 @@ jobs:
         run: |
           build-ci\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload
           if not %errorlevel%==0 exit /b %errorlevel%
-          build-ci\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload-32-structural
+          pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case PooledAggregate32Structural
           if not %errorlevel%==0 exit /b %errorlevel%
           rem Explicit diagnostics already ran FULL once before CTest; never repeat it.
           if not "%SCHEDULER_TRACE%"=="true" (
@@ -325,6 +325,7 @@ jobs:
             build-ci/scheduler-trace/
             build-ci/scheduler-trace-ack-stats/
             build-ci/scheduler-trace-aggregate32-structural/
+            build-ci/scheduler-trace-pooled-aggregate32-structural/
             build-ci/scheduler-trace-aggregate32/
             build-ci/scheduler-trace.exe
             build-ci/gargantuan_game_session_real_transport_tests.exe

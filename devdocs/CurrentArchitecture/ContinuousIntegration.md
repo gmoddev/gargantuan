@@ -216,7 +216,9 @@ CTest/tooling matrix and all five unchanged standalone workloads. The fixed
 `Aggregate32Structural` wraps the fifth `--reliable-workload-32-structural`
 invocation, each exactly once in its original logical order. Their owned bounded
 ETL, decoded events, child logs, metadata and cleanup evidence are always
-retained when reached. Commands one and two remain direct; all five
+retained when reached. `PooledAggregate32Structural` now wraps the second
+`--pooled --reliable-workload-32-structural` invocation with the same bounded
+controller. Only the first pooled invocation remains direct; all five
 logical invocations, dependent Linux and GNS gates
 remain mandatory. Helper compilation and noncapture self-tests precede this
 qualification. Original child failure remains failure; capture, loss, clock
@@ -231,7 +233,11 @@ All five normal standalone guards reject any nonzero status, including a negativ
 native crash. Helper tests are a distinct mandatory suite, independently checked
 from the existing physical-control/evidence tooling suites. The seven Windows
 tooling suite counts are 12, 21, 4, 1, 265, 32 and 3 (**338 total**); the separate
-scheduler helper suite now contains **34**, for a combined inventory of **372**.
+scheduler helper suite now contains **36**, for a combined inventory of **374**.
+Original `09aa075ad` ran 34 helper and 338 other Python checks (372 total)
+before its second direct pooled command failed recovery peer 0's RPC p95.
+The two new helper cases bind the pooled command and reject substitutions;
+they add no workload invocation or latency allowance.
 Original `d66444f3` ran 33 helper and 338 other Python checks (371 total) before
 its separate aggregate RPC timing failure. The added helper test covers the
 fourth command's exact fixed-case mapping and substitution denials.
@@ -348,7 +354,13 @@ different policy prevents resume, preserves status 125 and reaps the owned
 process tree. Requested flags, controller class, actual child class and main
 relative priority, query status and pre-resume verification are retained in the
 early child result, final metadata and wrapper. The current-source offline
-validator requires this measured policy. This includes the fixed fourth
+validator requires this measured policy. This includes the fixed second
+`PooledAggregate32Structural` command after original `09aa075ad` push timing
+failed before any scheduler wrapper was reached. Its original child's API
+priority and precise scheduling/wait cause are **NOT MEASURED**. The raw timing
+failure remains failed; this extension closes the missing observation and
+ordinary-launch precondition, without claiming that priority caused it.
+It also includes the fixed fourth
 `Aggregate32` command after original `d66444f3` push timing failed without a
 failing-window trace. Its previous direct child's actual priority is
 **NOT MEASURED**; the extension does not establish priority as the old cause.
