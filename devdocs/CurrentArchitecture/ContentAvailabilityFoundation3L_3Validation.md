@@ -6,6 +6,33 @@ last_verified: 2026-10-05
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Qualified Name candidate: fresh Local32 recovery FAIL (2026-10-05)
+
+The [fresh receipt](PooledPhysicalQualification3L.md#corrected-name-candidate-actual-local32-still-fails-recovery-2026-10-05)
+records native/package/tooling `b9f8ded29`, run
+`1072bd82-e3b6-4956-b919-778caa5dcaab`, after all six original hosted jobs
+and the official package dispatch pass. Fresh preflight, stage imports,
+capture configuration and control barrier pass; 32 actual clients reach
+readiness. All 32 source cursors remain below fence 23,246 at the unchanged
+35,112,557-us bound. Reference sealing at 65,080,874 us delays the verdict
+but does not explain away that measured failure. Main recovery work still
+averages 55.28 ms per completed tick. Exclusive reference-worker interference
+and stale-feedback deferral incidence are **NOT MEASURED**.
+
+The selected-prefix Name correction is qualified, but it does not establish
+recovery acceptance. Keep the original cessation clock, exact frozen work,
+admission, freshness and F1 constants. The next bounded correction separates
+live prefix measurement from reference replay and obtains current native
+feedback before initial eligibility as well as after lengthy preparation.
+Focused worker regression passes all four selected CTest entries, including
+the real-GNS old-path failure, corrected four-grant admission and unavailable
+refresh denial, exact retirement and frozen-reference isolation. Existing
+recovery parser and whitespace checks pass. Current-source hosted checks and
+another fresh actual Local32 measurement remain required. Failed evidence and
+successful run-owned cleanup are retained; Node32 and final acceptance remain
+outstanding.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M or merge.**
+
 ## Actual Local32 recovery measurement (2026-10-05)
 
 The [actual Local32 receipt](PooledPhysicalQualification3L.md#actual-local32-recovery-convergence-failure-2026-10-05)

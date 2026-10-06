@@ -860,9 +860,9 @@ namespace gargantuan::host {
 								RecoveryRecords[OverloadCase] = std::make_unique<detail::FarmRecoveryEvidence>(std::move(*Snapshot));
 								RecoveryEvidence = RecoveryRecords[OverloadCase].get();
 								QuoteFailure = RecoveryEvidence->Failure();
-								if (QuoteFailure.empty())
-									QuoteWorker = std::make_unique<detail::FrozenRecoveryQuote>(
-										std::move(CessationQuote->Replication), CessationQuote->MaximumFrameBytes);
+								// Retain the immutable t0 reference without replaying it alongside
+								// measured live service. The causal cut does not depend on the
+								// reference; start the same bounded oracle after recording it.
 							}
 						}
 					}
@@ -934,8 +934,14 @@ namespace gargantuan::host {
 				const auto ObservedAt = std::chrono::steady_clock::now();
 				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 					ObservedAt - OverloadCeased).count();
-				if (!RecoveryConvergedMicroseconds && RecoveryEvidence->Converged())
+				if (!RecoveryConvergedMicroseconds && RecoveryEvidence->Converged()) {
 					RecoveryConvergedMicroseconds = static_cast<std::uint64_t>(Elapsed);
+					QuoteWorker = std::make_unique<detail::FrozenRecoveryQuote>(
+						std::move(CessationQuote->Replication), CessationQuote->MaximumFrameBytes);
+					std::cerr << "[Qualification:Recovery] event=quote_start run=" << RunId
+						<< " case=" << CaseName << " prefix_converged_us=" << RecoveryConvergedMicroseconds
+						<< " tick=" << Tick << '\n';
+				}
 				// The binary tick record retains every server step. Keep textual
 				// recovery samples bounded when a large exact quote spans many ticks,
 				// while always recording the two acceptance observation points.
@@ -971,11 +977,13 @@ namespace gargantuan::host {
 					<< " quote_encode_retries=" << LastQuoteEncodeRetries
 					<< " quote_advance_attempted=" << LastQuoteAdvanceAttempted
 					<< " quote_advance_frame=" << LastQuoteAdvanceProducedFrame
+					<< " quote_started=" << static_cast<bool>(QuoteWorker)
 					<< " quote_complete=" << QuoteComplete << " quote_sealed=" << QuoteSealed
 					<< " quote_frames=" << QuotedFrameCount << " quote_audited=" << AuditedFrameCount
 					<< " quote_lag_records=" << QuoteLagRecords
 					<< " outstanding=" << Metrics.ReliableAdmission.OutstandingBytes
 					<< " active_grants=" << Metrics.ReliableAdmission.ActiveDrainGrants
+					<< " feedback_deferrals=" << Metrics.ReliableAdmission.FeedbackDeferrals
 					<< " scheduler_queued=" << Metrics.SchedulerQueuedReliableBytes
 					<< " native_queued=" << Metrics.NativeQueuedReliableBytes
 					<< " remote_dispatch_messages=" << Remote.QueuedDispatchMessages

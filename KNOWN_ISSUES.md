@@ -85,6 +85,21 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-05 qualified Name candidate `b9f8ded29` reaches 32 actual clients
+in fresh run `1072bd82-e3b6-4956-b919-778caa5dcaab` and still fails recovery.
+All 32 cursors are below fence 23,246 at the unchanged 35,112,557-us bound;
+reference sealing at 65,080,874 us only delays reporting. Completed Main
+recovery ticks average 55.28 ms. The reference worker's exclusive interference
+and stale-feedback incidence are **NOT MEASURED**. A narrow execution correction
+separates live convergence measurement from frozen replay and refreshes current
+native feedback before eligibility, preserving the original clock, exact work,
+50-ms freshness, admission, ACK/retirement and F1 semantics. That candidate
+passes four focused native CTest entries, including a real-GNS old-path
+failure and corrected admission/denial/conservation. New hosted CI is required
+before another actual Local32 run. [Failed evidence and cleanup](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#corrected-name-candidate-actual-local32-still-fails-recovery-2026-10-05)
+remain preserved. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; Node32 not
+run; no 3M.**
+
 2026-10-05 actual Local32 run `441c7f4c-870f-4e8f-92c9-66674adc86ff`
 reaches production on native `9ae8f68c2` after all six original tooling
 `999d3b0f` hosted jobs pass. It fails recovery convergence at the unchanged

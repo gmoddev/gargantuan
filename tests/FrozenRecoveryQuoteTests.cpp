@@ -83,6 +83,15 @@ void TestExactReplayAndIsolation() {
 	auto Threaded = Input.Capture();
 	// Neither oracle may see a live mutation after its captured source fence.
 	Input.Object->SetName("later-live-name-outside-the-captured-reference");
+	// The campaign retains its t0 snapshot until the live causal cut completes.
+	// Advance the real live producer before starting replay: accepted cursors,
+	// sequence and publication state must not mutate the detached reference.
+	for (const auto &[Connection, Limit] : Input.Limits) {
+		const auto Live = Input.Source->ProduceIncremental(Connection);
+		Require(Live.Frame && !Live.EncodedFrame.empty() && Live.Error.empty(),
+			"live production progresses while the captured oracle has not started");
+		(void)Limit;
+	}
 	std::vector<FrozenJournalQuoteStep> Expected;
 	for (std::size_t Step = 0; Step < 100; ++Step) {
 		auto Value = Serial->AdvanceFrozenJournalQuote(Input.Limits);

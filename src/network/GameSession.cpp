@@ -1610,32 +1610,52 @@ namespace gargantuan::network {
 				std::size_t GlobalConsumed = 0;
 				std::size_t GlobalJournalConsumed = 0;
 				bool MadeProgress = false;
+				auto RefreshStructuralService = [&](ConnectionId Connection, Peer &PeerValue, bool BeforeEligibility) {
+					if (!IsPooled()) return true;
+					// The old loop did not reconcile a just-submitted peer again until
+					// the next step. Preserve that behavior and its lifecycle timestamps;
+					// this refresh must not introduce another grant for that peer here.
+					if (BeforeEligibility && PeerValue.StructuralSubmittedThisStep) return true;
+					const auto Now = ServiceTime();
+					const auto &Previous = PeerValue.ReliableFeedback.Previous;
+					if (Previous && Previous->ObservedAtMicroseconds <= Now &&
+						Now - Previous->ObservedAtMicroseconds <= Configuration.ReliableService->Pooled.FeedbackFreshnessMicroseconds)
+						return true;
+					// Query native evidence, never retimestamp the earlier envelope.
+					// Relevance/planning or a preceding peer's encoding may age it before
+					// eligibility; this same reconciliation also protects acceptance.
+					const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
+					if (!Accepted) {
+						PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+							"[Network:PooledService] Acceptance accounting disappeared during preparation"}); return false;
+					}
+					const auto Sample = detail::ReliableServiceFeedbackAccess::Observe(*Transport, Connection);
+					const auto ObservedNow = ServiceTime();
+					const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, Sample,
+						ObservedNow, ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+					RecordCausalDelivery(Connection, PeerValue, Sample, Result.Valid);
+					RecordPooledObservation(Connection, *Accepted, Sample, Result, ObservedNow);
+					if (!Result.Valid || (Result.RetiredBytes &&
+						!RetireStructural(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
+						PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+							"[Network:PooledService] Native evidence failed during preparation"}); return false;
+					}
+					if (!ByteAdmission->RefreshService(Connection, detail::ReliableByteAdmission::ServiceObservation{
+						Result.ObservedAtMicroseconds, Result.Qualified, Result.Available, PeerValue.ReliableFeedback.OrdinaryDebt})) {
+						PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+							"[Network:PooledService] Structural service evidence could not refresh"}); return false;
+					}
+					if (!UpdateOrdinaryFunding()) {
+						PendingSessionFailure = DisconnectInfo{DisconnectReason::TransportFailure,
+							"Pooled ordinary funding became invalid"}; return false;
+					}
+					return true;
+				};
 				auto SubmitStructural =
 					[&](ConnectionId Connection, Peer &PeerValue, ReplicationProduceResult &Produced) {
 						std::optional<detail::ReliableByteAdmission::Reservation> Receipt;
 						if (ByteAdmission) {
-							if (IsPooled() && (!PeerValue.ReliableFeedback.Previous || ServiceTime() -
-								PeerValue.ReliableFeedback.Previous->ObservedAtMicroseconds > Configuration.ReliableService->Pooled.FeedbackFreshnessMicroseconds)) {
-								// Encoding and bounded retries may outlive a feedback window.
-								// Read current native evidence at the actual acceptance boundary.
-								const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
-								if (!Accepted) {
-									PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
-										"[Network:PooledService] Acceptance accounting disappeared during preparation"}); return false;
-								}
-								const auto Sample = detail::ReliableServiceFeedbackAccess::Observe(*Transport, Connection);
-								const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, Sample,
-									ServiceTime(), ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
-								RecordCausalDelivery(Connection, PeerValue, Sample, Result.Valid);
-								RecordPooledObservation(Connection, *Accepted, Sample, Result, ServiceTime());
-								if (!Result.Valid || (Result.RetiredBytes &&
-									!RetireStructural(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
-									PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
-										"[Network:PooledService] Native evidence failed during preparation"}); return false;
-								}
-								(void)ByteAdmission->RefreshService(Connection, detail::ReliableByteAdmission::ServiceObservation{
-									Result.ObservedAtMicroseconds, Result.Qualified, Result.Available, PeerValue.ReliableFeedback.OrdinaryDebt});
-							}
+							if (!RefreshStructuralService(Connection, PeerValue, false)) return false;
 							if (IsPooled()) {
 								// The encoded demand and its immediate eligibility check share
 								// one timestamp. Sampling twice can put eligibility before the
@@ -1778,6 +1798,7 @@ namespace gargantuan::network {
 					while (MadeProgress && GlobalConsumed < PassLimit) {
 						MadeProgress = false;
 						for (const auto Connection : StructuralConnections) {
+							if (PendingSessionFailure) { (void)DrainFailures(); return; }
 							auto Peer = Peers.find(Connection);
 							if (Peer == Peers.end() || PendingPeerFailures.contains(Connection)) continue;
 							if (Peer->second.ByteDeferredThisStep) continue;
@@ -1794,6 +1815,10 @@ namespace gargantuan::network {
 							if (ByteAdmission) {
 								if (!Replication->IsPlanningReady(Connection) && Replication->GetJournalLag(Connection) == 0) {
 									ByteAdmission->NoWork(Connection); continue;
+								}
+								if (!RefreshStructuralService(Connection, Peer->second, true)) {
+									if (PendingSessionFailure) { (void)DrainFailures(); return; }
+									continue;
 								}
 								if (IsPooled() && !UpdateOrdinaryFunding()) {
 									FailSession({DisconnectReason::TransportFailure, "Pooled ordinary funding became invalid"}); return;

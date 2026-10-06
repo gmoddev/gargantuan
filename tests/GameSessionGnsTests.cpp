@@ -12,14 +12,19 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "../src/host/server/FarmF1Evidence.hpp"
+#include "../src/network/GameSessionTestAccess.hpp"
+#include "../src/network/ReliableServiceFeedback.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 	using namespace gargantuan;
@@ -31,6 +36,7 @@ namespace {
 	bool QualificationAggregateStructural = false;
 	bool QualificationDiagnostic = false;
 	bool QualificationPooled = false;
+	bool QualificationFeedbackRefresh = false;
 
 	void Check(bool Condition, const char *Message) {
 		if (Condition) return;
@@ -60,7 +66,189 @@ namespace {
 			.ClientNonce = Role == GameSessionRole::Client ? 0x3dfeed1234ull : 0,
 		};
 		if (Profiled && Role == GameSessionRole::Server) Result.ReliableService = CandidateReliableService();
+		// This fixture measures feedback ordering on the offered step, independent
+		// of the normal six-tick relevance/catalog refresh cadence.
+		if (QualificationFeedbackRefresh && Role == GameSessionRole::Server) Result.Relevance.UpdateIntervalTicks = 1;
 		return Result;
+	}
+
+	// Delay one real native query, not the timestamp or contents it returns.
+	// Only armed after all 32 actual peers and their accepted debt are idle.
+	class DelayedFeedbackTransport final : public IGameTransport {
+		std::shared_ptr<IGameTransport> Delegate;
+		mutable std::size_t Remaining = 0;
+		bool Recording = false, Withhold = false;
+		bool EnableReliableServiceFeedback() override { return detail::ReliableServiceFeedbackAccess::Enable(*Delegate); }
+		bool ReleaseReliableServiceFeedback(ConnectionId Id) override { return detail::ReliableServiceFeedbackAccess::Release(*Delegate, Id); }
+		std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Id) const override {
+			if (!Recording) return detail::ReliableServiceFeedbackAccess::Observe(*Delegate, Id);
+			const bool Initial = Remaining != 0;
+			if (Initial && --Remaining == 0) {
+				std::this_thread::sleep_for(60ms);
+				++Delays;
+			}
+			auto Sample = detail::ReliableServiceFeedbackAccess::Observe(*Delegate, Id);
+			if (Initial) {
+				InitialQueries.emplace_back(Id, Sample);
+			} else {
+				++RefreshQueries;
+				if (Withhold) return {};
+				RefreshedQueries.emplace_back(Id, Sample);
+			}
+			return Sample;
+		}
+	  public:
+		mutable std::size_t Delays = 0, RefreshQueries = 0;
+		std::size_t StructuralSends = 0;
+		mutable std::vector<std::pair<ConnectionId, std::optional<detail::ReliableServiceFeedback>>> InitialQueries, RefreshedQueries;
+		explicit DelayedFeedbackTransport(std::shared_ptr<IGameTransport> Input) : Delegate(std::move(Input)) {}
+		TransportOperationResult Start(const TransportStartConfiguration &Input) override { return Delegate->Start(Input); }
+		TransportOperationResult Stop(DisconnectInfo Input) override { return Delegate->Stop(std::move(Input)); }
+		TransportOperationResult Disconnect(ConnectionId Id, DisconnectInfo Input) override { return Delegate->Disconnect(Id, std::move(Input)); }
+		TransportOperationResult Send(const NetworkMessageIntent &Input) override {
+			auto Result = Delegate->Send(Input);
+			if (Recording && Result.Succeeded() && detail::ReliableServiceFeedbackAccess::Token(Input)) ++StructuralSends;
+			return Result;
+		}
+		std::size_t PollEvents(std::span<TransportEvent> Output) override { return Delegate->PollEvents(Output); }
+		std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Id) const override { return Delegate->GetAvailableDatagramBytes(Id); }
+		std::optional<NetworkStatistics> GetStatistics(ConnectionId Id) const override { return Delegate->GetStatistics(Id); }
+		void Arm(bool Missing) {
+			Remaining = 32; Delays = RefreshQueries = StructuralSends = 0; InitialQueries.clear(); RefreshedQueries.clear();
+			Withhold = Missing; Recording = true;
+		}
+		void Disarm() { Recording = false; }
+	};
+
+	void TestPooledFeedbackRefresh(Engine &ServerRuntime, Engine &PrimaryRuntime, GameSession &Server,
+		GameSession &Primary, DelayedFeedbackTransport &Transport, std::uint16_t Port, std::uint64_t &Tick) {
+		struct Peer {
+			std::shared_ptr<GameNetworkingSocketsTransport> Transport;
+			std::unique_ptr<GameSession> Session;
+			std::unique_ptr<HeadlessRenderer> Renderer;
+			std::unique_ptr<Engine> Runtime;
+			~Peer() { if (Session) Session->Stop(); if (Runtime) Runtime->Destroy(); }
+		};
+		std::vector<std::unique_ptr<Peer>> Peers;
+		auto Step = [&] {
+			(void)Server.Poll(); (void)Primary.Poll();
+			PrimaryRuntime.Step(); ServerRuntime.Step();
+			Server.Step(Tick); Primary.Step(Tick);
+			for (auto &Value : Peers) {
+				(void)Value->Session->Poll();
+				if (!Value->Runtime && Value->Session->GetClientDataModel()) {
+					Value->Renderer = std::make_unique<HeadlessRenderer>(Vector2(32, 32));
+					Value->Runtime = std::make_unique<Engine>(Value->Session->GetClientDataModel(), Value->Renderer.get(),
+						std::function<void(std::string, std::string)>{},
+						EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+					Value->Runtime->ProcessService->Alive = true;
+					Check(Value->Session->AttachClientRuntime(*Value->Runtime), "feedback fixture peer attaches after production bootstrap");
+				}
+				if (Value->Runtime) Value->Runtime->Step();
+				Value->Session->Step(Tick);
+			}
+			++Tick;
+			std::this_thread::sleep_for(1ms);
+		};
+		const auto SetupDeadline = std::chrono::steady_clock::now() + 20s;
+		for (std::uint32_t Index = 1; Index < 32; ++Index) {
+			auto Value = std::make_unique<Peer>();
+			Value->Transport = std::make_shared<GameNetworkingSocketsTransport>();
+			auto Config = Configuration(GameSessionRole::Client, Port, false);
+			Config.ClientNonce += Index;
+			Value->Session = std::make_unique<GameSession>(Value->Transport, Config);
+			Check(Value->Session->Start().Succeeded(), "feedback fixture actual GNS peer starts");
+			Peers.push_back(std::move(Value));
+			while (Server.GetMetrics().ReadyPeers != Index + 1 && std::chrono::steady_clock::now() < SetupDeadline) Step();
+			Check(Server.GetMetrics().ReadyPeers == Index + 1, "feedback fixture reaches each actual Ready peer within its bound");
+			if (Failures) return;
+		}
+		auto Idle = [&] {
+			const auto M = Server.GetMetrics();
+			return M.ReadyPeers == 32 && M.JournalBacklogRecords == 0 && M.MaterializationBacklog == 0 &&
+				M.ReliableAdmission.AcceptedBytes == M.ReliableAdmission.VerifiedAttributedRetirement &&
+				M.ReliableAdmission.OutstandingBytes == 0 && M.ReliableAdmission.ActiveDrainGrants == 0 &&
+				M.ReliableAdmission.TerminalReleasedBytes == 0;
+		};
+		auto Drain = [&] {
+			const auto Deadline = std::chrono::steady_clock::now() + 5s;
+			do { Step(); } while (!Idle() && std::chrono::steady_clock::now() < Deadline);
+			Check(Idle() && Server.GetStatus() == GameSessionStatus::Listening,
+				"feedback fixture converges exact native ACK/retirement and source debt without terminal release");
+		};
+		Drain();
+		if (Failures) return;
+		auto Floor = ServerRuntime.DataModel->FindFirstChild("QualificationFloor", true);
+		Check(Floor && PrimaryRuntime.DataModel->FindFirstChild("QualificationFloor", true),
+			"feedback work targets the existing server and primary materialized Floor");
+		for (const auto &Value : Peers)
+			Check(Value->Runtime && Value->Runtime->DataModel->FindFirstChild("QualificationFloor", true),
+				"feedback work target is already materialized for every actual peer");
+		if (Failures || !Floor) return;
+		for (const bool Missing : {false, true}) {
+			const auto BeforeCursor = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId());
+			Check(Floor->ApplyAttributeMutation("FeedbackRefreshRegression", WireValue(Missing ? 2 : 1),
+				ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success,
+				"feedback regression offers one legitimate tiny current-state attribute to all peers");
+			const auto Committed = ChangeJournal::Get().Read(BeforeCursor, 1);
+			Check(Committed.Records.size() == 1 && Committed.Records.front().Object == Floor->GetObjectId() &&
+				std::holds_alternative<AttributeUpdatedChange>(Committed.Records.front().Payload),
+				"feedback work is an actual committed attribute on the materialized source object");
+			(void)Server.Poll();
+			ServerRuntime.Step();
+			const auto WorkTail = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId()).NextSequence;
+			std::size_t BackloggedPeers = 0;
+			for (const auto &Reader : detail::GameSessionTestAccess::GetJournalRequirements(Server)) {
+				if (Reader.Catalog) continue;
+				Check(Reader.Cursor.Scope == BeforeCursor.Scope && Reader.Cursor.NextSequence < WorkTail,
+					"each actual structural peer cursor is behind committed work before the delayed query sweep");
+				if (Reader.Cursor.Scope == BeforeCursor.Scope && Reader.Cursor.NextSequence < WorkTail) ++BackloggedPeers;
+			}
+			Check(BackloggedPeers == 32, "all 32 actual source readers require structural progress before eligibility");
+			if (Failures) return;
+			const auto Before = Server.GetMetrics().ReliableAdmission;
+			Transport.Arm(Missing);
+			Server.Step(Tick++);
+			Transport.Disarm();
+			Check(Server.GetStatus() == GameSessionStatus::Listening && Server.GetMetrics().ReadyPeers == 32,
+				"both delayed-query phases preserve the healthy actual 32-peer server");
+			const auto After = Server.GetMetrics().ReliableAdmission;
+			const auto At = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count());
+			std::size_t OldSamples = 0;
+			std::set<ConnectionId> InitialPeers;
+			for (const auto &[Id, Sample] : Transport.InitialQueries) {
+				Check(Sample && Sample->Connection == Id && Sample->CountersValid &&
+					Sample->State == ConnectionState::Connected && Sample->ObservedAtMicroseconds <= At,
+					"feedback regression retains unchanged generation-valid real native snapshots");
+				InitialPeers.insert(Id);
+				if (Sample && At - Sample->ObservedAtMicroseconds > 50'000) ++OldSamples;
+			}
+			Check(Transport.Delays == 1 && Transport.InitialQueries.size() == 32 && InitialPeers.size() == 32 && OldSamples >= 31,
+				"one bounded native query delay ages at least the first 31 envelope snapshots");
+			for (const auto &[Id, Sample] : Transport.RefreshedQueries) {
+				const auto Prior = std::ranges::find_if(Transport.InitialQueries, [&](const auto &Row) { return Row.first == Id; });
+				Check(Sample && Prior != Transport.InitialQueries.end() && Prior->second &&
+					Sample->ObservedAtMicroseconds > Prior->second->ObservedAtMicroseconds,
+					"eligibility refresh reads a later native snapshot instead of retimestamping cached data");
+			}
+			const auto Grants = Transport.StructuralSends;
+			std::cout << "[Network:PooledFeedbackRefresh] unavailable=" << Missing << " initial_old=" << OldSamples
+				<< " refresh_queries=" << Transport.RefreshQueries << " accepted_grants=" << Grants
+				<< " feedback_deferrals=" << After.FeedbackDeferrals - Before.FeedbackDeferrals << '\n';
+			Check(Transport.RefreshQueries >= 31, "actual GameSession refreshes stale evidence before first eligibility");
+			Check(Missing ? (Grants <= 1 && After.FeedbackDeferrals > Before.FeedbackDeferrals) :
+				(Grants >= 2 && Grants <= 4 && After.AcceptedBytes > Before.AcceptedBytes &&
+				 After.ActiveDrainGrants >= 2 && After.ActiveDrainGrants <= 4),
+				"native refresh restores real eligible service while unavailable feedback remains denied by unchanged admission");
+			Drain();
+			if (Failures) return;
+		}
+		const auto Native = Server.GetMetrics();
+		Check(Native.StructuralAcceptedFeedbackBytes == Native.StructuralFirstSentFeedbackBytes &&
+			Native.StructuralFirstSentFeedbackBytes == Native.StructuralAckedFeedbackBytes &&
+			Native.StructuralAckedFeedbackBytes == Native.ReliableAdmission.VerifiedAttributedRetirement,
+			"feedback ordering preserves unique native first-send, ACK and exact retirement conservation");
 	}
 }
 
@@ -72,6 +260,9 @@ int main(int ArgumentCount, char **Arguments) {
 	if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--pooled") {
 		QualificationPooled = true; --ArgumentCount; ++Arguments;
 	}
+	const bool FeedbackRefresh = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--pooled-feedback-refresh";
+	QualificationFeedbackRefresh = FeedbackRefresh;
+	if (FeedbackRefresh) { QualificationPooled = true; QualificationPeerCount = 32; }
 	QualificationDiagnostic = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ki008-attribution";
 	QualificationAggregateStructural = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload-32-structural";
 	QualificationAggregateStructural = QualificationAggregateStructural || QualificationDiagnostic;
@@ -79,9 +270,9 @@ int main(int ArgumentCount, char **Arguments) {
 	if (Aggregate) QualificationPeerCount = 32;
 	if (QualificationDiagnostic) QualificationPeerCount = DiagnosticDimension("KI008_PEERS", 32, 1, 32);
 	const bool Workload = Aggregate || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload");
-	const bool Profiled = Workload || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-profile");
+	const bool Profiled = FeedbackRefresh || Workload || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-profile");
 	if (ArgumentCount > 1 && !Profiled) {
-		std::cerr << "usage: gargantuan_game_session_real_transport_tests [--pooled] [--reliable-profile|--reliable-workload|--reliable-workload-32|--reliable-workload-32-structural|--ki008-attribution]\n";
+		std::cerr << "usage: gargantuan_game_session_real_transport_tests [--pooled] [--reliable-profile|--reliable-workload|--reliable-workload-32|--reliable-workload-32-structural|--ki008-attribution|--pooled-feedback-refresh]\n";
 		return 2;
 	}
 	if (Profiled) {
@@ -206,6 +397,7 @@ end)
 	ServerRuntime.ProcessService->Alive = true;
 
 	std::shared_ptr<GameNetworkingSocketsTransport> ServerTransport;
+	std::shared_ptr<DelayedFeedbackTransport> FeedbackTransport;
 	std::unique_ptr<host::detail::FarmF1Evidence> FiniteEvidence;
 	if (QualificationPooled) FiniteEvidence = std::make_unique<host::detail::FarmF1Evidence>();
 	std::unique_ptr<GameSession> Server;
@@ -218,8 +410,13 @@ end)
 			TransportConfiguration.SendRate = static_cast<std::uint32_t>(Profile.BackendSendRate());
 		}
 		auto CandidateTransport = std::make_shared<GameNetworkingSocketsTransport>(TransportConfiguration);
+		std::shared_ptr<IGameTransport> SessionTransport = CandidateTransport;
+		if (FeedbackRefresh) {
+			FeedbackTransport = std::make_shared<DelayedFeedbackTransport>(CandidateTransport);
+			SessionTransport = FeedbackTransport;
+		}
 		auto CandidateSession = std::make_unique<GameSession>(
-			CandidateTransport,
+			SessionTransport,
 			Configuration(GameSessionRole::Server, static_cast<std::uint16_t>(Candidate), Profiled),
 			&ServerRuntime
 		);
@@ -322,6 +519,12 @@ end)
 		ClientRuntime && ClientRuntime->Players->GetLocalPlayer().has_value(),
 		"real GNS client resolves its exact trusted LocalPlayer ObjectId"
 	);
+	if (FeedbackRefresh && ClientRuntime && FeedbackTransport && !Failures) {
+		TestPooledFeedbackRefresh(ServerRuntime, *ClientRuntime, *Server, Client, *FeedbackTransport, Port, Tick);
+		Client.Stop(); Server->Stop();
+		ClientRuntime->Destroy(); ServerRuntime.Destroy();
+		return Failures == 0 ? 0 : 1;
+	}
 
 	if (ClientRuntime && !ServerPlayers.empty() && ServerPlayers.front()->GetCharacter()) {
 		if (Workload) {

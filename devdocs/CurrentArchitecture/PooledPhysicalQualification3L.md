@@ -6,6 +6,91 @@ last_verified: 2026-10-05
 
 # Foundation 3L pooled physical qualification attempt
 
+## Corrected Name candidate: actual Local32 still fails recovery (2026-10-05)
+
+Candidate `b9f8ded29dcd3e9b1be805f5e76b03e901c9c162` passes all six
+original hosted jobs: Windows 95 native plus 372 Python checks each, Linux
+53 checks each, and GNS 10 checks each, with no JUnit failures/errors/skips.
+Native push/PR runs are `37378058515`/`37378065805`; GNS push/PR runs are
+`37378058572`/`37378065818`. Original index SHA-256 is
+`e19a41b99648db325a81718ce7ec85f0d91a5a2bdd511d0a50e2318f2c61fcef`.
+Official non-diagnostic dispatch `37378078144` also passes both jobs and
+package validation. Artifact `11376237179` has original ZIP SHA-256
+`84c8024f60711bb1657fb6b0aeda76c958741ce7a441cf1550bcff1e00079c0f`.
+Both endpoint inventories and projected startup smokes pass before launch.
+
+Fresh Local32 run `1072bd82-e3b6-4956-b919-778caa5dcaab`, coordinator
+`fbf1cc09-82fc-492c-a1a5-211ea871b9d7`, starts at
+`2026-10-05T23:19:53.181528Z` and finishes collection at
+`23:28:44.083276Z`. Both actual staged imports/configurations, fresh role
+preflights and the control barrier pass. Client preflight measures
+10,064,433,152 available bytes. All 32 clients reach readiness. The first
+production result is `recovery_work_did_not_converge_within_bound`.
+
+Structural cessation is tick 9,646 at monotonic 772,020,032,573 us, with
+fence 23,246. The frozen upper bound is 894,997,894 B across 2,341 frames;
+the unchanged derived deadline is 35,112,557 us. Prepared/accepted causal
+events reconstruct all 32 cursors below that fence at the deadline:
+22,431–22,648, or 598–815 records behind. The failure is real at the
+deadline. Reference completion only enables its report at 65,080,874 us;
+19 peers have converged by that later terminal observation and 13 have not.
+Post-cessation accepted/first-sent/ACKed/retired are
+883,606,031 / 882,610,010 / 882,498,588 / 882,498,588 B. Outstanding debt
+is 1,107,443 B and terminal release is zero; this is interrupted accounting,
+not convergence.
+
+The 1,174 completed recovery ticks average 55.28 ms of work. Sampled live
+Session work averages 55.47 ms, with 42.64 ms of incremental preparation
+and 11.38 ms of encoding. These are wall times, not thread CPU measurements.
+Process counters observe approximately 2.08 CPU cores across Main, the
+reference worker and transport, without an exclusive per-thread split.
+The final frame-to-failure interval is 41.350 ms; measured Main phases
+account for 39.303 ms, so final sealing cannot explain a 30-second stall.
+The asynchronous reference competes during measurement, but its exclusive
+effect is **NOT MEASURED**. Early allowance can also reject a stale native
+snapshot before reaching the existing post-encoding refresh; the separate
+feedback-deferral counter was not exported and its incidence is
+**NOT MEASURED**. No deadline or service allowance follows from these timings.
+
+The Name correction alone is insufficient. The next candidate preserves the
+t0 reference and measures live prefix convergence before starting the same
+bounded reference replay, then compares that original timestamp with the
+unchanged derived bound. It also refreshes genuinely stale native evidence
+before eligibility, retaining full ACK/retirement and funding validation.
+These execution changes require focused regression and hosted qualification;
+they are not a recovery PASS or authorization to skip Local32 acceptance.
+
+Focused worker qualification passes the corrected real-32-peer feedback test,
+GameSession suite, seven-case frozen-reference suite and admission-evidence
+suite (four CTest entries total). The exact same feedback fixture against the
+original `b9f8ded29` GameSession ages 31 real native snapshots, makes no
+refreshes, accepts one grant and records 62 freshness deferrals; it fails the
+required refresh assertion. Corrected production reads 31 fresh snapshots,
+accepts four grants and records zero freshness deferrals. Its unavailable
+refresh arm makes 62 actual queries but accepts only the one fresh peer's
+grant and records 62 deferrals. Both corrected arms converge native
+first-send, ACK and exact retirement without terminal release. The fixture
+uses the existing legal one-tick relevance setting to isolate eligibility
+from catalog-refresh cadence; production defaults are unchanged. Server
+compilation, the existing recovery parser and whitespace checks pass.
+Raw source/executable pins, original failing controls and corrected outputs
+remain in `farm32-feedback-refresh-native-b9-v1`. Hosted checks and fresh
+physical acceptance for this correction are still pending.
+
+Failed diagnostic captures, role/coordinator results and initiating errors
+remain preserved. Outer launch fails and collection refuses provider
+acceptance. Fresh cleanup at `23:41:32.522081Z` observes all six controls
+absent, no run-owned processes/listeners/rules, idle captures/services and
+no Packet Monitor filters. Final cleanup SHA-256 is
+`e5586c2f13a4d8a6c96e074870b1a4870415860a1b1b08f943f6dc7cd9a99ef6`.
+The earlier five-control attempt stops on a transient PID census refusal;
+its records remain, and only identity is retired in the fresh continuation.
+No unrelated process is killed. Raw evidence is retained in
+`farm32-b9f8ded29-local32-v1`, its private `collection/server-role`, and
+the read-only `farm32-1072-recovery-readonly-v1` artifact directory.
+Retained F1 PASS is unchanged. **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY; Local32 FAIL; Node32 not run; no 3M or merge.**
+
 ## Actual Local32 recovery convergence failure (2026-10-05)
 
 Tooling `999d3b0ffe03bcb1f71d8f76d96623907169c965` passes all six original

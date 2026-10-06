@@ -1361,6 +1361,10 @@ if(BUILD_TESTING)
 		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
 		add_test(NAME gargantuan_character_real_transport COMMAND gargantuan_character_real_transport_tests)
 		add_test(NAME gargantuan_game_session_real_transport COMMAND gargantuan_game_session_real_transport_tests)
+		add_test(NAME gargantuan_pooled_feedback_refresh
+			COMMAND gargantuan_game_session_real_transport_tests --pooled-feedback-refresh)
+		set_tests_properties(gargantuan_pooled_feedback_refresh PROPERTIES
+			LABELS "networking;transport;optional;pooled;feedback" TIMEOUT 180 RUN_SERIAL TRUE)
 		add_test(NAME gargantuan_physical_gns_probe_self_test COMMAND gargantuan_physical_gns_funding_probe --self-test)
 		add_test(NAME gargantuan_physical_gns_probe_invalid_arguments COMMAND gargantuan_physical_gns_funding_probe server 10.253.3.2 39450 3)
 		set_tests_properties(gargantuan_physical_gns_probe_self_test gargantuan_physical_gns_probe_invalid_arguments
