@@ -55,7 +55,8 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
             Require(Fields["native_valid"] == 1 and Fields["pid"] == Metadata.get("ChildPid") and
                     Fields["native_tid"] == Metadata.get("ChildMainTid") and Fields["qpc_frequency"] == Frequency,
                     "fixture native identity/clock mismatch")
-            Require(Fields.get("profile") == ("ACK_STATS" if Case == "AckStats" else
+            Require(Fields.get("profile") == ("ACK_CYCLE_FUNDED" if Case == "AckCycleFunded" else
+                    "ACK_STATS" if Case == "AckStats" else
                     "POOLED_SERVICE" if Case in ("PooledAggregate32Structural", "PooledFull") else "FULL_RESERVATION"), "unexpected fixture profile")
             Require(Metadata["BeforeChildResumeQpc"] <= Fields["qpc_before"] <= Fields["qpc_after"] <= Metadata["AfterChildExitQpc"], "fixture anchor outside child interval")
             Require(Metadata["MainFirstQpc"] <= Fields["qpc_before"] <= Fields["qpc_after"] <= Metadata["MainLastQpc"], "target thread events do not bracket fixture anchor")
@@ -131,6 +132,17 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
             Extra = ValidateStats(Metadata, Stdout, CsvPath, ByCase)
         except (OSError, ValueError, KeyError, TypeError, UnicodeError) as Error:
             Errors.append("stats coverage: " + str(Error))
+    if Case == "AckCycleFunded":
+        try:
+            Require(set(ByCase) == {"ackcycle-funded"}, "unexpected funded ACK cycle envelope")
+            Require(Metadata.get('WorkloadArguments') == ['--ack-cycle-funded', '1348'],
+                    "funded ACK cycle arguments differ from CTest 80")
+            Require(type(Metadata.get('ChildExitCode')) is int, "funded ACK cycle child exit missing")
+            Require(type(Metadata.get('UnsupportedLifecycleEvents')) is int and
+                    Metadata['UnsupportedLifecycleEvents'] == 0, "service-thread lifecycle schema incomplete")
+            Extra = ValidateStats(Metadata, Stdout, CsvPath, ByCase, Cycle=True)
+        except (OSError, ValueError, KeyError, TypeError, UnicodeError) as Error:
+            Errors.append("funded ACK cycle coverage: " + str(Error))
     return {"Format": "GargantuanSchedulerTraceCoverage", "Version": 1,
             "State": "LOSS_FREE_ANCHOR_WINDOW_RETAINED" if not Errors else "INCOMPLETE",
             "CausalVerdict": "NOT_CLAIMED", "Errors": Errors, "FixtureAnchorCount": len(Anchors),
@@ -606,7 +618,7 @@ def ValidateAggregateOperations(Data, Stable, Begin, End, MainTid, Number, Need)
              'selected operation snapshot matrix incomplete')
 
 
-def ValidateStats(Metadata, Stdout, CsvPath, Arms):
+def ValidateStats(Metadata, Stdout, CsvPath, Arms, Cycle=False):
     def Need(Value, Message):
         if not Value:
             raise ValueError(Message)
@@ -617,15 +629,23 @@ def ValidateStats(Metadata, Stdout, CsvPath, Arms):
         Need(len(Value) == len(Parts), "duplicate stats marker field")
         return Value
     Services, Snapshots, Summaries = [], [], []
+    Timings, TimingSummaries = [], []
+    Prefix = 'AckCycle' if Cycle else 'AckStats'
     for Line in Stdout.splitlines():
         Need(len(Line) <= 8192, "stats log line cap")
-        if Line.startswith("[Qualification:AckStatsServiceThread] "):
+        if Line.startswith("[Qualification:" + Prefix + "ServiceThread] "):
             Services.append(Fields(Line))
-        elif Line.startswith("[Qualification:AckStatsNativeSnapshot] "):
+        elif Line.startswith("[Qualification:" + Prefix + "NativeSnapshot] "):
             Snapshots.append(Fields(Line))
-        elif Line.startswith("[Qualification:AckStatsDiagnostic] "):
+        elif Line.startswith("[Qualification:" + Prefix + "Diagnostic] "):
             Summaries.append(Fields(Line))
+        elif Cycle and Line.startswith('[Qualification:AckCycleServiceTiming] '):
+            Need(len(Line) <= 512, 'phase timing line exceeds its fixed buffer derivation')
+            Timings.append(Fields(Line))
+        elif Cycle and Line.startswith('[Qualification:AckCycleTimingSummary] '):
+            TimingSummaries.append(Fields(Line))
         Need(len(Services) <= 16 and len(Snapshots) <= 16 and len(Summaries) <= 1, "stats evidence cap")
+        Need(len(Timings) <= 65536 and len(TimingSummaries) <= 1, 'phase timing evidence cap')
     Need(Services and len(Summaries) == 1 and int(Summaries[0]["valid"]) == 1 and
          int(Summaries[0]["thread_count"]) == len(Services), "service callback missing/overflow")
     Need([int(Row['sequence']) for Row in Services] == list(range(len(Services))), "service callback sequence")
@@ -678,15 +698,46 @@ def ValidateStats(Metadata, Stdout, CsvPath, Arms):
              Metadata['BeforeChildResumeQpc'] <= Start[0] < End[0] <= Metadata['AfterChildExitQpc'],
              "service lifecycle conflicting/reused")
         Used.add(Identity)
+    Extra = {}
+    if Cycle:
+        Need(Timings and len(TimingSummaries) == 1, 'native phase timing missing')
+        Summary = TimingSummaries[0]
+        Need(set(Summary) == {'records', 'retained', 'capacity', 'overflow', 'sink_cleared', 'valid'},
+             'native phase timing summary schema')
+        Need(int(Summary['records']) == int(Summary['retained']) == len(Timings) and
+             int(Summary['capacity']) == 65536 and all(int(Summary[K]) == V for K, V in
+                 (('overflow', 0), ('sink_cleared', 1), ('valid', 1))), 'native phase timing overflow/incomplete ownership')
+        Begin, End = Arms['ackcycle-funded']
+        ServiceThreads = {int(Row['native_tid']) for Row in Services}
+        Phases = set()
+        for Index, Row in enumerate(Timings):
+            Need(set(Row) == {'sequence', 'phase', 'pid', 'native_tid', 'clock_valid', 'qpc_begin', 'qpc_end',
+                             'qpc_frequency', 'count', 'bytes', 'detail', 'result', 'error', 'flags'},
+                 'native phase timing record schema')
+            Values = {K: int(V) for K, V in Row.items()}
+            Need(Values['sequence'] == Index and 1 <= Values['phase'] <= 5 and
+                 Values['pid'] == Metadata['ChildPid'] and
+                 (Values['native_tid'] == Metadata['ChildMainTid'] if Values['phase'] == 1 else
+                  Values['native_tid'] in ServiceThreads) and
+                 Values['clock_valid'] == 1 and Values['qpc_frequency'] == Metadata['QpcFrequency'] and
+                 Begin['qpc_before'] <= Values['qpc_begin'] <= Values['qpc_end'] <= End['qpc_after'],
+                 'native phase timing identity/clock outside owned envelope')
+            Need(all(0 <= Values[K] <= (1 << 64) - 1 for K in ('count', 'bytes', 'detail')) and
+                 -(1 << 63) <= Values['result'] < (1 << 63) and
+                 all(0 <= Values[K] <= (1 << 32) - 1 for K in ('error', 'flags')), 'native phase timing field bound')
+            Phases.add(Values['phase'])
+        Need(Phases == {1, 2, 3, 4, 5}, 'timer/create/wait/lock/drain/thinker phases not retained')
+        Extra = {'NativePhaseRecordCount': len(Timings), 'NativePhaseClockMapping': 'OWNED_QPC_NO_TIME_SUBTRACTION',
+                 'NativePhaseOverflow': False}
     return {'ServiceThreadCount': len(Services), 'NativeSnapshotCount': len(Snapshots),
             'NativeClockMapping': 'SNAPSHOT_BRACKETS_ONLY_NO_GLOBAL_OFFSET',
-            'FiniteGrantTimestampResolutionNs': 1000}
+            'FiniteGrantTimestampResolutionNs': 1000, **Extra}
 
 
 def Main():
     Parser = argparse.ArgumentParser()
     Parser.add_argument("--root", type=Path, required=True)
-    Parser.add_argument("--case", choices=("Full", "AckStats", "Aggregate32", "Aggregate32Structural", "PooledAggregate32Structural", "PooledFull"), default="Full")
+    Parser.add_argument("--case", choices=("Full", "AckStats", "Aggregate32", "Aggregate32Structural", "PooledAggregate32Structural", "PooledFull", "AckCycleFunded"), default="Full")
     Args = Parser.parse_args()
     Result = {"State": "INCOMPLETE", "CausalVerdict": "NOT_CLAIMED"}
     try:

@@ -85,6 +85,29 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-06 execution A `ed09e7126` retains three fresh failed Local attempts:
+`d326` capture/export reserve and `3a5` PackageRoot-case projection mismatch stop
+before native launch; corrected inputs let `2ca` run 32 native clients. All three
+causal recovery cases pass within their unchanged bounds and whole-run
+1,486,393,002 B conserves with zero terminal debt/grants/release, but all 32 F1
+running maxima 21,984,479,872–44,012,964,480 byte-us exceed 18,025,216,000
+(finite shortfall zero). Earliest failing token/first-send gap is NOT MEASURED.
+All six controls are retired and final full census passes (`3890bc06`); failed
+raw is preserved. Historical four-client F1 PASS keeps its original scope.
+[Current receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#fresh-local32-recovery-passes-f1-running-service-fails-2026-10-06).
+**KI-006 OPEN; Local32 FAIL, Node32 not run; no 3M or merge claim.**
+
+CI-only candidate `9ecc96619` push Windows job `112265212600` fails the unchanged
+funded ACK cycle (CTest 80), despite the new immediate pre-CTest Appraiser-zero
+observation. Exact payload/ACK/retirement checks pass, but the second
+393,652-byte grant at 16,667-us Main polling has a latched F1 failure. The old
+throw omits its completed segment/deficit ledger, so the exact violating gap
+and blocked/ready/native-wake cause remain NOT MEASURED. Preserve the original
+failed job; neither a host-preparation change nor another host's PASS replaces
+it. The minimal failure dump and separate fixed ACK-cycle diagnostic reuse the
+existing bounded tracing path without changing clocks, gates or native service.
+No new physical PASS or Foundation 3L completion is claimed.
+
 2026-10-06 analyzer B `8c5a22327` PR Windows `112239065328` fails the
 unchanged funded ACK statistics running-service gate at token 36, despite
 exact byte/ACK/retirement conservation. Maximum running deficit is

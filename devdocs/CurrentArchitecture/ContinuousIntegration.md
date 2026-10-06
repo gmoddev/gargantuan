@@ -422,6 +422,44 @@ current-source requirement does not retroactively qualify old jobs.
 
 ### Hosted scheduled-telemetry preparation (2026-10-06)
 
+The subsequent CI-only candidate `9ecc96619` push Windows job `112265212600`
+records Appraiser process count zero immediately before CTest, but fails test
+80 `gargantuan_gns_funded_ack` in the 393,652-byte, 16,667-us-poll second grant.
+The payload/ACK/retirement and chronology checks pass before the completed
+grant's independent F1 failure flag rejects it. Its original failure remains
+failed. The old failure path throws before printing the completed grant's
+activation, first-send, completion, deficit and segment ledger; its exact
+finite/running violation and blocked/ready cause are NOT MEASURED.
+
+Failure-only ACK-cycle output now retains that original completed snapshot and
+its existing bounded segment records before the unchanged rejection. It does
+not resample, move the activation clock, extend a deadline or print on the
+running service path. Cold supplied-record checks exercise snapshot identity,
+stale-token visibility and the existing 512-entry bound before any connection.
+The separate `scheduler_ack_cycle_diagnostic` dispatch route traces only the
+exact `--ack-cycle-funded 1348` command once through the existing owned Job,
+ETW, ordinary Normal child and bounded stream/cleanup path. It is mutually
+exclusive with the existing FULL and pair diagnostics. The normal complete
+CTest and five standalone workload commands remain unchanged.
+
+This opt-in route reuses the existing GNS service-thread initialization callback
+and QPC/native snapshot brackets, with distinct ACK-cycle labels. Native timer
+state is sampled only after a rejected grant or the selected pair's retirement;
+the original completed first-send ledger stays authoritative. Loss, lifecycle,
+clock, source hashes and native exit remain explicit. Diagnostic output cannot
+qualify a failed original job or physical provider, and no automatic diagnostic
+retry, package, Linux qualification or F1 waiver is introduced.
+The private borrowed timing sink records timer creation/fallback, actual wait,
+global-lock reacquisition, receive-drain count/bytes and thinker-pass
+count/collisions. With no sink, these hooks read no clocks, count nothing and
+allocate or print nothing. Opt-in fixture storage is allocated before GNS
+initialization, capped at 65,536 records by the existing 32-MiB stream limit,
+and rendered only after pair destruction and sink removal. Overflow, invalid
+clock or missing phase/lifecycle evidence leaves diagnostic coverage incomplete.
+The original wait APIs, parameters, thinker cutoff, retry policy and F1 bounds
+are unchanged; neither observation overhead nor externally scheduled time is
+subtracted from a failed grant.
+
 Analyzer B `8c5a22327` PR Windows job `112239065328`, run `37454619898`,
 fails CTest 83 `gargantuan_gns_funded_ack_stats`: the prompt arm's token 36
 conserves and retires all 393,652 bytes, but its maximum running deficit is

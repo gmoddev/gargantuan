@@ -28,7 +28,7 @@ class SchedulerTraceTests(unittest.TestCase):
         if PreCTest:
             self.assertLess(Workflow.index('      - name: Build bounded scheduler diagnostic'), Start)
             self.assertEqual(Workflow.index('      - name: Run complete headless CTest contract'), Start + len(Step))
-            self.assertIn("        if: \"!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)\"\n", Step)
+            self.assertIn("        if: \"!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))\"\n", Step)
         elif PreTiming:
             self.assertLess(Workflow.index('      - name: Verify pinned Farm32 control and evidence tooling'), Start)
             self.assertLess(Start, Workflow.index('      - name: Run qualified reliable workload timing in Release'))
@@ -711,6 +711,74 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
             self.assertEqual(Result['ServiceThreadCount'], 1)
             self.assertEqual(Result['NativeClockMapping'], 'SNAPSHOT_BRACKETS_ONLY_NO_GLOBAL_OFFSET')
             self.assertEqual(Result['FiniteGrantTimestampResolutionNs'], 1000)
+
+    def test_funded_ack_cycle_exact_arguments_and_service_lifecycle_without_workload(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.StatsFixture(Path(Directory))
+            Metadata.update(WorkloadCase='AckCycleFunded', WorkloadArguments=['--ack-cycle-funded', '1348'])
+            Log = Log.replace('AckStats', 'AckCycle').replace('ackstats-control', 'ackcycle-funded').replace(
+                'profile=ACK_STATS', 'profile=ACK_CYCLE_FUNDED')
+            for Index, Phase in enumerate(range(1, 6)):
+                Log += '\n[Qualification:AckCycleServiceTiming] sequence=' + str(Index) + ' phase=' + str(Phase) + \
+                    ' pid=42 native_tid=' + ('43' if Phase == 1 else '44') + \
+                    ' clock_valid=1 qpc_begin=100 qpc_end=110 qpc_frequency=10000000 count=1 bytes=0 detail=3 result=0 error=0 flags=0'
+            Log += '\n[Qualification:AckCycleTimingSummary] records=5 retained=5 capacity=65536 overflow=0 sink_cleared=1 valid=1'
+            Result = VALIDATOR.Validate(Metadata, Log, 'AckCycleFunded', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+            self.assertEqual(Result['ServiceThreadCount'], 1)
+            self.assertEqual(Result['NativePhaseRecordCount'], 5)
+            self.assertEqual(Result['CausalVerdict'], 'NOT_CLAIMED')
+            self.assertEqual(Metadata['ChildExitCode'], 1, 'retained native failure must remain failed')
+            for Arguments in (['--ack-stats-boundary'], ['--ack-cycle-funded'], ['1348', '--ack-cycle-funded'],
+                              ['--ack-cycle-funded', '1347'], ['--ack-cycle-funded', '1348', '--extra']):
+                self.assertEqual(VALIDATOR.Validate(dict(Metadata, WorkloadArguments=Arguments), Log,
+                    'AckCycleFunded', File)['State'], 'INCOMPLETE')
+            for Old, New in (('ackcycle-funded', 'ackstats-prompt'), ('profile=ACK_CYCLE_FUNDED', 'profile=ACK_STATS'),
+                             ('pid=42 native_tid=44', 'pid=9 native_tid=44'), ('native_us=3000000050000', 'native_us=0'),
+                             ('available=1', 'available=0'), ('qpc_before=400', 'qpc_before=950'),
+                             ('thread_count=1 valid=1', 'thread_count=1 valid=0'), ('phase=5', 'phase=6'),
+                             ('overflow=0 sink_cleared=1', 'overflow=1 sink_cleared=1'),
+                             ('sink_cleared=1', 'sink_cleared=0'), ('qpc_begin=100', 'qpc_begin=999'),
+                             ('clock_valid=1', 'clock_valid=0'), ('records=5 retained=5', 'records=6 retained=5'),
+                             ('pid=42 native_tid=44 clock_valid', 'pid=42 native_tid=99 clock_valid'),
+                             ('phase=3 pid=42 native_tid=44', 'phase=3 pid=42 native_tid=43')):
+                self.assertEqual(VALIDATOR.Validate(Metadata, Log.replace(Old, New), 'AckCycleFunded', File)['State'], 'INCOMPLETE')
+            self.assertEqual(VALIDATOR.Validate(dict(Metadata, EventsLost=1), Log, 'AckCycleFunded', File)['State'], 'INCOMPLETE')
+            self.assertEqual(VALIDATOR.Validate(dict(Metadata, UnsupportedLifecycleEvents=1), Log,
+                'AckCycleFunded', File)['State'], 'INCOMPLETE')
+
+    def test_funded_ack_cycle_is_fixed_diagnostic_only_not_a_qualification_retry(self):
+        Workflow = (ROOT / '.github/workflows/native-ci.yml').read_text()
+        Name = '      - name: Trace exact funded ACK cycle without qualification'
+        Start = Workflow.index(Name)
+        Step = Workflow[Start:Workflow.index('      - name:', Start + len(Name))]
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.scheduler_ack_cycle_diagnostic", Step)
+        self.assertEqual(Step.count('& tools/ci/SchedulerTrace.ps1 -Case AckCycleFunded'), 1)
+        self.assertIn('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }', Step)
+        self.assertIn('inputs.scheduler_trace && inputs.scheduler_ack_cycle_diagnostic', Workflow)
+        self.assertIn('inputs.scheduler_pair_diagnostic && inputs.scheduler_ack_cycle_diagnostic', Workflow)
+        self.assertEqual(Workflow.count('!inputs.scheduler_pair_diagnostic && !inputs.scheduler_ack_cycle_diagnostic'), 2)
+        self.assertIn('build-ci/scheduler-trace-ack-cycle-funded/', Workflow)
+        self.assertIn('build-ci/gargantuan_real_transport_tests.exe', Workflow)
+        Wrapper = (ROOT / 'tools/ci/SchedulerTrace.ps1').read_text()
+        self.assertIn("Argument=@('--ack-cycle-funded','1348'); Command='--run-ack-cycle-funded'", Wrapper)
+        self.assertIn("$Info.Environment['GARGANTUAN_SCHEDULER_ACK_CYCLE'] = '1'", Wrapper)
+        self.assertIn("$First = & $InvokeCase 'Full'", Wrapper)
+        self.assertIn("$Results += (& $InvokeCase 'AckStats')", Wrapper)
+        Native = (ROOT / 'tools/ci/SchedulerTrace.cpp').read_text()
+        self.assertIn('L"--ack-cycle-funded", "AckCycleFunded", false, L"1348"', Native)
+        self.assertIn('std::wstring(Args[1]) == L"--run-ack-cycle-funded"', Native)
+        Cycle = (ROOT / 'tests/GnsAckCycleFixture.hpp').read_text()
+        Failure = Cycle[Cycle.index('if (Failure == Fault::None && Final->StructuralLastCompletedGrantFailed)'):]
+        self.assertLess(Failure.index('DumpFailure(std::cerr, Token, *Final)'), Failure.index('throw std::runtime_error'))
+        self.assertIn('AckStatsTimingEvidence::Session Diagnostic(true)', Cycle)
+        self.assertIn('AckStatsTimingEvidence::Arm DiagnosticArm(Prompt, true)', Cycle)
+        self.assertIn('const auto &Event = Sample.LastCompletedStructuralSegmentEvents[Index]', Cycle)
+        Observer = (ROOT / 'tests/AckStatsTimingEvidence.hpp').read_text()
+        Clear = Observer.index('const bool SinkCleared = !Cycle ||')
+        self.assertLess(Clear, Observer.index('[Qualification:AckCycleServiceTiming]'))
+        self.assertIn('if (Index >= Buffer.Records.size())', Observer)
+        self.assertIn('Timing = std::make_unique<ServiceTimingBuffer>()', Observer)
 
     def test_ack_stats_bad_snapshots_lifecycle_and_bounds_fail(self):
         with tempfile.TemporaryDirectory() as Directory:

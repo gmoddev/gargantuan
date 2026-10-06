@@ -32,7 +32,7 @@ macro(GargantuanReplaceWake Old New)
 	string(REPLACE "${Old}" "${New}" GargantuanWakeSource "${GargantuanWakeSource}")
 endmacro()
 
-GargantuanReplaceWake("#include <atomic>" "#include <atomic>\n#include \"ReliableServiceFeedback.hpp\"")
+GargantuanReplaceWake("#include <atomic>" "#include <atomic>\n#include \"ReliableServiceFeedback.hpp\"\n#include \"ServiceTimingDiagnostics.hpp\"")
 GargantuanReplaceWake("static std::thread *s_pServiceThread = nullptr;" [=[
 #if defined( _WIN32 )
 static HANDLE s_hGargantuanPreciseWakeTimer = nullptr;
@@ -93,31 +93,48 @@ GargantuanReplaceWake([=[
 		int poll_result = poll( s_vecPollFDs.Base(), s_vecPollFDs.Count(), nMaxTimeoutMS );
 	#elif defined( _WIN32 )
 		bool bWaited = false;
+		SteamNetworkingSocketsLib::GargantuanServiceTimingSpan GargantuanWait(
+			SteamNetworkingSocketsLib::GargantuanServiceTimingPhase::TimerWait);
+		GargantuanWait.SetCount(nMaxTimeoutMS);
+		GargantuanWait.SetDetail(3); // Integer-ms fallback unless precise path succeeds.
 		if ( !bManualPoll && nMaxTimeoutMS > 0 && s_hGargantuanPreciseWakeTimer != nullptr &&
 			SteamNetworkingSocketsLib::GargantuanHasRunningStructuralGrant() &&
 			usecExactWake < k_nThinkTime_Never )
 		{
+			GargantuanWait.AddFlags(1); // Precise timer available for this running grant.
 			SteamNetworkingMicroseconds usecRemaining = usecExactWake - SteamNetworkingSockets_GetLocalTimestamp();
 			if ( usecRemaining <= 0 )
+			{
 				bWaited = true;
+				GargantuanWait.SetDetail(0); // Already due, no wait.
+			}
 			else
 			{
 				usecRemaining = std::min( usecRemaining, (SteamNetworkingMicroseconds)nMaxTimeoutMS * 1000 );
 				const SteamNetworkingMicroseconds usecTarget = SteamNetworkingSockets_GetLocalTimestamp() + usecRemaining;
 				bool bSpin = usecRemaining <= 1000;
+				GargantuanWait.SetBytes(usecRemaining); // Requested remaining microseconds.
+				if (bSpin) GargantuanWait.SetDetail(1);
 				if ( usecRemaining > 1000 )
 				{
 					LARGE_INTEGER due;
 					due.QuadPart = -10 * ( usecRemaining - 1000 );
-					if ( SetWaitableTimer( s_hGargantuanPreciseWakeTimer, &due, 0, nullptr, nullptr, FALSE ) )
+					GargantuanWait.AddFlags(2); // Set attempted.
+					const BOOL bGargantuanTimerSet = SetWaitableTimer( s_hGargantuanPreciseWakeTimer, &due, 0, nullptr, nullptr, FALSE );
+					if ( bGargantuanTimerSet )
 					{
+						GargantuanWait.AddFlags(4); // Set succeeded.
+						GargantuanWait.SetDetail(2);
 						HANDLE waits[2] = { s_hEventWakeThread, s_hGargantuanPreciseWakeTimer };
 						const DWORD result = WaitForMultipleObjects( 2, waits, FALSE, INFINITE );
+						GargantuanWait.SetResult(result);
+						if (result == WAIT_FAILED && GargantuanWait.Enabled()) GargantuanWait.SetError(GetLastError());
 						CancelWaitableTimer( s_hGargantuanPreciseWakeTimer );
 						if ( result == WAIT_OBJECT_0 )
 							bWaited = true;
 						bSpin = result == WAIT_OBJECT_0 + 1;
 					}
+					else if (GargantuanWait.Enabled()) GargantuanWait.SetError(GetLastError());
 				}
 				if ( bSpin )
 				{
@@ -132,7 +149,13 @@ GargantuanReplaceWake([=[
 			}
 		}
 		if ( !bWaited )
-			WaitForSingleObject( s_hEventWakeThread, nMaxTimeoutMS );
+		{
+			GargantuanWait.SetDetail(3);
+			const DWORD result = WaitForSingleObject( s_hEventWakeThread, nMaxTimeoutMS );
+			GargantuanWait.SetResult(result);
+			if (result == WAIT_FAILED && GargantuanWait.Enabled()) GargantuanWait.SetError(GetLastError());
+		}
+		GargantuanWait.Finish();
 	#else
 		#error "How do?"
 	#endif]=])
@@ -156,8 +179,14 @@ GargantuanReplaceWake([=[
 				return false;
 			}
 			// The timer is used only while a structural grant has unsent native bytes.
+			SteamNetworkingSocketsLib::GargantuanServiceTimingSpan GargantuanTimerCreate(
+				SteamNetworkingSocketsLib::GargantuanServiceTimingPhase::TimerCreate);
 			s_hGargantuanPreciseWakeTimer = CreateWaitableTimerExW( nullptr, nullptr,
-				CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE );]=])
+				CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE );
+			GargantuanTimerCreate.SetResult(s_hGargantuanPreciseWakeTimer != nullptr);
+			if (s_hGargantuanPreciseWakeTimer == nullptr && GargantuanTimerCreate.Enabled())
+				GargantuanTimerCreate.SetError(GetLastError());
+			GargantuanTimerCreate.Finish();]=])
 GargantuanReplaceWake([=[
 		if ( s_hEventWakeThread != INVALID_HANDLE_VALUE )
 		{
@@ -170,6 +199,26 @@ GargantuanReplaceWake([=[
 		if ( s_hEventWakeThread != INVALID_HANDLE_VALUE )
 		{
 			CloseHandle( s_hEventWakeThread );]=])
+
+# Aggregate phase spans observe the existing loops without changing their policy.
+GargantuanReplaceWake("static bool DrainSocket( CRawUDPSocketImpl *pSock )\n{" [=[static bool DrainSocket( CRawUDPSocketImpl *pSock )
+{
+	SteamNetworkingSocketsLib::GargantuanServiceTimingSpan GargantuanDrain(
+		SteamNetworkingSocketsLib::GargantuanServiceTimingPhase::ReceiveDrain);]=])
+GargantuanReplaceWake("\t\tif ( ret < 0 )\n\t\t\tbreak;\n\n\t\t// Emit ETW event" [=[		if ( ret < 0 )
+			break;
+
+		GargantuanDrain.AddCount();
+		GargantuanDrain.AddBytes(iov_buf.iov_len);
+
+		// Emit ETW event]=])
+GargantuanReplaceWake("\t// We're back awake.  Grab the lock again" [=[	SteamNetworkingSocketsLib::GargantuanServiceTimingSpan GargantuanLockWait(
+		SteamNetworkingSocketsLib::GargantuanServiceTimingPhase::GlobalLockWait);
+	// We're back awake.  Grab the lock again]=])
+GargantuanReplaceWake("\t\tif ( SteamNetworkingGlobalLock::TryLock( \"ServiceThread\", 20 ) )" [=[		GargantuanLockWait.AddCount();
+		if ( SteamNetworkingGlobalLock::TryLock( "ServiceThread", 20 ) )]=])
+GargantuanReplaceWake("\t// If we waited a long time, then that's probably bad.  Spew about it" [=[	GargantuanLockWait.Finish();
+	// If we waited a long time, then that's probably bad.  Spew about it]=])
 
 if(NOT EXISTS "${GargantuanWakePath}.gargantuan-wake-original")
 	file(WRITE "${GargantuanWakePath}.gargantuan-wake-original" "${GargantuanWakeOriginal}")

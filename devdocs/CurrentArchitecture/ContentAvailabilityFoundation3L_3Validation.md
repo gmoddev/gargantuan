@@ -6,6 +6,34 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Fresh Local32 causal recovery passes; F1 remains failed (2026-10-06)
+
+The [current physical receipt](PooledPhysicalQualification3L.md#fresh-local32-recovery-passes-f1-running-service-fails-2026-10-06)
+retains three distinct attempts on execution A `ed09e7126`. Analyzer B
+`8c5a22327` is used only for offline package verification; full strict
+provider replay is **NOT_REACHED**. `d326a539`
+stops at capture/export disk reserve before native launch; `3a5d4860` stops
+at the operational `PackageRoot` case/projection receipt mismatch before
+native launch. Corrected operational inputs let `2ca63cf8` run 32 actual
+native clients; Server exits 10 on F1 failure. All three causal recovery
+cases pass: gameplay 335,246/20,470,580 us, structural
+13,079,486/26,536,577 us and mixed 350,132/20,471,117 us
+(earliest convergence/original bound). Whole-run byte conservation is
+1,486,393,002 B, with zero terminal debt, active grants, pending tokens
+and terminal release.
+
+All 32 peers nevertheless exceed the F1 running limit: maxima
+21,984,479,872–44,012,964,480 byte-us >18,025,216,000; finite shortfall
+is zero. The earliest failing token/first-send gap is **NOT MEASURED**.
+Twenty-nine raw role/capture files, including about 6 GB of capture bytes,
+and four public receipts are hash-preserved. All six controls are retired
+with twelve journals and final full idle census; final receipt SHA-256 is
+`3890bc06b64368143a53e37ff42619221cb4c2b616f4e3d7c3d1d66b77a09713`.
+Original failures remain failed. Historical four-client F1 PASS retains its
+scope; no Local32 PASS, Node32, final acceptance, 3M or merge is inferred.
+No architecture, runtime, service or acceptance-gate change is made.
+**KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 ## Execution candidate qualified; offline diagnostics bound corrected (2026-10-06)
 
 [Execution A `ed09e7126`](PooledPhysicalQualification3L.md#qualified-execution-source-and-offline-archive-bound-correction-2026-10-06)

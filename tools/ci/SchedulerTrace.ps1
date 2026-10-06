@@ -1,15 +1,16 @@
 # Run only fixed diagnostic cases, once each. No trace or workload retries.
 [CmdletBinding(DefaultParameterSetName='Case')]
 param(
-    [Parameter(ParameterSetName='Case')][ValidateSet('Full','AckStats','Aggregate32','Aggregate32Structural','PooledAggregate32Structural','PooledFull')][string]$Case='Full',
+    [Parameter(ParameterSetName='Case')][ValidateSet('Full','AckStats','Aggregate32','Aggregate32Structural','PooledAggregate32Structural','PooledFull','AckCycleFunded')][string]$Case='Full',
     [Parameter(ParameterSetName='Pair')][switch]$Pair,
     [Parameter(ParameterSetName='SelfTest')][switch]$SelfTest
 )
 $ErrorActionPreference = 'Stop'
-function GetFixedCase([ValidateSet('Full','AckStats','Aggregate32','Aggregate32Structural','PooledAggregate32Structural','PooledFull')][string]$Case) {
+function GetFixedCase([ValidateSet('Full','AckStats','Aggregate32','Aggregate32Structural','PooledAggregate32Structural','PooledFull','AckCycleFunded')][string]$Case) {
     switch ($Case) {
         'Full' { return [pscustomobject]@{ Binary='build-ci/gargantuan_game_session_real_transport_tests.exe'; Output='build-ci/scheduler-trace'; Argument='--reliable-workload'; Command='--run' } }
         'AckStats' { return [pscustomobject]@{ Binary='build-ci/gargantuan_real_transport_tests.exe'; Output='build-ci/scheduler-trace-ack-stats'; Argument='--ack-stats-boundary'; Command='--run-ack-stats' } }
+        'AckCycleFunded' { return [pscustomobject]@{ Binary='build-ci/gargantuan_real_transport_tests.exe'; Output='build-ci/scheduler-trace-ack-cycle-funded'; Argument=@('--ack-cycle-funded','1348'); Command='--run-ack-cycle-funded' } }
         'Aggregate32' { return [pscustomobject]@{ Binary='build-ci/gargantuan_game_session_real_transport_tests.exe'; Output='build-ci/scheduler-trace-aggregate32'; Argument='--reliable-workload-32'; Command='--run-aggregate32' } }
         'Aggregate32Structural' { return [pscustomobject]@{ Binary='build-ci/gargantuan_game_session_real_transport_tests.exe'; Output='build-ci/scheduler-trace-aggregate32-structural'; Argument='--reliable-workload-32-structural'; Command='--run-aggregate32-structural' } }
         'PooledAggregate32Structural' { return [pscustomobject]@{ Binary='build-ci/gargantuan_game_session_real_transport_tests.exe'; Output='build-ci/scheduler-trace-pooled-aggregate32-structural'; Argument=@('--pooled','--reliable-workload-32-structural'); Command='--run-pooled-aggregate32-structural' } }
@@ -48,6 +49,13 @@ function InvokePair([scriptblock]$InvokeCase) {
         NativeCIQualification=$false; CausalVerdict='NOT_CLAIMED' }
 }
 if ($SelfTest) {
+    $AckCycle = GetFixedCase 'AckCycleFunded'
+    if ($AckCycle.Binary -ne 'build-ci/gargantuan_real_transport_tests.exe' -or
+        $AckCycle.Output -ne 'build-ci/scheduler-trace-ack-cycle-funded' -or
+        $AckCycle.Argument.Count -ne 2 -or $AckCycle.Argument[0] -ne '--ack-cycle-funded' -or
+        $AckCycle.Argument[1] -ne '1348' -or $AckCycle.Command -ne '--run-ack-cycle-funded') {
+        throw 'Fixed ACK cycle case binding test failed'
+    }
     $PooledFull = GetFixedCase 'PooledFull'
     if ($PooledFull.Binary -ne 'build-ci/gargantuan_game_session_real_transport_tests.exe' -or
         $PooledFull.Output -ne 'build-ci/scheduler-trace-pooled-full' -or
@@ -120,7 +128,7 @@ if ($SelfTest) {
     Write-Output '[Qualification:SchedulerTrace] wrapper-self-test=PASS no-session-or-child-created'
     exit 0
 }
-function InvokeFixedCase([ValidateSet('Full','AckStats','Aggregate32','Aggregate32Structural','PooledAggregate32Structural','PooledFull')][string]$Case) {
+function InvokeFixedCase([ValidateSet('Full','AckStats','Aggregate32','Aggregate32Structural','PooledAggregate32Structural','PooledFull','AckCycleFunded')][string]$Case) {
 $Root = (Get-Location).ProviderPath
 $Helper = Join-Path $Root 'build-ci/scheduler-trace.exe'
 $Selection = GetFixedCase $Case
@@ -151,6 +159,7 @@ function StartOwnedProcess([string[]]$Arguments) {
     $Info.CreateNoWindow = $true
     $Info.WorkingDirectory = $Root
     if ($Case -eq 'AckStats') { $Info.Environment['GARGANTUAN_SCHEDULER_ACK_STATS'] = '1' }
+    if ($Case -eq 'AckCycleFunded') { $Info.Environment['GARGANTUAN_SCHEDULER_ACK_CYCLE'] = '1' }
     foreach ($Argument in $Arguments) { [void]$Info.ArgumentList.Add($Argument) }
     return [Diagnostics.Process]::Start($Info)
 }

@@ -1,6 +1,10 @@
 #pragma once
 #include "../src/network/GnsAckDiagnosticsAccess.hpp"
+#include "../src/network/FiniteGrantServiceCurve.hpp"
 #include "../cmake/gns/PromptAckWireBudget.hpp"
+#include "AckStatsTimingEvidence.hpp"
+#include "GnsServiceTimingDiagnosticsFixture.hpp"
+#include <sstream>
 
 namespace GnsAckCycleFixture {
 using namespace gargantuan::network;
@@ -37,11 +41,61 @@ inline void Dump(const char *Side, std::uint64_t Token, const GargantuanAckDiagn
 			<< " value=" << Event.Value << '\n';
 	}
 }
+inline void DumpNativeSnapshot(const char *Stage, const char *Side, std::uint64_t Token,
+	GameNetworkingSocketsTransport &Transport, ConnectionId Connection) {
+	if (!AckStatsTimingEvidence::Enabled(true)) return;
+	GargantuanAckDiagnostics Snapshot;
+	const bool Available = AckStatsTimingEvidence::ReadNativeSnapshot(Stage, Side, true, Token, Snapshot,
+		[&] { return detail::GnsAckDiagnosticsAccess::Read(Transport, Connection, Snapshot); }, true);
+	std::cerr << "[Network:AckCycle:NativeState] stage=" << Stage << " side=" << Side << " token=" << Token
+		<< " available=" << Available;
+	if (Available) std::cerr << " native_now=" << Snapshot.NativeSnapshotNow
+		<< " last_ping_sent=" << Snapshot.NativeLastPingSent << " last_ping_received=" << Snapshot.NativeLastPingReceived
+		<< " stats_in_flight=" << Snapshot.NativeStatsInFlight << " tracer_ready=" << Snapshot.NativeTracerReady
+		<< " activity=" << Snapshot.NativeActivity << " stats_need_mask=" << Snapshot.ObservedStatsNeedMask
+		<< " last_deadline=" << Snapshot.LastDeadline << " overflow=" << Snapshot.Overflow;
+	std::cerr << '\n';
+}
 
 // Production adapter + real pinned GNS, two successive obligations on the same
 // connection. Submission is explicitly gated by actual native ACK retirement.
 // This isolates ACK/polling; it does not claim to run GameSession credit/fairness.
 enum class Fault { None, NativeSendFailure, ReceiveLoss, SocketSendFailure, ReceiveDuplicate };
+inline void DumpFailure(std::ostream &Output, std::uint64_t Token,
+	const detail::ReliableServiceFeedback &Sample) {
+	// The original completed snapshot survives ACK retirement. Printing this
+	// failure record neither resamples the native clock nor extends a deadline.
+	Output << "[Network:AckCycle:FailureCurve] token=" << Token
+		<< " connection_slot=" << Sample.Connection.Slot << " connection_generation=" << Sample.Connection.Generation
+		<< " observed_us=" << Sample.ObservedAtMicroseconds
+		<< " active_token=" << Sample.ActiveAttributedRetirementToken
+		<< " active_bytes=" << Sample.StructuralActiveGrantBytes
+		<< " active_first_sent=" << Sample.StructuralActiveGrantFirstSentBytes
+		<< " active_started_us=" << Sample.StructuralActiveGrantStartedAtMicroseconds
+		<< " completed_sequence=" << Sample.StructuralCompletedGrantSequence
+		<< " completed_token=" << Sample.StructuralLastCompletedGrantToken
+		<< " completed_token_matches=" << (Sample.StructuralLastCompletedGrantToken == Token)
+		<< " completed_bytes=" << Sample.StructuralLastCompletedGrantBytes
+		<< " activated_us=" << Sample.StructuralLastCompletedGrantActivatedAtMicroseconds
+		<< " first_send_us=" << Sample.StructuralLastCompletedGrantFirstSendAtMicroseconds
+		<< " completed_us=" << Sample.StructuralLastCompletedGrantCompletedAtMicroseconds
+		<< " completed_max_running_byte_us=" << Sample.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds
+		<< " generation_max_finite_shortfall_byte_us=" << Sample.StructuralMaximumFiniteShortfallByteMicroseconds
+		<< " grant_failed=" << Sample.StructuralLastCompletedGrantFailed
+		<< " service_failed=" << Sample.StructuralServiceFailed
+		<< " peer_rate_bytes_per_second=" << FiniteGrantServiceCurve::PeerRateBytesPerSecond
+		<< " finite_intercept_byte_us=" << FiniteGrantServiceCurve::FiniteInterceptByteMicroseconds
+		<< " running_bound_byte_us=" << FiniteGrantServiceCurve::RunningBoundByteMicroseconds
+		<< " segment_events=" << Sample.LastCompletedStructuralSegmentEventCount
+		<< " segment_count_invalid=" << (Sample.LastCompletedStructuralSegmentEventCount >
+			std::size(Sample.LastCompletedStructuralSegmentEvents)) << '\n';
+	for (std::size_t Index = 0; Index < std::min<std::size_t>(Sample.LastCompletedStructuralSegmentEventCount,
+		std::size(Sample.LastCompletedStructuralSegmentEvents)); ++Index) {
+		const auto &Event = Sample.LastCompletedStructuralSegmentEvents[Index];
+		Output << "[Network:AckCycle:FailureSegment] completed_token=" << Sample.StructuralLastCompletedGrantToken
+			<< " index=" << Index << " at_us=" << Event.AtMicroseconds << " bytes=" << Event.PayloadBytes << '\n';
+	}
+}
 inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, bool Prompt = false,
 	std::uint64_t TailBudget = 0, Fault Failure = Fault::None, bool MixedAfter = false, bool ProductionPolicy = false) {
 	PairFixture Pair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024}, TestLimits(), true);
@@ -199,8 +253,12 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			throw std::runtime_error("ACK cycle missing/inconsistent chronology");
 		const auto ExpectedRequests = Prompt && Sender.PromptFinalWireAllowed ? 1u : 0u;
 		if (Requests != ExpectedRequests) throw std::runtime_error("final grant ACK request was missing or duplicated");
-		if (Failure == Fault::None && Final->StructuralLastCompletedGrantFailed)
+		if (Failure == Fault::None && Final->StructuralLastCompletedGrantFailed) {
+			DumpFailure(std::cerr, Token, *Final);
+			DumpNativeSnapshot("grant-failure", "sender", Token, *Pair.Server, Pair.ServerConnection);
+			DumpNativeSnapshot("grant-failure", "receiver", Token, *Pair.Client, Pair.ClientConnection);
 			throw std::runtime_error("healthy ACK cycle failed canonical finite-grant service");
+		}
 		if (Failure == Fault::NativeSendFailure && (Sender.InjectedNativeSendFailures != 1 || FailedRequests != 1 ||
 			!Sender.FirstSentBytesAtInjectedFailure || Sender.FirstSentBytesAtInjectedFailure >= Bytes || Requests != 1))
 			throw std::runtime_error("native failed final-send retry lost or duplicated its finite obligation");
@@ -261,6 +319,10 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		<< " tail_budget=" << TailBudget << " observation_us=100000"
 		<< " sender_packets=" << SenderSettled->NativePacketsSent << " sender_udp_bytes=" << SenderSettled->NativePacketBytesSent
 		<< " receiver_packets=" << ReceiverSettled->NativePacketsSent << " receiver_udp_bytes=" << ReceiverSettled->NativePacketBytesSent << '\n';
+	if (Failure == Fault::None && Bytes == 393652 && PollPeriod == 16667us) {
+		DumpNativeSnapshot("terminal", "sender", 2, *Pair.Server, Pair.ServerConnection);
+		DumpNativeSnapshot("terminal", "receiver", 2, *Pair.Client, Pair.ClientConnection);
+	}
 }
 
 inline bool RunRetrySafety() {
@@ -303,6 +365,38 @@ inline bool RunRetrySafety() {
 
 inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0) {
 	try {
+		if (!TestGnsServiceTimingDiagnostics())
+			throw std::runtime_error("ACK cycle private timing diagnostics failed supplied-record checks");
+		AckStatsTimingEvidence::Session Diagnostic(true);
+		// Cold formatter checks use supplied records, before any connection or
+		// active grant. They cannot turn a failed production grant into a PASS.
+		detail::ReliableServiceFeedback FailureRecord;
+		FailureRecord.StructuralLastCompletedGrantToken = 2;
+		FailureRecord.StructuralLastCompletedGrantActivatedAtMicroseconds = 100;
+		FailureRecord.StructuralLastCompletedGrantFirstSendAtMicroseconds = 200;
+		FailureRecord.StructuralLastCompletedGrantCompletedAtMicroseconds = 300;
+		FailureRecord.StructuralLastCompletedGrantFailed = true;
+		FailureRecord.StructuralMaximumFiniteShortfallByteMicroseconds = 7;
+		FailureRecord.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds = 18025216001;
+		FailureRecord.LastCompletedStructuralSegmentEventCount = 2;
+		FailureRecord.LastCompletedStructuralSegmentEvents[0] = {200, 1135};
+		FailureRecord.LastCompletedStructuralSegmentEvents[1] = {300, 123};
+		std::ostringstream FailureOutput;
+		DumpFailure(FailureOutput, 2, FailureRecord);
+		if (FailureOutput.str().find("completed_token_matches=1") == std::string::npos ||
+			FailureOutput.str().find("activated_us=100 first_send_us=200 completed_us=300") == std::string::npos ||
+			FailureOutput.str().find("completed_max_running_byte_us=18025216001 generation_max_finite_shortfall_byte_us=7") == std::string::npos ||
+			FailureOutput.str().find("index=1 at_us=300 bytes=123") == std::string::npos ||
+			FailureOutput.str().find("index=2 ") != std::string::npos)
+			throw std::runtime_error("ACK failure snapshot evidence changed");
+		FailureOutput.str(""); FailureOutput.clear();
+		FailureRecord.LastCompletedStructuralSegmentEventCount = 513;
+		DumpFailure(FailureOutput, 3, FailureRecord);
+		if (FailureOutput.str().find("completed_token_matches=0") == std::string::npos ||
+			FailureOutput.str().find("segment_events=513 segment_count_invalid=1") == std::string::npos ||
+			FailureOutput.str().find("index=511 ") == std::string::npos ||
+			FailureOutput.str().find("index=512 ") != std::string::npos)
+			throw std::runtime_error("ACK failure segment evidence exceeded its fixed record bound");
 		GargantuanPromptAckWireBudget Budget;
 		if (!Budget.ConfigureBackground(8 * 1024 * 1024, 32, 1348, 5, 20, 120) ||
 			Budget.BackgroundRate != 44574 || Budget.BackgroundBurst != 517632 || Budget.Reserve != 8344034)
@@ -351,6 +445,7 @@ inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0) {
 			Repeated.Events[2].Type != GargantuanAckDiagnostics::MessageAcked ||
 			Repeated.Events[4].Identity != 2)
 			throw std::runtime_error("repeated ACKs displaced critical native events");
+		AckStatsTimingEvidence::Arm DiagnosticArm(Prompt, true);
 		for (const auto Bytes : {std::size_t{393652}, std::size_t{524288}})
 			for (const auto PollPeriod : {1000us, 16667us})
 				Observe(Bytes, PollPeriod, Prompt, TailBudget, Fault::None, false, Prompt && TailBudget == 1348);

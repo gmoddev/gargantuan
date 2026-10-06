@@ -5,6 +5,8 @@ string(REPLACE "\r\n" "\n" GnsThinkerCurrent "${GnsThinkerCurrent}")
 
 set(GnsOldEntry "void IThinker::Thinker_ProcessThinkers()\n{\n\t// We need the lock to access the thinker queue")
 set(GnsNewEntry "void IThinker::Thinker_ProcessThinkers()\n{\n\t// Gargantuan KI-008: service only timers due when this pass began.\n\t// Keep fresh callback timestamps below, but return to socket reads before\n\t// servicing timers that became due while this batch was executing.\n\tconst SteamNetworkingMicroseconds usecEligibilityCutoff = SteamNetworkingSockets_GetLocalTimestamp();\n\t// We need the lock to access the thinker queue")
+set(GnsPreviousEntry "${GnsNewEntry}")
+string(REPLACE "\n{\n" "\n{\n\t#ifndef IS_STEAMDATAGRAMROUTER\n\tGargantuanServiceTimingSpan GargantuanThinkers(GargantuanServiceTimingPhase::Thinkers);\n\t#endif\n" GnsNewEntry "${GnsNewEntry}")
 set(GnsOldCheck "if ( pNextThinker->GetNextThinkTime() >= usecNow )")
 set(GnsNewCheck "if ( pNextThinker->GetNextThinkTime() >= usecEligibilityCutoff )")
 set(GnsOldInclude "#include \"steamnetworkingsockets_thinker.h\"")
@@ -12,7 +14,9 @@ set(GnsNewInclude [=[#include "steamnetworkingsockets_thinker.h"
 
 #ifndef IS_STEAMDATAGRAMROUTER
 #include "ReliableServiceFeedback.hpp"
+#include "ServiceTimingDiagnostics.hpp"
 #endif]=])
+set(GnsPreviousInclude "#include \"steamnetworkingsockets_thinker.h\"\n\n#ifndef IS_STEAMDATAGRAMROUTER\n#include \"ReliableServiceFeedback.hpp\"\n#endif")
 set(GnsOldRetry [=[		else
 		{
 			// Deadlock!  Should be extremely rare.  Reschedule him for 1ms in the
@@ -30,13 +34,21 @@ set(GnsNewRetry [=[		else
 			#endif
 			pNextThinker->InternalSetNextThinkTime( usecRetry );
 		}]=])
+set(GnsPreviousRetry "${GnsNewRetry}")
+string(REPLACE "\t\t\tSteamNetworkingMicroseconds usecRetry" "\t\t\t#ifndef IS_STEAMDATAGRAMROUTER\n\t\t\tGargantuanThinkers.AddDetail(); // Connection-lock collision count.\n\t\t\t#endif\n\t\t\tSteamNetworkingMicroseconds usecRetry" GnsNewRetry "${GnsNewRetry}")
+set(GnsOldCallback "\t\tif ( pNextThinker->TryLock() )\n\t\t{")
+set(GnsNewCallback "${GnsOldCallback}\n\t\t\t#ifndef IS_STEAMDATAGRAMROUTER\n\t\t\tGargantuanThinkers.AddCount();\n\t\t\t#endif")
 
 # Strip only the known local corrections, then verify immutable upstream text.
 # This accepts unpatched, KI-008-only, and fully patched caches.
 set(GnsThinkerOriginal "${GnsThinkerCurrent}")
+string(REPLACE "${GnsNewCallback}" "${GnsOldCallback}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsNewRetry}" "${GnsOldRetry}" GnsThinkerOriginal "${GnsThinkerOriginal}")
+string(REPLACE "${GnsPreviousRetry}" "${GnsOldRetry}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsNewInclude}" "${GnsOldInclude}" GnsThinkerOriginal "${GnsThinkerOriginal}")
+string(REPLACE "${GnsPreviousInclude}" "${GnsOldInclude}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsNewEntry}" "${GnsOldEntry}" GnsThinkerOriginal "${GnsThinkerOriginal}")
+string(REPLACE "${GnsPreviousEntry}" "${GnsOldEntry}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsNewCheck}" "${GnsOldCheck}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(SHA256 GnsOriginalHash "${GnsThinkerOriginal}")
 if(NOT GnsOriginalHash STREQUAL "3173e3850d9ce7ad479f799f2e60daaffbbfbfc225605e7d22310911baee1613")
@@ -48,6 +60,7 @@ string(REPLACE "${GnsOldEntry}" "${GnsNewEntry}" GnsThinkerDesired "${GnsThinker
 string(REPLACE "${GnsOldCheck}" "${GnsNewCheck}" GnsThinkerDesired "${GnsThinkerDesired}")
 string(REPLACE "${GnsOldInclude}" "${GnsNewInclude}" GnsThinkerDesired "${GnsThinkerDesired}")
 string(REPLACE "${GnsOldRetry}" "${GnsNewRetry}" GnsThinkerDesired "${GnsThinkerDesired}")
+string(REPLACE "${GnsOldCallback}" "${GnsNewCallback}" GnsThinkerDesired "${GnsThinkerDesired}")
 if(NOT GnsThinkerCurrent STREQUAL GnsThinkerDesired)
 	file(WRITE "${GnsThinkerPath}" "${GnsThinkerDesired}")
 endif()

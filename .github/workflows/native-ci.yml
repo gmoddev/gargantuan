@@ -13,13 +13,17 @@ on:
         description: Diagnostic only - trace FULL and ACK statistics once, without qualification or packaging
         type: boolean
         default: false
+      scheduler_ack_cycle_diagnostic:
+        description: Diagnostic only - trace the exact funded ACK cycle once, without qualification or packaging
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   windows-native:
-    name: ${{ github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic && 'Windows causal diagnostic - not qualification' || 'Windows x64 / MSVC 19.50+ / Release' }}
+    name: ${{ github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic) && 'Windows causal diagnostic - not qualification' || 'Windows x64 / MSVC 19.50+ / Release' }}
     runs-on: windows-2025-vs2026
     timeout-minutes: 90
     env:
@@ -29,9 +33,9 @@ jobs:
 
     steps:
       - name: Reject conflicting diagnostic selections
-        if: github.event_name == 'workflow_dispatch' && inputs.scheduler_trace && inputs.scheduler_pair_diagnostic
+        if: github.event_name == 'workflow_dispatch' && ((inputs.scheduler_trace && inputs.scheduler_pair_diagnostic) || (inputs.scheduler_trace && inputs.scheduler_ack_cycle_diagnostic) || (inputs.scheduler_pair_diagnostic && inputs.scheduler_ack_cycle_diagnostic))
         shell: pwsh
-        run: throw 'Select either the legacy FULL diagnostic or the diagnostic-only pair'
+        run: throw 'Select only one fixed scheduler diagnostic route'
 
       - name: Checkout recursive dependencies
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -264,8 +268,15 @@ jobs:
           & tools/ci/SchedulerTrace.ps1 -Pair
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Trace exact funded ACK cycle without qualification
+        if: github.event_name == 'workflow_dispatch' && inputs.scheduler_ack_cycle_diagnostic
+        shell: pwsh
+        run: |
+          & tools/ci/SchedulerTrace.ps1 -Case AckCycleFunded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify compatibility appraisal absence before CTest
-        if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
+        if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
         timeout-minutes: 1
         shell: pwsh
         run: |
@@ -311,7 +322,7 @@ jobs:
           Write-Host "[CI:HostResources] pre_timing_process_count=0"
 
       - name: Run complete headless CTest contract
-        if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
+        if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
         shell: pwsh
         env:
           GARGANTUAN_SAMPLER_TEST_ARTIFACT_ROOT: ${{ github.workspace }}/build-ci/sampler-test-diagnostics
@@ -327,7 +338,7 @@ jobs:
           }
 
       - name: Verify pinned Farm32 control and evidence tooling
-        if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
+        if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
         shell: pwsh
         run: |
           python tools/physical-qualifier/bootstrap.py
@@ -400,7 +411,7 @@ jobs:
           Write-Host "[CI:HostResources] pre_timing_process_count=0"
 
       - name: Run qualified reliable workload timing in Release
-        if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
+        if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
         shell: cmd
         run: |
           pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case PooledFull
@@ -418,7 +429,7 @@ jobs:
           if not %errorlevel%==0 exit /b %errorlevel%
 
       - name: Package qualified 32-client physical candidate
-        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic
+        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic && !inputs.scheduler_ack_cycle_diagnostic
         shell: pwsh
         run: |
           $PackageRoot = Join-Path $PWD 'build-ci/QualifiedScalePhysical'
@@ -458,7 +469,7 @@ jobs:
           }
 
       - name: Upload qualified 32-client physical candidate
-        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic
+        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic && !inputs.scheduler_ack_cycle_diagnostic
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: qualified-scale-${{ github.sha }}
@@ -480,18 +491,20 @@ jobs:
             build-ci/sampler-test-diagnostics/
             build-ci/scheduler-trace/
             build-ci/scheduler-trace-ack-stats/
+            build-ci/scheduler-trace-ack-cycle-funded/
             build-ci/scheduler-trace-aggregate32-structural/
             build-ci/scheduler-trace-pooled-aggregate32-structural/
             build-ci/scheduler-trace-pooled-full/
             build-ci/scheduler-trace-aggregate32/
             build-ci/scheduler-trace.exe
             build-ci/gargantuan_game_session_real_transport_tests.exe
+            build-ci/gargantuan_real_transport_tests.exe
             build-ci/scheduler-trace-pair.json
 
   linux-sanitizers:
     name: Ubuntu 24.04 / Clang 19 / ASan + UBSan / Headless
     needs: windows-native
-    if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
+    if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:

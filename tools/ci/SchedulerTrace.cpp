@@ -36,13 +36,14 @@ constexpr GUID ThreadProvider{0x3d6fa8d1, 0xfe05, 0x11d0, {0x9d, 0xda, 0x00, 0xc
 constexpr GUID KernelControl{0x9e814aad, 0x3204, 0x11d2, {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
 constexpr GUID NullGuid{};
 constexpr char CsvHeader[] = "Qpc,Processor,Opcode,Version,HeaderPid,HeaderTid,NewTid,OldTid,TargetTid,TargetPid,OldWaitReason,OldWaitMode,OldState,ReadyAdjustReason,ReadyAdjustIncrement,ReadyFlags\n";
-enum class FixedCase { Full, AckStats, Aggregate32, Aggregate32Structural, PooledAggregate32Structural, PooledFull };
+enum class FixedCase { Full, AckStats, Aggregate32, Aggregate32Structural, PooledAggregate32Structural, PooledFull, AckCycleFunded };
 struct CaseSpec {
     const wchar_t *Binary;
     const wchar_t *Output;
     const wchar_t *Argument;
     const char *Name;
     bool Pooled = false;
+    const wchar_t *SecondArgument = nullptr;
 };
 CaseSpec GetCaseSpec(FixedCase Case) {
     switch (Case) {
@@ -50,6 +51,8 @@ CaseSpec GetCaseSpec(FixedCase Case) {
         return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace", L"--reliable-workload", "Full"};
     case FixedCase::AckStats:
         return {L"build-ci/gargantuan_real_transport_tests.exe", L"build-ci/scheduler-trace-ack-stats", L"--ack-stats-boundary", "AckStats"};
+    case FixedCase::AckCycleFunded:
+        return {L"build-ci/gargantuan_real_transport_tests.exe", L"build-ci/scheduler-trace-ack-cycle-funded", L"--ack-cycle-funded", "AckCycleFunded", false, L"1348"};
     case FixedCase::Aggregate32:
         return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace-aggregate32", L"--reliable-workload-32", "Aggregate32"};
     case FixedCase::Aggregate32Structural:
@@ -369,6 +372,12 @@ int DecodeOnly(const fs::path &Input, const fs::path &Destination, DWORD MainThr
     return Complete ? 0 : 125;
 }
 int SelfTest() {
+    const auto AckCycle = GetCaseSpec(FixedCase::AckCycleFunded);
+    if (std::wstring(AckCycle.Binary) != L"build-ci/gargantuan_real_transport_tests.exe" ||
+        std::wstring(AckCycle.Output) != L"build-ci/scheduler-trace-ack-cycle-funded" ||
+        std::wstring(AckCycle.Argument) != L"--ack-cycle-funded" ||
+        !AckCycle.SecondArgument || std::wstring(AckCycle.SecondArgument) != L"1348" ||
+        std::string(AckCycle.Name) != "AckCycleFunded" || AckCycle.Pooled) return 13;
     const auto PooledFull = GetCaseSpec(FixedCase::PooledFull);
     if (std::wstring(PooledFull.Binary) != L"build-ci/gargantuan_game_session_real_transport_tests.exe" ||
         std::wstring(PooledFull.Output) != L"build-ci/scheduler-trace-pooled-full" ||
@@ -635,7 +644,8 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
         std::ofstream Failure(Output / "metadata.json", std::ios::binary);
         Failure << "{\"Format\":\"GargantuanSchedulerTrace\",\"Version\":1,\"DiagnosticComplete\":false,"
             << "\"WorkloadCase\":" << JsonString(Selection.Name)
-            << ",\"WorkloadArguments\":[" << (Selection.Pooled ? "\"--pooled\"," : "") << JsonString(Utf8(Selection.Argument)) << "],"
+            << ",\"WorkloadArguments\":[" << (Selection.Pooled ? "\"--pooled\"," : "") << JsonString(Utf8(Selection.Argument))
+            << (Selection.SecondArgument ? "," + JsonString(Utf8(Selection.SecondArgument)) : "") << "],"
             << "\"State\":\"CAPTURE_UNAVAILABLE\",\"ChildLaunchAttempts\":0,\"ChildResumed\":false,"
             << "\"CausalVerdict\":\"NOT_CLAIMED\",\"StartStatus\":" << Recording.StartStatus
             << ",\"SessionGuid\":" << JsonString(Utf8(GuidText)) << ",\"EtlPath\":" << JsonString(Utf8(Etl.wstring())) << "}\n";
@@ -659,7 +669,8 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
     Startup.StartupInfo.hStdInput = Input.Value;
     Startup.lpAttributeList = Attributes;
     PROCESS_INFORMATION Child{};
-    std::wstring Command = L"\"" + Binary.wstring() + L"\" " + (Selection.Pooled ? L"--pooled " : L"") + Selection.Argument;
+    std::wstring Command = L"\"" + Binary.wstring() + L"\" " + (Selection.Pooled ? L"--pooled " : L"") + Selection.Argument +
+        (Selection.SecondArgument ? L" " + std::wstring(Selection.SecondArgument) : L"");
     const BOOL Created = CreateProcessW(Binary.c_str(), Command.data(), nullptr, nullptr, TRUE,
         WorkloadCreationFlags, nullptr, Root.c_str(),
         &Startup.StartupInfo, &Child);
@@ -770,7 +781,8 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
     std::ofstream Metadata(Output / "metadata.json", std::ios::binary);
     Metadata << "{\n\"Format\":\"GargantuanSchedulerTrace\",\"Version\":1,\n"
         << "\"WorkloadCase\":" << JsonString(Selection.Name)
-        << ",\"WorkloadArguments\":[" << (Selection.Pooled ? "\"--pooled\"," : "") << JsonString(Utf8(Selection.Argument)) << "],\n"
+        << ",\"WorkloadArguments\":[" << (Selection.Pooled ? "\"--pooled\"," : "") << JsonString(Utf8(Selection.Argument))
+        << (Selection.SecondArgument ? "," + JsonString(Utf8(Selection.SecondArgument)) : "") << "],\n"
         << "\"SessionName\":" << JsonString(Utf8(SessionName)) << ",\"SessionGuid\":" << JsonString(Utf8(GuidText))
         << ",\"EtlPath\":" << JsonString(Utf8(Etl.wstring())) << ",\n"
         << "\"DiagnosticComplete\":" << (DiagnosticComplete ? "true" : "false") << ",\"CausalVerdict\":\"NOT_CLAIMED\",\n"
@@ -824,6 +836,8 @@ int wmain(int Count, wchar_t **Args) {
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3]);
         if (Count == 4 && std::wstring(Args[1]) == L"--run-ack-stats")
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::AckStats);
+        if (Count == 4 && std::wstring(Args[1]) == L"--run-ack-cycle-funded")
+            return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::AckCycleFunded);
         if (Count == 4 && std::wstring(Args[1]) == L"--run-aggregate32")
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::Aggregate32);
         if (Count == 4 && std::wstring(Args[1]) == L"--run-aggregate32-structural")

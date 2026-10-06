@@ -6,6 +6,68 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Fresh Local32 recovery passes; F1 running service fails (2026-10-06)
+
+Three fresh Local attempts execute qualified A
+`ed09e7126c158a1b8c0dae3e51081f54cb29339e`. Reviewed analyzer B
+`8c5a22327a14af09d397ba8c3e647201143cb06a` is used only for offline
+package verification; full strict provider replay is **NOT_REACHED**.
+Their original failed sequence and terminal receipts remain unchanged:
+
+| Run | Actual result |
+| --- | --- |
+| `d326a539-d817-4bfd-9015-b99ac3bef6aa` | Worker capture/export reserve volume is insufficient before Server native launch. Native recovery and F1 are **NOT MEASURED**. |
+| `3a5d4860-9063-4043-8619-adf6a1098f3b` | Prepared runtime projection receipt mismatch from the `PackageRoot` case in the operational input, before native launch. Native recovery and F1 are **NOT MEASURED**. |
+| `2ca63cf8-db11-4024-9ace-48725185bd74` | After the reserve and projection inputs are corrected, 32 actual native clients run. Server exits 10: causal recovery passes, but F1 running service fails. |
+
+The first two corrections change operational inputs, not production, admission,
+service limits or acceptance predicates. The third run uses coordinator
+`35274d15-318a-478e-a793-b8992fcdc4a6`. Its retained causal TSVs and
+`server.stderr.log` report all three cases **PASS** under their original bounds:
+
+| Case | Accepted = first-sent = ACKed = retired B | Earliest prefix convergence us | Original bound us |
+| --- | ---: | ---: | ---: |
+| Gameplay | 5,344 | 335,246 | 20,470,580 |
+| Structural | 355,274,682 | 13,079,486 | 26,536,577 |
+| Mixed | 13,087 | 350,132 | 20,471,117 |
+
+Later strict-barrier observations do not turn these converged cases into
+deadline failures. Whole-run accepted, first-sent, ACKed and retired bytes
+conserve at 1,486,393,002 B; terminal outstanding debt, active grants, pending
+tokens and terminal release are zero. Conservation and recovery do not waive
+F1. All 32 peers latch a running-service failure: their maximum running
+deficits are 21,984,479,872–44,012,964,480 byte-us, above the unchanged
+18,025,216,000-byte-us limit. Maximum finite-grant shortfall is zero.
+The earliest failing historical token and its first-send gap remain
+**NOT MEASURED**: retained summaries contain historical maxima and last-grant
+timestamps, not the missing per-grant first-send history. ACK retirement wait
+cannot substitute for first-send completion or identify that gap.
+
+Failed raw evidence is preserved under
+`C:\Users\aiden\.codex\artifacts\farm32-2ca63cf8-failed-raw-v1\`.
+`preservation.json` SHA-256 is
+`ba7e67adcfb3b38026e8bbe67d044c65d8dfa02e8f6f4c1f5b37a54f2859152b`:
+29 role/capture files plus four public receipts, including the 3,116,367,872-B
+ETL and 2,902,153,460-B pcapng, retain their verified hashes. Capture/controller
+failure remains failure; preserved bytes do not establish capture acceptance.
+
+Each attempt's exact six run-owned control secrets was retired through the
+existing held-object checks after fresh full census. For the third run,
+all twelve journals and the final receipt are under
+`farm32-ed09e712-local32-v3\cleanup-raw-2ca63cf8\retirement\` in the same
+artifact parent. `final-result.json` SHA-256 is
+`3890bc06b64368143a53e37ff42619221cb4c2b616f4e3d7c3d1d66b77a09713`.
+Final CLIENT/SERVER/native observations at 13:17:15–18 UTC show all six absent,
+no owned/task/native/capture processes, task listeners or firewall rules,
+and capture services running and idle with all eight service files matching.
+Raw evidence, private configs and original failures remain preserved.
+
+This is **Local32 FAIL**, not provider PASS. Node32 is not run; final acceptance,
+3M and merge remain blocked. The retained four-client physical F1 PASS keeps
+its historical source/run scope and does not qualify this later 32-client
+recovery campaign. No architecture or runtime-source change follows from this
+receipt. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 ## Qualified execution source and offline archive bound correction (2026-10-06)
 
 Execution candidate A is `ed09e7126c158a1b8c0dae3e51081f54cb29339e`.
