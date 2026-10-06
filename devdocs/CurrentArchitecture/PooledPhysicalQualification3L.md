@@ -6,6 +6,40 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Absolute sender wake correction: source regression qualified (2026-10-06)
+
+The fixed FULL/ACK-statistics diagnostic on observation revision `b66ceb649`
+is a **non-reproduction**. Run `37530178397`, Windows job `112497231286`,
+passes both workloads and retains 48,896 control-phase records without overflow.
+The timer creation succeeds; this run does not exercise the NULL-timer path.
+Its diagnostic ZIP artifact `11445024420` has SHA-256
+`3a304236d23f287822ed6cad80b1c214e1b477006e19e8036c47eb21ff09e302`.
+It neither explains nor replaces the original `da16d5aba` failure below.
+
+Two independent defects are established by the actual applied pinned sender
+branches. Windows and Linux calculate remaining time with one clock reading,
+then add it to a later clock reading, moving the absolute deadline by the
+intervening pause. Windows also requires a timer handle for the existing
+at-most-1,000-us spin even though that path never uses the handle. The correction
+uses one clock sample for the target/clamp and requires the handle only for
+the long timer wait. Manual polling, no-running-grant and Never bypasses,
+long NULL-timer/error fallback, event wake, timer ownership and priorities remain
+unchanged. No F1, admission, reserve or transport-send constant changes.
+
+The existing native fairness target compiles test bodies extracted directly
+from the applied socketthread source. Bounded OS/clock stubs show old Windows
+and Linux deadline 210 us versus required 160 us, and old NULL-timer short wait
+falling back to an integer millisecond. Corrected branches reach 160 us and
+avoid that fallback; clamp, bypass, already-due, event, timer and error routes
+also pass. The worker native build and fairness test pass with owned jobs reaped;
+the final census finds no task process or UDP 39400/39450 listener. The worker
+cache is development evidence only. All 13 existing selected compatibility tests
+pass sequentially, including F1, mixed traffic/reserve, retry, funded ACK and
+feedback refresh; the actual applied pinned-source checks also pass. Original
+hosted CI and the exact-source physical package remain required before a fresh
+provider run.
+The original 1,109-us plateau's cause remains **NOT MEASURED**.
+
 ## Original hosted ACK statistics fails; exact wake attribution pending (2026-10-06)
 
 Correction `da16d5aba83f2edffe789491aed8e8258a0ca967` is **not CI-qualified**.

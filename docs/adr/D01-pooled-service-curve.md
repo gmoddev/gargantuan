@@ -218,6 +218,14 @@ first-send and retransmission accounting commit only after a positive native
 UDP send result, and all segments in that packet share one timestamp. These
 are transport implementation requirements, not new F1 service allowances.
 
+The precise wait preserves its clamped absolute deadline using one clock sample;
+a pause between calculations cannot retimestamp that deadline later. Windows'
+existing final short spin does not depend on successful creation of the timer
+used by longer waits. The source-extracted native regression and
+[correction receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#absolute-sender-wake-correction-source-regression-qualified-2026-10-06)
+verify these implementation corrections without changing the F1 contract or
+claiming a cause for an earlier uninstrumented CI gap.
+
 The extra packet cost of scoped NoNagle is bounded by the production grant
 cadence. A server step admits at most four complete structural grants and
 flushes them only after that step's admission loop; each grant is one native

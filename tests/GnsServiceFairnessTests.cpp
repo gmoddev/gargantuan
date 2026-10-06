@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <thread>
 #include "OrdinaryWirePacerFixture.hpp"
+#include "GnsPreciseWakeFixture.hpp"
 
 // Private exported test controls in this exact pinned socketthread.cpp. They
 // keep dispatch on this test thread; production continues using its GNS thread.
@@ -158,6 +159,7 @@ int main() {
 		return 1;
 	}
 	bool Passed = TestOrdinaryWirePacer();
+	Passed = TestGnsPreciseWake() && Passed;
 	Passed = ReliableMessageRetirement() && Passed;
 	Passed = PooledSenderQuantumIsolation() && Passed;
 	Passed = AsapInsertionOrdering() && Passed;

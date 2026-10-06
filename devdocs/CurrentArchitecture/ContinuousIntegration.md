@@ -334,6 +334,17 @@ events to QPC. Bracketed native snapshots establish observations at those points
 only. Neither clock instrumentation nor thread observation changes service
 timestamps, deadlines, thread priority or transport scheduling.
 
+The existing GNS fairness target also compiles Windows/Linux wait bodies
+extracted at configure time from the actual applied pinned socketthread source.
+Bounded OS/clock stubs cover absolute-deadline/clamp preservation, NULL-timer
+short spin, manual/no-grant/Never bypasses, already-due work, event wake and
+long timer/error fallback. The sender computes remaining time and its absolute
+target from the same clock sample; Windows requires a timer handle only for
+the long timer branch, not the existing at-most-1,000-us spin. These are source
+regressions, not a claim that a historical uninstrumented CI plateau has been
+attributed. Native compatibility and the correction's own original CI remain
+required; a passing diagnostic cannot replace a failed qualification job.
+
 The diagnostic uses a named system logger with a fresh GUID, 8 MiB of configured
 buffers and a 512 MiB sequential ETL limit. Decoded CSV is capped at 512 MiB;
 each child output stream is capped at 32 MiB. A Job Object owns the suspended

@@ -954,6 +954,7 @@ if(BUILD_TESTING)
 		target_compile_features(gargantuan_gns_service_fairness_tests PRIVATE cxx_std_17)
 		target_link_libraries(gargantuan_gns_service_fairness_tests PRIVATE GameNetworkingSockets::static)
 		target_include_directories(gargantuan_gns_service_fairness_tests PRIVATE
+			"${CMAKE_CURRENT_BINARY_DIR}"
 			"${gamenetworkingsockets_SOURCE_DIR}/src/steamnetworkingsockets"
 			$<TARGET_PROPERTY:GameNetworkingSockets_s,INCLUDE_DIRECTORIES>)
 		target_compile_definitions(gargantuan_gns_service_fairness_tests PRIVATE

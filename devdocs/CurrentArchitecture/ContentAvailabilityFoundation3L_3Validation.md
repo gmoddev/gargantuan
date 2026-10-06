@@ -6,6 +6,20 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Absolute native wake: source correction, provider gates pending (2026-10-06)
+
+The [wake receipt](PooledPhysicalQualification3L.md#absolute-sender-wake-correction-source-regression-qualified-2026-10-06)
+records independent source-extracted old-fail/new-pass regressions for a
+two-clock absolute-deadline shift on Windows/Linux and the unnecessary Windows
+timer-handle gate on the existing short spin. Actual worker native build/fairness
+passes; owned jobs are reaped and the endpoint census is empty. Constants,
+admission, reservations, priority and first-send accounting are unchanged.
+The hosted `b66ceb649` FULL/statistics diagnostic passes without reproducing
+the earlier plateau. Its 48,896 bounded phase records do not identify the
+original failure's cause. All 13 selected native compatibility tests and the
+actual pinned-source checks pass. New original CI/package qualification remains
+pending; no fresh physical PASS, KI-006 closure or 3L completion is claimed.
+
 ## Original hosted control-grant F1 failure remains authoritative (2026-10-06)
 
 The [exact ACK statistics receipt](PooledPhysicalQualification3L.md#original-hosted-ack-statistics-fails-exact-wake-attribution-pending-2026-10-06)

@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-06 the actual pinned wake branches independently reproduce a two-clock
+deadline shift on Windows/Linux and an unnecessary timer-handle requirement
+for Windows' existing short spin. Minimal corrected source branches and the
+actual worker native fairness target pass, with unchanged F1/admission/reserves.
+Hosted `b66ceb649` diagnostic `37530178397` is a non-reproduction with 48,896
+bounded control-phase records; the original `da16d5aba` gap remains unexplained.
+[Wake correction receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#absolute-sender-wake-correction-source-regression-qualified-2026-10-06).
+All 13 selected native compatibility tests and applied-source checks pass.
+**New CI/package and fresh Local32/Node32 evidence remain required;
+KI-006 OPEN, Foundation 3L B — PARTIALLY READY.**
+
 2026-10-06 `da16d5aba` original push Windows job `112458311111` fails ACK
 statistics F1 (95/96 native tests pass): control token 24, 393,652 B, has a
 1,109-us zero-first-send gap, exact running deficit 18,605,932,544 byte-us over

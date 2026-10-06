@@ -60,11 +60,12 @@ GargantuanReplaceWake([=[
 			SteamNetworkingSocketsLib::GargantuanHasRunningStructuralGrant() &&
 			usecExactWake < k_nThinkTime_Never )
 		{
-			SteamNetworkingMicroseconds usecRemaining = usecExactWake - SteamNetworkingSockets_GetLocalTimestamp();
+			const SteamNetworkingMicroseconds usecNow = SteamNetworkingSockets_GetLocalTimestamp();
+			SteamNetworkingMicroseconds usecRemaining = usecExactWake - usecNow;
 			usecRemaining = std::min( usecRemaining, (SteamNetworkingMicroseconds)nMaxTimeoutMS * 1000 );
 			if ( usecRemaining > 0 )
 			{
-				const SteamNetworkingMicroseconds usecTarget = SteamNetworkingSockets_GetLocalTimestamp() + usecRemaining;
+				const SteamNetworkingMicroseconds usecTarget = usecNow + usecRemaining;
 				bool bSpin = usecRemaining <= 1000;
 				if ( usecRemaining > 1000 )
 				{
@@ -97,12 +98,14 @@ GargantuanReplaceWake([=[
 			SteamNetworkingSocketsLib::GargantuanServiceTimingPhase::TimerWait);
 		GargantuanWait.SetCount(nMaxTimeoutMS);
 		GargantuanWait.SetDetail(3); // Integer-ms fallback unless precise path succeeds.
-		if ( !bManualPoll && nMaxTimeoutMS > 0 && s_hGargantuanPreciseWakeTimer != nullptr &&
+		if ( !bManualPoll && nMaxTimeoutMS > 0 &&
 			SteamNetworkingSocketsLib::GargantuanHasRunningStructuralGrant() &&
 			usecExactWake < k_nThinkTime_Never )
 		{
-			GargantuanWait.AddFlags(1); // Precise timer available for this running grant.
-			SteamNetworkingMicroseconds usecRemaining = usecExactWake - SteamNetworkingSockets_GetLocalTimestamp();
+			if (s_hGargantuanPreciseWakeTimer != nullptr)
+				GargantuanWait.AddFlags(1); // Preserve the timer-available diagnostic bit.
+			const SteamNetworkingMicroseconds usecNow = SteamNetworkingSockets_GetLocalTimestamp();
+			SteamNetworkingMicroseconds usecRemaining = usecExactWake - usecNow;
 			if ( usecRemaining <= 0 )
 			{
 				bWaited = true;
@@ -111,11 +114,11 @@ GargantuanReplaceWake([=[
 			else
 			{
 				usecRemaining = std::min( usecRemaining, (SteamNetworkingMicroseconds)nMaxTimeoutMS * 1000 );
-				const SteamNetworkingMicroseconds usecTarget = SteamNetworkingSockets_GetLocalTimestamp() + usecRemaining;
+				const SteamNetworkingMicroseconds usecTarget = usecNow + usecRemaining;
 				bool bSpin = usecRemaining <= 1000;
 				GargantuanWait.SetBytes(usecRemaining); // Requested remaining microseconds.
 				if (bSpin) GargantuanWait.SetDetail(1);
-				if ( usecRemaining > 1000 )
+				if ( usecRemaining > 1000 && s_hGargantuanPreciseWakeTimer != nullptr )
 				{
 					LARGE_INTEGER due;
 					due.QuadPart = -10 * ( usecRemaining - 1000 );
@@ -227,3 +230,34 @@ if(NOT GargantuanWakeCurrent STREQUAL GargantuanWakeSource)
 	file(WRITE "${GargantuanWakePath}" "${GargantuanWakeSource}")
 	file(WRITE "${GargantuanWakePath}.gargantuan-wake-applied" "${GargantuanWakeSource}")
 endif()
+
+# The existing fairness target tests these exact applied branches under bounded
+# OS/clock stubs. No copied pacing model or production clock seam is involved.
+string(FIND "${GargantuanWakeSource}" "\t\tbool bWaited = false;" WakeWindowsBegin)
+string(FIND "${GargantuanWakeSource}" "\t\tGargantuanWait.Finish();" WakeWindowsEnd)
+if(WakeWindowsBegin LESS 0 OR WakeWindowsEnd LESS WakeWindowsBegin)
+	message(FATAL_ERROR "Pinned Windows wake test branch missing")
+endif()
+string(LENGTH "\t\tGargantuanWait.Finish();" WakeWindowsTail)
+math(EXPR WakeWindowsLength "${WakeWindowsEnd} - ${WakeWindowsBegin} + ${WakeWindowsTail}")
+string(SUBSTRING "${GargantuanWakeSource}" ${WakeWindowsBegin} ${WakeWindowsLength} WakeWindowsBody)
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gns-wake-windows.inc" CONTENT "${WakeWindowsBody}" @ONLY)
+string(FIND "${GargantuanWakeSource}" "\t\tstruct epoll_event epoll_events[ 32 ];" WakeLinuxBegin)
+if(WakeLinuxBegin LESS 0)
+	message(FATAL_ERROR "Pinned Linux wake test branch missing")
+endif()
+string(SUBSTRING "${GargantuanWakeSource}" ${WakeLinuxBegin} -1 WakeLinuxRemainder)
+string(FIND "${WakeLinuxRemainder}" "\t\t#if IsLinux()\n" WakeLinuxIf)
+if(WakeLinuxIf LESS 0)
+	message(FATAL_ERROR "Pinned Linux wake test branch missing")
+endif()
+string(LENGTH "\t\t#if IsLinux()\n" WakeLinuxIfLength)
+math(EXPR WakeLinuxContentBegin "${WakeLinuxIf} + ${WakeLinuxIfLength}")
+string(SUBSTRING "${WakeLinuxRemainder}" ${WakeLinuxContentBegin} -1 WakeLinuxBodyRemainder)
+string(FIND "${WakeLinuxBodyRemainder}" "\t\t#else" WakeLinuxLength)
+if(WakeLinuxLength LESS 0)
+	message(FATAL_ERROR "Pinned Linux wake test branch missing")
+endif()
+string(SUBSTRING "${WakeLinuxRemainder}" 0 ${WakeLinuxIf} WakeLinuxPrefix)
+string(SUBSTRING "${WakeLinuxBodyRemainder}" 0 ${WakeLinuxLength} WakeLinuxBody)
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gns-wake-linux.inc" CONTENT "${WakeLinuxPrefix}${WakeLinuxBody}" @ONLY)
