@@ -209,6 +209,88 @@ class FinalTests(unittest.TestCase):
                 A.ReplayFourClient(Path(Root), {"Status": "PASS"}, SOURCE)
 
 
+class RetainedFourTests(unittest.TestCase):
+    def Evidence(self):
+        return {Key: Value for Key, Value in A.RETAINED_FOUR_CLIENT.items()
+                if Key != 'ProviderSourceCommit'} | {
+                    'State': 'MEASURED_PASS', 'EvidenceScope': 'RETAINED_F1_PHASE1'}
+
+    def Final(self, Evidence=None, Farm=None, Provenance=None):
+        Source = A.RETAINED_FOUR_CLIENT['ProviderSourceCommit']
+        Farm = Farm or Providers()
+        Farm['WorkloadPinParity']['SourceCommit'] = Source
+        return A.FinalObservation(Source, Farm, {'State': 'MEASURED_PASS', 'SourceCommit': Source},
+                                  Evidence or self.Evidence(), Provenance or {
+                                      'Package': {'State': 'MEASURED_PASS'},
+                                      'Sequence': {'State': 'MEASURED_PASS'}})
+
+    def test_exact_retention_keeps_historical_identity_and_current_provider_gates(self):
+        Result = self.Final()
+        self.assertEqual(Result['Status'], 'PASS')  # Supplied conjunction fixture, no physical replay.
+        self.assertEqual(Result['SourceCommit'], A.RETAINED_FOUR_CLIENT['ProviderSourceCommit'])
+        self.assertEqual(Result['FourClient']['SourceCommit'], A.RETAINED_FOUR_CLIENT['SourceCommit'])
+        self.assertIn({'Gate': 'RetainedFourClientMixed', 'State': 'MEASURED_PASS'}, Result['Gates'])
+        self.assertNotIn('FreshFourClientMixed', [Gate['Gate'] for Gate in Result['Gates']])
+        for Role in ('Local', 'Node'):
+            Farm = Providers()
+            Put(Farm, Role + '.F1.State', 'MEASURED_FAIL')
+            self.assertEqual(self.Final(Farm=Farm)['Status'], 'FAIL')
+            Put(Farm, Role + '.F1.State', None)
+            self.assertEqual(self.Final(Farm=Farm)['Status'], 'INCOMPLETE')
+        self.assertEqual(self.Final(Provenance={
+            'Package': {'State': 'MEASURED_PASS'}, 'Sequence': {'State': 'NOT_MEASURED'}})['Status'], 'INCOMPLETE')
+
+    def test_wrong_pair_pin_native_run_lifecycle_and_reuse_are_denied(self):
+        Source = A.RETAINED_FOUR_CLIENT['ProviderSourceCommit']
+        with self.assertRaises(A.EvidenceError):
+            A.FourClientGate('2' * 40, self.Evidence())
+        for Key, Value in (('InputMapSha256', '0' * 64), ('SourceCommit', Source),
+                           ('RunId', Four()['RunId']), ('LifecycleRunId', Four()['LifecycleRunId']),
+                           ('EvidenceScope', 'CURRENT_SOURCE_FOUR_CLIENT_MIXED')):
+            Bad = self.Evidence()
+            Bad[Key] = Value
+            with self.subTest(Key=Key), self.assertRaises(A.EvidenceError):
+                self.Final(Evidence=Bad)
+        Farm = Providers()
+        Farm['LocalRunId'] = A.RETAINED_FOUR_CLIENT['RunId']
+        with self.assertRaises(A.EvidenceError):
+            self.Final(Farm=Farm)
+
+    def test_retained_failure_and_pending_never_become_pass(self):
+        for State, Expected in (('MEASURED_FAIL', 'FAIL'), ('NOT_MEASURED', 'INCOMPLETE')):
+            Evidence = self.Evidence()
+            Evidence['State'] = State
+            self.assertEqual(self.Final(Evidence=Evidence)['Status'], Expected)
+
+    def test_exact_map_selects_unchanged_raw_replayer_source_before_parsing(self):
+        Raw = b'{"ClientRoot":"supplied-public-fixture"}'
+        Source = A.RETAINED_FOUR_CLIENT['ProviderSourceCommit']
+        # Only the fixture map digest is replaced; exact source/run/lifecycle stay literal.
+        with mock.patch.dict(A.RETAINED_FOUR_CLIENT, {'InputMapSha256': A.Digest(Raw)}), \
+                mock.patch.object(A, 'ReadBytes', return_value=Raw), \
+                mock.patch.object(A, 'ReplayFourClient', return_value=self.Evidence()) as Replay:
+            Result = A.ReplayFourClientInputs(Path('.'), Path('fixture.json'), Source)
+            Replay.assert_called_once_with(Path('.'), {'ClientRoot': 'supplied-public-fixture'},
+                                           A.RETAINED_FOUR_CLIENT['SourceCommit'])
+            self.assertEqual(Result['InputMapSha256'], A.Digest(Raw))
+            self.assertEqual(Result['SourceCommit'], A.RETAINED_FOUR_CLIENT['SourceCommit'])
+
+    def test_changed_map_or_different_provider_cannot_select_retained_source(self):
+        Raw = b'{"ClientRoot":"supplied-public-fixture"}'
+        Source = A.RETAINED_FOUR_CLIENT['ProviderSourceCommit']
+        with mock.patch.dict(A.RETAINED_FOUR_CLIENT, {'InputMapSha256': A.Digest(Raw)}):
+            for Data, Provider in ((Raw + b' ', Source), (Raw, '2' * 40)):
+                with mock.patch.object(A, 'ReadBytes', return_value=Data), \
+                        mock.patch.object(A, 'ReplayFourClient', return_value=self.Evidence()) as Replay, \
+                        self.assertRaises(A.EvidenceError):
+                    A.ReplayFourClientInputs(Path('.'), Path('fixture.json'), Provider)
+                self.assertEqual(Replay.call_args.args[2], Provider)
+            with mock.patch.object(A, 'ReadBytes', return_value=b'{"ClientRoot":1,"ClientRoot":2}'), \
+                    mock.patch.object(A, 'ReplayFourClient') as Replay, self.assertRaises(A.EvidenceError):
+                A.ReplayFourClientInputs(Path('.'), Path('fixture.json'), Source)
+            Replay.assert_not_called()
+
+
 class CITests(unittest.TestCase):
     def setUp(self):
         self.Temporary = tempfile.TemporaryDirectory()

@@ -539,16 +539,41 @@ def EvaluateProviders(Observation, ExpectedCommit):
     return Gates
 
 
+# One explicitly retained historical prerequisite, not native-source equivalence.
+RETAINED_FOUR_CLIENT = {
+    "ProviderSourceCommit": "c916b7d4f868177ae00b4b05dacfa7b8dbb1f563",
+    "SourceCommit": "9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad",
+    "RunId": "454bf4f8-c8f2-4c18-9866-1b61218da514",
+    "LifecycleRunId": "7a48260b-6911-4394-bbb5-65a65e17bac0",
+    "InputMapSha256": "d4ebc1849258d0bf30abeb37ca9e0de3737d533e7ac7df99fd449351d861e8ca",
+}
+
+
+def FourClientGate(Source, Four):
+    Retained = Four.get("EvidenceScope") == "RETAINED_F1_PHASE1"
+    if Retained:
+        Require(Source == RETAINED_FOUR_CLIENT["ProviderSourceCommit"] and
+                Four.get("InputMapSha256") == RETAINED_FOUR_CLIENT["InputMapSha256"],
+                "retained four-client source pair/input pin mismatch")
+    if Four["State"] == "MEASURED_PASS":
+        if Retained:
+            Require(all(Four.get(Key) == RETAINED_FOUR_CLIENT[Key]
+                        for Key in ("SourceCommit", "RunId", "LifecycleRunId")),
+                    "retained four-client native source/run/lifecycle mismatch")
+        else:
+            Require(Four.get("SourceCommit") == Source, "four-client candidate mismatch")
+    return {"Gate": "RetainedFourClientMixed" if Retained else "FreshFourClientMixed", "State": Four["State"]}
+
+
 def FinalObservation(SourceCommit, ProviderObservation, CI, FourClient, Provenance=None):
     Gates = EvaluateProviders(ProviderObservation, SourceCommit)
     Gates.append({"Gate": "ExactHeadCI", "State": CI["State"]})
-    Gates.append({"Gate": "FreshFourClientMixed", "State": FourClient["State"]})
+    Gates.append(FourClientGate(SourceCommit, FourClient))
     Provenance = Provenance or {'Package': {'State': 'NOT_MEASURED'}, 'Sequence': {'State': 'NOT_MEASURED'}}
     Gates.extend({'Gate': Key, 'State': Provenance[Key]['State']} for Key in ('Package', 'Sequence'))
     if CI["State"] == "MEASURED_PASS":
         Require(CI.get("SourceCommit") == SourceCommit, "CI candidate mismatch")
     if FourClient["State"] == "MEASURED_PASS":
-        Require(FourClient.get("SourceCommit") == SourceCommit, "four-client candidate mismatch")
         FourId = str(uuid.UUID(FourClient["RunId"]))
         Require(FourId not in (ProviderObservation["LocalRunId"], ProviderObservation["NodeRunId"]),
                 "four-client/provider run identity reused")
@@ -608,6 +633,19 @@ def ReplayFourClient(Root, Inputs, Source):
     return Result
 
 
+def ReplayFourClientInputs(Root, InputPath, Source):
+    Data = ReadBytes(InputPath)
+    Pin = Digest(Data)
+    Retained = (Source == RETAINED_FOUR_CLIENT["ProviderSourceCommit"] and
+                Pin == RETAINED_FOUR_CLIENT["InputMapSha256"])
+    NativeSource = RETAINED_FOUR_CLIENT["SourceCommit"] if Retained else Source
+    Result = ReplayFourClient(Root, JsonData(Data), NativeSource)
+    Result = {**Result, "InputMapSha256": Pin,
+              "EvidenceScope": "RETAINED_F1_PHASE1" if Retained else "CURRENT_SOURCE_FOUR_CLIENT_MIXED"}
+    FourClientGate(Source, Result)
+    return Result
+
+
 def Main():
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument("--source-commit", required=True)
@@ -644,7 +682,7 @@ def Main():
         Require(Args.ci_index_sha256 is None, "CI pin without inventory")
     with tempfile.TemporaryDirectory(prefix="gargantuan-3l-final-") as Temporary:
         Farm = ReplayProviders(Root, Inputs, Path(Temporary) / "farm.json", PowerShell)
-        Four = (ReplayFourClient(Root, ReadJson(Args.four_client_inputs), Source)
+        Four = (ReplayFourClientInputs(Root, Args.four_client_inputs, Source)
                 if Args.four_client_inputs else
                 {"State": "NOT_MEASURED", "Reason": "fresh four-client raw replay required"})
         Provenance = None
@@ -658,7 +696,7 @@ def Main():
         Result["FarmInputMapPath"] = str(Args.farm_inputs.absolute())
         Result["FarmInputMapSha256"] = Digest(ReadBytes(Args.farm_inputs))
         if Args.four_client_inputs:
-            Result["FourClientInputMapSha256"] = Digest(ReadBytes(Args.four_client_inputs))
+            Result["FourClientInputMapSha256"] = Four["InputMapSha256"]
         Result["AnalyzerSha256"] = Digest(ReadBytes(__file__))
         Result["AnalyzerProvenance"] = AnalyzerProvenance
         Result["PowerShellPath"] = str(PowerShell)

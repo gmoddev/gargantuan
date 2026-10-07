@@ -31,12 +31,13 @@ When a later analyzer B corrects offline evidence parsing, pass B explicitly;
 `--source-commit` remains the native execution candidate A.
 
 Freeze the native/analyzer execution candidate A before its build. Dispatch CI
-and the qualified-scale artifact on A, build the four-client probe and owned
-source archive from A, and preserve that clean A checkout for final replay.
+and the qualified-scale artifact on A and preserve that clean A checkout for
+final replay. Same-source four-client evidence is the default; the sole exact
+historical retention exception below preserves its separate native source.
 A later child B may record the newly measured qualifier artifact pins without
 changing A's native execution source. Qualify B's adapter/pin changes separately;
-the four-client native manifest and both official farm packages still identify
-A. This avoids a build/hash self-reference cycle. A final PR documentation or
+the native manifests keep their actual source identities. This avoids a
+build/hash self-reference cycle. A final PR documentation or
 pin receipt commit does not retrospectively relabel an A executable as B. This
 checker proves CI and physical execution provenance for the explicit A source;
 it does not waive required separate validation of the B qualifier.
@@ -44,9 +45,31 @@ The checker requires A to be an ancestor of clean HEAD B and records B plus
 hashes of the fixed final/four-client entrypoints, their F1 dependencies, and
 all farm dependencies enumerated by `PhysicalFarmAnalysisInventory.ps1`. It
 still replays raw four-client evidence in this
-invocation. CI, the qualified package, both physical manifests and the four-
-client source archive remain pinned to A. A B receipt is analyzer provenance,
+invocation. CI, the qualified package and both provider manifests remain pinned
+to A; the four-client archive stays pinned to its actual execution source.
+A B receipt is analyzer provenance,
 not a claim that B's native runtime was physically qualified.
+
+## Exact retained four-client prerequisite
+
+For provider candidate `c916b7d4f868177ae00b4b05dacfa7b8dbb1f563` only,
+the retained F1 Phase 1 prerequisite has native source
+`9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad`, physical run
+`454bf4f8-c8f2-4c18-9866-1b61218da514`, lifecycle
+`7a48260b-6911-4394-bbb5-65a65e17bac0`, and raw input-map SHA-256
+`d4ebc1849258d0bf30abeb37ca9e0de3737d533e7ac7df99fd449351d861e8ca`.
+The input map is hashed before parsing. Only this exact pair and map select the
+unchanged raw four-client replayer's historical source. A passing result must
+retain the exact native source/run/lifecycle, candidate pins and raw input
+hashes; it is labeled `RETAINED_F1_PHASE1` / `RetainedFourClientMixed`.
+There is no arbitrary source, ancestor-based retention, summary bypass or
+native-equivalence claim. Other maps use the original same-source replay rule.
+
+Retention does not qualify the changed native candidate: both current-source
+Local32 and Node32 grant-scoped F1 gates remain mandatory, along with every
+other provider, CI, package and controller-sequence gate. The historical
+completion must still precede both provider stages; Local completion must
+precede Node staging. No historical receipt or failed provider is relabeled.
 
 ```powershell
 python tests/foundation3l_acceptance.py `
@@ -68,7 +91,7 @@ INCOMPLETE. The command does not accept a four-client PASS flag or an existing
 farm summary as evidence. The four-client argument map is passed only to the
 fixed tracked `tests/foundation3l_four_client.py:Replay(Inputs, ExpectedCommit)`
 implementation. Until that implementation and its complete inputs are present,
-the fresh four-client gate remains unmeasured.
+the four-client gate remains unmeasured.
 
 The four-client input map includes `ServerCsv`, `AdmissionsCsv`, and a
 `ClientCsv` map keyed by the four exact nonce strings. `RawCsvSha256` contains
@@ -192,7 +215,7 @@ they remain bound by the original GitHub ZIP digest and bounded separately.
 
 Retain the root-owned CLIENT campaign stage configurations. Their RunId,
 SourceCommit and ManifestSha256 must bind the same indexed provider manifests.
-The fresh four-client replay must expose an evidence-backed `CompletedUtc`
+The same-source or exactly retained four-client replay must expose an evidence-backed `CompletedUtc`
 with `CompletionClockDomain = CONTROLLING_HOST_UTC`. Both provider stage
 `CreatedUtc` values must follow that completion. The controlling-host
 `farm_outer_endpoint.py` Local `host.terminal.json` must additionally prove
@@ -211,7 +234,7 @@ CI failures, missing tests, stale attempts, digest changes, PR-merge source
 mismatches, package inventory corruption and premature provider staging. It
 creates only small temporary local files and never claims physical results.
 
-Real final qualification still needs the fresh four-client raw replay,
+Real final qualification still needs the same-source or exactly retained four-client raw replay,
 successful post-change exact-head CI ZIPs, the actual qualified-scale ZIP,
 complete Local and Node raw campaigns with new F1/ordinary-demand records, real
 TLS/resource/capture/lifecycle evidence and retained controller stage records.
