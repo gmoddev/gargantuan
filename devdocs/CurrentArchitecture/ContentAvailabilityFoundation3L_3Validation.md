@@ -6,6 +6,21 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Post-wake decision A: native candidate qualified, provider evidence pending (2026-10-06)
+
+The [decision receipt](PooledPhysicalQualification3L.md#post-wake-decision-a-keep-f1-strict-2026-10-06)
+adopts KEEP F1 STRICT on native source `c916b7d4f`: old-fail/new-pass wake
+regressions, native 13/13, fixed clean 14/14 and all six original hosted jobs
+pass. Windows passes 96 native +382 Python each; Linux 53 each; GNS 11 each,
+with zero failures/errors/skips and reconciled source trees. Official exact-source
+package byte closures separately verify. No F1 constant, eligibility clock,
+admission, reserve or acceptance requirement changes; the independent challenge
+rejects a universal Windows dispatch promise. Normal 32-peer outputs lack the
+whole-peer F1 certificate and retain that limit; diagnostic native evidence is
+not physical evidence. The historical DA failure remains failed/unattributed.
+Fresh Local32/Node32 and final acceptance are pending; KI-006 OPEN, 3L B —
+PARTIALLY READY. No 3M or merge.
+
 ## Absolute native wake: source correction, provider gates pending (2026-10-06)
 
 The [wake receipt](PooledPhysicalQualification3L.md#absolute-sender-wake-correction-source-regression-qualified-2026-10-06)

@@ -198,6 +198,29 @@ fail even if its total completion appears to fit the startup allowance.
 
 ### Native transport implementation of the unchanged F1 bound
 
+#### Post-wake decision A — keep F1 strict (2026-10-06)
+
+After qualifying both absolute-wake implementation corrections on native source
+`c916b7d4f868177ae00b4b05dacfa7b8dbb1f563`, retain the existing finite and
+within-grant running equations, constants and common-four contract unchanged.
+Source-extracted old-fail/new-pass regressions, 13 native compatibility tests,
+the observed 32-peer F1 development workload, a fixed 14-child clean batch and
+all six original hosted jobs pass. An independent review challenged the
+platform assumptions and supports retaining the strict requirement on this
+evidence. The [decision receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-wake-decision-a-keep-f1-strict-2026-10-06)
+records counts, source scopes, alternatives and limitations.
+
+F1 remains a strict deployment-qualification and runtime-health requirement.
+A violating qualified grant still fails: do not pause its clock, omit it,
+erase history or excuse host lateness. Requested timer precision is not a
+universal Windows thread-dispatch guarantee. A finite passing campaign proves
+its recorded observations, not every future schedule; the untraced historical
+1,109-us failure remains unattributed. No benchmark-derived slack or stronger
+execution environment is introduced. Fresh current-source Local32 and Node32
+F1 evidence remains mandatory. A future residual failure without an attributable
+software cause requires the architecture decision procedure rather than another
+sequence of speculative micro-timing patches.
+
 The first physical F1 trace found a 1,258 B grant whose first UDP packet
 carried 1,135 structural bytes and whose 123 B final segment remained behind
 GNS's ordinary 5 ms Nagle timer. The finite envelope passed, but the

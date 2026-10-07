@@ -6,6 +6,58 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Post-wake decision A — keep F1 strict (2026-10-06)
+
+Native candidate `c916b7d4f868177ae00b4b05dacfa7b8dbb1f563` qualifies both
+identified wake corrections without changing F1. The old-source regressions
+fail and corrected applied Windows/Linux branches pass; native compatibility
+passes 13/13. All six original push/PR jobs pass with no failures/errors/skips:
+Windows **96 native +382 Python each**, Linux **53 each**, GNS **11 each**.
+Original index SHA-256 is
+`d954fa02e4d1fa853003585d178aeb7cdd4008eefb247d9e27d22f540487e062`;
+all actual source/PR merge trees reconcile to `7d44512879f37988c8029ae3650788efa48e712c`.
+Each Windows job's five required timing commands succeeds with normal-priority
+children, reaping and zero recorded loss. The official package dispatch
+`37539693115` separately passes Windows 96/Linux 53. Package artifact
+`11450431614` has SHA-256
+`f46f34192bb5316429d6385d4fd40732ad56cc5d8c07ddd127edcfe7c788102b`;
+its Player/Server byte closures verify. Passing package jobs do not replace any
+original job; all originals independently pass.
+
+One predeclared clean, diagnostics-off batch passes **14/14** fresh normal-priority
+children: four ACK-statistics, four funded four-grant, four mixed-traffic and two
+structural 32-peer workloads. No retries, remaining processes or listeners;
+all 58 retained files match their sizes/hashes. Matrix SHA-256 is
+`49c179511e3e0a1764ad16d8bb6561c23558998324a3c5adb1509309cef094a4`.
+ACK-statistics consumes 0.594–1.125 CPU seconds per approximately 64.3-s case;
+the two 32-peer cases consume 31.172/32.438 CPU seconds over 40.031/40.125 s.
+Default-off 32-peer and normal hosted outputs prove workload/conservation,
+but their whole-peer F1 certificates are **NOT MEASURED**. Separately retained
+instrumented development records qualify 2,408 grants/32 generations, with
+285,525,458 B exactly first-sent/ACKed/retired, maximum 9,324,008,704 byte-us,
+and common-four maximum 12,806,797,312 over 7,248 us. That worker cache remains
+development scope; no provider result is inferred from it.
+
+**Decision: A — KEEP F1 STRICT.** Independent challenge supports the existing
+finite and recurring equations, including slow-grant/blackout negative tests.
+Alternative B cannot derive a new constant from the old 1,109-us observation or
+remove running verification merely because finite completion passes. Alternative
+C needs measured remaining software monopolization; a dedicated thread alone
+does not prevent OS preemption. An explicit soft real-time alternative D would
+require a different, justified service/deployment contract and new negative
+proofs; no residual measured failure here justifies that semantic change.
+[Microsoft timer creation](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createwaitabletimerexw)
+and [thread scheduling](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-sleep)
+do not establish a universal bounded ready-to-running delay. Retaining the
+strict measured qualification requirement makes no such OS guarantee. A valid
+future violation still fails and requires attribution/architecture review;
+eligible clocks and failure history are never discounted. The original DA gap
+remains **NOT MEASURED** causally and its historical failure is preserved.
+
+Fresh Local32, real-TLS Node32 and the remaining resource/parity/final gates are
+still required. KI-006 is OPEN, Foundation 3L B — PARTIALLY READY. No physical
+PASS, 3M work or merge is claimed by this decision.
+
 ## Absolute sender wake correction: source regression qualified (2026-10-06)
 
 The fixed FULL/ACK-statistics diagnostic on observation revision `b66ceb649`
