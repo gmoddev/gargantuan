@@ -280,16 +280,19 @@ class CaptureCampaignTests(unittest.TestCase):
 
     def test_cancel_signal_is_exactly_bound_to_run_role_and_capture_readiness(self):
         Config = self.Config("SERVER")
+        # ReadConfig normally canonicalizes this root. TEMP can contain a
+        # Windows 8.3 alias, so the supplied fixture must use that same path.
+        Config["CaptureRoot"] = Config["CaptureRoot"].resolve()
         self.Capture.mkdir()
         Controller = campaign.FarmCaptureController(Config, Clock=self.Clock, Sleep=self.Clock.Sleep)
         Controller.Started = self.Clock()
         Controller.ReadyUtc = datetime.now(timezone.utc).isoformat()
-        Index = self.RoleEvidence("SERVER")
+        Index = self.RoleEvidence("SERVER").resolve()
         Signal = {"Format": "GargantuanFarm32CaptureCancel", "Version": 1,
                   "RunId": self.RunId, "CoordinatorRunId": self.CoordinatorRunId,
                   "Role": "SERVER", "ReadyUtc": Controller.ReadyUtc,
                   "Reason": "COORDINATOR_JOIN_FAILED", "JoinExitCode": 1}
-        Cancel = self.CaptureRoot / (self.RunId + ".capture-controller-cancel.json")
+        Cancel = Controller.Config["CaptureRoot"] / (self.RunId + ".capture-controller-cancel.json")
         Changes = (("RunId", str(uuid.uuid4())), ("CoordinatorRunId", str(uuid.uuid4())),
                    ("Role", "CLIENT"), ("ReadyUtc", "2020-01-01T00:00:00Z"),
                    ("Reason", "OTHER"), ("Version", True), ("JoinExitCode", True),

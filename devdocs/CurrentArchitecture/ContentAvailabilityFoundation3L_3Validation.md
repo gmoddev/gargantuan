@@ -6,6 +6,20 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Hosted capture-cancellation fixture path alias corrected (2026-10-08)
+
+Execution revision `e51e51fd7` has both original GNS jobs green, 11 cases each.
+Its original Windows push job `113568205897` fails the new capture-cancellation
+identity fixture: 12 comparisons equate a short `RUNNER~1` temporary path with
+the canonical long path of the same file. This is a test-path defect, not a
+capture identity or native service failure. Dependent push Linux is skipped;
+the original failure remains retained and cannot be replaced by another job.
+The fixture now canonicalizes its supplied capture root, expected role index
+and mock cancellation target exactly as production configuration does.
+All negative identity/reparse/bounded-read assertions remain. Focused tests
+pass 28 controller +21 runner, whitespace passes; no production change.
+New hosted qualification is required; **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 ## Separate-process native witness: capacity diagnosis continues (2026-10-08)
 
 The [native witness receipt](PooledPhysicalQualification3L.md#separate-process-native-witness-recurring-capacity-failure-2026-10-08)
