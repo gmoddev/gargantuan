@@ -6,6 +6,21 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Separate-process native witness: capacity diagnosis continues (2026-10-08)
+
+The [native witness receipt](PooledPhysicalQualification3L.md#separate-process-native-witness-recurring-capacity-failure-2026-10-08)
+records development loopback run `native-f1-452aa71d-9953c`: 32 actual separate
+Players, 117/6,905 completed grants fail, all 1,928,005,711 B conserve, finite
+shortfall zero. All 107 raw pins verify. Exact segments and contiguous frozen
+timing cover the first observed failure: accumulated recurring under-rate,
+maximum adjacent gap 589 us, not a single long blackout. Callback wall time
+dominates; actual CPU/preemption and nonstructural DATA/ACK classification remain
+NOT MEASURED. Independently challenged alternative B alone still fails 17/32
+retained witnesses. Keep strict refusal while investigating aggregate execution
+capacity; no constant/clock/reserve/admission change, physical retry or provider
+PASS. Owned native job is reaped and worker process/UDP census empty.
+**KI-006 OPEN; 3L B — PARTIALLY READY; Node32 unrun.**
+
 ## Coordinator failure promptly cancels owned capture (2026-10-08)
 
 The retained `9953fd84` timeline proves the client capture's 500-second timeout

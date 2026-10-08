@@ -6,6 +6,71 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Separate-process native witness: recurring capacity failure (2026-10-08)
+
+Development diagnostic `native-f1-452aa71d-9953c` runs one Server and 32 separate
+headless Players on worker loopback, with the original scale/recovery workload.
+It is not a physical provider result or a whole-source qualified package. Native
+diagnostic source is `452aa71dd`; GNS send/pacing/wake code is unchanged from
+qualified C916. The development Server and original C916 Player execute in new
+task-owned runtime copies; original packages and installed baselines are intact.
+Two preceding setup invocations fail before server start because the diagnostic
+descriptor first retained the old binary pin, then used sorted rather than
+PackageBuilder's ordered content-table keys. Those failures are preserved;
+the corrected diagnostic validates all 57 content members before starting.
+
+The measured native workload fails: 6,905 completed grants, 6,788 qualified,
+117 failed across all 32 peers, maximum 82,736,720,768 byte-us and zero finite
+shortfall. All 1,928,005,711 accepted bytes first-send, ACK and retire. The owned
+job is reaped; native processes and UDP 39450 are absent. All 107 indexed raw
+files (142,551,009 B) verify locally and against the worker index, SHA-256
+`382a4d57a490b73dd9d801d0895283e6a035e0d4e99060bfb7e3f0f4255a00c4`.
+
+The first Main-observed failed grant is peer `3:1`, token `2373`, 295,256 B:
+activation 1027058150896 us, first send 1027058151043, completion 1027058169635,
+observation 1027058185979. Its 260 segments independently reproduce the exact
+27,393,921,280 byte-us maximum. The first violating pre-send checkpoint spans
+4,068 us from the running minimum after segment 102 to segment 147, with
+50,028 B of intervening unique service:
+
+```text
+16,777,216 * 4,068 - 50,028 * 1,000,000
+= 18,221,714,688 >18,025,216,000 byte-us
+```
+
+Its largest adjacent segment gap is only 589 us. This is accumulated recurring
+under-rate service, not one >1.074-ms blackout. Peer `4:1` crosses arithmetically
+68 us earlier; the first observer is not necessarily the earliest native failure.
+These witnesses occur during structural offering, before cessation/recovery.
+They do not establish the phase or cause of the earlier physical failure.
+
+Frozen native history retains 8,192 contiguous records, sequence
+1954664–1962855, with zero drops/counter overflow. Its history-only QPC extent
+10270581189113–10270581867649 covers the failed grant at the measured 10-MHz
+steady/QPC bridge. The earlier timer-creation metadata is separate. During the
+4,068-us interval, thinker passes cover 4,033.9 us; nested SNP spans cover
+3,960.9 us, including 3,653.4 structural and 307.5 marked nonstructural us.
+Timer/poll totals 8.8 us, global-lock acquisition 3.5 us, receive drain zero.
+Nested durations must not be added. A 641.8-us pass visits four structural
+four-packet senders and 13 nonstructural single-packet senders. Nonstructural
+DATA versus pure ACK/control, actual CPU time and preemption are NOT MEASURED.
+Wall spans alone do not prove those causes or unavoidable platform jitter.
+
+**Post-wake decision: retain strict qualification refusal and investigate C's
+aggregate execution capacity.** Per-peer packet quanta and a byte pacer do not
+bound aggregate callback work. An arbitrary ordinary-callback cap cannot be
+derived from the byte reserves and may harm ACK/control. Alternative B's
+first-send-anchored prefix curve is independently defensible as an explicitly
+different finite-capacity contract, but counterfactual replay still rejects
+17/32 retained failed witnesses (only 15 pass). It does not correct this failure;
+no amendment or historical reclassification follows. Existing H_run, rates,
+running minima, admission, reserves and all acceptance gates remain unchanged.
+The next missing fact is execution versus ready/preempted time covering a failed
+interval, using a bounded adaptation of the existing scheduler diagnostic.
+No speculative quantum/timer patch or new physical attempt is made.
+
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; Node32 unrun; no 3M or merge.**
+
 ## Fresh corrected-wake Local32: F1 production service failure (2026-10-08)
 
 Physical run `9953fd84-0d6f-444a-93eb-ff8efa1d96ce`, coordinator/lifecycle
