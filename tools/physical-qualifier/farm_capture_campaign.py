@@ -378,6 +378,35 @@ class FarmCaptureController:
     def AwaitRole(self):
         Config = self.Config
         while self.Clock() - self.Started < ROLE_DEADLINE_SECONDS:
+            # Fixed local cancellation belongs to this controller's readiness
+            # generation. It has no caller-selected path or service operation.
+            # Keep it outside the capture directory so a late request cannot
+            # add bytes to an already sealed capture index.
+            Cancel = Config["CaptureRoot"] / (Config["RunId"] + ".capture-controller-cancel.json")
+            if self.ReadyUtc is not None:
+                try:
+                    Cancel = LocalPath(str(Cancel), MustExist=True)
+                    with Cancel.open("rb") as Stream:
+                        if not stat.S_ISREG(os.fstat(Stream.fileno()).st_mode):
+                            raise ValueError("non-file cancellation")
+                        Payload = Stream.read(1025)
+                    if len(Payload) > 1024:
+                        raise ValueError("oversized cancellation")
+                    Signal = json.loads(Payload.decode("utf-8"))
+                except (ValueError, OSError, UnicodeError):
+                    pass  # A partial, malformed or foreign signal is not authority.
+                else:
+                    Expected = {"Format": "GargantuanFarm32CaptureCancel", "Version": 1,
+                                "RunId": Config["RunId"], "CoordinatorRunId": Config["CoordinatorRunId"],
+                                "Role": Config["Role"], "ReadyUtc": self.ReadyUtc,
+                                "Reason": "COORDINATOR_JOIN_FAILED"}
+                    if (isinstance(Signal, dict) and set(Signal) == set(Expected) | {"JoinExitCode"} and
+                            type(Signal["Version"]) is int and
+                            all(Signal.get(Key) == Value for Key, Value in Expected.items()) and
+                            type(Signal["JoinExitCode"]) is int and
+                            -2147483648 <= Signal["JoinExitCode"] <= 2147483647 and Signal["JoinExitCode"] != 0):
+                        raise RuntimeError("[Qualification:FarmCapture] coordinator join failed exit_code=" +
+                                           str(Signal["JoinExitCode"]))
             Index = Config["RoleEvidenceRoot"] / "evidence-sha256.json"
             if Index.is_file():
                 try:

@@ -6,6 +6,24 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Coordinator failure promptly cancels owned capture (2026-10-08)
+
+The retained `9953fd84` timeline proves the client capture's 500-second timeout
+was secondary: coordinator abort arrived before 300 seconds, but the runner
+waited for capture completion before checking its failed join. The controller
+therefore waited for a role index that could not be sealed after abort.
+
+The runner now publishes a fixed local cancellation marker only on known join
+failure. Exact run/coordinator/role/capture-ready identity binds it to that
+controller, and it routes through existing owned Abort/FailureEvidence cleanup.
+Atomic exclusive publication, existing reparse-path checks and a bounded
+single-handle read prevent partial/foreign inputs from becoming cancellation
+authority. The marker lives outside sealed capture output; missing role evidence
+remains unsealed and failed. No CLI/config, installed service or 500/80/600-second
+bound changes. Controller tests pass 28/28 and runner tests 21/21; whitespace
+checks pass. New hosted CI remains required. This minimal tooling correction
+does not correct or erase the independently measured native F1 failure.
+
 ## Bounded first-failure retention: focused native validation (2026-10-08)
 
 The failed Local32 final rows lacked the first failed grant's timeline. Farm-only

@@ -255,7 +255,17 @@ passes before any role launches; `farm_capture_campaign.py validate CONFIG`
 exposes the same read-only check. Staging does not create CaptureRoot/RunId or
 RoleEvidenceRoot: the capture controller and native farm respectively retain
 those ownership boundaries. No capture, probe, service or installed config is
-started or replaced by preparation. The worker owns
+started or replaced by preparation.
+
+If coordinator join fails, the runner promptly requests cooperative capture
+cancellation through a fixed local marker outside the sealed capture directory.
+Exact run/coordinator/role/readiness identity is required; publication is atomic
+and exclusive, and reading is bounded with reparse paths rejected. The existing
+owned abort/stop/export path preserves failed diagnostic evidence. Missing role
+indexes remain unsealed. Ordinary completion and the 500-second role,
+80-second stop and 600-second lease bounds are unchanged.
+
+The worker owns
 the normal-LAN coordinator listener on `192.168.0.108:39451`, while the client
 connects outbound; a nonce-bound control-only socket probe and the same-run
 `LISTENING_UNQUALIFIED` marker precede the two role launches. The fixed runner

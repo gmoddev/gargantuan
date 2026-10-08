@@ -203,7 +203,7 @@ class CaptureCampaignTests(unittest.TestCase):
         self.assertEqual([Row[1] for Row in Calls[:3]], ["start", "stop", "status"])
         self.assertEqual(Calls[3][-1], "Finalize")
 
-    def FailedServer(self, ExportCode=0, Lost=0, MissingRole=False, WrongRun=False, StopDenied=False, ExportTimeout=False, MissingStop=False, LostStopReply=False):
+    def FailedServer(self, ExportCode=0, Lost=0, MissingRole=False, WrongRun=False, StopDenied=False, ExportTimeout=False, MissingStop=False, LostStopReply=False, CancelJoin=False):
         Config = self.Config("SERVER")
         Calls = []
         def Runner(Command, **_):
@@ -249,11 +249,91 @@ class CaptureCampaignTests(unittest.TestCase):
                 "Files": [{"Name": "result.json", "Bytes": ResultFile.stat().st_size,
                            "Sha256": campaign.Digest(ResultFile)}]})
         Controller = campaign.FarmCaptureController(Config, Runner=Runner, Clock=self.Clock, Sleep=self.Clock.Sleep)
+        if CancelJoin:
+            Finish = Controller.Finish
+            def CancelledFinish():
+                WriteJson(self.CaptureRoot / (self.RunId + ".capture-controller-cancel.json"), {
+                    "Format": "GargantuanFarm32CaptureCancel", "Version": 1,
+                    "RunId": self.RunId, "CoordinatorRunId": self.CoordinatorRunId,
+                    "Role": "SERVER", "ReadyUtc": Controller.ReadyUtc,
+                    "Reason": "COORDINATOR_JOIN_FAILED", "JoinExitCode": 1})
+                return Finish()
+            Controller.Finish = CancelledFinish
         with mock.patch.object(campaign, "Configured", return_value=Config), \
                 mock.patch.object(campaign, "FarmCaptureController", return_value=Controller):
             with self.assertRaises(Exception):
                 campaign.RunRole("unused fixed test config")
         return campaign.ReadJson(self.Capture / "capture-sha256.json"), Calls, Controller
+
+    def test_known_join_failure_cancels_before_role_deadline_and_exports_missing_role(self):
+        Row, Calls, Controller = self.FailedServer(MissingRole=True, CancelJoin=True)
+        self.assertLess(self.Clock.Value, 1)
+        self.assertEqual(Row["State"], "FAILED_DIAGNOSTIC")
+        self.assertIsNone(Row["RoleIndexSha256"])
+        self.assertTrue(Row["OwnedStopConfirmed"])
+        self.assertTrue(Row["OfflineExportSucceeded"])
+        self.assertIn("coordinator join failed exit_code=1", Row["FailureReasons"][0])
+        self.assertEqual([Call[1] for Call in Calls[:3]], ["start", "stop", "status"])
+        self.assertEqual(Calls[3][-1], "Finalize")
+        self.assertTrue(Controller.FinalizeAttempted)
+        self.assertFalse((self.RoleRoot / "evidence-sha256.json").exists())
+
+    def test_cancel_signal_is_exactly_bound_to_run_role_and_capture_readiness(self):
+        Config = self.Config("SERVER")
+        self.Capture.mkdir()
+        Controller = campaign.FarmCaptureController(Config, Clock=self.Clock, Sleep=self.Clock.Sleep)
+        Controller.Started = self.Clock()
+        Controller.ReadyUtc = datetime.now(timezone.utc).isoformat()
+        Index = self.RoleEvidence("SERVER")
+        Signal = {"Format": "GargantuanFarm32CaptureCancel", "Version": 1,
+                  "RunId": self.RunId, "CoordinatorRunId": self.CoordinatorRunId,
+                  "Role": "SERVER", "ReadyUtc": Controller.ReadyUtc,
+                  "Reason": "COORDINATOR_JOIN_FAILED", "JoinExitCode": 1}
+        Cancel = self.CaptureRoot / (self.RunId + ".capture-controller-cancel.json")
+        Changes = (("RunId", str(uuid.uuid4())), ("CoordinatorRunId", str(uuid.uuid4())),
+                   ("Role", "CLIENT"), ("ReadyUtc", "2020-01-01T00:00:00Z"),
+                   ("Reason", "OTHER"), ("Version", True), ("JoinExitCode", True),
+                   ("JoinExitCode", "1"), ("JoinExitCode", 0), ("JoinExitCode", 2147483648),
+                   ("UnexpectedPath", "C:\\Unrelated"))
+        for Key, Value in Changes:
+            with self.subTest(Key=Key, Value=Value):
+                WriteJson(Cancel, {**Signal, Key: Value})
+                self.assertEqual(Controller.AwaitRole()[0], Index)
+                self.assertFalse(Controller.StopConfirmed)
+        for Text in ("{", "x" * 1025, json.dumps({Key: Value for Key, Value in Signal.items() if Key != "Role"})):
+            Cancel.write_text(Text, encoding="utf-8")
+            self.assertEqual(Controller.AwaitRole()[0], Index)
+        WriteJson(Cancel, Signal)
+        Stat = Path.lstat
+        def Attributes(File, **Options):
+            if File == Cancel:
+                return mock.Mock(st_mode=campaign.stat.S_IFREG,
+                                 st_file_attributes=campaign.stat.FILE_ATTRIBUTE_REPARSE_POINT)
+            return Stat(File, **Options)
+        with mock.patch.object(Path, "lstat", Attributes):
+            self.assertEqual(Controller.AwaitRole()[0], Index)
+        Open = Path.open
+        with mock.patch.object(Path, "open", autospec=True) as Opened:
+            def Bounded(File, *Args, **Options):
+                Stream = Open(File, *Args, **Options)
+                if File != Cancel:
+                    return Stream
+                Wrapped = mock.MagicMock(wraps=Stream)
+                Wrapped.__enter__.return_value = Wrapped
+                Wrapped.__exit__.side_effect = lambda *Unused: Stream.close()
+                def ReadBounded(Maximum):
+                    self.assertEqual(Maximum, 1025)
+                    return Stream.read(Maximum)
+                Wrapped.read.side_effect = ReadBounded
+                return Wrapped
+            Opened.side_effect = Bounded
+            with self.assertRaisesRegex(RuntimeError, "coordinator join failed exit_code=1"):
+                Controller.AwaitRole()
+            CancelStream = next(Call for Call in Opened.call_args_list if Call.args[0] == Cancel)
+            self.assertEqual(CancelStream.args[1:], ("rb",))
+        with self.assertRaisesRegex(RuntimeError, "coordinator join failed exit_code=1"):
+            Controller.AwaitRole()
+        self.assertEqual(self.Clock.Value, 0)
 
     def test_native_fail_without_started_time_exports_diagnostic_and_preserves_failure(self):
         Row, Calls, _ = self.FailedServer()

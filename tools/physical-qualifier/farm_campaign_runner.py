@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import threading
@@ -318,6 +319,39 @@ def WriteNewJson(File, Row):
     return File
 
 
+def RequestCaptureCancel(Capture, Config, ReadyUtc, JoinCode):
+    Cancel = Path(Capture["CaptureRoot"]) / (Config["RunId"] + ".capture-controller-cancel.json")
+    if not Cancel.is_absolute() or str(Cancel).startswith("\\\\") or len(str(Cancel)) > 512:
+        raise ValueError("[Qualification:FarmCampaign] invalid fixed cancellation path")
+    for Current in (Cancel, *Cancel.parents):
+        try:
+            Attributes = Current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(Attributes.st_mode) or \
+                getattr(Attributes, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise ValueError("[Qualification:FarmCampaign] cancellation reparse path forbidden")
+    Signal = {"Format": "GargantuanFarm32CaptureCancel", "Version": 1,
+              "RunId": Config["RunId"], "CoordinatorRunId": Config["CoordinatorRunId"],
+              "Role": Config["Role"], "ReadyUtc": ReadyUtc,
+              "Reason": "COORDINATOR_JOIN_FAILED", "JoinExitCode": JoinCode}
+    Payload = (json.dumps(Signal, sort_keys=True) + "\n").encode("utf-8")
+    if len(Payload) > 1024:
+        raise ValueError("[Qualification:FarmCampaign] cancellation exceeds fixed bound")
+    Temporary = Cancel.with_name(Cancel.name + "." + str(uuid.uuid4()) + ".tmp")
+    Created = False
+    try:
+        with Temporary.open("xb") as Stream:
+            Created = True
+            Stream.write(Payload)
+        # Atomic exclusive publication on Windows and POSIX: no reader sees
+        # partial JSON, and an existing destination can never be overwritten.
+        os.link(Temporary, Cancel, follow_symlinks=False)
+    finally:
+        if Created:
+            Temporary.unlink()
+
+
 def StartNode(Config, Farm, Manifest):
     PowerShell, Helper, StageRoot = VerifyNodeStage(Config, Farm, Manifest)
     Flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -373,8 +407,9 @@ def RunRole(TicketPath):
     Schema, Farm, Capture = VerifyRole(Config, Role)
     Ready = Path(Capture["CaptureRoot"]).resolve() / Config["RunId"] / "capture-controller-ready.json"
     CaptureIndex = Ready.parent / "capture-sha256.json"
+    CaptureCancel = Ready.parent.parent / (Config["RunId"] + ".capture-controller-cancel.json")
     RoleIndex = Path(Farm["EvidenceRoot"]).resolve() / "evidence-sha256.json"
-    if Ready.exists() or CaptureIndex.exists() or RoleIndex.exists():
+    if Ready.exists() or CaptureIndex.exists() or RoleIndex.exists() or CaptureCancel.exists() or CaptureCancel.is_symlink():
         raise ValueError("[Qualification:FarmCampaign] stale role or capture evidence")
     JournalRoot = Path(Config["JournalRoot"]).resolve()
     if JournalRoot.exists() or not JournalRoot.parent.is_dir():
@@ -442,11 +477,20 @@ def RunRole(TicketPath):
         Endpoint["RunId"] = Config["CoordinatorRunId"]
         JoinCode = Join(Endpoint, {(Schema.Value["SchemaId"], 1): Schema},
                         Catalog, Journal(JournalRoot))
+        if JoinCode and CaptureProcess.poll() is None:
+            try:
+                RequestCaptureCancel(Capture, Config, Marker["ReadyUtc"], JoinCode)
+            except (ValueError, OSError) as Error:
+                raise RuntimeError("[Qualification:FarmCampaign] coordinator join failed exit_code=" +
+                                   str(JoinCode) + "; cooperative capture cancellation request failed") from Error
         try:
             CaptureCode = CaptureProcess.wait(timeout=max(0.1, Started + CAPTURE_FINISH_SECONDS - time.monotonic()))
         except subprocess.TimeoutExpired as Error:
             raise TimeoutError("[Qualification:FarmCampaign] capture finalization deadline") from Error
-        if JoinCode or CaptureCode or not CaptureIndex.is_file() or not RoleIndex.is_file():
+        if JoinCode:
+            raise RuntimeError("[Qualification:FarmCampaign] coordinator join failed exit_code=" + str(JoinCode) +
+                               "; capture_exit_code=" + str(CaptureCode))
+        if CaptureCode or not CaptureIndex.is_file() or not RoleIndex.is_file():
             raise RuntimeError("[Qualification:FarmCampaign] role, capture, or evidence index failed")
         if NodeProcess is not None:
             NodeReceipt = StopNode(Config, NodeProcess, NodeRoot)
