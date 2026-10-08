@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-08 corrected-wake source `c916b7d4f` reaches a fresh actual Local32
+measurement in run `9953fd84-0d6f-444a-93eb-ff8efa1d96ce`. Of 7,133 completed
+Ready grants, 21 fail running F1 across 16 peers; maximum
+96,951,490,816 >18,025,216,000 byte-us, with zero finite shortfall. All
+1,994,813,588 B first-send/ACK/retirement conservation and three recovery gates
+pass. First-failure chronology/cause is NOT MEASURED, so this reopens the
+post-wake architecture decision without changing F1 or attributing jitter.
+Cleanup passes; failure evidence is retained. See the
+[fresh receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#fresh-corrected-wake-local32-f1-production-service-failure-2026-10-08).
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; Node32 unrun.**
+
 2026-10-06 native `c916b7d4f` qualifies both known wake defects: source
 regressions, native 13/13, fixed clean 14/14 and all six original hosted jobs
 pass (Windows 96+382 each, Linux 53 each, GNS 11 each; zero failures/skips).

@@ -6,6 +6,60 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Fresh corrected-wake Local32: F1 production service failure (2026-10-08)
+
+Physical run `9953fd84-0d6f-444a-93eb-ff8efa1d96ce`, coordinator/lifecycle
+`981fbecc-0596-4f90-88b6-47d0cbb2df1c`, executes the qualified native candidate
+`c916b7d4f868177ae00b4b05dacfa7b8dbb1f563`. Thirty-two actual Player processes
+connect; server exits 10 and the role, coordinator and outer lifecycle fail.
+Of 7,133 completed Ready grants, 7,112 qualify; 21 fail across 16 peers.
+All reported finite shortfalls are zero. Maximum running deficit is
+**96,951,490,816 byte-us** (peer `2:1`), exceeding the unchanged
+**18,025,216,000 byte-us** bound. This is **F1 PRODUCTION SERVICE FAILURE**,
+not a provider PASS or an infrastructure-invalidated service measurement.
+
+All 1,994,813,588 accepted bytes are uniquely first-sent, ACKed and retired;
+terminal release, final pending tokens and active grants are zero. All five
+scale phases pass. Gameplay, structural and mixed recovery prefixes converge
+in 321,505, 38,775,827 and 315,804 us respectively, within their separate
+canonical quotes. Successful recovery and conservation do not erase F1 failure.
+
+The first violating token, interval, native segment/wake chronology, pool
+historical running deficit and OS cause are **NOT MEASURED**. Farm final records
+retain lifetime maxima and the last grant, which cannot reconstruct an earlier
+failure. No attribution to jitter, Nagle, receive work or an induced phase is
+made. The October 6 decision below is historical; this residual physical
+failure reopens its explicit post-wake decision gate. F1 remains unchanged
+while a bounded first-failure witness distinguishes an attributable scheduler
+defect from a contract/platform limitation. No further physical attempt follows
+this failure without a justified correction and required qualification.
+
+Failed server role evidence and worker capture bytes are retained under
+`farm32-9953fd84-failed-raw-v1`, with indexed sizes/SHA-256 verified. Worker
+capture reports `FAILED_DIAGNOSTIC` because the role failed, with owned stop and
+offline export confirmed. Full bidirectional acceptance is not inferred from
+that status. The client capture independently exceeds its 500-second deadline;
+its failed diagnostic index reports owned stop/export false and no role-index
+pin. Client role `result.json` and `evidence-sha256.json` are absent. Existing
+client bytes are retained as unsealed diagnostics, never resealed as acceptance
+evidence. This separate capture failure does not invalidate the sealed native
+server service failure or supply a physical PASS. Both child trees are reaped.
+Direct endpoint census verifies no
+task process, UDP/control listener or run firewall rule in either policy store;
+worker Packet Monitor is stopped, filters absent and capture service idle.
+Exactly six run control secrets are retired; cleanup receipt SHA-256 is
+`533b7f8f058373f9ce6319e4b418f175e9901279b0f5b481c3b1bf5d913c0dfa`.
+Raw failure evidence and installed baselines remain intact.
+
+Offline analyzer revision `4825df1bcc5f62a816fe35d68be4df9d83f9eb77` also has
+all six original hosted jobs green: Windows 96 native +387 Python each, Linux
+53 each, GNS 11 each, zero failures/errors/skips. Original archive index SHA-256
+is `ca714f838fbd34953c0de82a18018169d414817f29b96206f402e4d6244440eb`;
+source/merge tree reconciliation is `3c3eae3f1d7cb87314a0bdb83305ef95552c96d1`.
+These jobs qualify the analyzer, not the failed provider service.
+
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY. Node32 unrun; no 3M or merge.**
+
 ## Post-wake decision A — keep F1 strict (2026-10-06)
 
 Native candidate `c916b7d4f868177ae00b4b05dacfa7b8dbb1f563` qualifies both

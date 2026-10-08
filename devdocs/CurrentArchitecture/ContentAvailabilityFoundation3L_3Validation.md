@@ -6,6 +6,23 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Corrected-wake Local32 measured: F1 FAIL, recovery PASS (2026-10-08)
+
+The [fresh physical receipt](PooledPhysicalQualification3L.md#fresh-corrected-wake-local32-f1-production-service-failure-2026-10-08)
+records run `9953fd84-0d6f-444a-93eb-ff8efa1d96ce` and lifecycle
+`981fbecc-0596-4f90-88b6-47d0cbb2df1c`, native source `c916b7d4f`.
+Thirty-two actual clients complete 7,133 Ready grants; 21 fail running F1
+across 16 peers. Finite shortfall is zero; running maximum is
+96,951,490,816 >18,025,216,000 byte-us. Exact accepted/first-send/ACK/retirement
+conservation is 1,994,813,588 B; all three causal recovery cases pass.
+The first failing grant's timeline and OS/software cause are NOT MEASURED.
+The post-wake architecture decision is reopened; constants and gates remain
+unchanged pending causal evidence. Both child trees and exact run resources
+are cleaned, six secrets retired, failed raw evidence preserved. No fresh retry.
+Analyzer `4825df1b` separately has six original hosted jobs green, with
+Windows 96+387 each, Linux 53 each and GNS 11 each, zero failures/skips.
+**Local32 F1 FAIL; Node32 unrun; KI-006 OPEN; 3L B — PARTIALLY READY.**
+
 ## Post-wake decision A: native candidate qualified, provider evidence pending (2026-10-06)
 
 The [decision receipt](PooledPhysicalQualification3L.md#post-wake-decision-a-keep-f1-strict-2026-10-06)
