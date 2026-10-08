@@ -47,6 +47,7 @@
 #include "network/FarmCaptureEndpointAccess.hpp"
 #include "host/common/TransportServiceSmoke.hpp"
 #include "host/common/FarmClockCalibration.hpp"
+#include "host/server/FarmServiceTimingEvidence.hpp"
 #endif
 #if defined(GARGANTUAN_WITH_NODE_CONTENT)
 #include "host/server/NodeContentProvider.hpp"
@@ -430,11 +431,19 @@ namespace gargantuan::host {
 		// Renderer, and GameSession::Stop borrows Engine during exception cleanup.
 		std::unique_ptr<HeadlessRenderer> Renderer;
 		std::unique_ptr<Engine> Runtime;
+#if defined(GARGANTUAN_WITH_GNS)
+		// Installed before native initialization; released after transport joins.
+		std::unique_ptr<detail::FarmServiceTimingEvidence> ServiceTimingEvidence;
+#endif
 		std::unique_ptr<network::GameSession> Session;
 #if defined(GARGANTUAN_WITH_GNS)
 		std::shared_ptr<network::GameNetworkingSocketsTransport> FarmTransport;
 #endif
 		try {
+#if defined(GARGANTUAN_WITH_GNS)
+			if (FarmScaleWorkload && detail::FarmServiceTimingEvidence::Requested())
+				ServiceTimingEvidence = std::make_unique<detail::FarmServiceTimingEvidence>(true);
+#endif
 			const auto HostStartupStarted = std::chrono::steady_clock::now();
 			const auto HostStartupUnixMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::system_clock::now().time_since_epoch()).count();
@@ -685,6 +694,10 @@ namespace gargantuan::host {
 			std::unique_ptr<detail::FarmPublicationEvidence> PublicationEvidence;
 			std::unique_ptr<detail::FarmF1Evidence> F1Evidence;
 			if (FarmScaleWorkload) F1Evidence = std::make_unique<detail::FarmF1Evidence>();
+#if defined(GARGANTUAN_WITH_GNS)
+			if (F1Evidence && ServiceTimingEvidence)
+				F1Evidence->SetFailureObserver(ServiceTimingEvidence.get(), detail::FarmServiceTimingEvidence::Failed);
+#endif
 			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<detail::FarmPublicationEvidence>(
 				true, FarmRunId, -1, 0, std::filesystem::path(FarmPublicationEvidencePath));
 			if (PublicationEvidence) PublicationEvidence->WriteTrafficClock(std::cout);
@@ -1141,6 +1154,13 @@ namespace gargantuan::host {
 				if (!Lifecycle.Valid() || !Lifecycle.ContentPresent) ExitCode = 18;
 			}
 			Runtime.reset();
+#if defined(GARGANTUAN_WITH_GNS)
+			if (ServiceTimingEvidence) {
+				FarmTransport.reset(); // Last transport owner: native shutdown/join.
+				const bool Stopped = ServiceTimingEvidence->Stop();
+				ServiceTimingEvidence->Write(std::cout, FarmRunId, Stopped);
+			}
+#endif
 			std::cout << "[Runtime:Server] ShutdownMicroseconds="
 					  << std::chrono::duration_cast<std::chrono::microseconds>(
 							 std::chrono::steady_clock::now() - ShutdownStarted
@@ -1153,6 +1173,13 @@ namespace gargantuan::host {
 			Session.reset();
 			if (Runtime) Runtime->Destroy();
 			Runtime.reset();
+#if defined(GARGANTUAN_WITH_GNS)
+			if (ServiceTimingEvidence) {
+				FarmTransport.reset();
+				const bool Stopped = ServiceTimingEvidence->Stop();
+				ServiceTimingEvidence->Write(std::cout, FarmRunId, Stopped);
+			}
+#endif
 			return 7;
 		}
 	}

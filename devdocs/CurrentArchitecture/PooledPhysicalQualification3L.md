@@ -38,12 +38,19 @@ Failed server role evidence and worker capture bytes are retained under
 `farm32-9953fd84-failed-raw-v1`, with indexed sizes/SHA-256 verified. Worker
 capture reports `FAILED_DIAGNOSTIC` because the role failed, with owned stop and
 offline export confirmed. Full bidirectional acceptance is not inferred from
-that status. The client capture independently exceeds its 500-second deadline;
+that status. The client capture later exceeds its 500-second deadline;
 its failed diagnostic index reports owned stop/export false and no role-index
 pin. Client role `result.json` and `evidence-sha256.json` are absent. Existing
 client bytes are retained as unsealed diagnostics, never resealed as acceptance
 evidence. This separate capture failure does not invalidate the sealed native
-server service failure or supply a physical PASS. Both child trees are reaped.
+server service failure or supply a physical PASS. The retained public chronology
+places server exit at 21:28:41.2802105Z, coordinator abort at 21:28:41.878Z and
+client capture readiness at 21:23:49.702894Z. The abort occurs about 292 seconds
+after readiness, before the capture deadline; waiting afterward for the absent
+client role index causes the secondary timeout. All 32 unsealed native client
+logs contain scale completion PASS, which does not replace missing role sealing.
+No increase or restart of the 500-second capture clock is justified. Both child
+trees are reaped.
 Direct endpoint census verifies no
 task process, UDP/control listener or run firewall rule in either policy store;
 worker Packet Monitor is stopped, filters absent and capture service idle.

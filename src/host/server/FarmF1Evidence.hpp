@@ -14,6 +14,15 @@ namespace gargantuan::host::detail {
 // that an earlier finite grant failed does not accrue service across grants.
 class FarmF1Evidence final {
 public:
+	struct FailedGrant {
+		// One immutable diagnostic witness per peer. Invalid/missing timelines
+		// cannot become measured certificates through later requalification.
+		bool Observed = false, Measured = false;
+		std::uint64_t Sequence = 0, Token = 0, Bytes = 0, Activated = 0, First = 0, Completed = 0;
+		std::uint64_t ObservedAt = 0, MaximumRunning = 0;
+		std::uint32_t SegmentCount = 0;
+		std::array<network::detail::ReliableServiceFeedback::StructuralSegmentEvent, 512> Segments{};
+	};
 	struct Peer {
 		network::ConnectionId Connection{};
 		std::uint64_t Samples = 0, Completed = 0, Qualified = 0, CompletedBytes = 0;
@@ -24,12 +33,16 @@ public:
 		bool PendingCompleted = false;
 		std::uint64_t LastToken = 0, LastBytes = 0, LastActivated = 0, LastFirst = 0, LastCompleted = 0;
 		std::uint64_t MaximumRunning = 0, MaximumFiniteShortfall = 0;
-		bool Failed = false;
+		bool Failed = false, AccountingInvalid = false;
+		FailedGrant FirstFailed;
 	};
 private:
 	std::array<Peer, 32> Peers{};
 	std::size_t Count = 0;
 	bool Invalid = false;
+	bool FailureNotified = false;
+	void *FailureContext = nullptr;
+	void (*FailureObserver)(void *, std::uint64_t) noexcept = nullptr;
 	network::detail::PooledServiceSink Sink{this, Record, AcceptedGrant};
 	network::detail::PooledServiceSink *Previous = nullptr;
 	static void Record(void *Context, const network::detail::PooledServiceRecord &Value) noexcept {
@@ -45,6 +58,37 @@ private:
 		if (Count == Peers.size()) { Invalid = true; return nullptr; }
 		auto *P = &Peers[Count++]; P->Connection = Connection; return P;
 	}
+	static void RetainFailure(Peer &P, const network::detail::ReliableServiceFeedback &S,
+		bool CompletionValid) noexcept {
+		if (P.FirstFailed.Observed || (!S.StructuralLastCompletedGrantFailed &&
+			S.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds <=
+				network::PooledReliableServiceProfile::RunningGrantBoundByteMicroseconds)) return;
+		auto &W = P.FirstFailed;
+		W.Observed = true;
+		W.Sequence = S.StructuralCompletedGrantSequence; W.Token = S.StructuralLastCompletedGrantToken;
+		W.Bytes = S.StructuralLastCompletedGrantBytes;
+		W.Activated = S.StructuralLastCompletedGrantActivatedAtMicroseconds;
+		W.First = S.StructuralLastCompletedGrantFirstSendAtMicroseconds;
+		W.Completed = S.StructuralLastCompletedGrantCompletedAtMicroseconds;
+		W.ObservedAt = S.ObservedAtMicroseconds;
+		W.MaximumRunning = S.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds;
+		W.SegmentCount = S.LastCompletedStructuralSegmentEventCount;
+		if (!CompletionValid || !S.CountersValid || S.Connection != P.Connection ||
+			S.StructuralCompletedGrantSequence <= P.Completed ||
+			S.StructuralCompletedGrantSequence - P.Completed != 1 ||
+			!W.SegmentCount || W.SegmentCount > W.Segments.size()) return;
+		std::uint64_t Sum = 0, Last = W.First;
+		for (std::size_t I = 0; I < W.SegmentCount; ++I) {
+			const auto &Event = S.LastCompletedStructuralSegmentEvents[I];
+			if (!Event.PayloadBytes || Event.PayloadBytes > W.Bytes - Sum ||
+				Event.AtMicroseconds < Last || Event.AtMicroseconds > W.Completed) return;
+			Sum += Event.PayloadBytes; Last = Event.AtMicroseconds;
+		}
+		if (Sum != W.Bytes || S.LastCompletedStructuralSegmentEvents[0].AtMicroseconds != W.First ||
+			Last != W.Completed) return;
+		W.Segments = S.LastCompletedStructuralSegmentEvents;
+		W.Measured = true;
+	}
 public:
 	FarmF1Evidence() noexcept : Previous(network::detail::ActivePooledService) {
 		network::detail::ActivePooledService = &Sink;
@@ -52,37 +96,45 @@ public:
 	~FarmF1Evidence() { network::detail::ActivePooledService = Previous; }
 	FarmF1Evidence(const FarmF1Evidence &) = delete;
 	FarmF1Evidence &operator=(const FarmF1Evidence &) = delete;
+	// Farm-only Main-thread hook. The existing native observation timestamp
+	// fences opt-in timing retention; ordinary accounting errors are no witness.
+	void SetFailureObserver(void *Context, void (*Observer)(void *, std::uint64_t) noexcept) noexcept {
+		FailureContext = Context; FailureObserver = Observer;
+	}
 	void Accept(network::ConnectionId Connection, std::uint64_t Token, std::uint64_t Bytes,
 		std::uint64_t Activated) noexcept {
 		auto *P = Find(Connection); if (!P) return;
 		if (!Token || Token <= P->LastAcceptedToken || !Bytes || Bytes > network::MaximumReliableServiceGroupBytes ||
 			!Activated || P->PendingToken || Bytes > std::numeric_limits<std::uint64_t>::max() - P->QualifiedBytes - P->BootstrapBytes) {
-			P->Failed = true; return;
+			P->Failed = P->AccountingInvalid = true; return;
 		}
 		P->LastAcceptedToken = P->PendingToken = Token; P->PendingBytes = Bytes;
 		P->PendingActivated = Activated; P->PendingCompleted = false;
 		if (Activated == std::numeric_limits<std::uint64_t>::max()) {
 			// Bootstrap cannot resume after a qualified Ready grant.
-			if (P->QualifiedAccepted) P->Failed = true;
+			if (P->QualifiedAccepted) P->Failed = P->AccountingInvalid = true;
 			++P->BootstrapAccepted; P->BootstrapBytes += Bytes;
 		} else { ++P->QualifiedAccepted; P->QualifiedBytes += Bytes; }
 	}
 	void Observe(const network::detail::PooledServiceRecord &Value) noexcept {
 		auto *P = Find(Value.Connection); if (!P) return;
-		if (!Value.Result.Valid || Value.Accepted.Structural < P->Accepted ||
-			Value.Accepted.Structural != P->QualifiedBytes + P->BootstrapBytes) P->Failed = true;
+		const bool RecordValid = Value.Result.Valid && Value.Accepted.Structural >= P->Accepted &&
+			Value.Accepted.Structural == P->QualifiedBytes + P->BootstrapBytes;
+		if (!RecordValid)
+			P->Failed = P->AccountingInvalid = true;
 		P->Accepted = Value.Accepted.Structural;
 		if (!Value.Feedback) return; // Missing feedback cannot create completed evidence.
 		const auto &S = *Value.Feedback;
 		++P->Samples;
-		if (!S.CountersValid || S.Connection != Value.Connection ||
+		const bool FeedbackValid = !(!S.CountersValid || S.Connection != Value.Connection ||
 			S.StructuralPayloadBytesFirstSent < P->FirstSent || S.StructuralPayloadBytesAcked < P->Acked ||
 			S.StructuralPayloadBytesAcked > S.StructuralPayloadBytesFirstSent ||
 			S.StructuralPayloadBytesFirstSent > P->Accepted ||
 			S.StructuralCompletedGrantSequence < P->Completed ||
 			S.StructuralCompletedGrantSequence - P->Completed > 1 ||
-			Value.Result.RetiredBytes > std::numeric_limits<std::uint64_t>::max() - P->Retired)
-			P->Failed = true;
+			Value.Result.RetiredBytes > std::numeric_limits<std::uint64_t>::max() - P->Retired);
+		if (!FeedbackValid)
+			P->Failed = P->AccountingInvalid = true;
 		P->Retired += Value.Result.RetiredBytes;
 		P->FirstSent = S.StructuralPayloadBytesFirstSent;
 		P->Acked = S.StructuralPayloadBytesAcked;
@@ -94,7 +146,7 @@ public:
 			P->MaximumRunning > network::PooledReliableServiceProfile::RunningGrantBoundByteMicroseconds;
 		if (S.StructuralCompletedGrantSequence != P->Completed) {
 			const auto Bytes = S.StructuralLastCompletedGrantBytes;
-			if (!P->PendingToken || P->PendingCompleted || P->PendingToken != S.StructuralLastCompletedGrantToken ||
+			const bool CompletionValid = !(!P->PendingToken || P->PendingCompleted || P->PendingToken != S.StructuralLastCompletedGrantToken ||
 				P->PendingBytes != Bytes || P->PendingActivated != S.StructuralLastCompletedGrantActivatedAtMicroseconds ||
 				P->PendingActivated == std::numeric_limits<std::uint64_t>::max() ||
 				!Bytes || Bytes > network::MaximumReliableServiceGroupBytes ||
@@ -103,7 +155,20 @@ public:
 				S.StructuralLastCompletedGrantFirstSendAtMicroseconds < S.StructuralLastCompletedGrantActivatedAtMicroseconds ||
 				S.StructuralLastCompletedGrantCompletedAtMicroseconds < S.StructuralLastCompletedGrantFirstSendAtMicroseconds ||
 				S.StructuralLastCompletedGrantCompletedAtMicroseconds > S.ObservedAtMicroseconds ||
-				Bytes > std::numeric_limits<std::uint64_t>::max() - P->CompletedBytes) P->Failed = true;
+				Bytes > std::numeric_limits<std::uint64_t>::max() - P->CompletedBytes);
+			if (!CompletionValid) P->Failed = P->AccountingInvalid = true;
+			const bool RetirementValid = !Value.Result.RetiredBytes ||
+				(P->PendingToken && Value.Result.RetiredToken == P->PendingToken &&
+					Value.Result.RetiredBytes == P->PendingBytes &&
+					P->PendingActivated != std::numeric_limits<std::uint64_t>::max() &&
+					(P->PendingCompleted || CompletionValid));
+			// Validate this record, not the historical AccountingInvalid latch.
+			// An unrelated earlier accounting error cannot erase exact native data.
+			RetainFailure(*P, S, CompletionValid && RecordValid && FeedbackValid && RetirementValid);
+			if (!FailureNotified && P->FirstFailed.Measured) {
+				FailureNotified = true;
+				if (FailureObserver) FailureObserver(FailureContext, P->FirstFailed.ObservedAt);
+			}
 			P->Completed = S.StructuralCompletedGrantSequence;
 			P->CompletedBytes += Bytes;
 			if (!S.StructuralLastCompletedGrantFailed && S.CountersValid) ++P->Qualified;
@@ -115,11 +180,11 @@ public:
 		}
 		if (Value.Result.RetiredBytes) {
 			if (!P->PendingToken || Value.Result.RetiredToken != P->PendingToken || Value.Result.RetiredBytes != P->PendingBytes)
-				P->Failed = true;
+				P->Failed = P->AccountingInvalid = true;
 			if (P->PendingActivated == std::numeric_limits<std::uint64_t>::max()) {
-				if (P->PendingCompleted) P->Failed = true;
+				if (P->PendingCompleted) P->Failed = P->AccountingInvalid = true;
 				P->BootstrapRetired += Value.Result.RetiredBytes;
-			} else if (!P->PendingCompleted) P->Failed = true;
+			} else if (!P->PendingCompleted) P->Failed = P->AccountingInvalid = true;
 			P->PendingToken = P->PendingBytes = P->PendingActivated = 0; P->PendingCompleted = false;
 		}
 	}
@@ -151,6 +216,27 @@ public:
 				<< " last_completed_us=" << P.LastCompleted << " max_running_byte_us=" << P.MaximumRunning
 				<< " max_finite_shortfall_byte_us=" << P.MaximumFiniteShortfall
 				<< " failed=" << P.Failed << " valid=" << (!Invalid && Complete(P)) << '\n';
+			// Keep the canonical finite_grant_v1 row byte/schema compatible.
+			Out << "[Qualification:FarmF1Failure] event=peer run=" << Run
+				<< " connection=" << P.Connection.Slot << ':' << P.Connection.Generation
+				<< " storage_invalid=" << Invalid
+				<< " accounting_invalid=" << P.AccountingInvalid
+				<< " first_failed_observed=" << P.FirstFailed.Observed
+				<< " first_failed_measured=" << P.FirstFailed.Measured << '\n';
+			const auto &W = P.FirstFailed;
+			if (!W.Observed) continue;
+			Out << "[Qualification:FarmF1Failure] event=grant run=" << Run
+				<< " connection=" << P.Connection.Slot << ':' << P.Connection.Generation
+				<< " sequence=" << W.Sequence << " token=" << W.Token << " bytes=" << W.Bytes
+				<< " activated_us=" << W.Activated << " first_us=" << W.First << " completed_us=" << W.Completed
+				<< " observed_us=" << W.ObservedAt << " max_running_byte_us=" << W.MaximumRunning
+				<< " segments=" << W.SegmentCount << " measured=" << W.Measured << '\n';
+			if (!W.Measured) continue;
+			for (std::size_t J = 0; J < W.SegmentCount; ++J)
+				Out << "[Qualification:FarmF1Failure] event=segment run=" << Run
+					<< " connection=" << P.Connection.Slot << ':' << P.Connection.Generation
+					<< " token=" << W.Token << " sequence=" << J
+					<< " at_us=" << W.Segments[J].AtMicroseconds << " bytes=" << W.Segments[J].PayloadBytes << '\n';
 		}
 	}
 };

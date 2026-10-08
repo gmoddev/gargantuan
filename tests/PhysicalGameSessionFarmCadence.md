@@ -1,5 +1,36 @@
 # Farm32 actual-callback evidence
 
+## First failed finite grant and optional native timing
+
+Farm-only F1 retention preserves the first completed failed grant per peer,
+including token/generation, exact bytes, activation/first-send/completion times,
+the native maximum running deficit and at most 512 existing segment events.
+Later good or failed grants cannot overwrite it. Separate
+`[Qualification:FarmF1Failure]` rows leave the exact canonical F1 summary schema
+and acceptance unchanged. Missing, malformed or incomplete certificates are
+explicitly unmeasured; accounting errors do not manufacture native evidence.
+
+For a bounded diagnostic, `GARGANTUAN_FARM_SERVICE_TIMING=1` enables a server-only
+owner of the existing native timing sink before GNS initialization. It retains
+8,192 raw records (a four-MiB text budget), freezes history when the first measured
+failed certificate is observed, and keeps spans already in flight at freeze.
+Callbacks never wait or allocate. Wrapped history, collisions, filtered records
+and counter overflow are reported. Storage is read only after transport teardown
+and native thread joins; exception cleanup preserves that lifetime ordering.
+Default-off runs allocate no timing storage and install no observer.
+
+The F1 certificate uses steady-clock microseconds; bracketed steady/QPC anchors
+provide the local clock domains. GNS timer deadlines use its separate local
+timestamp domain. Raw phase spans do not establish OS preemption, complete
+interval coverage or a native-deadline mapping. Those claims remain
+`NOT_MEASURED` until the actual retained interval and any required scheduler
+trace support them. This diagnostic neither pauses F1 nor changes any service,
+admission, reserve, delivery or exit predicate. It addresses the missing first
+failure chronology demonstrated by Local32 run `9953fd84`; it is not provider
+acceptance evidence by itself.
+
+## Actual callback and publication records
+
 The five-phase farm workload counts invocations inside each Player's actual
 `RunService.PostSimulation` Luau callback. Every 60 callbacks, the script
 updates a local `ScaleCallbackBeat` attribute. PlayerHost validates that it

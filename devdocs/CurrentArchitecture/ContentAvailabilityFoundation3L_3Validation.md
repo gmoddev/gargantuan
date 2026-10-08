@@ -6,6 +6,26 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Bounded first-failure retention: focused native validation (2026-10-08)
+
+The failed Local32 final rows lacked the first failed grant's timeline. Farm-only
+retention now preserves the first exact completed failed certificate per peer,
+with bounded native segments and separate accounting-invalid diagnostics.
+An optional default-off server timing sink reuses existing native phase records,
+with fixed history, first-failure freeze and native-join lifetime protection.
+No F1, clock, admission, reserve, exit or canonical summary-schema change.
+
+Worker incremental compilation of the GameSession tests and server passes;
+`GameSessionTests` passes 1/1, zero failures/skips, including retention,
+malformed evidence, concurrent history, cutoff and lifecycle regressions.
+This reused mixed development cache is not whole-source qualification. The
+PowerShell canonical F1 parser passes 27 focused cases, including separate
+diagnostic-row compatibility. Independent review corrects stale ring writes
+and malformed accounting promoting a measured certificate before this build.
+New hosted qualification and an actual diagnostic witness remain pending.
+No new native farm or physical workload has run; missing causal attribution
+remains NOT MEASURED. **KI-006 OPEN; 3L B — PARTIALLY READY.**
+
 ## Corrected-wake Local32 measured: F1 FAIL, recovery PASS (2026-10-08)
 
 The [fresh physical receipt](PooledPhysicalQualification3L.md#fresh-corrected-wake-local32-f1-production-service-failure-2026-10-08)

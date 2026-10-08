@@ -15,6 +15,8 @@ try {
 	}
 	$Good = Read-Case $Rows
 	if ($Good.State -cne 'MEASURED_PASS' -or $Good.Observations.Count -ne 32) { throw 'valid F1 evidence failed' }; $Cases++
+	$Diagnostic = '[Qualification:FarmF1Failure] event=peer run=f1-regression connection=1:1 storage_invalid=0 accounting_invalid=0 first_failed_observed=0 first_failed_measured=0'
+	if ((Read-Case ($Rows + @($Diagnostic))).State -cne 'MEASURED_PASS') { throw 'separate diagnostic broke canonical F1 schema' }; $Cases++
 	Assert-FarmF1Admission $Good @{accepted=7392; retired=7392; terminal_release=0}; $Cases++
 	if ((Read-Case @()).State -cne 'NOT_MEASURED') { throw 'historical F1 absence promoted' }; $Cases++
 	foreach ($Mutation in @(
