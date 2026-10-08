@@ -6,6 +6,38 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Loss-free execution sample retained; exception export corrected (2026-10-08)
+
+The private worker-loopback diagnostic `native-f1-etw-window-e51-01` retains a
+source-triggered 40.13-second scheduler sample with zero event/buffer loss and
+4,517,586 chronological rows. Its 106 native evidence files verify by size and
+SHA-256; index pin is
+`b6eda5a42536a030e822aaf06d618e38ba45686c386cdcfbe5ac173d6cb90f97`.
+The service-thread clock/lifecycle bind PID 26016, TID 5304. The first measured
+failure observer and 53,987.7-us frozen native history lie inside the sample.
+Service residency is 53,975.1 us with only 12.6 us off-CPU, not a substantial
+dispatch blackout. Interrupt residency and diagnostic cost still require
+separate subtraction; scheduled residency is not itself thread CPU execution.
+
+The workload later throws `recovery_work_did_not_converge_within_bound` after
+the structural barrier reports 62,620,499 us against 32,672,322 us. Client 00
+then exits 7 on connection closure. This native diagnostic failure is retained;
+no physical or provider PASS is inferred. The normal-only host export lost the
+retained F1 certificate on exception unwinding, so exact failed-token/curve
+replay remains NOT MEASURED for this run, despite a contained observer.
+
+The minimal host correction keeps farm F1 ownership outside the try scope,
+exports its existing buffer before exception teardown and unregisters safely.
+A normal-export flag prevents duplicate rows if later cleanup throws. No
+contract, recovery deadline, service clock, public API or normal acceptance
+change. Incremental worker Server compilation passes with its owned job reaped;
+required new hosted qualification remains pending. Existing focused retention
+tests cover the unchanged evidence class; no source-mirroring test is added for
+host scope placement. The earlier full-warmup ETW diagnostic hit its fixed
+512-MiB caps and lost buffers; it remains invalid for causal attribution.
+Both native diagnostic jobs are reaped; no new physical attempt or 3M work.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+
 ## Hosted capture-cancellation fixture path alias corrected (2026-10-08)
 
 Execution revision `e51e51fd7` has both original GNS jobs green, 11 cases each.

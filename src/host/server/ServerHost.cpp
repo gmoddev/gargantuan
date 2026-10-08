@@ -435,6 +435,11 @@ namespace gargantuan::host {
 		// Installed before native initialization; released after transport joins.
 		std::unique_ptr<detail::FarmServiceTimingEvidence> ServiceTimingEvidence;
 #endif
+		// Retain native grant certificates through exception handlers. Inner
+		// observer scopes unwind before this sink is exported and unregistered;
+		// its optional timing observer also outlives it.
+		std::unique_ptr<detail::FarmF1Evidence> F1Evidence;
+		bool F1EvidenceWritten = false;
 		std::unique_ptr<network::GameSession> Session;
 #if defined(GARGANTUAN_WITH_GNS)
 		std::shared_ptr<network::GameNetworkingSocketsTransport> FarmTransport;
@@ -692,7 +697,6 @@ namespace gargantuan::host {
 			if (ScaleQualification && AdmissionEvidence)
 				ScaleQualification->AttachAdmissionEvidence(*AdmissionEvidence);
 			std::unique_ptr<detail::FarmPublicationEvidence> PublicationEvidence;
-			std::unique_ptr<detail::FarmF1Evidence> F1Evidence;
 			if (FarmScaleWorkload) F1Evidence = std::make_unique<detail::FarmF1Evidence>();
 #if defined(GARGANTUAN_WITH_GNS)
 			if (F1Evidence && ServiceTimingEvidence)
@@ -1039,7 +1043,10 @@ namespace gargantuan::host {
 			if (PublicationEvidence && !PublicationEvidence->Valid()) ExitCode = 10;
 			if (ServerTickEvidence && !ServerTickEvidence->Valid()) ExitCode = 10;
 			if (F1Evidence && !F1Evidence->Valid()) ExitCode = 10;
-			if (F1Evidence) F1Evidence->Write(std::cout, FarmRunId);
+			if (F1Evidence) {
+				F1Evidence->Write(std::cout, FarmRunId);
+				F1EvidenceWritten = true;
+			}
 			if (FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
 				FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
 				(ScaleQualification && !ScaleQualification->IsComplete())))
@@ -1169,6 +1176,11 @@ namespace gargantuan::host {
 			return ExitCode;
 		} catch (const std::exception &Error) {
 			std::cerr << "GargantuanServer stopped because packaged runtime startup failed: " << Error.what() << '\n';
+			if (F1Evidence && !F1EvidenceWritten) {
+				F1Evidence->Write(std::cout, FarmRunId);
+				std::cout.flush();
+			}
+			F1Evidence.reset(); // Restore the borrowed previous sink before teardown.
 			if (Session) Session->Stop();
 			Session.reset();
 			if (Runtime) Runtime->Destroy();
