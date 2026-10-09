@@ -6,6 +6,20 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Bounded investigation stops for networking architecture review (2026-10-09)
+
+The [two-strategy review](../FutureArchitecture/Foundation3LNetworkingCapacityReview.md)
+records exact retained peer/pool failures, execution-cost evidence, preimplementation
+counterexamples, external implementation comparisons and ranked options. No
+production correction or corrected native32 candidate was executed: neither
+deadline selection nor egress offload is a defensible narrow patch under the
+existing protected-work/ownership model. The isolated CPU model uses the exact
+production F1 curve and synthetic inputs; it cannot qualify native service.
+Implementation and physical retries stop for human review. Existing F1,
+admission, native truth, reserves, resources and recovery gates are unchanged.
+**FOUNDATION 3L — NETWORKING ARCHITECTURE REVIEW REQUIRED; KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY.** No third redesign, Node32, 3M or merge.
+
 ## Native execution-cost evidence; private UDP candidate not adopted (2026-10-09)
 
 The loss-free `native-f1-etw-window-e51-01` sample binds the service thread to

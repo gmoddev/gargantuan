@@ -6,6 +6,39 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Two-strategy networking investigation stops for review (2026-10-09)
+
+**FOUNDATION 3L — NETWORKING ARCHITECTURE REVIEW REQUIRED.** The
+[non-normative review](../FutureArchitecture/Foundation3LNetworkingCapacityReview.md)
+evaluates deadline selection in the current actor and bounded egress offload.
+Both fail the preimplementation correctness review as narrow corrections:
+bundled callbacks lack protected-work deadlines; egress needs a pending native
+transaction, socket leases, ACK/result ordering and truthful feedback frontier.
+Neither was implemented or run as a corrected native32 candidate. A five-case
+private model compiles the unchanged production F1 curve with synthetic CPU
+inputs; it is not native/provider qualification or a new production verifier.
+Implementation and physical retries stop for human architecture review, with
+strict F1/admission/reserves unchanged. No third strategy, 3M or merge.
+
+Fixed reconstruction of existing native32 certificates finds three genuine
+common-four intervals: peers 3–6 max 95,947,087,872, 8–11 max 70,936,894,784,
+18–21 max 162,366,100,480 byte-us. Two exceed 72,100,864,000. Exhausted members
+are not charged; only retained first-failed certificates are reconstructible.
+Raw pool calculation SHA256 is
+`732a4fb8e4250709d96bfb254c0a501b93b135e92872ed9b864e3c76d69672c3`.
+This supplements earlier diagnostic evidence, not the physical receipt.
+
+All original b56/968 hosted jobs are now terminal and their raw archives/tree
+joins verify. b56 PR Windows passes 96 native +393 Python and Linux 53; its
+original push failure 95/96 and skipped Linux remain failures. 968 push Windows
+passes 96+393 and Linux 53; its original PR failure 95/96 and skipped Linux
+remain failures. Both original GNS jobs pass 11 each for both sources. No
+pending jobs remain and no counterpart substitutes for an original failure.
+Terminal reconciliation manifest SHA256:
+`c47f8961df38397a7f8e807181ef7442b68176b6d578667db7165aff8f849e02`.
+Execution source remains unqualified. **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY; Local32 failed, Node32 unrun.** Cleanup/evidence remain preserved.
+
 ## Post-wake decision: measured profile remains unavailable (2026-10-09)
 
 The [execution-cost receipt and independently challenged decision](PooledPhysicalQualification3L.md#native-execution-cost-evidence-private-udp-candidate-not-adopted-2026-10-09)

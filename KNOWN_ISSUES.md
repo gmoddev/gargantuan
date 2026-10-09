@@ -85,6 +85,18 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-09 the user-bounded two-strategy investigation ends with
+**FOUNDATION 3L — NETWORKING ARCHITECTURE REVIEW REQUIRED**. Deadline selection
+and egress offload both fail the preimplementation correctness review as narrow
+patches; neither is presented as a corrected native32 trial. Retained native
+certificates also reconstruct two failing common-four pool intervals. The
+[review report](devdocs/FutureArchitecture/Foundation3LNetworkingCapacityReview.md)
+compares source-backed networking techniques and ranks three unimplemented
+architecture options. Implementation/physical retries stop for human review;
+no larger redesign, F1 change or third strategy is adopted. All b56/968 original
+CI jobs are terminal/retained; counterpart success cannot replace their distinct
+F1 failures. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+
 2026-10-09 the independently challenged [post-wake capacity decision](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-wake-decision-a-retain-strict-f1-measured-profile-unavailable)
 retains strict F1 and refuses qualification of the failed actual Local32 profile.
 A contained loss-free native failure-observer sample shows negligible off-CPU
