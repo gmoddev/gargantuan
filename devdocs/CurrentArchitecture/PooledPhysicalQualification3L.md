@@ -6,6 +6,96 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Native execution-cost evidence; private UDP candidate not adopted (2026-10-09)
+
+The loss-free `native-f1-etw-window-e51-01` sample binds the service thread to
+PID 26016 / TID 5304. Its frozen 53,987.7-us history has 53,975.1 us scheduled
+residency and 12.6 us off-CPU. The first measured failure observer is inside the
+sample. This rules out a substantial dispatch blackout in that observed history;
+it does not establish production WCET or the exact lost grant certificate.
+The four-grant sender callbacks cover 700 successful native UDP packets /
+821,978 B in 12,545.8 us, with no observed off-CPU interval. Separate bounded
+interrupt analysis finds 32 us of DPC and no ISR on the CPU used by these
+callbacks in the wider selected window. Even deliberately overcharging 272 us
+for interrupts and reporting precision (32 us plus one us for each of all 240
+retained DPC/ISR events across CPUs) leaves only about 63.87 MiB/s of native
+bytes, before structural attribution and the rest of service-loop work. This
+is diagnostic execution-cost evidence, not proof of hardware incapacity:
+loopback, recording overhead and whole production worst-case cost differ.
+
+A private component sample uses the existing sender spans to distinguish
+encryption and the synchronous Windows UDP call. In one unchanged funded
+four-grant test, 1,848 successful packets / 2,166,384 native B take 15,308.6 us
+of sender elapsed time: 1,129.9 us encryption, 11,991.2 us raw send and 2,187.5 us
+other work. Nested components are not summed twice. These QPC durations are
+elapsed measurements, not independently measured CPU or upper bounds.
+
+The narrowly scoped private candidate substitutes `WSASendTo` for `WSASendMsg`
+only when the existing message has no ancillary control. Nonempty control keeps
+the original call; datagram buffers, address, synchronous success/error result
+and first-send ownership remain unchanged. Eight supplied-API cases, 13 timing
+cases and the two existing applied-source checks pass. An initial fixture build
+failure from a missing IPv6 header is preserved and corrected with that include.
+One candidate funded-four test passes, transmitting exactly the same packet and
+wire counts as the baseline. Raw-call elapsed time is 11,527.4 us, only about
+3.87% lower in this single comparison. Peer/pool running maxima increase from
+2,650,800,128 / 7,180,648,448 to 3,674,210,304 / 8,321,499,136 byte-us, within
+unchanged bounds for this small fixture. Its tiny common-four sample is not a
+representative saturated interval.
+
+**The candidate is not adopted.** This comparison does not establish a useful
+correction for the actual Local32 failure. The candidate's four private worker
+source changes are restored to the component baseline after exact hash checks;
+no production or installed artifact changed. The
+candidate-linked development binary is stale against restored sources and is
+not eligible to run or package until rebuilt. Both experiment jobs are reaped;
+direct census finds no native process or UDP 39450/39451 listener. Comparison
+SHA-256 is `610d0e0f5d64989ca03a58dd92f745d06b944a91c78e4ad0553def9b2f45c890`;
+the retained private decision is
+`675acd525e1fa50130c12f23e88fc64b201be592404d25e3362d2c2509364aa7`.
+
+### Post-wake decision A: retain strict F1; measured profile unavailable
+
+**A — KEEP F1 STRICT** is selected again after the independently challenged
+execution-cost evidence. The actual Local32 path has not demonstrated the
+declared finite-grant service and cannot be treated as a qualified production
+profile. This applies the existing [profile refusal rule](PooledReliableServiceProof3L.md#physical-headroom),
+not a new service constant, lower admission rate or blanket Windows rejection.
+The two known wake fixes remain qualified; their correction does not erase
+the subsequent actual failure. Passing conservation/recovery, isolated native
+controls or configured 18-MiB/s pacing cannot substitute for this missing fact.
+
+B's first-send-anchored alternative still fails 17/32 retained witnesses and
+therefore cannot solve the measured capacity failure. C would need a coherent
+packet-boundary scheduler that separates urgent ACK/control, protected ordinary
+DATA and unsent finite-grant work while retaining FIFO, native first-send
+ownership and reserves. Current pinned connection callbacks bundle these duties
+under the serial global-lock actor. Prioritizing token-bearing callbacks or
+assigning an arbitrary per-pass quota can delay delivery/control and cannot
+create packet-processing capacity. D's batching/concurrent submission would
+need explicit datagram-buffer/completion/ordering ownership and portability
+qualification; no supported flag supplies that architecture automatically.
+
+The next canonical engineering slice is **bounded aggregate native service
+capacity**, with a CPU/work feasibility model and a challenged scheduler/IO
+design before implementation. Its available execution budget must cover four
+finite grants plus protected traffic; byte funding alone is insufficient. Even
+optimistically allocating all Q=1,248 B to unique structural service requires
+at least 67,108,864/1,248 =53,773.128205 packets/s; actual framing, underfilled
+packets, protected traffic, receive/ACK, retransmission and maintenance add work.
+The supported execution model must demonstrate that capacity and the unchanged
+F1 dispatch/blocking requirement in the complete 32-peer workload/recovery,
+rather than infer it from configured rates or isolated four-grant controls. The
+existing observer, raw events and direct cleanup census are enough to establish
+this refusal. No further evidence framework or timer/API micro-patch is added.
+Fresh Local32 follows only a justified, deterministically/native qualified
+correction with required execution-changing CI green. Real-TLS Node32 and later
+3L gates remain required afterward; this decision does not skip them.
+
+No F1 equation, eligible clock, running minimum, admission, reserve, resource,
+recovery or acceptance gate changes. No further physical attempt, provider PASS,
+3M work or merge is made. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+
 ## Separate-process native witness: recurring capacity failure (2026-10-08)
 
 Development diagnostic `native-f1-452aa71d-9953c` runs one Server and 32 separate

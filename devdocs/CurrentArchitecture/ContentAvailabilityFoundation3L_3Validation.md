@@ -6,6 +6,47 @@ last_verified: 2026-10-06
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Post-wake decision: measured profile remains unavailable (2026-10-09)
+
+The [execution-cost receipt and independently challenged decision](PooledPhysicalQualification3L.md#native-execution-cost-evidence-private-udp-candidate-not-adopted-2026-10-09)
+retain **A — KEEP F1 STRICT**. The actual Local32 profile fails its unchanged
+service requirement; byte funding and isolated passing controls cannot establish
+availability. The loss-free native sample shows negligible dispatch absence in
+its contained failure-observer history and substantial packet-processing work,
+without proving whole production WCET or hardware incapacity. A private
+WSASendTo comparison preserves exact packet/wire counts and passes focused
+checks but establishes no useful correction; it is not adopted. Private WSASendTo
+candidate changes are rolled back to the component baseline; owned jobs are reaped.
+
+The next engineering slice is a coherent aggregate native service-capacity
+design covering four finite grants and protected traffic, with execution/work
+feasibility and independent challenge. No fitted F1 slack, arbitrary callback
+quota, new physical retry or recursive tooling qualification. Local32 must pass
+after a qualified correction before Node32 and the remaining gates can finish.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M or merge.**
+
+Current execution-changing source `b56ae4372` is **not CI-qualified**. Its
+original push Windows job `113591145783` fails funded ACK statistics (95/96
+native tests): ordinary control token 36, 393,652 B, has running maximum
+21,847,785,920 >18,025,216,000 byte-us and zero finite shortfall. All 4,332,097
+accepted bytes first-send/ACK/retire, retransmission is zero and terminal state
+clears. Cause/OS scheduling are NOT MEASURED; conservation does not waive F1.
+Dependent push Linux is skipped. Raw log SHA-256 is
+`0eb776aad5f7f7953f56c75e8eac539d7e1fbe22221d9dc03608a944432e48b4`;
+original diagnostic ZIP pin is
+`dde9040f7eac162ce35f49a7d9925ba580ba3d5533f4d913ad9f50d57cdf7ffb`.
+Independent offline reconstruction verifies all 347 segment events, exact
+393,652-B conservation and the native running maximum. The first failing
+retained pre-send checkpoint is segment 43 at 2,402,182,198 us, following segment
+42 at 2,402,180,896 us: a 1,302-us zero-first-send gap. Running minimum is
+-6,133,577,792 byte-us and that checkpoint's balance is 15,714,208,128, giving
+the exact 21,847,785,920 maximum. The first strict integer-us crossing is
+2,402,181,971 us; native observation time inside that gap and its OS/software
+cause are NOT MEASURED. Reconstruction pin is
+`f07004a343a4b8203d681c93c06fcd3f903cdc151f0ae5840811a4cbeffc9fec`.
+Both original GNS sanitizer jobs pass 11 cases each; PR native jobs remain
+pending at this checkpoint and cannot replace the failed original push.
+
 ## Loss-free execution sample retained; exception export corrected (2026-10-08)
 
 The private worker-loopback diagnostic `native-f1-etw-window-e51-01` retains a

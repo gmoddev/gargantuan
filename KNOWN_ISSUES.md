@@ -85,6 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-09 the independently challenged [post-wake capacity decision](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-wake-decision-a-retain-strict-f1-measured-profile-unavailable)
+retains strict F1 and refuses qualification of the failed actual Local32 profile.
+A contained loss-free native failure-observer sample shows negligible off-CPU
+time and substantial serial packet-processing cost; production WCET and blanket
+platform incapacity are not inferred. A private Windows UDP API comparison
+preserves packet/reserve behavior but establishes no useful correction and is
+not adopted. The next canonical slice is bounded aggregate native service
+capacity with a coherent scheduler/IO design and execution feasibility, before
+a qualified correction and fresh Local32/Node32. Source `b56ae4372` also retains
+a distinct original hosted funded-ACK F1 failure, so it is not CI-qualified.
+No constants, admission/reserves, physical gates or historical failures change.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no new physical attempt.**
+
 2026-10-08 corrected-wake source `c916b7d4f` reaches a fresh actual Local32
 measurement in run `9953fd84-0d6f-444a-93eb-ff8efa1d96ce`. Of 7,133 completed
 Ready grants, 21 fail running F1 across 16 peers; maximum
