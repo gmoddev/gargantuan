@@ -13,7 +13,7 @@ PID 26016 / TID 5304. Its frozen 53,987.7-us history has 53,975.1 us scheduled
 residency and 12.6 us off-CPU. The first measured failure observer is inside the
 sample. This rules out a substantial dispatch blackout in that observed history;
 it does not establish production WCET or the exact lost grant certificate.
-The four-grant sender callbacks cover 700 successful native UDP packets /
+The 175 token-bearing four-packet sender callbacks cover 700 successful native UDP packets /
 821,978 B in 12,545.8 us, with no observed off-CPU interval. Separate bounded
 interrupt analysis finds 32 us of DPC and no ISR on the CPU used by these
 callbacks in the wider selected window. Even deliberately overcharging 272 us
