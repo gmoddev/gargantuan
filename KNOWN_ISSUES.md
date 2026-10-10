@@ -85,6 +85,23 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-10 the authorized [execution-environment study](devdocs/FutureArchitecture/Foundation3LNetworkingCapacityReview.md#11-execution-environment-feasibility-study-october-9-local--october-10-utc)
+returns **OPTION 2 INSUFFICIENT — REVIEW BOUNDED EGRESS OWNERSHIP**, limited to
+the declared instrumented HOSTPC pin19 candidate. Exactly six baseline and six
+service-thread-affinity runs are retained: baseline fails 328/34,364 grants and
+30/3,883 pool cohorts; pin19 fails 127/34,214 and 3/4,072. Every run conserves
+bytes and has zero finite shortfall; those successes do not erase running F1.
+A covered B04 pool failure is fully scheduled on LP19 with 95.9% of its
+3,811-us interval inside SNP sender spans. Conservative interrupt/endpoint
+charging still leaves 93,761,009,792 >72,100,864,000 byte-us. Placement alone
+does not qualify this profile. Critical observer/component cost and a separate
+receive-path delay remain uncertain; no blanket hardware limit or qualified
+offload is inferred. No third variant, production redesign or physical retry.
+All owned trees are reaped, ports/logger clear and original raw evidence
+preserved. Next is source-level bounded-egress transaction design review,
+including receive/global-to-connection locking; no implementation is adopted.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; Node32 unrun.**
+
 2026-10-09 the user-bounded two-strategy investigation ends with
 **FOUNDATION 3L — NETWORKING ARCHITECTURE REVIEW REQUIRED**. Deadline selection
 and egress offload both fail the preimplementation correctness review as narrow
