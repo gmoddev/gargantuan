@@ -1,0 +1,274 @@
+# Farm32 cross-provider acceptance observation
+
+`PhysicalGameSessionFarmAcceptance.ps1` is an offline follow-up to two
+successful role-local reconciliations: one Local and one Node. Supply the two
+reconciliation JSON files and each run's immutable Server and Clients evidence
+roots. It creates one new JSON report outside all evidence roots and rejects an
+existing output path.
+
+The report binds the two reconciliation hashes, four role-local evidence-index
+hashes, distinct run IDs, and identical source, workload, binary, package,
+content, and deployment pins. It independently checks the indexed resource CSVs
+and reports per-process working-set, private-byte, thread, handle, and observed
+CPU high-water/delta. `SumOfPerProcessPeak*` is a conservative sum of separate
+process peaks, **not** a synchronized aggregate high-water. The offline
+analyzer also groups rows bearing the same supervisor sweep timestamp,
+requires one unique row from every expected role process for a complete
+sweep, and reports the largest sum of working set and private bytes across
+complete sweeps. It checks each complete working-set sweep against the
+`AggregateWorkingSetLimitBytes` recorded in the indexed role result. A
+partial sweep is counted but never used as a 32-process aggregate. The sweep
+reads processes sequentially, so even a complete sweep is not an atomic
+simultaneous high-water or a host-memory-headroom proof. The two hosts have
+independent monotonic clocks; their CPU samples are not combined into a
+cross-host utilization percentage.
+
+Each role also seals `host-resources.csv` in its evidence index. The role-local
+supervisor samples Windows cumulative idle/kernel/user CPU time, available and
+total physical memory, a bounded sweep of currently live owned processes, and
+the pinned 10-Gbps fiber adapter's byte/error/discard counters. Each row names
+the host, role, provider, run, adapter index/MAC/address, monotonic start/end,
+and snapshot skew. The offline analyzer rejects missing or unsealed rows,
+counter reset/wrap, changed host/interface identity, invalid clock/CPU ranges,
+missing all-process snapshots, and physically impossible link rates. It reports
+CPU and NIC rates **per host and between adjacent samples**, plus minimum sampled
+available memory and maximum sampled simultaneous owned working set. The sweep
+is bounded in time but is not an atomic OS snapshot, and the fixed sampling
+interval can miss short peaks. The Server and Clients samples cannot be combined
+as one cross-host instant.
+
+The report also lists each role's indexed evidence file count and declared
+retained bytes from the prior reconciler's hash-verified index. This establishes
+only the bounded role-local evidence set. It does not establish capture
+retention, long-running resource stability, or production journal retention.
+
+When **both** provider manifests select the bounded recovery workload, the
+acceptance analyzer independently replays the canonical three-case recovery
+parser over each run's indexed Server stdout/stderr and all 32 indexed Clients
+stdout/stderr logs. It checks the sealed role results' run, manifest, provider,
+endpoint, and scale identity, then compares every recomputed recovery case to
+the separate reconciliation report. The fixed 20-second service-recovery gate
+is `MEASURED_PASS` only if Local and Node each pass gameplay, structural, and
+mixed service recovery. A valid failing case is reported as `MEASURED_FAIL`;
+an absent workload is `NOT MEASURED`. The fixed ordinary-service observation
+is separate from structural convergence. For each case, the frozen 3J reference
+defines the immutable cessation `W_i` and original workload-derived deadline.
+The C3/C5 causal verifier separately audits actual prepared/accepted complete
+frames, source-fence coverage, pending-token disposition, native first-send,
+ACK and retirement. Continuing relevance motion may change later frame bytes;
+those bytes must match their actual prepared identity, not a prediction from
+the frozen reference. The finite accepted prefix must converge by the original
+deadline, and later live work remains audited through terminal conservation
+and client final-Name observation. Missing or inconsistent reference or causal
+evidence fails closed. A parser fixture is not a physical Local or Node result.
+
+The report independently re-reads the indexed Server `server.stdout.log`
+native admission receipt and `admission-fairness.tsv` timeline, then compares
+every final admission field and the full parsed fairness observation with the
+reconciliation JSON. It rejects a rehashed timeline or plausible numeric
+report change that differs from the native source. The per-provider admission
+section reports exact terminal accepted/retired/debt conservation, observed
+grant and credit high-water against their existing 4-grant, 512-KiB peer and
+2-MiB global limits, backlog/deferral counters, and observed per-generation
+eligibility waits. The accepted exact-demand episodes now have a separate
+run-scoped verdict against the canonical 220.5-ms first-grant eligibility bound;
+an interruption, disposal, or open demand makes complete exact-demand episode
+coverage inconclusive. Even a passing set of accepted grants does not prove
+continuous semantic backlog, sustained fair share, or overload backpressure.
+The V2 native admission timeline adds generation- and token-scoped ACK
+retirement, grant release, and terminal release after each accepted grant.
+Its offline reader rejects a second grant for the same generation before
+release, a release before retirement, duplicate lifecycle transitions, and
+native active-grant counts that disagree with the reconstructed chronology.
+A `grant_terminal_released` event distinguishes a zero-byte owner cleanup
+after verified ACK retirement (`reason=none`, valid) from unreconciled
+terminal debt (`reason=terminal_release`, failure). The canonical terminal
+release bound applies to bytes, not the number of owner-cleanup events.
+Historical V1 traces remain readable but their grant lifecycle is
+`NOT_MEASURED`. The sealed admission timeline additionally rejects any snapshot exceeding the
+four-grant or peer/global credit caps, a grant-accepted snapshot with no active
+grant, or regressing cumulative deferrals. Its maxima and final sampled
+deferrals must fit the native final high-water and counters, and terminal
+pending enter/leave totals must reconcile. This is a bounded diagnostic
+subset: the trace still has no continuous semantic backlog ledger, so it
+cannot prove saturated fair-share service from credit-eligible candidates
+alone. The final provider acceptance report reconciles V2's lifecycle verdict
+as a separate gate; a parser-only fixture is not a physical result.
+
+For Node, the report also checks the indexed authenticated manifest RPC
+receipt against the run manifest and reconciliation fields. Without additional
+Node evidence it preserves `RealTls=NOT_MEASURED`: `grpc_ssl_credentials` and a
+matching root pin do not constitute a negotiated TLS-session proof. To measure
+that one RPC's negotiated TLS, supply the separately pinned `node-tls-match.json`,
+`node-stage.json`, and `node-run.json` paths and SHA-256 values together. The
+analyzer replays the pinned Node TLS matcher against the indexed Server receipt,
+owned-child stage/run receipt, and hash-bound Node log, then requires exact
+agreement with the supplied match receipt. It reports the TLS version/cipher and
+`NEGOTIATED_TLS_MANIFEST_RPC_MEASURED` only for that authenticated request. This
+does not establish complete content delivery or full provider parity. Local
+evidence containing a Node receipt is rejected. Source, workload and deployment
+pin parity is measured; complete application/provider parity is not.
+
+The report records the already typed five-phase observations and final native
+admission conservation as measured subsets. It intentionally remains
+`INCOMPLETE` / `Foundation3LQualification=NOT CLAIMED`. Current role-local
+reconciliations also carry a hash-indexed native Character publication join
+when the server and all 32 client binary traces exist. This analyzer replays
+the join from both providers' sealed roots and compares the complete result,
+including analyzer and parser source hashes,
+with each reconciliation. It exposes exact accepted/observed state-chain
+counts and server-local due-to-accept, forced-built-to-accept, and client-local
+receive-to-handler durations. Eight explicit server root identities bind the
+64 expected recipient relationships. When five sealed phase windows and every
+root relationship are complete, the join retains recipient-local handled gaps
+against 250 ms and state-tick deltas against 12 ticks as raw-gap diagnostics.
+They are not the canonical gate: `RecipientServiceWorkload3L.md`'s measurement
+contract and `PhysicalFundingGateReview3L.md` gate 5 require confirmed due work,
+acceptance and observation, with zero scheduler rejection. The separate
+`CharacterDueService` observation requires all 64 root/recipient relationships
+in all five phases (320 phase relationships), at least one confirmed due record
+per relationship/phase, complete due/accepted/handled conservation, and zero
+rejections. Missing phase coverage remains `NOT_MEASURED`. A raw gap alone
+cannot fail or pass that due-service gate. Cross-host one-way latency remains
+separate. A missing legacy trace set stays unmeasured, whereas an incomplete or
+invalid set is rejected.
+
+Final acceptance independently imports the existing `Assert-Records` and
+`Assert-ScaleRecords` validators from the canonical farm script. It replays
+all 33 indexed stdout logs, checks the exact ready identities against the
+reconciled report, and rechecks every five-phase content transition, fresh
+reload identity, phase duration, and designated producer RPC/Event/action
+requirement. A rehashed log with missing observations or failed action results
+cannot retain the earlier reconciliation's successful workload claim.
+
+`FixedWorkloadFairness` is a separate conjunction over the independently
+replayed native timeline: all 32 ready peer generations must have received a
+grant, and accepted-grant wait, exact-demand episode coverage, and V2 grant
+lifecycle coverage must all pass. Missing granted peers, unfinished eligible
+work, interrupted/disposed eligibility, or historical V1 lifecycle evidence
+cannot produce that PASS. Existing measured failures remain failures. This
+proves only the recorded exact-demand episodes of the fixed workload; it does
+not establish an indefinitely saturated source or a cross-grant drain rate.
+
+The designated Farm32 producer (client slot 0) now emits bounded Luau-local
+Remote traces after each phase drains. The acceptance analyzer replays its
+hash-indexed RPC invocation/return and Event offer/`OnClientEvent` callback
+records, requiring 100 RPCs per phase within p95/p99/max 150/250/500 ms and
+matched Events within 250 ms round trip and ACK service gap. Missing legacy
+traces remain `NOT MEASURED`; partial or malformed present traces are rejected,
+and a valid threshold violation is `MEASURED_FAIL`. The other 31 clients do not
+produce this measured ScaleEvent/ScaleFunction workload, so their Remote
+recipient service and cross-host one-way latency remain `NOT_MEASURED`.
+
+Current role-local
+evidence does **not** establish canonical CPU/memory/network headroom, fixed
+20-second recovery or exact convergence without the separately indexed recovery workload,
+journal
+retention margin under overload, full fairness/backpressure, or full provider
+parity. Negotiated real-TLS details remain unmeasured when the optional Node
+owned-child evidence is not supplied. Terminal zero journal backlog and zero
+failures do not establish the high-water retention margin. When the
+indexed three-case recovery workload is present, the report separately records
+that its 480 structural/mixed offer samples and recovery samples stayed within
+the 16,384-record window with nonnegative observed reader margin. This sampled
+verdict now also requires a retained, monotonic 7,680-observation count per
+structural/mixed case: one reader-margin measurement immediately after each
+committed Name mutation. Its native minimum may be lower than the 480
+end-of-opportunity samples and is the authoritative overload minimum. The
+source-log reader checks the count and bounded source-log ordering. This
+closes the between-workload-mutation sampling hole for this fixed overload;
+other commits between those mutations and independent sustained fairness or
+backpressure behavior are not inferred from that observation.
+
+The 4/8-GiB available-memory preflight and the endpoint's per-process/aggregate
+working-set limits are protective run bounds, not a final host-memory acceptance
+threshold. The 96-MiB/s backend envelope and its 64+8+4+8-MiB/s modeled
+commitments are canonical deployment context; host/NIC counters alone cannot
+prove reserved packet/retransmission capacity, provider overhead, or the
+application latency gates. No CPU-percentage, RSS-plateau, or NIC-utilization
+PASS threshold is inferred from a measured value.
+
+Mock test:
+
+Post-Stop logical lifetime evidence is independently replayed from all 33
+hash-indexed stdout logs. The server and every client must report its exact run,
+role, slot and nonce, terminal GameSession, zero connections/readers/admission
+owners and zero transient Content ownership. Admission conservation remains
+exact; resident/cache counters are diagnostic. Successful pre-Stop retirement
+and zero terminal release remain separate requirements. All-absent historical
+receipts are `NOT_MEASURED`; partial, forged or omitted present receipts fail
+closed. This scoped measurement does not promote overall `INCOMPLETE`.
+
+The independent `remote_ownership_v1` receipt uses the same 33-role identity and
+custody checks. Its exact insertion high-waters and terminal accepted/released
+totals establish RemoteManager queue/handler boundedness and zero final owned
+work. Recorded residence times and lease overshoot remain diagnostics. This
+does not prove NetworkScheduler RpcResponse queue latency or replace the
+designated producer's application timing checks.
+
+Final preparation must retain a controller-side analysis inventory from the
+qualified source checkout. The actual outer campaign `collect` binds role and
+capture indices through `farm_campaign_runner.Reconcile`; it does not execute
+these PowerShell analyzers or consume the legacy `package.py` endpoint bundle.
+Keep the complete checkout-relative analyzer layout and use
+`PhysicalFarmAnalysisInventory.ps1` to hash the 20 transitive analysis files,
+including clock, lifecycle and Remote ownership helpers, before independent reconciliation.
+Its `SourceCommit` must match a clean HEAD for those files. Prepend the approved
+installed `C:\Sandbox\Codex\Tools\physical-qualifier\runtime` directory to
+the controller process PATH, then supply that exact `python.exe` path and its
+approved SHA256. The inventory rejects a different resolved Python executable
+and records the running PowerShell 7 path/hash. Retain the inventory outside
+the checkout with final preparation artifacts and compare its file/runtime pins
+again before analysis; it is a source custody receipt, not a provider PASS.
+
+Ordinary complete-message demand is charged at successful transport handoff,
+with the exact originating phase retained in the existing scheduler message's
+private metadata. A late normal reliable tail remains normal even when its
+handoff follows phase End or the deliberate overload marker. Per-peer and
+global all-interval buckets keep their history across those boundaries. Replay
+joins each queued identity to one successful handoff and rejects changed bytes,
+phase relabeling, duplicate success, rejection, or unresolved fixed-phase work.
+The metadata join uses the existing bounded 4-GiB SQLite analysis scratch;
+native storage remains the existing bounded message queue and trace. Direct
+non-scheduler control sends use their current phase; Remote/Character reliable
+messages require their production scheduler identity. No phase transition
+requires an empty queue, adds delay, or grants a fresh burst allowance.
+
+The finite-grant receipt observes the existing successful admission boundary
+in `GameSession::SubmitStructural`. Pre-Ready bootstrap grants carry the existing
+sentinel activation and are recorded separately by exact token and complete-byte
+size. They retain first-send/ACK/retirement conservation but do not manufacture
+qualified F1 completion certificates. Every Ready qualified grant must match its
+native completion token, byte size, activation time, and sticky service verdict;
+missing certificates, unmatched retirement, and a later return to bootstrap fail
+closed. A bounded one-outstanding-grant record per peer is sufficient because
+the existing admission is ACK gated. `completed_bytes + bootstrap_bytes` must
+equal all admitted/first-sent/ACKed/retired bytes. Bootstrap alone cannot satisfy
+the qualified service gate. The real `--pooled --reliable-profile` GameSession/GNS
+fixture exercises this production bootstrap path; historical receipts are not
+retroactively assigned the new admission fields.
+
+The canonical ordinary Remote/action load has one producer. The other 31
+clients are Character recipients; their lack of additional RPC producers is
+not a missing workload gate. Cross-host latency diagnostics and final
+conjunctive qualification remain separate.
+
+The Node provider's owned-process `node-resources.csv` is independently pinned
+by `node-run.json` and replayed separately from Engine and client resource
+observations. It records monotonic CPU time, working set, private bytes, threads
+and handles at one-second opportunities plus a final pre-termination sample,
+bounded to 1,202 rows and 1 MiB by the existing 1,200-second process lifetime.
+The outer collector verifies and retains that exact file. Absent historical
+resource fields remain `NOT_MEASURED`; partial fields or mismatched identity,
+chronology, hash or successful owned-child cleanup fail closed. These are
+sampled cost diagnostics; no new CPU, memory or latency acceptance threshold
+is inferred from them.
+
+```powershell
+pwsh -NoProfile -File tests/PhysicalGameSessionFarmAcceptanceTests.ps1
+pwsh -NoProfile -File tests/PhysicalGameSessionFarmHostResourceTests.ps1
+pwsh -NoProfile -File tests/PhysicalGameSessionFarmLifecycleTests.ps1
+pwsh -NoProfile -File tests/PhysicalGameSessionFarmRemoteOwnershipTests.ps1
+pwsh -NoProfile -File tests/PhysicalFarmAnalysisInventoryTests.ps1
+pwsh -NoProfile -File tests/PhysicalFarmNodeResourcesTests.ps1
+```

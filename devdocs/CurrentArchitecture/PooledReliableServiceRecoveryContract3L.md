@@ -14,6 +14,164 @@ related_adrs:
 
 # Foundation 3L pooled-service overload and recovery contract
 
+## Causal cessation fence amendment — 2026-10-02
+
+**Selected design: C3, implemented by C5 — immutable cessation reference,
+causal semantic coverage, and exact accepted live obligations.** Implementation
+and qualification of this amendment are in progress; this decision alone does
+not qualify the provider campaign.
+
+The cessation snapshot answers what is necessary under the state known at
+cessation. It cannot predict subsequent relevance Enter/Leave transitions.
+Relevance is derived from current spatial/semantic state and may change without
+a ChangeJournal mutation. Moving Characters continue throughout recovery.
+
+The invariant is that the finite cessation backlog becomes represented, and
+every accepted byte obligation through its completion cut is delivered and
+retired exactly once. It is not that obsolete unaccepted work must be emitted,
+nor that the entire moving world becomes permanently idle.
+
+### Reference work and live byte obligations
+
+At cessation, capture the source scope and exclusive journal fence `J0`, each
+connection generation, accepted replication sequence, pending-transition token
+watermark and outstanding accepted grants. The existing detached quote retains
+its exact sequence, complete-byte size, fingerprint and cursor trace. Its sum,
+including accepted unretired debt, is the immutable cessation reference
+`W_i^0`. Quote construction must fail closed if its bounded replay cannot
+represent the captured source state. No subsequent live bytes enlarge this
+reference or move the deadline.
+
+The reference is an exact counterfactual replay under cessation state, not a
+second production payload queue. Where live state and planning remain identical,
+the byte-for-byte replay remains a regression oracle. After live state diverges,
+discarding a delta frame and comparing the remaining frame sequence to the
+frozen replay is invalid: that delta can change Known, replication sequence,
+packetization and the work still semantically necessary.
+
+Actual complete encoded frames become exact byte obligations only at matching
+scheduler acceptance. Record their generation, sequence, source coverage, exact
+complete service bytes and fingerprint before moving their payload; bind that
+identity to the accepted grant/retirement token. Rejection advances no accepted
+bytes. Missing fingerprints, mismatching accepted bytes, duplicate identities,
+unmatched retirement and evidence overflow invalidate qualification.
+
+Each accepted frame is recorded once. Semantic coverage tags may identify both
+pre-fence work and post-fence live work in one frame; they do not duplicate its
+framing bytes or create two grants. All post-cessation accepted work remains in
+the exact live ledger, including work accepted after recovery completes.
+
+### Semantic coverage and finite convergence
+
+Unaccepted current-state work retains existing 3J semantics. A later publication
+may represent prior property history; an irrelevant object may need no journal
+operation; an unaccepted pending Enter may legally cancel. Record the actual
+source-owned cursor/transition disposition. Absence from an arbitrary sample,
+elapsed time or healthy unrelated traffic is not proof of coverage. Ordered
+barriers remain ordered. Once bytes are accepted, later source changes cannot
+cancel or shrink that byte obligation.
+
+For each captured generation, baseline representation requires the production
+journal cursor to cover `J0` and every pre-fence pending token to have accepted
+coverage or an explicit legal cancellation/supersession. Freeze a finite accepted
+sequence/grant cut at that point. Convergence requires exact unique first-send,
+ACK and retirement of that prefix, including the accepted debt at cessation.
+Later live grants do not reopen the cut. A disconnect has an explicit terminal
+accounting disposition but is not successful recovery of a required conforming
+32-client run; a reused slot cannot inherit another generation's coverage.
+
+An unfinished cessation planning input is a separate baseline barrier, not an
+empty pending set. Repeated requests or invalidated continuations cannot clear
+it. The first source-confirmed valid complete planning installation resolves
+that barrier and transfers its installed pending tokens into baseline coverage.
+Those tokens must then be accepted or explicitly superseded/cancelled. The
+detached reference recomputes the captured input against its frozen catalog;
+unfinished scratch is never promoted directly into production Pending/Known.
+
+The separate 20-second service-recovery gate is unchanged. The existing
+workload-derived convergence deadline below uses immutable `W_i^0`; ordinary
+motion is part of the canonical workload and must pass that same deadline.
+Arbitrary continuing overload can consume the same 2 MiB/s credit and cannot
+be promised convergence from `W_i^0` alone. It is not cessation of excess demand.
+Qualification fails if the canonical live workload misses the deadline; it may
+not extend the deadline with observed delta bytes. No rate, fairness, reserve,
+queue, pending, debt or F1 constant changes.
+
+During continuing motion require bounded live operation and finite-prefix
+convergence. Require whole-run terminal conservation after the workload stops;
+do not substitute a transient globally empty queue for causal recovery proof.
+
+### Alternatives and counterexamples
+
+| Candidate | Decision and distinguishing counterexample |
+| --- | --- |
+| C1 frozen relevance | Retain only for reference replay. Freezing production relevance suppresses a necessary Leave and changes the moving workload. |
+| C2 future closure | Reject: a future Enter is unknowable at cessation; retrospective closure can expand forever. |
+| C3 reference plus live deltas | Select: preserves current-state semantics and exact accepted ownership without attributing future bytes to the past. |
+| C4 evolving obligation alone | Keep only as the live conservation ledger: continuous legal mutation need never make it empty. |
+| C5 causal fence | Select as C3's implementation, reusing generation, cursor, sequence and pending tokens instead of a public epoch API. |
+| C6 full causal shadow replay | Possible stronger offline diagnostic, but requires replaying every relevance/planning input and adds a second costly execution. Exact source dispositions plus fixed encoded-byte audit suffice for the acceptance contract. |
+
+Discriminating qualification must cover no-motion exact replay; post-fence
+Leave without a journal mutation; Enter; Enter then Leave both before and after
+acceptance; bounded oscillation; legal current-state coalescing; continuous
+mutation with a finite cut and a withheld-baseline negative; disconnect and slot
+reuse; provider-independent semantics; and exact byte/ACK/retirement conservation.
+The source-event regressions and ledger negatives are both required: a tracker
+that accepts invented coverage events is not proof of correct source semantics.
+
+The historical text and receipts below retain their original measured scope.
+Any interpretation requiring every later live frame to equal the frozen quote,
+or global quiescence while motion continues, is superseded by this amendment.
+
+### Detached reference execution
+
+The reference oracle must not synchronously encode large frames inside the
+measured server step. A worker-only diagnostic at `1f4ba2cfb` measured 72–94 ms
+reference advances alongside 62–85 ms live Session steps. Limiting replay to
+one frame per step bounded frame count, not its interference with service.
+
+Capture remains on Main at the original cessation timestamp. Main retains the
+detached immutable reference while observing the live finite causal prefix; it
+does not replay that reference concurrently with measured drain. The causal
+verifier establishes prefix convergence from the captured fence, accepted cut
+and exact retirement independently of reference frames. Record that live
+convergence timestamp first, then start one joined, cancellable oracle worker.
+Compare the recorded timestamp against the unchanged bound computed from the
+original captured reference. Late quote completion cannot extend that bound.
+Missing live convergence or reference completion cannot produce PASS; the
+existing finite campaign runtime and tick limits still fail closed. This avoids
+unnecessary observer computation during provider measurement without excusing
+slow production or discarding any acceptance fact.
+
+Once started, the oracle exclusively owns the detached coordinator, frozen
+journal/catalog and captured immutable schema. It publishes a bounded queue
+of frame identities, exact bytes, cursors,
+timing and terminal status; it owns no live Session, payload queue, evidence
+writer or Main observer. Main consumes bounded metadata without waiting for
+encoding. Schema replacement cannot change the captured reference. Cancellation
+is checked between bounded advances and the worker joins before runtime teardown.
+Serial and worker replay must produce identical reference frames and totals.
+
+The 65,536 reference-frame evidence limit counts **frames**, not calls to the
+oracle. Filtered journal coverage and bounded planning continuations can legally
+produce more calls without producing any frame; terminal completion also needs
+its own call after the final frame. The metadata queue remains capped at 64.
+Replay execution remains owned by the campaign's existing explicit finite
+runtime, finite host/client tick limits, and stop-aware cancellation/join; no
+new total-work constant or service allowance is introduced. The farm's runtime
+deadline fails the run and cleans up its owned process tree when exhausted.
+Cancellation is not successful reference completion. Focused oracle tests cover
+more than 65,536 empty journal/planning advances, exactly 65,536 frames followed
+by completion, and rejection of a genuine 65,537th frame.
+
+The original cessation timestamp, 20-second service observation and immutable
+workload-derived deadline remain unchanged. Oracle execution never pauses the
+clock or extends a deadline. Removing oracle work does not excuse slow live
+replication; production-equivalent resource and gameplay gates still apply.
+This execution correction requires deterministic and hosted qualification before
+provider use.
+
 ## Decision
 
 **B — SEPARATE SERVICE RECOVERY FROM STRUCTURAL CONVERGENCE.**
@@ -333,6 +491,16 @@ journal globally for the sake of one peer.
 The revised convergence contract keeps the accepted fairness model unchanged:
 finite rotating peer service, one grant per peer, four active grants, large-waiter
 earmark, generation-safe cleanup and no small-vs-large starvation.
+
+GameSession checks the age of its actual native envelope before initial
+structural eligibility as well as after lengthy encoding. If earlier peer work
+has aged the envelope, it queries native feedback again and applies the same
+generation/counter validation, exact token retirement and ordinary funding
+checks. It never retimestamps cached feedback or relaxes the 50-ms limit.
+Missing feedback still defers admission; invalid or terminal evidence follows
+the existing failure path. A peer that submitted a structural group in this
+step retains its grant until the next step, preserving lifecycle ordering and
+the existing one-group-per-peer step behavior.
 
 A large retained backlog does not create a new priority class. Existing 3J policy
 already alternates materialization transitions and journal work, keeps critical

@@ -55,6 +55,37 @@ per peer/direction and 64 manager-wide. The one ordinary producer is below
 eight (N=32) and 16 (N=200). The 16,384-B encoded-frame ceiling is unchanged.
 The fixture audits actual all-interval demand, not just these average bounds.
 
+The physical farm records successful native GNS ordinary reliable sends at the
+same transport-acceptance boundary used by `DueServiceFixture`'s simulator
+audit. Each record charges the complete encoded message (payload plus the
+32-byte adapter) once; GRPL structural traffic and per-state companions are not
+ordinary message charges. Forced reliable Character frames are counted and
+reported explicitly. Fixed-phase send rejection invalidates this evidence;
+normal `WouldBlock` retry does not mint another successful message. Character
+zero-rejection, producer completion, ownership and delivery gates remain
+independent, so shaping or unfinished offered work cannot qualify by itself.
+
+Five sender-local start/end markers delimit the accepted fixed workload;
+bootstrap, clock calibration and deliberate overload remain separate scopes.
+The client closes the retained `reload` phase at the existing replicated
+`ScaleOverloadEnabled` transition before the next Luau step; the overload
+workload intentionally leaves the `ScalePhase` label unchanged.
+Offline replay applies exact integer all-interval token-bucket arithmetic,
+including tied arrivals, both per peer and over each complete direction. It
+does not average per phase or reset demand credit at a grant boundary. All 32
+client traces are mandatory, including peers with zero ordinary messages.
+The existing fixed publication metadata caps also bound these records; no
+payload is retained. A missing boundary, overflow, malformed record or partial
+receipt fails closed.
+
+Raw Windows QPC ticks and a startup host/frequency receipt are used only for
+these demand records. The 32 ingress senders must identify one common owning
+host and QPC domain, matched to the independently indexed client host resource
+receipt. Server egress has its own domain. No cross-host timestamp subtraction
+or one-way latency inference occurs. Existing publication nanoseconds remain
+process-local. This ordinary message-demand audit neither counts wire packet
+overhead nor replaces the separately qualified funded transport reserve.
+
 Unreliable input/state still consume host and path capacity. Even continuous
 promotion plus the reliable mix is <865 KiB/s aggregate before structural work.
 The configured simulator backend is 16 MiB/s per connection. The existing
@@ -89,6 +120,10 @@ separate count of confirmed due work retired. A different generation cannot
 cancel it. Unchanged suppression is counted separately. Missing accepted
 or observed production, overdue scheduled relationships and unavailable origins
 invalidate completeness; changing the metric cannot erase those failures.
+The farm-only `RecipientRetired` trace stage (11) is emitted from an accepted
+GRPL Unpublish/Destroy after scheduler commit, with the full recipient and
+object generations and current simulation tick. Preparation, credit deferral,
+and rejected scheduler work do not retire a relationship.
 Forced reliable states are included in traffic accounting and require separate
 acceptance/observation conservation from ordinary cadence samples.
 Their separate built-to-observation distribution starts at actual forced state
@@ -97,8 +132,29 @@ construction; it is not mislabeled as a cadence-due sample.
 The bounded trace is analyzed after measured phases, with a 4,194,304-record
 cap, full overflow/decode accounting and no payload retention. Normative RPC
 p95/p99/max 150/250/500 ms and Event ACK/action 250 ms remain unchanged.
+The physical 32-client fixture's bounded in-band clock calibration uses the
+existing RemoteFunction echo during warmup and between-phase gaps, never as
+part of a measured phase. All 32 clients first acknowledge that their local
+measured phase has closed; only then may the server enable probes. Its native
+four-timestamp exchange yields a causal
+cross-host offset interval at each probe. It is not an exact one-way latency
+measurement or a phase-long drift guarantee; see
+[the Farm32 calibration note](../../tests/PhysicalGameSessionFarmClock.md).
 Due-service percentiles describe these measured runs, not a new universal
 Character latency guarantee. Rendered/GPU visibility is not measured.
+
+The physical farm separately retains bounded F1 first-send evidence for all 32
+connection generations. The private Main-thread pooled-feedback tap records
+each completed native grant before retirement or freshness-driven requalification
+can admit its successor. Its 32-entry farm-owned summary latches any service
+failure, checks consecutive completion identities, and sums exact grant bytes.
+The final grant is included even when all its bytes later ACK and retire. Final
+completed bytes, accepted bytes, unique first-send, ACK and retirement must agree;
+the parser independently joins the 32 ready identities and terminal admission
+totals. Retaining a failed grant verdict is diagnostic history, not a cross-grant
+service curve. Historical runs without these receipts remain unmeasured for this
+gate. Native service evidence does not replace the distinct four-grant pool
+probe, delivery, fairness, capture or recovery gates.
 
 The unchanged historical `phaseHealthy` result still includes tick and raw-gap
 guards. The qualified mode separately gates normative Remote/action service,

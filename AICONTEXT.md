@@ -79,6 +79,12 @@ Authoritative DataModel / live Instance graph
 
 ## Current implementation landmarks
 
+- Generic physical-agent coordination is owned by
+  [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator).
+  Read [ownership/pinning/migration](devdocs/CurrentArchitecture/PhysicalAgentCoordination.md)
+  and `tools/physical-qualifier/README.md` for qualification tooling work. Keep
+  Gargantuan's probe/capture/evidence policy local and installed tools intact.
+
 - Schema lifecycle is `Bootstrap -> NativeRegistration -> CoreRegistration ->
   PreRunRegistration -> Validation -> Frozen -> Runtime`. PreRun is narrowly
   sandboxed for schema definition and remains capability- and phase-gated.

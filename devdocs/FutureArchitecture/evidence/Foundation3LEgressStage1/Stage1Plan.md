@@ -1,0 +1,10 @@
+# Foundation 3L egress Stage 1 diagnostic plan
+
+Declared before either new native32 run. This is a two-run diagnostic, not physical qualification or a prototype trial.
+
+- Source: committed `c57e7cc0b32c3ef1c9fb9efffae93b3944366982` plus the pinned prior diagnostic overlay `1a951af184386c04d48f68bb54a6e25b2feba9eb00f42fcb782f1f424223019f`. The isolated diagnostic modification exports the overlay's already captured per-callback encryption and raw-send counters. A second mode leaves its pool and thread-lifecycle observers active but disables the detailed timing sink. It changes no GNS send, reliability, pacing, F1 or wire path.
+- Both runs: 32 separate GNS loopback Players, endpoint `127.0.0.1:39450`, 18,000 frames, five-phase scale and recovery workload, one server, Normal process priority, service-thread pin19, unchanged F1 verifier and first-failure recorder, full bounded ETW trace. Player package remains the verified `c916b7d4f868177ae00b4b05dacfa7b8dbb1f563` binary.
+- Run order: B04 instrumented, then B05 clean timing control. B04 native run ID `d7af967d-c680-434b-8b72-c7ca245ab8f5`, ETW session GUID `c0e9b10d-118b-4fde-8150-038d73de199e`. B05 native run ID `4eaa47fb-6d21-4a02-ad04-29c16371d476`, ETW session GUID `588acd0c-9c3c-43bb-ac90-ae85c034db8d`.
+- Preserve every exit, F1 failure and trace. No replacement, timer tuning, packet quantum tuning or qualification reinterpretation. Stop after these two runs even if no failed interval is captured.
+- Compare actual failed intervals only when identity, clock brackets, positive native-send events, and loss-free trace join. Sum raw/encryption components only within SNP spans and keep nested callback/thinker spans separate. The clean run tests timing-observer perturbation; run-to-run workload variance and remaining pool/F1 observers limit causal precision.
+- Stage 1 passes only if the failed interval has a reliable enough removable raw-send budget to defend offload after nonzero dispatch, result commit and protected work. Otherwise report `EGRESS BENEFIT NOT ESTABLISHED` and do not design or prototype egress ownership.

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -42,6 +43,16 @@ namespace gargantuan {
 
 	bool IsValidProtocolUtf8(std::string_view Value) {
 		for (std::size_t Index = 0; Index < Value.size();) {
+			// Every byte in an ASCII word is already a complete valid code point.
+			// memcpy permits unaligned input without aliasing or reading past the
+			// supplied view. Non-ASCII words retain the exact scalar decoder below.
+			while (Value.size() - Index >= sizeof(std::uint64_t)) {
+				std::uint64_t Word;
+				std::memcpy(&Word, Value.data() + Index, sizeof(Word));
+				if ((Word & UINT64_C(0x8080808080808080)) != 0) break;
+				Index += sizeof(Word);
+			}
+			if (Index == Value.size()) return true;
 			const auto First = static_cast<unsigned char>(Value[Index]);
 			std::size_t Count = 0;
 			std::uint32_t CodePoint = 0;

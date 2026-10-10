@@ -1,6 +1,7 @@
 #include "gargantuan/network/Scheduler.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
+#include "../src/runtime/PublicationLatencyDiagnostics.hpp"
 #include "../src/network/SessionSendAllowance.hpp"
 #include "ReliableByteAdmissionFixture.hpp"
 
@@ -80,6 +81,8 @@ namespace {
 		}
 
 		TransportOperationResult Send(const NetworkMessageIntent &Message) override {
+			if (gargantuan::runtime_detail::ActiveOrdinaryDemand.Sequence)
+				OrdinaryAttempts.push_back(gargantuan::runtime_detail::ActiveOrdinaryDemand);
 			if (Message.Destination() != ActiveConnection)
 				return {.Status = TransportOperationStatus::InvalidConnection};
 			if (NextSendStatus != TransportOperationStatus::Succeeded) {
@@ -95,6 +98,7 @@ namespace {
 			return {.Status = TransportOperationStatus::Succeeded};
 		}
 
+		std::vector<gargantuan::runtime_detail::OrdinaryDemandTag> OrdinaryAttempts;
 		std::size_t PollEvents(std::span<TransportEvent>) override { return 0; }
 
 		std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Connection) const override {
@@ -339,6 +343,32 @@ namespace {
 }
 
 int main() {
+	{
+		using namespace gargantuan::runtime_detail;
+		struct State { std::uint64_t Phase = 1, Sequence = 0; } Capture;
+		PublicationLatencySink Sink{&Capture,
+			[](void *, ConnectionId) noexcept { return true; },
+			[](void *, PublicationLatencyRecord) noexcept {},
+			[](void *, const char *, ConnectionId, std::span<const std::byte>, std::uint64_t) noexcept {},
+			[](void *Context, ConnectionId, std::span<const std::byte>) noexcept {
+				auto &Value = *static_cast<State *>(Context); return OrdinaryDemandTag{++Value.Sequence, Value.Phase};
+			}};
+		auto *Previous = ActivePublicationLatency; ActivePublicationLatency = &Sink;
+		RecordingTransport Transport({1, 1}); NetworkScheduler Scheduler(Transport); const auto Limits = TestLimits();
+		Check(Scheduler.RegisterConnection({1, 1}, Limits), "ordinary phase fixture registers production scheduler");
+		Check(Scheduler.Submit(*Intent({1, 1}, DeliveryMode::ReliableOrdered, TrafficClass::ReliableApplication, 1, Limits)).Accepted(),
+			"ordinary phase fixture accepts queued work");
+		Capture.Phase = 0; // Phase ends with a legitimate pending reliable tail.
+		Transport.NextSendStatus = TransportOperationStatus::WouldBlock;
+		(void)Scheduler.Flush({1, 1}, SchedulerTickBudget::FromNetworkLimits(Limits));
+		(void)Scheduler.Flush({1, 1}, SchedulerTickBudget::FromNetworkLimits(Limits));
+		Check(Transport.OrdinaryAttempts.size() == 2 && Capture.Sequence == 1 &&
+			Transport.OrdinaryAttempts[0].Sequence == 1 && Transport.OrdinaryAttempts[1].Sequence == 1 &&
+			Transport.OrdinaryAttempts[0].Phase == 1 && Transport.OrdinaryAttempts[1].Phase == 1 &&
+			ActiveOrdinaryDemand.Sequence == 0 && ActiveOrdinaryDemand.Phase == 0,
+			"production scheduler retains original phase and one identity across retry and restores ephemeral send scope");
+		ActivePublicationLatency = Previous;
+	}
 	try { gargantuan::test::TestReliableByteAdmission(); }
 	catch (const std::exception &Failure) { Check(false, Failure.what()); }
 	{

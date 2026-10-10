@@ -100,6 +100,13 @@ namespace gargantuan::network {
 	using CharacterTerminalHandler = std::function<void(ConnectionId, const DisconnectInfo &)>;
 
 	struct CharacterNetworkMetrics {
+		// Client-local admission diagnostics, distinct from server policy results.
+		std::uint64_t ActionSubmissionAttempts = 0;
+		std::uint64_t ActionSubmissionNoControl = 0;
+		std::uint64_t ActionSubmissionSuspended = 0;
+		std::uint64_t ActionSubmissionInvalid = 0;
+		std::uint64_t ActionSubmissionPendingFull = 0;
+		std::uint64_t ActionSubmissionSchedulerRejected = 0;
 		std::uint64_t CommandsReceived = 0;
 		std::uint64_t CommandsAccepted = 0;
 		std::uint64_t StaleCommandsRejected = 0;
@@ -120,6 +127,9 @@ namespace gargantuan::network {
 		std::uint64_t SchedulerSubmissions = 0;
 		std::uint64_t BaselineMisses = 0;
 		std::uint64_t StaleStatesDropped = 0;
+		std::uint64_t MaterializationEpochMismatches = 0;
+		std::uint64_t LastExpectedMaterializationEpoch = 0;
+		std::uint64_t LastReceivedMaterializationEpoch = 0;
 		std::uint64_t InterpolationBufferUnderruns = 0;
 		std::uint64_t InterpolationResets = 0;
 		std::uint64_t LocalSmoothCorrections = 0;

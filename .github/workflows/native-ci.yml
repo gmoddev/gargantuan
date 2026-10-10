@@ -4,20 +4,39 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      scheduler_trace:
+        description: Capture one bounded Windows FULL workload scheduler diagnostic
+        type: boolean
+        default: false
+      scheduler_pair_diagnostic:
+        description: Diagnostic only - trace FULL and ACK statistics once, without qualification or packaging
+        type: boolean
+        default: false
+      scheduler_ack_cycle_diagnostic:
+        description: Diagnostic only - trace the exact funded ACK cycle once, without qualification or packaging
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   windows-native:
-    name: Windows x64 / MSVC 19.50+ / Release
+    name: ${{ github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic) && 'Windows causal diagnostic - not qualification' || 'Windows x64 / MSVC 19.50+ / Release' }}
     runs-on: windows-2025-vs2026
     timeout-minutes: 90
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 4
       VULKAN_SDK_CHOCOLATEY_VERSION: 1.4.350
+      SCHEDULER_TRACE: ${{ github.event_name == 'workflow_dispatch' && inputs.scheduler_trace }}
 
     steps:
+      - name: Reject conflicting diagnostic selections
+        if: github.event_name == 'workflow_dispatch' && ((inputs.scheduler_trace && inputs.scheduler_pair_diagnostic) || (inputs.scheduler_trace && inputs.scheduler_ack_cycle_diagnostic) || (inputs.scheduler_pair_diagnostic && inputs.scheduler_ack_cycle_diagnostic))
+        shell: pwsh
+        run: throw 'Select only one fixed scheduler diagnostic route'
+
       - name: Checkout recursive dependencies
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -37,6 +56,74 @@ jobs:
             throw "Submodules are missing, conflicted, or not at their pinned revisions:`n$($Invalid -join "`n")"
           }
           $Status
+          $SourceCommit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to record actual CI source commit' }
+          $SourceCommit | Set-Content -Encoding ascii qualified-source-commit.txt
+
+      - name: Quiesce hosted compatibility appraisal
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:RUNNER_OS -cne 'Windows') { throw 'Appraiser preparation requires the GitHub-owned ephemeral Windows runner' }
+          Write-Host "[CI:HostResources] pwsh_version=$($PSVersionTable.PSVersion) framework=$([Runtime.InteropServices.RuntimeInformation]::FrameworkDescription)"
+          $TaskPath = '\Microsoft\Windows\Application Experience\'
+          $TaskName = 'Microsoft Compatibility Appraiser'
+          $TaskState = 'NOT_REGISTERED'
+          $Tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+            $_.TaskPath -ceq $TaskPath -and $_.TaskName -ceq $TaskName
+          })
+          if ($Tasks.Count -gt 1) { throw 'Duplicate exact compatibility appraisal tasks' }
+          if ($Tasks.Count -eq 1) {
+            Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+            Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+            $TaskState = 'Disabled'
+            $Tasks = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop)
+            if ($Tasks.Count -ne 1 -or $Tasks[0].TaskPath -cne $TaskPath -or $Tasks[0].TaskName -cne $TaskName -or
+                [string]$Tasks[0].State -cne 'Disabled') { throw 'Compatibility appraisal task did not remain Disabled' }
+          }
+          $Watch = [Diagnostics.Stopwatch]::StartNew()
+          $ExpectedImage = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'System32\CompatTelRunner.exe'))
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          foreach ($Row in $Processes) {
+            if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded' }
+            if ($Row.Name -ine 'CompatTelRunner.exe' -or ($Row.ProcessId -isnot [uint32] -and $Row.ProcessId -isnot [int]) -or
+                $Row.ProcessId -le 0 -or $Row.ProcessId -gt [int]::MaxValue -or $Row.CreationDate -isnot [datetime] -or
+                [string]::IsNullOrWhiteSpace($Row.ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Row.ExecutablePath) -or
+                [IO.Path]::GetFullPath($Row.ExecutablePath) -ine $ExpectedImage) { throw 'Unexpected compatibility appraisal process identity' }
+            $AppraiserPid = [int]$Row.ProcessId
+            $Birth = $Row.CreationDate.ToUniversalTime()
+            $Process = Get-Process -Id $AppraiserPid -ErrorAction Stop
+            try {
+              if ($Process.Id -ne $AppraiserPid) { throw 'Compatibility appraisal process object PID differs' }
+              $HeldHandle = $Process.Handle
+              if ($null -eq $HeldHandle -or $HeldHandle -eq [IntPtr]::Zero) { throw 'Compatibility appraisal process handle unavailable' }
+              $Current = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$AppraiserPid" -ErrorAction Stop)
+              if ($Current.Count -eq 0) {
+                Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage state=DISAPPEARED_AFTER_HANDLE_OPEN"
+                continue
+              }
+              if ($Current.Count -ne 1 -or $Current[0].ProcessId -ne $AppraiserPid -or $Current[0].Name -ine 'CompatTelRunner.exe' -or
+                  $Current[0].CreationDate -isnot [datetime] -or $Current[0].CreationDate.ToUniversalTime() -ne $Birth -or
+                  [string]::IsNullOrWhiteSpace($Current[0].ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Current[0].ExecutablePath) -or
+                  [IO.Path]::GetFullPath($Current[0].ExecutablePath) -ine $ExpectedImage) { throw 'Compatibility appraisal identity changed after handle open' }
+              if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded before stop' }
+              Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage action=HELD_IDENTITY_CHECKED_STOP"
+              $Process.Kill()
+              $RemainingMs = [int][Math]::Floor(15000 - $Watch.Elapsed.TotalMilliseconds)
+              if ($RemainingMs -le 0 -or -not $Process.WaitForExit($RemainingMs)) { throw 'Compatibility appraisal process did not exit within remaining 15-second budget' }
+            } finally { $Process.Dispose() }
+          }
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          if ($Watch.Elapsed.TotalSeconds -gt 15) { throw 'Compatibility appraisal final census exceeded 15 seconds' }
+          if ($Processes.Count -ne 0) { throw "Compatibility appraisal process persisted or reappeared; process_count=$($Processes.Count)" }
+          if ($TaskState -eq 'Disabled') {
+            $Tasks = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop)
+            if ($Tasks.Count -ne 1 -or $Tasks[0].TaskPath -cne $TaskPath -or $Tasks[0].TaskName -cne $TaskName -or
+                [string]$Tasks[0].State -cne 'Disabled') { throw 'Compatibility appraisal task did not remain Disabled' }
+          }
+          Write-Host "[CI:HostResources] task_path=$TaskPath task_name=$TaskName task_state=$TaskState process_count=0"
 
       - name: Install pinned repository tools
         uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908 # v3
@@ -156,25 +243,268 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
           cmake --build build-ci --config Release --parallel %CMAKE_BUILD_PARALLEL_LEVEL%
 
-      - name: Run complete headless CTest contract
+      - name: Build bounded scheduler diagnostic
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if not %errorlevel%==0 exit /b %errorlevel%
+          cl /nologo /std:c++20 /O2 /W4 /WX /EHsc tools\ci\SchedulerTrace.cpp /Febuild-ci\scheduler-trace.exe /Fobuild-ci\scheduler-trace.obj advapi32.lib tdh.lib
+          if not %errorlevel%==0 exit /b %errorlevel%
+          set "SCHEDULER_TRACE_TEST_HELPER=%CD%\build-ci\scheduler-trace.exe"
+          python -m unittest discover -s tests -p "test_scheduler_trace.py" -v
+          if not %errorlevel%==0 exit /b %errorlevel%
+
+      - name: Trace one FULL workload before independent native gates
+        if: github.event_name == 'workflow_dispatch' && inputs.scheduler_trace
         shell: pwsh
         run: |
-          ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit build-ci/ctest-results.xml
+          & tools/ci/SchedulerTrace.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Trace fixed FULL and ACK statistics pair without qualification
+        if: github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic
+        shell: pwsh
+        run: |
+          & tools/ci/SchedulerTrace.ps1 -Pair
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Trace exact funded ACK cycle without qualification
+        if: github.event_name == 'workflow_dispatch' && inputs.scheduler_ack_cycle_diagnostic
+        shell: pwsh
+        run: |
+          & tools/ci/SchedulerTrace.ps1 -Case AckCycleFunded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify compatibility appraisal absence before CTest
+        if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:RUNNER_OS -cne 'Windows') { throw 'Appraiser census requires the GitHub-owned ephemeral Windows runner' }
+          Write-Host "[CI:HostResources] pwsh_version=$($PSVersionTable.PSVersion) framework=$([Runtime.InteropServices.RuntimeInformation]::FrameworkDescription)"
+          $Watch = [Diagnostics.Stopwatch]::StartNew()
+          $ExpectedImage = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'System32\CompatTelRunner.exe'))
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          foreach ($Row in $Processes) {
+            if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded' }
+            if ($Row.Name -ine 'CompatTelRunner.exe' -or ($Row.ProcessId -isnot [uint32] -and $Row.ProcessId -isnot [int]) -or
+                $Row.ProcessId -le 0 -or $Row.ProcessId -gt [int]::MaxValue -or $Row.CreationDate -isnot [datetime] -or
+                [string]::IsNullOrWhiteSpace($Row.ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Row.ExecutablePath) -or
+                [IO.Path]::GetFullPath($Row.ExecutablePath) -ine $ExpectedImage) { throw 'Unexpected compatibility appraisal process identity' }
+            $AppraiserPid = [int]$Row.ProcessId
+            $Birth = $Row.CreationDate.ToUniversalTime()
+            $Process = Get-Process -Id $AppraiserPid -ErrorAction Stop
+            try {
+              if ($Process.Id -ne $AppraiserPid) { throw 'Compatibility appraisal process object PID differs' }
+              $HeldHandle = $Process.Handle
+              if ($null -eq $HeldHandle -or $HeldHandle -eq [IntPtr]::Zero) { throw 'Compatibility appraisal process handle unavailable' }
+              $Current = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$AppraiserPid" -ErrorAction Stop)
+              if ($Current.Count -eq 0) {
+                Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage state=DISAPPEARED_AFTER_HANDLE_OPEN"
+                continue
+              }
+              if ($Current.Count -ne 1 -or $Current[0].ProcessId -ne $AppraiserPid -or $Current[0].Name -ine 'CompatTelRunner.exe' -or
+                  $Current[0].CreationDate -isnot [datetime] -or $Current[0].CreationDate.ToUniversalTime() -ne $Birth -or
+                  [string]::IsNullOrWhiteSpace($Current[0].ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Current[0].ExecutablePath) -or
+                  [IO.Path]::GetFullPath($Current[0].ExecutablePath) -ine $ExpectedImage) { throw 'Compatibility appraisal identity changed after handle open' }
+              if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded before stop' }
+              Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage action=HELD_IDENTITY_CHECKED_STOP"
+              $Process.Kill()
+              $RemainingMs = [int][Math]::Floor(15000 - $Watch.Elapsed.TotalMilliseconds)
+              if ($RemainingMs -le 0 -or -not $Process.WaitForExit($RemainingMs)) { throw 'Compatibility appraisal process did not exit within remaining 15-second budget' }
+            } finally { $Process.Dispose() }
+          }
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          if ($Watch.Elapsed.TotalSeconds -gt 15) { throw 'Compatibility appraisal final census exceeded 15 seconds' }
+          if ($Processes.Count -ne 0) { throw "Compatibility appraisal process persisted or reappeared; process_count=$($Processes.Count)" }
+          Write-Host "[CI:HostResources] pre_timing_process_count=0"
+
+      - name: Run complete headless CTest contract
+        if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
+        shell: pwsh
+        env:
+          GARGANTUAN_SAMPLER_TEST_ARTIFACT_ROOT: ${{ github.workspace }}/build-ci/sampler-test-diagnostics
+        run: |
+          # Complete CTest includes the funded ACK workload/mode/pool gates and
+          # one paired native statistics-boundary run; do not duplicate them here.
+          # CTest changes into --test-dir before opening its JUnit output.
+          ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit "$env:GITHUB_WORKSPACE/build-ci/ctest-results.xml"
+          if ($LASTEXITCODE -ne 0) { throw 'Complete headless CTest contract failed' }
+          if (-not (Test-Path -LiteralPath build-ci/ctest-results.xml -PathType Leaf) -or
+              (Get-Item -LiteralPath build-ci/ctest-results.xml).Length -eq 0) {
+            throw 'CTest did not produce the required upload-path JUnit evidence'
+          }
+
+      - name: Verify pinned Farm32 control and evidence tooling
+        if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
+        shell: pwsh
+        run: |
+          python tools/physical-qualifier/bootstrap.py
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Agent Coordinator bootstrap failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p 'test_f1_candidate_source.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'F1 candidate source inventory tests failed' }
+          python -m unittest discover -s tests -p 'test_foundation3l_four_client.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'F1 raw four-client evidence replay tests failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p 'test_qualifier.py' -k phase1_raw_evidence -v
+          if ($LASTEXITCODE -ne 0) { throw 'F1 raw evidence collection tests failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p 'test_qualifier.py' -k phase1_stage_is_distinct_and_fixed -v
+          if ($LASTEXITCODE -ne 0) { throw 'F1 fixed capture staging test failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p 'test_farm_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Farm32 control and evidence tests failed' }
+          python -m unittest discover -s tests -p 'test_foundation3l_acceptance.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Final Foundation 3L conjunction tests failed' }
+          python -m unittest discover -s tests -p 'test_ci_junit_output.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'CI JUnit output-path regression tests failed' }
+          # Control-only mocks; no capture, NIC, or installed-service operation.
+          & tools/physical-qualifier/tests/TestCaptureHooks.ps1 -HookPath tools/physical-qualifier/worker/PktMonFarm32Capture.ps1 -Farm32
+          & tools/physical-qualifier/tests/TestDumpcapFarm32Capture.ps1
+          & tests/ContentScaleGameplayRecoveryTests.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Client recovery callback regression failed' }
+          & tests/ContentScaleGameplayRecoveryTests.ps1 -ReproduceMissingClientTick
+          if ($LASTEXITCODE -ne 0) { throw 'Client recovery negative control failed' }
+
+      - name: Verify compatibility appraisal absence before timing
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:RUNNER_OS -cne 'Windows') { throw 'Appraiser census requires the GitHub-owned ephemeral Windows runner' }
+          Write-Host "[CI:HostResources] pwsh_version=$($PSVersionTable.PSVersion) framework=$([Runtime.InteropServices.RuntimeInformation]::FrameworkDescription)"
+          $Watch = [Diagnostics.Stopwatch]::StartNew()
+          $ExpectedImage = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'System32\CompatTelRunner.exe'))
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          foreach ($Row in $Processes) {
+            if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded' }
+            if ($Row.Name -ine 'CompatTelRunner.exe' -or ($Row.ProcessId -isnot [uint32] -and $Row.ProcessId -isnot [int]) -or
+                $Row.ProcessId -le 0 -or $Row.ProcessId -gt [int]::MaxValue -or $Row.CreationDate -isnot [datetime] -or
+                [string]::IsNullOrWhiteSpace($Row.ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Row.ExecutablePath) -or
+                [IO.Path]::GetFullPath($Row.ExecutablePath) -ine $ExpectedImage) { throw 'Unexpected compatibility appraisal process identity' }
+            $AppraiserPid = [int]$Row.ProcessId
+            $Birth = $Row.CreationDate.ToUniversalTime()
+            $Process = Get-Process -Id $AppraiserPid -ErrorAction Stop
+            try {
+              if ($Process.Id -ne $AppraiserPid) { throw 'Compatibility appraisal process object PID differs' }
+              $HeldHandle = $Process.Handle
+              if ($null -eq $HeldHandle -or $HeldHandle -eq [IntPtr]::Zero) { throw 'Compatibility appraisal process handle unavailable' }
+              $Current = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$AppraiserPid" -ErrorAction Stop)
+              if ($Current.Count -eq 0) {
+                Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage state=DISAPPEARED_AFTER_HANDLE_OPEN"
+                continue
+              }
+              if ($Current.Count -ne 1 -or $Current[0].ProcessId -ne $AppraiserPid -or $Current[0].Name -ine 'CompatTelRunner.exe' -or
+                  $Current[0].CreationDate -isnot [datetime] -or $Current[0].CreationDate.ToUniversalTime() -ne $Birth -or
+                  [string]::IsNullOrWhiteSpace($Current[0].ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Current[0].ExecutablePath) -or
+                  [IO.Path]::GetFullPath($Current[0].ExecutablePath) -ine $ExpectedImage) { throw 'Compatibility appraisal identity changed after handle open' }
+              if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded before stop' }
+              Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage action=HELD_IDENTITY_CHECKED_STOP"
+              $Process.Kill()
+              $RemainingMs = [int][Math]::Floor(15000 - $Watch.Elapsed.TotalMilliseconds)
+              if ($RemainingMs -le 0 -or -not $Process.WaitForExit($RemainingMs)) { throw 'Compatibility appraisal process did not exit within remaining 15-second budget' }
+            } finally { $Process.Dispose() }
+          }
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          if ($Watch.Elapsed.TotalSeconds -gt 15) { throw 'Compatibility appraisal final census exceeded 15 seconds' }
+          if ($Processes.Count -ne 0) { throw "Compatibility appraisal process persisted or reappeared; process_count=$($Processes.Count)" }
+          Write-Host "[CI:HostResources] pre_timing_process_count=0"
+
+      - name: Run qualified reliable workload timing in Release
+        if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
+        shell: cmd
+        run: |
+          pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case PooledFull
+          if not %errorlevel%==0 exit /b %errorlevel%
+          pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case PooledAggregate32Structural
+          if not %errorlevel%==0 exit /b %errorlevel%
+          rem Explicit diagnostics already ran FULL once before CTest; never repeat it.
+          if not "%SCHEDULER_TRACE%"=="true" (
+            pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case Full
+          )
+          if not %errorlevel%==0 exit /b %errorlevel%
+          pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case Aggregate32
+          if not %errorlevel%==0 exit /b %errorlevel%
+          pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case Aggregate32Structural
+          if not %errorlevel%==0 exit /b %errorlevel%
+
+      - name: Package qualified 32-client physical candidate
+        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic && !inputs.scheduler_ack_cycle_diagnostic
+        shell: pwsh
+        run: |
+          $PackageRoot = Join-Path $PWD 'build-ci/QualifiedScalePhysical'
+          $PlayerRuntime = Join-Path $PWD 'build-ci/RuntimeDistribution'
+          $ServerRuntime = Join-Path $PWD 'build-ci/ServerRuntimeDistribution'
+          & (Join-Path $PWD 'build-ci/gargantuan_qualified_scale_package.exe') `
+            $PackageRoot $PlayerRuntime $ServerRuntime
+          if ($LASTEXITCODE -ne 0) { throw 'Qualified scale package generation failed' }
+          $ProjectionRun = [Guid]::NewGuid().ToString()
+          $ProjectionRegistry = Join-Path $PWD 'build-ci/QualifiedScaleRuntimeCheck'
+          foreach ($Role in @('Player', 'Server')) {
+            $RoleRoot = Join-Path $PackageRoot $Role
+            $Files = @(Get-ChildItem -LiteralPath $RoleRoot -File -Recurse | Sort-Object FullName |
+              ForEach-Object {
+                [ordered]@{
+                  Path = [IO.Path]::GetRelativePath($RoleRoot, $_.FullName).Replace('\', '/')
+                  Bytes = $_.Length
+                  Sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+              })
+            if ($Files.Count -lt 3) { throw "Qualified $Role package is incomplete" }
+            [IO.File]::WriteAllText((Join-Path $RoleRoot 'deployment-sha256.json'),
+              ([ordered]@{ Format = 'GargantuanFarmDeployment'; Version = 1;
+                SourceCommit = $env:GITHUB_SHA; Files = $Files } | ConvertTo-Json -Depth 5),
+              [Text.UTF8Encoding]::new($false))
+            # The upload is a pinned deployment envelope. The native host must
+            # receive its closed content projection, without this sidecar.
+            $LocalRole = if ($Role -eq 'Server') { 'Server' } else { 'Clients' }
+            $DeploymentPin = (Get-FileHash -LiteralPath (Join-Path $RoleRoot 'deployment-sha256.json') `
+              -Algorithm SHA256).Hash.ToLowerInvariant()
+            & ./tests/NewPhysicalGameSessionFarmProjection.ps1 -PackageRoot $RoleRoot `
+              -RunRegistryRoot $ProjectionRegistry -RunId $ProjectionRun -Role $LocalRole `
+              -DeploymentSha256 $DeploymentPin -SourceCommit $env:GITHUB_SHA
+            $RuntimeRoot = Join-Path $ProjectionRegistry "$ProjectionRun.$LocalRole.runtime"
+            & (Join-Path $PWD 'build-ci/gargantuan-packager.exe') validate $RuntimeRoot
+            if ($LASTEXITCODE -ne 0) { throw "Qualified $Role runtime projection failed native validation" }
+          }
+
+      - name: Upload qualified 32-client physical candidate
+        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic && !inputs.scheduler_ack_cycle_diagnostic
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: qualified-scale-${{ github.sha }}
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build-ci/QualifiedScalePhysical/
 
       - name: Upload native CI diagnostics
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: native-ci-diagnostics
           if-no-files-found: ignore
           path: |
+            qualified-source-commit.txt
             build-ci/CMakeFiles/CMakeConfigureLog.yaml
             build-ci/Testing/Temporary/LastTest.log
             build-ci/ctest-results.xml
+            build-ci/sampler-test-diagnostics/
+            build-ci/scheduler-trace/
+            build-ci/scheduler-trace-ack-stats/
+            build-ci/scheduler-trace-ack-cycle-funded/
+            build-ci/scheduler-trace-aggregate32-structural/
+            build-ci/scheduler-trace-pooled-aggregate32-structural/
+            build-ci/scheduler-trace-pooled-full/
+            build-ci/scheduler-trace-aggregate32/
+            build-ci/scheduler-trace.exe
+            build-ci/gargantuan_game_session_real_transport_tests.exe
+            build-ci/gargantuan_real_transport_tests.exe
+            build-ci/scheduler-trace-pair.json
 
   linux-sanitizers:
     name: Ubuntu 24.04 / Clang 19 / ASan + UBSan / Headless
     needs: windows-native
+    if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -197,6 +527,7 @@ jobs:
         run: |
           set -euo pipefail
           git submodule status --recursive | tee /tmp/gargantuan-submodules.txt
+          git rev-parse HEAD > qualified-source-commit.txt
           if grep -Eq '^[\-+U]' /tmp/gargantuan-submodules.txt; then
             echo "Submodules are missing, conflicted, or not at their pinned revisions."
             exit 1
@@ -281,15 +612,17 @@ jobs:
             --timeout 300 \
             --output-on-failure \
             --no-tests=error \
-            --output-junit build-sanitizers/ctest-results.xml
+            --output-junit "$GITHUB_WORKSPACE/build-sanitizers/ctest-results.xml"
+          test -s "$GITHUB_WORKSPACE/build-sanitizers/ctest-results.xml"
 
       - name: Upload sanitizer diagnostics
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: sanitizer-ci-diagnostics
           if-no-files-found: ignore
           path: |
+            qualified-source-commit.txt
             build-sanitizers/CMakeFiles/CMakeConfigureLog.yaml
             build-sanitizers/Testing/Temporary/LastTest.log
             build-sanitizers/ctest-results.xml
