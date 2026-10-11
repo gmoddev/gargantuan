@@ -1296,6 +1296,9 @@ namespace gargantuan::network {
 		void RecordCausalDelivery(ConnectionId Connection, Peer &PeerValue,
 			const std::optional<detail::ReliableServiceFeedback> &Sample, bool Valid) const {
 			if (!detail::ActiveStructuralCausalEvidence || !ByteAdmission || !ByteAdmission->Debt(Connection)) return;
+			// A pending native result leaves this observation incomplete.  Keep the
+			// last causal delivery until a complete snapshot can advance it.
+			if (Valid && !Sample) return;
 			const auto Before = PeerValue.CausalAcceptedBefore;
 			Valid = Valid && Sample && Sample->CountersValid && Sample->Connection == Connection &&
 				PeerValue.CausalGrantToken == ByteAdmission->DebtToken(Connection) &&
