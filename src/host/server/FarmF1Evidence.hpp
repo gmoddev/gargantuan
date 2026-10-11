@@ -77,7 +77,8 @@ private:
 			T.NativeApiEntered >= T.AdapterLocked && T.NativeApiLocked >= T.NativeApiEntered &&
 			T.NativeEnqueued >= T.NativeApiLocked && T.FirstSnpVisit >= T.NativeEnqueued &&
 			T.PacketPreparationEntered >= T.FirstSnpVisit && T.WorkerQueued >= T.PacketPreparationEntered &&
-			T.WorkerStarted >= T.WorkerQueued && T.NativeCompleted == First && T.ActorReconciled >= T.NativeCompleted;
+			T.WorkerStarted >= T.WorkerQueued && T.NativeCompleted >= T.WorkerStarted &&
+			T.NativeCompleted == First && T.ActorReconciled >= T.NativeCompleted;
 	}
 	static void RetainInitialFailure(Peer &P, const network::detail::ReliableServiceFeedback &S,
 		bool CompletionValid) noexcept {

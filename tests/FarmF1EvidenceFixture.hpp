@@ -3,11 +3,14 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <source_location>
 
 inline void TestFarmF1Evidence() {
 	using namespace gargantuan;
 	using network::detail::PooledServiceRecord;
-	auto Require = [](bool Value) { if (!Value) throw std::runtime_error("farm F1 retention regression"); };
+	auto Require = [](bool Value, std::source_location Site = std::source_location::current()) {
+		if (!Value) throw std::runtime_error("farm F1 retention regression at line " + std::to_string(Site.line()));
+	};
 	auto Completed = [](std::uint32_t Slot, std::uint64_t Sequence = 1, bool Failed = false) {
 		PooledServiceRecord R;
 		R.Connection = {Slot, 1}; R.Accepted.Structural = Sequence * 77;
