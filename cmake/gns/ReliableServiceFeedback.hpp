@@ -119,6 +119,10 @@ void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounte
 GargantuanReliableServiceSnapshot *GargantuanGetClosingFeedback();
 bool GargantuanReadNativeFeedback(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
 	GargantuanReliableServiceSnapshot &Result);
+// Cessation capture only: reconcile existing ownership without cancellation or
+// changing the execution domain. Every caller shares one absolute deadline.
+bool GargantuanReadResolvedNativeFeedback(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
+	std::uint64_t DeadlineMicroseconds, GargantuanReliableServiceSnapshot &Result);
 bool GargantuanConfigureNativeEgress(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
 	bool Enabled, std::uint64_t *Generation = nullptr);
 bool GargantuanConfigureNativeEgressWorkers(ISteamNetworkingSockets *Interface,

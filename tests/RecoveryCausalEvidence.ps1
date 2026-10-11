@@ -60,10 +60,16 @@ function Assert-RecoveryCausalEvidence {
 	$Expected = [Collections.Generic.HashSet[string]]::new([string[]]$ExpectedConnections, [StringComparer]::Ordinal)
 	if ($Expected.Count -ne 32) { throw 'causal recovery requires 32 original peers' }
 	$Lines = [IO.File]::ReadAllLines($Path)
-	if ($Lines.Count -lt 66 -or $Lines.Count -gt 131170 -or
-		$Lines[0] -cne "format=GargantuanRecoveryCausalV1`trun=$RunId`tcase=$Case") { throw 'causal evidence header or row bound is invalid' }
+	if ($Lines.Count -lt 66 -or $Lines.Count -gt 131170) { throw 'causal evidence row bound is invalid' }
+	$NativeBaseline = [decimal]$CessationMicroseconds
+	$V1Header = "format=GargantuanRecoveryCausalV1`trun=$RunId`tcase=$Case"
+	$V2Header = "format=GargantuanRecoveryCausalV2`trun=$RunId`tcase=$Case`tnative_baseline_us="
+	if ($Lines[0].StartsWith($V2Header, [StringComparison]::Ordinal)) {
+		$NativeBaseline = U $Lines[0].Substring($V2Header.Length)
+		if ($NativeBaseline -lt $CessationMicroseconds) { throw 'native baseline precedes the fixed cessation cut' }
+	} elseif ($Lines[0] -cne $V1Header) { throw 'causal evidence header is invalid' }
 	$State = @{ Peers = @{}; Slots = @{}; Scope = ''; PendingCount = 0; GrantCount = 0; IdentityCount = 0;
-		Events = 0; Quotes = 0; Sources = @{}; Totals = (Totals); LastTime = [decimal]$CessationMicroseconds; ConvergedUs = $null }
+		Events = 0; Quotes = 0; Sources = @{}; Totals = (Totals); LastTime = $NativeBaseline; ConvergedUs = $null }
 	$InEvents = $false; $Ended = $false; $AfterEvents = $false
 	for ($Line = 1; $Line -lt $Lines.Count; $Line++) {
 		$F = $Lines[$Line].Split("`t")
@@ -105,7 +111,9 @@ function Assert-RecoveryCausalEvidence {
 		if ($State.Peers.Count -ne 32) { throw 'causal evidence lacks all captures' }
 		if (-not $InEvents) {
 			$InEvents = $true
-			if (@($State.Peers.Values | Where-Object { -not (Converged $_) }).Count -eq 0) { $State.ConvergedUs = [decimal]0 }
+			if (@($State.Peers.Values | Where-Object { -not (Converged $_) }).Count -eq 0) {
+				$State.ConvergedUs = $NativeBaseline - $CessationMicroseconds
+			}
 		}
 		if ($F[0] -ceq 'end') {
 			if ($F.Count -ne 3 -or (U $F[1]) -ne $State.Events -or $F[2] -cne '0') { throw 'causal terminal count or status is invalid' }

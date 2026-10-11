@@ -86,6 +86,10 @@ struct ReliableServiceFeedbackAccess {
 	static bool Release(IGameTransport &Transport, ConnectionId Connection) { return Transport.ReleaseReliableServiceFeedback(Connection); }
 	[[nodiscard]] static std::optional<ReliableServiceFeedback> Observe(
 		const IGameTransport &Transport, ConnectionId Connection) { return Transport.ReadReliableServiceFeedback(Connection); }
+	[[nodiscard]] static std::optional<ReliableServiceFeedback> ObserveResolved(
+		const IGameTransport &Transport, ConnectionId Connection, std::uint64_t DeadlineMicroseconds) {
+		return Transport.ReadResolvedReliableServiceFeedback(Connection, DeadlineMicroseconds);
+	}
 };
 }
 }

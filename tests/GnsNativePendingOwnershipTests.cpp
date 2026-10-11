@@ -1,4 +1,7 @@
 #include <steam/steamnetworkingsockets.h>
+#include <steamnetworkingsockets_thinker.h>
+#include <clientlib/steamnetworkingsockets_lowlevel.h>
+#include <clientlib/steamnetworkingsockets_connections.h>
 #include "NativeEgressWorker.hpp"
 #include "ReliableServiceFeedback.hpp"
 #include "AckDiagnostics.hpp"
@@ -6,6 +9,9 @@
 #include <chrono>
 #include <cstdio>
 #include <thread>
+
+STEAMNETWORKINGSOCKETS_INTERFACE void SteamNetworkingSockets_SetManualPollMode(bool);
+STEAMNETWORKINGSOCKETS_INTERFACE void SteamNetworkingSockets_Poll(int);
 
 namespace {
 using namespace SteamNetworkingSocketsLib;
@@ -64,6 +70,67 @@ bool AwaitRetirement(std::uint64_t PriorPayload, GargantuanReliableServiceSnapsh
 		return Final.Counters.ReliablePayloadBytesAcked >= PriorPayload + 1200 &&
 			Final.Counters.UniqueReliableStreamBytesAcked == Final.Counters.UniqueReliableStreamBytesFirstSent;
 	});
+}
+
+class ReadyCheckpointTimer final : public IThinker {
+public:
+	bool Called = false;
+	bool Passed = false;
+private:
+	void Think(SteamNetworkingMicroseconds) override {
+		Called = true;
+		SteamNetworkingGlobalLock::AssertHeldByCurrentThread();
+		ConnectionScopeLock Lock;
+		auto *Connection = GetConnectionByHandle(Server, Lock);
+		auto *Ticket = Connection ? Connection->GargantuanNativePendingTicket() : nullptr;
+		GargantuanResumeNativeEgressForTest();
+		GargantuanNativeEgressResult First{};
+		if (!Ticket || !GargantuanWaitNativeEgressResult(Ticket, 100, First) || !First.Positive)
+			return;
+		// Make the next packet eligible under the unchanged native token bucket.
+		// The assertion below is event ordering, not a wall-clock latency gate.
+		while (SteamNetworkingSockets_GetLocalTimestamp() <= First.CompletedAtGnsMicroseconds + 1000) {}
+		GargantuanWakeReadyNativeEgressConnections();
+		Ticket = Connection->GargantuanNativePendingTicket();
+		GargantuanNativeEgressResult Next{};
+		Passed = Ticket && GargantuanWaitNativeEgressResult(Ticket, 100, Next) &&
+			Next.Positive && Next.DispatchSequence > First.DispatchSequence &&
+			Next.CompletedAtMicroseconds >= First.CompletedAtMicroseconds;
+	}
+};
+
+bool ReadyCheckpointDuringThinker(std::uint64_t PriorPayload) {
+	// Freeze normal actor dispatch. A completion produced inside this already
+	// executing callback falls after the thinker's fixed eligibility cutoff.
+	// Merely scheduling ASAP cannot prepare the next packet before it returns.
+	SteamNetworkingSockets_SetManualPollMode(true);
+	bool Passed = GargantuanArmNativeEgressPauseForTest(
+		GargantuanNativeEgressTestPausePoint::AfterOsReturn, 250,
+		GargantuanNativeEgressTestTraffic::Any, 1000) && SendReliable() && SendReliable();
+	bool Paused = false;
+	const auto Deadline = Clock::now() + std::chrono::milliseconds(100);
+	while (Passed && !Paused && Clock::now() < Deadline) {
+		SteamNetworkingSockets_Poll(0);
+		Paused = GargantuanWaitNativeEgressPauseForTest(1);
+	}
+	Passed = Passed && Paused;
+	if (Passed) {
+		SteamNetworkingGlobalLock GlobalLock("NativeEgressReadyCheckpointTest");
+		ReadyCheckpointTimer Timer;
+		Timer.SetNextThinkTimeASAP();
+		while (SteamNetworkingSockets_GetLocalTimestamp() <= Timer.GetNextThinkTime()) {}
+		IThinker::Thinker_ProcessThinkers();
+		Passed = Timer.Called && Timer.Passed;
+	}
+	GargantuanResumeNativeEgressForTest();
+	SteamNetworkingSockets_SetManualPollMode(false);
+	GargantuanReliableServiceSnapshot Final{};
+	const bool Retired = AwaitRetirement(PriorPayload + 1200, Final);
+	Passed = Passed && Retired && Final.Counters.ReliablePayloadBytesAcked == PriorPayload + 2400 &&
+		Final.Counters.ReliableStreamBytesRetransmitted == 0 && !Final.Counters.Invalid;
+	std::fprintf(stderr, "[Network:NativeEgress] ReadyCheckpointDuringFixedCutoffThinker=%s\n",
+		Passed ? "PASS" : "FAIL");
+	return Passed;
 }
 
 bool Run() {
@@ -129,7 +196,22 @@ bool Run() {
 		return GargantuanReadPendingNativeReceiveJournal(Interface, static_cast<std::uint32_t>(Server),
 			JournalCount, JournalHighWater, JournalOverflow) && JournalCount > 0;
 	}, std::chrono::milliseconds(75));
-	GargantuanResumeNativeEgressForTest();
+	GargantuanReliableServiceSnapshot Resolved{};
+	const bool ResolutionTimedOut = !GargantuanReadResolvedNativeFeedback(Interface,
+		static_cast<std::uint32_t>(Server), GargantuanReliableServiceClock() + 1000, Resolved);
+	std::thread ReleaseResult([] {
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		GargantuanResumeNativeEgressForTest();
+	});
+	const bool ResolutionCompleted = GargantuanReadResolvedNativeFeedback(Interface,
+		static_cast<std::uint32_t>(Server), GargantuanReliableServiceClock() + 100000, Resolved);
+	ReleaseResult.join();
+	const bool ResolutionTruth = ResolutionTimedOut && ResolutionCompleted &&
+		Resolved.Counters.ReliablePayloadBytesAcked <= 1200 &&
+		Resolved.Counters.UniqueReliableStreamBytesFirstSent > 0 && !Resolved.Counters.Invalid;
+	std::fprintf(stderr, "[Network:NativeEgress] ResolvedBaselineTimeoutAndNativeTruth=%s\n",
+		ResolutionTruth ? "PASS" : "FAIL");
+	if (!ResolutionTruth) return false;
 	GargantuanReliableServiceSnapshot First{};
 	bool ReceivedAfterCommit = false;
 	const bool FirstRetired = AwaitRetirement(0, First, &ReceivedAfterCommit);
@@ -164,6 +246,7 @@ bool Run() {
 		Second.Counters.ReliableStreamBytesRetransmitted == 0 && !Second.Counters.Invalid;
 	std::fprintf(stderr, "[Network:NativeEgress] NegativeFirstSendRetryReferences=%s\n", RetryExact ? "PASS" : "FAIL");
 	if (!RetryExact) return false;
+	if (!ReadyCheckpointDuringThinker(Second.Counters.ReliablePayloadBytesAcked)) return false;
 
 	if (!GargantuanArmNativeEgressPauseForTest(GargantuanNativeEgressTestPausePoint::BeforeOsCall,
 		250, GargantuanNativeEgressTestTraffic::Any, 1000) ||

@@ -35,6 +35,7 @@ namespace gargantuan::host::detail {
 		std::map<network::ConnectionId, std::array<std::uint64_t, 3>> LastDelivery;
 		ObjectId Scope;
 		std::uint64_t IdentityCount = 0;
+		std::uint64_t NativeBaselineMicroseconds = 0;
 		std::string Error;
 		bool AllocationFailed = false, Dumped = false;
 		network::detail::StructuralCausalEvidenceSink Sink{this, Record};
@@ -91,7 +92,8 @@ namespace gargantuan::host::detail {
 			}
 		}
 	  public:
-		explicit FarmRecoveryEvidence(std::vector<Snapshot> Captured) : Initial(std::move(Captured)) {
+		explicit FarmRecoveryEvidence(std::vector<Snapshot> Captured, std::uint64_t NativeBaseline)
+			: Initial(std::move(Captured)), NativeBaselineMicroseconds(NativeBaseline) {
 			using namespace network::detail;
 			if (Initial.size() != 32) throw std::invalid_argument("recovery requires 32 causal snapshots");
 			Scope = Initial.front().SourceScope;
@@ -150,7 +152,8 @@ namespace gargantuan::host::detail {
 		void Dump(const FarmAdmissionEvidence &Writer, std::string_view Run, std::string_view Case) {
 			if (Dumped) return;
 			Writer.WriteRecovery(Case, [&](auto &Output) {
-				Output.Write("format=GargantuanRecoveryCausalV1\trun=" + std::string(Run) + "\tcase=" + std::string(Case) + "\n");
+				Output.Write("format=GargantuanRecoveryCausalV2\trun=" + std::string(Run) + "\tcase=" + std::string(Case) +
+					"\tnative_baseline_us=" + std::to_string(NativeBaselineMicroseconds) + "\n");
 				for (const auto &Peer : Initial) {
 					std::ostringstream Line;
 					Line << "capture\t" << Peer.Connection.Slot << '\t' << Peer.Connection.Generation

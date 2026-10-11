@@ -76,7 +76,11 @@ GargantuanReplaceFeedback("\tbool bEmpty = segmentCollector.IsEmpty();" "\tbool 
 GargantuanReplaceFeedback("SteamNetworkingMicroseconds CSteamNetworkConnectionBase::SNP_ThinkSendState( SteamNetworkingMicroseconds usecNow )\n{" [=[SteamNetworkingMicroseconds CSteamNetworkConnectionBase::SNP_ThinkSendState( SteamNetworkingMicroseconds usecNow )
 {
 	if (m_senderState.GargantuanPendingTicket) {
-		if (GargantuanReconcileNativeEgressByDeadline(usecNow)) GargantuanDrainPendingReceived();
+		if (GargantuanReconcileNativeEgressByDeadline(usecNow)) {
+			GargantuanDrainPendingReceived();
+			// Completion and replay can be newer than the thinker's entry time.
+			usecNow = SteamNetworkingSockets_GetLocalTimestamp();
+		}
 		else return usecNow + 1000;
 	}
 	GargantuanServiceTimingSpan GargantuanSender(GargantuanServiceTimingPhase::SnpSender);
@@ -355,6 +359,27 @@ bool CSteamNetworkConnectionBase::GargantuanReconcileNativeEgress()
 	return true;
 }
 
+void CSteamNetworkConnectionBase::GargantuanServiceReadyNativeEgress()
+{
+	AssertLocksHeldByCurrentThread("GargantuanServiceReadyNativeEgress");
+	if (!m_senderState.GargantuanPendingTicket || !GargantuanReconcileNativeEgress()) return;
+	// Restore receive order before another numbered packet can be prepared.
+	GargantuanDrainPendingReceived();
+	if (m_senderState.GargantuanTerminalPurgePending) {
+		SNP_ShutdownConnection();
+		SetNextThinkTimeASAP();
+		return;
+	}
+	// This is a bounded sender opportunity, not a replacement for the
+	// connection state machine. Keep its earlier timer/deferred work intact.
+	if ((m_eConnectionState == k_ESteamNetworkingConnectionState_Connected ||
+		m_eConnectionState == k_ESteamNetworkingConnectionState_Linger) &&
+		m_pTransport && m_pTransport->BCanSendEndToEndData()) {
+		const SteamNetworkingMicroseconds UsecNow = SteamNetworkingSockets_GetLocalTimestamp();
+		EnsureMinThinkTime(SNP_ThinkSendState(UsecNow));
+	} else SetNextThinkTimeASAP();
+}
+
 // Base class for a list of segments for the same lane]=])
 GargantuanReplaceFeedback("\tpSendMessage->m_nMessageNumber = ++lane.m_nLastSentMsgNum;" [=[
 	pSendMessage->m_nMessageNumber = ++lane.m_nLastSentMsgNum;
@@ -482,6 +507,7 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 	bool GargantuanReconcileNativeEgress();
 	bool GargantuanReconcileNativeEgressByDeadline(SteamNetworkingMicroseconds UsecNow);
 	void GargantuanDrainPendingReceived();
+	void GargantuanServiceReadyNativeEgress();
 	virtual bool GargantuanIsDirectUDP() const { return false; }
 	bool GargantuanArmPromptFailure(bool AtSocket) {
 		if (!m_senderState.GargantuanPromptFinalGrantAck || !m_senderState.GargantuanAckTrace ||
@@ -760,12 +786,21 @@ void GargantuanUnregisterNativePending(CSteamNetworkConnectionBase *Connection) 
 
 void GargantuanWakeReadyNativeEgressConnections() noexcept {
 	SteamNetworkingGlobalLock::AssertHeldByCurrentThread();
+	// One fixed registry pass. A newly queued packet never causes a rescan,
+	// and a contended peer cannot block another peer's ready result.
 	for (auto *Connection : GargantuanPendingConnections) {
 		if (!Connection) continue;
-		ConnectionScopeLock Lock(*Connection);
+		// Pending-ticket publication and release both require the global lock;
+		// Ready is immutable until release. Unready peers need no actor lock.
 		GargantuanNativeEgressResult Result{};
-		if (GargantuanReadNativeEgressResult(Connection->GargantuanNativePendingTicket(), Result))
+		if (!GargantuanReadNativeEgressResult(Connection->GargantuanNativePendingTicket(), Result)) continue;
+		if (!Connection->TryLock()) {
 			Connection->SetNextThinkTimeASAP();
+			continue;
+		}
+		ConnectionScopeLock Lock;
+		Lock.TakeLockOwnership(Connection->m_pLock, "GargantuanReadyNativeEgress");
+		Connection->GargantuanServiceReadyNativeEgress();
 	}
 }
 
@@ -886,6 +921,29 @@ bool GargantuanReadNativeFeedback(ISteamNetworkingSockets *Interface, uint32 Han
 	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanReliableServiceFeedback");
 	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface) return false;
 	return Connection->GargantuanPopulateReliableServiceFeedback(Result);
+}
+
+bool GargantuanReadResolvedNativeFeedback(ISteamNetworkingSockets *Interface, uint32 Handle,
+	uint64_t DeadlineMicroseconds, GargantuanReliableServiceSnapshot &Result) {
+	SteamNetworkingGlobalLock GlobalLock("GargantuanCessationFeedback");
+	ConnectionScopeLock Lock;
+	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanCessationFeedback");
+	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface ||
+		!DeadlineMicroseconds || GargantuanReliableServiceClock() >= DeadlineMicroseconds) return false;
+	if (auto *Ticket = Connection->GargantuanNativePendingTicket()) {
+		GargantuanNativeEgressResult Native{};
+		const auto Now = GargantuanReliableServiceClock();
+		if (Now >= DeadlineMicroseconds) return false;
+		const auto Remaining = DeadlineMicroseconds - Now;
+		// Rounded wait is checked against the absolute deadline after returning.
+		const auto Milliseconds = static_cast<uint32>((std::min<uint64_t>(Remaining, 250000) + 999) / 1000);
+		if (!GargantuanWaitNativeEgressResult(Ticket, Milliseconds, Native) ||
+			GargantuanReliableServiceClock() >= DeadlineMicroseconds) return false;
+		if (!Connection->GargantuanReconcileNativeEgress()) return false;
+	}
+	Connection->GargantuanDrainPendingReceived();
+	return GargantuanReliableServiceClock() < DeadlineMicroseconds &&
+		Connection->GargantuanPopulateReliableServiceFeedback(Result) && !Result.Counters.Invalid;
 }
 
 static CSteamNetworkListenSocketBase *GetListenSocketByHandle]=])

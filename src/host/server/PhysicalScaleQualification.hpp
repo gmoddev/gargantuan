@@ -844,6 +844,7 @@ namespace gargantuan::host {
 					QuoteComplete = QuoteSealed = QuoteResultWritten = false;
 					QuoteFailure.clear();
 					std::uint64_t QuoteCaptureMicroseconds = 0;
+					std::uint64_t NativeBaselineMicroseconds = 0;
 					if (!AdmissionEvidence) QuoteFailure = "admission evidence is unavailable";
 					else {
 						AdmissionEvidenceCursor = static_cast<std::size_t>(AdmissionEvidence->Count());
@@ -855,9 +856,21 @@ namespace gargantuan::host {
 								std::chrono::steady_clock::now() - CaptureStarted).count());
 						if (!CessationQuote && QuoteFailure.empty()) QuoteFailure = "cessation quote capture failed";
 						if (CessationQuote) {
-							auto Snapshot = network::detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(Session, QuoteFailure);
+							// Native counts are resolved after the fixed source/accepted cut.
+							// One absolute budget covers every peer; the wait is included in
+							// F1 and recovery clocks, never added to their service allowances.
+							const auto NativeDeadline = static_cast<std::uint64_t>(
+								std::chrono::duration_cast<std::chrono::microseconds>(
+									OverloadCeased.time_since_epoch()).count()) +
+								network::PooledReliableServiceProfile{}.FeedbackFreshnessMicroseconds;
+							auto Snapshot = network::detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(
+								Session, QuoteFailure, NativeDeadline);
 							if (Snapshot) {
-								RecoveryRecords[OverloadCase] = std::make_unique<detail::FarmRecoveryEvidence>(std::move(*Snapshot));
+								NativeBaselineMicroseconds = static_cast<std::uint64_t>(
+									std::chrono::duration_cast<std::chrono::microseconds>(
+										std::chrono::steady_clock::now().time_since_epoch()).count());
+								RecoveryRecords[OverloadCase] = std::make_unique<detail::FarmRecoveryEvidence>(
+									std::move(*Snapshot), NativeBaselineMicroseconds);
 								RecoveryEvidence = RecoveryRecords[OverloadCase].get();
 								QuoteFailure = RecoveryEvidence->Failure();
 								// Retain the immutable t0 reference without replaying it alongside
@@ -867,8 +880,10 @@ namespace gargantuan::host {
 						}
 					}
 					std::cerr << "[Qualification:Recovery] event=quote_capture run=" << RunId
-						<< " case=" << CaseName << " status=" << (CessationQuote ? "READY" : "NOT_MEASURED")
+						<< " case=" << CaseName << " status=" <<
+							(CessationQuote && RecoveryEvidence && QuoteFailure.empty() ? "READY" : "NOT_MEASURED")
 						<< " capture_us=" << QuoteCaptureMicroseconds
+						<< " native_baseline_us=" << NativeBaselineMicroseconds
 						<< " reason=" << QuoteReasonToken(QuoteFailure)
 						<< " tick=" << Tick << '\n';
 					RecoverySnapshotWritten = false;

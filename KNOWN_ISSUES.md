@@ -104,6 +104,18 @@ cover measured service pauses with a small timing change. No native32 PASS,
 new Local32/Node32 measurement, F1 revision, 3M step or merge is inferred.
 **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
 
+2026-10-11 renewed actor investigation implements bounded ready-result
+checkpoints before socket draining, between receive callbacks and after thinker
+callbacks. Source proves the former receive-drain and fixed-cutoff batch waits;
+it does not attribute every historical failure. The candidate retains one
+unresolved numbered packet per peer and all F1 constants. Initial recovery
+capture separately freezes source/debt identities, resolves native feedback
+against one shared deadline and records the actual later baseline, rejecting
+incomplete or backdated evidence. Causal replay regressions pass 41 cases.
+Native preflights, required CI and fresh native32 capacity remain outstanding.
+See [the actor decision](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#12-bounded-actor-reconciliation-investigation-2026-10-11).
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
+
 2026-10-11 follow-up: `0ad686ab0` separates recovery source validation
 from transiently incomplete native feedback while retaining the initial
 full-conservation quote check. A bounded failure-only stage trace located

@@ -21,6 +21,24 @@ causal semantic coverage, and exact accepted live obligations.** Implementation
 and qualification of this amendment are in progress; this decision alone does
 not qualify the provider campaign.
 
+The native-egress cessation capture preserves the original cessation time,
+detached source reference and accepted-debt identity. Before resolving native
+feedback it captures all Main-owned source/grant fields. A private resolved
+feedback query waits only for already-owned native tickets, reconciles their real
+results and bounded receive journal under the existing GNS ownership locks, then
+copies complete native counters. All peers share one absolute deadline at
+cessation plus the existing feedback-freshness limit. The query never cancels a
+send, fences the worker domain or changes a service clock. Source, pending-token
+identity and accepted debt must be unchanged after the wait. Timeout, invalid
+feedback or changed identity produces NOT_MEASURED.
+
+The actual native baseline may complete after cessation. Recovery causal V2
+records that completion time separately from the immutable source/debt cut;
+offline replay rejects earlier causal events and cannot backdate initial
+convergence to cessation. The entire capture/wait remains included in F1 and
+recovery elapsed time and supplies no extra service allowance. Retained V1
+evidence keeps its original interpretation.
+
 The cessation snapshot answers what is necessary under the state known at
 cessation. It cannot predict subsequent relevance Enter/Leave transitions.
 Relevance is derived from current spatial/semantic state and may change without

@@ -16,6 +16,8 @@ set(GnsNewInclude [=[#include "steamnetworkingsockets_thinker.h"
 #include "ReliableServiceFeedback.hpp"
 #include "ServiceTimingDiagnostics.hpp"
 #endif]=])
+set(GnsReconciliationPreviousInclude "${GnsNewInclude}")
+string(REPLACE "#include \"ServiceTimingDiagnostics.hpp\"" "#include \"ServiceTimingDiagnostics.hpp\"\n#include \"NativeEgressWorker.hpp\"" GnsNewInclude "${GnsNewInclude}")
 set(GnsPreviousInclude "#include \"steamnetworkingsockets_thinker.h\"\n\n#ifndef IS_STEAMDATAGRAMROUTER\n#include \"ReliableServiceFeedback.hpp\"\n#endif")
 set(GnsOldRetry [=[		else
 		{
@@ -51,6 +53,8 @@ set(GnsNewInvoke [=[			{
 				// Think may destroy its owner. Nothing below reads that owner.
 				pNextThinker->Think( usecNow );
 			}]=])
+set(GnsPreviousInvoke "${GnsNewInvoke}")
+string(APPEND GnsNewInvoke "\n\t\t\t#ifndef IS_STEAMDATAGRAMROUTER\n\t\t\t// The callback released its connection lock; the table lock is still free.\n\t\t\tGargantuanWakeReadyNativeEgressConnections();\n\t\t\t#endif")
 
 # ASAP is a request for current native time, not an immortal heap priority.
 # Resolve under the existing table lock. ASAP bypasses public lockless hints so
@@ -72,11 +76,13 @@ string(REPLACE "${GnsNewEnsureHint}" "${GnsOldEnsureHint}" GnsThinkerOriginal "$
 string(REPLACE "${GnsNewEnsureLocked}" "${GnsOldEnsureLocked}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsNewSetLocked}" "${GnsOldSetLocked}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsNewInvoke}" "${GnsOldInvoke}" GnsThinkerOriginal "${GnsThinkerOriginal}")
+string(REPLACE "${GnsPreviousInvoke}" "${GnsOldInvoke}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsNewCallback}" "${GnsOldCallback}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsPreviousCallback}" "${GnsOldCallback}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsNewRetry}" "${GnsOldRetry}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsPreviousRetry}" "${GnsOldRetry}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsNewInclude}" "${GnsOldInclude}" GnsThinkerOriginal "${GnsThinkerOriginal}")
+string(REPLACE "${GnsReconciliationPreviousInclude}" "${GnsOldInclude}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsPreviousInclude}" "${GnsOldInclude}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsNewEntry}" "${GnsOldEntry}" GnsThinkerOriginal "${GnsThinkerOriginal}")
 string(REPLACE "${GnsPreviousEntry}" "${GnsOldEntry}" GnsThinkerOriginal "${GnsThinkerOriginal}")

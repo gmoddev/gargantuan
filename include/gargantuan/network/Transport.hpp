@@ -83,6 +83,10 @@ namespace gargantuan::network {
 		friend struct detail::ReliableServiceFeedbackAccess;
 		virtual bool EnableReliableServiceFeedback();
 		virtual std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Connection) const;
+		// Internal cessation capture only. Absolute deadline uses the feedback clock;
+		// ordinary health/admission observations remain nonblocking.
+		virtual std::optional<detail::ReliableServiceFeedback> ReadResolvedReliableServiceFeedback(
+			ConnectionId Connection, std::uint64_t DeadlineMicroseconds) const;
 		virtual bool ReleaseReliableServiceFeedback(ConnectionId Connection);
 	};
 }

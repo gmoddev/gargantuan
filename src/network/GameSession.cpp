@@ -2441,7 +2441,8 @@ namespace gargantuan::network {
 		return Session.State->Replication ? Session.State->Replication->GetMetrics() : ReplicationMetrics{};
 	}
 	std::optional<std::vector<detail::StructuralCausalSnapshot>>
-	detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(const GameSession &Session, std::string &Error) {
+	detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(const GameSession &Session, std::string &Error,
+		std::uint64_t NativeDeadlineMicroseconds) {
 		const auto *State = Session.State.get();
 		if (!State || !State->Replication || !State->ByteAdmission || !State->IsPooled()) {
 			Error = "Causal snapshot requires a pooled server"; return {};
@@ -2473,29 +2474,82 @@ namespace gargantuan::network {
 			Snapshot.GrantBytes = State->ByteAdmission->Debt(Connection);
 			Snapshot.GrantToken = Snapshot.GrantBytes ? State->ByteAdmission->DebtToken(Connection) : 0;
 			const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(State->Scheduler, Connection);
-			const auto Native = detail::ReliableServiceFeedbackAccess::Observe(*State->Transport, Connection);
-			if (!Accepted || !Native || !Native->CountersValid || Native->Connection != Connection ||
-				Native->StructuralPayloadBytesAcked > Native->StructuralPayloadBytesFirstSent ||
-				Native->StructuralPayloadBytesFirstSent > Accepted->Structural) {
-				Error = "Causal snapshot requires valid structural native conservation"; return {};
-			}
+			if (!Accepted) { Error = "Causal snapshot requires accepted structural conservation"; return {}; }
 			Snapshot.CumulativeAccepted = Accepted->Structural;
-			Snapshot.CumulativeFirstSent = Native->StructuralPayloadBytesFirstSent;
-			Snapshot.CumulativeAcked = Native->StructuralPayloadBytesAcked;
 			if (Snapshot.GrantBytes) {
 				if (Peer.CausalGrantToken != Snapshot.GrantToken || Peer.CausalGrantBytes != Snapshot.GrantBytes ||
 					Peer.CausalGrantFingerprint == std::array<std::uint64_t, 2>{} ||
-					!Peer.CausalGrantSequence || Peer.CausalAcceptedBefore > Snapshot.CumulativeAcked ||
+					!Peer.CausalGrantSequence || Peer.CausalAcceptedBefore > Snapshot.CumulativeAccepted ||
 					Snapshot.CumulativeAccepted - Peer.CausalAcceptedBefore != Snapshot.GrantBytes) {
 					Error = "Causal snapshot accepted grant lacks exact captured identity"; return {};
 				}
 				Snapshot.GrantSequence = Peer.CausalGrantSequence;
 				Snapshot.GrantFingerprint = Peer.CausalGrantFingerprint;
 				Snapshot.GrantAcceptedBefore = Peer.CausalAcceptedBefore;
-				Snapshot.GrantFirstSent = Snapshot.CumulativeFirstSent - Peer.CausalAcceptedBefore;
-				Snapshot.GrantAcked = Snapshot.CumulativeAcked - Peer.CausalAcceptedBefore;
 			}
 			Result.push_back(std::move(Snapshot));
+		}
+		// Freeze all Main-owned source/accepted identities before resolving native
+		// feedback. No Session step, admission or retirement occurs during this wait.
+		for (auto &Snapshot : Result) {
+			const auto Native = NativeDeadlineMicroseconds
+				? detail::ReliableServiceFeedbackAccess::ObserveResolved(*State->Transport, Snapshot.Connection,
+					NativeDeadlineMicroseconds)
+				: detail::ReliableServiceFeedbackAccess::Observe(*State->Transport, Snapshot.Connection);
+			if (!Native || !Native->CountersValid || Native->Connection != Snapshot.Connection ||
+				Native->StructuralPayloadBytesAcked > Native->StructuralPayloadBytesFirstSent ||
+				Native->StructuralPayloadBytesFirstSent > Snapshot.CumulativeAccepted ||
+				(NativeDeadlineMicroseconds && ServiceTime() >= NativeDeadlineMicroseconds) ||
+				(Snapshot.GrantBytes && Snapshot.GrantAcceptedBefore > Native->StructuralPayloadBytesAcked)) {
+				Error = "Causal snapshot requires valid resolved structural native conservation"; return {};
+			}
+			Snapshot.CumulativeFirstSent = Native->StructuralPayloadBytesFirstSent;
+			Snapshot.CumulativeAcked = Native->StructuralPayloadBytesAcked;
+			if (Snapshot.GrantBytes) {
+				Snapshot.GrantFirstSent = Snapshot.CumulativeFirstSent - Snapshot.GrantAcceptedBefore;
+				Snapshot.GrantAcked = Snapshot.CumulativeAcked - Snapshot.GrantAcceptedBefore;
+			}
+		}
+		for (const auto &Snapshot : Result) {
+			const auto Found = Replication.Peers.find(Snapshot.Connection);
+			const auto Peer = State->Peers.find(Snapshot.Connection);
+			const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(State->Scheduler, Snapshot.Connection);
+			if (Found == Replication.Peers.end() || Peer == State->Peers.end() || Peer->second.Phase != PeerPhase::Ready ||
+				!Accepted || Accepted->Structural != Snapshot.CumulativeAccepted || Found->second.PreparedCommit ||
+				Found->second.JournalCursor.Scope != Snapshot.SourceScope ||
+				Found->second.JournalCursor.NextSequence != Snapshot.JournalCursor ||
+				Found->second.NextSequence.Value() != Snapshot.NextSequence ||
+				Found->second.AcceptedRevision != Snapshot.AcceptedRevision ||
+				Found->second.NextPendingToken != Snapshot.PendingTokenWatermark ||
+				Found->second.PendingTransitions.size() != Snapshot.Pending.size() ||
+				State->ByteAdmission->Debt(Snapshot.Connection) != Snapshot.GrantBytes ||
+				(Snapshot.GrantBytes && State->ByteAdmission->DebtToken(Snapshot.Connection) != Snapshot.GrantToken)) {
+				Error = "Causal snapshot source or accepted debt changed during native resolution"; return {};
+			}
+			const auto &Value = Found->second;
+			const bool PlanningUnresolved = Value.Planned &&
+				(Value.PlanningSelection != Value.ResolvedSelection ||
+				 Value.DesiredDependencyCursor.Scope != Replication.DependencyCursor.Scope ||
+				 Value.DesiredDependencyCursor.NextSequence != Replication.DependencyCursor.NextSequence);
+			if (PlanningUnresolved != Snapshot.HasUnresolvedPlanning ||
+				(Snapshot.GrantBytes && (Peer->second.CausalGrantToken != Snapshot.GrantToken ||
+				 Peer->second.CausalGrantBytes != Snapshot.GrantBytes ||
+				 Peer->second.CausalGrantSequence != Snapshot.GrantSequence ||
+				 Peer->second.CausalGrantFingerprint != Snapshot.GrantFingerprint ||
+				 Peer->second.CausalAcceptedBefore != Snapshot.GrantAcceptedBefore))) {
+				Error = "Causal snapshot planning or grant identity changed during native resolution"; return {};
+			}
+			for (const auto &Pending : Snapshot.Pending) {
+				const auto Value = Found->second.PendingTransitions.find(Pending.Object);
+				if (Value == Found->second.PendingTransitions.end() || Value->second.Token != Pending.Token ||
+					(Value->second.Kind == ReplicationCoordinator::PendingTransitionKind::Enter) != Pending.Enter) {
+					Error = "Causal snapshot pending identity changed during native resolution"; return {};
+				}
+			}
+		}
+		if (State->Peers.size() != Result.size() || Replication.Peers.size() != Result.size() ||
+			ChangeJournal::Get().CreateCursor(Replication.SourceRootId).NextSequence != Tail) {
+			Error = "Causal snapshot journal changed during native resolution"; return {};
 		}
 		Error.clear(); return Result;
 	}

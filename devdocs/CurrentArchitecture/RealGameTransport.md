@@ -235,8 +235,18 @@ and compatibility design. See the
 
 ### Main-thread and backend ownership
 
-The adapter creates no Gargantuan worker thread. GNS may use its own internal
-service thread for transport mechanics. Gargantuan lifecycle callbacks are run
+The default adapter uses GNS's internal service thread for transport mechanics.
+The Windows opt-in native-egress candidate additionally owns four OS-only
+workers and 64 fixed tickets inside one exclusive pooled process domain.
+Workers copy datagrams and publish native results; SNP retains all protocol
+ownership and permits one unresolved numbered packet per peer. Ready results
+receive bounded actor checkpoints before socket draining, between receive
+callbacks and after thinker callbacks. The actor reconciles the native outcome
+and replays ordered receive feedback before preparing another packet. A busy
+connection lock is skipped and receives an ASAP thinker request; earlier
+deadlines and KI-008's fixed thinker eligibility cutoff remain intact. The
+[ownership decision](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#12-bounded-actor-reconciliation-investigation-2026-10-11)
+records bounds and outstanding capacity qualification. Gargantuan lifecycle callbacks are run
 only when `PollEvents` calls GNS `RunCallbacks`, and application code receives
 only copied `TransportEvent` values through caller-owned output storage. No
 DataModel mutation, Luau callback, or scheduler action occurs in a GNS callback.

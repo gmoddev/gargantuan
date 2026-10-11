@@ -1238,4 +1238,17 @@ namespace gargantuan::network {
 			Global.Interface, Found->second.Handle, Native)) return {};
 		return ServiceFeedback(Connection, Native);
 	}
+	std::optional<detail::ReliableServiceFeedback> GameNetworkingSocketsTransport::ReadResolvedReliableServiceFeedback(
+		ConnectionId Connection, std::uint64_t DeadlineMicroseconds) const {
+		auto &Global = GlobalState();
+		std::lock_guard Lock(Global.Mutex);
+		const auto &State = *this->State;
+		const auto Found = State.Connections.find(Connection);
+		if (!Connection.IsValid() || !State.Started || !Global.Interface || Found == State.Connections.end() ||
+			Found->second.State != ConnectionState::Connected) return {};
+		GargantuanReliableServiceSnapshot Native;
+		if (!SteamNetworkingSocketsLib::GargantuanReadResolvedNativeFeedback(
+			Global.Interface, Found->second.Handle, DeadlineMicroseconds, Native)) return {};
+		return ServiceFeedback(Connection, Native);
+	}
 }

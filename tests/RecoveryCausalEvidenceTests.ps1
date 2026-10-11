@@ -104,6 +104,29 @@ try {
 	[IO.File]::WriteAllLines($Path, $DebtRows); $Debt = Check-Replay
 	if ($Debt.Totals.retired -ne 2464 -or $Debt.Peers['1:1'].InitialDebt -ne 77 -or $Debt.Peers['1:1'].Cut -ne 1000) { throw 'captured debt failed exact conservation' }
 	$Count++
+	# Source/debt stay at t0; resolved native counters have their actual later time.
+	$ResolvedDebt = [string[]]$DebtRows.Clone()
+	$ResolvedDebt[0] = "format=GargantuanRecoveryCausalV2`trun=$Run`tcase=gameplay`tnative_baseline_us=1000500"
+	[IO.File]::WriteAllLines($Path, $ResolvedDebt); $Resolved = Check-Replay
+	if ($Resolved.Totals.retired -ne 2464 -or $Resolved.Peers['1:1'].InitialDebt -ne 77 -or
+		$Resolved.EarliestConvergedUs -lt 500) { throw 'native baseline changed debt or backdated convergence' }
+	$Count++
+	$BadBaseline = [string[]]$ResolvedDebt.Clone()
+	$BadBaseline[0] = "format=GargantuanRecoveryCausalV2`trun=$Run`tcase=gameplay`tnative_baseline_us=999999"
+	Check-Invalid $BadBaseline 'native baseline before cessation'
+	$BadBaseline[0] = "format=GargantuanRecoveryCausalV2`trun=$Run`tcase=gameplay`tnative_baseline_us=1001001"
+	Check-Invalid $BadBaseline 'causal event before native baseline'
+	# Initial convergence cannot precede the completed native observation.
+	$InitiallyComplete = [Collections.Generic.List[string]]::new()
+	$InitiallyComplete.Add("format=GargantuanRecoveryCausalV2`trun=$Run`tcase=gameplay`tnative_baseline_us=1000750")
+	for ($Peer = 1; $Peer -le 32; $Peer++) {
+		$InitiallyComplete.Add((@('capture', $Peer, 1, 100, 1, 100, 100, 2, 1, 0, 0, 0, 0, 0, 0, 0, 100, 100, 100, 0, 0) -join "`t"))
+	}
+	for ($Peer = 1; $Peer -le 32; $Peer++) { $InitiallyComplete.Add("source`t$Peer`t1`t100`t2") }
+	$InitiallyComplete.Add("end`t0`t0")
+	[IO.File]::WriteAllLines($Path, $InitiallyComplete); $Complete = Check-Replay
+	if ($Complete.EarliestConvergedUs -ne 750) { throw 'initial convergence was backdated to t0' }
+	$Count++
 	Write-Output "Recovery causal replay tests passed: $Count"
 } finally {
 	$Resolved = [IO.Path]::GetFullPath($Root)

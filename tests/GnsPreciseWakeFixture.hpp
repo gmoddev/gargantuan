@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <vector>
 
-// Only the OS/clock boundaries are supplied. The two .inc bodies are extracted
+// Only the OS/clock boundaries are supplied. The .inc bodies are extracted
 // from the actual applied pinned socketthread.cpp by ApplyPreciseSenderWake.
 namespace GnsPreciseWakeFixture {
 using SteamNetworkingMicroseconds = std::int64_t;
@@ -97,8 +97,54 @@ inline void Windows(int nMaxTimeoutMS, bool bManualPoll, SteamNetworkingMicrosec
 inline void Linux(int nMaxTimeoutMS, bool bManualPoll, SteamNetworkingMicroseconds usecExactWake) {
 #include "gns-wake-linux.inc"
 }
+struct ReceiveSocket {
+	struct { bool m_fnCallback = true; } m_callback;
+};
+struct ReceiveState {
+	ReceiveSocket Socket;
+	std::vector<int> Order;
+	int Checkpoints = 0, Reads = 0, CloseAtCheckpoint = 0, MaximumReads = 2;
+};
+inline ReceiveState *CurrentReceive = nullptr;
+inline std::atomic<int> s_nLowLevelSupportRefCount{1};
+inline void GargantuanWakeReadyNativeEgressConnections() {
+	CurrentReceive->Order.push_back(1);
+	if (++CurrentReceive->Checkpoints == CurrentReceive->CloseAtCheckpoint)
+		CurrentReceive->Socket.m_callback.m_fnCallback = false;
+}
+inline bool Receive(ReceiveState &Value) {
+	CurrentReceive = &Value;
+	auto *pSock = &Value.Socket;
+#include "gns-native-receive-prologue.inc"
+		Value.Order.push_back(2);
+		if (++Value.Reads >= Value.MaximumReads) pSock->m_callback.m_fnCallback = false;
+	}
+	return true;
+}
+inline bool ReceiveCheckpoints() {
+	ReceiveState ClosedFirst;
+	ClosedFirst.CloseAtCheckpoint = 1;
+	Receive(ClosedFirst);
+	bool Passed = ClosedFirst.Reads == 0 && ClosedFirst.Order == std::vector<int>{1};
+	ReceiveState ClosedSecond;
+	ClosedSecond.CloseAtCheckpoint = 2;
+	Receive(ClosedSecond);
+	Passed = ClosedSecond.Reads == 1 && ClosedSecond.Order == std::vector<int>{1, 2, 1} && Passed;
+	ReceiveState Continued;
+	Receive(Continued);
+	Passed = Continued.Reads == 2 && Continued.Order == std::vector<int>{1, 2, 1, 2} && Passed;
+	ReceiveState Shutdown;
+	s_nLowLevelSupportRefCount.store(0);
+	Receive(Shutdown);
+	s_nLowLevelSupportRefCount.store(1);
+	Passed = Shutdown.Checkpoints == 0 && Shutdown.Reads == 0 && Shutdown.Order.empty() && Passed;
+	CurrentReceive = nullptr;
+	std::fprintf(stderr, "[Gns:NativeEgress] SourceExtractedReceiveCheckpointCloseShutdownOrder=%s NO_NATIVE_IO\n",
+		Passed ? "PASS" : "FAIL");
+	return Passed;
+}
 inline bool Run() {
-	bool Passed = true;
+	bool Passed = ReceiveCheckpoints();
 	const auto Call = [](bool LinuxCase, State &Value, bool Timer, int Maximum, bool Manual,
 		SteamNetworkingMicroseconds Deadline) {
 		Current = &Value;

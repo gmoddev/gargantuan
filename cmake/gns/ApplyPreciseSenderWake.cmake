@@ -225,6 +225,17 @@ GargantuanReplaceWake("\tIThinker::Thinker_ProcessThinkers();" [=[	GargantuanWak
 GargantuanReplaceWake("\t// If we waited a long time, then that's probably bad.  Spew about it" [=[	GargantuanLockWait.Finish();
 	// If we waited a long time, then that's probably bad.  Spew about it]=])
 
+GargantuanReplaceWake("\t// Now check on sockets.  When using epoll, we can do this more efficiently" [=[	// Native results take a bounded actor opportunity before receive draining.
+	GargantuanWakeReadyNativeEgressConnections();
+	// Now check on sockets.  When using epoll, we can do this more efficiently]=])
+GargantuanReplaceWake("\t\tif ( s_nLowLevelSupportRefCount.load(std::memory_order_acquire) <= 0 )\n\t\t\treturn true; // Abort" [=[		if ( s_nLowLevelSupportRefCount.load(std::memory_order_acquire) <= 0 )
+			return true; // Abort
+		// A continuously readable socket cannot postpone ready native results
+		// until its entire receive queue empties. Replay finishes before this
+		// next receive callback, preserving each peer's input order.
+		GargantuanWakeReadyNativeEgressConnections();
+		if (!pSock->m_callback.m_fnCallback) break;]=])
+
 # The opt-in raw worker owns copied OS arguments and a generation-safe lease.
 # It is included in this final socketthread patch because this file's pinned
 # original/applied guard rejects a second writer on reconfigure.
@@ -304,3 +315,16 @@ endif()
 string(SUBSTRING "${WakeLinuxRemainder}" 0 ${WakeLinuxIf} WakeLinuxPrefix)
 string(SUBSTRING "${WakeLinuxBodyRemainder}" 0 ${WakeLinuxLength} WakeLinuxBody)
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gns-wake-linux.inc" CONTENT "${WakeLinuxPrefix}${WakeLinuxBody}" @ONLY)
+string(FIND "${GargantuanWakeSource}" "static bool DrainSocket( CRawUDPSocketImpl *pSock )" ReceiveFunctionBegin)
+if(ReceiveFunctionBegin LESS 0)
+	message(FATAL_ERROR "Pinned receive drain test function missing")
+endif()
+string(SUBSTRING "${GargantuanWakeSource}" ${ReceiveFunctionBegin} -1 ReceiveFunctionBody)
+string(FIND "${ReceiveFunctionBody}" "\twhile ( pSock->m_callback.m_fnCallback )" ReceivePrologueBegin)
+string(FIND "${ReceiveFunctionBody}" "\t\t#ifdef STEAMNETWORKINGSOCKETS_LOWLEVEL_TIME_SOCKET_CALLS" ReceivePrologueEnd)
+if(ReceivePrologueBegin LESS 0 OR ReceivePrologueEnd LESS ReceivePrologueBegin)
+	message(FATAL_ERROR "Pinned receive drain test prologue missing")
+endif()
+math(EXPR ReceivePrologueLength "${ReceivePrologueEnd} - ${ReceivePrologueBegin}")
+string(SUBSTRING "${ReceiveFunctionBody}" ${ReceivePrologueBegin} ${ReceivePrologueLength} ReceivePrologueBody)
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gns-native-receive-prologue.inc" CONTENT "${ReceivePrologueBody}" @ONLY)

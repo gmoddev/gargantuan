@@ -53,6 +53,8 @@ namespace gargantuan::network {
 		friend struct detail::GnsAckDiagnosticsAccess;
 		bool EnableReliableServiceFeedback() override;
 		std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Connection) const override;
+		std::optional<detail::ReliableServiceFeedback> ReadResolvedReliableServiceFeedback(
+			ConnectionId Connection, std::uint64_t DeadlineMicroseconds) const override;
 		bool ReleaseReliableServiceFeedback(ConnectionId Connection) override;
 		struct Impl;
 		std::unique_ptr<Impl> State;

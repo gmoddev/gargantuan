@@ -10,6 +10,8 @@
 namespace gargantuan::network {
 	bool IGameTransport::EnableReliableServiceFeedback() { return false; }
 	std::optional<detail::ReliableServiceFeedback> IGameTransport::ReadReliableServiceFeedback(ConnectionId) const { return {}; }
+	std::optional<detail::ReliableServiceFeedback> IGameTransport::ReadResolvedReliableServiceFeedback(
+		ConnectionId Connection, std::uint64_t) const { return ReadReliableServiceFeedback(Connection); }
 	bool IGameTransport::ReleaseReliableServiceFeedback(ConnectionId) { return false; }
 	bool TransportEndpoint::IsValid() const {
 		try {

@@ -50,8 +50,9 @@ bool GargantuanWaitNativeEgressResult(
 bool GargantuanCancelUnstartedNativeEgress(GargantuanNativeEgressTicket *Ticket) noexcept;
 void GargantuanReleaseNativeEgress(GargantuanNativeEgressTicket *Ticket) noexcept;
 [[noreturn]] void GargantuanFailStopNativeEgress(const char *Reason) noexcept;
-// Called by the GNS service actor after worker wake and before thinker dispatch.
-// The connection registry is owned by the SNP patch, not by worker threads.
+// Called at service-actor checkpoints with the global lock held. Each registry
+// slot gets at most one nonblocking connection-lock attempt and ready-result
+// reconciliation/replay/sender opportunity. The SNP actor owns the registry.
 void GargantuanWakeReadyNativeEgressConnections() noexcept;
 
 #if defined(GARGANTUAN_NATIVE_EGRESS_TEST_HOOKS)

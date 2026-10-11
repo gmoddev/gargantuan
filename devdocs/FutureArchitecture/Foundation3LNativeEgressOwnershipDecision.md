@@ -633,3 +633,49 @@ F1, so no further qualifier-only retry is justified for this candidate.
 KI-006 remains open; Foundation 3L remains B — PARTIALLY READY. Canonical Local32, real-TLS
 Node32 and the final acceptance sweep are withheld because the prerequisite
 native32 capacity gate failed. PR #6 remains draft; no 3M work or merge occurs.
+
+## 12. Bounded actor reconciliation investigation (2026-10-11)
+
+The renewed investigation first retains one unresolved numbered packet per
+peer. Source identifies two avoidable batch waits without attributing every
+historical failure to them. A worker release-publishes its immutable result
+and signals `WakeServiceThread`. The service thread reacquires the GNS global
+lock, drains raw sockets to would-block, then formerly scheduled ready peers
+ASAP before its thinker pass. Thus a continuously readable socket could delay
+all reconciliation. A result arriving during a thinker callback also missed
+that pass's fixed eligibility cutoff. That cutoff is the qualified KI-008
+receive-fairness correction and must remain.
+
+The candidate supplies ready-result checkpoints after global lock acquisition,
+between receive callbacks, and after thinker callbacks while the thinker table
+lock is released. Each checkpoint visits the existing 64-entry registry once.
+A connection lock is attempted without blocking. For a ready peer the actor
+commits the exact native outcome, finishes the existing fixed receive journal,
+then offers normal SNP send processing with a fresh timestamp. Connected or
+lingering peers still require a usable transport; terminal purge follows its
+existing path. Earlier state-machine deadlines remain scheduled. There is no
+recursive registry scan or second unresolved numbered packet for one peer.
+
+The work bound per checkpoint is 64 registry visits, at most one result per
+entry, at most 64 replayed datagrams per entry, and at most one newly pending
+numbered packet per peer. This does not bound an individual receive callback,
+external global-lock hold, or OS dispatch delay. Those remain qualification
+risks. Native-positive timestamps, ACK/NACK history, packet references, nonce
+order, retries, STOP_WAITING, pacing, admission, reserves and F1 are unchanged.
+The four-worker/64-ticket execution domain and exclusive pooled process
+boundary remain the capacity boundary; no cross-session broker is introduced.
+
+At 16 MiB/s a full 1,248-byte quantum represents approximately 74.39 us of
+required service. Four simultaneous peers require approximately 53,773 full
+quanta/s in aggregate, plus existing funded transport traffic. One-packet
+ownership therefore requires repeated actor opportunities; worker concurrency
+alone cannot supply them. The retained short worker stages make the bounded
+checkpoint candidate plausible, but only the unchanged native32 workload can
+qualify its measured capacity. An unqualified pipeline is not adopted: covering
+an entire 2.2 ms actor blackout would require approximately 30 prepared quanta
+per active peer and additional protected capacity, with new provisional packet
+ownership and feedback-frontier proofs.
+
+Deterministic preflights and a fresh bounded native32 campaign remain required.
+The earlier stop and failed evidence in sections 10–11 are historical receipts;
+this candidate does not relabel them or claim Local32/Node32 qualification.

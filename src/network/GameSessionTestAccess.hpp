@@ -120,7 +120,7 @@ namespace gargantuan::network::detail {
 		[[nodiscard]] static std::vector<JournalRequirement> GetJournalRequirements(const GameSession &Session);
 		[[nodiscard]] static ReplicationMetrics GetReplicationMetrics(const GameSession &Session);
 		[[nodiscard]] static std::optional<std::vector<StructuralCausalSnapshot>> CaptureStructuralCausalSnapshot(
-			const GameSession &Session, std::string &Error);
+			const GameSession &Session, std::string &Error, std::uint64_t NativeDeadlineMicroseconds = 0);
 		// Recovery source validation reads only journal/sequence/pending identity.
 		// Native feedback may be transiently incomplete while a send is pending.
 		[[nodiscard]] static std::optional<std::vector<StructuralCausalSnapshot>> CaptureStructuralSourceSnapshot(
