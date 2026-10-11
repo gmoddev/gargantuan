@@ -632,7 +632,8 @@ void CSteamNetworkConnectionBase::GargantuanDrainPendingReceived()
 		}
 		static_cast<CConnectionTransportUDPBase *>(m_pTransport)->GargantuanReplayReceivedData(
 			Datagram.Bytes.data(), Datagram.Size,
-			std::max(Datagram.ReceivedAtMicroseconds, m_senderState.GargantuanLastCompletedGnsAt));
+			std::max(static_cast<SteamNetworkingMicroseconds>(Datagram.ReceivedAtMicroseconds),
+				m_senderState.GargantuanLastCompletedGnsAt));
 	}
 	if (Queue->HasOverflowed()) m_senderState.GargantuanFeedback.Invalid = true;
 	if (!Queue->End()) GargantuanFailStopNativeEgress("pending receive replay incomplete");
