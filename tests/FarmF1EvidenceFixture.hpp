@@ -35,6 +35,21 @@ inline void TestFarmF1Evidence() {
 			S.StructuralLastCompletedGrantActivatedAtMicroseconds);
 		Evidence.Observe(R);
 	};
+	auto Initial = [&](std::uint32_t Slot, std::uint64_t Sequence, std::uint64_t Delay) {
+		auto R = Completed(Slot, Sequence, true); auto &S = *R.Feedback;
+		const auto First = S.StructuralLastCompletedGrantActivatedAtMicroseconds + Delay;
+		S.StructuralLastCompletedGrantFirstSendAtMicroseconds = S.StructuralLastCompletedGrantCompletedAtMicroseconds = First;
+		S.LastCompletedStructuralSegmentEvents[0].AtMicroseconds = First;
+		S.ObservedAtMicroseconds = First + 10;
+		auto &T = S.LastCompletedInitialTrace;
+		T.Enabled = true; T.Token = Sequence; T.MessageNumber = 9; T.NativeHandle = 123; T.DispatchSequence = 8;
+		T.TransportEntered = Sequence * 10000; T.AdapterLocked = T.TransportEntered + 1;
+		T.NativeApiEntered = T.AdapterLocked + 1; T.NativeApiLocked = T.NativeApiEntered + 1;
+		T.NativeEnqueued = T.NativeApiLocked + 1; T.FirstSnpVisit = T.NativeEnqueued + 1;
+		T.PacketPreparationEntered = T.FirstSnpVisit + 1; T.WorkerQueued = T.PacketPreparationEntered + 1;
+		T.WorkerStarted = T.WorkerQueued + 1; T.NativeCompleted = First; T.ActorReconciled = First + 1;
+		return R;
+	};
 	const auto *Previous = network::detail::ActivePooledService;
 	for (const bool Mismatch : {false, true}) {
 		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
@@ -191,23 +206,30 @@ inline void TestFarmF1Evidence() {
 		struct Notification { unsigned Count = 0; std::uint64_t Observed = 0; } Notice;
 		Evidence.SetFailureObserver(&Notice, [](void *Context, std::uint64_t Observed) noexcept {
 			auto &N = *static_cast<Notification *>(Context); ++N.Count; N.Observed = Observed;
-		});
+		}, true);
 		auto Bad = Completed(1, 1, true); Bad.Feedback->LastCompletedStructuralSegmentEventCount = 513;
 		Grant(Evidence, Bad); Require(Notice.Count == 0);
 		auto Accounting = Completed(2); Accounting.Result.RetiredToken = 9;
 		Grant(Evidence, Accounting); Require(Notice.Count == 0);
-		Grant(Evidence, Completed(3, 1, true));
-		Require(Notice.Count == 1 && Notice.Observed == 10020);
-		Grant(Evidence, Completed(3, 2)); Grant(Evidence, Completed(4, 1, true));
-		Require(Notice.Count == 1 && Notice.Observed == 10020);
+		Grant(Evidence, Completed(3, 1, true)); Require(Notice.Count == 0); // Running/drain failure does not freeze.
+		Grant(Evidence, Initial(3, 2, 7070));
+		Require(Notice.Count == 1 && Notice.Observed == 27080);
+		const auto &P = Evidence.Observations()[2];
+		Require(P.FirstFailed.Token == 1 && P.FirstInitialFailure.Measured && P.FirstInitialFailure.Token == 2 &&
+			P.FirstInitialFailure.InitialTraceValid && P.FirstInitialFailure.First == 27070);
+		Grant(Evidence, Completed(3, 3)); Grant(Evidence, Initial(4, 1, 8000));
+		Require(Notice.Count == 1 && Notice.Observed == 27080 && P.FirstInitialFailure.Token == 2);
+		std::ostringstream Out; Evidence.Write(Out, "initial-after-running");
+		Require(Out.str().find("sequence=2 token=2 bytes=77 activated_us=20000 first_us=27070") != std::string::npos &&
+			Out.str().find("event=trace run=initial-after-running connection=3:1 valid=1 enabled=1") != std::string::npos);
 	}
 	for (unsigned Case = 0; Case < 5; ++Case) {
 		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
 		unsigned Notifications = 0;
 		Evidence.SetFailureObserver(&Notifications, [](void *Context, std::uint64_t) noexcept {
 			++*static_cast<unsigned *>(Context);
-		});
-		auto R = Completed(1, 1, true);
+		}, true);
+		auto R = Initial(1, 1, 7070);
 		if (Case == 0) R.Result.Valid = false;
 		if (Case == 1) R.Accepted.Structural = 78;
 		if (Case == 2) R.Feedback->StructuralPayloadBytesFirstSent = 78;
@@ -215,12 +237,106 @@ inline void TestFarmF1Evidence() {
 		if (Case == 4) R.Result.RetiredToken = 9;
 		Grant(Evidence, R);
 		const auto &P = Evidence.Observations()[0];
-		Require(P.AccountingInvalid && P.FirstFailed.Observed && !P.FirstFailed.Measured && Notifications == 0);
+		Require(P.AccountingInvalid && P.FirstFailed.Observed && !P.FirstFailed.Measured &&
+			!P.FirstInitialFailure.Measured && Notifications == 0);
+	}
+	{
+		// Exact integer-microsecond boundary from the canonical byte-us intercept;
+		// no W/R drain allowance and no rounded millisecond trigger.
+		using Curve = network::FiniteGrantServiceCurve;
+		Require(!Curve::ZeroFirstSendBreach(0, 7070) &&
+			!Curve::ZeroFirstSendBreach(std::numeric_limits<std::uint64_t>::max(), std::numeric_limits<std::uint64_t>::max()) &&
+			!Curve::ZeroFirstSendBreach(10000, 9999) &&
+			!Curve::ZeroFirstSendBreach(1, std::numeric_limits<std::uint64_t>::max()));
+		const auto LastLegal = Curve::FiniteInterceptByteMicroseconds / Curve::PeerRateBytesPerSecond;
+		Require(LastLegal * Curve::PeerRateBytesPerSecond <= Curve::FiniteInterceptByteMicroseconds &&
+			(LastLegal + 1) * Curve::PeerRateBytesPerSecond > Curve::FiniteInterceptByteMicroseconds);
+		for (const auto Delay : {LastLegal, LastLegal + 1}) {
+			auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
+			unsigned Notifications = 0;
+			Evidence.SetFailureObserver(&Notifications, [](void *Context, std::uint64_t) noexcept {
+				++*static_cast<unsigned *>(Context);
+			}, true);
+			Grant(Evidence, Initial(1, 1, Delay));
+			Require(Evidence.Observations()[0].FirstInitialFailure.Measured == (Delay > LastLegal) &&
+				Notifications == (Delay > LastLegal ? 1U : 0U));
+		}
+	}
+	{
+		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
+		// A maximum grant begins promptly but drains beyond its finite envelope.
+		// A finite/running miss is real, but zero-first service did not breach.
+		auto R = Initial(1, 1, 295); auto &S = *R.Feedback;
+		R.Accepted.Structural = S.StructuralLastCompletedGrantBytes = network::MaximumReliableServiceGroupBytes;
+		S.StructuralPayloadBytesFirstSent = S.StructuralPayloadBytesAcked = R.Accepted.Structural;
+		R.Result.RetiredBytes = R.Accepted.Structural;
+		S.StructuralLastCompletedGrantCompletedAtMicroseconds = 50000;
+		S.ObservedAtMicroseconds = 50010;
+		S.LastCompletedStructuralSegmentEventCount = 2;
+		S.LastCompletedStructuralSegmentEvents[0].PayloadBytes = 1248;
+		S.LastCompletedStructuralSegmentEvents[1] = {50000, R.Accepted.Structural - 1248};
+		S.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds =
+			network::PooledReliableServiceProfile::RunningGrantBoundByteMicroseconds + 1;
+		S.StructuralMaximumFiniteShortfallByteMicroseconds = 1;
+		unsigned Notifications = 0;
+		Evidence.SetFailureObserver(&Notifications, [](void *Context, std::uint64_t) noexcept {
+			++*static_cast<unsigned *>(Context);
+		}, true);
+		Evidence.Accept(R.Connection, 1, R.Accepted.Structural, 10000); Evidence.Observe(R);
+		Require(Evidence.Observations()[0].FirstFailed.Measured && !Evidence.Observations()[0].FirstInitialFailure.Measured &&
+			Notifications == 0 && !Evidence.Valid(1));
+	}
+	for (unsigned Case = 0; Case < 13; ++Case) {
+		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
+		auto R = Initial(1, 1, 7070); auto &S = *R.Feedback;
+		// Admission is held fixed so a stale token or activation cannot certify a breach.
+		Evidence.Accept(R.Connection, 1, 77, 10000);
+		if (Case == 0) S.StructuralLastCompletedGrantToken = 2;
+		if (Case == 1) S.StructuralLastCompletedGrantActivatedAtMicroseconds = 9999;
+		if (Case == 2) S.StructuralLastCompletedGrantFirstSendAtMicroseconds = 9999;
+		if (Case == 3) S.StructuralLastCompletedGrantCompletedAtMicroseconds = 17069;
+		if (Case == 4) S.ObservedAtMicroseconds = 17069;
+		if (Case == 5) S.LastCompletedStructuralSegmentEventCount = 0;
+		if (Case == 6) S.LastCompletedStructuralSegmentEvents[0].AtMicroseconds = 17069;
+		if (Case == 7) S.LastCompletedStructuralSegmentEvents[0].PayloadBytes = 76;
+		if (Case == 8) S.CountersValid = false;
+		if (Case == 9) S.StructuralCompletedGrantSequence = 2;
+		if (Case == 10) S.StructuralLastCompletedGrantBytes = 0;
+		if (Case == 11) S.StructuralLastCompletedGrantActivatedAtMicroseconds = 0;
+		if (Case == 12) S.StructuralLastCompletedGrantActivatedAtMicroseconds = std::numeric_limits<std::uint64_t>::max();
+		Evidence.Observe(R);
+		Require(!Evidence.Observations()[0].FirstInitialFailure.Measured);
+	}
+	{
+		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
+		auto Bad = Initial(1, 1, 7070); Bad.Feedback->LastCompletedStructuralSegmentEventCount = 0;
+		Grant(Evidence, Bad); Grant(Evidence, Initial(1, 2, 7070));
+		Require(!Evidence.Observations()[0].FirstFailed.Measured &&
+			Evidence.Observations()[0].FirstInitialFailure.Measured && Evidence.Observations()[0].FirstInitialFailure.Token == 2);
+	}
+	for (const bool Mismatch : {false, true}) {
+		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
+		auto R = Initial(1, 1, 7070);
+		if (Mismatch) R.Feedback->LastCompletedInitialTrace.Token = 2;
+		else R.Feedback->LastCompletedInitialTrace.WorkerStarted = 17071;
+		Grant(Evidence, R);
+		Require(Evidence.Observations()[0].FirstInitialFailure.Measured &&
+			!Evidence.Observations()[0].FirstInitialFailure.InitialTraceValid);
 	}
 	{
 		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
 		auto Earlier = Completed(1); Earlier.Result.Valid = false;
 		Grant(Evidence, Earlier); Grant(Evidence, Completed(1, 2, true));
 		Require(Evidence.Observations()[0].AccountingInvalid && Evidence.Observations()[0].FirstFailed.Measured);
+	}
+	{
+		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
+		unsigned Notifications = 0;
+		Evidence.SetFailureObserver(&Notifications, [](void *Context, std::uint64_t) noexcept {
+			++*static_cast<unsigned *>(Context);
+		}); // Existing default freezes on the first general measured failure.
+		Grant(Evidence, Completed(1, 1, true));
+		Require(Notifications == 1 && Evidence.Observations()[0].FirstFailed.Measured &&
+			!Evidence.Observations()[0].FirstInitialFailure.Measured);
 	}
 }

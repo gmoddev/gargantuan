@@ -251,7 +251,7 @@ only when `PollEvents` calls GNS `RunCallbacks`, and application code receives
 only copied `TransportEvent` values through caller-owned output storage. No
 DataModel mutation, Luau callback, or scheduler action occurs in a GNS callback.
 
-The existing opt-in Farm service-timing observer can retain a private 128-byte
+The existing opt-in Farm service-timing observer can retain a bounded private
 initial-service trace in the native worker path: one active and one completed
 value per peer, copied into existing feedback and the bounded first-failed
 witness. It joins original activation, adapter/native API boundaries, initial
@@ -263,6 +263,22 @@ cost is unmeasured, so these traces cannot qualify capacity. The
 [initial-service assessment](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#15-initial-service-causal-investigation-2026-10-11)
 records the bounded diagnostic's non-reproduction of the delayed initial witness
 and the remaining execution-boundary decision.
+
+The final `GARGANTUAN_FARM_SERVICE_TIMING=initial` diagnostic mode retains
+zero-first-send breaches separately from general running failures. Its pure
+predicate uses the canonical finite intercept: elapsed µs times 16,777,216
+strictly exceeds 101,911,296,000 byte-µs. The first integer-clock breach is
+6,075 µs, independent of grant size. A valid first native-positive event invokes
+the existing borrowed observer during actor reconciliation, before remaining
+grant drain can overwrite the pre-event history. An atomic once claim owns the
+freeze fields; they are read only after native joins. The actual native event
+and later observer clock remain distinct. Main retains the completed initial
+witness independently, with unchanged F1 verdicts and chronology validation.
+This mode suppresses individual thinker callbacks and post-first-send sender
+spans before QPC capture, while keeping aggregate wait/receive/thinker and API
+lock/copy spans. Existing local SNP eligibility and the first prior packet's
+immutable worker result supplement the stage chain. Eligibility is a requested
+data deadline, not proof of actor dispatch; total observer cost remains unmeasured.
 
 GNS global initialization, callback routing, adapter lifetime, and public adapter
 operations are serialized by one recursive mutex. Registries are removed before

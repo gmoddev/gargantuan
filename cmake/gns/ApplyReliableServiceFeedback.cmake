@@ -89,7 +89,8 @@ GargantuanReplaceFeedback("SteamNetworkingMicroseconds CSteamNetworkConnectionBa
 		}
 		else return usecNow + 1000;
 	}
-	GargantuanServiceTimingSpan GargantuanSender(GargantuanServiceTimingPhase::SnpSender);
+	GargantuanServiceTimingSpan GargantuanSender(GargantuanServiceTimingPhase::SnpSender,
+		GargantuanInitialTrace.Enabled && !GargantuanInitialTrace.NativeCompleted);
 	if (GargantuanSender.Enabled()) {
 		GargantuanSender.SetResult(m_hConnectionSelf); // Observed native handle, never authority.
 		GargantuanSender.SetDetail(m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken);
@@ -369,6 +370,16 @@ bool CSteamNetworkConnectionBase::GargantuanReconcileNativeEgress()
 		m_senderState.MaybeCheckInFlightPacketMap();
 		m_sendRateData.m_flTokenBucket -= (float)Bytes;
 	}
+	// Retain the first completed packet before unique structural service,
+	// including ordinary/control packets created after the grant was enqueued.
+	auto &PriorTrace = m_senderState.GargantuanFeedback.InitialTrace;
+	if (PriorTrace.Enabled && !PriorTrace.NativeCompleted && !PriorTrace.PriorActorReconciled) {
+		PriorTrace.PriorWorkerQueued = Result.QueuedAtMicroseconds;
+		PriorTrace.PriorWorkerStarted = Result.StartedAtMicroseconds;
+		PriorTrace.PriorNativeCompleted = Result.CompletedAtMicroseconds;
+		PriorTrace.PriorNativePositive = Bytes > 0;
+		PriorTrace.PriorActorReconciled = GargantuanInitialServiceClock();
+	}
 	GargantuanReleaseNativeEgress(Ticket);
 	GargantuanUnregisterNativePending(this);
 	delete Helper;
@@ -429,6 +440,15 @@ GargantuanReplaceFeedback("\tint64 result = pSendMessage->m_nMessageNumber;" [=[
 	auto &GargantuanEnqueueTrace = m_senderState.GargantuanFeedback.InitialTrace;
 	if (GargantuanEnqueueTrace.Enabled && GargantuanEnqueueTrace.MessageNumber == uint64_t(result))
 		GargantuanEnqueueTrace.NativeEnqueued = GargantuanInitialServiceClock();]=])
+GargantuanReplaceFeedback("\t\tSteamNetworkingMicroseconds usecNextThink = SNP_GetNextThinkTime( usecNow );" [=[
+		SteamNetworkingMicroseconds usecNextThink = SNP_GetNextThinkTime( usecNow );
+		if (GargantuanEnqueueTrace.Enabled && GargantuanEnqueueTrace.MessageNumber == uint64_t(result)) {
+			// Observe existing local eligibility, not a raced thinker-heap getter.
+			GargantuanEnqueueTrace.EligibilityRecorded = GargantuanInitialServiceClock();
+			GargantuanEnqueueTrace.EligibilityNativeSample = usecNow;
+			GargantuanEnqueueTrace.RequestedDataThinkNative = usecNextThink;
+			GargantuanEnqueueTrace.EligibilityMode = usecNextThink > usecNow ? 1 : 2;
+		}]=])
 GargantuanReplaceFeedback("\tint nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;" [=[
 	int nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;
 	int nGargantuanStructuralPacketsThisThink = 0;]=])

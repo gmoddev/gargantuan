@@ -1258,3 +1258,49 @@ Ranked next steps are:
 **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.** Canonical
 Local32, real-TLS Node32 and final acceptance remain withheld. No further blind
 diagnostic run, pipeline, Foundation 3M work or merge is started.
+
+## 16. Final bounded zero-first-send attribution attempt (2026-10-11)
+
+The user authorizes one final fresh diagnostic after focused preflights. Recovery
+qualification and all F1/admission/reserve/fairness/reliability/security contracts
+remain unchanged. This addresses the demonstrated retention defect in section 15;
+it is not another unchanged capacity retry.
+
+The target is **zero unique first-send service immediately before the actual
+first native-positive event**, with strict `elapsed_us * R_i > B_finite`.
+Canonical constants give `R_i=16,777,216` and
+`B_finite=101,911,296,000 byte-µs`; integer elapsed 6,074 is legal and 6,075 is
+the first breach. The 6.137389 ms completion envelope for the historical
+1,057-byte grant includes its drain allowance and is not the zero-service trigger.
+A large grant beginning promptly but draining slowly does not satisfy this
+predicate. Zero/MAX activation, reversed time and overflow cannot certify it.
+
+A separate fixed initial-failure witness per peer survives an earlier running
+failure. Native valid, token-matched first-positive observation freezes existing
+bounded history during actor reconciliation, before full grant completion;
+completed Main feedback independently retains the exact token/byte/timeline
+witness. The atomic once writer never touches Main-owned peer state or emits
+output. Joined-only reading prevents races between Main fallback and native
+observation. Native completion time and later observer/freeze clock are separate;
+retained coverage is checked after the run, never presumed from the trigger.
+
+The existing service-timing flag adds exact mode `initial`. It suppresses
+individual thinker callbacks and post-first sender spans before clock capture.
+Aggregate timer/global-lock/receive/thinker history and native API lock/copy spans
+remain, along with initial sender spans. Existing local SNP data eligibility is
+recorded without a new raced thinker getter. The first completed packet before
+initial structural service retains its existing worker queue/start/completion
+and actor-reconciliation times. These fixed supplemental fields do not change
+the scheduling path. They require individual chronology checks and do not prove
+OS scheduling or every preceding packet's cause. Total observer overhead remains
+unmeasured; these observations cannot qualify production capacity.
+
+Focused regressions cover exact 6,074/6,075 boundaries, a prompt-start slow
+512 KiB grant, earlier running failure followed by an initial failure, invalid
+counter/identity/timestamp input, separate trace validity, native freezing before
+large-grant completion, concurrent once publication, and suppression before QPC.
+The one predeclared run is `3d955b61-ae2a-4844-a4f2-53e6ddae1433`, using the
+existing 32-Player Scale/Recovery workload with native egress enabled and pause
+hooks OFF. Exact source, tests, package pins and outcome will be recorded after
+preflight/execution. No F1 correction, new capacity PASS, scope change or pipeline
+is inferred before a demonstrated cause and fresh qualified correction.

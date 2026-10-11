@@ -72,6 +72,28 @@ inline bool Run() {
 		Require(!Value.LastCompletedInitialTrace.Enabled && Value.StructuralLastCompletedGrantToken == 2,
 			"untraced completion cannot retain another grant's trace");
 	});
+	Case("NativeInitialBreachBeforeCompletion", [] {
+		using namespace SteamNetworkingSocketsLib;
+		struct Capture { unsigned Calls = 0; std::uint64_t Token = 0, Activated = 0, First = 0; } Value;
+		GargantuanServiceTimingSink Sink{&Value, [](void *, const GargantuanServiceTimingRecord &) noexcept {}};
+		Sink.InitialOnly = true;
+		Sink.InitialBreach = [](void *Context, std::uint64_t Token, std::uint64_t Activated, std::uint64_t First) noexcept {
+			auto &C = *static_cast<Capture *>(Context); ++C.Calls; C.Token = Token; C.Activated = Activated; C.First = First;
+		};
+		Require(GargantuanSetServiceTimingSink(&Sink), "initial native observer borrows sink");
+		auto Late = Grant(1, 524288);
+		Late.FirstSend(77, 77, 1'006'075);
+		const bool BeforeCompletion = Value.Calls == 1 && Value.Token == 1 && Value.Activated == 1'000'000 &&
+			Value.First == 1'006'075 && Late.StructuralActiveGrantBytes == 524288;
+		Late.FirstSend(77, 77, 1'007'000);
+		auto Prompt = Grant(2, 524288); Prompt.FirstSend(77, 77, 1'000'295);
+		Prompt.FirstSend(77, 77, 1'040'000); // Later drain failure must not trigger initial retention.
+		auto Invalid = Grant(3, 77); Invalid.Invalid = true;
+		Invalid.FirstSend(77, 77, 1'006'075); // Corrupt counters cannot consume the single native freeze.
+		const bool OnlyInitial = Value.Calls == 1;
+		Require(GargantuanSetServiceTimingSink(nullptr), "initial observer releases sink");
+		Require(BeforeCompletion && OnlyInitial, "native callback freezes zero-first breach once before large grant drains");
+	});
 	Case("TinyFiniteLatencyAndPointwiseBoundary", [] {
 		auto Prompt = Grant(1, 77);
 		Prompt.FirstSend(77, 77, 1'006'000);
@@ -184,7 +206,7 @@ inline bool Run() {
 			Peers[0].StructuralLastCompletedGrantCompletedAtMicroseconds,
 			"smaller grant exits the common running interval first");
 	});
-	std::cout << "[Network:ServiceCurve] passed=" << Passed << " total=8\n";
-	return Passed == 8;
+	std::cout << "[Network:ServiceCurve] passed=" << Passed << " total=9\n";
+	return Passed == 9;
 }
 }

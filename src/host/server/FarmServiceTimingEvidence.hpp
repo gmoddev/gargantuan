@@ -109,9 +109,23 @@ private:
 	std::atomic<unsigned> TimerCount{0};
 	Clock Begin{}, Failure{};
 	std::uint64_t FailureObservedUs = 0;
+	std::uint64_t NativeInitialToken = 0, NativeActivatedUs = 0, NativeFirstUs = 0;
+	std::atomic_flag FreezeClaimed = ATOMIC_FLAG_INIT;
+	bool InitialMode = false;
 	bool Registered = false, CallbackRegistered = false;
 	inline static std::atomic<FarmServiceTimingEvidence *> Owner{nullptr};
 	SteamNetworkingSocketsLib::GargantuanServiceTimingSink Sink{this, RecordTiming, true};
+	static void InitialBreach(void *Context, std::uint64_t Token, std::uint64_t Activated, std::uint64_t First) noexcept {
+		static_cast<FarmServiceTimingEvidence *>(Context)->FreezeAt(First, Token, Activated, First);
+	}
+	void FreezeAt(std::uint64_t ObservedUs, std::uint64_t Token, std::uint64_t Activated, std::uint64_t First) noexcept {
+		if (!Values || FreezeClaimed.test_and_set(std::memory_order_acq_rel)) return;
+		// Single writer after the atomic claim. These values are read only after
+		// all callback/native writers join; no Main-owned peer state is touched.
+		FailureObservedUs = ObservedUs; NativeInitialToken = Token;
+		NativeActivatedUs = Activated; NativeFirstUs = First; Failure = Clock::Capture();
+		if (Failure.Valid) Values->Freeze(Failure.QpcAfter);
+	}
 	static void RecordTiming(void *Context, const Record &Value) noexcept {
 		auto &Self = *static_cast<FarmServiceTimingEvidence *>(Context);
 		if (Value.Phase == SteamNetworkingSocketsLib::GargantuanServiceTimingPhase::TimerCreate) {
@@ -135,14 +149,21 @@ private:
 			<< " qpc_frequency=" << Value.Frequency << '\n';
 	}
 public:
-	static bool EnabledValue(std::string_view Value) noexcept { return Value == "1"; }
+	static bool EnabledValue(std::string_view Value) noexcept { return Value == "1" || Value == "initial"; }
+	static bool InitialValue(std::string_view Value) noexcept { return Value == "initial"; }
+	static bool InitialRequested() noexcept {
+		const char *Value = std::getenv("GARGANTUAN_FARM_SERVICE_TIMING");
+		return Value && InitialValue(Value);
+	}
 	static bool Requested() noexcept {
 		const char *Value = std::getenv("GARGANTUAN_FARM_SERVICE_TIMING");
 		return Value && EnabledValue(Value);
 	}
 	// Supplied false mode lets tests prove no allocation, registration or clock.
-	explicit FarmServiceTimingEvidence(bool Enabled) {
+	explicit FarmServiceTimingEvidence(bool Enabled, bool InitialOnly = false) : InitialMode(InitialOnly) {
 		if (!Enabled) return;
+		Sink.InitialOnly = InitialOnly;
+		if (InitialOnly) Sink.InitialBreach = InitialBreach;
 		Values = std::make_unique<History>(); Begin = Clock::Capture();
 		if (!SteamNetworkingSocketsLib::GargantuanSetServiceTimingSink(&Sink))
 			throw std::runtime_error("[Qualification:FarmServiceTiming] timing sink already owned");
@@ -160,13 +181,12 @@ public:
 	FarmServiceTimingEvidence(const FarmServiceTimingEvidence &) = delete;
 	FarmServiceTimingEvidence &operator=(const FarmServiceTimingEvidence &) = delete;
 	bool Enabled() const noexcept { return Values != nullptr; }
+	bool InitialOnly() const noexcept { return InitialMode; }
 	static void Failed(void *Context, std::uint64_t ObservedUs) noexcept {
 		static_cast<FarmServiceTimingEvidence *>(Context)->Freeze(ObservedUs);
 	}
 	void Freeze(std::uint64_t ObservedUs) noexcept {
-		if (!Values || FailureObservedUs) return;
-		FailureObservedUs = ObservedUs; Failure = Clock::Capture();
-		if (Failure.Valid) Values->Freeze(Failure.QpcAfter);
+		FreezeAt(ObservedUs, 0, 0, 0);
 	}
 	// Caller has destroyed every transport and joined all native threads.
 	bool Stop() noexcept {
@@ -182,7 +202,8 @@ public:
 	}
 	void Write(std::ostream &Out, std::string_view Run, bool Joined) const {
 		if (!Values) return;
-		PrintClock(Out, Run, "BEGIN", Begin); PrintClock(Out, Run, "FAILURE_OBSERVER", Failure);
+		PrintClock(Out, Run, "BEGIN", Begin);
+		if (Joined) PrintClock(Out, Run, "FAILURE_OBSERVER", Failure);
 		const auto Starts = ThreadCount.load(std::memory_order_acquire);
 		for (unsigned I = 0; Joined && I < Starts && I < Threads.size(); ++I)
 			if (Threads[I].Ready.load(std::memory_order_acquire)) PrintClock(Out, Run, "SERVICE_THREAD", Threads[I].Value);
@@ -208,7 +229,10 @@ public:
 			<< " retained=" << Retained << " earliest_qpc=" << Earliest << " latest_qpc=" << Latest
 			<< " timer_creates=" << TimerCount.load() << " service_threads=" << Starts
 			<< " timer_overflow=" << (TimerCount.load() > TimerCreates.size()) << " thread_overflow=" << (Starts > Threads.size())
-			<< " failure_observed_us=" << FailureObservedUs << " frozen=" << (FailureObservedUs && Failure.Valid)
+			<< " failure_observed_us=" << (Joined ? FailureObservedUs : 0) << " frozen=" << (Joined && FailureObservedUs && Failure.Valid)
+			<< " initial_only=" << InitialMode << " native_initial_token=" << (Joined ? NativeInitialToken : 0)
+			<< " native_activated_us=" << (Joined ? NativeActivatedUs : 0) << " native_first_us=" << (Joined ? NativeFirstUs : 0)
+			<< " observer_overhead=NOT_MEASURED"
 			<< " certificate_clock=steady_us timing_clock=qpc timer_deadline_clock=gns_local_us"
 			<< " native_snapshot_bracket=NOT_MEASURED interval_coverage=NOT_MEASURED attribution=NOT_MEASURED\n";
 	}

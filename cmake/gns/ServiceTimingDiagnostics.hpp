@@ -31,6 +31,8 @@ struct GargantuanServiceTimingSink {
 	void *Context = nullptr;
 	void (*Record)(void *, const GargantuanServiceTimingRecord &) noexcept = nullptr;
 	bool DetailedCallbacks = false;
+	bool InitialOnly = false;
+	void (*InitialBreach)(void *, std::uint64_t, std::uint64_t, std::uint64_t) noexcept = nullptr;
 };
 class GargantuanServiceTimingSpan;
 inline thread_local GargantuanServiceTimingSpan *GargantuanCurrentSnpTiming = nullptr;
@@ -50,8 +52,10 @@ class GargantuanServiceTimingSpan final {
 	GargantuanServiceTimingSpan *PreviousSnpTiming = nullptr;
 	GargantuanServiceTimingRecord Value;
 public:
-	explicit GargantuanServiceTimingSpan(GargantuanServiceTimingPhase Phase) noexcept
+	explicit GargantuanServiceTimingSpan(GargantuanServiceTimingPhase Phase, bool InitialSender = false) noexcept
 		: Sink(GargantuanServiceTimingObserver.load(std::memory_order_acquire)) {
+		if (Sink && Sink->InitialOnly && (Phase == GargantuanServiceTimingPhase::ThinkerCallback ||
+			(Phase == GargantuanServiceTimingPhase::SnpSender && !InitialSender))) Sink = nullptr;
 		if (Sink && (Phase == GargantuanServiceTimingPhase::ThinkerCallback || Phase == GargantuanServiceTimingPhase::SnpSender) &&
 			!Sink->DetailedCallbacks) Sink = nullptr;
 		if (!Sink) return; // Disabled: no clocks, counting, allocation or output.
@@ -72,7 +76,7 @@ public:
 	GargantuanServiceTimingSpan &operator=(const GargantuanServiceTimingSpan &) = delete;
 	~GargantuanServiceTimingSpan() { Finish(); }
 	bool Enabled() const noexcept { return Sink != nullptr; }
-	bool Detailed() const noexcept { return Sink && Sink->DetailedCallbacks; }
+	bool Detailed() const noexcept { return Sink && Sink->DetailedCallbacks && !Sink->InitialOnly; }
 	bool PacketOwner(std::uint32_t Handle) const noexcept { return Sink && Value.Result == static_cast<std::int64_t>(Handle); }
 	void AddCount() noexcept { if (Sink) ++Value.Count; }
 	void AddBytes(std::uint64_t Bytes) noexcept { if (Sink) Value.Bytes += Bytes; }

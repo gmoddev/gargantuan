@@ -22,7 +22,8 @@ inline void TestFarmServiceTimingEvidence() {
 	auto Check = [](bool Value, const char *Message) { if (!Value) throw std::runtime_error(Message); };
 	Check(!GargantuanServiceTimingObserver.load(), "timing fixture begins with no borrowed sink");
 	Check(!Evidence::EnabledValue("") && !Evidence::EnabledValue("0") && !Evidence::EnabledValue("true") &&
-		!Evidence::EnabledValue("11") && Evidence::EnabledValue("1"), "only explicit exact timing opt-in accepted");
+		!Evidence::EnabledValue("11") && Evidence::EnabledValue("1") && Evidence::EnabledValue("initial") &&
+		!Evidence::InitialValue("1") && Evidence::InitialValue("initial"), "only exact full/initial timing opt-ins accepted");
 	{
 		Evidence Disabled(false); Disabled.Freeze(99);
 		std::ostringstream Out; Disabled.Write(Out, "disabled", true);
@@ -88,5 +89,34 @@ inline void TestFarmServiceTimingEvidence() {
 			"raw dump does not manufacture causal attribution");
 	}
 	Check(!GargantuanServiceTimingObserver.load(), "fixture releases owner before return");
-	std::cout << "[Qualification:FarmServiceTiming] fixture=PASS cases=7\n";
+	{
+		Evidence Initial(true, true);
+		auto *Sink = GargantuanServiceTimingObserver.load();
+		Check(Initial.InitialOnly() && Sink && Sink->InitialBreach, "initial mode owns the native trigger");
+		{
+			GargantuanServiceTimingSpan Callback(GargantuanServiceTimingPhase::ThinkerCallback);
+			GargantuanServiceTimingSpan Running(GargantuanServiceTimingPhase::SnpSender);
+			Check(!Callback.Enabled() && !Running.Enabled() && !GargantuanCurrentSnpTiming,
+				"high-rate callbacks and running senders are suppressed before clock capture");
+		}
+		{
+			GargantuanServiceTimingSpan InitialSender(GargantuanServiceTimingPhase::SnpSender, true);
+			Check(InitialSender.Enabled() && GargantuanCurrentSnpTiming == &InitialSender,
+				"initial sender observation remains scoped");
+		}
+		std::thread A([&] { Sink->InitialBreach(Sink->Context, 1, 10000, 17070); });
+		std::thread B([&] { Sink->InitialBreach(Sink->Context, 2, 20000, 27070); });
+		A.join(); B.join();
+		Initial.Freeze(99999); // Main fallback cannot replace the native winner.
+		Check(Initial.Stop() && !GargantuanServiceTimingObserver.load(), "native writers join before removal");
+		std::ostringstream Out; Initial.Write(Out, "initial", true);
+		const auto Text = Out.str();
+		Check(Text.find("initial_only=1") != std::string::npos && Text.find("attempts=1") != std::string::npos &&
+			Text.find("failure_observed_us=99999") == std::string::npos &&
+			(Text.find("native_initial_token=1 native_activated_us=10000 native_first_us=17070") != std::string::npos ||
+			 Text.find("native_initial_token=2 native_activated_us=20000 native_first_us=27070") != std::string::npos),
+			"once publication retains one whole native identity and bounded initial history");
+	}
+	Check(!GargantuanServiceTimingObserver.load(), "initial fixture releases owner");
+	std::cout << "[Qualification:FarmServiceTiming] fixture=PASS cases=8\n";
 }

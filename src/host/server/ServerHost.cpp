@@ -459,7 +459,8 @@ namespace gargantuan::host {
 		try {
 #if defined(GARGANTUAN_WITH_GNS)
 			if (FarmScaleWorkload && detail::FarmServiceTimingEvidence::Requested())
-				ServiceTimingEvidence = std::make_unique<detail::FarmServiceTimingEvidence>(true);
+				ServiceTimingEvidence = std::make_unique<detail::FarmServiceTimingEvidence>(true,
+					detail::FarmServiceTimingEvidence::InitialRequested());
 #endif
 			const auto HostStartupStarted = std::chrono::steady_clock::now();
 			const auto HostStartupUnixMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -714,7 +715,8 @@ namespace gargantuan::host {
 			if (FarmScaleWorkload) F1Evidence = std::make_unique<detail::FarmF1Evidence>();
 #if defined(GARGANTUAN_WITH_GNS)
 			if (F1Evidence && ServiceTimingEvidence)
-				F1Evidence->SetFailureObserver(ServiceTimingEvidence.get(), detail::FarmServiceTimingEvidence::Failed);
+				F1Evidence->SetFailureObserver(ServiceTimingEvidence.get(), detail::FarmServiceTimingEvidence::Failed,
+					ServiceTimingEvidence->InitialOnly());
 #endif
 			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<detail::FarmPublicationEvidence>(
 				true, FarmRunId, -1, 0, std::filesystem::path(FarmPublicationEvidencePath));

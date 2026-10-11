@@ -1,4 +1,5 @@
 #include "ReliableServiceFeedback.hpp"
+#include "ServiceTimingDiagnostics.hpp"
 #include <atomic>
 #include <chrono>
 #include <limits>
@@ -110,6 +111,17 @@ void GargantuanReliableServiceCounters::FirstSend(int Bytes, int StructuralPaylo
 			if (StructuralSegmentEventCount < MaximumStructuralSegmentEvents)
 				StructuralSegmentEvents[StructuralSegmentEventCount++] =
 					{EventTime, static_cast<std::uint64_t>(StructuralPayloadBytes)};
+			// Observer only: freeze before a late initial packet's remaining grant
+			// drains. Neither callback state nor result changes the F1 evaluator.
+			if (!Invalid && !StructuralGrantCurve.Invalid && !StructuralGrantCurve.HasFirstSend &&
+				EventTime >= StructuralGrantCurve.LastObservedAtMicroseconds &&
+				gargantuan::network::FiniteGrantServiceCurve::ZeroFirstSendBreach(
+					StructuralGrantCurve.ActivatedAtMicroseconds, EventTime)) {
+				auto *Observer = SteamNetworkingSocketsLib::GargantuanServiceTimingObserver.load(std::memory_order_acquire);
+				if (Observer && Observer->InitialBreach)
+					Observer->InitialBreach(Observer->Context, ActiveAttributedRetirementToken,
+						StructuralGrantCurve.ActivatedAtMicroseconds, EventTime);
+			}
 			(void)StructuralGrantCurve.FirstSend(ActiveAttributedRetirementToken,
 				static_cast<std::uint64_t>(StructuralPayloadBytes),
 				EventTime);

@@ -19,6 +19,17 @@ struct FiniteGrantServiceCurve {
 	static const std::uint64_t RunningBoundByteMicroseconds =
 		PeerRateBytesPerSecond * RunningHandoffMicroseconds + QuantumBytes * 1000000;
 
+	// Pure diagnostic predicate for a qualified activation and its first
+	// native-positive event. With pre-event D_g == 0 and W_g > 0, F1 has a
+	// positive unmet demand exactly when accrued byte-us exceeds the intercept.
+	// Invalid chronology/exhausted arithmetic cannot certify a measured breach.
+	static bool ZeroFirstSendBreach(std::uint64_t ActivatedAt, std::uint64_t FirstAt) noexcept {
+		if (!ActivatedAt || ActivatedAt == std::numeric_limits<std::uint64_t>::max() || FirstAt < ActivatedAt) return false;
+		const auto Elapsed = FirstAt - ActivatedAt;
+		return Elapsed <= std::numeric_limits<std::uint64_t>::max() / PeerRateBytesPerSecond &&
+			Elapsed * PeerRateBytesPerSecond > FiniteInterceptByteMicroseconds;
+	}
+
 	bool Invalid = false;
 	// Failure is latched for this grant and its ACK gap. A later independently
 	// admitted grant may requalify; EverFailed remains diagnostic history.
