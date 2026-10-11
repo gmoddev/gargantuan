@@ -638,7 +638,7 @@ GargantuanReplaceFeedback("\t// Fill out a message object\n\tCSteamNetworkingMes
 	GargantuanCopy.SetBytes(cbData);
 	// Fill out a message object
 	CSteamNetworkingMessage *pMsg = CSteamNetworkingMessage::New( cbData );]=])
-GargantuanReplaceFeedback("\tmemcpy( pMsg->m_pData, pData, cbData );" "\tmemcpy( pMsg->m_pData, pData, cbData );\n\tGargantuanCopy.Finish();")
+GargantuanReplaceFeedback("\t// Copy in the payload\n\tmemcpy( pMsg->m_pData, pData, cbData );" "\t// Copy in the payload\n\tmemcpy( pMsg->m_pData, pData, cbData );\n\tGargantuanCopy.Finish();")
 GargantuanReplaceFeedback("void CSteamNetworkConnectionBase::FreeResources()\n{\n\tAssertLocksHeldByCurrentThread();" [=[void CSteamNetworkConnectionBase::FreeResources()
 {
 	AssertLocksHeldByCurrentThread();
