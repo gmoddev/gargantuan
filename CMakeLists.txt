@@ -963,6 +963,37 @@ if(BUILD_TESTING)
 			target_compile_options(gargantuan_gns_service_fairness_tests PRIVATE $<IF:$<CONFIG:Debug>,/GR,/GR->)
 		endif()
 		add_test(NAME gargantuan_gns_service_fairness COMMAND gargantuan_gns_service_fairness_tests)
+		if(GARGANTUAN_NATIVE_EGRESS_TEST_HOOKS AND WIN32)
+			add_executable(gargantuan_gns_native_pending_ownership_tests "tests/GnsNativePendingOwnershipTests.cpp")
+			target_compile_features(gargantuan_gns_native_pending_ownership_tests PRIVATE cxx_std_17)
+			target_link_libraries(gargantuan_gns_native_pending_ownership_tests PRIVATE GameNetworkingSockets::static)
+			target_include_directories(gargantuan_gns_native_pending_ownership_tests PRIVATE
+				"${CMAKE_CURRENT_SOURCE_DIR}/cmake/gns"
+				"${gamenetworkingsockets_SOURCE_DIR}/src/steamnetworkingsockets"
+				$<TARGET_PROPERTY:GameNetworkingSockets_s,INCLUDE_DIRECTORIES>)
+			target_compile_definitions(gargantuan_gns_native_pending_ownership_tests PRIVATE
+				$<TARGET_PROPERTY:GameNetworkingSockets_s,COMPILE_DEFINITIONS>)
+			if(MSVC)
+				target_compile_options(gargantuan_gns_native_pending_ownership_tests PRIVATE $<IF:$<CONFIG:Debug>,/GR,/GR->)
+			endif()
+			add_test(NAME gargantuan_gns_native_pending_ownership COMMAND gargantuan_gns_native_pending_ownership_tests)
+			set_tests_properties(gargantuan_gns_native_pending_ownership PROPERTIES TIMEOUT 30 LABELS "network;qualification;native-egress")
+			add_executable(gargantuan_gns_native_egress_worker_tests "tests/GnsNativeEgressWorkerTests.cpp")
+			target_compile_features(gargantuan_gns_native_egress_worker_tests PRIVATE cxx_std_17)
+			target_link_libraries(gargantuan_gns_native_egress_worker_tests PRIVATE GameNetworkingSockets::static)
+			target_include_directories(gargantuan_gns_native_egress_worker_tests PRIVATE
+				"${CMAKE_CURRENT_BINARY_DIR}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/cmake/gns"
+				"${gamenetworkingsockets_SOURCE_DIR}/src/steamnetworkingsockets"
+				$<TARGET_PROPERTY:GameNetworkingSockets_s,INCLUDE_DIRECTORIES>)
+			target_compile_definitions(gargantuan_gns_native_egress_worker_tests PRIVATE
+				$<TARGET_PROPERTY:GameNetworkingSockets_s,COMPILE_DEFINITIONS>)
+			if(MSVC)
+				target_compile_options(gargantuan_gns_native_egress_worker_tests PRIVATE $<IF:$<CONFIG:Debug>,/GR,/GR->)
+			endif()
+			add_test(NAME gargantuan_gns_native_egress_worker COMMAND gargantuan_gns_native_egress_worker_tests)
+			set_tests_properties(gargantuan_gns_native_egress_worker PROPERTIES TIMEOUT 30 LABELS "network;qualification;native-egress")
+		endif()
 		add_executable(gargantuan_gns_capacity_benchmark "tests/GnsCapacityBenchmark.cpp")
 		target_compile_features(gargantuan_gns_capacity_benchmark PRIVATE cxx_std_23)
 		target_link_libraries(gargantuan_gns_capacity_benchmark PRIVATE gargantuan_core GameNetworkingSockets::static)

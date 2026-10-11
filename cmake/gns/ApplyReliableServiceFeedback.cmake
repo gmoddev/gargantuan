@@ -47,16 +47,21 @@ endmacro()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.h 35a8d2721334f5632e042f3165095dcae90ced590b78392cc0f4346fceaba170)
 GargantuanReplaceFeedback("#pragma once" "#pragma once\n#include \"ReliableServiceFeedback.hpp\"\n#include \"AckDiagnostics.hpp\"\n#include \"PromptAckWireBudget.hpp\"\n#include <memory>")
-GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tstd::unique_ptr<GargantuanAckDiagnostics> GargantuanAckTrace;\n\tGargantuanPromptAckWireBudget GargantuanPromptWire;\n\tbool GargantuanPromptFinalGrantAck = false; // Enabled only by funded attributed structural submission.\n\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tbool GargantuanRunningStructuralGrant = false;")
+GargantuanReplaceFeedback("struct LockDebugInfo;" "struct LockDebugInfo;\nstruct SNPPacketSerializeHelper;\nstruct GargantuanNativeEgressTicket;")
+GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tstd::unique_ptr<GargantuanAckDiagnostics> GargantuanAckTrace;\n\tGargantuanPromptAckWireBudget GargantuanPromptWire;\n\tbool GargantuanPromptFinalGrantAck = false; // Enabled only by funded attributed structural submission.\n\tbool GargantuanNativeEgressEnabled = false; // Explicit direct-UDP connection-generation opt-in.\n\tISteamNetworkingSockets *GargantuanTerminalInterface = nullptr;\n\tuint64_t GargantuanTerminalGeneration = 0;\n\tSNPPacketSerializeHelper *GargantuanPendingHelper = nullptr; // Actor-owned until native result reconciliation.\n\tGargantuanNativeEgressTicket *GargantuanPendingTicket = nullptr;\n\tSteamNetworkingMicroseconds GargantuanPendingDeadline = 0;\n\tbool GargantuanPendingCancelRequested = false;\n\tSteamNetworkingMicroseconds GargantuanLastCompletedGnsAt = 0;\n\tbool GargantuanTerminalPurgePending = false;\n\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tbool GargantuanRunningStructuralGrant = false;")
 GargantuanReplaceFeedback("\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;" "\t// A failed SendEncryptedDataChunk queues retry without first-send service.\n\tbool m_bGargantuanEverSent;\n\n\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;")
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.cpp 99e2b190b17993139bd3251f8862b81b58903a119ea456edacfec68f3dd9d65c)
-GargantuanReplaceFeedback("#include \"steamnetworkingsockets_snp.h\"" "#include \"steamnetworkingsockets_snp.h\"\n#include \"ServiceTimingDiagnostics.hpp\"\n#include \"OrdinaryWirePacer.hpp\"")
+GargantuanReplaceFeedback("#include \"steamnetworkingsockets_snp.h\"" "#include \"steamnetworkingsockets_snp.h\"\n#include \"ServiceTimingDiagnostics.hpp\"\n#include \"OrdinaryWirePacer.hpp\"\n#include \"NativeEgressWorker.hpp\"")
 GargantuanReplaceFeedback("struct SNPPacketSerializeHelper\n{" [=[struct SNPPacketSerializeHelper
 {
 	GargantuanOrdinaryWirePacer::Permit GargantuanOrdinaryPermit;
-	bool GargantuanHasData = false;]=])
+	bool GargantuanHasData = false;
+	bool GargantuanHasAck = false;
+	bool GargantuanPromptAck = false;
+	int GargantuanExpectedNativeBytes = 0;]=])
+GargantuanReplaceFeedback("int cbAckBytesWritten = pAfterAcks - pPayloadPtr;" "int cbAckBytesWritten = pAfterAcks - pPayloadPtr;\n\t\t\thelper.GargantuanHasAck = cbAckBytesWritten > 0;")
 GargantuanReplaceFeedback("\t\t|| helper.InFlightPkt().m_pTransport != m_pTransport // transport is not the selected transport" [=[		|| helper.InFlightPkt().m_pTransport != m_pTransport // transport is not the selected transport
 		// A control/ASAP wake cannot bypass the actual DATA reservation.  This
 		// precedes native queue mutation and retains the existing ACK-only path.
@@ -70,6 +75,10 @@ GargantuanReplaceFeedback("\t\t|| helper.InFlightPkt().m_pTransport != m_pTransp
 GargantuanReplaceFeedback("\tbool bEmpty = segmentCollector.IsEmpty();" "\tbool bEmpty = segmentCollector.IsEmpty();\n\thelper.GargantuanHasData = !bEmpty;")
 GargantuanReplaceFeedback("SteamNetworkingMicroseconds CSteamNetworkConnectionBase::SNP_ThinkSendState( SteamNetworkingMicroseconds usecNow )\n{" [=[SteamNetworkingMicroseconds CSteamNetworkConnectionBase::SNP_ThinkSendState( SteamNetworkingMicroseconds usecNow )
 {
+	if (m_senderState.GargantuanPendingTicket) {
+		if (GargantuanReconcileNativeEgressByDeadline(usecNow)) GargantuanDrainPendingReceived();
+		else return usecNow + 1000;
+	}
 	GargantuanServiceTimingSpan GargantuanSender(GargantuanServiceTimingPhase::SnpSender);
 	if (GargantuanSender.Enabled()) {
 		GargantuanSender.SetResult(m_hConnectionSelf); // Observed native handle, never authority.
@@ -77,8 +86,51 @@ GargantuanReplaceFeedback("SteamNetworkingMicroseconds CSteamNetworkConnectionBa
 		if (GargantuanHasRunningStructuralGrant()) GargantuanSender.AddFlags(1);
 	}]=])
 GargantuanReplaceFeedback("void SSNPSenderState::Shutdown()\n{" "void SSNPSenderState::Shutdown()\n{\n\tGargantuanSetRunningStructuralGrant(GargantuanRunningStructuralGrant, false);\n\tGargantuanFeedback.Purged = true; // Purge is never ACK retirement.")
+GargantuanReplaceFeedback("void CSteamNetworkConnectionBase::SNP_ShutdownConnection()\n{\n\tm_senderState.Shutdown();\n\tm_receiverState.Shutdown();\n}" [=[void CSteamNetworkConnectionBase::SNP_ShutdownConnection()
+{
+	if (m_senderState.GargantuanPendingTicket) {
+		m_senderState.GargantuanTerminalPurgePending = true;
+		SetNextThinkTimeASAP();
+		return;
+	}
+	m_senderState.GargantuanTerminalPurgePending = false;
+	m_senderState.Shutdown();
+	m_receiverState.Shutdown();
+	if (m_senderState.GargantuanTerminalGeneration) {
+		GargantuanReliableServiceSnapshot Snapshot;
+		GargantuanPopulateReliableServiceFeedback(Snapshot);
+		if (!GargantuanStoreNativeTerminalEvidence(m_senderState.GargantuanTerminalInterface,
+			m_hConnectionSelf, m_senderState.GargantuanTerminalGeneration, Snapshot))
+			GargantuanFailStopNativeEgress("terminal evidence store failed");
+		m_senderState.GargantuanTerminalGeneration = 0;
+		m_senderState.GargantuanTerminalInterface = nullptr;
+	}
+}]=])
 GargantuanReplaceFeedback("\t\tpMsg->Unlink();\n\t\tpMsg->Release();" "\t\tif (GargantuanAckTrace) GargantuanAckTrace->Record(GargantuanAckDiagnostics::MessageAcked, SteamNetworkingSockets_GetLocalTimestamp(), pMsg->m_nMessageNumber, pMsg->m_cbSize);\n\t\tGargantuanFeedback.AckMessage(pMsg->m_nMessageNumber, pMsg->m_cbSize, info.m_cbHdr);\n\t\tpMsg->Unlink();\n\t\tpMsg->Release();")
-GargantuanReplaceFeedback("\tAssertLocksHeldByCurrentThread( \"SNP_SendPacket\" );" "\tAssertLocksHeldByCurrentThread( \"SNP_SendPacket\" );\n\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->SerializedAckPacket = 0;")
+GargantuanReplaceFeedback("\tAssertLocksHeldByCurrentThread( \"SNP_SendPacket\" );" [=[
+	AssertLocksHeldByCurrentThread( "SNP_SendPacket" );
+	if (m_senderState.GargantuanPendingTicket) return false; // One unresolved numbered packet per connection.
+	if (m_senderState.GargantuanNativeEgressEnabled && GargantuanReplayingNativeDatagrams)
+		return false; // Replay cannot start another send until receive order is restored.
+	if (m_senderState.GargantuanNativeEgressEnabled && GargantuanIsDirectUDP() &&
+		!GargantuanCanQueueNativeEgress()) {
+		m_senderState.GargantuanFeedback.Invalid = true; // Capacity failure before packet/ACK mutation.
+		return false;
+	}
+	ctx.m_bGargantuanUseNativeEgress = m_senderState.GargantuanNativeEgressEnabled &&
+		GargantuanIsDirectUDP();
+	if (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->SerializedAckPacket = 0;]=])
+GargantuanReplaceFeedback("\tSNPPacketSerializeHelper helper;" [=[
+	std::unique_ptr<SNPPacketSerializeHelper> GargantuanPendingCandidate;
+	if (ctx.m_bGargantuanUseNativeEgress)
+		GargantuanPendingCandidate.reset(new (std::nothrow) SNPPacketSerializeHelper());
+	if (ctx.m_bGargantuanUseNativeEgress && !GargantuanPendingCandidate) {
+		m_senderState.GargantuanFeedback.Invalid = true;
+		return false;
+	}
+	SNPPacketSerializeHelper GargantuanStackHelper;
+	SNPPacketSerializeHelper &helper = GargantuanPendingCandidate ? *GargantuanPendingCandidate : GargantuanStackHelper;
+	const bool GargantuanHadRetry = !m_senderState.m_listReadyRetryReliableRange.IsEmpty();]=])
 GargantuanReplaceFeedback("\t\tSNP_RecordReceivedPktNum( nPktNum, usecNow, bScheduleAck );" "\t\tSNP_RecordReceivedPktNum( nPktNum, usecNow, bScheduleAck );\n\t\tif (bScheduleAck && m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Received(usecNow, nPktNum, m_receiverState.TimeWhenFlushAcks());")
 GargantuanReplaceFeedback("\t\tpReliableDecode += cbMsgSize;" "\t\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::MessageReceived, usecNow, nMsgNum, cbMsgSize);\n\t\tpReliableDecode += cbMsgSize;")
 GargantuanReplaceFeedback("\t\tm_receiverState.m_mapPacketGaps.rbegin()->second.m_usecWhenAckPrior = INT64_MAX; // Clear timer, we wrote everything we needed to" "\t\tif (m_senderState.GargantuanAckTrace) {\n\t\t\tm_senderState.GargantuanAckTrace->SerializedAckPacket = nLastPktToAck;\n\t\t\tm_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckSerialized, helper.UsecNow(), nLastPktToAck, 0);\n\t\t}\n\t\tm_receiverState.m_mapPacketGaps.rbegin()->second.m_usecWhenAckPrior = INT64_MAX; // Clear timer, we wrote everything we needed to")
@@ -86,6 +138,7 @@ GargantuanReplaceFeedback("\t// Fit as many blocks as possible." "\tif (m_sender
 GargantuanReplaceFeedback("\t\t\t*pLatestPktNum = LittleWord( uint16( nLastRecvPktNum ) );" "\t\t\t*pLatestPktNum = LittleWord( uint16( nLastRecvPktNum ) );\n\t\t\tif (m_senderState.GargantuanAckTrace) {\n\t\t\t\tm_senderState.GargantuanAckTrace->SerializedAckPacket = nLastRecvPktNum;\n\t\t\t\tm_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckSerialized, helper.UsecNow(), nLastRecvPktNum, 0);\n\t\t\t}")
 GargantuanReplaceFeedback("\t++nAckEnd;\n\n\t#ifdef SNP_ENABLE_PACKETSENDLOG" "\t++nAckEnd;\n\tif (m_senderState.GargantuanAckTrace) {\n\t\tm_senderState.GargantuanAckTrace->SerializedAckPacket = nAckEnd - 1;\n\t\tm_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckSerialized, helper.UsecNow(), nAckEnd - 1, nBlocks);\n\t}\n\n\t#ifdef SNP_ENABLE_PACKETSENDLOG")
 GargantuanReplaceFeedback("\t// OK, we have a plaintext payload.  Encrypt and send it." [=[
+	ctx.m_bGargantuanProtectedEgress = !helper.GargantuanHasData || helper.GargantuanHasAck || GargantuanHadRetry;
 	// The request belongs to the existing packet that completes unique first
 	// transmission, never to enqueue, a segment boundary, or retransmission.
 	if (ctx.m_bGargantuanPromptAckReserved && GargantuanCanReservePromptAck())
@@ -128,6 +181,22 @@ GargantuanReplaceFeedback("\t// OK, we have a plaintext payload.  Encrypt and se
 	}
 	// OK, we have a plaintext payload.  Encrypt and send it.]=])
 GargantuanReplaceFeedback("nBytesSent = helper.InFlightPkt().m_pTransport->SendEncryptedDataChunk(" "nBytesSent = GargantuanFailPromptPacket ? 0 : helper.InFlightPkt().m_pTransport->SendEncryptedDataChunk(")
+GargantuanReplaceFeedback("\tif ( nBytesSent <= 0 )" [=[
+	if (nBytesSent == -1 && ctx.m_pGargantuanNativeEgressTicket && GargantuanPendingCandidate) {
+		Assert(!m_senderState.GargantuanPendingTicket && !m_senderState.GargantuanPendingHelper);
+		helper.GargantuanPromptAck = ctx.m_bGargantuanPromptAck;
+		helper.GargantuanExpectedNativeBytes = ctx.m_nGargantuanQueuedBytes;
+		m_senderState.GargantuanPendingTicket = ctx.m_pGargantuanNativeEgressTicket;
+		m_senderState.GargantuanPendingHelper = GargantuanPendingCandidate.release();
+		m_senderState.GargantuanPendingDeadline = SteamNetworkingSockets_GetLocalTimestamp() + 250000;
+		m_senderState.GargantuanPendingCancelRequested = false;
+		if (!GargantuanRegisterNativePending(this))
+			GargantuanFailStopNativeEgress("pending connection registry exhausted");
+		Assert(GargantuanPendingReceive && !GargantuanPendingReceive->IsActive());
+		GargantuanPendingReceive->Begin();
+		return true;
+	}
+	if ( nBytesSent <= 0 )]=])
 GargantuanReplaceFeedback("\t\t// We have potentially transfered ownership of some reliable messages" [=[
 		if (ctx.m_bGargantuanPromptAck && m_senderState.GargantuanAckTrace)
 			m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::PromptRequestFailed,
@@ -192,6 +261,101 @@ GargantuanReplaceFeedback("\t// We sent a packet.  Track it" [=[
 		GargantuanGrant.StructuralActiveGrantFirstSentBytes < GargantuanGrant.StructuralActiveGrantBytes);
 
 	// We sent a packet.  Track it]=])
+GargantuanReplaceFeedback("// Base class for a list of segments for the same lane" [=[
+bool CSteamNetworkConnectionBase::GargantuanReconcileNativeEgressByDeadline(
+	SteamNetworkingMicroseconds UsecNow)
+{
+	if (GargantuanReconcileNativeEgress()) return true;
+	if (UsecNow < m_senderState.GargantuanPendingDeadline) return false;
+	if (m_senderState.GargantuanPendingCancelRequested)
+		GargantuanFailStopNativeEgress("pre-OS native cancellation exceeded deadline");
+	if (!GargantuanCancelUnstartedNativeEgress(m_senderState.GargantuanPendingTicket)) {
+		// Ready may have been published after our first acquire read.
+		if (GargantuanReconcileNativeEgress()) return true;
+		GargantuanFailStopNativeEgress("begun native send exceeded protected service deadline");
+	}
+	m_senderState.GargantuanPendingCancelRequested = true;
+	m_senderState.GargantuanPendingDeadline = UsecNow + 250000;
+	return GargantuanReconcileNativeEgress();
+}
+
+bool CSteamNetworkConnectionBase::GargantuanReconcileNativeEgress()
+{
+	auto *Ticket = m_senderState.GargantuanPendingTicket;
+	if (!Ticket) return true;
+	GargantuanNativeEgressResult Result{};
+	if (!GargantuanReadNativeEgressResult(Ticket, Result)) return false;
+	auto *Helper = m_senderState.GargantuanPendingHelper;
+	Assert(Helper);
+	const int Bytes = Result.Positive && Result.Bytes == Helper->GargantuanExpectedNativeBytes ? Result.Bytes : 0;
+	if (!Bytes || !Result.CompletedAtMicroseconds || !Result.CompletedAtGnsMicroseconds) {
+		m_senderState.GargantuanLastCompletedGnsAt = 0;
+		if (Result.Positive) m_senderState.GargantuanFeedback.Invalid = true;
+		if (Helper->GargantuanPromptAck && m_senderState.GargantuanAckTrace)
+			m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::PromptRequestFailed,
+				Helper->UsecNow(), m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken, 0);
+		SNP_QueueReliableSegmentsForRetry(Helper->m_insertInflightPkt.second, 0, "Native send fail");
+		for (uint16 SegmentHandle : Helper->InFlightPkt().m_vecReliableSegments) {
+			m_senderState.RemoveRefCountReliableSegment(SegmentHandle);
+			if (m_senderState.GargantuanAckTrace)
+				++m_senderState.GargantuanAckTrace->FailedPacketReferencesReleased;
+		}
+	} else {
+		m_senderState.GargantuanLastCompletedGnsAt = Result.CompletedAtGnsMicroseconds;
+		m_senderState.GargantuanFeedback.NativePacket(Bytes);
+		if (!Helper->GargantuanOrdinaryPermit.Complete(Bytes, Helper->GargantuanHasData))
+			m_senderState.GargantuanFeedback.Invalid = true;
+		GargantuanServiceTimingPacket(Bytes, m_hConnectionSelf);
+		if (m_senderState.GargantuanPromptFinalGrantAck && m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken)
+			m_senderState.GargantuanPromptWire.Charge(Bytes, 48);
+		if (Helper->GargantuanPromptAck && m_senderState.GargantuanAckTrace)
+			m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::PromptRequestSent,
+				Result.CompletedAtMicroseconds, m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken, Bytes);
+		if (m_senderState.GargantuanAckTrace && m_senderState.GargantuanAckTrace->SerializedAckPacket)
+			m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckPacketSent,
+				Result.CompletedAtMicroseconds, m_senderState.GargantuanAckTrace->SerializedAckPacket, Bytes);
+		for (uint16 SegmentHandle : Helper->InFlightPkt().m_vecReliableSegments) {
+			auto &Segment = m_senderState.m_listSentReliableSegments[SegmentHandle];
+			if (!Segment.m_bGargantuanEverSent) {
+				const auto &Counters = m_senderState.GargantuanFeedback;
+				int StructuralBytes = 0;
+				if (Counters.ActiveAttributedRetirementToken &&
+					Counters.ActiveAttributedMessageNumber == uint64_t(Segment.m_pMsg->m_nMessageNumber)) {
+					const int Begin = std::max(Segment.m_nOffset, Segment.m_pMsg->ReliableSendInfo().m_cbHdr);
+					const int End = std::min(Segment.m_nOffset + Segment.m_cbSize,
+						Segment.m_pMsg->ReliableSendInfo().m_cbHdr + Segment.m_pMsg->m_cbSize);
+					StructuralBytes = std::max(0, End - Begin);
+				}
+				Segment.m_bGargantuanEverSent = true;
+				m_senderState.GargantuanFeedback.FirstSend(Segment.m_cbSize, StructuralBytes,
+					Result.CompletedAtMicroseconds);
+			} else m_senderState.GargantuanFeedback.Retransmit(Segment.m_cbSize);
+		}
+		const auto &Grant = m_senderState.GargantuanFeedback;
+		GargantuanSetRunningStructuralGrant(m_senderState.GargantuanRunningStructuralGrant,
+			Grant.StructuralActiveGrantBytes && Grant.StructuralActiveGrantFirstSentBytes > 0 &&
+			Grant.StructuralActiveGrantFirstSentBytes < Grant.StructuralActiveGrantBytes);
+		Helper->InFlightPkt().m_usecWhenSent = Result.CompletedAtGnsMicroseconds;
+		auto Inserted = m_senderState.m_mapInFlightPacketsByPktNum.insert(Helper->m_insertInflightPkt);
+		if (!Inserted.second) GargantuanFailStopNativeEgress("duplicate numbered pending packet");
+		if (!Helper->InFlightPkt().m_vecReliableSegments.empty())
+			m_statsEndToEnd.TrackSentMessageExpectingSeqNumAck(Result.CompletedAtGnsMicroseconds, true);
+		if (m_senderState.m_itNextInFlightPacketToTimeout == m_senderState.m_mapInFlightPacketsByPktNum.end())
+			m_senderState.m_itNextInFlightPacketToTimeout = Inserted.first;
+		m_senderState.MaybeCheckInFlightPacketMap();
+		m_sendRateData.m_flTokenBucket -= (float)Bytes;
+	}
+	GargantuanReleaseNativeEgress(Ticket);
+	GargantuanUnregisterNativePending(this);
+	delete Helper;
+	m_senderState.GargantuanPendingHelper = nullptr;
+	m_senderState.GargantuanPendingTicket = nullptr;
+	m_senderState.GargantuanPendingDeadline = 0;
+	m_senderState.GargantuanPendingCancelRequested = false;
+	return true;
+}
+
+// Base class for a list of segments for the same lane]=])
 GargantuanReplaceFeedback("\tpSendMessage->m_nMessageNumber = ++lane.m_nLastSentMsgNum;" [=[
 	pSendMessage->m_nMessageNumber = ++lane.m_nLastSentMsgNum;
 	if ( pSendMessage->m_nFlags & k_nSteamNetworkingSend_Reliable )
@@ -210,6 +374,12 @@ GargantuanReplaceFeedback("\tpSendMessage->m_nMessageNumber = ++lane.m_nLastSent
 GargantuanReplaceFeedback("\tint nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;" [=[
 	int nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;
 	int nGargantuanStructuralPacketsThisThink = 0;]=])
+GargantuanReplaceFeedback("\t\t// We spent some tokens, do we have any left?" [=[
+		if (m_senderState.GargantuanPendingTicket) return usecNow + 1000;
+		// We spent some tokens, do we have any left?]=])
+GargantuanReplaceFeedback("\t// Start with the time when the receiver needs to flush out ack." [=[
+	if (m_senderState.GargantuanPendingTicket) return usecNow + 1000;
+	// Start with the time when the receiver needs to flush out ack.]=])
 GargantuanReplaceFeedback("\t\t// Sent too many packets in one burst?" [=[
 		// Keep four packets for this structural obligation. Other ordinary
 		// work on an attributed POOLED connection yields after one packet while
@@ -271,8 +441,47 @@ GargantuanReplaceFeedback("\t// Check if the receiver wants to send a NACK." [=[
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b67e44c75c27c10867a863b56e2a0d0ac95849aa116b5274a9ef)
-GargantuanReplaceFeedback("\tint m_cbMaxEncryptedPayload;" "\tint m_cbMaxEncryptedPayload;\n\tbool m_bGargantuanPromptAckReserved = false;\n\tbool m_bGargantuanPromptAck = false;")
+GargantuanReplaceFeedback("#include \"steamnetworkingsockets_snp.h\"" "#include \"steamnetworkingsockets_snp.h\"\n#include \"PendingNativeDatagramQueue.hpp\"\n#include <new>")
+GargantuanReplaceFeedback("\tint m_cbMaxEncryptedPayload;" "\tint m_cbMaxEncryptedPayload;\n\tbool m_bGargantuanPromptAckReserved = false;\n\tbool m_bGargantuanPromptAck = false;\n\tbool m_bGargantuanUseNativeEgress = false;\n\tbool m_bGargantuanProtectedEgress = false;\n\tint m_nGargantuanQueuedBytes = 0;\n\tGargantuanNativeEgressTicket *m_pGargantuanNativeEgressTicket = nullptr;")
 GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=[
+	bool GargantuanConfigureNativeEgress(bool Enabled, uint64_t Generation, ISteamNetworkingSockets *Interface) {
+		if (Enabled && !GargantuanIsDirectUDP()) return false;
+		if (m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken ||
+			m_senderState.GargantuanPendingTicket ||
+			m_senderState.GargantuanTerminalPurgePending) return false;
+		if (!Enabled && (m_senderState.m_cbPendingReliable ||
+			m_senderState.m_cbSentUnackedReliable ||
+			m_senderState.m_mapInFlightPacketsByPktNum.size() > 1)) return false;
+		if (Enabled && !GargantuanPendingReceive)
+			GargantuanPendingReceive.reset(new (std::nothrow) GargantuanPendingNativeDatagramQueue());
+		if (Enabled && !GargantuanPendingReceive) return false;
+		m_senderState.GargantuanNativeEgressEnabled = Enabled;
+		m_senderState.GargantuanTerminalGeneration = Enabled ? Generation : 0;
+		m_senderState.GargantuanTerminalInterface = Enabled ? Interface : nullptr;
+		return true;
+	}
+	void GargantuanMarkNativeEgressInvalid() { m_senderState.GargantuanFeedback.Invalid = true; }
+	bool GargantuanReadPendingReceiveJournal(uint32_t &Count, uint32_t &HighWater, bool &Overflow) const {
+		if (!GargantuanPendingReceive) return false;
+		Count = static_cast<uint32_t>(GargantuanPendingReceive->Size());
+		HighWater = static_cast<uint32_t>(GargantuanPendingReceive->MaximumObserved());
+		Overflow = GargantuanPendingReceive->HasOverflowed();
+		return true;
+	}
+	GargantuanNativeEgressTicket *GargantuanNativePendingTicket() const { return m_senderState.GargantuanPendingTicket; }
+	uint64_t GargantuanNativeTerminalGeneration() const { return m_senderState.GargantuanTerminalGeneration; }
+	bool GargantuanNativeTerminalPurgePending() const { return m_senderState.GargantuanTerminalPurgePending; }
+	bool GargantuanNativePurged() const { return m_senderState.GargantuanFeedback.Purged; }
+	void GargantuanFinishNativeTerminalPurge() { if (m_senderState.GargantuanTerminalPurgePending) SNP_ShutdownConnection(); }
+	std::unique_ptr<GargantuanPendingNativeDatagramQueue> GargantuanPendingReceive;
+	bool GargantuanReplayingNativeDatagrams = false;
+	bool GargantuanNativeEgressFeedbackComplete() const {
+		return !m_senderState.GargantuanPendingTicket &&
+			(!GargantuanPendingReceive || !GargantuanPendingReceive->IsActive());
+	}
+	bool GargantuanReconcileNativeEgress();
+	bool GargantuanReconcileNativeEgressByDeadline(SteamNetworkingMicroseconds UsecNow);
+	void GargantuanDrainPendingReceived();
 	virtual bool GargantuanIsDirectUDP() const { return false; }
 	bool GargantuanArmPromptFailure(bool AtSocket) {
 		if (!m_senderState.GargantuanPromptFinalGrantAck || !m_senderState.GargantuanAckTrace ||
@@ -346,22 +555,139 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 	}
 	// Caller holds the existing connection lock. Direct fields avoid a second
 	// mutable status sample or the rate-estimator side effects of realtime status.
-	void GargantuanPopulateReliableServiceFeedback(GargantuanReliableServiceSnapshot &Result) const {
+	bool GargantuanPopulateReliableServiceFeedback(GargantuanReliableServiceSnapshot &Result) const {
+		if (!GargantuanNativeEgressFeedbackComplete()) {
+			Result = {};
+			Result.Counters.Invalid = true;
+			return false;
+		}
 		GargantuanCopyReliableServiceFeedback(m_senderState.GargantuanFeedback,
 			m_senderState.m_cbPendingReliable, m_senderState.m_cbSentUnackedReliable,
 			static_cast<int>(GetState()), Result);
+		return true;
 	}
 
 	/// Called when we close the connection locally]=])
 GargantuanWriteFeedbackSource()
 
+GargantuanReadFeedbackSource(steamnetworkingsockets_connections.cpp 724eb5215fd2ed66e691c4ac798405531b973e499f3aee26c8d9f101f6bd0ae9)
+GargantuanReplaceFeedback("#include \"steamnetworkingsockets_connections.h\"" "#include \"steamnetworkingsockets_connections.h\"\n#include \"NativeEgressWorker.hpp\"")
+GargantuanReplaceFeedback("void CSteamNetworkConnectionBase::FreeResources()\n{\n\tAssertLocksHeldByCurrentThread();" [=[void CSteamNetworkConnectionBase::FreeResources()
+{
+	AssertLocksHeldByCurrentThread();
+	// Normal terminal Think reconciles asynchronously. Forced FreeResources is
+	// the final lifetime fence, including direct destruction paths.
+	if (auto *Ticket = m_senderState.GargantuanPendingTicket) {
+		GargantuanCancelUnstartedNativeEgress(Ticket);
+		GargantuanNativeEgressResult Result{};
+		if (!GargantuanWaitNativeEgressResult(Ticket, 250, Result))
+			GargantuanFailStopNativeEgress("forced connection free with unresolved native send");
+		if (!GargantuanReconcileNativeEgress())
+			GargantuanFailStopNativeEgress("forced connection free cannot reconcile native send");
+		GargantuanDrainPendingReceived();
+		SNP_ShutdownConnection();
+	}]=])
+GargantuanReplaceFeedback("void CSteamNetworkConnectionBase::Think( SteamNetworkingMicroseconds usecNow )\n{" [=[void CSteamNetworkConnectionBase::Think( SteamNetworkingMicroseconds usecNow )
+{]=])
+GargantuanReplaceFeedback("\t// Check our state\n\tswitch ( m_eConnectionState )\n\t{\n\t\tcase k_ESteamNetworkingConnectionState_Dead:\n\t\tcase k_ESteamNetworkingConnectionState_None:\n\t\tdefault:\n\t\t\t// WAT" [=[
+	if (m_senderState.GargantuanTerminalPurgePending) {
+		if (!GargantuanReconcileNativeEgressByDeadline(usecNow)) {
+			SetNextThinkTime(usecNow + 1000);
+			return;
+		}
+		GargantuanDrainPendingReceived();
+		SNP_ShutdownConnection();
+	}
+	// Check our state
+	switch ( m_eConnectionState )
+	{
+		case k_ESteamNetworkingConnectionState_Dead:
+		case k_ESteamNetworkingConnectionState_None:
+		default:
+			// WAT]=])
+GargantuanWriteFeedbackSource()
+
 GargantuanReadFeedbackSource(steamnetworkingsockets_udp.h ea4f517b674eb15f367c8b443a90738bebdcfb3f892b2a59ba26829eabf4ccea)
+GargantuanReplaceFeedback("#pragma once" "#pragma once\n#include \"NativeEgressWorker.hpp\"")
+GargantuanReplaceFeedback("\tvirtual bool SendDataPacket( SteamNetworkingMicroseconds usecNow ) override;" "\tvirtual bool SendDataPacket( SteamNetworkingMicroseconds usecNow ) override;\n\tvirtual GargantuanNativeEgressQueueStatus GargantuanQueueNativeDatagram( int ChunkCount, const iovec *Chunks, int TotalBytes, bool Protected, GargantuanNativeEgressTicket *&Ticket );\n\tvoid GargantuanReplayReceivedData(const uint8 *Packet, int Bytes, SteamNetworkingMicroseconds ReceivedAtMicroseconds) { Received_Data(Packet, Bytes, ReceivedAtMicroseconds); }")
+GargantuanReplaceFeedback("\tvirtual bool SendPacketGather( int nChunks, const iovec *pChunks, int cbSendTotal ) override;" "\tvirtual bool SendPacketGather( int nChunks, const iovec *pChunks, int cbSendTotal ) override;\n\tvirtual GargantuanNativeEgressQueueStatus GargantuanQueueNativeDatagram( int ChunkCount, const iovec *Chunks, int TotalBytes, bool Protected, GargantuanNativeEgressTicket *&Ticket ) override;")
 GargantuanReplaceFeedback("\tint m_nStatsNeed;" "\tint m_nStatsNeed;\n\tint m_nGargantuanTracerReady = 0;")
 GargantuanReplaceFeedback("\tCSteamNetworkConnectionUDP( CSteamNetworkingSockets *pSteamNetworkingSocketsInterface, ConnectionScopeLock &scopeLock );" "\tbool GargantuanIsDirectUDP() const override { return true; }\n\tCSteamNetworkConnectionUDP( CSteamNetworkingSockets *pSteamNetworkingSocketsInterface, ConnectionScopeLock &scopeLock );")
 GargantuanReplaceFeedback("\tvoid Trim( int cbHdrOutSpaceRemaining );" "\tvoid GargantuanReservePromptAck(size_t HeaderBytes, CSteamNetworkConnectionBase &Connection);\n\tvoid Trim( int cbHdrOutSpaceRemaining );")
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_udp.cpp a60888c40ea5a814485e56c1c528774d05df408130137fd909f66fc25d0aee2e)
+GargantuanReplaceFeedback("#include \"steamnetworkingsockets_udp.h\"" "#include \"steamnetworkingsockets_udp.h\"\n#include \"NativeEgressWorker.hpp\"")
+GargantuanReplaceFeedback("void CConnectionTransportUDPBase::Received_Data( const uint8 *pPkt, int cbPkt, SteamNetworkingMicroseconds usecNow )" [=[
+void CSteamNetworkConnectionBase::GargantuanDrainPendingReceived()
+{
+	auto *Queue = GargantuanPendingReceive.get();
+	if (!Queue || !Queue->IsActive() || m_senderState.GargantuanPendingTicket) return;
+	GargantuanReplayingNativeDatagrams = true;
+	GargantuanPendingNativeDatagramQueue::Datagram Datagram;
+	while (Queue->Take(Datagram)) {
+		if (!m_pTransport || !GargantuanIsDirectUDP()) {
+			m_senderState.GargantuanFeedback.Invalid = true;
+			continue;
+		}
+		static_cast<CConnectionTransportUDPBase *>(m_pTransport)->GargantuanReplayReceivedData(
+			Datagram.Bytes.data(), Datagram.Size,
+			std::max(Datagram.ReceivedAtMicroseconds, m_senderState.GargantuanLastCompletedGnsAt));
+	}
+	if (Queue->HasOverflowed()) m_senderState.GargantuanFeedback.Invalid = true;
+	if (!Queue->End()) GargantuanFailStopNativeEgress("pending receive replay incomplete");
+	GargantuanReplayingNativeDatagrams = false;
+}
+
+void CConnectionTransportUDPBase::Received_Data( const uint8 *pPkt, int cbPkt, SteamNetworkingMicroseconds usecNow )]=])
+GargantuanReplaceFeedback("int CConnectionTransportUDPBase::SendEncryptedDataChunk( const void *pChunk, int cbChunk, SendPacketContext_t &ctxBase )" [=[
+GargantuanNativeEgressQueueStatus CConnectionTransportUDPBase::GargantuanQueueNativeDatagram(
+	int, const iovec *, int, bool, GargantuanNativeEgressTicket *&) {
+	return GargantuanNativeEgressQueueStatus::Disabled;
+}
+
+int CConnectionTransportUDPBase::SendEncryptedDataChunk( const void *pChunk, int cbChunk, SendPacketContext_t &ctxBase )]=])
+GargantuanReplaceFeedback("\t// Send it\n\tif ( SendPacketGather( 2, gather, cbSend ) )" [=[
+	// The numbered packet is now immutable.  A queued attempt is not a
+	// positive send; SNP retains its packet and segment references until the
+	// actor receives the actual OS result.
+	if (ctx.m_bGargantuanUseNativeEgress) {
+		GargantuanNativeEgressTicket *Ticket = nullptr;
+		const auto Status = GargantuanQueueNativeDatagram(2, gather, cbSend,
+			ctx.m_bGargantuanProtectedEgress || ctx.msg.has_stats(), Ticket);
+		if (Status == GargantuanNativeEgressQueueStatus::Queued && Ticket) {
+			ctx.m_pGargantuanNativeEgressTicket = Ticket;
+			ctx.m_nGargantuanQueuedBytes = cbSend;
+			return -1; // Distinct pending result; never native service.
+		}
+		m_connection.GargantuanMarkNativeEgressInvalid();
+		return 0; // Rejected before OS execution; ordinary retry ownership.
+	}
+	// Send it
+	if ( SendPacketGather( 2, gather, cbSend ) )]=])
+GargantuanReplaceFeedback("\tconst uint8 *pIn = pPkt + sizeof(*hdr);" [=[
+	// Accept no ACK, sequence or stats side effects while a local numbered
+	// packet has an unresolved native outcome.  Overflow is packet loss at the
+	// UDP boundary, and invalidates qualification rather than fabricating ACK
+	// history or F1 progress.
+	if (auto *Queue = m_connection.GargantuanPendingReceive.get()) {
+		if (Queue->IsActive() && !m_connection.GargantuanReplayingNativeDatagrams) {
+			if (!Queue->Push(pPkt, cbPkt, usecNow))
+				m_connection.GargantuanMarkNativeEgressInvalid();
+			return;
+		}
+	}
+	const uint8 *pIn = pPkt + sizeof(*hdr);]=])
+GargantuanReplaceFeedback("bool CConnectionTransportUDP::SendPacketGather( int nChunks, const iovec *pChunks, int cbSendTotal )" [=[
+GargantuanNativeEgressQueueStatus CConnectionTransportUDP::GargantuanQueueNativeDatagram(
+	int ChunkCount, const iovec *Chunks, int TotalBytes, bool Protected,
+	GargantuanNativeEgressTicket *&Ticket) {
+	if (!m_pSocket) return GargantuanNativeEgressQueueStatus::Rejected;
+	m_connection.m_statsEndToEnd.TrackSentPacket(TotalBytes);
+	return GargantuanQueueNativeEgress(m_pSocket, ChunkCount, Chunks, TotalBytes, Protected, Ticket);
+}
+
+bool CConnectionTransportUDP::SendPacketGather( int nChunks, const iovec *pChunks, int cbSendTotal )]=])
 GargantuanReplaceFeedback("\tconst uint8 *pIn = pPkt + sizeof(*hdr);" "\t// Charge once after header/connection/state association, before decrypt can\n\t// reject a duplicate, old sequence, or crypto-invalid consumed datagram.\n\tm_connection.GargantuanRecordIncomingWire(cbPkt);\n\tconst uint8 *pIn = pPkt + sizeof(*hdr);")
 GargantuanReplaceFeedback("\tif ( SendPacketGather( 2, gather, cbSend ) )" "\t// Distinct opt-in socket failure: preserve packet-number and TrackSentStats\n\t// mutation, but never transmit a packet and then pretend it failed.\n\tif ( !m_connection.GargantuanFailSocketSend(ctx.m_bGargantuanPromptAck) && SendPacketGather( 2, gather, cbSend ) )")
 GargantuanReplaceFeedback("\t\treturn cbSend;\n\treturn 0;" [=[
@@ -411,6 +737,118 @@ GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(csteamnetworkingsockets.cpp 2b260c05cc8c262e785387ea3d08eee74cc03b6eed00493e961a82c05dec5451)
 GargantuanReplaceFeedback("static CSteamNetworkListenSocketBase *GetListenSocketByHandle" [=[
+static CSteamNetworkConnectionBase *GargantuanPendingConnections[64]{};
+
+bool GargantuanRegisterNativePending(CSteamNetworkConnectionBase *Connection) noexcept {
+	SteamNetworkingGlobalLock::AssertHeldByCurrentThread();
+	if (!Connection) return false;
+	for (auto *Entry : GargantuanPendingConnections) if (Entry == Connection) return false;
+	for (auto &Entry : GargantuanPendingConnections) {
+		if (!Entry) { Entry = Connection; return true; }
+	}
+	return false;
+}
+
+void GargantuanUnregisterNativePending(CSteamNetworkConnectionBase *Connection) noexcept {
+	SteamNetworkingGlobalLock::AssertHeldByCurrentThread();
+	for (auto &Entry : GargantuanPendingConnections) {
+		if (Entry == Connection) { Entry = nullptr; return; }
+	}
+	GargantuanFailStopNativeEgress("pending connection registry missing entry");
+}
+
+void GargantuanWakeReadyNativeEgressConnections() noexcept {
+	SteamNetworkingGlobalLock::AssertHeldByCurrentThread();
+	for (auto *Connection : GargantuanPendingConnections) {
+		if (!Connection) continue;
+		ConnectionScopeLock Lock(*Connection);
+		GargantuanNativeEgressResult Result{};
+		if (GargantuanReadNativeEgressResult(Connection->GargantuanNativePendingTicket(), Result))
+			Connection->SetNextThinkTimeASAP();
+	}
+}
+
+bool GargantuanConfigureNativeEgress(ISteamNetworkingSockets *Interface, uint32 Handle,
+	bool Enabled, uint64_t *Generation) {
+	if (Generation) *Generation = 0;
+	SteamNetworkingGlobalLock GlobalLock("GargantuanNativeEgressConfigure");
+	ConnectionScopeLock Lock;
+	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanNativeEgress");
+	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface) return false;
+	uint64_t ReservedGeneration = 0;
+	if (Enabled && (!GargantuanCanQueueNativeEgress() ||
+		!GargantuanReserveNativeTerminalEvidence(Interface, Handle, ReservedGeneration))) return false;
+	const uint64_t PriorGeneration = Connection->GargantuanNativeTerminalGeneration();
+	if (!Connection->GargantuanConfigureNativeEgress(Enabled, ReservedGeneration, Interface)) {
+		if (ReservedGeneration) GargantuanReleaseNativeTerminalEvidence(Interface, Handle, ReservedGeneration);
+		return false;
+	}
+	if (!Enabled && PriorGeneration &&
+		!GargantuanReleaseNativeTerminalEvidence(Interface, Handle, PriorGeneration))
+		GargantuanFailStopNativeEgress("native opt-out lost terminal reservation");
+	if (Generation) *Generation = ReservedGeneration;
+	return true;
+}
+
+bool GargantuanConfigureNativeEgressWorkers(ISteamNetworkingSockets *Interface,
+	bool Enabled, unsigned Workers) {
+	if (!Interface) return false;
+	SteamNetworkingGlobalLock GlobalLock("GargantuanNativeEgressWorkers");
+	return GargantuanConfigureNativeEgress(Enabled, Workers);
+}
+
+bool GargantuanReadPendingNativeReceiveJournal(ISteamNetworkingSockets *Interface,
+	uint32 Handle, uint32_t &Count, uint32_t &HighWater, bool &Overflow) {
+	ConnectionScopeLock Lock;
+	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanPendingReceiveJournal");
+	return Connection && Connection->m_pSteamNetworkingSocketsInterface == Interface &&
+		Connection->GargantuanReadPendingReceiveJournal(Count, HighWater, Overflow);
+}
+
+bool GargantuanDrainNativeConnection(ISteamNetworkingSockets *Interface,
+	uint32 Handle, uint64_t Generation, uint32 TimeoutMilliseconds) {
+	if (!Interface || !Generation) return false;
+	SteamNetworkingGlobalLock GlobalLock("GargantuanNativeEgressDrainConnection");
+	ConnectionScopeLock Lock;
+	auto *Connection = GetConnectionByHandle(Handle, Lock);
+	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface ||
+		Connection->GargantuanNativeTerminalGeneration() != Generation) return false;
+	if (auto *Ticket = Connection->GargantuanNativePendingTicket()) {
+		GargantuanCancelUnstartedNativeEgress(Ticket);
+		GargantuanNativeEgressResult Result{};
+		if (!GargantuanWaitNativeEgressResult(Ticket, TimeoutMilliseconds, Result))
+			GargantuanFailStopNativeEgress("connection drain exceeded bounded OS call");
+		if (!Connection->GargantuanReconcileNativeEgress())
+			GargantuanFailStopNativeEgress("connection drain result not visible");
+		Connection->GargantuanDrainPendingReceived();
+	}
+	Connection->GargantuanFinishNativeTerminalPurge();
+	return Connection->GargantuanNativePurged();
+}
+
+bool GargantuanDrainNativeEgress(ISteamNetworkingSockets *Interface, uint32 TimeoutMilliseconds) {
+	if (!Interface) return false;
+	{
+		SteamNetworkingGlobalLock GlobalLock("GargantuanNativeEgressFence");
+		GargantuanFenceNativeEgress();
+	}
+	if (!GargantuanWaitNativeEgressIdle(TimeoutMilliseconds))
+		GargantuanFailStopNativeEgress("global drain exceeded bounded OS call");
+	SteamNetworkingGlobalLock GlobalLock("GargantuanNativeEgressDrain");
+	FOR_EACH_HASHMAP(g_mapConnections, Index) {
+		auto *Connection = g_mapConnections[Index];
+		if (Connection->m_pSteamNetworkingSocketsInterface != Interface) continue;
+		ConnectionScopeLock Lock(*Connection);
+		if (Connection->GargantuanNativePendingTicket()) {
+			if (!Connection->GargantuanReconcileNativeEgress())
+				GargantuanFailStopNativeEgress("global drain result not visible");
+			Connection->GargantuanDrainPendingReceived();
+		}
+		Connection->GargantuanFinishNativeTerminalPurge();
+	}
+	return true;
+}
+
 bool GargantuanArmPromptFailure(ISteamNetworkingSockets *Interface, uint32 Handle, bool AtSocket) {
 	ConnectionScopeLock Lock;
 	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanPromptFailure");
@@ -446,8 +884,7 @@ bool GargantuanReadNativeFeedback(ISteamNetworkingSockets *Interface, uint32 Han
 	ConnectionScopeLock Lock;
 	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanReliableServiceFeedback");
 	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface) return false;
-	Connection->GargantuanPopulateReliableServiceFeedback(Result);
-	return true;
+	return Connection->GargantuanPopulateReliableServiceFeedback(Result);
 }
 
 static CSteamNetworkListenSocketBase *GetListenSocketByHandle]=])

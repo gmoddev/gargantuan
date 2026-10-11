@@ -161,6 +161,30 @@ inline bool RunPooledReliableServiceProductionTests() {
 			Check(R.Valid && !R.Qualified && !L.Offer,
 				"late catch-up cannot erase an earlier queued-offer failure");
 		});
+		Test("IncompleteNativeResultPreservesEvidenceFrontier", [&] {
+			Ledger L; Sample S{.Connection = Id, .State = ConnectionState::Connected};
+			S.ObservedAtMicroseconds = 1'000'000;
+			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Qualified,
+				"complete baseline qualifies");
+			Check(L.PublishOffer(7, 77, 1'000'000), "accepted offer");
+			auto R = L.Observe(Id, {77, 77, 0}, {}, 1'001'000, 7, 77);
+			Check(R.Valid && !R.Available && !R.Qualified && !L.ServiceEligible &&
+				R.ObservedAtMicroseconds == 1'000'000 && L.Previous &&
+				L.Previous->ObservedAtMicroseconds == 1'000'000 && L.Offer &&
+				L.Accepted.Structural == 77 && !L.StructuralRetired,
+				"pending native result cannot publish corrected service or release debt");
+			R = L.Observe(Id, {77, 77, 0}, {}, 1'060'001, 7, 77);
+			Check(R.Valid && !R.Available && !R.Qualified &&
+				R.ObservedAtMicroseconds == 1'000'000 && L.Offer,
+				"missing result cannot extend fifty-millisecond freshness");
+			S.ObservedAtMicroseconds = 1'060'002;
+			S.ActiveAttributedRetirementToken = 7; S.ActiveAttributedMessageNumber = 9;
+			S.StructuralPayloadBytesFirstSent = 77; S.UniqueReliableStreamBytesFirstSent = 77;
+			S.StructuralServiceFailed = true;
+			R = L.Observe(Id, {77, 77, 0}, S, 1'060'002, 7, 77);
+			Check(R.Valid && R.Available && !R.Qualified && !L.ServiceEligible && !L.Offer,
+				"late native result preserves real failed F1 history");
+		});
 		Test("SuccessfulRequalificationCanRestoreGrantHealth", [&] {
 			Ledger L; Sample S{.Connection = Id, .State = ConnectionState::Connected};
 			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid, "baseline");
@@ -575,6 +599,6 @@ inline bool RunPooledReliableServiceProductionTests() {
 		std::cerr << "[Network:PooledProduction] FAIL " << Error.what() << '\n'; return false;
 	}
 	std::cout << "[Network:PooledProduction] cases=" << Passed << " PASS\n";
-	return Passed == 17;
+	return Passed == 18;
 }
 }

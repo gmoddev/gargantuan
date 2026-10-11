@@ -62,7 +62,14 @@ struct PooledReliableServiceFeedback {
 		OrdinaryDebt += Added; GameplayLower += GameAdded; GameplayUpper += GameAdded;
 		Accepted = Created;
 		Output.Valid = true;
-		if (!Sample) return Output; // Retain all prior debt while feedback is missing.
+		if (!Sample) {
+			// An unresolved native result cannot qualify new service or age an old
+			// observation into a fresh one. Retain exact debt and the last genuine
+			// evidence time until a complete native snapshot can be reconciled.
+			Output.ObservedAtMicroseconds = Previous ? Previous->ObservedAtMicroseconds : 0;
+			ServiceEligible = false;
+			return Output;
+		}
 		const auto &S = *Sample;
 		if (!S.CountersValid || S.ObservedAtMicroseconds > Now ||
 			S.UniqueReliableStreamBytesAcked > S.UniqueReliableStreamBytesFirstSent ||

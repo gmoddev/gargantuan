@@ -436,6 +436,63 @@ inline bool Run() {
 		GargantuanSetRunningStructuralGrant(SecondSender, false);
 		Require(!GargantuanHasRunningStructuralGrant(), "last completion or shutdown clears the wake hint");
 	});
+	Case("NativeTerminalRegistryGenerationAndCapacity", [] {
+		using namespace SteamNetworkingSocketsLib;
+		// Registry identity is compared only; no GNS API dereferences this value.
+		auto *Interface = reinterpret_cast<ISteamNetworkingSockets *>(std::uintptr_t{1});
+		constexpr std::uint32_t Handle = 0x70000001;
+		std::uint64_t FirstGeneration = 0;
+		Require(GargantuanReserveNativeTerminalEvidence(Interface, Handle, FirstGeneration) && FirstGeneration,
+			"native terminal reserves one exact handle generation");
+		std::uint64_t Duplicate = 0;
+		Require(!GargantuanReserveNativeTerminalEvidence(Interface, Handle, Duplicate),
+			"unconsumed terminal handle cannot alias another generation");
+		GargantuanReliableServiceSnapshot Snapshot{};
+		Snapshot.Counters.Purged = true;
+		Snapshot.ObservedAtMicroseconds = 123;
+		Require(GargantuanStoreNativeTerminalEvidence(Interface, Handle, FirstGeneration, Snapshot),
+			"purged terminal receipt stores once");
+		Require(!GargantuanStoreNativeTerminalEvidence(Interface, Handle, FirstGeneration, Snapshot),
+			"duplicate purge cannot overwrite terminal evidence");
+		GargantuanReliableServiceSnapshot Taken{};
+		Require(!GargantuanTakeNativeTerminalFeedback(Interface, Handle, FirstGeneration + 1, Taken),
+			"wrong generation cannot take an old terminal");
+		Require(GargantuanTakeNativeTerminalFeedback(Interface, Handle, FirstGeneration, Taken) &&
+			Taken.Counters.Purged && Taken.ObservedAtMicroseconds == 123,
+			"exact generation takes immutable terminal receipt");
+		Require(!GargantuanTakeNativeTerminalFeedback(Interface, Handle, FirstGeneration, Taken),
+			"terminal receipt is consumed exactly once");
+		std::uint64_t NextGeneration = 0;
+		Require(GargantuanReserveNativeTerminalEvidence(Interface, Handle, NextGeneration) &&
+			NextGeneration > FirstGeneration, "same native handle reuses a fresh terminal generation");
+		Require(!GargantuanStoreNativeTerminalEvidence(Interface, Handle, FirstGeneration, Snapshot) &&
+			!GargantuanTakeNativeTerminalFeedback(Interface, Handle, FirstGeneration, Taken),
+			"stale generation cannot store or consume the replacement receipt");
+		Require(GargantuanReleaseNativeTerminalEvidence(Interface, Handle, NextGeneration),
+			"unused replacement reservation releases exactly once");
+
+		struct Reservations {
+			ISteamNetworkingSockets *Interface;
+			std::vector<std::pair<std::uint32_t, std::uint64_t>> Values;
+			~Reservations() {
+				for (const auto &[ValueHandle, Generation] : Values)
+					(void)GargantuanReleaseNativeTerminalEvidence(Interface, ValueHandle, Generation);
+			}
+		} Held{Interface};
+		const auto Baseline = GargantuanNativeTerminalEvidenceReserved();
+		const auto Capacity = GargantuanNativeTerminalEvidenceCapacity();
+		Require(Capacity == 64 && Baseline < Capacity, "native terminal registry has finite spare capacity");
+		for (std::uint32_t Index = 0; Index < Capacity - Baseline; ++Index) {
+			const auto ValueHandle = 0x71000000u + Index;
+			std::uint64_t Generation = 0;
+			Require(GargantuanReserveNativeTerminalEvidence(Interface, ValueHandle, Generation) && Generation,
+				"each capacity slot reserves one immutable generation");
+			Held.Values.emplace_back(ValueHandle, Generation);
+		}
+		std::uint64_t OverflowGeneration = 0;
+		Require(!GargantuanReserveNativeTerminalEvidence(Interface, 0x72000000u, OverflowGeneration) &&
+			!OverflowGeneration, "full terminal registry rejects before accepting more native work");
+	});
 	Case("SnapshotOverhead", [] {
 		OwnedPair Owner; auto &Pair = Owner.Pair;
 		const auto Before = Sample(Pair);
@@ -453,7 +510,7 @@ inline bool Run() {
 			<< " terminal_vector_bytes=" << sizeof(std::vector<std::optional<Feedback>>)
 			<< " snapshot_mean_ns=" << Elapsed / Count << " samples=" << Count << '\n';
 	});
-	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=11\n";
-	return Passed == 11;
+	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=12\n";
+	return Passed == 12;
 }
 }

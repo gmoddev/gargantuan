@@ -220,8 +220,51 @@ GargantuanReplaceWake("\t// We're back awake.  Grab the lock again" [=[	SteamNet
 	// We're back awake.  Grab the lock again]=])
 GargantuanReplaceWake("\t\tif ( SteamNetworkingGlobalLock::TryLock( \"ServiceThread\", 20 ) )" [=[		GargantuanLockWait.AddCount();
 		if ( SteamNetworkingGlobalLock::TryLock( "ServiceThread", 20 ) )]=])
+GargantuanReplaceWake("\tIThinker::Thinker_ProcessThinkers();" [=[	GargantuanWakeReadyNativeEgressConnections();
+	IThinker::Thinker_ProcessThinkers();]=])
 GargantuanReplaceWake("\t// If we waited a long time, then that's probably bad.  Spew about it" [=[	GargantuanLockWait.Finish();
 	// If we waited a long time, then that's probably bad.  Spew about it]=])
+
+# The opt-in raw worker owns copied OS arguments and a generation-safe lease.
+# It is included in this final socketthread patch because this file's pinned
+# original/applied guard rejects a second writer on reconfigure.
+GargantuanReplaceWake("#include <atomic>" [=[#include <atomic>
+#include <array>
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <cstring>
+#include "NativeEgressWorker.hpp"]=])
+GargantuanReplaceWake("\tSOCKET m_socket;" [=[	SOCKET m_socket;
+	std::uint64_t m_GargantuanEgressGeneration = 0;
+	unsigned m_GargantuanEgressLeases = 0;
+	bool m_GargantuanEgressClosing = false;]=])
+GargantuanReplaceWake("bool CRawUDPSocketImpl::BSendRawPacketGather( int nChunks" [=[#include "NativeEgressWorker.inc"
+
+bool CRawUDPSocketImpl::BSendRawPacketGather( int nChunks]=])
+GargantuanReplaceWake("\t// Set global flag to remember that at least once socket needs to be cleaned up\n\ts_bRawSocketPendingDestruction = true;" [=[	// Fence queued native calls before this raw descriptor can be closed.
+	GargantuanFenceSocketNativeEgress(this);
+	#ifdef _WIN32
+		if (m_GargantuanEgressLeases && WSAEventSelect(m_socket, nullptr, 0) != 0)
+			GargantuanFailStopNativeEgress("closed leased socket retained receive events");
+	#endif
+	// Set global flag to remember that at least once socket needs to be cleaned up
+	s_bRawSocketPendingDestruction = true;]=])
+GargantuanReplaceWake("\t\t\tAssert( pSock->m_callback.m_fnCallback );" [=[			Assert( pSock->m_callback.m_fnCallback ||
+				(pSock->m_GargantuanEgressClosing && pSock->m_GargantuanEgressLeases));]=])
+GargantuanReplaceWake("\t\t\tCRawUDPSocketImpl *pSock = s_vecRawSockets[ idx ];\n\n\t\t\t// Check if this socket has anything" [=[			CRawUDPSocketImpl *pSock = s_vecRawSockets[ idx ];
+			if (!pSock->m_callback.m_fnCallback) continue; // Retired native lease; no receive callback.
+
+			// Check if this socket has anything]=])
+GargantuanReplaceWake("\t\tif ( !s_vecRawSockets[i]->m_callback.m_fnCallback )\n\t\t{\n\t\t\tdelete s_vecRawSockets[i];" [=[		if ( !s_vecRawSockets[i]->m_callback.m_fnCallback &&
+			s_vecRawSockets[i]->m_GargantuanEgressLeases == 0 )
+		{
+			delete s_vecRawSockets[i];]=])
+GargantuanReplaceWake("\tAssert( !s_bRawSocketPendingDestruction );\n\n\t#ifdef USE_POLL" [=[	for (const auto *Socket : s_vecRawSockets)
+		if (!Socket->m_callback.m_fnCallback && Socket->m_GargantuanEgressLeases != 0)
+			s_bRawSocketPendingDestruction = true;
+
+	#ifdef USE_POLL]=])
 
 if(NOT EXISTS "${GargantuanWakePath}.gargantuan-wake-original")
 	file(WRITE "${GargantuanWakePath}.gargantuan-wake-original" "${GargantuanWakeOriginal}")

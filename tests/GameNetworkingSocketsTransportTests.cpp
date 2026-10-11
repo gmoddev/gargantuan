@@ -22,6 +22,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <variant>
@@ -192,6 +193,86 @@ namespace {
 			(void)Pair.Server->Stop({DisconnectReason::LocalShutdown, "Test server shutdown"});
 	}
 
+	void TestExclusivePooledDomain() {
+		std::cout << "[Networking:GNS] exclusive pooled execution domain\n" << std::flush;
+		GameNetworkingSocketsTransportConfiguration WorkerOnly;
+		WorkerOnly.EnableNativeEgressWorker = true;
+		Check(!WorkerOnly.IsValid(), "native egress worker requires exclusive pooled domain");
+		GameNetworkingSocketsTransportConfiguration StrictConfiguration;
+		StrictConfiguration.RequireExclusivePooledDomain = true;
+		Check(StrictConfiguration.IsValid(), "strict pooled domain is a valid opt-in configuration");
+		WorkerOnly.RequireExclusivePooledDomain = true;
+		WorkerOnly.MaximumConnections = 33;
+		Check(!WorkerOnly.IsValid(), "worker domain rejects a thirty-third supported peer");
+		WorkerOnly.MaximumConnections = 32;
+		Check(WorkerOnly.IsValid(), "worker experiment and strict domain configure together");
+
+		GameNetworkingSocketsTransport Regular;
+		TransportStartConfiguration Start{.Role = TransportRole::Server,
+			.Endpoint = {"127.0.0.1", 0}, .AdvertisedLimits = TestLimits()};
+		bool RegularStarted = false;
+		for (std::uint32_t Candidate = 39150; Candidate < 39250; ++Candidate) {
+			Start.Endpoint.Port = static_cast<std::uint16_t>(Candidate);
+			if (Regular.Start(Start).Succeeded()) { RegularStarted = true; break; }
+		}
+		Check(RegularStarted, "regular adapter acquires a real localhost listener");
+		if (!RegularStarted) return;
+		GameNetworkingSocketsTransport Strict(StrictConfiguration);
+		auto Denied = Strict.Start(Start);
+		Check(Denied.Status == TransportOperationStatus::InvalidState && Denied.IsTerminal(),
+			"strict pooled owner cannot start beside an active GNS adapter");
+		Check(Regular.Stop({DisconnectReason::LocalShutdown, "Domain fixture regular stop"}).Succeeded(),
+			"regular owner releases its GNS reference");
+		Check(Strict.Start(Start).Succeeded(), "strict pooled adapter claims empty process domain");
+		TransportStartConfiguration ClientStart{.Role = TransportRole::Client,
+			.Endpoint = {"127.0.0.1", Start.Endpoint.Port}, .AdvertisedLimits = TestLimits()};
+		Denied = Regular.Start(ClientStart);
+		Check(Denied.Status == TransportOperationStatus::InvalidState && Denied.IsTerminal(),
+			"strict owner blocks a new ordinary GNS adapter");
+		GameNetworkingSocketsTransport AnotherStrict(StrictConfiguration);
+		Denied = AnotherStrict.Start(ClientStart);
+		Check(Denied.Status == TransportOperationStatus::InvalidState && Denied.IsTerminal(),
+			"strict owner blocks a second strict adapter");
+		Check(Strict.Stop({DisconnectReason::LocalShutdown, std::string(4097, 'x')}).Status ==
+			TransportOperationStatus::MessageRejected,
+			"rejected Stop cannot release the exclusive lease");
+		Check(Regular.Start(ClientStart).Status == TransportOperationStatus::InvalidState,
+			"rejected Stop retains exclusivity");
+		Check(Strict.Stop({DisconnectReason::LocalShutdown, "Domain fixture strict stop"}).Succeeded(),
+			"valid Stop releases strict owner exactly once");
+		Check(Strict.Stop({DisconnectReason::LocalShutdown, "Duplicate domain stop"}).Status ==
+			TransportOperationStatus::InvalidState, "duplicate Stop cannot release another owner's lease");
+		#ifdef _WIN32
+		GameNetworkingSocketsTransport WorkerServer(WorkerOnly);
+		Check(WorkerServer.Start(Start).Succeeded(),
+			"experimental native workers start only under an exclusive pooled lease");
+		Check(WorkerServer.Stop({DisconnectReason::LocalShutdown, "Worker domain fixture stop"}).Succeeded(),
+			"idle native workers stop and release their exclusive lease");
+		#endif
+		Check(Regular.Start(ClientStart).Succeeded(), "ordinary adapter can start after strict Stop");
+		Check(Regular.Stop({DisconnectReason::LocalShutdown, "Domain fixture client stop"}).Succeeded(),
+			"ordinary adapter cleans up after lease release");
+		(void)Drain(Regular); // Stop preserves terminal events until the owner consumes them.
+
+		Start.Endpoint.Host = "203.0.113.17"; // TEST-NET-3 cannot be a local listen address.
+		const auto Failed = Strict.Start(Start);
+		Check(Failed.Status == TransportOperationStatus::TransportFailure && Failed.IsTerminal(),
+			"native listener failure after global acquisition is structured");
+		Check(Regular.Start(ClientStart).Succeeded(),
+			"failed strict Start releases its process-wide lease");
+		Check(Regular.Stop({DisconnectReason::LocalShutdown, "Domain fixture failure cleanup"}).Succeeded(),
+			"ordinary adapter cleans up after strict failure");
+		(void)Drain(Regular);
+
+		Start.Endpoint.Host = "127.0.0.1";
+		auto DestroyedStrict = std::make_unique<GameNetworkingSocketsTransport>(StrictConfiguration);
+		Check(DestroyedStrict->Start(Start).Succeeded(), "strict adapter starts before destructor cleanup");
+		DestroyedStrict.reset();
+		Check(Regular.Start(ClientStart).Succeeded(),
+			"destroying an active strict adapter releases the lease");
+		(void)Regular.Stop({DisconnectReason::LocalShutdown, "Domain fixture destruction cleanup"});
+	}
+
 	void TestFarmClockCapture() {
 		const gargantuan::ObjectId Remote{123, 1};
 		auto Clock = std::make_unique<gargantuan::host::FarmClockCalibration>("test-run", "client", 0);
@@ -251,6 +332,10 @@ int main(int ArgumentCount, char **Arguments) {
 	try { gargantuan::BootstrapNativeRuntimeSchema(); }
 	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
 	TestFarmClockCapture();
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--pooled-domain") {
+		TestExclusivePooledDomain();
+		return Failures == 0 ? 0 : 1;
+	}
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle")
 		return GnsAckCycleFixture::Run() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-retry-safety")
@@ -284,6 +369,7 @@ int main(int ArgumentCount, char **Arguments) {
 	Check(FeedbackPassed, "native reliable-service feedback contract");
 	Check(ServiceCurvePassed, "native pooled service curve contract");
 	Check(FiniteGrantPassed, "finite-grant service reference differential");
+	TestExclusivePooledDomain();
 	std::cout << "[Networking:GNS] validating configuration\n" << std::flush;
 
 	{

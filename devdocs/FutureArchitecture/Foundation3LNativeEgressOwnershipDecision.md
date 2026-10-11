@@ -16,6 +16,9 @@ finite, reviewable contracts. This is a documentation-only design assessment;
 no policy or native egress code is adopted by this document. The source review
 found no impossibility proof against preserving GNS reliability/security with
 off-thread OS sends; it found an incomplete ownership specification.
+Section 9 records the subsequent bounded implementation of the domain lease
+and incomplete-feedback behavior; it does not revise this static verdict or
+claim an egress worker or physical qualification pass.
 
 ## 1. Authority, revisions and source register
 
@@ -393,3 +396,74 @@ only test that one configuration. No prototype, native benchmark, physical
 Local32/Node32 attempt, CI execution campaign, canonical ADR/F1 change,
 Foundation 3M step or merge was performed here. KI-006 and Foundation 3L
 status remain unchanged.
+
+## 9. Follow-on implementation: strict domain and incomplete feedback
+
+The follow-on 3L candidate adopts the narrow process boundary for the actual
+packaged topology. A packaged `POOLED_SERVICE` server sets
+`RequireExclusivePooledDomain` when constructing its GNS adapter. `Start`
+claims the process-local GNS domain under the existing global adapter mutex
+only when no other adapter has a GNS reference. While held, another ordinary
+or strict adapter cannot start in that process. `Stop`, destruction, and every
+post-acquisition failed `Start` release the same lease through guarded global
+reference cleanup. A failed or duplicate `Stop` does not release a live lease.
+The direct four-client physical funding probe also sets the strict flag on its
+server; each probe client is a separate process. Ordinary same-process test
+fixtures remain on the default shared adapter path and make no strict pooled
+capacity claim. This deliberately narrows the earlier possible co-tenant
+design: adding supported same-process co-tenants would require an explicit
+aggregate funding proof before qualifying their accepted grants.
+
+`EnableNativeEgressWorker` defaults off and configuration rejects enabling it
+without the strict lease. The packaged server accepts the exact environment
+setting `GARGANTUAN_NATIVE_EGRESS_EXPERIMENT=1` only for a bounded pooled farm
+run; unset or `0` keeps the baseline path. This configuration flag is a gate
+for the native candidate, not by itself evidence that F1 capacity improves.
+The fixed A/B candidate starts four workers with the bounded 64-ticket native
+pool. Four is a pre-experiment capacity-margin choice against B04's roughly
+59,000 data packets per second, not a retuned PASS threshold; the farm workload
+and its acceptance gates remain identical between A and B. Strict production
+qualification requires the lease regardless of the worker flag. No profile
+rate, F1 equation, 50-ms freshness bound, wire representation, or
+ACK/retirement rule changes with this lease.
+
+The worker dispatches the oldest protected ticket first, but gives the oldest
+queued ordinary ticket a turn after at most eight protected dispatches while
+ordinary work waits. This finite burst rule preserves per-connection packet
+order and prevents sustained cross-peer control traffic from starving DATA.
+It is a worker fairness bound, not a change to F1 or the admission reserves.
+
+Worker-enabled adapter configuration limits maximum connections to the
+canonical 32-peer pooled topology. The 64-ticket pool reserves eight slots
+for protected packets, so admitting 33–64 simultaneous DATA peers would not
+preserve that reserve even though terminal receipt storage has 64 slots. For
+a worker-enabled peer, native opt-in reserves one finite terminal receipt slot
+and returns a generation that the adapter stores before announcing
+Connected. A close moves the adapter peer to Closing, rejects further sends,
+and retains its handle and debt while any OS result is unresolved. Closed and
+Disconnected events are emitted only after the adapter consumes the exact
+generation's purged native receipt; a reused handle cannot consume an earlier
+generation's evidence. Explicit `Disconnect` releases the adapter mutex for a
+bounded per-peer native drain, then captures the receipt before returning so
+Main's same-call terminal observation remains true. `Stop` drains all pending
+results outside that mutex, captures retained closing receipts, and only then
+disables workers and releases the GNS process lease. A begun OS attempt still
+unresolved at the 250-ms safety bound triggers native process fail-stop without
+a CRT dialog, preserving socket and SNP ownership until process termination.
+Other missing terminal receipts return terminal transport failure while the
+adapter retains ownership; neither path fabricates a completed receipt.
+
+For F1 feedback, a native snapshot that cannot resolve an outstanding send
+result is unavailable. The Main-owned pooled ledger retains accepted bytes,
+ordinary debt, and its last genuinely observed timestamp on a missing sample,
+but clears service eligibility and returns `Available=false` and
+`Qualified=false`. It cannot make an earlier sample fresh by stamping the
+current Main time. Once native code reconciles pending results at their actual
+positive-return times, the next complete sample may advance observation; a
+late result cannot rewrite a previously published qualified curve. The
+deterministic pooled production fixture covers pending feedback, freshness
+beyond 50 ms, and a later failed result. The real GNS lease fixture covers
+conflicting adapters, post-acquisition listener failure, `Stop`, duplicate
+`Stop`, and active-adapter destruction. The native chronology and worker
+ownership regressions remain separate qualification gates. KI-006 stays open,
+Foundation 3L B stays partially ready, and no Local32/Node32 PASS is inferred.

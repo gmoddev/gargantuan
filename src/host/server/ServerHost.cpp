@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -374,6 +375,17 @@ namespace gargantuan::host {
 		const bool FarmMode = !FarmRunId.empty() || !FarmDiagnosticStopEvent.empty() || FarmPeers != 0 ||
 			FarmScaleWorkload || FarmRecoveryWorkload ||
 			!FarmAdmissionEvidencePath.empty() || !FarmPublicationEvidencePath.empty();
+#if defined(GARGANTUAN_WITH_GNS)
+		const char *NativeEgressSetting = std::getenv("GARGANTUAN_NATIVE_EGRESS_EXPERIMENT");
+		const std::string_view NativeEgressValue = NativeEgressSetting ? NativeEgressSetting : "0";
+		const bool EnableNativeEgressWorker = NativeEgressValue == "1";
+		if ((NativeEgressValue != "0" && NativeEgressValue != "1") ||
+			(EnableNativeEgressWorker && (!FarmScaleWorkload || !HostConfiguration.ReliableService ||
+				!HostConfiguration.ReliableService->IsPooled()))) {
+			std::cerr << "[Network:NativeEgress] Experimental worker requires a bounded pooled farm run and setting 1.\n";
+			return 2;
+		}
+#endif
 		const auto ValidFarmRunId = std::all_of(FarmRunId.begin(), FarmRunId.end(), [](char Value) {
 			return (Value >= 'A' && Value <= 'Z') || (Value >= 'a' && Value <= 'z') ||
 				(Value >= '0' && Value <= '9') || Value == '-';
@@ -597,7 +609,9 @@ namespace gargantuan::host {
 				if (HostConfiguration.ReliableService) {
 					TransportConfiguration.MaximumConnections = HostConfiguration.ReliableService->MaximumConnections;
 					TransportConfiguration.SendRate = static_cast<std::uint32_t>(HostConfiguration.ReliableService->BackendSendRate());
+					TransportConfiguration.RequireExclusivePooledDomain = HostConfiguration.ReliableService->IsPooled();
 				}
+				TransportConfiguration.EnableNativeEgressWorker = EnableNativeEgressWorker;
 				auto NativeTransport = std::make_shared<network::GameNetworkingSocketsTransport>(TransportConfiguration);
 				if (FarmMode) FarmTransport = NativeTransport;
 				std::shared_ptr<network::IGameTransport> Transport = NativeTransport;

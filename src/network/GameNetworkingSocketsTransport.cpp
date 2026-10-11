@@ -57,6 +57,7 @@ namespace gargantuan::network {
 			std::recursive_mutex Mutex;
 			std::uint32_t ReferenceCount = 0;
 			ISteamNetworkingSockets *Interface = nullptr;
+			void *ExclusivePooledOwner = nullptr;
 			std::unordered_map<HSteamNetConnection, void *> ConnectionOwners;
 			std::unordered_map<HSteamListenSocket, void *> ListenerOwners;
 		};
@@ -294,6 +295,8 @@ namespace gargantuan::network {
 			ConnectionState State = ConnectionState::Connecting;
 			NetworkStatistics Statistics;
 			bool FundedAckPolicyConfigured = false;
+			std::uint64_t NativeTerminalGeneration = 0;
+			std::optional<DisconnectInfo> ClosingInformation;
 		};
 
 		explicit Impl(GameNetworkingSocketsTransportConfiguration Value) : Configuration(std::move(Value)) {}
@@ -302,6 +305,12 @@ namespace gargantuan::network {
 		bool Started = false;
 		bool RetainServiceTerminals = false;
 		bool OwnsGlobalReference = false;
+		bool NativeWorkerConfigured = false;
+		// Serializes explicit close/Stop while either operation releases the
+		// adapter mutex for a bounded native worker wait. GNS callbacks never
+		// acquire this mutex.
+		std::mutex LifecycleMutex;
+		bool Stopping = false;
 		TransportRole Role = TransportRole::Client;
 		TransportEndpoint Endpoint;
 		NetworkLimits Limits;
@@ -375,6 +384,8 @@ namespace gargantuan::network {
 
 		bool AcquireGlobal() {
 			auto &Global = GlobalState();
+			if (Global.ExclusivePooledOwner ||
+				(Configuration.RequireExclusivePooledDomain && Global.ReferenceCount)) return false;
 			if (Global.ReferenceCount == 0) {
 				SteamNetworkingErrMsg Error{};
 				if (!GameNetworkingSockets_Init(nullptr, Error)) return false;
@@ -387,6 +398,7 @@ namespace gargantuan::network {
 			if (Global.ReferenceCount == std::numeric_limits<std::uint32_t>::max()) return false;
 			++Global.ReferenceCount;
 			OwnsGlobalReference = true;
+			if (Configuration.RequireExclusivePooledDomain) Global.ExclusivePooledOwner = this;
 			return true;
 		}
 
@@ -394,6 +406,7 @@ namespace gargantuan::network {
 			if (!OwnsGlobalReference) return;
 			auto &Global = GlobalState();
 			OwnsGlobalReference = false;
+			if (Global.ExclusivePooledOwner == this) Global.ExclusivePooledOwner = nullptr;
 			if (--Global.ReferenceCount == 0) {
 				Global.ConnectionOwners.clear();
 				Global.ListenerOwners.clear();
@@ -463,37 +476,62 @@ namespace gargantuan::network {
 			});
 		}
 
+		bool CompleteClose(ConnectionId Id, const GargantuanReliableServiceSnapshot &Final) {
+			const auto Iterator = Connections.find(Id);
+			if (Iterator == Connections.end() || Iterator->second.State != ConnectionState::Closing ||
+				!Final.Counters.Purged) return false;
+			auto &Record = Iterator->second;
+			TerminalFeedback[Id.Slot] = ServiceFeedback(Id, Final);
+			// A purged but invalid receipt is terminal failure evidence, never a drain.
+			if (RetainServiceTerminals && !TerminalFeedback[Id.Slot])
+				TerminalFeedback[Id.Slot] = detail::ReliableServiceFeedback{
+					.Connection = Id, .ObservedAtMicroseconds = Final.ObservedAtMicroseconds,
+					.State = ConnectionState::Closed, .CountersValid = false};
+			const auto Handle = Record.Handle;
+			QueueEvent(ConnectionStateEvent{Id, ConnectionState::Closing, ConnectionState::Closed});
+			QueueEvent(DisconnectedEvent{Id, *Record.ClosingInformation});
+			ReleaseConnection(Id, Handle);
+			return true;
+		}
+
+		bool ReconcileClose(ConnectionId Id) {
+			const auto Iterator = Connections.find(Id);
+			if (Iterator == Connections.end() || Iterator->second.State != ConnectionState::Closing ||
+				!Iterator->second.NativeTerminalGeneration || !GlobalState().Interface) return false;
+			GargantuanReliableServiceSnapshot Final;
+			if (!SteamNetworkingSocketsLib::GargantuanTakeNativeTerminalFeedback(
+				GlobalState().Interface, Iterator->second.Handle,
+				Iterator->second.NativeTerminalGeneration, Final)) return false;
+			return CompleteClose(Id, Final);
+		}
+
 		void CloseConnection(ConnectionId Id, DisconnectInfo Information, bool NotifyBackend) {
 			const auto Iterator = Connections.find(Id);
 			if (Iterator == Connections.end()) return;
+			if (Iterator->second.State == ConnectionState::Closing ||
+				Iterator->second.State == ConnectionState::Closed) return;
 			if (const auto *Sink = detail::ActiveGnsService; Sink && Sink->Closed)
 				Sink->Closed(Sink->Context, Id, Information.Diagnostic.c_str());
-			auto Handle = Iterator->second.Handle;
-			auto Previous = Iterator->second.State;
+			const auto Handle = Iterator->second.Handle;
+			const auto Previous = Iterator->second.State;
 			RemoveConnectionMessageEvents(Id);
-			if (Previous != ConnectionState::Closing && Previous != ConnectionState::Closed) {
-				QueueEvent(ConnectionStateEvent{Id, Previous, ConnectionState::Closing});
-				Previous = ConnectionState::Closing;
-			}
-			QueueEvent(ConnectionStateEvent{Id, Previous, ConnectionState::Closed});
-			QueueEvent(DisconnectedEvent{Id, Information});
+			QueueEvent(ConnectionStateEvent{Id, Previous, ConnectionState::Closing});
+			Iterator->second.State = ConnectionState::Closing;
+			Iterator->second.ClosingInformation = std::move(Information);
+			const auto Reason = Iterator->second.ClosingInformation->Reason;
+			const auto NativeTerminalGeneration = Iterator->second.NativeTerminalGeneration;
 			if (GlobalState().Interface) {
 				GargantuanReliableServiceSnapshot Final;
-				if (SteamNetworkingSocketsLib::GargantuanCloseWithReliableServiceFeedback(
+				const bool Closed = SteamNetworkingSocketsLib::GargantuanCloseWithReliableServiceFeedback(
 					GlobalState().Interface, Handle,
-					NotifyBackend ? BackendDisconnectReason(Information.Reason) : 0,
-					NotifyBackend ? BackendDisconnectDiagnostic(Information.Reason) : nullptr, Final) && Final.Counters.Purged)
-				{
-					TerminalFeedback[Id.Slot] = ServiceFeedback(Id, Final);
-					// Purge remains terminal evidence even if cumulative service
-					// counters exhausted. It must never be reported as a drain.
-					if (RetainServiceTerminals && !TerminalFeedback[Id.Slot])
-						TerminalFeedback[Id.Slot] = detail::ReliableServiceFeedback{
-							.Connection = Id, .ObservedAtMicroseconds = Final.ObservedAtMicroseconds,
-							.State = ConnectionState::Closed, .CountersValid = false};
+					NotifyBackend ? BackendDisconnectReason(Reason) : 0,
+					NotifyBackend ? BackendDisconnectDiagnostic(Reason) : nullptr, Final);
+				if (NativeTerminalGeneration) {
+					(void)ReconcileClose(Id); // Exact generation, even if Close already purged.
+					return;
 				}
+				if (Closed && Final.Counters.Purged) (void)CompleteClose(Id, Final);
 			}
-			ReleaseConnection(Id, Handle);
 		}
 
 		void FailConnection(ConnectionId Id, DisconnectReason Reason, std::string Diagnostic) {
@@ -503,7 +541,7 @@ namespace gargantuan::network {
 		}
 
 		void OnStatusChanged(const SteamNetConnectionStatusChangedCallback_t &Information) {
-			if (!Started) return;
+			if (!Started || Stopping) return;
 			auto IdIterator = BackendConnections.find(Information.m_hConn);
 			if (Information.m_info.m_eState == k_ESteamNetworkingConnectionState_Connecting &&
 				IdIterator == BackendConnections.end()) {
@@ -547,8 +585,20 @@ namespace gargantuan::network {
 					QueueEvent(ConnectionStateEvent{Id, ConnectionState::Connecting, ConnectionState::Authenticating});
 					Connection->second.State = ConnectionState::Authenticating;
 				}
-				if (Connection->second.State == ConnectionState::Authenticating) {
-					QueueEvent(ConnectionStateEvent{Id, ConnectionState::Authenticating, ConnectionState::Connected});
+			if (Connection->second.State == ConnectionState::Authenticating) {
+				if (Configuration.EnableNativeEgressWorker) {
+					std::uint64_t Generation = 0;
+					if (!SteamNetworkingSocketsLib::GargantuanConfigureNativeEgress(
+						GlobalState().Interface, Information.m_hConn, true, &Generation) || !Generation) {
+						FailConnection(Id, DisconnectReason::ResourceExhaustion,
+							"Native egress connection generation unavailable");
+						return;
+					}
+					Connection = Connections.find(Id);
+					if (Connection == Connections.end()) return;
+					Connection->second.NativeTerminalGeneration = Generation;
+				}
+				QueueEvent(ConnectionStateEvent{Id, ConnectionState::Authenticating, ConnectionState::Connected});
 					Connection->second.State = ConnectionState::Connected;
 				}
 				break;
@@ -649,6 +699,9 @@ namespace gargantuan::network {
 	};
 
 	bool GameNetworkingSocketsTransportConfiguration::IsValid() const {
+		if (EnableNativeEgressWorker && !RequireExclusivePooledDomain) return false;
+		if (EnableNativeEgressWorker &&
+			MaximumConnections > ReliableServiceProfile::PooledService().MaximumConnections) return false;
 		if (SendRate && (*SendRate == 0 || *SendRate > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))) return false;
 		if (MaximumConnections == 0 || MaximumConnections > NativeMaximumGnsConnections ||
 			MaximumPendingEvents == 0 || MaximumPendingEvents > NativeMaximumGnsPendingEvents ||
@@ -663,9 +716,12 @@ namespace gargantuan::network {
 
 	GameNetworkingSocketsTransport::~GameNetworkingSocketsTransport() {
 		if (!State) return;
-		auto &Global = GlobalState();
-		std::lock_guard Lock(Global.Mutex);
-		if (State->Started) (void)Stop({DisconnectReason::LocalShutdown, "Transport destroyed"});
+		if (State->Started) {
+			(void)Stop({DisconnectReason::LocalShutdown, "Transport destroyed"});
+			// A timed-out native OS call still owns the GNS instance and callback
+			// target. Keep them alive rather than deleting referenced state.
+			if (State->Started) (void)State.release();
+		}
 	}
 
 	TransportOperationResult GameNetworkingSocketsTransport::Start(
@@ -685,10 +741,58 @@ namespace gargantuan::network {
 		if (!SteamAPI_SteamNetworkingIPAddr_ParseString(&Address, Configuration.Endpoint.Host.c_str()))
 			return Operation(TransportOperationStatus::MessageRejected);
 		Address.m_port = Configuration.Endpoint.Port;
+		if (Global.ExclusivePooledOwner ||
+			(State->Configuration.RequireExclusivePooledDomain && Global.ReferenceCount))
+			return TerminalOperation(TransportOperationStatus::InvalidState,
+				{DisconnectReason::TransportFailure,
+				 "[Network:GNS] Exclusive pooled execution domain conflicts with an active adapter"});
 		if (!State->AcquireGlobal()) return TerminalOperation(
 			TransportOperationStatus::TransportFailure,
 			{DisconnectReason::TransportFailure, "Unable to initialize GameNetworkingSockets"}
 		);
+		// Every post-acquisition exit, including an allocation exception, must
+		// return the process lease and close any native handle not yet committed
+		// to an active adapter. The existing global mutex also serializes callbacks.
+		struct StartRollback {
+			Impl &Adapter;
+			GlobalGnsState &Global;
+			HSteamNetConnection PendingHandle = k_HSteamNetConnection_Invalid;
+			bool Committed = false;
+			~StartRollback() {
+				if (Committed) return;
+				const bool PendingOwned = std::any_of(Adapter.Connections.begin(), Adapter.Connections.end(),
+					[&](const auto &Entry) { return Entry.second.Handle == PendingHandle; });
+				if (PendingHandle != k_HSteamNetConnection_Invalid && !PendingOwned && Global.Interface)
+					SteamAPI_ISteamNetworkingSockets_CloseConnection(Global.Interface, PendingHandle,
+						ResourceExhaustionEndReason, "Adapter startup failed", false);
+				for (const auto &[Id, Record] : Adapter.Connections) {
+					(void)Id;
+					Global.ConnectionOwners.erase(Record.Handle);
+					if (Global.Interface) SteamAPI_ISteamNetworkingSockets_CloseConnection(Global.Interface,
+						Record.Handle, ResourceExhaustionEndReason, "Adapter startup failed", false);
+				}
+				Adapter.Connections.clear();
+				Adapter.BackendConnections.clear();
+				if (Adapter.Listener != k_HSteamListenSocket_Invalid) {
+					Global.ListenerOwners.erase(Adapter.Listener);
+					if (Global.Interface) SteamAPI_ISteamNetworkingSockets_CloseListenSocket(Global.Interface, Adapter.Listener);
+					Adapter.Listener = k_HSteamListenSocket_Invalid;
+				}
+				if (Adapter.NativeWorkerConfigured && Global.Interface) {
+					(void)SteamNetworkingSocketsLib::GargantuanConfigureNativeEgressWorkers(
+						Global.Interface, false, 0);
+					Adapter.NativeWorkerConfigured = false;
+				}
+				Adapter.ReleaseGlobal();
+			}
+		} Rollback{*State, Global};
+		if (State->Configuration.EnableNativeEgressWorker) {
+			if (!SteamNetworkingSocketsLib::GargantuanConfigureNativeEgressWorkers(Global.Interface, true, 4))
+				return TerminalOperation(TransportOperationStatus::TransportFailure,
+					{DisconnectReason::TransportFailure,
+					 "[Network:GNS] Unable to start bounded native egress workers"});
+			State->NativeWorkerConfigured = true;
+		}
 		State->Role = Configuration.Role;
 		State->Endpoint = Configuration.Endpoint;
 		State->Limits = Configuration.AdvertisedLimits;
@@ -717,7 +821,6 @@ namespace gargantuan::network {
 				Global.Interface, Address, OptionCount, Options.data()
 			);
 			if (State->Listener == k_HSteamListenSocket_Invalid) {
-				State->ReleaseGlobal();
 				return TerminalOperation(
 					TransportOperationStatus::TransportFailure,
 					{DisconnectReason::TransportFailure, "Unable to create GNS listen socket"}
@@ -725,49 +828,74 @@ namespace gargantuan::network {
 			}
 			Global.ListenerOwners[State->Listener] = State.get();
 		} else {
-			const auto Handle = SteamAPI_ISteamNetworkingSockets_ConnectByIPAddress(
+			Rollback.PendingHandle = SteamAPI_ISteamNetworkingSockets_ConnectByIPAddress(
 				Global.Interface, Address, OptionCount, Options.data()
 			);
-			if (Handle == k_HSteamNetConnection_Invalid) {
-				State->ReleaseGlobal();
+			if (Rollback.PendingHandle == k_HSteamNetConnection_Invalid) {
 				return TerminalOperation(
 					TransportOperationStatus::TransportFailure,
 					{DisconnectReason::TransportFailure, "Unable to create GNS connection"}
 				);
 			}
-			if (!State->AllocateConnection(Handle)) {
-				SteamAPI_ISteamNetworkingSockets_CloseConnection(
-					Global.Interface, Handle, ResourceExhaustionEndReason, "Connection identity exhausted", false
-				);
-				State->ReleaseGlobal();
+			if (!State->AllocateConnection(Rollback.PendingHandle)) {
 				return TerminalOperation(
 					TransportOperationStatus::ResourceExhausted,
 					{DisconnectReason::ResourceExhaustion, "GNS connection identity exhausted"}
 				);
 			}
+			Rollback.PendingHandle = k_HSteamNetConnection_Invalid;
 		}
 		State->Started = true;
+		Rollback.Committed = true;
 		return Operation(TransportOperationStatus::Succeeded);
 	}
 
 	TransportOperationResult GameNetworkingSocketsTransport::Stop(DisconnectInfo Information) {
+		std::lock_guard LifecycleLock(State->LifecycleMutex);
 		auto &Global = GlobalState();
-		std::lock_guard Lock(Global.Mutex);
+		std::unique_lock Lock(Global.Mutex);
 		if (!State->Started) return Operation(TransportOperationStatus::InvalidState);
 		if (!Information.IsValid()) return Operation(TransportOperationStatus::MessageRejected);
-		std::vector<ConnectionId> Connections;
-		Connections.reserve(State->Connections.size());
-		for (const auto &[Id, Record] : State->Connections) {
-			(void)Record;
-			Connections.push_back(Id);
+		if (!State->Stopping) {
+			State->Stopping = true;
+			std::vector<ConnectionId> Connections;
+			Connections.reserve(State->Connections.size());
+			for (const auto &[Id, Record] : State->Connections) {
+				(void)Record;
+				Connections.push_back(Id);
+			}
+			for (const auto Id : Connections) State->CloseConnection(Id, Information, true);
+			if (State->Listener != k_HSteamListenSocket_Invalid) {
+				Global.ListenerOwners.erase(State->Listener);
+				SteamAPI_ISteamNetworkingSockets_CloseListenSocket(Global.Interface, State->Listener);
+				State->Listener = k_HSteamListenSocket_Invalid;
+			}
 		}
-		for (const auto Id : Connections) State->CloseConnection(Id, Information, true);
-		if (State->Listener != k_HSteamListenSocket_Invalid) {
-			Global.ListenerOwners.erase(State->Listener);
-			SteamAPI_ISteamNetworkingSockets_CloseListenSocket(Global.Interface, State->Listener);
-			State->Listener = k_HSteamListenSocket_Invalid;
+		if (!State->Connections.empty()) {
+			auto *Interface = Global.Interface;
+			Lock.unlock(); // Native worker completion can require the GNS actor lock.
+			const bool Drained = SteamNetworkingSocketsLib::GargantuanDrainNativeEgress(
+				Interface, 250);
+			Lock.lock();
+			std::vector<ConnectionId> Closing;
+			Closing.reserve(State->Connections.size());
+			for (const auto &[Id, Record] : State->Connections)
+				if (Record.State == ConnectionState::Closing) Closing.push_back(Id);
+			for (const auto Id : Closing) (void)State->ReconcileClose(Id);
+			if (!Drained || !State->Connections.empty())
+				return TerminalOperation(TransportOperationStatus::TransportFailure,
+					{DisconnectReason::TransportFailure,
+					 "[Network:GNS] Native egress terminal reconciliation did not complete within 250 ms"});
+		}
+		if (State->NativeWorkerConfigured) {
+			if (!SteamNetworkingSocketsLib::GargantuanConfigureNativeEgressWorkers(Global.Interface, false, 0))
+				return TerminalOperation(TransportOperationStatus::TransportFailure,
+					{DisconnectReason::TransportFailure,
+					 "[Network:GNS] Native egress workers could not stop after terminal drain"});
+			State->NativeWorkerConfigured = false;
 		}
 		State->Started = false;
+		State->Stopping = false;
 		State->ReleaseGlobal();
 		return Operation(TransportOperationStatus::Succeeded);
 	}
@@ -776,13 +904,36 @@ namespace gargantuan::network {
 		ConnectionId Connection,
 		DisconnectInfo Information
 	) {
+		std::lock_guard LifecycleLock(State->LifecycleMutex);
 		auto &Global = GlobalState();
-		std::lock_guard Lock(Global.Mutex);
-		if (!State->Started) return Operation(TransportOperationStatus::InvalidState);
+		std::unique_lock Lock(Global.Mutex);
+		if (!State->Started || State->Stopping) return Operation(TransportOperationStatus::InvalidState);
 		if (!Information.IsValid()) return Operation(TransportOperationStatus::MessageRejected);
 		if (!Connection.IsValid() || !State->Connections.contains(Connection))
 			return Operation(TransportOperationStatus::InvalidConnection);
 		State->CloseConnection(Connection, std::move(Information), true);
+		const auto Pending = State->Connections.find(Connection);
+		if (Pending != State->Connections.end() && Pending->second.State == ConnectionState::Closing) {
+			if (!Pending->second.NativeTerminalGeneration)
+				return TerminalOperation(TransportOperationStatus::TransportFailure,
+					{DisconnectReason::TransportFailure,
+					 "[Network:GNS] Native terminal purge evidence unavailable"});
+			auto *Interface = Global.Interface;
+			const auto Handle = Pending->second.Handle;
+			const auto Generation = Pending->second.NativeTerminalGeneration;
+			Lock.unlock();
+			const bool Drained = SteamNetworkingSocketsLib::GargantuanDrainNativeConnection(
+				Interface, Handle, Generation, 250);
+			Lock.lock();
+			(void)State->ReconcileClose(Connection);
+			// The actor may have purged into the generation cache between the
+			// first Take and Drain. Exact terminal capture is decisive in that race.
+			(void)Drained;
+			if (State->Connections.contains(Connection))
+				return TerminalOperation(TransportOperationStatus::TransportFailure,
+						{DisconnectReason::TransportFailure,
+						 "[Network:GNS] Native connection purge did not complete within 250 ms"});
+		}
 		return Operation(TransportOperationStatus::Succeeded);
 	}
 
@@ -948,6 +1099,7 @@ namespace gargantuan::network {
 			for (const auto Id : Connections) {
 				State->Observe(Id, "GnsPoll");
 				State->DrainMessages(Id);
+				(void)State->ReconcileClose(Id);
 			}
 		}
 		const auto Count = std::min(Output.size(), State->Events.size());
@@ -1080,6 +1232,7 @@ namespace gargantuan::network {
 			return {};
 		}
 		if (!State.Started || !Global.Interface) return {};
+		if (Found->second.State == ConnectionState::Closing) return {};
 		GargantuanReliableServiceSnapshot Native;
 		if (!SteamNetworkingSocketsLib::GargantuanGetReliableServiceFeedback(
 			Global.Interface, Found->second.Handle, Native)) return {};

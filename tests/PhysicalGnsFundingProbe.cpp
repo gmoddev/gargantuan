@@ -102,7 +102,11 @@ struct Probe {
 		RpcTimes.reserve(512); EventTimes.reserve(512);
 		const auto Profile = ReliableServiceProfile::PooledService();
 		GameNetworkingSocketsTransportConfiguration Config;
-		if (Server) { Config.MaximumConnections = Profile.MaximumConnections; Config.SendRate = static_cast<std::uint32_t>(Profile.BackendSendRate()); }
+		if (Server) {
+			Config.MaximumConnections = Profile.MaximumConnections;
+			Config.SendRate = static_cast<std::uint32_t>(Profile.BackendSendRate());
+			Config.RequireExclusivePooledDomain = true;
+		}
 		Transport = std::make_shared<GameNetworkingSocketsTransport>(Config);
 		if (Server) {
 			auto World = std::make_shared<DataModel>();

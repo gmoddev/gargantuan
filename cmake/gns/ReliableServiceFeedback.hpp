@@ -95,6 +95,9 @@ struct GargantuanReliableServiceSnapshot {
 };
 
 namespace SteamNetworkingSocketsLib {
+class CSteamNetworkConnectionBase;
+bool GargantuanRegisterNativePending(CSteamNetworkConnectionBase *Connection) noexcept;
+void GargantuanUnregisterNativePending(CSteamNetworkConnectionBase *Connection) noexcept;
 std::uint64_t GargantuanReliableServiceClock() noexcept;
 // Socket-thread wake policy only needs to know whether any connection has a
 // partly first-sent finite structural grant. The sender owns the local bool;
@@ -116,6 +119,27 @@ void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounte
 GargantuanReliableServiceSnapshot *GargantuanGetClosingFeedback();
 bool GargantuanReadNativeFeedback(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
 	GargantuanReliableServiceSnapshot &Result);
+bool GargantuanConfigureNativeEgress(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
+	bool Enabled, std::uint64_t *Generation = nullptr);
+bool GargantuanConfigureNativeEgressWorkers(ISteamNetworkingSockets *Interface,
+	bool Enabled, unsigned Workers);
+bool GargantuanDrainNativeEgress(ISteamNetworkingSockets *Interface,
+	std::uint32_t TimeoutMilliseconds);
+bool GargantuanDrainNativeConnection(ISteamNetworkingSockets *Interface,
+	std::uint32_t Handle, std::uint64_t Generation, std::uint32_t TimeoutMilliseconds);
+bool GargantuanReadPendingNativeReceiveJournal(ISteamNetworkingSockets *Interface,
+	std::uint32_t Handle, std::uint32_t &Count, std::uint32_t &HighWater, bool &Overflow);
+bool GargantuanTakeNativeTerminalFeedback(ISteamNetworkingSockets *Interface,
+	std::uint32_t Handle, std::uint64_t Generation, GargantuanReliableServiceSnapshot &Result);
+std::uint32_t GargantuanNativeTerminalEvidenceCapacity() noexcept;
+std::uint32_t GargantuanNativeTerminalEvidenceReserved() noexcept;
+bool GargantuanReserveNativeTerminalEvidence(ISteamNetworkingSockets *Interface,
+	std::uint32_t Handle, std::uint64_t &Generation) noexcept;
+bool GargantuanStoreNativeTerminalEvidence(ISteamNetworkingSockets *Interface,
+	std::uint32_t Handle, std::uint64_t Generation,
+	const GargantuanReliableServiceSnapshot &Result) noexcept;
+bool GargantuanReleaseNativeTerminalEvidence(ISteamNetworkingSockets *Interface,
+	std::uint32_t Handle, std::uint64_t Generation) noexcept;
 bool GargantuanGetReliableServiceFeedback(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
 	GargantuanReliableServiceSnapshot &Result);
 bool GargantuanCloseWithReliableServiceFeedback(ISteamNetworkingSockets *Interface, std::uint32_t Handle,

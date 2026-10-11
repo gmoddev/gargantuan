@@ -18,6 +18,11 @@ namespace gargantuan::network {
 		std::size_t MaximumPendingReceiveBytes = 16 * 1024 * 1024;
 		// Trusted startup-only per-listener/connection setting, never global.
 		std::optional<std::uint32_t> SendRate;
+		// A pooled server claims the one supported GNS execution domain for its
+		// entire adapter lifetime. The experimental worker additionally requires
+		// this lease; ordinary adapters retain the existing shared behavior.
+		bool RequireExclusivePooledDomain = false;
+		bool EnableNativeEgressWorker = false;
 
 		[[nodiscard]] bool IsValid() const;
 	};
