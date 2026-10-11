@@ -85,6 +85,14 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-11 [D02 product-contract review](docs/adr/D02-pooled-service-product-contract-review.md)
+recommends **HYBRID F1**: hard completed-grant, protected gameplay, capacity,
+fairness and causal recovery gates, with packet-scale curves diagnostic. This is
+not adopted or implemented; strict D01/F1 and every historical verdict remain.
+The proposal explicitly requalifies ACK-owned slot capacity and distinguishes
+2-MiB/s credit from delivered service for arbitrarily tiny grants. No new campaign
+or simplification is performed. **KI-006 OPEN; 3L B — PARTIALLY READY; PR #6 draft.**
+
 2026-10-11 final authorized initial-service attempt is complete and stops for
 **ARCHITECTURE/PLATFORM REVIEW**. Corrected diagnostic source `76f03b7c5`
 passes Release build and eight affected tests; zero-first retention uses the

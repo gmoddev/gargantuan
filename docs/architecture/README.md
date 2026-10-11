@@ -36,6 +36,10 @@ The Foundation 3L [D01 pooled service-curve decision](../adr/D01-pooled-service-
 starts the canonical `docs/adr/` series. Its F1 amendment governs finite
 accepted-grant drain capacity and supersedes D01's earlier cross-grant
 deficit and the short-window POOLED_SERVICE health/qualification models.
+The [D02 product-contract review](../adr/D02-pooled-service-product-contract-review.md)
+is a reviewed hybrid recommendation only; it supersedes nothing and changes no
+production or qualification gate. D01/F1 remains authoritative until separately
+amended and requalified.
 Other documents explicitly
 labeled accepted design direction, including the game networking architecture,
 retain ADR-like authority until migrated into that series.
