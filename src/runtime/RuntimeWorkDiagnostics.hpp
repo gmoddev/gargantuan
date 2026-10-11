@@ -113,6 +113,7 @@ enum class WorkCounter : std::size_t {
 	NamePreflightProofCalls, NamePreflightNonPropertyFallback, NamePreflightNonNameFallback,
 	NamePreflightNonReplicatedFallback, NamePreflightNameStateFallback, NamePreflightNameInvalidFallback,
 	NamePreflightAttributeFallback, NamePreflightFilteredFallback,
+	NamePreflightAttributeValidations,
 	StructuralEncodePayloadBytes, StructuralEncodeLimitFailures,
 	Count
 };
@@ -143,6 +144,7 @@ inline constexpr std::array<std::string_view, static_cast<std::size_t>(WorkCount
 	"NamePreflightProofCalls", "NamePreflightNonPropertyFallback", "NamePreflightNonNameFallback",
 	"NamePreflightNonReplicatedFallback", "NamePreflightNameStateFallback", "NamePreflightNameInvalidFallback",
 	"NamePreflightAttributeFallback", "NamePreflightFilteredFallback",
+	"NamePreflightAttributeValidations",
 	"StructuralEncodePayloadBytes", "StructuralEncodeLimitFailures"
 };
 struct WorkSample : std::array<WorkDuration, WorkPhaseNames.size()> {

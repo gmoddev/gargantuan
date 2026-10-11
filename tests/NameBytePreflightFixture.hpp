@@ -2,6 +2,7 @@
 
 #include "ReliableEnvelopeContractFixture.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
+#include "gargantuan/runtime/AttributeValidation.hpp"
 
 namespace gargantuan::test {
 
@@ -159,6 +160,134 @@ inline void TestNameBytePreflight() {
 			"covered history and unselected barriers must eliminate doomed encodes without changing the successful frame");
 		return Result;
 	};
+	{
+		NameBytePreflightFixture F;
+		EnvelopeRequire(F.World->ApplyAttributeMutation("ScaleClockEpoch", WireValue(1),
+			ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success,
+			"mixed proof fixture inserts an emitted DataModel Attribute");
+		F.Names(1);
+		F.Barrier(); // Keep the selected Name history before this ordered barrier.
+		F.Compare(512, 0); // Refresh both catalogs without consuming peer history.
+		const auto InitialLag = F.Optimized->GetJournalLag(F.Connection);
+		const auto Phase = static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode);
+		auto CompareMixed = [&](bool Defer, bool Accept) {
+			const auto Before = F.OptimizedWork[Phase].Calls;
+			const auto ReferenceBefore = F.ReferenceWork[Phase].Calls;
+			const auto Result = F.Compare(512, 2048, F.Limit, Defer ? 0 : F.Limit, Accept);
+			std::cout << "[Network:NameBytePreflight] case=mixed_attribute"
+				<< " disposition=" << (Defer ? "deferred" : Accept ? "accepted" : "rejected")
+				<< " optimized_encode_calls=" << F.OptimizedWork[Phase].Calls - Before
+				<< " reference_encode_calls=" << F.ReferenceWork[Phase].Calls - ReferenceBefore << '\n';
+			EnvelopeRequire((Defer ? Result.DeferredForBytes : Result.Frame.has_value()) &&
+				F.OptimizedWork[Phase].Calls - Before == 1 && F.ReferenceWork[Phase].Calls - ReferenceBefore > 1,
+				"emitting Attribute barriers must eliminate doomed Name encodes with exact reference equivalence");
+			return Result;
+		};
+		const auto Deferred = CompareMixed(true, false);
+		const auto Rejected = CompareMixed(false, false);
+		EnvelopeRequire(F.Optimized->GetJournalLag(F.Connection) == InitialLag &&
+			Deferred.RequiredFrameBytes == Rejected.EncodedFrame.size() &&
+			Deferred.DiagnosticFingerprint == Rejected.DiagnosticFingerprint,
+			"mixed Attribute byte deferral and rejection preserve exact sizing, fingerprint and cursor");
+		const auto Accepted = CompareMixed(false, true);
+		EnvelopeRequire(Accepted.EncodedFrame == Rejected.EncodedFrame &&
+			Accepted.Frame->Sequence == Rejected.Frame->Sequence &&
+			std::holds_alternative<AttributeReplicationUpdate>(Accepted.Frame->Operations.front().Intent),
+			"mixed proof retains the emitted Attribute and its ordered accepted prefix");
+		F.Drain();
+	}
+	for (const bool SmallName : {false, true}) {
+		NameBytePreflightFixture F(2);
+		for (std::size_t Index = 0; Index < 3; ++Index)
+			ChangeJournal::Get().Commit(F.World->GetObjectId(), F.World->GetObjectId(),
+				AttributeUpdatedChange{"Small" + std::to_string(Index), WireValue(static_cast<int>(Index))});
+		if (SmallName) F.Names(1, 7);
+		const auto Result = F.Compare();
+		EnvelopeRequire(Result.Frame && Result.SelectedTransitions == (SmallName ? 5 : 3) &&
+			Counter(F.OptimizedWork, WorkCounter::NamePreflightAttributeValidations) == 0 &&
+			Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) == 0,
+			"Attribute-only and small Name frames incur no duplicate Attribute validation in the size proof");
+	}
+	// An invalid selected Attribute must defeat the proof even when preceding
+	// valid Names already exceed the frame cap. The ordinary producer retains its
+	// exact reference/validation error, without accepting or skipping the suffix.
+	for (const auto &[Key, Value] : std::array<std::pair<std::string, WireValue>, 4>{
+		std::pair{std::string{"bad\0key", 7}, WireValue(std::string{"valid"})},
+		std::pair{std::string{"ValidKey"}, WireValue(std::string{"\xc0\xaf", 2})},
+		std::pair{std::string{"ValidKey"}, WireValue(std::string(MaximumAttributeValueBytes / 2, '\n'))},
+		std::pair{std::string{"ValidKey"}, WireValue(std::numeric_limits<double>::quiet_NaN())}}) {
+		NameBytePreflightFixture F;
+		F.Names(1);
+		ChangeJournal::Get().Commit(F.World->GetObjectId(), F.World->GetObjectId(),
+			AttributeUpdatedChange{Key, Value});
+		F.Compare(512, 0);
+		const auto InitialLag = F.Optimized->GetJournalLag(F.Connection);
+		const auto Result = F.Compare();
+		EnvelopeRequire(!Result.Frame && Result.Error == "Replication frame is invalid" &&
+			F.Optimized->GetJournalLag(F.Connection) == InitialLag &&
+			Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) == 0,
+			"invalid selected Attribute retains full-frame error precedence over oversized Names");
+	}
+	{
+		NameBytePreflightFixture F(2);
+		F.Names(1);
+		ChangeJournal::Get().Commit(F.World->GetObjectId(), F.World->GetObjectId(),
+			AttributeUpdatedChange{std::string{"bad\0key", 7}, WireValue(1)});
+		const auto Prefix = F.Compare(2, 31, 32 * 1024);
+		EnvelopeRequire(Prefix.Frame && Prefix.SelectedTransitions == 1 &&
+			Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) > 0,
+			"invalid Attribute outside the operation prefix cannot reject an earlier legal reduced prefix");
+		const auto RemainingLag = F.Optimized->GetJournalLag(F.Connection);
+		const auto Invalid = F.Compare(2, 31, 32 * 1024);
+		EnvelopeRequire(!Invalid.Frame && Invalid.Error == "Replication frame is invalid" &&
+			F.Optimized->GetJournalLag(F.Connection) == RemainingLag,
+			"accepting the earlier prefix cannot discard the later invalid Attribute");
+	}
+	{
+		NameBytePreflightFixture F(2);
+		ChangeJournal::Get().Commit(F.World->GetObjectId(), F.World->GetObjectId(),
+			AttributeUpdatedChange{"DeletedAttribute", std::nullopt});
+		F.Names(1);
+		const auto Result = F.Compare(512, 31, 32 * 1024);
+		EnvelopeRequire(Result.Frame && Result.SelectedTransitions == 2 &&
+			std::holds_alternative<AttributeReplicationUpdate>(Result.Frame->Operations.front().Intent) &&
+			!std::get<AttributeReplicationUpdate>(Result.Frame->Operations.front().Intent).Value,
+			"Attribute deletion remains one ordered operation in the reduced mixed prefix");
+		F.Drain();
+	}
+	for (const bool Republish : {false, true}) {
+		NameBytePreflightFixture F(3);
+		const auto Filtered = F.Objects.back()->GetObjectId();
+		for (auto *Source : {F.Optimized.get(), F.Reference.get()})
+			EnvelopeRequire(Source->SetRelevant(F.Connection, Filtered, false).Frame.has_value(),
+				"filtered Attribute fixture removes one materialized object identically");
+		ChangeJournal::Get().Commit(F.World->GetObjectId(), Filtered,
+			AttributeUpdatedChange{std::string{"bad\0key", 7}, WireValue(1)});
+		if (Republish) {
+			for (auto *Source : {F.Optimized.get(), F.Reference.get()})
+				EnvelopeRequire(Source->SetRelevant(F.Connection, Filtered, true).Frame.has_value(),
+					"complete reentry legally covers the malformed historical Attribute");
+		}
+		for (std::size_t Index = 0; Index < 2; ++Index) F.Objects[Index]->SetName(std::string(24 * 1024, 'a' + Index));
+		const auto Result = F.Compare(512, 31, 32 * 1024);
+		EnvelopeRequire(Result.Frame &&
+			F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls == 1,
+			"irrelevant or publication-covered malformed Attribute cannot disable a legal Name size proof");
+		F.Drain();
+	}
+	{
+		NameBytePreflightFixture F(2);
+		F.Names(1);
+		ChangeJournal::Get().Commit(F.World->GetObjectId(), F.World->GetObjectId(),
+			AttributeUpdatedChange{"Unresolved", WireValue(WireObjectReference{WireObjectId::FromObjectId({999, 7})})});
+		F.Compare(512, 0);
+		const auto InitialLag = F.Optimized->GetJournalLag(F.Connection);
+		const auto Result = F.Compare(512, 31, 32 * 1024);
+		EnvelopeRequire(!Result.Frame && Result.Error == "Replication operation references an object not materialized for this peer" &&
+			F.Optimized->GetJournalLag(F.Connection) == InitialLag &&
+			Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) == 0,
+			"unresolved selected Attribute preserves reference-error precedence over oversized Names");
+	}
 	{
 		NameBytePreflightFixture F;
 		F.Names(16);

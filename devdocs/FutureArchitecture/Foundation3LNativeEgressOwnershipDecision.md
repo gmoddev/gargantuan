@@ -6,8 +6,8 @@ evidence_date: 2026-10-11
 
 # Foundation 3L — execution-domain and native-egress ownership decision
 
-**Current verdict: BOUNDED ACTOR RECONCILIATION STILL FAILS NATIVE32 F1;
-STOP BEFORE AN UNQUALIFIED MULTI-PACKET OWNERSHIP REDESIGN.** The
+**Current verdict: NATIVE ACTOR SERVICE REMAINS UNQUALIFIED; RECOVERY
+PREPARATION IS UNDER INDEPENDENT CAUSAL INVESTIGATION.** The
 original static review below found the exclusive pooled-server lease to be the
 smallest defensible capacity boundary for the packaged ServerHost and identified
 ACK/history, chronology, protected-service, and close-path blockers before a
@@ -20,6 +20,9 @@ impossibility proof against retaining GNS reliability and security with an
 off-thread OS call; the measured candidate still fails the unchanged service
 contract. Sections 12–13 record the implemented reconciliation correction,
 truthful cessation baseline, required CI and fresh failed capacity measurement.
+Section 14 records the separately authorized parallel blocker investigation;
+the section 13 stop is the preceding task's receipt, not a claim that recovery
+work requires a native protocol redesign.
 
 ## 1. Authority, revisions and source register
 
@@ -845,3 +848,136 @@ KI-006 stays OPEN; Foundation 3L remains B — PARTIALLY READY. Canonical Local3
 real-TLS Node32 and final acceptance remain withheld after native32 FAIL. The
 separate structural production/drain miss also remains. PR #6 stays draft;
 no Foundation 3M work or automatic merge occurs.
+
+## 14. Parallel native-service and recovery investigations (2026-10-11)
+
+The user separately authorizes useful recovery progress while Track A is
+stopped. Each track permits at most two materially different, evidence-supported
+corrections that fail qualification before returning to architecture review.
+Diagnostic measurements are separately identified and cannot qualify capacity.
+All F1, admission, fairness, reserve, security and reliability contracts remain.
+
+### Track A — existing execution mechanisms do not establish a bound
+
+An independent source review finds no additional demonstrated implementation
+defect and no credible actor execution bound in the existing GNS mechanisms.
+The reviewed applied dependency source is the pinned revision plus the local
+patches at measured code `600912ed5`. References below are to that applied
+source, retained on `dockerbox` under
+`C:\Sandbox\Codex\Cache\foundation3l-native-egress-fetch\gamenetworkingsockets-src\src\steamnetworkingsockets\clientlib`.
+
+| Execution stage | Source fact |
+| --- | --- |
+| Publication and wake | `cmake/gns/NativeEgressWorker.inc:209–213` assigns the immutable result, release-publishes Ready, notifies and wakes the service thread without a GNS protocol lock. |
+| Existing dedicated thread | `steamnetworkingsockets_socketthread.cpp:3487–3518` already raises Windows service priority to `THREAD_PRIORITY_HIGHEST`; Linux elevation is best effort. |
+| Global acquisition | `steamnetworkingsockets_socketthread.cpp:2811–2825` repeatedly tries the global lock with a 20 ms timeout slice until acquisition or shutdown. The slice is not a measured hold or mandatory sleep; there is no total F1 bound. |
+| Ready reconciliation | `csteamnetworkingsockets.cpp:377–413` scans 64 entries under the global lock and attempts each ready connection lock without blocking, retaining ASAP service on collision. |
+| Packet preparation | `steamnetworkingsockets_snp.cpp:2258–2276` commits the actual result, replays the complete fixed receive journal, handles terminal state and offers normal SNP processing with a fresh clock. |
+| Replay | `steamnetworkingsockets_udp.cpp:713–731` drains up to 64 datagrams before another numbered packet; bounded count does not bound callback wall time. |
+| Application-facing connection locks | `csteamnetworkingsockets.cpp:1447–1454` and `steamnetworkingsockets_connections.cpp:2051–2058` hold the connection lock through ordinary message allocation and full payload copying. Feedback copies its fixed history under that lock at `csteamnetworkingsockets.cpp:529–533`. |
+| Manual polling | `steamnetworkingsockets_socketthread.cpp:4445–4490` stops the service thread and calls the same `InternalPoll` under the same global lock. It supplies no independent protocol domain. |
+| Callbacks and deferred work | `csteamnetworkingsockets.cpp:1898–1941` releases the callback-queue lock before invoking callbacks. Deferred global-lock tasks, connection deletion and socket destruction remain in the service pass at `steamnetworkingsockets_socketthread.cpp:2987–3000`. Their individual work is not preemptible by a ready checkpoint. |
+
+These are source exposures, not measured causes of the five current failing
+peers. In particular, callback duration alone does not demonstrate global
+contention. Allocation/copy could use existing `AllocateMessage`/`SendMessages`
+to shorten one connection-lock hold, but no retained failing interval attributes
+its delay to that hold. Applying it as a capacity correction would be speculative.
+
+**Track A stops without another native correction or automatic pipeline.**
+Ranked alternatives are: (1) qualify an execution environment together with
+bounds on all intervening actor/lock work; (2) give one GNS actor bounded command
+ownership of application-facing operations using existing manual polling,
+with new completion/overload/lifecycle and scheduling proofs; (3) a defensible
+prepared-packet pipeline with the ownership obligations in section 13; and
+(4) an explicit product/platform decision. The second alternative is a
+substantial execution-boundary design, not a polling switch. Neither all
+one-packet designs' impossibility nor a sufficient pipeline depth is proved.
+Track B may reduce Main CPU interference, but that alone establishes no actor
+bound and does not turn the retained native32 failure into PASS.
+
+### Track B — first bottleneck is incremental preparation before admission
+
+The retained `600912ed5` recovery samples show approximately 94–103 ms per
+Session step, comprising 71–79 ms of exclusive incremental preparation and
+17–23 ms of validation/encoding. Early busy samples charge 18,904 journal
+records and 25 geometric encoding retries per step. Planning/relevance are
+near zero, materialization backlog is zero and the scheduler queue is empty.
+No insufficient source production or relevance/planning cause follows: the
+source tail is fixed at 23,250, and exact accepted obligations reconcile.
+
+From cessation to live convergence, 2,130 new grants accept 810,387,360 bytes;
+adding 1,550,009 bytes of initial accepted debt gives the exact 811,937,369-byte
+cessation obligation. Observed grant ownership through release averages
+48.354 ms, with maximum 127.762 ms. These are Main-observed lifecycle durations,
+not measurements of native ACK latency. Lengthy Main preparation limits its
+opportunities to offer and retire grants. Credit, four slots, one grant per
+peer, exact retirement and scheduler policy must remain unchanged.
+
+The production path is retained journal → bounded `ProduceIncremental`
+selection/build/validation retries → exact encoded offer → pooled admission
+→ immediate scheduler flush → real native first send/ACK → next Main
+observation → exact retirement. Near the deadline most remaining work has
+not reached acceptance; the native outstanding debt is only about one wave.
+
+The existing all-native-Name size proof falls back on unsupported records.
+Before selecting a correction, diagnostic source `348430c42` adds only fixed
+first-fallback category counters to the existing bounded recovery samples:
+non-property (including its Attribute subset), non-Name, nonreplicated,
+Name-state and invalid-Name, plus whether the blocker is already filtered by
+publication/relevance. No identities or payloads are retained. Selection,
+validation, retries, read charges, encoding and publication are unchanged.
+This diagnostic identifies the missing source-path fact; it is not a capacity
+candidate. Its Release build and four affected native tests pass (76.90 s).
+The single reproduction is run `2c7756d6-0b62-471e-83c3-29ed6053e354`.
+In its first six busy structural samples, each step has 30 eligible proof calls
+and 25 geometric retries. First fallback counts are 26, 22, 24, 23, 21 and 16;
+every one is an Attribute, with zero filtered, non-Name, nonreplicated,
+Name-state or invalid-Name fallback. Session time is 87–96 ms, exclusive
+incremental time 67–75 ms and encode time 14–19 ms. This establishes a concrete
+source path: selected Attributes disable the existing Name-only lower bound,
+so large mixed candidates are repeatedly built and validated before rejection.
+
+The diagnostic remains **FAIL**: six of 32 peer F1 summaries fail, maximum
+23,122,854,336 byte-µs. Structural live convergence is 45.567431 s versus its
+unchanged workload-derived 39.171720 s bound, using 1,088,452,477 reference
+bytes. These fresh-cut sizes differ from the prior run; neither a controlled
+speed comparison nor a new allowance follows. All 106 indexed files verify;
+index SHA-256 is
+`716a0a2e22ed453288f53bd79827a04a919332d8f1df85a81d42189aa54cb4c3`.
+Cleanup finds zero runtime processes and zero UDP 39450 sockets. Raw evidence
+is under `C:\Sandbox\Codex\Evidence\Foundation3LRecoveryFallback348430c42`
+on `dockerbox`; plan, pins, preflight logs and summary are under
+`C:\Sandbox\Codex\Artifacts\foundation3l-recovery-fallback-348430c42`.
+
+The selected first correction is narrowly to validate selected Attributes
+alongside native Names in this lower-bound proof. Attributes count toward the
+existing operation limit, but add no inferred bytes to the Name-only size lower
+bound. The complete selected candidate must remain valid before an encoding
+attempt may be skipped. Actual encoding, frame limit, geometric retries and
+charged reads remain unchanged; admission still uses exact complete bytes.
+Other emitting record types retain ordinary fallback. The selected Attribute
+records are borrowed in a call-local list bounded by existing read/operation
+limits. Attribute validation is deferred until Name bytes prove oversize, so
+small or pure Attribute candidates perform no duplicate Attribute validation.
+No persistent value cache, alternate serializer, scheduler or native ownership
+change is introduced.
+
+The mixed-Attribute regression uses the real production coordinator against its
+existing unoptimized reference and requires exact bytes, fingerprint, sequence,
+cursor, Known, error, read-charge and retry equality. Against old `348430c42`
+production behavior plus the new fixture/counter header, the first mixed case
+fails its work assertion: six actual encodes versus six reference encodes.
+With the correction, deferred, rejected and accepted cases each perform one
+actual encode versus six reference encodes, preserving the exact outcomes.
+Additional regressions cover malformed selected suffixes (key, UTF-8, JSON
+size and NaN), unselected malformed suffixes, deletion, unknown references,
+filtered/publication-covered history and zero extra Attribute validations for
+small/pure Attribute frames. Independent source review finds no identified
+correctness blocker. The candidate Release build with pause hooks OFF passes;
+affected CTest passes 5/5 (83.32 s): GameSession, frozen recovery quote,
+replication, replication relevance and real-GNS GameSession. Logs, source pins,
+the expected old-control failure and JUnit are retained under
+`C:\Sandbox\Codex\Artifacts\foundation3l-recovery-mixed-preflight`.
+Required final-source hosted CI and fresh native recovery qualification remain
+outstanding. No recovery or F1 PASS is claimed.

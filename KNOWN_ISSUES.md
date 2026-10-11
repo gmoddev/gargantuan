@@ -85,6 +85,24 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-11 parallel blocker follow-up: independent Track A source review finds
+no credible actor-service bound in the existing dedicated high-priority thread,
+manual polling or global/connection-lock work. Track A stops without a new
+speculative patch or pipeline rewrite. Track B independently identifies costly
+incremental preparation before admission: early busy steps take 94–103 ms,
+including 25 geometric retries. One bounded fallback diagnostic at `348430c42`
+shows every first blocker in its first six busy samples is an emitted Attribute,
+with no filtered/Name-state/invalid blocker. The diagnostic remains FAIL; all
+106 indexed files verify and cleanup is clear. The first selected correction
+extends the existing Name-only size lower bound to validate selected Attributes,
+preserving exact frames, errors, read charges and publication. Its new mixed
+regression fails against old behavior (six encodes) and passes the candidate
+(one encode with identical bytes/outcomes). Release build and affected native
+CTest pass 5/5 (83.32 s); final-source CI and fresh native qualification remain
+in progress. No
+recovery/F1 PASS follows yet. See [parallel investigations](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#14-parallel-native-service-and-recovery-investigations-2026-10-11).
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
+
 2026-10-11 latest actor candidate `600912ed5` passes all six required exact-head
 hosted jobs, linked ownership/worker/fairness preflights 3/3, production affected
 CTest 13/13, and the follow-up GameSession/frozen-quote CTest 2/2. Causal replay

@@ -2092,8 +2092,8 @@ namespace gargantuan::network {
 					.AcceptedRevision = Peer->second.AcceptedRevision});
 			return Finish({{}, "No relevant replication changes are available"});
 		}
-		// Prove only an all-native-Name candidate that the normal encoder would
-		// reject for size. This is a lower bound, never an alternate serializer or
+		// Prove a native-Name/Attribute candidate that the normal encoder would
+		// reject for size. Name payload alone is a lower bound, never a serializer or
 		// admission estimate. Validate every selected value before skipping a retry:
 		// Frame::IsValid checks the whole candidate before the writer's size limit,
 		// so a bad later string must not disappear behind an earlier oversize prefix.
@@ -2108,6 +2108,7 @@ namespace gargantuan::network {
 			}
 			std::set<ObjectId> CurrentNames;
 			std::size_t NameBytes = 0, OperationCount = 0;
+			std::vector<const ChangeRecord *> SelectedAttributes;
 			for (const auto *Record : Records) {
 				const auto *Name = std::get_if<PropertyUpdatedChange>(&Record->Payload);
 				const auto Accepted = Peer->second.AcceptedParents.find(Record->Object);
@@ -2127,6 +2128,19 @@ namespace gargantuan::network {
 						runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightFilteredFallback);
 				};
 				if (!Name) {
+					if (const auto *Attribute = std::get_if<AttributeUpdatedChange>(&Record->Payload)) {
+						// Match the normal producer's filters before validating an emitted
+						// Attribute. This candidate contains no lifecycle operations, so
+						// accepted membership stays unchanged throughout this proof.
+						if ((Published != Peer->second.PublicationJournalEnds.end() && Record->Sequence < Published->second) ||
+							!Peer->second.View.RelevantObjects.contains(Record->Object) ||
+							!Peer->second.View.Knows(Record->Object)) continue;
+						// Pinned records outlive this call-local list. Attribute values are
+						// copied/validated only if Names alone prove this candidate too big.
+						SelectedAttributes.push_back(Record);
+						++OperationCount;
+						continue;
+					}
 					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightNonPropertyFallback);
 					if (std::holds_alternative<AttributeUpdatedChange>(Record->Payload))
 						runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightAttributeFallback);
@@ -2171,7 +2185,22 @@ namespace gargantuan::network {
 				NameBytes += Value.size();
 				++OperationCount;
 			}
-			return NameBytes > MaximumFrameBytes;
+			if (NameBytes <= MaximumFrameBytes) return false;
+			// Do not hide malformed Attributes behind an oversized Name prefix.
+			// The list is bounded by the existing selected-operation/read limits and
+			// cannot survive this proof or create an alternative serialization queue.
+			for (const auto *Record : SelectedAttributes) {
+				const auto &Attribute = std::get<AttributeUpdatedChange>(Record->Payload);
+				runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightAttributeValidations);
+				const ReplicationOperation Operation{Peer->second.View.Epoch,
+					AttributeReplicationUpdate{Record->Object, Attribute.AttributeName, Attribute.Value}};
+				if ((Attribute.Value && !ReferencesKnown(Peer->second.View, *Attribute.Value)) || !Operation.IsValid()) {
+					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightNonPropertyFallback);
+					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightAttributeFallback);
+					return false;
+				}
+			}
+			return true;
 		};
 		if (ProvenOversizedNames()) {
 			// Keep the existing geometric attempt and full pinned-read charge. Only
