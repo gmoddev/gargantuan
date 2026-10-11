@@ -85,6 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-11 initial-service follow-up returns **INITIAL F1 SERVICE — ARCHITECTURE
+DECISION REQUIRED**. One bounded diagnostic at `67d3772a4` passes its Release
+build and eight affected tests, but obtains no covered delayed-initial witness:
+all nine retained failed grants start native service in 180–685 µs, then fail
+during later drain. The covered first witness has 0.4 µs native Send-lock wait
+and 32 µs payload allocation/copy. This does not attribute the original 7,070 µs
+initial miss or justify a command owner. Full callback observer overhead is
+unmeasured; history freezes on the first running failure, so no universal initial
+PASS follows. All 107 indexed files verify and cleanup is clear. No production
+correction or additional blind run is selected. Recovery qualification remains
+intact. See [initial-service assessment](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#15-initial-service-causal-investigation-2026-10-11).
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
+
 2026-10-11 parallel blocker follow-up: independent Track A source review finds
 no credible actor-service bound in the existing dedicated high-priority thread,
 manual polling or global/connection-lock work. Track A stops without a new

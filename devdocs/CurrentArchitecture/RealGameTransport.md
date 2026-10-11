@@ -251,6 +251,19 @@ only when `PollEvents` calls GNS `RunCallbacks`, and application code receives
 only copied `TransportEvent` values through caller-owned output storage. No
 DataModel mutation, Luau callback, or scheduler action occurs in a GNS callback.
 
+The existing opt-in Farm service-timing observer can retain a private 128-byte
+initial-service trace in the native worker path: one active and one completed
+value per peer, copied into existing feedback and the bounded first-failed
+witness. It joins original activation, adapter/native API boundaries, initial
+SNP entry, packet preparation and actual worker/OS timestamps by token/message.
+Two QPC phases observe native Send connection-lock acquisition and payload copy.
+The observer owner outlives native joins; disabled tracing adds no clock reads,
+and no diagnostic value changes F1 or protocol decisions. Full callback observer
+cost is unmeasured, so these traces cannot qualify capacity. The
+[initial-service assessment](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#15-initial-service-causal-investigation-2026-10-11)
+records the bounded diagnostic's non-reproduction of the delayed initial witness
+and the remaining execution-boundary decision.
+
 GNS global initialization, callback routing, adapter lifetime, and public adapter
 operations are serialized by one recursive mutex. Registries are removed before
 connection/listener destruction and the last adapter releases the global GNS

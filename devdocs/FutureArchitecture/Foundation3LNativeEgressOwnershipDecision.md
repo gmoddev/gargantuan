@@ -1116,3 +1116,145 @@ exact diagnostic source, preflights, package pins and outcome will be recorded
 after execution. A non-reproduction or uncovered interval remains uncertain,
 with no blind retry. No initial-service correction, pipeline, qualified bounded
 actor model or platform-incapacity claim follows from source inspection alone.
+
+### Bounded diagnostic result and architecture decision
+
+**INITIAL F1 SERVICE — ARCHITECTURE DECISION REQUIRED.** The one bounded
+diagnostic did not obtain a covered delayed-initial-service witness. No production
+correction is selected from a different failure or a source exposure alone.
+
+Diagnostic source is `67d3772a410ece53797578a8fd2b8e712ab874eb`. Initial
+diagnostic commit `3bf749867` failed compilation because its payload-copy anchor
+also matched a receive copy. The corrected anchor is send-specific; the failed
+log is retained and no campaign ran on that revision. Its superseded hosted jobs
+were cancelled, not counted as PASS. Corrected Release build with pause hooks
+OFF passes, as do eight affected tests: GameSession, frozen recovery quote,
+replication, relevance, real-GNS GameSession, real transport, pooled-source
+contract and diagnostic-observe source contract. The new pooled-curve fixture
+passes eight cases, including disabled clocks, completed-trace retention/reset
+and sticky F1 failure; FarmF1 checks exact and mismatched trace tokens. Required
+hosted checks for the corrected diagnostic are separately tracked and still
+running at this receipt; no new production qualification uses them as passed.
+
+The single run `ecabe35b-f73c-4981-9a11-d19911408301` seals **FAIL**, server
+exit 10, with 9/32 F1 peer failures. Maximum running deficit is
+393,064,317,824 byte-µs and maximum finite shortfall is 209,462,000,000 byte-µs.
+These are instrumented results with unmeasured observer overhead, not a capacity
+qualification or a controlled regression relative to the uninstrumented source.
+All nine retained initial traces have valid exact token/time joins, start with
+no pending packet and reach first native-positive service in **180–685 µs**.
+They do not reproduce the retained 7,070 µs initial-service failure. In particular,
+peer 11's large-grant finite miss follows prompt initial service at 295 µs and
+later slow draining; it is not an initial-service counterexample.
+
+The first observed failed grant is peer `31:1`, token 4121, with 369,100 bytes:
+
+| Measured stage | Elapsed µs |
+| --- | ---: |
+| Activation → transport entry | 70 |
+| Adapter mutex acquisition | 0 (microsecond resolution) |
+| Adapter work → native API entry | 50 |
+| Native API entry → connection locked | 1 |
+| Locked → native enqueue | 34 |
+| Enqueue → first SNP visit | 6 |
+| First SNP visit → worker queue | 4 |
+| Worker queue → OS start | 12 |
+| OS start → positive native completion | 29 |
+| **Activation → first native-positive** | **206** |
+
+Its native API QPC spans independently measure **0.4 µs connection-lock wait**
+and **32.0 µs allocation/copy**. Across the 25 retained native API calls, those
+maxima are 1.4 µs and 32.0 µs. These facts do not identify an application
+Send-lock/copy bottleneck in this witness. They do not measure every feedback
+lock hold or attribute the old token 1071 interval. `NativeApiLocked` includes
+preceding observer publication work; scalar differences are not pure CPU time.
+
+This grant completes first-send in 20,299 µs, but fails recurring service with
+maximum running deficit 30,881,629,504 byte-µs. The retained noncreation QPC
+history covers approximately 33.176 ms, including its activation and completion;
+there are zero dropped records or counter overflows. Its largest native-positive
+segment gap is 1,840 µs, from `1278455904282` to `1278455906122`. Within that
+gap, global acquisition spans are 0.1–0.4 µs, sender/thinker spans at most about
+5.4 µs, and no receive-drain span overlaps. The actor performs existing precise
+spin waits: requested/observed 581/580.9, 409/409.0, 166/165.6 and 829/634.2 µs.
+This excludes a long measured global-lock/receive/thinker blocking span in that
+covered gap. It does not partition later-packet worker/OS residence: this
+diagnostic retains worker stage stamps for the initial packet only. It neither
+proves timer blindness nor explains the historical initial failure.
+
+The fixed ring records 8,560,274 attempts and overwrites older history as
+designed, freezing on that first observed **running** failure. Most later failed
+grants lack surrounding QPC coverage. The bounded first-failed witness selection
+does not prove that every later initial interval passed. Full callback timing is
+known to perturb execution; its total added overhead is **NOT MEASURED**. Thus
+the result is a non-reproduction in the retained initial witnesses, not a claim
+that the original initial failure disappeared or that initial F1 is qualified.
+
+The five Scale phases and all three diagnostic recovery cases pass. Gameplay is
+0.299729/20.470580 s, structural 22.025060/36.285691 s with 983,568,617 causal
+bytes, and mixed 0.345830/20.471283 s. These different fresh cuts and instrumented
+times do not supersede section 14's independently replayed recovery qualification.
+No Track B redesign is justified. Final accepted = first-sent = ACKed = retired
+is **2,279,954,203 bytes**, with zero pending tokens or terminal release.
+All **107** indexed files verify by size/SHA-256; index hash is
+`3f7245da3fa203af194d6c5127e4a5b7b4f4137a939a1dc610314c80a097237a`.
+Cleanup confirms zero task runtime processes and zero UDP 39450 sockets.
+
+Source, workload and package provenance are retained under
+`C:\Sandbox\Codex\Artifacts\foundation3l-initial-service-trace` on `dockerbox`;
+sealed raw evidence remains under
+`C:\Sandbox\Codex\Evidence\Foundation3LInitialServiceTrace\ecabe35b-f73c-4981-9a11-d19911408301`.
+Server binary SHA-256 is
+`100322c389ea7f4572e150406e42883816cf4cf22b6b124a1c040d108e516c4b`;
+descriptor hash is
+`c03bcce45bb41fccf1900b66051cf7ea82173f9f6c9a52478e23765cb9d7d527`.
+The unchanged Player pin is recorded in the predeclared plan. Both 57-member
+packages verify. The prelaunch census records 22,850,560,000 available bytes,
+zero runtimes and test-port sockets; unrelated native builds had finished before
+launch. Its aggregate CPU sample is 69%, so an otherwise idle host is not claimed.
+
+#### Both architectures and the supported-platform question
+
+**A — bounded actor opportunity:** Existing high priority, ASAP scheduling,
+checkpoints and precise wake bound selected work/counts but not total global or
+connection lock residence, non-preemptible callbacks, initial OS dispatch or
+worker scheduling. No covered initial delay identifies which exposure to fix.
+Initial registration or wider precise-wake eligibility may help a demonstrated
+batch/wait defect, but applying either now would be speculative. No production
+timing correction or timer constant change is attempted.
+
+**B — bounded actor/command ownership:** A command owner can reduce measured
+application/native competition only with bounded command execution and original
+activation/queue time, exact enqueue completion, overload rejection, FIFO,
+generation, protected service, feedback, close/cancel and shutdown proofs.
+It does not itself bound host dispatch or intervening native work. The covered
+Send-lock and copy spans are short; a command framework or payload preallocation
+does not address a demonstrated initial bottleneck here. It is not implemented.
+
+**Platform verdict:** The existing Windows native32 deployment remains
+unqualified under unchanged F1. Neither architecture currently supplies a
+credible measured total initial-service bound. This is an unresolved attribution
+and execution-boundary limitation, not proof that Windows/hardware or every
+one-packet design is incapable of F1. No multi-packet pipeline is justified by
+the one-segment initial counterexample.
+
+Ranked next steps are:
+
+1. **Smallest discriminator:** a bounded, low-overhead initial-delay capture
+   using the existing per-grant stage chain, retaining specifically an initial
+   finite miss and focused scheduling/lock evidence around it. Avoid the unrelated
+   running-failure freeze and full callback observer; quantify the remaining
+   observer cost. This is a different missing-fact experiment, not another
+   unchanged general campaign. It is proposed, not executed in this bounded turn.
+2. If that identifies a specific batch, lock or wake defect, qualify a narrow
+   actor-opportunity correction at unchanged F1 before fresh capacity testing.
+3. If application lock competition is measured and cannot be removed narrowly,
+   review bounded actor/command ownership with its complete completion/lifecycle
+   contract before implementation.
+4. If a sufficient initial opportunity cannot be qualified, make an explicit
+   supported-execution-environment/platform decision. Do not derive slack from
+   measurements or replace GNS speculatively.
+
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.** Canonical
+Local32, real-TLS Node32 and final acceptance remain withheld. No further blind
+diagnostic run, pipeline, Foundation 3M work or merge is started.
