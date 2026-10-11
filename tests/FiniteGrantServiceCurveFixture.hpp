@@ -25,6 +25,37 @@ struct ReferencePoint {
 	bool Running;
 };
 
+// D02 candidate arithmetic only. This fixture reference consumes synthetic
+// unique-native events and an explicitly resolved evidence frontier. It does
+// not replace the production F1 evaluator or qualify a host execution model.
+enum class CandidateH1Verdict { CompletedTimely, ActiveWithinBudget, DeadlineMiss, IncompleteFeedback, Invalid };
+
+inline CandidateH1Verdict CandidateH1(std::uint64_t GrantBytes, std::uint64_t Activated,
+	const std::vector<Step> &NativeEvents, std::uint64_t ResolvedThrough, bool FeedbackComplete = true) {
+	constexpr std::uint64_t Rate = 16'777'216;
+	constexpr std::uint64_t BudgetByteMicroseconds = Rate * 6'000 + (524'288 + 1'248) * 1'000'000ULL;
+	if (!GrantBytes || GrantBytes > 524'288 || !Activated || Activated == UINT64_MAX ||
+		ResolvedThrough < Activated || NativeEvents.size() > 512)
+		return CandidateH1Verdict::Invalid;
+	std::uint64_t Last = Activated, Sent = 0, Completed = 0;
+	bool CompletionPresent = false;
+	for (const auto &Event : NativeEvents) {
+		if (!Event.Bytes || Event.Bytes > GrantBytes - Sent || Event.Time < Last || Event.Time > ResolvedThrough)
+			return CandidateH1Verdict::Invalid;
+		Sent += Event.Bytes; Last = Event.Time;
+		if (Sent == GrantBytes) { Completed = Event.Time; CompletionPresent = true; }
+	}
+	// An unresolved result cannot prove either timely service or an exact
+	// deadline miss. A genuinely resolved late observation may carry an earlier
+	// positive native completion, which retains its actual event timestamp.
+	if (!FeedbackComplete) return CandidateH1Verdict::IncompleteFeedback;
+	const auto End = CompletionPresent ? Completed : ResolvedThrough;
+	const auto Elapsed = End - Activated;
+	if (Elapsed > UINT64_MAX / Rate) return CandidateH1Verdict::Invalid;
+	if (Rate * Elapsed > BudgetByteMicroseconds) return CandidateH1Verdict::DeadlineMiss;
+	return CompletionPresent ? CandidateH1Verdict::CompletedTimely : CandidateH1Verdict::ActiveWithinBudget;
+}
+
 // Intentionally straightforward reference: enumerate both sides of every
 // atomic first-send and compare each running point with every earlier point.
 // Between points, demand only rises, so the pre-event endpoint is the worst
@@ -202,7 +233,91 @@ inline bool Run() {
 				"optimized verdict differs from independent pointwise reference");
 		}
 	});
-	std::cout << "[Network:FiniteGrant] passed=" << Passed << " total=8\n";
-	return Passed == 8;
+	Case("CandidateUniformCompletionBoundary", [] {
+		constexpr std::uint64_t Activated = 1'000'000;
+		for (const auto Bytes : {77ULL, 1'057ULL, 65'536ULL, 524'288ULL}) {
+			Require(CandidateH1(Bytes, Activated, {{Activated + 37'324, Bytes}}, Activated + 37'324) ==
+				CandidateH1Verdict::CompletedTimely, "candidate uniform exact lower boundary");
+			Require(CandidateH1(Bytes, Activated, {{Activated + 37'325, Bytes}}, Activated + 37'325) ==
+				CandidateH1Verdict::DeadlineMiss, "candidate uniform exact upper boundary");
+		}
+		Require(CandidateH1(1'057, Activated, {{Activated + 7'070, 1'057}}, Activated + 7'070) ==
+			CandidateH1Verdict::CompletedTimely, "candidate explicitly permits historical tiny completion timing");
+		FiniteGrantServiceCurve Existing;
+		Require(Existing.Activate(1, 1'057, Activated) && !Existing.FirstSend(1, 1'057, Activated + 7'070) &&
+			Existing.ServiceFailed, "unchanged production F1 continues to fail the same timing");
+	});
+	Case("CandidateMissingFirstAndFinalByte", [] {
+		constexpr std::uint64_t Activated = 2'000'000;
+		Require(CandidateH1(77, Activated, {}, Activated + 37'324) == CandidateH1Verdict::ActiveWithinBudget,
+			"known no-first-send prefix before deadline is not a completion certificate");
+		Require(CandidateH1(77, Activated, {}, Activated + 37'325) == CandidateH1Verdict::DeadlineMiss,
+			"known no first-send fails without waiting for later completion");
+		Require(CandidateH1(524'288, Activated, {{Activated + 100, 524'287}}, Activated + 37'325) ==
+			CandidateH1Verdict::DeadlineMiss, "prompt first-send cannot conceal withheld final byte");
+		Require(CandidateH1(524'288, Activated,
+			{{Activated + 100, 524'287}, {Activated + 37'325, 1}}, Activated + 40'000) ==
+			CandidateH1Verdict::DeadlineMiss, "late last byte cannot repair the deadline");
+	});
+	Case("CandidateNativeTimeAndEvidenceFrontier", [] {
+		constexpr std::uint64_t Activated = 3'000'000;
+		Require(CandidateH1(77, Activated, {{Activated + 37'324, 77}}, Activated + 100'000) ==
+			CandidateH1Verdict::CompletedTimely, "late actor feedback preserves genuinely timely native completion");
+		Require(CandidateH1(77, Activated, {}, Activated + 100'000, false) ==
+			CandidateH1Verdict::IncompleteFeedback, "unresolved feedback cannot manufacture an exact failure");
+		Require(CandidateH1(77, Activated, {{Activated + 37'324, 77}}, Activated + 100'000, false) ==
+			CandidateH1Verdict::IncompleteFeedback, "unresolved feedback cannot manufacture a completion PASS");
+		Require(CandidateH1(77, Activated, {{Activated - 1, 77}}, Activated + 100) == CandidateH1Verdict::Invalid &&
+			CandidateH1(77, Activated, {{Activated + 20, 76}, {Activated + 10, 1}}, Activated + 100) ==
+				CandidateH1Verdict::Invalid &&
+			CandidateH1(77, Activated, {{Activated + 101, 77}}, Activated + 100) == CandidateH1Verdict::Invalid,
+			"pre-activation, reversed and future native event chronology is invalid");
+		Require(CandidateH1(77, Activated, {{Activated + 1, 78}}, Activated + 100) == CandidateH1Verdict::Invalid &&
+			CandidateH1(0, Activated, {}, Activated) == CandidateH1Verdict::Invalid &&
+			CandidateH1(524'289, Activated, {}, Activated) == CandidateH1Verdict::Invalid &&
+			CandidateH1(77, Activated, {}, Activated - 1) == CandidateH1Verdict::Invalid &&
+			CandidateH1(77, 0, {}, 100) == CandidateH1Verdict::Invalid &&
+			CandidateH1(77, UINT64_MAX, {}, UINT64_MAX) == CandidateH1Verdict::Invalid &&
+			CandidateH1(77, 1, {}, UINT64_MAX) == CandidateH1Verdict::Invalid,
+			"false bytes, invalid grant, reversed frontier and overflow cannot qualify");
+	});
+	Case("CandidateSharedProtectedFifoBudget", [] {
+		// All stages belong to one follower's submission-to-native-completion
+		// interval. Passing each stage against a renewed allowance is unsound.
+		auto FollowerWithinBudget = [](std::uint64_t Submitted, std::uint64_t Completed) {
+			return Completed >= Submitted && Completed - Submitted <= 50'000;
+		};
+		Require(FollowerWithinBudget(1'000'000, 1'050'000) && !FollowerWithinBudget(1'000'000, 1'050'001),
+			"one protected FIFO budget has an exact 50-ms boundary");
+		Require(30'000 <= 50'000 && 30'000 <= 50'000 && !FollowerWithinBudget(1'000'000, 1'060'000),
+			"two individually acceptable serial stages cannot receive two queue allowances");
+		Require(!FollowerWithinBudget(1'000'000, 999'999), "reversed follower timestamps cannot qualify");
+		constexpr std::uint64_t Rate = 16'777'216;
+		constexpr std::uint64_t StructuralByteMicroseconds = Rate * 6'000 + (524'288 + 1'248) * 1'000'000ULL;
+		constexpr std::uint64_t FollowerByteMicroseconds = 20'480 * 1'000'000ULL;
+		constexpr std::uint64_t Combined = StructuralByteMicroseconds + FollowerByteMicroseconds;
+		Require(Combined <= Rate * 50'000 && Combined + Rate * 100'000 <= Rate * 150'000,
+			"existing maximum structural budget plus 20-KiB follower fits optimistic FIFO and RPC p95 budgets");
+		Require(!FollowerWithinBudget(1'000'000, 1'000'000 + Combined / Rate + 1 + 12'000),
+			"additional prefix or service delay remains inside the same FIFO budget");
+	});
+	Case("CandidateNativeAndDeliveryDeadlinesRemainSeparate", [] {
+		auto Within = [](std::uint64_t Started, std::uint64_t Finished, std::uint64_t Budget) {
+			return Finished >= Started && Finished - Started <= Budget;
+		};
+		constexpr std::uint64_t Submitted = 1'000'000;
+		Require(Within(Submitted, Submitted + 49'000, 50'000) &&
+			!Within(Submitted, Submitted + 250'001, 250'000),
+			"timely native follower cannot hide a missed Event ACK or action-result maximum");
+		Require(!Within(Submitted, Submitted + 60'000, 50'000) &&
+			Within(Submitted, Submitted + 65'000, 250'000),
+			"later timely delivery cannot repair a missed native FIFO deadline");
+		Require(Within(Submitted, Submitted + 250'000, 250'000) &&
+			!Within(Submitted, Submitted + 250'001, 250'000), "unchanged Event/action maximum has no substituted allowance");
+		// ACK/retirement and protected wire service still require the existing
+		// ownership and real transport fixtures; arithmetic does not prove them.
+	});
+	std::cout << "[Network:FiniteGrant] passed=" << Passed << " total=13\n";
+	return Passed == 13;
 }
 } // namespace FiniteGrantServiceCurveFixture

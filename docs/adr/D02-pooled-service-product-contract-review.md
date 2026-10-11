@@ -1,5 +1,5 @@
 ---
-status: reviewed-recommendation-not-adopted
+status: capacity-review-required-not-adopted
 owner: runtime-networking-and-product
 reviewed_source: 9551ae974869b56ed12aa27aee2f4e7996fb23c9
 reviewed: 2026-10-11
@@ -9,6 +9,12 @@ supersedes: none
 # D02 — Reassess pooled service against product outcomes
 
 ## Verdict and authority
+
+**Follow-up qualification verdict (2026-10-11): HYBRID F1 — CAPACITY/ARCHITECTURE
+DECISION REQUIRED.** The deterministic production-admission schedule in section 9
+fails the retained capacity and fairness targets even with optimistic native
+service and zero ACK delay. Do not adopt or implement this proposal as written.
+The original recommendation and its rationale below remain decision history.
 
 **HYBRID F1.** Recommend replacing the packet-scale hard service curves with
 hard completed-grant, protected-gameplay, capacity, fairness and recovery gates.
@@ -422,3 +428,143 @@ close. If the first deterministic slot/capacity proof fails, return a focused
 capacity decision instead of starting another actor optimization campaign.
 No contract implementation, physical run, 3M, release, merge or historical rewrite
 is part of this task.
+
+## 9. Deterministic capacity qualification — blocked (2026-10-11)
+
+**HYBRID F1 — CAPACITY/ARCHITECTURE DECISION REQUIRED.** This follow-up executes
+the previously requested preimplementation proof at base
+`1710bc8d08cf2ae4049f3c58f5aed988f0969904`. It extends existing fixtures only.
+No production health predicate, rate, wire, resource, recovery or admission source
+changes. D01/F1 remains governing; the independently qualified native32 recovery
+receipt remains valid. No native32 or physical campaign runs.
+
+### First causal contradiction: ACK-owned slot reuse at nominal Main cadence
+
+The source path is connection configuration at
+`ReliableServiceProfile::BackendSendRate()` and adapter min/max rate settings;
+Main's 16,667-us deadline; GameSession native receipt observation; exact
+`ReliableByteAdmission::Retire`; `RefreshService` releasing a slot only after
+structural **and ordinary** debt is zero; then rotating whole-group admission.
+The current immediate flush improves initial handoff, but does not transfer
+admission or slot release out of Main. Fresh feedback is reused during ordinary
+within-step preparation. A just-submitted peer cannot regrant in that step.
+
+The fixture uses the **real production admission accountant**, 32 generations,
+the unchanged peer/global credit and funding, four slots, rotation, explicit
+native-byte progress, ACK-ready time, retirement and regrant. Fixed-phase Main
+steps have no CPU cost. Feedback is always valid/fresh/qualified to maximize
+opportunity; no original F1 failure can reduce the modeled capacity.
+
+The native side is deliberately an **optimistic fluid budget**, not GNS execution:
+all configured 18-MiB/s wire service is unique structural payload, with free
+1,248-B idle credit plus a 1,300-B final-packet overdraw. Encryption, framing,
+worker queues, locks, retries, ACK delay and ordinary debt cost zero in the first
+case. The synthetic 2,548-B advance is not a real first native-positive packet
+and does not qualify packet ownership or native chronology.
+
+```text
+Earliest G drain in that favorable budget:
+ceil((524,288 - 1,248 - 1,300) * 1,000,000 / 18 MiB/s)
+  = 27,643 us > 16,667 us
+
+Earliest nominal slot reuse = 2 * 16,667 = 33,334 us
+Four-slot ceiling = 2 MiB / 0.033334 s = 59.998800024 MiB/s < 64 MiB/s
+Last of eight waves waits 7 * 33,334 = 233,338 us > 220,500 us
+```
+
+This is failure of an ordinary **fixed-phase nominal schedule** allowed by the
+current composition, not proof of universal hardware/platform incapacity.
+Variable within-frame phases and catch-up steps can change slot timing; incidental
+favorable jitter is not a credible bounded execution plan. The old scalar proof's
+500-us readmit cadence and immediate drain/retirement/release are not the actual
+Main/ACK-owned execution model.
+
+At modeled time **6,000,115 us**, the repeated G case has **361,978,652 unique
+bytes**, below the proposed aggregate prefix requirement **368,581,384 bytes**.
+That one exact prefix is a sufficient failure witness, not an all-interval
+capacity verifier. All 32 peers receive service and grants meet H1 and the G burst
+gate. The finite run conserves **536,870,912 B accepted = sent = ACKed = retired**,
+with no terminal release, at most 4G debt and four slots. Thus neither completion
+nor exact conservation excuses the capacity/fairness miss.
+
+### H1–H4 disposition and negative coverage
+
+| Requirement | Deterministic result / limitation |
+| --- | --- |
+| H1 uniform completion | Candidate arithmetic PASS: 77 B, 1,057 B, 64 KiB and G at exact 37,324/37,325-us boundary; missing first/final bytes, invalid chronology and incomplete feedback distinguish correctly. Timely native timestamps remain timely despite later reconciliation. Original eight F1 cases remain unchanged |
+| H2 shared FIFO | Shared-budget arithmetic PASS: one 50-ms window, optimistic G +20-KiB feasibility, serial 30+30-ms rejection and follower/prefix-delay negative. Event/action delivery maxima remain separate. This does not establish real ordinary follower service from structural completion or reserves |
+| H3 burst capability | 18-MiB/s favorable model meets the G post-first 31.25-ms gate. A 14-MiB/s sender meets H1 but fails that burst gate; no configured-rate inference |
+| H3 sustained capacity/fairness | FAIL in the nominal repeated maximum-grant schedule, before worker/OS/ACK cost. Every peer is checked; deliberately omitting one ready peer fails fairness independently of aggregate progress |
+| ACK/ordinary debt | At modeled 16-MiB/s native service, G completes in 31,099 us. A 3,000-us ACK delay or ordinary-debt hold moves release to the third Main step and eligible wait to 350,007 us. A native completion cannot free an ACK-owned slot |
+| Tiny/medium/mixed shape | 77-B and 64-KiB groups, plus alternating tiny/medium/G groups, conserve exactly and serve every peer within the tested first-wave fair bound. They are not mislabeled the continuously offered G capacity fixture. Four admissions/frame bound medium/tiny byte throughput independently of native rates |
+| Source below offered rate | One G per peer per second completes and conserves, but yields no capacity qualification. Neither credit nor low offered load is evidence of 64 MiB/s |
+| Backpressure/resources | Failed preaccept reservation rolls back exactly; source work is retained. Duplicate retirement rejects. Debt/credit/grant bounds and accepted/send/ACK/retired ordering hold at every step |
+| H4 causal semantics | Existing 32 causal-evidence cases and existing recovery-contract regressions PASS unchanged. Cessation reference, semantic coverage and exact retirement are not altered |
+| H4 rate-derived convergence | NOT established under the proposal: its 2/64-MiB/s and 220.5-ms prerequisites already fail H3. A finite admission-schedule negative shows H1/burst deadlines alone do not imply the old byte-only formula |
+
+The finite H4 schedule uses 1,280 G offers per peer (640 MiB each): completion is
+**341.590160 s**, versus the unchanged **340.470500-s** formula. It already fails
+H3 capacity/fairness; it is not a jointly healthy H1–H3 counterexample. A real
+GRPL codec test encodes/decodes one exact G group with eight bounded Name updates
+and one Attribute barrier. `1,280 * 9 = 11,520 < 16,384` is hypothetical record-count
+arithmetic only. There is no full source/journal/planning replay or 640-MiB cessation
+quote here. Repeating identical values need not create new records. Do not
+relabel the canonical qualified recovery campaign based on this synthetic case.
+
+### Executed tests and reproducibility
+
+- `FiniteGrantServiceCurveFixture.hpp`: **13/13** (eight original plus five
+  H1/H2 candidate cases); existing registration and `--service-curve` entry.
+- `PooledReliableServiceProductionFixture.hpp`: existing **18/18** plus
+  **10/10** candidate schedule/codec cases. Expected contradictions assert
+  `candidate_qualified=0`; a green regression executable is not a hybrid PASS.
+- `gargantuan_networking_contracts`: **1/1 CTest PASS**, with the existing
+  scalar model/hardening, feedback, recovery and **32 causal-evidence** cases.
+- Existing pure `--service-curve` also retains **9/9** pooled curve cases.
+  This branch returns before GNS transport creation; no socket workload runs.
+
+Compilation uses the trusted `dockerbox` incremental MSVC Release build, bounded
+parallelism four, and only the two affected test targets. Logs/JUnit and transferred
+test-source hashes are retained under
+`C:\Sandbox\Codex\Artifacts\foundation3l-hybrid-capacity`; local copies are at
+`C:\Users\aiden\.codex\artifacts\foundation3l-hybrid-capacity`.
+The first passing CTest JUnit truncated stdout to 1,024 B; the same focused test
+was rerun with existing verbose/output-size options to preserve the actual
+counterexample rows. No new verifier or tracing infrastructure was added.
+
+Final focused CTest takes 0.12 s; the build and both deterministic commands exit
+zero. The three tested source-file SHA-256 values match between local and worker:
+
+| Test source | SHA-256 |
+| --- | --- |
+| `FiniteGrantServiceCurveFixture.hpp` | `66d78281fcdbe129c97f76e9e906f8e7a68ace8b1fde42dfef67596918ac934e` |
+| `PooledReliableServiceProductionFixture.hpp` | `38d664ebd183b2fc494171de4890f717c2ca23e929e0240f55167aace9555c2f` |
+| `NetworkingContractsTests.cpp` | `544bcdd7e1db3f79b875582ec69eeab2d132faf23e73d5840d2bf6e3605c2b4c` |
+
+The proof is source-backed deterministic arithmetic/resource behavior. It proves
+neither physical capacity, WCET, full source throughput nor a supported alternate
+actor schedule. No new hosted/native32/physical evidence is inferred. The PR remains
+draft and the proposed production predicate remains unimplemented.
+
+At 2026-10-11 22:13:46 UTC, remote PR head is still `1710bc8d0`: its GNS push/PR
+workflows **38177701544/38177705974** pass; native push/PR workflows
+**38177701541/38177705969** remain in progress. They do not test these new fixtures.
+This deterministic follow-up is retained as a local commit; no push/hosted
+workflow is initiated because the ordinary push CI includes socket/native
+execution outside this task's deterministic-only scope. CI policy is not changed
+or bypassed, and no final-source hosted PASS is claimed.
+
+### Ranked alternatives and exact next task
+
+| Rank | Alternative | Required evidence and cost |
+| --- | --- | --- |
+| 1 | Review bounded additional **Main-owned** retirement/reconciliation/admission opportunities | Addresses the demonstrated slot quantization while retaining exact ownership and simulation authority. Define actual opportunity spacing, work and ACK bounds, then prove repeated G waves, fairness, protected service and unchanged recovery. Another timer alone is not proof; no implementation is authorized here |
+| 2 | Review separation of first-send capacity permits from ACK-owned debt | Changes four-slot/debt ownership and funded resource exposure. Four unretired G grants already fill 4G: decoupling alone cannot admit a fifth G under current bounds. Requires an explicit capacity/ownership decision and exact ACK/retry/generation/shutdown/protected-traffic proofs; do not implement a pipeline automatically |
+| 3 | Review a different physically funded burst model | G must finish inside one nominal frame to use that slot every frame. Even this favorable budget needs about 29.854 MiB/s per connection; four such rates exceed the current 72-MiB/s structural-plus-transport allocation. Raising configuration alone is not valid funding |
+| 4 | Explicit product decision on delivered capacity/fairness and byte-plus-grant recovery semantics | Preserve legal sizes and existing gameplay/security/resource requirements. Any changed service promise needs a derived model and fresh evidence; do not silently turn 64-MiB/s funding into a lower delivered guarantee |
+
+**Stop for the capacity/ownership decision.** Rank 1 is the smallest next
+discriminating architecture review. Do not adopt D02, implement its health
+predicate, tune timers, launch another native campaign or redesign GNS based
+on a passing diagnostic sample. The product rationale for demoting unsupported
+packet-scale timing remains, but the proposed replacement is not qualified.

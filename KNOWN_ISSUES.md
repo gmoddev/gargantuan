@@ -85,6 +85,16 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-11 [D02 deterministic capacity follow-up](docs/adr/D02-pooled-service-product-contract-review.md#9-deterministic-capacity-qualification--blocked-2026-10-11)
+returns **HYBRID F1 — CAPACITY/ARCHITECTURE DECISION REQUIRED**. Existing fixtures
+detect a nominal 16,667-us Main/four-ACK-slot contradiction: even favorable
+18-MiB/s unique-payload service with zero ACK cost requires two steps per G slot,
+at most 59.9988 MiB/s and 233.338-ms eligible wait against 64 MiB/s and 220.5 ms.
+Candidate H1/H2 arithmetic and ten schedule negatives pass as regressions; this
+does not qualify the contract. Causal recovery tests and prior native32 recovery
+remain valid. No runtime-health change, native32/physical run or GNS redesign.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
+
 2026-10-11 [D02 product-contract review](docs/adr/D02-pooled-service-product-contract-review.md)
 recommends **HYBRID F1**: hard completed-grant, protected gameplay, capacity,
 fairness and causal recovery gates, with packet-scale curves diagnostic. This is

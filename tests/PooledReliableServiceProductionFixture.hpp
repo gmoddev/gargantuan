@@ -3,6 +3,7 @@
 #include "../src/network/PooledReliableServiceFeedback.hpp"
 #include "../src/network/FiniteGrantServiceCurve.hpp"
 #include "PooledReliableServiceModelFixture.hpp"
+#include "PooledReliableServiceRecoveryContractFixture.hpp"
 #include <array>
 #include <iostream>
 #include <vector>
@@ -600,5 +601,261 @@ inline bool RunPooledReliableServiceProductionTests() {
 	}
 	std::cout << "[Network:PooledProduction] cases=" << Passed << " PASS\n";
 	return Passed == 18;
+}
+
+// Candidate-only deterministic schedules. The real admission accountant is
+// reused; Qualified=true supplies the most favorable proposed health input.
+// Neither production F1 nor GNS is invoked or changed by these schedules.
+namespace HybridCapacityCandidate {
+using U = std::uint64_t;
+using Admission = network::detail::ReliableByteAdmission;
+inline constexpr U G = network::MaximumReliableServiceGroupBytes;
+inline constexpr U FrameUs = 16'667;
+inline constexpr U Rate = network::PooledReliableServiceProfile::PeerActiveGrantDrainCapacityFloor;
+inline constexpr U NativeAdvance = network::PooledReliableServiceProfile::ServiceQuantumBytes + 1'300;
+inline constexpr U CompletionNumerator = Rate * 6'000 + (G + 1'248) * 1'000'000;
+inline constexpr U CapacityLatencyNumerator = Rate * (250'000 + 220'500) + CompletionNumerator;
+
+struct Input {
+	U Bytes = G, GroupsPerPeer = 32, NativeRate = network::ReliableServiceProfile::PooledService().BackendSendRate();
+	U AckDelayUs = 0, OrdinaryHoldUs = 0, SourceIntervalUs = 0;
+	U ProbeUs = 6'000'000;
+	bool Unfair = false, RollbackOnce = false, Mixed = false;
+};
+struct Result {
+	U Accepted = 0, Sent = 0, Acked = 0, Retired = 0, CompletedAt = 0;
+	U ProbeSent = 0, ProbeAt = 0, ProbeOutstanding = 0;
+	U InitialWaitMax = 0, NativeDurationMax = 0, DebtHigh = 0, SlotsHigh = 0;
+	U RolledBack = 0, MinimumFirstWaveCount = 0;
+	bool CapacityMeasured = false, CapacityFailed = false, FairnessFailed = false;
+	bool CompletionFailed = false, BurstFailed = false, Converged = false;
+};
+inline Result Run(Input Configuration) {
+	Admission Account(network::ReliableServiceProfile::PooledService());
+	struct Peer {
+		U AcceptedGroups = 0, FirstAcceptedAt = 0, Activated = 0, CompleteAt = 0, NativeSent = 0;
+		bool Active = false, HasFirst = false, Retired = false;
+		Admission::Reservation Receipt;
+	};
+	std::array<Peer, 32> Peers{};
+	std::array<U, 32> Sent{};
+	Result Output;
+	U Cursor = 0;
+	bool RolledBack = false, Probed = false;
+	const auto Require = [](bool Value) { if (!Value) throw std::runtime_error("hybrid admission schedule invariant"); };
+	Require(Configuration.Bytes >= 77 && Configuration.Bytes <= G && Configuration.NativeRate > 0);
+	Require(Account.BeginStep(0));
+	for (std::uint32_t Index = 0; Index < 32; ++Index)
+		Require(Account.ObserveService({Index + 1, 1}, Admission::ServiceObservation{0, true, true}));
+	Account.SetOrdinaryFunding(224 * 1024); Account.EndStep();
+	// Precredit is reachable after 250 ms. Thereafter observations are strictly
+	// periodic: no favorable jitter, extra polls, CPU cost or scheduler catch-up.
+	for (U Frame = 0; Frame < 50'000; ++Frame) {
+		const U Now = 250'000 + Frame * FrameUs;
+		Require(Account.BeginStep(Now));
+		for (std::uint32_t Index = 0; Index < 32; ++Index) {
+			auto &Value = Peers[Index];
+			U OrdinaryDebt = 0;
+			if (Value.Active) {
+				// All configured wire bytes are granted to unique structural data;
+				// even initial credit and final-packet overdraw are free. This fluid
+				// upper service budget is deliberately more favorable than GNS.
+				const U Progress = std::min(Value.Receipt.Bytes, NativeAdvance +
+					Configuration.NativeRate * (Now - Value.Activated) / 1'000'000);
+				Require(Progress >= Value.NativeSent);
+				Sent[Index] += Progress - Value.NativeSent;
+				Output.Sent += Progress - Value.NativeSent; Value.NativeSent = Progress;
+				if (Now >= Value.CompleteAt && !Value.Retired &&
+					Now - Value.CompleteAt >= Configuration.AckDelayUs) {
+					Require(Value.NativeSent == Value.Receipt.Bytes);
+					Require(Account.Retire({Index + 1, 1}, Value.Receipt.Token, Value.Receipt.Bytes));
+					Require(!Account.Retire({Index + 1, 1}, Value.Receipt.Token, Value.Receipt.Bytes));
+					Output.Acked += Value.Receipt.Bytes; Value.Retired = true;
+				}
+				if (Now < Value.CompleteAt + Configuration.AckDelayUs + Configuration.OrdinaryHoldUs)
+					OrdinaryDebt = Configuration.OrdinaryHoldUs ? 1 : 0;
+			}
+			Require(Account.ObserveService({Index + 1, 1}, Admission::ServiceObservation{Now, true, true, OrdinaryDebt}));
+			if (Value.Active && Value.Retired && !OrdinaryDebt) Value.Active = false;
+		}
+		Account.SetOrdinaryFunding(224 * 1024);
+		const U Start = Configuration.Unfair ? 0 : Cursor;
+		for (U Offset = 0; Offset < 32; ++Offset) {
+			const auto Index = static_cast<std::uint32_t>((Start + Offset) % 32);
+			auto &Value = Peers[Index]; const network::ConnectionId Id{Index + 1, 1};
+			if (Value.Active || Value.AcceptedGroups == Configuration.GroupsPerPeer) { Account.NoWork(Id); continue; }
+			if (Configuration.SourceIntervalUs && Now - 250'000 < Value.AcceptedGroups * Configuration.SourceIntervalUs) {
+				Account.NoWork(Id); continue;
+			}
+			const std::array<U, 3> MixedSizes{77, 64 * 1024, G};
+			const U Bytes = Configuration.Mixed ? MixedSizes[(Index + Value.AcceptedGroups) % 3] : Configuration.Bytes;
+			Account.DeferSize(Id, Bytes);
+			if (Configuration.Unfair && Index == 31) continue;
+			auto Receipt = Account.Reserve(Id, Bytes);
+			if (!Receipt) continue;
+			if (Configuration.RollbackOnce && !RolledBack) {
+				Require(Account.Rollback(*Receipt)); RolledBack = true; continue;
+			}
+			Require(Account.Commit(*Receipt)); Value.Receipt = *Receipt;
+			Value.Active = true; Value.Retired = false; Value.Activated = Now;
+			Value.NativeSent = std::min(Bytes, NativeAdvance);
+			Sent[Index] += Value.NativeSent; Output.Sent += Value.NativeSent;
+			const U Remaining = Bytes - Value.NativeSent;
+			const U Duration = pooled_service_model::ceilUs(Remaining, Configuration.NativeRate);
+			Value.CompleteAt = Now + Duration;
+			Output.NativeDurationMax = std::max(Output.NativeDurationMax, Duration);
+			Output.CompletionFailed |= Duration * Rate > CompletionNumerator;
+			if (Bytes == G) Output.BurstFailed |= Duration * Rate > G * 1'000'000;
+			if (!Value.HasFirst) { Value.HasFirst = true; Value.FirstAcceptedAt = Now; }
+			++Value.AcceptedGroups; Cursor = (Index + 1) % 32;
+		}
+		Account.EndStep();
+		const auto Metrics = Account.GetMetrics();
+		Output.Accepted = Metrics.AcceptedBytes; Output.Retired = Metrics.VerifiedAttributedRetirement;
+		Output.DebtHigh = std::max(Output.DebtHigh, Metrics.OutstandingBytes);
+		Output.SlotsHigh = std::max(Output.SlotsHigh, Metrics.ActiveDrainGrants);
+		Require(Metrics.OutstandingBytes <= 4 * G && Metrics.ActiveDrainGrants <= 4);
+		Require(Output.Retired == Output.Acked && Output.Acked <= Output.Sent && Output.Sent <= Output.Accepted);
+		Require(Output.Accepted == Output.Retired + Metrics.OutstandingBytes && !Metrics.TerminalReleasedBytes);
+		Require(Account.GlobalCredit() <= 4 * G);
+		if (!Probed && Now >= Configuration.ProbeUs) {
+			Probed = true; Output.ProbeSent = Output.Sent; Output.ProbeAt = Now;
+			Output.ProbeOutstanding = Metrics.OutstandingBytes;
+			Output.CapacityMeasured = Configuration.Bytes == G && !Configuration.Mixed && !Configuration.SourceIntervalUs &&
+				std::ranges::all_of(Peers, [&](const Peer &Value) { return Value.AcceptedGroups < Configuration.GroupsPerPeer; });
+			if (Output.CapacityMeasured && Now * Rate > CapacityLatencyNumerator)
+				for (const U Bytes : Sent)
+					Output.CapacityFailed |= Bytes * 8 * 1'000'000 < Now * Rate - CapacityLatencyNumerator;
+		}
+		bool Finished = !Metrics.ActiveDrainGrants;
+		for (const auto &Value : Peers) Finished &= Value.AcceptedGroups == Configuration.GroupsPerPeer;
+		if (Finished) { Output.Converged = true; Output.CompletedAt = Now; break; }
+		if (Configuration.Unfair && Probed) { Output.CompletedAt = Now; break; }
+	}
+	U FirstWaveCount = 0;
+	for (const auto &Value : Peers) {
+		if (Value.HasFirst) {
+			++FirstWaveCount;
+			Output.InitialWaitMax = std::max(Output.InitialWaitMax, Value.FirstAcceptedAt - 250'000);
+		} else Output.InitialWaitMax = std::max(Output.InitialWaitMax, Output.CompletedAt - 250'000);
+	}
+	Output.MinimumFirstWaveCount = FirstWaveCount;
+	Output.FairnessFailed = Output.InitialWaitMax > 220'500;
+	Output.RolledBack = Account.GetMetrics().RolledBackBytes;
+	return Output;
+}
+
+inline bool RunTests() {
+	U Passed = 0;
+	const auto Check = [](bool Value, const char *Message) { if (!Value) throw std::runtime_error(Message); };
+	const auto Test = [&](const char *Name, auto Body) {
+		Body(); ++Passed; std::cout << "[Network:HybridCapacity] " << Name << "=PASS\n";
+	};
+	try {
+		Test("CodecProducesMaximumNineOperationBarrierGroup", [&] {
+			network::ReplicationFrame Frame{
+				.Version = network::ReplicationProtocolVersion, .Kind = network::ReplicationMessageKind::Incremental,
+				.Epoch = network::ReplicationEpoch(1), .Sequence = network::ReliableReplicationSequence(1)};
+			for (std::uint32_t Index = 0; Index < 8; ++Index)
+				Frame.Operations.push_back({Frame.Epoch, network::PropertyReplicationUpdate{
+					.Object = {Index + 1, 1}, .PropertyName = "Name", .Value = std::string(64 * 1024 - 256, 'a')}});
+			Frame.Operations.push_back({Frame.Epoch, network::AttributeReplicationUpdate{
+				.Object = {1, 1}, .AttributeName = "Fence", .Value = true}});
+			auto Encoded = network::EncodeReplicationFrame(Frame);
+			Check(bool(Encoded) && Encoded->size() + 32 < G, "legal maximum-shape seed encodes");
+			U Gap = G - 32 - Encoded->size();
+			for (std::uint32_t Index = 0; Index < 8 && Gap; ++Index) {
+				auto &Update = std::get<network::PropertyReplicationUpdate>(Frame.Operations[Index].Intent);
+				auto &Name = std::get<std::string>(Update.Value);
+				const U Added = std::min<U>(64 * 1024 - Name.size(), Gap);
+				Name.append(Added, 'a'); Gap -= Added;
+			}
+			Encoded = network::EncodeReplicationFrame(Frame);
+			Check(!Gap && bool(Encoded) && Encoded->size() + 32 == G &&
+				bool(network::DecodeReplicationFrame(*Encoded)), "maximum complete group is real GRPL, not fabricated bytes");
+			// The codec establishes legal shape, not a replay of 1280 live source
+			// revisions. Attribute barriers are the existing ordered-history seam.
+		});
+		Test("OptimisticMaximumGrantsMissNominalCapacityAndFairness", [&] {
+			const auto Value = Run({});
+			Check(Value.Converged && Value.MinimumFirstWaveCount == 32 && !Value.CompletionFailed && !Value.BurstFailed,
+				"timely grants and complete 32-peer service");
+			Check(Value.CapacityMeasured && Value.CapacityFailed && Value.FairnessFailed && Value.InitialWaitMax == 233'338,
+				"real cadence cannot satisfy retained capacity/fairness in the optimistic schedule");
+			Check(Value.Accepted == 32 * 32 * G && Value.Sent == Value.Accepted && Value.Retired == Value.Accepted,
+				"failure is not false conservation or unbounded debt");
+			std::cout << "[Network:HybridCapacity] nominal frame_us=" << FrameUs
+				<< " native_duration_us=" << Value.NativeDurationMax << " slot_cycle_us=" << 2 * FrameUs
+				<< " eligible_wait_us=" << Value.InitialWaitMax << " probe_at_us=" << Value.ProbeAt
+				<< " probe_unique_bytes=" << Value.ProbeSent << " final_bytes=" << Value.Accepted << '\n';
+		});
+		Test("AckDelayAndOrdinaryDebtKeepSlotsOwned", [&] {
+			const auto Fast = Run({.GroupsPerPeer = 2, .NativeRate = Rate});
+			const auto Delayed = Run({.GroupsPerPeer = 2, .NativeRate = Rate, .AckDelayUs = 3'000});
+			const auto Ordinary = Run({.GroupsPerPeer = 2, .NativeRate = Rate, .OrdinaryHoldUs = 3'000});
+			Check(Fast.Converged && Delayed.Converged && Ordinary.Converged &&
+				Delayed.InitialWaitMax == 350'007 && Ordinary.InitialWaitMax == 350'007,
+				"ACK or ordinary debt delays release to third Main observation");
+			Check(Delayed.CompletedAt > Fast.CompletedAt && Ordinary.CompletedAt > Fast.CompletedAt,
+				"native completion cannot prematurely release a slot");
+			std::cout << "[Network:HybridCapacity] delayed native_duration_us=" << Delayed.NativeDurationMax
+				<< " ack_delay_us=3000 eligible_wait_us=" << Delayed.InitialWaitMax << '\n';
+		});
+		Test("FourteenMiBSenderIsRejectedDespiteTimelyCompletion", [&] {
+			const auto Value = Run({.GroupsPerPeer = 2, .NativeRate = 14 * 1024 * 1024});
+			Check(Value.Converged && !Value.CompletionFailed && Value.BurstFailed && Value.FairnessFailed,
+				"a 14-MiB/s sender may pass H1 but must fail burst capability");
+		});
+		Test("CorruptRotationCannotHideStarvedPeer", [&] {
+			const auto Value = Run({.GroupsPerPeer = 64, .Unfair = true});
+			Check(!Value.Converged && Value.MinimumFirstWaveCount == 31 && Value.FairnessFailed,
+				"one omitted ready peer fails regardless of aggregate progress");
+		});
+		Test("TinyAndMediumGroupsRespectGrantCountCeiling", [&] {
+			for (const U Bytes : {77ULL, 64ULL * 1024}) {
+				const auto Value = Run({.Bytes = Bytes, .GroupsPerPeer = 16});
+				Check(Value.Converged && !Value.CapacityMeasured && !Value.CompletionFailed &&
+					Value.InitialWaitMax == 7 * FrameUs && Value.Sent == 32 * 16 * Bytes,
+					"small legal groups cannot be mislabeled a 64-MiB/s capacity offer");
+			}
+		});
+		Test("InsufficientSourceProductionCannotQualifyCapacity", [&] {
+			const auto Value = Run({.GroupsPerPeer = 8, .SourceIntervalUs = 1'000'000});
+			Check(Value.Converged && !Value.CapacityMeasured && Value.Sent == 32 * 8 * G,
+				"credit or a low offered rate cannot certify physical capacity");
+		});
+		Test("MixedLegalGroupsConserveAndServeEveryPeer", [&] {
+			const auto Value = Run({.GroupsPerPeer = 16, .Mixed = true});
+			Check(Value.Converged && Value.MinimumFirstWaveCount == 32 && !Value.CapacityMeasured &&
+				!Value.CompletionFailed && !Value.BurstFailed && !Value.FairnessFailed &&
+				Value.Accepted == Value.Sent && Value.Sent == Value.Retired,
+				"mixed grant sizes preserve exact accounting without a fabricated universal byte-rate claim");
+		});
+		Test("RollbackAndExactRetirementPreserveDebt", [&] {
+			const auto Value = Run({.GroupsPerPeer = 1, .RollbackOnce = true});
+			Check(Value.Converged && Value.RolledBack == G && Value.Accepted == 32 * G &&
+				Value.Retired == Value.Accepted && Value.DebtHigh == 4 * G && Value.SlotsHigh == 4,
+				"preaccept backpressure neither loses work nor fabricates retirement");
+		});
+		Test("NativeDeadlinesAloneDoNotImplyByteOnlyRecovery", [&] {
+			const auto Value = Run({.GroupsPerPeer = 1280});
+			const U Bound = pooled_recovery_contract::ConvergenceBoundUs(1280 * G, 32 * 1280 * G);
+			Check(Value.Converged && !Value.CompletionFailed && !Value.BurstFailed &&
+				Value.CapacityFailed && Value.FairnessFailed && Value.CompletedAt > Bound,
+				"finite full-grant work can miss the inherited byte-only deadline at nominal cadence");
+			// Legal single-frame shape plus count arithmetic is not a complete
+			// source-history replay or a measured cessation quote. H3 already
+			// fails in this schedule; this is not a jointly healthy H4 failure.
+			Check(1280 * 9 < DefaultChangeJournalCapacity, "hypothetical nine-record group count fits the ceiling");
+			std::cout << "[Network:HybridCapacity] finite_admission_schedule complete_us=" << Value.CompletedAt
+				<< " bound_us=" << Bound << " peer_bytes=" << 1280 * G << " total_bytes=" << Value.Accepted
+				<< " hypothetical_source_records=" << 1280 * 9 << '\n';
+		});
+	} catch (const std::exception &Error) {
+		std::cerr << "[Network:HybridCapacity] FAIL " << Error.what() << '\n'; return false;
+	}
+	std::cout << "[Network:HybridCapacity] cases=" << Passed << " candidate_qualified=0\n";
+	return Passed == 10;
+}
 }
 }
