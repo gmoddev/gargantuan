@@ -1,24 +1,23 @@
 ---
 status: review-required-non-normative
 owner: runtime-networking
-evidence_date: 2026-10-10
+evidence_date: 2026-10-11
 ---
 
 # Foundation 3L — execution-domain and native-egress ownership decision
 
-**Architecture verdict: DESIGN NOT QUALIFIED — SPECIFIC BLOCKERS.** An exclusive
-pooled-server support lease is the smallest defensible *proposed* capacity
-boundary for the packaged ServerHost. It does not correct that server's measured
-Local32 failure. An OS-only send worker remains a targeted hypothesis, but a
-separately authorized native32 prototype is premature until the ACK/history
-transaction, F1 chronology, protected opportunities and close path below have
-finite, reviewable contracts. This is a documentation-only design assessment;
-no policy or native egress code is adopted by this document. The source review
-found no impossibility proof against preserving GNS reliability/security with
-off-thread OS sends; it found an incomplete ownership specification.
-Section 9 records the subsequent bounded implementation of the domain lease
-and incomplete-feedback behavior; it does not revise this static verdict or
-claim an egress worker or physical qualification pass.
+**Current verdict: THE OS-ONLY WORKER CANDIDATE FAILS NATIVE32 F1.** The
+original static review below found the exclusive pooled-server lease to be the
+smallest defensible capacity boundary for the packaged ServerHost and identified
+ACK/history, chronology, protected-service, and close-path blockers before a
+prototype. Sections 1–8 preserve that review at its recorded revision. Section
+9 records the subsequent domain lease and incomplete-feedback implementation;
+Section 10 records the bounded worker candidate, its failed native32 A/B, and
+the later causal-evidence correction. Neither the lease nor the worker supplies
+a Local32 or real-TLS Node32 qualification pass. The source review found no
+impossibility proof against retaining GNS reliability and security with an
+off-thread OS call; the measured candidate still fails the unchanged service
+contract.
 
 ## 1. Authority, revisions and source register
 
@@ -467,3 +466,116 @@ conflicting adapters, post-acquisition listener failure, `Stop`, duplicate
 `Stop`, and active-adapter destruction. The native chronology and worker
 ownership regressions remain separate qualification gates. KI-006 stays open,
 Foundation 3L B stays partially ready, and no Local32/Node32 PASS is inferred.
+
+## 10. Bounded native32 A/B result and causal recovery correction
+
+The later Windows OS-only worker candidate at `e5605c495` closed the source
+ownership obligations in Section 8 with a fixed 64-ticket domain, eight
+protected reservations, four workers, one unresolved numbered packet per peer,
+bounded authenticated receive replay, actor-only protocol reconciliation,
+generation-safe socket leases, and fail-stop for an unresolved begun OS call.
+Deterministic linked native ownership and worker regressions passed; all six
+exact-head hosted Windows Release and GNS sanitizer jobs passed. These are
+correctness gates, not a capacity result. The predeclared native32 loopback A/B
+used one Server and 32 separate Players, the same packaged workload and
+unchanged F1/recovery gates; only `GARGANTUAN_NATIVE_EGRESS_EXPERIMENT` changed.
+Its plan and sealed raw evidence are retained under
+`C:\Sandbox\Codex\Artifacts\foundation3l-native-egress-ab-e5605c49` and
+`C:\Sandbox\Codex\Evidence\Foundation3LNativeEgressABE560` on `dockerbox`.
+
+| Arm | Run ID | Measured result |
+| --- | --- | --- |
+| A, synchronous raw send | `d241b8a7-f2b6-4864-bacb-61071022efc5` | 21 of 32 peer F1 summaries failed; structural recovery did not converge within 37.08 s. |
+| B, four OS-only workers | `2278c9fc-802b-485e-be0d-ef22d784cbba` | Four of 32 peer F1 summaries failed. Their maximum running deficits were 20.39–23.81 billion byte-µs against the unchanged 18.025216-billion bound. Recovery aborted at its first sample because a causal delivery event was incorrectly recorded invalid while a native result was pending. |
+
+The four B failures had individual first-send gaps of 1,196, 1,399, 1,370,
+and 1,405 µs. Three distinct gaps coincide with long Server work ticks, but
+the retained uninstrumented evidence does not separate native worker delay,
+actor wake/reconciliation delay, global-lock contention, or host scheduling.
+The B arm improved the observed peer failure count but **failed F1**. Byte
+conservation and cleanup are not substitutes for that failed predicate.
+
+The independently labeled service-timing diagnostic
+`89d4f2c0-647e-4db6-8ca1-10ce8b9df2ba` also failed. Its 4.7 million
+recorded timing events materially perturbed the first F1 failure (maximum
+deficit about 53.77 billion byte-µs), so it cannot attribute the uninstrumented
+B gaps or justify a timer/worker adjustment. Its raw evidence remains sealed.
+
+At `ae805bf8c`, `GameSession::RecordCausalDelivery` now retains its last
+complete delivery event when the pooled ledger reports a valid but unavailable
+native sample. It still records invalid feedback as invalid. This is a narrow
+causal-evidence correction; it changes no F1 equation, worker scheduling,
+admission, reserve, native result, or ACK/retirement rule. The exact revision's
+MSVC Release Server and affected test executables build, and four affected
+CTest cases pass. All six exact-head hosted checks pass: two Windows Release,
+two GNS ASan/UBSan/LSan, and two native headless ASan/UBSan jobs.
+
+The separately identified B requalification `0e7c4916-4204-43a0-9334-ea7bf8e244cb`
+uses the same 32-Player workload, unchanged limits and Player package, with
+Server binary SHA-256
+`12fdfd8f2f8f5e2a2ed44016f5f7330508788a17e0fa8d776c2e27cf3554b28d`.
+It **fails**: eight of 32 peer summaries report F1 failure. The largest
+running deficit is 506,835,571,968 byte-µs against 18,025,216,000; one peer
+also reports 175,601,000,000 byte-µs finite shortfall. This variation is not
+attributed to the three-line causal correction, which does not change native
+scheduling. Twenty peer summaries remain valid; early recovery abort leaves
+four additional summaries incomplete. No capacity PASS is inferred from the
+other peers or from positive byte/ACK counts.
+
+The prior invalid delivery event is absent: all 3,709 retained structural
+recovery events have valid source scope and delivery. Recovery instead aborts
+at tick 9,664 because `FarmRecoveryEvidence::ValidateSource` calls
+`CaptureStructuralCausalSnapshot`, whose full native conservation precondition
+rejects an unresolved pending send even though this validation uses only
+source cursors, sequence and pending-token fields. The initial cessation quote
+was captured READY. This is a separate causal-evidence integration defect;
+it does not explain the already measured F1 failures. The run's 106 indexed
+raw evidence members verify by size and SHA-256 (index SHA-256
+`19d0967c50da1e9f9a31c5866e5a65c994182b1d4f52f284d64b20c9dce165c0`).
+All task-owned Server/Player processes and the test port were clear after
+cleanup. Its sealed evidence is retained under
+`C:\Sandbox\Codex\Evidence\Foundation3LNativeEgressAe805bf` on `dockerbox`.
+The original A/B and timing diagnostic remain failed evidence, not replaced
+by this requalification.
+
+## 11. Architecture stop decision for the OS-only worker candidate
+
+This candidate preserves the reviewed protocol ownership, but it cannot be
+qualified for the unchanged 32-peer F1 workload. The source permits only one
+unresolved numbered packet per peer: after each positive OS result, that peer
+needs an actor turn before another datagram can be prepared. At 16 MiB/s and
+the 1,248-byte native quantum, an otherwise backlogged peer can consume the
+running allowance after about 1,074 µs without a new first send. The measured
+candidate has repeated longer gaps and failures in two uninstrumented B runs;
+the requalification also has a much larger failure. More workers or a shorter
+pending poll cannot eliminate a pause in protocol preparation, and the
+retained evidence does not isolate worker dispatch from actor/global-lock or
+host scheduling for each gap. No claimed scheduling correction follows from
+the perturbed timing-overlay run.
+
+Ranked paths for a new architecture decision are:
+
+1. **Bound actor service within GNS while retaining the protocol.** A finite
+   per-peer prepared-packet pipeline or another independently scheduled actor
+   boundary could cover pauses, but must extend provisional packet identity,
+   ACK/NACK replay, RTT, retries, pacing, nonce order, references and exact F1
+   results across multiple unresolved packets. This is a substantial new
+   ownership design and needs its own proof and capacity measurement.
+2. **Qualify a stronger supported execution environment or narrower process
+   topology.** It must demonstrate the unchanged 32-peer F1 curve and real
+   protected traffic with a defensible actor service bound. The prior pin19
+   environment study failed, so that configuration is not a qualified answer.
+   Splitting a single world across GNS processes would also add authority and
+   IPC ordering work.
+3. **Make an explicit product-scope decision.** Reducing the supported
+   concurrency or changing D01/F1 would change Foundation 3L's acceptance
+   contract; neither follows from these engineering measurements and neither
+   is adopted here.
+
+Replacing GNS remains unsupported by a demonstrated necessity or a qualified
+replacement. Correcting the separate source-only causal snapshot defect would
+remove a recovery-evidence abort but cannot make these F1 failures pass, so no
+further qualifier-only retry is justified for this candidate. KI-006 remains
+open; Foundation 3L remains B — PARTIALLY READY. Canonical Local32, real-TLS
+Node32 and the final acceptance sweep are withheld because the prerequisite
+native32 capacity gate failed. PR #6 remains draft; no 3M work or merge occurs.

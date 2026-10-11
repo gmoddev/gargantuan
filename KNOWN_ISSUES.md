@@ -85,6 +85,25 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-11 the bounded Windows OS-only GNS egress candidate passes linked
+ownership/race regressions and all six exact-head hosted jobs at `ae805bf8c`,
+but fails the unchanged native32 capacity gate. The predeclared `e5605c495`
+A/B has 21/32 synchronous peer F1 failures and 4/32 worker peer F1 failures;
+both arms fail overall. A separately labeled detailed-timing run materially
+perturbs service and is not used for attribution. After correcting a pending
+native causal-delivery event, exact-head worker requalification
+`0e7c4916-4204-43a0-9334-ea7bf8e244cb` still has 8/32 peer F1 failures,
+maximum running deficit 506,835,571,968 >18,025,216,000 byte-µs, and a
+finite shortfall. It also finds a distinct recovery source-validation error:
+the source-only check requests complete native feedback while a send is
+pending. The 106-member sealed evidence index verifies; cleanup leaves zero
+task-owned processes and no occupied farm port. See the
+[ownership decision and stop assessment](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#11-architecture-stop-decision-for-the-os-only-worker-candidate).
+The current one-unresolved-packet-per-peer actor boundary cannot safely
+cover measured service pauses with a small timing change. No native32 PASS,
+new Local32/Node32 measurement, F1 revision, 3M step or merge is inferred.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
+
 2026-10-10 the authorized [execution-environment study](devdocs/FutureArchitecture/Foundation3LNetworkingCapacityReview.md#11-execution-environment-feasibility-study-october-9-local--october-10-utc)
 returns **OPTION 2 INSUFFICIENT — REVIEW BOUNDED EGRESS OWNERSHIP**, limited to
 the declared instrumented HOSTPC pin19 candidate. Exactly six baseline and six
