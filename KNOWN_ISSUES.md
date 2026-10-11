@@ -85,6 +85,26 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-11 latest actor candidate `600912ed5` passes all six required exact-head
+hosted jobs, linked ownership/worker/fairness preflights 3/3, production affected
+CTest 13/13, and the follow-up GameSession/frozen-quote CTest 2/2. Causal replay
+passes 41 cases and the farm mocks pass. One fresh bounded native32 campaign
+`9c2c6261-e750-44bd-a147-6dbc4895d067` nevertheless fails F1 for 5/32 peers:
+maximum running deficit 38,574,670,272 >18,025,216,000 byte-µs. Retained native
+first-send gaps are 1,182–2,254 µs; the current uninstrumented evidence does not
+separate OS/worker, actor scheduling and lock contention. Initial structural
+cessation capture is now complete and truthful (27,730 µs to native baseline),
+but live recovery converges at 42.197 s against 34.092 s allowed; a large fixed
+source/journal backlog remains near the deadline. The later reference PASS
+does not repair this miss. All 106 indexed files verify; cleanup finds zero
+owned runtime processes and zero test-port sockets. Independent reviews find
+no demonstrated implementation defect supporting another retry. Stop before
+the substantial unqualified multi-packet ownership redesign; no universal
+one-packet impossibility or minimum pipeline depth is proved. See the
+[current architecture decision](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#13-reconciliation-qualification-and-architecture-decision-2026-10-11).
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft; Local32/Node32
+and final acceptance withheld.** Earlier entries below preserve their revisions.
+
 2026-10-11 the bounded Windows OS-only GNS egress candidate passes linked
 ownership/race regressions and all six exact-head hosted jobs at `ae805bf8c`,
 but fails the unchanged native32 capacity gate. The predeclared `e5605c495`
@@ -116,8 +136,9 @@ At `81f65d048`, the new callback dispatch regression fails on the old source
 and passes on the checkpoint candidate. Linked ownership/worker/fairness
 preflights pass 3/3; production hooks are disabled. The affected production
 CTest selection passes 13/13, and GameSession plus the seven-case frozen quote
-executable pass. Required CI and fresh native32 capacity remain outstanding;
-these preflights do not prove host scheduling bounds or F1 capacity.
+executable pass. CI and fresh native32 capacity were outstanding at that
+preflight revision; the latest entry above records their outcomes. These
+preflights do not prove host scheduling bounds or F1 capacity.
 See [the actor decision](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#12-bounded-actor-reconciliation-investigation-2026-10-11).
 **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
 

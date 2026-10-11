@@ -6,7 +6,8 @@ evidence_date: 2026-10-11
 
 # Foundation 3L — execution-domain and native-egress ownership decision
 
-**Current verdict: THE OS-ONLY WORKER CANDIDATE FAILS NATIVE32 F1.** The
+**Current verdict: BOUNDED ACTOR RECONCILIATION STILL FAILS NATIVE32 F1;
+STOP BEFORE AN UNQUALIFIED MULTI-PACKET OWNERSHIP REDESIGN.** The
 original static review below found the exclusive pooled-server lease to be the
 smallest defensible capacity boundary for the packaged ServerHost and identified
 ACK/history, chronology, protected-service, and close-path blockers before a
@@ -17,7 +18,8 @@ the later causal-evidence correction. Neither the lease nor the worker supplies
 a Local32 or real-TLS Node32 qualification pass. The source review found no
 impossibility proof against retaining GNS reliability and security with an
 off-thread OS call; the measured candidate still fails the unchanged service
-contract.
+contract. Sections 12–13 record the implemented reconciliation correction,
+truthful cessation baseline, required CI and fresh failed capacity measurement.
 
 ## 1. Authority, revisions and source register
 
@@ -689,7 +691,157 @@ and the GameSession and seven-case frozen recovery quote executables pass.
 Logs and JUnit are retained on `dockerbox` under
 `C:\Sandbox\Codex\Artifacts\foundation3l-reconciliation-preflight`.
 
-Required hosted CI and the predeclared fresh native32 capacity campaign remain
-outstanding. No preflight proves an upper bound on host scheduling or establishes
-F1 capacity. The earlier stop and failed evidence in sections 10–11 are historical
-receipts; this candidate does not relabel them or claim Local32/Node32 qualification.
+At this preflight revision, hosted CI and the fresh native32 campaign were still
+outstanding. Section 13 records their subsequent outcomes. No preflight proves
+an upper bound on host scheduling or establishes F1 capacity. The earlier failed
+evidence remains historical; no Local32/Node32 qualification follows.
+
+## 13. Reconciliation qualification and architecture decision (2026-10-11)
+
+**Decision: retain the tested correction, leave native egress opt-in and
+unqualified, and stop before a substantial multi-packet protocol redesign.**
+The bounded checkpoint removes two source-proven batch waits, but the unchanged
+native32 workload still fails F1. Independent reviews find no demonstrated
+checkpoint, pacing, ownership or cessation-baseline defect supporting another
+implementation retry. This is a rejection of this measured candidate, not an
+impossibility proof against every one-packet design or every supported platform.
+
+### Exact source and preflights
+
+The measured source is `600912ed54d95855ae94b7f532040df0b448897a`.
+It includes the `81f65d048` checkpoints and the V2 native-baseline/server-field
+join, plus rejection if the shared absolute capture deadline expires during
+final source revalidation. Historical standalone V1 replay remains supported;
+new farm qualification rejects a V1 downgrade or a mismatched V2 baseline.
+Causal replay passes 41 cases; recovery and final-acceptance mocks pass.
+The exact production MSVC Release build has test hooks OFF; its affected
+GameSession/frozen-quote CTest selection passes 2/2 (76.00 s), in addition to
+the linked 3/3 and production 13/13 preflights recorded above.
+
+All six required hosted jobs pass at the exact measured source:
+
+| Workflow | Windows Release | Headless ASan/UBSan | GNS ASan/UBSan/LSan |
+| --- | --- | --- | --- |
+| PR | [114409198547](https://github.com/gmoddev/gargantuan/actions/runs/38118843009/job/114409198547) | [114419258353](https://github.com/gmoddev/gargantuan/actions/runs/38118843009/job/114419258353) | [114409198716](https://github.com/gmoddev/gargantuan/actions/runs/38118843039/job/114409198716) |
+| Push | [114409190904](https://github.com/gmoddev/gargantuan/actions/runs/38118840191/job/114409190904) | [114420079917](https://github.com/gmoddev/gargantuan/actions/runs/38118840191/job/114420079917) | [114409191081](https://github.com/gmoddev/gargantuan/actions/runs/38118840251/job/114409191081) |
+
+Original REST run/job metadata is retained locally under
+`C:\Users\aiden\.codex\artifacts\foundation3l-reconciliation-600912ed5-ci`.
+CI success proves its exercised correctness gates, not native32 capacity.
+
+### One bounded native32 campaign
+
+Run `9c2c6261-e750-44bd-a147-6dbc4895d067` uses the existing 32-Player
+loopback workload, 18,000 client frames, unchanged scale/recovery gates and
+fresh identities. The unused plan was amended to the final baseline-join
+source before execution, with no known outcome. Native egress is enabled,
+timing diagnostics and pause hooks are disabled, and no affinity, priority,
+F1 constant or acceptance threshold is changed. The four-worker, 64-ticket,
+eight-protected-reservation exclusive pooled process domain is unchanged.
+This is a separately identified candidate measurement against the retained
+baseline workload; the original synchronous A is not remeasured, and no
+controlled performance improvement over previous runs is claimed.
+
+| Package | Binary SHA-256 | Manifest SHA-256 |
+| --- | --- | --- |
+| Server `600912ed5` | `c854e4c69dbbc367417eb6817caff3b8be8dbec23afb23e563ea400cfffbd5ef` | `8ee81cbe7092ae2b60ebcaeaaf632f998e7e36d67d0b0d612a201c079f768f75` |
+| Unchanged Player `c916` | `16edd167237e34afc5042f77c10966da60bccd645dd8f8dbc053906f9d5b3700` | `ceacd4a7912c240858599eeb093aa7739eabd2dec6fd92440ad0834bda9c2871` |
+
+**Result: FAIL.** All 32 peer F1 summaries are present; five peers fail,
+covering six grants. The other 27 pass. Finite shortfall, pending tokens and
+storage/accounting-invalid counts are zero. Final accepted, first-sent, ACKed
+and retired bytes agree; exact conservation does not erase running F1 failure.
+
+| Failing peer | Maximum running deficit, byte-µs | Largest first-send gap in retained first-failed grant |
+| --- | ---: | ---: |
+| 2:1 | 38,574,670,272 | 2,254 µs, final 868-byte segment |
+| 29:1 | 20,626,899,840 | 1,228 µs |
+| 30:1 | 20,535,312,384 | 1,224 µs |
+| 16:1 | 20,115,881,984 | 1,199 µs |
+| 15:1 | 19,830,669,312 | 1,182 µs |
+
+The unchanged running bound is **18,025,216,000 byte-µs**. These gaps use
+actual native-positive segment timestamps. Peers 15 and 16 pause over the same
+wall interval. The gaps overlap Server work, but this uninstrumented campaign
+does not decompose worker dispatch, OS return, actor scheduling or lock holds.
+The prior failure-only stage trace measured a dominant post-native actor delay;
+it cannot supply missing stage measurements for this new source. No measured
+global-lock cause, scheduling bound or worker saturation claim follows.
+
+Raw evidence is retained on `dockerbox` at
+`C:\Sandbox\Codex\Evidence\Foundation3LReconciliation600912ed5\9c2c6261-e750-44bd-a147-6dbc4895d067`.
+All 106 indexed files match size and SHA-256; the index SHA-256 is
+`a6a6fd7c97818cf8f719d8f6d12f677852262b0f5087a77a792f234bf1023c72`.
+Plan, package pins, launch log and derived measurement summary are under
+`C:\Sandbox\Codex\Artifacts\foundation3l-reconciliation-600912ed5`.
+Cleanup verifies zero task-owned Server/Player processes and zero UDP sockets
+on port 39450. Failed evidence remains sealed; no retry is performed.
+
+### Separate recovery result
+
+Initial structural cessation capture is **READY** with complete native
+feedback. Source cessation is `1236455740765` µs and the V2 native baseline
+is `1236455768495` µs, 27,730 µs later, within the unchanged 50 ms capture
+budget. Frozen source-quote copying consumes 27,602 µs; the remaining entire
+capture/validation interval is at most 128 µs. The 27 ms copy is not a measured
+GNS global-lock hold. All four captured accepted debts have full native first
+send and ACK accounting. The largest retained F1 failure completes 2.065 s
+before this cut; the other retained first failures occur 18.7–38.2 s after it.
+The evidence supports no cessation-bridge explanation for these failures.
+
+Recovery nevertheless **fails its unchanged convergence bound**. Independent
+V2 replay verifies the joined baseline and exact 811,937,369-byte causal
+obligation. Earliest live prefix convergence is 42.196589 s; the server records
+42.196909 s, 320 µs conservatively later. The allowed bound is 34.091909 s.
+At 33.976641 s, 281,315,889 bytes of the fixed structural future remain
+unaccepted and the journal backlog is 11,471 records, with only 1,574,608 bytes
+already accepted and outstanding. This locates a large remaining backlog
+upstream of native delivery, without proving a particular encoder/admission
+defect. It must be addressed separately from actor egress capacity.
+
+The detached quote starts after live convergence and finishes at 74.937739 s.
+Its valid exact-byte PASS cannot repair the earlier approximately 8.105 s live
+prefix miss. The server exits for `recovery_work_did_not_converge_within_bound`;
+client-06's exit 7 follows the server closure. The initial pending-feedback
+evidence gap is corrected; recovery throughput remains unqualified.
+
+### Causal blocker and ranked alternatives
+
+The exact architectural dependency is still **native completion → actor
+reconciliation/journal replay → next eligible packet preparation → worker
+dispatch** for each peer. Prioritized checkpoints shorten source-proven batch
+waits but do not bound external global-lock holds, callback duration or host
+dispatch. The measured candidate therefore supplies no defensible sufficient
+actor-service bound for unchanged F1. The retained gaps do not establish that
+a multi-packet pipeline is the only possible correction.
+
+1. **Bound the actor execution opportunity while retaining one pending packet.**
+   A genuinely bounded GNS actor execution boundary is the smallest ownership
+   alternative. It needs a concrete bound covering lock holders, callbacks and
+   scheduling, followed by unchanged F1 and protected-traffic measurement.
+   Additional checkpoints or timer tuning alone provide no such bound; the
+   earlier pin19 study is not a qualified execution environment.
+2. **A bounded prepared-packet pipeline, if the actor bound cannot be supplied.**
+   Two packets might cover peer 2's final-packet gap. Other observed gaps could
+   require additional prepared packets; no sufficient minimum depth is measured. The
+   approximately 30-quanta calculation in section 12 covers an entire 2.2 ms
+   blackout at full service; it is not a proved minimum F1 pipeline depth.
+   Even depth two requires explicit FIFO native dispatch and nonce ordering,
+   provisional packet/history identity, early ACK/NACK handling, RTT and retry
+   rules, STOP_WAITING, retained references, exact once retirement, complete
+   feedback frontiers, protected service under failure, generation-safe socket
+   leases, cancellation and shutdown reconciliation across several unresolved
+   packets. This is substantial unqualified protocol ownership work; it is not
+   started under this task's stop condition.
+3. **Explicit product or supported-platform decision.** A stronger execution
+   environment must actually pass unchanged gates. Lower concurrency or revised
+   F1 is a product contract change and is not adopted. A general cross-session
+   broker or replacement GNS is unsupported by the present topology/evidence.
+
+Independent source, reconciliation and cessation reviews find no demonstrated
+implementation defect permitting fresh requalification. Starting another
+pipeline implementation campaign would cross the user's explicit stop boundary.
+KI-006 stays OPEN; Foundation 3L remains B — PARTIALLY READY. Canonical Local32,
+real-TLS Node32 and final acceptance remain withheld after native32 FAIL. The
+separate structural production/drain miss also remains. PR #6 stays draft;
+no Foundation 3M work or automatic merge occurs.
