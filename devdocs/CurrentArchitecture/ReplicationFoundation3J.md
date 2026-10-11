@@ -350,8 +350,12 @@ encoder for exact bytes, fingerprints, sequence, cursor, error and work-budget
 results, including rejection, semantic barriers and the complete 512 KiB bound.
 Mixed Attribute regressions also cover selected malformed suffixes, unselected
 malformed suffixes, deletion, reference errors, filtered history and the
-small-frame validation guard. Their [qualification receipt](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#14-parallel-native-service-and-recovery-investigations-2026-10-11) records the results; source implementation alone
-does not establish recovery or native capacity.
+small-frame validation guard. Their [qualification receipt](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#14-parallel-native-service-and-recovery-investigations-2026-10-11)
+records five affected native tests and all six hosted jobs passing at `5de6135c8`.
+The fresh native32 campaign passes all three measured recovery cases, including
+28.178837 s structural convergence against 40.767221 s allowed with exact causal
+replay. Its distinct finite F1 failure leaves overall native service unqualified;
+no physical Local32/Node32 or Foundation 3L completion follows.
 The byte proof follows the producer's selection order: already-covered native
 Name history contributes no operation, then the selected operation limit ends
 the candidate before an unselected next record is inspected. Covered strings

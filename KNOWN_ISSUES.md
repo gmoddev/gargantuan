@@ -98,9 +98,19 @@ extends the existing Name-only size lower bound to validate selected Attributes,
 preserving exact frames, errors, read charges and publication. Its new mixed
 regression fails against old behavior (six encodes) and passes the candidate
 (one encode with identical bytes/outcomes). Release build and affected native
-CTest pass 5/5 (83.32 s); final-source CI and fresh native qualification remain
-in progress. No
-recovery/F1 PASS follows yet. See [parallel investigations](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#14-parallel-native-service-and-recovery-investigations-2026-10-11).
+CTest pass 5/5 (83.32 s); all six required hosted jobs pass at `5de6135c8`.
+Its single fresh native32 run `1f48c4dd-2a7b-4f3d-a578-63720bc16602`
+qualifies all three measured recovery cases: structural live convergence is
+28.178837 s against 40.767221 s allowed, with exact 1,239,317,970-byte causal
+conservation and independent replay. The run remains FAIL for one peer's
+finite F1 phase: a 1,057-byte grant takes 7,070 µs from activation to its sole
+native-positive send; finite shortfall is 1,057,000,000 byte-µs. Every running
+deficit is below the unchanged bound (maximum 13,052,674,048). This failure
+does not demonstrate an inter-packet reconciliation cause or justify a pipeline.
+All 107 indexed files verify; cleanup leaves zero runtime processes and test-port
+sockets. Recovery is resolved for this native campaign; actor execution capacity
+remains unqualified. Local32, real-TLS Node32 and final acceptance are withheld.
+See [parallel investigations](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#14-parallel-native-service-and-recovery-investigations-2026-10-11).
 **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
 
 2026-10-11 latest actor candidate `600912ed5` passes all six required exact-head

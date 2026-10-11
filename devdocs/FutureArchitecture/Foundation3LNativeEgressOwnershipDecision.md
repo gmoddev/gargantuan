@@ -979,5 +979,93 @@ affected CTest passes 5/5 (83.32 s): GameSession, frozen recovery quote,
 replication, replication relevance and real-GNS GameSession. Logs, source pins,
 the expected old-control failure and JUnit are retained under
 `C:\Sandbox\Codex\Artifacts\foundation3l-recovery-mixed-preflight`.
-Required final-source hosted CI and fresh native recovery qualification remain
-outstanding. No recovery or F1 PASS is claimed.
+### First correction qualification — recovery passes; native F1 remains blocked
+
+Measured production source is **`5de6135c877a65b26303662a64910d8c88f321c0`**.
+All six required hosted jobs pass on their original attempts before native32:
+
+| Workflow | Windows Release job | Ubuntu sanitizer job |
+| --- | --- | --- |
+| PR native `38127439855` | `114434629801` SUCCESS | `114445234870` SUCCESS |
+| Push native `38127437510` | `114434622406` SUCCESS | `114444777757` SUCCESS |
+| PR GNS `38127439863` | — | `114434629862` SUCCESS (ASan/UBSan/LSan) |
+| Push GNS `38127437491` | — | `114434622266` SUCCESS (ASan/UBSan/LSan) |
+
+The single fresh campaign is **`1f48c4dd-2a7b-4f3d-a578-63720bc16602`**,
+using the existing 32-Player loopback Scale/Recovery workload, native egress
+enabled, pause hooks OFF and detailed timing OFF. No affinity, priority, F1,
+admission, fairness, reserves or workload thresholds change. The five Scale
+phases pass. Each cessation capture is READY with a complete V2 native baseline;
+incomplete feedback is never treated as complete.
+
+| Recovery case | Live convergence | Unchanged workload-derived bound | Exact causal bytes |
+| --- | ---: | ---: | ---: |
+| Gameplay | 0.314908 s | 20.470926 s | 12,196 |
+| Structural | 28.178837 s | 40.767221 s | 1,239,317,970 |
+| Mixed | 0.368538 s | 20.471184 s | 13,416 |
+
+All three exact quotes and causal conservation results pass. Independent existing
+offline replay passes 164/14,453/167 events and 32/3,210/32 quoted frames;
+replayed convergence is 314,517/28,178,458/368,163 µs respectively, slightly
+earlier than the conservative server observations. Structural native baseline
+is `1245088837636` µs after cessation `1245088804176` µs; that complete-feedback
+delay remains counted. Its detached quote finishes at 64.635022 s, separately
+from the successful 28.178837 s live convergence. Fresh cessation workloads
+differ from earlier runs; these results are not a controlled absolute speed ratio.
+
+The 101 active structural samples have zero fallback categories, and every
+geometric encoding retry is covered by the Name preflight. Mean sampled Session
+work is 6.615 ms: 4.233 ms exclusive incremental preparation and 0.289 ms actual
+encoding. These bounded samples confirm the eliminated mixed-Attribute discard
+path; they are not a whole-phase p95 or actor WCET certificate. No second recovery
+correction is supported. **Track B's measured recovery convergence is qualified.**
+
+The sealed campaign is nevertheless **FAIL** (`server exited 10`): one of 32
+peers fails F1's finite phase. All 8,608 F1-eligible grants complete, but only
+8,607 pass. Peer `12:1`, sequence 37, token 1071 has 1,057 bytes activated at
+`1244987002289` µs and one native-positive segment completing at
+`1244987009359` µs: **7,070 µs**, against its unchanged finite full-completion
+envelope of approximately **6,137.389 µs**. Its maximum finite shortfall is
+**1,057,000,000 byte-µs**. No running phase exists within this one-segment grant.
+All running deficits in the campaign stay below 18,025,216,000, with maximum
+**13,052,674,048 byte-µs**. Failure/storage/accounting records remain valid;
+the peer's `valid=0` is the service failure, not an invalid evidence store.
+
+The initial finite-curve intercept is 6,074.386597 µs. At 7,070 µs its
+pre-event service is zero and required service has saturated at all 1,057 bytes;
+`FiniteGrantServiceCurve::FirstSend` checks that interval before adding bytes.
+Admission evidence independently agrees with the activation timestamp. This
+failure precedes the first gameplay cessation/native baseline by about 66 s,
+so no cessation-feedback bridge overlap is implicated.
+
+This exact remaining counterexample is **activation → initial native-positive
+service**, not demonstrated inter-packet reconciliation. The uninstrumented
+campaign cannot separate initial actor opportunity, locks, worker dispatch and
+OS scheduling. Earlier stage traces cannot attribute this fresh interval.
+Current evidence therefore does not justify a prepared-packet pipeline: extra
+packets alone do not supply an initial service opportunity. Track A remains
+stopped at the execution-boundary assessment above, without blind retry or
+another speculative patch. Existing priority and checkpoints supply no credible
+total bound; no universal one-packet impossibility or platform incapacity follows.
+
+Final accepted = native first-sent = ACKed = retired = **2,594,805,246 bytes**,
+with zero pending tokens, terminal release, outstanding grants or journal backlog.
+All **107** indexed members verify by size and SHA-256. Index SHA-256 is
+`f7ba120800f0b026a3ecfb81e07c354f1e7615e5844b8c401ea7c44eb9197ae2`.
+Cleanup confirms zero task runtime processes and zero UDP 39450 sockets.
+Original sealed evidence remains on `dockerbox` at
+`C:\Sandbox\Codex\Evidence\Foundation3LRecoveryMixed5de6135c8\1f48c4dd-2a7b-4f3d-a578-63720bc16602`;
+plan, package pins, build log, independent replay and verification summary are at
+`C:\Sandbox\Codex\Artifacts\foundation3l-recovery-mixed-5de6135c8`.
+Original hosted metadata is retained locally under
+`C:\Users\aiden\.codex\artifacts\foundation3l-parallel-blockers\ci-5de6135c8`.
+
+Ranked next alternatives remain (1) a specified execution environment with
+qualified bounds on initial and inter-packet actor/lock work; (2) bounded
+actor ownership of application-facing GNS operations, with completion,
+overload and lifecycle proofs; (3) a defensible pipeline only after proving
+the ownership model and how it addresses the actual service failures; and
+(4) an explicit supported-platform/product decision. None is implemented or
+qualified by this recovery correction. **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY; PR #6 draft.** Native F1 failure withholds canonical Local32, real-TLS
+Node32 and final acceptance. No Foundation 3M work or merge occurs.
