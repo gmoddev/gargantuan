@@ -114,6 +114,14 @@ namespace gargantuan::host {
 			std::uint64_t SessionNamePreflightRetries = 0;
 			std::uint64_t SessionNameValidationBytes = 0;
 			std::uint64_t SessionNameValidationCacheHits = 0;
+			std::uint64_t SessionNameProofCalls = 0;
+			std::uint64_t SessionNameNonPropertyFallback = 0;
+			std::uint64_t SessionNameNonNameFallback = 0;
+			std::uint64_t SessionNameNonReplicatedFallback = 0;
+			std::uint64_t SessionNameStateFallback = 0;
+			std::uint64_t SessionNameInvalidFallback = 0;
+			std::uint64_t SessionNameAttributeFallback = 0;
+			std::uint64_t SessionNameFilteredFallback = 0;
 			std::uint64_t PreQualificationMicroseconds = 0;
 		};
 		static constexpr std::size_t PeerCount = 32;
@@ -977,6 +985,14 @@ namespace gargantuan::host {
 					<< " session_name_preflight_retries=" << CurrentServerTickTiming.SessionNamePreflightRetries
 					<< " session_name_validation_bytes=" << CurrentServerTickTiming.SessionNameValidationBytes
 					<< " session_name_validation_cache_hits=" << CurrentServerTickTiming.SessionNameValidationCacheHits
+					<< " session_name_proof_calls=" << CurrentServerTickTiming.SessionNameProofCalls
+					<< " session_name_nonproperty_fallback=" << CurrentServerTickTiming.SessionNameNonPropertyFallback
+					<< " session_name_nonname_fallback=" << CurrentServerTickTiming.SessionNameNonNameFallback
+					<< " session_name_nonreplicated_fallback=" << CurrentServerTickTiming.SessionNameNonReplicatedFallback
+					<< " session_name_state_fallback=" << CurrentServerTickTiming.SessionNameStateFallback
+					<< " session_name_invalid_fallback=" << CurrentServerTickTiming.SessionNameInvalidFallback
+					<< " session_name_attribute_fallback=" << CurrentServerTickTiming.SessionNameAttributeFallback
+					<< " session_name_filtered_fallback=" << CurrentServerTickTiming.SessionNameFilteredFallback
 					<< " relevance_us=" << RelevanceMicroseconds
 					<< " planning_us=" << PlanningMicroseconds
 					<< " materialization_us=" << MaterializationMicroseconds

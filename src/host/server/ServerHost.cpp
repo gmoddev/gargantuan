@@ -802,6 +802,22 @@ namespace gargantuan::host {
 									runtime_detail::WorkCounter::NamePreflightValidationBytes)],
 								.SessionNameValidationCacheHits = SessionWork.Counters[static_cast<std::size_t>(
 									runtime_detail::WorkCounter::NamePreflightCacheHits)],
+								.SessionNameProofCalls = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightProofCalls)],
+								.SessionNameNonPropertyFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightNonPropertyFallback)],
+								.SessionNameNonNameFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightNonNameFallback)],
+								.SessionNameNonReplicatedFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightNonReplicatedFallback)],
+								.SessionNameStateFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightNameStateFallback)],
+								.SessionNameInvalidFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightNameInvalidFallback)],
+								.SessionNameAttributeFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightAttributeFallback)],
+								.SessionNameFilteredFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightFilteredFallback)],
 								.PreQualificationMicroseconds = Microseconds(QualificationStarted - SessionEnded),
 							});
 #if defined(GARGANTUAN_WITH_GNS)
