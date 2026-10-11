@@ -94,8 +94,10 @@ try {
 		$ServerOutput.Add("[Qualification:Recovery] event=all_opportunities run=$RunId case=$Case opportunities=480 elapsed_us=8000000 tick=$($Tick + 480)")
 		$RawBytes = if ($Case -eq 'gameplay') { 0 } else { 188743680 }
 		$MutationSamples = if ($Case -eq 'gameplay') { 0 } else { 7680 }
-		$ServerOutput.Add("[Qualification:Recovery] event=cessation run=$RunId case=$Case tick=$($Tick + 481) monotonic_us=$(100000000 * ($CaseIndex + 1) + 8000001) journal_tail=$Tail raw_name_bytes=$RawBytes retained_high=16 minimum_retention_margin=99 retention_mutation_samples=$MutationSamples")
-		$ServerError.Add("[Qualification:Recovery] event=quote_capture run=$RunId case=$Case status=READY reason=none tick=$($Tick + 481)")
+		$CessationMicroseconds = 100000000 * ($CaseIndex + 1) + 8000001
+		$NativeBaselineMicroseconds = $CessationMicroseconds + 500
+		$ServerOutput.Add("[Qualification:Recovery] event=cessation run=$RunId case=$Case tick=$($Tick + 481) monotonic_us=$CessationMicroseconds journal_tail=$Tail raw_name_bytes=$RawBytes retained_high=16 minimum_retention_margin=99 retention_mutation_samples=$MutationSamples")
+		$ServerError.Add("[Qualification:Recovery] event=quote_capture run=$RunId case=$Case status=READY reason=none native_baseline_us=$NativeBaselineMicroseconds tick=$($Tick + 481)")
 		$ServerError.Add("[Qualification:Recovery] event=cessation_barrier run=$RunId case=$Case journal_tail=$Tail")
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
 			$ServerError.Add("[Runtime:Luau] [Qualification:Recovery] event=probe_ack case=$Case peer_slot=$Peer peer_generation=1")
@@ -119,7 +121,7 @@ try {
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
 			$ServerError.Add("[Qualification:Recovery] event=terminal_reader run=$RunId case=$Case catalog=0 connection_slot=$Peer connection_generation=1 next_sequence=$Tail prepared=0 pending_relevance=0")
 		}
-		foreach ($Row in @(Save-RecoveryCausalFixture -Root $Root -RunId $RunId -Case $Case -Tail $Tail -CessationMicroseconds (100000000 * ($CaseIndex + 1) + 8000001))) { $ServerError.Add($Row) }
+		foreach ($Row in @(Save-RecoveryCausalFixture -Root $Root -RunId $RunId -Case $Case -Tail $Tail -CessationMicroseconds $CessationMicroseconds -NativeBaselineMicroseconds $NativeBaselineMicroseconds)) { $ServerError.Add($Row) }
 		$ServerError.Add("[Qualification:Recovery] event=strict_deadline_barrier run=$RunId case=$Case elapsed_us=20471000 bound_us=20470537")
 	}
 	$Server = [pscustomobject]@{ OutputPath = (Join-Path $Root 'server.stdout.log');
@@ -206,6 +208,26 @@ try {
 	}
 	Assert-RecoveryQuoteRejected -Reason 'missing capture' -Lines @($OriginalError |
 		Where-Object { $_ -notmatch 'event=quote_capture run=.* case=gameplay ' })
+	Assert-RecoveryQuoteRejected -Reason 'native baseline differs from capture' -Lines @($OriginalError | ForEach-Object {
+		if ($_ -match 'event=quote_capture run=.* case=gameplay ') {
+			$Changed = $_.Replace('native_baseline_us=108000501', 'native_baseline_us=108000502')
+			if ($Changed -ceq $_) { throw 'native baseline mismatch fixture did not change' }
+			$Changed
+		} else { $_ }
+	})
+	$CausalPath = Join-Path $Root 'recovery-gameplay.tsv'
+	$OriginalCausal = [IO.File]::ReadAllLines($CausalPath)
+	$Downgraded = [string[]]$OriginalCausal.Clone()
+	$Downgraded[0] = "format=GargantuanRecoveryCausalV1`trun=$RunId`tcase=gameplay"
+	[IO.File]::WriteAllLines($CausalPath, $Downgraded)
+	$Historical = Assert-RecoveryCausalEvidence -Path $CausalPath -RunId $RunId -Case gameplay `
+		-ExpectedConnections $Connections -CessationMicroseconds 108000001 -JournalFence 10000
+	if ($Historical.FormatVersion -ne 1) { throw 'historical V1 standalone replay was rejected' }
+	$RejectedV1 = $false
+	try { [void](Assert-RecoveryRecords -Server $Server -Clients $Clients `
+		-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) } catch { $RejectedV1 = $true }
+	if (-not $RejectedV1) { throw 'new farm capture accepted V1 causal evidence downgrade' }
+	[IO.File]::WriteAllLines($CausalPath, $OriginalCausal)
 	Assert-RecoveryQuoteRejected -Reason 'missing peer generation' -Lines @($OriginalError |
 		Where-Object { $_ -notmatch 'event=quote_peer run=.* case=structural connection_slot=1 ' })
 	Assert-RecoveryQuoteRejected -Reason 'nonpassing quote' -Lines @($OriginalError | ForEach-Object {

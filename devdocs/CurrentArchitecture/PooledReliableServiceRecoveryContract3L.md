@@ -30,14 +30,17 @@ copies complete native counters. All peers share one absolute deadline at
 cessation plus the existing feedback-freshness limit. The query never cancels a
 send, fences the worker domain or changes a service clock. Source, pending-token
 identity and accepted debt must be unchanged after the wait. Timeout, invalid
-feedback or changed identity produces NOT_MEASURED.
+feedback, changed identity or expiry during final source revalidation produces
+NOT_MEASURED.
 
 The actual native baseline may complete after cessation. Recovery causal V2
 records that completion time separately from the immutable source/debt cut;
 offline replay rejects earlier causal events and cannot backdate initial
 convergence to cessation. The entire capture/wait remains included in F1 and
 recovery elapsed time and supplies no extra service allowance. Retained V1
-evidence keeps its original interpretation.
+evidence keeps its original interpretation in standalone replay. A new farm
+qualification requires V2 and exact equality between its native-baseline header
+and the server's `quote_capture.native_baseline_us` field.
 
 The cessation snapshot answers what is necessary under the state known at
 cessation. It cannot predict subsequent relevance Enter/Leave transitions.

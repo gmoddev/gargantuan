@@ -112,7 +112,12 @@ unresolved numbered packet per peer and all F1 constants. Initial recovery
 capture separately freezes source/debt identities, resolves native feedback
 against one shared deadline and records the actual later baseline, rejecting
 incomplete or backdated evidence. Causal replay regressions pass 41 cases.
-Native preflights, required CI and fresh native32 capacity remain outstanding.
+At `81f65d048`, the new callback dispatch regression fails on the old source
+and passes on the checkpoint candidate. Linked ownership/worker/fairness
+preflights pass 3/3; production hooks are disabled. The affected production
+CTest selection passes 13/13, and GameSession plus the seven-case frozen quote
+executable pass. Required CI and fresh native32 capacity remain outstanding;
+these preflights do not prove host scheduling bounds or F1 capacity.
 See [the actor decision](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#12-bounded-actor-reconciliation-investigation-2026-10-11).
 **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
 

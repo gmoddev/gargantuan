@@ -2551,6 +2551,9 @@ namespace gargantuan::network {
 			ChangeJournal::Get().CreateCursor(Replication.SourceRootId).NextSequence != Tail) {
 			Error = "Causal snapshot journal changed during native resolution"; return {};
 		}
+		if (NativeDeadlineMicroseconds && ServiceTime() >= NativeDeadlineMicroseconds) {
+			Error = "Causal snapshot native resolution exceeded its shared deadline"; return {};
+		}
 		Error.clear(); return Result;
 	}
 	std::optional<std::vector<detail::StructuralCausalSnapshot>>

@@ -62,9 +62,11 @@ function Assert-RecoveryCausalEvidence {
 	$Lines = [IO.File]::ReadAllLines($Path)
 	if ($Lines.Count -lt 66 -or $Lines.Count -gt 131170) { throw 'causal evidence row bound is invalid' }
 	$NativeBaseline = [decimal]$CessationMicroseconds
+	$FormatVersion = 1
 	$V1Header = "format=GargantuanRecoveryCausalV1`trun=$RunId`tcase=$Case"
 	$V2Header = "format=GargantuanRecoveryCausalV2`trun=$RunId`tcase=$Case`tnative_baseline_us="
 	if ($Lines[0].StartsWith($V2Header, [StringComparison]::Ordinal)) {
+		$FormatVersion = 2
 		$NativeBaseline = U $Lines[0].Substring($V2Header.Length)
 		if ($NativeBaseline -lt $CessationMicroseconds) { throw 'native baseline precedes the fixed cessation cut' }
 	} elseif ($Lines[0] -cne $V1Header) { throw 'causal evidence header is invalid' }
@@ -242,5 +244,6 @@ function Assert-RecoveryCausalEvidence {
 	}
 	if (-not $Ended -or $State.Sources.Count -ne 32 -or $State.Peers.Count -ne 32 -or $null -eq $State.ConvergedUs -or
 		@($State.Peers.Values | Where-Object { -not (Converged $_) }).Count -ne 0) { throw 'causal recovery has no complete finite convergence proof' }
-	return @{ Peers = $State.Peers; Totals = $State.Totals; EventCount = $State.Events; QuotedFrames = $State.Quotes; EarliestConvergedUs = $State.ConvergedUs }
+	return @{ Peers = $State.Peers; Totals = $State.Totals; EventCount = $State.Events; QuotedFrames = $State.Quotes;
+		EarliestConvergedUs = $State.ConvergedUs; FormatVersion = $FormatVersion; NativeBaselineMicroseconds = $NativeBaseline }
 }

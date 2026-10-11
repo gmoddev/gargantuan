@@ -200,6 +200,11 @@ function Assert-RecoveryQuote {
 		[long]$Results[0].__line -ge [long]$Deadline.__line) {
 		throw "recovery case $Case lacks a complete ordered frozen quote audit"
 	}
+	if ($Causal.FormatVersion -ne 2 -or
+		$Causal.NativeBaselineMicroseconds -ne (Get-RecoveryUnsigned -Row $Captures[0] -Field 'native_baseline_us') -or
+		$Causal.NativeBaselineMicroseconds -lt $CessationMicroseconds) {
+		throw "recovery case $Case native baseline differs from its server capture"
+	}
 	$Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 	$Total = 0L
 	$FutureTotal = 0L

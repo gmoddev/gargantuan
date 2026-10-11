@@ -676,6 +676,20 @@ an entire 2.2 ms actor blackout would require approximately 30 prepared quanta
 per active peer and additional protected capacity, with new provisional packet
 ownership and feedback-frontier proofs.
 
-Deterministic preflights and a fresh bounded native32 campaign remain required.
-The earlier stop and failed evidence in sections 10–11 are historical receipts;
-this candidate does not relabel them or claim Local32/Node32 qualification.
+At `81f65d048`, the new fixed-cutoff callback regression fails against the old
+`0ad686ab0` implementation and passes against the checkpoint candidate: the next
+packet dispatch occurs within the already-running callback after native result
+publication. This proves removal of that batch wait without relying on a host
+timing threshold. Linked ownership, worker and fairness CTest preflights pass
+3/3 with test hooks enabled. They cover native truth, exact retirement, retry
+references, protected scheduling, socket generation/close, receive checkpoint
+ordering and the new dispatch ordering. Production hooks are disabled in the
+Release build. The affected production CTest selection passes 13/13 (95.78 s),
+and the GameSession and seven-case frozen recovery quote executables pass.
+Logs and JUnit are retained on `dockerbox` under
+`C:\Sandbox\Codex\Artifacts\foundation3l-reconciliation-preflight`.
+
+Required hosted CI and the predeclared fresh native32 capacity campaign remain
+outstanding. No preflight proves an upper bound on host scheduling or establishes
+F1 capacity. The earlier stop and failed evidence in sections 10–11 are historical
+receipts; this candidate does not relabel them or claim Local32/Node32 qualification.
