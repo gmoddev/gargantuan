@@ -1,5 +1,5 @@
 ---
-status: capacity-review-required-not-adopted
+status: structural-service-scope-review-required-not-adopted
 owner: runtime-networking-and-product
 reviewed_source: 9551ae974869b56ed12aa27aee2f4e7996fb23c9
 reviewed: 2026-10-11
@@ -9,6 +9,13 @@ supersedes: none
 # D02 — Reassess pooled service against product outcomes
 
 ## Verdict and authority
+
+**Latest recommendation (2026-10-11): B/C — retain 64 MiB/s as funding and use
+workload-qualified, count-aware structural outcomes.** Section 10 finds no
+independent product need for a universal 64-MiB/s delivered floor. It does not
+select a replacement scalar. A finite numerical service contract remains blocked
+on complete slot lifetime and qualified execution/path premises, including the
+ordinary-debt ownership coupling. No production gate is amended.
 
 **Follow-up qualification verdict (2026-10-11): HYBRID F1 — CAPACITY/ARCHITECTURE
 DECISION REQUIRED.** The deterministic production-admission schedule in section 9
@@ -568,3 +575,234 @@ discriminating architecture review. Do not adopt D02, implement its health
 predicate, tune timers, launch another native campaign or redesign GNS based
 on a passing diagnostic sample. The product rationale for demoting unsupported
 packet-scale timing remains, but the proposed replacement is not qualified.
+
+## 10. Structural requirements reassessment (2026-10-11)
+
+### Decision and remaining boundary
+
+**Recommend B/C: product-oriented structural service, with the existing 64-MiB/s
+funding envelope.** Do not redesign GNS to produce continuous 64-MiB/s delivery
+unless a declared workload/product class actually requires it. Do not replace
+64 with 60, 56, 48 or another benchmark-derived floor. Credit remains 2 MiB/s
+per peer, aggregate credit/funding 64 MiB/s, with every existing bound/reserve.
+
+**The replacement is not implementation-ready.** An enforceable finite eligible
+wait and count-aware convergence contract requires a selected qualified
+**complete-slot service premise**: native completion, ACK/loss/retry-reference
+retirement, Main opportunity spacing and ordinary-follower ownership. Current
+source/documents do not provide that complete premise. The ordinary-debt
+counterexample below is an independent fairness problem, not a reason to select
+a slower rate. This task changes proposed design and tests only.
+
+This review selects bounded readiness/convergence for declared source-shaped
+workloads as the engineering direction. The next owning decision is the complete
+slot boundary and qualified ACK/retry/Main assumptions, preserving continuous
+ordinary traffic. A separate product decision is required only if that review
+needs to narrow permitted traffic/path scope, introduce an unsupported readiness
+promise, or retain a costly delivered bulk entitlement. Do not ask for another
+arbitrary scalar. No new universal demand-to-rendered-content SLA is required.
+
+### Actual demand and metric boundaries
+
+The [recipient workload](../../devdocs/CurrentArchitecture/RecipientServiceWorkload3L.md)
+uses 32 connections, eight root-motion Characters, eight-recipient neighborhoods,
+one ordinary producer, and one shared **512-object/273,032-B provider unit** for
+load/resident/evict/reload. Provider JSON bytes are not GRPL service bytes. The
+ordinary mix offers at most 2,944 B/s ingress and 6,336 B/s reliable egress; its
+conservative combined boundary burst is 20,864 B. Even continuous promoted
+Character state plus reliable traffic is below 865 KiB/s before structural work.
+Recurring Character state is not structural traffic; new materialization is.
+
+Canonical overload offers 480 opportunities with sixteen 24-KiB Name values per
+opportunity: **180 MiB raw authored values per case**. Relevance, coalescing,
+ordered barriers, codec framing and fanout determine actual encoded/admitted work.
+The structural and mixed cases have identical raw Name counts but radically
+different cessation references. Authoring rate is not a transport obligation.
+
+| Quantity | What it establishes / what it does not |
+| --- | --- |
+| 64-MiB/s funded pool; 96-MiB/s backend envelope | Prospective rate/debt funding, not service actually delivered by Main/ACK-owned slots |
+| 2-MiB/s peer and 64-MiB/s aggregate credit | Admission permission with finite caps; cannot mint native service or retire debt |
+| Offered source/eligible demand | Work requiring preparation/encoding/admission; no accepted byte obligation until matching acceptance |
+| Encoded bytes | Codec work, including candidate preparation; not scheduler acceptance, native transmission or client application |
+| Accepted complete bytes | Exact token/message obligations; rejection advances no Known/cursor or accepted bytes |
+| Unique native first-send | Positive OS-send truth only; excludes retries and ordinary bytes; not remote receipt |
+| ACK and exact retirement | Separate monotonic delivery/reference ownership; no elapsed-time release |
+| Client content observation | Semantic application/readiness; not sender retirement or GPU-visible presentation |
+
+Existing source `5de6135c877a65b26303662a64910d8c88f321c0`, run
+`1f48c4dd-2a7b-4f3d-a578-63720bc16602`, supplies the following preserved recovery
+evidence. Reference work includes accepted unretired debt plus detached quote work:
+
+| Case | Reference/causal prefix bytes | Quoted new frames | Live convergence | Original deadline |
+| --- | ---: | ---: | ---: | ---: |
+| Gameplay | 12,196 | 32 | 0.314908 s | 20.470926 s |
+| Structural | 1,239,317,970 | 3,210 | 28.178837 s | 40.767221 s |
+| Mixed | 13,416 | 32 | 0.368538 s | 20.471184 s |
+
+The structural reference consists of **1,237,817,018 quoted B plus 1,500,952 B
+accepted debt at cessation**. Mixed has 11,311 quoted B plus 2,105 B debt. The
+structural/mixed opportunity windows are 14.990154/13.606843 s; neither raw authoring
+nor the reference is a measured offered/native byte rate. Reference divided by
+structural convergence is approximately 41.943 MiB/s, but includes debt that may
+already have been first sent and all production stages. **It is not a new capacity
+floor or a post-cessation transport-rate measurement.**
+
+All 32 clients acknowledge content in all five Scale phases, with 512 observed
+objects on load/resident/reload and no terminal materialization backlog. Cumulative
+`structural_bytes` rows are 1,066,916 baseline, 6,145,000 load, 6,260,024 resident,
+6,534,400 evict and 11,612,336 reload. Source proves these are
+`Metrics.StructuralBytesEncoded`, **not accepted/native throughput**. Whole-run
+accepted = first-sent = ACKed = retired is 2,594,805,246 B. Original F1 still FAILS
+the historical tiny grant; independent recovery PASS is not rewritten.
+
+Earlier simulator Local32/Node32 content load convergence is 253.587/240.338 ms;
+Character due-to-observation maxima are 72.5193/72.2049 ms. These are receipts
+under simulator reservations, not current physical qualification or a universal
+content-ready promise. Source demand, availability, authoritative residency,
+materialization, dependent RPC waits and GPU presentation remain distinct.
+
+### Product requirements versus inherited rate assumptions
+
+Maximum-group **FIFO protection** is justified. With the existing 150-ms RPC p95
+and 100-ms combined nonqueue allowance, the queue has 50 ms. Even an ideal fluid
+sender needs `(G +20 KiB)/50 ms = 10.390625 MiB/s` before any scheduling/overhead
+cost. The selected 16-MiB/s serialization target needs 32.470703125 ms and leaves
+17.529296875 ms queue headroom. D02's proposed uniform 37.324-ms completion plus
+the 20-KiB follower arithmetic fits 138.545 ms with that nonqueue allowance.
+These explain fast accepted-grant completion, not a continuous 64-MiB/s promise.
+Real follower service and RPC/Event/action gates remain separately mandatory.
+
+The 64-MiB/s choice is four times the 16-MiB/s active burst design, also 32 times
+peer credit refill. The 220.5-ms wait is seven 31.5-ms scalar-model waves. Neither
+was found to express an independently selected player response deadline. They
+are nevertheless **current accepted service-model requirements** and cannot be
+silently relabeled configuration or removed from production qualification.
+
+Lower aggregate service need not change already-materialized ordinary gameplay
+if all FIFO, protected-service and resource gates still pass. It can lengthen
+new-object/Character readiness, dependent invocation waits and finite convergence;
+those effects must be tested through client application, not excused by a passing
+transport average. No evidence proves a specific reduction harmless to all
+supported demand. The unchanged service-recovery maximum is 20 seconds.
+
+### Why a rounded capacity target does not repair fairness
+
+Section 9 already proves the nominal maximum-group ceiling and fairness mismatch.
+ACK, ordinary debt, group size and preparation can reduce service further. At
+four nominal admissions per frame, 64-KiB groups cap byte opportunities at about
+15 MiB/s; 77-B groups about 18,480 B/s. This is not a new minimum legal group size.
+Actual source packing must be established before applying those shape examples.
+
+The new real-accountant discriminator exposes a more basic coupling:
+`ReliableByteAdmission::RefreshService` releases `OwnsGrant` only after structural
+debt **and all current ordinary debt** are zero. The existing integration and
+`GrantRetainsOrdinaryFollowerAndTerminalGeneration` test intentionally retain
+followers. The predicate also includes **future ordinary arrivals**, not just a
+finite captured follower prefix.
+
+Four peers each offer one 115-B complete ordinary Event every 16,667 us. The
+supplied schedule retires each after 25 ms, leaving one/two messages at every
+Main snapshot. It fits the declared peer/aggregate byte and message envelopes
+with four ordinary producers below the eight-active-producer limit. These are
+synthetic retirement/arrival times;
+no host callbacks, application ACKs or wire execution were measured. After all
+four structural G grants retire exactly, the direct accountant retains:
+
+```text
+StructuralOutstanding = 0; StructuralRetired = 2,097,152 B
+ActiveDrainGrants = 4; OrdinaryDebt > 0 at every snapshot
+Next 28 credit-eligible ready peers: Allowance = 0
+```
+
+The regression checks 64 consecutive snapshots, exact conservation and fresh
+feedback; ordinary quiescence then frees the slots without new structural service
+or a funding change. Continued positive ordinary debt preserves this same
+predicate indefinitely. This is a source/accounting counterexample, not an actual
+host reproduction. Neither lowering 64 nor bounding structural ACK alone resolves
+it. Continuous ordinary traffic is permitted; declaring it overload would narrow
+the supported workload and is not this recommendation.
+
+### Count-aware contract seam and missing premises
+
+A replacement should express guaranteed **completed work and opportunity**, not
+infer it from refill. Let `N(w)` be native completion budget, `A(w)` exact
+ACK/retry-reference retirement budget, `O(w)` any justified finite follower hold,
+and `Delta` a maximum Main reconciliation/admission spacing. A fixed-phase model
+can use `C(w)=Delta*ceil((N(w)+A(w)+O(w))/Delta)`; a general-phase upper envelope
+adds the appropriate final reconciliation spacing. A first eligible 32-peer wave
+needs the preceding seven slot waves plus separately bounded credit/source work.
+Bytes, grant count/shape, slot holds and fair rotation all affect convergence.
+
+No numerical `A`, `O` or maximum wall-time `Delta` is established by:
+
+- 50-ms **feedback freshness**: observation age, not ACK progress;
+- 250-ms **Event ACK**: echoed RemoteEvent, explicitly not backend ACK;
+- 100-ms **nonqueue allowance**: gameplay budget, not a final reference-release proof;
+- requested GNS delayed-ACK timing or nominal Main tick: requests, not wall-time bounds;
+- 20-second recovery: global outcome after excess stops, not a stackable grant allowance.
+
+Retry references can outlive packet ACK. An evolving ordinary stream can prevent
+slot quiescence. A frozen reference frame count is not automatically an upper
+bound on live causal frames after legal relevance/motion divergence. Preserve C3/C5
+immutable reference, source coverage, exact accepted cut and delivery semantics;
+do not extend a deadline using later observed slot waits or future bytes.
+
+### Alternatives, qualification and next decision
+
+| Alternative | Product value / engineering cost | Recommendation |
+| --- | --- | --- |
+| A. Preserve 64-MiB/s delivered bulk entitlement | Faster large finite backlogs if genuinely required; needs bounded additional admission or ownership execution plus ACK/path proof. No independent ordinary-gameplay need for that scalar was found | Keep as an explicit optional service class only if selected/funded/qualified; do not optimize toward it by default |
+| B. Workload-qualified product outcomes, 64 funding | Protect gameplay/FIFO, count-aware fair progress, bounded debt and exact convergence on declared source/path classes. Avoids an unjustified universal byte floor | Preferred direction; missing complete-slot premise must be resolved before numeric acceptance criteria |
+| C. Finite completion plus separately justified capacity class | Retains hard grant and gameplay maxima and qualifies an explicit bulk/source-shaped service tier rather than treating every tiny stream as 64 MiB/s | Compatible with B; capacity must follow demand/deadline and byte/count feasibility, not a passing rate sample |
+
+The smallest owning review is **release the structural capacity permit after
+exact structural retirement while keeping ordinary debt charged in existing
+funding/pacing**. Prove prospective FIFO exposure, wire reserve, actor load and
+generation safety before implementing. An alternative is a finite follower
+frontier; retirement is not simply FIFO, so its attribution has additional cost.
+Requiring ordinary quiescence is a material workload restriction and is rejected
+as an implicit fix. No production release predicate changes here.
+
+Use existing fixtures to test whichever scoped service class is selected: retain
+the 37,324/37,325-us H1 boundaries and 50-ms shared FIFO/ordinary latency gates;
+maximum/repeated 32-peer waves; delayed ACK/retry and Main opportunities; tiny/mixed
+source shapes; individual starvation/unfair rotation; source underproduction;
+below-required service and growing backlog; ordinary traffic without quiescence;
+bounded overload and 20-second service recovery; exact causal convergence and
+accepted/native/ACK/retired conservation. Direct client readiness and application
+observations remain required in later authorized qualification. No new qualifier
+framework or physical campaign is warranted by this requirements task.
+
+Executed at source base `82d316bd445c73f3fc3cbaa2f7f9708b09fc9806` plus the two
+changed existing fixtures: MSVC Release incremental build, parallel four, and
+`gargantuan_networking_contracts` **PASS (0.12 s)**. Candidate schedule cases are
+now **11/11**; four added recovery discriminators and the existing 32 causal
+cases pass. The former H3 contradictions remain asserted failures of the proposed
+contract. Equal 1,261,568-B/peer hypothetical work encoded as 16,384 tiny groups
+versus three packed groups has the same old 21.072063-s byte-only deadline but
+nominal count floors **2,184.577024 s versus 0.400008 s**. These are supplied finite
+group/count examples, not proof of an actual GRPL journal fragmentation pattern.
+
+Logs/JUnit are retained at `C:\Sandbox\Codex\Artifacts\foundation3l-structural-requirements`
+and `C:\Users\aiden\.codex\artifacts\foundation3l-structural-requirements`.
+The local/worker test-source SHA-256 values match:
+
+| Test source | SHA-256 |
+| --- | --- |
+| `PooledReliableServiceProductionFixture.hpp` | `a4ea6f580b79b08c0ae53da02324303e24eee8d4d850b0d67a2561b3bd8e223d` |
+| `PooledReliableServiceRecoveryContractFixture.hpp` | `83cf5e98211d0e5200215341717eaffc04c75832e08c3772f4a2434d5989ba40` |
+
+At 2026-10-11 22:47:57 UTC PR #6 remains draft at remote `1710bc8d0`. Its GNS
+push/PR workflows **38177701544/38177705974** and Windows native jobs in
+**38177701541/38177705969** pass; the dependent headless Linux jobs are in progress.
+Those jobs do not test these local fixture changes. This follow-up is committed
+locally without a push that would initiate broader socket/native CI outside the
+current scope. No CI policy is changed or bypassed and no final-source hosted
+PASS is claimed.
+
+No new production behavior or acceptance gate changes; no native32/physical run,
+3M or merge. The report remains an unadopted proposal. **Stop before assigning a
+new numeric floor or readiness/ACK budget: resolve the complete-slot service and
+qualified workload/path scope first.** Current D01/F1 and historical failures
+remain authoritative, with qualified recovery preserved.

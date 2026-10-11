@@ -58,6 +58,89 @@ namespace gargantuan::test::pooled_recovery_contract {
 		static_assert(CompleteGroupBytes == 512 * KiB);
 		static_assert(32 * PeerCreditRate == StructuralPool);
 
+		// Candidate-contract discriminators only. These finite supplied schedules
+		// are not a new recovery formula, actual GRPL source replay or evidence of
+		// a numerical ACK/slot-service maximum. Keep the existing scalar proof and
+		// qualified causal recovery verdicts in their original scope.
+		constexpr U NominalMainStepUs = 16'667;
+		constexpr U DrainSlots = 4;
+		constexpr U CompletionNumerator = PeerDrainFloor * 6'000 +
+			(CompleteGroupBytes + 1'248) * 1'000'000;
+		constexpr U MaximumIntegerCompletionUs = CompletionNumerator / PeerDrainFloor;
+		constexpr U NativeCompleteUs = ServiceUs(CompleteGroupBytes, PeerDrainFloor);
+		Check(MaximumIntegerCompletionUs == 37'324 && NativeCompleteUs <= MaximumIntegerCompletionUs,
+			"candidate maximum-grant native completion can meet H1 without supplying ACK or slot release");
+		constexpr U AckReadyAfterServiceRecoveryUs = NativeCompleteUs + ServiceRecoveryDeadlineUs;
+		constexpr U NativeWaveBytes = DrainSlots * CompleteGroupBytes;
+		Check(32 * PeerCreditRate == StructuralPool && NativeWaveBytes == 4 * CompleteGroupBytes &&
+			AckReadyAfterServiceRecoveryUs > ServiceRecoveryDeadlineUs,
+			"unchanged funding and native completion cannot bound a supplied ACK-held slot schedule");
+		// In this schedule all four accepted groups have native-completed, but no
+		// matching ACK exists before the observation deadline. Ownership must keep
+		// four slots and 4G debt charged; native completion cannot authorize a fifth.
+		constexpr U OutstandingBeforeAck = NativeWaveBytes;
+		constexpr U RetiredBeforeAck = 0;
+		constexpr U FreshFeedbackObservedUs = ServiceRecoveryDeadlineUs;
+		Check(OutstandingBeforeAck == 4 * CompleteGroupBytes && RetiredBeforeAck == 0 &&
+			NativeWaveBytes < ServiceRecoveryDeadlineUs * StructuralPool / 1'000'000,
+			"one timely native wave does not imply sustained structural service or exact retirement");
+		Check(FreshFeedbackObservedUs == ServiceRecoveryDeadlineUs &&
+			AckReadyAfterServiceRecoveryUs > FreshFeedbackObservedUs && RetiredBeforeAck == 0,
+			"a current coherent feedback timestamp is not evidence that structural ACK or retirement occurred");
+
+		// Optimistic opportunity/count ceilings: zero payload, encoding, OS, ACK
+		// and ordinary-debt cost; one grant per peer and at most four global grants
+		// per nominal Main step, with retirement/regrant on the following step.
+		// Actual source work and nonzero slot holds can only increase these costs
+		// within this declared schedule. Catch-up/within-step phases are not modeled.
+		constexpr U TinyCompleteBytes = 77;
+		constexpr U TinyGrantsPerPeer = DefaultChangeJournalCapacity;
+		constexpr U SamePeerBytes = TinyCompleteBytes * TinyGrantsPerPeer;
+		constexpr U SameAggregateBytes = 32 * SamePeerBytes;
+		constexpr U PackedGrantsPerPeer = CeilDiv(SamePeerBytes, CompleteGroupBytes);
+		constexpr U TinyPeerCountUs = TinyGrantsPerPeer * NominalMainStepUs;
+		constexpr U TinyGlobalCountUs = CeilDiv(32 * TinyGrantsPerPeer, DrainSlots) * NominalMainStepUs;
+		constexpr U PackedGlobalCountUs = CeilDiv(32 * PackedGrantsPerPeer, DrainSlots) * NominalMainStepUs;
+		constexpr U ByteOnlyBoundUs = ConvergenceBoundUs(SamePeerBytes, SameAggregateBytes);
+		Check(SamePeerBytes == 1'261'568 && PackedGrantsPerPeer == 3,
+			"equal-byte finite inputs can require 16,384 tiny grants or three packed groups per peer");
+		Check(TinyPeerCountUs == 273'072'128 && TinyGlobalCountUs == 2'184'577'024 &&
+			PackedGlobalCountUs == 400'008 && ByteOnlyBoundUs == 21'072'063,
+			"nominal grant opportunities impose a count cost absent from the unchanged byte-only bound");
+		Check(TinyGlobalCountUs > ByteOnlyBoundUs && PackedGlobalCountUs < ByteOnlyBoundUs,
+			"same bytes and credit do not give tiny and packed schedules the same feasible convergence time");
+		// The journal capacity supplies only a finite count for this arithmetic.
+		// It does not establish that actual journal operations force these exact
+		// 77-byte GRPL groups, nor that source coalescing can produce the packed case.
+
+		constexpr U MediumCompleteBytes = 64 * KiB;
+		constexpr U MediumGrantsPerPeer = CompleteGroupBytes / MediumCompleteBytes;
+		constexpr U MixedGrantsPerPeer = MediumGrantsPerPeer + 1;
+		constexpr U MixedPeerBytes = CompleteGroupBytes + TinyCompleteBytes;
+		constexpr U PackedMixedGrantsPerPeer = CeilDiv(MixedPeerBytes, CompleteGroupBytes);
+		Check(MediumGrantsPerPeer == 8 && MediumGrantsPerPeer * MediumCompleteBytes == CompleteGroupBytes,
+			"eight medium groups carry the same complete bytes as one maximum group");
+		Check(MixedGrantsPerPeer == 9 && PackedMixedGrantsPerPeer == 2 &&
+			CeilDiv(32 * MixedGrantsPerPeer, DrainSlots) * NominalMainStepUs >
+				CeilDiv(32 * PackedMixedGrantsPerPeer, DrainSlots) * NominalMainStepUs,
+			"mixed size distribution changes slot-opportunity work even with equal exact byte totals");
+
+		// A supplied per-grant slot cost is independent of byte funding. Doubling
+		// it doubles this lower-bound count component. No ACK constant is selected:
+		// neither a gameplay Event maximum nor a shutdown timeout bounds structural
+		// ACK, Main observation, ordinary-debt release or source readiness.
+		auto CountCostUs = [](U Grants, U SuppliedSlotCostUs) {
+			return CeilDiv(Grants, DrainSlots) * SuppliedSlotCostUs;
+		};
+		Check(CountCostUs(32 * MixedGrantsPerPeer, 2 * NominalMainStepUs) ==
+			2 * CountCostUs(32 * MixedGrantsPerPeer, NominalMainStepUs),
+			"count-sensitive slot cost cannot be inferred from bytes or native completion alone");
+		std::cout << "[PooledRecoveryContract:CandidateDiscriminator] groups=4 qualified_contract=0"
+			<< " same_peer_bytes=" << SamePeerBytes << " tiny_groups_per_peer=" << TinyGrantsPerPeer
+			<< " packed_groups_per_peer=" << PackedGrantsPerPeer << " byte_only_bound_us=" << ByteOnlyBoundUs
+			<< " tiny_count_floor_us=" << TinyGlobalCountUs << " packed_count_floor_us=" << PackedGlobalCountUs
+			<< " ack_slot_maximum=NOT_SELECTED source_group_shape=NOT_MEASURED\n";
+
 		// The pooled admission model bounds only the next serialized offer/debt.
 		// Current 3J semantics independently retain bounded semantic work in the
 		// per-peer transition set and in the authoritative journal window.

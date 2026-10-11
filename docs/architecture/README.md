@@ -39,7 +39,10 @@ deficit and the short-window POOLED_SERVICE health/qualification models.
 The [D02 product-contract review](../adr/D02-pooled-service-product-contract-review.md)
 is a reviewed hybrid recommendation only; it supersedes nothing and changes no
 production or qualification gate. Its deterministic follow-up is blocked on
-nominal Main cadence and ACK-owned slot capacity. D01/F1 remains authoritative until separately
+nominal Main cadence and ACK-owned slot capacity; its requirements reassessment
+recommends a funded envelope with workload/count-aware service, pending complete
+slot-lifetime and ordinary-follower ownership review. D01/F1 remains authoritative
+until separately
 amended and requalified.
 Other documents explicitly
 labeled accepted design direction, including the game networking architecture,

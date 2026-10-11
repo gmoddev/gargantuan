@@ -6,6 +6,17 @@ last_verified: 2026-09-14
 
 # Foundation 3L pooled-service proof completion receipt
 
+## Structural requirements reassessment (2026-10-11)
+
+[D02 section 10](../../docs/adr/D02-pooled-service-product-contract-review.md#10-structural-requirements-reassessment-2026-10-11)
+recommends keeping funding separate from delivered byte/count/slot service. Existing
+deterministic CTest passes with 11 candidate cases, including continuous ordinary
+debt retaining already-retired structural slots, plus four count/ACK recovery
+discriminators. The candidate contract is not qualified: complete slot lifetime,
+ordinary-follower ownership and a supported path/Main premise remain unresolved.
+Original scalar, causal and measured native32 recovery verdicts remain unchanged.
+No production gate, physical run, new native32 campaign or scalar-rate retuning.
+
 ## D02 candidate capacity follow-up (2026-10-11)
 
 **HYBRID F1 — CAPACITY/ARCHITECTURE DECISION REQUIRED.** The

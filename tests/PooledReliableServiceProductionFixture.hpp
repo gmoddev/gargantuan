@@ -851,11 +851,64 @@ inline bool RunTests() {
 				<< " bound_us=" << Bound << " peer_bytes=" << 1280 * G << " total_bytes=" << Value.Accepted
 				<< " hypothetical_source_records=" << 1280 * 9 << '\n';
 		});
+		Test("ContinuingOrdinaryTrafficRetainsAlreadyRetiredStructuralSlots", [&] {
+			Admission Account(network::ReliableServiceProfile::PooledService());
+			std::array<Admission::Reservation, 4> Receipts{};
+			const auto Observe = [&](U At, U Ordinary) {
+				for (std::uint32_t Index = 0; Index < 32; ++Index)
+					Check(Account.ObserveService({Index + 1, 1},
+						Admission::ServiceObservation{At, true, true, Index < 4 ? Ordinary : 0}), "fresh peer accounting");
+				Account.SetOrdinaryFunding(224 * 1024);
+			};
+			Check(Account.BeginStep(0), "zero initial credit"); Observe(0, 0); Account.EndStep();
+			Check(Account.BeginStep(250'000), "reachable maximum-group credit"); Observe(250'000, 0);
+			for (std::uint32_t Index = 0; Index < 4; ++Index) {
+				auto Receipt = Account.Reserve({Index + 1, 1}, G);
+				Check(Receipt && Account.Commit(*Receipt), "four structural grants accepted"); Receipts[Index] = *Receipt;
+			}
+			Account.EndStep();
+			// This supplied ordinary stream is one 115-B complete Event message
+			// per frame on four peers. Each retires after 25 ms, yet an event just
+			// before each snapshot leaves one/two messages outstanding forever if
+			// the stream continues. No actual callback, socket or host is modeled.
+			constexpr U EventBytes = 115, OrdinaryRetirementUs = 25'000;
+			Check(EventBytes * 1'000'000 <= 32 * 1024 * FrameUs && 1'000'000 <= 64 * FrameUs &&
+				4 * EventBytes * 1'000'000 <= 256 * 1024 * FrameUs && 4 * 1'000'000 <= 512 * FrameUs,
+				"continuing traffic fits selected peer and aggregate byte/message envelopes");
+			Check(FrameUs < OrdinaryRetirementUs && OrdinaryRetirementUs < 2 * FrameUs,
+				"individual finite retirement need not create a zero-debt snapshot");
+			for (U Step = 0; Step < 64; ++Step) {
+				const U At = 250'000 + (Step + 2) * FrameUs;
+				Check(Account.BeginStep(At), "nominal observation");
+				if (!Step) for (const auto &Receipt : Receipts)
+					Check(Account.Retire(Receipt.Connection, Receipt.Token, Receipt.Bytes), "exact structural retirement");
+				const U OrdinaryAccepted = (Step + 1) * EventBytes;
+				const U OrdinaryRetired = Step > 1 ? (Step - 1) * EventBytes : 0;
+				Observe(At, OrdinaryAccepted - OrdinaryRetired);
+				for (std::uint32_t Index = 4; Index < 32; ++Index) {
+					const network::ConnectionId Id{Index + 1, 1}; Account.DeferSize(Id, G);
+					Check(!Account.Allowance(Id, At), "eligible peers remain excluded despite structural retirement");
+				}
+				const auto Metrics = Account.GetMetrics();
+				Check(!Metrics.OutstandingBytes && Metrics.ActiveDrainGrants == 4 &&
+					Metrics.AcceptedBytes == 4 * G && Metrics.VerifiedAttributedRetirement == 4 * G,
+					"ordinary traffic retains empty structural slots without violating exact byte conservation");
+				Account.EndStep();
+			}
+			const U QuiescentAt = 250'000 + 67 * FrameUs;
+			Check(Account.BeginStep(QuiescentAt), "all last ordinary messages can retire"); Observe(QuiescentAt, 0);
+			Check(!Account.GetMetrics().ActiveDrainGrants && Account.Allowance({5, 1}, QuiescentAt) == G,
+				"quiescence releases the slots without new structural service or a funding change");
+			Account.EndStep();
+			std::cout << "[Network:HybridCapacity] ordinary_continuing peers=4 complete_message_bytes=115"
+				<< " interval_us=" << FrameUs << " retirement_us=25000 blocked_eligible_peers=28"
+				<< " structural_outstanding=0 structural_retired=" << 4 * G << '\n';
+		});
 	} catch (const std::exception &Error) {
 		std::cerr << "[Network:HybridCapacity] FAIL " << Error.what() << '\n'; return false;
 	}
 	std::cout << "[Network:HybridCapacity] cases=" << Passed << " candidate_qualified=0\n";
-	return Passed == 10;
+	return Passed == 11;
 }
 }
 }

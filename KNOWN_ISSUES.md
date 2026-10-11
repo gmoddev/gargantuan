@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-11 [structural requirements reassessment](docs/adr/D02-pooled-service-product-contract-review.md#10-structural-requirements-reassessment-2026-10-11)
+recommends B/C: retain 64-MiB/s funding and define source-shaped count/slot service,
+not a rounded delivered floor. No independent product need for universal 64-MiB/s
+delivery was found, but current gates remain. A direct accountant regression
+shows continuous in-envelope ordinary debt can retain four already structurally
+retired slots and block 28 eligible peers. A lower scalar cannot fix that fairness
+coupling. Complete-slot/path/Main premises and finite follower ownership require
+review before numeric replacement. Deterministic CTest passes with 11 candidate
+cases and four recovery discriminators; no contract qualification, production
+change or native32/physical run. **KI-006 OPEN; 3L B — PARTIALLY READY; PR #6 draft.**
+
 2026-10-11 [D02 deterministic capacity follow-up](docs/adr/D02-pooled-service-product-contract-review.md#9-deterministic-capacity-qualification--blocked-2026-10-11)
 returns **HYBRID F1 — CAPACITY/ARCHITECTURE DECISION REQUIRED**. Existing fixtures
 detect a nominal 16,667-us Main/four-ACK-slot contradiction: even favorable
