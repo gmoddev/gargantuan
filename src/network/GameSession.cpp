@@ -2499,6 +2499,37 @@ namespace gargantuan::network {
 		}
 		Error.clear(); return Result;
 	}
+	std::optional<std::vector<detail::StructuralCausalSnapshot>>
+	detail::GameSessionTestAccess::CaptureStructuralSourceSnapshot(const GameSession &Session, std::string &Error) {
+		const auto *State = Session.State.get();
+		if (!State || !State->Replication || !State->ByteAdmission || !State->IsPooled()) {
+			Error = "Causal source snapshot requires a pooled server"; return {};
+		}
+		const auto &Replication = *State->Replication;
+		const auto Tail = ChangeJournal::Get().CreateCursor(Replication.SourceRootId).NextSequence;
+		std::vector<StructuralCausalSnapshot> Result;
+		Result.reserve(State->Peers.size());
+		for (const auto &[Connection, Peer] : State->Peers) {
+			const auto Found = Replication.Peers.find(Connection);
+			if (Peer.Phase != PeerPhase::Ready || Found == Replication.Peers.end() || Found->second.PreparedCommit) {
+				Error = "Causal source snapshot requires ready peers without outstanding preparation"; return {};
+			}
+			const auto &Value = Found->second;
+			if (Value.JournalCursor.Scope != Replication.SourceRootId || Value.JournalCursor.NextSequence > Tail) {
+				Error = "Causal source snapshot journal cursor is invalid"; return {};
+			}
+			StructuralCausalSnapshot Snapshot{.Connection = Connection, .SourceScope = Replication.SourceRootId,
+				.JournalCursor = Value.JournalCursor.NextSequence, .JournalTail = Tail,
+				.NextSequence = Value.NextSequence.Value(), .AcceptedRevision = Value.AcceptedRevision,
+				.PendingTokenWatermark = Value.NextPendingToken};
+			Snapshot.Pending.reserve(Value.PendingTransitions.size());
+			for (const auto &[Object, Pending] : Value.PendingTransitions)
+				Snapshot.Pending.push_back({Pending.Token, Object,
+					Pending.Kind == ReplicationCoordinator::PendingTransitionKind::Enter});
+			Result.push_back(std::move(Snapshot));
+		}
+		Error.clear(); return Result;
+	}
 	std::optional<std::vector<detail::StructuralDeliverySnapshot>>
 	detail::GameSessionTestAccess::GetStructuralDeliverySnapshots(const GameSession &Session, std::string &Error) {
 		const auto *State = Session.State.get();

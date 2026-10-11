@@ -135,7 +135,7 @@ namespace gargantuan::host::detail {
 		void ValidateSource(const network::GameSession &Session) {
 			if (!Failure().empty()) return;
 			std::string CaptureError;
-			auto Current = network::detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(Session, CaptureError);
+			auto Current = network::detail::GameSessionTestAccess::CaptureStructuralSourceSnapshot(Session, CaptureError);
 			if (!Current) { Error = CaptureError.empty() ? "causal source capture failed" : CaptureError; return; }
 			if (Current->size() != Initial.size()) { Error = "causal source peer set changed"; return; }
 			for (const auto &Peer : *Current) {

@@ -121,6 +121,10 @@ namespace gargantuan::network::detail {
 		[[nodiscard]] static ReplicationMetrics GetReplicationMetrics(const GameSession &Session);
 		[[nodiscard]] static std::optional<std::vector<StructuralCausalSnapshot>> CaptureStructuralCausalSnapshot(
 			const GameSession &Session, std::string &Error);
+		// Recovery source validation reads only journal/sequence/pending identity.
+		// Native feedback may be transiently incomplete while a send is pending.
+		[[nodiscard]] static std::optional<std::vector<StructuralCausalSnapshot>> CaptureStructuralSourceSnapshot(
+			const GameSession &Session, std::string &Error);
 		[[nodiscard]] static std::optional<std::vector<StructuralDeliverySnapshot>> GetStructuralDeliverySnapshots(
 			const GameSession &Session, std::string &Error);
 		// Main-only qualification capture. Accepted debt and the detached 3J
