@@ -104,6 +104,21 @@ cover measured service pauses with a small timing change. No native32 PASS,
 new Local32/Node32 measurement, F1 revision, 3M step or merge is inferred.
 **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
 
+2026-10-11 follow-up: `0ad686ab0` separates recovery source validation
+from transiently incomplete native feedback while retaining the initial
+full-conservation quote check. A bounded failure-only stage trace located
+755–2,200 µs native-completion-to-actor reconciliation delays in failed
+grants, versus 8–24 µs worker queue and 23–129 µs OS-call maxima in those
+grants. This traced build failed F1 for 9/32 peers. The uninstrumented
+exact-head B requalification `448d75d1-2e64-49d0-9bd0-0855b95b4bce`
+still failed F1 for 3/32 peers (largest deficit 20,535,312,384 versus
+18,025,216,000 byte-µs) and stopped because the initial structural causal
+capture encountered pending native feedback. Its 105-file evidence index
+verifies; all owned processes and the port were clear. The trace is diagnostic,
+and neither run qualifies capacity. A multi-packet actor pipeline or stronger
+measured execution boundary is an architecture change, not a timer adjustment.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
+
 2026-10-10 the authorized [execution-environment study](devdocs/FutureArchitecture/Foundation3LNetworkingCapacityReview.md#11-execution-environment-feasibility-study-october-9-local--october-10-utc)
 returns **OPTION 2 INSUFFICIENT — REVIEW BOUNDED EGRESS OWNERSHIP**, limited to
 the declared instrumented HOSTPC pin19 candidate. Exactly six baseline and six

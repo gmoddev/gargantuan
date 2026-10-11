@@ -538,6 +538,55 @@ cleanup. Its sealed evidence is retained under
 The original A/B and timing diagnostic remain failed evidence, not replaced
 by this requalification.
 
+The distinct source-validation defect was corrected at `0ad686ab0`:
+`FarmRecoveryEvidence::ValidateSource` now captures only the live source
+scope, journal cursor, sequence and pending-token identity it actually
+compares. Its initial causal capture still requires complete native
+conservation. This change leaves native egress, F1, admission, reserves and
+the recovery contract unchanged. The clean exact-head MSVC Release build and
+GameSession, real-GNS transport and frozen-recovery-quote executables pass.
+
+One separately labeled, failure-only stage diagnostic used that correction
+plus temporary in-memory per-grant timing maxima. It did **not** retain the
+earlier 4.7-million-event callback observer. Run
+`d7dd1fb1-9d31-4d1c-b028-009f3675be6a` used the same native32 workload
+and failed F1 for nine of 32 peers; three recovery quote cases reached PASS,
+but the server ultimately exited 10, with a structural strict-deadline
+barrier also exceeding its bound. Ten failure-transition records show maximum
+native-completion-to-actor-reconciliation delays of 755–2,200 µs and
+completion-to-next-packet-entry delays of 762–2,218 µs. Within those grants,
+worker queue maxima were 8–24 µs, OS-call maxima 23–129 µs, and packet
+preparation maxima 3–13 µs. These records locate the dominant delay in the
+traced build after the native OS result and before the actor can prepare the
+next packet; they do not establish the exact uninstrumented stage durations
+or separate GNS global-lock contention from host scheduling. All 107 indexed
+files verify by size and SHA-256 (index SHA-256
+`1cbd8e2b60d8593108ec6ef45cee3fd159a483da3bcb0735e11767672d294147`).
+The diagnostic package and evidence are preserved under
+`C:\Sandbox\Codex\Artifacts\foundation3l-egress-stage-diagnostic-339205e7`
+and `C:\Sandbox\Codex\Evidence\Foundation3LEgressStageDiagnostic339205e7`
+on `dockerbox`.
+
+The uninstrumented exact-`0ad686ab0` B requalification
+`448d75d1-2e64-49d0-9bd0-0855b95b4bce` used Server SHA-256
+`25f950e5e497f2a9616fcdfd35b45073c7e1434bce71d3078abadb7f0801b029`
+and the unchanged Player package. It **failed**: three of 32 peer F1
+summaries failed, with maximum running deficits 18,505,269,248,
+19,196,985,792 and 20,535,312,384 byte-µs against the unchanged
+18,025,216,000 bound. Twenty-seven peer summaries were valid; early abort
+left two incomplete. Gameplay quote recovery reached PASS, but the structural
+case encountered an unresolved native send at its **initial** full causal
+snapshot and was NOT_MEASURED. The source-only validation correction cannot
+relax that initial conservation precondition or create a valid cessation cut
+from incomplete feedback. The 105 indexed files verify by size and SHA-256
+(index SHA-256
+`709e27da361832eecb66500704d004081db3f3dbc49bc73ea979387e4464812e`).
+Both new runs cleaned all task-owned processes and released the farm port.
+The requalification package and raw evidence are preserved under
+`C:\Sandbox\Codex\Artifacts\foundation3l-source-snapshot-b-0ad686ab`
+and `C:\Sandbox\Codex\Evidence\Foundation3LSourceSnapshotB0ad686ab`
+on `dockerbox`. Neither run is a capacity PASS.
+
 ## 11. Architecture stop decision for the OS-only worker candidate
 
 This candidate preserves the reviewed protocol ownership, but it cannot be
@@ -546,12 +595,15 @@ unresolved numbered packet per peer: after each positive OS result, that peer
 needs an actor turn before another datagram can be prepared. At 16 MiB/s and
 the 1,248-byte native quantum, an otherwise backlogged peer can consume the
 running allowance after about 1,074 µs without a new first send. The measured
-candidate has repeated longer gaps and failures in two uninstrumented B runs;
-the requalification also has a much larger failure. More workers or a shorter
-pending poll cannot eliminate a pause in protocol preparation, and the
-retained evidence does not isolate worker dispatch from actor/global-lock or
-host scheduling for each gap. No claimed scheduling correction follows from
-the perturbed timing-overlay run.
+candidate has repeated longer gaps and failures in three uninstrumented B
+runs. More workers or a shorter pending poll cannot eliminate a pause in
+protocol preparation. The bounded failure-only diagnostic locates its
+dominant delay after the worker's positive OS result: actor reconciliation
+and the next actor packet entry can each wait beyond the peer's running
+allowance while worker queue and OS-call stages remain short. That trace is
+not a substitute for the uninstrumented F1 failures and does not distinguish
+global-lock contention from host scheduling. No claimed scheduling correction
+follows from either diagnostic.
 
 Ranked paths for a new architecture decision are:
 
@@ -573,9 +625,11 @@ Ranked paths for a new architecture decision are:
    is adopted here.
 
 Replacing GNS remains unsupported by a demonstrated necessity or a qualified
-replacement. Correcting the separate source-only causal snapshot defect would
-remove a recovery-evidence abort but cannot make these F1 failures pass, so no
-further qualifier-only retry is justified for this candidate. KI-006 remains
-open; Foundation 3L remains B — PARTIALLY READY. Canonical Local32, real-TLS
+replacement. The source-only recovery validation defect was corrected, but
+an initial cessation cut can still encounter incomplete native feedback;
+that requires a coordinated, truthful frontier if a future candidate reaches
+the capacity gate. The exact-head uninstrumented requalification still fails
+F1, so no further qualifier-only retry is justified for this candidate.
+KI-006 remains open; Foundation 3L remains B — PARTIALLY READY. Canonical Local32, real-TLS
 Node32 and the final acceptance sweep are withheld because the prerequisite
 native32 capacity gate failed. PR #6 remains draft; no 3M work or merge occurs.
