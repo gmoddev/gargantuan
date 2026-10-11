@@ -1304,3 +1304,103 @@ existing 32-Player Scale/Recovery workload with native egress enabled and pause
 hooks OFF. Exact source, tests, package pins and outcome will be recorded after
 preflight/execution. No F1 correction, new capacity PASS, scope change or pipeline
 is inferred before a demonstrated cause and fresh qualified correction.
+
+### Final attempt receipt — target not reproduced; stop
+
+**INITIAL F1 SERVICE — ARCHITECTURE/PLATFORM REVIEW REQUIRED.** The authorized
+final attempt is exhausted. No measured initial-service cause or production
+correction is established, and no diagnostic retry is started.
+
+Diagnostic source is `76f03b7c59bdc61f88f4b910ae20ce42ca06dd48`. The first
+preflight at `5839497fd` passed six of seven selected tests but failed the new
+reversed-worker-timeline regression. It exposed an actual missing
+`NativeCompleted >= WorkerStarted` check in diagnostic trace validity. That
+guard and line-aware assertion reporting were corrected before execution. The
+failed log is retained; superseded CI was cancelled, not counted as PASS.
+Corrected Release build passes. All eight affected native tests pass across the
+retained preflight/follow-up runs, including the nine-case pooled-curve fixture
+and eight-case service-timing fixture. The trigger's boundary, prompt-start slow
+drain exclusion, independent initial retention, invalid input and concurrent
+native freeze tests pass. Required hosted checks on this diagnostic source
+remain separately tracked; none is claimed passed while in progress.
+
+Exactly one fresh campaign ran: `3d955b61-ae2a-4844-a4f2-53e6ddae1433`.
+Both 57-member packages verify; Server binary SHA-256 is
+`db2524c9a139b57084661977e7095cbabe2a0fb57cd0946cd249639fa1990d58`,
+descriptor `882665a02b170b24e6db800c9f658fe7e669475d5bde362c890477dc904e8c87`.
+Player retains the predeclared unchanged pin. Prelaunch has zero compilers,
+task runtimes and UDP 39450 sockets and 22,761,566,208 available bytes. Direct
+processor samples are 21.747% and 23.699%; WMI reports a stale 100% and is not
+used as an idle-host claim. No scheduling, priority, timer or F1 constant changes.
+
+All 32 F1 summaries are present, `failed=0`, `valid=1`, with **7,190** completed
+passing eligible grants. Maximum running deficit is **13,181,666,624 byte-µs**,
+below the unchanged 18,025,216,000 bound; maximum finite shortfall is zero.
+All 32 separate initial-witness rows report `measured=0`. The native receipt is
+`initial_only=1`, joined, `frozen=0`, with token/activation/first timestamp zero.
+**No actual zero-first-send breach reproduced.** No initial-stage chain or
+failing-interval lock/scheduling attribution can be manufactured from this result.
+
+The overall sealed harness result is nevertheless **FAIL**:
+`recovery case structural has an invalid structural offer cadence`. Server exit
+is zero. Structural opportunities 148→149, 209→210 and 327→328 have measured
+intervals **16,660**, **16,530** and **16,509 µs**, below the unchanged 16,667 µs
+workload cadence required by `PhysicalGameSessionFarm.ps1`. No cadence threshold
+is changed and no source/workload correction or second run follows. Native F1
+sample successes and raw quote PASS rows therefore do not qualify this campaign,
+erase the original initial miss, or reopen the earlier qualified recovery code.
+Raw diagnostic recovery observations are gameplay 0.345870/20.471073 s,
+structural 17.255063/32.601944 s and mixed 0.330408/20.471306 s. Section 14's
+qualified recovery evidence remains the acceptance fact for that correction.
+
+The recorder writes **11,534,256** records, overwrites 11,526,064 as designed,
+and reports zero drops/counter overflow. With no target to freeze on, the final
+8,192 ring records cover **2.2284803 s at run end**. The separately retained
+sequence-zero timer-create record must be excluded from coverage calculations;
+the summary's earliest timestamp otherwise misleadingly points to startup.
+Retained end-ring maximum global acquisition and wait spans are 20.4458 ms and
+6.1708 ms, but have no initial-failure token/time join and cannot explain the
+historical 7.070 ms miss. Suppression removes the individual thinker and running
+sender clocks by construction; total observer perturbation is still unmeasured.
+No controlled performance comparison or universal platform guarantee follows.
+
+Final accepted = native first-sent = ACKed = retired is **2,048,028,021 bytes**;
+pending tokens, terminal release and accounting/storage invalidity are zero.
+All **107** sealed indexed files verify by size/SHA-256. Index SHA-256 is
+`ee9b568302b4e2cd135a8932d2ae47ea5e7fd54122b9e7a544fde1e4782d0a52`.
+Cleanup confirms zero task runtimes and UDP 39450 sockets. Raw evidence remains
+on `dockerbox` at
+`C:\Sandbox\Codex\Evidence\Foundation3LFinalInitialAttribution\3d955b61-ae2a-4844-a4f2-53e6ddae1433`;
+plan, packages, pins, failed/passing preflights and verification receipt remain at
+`C:\Sandbox\Codex\Artifacts\foundation3l-final-initial-attribution`.
+
+### Final architecture/platform assessment
+
+The evidence proves a real earlier F1 counterexample, qualified recovery, exact
+native-positive chronology and ownership, and a passing set of first-send
+observations in this invalid instrumented campaign. It does not establish the
+cause of the earlier initial miss or enough execution bounds to qualify the
+current broad Windows profile. Lock holders, connection collisions, deferred
+GNS work, callbacks, allocation/copy, worker availability and OS dispatch still
+lack a demonstrated total wall-time bound. Fixed counts/queues and existing
+high priority are not that bound. No repeated actor timer or priority tuning is
+justified, and extra packets do not inherently supply an initial opportunity.
+
+Unchanged F1 remains defensible as a strict deployment qualification and runtime
+health contract: violations must fail truthfully. Claiming it is assured under
+the current supported execution environment is not supported by the ledger.
+A finite passing sample is not an unconditional OS scheduling promise. This
+evidence also does not prove Windows/hardware or every one-packet actor design
+incapable of satisfying the measured contract. A stronger execution model or
+explicit product decision requires review before further implementation.
+
+| Ranked option | Cost and risk | Evidence required before adoption |
+| --- | --- | --- |
+| 1. Define and qualify a stronger execution environment with bounded competing actor/application work, retaining F1 | Moderate engineering/operations cost; support constraints may change, and OS interrupt/dispatch tails can remain. Affinity alone was not sufficient in earlier studies. | Explicit supported workload/environment, lock/work budgets, and fresh unchanged native/Local32/real-TLS Node32 measurements plus canonical resource/convergence gates. |
+| 2. Review one bounded GNS actor with command ownership of application operations | High correctness and lifecycle cost; bounded queue capacity alone does not bound command execution, callbacks or OS dispatch. No application-lock cause was measured here. | Completion/overload/FIFO/generation/feedback/protected-traffic/shutdown proofs and a credible end-to-end execution budget, then deterministic/native/physical qualification. |
+| 3. Make an explicit supported-platform or product-contract decision | Potentially lower implementation cost but material product impact. A broader best-effort promise or altered scope cannot be adopted by this task. | Human product requirements and an accepted architecture/contract decision; any new guarantee needs its own evidence. |
+
+None of these alternatives is automatically selected or implemented. No further
+initial-service diagnostic campaign, speculative pipeline or GNS replacement is
+started. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
+Local32, real-TLS Node32 and final acceptance remain withheld; no 3M or merge.

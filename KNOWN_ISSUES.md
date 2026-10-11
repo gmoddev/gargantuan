@@ -85,6 +85,22 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-11 final authorized initial-service attempt is complete and stops for
+**ARCHITECTURE/PLATFORM REVIEW**. Corrected diagnostic source `76f03b7c5`
+passes Release build and eight affected tests; zero-first retention uses the
+strict canonical 6,075 µs integer breach and freezes during native reconciliation,
+independently of earlier running failures. The one fresh run
+`3d955b61-ae2a-4844-a4f2-53e6ddae1433` retains no target: all 32 initial rows
+are unmeasured and no native freeze occurs. All 7,190 observed F1 grants pass,
+but the sealed harness FAILS structural-offer cadence (three intervals below
+16,667 µs), with unmeasured observer cost. It is not capacity qualification and
+does not erase the original 7.070 ms miss. Recovery correction remains qualified
+by its earlier evidence. All 107 indexed files verify; runtimes and port are
+clear. No causal production correction or further retry follows. See the
+[final assessment](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#16-final-bounded-zero-first-send-attribution-attempt-2026-10-11).
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft; Local32/Node32
+and final acceptance withheld.**
+
 2026-10-11 initial-service follow-up returns **INITIAL F1 SERVICE — ARCHITECTURE
 DECISION REQUIRED**. One bounded diagnostic at `67d3772a4` passes its Release
 build and eight affected tests, but obtains no covered delayed-initial witness:
