@@ -1069,3 +1069,50 @@ the ownership model and how it addresses the actual service failures; and
 qualified by this recovery correction. **KI-006 OPEN; Foundation 3L B — PARTIALLY
 READY; PR #6 draft.** Native F1 failure withholds canonical Local32, real-TLS
 Node32 and final acceptance. No Foundation 3M work or merge occurs.
+
+## 15. Initial-service causal investigation (2026-10-11)
+
+This follow-up preserves section 14's qualified native32 recovery correction
+and investigates the distinct finite initial-service failure. All six required
+hosted jobs also pass at receipt head `ff2b23b9652bd98dc0791300b84f2189aa961b29`:
+PR native `38133681440`, push native `38133678616`, PR GNS `38133681483`
+and push GNS `38133678634`. These jobs do not repair the measured native32 FAIL.
+
+Independent source reviews identify two exposures to discriminate. GameSession
+activates the accepted grant before semantic acceptance commit, causal bookkeeping
+and remote materialization; the immediate shared-allowance flush follows that
+work. GNS's ready-result checkpoints service already-dispatched pending packets,
+so a newly enqueued grant awaiting its initial packet is not yet in that registry.
+Precise wake also distinguishes partially first-sent grants from zero-first-send
+grants. None of these exposures attributes token 1071's retained 7,070 µs delay.
+NoNagle is already correctly selected. At the pinned source,
+`CheckConnectionStateOrScheduleWakeUp` invoked by `UseCurrentThread` is a TODO
+which only requests ASAP; that flag is not an actor execution shortcut.
+
+The bounded diagnostic extends existing private feedback and the existing opt-in
+Farm service-timing observer. One active and one completed initial-service value
+per peer retain adapter entry/lock, native API entry/connection lock/enqueue,
+first SNP visit and pending state, packet preparation, existing worker
+queue/start/OS-return timestamps and later actor reconciliation. Exact token,
+native message and handle correlate the first never-sent structural segment.
+Completed trace copying precedes active counter clearing. The first failed grant
+retains the value; diagnostic token/time validity is separate from F1 acceptance.
+Disabled observation adds no clock reads. No trace field participates in
+activation, scheduling, admission, reliability, security or qualification policy.
+
+Existing bounded QPC history records global-lock waits, receive/thinker work,
+callbacks and sender spans; two added phases separate native API connection-lock
+wait and message-copy work. Clock brackets and loss/coverage must be checked.
+Actual SNP entry is not a wake request or a connection-lock attempt; aggregate
+collision counts without a connection join cannot identify the failing peer.
+Actor reconciliation occurs after the authoritative positive OS timestamp and
+cannot retrospectively improve initial F1. Observer overhead must remain
+distinguished from production timing; the traced run is not capacity qualification.
+
+One predeclared diagnostic uses the existing native32 workload and unchanged
+gates, fresh run `ecabe35b-f73c-4981-9a11-d19911408301`, pause hooks OFF and
+the existing Farm service-timing flag enabled. Its parent source is `ff2b23b96`;
+exact diagnostic source, preflights, package pins and outcome will be recorded
+after execution. A non-reproduction or uncovered interval remains uncertain,
+with no blind retry. No initial-service correction, pipeline, qualified bounded
+actor model or platform-incapacity claim follows from source inspection alone.

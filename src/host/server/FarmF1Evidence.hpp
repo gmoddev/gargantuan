@@ -21,6 +21,8 @@ public:
 		std::uint64_t Sequence = 0, Token = 0, Bytes = 0, Activated = 0, First = 0, Completed = 0;
 		std::uint64_t ObservedAt = 0, MaximumRunning = 0;
 		std::uint32_t SegmentCount = 0;
+		network::detail::InitialServiceTrace InitialTrace{};
+		bool InitialTraceValid = false;
 		std::array<network::detail::ReliableServiceFeedback::StructuralSegmentEvent, 512> Segments{};
 	};
 	struct Peer {
@@ -87,6 +89,14 @@ private:
 		if (Sum != W.Bytes || S.LastCompletedStructuralSegmentEvents[0].AtMicroseconds != W.First ||
 			Last != W.Completed) return;
 		W.Segments = S.LastCompletedStructuralSegmentEvents;
+		W.InitialTrace = S.LastCompletedInitialTrace;
+		const auto &T = W.InitialTrace;
+		W.InitialTraceValid = T.Enabled && T.Token == W.Token && T.MessageNumber && T.NativeHandle && T.DispatchSequence &&
+			T.TransportEntered >= W.Activated && T.AdapterLocked >= T.TransportEntered &&
+			T.NativeApiEntered >= T.AdapterLocked && T.NativeApiLocked >= T.NativeApiEntered &&
+			T.NativeEnqueued >= T.NativeApiLocked && T.FirstSnpVisit >= T.NativeEnqueued &&
+			T.PacketPreparationEntered >= T.FirstSnpVisit && T.WorkerQueued >= T.PacketPreparationEntered &&
+			T.WorkerStarted >= T.WorkerQueued && T.NativeCompleted == W.First && T.ActorReconciled >= T.NativeCompleted;
 		W.Measured = true;
 	}
 public:
@@ -232,6 +242,19 @@ public:
 				<< " observed_us=" << W.ObservedAt << " max_running_byte_us=" << W.MaximumRunning
 				<< " segments=" << W.SegmentCount << " measured=" << W.Measured << '\n';
 			if (!W.Measured) continue;
+			const auto &T = W.InitialTrace;
+			if (T.Enabled)
+				Out << "[Qualification:FarmF1InitialTrace] run=" << Run << " connection=" << P.Connection.Slot << ':' << P.Connection.Generation
+					<< " valid=" << W.InitialTraceValid
+					<< " token=" << T.Token << " message=" << T.MessageNumber << " native_handle=" << T.NativeHandle
+					<< " activated_us=" << W.Activated << " transport_entered_us=" << T.TransportEntered
+					<< " adapter_locked_us=" << T.AdapterLocked << " native_api_entered_us=" << T.NativeApiEntered
+					<< " native_api_locked_us=" << T.NativeApiLocked << " native_enqueued_us=" << T.NativeEnqueued
+					<< " pending_at_enqueue=" << T.PendingAtEnqueue << " first_snp_us=" << T.FirstSnpVisit
+					<< " pending_at_first_snp=" << T.PendingAtFirstSnpVisit << " preparation_us=" << T.PacketPreparationEntered
+					<< " worker_queued_us=" << T.WorkerQueued << " worker_started_us=" << T.WorkerStarted
+					<< " native_completed_us=" << T.NativeCompleted << " actor_reconciled_us=" << T.ActorReconciled
+					<< " dispatch_sequence=" << T.DispatchSequence << " clock=steady_us\n";
 			for (std::size_t J = 0; J < W.SegmentCount; ++J)
 				Out << "[Qualification:FarmF1Failure] event=segment run=" << Run
 					<< " connection=" << P.Connection.Slot << ':' << P.Connection.Generation

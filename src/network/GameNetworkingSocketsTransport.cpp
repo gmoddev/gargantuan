@@ -277,6 +277,7 @@ namespace gargantuan::network {
 			Result.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds =
 				Counters.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds;
 			Result.StructuralLastCompletedGrantFailed = Counters.StructuralLastCompletedGrantFailed;
+			Result.LastCompletedInitialTrace = Counters.LastCompletedInitialTrace;
 			Result.StructuralMaximumFiniteShortfallByteMicroseconds =
 				Counters.StructuralMaximumFiniteShortfallByteMicroseconds;
 			Result.LastCompletedStructuralSegmentEventCount =
@@ -939,8 +940,13 @@ namespace gargantuan::network {
 
 	TransportOperationResult GameNetworkingSocketsTransport::Send(const NetworkMessageIntent &Message) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::TransportSend);
+		detail::InitialServiceTrace InitialTrace;
+		InitialTrace.Enabled = detail::ReliableServiceFeedbackAccess::Token(Message) != 0 &&
+			SteamNetworkingSocketsLib::GargantuanInitialServiceTimingEnabled();
+		if (InitialTrace.Enabled) InitialTrace.TransportEntered = SteamNetworkingSocketsLib::GargantuanInitialServiceClock();
 		auto &Global = GlobalState();
 		std::lock_guard Lock(Global.Mutex);
+		if (InitialTrace.Enabled) InitialTrace.AdapterLocked = SteamNetworkingSocketsLib::GargantuanInitialServiceClock();
 		std::int64_t PendingReliable = -1;
 		bool HasPendingStatus = false;
 		auto RecordOrdinary = [&](const char *Stage) {
@@ -1050,7 +1056,7 @@ namespace gargantuan::network {
 		int64 MessageNumber = -1;
 		if (Token && (!detail::ReliableServiceFeedbackAccess::ActivatedAt(Message) ||
 			!SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(Token,
-				detail::ReliableServiceFeedbackAccess::ActivatedAt(Message))))
+				detail::ReliableServiceFeedbackAccess::ActivatedAt(Message), &InitialTrace)))
 			return Fail(TransportOperationStatus::TransportFailure, "retirement-attribution");
 		const auto Result = SteamAPI_ISteamNetworkingSockets_SendMessageToConnection(
 			Global.Interface,

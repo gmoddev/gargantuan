@@ -2,6 +2,7 @@
 #include "gargantuan/network/Connection.hpp"
 #include "gargantuan/network/MessageIntent.hpp"
 #include "gargantuan/network/Transport.hpp"
+#include "InitialServiceTrace.hpp"
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -60,6 +61,7 @@ struct ReliableServiceFeedback {
 	};
 	std::array<StructuralSegmentEvent, 512> LastCompletedStructuralSegmentEvents{};
 	std::uint32_t LastCompletedStructuralSegmentEventCount = 0;
+	InitialServiceTrace LastCompletedInitialTrace{};
 	std::uint64_t NativePacketsSent = 0;
 	std::uint64_t NativePacketBytesSent = 0;
 	std::uint64_t NativeMaximumPacketBytes = 0;

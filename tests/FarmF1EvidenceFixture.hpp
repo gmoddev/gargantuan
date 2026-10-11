@@ -36,6 +36,22 @@ inline void TestFarmF1Evidence() {
 		Evidence.Observe(R);
 	};
 	const auto *Previous = network::detail::ActivePooledService;
+	for (const bool Mismatch : {false, true}) {
+		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
+		auto R = Completed(1, 1, true);
+		auto &T = R.Feedback->LastCompletedInitialTrace;
+		T.Enabled = true; T.Token = Mismatch ? 2 : 1; T.MessageNumber = 9; T.NativeHandle = 123; T.DispatchSequence = 8;
+		T.TransportEntered = 10000; T.AdapterLocked = 10001; T.NativeApiEntered = 10002; T.NativeApiLocked = 10003;
+		T.NativeEnqueued = 10004; T.FirstSnpVisit = 10005; T.PacketPreparationEntered = 10006;
+		T.WorkerQueued = 10007; T.WorkerStarted = 10008; T.NativeCompleted = 10010; T.ActorReconciled = 10011;
+		Grant(Evidence, R);
+		const auto &W = Evidence.Observations()[0].FirstFailed;
+		Require(W.Measured && W.InitialTraceValid == !Mismatch && W.InitialTrace.DispatchSequence == 8);
+		Grant(Evidence, Completed(1, 2));
+		Require(Evidence.Observations()[0].FirstFailed.InitialTrace.Token == T.Token && !Evidence.Valid(1));
+		std::ostringstream Out; Evidence.Write(Out, "initial-trace");
+		Require(Out.str().find(Mismatch ? "connection=1:1 valid=0 token=2" : "connection=1:1 valid=1 token=1") != std::string::npos);
+	}
 	{
 		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
 		for (unsigned I = 1; I <= 32; ++I) Grant(Evidence, Completed(I));

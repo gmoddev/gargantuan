@@ -73,6 +73,7 @@ void GargantuanReliableServiceCounters::SyncStructuralGrant() noexcept {
 		StructuralLastCompletedGrantFailed = Grant.GrantFailed;
 		LastCompletedStructuralSegmentEvents = StructuralSegmentEvents;
 		LastCompletedStructuralSegmentEventCount = StructuralSegmentEventCount;
+		LastCompletedInitialTrace = InitialTrace;
 		StructuralActiveGrantStartedAtMicroseconds = 0;
 		StructuralActiveGrantBytes = 0;
 		StructuralActiveGrantFirstSentBytes = 0;
@@ -165,6 +166,7 @@ void GargantuanReliableServiceCounters::AttributeMessage(
 	StructuralGrantFirstSendAtMicroseconds = 0;
 	StructuralGrantCompletedAtMicroseconds = 0;
 	StructuralSegmentEventCount = 0;
+	InitialTrace = {};
 	StructuralCurrentDeficitByteMicroseconds = 0;
 	StructuralActiveGrantStartedAtMicroseconds = PayloadBytes && ActivatedAtMicroseconds &&
 		ActivatedAtMicroseconds != std::numeric_limits<std::uint64_t>::max()

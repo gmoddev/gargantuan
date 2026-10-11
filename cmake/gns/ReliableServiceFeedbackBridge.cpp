@@ -1,4 +1,5 @@
 #include "ReliableServiceFeedback.hpp"
+#include "ServiceTimingDiagnostics.hpp"
 #include <steam/isteamnetworkingsockets.h>
 #include <chrono>
 #include <array>
@@ -91,10 +92,27 @@ bool GargantuanReleaseNativeTerminalEvidence(ISteamNetworkingSockets *Interface,
 }
 
 bool GargantuanBeginReliableRetirementAttribution(std::uint64_t Token,
-	std::uint64_t ActivatedAtMicroseconds) noexcept {
+	std::uint64_t ActivatedAtMicroseconds,
+	const gargantuan::network::detail::InitialServiceTrace *InitialTrace) noexcept {
 	if (!Token || PendingReliableRetirement.Token) return false;
 	PendingReliableRetirement = {Token, ActivatedAtMicroseconds};
+	if (InitialTrace && InitialTrace->Enabled && GargantuanInitialServiceTimingEnabled())
+		PendingReliableRetirement.InitialTrace = *InitialTrace;
 	return true;
+}
+
+bool GargantuanInitialServiceTimingEnabled() noexcept {
+	return GargantuanServiceTimingObserver.load(std::memory_order_acquire) != nullptr;
+}
+
+std::uint64_t GargantuanInitialServiceClock() noexcept {
+	return GargantuanInitialServiceTimingEnabled() ? GargantuanReliableServiceClock() : 0;
+}
+
+void GargantuanInitialServiceApiStage(bool Locked) noexcept {
+	auto &Trace = PendingReliableRetirement.InitialTrace;
+	if (!Trace.Enabled) return;
+	(Locked ? Trace.NativeApiLocked : Trace.NativeApiEntered) = GargantuanInitialServiceClock();
 }
 
 void GargantuanEndReliableRetirementAttribution() noexcept {

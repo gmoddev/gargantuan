@@ -1,5 +1,6 @@
 #pragma once
 #include "../../src/network/FiniteGrantServiceCurve.hpp"
+#include "../../src/network/InitialServiceTrace.hpp"
 #include <array>
 #include <cstdint>
 
@@ -15,6 +16,7 @@ struct GargantuanReliableServiceCounters {
 	std::array<StructuralSegmentEvent, MaximumStructuralSegmentEvents> LastCompletedStructuralSegmentEvents{};
 	std::uint32_t StructuralSegmentEventCount = 0;
 	std::uint32_t LastCompletedStructuralSegmentEventCount = 0;
+	gargantuan::network::detail::InitialServiceTrace InitialTrace{}, LastCompletedInitialTrace{};
 	gargantuan::network::FiniteGrantServiceCurve StructuralGrantCurve;
 	std::uint64_t UniqueReliableStreamBytesFirstSent = 0;
 	// Positive UDP data sends, including GNS framing and encrypted payload.
@@ -107,11 +109,16 @@ bool GargantuanHasRunningStructuralGrant() noexcept;
 struct GargantuanReliableAttribution {
 	std::uint64_t Token = 0;
 	std::uint64_t ActivatedAtMicroseconds = 0;
+	gargantuan::network::detail::InitialServiceTrace InitialTrace{};
 };
+bool GargantuanInitialServiceTimingEnabled() noexcept;
+std::uint64_t GargantuanInitialServiceClock() noexcept;
+void GargantuanInitialServiceApiStage(bool Locked) noexcept;
 // Scope exactly one synchronous reliable submission for sender-local retirement
 // attribution. Begin/End are thread-local and introduce no global GNS lock.
 bool GargantuanBeginReliableRetirementAttribution(std::uint64_t Token,
-	std::uint64_t ActivatedAtMicroseconds = 0) noexcept;
+	std::uint64_t ActivatedAtMicroseconds = 0,
+	const gargantuan::network::detail::InitialServiceTrace *InitialTrace = nullptr) noexcept;
 void GargantuanEndReliableRetirementAttribution() noexcept;
 GargantuanReliableAttribution GargantuanTakeReliableRetirementAttribution() noexcept;
 void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounters &Counters,

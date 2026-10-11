@@ -15,7 +15,8 @@ namespace SteamNetworkingSocketsLib {
 // Private, opt-in observation. Fixture-owned bounded storage is installed before
 // GNS initialization and removed after all pairs are destroyed. No service policy.
 enum class GargantuanServiceTimingPhase : std::uint8_t {
-	TimerCreate = 1, TimerWait, GlobalLockWait, ReceiveDrain, Thinkers, ThinkerCallback, SnpSender
+	TimerCreate = 1, TimerWait, GlobalLockWait, ReceiveDrain, Thinkers, ThinkerCallback, SnpSender,
+	ApiConnectionLockWait, ApiMessageCopy
 };
 struct GargantuanServiceTimingRecord {
 	GargantuanServiceTimingPhase Phase;

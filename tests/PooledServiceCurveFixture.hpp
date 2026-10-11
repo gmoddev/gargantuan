@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../cmake/gns/ReliableServiceFeedback.hpp"
+#include "../cmake/gns/ServiceTimingDiagnostics.hpp"
 #include "gargantuan/network/ReliableServiceProfile.hpp"
 #include <algorithm>
 #include <array>
@@ -42,6 +43,35 @@ inline bool Run() {
 			std::cerr << "[Network:ServiceCurve] " << Name << "=FAIL " << Error.what() << '\n';
 		}
 	};
+	Case("InitialTraceDisabledAndCompletionRetention", [] {
+		using namespace SteamNetworkingSocketsLib;
+		Require(!GargantuanInitialServiceTimingEnabled() && GargantuanInitialServiceClock() == 0,
+			"disabled initial observer has no diagnostic clock");
+		gargantuan::network::detail::InitialServiceTrace Offered;
+		Offered.Enabled = true; Offered.TransportEntered = 100;
+		Require(GargantuanBeginReliableRetirementAttribution(1, 100, &Offered), "disabled trace attribution begins");
+		GargantuanInitialServiceApiStage(false); GargantuanInitialServiceApiStage(true);
+		const auto Disabled = GargantuanTakeReliableRetirementAttribution();
+		GargantuanEndReliableRetirementAttribution();
+		Require(!Disabled.InitialTrace.Enabled && !Disabled.InitialTrace.NativeApiEntered &&
+			!Disabled.InitialTrace.NativeApiLocked, "inactive sink cannot create traced attribution");
+		auto Value = Grant(1, 77);
+		Value.InitialTrace = Offered;
+		Value.InitialTrace.Token = 1; Value.InitialTrace.NativeCompleted = 1'006'075;
+		Value.InitialTrace.WorkerQueued = 1'006'000; Value.InitialTrace.WorkerStarted = 1'006'010;
+		Value.InitialTrace.DispatchSequence = 42;
+		Value.FirstSend(77, 77, 1'006'075);
+		Require(Value.StructuralLastCompletedGrantFailed && Value.LastCompletedInitialTrace.Token == 1 &&
+			Value.LastCompletedInitialTrace.WorkerStarted == 1'006'010 && Value.LastCompletedInitialTrace.DispatchSequence == 42,
+			"one-segment failure copies exact initial evidence at completion");
+		Retire(Value, 1, 77);
+		Value.AttributeMessage(2, 2, 77, 2'000'000);
+		Require(!Value.InitialTrace.Enabled && !Value.InitialTrace.NativeCompleted &&
+			Value.LastCompletedInitialTrace.Token == 1, "later attribution clears active trace and preserves completion");
+		Value.FirstSend(77, 77, 2'005'000);
+		Require(!Value.LastCompletedInitialTrace.Enabled && Value.StructuralLastCompletedGrantToken == 2,
+			"untraced completion cannot retain another grant's trace");
+	});
 	Case("TinyFiniteLatencyAndPointwiseBoundary", [] {
 		auto Prompt = Grant(1, 77);
 		Prompt.FirstSend(77, 77, 1'006'000);
@@ -154,7 +184,7 @@ inline bool Run() {
 			Peers[0].StructuralLastCompletedGrantCompletedAtMicroseconds,
 			"smaller grant exits the common running interval first");
 	});
-	std::cout << "[Network:ServiceCurve] passed=" << Passed << " total=7\n";
-	return Passed == 7;
+	std::cout << "[Network:ServiceCurve] passed=" << Passed << " total=8\n";
+	return Passed == 8;
 }
 }

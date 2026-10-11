@@ -60,6 +60,7 @@ GargantuanReplaceFeedback("struct SNPPacketSerializeHelper\n{" [=[struct SNPPack
 	bool GargantuanHasData = false;
 	bool GargantuanHasAck = false;
 	bool GargantuanPromptAck = false;
+	uint64_t GargantuanPreparationEntered = 0;
 	int GargantuanExpectedNativeBytes = 0;]=])
 GargantuanReplaceFeedback("int cbAckBytesWritten = pAfterAcks - pPayloadPtr;" "int cbAckBytesWritten = pAfterAcks - pPayloadPtr;\n\t\t\thelper.GargantuanHasAck = cbAckBytesWritten > 0;")
 GargantuanReplaceFeedback("\t\t|| helper.InFlightPkt().m_pTransport != m_pTransport // transport is not the selected transport" [=[		|| helper.InFlightPkt().m_pTransport != m_pTransport // transport is not the selected transport
@@ -75,6 +76,11 @@ GargantuanReplaceFeedback("\t\t|| helper.InFlightPkt().m_pTransport != m_pTransp
 GargantuanReplaceFeedback("\tbool bEmpty = segmentCollector.IsEmpty();" "\tbool bEmpty = segmentCollector.IsEmpty();\n\thelper.GargantuanHasData = !bEmpty;")
 GargantuanReplaceFeedback("SteamNetworkingMicroseconds CSteamNetworkConnectionBase::SNP_ThinkSendState( SteamNetworkingMicroseconds usecNow )\n{" [=[SteamNetworkingMicroseconds CSteamNetworkConnectionBase::SNP_ThinkSendState( SteamNetworkingMicroseconds usecNow )
 {
+	auto &GargantuanInitialTrace = m_senderState.GargantuanFeedback.InitialTrace;
+	if (GargantuanInitialTrace.Enabled && !GargantuanInitialTrace.FirstSnpVisit) {
+		GargantuanInitialTrace.FirstSnpVisit = GargantuanInitialServiceClock();
+		GargantuanInitialTrace.PendingAtFirstSnpVisit = m_senderState.GargantuanPendingTicket != nullptr;
+	}
 	if (m_senderState.GargantuanPendingTicket) {
 		if (GargantuanReconcileNativeEgressByDeadline(usecNow)) {
 			GargantuanDrainPendingReceived();
@@ -113,6 +119,8 @@ GargantuanReplaceFeedback("void CSteamNetworkConnectionBase::SNP_ShutdownConnect
 GargantuanReplaceFeedback("\t\tpMsg->Unlink();\n\t\tpMsg->Release();" "\t\tif (GargantuanAckTrace) GargantuanAckTrace->Record(GargantuanAckDiagnostics::MessageAcked, SteamNetworkingSockets_GetLocalTimestamp(), pMsg->m_nMessageNumber, pMsg->m_cbSize);\n\t\tGargantuanFeedback.AckMessage(pMsg->m_nMessageNumber, pMsg->m_cbSize, info.m_cbHdr);\n\t\tpMsg->Unlink();\n\t\tpMsg->Release();")
 GargantuanReplaceFeedback("\tAssertLocksHeldByCurrentThread( \"SNP_SendPacket\" );" [=[
 	AssertLocksHeldByCurrentThread( "SNP_SendPacket" );
+	const uint64_t GargantuanPreparationEntered = m_senderState.GargantuanFeedback.InitialTrace.Enabled &&
+		!m_senderState.GargantuanFeedback.InitialTrace.NativeCompleted ? GargantuanInitialServiceClock() : 0;
 	if (m_senderState.GargantuanPendingTicket) return false; // One unresolved numbered packet per connection.
 	if (m_senderState.GargantuanNativeEgressEnabled && GargantuanReplayingNativeDatagrams)
 		return false; // Replay cannot start another send until receive order is restored.
@@ -134,6 +142,7 @@ GargantuanReplaceFeedback("\tSNPPacketSerializeHelper helper;" [=[
 	}
 	SNPPacketSerializeHelper GargantuanStackHelper;
 	SNPPacketSerializeHelper &helper = GargantuanPendingCandidate ? *GargantuanPendingCandidate : GargantuanStackHelper;
+	helper.GargantuanPreparationEntered = GargantuanPreparationEntered;
 	const bool GargantuanHadRetry = !m_senderState.m_listReadyRetryReliableRange.IsEmpty();]=])
 GargantuanReplaceFeedback("\t\tSNP_RecordReceivedPktNum( nPktNum, usecNow, bScheduleAck );" "\t\tSNP_RecordReceivedPktNum( nPktNum, usecNow, bScheduleAck );\n\t\tif (bScheduleAck && m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Received(usecNow, nPktNum, m_receiverState.TimeWhenFlushAcks());")
 GargantuanReplaceFeedback("\t\tpReliableDecode += cbMsgSize;" "\t\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::MessageReceived, usecNow, nMsgNum, cbMsgSize);\n\t\tpReliableDecode += cbMsgSize;")
@@ -330,6 +339,17 @@ bool CSteamNetworkConnectionBase::GargantuanReconcileNativeEgress()
 						Segment.m_pMsg->ReliableSendInfo().m_cbHdr + Segment.m_pMsg->m_cbSize);
 					StructuralBytes = std::max(0, End - Begin);
 				}
+				auto &Trace = m_senderState.GargantuanFeedback.InitialTrace;
+				if (StructuralBytes > 0 && Trace.Enabled && !Trace.NativeCompleted &&
+					Trace.Token == Counters.ActiveAttributedRetirementToken &&
+					Trace.MessageNumber == uint64_t(Segment.m_pMsg->m_nMessageNumber)) {
+					Trace.PacketPreparationEntered = Helper->GargantuanPreparationEntered;
+					Trace.WorkerQueued = Result.QueuedAtMicroseconds;
+					Trace.WorkerStarted = Result.StartedAtMicroseconds;
+					Trace.NativeCompleted = Result.CompletedAtMicroseconds;
+					Trace.ActorReconciled = GargantuanInitialServiceClock();
+					Trace.DispatchSequence = Result.DispatchSequence;
+				}
 				Segment.m_bGargantuanEverSent = true;
 				m_senderState.GargantuanFeedback.FirstSend(Segment.m_cbSize, StructuralBytes,
 					Result.CompletedAtMicroseconds);
@@ -390,12 +410,25 @@ GargantuanReplaceFeedback("\tpSendMessage->m_nMessageNumber = ++lane.m_nLastSent
 			m_senderState.GargantuanFeedback.AttributeMessage( nGargantuanAttribution.Token,
 				pSendMessage->m_nMessageNumber, pSendMessage->m_cbSize,
 				nGargantuanAttribution.ActivatedAtMicroseconds );
+			if (nGargantuanAttribution.InitialTrace.Enabled) {
+				auto &Trace = m_senderState.GargantuanFeedback.InitialTrace;
+				Trace = nGargantuanAttribution.InitialTrace;
+				Trace.Token = nGargantuanAttribution.Token;
+				Trace.MessageNumber = uint64_t(pSendMessage->m_nMessageNumber);
+				Trace.NativeHandle = m_hConnectionSelf;
+				Trace.PendingAtEnqueue = m_senderState.GargantuanPendingTicket != nullptr;
+			}
 			if (!m_senderState.GargantuanFeedback.Invalid && !m_senderState.GargantuanFeedback.Purged &&
 				m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken == nGargantuanAttribution.Token)
 				m_senderState.GargantuanPromptWire.Begin(nGargantuanAttribution.Token, pSendMessage->m_cbSize);
 			else m_senderState.GargantuanPromptWire.Invalid = true;
 		}
 	}]=])
+GargantuanReplaceFeedback("\tint64 result = pSendMessage->m_nMessageNumber;" [=[
+	int64 result = pSendMessage->m_nMessageNumber;
+	auto &GargantuanEnqueueTrace = m_senderState.GargantuanFeedback.InitialTrace;
+	if (GargantuanEnqueueTrace.Enabled && GargantuanEnqueueTrace.MessageNumber == uint64_t(result))
+		GargantuanEnqueueTrace.NativeEnqueued = GargantuanInitialServiceClock();]=])
 GargantuanReplaceFeedback("\tint nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;" [=[
 	int nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;
 	int nGargantuanStructuralPacketsThisThink = 0;]=])
@@ -598,6 +631,14 @@ GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.cpp 724eb5215fd2ed66e691c4ac798405531b973e499f3aee26c8d9f101f6bd0ae9)
 GargantuanReplaceFeedback("#include \"steamnetworkingsockets_connections.h\"" "#include \"steamnetworkingsockets_connections.h\"\n#include \"NativeEgressWorker.hpp\"")
+GargantuanReplaceFeedback("#include \"NativeEgressWorker.hpp\"" "#include \"NativeEgressWorker.hpp\"\n#include \"ServiceTimingDiagnostics.hpp\"")
+GargantuanReplaceFeedback("\t// Fill out a message object\n\tCSteamNetworkingMessage *pMsg = CSteamNetworkingMessage::New( cbData );" [=[
+	GargantuanServiceTimingSpan GargantuanCopy(GargantuanServiceTimingPhase::ApiMessageCopy);
+	GargantuanCopy.SetResult(m_hConnectionSelf);
+	GargantuanCopy.SetBytes(cbData);
+	// Fill out a message object
+	CSteamNetworkingMessage *pMsg = CSteamNetworkingMessage::New( cbData );]=])
+GargantuanReplaceFeedback("\tmemcpy( pMsg->m_pData, pData, cbData );" "\tmemcpy( pMsg->m_pData, pData, cbData );\n\tGargantuanCopy.Finish();")
 GargantuanReplaceFeedback("void CSteamNetworkConnectionBase::FreeResources()\n{\n\tAssertLocksHeldByCurrentThread();" [=[void CSteamNetworkConnectionBase::FreeResources()
 {
 	AssertLocksHeldByCurrentThread();
@@ -763,6 +804,17 @@ GargantuanReplaceFeedback("\t// Would we like to try to send some additional sta
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(csteamnetworkingsockets.cpp 2b260c05cc8c262e785387ea3d08eee74cc03b6eed00493e961a82c05dec5451)
+GargantuanReplaceFeedback("#include \"steamnetworkingsockets_connections.h\"" "#include \"steamnetworkingsockets_connections.h\"\n#include \"ServiceTimingDiagnostics.hpp\"")
+GargantuanReplaceFeedback("EResult CSteamNetworkingSockets::SendMessageToConnection( HSteamNetConnection hConn, const void *pData, uint32 cbData, int nSendFlags, int64 *pOutMessageNumber )\n{" [=[EResult CSteamNetworkingSockets::SendMessageToConnection( HSteamNetConnection hConn, const void *pData, uint32 cbData, int nSendFlags, int64 *pOutMessageNumber )
+{
+	GargantuanInitialServiceApiStage(false);
+	GargantuanServiceTimingSpan GargantuanApiLock(GargantuanServiceTimingPhase::ApiConnectionLockWait);
+	GargantuanApiLock.SetResult(hConn);
+	GargantuanApiLock.SetBytes(cbData);]=])
+GargantuanReplaceFeedback("\tCSteamNetworkConnectionBase *pConn = GetConnectionByHandleForAPI( hConn, connectionLock, \"SendMessageToConnection\" );" [=[
+	CSteamNetworkConnectionBase *pConn = GetConnectionByHandleForAPI( hConn, connectionLock, "SendMessageToConnection" );
+	GargantuanApiLock.Finish();
+	GargantuanInitialServiceApiStage(true);]=])
 GargantuanReplaceFeedback("static CSteamNetworkListenSocketBase *GetListenSocketByHandle" [=[
 static CSteamNetworkConnectionBase *GargantuanPendingConnections[64]{};
 
