@@ -1,5 +1,5 @@
 ---
-status: structural-service-scope-review-required-not-adopted
+status: historical-proposal-with-adopted-D03-followup
 owner: runtime-networking-and-product
 reviewed_source: 9551ae974869b56ed12aa27aee2f4e7996fb23c9
 reviewed: 2026-10-11
@@ -10,7 +10,14 @@ supersedes: none
 
 ## Verdict and authority
 
-**Latest recommendation (2026-10-11): B/C — retain 64 MiB/s as funding and use
+**Current decision:** [D03](D03-hybrid-pooled-service-and-permit-ownership.md)
+explicitly adopts the corrected B/C conjunction after the coordinated preflight.
+Sections below preserve the unadopted proposal and its failures. The continuous
+16/64-MiB/s delivered requirement and 220.5-ms fairness inference are superseded;
+all hard gameplay, resource and canonical recovery outcomes remain. Foundation
+3L qualification is still pending. D03 records exact criteria and migration.
+
+**Historical recommendation (2026-10-11): B/C — retain 64 MiB/s as funding and use
 workload-qualified, count-aware structural outcomes.** Section 10 finds no
 independent product need for a universal 64-MiB/s delivered floor. It does not
 select a replacement scalar. A finite numerical service contract remains blocked

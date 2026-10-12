@@ -492,3 +492,84 @@ correction and requalification under the reconciled recovery contract.
 KI-006 remains **OPEN**. Foundation 3L remains **B — PARTIALLY READY**.
 Physical 32-actual-client pooled qualification is **NOT MEASURED**.
 Foundation 3M remains **BLOCKED / NOT STARTED**.
+
+## Structural permit ownership decision — 2026-10-11
+
+**Accepted narrow correction; qualification pending.** The user's Foundation 3L
+closeout authority selects structural retirement as the lifetime boundary of a
+structural drain permit. Continuous permitted ordinary traffic must not require
+quiescence before another peer can receive structural service. The earlier
+integration receipts above retain their original source and contract scope.
+
+At source `4eea2307ce8bf78e3f7a8354d5cb672dcd677dc8`, the deterministic
+real-accountant discriminator retained all four permits after their structural
+debt retired, because continuing ordinary followers kept `OrdinaryDebt` positive.
+The remaining 28 credit-eligible peers received no allowance. Those supplied
+arrival/retirement times establish the accounting defect; they are not an actual
+host reproduction or a contradictory native32 recovery result. See the
+[requirements reassessment](../../docs/adr/D02-pooled-service-product-contract-review.md#10-structural-requirements-reassessment-2026-10-11).
+
+The correction in `ReliableByteAdmission::RefreshService` releases `OwnsGrant`
+only after `Retire` has consumed the exact structural receipt and cleared that
+peer's structural debt, and a complete available service observation is supplied.
+`Retire` still matches the full connection generation, nonzero token and exact
+byte count; duplicate or mismatched retirement supplies no release. GameSession's
+existing feedback ledger certifies availability from complete, fresh,
+generation-valid native evidence. Missing, incomplete or stale evidence cannot
+be promoted to an available observation. Native first-send, elapsed time and
+unrelated ordinary retirement cannot clear structural debt.
+
+Ordinary debt remains charged through the existing server-wide funding ledger,
+prospective admission exposure checks and wire pacing. Reliable FIFO and the
+protected gameplay/control/transport reservations remain in force. Removing
+ordinary quiescence from this permit's lifetime neither retires ordinary bytes
+nor grants them another authority or lane. One structural obligation per peer,
+four structural permits, the 4G accepted structural debt cap, generation cleanup
+and exact terminal reconciliation remain unchanged.
+
+The affected production fixture now specifies release despite continuing
+ordinary debt, withholding release without available evidence, exact duplicate
+retirement denial, and generation isolation. Its continuing-ordinary-traffic
+case specifies service for all 32 peers with bounded conserved structural debt.
+Old-fail/new-pass execution, affected native tests, sanitizers, exact-source hosted
+CI and fresh native32/Local32/real-TLS Node32 qualification are **pending** for this
+correction. Source changes and updated assertions alone do not establish PASS,
+close KI-006 or complete Foundation 3L.
+
+This ownership decision selects no new timing or delivered-rate guarantee.
+The primary D01/D02 decision must separately name any adopted service class and
+its hard predicates. A proposed 150-ms combined completion/retirement policy is
+a new selected qualification budget, not an inference that the existing 100-ms
+gameplay nonqueue allowance bounds native ACK or final retry-reference release.
+The 64-MiB/s funding envelope is not proof of sustained delivered service. Keep
+the existing qualified recovery correction and its immutable C3/C5 reference,
+coverage and exact accepted-prefix evidence; requalify affected numerical
+convergence premises rather than changing historical outcomes.
+
+### Current D03 integration — implementation adopted, end-to-end qualification pending
+
+[D03](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md) is now
+the accepted D01 amendment. Native/adapter/GameSession select the separate
+uniform completion certificate; legacy packet deficits remain diagnostic.
+Ready work arms a completed Main opportunity before preparation. Exact
+retirement remains held as fixed turnover metadata until fresh permit-return
+evidence and completion of the admission pass; it never creates byte retirement.
+The accountant returns structural permits independently of ordinary ACK debt,
+keeps global funding charged, and reuses its existing exposure word for a
+conservative ordinary native-unsent frontier. Grant and nonemitting journal
+rotation now have independent cursors; read caps and the recovery encoder
+correction are preserved.
+
+The missing protected FIFO acceptance fact is measured through original
+qualified ordinary acceptance metadata and positive unique native BODY
+intersections. Direct controls use an independent metadata namespace; the
+existing queued-origin trace remains contiguous. Fixed metadata has no payload
+or reference ownership. New versioned farm evidence requires exact native,
+turnover and completed-opportunity certificates plus all 33 processes' FIFO
+coverage joined to actual normal-phase ordinary demand. Legacy histories stay
+strict. No runtime wire, nonce, reliability or delivery order changes.
+
+Eight affected Windows suites pass; deterministic native pending ownership and
+worker race tests also pass. Final-source CI and fresh native32/provider gates
+remain required. This is implementation/preflight evidence, not Foundation 3L
+PASS. KI-006 remains open; PR #6 stays draft.

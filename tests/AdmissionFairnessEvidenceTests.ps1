@@ -22,6 +22,7 @@ function New-Event {
 function Write-Trace {
 	param([string[]]$Events, [string]$Trailer, [int]$Version = 1)
 	$Lines = @("format=GargantuanAdmissionEvidenceV$Version`trun=$RunId") + $Events + @($Trailer)
+	if ($Version -eq 3) { $Lines[0] += "`tcontract=HYBRID_F1_V1" }
 	[IO.File]::WriteAllText($Path, ($Lines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
 }
 
@@ -173,6 +174,24 @@ try {
 	}
 	$Changed = @($Events)
 	$Changed[1] = New-Event credit_eligible 1 1100 -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 524289
+	$HybridBoundary = @($Bounded)
+	$HybridBoundary[2] = New-Event grant_accepted 10 1182350 -Episode 1 -Token 10 -CreditAt 1050 -EligibleAt 1100
+	Write-Trace -Events $HybridBoundary -Trailer "end`t3`t0" -Version 3
+	$HybridResult = Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId
+	if ($HybridResult.ServiceContract -cne 'HYBRID_F1_V1' -or
+		$HybridResult.AcceptedGrantWaitBoundMicroseconds -ne 1181250 -or
+		$HybridResult.AcceptedGrantWaitBound -cne 'MEASURED_PASS') { throw 'hybrid exact fairness boundary failed' }
+	$HybridBoundary[2] = New-Event grant_accepted 10 1182351 -Episode 1 -Token 10 -CreditAt 1050 -EligibleAt 1100
+	Write-Trace -Events $HybridBoundary -Trailer "end`t3`t0" -Version 3
+	if ((Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId).AcceptedGrantWaitBound -cne 'MEASURED_FAIL') {
+		throw 'hybrid overdue accepted demand did not fail'
+	}
+	$Starved = @($Bounded[0..1])
+	$Starved += New-Event exact_demand 20 1182351 -Slot 2
+	Write-Trace -Events $Starved -Trailer "end`t3`t0" -Version 3
+	if ((Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId).ExactDemandEpisodeCoverage -cne 'MEASURED_FAIL') {
+		throw 'hybrid retained starvation did not fail'
+	}
 	Assert-Rejected $Changed 'peer credit beyond canonical burst cap'
 	$Changed = @($Events)
 	$Changed[1] = New-Event credit_eligible 1 1100 -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 100 -GlobalCredit 2097153
@@ -218,7 +237,7 @@ try {
 	Write-Trace -Events $Events -Trailer "end`t15`t0"
 	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'bad trailer accepted' }
 	catch { if ($_.Exception.Message -ceq 'bad trailer accepted') { throw } }
-Write-Output '[Qualification:Admission] analyzer_cases=28 PASS'
+Write-Output '[Qualification:Admission] analyzer_cases=31 PASS'
 } finally {
 	$Resolved = [IO.Path]::GetFullPath($Root)
 	if ($Resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase) -and

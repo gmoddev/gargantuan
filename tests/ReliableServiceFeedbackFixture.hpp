@@ -143,6 +143,38 @@ inline bool Run() {
 			std::cerr << "[Network:ReliableFeedback] " << Name << "=FAIL " << Error.what() << '\n';
 		}
 	};
+	Case("NativeCompletionCertificateIsSeparateFromLegacyAndRetirement", [] {
+		GargantuanReliableServiceCounters Value;
+		Value.AttributeMessage(1, 11, 1057, 1'000'000);
+		Value.FirstSend(1057, 1057, 1'007'070);
+		Require(!Value.Invalid && Value.StructuralServiceFailed && Value.StructuralLastCompletedGrantFailed &&
+			!Value.StructuralCompletionServiceFailed && !Value.StructuralLastCompletedCompletionFailed &&
+			!Value.StructuralCompletionEvidenceInvalid && Value.StructuralCompletionCurve.CompletedAtMicroseconds == 1'007'070,
+			"same positive native event retains legacy failure and timely hard completion separately");
+		Require(Value.ActiveAttributedRetirementToken == 1 && !Value.AttributedRetirementSequence &&
+			!Value.StructuralPayloadBytesAcked, "native completion supplies neither ACK nor retirement");
+		Value.ObserveActiveService(1'500'000);
+		Require(!Value.StructuralCompletionServiceFailed && !Value.StructuralLastCompletedCompletionFailed,
+			"retirement delay cannot charge a completed native hard curve");
+		Value.AckSegment(1057, false); Value.AckMessage(11, 1057, 0);
+		Require(!Value.Invalid && Value.LastAttributedRetirementToken == 1 && Value.LastAttributedRetiredPayloadBytes == 1057 &&
+			Value.AttributedRetirementSequence == 1 && !Value.StructuralLastCompletedCompletionFailed,
+			"matching ACK retires exactly without changing native completion truth");
+		Value.AttributeMessage(2, 12, 77, 2'000'000); Value.FirstSend(77, 77, 2'037'325);
+		Require(!Value.Invalid && Value.StructuralCompletionServiceFailed && Value.StructuralLastCompletedCompletionFailed &&
+			Value.StructuralLastCompletedGrantToken == 2 && Value.StructuralPayloadBytesFirstSent == 1134,
+			"late hard completion remains attributed and conserves actual positive bytes");
+		GargantuanReliableServiceCounters Bootstrap;
+		Bootstrap.AttributeMessage(3, 13, 77, UINT64_MAX);
+		Bootstrap.ObserveActiveService(1'000'000); Bootstrap.FirstSend(77, 77, 1'000'100);
+		Require(!Bootstrap.Invalid && !Bootstrap.StructuralCompletionCurve.ActiveToken &&
+			!Bootstrap.StructuralCompletionServiceFailed && !Bootstrap.StructuralCompletionEvidenceInvalid,
+			"explicit bootstrap has no qualified native completion clock");
+		GargantuanReliableServiceCounters Malformed;
+		Malformed.AttributeMessage(4, 14, 77, 1'000'000); Malformed.FirstSend(77, 78, 1'000'100);
+		Require(Malformed.Invalid && !Malformed.StructuralPayloadBytesFirstSent,
+			"hard certificate cannot turn malformed counter attribution into native service");
+	});
 	Case("FirstSendAndMessageBoundaries", [] {
 		OwnedPair Owner; auto &Pair = Owner.Pair;
 		Require(Pair.ServerConnection.IsValid(), "pair connected");
@@ -493,6 +525,140 @@ inline bool Run() {
 		Require(!GargantuanReserveNativeTerminalEvidence(Interface, 0x72000000u, OverflowGeneration) &&
 			!OverflowGeneration, "full terminal registry rejects before accepting more native work");
 	});
+	Case("QualifiedOrdinaryExactBoundaryAndRetry", [] {
+		GargantuanReliableServiceCounters Value;
+		Value.RegisterQualifiedOrdinary(1, 1'000, 1, 3, 1'000'000);
+		Value.FirstSend(482, 0, 1'025'000, 480);
+		Value.FirstSendQualifiedOrdinary(1, 480, 1'025'000);
+		Value.Retransmit(482); // Already-sent segments never call the unique hooks.
+		Require(Value.OrdinaryPayloadBytesFirstSent == 480 && Value.QualifiedOrdinaryPendingMessages == 1,
+			"retry does not complete the ordinary message or inflate unique BODY");
+		Value.FirstSend(520, 0, 1'050'000, 520);
+		Value.FirstSendQualifiedOrdinary(1, 520, 1'050'000);
+		Require(!Value.Invalid && !Value.QualifiedOrdinaryEvidenceInvalid && !Value.QualifiedOrdinaryEverFailed &&
+			Value.QualifiedOrdinaryRegisteredMessages == 1 && Value.QualifiedOrdinaryCompletedMessages == 1 &&
+			!Value.QualifiedOrdinaryPendingMessages && Value.QualifiedOrdinaryMaximumLatencyMicroseconds == 50'000 &&
+			Value.OrdinaryPayloadBytesFirstSent == 1'000,
+			"exact 50-ms acceptance to last positive native BODY passes without ACK");
+		Require(!Value.ReliablePayloadBytesAcked, "ordinary first-send completion does not retire payload debt");
+	});
+	Case("QualifiedOrdinaryLateAndWithheldFinalByte", [] {
+		GargantuanReliableServiceCounters Late;
+		Late.RegisterQualifiedOrdinary(1, 115, 4, 2, 1'000'000);
+		Late.FirstSend(117, 0, 1'051'000, 115);
+		Late.FirstSendQualifiedOrdinary(1, 115, 1'051'000);
+		Require(Late.QualifiedOrdinaryEverFailed && Late.QualifiedOrdinaryLastCompletedFailed &&
+			Late.QualifiedOrdinaryFailureSequence == 4 && Late.QualifiedOrdinaryFailurePhase == 2 &&
+			Late.QualifiedOrdinaryFailureCompletedAtMicroseconds == 1'051'000 &&
+			Late.QualifiedOrdinaryFailureExpectedBytes == 115 && Late.QualifiedOrdinaryFailureFirstSentBytes == 115,
+			"51-ms positive native completion retains one exact acceptance witness");
+		GargantuanReliableServiceCounters Partial;
+		Partial.RegisterQualifiedOrdinary(2, 115, 5, 2, 1'000'000);
+		Partial.FirstSendQualifiedOrdinary(2, 114, 1'049'999);
+		Partial.ObserveQualifiedOrdinary(1'050'000);
+		Require(!Partial.QualifiedOrdinaryEverFailed, "still-backlogged exact deadline has no extra rounding");
+		Partial.ObserveQualifiedOrdinary(1'050'001);
+		Require(Partial.QualifiedOrdinaryActiveDeadlineFailed && Partial.QualifiedOrdinaryEverFailed &&
+			Partial.QualifiedOrdinaryPendingMessages == 1 && Partial.QualifiedOrdinaryCompletedMessages == 0 &&
+			Partial.QualifiedOrdinaryFailureCompletedAtMicroseconds == 0 &&
+			Partial.QualifiedOrdinaryFailureFirstSentBytes == 114 && !Partial.ReliablePayloadBytesAcked,
+			"withheld final byte fails on resolved evidence without claiming completion or retirement");
+	});
+	Case("QualifiedOrdinaryTimelyWorkerResultBeforeLateObservation", [] {
+		GargantuanReliableServiceCounters Value;
+		Value.RegisterQualifiedOrdinary(1, 115, 1, 1, 1'000'000);
+		// Reconciliation commits the worker's actual completion timestamp, before
+		// observing a later actor/Main clock. Unresolved feedback is unavailable.
+		Value.FirstSend(117, 0, 1'049'999, 115);
+		Value.FirstSendQualifiedOrdinary(1, 115, 1'049'999);
+		Value.ObserveQualifiedOrdinary(1'100'000);
+		Require(!Value.QualifiedOrdinaryEverFailed && !Value.QualifiedOrdinaryActiveDeadlineFailed &&
+			Value.QualifiedOrdinaryMaximumLatencyMicroseconds == 49'999,
+			"late actor observation cannot replace a timely native completion timestamp");
+	});
+	Case("QualifiedOrdinaryBoundedEvidenceAndUnclassifiedTraffic", [] {
+		GargantuanReliableServiceCounters Value;
+		for (std::size_t Index = 0; Index < Value.MaximumQualifiedOrdinaryPending; ++Index)
+			Value.RegisterQualifiedOrdinary(static_cast<std::int64_t>(Index + 1), 115, Index + 1, 1, 1'000'000);
+		Require(Value.QualifiedOrdinaryPendingMessages == 40 && !Value.QualifiedOrdinaryEvidenceInvalid,
+			"bounded ordinary metadata has room for completed-result and unsent cohorts");
+		Value.RegisterQualifiedOrdinary(41, 115, 41, 1, 1'000'000);
+		Require(Value.QualifiedOrdinaryEvidenceInvalid && !Value.Invalid &&
+			Value.QualifiedOrdinaryPendingMessages == 40,
+			"observer exhaustion invalidates qualification but never rejects or owns a reliable message");
+		GargantuanReliableServiceCounters Unclassified;
+		for (int Index = 1; Index <= 100; ++Index) Unclassified.RegisterQualifiedOrdinary(Index, 115, 0, 0, 0);
+		Unclassified.FirstSend(117, 0, 1'000'000, 115);
+		Require(!Unclassified.QualifiedOrdinaryRegisteredMessages && !Unclassified.QualifiedOrdinaryEvidenceInvalid &&
+			Unclassified.OrdinaryPayloadBytesFirstSent == 115,
+			"legal unclassified overload supplies ordinary BODY truth without claiming H2 coverage");
+	});
+	Case("QualifiedOrdinarySubmissionScopeAndIntegrity", [] {
+		using namespace SteamNetworkingSocketsLib;
+		Require(GargantuanBeginReliableSubmissionMetadata(false, 7, 3, 1'000'000), "ordinary submission borrows metadata");
+		Require(!GargantuanBeginReliableSubmissionMetadata(false, 8, 3, 1'000'000), "nested ordinary metadata is rejected");
+		const auto Ordinary = GargantuanTakeReliableRetirementAttribution();
+		GargantuanEndReliableRetirementAttribution();
+		Require(Ordinary.SubmissionMetadata && !Ordinary.StructuralClass && !Ordinary.Token &&
+			Ordinary.QualifiedSequence == 7 && Ordinary.QualifiedPhase == 3 &&
+			Ordinary.SchedulerAcceptedAtMicroseconds == 1'000'000, "borrowed metadata is sender-local and consumed once");
+		Require(GargantuanBeginReliableSubmissionMetadata(true), "unattributed structural/bootstrap classification borrows metadata");
+		const auto Bootstrap = GargantuanTakeReliableRetirementAttribution();
+		GargantuanEndReliableRetirementAttribution();
+		Require(Bootstrap.StructuralClass && !Bootstrap.Token && !Bootstrap.QualifiedSequence,
+			"tokenless structural BODY cannot be classified as ordinary");
+		GargantuanReliableServiceCounters Invalid;
+		Invalid.RegisterQualifiedOrdinary(1, 115, 1, 1, 1'000'000);
+		Invalid.FirstSendQualifiedOrdinary(1, 116, 1'001'000);
+		Require(Invalid.QualifiedOrdinaryEvidenceInvalid && !Invalid.QualifiedOrdinaryCompletedMessages,
+			"oversized BODY cannot certify first-send completion");
+	});
+	Case("QualifiedOrdinaryDelayedActorDoesNotExhaustEvidence", [] {
+		GargantuanReliableServiceCounters Value;
+		// Sixteen accepted bodies fit one native packet. Its positive OS result
+		// arrives at 40 ms, but the actor has not reconciled it when eleven new
+		// qualified messages are accepted at 240 ms. No Main100 actor guarantee
+		// is assumed. Both arrival windows fit the declared ordinary envelope.
+		for (int Index = 1; Index <= 16; ++Index)
+			Value.RegisterQualifiedOrdinary(Index, 33, Index, 1, 1'000'000);
+		for (int Index = 17; Index <= 27; ++Index)
+			Value.RegisterQualifiedOrdinary(Index, 33, Index, 1, 1'240'000);
+		Require(Value.QualifiedOrdinaryPendingMessages == 27 && !Value.QualifiedOrdinaryEvidenceInvalid,
+			"one timely result cohort plus new messages cannot falsely overflow the qualified observer");
+		for (int Index = 1; Index <= 16; ++Index)
+			Value.FirstSendQualifiedOrdinary(Index, 33, 1'040'000);
+		for (int Index = 17; Index <= 27; ++Index)
+			Value.FirstSendQualifiedOrdinary(Index, 33, 1'250'000);
+		Value.ObserveQualifiedOrdinary(1'300'000);
+		Require(Value.QualifiedOrdinaryCompletedMessages == 27 && !Value.QualifiedOrdinaryPendingMessages &&
+			!Value.QualifiedOrdinaryEvidenceInvalid && !Value.QualifiedOrdinaryEverFailed &&
+			Value.QualifiedOrdinaryMaximumLatencyMicroseconds == 40'000,
+			"delayed reconciliation preserves both native completion timestamps");
+	});
+	Case("NativePositiveOrdinaryCompletionCertificate", [] {
+		using namespace SteamNetworkingSocketsLib;
+		NativePair Pair;
+		std::array<char, 115> Payload{};
+		const auto Accepted = GargantuanReliableServiceClock();
+		Require(GargantuanBeginReliableSubmissionMetadata(false, 1, 1, Accepted), "native ordinary submission metadata begins");
+		const auto Submitted = Pair.Sockets->SendMessageToConnection(Pair.Sender, Payload.data(),
+			static_cast<std::uint32_t>(Payload.size()), k_nSteamNetworkingSend_Reliable, nullptr);
+		GargantuanEndReliableRetirementAttribution();
+		Require(Submitted == k_EResultOK, "real UDP ordinary message accepted");
+		GargantuanReliableServiceSnapshot Snapshot;
+		const auto Deadline = std::chrono::steady_clock::now() + 2s;
+		while (std::chrono::steady_clock::now() < Deadline) {
+			if (GargantuanReadNativeFeedback(Pair.Sockets, Pair.Sender, Snapshot) &&
+				Snapshot.Counters.QualifiedOrdinaryCompletedMessages == 1) break;
+			std::this_thread::sleep_for(1ms);
+		}
+		Require(!Snapshot.Counters.Invalid && Snapshot.Counters.OrdinaryPayloadBytesFirstSent == Payload.size() &&
+			Snapshot.Counters.QualifiedOrdinaryRegisteredMessages == 1 &&
+			Snapshot.Counters.QualifiedOrdinaryCompletedMessages == 1 &&
+			!Snapshot.Counters.QualifiedOrdinaryPendingMessages && !Snapshot.Counters.QualifiedOrdinaryEvidenceInvalid &&
+			!Snapshot.Counters.QualifiedOrdinaryEverFailed && Snapshot.Counters.QualifiedOrdinaryMaximumLatencyMicroseconds <= 50'000,
+			"actual positive UDP results certify complete ordinary BODY and acceptance-to-last-send latency");
+	});
 	Case("SnapshotOverhead", [] {
 		OwnedPair Owner; auto &Pair = Owner.Pair;
 		const auto Before = Sample(Pair);
@@ -510,7 +676,7 @@ inline bool Run() {
 			<< " terminal_vector_bytes=" << sizeof(std::vector<std::optional<Feedback>>)
 			<< " snapshot_mean_ns=" << Elapsed / Count << " samples=" << Count << '\n';
 	});
-	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=12\n";
-	return Passed == 12;
+	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=20\n";
+	return Passed == 20;
 }
 }

@@ -13,7 +13,8 @@ enum class ReliableServiceMode : std::uint8_t { FULL_RESERVATION, POOLED_SERVICE
 // The single accepted Option C candidate. These are eligibility and funded
 // service bounds, never measurements of the configured host or path.
 struct PooledReliableServiceProfile {
-	// F1: finite accepted-grant latency and in-grant running capacity.
+	// Legacy F1 diagnostic arithmetic; D03/HYBRID_F1_V1 uses a separate
+	// uniform completion certificate and actual FIFO/capacity outcomes.
 	// Neither allowance accumulates across grants or during credit/ACK wait.
 	static constexpr std::uint64_t PeerActiveGrantDrainCapacityFloor = 16ULL * 1024 * 1024;
 	static constexpr std::uint64_t ServiceQuantumBytes = 1'248;
@@ -26,6 +27,11 @@ struct PooledReliableServiceProfile {
 		ServiceQuantumBytes * 1'000'000 + PeerActiveGrantDrainCapacityFloor * ServiceSchedulingMicroseconds;
 	static constexpr std::uint64_t FourGrantPoolRunningBoundByteMicroseconds =
 		4 * RunningGrantBoundByteMicroseconds;
+	// Accepted D03/HYBRID_F1_V1 product class. Legacy packet curves above
+	// remain independent diagnostics; funding is not measured capacity.
+	static constexpr std::uint64_t StructuralTurnoverMicroseconds = 150'000;
+	static constexpr std::uint64_t AdmissionOpportunityMicroseconds = 100'000;
+	static constexpr std::uint64_t EligibleAdmissionWaitMicroseconds = 1'181'250;
 	std::uint64_t BackendCap = 96 * 1024 * 1024;
 	std::uint64_t StructuralPool = 64 * 1024 * 1024;
 	std::uint64_t GameplayReserve = 8 * 1024 * 1024;
@@ -46,6 +52,12 @@ struct PooledReliableServiceProfile {
 	static constexpr std::uint64_t GameplayBurst = 160 * 1024;
 	static constexpr std::uint64_t GameplaySteadyRate = 256 * 1024;
 	static constexpr std::uint64_t ControlBurst = 64 * 1024;
+	// Prospective peer FIFO resource eligibility, not measured native capacity.
+	// Reserve the uniform G completion budget and a complete protected burst.
+	static constexpr std::uint64_t PeerOrdinaryUnsentLimit =
+		(PeerActiveGrantDrainCapacityFloor * QueueWindowMicroseconds -
+		 (FiniteGrantInterceptByteMicroseconds + MaximumReliableServiceGroupBytes * 1'000'000)) / 1'000'000 -
+		PeerGameplayBurst - ControlBurst;
 	[[nodiscard]] std::string_view ValidationError() const;
 };
 

@@ -15,6 +15,7 @@ namespace gargantuan::host::detail {
 // that an earlier finite grant failed does not accrue service across grants.
 class FarmF1Evidence final {
 public:
+	enum class Contract { FiniteGrantV1, HybridF1V1 };
 	struct FailedGrant {
 		// One immutable diagnostic witness per peer. Invalid/missing timelines
 		// cannot become measured certificates through later requalification.
@@ -44,10 +45,24 @@ public:
 		std::uint64_t LastToken = 0, LastBytes = 0, LastActivated = 0, LastFirst = 0, LastCompleted = 0;
 		std::uint64_t MaximumRunning = 0, MaximumFiniteShortfall = 0;
 		bool Failed = false, AccountingInvalid = false;
+		bool CompletionFailed = false, LastCompletionFailed = false, CompletionEvidenceInvalid = false, ExecutionFailed = false;
+		bool MainOpportunityFailed = false, TurnoverFailed = false;
+		bool QueuedFailed = false;
+		std::uint64_t MaximumMainOpportunity = 0, MaximumTurnover = 0;
+		std::uint64_t CompletedTurnovers = 0, CompletedAdmissionOpportunities = 0;
+		std::uint64_t LastTurnoverToken = 0, LastTurnoverActivated = 0, LastTurnoverAt = 0;
+		bool Hybrid = false;
+		std::uint64_t OrdinaryRegistered = 0, OrdinaryCompleted = 0, OrdinaryPending = 0, OrdinaryMaximumLatency = 0;
+		bool OrdinaryEverFailed = false, OrdinaryLastCompletedFailed = false;
+		bool OrdinaryActiveDeadlineFailed = false, OrdinaryEvidenceInvalid = false;
+		std::uint64_t OrdinaryFailureSequence = 0, OrdinaryFailurePhase = 0, OrdinaryFailureMessageNumber = 0;
+		std::uint64_t OrdinaryFailureAccepted = 0, OrdinaryFailureCompleted = 0;
+		std::uint32_t OrdinaryFailureExpectedBytes = 0, OrdinaryFailureFirstSentBytes = 0;
 		FailedGrant FirstFailed;
 		InitialFailure FirstInitialFailure;
 	};
 private:
+	const Contract ServiceContract;
 	std::array<Peer, 32> Peers{};
 	std::size_t Count = 0;
 	bool Invalid = false;
@@ -79,6 +94,30 @@ private:
 			T.PacketPreparationEntered >= T.FirstSnpVisit && T.WorkerQueued >= T.PacketPreparationEntered &&
 			T.WorkerStarted >= T.WorkerQueued && T.NativeCompleted >= T.WorkerStarted &&
 			T.NativeCompleted == First && T.ActorReconciled >= T.NativeCompleted;
+	}
+	static bool ValidCompletedSegments(const network::detail::ReliableServiceFeedback &S) noexcept {
+		const auto Count = S.LastCompletedStructuralSegmentEventCount;
+		const auto Bytes = S.StructuralLastCompletedGrantBytes;
+		if (!Count || Count > S.LastCompletedStructuralSegmentEvents.size()) return false;
+		std::uint64_t Sum = 0, Last = S.StructuralLastCompletedGrantFirstSendAtMicroseconds;
+		for (std::size_t I = 0; I < Count; ++I) {
+			const auto &Event = S.LastCompletedStructuralSegmentEvents[I];
+			if (!Event.PayloadBytes || Event.PayloadBytes > Bytes - Sum || Event.AtMicroseconds < Last ||
+				Event.AtMicroseconds > S.StructuralLastCompletedGrantCompletedAtMicroseconds) return false;
+			Sum += Event.PayloadBytes; Last = Event.AtMicroseconds;
+		}
+		return Sum == Bytes && S.LastCompletedStructuralSegmentEvents[0].AtMicroseconds ==
+			S.StructuralLastCompletedGrantFirstSendAtMicroseconds && Last == S.StructuralLastCompletedGrantCompletedAtMicroseconds;
+	}
+	static bool HybridCompletionPass(const network::detail::ReliableServiceFeedback &S) noexcept {
+		using Curve = network::FiniteGrantServiceCurve;
+		const auto Activated = S.StructuralLastCompletedGrantActivatedAtMicroseconds;
+		const auto First = S.StructuralLastCompletedGrantFirstSendAtMicroseconds;
+		const auto Completed = S.StructuralLastCompletedGrantCompletedAtMicroseconds;
+		if (!Activated || First < Activated || Completed < First) return false;
+		const auto Duration = Completed - Activated;
+		return Duration <= (Curve::FiniteInterceptByteMicroseconds + Curve::MaximumGrantBytes * 1'000'000) /
+			Curve::PeerRateBytesPerSecond;
 	}
 	static void RetainInitialFailure(Peer &P, const network::detail::ReliableServiceFeedback &S,
 		bool CompletionValid) noexcept {
@@ -144,7 +183,8 @@ private:
 		W.Measured = true;
 	}
 public:
-	FarmF1Evidence() noexcept : Previous(network::detail::ActivePooledService) {
+	explicit FarmF1Evidence(Contract Value = Contract::FiniteGrantV1) noexcept :
+		ServiceContract(Value), Previous(network::detail::ActivePooledService) {
 		network::detail::ActivePooledService = &Sink;
 	}
 	~FarmF1Evidence() { network::detail::ActivePooledService = Previous; }
@@ -179,8 +219,60 @@ public:
 		if (!RecordValid)
 			P->Failed = P->AccountingInvalid = true;
 		P->Accepted = Value.Accepted.Structural;
+		if (ServiceContract == Contract::HybridF1V1) {
+			P->Hybrid = true;
+			P->QueuedFailed |= Value.Result.QueuedOrdinaryEverFailed;
+			P->Failed |= P->QueuedFailed;
+			if (Value.Result.CompletedTurnovers < P->CompletedTurnovers ||
+				Value.Result.CompletedAdmissionOpportunities < P->CompletedAdmissionOpportunities)
+				P->Failed = P->AccountingInvalid = true;
+			P->CompletedTurnovers = Value.Result.CompletedTurnovers;
+			P->CompletedAdmissionOpportunities = Value.Result.CompletedAdmissionOpportunities;
+			P->LastTurnoverToken = Value.Result.LastCompletedTurnoverToken;
+			P->LastTurnoverActivated = Value.Result.LastCompletedTurnoverActivatedAtMicroseconds;
+			P->LastTurnoverAt = Value.Result.LastCompletedTurnoverAtMicroseconds;
+			P->MaximumMainOpportunity = std::max(P->MaximumMainOpportunity, Value.Result.MaximumMainOpportunityMicroseconds);
+			P->MaximumTurnover = std::max(P->MaximumTurnover, Value.Result.MaximumTurnoverMicroseconds);
+			P->MainOpportunityFailed |= Value.Result.MainOpportunityFailed ||
+				P->MaximumMainOpportunity > network::PooledReliableServiceProfile::AdmissionOpportunityMicroseconds;
+			P->TurnoverFailed |= Value.Result.TurnoverFailed ||
+				P->MaximumTurnover > network::PooledReliableServiceProfile::StructuralTurnoverMicroseconds;
+			P->ExecutionFailed |= Value.Result.ExecutionFailed || P->MainOpportunityFailed || P->TurnoverFailed;
+			P->Failed |= P->ExecutionFailed;
+		}
 		if (!Value.Feedback) return; // Missing feedback cannot create completed evidence.
 		const auto &S = *Value.Feedback;
+		if (ServiceContract == Contract::HybridF1V1) {
+			if (S.QualifiedOrdinaryRegisteredMessages < P->OrdinaryRegistered ||
+				S.QualifiedOrdinaryCompletedMessages < P->OrdinaryCompleted ||
+				S.QualifiedOrdinaryCompletedMessages > S.QualifiedOrdinaryRegisteredMessages ||
+				S.QualifiedOrdinaryPendingMessages != S.QualifiedOrdinaryRegisteredMessages - S.QualifiedOrdinaryCompletedMessages ||
+				S.QualifiedOrdinaryMaximumLatencyMicroseconds < P->OrdinaryMaximumLatency)
+				P->Failed = P->AccountingInvalid = true;
+			P->OrdinaryRegistered = S.QualifiedOrdinaryRegisteredMessages;
+			P->OrdinaryCompleted = S.QualifiedOrdinaryCompletedMessages;
+			P->OrdinaryPending = S.QualifiedOrdinaryPendingMessages;
+			P->OrdinaryMaximumLatency = std::max(P->OrdinaryMaximumLatency, S.QualifiedOrdinaryMaximumLatencyMicroseconds);
+			P->OrdinaryEverFailed |= S.QualifiedOrdinaryEverFailed;
+			P->OrdinaryLastCompletedFailed = S.QualifiedOrdinaryLastCompletedFailed;
+			P->OrdinaryActiveDeadlineFailed |= S.QualifiedOrdinaryActiveDeadlineFailed;
+			P->OrdinaryEvidenceInvalid |= S.QualifiedOrdinaryEvidenceInvalid;
+			if (!S.QualifiedOrdinaryFailureSequence && (S.QualifiedOrdinaryFailurePhase ||
+				S.QualifiedOrdinaryFailureMessageNumber || S.QualifiedOrdinaryFailureAcceptedAtMicroseconds ||
+				S.QualifiedOrdinaryFailureCompletedAtMicroseconds || S.QualifiedOrdinaryFailureExpectedBytes ||
+				S.QualifiedOrdinaryFailureFirstSentBytes)) P->OrdinaryEvidenceInvalid = true;
+			if (!P->OrdinaryFailureSequence && S.QualifiedOrdinaryFailureSequence) {
+				P->OrdinaryFailureSequence = S.QualifiedOrdinaryFailureSequence;
+				P->OrdinaryFailurePhase = S.QualifiedOrdinaryFailurePhase;
+				P->OrdinaryFailureMessageNumber = S.QualifiedOrdinaryFailureMessageNumber;
+				P->OrdinaryFailureAccepted = S.QualifiedOrdinaryFailureAcceptedAtMicroseconds;
+				P->OrdinaryFailureCompleted = S.QualifiedOrdinaryFailureCompletedAtMicroseconds;
+				P->OrdinaryFailureExpectedBytes = S.QualifiedOrdinaryFailureExpectedBytes;
+				P->OrdinaryFailureFirstSentBytes = S.QualifiedOrdinaryFailureFirstSentBytes;
+			}
+			P->Failed |= P->OrdinaryEverFailed || P->OrdinaryLastCompletedFailed || P->OrdinaryActiveDeadlineFailed ||
+				P->OrdinaryEvidenceInvalid || P->OrdinaryMaximumLatency > 50'000 || P->OrdinaryFailureSequence != 0;
+		}
 		++P->Samples;
 		const bool FeedbackValid = !(!S.CountersValid || S.Connection != Value.Connection ||
 			S.StructuralPayloadBytesFirstSent < P->FirstSent || S.StructuralPayloadBytesAcked < P->Acked ||
@@ -197,9 +289,17 @@ public:
 		P->MaximumRunning = std::max(P->MaximumRunning, S.StructuralMaximumDeficitByteMicroseconds);
 		P->MaximumFiniteShortfall = std::max(P->MaximumFiniteShortfall,
 			S.StructuralMaximumFiniteShortfallByteMicroseconds);
-		P->Failed |= S.StructuralServiceFailed || S.StructuralLastCompletedGrantFailed ||
-			(Value.Result.Available && !Value.Result.Qualified) || P->MaximumFiniteShortfall != 0 ||
-			P->MaximumRunning > network::PooledReliableServiceProfile::RunningGrantBoundByteMicroseconds;
+		const bool Hybrid = ServiceContract == Contract::HybridF1V1;
+		if (Hybrid) {
+			P->CompletionFailed |= S.StructuralCompletionServiceFailed;
+			P->CompletionEvidenceInvalid |= S.StructuralCompletionEvidenceInvalid;
+			P->Failed |= P->CompletionFailed || P->CompletionEvidenceInvalid ||
+				(Value.Result.Available && !Value.Result.Qualified);
+		} else {
+			P->Failed |= S.StructuralServiceFailed || S.StructuralLastCompletedGrantFailed ||
+				(Value.Result.Available && !Value.Result.Qualified) || P->MaximumFiniteShortfall != 0 ||
+				P->MaximumRunning > network::PooledReliableServiceProfile::RunningGrantBoundByteMicroseconds;
+		}
 		if (S.StructuralCompletedGrantSequence != P->Completed) {
 			const auto Bytes = S.StructuralLastCompletedGrantBytes;
 			const bool CompletionValid = !(!P->PendingToken || P->PendingCompleted || P->PendingToken != S.StructuralLastCompletedGrantToken ||
@@ -213,6 +313,12 @@ public:
 				S.StructuralLastCompletedGrantCompletedAtMicroseconds > S.ObservedAtMicroseconds ||
 				Bytes > std::numeric_limits<std::uint64_t>::max() - P->CompletedBytes);
 			if (!CompletionValid) P->Failed = P->AccountingInvalid = true;
+			if (Hybrid) {
+				P->LastCompletionFailed = S.StructuralLastCompletedCompletionFailed || !HybridCompletionPass(S);
+				P->CompletionFailed |= P->LastCompletionFailed;
+				P->CompletionEvidenceInvalid |= !CompletionValid || !ValidCompletedSegments(S);
+				P->Failed |= P->CompletionFailed || P->CompletionEvidenceInvalid;
+			}
 			const bool RetirementValid = !Value.Result.RetiredBytes ||
 				(P->PendingToken && Value.Result.RetiredToken == P->PendingToken &&
 					Value.Result.RetiredBytes == P->PendingBytes &&
@@ -229,7 +335,8 @@ public:
 			}
 			P->Completed = S.StructuralCompletedGrantSequence;
 			P->CompletedBytes += Bytes;
-			if (!S.StructuralLastCompletedGrantFailed && S.CountersValid) ++P->Qualified;
+			if (Hybrid ? (!P->LastCompletionFailed && !P->CompletionEvidenceInvalid && CompletionValid &&
+				RecordValid && FeedbackValid && S.CountersValid) : (!S.StructuralLastCompletedGrantFailed && S.CountersValid)) ++P->Qualified;
 			P->LastToken = S.StructuralLastCompletedGrantToken; P->LastBytes = Bytes;
 			P->LastActivated = S.StructuralLastCompletedGrantActivatedAtMicroseconds;
 			P->LastFirst = S.StructuralLastCompletedGrantFirstSendAtMicroseconds;
@@ -248,6 +355,12 @@ public:
 	}
 	static bool Complete(const Peer &P) noexcept {
 		return !P.Failed && P.Samples && P.Completed && P.Completed == P.Qualified &&
+			(!P.Hybrid || (P.CompletedAdmissionOpportunities && P.CompletedTurnovers == P.QualifiedAccepted &&
+				P.LastTurnoverToken == P.LastToken && P.LastTurnoverActivated == P.LastActivated &&
+				P.LastTurnoverAt >= P.LastCompleted && P.LastTurnoverAt - P.LastTurnoverActivated <=
+					network::PooledReliableServiceProfile::StructuralTurnoverMicroseconds &&
+				P.MaximumTurnover >= P.LastTurnoverAt - P.LastTurnoverActivated)) &&
+			(!P.Hybrid || (P.OrdinaryRegistered && P.OrdinaryCompleted == P.OrdinaryRegistered && !P.OrdinaryPending)) &&
 			!P.PendingToken && P.Completed == P.QualifiedAccepted && P.CompletedBytes == P.QualifiedBytes &&
 			P.BootstrapBytes == P.BootstrapRetired && P.CompletedBytes + P.BootstrapBytes == P.Accepted && P.Accepted == P.FirstSent &&
 			P.FirstSent == P.Acked && P.Acked == P.Retired;
@@ -261,7 +374,8 @@ public:
 	void Write(std::ostream &Out, std::string_view Run) const {
 		for (std::size_t I = 0; I < Count; ++I) {
 			const auto &P = Peers[I];
-			Out << "[Qualification:FarmF1] event=peer contract=finite_grant_v1 run=" << Run
+			Out << "[Qualification:FarmF1] event=peer contract="
+				<< (ServiceContract == Contract::HybridF1V1 ? "HYBRID_F1_V1" : "finite_grant_v1") << " run=" << Run
 				<< " connection=" << P.Connection.Slot << ':' << P.Connection.Generation
 				<< " samples=" << P.Samples << " completed=" << P.Completed << " qualified=" << P.Qualified
 				<< " completed_bytes=" << P.CompletedBytes << " accepted=" << P.Accepted
@@ -273,8 +387,26 @@ public:
 				<< " last_activated_us=" << P.LastActivated << " last_first_us=" << P.LastFirst
 				<< " last_completed_us=" << P.LastCompleted << " max_running_byte_us=" << P.MaximumRunning
 				<< " max_finite_shortfall_byte_us=" << P.MaximumFiniteShortfall
-				<< " failed=" << P.Failed << " valid=" << (!Invalid && Complete(P)) << '\n';
-			// Keep the canonical finite_grant_v1 row byte/schema compatible.
+				<< " failed=" << P.Failed << " valid=" << (!Invalid && Complete(P));
+			if (ServiceContract == Contract::HybridF1V1)
+				Out << " completion_failed=" << P.CompletionFailed << " last_completion_failed=" << P.LastCompletionFailed
+					<< " completion_evidence_invalid=" << P.CompletionEvidenceInvalid << " execution_failed=" << P.ExecutionFailed
+					<< " main_opportunity_failed=" << P.MainOpportunityFailed << " turnover_failed=" << P.TurnoverFailed
+					<< " queued_failed=" << P.QueuedFailed
+					<< " max_main_opportunity_us=" << P.MaximumMainOpportunity << " max_turnover_us=" << P.MaximumTurnover
+					<< " execution_opportunities=" << P.CompletedAdmissionOpportunities << " completed_turnovers=" << P.CompletedTurnovers
+					<< " last_turnover_token=" << P.LastTurnoverToken << " last_turnover_activated_us=" << P.LastTurnoverActivated
+					<< " last_turnover_us=" << P.LastTurnoverAt
+					<< " ordinary_registered=" << P.OrdinaryRegistered << " ordinary_completed=" << P.OrdinaryCompleted
+					<< " ordinary_pending=" << P.OrdinaryPending << " ordinary_max_latency_us=" << P.OrdinaryMaximumLatency
+					<< " ordinary_ever_failed=" << P.OrdinaryEverFailed << " ordinary_last_completed_failed=" << P.OrdinaryLastCompletedFailed
+					<< " ordinary_active_deadline_failed=" << P.OrdinaryActiveDeadlineFailed << " ordinary_evidence_invalid=" << P.OrdinaryEvidenceInvalid
+					<< " ordinary_failure_sequence=" << P.OrdinaryFailureSequence << " ordinary_failure_phase=" << P.OrdinaryFailurePhase
+					<< " ordinary_failure_message=" << P.OrdinaryFailureMessageNumber << " ordinary_failure_accepted_us=" << P.OrdinaryFailureAccepted
+					<< " ordinary_failure_completed_us=" << P.OrdinaryFailureCompleted << " ordinary_failure_expected_bytes=" << P.OrdinaryFailureExpectedBytes
+					<< " ordinary_failure_first_sent_bytes=" << P.OrdinaryFailureFirstSentBytes;
+			Out << '\n';
+			// Legacy rows keep their schema; hybrid requires an explicit contract and hard certificate fields.
 			Out << "[Qualification:FarmF1Failure] event=peer run=" << Run
 				<< " connection=" << P.Connection.Slot << ':' << P.Connection.Generation
 				<< " storage_invalid=" << Invalid

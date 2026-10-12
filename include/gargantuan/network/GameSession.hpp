@@ -84,6 +84,7 @@ namespace gargantuan::network {
 		std::uint64_t StructuralAckedFeedbackBytes = 0;
 		std::uint32_t StructuralFeedbackPeersObserved = 0;
 		std::uint64_t TransportConnections = 0;
+		std::uint64_t QualifiedOrdinaryQueueFailures = 0;
 		std::uint64_t AcceptedPeers = 0;
 		std::uint64_t ReadyPeers = 0;
 		std::uint64_t RejectedHandshakes = 0;

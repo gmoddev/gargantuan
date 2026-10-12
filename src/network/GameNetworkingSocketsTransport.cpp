@@ -261,6 +261,22 @@ namespace gargantuan::network {
 				Counters.ActiveAttributedMessageNumber, Counters.LastAttributedRetirementToken,
 				Counters.LastAttributedRetirementMessageNumber, Counters.LastAttributedRetiredPayloadBytes};
 			Result.StructuralGrantFirstSendAtMicroseconds = Counters.StructuralGrantFirstSendAtMicroseconds;
+			Result.OrdinaryPayloadBytesFirstSent = Counters.OrdinaryPayloadBytesFirstSent;
+			Result.QualifiedOrdinaryRegisteredMessages = Counters.QualifiedOrdinaryRegisteredMessages;
+			Result.QualifiedOrdinaryCompletedMessages = Counters.QualifiedOrdinaryCompletedMessages;
+			Result.QualifiedOrdinaryPendingMessages = Counters.QualifiedOrdinaryPendingMessages;
+			Result.QualifiedOrdinaryMaximumLatencyMicroseconds = Counters.QualifiedOrdinaryMaximumLatencyMicroseconds;
+			Result.QualifiedOrdinaryEverFailed = Counters.QualifiedOrdinaryEverFailed;
+			Result.QualifiedOrdinaryLastCompletedFailed = Counters.QualifiedOrdinaryLastCompletedFailed;
+			Result.QualifiedOrdinaryActiveDeadlineFailed = Counters.QualifiedOrdinaryActiveDeadlineFailed;
+			Result.QualifiedOrdinaryEvidenceInvalid = Counters.QualifiedOrdinaryEvidenceInvalid;
+			Result.QualifiedOrdinaryFailureSequence = Counters.QualifiedOrdinaryFailureSequence;
+			Result.QualifiedOrdinaryFailurePhase = Counters.QualifiedOrdinaryFailurePhase;
+			Result.QualifiedOrdinaryFailureMessageNumber = Counters.QualifiedOrdinaryFailureMessageNumber;
+			Result.QualifiedOrdinaryFailureAcceptedAtMicroseconds = Counters.QualifiedOrdinaryFailureAcceptedAtMicroseconds;
+			Result.QualifiedOrdinaryFailureCompletedAtMicroseconds = Counters.QualifiedOrdinaryFailureCompletedAtMicroseconds;
+			Result.QualifiedOrdinaryFailureExpectedBytes = Counters.QualifiedOrdinaryFailureExpectedBytes;
+			Result.QualifiedOrdinaryFailureFirstSentBytes = Counters.QualifiedOrdinaryFailureFirstSentBytes;
 			Result.NativePacketsSent = Counters.NativePacketsSent;
 			Result.NativePacketBytesSent = Counters.NativePacketBytesSent;
 			Result.NativeMaximumPacketBytes = Counters.NativeMaximumPacketBytes;
@@ -277,6 +293,9 @@ namespace gargantuan::network {
 			Result.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds =
 				Counters.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds;
 			Result.StructuralLastCompletedGrantFailed = Counters.StructuralLastCompletedGrantFailed;
+			Result.StructuralCompletionServiceFailed = Counters.StructuralCompletionServiceFailed;
+			Result.StructuralLastCompletedCompletionFailed = Counters.StructuralLastCompletedCompletionFailed;
+			Result.StructuralCompletionEvidenceInvalid = Counters.StructuralCompletionEvidenceInvalid;
 			Result.LastCompletedInitialTrace = Counters.LastCompletedInitialTrace;
 			Result.StructuralMaximumFiniteShortfallByteMicroseconds =
 				Counters.StructuralMaximumFiniteShortfallByteMicroseconds;
@@ -939,6 +958,9 @@ namespace gargantuan::network {
 	}
 
 	TransportOperationResult GameNetworkingSocketsTransport::Send(const NetworkMessageIntent &Message) {
+		const auto DirectOrdinaryOrigin = Message.Delivery() == DeliveryMode::ReliableOrdered &&
+			Message.Traffic() != TrafficClass::StructuralReplication && !runtime_detail::ActiveOrdinaryDemand.Sequence
+			? runtime_detail::DirectOrdinaryDemand(Message.Destination()) : runtime_detail::OrdinaryDemandTag{};
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::TransportSend);
 		detail::InitialServiceTrace InitialTrace;
 		InitialTrace.Enabled = detail::ReliableServiceFeedbackAccess::Token(Message) != 0 &&
@@ -1058,6 +1080,15 @@ namespace gargantuan::network {
 			!SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(Token,
 				detail::ReliableServiceFeedbackAccess::ActivatedAt(Message), &InitialTrace)))
 			return Fail(TransportOperationStatus::TransportFailure, "retirement-attribution");
+		const bool ReliableSubmission = Message.Delivery() == DeliveryMode::ReliableOrdered;
+		const auto &Ordinary = runtime_detail::ActiveOrdinaryDemand.Sequence
+			? runtime_detail::ActiveOrdinaryDemand : DirectOrdinaryOrigin;
+		if (ReliableSubmission && !SteamNetworkingSocketsLib::GargantuanBeginReliableSubmissionMetadata(
+			Message.Traffic() == TrafficClass::StructuralReplication,
+			Ordinary.Qualified ? Ordinary.Sequence : 0, Ordinary.Phase, Ordinary.AcceptedAtMicroseconds)) {
+			if (Token) SteamNetworkingSocketsLib::GargantuanEndReliableRetirementAttribution();
+			return Fail(TransportOperationStatus::TransportFailure, "submission-metadata");
+		}
 		const auto Result = SteamAPI_ISteamNetworkingSockets_SendMessageToConnection(
 			Global.Interface,
 			Connection->second.Handle,
@@ -1066,7 +1097,7 @@ namespace gargantuan::network {
 			Flags,
 			(Token || detail::ActiveGnsService) ? &MessageNumber : nullptr
 		);
-		if (Token) SteamNetworkingSocketsLib::GargantuanEndReliableRetirementAttribution();
+		if (ReliableSubmission) SteamNetworkingSocketsLib::GargantuanEndReliableRetirementAttribution();
 		State->Observe(Message.Destination(), "GnsQueued", Message.Payload(),
 			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()),
 			MessageNumber, -1, static_cast<int>(Result), nullptr, !PooledStructuralGrant);

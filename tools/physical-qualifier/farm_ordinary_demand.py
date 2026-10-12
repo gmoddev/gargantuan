@@ -56,7 +56,7 @@ def ClockReceipt(PathValue, Run, Role, Slot, Nonce):
     return Rows[0] if Rows else None
 
 
-def Offers(Records, Role, Slot, Connections, Database):
+def Offers(Records, Role, Slot, Connections, Database, Coverage=None):
     Phase = 0
     Expected = 1
     Previous = 0
@@ -85,6 +85,8 @@ def Offers(Records, Role, Slot, Connections, Database):
             Database.execute("INSERT INTO OrdinaryPending VALUES(?,?,?,?,?,?,?,?,?)",
                              (Role, Slot, Value.Sequence, *Connection, Phase,
                               Value.ServiceBytes, Value.DueTick, Value.Flags))
+            if Phase and Coverage is not None:
+                Coverage[Slot if Role == "CLIENT" else Connections[Connection]]["QueuedMessages"] += 1
             continue
         Origin = Phase
         if Value.Sequence:
@@ -105,6 +107,9 @@ def Offers(Records, Role, Slot, Connections, Database):
         if not Origin:
             continue
         Require(Value.Stage == 24, "fixed-workload ordinary transport send rejected")
+        if Coverage is not None:
+            Row = Coverage[Slot if Role == "CLIENT" else Connections[Connection]]
+            Row["SuccessfulQueuedMessages" if Value.Sequence else "DirectMessages"] += 1
         if Value.DueTick == 1:
             Require(Value.ServiceBytes - 32 <= 16384, "Remote encoded frame exceeds canonical cap")
         yield (Value.FrameSequence, Slot if Role == "CLIENT" else Connections[Connection],
@@ -139,6 +144,100 @@ def Direction(Streams, Frequency):
             for Slot, Pair in enumerate(Peers)], "Phases": Phases}
 
 
+def NativeRows(PathValue, Prefix):
+    """Reuse bounded indexed stdout; no new trace, payload or evidence storage."""
+    PathValue = Path(PathValue)
+    Require(PathValue.is_file() and not PathValue.is_symlink() and
+            PathValue.stat().st_size <= 16 * 1024 * 1024, "ordinary FIFO log invalid")
+    Rows = []
+    with PathValue.open(encoding="utf-8") as Stream:
+        for Line in Stream:
+            if not Line.startswith(Prefix):
+                continue
+            Row = {}
+            for Field in Line[len(Prefix):].strip().split():
+                Match = re.fullmatch(r"([a-z_]+)=([^\s=]+)", Field)
+                Require(Match is not None and Match[1] not in Row, "malformed ordinary FIFO receipt")
+                Row[Match[1]] = Match[2]
+            Rows.append(Row)
+            Require(len(Rows) <= 32, "ordinary FIFO certificate count exceeds bound")
+    return Rows
+
+
+def NativeNumber(Row, Field):
+    Value = Row.get(Field)
+    Require(isinstance(Value, str) and re.fullmatch(r"0|[1-9][0-9]*", Value),
+            "ordinary FIFO counter missing or malformed: " + Field)
+    Value = int(Value)
+    Require(Value <= 0xffffffffffffffff, "ordinary FIFO counter overflow")
+    return Value
+
+
+def NativeConnection(Row):
+    Value = Row.get("connection", "")
+    Match = re.fullmatch(r"([1-9][0-9]*):([1-9][0-9]*)", Value)
+    Require(Match is not None, "ordinary FIFO connection identity invalid")
+    return int(Match[1]), int(Match[2])
+
+
+def AnalyzeOrdinaryFIFO(ServerLog, ClientSources, ReadyBySlot, Run, Egress, Ingress):
+    """Join positive-native 50-ms certificates to ALL originating normal sends.
+
+    API acceptance/demand replay is only the denominator. Native completion
+    certificates supply service truth; no server/client clock subtraction occurs.
+    """
+    ServerRows = NativeRows(ServerLog, "[Qualification:FarmF1]")
+    Clients = {Slot: NativeRows(Log, "[Qualification:OrdinaryFIFO]")
+               for Slot, (_, _, Log) in ClientSources.items()}
+    Require(all(len(Rows) <= 1 for Rows in Clients.values()), "duplicate ordinary FIFO client certificate")
+    if not ServerRows or len(ServerRows) != 32 or any(len(Rows) != 1 for Rows in Clients.values()) or \
+            any(Row.get("contract") != "HYBRID_F1_V1" for Row in ServerRows) or \
+            any(Rows[0].get("contract") != "HYBRID_F1_V1" for Rows in Clients.values() if Rows):
+        return {"State": "NOT_MEASURED", "Contract": "HYBRID_F1_V1",
+                "Reason": "all 32 server and 32 client native FIFO certificates required; legacy/unknown contracts are not reinterpreted"}
+    Server = {}
+    for Row in ServerRows:
+        Require(Row.get("event") == "peer" and Row.get("run") == Run,
+                "ordinary FIFO server run or event differs")
+        Connection = NativeConnection(Row)
+        Require(Connection not in Server, "duplicate ordinary FIFO server connection")
+        Server[Connection] = Row
+    Require(set(Server) == {Value[0] for Value in ReadyBySlot.values()},
+            "ordinary FIFO server generations differ from ready peers")
+    Summaries = []
+    ClientFields = {"event", "contract", "run", "slot", "nonce", "connection", "registered", "completed",
+                    "pending", "max_latency_us", "ever_failed", "last_failed", "active_failed", "invalid", "queued_failed"}
+    ServerFailures = ("queued_failed", "ordinary_ever_failed", "ordinary_last_completed_failed", "ordinary_active_deadline_failed",
+                      "ordinary_evidence_invalid", "ordinary_failure_sequence", "ordinary_failure_phase", "ordinary_failure_message",
+                      "ordinary_failure_accepted_us", "ordinary_failure_completed_us", "ordinary_failure_expected_bytes",
+                      "ordinary_failure_first_sent_bytes")
+    for Slot in range(32):
+        ServerRow, ClientRow = Server[ReadyBySlot[Slot][0]], Clients[Slot][0]
+        Require(set(ClientRow) == ClientFields and ClientRow["event"] == "client" and ClientRow["run"] == Run and
+                NativeNumber(ClientRow, "slot") == Slot and NativeNumber(ClientRow, "nonce") == ClientSources[Slot][1] and
+                NativeConnection(ClientRow) == ReadyBySlot[Slot][1], "ordinary FIFO client schema or ready identity differs")
+        for Role, Row, Demand, Fields, Failures in (
+                ("SERVER", ServerRow, Egress["Peers"][Slot],
+                 ("ordinary_registered", "ordinary_completed", "ordinary_pending", "ordinary_max_latency_us"), ServerFailures),
+                ("CLIENT", ClientRow, Ingress["Peers"][Slot],
+                 ("registered", "completed", "pending", "max_latency_us"),
+                 ("ever_failed", "last_failed", "active_failed", "invalid", "queued_failed"))):
+            Registered, Completed, Pending, Maximum = [NativeNumber(Row, Field) for Field in Fields]
+            Require(Registered > 0 and Registered == Completed == Demand["Messages"] and Pending == 0 and Maximum <= 50000 and
+                    all(NativeNumber(Row, Field) == 0 for Field in Failures),
+                    "ordinary FIFO native coverage, completion or 50-ms hard service failed")
+            Require(Demand["QueuedMessages"] == Demand["SuccessfulQueuedMessages"] and
+                    Demand["Messages"] == Demand["SuccessfulQueuedMessages"] + Demand["DirectMessages"],
+                    "ordinary FIFO queued/successful denominator differs")
+            Summaries.append({"Role": Role, "Slot": Slot, "Registered": Registered, "Completed": Completed,
+                              "MaximumLatencyMicroseconds": Maximum, "QueuedMessages": Demand["QueuedMessages"],
+                              "DirectMessages": Demand["DirectMessages"]})
+    return {"State": "MEASURED_PASS", "Contract": "HYBRID_F1_V1", "ServerConnections": 32, "ClientCertificates": 32,
+            "RoleProcesses": 33, "Certificates": 64, "Boundary": "SCHEDULER_ACCEPTED_TO_COMPLETE_POSITIVE_NATIVE_FIRST_SEND",
+            "Scope": "ORIGINATING_FIXED_PHASES_1_TO_5", "MaximumLatencyMicroseconds": max(Row["MaximumLatencyMicroseconds"] for Row in Summaries),
+            "Observations": Summaries, "CrossHostTiming": "NOT_USED"}
+
+
 def Analyze(ServerPath, ServerLog, ClientSources, ReadyBySlot, Run, Database=None):
     if Database is None:
         # Standalone deterministic fixtures. Production supplies its existing
@@ -158,17 +257,27 @@ def Analyze(ServerPath, ServerLog, ClientSources, ReadyBySlot, Run, Database=Non
     Connections = {Value[0]: Slot for Slot, Value in ReadyBySlot.items()}
     Database.execute("CREATE TABLE OrdinaryPending(Role TEXT,Slot INTEGER,Sequence INTEGER,CS INTEGER,CG INTEGER,"
                      "Phase INTEGER,Bytes INTEGER,Kind INTEGER,Forced INTEGER,PRIMARY KEY(Role,Slot,Sequence)) WITHOUT ROWID")
-    Egress = Direction([Offers(IterRecords(ServerPath, Run, "SERVER"), "SERVER", -1, Connections, Database)],
+    def Coverage():
+        return [{"QueuedMessages": 0, "SuccessfulQueuedMessages": 0, "DirectMessages": 0} for _ in range(32)]
+    EgressCoverage, IngressCoverage = Coverage(), Coverage()
+    Egress = Direction([Offers(IterRecords(ServerPath, Run, "SERVER"), "SERVER", -1, Connections, Database, EgressCoverage)],
                        ServerClock["Frequency"])
     Ingress = Direction([Offers(IterRecords(PathValue, Run, "CLIENT", Slot, Nonce), "CLIENT", Slot,
-                                 {ReadyBySlot[Slot][1]: Slot}, Database)
+                                 {ReadyBySlot[Slot][1]: Slot}, Database, IngressCoverage)
                          for Slot, (PathValue, Nonce, _) in sorted(ClientSources.items())],
                         ClientClock["Frequency"])
     Require(all(Row["ForcedCharacterMessages"] for Row in Egress["Phases"]),
             "fixed phases lack actual forced reliable Character traffic")
+    for DirectionValue, CoverageValue in ((Egress, EgressCoverage), (Ingress, IngressCoverage)):
+        for Row, Count in zip(DirectionValue["Peers"], CoverageValue):
+            Require(Count["QueuedMessages"] == Count["SuccessfulQueuedMessages"] and
+                    Row["Messages"] == Count["SuccessfulQueuedMessages"] + Count["DirectMessages"],
+                    "ordinary queued/successful transport coverage differs")
+            Row.update(Count)
+    OrdinaryFIFO = AnalyzeOrdinaryFIFO(ServerLog, ClientSources, ReadyBySlot, Run, Egress, Ingress)
     return {"State": "MEASURED_PASS", "Contract": "ordinary_sender_demand_v1",
             "Boundary": "SUCCESSFUL_TRANSPORT_SEND", "CompleteByteBasis": "PAYLOAD_PLUS_32_BYTE_ADAPTER",
             "ServerClock": ServerClock, "ClientClock": ClientClock,
             "Egress": Egress, "Ingress": Ingress, "CrossHostTiming": "NOT_USED",
             "StructuralFirstSendService": "SEPARATE_F1_GATE",
-            "PacketReserve": "SEPARATE_FUNDED_TRANSPORT_GATE"}
+            "PacketReserve": "SEPARATE_FUNDED_TRANSPORT_GATE", "OrdinaryFIFO": OrdinaryFIFO}

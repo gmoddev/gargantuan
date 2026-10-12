@@ -415,6 +415,7 @@ Assert-FarmLifecycleAdmission -Observation $Lifecycle -Admission $Admission
 $RemoteOwnership = Read-FarmRemoteOwnershipObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
 	-RunManifestPath $RunManifestPath
 $F1 = Read-FarmF1Observation -ServerRoot $Server.Root -RunManifestPath $RunManifestPath
+Assert-FarmHybridService -Observation $F1 -Publication $Publication -Fairness $FairnessObservation
 Assert-FarmF1Admission -Observation $F1 -Admission $Admission
 $Ledger += [ordered]@{ Gate='Every finite native first-send grant, including final grants';
 	State=$F1.State; Evidence='32 generation-scoped sticky native verdict histories; exact completed, first-send, ACK and retirement conservation' }

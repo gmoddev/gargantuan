@@ -704,7 +704,7 @@ namespace gargantuan::host {
 				FarmRunId, std::filesystem::path(FarmPublicationEvidencePath).parent_path() / "server-work-ticks.bin");
 			std::unique_ptr<detail::FarmAdmissionEvidence> AdmissionEvidence;
 			if (FarmScaleWorkload) AdmissionEvidence = std::make_unique<detail::FarmAdmissionEvidence>(
-				FarmRunId, std::filesystem::path(FarmAdmissionEvidencePath));
+				FarmRunId, std::filesystem::path(FarmAdmissionEvidencePath), true);
 			// The writer outlives recovery buffers, including exception unwinding.
 			std::unique_ptr<PhysicalScaleQualification> ScaleQualification;
 			if (FarmScaleWorkload) ScaleQualification = std::make_unique<PhysicalScaleQualification>(
@@ -712,7 +712,8 @@ namespace gargantuan::host {
 			if (ScaleQualification && AdmissionEvidence)
 				ScaleQualification->AttachAdmissionEvidence(*AdmissionEvidence);
 			std::unique_ptr<detail::FarmPublicationEvidence> PublicationEvidence;
-			if (FarmScaleWorkload) F1Evidence = std::make_unique<detail::FarmF1Evidence>();
+			if (FarmScaleWorkload) F1Evidence = std::make_unique<detail::FarmF1Evidence>(
+				detail::FarmF1Evidence::Contract::HybridF1V1);
 #if defined(GARGANTUAN_WITH_GNS)
 			if (F1Evidence && ServiceTimingEvidence)
 				F1Evidence->SetFailureObserver(ServiceTimingEvidence.get(), detail::FarmServiceTimingEvidence::Failed,

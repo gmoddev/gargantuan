@@ -26,6 +26,13 @@ inline bool RunPooledReliableServiceProductionTests() {
 		Check(A.ObserveService(Id, Admission::ServiceObservation{Time, Qualified, Available, Ordinary}), "observe");
 		A.SetOrdinaryFunding(224 * 1024);
 	};
+	auto StampCompletion = [](Sample &S, std::uint64_t Sequence, std::uint64_t Token, std::uint64_t Bytes,
+		std::uint64_t Activated, std::uint64_t First, std::uint64_t Completed) {
+		S.StructuralCompletedGrantSequence = Sequence; S.StructuralLastCompletedGrantToken = Token;
+		S.StructuralLastCompletedGrantBytes = Bytes; S.StructuralLastCompletedGrantActivatedAtMicroseconds = Activated;
+		S.StructuralLastCompletedGrantFirstSendAtMicroseconds = First;
+		S.StructuralLastCompletedGrantCompletedAtMicroseconds = Completed;
+	};
 	try {
 		Test("ExplicitProfileAndFrozenBounds", [&] {
 			Check(ReliableServiceProfile{}.Mode == ReliableServiceMode::FULL_RESERVATION, "default changed");
@@ -80,30 +87,79 @@ inline bool RunPooledReliableServiceProductionTests() {
 			Step(A, 1'400'000, false); R = A.Reserve(Id, G); Check(R && A.Commit(*R), "bounded requalification");
 			Check(A.GetMetrics().QualificationGrants == 2, "qualification accounting");
 		});
-		Test("GrantRetainsOrdinaryFollowerAndTerminalGeneration", [&] {
+		Test("VerifiedStructuralPermitReturnsWithOrdinaryFundingStillCharged", [&] {
 			Admission A(ReliableServiceProfile::PooledService()); Step(A, 0); Step(A, 250'000);
 			auto R = A.Reserve(Id, G); Check(R && A.Commit(*R) && A.Retire(Id, R->Token, G), "grant retirement");
 			Step(A, 500'000, true, true, 100);
-			Check(!A.Allowance(Id, 500'000) && A.GetMetrics().ActiveDrainGrants == 1, "ordinary follower lost grant");
+			Check(A.Allowance(Id, 500'000) == G && !A.GetMetrics().ActiveDrainGrants,
+				"fresh matching structural retirement returns the permit despite an ordinary follower");
+			const auto Funding = Ledger::FundedOrdinary(5 * 1024 * 1024, 0, 5 * 1024 * 1024);
+			Check(Funding.has_value() && A.RefreshService(Id,
+				Admission::ServiceObservation{500'000, true, true, 5 * 1024 * 1024}), "ordinary ledger remains owned");
+			A.SetOrdinaryFunding(*Funding);
+			Check(!A.Allowance(Id, 500'000) && !A.GetMetrics().ActiveDrainGrants && A.GetMetrics().FundedDeferrals,
+				"returned structural permit cannot bypass independently charged ordinary funding");
+			Check(A.RefreshService(Id, Admission::ServiceObservation{500'000, true, true, 100}),
+				"verified ordinary progress leaves only its small retained follower");
+			A.SetOrdinaryFunding(224 * 1024);
+			R = A.Reserve(Id, G); Check(R && A.Commit(*R), "new exact structural ownership");
 			Check(!A.ObserveService({1, 2}, Admission::ServiceObservation{}), "generation reused before terminal");
 			Check(A.TerminalRelease(Id) && A.ObserveService({1, 2}, Admission::ServiceObservation{500'000, true, true}), "generation reset");
 			Check(!A.Allowance({1, 2}, 500'000), "reconnect inherited credit");
+		});
+		Test("RetirementNeedsCompleteAvailableFeedbackBeforePermitRelease", [&] {
+			for (unsigned Mode = 0; Mode < 3; ++Mode) {
+				Admission A(ReliableServiceProfile::PooledService()); Step(A, 0); Step(A, 250'000);
+				auto R = A.Reserve(Id, G); Check(R && A.Commit(*R), "owned structural grant");
+				Check(!A.Retire({1, 2}, R->Token, G) && !A.Retire(Id, R->Token + 1, G) &&
+					!A.Retire(Id, R->Token, G - 1), "generation, token and exact bytes bind retirement");
+				A.EndStep(); Check(A.BeginStep(500'000), "new receipt observation step");
+				Check(A.Retire(Id, R->Token, G) && !A.Retire(Id, R->Token, G), "one verified structural receipt");
+				std::optional<Admission::ServiceObservation> Observation;
+				if (Mode == 1) Observation = Admission::ServiceObservation{500'000, true, false, 100};
+				if (Mode == 2) Observation = Admission::ServiceObservation{449'999, true, false, 100};
+				Check(A.ObserveService(Id, Observation), "missing/incomplete/stale availability is explicit");
+				A.SetOrdinaryFunding(224 * 1024);
+				Check(!A.Debt(Id) && A.GetMetrics().ActiveDrainGrants == 1 && !A.Allowance(Id, 500'000),
+					"retirement accounting alone cannot release a permit through unavailable evidence");
+				A.EndStep(); Step(A, 750'000, true, true, 100);
+				Check(!A.GetMetrics().ActiveDrainGrants && A.Allowance(Id, 750'000) == G,
+					"later complete current evidence returns the previously retired permit exactly once");
+			}
 		});
 		Test("FundedOverloadAndRecovery", [&] {
 			Admission A(ReliableServiceProfile::PooledService()); Step(A, 0); Step(A, 250'000);
 			A.SetOrdinaryFunding(5 * 1024 * 1024); Check(!A.Allowance(Id, 250'000), "unfunded debt admitted");
 			Step(A, 500'000); Check(A.Allowance(Id, 500'000) == G && A.GetMetrics().FundedDeferrals, "funding recovery");
 		});
+		Test("ProspectivePeerFifoUsesUnsentBytesWithoutOrdinaryAckCoupling", [&] {
+			constexpr std::uint64_t Ordinary = 2 * 1024 * 1024, Control = 64 * 1024;
+			constexpr std::uint64_t Limit = PooledReliableServiceProfile::PeerOrdinaryUnsentLimit;
+			static_assert(Limit == 126'645);
+			Admission A(ReliableServiceProfile::PooledService()); Step(A, 0); Step(A, 250'000, true, true, Ordinary + Control);
+			const auto Funding = Ledger::FundedOrdinary(Ordinary + Control, Ordinary, Ordinary);
+			Check(Funding && *Funding == Ordinary + Control, "ordinary plus control exposure is independently funded");
+			A.SetOrdinaryFunding(*Funding);
+			Check(A.SetOrdinaryUnsent(Id, Ordinary) && !A.Allowance(Id, 250'000),
+				"global funding room cannot conceal an oversized unsent per-peer FIFO prefix");
+			Check(A.SetOrdinaryUnsent(Id, Limit + 1) && !A.Allowance(Id, 250'000) &&
+				A.SetOrdinaryUnsent(Id, Limit) && A.Allowance(Id, 250'000) == G,
+				"prospective unsent resource guard has its exact derived boundary");
+			Check(A.SetOrdinaryUnsent(Id, 0) && A.Allowance(Id, 250'000) == G,
+				"same ordinary ACK debt and funding permit a grant after verified native first-send clears the prefix");
+		});
 		Test("ExactReceiptIgnoresGameplayAndRetransmission", [&] {
 			Ledger L; Sample S{.Connection = Id, .State = ConnectionState::Connected};
 			detail::ReliableServiceAcceptedBytes C{164, 100, 64};
 			Check(L.Observe(Id, C, S, 0, 7, 100).Valid, "initial");
 			S.ObservedAtMicroseconds = 1000; S.UniqueReliableStreamBytesFirstSent = 170;
+			S.StructuralPayloadBytesFirstSent = 100; S.OrdinaryPayloadBytesFirstSent = 64;
 			S.UniqueReliableStreamBytesAcked = 67; S.ReliablePayloadBytesAcked = 64;
 			S.ReliableStreamBytesRetransmitted = 1000;
 			auto R = L.Observe(Id, C, S, 1000, 7, 100);
 			Check(R.Valid && !R.RetiredBytes && !L.OrdinaryDebt && !L.StructuralRetired, "unrelated ACK attribution");
 			S.ObservedAtMicroseconds = 2000; S.UniqueReliableStreamBytesAcked = 170; S.ReliablePayloadBytesAcked = 164;
+			S.StructuralPayloadBytesAcked = 100;
 			S.AttributedRetirementSequence = 1; S.LastAttributedRetirementToken = 7;
 			S.LastAttributedRetirementMessageNumber = 9; S.LastAttributedRetiredPayloadBytes = 100;
 			R = L.Observe(Id, C, S, 2000, 7, 100); Check(R.Valid && R.RetiredBytes == 100, "matching receipt");
@@ -111,6 +167,37 @@ inline bool RunPooledReliableServiceProductionTests() {
 			S.ReliablePayloadBytesAcked--; Check(!L.Observe(Id, C, S, 2000, 0, 0).Valid, "counter reversal");
 			S.State = ConnectionState::Closed; S.CountersValid = false;
 			R = L.Observe(Id, C, S, 2000, 0, 0); Check(R.Valid && R.Terminal && !R.RetiredBytes, "invalid counters purge only");
+		});
+		Test("StructuralRetirementCannotBorrowAggregateOrdinaryAck", [&] {
+			for (const auto Activation : std::array<std::uint64_t, 2>{1'000'000, std::numeric_limits<std::uint64_t>::max()}) {
+				for (unsigned Mode = 0; Mode < 3; ++Mode) {
+					Ledger L; Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'000'000,
+						.State = ConnectionState::Connected};
+					Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid &&
+						L.PublishOffer(7, 100, Activation), "one exact Ready or bootstrap structural owner");
+					S.ObservedAtMicroseconds = 1'010'000;
+					S.UniqueReliableStreamBytesFirstSent = 206;
+					S.StructuralPayloadBytesFirstSent = S.OrdinaryPayloadBytesFirstSent = 100;
+					S.UniqueReliableStreamBytesAcked = 103; S.ReliablePayloadBytesAcked = 100;
+					S.StructuralPayloadBytesAcked = Mode == 0 ? 0 : 100;
+					if (Activation != std::numeric_limits<std::uint64_t>::max())
+						StampCompletion(S, 1, 7, 100, Activation, 1'001'000, 1'001'000);
+					if (Mode == 2) {
+						S.ActiveAttributedRetirementToken = 7; S.ActiveAttributedMessageNumber = 9;
+					} else {
+						S.AttributedRetirementSequence = 1; S.LastAttributedRetirementToken = 7;
+						S.LastAttributedRetirementMessageNumber = 9; S.LastAttributedRetiredPayloadBytes = 100;
+					}
+					const auto Result = L.Observe(Id, {200, 100, 100}, S, 1'010'000, 7, 100);
+					if (Mode == 1) {
+						Check(Result.Valid && Result.RetiredToken == 7 && Result.RetiredBytes == 100 &&
+							L.OrdinaryDebt == 100, "matching structural BODY ACK and receipt retire only structural debt");
+					} else {
+						Check(!Result.Valid && !Result.RetiredToken && !Result.RetiredBytes && L.Invalid && L.Offer &&
+							!L.PendingTurnover, "contradictory structural ACK/receipt cannot publish retirement or permit certification");
+					}
+				}
+			}
 		});
 		Test("FiniteGrantFirstSendHealthDoesNotRequireShortAckDelta", [&] {
 			Ledger L;
@@ -132,8 +219,9 @@ inline bool RunPooledReliableServiceProductionTests() {
 				PooledReliableServiceProfile::RunningGrantBoundByteMicroseconds + 1;
 			S.StructuralServiceFailed = true;
 			Result = L.Observe(Id, {100, 100, 0}, S, 6000, 7, 100);
-			Check(Result.Valid && !Result.Qualified && !L.ServiceEligible,
-				"persistent native deficit defeats fresh feedback");
+			Check(Result.Valid && Result.Qualified && L.ServiceEligible,
+				"legacy native deficit remains diagnostic under the hybrid hard predicate");
+			S.StructuralCompletionServiceFailed = true;
 			S.ObservedAtMicroseconds = 7000;
 			S.UniqueReliableStreamBytesAcked = 102;
 			S.ReliablePayloadBytesAcked = 100;
@@ -146,21 +234,22 @@ inline bool RunPooledReliableServiceProductionTests() {
 			S.LastAttributedRetiredPayloadBytes = 100;
 			Result = L.Observe(Id, {100, 100, 0}, S, 7000, 7, 100);
 			Check(Result.Valid && Result.RetiredBytes == 100 && !Result.Qualified,
-				"later ACK retires exactly but does not erase a failed grant");
+				"later ACK retires exactly but does not erase a hard completion failure");
 		});
 		Test("QueuedOfferChargesBeforeNativeAttribution", [&] {
 			Ledger L; Sample S{.Connection = Id, .State = ConnectionState::Connected};
 			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid, "baseline");
 			Check(L.PublishOffer(7, 77, 1'000'000), "one exact accepted offer");
-			S.ObservedAtMicroseconds = 1'006'075;
-			auto R = L.Observe(Id, {77, 77, 0}, S, 1'006'075, 7, 77);
+			S.ObservedAtMicroseconds = 1'037'325;
+			auto R = L.Observe(Id, {77, 77, 0}, S, 1'037'325, 7, 77);
 			Check(R.Valid && !R.Qualified && L.QueuedOfferFailed,
 				"scheduler-held accepted bytes cannot evade finite latency");
 			S.ActiveAttributedRetirementToken = 7; S.ActiveAttributedMessageNumber = 9;
 			S.StructuralPayloadBytesFirstSent = 77; S.UniqueReliableStreamBytesFirstSent = 77;
-			R = L.Observe(Id, {77, 77, 0}, S, 1'006'075, 7, 77);
-			Check(R.Valid && !R.Qualified && !L.Offer,
-				"late catch-up cannot erase an earlier queued-offer failure");
+			StampCompletion(S, 1, 7, 77, 1'000'000, 1'037'325, 1'037'325);
+			R = L.Observe(Id, {77, 77, 0}, S, 1'037'325, 7, 77);
+			Check(R.Valid && !R.Qualified && L.Offer,
+				"late catch-up cannot erase failure or discard ACK-owned turnover metadata");
 		});
 		Test("IncompleteNativeResultPreservesEvidenceFrontier", [&] {
 			Ledger L; Sample S{.Connection = Id, .State = ConnectionState::Connected};
@@ -182,19 +271,208 @@ inline bool RunPooledReliableServiceProductionTests() {
 			S.ActiveAttributedRetirementToken = 7; S.ActiveAttributedMessageNumber = 9;
 			S.StructuralPayloadBytesFirstSent = 77; S.UniqueReliableStreamBytesFirstSent = 77;
 			S.StructuralServiceFailed = true;
+			S.StructuralCompletionServiceFailed = true;
+			StampCompletion(S, 1, 7, 77, 1'000'000, 1'060'002, 1'060'002);
 			R = L.Observe(Id, {77, 77, 0}, S, 1'060'002, 7, 77);
-			Check(R.Valid && R.Available && !R.Qualified && !L.ServiceEligible && !L.Offer,
-				"late native result preserves real failed F1 history");
+			Check(R.Valid && R.Available && !R.Qualified && !L.ServiceEligible && L.Offer,
+				"late native result preserves hard failure and exact ACK-owned offer history");
 		});
 		Test("SuccessfulRequalificationCanRestoreGrantHealth", [&] {
 			Ledger L; Sample S{.Connection = Id, .State = ConnectionState::Connected};
 			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid, "baseline");
-			S.ObservedAtMicroseconds = 1'001'000; S.StructuralServiceFailed = true;
+			S.ObservedAtMicroseconds = 1'001'000; S.StructuralCompletionServiceFailed = true;
 			Check(!L.Observe(Id, {0, 0, 0}, S, 1'001'000, 0, 0).Qualified,
 				"failed grant is unhealthy");
-			S.ObservedAtMicroseconds = 2'001'000; S.StructuralServiceFailed = false;
+			S.ObservedAtMicroseconds = 2'001'000; S.StructuralCompletionServiceFailed = false;
 			Check(L.Observe(Id, {0, 0, 0}, S, 2'001'000, 0, 0).Qualified,
 				"new independent successful qualification can restore service health");
+		});
+		Test("HardCertificateIntegrityCannotBeRetrospectivelyCorrected", [&] {
+			Ledger L; Sample S{.Connection = Id, .State = ConnectionState::Connected};
+			S.StructuralCompletionEvidenceInvalid = true;
+			Check(!L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid && L.Invalid,
+				"invalid native hard evidence remains fatal");
+			Ledger Immutable; S = Sample{.Connection = Id, .ObservedAtMicroseconds = 1'007'070,
+				.State = ConnectionState::Connected};
+			S.UniqueReliableStreamBytesFirstSent = S.StructuralPayloadBytesFirstSent = 77;
+			S.ActiveAttributedRetirementToken = 1; S.ActiveAttributedMessageNumber = 101;
+			S.StructuralCompletedGrantSequence = S.StructuralLastCompletedGrantToken = 1;
+			S.StructuralLastCompletedGrantBytes = 77; S.StructuralLastCompletedGrantActivatedAtMicroseconds = 1'000'000;
+			S.StructuralLastCompletedGrantFirstSendAtMicroseconds = S.StructuralLastCompletedGrantCompletedAtMicroseconds = 1'007'070;
+			S.StructuralLastCompletedCompletionFailed = true;
+			Check(Immutable.PublishOffer(1, 77, 1'000'000), "one exact owned completion clock");
+			Check(Immutable.Observe(Id, {77, 77, 0}, S, 1'007'070, 1, 77).Valid,
+				"first exact completed native record is retained");
+			S.StructuralLastCompletedCompletionFailed = false;
+			Check(!Immutable.Observe(Id, {77, 77, 0}, S, 1'007'070, 1, 77).Valid,
+				"unchanged completed sequence cannot acquire a healthier hard verdict");
+		});
+		Test("MainOpportunityArmsBeforePreparationAndHasExactBoundary", [&] {
+			for (const auto Elapsed : {100'000ULL, 100'001ULL}) {
+				Ledger L;
+				Check(L.BeginAdmissionOpportunity(1'000'000, true), "ready work is observed before preparation");
+				Check(L.CompleteAdmissionOpportunity(1'000'000 + Elapsed, false) == (Elapsed == 100'000) &&
+					L.MainOpportunityFailed == (Elapsed == 100'001) && !L.TurnoverFailed &&
+					L.MaximumMainOpportunityMicroseconds == Elapsed && L.CompletedAdmissionOpportunities == 1,
+					"completed initial opportunity has one 100-ms budget with exact maximum");
+				if (L.ExecutionFailed) {
+					const auto R = L.Observe(Id, {0, 0, 0}, {}, 1'200'000, 0, 0);
+					Check(R.Valid && !R.Available && !R.Qualified && R.ExecutionFailed && R.MainOpportunityFailed &&
+						R.MaximumMainOpportunityMicroseconds == Elapsed,
+						"missing native feedback does not conceal a measured Main execution failure");
+				}
+			}
+			Ledger Idle;
+			Check(Idle.BeginAdmissionOpportunity(1, false) && Idle.CompleteAdmissionOpportunity(1'000'000, false) &&
+				!Idle.ExecutionFailed && !Idle.CompletedAdmissionOpportunities,
+				"idle time before observed ready work is not charged");
+		});
+		Test("ExactRetirementRetainsTurnoverUntilCompletedAdmissionPass", [&] {
+			for (const auto Finish : {150'000ULL, 150'001ULL}) {
+				Ledger L; Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'000'000, .State = ConnectionState::Connected};
+				Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Qualified &&
+					L.BeginAdmissionOpportunity(1'000'000, true) && L.PublishOffer(1, 77, 1'000'000), "first exact offer");
+				S.ObservedAtMicroseconds = 1'007'070;
+				S.UniqueReliableStreamBytesFirstSent = S.StructuralPayloadBytesFirstSent = 77;
+				S.ActiveAttributedRetirementToken = 1; S.ActiveAttributedMessageNumber = 101;
+				S.StructuralServiceFailed = true; // Legacy timing is retained as diagnostic.
+				StampCompletion(S, 1, 1, 77, 1'000'000, 1'007'070, 1'007'070);
+				Check(L.Observe(Id, {77, 77, 0}, S, 1'007'070, 1, 77).Qualified && L.Offer && !L.PendingTurnover,
+					"native completion cannot discard the ACK-owned activation");
+				Check(L.CompleteAdmissionOpportunity(1'020'000, true) && L.BeginAdmissionOpportunity(1'100'000, true) &&
+					L.CompleteAdmissionOpportunity(1'110'000, true), "actual complete opportunities do not reset turnover activation");
+				S.ObservedAtMicroseconds = 1'140'000;
+				S.UniqueReliableStreamBytesAcked = S.StructuralPayloadBytesAcked = S.ReliablePayloadBytesAcked = 77;
+				S.ActiveAttributedRetirementToken = S.ActiveAttributedMessageNumber = 0;
+				S.AttributedRetirementSequence = S.LastAttributedRetirementToken = 1;
+				S.LastAttributedRetirementMessageNumber = 101; S.LastAttributedRetiredPayloadBytes = 77;
+				const auto Receipt = L.Observe(Id, {77, 77, 0}, S, 1'140'000, 1, 77);
+				Check(Receipt.Valid && Receipt.RetiredBytes == 77 && !L.Offer && L.PendingTurnover && !L.CompletedTurnovers,
+					"verified ACK retirement awaits the end of the complete admission pass");
+				Check(L.PublishOffer(2, 77, 1'145'000), "prior turnover metadata can coexist with a newly accepted offer");
+				Check(L.Observe(Id, {154, 154, 0}, {}, 1'145'000, 2, 77).Valid, "new accepted bytes remain exact");
+				Check(L.CompleteAdmissionOpportunity(1'000'000 + Finish, true) == (Finish == 150'000) &&
+					L.TurnoverFailed == (Finish == 150'001) && !L.MainOpportunityFailed && L.CompletedTurnovers == 1 &&
+					!L.PendingTurnover && L.Offer && L.Offer->Token == 2 && L.MaximumTurnoverMicroseconds == Finish,
+					"one activation-to-completed-opportunity budget permits no post-ACK allowance");
+				const auto R = L.Observe(Id, {154, 154, 0}, {}, 1'000'000 + Finish, 2, 77);
+				Check(R.CompletedTurnovers == 1 && R.LastCompletedTurnoverToken == 1 &&
+					R.LastCompletedTurnoverActivatedAtMicroseconds == 1'000'000 &&
+					R.LastCompletedTurnoverAtMicroseconds == 1'000'000 + Finish &&
+					R.ExecutionFailed == (Finish == 150'001), "fixed turnover certificate is available without retimestamped native evidence");
+			}
+		});
+		Test("WithheldAckCannotReleaseDebtOrEvadeTurnoverDeadline", [&] {
+			Ledger L; Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'000'000, .State = ConnectionState::Connected};
+			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid &&
+				L.BeginAdmissionOpportunity(1'000'000, true) && L.PublishOffer(1, 77, 1'000'000), "owned grant");
+			S.ObservedAtMicroseconds = 1'005'000; S.UniqueReliableStreamBytesFirstSent = S.StructuralPayloadBytesFirstSent = 77;
+			S.ActiveAttributedRetirementToken = 1; S.ActiveAttributedMessageNumber = 101;
+			StampCompletion(S, 1, 1, 77, 1'000'000, 1'005'000, 1'005'000);
+			Check(L.Observe(Id, {77, 77, 0}, S, 1'005'000, 1, 77).Qualified, "timely native completion");
+			for (const auto At : {1'050'000ULL, 1'100'000ULL, 1'150'000ULL})
+				Check(L.CompleteAdmissionOpportunity(At, true), "completed Main opportunities remain in budget");
+			Check(!L.BeginAdmissionOpportunity(1'150'001, true) && L.ExecutionFailed && L.TurnoverFailed &&
+				!L.MainOpportunityFailed && !L.StructuralRetired && L.Offer && !L.PendingTurnover,
+				"elapsed time cannot retire an ACK-owned offer or extend its combined budget");
+			const auto R = L.Observe(Id, {77, 77, 0}, {}, 1'150'001, 1, 77);
+			Check(R.Valid && R.ExecutionFailed && R.TurnoverFailed && !R.RetiredBytes && !R.Qualified,
+				"Main execution failure remains measured separately from unresolved native feedback");
+		});
+		Test("BoundedTurnoverStorageRejectsSecondUncertifiedRetirement", [&] {
+			Ledger L; Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'000'000, .State = ConnectionState::Connected};
+			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid && L.PublishOffer(1, 77, 1'000'000), "first offer");
+			S.ObservedAtMicroseconds = 1'020'000;
+			S.UniqueReliableStreamBytesFirstSent = S.UniqueReliableStreamBytesAcked = 77;
+			S.StructuralPayloadBytesFirstSent = S.StructuralPayloadBytesAcked = S.ReliablePayloadBytesAcked = 77;
+			S.AttributedRetirementSequence = S.LastAttributedRetirementToken = 1;
+			S.LastAttributedRetirementMessageNumber = 101; S.LastAttributedRetiredPayloadBytes = 77;
+			StampCompletion(S, 1, 1, 77, 1'000'000, 1'020'000, 1'020'000);
+			Check(L.Observe(Id, {77, 77, 0}, S, 1'020'000, 1, 77).RetiredBytes == 77 && L.PendingTurnover &&
+				L.PublishOffer(2, 77, 1'020'001), "one prior turnover slot");
+			S.ObservedAtMicroseconds = 1'040'000;
+			S.UniqueReliableStreamBytesFirstSent = S.UniqueReliableStreamBytesAcked = 154;
+			S.StructuralPayloadBytesFirstSent = S.StructuralPayloadBytesAcked = S.ReliablePayloadBytesAcked = 154;
+			S.AttributedRetirementSequence = S.LastAttributedRetirementToken = 2;
+			S.LastAttributedRetirementMessageNumber = 102;
+			StampCompletion(S, 2, 2, 77, 1'020'001, 1'040'000, 1'040'000);
+			const auto R = L.Observe(Id, {154, 154, 0}, S, 1'040'000, 2, 77);
+			Check(!R.Valid && !R.RetiredBytes && L.Invalid && L.PendingTurnover && L.PendingTurnover->Token == 1,
+				"second retirement cannot overwrite fixed prior-turnover evidence or invent a returned receipt");
+			Ledger Bootstrap;
+			Check(Bootstrap.PublishOffer(1, 77, UINT64_MAX) && Bootstrap.BeginAdmissionOpportunity(1'000'000, false) &&
+				Bootstrap.CompleteAdmissionOpportunity(2'000'000, false) && !Bootstrap.ExecutionFailed &&
+				!Bootstrap.CompletedAdmissionOpportunities, "bootstrap sentinel never arms an execution clock");
+		});
+		Test("StaleExactReceiptCannotCertifyStructuralPermitReturn", [&] {
+			Ledger L; Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'000'000, .State = ConnectionState::Connected};
+			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid &&
+				L.BeginAdmissionOpportunity(1'000'000, true) && L.PublishOffer(1, 77, 1'000'000), "one owned offer");
+			S.ObservedAtMicroseconds = 1'010'000;
+			S.UniqueReliableStreamBytesFirstSent = S.UniqueReliableStreamBytesAcked = 77;
+			S.StructuralPayloadBytesFirstSent = S.StructuralPayloadBytesAcked = S.ReliablePayloadBytesAcked = 77;
+			S.AttributedRetirementSequence = S.LastAttributedRetirementToken = 1;
+			S.LastAttributedRetirementMessageNumber = 101; S.LastAttributedRetiredPayloadBytes = 77;
+			StampCompletion(S, 1, 1, 77, 1'000'000, 1'010'000, 1'010'000);
+			const auto Stale = L.Observe(Id, {77, 77, 0}, S, 1'080'000, 1, 77);
+			Check(Stale.Valid && Stale.RetiredBytes == 77 && !Stale.Available &&
+				L.PendingTurnover && !L.PendingTurnover->PermitAvailable &&
+				L.CompleteAdmissionOpportunity(1'080'000, false) && !L.CompletedTurnovers &&
+				!L.PublishOffer(2, 77, 1'080'001), "stale receipt retains the permit-return obligation after exact byte retirement");
+			S.ObservedAtMicroseconds = 1'090'000;
+			Check(L.Observe(Id, {77, 77, 0}, S, 1'090'000, 0, 0).Available &&
+				L.CompleteAdmissionOpportunity(1'090'000, false) && L.CompletedTurnovers == 1 &&
+				!L.PendingTurnover && !L.OpportunityArmed,
+				"same validated retirement certifies once only after fresh evidence and a completed opportunity");
+		});
+		Test("OrdinaryUnsentUsesNativeBodyFrontierWithoutAckCoupling", [&] {
+			Ledger L; Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'000'000, .State = ConnectionState::Connected};
+			Check(L.Observe(Id, {100, 0, 100}, S, 1'000'000, 0, 0).Valid && L.OrdinaryUnsent == 100,
+				"new ordinary acceptance is unsent until positive native body evidence");
+			Check(L.Observe(Id, {150, 0, 150}, {}, 1'000'001, 0, 0).OrdinaryUnsent == 150,
+				"missing feedback cannot reduce unsent work or ignore new acceptance");
+			S.ObservedAtMicroseconds = 1'000'002; S.UniqueReliableStreamBytesFirstSent = S.OrdinaryPayloadBytesFirstSent = 120;
+			Check(L.Observe(Id, {150, 0, 150}, S, 1'000'002, 0, 0).OrdinaryUnsent == 30 && L.OrdinaryDebt == 150,
+				"positive native body reduces FIFO prefix while ACK-owned debt remains charged");
+			Check(L.Observe(Id, {180, 0, 180}, {}, 1'000'003, 0, 0).OrdinaryUnsent == 60,
+				"unknown frontier preserves old first-send evidence and charges new ordinary work");
+			S.ObservedAtMicroseconds = 1'000'004; S.UniqueReliableStreamBytesAcked = S.ReliablePayloadBytesAcked = 100;
+			Check(L.Observe(Id, {180, 0, 180}, S, 1'000'004, 0, 0).OrdinaryUnsent == 60 && L.OrdinaryDebt == 80,
+				"ACK progress changes ordinary debt independently of unsent FIFO bytes");
+		});
+		Test("NativeBodyAndCompletionIdentityRejectFalseHealth", [&] {
+			for (unsigned Mode = 0; Mode < 4; ++Mode) {
+				Ledger L; Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'000'000, .State = ConnectionState::Connected};
+				S.UniqueReliableStreamBytesFirstSent = S.OrdinaryPayloadBytesFirstSent = 100;
+				if (Mode == 0) S.OrdinaryPayloadBytesFirstSent = 101;
+				if (Mode == 1) S.UniqueReliableStreamBytesFirstSent = 99;
+				if (Mode == 2) {
+					S.OrdinaryPayloadBytesFirstSent = 50; S.UniqueReliableStreamBytesAcked = S.ReliablePayloadBytesAcked = 51;
+				}
+				if (Mode == 3) {
+					Check(L.Observe(Id, {100, 0, 100}, S, 1'000'000, 0, 0).Valid, "valid native body baseline");
+					S.OrdinaryPayloadBytesFirstSent = 99; S.ObservedAtMicroseconds = 1'000'001;
+				}
+				Check(!L.Observe(Id, {100, 0, 100}, S, 1'000'001, 0, 0).Valid && L.Invalid,
+					"excess, false, ACK-before-first and reversed ordinary body evidence are invalid");
+			}
+			for (unsigned Mode = 0; Mode < 5; ++Mode) {
+				Ledger L; Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'007'070, .State = ConnectionState::Connected};
+				if (Mode != 4) Check(L.PublishOffer(1, 77, 1'000'000), "one exact structural offer");
+				S.UniqueReliableStreamBytesFirstSent = S.StructuralPayloadBytesFirstSent = 77;
+				S.ActiveAttributedRetirementToken = 1; S.ActiveAttributedMessageNumber = 101;
+				StampCompletion(S, 1, 1, 77, 1'000'000, 1'007'070, 1'007'070);
+				if (Mode == 0) {
+					S.StructuralCompletedGrantSequence = S.StructuralLastCompletedGrantToken = 0;
+					S.StructuralLastCompletedGrantBytes = S.StructuralLastCompletedGrantActivatedAtMicroseconds = 0;
+					S.StructuralLastCompletedGrantFirstSendAtMicroseconds = S.StructuralLastCompletedGrantCompletedAtMicroseconds = 0;
+				}
+				if (Mode == 1) S.StructuralLastCompletedGrantToken = 2;
+				if (Mode == 2) S.StructuralLastCompletedGrantBytes = 76;
+				if (Mode == 3) ++S.StructuralLastCompletedGrantActivatedAtMicroseconds;
+				Check(!L.Observe(Id, {77, 77, 0}, S, 1'007'070, 1, 77).Valid && L.Invalid,
+					"full native bytes without an owned matching completion certificate cannot qualify");
+			}
 		});
 		Test("OrdinarySplitBoundContainsEveryLegalHistory", [&] {
 			for (std::uint64_t Total = 0; Total <= 512 * 1024; Total += 1024) {
@@ -600,7 +878,7 @@ inline bool RunPooledReliableServiceProductionTests() {
 		std::cerr << "[Network:PooledProduction] FAIL " << Error.what() << '\n'; return false;
 	}
 	std::cout << "[Network:PooledProduction] cases=" << Passed << " PASS\n";
-	return Passed == 18;
+	return Passed == 29;
 }
 
 // Candidate-only deterministic schedules. The real admission accountant is
@@ -676,7 +954,7 @@ inline Result Run(Input Configuration) {
 					OrdinaryDebt = Configuration.OrdinaryHoldUs ? 1 : 0;
 			}
 			Require(Account.ObserveService({Index + 1, 1}, Admission::ServiceObservation{Now, true, true, OrdinaryDebt}));
-			if (Value.Active && Value.Retired && !OrdinaryDebt) Value.Active = false;
+			if (Value.Active && Value.Retired) Value.Active = false;
 		}
 		Account.SetOrdinaryFunding(224 * 1024);
 		const U Start = Configuration.Unfair ? 0 : Cursor;
@@ -745,6 +1023,107 @@ inline Result Run(Input Configuration) {
 	return Output;
 }
 
+struct JournalCursorResult {
+	U ServedPeers = 0, MaximumFirstWaitUs = 0, HorizonUs = 0;
+	U FirstGrantWaveReaderAdvance = 0, FirstHeldStepReaderAdvance = 0;
+	U JournalReads = 0, MinimumReaderVisits = 0, Accepted = 0, Retired = 0;
+	U SlotsHigh = 0, DebtHigh = 0;
+};
+inline JournalCursorResult RunJournalCursorSchedule(bool SeparateCursors) {
+	Admission Account(network::ReliableServiceProfile::PooledService());
+	std::array<std::optional<Admission::Reservation>, 32> Receipts{};
+	std::array<U, 32> AcceptedStep{}, ReaderVisits{};
+	std::array<std::optional<U>, 32> FirstAcceptedStep{};
+	U GrantCursor = 0, JournalCursor = 0;
+	JournalCursorResult Output;
+	const auto Require = [](bool Value) {
+		if (!Value) throw std::runtime_error("journal/grant cursor schedule invariant");
+	};
+	const auto Observe = [&](U At) {
+		for (std::uint32_t Index = 0; Index < 32; ++Index)
+			Require(Account.ObserveService({Index + 1, 1}, Admission::ServiceObservation{At, true, true}));
+		Account.SetOrdinaryFunding(224 * 1024);
+	};
+	Require(Account.BeginStep(0)); Observe(0); Account.EndStep();
+	// Supported 128-record peer / 512-record global limits, with continuously
+	// ready, coalescible replicated changes. ProduceIncremental's reserve for
+	// one fallback examination makes ReadLimit=(Allowance+1)/2. Its zero-
+	// transition shadow read charges records without consuming these changes.
+	// Prompt native completion and exact seven-Step ACK retirement are supplied
+	// inputs, not a GNS, live journal, callback or physical-host replay.
+	constexpr U PeerReadLimit = 128, GlobalReadLimit = 512, TurnoverSteps = 7, Steps = 84;
+	Require(Steps * PeerReadLimit < DefaultChangeJournalCapacity);
+	Require(TurnoverSteps * FrameUs <= network::PooledReliableServiceProfile::StructuralTurnoverMicroseconds);
+	for (U Step = 0; Step < Steps; ++Step) {
+		const U At = 250'000 + Step * FrameUs;
+		Require(Account.BeginStep(At));
+		for (std::uint32_t Index = 0; Index < 32; ++Index) {
+			if (!Receipts[Index] || Step - AcceptedStep[Index] < TurnoverSteps) continue;
+			const auto Receipt = *Receipts[Index];
+			Require(Account.Retire(Receipt.Connection, Receipt.Token, Receipt.Bytes));
+			Require(!Account.Retire(Receipt.Connection, Receipt.Token, Receipt.Bytes));
+			Receipts[Index].reset();
+		}
+		Observe(At); // Complete, fresh receipt returns exactly the retired permit.
+		std::array<U, 32> Consumed{};
+		U GlobalConsumed = 0;
+		std::optional<U> LastGranted, LastReader;
+		const U GrantStart = GrantCursor;
+		const U JournalStart = SeparateCursors ? JournalCursor : GrantCursor;
+		for (U Offset = 0; Offset < 32; ++Offset) {
+			const auto Index = static_cast<std::uint32_t>((GrantStart + Offset) % 32);
+			if (Receipts[Index]) continue;
+			const network::ConnectionId Id{Index + 1, 1};
+			Account.DeferSize(Id, 77);
+			if (Account.Allowance(Id, At) < 77) continue;
+			const U Allowance = std::min(PeerReadLimit - Consumed[Index], GlobalReadLimit - GlobalConsumed);
+			Require(Allowance != 0);
+			const U Examined = (Allowance + 1) / 2;
+			Consumed[Index] += Examined; GlobalConsumed += Examined;
+			++ReaderVisits[Index]; LastReader = Index;
+			auto Receipt = Account.Reserve(Id, 77);
+			Require(Receipt && Account.Commit(*Receipt));
+			Receipts[Index] = *Receipt; AcceptedStep[Index] = Step;
+			if (!FirstAcceptedStep[Index]) FirstAcceptedStep[Index] = Step;
+			LastGranted = Index;
+		}
+		for (U Offset = 0; Offset < 32 && GlobalConsumed < GlobalReadLimit; ++Offset) {
+			const auto Index = static_cast<std::uint32_t>((JournalStart + Offset) % 32);
+			const U Allowance = std::min(PeerReadLimit - Consumed[Index], GlobalReadLimit - GlobalConsumed);
+			if (!Allowance) continue;
+			const U Examined = (Allowance + 1) / 2;
+			Consumed[Index] += Examined; GlobalConsumed += Examined;
+			++ReaderVisits[Index]; LastReader = Index;
+		}
+		Require(LastReader && GlobalConsumed == GlobalReadLimit);
+		Require(std::ranges::all_of(Consumed, [&](U Value) { return Value <= PeerReadLimit; }));
+		const U ReaderAdvance = (*LastReader + 1 + 32 - JournalStart) % 32;
+		if (!Step) Output.FirstGrantWaveReaderAdvance = ReaderAdvance;
+		if (Step == 1) Output.FirstHeldStepReaderAdvance = ReaderAdvance;
+		if (SeparateCursors) {
+			if (LastGranted) GrantCursor = (*LastGranted + 1) % 32;
+			JournalCursor = (*LastReader + 1) % 32;
+		} else GrantCursor = (*LastReader + 1) % 32;
+		Output.JournalReads += GlobalConsumed;
+		const auto Metrics = Account.GetMetrics();
+		Require(Metrics.ActiveDrainGrants <= 4 && Metrics.OutstandingBytes <= 4 * G &&
+			Metrics.AcceptedBytes == Metrics.VerifiedAttributedRetirement + Metrics.OutstandingBytes &&
+			!Metrics.TerminalReleasedBytes);
+		Output.SlotsHigh = std::max(Output.SlotsHigh, Metrics.ActiveDrainGrants);
+		Output.DebtHigh = std::max(Output.DebtHigh, Metrics.OutstandingBytes);
+		Output.Accepted = Metrics.AcceptedBytes; Output.Retired = Metrics.VerifiedAttributedRetirement;
+		Account.EndStep();
+	}
+	Output.HorizonUs = (Steps - 1) * FrameUs;
+	Output.MinimumReaderVisits = *std::ranges::min_element(ReaderVisits);
+	for (const auto &First : FirstAcceptedStep) {
+		if (!First) continue;
+		++Output.ServedPeers;
+		Output.MaximumFirstWaitUs = std::max(Output.MaximumFirstWaitUs, *First * FrameUs);
+	}
+	return Output;
+}
+
 inline bool RunTests() {
 	U Passed = 0;
 	const auto Check = [](bool Value, const char *Message) { if (!Value) throw std::runtime_error(Message); };
@@ -789,22 +1168,25 @@ inline bool RunTests() {
 				<< " eligible_wait_us=" << Value.InitialWaitMax << " probe_at_us=" << Value.ProbeAt
 				<< " probe_unique_bytes=" << Value.ProbeSent << " final_bytes=" << Value.Accepted << '\n';
 		});
-		Test("AckDelayAndOrdinaryDebtKeepSlotsOwned", [&] {
+		Test("AckDelayKeepsStructuralPermitOrdinaryFundingIsIndependent", [&] {
 			const auto Fast = Run({.GroupsPerPeer = 2, .NativeRate = Rate});
 			const auto Delayed = Run({.GroupsPerPeer = 2, .NativeRate = Rate, .AckDelayUs = 3'000});
 			const auto Ordinary = Run({.GroupsPerPeer = 2, .NativeRate = Rate, .OrdinaryHoldUs = 3'000});
 			Check(Fast.Converged && Delayed.Converged && Ordinary.Converged &&
-				Delayed.InitialWaitMax == 350'007 && Ordinary.InitialWaitMax == 350'007,
-				"ACK or ordinary debt delays release to third Main observation");
-			Check(Delayed.CompletedAt > Fast.CompletedAt && Ordinary.CompletedAt > Fast.CompletedAt,
-				"native completion cannot prematurely release a slot");
+				Delayed.InitialWaitMax == 350'007 && Ordinary.InitialWaitMax == Fast.InitialWaitMax,
+				"ACK still holds the permit while unrelated ordinary debt no longer holds retired structural ownership");
+			Check(Delayed.CompletedAt > Fast.CompletedAt && Ordinary.CompletedAt == Fast.CompletedAt,
+				"only exact structural retirement returns its permit; ordinary exposure remains separately funded");
 			std::cout << "[Network:HybridCapacity] delayed native_duration_us=" << Delayed.NativeDurationMax
 				<< " ack_delay_us=3000 eligible_wait_us=" << Delayed.InitialWaitMax << '\n';
 		});
-		Test("FourteenMiBSenderIsRejectedDespiteTimelyCompletion", [&] {
+		Test("FormerBurstProposalWouldRejectTimelyFourteenMiBPeer", [&] {
+			// Preserve this counterexample to the earlier unadopted proposal. The
+			// current hard native certificate uses uniform completion; it does not
+			// impose this separate per-peer burst floor.
 			const auto Value = Run({.GroupsPerPeer = 2, .NativeRate = 14 * 1024 * 1024});
 			Check(Value.Converged && !Value.CompletionFailed && Value.BurstFailed && Value.FairnessFailed,
-				"a 14-MiB/s sender may pass H1 but must fail burst capability");
+				"the former proposed burst rule rejects a timely 14-MiB/s peer independently of current hard health");
 		});
 		Test("CorruptRotationCannotHideStarvedPeer", [&] {
 			const auto Value = Run({.GroupsPerPeer = 64, .Unfair = true});
@@ -851,9 +1233,11 @@ inline bool RunTests() {
 				<< " bound_us=" << Bound << " peer_bytes=" << 1280 * G << " total_bytes=" << Value.Accepted
 				<< " hypothetical_source_records=" << 1280 * 9 << '\n';
 		});
-		Test("ContinuingOrdinaryTrafficRetainsAlreadyRetiredStructuralSlots", [&] {
+		Test("CorrectedStructuralPermitsServeAllPeersUnderContinuingOrdinaryTraffic", [&] {
 			Admission Account(network::ReliableServiceProfile::PooledService());
-			std::array<Admission::Reservation, 4> Receipts{};
+			std::array<std::optional<Admission::Reservation>, 32> Receipts{};
+			std::array<U, 32> AcceptedStep{}, AcceptedGroups{};
+			U Cursor = 4;
 			const auto Observe = [&](U At, U Ordinary) {
 				for (std::uint32_t Index = 0; Index < 32; ++Index)
 					Check(Account.ObserveService({Index + 1, 1},
@@ -865,6 +1249,7 @@ inline bool RunTests() {
 			for (std::uint32_t Index = 0; Index < 4; ++Index) {
 				auto Receipt = Account.Reserve({Index + 1, 1}, G);
 				Check(Receipt && Account.Commit(*Receipt), "four structural grants accepted"); Receipts[Index] = *Receipt;
+				AcceptedGroups[Index] = 1;
 			}
 			Account.EndStep();
 			// This supplied ordinary stream is one 115-B complete Event message
@@ -877,38 +1262,80 @@ inline bool RunTests() {
 				"continuing traffic fits selected peer and aggregate byte/message envelopes");
 			Check(FrameUs < OrdinaryRetirementUs && OrdinaryRetirementUs < 2 * FrameUs,
 				"individual finite retirement need not create a zero-debt snapshot");
-			for (U Step = 0; Step < 64; ++Step) {
-				const U At = 250'000 + (Step + 2) * FrameUs;
+			bool Converged = false;
+			for (U Step = 1; Step <= 256; ++Step) {
+				const U At = 250'000 + Step * FrameUs;
 				Check(Account.BeginStep(At), "nominal observation");
-				if (!Step) for (const auto &Receipt : Receipts)
-					Check(Account.Retire(Receipt.Connection, Receipt.Token, Receipt.Bytes), "exact structural retirement");
-				const U OrdinaryAccepted = (Step + 1) * EventBytes;
-				const U OrdinaryRetired = Step > 1 ? (Step - 1) * EventBytes : 0;
+				for (std::uint32_t Index = 0; Index < 32; ++Index) {
+					if (Receipts[Index] && Step - AcceptedStep[Index] >= 2) {
+						const auto &Receipt = *Receipts[Index];
+						Check(Account.Retire(Receipt.Connection, Receipt.Token, Receipt.Bytes) &&
+							!Account.Retire(Receipt.Connection, Receipt.Token, Receipt.Bytes), "exact structural retirement once");
+						Receipts[Index].reset();
+					}
+				}
+				const U OrdinaryAccepted = Step * EventBytes;
+				const U OrdinaryRetired = Step > 1 ? (Step - 2) * EventBytes : 0;
 				Observe(At, OrdinaryAccepted - OrdinaryRetired);
-				for (std::uint32_t Index = 4; Index < 32; ++Index) {
-					const network::ConnectionId Id{Index + 1, 1}; Account.DeferSize(Id, G);
-					Check(!Account.Allowance(Id, At), "eligible peers remain excluded despite structural retirement");
+				const U Start = Cursor;
+				for (U Offset = 0; Offset < 32; ++Offset) {
+					const auto Index = static_cast<std::uint32_t>((Start + Offset) % 32);
+					const network::ConnectionId Id{Index + 1, 1};
+					if (Receipts[Index] || AcceptedGroups[Index] == 2) { Account.NoWork(Id); continue; }
+					Account.DeferSize(Id, G);
+					auto Receipt = Account.Reserve(Id, G);
+					if (!Receipt) continue;
+					Check(Account.Commit(*Receipt), "eligible peer receives bounded structural service opportunity");
+					Receipts[Index] = *Receipt; AcceptedStep[Index] = Step; ++AcceptedGroups[Index];
+					Cursor = (Index + 1) % 32;
 				}
 				const auto Metrics = Account.GetMetrics();
-				Check(!Metrics.OutstandingBytes && Metrics.ActiveDrainGrants == 4 &&
-					Metrics.AcceptedBytes == 4 * G && Metrics.VerifiedAttributedRetirement == 4 * G,
-					"ordinary traffic retains empty structural slots without violating exact byte conservation");
+				Check(Metrics.OutstandingBytes <= 4 * G && Metrics.ActiveDrainGrants <= 4 &&
+					Metrics.AcceptedBytes == Metrics.VerifiedAttributedRetirement + Metrics.OutstandingBytes &&
+					!Metrics.TerminalReleasedBytes, "independent ordinary funding preserves four permits and exact structural debt");
 				Account.EndStep();
+				if (!Metrics.ActiveDrainGrants && std::ranges::all_of(AcceptedGroups, [](U Count) { return Count == 2; })) {
+					Converged = true; break;
+				}
 			}
-			const U QuiescentAt = 250'000 + 67 * FrameUs;
-			Check(Account.BeginStep(QuiescentAt), "all last ordinary messages can retire"); Observe(QuiescentAt, 0);
-			Check(!Account.GetMetrics().ActiveDrainGrants && Account.Allowance({5, 1}, QuiescentAt) == G,
-				"quiescence releases the slots without new structural service or a funding change");
-			Account.EndStep();
+			Check(Converged && Account.GetMetrics().AcceptedBytes == 32 * 2 * G &&
+				Account.GetMetrics().VerifiedAttributedRetirement == 32 * 2 * G,
+				"all 32 peers receive two exact structural grants without stopping the ordinary stream");
 			std::cout << "[Network:HybridCapacity] ordinary_continuing peers=4 complete_message_bytes=115"
-				<< " interval_us=" << FrameUs << " retirement_us=25000 blocked_eligible_peers=28"
-				<< " structural_outstanding=0 structural_retired=" << 4 * G << '\n';
+				<< " interval_us=" << FrameUs << " retirement_us=25000 served_eligible_peers=32"
+				<< " structural_outstanding=0 structural_retired=" << 32 * 2 * G << '\n';
+		});
+		Test("CoupledJournalCursorCanStarveTwentyEightReadyPeers", [&] {
+			const auto Value = RunJournalCursorSchedule(false);
+			Check(Value.FirstGrantWaveReaderAdvance == 12 && Value.FirstHeldStepReaderAdvance == 14,
+				"production geometric read quota advances twelve after a grant wave and fourteen while slots are held");
+			Check((12 + 6 * 14) % 32 == 0 && Value.ServedPeers == 4 &&
+				Value.HorizonUs > network::PooledReliableServiceProfile::EligibleAdmissionWaitMicroseconds,
+				"coupled rotation returns to the same four peers and supplies no first service to twenty-eight before the bound");
+			Check(Value.MinimumReaderVisits > 0 && Value.JournalReads == 84 * 512 &&
+				Value.SlotsHigh == 4 && Value.DebtHigh == 4 * 77,
+				"bounded read progress and conserved permits do not imply grant opportunity fairness");
+			std::cout << "[Network:HybridCapacity] coupled_cursor served_peers=" << Value.ServedPeers
+				<< " unserved_peers=28 horizon_us=" << Value.HorizonUs
+				<< " ack_turnover_us=" << 7 * FrameUs << " physical_measurement=0\n";
+		});
+		Test("AcceptedGrantCursorServesAllPeersWithoutSuppressingJournalReads", [&] {
+			const auto Value = RunJournalCursorSchedule(true);
+			Check(Value.ServedPeers == 32 && Value.MaximumFirstWaitUs == 7 * 7 * FrameUs &&
+				Value.MaximumFirstWaitUs <= network::PooledReliableServiceProfile::EligibleAdmissionWaitMicroseconds,
+				"accepted-grant rotation serves the eighth cohort within seven seven-Step slot turnovers");
+			Check(Value.MinimumReaderVisits > 0 && Value.JournalReads == 84 * 512 &&
+				Value.SlotsHigh == 4 && Value.DebtHigh == 4 * 77 && Value.Accepted > Value.Retired,
+				"independent shadow rotation preserves bounded journal service and exact outstanding structural ownership");
+			std::cout << "[Network:HybridCapacity] separate_cursors served_peers=" << Value.ServedPeers
+				<< " maximum_first_wait_us=" << Value.MaximumFirstWaitUs
+				<< " minimum_reader_visits=" << Value.MinimumReaderVisits << " physical_measurement=0\n";
 		});
 	} catch (const std::exception &Error) {
 		std::cerr << "[Network:HybridCapacity] FAIL " << Error.what() << '\n'; return false;
 	}
 	std::cout << "[Network:HybridCapacity] cases=" << Passed << " candidate_qualified=0\n";
-	return Passed == 11;
+	return Passed == 13;
 }
 }
 }

@@ -51,7 +51,13 @@ public:
 		if (!Profile.IsPooled() || Found == Peers.end() || !Found->second.Seen || Active) return false;
 		auto &Value = Found->second;
 		Value.Service = Service;
-		if (Value.OwnsGrant && !Value.Debt && Service && !Service->OrdinaryDebt) {
+		// Retire has already verified the exact generation/token/byte receipt.
+		// GameSession's PooledReliableServiceFeedback ledger certifies Available
+		// from complete, fresh generation-valid native evidence at consumption;
+		// a missing/stale sample cannot release a permit.
+		// This permit owns structural debt. Ordinary followers remain charged by
+		// the independent server-wide funding ledger and retain reliable FIFO.
+		if (Value.OwnsGrant && !Value.Debt && Service && Service->Available) {
 			Value.OwnsGrant = false; --Totals.ActiveDrainGrants;
 			EmitGrantLifecycle(Id, Value, AdmissionEvidenceKind::GrantReleased, Now);
 			ClearDiagnosticGrant(Value);
@@ -59,6 +65,17 @@ public:
 		return true;
 	}
 	void SetOrdinaryFunding(std::uint64_t Bytes) { OrdinaryFunding = Bytes; }
+	bool SetOrdinaryUnsent(ConnectionId Id, std::uint64_t Bytes) {
+		auto Found = Peers.find(Id);
+		if (!Profile.IsPooled() || Found == Peers.end() || !Found->second.Exposure) return false;
+		// Pooled debt and global funding already have exact owners. Reuse the
+		// existing FIFO exposure word for the conservative native-unsent prefix.
+		const auto Remaining = AggregateExposure - *Found->second.Exposure;
+		if (Bytes > std::numeric_limits<std::uint64_t>::max() - Remaining) return false;
+		AggregateExposure = Remaining + Bytes;
+		Found->second.Exposure = Bytes;
+		return true;
+	}
 	bool Retire(ConnectionId Id, std::uint64_t Token, std::uint64_t Bytes) {
 		auto Found = Peers.find(Id);
 		if (!Profile.IsPooled() || Found == Peers.end() || !Token || !Bytes ||
@@ -134,7 +151,9 @@ public:
 				Add(Totals.GrantDeferrals, 1); ReleaseWait(Id); return 0;
 			}
 		}
-		const auto PeerRoom = Profile.IsPooled() ? MaximumReliableServiceGroupBytes :
+		const auto PeerRoom = Profile.IsPooled()
+			? (*Value.Exposure <= PooledReliableServiceProfile::PeerOrdinaryUnsentLimit
+				? MaximumReliableServiceGroupBytes : std::uint64_t{0}) :
 			Room(*Value.Exposure, Profile.PeerBacklog - Profile.GameplayBurst, Value.Backlogged);
 		const auto GlobalRoom = Profile.IsPooled() ? FundedRoom() : Room(AggregateExposure,
 			Profile.GlobalBacklog - Profile.GameplayBurst * Profile.MaximumConnections, GlobalBacklogged);

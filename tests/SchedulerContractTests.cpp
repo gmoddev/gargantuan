@@ -3,6 +3,7 @@
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include "../src/runtime/PublicationLatencyDiagnostics.hpp"
 #include "../src/network/SessionSendAllowance.hpp"
+#include "../src/network/ReliableServiceFeedback.hpp"
 #include "ReliableByteAdmissionFixture.hpp"
 
 #include <algorithm>
@@ -351,22 +352,76 @@ int main() {
 			[](void *, PublicationLatencyRecord) noexcept {},
 			[](void *, const char *, ConnectionId, std::span<const std::byte>, std::uint64_t) noexcept {},
 			[](void *Context, ConnectionId, std::span<const std::byte>) noexcept {
-				auto &Value = *static_cast<State *>(Context); return OrdinaryDemandTag{++Value.Sequence, Value.Phase};
+				auto &Value = *static_cast<State *>(Context); return OrdinaryDemandTag{++Value.Sequence, Value.Phase, 0, true};
 			}};
 		auto *Previous = ActivePublicationLatency; ActivePublicationLatency = &Sink;
 		RecordingTransport Transport({1, 1}); NetworkScheduler Scheduler(Transport); const auto Limits = TestLimits();
 		Check(Scheduler.RegisterConnection({1, 1}, Limits), "ordinary phase fixture registers production scheduler");
 		Check(Scheduler.Submit(*Intent({1, 1}, DeliveryMode::ReliableOrdered, TrafficClass::ReliableApplication, 1, Limits)).Accepted(),
 			"ordinary phase fixture accepts queued work");
+		const auto QueuedAt = detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, {1, 1});
+		Check(QueuedAt && *QueuedAt != 0, "qualified ordinary queue exposes its original scheduler acceptance anchor");
 		Capture.Phase = 0; // Phase ends with a legitimate pending reliable tail.
 		Transport.NextSendStatus = TransportOperationStatus::WouldBlock;
 		(void)Scheduler.Flush({1, 1}, SchedulerTickBudget::FromNetworkLimits(Limits));
+		Check(detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, {1, 1}) == QueuedAt,
+			"WouldBlock neither removes nor retimestamps the oldest qualified queue anchor");
 		(void)Scheduler.Flush({1, 1}, SchedulerTickBudget::FromNetworkLimits(Limits));
 		Check(Transport.OrdinaryAttempts.size() == 2 && Capture.Sequence == 1 &&
 			Transport.OrdinaryAttempts[0].Sequence == 1 && Transport.OrdinaryAttempts[1].Sequence == 1 &&
 			Transport.OrdinaryAttempts[0].Phase == 1 && Transport.OrdinaryAttempts[1].Phase == 1 &&
+			Transport.OrdinaryAttempts[0].AcceptedAtMicroseconds != 0 &&
+			Transport.OrdinaryAttempts[0].AcceptedAtMicroseconds == Transport.OrdinaryAttempts[1].AcceptedAtMicroseconds &&
+			Transport.OrdinaryAttempts[0].Qualified && Transport.OrdinaryAttempts[1].Qualified &&
 			ActiveOrdinaryDemand.Sequence == 0 && ActiveOrdinaryDemand.Phase == 0,
 			"production scheduler retains original phase and one identity across retry and restores ephemeral send scope");
+		const auto Drained = detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, {1, 1});
+		Check(Drained && *Drained == 0, "queue evidence returns zero after handoff without claiming native completion");
+		Check(!detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, {1, 2}),
+			"queue evidence rejects another generation of the same slot");
+		ActivePublicationLatency = Previous;
+	}
+	{
+		using namespace gargantuan::runtime_detail;
+		struct State {
+			std::uint64_t Sequence = 0, At = 1'000'000;
+			bool Qualified = false;
+		} Capture;
+		PublicationLatencySink Sink{&Capture,
+			[](void *, ConnectionId) noexcept { return true; },
+			[](void *, PublicationLatencyRecord) noexcept {},
+			[](void *, const char *, ConnectionId, std::span<const std::byte>, std::uint64_t) noexcept {},
+			[](void *Context, ConnectionId, std::span<const std::byte>) noexcept {
+				auto &Value = *static_cast<State *>(Context);
+				return OrdinaryDemandTag{++Value.Sequence, 1, Value.At, Value.Qualified};
+			}};
+		auto *Previous = ActivePublicationLatency; ActivePublicationLatency = &Sink;
+		const ConnectionId Connection{7, 1};
+		RecordingTransport Transport(Connection); NetworkScheduler Scheduler(Transport);
+		const auto Limits = TestLimits(64, 32, 256, 128, 16);
+		Check(Scheduler.RegisterConnection(Connection, Limits), "multi-priority queue evidence fixture registers");
+		Check(Scheduler.Submit(*Intent(Connection, DeliveryMode::ReliableOrdered, TrafficClass::Background, 1, Limits)).Accepted(),
+			"unqualified ordinary message precedes qualified work in one FIFO deque");
+		Capture.Qualified = true; Capture.At += 100;
+		Check(Scheduler.Submit(*Intent(Connection, DeliveryMode::ReliableOrdered, TrafficClass::Background, 2, Limits)).Accepted(),
+			"qualified ordinary message follows the unqualified head");
+		Check(detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection) ==
+			std::optional<std::uint64_t>(1'000'100), "unqualified head cannot conceal a qualified queue deadline");
+		for (const auto Traffic : {TrafficClass::Control, TrafficClass::ReliableApplication,
+			TrafficClass::RealtimeState, TrafficClass::EphemeralApplication, TrafficClass::StructuralReplication}) {
+			Capture.At += 100;
+			Check(Scheduler.Submit(*Intent(Connection, DeliveryMode::ReliableOrdered, Traffic, 3, Limits)).Accepted(),
+				"each remaining scheduler priority receives a bounded message");
+		}
+		Check(detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection) ==
+			std::optional<std::uint64_t>(1'000'100),
+			"minimum across all six queues is independent of precedence and excludes structural traffic");
+		(void)Scheduler.Flush(Connection, SchedulerTickBudget::FromNetworkLimits(Limits));
+		const auto Drained = detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection);
+		Check(Drained && *Drained == 0, "all priority queues drain their qualified anchor evidence");
+		Check(!detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, {7, 2}) &&
+			!detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, {8, 1}),
+			"invalid generations and absent slots do not return empty valid certificates");
 		ActivePublicationLatency = Previous;
 	}
 	try { gargantuan::test::TestReliableByteAdmission(); }

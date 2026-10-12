@@ -38,7 +38,7 @@ class OrdinaryDemandTests(unittest.TestCase):
                               f"\tslot={Slot}\tnonce={Nonce}\tcount={len(Rows)}\tdropped=0"
                               "\tdecode_failures=0\n").encode() + b"".join(Rows))
 
-    def Make(self, Repeat=1, Rejected=False, MissingEnd=False, Size=212):
+    def Make(self, Repeat=1, Rejected=False, MissingEnd=False, Size=212, AllClientSenders=False):
         self.Log.write_text(self.Clock("SERVER", -1, 0, "WORKER"))
         Rows = [self.Packet(8, 1)]
         Sequence = 0
@@ -61,7 +61,7 @@ class OrdinaryDemandTests(unittest.TestCase):
             for Phase in range(1, 6):
                 At = Phase * 100000000
                 Rows.append(self.Rec(26, At, 1, Phase, Flags=1))
-                if Slot == 0:
+                if Slot == 0 or AllClientSenders:
                     Rows.append(self.Rec(27, At + 1, Bytes=112, Kind=1, Sequence=Phase, Origin=Phase))
                     Rows.append(self.Rec(24, At + 1, Bytes=112, Kind=1, Sequence=Phase, Origin=Phase))
                 Rows.append(self.Rec(26, At + 2, 1, Phase))
@@ -70,6 +70,117 @@ class OrdinaryDemandTests(unittest.TestCase):
 
     def Analyze(self):
         return Analyze(self.Server, self.Log, self.Clients, self.Ready, "test")
+
+    def HybridCertificates(self):
+        self.Make(AllClientSenders=True)
+        ServerRows = []
+        for Slot in range(32):
+            ServerRows.append(f"[Qualification:FarmF1] event=peer contract=HYBRID_F1_V1 run=test connection={Slot + 1}:1 "
+                              "queued_failed=0 ordinary_registered=5 ordinary_completed=5 ordinary_pending=0 ordinary_max_latency_us=50000 "
+                              "ordinary_ever_failed=0 ordinary_last_completed_failed=0 ordinary_active_deadline_failed=0 ordinary_evidence_invalid=0 "
+                              "ordinary_failure_sequence=0 ordinary_failure_phase=0 ordinary_failure_message=0 ordinary_failure_accepted_us=0 "
+                              "ordinary_failure_completed_us=0 ordinary_failure_expected_bytes=0 ordinary_failure_first_sent_bytes=0\n")
+            Log = self.Clients[Slot][2]
+            with Log.open("a") as Stream:
+                Stream.write(f"[Qualification:OrdinaryFIFO] event=client contract=HYBRID_F1_V1 run=test slot={Slot} nonce={Slot + 100} "
+                             "connection=1:1 registered=5 completed=5 pending=0 max_latency_us=50000 "
+                             "ever_failed=0 last_failed=0 active_failed=0 invalid=0 queued_failed=0\n")
+        with self.Log.open("a") as Stream:
+            Stream.writelines(ServerRows)
+
+    def test_hybrid_native_fifo_33_processes_and_exact_demand(self):
+        self.HybridCertificates()
+        Result = self.Analyze()["OrdinaryFIFO"]
+        self.assertEqual(Result["State"], "MEASURED_PASS")
+        self.assertEqual((Result["RoleProcesses"], Result["ServerConnections"], Result["ClientCertificates"]), (33, 32, 32))
+        self.assertEqual(Result["MaximumLatencyMicroseconds"], 50000)
+        self.assertEqual(len(Result["Observations"]), 64)
+
+    def test_hybrid_native_fifo_absent_or_unknown_is_not_measured(self):
+        self.assertEqual(self.Analyze()["OrdinaryFIFO"]["State"], "NOT_MEASURED")
+        self.HybridCertificates()
+        Log = self.Clients[31][2]
+        Before = Log.read_text()
+        Log.write_text(Before.replace("contract=HYBRID_F1_V1", "contract=unknown"))
+        self.assertEqual(self.Analyze()["OrdinaryFIFO"]["State"], "NOT_MEASURED")
+        Log.write_text(Before.split("[Qualification:OrdinaryFIFO]")[0])
+        self.assertEqual(self.Analyze()["OrdinaryFIFO"]["State"], "NOT_MEASURED")
+
+    def test_hybrid_native_fifo_client_identity_flags_counts_and_latency(self):
+        Mutations = (("slot=31 nonce=131", "slot=30 nonce=131"), ("nonce=131", "nonce=130"),
+                     ("connection=1:1", "connection=1:2"), ("run=test", "run=other"),
+                     ("registered=5", "registered=0"), ("registered=5", "registered=6"),
+                     ("completed=5", "completed=4"), ("pending=0", "pending=1"),
+                     ("max_latency_us=50000", "max_latency_us=50001"),
+                     ("ever_failed=0", "ever_failed=1"), ("last_failed=0", "last_failed=1"),
+                     ("active_failed=0", "active_failed=1"), ("invalid=0", "invalid=1"),
+                     ("queued_failed=0", "queued_failed=1"), (" queued_failed=0", ""))
+        for Old, New in Mutations:
+            with self.subTest(Old=Old):
+                self.HybridCertificates()
+                Log = self.Clients[31][2]
+                Before, Certificate = Log.read_text().split("[Qualification:OrdinaryFIFO]")
+                Log.write_text(Before + "[Qualification:OrdinaryFIFO]" + Certificate.replace(Old, New))
+                with self.assertRaises(ValueError):
+                    self.Analyze()
+
+    def test_hybrid_native_fifo_server_generation_counts_and_failures(self):
+        for Old, New in (("connection=32:1", "connection=32:2"),
+                         ("ordinary_registered=5", "ordinary_registered=6"),
+                         ("ordinary_completed=5", "ordinary_completed=4"),
+                         ("ordinary_pending=0", "ordinary_pending=1"),
+                         ("ordinary_max_latency_us=50000", "ordinary_max_latency_us=50001"),
+                         ("ordinary_evidence_invalid=0", "ordinary_evidence_invalid=1"),
+                         ("queued_failed=0", "queued_failed=1"),
+                         ("ordinary_failure_sequence=0", "ordinary_failure_sequence=1")):
+            with self.subTest(Old=Old):
+                self.HybridCertificates()
+                self.Log.write_text(self.Log.read_text().replace(Old, New))
+                with self.assertRaises(ValueError):
+                    self.Analyze()
+
+    def test_hybrid_native_fifo_duplicate_certificate_rejected(self):
+        self.HybridCertificates()
+        Log = self.Clients[0][2]
+        Certificate = "[Qualification:OrdinaryFIFO]" + Log.read_text().split("[Qualification:OrdinaryFIFO]")[1]
+        with Log.open("a") as Stream:
+            Stream.write(Certificate)
+        with self.assertRaises(ValueError):
+            self.Analyze()
+
+    def test_hybrid_native_fifo_late_normal_tail_keeps_origin_and_counts(self):
+        self.HybridCertificates()
+        Rows = self.ServerRows()
+        Tail = next(Row for Row in Rows if Row[0] == 24 and Row[9] == 160)
+        Rows.remove(Tail); Tail[7] = Tail[13] = Rows[-1][13] + 1; Rows.append(Tail)
+        self.ReplaceServer(Rows)
+        self.assertEqual(self.Analyze()["OrdinaryFIFO"]["State"], "MEASURED_PASS")
+
+    def test_hybrid_native_fifo_direct_controls_are_covered_without_fake_enqueue(self):
+        self.HybridCertificates()
+        Rows = self.ServerRows()
+        Rows.remove(next(Row for Row in Rows if Row[0] == 27 and Row[9] == 1))
+        Direct = next(Row for Row in Rows if Row[0] == 24 and Row[9] == 1)
+        Direct[9] = Direct[10] = Direct[11] = Direct[1] = 0
+        # Remaining queued identities still form the native queue's exact sequence.
+        for Row in Rows:
+            if Row[0] in (24, 27) and Row[9] > 1:
+                Row[9] -= 1
+        self.ReplaceServer(Rows)
+        Result = self.Analyze()
+        self.assertEqual(Result["OrdinaryFIFO"]["State"], "MEASURED_PASS")
+        self.assertEqual(Result["Egress"]["Peers"][0]["DirectMessages"], 1)
+        self.assertEqual(Result["Egress"]["Peers"][0]["QueuedMessages"], 4)
+
+    def test_hybrid_native_fifo_removed_client_success_cannot_match_certificate(self):
+        self.HybridCertificates()
+        PathValue, Nonce, _ = self.Clients[31]
+        Raw = PathValue.read_bytes().split(b"\n", 1)[1]
+        Rows = [RECORD.unpack(Raw[I:I + RECORD.size]) for I in range(0, len(Raw), RECORD.size)]
+        Rows = [Row for Row in Rows if not (Row[0] in (24, 27) and Row[9] == 5)]
+        self.Write(PathValue, "CLIENT", 31, Nonce, [RECORD.pack(*Row) for Row in Rows])
+        with self.assertRaisesRegex(ValueError, "native coverage"):
+            self.Analyze()
 
     def ServerRows(self):
         Raw = self.Server.read_bytes().split(b"\n", 1)[1]

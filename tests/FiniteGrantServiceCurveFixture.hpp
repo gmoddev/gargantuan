@@ -9,6 +9,7 @@
 
 namespace FiniteGrantServiceCurveFixture {
 using gargantuan::network::FiniteGrantServiceCurve;
+using gargantuan::network::NativeGrantCompletionCurve;
 
 inline void Require(bool Condition, const char *Message) {
 	if (!Condition) throw std::runtime_error(Message);
@@ -317,7 +318,81 @@ inline bool Run() {
 		// ACK/retirement and protected wire service still require the existing
 		// ownership and real transport fixtures; arithmetic does not prove them.
 	});
-	std::cout << "[Network:FiniteGrant] passed=" << Passed << " total=13\n";
-	return Passed == 13;
+	Case("NativeCompletionUniformExactBoundaries", [] {
+		for (const auto Bytes : {77ULL, 1'057ULL, 65'536ULL, 524'288ULL}) {
+			NativeGrantCompletionCurve OnTime, Late;
+			Require(OnTime.Activate(1, Bytes, 1'000'000) && OnTime.FirstSend(1, Bytes, 1'037'324) &&
+				OnTime.CompletedAtMicroseconds == 1'037'324, "hard uniform completion lower boundary");
+			Require(Late.Activate(1, Bytes, 1'000'000) && !Late.FirstSend(1, Bytes, 1'037'325) &&
+				!Late.Invalid && Late.GrantFailed && Late.FirstSentBytes == Bytes && Late.CompletedAtMicroseconds == 1'037'325,
+				"hard late completion fails truthfully without discarding native bytes");
+		}
+	});
+	Case("NativeCompletionDetectsMissingFirstAndFinalService", [] {
+		NativeGrantCompletionCurve Missing;
+		Require(Missing.Activate(1, 77, 1'000'000) && Missing.Observe(1'037'324) &&
+			!Missing.CompletedAtMicroseconds && !Missing.Observe(1'037'325) && Missing.GrantFailed,
+			"known missing first send fails while still active");
+		NativeGrantCompletionCurve Final;
+		Require(Final.Activate(1, 65'536, 1'000'000) && Final.FirstSend(1, 65'535, 1'000'100) &&
+			!Final.Observe(1'037'325) && !Final.CompletedAtMicroseconds,
+			"native prefix cannot hide an overdue final byte");
+		Require(!Final.FirstSend(1, 1, 1'038'000) && Final.CompletedAtMicroseconds == 1'038'000,
+			"later delivery cannot repair a resolved deadline failure");
+	});
+	Case("NativeMaximumGrantUniformDeadlineDoesNotInferPerPeerRate", [] {
+		for (const auto Duration : {31'250ULL, 31'251ULL}) {
+			NativeGrantCompletionCurve Curve;
+			Require(Curve.Activate(1, 524'288, 1'000'000) && Curve.FirstSend(1, 1'248, 1'000'100),
+				"maximum grant has an explicit first-positive boundary");
+			const auto Passed = Curve.FirstSend(1, 524'288 - 1'248, 1'000'100 + Duration);
+			Require(Passed && !Curve.Invalid && Curve.CompletedAtMicroseconds && !Curve.GrantFailed,
+				"31.25-ms design rate is not an additional hard completion deadline");
+		}
+		NativeGrantCompletionCurve Slow;
+		constexpr std::uint64_t Remaining = 524'288 - 1'248, SlowRate = 14 * 1'024 * 1'024;
+		constexpr std::uint64_t Duration = (Remaining * 1'000'000 + SlowRate - 1) / SlowRate;
+		Require(Slow.Activate(1, 524'288, 1'000'000) && Slow.FirstSend(1, 1'248, 1'000'100) &&
+			Duration + 100 < 37'324 && Slow.FirstSend(1, Remaining, 1'000'100 + Duration) && !Slow.GrantFailed,
+			"prompt 14-MiB/s per-peer completion is accepted when actual hard deadline is met");
+	});
+	Case("LegacyMicroTimingDoesNotChangeNativeCompletionCertificate", [] {
+		FiniteGrantServiceCurve Legacy;
+		NativeGrantCompletionCurve Hard;
+		Require(Legacy.Activate(1, 65'536, 1'000'000) && Hard.Activate(1, 65'536, 1'000'000) &&
+			Legacy.FirstSend(1, 100, 1'000'100) && Hard.FirstSend(1, 100, 1'000'100), "shared native chronology");
+		Require(!Legacy.FirstSend(1, 65'436, 1'005'000) && Legacy.ServiceFailed &&
+			Hard.FirstSend(1, 65'436, 1'005'000) && !Hard.GrantFailed,
+			"a recovered micro-timing gap preserves legacy failure and a passing hard certificate separately");
+	});
+	Case("NativeCompletionRejectsInvalidIdentityAndChronology", [] {
+		NativeGrantCompletionCurve Wrong, Reverse, Empty, Oversize, Zero, Bootstrap, Overflow, Reuse;
+		Require(Wrong.Activate(1, 77, 1'000'000) && !Wrong.FirstSend(2, 77, 1'000'001) && Wrong.Invalid,
+			"wrong native grant token is hard-invalid");
+		Require(Reverse.Activate(1, 77, 1'000'000) && Reverse.Observe(1'000'100) &&
+			!Reverse.FirstSend(1, 77, 1'000'099) && Reverse.Invalid,
+			"native result cannot backfill an already resolved observation frontier");
+		Require(Empty.Activate(1, 77, 1'000'000) && !Empty.FirstSend(1, 0, 1'000'001) && Empty.Invalid &&
+			Oversize.Activate(1, 77, 1'000'000) && !Oversize.FirstSend(1, 78, 1'000'001) && Oversize.Invalid,
+			"zero or excess unique bytes cannot qualify native service");
+		Require(!Zero.Activate(1, 77, 0) && Zero.Invalid && !Bootstrap.Activate(1, 77, UINT64_MAX) && Bootstrap.Invalid,
+			"unqualified activation sentinels cannot start a hard curve");
+		Require(Overflow.Activate(1, 77, 1) && !Overflow.Observe(UINT64_MAX) && Overflow.Invalid,
+			"completion arithmetic cannot overflow");
+		Require(Reuse.Activate(1, 77, 1'000'000) && !Reuse.Activate(2, 77, 1'000'001) && Reuse.Invalid,
+			"another grant cannot replace unresolved native service");
+	});
+	Case("NativeCompletionLateFeedbackAndRetirementRemainSeparate", [] {
+		NativeGrantCompletionCurve Curve;
+		Require(Curve.Activate(1, 1'057, 1'000'000) && Curve.FirstSend(1, 1'057, 1'007'070), "timely tiny hard completion");
+		Require(Curve.Observe(1'200'000) && Curve.CompletedAtMicroseconds == 1'007'070 && !Curve.GrantFailed,
+			"late complete feedback or delayed ACK cannot change the actual native-completion certificate");
+		Require(Curve.Activate(2, 77, 1'250'000) && !Curve.FirstSend(2, 77, 1'287'325) && Curve.EverFailed,
+			"a later hard failure is retained independently");
+		Require(Curve.Activate(3, 77, 1'300'000) && Curve.FirstSend(3, 77, 1'300'100) &&
+			!Curve.GrantFailed && Curve.EverFailed, "new grant health does not erase historical hard failures");
+	});
+	std::cout << "[Network:FiniteGrant] passed=" << Passed << " total=19\n";
+	return Passed == 19;
 }
 } // namespace FiniteGrantServiceCurveFixture

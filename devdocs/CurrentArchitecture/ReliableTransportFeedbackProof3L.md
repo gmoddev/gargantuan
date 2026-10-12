@@ -361,3 +361,71 @@ production `POOLED_SERVICE` admission and re-run the accepted Option C service
 proof against real GameSession/GNS feedback.
 
 KI-006 remains **OPEN**. Production pooled service remains **NOT IMPLEMENTED**. Foundation 3L remains **B — PARTIALLY READY**. No 3M.
+
+## Structural permit consumption decision — 2026-10-11
+
+**Accepted narrow ownership correction; new qualification pending.** The
+Foundation 3L closeout authority selects exact structural retirement as the end
+of a structural drain permit. The earlier checkpoint statements in this document
+describe their recorded revisions; production integration and subsequent receipts
+are owned by the [integration record](PooledReliableServiceIntegration3L.md#structural-permit-ownership-decision--2026-10-11).
+
+The native receipt still binds a single accepted structural message to its
+generation-safe connection, token, native message number and complete byte size.
+Only final ACKed-reference retirement advances that receipt. Segment ACK alone,
+native first-send, an ordinary message's retirement, elapsed time or terminal
+purge cannot manufacture structural retirement. Retry references may delay final
+release; their eventual removal remains GNS-owned. Duplicate receipt consumption
+and replacement-generation attribution remain invalid.
+
+After the Main-owned ledger validates and consumes the exact receipt,
+`ReliableByteAdmission::RefreshService` may release the debt-free structural
+permit on an available service observation even while ordinary debt remains.
+Availability retains the existing complete/fresh/native-generation checks at
+GameSession consumption. Absent, incomplete, stale or unavailable evidence cannot
+authorize release. The separate ordinary funding ledger still charges those
+followers; reliable FIFO, protected reservations and wire pacing still constrain
+the next structural admission. No ordinary-quiescence prerequisite or new
+application ACK is introduced.
+
+The source `4eea2307ce8bf78e3f7a8354d5cb672dcd677dc8` discriminator identifies the
+old accounting dependency with a supplied continuous ordinary stream after exact
+structural retirement. It does not measure native ACK latency or invalidate the
+qualified recovery campaign. Updated production regressions specify exact token,
+byte and generation checks, duplicate denial, unavailable-evidence withholding
+and progress without ordinary quiescence. Their old-fail/new-pass execution and
+the correction's native, sanitizer, hosted and provider qualification are
+**pending**. Native receipt semantics, wire/security, reliability and all existing
+hard resource bounds are preserved; KI-006 remains open.
+
+### D03 follow-up receipt and hard evidence frontier
+
+The old-fail/new-pass accountant control has now executed: old source fails the
+fresh structural-retirement/ordinary-follower assertion; the corrected predicate
+passes. An exact structural receipt must additionally agree with cumulative
+structural BODY ACKs; ordinary aggregate ACK movement cannot masquerade as
+structural retirement. Fresh Available feedback returns the permit; stale or
+missing evidence cannot certify turnover.
+
+The adopted [D03](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md)
+uses a separate native uniform-completion verdict while preserving old F1
+history. Counter monotonicity, immutable completion identities and BODY
+conservation remain hard. Ordinary native-unsent state credits only complete
+positive BODY evidence, independently of ordinary ACK debt. The same one-packet
+native pending ownership and generation-safe socket leases remain in force.
+
+Missing protected ordinary first-send timing is now instrumented at the existing
+positive native segment boundaries, including worker completion time and
+retry exclusion. Qualified metadata follows the existing message and keeps its
+scheduler timestamp across WouldBlock. A bounded 40-entry observer stores no
+payload/reference; overflow invalidates its certificate without changing
+reliability. Complete sender-owned normal-phase evidence from 32 server peers
+and 32 clients must match the existing successful queued/direct demand records.
+Enqueue, ACK, RPC averages and missing fields cannot substitute for native FIFO.
+
+MSVC affected preflight passes eight suites; separate deterministic worker and
+pending-ownership regressions pass. Logs, JUnit and the earlier failed compact
+accountant bound are retained under `foundation3l-permit-ownership`. Exact-source
+native/sanitizer CI, native32, Local32, real-TLS Node32 and independent acceptance
+remain pending. Historical recovery and failed F1 verdicts retain their original
+meaning.

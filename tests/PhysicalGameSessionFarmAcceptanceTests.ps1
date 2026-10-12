@@ -546,7 +546,7 @@ try {
 			$_.Gate -ceq 'Per-peer ACK-gated accepted-grant lifecycle' -and
 			$_.State -ceq 'NOT MEASURED' }).Count -ne 1 -or
 		@($Observed.GateObservations | Where-Object {
-			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within 220.5 ms' -and
+			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within versioned contract bound' -and
 			$_.State -ceq 'MEASURED_PASS' }).Count -ne 1 -or
 		$Observed.Node.Provider.State -cne 'AUTHENTICATED_MANIFEST_RPC_MEASURED' -or
 		$Observed.Node.Provider.RealTls -cne 'NOT_MEASURED' -or
@@ -555,7 +555,7 @@ try {
 		$Observed.Local.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Node.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 23 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 24 -or
 		$Observed.Local.F1.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.Workload.State -cne 'MEASURED_PASS' -or
 		$Observed.Local.Admission.FixedWorkloadFairness.State -cne 'NOT_MEASURED' -or
@@ -783,7 +783,7 @@ try {
 	if ($SlowObserved.Node.Admission.AcceptedGrantWaitBound -cne 'MEASURED_FAIL' -or
 		$SlowObserved.Node.Admission.FixedWorkloadFairness.State -cne 'MEASURED_FAIL' -or
 		@($SlowObserved.GateObservations | Where-Object {
-			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within 220.5 ms' -and
+			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within versioned contract bound' -and
 			$_.State -ceq 'MEASURED_FAIL' }).Count -ne 1 -or
 		@($SlowObserved.GateObservations | Where-Object {
 			$_.Gate -ceq 'Full fairness, overload backpressure and journal retention margin' -and

@@ -389,6 +389,24 @@ namespace gargantuan::network {
 		auto Iterator = State->Connections.find(Connection);
 		return Iterator == State->Connections.end() ? std::nullopt : std::optional(Iterator->second.Statistics);
 	}
+	std::optional<std::uint64_t> detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(
+		const NetworkScheduler &Scheduler, ConnectionId Connection) {
+		const auto Found = Scheduler.State->Connections.find(Connection);
+		if (Found == Scheduler.State->Connections.end()) return {};
+		std::uint64_t Oldest = 0;
+		for (const auto &Queue : Found->second.Queues) {
+			// Each priority deque is FIFO, but an unqualified head may precede
+			// qualified work. Find its first qualified entry without a new index.
+			for (const auto &Message : Queue) {
+				const auto &Tag = Message.OrdinaryDemand;
+				if (!Tag.Qualified) continue;
+				if (!Tag.AcceptedAtMicroseconds) return {};
+				if (!Oldest || Tag.AcceptedAtMicroseconds < Oldest) Oldest = Tag.AcceptedAtMicroseconds;
+				break;
+			}
+		}
+		return Oldest;
+	}
 	std::optional<detail::ReliableServiceAcceptedBytes> detail::ReliableServiceFeedbackAccess::Accepted(
 		const NetworkScheduler &Scheduler, ConnectionId Connection) {
 		auto Found = Scheduler.State->Connections.find(Connection);

@@ -17,8 +17,15 @@ inline void TestFarmF1Evidence() {
 		R.Result.Valid = R.Result.Available = true; R.Result.Qualified = !Failed;
 		R.Result.RetiredBytes = 77;
 		R.Result.RetiredToken = Sequence;
+		R.Result.CompletedTurnovers = Sequence; R.Result.CompletedAdmissionOpportunities = Sequence;
+		R.Result.LastCompletedTurnoverToken = Sequence;
+		R.Result.LastCompletedTurnoverActivatedAtMicroseconds = Sequence * 10000;
+		R.Result.LastCompletedTurnoverAtMicroseconds = Sequence * 10000 + 20;
+		R.Result.MaximumMainOpportunityMicroseconds = 20; R.Result.MaximumTurnoverMicroseconds = 20;
 		R.Feedback.emplace(); auto &S = *R.Feedback;
 		S.Connection = R.Connection; S.CountersValid = true;
+		S.QualifiedOrdinaryRegisteredMessages = S.QualifiedOrdinaryCompletedMessages = Sequence;
+		S.QualifiedOrdinaryMaximumLatencyMicroseconds = 50000;
 		S.ObservedAtMicroseconds = Sequence * 10000 + 20;
 		S.StructuralCompletedGrantSequence = Sequence;
 		S.StructuralPayloadBytesFirstSent = S.StructuralPayloadBytesAcked = Sequence * 77;
@@ -44,6 +51,8 @@ inline void TestFarmF1Evidence() {
 		S.StructuralLastCompletedGrantFirstSendAtMicroseconds = S.StructuralLastCompletedGrantCompletedAtMicroseconds = First;
 		S.LastCompletedStructuralSegmentEvents[0].AtMicroseconds = First;
 		S.ObservedAtMicroseconds = First + 10;
+		R.Result.LastCompletedTurnoverAtMicroseconds = S.ObservedAtMicroseconds;
+		R.Result.MaximumTurnoverMicroseconds = Delay + 10;
 		auto &T = S.LastCompletedInitialTrace;
 		T.Enabled = true; T.Token = Sequence; T.MessageNumber = 9; T.NativeHandle = 123; T.DispatchSequence = 8;
 		T.TransportEntered = Sequence * 10000; T.AdapterLocked = T.TransportEntered + 1;
@@ -54,6 +63,115 @@ inline void TestFarmF1Evidence() {
 		return R;
 	};
 	const auto *Previous = network::detail::ActivePooledService;
+	using FarmEvidence = host::detail::FarmF1Evidence;
+	{
+		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1); auto &Evidence = *Storage;
+		auto R = Initial(1, 1, 7070); R.Result.Qualified = true;
+		R.Feedback->StructuralServiceFailed = true;
+		R.Feedback->StructuralMaximumFiniteShortfallByteMicroseconds = 1;
+		R.Feedback->StructuralMaximumDeficitByteMicroseconds =
+			network::PooledReliableServiceProfile::RunningGrantBoundByteMicroseconds + 1;
+		Grant(Evidence, R);
+		Require(Evidence.Valid(1) && Evidence.Observations()[0].FirstFailed.Measured &&
+			Evidence.Observations()[0].FirstInitialFailure.Measured);
+		std::ostringstream Out; Evidence.Write(Out, "hybrid-test");
+		Require(Out.str().find("contract=HYBRID_F1_V1") != std::string::npos &&
+			Out.str().find("completion_failed=0 last_completion_failed=0 completion_evidence_invalid=0 execution_failed=0") != std::string::npos);
+		auto Strict = std::make_unique<FarmEvidence>(); Grant(*Strict, R);
+		Require(!Strict->Valid(1)); // The same old native deficit remains fatal under the old contract.
+	}
+	for (const auto Delay : {37324ULL, 37325ULL}) {
+		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1);
+		auto R = Initial(1, 1, Delay); R.Result.Qualified = true;
+		Grant(*Storage, R);
+		Require(Storage->Valid(1) == (Delay == 37324));
+	}
+	for (const auto Burst : {31250ULL, 31251ULL, 35715ULL}) {
+		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1);
+		auto R = Completed(1); auto &S = *R.Feedback;
+		R.Accepted.Structural = R.Result.RetiredBytes = S.StructuralLastCompletedGrantBytes = network::MaximumReliableServiceGroupBytes;
+		S.StructuralPayloadBytesFirstSent = S.StructuralPayloadBytesAcked = R.Accepted.Structural;
+		S.StructuralLastCompletedGrantFirstSendAtMicroseconds = 11000;
+		S.StructuralLastCompletedGrantCompletedAtMicroseconds = 11000 + Burst;
+		S.ObservedAtMicroseconds = S.StructuralLastCompletedGrantCompletedAtMicroseconds + 1;
+		S.LastCompletedStructuralSegmentEventCount = 2;
+		S.LastCompletedStructuralSegmentEvents[0] = {11000, 1248};
+		S.LastCompletedStructuralSegmentEvents[1] = {11000 + Burst, R.Accepted.Structural - 1248};
+		R.Result.LastCompletedTurnoverAtMicroseconds = S.ObservedAtMicroseconds;
+		R.Result.MaximumTurnoverMicroseconds = S.ObservedAtMicroseconds - 10000;
+		Storage->Accept(R.Connection, 1, R.Accepted.Structural, 10000); Storage->Observe(R);
+		Require(Storage->Valid(1)); // 14-MiB/s serialization can fit H1; no extra 31.25-ms hard gate.
+	}
+	for (unsigned Case = 0; Case < 6; ++Case) {
+		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1);
+		auto R = Completed(1); auto &S = *R.Feedback;
+		if (Case == 0) S.StructuralCompletionServiceFailed = true;
+		if (Case == 1) S.StructuralLastCompletedCompletionFailed = true;
+		if (Case == 2) S.StructuralCompletionEvidenceInvalid = true;
+		if (Case == 3) S.LastCompletedStructuralSegmentEventCount = 0;
+		if (Case == 4) S.LastCompletedStructuralSegmentEvents[0].PayloadBytes = 76;
+		if (Case == 5) S.LastCompletedStructuralSegmentEvents[0].AtMicroseconds = 10009;
+		Grant(*Storage, R); Grant(*Storage, Completed(1, 2));
+		Require(!Storage->Valid(1)); // Later clean certificates cannot erase hard failure or malformed chronology.
+	}
+	{
+		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1);
+		Grant(*Storage, Completed(1));
+		auto R = Completed(1); R.Feedback.reset(); R.Result.Available = false;
+		R.Result.RetiredBytes = R.Result.RetiredToken = 0; R.Result.ExecutionFailed = true;
+		Storage->Observe(R);
+		Require(!Storage->Valid(1) && Storage->Observations()[0].ExecutionFailed);
+	}
+	for (unsigned Case = 0; Case < 5; ++Case) {
+		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1);
+		Grant(*Storage, Completed(1));
+		auto R = Completed(1); R.Feedback.reset(); R.Result.Available = false;
+		R.Result.RetiredBytes = R.Result.RetiredToken = 0;
+		if (Case == 0) R.Result.MainOpportunityFailed = true;
+		if (Case == 1) R.Result.TurnoverFailed = true;
+		if (Case == 2) R.Result.MaximumMainOpportunityMicroseconds = 100001;
+		if (Case == 3) R.Result.MaximumTurnoverMicroseconds = 150001;
+		if (Case == 4) R.Result.QueuedOrdinaryEverFailed = true;
+		Storage->Observe(R);
+		Require(!Storage->Valid(1) && (Case == 4 ? Storage->Observations()[0].QueuedFailed : Storage->Observations()[0].ExecutionFailed));
+	}
+	for (unsigned Case = 0; Case < 10; ++Case) {
+		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1);
+		Grant(*Storage, Completed(1));
+		auto R = Completed(1); auto &S = *R.Feedback;
+		R.Result.RetiredBytes = R.Result.RetiredToken = 0;
+		if (Case == 0) S.QualifiedOrdinaryRegisteredMessages = S.QualifiedOrdinaryCompletedMessages = 0;
+		if (Case == 1) { S.QualifiedOrdinaryRegisteredMessages = 2; S.QualifiedOrdinaryPendingMessages = 1; }
+		if (Case == 2) S.QualifiedOrdinaryMaximumLatencyMicroseconds = 50001;
+		if (Case == 3) S.QualifiedOrdinaryEverFailed = true;
+		if (Case == 4) S.QualifiedOrdinaryLastCompletedFailed = true;
+		if (Case == 5) S.QualifiedOrdinaryActiveDeadlineFailed = true;
+		if (Case == 6) S.QualifiedOrdinaryEvidenceInvalid = true;
+		if (Case == 7) {
+			S.QualifiedOrdinaryEverFailed = true; S.QualifiedOrdinaryFailureSequence = 9;
+			S.QualifiedOrdinaryFailurePhase = 2; S.QualifiedOrdinaryFailureMessageNumber = 7;
+			S.QualifiedOrdinaryFailureAcceptedAtMicroseconds = 100;
+			S.QualifiedOrdinaryFailureCompletedAtMicroseconds = 50101;
+			S.QualifiedOrdinaryFailureExpectedBytes = S.QualifiedOrdinaryFailureFirstSentBytes = 115;
+		}
+		if (Case == 8) S.QualifiedOrdinaryPendingMessages = 1; // Count mismatch, not a pending-message certificate.
+		if (Case == 9) S.QualifiedOrdinaryFailurePhase = 1; // Partial first-failure witness is malformed.
+		Storage->Observe(R);
+		Require(!Storage->Valid(1));
+		if (Case == 7) {
+			const auto &P = Storage->Observations()[0];
+			Require(P.OrdinaryFailureSequence == 9 && P.OrdinaryFailurePhase == 2 &&
+				P.OrdinaryFailureMessageNumber == 7 && P.OrdinaryFailureCompleted == 50101 && P.OrdinaryFailureExpectedBytes == 115);
+		}
+	}
+	{
+		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1);
+		auto R = Completed(1);
+		R.Feedback->QualifiedOrdinaryRegisteredMessages = R.Feedback->QualifiedOrdinaryCompletedMessages = 0;
+		R.Feedback->QualifiedOrdinaryMaximumLatencyMicroseconds = 0;
+		Grant(*Storage, R);
+		Require(!Storage->Valid(1)); // An otherwise complete structural campaign cannot invent H2 coverage.
+	}
 	for (const bool Mismatch : {false, true}) {
 		auto Storage = std::make_unique<host::detail::FarmF1Evidence>(); auto &Evidence = *Storage;
 		auto R = Completed(1, 1, true);

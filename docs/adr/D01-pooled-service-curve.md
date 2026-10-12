@@ -12,6 +12,12 @@ production health and physical qualification. Historical receipts remain
 evidence of the rule under which they were evaluated; they do not establish
 compliance with D01.
 
+**Current governing amendment:** the explicitly accepted
+[D03 hybrid service and permit ownership decision](D03-hybrid-pooled-service-and-permit-ownership.md)
+supersedes F1's hard packet timing and implied continuous delivered capacity.
+The earlier text remains decision history. New production/evidence uses
+`HYBRID_F1_V1`; historical `finite_grant_v1` failures remain failures.
+
 ## Rates and the native quantum
 
 Peer credit refills at **2 MiB/s** between grants. Credit is admission
@@ -395,3 +401,33 @@ one 1,258-byte grant used 1,451 IPv4 wire bytes, exceeding the 8/64 reserve
 ratio. Funded eligibility leaves that grant's ACK policy unchanged. Existing
 historical failures and the separate F1 physical PASS retain their original
 meaning; native prototype success does not qualify a later recovery campaign.
+
+## HYBRID_F1_V1 amendment — product service and exact permits (2026-10-11)
+
+Adopt D03 after coordinated deterministic/affected Windows preflight. Require
+its conjunction: exact uniform native completion at 37324.3865966796875 us,
+actual protected ordinary FIFO within 50000 us, exact structural turnover
+through a completed Main opportunity within 150000 us, completed ready-work
+Main opportunity within 100000 us, and qualified 32-peer admission within
+1181250 us. Keep all original player latency, security, reliability, reserves,
+resource, native-positive truth and exact delivery guarantees.
+
+64 MiB/s remains funded structural capacity/refill. Neither refill nor these
+finite clocks proves continuous delivered service. Qualify actual offered group
+shapes, Main/source work, fairness, ACK retirement and regrant. Preserve the
+20-second service recovery and the original C3/C5 immutable reference deadline
+as additional hard outcomes; no generic byte-count convergence proof follows
+from the replacement clocks alone.
+
+Structural permits return after exact generation-correct retirement and fresh
+complete feedback, independently of unrelated ordinary ACK debt. Ordinary
+funding stays charged and native-unsent exposure remains prospectively bounded.
+Neither timeout nor incomplete evidence returns capacity. Separate committed
+grant rotation from the existing journal-reader rotation.
+
+Legacy F1 curve arithmetic and histories remain unchanged, diagnostic under
+this version. Hard completion/counter integrity, generation and feedback errors
+remain fatal or bounded service failures as D03 specifies. Explicitly version
+health/evidence migration across native, adapter and GameSession; old readers
+remain strict. No historical verdict is rewritten. KI-006 remains OPEN pending
+all exact-source CI, native32, Local32, real-TLS Node32 and independent acceptance.

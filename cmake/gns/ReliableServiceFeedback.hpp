@@ -18,6 +18,10 @@ struct GargantuanReliableServiceCounters {
 	std::uint32_t LastCompletedStructuralSegmentEventCount = 0;
 	gargantuan::network::detail::InitialServiceTrace InitialTrace{}, LastCompletedInitialTrace{};
 	gargantuan::network::FiniteGrantServiceCurve StructuralGrantCurve;
+	gargantuan::network::NativeGrantCompletionCurve StructuralCompletionCurve;
+	bool StructuralCompletionServiceFailed = false;
+	bool StructuralLastCompletedCompletionFailed = false;
+	bool StructuralCompletionEvidenceInvalid = false;
 	std::uint64_t UniqueReliableStreamBytesFirstSent = 0;
 	// Positive UDP data sends, including GNS framing and encrypted payload.
 	// IPv4/UDP headers can be added separately when proving wire reserve.
@@ -28,6 +32,9 @@ struct GargantuanReliableServiceCounters {
 	// Payload bytes belonging to the one native-attributed structural grant.
 	// Reliable stream framing and ordinary reliable traffic are excluded.
 	std::uint64_t StructuralPayloadBytesFirstSent = 0;
+	// All ordinary reliable BODY bytes, including the adapter envelope but
+	// excluding private GNS headers. Independent of optional H2 qualification.
+	std::uint64_t OrdinaryPayloadBytesFirstSent = 0;
 	std::uint64_t StructuralPayloadBytesAcked = 0;
 	// F1 running time and deficit are charged within each finite accepted grant.
 	// The maximum is the maximum of independent per-grant observations, never
@@ -66,8 +73,36 @@ struct GargantuanReliableServiceCounters {
 	std::uint64_t LastAttributedRetiredPayloadBytes = 0;
 	bool Invalid = false;
 	bool Purged = false;
+	struct QualifiedOrdinaryPending {
+		std::uint64_t MessageNumber = 0, Sequence = 0, Phase = 0, AcceptedAtMicroseconds = 0;
+		std::uint32_t ExpectedBytes = 0, FirstSentBytes = 0;
+	};
+	// One unresolved native packet can retain a timely-completed cohort whose
+	// acceptance timestamps occupy its preceding 50-ms window. A second cohort
+	// awaiting first-send occupies the current 50-ms window. Each is bounded by
+	// ceil(16-message burst +64/s *50ms)=20 under the qualified arrival envelope.
+	// No actor reconciliation or Main-opportunity bound is inferred here.
+	// Metadata only; overflow invalidates the explicitly qualified observation,
+	// never rejects legal messages or transfers their reliability ownership.
+	static constexpr std::size_t MaximumQualifiedOrdinaryPending = 40;
+	static constexpr std::uint64_t QualifiedOrdinaryDeadlineMicroseconds = 50'000;
+	std::array<QualifiedOrdinaryPending, MaximumQualifiedOrdinaryPending> QualifiedOrdinaryPendingMessagesStorage{};
+	std::uint64_t QualifiedOrdinaryRegisteredMessages = 0, QualifiedOrdinaryCompletedMessages = 0;
+	std::uint64_t QualifiedOrdinaryPendingMessages = 0, QualifiedOrdinaryMaximumLatencyMicroseconds = 0;
+	bool QualifiedOrdinaryEverFailed = false, QualifiedOrdinaryLastCompletedFailed = false;
+	bool QualifiedOrdinaryActiveDeadlineFailed = false, QualifiedOrdinaryEvidenceInvalid = false;
+	std::uint64_t QualifiedOrdinaryFailureSequence = 0, QualifiedOrdinaryFailurePhase = 0;
+	std::uint64_t QualifiedOrdinaryFailureMessageNumber = 0, QualifiedOrdinaryFailureAcceptedAtMicroseconds = 0;
+	std::uint64_t QualifiedOrdinaryFailureCompletedAtMicroseconds = 0;
+	std::uint32_t QualifiedOrdinaryFailureExpectedBytes = 0, QualifiedOrdinaryFailureFirstSentBytes = 0;
 
-	void FirstSend(int Bytes, int StructuralPayloadBytes = 0, std::uint64_t NowMicroseconds = 0) noexcept;
+	void FirstSend(int Bytes, int StructuralPayloadBytes = 0, std::uint64_t NowMicroseconds = 0,
+		int OrdinaryPayloadBytes = 0) noexcept;
+	void RegisterQualifiedOrdinary(std::int64_t MessageNumber, int PayloadBytes,
+		std::uint64_t Sequence, std::uint64_t Phase, std::uint64_t AcceptedAtMicroseconds) noexcept;
+	void FirstSendQualifiedOrdinary(std::int64_t MessageNumber, int PayloadBytes,
+		std::uint64_t CompletedAtMicroseconds) noexcept;
+	void ObserveQualifiedOrdinary(std::uint64_t ResolvedThroughMicroseconds) noexcept;
 	void NativePacket(int Bytes) noexcept;
 	void Retransmit(int Bytes) noexcept;
 	void AckSegment(int Bytes, bool AlreadyAcked) noexcept;
@@ -86,6 +121,9 @@ struct GargantuanReliableServiceCounters {
 private:
 	void Add(std::uint64_t &Value, int Bytes) noexcept;
 	void SyncStructuralGrant() noexcept;
+	void SyncCompletionGrant() noexcept;
+	void LatchQualifiedOrdinaryFailure(const QualifiedOrdinaryPending &Message,
+		std::uint64_t CompletedAtMicroseconds) noexcept;
 };
 
 struct GargantuanReliableServiceSnapshot {
@@ -110,7 +148,12 @@ struct GargantuanReliableAttribution {
 	std::uint64_t Token = 0;
 	std::uint64_t ActivatedAtMicroseconds = 0;
 	gargantuan::network::detail::InitialServiceTrace InitialTrace{};
+	bool SubmissionMetadata = false, StructuralClass = false;
+	std::uint64_t QualifiedSequence = 0, QualifiedPhase = 0, SchedulerAcceptedAtMicroseconds = 0;
 };
+bool GargantuanBeginReliableSubmissionMetadata(bool StructuralClass,
+	std::uint64_t QualifiedSequence = 0, std::uint64_t QualifiedPhase = 0,
+	std::uint64_t SchedulerAcceptedAtMicroseconds = 0) noexcept;
 bool GargantuanInitialServiceTimingEnabled() noexcept;
 std::uint64_t GargantuanInitialServiceClock() noexcept;
 void GargantuanInitialServiceApiStage(bool Locked) noexcept;

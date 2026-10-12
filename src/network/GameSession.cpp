@@ -160,6 +160,7 @@ namespace gargantuan::network {
 		std::map<ConnectionId, Peer> Peers;
 		std::optional<ConnectionId> PrimaryConnection;
 		std::optional<ConnectionId> StructuralFairnessCursor;
+		std::optional<ConnectionId> StructuralJournalFairnessCursor;
 		std::vector<ConnectionId> StructuralConnectionsScratch;
 
 		std::unique_ptr<ReplicationCoordinator> Replication;
@@ -1338,6 +1339,7 @@ namespace gargantuan::network {
 					ByteAdmission->DebtToken(Id), ByteAdmission->Debt(Id));
 				if (!Updated.Valid || Value.ReliableFeedback.OrdinaryDebt > std::numeric_limits<std::uint64_t>::max() - Debt)
 					return false;
+				if (!ByteAdmission->SetOrdinaryUnsent(Id, Value.ReliableFeedback.OrdinaryUnsent)) return false;
 				Debt += Value.ReliableFeedback.OrdinaryDebt;
 				Lower += Value.ReliableFeedback.GameplayLower;
 				Upper += Value.ReliableFeedback.GameplayUpper;
@@ -1354,7 +1356,7 @@ namespace gargantuan::network {
 				Sink->Record(Sink->Context, detail::PooledServiceRecord{
 					.Connection = Connection, .SimulationTick = CurrentTick, .NowMicroseconds = Now,
 					.DebtToken = ByteAdmission->DebtToken(Connection), .DebtBytes = ByteAdmission->Debt(Connection),
-					.StructuralJournalLag = Replication->GetJournalLag(Connection),
+					.StructuralJournalLag = Replication ? Replication->GetJournalLag(Connection) : 0,
 					.Accepted = Accepted, .Feedback = Sample, .Result = Result,
 					.Admission = ByteAdmission->GetMetrics()});
 		}
@@ -1377,6 +1379,7 @@ namespace gargantuan::network {
 					const auto Last = Iterator->second.ReliableFeedback.Observe(Connection, *Accepted, Final, ServiceTime(),
 						ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
 					RecordCausalDelivery(Connection, Iterator->second, Final, Last.Valid);
+					RecordPooledObservation(Connection, *Accepted, Final, Last, ServiceTime());
 					if (Last.Valid && Last.RetiredBytes)
 						(void)RetireStructural(Connection, Last.RetiredToken, Last.RetiredBytes);
 					(void)Scheduler.CancelConnection(Connection);
@@ -1390,6 +1393,7 @@ namespace gargantuan::network {
 			if (ByteAdmission) ByteAdmission->Remove(Connection);
 			if (Peers.empty()) {
 				StructuralFairnessCursor.reset();
+				StructuralJournalFairnessCursor.reset();
 				StructuralConnectionsScratch.clear();
 			}
 			if (Authority) (void)Authority->RemovePeer(Connection, std::max(CurrentTick, std::uint64_t{1}));
@@ -1412,6 +1416,24 @@ namespace gargantuan::network {
 			}
 		}
 
+		void ObserveOrdinaryQueue(ConnectionId Connection, Peer &PeerValue, std::uint64_t Now) {
+			const auto Oldest = detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection);
+			const bool Failed = !Oldest || (*Oldest && (Now < *Oldest ||
+				Now - *Oldest > PooledReliableServiceProfile::QueueWindowMicroseconds));
+			auto &Ledger = PeerValue.ReliableFeedback;
+			Ledger.QueuedOrdinaryFailed = Failed;
+			if (Failed && !Ledger.QueuedOrdinaryEverFailed) {
+				Ledger.QueuedOrdinaryEverFailed = true;
+				SaturatingAdd(Metrics.QualifiedOrdinaryQueueFailures, 1);
+			}
+			if (IsPooled()) {
+				if (const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection)) {
+					const auto Result = Ledger.Observe(Connection, *Accepted, {}, Now,
+						ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+					RecordPooledObservation(Connection, *Accepted, {}, Result, Now);
+				}
+			}
+		}
 		void Step(std::uint64_t SimulationTick) {
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::SessionStep);
 			if (Status == GameSessionStatus::Created || Status == GameSessionStatus::Starting ||
@@ -1420,6 +1442,28 @@ namespace gargantuan::network {
 				return;
 			if (!DrainFailures()) return;
 			CurrentTick = SimulationTick;
+			for (auto &[Connection, PeerValue] : Peers)
+				if (PeerValue.Phase == PeerPhase::Ready) ObserveOrdinaryQueue(Connection, PeerValue, ServiceTime());
+			if (IsPooled() && Replication) {
+				// Arm before reconciliation, relevance, planning and encoding. The
+				// endpoint below certifies a completed pass, never its entry alone.
+				for (auto &[Connection, PeerValue] : Peers) {
+					if (PeerValue.Phase != PeerPhase::Ready) continue;
+					const bool WorkReady = Replication->HasPendingRelevance(Connection) ||
+						Replication->IsPlanningReady(Connection) || Replication->GetJournalLag(Connection) != 0;
+					const auto OpportunityAt = ServiceTime();
+					if (!PeerValue.ReliableFeedback.BeginAdmissionOpportunity(OpportunityAt, WorkReady)) {
+						if (const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection)) {
+							const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, {}, OpportunityAt,
+								ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+							RecordPooledObservation(Connection, *Accepted, {}, Result, OpportunityAt);
+						}
+						PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+							"[Network:PooledService] Structural execution opportunity exceeded its product budget"});
+					}
+				}
+				if (!DrainFailures()) return;
+			}
 			if (Replication) Replication->ProcessCatalogRetirement(SimulationTick);
 			for (auto &[Connection, PeerValue] : Peers) {
 				(void)Connection;
@@ -1590,6 +1634,12 @@ namespace gargantuan::network {
 							Replication->GetJournalLag(Connection));
 					HasPendingBootstrap = HasPendingBootstrap || PeerValue.Phase == PeerPhase::BootstrapPending;
 				}
+				std::optional<ConnectionId> JournalStartConnection;
+				if (IsPooled() && !StructuralConnections.empty() && StructuralJournalFairnessCursor) {
+					const auto Found = std::lower_bound(StructuralConnections.begin(), StructuralConnections.end(),
+						*StructuralJournalFairnessCursor);
+					JournalStartConnection = Found == StructuralConnections.end() ? StructuralConnections.front() : *Found;
+				}
 				if (!StructuralConnections.empty()) {
 					std::size_t Start = 0;
 					if (StructuralFairnessCursor) {
@@ -1609,6 +1659,7 @@ namespace gargantuan::network {
 				}
 
 				std::optional<ConnectionId> LastServicedConnection;
+				std::optional<ConnectionId> LastGrantedConnection;
 				std::optional<ConnectionId> LastJournalServicedConnection;
 				std::size_t GlobalConsumed = 0;
 				std::size_t GlobalJournalConsumed = 0;
@@ -1775,6 +1826,7 @@ namespace gargantuan::network {
 						}
 						PeerValue.StructuralSubmittedThisStep = true;
 						LastServicedConnection = Connection;
+						LastGrantedConnection = Connection;
 						// An accepted F1 grant is already on its finite first-send clock.
 						// Submit it before planning the next peer's large frame; the
 						// shared step allowance keeps normal scheduler precedence/bounds.
@@ -1989,7 +2041,11 @@ namespace gargantuan::network {
 				// many ticks. Preserve independent progress for journal prefixes that
 				// provably cannot emit structural work, under the unchanged read caps.
 				if (ByteAdmission || GlobalConsumed >= Configuration.StructuralReplication.MaximumTransitionsPerTick) {
-					for (const auto Connection : StructuralConnections) {
+					const auto JournalStart = JournalStartConnection
+						? static_cast<std::size_t>(std::ranges::find(StructuralConnections, *JournalStartConnection) - StructuralConnections.begin())
+						: std::size_t{0};
+					for (std::size_t Offset = 0; Offset < StructuralConnections.size(); ++Offset) {
+						const auto Connection = StructuralConnections[(JournalStart + Offset) % StructuralConnections.size()];
 						if (GlobalJournalConsumed >= Configuration.StructuralReplication.MaximumJournalRecordsPerTick) break;
 						auto Peer = Peers.find(Connection);
 						if (Peer == Peers.end() || PendingPeerFailures.contains(Connection) ||
@@ -2009,6 +2065,18 @@ namespace gargantuan::network {
 				}
 				if (ByteAdmission) ByteAdmission->EndStep();
 				if (!StructuralConnections.empty()) {
+					if (IsPooled()) {
+						// Slot opportunity rotates only after accepted work. A shadow
+						// journal reader must not redirect the next free structural slot.
+						if (LastGrantedConnection) {
+							auto Last = std::ranges::find(StructuralConnections, *LastGrantedConnection);
+							StructuralFairnessCursor = ++Last == StructuralConnections.end() ? StructuralConnections.front() : *Last;
+						}
+						if (LastJournalServicedConnection) {
+							auto Last = std::ranges::find(StructuralConnections, *LastJournalServicedConnection);
+							StructuralJournalFairnessCursor = ++Last == StructuralConnections.end() ? StructuralConnections.front() : *Last;
+						}
+					} else {
 					auto Last = LastServicedConnection
 						? std::ranges::find(StructuralConnections, *LastServicedConnection) : StructuralConnections.begin();
 					// Coalesced/skipped records consume service even with no frame.
@@ -2020,6 +2088,7 @@ namespace gargantuan::network {
 						StructuralFairnessCursor = StructuralConnections.front();
 					else
 						StructuralFairnessCursor = *Last;
+					}
 				}
 				if (GlobalConsumed >= Configuration.StructuralReplication.MaximumTransitionsPerTick &&
 					Replication->HasPendingStructuralWork())
@@ -2057,6 +2126,26 @@ namespace gargantuan::network {
 				}
 				Metrics.JournalBacklogRecordsHighWater = std::max(Metrics.JournalBacklogRecordsHighWater, Metrics.JournalBacklogRecords);
 				Metrics.JournalMaximumBacklogEpisodeAgeTicks = std::max(Metrics.JournalMaximumBacklogEpisodeAgeTicks, Metrics.JournalOldestBacklogEpisodeAgeTicks);
+				if (IsPooled()) {
+					for (auto &[Connection, PeerValue] : Peers) {
+						if (PeerValue.Phase != PeerPhase::Ready || PendingPeerFailures.contains(Connection)) continue;
+						const bool WorkReady = Replication->HasPendingRelevance(Connection) ||
+							Replication->IsPlanningReady(Connection) || Replication->GetJournalLag(Connection) != 0;
+						const auto CompletedAt = ServiceTime();
+						const bool Fits = PeerValue.ReliableFeedback.CompleteAdmissionOpportunity(CompletedAt, WorkReady);
+						const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
+						if (!Accepted) {
+							FailSession({DisconnectReason::TransportFailure, "[Network:PooledService] Completed opportunity lost acceptance accounting"});
+							return;
+						}
+						const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, {}, CompletedAt,
+							ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+						RecordPooledObservation(Connection, *Accepted, {}, Result, CompletedAt);
+						if (!Fits)
+							PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+								"[Network:PooledService] Structural retirement or completed admission opportunity exceeded its product budget"});
+					}
+				}
 				if (!DrainFailures()) return;
 				SynchronizeServerGraph();
 				if (!DrainFailures()) return;
@@ -2092,6 +2181,8 @@ namespace gargantuan::network {
 			}
 			for (auto &[Connection, Information] : TerminalConnections)
 				FailPeer(Connection, Information.Reason, std::move(Information.Diagnostic));
+			for (auto &[Connection, PeerValue] : Peers)
+				if (PeerValue.Phase == PeerPhase::Ready) ObserveOrdinaryQueue(Connection, PeerValue, ServiceTime());
 		}
 
 		bool AttachClientRuntime(Engine &RuntimeValue) {

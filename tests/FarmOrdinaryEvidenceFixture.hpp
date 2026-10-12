@@ -20,9 +20,13 @@ inline void TestFarmOrdinaryEvidence() {
 				Clock.str().find("frequency=0") != std::string::npos)
 				throw std::runtime_error("farm sender QPC domain missing");
 			Evidence.SetTrafficPhase("baseline");
+			const auto Direct = runtime_detail::DirectOrdinaryDemand({1, 1});
+			if (!Direct.Qualified || !Direct.AcceptedAtMicroseconds || Direct.Sequence != ((std::uint64_t{1} << 63) | 1))
+				throw std::runtime_error("direct native identity namespace is not independent");
 			std::array<std::byte, 180> Payload{};
 			std::memcpy(Payload.data(), "GCHR", 4); Payload[6] = std::byte{5};
 			const auto Tag = runtime_detail::QueueOrdinaryDemand({1, 1}, Payload);
+			if (!Tag.Qualified || Tag.Sequence != 1) throw std::runtime_error("direct metadata changed queued origin identity");
 			Evidence.SetTrafficPhase("baseline", true);
 			Evidence.SetTrafficPhase("baseline", true); // Retained phase cannot reopen during overload.
 			runtime_detail::RecordPublicationLatency({.Stage="OrdinaryReliableSent", .Connection={1, 1},

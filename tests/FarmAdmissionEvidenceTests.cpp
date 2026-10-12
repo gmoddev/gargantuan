@@ -75,6 +75,14 @@ int main() {
 		}
 		Check(Read(Path).ends_with("end\t65536\t1\n"), "overflow marker is explicit in retained file");
 		std::filesystem::remove(Path);
+		{
+			FarmAdmissionEvidence Evidence("hybrid-contract-test", Path, true);
+			Evidence.Dump();
+			Check(Evidence.Valid(), "hybrid writer completes");
+		}
+		Check(Read(Path).starts_with("format=GargantuanAdmissionEvidenceV3\trun=hybrid-contract-test\tcontract=HYBRID_F1_V1\n"),
+			"hybrid wait semantics require an explicit source-written version");
+		std::filesystem::remove(Path);
 		std::filesystem::remove(Root);
 		std::cout << "[Qualification:Admission] file_tests=PASS\n";
 		return 0;

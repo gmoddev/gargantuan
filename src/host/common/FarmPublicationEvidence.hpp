@@ -92,7 +92,7 @@ private:
 	std::uint64_t TrafficPhase = 0;
 	std::uint64_t OrdinarySequence = 0;
 	std::vector<Record> Records;
-	runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet, QueueOrdinary};
+	runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet, QueueOrdinary, DirectOrdinary};
 	runtime_detail::PublicationLatencySink *Previous = nullptr;
 
 	static bool Selected(void *Context, network::ConnectionId Connection) noexcept {
@@ -147,7 +147,8 @@ private:
 		if (Self.OrdinarySequence >= Self.Limit || Payload.size() > std::numeric_limits<std::uint32_t>::max() - network::ReliableServiceEnvelopeBytes) {
 			Self.Overflow = true; return {};
 		}
-		const runtime_detail::OrdinaryDemandTag Tag{++Self.OrdinarySequence, Self.TrafficPhase};
+		runtime_detail::OrdinaryDemandTag Tag{++Self.OrdinarySequence, Self.TrafficPhase};
+		Tag.Qualified = Self.TrafficPhase >= 1 && Self.TrafficPhase <= 5;
 		const bool Character = Payload.size() >= 7 && std::memcmp(Payload.data(), "GCHR", 4) == 0;
 		const bool Remote = Payload.size() >= 7 && std::memcmp(Payload.data(), "GRMT", 4) == 0;
 		runtime_detail::RecordPublicationLatency({.Stage="OrdinaryReliableQueued", .Connection=Connection,
@@ -155,6 +156,17 @@ private:
 			.Bytes=static_cast<std::uint32_t>(Payload.size() + network::ReliableServiceEnvelopeBytes),
 			.Operations=Character && std::to_integer<unsigned>(Payload[6]) == 5 ? 1u : 0u});
 		return Tag;
+	}
+	std::uint64_t DirectOrdinarySequence = 0;
+	static runtime_detail::OrdinaryDemandTag DirectOrdinary(void *Context, network::ConnectionId) noexcept {
+		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
+		if (Self.DirectOrdinarySequence >= Self.Limit) { Self.Overflow = true; return {}; }
+		// Direct control has no scheduler-owned prefix. Its successful submission
+		// begins at transport entry. Leave the existing direct-send trace schema
+		// unchanged; this identity is native timing metadata only.
+		return {(std::uint64_t{1} << 63) | ++Self.DirectOrdinarySequence, Self.TrafficPhase,
+			runtime_detail::PublicationLatencyNow() / 1'000,
+			Self.TrafficPhase >= 1 && Self.TrafficPhase <= 5};
 	}
 	static void Append(void *Context, runtime_detail::PublicationLatencyRecord Value) noexcept {
 		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);

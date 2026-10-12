@@ -40,7 +40,9 @@ function Read-AdmissionFairnessEvidence {
 	$Reader = [IO.StreamReader]::new($Stream, [Text.UTF8Encoding]::new($false, $true))
 	try {
 		$Header = $Reader.ReadLine()
-		$IsV2 = $Header -ceq "format=GargantuanAdmissionEvidenceV2`trun=$RunId"
+		$IsHybrid = $Header -ceq "format=GargantuanAdmissionEvidenceV3`trun=$RunId`tcontract=HYBRID_F1_V1"
+		$IsV2 = $IsHybrid -or $Header -ceq "format=GargantuanAdmissionEvidenceV2`trun=$RunId"
+		$WaitBound = [UInt64]$(if ($IsHybrid) { 1181250 } else { 220500 })
 		if (-not $IsV2 -and $Header -cne "format=GargantuanAdmissionEvidenceV1`trun=$RunId") {
 			throw 'admission fairness evidence header or run identity is invalid'
 		}
@@ -266,6 +268,7 @@ function Read-AdmissionFairnessEvidence {
 				TotalObservedWaitMicroseconds = $_.TotalObservedWaitMicroseconds }
 		})
 		return [pscustomobject]@{
+			ServiceContract = $(if ($IsHybrid) { 'HYBRID_F1_V1' } else { 'finite_grant_v1' })
 			Classification = 'EVIDENCE_INTEGRITY_AND_OBSERVED_TIMING_ONLY'
 			TraceCanonicalCounterBounds = 'MEASURED_PASS'
 			GrantLifecycleCoverage = $(if (-not $IsV2 -or $GrantCount -eq 0) { 'NOT_MEASURED' }
@@ -286,12 +289,13 @@ function Read-AdmissionFairnessEvidence {
 			LastTraceFairnessDeferrals = $PreviousDeferrals[3]
 			# This is a verdict on recorded, accepted exact-demand episodes only.
 			# It does not establish continuous source backlog or universal fairness.
-			AcceptedGrantWaitBoundMicroseconds = [UInt64]220500
+			AcceptedGrantWaitBoundMicroseconds = $WaitBound
 			AcceptedGrantWaitBound = $(if ($GrantCount -eq 0) { 'NOT_MEASURED' }
-				elseif ($MaximumWait -gt 220500) { 'MEASURED_FAIL' }
+				elseif ($MaximumWait -gt $WaitBound) { 'MEASURED_FAIL' }
 				else { 'MEASURED_PASS' })
-			ExactDemandEpisodeCoverage = $(if ($GrantCount -eq 0) { 'NOT_MEASURED' }
-				elseif ($MaximumWait -gt 220500) { 'MEASURED_FAIL' }
+			ExactDemandEpisodeCoverage = $(if ($MaximumWait -gt $WaitBound -or
+					@($Retained | Where-Object { $_.ObservedAgeLowerBoundMicroseconds -gt $WaitBound }).Count -gt 0) { 'MEASURED_FAIL' }
+				elseif ($GrantCount -eq 0) { 'NOT_MEASURED' }
 				elseif ($InterruptedEligibilityEpisodeCount -gt 0 -or $DisposedEligibleCount -gt 0 -or
 					$Current.Count -gt 0 -or $OpenAfterInterruptionCount -gt 0) { 'INCONCLUSIVE_NOT_MEASURED' }
 				else { 'MEASURED_PASS' })

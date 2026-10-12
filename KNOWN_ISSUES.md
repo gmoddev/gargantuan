@@ -85,6 +85,26 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-11 — D03 hybrid implementation, qualification pending.** The task
+reconciled the two local unpushed deterministic commits with remote PR #6.
+Exact retired structural permits now return independently of ordinary ACK
+debt after fresh complete feedback; ordinary funding remains charged. A native
+BODY frontier guards prospective peer FIFO without recreating ACK coupling.
+Independent grant/journal cursors fix the deterministic repeated-four-peer
+starvation schedule. D01 explicitly adopts D03's product conjunction; old F1
+curves/readers remain strict historical evidence and diagnostic under the new
+version. New native/adapter/GameSession health and versioned 33-process FIFO
+coverage are implemented.
+
+Affected Windows preflight: eight suites PASS (71.48 s), including pinned GNS,
+GameSession, feedback refresh and frozen recovery. An earlier compact-state
+memory regression is retained and corrected without changing the resource
+bound. The following are still required: final-source native/sanitizer CI,
+one bounded native32 under HYBRID_F1_V1, fresh Local32/real-TLS Node32 and final
+independent acceptance. No new physical PASS or unchanged-source recovery claim
+is inferred. Prior recovery remains qualified at its recorded revision.
+**KI-006 OPEN; Foundation 3L partially ready; PR #6 draft; no 3M or merge.**
+
 2026-10-11 [structural requirements reassessment](docs/adr/D02-pooled-service-product-contract-review.md#10-structural-requirements-reassessment-2026-10-11)
 recommends B/C: retain 64-MiB/s funding and define source-shaped count/slot service,
 not a rounded delivered floor. No independent product need for universal 64-MiB/s

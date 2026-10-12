@@ -33,17 +33,16 @@ them. An accepted ADR may lead implementation, so it is not evidence that every
 described facility already exists.
 
 The Foundation 3L [D01 pooled service-curve decision](../adr/D01-pooled-service-curve.md)
-starts the canonical `docs/adr/` series. Its F1 amendment governs finite
+starts the canonical `docs/adr/` series. Its historical F1 amendment governed finite
 accepted-grant drain capacity and supersedes D01's earlier cross-grant
 deficit and the short-window POOLED_SERVICE health/qualification models.
 The [D02 product-contract review](../adr/D02-pooled-service-product-contract-review.md)
-is a reviewed hybrid recommendation only; it supersedes nothing and changes no
-production or qualification gate. Its deterministic follow-up is blocked on
-nominal Main cadence and ACK-owned slot capacity; its requirements reassessment
-recommends a funded envelope with workload/count-aware service, pending complete
-slot-lifetime and ordinary-follower ownership review. D01/F1 remains authoritative
-until separately
-amended and requalified.
+preserves the reviewed proposal and its deterministic capacity failures.
+The accepted [D03 hybrid service and permit ownership decision](../adr/D03-hybrid-pooled-service-and-permit-ownership.md)
+is the current D01 amendment: uniform native completion, direct protected FIFO,
+exact turnover/opportunity, qualified fair rotation and independent canonical
+recovery outcomes. Funding is separate from delivered capacity. End-to-end
+qualification remains pending; historical failures are not relabeled.
 Other documents explicitly
 labeled accepted design direction, including the game networking architecture,
 retain ADR-like authority until migrated into that series.

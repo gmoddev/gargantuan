@@ -4,6 +4,7 @@
 #include "host/common/FarmPublicationEvidence.hpp"
 #include "host/common/FarmLifecycleEvidence.hpp"
 #include "host/player/FarmRecoveryObservation.hpp"
+#include "network/ReliableServiceFeedback.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -174,6 +175,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 
 #if defined(GARGANTUAN_WITH_GNS)
 	TransportServiceSmoke TransportTrace(Program.is_used("--session-smoke"), "player");
+	std::shared_ptr<network::GameNetworkingSocketsTransport> FarmNativeTransport;
+	std::optional<network::ConnectionId> FarmConnection;
 #endif
 	std::unique_ptr<BaseRenderer> Renderer;
 	std::unique_ptr<Engine> Runtime;
@@ -189,8 +192,14 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		std::shared_ptr<DataModel> World;
 #if defined(GARGANTUAN_WITH_GNS)
 		if (!ClientText.empty()) {
+			auto ClientTransport = std::make_shared<network::GameNetworkingSocketsTransport>();
+			if (FarmScaleWorkload) {
+				if (!network::detail::ReliableServiceFeedbackAccess::Enable(*ClientTransport))
+					throw std::runtime_error("farm client terminal feedback could not be enabled");
+				FarmNativeTransport = ClientTransport;
+			}
 			Session = std::make_unique<network::GameSession>(
-				std::make_shared<network::GameNetworkingSocketsTransport>(),
+				ClientTransport,
 				network::GameSessionConfiguration{
 					.Role = network::GameSessionRole::Client,
 					.Endpoint = *ClientEndpoint,
@@ -254,6 +263,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			const auto Connection = Session->GetPrimaryConnection();
 			FarmReady = Session->GetStatus() == network::GameSessionStatus::Ready && Connection.has_value();
 			if (!FarmReady) throw std::runtime_error("client farm game session did not reach Ready");
+			if (FarmScaleWorkload) FarmConnection = Connection;
 			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<host::detail::FarmPublicationEvidence>(
 				false, FarmRunId, FarmSlot, FarmClientNonce,
 				std::filesystem::path(FarmPublicationEvidencePath), *Connection);
@@ -714,6 +724,31 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				static_cast<unsigned long long>(Metrics.ActionPresentationStops)
 			);
 			Session->Stop();
+			if (FarmScaleWorkload) {
+#if defined(GARGANTUAN_WITH_GNS)
+				const auto Final = FarmNativeTransport && FarmConnection
+					? network::detail::ReliableServiceFeedbackAccess::Observe(*FarmNativeTransport, *FarmConnection)
+					: std::optional<network::detail::ReliableServiceFeedback>{};
+				if (!Final || Final->State != network::ConnectionState::Closed || !Final->CountersValid) {
+					ExitCode = 20;
+				} else {
+					std::cout << "[Qualification:OrdinaryFIFO] event=client contract=HYBRID_F1_V1 run=" << FarmRunId
+						<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+						<< " connection=" << FarmConnection->Slot << ':' << FarmConnection->Generation
+						<< " registered=" << Final->QualifiedOrdinaryRegisteredMessages
+						<< " completed=" << Final->QualifiedOrdinaryCompletedMessages
+						<< " pending=" << Final->QualifiedOrdinaryPendingMessages
+						<< " max_latency_us=" << Final->QualifiedOrdinaryMaximumLatencyMicroseconds
+						<< " ever_failed=" << Final->QualifiedOrdinaryEverFailed
+						<< " last_failed=" << Final->QualifiedOrdinaryLastCompletedFailed
+						<< " active_failed=" << Final->QualifiedOrdinaryActiveDeadlineFailed
+						<< " invalid=" << Final->QualifiedOrdinaryEvidenceInvalid
+						<< " queued_failed=" << (Session->GetMetrics().QualifiedOrdinaryQueueFailures != 0) << '\n';
+					if (!network::detail::ReliableServiceFeedbackAccess::Release(*FarmNativeTransport, *FarmConnection))
+						ExitCode = 20;
+				}
+#endif
+			}
 			if (FarmScaleWorkload) Lifecycle.ObserveSession(*Session);
 		}
 		Session.reset();

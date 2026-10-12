@@ -101,6 +101,18 @@ bool GargantuanBeginReliableRetirementAttribution(std::uint64_t Token,
 	return true;
 }
 
+bool GargantuanBeginReliableSubmissionMetadata(bool StructuralClass,
+	std::uint64_t QualifiedSequence, std::uint64_t QualifiedPhase,
+	std::uint64_t SchedulerAcceptedAtMicroseconds) noexcept {
+	if (PendingReliableRetirement.SubmissionMetadata) return false;
+	PendingReliableRetirement.SubmissionMetadata = true;
+	PendingReliableRetirement.StructuralClass = StructuralClass;
+	PendingReliableRetirement.QualifiedSequence = QualifiedSequence;
+	PendingReliableRetirement.QualifiedPhase = QualifiedPhase;
+	PendingReliableRetirement.SchedulerAcceptedAtMicroseconds = SchedulerAcceptedAtMicroseconds;
+	return true;
+}
+
 bool GargantuanInitialServiceTimingEnabled() noexcept {
 	return GargantuanServiceTimingObserver.load(std::memory_order_acquire) != nullptr;
 }
@@ -141,6 +153,9 @@ void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounte
 	else {
 		Result.ObservedAtMicroseconds = static_cast<std::uint64_t>(Time);
 		Result.Counters.ObserveActiveService(Result.ObservedAtMicroseconds);
+		// Pending OS results were resolved before this snapshot. The copy's
+		// deadline check never replaces a timely worker completion with Main time.
+		Result.Counters.ObserveQualifiedOrdinary(Result.ObservedAtMicroseconds);
 	}
 }
 
