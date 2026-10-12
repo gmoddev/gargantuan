@@ -1536,3 +1536,89 @@ All failures retain their original source/verdict. The later fixture/evidence
 commit is not a relabeling of the native execution source. **KI-006 OPEN;
 Foundation 3L B — PARTIALLY READY; PR #6 draft.** No Local32/Node32/final
 acceptance, 3M, merge or release is claimed or started.
+
+## 18. D03 execution-gate follow-up (2026-10-12; qualification in progress)
+
+The authorized follow-up starts from draft PR #6 `0571f3b210028`. Its six
+original hosted jobs subsequently pass: Native push/PR Windows 96 each,
+Linux 53 each, and GNS push/PR 11 each. The PR merge tree matches the tested
+branch tree. This is 0571 evidence, not final-source qualification for the
+later changes below. The original E8 failures remain failed.
+
+The exact original initiating predicate remains unmeasured. The earlier
+section's Main-or-turnover interpretation is not exhaustive: the shared
+Begin rejection can also follow invalid accounting or chronology. The new
+opt-in capture preserves the pre-check obligation, missing-acceptance state,
+distinct predicate bits, whole-lifetime first fault and first post-fault
+lifecycle record. Named adapter/GNS table/connection/terminal call sites reuse
+the bounded 8192-record history. A positive nonblocking quiescence proof is
+required before traversal or freeing; a retained native domain retains its
+diagnostic callback storage. Lock-owner and full-stack identity remain
+unmeasured.
+
+The one corrected-runtime-stage scheduler capture uses original runner bounds,
+ordinary verified child priority and fresh identity
+`fed82adb-6039-41b4-94e9-16ff62713672`. At 0571 plus its recorded 14-file
+diagnostic/static overlay, all eight PooledFull cases pass. Mixed overload's
+maximum step interval is 24.101 ms. Accepted and exactly retired BODY both
+equal 38693126 B; terminal release and outstanding debt are zero. No D03
+breach is observed. Kernel coverage retains 4298937 rows, 17623 main switches,
+8642 ready events and 16 anchors without loss. Native joins, sink removal,
+child tree reap, trace cleanup and idle fixture ports are verified. Observer
+perturbation is unmeasured and never subtracted. The earlier separate startup
+attempt omitted the executable-local runtime font and aborted before networking;
+its original capture and exit remain preserved. Neither execution attributes
+or erases the original E8 initiating failure.
+
+Independent deterministic cases show that a 110-ms Main interval or one
+170-ms turnover can satisfy the other product outcomes. Merely deleting their
+predicates permits ACK-held or unfairly rotated peers to hide service debt.
+Tiny fair admissions also do not imply the independent convergence deadline.
+
+**Selected A: retain D03 V1 and continue bounded production qualification.**
+The 100/150-ms gates and every existing product predicate remain hard.
+Current corrected 0571 hosted CI and the fresh loss-free PooledFull execution
+support one actual native32 qualification after required final-source
+preflights/CI. They do not establish the original E8 cause. Adding a larger
+copied/replayed source observer merely to remove a stronger gate that this
+corrected workload passes is not the smallest source-supported correction.
+
+The unadopted B prototype investigated direct 1181250-us source admission.
+Its supporting fifteen actual producer/watch tests and three exact-credit
+tests passed before archival, including PREPARE/COMMIT/discard, partial 16K
+NoFrame prefixes, immutable lineage, hard-reference transfer and a returned
+ready unit becoming dependent. A later independent audit found that minimum
+ObjectId selection could hide older work behind repeatedly cancelled newer
+units; an oldest-unit correction was drafted but not included in that tested
+source. Exact terminal timestamps were also being corrected. No prototype
+health integration or independent first-ready source coverage was qualified.
+
+Cold 1057-B complete BODY credit requires505us, not504; G requires250000us.
+The prototype's original37-case fixture passed with the recorded source.
+The selected candidate retains only the34-case V1/review fixture.
+Two failed prototype test premises remain preserved: a zero-cost planned
+journal refresh need not require a READY relevance batch, and nullable
+Character.RootPart is Soft while Player.Character is explicitly Hard.
+Those corrections do not attribute a production defect or tune thresholds.
+
+A future B replacement requires independently owned source-unit/readiness/
+credit/complete-cost facts for all original32 subjects, including unvisited,
+late-first-probe and unresolved work; first producer visitation and later
+cessation quotes cannot supply that proof. Legitimate non-slot funding/FIFO
+denial during declared overload must remain distinguishable from slot-induced
+starvation without restarting existing obligations. These missing acceptance
+facts are not excused by supporting metadata tests. Prototype patches are
+preserved outside the active candidate; no V2 health change is adopted.
+
+Retained attribution summary SHA-256:
+`f8cc8a66ffc5d1655f525a3ddf5c4bb5d59844d0c4b07cac62ca8effee6523fa`.
+Current source-watch/credit JUnit: `source-unit-proof-ready-v3-junit.xml`
+under the same `foundation3l-d03-first-breach-0571-v1` artifact root; both
+networking and actual replication suites pass in 8.42 s. The provenance lists
+the tested dirty source separately from the earlier diagnostic binary.
+
+**KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY READY.** Selected
+V1 final-source CI/package, native32, Local32, real-TLS Node32 and final
+acceptance remain unfinished. Recovery's historical
+qualified correction remains valid at its recorded source. PR #6 stays draft;
+no 3M, merge or release.

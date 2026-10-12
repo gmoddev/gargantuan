@@ -393,6 +393,112 @@ inline bool RunPooledReliableServiceProductionTests() {
 			Check(R.Valid && R.ExecutionFailed && R.TurnoverFailed && !R.RetiredBytes && !R.Qualified,
 				"Main execution failure remains measured separately from unresolved native feedback");
 		});
+		Test("ReviewMainTimerIsStrongerThanSourceProgressOutcome", [&] {
+			using Episode = pooled_recovery_contract::ProductProgressReview::Episode;
+			Ledger L;
+			Check(L.BeginAdmissionOpportunity(1'000'000, true) &&
+				!L.CompleteAdmissionOpportunity(1'110'000, true) && L.MainOpportunityFailed && !L.TurnoverFailed,
+				"current D03 still rejects a 110-ms completed Main opportunity");
+			Episode Source{1'000'000, 1'000'000, 9, 1};
+			NativeGrantCompletionCurve Native;
+			Check(Source.Accepted(1'110'000, G, 1) && Source.Fits(1'141'250) &&
+				Native.Activate(1, G, 1'110'000) && Native.FirstSend(1, G, 1'141'250),
+				"hypothetical direct source wait and unchanged native oracle permit this supplied schedule");
+		});
+		Test("ReviewLateTurnoverPreservesExactReceiptAndProductWait", [&] {
+			using Episode = pooled_recovery_contract::ProductProgressReview::Episode;
+			constexpr std::uint64_t Bytes = 1'057;
+			Ledger L; Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'000'000, .State = ConnectionState::Connected};
+			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid &&
+				L.BeginAdmissionOpportunity(1'000'000, true) && L.PublishOffer(1, Bytes, 1'000'000), "one exact offer");
+			S.ObservedAtMicroseconds = 1'001'000;
+			S.UniqueReliableStreamBytesFirstSent = S.StructuralPayloadBytesFirstSent = Bytes;
+			S.ActiveAttributedRetirementToken = 1; S.ActiveAttributedMessageNumber = 101;
+			StampCompletion(S, 1, 1, Bytes, 1'000'000, 1'001'000, 1'001'000);
+			Check(L.Observe(Id, {Bytes, Bytes, 0}, S, 1'001'000, 1, Bytes).Qualified, "native completion supplies no ACK");
+			for (const auto At : {1'050'000ULL, 1'100'000ULL, 1'150'000ULL})
+				Check(L.CompleteAdmissionOpportunity(At, true), "completed Main passes continue while ACK is absent");
+			Check(!L.BeginAdmissionOpportunity(1'170'000, true) && L.TurnoverFailed && !L.MainOpportunityFailed &&
+				!L.StructuralRetired && L.Offer, "current D03 rejects 170-ms ownership without retiring debt");
+			S.ObservedAtMicroseconds = 1'170'000;
+			S.UniqueReliableStreamBytesAcked = S.StructuralPayloadBytesAcked = S.ReliablePayloadBytesAcked = Bytes;
+			S.ActiveAttributedRetirementToken = S.ActiveAttributedMessageNumber = 0;
+			S.AttributedRetirementSequence = S.LastAttributedRetirementToken = 1;
+			S.LastAttributedRetirementMessageNumber = 101; S.LastAttributedRetiredPayloadBytes = Bytes;
+			const auto Receipt = L.Observe(Id, {Bytes, Bytes, 0}, S, 1'170'000, 1, Bytes);
+			Episode Waiting{1'000'000, 1'000'000, 9, 1};
+			Check(Receipt.Valid && Receipt.RetiredBytes == Bytes && Receipt.ExecutionFailed &&
+				Waiting.Accepted(1'170'000, Bytes, 1) && Waiting.Fits(1'170'000),
+				"exact late ACK remains valid ownership evidence while hypothetical product wait still fits");
+		});
+		Test("ReviewSourceCompetitionDetectsAckHeldSlotsWithoutTurnoverTimer", [&] {
+			using Episode = pooled_recovery_contract::ProductProgressReview::Episode;
+			constexpr std::uint64_t Epoch = 1'000'000;
+			Admission A(ReliableServiceProfile::PooledService());
+			std::array<std::optional<Admission::Reservation>, 4> Receipts;
+			std::array<Episode, 32> Sources;
+			for (const auto At : std::array<std::uint64_t, 2>{0, Epoch}) {
+				Check(A.BeginStep(At), "candidate admission precredit step");
+				for (std::uint32_t Slot = 1; Slot <= 32; ++Slot)
+					Check(A.ObserveService({Slot, 1}, Admission::ServiceObservation{At, true, true}), "complete fresh sample");
+				A.SetOrdinaryFunding(224 * 1024);
+				if (At == Epoch) {
+					for (std::uint32_t Slot = 1; Slot <= 32; ++Slot) {
+						A.DeferSize({Slot, 1}, G); Sources[Slot - 1] = {Epoch, Epoch, 9, Slot};
+					}
+					for (std::uint32_t Slot = 1; Slot <= 4; ++Slot) {
+						Receipts[Slot - 1] = A.Reserve({Slot, 1}, G);
+						Check(Receipts[Slot - 1] && A.Commit(*Receipts[Slot - 1]) &&
+							Sources[Slot - 1].Accepted(Epoch, G, Slot), "four exact initial owners");
+						NativeGrantCompletionCurve Native;
+						Check(Native.Activate(Receipts[Slot - 1]->Token, G, Epoch) &&
+							Native.FirstSend(Receipts[Slot - 1]->Token, G, Epoch + 31'250), "timely native sends need no ACK");
+					}
+				}
+				A.EndStep();
+			}
+			const auto Observed = Epoch + pooled_recovery_contract::ProductProgressReview::FairWaitUs + 1;
+			Check(A.BeginStep(Observed), "observe retained owners after independent product wait");
+			for (std::uint32_t Slot = 1; Slot <= 32; ++Slot)
+				Check(A.ObserveService({Slot, 1}, Admission::ServiceObservation{Observed, true, true}), "fresh known counters");
+			A.SetOrdinaryFunding(224 * 1024);
+			for (std::uint32_t Slot = 5; Slot <= 32; ++Slot)
+				Check(A.Allowance({Slot, 1}, Observed) == 0 && !Sources[Slot - 1].Fits(Observed),
+					"held ACK slots cannot reset or hide 28 independent source waits");
+			Check(A.GetMetrics().ActiveDrainGrants == 4 && A.GetMetrics().OutstandingBytes == 4 * G &&
+				A.GetMetrics().VerifiedAttributedRetirement == 0 && A.GetMetrics().TerminalReleasedBytes == 0,
+				"product deadline never retires, compensates or frees exact owned bytes");
+			A.EndStep();
+		});
+		Test("ReviewQuietAckOwnershipHasNoInventedSourceDeadline", [&] {
+			using Episode = pooled_recovery_contract::ProductProgressReview::Episode;
+			constexpr std::uint64_t Epoch = 1'000'000;
+			const auto Later = Epoch + pooled_recovery_contract::ProductProgressReview::FairWaitUs + 1;
+			Admission A(ReliableServiceProfile::PooledService());
+			std::array<Episode, 4> CompletedSource;
+			for (const auto At : std::array<std::uint64_t, 3>{0, Epoch, Later}) {
+				Check(A.BeginStep(At), "quiet source admission snapshot");
+				for (std::uint32_t Slot = 1; Slot <= 32; ++Slot)
+					Check(A.ObserveService({Slot, 1}, Admission::ServiceObservation{At, true, true}), "all live identities retain fresh evidence");
+				A.SetOrdinaryFunding(224 * 1024);
+				if (At == Epoch) {
+					for (std::uint32_t Slot = 1; Slot <= 4; ++Slot) {
+						A.DeferSize({Slot, 1}, G);
+						const auto Receipt = A.Reserve({Slot, 1}, G);
+						CompletedSource[Slot - 1] = {Epoch, Epoch, 9, Slot};
+						Check(Receipt && A.Commit(*Receipt) && CompletedSource[Slot - 1].Accepted(Epoch, G, Slot), "one actual complete source acceptance");
+					}
+				}
+				A.EndStep();
+			}
+			for (auto &Source : CompletedSource) Check(Source.Fits(Later), "completed source episode does not invent a next unit");
+			Check(A.GetMetrics().OutstandingBytes == 4 * G && A.GetMetrics().ActiveDrainGrants == 4 &&
+				!A.GetMetrics().VerifiedAttributedRetirement && !A.GetMetrics().TerminalReleasedBytes,
+				"quiet ACK holds retain bounded exact resources without fictitious retirement");
+			// The supplied projection has no next source unit for any peer. This
+			// is not a terminal qualification PASS: a cessation reference would
+			// still require exact ACK retirement by its unchanged C3/C5 deadline.
+		});
 		Test("BoundedTurnoverStorageRejectsSecondUncertifiedRetirement", [&] {
 			Ledger L; Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'000'000, .State = ConnectionState::Connected};
 			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid && L.PublishOffer(1, 77, 1'000'000), "first offer");
@@ -892,7 +998,7 @@ inline bool RunPooledReliableServiceProductionTests() {
 		std::cerr << "[Network:PooledProduction] FAIL " << Error.what() << '\n'; return false;
 	}
 	std::cout << "[Network:PooledProduction] cases=" << Passed << " PASS\n";
-	return Passed == 30;
+	return Passed == 34;
 }
 
 // Candidate-only deterministic schedules. The real admission accountant is

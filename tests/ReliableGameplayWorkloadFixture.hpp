@@ -11,6 +11,7 @@
 #include "AggregateWorkloadEvidence.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/network/GnsServiceDiagnostics.hpp"
+#include "../src/host/server/FarmServiceTimingEvidence.hpp"
 
 #include <algorithm>
 #include <array>
@@ -497,12 +498,227 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	if (QualificationDiagnostic) SteamAPI_ISteamNetworkingUtils_SetDebugOutputFunction(SteamNetworkingUtils(), k_ESteamNetworkingSocketsDebugOutputType_None, nullptr);
 }
 
+// Whole-lifetime, opt-in scalar capture. This owner is declared before every
+// transport; native timing is read only after transport destruction has joined.
+struct PooledExecutionAttribution {
+	enum class Stage : unsigned { Setup, Warmup, Demand, Drain, Report, CaseCleanup, FinalStop, NativeJoin };
+	struct Fault {
+		bool Observed = false;
+		std::string_view Case;
+		Stage Lifecycle = Stage::Setup;
+		unsigned Phase = 0;
+		std::uint64_t PhaseBeginNs = 0, Step = 0, PriorAt = 0, Now = 0, Tick = 0, DebtToken = 0, DebtBytes = 0;
+		ConnectionId Connection;
+		detail::PooledObservationPoint Point = detail::PooledObservationPoint::Other;
+		detail::PooledExecutionState Before;
+		detail::PooledReliableServiceFeedback::Result Result;
+		bool Rejected = false, InvalidAfter = false, WorkReady = false, AcceptanceAvailable = true;
+		test_detail::WorkloadClockAnchor Clock;
+	} First;
+	bool Enabled = false, LifecycleObserved = false, PostFaultLifecycleObserved = false;
+	std::string_view CurrentCase = "setup", LifecycleCase;
+	Stage CurrentStage = Stage::Setup, LifecycleStage = Stage::Setup;
+	unsigned Phase = 0;
+	std::uint64_t Step = 0, PhaseBeginNs = 0, LastAt = 0;
+	std::uint64_t LifecycleStep = 0, LifecyclePhaseBeginNs = 0;
+	unsigned LifecyclePhase = 0;
+	detail::PooledLifecycleRecord FirstLifecycle{};
+	detail::PooledLifecycleRecord PostFaultLifecycle{};
+	Stage PostFaultStage = Stage::Setup;
+	std::uint64_t PostFaultStep = 0;
+	test_detail::WorkloadClockAnchor LifecycleClock;
+	detail::PooledServiceSink *Previous = nullptr;
+	detail::PooledServiceSink Sink;
+	std::unique_ptr<host::detail::FarmServiceTimingEvidence> Timing;
+	explicit PooledExecutionAttribution(bool Capture, bool NativeTiming = true) : Enabled(Capture) {
+		if (!Enabled) return;
+		if (NativeTiming) Timing = std::make_unique<host::detail::FarmServiceTimingEvidence>(true, false, true);
+		Previous = detail::ActivePooledService;
+		Sink.Context = this; Sink.CaptureExecution = true;
+		Sink.Record = [](void *Context, const detail::PooledServiceRecord &Value) noexcept {
+			auto &Self = *static_cast<PooledExecutionAttribution *>(Context);
+			if (!Self.First.Observed && (Value.ExecutionRejected || Value.Result.ExecutionFailed || Value.InvalidAfter)) {
+				auto &Saved = Self.First;
+				Saved.Observed = true; Saved.Case = Self.CurrentCase; Saved.Lifecycle = Self.CurrentStage;
+				Saved.Phase = Self.Phase; Saved.PhaseBeginNs = Self.PhaseBeginNs; Saved.Step = Self.Step;
+				Saved.PriorAt = Self.LastAt; Saved.Now = Value.NowMicroseconds; Saved.Tick = Value.SimulationTick;
+				Saved.Connection = Value.Connection; Saved.DebtToken = Value.DebtToken; Saved.DebtBytes = Value.DebtBytes;
+				Saved.Point = Value.Point; Saved.Before = Value.ExecutionBefore; Saved.Result = Value.Result;
+				Saved.Rejected = Value.ExecutionRejected; Saved.InvalidAfter = Value.InvalidAfter; Saved.WorkReady = Value.WorkReady;
+				Saved.AcceptanceAvailable = Value.AcceptanceAvailable;
+				Saved.Clock = test_detail::WorkloadClockAnchor::Capture();
+				if (Self.Timing) Self.Timing->Freeze(Value.NowMicroseconds);
+			}
+			Self.LastAt = Value.NowMicroseconds;
+			if (Self.Previous && Self.Previous->Record && (!Value.DiagnosticOnly || Self.Previous->CaptureExecution))
+				Self.Previous->Record(Self.Previous->Context, Value);
+		};
+		Sink.AcceptedGrant = [](void *Context, ConnectionId Id, std::uint64_t Token, std::uint64_t Bytes, std::uint64_t At) noexcept {
+			auto &Self = *static_cast<PooledExecutionAttribution *>(Context);
+			if (Self.Previous && Self.Previous->AcceptedGrant) Self.Previous->AcceptedGrant(Self.Previous->Context, Id, Token, Bytes, At);
+		};
+		Sink.Lifecycle = [](void *Context, const detail::PooledLifecycleRecord &Value) noexcept {
+			auto &Self = *static_cast<PooledExecutionAttribution *>(Context);
+			if (!Self.LifecycleObserved) {
+				Self.LifecycleObserved = true; Self.FirstLifecycle = Value; Self.LifecycleCase = Self.CurrentCase;
+				Self.LifecycleStage = Self.CurrentStage; Self.LifecycleClock = test_detail::WorkloadClockAnchor::Capture();
+				Self.LifecycleStep = Self.Step; Self.LifecyclePhase = Self.Phase; Self.LifecyclePhaseBeginNs = Self.PhaseBeginNs;
+			}
+			if (!Self.PostFaultLifecycleObserved && Self.First.Observed && Value.NowMicroseconds >= Self.First.Now) {
+				Self.PostFaultLifecycleObserved = true; Self.PostFaultLifecycle = Value;
+				Self.PostFaultStage = Self.CurrentStage; Self.PostFaultStep = Self.Step;
+			}
+			if (Self.Previous && Self.Previous->Lifecycle) Self.Previous->Lifecycle(Self.Previous->Context, Value);
+		};
+		detail::ActivePooledService = &Sink;
+	}
+	~PooledExecutionAttribution() {
+		if (!Enabled) return;
+		detail::ActivePooledService = Previous;
+		const bool Joined = !Timing || detail::NativeDiagnosticQuiescent();
+		const bool Cleared = Joined && (!Timing || Timing->Stop());
+		std::cout << "[Qualification:ExecutionCapture] joined=" << Joined << " sink_removed=" << Cleared
+			<< " incomplete=" << (!Joined || !Cleared) << '\n';
+		Print();
+		if (Timing && Joined && Cleared) Timing->Write(std::cout, "pooled-execution-attribution", true);
+		else if (Timing) {
+			// A cached native span can still Finish after bounded Stop retained its
+			// domain. Retain the installed heap sink/history; never Visit or free it.
+			(void)Timing.release();
+		}
+	}
+	void Print() const {
+		const auto &F = First;
+		std::cout << "[Qualification:ExecutionFirst] observed=" << F.Observed << " owner_measured=0 stack_measured=0";
+		if (F.Observed) std::cout << " case=" << F.Case << " stage=" << static_cast<unsigned>(F.Lifecycle)
+			<< " phase=" << F.Phase << " phase_begin_ns=" << F.PhaseBeginNs << " step=" << F.Step
+			<< " prior_us=" << F.PriorAt << " now_us=" << F.Now << " tick=" << F.Tick
+			<< " slot=" << F.Connection.Slot << " generation=" << F.Connection.Generation
+			<< " point=" << static_cast<unsigned>(F.Point) << " rejected=" << F.Rejected << " invalid_after=" << F.InvalidAfter
+			<< " acceptance_available=" << F.AcceptanceAvailable
+			<< " main_failed=" << F.Result.MainOpportunityFailed << " turnover_failed=" << F.Result.TurnoverFailed
+			<< " max_main_us=" << F.Result.MaximumMainOpportunityMicroseconds << " max_turnover_us=" << F.Result.MaximumTurnoverMicroseconds
+			<< " before_captured=" << F.Before.Captured << " before_invalid=" << F.Before.Invalid << " armed=" << F.Before.Armed
+			<< " required_since_us=" << F.Before.RequiredSince << " boundary_us=" << F.Before.Boundary << " work_ready=" << F.WorkReady
+			<< " offer_token=" << F.Before.OfferToken << " offer_bytes=" << F.Before.OfferBytes << " offer_at_us=" << F.Before.OfferAt
+			<< " turnover_token=" << F.Before.TurnoverToken << " turnover_at_us=" << F.Before.TurnoverAt << " permit_available=" << F.Before.PermitAvailable
+			<< " debt_token=" << F.DebtToken << " debt_bytes=" << F.DebtBytes
+			<< " qpc_before=" << F.Clock.QpcBefore << " qpc_after=" << F.Clock.QpcAfter << " frequency=" << F.Clock.QpcFrequency;
+		if (F.Observed) std::cout << " pid=" << F.Clock.Process << " native_tid=" << F.Clock.Thread
+			<< " clock_valid=" << F.Clock.NativeValid << " steady_ns=" << F.Clock.SteadyNs << " has_boundary=" << F.Before.HasBoundary;
+		std::cout << '\n' << "[Qualification:ExecutionLifecycle] observed=" << LifecycleObserved;
+		if (LifecycleObserved) std::cout << " case=" << LifecycleCase << " stage=" << static_cast<unsigned>(LifecycleStage)
+			<< " step=" << LifecycleStep << " phase=" << LifecyclePhase << " phase_begin_ns=" << LifecyclePhaseBeginNs
+			<< " point=" << static_cast<unsigned>(FirstLifecycle.Point) << " role=" << unsigned(FirstLifecycle.Role)
+			<< " status_before=" << unsigned(FirstLifecycle.StatusBefore) << " reason=" << FirstLifecycle.Reason
+			<< " now_us=" << FirstLifecycle.NowMicroseconds << " qpc_before=" << LifecycleClock.QpcBefore << " qpc_after=" << LifecycleClock.QpcAfter;
+		std::cout << '\n';
+		std::cout << "[Qualification:ExecutionPostFaultLifecycle] observed=" << PostFaultLifecycleObserved;
+		if (PostFaultLifecycleObserved) std::cout << " stage=" << static_cast<unsigned>(PostFaultStage)
+			<< " step=" << PostFaultStep << " point=" << static_cast<unsigned>(PostFaultLifecycle.Point)
+			<< " role=" << unsigned(PostFaultLifecycle.Role) << " status_before=" << unsigned(PostFaultLifecycle.StatusBefore)
+			<< " reason=" << PostFaultLifecycle.Reason << " now_us=" << PostFaultLifecycle.NowMicroseconds;
+		std::cout << '\n';
+	}
+};
+
+bool TestPooledExecutionCapture() {
+	auto *Original = detail::ActivePooledService;
+	{ PooledExecutionAttribution Off(false, false); Check(detail::ActivePooledService == Original && !Off.Timing && !Off.First.Clock.NativeValid,
+		"disabled execution capture owns no sink, timing storage or clock"); }
+	unsigned Records = 0, Grants = 0, Lifecycles = 0;
+	struct Forwarded { unsigned *Records, *Grants, *Lifecycles; } Forward{&Records, &Grants, &Lifecycles};
+	detail::PooledServiceSink Previous{&Forward,
+		[](void *C, const detail::PooledServiceRecord &) noexcept { ++*static_cast<Forwarded *>(C)->Records; },
+		[](void *C, ConnectionId, std::uint64_t, std::uint64_t, std::uint64_t) noexcept { ++*static_cast<Forwarded *>(C)->Grants; },
+		[](void *C, const detail::PooledLifecycleRecord &) noexcept { ++*static_cast<Forwarded *>(C)->Lifecycles; }};
+	detail::ActivePooledService = &Previous;
+	{
+		PooledExecutionAttribution Capture(true, false);
+		Capture.Sink.Lifecycle(&Capture, {detail::PooledLifecyclePoint::FailPeer, {1, 1}, 100, 0, 0, 1});
+		detail::PooledReliableServiceFeedback Ledger;
+		Check(Ledger.BeginAdmissionOpportunity(1000, true), "synthetic opportunity arms");
+		const auto Before = detail::CapturePooledExecution(Ledger);
+		Check(!Ledger.CompleteAdmissionOpportunity(101001, false), "synthetic exact Main violation");
+		detail::PooledServiceRecord R;
+		R.Connection = {1, 1}; R.NowMicroseconds = 101001; R.Point = detail::PooledObservationPoint::AdmissionComplete;
+		R.ExecutionBefore = Before; R.ExecutionRejected = true;
+		R.Result = Ledger.Observe(R.Connection, {}, {}, 101001, 0, 0);
+		Capture.CurrentCase = "synthetic-main"; Capture.CurrentStage = PooledExecutionAttribution::Stage::Demand;
+		Capture.Sink.Record(&Capture, R);
+		Capture.CurrentCase = "cleanup"; Capture.CurrentStage = PooledExecutionAttribution::Stage::FinalStop;
+		R.NowMicroseconds = 300000; Capture.Sink.Record(&Capture, R);
+		Capture.Sink.AcceptedGrant(&Capture, R.Connection, 1, 77, 1000);
+		Capture.Sink.Lifecycle(&Capture, {detail::PooledLifecyclePoint::FailPeer, R.Connection, 101002, 0, 0, 1});
+		Check(Capture.First.Now == 101001 && Capture.First.Case == "synthetic-main" &&
+			Capture.First.Before.RequiredSince == 1000 && Capture.First.Before.Armed &&
+			Capture.First.Result.MainOpportunityFailed && !Capture.First.Result.TurnoverFailed &&
+			Ledger.OpportunityRequiredSinceMicroseconds == 101001 &&
+			Capture.FirstLifecycle.NowMicroseconds < Capture.First.Now && Capture.PostFaultLifecycleObserved &&
+			Capture.PostFaultLifecycle.NowMicroseconds > Capture.First.Now,
+			"earlier setup lifecycle cannot mask the first fault and its later teardown");
+	}
+	{
+		PooledExecutionAttribution Capture(true, false);
+		detail::PooledServiceRecord R; R.NowMicroseconds = 77; R.ExecutionRejected = true; R.InvalidAfter = true;
+		R.ExecutionBefore.Invalid = R.ExecutionBefore.Captured = true;
+		R.Point = detail::PooledObservationPoint::AdmissionBegin;
+		Capture.Sink.Record(&Capture, R);
+		Check(Capture.First.Observed && Capture.First.InvalidAfter && !Capture.First.Result.ExecutionFailed,
+			"invalid Begin rejection is captured independently of execution bits");
+	}
+	{
+		PooledExecutionAttribution Capture(true, false);
+		detail::PooledReliableServiceFeedback Ledger;
+		Check(Ledger.PublishOffer(1, 77, 1000) && Ledger.CompleteAdmissionOpportunity(50000, false) &&
+			Ledger.CompleteAdmissionOpportunity(100000, false), "synthetic turnover retains frequent Main opportunities");
+		detail::PooledServiceRecord R; R.Connection = {1, 1}; R.NowMicroseconds = 151001;
+		R.ExecutionBefore = detail::CapturePooledExecution(Ledger);
+		R.ExecutionRejected = !Ledger.BeginAdmissionOpportunity(R.NowMicroseconds, true);
+		R.Point = detail::PooledObservationPoint::AdmissionBegin;
+		R.Result = Ledger.Observe(R.Connection, {77, 77, 0}, {}, R.NowMicroseconds, 1, 77);
+		Capture.Sink.Record(&Capture, R);
+		Check(Capture.First.Result.TurnoverFailed && !Capture.First.Result.MainOpportunityFailed &&
+			Capture.First.Before.OfferToken == 1 && Capture.First.Before.OfferBytes == 77 && Capture.First.Before.OfferAt == 1000,
+			"first turnover failure retains exact activation without becoming a Main failure");
+		Ledger.PendingTurnover = detail::PooledReliableServiceFeedback::Turnover{2, 1001, true};
+		const auto Snapshot = detail::CapturePooledExecution(Ledger);
+		Check(Snapshot.TurnoverToken == 2 && Snapshot.TurnoverAt == 1001 && Snapshot.PermitAvailable,
+			"pending permit metadata is copied independently without changing ownership");
+	}
+	{
+		PooledExecutionAttribution Capture(true, false);
+		detail::PooledReliableServiceFeedback Ledger;
+		Ledger.HasOpportunityBoundary = true; Ledger.LastOpportunityBoundaryMicroseconds = 1000;
+		detail::PooledServiceRecord R; R.NowMicroseconds = 999; R.ExecutionBefore = detail::CapturePooledExecution(Ledger);
+		R.ExecutionRejected = !Ledger.BeginAdmissionOpportunity(999, true); R.InvalidAfter = Ledger.Invalid;
+		R.Result = Ledger.Observe({1, 1}, {}, {}, 999, 0, 0);
+		Capture.Sink.Record(&Capture, R);
+		Check(Capture.First.InvalidAfter && !Capture.First.Result.ExecutionFailed && Capture.First.Before.Boundary > Capture.First.Now,
+			"clock regression remains a distinct invalid rejection with original boundary");
+	}
+	{
+		PooledExecutionAttribution Capture(true, false);
+		detail::PooledServiceRecord R; R.NowMicroseconds = 111; R.ExecutionRejected = true;
+		R.AcceptanceAvailable = false; R.DiagnosticOnly = true;
+		R.ExecutionBefore.Captured = R.ExecutionBefore.Armed = true; R.ExecutionBefore.RequiredSince = 1;
+		Capture.Sink.Record(&Capture, R);
+		Check(Capture.First.Observed && !Capture.First.AcceptanceAvailable && Capture.First.Before.RequiredSince == 1,
+			"absent acceptance retains first rejected check without inventing accepted bytes or forwarding fake evidence");
+	}
+	Check(Records == 5 && Grants == 1 && Lifecycles == 2 && detail::ActivePooledService == &Previous,
+		"all original callbacks forward exactly once and restore scope");
+	detail::ActivePooledService = Original;
+	std::cout << "[Qualification:ExecutionCapture] deterministic=PASS natural_failure=NOT_CLAIMED\n";
+	return Failures == 0;
+}
+
 void RunReliableGameplayWorkload(
 	Engine &ServerRuntime, Engine &ClientRuntime, GameSession &Server, GameSession &Client,
 	GameNetworkingSocketsTransport &ClientTransport, std::uint64_t &Tick,
 	GameNetworkingSocketsTransport &ServerTransport,
 	const std::shared_ptr<RemoteFunction> &ServerFunction,
-	const std::shared_ptr<RemoteEvent> &ServerEvent
+	const std::shared_ptr<RemoteEvent> &ServerEvent, PooledExecutionAttribution *Attribution = nullptr
 ) {
 	using Clock = std::chrono::steady_clock;
 	const auto Connection = Client.GetPrimaryConnection();
@@ -558,6 +774,7 @@ void RunReliableGameplayWorkload(
 		detail::PooledServiceSink Sink;
 		explicit ExecutionWitness(std::uint64_t &Value) : Step(&Value) {
 			Sink.Context = this;
+			Sink.CaptureExecution = Previous && Previous->CaptureExecution;
 			Sink.Record = [](void *Context, const detail::PooledServiceRecord &Record) noexcept {
 				auto &Self = *static_cast<ExecutionWitness *>(Context);
 				if (!Self.Observed && Record.Result.ExecutionFailed) {
@@ -567,13 +784,18 @@ void RunReliableGameplayWorkload(
 					Self.FirstResult = Record.Result;
 				}
 				Self.LastAt = Record.NowMicroseconds; Self.LastStep = *Self.Step;
-				if (Self.Previous && Self.Previous->Record) Self.Previous->Record(Self.Previous->Context, Record);
+				if (Self.Previous && Self.Previous->Record && (!Record.DiagnosticOnly || Self.Previous->CaptureExecution))
+					Self.Previous->Record(Self.Previous->Context, Record);
 			};
 			Sink.AcceptedGrant = [](void *Context, ConnectionId Id, std::uint64_t Token,
 				std::uint64_t Bytes, std::uint64_t At) noexcept {
 				auto &Self = *static_cast<ExecutionWitness *>(Context);
 				if (Self.Previous && Self.Previous->AcceptedGrant)
 					Self.Previous->AcceptedGrant(Self.Previous->Context, Id, Token, Bytes, At);
+			};
+			if (Previous && Previous->Lifecycle) Sink.Lifecycle = [](void *Context, const detail::PooledLifecycleRecord &Value) noexcept {
+				auto &Self = *static_cast<ExecutionWitness *>(Context);
+				Self.Previous->Lifecycle(Self.Previous->Context, Value);
 			};
 			detail::ActivePooledService = &Sink;
 		}
@@ -685,11 +907,13 @@ void RunReliableGameplayWorkload(
 		PreviousStepStarted = StepStarted;
 		PreviousStepCpu = StepCpu;
 		++Results.StepCount;
+		if (Attribution) Attribution->Step = Results.StepCount;
 		const auto Next = StepStarted + std::chrono::microseconds(16'667);
 		auto Measure = [&](double &Maximum, WorkloadPhase Phase, auto &&Operation) {
 			const auto CpuBefore = CaptureWorkloadCpu();
 			const auto Started = Clock::now();
 			Execution.Phase = static_cast<unsigned>(Phase);
+			if (Attribution) { Attribution->Phase = static_cast<unsigned>(Phase); Attribution->PhaseBeginNs = ActionTimestamp(Started); }
 			Operation();
 			const auto Ended = Clock::now();
 			const auto CpuAfter = CaptureWorkloadCpu();
@@ -817,8 +1041,10 @@ void RunReliableGameplayWorkload(
 		{"mixed-overload", 16 * 1024, 16, 40, false, false, true},
 		{"recovery", 128, 1, 8, false, true},
 	};
+	if (Attribution) Attribution->CurrentStage = PooledExecutionAttribution::Stage::Warmup;
 	for (int Frame = 0; Frame < 120; ++Frame) Step();
 	for (const auto &Case : Cases) {
+		if (Attribution) { Attribution->CurrentCase = Case.Name; Attribution->CurrentStage = PooledExecutionAttribution::Stage::Demand; }
 		Results = {};
 		Execution.Reset();
 		// Structural overload retains normal ordinary protection. Only the two
@@ -877,6 +1103,7 @@ void RunReliableGameplayWorkload(
 			Step();
 		}
 		const auto DemandEnded = Clock::now();
+		if (Attribution) Attribution->CurrentStage = PooledExecutionAttribution::Stage::Drain;
 		Check(detail::GameSessionTestAccess::SetOrdinarySourceNormal(Server, true) &&
 			detail::GameSessionTestAccess::SetOrdinarySourceNormal(Client, true),
 			"new recovery probes restore normal scope while prior accepted memberships remain frozen");
@@ -1023,6 +1250,7 @@ void RunReliableGameplayWorkload(
 			<< " pending_enters=" << After.StructuralPendingEnters << " pending_leaves=" << After.StructuralPendingLeaves
 			<< " decode_ns=" << Client.GetMetrics().ClientStructuralDecodeNanoseconds
 			<< " apply_ns=" << Client.GetMetrics().ClientStructuralApplyNanoseconds << '\n';
+		if (Attribution) Attribution->CurrentStage = PooledExecutionAttribution::Stage::Report;
 		std::cout << "[Qualification:WorkloadTiming] case=" << Case.Name << " steps=" << Results.StepCount
 			<< " step_interval_max_ms=" << Results.StepIntervalMs
 			<< " client_runtime_max_ms=" << Results.ClientRuntimeMs << " server_runtime_max_ms=" << Results.ServerRuntimeMs
@@ -1061,6 +1289,7 @@ void RunReliableGameplayWorkload(
 			Check(EventMaximum <= 250, "qualified Event echo meets unchanged RTT gate");
 			Check(!Results.Action.empty() && Percentile(Results.Action, 1) <= 250, "qualified action result meets unchanged gate");
 		}
+		if (Attribution) Attribution->CurrentStage = PooledExecutionAttribution::Stage::CaseCleanup;
 		for (const auto &Object : Parts) {
 			Check(ClientRuntime.DataModel->FindFirstChild(Object->GetName(), true) != nullptr,
 				"mixed structural workload reaches client application");
@@ -1073,6 +1302,7 @@ void RunReliableGameplayWorkload(
 	Receiver->SetRequestHandler(ServerFunction->GetNetworkObjectId(), {});
 	Receiver->SetEventHandler(ServerEvent->GetNetworkObjectId(), {});
 	if (Client.GetStatus() == GameSessionStatus::Ready) Sender->SetEventHandler(ClientEvent->GetNetworkObjectId(), {});
+	if (Attribution) Attribution->CurrentStage = PooledExecutionAttribution::Stage::FinalStop;
 	Client.Stop();
 }
 

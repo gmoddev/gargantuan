@@ -15,6 +15,7 @@
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/network/ReliableServiceFeedback.hpp"
 #include "PooledRecoveryEvidence.hpp"
+#include "GnsServiceTimingDiagnosticsFixture.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -261,6 +262,11 @@ namespace {
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--execution-capture-self-test") {
+		const bool Scalars = TestPooledExecutionCapture();
+		const bool Spans = TestGnsServiceTimingDiagnostics();
+		return Scalars && Spans ? 0 : 1;
+	}
 	if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--pooled") {
 		QualificationPooled = true; --ArgumentCount; ++Arguments;
 	}
@@ -407,10 +413,16 @@ end)
 	);
 	ServerRuntime.ProcessService->Alive = true;
 
-	std::shared_ptr<GameNetworkingSocketsTransport> ServerTransport;
-	std::shared_ptr<DelayedFeedbackTransport> FeedbackTransport;
 	std::unique_ptr<host::detail::FarmF1Evidence> FiniteEvidence;
 	if (QualificationPooled) FiniteEvidence = std::make_unique<host::detail::FarmF1Evidence>();
+	const auto *CaptureValue = std::getenv("GARGANTUAN_EXECUTION_ATTRIBUTION");
+	std::unique_ptr<PooledExecutionAttribution> ExecutionAttribution;
+	if (CaptureValue && std::string_view(CaptureValue) == "1") {
+		if (!QualificationPooled || !Workload || Aggregate) { std::cerr << "execution attribution requires fixed PooledFull\n"; return 2; }
+		ExecutionAttribution = std::make_unique<PooledExecutionAttribution>(true);
+	}
+	std::shared_ptr<GameNetworkingSocketsTransport> ServerTransport;
+	std::shared_ptr<DelayedFeedbackTransport> FeedbackTransport;
 	std::optional<PooledRecoveryEvidence::Recorder::Chain> RecoveryChain;
 	if (RecoveryEvidence) RecoveryChain.emplace(*RecoveryEvidence);
 	std::unique_ptr<GameSession> Server;
@@ -547,7 +559,7 @@ end)
 			if (Aggregate) RunAggregateReliableGameplay(ServerRuntime, *ClientRuntime, *Server, Client, Port,
 				Tick, QualificationFunction, QualificationEvent);
 			else RunReliableGameplayWorkload(ServerRuntime, *ClientRuntime, *Server, Client,
-				*ClientTransport, Tick, *ServerTransport, QualificationFunction, QualificationEvent);
+				*ClientTransport, Tick, *ServerTransport, QualificationFunction, QualificationEvent, ExecutionAttribution.get());
 			Client.Stop();
 			Server->Stop();
 			Check(Server->GetMetrics().ReliableAdmissionPeerStates == 0,

@@ -16,6 +16,88 @@ affected suites; this record is explicitly adopted with implementation.
 Adoption is not Foundation 3L PASS.
 Historical failures retain their original source, contract and verdict.
 
+## Execution-gate review — 2026-10-12
+
+**Selected A: retain D03 V1 and continue bounded production qualification.**
+The 100000-us completed Main opportunity, 150000-us exact turnover and all
+other hard predicates below remain unchanged. No V2 production health or
+source-class change is adopted.
+
+Separate deterministic schedules exhibit a 110-ms Main opportunity or one
+170-ms exact turnover with timely native BODY completion, protected ordinary
+service, gameplay responses, all 32 source admissions, exact ownership and
+finite recovery. They do not assert that repeated 170-ms turnovers satisfy
+the fair admission deadline. The timers are stronger than the remaining
+player outcomes; that alone does not justify deleting them.
+
+Counterexamples reject removal without an independent replacement: four
+ACK-held slots can hide 28 waiting peers, unfair rotation can repeatedly serve
+the same peers, and tiny grants can satisfy admission fairness while missing
+the immutable convergence deadline. First producer visitation cannot prove
+the readiness of an unvisited source. Cancellation of unrelated newer work
+cannot count as service of an older obligation.
+
+A proposed direct 1181250-us source-admission guard was investigated but is
+**not adopted**. Supporting metadata/credit prototypes passed focused tests;
+their diffs and failed fixture premises are preserved outside the candidate.
+They do not qualify a runtime health replacement. A safe replacement would
+need original-unit first-ready provenance for all expected peers, exact
+complete cost and historical credit, bounded read feasibility, matching
+COMMIT/cancellation and unresolved/disconnected-unit rejection. It must also
+distinguish legitimate non-slot funding/FIFO denial during declared overload
+from slot-induced starvation, without restarting existing obligations.
+Adding a copied/replayed source observer solely to remove gates that the
+current corrected workload passes is not the smallest justified correction.
+
+Archived prototype patch SHA-256 identities (not applied to the candidate):
+
+- Source ownership/runtime: `70afdd9cfc859ab2a0276074fb93cd793717a0e9e72f9abb9b956604c6a4528e`.
+- Source-unit tests: `9c412be9d2b0300d528a1dc1977e3b80f97f7d75d6899702a72f64a100b9eafa`.
+- Historical credit API/tests: `627aa62805ff98b87d1d24255f7781f3d61e2172f35a78fb5e8aa3c355ed966d`.
+
+All six original hosted jobs at current `0571f3b210028` pass. The fresh
+loss-free fixed PooledFull run below also passes. These facts justify one
+normal exact-source native32 qualification after preflights; they neither
+attribute the original E8 failure nor prove it disappeared. Keep the bounded
+first-fault discriminator available. If qualification fails, retain its
+actual first predicate/obligation and compare a source-supported correction
+with the direct-outcome alternative; no deadline relaxation or blind retry.
+
+### Bounded attribution result
+
+The first-fault diagnostic now retains the pre-check obligation, distinguishes
+Main/turnover failure from invalid accounting, covers the whole workload lifetime
+and records the first post-fault lifecycle event. Its opt-in native history uses
+the existing 8192-record bounded store and fixed named call sites. History may
+be read or freed only after positive native quiescence; failed bounded shutdown
+retains callback storage and reports incomplete.
+
+The fresh instrumented fixed PooledFull execution at base `0571f3b210028` plus
+the recorded 14-file diagnostic/static overlay passed all eight cases. The
+mixed-overload maximum step interval was **24.101 ms**. Exactly **38693126 B**
+were accepted and retired, with zero terminal release and outstanding debt.
+No actual D03 breach was retained. Kernel capture was loss-free and cleanup was
+verified. **The original E8 CI breach remains unattributed**; this execution does
+not prove that it disappeared. Lock owners/full stacks and observer perturbation
+remain unmeasured. An earlier fresh staging failure omitted the executable-local
+runtime font, aborted before networking, and is separately preserved.
+
+Local retained attribution summary:
+`foundation3l-d03-first-breach-0571-v1/attribution-summary.json`, SHA-256
+`f8cc8a66ffc5d1655f525a3ddf5c4bb5d59844d0c4b07cac62ca8effee6523fa`.
+The archived source-unit/credit preflight subsequently passed the actual
+replication and networking suites; it is not part of the selected V1 candidate
+and qualifies no V2 health migration. Native32 and physical gates still require
+the selected final source.
+
+The selected V1 source was restored after prototype archival and rechecked:
+all14 diagnostic/static normalized Git blobs match that measured overlay;
+the five prototype-only production/test paths match base0571. Remote jobs4
+incremental preflights pass GameSession, networking contracts and real transport
+(3/3;23.16s), plus capture/callsite deterministic self-tests. JUnit SHA-256:
+`307c87169d22b1b27a792b14bcb09fe3aeca8cbcfbfb0ddcf4d811ae3216726f`.
+This is supporting native verification, not final-source hosted CI or native32.
+
 ## Hard conjunction
 
 1. **Native structural completion.** For every Ready, generation-valid accepted

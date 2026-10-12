@@ -551,8 +551,15 @@ namespace gargantuan::network {
 			Runtime = nullptr;
 		}
 
+		void RecordPooledLifecycle(detail::PooledLifecyclePoint Point, ConnectionId Connection, DisconnectReason Reason) {
+			if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Lifecycle)
+				Sink->Lifecycle(Sink->Context, {Point, Connection, ServiceTime(),
+					static_cast<std::uint8_t>(Configuration.Role), static_cast<std::uint8_t>(Status),
+					static_cast<std::uint32_t>(Reason)});
+		}
 		void FailSession(DisconnectInfo Information) {
 			if (Status == GameSessionStatus::Failed || Status == GameSessionStatus::Closed) return;
+			RecordPooledLifecycle(detail::PooledLifecyclePoint::FailSession, PrimaryConnection.value_or(ConnectionId{}), Information.Reason);
 			const auto Diagnostic = Information.Diagnostic.size() <= 512 ? Information.Diagnostic
 																		 : Information.Diagnostic.substr(0, 512);
 			Status = GameSessionStatus::Closing;
@@ -564,6 +571,7 @@ namespace gargantuan::network {
 
 		void Stop() {
 			if (Status == GameSessionStatus::Closed || Status == GameSessionStatus::Failed) return;
+			RecordPooledLifecycle(detail::PooledLifecyclePoint::LocalStop, PrimaryConnection.value_or(ConnectionId{}), DisconnectReason::LocalShutdown);
 			const bool TransportStarted = Status != GameSessionStatus::Created;
 			Status = GameSessionStatus::Closing;
 			ReleaseSessionResources();
@@ -605,6 +613,7 @@ namespace gargantuan::network {
 		}
 
 		void FailPeer(ConnectionId Connection, DisconnectReason Reason, std::string Diagnostic) {
+			RecordPooledLifecycle(detail::PooledLifecyclePoint::FailPeer, Connection, Reason);
 			if (Reason == DisconnectReason::ProtocolViolation) ++Metrics.ProtocolRejects;
 			LOG_WARN(
 				App,
@@ -1369,19 +1378,45 @@ namespace gargantuan::network {
 			ByteAdmission->SetOrdinaryFunding(*Funded);
 			return true;
 		}
+		void RecordPooledExecutionWithoutAcceptance(ConnectionId Connection, const detail::PooledReliableServiceFeedback &Ledger,
+			detail::PooledObservationPoint Point, detail::PooledExecutionState Before, std::uint64_t Now, bool WorkReady) {
+			const auto *Sink = detail::ActivePooledService;
+			if (!Sink || !Sink->CaptureExecution || !Sink->Record) return;
+			// No synthetic accounting observation is forwarded to qualification sinks.
+			detail::PooledServiceRecord Record;
+			Record.Connection = Connection; Record.SimulationTick = CurrentTick; Record.NowMicroseconds = Now;
+			Record.Point = Point; Record.ExecutionBefore = Before; Record.ExecutionRejected = true;
+			Record.InvalidAfter = Ledger.Invalid; Record.WorkReady = WorkReady;
+			Record.AcceptanceAvailable = false; Record.DiagnosticOnly = true;
+			Record.DebtToken = ByteAdmission->DebtToken(Connection); Record.DebtBytes = ByteAdmission->Debt(Connection);
+			Record.Result.ExecutionFailed = Ledger.ExecutionFailed;
+			Record.Result.MainOpportunityFailed = Ledger.MainOpportunityFailed; Record.Result.TurnoverFailed = Ledger.TurnoverFailed;
+			Record.Result.MaximumMainOpportunityMicroseconds = Ledger.MaximumMainOpportunityMicroseconds;
+			Record.Result.MaximumTurnoverMicroseconds = Ledger.MaximumTurnoverMicroseconds;
+			Sink->Record(Sink->Context, Record);
+		}
 		void RecordPooledObservation(ConnectionId Connection, const detail::ReliableServiceAcceptedBytes &Accepted,
 			const std::optional<detail::ReliableServiceFeedback> &Sample,
-			const detail::PooledReliableServiceFeedback::Result &Result, std::uint64_t Now) {
-			if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Record)
+			const detail::PooledReliableServiceFeedback::Result &Result, std::uint64_t Now,
+			detail::PooledObservationPoint Point = detail::PooledObservationPoint::Other,
+			detail::PooledExecutionState Before = {}, bool ExecutionRejected = false, bool WorkReady = false) {
+			if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Record) {
+				if (Sink->CaptureExecution && !Before.Captured && Peers.contains(Connection))
+					Before = detail::CapturePooledExecution(Peers.at(Connection).ReliableFeedback);
 				Sink->Record(Sink->Context, detail::PooledServiceRecord{
 					.Connection = Connection, .SimulationTick = CurrentTick, .NowMicroseconds = Now,
 					.DebtToken = ByteAdmission->DebtToken(Connection), .DebtBytes = ByteAdmission->Debt(Connection),
 					.StructuralJournalLag = Replication ? Replication->GetJournalLag(Connection) : 0,
 					.Accepted = Accepted, .Feedback = Sample, .Result = Result,
-					.Admission = ByteAdmission->GetMetrics()});
+					.Admission = ByteAdmission->GetMetrics(), .Point = Point,
+					.ExecutionBefore = Before, .ExecutionRejected = ExecutionRejected,
+					.InvalidAfter = Sink->CaptureExecution && Peers.contains(Connection) && Peers.at(Connection).ReliableFeedback.Invalid,
+					.WorkReady = WorkReady});
+			}
 		}
 
 		void TearDownPeer(ConnectionId Connection) {
+			RecordPooledLifecycle(detail::PooledLifecyclePoint::PeerTeardown, Connection, DisconnectReason::LocalShutdown);
 			auto Iterator = Peers.find(Connection);
 			if (IsPooled()) {
 				// Closing is not a release. Purge first, reconcile the immutable
@@ -1399,7 +1434,7 @@ namespace gargantuan::network {
 					const auto Last = Iterator->second.ReliableFeedback.Observe(Connection, *Accepted, Final, ServiceTime(),
 						ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
 					RecordCausalDelivery(Connection, Iterator->second, Final, Last.Valid);
-					RecordPooledObservation(Connection, *Accepted, Final, Last, ServiceTime());
+					RecordPooledObservation(Connection, *Accepted, Final, Last, ServiceTime(), detail::PooledObservationPoint::PeerTeardown);
 					if (Last.Valid && Last.RetiredBytes)
 						(void)RetireStructural(Connection, Last.RetiredToken, Last.RetiredBytes);
 					(void)Scheduler.CancelConnection(Connection);
@@ -1476,12 +1511,16 @@ namespace gargantuan::network {
 					const bool WorkReady = Replication->HasPendingRelevance(Connection) ||
 						Replication->IsPlanningReady(Connection) || Replication->GetJournalLag(Connection) != 0;
 					const auto OpportunityAt = ServiceTime();
+					const auto ExecutionBefore = detail::ActivePooledService && detail::ActivePooledService->CaptureExecution
+						? detail::CapturePooledExecution(PeerValue.ReliableFeedback) : detail::PooledExecutionState{};
 					if (!PeerValue.ReliableFeedback.BeginAdmissionOpportunity(OpportunityAt, WorkReady)) {
 						if (const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection)) {
 							const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, {}, OpportunityAt,
 								ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
-							RecordPooledObservation(Connection, *Accepted, {}, Result, OpportunityAt);
-						}
+							RecordPooledObservation(Connection, *Accepted, {}, Result, OpportunityAt,
+								detail::PooledObservationPoint::AdmissionBegin, ExecutionBefore, true, WorkReady);
+						} else RecordPooledExecutionWithoutAcceptance(Connection, PeerValue.ReliableFeedback,
+							detail::PooledObservationPoint::AdmissionBegin, ExecutionBefore, OpportunityAt, WorkReady);
 						PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
 							"[Network:PooledService] Structural execution opportunity exceeded its product budget"});
 					}
@@ -2156,15 +2195,20 @@ namespace gargantuan::network {
 						const bool WorkReady = Replication->HasPendingRelevance(Connection) ||
 							Replication->IsPlanningReady(Connection) || Replication->GetJournalLag(Connection) != 0;
 						const auto CompletedAt = ServiceTime();
+						const auto ExecutionBefore = detail::ActivePooledService && detail::ActivePooledService->CaptureExecution
+							? detail::CapturePooledExecution(PeerValue.ReliableFeedback) : detail::PooledExecutionState{};
 						const bool Fits = PeerValue.ReliableFeedback.CompleteAdmissionOpportunity(CompletedAt, WorkReady);
 						const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
 						if (!Accepted) {
+							RecordPooledExecutionWithoutAcceptance(Connection, PeerValue.ReliableFeedback,
+								detail::PooledObservationPoint::AdmissionComplete, ExecutionBefore, CompletedAt, WorkReady);
 							FailSession({DisconnectReason::TransportFailure, "[Network:PooledService] Completed opportunity lost acceptance accounting"});
 							return;
 						}
 						const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, {}, CompletedAt,
 							ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
-						RecordPooledObservation(Connection, *Accepted, {}, Result, CompletedAt);
+						RecordPooledObservation(Connection, *Accepted, {}, Result, CompletedAt,
+							detail::PooledObservationPoint::AdmissionComplete, ExecutionBefore, !Fits, WorkReady);
 						if (!Fits)
 							PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
 								"[Network:PooledService] Structural retirement or completed admission opportunity exceeded its product budget"});

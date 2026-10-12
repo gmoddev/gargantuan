@@ -6,6 +6,7 @@
 #include "ReliableServiceFeedback.hpp"
 #include "OrdinaryServicePolicy.hpp"
 #include "../../cmake/gns/ReliableServiceFeedback.hpp"
+#include "../../cmake/gns/ServiceTimingDiagnostics.hpp"
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
@@ -879,9 +880,14 @@ namespace gargantuan::network {
 	}
 
 	TransportOperationResult GameNetworkingSocketsTransport::Stop(DisconnectInfo Information) {
+		using namespace SteamNetworkingSocketsLib;
+		GargantuanServiceCallsiteSpan LifecycleWait(GargantuanServiceCallsite::StopLifecycleMutex);
 		std::lock_guard LifecycleLock(State->LifecycleMutex);
+		LifecycleWait.Finish();
 		auto &Global = GlobalState();
+		GargantuanServiceCallsiteSpan MutexWait(GargantuanServiceCallsite::StopAdapterMutex);
 		std::unique_lock Lock(Global.Mutex);
+		MutexWait.Finish();
 		if (!State->Started) return Operation(TransportOperationStatus::InvalidState);
 		if (!Information.IsValid()) return Operation(TransportOperationStatus::MessageRejected);
 		if (!State->Stopping) {
@@ -932,9 +938,14 @@ namespace gargantuan::network {
 		ConnectionId Connection,
 		DisconnectInfo Information
 	) {
+		using namespace SteamNetworkingSocketsLib;
+		GargantuanServiceCallsiteSpan LifecycleWait(GargantuanServiceCallsite::DisconnectLifecycleMutex);
 		std::lock_guard LifecycleLock(State->LifecycleMutex);
+		LifecycleWait.Finish();
 		auto &Global = GlobalState();
+		GargantuanServiceCallsiteSpan MutexWait(GargantuanServiceCallsite::DisconnectAdapterMutex);
 		std::unique_lock Lock(Global.Mutex);
+		MutexWait.Finish();
 		if (!State->Started || State->Stopping) return Operation(TransportOperationStatus::InvalidState);
 		if (!Information.IsValid()) return Operation(TransportOperationStatus::MessageRejected);
 		if (!Connection.IsValid() || !State->Connections.contains(Connection))
@@ -1147,10 +1158,16 @@ namespace gargantuan::network {
 	}
 
 	std::size_t GameNetworkingSocketsTransport::PollEvents(std::span<TransportEvent> Output) {
+		using namespace SteamNetworkingSocketsLib;
 		auto &Global = GlobalState();
+		GargantuanServiceCallsiteSpan MutexWait(GargantuanServiceCallsite::AdapterMutex);
 		std::lock_guard Lock(Global.Mutex);
+		MutexWait.Finish();
 		if (State->Started && Global.Interface) {
-			SteamAPI_ISteamNetworkingSockets_RunCallbacks(Global.Interface);
+			{
+				GargantuanServiceCallsiteSpan Call(GargantuanServiceCallsite::RunCallbacks);
+				SteamAPI_ISteamNetworkingSockets_RunCallbacks(Global.Interface);
+			}
 			std::vector<ConnectionId> Connections;
 			Connections.reserve(State->Connections.size());
 			for (const auto &[Id, Record] : State->Connections) {
@@ -1158,9 +1175,10 @@ namespace gargantuan::network {
 				Connections.push_back(Id);
 			}
 			for (const auto Id : Connections) {
-				State->Observe(Id, "GnsPoll");
-				State->DrainMessages(Id);
-				(void)State->ReconcileClose(Id);
+				const auto Handle = GargantuanCallsiteTimingEnabled() && State->Connections.contains(Id) ? State->Connections.at(Id).Handle : 0;
+				{ GargantuanServiceCallsiteSpan Call(GargantuanServiceCallsite::PollObserve, Handle); State->Observe(Id, "GnsPoll"); }
+				{ GargantuanServiceCallsiteSpan Call(GargantuanServiceCallsite::PollReceive, Handle); State->DrainMessages(Id); }
+				{ GargantuanServiceCallsiteSpan Call(GargantuanServiceCallsite::PollReconcile, Handle); (void)State->ReconcileClose(Id); }
 			}
 		}
 		const auto Count = std::min(Output.size(), State->Events.size());
@@ -1205,6 +1223,12 @@ namespace gargantuan::network {
 				Result.EstimatedRoundTripTime = std::chrono::milliseconds(Status.m_nPing);
 		}
 		return Result.IsValid() ? std::optional<NetworkStatistics>(Result) : std::nullopt;
+	}
+
+	bool detail::NativeDiagnosticQuiescent() noexcept {
+		auto &Global = GlobalState();
+		std::unique_lock Lock(Global.Mutex, std::try_to_lock);
+		return Lock.owns_lock() && Global.ReferenceCount == 0 && Global.Interface == nullptr;
 	}
 
 	std::optional<TransportEndpoint> detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(

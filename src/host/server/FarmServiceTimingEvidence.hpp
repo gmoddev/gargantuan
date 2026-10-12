@@ -160,9 +160,11 @@ public:
 		return Value && EnabledValue(Value);
 	}
 	// Supplied false mode lets tests prove no allocation, registration or clock.
-	explicit FarmServiceTimingEvidence(bool Enabled, bool InitialOnly = false) : InitialMode(InitialOnly) {
+	explicit FarmServiceTimingEvidence(bool Enabled, bool InitialOnly = false, bool CallsiteOnly = false) : InitialMode(InitialOnly) {
 		if (!Enabled) return;
 		Sink.InitialOnly = InitialOnly;
+		Sink.CaptureCallsites = CallsiteOnly;
+		if (CallsiteOnly) Sink.DetailedCallbacks = false;
 		if (InitialOnly) Sink.InitialBreach = InitialBreach;
 		Values = std::make_unique<History>(); Begin = Clock::Capture();
 		if (!SteamNetworkingSocketsLib::GargantuanSetServiceTimingSink(&Sink))

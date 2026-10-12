@@ -85,6 +85,35 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-12 — Authorized D03 execution-gate reassessment in progress.**
+All six original hosted jobs at `0571f3b210028` pass; this does not qualify
+later source changes. A fresh first-fault/whole-lifetime scheduler capture
+passes eight PooledFull cases, with no D03 breach, a 24.101-ms maximum mixed
+step interval and exact 38693126-B acceptance/retirement. The original E8
+initiating predicate remains unknown: the shared rejection can also follow
+invalid accounting, not only the two timing predicates. Its 214.799-ms
+terminal poll can include teardown. No historical failure is relabeled.
+
+**Selected A: retain D03 V1 and continue bounded production qualification.**
+[D03](docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md#execution-gate-review--2026-10-12)
+keeps the 100/150-ms predicates, declared-source fairness and all other hard
+outcomes unchanged. Deterministic schedules show that the timers are stronger
+than the remaining player deadlines, but deleting them without independently
+owned first-ready source coverage can conceal slot-induced starvation.
+Overload funding/FIFO denial also needs a truthful class boundary.
+
+The larger V2 source-watch/credit prototype is archived outside the candidate,
+including fifteen source cases plus the later oldest-unit correction and exact
+cold-credit tests (1057 B: 504 us insufficient, 505 us sufficient). Supporting
+passes do not qualify a new contract. No production health replacement is enabled.
+
+The current corrected source and bounded first-fault diagnostic now proceed
+through required final-source preflights/CI and one native32 qualification.
+No original failure is claimed corrected by non-reproduction. Native32 and
+physical acceptance remain unexecuted for this candidate. **KI-006 remains
+OPEN; Foundation 3L remains B — PARTIALLY READY; PR #6 remains draft.**
+No 3M or merge.
+
 **2026-10-12 — Original e8 PR CI FAIL; stats predicate migration.**
 At `e8c89f4a`, funded ACK stats token 34 conserves and retires 393652 BODY
 bytes, with zero retries. Its 347 positive-native events sum exactly; native

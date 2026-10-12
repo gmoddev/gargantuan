@@ -25,7 +25,9 @@ std::uint32_t GargantuanNativeTerminalEvidenceCapacity() noexcept {
 }
 
 std::uint32_t GargantuanNativeTerminalEvidenceReserved() noexcept {
+	GargantuanServiceCallsiteSpan Wait(GargantuanServiceCallsite::TerminalReserved);
 	std::lock_guard<std::mutex> Lock(TerminalEvidenceMutex);
+	Wait.Finish();
 	std::uint32_t Count = 0;
 	for (const auto &Slot : TerminalEvidence) if (Slot.Generation) ++Count;
 	return Count;
@@ -35,7 +37,9 @@ bool GargantuanReserveNativeTerminalEvidence(ISteamNetworkingSockets *Interface,
 	std::uint32_t Handle, std::uint64_t &Generation) noexcept {
 	Generation = 0;
 	if (!Interface || !Handle) return false;
+	GargantuanServiceCallsiteSpan Wait(GargantuanServiceCallsite::TerminalReserve, Handle);
 	std::lock_guard<std::mutex> Lock(TerminalEvidenceMutex);
+	Wait.Finish();
 	TerminalEvidenceSlot *Free = nullptr;
 	for (auto &Slot : TerminalEvidence) {
 		if (Slot.Generation && Slot.Interface == Interface && Slot.Handle == Handle) return false;
@@ -51,7 +55,9 @@ bool GargantuanStoreNativeTerminalEvidence(ISteamNetworkingSockets *Interface,
 	std::uint32_t Handle, std::uint64_t Generation,
 	const GargantuanReliableServiceSnapshot &Result) noexcept {
 	if (!Generation || !Result.Counters.Purged) return false;
+	GargantuanServiceCallsiteSpan Wait(GargantuanServiceCallsite::TerminalStore, Handle);
 	std::lock_guard<std::mutex> Lock(TerminalEvidenceMutex);
+	Wait.Finish();
 	for (auto &Slot : TerminalEvidence) {
 		if (Slot.Interface == Interface && Slot.Handle == Handle && Slot.Generation == Generation) {
 			if (Slot.Complete) return false;
@@ -66,7 +72,9 @@ bool GargantuanStoreNativeTerminalEvidence(ISteamNetworkingSockets *Interface,
 bool GargantuanTakeNativeTerminalFeedback(ISteamNetworkingSockets *Interface,
 	std::uint32_t Handle, std::uint64_t Generation, GargantuanReliableServiceSnapshot &Result) {
 	if (!Generation) return false;
+	GargantuanServiceCallsiteSpan Wait(GargantuanServiceCallsite::TerminalTake, Handle);
 	std::lock_guard<std::mutex> Lock(TerminalEvidenceMutex);
+	Wait.Finish();
 	for (auto &Slot : TerminalEvidence) {
 		if (Slot.Interface == Interface && Slot.Handle == Handle && Slot.Generation == Generation) {
 			if (!Slot.Complete) return false;
@@ -81,7 +89,9 @@ bool GargantuanTakeNativeTerminalFeedback(ISteamNetworkingSockets *Interface,
 bool GargantuanReleaseNativeTerminalEvidence(ISteamNetworkingSockets *Interface,
 	std::uint32_t Handle, std::uint64_t Generation) noexcept {
 	if (!Generation) return false;
+	GargantuanServiceCallsiteSpan Wait(GargantuanServiceCallsite::TerminalRelease, Handle);
 	std::lock_guard<std::mutex> Lock(TerminalEvidenceMutex);
+	Wait.Finish();
 	for (auto &Slot : TerminalEvidence) {
 		if (Slot.Interface == Interface && Slot.Handle == Handle && Slot.Generation == Generation) {
 			Slot = {};

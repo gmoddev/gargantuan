@@ -27,4 +27,7 @@ struct GnsServiceSink {
 	bool (*Interested)(void *, const char *, std::span<const std::byte>) noexcept = nullptr;
 };
 inline thread_local GnsServiceSink *ActiveGnsService = nullptr;
+// Nonblocking post-owner-destruction proof. False includes a retained native
+// domain after bounded shutdown; diagnostic callback storage must then survive.
+bool NativeDiagnosticQuiescent() noexcept;
 }

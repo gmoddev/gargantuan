@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PooledReliableServiceModelFixture.hpp"
+#include "../src/network/FiniteGrantServiceCurve.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationProtocol.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
@@ -84,6 +85,48 @@ namespace gargantuan::test::pooled_recovery_contract {
 		}
 	}
 
+	// Hypothetical product-policy review only. These supplied schedules do not
+	// change D03 production health, establish host timing, or qualify a source.
+	// Keep its existing 32-peer fair outcome as a direct entitlement, not a
+	// derivation from a 100-ms Main opportunity and seven 150-ms slot lifetimes.
+	namespace ProductProgressReview {
+		inline constexpr U FairWaitUs = ProductStructuralClass::ReadyFairWaitUs;
+		struct Episode {
+			// Symbolic oldest qualifying unit and NoFrame fence are supplied by
+			// this review. This is not an implementation of 3J unit identification,
+			// relevance cancellation, current-state coverage or exact byte quoting.
+			U SourceReadyAt = 0, CreditReadyAt = 0, Frontier = 0, OldestUnit = 0;
+			U CoveredThrough = 0, ResolvedAt = 0, LastObservedAt = 0;
+			bool Invalid = false, Failed = false;
+			bool PartialNoFrame(U Through) {
+				if (Through < CoveredThrough) { Invalid = true; return false; }
+				CoveredThrough = Through;
+				return true; // Cursor advance is not complete source discharge.
+			}
+			bool NoFrame(U At, U Through, bool RelevanceComplete) {
+				if (ResolvedAt || !At || At < SourceReadyAt || At < LastObservedAt || !PartialNoFrame(Through) ||
+					Through < Frontier || !RelevanceComplete) return false;
+				ResolvedAt = At; return true;
+			}
+			bool Accepted(U At, U CompleteBytes, U AcceptedUnit) {
+				if (!OldestUnit || AcceptedUnit != OldestUnit || !CompleteBytes ||
+					CompleteBytes > CompleteGroupBytes || ResolvedAt || At < CreditReadyAt || At < LastObservedAt) return false;
+				ResolvedAt = At; return true; // Caller supplies an actual complete scheduler acceptance.
+			}
+			bool Fits(U ObservedAt) {
+				if (Invalid || !SourceReadyAt || CreditReadyAt < SourceReadyAt ||
+					CreditReadyAt - SourceReadyAt > MaximumFreshCreditWarmupUs || ObservedAt < LastObservedAt) {
+					Invalid = true; return false;
+				}
+				LastObservedAt = ObservedAt;
+				const U End = ResolvedAt ? ResolvedAt : ObservedAt;
+				if (End < SourceReadyAt || End > ObservedAt) { Invalid = true; return false; }
+				Failed |= End >= CreditReadyAt && End - CreditReadyAt > FairWaitUs;
+				return !Failed;
+			}
+		};
+	}
+
 	inline bool RunPooledReliableServiceRecoveryContractTests() {
 		int Failures = 0;
 		auto Check = [&](bool Condition, const char *Message) {
@@ -98,6 +141,139 @@ namespace gargantuan::test::pooled_recovery_contract {
 		static_assert(network::MaximumStructuralPendingTransitions == 1'048'576);
 		static_assert(CompleteGroupBytes == 512 * KiB);
 		static_assert(32 * PeerCreditRate == StructuralPool);
+		{
+			using namespace ProductProgressReview;
+			using Native = network::NativeGrantCompletionCurve;
+			constexpr U Epoch = 1'000'000, Frontier = 900;
+			// A gap before acceptance is different from withholding an already
+			// accepted ordinary message. Supply positive BODY completions and exact
+			// ACK/retirement times; none is a measured GNS or OS bound.
+			for (const bool SlowFirstAck : {false, true}) {
+				const U InitialOpportunity = SlowFirstAck ? 0 : 110'000;
+				const U Bytes = SlowFirstAck ? 1'057 : CompleteGroupBytes;
+				const U NativeUs = SlowFirstAck ? 1'000 : 31'250;
+				std::array<Episode, 32> Episodes;
+				std::array<Native, 32> Curves;
+				U AcceptedBytes = 0, NativeBytes = 0, AckedBytes = 0, RetiredBytes = 0;
+				U CompletionAt = Epoch, WaveAt = Epoch + InitialOpportunity;
+				for (U Wave = 0; Wave < 8; ++Wave) {
+					const U TurnoverUs = SlowFirstAck && Wave == 0 ? 170'000 : 50'000;
+					for (U Lane = 0; Lane < 4; ++Lane) {
+						const U Index = Wave * 4 + Lane;
+						Episodes[Index] = {Epoch, Epoch, Frontier, Index + 1};
+						Check(Episodes[Index].Accepted(WaveAt, Bytes, Index + 1) && Episodes[Index].Fits(WaveAt),
+							"hypothetical source-ready fairness covers all 32 complete group acceptances");
+						Check(Curves[Index].Activate(Index + 1, Bytes, WaveAt) &&
+							Curves[Index].FirstSend(Index + 1, Bytes, WaveAt + NativeUs) &&
+							Curves[Index].CompletedAtMicroseconds == WaveAt + NativeUs,
+							"actual native completion oracle retains unchanged positive BODY deadline");
+						AcceptedBytes += Bytes; NativeBytes += Curves[Index].FirstSentBytes;
+						// ACKs are supplied separately, strictly after native completion.
+						Check(TurnoverUs >= NativeUs, "ACK cannot precede native BODY completion");
+						AckedBytes += Bytes; RetiredBytes += Bytes;
+					}
+					CompletionAt = WaveAt + TurnoverUs;
+					WaveAt = CompletionAt; // Next four slots wait for the exact prior receipts.
+				}
+				Check(AcceptedBytes == NativeBytes && NativeBytes == AckedBytes && AckedBytes == RetiredBytes &&
+					CompletionAt - Epoch <= ServiceRecoveryDeadlineUs &&
+					CompletionAt - Epoch <= ConvergenceBoundUs(Bytes, 32 * Bytes),
+					"supplied finite source conserves exact BODY/ACK/debt and retains both recovery outcomes");
+				// These accepted ordinary messages complete at positive native send;
+				// a 110-ms handler wait is included in invocation latency, not retimed.
+				const U RequestAccepted = Epoch, RequestNative = Epoch + 1'000;
+				const U ReplyAccepted = Epoch + 110'000, ReplyNative = Epoch + 112'000;
+				Check(RequestNative - RequestAccepted <= 50'000 && ReplyNative - ReplyAccepted <= 50'000 &&
+					ReplyNative - RequestAccepted <= 150'000 && ReplyNative - RequestAccepted <= 250'000 &&
+					ReplyNative - RequestAccepted <= 500'000,
+					"supplied positive ordinary BODY and end-to-end RPC/Event/action clocks stay independent");
+				Check(SlowFirstAck ? 170'000 > ProductStructuralClass::TurnoverBudgetUs :
+					InitialOpportunity > ProductStructuralClass::OpportunityBudgetUs,
+					"healthy supplied product outcomes do not imply either selected internal D03 timer");
+			}
+			std::array<Episode, 32> Held;
+			for (U Index = 0; Index < Held.size(); ++Index) Held[Index] = {Epoch, Epoch, Frontier, Index + 1};
+			for (U Index = 0; Index < 4; ++Index) Check(Held[Index].Accepted(Epoch, 1'057, Index + 1), "first four accepted");
+			const U FairDeadline = Epoch + FairWaitUs;
+			for (U Index = 4; Index < 32; ++Index)
+				Check(Held[Index].Fits(FairDeadline) && !Held[Index].Fits(FairDeadline + 1),
+					"all-slot ACK hold cannot hide the 28 waiting source episodes");
+			Episode OwnNext{Epoch, Epoch, Frontier, 2};
+			Check(!OwnNext.Fits(FairDeadline + 1), "a prior owned slot cannot exempt its own next source work");
+			// No pending source episode exists for a quiet ACK-owned grant. Its
+			// bounded bytes and exact references remain owned; no timer retires them.
+			Episode Unfair{Epoch, Epoch, Frontier, 1};
+			Check(!Unfair.Fits(FairDeadline + 1), "rotating other peers never resets an excluded peer's source clock");
+			Episode Unprepared{Epoch, Epoch + MaximumFreshCreditWarmupUs, Frontier, 1};
+			const U WarmDeadline = Epoch + MaximumFreshCreditWarmupUs + FairWaitUs;
+			Check(Unprepared.Fits(WarmDeadline) && !Unprepared.Fits(WarmDeadline + 1),
+				"fixed source readiness and separate credit warmup cannot be delayed until encoding or fresh feedback");
+			const U TinyCreditUs = ServiceUs(1'057, PeerCreditRate);
+			Episode ColdTiny{Epoch, Epoch + TinyCreditUs, Frontier, 1};
+			Check(TinyCreditUs < MaximumFreshCreditWarmupUs &&
+				!ColdTiny.Accepted(Epoch + TinyCreditUs - 1, 1'057, 1) &&
+				ColdTiny.Accepted(Epoch + TinyCreditUs, 1'057, 1) && ColdTiny.Fits(Epoch + TinyCreditUs),
+				"actual complete-unit credit cost, not a uniform extra G warmup, precedes tiny admission");
+			constexpr U SuppliedRecoveryTailBytes = 40 * MiB; // Bytes are not journal cursor units.
+			Episode Oldest{Epoch, Epoch, Frontier, 1};
+			Check(!Oldest.Accepted(Epoch + 10'000, 77, 99) && !Oldest.Fits(FairDeadline + 1),
+				"a tiny unrelated new relevance group cannot clear the oldest owed semantic unit");
+			Check(!Oldest.Accepted(Epoch + 20'000, 1'057, 1) && !Oldest.Fits(FairDeadline + 1),
+				"an earlier-looking receipt cannot repair an already observed source wait breach");
+			Episode MatchingOldest{Epoch, Epoch, Frontier, 1};
+			Check(SuppliedRecoveryTailBytes > CompleteGroupBytes &&
+				MatchingOldest.Accepted(Epoch + 20'000, 1'057, 1) && MatchingOldest.Fits(FairDeadline + 1),
+				"matching complete-unit progress need not deliver an entire 40-MiB recovery fence in one fair wait");
+			Episode Filtered{Epoch, Epoch, Frontier};
+			Check(Filtered.PartialNoFrame(100) && !Filtered.NoFrame(FairDeadline, 100, true) &&
+				!Filtered.Fits(FairDeadline + 1), "partial irrelevant prefix cannot discharge a captured relevant suffix");
+			Episode NoFrame{Epoch, Epoch, Frontier};
+			Check(!NoFrame.NoFrame(Epoch + 20'000, Frontier, false) &&
+				NoFrame.NoFrame(Epoch + 30'000, Frontier, true) && NoFrame.Fits(FairDeadline + 1),
+				"complete semantic NoFrame discharge can resolve irrelevant work without manufacturing a grant");
+			Episode ColdNoFrame{Epoch, Epoch + MaximumFreshCreditWarmupUs, Frontier};
+			Check(ColdNoFrame.NoFrame(Epoch + 30'000, Frontier, true) && ColdNoFrame.Fits(FairDeadline + 1),
+				"semantic irrelevant-source discharge needs no fabricated complete-group credit");
+			Episode CoveredNoFrame{Epoch, Epoch, Frontier};
+			Check(CoveredNoFrame.NoFrame(Epoch + 30'000, Frontier + 1, true) && CoveredNoFrame.Fits(FairDeadline + 1),
+				"a complete semantic prefix beyond the frozen fence covers that fence without needing exact equality");
+			Episode LateDischarge{Epoch, Epoch, Frontier};
+			Check(LateDischarge.NoFrame(FairDeadline + 1, Frontier, true) && !LateDischarge.Fits(FairDeadline + 1),
+				"eventual semantic discharge cannot erase an earlier product wait breach");
+			Check(!LateDischarge.NoFrame(Epoch + 10'000, Frontier, true) && !LateDischarge.Fits(FairDeadline + 1),
+				"a second earlier receipt cannot retrospectively repair a closed late source episode");
+			// This finite hypothetical reference has 64 complete groups per peer,
+			// all ready at cessation. Complete group acceptance resolves one source
+			// episode and immediately exposes its next ready remainder. NoFrame or
+			// partial filtering cannot do that. Fair progress alone is insufficient.
+			constexpr U GroupsPerPeer = 64, SmallBytes = 1'057, SlowWaveUs = 100'000;
+			std::array<Native, 32> SlowCurves;
+			std::array<U, 32> NextReady; NextReady.fill(Epoch);
+			U SlowAccepted = 0, SlowNative = 0, SlowRetired = 0, SlowCompleted = Epoch;
+			for (U Round = 0; Round < GroupsPerPeer; ++Round) {
+				for (U Wave = 0; Wave < 8; ++Wave) {
+					const U At = Epoch + (Round * 8 + Wave) * SlowWaveUs;
+					for (U Lane = 0; Lane < 4; ++Lane) {
+						const U Index = Wave * 4 + Lane, Token = Round * 32 + Index + 1;
+						Episode Ready{NextReady[Index], NextReady[Index], Frontier, Token};
+						Check(Ready.Accepted(At, SmallBytes, Token) && Ready.Fits(At) &&
+							SlowCurves[Index].Activate(Token, SmallBytes, At) &&
+							SlowCurves[Index].FirstSend(Token, SmallBytes, At + 1'000),
+							"every slow finite-reference group has fair source progress and timely positive native BODY");
+						SlowAccepted += SmallBytes; SlowNative += SlowCurves[Index].FirstSentBytes;
+						SlowRetired += SmallBytes; // Supplied exact ACK at the end of this wave.
+						NextReady[Index] = At;
+					}
+					SlowCompleted = At + SlowWaveUs;
+				}
+			}
+			const U ReferenceBound = ConvergenceBoundUs(GroupsPerPeer * SmallBytes, 32 * GroupsPerPeer * SmallBytes);
+			Check(SlowAccepted == 32 * GroupsPerPeer * SmallBytes && SlowAccepted == SlowNative &&
+				SlowNative == SlowRetired && SlowCompleted - Epoch > ReferenceBound,
+				"fair bounded group progress and exact terminal conservation cannot hide a late immutable reference prefix");
+			std::cout << "[PooledRecoveryContract:ProductProgressReview] hypothetical_only=1 peers=32 fair_wait_us="
+				<< FairWaitUs << " production_policy_unchanged=1\n";
+		}
 
 		// This is a declared finite, fully ready 32-peer workload. Its supplied
 		// opportunities and exact receipts establish the count/fairness seam, not

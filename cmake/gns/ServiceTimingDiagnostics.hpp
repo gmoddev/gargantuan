@@ -33,10 +33,24 @@ struct GargantuanServiceTimingSink {
 	bool DetailedCallbacks = false;
 	bool InitialOnly = false;
 	void (*InitialBreach)(void *, std::uint64_t, std::uint64_t, std::uint64_t) noexcept = nullptr;
+	bool CaptureCallsites = false;
 };
+// Named attribution uses the unchanged phase/record layout. Bit31 distinguishes
+// passive callsite scopes; Detail is this fixed enum, never a fabricated owner.
+enum class GargantuanServiceCallsite : std::uint64_t {
+	AdapterMutex = 101, RunCallbacks, PollObserve, PollReceive, PollReconcile,
+	StopLifecycleMutex, StopAdapterMutex, DisconnectLifecycleMutex, DisconnectAdapterMutex,
+	ApiLookup = 201, ApiTableWait, ApiConnectionWait,
+	TerminalReserved = 301, TerminalReserve, TerminalStore, TerminalTake, TerminalRelease
+};
+inline constexpr std::uint32_t GargantuanNamedCallsiteFlag = 0x80000000u;
 class GargantuanServiceTimingSpan;
 inline thread_local GargantuanServiceTimingSpan *GargantuanCurrentSnpTiming = nullptr;
 inline std::atomic<GargantuanServiceTimingSink *> GargantuanServiceTimingObserver{nullptr};
+inline bool GargantuanCallsiteTimingEnabled() noexcept {
+	const auto *Sink = GargantuanServiceTimingObserver.load(std::memory_order_acquire);
+	return Sink && Sink->CaptureCallsites;
+}
 inline bool GargantuanSetServiceTimingSink(GargantuanServiceTimingSink *Sink) noexcept {
 	if (!Sink) {
 		GargantuanServiceTimingObserver.store(nullptr, std::memory_order_release);
@@ -52,8 +66,10 @@ class GargantuanServiceTimingSpan final {
 	GargantuanServiceTimingSpan *PreviousSnpTiming = nullptr;
 	GargantuanServiceTimingRecord Value;
 public:
-	explicit GargantuanServiceTimingSpan(GargantuanServiceTimingPhase Phase, bool InitialSender = false) noexcept
+	explicit GargantuanServiceTimingSpan(GargantuanServiceTimingPhase Phase, bool InitialSender = false,
+		bool CallsiteOnly = false) noexcept
 		: Sink(GargantuanServiceTimingObserver.load(std::memory_order_acquire)) {
+		if (Sink && CallsiteOnly && !Sink->CaptureCallsites) Sink = nullptr;
 		if (Sink && Sink->InitialOnly && (Phase == GargantuanServiceTimingPhase::ThinkerCallback ||
 			(Phase == GargantuanServiceTimingPhase::SnpSender && !InitialSender))) Sink = nullptr;
 		if (Sink && (Phase == GargantuanServiceTimingPhase::ThinkerCallback || Phase == GargantuanServiceTimingPhase::SnpSender) &&
@@ -101,6 +117,17 @@ public:
 		Sink = nullptr;
 		Observer->Record(Observer->Context, Value);
 	}
+};
+class GargantuanServiceCallsiteSpan final {
+	GargantuanServiceTimingSpan Value;
+public:
+	explicit GargantuanServiceCallsiteSpan(GargantuanServiceCallsite Site, std::uint32_t Handle = 0) noexcept
+		: Value(GargantuanServiceTimingPhase::ApiConnectionLockWait, false, true) {
+		Value.SetDetail(static_cast<std::uint64_t>(Site)); Value.SetResult(Handle); Value.AddFlags(GargantuanNamedCallsiteFlag); Value.AddCount();
+	}
+	void Finish() noexcept { Value.Finish(); }
+	void AddCount() noexcept { Value.AddCount(); }
+	bool Enabled() const noexcept { return Value.Enabled(); }
 };
 // Count only the preexisting successful native packet hook, on this callback's
 // thread. The borrowed stack span is restored on every return/unwind; no owner

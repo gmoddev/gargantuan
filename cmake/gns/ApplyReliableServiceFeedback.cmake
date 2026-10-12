@@ -861,6 +861,19 @@ GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(csteamnetworkingsockets.cpp 2b260c05cc8c262e785387ea3d08eee74cc03b6eed00493e961a82c05dec5451)
 GargantuanReplaceFeedback("#include \"steamnetworkingsockets_connections.h\"" "#include \"steamnetworkingsockets_connections.h\"\n#include \"ServiceTimingDiagnostics.hpp\"")
+GargantuanReplaceFeedback("inline CSteamNetworkConnectionBase *GetConnectionByHandleForAPI( HSteamNetConnection sock, ConnectionScopeLock &scopeLock, const char *pszLockTag )\n{" [=[inline CSteamNetworkConnectionBase *GetConnectionByHandleForAPI( HSteamNetConnection sock, ConnectionScopeLock &scopeLock, const char *pszLockTag )
+{
+	GargantuanServiceCallsiteSpan GargantuanLookup(GargantuanServiceCallsite::ApiLookup, sock);]=])
+GargantuanReplaceFeedback("\t\tif ( !tableScopeLock.TryLock( g_tables_lock, 1, nullptr ) )\n\t\t\tcontinue;" [=[
+		GargantuanServiceCallsiteSpan GargantuanTableWait(GargantuanServiceCallsite::ApiTableWait, sock);
+		const bool bGargantuanTableLocked = tableScopeLock.TryLock( g_tables_lock, 1, nullptr );
+		GargantuanTableWait.Finish();
+		if ( !bGargantuanTableLocked ) continue;]=])
+GargantuanReplaceFeedback("\t\tif ( !scopeLock.TryLock( *pResult->m_pLock, 1, pszLockTag ) )\n\t\t\tcontinue;" [=[
+		GargantuanServiceCallsiteSpan GargantuanConnectionWait(GargantuanServiceCallsite::ApiConnectionWait, sock);
+		const bool bGargantuanConnectionLocked = scopeLock.TryLock( *pResult->m_pLock, 1, pszLockTag );
+		GargantuanConnectionWait.Finish();
+		if ( !bGargantuanConnectionLocked ) continue;]=])
 GargantuanReplaceFeedback("EResult CSteamNetworkingSockets::SendMessageToConnection( HSteamNetConnection hConn, const void *pData, uint32 cbData, int nSendFlags, int64 *pOutMessageNumber )\n{" [=[EResult CSteamNetworkingSockets::SendMessageToConnection( HSteamNetConnection hConn, const void *pData, uint32 cbData, int nSendFlags, int64 *pOutMessageNumber )
 {
 	GargantuanInitialServiceApiStage(false);

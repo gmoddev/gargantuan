@@ -90,6 +90,32 @@ inline bool TestGnsServiceTimingDiagnostics() {
 	Passed = Passed && Values.Count == 2 && Values.Records[0].Bytes == 7 && Values.Records[0].Count == 1 &&
 		Values.Records[1].Bytes == 16 && Values.Records[1].Count == 2 && GargantuanCurrentSnpTiming == nullptr;
 	GargantuanSetServiceTimingSink(nullptr);
+	Values.Count = 0; Values.Overflow = false;
+	Passed = GargantuanSetServiceTimingSink(&Sink) && Passed;
+	{
+		GargantuanServiceCallsiteSpan Disabled(GargantuanServiceCallsite::ApiLookup, 9);
+		Passed = Passed && !Disabled.Enabled() && !GargantuanCallsiteTimingEnabled();
+	}
+	Passed = Passed && Values.Count == 0;
+	Sink.CaptureCallsites = true;
+	{
+		GargantuanServiceCallsiteSpan Active(GargantuanServiceCallsite::ApiLookup, 9);
+		Passed = Passed && Active.Enabled(); Active.Finish(); Active.Finish();
+	}
+	Passed = Passed && Values.Count == 1 && Values.Records[0].Detail == 201 && Values.Records[0].Result == 9 &&
+		Values.Records[0].Flags == GargantuanNamedCallsiteFlag && Values.Records[0].Count == 1;
+	Values.Count = 0;
+	{
+		GargantuanServiceCallsiteSpan Outer(GargantuanServiceCallsite::PollReceive, 9);
+		{ GargantuanServiceCallsiteSpan Inner(GargantuanServiceCallsite::ApiConnectionWait, 9); }
+	}
+	Passed = Passed && Values.Count == 2 && Values.Records[0].Detail == 203 && Values.Records[1].Detail == 104;
+#if defined(_WIN32)
+	Passed = Passed && Values.Records[0].BeginQpc >= Values.Records[1].BeginQpc &&
+		Values.Records[0].EndQpc <= Values.Records[1].EndQpc;
+#endif
+	GargantuanSetServiceTimingSink(nullptr);
+	std::cout << "[Qualification:GnsCallsiteTiming] cases=3 passed=" << Passed << '\n';
 	std::cout << "[Qualification:GnsServiceTiming] cases=9 passed=" << Passed << '\n';
 	return Passed;
 }

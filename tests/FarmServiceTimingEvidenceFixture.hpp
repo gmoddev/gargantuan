@@ -118,5 +118,34 @@ inline void TestFarmServiceTimingEvidence() {
 			"once publication retains one whole native identity and bounded initial history");
 	}
 	Check(!GargantuanServiceTimingObserver.load(), "initial fixture releases owner");
+	{
+		Evidence Named(true, false, true);
+		auto *Sink = GargantuanServiceTimingObserver.load();
+		Check(Sink && Sink->CaptureCallsites && !Sink->DetailedCallbacks, "named mode explicitly opts in without high-rate callback detail");
+		{ GargantuanServiceCallsiteSpan Span(GargantuanServiceCallsite::ApiTableWait, 99); }
+		Named.Freeze(1234);
+		Check(Named.Stop(), "named mode removes borrowed sink");
+		std::ostringstream Out; Named.Write(Out, "named", true);
+		Check(Out.str().find("detail=202 result=99 error=0 flags=2147483648") != std::string::npos,
+			"named tags retain unchanged record layout without claiming a lock owner");
+	}
+	{
+		auto History = std::make_unique<Evidence::History>();
+		for (std::uint64_t I = 0; I < Evidence::Capacity + 1; ++I)
+			History->Append({.Phase=GargantuanServiceTimingPhase::ApiConnectionLockWait,
+				.BeginQpc=10, .EndQpc=30, .Detail=203, .Flags=GargantuanNamedCallsiteFlag});
+		History->Freeze(20);
+		History->Append({.Phase=GargantuanServiceTimingPhase::ApiConnectionLockWait,
+			.BeginQpc=21, .EndQpc=40, .Detail=203, .Flags=GargantuanNamedCallsiteFlag});
+		std::size_t Count = 0;
+		History->Visit([&](std::uint64_t, const Evidence::Record &Value) {
+			++Count; Check(Value.BeginQpc <= 20 && Value.EndQpc == 30 && Value.Flags == GargantuanNamedCallsiteFlag,
+				"pre-breach acquisition finishing after freeze is retained; post-breach begin is excluded");
+		});
+		Check(Count == Evidence::Capacity && History->OverwrittenCount() == 1 && !History->DroppedCount(),
+			"named history stays bounded and exposes overwritten evidence instead of inventing coverage");
+	}
+	Check(!GargantuanServiceTimingObserver.load(), "named fixture releases owner");
 	std::cout << "[Qualification:FarmServiceTiming] fixture=PASS cases=8\n";
+	std::cout << "[Qualification:FarmCallsiteTiming] fixture=PASS cases=2\n";
 }
