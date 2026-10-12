@@ -85,6 +85,40 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-12 — Original e8 PR CI FAIL; stats predicate migration.**
+At `e8c89f4a`, funded ACK stats token 34 conserves and retires 393652 BODY
+bytes, with zero retries. Its 347 positive-native events sum exactly; native
+completion is 21.794 ms, within D03's exact uniform completion budget.
+The fixture instead fails a 27.737-billion byte-us legacy running deficit
+against 18.025 billion. The separate hard completion flags are not printed
+in the failed log; no full D03 PASS is inferred. Original Windows failure
+and skipped dependent Linux job remain FAIL/SKIPPED evidence. Native32 has
+not launched. The fixture correction uses the existing native completion
+curve with exact identity, chronology, complete BODY and hard evidence flags,
+retains legacy diagnostic traces, and preserves funding, prompts, coverage
+and exact retirement. Focused regressions and fresh CI are required.
+Production code and contract constants are unchanged. **KI-006 remains OPEN.**
+
+The same original e8 manual package workflow passes 96/96 native tests but
+fails POOLED mixed-overload with a production execution-budget rejection
+(Main 100 ms or turnover 150 ms; the log omits the distinguishing bits).
+The terminal client-poll span is 214.799 ms and may include teardown;
+lock/scheduling/native cause is unresolved. Dependent Linux skips and no
+package exists. A bounded preflight retains the existing first-failure result
+and repairs independently missing ordinary source declarations without
+excluding normal gameplay under structural overload or changing any deadline.
+The stats correction separately passes its native preflight in 64.30 s.
+These results do not qualify or relabel the original failed candidate.
+
+The one corrected POOLED preflight passes eight cases in 125.828 s but does
+not reproduce the execution failure. Independent replay of the original
+loss-free ETW trace measures the terminal poll as 4.8864 ms Running,
+129.0823 ms Blocked and 80.8307 ms Ready. The wait owner and original first
+Main/turnover breach remain unmeasured; the span may include teardown.
+No demonstrated production fix is available. Further native32/physical
+campaigns stop for [execution architecture review](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#17-hybrid-execution-opportunity-qualification-decision-2026-10-12).
+All contract constants, failed CI and historical recovery qualification remain.
+
 **2026-10-12 — Sink-independent candidate CI FAIL, bounded correction.**
 At `7f30ed986`, GNS push/PR pass 11/11 each. Native PR/manual pass 96/96,
 then fail two obsolete textual assertions about successful submission and

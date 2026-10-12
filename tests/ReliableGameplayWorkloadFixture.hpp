@@ -544,6 +544,42 @@ void RunReliableGameplayWorkload(
 	};
 	struct PendingEvent { Clock::time_point Started; std::vector<WireValue> Arguments; };
 	Observation Results;
+	// One scalar witness per named case from the existing Main-owned sink.
+	// Forward every original callback; no payload history or changed health clock.
+	struct ExecutionWitness {
+		std::uint64_t *Step = nullptr;
+		unsigned Phase = 0, FirstPhase = 0;
+		bool Observed = false;
+		std::uint64_t FirstAt = 0, FirstStep = 0, PriorAt = 0, PriorStep = 0;
+		std::uint64_t LastAt = 0, LastStep = 0, DebtToken = 0, DebtBytes = 0;
+		ConnectionId Connection;
+		detail::PooledReliableServiceFeedback::Result FirstResult;
+		detail::PooledServiceSink *Previous = detail::ActivePooledService;
+		detail::PooledServiceSink Sink;
+		explicit ExecutionWitness(std::uint64_t &Value) : Step(&Value) {
+			Sink.Context = this;
+			Sink.Record = [](void *Context, const detail::PooledServiceRecord &Record) noexcept {
+				auto &Self = *static_cast<ExecutionWitness *>(Context);
+				if (!Self.Observed && Record.Result.ExecutionFailed) {
+					Self.Observed = true; Self.FirstAt = Record.NowMicroseconds; Self.FirstStep = *Self.Step;
+					Self.PriorAt = Self.LastAt; Self.PriorStep = Self.LastStep; Self.FirstPhase = Self.Phase;
+					Self.Connection = Record.Connection; Self.DebtToken = Record.DebtToken; Self.DebtBytes = Record.DebtBytes;
+					Self.FirstResult = Record.Result;
+				}
+				Self.LastAt = Record.NowMicroseconds; Self.LastStep = *Self.Step;
+				if (Self.Previous && Self.Previous->Record) Self.Previous->Record(Self.Previous->Context, Record);
+			};
+			Sink.AcceptedGrant = [](void *Context, ConnectionId Id, std::uint64_t Token,
+				std::uint64_t Bytes, std::uint64_t At) noexcept {
+				auto &Self = *static_cast<ExecutionWitness *>(Context);
+				if (Self.Previous && Self.Previous->AcceptedGrant)
+					Self.Previous->AcceptedGrant(Self.Previous->Context, Id, Token, Bytes, At);
+			};
+			detail::ActivePooledService = &Sink;
+		}
+		~ExecutionWitness() { detail::ActivePooledService = Previous; }
+		void Reset() noexcept { Observed = false; LastAt = LastStep = 0; }
+	} Execution(Results.StepCount);
 	std::map<int, PendingEvent> Events;
 	int Sequence = 0;
 	std::size_t PendingRequests = 0;
@@ -653,6 +689,7 @@ void RunReliableGameplayWorkload(
 		auto Measure = [&](double &Maximum, WorkloadPhase Phase, auto &&Operation) {
 			const auto CpuBefore = CaptureWorkloadCpu();
 			const auto Started = Clock::now();
+			Execution.Phase = static_cast<unsigned>(Phase);
 			Operation();
 			const auto Ended = Clock::now();
 			const auto CpuAfter = CaptureWorkloadCpu();
@@ -783,6 +820,13 @@ void RunReliableGameplayWorkload(
 	for (int Frame = 0; Frame < 120; ++Frame) Step();
 	for (const auto &Case : Cases) {
 		Results = {};
+		Execution.Reset();
+		// Structural overload retains normal ordinary protection. Only the two
+		// declared 16-KiB/concurrency-16 ordinary overload sources leave that class.
+		const bool OrdinaryNormal = Case.Frame != 16 * 1024 || Case.Concurrency != 16;
+		Check(detail::GameSessionTestAccess::SetOrdinarySourceNormal(Server, OrdinaryNormal) &&
+			detail::GameSessionTestAccess::SetOrdinarySourceNormal(Client, OrdinaryNormal),
+			"workload declares prospective ordinary scope without resetting accepted ownership or credits");
 		PreviousStepStarted.reset();
 		RecoveryProbeActive = false;
 		const auto CaseClockAnchor = test_detail::WorkloadClockAnchor::Capture();
@@ -833,6 +877,9 @@ void RunReliableGameplayWorkload(
 			Step();
 		}
 		const auto DemandEnded = Clock::now();
+		Check(detail::GameSessionTestAccess::SetOrdinarySourceNormal(Server, true) &&
+			detail::GameSessionTestAccess::SetOrdinarySourceNormal(Client, true),
+			"new recovery probes restore normal scope while prior accepted memberships remain frozen");
 		const auto DrainDeadline = DemandEnded + 20s;
 		const auto DemandEndMetrics = Server.GetMetrics();
 		// Qualification-only bounded inventory. Count closed Name segments in
@@ -982,6 +1029,15 @@ void RunReliableGameplayWorkload(
 			<< " server_poll_max_ms=" << Results.ServerPollMs << " client_poll_max_ms=" << Results.ClientPollMs
 			<< " server_session_max_ms=" << Results.ServerSessionMs << " client_session_max_ms=" << Results.ClientSessionMs
 			<< " observer_max_ms=" << Results.ObserverMs << " sleep_overshoot_max_ms=" << Results.SleepOvershootMs << '\n';
+		std::cout << "[Qualification:ExecutionWitness] case=" << Case.Name << " observed=" << Execution.Observed;
+		if (Execution.Observed) std::cout << " first_at_us=" << Execution.FirstAt << " first_step=" << Execution.FirstStep
+			<< " phase=" << Execution.FirstPhase << " prior_at_us=" << Execution.PriorAt << " prior_step=" << Execution.PriorStep
+			<< " connection_slot=" << Execution.Connection.Slot << " connection_generation=" << Execution.Connection.Generation
+			<< " main_failed=" << Execution.FirstResult.MainOpportunityFailed << " turnover_failed=" << Execution.FirstResult.TurnoverFailed
+			<< " max_main_us=" << Execution.FirstResult.MaximumMainOpportunityMicroseconds
+			<< " max_turnover_us=" << Execution.FirstResult.MaximumTurnoverMicroseconds
+			<< " debt_token=" << Execution.DebtToken << " debt_bytes=" << Execution.DebtBytes;
+		std::cout << '\n';
 		const auto Profile = CandidateReliableService().IsPooled() ? "POOLED_SERVICE" : "FULL_RESERVATION";
 		Results.CpuTiming.Print(std::cout, Case.Name, Profile);
 		CaseClockAnchor.Print(std::cout, Case.Name, Profile, "BEGIN");

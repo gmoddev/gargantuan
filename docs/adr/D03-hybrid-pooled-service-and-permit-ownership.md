@@ -386,3 +386,113 @@ code, timers, rates and hard acceptance constants are unchanged.
 Preflight JUnit SHA-256:
 `569fe54dc4b9e6d0ddc28e28decc523b5a25a95e68c794d6e7b2d27e419e0387`.
 Fresh original hosted CI is still required before the unlaunched campaign.
+
+## Stats-boundary D03 predicate migration (2026-10-12)
+
+Original PR CI at `e8c89f4aa575a00510ba8db32544fb12c4a618aa` fails
+`gargantuan_gns_funded_ack_stats`; its dependent Linux job is skipped.
+The control arm's token 34 has 393652 BODY bytes and exact first-send, ACK,
+retirement and cleared ownership; retries are zero. Its 347 retained positive
+native segment records sum to those exact bytes. First-send is 653 us after
+activation and completion is 21794 us after activation. The exact completion
+cost is `365642645504 <= 626199296000` byte-us. Legacy running deficit is
+`27736588736 > 18025216000` byte-us and is the shown failed predicate.
+The failed log does not print the separate hard completion flags, so their
+values are not inferred. This arithmetic is not a complete D03 qualification.
+Original Windows job `114687586999` log SHA-256:
+`e2682c0f74e78633d189bd05b8cc7915b4a0c4ba8ca5b19b2d00b7edc62e58bc`.
+The failed verdict remains unchanged; native32 run
+`eae1f917-1755-4f14-92ce-bb370dd0a9bd` has not executed.
+
+The stats fixture still fatally checked the legacy running/size-finite flags,
+despite the adopted nonfatal diagnostic semantics above. Its correction replays
+the existing bounded native BODY events through `NativeGrantCompletionCurve`,
+checks exact token/bytes/original activation, completed sequence, hard evidence
+flags and complete timestamp chronology, and rejects missing final bytes.
+The same 37324/37325-us integer boundary applies to tiny, medium and maximum
+grants. Invalid, incomplete, misidentified, reversed, overflowing and explicitly
+failed certificates remain rejected. Legacy failures retain their detailed
+trace output as diagnostics. Wire-prefix/terminal funding, stats/tracer coverage,
+prompt limits, payload/FIFO and exact ACK retirement checks are unchanged.
+This fixes the demonstrated stats-test migration only; separate stronger
+four-grant probes and physical prerequisites are unchanged. No production
+timer, scheduling, rate, acceptance constant or runtime behavior changes.
+Fresh focused preflight and exact-source hosted CI remain required.
+
+Focused fixture preflight passes in 64.30 s on the explicitly dirty e8 base
+with only the revised stats header transferred. Both 48-grant arms conserve
+6694471 B. Control has zero prompts and whole IPv6 cost 7204128 B below
+7587728 B; prompt mode has 17 prompts and cost 7204179 B below 7587730 B.
+Both arms observe tracer and instantaneous send/receipt coverage. The new
+completion/conservation definitions pass. No runtime legacy-only deficit
+reproduces; the deterministic legacy-failed/native-complete case executes.
+The preflight is not clean-source CI or native32 qualification.
+JUnit SHA-256:
+`7b09565fa0355c6808155f9425161e1b295946061a5cdb728dcbb8168d9e3ef5`.
+
+## Original e8 execution-opportunity failure (2026-10-12)
+
+The same source's original manual packaging workflow passes 96/96 native tests
+but fails the subsequent POOLED single-peer mixed-overload product workload.
+The server rejects peer 1:1 with the execution-opportunity budget diagnostic;
+that source predicate combines Main 100-ms and turnover 150-ms failures.
+The output does not retain the distinguishing bits. Service recovery,
+convergence and application failures follow disconnection; they are not an
+attributed native sender defect. The preceding structural-overload case
+recovers in 93.9855 ms and converges in 363.169 ms. Its 20.0094-s drain
+intentionally observes the 20-second journal snapshot.
+
+The terminal mixed-overload `Client.Poll` phase spans 214.7994 ms on the shared
+fixture Main thread (`3931549734000..3931764533400` steady ns). Coarse sampled
+thread/process CPU deltas are zero. This phase includes native polling and
+application dispatch and may include disconnect cleanup after an earlier
+rejection. It is not established as the initiating delay, lock contention,
+OS scheduling or native execution. Source bounds received work (1024 native
+messages / 2 MiB per connection, 128 dispatched events), but public pinned-GNS
+table/connection lock acquisition retries have no total deadline. Callback and
+terminal-store mutex acquisition also has no proven wall-time bound.
+
+The original six-job conjunction remains FAIL: Native push Windows 96 and
+Linux 53 pass; Native PR Windows 95/96 fails stats and Linux skips; both GNS
+events pass 11. The manual Linux job skips and no qualified package exists.
+Original index SHA-256:
+`47bcc9592fc604ed31436501b57f12ada0bb2121c4329489b19d3f40944e27fd`;
+checkout reconciliation:
+`2b97d621876250c5e773e2e6c3c0c2de4d008a8ccb222679d6b5da3201bfda46`;
+manual failed log:
+`07eb18991f12fe5df33c4c41adb5e5ee072fdd801cd9a350c19d7b57c874f55a`.
+
+One bounded existing POOLED workload preflight retains the first existing
+`PooledServiceRecord.Result` execution failure with flags, maxima, timestamp,
+step and debt identity. The scalar witness forwards all original evidence
+callbacks and changes no clocks or health rules. Independently, the fixture
+declares its 16-KiB/concurrency-16 gameplay/mixed ordinary overload sources,
+preserves normal ordinary protection during structural overload, and restores
+normal scope before new recovery probes without resetting credits or accepted
+memberships. The single-peer pooled client explicitly declares its ordinary
+source. These fixture corrections do not establish the cause or fix the
+retained execution rejection. No deadline exemption or runtime correction is
+justified by this evidence. Native32 remains unlaunched.
+
+The one focused preflight passes all eight cases in 125.828 s with every
+first-failure witness `observed=0`. Created/retired bytes both equal 38668514;
+terminal/outstanding bytes are zero. Process/port cleanup is verified.
+Summary SHA-256:
+`c1a914ce3ffe3bd153aa244060367775e2694c41cb1854de8f9da9fac446e8d8`.
+The original failure does not reproduce and remains unresolved.
+
+Independent offline replay of the original manual scheduler trace proves
+loss-free anchor-window coverage. The 214.7994-ms terminal client-poll span
+contains 4.8864 ms Running, 129.0823 ms Waiting/blocked and 80.8307 ms Ready.
+All four waits report state 5/reason 6; the first wait is 120.7932 ms.
+Wait object/stack/owner, first-breach time and Main-versus-turnover bit are
+not measured. That span may include cleanup after the actual initiating
+failure. QPC resolution is 100 ns; observer perturbation is unmeasured.
+Attribution SHA-256:
+`a141251b9a0a5adf86ae140ad7ddfdd32d79027e6ab93165de1490d2df5e8365`.
+
+No source-supported production correction is demonstrated. Further campaign
+launches stop for the [execution architecture assessment](../../devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#17-hybrid-execution-opportunity-qualification-decision-2026-10-12).
+Retain the exact 37.3243865966796875-ms completion, 50-ms ordinary, 100-ms
+Main and 150-ms turnover requirements and all other canonical guarantees.
+This is not a platform impossibility proof or a D03 qualification PASS.

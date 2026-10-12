@@ -7,8 +7,13 @@ evidence_date: 2026-10-12
 # Foundation 3L — execution-domain and native-egress ownership decision
 
 **Current state:** [D03](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md)
-adopts `HYBRID_F1_V1` and exact structural permit ownership; its implementation
-at `7c1be009fdbfcbe0857824393f8615a9c01a4225` remains qualification-pending.
+adopts `HYBRID_F1_V1` and exact structural permit ownership. The native
+implementation at `e8c89f4aa575a00510ba8db32544fb12c4a618aa` remains
+qualification-pending: original required CI and manual packaging fail.
+Section 17 records the corrected fixture preflights and the bounded review of
+the original execution-budget failure. No demonstrated production correction
+to that failure is selected; further campaign launches require execution-model
+review and qualifying evidence.
 The separately qualified native32 recovery at `5de6135c877a65b26303662a64910d8c88f321c0`
 remains valid at that revision. No new native32, Local32 or Node32 PASS is
 claimed. The first implementation CI push passed 95/96 Windows CTests but
@@ -25,7 +30,8 @@ and seven non-owning origin lists use existing native message lifetime and
 positive segment hooks, including pending packets. It changes no packet
 ordering, ACK ownership, pacing, structural permit or source acceptance limit.
 Diagnostic overflow cannot discharge obligations or fence production health.
-The correction remains under preflight; no new physical verdict is inferred.
+The correction passed its Windows preflights. The subsequent e8 CI failures
+and their measured limits are recorded below; no new physical verdict is inferred.
 
 **Historical review verdict: NATIVE ACTOR SERVICE REMAINED UNQUALIFIED;
 RECOVERY PREPARATION WAS UNDER INDEPENDENT CAUSAL INVESTIGATION.** The
@@ -1425,3 +1431,108 @@ None of these alternatives is automatically selected or implemented. No further
 initial-service diagnostic campaign, speculative pipeline or GNS replacement is
 started. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; PR #6 draft.**
 Local32, real-TLS Node32 and final acceptance remain withheld; no 3M or merge.
+
+## 17. Hybrid execution-opportunity qualification decision (2026-10-12)
+
+**FOUNDATION 3L — EXECUTION QUALIFICATION BLOCKED; ARCHITECTURE EVIDENCE REQUIRED.**
+
+Exact structural permit return, independent grant/journal rotation and the
+sink-independent native H2 policy are implemented under D03. Recovery's
+qualified encoder correction is preserved. The proposed one-pending-packet
+ownership model is not disproved by the following evidence, and no pipeline
+or transport replacement is justified.
+
+Original e8 push Windows/Linux and both GNS sanitizer events pass. Original
+PR Windows fails 1/96 in ACK stats and its Linux job skips. The fixture
+incorrectly makes a legacy running deficit fatal: token 34 completes all
+393652 BODY bytes in 21794 us with exact ACK/retirement and zero retries.
+The corrected test replays the bounded positive-native events through the
+unchanged D03 completion curve; invalid/incomplete/late certificates fail,
+and legacy traces remain diagnostic. Both 48-grant native arms pass the
+focused 64.30-s preflight, including the unchanged wire-prefix/terminal
+ceilings, prompt isolation and native tracer/stats coverage.
+
+The original manual workflow passes 96 native tests but fails the later
+single-peer POOLED mixed-overload workload. Its production rejection means
+Main opportunity 100 ms **or** grant turnover 150 ms failed. That run omits
+the original failing bit, armed-opportunity history and timestamped rejection.
+Recovery/convergence/application failures follow disconnection. No package
+exists and no candidate native32 has launched.
+
+The original loss-free scheduler trace matches PID 4464/TID 4420 and both
+MSVC QPC anchors. Its terminal client-poll step 590 spans 214.7994 ms:
+
+| Measured thread state | Time |
+| --- | --- |
+| Running | 4.8864 ms |
+| Waiting/blocked | 129.0823 ms |
+| Ready but not dispatched | 80.8307 ms |
+
+Four wait cycles all have state 5/reason 6. The first wait is 120.7932 ms,
+followed by 24.4504 ms ready time. These are measured scheduling states,
+not a named GNS mutex or call stack. The poll includes application dispatch
+and can include teardown after an earlier rejection. Its position relative
+to the first breach remains unmeasured. Removing ready time alone would
+leave 133.9687 ms of run/wait within this terminal span, but this arithmetic
+does not identify the failed opportunity or prove a platform impossibility.
+Calibration resolution is 100 ns, with BEGIN/END anchor brackets 0/100 ns;
+capture/observer perturbation is unmeasured and no overhead is subtracted.
+
+Source review finds bounded work counts (1024 native messages / 2 MiB per
+connection, 128 dispatched events), but no total wall deadline on the pinned
+GNS table/connection API acquisition loops or callback/terminal mutex waits.
+No demonstrated CPU-loop or cardinality defect explains this occurrence.
+
+One focused POOLED preflight corrects independently missing ordinary source
+declarations: gameplay/mixed ordinary overload leaves normal enrollment,
+structural overload retains normal ordinary protection, and new recovery
+probes restore normal scope without resetting buckets, clocks or accepted
+memberships. Its single-peer client declares its ordinary source. A scalar
+first-failure witness forwards the existing sink and grant callbacks and
+retains the existing execution bits, maxima, timestamp, step and debt identity.
+This explicitly dirty e8 fixture snapshot passes all eight cases in 125.828 s;
+every witness has `observed=0`. Created and retired bytes both equal 38668514,
+with zero outstanding/terminal bytes. Cleanup proves no remaining native
+processes or fixture-port owners. This non-reproduction does not attribute,
+correct or erase the original production rejection. No test is repeated.
+
+### Ranked next steps
+
+1. **Obtain the smallest missing causal evidence.** Join the existing first
+   failure result and armed opportunity/activation chronology to wait-owner or
+   stack evidence before teardown on the same call path. The retained trace
+   already proves blocked and runnable-delay intervals; another throughput
+   benchmark alone will not identify the owner. Required CI/package remains
+   failed, so this is a focused attribution prerequisite, not permission to
+   launch native32 or physical qualification.
+2. **Bound application/API ownership if attribution supports it.** Evaluate
+   an existing private try-lock/command boundary or separate client/server
+   execution ownership while preserving FIFO, generation, native chronology,
+   feedback, protected traffic and shutdown. Bounded queue counts alone do not
+   bound execution. Costs and race/lifecycle qualification are substantial;
+   no multi-packet rewrite is automatically selected.
+3. **Qualify a stronger execution environment or make a product decision.**
+   Include the required CI environment and actual supported topology. Support
+   exclusions or altered deadlines require a separate material decision;
+   priority/timer tuning and benchmark-derived slack are not corrections.
+
+The current evidence supports truthful fail-stop qualification, not a claim
+that the execution environment assures D03. It does not prove that Windows,
+the hardware, or every one-packet architecture is incapable of qualification.
+No source-supported production correction to the initiating failure is
+demonstrated after this bounded review. Further qualification campaigns stop.
+
+### Custody
+
+- Original CI index: `47bcc9592fc604ed31436501b57f12ada0bb2121c4329489b19d3f40944e27fd`.
+- Source/tree reconciliation: `2b97d621876250c5e773e2e6c3c0c2de4d008a8ccb222679d6b5da3201bfda46`.
+- Original manual log: `07eb18991f12fe5df33c4c41adb5e5ee072fdd801cd9a350c19d7b57c874f55a`.
+- Original manual diagnostic ZIP: `84562eb61959e6cffb9a7161aab6bd946a3c7a8fd6bd59b5d5b998bbace38439`.
+- Offline trace attribution: `a141251b9a0a5adf86ae140ad7ddfdd32d79027e6ab93165de1490d2df5e8365`.
+- Exact retained span rows: `e152e8ace0cfd03611def0dd6ad4330b7b784dc0139a039609699339416b3c3d`.
+- Focused POOLED preflight summary: `c1a914ce3ffe3bd153aa244060367775e2694c41cb1854de8f9da9fac446e8d8`.
+
+All failures retain their original source/verdict. The later fixture/evidence
+commit is not a relabeling of the native execution source. **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY; PR #6 draft.** No Local32/Node32/final
+acceptance, 3M, merge or release is claimed or started.

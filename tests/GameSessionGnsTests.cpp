@@ -445,6 +445,9 @@ end)
 	auto ClientTransport = std::make_shared<GameNetworkingSocketsTransport>();
 	auto ClientConfiguration = Configuration(GameSessionRole::Client, Port, false);
 	ClientConfiguration.ClientNonce = 0x32f1a69u;
+	// The single-peer product workload declares both ordinary source directions.
+	// Aggregate and feedback-only fixtures retain their independently scoped setup.
+	ClientConfiguration.DeclareNormalOrdinaryService = QualificationPooled && Workload && !Aggregate;
 	GameSession Client(ClientTransport, ClientConfiguration);
 	Check(Client.Start().Succeeded(), "real GNS GameSession client starts");
 

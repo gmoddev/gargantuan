@@ -1,10 +1,47 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-10-06
+last_verified: 2026-10-12
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Hybrid execution qualification stops for evidence review (2026-10-12)
+
+**FOUNDATION 3L — EXECUTION QUALIFICATION BLOCKED.**
+[D03](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md)
+explicitly adopts the hybrid completion, protected ordinary, Main opportunity
+and turnover requirements. Exact structural retirement returns its permit
+independently of ordinary ACK debt. The qualified recovery encoder correction
+and all historical failures remain preserved at their actual revisions.
+
+Original `e8c89f4aa575a00510ba8db32544fb12c4a618aa` push Windows 96/Linux 53
+and both GNS 11-case events pass. Original PR Windows fails ACK stats 1/96
+and its Linux job skips. The separately corrected stats fixture replaces a
+stale fatal legacy curve with exact D03-native event replay; both 48-grant
+arms and unchanged wire/prompt/control/conservation checks pass in 64.30 s.
+
+The original manual workflow passes 96 native tests but rejects a peer during
+POOLED mixed-overload for Main 100-ms or turnover 150-ms execution health.
+Its Linux job skips and no qualified package exists. The original loss-free
+ETW trace measures the terminal 214.7994-ms client poll as 4.8864 ms Running,
+129.0823 ms Blocked and 80.8307 ms Ready. Wait owner/stack, first-breach time
+and the failed execution bit remain unmeasured; that span can include teardown.
+
+One corrected fixture preflight declares ordinary overload truthfully while
+preserving normal gameplay during structural overload, restores future normal
+enrollment without resetting accepted obligations, and retains the existing
+first-failure result. All eight cases pass in 125.828 s without reproducing
+the failure. Created/retired bytes both equal 38668514; outstanding/terminal
+bytes and remaining native processes/port owners are zero. These are dirty-e8
+fixture preflights, not clean-source CI, native32 or physical qualification.
+
+No demonstrated production correction to the initiating failure is selected.
+The [bounded execution assessment](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#17-hybrid-execution-opportunity-qualification-decision-2026-10-12)
+ranks precise wait/ownership attribution before an API/command-boundary or
+supported-environment decision. All deadlines and guarantees remain unchanged.
+Further native32/physical campaigns stop. **KI-006 OPEN; Foundation 3L B —
+PARTIALLY READY; PR #6 draft; no 3M, merge or release.**
 
 ## Two-strategy networking investigation stops for review (2026-10-09)
 

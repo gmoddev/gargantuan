@@ -17,6 +17,90 @@ inline bool GrantConserved(const Feedback &Sender, std::uint64_t Accepted,
 		Sender.SentUnackedReliableStreamBytes == 0;
 }
 
+inline bool GrantCompletionHealthy(const Feedback &Sender, std::uint64_t Token,
+	std::uint64_t Bytes, std::uint64_t ActivatedAt) noexcept {
+	using Curve = gargantuan::network::NativeGrantCompletionCurve;
+	if (!Sender.CountersValid || Sender.StructuralCompletionEvidenceInvalid ||
+		Sender.StructuralCompletionServiceFailed || Sender.StructuralLastCompletedCompletionFailed ||
+		!Sender.StructuralCompletedGrantSequence || Sender.StructuralLastCompletedGrantToken != Token ||
+		Sender.StructuralLastCompletedGrantBytes != Bytes ||
+		Sender.StructuralLastCompletedGrantActivatedAtMicroseconds != ActivatedAt ||
+		!Sender.StructuralLastCompletedGrantFirstSendAtMicroseconds ||
+		Sender.StructuralLastCompletedGrantCompletedAtMicroseconds > Sender.ObservedAtMicroseconds ||
+		!Sender.LastCompletedStructuralSegmentEventCount ||
+		Sender.LastCompletedStructuralSegmentEventCount > Sender.LastCompletedStructuralSegmentEvents.size()) return false;
+	// Replay the existing bounded positive-native BODY record. Legacy packet-gap
+	// flags remain diagnostics; they cannot substitute for this D03 certificate.
+	Curve Completion;
+	if (!Completion.Activate(Token, Bytes, ActivatedAt)) return false;
+	for (std::uint32_t Index = 0; Index < Sender.LastCompletedStructuralSegmentEventCount; ++Index) {
+		const auto &Event = Sender.LastCompletedStructuralSegmentEvents[Index];
+		if (!Completion.FirstSend(Token, Event.PayloadBytes, Event.AtMicroseconds)) return false;
+	}
+	return Completion.FirstSentBytes == Bytes &&
+		Completion.FirstSentAtMicroseconds == Sender.StructuralLastCompletedGrantFirstSendAtMicroseconds &&
+		Completion.CompletedAtMicroseconds == Sender.StructuralLastCompletedGrantCompletedAtMicroseconds;
+}
+
+inline void CheckCompletionDefinition() {
+	const auto Certificate = [](std::uint64_t Bytes, std::uint64_t Elapsed) {
+		Feedback Value;
+		Value.StructuralCompletedGrantSequence = 34;
+		Value.StructuralLastCompletedGrantToken = 34; Value.StructuralLastCompletedGrantBytes = Bytes;
+		Value.StructuralLastCompletedGrantActivatedAtMicroseconds = 1000;
+		Value.StructuralLastCompletedGrantFirstSendAtMicroseconds = 1000 + Elapsed;
+		Value.StructuralLastCompletedGrantCompletedAtMicroseconds = 1000 + Elapsed;
+		Value.ObservedAtMicroseconds = 1000 + Elapsed;
+		for (std::uint64_t Remaining = Bytes; Remaining;) {
+			const auto Part = std::min<std::uint64_t>(Remaining, 1248);
+			Value.LastCompletedStructuralSegmentEvents[Value.LastCompletedStructuralSegmentEventCount++] =
+				{1000 + Elapsed, Part};
+			Remaining -= Part;
+		}
+		return Value;
+	};
+	for (const auto Bytes : {std::uint64_t{77}, std::uint64_t{393652}, std::uint64_t{524288}}) {
+		Require(GrantCompletionHealthy(Certificate(Bytes, 37324), 34, Bytes, 1000) &&
+			!GrantCompletionHealthy(Certificate(Bytes, 37325), 34, Bytes, 1000),
+			"D03 tiny/medium/maximum grants retain the exact integer completion boundary");
+	}
+	auto Timely = Certificate(393652, 21794);
+	Timely.StructuralLastCompletedGrantFailed = Timely.StructuralServiceFailed = true;
+	Timely.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds = 27736588736ULL;
+	Require(GrantCompletionHealthy(Timely, 34, 393652, 1000),
+		"legacy running failure must remain nonfatal for a complete D03-native certificate");
+	for (unsigned Case = 0; Case < 19; ++Case) {
+		auto Bad = Timely;
+		if (Case == 0) Bad.CountersValid = false;
+		if (Case == 1) Bad.StructuralCompletionEvidenceInvalid = true;
+		if (Case == 2) Bad.StructuralCompletionServiceFailed = true;
+		if (Case == 3) Bad.StructuralLastCompletedCompletionFailed = true;
+		if (Case == 4) Bad.StructuralCompletedGrantSequence = 0;
+		if (Case == 5) ++Bad.StructuralLastCompletedGrantToken;
+		if (Case == 6) --Bad.StructuralLastCompletedGrantBytes;
+		if (Case == 7) ++Bad.StructuralLastCompletedGrantActivatedAtMicroseconds;
+		if (Case == 8) Bad.StructuralLastCompletedGrantFirstSendAtMicroseconds = 0;
+		if (Case == 9) Bad.StructuralLastCompletedGrantCompletedAtMicroseconds = 0;
+		if (Case == 10) --Bad.ObservedAtMicroseconds;
+		if (Case == 11) Bad.LastCompletedStructuralSegmentEventCount = 0;
+		if (Case == 12) Bad.LastCompletedStructuralSegmentEventCount = 513;
+		if (Case == 13) --Bad.LastCompletedStructuralSegmentEvents[0].PayloadBytes;
+		if (Case == 14) ++Bad.LastCompletedStructuralSegmentEvents[0].PayloadBytes;
+		if (Case == 15) Bad.LastCompletedStructuralSegmentEvents[0].PayloadBytes = 0;
+		if (Case == 16) Bad.LastCompletedStructuralSegmentEvents[0].AtMicroseconds = 999;
+		if (Case == 17) --Bad.LastCompletedStructuralSegmentEvents[1].AtMicroseconds;
+		if (Case == 18) Bad.LastCompletedStructuralSegmentEvents[0].AtMicroseconds =
+			std::numeric_limits<std::uint64_t>::max();
+		Require(!GrantCompletionHealthy(Bad, 34, 393652, 1000),
+			"D03 certificate rejects incomplete BODY, identity/chronology/evidence errors and hard failures");
+	}
+	Require(!GrantCompletionHealthy(Timely, 0, 393652, 1000) &&
+		!GrantCompletionHealthy(Timely, 34, 0, 1000) &&
+		!GrantCompletionHealthy(Timely, 34, 524289, 1000) &&
+		!GrantCompletionHealthy(Timely, 34, 393652, 0), "invalid activation cannot certify native service");
+	std::cout << "[Network:AckStatsBoundary] CompletionDefinition=PASS contract=HYBRID_F1_V1\n";
+}
+
 inline std::uint64_t WholeWireCeiling(std::uint64_t Accepted, std::uint64_t ObservedUs) {
 	// Independent funding arithmetic, including retries, both endpoint emitters
 	// and the post-retirement tail. Reused at each prefix and at termination.
@@ -145,12 +229,15 @@ inline void Observe(bool Prompt) {
 		Pump(*Pair.Server, *Pair.Client, Pair.ServerEvents, Pair.ClientEvents, 5ms, [] { return false; });
 		Final = ReadWire(Pair);
 		const bool Conserved = GrantConserved(Final.Sender, Accepted, Token, Bytes);
-		const bool F1Healthy = !Final.Sender.StructuralLastCompletedGrantFailed && !Final.Sender.StructuralServiceFailed;
-		if (!Conserved || !F1Healthy) {
+		const bool LegacyF1Healthy = !Final.Sender.StructuralLastCompletedGrantFailed && !Final.Sender.StructuralServiceFailed;
+		const bool CompletionHealthy = GrantCompletionHealthy(Final.Sender, Token, Bytes, ActivatedAt);
+		if (!Conserved || !CompletionHealthy || !LegacyF1Healthy) {
 			// Failure-only evidence: never extend the preceding deadline or hide
 			// which independent delivery/accounting or F1 service predicate failed.
-			std::cerr << "[Network:AckStatsFailure] prompt=" << Prompt << " token=" << Token
-				<< " conserved=" << Conserved << " f1_healthy=" << F1Healthy
+			std::cerr << "[Network:AckStatsObservation] prompt=" << Prompt << " token=" << Token
+				<< " conserved=" << Conserved << " legacy_f1_healthy=" << LegacyF1Healthy
+				<< " completion_healthy=" << CompletionHealthy
+				<< " diagnostic_only=" << (Conserved && CompletionHealthy)
 				<< " bytes=" << Bytes << " accepted=" << Accepted << " activated_us=" << ActivatedAt
 				<< " elapsed_us=" << Now() - ActivatedAt
 				<< " deadline_elapsed=" << (std::chrono::steady_clock::now() >= Deadline)
@@ -178,7 +265,10 @@ inline void Observe(bool Prompt) {
 				<< " receiver_unacked=" << Final.Receiver.SentUnackedReliableStreamBytes
 				<< " receiver_retransmitted=" << Final.Receiver.ReliableStreamBytesRetransmitted
 				<< " grant_failed=" << Final.Sender.StructuralLastCompletedGrantFailed
-				<< " service_failed=" << Final.Sender.StructuralServiceFailed << '\n';
+				<< " service_failed=" << Final.Sender.StructuralServiceFailed
+				<< " completion_failed=" << Final.Sender.StructuralCompletionServiceFailed
+				<< " completed_completion_failed=" << Final.Sender.StructuralLastCompletedCompletionFailed
+				<< " completion_invalid=" << Final.Sender.StructuralCompletionEvidenceInvalid << '\n';
 			// Use the original Final snapshot. Its completed segment record survives
 			// ACK/retirement; never relabel an older completed token as this grant.
 			const auto &Sample = Final.Sender;
@@ -243,8 +333,7 @@ inline void Observe(bool Prompt) {
 		Require(Conserved, "stats-boundary grant did not conserve/retire its exact bytes");
 		Require(Cost(WireBefore, Final).ConservativeIpv6Bytes <= WholeWireCeiling(Accepted, Now() - StartUs),
 			"completed grant prefix exceeded independently derived whole-connection wire funding");
-		Require(F1Healthy,
-			"stats boundary violated unchanged F1");
+		Require(CompletionHealthy, "stats boundary violated exact D03 native completion");
 		ExactPayloads(Pair, {Payload(Bytes, std::byte{0x49})});
 		Require(AckAccess::Read(*Pair.Server, Pair.ServerConnection, Sender), "grant prompt evidence missing");
 		const auto Count = Requests(Sender, Token);
@@ -300,6 +389,7 @@ inline bool Run() {
     AckStatsTimingEvidence::Session Diagnostic;
 	try {
 		CheckConservationDefinition();
+		CheckCompletionDefinition();
 		Observe(false);
 		Diagnostic.StopTiming(); // Control pair is destroyed/joined; both native arms still run.
 		Observe(true);
