@@ -7,6 +7,59 @@
 namespace GnsAckStatsBoundaryFixture {
 using namespace GnsFundedAckCompatibilityFixture;
 
+inline bool GrantConserved(const Feedback &Sender, std::uint64_t Accepted,
+	std::uint64_t Token, std::uint64_t Bytes) noexcept {
+	return Sender.CountersValid && Sender.StructuralPayloadBytesFirstSent == Accepted &&
+		Sender.StructuralPayloadBytesAcked == Accepted &&
+		Sender.UniqueReliableStreamBytesFirstSent == Sender.UniqueReliableStreamBytesAcked &&
+		Sender.LastAttributedRetirementToken == Token && Sender.LastAttributedRetiredPayloadBytes == Bytes &&
+		Sender.ActiveAttributedRetirementToken == 0 && Sender.PendingReliableStreamBytes == 0 &&
+		Sender.SentUnackedReliableStreamBytes == 0;
+}
+
+inline std::uint64_t WholeWireCeiling(std::uint64_t Accepted, std::uint64_t ObservedUs) {
+	// Independent funding arithmetic, including retries, both endpoint emitters
+	// and the post-retirement tail. Reused at each prefix and at termination.
+	constexpr std::uint64_t MaximumWire = 1300 + 48;
+	constexpr std::uint64_t PairRequestConfirmation = 2 * 2 * MaximumWire;
+	constexpr std::uint64_t PeriodicNumerator = PairRequestConfirmation * (24 + 6 + 1);
+	constexpr std::uint64_t PairPeriodicRate = (PeriodicNumerator + 119) / 120;
+	constexpr std::uint64_t PopulationPeriodicRate = (32 * PeriodicNumerator + 119) / 120;
+	const PooledReliableServiceProfile Profile;
+	const auto ResidualRate = Profile.RequiredTransportReserve - PopulationPeriodicRate;
+	return Accepted + Accepted * ResidualRate / Profile.StructuralPool +
+		3 * PairRequestConfirmation + (ObservedUs * PairPeriodicRate + 999999) / 1000000;
+}
+
+inline void CheckConservationDefinition() {
+	Feedback Observed;
+	Observed.StructuralPayloadBytesFirstSent = Observed.StructuralPayloadBytesAcked = 231;
+	Observed.UniqueReliableStreamBytesFirstSent = Observed.UniqueReliableStreamBytesAcked = 237;
+	Observed.LastAttributedRetirementToken = 3; Observed.LastAttributedRetiredPayloadBytes = 77;
+	Observed.ReliableStreamBytesRetransmitted = 79;
+	const auto Conserved = GrantConserved(Observed, 231, 3, 77);
+	Require(Conserved && !(Conserved && Observed.ReliableStreamBytesRetransmitted == 0),
+		"old zero-retry predicate rejects exact conserved observed token 3; retries are independent wire cost");
+	for (unsigned Case = 0; Case < 9; ++Case) {
+		auto Bad = Observed;
+		if (Case == 0) Bad.StructuralPayloadBytesFirstSent += 79;
+		if (Case == 1) Bad.StructuralPayloadBytesAcked += 79;
+		if (Case == 2) Bad.UniqueReliableStreamBytesFirstSent += 79;
+		if (Case == 3) ++Bad.LastAttributedRetirementToken;
+		if (Case == 4) ++Bad.LastAttributedRetiredPayloadBytes;
+		if (Case == 5) Bad.ActiveAttributedRetirementToken = 3;
+		if (Case == 6) Bad.PendingReliableStreamBytes = 1;
+		if (Case == 7) Bad.SentUnackedReliableStreamBytes = 1;
+		if (Case == 8) Bad.CountersValid = false;
+		Require(!GrantConserved(Bad, 231, 3, 77), "retry cannot become unique service/ACK or hide an incorrect or incomplete owner");
+	}
+	const auto PrefixLimit = WholeWireCeiling(231, 553375);
+	const auto PrefixOvershoot = PrefixLimit + 1;
+	Require(!(PrefixOvershoot <= PrefixLimit) && PrefixOvershoot <= WholeWireCeiling(231 + 393652, 553375),
+		"a later grant cannot fund an earlier completed-prefix overshoot");
+	std::cout << "[Network:AckStatsBoundary] ConservationDefinition=PASS\n";
+}
+
 struct Totals {
 	std::uint64_t Tracers = 0, Instantaneous = 0, InstantaneousReceived = 0;
 	std::uint64_t ImmediateSent = 0, ImmediateReceived = 0, Requests = 0;
@@ -91,10 +144,7 @@ inline void Observe(bool Prompt) {
 		}
 		Pump(*Pair.Server, *Pair.Client, Pair.ServerEvents, Pair.ClientEvents, 5ms, [] { return false; });
 		Final = ReadWire(Pair);
-		const bool Conserved = Final.Sender.StructuralPayloadBytesFirstSent == Accepted && Final.Sender.StructuralPayloadBytesAcked == Accepted &&
-			Final.Sender.LastAttributedRetirementToken == Token && Final.Sender.LastAttributedRetiredPayloadBytes == Bytes &&
-			Final.Sender.ActiveAttributedRetirementToken == 0 && Final.Sender.PendingReliableStreamBytes == 0 &&
-			Final.Sender.SentUnackedReliableStreamBytes == 0 && Final.Sender.ReliableStreamBytesRetransmitted == 0;
+		const bool Conserved = GrantConserved(Final.Sender, Accepted, Token, Bytes);
 		const bool F1Healthy = !Final.Sender.StructuralLastCompletedGrantFailed && !Final.Sender.StructuralServiceFailed;
 		if (!Conserved || !F1Healthy) {
 			// Failure-only evidence: never extend the preceding deadline or hide
@@ -111,7 +161,7 @@ inline void Observe(bool Prompt) {
 				<< " active_clear=" << (Final.Sender.ActiveAttributedRetirementToken == 0)
 				<< " pending_clear=" << (Final.Sender.PendingReliableStreamBytes == 0)
 				<< " unacked_clear=" << (Final.Sender.SentUnackedReliableStreamBytes == 0)
-				<< " retransmission_zero=" << (Final.Sender.ReliableStreamBytesRetransmitted == 0)
+				<< " stream_equal=" << (Final.Sender.UniqueReliableStreamBytesFirstSent == Final.Sender.UniqueReliableStreamBytesAcked)
 				<< " first_sent=" << Final.Sender.StructuralPayloadBytesFirstSent
 				<< " acked=" << Final.Sender.StructuralPayloadBytesAcked
 				<< " retired_token=" << Final.Sender.LastAttributedRetirementToken
@@ -191,6 +241,8 @@ inline void Observe(bool Prompt) {
 			PrintFailureState("receiver", *Pair.Client, Pair.ClientConnection);
 		}
 		Require(Conserved, "stats-boundary grant did not conserve/retire its exact bytes");
+		Require(Cost(WireBefore, Final).ConservativeIpv6Bytes <= WholeWireCeiling(Accepted, Now() - StartUs),
+			"completed grant prefix exceeded independently derived whole-connection wire funding");
 		Require(F1Healthy,
 			"stats boundary violated unchanged F1");
 		ExactPayloads(Pair, {Payload(Bytes, std::byte{0x49})});
@@ -206,21 +258,14 @@ inline void Observe(bool Prompt) {
         AckStatsTimingEvidence::ReadNativeSnapshot("terminal", "receiver", Prompt, Grants, Receiver,
             [&] { return AckAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver); }), "final stats missing");
 	SenderTotals.Add(Sender); ReceiverTotals.Add(Receiver);
-	const auto Whole = Cost(WireBefore, ReadWire(Pair));
+	const auto TerminalWire = ReadWire(Pair);
+	const auto Whole = Cost(WireBefore, TerminalWire);
 	const auto ObservedUs = Now() - StartUs;
 	// Independent whole-connection check, including denied tiny grants and
 	// the post-retirement tail. One actual peer has two endpoint emitters;
 	// each periodic class can send one maximum request and confirmation.
 	// Keep this arithmetic independent of the production budget helper.
-	constexpr std::uint64_t MaximumWire = 1300 + 48;
-	constexpr std::uint64_t PairRequestConfirmation = 2 * 2 * MaximumWire;
-	constexpr std::uint64_t PeriodicNumerator = PairRequestConfirmation * (24 + 6 + 1);
-	constexpr std::uint64_t PairPeriodicRate = (PeriodicNumerator + 119) / 120;
-	constexpr std::uint64_t PopulationPeriodicRate = (32 * PeriodicNumerator + 119) / 120;
-	const PooledReliableServiceProfile Profile;
-	const auto ResidualRate = Profile.RequiredTransportReserve - PopulationPeriodicRate;
-	const auto WholeWireLimit = Accepted + Accepted * ResidualRate / Profile.StructuralPool +
-		3 * PairRequestConfirmation + (ObservedUs * PairPeriodicRate + 999999) / 1000000;
+	const auto WholeWireLimit = WholeWireCeiling(Accepted, ObservedUs);
 	PrintState("terminal", "sender", Sender); PrintState("terminal", "receiver", Receiver);
 	std::cout << "[Network:AckStatsCoverage] prompt=" << Prompt << " grants=" << Grants
 		<< " tracer_requests=" << SenderTotals.Tracers + ReceiverTotals.Tracers
@@ -245,6 +290,8 @@ inline void Observe(bool Prompt) {
 		<< " first_sender_instant_us=" << SenderTotals.FirstInstantaneous
 		<< " first_receiver_instant_us=" << ReceiverTotals.FirstInstantaneous
 		<< " sender_packets=" << Whole.SenderPackets << " receiver_packets=" << Whole.ReceiverPackets
+		<< " sender_retransmitted=" << TerminalWire.Sender.ReliableStreamBytesRetransmitted
+		<< " receiver_retransmitted=" << TerminalWire.Receiver.ReliableStreamBytesRetransmitted
 		<< " whole_ipv6_bound=" << Whole.ConservativeIpv6Bytes << " whole_wire_limit=" << WholeWireLimit
 		<< " lifetime_120s=NOT_MEASURED result=PASS\n";
 }
@@ -252,6 +299,7 @@ inline void Observe(bool Prompt) {
 inline bool Run() {
     AckStatsTimingEvidence::Session Diagnostic;
 	try {
+		CheckConservationDefinition();
 		Observe(false);
 		Diagnostic.StopTiming(); // Control pair is destroyed/joined; both native arms still run.
 		Observe(true);

@@ -85,6 +85,25 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-12 — Sink-independent candidate CI FAIL, bounded correction.**
+At `7f30ed986`, GNS push/PR pass 11/11 each. Native PR/manual pass 96/96,
+then fail two obsolete textual assertions about successful submission and
+client phase scope; their focused correction passes 28/28. Native push passes
+95/96 but funded ACK stats rejects a 79-byte retry despite exact accepted,
+first-send, ACK and retirement equality. ACK prepared 75.892 ms after receipt
+against its native 50-ms target; exact scheduling/lock cause is unknown.
+Canonical funding explicitly counts retries as cost and does not make a retry
+alone a conservation failure. The fixture correction retains independent
+wire funding, unique delivery, retirement, control coverage and service gates.
+All three dependent Linux jobs are skipped; no official package or native32
+result is claimed. Original failed logs, whole JUnit and indexes are preserved.
+The correction passes all 279 Farm32 tests (197.120 s) and the unchanged
+real native stats observation (64.29 s), including both 48-grant arms and
+existing wire ceilings now checked at every completed prefix. This run has
+zero retries; it does not attribute the prior late ACK. Production code,
+timers, rates and acceptance constants are unchanged.
+**KI-006 OPEN; fresh exact-source qualification required; PR #6 draft.**
+
 **2026-10-12 — Sink-independent H2 correction under qualification.** All six
 original hosted jobs passed at `561baba1d7e948bedc52430d40123fdd657226bc`
 after the endpoint pipe correction (Windows 96/96, native Linux 53/53 and

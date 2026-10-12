@@ -318,18 +318,43 @@ class OrdinaryDemandTests(unittest.TestCase):
         Native = (Root / "src/network/GameNetworkingSocketsTransport.cpp").read_text()
         Start = Native.index("TransportOperationResult GameNetworkingSocketsTransport::Send(")
         Send = Native[Start:Native.index("std::size_t GameNetworkingSocketsTransport::PollEvents", Start)]
-        self.assertIn('case k_EResultOK:\n\t\t\tRecordOrdinary("OrdinaryReliableSent")', Send)
+        SuccessStart = Send.index('case k_EResultOK:')
+        SuccessEnd = Send.index('case k_EResultIgnored:', SuccessStart)
+        Success = Send[SuccessStart:SuccessEnd]
+        Record = 'RecordOrdinary("OrdinaryReliableSent")'
+        self.assertEqual(Send.count(Record), 1)
+        self.assertEqual(Success.count(Record), 1)
+        self.assertLess(Send.index('const auto Result = SteamAPI_ISteamNetworkingSockets_SendMessageToConnection('),
+                        SuccessStart)
+        self.assertLess(Success.index(Record),
+                        Success.index('return Operation(TransportOperationStatus::Succeeded);'))
+        self.assertNotIn(Record, Send[:SuccessStart])
+        self.assertNotIn(Record, Send[SuccessEnd:])
         self.assertIn('Message.Traffic() != TrafficClass::StructuralReplication', Send)
         self.assertIn('Payload.size() + AdapterEnvelopeBytes', Send)
         self.assertIn('if (!runtime_detail::PublicationLatencySelected(Message.Destination())) return;', Send)
-        self.assertNotIn('RecordOrdinary("OrdinaryReliableSent")', Send[:Send.index('case k_EResultOK:')])
 
     def test_client_closes_reload_before_deliberate_overload_callback(self):
         Root = Path(__file__).resolve().parents[3]
         Player = (Root / "src/host/player/PlayerHost.cpp").read_text()
         Loop = Player[Player.index('while (Runtime->ProcessService->Alive)'):]
-        self.assertLess(Loop.index('GetAttributeValue("ScaleOverloadEnabled")'), Loop.index('Runtime->Step()'))
-        self.assertIn('std::string_view{}, Overload)', Loop)
+        BeforeStep = Loop[:Loop.index('Runtime->Step()')]
+        Phase = BeforeStep.index('GetAttributeValue("ScalePhase")')
+        Overload = BeforeStep.index('GetAttributeValue("ScaleOverloadEnabled")')
+        PhaseName = BeforeStep.index('const auto PhaseName = Name ? std::string_view(*Name) : std::string_view{};')
+        Normal = BeforeStep.index('const bool Normal = !Overload &&')
+        PrivateScope = BeforeStep.index('SetOrdinarySourceNormal(*Session, Normal)')
+        DiagnosticScope = BeforeStep.index('if (PublicationEvidence)')
+        self.assertLess(BeforeStep.index('if (FarmScaleWorkload) {'), Phase)
+        self.assertLess(Phase, PhaseName)
+        self.assertLess(PhaseName, Normal)
+        self.assertLess(Overload, Normal)
+        self.assertIn('std::optional<WireValue>(WireValue(true))', BeforeStep[Overload:Normal])
+        for Name in ('baseline', 'load', 'resident', 'evict', 'reload'):
+            self.assertIn(f'PhaseName == "{Name}"', BeforeStep[Normal:PrivateScope])
+        self.assertLess(Normal, PrivateScope)
+        self.assertLess(PrivateScope, DiagnosticScope)
+        self.assertIn('PublicationEvidence->SetTrafficPhase(PhaseName, Overload);', BeforeStep)
 
 
 if __name__ == "__main__":

@@ -329,3 +329,60 @@ in 0.39 s. It covers unresolved feedback, negative-result retry, late positive
 worker completion without a diagnostic sink and terminal detach/release.
 Fresh exact-source hosted CI and the bounded campaign remain separate gates.
 No native32, Local32 or Node32 result is inferred from these tests.
+
+### First sink-independent source CI (2026-10-12): FAIL retained
+
+At `7f30ed98670f94a22c4ecf6d604725a4fec28396`, both original GNS sanitizer
+jobs pass 11/11. Native PR and the official dispatch pass 96/96 native tests,
+then reject two stale source-text assertions: successful submission recording
+is no longer immediately adjacent to the OK case, and the client phase is now
+named before scope publication. The corrected assertions retain the successful
+GNS submission boundary and the independent private/diagnostic scope update
+before the gameplay step. This is not a native OS-completion measurement.
+The focused ordinary-demand tests pass 28/28.
+
+The original Native push separately passes 95/96 and fails funded ACK stats.
+A 77-byte token 3 completes native first-send in 126 us. Accepted, unique BODY
+first-send, BODY ACK, token/byte retirement and cleared ownership all match.
+One 79-byte stream retry makes the fixture's combined `Conserved` false.
+Its receiver schedules ACK at +50000 us but prepares it at +75892 us and
+positively sends it at +75943 us. Pinned retry timeout is smoothed ping times
+3000 plus 60000 us; retry is compatible with this delayed execution. The exact
+scheduling/lock cause is uninstrumented and no correction to it is claimed.
+
+The accepted [physical funding clarification](../../devdocs/CurrentArchitecture/PhysicalFundingGateReview3L.md)
+explicitly treats nonzero retransmission as wire cost, not failure alone.
+D01 charges retries/duplicates independently and D03 preserves that rule.
+Logical conservation must therefore remain separate from retry telemetry.
+The full stats/funding observation aborted before its terminal checks; neither
+the observed equalities nor this source analysis relabels the run as PASS.
+The reviewed fixture correction preserves exact delivery/retirement and all
+funding, control-coverage, prompt-isolation and service gates. Fresh source
+verification is required. No production timer, priority, rate or acceptance
+constant is adjusted.
+
+Both original dependent Linux jobs and the manual Linux job are skipped.
+The original CI conjunction fails and no official package is produced.
+Original index SHA-256:
+`e0527807b93ec5d3b859106b869883be818c629214a57fb951fa83282d268ac4`;
+checkout reconciliation:
+`f6537182cb64c9e20a3034cc8f232862317c2140241293690ce2975c8cd66bc9`.
+The failed push's unchanged whole 96-case JUnit SHA-256 is
+`ade7ffe95dbc338154776a0e68b3de8080b13ae97a3d23a950dd80958cbe6407`.
+These remain historical failures; staged native32 plan
+`4c49856c-783e-45c0-b6a1-9ab9a2c3fc3d` has not executed.
+
+Correction preflight: all 279 existing Farm32 tooling tests PASS in 197.120 s.
+The focused real native stats boundary passes in 64.29 s: both original
+48-grant arms, all completed-prefix wire ceilings, exact payload/stream
+ACK/retirement, tracer and instantaneous send/receipt coverage, and prompt
+isolation. Control has zero prompts; funded mode has 17. Each accepts
+6694471 B; whole IPv6 wire upper bounds are 7204128 and 7204179 B, below
+the unchanged 7587727 and 7587729 B ceilings. Both endpoint retry totals
+are zero in this fresh run, so it does not reproduce or explain the late ACK.
+The deterministic observed-value counterexample and nine invalid-accounting
+negatives qualify the changed conservation definition. Native production
+code, timers, rates and hard acceptance constants are unchanged.
+Preflight JUnit SHA-256:
+`569fe54dc4b9e6d0ddc28e28decc523b5a25a95e68c794d6e7b2d27e419e0387`.
+Fresh original hosted CI is still required before the unlaunched campaign.
