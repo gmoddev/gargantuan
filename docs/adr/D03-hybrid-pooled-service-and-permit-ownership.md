@@ -216,3 +216,42 @@ same bound passes. Both logs and JUnit are retained at
 local `C:\Users\aiden\.codex\artifacts\foundation3l-permit-ownership` directory.
 This dirty-source preflight does not replace exact-source hosted CI or a physical
 receipt. Additional queue-watchdog regressions and final source gates follow.
+
+### First committed-source CI and supervisor correction
+
+Native source `7c1be009fdbfcbe0857824393f8615a9c01a4225` preserves the prior
+deterministic commits. Both original GNS sanitizer workflows passed:
+push `38192457367` and PR `38192459467`. The push collection verified the
+exact checkout marker and 11 original JUnit cases. This is partial CI evidence.
+Windows push `38192457355` passed 95/96 CTests; the endpoint fixture failed
+with `redirected output did not drain` after its harmless 32-child sampler
+observation. Its dependent Linux job was skipped, so the required CI
+conjunction did not pass. Native32 has not launched on this revision.
+
+A bounded isolated Windows counterexample occupied the shared worker pool,
+exited the owned child and retained its real anonymous pipes. `CopyToAsync`
+missed the existing 5000-ms drain wait; the existing dedicated
+`PhysicalFarmPipeDrain` completed both streams within that unchanged wait and
+preserved exact stdout/stderr bytes. This demonstrates the implementation
+mechanism; the original CI did not instrument pool saturation, so attributing
+its precise scheduling state remains inference. The endpoint correction reuses
+that helper and pins/stages its dependency. It changes no networking contract,
+shutdown timeout or native implementation. A new exact-source CI conjunction
+is required before the single fresh native32 campaign.
+
+Correction preflight: endpoint fixture PASS in 21.49 s; isolated starvation
+and the existing 33-child/66-stream pipe test PASS in 9.22 s; analyzer inventory
+PASS; final acceptance reader 39/39 PASS; existing outer staging mocks 48/48
+PASS. The isolated fixture waits for completed pipe writes before occupying
+the pool and uses a child blocked on its own redirected stdin, avoiding an
+unrelated child-start or descendant-spawn race. Its intermediate fixture
+quoting failure remains retained. This observer-process correction does not
+attribute the historical native initial-service failure.
+
+Logs and original JUnit files are retained at
+`C:\Users\aiden\.codex\artifacts\foundation3l-endpoint-pipe-attribution`.
+
+Retained failure log SHA-256:
+`7f6a83570750e1b0c5639d2a2554d96d044b3d9568c6db5dc26b925f4dc29ce9`,
+at `C:\Users\aiden\.codex\artifacts\foundation3l-permit-ownership\native-push-38192457355-failure.log`.
+Historical failures and the qualified recovery correction remain unchanged.

@@ -45,6 +45,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'PhysicalFarmPipeDrain.ps1')
 $OwnedProcesses = [Collections.Generic.List[object]]::new()
 $ResourceSamples = [Collections.Generic.List[object]]::new()
 $HostResourceSamples = [Collections.Generic.List[object]]::new()
@@ -540,9 +541,9 @@ function Start-EndpointProcess {
 			OutputPath = $OutputPath; ErrorPath = $ErrorPath
 			OutputStream = $Output; ErrorStream = $ErrorStream
 			OutputCopy = $(if ($SamplerPipes) { [FarmSamplerPipeCopy]::Start($Process.StandardOutput.BaseStream, $Output) }
-				else { $Process.StandardOutput.BaseStream.CopyToAsync($Output) })
+				else { [PhysicalFarmPipeDrain]::Start($Process.StandardOutput.BaseStream, $Output) })
 			ErrorCopy = $(if ($SamplerPipes) { [FarmSamplerPipeCopy]::Start($Process.StandardError.BaseStream, $ErrorStream) }
-				else { $Process.StandardError.BaseStream.CopyToAsync($ErrorStream) })
+				else { [PhysicalFarmPipeDrain]::Start($Process.StandardError.BaseStream, $ErrorStream) })
 		}
 	} catch {
 		if ($Started -and -not $Process.HasExited) { try { $Process.Kill($true) } catch {} }

@@ -325,7 +325,8 @@ def PrepareInputsOnce(ConfigPath, TransportInstance=None, AttemptId=None):
                  "NewPhysicalGameSessionFarmProjection.ps1",
                  "NewPhysicalGameSessionFarmNodeTls.ps1",
                  "PhysicalGameSessionFarmPreflight.ps1",
-                 "PhysicalGameSessionFarmEndpoint.ps1"):
+                 "PhysicalGameSessionFarmEndpoint.ps1",
+                 "PhysicalFarmPipeDrain.ps1"):
         SourceFile = SOURCE.parent.parent / "tests" / Name
         Destination = str(PureWindowsPath(WorkerRunRoot) / Name)
         TransportInstance.RemoteCopy(SourceFile, Destination)

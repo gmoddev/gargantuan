@@ -6,8 +6,18 @@ evidence_date: 2026-10-11
 
 # Foundation 3L — execution-domain and native-egress ownership decision
 
-**Current verdict: NATIVE ACTOR SERVICE REMAINS UNQUALIFIED; RECOVERY
-PREPARATION IS UNDER INDEPENDENT CAUSAL INVESTIGATION.** The
+**Current state:** [D03](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md)
+adopts `HYBRID_F1_V1` and exact structural permit ownership; its implementation
+at `7c1be009fdbfcbe0857824393f8615a9c01a4225` remains qualification-pending.
+The separately qualified native32 recovery at `5de6135c877a65b26303662a64910d8c88f321c0`
+remains valid at that revision. No new native32, Local32 or Node32 PASS is
+claimed. The first implementation CI push passed 95/96 Windows CTests but
+failed the endpoint redirected-pipe teardown fixture; both original GNS
+sanitizer workflows passed. A bounded anonymous-pipe counterexample supports
+reusing the existing dedicated drain, without changing shutdown bounds.
+
+**Historical review verdict: NATIVE ACTOR SERVICE REMAINED UNQUALIFIED;
+RECOVERY PREPARATION WAS UNDER INDEPENDENT CAUSAL INVESTIGATION.** The
 original static review below found the exclusive pooled-server lease to be the
 smallest defensible capacity boundary for the packaged ServerHost and identified
 ACK/history, chronology, protected-service, and close-path blockers before a

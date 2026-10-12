@@ -76,6 +76,7 @@ ANALYZER_FILES = (
     "tests/PhysicalGameSessionFarmReconcile.ps1",
     "tests/PhysicalGameSessionFarm.ps1",
     "tests/PhysicalGameSessionFarmEndpoint.ps1",
+    "tests/PhysicalFarmPipeDrain.ps1",
     "tests/PhysicalGameSessionFarmNodeTls.ps1",
     "tests/AdmissionFairnessEvidence.ps1",
     "tests/RecoveryCausalEvidence.ps1",

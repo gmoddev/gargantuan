@@ -1,6 +1,11 @@
 #requires -Version 7.0
 . (Join-Path $PSScriptRoot 'PhysicalFarmPipeDrain.ps1')
 $ErrorActionPreference = 'Stop'
+# Keep the worker-pool bound inside a fresh owned process; do not perturb the
+# sampler/controller process or the subsequent 33-child drain test.
+$PowerShell = (Get-Process -Id $PID).Path
+& $PowerShell -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'PhysicalFarmPipeDrainStarvationTests.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'isolated pipe-starvation regression failed' }
 $TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $Root = [IO.Path]::GetFullPath((Join-Path $TempRoot ('GargantuanFarmPipeDrain-' + [Guid]::NewGuid().ToString('N'))))
 if (-not $Root.StartsWith($TempRoot, [StringComparison]::OrdinalIgnoreCase)) {

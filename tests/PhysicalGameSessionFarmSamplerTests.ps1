@@ -2,6 +2,7 @@
 # Only harmless owned Python sleepers and an owned PowerShell sampler are run.
 # Adapter queries are supplied fixtures; these tests do not qualify a farm/NIC.
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'PhysicalFarmPipeDrain.ps1')
 & (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmSamplerSourceTests.ps1')
 $Endpoint = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmEndpoint.ps1'
 $Tokens = $null; $Errors = $null

@@ -71,7 +71,8 @@ section reports exact terminal accepted/retired/debt conservation, observed
 grant and credit high-water against their existing 4-grant, 512-KiB peer and
 2-MiB global limits, backlog/deferral counters, and observed per-generation
 eligibility waits. The accepted exact-demand episodes now have a separate
-run-scoped verdict against the canonical 220.5-ms first-grant eligibility bound;
+run-scoped verdict against its explicit versioned first-grant eligibility bound:
+220.5 ms for historical V1/V2, or D03's 1181.25 ms for V3 `HYBRID_F1_V1`;
 an interruption, disposal, or open demand makes complete exact-demand episode
 coverage inconclusive. Even a passing set of accepted grants does not prove
 continuous semantic backlog, sustained fair share, or overload backpressure.
@@ -211,8 +212,14 @@ qualified source checkout. The actual outer campaign `collect` binds role and
 capture indices through `farm_campaign_runner.Reconcile`; it does not execute
 these PowerShell analyzers or consume the legacy `package.py` endpoint bundle.
 Keep the complete checkout-relative analyzer layout and use
-`PhysicalFarmAnalysisInventory.ps1` to hash the 20 transitive analysis files,
-including clock, lifecycle and Remote ownership helpers, before independent reconciliation.
+`PhysicalFarmAnalysisInventory.ps1` to hash the 23 transitive analysis files,
+including clock, lifecycle, Remote ownership and `PhysicalFarmPipeDrain.ps1`
+helpers, before independent reconciliation. The role-local endpoint uses the
+same existing dedicated drains as the monolithic farm: one bounded-lifetime
+reader per owned redirected stream, so idle Windows anonymous-pipe reads do
+not consume the shared worker pool. The helper is included in the hash-verified
+endpoint staging closure. The existing process-exit and stream-drain shutdown
+bounds remain unchanged.
 Its `SourceCommit` must match a clean HEAD for those files. Prepend the approved
 installed `C:\Sandbox\Codex\Tools\physical-qualifier\runtime` directory to
 the controller process PATH, then supply that exact `python.exe` path and its

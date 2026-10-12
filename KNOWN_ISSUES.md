@@ -85,6 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-11 — First hybrid committed-source CI: partial; endpoint drain correction.**
+At `7c1be009fdbfcbe0857824393f8615a9c01a4225`, both original GNS sanitizer
+workflows passed. Windows push `38192457355` passed 95/96 CTests but failed the
+harmless endpoint fixture's redirected-output teardown; its dependent Linux
+job was skipped. A bounded real anonymous-pipe counterexample establishes
+that the endpoint's remaining `CopyToAsync` readers can miss the unchanged
+5-second shutdown wait under shared-worker starvation. Reusing the existing
+dedicated drain corrects that mechanism; exact CI saturation was unmeasured.
+The helper is included in endpoint staging and analyzer custody. Fresh
+exact-source CI remains required; native32 has not launched. No timer, native
+health, resource or product bound is changed by this supervisor correction.
+**KI-006 OPEN; Foundation 3L partially ready; PR #6 draft.**
+
 **2026-10-11 — D03 hybrid implementation, qualification pending.** The task
 reconciled the two local unpushed deterministic commits with remote PR #6.
 Exact retired structural permits now return independently of ordinary ACK

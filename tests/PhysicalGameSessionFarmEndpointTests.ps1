@@ -3,6 +3,7 @@
 # executable, socket, capture, or privileged service is started.
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'PhysicalFarmPipeDrain.ps1')
 $Source = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmEndpoint.ps1'
 $Tokens = $null
 $Errors = $null
