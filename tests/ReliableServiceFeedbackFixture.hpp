@@ -1,6 +1,9 @@
 #pragma once
 #include "../src/network/ReliableServiceFeedback.hpp"
 #include "../cmake/gns/ReliableServiceFeedback.hpp"
+#include "../cmake/gns/ProtectedOrdinaryService.hpp"
+#include "../src/runtime/OrdinaryServiceMetadata.hpp"
+#include "../src/runtime/PublicationLatencyDiagnostics.hpp"
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingsockets.h>
 #include <stdexcept>
@@ -613,6 +616,55 @@ inline bool Run() {
 		Require(Invalid.QualifiedOrdinaryEvidenceInvalid && !Invalid.QualifiedOrdinaryCompletedMessages,
 			"oversized BODY cannot certify first-send completion");
 	});
+	Case("ProtectedOrdinaryMessageOwnedClockAndStickyHealth", [] {
+		GargantuanProtectedOrdinaryService Health;
+		GargantuanProtectedOrdinaryService::Message Timely, Late, LaterTimely;
+		Require(Health.Enroll(Timely, 0, 1'000'000, 115), "protected body enrolled without a diagnostic sequence");
+		Health.FirstSend(Timely, 114, 1'049'999);
+		Health.Observe(1'050'000);
+		Require(!Health.EverFailed && !Health.ActiveDeadlineFailed && Timely.RemainingBodyBytes == 1,
+			"partial body at exact 50-ms deadline has no slack or fabricated completion");
+		Health.FirstSend(Timely, 1, 1'050'000);
+		Health.Observe(1'100'000);
+		Require(!Timely.Owner && !Health.EverFailed && Health.MaximumLatencyMicroseconds == 50'000,
+			"timely native completion is detached before a later actor frontier");
+		Require(Health.Enroll(Late, 0, 2'000'000, 115), "next protected obligation enrolled");
+		Health.FirstSend(Late, 115, 2'050'001);
+		Require(Health.Enroll(LaterTimely, 6, 2'100'000, 115), "later direct obligation enrolled");
+		Health.FirstSend(LaterTimely, 115, 2'100'001);
+		Health.Observe(2'200'000);
+		Require(Health.EverFailed && !Health.ActiveDeadlineFailed && !Health.EvidenceInvalid &&
+			!Late.Owner && !LaterTimely.Owner, "50-ms+1 breach cannot be erased by a later timely completion");
+	});
+	Case("ProtectedOrdinaryOriginFrontierAndDiagnosticIndependence", [] {
+		GargantuanProtectedOrdinaryService Health;
+		std::array<GargantuanProtectedOrdinaryService::Message, 64> Messages;
+		GargantuanReliableServiceCounters Diagnostic;
+		for (unsigned Index = 0; Index < Messages.size(); ++Index) {
+			Require(Health.Enroll(Messages[Index], Index % 7, 1'000'000 + Index, 33), "health has no diagnostic 40-message cap");
+			Diagnostic.RegisterQualifiedOrdinary(Index + 1, 33, Index + 1, 1, 1'000'000 + Index);
+		}
+		Require(Diagnostic.QualifiedOrdinaryEvidenceInvalid && !Diagnostic.Invalid, "optional certificate overflow stays diagnostic");
+		for (auto &Message : Messages) Health.FirstSend(Message, 33, 1'040'000);
+		Health.Observe(1'100'000);
+		Require(!Health.EvidenceInvalid && !Health.EverFailed, "observer exhaustion cannot change production health or delivery");
+		GargantuanProtectedOrdinaryService::Message Newer, Older;
+		Require(Health.Enroll(Newer, 0, 2'000'000, 33) && Health.Enroll(Older, 1, 1'900'000, 33),
+			"different scheduler origins may invert original acceptance order");
+		Health.Observe(2'010'000);
+		Require(Health.ActiveDeadlineFailed && Health.EverFailed && !Health.EvidenceInvalid,
+			"all origin heads cover the older obligation behind a newer serializer head");
+		Health.Purge();
+		Require(!Newer.Owner && !Older.Owner, "terminal purge detaches nodes before reliability release");
+		GargantuanProtectedOrdinaryService Unsupported;
+		GargantuanProtectedOrdinaryService::Message First, Inverted;
+		Require(Unsupported.Enroll(First, 6, 3'000'000, 33) && !Unsupported.Enroll(Inverted, 6, 2'999'999, 33) &&
+			Unsupported.EvidenceInvalid && !Inverted.Owner, "unsupported concurrent-origin inversion fails health evidence without taking ownership");
+		Unsupported.Purge();
+		GargantuanProtectedOrdinaryService Premature;
+		{ GargantuanProtectedOrdinaryService::Message Body; Require(Premature.Enroll(Body, 0, 1, 1), "release fixture"); }
+		Require(Premature.EvidenceInvalid, "unexpected early message release cannot hide missing first-send");
+	});
 	Case("QualifiedOrdinaryDelayedActorDoesNotExhaustEvidence", [] {
 		GargantuanReliableServiceCounters Value;
 		// Sixteen accepted bodies fit one native packet. Its positive OS result
@@ -659,6 +711,22 @@ inline bool Run() {
 			!Snapshot.Counters.QualifiedOrdinaryEverFailed && Snapshot.Counters.QualifiedOrdinaryMaximumLatencyMicroseconds <= 50'000,
 			"actual positive UDP results certify complete ordinary BODY and acceptance-to-last-send latency");
 	});
+	Case("ProtectedOrdinaryAdapterWithoutDiagnosticSink", [] {
+		OwnedPair Owner; auto &Pair = Owner.Pair;
+		Require(!gargantuan::runtime_detail::ActivePublicationLatency, "fixture has no diagnostic observer");
+		const auto Now = SteamNetworkingSocketsLib::GargantuanReliableServiceClock();
+		Require(Now > 60'000, "monotonic source clock available");
+		auto Intent = Message(Pair.ServerConnection, DeliveryMode::ReliableOrdered,
+			std::vector<std::byte>(115, std::byte{0x52}), Pair.Limits);
+		{
+			gargantuan::runtime_detail::OrdinaryServiceScope Queued({Now - 60'000, 2, true});
+			Require(Intent && Pair.Server->Send(*Intent).Succeeded(), "already accepted protected message reaches native transport");
+		}
+		const auto Final = Complete(Pair, 115 + 32);
+		Require(Final.ProtectedOrdinaryEverFailed && !Final.ProtectedOrdinaryEvidenceInvalid &&
+			!Final.QualifiedOrdinaryRegisteredMessages && !Final.QualifiedOrdinaryEvidenceInvalid,
+			"late complete native BODY fails production health without enrolling the diagnostic table");
+	});
 	Case("SnapshotOverhead", [] {
 		OwnedPair Owner; auto &Pair = Owner.Pair;
 		const auto Before = Sample(Pair);
@@ -676,7 +744,7 @@ inline bool Run() {
 			<< " terminal_vector_bytes=" << sizeof(std::vector<std::optional<Feedback>>)
 			<< " snapshot_mean_ns=" << Elapsed / Count << " samples=" << Count << '\n';
 	});
-	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=20\n";
-	return Passed == 20;
+	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=23\n";
+	return Passed == 23;
 }
 }

@@ -21,6 +21,7 @@ struct PooledReliableServiceFeedback {
 	bool ServiceEligible = false;
 	bool QueuedOfferFailed = false;
 	bool QueuedOrdinaryFailed = false, QueuedOrdinaryEverFailed = false;
+	bool QueuedQualifiedOrdinaryEverFailed = false; // Optional certificate history only.
 	bool ExecutionFailed = false, MainOpportunityFailed = false, TurnoverFailed = false;
 	std::uint64_t MaximumMainOpportunityMicroseconds = 0, MaximumTurnoverMicroseconds = 0;
 	std::uint64_t LastCompletedTurnoverToken = 0, LastCompletedTurnoverActivatedAtMicroseconds = 0;
@@ -93,6 +94,7 @@ struct PooledReliableServiceFeedback {
 		std::uint64_t ObservedAtMicroseconds = 0, RetiredToken = 0, RetiredBytes = 0;
 		bool ExecutionFailed = false;
 		bool QueuedOrdinaryEverFailed = false;
+		bool QueuedQualifiedOrdinaryEverFailed = false;
 		bool MainOpportunityFailed = false, TurnoverFailed = false;
 		std::uint64_t MaximumMainOpportunityMicroseconds = 0, MaximumTurnoverMicroseconds = 0;
 		std::uint64_t CompletedTurnovers = 0, CompletedAdmissionOpportunities = 0;
@@ -107,6 +109,7 @@ struct PooledReliableServiceFeedback {
 		Result Output;
 		Output.ExecutionFailed = ExecutionFailed;
 		Output.QueuedOrdinaryEverFailed = QueuedOrdinaryEverFailed;
+		Output.QueuedQualifiedOrdinaryEverFailed = QueuedQualifiedOrdinaryEverFailed;
 		Output.MainOpportunityFailed = MainOpportunityFailed; Output.TurnoverFailed = TurnoverFailed;
 		Output.MaximumMainOpportunityMicroseconds = MaximumMainOpportunityMicroseconds;
 		Output.MaximumTurnoverMicroseconds = MaximumTurnoverMicroseconds;
@@ -150,7 +153,7 @@ struct PooledReliableServiceFeedback {
 			return Output;
 		}
 		const auto &S = *Sample;
-		if (!S.CountersValid || S.StructuralCompletionEvidenceInvalid || S.QualifiedOrdinaryEvidenceInvalid || S.ObservedAtMicroseconds > Now ||
+		if (!S.CountersValid || S.StructuralCompletionEvidenceInvalid || S.ObservedAtMicroseconds > Now ||
 			S.UniqueReliableStreamBytesAcked > S.UniqueReliableStreamBytesFirstSent ||
 			S.StructuralPayloadBytesAcked > S.StructuralPayloadBytesFirstSent ||
 			S.StructuralPayloadBytesFirstSent > S.UniqueReliableStreamBytesFirstSent ||
@@ -276,8 +279,8 @@ struct PooledReliableServiceFeedback {
 		// The native sender checks every first-send event and every observed
 		// still-backlogged interval. A short zero-ACK sample is not a failure.
 		Output.Qualified = Output.Available && !S.StructuralCompletionServiceFailed && !QueuedOfferFailed &&
-			!S.StructuralLastCompletedCompletionFailed && !ExecutionFailed && !QueuedOrdinaryFailed &&
-			!S.QualifiedOrdinaryLastCompletedFailed && !S.QualifiedOrdinaryActiveDeadlineFailed;
+			!S.StructuralLastCompletedCompletionFailed && !ExecutionFailed && !QueuedOrdinaryFailed && !QueuedOrdinaryEverFailed &&
+			!S.ProtectedOrdinaryEverFailed && !S.ProtectedOrdinaryActiveDeadlineFailed && !S.ProtectedOrdinaryEvidenceInvalid;
 		OrdinaryUnsent = OrdinaryCreated - S.OrdinaryPayloadBytesFirstSent;
 		Output.OrdinaryUnsent = OrdinaryUnsent;
 		ServiceEligible = Output.Qualified;

@@ -1,7 +1,7 @@
 ---
 status: accepted-qualification-pending
 owner: runtime-networking
-reviewed: 2026-10-11
+reviewed: 2026-10-12
 supersedes: D01/F1 hard packet timing and implied continuous delivered capacity
 ---
 
@@ -36,7 +36,7 @@ Historical failures retain their original source, contract and verdict.
    lateness claim. Reconciliation uses the actual worker completion timestamp.
    Earlier incomplete evidence must not be retrospectively repaired.
 
-2. **Protected ordinary FIFO.** A qualified ordinary reliable gameplay/control
+2. **Protected ordinary FIFO.** A prospectively protected ordinary reliable gameplay/control
    message must complete unique native BODY first-send within **50000 us of its
    original scheduler acceptance**, including any scheduler and GNS queue delay.
    Direct control has no scheduler prefix: its successful submission starts at
@@ -46,6 +46,19 @@ Historical failures retain their original source, contract and verdict.
    exposed prefixes and continuing arrivals must be covered. RPC p95/p99/max
    remain 150/250/500 ms; Event ACK/action maxima remain 250 ms. Dependency waits
    never restart invocation clocks. No stage receives another 50-ms allowance.
+
+   Membership uses the existing combined ordinary source envelope: per peer
+   64 messages/s with burst 16 and 32768 B/s with burst 20480 B; per session
+   512 messages/s with burst 128 and 262144 B/s with burst 163840 B. Complete
+   message bytes include the 32-byte adapter envelope. Gameplay and control
+   share these allocations. Control funding/reserves are not additional source
+   arrival allowances. Ready pooled servers enroll this class automatically;
+   clients require the trusted native startup declaration. Bootstrap and an
+   explicitly declared workload overload do not enroll new protected work.
+   Membership is immutable at acceptance; later scope changes cannot remove
+   an obligation or recreate source credit. Excess traffic retains existing
+   acceptance, funding, backpressure and overload treatment. The classifier
+   adds no pacing, rejection, scheduler or public API.
 
 3. **Exact turnover and completed opportunity.** Select **150000 us** as a new
    combined structural turnover entitlement, from activation through exact
@@ -172,6 +185,30 @@ Grant certificates require exact counts, completion, retirement and completed
 Main opportunity/turnover identities; zero or missing evidence is not success.
 
 The missing H2 acceptance fact is supplied by existing positive segment hooks:
+
+Runtime protection is independent of an optional publication observer. The
+original acceptance timestamp is captured before observer callbacks and follows
+the existing scheduler message through WouldBlock. Direct protection starts
+at transport entry and charges its prospective class only after successful
+native acceptance. A nonzero queued timestamp also prevents bootstrap or
+out-of-class queued work from being reclassified at a later Ready handoff.
+
+Existing GNS message lifetime owns remaining unique BODY and non-owning links
+in seven monotonic origin lists (six scheduler priorities and direct sends).
+Positive never-sent BODY intersections reduce remaining bytes; retries, ACKs
+and cursor advancement cannot discharge that obligation. At a complete native
+feedback frontier, seven list heads suffice to detect an overdue outstanding
+message, including provisional packet references. Completion/unlink is O(1).
+Terminal purge detaches links before native release. Unsupported metadata or
+unexpected early release invalidates protection evidence without fabricating
+delivery, corrupting reliability ownership or replaying a successful send.
+Missed protected deadlines remain sticky health failures for that connection
+lifetime, even if a subsequent message is timely. Diagnostic queue failures
+and diagnostic table overflow do not set production protection health.
+The added native metadata footprint must be included in actual resource gates;
+the compact structural accountant bound is unchanged.
+
+Separately, the qualification certificate retains its bounded event table:
 qualified origin/timestamp POD follows the existing reliable message; unique
 BODY intersections advance only after positive native send. A fixed 40-entry
 qualification metadata table retains up to 20 timely completed messages in
@@ -255,3 +292,40 @@ Retained failure log SHA-256:
 `7f6a83570750e1b0c5639d2a2554d96d044b3d9568c6db5dc26b925f4dc29ce9`,
 at `C:\Users\aiden\.codex\artifacts\foundation3l-permit-ownership\native-push-38192457355-failure.log`.
 Historical failures and the qualified recovery correction remain unchanged.
+
+### Sink-independent ordinary health correction (2026-10-12)
+
+All six original hosted jobs passed on baseline
+`561baba1d7e948bedc52430d40123fdd657226bc`: Windows 96/96, native Linux
+53/53 and GNS sanitizer 11/11 in each event. Official package custody also
+verified both 58-file runtime closures. These receipts do not qualify the
+subsequent ordinary-health correction.
+
+A source counterexample found that no optional publication sink produced no
+ordinary diagnostic tag, so even a tiny message completing at 51 ms could
+escape production H2 while structural completion, opportunity and turnover
+remained timely. No physical reproduction is claimed. The correction separates
+runtime membership/health as specified above and keeps the existing observer
+as certificate evidence. Independent review additionally removed a diagnostic
+queue-failure dependency and froze acceptance before optional callbacks.
+
+Combined MSVC Release preflight, four build jobs, production pause hooks OFF:
+eight affected suites PASS in 71.88 s. Production accounting has 30 cases,
+capacity schedules 13, causal recovery 32, native finite curves 19 and feedback
+23. Coverage includes no-sink native lateness, 50000/50001 boundaries, partial
+BODY/retries, sticky late-then-timely health, crossed scheduler origins,
+diagnostic overflow, policy churn, bootstrap, WouldBlock and observer clock
+perturbation. The first compile failed a missing fixture include and the
+second link failed the omitted private transport-policy forwarder; both
+failures and corrected snapshots are retained. Neither is a measured service
+failure. Actual pinned allocation uses new/delete without whole-object memset;
+the added message member's constructor/destructor participates in that lifetime.
+
+Receipts and source-member hashes are retained under
+`C:\Users\aiden\.codex\artifacts\foundation3l-h2-runtime-protection`
+and the corresponding worker artifact directory. The separate MSVC build with
+test-only pause hooks ON passed both native pending-ownership and worker suites
+in 0.39 s. It covers unresolved feedback, negative-result retry, late positive
+worker completion without a diagnostic sink and terminal detach/release.
+Fresh exact-source hosted CI and the bounded campaign remain separate gates.
+No native32, Local32 or Node32 result is inferred from these tests.

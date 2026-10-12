@@ -103,13 +103,17 @@ bool GargantuanBeginReliableRetirementAttribution(std::uint64_t Token,
 
 bool GargantuanBeginReliableSubmissionMetadata(bool StructuralClass,
 	std::uint64_t QualifiedSequence, std::uint64_t QualifiedPhase,
-	std::uint64_t SchedulerAcceptedAtMicroseconds) noexcept {
+	std::uint64_t SchedulerAcceptedAtMicroseconds, bool ProtectedOrdinary,
+	std::uint64_t ProtectedAcceptedAtMicroseconds, unsigned ProtectedOrigin) noexcept {
 	if (PendingReliableRetirement.SubmissionMetadata) return false;
 	PendingReliableRetirement.SubmissionMetadata = true;
 	PendingReliableRetirement.StructuralClass = StructuralClass;
 	PendingReliableRetirement.QualifiedSequence = QualifiedSequence;
 	PendingReliableRetirement.QualifiedPhase = QualifiedPhase;
 	PendingReliableRetirement.SchedulerAcceptedAtMicroseconds = SchedulerAcceptedAtMicroseconds;
+	PendingReliableRetirement.ProtectedOrdinary = ProtectedOrdinary;
+	PendingReliableRetirement.ProtectedAcceptedAtMicroseconds = ProtectedAcceptedAtMicroseconds;
+	PendingReliableRetirement.ProtectedOrigin = ProtectedOrigin;
 	return true;
 }
 

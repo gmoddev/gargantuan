@@ -5,12 +5,14 @@
 #include "InitialServiceTrace.hpp"
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 namespace gargantuan::network {
 class GameNetworkingSocketsTransport;
 class NetworkScheduler;
 namespace detail {
+	class OrdinaryServicePolicy;
 	struct ReliableServiceAcceptedBytes {
 		std::uint64_t All = 0, Structural = 0, Gameplay = 0;
 	};
@@ -72,6 +74,9 @@ struct ReliableServiceFeedback {
 	bool StructuralLastCompletedCompletionFailed = false;
 	bool StructuralCompletionEvidenceInvalid = false;
 	std::uint64_t OrdinaryPayloadBytesFirstSent = 0;
+	// Production health is independent of optional diagnostic certificate scope.
+	bool ProtectedOrdinaryEverFailed = false, ProtectedOrdinaryActiveDeadlineFailed = false;
+	bool ProtectedOrdinaryEvidenceInvalid = false;
 	std::uint64_t QualifiedOrdinaryRegisteredMessages = 0, QualifiedOrdinaryCompletedMessages = 0;
 	std::uint64_t QualifiedOrdinaryPendingMessages = 0, QualifiedOrdinaryMaximumLatencyMicroseconds = 0;
 	bool QualifiedOrdinaryEverFailed = false, QualifiedOrdinaryLastCompletedFailed = false;
@@ -82,6 +87,12 @@ struct ReliableServiceFeedback {
 	std::uint32_t QualifiedOrdinaryFailureExpectedBytes = 0, QualifiedOrdinaryFailureFirstSentBytes = 0;
 };
 struct ReliableServiceFeedbackAccess {
+	[[nodiscard]] static bool DeclareOrdinaryPolicy(IGameTransport &, ConnectionId,
+		std::shared_ptr<OrdinaryServicePolicy>);
+	[[nodiscard]] static bool DeclareOrdinaryPolicy(NetworkScheduler &, ConnectionId,
+		std::shared_ptr<OrdinaryServicePolicy>);
+	[[nodiscard]] static std::optional<std::uint64_t> OldestProtectedOrdinary(
+		const NetworkScheduler &, ConnectionId);
 	[[nodiscard]] static std::optional<ReliableServiceAcceptedBytes> Accepted(const NetworkScheduler &Scheduler, ConnectionId Connection);
 	// Read only, bounded by the scheduler's existing six queue/input limits.
 	// Zero means no qualified ordinary message remains before native handoff.

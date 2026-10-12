@@ -590,6 +590,13 @@ namespace {
 			!Restricted.IsValid() && Configuration(GameSessionRole::Server, "10.0.0.2").IsValid(),
 			"non-loopback DevelopmentLocal endpoints require the explicit insecure-development override"
 		);
+		auto DeclaredClient = Configuration(GameSessionRole::Client);
+		DeclaredClient.DeclareNormalOrdinaryService = true;
+		Check(DeclaredClient.IsValid() && !DeclaredClient.ReliableService,
+			"trusted client ordinary source declaration is independent of server funding and the wire profile");
+		auto WrongRoleDeclaration = Configuration(GameSessionRole::Server);
+		WrongRoleDeclaration.DeclareNormalOrdinaryService = true;
+		Check(!WrongRoleDeclaration.IsValid(), "server normal declaration remains selected only by its pooled profile");
 
 		auto World = std::make_shared<DataModel>();
 		auto Control = std::dynamic_pointer_cast<CharacterControlService>(World->GetService("CharacterControlService"));

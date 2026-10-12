@@ -1,5 +1,6 @@
 #include "gargantuan/network/Transport.hpp"
 #include "ReliableServiceFeedback.hpp"
+#include "OrdinaryServicePolicy.hpp"
 
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
@@ -8,6 +9,15 @@
 #include <type_traits>
 
 namespace gargantuan::network {
+	bool IGameTransport::SetOrdinaryServicePolicy(ConnectionId, std::shared_ptr<detail::OrdinaryServicePolicy>) { return true; }
+	bool detail::ReliableServiceFeedbackAccess::DeclareOrdinaryPolicy(IGameTransport &Transport,
+		ConnectionId Connection, std::shared_ptr<detail::OrdinaryServicePolicy> Policy) {
+		// The same Main-owned policy is retained by the scheduler and provider.
+		// Native providers additionally validate the live connection generation;
+		// default providers support only the deterministic scheduler-side seam.
+		return Connection.IsValid() && Policy && Policy->OnOwnerThread() &&
+			Transport.SetOrdinaryServicePolicy(Connection, std::move(Policy));
+	}
 	bool IGameTransport::EnableReliableServiceFeedback() { return false; }
 	std::optional<detail::ReliableServiceFeedback> IGameTransport::ReadReliableServiceFeedback(ConnectionId) const { return {}; }
 	std::optional<detail::ReliableServiceFeedback> IGameTransport::ReadResolvedReliableServiceFeedback(

@@ -5,6 +5,7 @@
 #include "host/common/FarmLifecycleEvidence.hpp"
 #include "host/player/FarmRecoveryObservation.hpp"
 #include "network/ReliableServiceFeedback.hpp"
+#include "network/GameSessionTestAccess.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -206,8 +207,11 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					.Limits = network::GameSessionConfiguration::DefaultLimits(),
 					.ClientNonce = FarmEnabled ? FarmClientNonce : 0,
 					.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
+					.DeclareNormalOrdinaryService = true,
 				}
 			);
+			if (FarmScaleWorkload && !network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, false))
+				throw std::runtime_error("[Network:OrdinaryService] Client bootstrap source scope failed");
 			if (!Session->Start().Succeeded()) throw std::runtime_error("client game-session endpoint failed to start");
 			SDLHost BootstrapHost;
 			for (std::uint64_t Tick = 1; Tick <= network::DefaultGameSessionHandshakeTimeoutTicks; ++Tick) {
@@ -320,14 +324,19 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		while (Runtime->ProcessService->Alive) {
 			const auto FrameStarted = std::chrono::steady_clock::now();
 			if (Session) (void)Session->Poll();
-			if (PublicationEvidence) {
+			if (FarmScaleWorkload) {
 				const auto Phase = World->GetAttributeValue("ScalePhase");
 				const auto *Name = Phase ? std::get_if<std::string>(&*Phase) : nullptr;
 				// Recovery deliberately retains ScalePhase=reload. Its existing
 				// enable transition ends fixed demand before the next Luau step.
 				const bool Overload = World->GetAttributeValue("ScaleOverloadEnabled") ==
 					std::optional<WireValue>(WireValue(true));
-				PublicationEvidence->SetTrafficPhase(Name ? std::string_view(*Name) : std::string_view{}, Overload);
+				const auto PhaseName = Name ? std::string_view(*Name) : std::string_view{};
+				const bool Normal = !Overload && (PhaseName == "baseline" || PhaseName == "load" ||
+					PhaseName == "resident" || PhaseName == "evict" || PhaseName == "reload");
+				if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, Normal))
+					throw std::runtime_error("[Network:OrdinaryService] Client source scope failed");
+				if (PublicationEvidence) PublicationEvidence->SetTrafficPhase(PhaseName, Overload);
 			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (ClockCalibration) {

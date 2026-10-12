@@ -1,7 +1,7 @@
 ---
 status: review-required-non-normative
 owner: runtime-networking
-evidence_date: 2026-10-11
+evidence_date: 2026-10-12
 ---
 
 # Foundation 3L — execution-domain and native-egress ownership decision
@@ -15,6 +15,17 @@ claimed. The first implementation CI push passed 95/96 Windows CTests but
 failed the endpoint redirected-pipe teardown fixture; both original GNS
 sanitizer workflows passed. A bounded anonymous-pipe counterexample supports
 reusing the existing dedicated drain, without changing shutdown bounds.
+
+Subsequent exact-source CI at `561baba1d7e948bedc52430d40123fdd657226bc`
+passed all six original jobs. An independent pre-campaign review then found
+that optional ordinary diagnostic tags still selected production H2 health.
+The current correction separates a Main-owned prospective source declaration
+and immutable acceptance metadata from certificate collection. Remaining BODY
+and seven non-owning origin lists use existing native message lifetime and
+positive segment hooks, including pending packets. It changes no packet
+ordering, ACK ownership, pacing, structural permit or source acceptance limit.
+Diagnostic overflow cannot discharge obligations or fence production health.
+The correction remains under preflight; no new physical verdict is inferred.
 
 **Historical review verdict: NATIVE ACTOR SERVICE REMAINED UNQUALIFIED;
 RECOVERY PREPARATION WAS UNDER INDEPENDENT CAUSAL INVESTIGATION.** The

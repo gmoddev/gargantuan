@@ -18,6 +18,24 @@ related_adrs:
 
 ## Foundation 3L finite-grant delivery
 
+The current coordinated health contract is
+[D03 / HYBRID_F1_V1](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md).
+It preserves native-positive truth, exact generation/token retirement and
+bounded protected ordinary completion while retaining the legacy F1 curves as
+diagnostics. Qualification remains pending. Ready pooled server policy and an
+explicit trusted client declaration classify the existing combined ordinary
+source envelope independently of optional publication observers. Acceptance
+metadata remains on the existing scheduler/native message; positive unique
+BODY completion and a complete pending-result frontier drive runtime health.
+Seven non-owning per-origin native lists add no payload queue or scheduler.
+Diagnostic table overflow cannot invalidate production byte accounting or
+change runtime protection membership. Hard protection breaches remain sticky
+for the connection lifetime. Native metadata footprint is covered by resource
+qualification rather than claimed unchanged.
+
+The following finite-grant experiment describes the prior D01 mechanism and
+its historical qualification. D03 supersedes its hard timing/health conjunction.
+
 The [F1 amendment](../../docs/adr/D01-pooled-service-curve.md) governs the current
 token-bearing POOLED_SERVICE path. It uses reliable ordered NoNagle for unique
 first-send drain. Direct UDP additionally permits a funded immediate ACK request
@@ -37,8 +55,9 @@ credits failed sends nor fabricates delivery. The bounded native observer is
 opt-in for qualification; normal connections do not allocate its event buffer.
 
 The source-derived request/response and periodic-control funding proof is in
-D01. F1, credit/fairness, pending/debt, four ACK-owned slots, and C3/C5 recovery
-deadlines are unchanged. Hosted CI and fresh physical recovery qualification
+D01. Credit, pending/debt, four ACK-owned slots and independent C3/C5 recovery
+deadlines remain intact; D03 explicitly amends hard completion and fairness.
+Hosted CI and fresh physical recovery qualification
 remain separate from the native prototype results. Historical deployment
 captures below describe their original revisions, not this delivery policy.
 

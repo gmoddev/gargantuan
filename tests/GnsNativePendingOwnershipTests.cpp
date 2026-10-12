@@ -49,10 +49,14 @@ bool Connected(HSteamNetConnection Handle) {
 		Info.m_eState == k_ESteamNetworkingConnectionState_Connected;
 }
 
-bool SendReliable() {
+bool SendReliable(std::uint64_t ProtectedAcceptedAt = 0, unsigned ProtectedOrigin = 6) {
 	std::array<std::uint8_t, 1200> Payload{};
-	return Interface->SendMessageToConnection(Server, Payload.data(), static_cast<std::uint32_t>(Payload.size()),
-		k_nSteamNetworkingSend_ReliableNoNagle, nullptr) == k_EResultOK;
+	if (ProtectedAcceptedAt && !GargantuanBeginReliableSubmissionMetadata(false, 0, 0, 0,
+		true, ProtectedAcceptedAt, ProtectedOrigin)) return false;
+	const auto Result = Interface->SendMessageToConnection(Server, Payload.data(), static_cast<std::uint32_t>(Payload.size()),
+		k_nSteamNetworkingSend_ReliableNoNagle, nullptr);
+	if (ProtectedAcceptedAt) GargantuanEndReliableRetirementAttribution();
+	return Result == k_EResultOK;
 }
 
 bool ReceiveOne() {
@@ -181,8 +185,9 @@ bool Run() {
 	// A positive OS send remains unpublished while the worker pauses after the
 	// return.  The peer can receive and ACK during this pause, but the sender's
 	// SNP parser must replay that datagram only after committing the packet.
+	const auto ProtectedAccepted = GargantuanReliableServiceClock();
 	if (!GargantuanArmNativeEgressPauseForTest(GargantuanNativeEgressTestPausePoint::AfterOsReturn, 250) ||
-		!SendReliable() || !GargantuanWaitNativeEgressPauseForTest(100)) {
+		!SendReliable(ProtectedAccepted) || !GargantuanWaitNativeEgressPauseForTest(100)) {
 		std::fprintf(stderr, "[Network:NativeEgress] first pending OS pause was not reached\n");
 		return false;
 	}
@@ -218,7 +223,8 @@ bool Run() {
 	const bool FirstExact = Unavailable && (ReceivedBeforeCommit || ReceivedAfterCommit) && AckQueuedBeforeCommit &&
 		JournalHighWater > 0 && !JournalOverflow && FirstRetired &&
 		First.Counters.ReliablePayloadBytesAcked == 1200 &&
-		First.Counters.ReliableStreamBytesRetransmitted == 0 && !First.Counters.Invalid;
+		First.Counters.ReliableStreamBytesRetransmitted == 0 && !First.Counters.Invalid &&
+		!First.Counters.ProtectedOrdinaryEvidenceInvalid && !First.Counters.QualifiedOrdinaryRegisteredMessages;
 	std::fprintf(stderr, "[Network:NativeEgress] AckBeforeCommitAndFrontier=%s\n", FirstExact ? "PASS" : "FAIL");
 	if (!FirstExact) std::fprintf(stderr,
 		"[Network:NativeEgress] ack detail unavailable=%d receivedBefore=%d receivedAfter=%d journaled=%d count=%u high=%u overflow=%d retired=%d payloadAcked=%llu firstSent=%llu uniqueAcked=%llu retransmit=%llu invalid=%d\n",
@@ -232,7 +238,7 @@ bool Run() {
 
 	GargantuanAckDiagnostics Trace{};
 	if (!GargantuanAccessAckDiagnostics(Interface, static_cast<std::uint32_t>(Server), true, Trace) ||
-		!GargantuanFailNextNativeEgressForTest() || !SendReliable()) {
+		!GargantuanFailNextNativeEgressForTest() || !SendReliable(GargantuanReliableServiceClock())) {
 		std::fprintf(stderr, "[Network:NativeEgress] negative result setup failed\n");
 		return false;
 	}
@@ -243,14 +249,24 @@ bool Run() {
 	const bool RetryExact = FailedOnce && SecondRetired && Traced &&
 		Trace.FailedPacketReferencesReleased > 0 &&
 		Second.Counters.ReliablePayloadBytesAcked == 2400 &&
-		Second.Counters.ReliableStreamBytesRetransmitted == 0 && !Second.Counters.Invalid;
+		Second.Counters.ReliableStreamBytesRetransmitted == 0 && !Second.Counters.Invalid &&
+		!Second.Counters.ProtectedOrdinaryEvidenceInvalid;
 	std::fprintf(stderr, "[Network:NativeEgress] NegativeFirstSendRetryReferences=%s\n", RetryExact ? "PASS" : "FAIL");
 	if (!RetryExact) return false;
 	if (!ReadyCheckpointDuringThinker(Second.Counters.ReliablePayloadBytesAcked)) return false;
+	GargantuanReliableServiceSnapshot BeforeLate{};
+	if (!GargantuanGetReliableServiceFeedback(Interface, static_cast<std::uint32_t>(Server), BeforeLate) ||
+		!SendReliable(GargantuanReliableServiceClock() - 60'000, 5)) return false;
+	GargantuanReliableServiceSnapshot Late{};
+	const bool LateExact = AwaitRetirement(BeforeLate.Counters.ReliablePayloadBytesAcked, Late) &&
+		Late.Counters.ProtectedOrdinaryEverFailed && !Late.Counters.ProtectedOrdinaryEvidenceInvalid &&
+		!Late.Counters.QualifiedOrdinaryRegisteredMessages && !Late.Counters.Invalid;
+	std::fprintf(stderr, "[Network:NativeEgress] ProtectedNoSinkWorkerCompletion=%s\n", LateExact ? "PASS" : "FAIL");
+	if (!LateExact) return false;
 
 	if (!GargantuanArmNativeEgressPauseForTest(GargantuanNativeEgressTestPausePoint::BeforeOsCall,
 		250, GargantuanNativeEgressTestTraffic::Any, 1000) ||
-		!SendReliable() || !GargantuanWaitNativeEgressPauseForTest(100)) {
+		!SendReliable(GargantuanReliableServiceClock()) || !GargantuanWaitNativeEgressPauseForTest(100)) {
 		std::fprintf(stderr, "[Network:NativeEgress] terminal pending OS pause was not reached\n");
 		return false;
 	}
@@ -268,7 +284,7 @@ bool Run() {
 	const bool DuplicateTook = GargantuanTakeNativeTerminalFeedback(Interface,
 		static_cast<std::uint32_t>(Server), Generation, Duplicate);
 	const bool ExactTerminal = ClosingIncomplete && Took && Terminal.Counters.Purged &&
-		!DuplicateTook;
+		!DuplicateTook && !Terminal.Counters.ProtectedOrdinaryEvidenceInvalid;
 	std::fprintf(stderr, "[Network:NativeEgress] PendingCloseTerminalGeneration=%s\n",
 		ExactTerminal ? "PASS" : "FAIL");
 	if (!ExactTerminal) std::fprintf(stderr,

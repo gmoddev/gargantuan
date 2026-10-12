@@ -108,6 +108,9 @@ namespace gargantuan::network::detail {
 			Coordinator.IncrementalEncodingOptimizationsEnabled = Enabled;
 		}
 		static void SetFailurePoint(GameSession &Session, GameSessionFailurePoint Point);
+		// Trusted source scope only; affects future enrollment, not acceptance or
+		// clocks already owned by queued/native messages. No budget reset.
+		[[nodiscard]] static bool SetOrdinarySourceNormal(GameSession &Session, bool Normal);
 		static void RequestSpatialValidation(GameSession &Session);
 		[[nodiscard]] static bool VerifySpatialIndex(const GameSession &Session);
 		[[nodiscard]] static std::optional<SpatialCellAddress> GetSpatialCellAddress(const GameSession &Session, ObjectId Object);

@@ -85,6 +85,23 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-12 — Sink-independent H2 correction under qualification.** All six
+original hosted jobs passed at `561baba1d7e948bedc52430d40123fdd657226bc`
+after the endpoint pipe correction (Windows 96/96, native Linux 53/53 and
+GNS sanitizer 11/11 in each event). Before native32, independent source review
+found an H2 gap: no publication observer meant no ordinary diagnostic tag,
+so a late normal message could escape production FIFO health. A separate
+prospective policy now carries immutable acceptance time/class on existing
+messages and observes remaining native BODY independently of the certificate
+table. Queued diagnostic lateness and native table overflow are excluded from
+runtime health. Eight affected Windows suites PASS in 71.88 s, and both separate
+native pending/worker race suites PASS in 0.39 s. The retained preflight compile
+and link failures were missing test include/accessor integration defects.
+Fresh exact-source CI is required before measurement; earlier CI remains
+baseline evidence only.
+Native32, fresh Local32 and real-TLS Node32 remain unrun on this candidate.
+**KI-006 OPEN; Foundation 3L partially ready; PR #6 draft.**
+
 **2026-10-11 — First hybrid committed-source CI: partial; endpoint drain correction.**
 At `7c1be009fdbfcbe0857824393f8615a9c01a4225`, both original GNS sanitizer
 workflows passed. Windows push `38192457355` passed 95/96 CTests but failed the

@@ -52,6 +52,8 @@ namespace gargantuan::network {
 		friend struct detail::FarmCaptureEndpointAccess;
 		friend struct detail::GnsAckDiagnosticsAccess;
 		bool EnableReliableServiceFeedback() override;
+		bool SetOrdinaryServicePolicy(ConnectionId Connection,
+			std::shared_ptr<detail::OrdinaryServicePolicy> Policy) override;
 		std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Connection) const override;
 		std::optional<detail::ReliableServiceFeedback> ReadResolvedReliableServiceFeedback(
 			ConnectionId Connection, std::uint64_t DeadlineMicroseconds) const override;

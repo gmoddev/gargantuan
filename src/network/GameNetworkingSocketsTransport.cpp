@@ -4,6 +4,7 @@
 #include "GnsServiceDiagnostics.hpp"
 #include "FarmCaptureEndpointAccess.hpp"
 #include "ReliableServiceFeedback.hpp"
+#include "OrdinaryServicePolicy.hpp"
 #include "../../cmake/gns/ReliableServiceFeedback.hpp"
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
@@ -262,6 +263,9 @@ namespace gargantuan::network {
 				Counters.LastAttributedRetirementMessageNumber, Counters.LastAttributedRetiredPayloadBytes};
 			Result.StructuralGrantFirstSendAtMicroseconds = Counters.StructuralGrantFirstSendAtMicroseconds;
 			Result.OrdinaryPayloadBytesFirstSent = Counters.OrdinaryPayloadBytesFirstSent;
+			Result.ProtectedOrdinaryEverFailed = Counters.ProtectedOrdinaryEverFailed;
+			Result.ProtectedOrdinaryActiveDeadlineFailed = Counters.ProtectedOrdinaryActiveDeadlineFailed;
+			Result.ProtectedOrdinaryEvidenceInvalid = Counters.ProtectedOrdinaryEvidenceInvalid;
 			Result.QualifiedOrdinaryRegisteredMessages = Counters.QualifiedOrdinaryRegisteredMessages;
 			Result.QualifiedOrdinaryCompletedMessages = Counters.QualifiedOrdinaryCompletedMessages;
 			Result.QualifiedOrdinaryPendingMessages = Counters.QualifiedOrdinaryPendingMessages;
@@ -315,6 +319,8 @@ namespace gargantuan::network {
 			ConnectionState State = ConnectionState::Connecting;
 			NetworkStatistics Statistics;
 			bool FundedAckPolicyConfigured = false;
+			std::shared_ptr<detail::OrdinaryServicePolicy> OrdinaryPolicy;
+			bool OrdinaryPolicyInvalid = false;
 			std::uint64_t NativeTerminalGeneration = 0;
 			std::optional<DisconnectInfo> ClosingInformation;
 		};
@@ -502,6 +508,8 @@ namespace gargantuan::network {
 				!Final.Counters.Purged) return false;
 			auto &Record = Iterator->second;
 			TerminalFeedback[Id.Slot] = ServiceFeedback(Id, Final);
+			if (TerminalFeedback[Id.Slot] && Record.OrdinaryPolicyInvalid)
+				TerminalFeedback[Id.Slot]->ProtectedOrdinaryEvidenceInvalid = true;
 			// A purged but invalid receipt is terminal failure evidence, never a drain.
 			if (RetainServiceTerminals && !TerminalFeedback[Id.Slot])
 				TerminalFeedback[Id.Slot] = detail::ReliableServiceFeedback{
@@ -958,9 +966,12 @@ namespace gargantuan::network {
 	}
 
 	TransportOperationResult GameNetworkingSocketsTransport::Send(const NetworkMessageIntent &Message) {
-		const auto DirectOrdinaryOrigin = Message.Delivery() == DeliveryMode::ReliableOrdered &&
+		// Direct protection starts at transport entry, before adapter lock waiting.
+		const auto OrdinaryEnteredAt = SteamNetworkingSocketsLib::GargantuanReliableServiceClock();
+		auto DirectOrdinaryOrigin = Message.Delivery() == DeliveryMode::ReliableOrdered &&
 			Message.Traffic() != TrafficClass::StructuralReplication && !runtime_detail::ActiveOrdinaryDemand.Sequence
 			? runtime_detail::DirectOrdinaryDemand(Message.Destination()) : runtime_detail::OrdinaryDemandTag{};
+		if (DirectOrdinaryOrigin.Sequence) DirectOrdinaryOrigin.AcceptedAtMicroseconds = OrdinaryEnteredAt;
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::TransportSend);
 		detail::InitialServiceTrace InitialTrace;
 		InitialTrace.Enabled = detail::ReliableServiceFeedbackAccess::Token(Message) != 0 &&
@@ -1081,11 +1092,18 @@ namespace gargantuan::network {
 				detail::ReliableServiceFeedbackAccess::ActivatedAt(Message), &InitialTrace)))
 			return Fail(TransportOperationStatus::TransportFailure, "retirement-attribution");
 		const bool ReliableSubmission = Message.Delivery() == DeliveryMode::ReliableOrdered;
+		const bool DirectProtectedOrigin = ReliableSubmission &&
+			Message.Traffic() != TrafficClass::StructuralReplication &&
+			!runtime_detail::ActiveOrdinaryService.AcceptedAtMicroseconds;
+		const auto OrdinaryService = DirectProtectedOrigin && Connection->second.OrdinaryPolicy
+			? Connection->second.OrdinaryPolicy->Prepare(Frame->size(), 6, OrdinaryEnteredAt)
+			: runtime_detail::ActiveOrdinaryService;
 		const auto &Ordinary = runtime_detail::ActiveOrdinaryDemand.Sequence
 			? runtime_detail::ActiveOrdinaryDemand : DirectOrdinaryOrigin;
 		if (ReliableSubmission && !SteamNetworkingSocketsLib::GargantuanBeginReliableSubmissionMetadata(
 			Message.Traffic() == TrafficClass::StructuralReplication,
-			Ordinary.Qualified ? Ordinary.Sequence : 0, Ordinary.Phase, Ordinary.AcceptedAtMicroseconds)) {
+			Ordinary.Qualified ? Ordinary.Sequence : 0, Ordinary.Phase, Ordinary.AcceptedAtMicroseconds,
+			OrdinaryService.Protected, OrdinaryService.AcceptedAtMicroseconds, OrdinaryService.Origin)) {
 			if (Token) SteamNetworkingSocketsLib::GargantuanEndReliableRetirementAttribution();
 			return Fail(TransportOperationStatus::TransportFailure, "submission-metadata");
 		}
@@ -1103,6 +1121,12 @@ namespace gargantuan::network {
 			MessageNumber, -1, static_cast<int>(Result), nullptr, !PooledStructuralGrant);
 		switch (Result) {
 		case k_EResultOK:
+			if (DirectProtectedOrigin && Connection->second.OrdinaryPolicy &&
+				!Connection->second.OrdinaryPolicy->Commit(Frame->size(), OrdinaryService)) {
+				// The native send already succeeded: never replay or alter delivery.
+				// Main affinity/no reentrancy makes this an unsupported policy state.
+				Connection->second.OrdinaryPolicyInvalid = true;
+			}
 			RecordOrdinary("OrdinaryReliableSent");
 			SaturatingAdd(*Connection->second.Statistics.MessagesSent, 1);
 			SaturatingAdd(*Connection->second.Statistics.BytesSent, Message.Payload().size());
@@ -1212,6 +1236,16 @@ namespace gargantuan::network {
 		State->RetainServiceTerminals = true;
 		return true;
 	}
+	bool GameNetworkingSocketsTransport::SetOrdinaryServicePolicy(ConnectionId Connection,
+		std::shared_ptr<detail::OrdinaryServicePolicy> Policy) {
+		auto &Global = GlobalState();
+		std::lock_guard Lock(Global.Mutex);
+		const auto Found = State->Connections.find(Connection);
+		if (!Connection.IsValid() || !Policy || !Policy->OnOwnerThread() ||
+			!State->Started || Found == State->Connections.end() || Found->second.OrdinaryPolicy) return false;
+		Found->second.OrdinaryPolicy = std::move(Policy);
+		return true;
+	}
 	bool GameNetworkingSocketsTransport::ReleaseReliableServiceFeedback(ConnectionId Connection) {
 		auto &Global = GlobalState(); std::lock_guard Lock(Global.Mutex);
 		if (!State->RetainServiceTerminals || !Connection.IsValid() || State->Connections.contains(Connection) ||
@@ -1273,7 +1307,9 @@ namespace gargantuan::network {
 		GargantuanReliableServiceSnapshot Native;
 		if (!SteamNetworkingSocketsLib::GargantuanGetReliableServiceFeedback(
 			Global.Interface, Found->second.Handle, Native)) return {};
-		return ServiceFeedback(Connection, Native);
+		auto Result = ServiceFeedback(Connection, Native);
+		if (Result && Found->second.OrdinaryPolicyInvalid) Result->ProtectedOrdinaryEvidenceInvalid = true;
+		return Result;
 	}
 	std::optional<detail::ReliableServiceFeedback> GameNetworkingSocketsTransport::ReadResolvedReliableServiceFeedback(
 		ConnectionId Connection, std::uint64_t DeadlineMicroseconds) const {
@@ -1286,6 +1322,8 @@ namespace gargantuan::network {
 		GargantuanReliableServiceSnapshot Native;
 		if (!SteamNetworkingSocketsLib::GargantuanReadResolvedNativeFeedback(
 			Global.Interface, Found->second.Handle, DeadlineMicroseconds, Native)) return {};
-		return ServiceFeedback(Connection, Native);
+		auto Result = ServiceFeedback(Connection, Native);
+		if (Result && Found->second.OrdinaryPolicyInvalid) Result->ProtectedOrdinaryEvidenceInvalid = true;
+		return Result;
 	}
 }

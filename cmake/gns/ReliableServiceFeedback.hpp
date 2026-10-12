@@ -73,6 +73,8 @@ struct GargantuanReliableServiceCounters {
 	std::uint64_t LastAttributedRetiredPayloadBytes = 0;
 	bool Invalid = false;
 	bool Purged = false;
+	bool ProtectedOrdinaryEverFailed = false, ProtectedOrdinaryActiveDeadlineFailed = false;
+	bool ProtectedOrdinaryEvidenceInvalid = false;
 	struct QualifiedOrdinaryPending {
 		std::uint64_t MessageNumber = 0, Sequence = 0, Phase = 0, AcceptedAtMicroseconds = 0;
 		std::uint32_t ExpectedBytes = 0, FirstSentBytes = 0;
@@ -150,10 +152,14 @@ struct GargantuanReliableAttribution {
 	gargantuan::network::detail::InitialServiceTrace InitialTrace{};
 	bool SubmissionMetadata = false, StructuralClass = false;
 	std::uint64_t QualifiedSequence = 0, QualifiedPhase = 0, SchedulerAcceptedAtMicroseconds = 0;
+	bool ProtectedOrdinary = false;
+	std::uint64_t ProtectedAcceptedAtMicroseconds = 0;
+	unsigned ProtectedOrigin = 6;
 };
 bool GargantuanBeginReliableSubmissionMetadata(bool StructuralClass,
 	std::uint64_t QualifiedSequence = 0, std::uint64_t QualifiedPhase = 0,
-	std::uint64_t SchedulerAcceptedAtMicroseconds = 0) noexcept;
+	std::uint64_t SchedulerAcceptedAtMicroseconds = 0, bool ProtectedOrdinary = false,
+	std::uint64_t ProtectedAcceptedAtMicroseconds = 0, unsigned ProtectedOrigin = 6) noexcept;
 bool GargantuanInitialServiceTimingEnabled() noexcept;
 std::uint64_t GargantuanInitialServiceClock() noexcept;
 void GargantuanInitialServiceApiStage(bool Locked) noexcept;

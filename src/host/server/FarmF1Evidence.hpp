@@ -221,7 +221,7 @@ public:
 		P->Accepted = Value.Accepted.Structural;
 		if (ServiceContract == Contract::HybridF1V1) {
 			P->Hybrid = true;
-			P->QueuedFailed |= Value.Result.QueuedOrdinaryEverFailed;
+			P->QueuedFailed |= Value.Result.QueuedOrdinaryEverFailed || Value.Result.QueuedQualifiedOrdinaryEverFailed;
 			P->Failed |= P->QueuedFailed;
 			if (Value.Result.CompletedTurnovers < P->CompletedTurnovers ||
 				Value.Result.CompletedAdmissionOpportunities < P->CompletedAdmissionOpportunities)

@@ -122,7 +122,7 @@ inline void TestFarmF1Evidence() {
 		Storage->Observe(R);
 		Require(!Storage->Valid(1) && Storage->Observations()[0].ExecutionFailed);
 	}
-	for (unsigned Case = 0; Case < 5; ++Case) {
+	for (unsigned Case = 0; Case < 6; ++Case) {
 		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1);
 		Grant(*Storage, Completed(1));
 		auto R = Completed(1); R.Feedback.reset(); R.Result.Available = false;
@@ -132,8 +132,9 @@ inline void TestFarmF1Evidence() {
 		if (Case == 2) R.Result.MaximumMainOpportunityMicroseconds = 100001;
 		if (Case == 3) R.Result.MaximumTurnoverMicroseconds = 150001;
 		if (Case == 4) R.Result.QueuedOrdinaryEverFailed = true;
+		if (Case == 5) R.Result.QueuedQualifiedOrdinaryEverFailed = true;
 		Storage->Observe(R);
-		Require(!Storage->Valid(1) && (Case == 4 ? Storage->Observations()[0].QueuedFailed : Storage->Observations()[0].ExecutionFailed));
+		Require(!Storage->Valid(1) && (Case >= 4 ? Storage->Observations()[0].QueuedFailed : Storage->Observations()[0].ExecutionFailed));
 	}
 	for (unsigned Case = 0; Case < 10; ++Case) {
 		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1);

@@ -5,6 +5,7 @@
 #include "../src/network/SessionSendAllowance.hpp"
 #include "../src/network/ReliableServiceFeedback.hpp"
 #include "ReliableByteAdmissionFixture.hpp"
+#include "OrdinaryServicePolicyFixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -82,6 +83,8 @@ namespace {
 		}
 
 		TransportOperationResult Send(const NetworkMessageIntent &Message) override {
+			if (Message.Delivery() == DeliveryMode::ReliableOrdered && Message.Traffic() != TrafficClass::StructuralReplication)
+				ServiceAttempts.push_back(gargantuan::runtime_detail::ActiveOrdinaryService);
 			if (gargantuan::runtime_detail::ActiveOrdinaryDemand.Sequence)
 				OrdinaryAttempts.push_back(gargantuan::runtime_detail::ActiveOrdinaryDemand);
 			if (Message.Destination() != ActiveConnection)
@@ -100,6 +103,7 @@ namespace {
 		}
 
 		std::vector<gargantuan::runtime_detail::OrdinaryDemandTag> OrdinaryAttempts;
+		std::vector<gargantuan::runtime_detail::OrdinaryServiceMetadata> ServiceAttempts;
 		std::size_t PollEvents(std::span<TransportEvent>) override { return 0; }
 
 		std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Connection) const override {
@@ -344,6 +348,91 @@ namespace {
 }
 
 int main() {
+	try { gargantuan::test::TestOrdinaryServicePolicy(); }
+	catch (const std::exception &Failure) { Check(false, Failure.what()); }
+	{
+		using namespace gargantuan::runtime_detail;
+		Check(!ActivePublicationLatency, "no-sink source policy fixture has no diagnostic observer");
+		const ConnectionId Connection{31, 1};
+		RecordingTransport Transport(Connection); NetworkScheduler Scheduler(Transport);
+		const auto Limits = TestLimits(64, 32, 256, 128, 16);
+		Check(Scheduler.RegisterConnection(Connection, Limits), "no-sink scheduler registers its generation");
+		Check(Scheduler.Submit(*Intent(Connection, DeliveryMode::ReliableOrdered, TrafficClass::ReliableApplication, 1, Limits)).Accepted(),
+			"bootstrap is accepted before source declaration");
+		auto Global = std::make_shared<detail::OrdinaryServiceBudget>();
+		auto Policy = std::make_shared<detail::OrdinaryServicePolicy>(Global);
+		Check(detail::ReliableServiceFeedbackAccess::DeclareOrdinaryPolicy(Scheduler, Connection, Policy) && Policy->SetReady(true),
+			"Ready binds one Main-owned source policy independently of diagnostics");
+		Check(!detail::ReliableServiceFeedbackAccess::DeclareOrdinaryPolicy(Scheduler, Connection,
+			std::make_shared<detail::OrdinaryServicePolicy>(Global)), "same generation cannot replace its policy to refill budgets");
+		Check(Scheduler.Submit(*Intent(Connection, DeliveryMode::ReliableOrdered, TrafficClass::ReliableApplication, 2, Limits)).Accepted(),
+			"normal source work is accepted with no diagnostic sink");
+		const auto Anchor = detail::ReliableServiceFeedbackAccess::OldestProtectedOrdinary(Scheduler, Connection);
+		Check(Anchor && *Anchor && detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection) ==
+			std::optional<std::uint64_t>(0), "production queue clock exists without certificate identity");
+		Global->SetNormal(false);
+		Check(Scheduler.Submit(*Intent(Connection, DeliveryMode::ReliableOrdered, TrafficClass::ReliableApplication, 3, Limits)).Accepted(),
+			"out-of-class overload remains accepted");
+		Transport.NextSendStatus = TransportOperationStatus::WouldBlock;
+		(void)Scheduler.Flush(Connection, SchedulerTickBudget::FromNetworkLimits(Limits));
+		Check(detail::ReliableServiceFeedbackAccess::OldestProtectedOrdinary(Scheduler, Connection) == Anchor,
+			"WouldBlock and policy churn retain the original protected queue anchor");
+		(void)Scheduler.Flush(Connection, SchedulerTickBudget::FromNetworkLimits(Limits));
+		Check(Transport.ServiceAttempts.size() == 4 && Transport.ServiceAttempts[0].AcceptedAtMicroseconds &&
+			Transport.ServiceAttempts[0].AcceptedAtMicroseconds == Transport.ServiceAttempts[1].AcceptedAtMicroseconds &&
+			!Transport.ServiceAttempts[0].Protected && !Transport.ServiceAttempts[1].Protected &&
+			Transport.ServiceAttempts[2].Protected && Transport.ServiceAttempts[2].AcceptedAtMicroseconds == *Anchor &&
+			!Transport.ServiceAttempts[3].Protected && Transport.ServiceAttempts[3].AcceptedAtMicroseconds &&
+			Transport.ServiceAttempts[0].Origin == 2 && Transport.ServiceAttempts[2].Origin == 2 &&
+			!ActiveOrdinaryService.AcceptedAtMicroseconds,
+			"bootstrap is never retagged after Ready and all queued origins remain frozen through handoff");
+		Check(detail::ReliableServiceFeedbackAccess::OldestProtectedOrdinary(Scheduler, Connection) ==
+			std::optional<std::uint64_t>(0) && !detail::ReliableServiceFeedbackAccess::OldestProtectedOrdinary(Scheduler, {31, 2}),
+			"drained source clocks and invalid generations remain distinct");
+		const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
+		Check(Accepted && Accepted->All == 99 && Accepted->Gameplay == 99 && !Accepted->Structural,
+			"bootstrap, protected and overload BODY bytes remain fully accepted and funded");
+	}
+	{
+		using namespace gargantuan::runtime_detail;
+		struct State { std::uint64_t Entry = 0, Exit = 0; } Capture;
+		PublicationLatencySink Sink{&Capture,
+			[](void *, ConnectionId) noexcept { return true; },
+			[](void *, PublicationLatencyRecord) noexcept {},
+			[](void *, const char *, ConnectionId, std::span<const std::byte>, std::uint64_t) noexcept {},
+			[](void *Context, ConnectionId, std::span<const std::byte>) noexcept {
+				auto &Value = *static_cast<State *>(Context);
+				Value.Entry = PublicationLatencyNow() / 1'000;
+				// Force a microsecond boundary inside the optional callback. This
+				// bounded clock probe is not a wall-time performance allowance.
+				for (unsigned I = 0; I < 10'000; ++I) {
+					Value.Exit = PublicationLatencyNow() / 1'000;
+					if (Value.Exit > Value.Entry) break;
+				}
+				return OrdinaryDemandTag{1, 1, UINT64_MAX / 2, true};
+			}};
+		auto *Previous = ActivePublicationLatency; ActivePublicationLatency = &Sink;
+		const ConnectionId Connection{32, 1};
+		RecordingTransport Transport(Connection); NetworkScheduler Scheduler(Transport); const auto Limits = TestLimits();
+		auto Global = std::make_shared<detail::OrdinaryServiceBudget>();
+		auto Policy = std::make_shared<detail::OrdinaryServicePolicy>(Global); Policy->SetReady(true);
+		Check(Scheduler.RegisterConnection(Connection, Limits) &&
+			detail::ReliableServiceFeedbackAccess::DeclareOrdinaryPolicy(Scheduler, Connection, Policy),
+			"acceptance-clock callback fixture binds declared source policy");
+		Check(Scheduler.Submit(*Intent(Connection, DeliveryMode::ReliableOrdered, TrafficClass::ReliableApplication, 1, Limits)).Accepted(),
+			"optional callback cannot replace the accepted message clock");
+		const auto ProtectedAt = detail::ReliableServiceFeedbackAccess::OldestProtectedOrdinary(Scheduler, Connection);
+		const auto QualifiedAt = detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection);
+		Check(ProtectedAt && *ProtectedAt && ProtectedAt == QualifiedAt && *ProtectedAt <= Capture.Entry &&
+			Capture.Exit > Capture.Entry && *ProtectedAt < Capture.Exit && *ProtectedAt != UINT64_MAX / 2,
+			"one actual acceptance clock precedes callback delay and replaces a supplied diagnostic timestamp");
+		(void)Scheduler.Flush(Connection, SchedulerTickBudget::FromNetworkLimits(Limits));
+		Check(Transport.ServiceAttempts.size() == 1 && Transport.OrdinaryAttempts.size() == 1 &&
+			Transport.ServiceAttempts[0].AcceptedAtMicroseconds == *ProtectedAt &&
+			Transport.OrdinaryAttempts[0].AcceptedAtMicroseconds == *ProtectedAt,
+			"native handoff preserves the same frozen private and certificate acceptance clock");
+		ActivePublicationLatency = Previous;
+	}
 	{
 		using namespace gargantuan::runtime_detail;
 		struct State { std::uint64_t Phase = 1, Sequence = 0; } Capture;
@@ -405,16 +494,16 @@ int main() {
 		Capture.Qualified = true; Capture.At += 100;
 		Check(Scheduler.Submit(*Intent(Connection, DeliveryMode::ReliableOrdered, TrafficClass::Background, 2, Limits)).Accepted(),
 			"qualified ordinary message follows the unqualified head");
-		Check(detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection) ==
-			std::optional<std::uint64_t>(1'000'100), "unqualified head cannot conceal a qualified queue deadline");
+		const auto ActualAnchor = detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection);
+		Check(ActualAnchor && *ActualAnchor && *ActualAnchor != Capture.At,
+			"unqualified head cannot conceal a qualified queue deadline and diagnostics cannot supply its clock");
 		for (const auto Traffic : {TrafficClass::Control, TrafficClass::ReliableApplication,
 			TrafficClass::RealtimeState, TrafficClass::EphemeralApplication, TrafficClass::StructuralReplication}) {
 			Capture.At += 100;
 			Check(Scheduler.Submit(*Intent(Connection, DeliveryMode::ReliableOrdered, Traffic, 3, Limits)).Accepted(),
 				"each remaining scheduler priority receives a bounded message");
 		}
-		Check(detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection) ==
-			std::optional<std::uint64_t>(1'000'100),
+		Check(detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection) == ActualAnchor,
 			"minimum across all six queues is independent of precedence and excludes structural traffic");
 		(void)Scheduler.Flush(Connection, SchedulerTickBudget::FromNetworkLimits(Limits));
 		const auto Drained = detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection);

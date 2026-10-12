@@ -34,6 +34,20 @@ inline bool RunPooledReliableServiceProductionTests() {
 		S.StructuralLastCompletedGrantCompletedAtMicroseconds = Completed;
 	};
 	try {
+		Test("DiagnosticOrdinaryFailureDoesNotOwnRuntimeHealth", [&] {
+			Sample S{.Connection = Id, .ObservedAtMicroseconds = 1'000'000,
+				.State = ConnectionState::Connected};
+			S.QualifiedOrdinaryEverFailed = S.QualifiedOrdinaryEvidenceInvalid = true;
+			Ledger Diagnostic; Diagnostic.QueuedQualifiedOrdinaryEverFailed = true;
+			const auto Observed = Diagnostic.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0);
+			Check(Observed.Valid && Observed.Available && Observed.Qualified &&
+				Observed.QueuedQualifiedOrdinaryEverFailed && !Observed.QueuedOrdinaryEverFailed && !Diagnostic.Invalid,
+				"certificate-only failures preserve fresh exact runtime ownership and qualification");
+			Ledger Runtime; Runtime.QueuedOrdinaryEverFailed = true;
+			const auto Failed = Runtime.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0);
+			Check(Failed.Valid && Failed.Available && !Failed.Qualified && Failed.QueuedOrdinaryEverFailed && !Runtime.Invalid,
+				"sticky protected queue failure fences service without invalidating exact ownership");
+		});
 		Test("ExplicitProfileAndFrozenBounds", [&] {
 			Check(ReliableServiceProfile{}.Mode == ReliableServiceMode::FULL_RESERVATION, "default changed");
 			auto P = ReliableServiceProfile::PooledService(); Check(P.IsValid() && P.IsLatencyCompatible(), "candidate");
@@ -878,7 +892,7 @@ inline bool RunPooledReliableServiceProductionTests() {
 		std::cerr << "[Network:PooledProduction] FAIL " << Error.what() << '\n'; return false;
 	}
 	std::cout << "[Network:PooledProduction] cases=" << Passed << " PASS\n";
-	return Passed == 29;
+	return Passed == 30;
 }
 
 // Candidate-only deterministic schedules. The real admission accountant is

@@ -46,10 +46,11 @@ macro(GargantuanWriteFeedbackSource)
 endmacro()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.h 35a8d2721334f5632e042f3165095dcae90ced590b78392cc0f4346fceaba170)
-GargantuanReplaceFeedback("#pragma once" "#pragma once\n#include \"ReliableServiceFeedback.hpp\"\n#include \"AckDiagnostics.hpp\"\n#include \"PromptAckWireBudget.hpp\"\n#include <memory>")
+GargantuanReplaceFeedback("#pragma once" "#pragma once\n#include \"ReliableServiceFeedback.hpp\"\n#include \"ProtectedOrdinaryService.hpp\"\n#include \"AckDiagnostics.hpp\"\n#include \"PromptAckWireBudget.hpp\"\n#include <memory>")
 GargantuanReplaceFeedback("struct LockDebugInfo;" "struct LockDebugInfo;\nstruct SNPPacketSerializeHelper;\nstruct GargantuanNativeEgressTicket;")
-GargantuanReplaceFeedback("class CSteamNetworkingMessage : public SteamNetworkingMessage_t\n{" "class CSteamNetworkingMessage : public SteamNetworkingMessage_t\n{\npublic:\n\tuint32_t m_nGargantuanPayloadBytes; // Sender-local BODY size assigned before native enqueue.\n\tbool m_bGargantuanStructuralPayload; // Classification only; no reference or ordering ownership.")
+GargantuanReplaceFeedback("class CSteamNetworkingMessage : public SteamNetworkingMessage_t\n{" "class CSteamNetworkingMessage : public SteamNetworkingMessage_t\n{\npublic:\n\tGargantuanProtectedOrdinaryService::Message m_GargantuanProtectedOrdinary; // Non-owning sender health links.\n\tuint32_t m_nGargantuanPayloadBytes; // Sender-local BODY size assigned before native enqueue.\n\tbool m_bGargantuanStructuralPayload; // Classification only; no reference or ordering ownership.")
 GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tstd::unique_ptr<GargantuanAckDiagnostics> GargantuanAckTrace;\n\tGargantuanPromptAckWireBudget GargantuanPromptWire;\n\tbool GargantuanPromptFinalGrantAck = false; // Enabled only by funded attributed structural submission.\n\tbool GargantuanNativeEgressEnabled = false; // Explicit direct-UDP connection-generation opt-in.\n\tISteamNetworkingSockets *GargantuanTerminalInterface = nullptr;\n\tuint64_t GargantuanTerminalGeneration = 0;\n\tSNPPacketSerializeHelper *GargantuanPendingHelper = nullptr; // Actor-owned until native result reconciliation.\n\tGargantuanNativeEgressTicket *GargantuanPendingTicket = nullptr;\n\tSteamNetworkingMicroseconds GargantuanPendingDeadline = 0;\n\tbool GargantuanPendingCancelRequested = false;\n\tSteamNetworkingMicroseconds GargantuanLastCompletedGnsAt = 0;\n\tbool GargantuanTerminalPurgePending = false;\n\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tbool GargantuanRunningStructuralGrant = false;")
+GargantuanReplaceFeedback("\tGargantuanReliableServiceCounters GargantuanFeedback;" "\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tmutable GargantuanProtectedOrdinaryService GargantuanProtectedOrdinary;")
 GargantuanReplaceFeedback("\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;" "\t// A failed SendEncryptedDataChunk queues retry without first-send service.\n\tbool m_bGargantuanEverSent;\n\n\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;")
 GargantuanWriteFeedbackSource()
 
@@ -97,7 +98,7 @@ GargantuanReplaceFeedback("SteamNetworkingMicroseconds CSteamNetworkConnectionBa
 		GargantuanSender.SetDetail(m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken);
 		if (GargantuanHasRunningStructuralGrant()) GargantuanSender.AddFlags(1);
 	}]=])
-GargantuanReplaceFeedback("void SSNPSenderState::Shutdown()\n{" "void SSNPSenderState::Shutdown()\n{\n\tGargantuanSetRunningStructuralGrant(GargantuanRunningStructuralGrant, false);\n\tGargantuanFeedback.Purged = true; // Purge is never ACK retirement.")
+GargantuanReplaceFeedback("void SSNPSenderState::Shutdown()\n{" "void SSNPSenderState::Shutdown()\n{\n\tif (!GargantuanPendingTicket) GargantuanProtectedOrdinary.Observe(GargantuanReliableServiceClock());\n\tGargantuanProtectedOrdinary.Purge(); // Detach before reliability message releases.\n\tGargantuanSetRunningStructuralGrant(GargantuanRunningStructuralGrant, false);\n\tGargantuanFeedback.Purged = true; // Purge is never ACK retirement.")
 GargantuanReplaceFeedback("void CSteamNetworkConnectionBase::SNP_ShutdownConnection()\n{\n\tm_senderState.Shutdown();\n\tm_receiverState.Shutdown();\n}" [=[void CSteamNetworkConnectionBase::SNP_ShutdownConnection()
 {
 	if (m_senderState.GargantuanPendingTicket) {
@@ -271,6 +272,8 @@ GargantuanReplaceFeedback("\t// We sent a packet.  Track it" [=[
 				GargantuanPacketSentAt, OrdinaryBytes);
 			m_senderState.GargantuanFeedback.FirstSendQualifiedOrdinary(GargantuanSeg.m_pMsg->m_nMessageNumber,
 				OrdinaryBytes, GargantuanPacketSentAt);
+			m_senderState.GargantuanProtectedOrdinary.FirstSend(GargantuanSeg.m_pMsg->m_GargantuanProtectedOrdinary,
+				static_cast<uint32_t>(OrdinaryBytes), GargantuanPacketSentAt);
 		}
 		else
 			m_senderState.GargantuanFeedback.Retransmit(GargantuanSeg.m_cbSize);
@@ -367,6 +370,8 @@ bool CSteamNetworkConnectionBase::GargantuanReconcileNativeEgress()
 					Result.CompletedAtMicroseconds, OrdinaryBytes);
 				m_senderState.GargantuanFeedback.FirstSendQualifiedOrdinary(Segment.m_pMsg->m_nMessageNumber,
 					OrdinaryBytes, Result.CompletedAtMicroseconds);
+				m_senderState.GargantuanProtectedOrdinary.FirstSend(Segment.m_pMsg->m_GargantuanProtectedOrdinary,
+					static_cast<uint32_t>(OrdinaryBytes), Result.CompletedAtMicroseconds);
 			} else m_senderState.GargantuanFeedback.Retransmit(Segment.m_cbSize);
 		}
 		const auto &Grant = m_senderState.GargantuanFeedback;
@@ -433,6 +438,13 @@ GargantuanReplaceFeedback("\tpSendMessage->m_nMessageNumber = ++lane.m_nLastSent
 	{
 		const auto nGargantuanAttribution = GargantuanTakeReliableRetirementAttribution();
 		pSendMessage->m_bGargantuanStructuralPayload = nGargantuanAttribution.StructuralClass || nGargantuanAttribution.Token;
+		if (nGargantuanAttribution.ProtectedOrdinary) {
+			if (pSendMessage->m_bGargantuanStructuralPayload)
+				m_senderState.GargantuanProtectedOrdinary.EvidenceInvalid = true;
+			else m_senderState.GargantuanProtectedOrdinary.Enroll(pSendMessage->m_GargantuanProtectedOrdinary,
+				nGargantuanAttribution.ProtectedOrigin, nGargantuanAttribution.ProtectedAcceptedAtMicroseconds,
+				pSendMessage->m_nGargantuanPayloadBytes);
+		}
 		if (!pSendMessage->m_bGargantuanStructuralPayload)
 			m_senderState.GargantuanFeedback.RegisterQualifiedOrdinary(pSendMessage->m_nMessageNumber,
 				pSendMessage->m_cbSize, nGargantuanAttribution.QualifiedSequence,
@@ -663,6 +675,10 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 		GargantuanCopyReliableServiceFeedback(m_senderState.GargantuanFeedback,
 			m_senderState.m_cbPendingReliable, m_senderState.m_cbSentUnackedReliable,
 			static_cast<int>(GetState()), Result);
+		m_senderState.GargantuanProtectedOrdinary.Observe(Result.ObservedAtMicroseconds);
+		Result.Counters.ProtectedOrdinaryEverFailed = m_senderState.GargantuanProtectedOrdinary.EverFailed;
+		Result.Counters.ProtectedOrdinaryActiveDeadlineFailed = m_senderState.GargantuanProtectedOrdinary.ActiveDeadlineFailed;
+		Result.Counters.ProtectedOrdinaryEvidenceInvalid = m_senderState.GargantuanProtectedOrdinary.EvidenceInvalid;
 		return true;
 	}
 

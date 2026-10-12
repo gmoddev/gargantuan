@@ -5,6 +5,7 @@
 #include "ReliableByteAdmission.hpp"
 #include "PooledReliableServiceFeedback.hpp"
 #include "PooledServiceDiagnostics.hpp"
+#include "OrdinaryServicePolicy.hpp"
 
 #include "GameSessionTestAccess.hpp"
 
@@ -94,6 +95,7 @@ namespace gargantuan::network {
 			   StructuralReplication.IsValid() &&
 			   (!ReliableService || (Role == GameSessionRole::Server && ReliableService->IsValid() &&
 				ReliableService->MaximumConnections <= MaximumGameSessionPeers)) &&
+			   (!DeclareNormalOrdinaryService || Role == GameSessionRole::Client) &&
 			   (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint));
 	}
 
@@ -132,6 +134,7 @@ namespace gargantuan::network {
 			std::set<ObjectId> RemoteMaterializedObjects;
 			detail::SessionSendAllowance SendAllowance;
 			detail::PooledReliableServiceFeedback ReliableFeedback;
+			std::shared_ptr<detail::OrdinaryServicePolicy> OrdinaryPolicy;
 			// Bounded evidence for the one ACK-gated accepted grant. Populated only
 			// with internal evidence enabled; never used for admission.
 			std::uint64_t CausalGrantToken = 0, CausalGrantSequence = 0, CausalGrantBytes = 0, CausalAcceptedBefore = 0;
@@ -184,6 +187,7 @@ namespace gargantuan::network {
 		std::optional<DisconnectInfo> PendingSessionFailure;
 		bool BaselineApplied = false;
 		bool ClientRuntimeAttached = false;
+		std::shared_ptr<detail::OrdinaryServiceBudget> OrdinarySource;
 		detail::GameSessionFailurePoint FailurePoint = detail::GameSessionFailurePoint::None;
 
 		Implementation(
@@ -209,6 +213,18 @@ namespace gargantuan::network {
 					Configuration.Limits.MaximumReliableMessageBytes,
 					MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes);
 			}
+			if ((Configuration.ReliableService && Configuration.ReliableService->IsPooled()) ||
+				Configuration.DeclareNormalOrdinaryService)
+				OrdinarySource = std::make_shared<detail::OrdinaryServiceBudget>();
+		}
+		bool ArmOrdinaryPolicy(ConnectionId Connection, Peer &PeerValue) {
+			if (!OrdinarySource || PeerValue.OrdinaryPolicy) return true;
+			auto Policy = std::make_shared<detail::OrdinaryServicePolicy>(OrdinarySource);
+			if (!detail::ReliableServiceFeedbackAccess::DeclareOrdinaryPolicy(Scheduler, Connection, Policy) ||
+				!detail::ReliableServiceFeedbackAccess::DeclareOrdinaryPolicy(*Transport, Connection, Policy) ||
+				!Policy->SetReady(true)) return false;
+			PeerValue.OrdinaryPolicy = std::move(Policy);
+			return true;
 		}
 
 		~Implementation() {
@@ -924,6 +940,10 @@ namespace gargantuan::network {
 				return;
 			}
 			PeerValue.Phase = PeerPhase::Ready;
+			if (!ArmOrdinaryPolicy(Connection, PeerValue)) {
+				Reject(Connection, DisconnectReason::ResourceExhaustion, "Ordinary source policy registration failed");
+				return;
+			}
 			if (const auto *View = Replication->GetView(Connection)) {
 				PeerValue.RemoteMaterializedObjects = std::set<ObjectId>(
 					View->KnownObjects.begin(), View->KnownObjects.end()
@@ -1417,13 +1437,17 @@ namespace gargantuan::network {
 		}
 
 		void ObserveOrdinaryQueue(ConnectionId Connection, Peer &PeerValue, std::uint64_t Now) {
-			const auto Oldest = detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection);
+			const auto Oldest = detail::ReliableServiceFeedbackAccess::OldestProtectedOrdinary(Scheduler, Connection);
 			const bool Failed = !Oldest || (*Oldest && (Now < *Oldest ||
 				Now - *Oldest > PooledReliableServiceProfile::QueueWindowMicroseconds));
+			const auto EvidenceOldest = detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection);
+			const bool EvidenceFailed = !EvidenceOldest || (*EvidenceOldest && (Now < *EvidenceOldest ||
+				Now - *EvidenceOldest > PooledReliableServiceProfile::QueueWindowMicroseconds));
 			auto &Ledger = PeerValue.ReliableFeedback;
 			Ledger.QueuedOrdinaryFailed = Failed;
-			if (Failed && !Ledger.QueuedOrdinaryEverFailed) {
-				Ledger.QueuedOrdinaryEverFailed = true;
+			if (Failed) Ledger.QueuedOrdinaryEverFailed = true;
+			if (EvidenceFailed && !Ledger.QueuedQualifiedOrdinaryEverFailed) {
+				Ledger.QueuedQualifiedOrdinaryEverFailed = true;
 				SaturatingAdd(Metrics.QualifiedOrdinaryQueueFailures, 1);
 			}
 			if (IsPooled()) {
@@ -2233,6 +2257,10 @@ namespace gargantuan::network {
 			}
 			ClientRuntimeAttached = true;
 			PeerValue.Phase = PeerPhase::Ready;
+			if (!ArmOrdinaryPolicy(*PrimaryConnection, PeerValue)) {
+				FailSession({DisconnectReason::ResourceExhaustion, "Client ordinary source policy registration failed"});
+				return false;
+			}
 			Status = GameSessionStatus::Ready;
 			++Metrics.ReadyPeers;
 			return true;
@@ -2646,6 +2674,9 @@ namespace gargantuan::network {
 			Error = "Causal snapshot native resolution exceeded its shared deadline"; return {};
 		}
 		Error.clear(); return Result;
+	}
+	bool detail::GameSessionTestAccess::SetOrdinarySourceNormal(GameSession &Session, bool Normal) {
+		return !Session.State->OrdinarySource || Session.State->OrdinarySource->SetNormal(Normal);
 	}
 	std::optional<std::vector<detail::StructuralCausalSnapshot>>
 	detail::GameSessionTestAccess::CaptureStructuralSourceSnapshot(const GameSession &Session, std::string &Error) {

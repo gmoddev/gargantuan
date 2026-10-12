@@ -138,6 +138,8 @@ namespace gargantuan::host {
 				RecoveryWorkload(RecoveryWorkloadValue), TickEvidence(TickEvidenceValue) {
 			if (RunId.empty() || !Runtime.Content || !Runtime.DataModel || !Runtime.CharacterControl)
 				throw std::invalid_argument("physical scale qualification requires a content-backed server runtime");
+			if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(Session, false))
+				throw std::invalid_argument("[Network:OrdinaryService] Server bootstrap source scope failed");
 		}
 		void AttachAdmissionEvidence(detail::FarmAdmissionEvidence &Evidence) { AdmissionEvidence = &Evidence; }
 		~PhysicalScaleQualification() {
@@ -651,6 +653,8 @@ namespace gargantuan::host {
 		}
 
 		void BeginPhase(Phase Value, std::uint64_t Tick) {
+			if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(Session, true))
+				Fail("ordinary_source_scope_failed", Tick);
 			if (Value == Phase::Load || Value == Phase::Reload) {
 				if (!Runtime.Content->RequestContent(ContentKey)) Fail("content_demand_rejected", Tick);
 			} else if (Value == Phase::Evict) {
@@ -751,6 +755,8 @@ namespace gargantuan::host {
 		}
 
 		void InitializeOverload(std::uint64_t Tick) {
+			if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(Session, false))
+				Fail("ordinary_overload_scope_failed", Tick);
 			OverloadRoot = std::make_shared<Folder>();
 			OverloadRoot->SetName("ScaleOverloadRegion");
 			OverloadRoot->SetParent(Runtime.Workspace);
@@ -1096,6 +1102,8 @@ namespace gargantuan::host {
 		}
 
 		void EndPhase(std::uint64_t Tick) {
+			if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(Session, false))
+				Fail("ordinary_phase_end_scope_failed", Tick);
 			runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseEnd",
 				.Sequence=static_cast<std::uint64_t>(CurrentPhase) + 1});
 			const auto Ended = std::chrono::steady_clock::now();
