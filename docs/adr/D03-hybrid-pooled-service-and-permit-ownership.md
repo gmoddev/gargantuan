@@ -141,6 +141,75 @@ Package preflight receipt:
 Exact-source hosted CI and a fresh native32 identity remain mandatory before
 claiming the complete conjunction.
 
+### Corrected native32: execution passes, recovery receive attribution pending
+
+At `b65c3528e83e`, all original hosted Windows96/Linux53/GNS11 jobs and the
+official package pass. Fresh run `9196af39-8da8-4200-95da-a07e604a92a2`
+passes native F1 for32 peers/7089 completed grants, with maximum Main61208us
+and exact turnover106758us. All64 nonzero normal ordinary certificates pass
+(maximum9075us); exact admission/conservation, fixed32-peer fairness and960
+versioned cadence records pass. **Full qualification still FAILS** recovery
+client RPC latency and the publication join. Retain all hard predicates.
+
+Every first gameplay/mixed recovery RPC exceeds500ms. Client0 measures
+618219/549290us, with604891/536267us between GNS API handoff and server
+receipt. Scheduler/handler work is short and server frames continue. The
+evidence does not separate native sending/retry/reassembly from completed
+receive waiting for polling or adapter dispatch. Recovery phase0 is intentional;
+normal H2 PASS cannot repair failed recovery probes. Historical recovery
+correction and original E8 failure retain their source/verdict.
+
+The join separately finds repeated compact-invalid candidates recorded as
+`StateBuilt` before caller rejection. A focused diagnostic correction records
+only encodable snapshots while preserving candidate return, rejection counters,
+sequence advancement and due/requeue. It neither ignores duplicate successful
+states nor changes publication behavior.
+
+The next bounded discriminator adds only fixed RPC receive metadata to the
+existing publication tap: GNS dequeue timestamp, age since complete ordered
+message became receivable and adapter event depth before enqueue. Pinned GNS
+assigns `m_usecTimeReceived` at full ordered-message reception, not first UDP
+arrival. Joining that record to existing RPC receipt separates completed receive
+queue residence from adapter dispatch. It cannot attribute earlier native send
+or reassembly on its own. No payload retention, log I/O, new scheduler or health
+change is needed. Focused regressions, affected native tests and exact-source
+CI precede one fresh diagnostic identity. Observer perturbation remains
+unmeasured. Ownership decision section20 retains exact receipts and alternatives.
+
+Independent contract review then establishes a separate fixture enrollment
+mismatch: the canonical service-recovery promise is return to qualified behavior
+within20s, not zero settling time after overload. The already qualified
+`PooledReliableServiceIntegration3L.md` recovery-probe correction and actual
+`ReliableGameplayWorkloadFixture.hpp` keep failed latency attempts unproven,
+try at most one fresh group per second, retain every attempt and never forgive
+accepted errors. The farm's immediate one-shot10-probe cohort lacked that
+established enrollment distinction.
+
+The prospective `bounded_recovery_cohort_v1` correction uses at most20 fresh
+cohorts, one in flight, at least1s between starts. Every invocation/ACK retains
+its actual integer clock endpoints and cohort identity. Pending Events cannot
+be abandoned to restart, and actual RPC/Event errors remain fatal. All completed
+positive but slow cohorts remain visible as UNPROVEN; only a complete qualified
+10-RPC/10-Event cohort can produce the final summary/recovery acknowledgment.
+The existing150/250/500ms RPC and250ms Event gates and original server20s
+cessation deadline remain unchanged. Exact server acknowledgment timestamps
+must independently satisfy that deadline; client recovery-entry clocks only
+bound the controlled producer. Legacy evidence retains its strict original
+interpretation. This is alignment with the existing recovery contract, not
+retrospective PASS for b65 or a new production exemption. Focused actual Luau,
+reader negatives, native preflights and fresh hosted CI remain required.
+
+Corrected source preflight subsequently passes: actual Luau recovery/cohort/
+pending-transition tests, exact missing-tick negative, strict recovery-reader
+positive/negative/legacy/boundary cases, publication Python12, all four affected
+native suites and fresh closed Player/Server packages. Source input and native
+JUnit SHA-256 are
+`f9f151c753c26e7bd3300a6bdca1f1322fca87f981f6fd4249707e7b897947b2` /
+`23051315e6c4828d133dfa98c888cd1da43a7bcb5b6184a108f18790f1f18124`.
+The earlier Character-fixture promotion premise and PowerShell nonce-lookup
+failure remain preserved, with source-supported minimal corrections. This
+preflight is not hosted CI, native32 or physical qualification.
+
 ## Hard conjunction
 
 1. **Native structural completion.** For every Ready, generation-valid accepted

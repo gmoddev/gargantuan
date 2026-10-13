@@ -171,6 +171,115 @@ try {
 		-MaximumRunMicroseconds 20470536L) } catch { $RejectedHardTimeout = $true }
 	if (-not $RejectedHardTimeout) { throw 'retained-work deadline beyond hard run timeout was accepted' }
 	$OriginalError = [IO.File]::ReadAllLines($Server.ErrorPath)
+	# Prospective recovery cohorts retain a slow successful first attempt and
+	# establish service with a later complete ten-RPC/ten-Event cohort. The old
+	# immediate-cohort evidence is tested unchanged below.
+	$LegacyClients = @($Clients | ForEach-Object { ,([IO.File]::ReadAllLines($_.ErrorPath)) })
+	$ReadyRows = @(0..31 | ForEach-Object { "[Qualification:Server] event=ready run=$RunId nonce=$($ExpectedNonces[$_]) connection_slot=$($_ + 1) connection_generation=1 player_id=$($_ + 1)" })
+	$BeforeCohortOutput = [IO.File]::ReadAllLines($Server.OutputPath)
+	[IO.File]::WriteAllLines($Server.OutputPath, @($ReadyRows) + @($BeforeCohortOutput))
+	$CohortServerError = @($OriginalError | ForEach-Object {
+		if ($_ -match 'event=probe_ack case=(gameplay|structural|mixed) ') {
+			$CaseIndex = [array]::IndexOf($Cases, $Matches[1])
+			$_ + " contract=bounded_recovery_cohort_v1 attempt=2 monotonic_us=$(100000000 * ($CaseIndex + 1) + 15000001)"
+		} else { $_ }
+	})
+	[IO.File]::WriteAllLines($Server.ErrorPath, $CohortServerError)
+	$CohortClients = @()
+	for ($Slot = 0; $Slot -lt 32; $Slot++) {
+		$Lines = [Collections.Generic.List[string]]::new()
+		foreach ($CaseIndex in 0..2) {
+			$Case = $Cases[$CaseIndex]; $Player = $Slot + 1
+			$Origin = 1000000000000L + 100000000000L * $CaseIndex
+			$Deadline = $Origin + 20000000000L
+			$At = $Origin + 1000000L
+			foreach ($Attempt in 1..2) {
+				$Start = $At
+				$Lines.Add("[Qualification:Recovery] event=cohort_start contract=bounded_recovery_cohort_v1 case=$Case player_id=$Player attempt=$Attempt recovery_started_clock_ns=$Origin deadline_clock_ns=$Deadline started_clock_ns=$Start client_tick=1")
+				for ($Index = 1; $Index -le 10; $Index++) {
+					$Latency = if ($Attempt -eq 1 -and $Index -eq 1) { 600000L } else { 1000L }
+					$Finish = $At + $Latency * 1000
+					$Sequence = ($Attempt - 1) * 10 + $Index
+					$Lines.Add("[Qualification:Recovery] event=rpc_probe contract=bounded_recovery_cohort_v1 case=$Case player_id=$Player attempt=$Attempt index=$Index client_tick=1 started_clock_ns=$At ended_clock_ns=$Finish elapsed_us=$Latency ok=1")
+					$Lines.Add("[Qualification:Recovery] event=event_offer contract=bounded_recovery_cohort_v1 case=$Case player_id=$Player attempt=$Attempt index=$Index sequence=$Sequence started_clock_ns=$Finish ok=1")
+					$EventEnd = $Finish + 1000000
+					$Lines.Add("[Qualification:Recovery] event=event_probe contract=bounded_recovery_cohort_v1 case=$Case player_id=$Player attempt=$Attempt index=$Index sequence=$Sequence started_clock_ns=$Finish ended_clock_ns=$EventEnd elapsed_us=1000 ok=1")
+					$At = $Finish + 200000000
+				}
+				$Maximum = if ($Attempt -eq 1) { 600000 } else { 1000 }
+				$Status = if ($Attempt -eq 1) { 'UNPROVEN' } else { 'QUALIFIED' }
+				$Lines.Add("[Qualification:Recovery] event=cohort_end contract=bounded_recovery_cohort_v1 case=$Case player_id=$Player attempt=$Attempt recovery_started_clock_ns=$Origin deadline_clock_ns=$Deadline started_clock_ns=$Start ended_clock_ns=$At rpc_acks=10 rpc_errors=0 event_acks=10 event_errors=0 pending_events=0 rpc_p95_us=$Maximum rpc_p99_us=$Maximum rpc_max_us=$Maximum event_max_us=1000 status=$Status reason=none")
+				$At += 1000000000L
+			}
+			$Lines.Add("[Qualification:Recovery] event=client_probes contract=bounded_recovery_cohort_v1 case=$Case player_id=$Player attempt=2 rpc_acks=10 rpc_errors=0 event_acks=10 rpc_p95_us=1000 rpc_p99_us=1000 rpc_max_us=1000 event_max_us=1000")
+		}
+		$Original = [IO.File]::ReadAllLines($Clients[$Slot].ErrorPath)
+		$New = @($Original | Where-Object { $_ -notmatch 'event=client_probes ' }) + @($Lines)
+		$CohortClients += ,$New
+		[IO.File]::WriteAllLines($Clients[$Slot].ErrorPath, $New)
+	}
+	$CohortPass = Assert-RecoveryRecords -Server $Server -Clients $Clients -ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections
+	if ($CohortPass.State -ne 'MEASURED_PASS') { throw 'bounded recovery did not retain slow first cohort and qualify later service' }
+	function Assert-CohortRejected([string[]]$Lines, [string]$Reason) {
+		[IO.File]::WriteAllLines($Clients[0].ErrorPath, $Lines)
+		$Rejected = $false
+		try { [void](Assert-RecoveryRecords -Server $Server -Clients $Clients -ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) }
+		catch { $Rejected = $true }
+		if (-not $Rejected) { throw "invalid bounded cohort accepted: $Reason" }
+		[IO.File]::WriteAllLines($Clients[0].ErrorPath, $CohortClients[0])
+	}
+	foreach ($Mutation in @('raw-gap', 'raw-duplicate', 'offer-gap', 'clock-retime', 'rpc-error', 'event-error', 'offer-error', 'summary-forgery',
+		'pending', 'unknown-version', 'partial-version', 'origin-reset', 'attempt-gap', 'attempt-cap', 'cadence', 'overlap', 'early-summary', 'false-qualification', 'terminal-failure', 'duplicate-field')) {
+		$Changed = [Collections.Generic.List[string]]::new()
+		foreach ($Line in $CohortClients[0]) {
+			$Row = $Line
+			if ($Line -match 'case=gameplay ' -and $Line -match 'attempt=1 ') {
+				if ($Mutation -eq 'raw-gap' -and $Line -match 'event=rpc_probe .* index=1 ') { continue }
+				if ($Mutation -eq 'offer-gap' -and $Line -match 'event=event_offer .* index=1 ') { continue }
+				if ($Mutation -eq 'clock-retime' -and $Line -match 'event=rpc_probe .* index=1 ') { $Row = $Row.Replace('elapsed_us=600000', 'elapsed_us=1') }
+				if ($Mutation -eq 'rpc-error' -and $Line -match 'event=rpc_probe .* index=1 ') { $Row = $Row.Replace('ok=1', 'ok=0') }
+				if ($Mutation -eq 'event-error' -and $Line -match 'event=event_probe .* index=1 ') { $Row = $Row.Replace('ok=1', 'ok=0') }
+				if ($Mutation -eq 'offer-error' -and $Line -match 'event=event_offer .* index=1 ') { $Row = $Row.Replace('ok=1', 'ok=0') }
+				if ($Mutation -eq 'pending' -and $Line -match 'event=cohort_end ') { $Row = $Row.Replace('pending_events=0', 'pending_events=1') }
+				if ($Mutation -eq 'false-qualification' -and $Line -match 'event=cohort_end ') { $Row = $Row.Replace('status=UNPROVEN', 'status=QUALIFIED') }
+				if ($Mutation -eq 'duplicate-field' -and $Line -match 'event=cohort_start ') { $Row += ' attempt=1' }
+				if ($Mutation -eq 'raw-duplicate' -and $Line -match 'event=rpc_probe .* index=1 ') { $Changed.Add($Row) }
+			}
+			if ($Line -match 'case=gameplay ' -and $Line -match 'attempt=2 ') {
+				if ($Mutation -eq 'attempt-gap') { $Row = $Row.Replace('attempt=2', 'attempt=3') }
+				if ($Mutation -eq 'attempt-cap') { $Row = $Row.Replace('attempt=2', 'attempt=21') }
+				if ($Mutation -eq 'origin-reset') { $Row = $Row.Replace('recovery_started_clock_ns=1000000000000', 'recovery_started_clock_ns=1000000000001') }
+				if ($Mutation -cin @('cadence', 'overlap') -and $Line -match 'event=cohort_start ') { $Row = $Row -replace 'started_clock_ns=100[0-9]+ client_tick=', 'started_clock_ns=1000001000001 client_tick=' }
+				if ($Mutation -eq 'summary-forgery' -and $Line -match 'event=client_probes ') { $Row = $Row.Replace('rpc_max_us=1000', 'rpc_max_us=1') }
+			}
+			if ($Mutation -eq 'unknown-version') { $Row = $Row.Replace('bounded_recovery_cohort_v1', 'bounded_recovery_cohort_v2') }
+			if ($Mutation -eq 'partial-version' -and $Line -match 'event=rpc_probe .* case=gameplay .* attempt=1 index=1 ') { $Row = $Row.Replace('contract=bounded_recovery_cohort_v1 ', '') }
+			if ($Mutation -eq 'early-summary' -and $Line -match 'event=cohort_start .* case=gameplay .* attempt=2 ') {
+				$Changed.Add(@($CohortClients[0] | Where-Object { $_ -match 'event=client_probes .* case=gameplay ' })[0])
+			}
+			$Changed.Add($Row)
+		}
+		if ($Mutation -eq 'terminal-failure') { $Changed.Add('[Qualification:Recovery] event=recovery_failed contract=bounded_recovery_cohort_v1 case=gameplay player_id=1 attempt=2 reason=deadline') }
+		if (($Changed -join "`n") -ceq ($CohortClients[0] -join "`n")) { throw "cohort negative did not change: $Mutation" }
+		Assert-CohortRejected -Lines $Changed.ToArray() -Reason $Mutation
+	}
+	$ExactServerDeadline = @($CohortServerError | ForEach-Object {
+		if ($_ -match 'event=probe_ack case=gameplay peer_slot=1 ') { $_.Replace('monotonic_us=115000001', 'monotonic_us=128000001') }
+		elseif ($_ -match 'event=sample run=.* case=gameplay elapsed_us=19000000 ') { $_.Replace('elapsed_us=19000000', 'elapsed_us=20000000') }
+		else { $_ }
+	})
+	[IO.File]::WriteAllLines($Server.ErrorPath, $ExactServerDeadline)
+	if ((Assert-RecoveryRecords -Server $Server -Clients $Clients -ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections).State -ne 'MEASURED_PASS') { throw 'exact immutable20s recovery ACK was rejected' }
+	[IO.File]::WriteAllLines($Server.ErrorPath, @($ExactServerDeadline | ForEach-Object { if ($_ -match 'event=probe_ack case=gameplay peer_slot=1 ') { $_.Replace('monotonic_us=128000001', 'monotonic_us=128000002') } else { $_ } }))
+	$DeadlineRejected = $false
+	try { [void](Assert-RecoveryRecords -Server $Server -Clients $Clients -ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) } catch { $DeadlineRejected = $true }
+	if (-not $DeadlineRejected) { throw 'immutable server20s deadline plus1 was accepted' }
+	[IO.File]::WriteAllLines($Server.ErrorPath, $OriginalError)
+	[IO.File]::WriteAllLines($Server.OutputPath, $BeforeCohortOutput)
+	for ($Slot = 0; $Slot -lt 32; $Slot++) { [IO.File]::WriteAllLines($Clients[$Slot].ErrorPath, $LegacyClients[$Slot]) }
+	$LegacyLate = @($LegacyClients[0] | ForEach-Object { if ($_ -match 'event=client_probes case=gameplay ') { $_.Replace('rpc_max_us=1000', 'rpc_max_us=600000') } else { $_ } })
+	Assert-CohortRejected -Lines $LegacyLate -Reason 'legacy first late probe still fails unchanged'
+	[IO.File]::WriteAllLines($Clients[0].ErrorPath, $LegacyClients[0])
 	$TerminalStructuralSample = @($OriginalError | Where-Object {
 		$_ -match 'event=sample run=.* case=structural elapsed_us=19000000 '
 	})[0].Replace('elapsed_us=19000000', 'elapsed_us=20470530')

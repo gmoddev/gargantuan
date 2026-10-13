@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from farm_publication_trace import RECORD, Validate
+from farm_publication_trace import RECORD, Validate, IterRecords
 
 
 class FarmPublicationTraceTests(unittest.TestCase):
@@ -65,6 +65,51 @@ class FarmPublicationTraceTests(unittest.TestCase):
                    Role="SERVER", Slot=-1, Nonce=0)
         with self.assertRaises(ValueError):
             Validate(self.Path, "run-a", "SERVER")
+
+    @staticmethod
+    def NativeRpc(**Changes):
+        Fields = dict(Stage=28, Flags=0, ConnectionSlot=1, ConnectionGeneration=1,
+                      ObjectSlot=18, ObjectGeneration=2, Bytes=65, Nanoseconds=170,
+                      ReadyAgeUs=500_000, Request=7, EventDepth=4096, Kind=3,
+                      NativeMessageNumber=23, AgeSampleEndedNanoseconds=190)
+        Fields.update(Changes)
+        return RECORD.pack(*Fields.values())
+
+    def test_rpc_native_dequeue_preserves_separate_age_depth_and_identity(self):
+        for Role, Slot, Nonce in (("CLIENT", 0, 17), ("SERVER", -1, 0)):
+            for Kind in (3, 4, 5):
+                Required = [self.Record(9, 100), self.Record(10, 150)] if Role == "CLIENT" else [self.Record(8, 100)]
+                self.Write(Required + [self.NativeRpc(Kind=Kind)], Role=Role, Slot=Slot, Nonce=Nonce)
+                Value = Validate(self.Path, "run-a", Role, Slot, Nonce)
+                self.assertEqual(Value["Stages"][28], 1)
+                Row = list(IterRecords(self.Path, "run-a", Role, Slot, Nonce))[-1]
+                self.assertEqual(Row.RpcReadyQueueAgeMicroseconds, 500_000)
+                self.assertEqual(Row.RpcAdapterPendingEventDepth, 4096)
+                self.assertEqual((Row.ObjectSlot, Row.ObjectGeneration, Row.Sequence, Row.RpcNativeMessageNumber), (18, 2, 7, 23))
+                self.assertEqual(Row.RpcAgeSamplingSpanNanoseconds, 20)
+        self.Write([self.Record(9, 100), self.Record(10, 150), self.NativeRpc(ReadyAgeUs=0, EventDepth=0)])
+        Validate(self.Path, "run-a", "CLIENT", 0, 17)
+
+    def test_rpc_native_dequeue_rejects_invalid_identity_age_depth_protocol_and_size(self):
+        for Changes in ({"ConnectionSlot": 0}, {"ConnectionGeneration": 0},
+                        {"ObjectSlot": 0}, {"ObjectGeneration": 0}, {"Request": 0},
+                        {"ReadyAgeUs": 1 << 63}, {"EventDepth": 1_048_577},
+                        {"Kind": 0}, {"Kind": 6}, {"AgeSampleEndedNanoseconds": 169},
+                        {"NativeMessageNumber": 0}, {"NativeMessageNumber": 1 << 63},
+                        {"Flags": 1}, {"Bytes": 31}):
+            with self.subTest(Changes=Changes):
+                self.Write([self.Record(9, 100), self.Record(10, 150), self.NativeRpc(**Changes)])
+                with self.assertRaises(ValueError):
+                    Validate(self.Path, "run-a", "CLIENT", 0, 17)
+
+    def test_rpc_native_dequeue_sampling_end_is_the_next_record_frontier(self):
+        Prefix = [self.Record(9, 100), self.Record(10, 150), self.NativeRpc()]
+        for Following in (self.Rpc(14, 180), self.NativeRpc(Nanoseconds=185, AgeSampleEndedNanoseconds=200)):
+            self.Write(Prefix + [Following])
+            with self.assertRaises(ValueError):
+                Validate(self.Path, "run-a", "CLIENT", 0, 17)
+        self.Write(Prefix + [self.Rpc(14, 190)])
+        Validate(self.Path, "run-a", "CLIENT", 0, 17)
 
     def test_rejects_retirement_with_packet_fields_or_client_role(self):
         Retired = RECORD.pack(11, 0, 1, 1, 8, 2, 0,

@@ -48,7 +48,10 @@ $Prelude = @'
 local Qualified, ProducerPlayerId, PhysicalFarm = true, 1, true
 local NativePrint = print
 local Records, Acknowledgements, Callbacks = {}, {}, {}
+local AcknowledgementAttempts = {}
 local TestClock = 10
+local RecoveryTesting, RecoveryMode, RecoveryRpcCalls = false, 'Healthy', 0
+local HeldRecoveryEvents = {}
 local os = {clock = function() return TestClock end}
 local VerifyScope, HostScopePhase, HostScopeNormal = false, nil, false
 local function CheckScope(Phase, Normal)
@@ -70,11 +73,15 @@ local PostSimulation = {}
 function PostSimulation:Connect(Callback) table.insert(Callbacks, Callback) end
 local PlayersMock = {LocalPlayer = {PlayerId = 9}}
 local PhaseMock = {OnClientEvent = Signal()}
-function PhaseMock:FireServer(Kind, Case)
+function PhaseMock:FireServer(Kind, Case, Attempt)
     if Kind == 'phase_ack' or Kind == 'content_observed' then
         CheckScope(Case, Case ~= 'complete' and Case ~= 'calibrating')
     elseif Kind == 'clock_quiesced' or Kind == 'clock_done' then
         CheckScope('calibrating', false)
+    elseif Kind == 'recovery_done' then
+        assert(type(Attempt) == 'number' and Attempt >= 1 and Attempt <= 20 and Attempt == math.floor(Attempt),
+            'actual recovery acknowledgement must carry its qualified attempt')
+        AcknowledgementAttempts[Case] = Attempt
     end
     local Key = Kind .. ':' .. Case
     Acknowledgements[Key] = (Acknowledgements[Key] or 0) + 1
@@ -86,6 +93,13 @@ function EventMock:FireServer(Message, Sequence)
 end
 local OverloadEventMock = {OnClientEvent = Signal()}
 function OverloadEventMock:FireServer(Message, Sequence, Case)
+    if RecoveryTesting and Message == 'recovery' then
+        if RecoveryMode == 'EventError' then error('accepted Event fixture failure') end
+        if RecoveryMode == 'PendingEvents' then
+            table.insert(HeldRecoveryEvents, {Message, Sequence, Case})
+            return
+        end
+    end
     self.OnClientEvent.Callback(Message, Sequence, Case)
 end
 local RpcCount = 0
@@ -96,6 +110,13 @@ function FunctionMock:InvokeServerWithTimeout(Timeout, Payload)
             string.sub(Payload, 1, 6) ~= 'clock:')
     end
     RpcCount += 1
+    if RecoveryTesting and Payload == 'recovery' then
+        RecoveryRpcCalls += 1
+        TestClock += if RecoveryMode == 'AlwaysSlow' or
+            (RecoveryMode == 'FirstSlow' and RecoveryRpcCalls == 1) then 0.618219 else 0.03
+        if RecoveryMode == 'PendingRpc' then coroutine.yield() end
+        if RecoveryMode == 'RpcError' then return nil end
+    end
     return Payload
 end
 local Children, Holders = {}, {}
@@ -127,7 +148,10 @@ local task = {
         table.insert(PendingTasks, Thread)
         assert(coroutine.resume(Thread))
     end,
-    wait = function() if DeferredTasks then coroutine.yield() end end,
+    wait = function(Seconds)
+        if RecoveryTesting then TestClock += Seconds or 0 end
+        if DeferredTasks then coroutine.yield() end
+    end,
 }
 local function DrainTasks()
     for Opportunity = 1, 110 do
@@ -211,6 +235,7 @@ PlayersMock.LocalPlayer = {PlayerId = 9}
 NativePrint('[Qualification:ScopeHandoffScript] opening=PASS closing=PASS rpc_samples=100 clock_probes=4 phase_clock=IMMUTABLE result=PASS')
 -- Invoke recovery independently; content-producer ticks must not be required.
 local Recovery = Callbacks[2]
+RecoveryTesting = true
 local PreviousTick = 0
 for CaseIndex, Case in {'gameplay', 'structural', 'mixed'} do
     Attributes.ScaleOverloadCase = Case
@@ -224,8 +249,10 @@ for CaseIndex, Case in {'gameplay', 'structural', 'mixed'} do
     Attributes.ScaleOverloadCase = 'recover_' .. Case
     local RpcBefore = RpcCount
     Recovery()
+    Recovery() -- Only a settled cohort may publish its complete receipt.
     assert(RpcCount - RpcBefore == 10, 'each recovery must execute exactly ten real callback RPC invocations')
     assert(Acknowledgements['recovery_done:' .. Case] == 1, 'ten RPC/event ACK gates must complete')
+    assert(AcknowledgementAttempts[Case] == RecoveryAttempt, 'server handoff must identify the qualified cohort')
     if CaseIndex > 1 then assert(Acknowledgements['name_converged:' .. Case] == 1) end
     local Probes, Summary = 0, 0
     for _, Record in Records do
@@ -233,7 +260,7 @@ for CaseIndex, Case in {'gameplay', 'structural', 'mixed'} do
             Probes += 1
             local ClientTick = tonumber(string.match(Record, 'client_tick=(%d+)'))
             assert(ClientTick and ClientTick > PreviousTick, 'client_tick must be local, numeric and advance across cases')
-            assert(string.match(Record, 'ok=1$'), 'bounded echo must pass')
+            assert(string.match(Record, 'ok=1 contract=bounded_recovery_cohort_v1 attempt=1$'), 'bounded echo must pass')
         elseif string.find(Record, 'event=client_probes case=' .. Case .. ' ', 1, true) then Summary += 1 end
     end
     assert(Probes == 10 and Summary == 1, 'all formatted probe records and terminal summary must exist')
@@ -243,6 +270,113 @@ for CaseIndex, Case in {'gameplay', 'structural', 'mixed'} do
         'completed callback must not repeat probes or acknowledgement')
 end
 NativePrint('[Qualification:RecoveryScript] cases=3 rpc_probes=30 completed_cases=3 result=PASS')
+-- Fresh bounded fixture occurrences use the actual case-reset path. They do
+-- not replay any transport operation or reuse an accepted request/Event.
+local function BeginFixture(Mode)
+    RecoveryMode, RecoveryRpcCalls = Mode, 0
+    table.clear(HeldRecoveryEvents)
+    CurrentOverloadCase = nil
+    Acknowledgements['recovery_done:gameplay'] = nil
+    Attributes.ScaleOverloadCase = 'gameplay'
+    Recovery()
+    Attributes.ScaleOverloadCase = 'recover_gameplay'
+    return #Records
+end
+local function CountRecords(After, Fragment)
+    local Count = 0
+    for Index = After + 1, #Records do
+        if string.find(Records[Index], Fragment, 1, true) then Count += 1 end
+    end
+    return Count
+end
+local First = BeginFixture('FirstSlow')
+Recovery()
+local OriginalDeadline = RecoveryDeadlineNs
+Recovery() -- Retains UNPROVEN first cohort and starts fresh second cohort.
+assert(RecoveryAttempt == 2 and RecoveryRpcCalls == 20 and not RecoveryResultSent,
+    'slow successful first cohort is unproven and cannot publish recovery')
+Recovery()
+assert(RecoveryResultSent and Acknowledgements['recovery_done:gameplay'] == 1 and AcknowledgementAttempts.gameplay == 2 and
+    RecoveryDeadlineNs == OriginalDeadline and CountRecords(First, 'status=UNPROVEN') == 1 and
+    CountRecords(First, 'status=QUALIFIED') == 1 and CountRecords(First, 'event=rpc_probe') == 20 and
+    CountRecords(First, 'event=event_probe') == 20,
+    'healthy fresh cohort qualifies without discarding first-cohort evidence or restarting deadline')
+local Starts = {}
+for Index = First + 1, #Records do
+    if string.find(Records[Index], 'event=cohort_start ', 1, true) then
+        table.insert(Starts, tonumber(string.match(Records[Index], ' started_clock_ns=(%d+)')))
+    end
+end
+assert(#Starts == 2 and Starts[2] - Starts[1] >= 1000000000, 'fresh cohort starts must remain at most one per second')
+First = BeginFixture('AlwaysSlow')
+for Opportunity = 1, 30 do Recovery() if RecoveryFailed then break end end
+assert(RecoveryFailed and not RecoveryResultSent and not Acknowledgements['recovery_done:gameplay'] and
+    RecoveryDeadlineNs - RecoveryStartedNs == 20000000000 and RecoveryAttempt <= 20 and
+    CountRecords(First, 'status=UNPROVEN') > 0 and CountRecords(First, 'status=QUALIFIED') == 0,
+    'always unsuitable cohorts fail at the unchanged deadline instead of retrying indefinitely')
+for _, Mode in {'RpcError', 'EventError'} do
+    First = BeginFixture(Mode)
+    Recovery()
+    local Attempts, Calls = RecoveryAttempt, RecoveryRpcCalls
+    RecoveryMode = 'Healthy'
+    for Opportunity = 1, 3 do Recovery() end
+    assert(RecoveryFailed and not RecoveryResultSent and RecoveryAttempt == Attempts and RecoveryRpcCalls == Calls and
+        CountRecords(First, 'status=FAILED') == 1 and not Acknowledgements['recovery_done:gameplay'],
+        'accepted RPC/Event errors remain fatal and cannot be hidden by a later healthy cohort')
+end
+First = BeginFixture('PendingEvents')
+Recovery()
+local PendingDeadline = RecoveryDeadlineNs
+TestClock += 1
+Recovery()
+assert(RecoveryAttempt == 1 and #HeldRecoveryEvents == 10 and RecoveryEventAcks == 0 and
+    next(RecoveryEventStarted) ~= nil, 'pending accepted Events must prevent a fresh cohort')
+TestClock = PendingDeadline / 1000000000
+Recovery()
+assert(RecoveryFailed and next(RecoveryEventStarted) ~= nil and RecoveryDeadlineNs == PendingDeadline,
+    'deadline failure must retain pending accepted Events')
+for _, Held in HeldRecoveryEvents do OverloadEventMock.OnClientEvent.Callback(table.unpack(Held)) end
+Recovery()
+assert(not RecoveryResultSent and CountRecords(First, 'event=event_probe') == 10 and
+    not Acknowledgements['recovery_done:gameplay'], 'late Events remain raw evidence without retrospective qualification')
+First = BeginFixture('PendingRpc')
+DeferredTasks = true
+Recovery()
+local RpcDeadline = RecoveryDeadlineNs
+local StructuralReadyBefore = Acknowledgements['overload_ready:structural']
+Attributes.ScaleOverloadCase = 'structural'
+Recovery()
+assert(RecoveryFailed and RecoveryFailureReason == 'case_transition' and CurrentOverloadCase == 'gameplay' and
+    RecoveryDeadlineNs == RpcDeadline and not RecoveryProbesDone and
+    Acknowledgements['overload_ready:structural'] == StructuralReadyBefore,
+    'case transition must retain an in-flight RPC and refuse next-case offers')
+DrainTasks()
+DeferredTasks = false
+assert(RecoveryProbesDone and RecoveryRpcCalls == 1 and not RecoveryResultSent and
+    CountRecords(First, 'event=rpc_probe case=gameplay ') == 1 and
+    CountRecords(First, 'event=rpc_probe case=structural ') == 0,
+    'late RPC must preserve its captured old case/attempt without retrospective qualification')
+First = BeginFixture('PendingEvents')
+Recovery()
+local EventDeadline = RecoveryDeadlineNs
+StructuralReadyBefore = Acknowledgements['overload_ready:structural']
+Attributes.ScaleOverloadCase = 'structural'
+Recovery()
+assert(RecoveryFailed and CurrentOverloadCase == 'gameplay' and RecoveryDeadlineNs == EventDeadline and
+    next(RecoveryEventStarted) ~= nil and #HeldRecoveryEvents == 10 and
+    Acknowledgements['overload_ready:structural'] == StructuralReadyBefore,
+    'case transition must preserve pending Events and their old context')
+for _, Held in HeldRecoveryEvents do OverloadEventMock.OnClientEvent.Callback(table.unpack(Held)) end
+Recovery()
+assert(not RecoveryResultSent and CountRecords(First, 'event=event_probe') == 10 and
+    CountRecords(First, 'status=QUALIFIED') == 0, 'late old-case Events must not qualify or start a new case')
+First = BeginFixture('Healthy')
+RecoveryAttempt = 20 -- Exercise the defensive counter guard independently.
+Recovery()
+Recovery()
+assert(RecoveryFailed and RecoveryAttempt == 20 and RecoveryRpcCalls == 0 and
+    CountRecords(First, 'event=cohort_start') == 0, 'attempt cap must reject a twenty-first cohort')
+NativePrint('[Qualification:RecoveryCohortScript] first_slow=PASS deadline=PASS errors=PASS pending=PASS transition=PASS attempt_cap=PASS result=PASS')
 '@
 $Path = Join-Path ([IO.Path]::GetTempPath()) ('gargantuan-recovery-client-' + [Guid]::NewGuid().ToString('N') + '.luau')
 try {

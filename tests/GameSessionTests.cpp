@@ -428,6 +428,79 @@ namespace {
 					"farm RPC receive marker retains exact received bytes");
 			} else Check(false, "farm RPC GNS-accept marker is present in sealed binary trace");
 		}
+		RemoteMessage NativeRequest{.Kind = RemoteMessageKind::Request, .Remote = {18, 2},
+			.Request = RemoteRequestId{7}, .Deadline = std::chrono::milliseconds(1'000),
+			.Arguments = {WireValue(std::string("recovery"))}};
+		const auto NativeEncoded = EncodeRemoteMessage(NativeRequest);
+		Check(NativeEncoded.has_value(), "native receive diagnostic fixture encodes a real RPC");
+		if (NativeEncoded) {
+			// Old aggregate initializers have no callback and must remain no-op.
+			runtime_detail::PublicationLatencySink LegacySink{nullptr,
+				+[](void *, ConnectionId) noexcept { return true; }};
+			runtime_detail::ActivePublicationLatency = &LegacySink;
+			Check(!runtime_detail::PublicationRpcNativeReceiveSelected({1, 1}, *NativeEncoded),
+				"legacy diagnostic sink leaves optional native receive disabled");
+			runtime_detail::RecordPublicationRpcNativeReceive({1, 1}, *NativeEncoded, 100, 101, 0, 0, 1);
+			runtime_detail::ActivePublicationLatency = Previous;
+			for (int Case = 0; Case < 14; ++Case) {
+				const auto Directory = Root / ("native-" + std::to_string(Case));
+				std::filesystem::create_directory(Directory);
+				const auto Output = Directory / "publication-service-0.bin";
+				auto Payload = *NativeEncoded;
+				std::int64_t Age = 500'000, Number = 23;
+				std::size_t Depth = 4096;
+				ConnectionId Connection{1, 1};
+				if (Case == 1) Payload[4] = std::byte{1}; // Protocol version.
+				if (Case == 2) Payload[7] = std::byte{1}; // Reserved.
+				if (Case == 3) for (std::size_t I = 12; I < 16; ++I) Payload[I] = std::byte{0};
+				if (Case == 4) for (std::size_t I = 24; I < 32; ++I) Payload[I] = std::byte{0};
+				if (Case == 5) Age = -1;
+				if (Case == 6) Depth = host::detail::FarmPublicationEvidence::MaximumNativeReceiveEventDepth + 1;
+				if (Case == 7) Number = 0;
+				if (Case == 8) Connection.Generation = 2; // Not this client's lifetime.
+				if (Case == 9) Payload[6] = std::byte{0}; // Event: not an RPC.
+				if (Case == 10) Payload.resize(31); // Fixed-header selection requires 32 bytes.
+				if (Case == 12) { Age = 0; Depth = 0; }
+				{
+					host::detail::FarmPublicationEvidence Evidence(false, "test-run", 0, 17, Output, {1, 1}, 1);
+					const auto At = runtime_detail::PublicationLatencyNow();
+					const auto After = Case == 13 ? At - 1 : At + 100;
+					runtime_detail::RecordPublicationRpcNativeReceive(Connection, Payload,
+						At, After, Age, Depth, Number);
+					if (Case == 11) runtime_detail::RecordPublicationRpcNativeReceive(Connection, Payload,
+						At + 100, After + 100, Age, Depth, Number);
+					Evidence.Dump();
+					if (Case == 0 || Case == 12)
+						Check(Evidence.Valid() && Evidence.Count() == 1, "native dequeue retains exact RPC metadata including zero age/depth");
+					else if (Case >= 8 && Case <= 10)
+						Check(Evidence.Valid() && Evidence.Count() == 0, "native dequeue ignores other generations, Events and short headers");
+					else if (Case == 11)
+						Check(!Evidence.Valid() && Evidence.Overflowed() && Evidence.Count() == 1,
+							"native dequeue overflow invalidates evidence without growing storage");
+					else Check(!Evidence.Valid() && Evidence.Failures() == 1 && Evidence.Count() == 0,
+						"invalid native dequeue protocol, identity, signed age, depth or message number invalidates evidence");
+				}
+				if (Case == 0) {
+					std::ifstream File(Output, std::ios::binary);
+					const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
+					const auto Offset = Bytes.find('\n') + 1;
+					auto Read = [&](std::size_t Field, std::size_t Width) {
+						std::uint64_t Value = 0;
+						for (std::size_t I = 0; I < Width; ++I)
+							Value |= static_cast<std::uint64_t>(static_cast<unsigned char>(Bytes[Offset + Field + I])) << (8 * I);
+						return Value;
+					};
+					Check(Offset && Bytes.size() >= Offset + 80 && Read(0, 2) == 28 &&
+						Read(4, 4) == 1 && Read(8, 4) == 1 && Read(12, 4) == 18 && Read(16, 4) == 2 &&
+						Read(32, 8) == 500'000 && Read(40, 8) == 7 && Read(48, 8) == 4096 &&
+						Read(56, 8) == 3 && Read(64, 8) == 23 && Read(72, 8) - Read(24, 8) == 100,
+						"native dequeue binary stage preserves ready age, pre-enqueue depth, clock bracket and both identities");
+				}
+				std::filesystem::remove(Output);
+				std::filesystem::remove(Directory);
+			}
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous, "native receive fixture restores scoped callback");
 		std::filesystem::remove(ServerPath);
 		std::filesystem::remove(DirectPath);
 		std::filesystem::remove(ClientPath);

@@ -1098,8 +1098,13 @@ namespace gargantuan::network {
 			),
 			.ActiveAction = Runtime.ActiveAction,
 		};
-		runtime_detail::RecordPublicationLatency({.Stage = "StateBuilt", .Object = Character,
-			.Tick = AuthoritativeTick, .Sequence = Result.StateSequence.Value(), .Epoch = Result.ControlEpoch.Value(), .Kind = 5});
+		// StateBuilt certifies an encodable snapshot, not an attempted candidate.
+		// Preserve the candidate return: callers still own rejection, counters,
+		// sequence advancement and due requeue. Only scoped diagnostics repeat
+		// the compact preflight; an inactive observer adds no encoding work.
+		if (runtime_detail::PublicationLatencySelected({}) && GetCompactCharacterStateEncodedBytes(Result) != 0)
+			runtime_detail::RecordPublicationLatency({.Stage = "StateBuilt", .Object = Character,
+				.Tick = AuthoritativeTick, .Sequence = Result.StateSequence.Value(), .Epoch = Result.ControlEpoch.Value(), .Kind = 5});
 		return Result;
 	}
 

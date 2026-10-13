@@ -8,6 +8,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "../src/runtime/PublicationLatencyDiagnostics.hpp"
 
 #include <Luau/Compiler.h>
 #include <lua.h>
@@ -1278,6 +1279,90 @@ namespace {
 			Server.Step(World, Cycle + 1);
 		}
 		Check(true, "ten active-action Character destruction and manager teardown cycles remain generation-safe");
+	}
+
+	void TestStateBuiltRequiresCompactSnapshot() {
+		struct Capture {
+			std::array<runtime_detail::PublicationLatencyRecord, 64> Records{};
+			std::size_t Count = 0;
+			bool Overflow = false;
+			runtime_detail::PublicationLatencySink *Previous = runtime_detail::ActivePublicationLatency;
+			runtime_detail::PublicationLatencySink Sink{
+				this,
+				[](void *, ConnectionId) noexcept { return true; },
+				[](void *Context, runtime_detail::PublicationLatencyRecord Record) noexcept {
+					auto &Self = *static_cast<Capture *>(Context);
+					if (Self.Count == Self.Records.size()) { Self.Overflow = true; return; }
+					Self.Records[Self.Count++] = Record;
+				},
+				[](void *, const char *, ConnectionId, std::span<const std::byte>, std::uint64_t) noexcept {},
+			};
+			Capture() { runtime_detail::ActivePublicationLatency = &Sink; }
+			~Capture() { runtime_detail::ActivePublicationLatency = Previous; }
+			std::size_t StageCount(std::string_view Stage) const {
+				return static_cast<std::size_t>(std::count_if(Records.begin(), Records.begin() + Count,
+					[Stage](const auto &Record) { return std::string_view(Record.Stage) == Stage; }));
+			}
+		};
+		RecordingScheduler Scheduler;
+		AuthoritativeCharacterNetwork Server(Scheduler, TestLimits(), Movement);
+		WorldRoot World;
+		const ConnectionId First{1'700, 1}, Second{1'701, 1};
+		auto Character = std::make_shared<KinematicCharacter>();
+		// Keep the moving classification stable across the compact-range fault.
+		// A stationary-to-moving transition promotes and reschedules the wheel
+		// before due processing, which would test cadence instead of rejection.
+		Character->ApplyRuntimeControllerFacts({1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, false);
+		const auto Id = Character->GetObjectId();
+		Check(Server.AddPeer(First) && Server.AddPeer(Second) && Server.RegisterCharacter(Character) &&
+			Server.MarkMaterialized(First, Id, StateChannelId(800)) &&
+			Server.MarkMaterialized(Second, Id, StateChannelId(801)), "snapshot evidence fixture registers two recipients");
+		Capture Evidence;
+		Server.Step(World, 1);
+		Check(Scheduler.Messages.size() == 2 && Evidence.StageCount("StateBuilt") == 1 &&
+			Evidence.StageCount("CharacterSnapshot") == 1, "one valid snapshot retains one unique build across two peers");
+		std::uint64_t InitialSequence = 0;
+		if (!Scheduler.Messages.empty()) {
+			auto Message = DecodeCharacterMessage(Scheduler.Messages.front().Payload());
+			const auto *Frame = Message ? std::get_if<CharacterStateFrame>(&*Message) : nullptr;
+			if (Frame && Frame->StateCount == 1) InitialSequence = Frame->States[0].StateSequence.Value();
+		}
+		Check(InitialSequence != 0, "initial successful state has a protocol sequence");
+		Scheduler.Messages.clear();
+		Evidence.Count = 0;
+		Character->ApplyRuntimeControllerFacts({600.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, false);
+		const CharacterAuthoritativeState Unencodable{
+			.Character = Id, .ControlEpoch = CharacterControlEpoch(1), .StateSequence = RealtimeStateSequence(1),
+			.AuthoritativeTick = 4, .Transform = Character->GetCFrame(), .Velocity = Character->GetVelocity(),
+			.FloorNormal = Character->GetFloorNormal(),
+		};
+		Check(Unencodable.IsValid() && GetCompactCharacterStateEncodedBytes(Unencodable) == 0,
+			"finite candidate velocity outside compact range is deterministically rejected");
+		Check(!Server.PublishState(Id, 4) && !Server.PublishState(Id, 4),
+			"direct publication preserves rejection of repeated unencodable candidates");
+		const auto RejectsBefore = Server.GetMetrics().ProtocolRejects;
+		Server.Step(World, 4);
+		const auto FirstState = Server.GetPublicationSchedulingState(First, Id);
+		const auto SecondState = Server.GetPublicationSchedulingState(Second, Id);
+		Check(Scheduler.Messages.empty() && Evidence.StageCount("StateBuilt") == 0 &&
+			Evidence.StageCount("CharacterSnapshot") == 0 && Server.GetMetrics().ProtocolRejects > RejectsBefore,
+			"rejected builds remain counted and never claim completed snapshot evidence or packets");
+		Check(FirstState && SecondState && FirstState->Due && SecondState->Due &&
+			FirstState->LastAcceptedPublicationTick == 1 && SecondState->LastAcceptedPublicationTick == 1,
+			"compact rejection preserves both due obligations and their prior accepted history");
+		Evidence.Count = 0;
+		Character->ApplyRuntimeControllerFacts({}, {0.0f, 1.0f, 0.0f}, false);
+		Server.Step(World, 5);
+		Check(Scheduler.Messages.size() == 2 && Evidence.StageCount("StateBuilt") == 1 &&
+			Evidence.StageCount("CharacterSnapshot") == 1 && !Evidence.Overflow,
+			"restored valid state produces one successful build and snapshot shared across recipients");
+		for (const auto &Queued : Scheduler.Messages) {
+			auto Message = DecodeCharacterMessage(Queued.Payload());
+			const auto *Frame = Message ? std::get_if<CharacterStateFrame>(&*Message) : nullptr;
+			Check(Frame && Frame->StateCount == 1 && Frame->States[0].Character == Id &&
+				Frame->States[0].StateSequence.Value() == InitialSequence + 3,
+				"direct rejected candidates still consume their existing sequences before valid recovery");
+		}
 	}
 
 	void TestStateBatchingCadenceAndSuppression() {
@@ -2984,6 +3069,7 @@ int main() {
 		TestLossReorderAndLifecycle();
 		TestRemotePresentationFaultMatrix();
 		TestRepeatedManagerChurn();
+		TestStateBuiltRequiresCompactSnapshot();
 		TestStateBatchingCadenceAndSuppression();
 		TestImportanceCadenceAndLifecycle();
 		TestBoundedPublicationScheduling();

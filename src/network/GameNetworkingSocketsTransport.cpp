@@ -699,6 +699,23 @@ namespace gargantuan::network {
 					FailConnection(Id, DisconnectReason::TransportFailure, "GNS receive operation failed");
 					break;
 				}
+				// Disabled observers read no extra clocks. Selection peeks only the
+				// fixed adapter/RPC prefix before DecodeMessage copies the payload.
+				// The steady timestamp is after ReceiveMessagesOnConnection and
+				// those fixed checks, not the earlier OS or fragment arrival time.
+				if (Message->m_pData && Message->m_cbSize >= static_cast<int>(AdapterEnvelopeBytes + 32)) {
+					const auto Payload = std::span(static_cast<const std::byte *>(Message->m_pData),
+						static_cast<std::size_t>(Message->m_cbSize)).subspan(AdapterEnvelopeBytes);
+					if (runtime_detail::PublicationRpcNativeReceiveSelected(Id, Payload)) {
+						const auto DequeuedAt = runtime_detail::PublicationLatencyNow();
+						const auto NativeNow = SteamAPI_ISteamNetworkingUtils_GetLocalTimestamp(SteamNetworkingUtils());
+						const auto ReadyAge = Message->m_usecTimeReceived > 0 && NativeNow >= Message->m_usecTimeReceived
+							? NativeNow - Message->m_usecTimeReceived : -1;
+						const auto AgeSampleEnded = runtime_detail::PublicationLatencyNow();
+						runtime_detail::RecordPublicationRpcNativeReceive(Id, Payload, DequeuedAt, AgeSampleEnded,
+							ReadyAge, Events.size(), Message->m_nMessageNumber);
+					}
+				}
 				auto Event = DecodeMessage(Id, *Message);
 				// The farm-only publication sink records the first polled native
 				// receive before GameSession dispatch, without retaining a payload.

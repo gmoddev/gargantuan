@@ -58,6 +58,7 @@ public:
 		RpcResponseSchedulerAccepted, RpcResponseGnsAccepted,
 		RpcResponseReceived, RpcCompletion,
 		OrdinaryReliableSent, OrdinaryReliableRejected, TrafficPhase, OrdinaryReliableQueued,
+		RpcNativeReceive,
 	};
 	struct Record {
 		std::uint64_t Nanoseconds = 0;
@@ -79,6 +80,7 @@ public:
 	static constexpr std::size_t ServerRecordLimit = 4'194'304;
 	static constexpr std::size_t ClientRecordLimit = 131'072;
 	static constexpr std::uint64_t MaximumFileBytes = ServerRecordLimit * 80ull + 512;
+	static constexpr std::size_t MaximumNativeReceiveEventDepth = 1'048'576;
 
 private:
 	std::filesystem::path Path;
@@ -92,7 +94,7 @@ private:
 	std::uint64_t TrafficPhase = 0;
 	std::uint64_t OrdinarySequence = 0;
 	std::vector<Record> Records;
-	runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet, QueueOrdinary, DirectOrdinary};
+	runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet, QueueOrdinary, DirectOrdinary, NativeReceive};
 	runtime_detail::PublicationLatencySink *Previous = nullptr;
 
 	static bool Selected(void *Context, network::ConnectionId Connection) noexcept {
@@ -197,6 +199,59 @@ private:
 			.Kind = *Kind, .Flags = static_cast<std::uint16_t>(Value.Operations & 1u),
 		});
 	}
+	struct RpcHeader {
+		ObjectId Remote;
+		std::uint64_t Request = 0;
+		std::uint8_t Kind = 0;
+	};
+	std::optional<RpcHeader> ReadRpcHeader(std::span<const std::byte> Payload) noexcept {
+		try {
+			network::GameBinaryReader Input(Payload, "Remote diagnostic header");
+			std::uint32_t Magic = 0;
+			std::uint16_t Version = 0;
+			std::uint8_t Reserved = 0;
+			std::uint64_t Publication = 0;
+			RpcHeader Header;
+			if (!Input.Integer(Magic) || !Input.Integer(Version) || !Input.Integer(Header.Kind) ||
+				!Input.Integer(Reserved) || !network::ReadBinaryObjectId(Input, Header.Remote) ||
+				!Input.Integer(Publication) || !Input.Integer(Header.Request) ||
+				Version != network::RemoteProtocolVersion || Reserved != 0 ||
+				!Header.Remote.IsValid() || Publication == 0 || Header.Request == 0) {
+				++DecodeFailures; return std::nullopt;
+			}
+			return Header;
+		} catch (...) { ++DecodeFailures; return std::nullopt; }
+	}
+	static void NativeReceive(void *Context, network::ConnectionId Connection,
+		std::span<const std::byte> Payload, std::uint64_t DequeuedAtNanoseconds,
+		std::uint64_t AgeSampleEndedNanoseconds,
+		std::int64_t ReadyQueueAgeMicroseconds, std::size_t AdapterPendingEventDepth,
+		std::int64_t NativeMessageNumber) noexcept {
+		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
+		const auto Header = Self.ReadRpcHeader(Payload);
+		if (!Header) return;
+		if (!Connection.IsValid() || DequeuedAtNanoseconds == 0 || AgeSampleEndedNanoseconds < DequeuedAtNanoseconds ||
+			ReadyQueueAgeMicroseconds < 0 ||
+			AdapterPendingEventDepth > MaximumNativeReceiveEventDepth || NativeMessageNumber <= 0 ||
+			Payload.size() > std::numeric_limits<std::uint32_t>::max()) {
+			++Self.DecodeFailures; return;
+		}
+		// Stage 28 reuses unused RPC fields with explicit meanings: Tick is
+		// GNS complete-ready queue age (microseconds); DueTick is adapter event
+		// depth BEFORE this event; ControlEpoch is RemoteMessageKind;
+		// MaterializationEpoch is native message number; FrameSequence is the
+		// steady timestamp after the GNS age read. That bracket bounds sampling
+		// uncertainty; total observer perturbation remains unmeasured. It proves
+		// neither first UDP arrival nor native send. Version was checked above.
+		Self.Add(Record{.Nanoseconds = DequeuedAtNanoseconds,
+			.Tick = static_cast<std::uint64_t>(ReadyQueueAgeMicroseconds), .Sequence = Header->Request,
+			.DueTick = AdapterPendingEventDepth, .ControlEpoch = Header->Kind,
+			.MaterializationEpoch = static_cast<std::uint64_t>(NativeMessageNumber),
+			.FrameSequence = AgeSampleEndedNanoseconds,
+			.ConnectionSlot = Connection.Slot, .ConnectionGeneration = Connection.Generation,
+			.ObjectSlot = Header->Remote.Slot, .ObjectGeneration = Header->Remote.Generation,
+			.Bytes = static_cast<std::uint32_t>(Payload.size()), .Kind = Stage::RpcNativeReceive});
+	}
 	static void Packet(void *Context, const char *Name, network::ConnectionId Connection,
 		std::span<const std::byte> Payload, std::uint64_t Nanoseconds) noexcept {
 		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
@@ -208,31 +263,14 @@ private:
 			if (MessageKind != static_cast<std::uint8_t>(network::RemoteMessageKind::Request) &&
 				MessageKind != static_cast<std::uint8_t>(network::RemoteMessageKind::Response) &&
 				MessageKind != static_cast<std::uint8_t>(network::RemoteMessageKind::RequestError)) return;
-			try {
-				network::GameBinaryReader Input(Payload, "Remote diagnostic header");
-				std::uint32_t Magic = 0;
-				std::uint16_t Version = 0;
-				std::uint8_t Kind = 0, Reserved = 0;
-				ObjectId Remote;
-				std::uint64_t Publication = 0, Request = 0;
-				if (!Input.Integer(Magic) || !Input.Integer(Version) || !Input.Integer(Kind) ||
-					!Input.Integer(Reserved) || !network::ReadBinaryObjectId(Input, Remote) ||
-					!Input.Integer(Publication) || !Input.Integer(Request)) {
-					++Self.DecodeFailures;
-					return;
-				}
-				if (Version != network::RemoteProtocolVersion || Reserved != 0 ||
-					Publication == 0 || Request == 0) {
-					++Self.DecodeFailures;
-					return;
-				}
-				Self.Add(Record{.Nanoseconds = Nanoseconds, .Sequence = Request,
+			if (const auto Header = Self.ReadRpcHeader(Payload)) {
+				Self.Add(Record{.Nanoseconds = Nanoseconds, .Sequence = Header->Request,
 					.ConnectionSlot = Connection.Slot, .ConnectionGeneration = Connection.Generation,
-					.ObjectSlot = Remote.Slot, .ObjectGeneration = Remote.Generation,
+					.ObjectSlot = Header->Remote.Slot, .ObjectGeneration = Header->Remote.Generation,
 					.Bytes = static_cast<std::uint32_t>(Payload.size()),
-					.Kind = Kind == static_cast<std::uint8_t>(network::RemoteMessageKind::Request)
+					.Kind = Header->Kind == static_cast<std::uint8_t>(network::RemoteMessageKind::Request)
 						? Stage::RpcRequestGnsAccepted : Stage::RpcResponseGnsAccepted});
-			} catch (...) { ++Self.DecodeFailures; }
+			}
 			return;
 		}
 		const auto Kind = StageOf(Name);

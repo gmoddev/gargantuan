@@ -93,7 +93,7 @@ if PhysicalFarm then
     local ClockQuiescedCount = 0
     local LastBroadcastTick = -60
     local LastStopTick = -60
-    PhaseControl.OnServerEvent:Connect(function(Peer, Kind, Phase)
+    PhaseControl.OnServerEvent:Connect(function(Peer, Kind, Phase, Attempt)
         if Kind == "clock_quiesced" and CurrentPhase == "calibrating" and
             Phase == game:GetAttribute("ScaleClockEpoch") then
             local PeerKey = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
@@ -157,13 +157,15 @@ if PhysicalFarm then
                 print(string.format("[Qualification:Recovery] event=offered_ack case=%s peer_slot=%d peer_generation=%d count=%d",
                     Phase, Peer.Slot, Peer.Generation, OverloadOfferedCount))
             end
-        elseif Kind == "recovery_done" and
+        elseif Kind == "recovery_done" and Phase == CurrentOverloadCase and
+            type(Attempt) == "number" and Attempt == math.floor(Attempt) and Attempt >= 1 and Attempt <= 20 and
             game:GetAttribute("ScaleOverloadCase") == "recover_" .. tostring(Phase) then
+            local ReceivedAtUs = math.floor(math.floor(os.clock() * 1000000000) / 1000)
             local Key = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
             if not RecoveryProbeSeen[Key] then
                 RecoveryProbeSeen[Key] = true
-                print(string.format("[Qualification:Recovery] event=probe_ack case=%s peer_slot=%d peer_generation=%d",
-                    Phase, Peer.Slot, Peer.Generation))
+                print(string.format("[Qualification:Recovery] event=probe_ack case=%s peer_slot=%d peer_generation=%d contract=bounded_recovery_cohort_v1 attempt=%d monotonic_us=%d",
+                    Phase, Peer.Slot, Peer.Generation, Attempt, ReceivedAtUs))
             end
         elseif Kind == "name_converged" and
             game:GetAttribute("ScaleOverloadCase") == "recover_" .. tostring(Phase) then
@@ -363,6 +365,16 @@ local RecoveryEventAcks = 0
 local RecoveryRpcLatencies = {}
 local RecoveryEventLatencies = {}
 local RecoveryEventStarted = {}
+local RecoveryEventErrors = 0
+local RecoveryStartedNs = nil
+local RecoveryDeadlineNs = nil
+local RecoveryCohortStartedNs = nil
+local RecoveryLastCohortStartedNs = nil
+local RecoveryAttempt = 0
+local RecoveryCohortClosed = false
+local RecoveryFailed = false
+local RecoveryFailureReason = "none"
+local RecoveryFailureReported = false
 local RecoveryNameSent = false
 local RecoveryResultSent = false
 local OverloadSequence = 0
@@ -372,14 +384,39 @@ if OverloadEvent then
         if Message == "recovery" then
             local Started = RecoveryEventStarted[Sequence]
             if Started then
+                local EndedNs = math.floor(os.clock() * 1000000000)
+                local ElapsedUs = math.floor((EndedNs - Started.Nanoseconds) / 1000)
                 RecoveryEventStarted[Sequence] = nil
                 RecoveryEventAcks += 1
-                table.insert(RecoveryEventLatencies, math.floor((os.clock() - Started) * 1000000))
+                table.insert(RecoveryEventLatencies, ElapsedUs)
+                print(string.format("[Qualification:Recovery] event=event_probe contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d index=%d sequence=%d started_clock_ns=%d ended_clock_ns=%d elapsed_us=%d ok=1",
+                    Case, Players.LocalPlayer.PlayerId, Started.Attempt, Started.Index, Sequence,
+                    Started.Nanoseconds, EndedNs, ElapsedUs))
             end
         else
             OverloadEventAcks += 1
         end
     end)
+end
+local function CloseRecoveryCohort(Status, Reason)
+    if RecoveryCohortClosed then return false end
+    RecoveryCohortClosed = true
+    table.sort(RecoveryRpcLatencies)
+    table.sort(RecoveryEventLatencies)
+    local Pending = 0
+    for _ in RecoveryEventStarted do Pending += 1 end
+    local EndedNs = math.floor(os.clock() * 1000000000)
+    if EndedNs >= RecoveryDeadlineNs then
+        Status, Reason = "FAILED", "deadline"
+        RecoveryFailed, RecoveryFailureReason = true, "deadline"
+    end
+    print(string.format("[Qualification:Recovery] event=cohort_end contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d recovery_started_clock_ns=%d deadline_clock_ns=%d started_clock_ns=%d ended_clock_ns=%d rpc_acks=%d rpc_errors=%d event_acks=%d event_errors=%d pending_events=%d rpc_p95_us=%d rpc_p99_us=%d rpc_max_us=%d event_max_us=%d status=%s reason=%s",
+        CurrentOverloadCase, Players.LocalPlayer.PlayerId, RecoveryAttempt, RecoveryStartedNs, RecoveryDeadlineNs,
+        RecoveryCohortStartedNs, EndedNs, RecoveryProbeAcks, RecoveryProbeErrors,
+        RecoveryEventAcks, RecoveryEventErrors, Pending, RecoveryRpcLatencies[10] or 0,
+        RecoveryRpcLatencies[10] or 0, RecoveryRpcLatencies[10] or 0,
+        RecoveryEventLatencies[#RecoveryEventLatencies] or 0, Status, Reason))
+    return Status == "QUALIFIED"
 end
 Event.OnClientEvent:Connect(function(Message, Sequence)
     if not EventPending or EventPending.Sequence ~= Sequence or EventPending.Phase ~= Message then
@@ -790,6 +827,25 @@ if PhysicalFarm then
         local Stage = game:GetAttribute("ScaleOverloadCase")
         if Stage == "gameplay" or Stage == "structural" or Stage == "mixed" then
             if Stage ~= CurrentOverloadCase then
+                if CurrentOverloadCase ~= nil and not (RecoveryResultSent and RecoveryProbesDone and
+                    next(RecoveryEventStarted) == nil) then
+                    -- A failed/deadline case may still own an accepted RPC or
+                    -- Event. Retain that context for late results; never reset
+                    -- its clocks/counters or begin the next case's offers.
+                    RecoveryFailed, RecoveryFailureReason = true, "case_transition"
+                    if RecoveryProbesStarted and not RecoveryCohortClosed then
+                        CloseRecoveryCohort("FAILED", "case_transition")
+                    end
+                    if not RecoveryFailureReported then
+                        RecoveryFailureReported = true
+                        local Pending = 0
+                        for _ in RecoveryEventStarted do Pending += 1 end
+                        print(string.format("[Qualification:Recovery] event=recovery_failed contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d recovery_started_clock_ns=%d deadline_clock_ns=%d ended_clock_ns=%d pending_events=%d reason=case_transition",
+                            CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryAttempt, RecoveryStartedNs or 0,
+                            RecoveryDeadlineNs or 0, math.floor(os.clock() * 1000000000), Pending))
+                    end
+                    return
+                end
                 CurrentOverloadCase = Stage
                 OverloadReadySent = false
                 OverloadOffered = 0
@@ -809,6 +865,16 @@ if PhysicalFarm then
                 RecoveryRpcLatencies = {}
                 RecoveryEventLatencies = {}
                 RecoveryEventStarted = {}
+                RecoveryEventErrors = 0
+                RecoveryStartedNs = nil
+                RecoveryDeadlineNs = nil
+                RecoveryCohortStartedNs = nil
+                RecoveryLastCohortStartedNs = nil
+                RecoveryAttempt = 0
+                RecoveryCohortClosed = false
+                RecoveryFailed = false
+                RecoveryFailureReason = "none"
+                RecoveryFailureReported = false
                 RecoveryNameSent = false
                 RecoveryResultSent = false
             end
@@ -873,49 +939,118 @@ if PhysicalFarm then
             return
         end
         if Stage ~= "recover_" .. tostring(CurrentOverloadCase) then return end
-        if not RecoveryProbesStarted then
+        local NowNs = math.floor(os.clock() * 1000000000)
+        if not RecoveryStartedNs then
+            -- This local observation never restarts. The server's independent
+            -- cessation-to-recovery deadline remains the authoritative gate.
+            RecoveryStartedNs = NowNs
+            RecoveryDeadlineNs = NowNs + 20000000000
+        end
+        if not RecoveryResultSent and not RecoveryFailed and NowNs >= RecoveryDeadlineNs then
+            RecoveryFailed, RecoveryFailureReason = true, "deadline"
+            if RecoveryProbesStarted and not RecoveryCohortClosed then CloseRecoveryCohort("FAILED", "deadline") end
+        end
+        if RecoveryFailed and not RecoveryFailureReported then
+            RecoveryFailureReported = true
+            local Pending = 0
+            for _ in RecoveryEventStarted do Pending += 1 end
+            print(string.format("[Qualification:Recovery] event=recovery_failed contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d recovery_started_clock_ns=%d deadline_clock_ns=%d ended_clock_ns=%d pending_events=%d reason=%s",
+                CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryAttempt, RecoveryStartedNs,
+                RecoveryDeadlineNs, NowNs, Pending, RecoveryFailureReason))
+        end
+        local Settled = RecoveryProbesStarted and RecoveryProbesDone and
+            RecoveryProbeAcks == 10 and RecoveryEventAcks == 10 and next(RecoveryEventStarted) == nil
+        if Settled and not RecoveryCohortClosed and not RecoveryFailed then
+            table.sort(RecoveryRpcLatencies)
+            table.sort(RecoveryEventLatencies)
+            local Healthy = RecoveryProbeErrors == 0 and RecoveryEventErrors == 0 and
+                RecoveryRpcLatencies[10] <= 150000 and RecoveryRpcLatencies[10] <= 250000 and
+                RecoveryRpcLatencies[10] <= 500000 and RecoveryEventLatencies[10] <= 250000
+            Healthy = CloseRecoveryCohort(if Healthy then "QUALIFIED" else "UNPROVEN", "none")
+            if Healthy then
+                RecoveryResultSent = pcall(function()
+                    PhaseControl:FireServer("recovery_done", CurrentOverloadCase, RecoveryAttempt)
+                end)
+                if RecoveryResultSent then
+                    print(string.format("[Qualification:Recovery] event=client_probes case=%s contract=bounded_recovery_cohort_v1 player_id=%d attempt=%d rpc_acks=%d rpc_errors=%d event_acks=%d rpc_p95_us=%d rpc_p99_us=%d rpc_max_us=%d event_max_us=%d",
+                        CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryAttempt, RecoveryProbeAcks,
+                        RecoveryProbeErrors, RecoveryEventAcks, RecoveryRpcLatencies[10],
+                        RecoveryRpcLatencies[10], RecoveryRpcLatencies[10], RecoveryEventLatencies[10]))
+                else RecoveryFailed, RecoveryFailureReason = true, "control_error" end
+            end
+        end
+        NowNs = math.floor(os.clock() * 1000000000)
+        if not RecoveryResultSent and not RecoveryFailed and
+            (NowNs >= RecoveryDeadlineNs or (RecoveryAttempt >= 20 and
+                (not RecoveryProbesStarted or (RecoveryCohortClosed and Settled)))) then
+            RecoveryFailed, RecoveryFailureReason = true,
+                if NowNs >= RecoveryDeadlineNs then "deadline" else "attempt_limit"
+        end
+        if not RecoveryResultSent and not RecoveryFailed and
+            (not RecoveryProbesStarted or (RecoveryCohortClosed and Settled)) and
+            (not RecoveryLastCohortStartedNs or NowNs - RecoveryLastCohortStartedNs >= 1000000000) then
+            -- These are fresh invocations after a settled, unsuitable cohort;
+            -- no accepted request/Event is replayed, cancelled or abandoned.
+            RecoveryAttempt += 1
             RecoveryProbesStarted = true
+            RecoveryProbesDone = false
+            RecoveryCohortClosed = false
+            RecoveryCohortStartedNs = NowNs
+            RecoveryLastCohortStartedNs = NowNs
+            RecoveryProbeAcks, RecoveryEventAcks = 0, 0
+            RecoveryRpcLatencies, RecoveryEventLatencies = {}, {}
+            print(string.format("[Qualification:Recovery] event=cohort_start contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d recovery_started_clock_ns=%d deadline_clock_ns=%d started_clock_ns=%d client_tick=%d",
+                CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryAttempt, RecoveryStartedNs,
+                RecoveryDeadlineNs, RecoveryCohortStartedNs, RecoveryCallbackTick))
+            local RunningCase, RunningAttempt, RunningDeadlineNs = CurrentOverloadCase, RecoveryAttempt, RecoveryDeadlineNs
             task.spawn(function()
                 for Index = 1, 10 do
-                    local Started = os.clock()
+                    if RecoveryFailed or math.floor(os.clock() * 1000000000) >= RunningDeadlineNs then break end
+                    local StartedNs = math.floor(os.clock() * 1000000000)
                     local StartedTick = RecoveryCallbackTick
                     local Ok, Value = pcall(function()
                         return OverloadFunction:InvokeServerWithTimeout(1, "recovery")
                     end)
-                    local Ended = os.clock()
+                    local EndedNs = math.floor(os.clock() * 1000000000)
+                    local ElapsedUs = math.floor((EndedNs - StartedNs) / 1000)
                     local Passed = Ok and Value == "recovery"
-                    print(string.format("[Qualification:Recovery] event=rpc_probe case=%s player_id=%d index=%d client_tick=%d started_clock_ns=%d ended_clock_ns=%d elapsed_us=%d ok=%d",
-                        CurrentOverloadCase, LocalPlayer.PlayerId, Index, StartedTick,
-                        math.floor(Started * 1000000000), math.floor(Ended * 1000000000),
-                        math.floor((Ended - Started) * 1000000), if Passed then 1 else 0))
+                    print(string.format("[Qualification:Recovery] event=rpc_probe case=%s player_id=%d index=%d client_tick=%d started_clock_ns=%d ended_clock_ns=%d elapsed_us=%d ok=%d contract=bounded_recovery_cohort_v1 attempt=%d",
+                        RunningCase, LocalPlayer.PlayerId, Index, StartedTick, StartedNs, EndedNs,
+                        ElapsedUs, if Passed then 1 else 0, RunningAttempt))
                     if Passed then
                         RecoveryProbeAcks += 1
-                        table.insert(RecoveryRpcLatencies, math.floor((Ended - Started) * 1000000))
-                    else RecoveryProbeErrors += 1 end
+                        table.insert(RecoveryRpcLatencies, ElapsedUs)
+                    else
+                        RecoveryProbeErrors += 1
+                        RecoveryFailed, RecoveryFailureReason = true, "rpc_error"
+                        CloseRecoveryCohort("FAILED", "rpc_error")
+                        break
+                    end
+                    if RecoveryFailed or EndedNs >= RunningDeadlineNs then break end
                     OverloadSequence += 1
-                    RecoveryEventStarted[OverloadSequence] = os.clock()
-                    pcall(function()
-                        OverloadEvent:FireServer("recovery", OverloadSequence, CurrentOverloadCase)
+                    local EventStartedNs = math.floor(os.clock() * 1000000000)
+                    RecoveryEventStarted[OverloadSequence] = {Nanoseconds = EventStartedNs,
+                        Attempt = RunningAttempt, Index = Index}
+                    local EventOk = pcall(function()
+                        OverloadEvent:FireServer("recovery", OverloadSequence, RunningCase)
                     end)
+                    print(string.format("[Qualification:Recovery] event=event_offer contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d index=%d sequence=%d started_clock_ns=%d ok=%d",
+                        RunningCase, LocalPlayer.PlayerId, RunningAttempt, Index, OverloadSequence,
+                        EventStartedNs, if EventOk then 1 else 0))
+                    if not EventOk then
+                        RecoveryEventErrors += 1
+                        RecoveryFailed, RecoveryFailureReason = true, "event_error"
+                        local EventEndedNs = math.floor(os.clock() * 1000000000)
+                        print(string.format("[Qualification:Recovery] event=event_probe contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d index=%d sequence=%d started_clock_ns=%d ended_clock_ns=%d elapsed_us=%d ok=0",
+                            RunningCase, LocalPlayer.PlayerId, RunningAttempt, Index, OverloadSequence,
+                            EventStartedNs, EventEndedNs, math.floor((EventEndedNs - EventStartedNs) / 1000)))
+                        CloseRecoveryCohort("FAILED", "event_error")
+                        break
+                    end
                     task.wait(0.2)
                 end
                 RecoveryProbesDone = true
             end)
-        end
-        if RecoveryProbesDone and not RecoveryResultSent and
-            RecoveryProbeAcks == 10 and RecoveryProbeErrors == 0 and RecoveryEventAcks == 10 then
-            table.sort(RecoveryRpcLatencies)
-            table.sort(RecoveryEventLatencies)
-            RecoveryResultSent = pcall(function()
-                PhaseControl:FireServer("recovery_done", CurrentOverloadCase)
-            end)
-            if RecoveryResultSent then
-                print(string.format("[Qualification:Recovery] event=client_probes case=%s player_id=%d rpc_acks=%d rpc_errors=%d event_acks=%d rpc_p95_us=%d rpc_p99_us=%d rpc_max_us=%d event_max_us=%d",
-                    CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryProbeAcks,
-                    RecoveryProbeErrors, RecoveryEventAcks,
-                    RecoveryRpcLatencies[10], RecoveryRpcLatencies[10],
-                    RecoveryRpcLatencies[10], RecoveryEventLatencies[10]))
-            end
         end
         if CurrentOverloadCase ~= "gameplay" and not RecoveryNameSent then
             local Root = Workspace:FindFirstChild("ScaleOverloadRegion")

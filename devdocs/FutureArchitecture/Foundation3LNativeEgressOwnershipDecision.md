@@ -1704,3 +1704,198 @@ Corrective preflight receipts: native JUnit
 package seal `39999377635cf6dbdf54b9d0dd9ac6b169dce6fe258f2e48e68c799d5f5a4d73`;
 H2 focused result `8aaf640ce08a86d7b768545750ad2f9839c761b6cad17bb569957f765d0da8de`;
 cadence parser `3d85d4b35327633506c3a0c8fb7b01c9566a8d5cf73cc08947940c0aa5c7a474`.
+
+## 20. Corrected native32: D03 passes; recovery receive path remains unattributed
+
+Retain A and unchanged D03 V1. Candidate
+`b65c3528e83e39ba12961924dfe981fcb4e8fabb`, tree
+`96229159a62f468040c7bda103cb2d2dcb1940e8`, passes all original hosted
+Native push/PR Windows96/Ubuntu53 and GNS push/PR11 jobs on attempt1.
+PR merge `669dae63c4061ec8113cbdb3d9ac5647a2a5385f` has the same tree.
+Official manual38331582248 and its qualified package pass. The original
+tooling counts are42 helper/361 tooling; no obsolete supplemental count is a
+new acceptance gate.
+
+Exactly one corrected-source native32 campaign,
+`9196af39-8da8-4200-95da-a07e604a92a2`, runs
+2026-10-13T02:58:21.8461828Z through03:02:49.6088478Z (267.762665s),
+with native egress1, detailed timing OFF and the existing32-client workload.
+Launcher exits1 without outer timeout or retry. All107 original members
+(147622332B) are sealed and independently hash-verified. Owned native processes
+and UDP39450 owners are absent at cleanup. **Full native32 remains FAIL.**
+
+Independent unchanged canonical readers measure:
+
+- Native F1:32/32 and7089 completed qualified grants pass; completion,
+  execution, Main, turnover and invalid-evidence failure flags are zero.
+  Maximum Main61208us and turnover106758us pass unchanged100000/150000us.
+  The last-grant maximum1259us is not an overall-grant latency maximum.
+- All64 nonzero normal ordinary certificates across33 processes pass exact
+  originating demand/registration/completion and zero pending/failure/invalid
+  checks. Egress2205/ingress1832 messages have maximum9075us below50000us.
+- Accepted=retired2040720733B; outstanding, active, pending, journal,
+  materialization and terminal-release counts are zero. Fixed32-peer fairness
+  passes with maximum observed eligible admission wait511946us.
+- All960 opportunity_start_v1 cadence rows pass. Minimum start gaps16670/16680us
+  pass16667us, while prior-completion-to-start gaps16120/15677us illustrate why
+  the old completion-only definition was inappropriate for these new rows.
+- Server-only strict convergence and causal replay pass all3 cases:
+  gameplay344843us <=20470814us, structural15896552us <=31745512us with
+  709021795B retained, mixed349952us <=20470813us. Service snapshots occur at
+  20.412670/20.412105/20.400611s. This prefix is explicitly NOT_FULL_C3;
+  failed client probes cannot be substituted by passing server outcomes.
+
+### First remaining product failure
+
+The full reader rejects `client 0 lacks canonical gameplay overload/ordinary
+recovery probes`; all96 case summaries exist, each with10 RPC/event ACKs and
+no RPC error. All32 first gameplay/mixed recovery RPCs exceed500ms; structural
+probes pass. Client0 gameplay RPC1 takes618219us, mixed RPC1 takes549290us;
+mixed Event maximum268545us also exceeds250000us. Later RPCs are substantially
+faster, but do not repair the maximum or percentile failure.
+
+Exact client0 gameplay Remote9:1/request537 starts at1389811388393700ns:
+scheduler accepts at+8.6us, GNS API handoff at+128.3us, server RPC receipt at
++605019.7us, handler at+608668.5us, response GNS handoff at+608683.6us,
+and completion at+618216.9us. Mixed Remote9:1/request574 starts at
+1389922825720799ns: scheduler+10.301us, GNS handoff+739.701us, server receipt
++537006.901us, handler+537547.901us, response handoff+537609.801us,
+completion+549286.501us. Thus the first measured large interval is GNS API
+handoff to server receipt:604891/536267us. Handoff is not positive native OS
+sending. Server frames continue, with maximum start gaps17.794/18.369ms and
+work5.315/5.465ms over these intervals; no600ms Main stall is demonstrated.
+
+`RpcRequestReceived` is after transport polling/decoding but before dispatch
+queue/handler. Remaining alternatives are native sending/retry/reassembly,
+complete native receive waiting for polling, or adapter events waiting for the
+128-event GameSession drain. Cessation `native_queued=0` maps only to GNS
+`m_cbPendingReliable`, not sent-unacknowledged reliable bytes or receive events.
+All recovery messages correctly have phase0 outside normal H2 scope. Neither
+normal H2 PASS nor the earlier historical recovery qualification changes these
+observations. No correction to recovery or supported-platform limitation is
+established.
+
+### Separate publication diagnostic defect
+
+The direct publication join rejects the first duplicate Object26:1/tick183/
+sequence126/controlEpoch2 at ordinals37047/37049,800ns apart. There are62
+repeated identities/7339 excess records; none has a snapshot or accepted packet.
+`BuildState` records candidates before compact validation; rejection leaves
+PreparedTick unset and requeues due work. The repeated rows represent rejected
+attempts, not duplicate successful packet ownership. The rejected field is
+unmeasured; adding time to the key or ignoring duplicate successful builds is
+unacceptable. The smallest correction gates only the diagnostic StateBuilt
+record on compact encodability while retaining candidate return and all existing
+caller rejection, sequence, counter and due/requeue behavior. Diagnostic-disabled
+production need not perform an extra validation.
+
+### Bounded next discriminator
+
+Pinned GNS2cb93a06350bb065db53abdb0d87cf297e0bfd34 assigns
+`m_usecTimeReceived` when a complete ordered reliable message becomes receivable,
+not at first UDP arrival. One fixed RPC-only record at GNS dequeue, its complete
+receive age and adapter event depth can split that interval from later
+GameSession receipt using the existing bounded publication tap. It cannot by
+itself distinguish sender first-send from retries/reassembly if receive age is
+small. No payload retention, new scheduler, health change or log I/O is required.
+This is one new causal measurement, not a blind qualification retry. Qualify
+the diagnostic/rejected-build correction through focused regressions, affected
+native tests and exact-source CI before a fresh bounded diagnostic identity.
+Report observer perturbation as unmeasured. Preserve all existing gates.
+
+Custody SHA-256:
+
+- Original CI index:`674e172621d31e61f305469558c7533164809e4a1b5062dd872590e0963da178`.
+- Checkout reconciliation:`7b75d72f46f2bf5172b0514f9674dc197636ea0d172a94b250d6d4bc1e49b091`.
+- Official package ZIP:`e0ded3196ae9cb39856f7d178f8cc808040e1c8ce9d4be2b1314588e1b4b4740`.
+- Original native index:`671ac3dc2e7126c69a724b6fd09e21df94cee7c033035cfad87e0bf139352400`.
+- Canonical subset summary:`6ab36a59681f11aa50e49893790c089237b568c88f1d771a8025a27549225f37`.
+- Publication/H2 custody:`1ed61892deba4c42cf11bad3a64a5ef418b6c28792f74d4472a4d28aa963a6d2`.
+- First-probe paths:`2da0579ecddffd5ad104f86bab70a9638edc26ba34258d84e9f6738c428deda7`.
+- Surrounding evidence:`878f0026a3b66a6be3b9c5882c7972ae17b3d9950279323895c2732da24a57d8`.
+
+The original E8 initiating failure remains unattributed. Current D03 passing
+subsets support retaining its limits, not removing other failed product gates.
+KI-006 OPEN; Foundation3L B — PARTIALLY READY; PR6 draft. Current-source
+four-client, Local32, real-TLS Node32 and final acceptance remain unqualified.
+
+### Source-backed recovery enrollment correction under qualification
+
+The canonical recovery contract's Service recovery section requires qualified
+behavior to return within20s after excess demand ceases. The established
+integration qualification already corrected a premature one-shot health
+inference: bounded fresh RPC/Event/action groups are attempted at most once/s
+while recovery is unproven, every attempt is retained, accepted errors remain
+fatal, and a complete qualified group plus cleared debt/grants/queues must be
+observed before20s. This is implemented in the existing native gameplay fixture.
+The farm's immediate ten-probe cohort did not reuse that enrollment distinction.
+The original b65 farm reader correctly rejects its supplied legacy evidence;
+that historical FAIL is preserved, not reinterpreted as recovery PASS.
+
+A prospective versioned farm correction retains all raw RPC/Event clocks and
+attempt identities. At most20 fresh cohorts may start, at least1s apart and with
+one in flight. A new cohort cannot discard pending Events or reuse an earlier
+invocation. Actual RPC/Event errors stay sticky failures. Positive completed
+cohorts outside the existing150/250/500ms RPC/250ms Event limits stay UNPROVEN.
+Only the sole final complete qualified10-RPC/10-Event cohort may emit the final
+summary and recovery_done. New strict readers conserve every indexed result,
+verify metrics from original integer timestamps, reject partial/error/duplicate/
+mixed-version evidence, and independently check all32 server receipt timestamps
+against the original cessation20s deadline. Client entry clocks do not replace
+that server deadline. Legacy rows keep the original strict one-shot reader.
+
+This correction changes qualification enrollment only. It preserves excess
+offering, native service, ordinary FIFO, exact ownership, causal quotes and
+convergence. It does not demonstrate a native sender or platform defect and
+does not reopen the qualified recovery encoder. The receive discriminator
+remains useful to explain the retained unsuitable first cohort. After focused
+actual-Luau/reader/native preflights and exact-source CI, one fresh bounded
+campaign can qualify the correction and retain this new causal boundary.
+
+The first new native preflight builds successfully in47.1085s, and GameSession,
+PlayerRuntime and real transport pass. The new Character rejection regression
+fails because its stationary-to-moving transition promotes and reschedules the
+due opportunity before the intended tick. Seeding a valid moving baseline
+preserves movement status and exercises the original due work without changing
+production cadence or assertions. The failed input/JUnit remain immutable:
+`9d39fd0ce08d931c373c8801048262050c1795b69464bbf6c1ac7554c9cc8cd6` /
+`01b85c9fa2c780ced08cbd0f6226fe10f31590f363be24788824dac397c7a3e1`.
+Fresh corrected preflight remains required.
+
+The next preflight passes actual pinned-Luau normal/cohort/pending-transition
+regressions (0.385s) and the exact missing-tick negative (0.373s), then stops
+at the recovery reader (7.48198s). Original Ready rows exist. PowerShell parses
+the unparenthesized cast/index argument in a simplified Where-Object command
+as an expandable string, producing zero nonce matches for both real b65 and
+synthetic records. A scriptblock comparison produces exactly one match; the
+one-line correction retains all identity requirements. Python, native build,
+CTest and package stages did not execute after this failure. The v2 input and
+stopped receipts remain immutable:
+`1992e858097b5550bab3bd7a98f48640d84a534f605d3d505e64fb76cc478e8a` /
+`9d372409910af2a19722c96d0071727b71bf6de16bc1c4cdd98dc1b282fa16fb`.
+The independent expression witness is
+`6491a446b6c607d65ef890d72d6a7deae30d0b401be87fd63654e695c3d48b68`.
+No missing-identity fallback or slot-derived PlayerId is introduced.
+
+Fresh v3 preflight passes all four focused stages: actual pinned Luau0.384s,
+missing-tick negative0.371s, strict recovery reader59.640s and publication
+Python12 cases0.321s. Incremental jobs4 build passes13.099s; all four native
+suites pass8.16s: GameSession, Character networking, PlayerRuntime and real
+transport. Fresh short-path package generation/Validate/Load passes1.081s;
+both roles have58 actual members with closed inventories. Release/hooksOFF
+and the existing cache remain unchanged. This is explicitly a dirty b65 base
+plus the sealed12-file source overlay, not final-source hosted CI or native32.
+All twelve inputs still match the local candidate and prior v2 bytes are saved.
+
+V3 source input SHA-256:
+`f9f151c753c26e7bd3300a6bdca1f1322fca87f981f6fd4249707e7b897947b2`;
+native JUnit:
+`23051315e6c4828d133dfa98c888cd1da43a7bcb5b6184a108f18790f1f18124`;
+focused receipt:
+`92baa7a20564bf78dbcecfedf208c46e8a3aee9cf83e55af07ad6ced535147b3`;
+native/package inventory receipt:
+`bf6b76808cfe4a4c435a64e542edb6df4ad296f9ecb5fdb99c38c42c448d0cb8`;
+verified result:
+`6184bac4c789bb5c1cdb93ad43b9af16e3098bb6e866b7a6b096048c149fdb73`.
+Final-source CI/package and a fresh bounded campaign remain required. No
+physical result or 3L completion is inferred.

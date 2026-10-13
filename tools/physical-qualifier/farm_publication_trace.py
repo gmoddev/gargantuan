@@ -19,10 +19,12 @@ HEADER = re.compile(
 )
 RPC_STAGES = set(range(14, 24))
 TRAFFIC_STAGES = {24, 25, 26, 27}
-SERVER_STAGES = set(range(1, 9)) | {11, 12, 13} | RPC_STAGES | TRAFFIC_STAGES
-CLIENT_STAGES = {9, 10} | RPC_STAGES | TRAFFIC_STAGES
+SERVER_STAGES = set(range(1, 9)) | {11, 12, 13, 28} | RPC_STAGES | TRAFFIC_STAGES
+CLIENT_STAGES = {9, 10, 28} | RPC_STAGES | TRAFFIC_STAGES
 SERVER_CAP = 4_194_304
 CLIENT_CAP = 131_072
+RPC_NATIVE_RECEIVE = 28
+MAXIMUM_ADAPTER_EVENT_DEPTH = 1_048_576
 
 
 class PublicationRecord(NamedTuple):
@@ -40,6 +42,26 @@ class PublicationRecord(NamedTuple):
     ControlEpoch: int
     MaterializationEpoch: int
     FrameSequence: int
+
+    # Stage 28 metadata is orthogonal to the existing RPC causal stages. The
+    # native GNS clock age starts at complete ordered-message readiness, not
+    # the first UDP packet. Nanoseconds is sampled after dequeue and fixed
+    # prefix selection, before decode/copy and adapter QueueEvent.
+    @property
+    def RpcReadyQueueAgeMicroseconds(self):
+        return self.Tick if self.Stage == RPC_NATIVE_RECEIVE else None
+
+    @property
+    def RpcAdapterPendingEventDepth(self):
+        return self.DueTick if self.Stage == RPC_NATIVE_RECEIVE else None
+
+    @property
+    def RpcAgeSamplingSpanNanoseconds(self):
+        return self.FrameSequence - self.Nanoseconds if self.Stage == RPC_NATIVE_RECEIVE else None
+
+    @property
+    def RpcNativeMessageNumber(self):
+        return self.MaterializationEpoch if self.Stage == RPC_NATIVE_RECEIVE else None
 
 
 def Require(Condition, Message):
@@ -103,6 +125,17 @@ def IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, Expecte
                         (ServiceBytes > 0 if Stage in (16, 17, 21, 22) else ServiceBytes == 0) and
                         Tick == 0 and Flags == 0,
                         "RPC stage lacks request/remote identity or carries unrelated fields")
+            if Stage == RPC_NATIVE_RECEIVE:
+                Require(Flags == 0 and ConnectionSlot > 0 and ConnectionGeneration > 0 and
+                        ObjectSlot > 0 and ObjectGeneration > 0 and Sequence > 0 and
+                        Nanoseconds > 0 and ServiceBytes >= 32 and
+                        Tick <= (1 << 63) - 1 and DueTick <= MAXIMUM_ADAPTER_EVENT_DEPTH and
+                        ControlEpoch in (3, 4, 5) and 0 < MaterializationEpoch <= (1 << 63) - 1 and
+                        FrameSequence >= Nanoseconds,
+                        "RPC native dequeue identity, complete-ready age, event depth or protocol invalid")
+                # The next record cannot precede the end of this sampled span.
+                # Legacy stages keep their existing point-timestamp frontier.
+                PreviousNs = FrameSequence
             if Stage in (24, 25, 27):
                 Require(ConnectionSlot > 0 and ConnectionGeneration > 0 and ServiceBytes > 32 and
                         DueTick in (0, 1, 2) and FrameSequence > 0 and

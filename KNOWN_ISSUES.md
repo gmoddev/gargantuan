@@ -85,6 +85,43 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-13 — Retained D03 passes current native32 subsets; recovery/publication FAIL.**
+Candidate `b65c3528e83e` passes all six original hosted jobs and official
+package verification. Fresh run `9196af39-8da8-4200-95da-a07e604a92a2`
+passes native F1 for all32 peers/7089 completed grants, with Main61208us,
+turnover106758us and no hard failure flags. All64 nonzero ordinary certificates
+pass; maximum9075us. Acceptance=retirement2040720733B, exact fairness and all960
+versioned cadence records pass. These are subsets, not full qualification.
+
+The full reader rejects client0's gameplay recovery probes. Every client's
+first gameplay/mixed RPC exceeds500ms. Client0 measures618219/549290us;
+GNS API handoff to server RPC receipt accounts for604891/536267us. Client
+scheduler wait is below11us, handoff below740us, and server frames continue.
+Native-positive sending, retry/reassembly and receive-queue residence are not
+separated by this evidence. Cessation `native_queued=0` covers pending reliable
+bytes only, excluding neither unacknowledged bytes nor receive-event debt.
+
+The publication join separately rejects duplicate `StateBuilt` identities:
+compact-invalid candidates are recorded before rejection and repeatedly rebuilt
+without a prepared snapshot or accepted packet. A focused diagnostic correction
+preserves existing rejection/requeue behavior and records only encodable builds.
+One bounded receive diagnostic is being qualified to split complete native
+receive, GNS dequeue and GameSession dispatch. No deadline, health, FIFO, credit,
+ownership or recovery change is justified yet. Original107-member evidence and
+cleanup remain sealed. See ownership decision section20. **KI-006 OPEN; PR6
+draft; no Local32/Node32 PASS or3L completion.**
+
+Subsequent source review identifies a qualifier enrollment mismatch, not a
+demonstrated native defect. The canonical20s service-recovery contract and
+already qualified integration fixture allow bounded fresh attempts while service
+is unproven. The farm instead requires its first immediate10-probe cohort to
+be healthy. A prospective versioned correction retains every attempt, permits
+one bounded cohort in flight and requires a complete qualified10-RPC/10-Event
+cohort by the original server20s deadline. Latency constants, invocation clocks,
+pending ownership and all actual errors remain hard gates; old rows retain their
+strict old reader semantics and b65 remains FAIL. Qualification of the corrected
+fixture and receive discriminator is pending.
+
 **2026-10-12 — Retained D03 native32 service subsets pass; fixture conjunction FAIL.**
 Candidate `00239d940527` passes all original Windows96/Linux53/GNS11 hosted
 jobs and official package verification. Its single fresh32-peer run retains

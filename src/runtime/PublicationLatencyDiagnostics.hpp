@@ -2,9 +2,11 @@
 
 #include "gargantuan/network/Connection.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/network/RemoteProtocol.hpp"
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 
 namespace gargantuan::runtime_detail {
@@ -30,6 +32,10 @@ struct PublicationLatencySink {
 	void (*Packet)(void *, const char *, network::ConnectionId, std::span<const std::byte>, std::uint64_t) noexcept = nullptr;
 	OrdinaryDemandTag (*QueueOrdinary)(void *, network::ConnectionId, std::span<const std::byte>) noexcept = nullptr;
 	OrdinaryDemandTag (*DirectOrdinary)(void *, network::ConnectionId) noexcept = nullptr;
+	// Optional RPC-only dequeue metadata. Age starts when pinned GNS has a
+	// complete ordered message, not at UDP arrival or sender native execution.
+	void (*NativeReceive)(void *, network::ConnectionId, std::span<const std::byte>,
+		std::uint64_t, std::uint64_t, std::int64_t, std::size_t, std::int64_t) noexcept = nullptr;
 };
 inline thread_local PublicationLatencySink *ActivePublicationLatency = nullptr;
 inline thread_local OrdinaryDemandTag ActiveOrdinaryDemand;
@@ -53,6 +59,24 @@ inline OrdinaryDemandTag QueueOrdinaryDemand(network::ConnectionId Connection, s
 	auto Tag = ActivePublicationLatency->QueueOrdinary(ActivePublicationLatency->Context, Connection, Payload);
 	if (Tag.Sequence && !Tag.AcceptedAtMicroseconds) Tag.AcceptedAtMicroseconds = PublicationLatencyNow() / 1'000;
 	return Tag;
+}
+inline bool PublicationRpcNativeReceiveSelected(network::ConnectionId Connection,
+	std::span<const std::byte> Payload) noexcept {
+	if (!PublicationLatencySelected(Connection) || !ActivePublicationLatency->NativeReceive ||
+		Payload.size() < 32 || std::memcmp(Payload.data(), "GRMT", 4) != 0) return false;
+	const auto Kind = static_cast<network::RemoteMessageKind>(std::to_integer<std::uint8_t>(Payload[6]));
+	return Kind == network::RemoteMessageKind::Request || Kind == network::RemoteMessageKind::Response ||
+		Kind == network::RemoteMessageKind::RequestError;
+}
+inline void RecordPublicationRpcNativeReceive(network::ConnectionId Connection,
+	std::span<const std::byte> Payload, std::uint64_t DequeuedAtNanoseconds,
+	std::uint64_t AgeSampleEndedNanoseconds,
+	std::int64_t ReadyQueueAgeMicroseconds, std::size_t AdapterPendingEventDepth,
+	std::int64_t NativeMessageNumber) noexcept {
+	if (!PublicationRpcNativeReceiveSelected(Connection, Payload)) return;
+	ActivePublicationLatency->NativeReceive(ActivePublicationLatency->Context, Connection, Payload,
+		DequeuedAtNanoseconds, AgeSampleEndedNanoseconds, ReadyQueueAgeMicroseconds,
+		AdapterPendingEventDepth, NativeMessageNumber);
 }
 inline OrdinaryDemandTag DirectOrdinaryDemand(network::ConnectionId Connection) noexcept {
 	if (!PublicationLatencySelected(Connection) || !ActivePublicationLatency->DirectOrdinary) return {};
