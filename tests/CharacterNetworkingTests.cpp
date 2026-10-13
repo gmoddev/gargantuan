@@ -1313,7 +1313,7 @@ namespace {
 		const auto Original = Server.GetPublicationSchedulingState(First, Id);
 		Check(Original && Original->Due && Evidence.Count == 0, "new forced due is not a retirement");
 		WorldRoot World;
-		Scheduler.NextSubmission = {SchedulerSubmitStatus::WouldBlock};
+		Scheduler.NextSubmission = {SchedulerSubmitStatus::DroppedUnreliable};
 		Server.Step(World, 1);
 		const auto Deferred = Server.GetPublicationSchedulingState(First, Id);
 		Check(Original && Deferred && Deferred->Due && Deferred->DesiredDueTick == Original->DesiredDueTick &&
