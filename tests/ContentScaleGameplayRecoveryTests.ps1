@@ -49,8 +49,10 @@ local Qualified, ProducerPlayerId, PhysicalFarm = true, 1, true
 local NativePrint = print
 local Records, Acknowledgements, Callbacks = {}, {}, {}
 local AcknowledgementAttempts = {}
+local AcknowledgementClocks = {}
 local TestClock = 10
 local RecoveryTesting, RecoveryMode, RecoveryRpcCalls = false, 'Healthy', 0
+local RecoveryEventOffers, RecoveryWaitCalls = 0, {}
 local HeldRecoveryEvents = {}
 local os = {clock = function() return TestClock end}
 local VerifyScope, HostScopePhase, HostScopeNormal = false, nil, false
@@ -82,6 +84,7 @@ function PhaseMock:FireServer(Kind, Case, Attempt)
         assert(type(Attempt) == 'number' and Attempt >= 1 and Attempt <= 20 and Attempt == math.floor(Attempt),
             'actual recovery acknowledgement must carry its qualified attempt')
         AcknowledgementAttempts[Case] = Attempt
+        AcknowledgementClocks[Case] = TestClock
     end
     local Key = Kind .. ':' .. Case
     Acknowledgements[Key] = (Acknowledgements[Key] or 0) + 1
@@ -94,8 +97,10 @@ end
 local OverloadEventMock = {OnClientEvent = Signal()}
 function OverloadEventMock:FireServer(Message, Sequence, Case)
     if RecoveryTesting and Message == 'recovery' then
+        RecoveryEventOffers += 1
         if RecoveryMode == 'EventError' then error('accepted Event fixture failure') end
-        if RecoveryMode == 'PendingEvents' then
+        if RecoveryMode == 'PendingEvents' or
+            (RecoveryMode == 'FinalPendingEvent' and RecoveryEventOffers == 10) then
             table.insert(HeldRecoveryEvents, {Message, Sequence, Case})
             return
         end
@@ -149,7 +154,11 @@ local task = {
         assert(coroutine.resume(Thread))
     end,
     wait = function(Seconds)
-        if RecoveryTesting then TestClock += Seconds or 0 end
+        if RecoveryTesting then
+            table.insert(RecoveryWaitCalls, {Seconds = Seconds, RpcCalls = RecoveryRpcCalls,
+                EventOffers = RecoveryEventOffers})
+            TestClock += Seconds or 0
+        end
         if DeferredTasks then coroutine.yield() end
     end,
 }
@@ -247,10 +256,12 @@ for CaseIndex, Case in {'gameplay', 'structural', 'mixed'} do
             (((CaseIndex - 1) * 7 + Opportunity + Index) % 26)), 24576)
     end
     Attributes.ScaleOverloadCase = 'recover_' .. Case
-    local RpcBefore = RpcCount
+    local RpcBefore, EventBefore, WaitBefore = RpcCount, RecoveryEventOffers, #RecoveryWaitCalls
     Recovery()
     Recovery() -- Only a settled cohort may publish its complete receipt.
     assert(RpcCount - RpcBefore == 10, 'each recovery must execute exactly ten real callback RPC invocations')
+    assert(RecoveryEventOffers - EventBefore == 10 and #RecoveryWaitCalls - WaitBefore == 9,
+        'exactly ten Events and nine waits between offers must precede the final receipt')
     assert(Acknowledgements['recovery_done:' .. Case] == 1, 'ten RPC/event ACK gates must complete')
     assert(AcknowledgementAttempts[Case] == RecoveryAttempt, 'server handoff must identify the qualified cohort')
     if CaseIndex > 1 then assert(Acknowledgements['name_converged:' .. Case] == 1) end
@@ -274,6 +285,8 @@ NativePrint('[Qualification:RecoveryScript] cases=3 rpc_probes=30 completed_case
 -- not replay any transport operation or reuse an accepted request/Event.
 local function BeginFixture(Mode)
     RecoveryMode, RecoveryRpcCalls = Mode, 0
+    RecoveryEventOffers = 0
+    table.clear(RecoveryWaitCalls)
     table.clear(HeldRecoveryEvents)
     CurrentOverloadCase = nil
     Acknowledgements['recovery_done:gameplay'] = nil
@@ -289,7 +302,45 @@ local function CountRecords(After, Fragment)
     end
     return Count
 end
-local First = BeginFixture('FirstSlow')
+local function CheckPacing()
+    assert(RecoveryRpcCalls == 10 and RecoveryEventOffers == 10 and #RecoveryWaitCalls == 9,
+        'actual completed cohort must retain ten RPCs, ten Events and exactly nine pacing waits')
+    for Index, Wait in RecoveryWaitCalls do
+        assert(Wait.Seconds == 0.2 and Wait.RpcCalls == Index and Wait.EventOffers == Index,
+            'the existing 200-ms wait must occur only after offers one through nine')
+    end
+end
+-- The server cessation clock is independent of this client's delayed stage
+-- observation. A final receipt must not add a tenth idle interval after all
+-- accepted work is complete near the unchanged server20s boundary.
+local First = BeginFixture('Healthy')
+local ServerCessationClock, ServerDeadlineClock = 100, 120
+TestClock = ServerCessationClock + 17.85
+Recovery()
+CheckPacing()
+local QualifiedAt = TestClock
+Recovery()
+assert(RecoveryResultSent and Acknowledgements['recovery_done:gameplay'] == 1 and
+    AcknowledgementClocks.gameplay == QualifiedAt and QualifiedAt <= ServerDeadlineClock and
+    RecoveryDeadlineNs - RecoveryStartedNs == 20000000000 and CountRecords(First, 'status=QUALIFIED') == 1,
+    'healthy final work before immutable server20s must publish without a trailing 200-ms wait or clock restart')
+First = BeginFixture('FinalPendingEvent')
+Recovery()
+CheckPacing()
+local FinalEventDeadline = RecoveryDeadlineNs
+Recovery()
+assert(RecoveryProbesDone and RecoveryProbeAcks == 10 and RecoveryEventAcks == 9 and
+    #HeldRecoveryEvents == 1 and next(RecoveryEventStarted) ~= nil and RecoveryAttempt == 1 and
+    not RecoveryResultSent and not Acknowledgements['recovery_done:gameplay'],
+    'removing the final pacing wait must never bypass the last accepted Event acknowledgement')
+OverloadEventMock.OnClientEvent.Callback(table.unpack(HeldRecoveryEvents[1]))
+Recovery()
+assert(RecoveryResultSent and RecoveryAttempt == 1 and RecoveryRpcCalls == 10 and RecoveryEventOffers == 10 and
+    RecoveryDeadlineNs == FinalEventDeadline and next(RecoveryEventStarted) == nil and
+    Acknowledgements['recovery_done:gameplay'] == 1 and CountRecords(First, 'event=event_probe') == 10,
+    'the original final Event must close its same cohort without replay, new offers or a restarted deadline')
+NativePrint('[Qualification:RecoveryPacingScript] rpc_probes=10 event_offers=10 inter_offer_waits=9 final_pending=PASS server20s=PASS result=PASS')
+First = BeginFixture('FirstSlow')
 Recovery()
 local OriginalDeadline = RecoveryDeadlineNs
 Recovery() -- Retains UNPROVEN first cohort and starts fresh second cohort.

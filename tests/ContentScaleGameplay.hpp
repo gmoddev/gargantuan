@@ -1047,7 +1047,9 @@ if PhysicalFarm then
                         CloseRecoveryCohort("FAILED", "event_error")
                         break
                     end
-                    task.wait(0.2)
+                    -- Pace the next offer; a completed final offer owns no
+                    -- further pacing interval before its receipt can qualify.
+                    if Index < 10 then task.wait(0.2) end
                 end
                 RecoveryProbesDone = true
             end)

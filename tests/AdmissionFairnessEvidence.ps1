@@ -24,6 +24,16 @@ function Read-AdmissionFairnessEvidence {
 	$TerminalReleasedGrantCount = 0
 	$TerminalDebtReleaseCount = 0
 	$PendingReplacement = $null
+	# HYBRID's obligation belongs to the independently eligible peer, not to
+	# an obsolete encoded candidate. Only an adjacent, same-clock replacement
+	# bridge can preserve eligibility; candidate identities remain distinct.
+	$PendingPeerBridge = $null
+	$PeerEpisodeCount = 0
+	$CompletedPeerEpisodeCount = 0
+	$CarriedReplacementCount = 0
+	$UnprovenPeerEpisodeCount = 0
+	$MaximumPeerWait = [UInt64]0
+	$PeerWaitFailed = $false
 	$Count = 0
 	$GrantCount = 0
 	$InterruptedEligibilityEpisodeCount = 0
@@ -99,6 +109,25 @@ function Read-AdmissionFairnessEvidence {
 			# may still use the step ledger's earlier Now. File order is causal,
 			# but timestamps need only be monotonic within one demand.
 			$LatestTime = [Math]::Max($LatestTime, $At)
+			if ($IsHybrid -and $PendingPeerBridge) {
+				$BridgeMatches = $Peer -ceq $PendingPeerBridge.Peer -and $At -eq $PendingPeerBridge.At -and
+					$(if ($PendingPeerBridge.Phase -ceq 'exact') { $Kind -ceq 'exact_demand' }
+					  else { $Kind -ceq 'credit_eligible' -and $DemandId -eq $PendingPeerBridge.DemandId })
+				# The Farm GameSession producer emits these facts after its current
+				# Allowance refill, without yielding, reserving or advancing Now.
+				# Credit, active owners and deferral counters cannot
+				# change between them; a larger successor still needs existing credit.
+				if ($BridgeMatches) {
+					for ($WitnessIndex = 0; $WitnessIndex -lt 7; $WitnessIndex++) {
+						if ($N[9+$WitnessIndex] -ne $PendingPeerBridge.Witness[$WitnessIndex]) { $BridgeMatches = $false }
+					}
+					if ($Bytes -gt $PendingPeerBridge.Witness[0]) { $BridgeMatches = $false }
+				}
+				if (-not $BridgeMatches) {
+					$UnprovenPeerEpisodeCount++
+					$PendingPeerBridge = $null
+				}
+			}
 			if ($Kind -cin @('grant_retired', 'grant_released', 'grant_terminal_released')) {
 				if (-not $IsV2 -or $Reason -cnotin @('none', 'terminal_release') -or
 					($Kind -cne 'grant_terminal_released' -and $Reason -cne 'none') -or $Token -eq 0 -or
@@ -147,8 +176,12 @@ function Read-AdmissionFairnessEvidence {
 				$Demands.Add($DemandId, @{
 					Peer = $Peer; Bytes = $Bytes; At = $At; LastAt = $At; Episode = [UInt64]0
 					Active = $false; EligibleSince = [UInt64]0; CreditAt = [UInt64]0
-					EverEligible = $false; Closed = $false
+					EverEligible = $false; Closed = $false; PeerEligibleSince = [UInt64]0
 				})
+				if ($IsHybrid -and $PendingPeerBridge) {
+					$PendingPeerBridge.Phase = 'eligible'
+					$PendingPeerBridge.DemandId = $DemandId
+				}
 				$Current.Add($Peer, $DemandId)
 				if (-not $Peers.ContainsKey($Peer)) {
 					$Peers.Add($Peer, @{ Peer = $Peer; Slot = $N[0]; Generation = $N[1];
@@ -181,6 +214,16 @@ function Read-AdmissionFairnessEvidence {
 					$Demand.EverEligible = $true
 					$Demand.EligibleSince = $At
 					$Demand.CreditAt = $CreditAt
+					if ($IsHybrid) {
+						if ($PendingPeerBridge) {
+							$Demand.PeerEligibleSince = $PendingPeerBridge.Since
+							$CarriedReplacementCount++
+							$PendingPeerBridge = $null
+						} else {
+							$Demand.PeerEligibleSince = $At
+							$PeerEpisodeCount++
+						}
+					}
 				}
 				'eligibility_interrupted' {
 					if ($Reason -cne 'feedback_unavailable' -or $Token -ne 0 -or -not $Demand.Active -or
@@ -190,6 +233,11 @@ function Read-AdmissionFairnessEvidence {
 					}
 					$Demand.Active = $false
 					$InterruptedEligibilityEpisodeCount++
+					if ($IsHybrid) {
+						if ($At - $Demand.PeerEligibleSince -gt $WaitBound) { $PeerWaitFailed = $true }
+						$UnprovenPeerEpisodeCount++
+						$Demand.PeerEligibleSince = [UInt64]0
+					}
 				}
 				'reservation_rolled_back' {
 					if ($Reason -cne 'rollback' -or $Token -eq 0 -or -not $Demand.Active -or
@@ -219,6 +267,13 @@ function Read-AdmissionFairnessEvidence {
 					$Stats.MaximumObservedWaitMicroseconds = [Math]::Max($Stats.MaximumObservedWaitMicroseconds, $Wait)
 					$Stats.TotalObservedWaitMicroseconds += $Wait
 					$MaximumWait = [Math]::Max($MaximumWait, $Wait)
+					if ($IsHybrid) {
+						$PeerWait = [UInt64]($At - $Demand.PeerEligibleSince)
+						$MaximumPeerWait = [Math]::Max($MaximumPeerWait, $PeerWait)
+						if ($PeerWait -gt $WaitBound) { $PeerWaitFailed = $true }
+						$CompletedPeerEpisodeCount++
+						$Demand.PeerEligibleSince = [UInt64]0
+					}
 					$GrantCount++
 					$Demand.Closed = $true
 					[void]$Current.Remove($Peer)
@@ -232,6 +287,14 @@ function Read-AdmissionFairnessEvidence {
 					}
 					if ($Demand.Active) { $DisposedEligibleCount++ }
 					if ($Demand.EverEligible) { $DisposedEverEligibleCount++ }
+					if ($IsHybrid -and $Demand.Active) {
+						if ($At - $Demand.PeerEligibleSince -gt $WaitBound) { $PeerWaitFailed = $true }
+						if ($Reason -ceq 'replaced' -and $N[9] -ge $Bytes -and
+							-not $OpenGrantByPeer.ContainsKey($Peer)) {
+							$PendingPeerBridge = @{ Peer=$Peer; At=$At; Since=$Demand.PeerEligibleSince;
+								Phase='exact'; DemandId=[UInt64]0; Witness=[UInt64[]]$N[9..15] }
+						} else { $UnprovenPeerEpisodeCount++ }
+					}
 					$Demand.Closed = $true
 					[void]$Current.Remove($Peer)
 					if ($Reason -ceq 'replaced') { $PendingReplacement = $Peer }
@@ -267,7 +330,14 @@ function Read-AdmissionFairnessEvidence {
 				MaximumObservedWaitMicroseconds = $_.MaximumObservedWaitMicroseconds;
 				TotalObservedWaitMicroseconds = $_.TotalObservedWaitMicroseconds }
 		})
-		return [pscustomobject]@{
+		if ($IsHybrid) {
+			if ($PendingPeerBridge) { $UnprovenPeerEpisodeCount++ }
+			foreach ($Demand in $Demands.Values) {
+				if (-not $Demand.Closed -and $Demand.Active -and
+					$LatestTime - $Demand.PeerEligibleSince -gt $WaitBound) { $PeerWaitFailed = $true }
+			}
+		}
+		$Result = [pscustomobject]@{
 			ServiceContract = $(if ($IsHybrid) { 'HYBRID_F1_V1' } else { 'finite_grant_v1' })
 			Classification = 'EVIDENCE_INTEGRITY_AND_OBSERVED_TIMING_ONLY'
 			TraceCanonicalCounterBounds = 'MEASURED_PASS'
@@ -310,5 +380,19 @@ function Read-AdmissionFairnessEvidence {
 			LatestRecordedMicroseconds = $LatestTime
 			MaximumObservedEligibilityToGrantMicroseconds = $MaximumWait
 		}
+		if ($IsHybrid) {
+			$PeerCoverage = if ($PeerWaitFailed) { 'MEASURED_FAIL' }
+				elseif ($PeerEpisodeCount -eq 0) { 'NOT_MEASURED' }
+				elseif ($UnprovenPeerEpisodeCount -gt 0 -or $Current.Count -gt 0 -or
+					$CompletedPeerEpisodeCount -ne $PeerEpisodeCount) { 'INCONCLUSIVE_NOT_MEASURED' }
+				else { 'MEASURED_PASS' }
+			$Result | Add-Member -NotePropertyName ContinuousEligiblePeerEpisodeCoverage -NotePropertyValue $PeerCoverage
+			$Result | Add-Member -NotePropertyName MaximumObservedPeerEligibilityToGrantMicroseconds -NotePropertyValue $MaximumPeerWait
+			$Result | Add-Member -NotePropertyName ContinuousPeerEligibleEpisodeCount -NotePropertyValue $PeerEpisodeCount
+			$Result | Add-Member -NotePropertyName CompletedContinuousPeerEligibleEpisodeCount -NotePropertyValue $CompletedPeerEpisodeCount
+			$Result | Add-Member -NotePropertyName CarriedEligibleReplacementCount -NotePropertyValue $CarriedReplacementCount
+			$Result | Add-Member -NotePropertyName UnprovenPeerEligibilityEpisodeCount -NotePropertyValue $UnprovenPeerEpisodeCount
+		}
+		return $Result
 	} finally { $Reader.Dispose() }
 }

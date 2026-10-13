@@ -2241,3 +2241,97 @@ must confirm the correction; the original FAIL cannot be replaced by inference.
 Independent attribution receipt SHA256
 `7d596a4d0e8969c62bf92f8e00adce41ad6ec39fc9d19ad726d527e2c24a3aca`.
 KI-006 OPEN; PR6 draft; no3M or merge.
+
+## 25. HYBRID scope qualification and final-probe withholding (2026-10-13)
+
+Candidate `4a2e8d6112a5720f8908f26dd61ee79adf9f487e`, tree
+`ba3d3a8343fe83dd00ac4e65a571949ea5cc6402`, passes21 affected native tests,
+the existing execution-capture regression and the aggregate32 structural arm
+in43.085s with no captured D03 fault. Its original native push/PR workflows
+38443549484/38443558287, GNS38443549705/38443559576 and official manual
+38443548820 all pass: JUnit97/53/97/53/11/11/97/53, zero failures/errors/skips.
+Original source/merge-tree/contract joins and the official package independently
+verify; canonical receipt SHA256
+`99aec9db0cbe74490729310167aa7ab340130c17c831b87679c6021b779046d8`.
+This qualifies the CI correction; it does not substitute for provider gates.
+
+The sole fresh native32 run `edddd44d-a99c-465a-93ff-eee38950eedd` exits1
+after264.6270693s without outer timeout. All107 indexed members/150991968 bytes
+remain unchanged and mirrored; index SHA256
+`eb23c28096b51b0b6541ed386e2c21c511e04a8d6a02073e3cb1fd9aef1d14fe`.
+Owned native processes and UDP39450 are absent. Strict publication replay and
+five-phase workload pass; the full conjunction remains rejected for structural
+recovery's server20s deadline and incomplete fairness-demand episode coverage.
+The latter is resolved by the prospective peer proof in section26;32/32 peers,
+accepted wait and grant lifecycle pass. Original candidate coverage remains
+incomplete and cannot become an independent fairness PASS by ignoring disposal.
+
+Structural peer16:1/client15/nonce5146356167710081040 uses the correct bounded
+cohort version and attempt1. Cessation1450397489925us to server
+ACK1450417639572us is20149647us:149647us late. Cohort enrollment starts at
+cessation+17660193.4us. Its final structural preparation covers journal
+23242–23249/fence23249, sequence173/token5495/147716B; first-send/ACK is observed
+at1450415139979us and retirement at1450415139982us. The subsequent client
+stage/cohort starts about10.1364ms later. Matching this exact packet to the
+recovery Attribute is source-supported inference, not captured payload proof.
+
+All ten RPCs and ten Events complete by cessation+19928128.9us; maximum RPC
+35188us/Event33939us and pending Events0. The client identity observer finishes
+about1.0644ms after cohort enrollment, not at the final tail. Final Event ACK to
+cohort-end takes200.9425ms, then cohort-end to server ACK20.5756ms. The actual
+Luau probe loop unconditionally sleeps200ms even after index10 before marking
+its coroutine complete; all32 structural cohorts retain a181.546–216.765ms tail.
+Thus a demonstrated fixture idle wait holds already-complete evidence past
+the deadline. This does not establish an actor, worker or OS defect.
+
+Select only the inter-probe correction: wait after indices1–9, retain ten real
+RPC/Event invocations, require the final accepted Event to settle, and preserve
+all error/deadline/attempt/clock and native/ordinary/conservation requirements.
+No accepted operation is replayed or abandoned. The narrow enrollment margin
+still needs a fresh qualified run after focused regression/native preflight and
+exact-source CI. Neither the failed source nor recovery evidence is relabeled.
+KI-006 OPEN; PR6 draft; no3M or automatic merge.
+
+## 26. Continuous eligible-peer evidence across replanning (2026-10-13)
+
+The preserved A4 fairness reader reports INCONCLUSIVE, correctly refusing to
+infer acceptance of candidate3286/516647B on connection25:1. It was eligible at
+1450396291099us, disposed as `replaced` at1450396543277us, then replaced by
+candidate3318/393652B at that same time. Its immediate credit-eligibility record
+has the same peer/time; actual acceptance is token3317 at1450396543281us.
+Candidate wait4us cannot substitute for the original peer wait252182us.
+
+Source `ObserveExactDemand` changes only diagnostic candidate identity after
+exact encoding, disposing/creating synchronously. `SubmitStructural` samples
+one AdmissionAt for Allowance/Observe/Reserve, and Reserve rechecks Allowance.
+Consequently only the contiguous same-generation/same-time
+`replaced -> exact_demand -> credit_eligible` bridge supports continuous peer
+eligibility. It does not prove old/new payload equivalence. Scheduler acceptance
+alone creates the exact delivery obligation; source/coalescing/causal ownership
+and all accepted-byte retirement remain independently enforced.
+
+Independent review additionally requires unchanged pre-reservation peer/global
+credit, active-grant count and four deferral counters across all three records;
+both costs must fit the same peer credit. Same-clock refills are impossible in
+this GameSession path. Invented credit growth, changed funding/ownership or
+counter movement cannot fabricate a continuous bridge.
+
+D03 requires admission of every independently eligible peer, not compulsory
+publication of every obsolete unaccepted candidate. Select a bounded extension
+of the existing offline reader: carry the original eligibility across the
+proven bridge until actual grant, preserve every candidate identity/byte count,
+and require `ContinuousEligiblePeerEpisodeCoverage` for HYBRID. Any observed
+age1181251us fails even if each replacement is young, or the interval ends in
+withdrawal/interruption. Missing/delayed/noncontiguous bridges, feedback loss,
+generation changes, open episodes and terminal debt cannot establish PASS.
+The original candidate-coverage output and legacy F1 selection stay unchanged.
+
+Compare alternatives: carrying peer lineage matches the accepted D03 obligation
+using existing bounded records; freezing prepared production frames would
+change replanning/coalescing ownership and is unnecessary for this missing
+acceptance fact. Merely rerunning until no replacement occurs or ignoring
+disposed candidates would leave starvation unqualified and is rejected.
+Focused adversarial regressions, affected native checks and exact-source CI
+must qualify the extension before one justified corrected native campaign.
+Original A4 report remains INCONCLUSIVE and whole run FAIL; no provider or final
+acceptance is inferred from a later offline lineage proof. KI-006 OPEN.

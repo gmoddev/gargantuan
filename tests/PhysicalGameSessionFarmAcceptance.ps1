@@ -611,7 +611,7 @@ function Read-AdmissionObservation {
 		($RecordedFairness | ConvertTo-Json -Depth 10 -Compress)) {
 		throw 'reconciled admission fairness observation differs from sealed native timeline'
 	}
-	return [ordered]@{
+	$Result = [ordered]@{
 		Classification = 'TERMINAL_CONSERVATION_AND_BOUNDED_ADMISSION_SUBSETS_ONLY'
 		AcceptedBytes = [long]$Admission.accepted
 		RetiredBytes = [long]$Admission.retired
@@ -639,6 +639,11 @@ function Read-AdmissionObservation {
 		JournalFailures = [long]$Admission.journal_failures
 		Fairness = $ObservedFairness
 	}
+	if ($ObservedFairness.ServiceContract -ceq 'HYBRID_F1_V1') {
+		$Result.ContinuousEligiblePeerEpisodeCoverage = $ObservedFairness.ContinuousEligiblePeerEpisodeCoverage
+		$Result.MaximumObservedPeerEligibilityToGrantMicroseconds = $ObservedFairness.MaximumObservedPeerEligibilityToGrantMicroseconds
+	}
+	return $Result
 }
 
 function Get-FixedWorkloadFairness {
@@ -657,16 +662,24 @@ function Get-FixedWorkloadFairness {
 		if ($Row.GrantCount -gt 0) { [void]$Granted.Add($Row.Peer) }
 	}
 	$Missing = @($Expected | Where-Object { -not $Granted.Contains($_) } | Sort-Object)
-	$Parts = @($Observation.AcceptedGrantWaitBound, $Observation.ExactDemandEpisodeCoverage,
+	$IsHybrid = $Observation.ServiceContract -ceq 'HYBRID_F1_V1'
+	$EpisodeCoverage = if ($IsHybrid) { $Observation.ContinuousEligiblePeerEpisodeCoverage }
+		else { $Observation.ExactDemandEpisodeCoverage }
+	$Parts = @($Observation.AcceptedGrantWaitBound, $EpisodeCoverage,
 		$Observation.GrantLifecycleCoverage)
 	$State = if ('MEASURED_FAIL' -cin $Parts) { 'MEASURED_FAIL' }
 		elseif ($Missing.Count -eq 0 -and @($Parts | Where-Object { $_ -cne 'MEASURED_PASS' }).Count -eq 0) { 'MEASURED_PASS' }
 		else { 'NOT_MEASURED' }
-	return [ordered]@{ State=$State; GrantedPeers=$Granted.Count; RequiredPeers=32; MissingGrantedPeers=$Missing;
+	$Result = [ordered]@{ State=$State; GrantedPeers=$Granted.Count; RequiredPeers=32; MissingGrantedPeers=$Missing;
 		AcceptedGrantWaitBound=$Observation.AcceptedGrantWaitBound;
 		ExactDemandEpisodeCoverage=$Observation.ExactDemandEpisodeCoverage;
 		GrantLifecycleCoverage=$Observation.GrantLifecycleCoverage;
 		Scope='recorded exact-demand episodes of this fixed 32-peer workload; no continuous-source claim' }
+	if ($IsHybrid) {
+		$Result.ContinuousEligiblePeerEpisodeCoverage = $EpisodeCoverage
+		$Result.Scope = 'recorded continuous independent peer eligibility of this fixed 32-peer workload; distinct candidates and no continuous-source claim'
+	}
+	return $Result
 }
 
 function Read-WorkloadObservation {

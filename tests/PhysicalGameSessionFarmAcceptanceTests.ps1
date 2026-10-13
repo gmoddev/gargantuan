@@ -102,17 +102,30 @@ function Save-FairnessRows {
 }
 
 function Save-CompleteFairness {
-	param($Run, [switch]$MissingPeer, [switch]$OpenEligible)
+	param($Run, [switch]$MissingPeer, [switch]$OpenEligible, [switch]$Hybrid,
+		[switch]$EligibleReplacement, [switch]$OverduePeer, [switch]$BridgeGap)
 	$Rows=[Collections.Generic.List[string]]::new()
-	$Rows.Add("format=GargantuanAdmissionEvidenceV2`trun=$($Run.Report.RunId)")
+	$Rows.Add($(if ($Hybrid) { "format=GargantuanAdmissionEvidenceV3`trun=$($Run.Report.RunId)`tcontract=HYBRID_F1_V1" }
+		else { "format=GargantuanAdmissionEvidenceV2`trun=$($Run.Report.RunId)" }))
 	$Last=if ($MissingPeer) {31} else {32}
 	foreach ($Peer in 1..$Last) {
 		$At=1000*$Peer
-		$Rows.Add((@('event','exact_demand','none',$Peer,1,$Peer,0,0,256,$At,0,0,0,0,0,0,0,0,0) -join "`t"))
-		$Rows.Add((@('event','credit_eligible','none',$Peer,1,$Peer,1,0,256,($At+100),($At+50),($At+100),256,256,0,0,0,0,0) -join "`t"))
-		$Rows.Add((@('event','grant_accepted','none',$Peer,1,$Peer,1,$Peer,256,($At+200),($At+50),($At+100),0,0,1,0,0,0,0) -join "`t"))
-		$Rows.Add((@('event','grant_retired','none',$Peer,1,$Peer,0,$Peer,256,($At+300),0,0,0,0,1,0,0,0,0) -join "`t"))
-		$Rows.Add((@('event','grant_released','none',$Peer,1,$Peer,0,$Peer,256,($At+400),0,0,0,0,0,0,0,0,0) -join "`t"))
+		$Demand = if ($EligibleReplacement -and $Peer -gt 1) { $Peer+1 } else { $Peer }
+		$Bytes = if ($EligibleReplacement -and $Peer -eq 1) { 512 } else { 256 }
+		$CreditAt=$At+50; $EligibleAt=$At+100; $GrantAt=$At+200
+		$Rows.Add((@('event','exact_demand','none',$Peer,1,$Demand,0,0,$Bytes,$At,0,0,0,0,0,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','credit_eligible','none',$Peer,1,$Demand,1,0,$Bytes,$EligibleAt,$CreditAt,$EligibleAt,$Bytes,$Bytes,0,0,0,0,0) -join "`t"))
+		if ($EligibleReplacement -and $Peer -eq 1) {
+			$ReplacedAt=$At+250100
+			$Rows.Add((@('event','demand_disposed','replaced',1,1,$Demand,1,0,$Bytes,$ReplacedAt,$CreditAt,$EligibleAt,512,512,0,0,0,0,0) -join "`t"))
+			$Demand=2; $Bytes=256; $CreditAt=$ReplacedAt; $EligibleAt=$ReplacedAt+[int][bool]$BridgeGap
+			$Rows.Add((@('event','exact_demand','none',1,1,$Demand,0,0,$Bytes,$ReplacedAt,0,0,512,512,0,0,0,0,0) -join "`t"))
+			$Rows.Add((@('event','credit_eligible','none',1,1,$Demand,1,0,$Bytes,$EligibleAt,$CreditAt,$EligibleAt,512,512,0,0,0,0,0) -join "`t"))
+			$GrantAt=if ($OverduePeer) { $At+1181351 } else { $ReplacedAt+4 }
+		}
+		$Rows.Add((@('event','grant_accepted','none',$Peer,1,$Demand,1,$Peer,$Bytes,$GrantAt,$CreditAt,$EligibleAt,0,0,1,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','grant_retired','none',$Peer,1,$Demand,0,$Peer,$Bytes,($GrantAt+100),0,0,0,0,1,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','grant_released','none',$Peer,1,$Demand,0,$Peer,$Bytes,($GrantAt+200),0,0,0,0,0,0,0,0,0) -join "`t"))
 	}
 	if ($OpenEligible) {
 		$Rows.Add((@('event','exact_demand','none',1,1,33,0,0,256,40000,0,0,0,0,0,0,0,0,0) -join "`t"))
@@ -1098,6 +1111,38 @@ try {
 	$Node.Report.AdmissionFairnessObservation.ExactDemandEpisodeCoverage='MEASURED_PASS'
 	Save-Json -Path $Node.ReportPath -Value $Node.Report
 	Assert-Rejected -Name 'forged complete fairness hides open eligibility' -OutputPath (Join-Path $TestRoot 'forged-complete-fairness.json')
+	Save-CompleteFairness -Run $Node
+	Save-CompleteFairness -Run $Local -Hybrid -EligibleReplacement
+	Save-CompleteFairness -Run $Node -Hybrid -EligibleReplacement
+	$HybridPath=Join-Path $TestRoot 'hybrid-peer-lineage.json'
+	Invoke-Analyzer -OutputPath $HybridPath
+	$HybridObserved=Get-Content $HybridPath -Raw|ConvertFrom-Json
+	if ($HybridObserved.Node.Admission.FixedWorkloadFairness.State -cne 'MEASURED_PASS' -or
+		$HybridObserved.Node.Admission.ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_PASS' -or
+		$HybridObserved.Node.Admission.MaximumObservedPeerEligibilityToGrantMicroseconds -ne 250004 -or
+		$HybridObserved.Node.Admission.ExactDemandEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED') {
+		throw 'HYBRID peer-lineage propagation lost age or relabeled the exact-candidate diagnostic'
+	}
+	Save-CompleteFairness -Run $Node -Hybrid -EligibleReplacement -OverduePeer
+	$HybridLatePath=Join-Path $TestRoot 'hybrid-overdue-peer.json'
+	Invoke-Analyzer -OutputPath $HybridLatePath
+	$HybridLate=Get-Content $HybridLatePath -Raw|ConvertFrom-Json
+	if ($HybridLate.Node.Admission.AcceptedGrantWaitBound -cne 'MEASURED_PASS' -or
+		$HybridLate.Node.Admission.FixedWorkloadFairness.State -cne 'MEASURED_FAIL' -or
+		$HybridLate.Node.Admission.ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_FAIL') {
+		throw 'accepted young replacement hid an overdue peer in fixed fairness'
+	}
+	Save-CompleteFairness -Run $Node -Hybrid -EligibleReplacement -BridgeGap
+	$HybridGapPath=Join-Path $TestRoot 'hybrid-peer-gap.json'
+	Invoke-Analyzer -OutputPath $HybridGapPath
+	$HybridGap=Get-Content $HybridGapPath -Raw|ConvertFrom-Json
+	if ($HybridGap.Node.Admission.FixedWorkloadFairness.State -cne 'NOT_MEASURED') {
+		throw 'missing immediate successor eligibility qualified fixed peer fairness'
+	}
+	$Node.Report.AdmissionFairnessObservation.ContinuousEligiblePeerEpisodeCoverage='MEASURED_PASS'
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged peer lineage hides replacement gap' -OutputPath (Join-Path $TestRoot 'forged-peer-lineage.json')
+	Save-CompleteFairness -Run $Local
 	Save-CompleteFairness -Run $Node
 	$Node.Report.Remove('AdmissionFairnessObservation')
 	Save-Json -Path $Node.ReportPath -Value $Node.Report

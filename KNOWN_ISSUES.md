@@ -85,6 +85,36 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-13 — HYBRID scope CI passes; native32 exposes a final-probe idle wait.**
+Source `4a2e8d6112a5720f8908f26dd61ee79adf9f487e` passes all eight original
+Windows/Linux/GNS hosted jobs, including all three Windows reliable timing
+steps. Independent canonical CI/package receipt SHA256 is
+`99aec9db0cbe74490729310167aa7ab340130c17c831b87679c6021b779046d8`.
+The sole fresh native32 run `edddd44d-a99c-465a-93ff-eee38950eedd` remains
+**FAIL**, exit1 after264.627s, with no outer timeout or remaining owned
+process/UDP39450 owner. Its107 original files/150991968 bytes are sealed by
+index `eb23c28096b51b0b6541ed386e2c21c511e04a8d6a02073e3cb1fd9aef1d14fe`.
+
+Structural peer16:1's correctly versioned recovery ACK arrives20.149647s
+after cessation, violating the unchanged20s gate. All ten RPC/Event results
+were complete by19.928129s; final Event-to-cohort-end takes200.9425ms, then
+server acknowledgment takes20.5756ms. The actual Luau loop sleeps200ms after
+index10 despite having no further probe to schedule. The selected correction
+retains200ms between indices1–9 and still awaits every final Event result,
+preserving counts, errors, clocks, attempt ownership and all deadlines.
+Delayed structural enrollment at17.6601934s leaves a narrow real margin;
+removing fixture withholding is not proof of renewed qualification.
+
+Independent strict replay also reports incomplete exact fairness-demand
+episode coverage, despite32/32 granted peers and passing accepted-grant wait
+and lifecycle checks. Source legitimately replans one unaccepted candidate,
+resetting its diagnostic identity. The selected HYBRID proof carries the
+original peer eligibility through the source's atomic replacement until actual
+grant (252182us here), preserves distinct candidate bytes, and rejects repeated
+replacement starvation or unproven bridges. Legacy exact-candidate coverage is
+unchanged; this is not a measured deadline breach or a waiver. Whole native32, Local32,
+real-TLS Node32 and final acceptance remain unqualified; KI-006 OPEN.
+
 **2026-10-13 — Official CI exposes live aggregate diagnostic reporting interference.**
 Source `5a45570b7bb8b43315b477b2977d339847be9883` passes the21-test affected
 native preflight and its original Windows CTest97/97, but official manual

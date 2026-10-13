@@ -562,6 +562,10 @@ def EvaluateProviders(Observation, ExpectedCommit, ExpectedContract="F1"):
             Gates.append({"Gate": Provider + ".Publication.OrdinaryFIFO.State",
                           "State": "MEASURED_PASS" if At(Value, "Publication.OrdinaryFIFO.State") == "MEASURED_PASS" else
                           "MEASURED_FAIL" if At(Value, "Publication.OrdinaryFIFO.State") == "MEASURED_FAIL" else "NOT_MEASURED"})
+            PeerCoverage = At(Value, "Admission.ContinuousEligiblePeerEpisodeCoverage")
+            Gates.append({"Gate": Provider + ".Admission.ContinuousEligiblePeerEpisodeCoverage",
+                          "State": "MEASURED_PASS" if PeerCoverage == "MEASURED_PASS" else
+                          "MEASURED_FAIL" if PeerCoverage == "MEASURED_FAIL" else "NOT_MEASURED"})
         for Key, Expected in PROVIDER_GATES.items():
             Actual = At(Value, Key)
             Gates.append({"Gate": f"{Provider}.{Key}", "State":

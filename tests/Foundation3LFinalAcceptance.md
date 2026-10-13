@@ -143,6 +143,11 @@ The final typed conjunction requires each provider's:
 - five-phase, all-32-client workload and exact terminal conservation;
 - generation-safe, grant-scoped F1 native completion and sticky failure evidence;
 - ACK-gated grant lifecycle, recorded wait bound and fixed-workload fairness;
+- for HYBRID, independently complete continuous eligible-peer episodes across
+  source-proven atomic candidate replacement, retaining the earliest clock and
+  the1181250-us bound. Missing/unknown/interrupted coverage cannot pass; distinct
+  unaccepted candidate bytes are not claimed as delivered. Original exact-demand
+  coverage and legacy F1 semantics remain visible and unchanged;
 - accepted Character state chain, due-service cadence and all-window ordinary
   successful-send demand (including forced Character traffic);
 - native probe clock calibration, work-tick limits and designated producer

@@ -42,6 +42,19 @@ This amendment supersedes only the retained raw-running-curve exception in the
 historical records below; it does not change production networking or grants.
 Qualification of the coordinated migration and final conjunction is pending.
 
+The coordinated scope candidate `4a2e8d6112a5720f8908f26dd61ee79adf9f487e`
+subsequently passes all eight original exact-source hosted jobs and independent
+canonical CI/package verification. Its fresh native32 run remains FAIL: a
+correctly versioned structural recovery ACK arrives20.149647s after cessation,
+while its ten RPC/Event results were complete by19.928129s. The fixture's
+unconditional200ms sleep after the final probe withholds the receipt; the
+selected correction waits only between probes and still requires final Event
+settlement. All D03 and recovery deadlines remain unchanged. Exact candidate
+coverage remains incomplete after legitimate replanning; the selected peer
+eligibility proof below preserves its original wait across atomic replacement.
+Full qualification is pending; the detailed preserved-source account is in
+[ownership decision section25](../../devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#25-hybrid-scope-qualification-and-final-probe-withholding-2026-10-13).
+
 The authorized Foundation 3L follow-up adopts D02's B/C direction: retain
 funding, exact delivery and hard player outcomes; qualify actual source-shaped
 capacity. The coordinated deterministic/native Windows preflight passed eight
@@ -341,6 +354,26 @@ preflight is not hosted CI, native32 or physical qualification.
    This explicitly replaces the old mechanically derived 220500-us promise.
    A different valid source configuration is not automatically qualified:
    offered-work feasibility and peer-by-peer progress require source evidence.
+
+   HYBRID qualification must prove continuous eligible **peer** wait across
+   replacement of an unaccepted encoded candidate. Distinct candidate IDs and
+   exact byte counts remain distinct; replacement is not acceptance, delivery
+   or payload equivalence. Carry the earliest eligibility only through the
+   source's contiguous `replaced -> exact_demand -> credit_eligible` records
+   for the same connection generation and timestamp, then end at an actual
+   grant. Both candidates must fit the unchanged pre-reservation peer credit;
+   peer/global credit, active grants and all four deferral counter witnesses
+   remain identical throughout that atomic bridge. Repeated replacement cannot
+   restart the1181250-us clock. Any
+   observed overdue interval fails, including one ending in interruption or
+   disposal. Missing/noncontiguous bridges, delayed successor eligibility,
+   feedback interruption, eligible withdrawal, generation change or unfinished
+   ownership cannot prove coverage. The independently required
+   `ContinuousEligiblePeerEpisodeCoverage` must pass; the original
+   `ExactDemandEpisodeCoverage` remains a diagnostic for distinct candidate
+   episodes and retains its mandatory original semantics under legacy F1.
+   This clarifies the existing peer guarantee without changing production
+   admission or promising delivery of a candidate that was never accepted.
 
 5. **Independent finite recovery outcomes.** Keep the 20-second service
    recovery maximum and the existing C3/C5 immutable cessation reference,
