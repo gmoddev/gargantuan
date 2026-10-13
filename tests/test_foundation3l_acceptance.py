@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest import mock
+import xml.etree.ElementTree as ET
 import zipfile
 
 import foundation3l_acceptance as A
@@ -334,7 +335,7 @@ class CITests(unittest.TestCase):
             Zip.writestr('qualified-source-commit.txt', Source + '\n')
         return Buffer.getvalue()
 
-    def Write(self):
+    def Write(self, Version=1):
         for Entry in self.Entries:
             for Key in ('Run', 'Jobs', 'ArtifactMetadata', 'Archive'):
                 Item = Entry[Key]
@@ -342,7 +343,7 @@ class CITests(unittest.TestCase):
                         json.dumps(self.Documents[Item['Path']]).encode())
                 (self.Root / Item['Path']).write_bytes(Data)
                 Item['Sha256'] = A.Digest(Data)
-        Data = json.dumps({"Format": "GargantuanFoundation3LCI", "Version": 1, "Jobs": self.Entries}).encode()
+        Data = json.dumps({"Format": "GargantuanFoundation3LCI", "Version": Version, "Jobs": self.Entries}).encode()
         Index = self.Root / 'index.json'
         Index.write_bytes(Data)
         return Index, A.Digest(Data)
@@ -386,6 +387,122 @@ class CITests(unittest.TestCase):
                 Index, Pin = self.Write()
                 with self.assertRaises(A.EvidenceError):
                     A.VerifyCI(Index, Pin, SOURCE, 'HYBRID_F1_V1')
+
+    def StaleHybridJob(self):
+        self.SetHybridArchives()
+        Job = self.Documents['1-Jobs.json']['jobs'][1]
+        Job.update(id=201, url='https://api.github.com/repos/gmoddev/gargantuan/actions/jobs/201',
+                   run_url='https://api.github.com/repos/gmoddev/gargantuan/actions/runs/101')
+        Job['steps'][0].update(status='pending', conclusion=None)
+        with zipfile.ZipFile(io.BytesIO(self.Archives['1-artifact.zip'])) as Zip:
+            Cases = ET.fromstring(Zip.read('build/ctest-results.xml')).findall('.//testcase')
+        Names = sorted(Case.get('name') for Case in Cases)
+        Count = len(Names)
+        Prefix = '2026-10-02T01:58:00Z '
+        Lines = [Prefix + 'ctest --test-dir build-sanitizers \\']
+        Lines += [Prefix + f'{Index}/{Count} Test #{Index}: {Name} .... Passed 0.01 sec'
+                  for Index, Name in enumerate(Names, 1)]
+        Lines += [Prefix + f'100% tests passed, 0 tests failed out of {Count}',
+                  '2026-10-02T01:59:01Z Artifact sanitizer-ci-diagnostics.zip successfully finalized. Artifact ID 2',
+                  '2026-10-02T01:59:01Z Artifact download URL: https://github.com/gmoddev/gargantuan/actions/runs/101/artifacts/2']
+        Data = ('\n'.join(Lines) + '\n').encode()
+        (self.Root / 'original-job.log').write_bytes(Data)
+        self.Entries[1]['OriginalJobLog'] = {'File': {'Path': 'original-job.log', 'Sha256': A.Digest(Data)},
+                                           'JobId': 201, 'RunId': 101, 'Attempt': 1, 'Url': Job['url'] + '/logs'}
+        return Job, Lines
+
+    def VerifyStaleHybrid(self, Version=2):
+        Index, Pin = self.Write(Version)
+        return A.VerifyCI(Index, Pin, SOURCE, 'HYBRID_F1_V1')
+
+    def ReplaceOriginalLog(self, Lines):
+        Data = ('\n'.join(Lines) + '\n').encode()
+        (self.Root / 'original-job.log').write_bytes(Data)
+        self.Entries[1]['OriginalJobLog']['File']['Sha256'] = A.Digest(Data)
+
+    def test_hybrid_v2_original_job_log_corroborates_stale_pending_step(self):
+        Job, _ = self.StaleHybridJob()
+        Result = self.VerifyStaleHybrid()
+        Evidence = Result['Jobs'][1]['CTestStepEvidence']
+        self.assertEqual(Result['InventoryVersion'], 2)
+        self.assertEqual(Evidence['ApiStep'], Job['steps'][0])
+        self.assertEqual(Evidence['Kind'], 'ORIGINAL_JOB_LOG_AND_JUNIT')
+        self.assertEqual(Evidence['PassedTests'], Result['Jobs'][1]['Tests'])
+        self.assertEqual(Job['steps'][0]['status'], 'pending')
+        with self.assertRaisesRegex(A.EvidenceError, 'required CTest step missing/failed'):
+            self.VerifyStaleHybrid(Version=1)
+        Index, Pin = self.Write(Version=2)
+        with self.assertRaisesRegex(A.EvidenceError, 'unknown CI inventory format'):
+            A.VerifyCI(Index, Pin, SOURCE, 'F1')
+
+    def test_hybrid_v2_failed_skipped_missing_duplicate_or_unknown_step_stays_fatal(self):
+        for Steps in ([], [{'status': 'completed', 'conclusion': 'failure'}],
+                      [{'status': 'completed', 'conclusion': 'skipped'}],
+                      [{'status': 'in_progress', 'conclusion': None}], [{'status': 'pending'}],
+                      [{'status': 'pending', 'conclusion': None}] * 2):
+            with self.subTest(Steps=Steps):
+                self.setUp()
+                Job, _ = self.StaleHybridJob()
+                Name = Job['steps'][0]['name']
+                Job['steps'] = [dict(Step, name=Name) for Step in Steps]
+                with self.assertRaisesRegex(A.EvidenceError, 'required CTest step missing/failed'):
+                    self.VerifyStaleHybrid()
+
+    def test_hybrid_v2_wrong_or_missing_original_log_provenance_stays_fatal(self):
+        for Field, Value in (('JobId', 202), ('RunId', 102), ('Attempt', 2), ('Url', 'https://example.com/log')):
+            with self.subTest(Field=Field):
+                self.setUp()
+                self.StaleHybridJob()
+                self.Entries[1]['OriginalJobLog'][Field] = Value
+                with self.assertRaises(A.EvidenceError):
+                    self.VerifyStaleHybrid()
+        self.setUp()
+        self.StaleHybridJob()
+        del self.Entries[1]['OriginalJobLog']
+        with self.assertRaisesRegex(A.EvidenceError, 'original job log provenance'):
+            self.VerifyStaleHybrid()
+
+    def test_hybrid_v2_original_full_ctest_and_artifact_counterexamples(self):
+        Changes = (
+            lambda Lines: Lines[1:],
+            lambda Lines: [Lines[0], *Lines],
+            lambda Lines: [*Lines[:1], *Lines[2:]],
+            lambda Lines: [Line.replace(' Passed ', ' Failed ') for Line in Lines],
+            lambda Lines: [Line.replace('0 tests failed', '1 tests failed') for Line in Lines],
+            lambda Lines: [*Lines, Lines[-3]],
+            lambda Lines: [Line.replace('Artifact ID 2', 'Artifact ID 3') for Line in Lines],
+            lambda Lines: [Line.replace('Artifact ID 2', 'Artifact ID 20').replace('/artifacts/2', '/artifacts/20')
+                           for Line in Lines],
+            lambda Lines: [Line.replace('/runs/101/artifacts/2', '/runs/102/artifacts/2') for Line in Lines],
+            lambda Lines: [Line.replace('build-sanitizers', 'build-sanitizers-other') for Line in Lines],
+            lambda Lines: [Line.replace('01:59:01Z', '02:01:00Z') for Line in Lines],
+            lambda Lines: [Line.replace('01:58:00Z', '00:59:00Z') for Line in Lines],
+            lambda Lines: [*Lines, '2026-10-02T01:59:02Z ##[error]execution failed'],
+        )
+        for Change in Changes:
+            with self.subTest(Change=Change):
+                self.setUp()
+                _, Lines = self.StaleHybridJob()
+                self.ReplaceOriginalLog(Change(Lines))
+                with self.assertRaises(A.EvidenceError):
+                    self.VerifyStaleHybrid()
+
+    def test_hybrid_v2_full_case_identity_and_log_pin_remain_required(self):
+        self.StaleHybridJob()
+        self.Entries[1]['OriginalJobLog']['File']['Sha256'] = '0' * 64
+        with self.assertRaisesRegex(A.EvidenceError, 'evidence hash mismatch'):
+            self.VerifyStaleHybrid()
+        self.setUp()
+        _, Lines = self.StaleHybridJob()
+        Lines[1] = Lines[1].replace(' .... ', '_wrong .... ')
+        self.ReplaceOriginalLog(Lines)
+        with self.assertRaisesRegex(A.EvidenceError, 'case identity mismatch'):
+            self.VerifyStaleHybrid()
+        self.setUp()
+        self.StaleHybridJob()
+        self.Documents['1-Run.json']['conclusion'] = 'failure'
+        with self.assertRaisesRegex(A.EvidenceError, 'CI is not successful'):
+            self.VerifyStaleHybrid()
 
     def DiagnosticMetadataReader(self, Reads, Sizes=None, ExtraNames=('diagnostics/scheduler.etl',), SourceData=None):
         # Model central-directory expanded sizes without allocating or reading

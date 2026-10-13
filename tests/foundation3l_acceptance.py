@@ -206,13 +206,79 @@ def ReadJUnit(Data, Required):
     return len(Cases)
 
 
+def VerifyCIJobLog(Root, Entry, Run, Job, Metadata, Step, XmlData):
+    """Corroborate one stale pending step without changing its raw API state."""
+    Original = Entry.get("OriginalJobLog")
+    Require(isinstance(Original, dict) and set(Original) == {"File", "JobId", "RunId", "Attempt", "Url"},
+            "missing/invalid original job log provenance")
+    for Field, Value in (("JobId", Job.get("id")), ("RunId", Run["id"]), ("Attempt", Run["run_attempt"])):
+        Require(type(Original.get(Field)) is int and Original[Field] > 0 and Original[Field] == Value,
+                "original job log identity mismatch")
+    JobUrl = f"https://api.github.com/repos/gmoddev/gargantuan/actions/jobs/{Job['id']}"
+    Require(Job.get("url") == JobUrl and Original["Url"] == JobUrl + "/logs" and
+            Job.get("run_url") == f"https://api.github.com/repos/gmoddev/gargantuan/actions/runs/{Run['id']}",
+            "original job log URL mismatch")
+    Data = Pinned(Root, Original["File"], 16 * 1024 * 1024)
+    Text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", Data.decode("utf-8"))
+    Lines = Text.splitlines()
+    Require(not any("##[error]" in Line for Line in Lines), "original job log contains a runner error")
+    Directory = {"Windows x64 / MSVC 19.50+ / Release": "build-ci",
+                 "Ubuntu 24.04 / Clang 19 / ASan + UBSan / Headless": "build-sanitizers",
+                 "Ubuntu 24.04 / Clang 19 / ASan + UBSan + LSan / GNS": "build-gns-sanitizers"}[Job["name"]]
+    Commands = [Number for Number, Line in enumerate(Lines)
+                if re.search(r"\bctest --test-dir " + Directory + r"(?=\s|$)", Line)]
+    Require(len(Commands) == 1, "missing/ambiguous original CTest execution")
+    Start = Commands[0]
+    Summaries = [(Number, re.search(r"(\d+)% tests passed, (\d+) tests failed out of (\d+)", Line))
+                 for Number, Line in enumerate(Lines) if Number > Start and "tests failed out of" in Line]
+    Require(len(Summaries) == 1 and Summaries[0][1] is not None, "missing/ambiguous original CTest summary")
+    End, Summary = Summaries[0]
+    Require(Summary[1] == "100" and Summary[2] == "0", "original CTest execution failed")
+    Cases = ET.fromstring(XmlData).findall(".//testcase")
+    Require(all(Case.get("status", "run") in ("run", "passed") and Case.find("skipped") is None
+                for Case in Cases), "original CTest/JUnit case skipped")
+    Names = {Case.get("name") for Case in Cases}
+    Count = len(Cases)
+    Require(int(Summary[3]) == Count, "original CTest/JUnit count mismatch")
+    Pattern = r"^\S+Z\s+(\d+)/(\d+) Test\s+#(\d+):\s+(\S+)\s+\.+\s+Passed\s+[0-9.]+ sec\s*$"
+    Rows = [(Number, re.fullmatch(Pattern, Line)) for Number, Line in enumerate(Lines)
+            if Start < Number < End and re.search(r"\d+/\d+ Test\s+#", Line)]
+    Require(len(Rows) == Count and all(Match is not None for _, Match in Rows),
+            "incomplete/failed original CTest rows")
+    Require([int(Match[1]) for _, Match in Rows] == list(range(1, Count + 1)) and
+            all(int(Match[2]) == Count for _, Match in Rows) and
+            all(int(Match[3]) > 0 for _, Match in Rows) and
+            len({Match[3] for _, Match in Rows}) == Count and
+            {Match[4] for _, Match in Rows} == Names, "original CTest/JUnit case identity mismatch")
+    Finalized = f"Artifact {Metadata['name']}.zip successfully finalized. Artifact ID {Metadata['id']}"
+    Uploads = [Number for Number, Line in enumerate(Lines) if re.search(re.escape(Finalized) + r"\s*$", Line)]
+    DownloadUrl = f"https://github.com/gmoddev/gargantuan/actions/runs/{Run['id']}/artifacts/{Metadata['id']}"
+    Links = [Number for Number, Line in enumerate(Lines)
+             if re.search("Artifact download URL: " + re.escape(DownloadUrl) + r"\s*$", Line)]
+    Require(len(Uploads) == 1 and len(Links) == 1 and End < Uploads[0] < Links[0],
+            "original job log artifact provenance mismatch")
+    Points = [Start, *[Number for Number, _ in Rows], End, Uploads[0], Links[0]]
+    Times = [Timestamp(Lines[Number].split()[0]) for Number in Points]
+    Require(Times == sorted(Times) and Timestamp(Job["started_at"]) <= Times[0] and
+            Times[-1] <= Timestamp(Job["completed_at"]) and
+            Times[-3] <= Timestamp(Metadata["created_at"]) <= Times[-2],
+            "original job log execution clock mismatch")
+    return {"Kind": "ORIGINAL_JOB_LOG_AND_JUNIT", "ApiStep": Step, "JobId": Job["id"],
+            "RunId": Run["id"], "Attempt": Run["run_attempt"], "ArtifactId": Metadata["id"],
+            "OriginalJobLogUrl": Original["Url"], "OriginalJobLogSha256": Digest(Data),
+            "PassedTests": Count, "CTestStartedUtc": Lines[Start].split()[0],
+            "CTestCompletedUtc": Lines[End].split()[0]}
+
+
 def VerifyCI(IndexPath, IndexSha256, ExpectedCommit, ExpectedContract="F1"):
     """Pinned raw GitHub API metadata plus original download ZIPs, never a PASS label."""
     Require(ExpectedContract in ("F1", "HYBRID_F1_V1"), "unknown qualification contract")
     Data = ReadBytes(IndexPath)
     Require(Digest(Data) == Hash(IndexSha256), "CI index pin mismatch")
     Index = JsonData(Data)
-    Require(Index.get("Format") == "GargantuanFoundation3LCI" and Index.get("Version") == 1,
+    Version = Index.get("Version")
+    Require(Index.get("Format") == "GargantuanFoundation3LCI" and type(Version) is int and
+            Version in (1, 2) and (Version == 1 or ExpectedContract == "HYBRID_F1_V1"),
             "unknown CI inventory format")
     Entries = Index.get("Jobs")
     Require(isinstance(Entries, list) and len(Entries) == len(CI_JOBS), "CI job inventory incomplete")
@@ -253,8 +319,11 @@ def VerifyCI(IndexPath, IndexSha256, ExpectedCommit, ExpectedContract="F1"):
                 Job.get("head_sha") == ExpectedCommit and Job.get("status") == "completed" and
                 Job.get("conclusion") == "success", "stale/failed CI job")
         Steps = [Step for Step in Job.get("steps", []) if Step.get("name") == StepName]
-        Require(len(Steps) == 1 and Steps[0].get("status") == "completed" and
-                Steps[0].get("conclusion") == "success", "required CTest step missing/failed")
+        Require(len(Steps) == 1, "required CTest step missing/failed")
+        Step = Steps[0]
+        StepSuccessful = Step.get("status") == "completed" and Step.get("conclusion") == "success"
+        Require(StepSuccessful or (Version == 2 and Step.get("status") == "pending" and
+                "conclusion" in Step and Step["conclusion"] is None), "required CTest step missing/failed")
         Require(Metadata.get("name") == ArtifactName and Metadata.get("expired") is False and
                 Metadata.get("workflow_run", {}).get("id") == Run["id"] and
                 Metadata.get("workflow_run", {}).get("head_sha") == ExpectedCommit,
@@ -295,11 +364,20 @@ def VerifyCI(IndexPath, IndexSha256, ExpectedCommit, ExpectedContract="F1"):
                 XmlData = File.read(16 * 1024 * 1024 + 1)
             Require(len(XmlData) <= 16 * 1024 * 1024, "oversized JUnit evidence")
             Count = ReadJUnit(XmlData, Required)
-        Observed.append({"Name": Name, "RunId": Run["id"], "Attempt": Run["run_attempt"],
+        StepEvidence = None
+        if not StepSuccessful:
+            StepEvidence = VerifyCIJobLog(Root, Entry, Run, Job, Metadata, Step, XmlData)
+        Observation = {"Name": Name, "RunId": Run["id"], "Attempt": Run["run_attempt"],
                          "Event": Run["event"], "StartedUtc": Job["started_at"], "CompletedUtc": Job["completed_at"],
-                         "ArtifactId": Metadata["id"], "Tests": Count, "ArchiveSha256": Digest(Archive)})
-    return {"State": "MEASURED_PASS", "SourceCommit": ExpectedCommit, "Contract": ExpectedContract, "Jobs": Observed,
-            "InventorySha256": Digest(Data)}
+                         "ArtifactId": Metadata["id"], "Tests": Count, "ArchiveSha256": Digest(Archive)}
+        if StepEvidence is not None:
+            Observation["CTestStepEvidence"] = StepEvidence
+        Observed.append(Observation)
+    Result = {"State": "MEASURED_PASS", "SourceCommit": ExpectedCommit, "Contract": ExpectedContract, "Jobs": Observed,
+              "InventorySha256": Digest(Data)}
+    if Version == 2:
+        Result["InventoryVersion"] = Version
+    return Result
 
 
 def VerifyNativeRuntimeInventory(PackageData, DeploymentFiles):

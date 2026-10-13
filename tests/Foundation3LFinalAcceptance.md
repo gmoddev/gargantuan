@@ -37,6 +37,27 @@ All required source, digest, job, test-identity and outcome checks remain.
 This offline parsing correction uses the A/B procedure below; it does not
 relabel the already-qualified native candidate or require dropping raw traces.
 
+CI inventory version1 and legacy F1 keep their strict API-step requirement.
+Explicit HYBRID inventory version2 may corroborate a unique required step whose
+raw API state is `pending` with a null conclusion, only when the exact-source
+run and job are both terminal successes. Missing, duplicated, failed, skipped,
+running or unknown required-step states cannot use this path. The original
+metadata is never rewritten; the result records its pending step verbatim.
+
+The affected job entry adds `OriginalJobLog` with `File` (`Path`, `Sha256`),
+integer `JobId`, `RunId`, `Attempt`, and the exact original GitHub job-log API
+`Url`. This original log is pinned and bounded to16MiB. It must identify one
+timestamped CTest invocation, a complete sequential passed case list and one
+zero-failure summary. Its full case names and count must exactly match the
+artifact's JUnit, with no skipped cases. The original artifact finalization and
+download URL must match the independently pinned artifact and workflow run;
+execution and upload must fall within the job's timestamps. Existing artifact
+digest, source marker, contract, attempt and required-test checks remain fatal.
+An incomplete log, a later successful rerun, another job's log, a summary alone
+or a caller-supplied PASS label cannot substitute. Version2 preserves this log
+corroboration separately from the unchanged raw API step state. Qualify the
+offline reader as analyzer B; its evidence remains the original native source A.
+
 `foundation3l_acceptance.py` is an offline final conjunction for the fixed
 canonical workload in `PhysicalFundingGateReview3L.md`. It does not start a
 process on either physical endpoint, change acceptance bounds, close KI-006,
