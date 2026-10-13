@@ -541,6 +541,8 @@ namespace {
 		std::filesystem::remove(RpcClientPath);
 		std::filesystem::remove(RpcDirectory);
 		std::filesystem::remove(DirectDirectory);
+		std::filesystem::remove(LifetimePath);
+		std::filesystem::remove(LifetimeDirectory);
 		std::filesystem::remove(Root);
 	}
 
