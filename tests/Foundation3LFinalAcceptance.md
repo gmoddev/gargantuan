@@ -154,6 +154,12 @@ The final typed conjunction requires each provider's:
   include unprinted ticks: they must bound every printed observation, remain
   monotonic, preserve nonnegative coverage and the16384-record cap; equality
   with sparse printed extrema is not required;
+- source-bound live final-Name observations: prospective bounded recovery
+  cohorts require `source_replica_v1` witnesses for all32 structural/mixed
+  targets on every client. Authoritative source identity must match the server;
+  local identity remains generation-safe, unique and diagnostic within the
+  current replica epoch. Missing/ambiguous/stale binding and wrong Name remain
+  fatal. Server causal/native ACK evidence cannot substitute for the client map;
 - role-local complete process sweeps, actual host/NIC observations and bounded
   evidence inventories.
 

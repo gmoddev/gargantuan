@@ -666,6 +666,7 @@ function Assert-RecoveryRecords {
 	$ServerReady = @(Get-Records -Path $Server.OutputPath -Kind 'Server' | Where-Object { $_.event -ceq 'ready' -and $_.run -ceq $RunId })
 	$CohortConnections = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 	$CohortPlayers = [Collections.Generic.HashSet[long]]::new()
+	$FinalNameIdentityContract = $null
 	foreach ($Slot in 0..31) {
 		$Client = $Clients[$Slot]
 		$ClientOutput = Get-Records -Path $Client.OutputPath -Kind 'Client'
@@ -723,8 +724,35 @@ function Assert-RecoveryRecords {
 				throw "client $Slot lacks 32 final $Case ObjectId/Name observations"
 			}
 			$Seen = [Collections.Generic.HashSet[int]]::new()
+			$LocalIdentities = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+			$ReplicaEpoch = $null
 			$CaseIndex = if ($Case -eq 'structural') { 1 } else { 2 }
 			foreach ($Name in $Names) {
+				$IdentityContract = if ($Name.ContainsKey('identity_contract')) { $Name.identity_contract } else { 'legacy_literal_object_id' }
+				if ($null -eq $FinalNameIdentityContract) { $FinalNameIdentityContract = $IdentityContract }
+				if ($IdentityContract -cne $FinalNameIdentityContract -or
+					$IdentityContract -cnotin @('legacy_literal_object_id', 'source_replica_v1') -or
+					($NewEnrollment -and $IdentityContract -cne 'source_replica_v1')) {
+					throw 'recovery final Name identity contract missing, mixed or unknown'
+				}
+				if ($IdentityContract -ceq 'source_replica_v1') {
+					$Fields = @('event', 'run_id', 'slot', 'nonce', 'case', 'index', 'object_slot', 'object_generation',
+						'name_bytes', 'letter', 'identity_contract', 'local_object_slot', 'local_object_generation', 'replica_epoch', '__line')
+					if ($Name.Count -ne $Fields.Count -or @($Fields | Where-Object { -not $Name.ContainsKey($_) }).Count) {
+						throw 'recovery source replica identity schema partial or extended'
+					}
+					$LocalSlot = Get-RecoveryUnsigned $Name 'local_object_slot'
+					$LocalGeneration = Get-RecoveryUnsigned $Name 'local_object_generation'
+					$Epoch = Get-RecoveryUnsigned $Name 'replica_epoch'
+					if ($null -eq $ReplicaEpoch) { $ReplicaEpoch = $Epoch }
+					if ($LocalSlot -le 0 -or $LocalSlot -gt [uint32]::MaxValue -or
+						$LocalGeneration -le 0 -or $LocalGeneration -gt [uint32]::MaxValue -or
+						$Epoch -le 0 -or $Epoch -ne $ReplicaEpoch -or -not $LocalIdentities.Add("${LocalSlot}:${LocalGeneration}")) {
+						throw 'recovery source replica identity has invalid, duplicate or mixed live local bindings'
+					}
+				} elseif (@('local_object_slot', 'local_object_generation', 'replica_epoch') | Where-Object { $Name.ContainsKey($_) }) {
+					throw 'legacy recovery identity cannot partially claim source replica binding'
+				}
 				$Index = [int]$Name.index
 				$Opportunity = if ($Index -lt 16) { 479 } else { 480 }
 				$Letter = [char]([int][char]'a' + (($CaseIndex * 7 + $Opportunity + $Index) % 26))
@@ -747,7 +775,7 @@ function Assert-RecoveryRecords {
 	$TotalRetainedAcrossCases = 0L
 	foreach ($Observation in $CaseObservations) { $TotalRetainedAcrossCases += [long]$Observation.ExactRetainedWorkBytes }
 	return [ordered]@{ State = $State; Cases = @($CaseObservations);
-		ExactRetainedWorkBytes = $TotalRetainedAcrossCases }
+		ExactRetainedWorkBytes = $TotalRetainedAcrossCases; FinalNameIdentityContract = $FinalNameIdentityContract }
 }
 
 function Start-LoggedProcess {

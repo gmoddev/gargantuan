@@ -2112,3 +2112,74 @@ exact-source hosted CI, and one justified fresh native32 qualification with
 fresh identity. Then the four-client prerequisite, Local32, real-TLS Node32
 and final independent acceptance remain mandatory. Owned native processes and
 port39450 were absent after the failed run. KI-006 OPEN; PR6 draft; no3M/merge.
+
+## 23. Client source identity observation correction (2026-10-13)
+
+Corrected source `f2b1e800872783cf1d769daf49c5507ba65772f5`, tree
+`c99571f206b770d18f7e1cf32f5b0a20765c4cc5`, passes all eight original hosted
+jobs: native push38408918240/PR38408928583, GNS38408918543/38408928138 and
+official all-false manual38408917539. JUnit totals97/53/97/53/11/11/97/53 have
+zero failures/errors/skips. Independent canonical CI/package receipt SHA256
+`c245be09f228a81f591c06a2925b203a23e924ca2e467c1e363456398215a763` passes;
+own raw-log/ZIP-marker/commit/tree review also passes. No rerun substitutes for
+an original outcome.
+
+Fresh native32 `df023fb3-7998-4c95-9f95-e2cf3b6ae1f3` exits1 after269.9368351s:
+`client 0 structural observed a wrong ObjectId or final Name`. The107 original
+members/150320877 bytes remain sealed under index
+`6b2b662747443b86fbf722fdd09216246a0e6086ed36cff33777f9ee3edb3bc7`.
+Owned native processes and UDP39450 owners are absent. Strict publication V2
+replay passes (211479 accepted/client-handled states, no unresolved obligations),
+join SHA256 `3e2259efe2825f5e5dbd802a796004436f33cf951c4a749ab650a6ce4825dbe0`.
+Whole native32 remains FAIL.
+
+Independent existing subset replay passes all32 peers/7177 qualified grants,
+Main74774us, turnover107068us, eligible admission28247us (broader request wait
+518783us) and all64 origin-bound ordinary FIFO certificates, maximum9180us.
+Accepted=first-sent=ACKed=retired2063858720 bytes with zero outstanding,
+terminal release or active grants. All96 recovery service cohorts pass; server
+C3/C5 causal prefixes pass gameplay/structural/mixed. The structural prefix
+converges16745346us against32320365us, conserving746418432 causal bytes.
+Subset bounds/pin summary SHA256
+`15be4551c71ad476e71686e3446964f6d45e5225859effda052854f72caaa59d`.
+These are independent measured subsets, not a full client identity proof.
+
+The first failing comparison is server authoritative607:1 versus client-local
+1265:1. The observed Name is exactly24576 `s` bytes. All2048 final observations
+have correct Names and tuples but compare different identity namespaces.
+PlayerHost emits the observed Instance's local GetObjectId; ReplicaApplier
+creates separate Instances and resolves authoritative source IDs through its
+receiver map, as the canonical loopback architecture requires. This is a
+demonstrated qualification producer defect; no stale production mapping or
+wrong Name is established.
+
+Raw CausalV2 records server source coverage, accepted/native ACK/retired work;
+client publication traces cover GCHR. Neither records these GRPL live bindings.
+Structural indices0 and25 both have final Name `s`, so swapping their bindings
+can preserve Name/index/local-ID observations and server causal replay while
+violating target identity. Dropping the comparison or retrospectively inferring
+the source key would weaken qualification. The old run is not promoted.
+
+The smallest correction uses the existing private GameSessionTestAccess seam
+to capture full source IDs from the live replica map for the actual observed
+Instances. Both entrypoints reject non-Main callers before state access. Batch
+size1–32 and the existing65536-object cap bound one traversal to at most2097152
+comparisons, once per recovery case; no reverse map or retained ownership is
+added. Live registry/scope, full local generation, pointer uniqueness, unique
+source association, forward Resolve and stable current epoch/root are checked.
+The host validates the complete batch before emitting `source_replica_v1`
+records containing source/local IDs and epoch. Missing binding fails closed.
+
+The reader still compares the authoritative source ID and exact final Name;
+new cohort evidence additionally requires complete uniform witness schema,
+positive unique local generations and a common current batch epoch. Legacy
+immediate-cohort literal semantics remain strict. Focused regressions use actual
+replica materialization, equal Names/reversed order, unpublish, generation/epoch
+replacement, Destroy/Reset and non-Main calls, plus forged-source and malformed
+witness counterexamples. Observer overhead is not yet measured. Production
+replication, ownership, scheduler, deadlines and recovery are unchanged.
+
+Affected native preflight and fresh exact-source CI must qualify this source
+before any justified corrective native32 capture. No blind retry, source-name
+heuristic or transport redesign is selected. Physical providers and final
+acceptance remain pending; KI-006 OPEN and PR6 draft.

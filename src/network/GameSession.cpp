@@ -27,6 +27,8 @@
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationTransport.hpp"
 #include "gargantuan/network/Scheduler.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/Players.hpp"
 
@@ -2562,6 +2564,46 @@ namespace gargantuan::network {
 
 	bool detail::GameSessionTestAccess::VerifySpatialIndex(const GameSession &Session) {
 		return !Session.State->SpatialValidationRequested && Session.State->SpatialValidationPassed;
+	}
+	std::optional<std::vector<detail::ClientReplicaIdentity>> detail::GameSessionTestAccess::ReadClientReplicaIdentities(
+		const GameSession &Session, std::span<const std::shared_ptr<Instance>> Observed) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return {};
+		if (!Session.State || Session.State->Configuration.Role != GameSessionRole::Client ||
+			Session.State->Status != GameSessionStatus::Ready) return {};
+		return ReadClientReplicaIdentities(Session.State->Replica, Observed);
+	}
+	std::optional<std::vector<detail::ClientReplicaIdentity>> detail::GameSessionTestAccess::ReadClientReplicaIdentities(
+		const ReplicaApplier &Replica, std::span<const std::shared_ptr<Instance>> Observed) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return {};
+		// The existing replica object cap bounds the one map traversal; the farm
+		// supplies at most 32 live final observations, once per recovery case.
+		const auto Epoch = Replica.GetEpoch();
+		const auto Root = Replica.GetReplicaRoot();
+		if (Observed.empty() || Observed.size() > 32 || !Epoch.IsValid() || !Root ||
+			Root->GetDestroyed() || Root->IsDestroying() || Replica.Receiver.Objects.size() > MaximumSnapshotObjects) return {};
+		std::vector<ClientReplicaIdentity> Result(Observed.size());
+		for (std::size_t Index = 0; Index < Observed.size(); ++Index) {
+			const auto &Object = Observed[Index];
+			if (!Object || Object->GetDestroyed() || Object->IsDestroying() || !Object->GetObjectId().IsValid() ||
+				Object->GetReplicationScopeId() != Root->GetObjectId() ||
+				ObjectRegistry::Get().Lookup(Object->GetObjectId()) != Object) return {};
+			for (std::size_t Prior = 0; Prior < Index; ++Prior)
+				if (Observed[Prior] == Object || Observed[Prior]->GetObjectId() == Object->GetObjectId()) return {};
+			Result[Index].Local = Object->GetObjectId(); Result[Index].Epoch = Epoch;
+		}
+		for (const auto &[WireId, InstanceValue] : Replica.Receiver.Objects) {
+			for (std::size_t Index = 0; Index < Observed.size(); ++Index) {
+				if (InstanceValue != Observed[Index]) continue;
+				if (!WireId.IsValid() || Result[Index].Source.IsValid() ||
+					InstanceValue->GetObjectId() != Result[Index].Local || InstanceValue->GetDestroyed() ||
+					InstanceValue->IsDestroying()) return {};
+				Result[Index].Source = WireId.ToObjectId();
+			}
+		}
+		for (std::size_t Index = 0; Index < Result.size(); ++Index)
+			if (!Result[Index].Source.IsValid() || Replica.Resolve(Result[Index].Source) != Observed[Index]) return {};
+		if (Replica.GetEpoch() != Epoch || Replica.GetReplicaRoot() != Root) return {};
+		return Result;
 	}
 	void detail::GameSessionTestAccess::RequestSpatialValidation(GameSession &Session) {
 		Session.State->SpatialValidationRequested = true;

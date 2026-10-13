@@ -13,10 +13,15 @@
 
 namespace gargantuan::network {
 	class GameSession;
+	class ReplicaApplier;
 	struct ReplicationMetrics;
 }
 
 namespace gargantuan::network::detail {
+	struct ClientReplicaIdentity {
+		ObjectId Source, Local;
+		ReplicationEpoch Epoch;
+	};
 	enum class StructuralCausalKind : std::uint8_t {
 		Prepared, Accepted, Rejected, NoFrame, PendingAdded, PendingCancelled, PendingReplaced, PeerRemoved, Delivery, Retired,
 		PlanningInstalled,
@@ -103,6 +108,12 @@ namespace gargantuan::network::detail {
 
 	class GameSessionTestAccess final {
 	  public:
+		// Main-owned qualification observation only. Source and local identity
+		// domains stay distinct; no lookup by Name/path or persistent reverse map.
+		[[nodiscard]] static std::optional<std::vector<ClientReplicaIdentity>> ReadClientReplicaIdentities(
+			const GameSession &Session, std::span<const std::shared_ptr<Instance>> Observed);
+		[[nodiscard]] static std::optional<std::vector<ClientReplicaIdentity>> ReadClientReplicaIdentities(
+			const ReplicaApplier &Replica, std::span<const std::shared_ptr<Instance>> Observed);
 		// Internal A/B fixture only. No runtime configuration or wire policy.
 		static void SetIncrementalEncodingOptimizationsEnabled(ReplicationCoordinator &Coordinator, bool Enabled) {
 			Coordinator.IncrementalEncodingOptimizationsEnabled = Enabled;

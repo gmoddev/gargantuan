@@ -85,6 +85,35 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-13 — Corrected V2 publication PASS; client identity witness defect found.**
+Source `f2b1e800872783cf1d769daf49c5507ba65772f5` passes all eight original
+hosted jobs and independent canonical CI/package verification. Its sole fresh
+native32 run `df023fb3-7998-4c95-9f95-e2cf3b6ae1f3` remains **FAIL**, exit1
+after269.937s. Original107 files/150320877 bytes are sealed; cleanup has no
+owned host processes or UDP39450 owner. Strict V2 publication replay passes,
+including211479 accepted/client-handled states and zero unresolved obligations.
+Independent subsets pass all32 peers/7177 grants, Main74774us, turnover107068us,
+eligible admission28247us and all64 ordinary FIFO certificates (maximum9180us).
+Accepted=first-sent=ACKed=retired2063858720 bytes; no terminal debt remains.
+These results cannot replace the missing client identity witness.
+
+The first rejection compares server source ObjectId607:1 against client local
+Instance ObjectId1265:1. All2048 structural/mixed observations have correct
+final Name, length and tuple, but the producer records a different identity
+domain. Canonical replication deliberately maps source IDs to separate local
+Instances. Existing server causal/ACK evidence does not capture that live
+client binding; duplicate final Names make index/Name substitution unsafe.
+The original run cannot establish exact target identity and is not relabeled.
+
+The focused correction reads the existing live replica map through the private
+Main-only qualification seam, validates at most32 observed Instances and emits
+`source_replica_v1` source/local full identities plus current replica epoch.
+Missing, stale, foreign, destroyed, duplicate or ambiguous bindings fail closed.
+Exact authoritative identity and final Name checks remain fatal; production
+replication, D03 health and scheduling are unchanged. Preflight and fresh
+exact-source qualification are required. KI-006 remains OPEN; no provider or
+final acceptance gate is closed.
+
 **2026-10-13 — Contract-aware CI PASS; fresh native32 evidence corrections pending.**
 Candidate `29884da787589cbe4bd2c10fd9d284c841ed97e1` passes all six original
 Windows/Linux/GNS hosted jobs and both official package jobs. Independent

@@ -11,9 +11,11 @@
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationTransport.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
+#include "../src/network/GameSessionTestAccess.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "ProtocolUtf8ParityFixture.hpp"
 #include "BoundedReplicationEncodingFixture.hpp"
 #include "FarmRecoveryObservationFixture.hpp"
@@ -93,6 +95,78 @@ namespace {
 				Publish && Publish->Object == Object)
 				return Publish;
 		return nullptr;
+	}
+
+	void TestClientReplicaIdentityObservations() {
+		using Access = gargantuan::network::detail::GameSessionTestAccess;
+		auto World = std::make_shared<DataModel>();
+		auto First = std::make_shared<Part>(), Second = std::make_shared<Part>();
+		First->SetName("same"); Second->SetName("same");
+		First->SetParent(World); Second->SetParent(World);
+		const auto FirstSource = First->GetObjectId(), SecondSource = Second->GetObjectId();
+		ReplicationCoordinator Coordinator(World);
+		ReplicaApplier Replica;
+		auto Baseline = Coordinator.AddPeer({703, 1}, ReplicationEpoch(11));
+		Check(Baseline.Succeeded() && Replica.ApplyFrame(*Baseline.Frame).Succeeded(),
+			"identity observation establishes an actual live source-to-replica map");
+		const auto FirstLocal = Replica.Resolve(FirstSource), SecondLocal = Replica.Resolve(SecondSource);
+		if (!FirstLocal || !SecondLocal) { Check(false, "identity observation requires both actual live replicas"); return; }
+		const std::array Observed{SecondLocal, FirstLocal};
+		for (const auto Domain : {ExecutionDomain::Worker, ExecutionDomain::IO, ExecutionDomain::Simulation}) {
+			ExecutionDomainScope Scope(Domain);
+			Check(!Access::ReadClientReplicaIdentities(Replica, Observed),
+				"non-Main qualification caller is rejected before traversing the live replica");
+		}
+		const auto Identities = Access::ReadClientReplicaIdentities(Replica, Observed);
+		Check(FirstLocal->GetObjectId() != FirstSource && SecondLocal->GetObjectId() != SecondSource &&
+			FirstLocal->GetName() == SecondLocal->GetName() && Identities && Identities->size() == 2 &&
+			(*Identities)[0].Source == SecondSource && (*Identities)[0].Local == SecondLocal->GetObjectId() &&
+			(*Identities)[1].Source == FirstSource && (*Identities)[1].Local == FirstLocal->GetObjectId() &&
+			(*Identities)[0].Epoch == ReplicationEpoch(11) && (*Identities)[1].Epoch == ReplicationEpoch(11),
+			"distinct local/source generations are joined by exact live binding, never duplicate Name or array order");
+		const std::array Duplicate{FirstLocal, FirstLocal};
+		const std::array<std::shared_ptr<Instance>, 1> Null{nullptr};
+		const std::array<std::shared_ptr<Instance>, 1> Foreign{First};
+		std::array<std::shared_ptr<Instance>, 33> Oversized{};
+		Check(!Access::ReadClientReplicaIdentities(Replica, Duplicate) && !Access::ReadClientReplicaIdentities(Replica, Null) &&
+			!Access::ReadClientReplicaIdentities(Replica, Foreign) && !Access::ReadClientReplicaIdentities(Replica, Oversized) &&
+			!Access::ReadClientReplicaIdentities(Replica, {}),
+			"duplicate/ambiguous observations, null, foreign scope and empty/oversized batches fail closed");
+		ReplicationFrame Remove{ReplicationProtocolVersion, ReplicationMessageKind::Incremental, ReplicationEpoch(11),
+			ReliableReplicationSequence(2), {}, {{ReplicationEpoch(11), UnpublishReplication{FirstSource}}}};
+		Check(Replica.ApplyFrame(Remove).Succeeded() && !Replica.Resolve(FirstSource) &&
+			!Access::ReadClientReplicaIdentities(Replica, std::array{FirstLocal}),
+			"unpublished source cannot retain an observation through its stale local replica pointer");
+		// A complete subsequent epoch reuses the same wire slot with a new
+		// generation. It constructs a new live object and cannot bind the old one.
+		const ObjectId ReusedSource{FirstSource.Slot, static_cast<std::uint32_t>(FirstSource.Generation + 1)};
+		auto Reused = *Baseline.Frame;
+		Reused.Epoch = ReplicationEpoch(12);
+		bool ReusedPublication = false;
+		for (auto &Operation : Reused.Operations) {
+			Operation.Epoch = Reused.Epoch;
+			if (auto *Publish = std::get_if<PublishReplication>(&Operation.Intent); Publish && Publish->Object == FirstSource) {
+				Publish->Object = ReusedSource; ReusedPublication = true;
+			}
+		}
+		Check(ReusedPublication, "reused-generation fixture changes the actual baseline source identity");
+		Check(Replica.ApplyFrame(Reused).Succeeded() && !Replica.Resolve(FirstSource),
+			"fresh epoch accepts only the full reused source generation");
+		const auto ReusedLocal = Replica.Resolve(ReusedSource);
+		const auto ReusedIdentity = ReusedLocal ? Access::ReadClientReplicaIdentities(Replica, std::array{ReusedLocal}) : std::nullopt;
+		Check(ReusedIdentity && (*ReusedIdentity)[0].Source == ReusedSource &&
+			(*ReusedIdentity)[0].Local == ReusedLocal->GetObjectId() && (*ReusedIdentity)[0].Epoch == ReplicationEpoch(12) &&
+			!Access::ReadClientReplicaIdentities(Replica, std::array{FirstLocal}) &&
+			!Access::ReadClientReplicaIdentities(Replica, std::array{SecondLocal}),
+			"epoch replacement invalidates every old replica binding even while a test retains its old Instance");
+		if (ReusedLocal) {
+			ReusedLocal->Destroy();
+			Check(!Access::ReadClientReplicaIdentities(Replica, std::array{ReusedLocal}),
+				"destroyed local target cannot certify a source binding");
+		}
+		Replica.Reset();
+		Check(!Replica.GetEpoch().IsValid() && !Access::ReadClientReplicaIdentities(Replica, Observed),
+			"reset replica owns no epoch or valid historical source/local witness");
 	}
 
 	void TestRepeatedReplicaPropertyPreflight() {
@@ -639,6 +713,7 @@ int main() {
 	Check(test::RunFarmRecoveryObservationTests(), "farm recovery stage comes from the replicated DataModel");
 	TestReplicaRenderDirtiness();
 	TestRepeatedReplicaPropertyPreflight();
+	TestClientReplicaIdentityObservations();
 	TestRevisionedStructuralMaterialization();
 	TestStructuralTemplateDifferential();
 

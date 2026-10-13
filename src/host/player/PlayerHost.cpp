@@ -462,13 +462,23 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 									if (Complete) Observed[Index] = Children.front();
 								}
 								if (Complete) {
+									if (!Session)
+										throw std::runtime_error("[Qualification:Identity] Recovery observations lack an active client session");
+									const auto Identities = network::detail::GameSessionTestAccess::ReadClientReplicaIdentities(
+										*Session, Observed);
+									if (!Identities || Identities->size() != Observed.size())
+										throw std::runtime_error("[Qualification:Identity] Recovery observations lack exact live source-to-replica bindings");
 									FarmRecoveryNamesObserved[CaseIndex] = true;
 									for (std::size_t Index = 0; Index < Observed.size(); ++Index)
 										std::cout << "[Qualification:Client] event=name_object run_id=" << FarmRunId
 											<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
 											<< " case=" << (CaseIndex == 1 ? "structural" : "mixed") << " index=" << Index
-											<< " object_slot=" << Observed[Index]->GetObjectId().Slot
-											<< " object_generation=" << Observed[Index]->GetObjectId().Generation
+											<< " identity_contract=source_replica_v1"
+											<< " object_slot=" << (*Identities)[Index].Source.Slot
+											<< " object_generation=" << (*Identities)[Index].Source.Generation
+											<< " local_object_slot=" << (*Identities)[Index].Local.Slot
+											<< " local_object_generation=" << (*Identities)[Index].Local.Generation
+											<< " replica_epoch=" << (*Identities)[Index].Epoch.Value()
 											<< " name_bytes=24576 letter=" << static_cast<char>('a' +
 												(CaseIndex * 7 + (Index < 16 ? 479 : 480) + Index) % 26) << '\n';
 									std::cout << "[Qualification:Client] event=names_observed run_id=" << FarmRunId

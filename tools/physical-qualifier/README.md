@@ -334,6 +334,14 @@ retire before their due tick. Reentry starts a fresh lifetime. Missing, duplicat
 stale or wrong-generation ends and unexplained due changes remain fatal. V1
 traces retain their original strict interpretation; mixed schema versions reject.
 
+Prospective bounded recovery cohorts also require `source_replica_v1` final-Name
+witnesses. The native client records authoritative source IDs from the actual
+live replica map, alongside local IDs and epoch. The reader retains exact
+source-ID/Name checks and rejects missing, partial, mixed, stale or ambiguous
+witnesses. Local runtime IDs are not server IDs. Historical logs retain their
+original literal comparison and verdict; server causal/ACK replay alone cannot
+repair a missing client binding.
+
 The fixed baseline/recovery frame ceilings cover their existing 300/420-second
 role-local runtime budgets at the Player's 16,667-us network cadence, including
 its first unslept frame: 18,001/25,201 client frames and the existing extra 1,000

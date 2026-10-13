@@ -175,6 +175,8 @@ try {
 	# establish service with a later complete ten-RPC/ten-Event cohort. The old
 	# immediate-cohort evidence is tested unchanged below.
 	$LegacyClients = @($Clients | ForEach-Object { ,([IO.File]::ReadAllLines($_.ErrorPath)) })
+	$LegacyNameOutputs = @($Clients | ForEach-Object { ,([IO.File]::ReadAllLines($_.OutputPath)) })
+	$BoundNameOutputs = @()
 	$ReadyRows = @(0..31 | ForEach-Object { "[Qualification:Server] event=ready run=$RunId nonce=$($ExpectedNonces[$_]) connection_slot=$($_ + 1) connection_generation=1 player_id=$($_ + 1)" })
 	$BeforeCohortOutput = [IO.File]::ReadAllLines($Server.OutputPath)
 	[IO.File]::WriteAllLines($Server.OutputPath, @($ReadyRows) + @($BeforeCohortOutput))
@@ -217,9 +219,59 @@ try {
 		$New = @($Original | Where-Object { $_ -notmatch 'event=client_probes ' }) + @($Lines)
 		$CohortClients += ,$New
 		[IO.File]::WriteAllLines($Clients[$Slot].ErrorPath, $New)
+		$BoundNames = @($LegacyNameOutputs[$Slot] | ForEach-Object {
+			if ($_ -match 'event=name_object .* index=([0-9]+) ') {
+				$_ + " identity_contract=source_replica_v1 local_object_slot=$(1000 + [int]$Matches[1]) local_object_generation=7 replica_epoch=3"
+			} else { $_ }
+		})
+		$BoundNameOutputs += ,$BoundNames
+		[IO.File]::WriteAllLines($Clients[$Slot].OutputPath, $BoundNames)
 	}
 	$CohortPass = Assert-RecoveryRecords -Server $Server -Clients $Clients -ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections
-	if ($CohortPass.State -ne 'MEASURED_PASS') { throw 'bounded recovery did not retain slow first cohort and qualify later service' }
+	if ($CohortPass.State -ne 'MEASURED_PASS' -or $CohortPass.FinalNameIdentityContract -cne 'source_replica_v1') {
+		throw 'bounded recovery did not retain slow first cohort and exact source-to-local identity service'
+	}
+	function Assert-NameRejected([string[]]$Lines, [string]$Reason) {
+		[IO.File]::WriteAllLines($Clients[0].OutputPath, $Lines)
+		$Rejected = $false
+		try { [void](Assert-RecoveryRecords -Server $Server -Clients $Clients -ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) }
+		catch {
+			if ($_.Exception.Message -notmatch 'identity|ObjectId|final Name|unsigned (local_object_slot|local_object_generation|replica_epoch)') { throw }
+			$Rejected = $true
+		}
+		if (-not $Rejected) { throw "invalid live source identity accepted: $Reason" }
+		[IO.File]::WriteAllLines($Clients[0].OutputPath, $BoundNameOutputs[0])
+	}
+	foreach ($Mutation in @('source-swap-same-name', 'source-generation', 'local-as-source', 'local-zero', 'local-negative',
+		'local-generation', 'local-overflow', 'duplicate-local', 'epoch-zero', 'epoch-mixed', 'epoch-missing',
+		'unknown-version', 'missing-version', 'extra-field', 'wrong-name', 'wrong-length')) {
+		$Changed = @($BoundNameOutputs[0] | ForEach-Object {
+			$Row = $_
+			if ($_ -match 'event=name_object .* case=structural index=0 ') {
+				switch ($Mutation) {
+					'source-swap-same-name' { $Row = $Row.Replace('object_slot=100 object_generation=1', 'object_slot=125 object_generation=1') }
+					'source-generation' { $Row = $Row.Replace('object_generation=1 name_bytes=', 'object_generation=2 name_bytes=') }
+					'local-as-source' { $Row = $Row.Replace('object_slot=100 object_generation=1', 'object_slot=1000 object_generation=7') }
+					'local-zero' { $Row = $Row.Replace('local_object_slot=1000', 'local_object_slot=0') }
+					'local-negative' { $Row = $Row.Replace('local_object_slot=1000', 'local_object_slot=-1') }
+					'local-generation' { $Row = $Row.Replace('local_object_generation=7', 'local_object_generation=0') }
+					'local-overflow' { $Row = $Row.Replace('local_object_slot=1000', 'local_object_slot=4294967296') }
+					'duplicate-local' { $Row = $Row.Replace('local_object_slot=1000', 'local_object_slot=1001') }
+					'epoch-zero' { $Row = $Row.Replace('replica_epoch=3', 'replica_epoch=0') }
+					'epoch-mixed' { $Row = $Row.Replace('replica_epoch=3', 'replica_epoch=4') }
+					'epoch-missing' { $Row = $Row.Replace(' replica_epoch=3', '') }
+					'unknown-version' { $Row = $Row.Replace('source_replica_v1', 'source_replica_v2') }
+					'missing-version' { $Row = $Row.Replace(' identity_contract=source_replica_v1', '') }
+					'extra-field' { $Row += ' ignored_binding=1' }
+					'wrong-name' { $Row = $Row.Replace('letter=s', 'letter=t') }
+					'wrong-length' { $Row = $Row.Replace('name_bytes=24576', 'name_bytes=24575') }
+				}
+			}
+			$Row
+		})
+		if (($Changed -join "`n") -ceq ($BoundNameOutputs[0] -join "`n")) { throw "identity negative did not change: $Mutation" }
+		Assert-NameRejected -Lines $Changed -Reason $Mutation
+	}
 	function Assert-CohortRejected([string[]]$Lines, [string]$Reason) {
 		[IO.File]::WriteAllLines($Clients[0].ErrorPath, $Lines)
 		$Rejected = $false
@@ -276,7 +328,10 @@ try {
 	if (-not $DeadlineRejected) { throw 'immutable server20s deadline plus1 was accepted' }
 	[IO.File]::WriteAllLines($Server.ErrorPath, $OriginalError)
 	[IO.File]::WriteAllLines($Server.OutputPath, $BeforeCohortOutput)
-	for ($Slot = 0; $Slot -lt 32; $Slot++) { [IO.File]::WriteAllLines($Clients[$Slot].ErrorPath, $LegacyClients[$Slot]) }
+	for ($Slot = 0; $Slot -lt 32; $Slot++) {
+		[IO.File]::WriteAllLines($Clients[$Slot].ErrorPath, $LegacyClients[$Slot])
+		[IO.File]::WriteAllLines($Clients[$Slot].OutputPath, $LegacyNameOutputs[$Slot])
+	}
 	$LegacyLate = @($LegacyClients[0] | ForEach-Object { if ($_ -match 'event=client_probes case=gameplay ') { $_.Replace('rpc_max_us=1000', 'rpc_max_us=600000') } else { $_ } })
 	Assert-CohortRejected -Lines $LegacyLate -Reason 'legacy first late probe still fails unchanged'
 	[IO.File]::WriteAllLines($Clients[0].ErrorPath, $LegacyClients[0])

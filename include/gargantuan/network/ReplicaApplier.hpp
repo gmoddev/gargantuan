@@ -11,6 +11,7 @@ namespace gargantuan {
 }
 
 namespace gargantuan::network {
+	namespace detail { class GameSessionTestAccess; }
 	enum class ReplicaApplyStatus : std::uint8_t {
 		Applied,
 		MalformedFrame,
@@ -63,6 +64,7 @@ namespace gargantuan::network {
 		}
 
 	  private:
+		friend class detail::GameSessionTestAccess;
 		Snapshot SemanticState;
 		SnapshotLoadResult Receiver;
 		ReplicationEpoch Epoch;
