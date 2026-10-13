@@ -2058,3 +2058,57 @@ resource/backpressure/provider-parity gates and final independent acceptance
 remain unqualified. KI-006 OPEN; Foundation3L B — PARTIALLY READY; PR6 draft.
 No3M or automatic merge. The assessment checkpoint changes documentation only;
 execution source remains e792.
+
+## 22. D03 contract scope and native32 evidence corrections (2026-10-13)
+
+The subsequent explicit product decision removes raw D01 running-deficit
+thresholds from standard `HYBRID_F1_V1` release acceptance. D01 selectors stay
+strict; raw measurements remain diagnostic. D03 completion, FIFO, Main,
+turnover, fair admission, conservation and recovery remain independently fatal.
+This supersedes section21's immediate qualification-scope blocker, without
+relabeling any historical run.
+
+Candidate `29884da787589cbe4bd2c10fd9d284c841ed97e1`, tree
+`3582e863440a38c90c8ddb99dab834ec2dc4fa22`, passes original hosted native
+push/PR runs38390845856/38390852516 and GNS runs38390845835/38390852741;
+official all-false manual38390891645 also passes both jobs. Actual JUnit totals
+are97/53/97/53/11/11/97/53 with zero failure/error/skip. Independent canonical
+CI/package verification passes, receipt SHA256
+`579a7d2bd6571e10918411e6bef581fd8e0c1264fb6d8560bd9e96f339f76094`.
+This qualifies that source's CI/package scope, not physical provider acceptance.
+
+Its sole native32 run `78110202-a5a3-4336-bb67-a6d67b0042ab` exits1 after
+272.5582743s. The107 original files (153384689 bytes) remain sealed under index
+SHA256 `ac24f3adf94027bd16f2952aa8d5da081d267cfb1603c38166e8ebf24e0c3fe0`.
+The first rejection is `recovery structural lost retained journal coverage`.
+At tick9312,218027us after cessation, printed minimum15154 exceeds the
+native all-tick minimum15153; current margin15169, retained16384, failures0.
+All366 printed recovery samples satisfy actual coverage/arithmetic/cap checks.
+Source updates extrema every tick but prints every16 ticks. Requiring equality
+with the sparse reconstruction is a demonstrated reader defect. The correction
+requires nonnegative, bounded, monotonic cumulative extrema enclosing all
+printed samples, while retaining every actual coverage and failure check.
+
+The publication join independently rejects Character38:1 on connection1:1:
+confirmed due184 is later replaced by243 at frame244. GRPL retirement of
+object39:1 appears at tick203, but V1 records no actual GCHR relationship end.
+The dependency and source path support a materialization-lifetime explanation;
+the original trace does not directly measure that owner transition. Consequently
+the original full result remains FAIL. Neither an epoch change nor an adjacent
+object identity is accepted as proof that a pending due may be discarded.
+
+V2 adds one server-only `CharacterRelationshipRetired` record after successful
+owner removal in MarkUnmaterialized, UnregisterCharacter or RemovePeer.
+It preserves the80-byte format size and caps, joins exact ready connection and
+live Character generations, ends a lifetime once, and cannot manufacture
+accepted or client-applied service. A confirmed due cannot retire early;
+an unconfirmed forecast may end before its predicted future tick. Failed,
+duplicate, stale and speculative removals emit no event. Reentry has a fresh
+lifetime. V1 stays strict and mixed schemas reject. These are diagnostic and
+reader corrections; production transport, deadlines and recovery are unchanged.
+
+Required next gates are affected native regression/package preflight,
+exact-source hosted CI, and one justified fresh native32 qualification with
+fresh identity. Then the four-client prerequisite, Local32, real-TLS Node32
+and final independent acceptance remain mandatory. Owned native processes and
+port39450 were absent after the failed run. KI-006 OPEN; PR6 draft; no3M/merge.

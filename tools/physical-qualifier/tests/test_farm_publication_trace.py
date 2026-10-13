@@ -13,8 +13,8 @@ class FarmPublicationTraceTests(unittest.TestCase):
         self.addCleanup(self.Temp.cleanup)
         self.Path = Path(self.Temp.name) / "publication-service-0.bin"
 
-    def Write(self, Records, Dropped=0, DecodeFailures=0, Role="CLIENT", Slot=0, Nonce=17):
-        Header = (f"format=GargantuanFarmPublicationV1\trun=run-a\trole={Role}"
+    def Write(self, Records, Dropped=0, DecodeFailures=0, Role="CLIENT", Slot=0, Nonce=17, Version=1):
+        Header = (f"format=GargantuanFarmPublicationV{Version}\trun=run-a\trole={Role}"
                   f"\tslot={Slot}\tnonce={Nonce}\tcount={len(Records)}"
                   f"\tdropped={Dropped}\tdecode_failures={DecodeFailures}\n").encode()
         self.Path.write_bytes(Header + b"".join(Records))
@@ -29,6 +29,27 @@ class FarmPublicationTraceTests(unittest.TestCase):
         Value = Validate(self.Path, "run-a", "CLIENT", 0, 17)
         self.assertEqual(Value["Stages"], {9: 1, 10: 1})
         self.assertEqual(Value["CrossHostLatency"], "NOT_MEASURED")
+
+    def test_v2_native_relationship_retirement_is_explicit_and_still_80_bytes(self):
+        self.assertEqual(RECORD.size, 80)
+        End = RECORD.pack(29, 0, 1, 1, 8, 2, 0, 110, 200, 0, 0, 0, 0, 0)
+        self.Write([self.Record(8, 100), End], Role="SERVER", Slot=-1, Nonce=0, Version=2)
+        Value = Validate(self.Path, "run-a", "SERVER")
+        self.assertEqual(Value["SchemaVersion"], 2)
+        self.assertEqual(Value["Stages"], {8: 1, 29: 1})
+        self.assertTrue(all(Row.SchemaVersion == 2 for Row in IterRecords(self.Path, "run-a", "SERVER")))
+        self.Write([self.Record(8, 100), End], Role="SERVER", Slot=-1, Nonce=0)
+        with self.assertRaisesRegex(ValueError, "invalid stage"):
+            Validate(self.Path, "run-a", "SERVER")
+        self.Write([self.Record(9, 100), self.Record(10, 105), End], Version=2)
+        with self.assertRaises(ValueError):
+            Validate(self.Path, "run-a", "CLIENT", 0, 17)
+        for Index in (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13):
+            Fields = list(RECORD.unpack(End))
+            Fields[Index] = 0 if Index in (2, 3, 4, 5, 8) else 1
+            self.Write([self.Record(8, 100), RECORD.pack(*Fields)], Role="SERVER", Slot=-1, Nonce=0, Version=2)
+            with self.subTest(Index=Index), self.assertRaises(ValueError):
+                Validate(self.Path, "run-a", "SERVER")
 
     def test_server_due_and_scheduler_acceptance_are_retained(self):
         self.Path = Path(self.Temp.name) / "publication-service.bin"

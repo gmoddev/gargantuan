@@ -59,6 +59,7 @@ public:
 		RpcResponseReceived, RpcCompletion,
 		OrdinaryReliableSent, OrdinaryReliableRejected, TrafficPhase, OrdinaryReliableQueued,
 		RpcNativeReceive,
+		CharacterRelationshipRetired,
 	};
 	struct Record {
 		std::uint64_t Nanoseconds = 0;
@@ -104,6 +105,7 @@ private:
 	static std::optional<Stage> StageOf(std::string_view Value) noexcept {
 		if (Value == "FrameBegin") return Stage::FrameBegin;
 		if (Value == "CharacterNextDue") return Stage::CharacterNextDue;
+		if (Value == "CharacterRelationshipRetired") return Stage::CharacterRelationshipRetired;
 		if (Value == "CharacterDue") return Stage::CharacterDue;
 		if (Value == "StateBuilt") return Stage::StateBuilt;
 		if (Value == "CharacterSnapshot") return Stage::CharacterSnapshot;
@@ -174,8 +176,9 @@ private:
 		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
 		const auto Kind = StageOf(Value.Stage);
 		if (!Kind || (Self.Server && (*Kind == Stage::ClientNativeReceive || *Kind == Stage::ClientHandled)) ||
-			(!Self.Server && *Kind != Stage::ClientHandled && *Kind < Stage::RpcRequestStarted)) return;
-		if (*Kind >= Stage::OrdinaryReliableSent) {
+			(!Self.Server && (*Kind == Stage::CharacterRelationshipRetired ||
+				(*Kind != Stage::ClientHandled && *Kind < Stage::RpcRequestStarted)))) return;
+		if (*Kind >= Stage::OrdinaryReliableSent && *Kind <= Stage::OrdinaryReliableQueued) {
 			const auto Counter = TrafficClockNow();
 			if (!Counter) { ++Self.DecodeFailures; return; }
 			if (*Kind == Stage::TrafficPhase) Self.TrafficPhase = Value.Operations ? Value.Sequence : 0;
@@ -397,7 +400,7 @@ public:
 			Handle = open(Path.c_str(), O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, 0600);
 			if (Handle < 0) throw std::runtime_error("publication evidence file is not new");
 #endif
-			const std::string Header = "format=GargantuanFarmPublicationV1\trun=" + RunId +
+			const std::string Header = "format=GargantuanFarmPublicationV2\trun=" + RunId +
 				"\trole=" + (Server ? "SERVER" : "CLIENT") + "\tslot=" + std::to_string(Slot) +
 				"\tnonce=" + std::to_string(Nonce) + "\tcount=" + std::to_string(Records.size()) +
 				"\tdropped=" + std::to_string(Overflow ? 1 : 0) +

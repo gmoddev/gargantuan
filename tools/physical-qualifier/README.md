@@ -324,6 +324,16 @@ campaign sealing and offline acceptance; it is not a verified driver allocation
 or capacity PASS. The [buffer candidate evidence and validation plan](docs/FARM32_CLIENT_CAPTURE_BUFFER.md)
 preserve the existing zero-drop, full-packet, duration, and retention gates.
 
+Farm publication evidence V2 retains the80-byte record and existing bounds.
+Its server-only `CharacterRelationshipRetired` record identifies the successful
+GCHR materialization owner removal, separately from GRPL object retirement.
+The reader requires a known live, generation-specific relationship and ready
+connection. Retirement disposes that lifetime's pending due obligation without
+manufacturing accepted service or client delivery; confirmed obligations cannot
+retire before their due tick. Reentry starts a fresh lifetime. Missing, duplicate,
+stale or wrong-generation ends and unexplained due changes remain fatal. V1
+traces retain their original strict interpretation; mixed schema versions reject.
+
 The fixed baseline/recovery frame ceilings cover their existing 300/420-second
 role-local runtime budgets at the Player's 16,667-us network cadence, including
 its first unslept frame: 18,001/25,201 client frames and the existing extra 1,000

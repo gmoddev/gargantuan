@@ -1165,7 +1165,7 @@ namespace gargantuan::network {
 				for (const auto Character : PeerValue.MaterializedCharacters)
 					if (!DesiredCharacters.contains(Character)) {
 						runtime_detail::CountWork(runtime_detail::WorkCounter::GraphChanges);
-						if (!Authority->MarkUnmaterialized(Connection, Character)) PeerHealthy = false;
+						if (!Authority->MarkUnmaterialized(Connection, Character, CurrentTick)) PeerHealthy = false;
 						else if (PeerValue.ControlledCharacter == Character) {
 							// MarkUnmaterialized revokes the native control lease. Clear the
 							// session's mirror so the same Player.Character can rebind when

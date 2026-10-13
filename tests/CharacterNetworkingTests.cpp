@@ -1281,6 +1281,79 @@ namespace {
 		Check(true, "ten active-action Character destruction and manager teardown cycles remain generation-safe");
 	}
 
+	void TestPublicationRelationshipRetirementEvidence() {
+		struct Capture {
+			std::array<runtime_detail::PublicationLatencyRecord, 16> Ends{};
+			std::size_t Count = 0;
+			bool Overflow = false;
+			runtime_detail::PublicationLatencySink *Previous = runtime_detail::ActivePublicationLatency;
+			runtime_detail::PublicationLatencySink Sink{
+				this, [](void *, ConnectionId) noexcept { return true; },
+				[](void *Context, runtime_detail::PublicationLatencyRecord Record) noexcept {
+					if (std::string_view(Record.Stage) != "CharacterRelationshipRetired") return;
+					auto &Self = *static_cast<Capture *>(Context);
+					if (Self.Count == Self.Ends.size()) { Self.Overflow = true; return; }
+					Self.Ends[Self.Count++] = Record;
+				},
+				[](void *, const char *, ConnectionId, std::span<const std::byte>, std::uint64_t) noexcept {},
+			};
+			Capture() { runtime_detail::ActivePublicationLatency = &Sink; }
+			~Capture() { runtime_detail::ActivePublicationLatency = Previous; }
+		} Evidence;
+		RecordingScheduler Scheduler;
+		AuthoritativeCharacterNetwork Server(Scheduler, TestLimits(), Movement);
+		const ConnectionId First{1'720, 3}, Second{1'721, 4}, Reused{1'720, 5};
+		auto Character = std::make_shared<KinematicCharacter>();
+		auto Other = std::make_shared<KinematicCharacter>();
+		const auto Id = Character->GetObjectId(), OtherId = Other->GetObjectId();
+		Check(Server.AddPeer(First) && Server.AddPeer(Second) && Server.RegisterCharacter(Character) &&
+			Server.RegisterCharacter(Other) && Server.MarkMaterialized(First, Id, StateChannelId(810)) &&
+			Server.MarkMaterialized(Second, Id, StateChannelId(811)) &&
+			Server.MarkMaterialized(First, OtherId, StateChannelId(812)), "retirement evidence owns three exact relationships");
+		const auto Original = Server.GetPublicationSchedulingState(First, Id);
+		Check(Original && Original->Due && Evidence.Count == 0, "new forced due is not a retirement");
+		WorldRoot World;
+		Scheduler.NextSubmission = {SchedulerSubmitStatus::WouldBlock};
+		Server.Step(World, 1);
+		const auto Deferred = Server.GetPublicationSchedulingState(First, Id);
+		Check(Original && Deferred && Deferred->Due && Deferred->DesiredDueTick == Original->DesiredDueTick &&
+			Evidence.Count == 0, "scheduler rejection preserves the original due and cannot emit lifetime retirement");
+		Scheduler.NextSubmission = {SchedulerSubmitStatus::Accepted};
+		Check(!Server.MarkMaterialized(First, Id, StateChannelId(810)) &&
+			!Server.MarkUnmaterialized(Reused, Id, 20) && !Server.UnregisterCharacter({}, 20) &&
+			!Server.RemovePeer(Reused, 20) && Evidence.Count == 0,
+			"rejected or stale-generation lifetime operations cannot dispose a pending due");
+		Check(Server.BindControl(First, OtherId, 20).has_value() && Server.RevokeControl(OtherId, 21) &&
+			Evidence.Count == 0, "control lease revocation alone retains materialized recipient relationships");
+		Check(Server.MarkUnmaterialized(First, Id, 22) && Evidence.Count == 1 &&
+			Evidence.Ends[0].Connection == First && Evidence.Ends[0].Object == Id && Evidence.Ends[0].Tick == 22 &&
+			Evidence.Ends[0].Nanoseconds != 0 && !Server.GetPublicationSchedulingState(First, Id) &&
+			Server.GetPublicationSchedulingState(Second, Id).has_value(),
+			"successful dependency-driven unmaterialization retires one full generation relationship, not service");
+		Check(!Server.MarkUnmaterialized(First, Id, 23) && Evidence.Count == 1,
+			"duplicate relationship removal emits no second retirement");
+		Check(Server.MarkMaterialized(First, Id, StateChannelId(813)) && Evidence.Count == 1,
+			"reentry owns a fresh due without erasing or duplicating the prior lifetime disposition");
+		Check(Server.UnregisterCharacter(Id, 24) && Evidence.Count == 3 &&
+			std::count_if(Evidence.Ends.begin() + 1, Evidence.Ends.begin() + 3,
+				[&](const auto &End) { return End.Object == Id && End.Tick == 24 &&
+					(End.Connection == First || End.Connection == Second); }) == 2,
+			"authoritative Character removal ends exactly its two live recipient lifetimes");
+		Check(!Server.UnregisterCharacter(Id, 25) && Server.RemovePeer(First, 26) && Evidence.Count == 4 &&
+			Evidence.Ends[3].Connection == First && Evidence.Ends[3].Object == OtherId && Evidence.Ends[3].Tick == 26 &&
+			!Server.RemovePeer(First, 27) && Server.RemovePeer(Second, 27) && Evidence.Count == 4,
+			"peer teardown ends remaining relationships once and empty/duplicate teardown emits none");
+		Check(Server.AddPeer(Reused) && Server.MarkMaterialized(Reused, OtherId, StateChannelId(814)) &&
+			!Server.MarkUnmaterialized(First, OtherId, 28) && Evidence.Count == 4 &&
+			Server.RemovePeer(Reused, 29) && Evidence.Count == 5 && Evidence.Ends[4].Connection == Reused,
+			"reused connection slot keeps new generation lifetime separate from stale removal");
+		for (std::size_t Index = 0; Index < Evidence.Count; ++Index) {
+			const auto &End = Evidence.Ends[Index];
+			Check(!End.Sequence && !End.Due && !End.Epoch && !End.Bytes && !End.Operations && !Evidence.Overflow,
+				"relationship retirement carries identity only and never invents a state or serviced due");
+		}
+	}
+
 	void TestStateBuiltRequiresCompactSnapshot() {
 		struct Capture {
 			std::array<runtime_detail::PublicationLatencyRecord, 64> Records{};
@@ -3069,6 +3142,7 @@ int main() {
 		TestLossReorderAndLifecycle();
 		TestRemotePresentationFaultMatrix();
 		TestRepeatedManagerChurn();
+		TestPublicationRelationshipRetirementEvidence();
 		TestStateBuiltRequiresCompactSnapshot();
 		TestStateBatchingCadenceAndSuppression();
 		TestImportanceCadenceAndLifecycle();

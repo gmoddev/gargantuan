@@ -150,7 +150,10 @@ The final typed conjunction requires each provider's:
 - all-role logical cleanup and Remote ownership release;
 - nonce-bound 32-tuple capture, complete manifests and lifecycle reconciliation;
 - fixed service recovery, immutable exact W, C3/C5 finite-prefix convergence,
-  and sampled bounded journal retention;
+  and sampled bounded journal retention. Native cumulative retention extrema
+  include unprinted ticks: they must bound every printed observation, remain
+  monotonic, preserve nonnegative coverage and the16384-record cap; equality
+  with sparse printed extrema is not required;
 - role-local complete process sweeps, actual host/NIC observations and bounded
   evidence inventories.
 

@@ -290,6 +290,37 @@ namespace {
 				"farm server trace seals bounded records after measured work");
 		}
 		Check(runtime_detail::ActivePublicationLatency == Previous, "farm server trace restores scoped sink");
+		const auto LifetimeDirectory = Root / "lifetime";
+		std::filesystem::create_directory(LifetimeDirectory);
+		const auto LifetimePath = LifetimeDirectory / "publication-service.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0, LifetimePath, {}, 2);
+			Evidence.MarkFrameBegin(11);
+			runtime_detail::RecordPublicationLatency({.Stage = "CharacterRelationshipRetired", .Connection = {4, 7},
+				.Object = {9, 3}, .Tick = 11});
+			Evidence.Dump();
+			Check(Evidence.Valid() && Evidence.Count() == 2, "farm owner lifetime end stays in the existing fixed record budget");
+		}
+		{
+			std::ifstream File(LifetimePath, std::ios::binary);
+			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
+			const auto HeaderEnd = Bytes.find('\n');
+			Check(Bytes.starts_with("format=GargantuanFarmPublicationV2\t"), "new lifetime evidence explicitly identifies V2");
+			if (HeaderEnd != std::string::npos && Bytes.size() == HeaderEnd + 1 + 2 * 80) {
+				const auto Offset = HeaderEnd + 1 + 80;
+				auto Read = [&](std::size_t Index, std::size_t Length) {
+					std::uint64_t Value = 0;
+					for (std::size_t Byte = 0; Byte < Length; ++Byte)
+						Value |= static_cast<std::uint64_t>(static_cast<unsigned char>(Bytes[Offset + Index + Byte])) << (8 * Byte);
+					return Value;
+				};
+				Check(Read(0, 2) == 29 && Read(2, 2) == 0 && Read(4, 4) == 4 && Read(8, 4) == 7 &&
+					Read(12, 4) == 9 && Read(16, 4) == 3 && Read(20, 4) == 0 && Read(24, 8) != 0 &&
+					Read(32, 8) == 11 && Read(40, 8) == 0 && Read(48, 8) == 0 && Read(56, 8) == 0 &&
+					Read(64, 8) == 0 && Read(72, 8) == 0,
+					"Stage29 preserves exact lifetime identity and tick without ordinary clock or packet-field remapping");
+			} else Check(false, "fixed80-byte lifetime record is present without trailing or missing bytes");
+		}
 		const auto DirectDirectory = Root / "direct";
 		std::filesystem::create_directory(DirectDirectory);
 		const auto DirectPath = DirectDirectory / "publication-service.bin";
@@ -358,6 +389,8 @@ namespace {
 		const auto ClientPath = Root / "publication-service-0.bin";
 		{
 			host::detail::FarmPublicationEvidence Evidence(false, "test-run", 0, 17, ClientPath, {1, 1}, 2);
+			runtime_detail::RecordPublicationLatency({.Stage = "CharacterRelationshipRetired", .Connection = {1, 1},
+				.Object = {9, 2}, .Tick = 20});
 			CharacterStateFrame Frame{.ServerTick = 31, .FrameSequence = CharacterStateFrameSequence{1}, .StateCount = 1};
 			Frame.States[0] = CharacterAuthoritativeState{.Character = {9, 2},
 				.ControlEpoch = CharacterControlEpoch{7}, .StateSequence = RealtimeStateSequence{12},

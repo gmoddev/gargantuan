@@ -459,7 +459,7 @@ try {
 			throw "retention fixture did not mutate: $Reason"
 		}
 		[IO.File]::WriteAllText($Server.OutputPath, $OutputText)
-		[IO.File]::WriteAllText($Server.ErrorPath, $ErrorText)
+		[IO.File]::WriteAllText($Server.ErrorPath, $ErrorText + "`n")
 		$Rejected = $false
 		try { [void](Assert-RecoveryRecords -Server $Server -Clients $Clients `
 			-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) }
@@ -483,6 +483,36 @@ try {
 	Assert-RetentionRejected -Reason 'recovery sampled high-water mismatch' -OutputText $OriginalOutput `
 		-ErrorText ([regex]::Replace(($OriginalError -join "`n"),
 			'(event=sample run=[^\n]+ case=mixed elapsed_us=19000000 [^\n]*?retained_high=)16', '${1}15'))
+	# A native check between printed recovery ticks can observe a lower margin
+	# or higher retention count. Later printed samples retain those exact extrema.
+	$SparseExtrema = [regex]::Replace(($OriginalError -join "`n"),
+		'(event=sample run=[^\n]+ case=structural [^\n]*?retained_high=)16 minimum_retention_margin=99',
+		'${1}17 minimum_retention_margin=98')
+	if ($SparseExtrema -ceq ($OriginalError -join "`n")) { throw 'sparse native-extrema fixture did not change' }
+	[IO.File]::WriteAllText($Server.ErrorPath, $SparseExtrema + "`n")
+	[void](Assert-RecoveryRecords -Server $Server -Clients $Clients `
+		-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections)
+	# The exact zero-margin boundary is healthy; negative margins remain fatal.
+	[IO.File]::WriteAllText($Server.ErrorPath, $SparseExtrema.Replace('minimum_retention_margin=98', 'minimum_retention_margin=0') + "`n")
+	[void](Assert-RecoveryRecords -Server $Server -Clients $Clients `
+		-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections)
+	[IO.File]::WriteAllLines($Server.ErrorPath, $OriginalError)
+	foreach ($Mutation in @(
+		@('increasing cumulative minimum', 'minimum_retention_margin=98', 'minimum_retention_margin=99'),
+		@('decreasing cumulative high', 'retained_high=17', 'retained_high=16'),
+		@('cumulative high exceeds resource cap', 'retained_high=17', 'retained_high=16385'),
+		@('negative cumulative minimum', 'minimum_retention_margin=98', 'minimum_retention_margin=-1'),
+		@('minimum exceeds observed margin', 'minimum_retention_margin=98', 'minimum_retention_margin=100'),
+		@('journal failure remains fatal', 'journal_failures=0', 'journal_failures=1'),
+		@('current coverage arithmetic remains fatal', 'required=100 margin=99', 'required=100 margin=98'),
+		@('current required history was evicted', 'oldest=1 required=100 margin=99', 'oldest=101 required=100 margin=99')
+	)) {
+		$Lines = @($SparseExtrema -split '\r?\n')
+		$Candidates = @(0..($Lines.Count - 1) | Where-Object { $Lines[$_] -match 'event=sample .* case=structural ' })
+		$Target = $Candidates[-1]
+		$Lines[$Target] = $Lines[$Target].Replace($Mutation[1], $Mutation[2])
+		Assert-RetentionRejected -Reason $Mutation[0] -OutputText $OriginalOutput -ErrorText ($Lines -join "`n")
+	}
 	$OriginalClient = [IO.File]::ReadAllText($Clients[0].OutputPath)
 	[IO.File]::WriteAllText($Clients[0].OutputPath, $OriginalClient.Replace('object_slot=100', 'object_slot=999'))
 	$Rejected = $false

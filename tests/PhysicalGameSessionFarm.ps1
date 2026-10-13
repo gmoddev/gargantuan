@@ -550,6 +550,8 @@ function Assert-RecoveryRecords {
 		if ($Samples.Count -eq 0) { throw "recovery $Case lacks native service samples" }
 		$ObservedRetainedHigh = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'retained_high'
 		$ObservedMinimumMargin = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'minimum_retention_margin'
+		$PreviousReportedHigh = $ObservedRetainedHigh
+		$PreviousReportedMinimum = $ObservedMinimumMargin
 		$PreviousTail = $Tail
 		foreach ($Sample in $Samples) {
 			$Oldest = Get-RecoveryUnsigned -Row $Sample -Field 'oldest'
@@ -558,15 +560,22 @@ function Assert-RecoveryRecords {
 			$Retained = Get-RecoveryUnsigned -Row $Sample -Field 'retained'
 			$ObservedRetainedHigh = [math]::Max($ObservedRetainedHigh, $Retained)
 			$ObservedMinimumMargin = [math]::Min($ObservedMinimumMargin, $Margin)
+			# Native extrema include every recovery tick; these text samples are sparse.
+			# Preserve the all-tick source's bounds/monotonicity without claiming that
+			# printed rows contain the instant at which either extremum changed.
+			$ReportedHigh = Get-RecoveryUnsigned -Row $Sample -Field 'retained_high'
+			$ReportedMinimum = Get-RecoveryUnsigned -Row $Sample -Field 'minimum_retention_margin'
 			$CurrentTail = Get-RecoveryUnsigned -Row $Sample -Field 'current_tail'
 			if ($Oldest -lt 1 -or $Required -lt $Oldest -or $Required -gt $CurrentTail -or
 				$Margin -ne ($Required - $Oldest) -or $Retained -gt 16384 -or
-				(Get-RecoveryUnsigned -Row $Sample -Field 'retained_high') -ne $ObservedRetainedHigh -or
-				(Get-RecoveryUnsigned -Row $Sample -Field 'minimum_retention_margin') -ne $ObservedMinimumMargin -or
-				[long]$Sample.journal_failures -ne 0 -or $CurrentTail -lt $PreviousTail) {
+				$ReportedHigh -lt $ObservedRetainedHigh -or $ReportedHigh -lt $PreviousReportedHigh -or $ReportedHigh -gt 16384 -or
+				$ReportedMinimum -gt $ObservedMinimumMargin -or $ReportedMinimum -gt $PreviousReportedMinimum -or
+				(Get-RecoveryUnsigned -Row $Sample -Field 'journal_failures') -ne 0 -or $CurrentTail -lt $PreviousTail) {
 				throw "recovery $Case lost retained journal coverage"
 			}
 			$PreviousTail = $CurrentTail
+			$PreviousReportedHigh = $ReportedHigh
+			$PreviousReportedMinimum = $ReportedMinimum
 		}
 		$LastProbeLine = [long]($ProbeRows | Measure-Object -Property __line -Maximum).Maximum
 		$VersionedAcks = @($ProbeRows | Where-Object { $_.ContainsKey('contract') })
@@ -819,8 +828,9 @@ function Test-SealedFarmPublicationTrace {
 		}
 		if ($HeaderBytes[$HeaderBytes.Count - 1] -ne 10) { return $false }
 		$Header = [Text.Encoding]::ASCII.GetString($HeaderBytes.ToArray())
-		$Prefix = "format=GargantuanFarmPublicationV1`trun=$ExpectedRunId`trole=SERVER`tslot=-1`tnonce=0`t"
-		if (-not $Header.StartsWith($Prefix, [StringComparison]::Ordinal)) { return $false }
+		$Prefixes = @("format=GargantuanFarmPublicationV1`trun=$ExpectedRunId`trole=SERVER`tslot=-1`tnonce=0`t",
+			"format=GargantuanFarmPublicationV2`trun=$ExpectedRunId`trole=SERVER`tslot=-1`tnonce=0`t")
+		if (-not @($Prefixes | Where-Object { $Header.StartsWith($_, [StringComparison]::Ordinal) }).Count) { return $false }
 		if ($Header -cnotmatch 'count=([0-9]+)\x09dropped=0\x09decode_failures=0\x0A$') { return $false }
 		$Count = [long]$Matches[1]
 		return $Stream.Length -eq ($HeaderBytes.Count + 80L * $Count)

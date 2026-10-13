@@ -85,6 +85,32 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-13 — Contract-aware CI PASS; fresh native32 evidence corrections pending.**
+Candidate `29884da787589cbe4bd2c10fd9d284c841ed97e1` passes all six original
+Windows/Linux/GNS hosted jobs and both official package jobs. Independent
+contract-aware CI and package verification pass. Native32 run
+`78110202-a5a3-4336-bb67-a6d67b0042ab` remains **FAIL**, exit1 after272.558s;
+owned host processes and port39450 are absent after cleanup.
+
+Its first reader rejection compares sparse printed retention samples with
+all-tick native extrema as though their minima must be equal. The first
+structural sample reports native minimum15153 versus sampled minimum15154;
+current margin15169, retained16384 and journal failures0. All366 recovery
+samples preserve actual coverage, arithmetic and resource bounds. The focused
+reader correction checks native extrema envelopes and monotonicity, retaining
+fatal missing/negative values, actual coverage loss, cap excess and failures.
+
+The independent publication join still rejects Character38:1 due184 changing
+to243 for connection1:1. The original V1 trace records GRPL object retirement,
+but not successful removal of its dependent GCHR materialization. It cannot
+establish that particular owner transition and is not relabeled PASS. V2 adds
+a bounded, generation-specific relationship retirement record at successful
+owner removal, preserving confirmed due obligations and client-delivery joins.
+The record remains80 bytes with unchanged caps; no protocol, scheduling or
+production health predicate changes. V1 evidence remains strict. New source
+requires affected native preflight, exact-source CI and fresh native32 evidence.
+KI-006 remains OPEN; no physical provider or final acceptance gate is closed.
+
 **2026-10-13 — D03 standard-profile qualification scope resolved; fresh qualification pending.**
 The explicit product decision supersedes the earlier exception that required
 raw D01 packet-scale running service for standard `HYBRID_F1_V1` release.
