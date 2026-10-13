@@ -355,6 +355,46 @@ class OrdinaryDemandTests(unittest.TestCase):
         self.assertLess(Normal, PrivateScope)
         self.assertLess(PrivateScope, DiagnosticScope)
         self.assertIn('PublicationEvidence->SetTrafficPhase(PhaseName, Overload);', BeforeStep)
+        self.assertIn('Runtime->CharacterControl->GetAttributeValue("ScalePhase")', BeforeStep)
+        self.assertNotIn('World->GetAttributeValue("ScalePhase")', BeforeStep)
+        Marker = BeforeStep.index('ApplyAttributeMutation("ScaleOrdinarySourcePhase"')
+        self.assertLess(DiagnosticScope, Marker)
+        self.assertIn('KnownPhase ? std::optional<WireValue>', BeforeStep[DiagnosticScope:Marker])
+        for ClosingPhase in ('calibrating', 'complete'):
+            self.assertIn(f'PhaseName == "{ClosingPhase}"', BeforeStep[DiagnosticScope:Marker])
+        self.assertIn(': std::nullopt;', BeforeStep[DiagnosticScope:Marker])
+
+    def test_same_frame_phase_ack_waits_for_prospective_host_enrollment(self):
+        Root = Path(__file__).resolve().parents[3]
+        Gameplay = (Root / "tests/ContentScaleGameplay.hpp").read_text()
+        Ack = Gameplay[Gameplay.index('if ScopeReady and PendingPhaseAcknowledgement and'):Gameplay.index('local ReceivedPhase =')]
+        self.assertIn('Control:GetAttribute("ScaleOrdinarySourcePhase") == PendingPhaseAcknowledgement', Ack)
+        self.assertLess(Ack.index('ScaleOrdinarySourcePhase'), Ack.index('PhaseControl:FireServer("phase_ack"'))
+        Content = Gameplay[Gameplay.index('if ContentObservedPhase ~= nil'):Gameplay.index('if ScopeReady and PendingPhaseCompletion and')]
+        self.assertLess(Content.index('ScaleOrdinarySourcePhase'), Content.index('PhaseControl:FireServer("content_observed"'))
+        ProducerStart = Gameplay.index('local NextPhase =', Gameplay.index('auto ClientScript'))
+        Producer = Gameplay[ProducerStart:Gameplay.index('if PhaseFinalized then return end', ProducerStart)]
+        self.assertLess(Producer.index('PhaseStartedAt = os.clock()'), Producer.index('ScaleOrdinarySourcePhase'))
+        self.assertLess(Producer.index('ScaleOrdinarySourcePhase'), Producer.index('task.spawn(function()'))
+        self.assertIn('if not RpcStarted then', Producer)
+        self.assertIn('for Index = 1, 100 do', Producer)
+        self.assertIn('ProducerPlayerId ~= 0 and LocalPlayer.PlayerId ~= ProducerPlayerId then return end', Producer)
+
+    def test_calibration_and_completion_wait_for_prospective_class_close(self):
+        Root = Path(__file__).resolve().parents[3]
+        Gameplay = (Root / "tests/ContentScaleGameplay.hpp").read_text()
+        Control = Gameplay[Gameplay.index('if PhaseControl then\n        PhaseControlTick += 1'):Gameplay.index('if not ProducerReported then')]
+        Gate = Control.index('if ScopeReady and Control:GetAttribute("ScalePhase") == "calibrating"')
+        self.assertLess(Control.index('PhaseControl:FireServer("ready", "")'), Gate)
+        self.assertLess(Control.index('ScaleOrdinarySourcePhase'), Gate)
+        self.assertIn('if ScopeReady and game:GetAttribute("ScaleClockActive") == true', Control)
+        for Operation in ('PhaseControl:FireServer("clock_quiesced"', 'PhaseControl:FireServer("clock_done"',
+                          'PhaseControl:FireServer("phase_ack"', 'PhaseControl:FireServer("content_observed"',
+                          'PhaseControl:FireServer(if PendingPhaseCompletionHealthy'):
+            self.assertGreater(Control.index(Operation), Gate)
+        self.assertIn('if ScopeReady and PendingPhaseAcknowledgement', Control)
+        self.assertIn('ScopeReady and\n            Control:GetAttribute("ScaleOrdinarySourcePhase") == ContentObservedPhase', Control)
+        self.assertIn('if ScopeReady and PendingPhaseCompletion', Control)
 
 
 if __name__ == "__main__":

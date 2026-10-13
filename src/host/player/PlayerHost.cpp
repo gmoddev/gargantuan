@@ -325,7 +325,9 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			const auto FrameStarted = std::chrono::steady_clock::now();
 			if (Session) (void)Session->Poll();
 			if (FarmScaleWorkload) {
-				const auto Phase = World->GetAttributeValue("ScalePhase");
+				// The existing phase Remote updates this client-owned control state
+				// before the independently replicated DataModel Attribute arrives.
+				const auto Phase = Runtime->CharacterControl->GetAttributeValue("ScalePhase");
 				const auto *Name = Phase ? std::get_if<std::string>(&*Phase) : nullptr;
 				// Recovery deliberately retains ScalePhase=reload. Its existing
 				// enable transition ends fixed demand before the next Luau step.
@@ -337,6 +339,18 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, Normal))
 					throw std::runtime_error("[Network:OrdinaryService] Client source scope failed");
 				if (PublicationEvidence) PublicationEvidence->SetTrafficPhase(PhaseName, Overload);
+				// Qualification-only handoff to the existing Luau producer. A phase
+				// callback in this same frame must not enqueue normal ACKs before the
+				// host has prospectively enrolled their source and trace boundary.
+				// Also acknowledge closing/calibration labels, so those callbacks
+				// cannot send under the preceding normal phase's membership.
+				const bool KnownPhase = PhaseName == "baseline" || PhaseName == "load" || PhaseName == "resident" ||
+					PhaseName == "evict" || PhaseName == "reload" || PhaseName == "calibrating" || PhaseName == "complete";
+				const auto SourcePhase = KnownPhase ? std::optional<WireValue>(WireValue(std::string(PhaseName))) : std::nullopt;
+				if (Runtime->CharacterControl->GetAttributeValue("ScaleOrdinarySourcePhase") != SourcePhase &&
+					Runtime->CharacterControl->ApplyAttributeMutation("ScaleOrdinarySourcePhase", SourcePhase,
+						ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+					throw std::runtime_error("[Network:OrdinaryService] Client source enrollment handoff failed");
 			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (ClockCalibration) {

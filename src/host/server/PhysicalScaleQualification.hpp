@@ -780,7 +780,7 @@ namespace gargantuan::host {
 			BeginOverloadCase(Tick);
 		}
 
-		void OfferOverloadNameWork(std::uint64_t Tick) {
+		void OfferOverloadNameWork(std::uint64_t Tick, std::chrono::steady_clock::time_point OpportunityStarted) {
 			if (OverloadCase == 0) return;
 			const auto First = ((OverloadOpportunities - 1) % 2) * 16;
 			for (std::size_t Index = First; Index < First + 16; ++Index) {
@@ -798,6 +798,8 @@ namespace gargantuan::host {
 			std::cout << "[Qualification:Recovery] event=structural_offer run=" << RunId
 				<< " case=" << OverloadCases[OverloadCase] << " opportunity=" << OverloadOpportunities
 				<< " mutations=16 name_bytes=" << OverloadNameBytes << " tick=" << Tick
+				<< " cadence_boundary=opportunity_start_v1 opportunity_start_us="
+				<< std::chrono::duration_cast<std::chrono::microseconds>(OpportunityStarted.time_since_epoch()).count()
 				<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
 			const auto Retention = ObserveRetention(Tick);
@@ -828,7 +830,7 @@ namespace gargantuan::host {
 				if (Now - LastOverloadOpportunity < std::chrono::microseconds(16'667)) return;
 				LastOverloadOpportunity = Now;
 				++OverloadOpportunities;
-				OfferOverloadNameWork(Tick);
+				OfferOverloadNameWork(Tick, Now);
 				if (OverloadCase == 0) (void)ObserveRetention(Tick);
 				if (OverloadOpportunities == OverloadOpportunityCount) {
 					State = Stage::OverloadOffered;

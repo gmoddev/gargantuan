@@ -85,6 +85,18 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-12 — Retained D03 native32 service subsets pass; fixture conjunction FAIL.**
+Candidate `00239d940527` passes all original Windows96/Linux53/GNS11 hosted
+jobs and official package verification. Its single fresh32-peer run retains
+no server F1/Main100/turnover150 breach (max73064/123475us), with exact
+1903937081-B acceptance/retirement and zero debt/terminal release. Overall
+qualification remains failed: completion-time logs cannot prove the paced
+opportunity-start interval, and several clients have zero originating normal
+ordinary demand, so required all-client H2 coverage is absent. Source-supported
+fixture corrections are under qualification; no deadline or ownership change
+is made. The original run and107-member index remain immutable. See ownership
+decision section19. **KI-006 OPEN; PR6 draft; no physical PASS or3L completion.**
+
 **2026-10-12 — Authorized D03 execution-gate reassessment in progress.**
 All six original hosted jobs at `0571f3b210028` pass; this does not qualify
 later source changes. A fresh first-fault/whole-lifetime scheduler capture

@@ -1622,3 +1622,85 @@ V1 final-source CI/package, native32, Local32, real-TLS Node32 and final
 acceptance remain unfinished. Recovery's historical
 qualified correction remains valid at its recorded source. PR #6 stays draft;
 no 3M, merge or release.
+
+## 19. Retained-D03 native32: service subsets pass; fixture conjunction fails
+
+The selected A candidate `00239d940527b443770aac8fc59d6743f2e5b8fd`
+keeps D03 V1 unchanged. All six original hosted push/PR jobs pass on attempt1:
+Windows96/Ubuntu53 for each Native event, GNS11 for each event, zero failures,
+errors or skips. Actual checkout markers reconcile to tree
+`7e59dcbf4092b764c6fc6de5614139a744c395f5`; the PR merge is
+`3d1bc44605729c32a68386e297255e2468cda378`. Official manual38318108457
+and its qualified package also pass. Supplemental old tooling-count code
+expects295 while original logs report42 helper and359 tooling tests; that
+historical count-helper limitation is not a failed CI job.
+
+Exactly one fresh native32 campaign, `3d7161f2-eaf7-40d6-a6db-a39c684c9484`,
+uses the existing workload, native egress1 and detailed timing OFF. It runs
+2026-10-13T00:26:15.3364514Z through00:30:20.7647290Z and exits1 after245.43s.
+The server exits0 with32 unique terminals and no identity conflict. The farm
+validator rejects `recovery case structural has an invalid structural offer
+cadence`. All107 indexed members (142463888B) are sealed and verified; owned
+native processes and UDP39450 owners are absent. **The campaign remains FAIL.**
+
+Independent exact-source readers measure these subsets:
+
+- Server F1: all32 peers and6752 completed qualified grants pass; maximum Main
+  opportunity73064us and exact turnover123475us, with no completion/execution
+  or invalid-evidence failure flags.
+- Admission/fairness: accepted=retired1903937081B, zero terminal release,
+  outstanding debt or backlog;6784 grants including bootstrap retire/release;
+  four-slot/credit bounds pass; maximum observed eligible admission wait19858us.
+- Native ordinary certificates: maximum10118us server /7145us client, no
+  deadline/invalid/pending flags. The full direct join nevertheless rejects
+  required nonzero all-client coverage. All64 registration counts exactly
+  match originating normal demand; first rejection is client slot1 with
+  demand=registered=completed=0. Zero demand is not a successful H2 certificate.
+- Conditional quote/causal subsets conserve12008B gameplay,567085548B
+  structural and13557B mixed, converging in333296/13092550/333760us against
+  quoted20470926/29856703/20470992us. Healthy service after all probes is
+  observed within20s. These do not override the full cadence failure.
+
+Two source-supported fixture corrections are under qualification. Native
+opportunity pacing uses entry `Now` with the unchanged16667us interval, while
+the old log timestamps completion after sixteen mutations/retention samples.
+Variable work duration makes completion gaps shorter despite legal entry gaps.
+New explicit `opportunity_start_v1` evidence preserves completion timestamps,
+checks exact entry cadence and ordered nonoverlapping work, and retains strict
+legacy interpretation. Its focused positive and nine negative parser cases pass.
+
+Client phase events update CharacterControl before independently replicated
+DataModel phase state arrives. The host's old DataModel-based source enrollment
+therefore misses phase-control traffic from many nonproducer clients. A
+prospective host/controlled-producer handoff is being qualified for opening and
+closing phases. It must preserve original phase/acceptance clocks and immutable
+membership, without extra traffic producers or weakening the64-certificate gate.
+
+Custody SHA-256:
+
+- Original CI index: `a8e5c37b3fc785e94eeb8a25415f552b9dd0c5b537d9421fd5dc473f1886ce01`.
+- Checkout reconciliation: `5f45950519b6321c9edc701284b8aed59acc4911adb8e35cd191fc6b4b264f34`.
+- Official package ZIP: `bd9682493a8decac4c65a8c2cf49eec7df7f6ef8e67c7b9d74f36ed4cb19d6cf`.
+- Original native index: `b1f5847637909b6916e7ceedd83bc8dc4e8a7c90ad99174d7d20d35cdd6a958c`.
+- Exact-source independent subset index: `228654ff03c742577211cda962a5b52bccaddd91f261fe75dad9168f5d72b30e`.
+
+Fresh corrected-source preflights, hosted CI and a fresh qualification identity
+remain required. No runtime deadline, funding or transport ownership change is
+adopted. **KI-006 OPEN; 3L B — PARTIALLY READY; PR6 draft.** Four-client,
+Local32, real-TLS Node32 and final acceptance remain unqualified for this source.
+
+Corrective preflights subsequently pass: pinned Luau opening/closing handoff
+and unchanged recovery, Python ordinary-demand30/30, native jobs4 build and
+three affected suites (8.08s). Fresh current-script packages pass both native
+Validate/Load and57-member byte inventories (58 actual files per role).
+An overlong task staging path is preserved as a243>240 counterexample; the
+fresh238-character projection passes the unchanged guard. The first generic
+failure's exact item remains unmeasured. Generator diagnostics are now bounded
+to16 entries and512 characters per existing diagnostic field, with no gate
+change. No additional native32 campaign has run.
+
+Corrective preflight receipts: native JUnit
+`79a99df0ec9aabb6f12b136632a3ef86509186c2a4da640332037e2e5431185e`;
+package seal `39999377635cf6dbdf54b9d0dd9ac6b169dce6fe258f2e48e68c799d5f5a4d73`;
+H2 focused result `8aaf640ce08a86d7b768545750ad2f9839c761b6cad17bb569957f765d0da8de`;
+cadence parser `3d85d4b35327633506c3a0c8fb7b01c9566a8d5cf73cc08947940c0aa5c7a474`.

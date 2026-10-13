@@ -301,6 +301,7 @@ function Assert-RecoveryRecords {
 	foreach ($Connection in $ExpectedConnections) { [void]$ExpectedPeers.Add($Connection) }
 	if ($ExpectedPeers.Count -ne 32) { throw 'recovery workload lacks original peer generations' }
 	$CaseObservations = [Collections.Generic.List[object]]::new()
+	$CadenceBoundary = $null
 	foreach ($CaseIndex in 0..2) {
 		$Case = $Cases[$CaseIndex]
 		$Starts = @($Output | Where-Object { $_.event -eq 'case_start' -and $_.case -eq $Case -and $_.run -eq $RunId })
@@ -325,9 +326,33 @@ function Assert-RecoveryRecords {
 		if ($ExpectedOffers -gt 0) {
 			$MinimumObservedRetentionMargin = [long]::MaxValue
 			$MaximumObservedRetained = 0L
+			$PreviousOpportunityStart = 0L
+			$PreviousOpportunityCompleted = 0L
 			for ($Index = 0; $Index -lt 480; $Index++) {
 				$Offer = $Offers[$Index]
 				$RetentionRow = $Retention[$Index]
+				$HasBoundary = $Offer.ContainsKey('cadence_boundary')
+				$HasStart = $Offer.ContainsKey('opportunity_start_us')
+				if ($HasBoundary -ne $HasStart) { throw "recovery case $Case has partial structural cadence boundaries" }
+				$Boundary = if ($HasBoundary) { [string]$Offer.cadence_boundary } else { 'legacy_completion_v1' }
+				if ($Boundary -cnotin @('legacy_completion_v1', 'opportunity_start_v1') -or
+					($HasBoundary -and $Boundary -cne 'opportunity_start_v1')) { throw 'unknown explicit structural cadence boundary' }
+				if ($null -eq $CadenceBoundary) { $CadenceBoundary = $Boundary }
+				if ($Boundary -cne $CadenceBoundary) { throw 'mixed structural cadence boundary versions' }
+				$Completed = Get-RecoveryUnsigned -Row $Offer -Field 'monotonic_us'
+				$OpportunityStart = if ($HasStart) { Get-RecoveryUnsigned -Row $Offer -Field 'opportunity_start_us' } else { $Completed }
+				# Completion timestamps retain their original meaning. Variable work
+				# duration cannot establish invocation cadence; new rows explicitly
+				# identify the same entry boundary used by the unchanged native gate.
+				if ($OpportunityStart -le 0 -or $Completed -lt $OpportunityStart -or
+					($Index -gt 0 -and $OpportunityStart - $PreviousOpportunityStart -lt 16667) -or
+					($HasStart -and ($OpportunityStart -lt [long]$Starts[0].monotonic_us -or
+						$Completed -ge [long]$Cessations[0].monotonic_us -or
+						($Index -gt 0 -and $PreviousOpportunityCompleted -gt $OpportunityStart)))) {
+					throw "recovery case $Case has an invalid structural offer cadence"
+				}
+				$PreviousOpportunityStart = $OpportunityStart
+				$PreviousOpportunityCompleted = $Completed
 				$Oldest = Get-RecoveryUnsigned -Row $RetentionRow -Field 'oldest'
 				$Required = Get-RecoveryUnsigned -Row $RetentionRow -Field 'required'
 				$Margin = Get-RecoveryUnsigned -Row $RetentionRow -Field 'margin'
@@ -340,8 +365,7 @@ function Assert-RecoveryRecords {
 					($Index -lt 479 -and [long]$RetentionRow.__line -ge [long]$Offers[$Index + 1].__line) -or
 					$Oldest -lt 1 -or $Required -lt $Oldest -or $Required -gt $Tail -or
 					$Margin -ne ($Required - $Oldest) -or $Retained -gt 16384 -or
-					$SampleCount -ne 16 * ($Index + 1) -or
-					($Index -gt 0 -and [long]$Offer.monotonic_us - [long]$Offers[$Index - 1].monotonic_us -lt 16667)) {
+					$SampleCount -ne 16 * ($Index + 1)) {
 					throw "recovery case $Case has an invalid structural offer cadence"
 				}
 				$MinimumObservedRetentionMargin = [math]::Min($MinimumObservedRetentionMargin, $Margin)

@@ -286,6 +286,54 @@ try {
 	if ($LiveResult.State -ne 'MEASURED_PASS') { throw 'later source work invalidated a completed finite baseline prefix' }
 	[IO.File]::WriteAllLines($Server.ErrorPath, $OriginalError)
 	$OriginalOutput = [IO.File]::ReadAllText($Server.OutputPath)
+	# The same legal entry cadence can have shorter adjacent completion gaps
+	# when mutation/retention work duration changes. No clock or host is run.
+	$EntryRows = @([IO.File]::ReadAllLines($Server.OutputPath) | ForEach-Object {
+		if ($_ -match 'event=structural_offer .* opportunity=([0-9]+) .* monotonic_us=([0-9]+)$') {
+			$Opportunity = [int]$Matches[1]
+			$Start = [long]$Matches[2] - 16667
+			$Duration = if ($Opportunity % 2) { 1000L } else { 1L }
+			$_ -replace 'monotonic_us=[0-9]+$', "cadence_boundary=opportunity_start_v1 opportunity_start_us=$Start monotonic_us=$($Start + $Duration)"
+		} else { $_ }
+	})
+	[IO.File]::WriteAllLines($Server.OutputPath, $EntryRows)
+	$EntryResult = Assert-RecoveryRecords -Server $Server -Clients $Clients `
+		-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections
+	if ($EntryResult.State -ne 'MEASURED_PASS') { throw 'legal entry cadence with variable completion duration was rejected' }
+	function Assert-CadenceRejected {
+		param([string[]]$Lines, [string]$Reason)
+		[IO.File]::WriteAllLines($Server.OutputPath, $Lines)
+		$Rejected = $false
+		try { [void](Assert-RecoveryRecords -Server $Server -Clients $Clients `
+			-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) } catch { $Rejected = $true }
+		if (-not $Rejected) { throw "invalid structural cadence accepted: $Reason" }
+	}
+	foreach ($Mutation in @('short-entry', 'missing-marker', 'missing-start', 'missing-both', 'unknown-marker', 'reversed-completion', 'overlap', 'regressed-start')) {
+		$BadRows = @($EntryRows | ForEach-Object {
+			if ($_ -match 'event=structural_offer .* case=structural opportunity=([12]) ') {
+				$Opportunity = [int]$Matches[1]
+				$Row = $_
+				if ($Mutation -eq 'short-entry' -and $Opportunity -eq 2) { $Row = $Row.Replace('opportunity_start_us=200016667', 'opportunity_start_us=200016666') }
+				if ($Mutation -eq 'missing-marker' -and $Opportunity -eq 2) { $Row = $Row.Replace('cadence_boundary=opportunity_start_v1 ', '') }
+				if ($Mutation -eq 'missing-start' -and $Opportunity -eq 2) { $Row = $Row.Replace('opportunity_start_us=200016667 ', '') }
+				if ($Mutation -eq 'missing-both' -and $Opportunity -eq 2) { $Row = $Row.Replace('cadence_boundary=opportunity_start_v1 opportunity_start_us=200016667 ', '') }
+				if ($Mutation -eq 'unknown-marker' -and $Opportunity -eq 2) { $Row = $Row.Replace('opportunity_start_v1', 'opportunity_start_v2') }
+				if ($Mutation -eq 'reversed-completion' -and $Opportunity -eq 1) { $Row = $Row.Replace('monotonic_us=200001000', 'monotonic_us=199999999') }
+				if ($Mutation -eq 'overlap' -and $Opportunity -eq 1) { $Row = $Row.Replace('monotonic_us=200001000', 'monotonic_us=200016668') }
+				if ($Mutation -eq 'regressed-start' -and $Opportunity -eq 2) { $Row = $Row.Replace('opportunity_start_us=200016667', 'opportunity_start_us=199999999') }
+				$Row
+			} else { $_ }
+		})
+		if (($BadRows -join "`n") -ceq ($EntryRows -join "`n")) { throw "cadence fixture did not change: $Mutation" }
+		Assert-CadenceRejected -Lines $BadRows -Reason $Mutation
+	}
+	$LegacyShort = @($OriginalOutput -split '\r?\n' | ForEach-Object {
+		if ($_ -match 'event=structural_offer .* case=structural opportunity=2 ') {
+			$_.Replace('monotonic_us=200033334', 'monotonic_us=200033333')
+		} else { $_ }
+	})
+	Assert-CadenceRejected -Lines $LegacyShort -Reason 'legacy completion gap 16666 remains rejected'
+	[IO.File]::WriteAllText($Server.OutputPath, $OriginalOutput)
 	$BadMargin = [regex]::Replace($OriginalOutput,
 		'(event=retention[^\r\n]*?margin=)99', '${1}-1',
 		[Text.RegularExpressions.RegexOptions]::None, [timespan]::FromSeconds(1))

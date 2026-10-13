@@ -98,6 +98,49 @@ incremental preflights pass GameSession, networking contracts and real transport
 `307c87169d22b1b27a792b14bcb09fe3aeca8cbcfbfb0ddcf4d811ae3216726f`.
 This is supporting native verification, not final-source hosted CI or native32.
 
+### First retained-V1 native32 and focused fixture correction
+
+At `00239d940527`, original Windows96/Linux53/GNS11 CI and the official
+package pass. The single fresh native32 run retains no server F1/Main/turnover
+breach across32 peers and6752 qualified grants (maximum73064/123475us), but
+its overall verdict is FAIL. The canonical recovery reader rejects structural
+offer cadence, and the ordinary join rejects nonzero coverage for clients that
+emitted no prospectively enrolled normal demand. Passing subsets cannot repair
+either missing conjunct. Ownership decision section19 preserves exact custody.
+
+The corrective slice changes qualification evidence and the controlled source
+handoff, with no D03 deadline or transport ownership change:
+
+- Preserve mutation-completion `monotonic_us`; add explicitly versioned
+  opportunity-start time from the existing native16667us pacing boundary.
+  New readers prove start cadence, ordered completion and no overlap; legacy
+  rows retain their original strict interpretation.
+- Use the already received client control phase, apply prospective source
+  membership and trace phase, then publish a local host-applied phase marker.
+  Controlled phase traffic waits for that marker on opening and closing;
+  initial ready and declared overload retain their existing protocols.
+  The phase clock is retained before waiting, and the100-RPC task starts once.
+  No accepted message is retimestamped, and credit is not reset.
+
+Focused existing fixtures pass: cadence positive/nine negatives; actual pinned
+Luau opening/closing handoff,100 RPCs/four clock probes and unchanged recovery;
+exact historical missing-tick negative; ordinary-demand Python30/30. A new
+test-slice error was corrected and preserved separately. The corrected jobs4
+native build and three affected suites pass; fresh canonical Player/Server
+packages pass Validate/Load and byte-closure checks with the current script.
+Use supported short staging paths: the failed output projects a243-character
+temporary member beyond the unchanged240 guard, while the successful output
+projects238. The old generic failure did not expose its exact diagnostic item;
+both roots/results remain preserved. Bounded generator failure diagnostics now
+expose existing errors without changing acceptance.
+
+Native preflight JUnit SHA-256:
+`79a99df0ec9aabb6f12b136632a3ef86509186c2a4da640332037e2e5431185e`.
+Package preflight receipt:
+`39999377635cf6dbdf54b9d0dd9ac6b169dce6fe258f2e48e68c799d5f5a4d73`.
+Exact-source hosted CI and a fresh native32 identity remain mandatory before
+claiming the complete conjunction.
+
 ## Hard conjunction
 
 1. **Native structural completion.** For every Ready, generation-valid accepted

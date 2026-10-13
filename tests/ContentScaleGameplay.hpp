@@ -337,6 +337,7 @@ local StopDrainStartedAt = 0
 local PhaseFinalized = false
 local PhaseTrafficFailure = false
 local RpcComplete = false
+local RpcStarted = false
 local RpcSamples = {}
 local RpcTrace = {}
 local RpcErrors = 0
@@ -541,8 +542,16 @@ RunService.PostSimulation:Connect(function()
     end
     if PhaseControl then
         PhaseControlTick += 1
+        local ReceivedScopePhase = Control:GetAttribute("ScalePhase")
+        local ScopeReady = ReceivedScopePhase ~= nil and
+            Control:GetAttribute("ScaleOrdinarySourcePhase") == ReceivedScopePhase
+        -- Initial ready remains outside measured traffic. All phase-dependent
+        -- control waits for the host to open OR close its prospective class.
+        if not PhaseReadySent then
+            PhaseReadySent = pcall(function() PhaseControl:FireServer("ready", "") end)
+        end
         local ClockEpoch = game:GetAttribute("ScaleClockEpoch")
-        if Control:GetAttribute("ScalePhase") == "calibrating" and
+        if ScopeReady and Control:GetAttribute("ScalePhase") == "calibrating" and
             type(ClockEpoch) == "number" and ClockEpoch > FarmClockQuiescedEpoch then
             -- This callback has already stopped counting the measured phase.
             -- The server cannot enable any probe until all 32 peers submit this marker.
@@ -552,7 +561,7 @@ RunService.PostSimulation:Connect(function()
                 print(string.format("[Qualification:FarmClock] event=client_quiesced epoch=%d", ClockEpoch))
             end
         end
-        if game:GetAttribute("ScaleClockActive") == true and type(ClockEpoch) == "number" and
+        if ScopeReady and game:GetAttribute("ScaleClockActive") == true and type(ClockEpoch) == "number" and
             ClockEpoch > FarmClockStartedEpoch and FarmClockQuiescedEpoch >= ClockEpoch and
             Control:GetAttribute("ScalePhase") == "calibrating" then
             FarmClockStartedEpoch = ClockEpoch
@@ -579,10 +588,8 @@ RunService.PostSimulation:Connect(function()
                 print(string.format("[Qualification:FarmClock] event=ack_failed epoch=%d", ClockEpoch))
             end)
         end
-        if not PhaseReadySent then
-            PhaseReadySent = pcall(function() PhaseControl:FireServer("ready", "") end)
-        end
-        if PendingPhaseAcknowledgement then
+        if ScopeReady and PendingPhaseAcknowledgement and (
+            Control:GetAttribute("ScaleOrdinarySourcePhase") == PendingPhaseAcknowledgement) then
             local Acknowledged = pcall(function()
                 PhaseControl:FireServer("phase_ack", PendingPhaseAcknowledgement)
             end)
@@ -610,6 +617,8 @@ RunService.PostSimulation:Connect(function()
             end
         end
         if ContentObservedPhase ~= nil and ContentObservedPhase == ReceivedPhase and
+            ScopeReady and
+            Control:GetAttribute("ScaleOrdinarySourcePhase") == ContentObservedPhase and
             not ContentObservationSubmitted and
             ContentObservationAttempts < 20 and
             PhaseControlTick - LastContentObservationTick >= 60 then
@@ -626,7 +635,8 @@ RunService.PostSimulation:Connect(function()
                 ContentObservationSubmitted = true
             end
         end
-        if PendingPhaseCompletion then
+        if ScopeReady and PendingPhaseCompletion and
+            Control:GetAttribute("ScaleOrdinarySourcePhase") == PendingPhaseCompletion then
             local Completed = pcall(function()
                 PhaseControl:FireServer(if PendingPhaseCompletionHealthy then "complete" else "failed",
                     PendingPhaseCompletion)
@@ -678,10 +688,17 @@ RunService.PostSimulation:Connect(function()
         PhaseActionRejectionsStart = ActionRejections
         PhaseActionUnexpectedEndingsStart = ActionUnexpectedEndings
         RpcComplete = false
+        RpcStarted = false
         RpcSamples = {}
         RpcTrace = {}
         RpcErrors = 0
         RpcTimeouts = 0
+    end
+    -- Keep the received-phase clock above. This prospective handoff delays
+    -- only new ordinary sends; it cannot retimestamp an accepted message.
+    if PhysicalFarm and Control:GetAttribute("ScaleOrdinarySourcePhase") ~= Phase then return end
+    if not RpcStarted then
+        RpcStarted = true
         local RunningPhase = Phase
         task.spawn(function()
             for Index = 1, 100 do
