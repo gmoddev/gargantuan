@@ -79,13 +79,53 @@ class FourClientTests(unittest.TestCase):
         self.Log = self.Root / "server.log"
         self.Rows, self.Text = Fixture()
 
-    def RunNative(self, Rows=None, Text=None):
+    def RunNative(self, Rows=None, Text=None, Contract="F1"):
         with self.Csv.open("w", newline="") as Stream:
-            Writer = csv.DictWriter(Stream, fieldnames=Replay.FIELDS)
+            Writer = csv.DictWriter(Stream, fieldnames=Replay.HYBRID_FIELDS if Contract == "HYBRID_F1_V1" else Replay.FIELDS)
             Writer.writeheader()
             Writer.writerows(self.Rows if Rows is None else Rows)
         self.Log.write_text(self.Text if Text is None else Text)
-        return Replay.ReplayNative(self.Csv, self.Log)
+        return Replay.ReplayNative(self.Csv, self.Log, ExpectedContract=Contract)
+
+    def HybridFixture(self):
+        Rows = copy.deepcopy(self.Rows)
+        for Row in Rows:
+            Row.update(completion_failed=0, last_completion_failed=0, completion_evidence_invalid=0,
+                       service_failed=1, last_completed_failed=int(Row["last_completed_token"] != 0),
+                       max_run_deficit_byte_us=Replay.RUN_BOUND + 1,
+                       last_completed_max_run_deficit_byte_us=Replay.RUN_BOUND + 1 if Row["last_completed_token"] else 0)
+        Text = self.Text.replace("contract=F1", "contract=HYBRID_F1_V1").replace(
+            "pool_curve=derived-from-four-native-grant-curves", "pool_curve=diagnostic-four-grant-overlap").replace(
+            "role=server nonce=", "role=server contract=HYBRID_F1_V1 nonce=").replace(
+            "max_run_deficit_byte_us=1000", f"max_run_deficit_byte_us={Replay.RUN_BOUND + 1}").replace(
+            "pool_episodes=32", f"pool_episodes=32 completion_budget_byte_us={Replay.COMPLETION_BUDGET} native_completion_invalid=0")
+        return Rows, Text
+
+    def test_hybrid_accepts_legacy_deficit_diagnostic_only(self):
+        Rows, Text = self.HybridFixture()
+        Result = self.RunNative(Rows, Text, "HYBRID_F1_V1")
+        self.assertEqual(Result["Contract"], "HYBRID_F1_V1")
+        self.assertEqual(Result["PoolProof"], "LEGACY_DIAGNOSTIC")
+
+    def test_hybrid_fatal_completion_flags_and_deadline(self):
+        Rows, Text = self.HybridFixture()
+        for Field in ("completion_failed", "last_completion_failed", "completion_evidence_invalid"):
+            Bad = copy.deepcopy(Rows)
+            Bad[4][Field] = 1
+            with self.subTest(Field=Field), self.assertRaisesRegex(ValueError, "native completion"):
+                self.RunNative(Bad, Text, "HYBRID_F1_V1")
+        Bad = copy.deepcopy(Rows)
+        Bad[4]["last_completed_finish_us"] = Bad[4]["last_completed_activated_us"] + 37_325
+        Bad[4]["feedback_us"] = Bad[4]["consumed_us"] = Bad[4]["last_completed_finish_us"]
+        with self.assertRaisesRegex(ValueError, "finite"):
+            self.RunNative(Bad, Text, "HYBRID_F1_V1")
+
+    def test_contract_identity_cannot_be_inferred_from_a_pass(self):
+        Rows, Text = self.HybridFixture()
+        with self.assertRaisesRegex(ValueError, "constants/certificate"):
+            self.RunNative(Text=Text)
+        with self.assertRaisesRegex(ValueError, "constants/certificate"):
+            self.RunNative(Rows, self.Text, "HYBRID_F1_V1")
 
     def test_exact_128_grants_and_pool_derivation(self):
         Result = self.RunNative()

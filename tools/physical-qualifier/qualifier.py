@@ -51,6 +51,17 @@ PHASE1_CAPTURE_DURATION = 70
 PHASE1_CAPTURE_STOP_TIMEOUT = 75
 CAPTURE_SERVICE_STOP_TIMEOUT = 45
 PHASE1_CLASSIFICATION = "FOUR_CLIENT_PHASE1_ONLY"
+# Deployment pins remain legacy until a fresh exact-source hybrid probe is
+# qualified and pinned. A config cannot select a different binary contract.
+PHASE1_CONTRACT = "F1"
+SERVICE_CONTRACTS = ("F1", "HYBRID_F1_V1")
+
+
+def ServiceContract(Config):
+    Contract = Config.get("ServiceContract", "F1")
+    if Contract not in SERVICE_CONTRACTS:
+        raise ValueError("unsupported service contract")
+    return Contract
 
 
 def IsPhase1(Config):
@@ -146,6 +157,9 @@ def CaptureDirections(File, Role, IncludeTuples=False):
 
 def ValidateConfig(Config):
     uuid.UUID(Config["RunId"])
+    Contract = ServiceContract(Config)
+    if (IsPhase1(Config) and Contract != PHASE1_CONTRACT) or (not IsPhase1(Config) and Contract != "F1"):
+        raise ValueError("service contract does not match the pinned qualification mode")
     ControlPreflight = Config.get("ControlPreflight")
     if ControlPreflight is not None and ControlPreflight is not True:
         raise ValueError("invalid control preflight mode")
@@ -243,9 +257,9 @@ class LocalRun:
         if (Manifest["BaseHead"] != ExpectedHead or Manifest["OverlayArchiveSha256"].upper() != ExpectedOverlay or
                 Manifest["GnsPin"] != GNS_PIN):
             raise ValueError("source manifest provenance mismatch")
-        if IsPhase1(Config) and (Manifest.get("Contract") != "F1" or
+        if IsPhase1(Config) and (Manifest.get("Contract") != ServiceContract(Config) or
                                  Manifest.get("ProbeSHA256", "").upper() != PHASE1_PROBE_SHA):
-            raise ValueError("Phase 1 requires the F1 probe source manifest")
+            raise ValueError("Phase 1 requires the matching service contract probe source manifest")
         if IsPhase1(Config) and (Manifest.get("SourceArchive") != PHASE1_SOURCE_ARCHIVE or
                                  Digest(ManifestPath.parent / PHASE1_SOURCE_ARCHIVE) != PHASE1_OVERLAY):
             raise ValueError("Phase 1 native source archive hash mismatch")
@@ -272,6 +286,8 @@ class LocalRun:
                   "1" if IsPhase1(Config) else "0"])
         if not IsPhase1(Config):
             Fixed.append("--readiness-smoke")
+        elif ServiceContract(Config) == "HYBRID_F1_V1":
+            Fixed.append("--hybrid-f1")
         if Config["ProbeArgs"] != Fixed:
             raise ValueError("probe arguments do not match the fixed qualification mode")
         if IsPhase1(Config) and Config["Role"] == "CLIENT":
@@ -431,6 +447,8 @@ class LocalRun:
     def Result(self):
         Clients = self.Config.get("ReadinessClients", 1)
         Phase1 = IsPhase1(self.Config)
+        Contract = ServiceContract(self.Config)
+        Hybrid = Contract == "HYBRID_F1_V1"
         Classification = PHASE1_CLASSIFICATION if Phase1 else "FOUR_CLIENT_READINESS_ONLY"
         if Clients == 4 and self.Config["Role"] == "CLIENT":
             Reports = []
@@ -439,11 +457,13 @@ class LocalRun:
                 Stdout = (self.Log.Directory / (Stem + ".stdout.log")).read_text(errors="replace")
                 Stderr = (self.Log.Directory / (Stem + ".stderr.log")).read_text(errors="replace")
                 Proof = ("[Probe:Result] pass=1 scope=Phase1-only" in Stdout and
-                         "[Probe:Summary] role=client" in Stdout) if Phase1 else (
+                         "[Probe:Summary] role=client" in Stdout and
+                         (not Hybrid or "contract=HYBRID_F1_V1" in Stdout)) if Phase1 else (
                          "[Probe:Readiness] result=pass role=client ready=1 expected=1 clean_remote_shutdown=1" in Stdout)
                 Passed = Process.returncode == 0 and Proof and "[Probe:Cleanup] good=1" in Stdout
                 Reports.append((Passed, Stderr))
             return {"Classification": Classification,
+                    "ServiceContract": Contract,
                     "Success": len(Reports) == 4 and all(Passed for Passed, _ in Reports),
                     "ExitCode": self.Probe.returncode, "EvidencePath": str(self.Log.Directory),
                     "Pid": self.Probe.pid, "ClientNonces": self.ClientNonces,
@@ -468,10 +488,12 @@ class LocalRun:
                                  int(P["structural_first"]) > 0 and
                                  int(P["structural_ack"]) == int(P["structural_first"]) and
                                  int(P["running_us"]) > 0 and
-                                 int(P["max_run_deficit_byte_us"]) <= int(Curve["peer_running_bound_byte_us"])
+                                 (Hybrid or int(P["max_run_deficit_byte_us"]) <= int(Curve["peer_running_bound_byte_us"]))
                                  for P in Peers))
-                PoolProof = (Curve["contract"] == "F1" and Curve["verdict"] == "PASS" and
-                             Curve["pool_curve"] == "derived-from-four-native-grant-curves" and
+                PoolProof = (Curve["contract"] == Contract and Curve["verdict"] == "PASS" and
+                             (not Hybrid or (Curve.get("completion_budget_byte_us") == "626199296000" and
+                                             Curve.get("native_completion_invalid") == "0")) and
+                             Curve["pool_curve"] == ("diagnostic-four-grant-overlap" if Hybrid else "derived-from-four-native-grant-curves") and
                              int(Curve["peer_rate_Bps"]) == 16 * 1024 * 1024 and
                              int(Curve["pool_rate_Bps"]) == 64 * 1024 * 1024 and
                              int(Curve["quantum_B"]) == 1248 and
@@ -497,6 +519,7 @@ class LocalRun:
             Success = (Success and
                        "[Probe:Readiness] result=pass role=server ready=4 expected=4" in Stdout)
         return {**({"Classification": Classification} if Clients == 4 else {}),
+                "ServiceContract": Contract,
                 "Success": Success, "ExitCode": self.Probe.returncode,
                 "EvidencePath": str(self.Log.Directory), "Pid": self.Probe.pid,
                 "Detail": Stderr[-2048:]}
@@ -624,6 +647,7 @@ def Stage(Args):
                                           PHASE1_CLASSIFICATION if Phase1 else "FOUR_CLIENT_READINESS_ONLY")
     if Phase1:
         Shared["QualificationMode"] = "PHASE1"
+        Shared["ServiceContract"] = getattr(Args, "contract", PHASE1_CONTRACT)
     if ControlPreflight:
         Shared["ControlPreflight"] = True
     ValidateConfig(Shared)
@@ -633,7 +657,7 @@ def Stage(Args):
               "ProbePath": str(Path(ClientBundle) / "gargantuan_physical_gns_funding_probe.exe"),
               "SourceManifest": str(Path(ClientBundle) / "source-manifest.json"), "WorkDir": ClientBundle,
               "ProbeArgs": ["client", "10.253.3.2", "39450", str(Args.nonce),
-                            "1" if Phase1 else "0"] + ([] if Phase1 else ["--readiness-smoke"]),
+                            "1" if Phase1 else "0"] + (["--hybrid-f1"] if Phase1 and ServiceContract(Shared) == "HYBRID_F1_V1" else [] if Phase1 else ["--readiness-smoke"]),
               "EvidenceDir": str(Directory / "client-evidence"),
               "CaptureCommand": [r"C:\Program Files\Wireshark\dumpcap.exe", "-i", Args.capture_device,
                                  *(["-B", "64"] if Clients == 4 else []),
@@ -649,7 +673,7 @@ def Stage(Args):
                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", Args.server_capture_stop, "{EvidenceDir}", "Stop"])
     Server = {**Shared, "Role": "SERVER", "ProbePath": ServerBundle + r"\gargantuan_physical_gns_funding_probe.exe",
               "SourceManifest": ServerBundle + r"\source-manifest.json", "WorkDir": ServerBundle,
-              "ProbeArgs": ["server", "10.253.3.2", "39450", str(Clients)] + ([] if Phase1 else ["--readiness-smoke"]),
+              "ProbeArgs": ["server", "10.253.3.2", "39450", str(Clients)] + (["--hybrid-f1"] if Phase1 and ServiceContract(Shared) == "HYBRID_F1_V1" else [] if Phase1 else ["--readiness-smoke"]),
               "EvidenceDir": Args.server_evidence,
               "CaptureStart": CaptureStart,
               "CaptureStop": CaptureStop}
@@ -674,6 +698,7 @@ def Main():
     Child.add_argument("--nonce", type=int, default=92707)
     Child.add_argument("--clients", type=int, choices=(1, 4), default=1)
     Child.add_argument("--phase1", action="store_true")
+    Child.add_argument("--contract", choices=SERVICE_CONTRACTS, default=PHASE1_CONTRACT)
     Child.add_argument("--control-preflight", action="store_true")
     Args = Parser.parse_args()
     try:

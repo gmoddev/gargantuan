@@ -20,6 +20,8 @@ RATE = 16_777_216
 GROUP = 524_288
 RUN_BOUND = 18_025_216_000
 FINITE_INTERCEPT = 101_911_296_000
+COMPLETION_BUDGET = FINITE_INTERCEPT + GROUP * 1_000_000
+CONTRACTS = ("F1", "HYBRID_F1_V1")
 MAX_ROWS = 65_536
 TOOLS = Path(__file__).resolve().parents[1] / "tools" / "physical-qualifier"
 FIELDS = ("simulation_step,slot,generation,consumed_us,feedback_us,present,valid,available,qualified,"
@@ -30,6 +32,7 @@ FIELDS = ("simulation_step,slot,generation,consumed_us,feedback_us,present,valid
           "last_completed_max_run_deficit_byte_us,last_completed_failed,retry,pending,unacked,retirement_sequence,"
           "retired_token,result_retired_bytes,grants,total_debt,created,retired,terminal,delta_first,delta_ack,"
           "delta_retry,backend_ns,queue_us,rate").split(",")
+HYBRID_FIELDS = FIELDS + ["completion_failed", "last_completion_failed", "completion_evidence_invalid"]
 
 
 def Require(Condition, Message):
@@ -100,16 +103,22 @@ def NativePass(Text, Role):
     return Summary
 
 
-def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
+def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None, ExpectedContract="F1"):
     """Replay the fixed probe's bounded snapshot schema and native certificate."""
     Text = Read(ServerLog)
+    Require(ExpectedContract in CONTRACTS, "unsupported service contract")
+    Hybrid = ExpectedContract == "HYBRID_F1_V1"
     Summary = NativePass(Text, "server")
     Curve = One(Text, "ServiceCurve")
-    Expected = {"contract": "F1", "verdict": "PASS", "pool_curve": "derived-from-four-native-grant-curves",
+    Expected = {"contract": ExpectedContract, "verdict": "PASS", "pool_curve": "diagnostic-four-grant-overlap" if Hybrid else "derived-from-four-native-grant-curves",
                 "peer_rate_Bps": str(RATE), "pool_rate_Bps": str(4 * RATE), "quantum_B": "1248",
                 "startup_us": "5000", "run_us": "1000", "peer_finite_intercept_byte_us": str(FINITE_INTERCEPT),
                 "peer_running_bound_byte_us": str(RUN_BOUND), "pool_running_bound_byte_us": str(4 * RUN_BOUND)}
     Require(all(Curve.get(Key) == Value for Key, Value in Expected.items()), "F1 constants/certificate mismatch")
+    if Hybrid:
+        Require(Summary.get("contract") == ExpectedContract and
+                Curve.get("completion_budget_byte_us") == str(COMPLETION_BUDGET) and
+                Curve.get("native_completion_invalid") == "0", "hybrid native certificate missing/invalid")
     Admission = One(Text, "Admission")
     Require(all(Admission.get(Key) == "0" for Key in ("terminal", "outstanding", "grants")) and
             Admission.get("accepted") == Admission.get("retired") and Admission.get("grants_high_water") == "4",
@@ -154,7 +163,7 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
     PreviousGlobal = None
     with Path(ServerCsv).open(encoding="utf-8-sig", newline="") as Stream:
         Reader = csv.DictReader(Stream)
-        Require(Reader.fieldnames == FIELDS, "native CSV schema mismatch")
+        Require(Reader.fieldnames == (HYBRID_FIELDS if Hybrid else FIELDS), "native CSV schema mismatch")
         for Raw in Reader:
             Rows += 1
             Require(Rows <= MAX_ROWS and None not in Raw and all(V is not None for V in Raw.values()), "truncated/oversized CSV")
@@ -181,9 +190,13 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
                         "native cumulative counters regressed")
             Require(Row["structural_ack"] <= Row["structural_first"] <= Row["accepted_structural"] and
                     Row["structural_first"] - Row["structural_ack"] <= GROUP, "native first-send/ACK conservation failed")
-            Require(Row["service_failed"] == Row["last_completed_failed"] == 0 and
-                    max(Row["current_run_deficit_byte_us"], Row["max_run_deficit_byte_us"],
-                        Row["last_completed_max_run_deficit_byte_us"]) <= RUN_BOUND, "latched native running service failure")
+            if Hybrid:
+                Require(Row["completion_failed"] == Row["last_completion_failed"] ==
+                        Row["completion_evidence_invalid"] == 0, "latched native completion failure")
+            else:
+                Require(Row["service_failed"] == Row["last_completed_failed"] == 0 and
+                        max(Row["current_run_deficit_byte_us"], Row["max_run_deficit_byte_us"],
+                            Row["last_completed_max_run_deficit_byte_us"]) <= RUN_BOUND, "latched native running service failure")
             # The maximum-size campaign, unlike preliminary connection setup,
             # must have current valid native feedback on every sampled row.
             Campaign = any(Key[0] == Slot and Value == GROUP for Key, Value in Grants.items())
@@ -203,8 +216,10 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
                             Row["first_sent_in_grant"] <= Row["active_grant_bytes"], "active grant attribution mismatch")
                     Demand = min(Row["active_grant_bytes"] * 1_000_000,
                                  max(0, RATE * (Row["feedback_us"] - Row["active_grant_started_us"]) - FINITE_INTERCEPT))
-                    Require(Row["active_grant_started_us"] > 0 and
-                            Demand <= Row["first_sent_in_grant"] * 1_000_000, "sampled finite envelope failed")
+                    Require(0 < Row["active_grant_started_us"] <= Row["feedback_us"] and (Hybrid and
+                            (Row["first_sent_in_grant"] == Row["active_grant_bytes"] or
+                             RATE * (Row["feedback_us"] - Row["active_grant_started_us"]) <= COMPLETION_BUDGET) or
+                            not Hybrid and Demand <= Row["first_sent_in_grant"] * 1_000_000), "sampled finite envelope failed")
             Token = Row["last_completed_token"]
             if Token:
                 Key = (Slot, Token)
@@ -216,7 +231,8 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
                 if AdmissionsCsv is not None:
                     Require(Key in Admitted and Admitted[Key]["activated_us"] == Start, "completion activation differs from admission boundary")
                 Require(0 < Start <= First <= Finish <= Row["feedback_us"] and
-                        RATE * (Finish - Start) <= FINITE_INTERCEPT + Size * 1_000_000, "finite completion envelope failed")
+                        RATE * (Finish - Start) <= (COMPLETION_BUDGET if Hybrid else
+                        FINITE_INTERCEPT + Size * 1_000_000), "finite completion envelope failed")
                 Completed[Key] = Certificate
             if Row["result_retired_bytes"]:
                 Key = (Slot, Row["retired_token"])
@@ -275,10 +291,10 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
         At = Time
     Require(CommonUs > 0 and Episodes >= 3 and Curve.get("pool_common_run_us") == str(CommonUs) and
             Curve.get("pool_episodes") == str(Episodes), "common first-send overlap differs from native summary")
-    return {"Rows": Rows, "MaximumGrants": 128, "Peers": sorted(PerPeer, key=lambda P: P["Slot"]),
+    return {"Contract": ExpectedContract, "Rows": Rows, "MaximumGrants": 128, "Peers": sorted(PerPeer, key=lambda P: P["Slot"]),
             "Accepted": UInt(Admission["accepted"]), "Retired": UInt(Admission["retired"]),
             "CommonRunningUs": CommonUs, "CommonEpisodes": Episodes, "PoolBoundByteUs": 4 * RUN_BOUND,
-            "PoolProof": "sum-of-four-native-all-subinterval-certificates", "MeasuredPoolMaximum": "NOT_MEASURED",
+            "PoolProof": "LEGACY_DIAGNOSTIC" if Hybrid else "sum-of-four-native-all-subinterval-certificates", "MeasuredPoolMaximum": "NOT_MEASURED",
             "NativeEvidenceKind": "consumed-feedback-snapshots-with-latched-native-certificates",
             "PreCampaignUncertifiedBootstrap": Bootstrap,
             "AdmissionBoundaryState": "MEASURED" if AdmissionsCsv is not None else "NOT_MEASURED",
@@ -463,14 +479,14 @@ def FullPackets(File):
     return Count
 
 
-def Replay(Inputs, ExpectedCommit):
+def Replay(Inputs, ExpectedCommit, ExpectedContract="F1"):
     try:
-        return ReplayInputs(Inputs, ExpectedCommit)
+        return ReplayInputs(Inputs, ExpectedCommit, ExpectedContract)
     except (KeyError, TypeError, IndexError, OSError, UnicodeError, OverflowError) as Error:
         raise ValueError("[Foundation3L:FourClient] malformed/inaccessible retained evidence: " + str(Error)) from Error
 
 
-def ReplayInputs(Inputs, ExpectedCommit):
+def ReplayInputs(Inputs, ExpectedCommit, ExpectedContract="F1"):
     """Fixed, offline entry point. Inputs map paths to retained raw evidence.
 
     Missing inputs are NOT_MEASURED. Present malformed/failed evidence raises.
@@ -478,6 +494,7 @@ def ReplayInputs(Inputs, ExpectedCommit):
     from probe working directories; endpoint files match original manifests.
     """
     Require(isinstance(Inputs, dict) and re.fullmatch(r"[0-9a-f]{40}", ExpectedCommit), "invalid replay request")
+    Require(ExpectedContract in CONTRACTS, "unsupported service contract")
     Required = ("ClientRoot", "ServerRoot", "CoordinatorRoot", "LifecycleHostRoot", "LifecycleQualification",
                 "Cleanup", "ServerCsv", "AdmissionsCsv", "ClientCsv", "RawCsvSha256", "CandidateRoot")
     if any(Key not in Inputs for Key in Required):
@@ -491,7 +508,7 @@ def ReplayInputs(Inputs, ExpectedCommit):
                                         ("ClientRoot", "ServerRoot", "CoordinatorRoot", "LifecycleHostRoot")]
     Source = Object(Needed(Client, "source-manifest.json"))
     Require(Source == Object(Needed(Server, "source-manifest.json")), "endpoints ran different candidates")
-    Require(Source.get("BaseHead") == ExpectedCommit and Source.get("Contract") == "F1" and
+    Require(Source.get("BaseHead") == ExpectedCommit and Source.get("Contract") == ExpectedContract and
             Source.get("GnsPin") == "2cb93a06350bb065db53abdb0d87cf297e0bfd34" and
             Source.get("SourceArchiveFormat") == "F1_OWNED_TREE_V2", "candidate source provenance mismatch")
     sys.path.insert(0, str(TOOLS))
@@ -519,11 +536,14 @@ def ReplayInputs(Inputs, ExpectedCommit):
                 "raw CSV differs from endpoint sealed evidence: " + Key)
     ServerLogs = [File for Name, File in Server.items() if re.fullmatch(r"probe-server(?:-[0-9]+)?\.stdout\.log", Name)]
     Require(len(ServerLogs) == 1, "missing/ambiguous server log")
-    Native = ReplayNative(Inputs["ServerCsv"], ServerLogs[0], Inputs["AdmissionsCsv"])
+    Native = ReplayNative(Inputs["ServerCsv"], ServerLogs[0], Inputs["AdmissionsCsv"], ExpectedContract)
     Nonces = [P["Nonce"] for P in Native["Peers"]]
     Require(set(Inputs["ClientCsv"]) == {str(N) for N in Nonces}, "raw client identity mismatch")
     Gameplay = {}
     for Nonce in Nonces:
+        if ExpectedContract == "HYBRID_F1_V1":
+            Require(One(Read(Needed(Client, f"probe-client-{Nonce}.stdout.log")), "Summary").get("contract") ==
+                    ExpectedContract, "mixed client service contract")
         Gameplay[str(Nonce)] = ReplayGameplay(Inputs["ClientCsv"][str(Nonce)],
             Read(Needed(Client, f"probe-client-{Nonce}.stdout.log")), Nonce, Nonce == Native["ProducerNonce"])
     Results = {Role: Object(Needed(Files, "result.json")) for Role, Files in
@@ -533,6 +553,8 @@ def ReplayInputs(Inputs, ExpectedCommit):
                 "physical endpoint/coordinator failed: " + Role)
         if Role != "COORDINATOR":
             Require(Result.get("ExitCode") == 0, "physical child failed")
+            if ExpectedContract == "HYBRID_F1_V1":
+                Require(Result.get("ServiceContract") == ExpectedContract, "mixed endpoint service contract")
     Require(Results["CLIENT"].get("ClientNonces") == Nonces, "client result nonces mismatch")
     Endpoint = Results["COORDINATOR"]["Endpoints"]
     Require(set(Endpoint) == {"CLIENT", "SERVER"}, "coordinator endpoint set mismatch")
@@ -598,7 +620,7 @@ def ReplayInputs(Inputs, ExpectedCommit):
         Captures[Role] = {"Packets": Count, "Tuples": Tuples}
         EndpointJournal(Files, Results[Role], Source, RunId, Tuples)
     Require(set(Captures["CLIENT"]["Tuples"]) == set(Captures["SERVER"]["Tuples"]), "capture endpoint tuple mismatch")
-    return {"State": "MEASURED_PASS", "SourceCommit": ExpectedCommit, "RunId": RunId, "LifecycleRunId": LifecycleRunId,
+    return {"State": "MEASURED_PASS", "Contract": ExpectedContract, "SourceCommit": ExpectedCommit, "RunId": RunId, "LifecycleRunId": LifecycleRunId,
             "CompletedUtc": CompletedUtc, "CompletionClockDomain": "CONTROLLING_HOST_UTC",
             "CandidatePins": Pins, "InputHashes": Hashes, "Native": Native,
             "Gameplay": Gameplay, "Capture": Captures}

@@ -85,6 +85,18 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-13 — D03 standard-profile qualification scope resolved; fresh qualification pending.**
+The explicit product decision supersedes the earlier exception that required
+raw D01 packet-scale running service for standard `HYBRID_F1_V1` release.
+Contract-aware raw and funded four-grant fixtures keep their curves diagnostic
+only under HYBRID; explicit legacy modes retain strict semantics. Native
+completion, attribution, chronology, packet/reserve accounting, reliability,
+order, lifecycle and exact retirement stay fatal. CI/package/four-client/final
+readers require matching explicit contract identity; historical failures remain
+unchanged. All D03 product bounds and independent provider/recovery gates remain
+mandatory. The migration is being qualified; this decision alone closes no
+evidence gate. **KI-006 OPEN; PR6 draft; Foundation3L B — PARTIALLY READY.**
+
 **2026-10-13 — Required raw four-grant CI fails; final attribution does not reproduce.**
 Execution candidate `e792482e8a9f326bb0f2861576e87e163d0c7537` preserves
 D03's100/150ms limits and qualifies the focused publication/recovery enrollment

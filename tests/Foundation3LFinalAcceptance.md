@@ -10,6 +10,24 @@ related_code:
 
 # Final Foundation 3L evidence conjunction
 
+## Explicit qualification contract
+
+Standard `HYBRID_F1_V1` qualification uses the adopted D03 product contract,
+including its2026-10-13 raw-running-curve scope amendment. The retained raw
+four-grant/four-client structural checks remain required with explicit matching
+contract identity. Legacy running deficits are diagnostic in that profile;
+native completion, positive first-send truth, exact packet/reserve/delivery
+accounting, reliability, order and lifetime remain fatal. This subset does not
+prove full D03: both provider campaigns independently enforce50ms ordinary FIFO,
+100ms Main,150ms turnover,1181.25ms fair32 admission, gameplay, resource,
+backpressure and canonical recovery/convergence requirements.
+
+Legacy F1 evidence retains its original full curve semantics. An explicitly
+selected profile must match the current-source CI, package, four-client and
+provider evidence; missing, unknown or mixed identity cannot qualify HYBRID.
+Historical failures and the exact retained historical exception below remain
+unchanged. No earlier source becomes a current HYBRID PASS through this amendment.
+
 CI diagnostics retain all raw trace sets. The reader bounds the original
 compressed ZIP to 128 MiB and its directory to 10,000 members, validates every
 path and duplicate, and reads only one JUnit member (16 MiB cap) and one source
@@ -74,6 +92,7 @@ precede Node staging. No historical receipt or failed provider is relabeled.
 ```powershell
 python tests/foundation3l_acceptance.py `
   --source-commit <40-lowercase-hex> `
+  --contract HYBRID_F1_V1 `
   --analyzer-commit <clean-reviewed-analyzer-HEAD-if-different-from-source> `
   --farm-inputs <raw-farm-arguments.json> `
   --powershell-path <absolute-pwsh.exe-path> --powershell-sha256 <runtime-sha256> `
@@ -210,7 +229,8 @@ content-manifest and deployment hashes must equal the independently replayed
 Local/Node run manifests. Matching a self-reported source SHA alone is
 insufficient.
 The builder's two retained source-fixture files and canonical workload
-descriptor are the only allowed files outside the two deployment inventories;
+descriptor, plus the bounded exact `qualification-contract.txt` marker for
+HYBRID, are the only allowed files outside the two deployment inventories;
 they remain bound by the original GitHub ZIP digest and bounded separately.
 
 Retain the root-owned CLIENT campaign stage configurations. Their RunId,

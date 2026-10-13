@@ -332,35 +332,52 @@ int main(int ArgumentCount, char **Arguments) {
 	try { gargantuan::BootstrapNativeRuntimeSchema(); }
 	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
 	TestFarmClockCapture();
+	Check(GnsFourGrantFixture::RunContractTests(), "four-grant explicit contract semantics");
+	if (Failures) return 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant-contract") return 0;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--pooled-domain") {
 		TestExclusivePooledDomain();
 		return Failures == 0 ? 0 : 1;
 	}
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle")
 		return GnsAckCycleFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle-hybrid")
+		return GnsAckCycleFixture::Run(false, 0, GnsFourGrantFixture::Contract::HybridF1) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-retry-safety")
 		return GnsAckCycleFixture::RunRetrySafety() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-compatibility")
 		return GnsFundedAckCompatibilityFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-compatibility-hybrid")
+		return GnsFundedAckCompatibilityFixture::Run(GnsFourGrantFixture::Contract::HybridF1) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-four-grant")
 		return GnsFundedAckFourGrantFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-four-grant-hybrid")
+		return GnsFundedAckFourGrantFixture::Run(GnsFourGrantFixture::Contract::HybridF1) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-stats-boundary")
 		return GnsAckStatsBoundaryFixture::Run() ? 0 : 1;
-	if (ArgumentCount == 3 && std::string_view(Arguments[1]) == "--ack-cycle-funded") {
+	if (ArgumentCount == 3 && (std::string_view(Arguments[1]) == "--ack-cycle-funded" ||
+		std::string_view(Arguments[1]) == "--ack-cycle-funded-hybrid")) {
 		const std::string_view Text(Arguments[2]);
 		std::uint64_t TailBudget = 0;
 		const auto Parsed = std::from_chars(Text.data(), Text.data() + Text.size(), TailBudget);
 		if (Parsed.ec != std::errc{} || Parsed.ptr != Text.data() + Text.size() || !TailBudget) return 2;
-		return GnsAckCycleFixture::Run(true, TailBudget) ? 0 : 1;
+		return GnsAckCycleFixture::Run(true, TailBudget, std::string_view(Arguments[1]) == "--ack-cycle-funded-hybrid" ?
+			GnsFourGrantFixture::Contract::HybridF1 : GnsFourGrantFixture::Contract::LegacyFiniteGrant) ? 0 : 1;
 	}
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--packet-tail")
 		return GnsPacketTailFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--packet-tail-hybrid")
+		return GnsPacketTailFixture::Run(GnsFourGrantFixture::Contract::HybridF1) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant")
 		return GnsFourGrantFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant-hybrid")
+		return GnsFourGrantFixture::Run(GnsFourGrantFixture::Contract::HybridF1) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant-sanitizer-safety")
 		return GnsFourGrantFixture::Run(false) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--mixed-traffic")
 		return GnsMixedTrafficFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--mixed-traffic-hybrid")
+		return GnsMixedTrafficFixture::Run(GnsFourGrantFixture::Contract::HybridF1) ? 0 : 1;
 	const bool FeedbackPassed = FeedbackFixture::Run();
 	const bool ServiceCurvePassed = ServiceCurveFixture::Run();
 	const bool FiniteGrantPassed = FiniteGrantServiceCurveFixture::Run();

@@ -13,7 +13,35 @@ source, hosted CI and endpoint preflight; it does not invalidate or rerun the
 retained F1 qualification. Required hosted CI includes the original uploaded
 JUnit evidence, not only a successful workflow status.
 
-The development Phase 1 probe and result analyzer implement the
+## Versioned qualification scope (2026-10-13)
+
+Standard `HYBRID_F1_V1` releases qualify D03. The retained legacy packet-scale
+running curve is diagnostic under that profile; it cannot independently reject
+a release. Native-positive unique BODY completion within the exact
+`626199296000 / 16777216 = 37324.3865966796875`-us budget, original activation
+and first-send identity, fresh complete feedback, exact ACK/retirement,
+conservation, reserves, ordering, gameplay and lifecycle remain fatal. The
+four-client Phase 1 result is only a prerequisite: Native32/Local32/Node32 must
+separately establish the full D03 completion/FIFO/execution/turnover/fairness and
+recovery conjunction.
+
+The probe selects this scope explicitly with `--hybrid-f1`; its summaries and
+source manifest must identify `HYBRID_F1_V1`. Hybrid CSV adds the three native
+completion failure/evidence flags. `Replay(..., ExpectedContract="HYBRID_F1_V1")`
+requires that exact schema and all endpoint identities; a legacy PASS cannot
+substitute. The default replay and probe command remain strict legacy `F1`.
+`stage --contract` and config `ServiceContract` must match the pinned
+`PHASE1_CONTRACT`. The current deployment pins remain historical `F1`: hybrid
+staging is rejected until a freshly qualified exact-source probe/archive/runtime
+and closed native dependency manifest are pinned together. No installed
+coordinator service or historical manifest is changed by this scope migration.
+
+CI selects the hybrid four-grant and funded-ACK fixtures and uploads an exact
+`qualification-contract.txt` marker. Official package evidence carries that
+marker outside both closed deployment role inventories. Historic artifacts
+without it retain their original strict identity and verdict.
+
+The retained development Phase 1 probe and result analyzer implement the
 [D01/F1 finite-grant drain contract](../../docs/adr/D01-pooled-service-curve.md):
 each accepted maximum-size grant must complete unique native first-send within
 its finite rate-latency envelope, pass its independent intra-grant running-rate

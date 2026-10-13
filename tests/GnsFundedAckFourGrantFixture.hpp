@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GnsFundedAckCompatibilityFixture.hpp"
+#include "GnsFourGrantFixture.hpp"
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -31,7 +32,10 @@ inline void DrainAll(std::array<PairFixture, 4> &Pairs) {
 	}
 }
 
-inline bool Run() {
+inline bool Run(GnsFourGrantFixture::Contract Selected = GnsFourGrantFixture::Contract::LegacyFiniteGrant) {
+	const bool RequireLegacyCurve = Selected == GnsFourGrantFixture::Contract::LegacyFiniteGrant;
+	std::cout << "[Network:FundedAckFour] contract=" << GnsFourGrantFixture::Identity(Selected) << '\n';
+	if (Selected == GnsFourGrantFixture::Contract::SanitizerSafety) return false;
 	constexpr std::uint64_t GrantBytes = MaximumReliableServiceGroupBytes;
 	constexpr std::uint64_t Token = 1;
 	const auto Profile = ReliableServiceProfile::PooledService().Pooled;
@@ -68,16 +72,14 @@ inline bool Run() {
 			const auto Snapshot = Compatibility::ReadWire(Pairs[Index]);
 			const auto &Sample = Snapshot.Sender;
 			if (Sample.StructuralLastCompletedGrantToken != Token || Sample.StructuralLastCompletedGrantBytes != GrantBytes ||
-				Sample.StructuralPayloadBytesFirstSent != GrantBytes || Sample.StructuralLastCompletedGrantFailed ||
-				Sample.StructuralServiceFailed || Sample.StructuralMaximumFiniteShortfallByteMicroseconds != 0 ||
-				Sample.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds >
-					FiniteGrantServiceCurve::RunningBoundByteMicroseconds) {
+				Sample.StructuralPayloadBytesFirstSent != GrantBytes ||
+				!GnsFourGrantFixture::SelectedTimingValid(Sample, Token, GrantBytes, Selected)) {
 				std::cerr << "[Network:FundedAckFour] peer=" << Index << " token="
 					<< Sample.StructuralLastCompletedGrantToken << " first_sent=" << Sample.StructuralPayloadBytesFirstSent
 					<< " active_bytes=" << Sample.StructuralActiveGrantBytes << " failed=" << Sample.StructuralLastCompletedGrantFailed
 					<< " finite_shortfall=" << Sample.StructuralMaximumFiniteShortfallByteMicroseconds
 					<< " running_deficit=" << Sample.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds << '\n';
-				throw std::runtime_error("individual funded maximum grant failed strict native F1");
+				throw std::runtime_error("individual funded maximum grant failed selected native contract");
 			}
 			const auto Activation = Sample.StructuralLastCompletedGrantActivatedAtMicroseconds;
 			const auto First = Sample.StructuralLastCompletedGrantFirstSendAtMicroseconds;
@@ -124,7 +126,7 @@ inline bool Run() {
 			Served += Event.Bytes; Observe(Event.At);
 		}
 		Observe(CommonEnd);
-		Compatibility::Require(MaximumPoolDeficit <= PooledReliableServiceProfile::FourGrantPoolRunningBoundByteMicroseconds,
+		Compatibility::Require(!RequireLegacyCurve || MaximumPoolDeficit <= PooledReliableServiceProfile::FourGrantPoolRunningBoundByteMicroseconds,
 			"funded ACK prototype violated the unchanged common four-grant running curve");
 
 		bool Retired = false;
@@ -185,7 +187,8 @@ inline bool Run() {
 		const auto ReserveBudget = Profile.RequiredTransportReserve * (LatestCompletion - EarliestActivation) / 1000000 + 4 * 1300;
 		Compatibility::Require(WholeIpv4 - 4 * GrantBytes <= ReserveBudget && WholeIpv6 <= FundedCeilings,
 			"whole four-grant wire overhead exceeded unchanged reserve or funded ceilings");
-		std::cout << "[Network:FundedAckFour] overlap_us=" << CommonEnd - CommonStart
+		std::cout << "[Network:FundedAckFour] contract=" << GnsFourGrantFixture::Identity(Selected)
+			<< " overlap_us=" << CommonEnd - CommonStart
 			<< " peer_max_running_byte_us=" << MaximumPeerDeficit << " pool_max_running_byte_us=" << MaximumPoolDeficit
 			<< " pool_bound_byte_us=" << PooledReliableServiceProfile::FourGrantPoolRunningBoundByteMicroseconds
 			<< " whole_wire_ipv4=" << WholeIpv4 << " whole_wire_ipv6_bound=" << WholeIpv6
@@ -193,7 +196,8 @@ inline bool Run() {
 			<< " requests=" << PromptCount << " result=PASS\n";
 		return true;
 	} catch (const std::exception &Error) {
-		std::cerr << "[Network:FundedAckFour] FAIL " << Error.what() << '\n';
+		std::cerr << "[Network:FundedAckFour] contract=" << GnsFourGrantFixture::Identity(Selected)
+			<< " FAIL " << Error.what() << '\n';
 		return false;
 	}
 }

@@ -96,8 +96,9 @@ struct Probe {
 	double MaximumStepMs = 0;
 	glm::vec3 InitialPosition{};
 	bool InputSent = false, Moved = false;
-	Probe(bool IsServer, bool IsProducer, std::uint64_t ClientNonce, TransportEndpoint Endpoint, bool IsReadinessSmoke, unsigned ClientCount)
+	Probe(bool IsServer, bool IsProducer, std::uint64_t ClientNonce, TransportEndpoint Endpoint, bool IsReadinessSmoke, unsigned ClientCount, bool Hybrid)
 		: Server(IsServer), Producer(IsProducer), ReadinessSmoke(IsReadinessSmoke), Nonce(ClientNonce), ExpectedClients(ClientCount) {
+		Samples.Hybrid = Hybrid;
 		if (Server) Samples.Prepare();
 		RpcTimes.reserve(512); EventTimes.reserve(512);
 		const auto Profile = ReliableServiceProfile::PooledService();
@@ -328,7 +329,7 @@ struct Probe {
 		if (ReadinessSmoke) std::cout << "[Probe:Readiness] result=" << (ReadinessPassed ? "pass" : "fail")
 			<< " role=" << (Server ? "server" : "client") << " ready=" << (Server ? ReadinessObserved : static_cast<unsigned>(WasReady))
 			<< " expected=" << (Server ? ExpectedClients : 1) << " clean_remote_shutdown=" << (!Server && ReadinessPassed) << '\n';
-		std::cout << "[Probe:Summary] role=" << (Server ? "server" : "client") << " nonce=" << Nonce << " producer=" << Producer
+		std::cout << "[Probe:Summary] role=" << (Server ? "server" : "client") << " contract=" << Samples.Contract() << " nonce=" << Nonce << " producer=" << Producer
 			<< " waves=" << Wave << " applied=" << Applied << " moved=" << Moved << " rpc_n=" << RpcTimes.size() << " event_n=" << EventTimes.size()
 			<< " rpc_p95_ms=" << Percentile(RpcTimes, 95) << " rpc_p99_ms=" << Percentile(RpcTimes, 99) << " rpc_max_ms=" << Percentile(RpcTimes, 100)
 			<< " event_max_ms=" << Percentile(EventTimes, 100) << " step_max_ms=" << MaximumStepMs << " errors=" << Errors
@@ -350,7 +351,7 @@ struct Probe {
 			const auto Cause = Participants.size() < PeerCount ? "H-client-readiness-or-disconnect" :
 				Samples.FloorFailure ? "C-grant-drain-or-delivery" : Samples.Invalid ? "D-feedback-or-attribution" :
 				!Samples.PoolQualifiedUs ? "B-four-grant-firstsend-overlap" : "A-campaign-convergence-or-turnover";
-			std::cout << "[Probe:ServiceCurve] contract=F1 peer_rate_Bps=" << Profile.Pooled.PeerDrainFloor
+			std::cout << "[Probe:ServiceCurve] contract=" << Samples.Contract() << " peer_rate_Bps=" << Profile.Pooled.PeerDrainFloor
 				<< " pool_rate_Bps=" << Profile.Pooled.StructuralPool << " quantum_B=" << PooledReliableServiceProfile::ServiceQuantumBytes
 				<< " startup_us=5000 run_us=1000"
 				<< " peer_finite_intercept_byte_us=" << FiniteLatencyByteMicroseconds
@@ -358,7 +359,9 @@ struct Probe {
 				<< " pool_running_bound_byte_us=" << PooledReliableServiceProfile::FourGrantPoolRunningBoundByteMicroseconds
 				<< " pool_common_run_us=" << Samples.PoolQualifiedUs
 				<< " pool_episodes=" << Samples.PoolEpisodes
-				<< " pool_curve=derived-from-four-native-grant-curves"
+				<< " pool_curve=" << (Samples.Hybrid ? "diagnostic-four-grant-overlap" : "derived-from-four-native-grant-curves")
+				<< " completion_budget_byte_us=" << NativeGrantCompletionCurve::CompletionBudgetByteMicroseconds
+				<< " native_completion_invalid=" << Samples.NativeCompletionInvalid
 				<< " demand_rows=" << DemandRows << " four_grant_debt_rows=" << FourGrantDebtRows
 				<< " verdict=" << (Samples.Passed() ? "PASS" : "FAIL")
 				<< " failure_class=" << (Samples.Passed() ? "none" : FailureClass.empty() ? Cause : FailureClass) << '\n';
@@ -454,6 +457,11 @@ void SelfTest() {
 				.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds =
 					Point == 2 ? (Slow ? RunningDeficitBound + 1 : 10'000'000'000ULL) : 0,
 				.StructuralLastCompletedGrantFailed = Point == 2 && Slow};
+			if (Point == 2) {
+				R.Feedback->LastCompletedStructuralSegmentEventCount = 2;
+				R.Feedback->LastCompletedStructuralSegmentEvents[0] = {Start + 6000, 100'000};
+				R.Feedback->LastCompletedStructuralSegmentEvents[1] = {Start + 31'000, GroupBytes - 100'000};
+			}
 			R.Result.Valid = true; R.Result.Available = !Stale; R.Result.Qualified = !Slow && !Stale;
 			R.Accepted.Structural = Prior + GroupBytes;
 			R.Admission.ActiveDrainGrants = Active ? PeerCount : 0;
@@ -489,6 +497,24 @@ void SelfTest() {
 		"F1 grant turnover and common first-send overlap failed");
 	Trace Slow; Slow.Demand = 1; FeedCurve(Slow, 1, 1, 0); FeedCurve(Slow, 2, 1, 1, true);
 	Require(Slow.FloorFailure && !Slow.Passed(), "native grant running deficit escaped failure");
+	Trace Hybrid; Hybrid.Hybrid = true; Hybrid.Demand = 1;
+	for (unsigned W = 1; W <= 3; ++W)
+		for (unsigned P = 0; P < 3; ++P)
+			FeedCurve(Hybrid, (W - 1) * 3 + P + 1, W, P, true);
+	Hybrid.Analyze();
+	Require(Hybrid.Passed(), "legacy running deficit invalidated exact hybrid completion");
+	const auto Certificate = Hybrid.Peers[0].Previous.Sample.Feedback.value();
+	Require(Trace::NativeCompletionPass(Certificate), "exact native BODY certificate rejected");
+	for (unsigned Case = 0; Case < 5; ++Case) {
+		auto Bad = Certificate;
+		if (Case == 0) Bad.StructuralCompletionServiceFailed = true;
+		if (Case == 1) Bad.StructuralLastCompletedCompletionFailed = true;
+		if (Case == 2) Bad.StructuralCompletionEvidenceInvalid = true;
+		if (Case == 3) --Bad.LastCompletedStructuralSegmentEvents[1].PayloadBytes;
+		if (Case == 4) Bad.LastCompletedStructuralSegmentEvents[1].AtMicroseconds =
+			Bad.StructuralLastCompletedGrantActivatedAtMicroseconds + 37'325;
+		Require(!Trace::NativeCompletionPass(Bad), "hybrid native failure escaped fatal check");
+	}
 	Trace Stale; Stale.Demand = 1; FeedCurve(Stale, 1, 1, 0); FeedCurve(Stale, 2, 1, 1, false, true);
 	Require(Stale.Invalid && !Stale.Passed(), "stale campaign feedback escaped failure");
 	Trace NoOverlap; NoOverlap.Demand = 1;
@@ -520,7 +546,7 @@ void SelfTest() {
 	Require(DuplicateAdmission.Invalid, "duplicate accepted obligation escaped evidence failure");
 	Good.Rows.resize(Trace::Capacity); FeedCurve(Good, 999, 3, 2);
 	Require(Good.Overflow, "trace overflow did not fail closed");
-	std::cout << "[Probe:SelfTest] pass=1 sockets=0 contract=F1 cases=8\n";
+	std::cout << "[Probe:SelfTest] pass=1 sockets=0 contract=F1,HYBRID_F1_V1 cases=14\n";
 }
 }
 int main(int Count, char **Args) {
@@ -533,9 +559,11 @@ int main(int Count, char **Args) {
 		if (Count == 2 && std::string_view(Args[1]) == "--self-test") { SelfTest(); return 0; }
 		const bool Server = Count > 1 && std::string_view(Args[1]) == "server";
 		const bool ReadinessSmoke = Count > 1 && std::string_view(Args[Count - 1]) == "--readiness-smoke";
-		Require((Server && ((Count == 5 && !ReadinessSmoke) || (Count == 6 && ReadinessSmoke))) ||
-			(!Server && ((Count == 6 && !ReadinessSmoke) || (Count == 7 && ReadinessSmoke)) && std::string_view(Args[1]) == "client"),
-			"usage: probe server bindAddress port expectedClients [--readiness-smoke] | probe client serverAddress port nonce producerFlag [--readiness-smoke]");
+		const bool Hybrid = Count > 1 && std::string_view(Args[Count - 1]) == "--hybrid-f1";
+		const auto PositionalCount = Count - (ReadinessSmoke || Hybrid ? 1 : 0);
+		Require((Server && PositionalCount == 5) ||
+			(!Server && PositionalCount == 6 && std::string_view(Args[1]) == "client"),
+			"usage: probe server bindAddress port expectedClients [--readiness-smoke|--hybrid-f1] | probe client serverAddress port nonce producerFlag [--readiness-smoke|--hybrid-f1]");
 		const auto Port = Number(Args[3]); Require(Port && Port <= 65535, "invalid port");
 		const auto N = Number(Args[4]); Require(Server ? (ReadinessSmoke ? (N == 1 || N == PeerCount) : N == PeerCount) : N > 0,
 			"Phase1 requires four clients; readiness smoke requires one or four clients and nonzero client nonces");
@@ -549,8 +577,8 @@ int main(int Count, char **Args) {
 			<< " drain_floor=" << P.Pooled.PeerDrainFloor << " peer_credit=" << P.Pooled.PeerCreditRate << " global_credit=" << P.Pooled.GlobalCreditRate
 			<< " grants=" << P.Pooled.MaximumDrainGrants << " freshness_us=" << P.Pooled.FeedbackFreshnessMicroseconds << " requalification_us=" << P.Pooled.RequalificationMicroseconds
 			<< " peer_burst=" << P.Pooled.PeerBurstCap << " global_burst=" << P.Pooled.GlobalBurstCap << " peer_pending=" << P.Pooled.PeerPendingCap << " global_pending=" << P.Pooled.GlobalPendingCap
-			<< " backend_send_rate=" << P.BackendSendRate() << " scope=" << WaveCount << "-barriered-one-G-waves-per-peer contract=F1 actions=not-exercised\n";
-		Probe Run(Server, Flag != 0, Server ? 0 : N, {Args[2], static_cast<std::uint16_t>(Port)}, ReadinessSmoke, Server ? static_cast<unsigned>(N) : PeerCount);
+			<< " backend_send_rate=" << P.BackendSendRate() << " scope=" << WaveCount << "-barriered-one-G-waves-per-peer contract=" << (Hybrid ? "HYBRID_F1_V1" : "F1") << " actions=not-exercised\n";
+		Probe Run(Server, Flag != 0, Server ? 0 : N, {Args[2], static_cast<std::uint16_t>(Port)}, ReadinessSmoke, Server ? static_cast<unsigned>(N) : PeerCount, Hybrid);
 		bool Passed = true;
 		try { Run.Run(); } catch (const std::exception &E) { Passed = false; std::cerr << "[Probe:Failure] " << E.what() << '\n'; }
 		try { Run.Cleanup(); } catch (const std::exception &E) { Passed = false; std::cerr << "[Probe:CleanupFailure] " << E.what() << '\n'; }

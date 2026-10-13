@@ -142,6 +142,69 @@ namespace gargantuan::test::pooled_recovery_contract {
 		static_assert(CompleteGroupBytes == 512 * KiB);
 		static_assert(32 * PeerCreditRate == StructuralPool);
 		{
+			using Legacy = network::FiniteGrantServiceCurve;
+			using Native = network::NativeGrantCompletionCurve;
+			using namespace ProductStructuralClass;
+			constexpr U Epoch = 1'000'000, Bytes = 65'536;
+			Legacy Curve; Native Completion;
+			Check(Curve.Activate(1, Bytes, Epoch) && Completion.Activate(1, Bytes, Epoch) &&
+				Curve.FirstSend(1, Bytes, Epoch + 100) && Completion.FirstSend(1, Bytes, Epoch + 100),
+				"D03 counterexamples begin with truthful native BODY and healthy legacy packet service");
+			Check(!Curve.GrantFailed && Curve.MaximumRunningDeficitByteMicroseconds == 0,
+				"completed grants stop the legacy running clock without claiming future product progress");
+			const Turnover Timely{Epoch, Epoch + 100, Epoch + 1'000, Epoch + 2'000, Epoch + 3'000,
+				Bytes, Bytes, Bytes, Bytes};
+			Check(CompletedTurnoverFits(Timely), "timely exact native/ACK/retirement baseline");
+			auto AckHeld = Timely;
+			AckHeld.Acked = Epoch + 149'000; AckHeld.MainRetired = Epoch + 150'000;
+			AckHeld.OpportunityCompleted = Epoch + 150'001;
+			Check(Curve.Observe(Epoch + 150'001) && !CompletedTurnoverFits(AckHeld),
+				"healthy legacy packet service cannot hide 150001-us exact permit turnover");
+			Check(Curve.Observe(Epoch + 200'001) && !CompletedOpportunityFits(Epoch + 100'000, Epoch + 200'001),
+				"idle native curve cannot hide a 100001-us completed Main opportunity gap with ready source work");
+			std::array<U, 32> FirstAdmission{};
+			for (U Peer = 0; Peer < 4; ++Peer) FirstAdmission[Peer] = Epoch;
+			// Repeatedly servicing these same four peers leaves the other 28
+			// independently Ready peers unaccepted, regardless of their packet gaps.
+			Check(Curve.Observe(Epoch + ReadyFairWaitUs + 1) &&
+				!std::ranges::all_of(FirstAdmission, [&](U At) { return At >= Epoch && At - Epoch <= ReadyFairWaitUs; }),
+				"acceptable packet gaps on admitted peers cannot certify 32-peer fair admission");
+			constexpr U OrdinaryAccepted = Epoch + 200'000, OrdinaryCompleted = OrdinaryAccepted + 50'001;
+			Legacy FifoLegacy;
+			Check(FifoLegacy.Activate(1, Bytes, Epoch) && FifoLegacy.FirstSend(1, Bytes, Epoch + 100) &&
+				FifoLegacy.Observe(OrdinaryCompleted) && OrdinaryCompleted - OrdinaryAccepted > 50'000,
+				"native structural legacy PASS cannot grant another 50-ms FIFO allowance to an accepted ordinary follower");
+			Legacy DelayedFirst; Native LateNative;
+			Check(DelayedFirst.Activate(1, Bytes, Epoch) && LateNative.Activate(1, Bytes, Epoch), "late first-send activation");
+			(void)DelayedFirst.FirstSend(1, Bytes, Epoch + 37'325);
+			Check(!LateNative.FirstSend(1, Bytes, Epoch + 37'325) && LateNative.GrantFailed &&
+				DelayedFirst.MaximumRunningDeficitByteMicroseconds == 0 && DelayedFirst.HasFirstSend,
+				"zero legacy running gap cannot hide a missed 37324.3865966796875-us native completion");
+			Legacy RecoveryLegacy;
+			Check(RecoveryLegacy.Activate(1, Bytes, Epoch) && RecoveryLegacy.FirstSend(1, Bytes, Epoch + 100) &&
+				RecoveryLegacy.Observe(Epoch + ServiceRecoveryDeadlineUs + 1), "healthy accepted-grant packet chronology in recovery");
+			const U Retained = MiB, Required = ConvergenceBoundUs(Retained, 32 * Retained);
+			const U SourceProduced = Retained - 1, SourceFinished = Epoch + Required + 1;
+			Check(SourceProduced < Retained && SourceFinished - Epoch > Required &&
+				ServiceRecoveryDeadlineUs + 1 > ServiceRecoveryDeadlineUs,
+				"prompt accepted-grant service cannot hide unproduced immutable recovery bytes or a missed service-return deadline");
+			Legacy Diagnostic; Native Hybrid;
+			Check(Diagnostic.Activate(1, Bytes, Epoch) && Hybrid.Activate(1, Bytes, Epoch) &&
+				Diagnostic.FirstSend(1, 100, Epoch + 100) && Hybrid.FirstSend(1, 100, Epoch + 100), "same positive native prefix");
+			(void)Diagnostic.FirstSend(1, Bytes - 100, Epoch + 5'000);
+			const Turnover HybridTurn{Epoch, Epoch + 5'000, Epoch + 6'000, Epoch + 7'000, Epoch + 8'000,
+				Bytes, Bytes, Bytes, Bytes};
+			Check(Diagnostic.GrantFailed && Hybrid.FirstSend(1, Bytes - 100, Epoch + 5'000) &&
+				CompletedTurnoverFits(HybridTurn) && CompletedOpportunityFits(Epoch, Epoch + 8'000),
+				"legacy running failure alone does not invalidate exact timely D03 native/ACK/retirement/opportunity service");
+			for (U Peer = 0; Peer < 32; ++Peer) FirstAdmission[Peer] = Epoch + (Peer / 4) * 8'000;
+			Check(std::ranges::all_of(FirstAdmission, [&](U At) { return At >= Epoch && At - Epoch <= ReadyFairWaitUs; }) &&
+				(Epoch + 9'000) - (Epoch + 5'000) <= 50'000 &&
+				8 * 8'000 <= ServiceRecoveryDeadlineUs && 8 * 8'000 <= ConvergenceBoundUs(Bytes, 32 * Bytes),
+				"otherwise timely supplied HYBRID schedule retains direct FIFO, all32 admission and independent recovery budgets");
+			std::cout << "[PooledRecoveryContract] contract=HYBRID_F1_V1 independent_legacy_gap_counterexamples=PASS\n";
+		}
+		{
 			using namespace ProductProgressReview;
 			using Native = network::NativeGrantCompletionCurve;
 			constexpr U Epoch = 1'000'000, Frontier = 900;

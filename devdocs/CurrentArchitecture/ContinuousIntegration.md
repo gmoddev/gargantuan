@@ -50,6 +50,16 @@ the workflow makes no macOS CI claim.
 
 ## Fresh-checkout bootstrap
 
+The standard release profile is explicitly `HYBRID_F1_V1` under D03's
+2026-10-13 qualification-scope amendment. Its raw four-grant entries retain
+legacy running-curve measurements as diagnostics and independently enforce
+native finite completion, first-send attribution, ownership/conservation,
+reserves, reliability, order and cleanup. Explicit legacy fixture modes retain
+their original strict curves. Contract identity follows the actual checkout,
+test invocation and qualified artifact; unknown or mismatched identity cannot
+turn a failed/missing test into PASS. Full D03 FIFO, Main, turnover, fairness
+and recovery gates remain independent and mandatory.
+
 The Windows complete CTest pass includes the funded structural ACK matrix,
 ordinary/FULL_RESERVATION and mixed FIFO isolation, simultaneous four-grant
 F1/pool verification, and one paired control/funded native statistics-boundary

@@ -356,6 +356,37 @@ class CITests(unittest.TestCase):
         self.assertEqual(Result['State'], 'MEASURED_PASS')
         self.assertEqual(len(Result['Jobs']), 3)
 
+    def SetHybridArchives(self, Contract='HYBRID_F1_V1', LegacyNames=False):
+        for Number, (Name, (_, _, Required, _)) in enumerate(A.CI_JOBS.items()):
+            if not LegacyNames:
+                Required = {A.HYBRID_TEST_IDENTITIES.get(Test, Test) for Test in Required}
+                if Name.startswith('Windows '):
+                    Required.add('gargantuan_four_grant_contract')
+            Buffer = io.BytesIO()
+            with zipfile.ZipFile(Buffer, 'w') as Zip:
+                Zip.writestr('build/ctest-results.xml', Xml(Required))
+                Zip.writestr('qualified-source-commit.txt', SOURCE + '\n')
+                if Contract is not None:
+                    Zip.writestr('qualification-contract.txt', Contract + '\n')
+            Archive = Buffer.getvalue()
+            self.Archives[f'{Number}-artifact.zip'] = Archive
+            self.Documents[f'{Number}-ArtifactMetadata.json'].update(
+                digest='sha256:' + A.Digest(Archive), size_in_bytes=len(Archive))
+
+    def test_hybrid_ci_requires_contract_and_distinct_required_tests(self):
+        self.SetHybridArchives()
+        Index, Pin = self.Write()
+        Result = A.VerifyCI(Index, Pin, SOURCE, 'HYBRID_F1_V1')
+        self.assertEqual(Result['Contract'], 'HYBRID_F1_V1')
+        with self.assertRaisesRegex(A.EvidenceError, 'contract mismatch'):
+            A.VerifyCI(Index, Pin, SOURCE)
+        for Contract, LegacyNames in ((None, False), ('F1', False), ('unknown', False), ('HYBRID_F1_V1', True)):
+            with self.subTest(Contract=Contract, LegacyNames=LegacyNames):
+                self.SetHybridArchives(Contract, LegacyNames)
+                Index, Pin = self.Write()
+                with self.assertRaises(A.EvidenceError):
+                    A.VerifyCI(Index, Pin, SOURCE, 'HYBRID_F1_V1')
+
     def DiagnosticMetadataReader(self, Reads, Sizes=None, ExtraNames=('diagnostics/scheduler.etl',), SourceData=None):
         # Model central-directory expanded sizes without allocating or reading
         # a large diagnostic payload. Required members remain real ZIP data.
@@ -582,6 +613,23 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(Result['RuntimeInventories']['Server']['Layout'],
                          'DEPLOYMENT_ENVELOPE_REQUIRES_RUNTIME_PROJECTION')
 
+    def test_hybrid_package_requires_exact_contract_without_changing_runtime_closure(self):
+        self.CI['Contract'] = 'HYBRID_F1_V1'
+        with self.assertRaisesRegex(A.EvidenceError, 'package qualification contract'):
+            A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
+        for Contract in ('F1', 'unknown', 'HYBRID_F1_V1'):
+            self.Files['qualification-contract.txt'] = (Contract + '\n').encode()
+            if Contract == 'HYBRID_F1_V1':
+                Result = A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
+                self.assertEqual(Result['Contract'], Contract)
+                self.assertEqual(Result['Pins'], self.Pins)
+            else:
+                with self.assertRaisesRegex(A.EvidenceError, 'package qualification contract'):
+                    A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
+        self.CI['Contract'] = 'F1'
+        with self.assertRaises(A.EvidenceError):
+            A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
+
     def test_deployment_cannot_extend_native_content_closure(self):
         # This is hash-consistent deployment evidence, but the native host
         # would reject its extra file. Inventory hashes alone are insufficient.
@@ -732,6 +780,46 @@ class ProvenanceTests(unittest.TestCase):
             Index.write_bytes(Raw)
             with self.assertRaises(A.EvidenceError):
                 A.VerifyProvenance(Index, A.Digest(Raw), Inputs, self.CI, Physical, SOURCE)
+
+
+class HybridFinalTests(unittest.TestCase):
+    def Inputs(self):
+        Farm = Providers()
+        for Role in ('Local', 'Node'):
+            Put(Farm[Role], 'F1.Contract', 'HYBRID_F1_V1')
+            Put(Farm[Role], 'Admission.Fairness.ServiceContract', 'HYBRID_F1_V1')
+            Put(Farm[Role], 'Publication.OrdinaryFIFO.Contract', 'HYBRID_F1_V1')
+            Put(Farm[Role], 'Publication.OrdinaryFIFO.State', 'MEASURED_PASS')
+        CI = {'State': 'MEASURED_PASS', 'SourceCommit': SOURCE, 'Contract': 'HYBRID_F1_V1'}
+        Physical = {**Four(), 'Contract': 'HYBRID_F1_V1'}
+        Provenance = {'Package': {'State': 'MEASURED_PASS', 'Contract': 'HYBRID_F1_V1'},
+                      'Sequence': {'State': 'MEASURED_PASS'}}
+        return Farm, CI, Physical, Provenance
+
+    def test_matching_hybrid_contract_is_required_across_all_independent_evidence(self):
+        Inputs = self.Inputs()
+        self.assertEqual(A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')['Status'], 'PASS')
+        for Index, Path in ((0, 'Local.F1.Contract'), (0, 'Node.F1.Contract'),
+                            (0, 'Local.Admission.Fairness.ServiceContract'),
+                            (0, 'Node.Publication.OrdinaryFIFO.Contract'), (1, 'Contract'),
+                            (2, 'Contract'), (3, 'Package.Contract')):
+            for Bad in (None, 'F1', 'unknown'):
+                Changed = copy.deepcopy(Inputs)
+                Put(Changed[Index], Path, Bad)
+                with self.subTest(Index=Index, Path=Path, Bad=Bad), self.assertRaises(A.EvidenceError):
+                    A.FinalObservation(SOURCE, *Changed, 'HYBRID_F1_V1')
+        with self.assertRaises(A.EvidenceError):
+            A.FinalObservation(SOURCE, *Inputs)
+
+    def test_hybrid_cannot_pass_without_independent_fifo_or_recovery(self):
+        for Role in ('Local', 'Node'):
+            for Path in ('Publication.OrdinaryFIFO.State', 'Recovery.FixedServiceRecovery',
+                         'Admission.FixedWorkloadFairness.State', 'F1.State'):
+                for State, Expected in ((None, 'INCOMPLETE'), ('MEASURED_FAIL', 'FAIL')):
+                    Inputs = self.Inputs()
+                    Put(Inputs[0][Role], Path, State)
+                    with self.subTest(Role=Role, Path=Path, State=State):
+                        self.assertEqual(A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')['Status'], Expected)
 
 
 if __name__ == '__main__':

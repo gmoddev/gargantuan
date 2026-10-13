@@ -1,6 +1,7 @@
 #pragma once
 #include "../src/network/PooledServiceDiagnostics.hpp"
 #include "../src/network/GnsServiceDiagnostics.hpp"
+#include "../src/network/FiniteGrantServiceCurve.hpp"
 #include <algorithm>
 #include <array>
 #include <fstream>
@@ -55,6 +56,25 @@ struct Trace {
 		std::uint64_t PoolEpisodes = 0;
 	unsigned Demand = 0;
 	bool Overflow = false, Invalid = false, FloorFailure = false, Installed = false;
+	bool Hybrid = false, NativeCompletionInvalid = false;
+	const char *Contract() const noexcept { return Hybrid ? "HYBRID_F1_V1" : "F1"; }
+	static bool NativeCompletionPass(const detail::ReliableServiceFeedback &F) noexcept {
+		NativeGrantCompletionCurve Curve;
+		if (!F.CountersValid || F.StructuralCompletionServiceFailed || F.StructuralLastCompletedCompletionFailed ||
+			F.StructuralCompletionEvidenceInvalid || !F.StructuralCompletedGrantSequence ||
+			!Curve.Activate(F.StructuralLastCompletedGrantToken, F.StructuralLastCompletedGrantBytes,
+				F.StructuralLastCompletedGrantActivatedAtMicroseconds)) return false;
+		const auto Count = F.LastCompletedStructuralSegmentEventCount;
+		if (!Count || Count > F.LastCompletedStructuralSegmentEvents.size()) return false;
+		for (std::size_t I = 0; I < Count; ++I) {
+			const auto &Event = F.LastCompletedStructuralSegmentEvents[I];
+			if (!Curve.FirstSend(F.StructuralLastCompletedGrantToken, Event.PayloadBytes, Event.AtMicroseconds)) return false;
+		}
+		return !Curve.Invalid && !Curve.GrantFailed && Curve.FirstSentBytes == Curve.GrantBytes &&
+			Curve.FirstSentAtMicroseconds == F.StructuralLastCompletedGrantFirstSendAtMicroseconds &&
+			Curve.CompletedAtMicroseconds == F.StructuralLastCompletedGrantCompletedAtMicroseconds &&
+			Curve.CompletedAtMicroseconds <= F.ObservedAtMicroseconds;
+	}
 	detail::PooledServiceSink Sink{this, Record, AcceptedGrant};
 	detail::GnsServiceSink BackendSink{this, BackendRecord, nullptr};
 	detail::PooledServiceSink *PreviousSink = nullptr;
@@ -103,13 +123,14 @@ struct Trace {
 				A->Bytes != F.StructuralLastCompletedGrantBytes || A->Activated != F.StructuralLastCompletedGrantActivatedAtMicroseconds)
 				Invalid = true;
 			else {
-				if (F.StructuralLastCompletedGrantFailed || F.StructuralServiceFailed ||
+				if (Hybrid && !NativeCompletionPass(F)) NativeCompletionInvalid = FloorFailure = true;
+				if ((!Hybrid && (F.StructuralLastCompletedGrantFailed || F.StructuralServiceFailed ||
 					F.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds > RunningDeficitBound ||
+					PeerDrainRate * (F.StructuralLastCompletedGrantCompletedAtMicroseconds - A->Activated) >
+						FiniteLatencyByteMicroseconds + A->Bytes * 1'000'000)) ||
 					F.StructuralLastCompletedGrantFirstSendAtMicroseconds < A->Activated ||
 					F.StructuralLastCompletedGrantCompletedAtMicroseconds < F.StructuralLastCompletedGrantFirstSendAtMicroseconds ||
-					F.StructuralLastCompletedGrantCompletedAtMicroseconds > F.ObservedAtMicroseconds ||
-					PeerDrainRate * (F.StructuralLastCompletedGrantCompletedAtMicroseconds - A->Activated) >
-						FiniteLatencyByteMicroseconds + A->Bytes * 1'000'000) FloorFailure = true;
+					F.StructuralLastCompletedGrantCompletedAtMicroseconds > F.ObservedAtMicroseconds) FloorFailure = true;
 				A->Certified = true;
 			}
 		}
@@ -148,7 +169,8 @@ struct Trace {
 				const auto &F = *S.Feedback;
 				if (F.StructuralPayloadBytesAcked > F.StructuralPayloadBytesFirstSent ||
 					F.StructuralPayloadBytesFirstSent - F.StructuralPayloadBytesAcked > GroupBytes ||
-					F.StructuralMaximumDeficitByteMicroseconds > RunningDeficitBound || F.StructuralServiceFailed)
+					(!Self.Hybrid && (F.StructuralMaximumDeficitByteMicroseconds > RunningDeficitBound || F.StructuralServiceFailed)) ||
+					(Self.Hybrid && (F.StructuralCompletionServiceFailed || F.StructuralCompletionEvidenceInvalid)))
 					Self.FloorFailure = true;
 				if (!P->CampaignBaseline) {
 					P->BaselineFirst = F.StructuralPayloadBytesFirstSent;
@@ -193,7 +215,7 @@ struct Trace {
 						const auto Finish = Completed ? F.StructuralLastCompletedGrantCompletedAtMicroseconds :
 							F.StructuralGrantCompletedAtMicroseconds;
 						if (Completed && F.StructuralLastCompletedGrantBytes != G->Bytes) Self.Invalid = true;
-						if (Completed && (F.StructuralLastCompletedGrantFailed ||
+						if (!Self.Hybrid && Completed && (F.StructuralLastCompletedGrantFailed ||
 							F.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds > RunningDeficitBound))
 							Self.FloorFailure = true;
 						if (Started && !G->Qualified) {
@@ -209,8 +231,8 @@ struct Trace {
 							G->StartedAtMicroseconds > G->FirstSendAtMicroseconds ||
 							G->FirstSendAtMicroseconds > G->CompletedAtMicroseconds ||
 							G->CompletedAtMicroseconds > F.ObservedAtMicroseconds ||
-							PeerDrainRate * (G->CompletedAtMicroseconds - G->StartedAtMicroseconds) >
-								FiniteLatencyByteMicroseconds + G->Bytes * 1'000'000)) Self.FloorFailure = true;
+							(!Self.Hybrid && PeerDrainRate * (G->CompletedAtMicroseconds - G->StartedAtMicroseconds) >
+								FiniteLatencyByteMicroseconds + G->Bytes * 1'000'000))) Self.FloorFailure = true;
 					}
 				}
 			}
@@ -263,7 +285,7 @@ struct Trace {
 		for (const auto &P : Peers) {
 			if (!P.Id.IsValid() || !P.CampaignBaseline || P.QualifiedGrants < 3 ||
 				P.LastFirst <= P.BaselineFirst || P.LastAck != P.LastFirst ||
-				P.LastActiveUs <= P.BaselineActiveUs || P.MaximumDeficit > RunningDeficitBound ||
+				P.LastActiveUs <= P.BaselineActiveUs || (!Hybrid && P.MaximumDeficit > RunningDeficitBound) ||
 				!P.HasPrevious || !P.Previous.Sample.Feedback ||
 				P.Previous.Sample.Feedback->PendingReliableStreamBytes ||
 				P.Previous.Sample.Feedback->StructuralActiveGrantBytes)
@@ -285,7 +307,9 @@ struct Trace {
 	}
 	void Dump(const char *Path) const {
 		std::ofstream Out(Path); Out.exceptions(std::ios::failbit | std::ios::badbit);
-		Out << "simulation_step,slot,generation,consumed_us,feedback_us,present,valid,available,qualified,debt_token,debt_bytes,journal_lag,accepted_structural,structural_first,structural_ack,running_us,current_run_deficit_byte_us,max_run_deficit_byte_us,service_failed,active_grant_started_us,active_grant_bytes,first_sent_in_grant,grant_first_us,grant_complete_us,last_completed_token,last_completed_bytes,last_completed_activated_us,last_completed_first_us,last_completed_finish_us,last_completed_max_run_deficit_byte_us,last_completed_failed,retry,pending,unacked,retirement_sequence,retired_token,result_retired_bytes,grants,total_debt,created,retired,terminal,delta_first,delta_ack,delta_retry,backend_ns,queue_us,rate\n";
+		Out << "simulation_step,slot,generation,consumed_us,feedback_us,present,valid,available,qualified,debt_token,debt_bytes,journal_lag,accepted_structural,structural_first,structural_ack,running_us,current_run_deficit_byte_us,max_run_deficit_byte_us,service_failed,active_grant_started_us,active_grant_bytes,first_sent_in_grant,grant_first_us,grant_complete_us,last_completed_token,last_completed_bytes,last_completed_activated_us,last_completed_first_us,last_completed_finish_us,last_completed_max_run_deficit_byte_us,last_completed_failed,retry,pending,unacked,retirement_sequence,retired_token,result_retired_bytes,grants,total_debt,created,retired,terminal,delta_first,delta_ack,delta_retry,backend_ns,queue_us,rate";
+		if (Hybrid) Out << ",completion_failed,last_completion_failed,completion_evidence_invalid";
+		Out << '\n';
 		for (const auto &R : Rows) {
 			const auto &S = R.Sample; const auto F = S.Feedback.value_or(detail::ReliableServiceFeedback{});
 			const auto &M = S.Admission; const auto &B = R.Backend;
@@ -308,7 +332,10 @@ struct Trace {
 				<< ',' << M.ActiveDrainGrants << ',' << M.OutstandingBytes << ',' << M.AcceptedBytes
 				<< ',' << M.VerifiedAttributedRetirement << ',' << M.TerminalReleasedBytes
 				<< ',' << R.FirstDelta << ',' << R.AckDelta << ',' << R.RetryDelta
-				<< ',' << B.Nanoseconds << ',' << B.QueueUs << ',' << B.Rate << '\n';
+				<< ',' << B.Nanoseconds << ',' << B.QueueUs << ',' << B.Rate;
+			if (Hybrid) Out << ',' << F.StructuralCompletionServiceFailed << ',' << F.StructuralLastCompletedCompletionFailed
+				<< ',' << F.StructuralCompletionEvidenceInvalid;
+			Out << '\n';
 		}
 	}
 };

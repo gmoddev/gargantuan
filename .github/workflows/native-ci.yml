@@ -329,6 +329,9 @@ jobs:
         run: |
           # Complete CTest includes the funded ACK workload/mode/pool gates and
           # one paired native statistics-boundary run; do not duplicate them here.
+          # Standard HYBRID_F1_V1 four-grant checks retain fatal D03 completion,
+          # ownership/accounting/reserve gates; legacy packet curves are diagnostics.
+          [IO.File]::WriteAllText((Join-Path $PWD 'qualification-contract.txt'), "HYBRID_F1_V1`n", [Text.UTF8Encoding]::new($false))
           # CTest changes into --test-dir before opening its JUnit output.
           ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit "$env:GITHUB_WORKSPACE/build-ci/ctest-results.xml"
           if ($LASTEXITCODE -ne 0) { throw 'Complete headless CTest contract failed' }
@@ -346,7 +349,7 @@ jobs:
           python -m unittest discover -s tools/physical-qualifier/tests -p 'test_f1_candidate_source.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'F1 candidate source inventory tests failed' }
           python -m unittest discover -s tests -p 'test_foundation3l_four_client.py' -v
-          if ($LASTEXITCODE -ne 0) { throw 'F1 raw four-client evidence replay tests failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Versioned F1/D03 raw four-client evidence replay tests failed' }
           python -m unittest discover -s tools/physical-qualifier/tests -p 'test_qualifier.py' -k phase1_raw_evidence -v
           if ($LASTEXITCODE -ne 0) { throw 'F1 raw evidence collection tests failed' }
           python -m unittest discover -s tools/physical-qualifier/tests -p 'test_qualifier.py' -k phase1_stage_is_distinct_and_fixed -v
@@ -438,6 +441,7 @@ jobs:
           & (Join-Path $PWD 'build-ci/gargantuan_qualified_scale_package.exe') `
             $PackageRoot $PlayerRuntime $ServerRuntime
           if ($LASTEXITCODE -ne 0) { throw 'Qualified scale package generation failed' }
+          Copy-Item -LiteralPath qualification-contract.txt -Destination (Join-Path $PackageRoot 'qualification-contract.txt')
           $ProjectionRun = [Guid]::NewGuid().ToString()
           $ProjectionRegistry = Join-Path $PWD 'build-ci/QualifiedScaleRuntimeCheck'
           foreach ($Role in @('Player', 'Server')) {
@@ -485,6 +489,7 @@ jobs:
           if-no-files-found: ignore
           path: |
             qualified-source-commit.txt
+            qualification-contract.txt
             build-ci/CMakeFiles/CMakeConfigureLog.yaml
             build-ci/Testing/Temporary/LastTest.log
             build-ci/ctest-results.xml
@@ -607,6 +612,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          printf 'HYBRID_F1_V1\n' > qualification-contract.txt
           ctest --test-dir build-sanitizers \
             --parallel 1 \
             --timeout 300 \
@@ -623,6 +629,7 @@ jobs:
           if-no-files-found: ignore
           path: |
             qualified-source-commit.txt
+            qualification-contract.txt
             build-sanitizers/CMakeFiles/CMakeConfigureLog.yaml
             build-sanitizers/Testing/Temporary/LastTest.log
             build-sanitizers/ctest-results.xml

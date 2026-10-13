@@ -18,6 +18,13 @@ supersedes F1's hard packet timing and implied continuous delivered capacity.
 The earlier text remains decision history. New production/evidence uses
 `HYBRID_F1_V1`; historical `finite_grant_v1` failures remain failures.
 
+The2026-10-13 D03 qualification-scope amendment also supersedes the exception
+that required raw four-grant running curves for standard HYBRID release.
+Explicit legacy profiles retain the complete rules below; new HYBRID fixtures
+keep these measurements as diagnostics while enforcing their hard native
+completion, attribution, accounting, reserve, reliability and lifetime checks.
+No historical measurement or verdict changes.
+
 ## Rates and the native quantum
 
 Peer credit refills at **2 MiB/s** between grants. Credit is admission

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../src/network/FiniteGrantServiceCurve.hpp"
+#include "GnsFourGrantFixture.hpp"
 #include <steam/isteamnetworkingutils.h>
 #include <array>
 #include <chrono>
@@ -29,7 +30,8 @@ struct TailResult {
 	std::uint32_t SegmentCount = 0;
 };
 
-inline TailResult Observe(std::size_t CompleteBytes, std::uint64_t Token) {
+inline TailResult Observe(std::size_t CompleteBytes, std::uint64_t Token,
+	GnsFourGrantFixture::Contract Selected = GnsFourGrantFixture::Contract::LegacyFiniteGrant) {
 	if (CompleteBytes <= ReliableServiceEnvelopeBytes) throw std::runtime_error("invalid complete size");
 	PairFixture Pair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024}, TestLimits(), true);
 	if (!Pair.ServerConnection.IsValid()) throw std::runtime_error("real GNS pair did not connect");
@@ -64,6 +66,10 @@ inline TailResult Observe(std::size_t CompleteBytes, std::uint64_t Token) {
 			throw std::runtime_error("native feedback invalid");
 		}
 		if (Sample->StructuralLastCompletedGrantToken == Token) {
+			if (!GnsFourGrantFixture::SelectedTimingValid(*Sample, Token, CompleteBytes, Selected) ||
+				Sample->NativePacketsSent < Before->NativePacketsSent ||
+				Sample->NativePacketBytesSent < Before->NativePacketBytesSent)
+				throw std::runtime_error("packet tail selected native completion/accounting contract failed");
 			Result.FirstAt = Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds;
 			Result.CompletedAt = Sample->StructuralLastCompletedGrantCompletedAtMicroseconds;
 			Result.MaximumRunningDeficit =
@@ -87,7 +93,8 @@ inline TailResult Observe(std::size_t CompleteBytes, std::uint64_t Token) {
 		Final.LastAttributedRetiredPayloadBytes != CompleteBytes ||
 		Final.ReliableStreamBytesRetransmitted != 0)
 		throw std::runtime_error("native ACK/retirement conservation failed");
-	std::cout << "[Network:GnsTail] bytes=" << CompleteBytes << " first_bytes=" << Result.FirstBytes
+	std::cout << "[Network:GnsTail] contract=" << GnsFourGrantFixture::Identity(Selected)
+		<< " bytes=" << CompleteBytes << " first_bytes=" << Result.FirstBytes
 		<< " tail_bytes=" << (CompleteBytes - Result.FirstBytes) << " first_us=" << Result.FirstAt
 		<< " complete_us=" << Result.CompletedAt << " gap_us=" << (Result.CompletedAt - Result.FirstAt)
 		<< " max_deficit_byte_us=" << Result.MaximumRunningDeficit
@@ -101,14 +108,16 @@ inline TailResult Observe(std::size_t CompleteBytes, std::uint64_t Token) {
 	return Result;
 }
 
-inline bool Run() {
+inline bool Run(GnsFourGrantFixture::Contract Selected = GnsFourGrantFixture::Contract::LegacyFiniteGrant) {
+	std::cout << "[Network:GnsTail] contract=" << GnsFourGrantFixture::Identity(Selected) << '\n';
+	if (Selected == GnsFourGrantFixture::Contract::SanitizerSafety) return false;
 	try {
 		std::uint64_t Token = 1;
 		for (const std::size_t Size : std::array<std::size_t, 14>{77, 1134, 1135, 1136, 1137,
 			1138, 1248, 1257, 1258, 1259, 1260, 8192, 65536, 524288}) {
-			const auto Result = Observe(Size, Token++);
-			if (Result.ServiceFailed || Result.MaximumRunningDeficit >
-				FiniteGrantServiceCurve::RunningBoundByteMicroseconds)
+			const auto Result = Observe(Size, Token++, Selected);
+			if (Selected == GnsFourGrantFixture::Contract::LegacyFiniteGrant &&
+				(Result.ServiceFailed || Result.MaximumRunningDeficit > FiniteGrantServiceCurve::RunningBoundByteMicroseconds))
 				throw std::runtime_error("scoped NoNagle failed a legal finite grant");
 			if (Result.NativePackets == 0 || Result.NativeMaximumPacketBytes > 1300 ||
 				Result.NativePacketBytes + 28 * Result.NativePackets >
@@ -117,7 +126,7 @@ inline bool Run() {
 		}
 		return true;
 	} catch (const std::exception &Error) {
-		std::cerr << "[Network:GnsTail] corrected=FAIL " << Error.what() << '\n';
+		std::cerr << "[Network:GnsTail] contract=" << GnsFourGrantFixture::Identity(Selected) << " corrected=FAIL " << Error.what() << '\n';
 		return false;
 	}
 }

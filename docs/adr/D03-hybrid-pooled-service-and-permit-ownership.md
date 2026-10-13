@@ -9,6 +9,39 @@ supersedes: D01/F1 hard packet timing and implied continuous delivered capacity
 
 ## Decision scope
 
+### Qualification-scope amendment — 2026-10-13
+
+The product decision at this checkpoint removes the earlier exception that
+retained raw D01 packet-scale running service as a mandatory standard-profile
+release gate. For explicitly identified `HYBRID_F1_V1` evidence, legacy peer
+and common-pool running curves are retained diagnostics, not independent
+release predicates. The raw four-grant test remains mandatory under its
+contract-aware mode; it must still reject incomplete/late native structural
+completion, false first-send attribution, invalid chronology/frontiers,
+packet/reserve violations, unreliable/incorrect order, lifecycle defects or
+inexact accepted/first-sent/ACK/retired/terminal accounting.
+
+Explicit legacy `F1`/`finite_grant_v1` profiles keep their original finite and
+running-service semantics. Missing, unknown or mixed contract identity cannot
+select HYBRID semantics. Historical e792 manual CI and earlier physical/native
+failures retain their original source, contract and FAIL verdicts. A fresh
+source identity and fresh evidence are required; no archived result is relabeled.
+
+The four-grant native and four-client physical checks qualify a structural
+transport subset. They cannot substitute for independently qualified protected
+ordinary FIFO, Main opportunity, exact turnover, all32-peer fair admission,
+gameplay, resources or recovery/convergence. Standard-profile final acceptance
+must explicitly join matching HYBRID identities across CI, qualified package,
+fresh four-client prerequisite and both Local32/real-TLS Node32 providers.
+
+All D03 hard bounds remain exact: native completion37324.3865966796875us,
+ordinary FIFO50000us, completed Main100000us, turnover150000us and qualified
+32-peer eligible admission1181250us. All security, reliability, conservation,
+reserves, bounded debt and canonical recovery obligations remain mandatory.
+This amendment supersedes only the retained raw-running-curve exception in the
+historical records below; it does not change production networking or grants.
+Qualification of the coordinated migration and final conjunction is pending.
+
 The authorized Foundation 3L follow-up adopts D02's B/C direction: retain
 funding, exact delivery and hard player outcomes; qualify actual source-shaped
 capacity. The coordinated deterministic/native Windows preflight passed eight

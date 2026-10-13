@@ -6,6 +6,19 @@ last_verified: 2026-10-06
 
 # Foundation 3L pooled physical qualification attempt
 
+## Current qualification scope — 2026-10-13
+
+The product-authorized D03 `HYBRID_F1_V1` scope amendment removes the raw D01
+packet-scale running curve as a standard-profile release predicate. Fresh
+explicitly identified HYBRID evidence preserves finite native completion,
+first-send truth, exact accounting, reserves, reliability, order and lifetime.
+Four-client transport evidence is a subset; full native32/Local32/real-TLS
+Node32 must independently qualify FIFO, Main, turnover, fair32 admission,
+gameplay, resources, backpressure and recovery/convergence. Existing legacy
+profiles and all failures/PASS receipts below retain their original scope.
+The amendment alone establishes no new physical result. KI-006 remains OPEN;
+PR6 draft, no3M or merge.
+
 ## Bounded investigation stops for networking architecture review (2026-10-09)
 
 The [two-strategy review](../FutureArchitecture/Foundation3LNetworkingCapacityReview.md)

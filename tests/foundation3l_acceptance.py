@@ -178,6 +178,13 @@ CI_JOBS = {
         "Run GNS transport sanitizer CTest contract"),
 }
 
+HYBRID_TEST_IDENTITIES = {
+    "gargantuan_f1_packet_tail": "gargantuan_hybrid_packet_tail",
+    "gargantuan_f1_four_grant": "gargantuan_hybrid_four_grant",
+    "gargantuan_f1_mixed_traffic": "gargantuan_hybrid_mixed_traffic",
+    "gargantuan_gns_funded_ack_four_grant": "gargantuan_gns_funded_ack_four_grant_hybrid",
+}
+
 
 def ReadJUnit(Data, Required):
     Require(b"<!DOCTYPE" not in Data.upper() and b"<!ENTITY" not in Data.upper(), "XML declarations forbidden")
@@ -199,8 +206,9 @@ def ReadJUnit(Data, Required):
     return len(Cases)
 
 
-def VerifyCI(IndexPath, IndexSha256, ExpectedCommit):
+def VerifyCI(IndexPath, IndexSha256, ExpectedCommit, ExpectedContract="F1"):
     """Pinned raw GitHub API metadata plus original download ZIPs, never a PASS label."""
+    Require(ExpectedContract in ("F1", "HYBRID_F1_V1"), "unknown qualification contract")
     Data = ReadBytes(IndexPath)
     Require(Digest(Data) == Hash(IndexSha256), "CI index pin mismatch")
     Index = JsonData(Data)
@@ -217,6 +225,10 @@ def VerifyCI(IndexPath, IndexSha256, ExpectedCommit):
         Require(Name in CI_JOBS and Name not in Seen, "unknown/duplicate CI job")
         Seen.add(Name)
         Workflow, ArtifactName, Required, StepName = CI_JOBS[Name]
+        if ExpectedContract == "HYBRID_F1_V1":
+            Required = {HYBRID_TEST_IDENTITIES.get(Test, Test) for Test in Required}
+            if Name.startswith("Windows "):
+                Required.add("gargantuan_four_grant_contract")
         Run = JsonData(Pinned(Root, Entry["Run"]))
         Jobs = JsonData(Pinned(Root, Entry["Jobs"]))
         Metadata = JsonData(Pinned(Root, Entry["ArtifactMetadata"]))
@@ -273,6 +285,12 @@ def VerifyCI(IndexPath, IndexSha256, ExpectedCommit):
                 SourceData = File.read(129)
             Require(len(SourceData) <= 128 and SourceData.decode("ascii").strip() == ExpectedCommit,
                     "actual CI checkout differs from candidate source")
+            Contracts = [Item for Item in Infos if PurePosixPath(Item.filename).name == "qualification-contract.txt"]
+            if ExpectedContract == "HYBRID_F1_V1" or Contracts:
+                Require(len(Contracts) == 1 and Contracts[0].file_size <= 64,
+                        "CI qualification contract missing/ambiguous/oversized")
+                Require(Zip.read(Contracts[0]).decode("ascii").strip() == ExpectedContract,
+                        "CI qualification contract mismatch")
             with Zip.open(Xml[0]) as File:
                 XmlData = File.read(16 * 1024 * 1024 + 1)
             Require(len(XmlData) <= 16 * 1024 * 1024, "oversized JUnit evidence")
@@ -280,7 +298,7 @@ def VerifyCI(IndexPath, IndexSha256, ExpectedCommit):
         Observed.append({"Name": Name, "RunId": Run["id"], "Attempt": Run["run_attempt"],
                          "Event": Run["event"], "StartedUtc": Job["started_at"], "CompletedUtc": Job["completed_at"],
                          "ArtifactId": Metadata["id"], "Tests": Count, "ArchiveSha256": Digest(Archive)})
-    return {"State": "MEASURED_PASS", "SourceCommit": ExpectedCommit, "Jobs": Observed,
+    return {"State": "MEASURED_PASS", "SourceCommit": ExpectedCommit, "Contract": ExpectedContract, "Jobs": Observed,
             "InventorySha256": Digest(Data)}
 
 
@@ -342,6 +360,8 @@ def VerifyNativeRuntimeInventory(PackageData, DeploymentFiles):
 def VerifyQualifiedPackage(IndexRoot, Entry, ExpectedCommit, CI):
     """Stream the original GitHub ZIP; never extract, execute, or trust its manifest alone."""
     Require(CI.get("State") == "MEASURED_PASS", "qualified package needs verified CI")
+    ExpectedContract = CI.get("Contract", "F1")
+    Require(ExpectedContract in ("F1", "HYBRID_F1_V1"), "unknown package qualification contract")
     Windows = next(Job for Job in CI["Jobs"] if Job["Name"].startswith("Windows "))
     Require(Windows["Event"] == "workflow_dispatch", "qualified package requires dispatch build")
     Metadata = JsonData(Pinned(IndexRoot, Entry["ArtifactMetadata"]))
@@ -375,7 +395,8 @@ def VerifyQualifiedPackage(IndexRoot, Entry, ExpectedCommit, CI):
             Name = Info.filename
             PathName = PurePosixPath(Name)
             Require(not PathName.is_absolute() and ".." not in PathName.parts and "\\" not in Name and
-                    ":" not in Name and PathName.parts[0] in ("Player", "Server", "fixture", "qualification-descriptor.json") and
+                    ":" not in Name and PathName.parts[0] in ("Player", "Server", "fixture", "qualification-descriptor.json",
+                        *(["qualification-contract.txt"] if ExpectedContract == "HYBRID_F1_V1" else [])) and
                     Name.casefold() not in Folded and Info.file_size <= 256 * 1024 ** 2 and
                     ((Info.external_attr >> 16) & 0o170000) != 0o120000, "invalid qualified ZIP member")
             Folded.add(Name.casefold())
@@ -385,6 +406,11 @@ def VerifyQualifiedPackage(IndexRoot, Entry, ExpectedCommit, CI):
         # files and descriptor beside the two deployment roots.
         ExpectedFiles = {'fixture/content/content.manifest.json', 'fixture/content/regions/scale.instance.json',
                          'qualification-descriptor.json'}
+        if ExpectedContract == "HYBRID_F1_V1":
+            ExpectedFiles.add('qualification-contract.txt')
+            Require('qualification-contract.txt' in Files and Files['qualification-contract.txt'].file_size <= 64 and
+                    Zip.read('qualification-contract.txt').decode('ascii').strip() == ExpectedContract,
+                    "package qualification contract missing/mismatched")
         Require(ExpectedFiles <= set(Files) and all(Files[Key].file_size <= 1024 * 1024 for Key in ExpectedFiles),
                 "qualified source fixture/descriptor missing or oversized")
         Descriptor = JsonData(Zip.read('qualification-descriptor.json'))
@@ -425,7 +451,7 @@ def VerifyQualifiedPackage(IndexRoot, Entry, ExpectedCommit, CI):
                     "native package manifest absent/oversized")
             RuntimeInventories[Role] = VerifyNativeRuntimeInventory(Zip.read(PackageName), Manifest['Files'])
         Require(set(Files) == ExpectedFiles and len(Pins) == 8, "qualified package contains extra/missing files")
-    return {"State": "MEASURED_PASS", "ArtifactId": Metadata["id"], "ArchiveSha256": ActualHash,
+    return {"State": "MEASURED_PASS", "Contract": ExpectedContract, "ArtifactId": Metadata["id"], "ArchiveSha256": ActualHash,
             "Pins": Pins, "RuntimeInventories": RuntimeInventories}
 
 
@@ -510,7 +536,7 @@ PROVIDER_GATES = {
 }
 
 
-def EvaluateProviders(Observation, ExpectedCommit):
+def EvaluateProviders(Observation, ExpectedCommit, ExpectedContract="F1"):
     Require(Observation.get("Format") == "GargantuanPhysicalFarmAcceptanceObservation" and
             Observation.get("Version") == 1, "unrecognized provider observation")
     Require(At(Observation, "WorkloadPinParity.SourceCommit") == ExpectedCommit and
@@ -520,6 +546,16 @@ def EvaluateProviders(Observation, ExpectedCommit):
     Gates = []
     for Provider in ("Local", "Node"):
         Value = Observation[Provider]
+        Contract = At(Value, "F1.Contract")
+        Require(Contract == "HYBRID_F1_V1" if ExpectedContract == "HYBRID_F1_V1" else
+                Contract in (None, "finite_grant_v1"), f"{Provider}: qualification contract mismatch")
+        if ExpectedContract == "HYBRID_F1_V1":
+            Require(At(Value, "Admission.Fairness.ServiceContract") == ExpectedContract and
+                    At(Value, "Publication.OrdinaryFIFO.Contract") == ExpectedContract,
+                    f"{Provider}: admission/FIFO contract mismatch")
+            Gates.append({"Gate": Provider + ".Publication.OrdinaryFIFO.State",
+                          "State": "MEASURED_PASS" if At(Value, "Publication.OrdinaryFIFO.State") == "MEASURED_PASS" else
+                          "MEASURED_FAIL" if At(Value, "Publication.OrdinaryFIFO.State") == "MEASURED_FAIL" else "NOT_MEASURED"})
         for Key, Expected in PROVIDER_GATES.items():
             Actual = At(Value, Key)
             Gates.append({"Gate": f"{Provider}.{Key}", "State":
@@ -550,13 +586,15 @@ RETAINED_FOUR_CLIENT = {
 }
 
 
-def FourClientGate(Source, Four):
+def FourClientGate(Source, Four, ExpectedContract="F1"):
     Retained = Four.get("EvidenceScope") == "RETAINED_F1_PHASE1"
     if Retained:
         Require(Source == RETAINED_FOUR_CLIENT["ProviderSourceCommit"] and
                 Four.get("InputMapSha256") == RETAINED_FOUR_CLIENT["InputMapSha256"],
                 "retained four-client source pair/input pin mismatch")
     if Four["State"] == "MEASURED_PASS":
+        Require(Four.get("Contract") == ExpectedContract if ExpectedContract == "HYBRID_F1_V1" else
+                Four.get("Contract") in (None, "F1"), "four-client qualification contract mismatch")
         if Retained:
             Require(all(Four.get(Key) == RETAINED_FOUR_CLIENT[Key]
                         for Key in ("SourceCommit", "RunId", "LifecycleRunId")),
@@ -566,14 +604,20 @@ def FourClientGate(Source, Four):
     return {"Gate": "RetainedFourClientMixed" if Retained else "FreshFourClientMixed", "State": Four["State"]}
 
 
-def FinalObservation(SourceCommit, ProviderObservation, CI, FourClient, Provenance=None):
-    Gates = EvaluateProviders(ProviderObservation, SourceCommit)
+def FinalObservation(SourceCommit, ProviderObservation, CI, FourClient, Provenance=None, ExpectedContract="F1"):
+    Require(ExpectedContract in ("F1", "HYBRID_F1_V1"), "unknown qualification contract")
+    Gates = EvaluateProviders(ProviderObservation, SourceCommit, ExpectedContract)
     Gates.append({"Gate": "ExactHeadCI", "State": CI["State"]})
-    Gates.append(FourClientGate(SourceCommit, FourClient))
+    Gates.append(FourClientGate(SourceCommit, FourClient, ExpectedContract))
     Provenance = Provenance or {'Package': {'State': 'NOT_MEASURED'}, 'Sequence': {'State': 'NOT_MEASURED'}}
     Gates.extend({'Gate': Key, 'State': Provenance[Key]['State']} for Key in ('Package', 'Sequence'))
     if CI["State"] == "MEASURED_PASS":
         Require(CI.get("SourceCommit") == SourceCommit, "CI candidate mismatch")
+        Require(CI.get("Contract") == ExpectedContract if ExpectedContract == "HYBRID_F1_V1" else
+                CI.get("Contract") in (None, "F1"), "CI qualification contract mismatch")
+    if Provenance['Package']['State'] == 'MEASURED_PASS':
+        Require(Provenance['Package'].get('Contract') == ExpectedContract if ExpectedContract == "HYBRID_F1_V1" else
+                Provenance['Package'].get('Contract') in (None, "F1"), "package qualification contract mismatch")
     if FourClient["State"] == "MEASURED_PASS":
         FourId = str(uuid.UUID(FourClient["RunId"]))
         Require(FourId not in (ProviderObservation["LocalRunId"], ProviderObservation["NodeRunId"]),
@@ -582,7 +626,7 @@ def FinalObservation(SourceCommit, ProviderObservation, CI, FourClient, Provenan
     Status = "FAIL" if any(Item["State"] == "MEASURED_FAIL" for Item in Gates) else (
         "PASS" if all(Item["State"] == "MEASURED_PASS" for Item in Gates) else "INCOMPLETE")
     return {"Format": "GargantuanFoundation3LFinalAcceptance", "Version": 1,
-            "Status": Status, "SourceCommit": SourceCommit,
+            "Status": Status, "SourceCommit": SourceCommit, "Contract": ExpectedContract,
             "LocalRunId": ProviderObservation["LocalRunId"], "NodeRunId": ProviderObservation["NodeRunId"],
             "Gates": Gates, "CI": CI, "FourClient": FourClient,
             "Provenance": Provenance,
@@ -619,7 +663,7 @@ def ReplayProviders(Root, Arguments, Destination, PowerShell):
     return ReadJson(Destination)
 
 
-def ReplayFourClient(Root, Inputs, Source):
+def ReplayFourClient(Root, Inputs, Source, ExpectedContract="F1"):
     Script = Root / "tests/foundation3l_four_client.py"
     Require(Script.is_file(), "four-client raw replayer has not been integrated")
     subprocess.run(["git", "ls-files", "--error-unmatch", "tests/foundation3l_four_client.py"],
@@ -628,28 +672,31 @@ def ReplayFourClient(Root, Inputs, Source):
     Module = importlib.util.module_from_spec(Spec)
     sys.modules[Spec.name] = Module
     Spec.loader.exec_module(Module)
-    Result = Module.Replay(Inputs, Source)
+    Result = Module.Replay(Inputs, Source, ExpectedContract)
     Require(isinstance(Result, dict) and Result.get("State") in
             ("MEASURED_PASS", "MEASURED_FAIL", "NOT_MEASURED"), "invalid four-client replay result")
     return Result
 
 
-def ReplayFourClientInputs(Root, InputPath, Source):
+def ReplayFourClientInputs(Root, InputPath, Source, ExpectedContract="F1"):
     Data = ReadBytes(InputPath)
     Pin = Digest(Data)
     Retained = (Source == RETAINED_FOUR_CLIENT["ProviderSourceCommit"] and
                 Pin == RETAINED_FOUR_CLIENT["InputMapSha256"])
     NativeSource = RETAINED_FOUR_CLIENT["SourceCommit"] if Retained else Source
-    Result = ReplayFourClient(Root, JsonData(Data), NativeSource)
+    Result = (ReplayFourClient(Root, JsonData(Data), NativeSource) if ExpectedContract == "F1" else
+              ReplayFourClient(Root, JsonData(Data), NativeSource, ExpectedContract))
     Result = {**Result, "InputMapSha256": Pin,
               "EvidenceScope": "RETAINED_F1_PHASE1" if Retained else "CURRENT_SOURCE_FOUR_CLIENT_MIXED"}
-    FourClientGate(Source, Result)
+    FourClientGate(Source, Result, ExpectedContract)
     return Result
 
 
 def Main():
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument("--source-commit", required=True)
+    Parser.add_argument("--contract", choices=("F1", "HYBRID_F1_V1"), default="F1",
+                        help="explicit qualification profile; historical F1 remains strict")
     Parser.add_argument("--analyzer-commit", help="clean reviewed offline analyzer HEAD; defaults to execution source")
     Parser.add_argument("--farm-inputs", required=True, type=Path,
                         help="JSON raw parameter map for the fixed offline farm acceptance script")
@@ -678,12 +725,12 @@ def Main():
     CI = {"State": "NOT_MEASURED", "Reason": "exact-head GitHub metadata/artifact inventory absent"}
     if Args.ci_index is not None:
         Require(Args.ci_index_sha256 is not None, "independent CI inventory pin required")
-        CI = VerifyCI(Args.ci_index, Args.ci_index_sha256, Source)
+        CI = VerifyCI(Args.ci_index, Args.ci_index_sha256, Source, Args.contract)
     else:
         Require(Args.ci_index_sha256 is None, "CI pin without inventory")
     with tempfile.TemporaryDirectory(prefix="gargantuan-3l-final-") as Temporary:
         Farm = ReplayProviders(Root, Inputs, Path(Temporary) / "farm.json", PowerShell)
-        Four = (ReplayFourClientInputs(Root, Args.four_client_inputs, Source)
+        Four = (ReplayFourClientInputs(Root, Args.four_client_inputs, Source, Args.contract)
                 if Args.four_client_inputs else
                 {"State": "NOT_MEASURED", "Reason": "fresh four-client raw replay required"})
         Provenance = None
@@ -692,7 +739,7 @@ def Main():
             Provenance = VerifyProvenance(Args.provenance_index, Args.provenance_index_sha256, Inputs, CI, Four, Source)
         else:
             Require(Args.provenance_index_sha256 is None, "provenance pin without inventory")
-        Result = FinalObservation(Source, Farm, CI, Four, Provenance)
+        Result = FinalObservation(Source, Farm, CI, Four, Provenance, Args.contract)
         Result["FarmReplaySha256"] = Digest(ReadBytes(Path(Temporary) / "farm.json"))
         Result["FarmInputMapPath"] = str(Args.farm_inputs.absolute())
         Result["FarmInputMapSha256"] = Digest(ReadBytes(Args.farm_inputs))

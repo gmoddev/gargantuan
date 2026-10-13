@@ -1,6 +1,7 @@
 #pragma once
 #include "../src/network/GnsAckDiagnosticsAccess.hpp"
 #include "../src/network/FiniteGrantServiceCurve.hpp"
+#include "GnsFourGrantFixture.hpp"
 #include "../cmake/gns/PromptAckWireBudget.hpp"
 #include "AckStatsTimingEvidence.hpp"
 #include "GnsServiceTimingDiagnosticsFixture.hpp"
@@ -97,7 +98,8 @@ inline void DumpFailure(std::ostream &Output, std::uint64_t Token,
 	}
 }
 inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, bool Prompt = false,
-	std::uint64_t TailBudget = 0, Fault Failure = Fault::None, bool MixedAfter = false, bool ProductionPolicy = false) {
+	std::uint64_t TailBudget = 0, Fault Failure = Fault::None, bool MixedAfter = false, bool ProductionPolicy = false,
+	GnsFourGrantFixture::Contract Selected = GnsFourGrantFixture::Contract::LegacyFiniteGrant) {
 	PairFixture Pair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024}, TestLimits(), true);
 	struct Cleanup { PairFixture &Value; ~Cleanup() { StopPair(Value); } } Guard{Pair};
 	struct LossCleanup {
@@ -253,11 +255,13 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			throw std::runtime_error("ACK cycle missing/inconsistent chronology");
 		const auto ExpectedRequests = Prompt && Sender.PromptFinalWireAllowed ? 1u : 0u;
 		if (Requests != ExpectedRequests) throw std::runtime_error("final grant ACK request was missing or duplicated");
-		if (Failure == Fault::None && Final->StructuralLastCompletedGrantFailed) {
+		if (Failure == Fault::None && (Final->StructuralLastCompletedGrantFailed ||
+			!GnsFourGrantFixture::SelectedTimingValid(*Final, Token, Bytes, Selected, Token * Bytes))) {
 			DumpFailure(std::cerr, Token, *Final);
 			DumpNativeSnapshot("grant-failure", "sender", Token, *Pair.Server, Pair.ServerConnection);
 			DumpNativeSnapshot("grant-failure", "receiver", Token, *Pair.Client, Pair.ClientConnection);
-			throw std::runtime_error("healthy ACK cycle failed canonical finite-grant service");
+			if (!GnsFourGrantFixture::SelectedTimingValid(*Final, Token, Bytes, Selected, Token * Bytes))
+				throw std::runtime_error("healthy ACK cycle failed selected native completion contract");
 		}
 		if (Failure == Fault::NativeSendFailure && (Sender.InjectedNativeSendFailures != 1 || FailedRequests != 1 ||
 			!Sender.FirstSentBytesAtInjectedFailure || Sender.FirstSentBytesAtInjectedFailure >= Bytes || Requests != 1))
@@ -363,7 +367,10 @@ inline bool RunRetrySafety() {
 	}
 }
 
-inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0) {
+inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0,
+	GnsFourGrantFixture::Contract Selected = GnsFourGrantFixture::Contract::LegacyFiniteGrant) {
+	std::cout << "[Network:AckCycle] contract=" << GnsFourGrantFixture::Identity(Selected) << '\n';
+	if (Selected == GnsFourGrantFixture::Contract::SanitizerSafety) return false;
 	try {
 		if (!TestGnsServiceTimingDiagnostics())
 			throw std::runtime_error("ACK cycle private timing diagnostics failed supplied-record checks");
@@ -448,9 +455,9 @@ inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0) {
 		AckStatsTimingEvidence::Arm DiagnosticArm(Prompt, true);
 		for (const auto Bytes : {std::size_t{393652}, std::size_t{524288}})
 			for (const auto PollPeriod : {1000us, 16667us})
-				Observe(Bytes, PollPeriod, Prompt, TailBudget, Fault::None, false, Prompt && TailBudget == 1348);
+				Observe(Bytes, PollPeriod, Prompt, TailBudget, Fault::None, false, Prompt && TailBudget == 1348, Selected);
 		if (Prompt) for (const auto Bytes : {std::size_t{77}, std::size_t{1135}, std::size_t{1136}, std::size_t{1258}})
-			Observe(Bytes, 1000us, Prompt, TailBudget, Fault::None, false, TailBudget == 1348);
+			Observe(Bytes, 1000us, Prompt, TailBudget, Fault::None, false, TailBudget == 1348, Selected);
 		if (Prompt && TailBudget == 1348) {
 			Observe(393652, 1000us, true, TailBudget, Fault::NativeSendFailure);
 			Observe(393652, 1000us, true, TailBudget, Fault::SocketSendFailure);

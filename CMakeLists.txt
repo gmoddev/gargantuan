@@ -1359,23 +1359,26 @@ if(BUILD_TESTING)
 		add_test(NAME gargantuan_gns_failed_send_retry_safety COMMAND gargantuan_real_transport_tests --ack-retry-safety)
 		set_tests_properties(gargantuan_gns_failed_send_retry_safety
 			PROPERTIES LABELS "networking;optional;sanitizer-safety" TIMEOUT 45 RUN_SERIAL TRUE)
-		add_test(NAME gargantuan_gns_funded_ack COMMAND gargantuan_real_transport_tests --ack-cycle-funded 1348)
-		add_test(NAME gargantuan_gns_funded_ack_compatibility COMMAND gargantuan_real_transport_tests --ack-funded-compatibility)
-		add_test(NAME gargantuan_gns_funded_ack_four_grant COMMAND gargantuan_real_transport_tests --ack-funded-four-grant)
+		add_test(NAME gargantuan_gns_funded_ack COMMAND gargantuan_real_transport_tests --ack-cycle-funded-hybrid 1348)
+		add_test(NAME gargantuan_gns_funded_ack_compatibility COMMAND gargantuan_real_transport_tests --ack-funded-compatibility-hybrid)
+		add_test(NAME gargantuan_gns_funded_ack_four_grant_hybrid COMMAND gargantuan_real_transport_tests --ack-funded-four-grant-hybrid)
 		set_tests_properties(gargantuan_gns_funded_ack gargantuan_gns_funded_ack_compatibility
-			gargantuan_gns_funded_ack_four_grant PROPERTIES LABELS "networking;optional;f1;funded-ack" TIMEOUT 60 RUN_SERIAL TRUE)
+			gargantuan_gns_funded_ack_four_grant_hybrid PROPERTIES LABELS "networking;optional;f1;funded-ack" TIMEOUT 60 RUN_SERIAL TRUE)
+		add_test(NAME gargantuan_four_grant_contract COMMAND gargantuan_real_transport_tests --four-grant-contract)
+		set_tests_properties(gargantuan_four_grant_contract PROPERTIES LABELS "networking;optional;contract" TIMEOUT 10)
 		# Actual pinned 5/20-second control paths: one control/funded pair, not
 		# repeated in each workload fixture or the sanitizer timing matrix.
 		add_test(NAME gargantuan_gns_funded_ack_stats COMMAND gargantuan_real_transport_tests --ack-stats-boundary)
 		set_tests_properties(gargantuan_gns_funded_ack_stats
 			PROPERTIES LABELS "networking;optional;funded-ack" TIMEOUT 100 RUN_SERIAL TRUE)
-		add_test(NAME gargantuan_f1_packet_tail COMMAND gargantuan_real_transport_tests --packet-tail)
-		add_test(NAME gargantuan_f1_four_grant COMMAND gargantuan_real_transport_tests --four-grant)
+		add_test(NAME gargantuan_hybrid_packet_tail COMMAND gargantuan_real_transport_tests --packet-tail-hybrid)
+		# Standard releases qualify D03; --four-grant remains an explicit legacy probe.
+		add_test(NAME gargantuan_hybrid_four_grant COMMAND gargantuan_real_transport_tests --four-grant-hybrid)
 		add_test(NAME gargantuan_f1_four_grant_sanitizer_safety
 			COMMAND gargantuan_real_transport_tests --four-grant-sanitizer-safety)
-		add_test(NAME gargantuan_f1_mixed_traffic COMMAND gargantuan_real_transport_tests --mixed-traffic)
-		set_tests_properties(gargantuan_f1_packet_tail gargantuan_f1_four_grant
-			gargantuan_f1_four_grant_sanitizer_safety gargantuan_f1_mixed_traffic
+		add_test(NAME gargantuan_hybrid_mixed_traffic COMMAND gargantuan_real_transport_tests --mixed-traffic-hybrid)
+		set_tests_properties(gargantuan_hybrid_packet_tail gargantuan_hybrid_four_grant
+			gargantuan_f1_four_grant_sanitizer_safety gargantuan_hybrid_mixed_traffic
 			PROPERTIES LABELS "networking;optional;f1" TIMEOUT 30 RUN_SERIAL TRUE)
 		add_test(NAME gargantuan_pooled_service_source_contract
 			COMMAND ${CMAKE_COMMAND}

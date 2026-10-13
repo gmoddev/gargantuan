@@ -319,7 +319,7 @@ class QualificationTests(unittest.TestCase):
                 OldManifest = json.loads(Manifest.read_text())
                 OldManifest["Contract"] = "D01"
                 Manifest.write_text(json.dumps(OldManifest))
-                with self.assertRaisesRegex(ValueError, "F1 probe source"):
+                with self.assertRaisesRegex(ValueError, "matching service contract probe source"):
                     Q.LocalRun(Client, Log).Check()
                 OldManifest["Contract"] = "F1"
                 Manifest.write_text(json.dumps(OldManifest))
@@ -370,6 +370,12 @@ class QualificationTests(unittest.TestCase):
                          {"RunTimeout": 60}, {"QualificationMode": "UNSAFE"}):
             with self.assertRaises(ValueError):
                 Q.ValidateConfig({**Coordinator, **Mutation})
+        with self.assertRaisesRegex(ValueError, "service contract"):
+            Q.ValidateConfig({**Coordinator, "ServiceContract": "HYBRID_F1_V1"})
+        with mock.patch.object(Q, "PHASE1_CONTRACT", "HYBRID_F1_V1"):
+            Q.ValidateConfig({**Coordinator, "ServiceContract": "HYBRID_F1_V1"})
+            with self.assertRaisesRegex(ValueError, "service contract"):
+                Q.ValidateConfig(Coordinator)
 
     def test_f1_source_archive_reproduces_pinned_manifest(self):
         ArchivePath = self.Root / Q.PHASE1_SOURCE_ARCHIVE
@@ -428,6 +434,18 @@ class QualificationTests(unittest.TestCase):
         self.assertFalse(Run.Result()["Success"])
         (Directory / "probe-server.stdout.log").write_text(Good.replace("max_run_deficit_byte_us=9000000000", "max_run_deficit_byte_us=18025216001", 1))
         self.assertFalse(Run.Result()["Success"])
+        Hybrid = Good.replace("contract=F1", "contract=HYBRID_F1_V1").replace(
+            "pool_curve=derived-from-four-native-grant-curves", "pool_curve=diagnostic-four-grant-overlap").replace(
+            "pool_episodes=3", "pool_episodes=3 completion_budget_byte_us=626199296000 native_completion_invalid=0").replace(
+            "max_run_deficit_byte_us=9000000000", "max_run_deficit_byte_us=18025216001")
+        HybridRun = Q.LocalRun({**Config, "ServiceContract": "HYBRID_F1_V1"}, SimpleNamespace(Directory=Directory))
+        HybridRun.Probe = Run.Probe
+        (Directory / "probe-server.stdout.log").write_text(Hybrid)
+        self.assertTrue(HybridRun.Result()["Success"])
+        self.assertEqual("HYBRID_F1_V1", HybridRun.Result()["ServiceContract"])
+        self.assertFalse(Run.Result()["Success"])
+        (Directory / "probe-server.stdout.log").write_text(Hybrid.replace("native_completion_invalid=0", "native_completion_invalid=1"))
+        self.assertFalse(HybridRun.Result()["Success"])
         (Directory / "probe-server.stdout.log").write_text(Good.replace("completed_grants=3", "completed_grants=2", 1))
         self.assertFalse(Run.Result()["Success"])
         (Directory / "probe-server.stdout.log").write_text(Good.replace("pool_running_bound_byte_us=72100864000", "pool_running_bound_byte_us=72100864001"))

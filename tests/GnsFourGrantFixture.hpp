@@ -24,7 +24,97 @@ struct Segment {
 	std::uint64_t Bytes = 0;
 };
 
-inline bool Run(bool RequireWallClockF1 = true) {
+enum class Contract { LegacyFiniteGrant, HybridF1, SanitizerSafety };
+
+inline const char *Identity(Contract Value) {
+	return Value == Contract::HybridF1 ? "HYBRID_F1_V1" :
+		Value == Contract::LegacyFiniteGrant ? "finite_grant_v1" : "SANITIZER_SAFETY_V1";
+}
+
+// Replay the bounded unique-positive-native timeline independently of the
+// retained legacy curve. Completion never stands in for ACK or retirement.
+inline bool NativeCompletionValid(const detail::ReliableServiceFeedback &Sample,
+	std::uint64_t Token, std::uint64_t Bytes, std::uint64_t ExpectedFirstSentBytes = 0) {
+	if (!Sample.CountersValid || Sample.StructuralCompletionEvidenceInvalid ||
+		Sample.StructuralCompletionServiceFailed || Sample.StructuralLastCompletedCompletionFailed ||
+		Sample.StructuralLastCompletedGrantToken != Token || Sample.StructuralLastCompletedGrantBytes != Bytes ||
+		Sample.StructuralPayloadBytesFirstSent != (ExpectedFirstSentBytes ? ExpectedFirstSentBytes : Bytes) ||
+		!Sample.StructuralCompletedGrantSequence ||
+		!Sample.LastCompletedStructuralSegmentEventCount ||
+		Sample.LastCompletedStructuralSegmentEventCount > Sample.LastCompletedStructuralSegmentEvents.size()) return false;
+	NativeGrantCompletionCurve Curve;
+	if (!Curve.Activate(Token, Bytes, Sample.StructuralLastCompletedGrantActivatedAtMicroseconds)) return false;
+	for (std::uint32_t Index = 0; Index < Sample.LastCompletedStructuralSegmentEventCount; ++Index) {
+		const auto &Event = Sample.LastCompletedStructuralSegmentEvents[Index];
+		if (!Curve.FirstSend(Token, Event.PayloadBytes, Event.AtMicroseconds)) return false;
+	}
+	return !Curve.Invalid && !Curve.GrantFailed && Curve.FirstSentBytes == Bytes &&
+		Curve.FirstSentAtMicroseconds == Sample.StructuralLastCompletedGrantFirstSendAtMicroseconds &&
+		Curve.CompletedAtMicroseconds == Sample.StructuralLastCompletedGrantCompletedAtMicroseconds &&
+		Curve.CompletedAtMicroseconds <= Sample.ObservedAtMicroseconds;
+}
+
+inline bool LegacyTimingFailed(const detail::ReliableServiceFeedback &Sample) {
+	return Sample.StructuralLastCompletedGrantFailed || Sample.StructuralServiceFailed ||
+		Sample.StructuralMaximumFiniteShortfallByteMicroseconds != 0 ||
+		Sample.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds >
+			FiniteGrantServiceCurve::RunningBoundByteMicroseconds;
+}
+
+inline bool SelectedTimingValid(const detail::ReliableServiceFeedback &Sample,
+	std::uint64_t Token, std::uint64_t Bytes, Contract Selected, std::uint64_t ExpectedFirstSentBytes = 0) {
+	return Selected == Contract::SanitizerSafety || (NativeCompletionValid(Sample, Token, Bytes, ExpectedFirstSentBytes) &&
+		(Selected == Contract::HybridF1 || !LegacyTimingFailed(Sample)));
+}
+
+inline bool RunContractTests() {
+	detail::ReliableServiceFeedback Sample;
+	Sample.ObservedAtMicroseconds = 1'055'000;
+	Sample.StructuralCompletedGrantSequence = Sample.StructuralLastCompletedGrantToken = 1;
+	Sample.StructuralLastCompletedGrantBytes = Sample.StructuralPayloadBytesFirstSent = 65'536;
+	Sample.StructuralLastCompletedGrantActivatedAtMicroseconds = 1'000'000;
+	Sample.StructuralLastCompletedGrantFirstSendAtMicroseconds = 1'000'100;
+	Sample.StructuralLastCompletedGrantCompletedAtMicroseconds = 1'005'000;
+	Sample.LastCompletedStructuralSegmentEventCount = 2;
+	Sample.LastCompletedStructuralSegmentEvents[0] = {1'000'100, 100};
+	Sample.LastCompletedStructuralSegmentEvents[1] = {1'005'000, 65'436};
+	FiniteGrantServiceCurve Legacy;
+	if (!Legacy.Activate(1, 65'536, 1'000'000) || !Legacy.FirstSend(1, 100, 1'000'100)) return false;
+	(void)Legacy.FirstSend(1, 65'436, 1'005'000);
+	Sample.StructuralLastCompletedGrantFailed = Sample.StructuralServiceFailed = Legacy.GrantFailed;
+	Sample.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds = Legacy.MaximumRunningDeficitByteMicroseconds;
+	if (!LegacyTimingFailed(Sample) || !SelectedTimingValid(Sample, 1, 65'536, Contract::HybridF1) ||
+		SelectedTimingValid(Sample, 1, 65'536, Contract::LegacyFiniteGrant)) return false;
+	auto Repeated = Sample;
+	Repeated.StructuralPayloadBytesFirstSent = 2 * 65'536;
+	if (!SelectedTimingValid(Repeated, 1, 65'536, Contract::HybridF1, 2 * 65'536) ||
+		SelectedTimingValid(Repeated, 1, 65'536, Contract::HybridF1)) return false;
+	auto Late = Sample;
+	Late.StructuralLastCompletedGrantCompletedAtMicroseconds = 1'037'325;
+	Late.LastCompletedStructuralSegmentEvents[1].AtMicroseconds = 1'037'325;
+	if (SelectedTimingValid(Late, 1, 65'536, Contract::HybridF1)) return false;
+	for (int Fault = 0; Fault < 8; ++Fault) {
+		auto Invalid = Sample;
+		switch (Fault) {
+		case 0: Invalid.CountersValid = false; break;
+		case 1: Invalid.StructuralCompletionEvidenceInvalid = true; break;
+		case 2: Invalid.StructuralLastCompletedCompletionFailed = true; break;
+		case 3: Invalid.LastCompletedStructuralSegmentEventCount = 513; break;
+		case 4: --Invalid.LastCompletedStructuralSegmentEvents[1].PayloadBytes; break;
+		case 5: Invalid.LastCompletedStructuralSegmentEvents[1].AtMicroseconds = 999'999; break;
+		case 6: Invalid.StructuralLastCompletedGrantToken = 2; break;
+		case 7: Invalid.ObservedAtMicroseconds = 1'004'999; break;
+		}
+		if (SelectedTimingValid(Invalid, 1, 65'536, Contract::HybridF1)) return false;
+	}
+	std::cout << "[Network:GnsFour] contract_policy=PASS hybrid_legacy_only_failure=diagnostic hard_faults=9\n";
+	return true;
+}
+
+inline bool Run(Contract Selected = Contract::LegacyFiniteGrant) {
+	const bool RequireWallClockF1 = Selected == Contract::LegacyFiniteGrant;
+	const bool RequireNativeCompletion = Selected != Contract::SanitizerSafety;
+	std::cout << "[Network:GnsFour] contract=" << Identity(Selected) << '\n';
 	constexpr std::uint64_t GrantBytes = 512 * 1024;
 	constexpr std::uint64_t PoolRate = 64 * 1024 * 1024;
 	constexpr std::uint64_t PoolBound = 4 * FiniteGrantServiceCurve::RunningBoundByteMicroseconds;
@@ -61,7 +151,7 @@ inline bool Run(bool RequireWallClockF1 = true) {
 				throw std::runtime_error("four-peer structural submission failed");
 		}
 		std::this_thread::sleep_for(55ms);
-		if (!RequireWallClockF1) {
+		if (Selected == Contract::SanitizerSafety) {
 			// Sanitizer instrumentation and shared CI scheduling are not an F1
 			// throughput environment. Let the same real-GNS grants finish before
 			// checking their byte, packet, ACK and retirement semantics.
@@ -100,15 +190,16 @@ inline bool Run(bool RequireWallClockF1 = true) {
 				*Pairs[Index].Server, Pairs[Index].ServerConnection);
 			const auto &Sample = Samples[Index];
 			AnyIndividualFailure |= !Sample || !Sample->CountersValid ||
+				Sample->NativePacketsSent < InitialPackets[Index] ||
+				Sample->NativePacketBytesSent < InitialPacketBytes[Index] ||
 				Sample->StructuralLastCompletedGrantToken != 1 ||
 				Sample->StructuralLastCompletedGrantBytes != GrantBytes ||
 				Sample->StructuralPayloadBytesFirstSent != GrantBytes ||
 				Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds == 0 ||
 				Sample->StructuralLastCompletedGrantCompletedAtMicroseconds < Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds ||
 				Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds < Sample->StructuralLastCompletedGrantActivatedAtMicroseconds ||
-				(RequireWallClockF1 && (Sample->StructuralLastCompletedGrantFailed ||
-					Sample->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds >
-						FiniteGrantServiceCurve::RunningBoundByteMicroseconds));
+				Sample->LastCompletedStructuralSegmentEventCount > Sample->LastCompletedStructuralSegmentEvents.size() ||
+				!SelectedTimingValid(*Sample, 1, GrantBytes, Selected);
 		}
 		for (std::size_t Index = 0; Index < Pairs.size(); ++Index) {
 			const auto &Sample = Samples[Index];
@@ -132,12 +223,14 @@ inline bool Run(bool RequireWallClockF1 = true) {
 			MaximumPeerRunningDeficit = std::max(MaximumPeerRunningDeficit,
 				Sample->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds);
 			WallClockFailedPeers += CurveFailed || RunningBoundExceeded;
-			if (AnyIndividualFailure) {
+			if (AnyIndividualFailure || CurveFailed || RunningBoundExceeded) {
 				std::cerr << "[Network:GnsFour] peer=" << Index
+					<< " contract=" << Identity(Selected)
 					<< " counters_invalid=" << CountersInvalid
 					<< " completion_missing=" << CompletionMissing
 					<< " size_mismatch=" << SizeMismatch
 					<< " first_send_mismatch=" << FirstSendMismatch
+					<< " native_completion_invalid=" << (RequireNativeCompletion && !NativeCompletionValid(*Sample, 1, GrantBytes))
 					<< " curve_failed=" << CurveFailed
 					<< " running_bound_exceeded=" << RunningBoundExceeded
 					<< " observed_us=" << Sample->ObservedAtMicroseconds
@@ -170,7 +263,7 @@ inline bool Run(bool RequireWallClockF1 = true) {
 						<< " at_us=" << Native.AtMicroseconds
 						<< " bytes=" << Native.PayloadBytes << '\n';
 				}
-				continue;
+				if (AnyIndividualFailure) continue;
 			}
 			CommonStart = std::max(CommonStart, Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds);
 			CommonEnd = std::min(CommonEnd, Sample->StructuralLastCompletedGrantCompletedAtMicroseconds);
@@ -196,9 +289,9 @@ inline bool Run(bool RequireWallClockF1 = true) {
 			if (Sum != GrantBytes) throw std::runtime_error("four-peer first-send timeline incomplete");
 		}
 		if (AnyIndividualFailure)
-			throw std::runtime_error(RequireWallClockF1 ?
-				"individual maximum grant failed F1" : "sanitizer grant attribution failed");
-		if (CommonEnd <= CommonStart + (RequireWallClockF1 ? 1000 : 0))
+			throw std::runtime_error(Selected == Contract::SanitizerSafety ?
+				"sanitizer grant attribution failed" : "individual maximum grant failed selected contract");
+		if (CommonEnd <= CommonStart + (RequireNativeCompletion ? 1000 : 0))
 			throw std::runtime_error("no genuine common four-grant drain interval");
 		for (const auto &Peer : PerPeer) {
 			std::uint64_t AtStart = 0;
@@ -236,11 +329,13 @@ inline bool Run(bool RequireWallClockF1 = true) {
 		const auto FiniteEnvelopeMicroseconds =
 			(FiniteEnvelopeByteMicroseconds + FiniteGrantServiceCurve::PeerRateBytesPerSecond - 1) /
 			FiniteGrantServiceCurve::PeerRateBytesPerSecond;
-		const auto ReserveWindowMicroseconds = RequireWallClockF1 ?
+		const auto ReserveWindowMicroseconds = RequireNativeCompletion ?
 			LatestCompletion - EarliestActivation : FiniteEnvelopeMicroseconds;
 		const auto ReserveBudget = Reserve * ReserveWindowMicroseconds / 1000000 + 4 * 1300;
 		std::cout << "[Network:GnsFour] mode=" <<
-			(RequireWallClockF1 ? "strict-f1" : "sanitizer-safety-f1-not-qualified")
+			(RequireWallClockF1 ? "strict-f1" : Selected == Contract::HybridF1 ?
+				"hybrid-native-completion" : "sanitizer-safety-f1-not-qualified")
+			<< " contract=" << Identity(Selected)
 			<< " overlap_us=" << (CommonEnd - CommonStart)
 			<< " wall_clock_failed_peers=" << WallClockFailedPeers
 			<< " peer_max_running_byte_us=" << MaximumPeerRunningDeficit
@@ -258,11 +353,24 @@ inline bool Run(bool RequireWallClockF1 = true) {
 				Final.LastAttributedRetiredPayloadBytes != GrantBytes ||
 				Final.ReliableStreamBytesRetransmitted != 0)
 				throw std::runtime_error("four-peer ACK/retirement convergence failed");
+			// ACK is transport receipt, not adapter delivery. Drain the existing
+			// bounded event queue and require exactly one unchanged ordered payload.
+			auto Received = Drain(*Pair.Client);
+			Pair.ClientEvents.insert(Pair.ClientEvents.end(), std::make_move_iterator(Received.begin()),
+				std::make_move_iterator(Received.end()));
+			const auto Delivered = Payloads(Pair.ClientEvents);
+			if (Delivered != std::vector<std::vector<std::byte>>{
+				std::vector<std::byte>(GrantBytes - ReliableServiceEnvelopeBytes, std::byte{0x37})})
+				throw std::runtime_error("four-peer exact ordered delivery failed");
 		}
 		return true;
 	} catch (const std::exception &Error) {
-		std::cerr << "[Network:GnsFour] FAIL " << Error.what() << '\n';
+		std::cerr << "[Network:GnsFour] contract=" << Identity(Selected) << " FAIL " << Error.what() << '\n';
 		return false;
 	}
+}
+// Retain the existing diagnostic call convention, including sanitizer mode.
+inline bool Run(bool RequireWallClockF1) {
+	return Run(RequireWallClockF1 ? Contract::LegacyFiniteGrant : Contract::SanitizerSafety);
 }
 }
