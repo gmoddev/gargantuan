@@ -107,6 +107,15 @@ pass, but fairness is independently INCONCLUSIVE: one generic `no_work`
 disposal cannot prove demand ended. Prospective generation-safe source-empty
 evidence V3 distinguishes it from budget/planning refusal and counts endings
 separately from actual grants; A5's old unknown disposal remains unproven.
+Pre-publication audit of unqualified A6 `751e4eeaa` also finds that retained
+`GlobalWait` can block ready peers during unfinished planning. The selected
+source deferral yields only that funding turn while retaining exact demand,
+eligibility and credit; an actual two-peer/planner regression must qualify it.
+A6 was not pushed or used for native32; its23-test preflight is not a campaign.
+The follow-up additionally samples fresh time for source-empty disposal and
+checks the committed raw journal frontier, not cached lag0. Missing/backward
+time or invalid/newer source cannot forgive eligibility; frozen quotes keep
+their immutable frontier. Changed-source preflight/CI/native32 remain required.
 See ownership decision section27. **KI-006 OPEN; PR6 draft; no physical PASS
 or3L completion.**
 

@@ -1934,7 +1934,10 @@ namespace gargantuan::network {
 							std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes;
 							if (ByteAdmission) {
 								if (!Replication->HasPendingStructuralWork(Connection)) {
-									ByteAdmission->NoWork(Connection, true); continue;
+									if (!ByteAdmission->NoWork(Connection, true, ServiceTime())) {
+										FailSession({DisconnectReason::ResourceExhaustion, "Reliable source-empty clock/ownership failed"}); return;
+									}
+									continue;
 								}
 								if (!RefreshStructuralService(Connection, Peer->second, true)) {
 									if (PendingSessionFailure) { (void)DrainFailures(); return; }
@@ -1958,7 +1961,10 @@ namespace gargantuan::network {
 								return true;
 							};
 							if (Peer->second.Phase == PeerPhase::BootstrapPending) {
-								if (!Replication->IsPlanningReady(Connection)) continue;
+								if (!Replication->IsPlanningReady(Connection)) {
+									if (ByteAdmission) ByteAdmission->DeferSource(Connection);
+									continue;
+								}
 								const auto CriticalTransitions = Replication->GetPendingCriticalTransitionCount(Connection);
 								if (CriticalTransitions == 0) {
 									PendingPeerFailures.try_emplace(
@@ -1970,7 +1976,10 @@ namespace gargantuan::network {
 									);
 									continue;
 								}
-								if (CriticalTransitions > Allowance) continue;
+								if (CriticalTransitions > Allowance) {
+									if (ByteAdmission) ByteAdmission->DeferSource(Connection);
+									continue;
+								}
 								const auto ReplicationMetricsBefore = Replication->GetCumulativeMetrics();
 								auto Produced = Replication->ProducePendingBaseline(Connection, Allowance, SimulationTick,
 									Peer->second.Limits.MaximumReliableMessageBytes, AvailableFrameBytes);
@@ -1987,7 +1996,10 @@ namespace gargantuan::network {
 									ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
 								// A world revision can obsolete a queued bootstrap while its
 								// peer awaits bounded 3E service. Defer, never accept stale work.
-								if (Produced.Error == "No replication relevance changes are available") continue;
+								if (Produced.Error == "No replication relevance changes are available") {
+									if (ByteAdmission) ByteAdmission->DeferSource(Connection);
+									continue;
+								}
 								if (!Produced.Succeeded() || !Produced.Frame) {
 									PendingPeerFailures.try_emplace(
 										Connection,
@@ -2100,8 +2112,13 @@ namespace gargantuan::network {
 							}
 							// No frame can mean exhausted journal allowance or unfinished
 							// planning. Neither may erase the exact candidate or fair wait.
-							if (ByteAdmission && !Replication->HasPendingStructuralWork(Connection))
-								ByteAdmission->NoWork(Connection, true);
+							if (ByteAdmission) {
+								if (!Replication->HasPendingStructuralWork(Connection)) {
+									if (!ByteAdmission->NoWork(Connection, true, ServiceTime())) {
+										FailSession({DisconnectReason::ResourceExhaustion, "Reliable source-empty clock/ownership failed"}); return;
+									}
+								} else ByteAdmission->DeferSource(Connection);
+							}
 						}
 					}
 				}

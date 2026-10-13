@@ -2657,8 +2657,17 @@ namespace gargantuan::network {
 	bool ReplicationCoordinator::HasPendingStructuralWork(ConnectionId Connection) const {
 		const auto Peer = Peers.find(Connection);
 		// Missing ownership cannot certify an empty, generation-valid source.
-		return Peer == Peers.end() || Peer->second.PreparedCommit.has_value() ||
-			GetJournalLag(Connection) != 0 || HasPendingRelevance(Connection);
+		if (Peer == Peers.end() || !SourceRootId.IsValid() || CatalogCursor.Scope != SourceRootId ||
+			Peer->second.JournalCursor.Scope != SourceRootId ||
+			Peer->second.JournalCursor.NextSequence > CatalogCursor.NextSequence ||
+			Peer->second.PreparedCommit.has_value() || GetJournalLag(Connection) != 0 || HasPendingRelevance(Connection)) return true;
+		// Catalog refresh may not run when planning has no active peers. Read
+		// only the committed frontier; never certify a newer raw suffix empty.
+		// Detached cessation replay owns its frozen frontier, not later mutation.
+		if (FrozenQuote) return FrozenJournalTail != CatalogCursor.NextSequence;
+		if (!SourceRoot || SourceRoot->GetDestroyed() || SourceRoot->GetObjectId() != SourceRootId) return true;
+		const auto SourceCursor = ChangeJournal::Get().CreateCursor(SourceRootId);
+		return SourceCursor.Scope != SourceRootId || SourceCursor.NextSequence != CatalogCursor.NextSequence;
 	}
 
 	ReplicationScheduleResult

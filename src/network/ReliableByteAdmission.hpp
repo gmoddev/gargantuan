@@ -251,14 +251,24 @@ public:
 	// SourceEmpty is asserted only by the replication owner after checking
 	// journal, relevance, planning and prepared ownership. Generic callers and
 	// unexamined steps retain their original inconclusive diagnostic reason.
-	void NoWork(ConnectionId Id, bool SourceEmpty = false) {
+	bool NoWork(ConnectionId Id, bool SourceEmpty = false,
+		std::uint64_t AtMicroseconds = std::numeric_limits<std::uint64_t>::max()) {
+		// Source-owned emptiness must be timed after its actual observation.
+		// Reject missing/backward time before changing any candidate or clock.
+		if (SourceEmpty && (AtMicroseconds == std::numeric_limits<std::uint64_t>::max() ||
+			!Peers.contains(Id) || !Advance(AtMicroseconds))) return false;
 		if (auto Found = Peers.find(Id); Found != Peers.end()) {
 			DisposeDemand(Id, Found->second, SourceEmpty
 				? AdmissionEvidenceReason::SourceEmpty : AdmissionEvidenceReason::NoWork);
 			Found->second.Required = MinimumFrameBytes; Found->second.WaitSince.reset(); Found->second.DemandStep = 0;
 		}
 		ReleaseWait(Id);
+		return true;
 	}
+	// A bounded source/planning deferral cannot monopolize aggregate funding.
+	// Yield only the funding turn: the exact candidate, original fair wait,
+	// required cost, credits and accepted debt keep their existing owners.
+	void DeferSource(ConnectionId Id) { ReleaseWait(Id); }
 	void Remove(ConnectionId Id) {
 		if (Active && Active->Connection == Id) (void)Rollback(*Active);
 		if (auto Found = Peers.find(Id); Found != Peers.end()) {

@@ -2405,6 +2405,33 @@ its count/wait are separate from actual accepted grants. Generic `no_work`
 and old V1/V2 evidence remain strict/inconclusive as before. A5's unknown
 disposal is not retrospectively proven by this amendment.
 
+Before publication, independent read-only review of unqualified A6 `751e4eeaa`
+finds a retained funding-turn hazard. An exact candidate can own `GlobalWait`
+while aggregate credit is short; planning replacement then makes preparation
+unavailable. Once credit refills, each examined no-frame step preserves that
+funding turn and excludes other ready peers, even with free permits. Preserving
+the candidate's age must not preserve exclusive funding priority while its
+source cannot produce. Select `DeferSource` to release only `GlobalWait`, with
+no candidate/required-byte/credit/eligibility reset and no fabricated no-work
+disposition. A focused actual two-peer/planner regression must prove that the
+other ready peer progresses while the deferred candidate keeps its original
+ownership. This is a static correction before publication: A6 is not pushed
+and has no native campaign or FAIL verdict. All hard bounds remain unchanged.
+
+Two additional exact-proof checks are required in the reviewed follow-up.
+Source-empty disposal samples fresh monotonic time after its actual owner query;
+missing/backward time rejects before state changes. A cached exact-bound step
+cannot conceal an actual end1us overdue. The query must also compare the current
+committed scoped journal frontier with the catalog cursor: an actual new Name
+can exist while cached peer lag is0. Missing/destroyed/wrong-generation source,
+cursor mismatch, pending planning/preparation and a newer raw suffix cannot
+certify emptiness. Detached reference replay uses its original frozen frontier,
+so later live mutation cannot invent reference work. The checks perform only
+bounded scalar/map reads, never catalog refresh or payload construction.
+Actual coordinator/account regressions cover these counterexamples together
+with competing-peer progress and retained candidate age. A6's original23-test
+preflight PASS is retained; the changed source still needs fresh native tests.
+
 Fresh affected native preflight, exact-source CI and an authorized campaign
 must qualify both corrections. No fresh native/physical PASS is claimed here.
 **KI-006 OPEN; Foundation3L B — PARTIALLY READY; PR6 draft; no3M or merge.**

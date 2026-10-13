@@ -87,6 +87,24 @@ Source-empty endings are counted separately from actual grants and accepted
 bytes. Generic `no_work` remains inconclusive; old V1/V2 keep their original
 semantics. This prospective proof cannot reinterpret A5's unknown disposal.
 
+A read-only pre-publication audit of unqualified A6 `751e4eeaa` identifies a
+funding-turn coupling: preserving a candidate through unfinished planning also
+preserves `GlobalWait`. After its funding credit refills, a peer still unable
+to prepare can block other ready peers for the entire planning interval. This
+is a source counterexample, not a measured A6 native32 failure; A6 was not pushed
+or used for a native32 campaign. Its affected23-test preflight remains separate.
+Select a source-deferral operation that releases only this funding turn,
+retaining the exact candidate, original eligibility, required bytes and credit.
+Exercise the real two-peer/planner interaction before fresh qualification.
+No timer, admission deadline, accounting allowance or empty-source claim changes.
+The reviewed follow-up also requires fresh monotonic time after the owner query
+for source-empty disposal; cached step time cannot forgive a deadline breach.
+Missing/backward time fails before mutation. Empty proof additionally requires
+valid source/generation/cursor ownership and equality with the committed raw
+journal frontier, not just cached catalog lag. Detached quotes use their frozen
+frontier. These scalar checks add no catalog scan or live quote replay; focused
+regressions cover actual mutation with cached lag0 and an end1us beyond the bound.
+
 The coordinated scope candidate `4a2e8d6112a5720f8908f26dd61ee79adf9f487e`
 subsequently passes all eight original exact-source hosted jobs and independent
 canonical CI/package verification. Its fresh native32 run remains FAIL: a

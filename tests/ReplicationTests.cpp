@@ -132,15 +132,32 @@ namespace {
 		Check(Deferred.DeferredForBytes && Deferred.RequiredFrameBytes != 0, "source-empty fixture obtains real encoded baseline candidate");
 		if (!Deferred.DeferredForBytes) { Coordinator.RemovePeer(Connection); World->Destroy(); return; }
 		Admission Account(ReliableServiceProfile::PooledService());
+		const ConnectionId ReadyPeer{88, 3};
+		const std::array<ConnectionId, 4> WarmupPeers{{{89, 3}, {90, 3}, {91, 3}, {92, 3}}};
 		auto Step = [&](std::uint64_t At) {
 			Check(Account.BeginStep(At) && Account.ObserveService(Connection, Admission::ServiceObservation{At, true, true}),
 				"source-empty fixture retains complete generation-valid service");
+			Check(Account.ObserveService(ReadyPeer, Admission::ServiceObservation{At, true, true}), "ready competing peer has fresh service");
+			for (const auto Peer : WarmupPeers)
+				Check(Account.ObserveService(Peer, Admission::ServiceObservation{At, true, true}), "prior ACK consumers retain fresh full-generation service");
 			Account.SetOrdinaryFunding(224 * 1024);
 			(void)Account.Allowance(Connection, At);
+			(void)Account.Allowance(ReadyPeer, At);
+			for (const auto Peer : WarmupPeers) (void)Account.Allowance(Peer, At);
 		};
 		Step(0);
 		Account.DeferSize(Connection, Deferred.RequiredFrameBytes + ReliableServiceEnvelopeBytes, Deferred.DiagnosticFingerprint);
 		Account.EndStep(); Step(250'000); Account.EndStep();
+		// Four previously serviced peers consume the actual pooled burst. Their
+		// exact ACK retirement releases every slot before the two subject peers
+		// compete, without changing rates, credits or admission ownership.
+		for (const auto Peer : WarmupPeers) {
+			auto Receipt = Account.Reserve(Peer, MaximumReliableServiceGroupBytes);
+			Check(Receipt && Account.Commit(*Receipt) && Account.Retire(Peer, Receipt->Token, Receipt->Bytes) &&
+				Account.RefreshService(Peer, Admission::ServiceObservation{250'000, true, true}), "prior exact grants drain funded credit and retire ACK-owned slots");
+		}
+		Check(Account.GlobalCredit() == 0 && Account.Allowance(Connection, 250'000) == 0,
+			"real encoded candidate owns global refill turn after prior exact service");
 		const auto Eligible = std::ranges::find_if(Evidence.Events.begin(), Evidence.Events.begin() + Evidence.Count,
 			[](const auto &Event) { return Event.Kind == Kind::CreditEligible; });
 		Check(Eligible != Evidence.Events.begin() + Evidence.Count, "real exact baseline candidate becomes credit eligible");
@@ -156,10 +173,21 @@ namespace {
 			NoPlan.Error == "No replication relevance changes are available" && Coordinator.HasPendingStructuralWork(Connection),
 			"zero journal lag and no frame do not erase bounded planning ownership");
 		Step(260'000);
-		if (!Coordinator.HasPendingStructuralWork(Connection)) Account.NoWork(Connection, true);
+		Account.DeferSource(ReadyPeer);
+		Check(Account.Allowance(ReadyPeer, 260'000) == 0,
+			"another generation-valid peer cannot release the retained candidate funding turn");
+		if (!Coordinator.HasPendingStructuralWork(Connection)) (void)Account.NoWork(Connection, true, 260'000);
+		else if (!Coordinator.IsPlanningReady(Connection)) Account.DeferSource(Connection);
+		const auto Ready = Account.Reserve(ReadyPeer, 128);
+		Check(Ready && Account.Commit(*Ready) && Account.Retire(ReadyPeer, Ready->Token, Ready->Bytes) &&
+			Account.RefreshService(ReadyPeer, Admission::ServiceObservation{260'000, true, true}),
+			"actual non-ready planning yields only the funding turn so a ready competing peer accepts and retires");
 		Account.EndStep();
 		Check(Evidence.Count == 2 && DemandId != 0 && Since == 250'000,
-			"bounded planning deferral preserves exact demand identity and original eligibility without disposal");
+			"bounded planning funding yield preserves exact demand identity and original eligibility without disposal");
+		Check(Account.GetMetrics().OldestWaitMicroseconds == 260'000 &&
+			Account.GlobalCredit() == 671088 - 128 && Account.Debt(Connection) == 0,
+			"funding yield retains original admission wait and leaves credit/debt unchanged except ready peer exact grant");
 		for (int Attempt = 0; Attempt < 2000 && !Coordinator.IsPlanningReady(Connection); ++Attempt)
 			Coordinator.ProcessPlanning(++Tick);
 		auto Baseline = Coordinator.ProducePendingBaseline(Connection, 8, Tick);
@@ -168,10 +196,13 @@ namespace {
 		Check(Coordinator.CommitSchedulerAcceptance(Connection, Baseline.Frame->Sequence).Succeeded(), "actual baseline acceptance commits planning work");
 		for (int Attempt = 0; Attempt < 2000 && Coordinator.HasPendingRelevance(Connection); ++Attempt) Coordinator.ProcessPlanning(++Tick);
 		Check(!Coordinator.HasPendingStructuralWork(Connection), "accepted baseline and completed planning disposal establish actual empty source");
-		Step(270'000); if (!Coordinator.HasPendingStructuralWork(Connection)) Account.NoWork(Connection, true); Account.EndStep();
+		Step(270'000);
+		if (!Coordinator.HasPendingStructuralWork(Connection)) Check(Account.NoWork(Connection, true, 270'000), "actual source-empty end supplies fresh time");
+		Account.EndStep();
 		Check(Evidence.Count == 3 && Evidence.Events[2].Kind == Kind::DemandDisposed && Evidence.Events[2].Reason == Reason::SourceEmpty &&
-			Evidence.Events[2].DemandId == DemandId && Evidence.Events[2].EligibleSinceMicroseconds == Since && Account.GetMetrics().AcceptedBytes == 0,
-			"source-empty end closes original eligibility without manufacturing accepted bytes");
+			Evidence.Events[2].DemandId == DemandId && Evidence.Events[2].EligibleSinceMicroseconds == Since &&
+			Account.GetMetrics().AcceptedBytes == 4 * MaximumReliableServiceGroupBytes + 128,
+			"source-empty end closes original eligibility without manufacturing candidate delivery");
 		// A capped no-frame journal read consumes only one irrelevant record.
 		// Remaining source records and an exact current Name candidate survive.
 		for (int Index = 0; Index < 3; ++Index)
@@ -184,7 +215,10 @@ namespace {
 		auto Capped = Coordinator.ProduceIncremental(Connection, 0, MaximumReplicationFrameBytes, 2);
 		Check(!Capped.Frame && Capped.JournalRecordsExamined == 1 && Coordinator.GetJournalLag(Connection) == 3 &&
 			Coordinator.HasPendingStructuralWork(Connection), "capped no-frame read cannot certify remaining source empty");
-		Step(290'000); if (!Coordinator.HasPendingStructuralWork(Connection)) Account.NoWork(Connection, true); Account.EndStep();
+		Step(290'000);
+		if (!Coordinator.HasPendingStructuralWork(Connection)) (void)Account.NoWork(Connection, true, 290'000);
+		else if (!Capped.Frame) Account.DeferSource(Connection);
+		Account.EndStep();
 		Check(Evidence.Count == BeforeCapped, "insufficient journal budget retains exact demand and eligible clock");
 		auto Final = Coordinator.ProduceIncremental(Connection, 8, MaximumReplicationFrameBytes, 32);
 		Check(Final.Frame.has_value(), "remaining journal candidate eventually prepares under unchanged bounded read allowance");
@@ -200,6 +234,44 @@ namespace {
 		}
 		Check(!Coordinator.HasPendingStructuralWork(Connection) && Coordinator.HasPendingStructuralWork({87, 4}),
 			"actual drained source is empty and unknown full generation fails closed");
+		std::string FrozenError;
+		auto Frozen = Coordinator.CaptureFrozenQuote(FrozenError);
+		Check(Frozen && FrozenError.empty() && !Frozen->HasPendingStructuralWork(Connection),
+			"actual drained source captures an independently empty cessation frontier");
+		Object->SetName("source-frontier-final");
+		Check(Coordinator.GetJournalLag(Connection) == 0 && Coordinator.HasPendingStructuralWork(Connection),
+			"fresh committed Name cannot be declared empty by a stale catalog cursor");
+		Check(Frozen && !Frozen->HasPendingStructuralWork(Connection), "later live mutation cannot invent work in the frozen cessation frontier");
+		auto Fresh = Coordinator.ProduceIncremental(Connection, 8, MaximumReplicationFrameBytes, 32);
+		Check(Fresh.Frame && Coordinator.HasPendingStructuralWork(Connection) &&
+			Coordinator.CommitSchedulerAcceptance(Connection, Fresh.Frame->Sequence).Succeeded() &&
+			!Coordinator.HasPendingStructuralWork(Connection),
+			"fresh source suffix prepares and accepts through unchanged bounded production ownership before empty proof");
+		{
+			Admission ClockAccount(ReliableServiceProfile::PooledService());
+			auto ClockStep = [&](std::uint64_t At) {
+				Check(ClockAccount.BeginStep(At) && ClockAccount.ObserveService(Connection,
+					Admission::ServiceObservation{At, true, true}), "source-empty clock fixture observes complete service");
+				ClockAccount.SetOrdinaryFunding(224 * 1024);
+				(void)ClockAccount.Allowance(Connection, At);
+			};
+			ClockStep(0); ClockAccount.DeferSize(Connection, 100, {7, 8}); ClockAccount.EndStep();
+			ClockStep(100); ClockAccount.EndStep();
+			ClockStep(1'181'350); ClockAccount.EndStep();
+			const auto Before = Evidence.Count;
+			const auto Credit = ClockAccount.GlobalCredit();
+			Check(!ClockAccount.NoWork(Connection, true) && !ClockAccount.NoWork(Connection, true, 1'181'349) &&
+				Evidence.Count == Before && ClockAccount.GlobalCredit() == Credit && ClockAccount.Debt(Connection) == 0,
+				"missing or backward source-empty time cannot dispose the obligation or alter funding/debt");
+			if (!Coordinator.HasPendingStructuralWork(Connection))
+				Check(ClockAccount.NoWork(Connection, true, 1'181'351), "actual empty source end advances to its fresh observed time");
+			Check(Evidence.Count == Before + 1 && Evidence.Events[Before].Reason == Reason::SourceEmpty &&
+				Evidence.Events[Before].AtMicroseconds == 1'181'351 && Evidence.Events[Before].EligibleSinceMicroseconds == 100 &&
+				Evidence.Events[Before].AtMicroseconds - Evidence.Events[Before].EligibleSinceMicroseconds == 1'181'251,
+				"cached exact-bound time cannot conceal source-empty end one microsecond beyond the unchanged fair deadline");
+			Check(ClockAccount.Allowance(Connection, 1'181'350) == 0 && ClockAccount.GetMetrics().AcceptedBytes == 0,
+				"fresh source-empty time remains monotonic and creates no delivery");
+		}
 		Coordinator.RemovePeer(Connection); World->Destroy();
 	}
 
