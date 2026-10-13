@@ -779,7 +779,9 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
         self.assertIn('L"--ack-cycle-funded", "AckCycleFunded", false, L"1348"', Native)
         self.assertIn('std::wstring(Args[1]) == L"--run-ack-cycle-funded"', Native)
         Cycle = (ROOT / 'tests/GnsAckCycleFixture.hpp').read_text()
-        Failure = Cycle[Cycle.index('if (Failure == Fault::None && Final->StructuralLastCompletedGrantFailed)'):]
+        Failure = Cycle[Cycle.index('if (Failure == Fault::None &&'):]
+        self.assertIn('SelectedTimingValid(*Final, Token, Bytes, Selected, Token * Bytes)', Failure)
+        self.assertIn('if (!GnsFourGrantFixture::SelectedTimingValid', Failure)
         self.assertLess(Failure.index('DumpFailure(std::cerr, Token, *Final)'), Failure.index('throw std::runtime_error'))
         self.assertIn('AckStatsTimingEvidence::Session Diagnostic(true)', Cycle)
         self.assertIn('AckStatsTimingEvidence::Arm DiagnosticArm(Prompt, true)', Cycle)

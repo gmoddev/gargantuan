@@ -97,6 +97,14 @@ unchanged. All D03 product bounds and independent provider/recovery gates remain
 mandatory. The migration is being qualified; this decision alone closes no
 evidence gate. **KI-006 OPEN; PR6 draft; Foundation3L B — PARTIALLY READY.**
 
+The first exact-source migration CI at `6b4d464fe638` fails before CTest:
+`test_scheduler_trace.py` searches for the superseded literal legacy-failure
+condition rather than the new selected-contract predicate. Engine compilation
+passes; no native timing, package or provider result is inferred. The narrow
+test correction retains failure-diagnostic ordering and explicitly checks the
+selected fatal predicate. Original failure log/ZIP and skipped Linux evidence
+remain sealed; fresh corrected-source CI is required.
+
 **2026-10-13 — Required raw four-grant CI fails; final attribution does not reproduce.**
 Execution candidate `e792482e8a9f326bb0f2861576e87e163d0c7537` preserves
 D03's100/150ms limits and qualifies the focused publication/recovery enrollment
