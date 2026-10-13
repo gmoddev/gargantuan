@@ -2605,6 +2605,69 @@ namespace gargantuan::network {
 		if (Replica.GetEpoch() != Epoch || Replica.GetReplicaRoot() != Root) return {};
 		return Result;
 	}
+	bool detail::GameSessionTestAccess::VerifyClientReplicaIdentities(const GameSession &Session,
+		std::span<const std::shared_ptr<Instance>> Observed, std::span<const ClientReplicaIdentity> Identities) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return false;
+		if (!Session.State || Session.State->Configuration.Role != GameSessionRole::Client ||
+			Session.State->Status != GameSessionStatus::Ready) return false;
+		return VerifyClientReplicaIdentities(Session.State->Replica, Observed, Identities);
+	}
+	bool detail::GameSessionTestAccess::VerifyClientReplicaIdentities(const ReplicaApplier &Replica,
+		std::span<const std::shared_ptr<Instance>> Observed, std::span<const ClientReplicaIdentity> Identities) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return false;
+		if (Observed.empty() || Observed.size() > 32 || Observed.size() != Identities.size()) return false;
+		const auto Epoch = Replica.GetEpoch();
+		const auto Root = Replica.GetReplicaRoot();
+		if (!Epoch.IsValid() || !Root || Root->GetDestroyed() || Root->IsDestroying()) return false;
+		for (std::size_t Index = 0; Index < Observed.size(); ++Index) {
+			const auto &Object = Observed[Index]; const auto &Identity = Identities[Index];
+			if (!Object || Object->GetDestroyed() || Object->IsDestroying() || !Identity.Source.IsValid() ||
+				!Identity.Local.IsValid() || Identity.Epoch != Epoch || Object->GetObjectId() != Identity.Local ||
+				Object->GetReplicationScopeId() != Root->GetObjectId() ||
+				ObjectRegistry::Get().Lookup(Identity.Local) != Object || Replica.Resolve(Identity.Source) != Object) return false;
+			for (std::size_t Prior = 0; Prior < Index; ++Prior)
+				if (Observed[Prior] == Object || Identities[Prior].Source == Identity.Source ||
+					Identities[Prior].Local == Identity.Local) return false;
+		}
+		return Replica.GetEpoch() == Epoch && Replica.GetReplicaRoot() == Root;
+	}
+	std::optional<detail::PooledPostpassSnapshot> detail::GameSessionTestAccess::ReadPooledPostpass(const GameSession &Session) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return {};
+		const auto *State = Session.State.get();
+		if (!State || State->Configuration.Role != GameSessionRole::Server || !State->IsPooled() ||
+			!State->ByteAdmission || State->Peers.size() > MaximumGameSessionPeers) return {};
+		PooledPostpassSnapshot Result;
+		Result.Admission = State->ByteAdmission->GetMetrics();
+		Result.Peers.reserve(State->Peers.size());
+		for (const auto &[Connection, Peer] : State->Peers) {
+			const auto Accepted = ReliableServiceFeedbackAccess::Accepted(State->Scheduler, Connection);
+			if (!Accepted) return {};
+			const auto &Ledger = Peer.ReliableFeedback;
+			PooledPostpassPeer Value;
+			Value.Connection = Connection; Value.Ready = Peer.Phase == PeerPhase::Ready;
+			Value.Execution = CapturePooledExecution(Ledger);
+			Value.Healthy = !Ledger.Invalid && !Ledger.ExecutionFailed && !Ledger.QueuedOfferFailed &&
+				!Ledger.QueuedOrdinaryFailed && !Ledger.QueuedOrdinaryEverFailed;
+			Value.Accepted = *Accepted; Value.ReconciledAccepted = Ledger.Accepted;
+			Value.Retired = Ledger.StructuralRetired; Value.OrdinaryDebt = Ledger.OrdinaryDebt;
+			Value.OrdinaryUnsent = Ledger.OrdinaryUnsent;
+			Value.Debt = State->ByteAdmission->Debt(Connection); Value.DebtToken = State->ByteAdmission->DebtToken(Connection);
+			if (Ledger.Previous) {
+				const auto &Native = *Ledger.Previous;
+				Value.FeedbackComplete = Native.Connection == Connection && Native.CountersValid &&
+					Native.State == ConnectionState::Connected;
+				Value.Healthy &= !Native.StructuralCompletionServiceFailed && !Native.StructuralLastCompletedCompletionFailed &&
+					!Native.StructuralCompletionEvidenceInvalid && !Native.ProtectedOrdinaryEverFailed &&
+					!Native.ProtectedOrdinaryActiveDeadlineFailed && !Native.ProtectedOrdinaryEvidenceInvalid;
+				Value.FirstSent = Native.StructuralPayloadBytesFirstSent; Value.Acked = Native.StructuralPayloadBytesAcked;
+				Value.ReliableAcked = Native.ReliablePayloadBytesAcked;
+				Value.NativePending = Native.PendingReliableStreamBytes; Value.NativeUnacked = Native.SentUnackedReliableStreamBytes;
+				Value.NativeGrantToken = Native.ActiveAttributedRetirementToken;
+			}
+			Result.Peers.push_back(Value);
+		}
+		return Result;
+	}
 	void detail::GameSessionTestAccess::RequestSpatialValidation(GameSession &Session) {
 		Session.State->SpatialValidationRequested = true;
 		Session.State->SpatialValidationPassed = false;

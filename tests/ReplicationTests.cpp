@@ -124,6 +124,26 @@ namespace {
 			(*Identities)[1].Source == FirstSource && (*Identities)[1].Local == FirstLocal->GetObjectId() &&
 			(*Identities)[0].Epoch == ReplicationEpoch(11) && (*Identities)[1].Epoch == ReplicationEpoch(11),
 			"distinct local/source generations are joined by exact live binding, never duplicate Name or array order");
+		if (!Identities || Identities->size() != 2) return;
+		Check(Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities),
+			"immutable cut verifies exact current forward bindings despite equal Names");
+		for (const auto Domain : {ExecutionDomain::Worker, ExecutionDomain::IO, ExecutionDomain::Simulation}) {
+			ExecutionDomainScope Scope(Domain);
+			Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities),
+				"forward cut rejects non-Main calls before reading replica state");
+		}
+		auto RejectIdentity = [&](auto &&Change, const char *Reason) {
+			auto Wrong = *Identities; Change(Wrong);
+			Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, Wrong), Reason);
+		};
+		RejectIdentity([](auto &Ids) { std::swap(Ids[0].Source, Ids[1].Source); },
+			"same-Name aliases cannot swap their authoritative source witnesses");
+		RejectIdentity([](auto &Ids) { Ids[0].Source = Ids[1].Source; }, "duplicate source witness fails the cut");
+		RejectIdentity([](auto &Ids) { Ids[0].Local = Ids[1].Local; }, "duplicate local witness fails the cut");
+		RejectIdentity([](auto &Ids) { ++Ids[0].Source.Generation; }, "wrong full source generation fails the cut");
+		RejectIdentity([](auto &Ids) { ++Ids[0].Local.Generation; }, "wrong full local generation fails the cut");
+		RejectIdentity([](auto &Ids) { Ids[0].Epoch = ReplicationEpoch(12); }, "stale or forecast replica epoch fails the cut");
+		RejectIdentity([](auto &Ids) { Ids[0].Source = {}; }, "missing source identity fails the cut");
 		const std::array Duplicate{FirstLocal, FirstLocal};
 		const std::array<std::shared_ptr<Instance>, 1> Null{nullptr};
 		const std::array<std::shared_ptr<Instance>, 1> Foreign{First};
@@ -132,11 +152,20 @@ namespace {
 			!Access::ReadClientReplicaIdentities(Replica, Foreign) && !Access::ReadClientReplicaIdentities(Replica, Oversized) &&
 			!Access::ReadClientReplicaIdentities(Replica, {}),
 			"duplicate/ambiguous observations, null, foreign scope and empty/oversized batches fail closed");
+		Check(!Access::VerifyClientReplicaIdentities(Replica, Duplicate, *Identities) &&
+			!Access::VerifyClientReplicaIdentities(Replica, Null, std::span(*Identities).first(1)) &&
+			!Access::VerifyClientReplicaIdentities(Replica, Foreign, std::span(*Identities).first(1)) &&
+			!Access::VerifyClientReplicaIdentities(Replica, Oversized, *Identities) &&
+			!Access::VerifyClientReplicaIdentities(Replica, {}, {}) &&
+			!Access::VerifyClientReplicaIdentities(Replica, Observed, std::span(*Identities).first(1)),
+			"forward cut rejects duplicate pointers, null/foreign targets and missing or excessive bindings");
 		ReplicationFrame Remove{ReplicationProtocolVersion, ReplicationMessageKind::Incremental, ReplicationEpoch(11),
 			ReliableReplicationSequence(2), {}, {{ReplicationEpoch(11), UnpublishReplication{FirstSource}}}};
 		Check(Replica.ApplyFrame(Remove).Succeeded() && !Replica.Resolve(FirstSource) &&
 			!Access::ReadClientReplicaIdentities(Replica, std::array{FirstLocal}),
 			"unpublished source cannot retain an observation through its stale local replica pointer");
+		Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities),
+			"servicing that unpublishes a previously discovered replica invalidates the final cohort cut");
 		// A complete subsequent epoch reuses the same wire slot with a new
 		// generation. It constructs a new live object and cannot bind the old one.
 		const ObjectId ReusedSource{FirstSource.Slot, static_cast<std::uint32_t>(FirstSource.Generation + 1)};
@@ -168,14 +197,21 @@ namespace {
 			!Access::ReadClientReplicaIdentities(Replica, std::array{FirstLocal}) &&
 			!Access::ReadClientReplicaIdentities(Replica, std::array{SecondLocal}),
 			"epoch replacement invalidates every old replica binding even while a test retains its old Instance");
+		Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities) && ReusedIdentity &&
+			Access::VerifyClientReplicaIdentities(Replica, std::array{ReusedLocal}, *ReusedIdentity),
+			"fresh epoch and source generation validate only the new live replica at the final cut");
 		if (ReusedLocal) {
 			ReusedLocal->Destroy();
 			Check(!Access::ReadClientReplicaIdentities(Replica, std::array{ReusedLocal}),
 				"destroyed local target cannot certify a source binding");
+			Check(!ReusedIdentity || !Access::VerifyClientReplicaIdentities(Replica, std::array{ReusedLocal}, *ReusedIdentity),
+				"destroyed target invalidates a previously captured forward witness");
 		}
 		Replica.Reset();
 		Check(!Replica.GetEpoch().IsValid() && !Access::ReadClientReplicaIdentities(Replica, Observed),
 			"reset replica owns no epoch or valid historical source/local witness");
+		Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities),
+			"reset invalidates every immutable-cut epoch and generation witness");
 	}
 
 	void TestRepeatedReplicaPropertyPreflight() {

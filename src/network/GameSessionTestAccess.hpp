@@ -10,6 +10,7 @@
 #include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/runtime/SpatialRegionIndex.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
+#include "PooledServiceDiagnostics.hpp"
 
 namespace gargantuan::network {
 	class GameSession;
@@ -21,6 +22,19 @@ namespace gargantuan::network::detail {
 	struct ClientReplicaIdentity {
 		ObjectId Source, Local;
 		ReplicationEpoch Epoch;
+	};
+	struct PooledPostpassPeer {
+		ConnectionId Connection;
+		bool Ready = false, FeedbackComplete = false, Healthy = false;
+		PooledExecutionState Execution;
+		ReliableServiceAcceptedBytes Accepted, ReconciledAccepted;
+		std::uint64_t FirstSent = 0, Acked = 0, Retired = 0, ReliableAcked = 0;
+		std::uint64_t DebtToken = 0, Debt = 0, OrdinaryDebt = 0, OrdinaryUnsent = 0;
+		std::uint64_t NativePending = 0, NativeUnacked = 0, NativeGrantToken = 0;
+	};
+	struct PooledPostpassSnapshot {
+		ReliableByteAdmissionMetrics Admission;
+		std::vector<PooledPostpassPeer> Peers;
 	};
 	enum class StructuralCausalKind : std::uint8_t {
 		Prepared, Accepted, Rejected, NoFrame, PendingAdded, PendingCancelled, PendingReplaced, PeerRemoved, Delivery, Retired,
@@ -114,6 +128,15 @@ namespace gargantuan::network::detail {
 			const GameSession &Session, std::span<const std::shared_ptr<Instance>> Observed);
 		[[nodiscard]] static std::optional<std::vector<ClientReplicaIdentity>> ReadClientReplicaIdentities(
 			const ReplicaApplier &Replica, std::span<const std::shared_ptr<Instance>> Observed);
+		// Bounded forward checks at an immutable observation cut, after the
+		// independently serviced source-map discovery. No reverse index or poll.
+		[[nodiscard]] static bool VerifyClientReplicaIdentities(const GameSession &Session,
+			std::span<const std::shared_ptr<Instance>> Observed, std::span<const ClientReplicaIdentity> Identities);
+		[[nodiscard]] static bool VerifyClientReplicaIdentities(const ReplicaApplier &Replica,
+			std::span<const std::shared_ptr<Instance>> Observed, std::span<const ClientReplicaIdentity> Identities);
+		// Copies the actual ledger AFTER the production admission pass. Never
+		// polls native feedback, advances clocks or reconciles/mutates ownership.
+		[[nodiscard]] static std::optional<PooledPostpassSnapshot> ReadPooledPostpass(const GameSession &Session);
 		// Internal A/B fixture only. No runtime configuration or wire policy.
 		static void SetIncrementalEncodingOptimizationsEnabled(ReplicationCoordinator &Coordinator, bool Enabled) {
 			Coordinator.IncrementalEncodingOptimizationsEnabled = Enabled;

@@ -85,6 +85,30 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-13 — Official CI exposes live aggregate diagnostic reporting interference.**
+Source `5a45570b7bb8b43315b477b2977d339847be9883` passes the21-test affected
+native preflight and its original Windows CTest97/97, but official manual
+`38428841813` fails the subsequent qualified aggregate32 structural workload;
+dependent Linux is SKIPPED and no official package is uploaded. Peers11–14
+reject on the retained execution-budget path. No native32 run is launched on
+this source; staged identity qualification remains gated.
+
+The fixture ends its measured drain without proving native ACK/retirement and
+execution ownership quiescence, then prints13.2MB of diagnostics before
+destroying pressure objects and running120 live service Steps. Zero-loss ETW
+records266.0179ms scheduled running,0.0290ms ready and0 blocked immediately
+after the overload END anchor. The larger478.0237ms interval has468.0300ms
+running. Published75.3948ms maximum service gap excludes these report/cleanup
+operations. Exact first Main100ms versus turnover150ms bit, token and rejection
+timestamp are not retained; the source path proves rejection before Stop.
+The failure is fatal and is not exempted as post-terminal teardown.
+
+The source-supported correction being qualified services final verification
+and destruction, proves exact post-pass ownership quiescence, and defers cold
+formatting/output until sessions stop. Existing scalar first-fault capture is
+reused across the complete aggregate lifecycle. No deadline, production health
+or workload is relaxed. Original failure and trace stay sealed; KI-006 OPEN.
+
 **2026-10-13 — Corrected V2 publication PASS; client identity witness defect found.**
 Source `f2b1e800872783cf1d769daf49c5507ba65772f5` passes all eight original
 hosted jobs and independent canonical CI/package verification. Its sole fresh

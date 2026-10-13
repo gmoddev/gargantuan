@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <limits>
 #include <cstdlib>
 #include <steam/steamnetworkingsockets.h>
 #include <steam/steamnetworkingsockets_flat.h>
@@ -33,11 +34,164 @@ int DiagnosticDimension(const char *Name, int Default, int Minimum, int Maximum)
 	return std::clamp(std::atoi(Text), Minimum, Maximum);
 }
 
+// Whole-lifetime, opt-in scalar capture. This owner is declared before every
+// transport; native timing is read only after transport destruction has joined.
+struct PooledExecutionAttribution {
+	enum class Stage : unsigned { Setup, Warmup, Demand, Drain, Report, CaseCleanup, FinalStop, NativeJoin };
+	struct Fault {
+		bool Observed = false;
+		std::string_view Case;
+		Stage Lifecycle = Stage::Setup;
+		unsigned Phase = 0;
+		std::uint64_t PhaseBeginNs = 0, Step = 0, PriorAt = 0, Now = 0, Tick = 0, DebtToken = 0, DebtBytes = 0;
+		ConnectionId Connection;
+		detail::PooledObservationPoint Point = detail::PooledObservationPoint::Other;
+		detail::PooledExecutionState Before;
+		detail::PooledReliableServiceFeedback::Result Result;
+		bool Rejected = false, InvalidAfter = false, WorkReady = false, AcceptanceAvailable = true;
+		test_detail::WorkloadClockAnchor Clock;
+	} First;
+	bool Enabled = false, LifecycleObserved = false, PostFaultLifecycleObserved = false;
+	std::string_view CurrentCase = "setup", LifecycleCase;
+	Stage CurrentStage = Stage::Setup, LifecycleStage = Stage::Setup;
+	unsigned Phase = 0;
+	std::uint64_t Step = 0, PhaseBeginNs = 0, LastAt = 0;
+	std::uint64_t LifecycleStep = 0, LifecyclePhaseBeginNs = 0;
+	unsigned LifecyclePhase = 0;
+	detail::PooledLifecycleRecord FirstLifecycle{};
+	detail::PooledLifecycleRecord PostFaultLifecycle{};
+	Stage PostFaultStage = Stage::Setup;
+	std::uint64_t PostFaultStep = 0;
+	test_detail::WorkloadClockAnchor LifecycleClock;
+	detail::PooledServiceSink *Previous = nullptr;
+	detail::PooledServiceSink Sink;
+	std::unique_ptr<host::detail::FarmServiceTimingEvidence> Timing;
+	explicit PooledExecutionAttribution(bool Capture, bool NativeTiming = true) : Enabled(Capture) {
+		if (!Enabled) return;
+		if (NativeTiming) Timing = std::make_unique<host::detail::FarmServiceTimingEvidence>(true, false, true);
+		Previous = detail::ActivePooledService;
+		Sink.Context = this; Sink.CaptureExecution = true;
+		Sink.Record = [](void *Context, const detail::PooledServiceRecord &Value) noexcept {
+			auto &Self = *static_cast<PooledExecutionAttribution *>(Context);
+			if (!Self.First.Observed && (Value.ExecutionRejected || Value.Result.ExecutionFailed || Value.InvalidAfter)) {
+				auto &Saved = Self.First;
+				Saved.Observed = true; Saved.Case = Self.CurrentCase; Saved.Lifecycle = Self.CurrentStage;
+				Saved.Phase = Self.Phase; Saved.PhaseBeginNs = Self.PhaseBeginNs; Saved.Step = Self.Step;
+				Saved.PriorAt = Self.LastAt; Saved.Now = Value.NowMicroseconds; Saved.Tick = Value.SimulationTick;
+				Saved.Connection = Value.Connection; Saved.DebtToken = Value.DebtToken; Saved.DebtBytes = Value.DebtBytes;
+				Saved.Point = Value.Point; Saved.Before = Value.ExecutionBefore; Saved.Result = Value.Result;
+				Saved.Rejected = Value.ExecutionRejected; Saved.InvalidAfter = Value.InvalidAfter; Saved.WorkReady = Value.WorkReady;
+				Saved.AcceptanceAvailable = Value.AcceptanceAvailable;
+				Saved.Clock = test_detail::WorkloadClockAnchor::Capture();
+				if (Self.Timing) Self.Timing->Freeze(Value.NowMicroseconds);
+			}
+			Self.LastAt = Value.NowMicroseconds;
+			if (Self.Previous && Self.Previous->Record && (!Value.DiagnosticOnly || Self.Previous->CaptureExecution))
+				Self.Previous->Record(Self.Previous->Context, Value);
+		};
+		Sink.AcceptedGrant = [](void *Context, ConnectionId Id, std::uint64_t Token, std::uint64_t Bytes, std::uint64_t At) noexcept {
+			auto &Self = *static_cast<PooledExecutionAttribution *>(Context);
+			if (Self.Previous && Self.Previous->AcceptedGrant) Self.Previous->AcceptedGrant(Self.Previous->Context, Id, Token, Bytes, At);
+		};
+		Sink.Lifecycle = [](void *Context, const detail::PooledLifecycleRecord &Value) noexcept {
+			auto &Self = *static_cast<PooledExecutionAttribution *>(Context);
+			if (!Self.LifecycleObserved) {
+				Self.LifecycleObserved = true; Self.FirstLifecycle = Value; Self.LifecycleCase = Self.CurrentCase;
+				Self.LifecycleStage = Self.CurrentStage; Self.LifecycleClock = test_detail::WorkloadClockAnchor::Capture();
+				Self.LifecycleStep = Self.Step; Self.LifecyclePhase = Self.Phase; Self.LifecyclePhaseBeginNs = Self.PhaseBeginNs;
+			}
+			if (!Self.PostFaultLifecycleObserved && Self.First.Observed && Value.NowMicroseconds >= Self.First.Now) {
+				Self.PostFaultLifecycleObserved = true; Self.PostFaultLifecycle = Value;
+				Self.PostFaultStage = Self.CurrentStage; Self.PostFaultStep = Self.Step;
+			}
+			if (Self.Previous && Self.Previous->Lifecycle) Self.Previous->Lifecycle(Self.Previous->Context, Value);
+		};
+		detail::ActivePooledService = &Sink;
+	}
+	~PooledExecutionAttribution() {
+		if (!Enabled) return;
+		detail::ActivePooledService = Previous;
+		const bool Joined = !Timing || detail::NativeDiagnosticQuiescent();
+		const bool Cleared = Joined && (!Timing || Timing->Stop());
+		std::cout << "[Qualification:ExecutionCapture] joined=" << Joined << " sink_removed=" << Cleared
+			<< " incomplete=" << (!Joined || !Cleared) << '\n';
+		Print();
+		if (Timing && Joined && Cleared) Timing->Write(std::cout, "pooled-execution-attribution", true);
+		else if (Timing) {
+			// A cached native span can still Finish after bounded Stop retained its
+			// domain. Retain the installed heap sink/history; never Visit or free it.
+			(void)Timing.release();
+		}
+	}
+	void Print() const {
+		const auto &F = First;
+		std::cout << "[Qualification:ExecutionFirst] observed=" << F.Observed << " owner_measured=0 stack_measured=0";
+		if (F.Observed) std::cout << " case=" << F.Case << " stage=" << static_cast<unsigned>(F.Lifecycle)
+			<< " phase=" << F.Phase << " phase_begin_ns=" << F.PhaseBeginNs << " step=" << F.Step
+			<< " prior_us=" << F.PriorAt << " now_us=" << F.Now << " tick=" << F.Tick
+			<< " slot=" << F.Connection.Slot << " generation=" << F.Connection.Generation
+			<< " point=" << static_cast<unsigned>(F.Point) << " rejected=" << F.Rejected << " invalid_after=" << F.InvalidAfter
+			<< " acceptance_available=" << F.AcceptanceAvailable
+			<< " main_failed=" << F.Result.MainOpportunityFailed << " turnover_failed=" << F.Result.TurnoverFailed
+			<< " max_main_us=" << F.Result.MaximumMainOpportunityMicroseconds << " max_turnover_us=" << F.Result.MaximumTurnoverMicroseconds
+			<< " before_captured=" << F.Before.Captured << " before_invalid=" << F.Before.Invalid << " armed=" << F.Before.Armed
+			<< " required_since_us=" << F.Before.RequiredSince << " boundary_us=" << F.Before.Boundary << " work_ready=" << F.WorkReady
+			<< " offer_token=" << F.Before.OfferToken << " offer_bytes=" << F.Before.OfferBytes << " offer_at_us=" << F.Before.OfferAt
+			<< " turnover_token=" << F.Before.TurnoverToken << " turnover_at_us=" << F.Before.TurnoverAt << " permit_available=" << F.Before.PermitAvailable
+			<< " debt_token=" << F.DebtToken << " debt_bytes=" << F.DebtBytes
+			<< " qpc_before=" << F.Clock.QpcBefore << " qpc_after=" << F.Clock.QpcAfter << " frequency=" << F.Clock.QpcFrequency;
+		if (F.Observed) std::cout << " pid=" << F.Clock.Process << " native_tid=" << F.Clock.Thread
+			<< " clock_valid=" << F.Clock.NativeValid << " steady_ns=" << F.Clock.SteadyNs << " has_boundary=" << F.Before.HasBoundary;
+		std::cout << '\n' << "[Qualification:ExecutionLifecycle] observed=" << LifecycleObserved;
+		if (LifecycleObserved) std::cout << " case=" << LifecycleCase << " stage=" << static_cast<unsigned>(LifecycleStage)
+			<< " step=" << LifecycleStep << " phase=" << LifecyclePhase << " phase_begin_ns=" << LifecyclePhaseBeginNs
+			<< " point=" << static_cast<unsigned>(FirstLifecycle.Point) << " role=" << unsigned(FirstLifecycle.Role)
+			<< " status_before=" << unsigned(FirstLifecycle.StatusBefore) << " reason=" << FirstLifecycle.Reason
+			<< " now_us=" << FirstLifecycle.NowMicroseconds << " qpc_before=" << LifecycleClock.QpcBefore << " qpc_after=" << LifecycleClock.QpcAfter;
+		std::cout << '\n';
+		std::cout << "[Qualification:ExecutionPostFaultLifecycle] observed=" << PostFaultLifecycleObserved;
+		if (PostFaultLifecycleObserved) std::cout << " stage=" << static_cast<unsigned>(PostFaultStage)
+			<< " step=" << PostFaultStep << " point=" << static_cast<unsigned>(PostFaultLifecycle.Point)
+			<< " role=" << unsigned(PostFaultLifecycle.Role) << " status_before=" << unsigned(PostFaultLifecycle.StatusBefore)
+			<< " reason=" << PostFaultLifecycle.Reason << " now_us=" << PostFaultLifecycle.NowMicroseconds;
+		std::cout << '\n';
+	}
+};
+
+// Missing generations and terminal release cannot stand in for ACK retirement.
+bool AggregatePooledQuiescent(const detail::PooledPostpassSnapshot &Snapshot,
+	std::span<const ConnectionId> Expected) {
+	if (Expected.empty() || Snapshot.Peers.size() != Expected.size() ||
+		Snapshot.Admission.TerminalReleasedBytes || Snapshot.Admission.OutstandingBytes ||
+		Snapshot.Admission.ActiveDrainGrants ||
+		Snapshot.Admission.AcceptedBytes != Snapshot.Admission.VerifiedAttributedRetirement) return false;
+	std::uint64_t Accepted = 0, Retired = 0;
+	for (std::size_t Index = 0; Index < Expected.size(); ++Index) {
+		if (!Expected[Index].IsValid()) return false;
+		for (std::size_t Prior = 0; Prior < Index; ++Prior) if (Expected[Prior] == Expected[Index]) return false;
+		const auto Found = std::find_if(Snapshot.Peers.begin(), Snapshot.Peers.end(),
+			[&](const auto &Value) { return Value.Connection == Expected[Index]; });
+		if (Found == Snapshot.Peers.end()) return false;
+		const auto &Value = *Found; const auto &Execution = Value.Execution;
+		if (!Value.Ready || !Value.FeedbackComplete || !Value.Healthy || !Execution.Captured || Execution.Invalid || Execution.Armed ||
+			Execution.OfferToken || Execution.OfferBytes || Execution.TurnoverToken || Value.DebtToken || Value.Debt ||
+			Value.OrdinaryDebt || Value.OrdinaryUnsent || Value.NativePending || Value.NativeUnacked || Value.NativeGrantToken ||
+			Value.Accepted.All != Value.ReconciledAccepted.All || Value.Accepted.Structural != Value.ReconciledAccepted.Structural ||
+			Value.Accepted.Gameplay != Value.ReconciledAccepted.Gameplay || Value.Accepted.All != Value.ReliableAcked ||
+			Value.Accepted.Structural != Value.FirstSent || Value.FirstSent != Value.Acked || Value.Acked != Value.Retired) return false;
+		if (Value.Accepted.Structural > std::numeric_limits<std::uint64_t>::max() - Accepted ||
+			Value.Retired > std::numeric_limits<std::uint64_t>::max() - Retired) return false;
+		Accepted += Value.Accepted.Structural; Retired += Value.Retired;
+	}
+	return Accepted == Snapshot.Admission.AcceptedBytes && Retired == Snapshot.Admission.VerifiedAttributedRetirement;
+}
+
 void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	GameSession &Server, GameSession &Primary, std::uint16_t Port, std::uint64_t &Tick,
 	const std::shared_ptr<RemoteFunction> &Function, const std::shared_ptr<RemoteEvent> &Event) {
 	using Clock = std::chrono::steady_clock;
 	const auto DiagnosticStart = Clock::now();
+	PooledExecutionAttribution Attribution(CandidateReliableService().IsPooled(), false);
 	const int PressureCount = QualificationDiagnostic ? DiagnosticDimension("KI008_GROUPS", 6, 0, 6) : 6;
 	const int PressureBytes = QualificationDiagnostic ? DiagnosticDimension("KI008_BYTES", 24576, 1, 24576) : 24576;
 	const bool Gameplay = !QualificationDiagnostic || DiagnosticDimension("KI008_GAMEPLAY", 1, 0, 1) != 0;
@@ -117,6 +271,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		Disconnected = true;
 	};
 	auto Step = [&]() {
+		Attribution.Step = Tick;
 		const auto Next = Clock::now() + std::chrono::microseconds(16'667);
 		const auto Started = Clock::now();
 		const auto StartedCpu = test_detail::CaptureWorkloadCpu();
@@ -273,6 +428,29 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		std::size_t Pending = 0, PendingHigh = 0;
 	};
 	std::vector<Sample> Samples(QualificationPeerCount);
+	struct FrozenPhase {
+		bool Overload = false, DeadlineReached = false;
+		bool RecoveryInput = false, HealthyControl = false, ExtraRecoveryRpc = false;
+		int Concurrent = 0;
+		std::uint32_t Phase = 0;
+		std::size_t Active = 0;
+		std::uint64_t Tick = 0;
+		double DurationSeconds = 0, DrainMs = 0;
+		test_detail::WorkloadClockAnchor BeginAnchor, EndAnchor;
+		GameSessionMetrics Before, After;
+		AggregateBounds Bounds;
+		test_detail::AggregateOperationEvidence Operations;
+		std::array<test_detail::AggregatePeerEvidence, 32> Peers;
+		std::vector<Sample> Samples;
+		std::vector<double> ConvergenceMs;
+		std::vector<std::uint64_t> StructuralReceived;
+	};
+	// Three fixed phases, existing bounded record arrays; heap data only.
+	// No formatted strings or references to reset phase state survive.
+	std::array<std::unique_ptr<FrozenPhase>, 3> Frozen;
+	const auto ServerConnections = detail::GameSessionTestAccess::GetConnections(Server);
+	Check(ServerConnections.size() == QualificationPeerCount, "aggregate binds every server peer generation");
+	if (ServerConnections.size() != QualificationPeerCount) return;
 	std::vector<Engine *> Runtimes{&PrimaryRuntime};
 	std::vector<GameSession *> Sessions{&Primary};
 	for (auto &Peer : Peers) { Runtimes.push_back(Peer->Runtime.get()); Sessions.push_back(Peer->Session.get()); }
@@ -285,6 +463,9 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 			AggregatePeers[Index]->Configure(AggregatePhase, Index, Connections[Index].Slot, Connections[Index].Generation);
 		AggregatePhaseActive = true;
 		const auto AggregateBeginAnchor = test_detail::WorkloadClockAnchor::Capture();
+		Attribution.CurrentCase = AggregateCases[AggregatePhase]; Attribution.Phase = AggregatePhase;
+		Attribution.PhaseBeginNs = AggregateBeginAnchor.SteadyNs;
+		Attribution.CurrentStage = PooledExecutionAttribution::Stage::Warmup;
 		LastStep = Clock::now();
 		LastSleepEnd = LastStep;
 		PriorObserverMs = PriorSleepRequestedMs = PriorSleepActualMs = 0;
@@ -308,6 +489,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		std::vector<std::uint64_t> StructuralBefore;
 		for (const auto *Session : Sessions) StructuralBefore.push_back(Session->GetMetrics().ClientStructuralBytesReceived);
 		const auto Started = Clock::now();
+		Attribution.CurrentStage = PooledExecutionAttribution::Stage::Demand;
 		for (int Frame = 0; Frame < 480 && !Disconnected; ++Frame) {
 			for (std::size_t Index = 0; Index < Pressure.size(); ++Index)
 				Pressure[Index]->SetName("Aggregate" + std::to_string(Index) + "-" + std::to_string(Frame) + std::string(PressureBytes, 'a'));
@@ -359,6 +541,8 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 			Step();
 		}
 		const auto Ended = Clock::now();
+		Attribution.CurrentStage = PooledExecutionAttribution::Stage::Drain;
+		bool RecoveryInput = false;
 		if (Overload && PooledRecoveryEvidence::Current) {
 			auto *Diagnostic = PooledRecoveryEvidence::Current;
 			std::uint64_t Carryover = 0;
@@ -383,44 +567,176 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 				Step();
 			}
 			Diagnostic->End();
-			std::cout << "[Qualification:PooledRecoveryInput] ordinary_profile_control=" << HealthyControl
-				<< " active=" << Active << " concurrent=" << Concurrent << " extra_recovery_rpc=" << !HealthyControl << '\n';
+			RecoveryInput = true;
 		}
 		const auto Deadline = Ended + 20s;
 		std::vector<double> ConvergenceMs(QualificationPeerCount, -1);
-		auto Converged = [&]() {
-			bool All = true;
-			for (std::size_t Index = 0; Index < Runtimes.size(); ++Index) {
-				const bool Current = std::all_of(Pressure.begin(), Pressure.end(), [&](const auto &Object) {
-					return Runtimes[Index]->DataModel->FindFirstChild(Object->GetName(), true) != nullptr;
-				});
-				if (Current && ConvergenceMs[Index] < 0)
-					ConvergenceMs[Index] = std::chrono::duration<double, std::milli>(Clock::now() - Ended).count();
-				All = All && Current;
+		struct ClientCut {
+			std::vector<std::shared_ptr<Instance>> Objects;
+			std::vector<detail::ClientReplicaIdentity> Identities;
+			bool Valid = false;
+		};
+		std::vector<ClientCut> Cuts(QualificationPeerCount);
+		std::vector<ObjectId> FinalSources;
+		std::vector<std::string> FinalNames;
+		for (const auto &Object : Pressure) { FinalSources.push_back(Object->GetObjectId()); FinalNames.push_back(Object->GetName()); }
+		auto CurrentCut = [&](std::size_t Index) {
+			const auto &Cut = Cuts[Index];
+			if (!Cut.Valid || Cut.Objects.size() != Pressure.size()) return false;
+			for (std::size_t Object = 0; Object < Pressure.size(); ++Object)
+				if (Pressure[Object]->GetDestroyed() || Pressure[Object]->IsDestroying() ||
+					Pressure[Object]->GetObjectId() != FinalSources[Object] || Pressure[Object]->GetName() != FinalNames[Object] ||
+					Cut.Objects[Object]->GetName() != FinalNames[Object]) return false;
+			return Pressure.empty() || detail::GameSessionTestAccess::VerifyClientReplicaIdentities(
+				*Sessions[Index], Cut.Objects, Cut.Identities);
+		};
+		auto DiscoverCut = [&](std::size_t Index) {
+			auto &Cut = Cuts[Index];
+			if (CurrentCut(Index)) return;
+			Cut = {}; ConvergenceMs[Index] = -1;
+			for (const auto &Name : FinalNames) {
+				auto Object = Runtimes[Index]->DataModel->FindFirstChild(Name, true);
+				if (!Object) return;
+				Cut.Objects.push_back(std::move(Object));
 			}
-			return All;
+			if (!Pressure.empty()) {
+				const auto Identities = detail::GameSessionTestAccess::ReadClientReplicaIdentities(*Sessions[Index], Cut.Objects);
+				if (!Identities || Identities->size() != Pressure.size()) return;
+				for (std::size_t Object = 0; Object < Pressure.size(); ++Object)
+					if ((*Identities)[Object].Source != FinalSources[Object]) return;
+				Cut.Identities = *Identities;
+			}
+			Cut.Valid = true;
+			if (CurrentCut(Index)) ConvergenceMs[Index] = std::chrono::duration<double, std::milli>(Clock::now() - Ended).count();
+			else Cut.Valid = false;
 		};
 		auto Pending = [&]() { return std::any_of(Samples.begin(), Samples.end(), [](const Sample &Value) { return Value.Pending != 0; }); };
-		while (!Disconnected && (Pending() || !Converged() || Server.GetMetrics().JournalBacklogRecords != 0) && Clock::now() < Deadline) Step();
-		Check(!Pending() && Converged(), "aggregate accepted requests drain and all peers converge");
+		auto Quiescent = [&]() {
+			if (!CandidateReliableService().IsPooled()) return true;
+			const auto Snapshot = detail::GameSessionTestAccess::ReadPooledPostpass(Server);
+			return Snapshot && AggregatePooledQuiescent(*Snapshot, ServerConnections);
+		};
+		bool Converged = false, Drained = false;
+		std::size_t NextClient = 0;
+		while (!Disconnected && Clock::now() < Deadline) {
+			// One hierarchy/map discovery per serviced opportunity. The final cut
+			// checks forward bindings, without another whole-map traversal.
+			DiscoverCut(NextClient); NextClient = (NextClient + 1) % QualificationPeerCount;
+			Converged = std::all_of(Cuts.begin(), Cuts.end(), [](const auto &Cut) { return Cut.Valid; });
+			if (Converged)
+				for (std::size_t Index = 0; Index < Cuts.size(); ++Index) if (!CurrentCut(Index)) {
+					Cuts[Index].Valid = false; ConvergenceMs[Index] = -1; Converged = false;
+				}
+			Drained = !Pending() && Converged && Server.GetMetrics().JournalBacklogRecords == 0 && Quiescent() && Clock::now() < Deadline;
+			if (Drained) break;
+			Step();
+		}
+		Check(Drained && Converged, "aggregate accepted work ACK-retires with no timed ownership and all exact replicas converge");
 		const auto AggregateEndAnchor = test_detail::WorkloadClockAnchor::Capture();
 		const bool AggregateDeadlineReached = Clock::now() >= Deadline;
 		AggregatePhaseActive = false;
 		const auto After = Server.GetMetrics();
 		const auto &Admission = After.ReliableAdmission;
 		const auto AggregateDrainMs = std::chrono::duration<double, std::milli>(Clock::now() - Ended).count();
+		Check(Admission.PeerCreditHighWater <= CandidateReliableService().PeerCreditCap() && Admission.GlobalCreditHighWater <= CandidateReliableService().GlobalCreditCap(),
+			"aggregate byte credit stays within unchanged caps");
+		Check(After.PlanningMaximumTickWork <= 65'536 && After.StructuralMaximumTransitionsSelectedPerTick <= 8'192,
+			"aggregate planning and selection bounds remain unchanged");
+		Check(After.JournalBacklogRecords == 0, "aggregate raw journal readers recover");
+		for (std::size_t Index = 0; Index < Active; ++Index) {
+			const auto &Sample = Samples[Index];
+			Check(Sample.Errors == 0 && Sample.Completed == Sample.Accepted && (!Gameplay || Sample.Completed > 0),
+				"every eligible aggregate peer completes accepted work without corruption");
+			if (!Overload && !Sample.Latencies.empty()) {
+				// Exact order statistics without sorting or formatting the live evidence.
+				// At most 208 bounded requests per peer; the original thresholds hold.
+				auto Latencies = Sample.Latencies;
+				auto Percentile = [&](double Fraction) {
+					const auto Rank = static_cast<std::size_t>(std::ceil(Fraction * Latencies.size())) - 1;
+					std::nth_element(Latencies.begin(), Latencies.begin() + Rank, Latencies.end());
+					return Latencies[Rank];
+				};
+				Check(Percentile(.95) <= 150 && Percentile(.99) <= 250 && Percentile(1) <= 500,
+					"aggregate qualified RPC meets unchanged gates");
+			}
+		}
+		auto &Saved = *(Frozen[AggregatePhase] = std::make_unique<FrozenPhase>());
+		Saved.Overload = Overload; Saved.Phase = AggregatePhase; Saved.Active = Active; Saved.Tick = Tick;
+		Saved.RecoveryInput = RecoveryInput; Saved.HealthyControl = HealthyControl;
+		Saved.Concurrent = Concurrent; Saved.ExtraRecoveryRpc = !HealthyControl;
+		Saved.DurationSeconds = std::chrono::duration<double>(Ended - Started).count(); Saved.DrainMs = AggregateDrainMs;
+		Saved.BeginAnchor = AggregateBeginAnchor; Saved.EndAnchor = AggregateEndAnchor; Saved.DeadlineReached = AggregateDeadlineReached;
+		Saved.Before = Before; Saved.After = After; Saved.Bounds = Bounds; Saved.Operations = *AggregateOperations;
+		Saved.Samples = Samples; Saved.ConvergenceMs = ConvergenceMs;
+		for (std::size_t Index = 0; Index < AggregatePeers.size(); ++Index) {
+			Saved.Peers[Index] = *AggregatePeers[Index];
+			Saved.StructuralReceived.push_back(Sessions[Index]->GetMetrics().ClientStructuralBytesReceived - StructuralBefore[Index]);
+		}
+		// Closing gameplay callbacks is proved before a successful phase reset.
+		// A failed phase keeps the original captures alive through Session::Stop.
+		Check(!Pending(), "aggregate phase cannot reset live RPC callback captures");
+		Attribution.CurrentStage = PooledExecutionAttribution::Stage::CaseCleanup;
+		for (auto &Object : Pressure) { Object->Destroy(); Step(); }
+		for (int Frame = 0; Frame < 120; ++Frame) Step();
+		Check(!Pending() && Server.GetMetrics().JournalBacklogRecords == 0 && Quiescent(),
+			"aggregate removal work ACK-retires and returns actual ownership before phase reset or Stop");
+		if (Failures) break;
+		++AggregatePhase;
+	}
+	Receiver->SetRequestHandler(Function->GetNetworkObjectId(), {});
+	Receiver->SetEventHandler(Event->GetNetworkObjectId(), {});
+	Attribution.CurrentStage = PooledExecutionAttribution::Stage::FinalStop;
+	// Stop while callback captures still exist, including on a failed drain.
+	Primary.Stop();
+	for (auto &Peer : Peers) Peer->Session->Stop();
+	const auto CleanupDeadline = Clock::now() + 5s;
+	while (!detail::GameSessionTestAccess::GetConnections(Server).empty() && Clock::now() < CleanupDeadline) {
+		Attribution.Step = Tick;
+		(void)Server.Poll(); Server.Step(Tick++); std::this_thread::sleep_for(1ms);
+	}
+	const auto Requirements = detail::GameSessionTestAccess::GetJournalRequirements(Server);
+	const auto PeerRequirements = std::count_if(Requirements.begin(), Requirements.end(), [](const auto &Value) { return !Value.Catalog; });
+	const auto ConnectionsRemaining = detail::GameSessionTestAccess::GetConnections(Server).size();
+	Check(PeerRequirements == 0 && !ConnectionsRemaining, "aggregate disconnect releases every peer journal owner");
+	Server.Stop();
+	Check(detail::GameSessionTestAccess::GetConnections(Server).empty() &&
+		Server.GetMetrics().ReliableAdmissionPeerStates == 0, "aggregate Stop closes actual admission and session ownership");
+	// All live session ownership has closed. Formatting, sorting and output are
+	// cold work; the saved END anchors and phase values remain unchanged.
+	Attribution.CurrentStage = PooledExecutionAttribution::Stage::Report;
+	std::cout << "[Qualification:AggregateCleanup] peer_requirements=" << PeerRequirements
+		<< " connections=" << ConnectionsRemaining << '\n';
+	std::cout << "[Qualification:AggregateReportStorage] phase_capacity=" << Frozen.size()
+		<< " static_phase_bytes=" << sizeof(FrozenPhase) << " heap_phase_bytes_bound=" << Frozen.size() * sizeof(FrozenPhase)
+		<< " remote_records_per_peer=" << test_detail::AggregatePeerEvidence::RemoteEvidence::Capacity
+		<< " operation_snapshots_per_phase=" << test_detail::AggregateOperationEvidence::SnapshotCapacity
+		<< " report_after_stop=1\n";
+	for (auto &Phase : Frozen) {
+		if (!Phase) continue;
+		auto &Saved = *Phase;
+		const auto Overload = Saved.Overload; const auto AggregatePhase = Saved.Phase; const auto Tick = Saved.Tick;
+		const auto Active = Saved.Active; auto &Samples = Saved.Samples; const auto &ConvergenceMs = Saved.ConvergenceMs;
+		const auto &Bounds = Saved.Bounds; const auto &Before = Saved.Before; const auto &After = Saved.After;
+		const auto &Admission = After.ReliableAdmission; const auto AggregateDrainMs = Saved.DrainMs;
+		const auto &AggregateBeginAnchor = Saved.BeginAnchor; const auto &AggregateEndAnchor = Saved.EndAnchor;
+		const auto AggregateDeadlineReached = Saved.DeadlineReached;
+		std::array<const test_detail::AggregatePeerEvidence *, 32> AggregatePeers;
+		for (std::size_t Index = 0; Index < AggregatePeers.size(); ++Index) AggregatePeers[Index] = &Saved.Peers[Index];
 		const auto AggregateCase = AggregateCases[AggregatePhase];
 		const auto AggregateContext = " phase_index=" + std::to_string(AggregatePhase);
+		if (Saved.RecoveryInput)
+			std::cout << "[Qualification:PooledRecoveryInput] ordinary_profile_control=" << Saved.HealthyControl
+				<< " active=" << Saved.Active << " concurrent=" << Saved.Concurrent << " extra_recovery_rpc=" << Saved.ExtraRecoveryRpc << '\n';
 		AggregateBeginAnchor.Print(std::cout, AggregateCase, AggregateProfile, "BEGIN", AggregateContext);
 		AggregateEndAnchor.Print(std::cout, AggregateCase, AggregateProfile, "END", AggregateContext);
-		AggregateOperations->Print(std::cout, AggregateCase, AggregateProfile, AggregatePhase);
+		Saved.Operations.Print(std::cout, AggregateCase, AggregateProfile, AggregatePhase);
 		for (const auto &Diagnostic : AggregatePeers) {
 			std::cout << "[Qualification:AggregatePeerEvidence] case=" << AggregateCase << " profile=" << AggregateProfile
 				<< Diagnostic->Context() << " configured=" << Diagnostic->Configured << " invalid=" << Diagnostic->Invalid << '\n';
 			Diagnostic->Remote.Print(std::cout, AggregateCase, AggregateProfile, Tick, AggregateEndAnchor.SteadyNs,
 				AggregateDeadlineReached, Diagnostic->Context());
 		}
-		std::cout << "[Qualification:AggregateBounds] overload=" << Overload << " duration_s=" << std::chrono::duration<double>(Ended - Started).count()
+		std::cout << "[Qualification:AggregateBounds] overload=" << Overload << " duration_s=" << Saved.DurationSeconds
 			<< " drain_ms=" << AggregateDrainMs
 			<< " structural_reserved=" << Admission.ReservedBytes - Before.ReliableAdmission.ReservedBytes
 			<< " structural_accepted=" << Admission.AcceptedBytes - Before.ReliableAdmission.AcceptedBytes
@@ -453,11 +769,6 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 			if (Span.PriorSleepProcessCpuMs) std::cout << *Span.PriorSleepProcessCpuMs; else std::cout << "NOT_MEASURED";
 			std::cout << '\n';
 		}
-		Check(Admission.PeerCreditHighWater <= CandidateReliableService().PeerCreditCap() && Admission.GlobalCreditHighWater <= CandidateReliableService().GlobalCreditCap(),
-			"aggregate byte credit stays within unchanged caps");
-		Check(After.PlanningMaximumTickWork <= 65'536 && After.StructuralMaximumTransitionsSelectedPerTick <= 8'192,
-			"aggregate planning and selection bounds remain unchanged");
-		Check(After.JournalBacklogRecords == 0, "aggregate raw journal readers recover");
 		for (std::size_t Index = 0; Index < Active; ++Index) {
 			auto &Sample = Samples[Index];
 			std::sort(Sample.Latencies.begin(), Sample.Latencies.end());
@@ -468,161 +779,81 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 				<< " active=" << Active << " peer=" << Index << " accepted=" << Sample.Accepted << " completed=" << Sample.Completed
 				<< " pending_high=" << Sample.PendingHigh << " errors=" << Sample.Errors << " p95_ms=" << Percentile(.95)
 				<< " p99_ms=" << Percentile(.99) << " max_ms=" << Percentile(1)
-				<< " structural_received_bytes=" << Sessions[Index]->GetMetrics().ClientStructuralBytesReceived - StructuralBefore[Index]
+				<< " structural_received_bytes=" << Saved.StructuralReceived[Index]
 				<< " convergence_ms=" << ConvergenceMs[Index]
-				<< " admitted_Bps=" << Sample.Accepted * 3104 / std::chrono::duration<double>(Ended - Started).count() << '\n';
-			Check(Sample.Errors == 0 && Sample.Completed == Sample.Accepted && (!Gameplay || Sample.Completed > 0),
-				"every eligible aggregate peer completes accepted work without corruption");
-			if (!Overload) Check(Percentile(.95) <= 150 && Percentile(.99) <= 250 && Percentile(1) <= 500,
-				"aggregate qualified RPC meets unchanged gates");
+				<< " admitted_Bps=" << Sample.Accepted * 3104 / Saved.DurationSeconds << '\n';
 		}
-		for (auto &Object : Pressure) Object->Destroy();
-		for (int Frame = 0; Frame < 120; ++Frame) Step();
-		if (Failures) break;
-		++AggregatePhase;
 	}
-	Receiver->SetRequestHandler(Function->GetNetworkObjectId(), {});
-	Receiver->SetEventHandler(Event->GetNetworkObjectId(), {});
-	// Stop while callback captures still exist, including on a failed drain.
-	Primary.Stop();
-	for (auto &Peer : Peers) Peer->Session->Stop();
-	const auto CleanupDeadline = Clock::now() + 5s;
-	while (!detail::GameSessionTestAccess::GetConnections(Server).empty() && Clock::now() < CleanupDeadline) {
-		(void)Server.Poll(); Server.Step(Tick++); std::this_thread::sleep_for(1ms);
-	}
-	const auto Requirements = detail::GameSessionTestAccess::GetJournalRequirements(Server);
-	const auto PeerRequirements = std::count_if(Requirements.begin(), Requirements.end(), [](const auto &Value) { return !Value.Catalog; });
-	std::cout << "[Qualification:AggregateCleanup] peer_requirements=" << PeerRequirements
-		<< " connections=" << detail::GameSessionTestAccess::GetConnections(Server).size() << '\n';
-	Check(PeerRequirements == 0 && detail::GameSessionTestAccess::GetConnections(Server).empty(), "aggregate disconnect releases every peer journal owner");
 	if (QualificationDiagnostic) SteamAPI_ISteamNetworkingUtils_SetDebugOutputFunction(SteamNetworkingUtils(), k_ESteamNetworkingSocketsDebugOutputType_None, nullptr);
 }
 
-// Whole-lifetime, opt-in scalar capture. This owner is declared before every
-// transport; native timing is read only after transport destruction has joined.
-struct PooledExecutionAttribution {
-	enum class Stage : unsigned { Setup, Warmup, Demand, Drain, Report, CaseCleanup, FinalStop, NativeJoin };
-	struct Fault {
-		bool Observed = false;
-		std::string_view Case;
-		Stage Lifecycle = Stage::Setup;
-		unsigned Phase = 0;
-		std::uint64_t PhaseBeginNs = 0, Step = 0, PriorAt = 0, Now = 0, Tick = 0, DebtToken = 0, DebtBytes = 0;
-		ConnectionId Connection;
-		detail::PooledObservationPoint Point = detail::PooledObservationPoint::Other;
-		detail::PooledExecutionState Before;
-		detail::PooledReliableServiceFeedback::Result Result;
-		bool Rejected = false, InvalidAfter = false, WorkReady = false, AcceptanceAvailable = true;
-		test_detail::WorkloadClockAnchor Clock;
-	} First;
-	bool Enabled = false, LifecycleObserved = false, PostFaultLifecycleObserved = false;
-	std::string_view CurrentCase = "setup", LifecycleCase;
-	Stage CurrentStage = Stage::Setup, LifecycleStage = Stage::Setup;
-	unsigned Phase = 0;
-	std::uint64_t Step = 0, PhaseBeginNs = 0, LastAt = 0;
-	std::uint64_t LifecycleStep = 0, LifecyclePhaseBeginNs = 0;
-	unsigned LifecyclePhase = 0;
-	detail::PooledLifecycleRecord FirstLifecycle{};
-	detail::PooledLifecycleRecord PostFaultLifecycle{};
-	Stage PostFaultStage = Stage::Setup;
-	std::uint64_t PostFaultStep = 0;
-	test_detail::WorkloadClockAnchor LifecycleClock;
-	detail::PooledServiceSink *Previous = nullptr;
-	detail::PooledServiceSink Sink;
-	std::unique_ptr<host::detail::FarmServiceTimingEvidence> Timing;
-	explicit PooledExecutionAttribution(bool Capture, bool NativeTiming = true) : Enabled(Capture) {
-		if (!Enabled) return;
-		if (NativeTiming) Timing = std::make_unique<host::detail::FarmServiceTimingEvidence>(true, false, true);
-		Previous = detail::ActivePooledService;
-		Sink.Context = this; Sink.CaptureExecution = true;
-		Sink.Record = [](void *Context, const detail::PooledServiceRecord &Value) noexcept {
-			auto &Self = *static_cast<PooledExecutionAttribution *>(Context);
-			if (!Self.First.Observed && (Value.ExecutionRejected || Value.Result.ExecutionFailed || Value.InvalidAfter)) {
-				auto &Saved = Self.First;
-				Saved.Observed = true; Saved.Case = Self.CurrentCase; Saved.Lifecycle = Self.CurrentStage;
-				Saved.Phase = Self.Phase; Saved.PhaseBeginNs = Self.PhaseBeginNs; Saved.Step = Self.Step;
-				Saved.PriorAt = Self.LastAt; Saved.Now = Value.NowMicroseconds; Saved.Tick = Value.SimulationTick;
-				Saved.Connection = Value.Connection; Saved.DebtToken = Value.DebtToken; Saved.DebtBytes = Value.DebtBytes;
-				Saved.Point = Value.Point; Saved.Before = Value.ExecutionBefore; Saved.Result = Value.Result;
-				Saved.Rejected = Value.ExecutionRejected; Saved.InvalidAfter = Value.InvalidAfter; Saved.WorkReady = Value.WorkReady;
-				Saved.AcceptanceAvailable = Value.AcceptanceAvailable;
-				Saved.Clock = test_detail::WorkloadClockAnchor::Capture();
-				if (Self.Timing) Self.Timing->Freeze(Value.NowMicroseconds);
-			}
-			Self.LastAt = Value.NowMicroseconds;
-			if (Self.Previous && Self.Previous->Record && (!Value.DiagnosticOnly || Self.Previous->CaptureExecution))
-				Self.Previous->Record(Self.Previous->Context, Value);
-		};
-		Sink.AcceptedGrant = [](void *Context, ConnectionId Id, std::uint64_t Token, std::uint64_t Bytes, std::uint64_t At) noexcept {
-			auto &Self = *static_cast<PooledExecutionAttribution *>(Context);
-			if (Self.Previous && Self.Previous->AcceptedGrant) Self.Previous->AcceptedGrant(Self.Previous->Context, Id, Token, Bytes, At);
-		};
-		Sink.Lifecycle = [](void *Context, const detail::PooledLifecycleRecord &Value) noexcept {
-			auto &Self = *static_cast<PooledExecutionAttribution *>(Context);
-			if (!Self.LifecycleObserved) {
-				Self.LifecycleObserved = true; Self.FirstLifecycle = Value; Self.LifecycleCase = Self.CurrentCase;
-				Self.LifecycleStage = Self.CurrentStage; Self.LifecycleClock = test_detail::WorkloadClockAnchor::Capture();
-				Self.LifecycleStep = Self.Step; Self.LifecyclePhase = Self.Phase; Self.LifecyclePhaseBeginNs = Self.PhaseBeginNs;
-			}
-			if (!Self.PostFaultLifecycleObserved && Self.First.Observed && Value.NowMicroseconds >= Self.First.Now) {
-				Self.PostFaultLifecycleObserved = true; Self.PostFaultLifecycle = Value;
-				Self.PostFaultStage = Self.CurrentStage; Self.PostFaultStep = Self.Step;
-			}
-			if (Self.Previous && Self.Previous->Lifecycle) Self.Previous->Lifecycle(Self.Previous->Context, Value);
-		};
-		detail::ActivePooledService = &Sink;
-	}
-	~PooledExecutionAttribution() {
-		if (!Enabled) return;
-		detail::ActivePooledService = Previous;
-		const bool Joined = !Timing || detail::NativeDiagnosticQuiescent();
-		const bool Cleared = Joined && (!Timing || Timing->Stop());
-		std::cout << "[Qualification:ExecutionCapture] joined=" << Joined << " sink_removed=" << Cleared
-			<< " incomplete=" << (!Joined || !Cleared) << '\n';
-		Print();
-		if (Timing && Joined && Cleared) Timing->Write(std::cout, "pooled-execution-attribution", true);
-		else if (Timing) {
-			// A cached native span can still Finish after bounded Stop retained its
-			// domain. Retain the installed heap sink/history; never Visit or free it.
-			(void)Timing.release();
-		}
-	}
-	void Print() const {
-		const auto &F = First;
-		std::cout << "[Qualification:ExecutionFirst] observed=" << F.Observed << " owner_measured=0 stack_measured=0";
-		if (F.Observed) std::cout << " case=" << F.Case << " stage=" << static_cast<unsigned>(F.Lifecycle)
-			<< " phase=" << F.Phase << " phase_begin_ns=" << F.PhaseBeginNs << " step=" << F.Step
-			<< " prior_us=" << F.PriorAt << " now_us=" << F.Now << " tick=" << F.Tick
-			<< " slot=" << F.Connection.Slot << " generation=" << F.Connection.Generation
-			<< " point=" << static_cast<unsigned>(F.Point) << " rejected=" << F.Rejected << " invalid_after=" << F.InvalidAfter
-			<< " acceptance_available=" << F.AcceptanceAvailable
-			<< " main_failed=" << F.Result.MainOpportunityFailed << " turnover_failed=" << F.Result.TurnoverFailed
-			<< " max_main_us=" << F.Result.MaximumMainOpportunityMicroseconds << " max_turnover_us=" << F.Result.MaximumTurnoverMicroseconds
-			<< " before_captured=" << F.Before.Captured << " before_invalid=" << F.Before.Invalid << " armed=" << F.Before.Armed
-			<< " required_since_us=" << F.Before.RequiredSince << " boundary_us=" << F.Before.Boundary << " work_ready=" << F.WorkReady
-			<< " offer_token=" << F.Before.OfferToken << " offer_bytes=" << F.Before.OfferBytes << " offer_at_us=" << F.Before.OfferAt
-			<< " turnover_token=" << F.Before.TurnoverToken << " turnover_at_us=" << F.Before.TurnoverAt << " permit_available=" << F.Before.PermitAvailable
-			<< " debt_token=" << F.DebtToken << " debt_bytes=" << F.DebtBytes
-			<< " qpc_before=" << F.Clock.QpcBefore << " qpc_after=" << F.Clock.QpcAfter << " frequency=" << F.Clock.QpcFrequency;
-		if (F.Observed) std::cout << " pid=" << F.Clock.Process << " native_tid=" << F.Clock.Thread
-			<< " clock_valid=" << F.Clock.NativeValid << " steady_ns=" << F.Clock.SteadyNs << " has_boundary=" << F.Before.HasBoundary;
-		std::cout << '\n' << "[Qualification:ExecutionLifecycle] observed=" << LifecycleObserved;
-		if (LifecycleObserved) std::cout << " case=" << LifecycleCase << " stage=" << static_cast<unsigned>(LifecycleStage)
-			<< " step=" << LifecycleStep << " phase=" << LifecyclePhase << " phase_begin_ns=" << LifecyclePhaseBeginNs
-			<< " point=" << static_cast<unsigned>(FirstLifecycle.Point) << " role=" << unsigned(FirstLifecycle.Role)
-			<< " status_before=" << unsigned(FirstLifecycle.StatusBefore) << " reason=" << FirstLifecycle.Reason
-			<< " now_us=" << FirstLifecycle.NowMicroseconds << " qpc_before=" << LifecycleClock.QpcBefore << " qpc_after=" << LifecycleClock.QpcAfter;
-		std::cout << '\n';
-		std::cout << "[Qualification:ExecutionPostFaultLifecycle] observed=" << PostFaultLifecycleObserved;
-		if (PostFaultLifecycleObserved) std::cout << " stage=" << static_cast<unsigned>(PostFaultStage)
-			<< " step=" << PostFaultStep << " point=" << static_cast<unsigned>(PostFaultLifecycle.Point)
-			<< " role=" << unsigned(PostFaultLifecycle.Role) << " status_before=" << unsigned(PostFaultLifecycle.StatusBefore)
-			<< " reason=" << PostFaultLifecycle.Reason << " now_us=" << PostFaultLifecycle.NowMicroseconds;
-		std::cout << '\n';
-	}
-};
-
 bool TestPooledExecutionCapture() {
+	{
+		std::array<ConnectionId, 32> Expected;
+		detail::PooledPostpassSnapshot Complete;
+		for (std::uint32_t Index = 0; Index < Expected.size(); ++Index) {
+			Expected[Index] = {Index + 1, 1};
+			detail::PooledPostpassPeer Peer;
+			Peer.Connection = Expected[Index]; Peer.Ready = Peer.FeedbackComplete = Peer.Healthy = true;
+			Peer.Execution.Captured = true;
+			Peer.Accepted = Peer.ReconciledAccepted = {77, 77, 0};
+			Peer.FirstSent = Peer.Acked = Peer.Retired = Peer.ReliableAcked = 77;
+			Complete.Peers.push_back(Peer);
+		}
+		Complete.Admission.AcceptedBytes = Complete.Admission.VerifiedAttributedRetirement = 32 * 77;
+		Check(AggregatePooledQuiescent(Complete, Expected), "exact 32-generation postpass ACK retirement permits the immutable phase cut");
+		auto Reject = [&](auto &&Change, const char *Reason) {
+			auto Incomplete = Complete; Change(Incomplete);
+			Check(!AggregatePooledQuiescent(Incomplete, Expected), Reason);
+		};
+		Reject([](auto &S) { S.Peers.clear(); }, "empty peer evidence cannot prove live ownership closure");
+		Reject([](auto &S) { S.Peers.pop_back(); }, "missing peer generation cannot prove quiescence");
+		Reject([](auto &S) { ++S.Peers[0].Connection.Generation; }, "stale peer generation cannot bind a phase cut");
+		Reject([](auto &S) { S.Peers[1] = S.Peers[0]; }, "duplicate peer evidence cannot replace another owner");
+		Reject([](auto &S) { --S.Peers[0].FirstSent; }, "withheld native first-send bytes cannot look delivered");
+		Reject([](auto &S) { --S.Peers[0].Acked; }, "positive native send alone cannot replace exact ACK");
+		Reject([](auto &S) { --S.Peers[0].Retired; }, "ACK alone cannot replace production retirement");
+		Reject([](auto &S) { ++S.Peers[0].Accepted.All; }, "unreconciled acceptance cannot borrow older native counters");
+		Reject([](auto &S) { S.Peers[0].FeedbackComplete = false; }, "incomplete feedback cannot establish quiescence");
+		Reject([](auto &S) { S.Peers[0].Healthy = false; }, "failed product health cannot establish quiescence");
+		Reject([](auto &S) { S.Peers[0].NativePending = 1; }, "native pending work prevents a cold report cut");
+		Reject([](auto &S) { S.Peers[0].NativeUnacked = 1; }, "native unacked work prevents a cold report cut");
+		Reject([](auto &S) { S.Peers[0].OrdinaryDebt = 1; }, "ordinary debt prevents a cold report cut");
+		Reject([](auto &S) { S.Peers[0].Debt = S.Admission.OutstandingBytes = 77; }, "structural debt cannot be hidden by callback completion");
+		Reject([](auto &S) { S.Admission.ActiveDrainGrants = 1; }, "zero-byte retained permit still owns a slot");
+		Reject([](auto &S) { S.Admission.TerminalReleasedBytes = 77; S.Admission.VerifiedAttributedRetirement -= 77; },
+			"exact terminal conservation is not successful delivery");
+		detail::PooledReliableServiceFeedback Ledger;
+		Check(Ledger.BeginAdmissionOpportunity(1000, true), "actual ledger arms live work");
+		Complete.Peers[0].Execution = detail::CapturePooledExecution(Ledger);
+		Check(!AggregatePooledQuiescent(Complete, Expected), "armed Main work remains live even without byte debt");
+		Check(Ledger.CompleteAdmissionOpportunity(2000, false), "actual admission pass clears no-work Main ownership");
+		Ledger.PendingTurnover = detail::PooledReliableServiceFeedback::Turnover{1, 1000, true};
+		Complete.Peers[0].Execution = detail::CapturePooledExecution(Ledger);
+		Check(!AggregatePooledQuiescent(Complete, Expected), "ACK and an available permit do not erase pre-clear turnover metadata");
+		Check(Ledger.CompleteAdmissionOpportunity(3000, false), "actual completed pass consumes returned turnover metadata");
+		Complete.Peers[0].Execution = detail::CapturePooledExecution(Ledger);
+		Check(AggregatePooledQuiescent(Complete, Expected), "only the postpass state certifies returned ownership");
+		Check(!AggregatePooledQuiescent({}, {}), "empty expected cohort cannot certify quiescence");
+	}
+	{
+		auto Live = std::make_unique<test_detail::AggregatePeerEvidence>();
+		Live->Configure(0, 0, 1, 1);
+		Live->Remote.Begin(1, true, false, 10, 1000, 1);
+		Live->Remote.Submitted(1, true, 10, 1001, 1);
+		Live->End(Live->CaptureIdentity(), 1, 11, 2000, 1, 0, true);
+		const auto Frozen = std::make_unique<test_detail::AggregatePeerEvidence>(*Live);
+		Live->Configure(1, 0, 1, 1);
+		Check(Frozen->Phase == 0 && Frozen->Remote.Count == 1 && Frozen->Remote.Records[0].Terminal &&
+			Frozen->Remote.Records[0].EndNs == 2000 && Live->Phase == 1 && Live->Remote.Count == 0,
+			"heap phase evidence remains immutable after the next phase resets its live callback records");
+		Live->Remote.Begin(1, true, false, 20, 3000, 1);
+		Live->Remote.Submitted(1, true, 20, 3001, 1);
+		const auto FailedCut = std::make_unique<test_detail::AggregatePeerEvidence>(*Live);
+		Live->End(Live->CaptureIdentity(), 1, 21, 4000, 1, 1, false);
+		Check(!FailedCut->Remote.Records[0].Terminal && Live->Remote.Records[0].Terminal,
+			"Stop-time terminal callbacks cannot retrospectively complete frozen failed phase evidence");
+	}
 	auto *Original = detail::ActivePooledService;
 	{ PooledExecutionAttribution Off(false, false); Check(detail::ActivePooledService == Original && !Off.Timing && !Off.First.Clock.NativeValid,
 		"disabled execution capture owns no sink, timing storage or clock"); }

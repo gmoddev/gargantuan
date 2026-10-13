@@ -2183,3 +2183,61 @@ Affected native preflight and fresh exact-source CI must qualify this source
 before any justified corrective native32 capture. No blind retry, source-name
 heuristic or transport redesign is selected. Physical providers and final
 acceptance remain pending; KI-006 OPEN and PR6 draft.
+
+## 24. Aggregate reporting and live D03 ownership (2026-10-13)
+
+Source `5a45570b7bb8b43315b477b2977d339847be9883` qualifies21 affected native
+tests and44 final-reader tests after the identity fixture correction. Original
+official manual38428841813 Windows115405354122 passes97/97 CTests but fails
+`Run qualified reliable workload timing in Release`, specifically aggregate32
+structural connectivity. Linux115433253385 is SKIPPED; there is no official
+package. Original job log SHA256
+`c13e39b93a1a84d2d7d716a4e7a102c313b29cc82c8b96c323a8f5216c4049b4`,
+diagnostics ZIP
+`b8be149a78f400716a3e1b5ec0e364d178771a9d389f457211f897f669c5dc6a`
+and manual custody index
+`2e852f6ac2b755e8a0a9cc5cfed3a08d0870b5dda7116a62b476e718e6c9f038`
+remain unchanged. The staged native32 identity experiment is not launched.
+
+Peers11–14 reject at BeginAdmissionOpportunity's product execution-budget
+path. Its message combines Main100ms, turnover150ms and invalid-state rejection;
+this aggregate path does not retain exact first flags/token/activation or
+rejection clock. The assertion comes from a still-live Step before explicit
+Stop, not the later terminal cleanup path. The reported75.3948ms maximum gap
+and75.0095ms maximum work cover workload steps, not all reporting/cleanup.
+
+The preserved uncapped scheduler trace has537428 events and zero loss. After
+the overload END anchor, QPC36706314119→36708974588 spans266.0469ms:
+266.0179ms scheduled running,0.0290ms ready,0 blocked. The478.0237ms interval
+through the first subsequent DelayExecution wait has468.0300ms running,
+3.0752ms ready and6.9184ms blocked. These windows contradict a long external
+descheduling explanation for that interval. Stack/interrupt attribution and
+exact report-versus-Destroy-versus-first-Step partition remain unmeasured.
+
+Source drains requests, Names and journal lag, then repeats32 recursive Name
+scans, freezes the END anchor, prints roughly13.2MB of bounded evidence,
+destroys six pressure objects and executes120 further live Steps. The drain
+does not establish accepted=first-sent=ACKed=retired or clear offers, pending
+turnover and armed execution obligations. Thus fixture-specific cold reporting
+can pause required service well beyond both retained bounds. Four rejected
+peers matching four slots is consistent with retained ownership, not proof of
+the precise first token. No platform impossibility or production actor defect
+is established by this trace.
+
+Selected correction retains D03 and the workload: service between bounded
+per-client final-state checks and pressure destruction; verify actual post-pass
+ownership before ending the existing Ended+20s drain; retain three bounded
+immutable phase reports on the heap and format/output only after Stop and
+ownership closure. Preserve original phase ticks/anchors and callback lifetimes.
+Current source/lifetime bindings must remain valid at the immutable convergence
+cut; Name-only cached booleans are insufficient. AdmissionComplete's captured
+ExecutionBefore is pre-clear and cannot itself prove quiescence.
+
+Reuse the existing scalar first-fault owner across setup, verification, cleanup
+and Stop so any remaining failure identifies Main/turnover/state, time, peer
+and token. No new general tracing system, timing slack or timer reset is selected.
+All pre-Stop failures remain fatal. Bounded existing regression/qualification
+must confirm the correction; the original FAIL cannot be replaced by inference.
+Independent attribution receipt SHA256
+`7d596a4d0e8969c62bf92f8e00adce41ad6ec39fc9d19ad726d527e2c24a3aca`.
+KI-006 OPEN; PR6 draft; no3M or merge.
