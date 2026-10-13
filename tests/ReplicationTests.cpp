@@ -140,7 +140,16 @@ namespace {
 		// A complete subsequent epoch reuses the same wire slot with a new
 		// generation. It constructs a new live object and cannot bind the old one.
 		const ObjectId ReusedSource{FirstSource.Slot, static_cast<std::uint32_t>(FirstSource.Generation + 1)};
-		auto Reused = *Baseline.Frame;
+		// Coordinator baselines retain immutable PreparedPublish templates.
+		// ApplyFrame normalizes them through this actual wire codec; mutate the
+		// resulting Publish representation rather than a template or absent arm.
+		const auto EncodedBaseline = EncodeReplicationFrame(*Baseline.Frame);
+		Check(EncodedBaseline.has_value(), "identity fixture encodes its actual prepared baseline");
+		if (!EncodedBaseline) return;
+		const auto DecodedBaseline = DecodeReplicationFrame(*EncodedBaseline);
+		Check(DecodedBaseline.has_value(), "identity fixture decodes the actual source-ID wire representation");
+		if (!DecodedBaseline) return;
+		auto Reused = *DecodedBaseline;
 		Reused.Epoch = ReplicationEpoch(12);
 		bool ReusedPublication = false;
 		for (auto &Operation : Reused.Operations) {

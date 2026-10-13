@@ -802,6 +802,7 @@ function Read-RecoveryObservation {
 			FixedServiceRecovery = 'NOT MEASURED'
 			StrictConvergenceSufficientProof = 'NOT MEASURED'
 			SampledJournalRetention = 'NOT MEASURED'
+			FinalNameIdentityContract = 'NOT_MEASURED'
 			ExactRetainedWorkBytes = 'NOT_MEASURED'; Cases = @() }
 	}
 	if ($null -eq $Report.RecoveryObservation -or
@@ -862,6 +863,7 @@ function Read-RecoveryObservation {
 		State = $Observed.State; Workload = 'THREE_CASES_REPLAYED_FROM_INDEXED_LOGS'
 		FixedServiceRecovery = $Fixed; StrictConvergenceSufficientProof = $Strict
 		SampledJournalRetention = 'MEASURED_PASS'
+		FinalNameIdentityContract = $Observed.FinalNameIdentityContract
 		MinimumCessationRetentionMarginRecords = [long](@($Cases | ForEach-Object MinimumRetentionMarginRecords |
 			Measure-Object -Minimum).Minimum)
 		ExactRetainedWorkBytes = [long]$Observed.ExactRetainedWorkBytes; Cases = $Cases

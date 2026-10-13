@@ -550,6 +550,12 @@ def EvaluateProviders(Observation, ExpectedCommit, ExpectedContract="F1"):
         Require(Contract == "HYBRID_F1_V1" if ExpectedContract == "HYBRID_F1_V1" else
                 Contract in (None, "finite_grant_v1"), f"{Provider}: qualification contract mismatch")
         if ExpectedContract == "HYBRID_F1_V1":
+            Identity = At(Value, "Recovery.FinalNameIdentityContract")
+            Require(Identity in (None, "legacy_literal_object_id", "source_replica_v1"),
+                    f"{Provider}: unknown client source identity witness")
+            Gates.append({"Gate": Provider + ".Recovery.FinalNameIdentityContract", "State":
+                          "MEASURED_PASS" if Identity == "source_replica_v1" else
+                          "MEASURED_FAIL" if Identity == "legacy_literal_object_id" else "NOT_MEASURED"})
             Require(At(Value, "Admission.Fairness.ServiceContract") == ExpectedContract and
                     At(Value, "Publication.OrdinaryFIFO.Contract") == ExpectedContract,
                     f"{Provider}: admission/FIFO contract mismatch")

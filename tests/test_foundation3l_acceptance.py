@@ -790,6 +790,7 @@ class HybridFinalTests(unittest.TestCase):
             Put(Farm[Role], 'Admission.Fairness.ServiceContract', 'HYBRID_F1_V1')
             Put(Farm[Role], 'Publication.OrdinaryFIFO.Contract', 'HYBRID_F1_V1')
             Put(Farm[Role], 'Publication.OrdinaryFIFO.State', 'MEASURED_PASS')
+            Put(Farm[Role], 'Recovery.FinalNameIdentityContract', 'source_replica_v1')
         CI = {'State': 'MEASURED_PASS', 'SourceCommit': SOURCE, 'Contract': 'HYBRID_F1_V1'}
         Physical = {**Four(), 'Contract': 'HYBRID_F1_V1'}
         Provenance = {'Package': {'State': 'MEASURED_PASS', 'Contract': 'HYBRID_F1_V1'},
@@ -820,6 +821,18 @@ class HybridFinalTests(unittest.TestCase):
                     Put(Inputs[0][Role], Path, State)
                     with self.subTest(Role=Role, Path=Path, State=State):
                         self.assertEqual(A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')['Status'], Expected)
+
+    def test_hybrid_requires_live_source_identity_witness_from_each_provider(self):
+        for Role in ('Local', 'Node'):
+            for Identity, Expected in ((None, 'INCOMPLETE'), ('legacy_literal_object_id', 'FAIL')):
+                Inputs = self.Inputs()
+                Put(Inputs[0][Role], 'Recovery.FinalNameIdentityContract', Identity)
+                with self.subTest(Role=Role, Identity=Identity):
+                    self.assertEqual(A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')['Status'], Expected)
+            Inputs = self.Inputs()
+            Put(Inputs[0][Role], 'Recovery.FinalNameIdentityContract', 'forged_source_binding')
+            with self.subTest(Role=Role), self.assertRaises(A.EvidenceError):
+                A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')
 
 
 if __name__ == '__main__':
