@@ -2654,6 +2654,13 @@ namespace gargantuan::network {
 		return false;
 	}
 
+	bool ReplicationCoordinator::HasPendingStructuralWork(ConnectionId Connection) const {
+		const auto Peer = Peers.find(Connection);
+		// Missing ownership cannot certify an empty, generation-valid source.
+		return Peer == Peers.end() || Peer->second.PreparedCommit.has_value() ||
+			GetJournalLag(Connection) != 0 || HasPendingRelevance(Connection);
+	}
+
 	ReplicationScheduleResult
 	ReplicationCoordinator::CommitSchedulerAcceptance(ConnectionId Connection, ReliableReplicationSequence Sequence) {
 		runtime_detail::WorkScope AcceptanceWork(runtime_detail::WorkPhase::StructuralAcceptance);

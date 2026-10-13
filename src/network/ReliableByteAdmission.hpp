@@ -248,9 +248,13 @@ public:
 		if (!Profile.IsPooled()) { *Value.Exposure -= Receipt.Bytes; AggregateExposure -= Receipt.Bytes; }
 		Add(Totals.RolledBackBytes, Receipt.Bytes); Active.reset(); return true;
 	}
-	void NoWork(ConnectionId Id) {
+	// SourceEmpty is asserted only by the replication owner after checking
+	// journal, relevance, planning and prepared ownership. Generic callers and
+	// unexamined steps retain their original inconclusive diagnostic reason.
+	void NoWork(ConnectionId Id, bool SourceEmpty = false) {
 		if (auto Found = Peers.find(Id); Found != Peers.end()) {
-			DisposeDemand(Id, Found->second, AdmissionEvidenceReason::NoWork);
+			DisposeDemand(Id, Found->second, SourceEmpty
+				? AdmissionEvidenceReason::SourceEmpty : AdmissionEvidenceReason::NoWork);
 			Found->second.Required = MinimumFrameBytes; Found->second.WaitSince.reset(); Found->second.DemandStep = 0;
 		}
 		ReleaseWait(Id);

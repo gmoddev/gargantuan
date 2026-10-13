@@ -12,6 +12,7 @@
 #include "gargantuan/network/ReplicationTransport.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
+#include "../src/network/ReliableByteAdmission.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
@@ -95,6 +96,111 @@ namespace {
 				Publish && Publish->Object == Object)
 				return Publish;
 		return nullptr;
+	}
+
+	void TestSourceOwnedAdmissionEmptiness() {
+		using Admission = gargantuan::network::detail::ReliableByteAdmission;
+		using Kind = gargantuan::network::detail::AdmissionEvidenceKind;
+		using Reason = gargantuan::network::detail::AdmissionEvidenceReason;
+		struct Capture {
+			std::array<gargantuan::network::detail::AdmissionEvidenceEvent, 64> Events{};
+			std::size_t Count = 0;
+			gargantuan::network::detail::AdmissionEvidenceSink Sink{this, Record};
+			gargantuan::network::detail::AdmissionEvidenceSink *Previous = gargantuan::network::detail::ActiveAdmissionEvidence;
+			Capture() { gargantuan::network::detail::ActiveAdmissionEvidence = &Sink; }
+			~Capture() { gargantuan::network::detail::ActiveAdmissionEvidence = Previous; }
+			static void Record(void *Context, const gargantuan::network::detail::AdmissionEvidenceEvent &Event) noexcept {
+				auto &Value = *static_cast<Capture *>(Context);
+				if (Value.Count < Value.Events.size()) Value.Events[Value.Count++] = Event;
+			}
+		} Evidence;
+		auto World = std::make_shared<DataModel>();
+		auto Object = std::make_shared<Folder>(); Object->SetParent(World);
+		const ConnectionId Connection{87, 3};
+		StructuralReplicationConfiguration Configuration;
+		Configuration.PlanningWorkPerTick = 2; Configuration.PlanningPeerQuantum = 1;
+		ReplicationCoordinator Coordinator(World, {}, true, Configuration);
+		PeerRelevanceSelection Selection{.RequiredObjects = {World->GetObjectId()},
+			.DesiredObjects = {World->GetObjectId(), Object->GetObjectId()}};
+		std::ranges::sort(Selection.DesiredObjects);
+		auto Input = std::make_shared<const PeerRelevanceSelection>(Selection);
+		Check(Coordinator.RegisterPeerPlanned(Connection, ReplicationEpoch(1), Input).Succeeded(), "source-empty fixture registers actual bounded planner");
+		std::uint64_t Tick = 0;
+		for (int Attempt = 0; Attempt < 2000 && !Coordinator.IsPlanningReady(Connection); ++Attempt)
+			Coordinator.ProcessPlanning(++Tick);
+		auto Deferred = Coordinator.ProducePendingBaseline(Connection, 8, Tick, MaximumReplicationFrameBytes, 0);
+		Check(Deferred.DeferredForBytes && Deferred.RequiredFrameBytes != 0, "source-empty fixture obtains real encoded baseline candidate");
+		if (!Deferred.DeferredForBytes) { Coordinator.RemovePeer(Connection); World->Destroy(); return; }
+		Admission Account(ReliableServiceProfile::PooledService());
+		auto Step = [&](std::uint64_t At) {
+			Check(Account.BeginStep(At) && Account.ObserveService(Connection, Admission::ServiceObservation{At, true, true}),
+				"source-empty fixture retains complete generation-valid service");
+			Account.SetOrdinaryFunding(224 * 1024);
+			(void)Account.Allowance(Connection, At);
+		};
+		Step(0);
+		Account.DeferSize(Connection, Deferred.RequiredFrameBytes + ReliableServiceEnvelopeBytes, Deferred.DiagnosticFingerprint);
+		Account.EndStep(); Step(250'000); Account.EndStep();
+		const auto Eligible = std::ranges::find_if(Evidence.Events.begin(), Evidence.Events.begin() + Evidence.Count,
+			[](const auto &Event) { return Event.Kind == Kind::CreditEligible; });
+		Check(Eligible != Evidence.Events.begin() + Evidence.Count, "real exact baseline candidate becomes credit eligible");
+		const auto DemandId = Eligible != Evidence.Events.begin() + Evidence.Count ? Eligible->DemandId : 0;
+		const auto Since = Eligible != Evidence.Events.begin() + Evidence.Count ? Eligible->EligibleSinceMicroseconds : 0;
+		// Replacing a selection invalidates the completed plan without creating
+		// journal history. One charged planning slice cannot finish its disposal.
+		auto Replacement = std::make_shared<const PeerRelevanceSelection>(*Input);
+		Check(Coordinator.RequestPlanning(Connection, Replacement, Tick + 1).Succeeded(), "source-empty fixture replaces actual planning input");
+		Coordinator.ProcessPlanning(++Tick);
+		auto NoPlan = Coordinator.ProducePendingBaseline(Connection, 8, Tick);
+		Check(!Coordinator.IsPlanningReady(Connection) && Coordinator.GetJournalLag(Connection) == 0 &&
+			NoPlan.Error == "No replication relevance changes are available" && Coordinator.HasPendingStructuralWork(Connection),
+			"zero journal lag and no frame do not erase bounded planning ownership");
+		Step(260'000);
+		if (!Coordinator.HasPendingStructuralWork(Connection)) Account.NoWork(Connection, true);
+		Account.EndStep();
+		Check(Evidence.Count == 2 && DemandId != 0 && Since == 250'000,
+			"bounded planning deferral preserves exact demand identity and original eligibility without disposal");
+		for (int Attempt = 0; Attempt < 2000 && !Coordinator.IsPlanningReady(Connection); ++Attempt)
+			Coordinator.ProcessPlanning(++Tick);
+		auto Baseline = Coordinator.ProducePendingBaseline(Connection, 8, Tick);
+		Check(Baseline.Frame.has_value() && Coordinator.HasPendingStructuralWork(Connection), "unaccepted prepared baseline remains source-owned work");
+		if (!Baseline.Frame) { Coordinator.RemovePeer(Connection); World->Destroy(); return; }
+		Check(Coordinator.CommitSchedulerAcceptance(Connection, Baseline.Frame->Sequence).Succeeded(), "actual baseline acceptance commits planning work");
+		for (int Attempt = 0; Attempt < 2000 && Coordinator.HasPendingRelevance(Connection); ++Attempt) Coordinator.ProcessPlanning(++Tick);
+		Check(!Coordinator.HasPendingStructuralWork(Connection), "accepted baseline and completed planning disposal establish actual empty source");
+		Step(270'000); if (!Coordinator.HasPendingStructuralWork(Connection)) Account.NoWork(Connection, true); Account.EndStep();
+		Check(Evidence.Count == 3 && Evidence.Events[2].Kind == Kind::DemandDisposed && Evidence.Events[2].Reason == Reason::SourceEmpty &&
+			Evidence.Events[2].DemandId == DemandId && Evidence.Events[2].EligibleSinceMicroseconds == Since && Account.GetMetrics().AcceptedBytes == 0,
+			"source-empty end closes original eligibility without manufacturing accepted bytes");
+		// A capped no-frame journal read consumes only one irrelevant record.
+		// Remaining source records and an exact current Name candidate survive.
+		for (int Index = 0; Index < 3; ++Index)
+			ChangeJournal::Get().Commit(World->GetObjectId(), Object->GetObjectId(), PropertyUpdatedChange{"Archivable", WireValue(Index != 0), false});
+		Object->SetName("source-budget-final");
+		auto Name = Coordinator.ProduceIncremental(Connection, 8, MaximumReplicationFrameBytes, 32, 0);
+		Check(Name.DeferredForBytes, "journal fixture gets a real deferred current Name candidate");
+		Step(280'000); Account.DeferSize(Connection, Name.RequiredFrameBytes + ReliableServiceEnvelopeBytes, Name.DiagnosticFingerprint); Account.EndStep();
+		const auto BeforeCapped = Evidence.Count;
+		auto Capped = Coordinator.ProduceIncremental(Connection, 0, MaximumReplicationFrameBytes, 2);
+		Check(!Capped.Frame && Capped.JournalRecordsExamined == 1 && Coordinator.GetJournalLag(Connection) == 3 &&
+			Coordinator.HasPendingStructuralWork(Connection), "capped no-frame read cannot certify remaining source empty");
+		Step(290'000); if (!Coordinator.HasPendingStructuralWork(Connection)) Account.NoWork(Connection, true); Account.EndStep();
+		Check(Evidence.Count == BeforeCapped, "insufficient journal budget retains exact demand and eligible clock");
+		auto Final = Coordinator.ProduceIncremental(Connection, 8, MaximumReplicationFrameBytes, 32);
+		Check(Final.Frame.has_value(), "remaining journal candidate eventually prepares under unchanged bounded read allowance");
+		if (Final.Frame) {
+			Step(300'000);
+			Account.ObserveExactDemand(Connection, Final.EncodedFrame.size() + ReliableServiceEnvelopeBytes, 300'000, Final.DiagnosticFingerprint);
+			auto Receipt = Account.Reserve(Connection, Final.EncodedFrame.size() + ReliableServiceEnvelopeBytes);
+			Check(Receipt && Account.Commit(*Receipt) && Coordinator.CommitSchedulerAcceptance(Connection, Final.Frame->Sequence).Succeeded(),
+				"unchanged admission and source owners accept eventual exact journal frame");
+			if (Receipt) Check(Account.Retire(Connection, Receipt->Token, Receipt->Bytes) &&
+				Account.RefreshService(Connection, Admission::ServiceObservation{300'000, true, true}), "exact eventual grant retires and releases");
+			Account.EndStep();
+		}
+		Check(!Coordinator.HasPendingStructuralWork(Connection) && Coordinator.HasPendingStructuralWork({87, 4}),
+			"actual drained source is empty and unknown full generation fails closed");
+		Coordinator.RemovePeer(Connection); World->Destroy();
 	}
 
 	void TestClientReplicaIdentityObservations() {
@@ -759,6 +865,7 @@ int main() {
 	TestReplicaRenderDirtiness();
 	TestRepeatedReplicaPropertyPreflight();
 	TestClientReplicaIdentityObservations();
+	TestSourceOwnedAdmissionEmptiness();
 	TestRevisionedStructuralMaterialization();
 	TestStructuralTemplateDifferential();
 

@@ -306,6 +306,35 @@ try {
 			}
 		}
 	}
+	foreach ($EndAt in @(1182350,1182351)) {
+		$SourceEmpty = @($Lineage[0..1]) + @(
+			(New-Event demand_disposed 100 $EndAt -Reason source_empty -Episode 1 -CreditAt 1050 -EligibleAt 1100)
+		)
+		$EmptyResult = Read-HybridTrace $SourceEmpty
+		$ExpectedState = if ($EndAt -eq 1182350) { 'MEASURED_PASS' } else { 'MEASURED_FAIL' }
+		if ($EmptyResult.ContinuousEligiblePeerEpisodeCoverage -cne $ExpectedState -or
+			$EmptyResult.SourceEmptyPeerEligibleEpisodeCount -ne 1 -or
+			$EmptyResult.CompletedContinuousPeerEligibleEpisodeCount -ne 0 -or $EmptyResult.GrantedCount -ne 0 -or
+			$EmptyResult.MaximumObservedPeerEligibilityToGrantMicroseconds -ne 0 -or
+			$EmptyResult.MaximumObservedSourceEmptyPeerEligibleWaitMicroseconds -ne $EndAt-1100 -or
+			$EmptyResult.GrantLifecycleCoverage -cne 'NOT_MEASURED' -or
+			$EmptyResult.ExactDemandEpisodeCoverage -cne 'NOT_MEASURED') {
+			throw 'source-owned empty end hid an overdue wait or invented delivered service'
+		}
+		Assert-Rejected $SourceEmpty 'legacy source-empty waiver' -Version 1
+		Assert-Rejected $SourceEmpty 'legacy lifecycle source-empty waiver' -Version 2
+	}
+	$EmptyReplacement = @($Lineage[0..7]) + @(
+		(New-Event demand_disposed 102 1182350 -Bytes 80 -Reason source_empty -Episode 1 -CreditAt 801100 -EligibleAt 801100)
+	)
+	$EmptyReplacementResult = Read-HybridTrace $EmptyReplacement
+	if ($EmptyReplacementResult.ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_PASS' -or
+		$EmptyReplacementResult.MaximumObservedSourceEmptyPeerEligibleWaitMicroseconds -ne 1181250 -or
+		$EmptyReplacementResult.CompletedContinuousPeerEligibleEpisodeCount -ne 0 -or
+		$EmptyReplacementResult.SourceEmptyPeerEligibleEpisodeCount -ne 1) {
+		throw 'source-empty end reset the original eligible replacement clock'
+	}
+	Assert-Rejected ($EmptyReplacement + @($EmptyReplacement[-1])) 'duplicate source-empty end' -Version 3
 	$Interrupted = @($Lineage[0..1]) + @(
 		(New-Event eligibility_interrupted 100 1182351 -Reason feedback_unavailable -Episode 1 -CreditAt 1050 -EligibleAt 1100),
 		(New-Event credit_eligible 100 1182400 -Episode 2 -CreditAt 1050 -EligibleAt 1182400 -PeerCredit 100),
@@ -371,7 +400,7 @@ try {
 	Write-Trace -Events $Events -Trailer "end`t15`t0"
 	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'bad trailer accepted' }
 	catch { if ($_.Exception.Message -ceq 'bad trailer accepted') { throw } }
-Write-Output '[Qualification:Admission] analyzer_cases=31 peer_lineage_cases=25 PASS'
+Write-Output '[Qualification:Admission] analyzer_cases=31 peer_lineage_cases=25 source_empty_cases=8 PASS'
 } finally {
 	$Resolved = [IO.Path]::GetFullPath($Root)
 	if ($Resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase) -and

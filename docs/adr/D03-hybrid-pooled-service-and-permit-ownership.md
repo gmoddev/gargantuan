@@ -42,6 +42,51 @@ This amendment supersedes only the retained raw-running-curve exception in the
 historical records below; it does not change production networking or grants.
 Qualification of the coordinated migration and final conjunction is pending.
 
+### Independent service-recovery notification — 2026-10-13
+
+Source `19f9f57a11dd7627b20bf4d5f42e0358618eabeb` (A5), run
+`541d1719-2a70-4655-b9f4-afce45e15521`, remains **FAIL**. Its original107
+members/153188597B plus17543B index are sealed by
+`2c41f505808ea7fd9826836208d35ef759d242a598dca10bdd415acf6b03063a`.
+All32 structural service receipts exceed the unchanged server20s maximum:
+first22.895943s (peer12:1), last24.346420s (peer19:1). The first client waits
+for a replicated `recover_*` marker behind the structural journal prefix,
+then starts its cohort20.5930431s after cessation. Its fence-crossing frame is
+prepared20.548006s, accepted385us later and fully ACKed at observed feedback
+29.275ms later. Ten healthy probes take2.2793538s; final Event-to-end15.2786ms
+confirms that the final200ms idle defect was corrected. These are source,
+feedback and callback measurements, not native OS-call timings. Observer
+perturbation is not separately measured; ordinary service before20s is not
+proved because the required early probes were never offered.
+
+The contract separates20s service restoration from structural convergence.
+A5's immutable1000421668B reference permits36.109713s; its exact causal prefix
+converges22.079024s. Its larger remaining work than A4's786571448B is not by
+itself evidence of a production regression. Native HYBRID/FIFO and five-phase
+subsets pass, while full qualification also retains INCONCLUSIVE fairness:
+one generic `no_work` disposal does not prove that eligible source demand ended.
+
+Select a fixture correction using existing protected ordinary ScalePhaseControl:
+one case-bound cessation notice after actual server publication, marked before
+submission and never replayed after partial failure. The client accepts only
+its matching active case after the offered handshake with no pending overload
+RPC; first receipt owns its immutable clock. Wrong/stale/duplicate notices
+cannot reset it or create duplicate cohorts. The GRPL marker is no service
+fallback. Exact final Names/source identities, C3/C5 coverage/retirement and the
+original convergence deadline remain mandatory. The independent server20s
+deadline, ten probes, nine inter-offer waits, errors and accepted ownership are
+unchanged. Actual embedded client/server pinned-Luau regressions pass locally;
+fresh native/CI/provider qualification remains required. A5/A4 are not relabeled.
+
+The independent fairness correction is also unqualified: a source-owned
+`HasPendingStructuralWork` query distinguishes real empty demand from planning
+or zero journal-budget refusal, preserving candidates through the latter.
+Explicit admission evidence V3 may end an eligible interval only with truthful
+`source_empty`, checked against the original fairness deadline before disposal.
+Source-empty endings are counted separately from actual grants and accepted
+bytes. Generic `no_work` remains inconclusive; old V1/V2 keep their original
+semantics. This prospective proof cannot reinterpret A5's unknown disposal.
+
 The coordinated scope candidate `4a2e8d6112a5720f8908f26dd61ee79adf9f487e`
 subsequently passes all eight original exact-source hosted jobs and independent
 canonical CI/package verification. Its fresh native32 run remains FAIL: a

@@ -1933,8 +1933,8 @@ namespace gargantuan::network {
 							if (Allowance == 0) break;
 							std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes;
 							if (ByteAdmission) {
-								if (!Replication->IsPlanningReady(Connection) && Replication->GetJournalLag(Connection) == 0) {
-									ByteAdmission->NoWork(Connection); continue;
+								if (!Replication->HasPendingStructuralWork(Connection)) {
+									ByteAdmission->NoWork(Connection, true); continue;
 								}
 								if (!RefreshStructuralService(Connection, Peer->second, true)) {
 									if (PendingSessionFailure) { (void)DrainFailures(); return; }
@@ -2098,7 +2098,10 @@ namespace gargantuan::network {
 								if (ProduceJournal()) continue;
 								if (ProduceRelevance()) continue;
 							}
-							if (ByteAdmission) ByteAdmission->NoWork(Connection);
+							// No frame can mean exhausted journal allowance or unfinished
+							// planning. Neither may erase the exact candidate or fair wait.
+							if (ByteAdmission && !Replication->HasPendingStructuralWork(Connection))
+								ByteAdmission->NoWork(Connection, true);
 						}
 					}
 				}

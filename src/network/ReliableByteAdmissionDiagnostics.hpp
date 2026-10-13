@@ -43,6 +43,7 @@ namespace gargantuan::network::detail {
 		GenerationRemoved,
 		TerminalRelease,
 		FeedbackUnavailable,
+		SourceEmpty,
 	};
 	struct AdmissionEvidenceEvent {
 		AdmissionEvidenceKind Kind = AdmissionEvidenceKind::ExactDemand;

@@ -22,6 +22,23 @@ prove full D03: both provider campaigns independently enforce50ms ordinary FIFO,
 100ms Main,150ms turnover,1181.25ms fair32 admission, gameplay, resource,
 backpressure and canonical recovery/convergence requirements.
 
+The fixed20s service-recovery receipt is independent of the longer C3/C5
+structural convergence deadline. The current fixture enrolls probes only from
+one matching-case ordinary cessation notice on existing ScalePhaseControl,
+after the native host actually ceases production. The client retains its first
+receive clock, completed offered handshake and accepted RPC/Event ownership;
+duplicate/stale notices cannot reset it and GRPL provides no service fallback.
+The server still measures cessation-to-complete-receipt≤20s. Ten RPC/Event
+probes, nine inter-offer waits and all latency/error/attempt gates remain.
+The replicated marker and exact final Names/source identities remain required
+for independent structural convergence, not for enrolling ordinary probes.
+Missing notification, late receipt, partial cohorts or missing causal/name
+evidence cannot produce PASS. A5's earlier marker-gated FAIL is preserved;
+it proves no earlier service result. Explicit V3 source-empty fairness endings
+are separately measured from grants; generic `no_work` remains unproven and
+legacy evidence is not reinterpreted. Both corrections require fresh source
+qualification before closing any canonical gate.
+
 Legacy F1 evidence retains its original full curve semantics. An explicitly
 selected profile must match the current-source CI, package, four-client and
 provider evidence; missing, unknown or mixed identity cannot qualify HYBRID.

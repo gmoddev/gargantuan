@@ -30,6 +30,8 @@ function Read-AdmissionFairnessEvidence {
 	$PendingPeerBridge = $null
 	$PeerEpisodeCount = 0
 	$CompletedPeerEpisodeCount = 0
+	$SourceEmptyPeerEpisodeCount = 0
+	$MaximumSourceEmptyPeerWait = [UInt64]0
 	$CarriedReplacementCount = 0
 	$UnprovenPeerEpisodeCount = 0
 	$MaximumPeerWait = [UInt64]0
@@ -69,7 +71,8 @@ function Read-AdmissionFairnessEvidence {
 					'grant_accepted', 'reservation_rolled_back', 'demand_disposed',
 					'grant_retired', 'grant_released', 'grant_terminal_released') -or
 				$Fields[2] -cnotin @('none', 'no_work', 'unexamined', 'replaced', 'rollback',
-					'generation_removed', 'terminal_release', 'feedback_unavailable')) {
+					'generation_removed', 'terminal_release', 'feedback_unavailable', 'source_empty') -or
+				($Fields[2] -ceq 'source_empty' -and -not $IsHybrid)) {
 				throw "admission fairness evidence event $Count has an invalid schema"
 			}
 			try {
@@ -279,7 +282,7 @@ function Read-AdmissionFairnessEvidence {
 					[void]$Current.Remove($Peer)
 				}
 				'demand_disposed' {
-					if ($Reason -cnotin @('no_work', 'unexamined', 'replaced',
+					if ($Reason -cnotin @('no_work', 'source_empty', 'unexamined', 'replaced',
 						'generation_removed', 'terminal_release') -or $Token -ne 0 -or
 						$Episode -ne $Demand.Episode -or
 						$EligibleSince -ne $(if ($Demand.Active) { $Demand.EligibleSince } else { 0 })) {
@@ -293,6 +296,12 @@ function Read-AdmissionFairnessEvidence {
 							-not $OpenGrantByPeer.ContainsKey($Peer)) {
 							$PendingPeerBridge = @{ Peer=$Peer; At=$At; Since=$Demand.PeerEligibleSince;
 								Phase='exact'; DemandId=[UInt64]0; Witness=[UInt64[]]$N[9..15] }
+						} elseif ($Reason -ceq 'source_empty' -and -not $OpenGrantByPeer.ContainsKey($Peer)) {
+							# This closes source eligibility, not an accepted grant. It
+							# contributes no delivered bytes or completed grant count.
+							$SourceEmptyPeerEpisodeCount++
+							$MaximumSourceEmptyPeerWait = [Math]::Max($MaximumSourceEmptyPeerWait,
+								[UInt64]($At - $Demand.PeerEligibleSince))
 						} else { $UnprovenPeerEpisodeCount++ }
 					}
 					$Demand.Closed = $true
@@ -384,12 +393,14 @@ function Read-AdmissionFairnessEvidence {
 			$PeerCoverage = if ($PeerWaitFailed) { 'MEASURED_FAIL' }
 				elseif ($PeerEpisodeCount -eq 0) { 'NOT_MEASURED' }
 				elseif ($UnprovenPeerEpisodeCount -gt 0 -or $Current.Count -gt 0 -or
-					$CompletedPeerEpisodeCount -ne $PeerEpisodeCount) { 'INCONCLUSIVE_NOT_MEASURED' }
+					$CompletedPeerEpisodeCount + $SourceEmptyPeerEpisodeCount -ne $PeerEpisodeCount) { 'INCONCLUSIVE_NOT_MEASURED' }
 				else { 'MEASURED_PASS' }
 			$Result | Add-Member -NotePropertyName ContinuousEligiblePeerEpisodeCoverage -NotePropertyValue $PeerCoverage
 			$Result | Add-Member -NotePropertyName MaximumObservedPeerEligibilityToGrantMicroseconds -NotePropertyValue $MaximumPeerWait
 			$Result | Add-Member -NotePropertyName ContinuousPeerEligibleEpisodeCount -NotePropertyValue $PeerEpisodeCount
 			$Result | Add-Member -NotePropertyName CompletedContinuousPeerEligibleEpisodeCount -NotePropertyValue $CompletedPeerEpisodeCount
+			$Result | Add-Member -NotePropertyName SourceEmptyPeerEligibleEpisodeCount -NotePropertyValue $SourceEmptyPeerEpisodeCount
+			$Result | Add-Member -NotePropertyName MaximumObservedSourceEmptyPeerEligibleWaitMicroseconds -NotePropertyValue $MaximumSourceEmptyPeerWait
 			$Result | Add-Member -NotePropertyName CarriedEligibleReplacementCount -NotePropertyValue $CarriedReplacementCount
 			$Result | Add-Member -NotePropertyName UnprovenPeerEligibilityEpisodeCount -NotePropertyValue $UnprovenPeerEpisodeCount
 		}

@@ -256,6 +256,8 @@ for CaseIndex, Case in {'gameplay', 'structural', 'mixed'} do
             (((CaseIndex - 1) * 7 + Opportunity + Index) % 26)), 24576)
     end
     Attributes.ScaleOverloadCase = 'recover_' .. Case
+    OverloadOfferedSent = true -- The server's actual all-offered barrier precedes its notification.
+    PhaseMock.OnClientEvent.Callback('recover', Case)
     local RpcBefore, EventBefore, WaitBefore = RpcCount, RecoveryEventOffers, #RecoveryWaitCalls
     Recovery()
     Recovery() -- Only a settled cohort may publish its complete receipt.
@@ -281,9 +283,47 @@ for CaseIndex, Case in {'gameplay', 'structural', 'mixed'} do
         'completed callback must not repeat probes or acknowledgement')
 end
 NativePrint('[Qualification:RecoveryScript] cases=3 rpc_probes=30 completed_cases=3 result=PASS')
+-- A source-bound ordinary cessation arrives before a long structural journal
+-- tail. Service must be measured now; Names remain an independent live proof.
+CurrentOverloadCase = nil
+Attributes.ScaleOverloadCase = 'structural'
+for _, Child in Children do Child.Name = 'old' end
+Recovery()
+OverloadOfferedSent = true
+local StructuralRpcBefore = RecoveryRpcCalls
+local StructuralDoneBefore = Acknowledgements['recovery_done:structural'] or 0
+local StructuralNamesBefore = Acknowledgements['name_converged:structural'] or 0
+local NoticeClock = TestClock
+PhaseMock.OnClientEvent.Callback('recover', 'mixed')
+PhaseMock.OnClientEvent.Callback('recover', nil)
+assert(RecoveryStartedNs == nil and RecoveryCessationCase == nil,
+    'wrong-case or malformed notices must not establish recovery clocks')
+PhaseMock.OnClientEvent.Callback('recover', 'structural')
+local NoticeDeadline = RecoveryDeadlineNs
+Recovery()
+Recovery()
+assert(Attributes.ScaleOverloadCase == 'structural' and RecoveryResultSent and
+    RecoveryRpcCalls - StructuralRpcBefore == 10 and
+    Acknowledgements['recovery_done:structural'] == StructuralDoneBefore + 1 and
+    (Acknowledgements['name_converged:structural'] or 0) == StructuralNamesBefore,
+    'ordinary service must qualify before the withheld GRPL marker or final Names')
+PhaseMock.OnClientEvent.Callback('recover', 'structural')
+PhaseMock.OnClientEvent.Callback('recover', 'gameplay')
+assert(RecoveryStartedNs == math.floor(NoticeClock * 1000000000) and RecoveryDeadlineNs == NoticeDeadline,
+    'duplicate/stale notices must not reset clocks, counters or completed cohorts')
+Attributes.ScaleOverloadCase = 'recover_structural'
+TestClock += 21
+for Index = 0, 31 do
+    local Opportunity = if Index < 16 then 479 else 480
+    Children[Index + 1].Name = string.rep(string.char(string.byte('a') + ((7 + Opportunity + Index) % 26)), 24576)
+end
+Recovery()
+assert(Acknowledgements['name_converged:structural'] == StructuralNamesBefore + 1 and
+    Acknowledgements['recovery_done:structural'] == StructuralDoneBefore + 1,
+    'later structural convergence cannot replay or backdate the ordinary service receipt')
 -- Fresh bounded fixture occurrences use the actual case-reset path. They do
 -- not replay any transport operation or reuse an accepted request/Event.
-local function BeginFixture(Mode)
+local function BeginFixture(Mode, Notify)
     RecoveryMode, RecoveryRpcCalls = Mode, 0
     RecoveryEventOffers = 0
     table.clear(RecoveryWaitCalls)
@@ -293,6 +333,8 @@ local function BeginFixture(Mode)
     Attributes.ScaleOverloadCase = 'gameplay'
     Recovery()
     Attributes.ScaleOverloadCase = 'recover_gameplay'
+    OverloadOfferedSent = true
+    if Notify ~= false then PhaseMock.OnClientEvent.Callback('recover', 'gameplay') end
     return #Records
 end
 local function CountRecords(After, Fragment)
@@ -310,12 +352,26 @@ local function CheckPacing()
             'the existing 200-ms wait must occur only after offers one through nine')
     end
 end
+local First = BeginFixture('Healthy', false)
+Recovery()
+assert(RecoveryRpcCalls == 0 and RecoveryStartedNs == nil and not RecoveryResultSent,
+    'a replicated recover marker alone cannot substitute for ordinary cessation notification')
+OverloadOfferedSent = false
+PhaseMock.OnClientEvent.Callback('recover', 'gameplay')
+assert(RecoveryStartedNs == nil, 'a notice before the client offered handshake must not activate recovery')
+OverloadOfferedSent = true
+OverloadRpcPending = 1
+PhaseMock.OnClientEvent.Callback('recover', 'gameplay')
+assert(RecoveryStartedNs == nil and OverloadRpcPending == 1,
+    'notification cannot erase accepted overload RPC ownership')
+OverloadRpcPending = 0
 -- The server cessation clock is independent of this client's delayed stage
 -- observation. A final receipt must not add a tenth idle interval after all
 -- accepted work is complete near the unchanged server20s boundary.
-local First = BeginFixture('Healthy')
+First = BeginFixture('Healthy', false)
 local ServerCessationClock, ServerDeadlineClock = 100, 120
 TestClock = ServerCessationClock + 17.85
+PhaseMock.OnClientEvent.Callback('recover', 'gameplay')
 Recovery()
 CheckPacing()
 local QualifiedAt = TestClock
@@ -429,7 +485,48 @@ assert(RecoveryFailed and RecoveryAttempt == 20 and RecoveryRpcCalls == 0 and
     CountRecords(First, 'event=cohort_start') == 0, 'attempt cap must reject a twenty-first cohort')
 NativePrint('[Qualification:RecoveryCohortScript] first_slow=PASS deadline=PASS errors=PASS pending=PASS transition=PASS attempt_cap=PASS result=PASS')
 '@
+$Server = $Source.IndexOf('auto ServerScript')
+$ServerBegin = $Source.IndexOf('R"(', $Server)
+$ServerEnd = $Source.IndexOf(')"', $ServerBegin + 3)
+if ($Server -lt 0 -or $ServerBegin -lt 0 -or $ServerEnd -lt 0) { throw 'embedded server Luau source delimiters are missing' }
+$ServerPrelude = $Prelude + @'
+
+local PhysicalFarm, ReplicateDiagnosticCounter = true, false
+local Notices, FailBroadcast = {}, false
+PhaseMock.OnServerEvent, EventMock.OnServerEvent, OverloadEventMock.OnServerEvent = Signal(), Signal(), Signal()
+function PhaseMock:FireAllClients(Kind, Case)
+    table.insert(Notices, {Kind, Case})
+    if FailBroadcast then error('partial broadcast fixture failure') end
+end
+function PhaseMock:FireClient(...) end
+function OverloadEventMock:FireClient(...) end
+function FunctionMock:SetServerHandler(Callback) self.ServerHandler = Callback end
+function ControlMock:SetActionPolicy(Callback) self.Policy = Callback end
+'@
+$ServerAssertions = @'
+assert(#Callbacks == 1, 'actual server must use its existing post-simulation callback')
+local ServerStep = Callbacks[1]
+for _, Case in {'gameplay', 'structural', 'mixed'} do
+    local Before = #Notices
+    Attributes.ScaleOverloadCase = 'recover_' .. Case
+    ServerStep()
+    assert(#Notices == Before, 'unknown/future cessation cannot create a notification')
+    Attributes.ScaleOverloadCase = Case
+    ServerStep()
+    assert(#Notices == Before, 'active overload production is not cessation')
+    Attributes.ScaleOverloadCase = 'recover_' .. Case
+    FailBroadcast = Case == 'mixed'
+    ServerStep()
+    assert(#Notices == Before + 1 and Notices[#Notices][1] == 'recover' and Notices[#Notices][2] == Case,
+        'actual server must notify the exact case once after published cessation')
+    for Opportunity = 1, 10 do ServerStep() end
+    assert(#Notices == Before + 1, 'successful or partially failed notifications must never be replayed')
+end
+assert(ControlMock.Attributes.ScaleProducerFailed == 'mixed', 'partial notification failure remains explicit')
+NativePrint('[Qualification:RecoveryNotificationScript] actual_server_once=PASS case_binding=PASS partial_failure_no_replay=PASS result=PASS')
+'@
 $Path = Join-Path ([IO.Path]::GetTempPath()) ('gargantuan-recovery-client-' + [Guid]::NewGuid().ToString('N') + '.luau')
+$ServerPath = Join-Path ([IO.Path]::GetTempPath()) ('gargantuan-recovery-server-' + [Guid]::NewGuid().ToString('N') + '.luau')
 try {
     [IO.File]::WriteAllText($Path, $Prelude + "`n" + $Source.Substring($Begin + 3, $End - $Begin - 3) + "`n" + $Assertions)
     $Output = & $Interpreter run $Path 2>&1
@@ -442,9 +539,15 @@ try {
     } else {
         $Output | Write-Output
         if ($Result -ne 0) { throw "embedded client recovery execution failed: $Result" }
+        [IO.File]::WriteAllText($ServerPath, $ServerPrelude + "`n" + $Source.Substring($ServerBegin + 3, $ServerEnd - $ServerBegin - 3) + "`n" + $ServerAssertions)
+        $ServerOutput = & $Interpreter run $ServerPath 2>&1
+        $ServerResult = $LASTEXITCODE
+        $ServerOutput | Write-Output
+        if ($ServerResult -ne 0) { throw "embedded server recovery execution failed: $ServerResult" }
     }
 } finally {
     if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force }
+    if (Test-Path -LiteralPath $ServerPath) { Remove-Item -LiteralPath $ServerPath -Force }
 }
 # A deliberately failing negative-control child is a successful test only
 # after its exact failure was checked above; do not leak its exit code to CI.

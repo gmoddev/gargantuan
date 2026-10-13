@@ -2335,3 +2335,76 @@ Focused adversarial regressions, affected native checks and exact-source CI
 must qualify the extension before one justified corrected native campaign.
 Original A4 report remains INCONCLUSIVE and whole run FAIL; no provider or final
 acceptance is inferred from a later offline lineage proof. KI-006 OPEN.
+
+## 27. Independent service restoration and source-empty fairness (2026-10-13)
+
+A5 source `19f9f57a11dd7627b20bf4d5f42e0358618eabeb`, tree
+`63ee0155754cad209668287b5e6d20de5fa46652`, executes one fresh native32 run
+`541d1719-2a70-4655-b9f4-afce45e15521`: **FAIL**, exit1 after270.25544s.
+Its107 original members/153188597B plus17543B index remain sealed by
+`2c41f505808ea7fd9826836208d35ef759d242a598dca10bdd415acf6b03063a`.
+The originals are independently mirrored; owned native processes and UDP39450
+are absent after cleanup. A4 and A5 retain their original source/verdict.
+
+All32 correctly versioned structural service receipts miss the immutable20s
+maximum (22.895943–24.346420s). First late peer12:1/client11 has the following
+source/native-causal and client/server boundaries, relative to cessation:
+
+| Recorded boundary | Elapsed |
+| --- | ---: |
+| Cessation at1459641614069us | 0 |
+| Prepare418305B seq189, cursor23230→23248 | 20.548006s |
+| Accept token5898 | 20.548391s |
+| Complete first-send/ACK feedback observed | 20.577666s |
+| Exact retirement | 20.577667s |
+| Client cohort starts | 20.5930431s |
+| Cohort ends, ten RPC/Event ACKs | 22.8723969s |
+| Server receives service receipt | 22.895943s |
+
+The independent admission record places eligibility1us before grant. The
+cohort takes2.2793538s (RPC maximum33.812ms; Event maximum50.291ms), final
+Event-to-end15.2786ms and end-to-server-ACK23.5461ms. There is no final200ms
+withholding. Feedback observations are not OS-call timestamps; worker/OS
+dispatch and separate observer perturbation are unmeasured.
+
+The exact1000421668B causal prefix converges22.079024s against the immutable
+36.109713s reference bound. Variable remaining work differs from A4's786571448B
+and does not alone prove a production regression. Native HYBRID32/FIFO
+(maximum9.121ms) and the five-phase workload subsets pass. Whole qualification
+also retains an INCONCLUSIVE eligible episode disposed as generic `no_work`;
+it is neither silently completed nor accepted as obsolete payload.
+
+Canonical D01/D03 and PhysicalFundingGateReview3L distinguish20s ordinary
+service restoration from complete structural convergence. Waiting for the
+structural `recover_*` journal mutation before offering any service probes
+adds a convergence prerequisite. A5 cannot establish earlier service health
+or be retrospectively qualified: those probes were never offered.
+
+Selected correction uses existing ScalePhaseControl for one case-bound
+ordinary cessation notice after actual publication. Mark before submission;
+partial failure is explicit and never replayed. Client enrollment requires its
+active case, completed offered handshake and no pending overload RPC. Preserve
+the first receive clock and all accepted RPC/Event ownership. Duplicate,
+stale, wrong-case or missing notices cannot reset it or fall back to GRPL.
+Keep exact final Names/source identity, causal fence, conservation, retirement
+and the original convergence deadline. Keep server20s, ten probes and nine
+200ms inter-offer waits. No transport/channel/scheduler redesign is required.
+
+Both actual embedded scripts pass pinned-Luau local regressions, including
+withheld marker/Names, missing notice, pending ownership, case/clock guards and
+once-only partial broadcast failure. Existing formatting, pacing, deadline,
+error and retry negatives remain. An initial new test omitted the canonical
+structural Name+7 offset; exact verification rejected it and only that test
+expectation was corrected.
+
+The separate prospective fairness correction distinguishes true source-empty
+state from planning/journal-budget refusal with source-owned generation-safe
+`HasPendingStructuralWork`. Refusal preserves the admission candidate. V3
+`source_empty` can end eligibility only after checking its original deadline;
+its count/wait are separate from actual accepted grants. Generic `no_work`
+and old V1/V2 evidence remain strict/inconclusive as before. A5's unknown
+disposal is not retrospectively proven by this amendment.
+
+Fresh affected native preflight, exact-source CI and an authorized campaign
+must qualify both corrections. No fresh native/physical PASS is claimed here.
+**KI-006 OPEN; Foundation3L B — PARTIALLY READY; PR6 draft; no3M or merge.**

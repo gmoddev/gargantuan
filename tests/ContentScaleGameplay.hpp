@@ -69,6 +69,7 @@ if PhysicalFarm then
     local OverloadFunction = game:FindFirstChild("ScaleOverloadFunction")
     local RunService = game:GetService("RunService")
     local CurrentOverloadCase = nil
+    local RecoveryCessationNotified = nil
     local OverloadReady = {}
     local OverloadOffered = {}
     local RecoveryProbeSeen = {}
@@ -194,6 +195,7 @@ if PhysicalFarm then
         if type(NextOverload) == "string" and NextOverload ~= CurrentOverloadCase and
             (NextOverload == "gameplay" or NextOverload == "structural" or NextOverload == "mixed") then
             CurrentOverloadCase = NextOverload
+            RecoveryCessationNotified = nil
             OverloadReady = {}
             OverloadOffered = {}
             RecoveryProbeSeen = {}
@@ -202,6 +204,18 @@ if PhysicalFarm then
             OverloadOfferedCount = 0
             Control:SetAttribute("ScaleOverloadReadyAcks", 0)
             Control:SetAttribute("ScaleOverloadOfferedAcks", 0)
+        end
+        if CurrentOverloadCase and NextOverload == "recover_" .. CurrentOverloadCase and
+            RecoveryCessationNotified == nil then
+            -- The native host has already ceased offers and published its
+            -- immutable cessation fence. Ordinary service cannot be tested by
+            -- waiting for this attribute at the tail of the structural journal.
+            -- Mark before submission: a failed/partial broadcast is not replayed.
+            RecoveryCessationNotified = CurrentOverloadCase
+            local Ok = pcall(function() PhaseControl:FireAllClients("recover", CurrentOverloadCase) end)
+            print(string.format("[Qualification:Recovery] event=cessation_notice_sent case=%s ok=%d",
+                CurrentOverloadCase, if Ok then 1 else 0))
+            if not Ok then Control:SetAttribute("ScaleProducerFailed", CurrentOverloadCase) end
         end
         if type(NextPhase) == "string" and NextPhase ~= CurrentPhase then
             CurrentPhase = NextPhase
@@ -291,18 +305,6 @@ local FarmCallbackPhase = nil
 local FarmCallbackPhaseCount = 0
 local FarmClockStartedEpoch = 0
 local FarmClockQuiescedEpoch = 0
-if PhaseControl then
-    PhaseControl.OnClientEvent:Connect(function(Kind, Phase)
-        if Kind == "phase" and type(Phase) == "string" then
-            Control:SetAttribute("ScalePhase", Phase)
-            if Phase ~= "calibrating" then PendingPhaseAcknowledgement = Phase end
-            print(string.format("[Content:ScalePhase] event=received phase=%s", Phase))
-        elseif Kind == "stop" and Phase == Control:GetAttribute("ScalePhase") then
-            PendingPhaseStop = Phase
-            print(string.format("[Content:ScalePhase] event=stop_received phase=%s", Phase))
-        end
-    end)
-end
 Control:SetAttribute("ScaleClientStarted", true)
 local Tick = 0
 local StartedActionAt = 0
@@ -377,7 +379,29 @@ local RecoveryFailureReason = "none"
 local RecoveryFailureReported = false
 local RecoveryNameSent = false
 local RecoveryResultSent = false
+local RecoveryCessationCase = nil
 local OverloadSequence = 0
+if PhaseControl then
+    PhaseControl.OnClientEvent:Connect(function(Kind, Phase)
+        if Kind == "phase" and type(Phase) == "string" then
+            Control:SetAttribute("ScalePhase", Phase)
+            if Phase ~= "calibrating" then PendingPhaseAcknowledgement = Phase end
+            print(string.format("[Content:ScalePhase] event=received phase=%s", Phase))
+        elseif Kind == "stop" and Phase == Control:GetAttribute("ScalePhase") then
+            PendingPhaseStop = Phase
+            print(string.format("[Content:ScalePhase] event=stop_received phase=%s", Phase))
+        elseif Kind == "recover" and type(Phase) == "string" and Phase == CurrentOverloadCase and
+            Players.LocalPlayer ~= nil and
+            OverloadOfferedSent and OverloadRpcPending == 0 and RecoveryCessationCase == nil and
+            not RecoveryFailed then
+            RecoveryCessationCase = Phase
+            RecoveryStartedNs = math.floor(os.clock() * 1000000000)
+            RecoveryDeadlineNs = RecoveryStartedNs + 20000000000
+            print(string.format("[Qualification:Recovery] event=cessation_notice_received case=%s player_id=%d started_clock_ns=%d",
+                Phase, Players.LocalPlayer.PlayerId, RecoveryStartedNs))
+        end
+    end)
+end
 if OverloadEvent then
     OverloadEvent.OnClientEvent:Connect(function(Message, Sequence, Case)
         if Case ~= CurrentOverloadCase then return end
@@ -825,6 +849,10 @@ if PhysicalFarm then
         local LocalPlayer = Players.LocalPlayer
         if not LocalPlayer or not PhaseControl then return end
         local Stage = game:GetAttribute("ScaleOverloadCase")
+        if CurrentOverloadCase ~= nil and Stage == CurrentOverloadCase and
+            RecoveryCessationCase == CurrentOverloadCase then
+            Stage = "recover_" .. CurrentOverloadCase
+        end
         if Stage == "gameplay" or Stage == "structural" or Stage == "mixed" then
             if Stage ~= CurrentOverloadCase then
                 if CurrentOverloadCase ~= nil and not (RecoveryResultSent and RecoveryProbesDone and
@@ -877,6 +905,7 @@ if PhysicalFarm then
                 RecoveryFailureReported = false
                 RecoveryNameSent = false
                 RecoveryResultSent = false
+                RecoveryCessationCase = nil
             end
             if not OverloadReadySent then
                 local Root = Workspace:FindFirstChild("ScaleOverloadRegion")
@@ -938,14 +967,11 @@ if PhysicalFarm then
             end
             return
         end
-        if Stage ~= "recover_" .. tostring(CurrentOverloadCase) then return end
+        if Stage ~= "recover_" .. tostring(CurrentOverloadCase) or
+            RecoveryCessationCase ~= CurrentOverloadCase then return end
         local NowNs = math.floor(os.clock() * 1000000000)
-        if not RecoveryStartedNs then
-            -- This local observation never restarts. The server's independent
-            -- cessation-to-recovery deadline remains the authoritative gate.
-            RecoveryStartedNs = NowNs
-            RecoveryDeadlineNs = NowNs + 20000000000
-        end
+        -- The ordinary notification owns the immutable local observation.
+        -- The server's independent cessation-to-receipt20s gate remains final.
         if not RecoveryResultSent and not RecoveryFailed and NowNs >= RecoveryDeadlineNs then
             RecoveryFailed, RecoveryFailureReason = true, "deadline"
             if RecoveryProbesStarted and not RecoveryCohortClosed then CloseRecoveryCohort("FAILED", "deadline") end

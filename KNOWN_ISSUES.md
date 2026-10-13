@@ -85,6 +85,31 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-13 — A5 FAIL: service enrollment waits behind structural convergence.**
+Source `19f9f57a11dd7627b20bf4d5f42e0358618eabeb`, native32 run
+`541d1719-2a70-4655-b9f4-afce45e15521`, remains FAIL (270.25544s/exit1), sealed
+by index `2c41f505808ea7fd9826836208d35ef759d242a598dca10bdd415acf6b03063a`.
+All32 structural receipts exceed20s. First peer12:1 starts its cohort20.5930431s
+after cessation because the replicated `recover_*` marker waits at the journal
+tail; full receipt22.895943s. Its frame is first prepared20.548006s, accepted
+385us later and fully ACKed at observed feedback29.275ms later. Ten healthy
+probes take2.2793538s; final Event-to-end15.2786ms confirms no final200ms wait.
+Earlier service is unmeasured. Exact1000421668B causal convergence takes
+22.079024s within its independent36.109713s reference bound. This remaining
+work differs from A4; it does not alone establish a production regression.
+
+Select one case-bound ordinary cessation notice on existing ScalePhaseControl,
+preserving server20s, all ten probes, ownership, Names/source identities and
+C3/C5. No GRPL fallback, clock reset or partial-broadcast replay is allowed.
+Actual client/server pinned-Luau regressions pass locally; fresh source/native/
+CI qualification remains pending. Native HYBRID/FIFO and five-phase subsets
+pass, but fairness is independently INCONCLUSIVE: one generic `no_work`
+disposal cannot prove demand ended. Prospective generation-safe source-empty
+evidence V3 distinguishes it from budget/planning refusal and counts endings
+separately from actual grants; A5's old unknown disposal remains unproven.
+See ownership decision section27. **KI-006 OPEN; PR6 draft; no physical PASS
+or3L completion.**
+
 **2026-10-13 — HYBRID scope CI passes; native32 exposes a final-probe idle wait.**
 Source `4a2e8d6112a5720f8908f26dd61ee79adf9f487e` passes all eight original
 Windows/Linux/GNS hosted jobs, including all three Windows reliable timing
