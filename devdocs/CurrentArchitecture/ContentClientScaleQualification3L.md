@@ -6,6 +6,23 @@ last_verified: 2026-09-13
 
 # Foundation 3L client and scale qualification
 
+## Current-source checkpoint — 2026-10-13
+
+Execution candidate `e792482e8a9f326bb0f2861576e87e163d0c7537` is not
+qualification-complete. Focused deterministic and affected native preflights
+pass, but mandatory original manual CI `38346195711` fails the retained raw
+four-grant running-service gate. Its official package is unqualified. One
+bounded diagnostic does not reproduce the failure and does not supersede it.
+Source restoration and owned-process/port cleanup are verified.
+
+Retained b65 native32 subsets pass D03 Main/turnover, ordinary service,
+conservation, fairness and server-only convergence; the full b65 run remains
+FAIL. No e792 native32, current-source four-client, Local32, real-TLS Node32,
+provider-parity or final acceptance PASS is claimed. Historical matrices below
+retain their original source and scope. KI-006 stays OPEN, PR6 stays draft and
+Foundation3L stays B — PARTIALLY READY. See
+[the final attribution assessment](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#21-final-required-raw-service-attribution-and-qualification-boundary-2026-10-13).
+
 **B — FOUNDATION 3L PARTIALLY READY.** The qualified 32- and 200-protocol-peer
 Local/Node workload passes recipient service, gameplay budgets and lifecycle
 checks. This narrows KI-006; it does not qualify physical 200/500 clients or

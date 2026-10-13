@@ -1899,3 +1899,162 @@ verified result:
 `6184bac4c789bb5c1cdb93ad43b9af16e3098bb6e866b7a6b096048c149fdb73`.
 Final-source CI/package and a fresh bounded campaign remain required. No
 physical result or 3L completion is inferred.
+
+## 21. Final required raw-service attribution and qualification boundary (2026-10-13)
+
+**EXECUTION/QUALIFICATION SCOPE — ARCHITECTURE DECISION REQUIRED.**
+Retain selected D03 V1, including100000-us Main and150000-us exact turnover.
+Execution candidate `e792482e8a9f326bb0f2861576e87e163d0c7537`, tree
+`6f2478ae9fa3500ce7c0e9eaa34e265316f9becd`, commits the section20
+publication diagnostic, bounded RPC receive evidence and prospective recovery
+enrollment corrections. The sealed v3 deterministic/affected native preflights
+pass. Historical failures and the qualified recovery encoder remain unchanged.
+The corrected farm recovery behavior is not yet qualified by a new native32 run.
+
+### First new required failure
+
+Original all-false manual Native CI
+[`38346195711`](https://github.com/gmoddev/gargantuan/actions/runs/38346195711)
+tests exact e792 source. Its Windows job runs96 tests and fails only
+`gargantuan_f1_four_grant`; the dependent Linux job is skipped. The original
+official package is therefore unqualified. Successful other jobs cannot
+substitute for this original required result.
+
+This is the unchanged strict raw `--four-grant` fixture: four server/client
+adapter pairs in one classic GNS service-thread process, native worker OFF,
+exclusive domain OFF,18-MiB/s configured send rate. It is not the native-worker
+production workload. Each512-KiB intent is prepared/attributed, activated and
+sent sequentially; the fixture sleeps55ms before observing. There is no
+polling observer during drain. D03's statistics migration explicitly preserves
+this stronger raw four-grant gate and the physical prerequisite. Its failure
+cannot be silently demoted as obsolete production telemetry.
+
+All peers have462 positive BODY records totaling524288B, zero finite shortfall,
+zero chronology/counter flags, zero retries/pending/unacknowledged bytes and
+exact524288B ACK/retirement. First sends take311–560us; completion28.884–29.171ms
+passes the exact37.3243865966796875-ms D03 finite envelope.
+
+| Peer | Maximum raw running deficit, byte-us | Allowed | Verdict |
+| --- | ---: | ---: | --- |
+| 0 | 18188160256 | 18025216000 | FAIL |
+| 1 | 18708253952 | 18025216000 | FAIL |
+| 2 | 18406264064 | 18025216000 | FAIL |
+| 3 | 13593952000 | 18025216000 | PASS |
+
+Independent replay exactly matches the exported counters. The failed windows
+span4066/4097/4079us and each delivers50028B. Largest individual segment gaps
+are385/385/361/333us. Thus this is accumulated raw running-service shortfall,
+not missing first-send or one measured millisecond-scale stall. Early windows
+overlap later sequential activation/setup but end about3.7ms after the last
+activation. API-return, lock-owner and OS execution evidence is absent; this
+overlap does not establish setup as the cause. Neither the original E8 D03
+failure nor this new failure is attributed to a specific production defect.
+
+### One final bounded discriminator: target not reproduced
+
+Fresh identity `5d659665-b2b9-436e-9f28-a326dfdbe94e` runs exactly one strict
+four-grant diagnostic on e792 plus an external single-header overlay. Existing
+capture/history ownership regressions pass before the jobs4 incremental build;
+no runtime contract, pacing, priority, affinity or send mode is changed. The
+overlay enables existing detailed callback/callsite history before native
+initialization, retains existing initial-trace POD metadata, freezes before
+post-drain observation and reads only after positive native shutdown/quiescence.
+No generalized recorder or production patch is introduced.
+
+The diagnostic exits0 without timeout in45.7696282s. All strict gates pass:
+first sends301/209/198/332us; completions28.821/28.825/28.828/28.843ms;
+maximum peer running deficit3674210304, pool7318716864 against72100864000;
+common four-peer overlap27548us. Native1848 packets use2218128 wire bytes,
+including120976 overhead below255046 reserve. These results do not replace
+the failed original CI or prove the failure disappeared.
+
+Positive native join/detach/quiescence is observed. The existing8192-record
+history receives9411 records, overwrites1219 and reports zero dropped records.
+Saved timer metadata predates the ring but is not retained span coverage.
+Actual retained history starts4.314ms after first activation; full
+activation-to-completion coverage is FALSE. Initial POD native handles join
+373/373/378/379 retained SNP spans, but early per-owner API wait/message-copy
+spans are absent. Clock-anchor offset intersections are0–100ns at10MHz QPC.
+Overall observer perturbation is NOT_MEASURED. Missing spans are unmeasured,
+not zero. No wait-owner, scheduling, lock, dispatch or OS cause is demonstrated.
+
+The original header raw hash/Git blob are restored and worker checkout is
+clean exact e792. Owned processes and UDP39000–39099 owners are absent.
+Protected staged Player/Server/SDL/protobuf hashes and native32 launch plan
+are unchanged. The diagnostic binary is retained as an overlay artifact and
+is not a qualification binary. Zero retries; native32 remains UNLAUNCHED.
+This final attribution track stops on nonreproduction.
+
+### Architecture assessment and ranked alternatives
+
+The measured D03 service subsets at b65 support retaining100/150ms; they are
+not the full conjunction. The proposed direct-outcome replacement still lacks
+independent first-ready/all-peer ownership proof described above. Removing the
+timers or the separate raw gate solely to obtain CI PASS is unjustified.
+General-purpose thread dispatch and blocking GNS/application lock paths have
+no demonstrated wall-time bound; current evidence does not prove Windows/GNS
+cannot meet D03, or identify a correction that would guarantee the raw curve.
+
+1. **Retain the explicit stronger gate and leave this candidate unqualified.**
+   This is the selected immediate action and preserves all accepted guarantees.
+   Resume only with new causal evidence or a justified execution-environment
+   qualification plan, not another identical trial. Cost:3L stays open. Needed
+   evidence: complete first-failing-window native spans joined to actual
+   API/lock/scheduling owners, with bounded observer cost, before selecting a
+   source correction or deployment assumption. A timer, priority or affinity
+   adjustment without that mechanism would be speculative.
+2. **Explicitly decide whether raw D01 running service remains a supported
+   deployment/release guarantee alongside adopted D03.** Choosing D03 product
+   outcomes for normal acceptance while classifying the stronger raw curve as
+   a separate diagnostic/deployment class would reverse D03's explicit retained
+   exception. This is a material qualification-scope decision, not an ordinary
+   migration fix. It requires recorded product authority and proof that finite
+   completion, shared ordinary FIFO, all32 source fairness, exact ownership,
+   resource limits and causal recovery remain independently enforced. No such
+   reclassification is adopted here.
+3. **Bounded actor/ownership or stronger-platform redesign.** Highest cost and
+   regression risk; currently unsupported by an attributed failing path. It
+   requires evidence of the actual obstruction and bounded scheduling/lock
+   assumptions, then unchanged reliability, protected traffic, socket lifetime,
+   conservation and service qualification. A speculative multi-packet pipeline
+   would not establish initial execution opportunity and is not selected.
+
+The smallest next discriminating action is deciding the retained raw guarantee's
+supported topology and necessity from product/source authority. If it remains
+mandatory, a later experiment must target the original failed early window with
+complete bounded coverage and a stated new causal hypothesis. No additional
+experiment is authorized or executed by this checkpoint. This is not a claim
+of mathematical/platform impossibility and not a D03 qualification PASS.
+
+### Evidence custody and remaining gates
+
+Local artifact roots are `tooling-ci-e792482e8a9f-next-early-38346195711-115128081615-v1`,
+`foundation3l-four-grant-e792-review-v1` and
+`foundation3l-e792-four-grant-diagnostic-v1` under the controller's Codex artifacts.
+SHA-256 identities:
+
+- Original failed manual artifact ZIP:
+  `798dbf108668df3f01b54901bdb380d34840c5b80184958707a322351a06eb96`.
+- Original failed manual raw log:
+  `79d096d21e60bdedbede42b4ec4411b7ed1bd4309f4bdbc3d164d65ff36e9044`.
+- Original failed manual JUnit:
+  `fb404be6d0252b2acae9565a2f5612a6ba4e17dc9a45c7c3c36b41bce70eb621`.
+- Single diagnostic overlay:
+  `d4b8e7e4e24279e6ced83e51b0266303a12bbc15c2189009160164fc46191e39`.
+- Single diagnostic raw stderr:
+  `b10c163cccaea6ad23a04aa55d798ec592873dbcd7912508e656e631382b2ff6`.
+- Single diagnostic run receipt:
+  `f33f6d5485660fda9611ae0a34988c80af176476f30fc6ba8bd0365607950e23`.
+- Coverage assessment:
+  `f14e443ed79bf82adc871cab74116e01a7dcc738ff2c31779f9d18d2c3cf3fa0`.
+- Source restoration/cleanup receipt:
+  `dc0e9cf3446656d3443adca1c2fc24be775b4426bb11f20723ec8c536d454deb`.
+- Complete single-diagnostic member inventory:
+  `f103341d5d67dc60481b767b946145df79aff5777905456da9b838667adbf5f5`.
+
+No missing official-package authorization is manufactured. Current-source
+native32, required four-client, canonical Local32, real-TLS Node32, remaining
+resource/backpressure/provider-parity gates and final independent acceptance
+remain unqualified. KI-006 OPEN; Foundation3L B — PARTIALLY READY; PR6 draft.
+No3M or automatic merge. The assessment checkpoint changes documentation only;
+execution source remains e792.

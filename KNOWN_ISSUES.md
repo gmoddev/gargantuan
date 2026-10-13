@@ -85,6 +85,31 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-13 — Required raw four-grant CI fails; final attribution does not reproduce.**
+Execution candidate `e792482e8a9f326bb0f2861576e87e163d0c7537` preserves
+D03's100/150ms limits and qualifies the focused publication/recovery enrollment
+corrections through deterministic and affected native preflights. Original
+mandatory manual CI `38346195711` fails `gargantuan_f1_four_grant` (95/96
+Windows tests). Three peers exceed the explicitly retained stronger raw
+running-service bound; all four finite completions and exact retirement pass.
+This is not a measured D03 Main/turnover failure. No qualified official package
+is available from that original run.
+
+The one final diagnostic identity `5d659665-b2b9-436e-9f28-a326dfdbe94e`
+passes strict four-grant checks but does not reproduce the target. Its bounded
+history overwrites1219 records, losing the first4.314ms after activation;
+observer overhead and early API/lock waits remain unmeasured. The original
+failure remains FAIL and unattributed. Original source is restored, owned
+processes/ports are absent, and staged native32 binaries are unchanged.
+
+Further attribution attempts stop. The unresolved decision concerns the
+explicitly retained raw D01 supplementary execution/qualification scope, not
+permission to relax D03 or a proof that the platform cannot satisfy it.
+See [ownership decision section21](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#21-final-required-raw-service-attribution-and-qualification-boundary-2026-10-13).
+Native32, current-source four-client, Local32, real-TLS Node32 and final
+acceptance remain unqualified. **KI-006 OPEN; Foundation3L B — PARTIALLY READY;
+PR6 draft; no3M or merge.**
+
 **2026-10-13 — Retained D03 passes current native32 subsets; recovery/publication FAIL.**
 Candidate `b65c3528e83e` passes all six original hosted jobs and official
 package verification. Fresh run `9196af39-8da8-4200-95da-a07e604a92a2`

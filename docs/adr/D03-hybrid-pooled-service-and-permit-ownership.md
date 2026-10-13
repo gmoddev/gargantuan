@@ -18,6 +18,30 @@ Historical failures retain their original source, contract and verdict.
 
 ## Execution-gate review — 2026-10-12
 
+### Final checkpoint — 2026-10-13
+
+**Retain D03 V1; required supplementary raw service remains unqualified.**
+The100000-us Main and150000-us turnover predicates are unchanged. Candidate
+`b65c3528e83e` passes these predicates across32 peers/7089 completed grants,
+but its full native32 conjunction fails separately. Candidate
+`e792482e8a9f326bb0f2861576e87e163d0c7537` contains the source-backed
+qualification enrollment and publication diagnostic corrections, with focused
+deterministic and affected native preflights passing.
+
+Its mandatory original manual CI `38346195711` fails the explicitly retained
+stronger raw four-grant running-service probe. All four first sends are prompt
+and finite completions pass; this failure does not establish a D03 execution
+predicate defect. The one final diagnostic passes without reproducing it, loses
+early bounded history and measures no overall observer overhead. It cannot
+replace the failed original run or qualify the official package.
+
+The bounded attribution track therefore stops with an execution/qualification
+scope decision required. Neither a production defect nor platform impossibility
+is demonstrated. No raw gate is demoted, no D03 V2 is adopted, and no current
+native32 or physical run is launched. The exact evidence, ranked alternatives
+and conditions for a justified next experiment are recorded in
+[ownership decision section21](../../devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#21-final-required-raw-service-attribution-and-qualification-boundary-2026-10-13).
+
 **Selected A: retain D03 V1 and continue bounded production qualification.**
 The 100000-us completed Main opportunity, 150000-us exact turnover and all
 other hard predicates below remain unchanged. No V2 production health or
