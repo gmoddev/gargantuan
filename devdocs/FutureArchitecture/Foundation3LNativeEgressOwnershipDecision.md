@@ -2435,3 +2435,58 @@ preflight PASS is retained; the changed source still needs fresh native tests.
 Fresh affected native preflight, exact-source CI and an authorized campaign
 must qualify both corrections. No fresh native/physical PASS is claimed here.
 **KI-006 OPEN; Foundation3L B — PARTIALLY READY; PR6 draft; no3M or merge.**
+
+## 28. A7 native D03 qualification checkpoint (2026-10-13)
+
+Native execution source A7 is `5a2e735c96dd2a7983681a090a4610b90772d368`,
+tree `03f22a072ccb36bb0b7b1a2700b7b5de7a8c4218`. Fresh23-test native
+preflight, actual pinned-Luau positive/negative checks, aggregate32 and probe
+selftests pass. All eight original exact-source hosted jobs pass
+97/53/97/53/11/11/97/53; original official run38482123253 supplies the qualified
+package. Independent canonical CI/package input/custody receipt SHA256:
+`ae41955737123cef16ff3e08048edd27533565cb8948e8e978733a852dd43f9f`;
+qualified package ZIP:
+`1566963f4649ea9a9aa764a0488b78c7f7059912c82413c12f9822ea1f5a16c7`.
+
+The sole fresh native32 run `6aa1c66f-35e2-45c9-8f92-1c7761705641` completes
+284.656s/exit0, with exact source clean and owned native processes/UDP absent.
+The107 original members total150686309B, plus17544B index. Index SHA256:
+`3a798262726d572ccab0e28706ab1de0d9870db6bd14f0875d80293014307df9`.
+Independent whole replay is **MEASURED_SUBSET_PASS**, failures[]; conjunction:
+`adc5f3d89e74e30bc9d98d4145068390e8f335cf48822f6f50ef38967e602a4c`.
+This is not physical provider qualification or Foundation3L completion.
+
+All32 peers pass native D03. Maximum completed Main opportunity63.671ms,
+turnover112.213ms and protected ordinary FIFO8.636ms meet the unchanged bounds.
+Exact accepted=first-sent=ACKed=retired2092432666B; terminal release, outstanding
+debt, open grants and pending materialization/journal work are0. All7302
+independently eligible episodes complete, maximum96.729ms. The separate broad
+request-wait counter1.346241s starts before independent eligibility and is not
+the fair-admission measurement. Native run source-empty endings/replacement
+bridges are0; focused deterministic and actual coordinator/planner regressions
+qualify those paths. Their execution is not fabricated for this campaign.
+
+| Recovery case | Maximum server service receipt | Exact reference work | Reference bound | Causal first complete prefix |
+| --- | ---: | ---: | ---: | ---: |
+| Gameplay | 5.449543s | 13982B | 20.470971s | 0.468576s |
+| Structural | 2.620571s | 758425155B | 32.848300s | 17.143725s |
+| Mixed | 5.420156s | 13181B | 20.470947s | 0.482741s |
+
+All96 service receipts match healthy ten-RPC/ten-Event cohorts, no pending
+accepted probes and the original immutable deadline. Gameplay/mixed each retain
+32 first-attempt UNPROVEN cohorts and qualify attempt2; structural qualifies
+attempt1. Structural ordinary cessation notices arrive33.663–62.304ms after
+server cessation; exact source-bound final Names finish15.208642–17.156190s.
+The later server convergence snapshots are0.469100/17.144047/0.483255s and must
+not be confused with first complete causal-prefix timestamps above. Exact GRPL
+marker arrival, notice submission/native dispatch split and separate observer
+perturbation are unmeasured. No earlier A5 probe or result is invented.
+
+The incoming qualifier-only child binds prepared A7 archive/probe/runtime inputs
+and adapts the physical qualifier separately; native manifests keep source A7.
+Pinning/installing that child cannot prove a four-client or provider PASS.
+Same-source four-client, canonical Local32, real-TLS Node32, provider parity,
+remaining physical resources/capture/backpressure and final conjunction remain
+UNQUALIFIED. Controller RAM around4.97GiB is below the full32 client8GiB floor;
+the bounded four-client prerequisite remains possible. Preserve A5/A4 and all
+older failures, keep KI-006 OPEN and PR6 draft; no3M or automatic merge.

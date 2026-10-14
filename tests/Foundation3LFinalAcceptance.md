@@ -1,7 +1,7 @@
 ---
 status: current
 owner: qualification
-last_verified: 2026-10-06
+last_verified: 2026-10-13
 related_code:
   - tests/foundation3l_acceptance.py
   - tests/test_foundation3l_acceptance.py
@@ -9,6 +9,27 @@ related_code:
 ---
 
 # Final Foundation 3L evidence conjunction
+
+## Current measured scope — A7 native subset (2026-10-13)
+
+Native source `5a2e735c96dd2a7983681a090a4610b90772d368`, tree
+`03f22a072ccb36bb0b7b1a2700b7b5de7a8c4218`, passes all eight original
+exact-source CI jobs and canonical CI/package replay (receipt
+`ae41955737123cef16ff3e08048edd27533565cb8948e8e978733a852dd43f9f`).
+Its sole same-host native32 run `6aa1c66f-35e2-45c9-8f92-1c7761705641` has
+strict `MEASURED_SUBSET_PASS`, failures[], conjunction
+`adc5f3d89e74e30bc9d98d4145068390e8f335cf48822f6f50ef38967e602a4c`.
+All retained D03 native, ordinary FIFO, execution, fair admission, exact
+accounting, fixed service-recovery and causal-convergence subsets pass.
+Historical A5 and other failures retain their original source/verdict.
+
+This native subset does not supply the physical inputs below. Same-source
+four-client, canonical Local32, real-TLS Node32, physical provider parity and
+final acceptance remain UNQUALIFIED. Controller RAM around4.97GiB is below
+the full32 client8GiB floor; four-client qualification may proceed separately.
+The incoming qualifier-only child keeps native source A7 distinct from its
+analyzer/adapter/pin identity and requires its own qualification. Updated pins
+are prepared inputs, not a physical PASS. KI-006 remains OPEN; PR6 remains draft.
 
 ## Explicit qualification contract
 
@@ -36,8 +57,9 @@ Missing notification, late receipt, partial cohorts or missing causal/name
 evidence cannot produce PASS. A5's earlier marker-gated FAIL is preserved;
 it proves no earlier service result. Explicit V3 source-empty fairness endings
 are separately measured from grants; generic `no_work` remains unproven and
-legacy evidence is not reinterpreted. Both corrections require fresh source
-qualification before closing any canonical gate.
+legacy evidence is not reinterpreted. The A7 native subset qualifies these
+corrections; each physical campaign must still independently qualify the
+unchanged guarantees before provider or final gates can close.
 
 Legacy F1 evidence retains its original full curve semantics. An explicitly
 selected profile must match the current-source CI, package, four-client and

@@ -1,7 +1,7 @@
 ---
 status: accepted-qualification-pending
 owner: runtime-networking
-reviewed: 2026-10-12
+reviewed: 2026-10-13
 supersedes: D01/F1 hard packet timing and implied continuous delivered capacity
 ---
 
@@ -40,9 +40,49 @@ ordinary FIFO50000us, completed Main100000us, turnover150000us and qualified
 reserves, bounded debt and canonical recovery obligations remain mandatory.
 This amendment supersedes only the retained raw-running-curve exception in the
 historical records below; it does not change production networking or grants.
-Qualification of the coordinated migration and final conjunction is pending.
+Native qualification of the coordinated migration passes at the A7 checkpoint
+below; the physical provider and final conjunction remain pending.
+
+### A7 native qualification checkpoint — 2026-10-13
+
+Source `5a2e735c96dd2a7983681a090a4610b90772d368` (A7), tree
+`03f22a072ccb36bb0b7b1a2700b7b5de7a8c4218`, passes all eight original
+exact-source hosted jobs and canonical CI/package replay. Fresh same-host
+native32 run `6aa1c66f-35e2-45c9-8f92-1c7761705641` completes in284.656s;
+independent whole replay is `MEASURED_SUBSET_PASS`, with no failed conjunct.
+Its native D03 maxima are Main63.671ms, turnover112.213ms and ordinary FIFO
+8.636ms. All32 peers conserve2092432666B accepted=first-sent=ACKed=retired;
+terminal release, outstanding debt and open grants are0.
+
+All96 healthy recovery cohorts retain ten RPC/Event results and the immutable
+deadline. Maximum server cessation-to-receipt times are5.449543s gameplay,
+2.620571s structural and5.420156s mixed, below the unchanged20s limit.
+Gameplay/mixed first cohorts remain UNPROVEN and their second cohorts qualify;
+no failed attempt is relabeled. Structural ordinary notices arrive33.663–
+62.304ms after cessation, while exact client final Names complete15.208642–
+17.156190s later. The separate758425155B structural reference has a32.848300s
+bound; causal first complete-prefix convergence is17.143725s. GRPL marker
+arrival and notice submission/native dispatch are not separately timestamped.
+
+All7302 recorded eligible episodes complete, with maximum96.729ms. The broad
+admission request-wait counter1.346241s includes time before independent
+eligibility and does not replace that proof. This run contains no source-empty
+eligible endings or carried replacements: those branches retain their focused
+deterministic/production-fixture qualification, not invented native coverage.
+A5 and all older failures remain unchanged. Exact hashes and scope are in
+[ownership decision section28](../../devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#28-a7-native-d03-qualification-checkpoint-2026-10-13).
+
+This qualifies the same-host native subset only. The incoming qualifier-only
+analyzer/pin child is separate from native source A7. Same-source four-client,
+canonical physical Local32, real-TLS Node32 and final acceptance remain
+unqualified. Controller RAM around4.97GiB is below the full32 client8GiB floor;
+it does not prevent the bounded four-client prerequisite. **KI-006 OPEN; PR6
+draft; Foundation3L not complete; no3M or merge.**
 
 ### Independent service-recovery notification — 2026-10-13
+
+The following A5/A6 checkpoint precedes A7's qualification above; its original
+failed verdicts and then-unqualified corrections are retained.
 
 Source `19f9f57a11dd7627b20bf4d5f42e0358618eabeb` (A5), run
 `541d1719-2a70-4655-b9f4-afce45e15521`, remains **FAIL**. Its original107

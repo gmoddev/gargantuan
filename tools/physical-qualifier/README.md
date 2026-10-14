@@ -31,10 +31,17 @@ completion failure/evidence flags. `Replay(..., ExpectedContract="HYBRID_F1_V1")
 requires that exact schema and all endpoint identities; a legacy PASS cannot
 substitute. The default replay and probe command remain strict legacy `F1`.
 `stage --contract` and config `ServiceContract` must match the pinned
-`PHASE1_CONTRACT`. The current deployment pins remain historical `F1`: hybrid
-staging is rejected until a freshly qualified exact-source probe/archive/runtime
-and closed native dependency manifest are pinned together. No installed
-coordinator service or historical manifest is changed by this scope migration.
+`PHASE1_CONTRACT`. Phase 1 staging now selects `HYBRID_F1_V1` and the
+[A7 manifest](phase1-hybrid-5a2e735c9-source-manifest.json): native source
+`5a2e735c96dd2a7983681a090a4610b90772d368`, archive SHA-256
+`3AF332431D63AFA269084BC290A3A56383DC1F644A2CD4901684384CEDCA4502`, and
+probe SHA-256 `70CF49A6B1947558BC2639E514E908DE5CEE44AA0A7AC9E5AF46BAC0093AFB3C`.
+Its five measured native DLLs and twelve runtime assets are pinned together.
+The native build and its hosted CI remain A7; this later qualifier-only child
+pins those existing bytes and has separate tooling provenance. No self-referential
+source/archive hash is required. Hybrid four-client physical qualification,
+Local32, Node32 and final 3L acceptance are not established by this pin change.
+No installed coordinator service or historical manifest is changed.
 
 CI selects the hybrid four-grant and funded-ACK fixtures and uploads an exact
 `qualification-contract.txt` marker. Official package evidence carries that
@@ -69,13 +76,13 @@ F1 native-source archive SHA-256
 `18AF89DAEEF3D5DD8E1AC6ED7089EDBEF278990AA211CBB4E54BCF3555D846FB`,
 and Windows probe SHA-256
 `925DC0684787B1D629901D5047FF9ECC968AFC5F4E579DE576F701322E9BB99F`.
-The [F1 manifest](phase1-f1-source-manifest.json) also pins all twelve runtime
+The [historical ce4733 F1 manifest](phase1-f1-ce4733-source-manifest.json) also pins all twelve runtime
 assets and the two native DLLs required beside the probe executable; the Phase 1
 adapter checks their hashes and rejects the earlier D01
 candidate. [Generate the archive](make_f1_source_archive.py) with
-`python tools/physical-qualifier/make_f1_source_archive.py <output.zip>` from
-the pinned native source. Use `--verify-pinned <archive.zip>` to compare the
-archive with the historical source revision; `--verify-tree <archive.zip>
+`python tools/physical-qualifier/make_f1_source_archive.py --legacy <output.zip>` from
+the pinned native source. Use `--legacy --verify-pinned <archive.zip>` to compare the
+archive with the historical source revision; `--legacy --verify-tree <archive.zip>
 <source-root>` checks a separate build tree. The candidate bundle is staged
 separately from installed tools; endpoint artifact, capture, evidence-root and
 normal-LAN preflights remain required before an authorized physical attempt.
@@ -371,7 +378,8 @@ by this offline analysis path; its contents are not evidence of analyzer custody
 ## New F1 candidate source provenance
 
 The `make_f1_source_archive.py output.zip`, `--verify-pinned`, and `--verify-tree`
-modes select the format in the pinned manifest. Prefix those arguments with
+modes select the A7 hybrid manifest and reproduce the tested native A7 source,
+even when invoked from the later qualifier-only child. Prefix those arguments with
 `--legacy` to reproduce or verify the historical 31-file ce4733 archive using
 `phase1-f1-ce4733-source-manifest.json`. That historical inventory cannot claim
 coverage of newer native execution. Explicit candidate modes accept an
@@ -415,8 +423,8 @@ For a new candidate, create a new versioned source manifest and bundle. Update
 files together. Endpoint preflight still checks the externally pinned archive
 hash first, then dispatches only the pinned format and validates its complete
 embedded inventory against the pinned commit. `package.py` includes the new
-verifier beside both qualifier entrypoints. The current committed legacy pins
-remain unchanged and intentionally reject an unpinned new candidate.
+verifier beside both qualifier entrypoints. Historical legacy manifests remain
+unchanged; the current Phase 1 pins require the measured A7 hybrid candidate.
 The archive identifies the chosen native build commit. A later qualifier-only
 commit may pin that build's measured artifacts; its separately hashed qualifier
 bundle is the endpoint tooling provenance. Do not attempt a self-referential

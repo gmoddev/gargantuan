@@ -85,6 +85,28 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-13 — A7 native D03 subset PASS; physical closeout remains open.**
+Exact source `5a2e735c96dd2a7983681a090a4610b90772d368` passes all eight
+original hosted CI jobs and canonical CI/package replay. Sole native32 run
+`6aa1c66f-35e2-45c9-8f92-1c7761705641` completes284.656s/exit0; strict
+whole replay is `MEASURED_SUBSET_PASS`, failures[]. Main63.671ms,
+turnover112.213ms and FIFO8.636ms pass unchanged D03. Accepted, first-sent,
+ACKed and retired all equal2092432666B, with0 terminal release/debt/open grants.
+All7302 eligible episodes complete, maximum96.729ms. The broad1.346241s
+request-wait counter includes pre-eligibility time; it is not that deadline.
+No source-empty ending or replacement occurs in this run; focused regressions
+qualify those branches separately.
+
+All96 recovery service receipts pass the unchanged server20s limit: maxima
+5.449543s gameplay,2.620571s structural,5.420156s mixed. Structural causal
+first complete prefix758425155B converges17.143725s within32.848300s.
+Original A5 FAIL and unknown disposal remain unchanged. See ownership section28
+for sealed evidence, actual rejected initial cohorts and measurement limits.
+Incoming qualifier-only pin/analyzer child does not change A7's native identity
+or prove physical results. Same-source four-client, Local32, real-TLS Node32 and
+final acceptance remain UNQUALIFIED; controller RAM around4.97GiB is below
+the full32 client8GiB floor. **KI-006 OPEN; PR6 draft; no3L closure or3M.**
+
 **2026-10-13 — A5 FAIL: service enrollment waits behind structural convergence.**
 Source `19f9f57a11dd7627b20bf4d5f42e0358618eabeb`, native32 run
 `541d1719-2a70-4655-b9f4-afce45e15521`, remains FAIL (270.25544s/exit1), sealed
