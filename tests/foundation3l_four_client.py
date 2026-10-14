@@ -32,7 +32,12 @@ FIELDS = ("simulation_step,slot,generation,consumed_us,feedback_us,present,valid
           "last_completed_max_run_deficit_byte_us,last_completed_failed,retry,pending,unacked,retirement_sequence,"
           "retired_token,result_retired_bytes,grants,total_debt,created,retired,terminal,delta_first,delta_ack,"
           "delta_retry,backend_ns,queue_us,rate").split(",")
-HYBRID_FIELDS = FIELDS + ["completion_failed", "last_completion_failed", "completion_evidence_invalid"]
+HYBRID_FIELDS = FIELDS + ["completion_failed", "last_completion_failed", "completion_evidence_invalid",
+    "observation_ordinal", "observation_point", "native_state", "counters_valid", "cleanup", "result_terminal",
+    "execution_rejected", "invalid_after", "execution_failed", "main_failed", "turnover_failed", "ordinary_failed"]
+ACCOUNTING_FIELDS = {"simulation_step", "slot", "generation", "consumed_us", "debt_token", "debt_bytes",
+                    "journal_lag", "accepted_structural", "grants", "total_debt", "created", "retired", "terminal",
+                    "backend_ns", "queue_us", "rate", "valid"}
 
 
 def Require(Condition, Message):
@@ -118,7 +123,10 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None, ExpectedContract="F1"
     if Hybrid:
         Require(Summary.get("contract") == ExpectedContract and
                 Curve.get("completion_budget_byte_us") == str(COMPLETION_BUDGET) and
-                Curve.get("native_completion_invalid") == "0", "hybrid native certificate missing/invalid")
+                        Curve.get("native_completion_invalid") == "0", "hybrid native certificate missing/invalid")
+        Require(Curve.get("trace_format") == "HYBRID_OBSERVATION_V2", "hybrid observation identity missing")
+        LiveCut = UInt(Curve.get("live_cut_ordinal", "0"))
+        Require(LiveCut > 0, "successful live campaign cut missing")
     Admission = One(Text, "Admission")
     Require(all(Admission.get(Key) == "0" for Key in ("terminal", "outstanding", "grants")) and
             Admission.get("accepted") == Admission.get("retired") and Admission.get("grants_high_water") == "4",
@@ -154,6 +162,18 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None, ExpectedContract="F1"
         Require(Boundary == {"format": "F1_ACCEPTED_ACTIVATION_V1", "records": str(len(Admitted))},
                 "admission record count differs from native summary")
     Peers = {}
+    AdmissionPrefixes = {}
+    if Hybrid and AdmissionsCsv is not None:
+        for Slot in Identity:
+            Total = 0
+            AdmissionPrefixes[Slot] = {0: []}
+            Prefix = []
+            for Key, Value in Admitted.items():
+                if Key[0] != Slot:
+                    continue
+                Total += Value["bytes"]
+                Prefix = [*Prefix, Value]
+                AdmissionPrefixes[Slot][Total] = Prefix
     Completed = {}
     Grants = {}
     Retired = set()
@@ -161,17 +181,32 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None, ExpectedContract="F1"
     Rows = 0
     SeenSamples = set()
     PreviousGlobal = None
+    PreviousAccounting = {}
     with Path(ServerCsv).open(encoding="utf-8-sig", newline="") as Stream:
         Reader = csv.DictReader(Stream)
         Require(Reader.fieldnames == (HYBRID_FIELDS if Hybrid else FIELDS), "native CSV schema mismatch")
         for Raw in Reader:
             Rows += 1
             Require(Rows <= MAX_ROWS and None not in Raw and all(V is not None for V in Raw.values()), "truncated/oversized CSV")
-            Row = {Key: UInt(Value) for Key, Value in Raw.items()}
+            Row = {Key: (-1 if Hybrid and Key in ("queue_us", "rate") and Value == "-1" else UInt(Value))
+                   for Key, Value in Raw.items()}
             Slot = Row["slot"]
             Sample = (Row["simulation_step"], Slot)
-            Require(Sample not in SeenSamples, "duplicate native snapshot")
-            SeenSamples.add(Sample)
+            if Hybrid:
+                Require(Row["observation_ordinal"] == Rows and Row["observation_point"] in range(4),
+                        "missing/duplicate/reordered observation ordinal or point")
+                Require(Row["cleanup"] == int(Rows > LiveCut), "cleanup crossed successful live cut")
+                Require(all(Row[K] in (0, 1) for K in ("present", "valid", "available", "qualified", "counters_valid",
+                        "cleanup", "result_terminal", "execution_rejected", "invalid_after", "execution_failed",
+                        "main_failed", "turnover_failed", "ordinary_failed")), "invalid observation boolean")
+                Require(Row["valid"] == 1 and all(Row[K] == 0 for K in ("execution_rejected", "invalid_after",
+                        "execution_failed", "main_failed", "turnover_failed", "ordinary_failed")),
+                        "fatal owner or D03 execution/ordinary failure")
+                Require(Row["completion_failed"] == Row["last_completion_failed"] ==
+                        Row["completion_evidence_invalid"] == 0, "latched native completion failure")
+            else:
+                Require(Sample not in SeenSamples, "duplicate native snapshot")
+                SeenSamples.add(Sample)
             Require(Slot in Identity and Row["generation"] == UInt(Identity[Slot]["generation"]), "generation/slot mismatch")
             Require(Row["grants"] <= 4 and Row["terminal"] == 0 and Row["retired"] <= Row["created"] and
                     Row["created"] - Row["retired"] == Row["total_debt"], "row debt conservation failed")
@@ -179,6 +214,63 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None, ExpectedContract="F1"
                 Require(all(Row[K] >= PreviousGlobal[K] for K in ("simulation_step", "consumed_us", "created", "retired")),
                         "global counters regressed")
             PreviousGlobal = Row
+            if Hybrid:
+                Accounting = PreviousAccounting.get(Slot)
+                Require(Accounting is None or Row["accepted_structural"] >= Accounting["accepted_structural"],
+                        "accepted accounting regressed")
+                PreviousAccounting[Slot] = Row
+                # Every accepted owner row remains evidence, including a null
+                # native result. It cannot replace or refresh a native snapshot.
+                Token = Row["debt_token"]
+                if Token:
+                    Key = (Slot, Token)
+                    Require(0 < Row["debt_bytes"] <= GROUP and Key not in Retired and
+                            (Key not in Grants or Grants[Key] == Row["debt_bytes"]), "invalid/reused accepted token")
+                    Grants[Key] = Row["debt_bytes"]
+                    if AdmissionsCsv is not None:
+                        Require(Key in Admitted and Admitted[Key]["bytes"] == Row["debt_bytes"],
+                                "unrecorded/changed accepted obligation")
+                if AdmissionsCsv is not None:
+                    Require(Row["accepted_structural"] in AdmissionPrefixes[Slot], "accepted accounting has no exact admission prefix")
+                    Prefix = AdmissionPrefixes[Slot][Row["accepted_structural"]]
+                    Require(all(A["activated_us"] == 2**64 - 1 or A["activated_us"] <= Row["consumed_us"] for A in Prefix),
+                            "accepted accounting precedes qualified admission")
+                else:
+                    Require(Row["accepted_structural"] == sum(V for K, V in Grants.items() if K[0] == Slot),
+                            "accepted accounting differs from observed exact grants")
+                if Row["cleanup"]:
+                    Require(Slot in Peers and Row["accepted_structural"] == Peers[Slot]["accepted_structural"] and
+                            Row["debt_token"] == Row["debt_bytes"] == Row["result_retired_bytes"] ==
+                            Row["grants"] == Row["total_debt"] == 0, "cleanup has new or unresolved ownership")
+                if not Row["present"]:
+                    Require(Row["native_state"] == 255 and Row["counters_valid"] == 0 and
+                            Row["available"] == Row["qualified"] == Row["result_terminal"] ==
+                            Row["result_retired_bytes"] == Row["delta_first"] == Row["delta_ack"] == Row["delta_retry"] == 0,
+                            "null accounting claimed native evidence")
+                    Require(all(Row[K] == 0 for K in FIELDS if K not in ACCOUNTING_FIELDS),
+                            "null accounting contains fabricated native fields")
+                    continue
+                Require(Row["native_state"] in range(5) and 0 <= Row["consumed_us"] - Row["feedback_us"] <= 50_000,
+                        "native feedback future/stale or invalid state")
+                Require(Row["completion_failed"] == Row["last_completion_failed"] ==
+                        Row["completion_evidence_invalid"] == 0, "latched native completion failure")
+                if Row["cleanup"]:
+                    Require(Row["native_state"] in (2, 3, 4) and
+                            Row["result_terminal"] == int(Row["native_state"] == 4) and
+                            Row["delta_first"] == Row["delta_ack"] == Row["delta_retry"] == 0,
+                            "cleanup cannot certify new native service")
+                    Require((Row["available"] == Row["qualified"] == 1) if Row["native_state"] == 2 else
+                            (Row["available"] == Row["qualified"] == 0), "cleanup state/availability mismatch")
+                    Require(Row["counters_valid"] == 1 or Row["native_state"] == 4 and Row["result_terminal"] == 1,
+                            "cleanup invalid counters require exact closed terminal receipt")
+                    if Row["counters_valid"]:
+                        Require(Row["structural_first"] == Peers[Slot]["structural_first"] and
+                                Row["structural_ack"] == Peers[Slot]["structural_ack"] and
+                                Row["active_grant_bytes"] == Row["pending"] == 0,
+                                "cleanup native totals differ from certified live cut")
+                    continue
+                Require(Row["available"] == Row["qualified"] == Row["counters_valid"] == 1 and
+                        Row["native_state"] == 2 and Row["result_terminal"] == 0, "native service observation unavailable/invalid")
             Previous = Peers.get(Slot)
             if Previous:
                 # SyncStructuralGrant accumulates elapsed deltas and takes a
@@ -188,6 +280,14 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None, ExpectedContract="F1"
                 Require(all(Row[K] >= Previous[K] for K in ("feedback_us", "structural_first", "structural_ack",
                         "running_us", "max_run_deficit_byte_us", "retry", "accepted_structural", "retirement_sequence")),
                         "native cumulative counters regressed")
+                if Hybrid:
+                    Require(Row["last_completed_token"] >= Previous["last_completed_token"], "native completed certificate disappeared")
+                    Require(Row["delta_first"] == Row["structural_first"] - Previous["structural_first"] and
+                            Row["delta_ack"] == Row["structural_ack"] - Previous["structural_ack"] and
+                            Row["delta_retry"] == Row["retry"] - Previous["retry"], "native deltas changed across accounting rows")
+            elif Hybrid:
+                Require(Row["delta_first"] == Row["delta_ack"] == Row["delta_retry"] == 0,
+                        "initial native snapshot claimed invented deltas")
             Require(Row["structural_ack"] <= Row["structural_first"] <= Row["accepted_structural"] and
                     Row["structural_first"] - Row["structural_ack"] <= GROUP, "native first-send/ACK conservation failed")
             if Hybrid:
@@ -252,6 +352,8 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None, ExpectedContract="F1"
                 Retired.add(Key)
             Peers[Slot] = Row
     Require(Rows == UInt(Summary["samples"]) and Rows > 0, "CSV row count differs from sealed native summary")
+    if Hybrid:
+        Require(LiveCut <= Rows, "successful live cut exceeds observed prefix")
     Require(len(Peers) == 4 and set(Grants) == Retired and set(Completed) <= Retired, "missing/unretired grant evidence")
     if AdmissionsCsv is not None:
         Require(set(Admitted) == set(Grants) and all((Key in Completed) == (A["activated_us"] != 2**64 - 1)

@@ -89,16 +89,24 @@ class FourClientTests(unittest.TestCase):
 
     def HybridFixture(self):
         Rows = copy.deepcopy(self.Rows)
-        for Row in Rows:
+        Previous = {}
+        for Ordinal, Row in enumerate(Rows, 1):
             Row.update(completion_failed=0, last_completion_failed=0, completion_evidence_invalid=0,
                        service_failed=1, last_completed_failed=int(Row["last_completed_token"] != 0),
                        max_run_deficit_byte_us=Replay.RUN_BOUND + 1,
-                       last_completed_max_run_deficit_byte_us=Replay.RUN_BOUND + 1 if Row["last_completed_token"] else 0)
+                       last_completed_max_run_deficit_byte_us=Replay.RUN_BOUND + 1 if Row["last_completed_token"] else 0,
+                       observation_ordinal=Ordinal, observation_point=0, native_state=2, counters_valid=1,
+                       cleanup=0, result_terminal=0, execution_rejected=0, invalid_after=0,
+                       execution_failed=0, main_failed=0, turnover_failed=0, ordinary_failed=0)
+            Before = Previous.get(Row["slot"], Row)
+            Row.update(delta_first=Row["structural_first"] - Before["structural_first"],
+                       delta_ack=Row["structural_ack"] - Before["structural_ack"], delta_retry=Row["retry"] - Before["retry"])
+            Previous[Row["slot"]] = Row
         Text = self.Text.replace("contract=F1", "contract=HYBRID_F1_V1").replace(
             "pool_curve=derived-from-four-native-grant-curves", "pool_curve=diagnostic-four-grant-overlap").replace(
             "role=server nonce=", "role=server contract=HYBRID_F1_V1 nonce=").replace(
             "max_run_deficit_byte_us=1000", f"max_run_deficit_byte_us={Replay.RUN_BOUND + 1}").replace(
-            "pool_episodes=32", f"pool_episodes=32 completion_budget_byte_us={Replay.COMPLETION_BUDGET} native_completion_invalid=0")
+            "pool_episodes=32", f"pool_episodes=32 completion_budget_byte_us={Replay.COMPLETION_BUDGET} native_completion_invalid=0 trace_format=HYBRID_OBSERVATION_V2 live_cut_ordinal={len(Rows)}")
         return Rows, Text
 
     def test_hybrid_accepts_legacy_deficit_diagnostic_only(self):
@@ -106,6 +114,99 @@ class FourClientTests(unittest.TestCase):
         Result = self.RunNative(Rows, Text, "HYBRID_F1_V1")
         self.assertEqual(Result["Contract"], "HYBRID_F1_V1")
         self.assertEqual(Result["PoolProof"], "LEGACY_DIAGNOSTIC")
+
+    def InterleavedHybrid(self):
+        Native, Text = self.HybridFixture()
+        Rows = []
+        for Row in Native:
+            Rows.append(Row)
+            Null = {K: Row[K] if K in Replay.ACCOUNTING_FIELDS else 0 for K in Replay.HYBRID_FIELDS}
+            Null.update(valid=1, native_state=255, observation_point=2, queue_us=-1, rate=-1)
+            Rows.append(Null)
+        for Ordinal, Row in enumerate(Rows, 1):
+            Row["observation_ordinal"] = Ordinal
+        Text = Text.replace(f"samples={len(Native)}", f"samples={len(Rows)}").replace(
+            f"live_cut_ordinal={len(Native)}", f"live_cut_ordinal={len(Rows)}")
+        return Rows, Text
+
+    def test_hybrid_all_accounting_rows_preserved_without_native_deltas_reset(self):
+        Rows, Text = self.InterleavedHybrid()
+        Result = self.RunNative(Rows, Text, "HYBRID_F1_V1")
+        self.assertEqual(len(Rows), Result["Rows"])
+        self.assertEqual(128, Result["MaximumGrants"])
+        self.assertEqual(Result["Accepted"], Result["Retired"])
+
+    def test_hybrid_null_rows_cannot_claim_native_evidence_or_mask_hard_failure(self):
+        Rows, Text = self.InterleavedHybrid()
+        for Field in ("feedback_us", "structural_first", "last_completed_token", "result_retired_bytes",
+                      "delta_first", "completion_failed", "execution_failed", "main_failed", "turnover_failed",
+                      "ordinary_failed", "execution_rejected", "invalid_after", "terminal"):
+            Bad = copy.deepcopy(Rows)
+            Bad[1][Field] = 1
+            with self.subTest(Field=Field), self.assertRaises(ValueError):
+                self.RunNative(Bad, Text, "HYBRID_F1_V1")
+
+    def test_hybrid_ordinals_and_actual_native_frontier_remain_strict(self):
+        Rows, Text = self.InterleavedHybrid()
+        for Mutation in ("ordinal", "point", "future", "stale", "unavailable", "counters", "unqualified", "delta"):
+            Bad = copy.deepcopy(Rows)
+            if Mutation == "ordinal": Bad[2]["observation_ordinal"] -= 1
+            if Mutation == "point": Bad[2]["observation_point"] = 4
+            if Mutation == "future": Bad[2]["feedback_us"] = Bad[2]["consumed_us"] + 1
+            if Mutation == "stale": Bad[2]["feedback_us"] = Bad[2]["consumed_us"] - 50_001
+            if Mutation == "unavailable": Bad[2]["available"] = 0
+            if Mutation == "counters": Bad[2]["counters_valid"] = 0
+            if Mutation == "unqualified": Bad[2]["qualified"] = 0
+            if Mutation == "delta": Bad[8]["delta_first"] += 1
+            with self.subTest(Mutation=Mutation), self.assertRaises(ValueError):
+                self.RunNative(Bad, Text, "HYBRID_F1_V1")
+
+    def test_hybrid_missing_native_or_retirement_certificate_cannot_pass(self):
+        Rows, Text = self.InterleavedHybrid()
+        # All owner rows can be valid while every native service fact is absent.
+        Bad = [R if not R["present"] else {K: R[K] if K in Replay.ACCOUNTING_FIELDS else 0
+               for K in Replay.HYBRID_FIELDS} for R in copy.deepcopy(Rows)]
+        for Ordinal, Row in enumerate(Bad, 1):
+            Row.update(observation_ordinal=Ordinal, observation_point=0, native_state=255, valid=1)
+        with self.assertRaises(ValueError):
+            self.RunNative(Bad, Text, "HYBRID_F1_V1")
+        for Field in ("structural_ack", "last_completed_token", "last_completed_first_us", "last_completed_finish_us"):
+            Bad = copy.deepcopy(Rows)
+            Bad[-2][Field] = 0
+            with self.subTest(Field=Field), self.assertRaises(ValueError):
+                self.RunNative(Bad, Text, "HYBRID_F1_V1")
+
+    def test_hybrid_final_null_accounting_cannot_add_phantom_accepted_byte(self):
+        Rows, Text = self.InterleavedHybrid()
+        Rows[-1]["accepted_structural"] += 1
+        self.assertEqual(0, Rows[-1]["debt_token"])
+        with self.assertRaisesRegex(ValueError, "accepted accounting"):
+            self.RunNative(Rows, Text, "HYBRID_F1_V1")
+
+    def test_hybrid_cleanup_requires_complete_live_cut_and_exact_owned_totals(self):
+        Rows, Text = self.InterleavedHybrid()
+        Last = {R["slot"]: R for R in Rows if R["present"]}
+        for Slot in range(1, 5):
+            Row = copy.deepcopy(Last[Slot])
+            Row.update(observation_ordinal=len(Rows) + 1, observation_point=3, cleanup=1,
+                       consumed_us=Rows[-1]["consumed_us"] + 1, native_state=4, available=0, qualified=0,
+                       result_terminal=1, result_retired_bytes=0, delta_first=0, delta_ack=0, delta_retry=0,
+                       created=Rows[-1]["created"], retired=Rows[-1]["retired"], total_debt=0, grants=0)
+            Row["feedback_us"] = Row["consumed_us"]
+            Rows.append(Row)
+        Text = Text.replace("samples=768", "samples=772")
+        self.RunNative(Rows, Text, "HYBRID_F1_V1")
+        for Mutation in ("early", "missing", "terminal", "first", "ack", "invalid_connected", "connected_unavailable"):
+            Bad, BadText = copy.deepcopy(Rows), Text
+            if Mutation == "early": BadText = BadText.replace("live_cut_ordinal=768", "live_cut_ordinal=1")
+            if Mutation == "missing": BadText = BadText.replace("live_cut_ordinal=768", "live_cut_ordinal=0")
+            if Mutation == "terminal": Bad[-1]["terminal"] = 1
+            if Mutation == "first": Bad[-1]["structural_first"] += 1
+            if Mutation == "ack": Bad[-1]["structural_ack"] -= 1
+            if Mutation == "invalid_connected": Bad[-1].update(native_state=2, result_terminal=0, available=1, qualified=1, counters_valid=0)
+            if Mutation == "connected_unavailable": Bad[-1].update(native_state=2, result_terminal=0)
+            with self.subTest(Mutation=Mutation), self.assertRaises(ValueError):
+                self.RunNative(Bad, BadText, "HYBRID_F1_V1")
 
     def test_hybrid_fatal_completion_flags_and_deadline(self):
         Rows, Text = self.HybridFixture()

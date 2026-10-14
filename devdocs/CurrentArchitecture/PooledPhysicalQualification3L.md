@@ -1,12 +1,12 @@
 ---
-status: f1-phase1-pass-later-gates-pending
+status: historical-f1-phase1-pass-hybrid-physical-pending
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-10-06
+last_verified: 2026-10-14
 ---
 
 # Foundation 3L pooled physical qualification attempt
 
-## Current qualification scope — 2026-10-13
+## Current qualification scope — 2026-10-14
 
 The product-authorized D03 `HYBRID_F1_V1` scope amendment removes the raw D01
 packet-scale running curve as a standard-profile release predicate. Fresh
@@ -18,6 +18,12 @@ gameplay, resources, backpressure and recovery/convergence. Existing legacy
 profiles and all failures/PASS receipts below retain their original scope.
 The amendment alone establishes no new physical result. KI-006 remains OPEN;
 PR6 draft, no3M or merge.
+
+A7's same-host native32 subset and hosted CI/package pass. The fresh control
+prerequisite passes; the subsequent A7 four-client attempt remains FAIL on a
+demonstrated observer classification defect. See the
+[current physical continuation](#d03-a7-four-client-continuation-2026-10-14).
+Neither result supplies Local32, real-TLS Node32 or final physical acceptance.
 
 ## Bounded investigation stops for networking architecture review (2026-10-09)
 
@@ -3872,3 +3878,85 @@ sockets; both capture services are running and idle. Original evidence remains
 under the existing endpoint evidence parents with this UUID. The failed outer
 receipt remains unchanged. No production/provider run or Foundation 3L PASS is
 claimed by this synthetic infrastructure exercise.
+
+## D03 A7 four-client continuation (2026-10-14)
+
+Native source A7 is `5a2e735c96dd2a7983681a090a4610b90772d368`.
+Qualifier-only B2 is `372cb83cd72bd241ced43feb9865ddf2305b8f97`; its
+closed package SHA256 is
+`67627050dfec9ead90cbaf40f0d454d46f824ee7b2979af1da231304488ca777`.
+These identities remain separate. A7's native32 and hosted CI/package subset
+PASS does not qualify physical delivery or either provider campaign.
+
+Fresh control run `3f1df06a-2e89-4db8-8809-91cb6dad7df9`, lifecycle
+`20009b7c-2e72-4bc4-b0bf-2938f58d5e4d`, passes both actual evidence
+preflights, forward/reverse tunnel proofs and the control-only lifecycle in
+25.1684134s. This is **CONTROL_PREFLIGHT_ONLY**, with no native or capture
+qualification. Its final receipt SHA256 is
+`ea32973333cfc1b5e750fec60247da5a6bab3464ff0462bab47e9578911566ac`.
+The controller independently verifies all99 mirrored files/34366586B.
+
+The first cleanup stop falsely rejected the matching client daemon: PowerShell
+7.6.5 `ConvertFrom-Json` converted its recorded ISO timestamp to `DateTime`,
+so the exact string comparison used a locale representation. Actual PID44784,
+executable, command line and creation timestamp matched the ownership marker.
+The external stop helper now parses only that marker with `-DateKind String`;
+the exact timestamp, PID, image, wrapper, stage hash, port and task checks are
+unchanged. Same timestamp and changed-timestamp regressions pass, and an
+independent review finds no weakened guard. Failed stop/rollback outputs remain
+preserved. Both endpoints subsequently stop and restore their baselines.
+
+Fresh physical run `237be7c6-2c47-42d2-96cc-0f06664116b9`, lifecycle
+`a152c1cd-1205-4df6-9a41-5c583c94fe0d`, remains **FAIL**. Its sole bounded
+attempt exits1 after36.0701401s. Server classification is
+`D-feedback-or-attribution`, `invalid=1`, `floor_failure=0`,
+`native_completion_invalid=0`; clients report the server connection closed.
+The retained legacy deficits do not exceed their old threshold. Four maximum
+grants remain incomplete; their2097152B terminal release after abort is not
+service, ACKed delivery or retirement.
+
+The first invalid witness is original server CSV line5067/data ordinal5066:
+tick510, connection1:1, consumed1472891222935us, no feedback, valid accounting,
+unavailable service, bootstrap accepted6429B and no structural debt. It precedes
+the new maximum grants. Production `ObserveOrdinaryQueue` deliberately emits
+valid accounting observations without a native snapshot; the Phase1 observer
+incorrectly requires every record after demand starts to contain fresh native
+feedback. This is a demonstrated fixture classification defect. The old CSV
+does not record the observation point or native state, so the exact emit site
+and later unavailable cleanup rows are source inferences, not measured labels.
+No scheduling, native-completion or platform failure is attributed by this run.
+
+Strict existing replay rejects the original failed native result. Failed-run
+receipt SHA256 is
+`d6a2737158f1fd540435667baaece6267b4daf3242c0123704024fc1ac05778b`;
+original CSV SHA256 is
+`b17ef17cfbf54d30c9fd86c25b7b693844d0394f646266592e7db96d7040465d`.
+The controller independently verifies111 mirrored files/49897198B, including
+both worker capture formats. Both endpoint baselines and all33 original worker
+files are restored; relevant listeners/UDP, owned tasks/processes and capture
+are clear. A focused fixture correction is pending qualification; it cannot
+reinterpret this failed run as PASS. Local32, real-TLS Node32, physical provider
+parity and final acceptance remain unqualified. KI-006 OPEN; PR6 draft; no3M.
+
+### Focused observer correction awaiting native qualification
+
+The HYBRID-only fixture uses `HYBRID_OBSERVATION_V2`: all bounded raw rows have
+sequential ordinal, existing observation point, native state, counter-validity,
+cleanup phase and fatal owner/D03 flags. A valid null accounting row retains
+acceptance/debt without advancing any native clock, counters or certificate.
+Only genuine fresh connected native observations update the separate native
+history and exact deltas. Every bookkeeping acceptance value must have an exact
+recorded per-peer admission prefix. Missing snapshots cannot certify retirement
+or satisfy the complete bounded campaign.
+
+Only a successfully completed live run with all required native certificates,
+ACK/retirement and zero owned debt can mark the cleanup cut. Later owned close
+rows remain retained; they cannot add service or alter certified totals. Early
+close, terminal release, invalid connected counters, changed timestamps/counters
+and retained D03 failures remain fatal, including the final process exit.
+The37324.3865966796875us native certificate budget and all other D03 constants
+are unchanged. Legacy F1 observer, schema and contract semantics remain strict.
+This changes qualification code only; no provider, admission or runtime-health
+code changes. Python replay30tests and final conjunction50tests pass locally.
+The changed native self-test, hosted CI and fresh physical attempt are still
+pending; no corrected native or physical PASS is claimed by this patch.

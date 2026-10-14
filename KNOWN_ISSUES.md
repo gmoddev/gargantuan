@@ -85,6 +85,23 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-14 — Control PASS; A7 four-client FAIL on observer classification.**
+Fresh control-only run `3f1df06a-2e89-4db8-8809-91cb6dad7df9` passes actual
+endpoint preflights and lifecycle/tunnel checks. Fresh physical run
+`237be7c6-2c47-42d2-96cc-0f06664116b9` remains FAIL: the first invalid row is
+valid accounting without native feedback, before the first maximum grants.
+The Phase1 observer incorrectly treats every demand-time record as a native
+snapshot. Production ordinary-accounting records deliberately omit snapshots;
+missing evidence cannot certify completion. No native timing/platform cause is
+established before this fixture abort. Strict replay still rejects the run;
+all raw captures/logs and original verdicts are preserved. Both endpoints and
+all33 worker originals are restored; owned ports/processes/capture are clear.
+See the [physical continuation receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#d03-a7-four-client-continuation-2026-10-14).
+The focused fixture correction requires fresh qualification. Controller free
+RAM5089472512B at01:58:58Z remains below the full32 floor8589934592B.
+Four-client, Local32, real-TLS Node32 and final acceptance remain unqualified.
+**KI-006 OPEN; PR6 draft; no3L closure,3M or merge.**
+
 **2026-10-13 — A7 native D03 subset PASS; physical closeout remains open.**
 Exact source `5a2e735c96dd2a7983681a090a4610b90772d368` passes all eight
 original hosted CI jobs and canonical CI/package replay. Sole native32 run

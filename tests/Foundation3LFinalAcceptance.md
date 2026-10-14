@@ -1,7 +1,7 @@
 ---
 status: current
 owner: qualification
-last_verified: 2026-10-13
+last_verified: 2026-10-14
 related_code:
   - tests/foundation3l_acceptance.py
   - tests/test_foundation3l_acceptance.py
@@ -9,6 +9,22 @@ related_code:
 ---
 
 # Final Foundation 3L evidence conjunction
+
+## Current physical checkpoint (2026-10-14)
+
+Control-only run `3f1df06a-2e89-4db8-8809-91cb6dad7df9` passes its actual
+endpoint preflights and lifecycle. Subsequent four-client physical run
+`237be7c6-2c47-42d2-96cc-0f06664116b9` remains FAIL; strict replay rejects
+its failed native result. The first invalid record is legal null-feedback
+accounting before the first maximum grants, incorrectly classified by the
+probe as missing native service. The focused HYBRID fixture correction retains
+every observation, separate genuine native evidence and an explicit verified
+live-completion cut before owned cleanup. It requires fresh qualification;
+old rows without phase/state/ordinal cannot be retrospectively recertified.
+See the [physical receipt](../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#d03-a7-four-client-continuation-2026-10-14).
+Legacy F1 semantics and all existing D03 deadlines remain unchanged. Current
+source four-client, Local32, real-TLS Node32 and final acceptance are unqualified.
+KI-006 OPEN; PR6 draft; no3M or merge.
 
 ## Current measured scope — A7 native subset (2026-10-13)
 

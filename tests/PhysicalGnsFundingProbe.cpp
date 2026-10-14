@@ -362,6 +362,8 @@ struct Probe {
 				<< " pool_curve=" << (Samples.Hybrid ? "diagnostic-four-grant-overlap" : "derived-from-four-native-grant-curves")
 				<< " completion_budget_byte_us=" << NativeGrantCompletionCurve::CompletionBudgetByteMicroseconds
 				<< " native_completion_invalid=" << Samples.NativeCompletionInvalid
+				<< (Samples.Hybrid ? " trace_format=HYBRID_OBSERVATION_V2 live_cut_ordinal=" : "")
+				<< (Samples.Hybrid ? std::to_string(Samples.LiveCutOrdinal) : std::string{})
 				<< " demand_rows=" << DemandRows << " four_grant_debt_rows=" << FourGrantDebtRows
 				<< " verdict=" << (Samples.Passed() ? "PASS" : "FAIL")
 				<< " failure_class=" << (Samples.Passed() ? "none" : FailureClass.empty() ? Cause : FailureClass) << '\n';
@@ -462,7 +464,18 @@ void SelfTest() {
 				R.Feedback->LastCompletedStructuralSegmentEvents[0] = {Start + 6000, 100'000};
 				R.Feedback->LastCompletedStructuralSegmentEvents[1] = {Start + 31'000, GroupBytes - 100'000};
 			}
-			R.Result.Valid = true; R.Result.Available = !Stale; R.Result.Qualified = !Slow && !Stale;
+			if (T.Hybrid && Wave > 1 && Point != 2) {
+				const auto &Before = *T.GetPeer(Id)->NativePrevious.Sample.Feedback;
+				R.Feedback->StructuralLastCompletedGrantToken = Before.StructuralLastCompletedGrantToken;
+				R.Feedback->StructuralLastCompletedGrantBytes = Before.StructuralLastCompletedGrantBytes;
+				R.Feedback->StructuralLastCompletedGrantActivatedAtMicroseconds = Before.StructuralLastCompletedGrantActivatedAtMicroseconds;
+				R.Feedback->StructuralLastCompletedGrantFirstSendAtMicroseconds = Before.StructuralLastCompletedGrantFirstSendAtMicroseconds;
+				R.Feedback->StructuralLastCompletedGrantCompletedAtMicroseconds = Before.StructuralLastCompletedGrantCompletedAtMicroseconds;
+				R.Feedback->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds = Before.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds;
+				R.Feedback->LastCompletedStructuralSegmentEventCount = Before.LastCompletedStructuralSegmentEventCount;
+				R.Feedback->LastCompletedStructuralSegmentEvents = Before.LastCompletedStructuralSegmentEvents;
+			}
+			R.Result.Valid = true; R.Result.Available = !Stale; R.Result.Qualified = (T.Hybrid || !Slow) && !Stale;
 			R.Accepted.Structural = Prior + GroupBytes;
 			R.Admission.ActiveDrainGrants = Active ? PeerCount : 0;
 			if (!Active) { R.Result.RetiredToken = Token; R.Result.RetiredBytes = GroupBytes; }
@@ -503,6 +516,81 @@ void SelfTest() {
 			FeedCurve(Hybrid, (W - 1) * 3 + P + 1, W, P, true);
 	Hybrid.Analyze();
 	Require(Hybrid.Passed(), "legacy running deficit invalidated exact hybrid completion");
+	// Owner-accounting boundaries share ticks with native observations. Keep
+	// every row while differences and certificates use only genuine snapshots.
+	{
+		auto Interleaved = std::make_unique<Trace>(); Interleaved->Hybrid = true; Interleaved->Demand = 1;
+		for (unsigned W = 1; W <= 3; ++W) for (unsigned P = 0; P < 3; ++P) {
+			FeedCurve(*Interleaved, W, W, P, true); // Deliberately repeated tick.
+			for (const auto &Peer : Interleaved->Peers) {
+				auto Accounting = Peer.NativePrevious.Sample; Accounting.Feedback.reset();
+				Accounting.NowMicroseconds = Interleaved->Rows.back().Sample.NowMicroseconds;
+				Accounting.Point = detail::PooledObservationPoint::AdmissionComplete;
+				Accounting.Result = {}; Accounting.Result.Valid = true;
+				Trace::Record(Interleaved.get(), Accounting);
+			}
+		}
+		Interleaved->Analyze();
+		Require(Interleaved->Passed() && Interleaved->Rows.size() == 72 &&
+			!Interleaved->Peers[0].Previous.Sample.Feedback && Interleaved->Peers[0].HasNativePrevious &&
+			Interleaved->Peers[0].NativePrevious.FirstDelta == GroupBytes - 100'000 &&
+			Interleaved->Peers[0].NativePrevious.AckDelta == GroupBytes,
+			"null accounting reset genuine native deltas or lost evidence rows");
+		auto Negative = std::make_unique<Trace>(*Interleaved);
+		auto Closed = Interleaved->Peers[0].NativePrevious.Sample;
+		Closed.NowMicroseconds += 1; Closed.Feedback->ObservedAtMicroseconds = Closed.NowMicroseconds;
+		Closed.Point = detail::PooledObservationPoint::PeerTeardown;
+		Closed.Feedback->State = ConnectionState::Closed;
+		Closed.Result = {}; Closed.Result.Valid = Closed.Result.Terminal = true;
+		Trace::Record(Negative.get(), Closed);
+		Require(!Negative->Passed(), "early teardown bypassed successful live campaign cut");
+		Interleaved->BeginCleanup(); Trace::Record(Interleaved.get(), Closed);
+		Require(Interleaved->Passed() && Interleaved->LiveCutOrdinal == 72,
+			"owned zero-debt cleanup erased certified live campaign");
+		for (unsigned Case = 0; Case < 7; ++Case) {
+			*Negative = *Interleaved; auto Bad = Closed; Bad.NowMicroseconds += 1;
+			Bad.Feedback->ObservedAtMicroseconds = Bad.NowMicroseconds;
+			if (Case == 0) Bad.Feedback->StructuralPayloadBytesFirstSent += 1;
+			if (Case == 1) Bad.Feedback->StructuralPayloadBytesAcked -= 1;
+			if (Case == 2) { Bad.Feedback->State = ConnectionState::Connected; Bad.Feedback->CountersValid = false;
+				Bad.Result.Terminal = false; Bad.Result.Available = Bad.Result.Qualified = true; }
+			if (Case == 3) Bad.Admission.TerminalReleasedBytes = 1;
+			if (Case == 4) Bad.Result.ExecutionFailed = true;
+			if (Case == 5) { Bad.Feedback.reset(); Bad.Result = {}; Bad.Result.Valid = true; Bad.Result.MainOpportunityFailed = true; }
+			if (Case == 6) { Bad.Feedback.reset(); Bad.Result = {}; Bad.Result.Valid = true; Bad.Accepted.Structural += 1; }
+			Trace::Record(Negative.get(), Bad);
+			Require(!Negative->Passed(), "cleanup failure escaped final campaign predicate");
+		}
+		*Negative = *Interleaved; auto Terminal = Closed; Terminal.Feedback->CountersValid = false;
+		Trace::Record(Negative.get(), Terminal);
+		Require(Negative->Passed(), "exact closed-terminal counter-invalid exception lost certified prefix");
+	}
+	{
+		auto Native = std::make_unique<Trace>(); Native->Hybrid = true; Native->Demand = 1;
+		FeedCurve(*Native, 1, 1, 0); FeedCurve(*Native, 1, 1, 1);
+		auto Negative = std::make_unique<Trace>();
+		for (unsigned Case = 0; Case < 8; ++Case) {
+			*Negative = *Native; auto Bad = Native->Peers[0].NativePrevious.Sample;
+			Bad.NowMicroseconds += 1; Bad.Feedback->ObservedAtMicroseconds = Bad.NowMicroseconds;
+			if (Case == 0) Bad.Feedback->ObservedAtMicroseconds += 1;
+			if (Case == 1) Bad.Feedback->ObservedAtMicroseconds -= FreshnessUs + 1;
+			if (Case == 2) Bad.Feedback->CountersValid = false;
+			if (Case == 3) Bad.Result.Qualified = false;
+			if (Case == 4) Bad.Feedback->StructuralGrantFirstSendAtMicroseconds += 1;
+			if (Case == 5) { Bad.NowMicroseconds = Bad.Feedback->ObservedAtMicroseconds =
+				Bad.Feedback->StructuralActiveGrantStartedAtMicroseconds + 37'325; }
+			if (Case == 6) { Bad.Feedback.reset(); Bad.Result = {}; Bad.Result.Valid = false; }
+			if (Case == 7) { Bad.Feedback.reset(); Bad.Result = {}; Bad.Result.Valid = true; Bad.Result.TurnoverFailed = true; }
+			Trace::Record(Negative.get(), Bad);
+			Require(Negative->Invalid || Negative->FloorFailure, "invalid native or owner frontier escaped hard failure");
+		}
+		*Negative = *Native;
+		for (const auto &Peer : Native->Peers) {
+			auto Null = Peer.NativePrevious.Sample; Null.Feedback.reset(); Null.Result = {}; Null.Result.Valid = true;
+			Trace::Record(Negative.get(), Null);
+		}
+		Negative->Analyze(); Require(!Negative->Passed(), "missing completion/ACK feedback qualified a live grant");
+	}
 	const auto Certificate = Hybrid.Peers[0].Previous.Sample.Feedback.value();
 	Require(Trace::NativeCompletionPass(Certificate), "exact native BODY certificate rejected");
 	for (unsigned Case = 0; Case < 5; ++Case) {
@@ -546,7 +634,7 @@ void SelfTest() {
 	Require(DuplicateAdmission.Invalid, "duplicate accepted obligation escaped evidence failure");
 	Good.Rows.resize(Trace::Capacity); FeedCurve(Good, 999, 3, 2);
 	Require(Good.Overflow, "trace overflow did not fail closed");
-	std::cout << "[Probe:SelfTest] pass=1 sockets=0 contract=F1,HYBRID_F1_V1 cases=14\n";
+	std::cout << "[Probe:SelfTest] pass=1 sockets=0 contract=F1,HYBRID_F1_V1 cases=34\n";
 }
 }
 int main(int Count, char **Args) {
@@ -581,7 +669,9 @@ int main(int Count, char **Args) {
 		Probe Run(Server, Flag != 0, Server ? 0 : N, {Args[2], static_cast<std::uint16_t>(Port)}, ReadinessSmoke, Server ? static_cast<unsigned>(N) : PeerCount, Hybrid);
 		bool Passed = true;
 		try { Run.Run(); } catch (const std::exception &E) { Passed = false; std::cerr << "[Probe:Failure] " << E.what() << '\n'; }
+		if (Passed && Server) Run.Samples.BeginCleanup();
 		try { Run.Cleanup(); } catch (const std::exception &E) { Passed = false; std::cerr << "[Probe:CleanupFailure] " << E.what() << '\n'; }
+		if (Server && Hybrid) Passed = Passed && Run.Samples.Passed();
 		Run.Report(); std::cout << "[Probe:Result] pass=" << Passed << " scope=Phase1-only\n"; return Passed ? 0 : 1;
 	} catch (const std::exception &E) { std::cerr << "[Probe:Failure] " << E.what() << '\n'; return 1; }
 }

@@ -1,12 +1,21 @@
 ---
 status: review-required-non-normative
 owner: runtime-networking
-evidence_date: 2026-10-12
+evidence_date: 2026-10-14
 ---
 
 # Foundation 3L — execution-domain and native-egress ownership decision
 
-**Current state:** [D03](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md)
+**Current state (2026-10-14):** A7's same-host native32 D03 and hosted
+CI/package subset passes as recorded in section28. Control-only qualification
+passes; the fresh four-client attempt remains FAIL on the legal null-feedback
+accounting-row classification defect recorded in the
+[physical continuation](../CurrentArchitecture/PooledPhysicalQualification3L.md#d03-a7-four-client-continuation-2026-10-14).
+Its native grants remain incomplete; no physical PASS or platform limitation
+is inferred. A focused qualification-only correction is pending. Local32,
+real-TLS Node32 and final acceptance remain open; KI-006 OPEN; PR6 draft.
+
+**Historical e8 implementation checkpoint:** [D03](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md)
 adopts `HYBRID_F1_V1` and exact structural permit ownership. The native
 implementation at `e8c89f4aa575a00510ba8db32544fb12c4a618aa` remains
 qualification-pending: original required CI and manual packaging fail.
