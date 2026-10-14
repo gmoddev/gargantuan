@@ -16,6 +16,7 @@ ROOT = Path(r"C:\Sandbox\Codex\Workspaces\agent-coordinator-foundation-2-client"
 CLIENT_CODEX = Path(r"C:\Users\aiden\AppData\Local\OpenAI\Codex\bin\d375f7df50d3b421\codex.exe")
 CLIENT_PYTHON = Path(r"C:\Python312\python.exe")
 WORKER_ARTIFACT = "C:/Sandbox/Codex/Artifacts/gargantuan-3l-physical"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evidence_gate import CLIENT_SID, WORKER_SID, RequireProof, RequireEvidenceReady
 from lifecycle_tunnel import TunnelSession
 
