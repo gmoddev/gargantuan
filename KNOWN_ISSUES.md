@@ -85,6 +85,23 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-14 — Native32 and corrected four-client PASS; full32 resource blocked.**
+Native execution source3182, qualifier24bfd and offline analyzerdd394 retain
+separate provenance. All eight native-source hosted jobs/package, both six-job
+qualifier/analyzer regressions and independent raw replay pass. Corrected whole
+four-client replay of original run `a9f5e41e-78f3-414f-a742-3115243a5891` is
+`MEASURED_PASS`, SHA256
+`da7b1b93a985bc1c06432efe1b5aca5e845174e34687fbb02c2f1a53d76259da`.
+All128 maximum grants, exact accounting, gameplay/captures/lifecycle and cleanup
+pass; maximum native completion28.962ms. Original reader rejection remains
+preserved; no physical retry occurred. Both endpoint baselines are restored.
+Latest20:57UTC client free RAM4235452416B is below8589934592B; worker20:59UTC
+free disk29550948352B is below the unchanged Farm32 reserve36507222016B.
+The bounded disk audit establishes no safely deletable6.48GiB set with complete
+verified controller copies. No user apps, caches or unverified evidence are
+removed. Local32, real-TLS Node32, provider parity and independent final
+acceptance remain unqualified. **KI-006 OPEN; 3L NOT_COMPLETE; PR6 draft.**
+
 **2026-10-14 — Corrected physical run completed; offline nonce-order fix pending replay.**
 Physical `a9f5e41e-78f3-414f-a742-3115243a5891` completes94.224s/exit0,
 native128-grant V2 subset PASS and both endpoint cleanup PASS. Original whole

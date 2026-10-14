@@ -10,6 +10,24 @@ related_code:
 
 # Final Foundation 3L evidence conjunction
 
+## Latest closeout checkpoint — prerequisite PASS, full32 blocked (2026-10-14)
+
+The current source3182 native subset/official CI package and corrected whole
+four-client run `a9f5e41e-78f3-414f-a742-3115243a5891` pass. Offline analyzer
+dd394 replays the unchanged original run as `MEASURED_PASS`, receipt
+`da7b1b93a985bc1c06432efe1b5aca5e845174e34687fbb02c2f1a53d76259da`;
+controlling-host completion `2026-10-14T05:08:28.676000+00:00`. Original reader
+rejection remains preserved, and qualifier24bfd/analyzerdd394 both pass their
+original six-job source/tool regressions. Native, qualifier, analyzer and this
+later documentation receipt retain separate identities under the A/B policy.
+No native executable is relabeled by a documentation commit.
+
+Fresh full32 readiness fails: client free memory4235452416B <8589934592B;
+worker capture disk29550948352B <36507222016B. No resources are silently waived,
+no user apps/caches/unverified evidence removed, and no Local32/Node32 started.
+Their raw campaigns, provider parity and final conjunction remain absent.
+**Foundation3L NOT_COMPLETE; KI-006 OPEN; PR6 draft; no3M or automatic merge.**
+
 ## Current measured scope — corrected observer source3182 (2026-10-14)
 
 Source `3182a164d5bf87f5051e11ecbd1c749b73c282dc` passes all eight original

@@ -26,6 +26,11 @@ demonstrated observer classification defect. See the
 [current physical continuation](#d03-a7-four-client-continuation-2026-10-14).
 Neither result supplies Local32, real-TLS Node32 or final physical acceptance.
 
+The latest corrected whole four-client replay passes, as recorded below. Native
+source3182, qualifier24bfd and offline analyzerdd394 remain distinct; their
+required hosted CI and source/tool regressions pass. Full32 remains blocked by
+client memory and worker capture disk reserve; KI-006 OPEN, 3L NOT_COMPLETE.
+
 ## Bounded investigation stops for networking architecture review (2026-10-09)
 
 The [two-strategy review](../FutureArchitecture/Foundation3LNetworkingCapacityReview.md)
@@ -4022,3 +4027,55 @@ mutation are retained separately; the latter changes exactly one external hash
 6936→a180, with independent review and all ownership guards preserved.
 Current full32 client RAM5691133952B at05:11:17Z is below8589934592B required.
 Local32, real-TLS Node32 and final acceptance remain open; KI-006 OPEN; PR6 draft.
+
+### Corrected whole four-client PASS and resource closeout
+
+Clean offline analyzer `dd39472182d59715be40503f7f028aae71c59653` replays the
+SAME original run `a9f5e41e-78f3-414f-a742-3115243a5891` once, returning full
+**MEASURED_PASS**, result SHA256
+`da7b1b93a985bc1c06432efe1b5aca5e845174e34687fbb02c2f1a53d76259da`.
+Root independently repeats the read-only whole conjunction and matches that
+result exactly. Actual controlling-host completion is
+`2026-10-14T05:08:28.676000+00:00`; clock domain CONTROLLING_HOST_UTC.
+Native source3182 and endpoint qualifier24bfd are not relabeled as analyzer C.
+The original nonce-order reader rejection286548 and all failed invocation
+outputs remain immutable. No native or physical retry follows the reader fix.
+
+All128 maximum grants over32 waves complete with exact native first-send/ACK/
+retirement certificates; largest activation-to-native completion28.962ms is
+below37.324386ms. Overall accepted=retired67134512B, terminal/debt/open0.
+Producer305196775 completes80 RPC and80 Event samples; the other three retain
+their qualified nonproducer roles. Full source/archive/runtime, CSV, gameplay,
+capture, tunnel, endpoint/coordinator, lifecycle and cleanup checks pass. Client
+capture66120 packets and worker66202 packets contain four matching bidirectional
+tuples; per-tuple native directions agree, full frames and zero recorded loss
+are required. Counts need not equal because unmarked captured frames differ.
+Root independently hash-checks all111 mirrored originals215508851B against
+index2561f13c, including the preserved rejected reader receipt.
+
+Both qualifier24bfd and analyzerdd394 original six-job hosted regressions pass
+97/53/97/53/11/11; Root verifies original ZIP/log/JUnit/contract and actual tree
+joins. Qualifier receipt SHA256
+`e559dc8d16fa061ca5cbc0e95b5cdcd655b254ee2d53bae6704e65f9e7b5037d`;
+analyzer receipt
+`2b045145d53837f7509ff8409fed619fc8375eba8ade5749635a88b8c99ddc12`.
+Root checkout-review pins areed652fe64a4662c146f72dc016be9ab0fc982117e0df4cb354152cab8af4f3f6
+and0c2836953cce8ba78ac9e0e71fd11b878ae3b9904b939212a086ed1475c169e5.
+Earlier bounded GET network timeouts are preserved separately from successful
+original attempt1 outcomes. No later run substitutes for an original attempt.
+
+At20:57:26UTC client RAM4235452416B (3.94GiB) is below8GiB8589934592B.
+At20:59:26UTC worker RAM21814652928B passes, but disk29550948352B (27.52GiB)
+is below the unchanged Farm32 capture reserve34GiB36507222016B, short6.48GiB.
+The worker floor is `PktMonFarm32Capture.ps1`'s34GB reserve, not the smaller
+Phase1 capture profile. The bounded read-only disk audit finds no safely
+deletable set of that size with established complete controller custody. All33
+baseline worker files, workflows/policies/catalogs, keys/profiles and ports are
+freshly reverified restored/absent; capture remains idle. User applications,
+build caches and unverified evidence are untouched.
+
+**External headroom is required before Local32.** Then canonical Local32,
+real-TLS Node32, provider parity, resources/backpressure/recovery and final
+independent acceptance must complete on the same native source/package. This
+four-client PASS does not establish those gates. KI-006 OPEN; Foundation3L
+NOT_COMPLETE; PR6 draft; no3M, release or automatic merge.

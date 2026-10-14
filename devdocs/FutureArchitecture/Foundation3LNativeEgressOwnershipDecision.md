@@ -9,11 +9,15 @@ evidence_date: 2026-10-14
 **Current state (2026-10-14):** Corrected observer source3182 passes fresh
 same-host native32 D03 and all original hosted CI/package gates, recorded in
 section29. A7's native subset remains preserved in section28. Control-only
-qualification passes; A7's four-client attempt remains FAIL on the legal
+qualification passes; corrected source3182 four-client now passes full raw
+replay under analyzerdd394. Fresh full32 readiness fails client memory and
+worker capture disk reserve, so Local32/Node32/final remain open. A7's earlier
+four-client attempt remains FAIL on the legal
 null-feedback accounting-row classification defect recorded in the
 [physical continuation](../CurrentArchitecture/PooledPhysicalQualification3L.md#d03-a7-four-client-continuation-2026-10-14).
 Its native grants remain incomplete; no physical PASS or platform limitation
-is inferred. The qualification-only correction requires fresh physical use. Local32,
+is inferred from that earlier run. The qualified fresh physical use is recorded
+in the current physical receipt. Local32,
 real-TLS Node32 and final acceptance remain open; KI-006 OPEN; PR6 draft.
 
 **Historical e8 implementation checkpoint:** [D03](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md)
