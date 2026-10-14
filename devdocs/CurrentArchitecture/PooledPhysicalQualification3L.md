@@ -19,7 +19,8 @@ profiles and all failures/PASS receipts below retain their original scope.
 The amendment alone establishes no new physical result. KI-006 remains OPEN;
 PR6 draft, no3M or merge.
 
-A7's same-host native32 subset and hosted CI/package pass. The fresh control
+A7's same-host native32 subset remains preserved. Corrected observer source3182
+passes fresh native32 and hosted CI/package, as recorded below. The fresh control
 prerequisite passes; the subsequent A7 four-client attempt remains FAIL on a
 demonstrated observer classification defect. See the
 [current physical continuation](#d03-a7-four-client-continuation-2026-10-14).
@@ -3958,5 +3959,30 @@ The37324.3865966796875us native certificate budget and all other D03 constants
 are unchanged. Legacy F1 observer, schema and contract semantics remain strict.
 This changes qualification code only; no provider, admission or runtime-health
 code changes. Python replay30tests and final conjunction50tests pass locally.
-The changed native self-test, hosted CI and fresh physical attempt are still
-pending; no corrected native or physical PASS is claimed by this patch.
+At source3182 freeze the changed native self-test, hosted CI and fresh physical
+attempt were pending. Subsequent preflight, hosted CI/package and native32 pass
+as recorded below; the corrected physical attempt remains unexecuted.
+
+### Corrected source3182: native subset qualified, new physical inputs pinned
+
+Native source `3182a164d5bf87f5051e11ecbd1c749b73c282dc` passes all original
+hosted jobs97/53/97/53/11/11/97/53 and independent CI/package verification,
+receipt `bf7ba58d06e38c8052f0ee628156ea05231398c872f25de341a41a6d9ff39e00`.
+The sole native32 run `3102a9ac-ec36-4190-b690-c827957e3441` has strict
+`MEASURED_SUBSET_PASS`, failures[], conjunction SHA256
+`933d74cb4a547251ef707a49fd4d34aa1d77133d86b23669cb901d294ebb6700`.
+All32 D03 peers, exact2145891493B accepted/first-sent/ACKed/retired,7424 eligible
+fair episodes and all three service/causal recovery cases pass. This does not
+supply physical or final provider qualification.
+
+The later qualifier child pins the measured native probe SHA256
+`2e7f33f1fbeb7198cab1a14091d2dd5ac12a356d72afdaa6e82a7886451e5164`,
+owned source archive
+`68d48757a85c7706578140ebd022691d10dfb3c335e7b1359e0bf3b706266655`
+and source-manifest
+`a180ba7a0bc45e1eee4e7db2b6ebe43a52334c5eead2d9839633a7dba9bccf9d`.
+Five DLLs and twelve runtime assets remain unchanged and independently verified.
+Native source3182 and qualifier child identities remain separate. New pins and
+completed native qualification do not upgrade the A7 physical FAIL or establish
+a new four-client result. Fresh physical execution and strict raw replay remain
+mandatory, then Local32, real-TLS Node32 and final acceptance. KI-006 OPEN.

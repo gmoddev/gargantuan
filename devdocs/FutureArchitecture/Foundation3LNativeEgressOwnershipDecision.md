@@ -6,13 +6,14 @@ evidence_date: 2026-10-14
 
 # Foundation 3L — execution-domain and native-egress ownership decision
 
-**Current state (2026-10-14):** A7's same-host native32 D03 and hosted
-CI/package subset passes as recorded in section28. Control-only qualification
-passes; the fresh four-client attempt remains FAIL on the legal null-feedback
-accounting-row classification defect recorded in the
+**Current state (2026-10-14):** Corrected observer source3182 passes fresh
+same-host native32 D03 and all original hosted CI/package gates, recorded in
+section29. A7's native subset remains preserved in section28. Control-only
+qualification passes; A7's four-client attempt remains FAIL on the legal
+null-feedback accounting-row classification defect recorded in the
 [physical continuation](../CurrentArchitecture/PooledPhysicalQualification3L.md#d03-a7-four-client-continuation-2026-10-14).
 Its native grants remain incomplete; no physical PASS or platform limitation
-is inferred. A focused qualification-only correction is pending. Local32,
+is inferred. The qualification-only correction requires fresh physical use. Local32,
 real-TLS Node32 and final acceptance remain open; KI-006 OPEN; PR6 draft.
 
 **Historical e8 implementation checkpoint:** [D03](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md)
@@ -2499,3 +2500,68 @@ remaining physical resources/capture/backpressure and final conjunction remain
 UNQUALIFIED. Controller RAM around4.97GiB is below the full32 client8GiB floor;
 the bounded four-client prerequisite remains possible. Preserve A5/A4 and all
 older failures, keep KI-006 OPEN and PR6 draft; no3M or automatic merge.
+
+## 29. HYBRID observer correction: exact-source CI and native subset PASS
+
+Source `3182a164d5bf87f5051e11ecbd1c749b73c282dc`, tree
+`a30316f0886df21b72fb9a5e6e8fa34b66b990bd`, changes four qualification files
+and evidence records; production networking, admission and health code are
+unchanged from A7. The demonstrated physical observer defect and retained FAIL
+are documented in the [physical receipt](../CurrentArchitecture/PooledPhysicalQualification3L.md#d03-a7-four-client-continuation-2026-10-14).
+All30 raw replay and50 final conjunction Python tests pass; cached native
+preflight passes23/23, actual34-case socket-free probe self-test, pinned Luau,
+execution capture, aggregate32 and package checks. Native preflight receipt:
+`0d54951f37e968c25d2e1fe4fc1de52e87f06e20d9f7d8f94639671bb8d7fa1d`.
+
+All eight original hosted jobs pass97/53/97/53/11/11/97/53. Official run
+38503339546 supplies package SHA256
+`961fef56761b563ecbf7b10708d724b41c7ea1bb9dd88fc96db50c6fb60bf9f6`.
+Independent checkout review SHA256
+`00e2cefef463a631d6ef9f3a7575b992286caaa37cd1b72561974109d972a074`
+and canonical CI/package receipt
+`bf7ba58d06e38c8052f0ee628156ea05231398c872f25de341a41a6d9ff39e00`
+verify actual source, original attempts, contract, complete JUnits and inventories.
+
+The sole native32 run `3102a9ac-ec36-4190-b690-c827957e3441` completes
+289.1560717s/exit0, no outer timeout. All107 original members151403654B plus
+index are independently hash-verified; index SHA256
+`e8962812f4a5fcb2618062741b9b62cb5a2932a5b04089e2a11e1a6f92d381cf`.
+Strict whole conjunction is **MEASURED_SUBSET_PASS**, failures[], SHA256
+`933d74cb4a547251ef707a49fd4d34aa1d77133d86b23669cb901d294ebb6700`.
+Publication join SHA256
+`a5b822632068f45f4f005cd9772f692dd63c4a22d4a6a456b43de428968a483a`.
+Owned native processes and UDP39450 are absent after completion.
+
+All32 native D03 peers pass,7392 qualified grants plus32 bootstrap. Exact
+accepted=first-sent=ACKed=retired2145891493B, terminal/outstanding/open0 and
+grant high-water4. Main maximum63.152ms, turnover95.252ms and64 originating
+ordinary FIFO certificates/max9.148ms meet retained limits. All7424 independently
+eligible episodes complete, no unproven disposal; maximum240.452ms. Broad
+request wait1.149521s is a separate measurement. Source-empty endings are0;
+unit regressions qualify their ownership without claiming this run exercised them.
+One replacement bridge is exercised: peer29:1 candidates3309→3341 preserve
+the same eligibility time and production adjacency witness. The obsolete516647B
+candidate is not accepted; the successor442850B is accepted. Independent raw
+log/TSV audit verifies the240.452ms maximum across that continuous episode.
+
+All three fixed20s service-recovery and causal/source-replica proofs pass.
+Gameplay exact work14781B converges0.471117s within20.471061s; structural
+810016035B converges18.154337s within33.458343s; mixed13651B converges0.466524s
+within20.470970s. These convergence figures are not fixed-service receipt maxima.
+Later strict snapshots around20.4s are polling snapshots, not initial convergence.
+No unmeasured notification/native-dispatch split or observer perturbation is claimed.
+
+Independent original-log audit checks67 sealed log/TSV pins and all96 exact
+server receipts against ten-RPC/ten-Event client cohorts, immutable receive
+anchors and20s server deadlines. Actual server service maxima are5.483715s
+gameplay,2.614392s structural and5.437239s mixed; errors/pending0. Gameplay and
+mixed retain all32 initial UNPROVEN cohorts, then qualify attempt2; structural
+qualifies attempt1. Structural earliest complete causal prefix18.153929s is
+separate from the18.154337s live server convergence result. Exact source Names
+are observed16.333303–18.165383s. Independent measurements SHA256:
+`bf1add31e3e762e1599f41a65a771a05d600d55a5e7f590eb71a395012b7373a`.
+
+The later qualifier child pins measured source3182 archive/probe bytes; it does
+not relabel the executable or supply physical qualification. Fresh four-client,
+canonical Local32, real-TLS Node32 and independent final acceptance remain open.
+No older failure is upgraded. KI-006 OPEN; PR6 draft; no3M or automatic merge.

@@ -10,6 +10,22 @@ related_code:
 
 # Final Foundation 3L evidence conjunction
 
+## Current measured scope — corrected observer source3182 (2026-10-14)
+
+Source `3182a164d5bf87f5051e11ecbd1c749b73c282dc` passes all eight original
+hosted CI jobs and canonical CI/package verification, receipt
+`bf7ba58d06e38c8052f0ee628156ea05231398c872f25de341a41a6d9ff39e00`.
+Fresh native32 `3102a9ac-ec36-4190-b690-c827957e3441` passes strict whole
+available conjunction `MEASURED_SUBSET_PASS`, failures[], SHA256
+`933d74cb4a547251ef707a49fd4d34aa1d77133d86b23669cb901d294ebb6700`.
+All32 native D03, exact accounting,7424 eligible episodes and all three fixed
+service/causal recovery cases pass. Main63.152ms, turnover95.252ms and
+ordinaryFIFO9.148ms preserve the original limits. This is same-host native
+evidence; it does not supply the physical inputs below. Fresh corrected
+four-client, Local32, real-TLS Node32 and final acceptance remain unqualified.
+Native execution source3182 and later qualifier/analyzer child remain distinct
+under the existing A/B procedure. KI-006 OPEN; PR6 draft; no3M or merge.
+
 ## Current physical checkpoint (2026-10-14)
 
 Control-only run `3f1df06a-2e89-4db8-8809-91cb6dad7df9` passes its actual

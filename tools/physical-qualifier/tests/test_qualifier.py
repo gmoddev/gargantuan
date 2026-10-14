@@ -287,7 +287,7 @@ class QualificationTests(unittest.TestCase):
         Probe = self.Root / "gargantuan_physical_gns_funding_probe.exe"
         Probe.write_bytes(b"qualification-only test")
         Manifest = self.Root / "phase1-source-manifest.json"
-        RuntimeHashes = json.loads((Path(__file__).parents[1] / "phase1-hybrid-5a2e735c9-source-manifest.json").read_text())["RuntimeSha256"]
+        RuntimeHashes = json.loads((Path(__file__).parents[1] / "phase1-hybrid-3182a164-source-manifest.json").read_text())["RuntimeSha256"]
         Manifest.write_text(json.dumps({"BaseHead": Q.PHASE1_BASE_HEAD, "OverlayArchiveSha256": Q.PHASE1_OVERLAY,
                                         "GnsPin": Q.GNS_PIN, "Contract": Q.PHASE1_CONTRACT,
                                         "ProbeSHA256": Q.PHASE1_PROBE_SHA,
@@ -388,7 +388,7 @@ class QualificationTests(unittest.TestCase):
         subprocess.run([sys.executable, str(Generator), str(ArchivePath)], check=True,
                        capture_output=True, text=True)
         self.assertEqual(Q.PHASE1_OVERLAY, Q.Digest(ArchivePath))
-        Manifest = json.loads((Generator.parent / "phase1-hybrid-5a2e735c9-source-manifest.json").read_text())
+        Manifest = json.loads((Generator.parent / "phase1-hybrid-3182a164-source-manifest.json").read_text())
         self.assertEqual(Q.PHASE1_BASE_HEAD, Manifest["BaseHead"])
         self.assertEqual(Q.PHASE1_OVERLAY, Manifest["OverlayArchiveSha256"])
         self.assertEqual(Q.PHASE1_PROBE_SHA, Manifest["ProbeSHA256"])

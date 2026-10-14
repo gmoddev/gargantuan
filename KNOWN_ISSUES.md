@@ -85,6 +85,24 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-14 — Corrected observer source3182: native subset PASS; physical pending.**
+Source `3182a164d5bf87f5051e11ecbd1c749b73c282dc` passes all eight original
+hosted jobs97/53/97/53/11/11/97/53 and independent canonical CI/package replay,
+receipt `bf7ba58d06e38c8052f0ee628156ea05231398c872f25de341a41a6d9ff39e00`.
+Sole native32 run `3102a9ac-ec36-4190-b690-c827957e3441` completes289.156s,
+exit0. Strict conjunction is `MEASURED_SUBSET_PASS`, failures[], SHA256
+`933d74cb4a547251ef707a49fd4d34aa1d77133d86b23669cb901d294ebb6700`.
+All32 D03 peers pass: Main63.152ms, turnover95.252ms, ordinaryFIFO9.148ms.
+Accepted=first-sent=ACKed=retired2145891493B; terminal/debt/open grants0.
+All7424 eligible episodes complete, max240.452ms. All three fixed service and
+causal recovery cases pass; structural810016035B converges18.154337s within
+33.458343s. No source-empty episode occurs; focused regressions cover that path.
+The corrected four-client observer has not yet run physically. A7's failed
+physical attempt below remains FAIL. Native source3182 and the later qualifier
+pin child retain separate identities. Current-source four-client, Local32,
+real-TLS Node32 and final acceptance remain unqualified; controller5.40GiB at
+03:28:24Z remains below the full32 client8GiB floor. **KI-006 OPEN; PR6 draft.**
+
 **2026-10-14 — Control PASS; A7 four-client FAIL on observer classification.**
 Fresh control-only run `3f1df06a-2e89-4db8-8809-91cb6dad7df9` passes actual
 endpoint preflights and lifecycle/tunnel checks. Fresh physical run

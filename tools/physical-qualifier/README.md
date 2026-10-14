@@ -13,7 +13,7 @@ source, hosted CI and endpoint preflight; it does not invalidate or rerun the
 retained F1 qualification. Required hosted CI includes the original uploaded
 JUnit evidence, not only a successful workflow status.
 
-## Versioned qualification scope (2026-10-13)
+## Versioned qualification scope (2026-10-14)
 
 Standard `HYBRID_F1_V1` releases qualify D03. The retained legacy packet-scale
 running curve is diagnostic under that profile; it cannot independently reject
@@ -26,19 +26,30 @@ separately establish the full D03 completion/FIFO/execution/turnover/fairness an
 recovery conjunction.
 
 The probe selects this scope explicitly with `--hybrid-f1`; its summaries and
-source manifest must identify `HYBRID_F1_V1`. Hybrid CSV adds the three native
-completion failure/evidence flags. `Replay(..., ExpectedContract="HYBRID_F1_V1")`
+source manifest must identify `HYBRID_F1_V1`. The current Hybrid CSV uses
+`HYBRID_OBSERVATION_V2`: three native completion failure/evidence flags plus
+raw ordinal, existing observation point, native state/counter validity,
+verified cleanup cut and fatal owner/D03 flags. Valid null bookkeeping rows
+cannot replace genuine native history, advance its clock or certify delivery.
+Every accepted row must match a recorded admission prefix. Owned cleanup can
+follow only a completely verified live campaign; early termination, terminal
+release, changed native totals and retained hard failures remain fatal.
+`Replay(..., ExpectedContract="HYBRID_F1_V1")`
 requires that exact schema and all endpoint identities; a legacy PASS cannot
 substitute. The default replay and probe command remain strict legacy `F1`.
 `stage --contract` and config `ServiceContract` must match the pinned
 `PHASE1_CONTRACT`. Phase 1 staging now selects `HYBRID_F1_V1` and the
-[A7 manifest](phase1-hybrid-5a2e735c9-source-manifest.json): native source
-`5a2e735c96dd2a7983681a090a4610b90772d368`, archive SHA-256
-`3AF332431D63AFA269084BC290A3A56383DC1F644A2CD4901684384CEDCA4502`, and
-probe SHA-256 `70CF49A6B1947558BC2639E514E908DE5CEE44AA0A7AC9E5AF46BAC0093AFB3C`.
+[3182 manifest](phase1-hybrid-3182a164-source-manifest.json): native source
+`3182a164d5bf87f5051e11ecbd1c749b73c282dc`, archive SHA-256
+`68D48757A85C7706578140EBD022691D10DFB3C335E7B1359E0BF3B706266655`, and
+probe SHA-256 `2E7F33F1FBEB7198CAB1A14091D2DD5AC12A356D72AFDAA6E82A7886451E5164`.
 Its five measured native DLLs and twelve runtime assets are pinned together.
-The native build and its hosted CI remain A7; this later qualifier-only child
-pins those existing bytes and has separate tooling provenance. No self-referential
+The native execution source is `3182a164d5bf87f5051e11ecbd1c749b73c282dc`;
+the later qualifier-only child pins its measured build bytes and has separate
+tooling provenance. Exact-source CI and native32 PASS are prerequisites to
+applying these pins. Both now pass at source3182, as recorded in the
+[ownership decision](../../devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#29-hybrid-observer-correction-exact-source-ci-and-native-subset-pass).
+Preparing or applying a pin patch does not independently prove either gate. No self-referential
 source/archive hash is required. Hybrid four-client physical qualification,
 Local32, Node32 and final 3L acceptance are not established by this pin change.
 No installed coordinator service or historical manifest is changed.
@@ -378,7 +389,7 @@ by this offline analysis path; its contents are not evidence of analyzer custody
 ## New F1 candidate source provenance
 
 The `make_f1_source_archive.py output.zip`, `--verify-pinned`, and `--verify-tree`
-modes select the A7 hybrid manifest and reproduce the tested native A7 source,
+modes select the 3182 hybrid manifest and reproduce the selected native source,
 even when invoked from the later qualifier-only child. Prefix those arguments with
 `--legacy` to reproduce or verify the historical 31-file ce4733 archive using
 `phase1-f1-ce4733-source-manifest.json`. That historical inventory cannot claim
@@ -424,7 +435,7 @@ files together. Endpoint preflight still checks the externally pinned archive
 hash first, then dispatches only the pinned format and validates its complete
 embedded inventory against the pinned commit. `package.py` includes the new
 verifier beside both qualifier entrypoints. Historical legacy manifests remain
-unchanged; the current Phase 1 pins require the measured A7 hybrid candidate.
+unchanged; the current Phase 1 pins identify the measured 3182 build candidate.
 The archive identifies the chosen native build commit. A later qualifier-only
 commit may pin that build's measured artifacts; its separately hashed qualifier
 bundle is the endpoint tooling provenance. Do not attempt a self-referential
