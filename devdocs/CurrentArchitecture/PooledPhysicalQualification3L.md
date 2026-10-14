@@ -3986,3 +3986,39 @@ Native source3182 and qualifier child identities remain separate. New pins and
 completed native qualification do not upgrade the A7 physical FAIL or establish
 a new four-client result. Fresh physical execution and strict raw replay remain
 mandatory, then Local32, real-TLS Node32 and final acceptance. KI-006 OPEN.
+
+### Fresh corrected physical execution: completed; nonce-order reader correction
+
+Physical run `a9f5e41e-78f3-414f-a742-3115243a5891`, lifecycle
+`54e292fc-2c3e-4e73-9e43-fd2e67439157`, executes native source3182 with
+qualifier child `24bfd2e0bd46551026a0a64f7ab9f88b986cfaea`. Its sole bounded
+attempt exits0 in94.2239142s; native V2 replay passes128 maximum grants over
+32 waves, with32961 raw observations/live cut32957. Each peer first-sends and
+ACKs16777216B of demanded maximum grants. Overall accepted=retired67134512B,
+including25648B bootstrap; terminal/outstanding/open0. This native subset alone
+does not establish the full physical result.
+
+Original full replay rejects at the client nonce-array comparison. Client
+launch order is305196775,305196776,305196777,305196778; GNS slot order is
+305196776,305196775,305196777,305196778. The same four unique identities and
+producer305196775 agree; source promises no ordering equality across independently
+assigned connections. The original rejection receipt remains unchanged, SHA256
+`286548d725ef4e1c2aba57780d32e3453f340453d222570fae8d911383b9a5af`.
+The smallest offline correction requires exactly four unique integer identities
+with the same set, retaining full native slot/generation and per-nonce producer,
+CSV/log, gameplay and lifecycle bindings. Thirty-two replay tests and independent
+source review pass, including reordered positive and malformed/duplicate/missing/
+foreign-identity negatives. Legacy F1 timing semantics remain unchanged.
+Corrected whole replay is pending at this analyzer commit; no native retry is
+needed or authorized to correct a reader-only ordering premise.
+
+All111 worker originals/raw members215508851B are mirrored with exact inventory,
+size and hash closure, index
+`2561f13c81b6c1521ce53efa53bd4d25d00259a57ffceddb8b37bd62f4754b3b`.
+Both endpoint baselines and all33 worker original files are restored; owned
+daemons, tunnels, native processes, listeners and capture are idle. The rejected
+backup-path invocation and stale helper source-manifest pin stop before worker
+mutation are retained separately; the latter changes exactly one external hash
+6936→a180, with independent review and all ownership guards preserved.
+Current full32 client RAM5691133952B at05:11:17Z is below8589934592B required.
+Local32, real-TLS Node32 and final acceptance remain open; KI-006 OPEN; PR6 draft.

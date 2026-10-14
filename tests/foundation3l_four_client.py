@@ -657,7 +657,14 @@ def ReplayInputs(Inputs, ExpectedCommit, ExpectedContract="F1"):
             Require(Result.get("ExitCode") == 0, "physical child failed")
             if ExpectedContract == "HYBRID_F1_V1":
                 Require(Result.get("ServiceContract") == ExpectedContract, "mixed endpoint service contract")
-    Require(Results["CLIENT"].get("ClientNonces") == Nonces, "client result nonces mismatch")
+    # Client launch order and server connection-slot assignment are independent.
+    # Bind the same four identities; per-nonce gameplay above still binds the
+    # native full connection and the unique producer without reassigning them.
+    ClientNonces = Results["CLIENT"].get("ClientNonces")
+    Require(type(ClientNonces) is list and len(ClientNonces) == 4 and
+            all(type(Nonce) is int for Nonce in ClientNonces) and
+            len(set(ClientNonces)) == 4 and set(ClientNonces) == set(Nonces),
+            "client result nonces mismatch")
     Endpoint = Results["COORDINATOR"]["Endpoints"]
     Require(set(Endpoint) == {"CLIENT", "SERVER"}, "coordinator endpoint set mismatch")
     RunId = Endpoint["CLIENT"]["RunId"]

@@ -345,7 +345,7 @@ class FourClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "truncation"):
             Replay.FullPackets(File)
 
-    def FullFixture(self):
+    def FullFixture(self, ClientNonces=None):
         self.RunNative()
         Inputs = {Key: str(self.Root / Key) for Key in
                   ("ClientRoot", "ServerRoot", "CoordinatorRoot", "LifecycleHostRoot", "CandidateRoot")}
@@ -390,7 +390,7 @@ class FourClientTests(unittest.TestCase):
         Run = "11111111-1111-4111-8111-111111111111"
         Lifecycle = "22222222-2222-4222-8222-222222222222"
         Result = {"Success": True, "ExitCode": 0, "Classification": "FOUR_CLIENT_PHASE1_ONLY"}
-        ClientResult = {**Result, "ClientNonces": [101, 102, 103, 104]}
+        ClientResult = {**Result, "ClientNonces": [101, 102, 103, 104] if ClientNonces is None else ClientNonces}
         Save(Client / "result.json", ClientResult)
         Save(Server / "result.json", Result)
         Endpoints = {"CLIENT": {**ClientResult, "RunId": Run, "Type": "CLIENT_DONE"},
@@ -505,6 +505,28 @@ class FourClientTests(unittest.TestCase):
         self.assertTrue(Result["CompletedUtc"].endswith("+00:00"))
         self.assertEqual(Result["CompletionClockDomain"], "CONTROLLING_HOST_UTC")
         self.assertEqual(Result["CompletedUtc"], "2027-01-15T08:00:00+00:00")
+
+    def test_client_launch_order_does_not_reassign_native_connections_or_producer(self):
+        Result = self.FullReplay(self.FullFixture([102, 101, 104, 103]))
+        self.assertEqual(Result["State"], "MEASURED_PASS")
+        self.assertEqual(Result["Native"]["ProducerNonce"], 101)
+        self.assertEqual({Peer["Slot"]: Peer["Nonce"] for Peer in Result["Native"]["Peers"]},
+                         {1: 101, 2: 102, 3: 103, 4: 104})
+        self.assertEqual(set(Result["Gameplay"]), {"101", "102", "103", "104"})
+
+    def test_client_result_requires_four_unique_exact_integer_identities(self):
+        OriginalRoot = self.Root
+        Cases = ([101, 102, 103], [101, 102, 103, 104, 105], [101, 102, 103, 103],
+                 [101, 102, 103, 105], [101, 102, 103, "104"], [101, 102, 103, 104.0],
+                 [101, 102, 103, True], {"101": 1, "102": 1, "103": 1, "104": 1})
+        try:
+            for Index, Nonces in enumerate(Cases):
+                self.Root = OriginalRoot / str(Index)
+                self.Root.mkdir()
+                with self.subTest(Nonces=Nonces), self.assertRaisesRegex(ValueError, "client result nonces"):
+                    self.FullReplay(self.FullFixture(Nonces))
+        finally:
+            self.Root = OriginalRoot
 
     def test_validly_resealed_capture_loss_fails(self):
         Inputs = self.FullFixture()

@@ -85,6 +85,18 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-14 — Corrected physical run completed; offline nonce-order fix pending replay.**
+Physical `a9f5e41e-78f3-414f-a742-3115243a5891` completes94.224s/exit0,
+native128-grant V2 subset PASS and both endpoint cleanup PASS. Original whole
+replay rejects an unsupported launch-order==GNS-slot-order premise despite the
+same four nonce identities/producer. The focused offline correction retains
+exact four-identity, native full-connection, producer and all other bindings;
+32 tests and independent review pass. Replay of the SAME raw evidence remains
+pending; original rejection and captures remain immutable. No native retry.
+Client free RAM5.30GiB remains below the full32 client8GiB floor. See the
+[physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#fresh-corrected-physical-execution-completed-nonce-order-reader-correction).
+**KI-006 OPEN; Local32/real-TLS Node32/final acceptance unqualified; PR6 draft.**
+
 **2026-10-14 — Corrected observer source3182: native subset PASS; physical pending.**
 Source `3182a164d5bf87f5051e11ecbd1c749b73c282dc` passes all eight original
 hosted jobs97/53/97/53/11/11/97/53 and independent canonical CI/package replay,
