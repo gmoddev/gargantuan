@@ -38,16 +38,36 @@ release, changed native totals and retained hard failures remain fatal.
 requires that exact schema and all endpoint identities; a legacy PASS cannot
 substitute. The default replay and probe command remain strict legacy `F1`.
 `stage --contract` and config `ServiceContract` must match the pinned
-`PHASE1_CONTRACT`. Phase 1 staging now selects `HYBRID_F1_V1` and the
-[3182 manifest](phase1-hybrid-3182a164-source-manifest.json): native source
+`PHASE1_CONTRACT`. Current staging selects `HYBRID_F1_V1` and the
+[f30 manifest](phase1-hybrid-f30e80ba-source-manifest.json): native execution
+source `f30e80bacda8d06fa5969c4ac0bfc527cea91aff`, archive SHA-256
+`CDD202D416428C6136F5D837F04AD5AD264CBAE68AE9CD58378277A8DAD2D835`.
+Its freshly collected probe SHA-256 is
+`2E7F33F1FBEB7198CAB1A14091D2DD5AC12A356D72AFDAA6E82A7886451E5164`;
+all five native DLLs and twelve runtime assets also match the measured3182
+bytes. Source identity is the new verified owned-tree archive and exact clean
+incremental build receipt. The probe's cached source label is informational;
+it is not an embedded commit certificate and is not rewritten.
+
+The f30 change adds bounded host first-fault evidence and server-child
+diagnostic settings. There are no changes from3182 in `src/network`,
+`include/gargantuan/network`, `cmake/gns`, the GNS recipe, runtime Luau or the
+physical probe and trace sources. The retained3182 native32 result keeps its
+original execution source and scope; no new f30 native32 result is claimed.
+The f30 affected native preflight passes all23 selected CTests, scheduler
+and endpoint tests, Luau recovery and aggregate checks. Its exact-source hosted
+CI/official package, fresh same-source four-client prerequisite and Local32
+conjunction remain independent gates. The qualifier child has separate tooling
+provenance. Applying this pin update does not establish those gates or final3L.
+
+The [3182 manifest](phase1-hybrid-3182a164-source-manifest.json) remains historical:
+native source
 `3182a164d5bf87f5051e11ecbd1c749b73c282dc`, archive SHA-256
 `68D48757A85C7706578140EBD022691D10DFB3C335E7B1359E0BF3B706266655`, and
 probe SHA-256 `2E7F33F1FBEB7198CAB1A14091D2DD5AC12A356D72AFDAA6E82A7886451E5164`.
 Its five measured native DLLs and twelve runtime assets are pinned together.
-The native execution source is `3182a164d5bf87f5051e11ecbd1c749b73c282dc`;
-the later qualifier-only child pins its measured build bytes and has separate
-tooling provenance. Exact-source CI and native32 PASS are prerequisites to
-applying these pins. Both now pass at source3182, as recorded in the
+That native execution source is `3182a164d5bf87f5051e11ecbd1c749b73c282dc`.
+Its exact-source CI and native32 PASS are retained as recorded in the
 [ownership decision](../../devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#29-hybrid-observer-correction-exact-source-ci-and-native-subset-pass).
 Preparing or applying a pin patch does not independently prove either gate. No self-referential
 source/archive hash is required. Hybrid four-client physical qualification,

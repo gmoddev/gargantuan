@@ -85,12 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
-**2026-10-15 — First-fault diagnostic implemented; qualification pending.**
+**2026-10-15 — First-fault native preflight PASS; physical qualification pending.**
 The authorized continuation adds one persistent pre-rejection execution record
 and bounded correlation through the existing GNS/scheduler diagnostics. It
 does not change D03, admission, gameplay, ownership or recovery. Exact predicate,
 obligation, clocks and host stage must be measured in one fresh Local32 attempt
 after deterministic/native/CI preflights. Existing failures are not relabeled.
+Execution source `f30e80bacda8d06fa5969c4ac0bfc527cea91aff` passes all23
+affected native tests,45 scheduler tests, actual endpoint tests, both recovery
+script cases, execution capture and aggregate32 preflight. One synthetic
+recorder control passes READY/owned stop with zero reported loss; it launches
+no gameplay and validates no fault certificate. Hosted CI, fresh four-client
+prerequisite and the authorized Local32 attempt remain pending. See
+[ownership section31](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#31-first-d03-fault-persistence-and-bounded-scheduling-correlation).
 Both archived native/quote trees are restored to their identical C: paths with
 full byte/metadata verification; original D: archives remain intact (restore
 receipt `801403baf77f783004a3b44ddef884cb0ffb6145998287f00157a6157c9f9007`).

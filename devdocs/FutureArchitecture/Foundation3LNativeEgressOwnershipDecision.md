@@ -6,13 +6,16 @@ evidence_date: 2026-10-15
 
 # Foundation 3L — execution-domain and native-egress ownership decision
 
-**Diagnostic continuation (2026-10-15, qualification pending):** The authorized
+**Diagnostic continuation (2026-10-15, physical qualification pending):** The authorized
 next slice implements a single persistent pre-rejection execution fault through
 the existing opt-in pooled observation sink. It preserves original obligation
 state and host-stage times; existing GNS callsite timing freezes on this D03
 fault rather than an unrelated legacy running deficit. A bounded record-only
 mode reuses the existing Windows scheduler recorder. This is diagnostic
 implementation, not a D03 correction or PASS. Section31 records its ownership.
+Execution source `f30e80bacda8d06fa5969c4ac0bfc527cea91aff` now passes the
+affected native preflight and a synthetic recorder control. Hosted CI/package,
+fresh four-client prerequisite and the one fresh Local32 attempt remain pending.
 
 **Current state (2026-10-15, later continuation):** Actual Local32
 `ab0df092-fe93-4e6e-918a-2ae448479b3e` fails during gameplay on compound D03
@@ -2693,7 +2696,49 @@ cannot establish whole-window coverage or a wait owner by themselves.
 Deterministic regressions exercise exact100000/100001us Main and150000/150001us
 turnover boundaries, backward/invalid state, first-fault immutability, actual
 binary persistence/failure and accounting exclusion. Recorder tests cover path,
-lease, stop/loss and inclusive file-cap boundaries. Their implementation is
-pending affected native tests, exact-source hosted CI/package verification and
-the one authorized fresh bounded Local32 attempt. Historical Local FAIL and
+lease, stop/loss and inclusive file-cap boundaries. The measured preflight below
+qualifies these affected tests; exact-source hosted CI/package verification and
+the one authorized fresh bounded Local32 attempt remain pending. Historical Local FAIL and
 all qualified source3182 evidence remain unchanged; no Node32 or final PASS.
+
+### Measured diagnostic preflight at source f30 (2026-10-15)
+
+Execution source `f30e80bacda8d06fa5969c4ac0bfc527cea91aff`, tree
+`542fb1f0365d5602c6eeca679a43c4bdf3b6d7e5`, passes the affected Windows
+worker preflight with four build jobs and unchanged cache across that run:
+all23 selected CTests (166.856s), all45 compiled scheduler-helper tests,
+the actual endpoint suite, positive and missing-client-tick recovery-script
+cases, execution-capture self-test, aggregate32 structural fixture (43.025s)
+and fresh local packaging. Master receipt SHA-256 is
+`29f962f4c3a848de61c8411f9fcaea7eb3629737b4eb76067deb28e7ca043db3`;
+CTest JUnit is
+`3c95c431aa1589ce7860b206ab476f9336f14c178a0b29d13c251e0164d221fa`.
+The independently checked closed mirror contains161 original files/53427265B,
+index `d2b32139feebc5b5e2453c671699347f688af0a6d6310a1e8686890bb74cfece`.
+These are affected preflight results, not hosted CI or native32 qualification.
+
+Earlier attempts remain failures: the external runner initially omitted its
+child working directory and Python could not discover tests; its minimal
+environment correction exposes a new endpoint-test log-sharing defect.
+That fixture read its output before closing the owned writer. The f30 test
+reads only after the existing bounded stop/drain/dispose. Neither correction
+changes production scheduling, health or service bounds. Original receipts
+are retained rather than overwritten by the passing preflight.
+
+Exactly one zero-workload recorder control, run
+`1661be32-bf5a-4e2e-99c2-0dead1d057ba`, proves actual READY and owned circular
+trace shutdown after a synthetic792-byte size signal. Start/query/stop and
+all reported loss counters are zero; protected CKCL query text is unchanged.
+The retained ETL is7864320B. This signal is not a valid first-fault record and
+no GNS/farm/socket workload runs. Receipt SHA-256 is
+`a488e6390de1c31dc55b9296ac067d6af362dcf84e2b95b9e344b8151ec92bdd`;
+the independently checked11-member/7877123B mirror index is
+`2611801ee7fe1b4d9150e9bc2e1f88da0b3db7fe2fef3ca91b90978e8fa527af`.
+Observer overhead remains unmeasured. This control proves neither gameplay
+timing nor future trace coverage, fault persistence or D03 compliance.
+
+The scoped network/GNS/probe dependency comparison from3182 to f30 has no
+production networking changes. Its native32/recovery results remain qualified
+only at their recorded source. Fresh f30 source/archive/probe identity and
+physical prerequisites must be established separately; the farm must use the
+new exact-source official hosted package. No historical result is relabeled.
