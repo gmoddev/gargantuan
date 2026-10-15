@@ -6,7 +6,19 @@ evidence_date: 2026-10-14
 
 # Foundation 3L — execution-domain and native-egress ownership decision
 
-**Current state (2026-10-14):** Corrected observer source3182 passes fresh
+**Current state (2026-10-15):** The autonomous Full32 continuation resolves
+worker capture disk through verified archival of24 closed task-owned build
+directories; actual C:38653771776B exceeds the unchanged34GiB floor.
+Controller free RAM5595303936B remains2994630656B short of8GiB, with no idle
+task-owned process or qualified replacement placement. No Full32 launch occurs.
+Later documentation-head b629's original CI sampler-startup FAIL remains
+separate from source3182's qualified native/package evidence; no D03 defect,
+deadline change or blind retry is inferred. The
+[resource/CI checkpoint](../CurrentArchitecture/PooledPhysicalQualification3L.md#autonomous-full32-resource-remediation-2026-10-15)
+records archive recovery, exact receipts and inert Local/Node resumption.
+**KI-006 OPEN; 3L NOT_COMPLETE; PR6 draft; no3M or merge.**
+
+**Prior checkpoint (2026-10-14):** Corrected observer source3182 passes fresh
 same-host native32 D03 and all original hosted CI/package gates, recorded in
 section29. A7's native subset remains preserved in section28. Control-only
 qualification passes; corrected source3182 four-client now passes full raw

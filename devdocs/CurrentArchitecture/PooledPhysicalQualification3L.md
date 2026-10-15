@@ -6,6 +6,106 @@ last_verified: 2026-10-14
 
 # Foundation 3L pooled physical qualification attempt
 
+## Autonomous Full32 resource remediation (2026-10-15)
+
+The continuation verifies PR6 OPEN/draft at `b629411b02d9a8625b542973597b0214e069a469`.
+Native source `3182a164d5bf87f5051e11ecbd1c749b73c282dc`, qualifier24bfd,
+offline analyzerdd394, official package SHA256
+`961fef56761b563ecbf7b10708d724b41c7ea1bb9dd88fc96db50c6fb60bf9f6`
+and corrected four-client evidence retain their existing qualified scopes.
+No native or physical campaign is repeated by this resource operation.
+
+Worker inventory finds a separate healthy local NTFS D: volume with
+108334825472B available. An explicit24-leaf allowlist selects only closed
+Foundation3L f1/farm/quote diagnostic build directories under
+`C:\Sandbox\Codex\Builds`:56634files/23206846575B. It excludes current native
+build/source, persistent quote-timing dependency caches, all raw evidence and
+other projects. Full source/destination inventories, SHA256, size, creation and
+write timestamps and attributes match before retirement. ACL/owner/last-access
+preservation is not claimed. Independent review and a fresh per-leaf check of
+both copies, reparse ancestry, process references and protected source/cache
+precede literal-path removal of only the redundant C: leaves. No process is
+stopped, junction created, service/config/firewall changed or raw evidence deleted.
+
+- Archive root: `D:\Sandbox\Codex\ArchivedBuilds\foundation3l-20261015-v1`.
+- Restore: copy a complete archived leaf to its identical original C: path
+  while inactive before reusing that historical CMake build; manifests and
+  original-to-archive maps remain outside the retired leaves and are mirrored
+  to the controller. No CMake path rewrite is implied.
+- Copy receipt: `09cf96b02d609dd9f8acf99ca22a153c94efbab70425c7c60ac356f6358b2e1f`.
+- Retirement receipt: `0657658695a071405dadad76d62fd30b171995dead408aee118263a04b928436`.
+- Actual worker free C:38653771776B (~36.00GiB) against unchanged
+  36507222016B (34GiB), measured after retirement; no projected-byte PASS.
+- Controller evidence: `foundation3l-autonomous-resource-assessment-20261015-v1`
+  under the retained task artifacts, including all original copy manifests.
+
+The05:29:22UTC post-census proves current source3182 tracked-clean, current
+cache4319 and persistent quote-timing cache564d unchanged, protected build roots
+present and qualification native/build processes, ports and captures idle.
+Census SHA256 `f6b55de480ae86d8763ee5779a9af2143b08f8570ec4b70edad29f69520a5ccb`;
+all63 final support members/24549063B are independently hash/size verified on
+the controller, inventory
+`c1c745f047ae60040318d888771b4f0e811cd04be78470cfff0b850c22f89ec8`.
+
+The remaining immediate external blocker is controller RAM. At
+`2026-10-15T05:28:52.8797726Z`, free5595303936B is2994630656B (~2.79GiB)
+below8589934592B. No idle task-owned native/qualifier process is present.
+Controller census SHA256 is
+`27ac51f397c55390f34869467a1194407a9b3ac7108e75b97d040bc094f0004e`.
+User applications remain untouched. Spare LAN Linux RAM is not a qualified
+replacement: its2500-Mb/s interface routes to the fiber addresses through the
+LAN gateway and lacks this Windows capture/runtime deployment. Swapping the
+Windows roles contradicts fixed client.1/server.2 capture, route and security
+bindings. Neither alternative is a ready placement change. Sampled native32
+memory omits transient/kernel/capture/controller costs and cannot justify
+lowering the protective8GiB client floor. All D03 product bounds remain intact.
+
+Inert LocalRecovery/NodeRecovery templates and the exact resumable plan are in
+`foundation3l-farm32-3182-b629-inert-plan-v1/inert-plan.json`, SHA256
+`ebf3764fdd41f62edd580179ef5edf20d4b0ebf248b8488f4c4d543c8b61481f`.
+They create no UUID, ticket, TLS secret, expiring preflight, capture or session.
+Existing outer-runner `--help` succeeds through the actual pinned local Python.
+Prospective private collection roots use controller D:, with client capture
+remaining C:. This placement alone does not prove capacity for two worker
+capture members each below15GiB. Before Collect, inspect actual immutable
+indexed byte totals and free capacity; before Node, recheck retained Local
+footprint and unchanged role/capture floors. Any needed offload must preserve
+complete verified copies, private-access boundaries, original index bytes and
+identical-path restoration before final conjunction. Do not delete unique
+evidence, use reparse redirects or silently waive storage requirements.
+
+### Later original CI failure remains separate
+
+Documentation head b629's original Native push run `38637417269`, job
+`116104012406`, attempt1, reports96/97 tests passed, with the endpoint fixture
+failed; dependent Linux is skipped. The injected `Throw` resource sampler has not
+reached its first baseline/readiness when the retained5000ms startup bound
+expires. Original QPC intervals total5058.0229ms through verified counter-load
+completion: parent closure1084.2961ms, closure-to-launch1885.0072ms,
+launch-to-child-entry1448.7686ms, child entry396.0334ms, next gap56.4052ms,
+assembly load187.5124ms. Fast/Blocked initializations are1081/1189ms.
+These wall intervals do not separate CPU, scheduling, filesystem waits or
+observer perturbation. No production D03 predicate failure or minimal
+implementation defect is demonstrated; no threshold tuning or rerun occurs.
+
+Original log SHA256
+`fdef2b8d18885dab5aeb44959b0685b88141677bd3400982271e6e1231ecb532`,
+original diagnostics ZIP
+`40add7ccf8bbcf27adac9afc25288c3861022f1b65a7657d676af7c03ccf7c61`,
+and structured assessment
+`58731b15c3e56eecafd02bf329cdbd892cf84fcd48f47d66c4cbbd4ec3b01ea0`
+are retained in `foundation3l-full32-b629-original-ci-failure-v1`.
+Earlier A8 native/package and qualifier/analyzer CI PASS remain source-specific;
+the later required CI FAIL is not relabeled or replaced by PR CI success.
+Final-source CI remains required for closeout.
+
+After external controller headroom: recheck all live prerequisites, verify and
+stage the official3182 package, perform one fresh canonical Local32, reconcile
+its full raw conjunction/cleanup, then separately prepare and run real-TLS
+Node32. Preserve both complete providers for parity/resources/recovery and
+independent final acceptance. **No Full32 run started; KI-006 OPEN;
+Foundation3L NOT_COMPLETE; PR6 draft; no3M, release or merge.**
+
 ## Current qualification scope — 2026-10-14
 
 The product-authorized D03 `HYBRID_F1_V1` scope amendment removes the raw D01

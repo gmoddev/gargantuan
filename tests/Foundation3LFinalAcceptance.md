@@ -10,6 +10,31 @@ related_code:
 
 # Final Foundation 3L evidence conjunction
 
+## Latest continuation — worker disk resolved, controller RAM external (2026-10-15)
+
+The existing native3182/official package and corrected four-client PASS remain
+source-specific prerequisites. Verified archival of24 inactive task-owned
+diagnostic builds preserves23206846575B on worker D: and frees actual C: to
+38653771776B, above the unchanged36507222016B Farm32 reserve. Raw evidence,
+current native source/build and dependency caches remain intact; exact
+retirement receipt is
+`0657658695a071405dadad76d62fd30b171995dead408aee118263a04b928436`.
+The controller's05:28:52UTC free RAM5595303936B remains2994630656B below
+8589934592B. No idle task-owned process, compatible alternate placement or
+independently justified lower floor resolves it. User-managed free RAM is
+required. Fresh inert templates preserve the official source/package and
+separate analyzer identities; no Full32 identity, secret or campaign exists.
+Collection and retained provider storage need actual-size checks before use.
+
+The later documentation-head b629 Native push CI38637417269 remains FAIL on
+the sampler's5000ms initialization bound during injected `Throw` setup;
+retained phases reach counter-load completion at5058.023ms. No production D03
+failure or correctable defect is established. Prior source3182 qualification
+is not relabeled, and all-current-head/final-source CI PASS is not claimed.
+See the [resource/CI checkpoint and resumable plan](../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#autonomous-full32-resource-remediation-2026-10-15).
+**Local32, real-TLS Node32, resource/provider parity and final conjunction remain
+unqualified. Foundation3L NOT_COMPLETE; KI-006 OPEN; PR6 draft; no3M or merge.**
+
 ## Latest closeout checkpoint — prerequisite PASS, full32 blocked (2026-10-14)
 
 The current source3182 native subset/official CI package and corrected whole

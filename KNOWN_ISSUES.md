@@ -85,6 +85,34 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-15 — Worker disk remediated; actual-client RAM remains external.**
+The autonomous Full32 continuation preserves native source3182's qualified
+native32/official package and the corrected four-client PASS. It archives24
+closed task-owned diagnostic builds (56634files/23206846575B) to worker
+`D:\Sandbox\Codex\ArchivedBuilds\foundation3l-20261015-v1`, verifies full
+contents/closed inventories/creation and write times/attributes, then retires
+only the verified C: duplicates after fresh process and path checks. Raw
+evidence, current source/build and persistent dependency caches remain intact.
+Actual worker C: free38653771776B exceeds the unchanged36507222016B floor;
+retirement receipt `0657658695a071405dadad76d62fd30b171995dead408aee118263a04b928436`.
+Controller05:28:52UTC free RAM5595303936B remains2994630656B (2.79GiB) short
+of8589934592B; no idle task-owned process can supply that headroom. Fixed
+fiber/capture/security roles exclude an unqualified role swap or Linux host
+substitution, and sampled native memory does not prove a lower safe floor.
+User-managed application headroom is required before Local32. Inert Local/Node
+templates retain source/package identities and defer identities/secrets/live
+preflights until readiness; actual capture collection/retention capacity must
+also be checked before collection and Node32.
+
+Original later documentation-head b629 push CI `38637417269` remains FAIL:
+96/97 Windows tests, sampler initialization deadline exceeded in injected
+`Throw` setup; dependent Linux skipped. Retained phases reach verified counter
+load completion at5058.023ms against5000ms. No production D03 failure or
+correctable implementation defect is established; no deadline change/rerun is
+made. This does not relabel earlier qualified source3182 evidence or establish
+all-current-head CI PASS. [Full resource/CI checkpoint](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#autonomous-full32-resource-remediation-2026-10-15).
+**KI-006 OPEN; Local32/real-TLS Node32/final acceptance unqualified; PR6 draft.**
+
 **2026-10-14 — Native32 and corrected four-client PASS; full32 resource blocked.**
 Native execution source3182, qualifier24bfd and offline analyzerdd394 retain
 separate provenance. All eight native-source hosted jobs/package, both six-job
