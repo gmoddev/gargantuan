@@ -70,6 +70,9 @@ private:
 	bool FailureInitialOnly = false;
 	void *FailureContext = nullptr;
 	void (*FailureObserver)(void *, std::uint64_t) noexcept = nullptr;
+	void *ExecutionFaultContext = nullptr;
+	bool (*ExecutionFaultObserver)(void *, const network::detail::PooledServiceRecord &) noexcept = nullptr;
+	bool ExecutionFaultNotified = false, ExecutionDiagnosticFailed = false;
 	network::detail::PooledServiceSink Sink{this, Record, AcceptedGrant};
 	network::detail::PooledServiceSink *Previous = nullptr;
 	static void Record(void *Context, const network::detail::PooledServiceRecord &Value) noexcept {
@@ -197,6 +200,16 @@ public:
 		bool InitialOnly = false) noexcept {
 		FailureContext = Context; FailureObserver = Observer; FailureInitialOnly = InitialOnly;
 	}
+	// Opt-in farm diagnostics only. Freeze/copy first, then persist before the
+	// caller enters peer rejection. A failed observer invalidates evidence only;
+	// no production ledger or scheduling decision reads this state.
+	void SetExecutionFaultObserver(void *Context,
+		bool (*Observer)(void *, const network::detail::PooledServiceRecord &) noexcept) noexcept {
+		if (ExecutionFaultNotified) return;
+		ExecutionFaultContext = Context; ExecutionFaultObserver = Observer;
+		Sink.CaptureExecution = Observer != nullptr;
+	}
+	bool ExecutionCaptureValid() const noexcept { return !ExecutionDiagnosticFailed; }
 	void Accept(network::ConnectionId Connection, std::uint64_t Token, std::uint64_t Bytes,
 		std::uint64_t Activated) noexcept {
 		auto *P = Find(Connection); if (!P) return;
@@ -213,6 +226,15 @@ public:
 		} else { ++P->QualifiedAccepted; P->QualifiedBytes += Bytes; }
 	}
 	void Observe(const network::detail::PooledServiceRecord &Value) noexcept {
+		if (ExecutionFaultObserver && !ExecutionFaultNotified &&
+			Value.Point != network::detail::PooledObservationPoint::PeerTeardown &&
+			(Value.ExecutionRejected || Value.Result.ExecutionFailed || Value.InvalidAfter)) {
+			ExecutionFaultNotified = true;
+			ExecutionDiagnosticFailed = !ExecutionFaultObserver(ExecutionFaultContext, Value);
+		}
+		// CaptureExecution exposes otherwise-suppressed diagnostics without
+		// admitting them into accepted/native-service certificates or peer counts.
+		if (Value.DiagnosticOnly) return;
 		auto *P = Find(Value.Connection); if (!P) return;
 		const bool RecordValid = Value.Result.Valid && Value.Accepted.Structural >= P->Accepted &&
 			Value.Accepted.Structural == P->QualifiedBytes + P->BootstrapBytes;
@@ -366,7 +388,7 @@ public:
 			P.FirstSent == P.Acked && P.Acked == P.Retired;
 	}
 	bool Valid(std::size_t Expected = 32) const noexcept {
-		if (Invalid || Count != Expected) return false;
+		if (Invalid || ExecutionDiagnosticFailed || Count != Expected) return false;
 		for (std::size_t I = 0; I < Count; ++I) if (!Complete(Peers[I])) return false;
 		return true;
 	}

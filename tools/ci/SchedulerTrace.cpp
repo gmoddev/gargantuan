@@ -146,11 +146,12 @@ struct Trace {
     Properties State;
     ULONG StartStatus = ERROR_NOT_READY, QueryStatus = ERROR_NOT_READY, StopStatus = ERROR_NOT_READY;
     bool Started = false;
-    void Start(const GUID &Guid, const std::wstring &Path) {
+    void Start(const GUID &Guid, const std::wstring &Path, bool Circular = false) {
         if (Path.size() >= std::size(State.File)) throw std::runtime_error("ETL path too long");
         State.Value.Wnode.Guid = Guid;
         State.Value.Wnode.ClientContext = 1; // QPC, never CPU time.
-        State.Value.LogFileMode = EVENT_TRACE_SYSTEM_LOGGER_MODE | EVENT_TRACE_FILE_MODE_SEQUENTIAL;
+        State.Value.LogFileMode = EVENT_TRACE_SYSTEM_LOGGER_MODE |
+            (Circular ? EVENT_TRACE_FILE_MODE_CIRCULAR : EVENT_TRACE_FILE_MODE_SEQUENTIAL);
         State.Value.BufferSize = 64;
         State.Value.MinimumBuffers = 128;
         State.Value.MaximumBuffers = 128;
@@ -165,6 +166,21 @@ struct Trace {
         Properties Query;
         QueryStatus = ControlTraceW(Id, nullptr, &Query.Value, EVENT_TRACE_CONTROL_QUERY);
         if (QueryStatus == ERROR_SUCCESS) State = Query;
+        Properties Final;
+        StopStatus = ControlTraceW(Id, nullptr, &Final.Value, EVENT_TRACE_CONTROL_STOP);
+        if (StopStatus == ERROR_SUCCESS) State = Final;
+        Started = false;
+    }
+    void StopOwned(const GUID &Guid, const std::wstring &Path) {
+        if (!Started) return;
+        Properties Query;
+        QueryStatus = ControlTraceW(Id, nullptr, &Query.Value, EVENT_TRACE_CONTROL_QUERY);
+        if (QueryStatus != ERROR_SUCCESS || !Owns(Query, Guid, Path)) {
+            StopStatus = QueryStatus == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : QueryStatus;
+            Started = false; // Do not let the destructor stop an unverified session.
+            return;
+        }
+        State = Query;
         Properties Final;
         StopStatus = ControlTraceW(Id, nullptr, &Final.Value, EVENT_TRACE_CONTROL_STOP);
         if (StopStatus == ERROR_SUCCESS) State = Final;
@@ -306,11 +322,202 @@ DWORD ParseMainThread(const wchar_t *Text) {
         throw std::runtime_error("offline decode requires a positive uint32 main thread ID");
     return static_cast<DWORD>(Number);
 }
+constexpr ULONGLONG FarmRecordLimitMs = 420000;
+constexpr std::uint64_t FarmFirstFaultBytes = 792; // Stop signal only; no live snapshot read/flush claim.
+constexpr wchar_t FarmEvidenceRoot[] = L"C:/Sandbox/Codex/Evidence";
+enum class FarmRecordEnd { Continue, FirstFault, LeaseExit, Deadline, ObservationFailure };
+void ValidateFarmPaths(const fs::path &Output, const std::wstring &Run, const fs::path &Fault) {
+    const fs::path Evidence(FarmEvidenceRoot);
+    const auto CanonicalComponents = [](const fs::path &Path) {
+        if (!Path.is_absolute()) return false;
+        for (const auto &Part : Path)
+            if (Part == L"." || Part == L"..") return false;
+        return true;
+    };
+    const auto Role = Fault.parent_path().filename().wstring();
+    const auto Suffix = L"-Ev-" + Run;
+    const bool RoleCharacters = std::all_of(Role.begin(), Role.end(), [](wchar_t C) {
+        return (C >= L'a' && C <= L'z') || (C >= L'A' && C <= L'Z') ||
+            (C >= L'0' && C <= L'9') || C == L'-';
+    });
+    if (!CanonicalComponents(Output) || !CanonicalComponents(Fault) ||
+        Output != Evidence / (L"D03S-" + Run) || Fault.parent_path().parent_path() != Evidence ||
+        Fault.filename() != L"first-execution-fault.bin" || Role.size() <= Suffix.size() ||
+        Role.size() > 120 || Role.compare(Role.size() - Suffix.size(), Suffix.size(), Suffix) != 0 || !RoleCharacters)
+        throw std::runtime_error("farm recorder requires exact run-bound local evidence paths");
+}
+DWORD ParseFarmLeaseOwner(const wchar_t *Text, DWORD Self) {
+    const std::wstring Value(Text);
+    if (Value.empty() || Value.size() > 10 || Value.front() == L'0' ||
+        !std::all_of(Value.begin(), Value.end(), [](wchar_t C) { return C >= L'0' && C <= L'9'; }))
+        throw std::runtime_error("farm recorder requires a positive original lease-owner PID");
+    const auto Number = std::stoull(Value);
+    if (Number > UINT32_MAX || Number == Self)
+        throw std::runtime_error("farm recorder requires a positive original lease-owner PID distinct from itself");
+    return static_cast<DWORD>(Number);
+}
+FarmRecordEnd FarmRecordBoundary(std::uint64_t FaultBytes, DWORD LeaseState,
+    ULONGLONG Elapsed, DWORD ObservationError) noexcept {
+    if (ObservationError != ERROR_SUCCESS || (LeaseState != WAIT_OBJECT_0 && LeaseState != WAIT_TIMEOUT))
+        return FarmRecordEnd::ObservationFailure;
+    if (FaultBytes >= FarmFirstFaultBytes) return FarmRecordEnd::FirstFault;
+    if (LeaseState == WAIT_OBJECT_0) return FarmRecordEnd::LeaseExit;
+    if (Elapsed >= FarmRecordLimitMs) return FarmRecordEnd::Deadline;
+    return FarmRecordEnd::Continue;
+}
+const char *FarmRecordEndName(FarmRecordEnd End) noexcept {
+    switch (End) {
+    case FarmRecordEnd::FirstFault: return "FIRST_FAULT_SIZE_OBSERVED";
+    case FarmRecordEnd::LeaseExit: return "ORIGINAL_LEASE_EXITED";
+    case FarmRecordEnd::Deadline: return "DEADLINE";
+    case FarmRecordEnd::ObservationFailure: return "OBSERVATION_FAILURE";
+    default: return "NOT_STARTED";
+    }
+}
+bool FarmExpectedMissing(DWORD Error) noexcept {
+    return Error == ERROR_FILE_NOT_FOUND || Error == ERROR_PATH_NOT_FOUND;
+}
+void ValidateFarmFaultParent(const fs::path &Fault) {
+    // The canonical endpoint creates its role root only at Launch. The recorder
+    // observes that literal child but must never precreate it during Stage.
+    const auto Parent = Fault.parent_path();
+    RequirePlainLocalPath(Parent.parent_path());
+    if (!fs::is_directory(Parent.parent_path()))
+        throw std::runtime_error("farm recorder evidence grandparent must remain a directory");
+    const DWORD Attributes = GetFileAttributesW(Parent.c_str());
+    if (Attributes == INVALID_FILE_ATTRIBUTES) {
+        if (FarmExpectedMissing(GetLastError())) return;
+        throw std::runtime_error("farm recorder fault parent cannot be observed");
+    }
+    if (!(Attributes & FILE_ATTRIBUTE_DIRECTORY) || (Attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+        throw std::runtime_error("farm recorder fault parent is not a plain directory");
+    RequirePlainLocalPath(Fault.parent_path());
+}
+std::uint64_t ReadFarmFaultSize(const fs::path &Path, DWORD &Error) {
+    ValidateFarmFaultParent(Path);
+    WIN32_FILE_ATTRIBUTE_DATA Data{};
+    if (!GetFileAttributesExW(Path.c_str(), GetFileExInfoStandard, &Data)) {
+        Error = GetLastError();
+        if (FarmExpectedMissing(Error)) {
+            ValidateFarmFaultParent(Path); // Missing role is legal; a missing/changed grandparent is not.
+            Error = ERROR_SUCCESS;
+        }
+        return 0;
+    }
+    if (Data.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) {
+        Error = ERROR_ACCESS_DENIED; return 0;
+    }
+    Error = ERROR_SUCCESS;
+    return (static_cast<std::uint64_t>(Data.nFileSizeHigh) << 32) | Data.nFileSizeLow;
+}
+void WriteFarmReceipt(const fs::path &Path, const std::string &Text) {
+    if (Text.empty() || Text.size() > 16384) throw std::runtime_error("farm recorder receipt exceeds fixed bound");
+    Handle File;
+    File.Value = CreateFileW(Path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+        CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (File.Value == INVALID_HANDLE_VALUE) throw std::runtime_error("farm recorder receipt already exists or cannot be created");
+    DWORD Written = 0;
+    if (!WriteFile(File.Value, Text.data(), static_cast<DWORD>(Text.size()), &Written, nullptr) ||
+        Written != Text.size() || !FlushFileBuffers(File.Value))
+        throw std::runtime_error("farm recorder receipt write or flush failed");
+}
+bool FarmRecordingComplete(const Trace &Recording, FarmRecordEnd End, DWORD Error,
+    std::uint64_t Frequency, std::uint64_t Before, std::uint64_t After, std::uint64_t StopAt) noexcept {
+    return (End == FarmRecordEnd::FirstFault || End == FarmRecordEnd::LeaseExit) && Error == ERROR_SUCCESS &&
+        Frequency && Before && After >= Before && StopAt >= After &&
+        Recording.StartStatus == ERROR_SUCCESS && Recording.QueryStatus == ERROR_SUCCESS &&
+        Recording.StopStatus == ERROR_SUCCESS && Recording.State.Value.EventsLost == 0 &&
+        Recording.State.Value.LogBuffersLost == 0 && Recording.State.Value.RealTimeBuffersLost == 0;
+}
+int RecordFarmServer(const fs::path &Output, const std::wstring &Run, const fs::path &Fault, const wchar_t *Owner) {
+    const GUID Guid = ParseGuid(Run);
+    ValidateFarmPaths(Output, Run, Fault);
+    const DWORD OwnerPid = ParseFarmLeaseOwner(Owner, GetCurrentProcessId());
+    RequirePlainLocalPath(Output.parent_path());
+    ValidateFarmFaultParent(Fault);
+    if (!fs::is_directory(Output.parent_path()))
+        throw std::runtime_error("farm recorder evidence grandparent must already be a plain directory");
+    const DWORD Attributes = GetFileAttributesW(Output.c_str());
+    if (Attributes != INVALID_FILE_ATTRIBUTES || GetLastError() != ERROR_FILE_NOT_FOUND)
+        throw std::runtime_error("farm recorder output must be a new exclusive directory");
+    DWORD ObservationError = ERROR_SUCCESS;
+    if (ReadFarmFaultSize(Fault, ObservationError) != 0 || ObservationError != ERROR_SUCCESS)
+        throw std::runtime_error("farm recorder first-fault path must be absent or empty before capture");
+    Handle Lease;
+    Lease.Value = OpenProcess(SYNCHRONIZE, FALSE, OwnerPid);
+    if (!Lease.Value || WaitForSingleObject(Lease.Value, 0) != WAIT_TIMEOUT)
+        throw std::runtime_error("farm recorder original lease-owner process is absent or exited");
+    if (!fs::create_directory(Output)) throw std::runtime_error("farm recorder output already exists");
+    RequirePlainLocalPath(Output);
+    const auto Etl = Output / "scheduler.etl";
+    LARGE_INTEGER Frequency{};
+    if (!QueryPerformanceFrequency(&Frequency) || Frequency.QuadPart <= 0)
+        throw std::runtime_error("farm recorder QPC frequency unavailable");
+    Trace Recording;
+    const auto StartedMs = GetTickCount64();
+    const auto Before = Qpc();
+    Recording.Start(Guid, Etl.wstring(), true); // Only this record-only mode is circular.
+    const auto After = Qpc();
+    FarmRecordEnd End = FarmRecordEnd::Continue;
+    std::uint64_t FaultBytes = 0, ReadyAt = 0;
+    std::string ReceiptError;
+    if (Recording.Started) {
+        try {
+            ReadyAt = Qpc();
+            if (!Before || After < Before || ReadyAt < After) throw std::runtime_error("farm recorder QPC order invalid");
+            std::ostringstream Ready;
+            Ready << "{\"Format\":\"GargantuanFarmSchedulerReady\",\"Version\":1,\"RunId\":" << JsonString(Utf8(Run))
+                << ",\"RecorderPid\":" << GetCurrentProcessId() << ",\"LeaseOwnerPid\":" << OwnerPid
+                << ",\"SessionGuid\":" << JsonString(Utf8(Run)) << ",\"SessionName\":" << JsonString(Utf8(SessionName))
+                << ",\"Etl\":" << JsonString(Utf8(Etl.wstring())) << ",\"QpcFrequency\":" << Frequency.QuadPart
+                << ",\"BeforeTraceStartQpc\":" << Before << ",\"AfterTraceStartQpc\":" << After << ",\"ReadyQpc\":" << ReadyAt
+                << ",\"Circular\":true,\"TraceFileCapBytes\":536870912,\"NoChildLaunched\":true}\n";
+            WriteFarmReceipt(Output / "ready.json", Ready.str());
+            while (End == FarmRecordEnd::Continue) {
+                FaultBytes = ReadFarmFaultSize(Fault, ObservationError);
+                const DWORD LeaseState = WaitForSingleObject(Lease.Value, 0);
+                if (LeaseState == WAIT_FAILED) ObservationError = GetLastError();
+                End = FarmRecordBoundary(FaultBytes, LeaseState, GetTickCount64() - StartedMs, ObservationError);
+                if (End == FarmRecordEnd::Continue) (void)WaitForSingleObject(Lease.Value, 50);
+            }
+        } catch (const std::exception &Failure) {
+            ReceiptError = Failure.what(); ObservationError = ERROR_INVALID_DATA; End = FarmRecordEnd::ObservationFailure;
+        }
+    }
+    Recording.StopOwned(Guid, Etl.wstring());
+    const auto StopAt = Qpc();
+    const auto Elapsed = GetTickCount64() - StartedMs;
+    const bool Complete = FarmRecordingComplete(Recording, End, ObservationError,
+        static_cast<std::uint64_t>(Frequency.QuadPart), Before, After, StopAt);
+    std::ostringstream Metadata;
+    Metadata << "{\"Format\":\"GargantuanFarmSchedulerRecord\",\"Version\":1,\"Scope\":\"RECORD_ONLY\",\"RunId\":"
+        << JsonString(Utf8(Run)) << ",\"LeaseOwnerPid\":" << OwnerPid << ",\"RecorderPid\":" << GetCurrentProcessId()
+        << ",\"OriginalLeaseHandleHeld\":true,\"NoChildLaunched\":true,\"SchedulingPolicyChanged\":false"
+        << ",\"DiagnosticComplete\":" << (Complete ? "true" : "false") << ",\"EndReason\":" << JsonString(FarmRecordEndName(End))
+        << ",\"FirstFaultPath\":" << JsonString(Utf8(Fault.wstring())) << ",\"ObservedFaultBytes\":" << FaultBytes
+        << ",\"FaultSizeThresholdBytes\":792,\"ObservationError\":" << ObservationError << ",\"ReceiptError\":" << JsonString(ReceiptError)
+        << ",\"SessionGuid\":" << JsonString(Utf8(Run)) << ",\"SessionName\":" << JsonString(Utf8(SessionName))
+        << ",\"Etl\":" << JsonString(Utf8(Etl.wstring())) << ",\"StartStatus\":" << Recording.StartStatus
+        << ",\"QueryStatus\":" << Recording.QueryStatus << ",\"StopStatus\":" << Recording.StopStatus
+        << ",\"EventsLost\":" << Recording.State.Value.EventsLost << ",\"LogBuffersLost\":" << Recording.State.Value.LogBuffersLost
+        << ",\"RealTimeBuffersLost\":" << Recording.State.Value.RealTimeBuffersLost
+        << ",\"ClockType\":1,\"QpcFrequency\":" << Frequency.QuadPart << ",\"BeforeTraceStartQpc\":" << Before
+        << ",\"AfterTraceStartQpc\":" << After << ",\"ReadyQpc\":" << ReadyAt << ",\"AfterTraceStopQpc\":" << StopAt
+        << ",\"ElapsedMilliseconds\":" << Elapsed << ",\"RecordDeadlineMs\":420000,\"TimedOut\":"
+        << (End == FarmRecordEnd::Deadline ? "true" : "false")
+        << ",\"Circular\":true,\"TraceFileCapBytes\":536870912,\"BufferSizeKiB\":64,\"MaximumBuffers\":128"
+        << ",\"FaultCertificateValidated\":false,\"FaultHeaderRead\":false,\"FaultFlushObserved\":false"
+        << ",\"WholeWindowCoverage\":\"NOT_ASSUMED\",\"CausalVerdict\":\"NOT_CLAIMED\",\"ObserverOverhead\":\"NOT_MEASURED\"}\n";
+    WriteFarmReceipt(Output / "record.json", Metadata.str());
+    std::cout << "[Qualification:SchedulerTrace] farm_record_only=1 end=" << FarmRecordEndName(End)
+        << " diagnostic_complete=" << Complete << " no-child-or-priority-change\n";
+    return Complete ? 0 : 125;
+}
 int DecodeOnly(const fs::path &Input, const fs::path &Destination, DWORD MainThread) {
     // This branch only reads an existing ETL. It never constructs Trace,
     // starts a session, launches a child, or changes the retained raw files.
     RequirePlainLocalPath(Input);
-    if (!fs::is_regular_file(Input) || fs::file_size(Input) >= CsvLimit)
+    if (!fs::is_regular_file(Input) || fs::file_size(Input) > CsvLimit)
         throw std::runtime_error("offline decode requires a bounded regular ETL");
     const auto Etl = fs::canonical(Input);
     const auto InputBytes = fs::file_size(Etl);
@@ -372,6 +579,47 @@ int DecodeOnly(const fs::path &Input, const fs::path &Destination, DWORD MainThr
     return Complete ? 0 : 125;
 }
 int SelfTest() {
+    const std::wstring FarmRun = L"11111111-2222-4333-8444-555555555555";
+    const fs::path FarmOutput = fs::path(FarmEvidenceRoot) / (L"D03S-" + FarmRun);
+    const fs::path FarmFault = fs::path(FarmEvidenceRoot) / (L"L32S2-Ev-" + FarmRun) / L"first-execution-fault.bin";
+    ValidateFarmPaths(FarmOutput, FarmRun, FarmFault);
+    for (const auto &Bad : {FarmOutput / L"child", fs::path(L"D:/Sandbox/Codex/Evidence") / FarmOutput.filename(),
+        fs::path(L"relative"), FarmOutput.parent_path() / L".." / FarmOutput.filename()}) {
+        try { ValidateFarmPaths(Bad, FarmRun, FarmFault); return 16; } catch (...) {}
+    }
+    for (const auto &Bad : {FarmFault.parent_path() / L"other.bin", FarmOutput / L"first-execution-fault.bin",
+        FarmFault.parent_path() / L"nested" / L"first-execution-fault.bin",
+        fs::path(FarmEvidenceRoot) / (L"Other-Ev-" + FarmRun + L"-stale") / L"first-execution-fault.bin"}) {
+        try { ValidateFarmPaths(FarmOutput, FarmRun, Bad); return 16; } catch (...) {}
+    }
+    if (ParseFarmLeaseOwner(L"17", 19) != 17) return 17;
+    if (!FarmExpectedMissing(ERROR_FILE_NOT_FOUND) || !FarmExpectedMissing(ERROR_PATH_NOT_FOUND) ||
+        FarmExpectedMissing(ERROR_ACCESS_DENIED) || FarmExpectedMissing(ERROR_SUCCESS) ||
+        FarmExpectedMissing(ERROR_SHARING_VIOLATION)) return 17;
+    for (const auto *Bad : {L"0", L"01", L"-1", L"+1", L"17x", L"4294967296", L"19", L""}) {
+        try { (void)ParseFarmLeaseOwner(Bad, 19); return 17; } catch (...) {}
+    }
+    if (FarmRecordBoundary(791, WAIT_TIMEOUT, 419999, 0) != FarmRecordEnd::Continue ||
+        FarmRecordBoundary(792, WAIT_TIMEOUT, 419999, 0) != FarmRecordEnd::FirstFault ||
+        FarmRecordBoundary(0, WAIT_OBJECT_0, 1, 0) != FarmRecordEnd::LeaseExit ||
+        FarmRecordBoundary(0, WAIT_TIMEOUT, 420000, 0) != FarmRecordEnd::Deadline ||
+        FarmRecordBoundary(792, WAIT_FAILED, 1, 0) != FarmRecordEnd::ObservationFailure ||
+        FarmRecordBoundary(792, WAIT_TIMEOUT, 1, ERROR_ACCESS_DENIED) != FarmRecordEnd::ObservationFailure) return 18;
+    Trace FarmRecording;
+    FarmRecording.StartStatus = FarmRecording.QueryStatus = FarmRecording.StopStatus = ERROR_SUCCESS;
+    if (!FarmRecordingComplete(FarmRecording, FarmRecordEnd::FirstFault, 0, 10000000, 1, 2, 3) ||
+        FarmRecordingComplete(FarmRecording, FarmRecordEnd::Deadline, 0, 10000000, 1, 2, 3) ||
+        FarmRecordingComplete(FarmRecording, FarmRecordEnd::LeaseExit, 0, 0, 1, 2, 3)) return 19;
+    FarmRecording.State.Value.EventsLost = 1;
+    if (FarmRecordingComplete(FarmRecording, FarmRecordEnd::FirstFault, 0, 10000000, 1, 2, 3)) return 19;
+    FarmRecording.State.Value.EventsLost = 0;
+    FarmRecording.QueryStatus = ERROR_ACCESS_DENIED;
+    if (FarmRecordingComplete(FarmRecording, FarmRecordEnd::FirstFault, 0, 10000000, 1, 2, 3)) return 19;
+    FarmRecording.QueryStatus = ERROR_SUCCESS; FarmRecording.StopStatus = ERROR_ACCESS_DENIED;
+    if (FarmRecordingComplete(FarmRecording, FarmRecordEnd::FirstFault, 0, 10000000, 1, 2, 3)) return 19;
+    FarmRecording.StopStatus = ERROR_SUCCESS;
+    if (FarmRecordingComplete(FarmRecording, FarmRecordEnd::LeaseExit, 0, 10000000, 2, 1, 3) ||
+        FarmRecordingComplete(FarmRecording, FarmRecordEnd::LeaseExit, ERROR_ACCESS_DENIED, 10000000, 1, 2, 3)) return 19;
     const auto AckCycle = GetCaseSpec(FixedCase::AckCycleFunded);
     if (std::wstring(AckCycle.Binary) != L"build-ci/gargantuan_real_transport_tests.exe" ||
         std::wstring(AckCycle.Output) != L"build-ci/scheduler-trace-ack-cycle-funded" ||
@@ -474,6 +722,7 @@ int SelfTest() {
     try { (void)ParseGuid(L"9e814aad-3204-11d2-9a82-006008a86939"); return 10; } catch (...) {}
     std::cout << "[Qualification:SchedulerTrace] self-test=PASS v5-layout=PASS no-session-or-child-created\n";
     std::cout << "[Qualification:SchedulerTrace] rows-over-five-million=PASS byte-cap=PASS overflow-denial=PASS\n";
+    std::cout << "[Qualification:SchedulerTrace] farm-record-paths=PASS lease-boundaries=PASS loss-metadata=PASS no-capture-created\n";
     return 0;
 }
 void Drain(HANDLE Pipe, const fs::path &Path, std::atomic<bool> &Capped, std::atomic<bool> &Failed) noexcept {
@@ -832,6 +1081,8 @@ int wmain(int Count, wchar_t **Args) {
                 GetThreadPriority(GetCurrentThread()) == THREAD_PRIORITY_NORMAL ? 0 : 125;
         if (Count == 5 && std::wstring(Args[1]) == L"--decode")
             return DecodeOnly(fs::path(Args[2]), fs::path(Args[3]), ParseMainThread(Args[4]));
+        if (Count == 6 && std::wstring(Args[1]) == L"--record-farm-server")
+            return RecordFarmServer(fs::path(Args[2]), Args[3], fs::path(Args[4]), Args[5]);
         if (Count == 4 && std::wstring(Args[1]) == L"--run")
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3]);
         if (Count == 4 && std::wstring(Args[1]) == L"--run-ack-stats")

@@ -6,6 +6,14 @@ evidence_date: 2026-10-15
 
 # Foundation 3L — execution-domain and native-egress ownership decision
 
+**Diagnostic continuation (2026-10-15, qualification pending):** The authorized
+next slice implements a single persistent pre-rejection execution fault through
+the existing opt-in pooled observation sink. It preserves original obligation
+state and host-stage times; existing GNS callsite timing freezes on this D03
+fault rather than an unrelated legacy running deficit. A bounded record-only
+mode reuses the existing Windows scheduler recorder. This is diagnostic
+implementation, not a D03 correction or PASS. Section31 records its ownership.
+
 **Current state (2026-10-15, later continuation):** Actual Local32
 `ab0df092-fe93-4e6e-918a-2ae448479b3e` fails during gameplay on compound D03
 execution-health guards. First retained complete rejection is peer13:1;
@@ -2638,3 +2646,54 @@ exact-source CI and explicit package/prerequisite provenance before another
 bounded physical attempt. It is not a new health predicate or tracing framework.
 Only measured ownership then justifies a Main-work correction or an execution
 environment review. No platform impossibility or new supported scope is inferred.
+
+## 31. First D03 fault persistence and bounded scheduling correlation
+
+The farm host's child-local `GARGANTUAN_FARM_EXECUTION_CAPTURE=1` enables one
+Main-owned `first-execution-fault.bin` in the existing private role evidence
+root. Startup exclusively opens the non-inherited descriptor and persists a
+run-bound header. Healthy observations perform no file writes. The first
+non-teardown execution rejection, execution failure or invalid-state record
+latches before its callback; later peers, generations and cleanup cannot
+replace it. Diagnostic-only observations do not enter peer counts, acceptance
+or native-service accounting. Persistence failure invalidates qualification
+evidence and never changes production admission or health.
+
+The fixed792-byte little-endian record preserves the pre-check obligation,
+required-since/boundary, offer and turnover tokens/activation, permit ownership,
+full peer generation, current time/elapsed-validity/backward flags, actual
+Main/turnover/invalid result and native feedback state. Seven fixed completed
+host-stage slots and the active stage use existing host timestamps. A fault-only
+PID/TID and steady/QPC bracket reuses the existing native clock capture; an
+unsupported/invalid clock remains unmeasured. The immutable scalar copy precedes
+fault-only write/flush, whose post-fault cost cannot be the initiating interval.
+Healthy Main stage annotations add no clock reads or allocation.
+
+The existing GNS ring records named callsites in this mode, disables detailed
+per-callback retention, and freezes at the first D03 fault. Legacy curve failure
+cannot consume that trigger. Native ring storage is read only after transport
+destruction/native joins; freeze alone does not authorize concurrent reads.
+Joined history is flushed to a dedicated sidecar before stdout export. The
+diagnostic farm unwinds after the failing Session step to attempt timely export;
+external termination can still prevent it. Missing joins/history remain missing
+evidence, never an inferred lock or actor cause. All service predicates remain
+unchanged.
+
+The existing Windows scheduler helper's record-only farm mode launches no
+workload and changes no priorities. It uses fixed run-bound local paths, an
+original lease-owner process handle, a new exact GUID/name/ETL identity, a512MiB
+circular cap and420s deadline. It never adopts or stops another session. It
+starts before the canonical launch barrier, without precreating the role
+evidence root, and stops on a fault-size signal or original lease exit. File
+size does not prove a complete or flushed fault certificate. Offline decoding
+must separately validate the scalar record, clock bracket, retained thread
+interval and loss/coverage. Circular retention and two-second resource samples
+cannot establish whole-window coverage or a wait owner by themselves.
+
+Deterministic regressions exercise exact100000/100001us Main and150000/150001us
+turnover boundaries, backward/invalid state, first-fault immutability, actual
+binary persistence/failure and accounting exclusion. Recorder tests cover path,
+lease, stop/loss and inclusive file-cap boundaries. Their implementation is
+pending affected native tests, exact-source hosted CI/package verification and
+the one authorized fresh bounded Local32 attempt. Historical Local FAIL and
+all qualified source3182 evidence remain unchanged; no Node32 or final PASS.

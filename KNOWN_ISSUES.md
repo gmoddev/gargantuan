@@ -85,6 +85,18 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-15 — First-fault diagnostic implemented; qualification pending.**
+The authorized continuation adds one persistent pre-rejection execution record
+and bounded correlation through the existing GNS/scheduler diagnostics. It
+does not change D03, admission, gameplay, ownership or recovery. Exact predicate,
+obligation, clocks and host stage must be measured in one fresh Local32 attempt
+after deterministic/native/CI preflights. Existing failures are not relabeled.
+Both archived native/quote trees are restored to their identical C: paths with
+full byte/metadata verification; original D: archives remain intact (restore
+receipt `801403baf77f783004a3b44ddef884cb0ffb6145998287f00157a6157c9f9007`).
+The earlier dormant-state prohibition is discharged for those verified trees.
+**KI-006 OPEN; Foundation3L NOT_COMPLETE; PR6 draft.**
+
 **2026-10-15 — Local32 execution-health FAIL; first causal interval unmeasured.**
 Controller RAM recovered; no agent stopped user applications. Native source3182,
 official package961f and tooling head `bdef7003828553fee2fb2c41f368fb0c60886f8b`

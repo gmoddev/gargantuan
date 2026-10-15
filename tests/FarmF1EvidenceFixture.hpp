@@ -1,11 +1,13 @@
 #pragma once
 #include "../src/host/server/FarmF1Evidence.hpp"
+#include "FarmD03FirstFaultFixture.hpp"
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <source_location>
 
 inline void TestFarmF1Evidence() {
+	TestFarmD03FirstFault();
 	using namespace gargantuan;
 	using network::detail::PooledServiceRecord;
 	auto Require = [](bool Value, std::source_location Site = std::source_location::current()) {
@@ -460,5 +462,26 @@ inline void TestFarmF1Evidence() {
 		Grant(Evidence, Completed(1, 1, true));
 		Require(Notifications == 1 && Evidence.Observations()[0].FirstFailed.Measured &&
 			!Evidence.Observations()[0].FirstInitialFailure.Measured);
+	}
+	for (const bool Persist : {false, true}) {
+		auto Storage = std::make_unique<FarmEvidence>(FarmEvidence::Contract::HybridF1V1);
+		struct Observer { unsigned Count = 0; bool Persist = false; } Capture{0, Persist};
+		Storage->SetExecutionFaultObserver(&Capture, [](void *Context, const PooledServiceRecord &) noexcept {
+			auto &Saved = *static_cast<Observer *>(Context); ++Saved.Count; return Saved.Persist;
+		});
+		Require(network::detail::ActivePooledService->CaptureExecution);
+		Grant(*Storage, Completed(1)); Require(Storage->Valid(1));
+		PooledServiceRecord Diagnostic;
+		Diagnostic.Connection = {999, 999}; Diagnostic.DiagnosticOnly = true;
+		Storage->Observe(Diagnostic); // Not accepted/native evidence, even with execution capture enabled.
+		Require(Storage->Valid(1) && Storage->Observations().size() == 1 && Capture.Count == 0);
+		Diagnostic.ExecutionRejected = Diagnostic.InvalidAfter = true;
+		Storage->Observe(Diagnostic);
+		Require(Capture.Count == 1 && Storage->ExecutionCaptureValid() == Persist && Storage->Valid(1) == Persist);
+		Diagnostic.Point = network::detail::PooledObservationPoint::PeerTeardown;
+		Storage->Observe(Diagnostic); Require(Capture.Count == 1);
+		Storage->SetExecutionFaultObserver(nullptr, nullptr);
+		Diagnostic.Point = network::detail::PooledObservationPoint::AdmissionBegin;
+		Storage->Observe(Diagnostic); Require(Capture.Count == 1); // First capture cannot be reset after fault.
 	}
 }

@@ -170,6 +170,26 @@ try {
 	if (-not $MockProcess.Killed -or -not $MockProcess.Disposed -or $Output.CanWrite -or $ErrorStream.CanWrite) {
 		throw 'owned-PID cleanup did not terminate and dispose the mock process and streams'
 	}
+	$CaptureEnvironmentBefore = [Environment]::GetEnvironmentVariable('GARGANTUAN_FARM_EXECUTION_CAPTURE')
+	$TimingEnvironmentBefore = [Environment]::GetEnvironmentVariable('GARGANTUAN_FARM_SERVICE_TIMING')
+	$DiagnosticOutput = Join-Path $Root 'DiagnosticEnvironment'
+	[void][IO.Directory]::CreateDirectory($DiagnosticOutput)
+	$DiagnosticOwner = Start-EndpointProcess -Executable (Join-Path $PSHOME 'pwsh.exe') -WorkingDirectory $Root `
+		-Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+			'[Console]::WriteLine($env:GARGANTUAN_FARM_EXECUTION_CAPTURE + ":" + $env:GARGANTUAN_FARM_SERVICE_TIMING)') `
+		-Label 'server' -OutputDirectory $DiagnosticOutput -CaptureExecutionFault
+	try {
+		if (-not $DiagnosticOwner.Process.WaitForExit(5000) -or $DiagnosticOwner.Process.ExitCode -ne 0 -or
+			-not $DiagnosticOwner.OutputCopy.Wait(5000) -or -not $DiagnosticOwner.ErrorCopy.Wait(5000)) {
+			throw 'child-local diagnostic environment probe failed'
+		}
+		$DiagnosticOwner.OutputStream.Flush()
+		if (([IO.File]::ReadAllText($DiagnosticOwner.OutputPath)).Trim() -cne '1:1' -or
+			[Environment]::GetEnvironmentVariable('GARGANTUAN_FARM_EXECUTION_CAPTURE') -cne $CaptureEnvironmentBefore -or
+			[Environment]::GetEnvironmentVariable('GARGANTUAN_FARM_SERVICE_TIMING') -cne $TimingEnvironmentBefore) {
+			throw 'diagnostic environment was not confined to its server child'
+		}
+	} finally { Stop-EndpointProcess -Owner $DiagnosticOwner }
 	$FairnessPath = Join-Path $Evidence 'admission-fairness.tsv'
 	$FairnessLines = @(
 		"format=GargantuanAdmissionEvidenceV1`trun=$($Manifest.RunId)",

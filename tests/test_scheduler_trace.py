@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("SchedulerTraceValidate", ROOT / "tools/ci/SchedulerTraceValidate.py")
@@ -1056,6 +1057,36 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
         self.assertIn("wrapper-self-test=PASS no-session-or-child-created", Result.stdout)
         self.assertIn("dword-exit-normalization=PASS raw-status-preserved", Result.stdout)
 
+    def test_farm_record_only_uses_fixed_paths_original_lease_and_existing_bounded_trace(self):
+        Source = (ROOT / 'tools/ci/SchedulerTrace.cpp').read_text()
+        Body = Source[Source.index('int RecordFarmServer('):Source.index('int DecodeOnly(')]
+        for Forbidden in ('CreateProcessW(', 'SetPriorityClass(', 'SetThreadPriority(', 'Decode(', 'Cleanup('):
+            self.assertNotIn(Forbidden, Body)
+        for Required in ('ValidateFarmPaths(Output, Run, Fault)', 'ParseFarmLeaseOwner(Owner, GetCurrentProcessId())',
+                         'OpenProcess(SYNCHRONIZE, FALSE, OwnerPid)', 'ValidateFarmFaultParent(Fault)',
+                         'Recording.Start(Guid, Etl.wstring(), true)', 'Recording.StopOwned(Guid, Etl.wstring())',
+                         'WriteFarmReceipt(Output / "ready.json"', 'WriteFarmReceipt(Output / "record.json"'):
+            self.assertIn(Required, Body)
+        self.assertLess(Body.index('Recording.Start('), Body.index('WriteFarmReceipt(Output / "ready.json"'))
+        self.assertIn('constexpr ULONGLONG FarmRecordLimitMs = 420000;', Source)
+        self.assertIn('constexpr std::uint64_t FarmFirstFaultBytes = 792;', Source)
+        self.assertIn('L"C:/Sandbox/Codex/Evidence"', Source)
+        self.assertIn('Output != Evidence / (L"D03S-" + Run)', Source)
+        self.assertIn('Fault.filename() != L"first-execution-fault.bin"', Source)
+        Parent = Source[Source.index('void ValidateFarmFaultParent('):Source.index('std::uint64_t ReadFarmFaultSize(')]
+        self.assertIn('RequirePlainLocalPath(Parent.parent_path())', Parent)
+        self.assertIn('!fs::is_directory(Parent.parent_path())', Parent)
+        self.assertIn('FarmExpectedMissing(GetLastError())', Parent)
+        self.assertNotIn('create_directory', Parent)
+        self.assertIn('ValidateFarmFaultParent(Path)', Source)
+        self.assertIn('(Circular ? EVENT_TRACE_FILE_MODE_CIRCULAR : EVENT_TRACE_FILE_MODE_SEQUENTIAL)', Source)
+        self.assertIn('void Start(const GUID &Guid, const std::wstring &Path, bool Circular = false)', Source)
+        self.assertIn('QueryStatus != ERROR_SUCCESS || !Owns(Query, Guid, Path)', Source)
+        self.assertIn('Count == 6 && std::wstring(Args[1]) == L"--record-farm-server"', Source)
+        for Field in ('WholeWindowCoverage', 'NOT_ASSUMED', 'CausalVerdict', 'NOT_CLAIMED',
+                      'FaultCertificateValidated', 'FaultFlushObserved', 'SchedulingPolicyChanged'):
+            self.assertIn(Field, Body)
+
     def test_decoder_keeps_byte_time_bounds_and_decode_only_has_no_capture_or_child(self):
         Source = (ROOT / 'tools/ci/SchedulerTrace.cpp').read_text()
         self.assertIn('constexpr std::uint64_t CsvLimit = 512ULL * 1024 * 1024;', Source)
@@ -1068,6 +1099,8 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
         self.assertIn('Decode(Etl, Decoded)', Body)
         self.assertIn('fs::create_directory(Output)', Body)
         self.assertIn('RequirePlainLocalPath(Destination.parent_path())', Body)
+        self.assertIn('fs::file_size(Input) > CsvLimit', Body)
+        self.assertNotIn('fs::file_size(Input) >= CsvLimit', Body)
         Validator = (ROOT / 'tools/ci/SchedulerTraceValidate.py').read_text()
         self.assertNotIn('5_000_000', Validator)
         self.assertEqual(Validator.count('Count <= CsvBytes'), 2)
@@ -1130,6 +1163,74 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
         self.assertEqual(Result.returncode, 0, Result.stdout + Result.stderr)
         self.assertIn("self-test=PASS v5-layout=PASS no-session-or-child-created", Result.stdout)
         self.assertIn('rows-over-five-million=PASS byte-cap=PASS overflow-denial=PASS', Result.stdout)
+        self.assertIn('farm-record-paths=PASS lease-boundaries=PASS loss-metadata=PASS no-capture-created', Result.stdout)
+
+    @unittest.skipUnless(os.environ.get('SCHEDULER_TRACE_TEST_HELPER'), 'native compile-only helper not supplied')
+    def test_native_farm_recorder_rejects_unbound_inputs_without_capture(self):
+        Run = '11111111-2222-4333-8444-555555555555'
+        Output = 'C:/Sandbox/Codex/Evidence/D03S-' + Run
+        Fault = 'C:/Sandbox/Codex/Evidence/L32S2-Ev-' + Run + '/first-execution-fault.bin'
+        Cases = [(['relative', Run, Fault, '17'], 'exact run-bound local evidence paths'),
+                 ([Output + '/child', Run, Fault, '17'], 'exact run-bound local evidence paths'),
+                 ([Output, Run, Fault.replace('first-execution-fault.bin', 'other.bin'), '17'],
+                  'exact run-bound local evidence paths'),
+                 ([Output, Run, Fault.replace(Run, Run[:-1] + '6'), '17'], 'exact run-bound local evidence paths')]
+        for Pid in ('0', '01', '-1', '+1', '4294967296', '17x', ''):
+            Cases.append(([Output, Run, Fault, Pid], 'positive original lease-owner PID'))
+        Cases.extend((([Output, Run, Fault], 'invalid arguments'),
+                      ([Output, Run, Fault, '17', '--extra'], 'invalid arguments'),
+                      ([Output, '00000000-0000-0000-0000-000000000000', Fault, '17'], 'reserved session GUID')))
+        for Arguments, Message in Cases:
+            with self.subTest(Arguments=Arguments):
+                Result = subprocess.run([os.environ['SCHEDULER_TRACE_TEST_HELPER'], '--record-farm-server', *Arguments],
+                    text=True, capture_output=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                self.assertEqual(Result.returncode, 125, Result.stdout + Result.stderr)
+                self.assertIn(Message, Result.stderr)
+        # Do not create the canonical endpoint's absent role root merely to
+        # observe it. With the actual Evidence root present, this must reach
+        # the invalid original-lease check before any ETW/output creation.
+        Fresh = str(uuid.uuid4())
+        FreshOutput = Path('C:/Sandbox/Codex/Evidence') / ('D03S-' + Fresh)
+        FreshRole = FreshOutput.parent / ('L32S2-Ev-' + Fresh)
+        FreshFault = FreshRole / 'first-execution-fault.bin'
+        self.assertFalse(FreshOutput.exists())
+        self.assertFalse(FreshRole.exists())
+        Result = subprocess.run([os.environ['SCHEDULER_TRACE_TEST_HELPER'], '--record-farm-server',
+            str(FreshOutput), Fresh, str(FreshFault), '4294967295'], text=True, capture_output=True, timeout=30,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.assertEqual(Result.returncode, 125, Result.stdout + Result.stderr)
+        if FreshOutput.parent.is_dir():
+            self.assertIn('original lease-owner process is absent or exited', Result.stderr)
+        self.assertFalse(FreshOutput.exists())
+        self.assertFalse(FreshRole.exists())
+
+    @unittest.skipUnless(os.environ.get('SCHEDULER_TRACE_TEST_HELPER'), 'native compile-only helper not supplied')
+    def test_native_decode_inclusive_file_cap_is_not_a_valid_etl_certificate(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Root = Path(Directory)
+            Retained = Root / 'retained'
+            Retained.mkdir()
+            Input = Retained / 'invalid.etl'
+            Limit = 512 * 1024 * 1024
+            for Bytes in (Limit + 1, Limit):
+                with self.subTest(Bytes=Bytes):
+                    with Input.open('wb') as File:
+                        File.write(b'not-an-etl')
+                        File.truncate(Bytes)
+                    Output = Root / ('decoded-' + str(Bytes))
+                    Result = subprocess.run([os.environ['SCHEDULER_TRACE_TEST_HELPER'], '--decode',
+                        str(Input), str(Output), '17'], text=True, capture_output=True, timeout=60,
+                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                    self.assertEqual(Result.returncode, 125, Result.stdout + Result.stderr)
+                    self.assertEqual(Input.stat().st_size, Bytes)
+                    if Bytes > Limit:
+                        self.assertIn('bounded regular ETL', Result.stderr)
+                        self.assertFalse(Output.exists())
+                    else:
+                        Receipt = json.loads((Output / 'decode.json').read_text())
+                        self.assertFalse(Receipt['DecodeComplete'])
+                        self.assertEqual(Receipt['InputEtlBytes'], Limit)
+                        self.assertNotEqual(Receipt['DecodeOpenStatus'], 0)
 
     @unittest.skipUnless(os.environ.get('SCHEDULER_TRACE_TEST_HELPER'), 'native compile-only helper not supplied')
     def test_native_decode_rejects_invalid_arguments_without_output_or_capture(self):

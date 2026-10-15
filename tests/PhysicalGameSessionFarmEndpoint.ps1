@@ -515,8 +515,10 @@ function Assert-RolePaths {
 
 function Start-EndpointProcess {
 	param([string]$Executable, [string]$WorkingDirectory, [string[]]$Arguments,
-		[string]$Label, [string]$OutputDirectory, [string[]]$RemoveEnvironmentVariables = @(), [switch]$SamplerPipes)
+		[string]$Label, [string]$OutputDirectory, [string[]]$RemoveEnvironmentVariables = @(), [switch]$SamplerPipes,
+		[switch]$CaptureExecutionFault)
 	if ($SamplerPipes -and $Label -cne 'sampler') { throw 'dedicated sampler pipes cannot own a native role process' }
+	if ($CaptureExecutionFault -and $Label -cne 'server') { throw 'execution fault capture belongs only to the qualified server' }
 	$Info = [Diagnostics.ProcessStartInfo]::new()
 	$Info.FileName = $Executable
 	$Info.WorkingDirectory = $WorkingDirectory
@@ -526,6 +528,11 @@ function Start-EndpointProcess {
 	$Info.RedirectStandardError = $true
 	foreach ($Argument in $Arguments) { [void]$Info.ArgumentList.Add($Argument) }
 	foreach ($Variable in $RemoveEnvironmentVariables) { [void]$Info.Environment.Remove($Variable) }
+	if ($CaptureExecutionFault) {
+		# Child-local passive diagnostics; no parent or machine environment changes.
+		$Info.Environment['GARGANTUAN_FARM_EXECUTION_CAPTURE'] = '1'
+		$Info.Environment['GARGANTUAN_FARM_SERVICE_TIMING'] = '1'
+	}
 	$OutputPath = Join-Path $OutputDirectory "$Label.stdout.log"
 	$ErrorPath = Join-Path $OutputDirectory "$Label.stderr.log"
 	$Output = [IO.File]::Open($OutputPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
@@ -1571,7 +1578,8 @@ try {
 				'--content-node-token-env', $Manifest.NodeTokenEnvironment)
 		}
 		$Owner = Start-EndpointProcess -Executable $Executable -WorkingDirectory $RuntimeRoot `
-			-Arguments $Arguments -Label 'server' -OutputDirectory $Paths.Evidence
+			-Arguments $Arguments -Label 'server' -OutputDirectory $Paths.Evidence `
+			-CaptureExecutionFault:$Manifest.ScaleWorkload
 		$Owners.Add($Owner)
 		Publish-EndpointSamplerOwner -Sampler $ResourceSampler -Owner $Owner
 		$Clock = [Diagnostics.Stopwatch]::StartNew()

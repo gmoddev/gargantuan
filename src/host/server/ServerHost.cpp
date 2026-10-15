@@ -3,6 +3,7 @@
 #include "host/server/FarmAdmissionEvidence.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
 #include "host/server/FarmF1Evidence.hpp"
+#include "host/server/FarmD03FirstFault.hpp"
 #include "host/common/FarmServerTickEvidence.hpp"
 #include "host/common/FarmLifecycleEvidence.hpp"
 
@@ -21,6 +22,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -56,6 +58,22 @@
 
 namespace gargantuan::host {
 	namespace {
+		struct FarmExecutionFaultContext {
+			detail::FarmD03FirstFault *Evidence = nullptr;
+#if defined(GARGANTUAN_WITH_GNS)
+			detail::FarmServiceTimingEvidence *Timing = nullptr;
+#endif
+			static bool Persist(void *Context, const network::detail::PooledServiceRecord &Value) noexcept {
+				auto &Self = *static_cast<FarmExecutionFaultContext *>(Context);
+#if defined(GARGANTUAN_WITH_GNS)
+				if (Self.Timing) Self.Timing->Freeze(Value.NowMicroseconds);
+				const auto Clock = detail::FarmServiceTimingEvidence::Clock::Capture();
+				Self.Evidence->SetClock({Clock.Process, Clock.Thread, Clock.SteadyNs,
+					Clock.QpcBefore, Clock.QpcAfter, Clock.Frequency, Clock.Valid});
+#endif
+				return Self.Evidence->Persist(Value);
+			}
+		};
 #if defined(GARGANTUAN_WITH_GNS)
 		// Only constructed by the trusted bounded session-smoke mode. This observes
 		// ordinary sends unchanged; it has no queue, scheduling or authority policy.
@@ -443,6 +461,12 @@ namespace gargantuan::host {
 		// Renderer, and GameSession::Stop borrows Engine during exception cleanup.
 		std::unique_ptr<HeadlessRenderer> Renderer;
 		std::unique_ptr<Engine> Runtime;
+		const auto *ExecutionCaptureValue = std::getenv("GARGANTUAN_FARM_EXECUTION_CAPTURE");
+		const bool CaptureExecution = FarmScaleWorkload && ExecutionCaptureValue &&
+			std::string_view(ExecutionCaptureValue) == "1";
+		std::unique_ptr<detail::FarmD03FirstFault> ExecutionFault;
+		FarmExecutionFaultContext ExecutionContext;
+		std::ofstream ExecutionTimingOutput;
 #if defined(GARGANTUAN_WITH_GNS)
 		// Installed before native initialization; released after transport joins.
 		std::unique_ptr<detail::FarmServiceTimingEvidence> ServiceTimingEvidence;
@@ -458,10 +482,25 @@ namespace gargantuan::host {
 #endif
 		try {
 #if defined(GARGANTUAN_WITH_GNS)
-			if (FarmScaleWorkload && detail::FarmServiceTimingEvidence::Requested())
+			if (FarmScaleWorkload && (CaptureExecution || detail::FarmServiceTimingEvidence::Requested()))
 				ServiceTimingEvidence = std::make_unique<detail::FarmServiceTimingEvidence>(true,
-					detail::FarmServiceTimingEvidence::InitialRequested());
+					!CaptureExecution && detail::FarmServiceTimingEvidence::InitialRequested(), CaptureExecution);
 #endif
+			if (CaptureExecution) {
+				const auto EvidenceRoot = std::filesystem::path(FarmPublicationEvidencePath).parent_path();
+				ExecutionFault = std::make_unique<detail::FarmD03FirstFault>(
+					EvidenceRoot / "first-execution-fault.bin", FarmRunId);
+				const auto TimingPath = EvidenceRoot / "execution-native-timing.log";
+				if (std::filesystem::exists(TimingPath))
+					throw std::runtime_error("[Qualification:D03] native timing sidecar already exists");
+				ExecutionTimingOutput.open(TimingPath, std::ios::binary | std::ios::out);
+				if (!ExecutionTimingOutput)
+					throw std::runtime_error("[Qualification:D03] native timing sidecar could not be opened");
+				ExecutionContext.Evidence = ExecutionFault.get();
+#if defined(GARGANTUAN_WITH_GNS)
+				ExecutionContext.Timing = ServiceTimingEvidence.get();
+#endif
+			}
 			const auto HostStartupStarted = std::chrono::steady_clock::now();
 			const auto HostStartupUnixMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::system_clock::now().time_since_epoch()).count();
@@ -714,8 +753,10 @@ namespace gargantuan::host {
 			std::unique_ptr<detail::FarmPublicationEvidence> PublicationEvidence;
 			if (FarmScaleWorkload) F1Evidence = std::make_unique<detail::FarmF1Evidence>(
 				detail::FarmF1Evidence::Contract::HybridF1V1);
+			if (F1Evidence && ExecutionFault)
+				F1Evidence->SetExecutionFaultObserver(&ExecutionContext, FarmExecutionFaultContext::Persist);
 #if defined(GARGANTUAN_WITH_GNS)
-			if (F1Evidence && ServiceTimingEvidence)
+			if (F1Evidence && ServiceTimingEvidence && !ExecutionFault)
 				F1Evidence->SetFailureObserver(ServiceTimingEvidence.get(), detail::FarmServiceTimingEvidence::Failed,
 					ServiceTimingEvidence->InitialOnly());
 #endif
@@ -734,12 +775,21 @@ namespace gargantuan::host {
 					break;
 				}
 				const auto TickStarted = std::chrono::steady_clock::now();
+				auto MarkExecutionStage = [&](detail::FarmD03FirstFault::Stage Stage,
+					std::chrono::steady_clock::time_point At) {
+					if (ExecutionFault) ExecutionFault->MarkStage(Stage, Runtime->GetSimulationTick() +
+						(Stage == detail::FarmD03FirstFault::Stage::Poll || Stage == detail::FarmD03FirstFault::Stage::Engine ? 1 : 0),
+						static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(At.time_since_epoch()).count()));
+				};
+				MarkExecutionStage(detail::FarmD03FirstFault::Stage::Poll, TickStarted);
 				if (ServerTickEvidence) ServerTickEvidence->BeginTick(Runtime->GetSimulationTick() + 1);
 				if (PublicationEvidence) PublicationEvidence->MarkFrameBegin(Runtime->GetSimulationTick() + 1);
 				if (Session) (void)Session->Poll();
 				const auto EngineStarted = std::chrono::steady_clock::now();
+				MarkExecutionStage(detail::FarmD03FirstFault::Stage::Engine, EngineStarted);
 				Runtime->Step();
 			const auto SessionStarted = std::chrono::steady_clock::now();
+			MarkExecutionStage(detail::FarmD03FirstFault::Stage::Session, SessionStarted);
 			if (Session) {
 				runtime_detail::WorkSample SessionWork;
 				if (FarmRecoveryWorkload) {
@@ -749,6 +799,12 @@ namespace gargantuan::host {
 					Session->Step(Runtime->GetSimulationTick());
 				}
 				const auto SessionEnded = std::chrono::steady_clock::now();
+					// The initiating scalar record is already persisted before rejection.
+					// Unwind this diagnostic farm promptly so native joins can export its
+					// frozen history before a remote supervisor reacts to disconnects.
+					if (ExecutionFault && ExecutionFault->HasFault())
+						throw std::runtime_error("[Qualification:D03] first execution fault captured before peer rejection");
+					MarkExecutionStage(detail::FarmD03FirstFault::Stage::Qualifier, SessionEnded);
 					if (Session->GetStatus() == network::GameSessionStatus::Failed)
 						throw std::runtime_error(Session->GetFailure());
 					if (FarmMode) {
@@ -1059,6 +1115,7 @@ namespace gargantuan::host {
 				if (BindEndpoint) {
 					TickDeadline += std::chrono::microseconds(16'667);
 					const auto Now = std::chrono::steady_clock::now();
+					MarkExecutionStage(detail::FarmD03FirstFault::Stage::Sleep, Now);
 					if (TickDeadline > Now)
 						std::this_thread::sleep_until(TickDeadline);
 					else if (Now - TickDeadline > std::chrono::milliseconds(250))
@@ -1075,6 +1132,7 @@ namespace gargantuan::host {
 			if (AdmissionEvidence && !AdmissionEvidence->Valid()) ExitCode = 10;
 			if (PublicationEvidence && !PublicationEvidence->Valid()) ExitCode = 10;
 			if (ServerTickEvidence && !ServerTickEvidence->Valid()) ExitCode = 10;
+			if (ExecutionFault && ExecutionFault->Failed()) ExitCode = 10;
 			if (F1Evidence && !F1Evidence->Valid()) ExitCode = 10;
 			if (F1Evidence) {
 				F1Evidence->Write(std::cout, FarmRunId);
@@ -1198,6 +1256,11 @@ namespace gargantuan::host {
 			if (ServiceTimingEvidence) {
 				FarmTransport.reset(); // Last transport owner: native shutdown/join.
 				const bool Stopped = ServiceTimingEvidence->Stop();
+				if (ExecutionTimingOutput.is_open()) {
+					ServiceTimingEvidence->Write(ExecutionTimingOutput, FarmRunId, Stopped);
+					ExecutionTimingOutput.flush();
+					if (!ExecutionTimingOutput) ExitCode = 10;
+				}
 				ServiceTimingEvidence->Write(std::cout, FarmRunId, Stopped);
 			}
 #endif
@@ -1208,10 +1271,17 @@ namespace gargantuan::host {
 					  << '\n';
 			return ExitCode;
 		} catch (const std::exception &Error) {
-			std::cerr << "GargantuanServer stopped because packaged runtime startup failed: " << Error.what() << '\n';
+			const bool CapturedExecutionFault = ExecutionFault && ExecutionFault->HasFault();
+			if (!CapturedExecutionFault)
+				std::cerr << "GargantuanServer stopped because packaged runtime startup failed: " << Error.what() << '\n';
 			if (F1Evidence && !F1EvidenceWritten) {
-				F1Evidence->Write(std::cout, FarmRunId);
-				std::cout.flush();
+				if (CapturedExecutionFault && ExecutionTimingOutput.is_open()) {
+					F1Evidence->Write(ExecutionTimingOutput, FarmRunId);
+					ExecutionTimingOutput.flush();
+				} else {
+					F1Evidence->Write(std::cout, FarmRunId);
+					std::cout.flush();
+				}
 			}
 			F1Evidence.reset(); // Restore the borrowed previous sink before teardown.
 			if (Session) Session->Stop();
@@ -1222,9 +1292,15 @@ namespace gargantuan::host {
 			if (ServiceTimingEvidence) {
 				FarmTransport.reset();
 				const bool Stopped = ServiceTimingEvidence->Stop();
+				if (ExecutionTimingOutput.is_open()) {
+					ServiceTimingEvidence->Write(ExecutionTimingOutput, FarmRunId, Stopped);
+					ExecutionTimingOutput.flush();
+				}
 				ServiceTimingEvidence->Write(std::cout, FarmRunId, Stopped);
 			}
 #endif
+			if (CapturedExecutionFault)
+				std::cerr << "GargantuanServer stopped because packaged runtime startup failed: " << Error.what() << '\n';
 			return 7;
 		}
 	}
