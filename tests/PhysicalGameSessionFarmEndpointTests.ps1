@@ -183,13 +183,12 @@ try {
 			-not $DiagnosticOwner.OutputCopy.Wait(5000) -or -not $DiagnosticOwner.ErrorCopy.Wait(5000)) {
 			throw 'child-local diagnostic environment probe failed'
 		}
-		$DiagnosticOwner.OutputStream.Flush()
-		if (([IO.File]::ReadAllText($DiagnosticOwner.OutputPath)).Trim() -cne '1:1' -or
-			[Environment]::GetEnvironmentVariable('GARGANTUAN_FARM_EXECUTION_CAPTURE') -cne $CaptureEnvironmentBefore -or
-			[Environment]::GetEnvironmentVariable('GARGANTUAN_FARM_SERVICE_TIMING') -cne $TimingEnvironmentBefore) {
-			throw 'diagnostic environment was not confined to its server child'
-		}
 	} finally { Stop-EndpointProcess -Owner $DiagnosticOwner }
+	if (([IO.File]::ReadAllText($DiagnosticOwner.OutputPath)).Trim() -cne '1:1' -or
+		[Environment]::GetEnvironmentVariable('GARGANTUAN_FARM_EXECUTION_CAPTURE') -cne $CaptureEnvironmentBefore -or
+		[Environment]::GetEnvironmentVariable('GARGANTUAN_FARM_SERVICE_TIMING') -cne $TimingEnvironmentBefore) {
+		throw 'diagnostic environment was not confined to its server child'
+	}
 	$FairnessPath = Join-Path $Evidence 'admission-fairness.tsv'
 	$FairnessLines = @(
 		"format=GargantuanAdmissionEvidenceV1`trun=$($Manifest.RunId)",
