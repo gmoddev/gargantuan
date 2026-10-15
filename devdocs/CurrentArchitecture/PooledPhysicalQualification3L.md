@@ -1,10 +1,146 @@
 ---
 status: historical-f1-phase1-pass-hybrid-physical-pending
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-10-14
+last_verified: 2026-10-15
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Actual Local32 attempts and execution evidence blocker (2026-10-15)
+
+Both actual attempts use native source
+`3182a164d5bf87f5051e11ecbd1c749b73c282dc`, official package SHA256
+`961fef56761b563ecbf7b10708d724b41c7ea1bb9dd88fc96db50c6fb60bf9f6`,
+and tracked-clean tooling `bdef7003828553fee2fb2c41f368fb0c60886f8b`.
+No production code, health bound, capture reserve or accepted workload changes.
+The original eight native-source CI/package jobs and native32/recovery plus
+corrected four-client PASS remain qualified subsets. Current bdef's six original
+push/PR jobs pass97/53/97/53/11/11 with actual checkout/JUnit/contract joins;
+receipt `8bf1c20585b73c0f2d6a16913b6a2462c769f0f3b9941a2b02af65c50dc49dc7`.
+Earlier b629's original CI FAIL is not relabeled.
+
+### First attempt: infrastructure rejection before gameplay
+
+Run `73f40b17-edf1-4ea4-98ca-6488a77e0eac`, coordinator
+`5e642514-ccaa-4ebd-a1ed-ab7a6ce36edb`, passes prepare/stage, then fails
+capture startup. Worker preflight10:18:34UTC has37051441152B free C:;
+post-failure10:21:31UTC has34551799808B, a2499641344B decline. The installed
+hook checks34GiB36507222016B before starting capture and correctly rejects.
+New task roots total19384326B and cannot explain the decline; no past external
+owner or pagefile growth is established. There is no native gameplay/F1 result.
+Owned child trees are reaped. Server diagnostic capture confirms owned stop;
+client diagnostic marker retains OwnedStopConfirmed=false, with subsequent
+process/port/capture checks proving idle, not capture completeness.
+
+First-run custody is `C:\Sandbox\Codex\L32F73v1`:413files/38773249B,
+index SHA256 `76d9d703999ec7ffad8f384ad85fefaa0e45b8aa3f53b90462876120afc60737`.
+Original worker/controller roots and original FAIL remain unchanged. An initial
+long-path custody-copy failure and its partial copy are preserved; a fresh short
+custody destination supplies the verified complete copy without rerunning native.
+
+### Verified storage correction and dormant build state
+
+The earlier V2 resource operation archives four closed diagnostic builds,
+20123files/5999735894B; retirement receipt
+`84f5a7240082ed9792557d4e1ffaa261c6c82bd79381b59db8c8c850b913884a`.
+Its original copy interrupted by a build-activity guard remains preserved;
+only a separately reviewed remaining-leaf continuation completes the copy.
+The slim resulting headroom does not survive the first attempt above.
+
+V3 parks five entire closed task trees,6209files/5428611575B, under
+`D:\Sandbox\Codex\ArchivedBuilds\foundation3l-20261015-v3`. Full hashes,
+closed membership, creation/write times and attributes are verified before
+retiring exact C: duplicates; no ACL/owner/last-access preservation is claimed.
+Copy receipt `1a2af69b5c1ad715cb65ce999944b361aec2b49ffa1190873c9a1705d72f5c6d`;
+retirement `4256ec23396d1082e10bc231c1d8a14bc3281989c6631de5b0db58bb5e76147c`.
+All29 final support files2975644B are independently hash/size verified.
+Fresh10:38:40UTC worker C:39563481088B exceeds the unchanged floor by3056259072B.
+Controller10:39:37UTC RAM18578546688B, C:47482814464B and D:31116730368B
+support fresh canonical preflights and planned capture placement.
+
+Two V3 trees are the inseparable native build and quote/vcpkg dependency pair:
+`C:\Sandbox\Codex\Builds\foundation3l-native-egress-msvc-release-vcpkg` and
+`C:\Sandbox\Codex\Builds\farm32-quote-timing-msvc-release-gns`. Both caches
+remain byte-identical in their complete D: archives (4319/564d pins).
+**Native builds, native tests and cache-dependent probes are prohibited until
+BOTH entire trees are verified restored to their identical original C: paths.**
+Do not build from D:, rewrite CMake paths or create redirects. External source
+and Fetch caches are unchanged. Official F32A8 deployment, installed runtimes
+and capture tooling are independent of those dormant trees; both hosts'122
+package files37558554B match the official ZIP. Three additional parked trees
+are closed strengthened, ring and execution-study diagnostics. Restore maps,
+manifests and instructions are retained in the V3 support roots on both hosts.
+
+### Fresh actual Local32: hard execution-health FAIL
+
+Run `ab0df092-fe93-4e6e-918a-2ae448479b3e`, coordinator
+`a475ccc3-cf67-42e3-95a2-5c078940b3ec`, is created10:40:17.973UTC.
+Prepare10:40:37.887 and stage10:40:50.584 complete0/empty stderr. Native
+server listens on required fiber10.253.3.2:39450 at10:41:11.847UTC. Actual
+32-client workload runs; original outer launch terminates FAIL/exit1 at
+10:45:01.689UTC. Client12 exits7 with server connection closed; both worker
+host/role and controller owned child trees are reaped. This is distinct from
+the preceding infrastructure-only failure.
+
+The first retained complete server rejection is stderr line627, peer13:1,
+`Structural execution opportunity exceeded its product budget`. There are29
+complete unique peer rejection lines; other lines use the retirement/completed
+admission guard. Both guards combine invalid/monotonic state with sticky
+Main100000us and turnover150000us failures. The strings do not identify the
+first actual predicate, onset clock, obligation/token or measured interval.
+No native F1, publication, work-tick, fairness or result summary exists before
+abort. Stdout238196B and stderr204800B end mid-line; log buffering prevents
+ordering their tails or treating nearby reload stop messages as teardown.
+Last complete source offer478 of480, tick9071, spans389us inside its offer
+body. It does not certify a completed Main opportunity or turnover.
+
+The78 server resource samples are about2s apart: minimum available RAM
+20965130240B; peak server working/private sets311971840/600989696B; sampled
+NIC errors/discards0; maximum coarse aggregate host busy27.823%. They establish
+no sampled server RAM/NIC violation and cannot resolve100/150ms scheduling,
+per-core contention, lock waits or observer perturbation. No such cause is
+measured. All180 small mirrored files550849B match original worker bytes;
+index `0ada59b5e5d8a0b4b879cc3cd4118d95a03845a0db4c47e1e08aa1fb0d091748`.
+Independent attribution `528f814cc99e9a6e0282a88b1f95816beee95f34c2a59d017edf3732e2a26caa`
+finds no demonstrated correctable production defect.
+
+Diagnostic evidence is retained under `C:\Sandbox\Codex\L32Fab0v1` and
+original run-scoped worker/controller roots. Worker capture index
+`1f8b91accbddbf47240befbec88e6bf52062bfdebebc711e4a04accb15af2bf3`
+remains FAILED_DIAGNOSTIC, OwnedStopConfirmed=true and OfflineExportSucceeded=true;
+ETL805306368B and pcap740685144B are preserved. Successful export/idle cleanup
+does not qualify the failed provider. At10:51:36UTC worker capture/ports are
+idle and free C:37288566784B, D:69818183680B, RAM21623705600B. Controller10:56UTC
+has no owned native/Python/dumpcap processes or owned UDP listeners; child-tree
+reaping is retained. Client capture retains OwnedStopConfirmed=false and four
+producer-unsealed artifacts; stable diagnostic copies do not retroactively seal
+them. Complete custody index
+`d3b02400a3161b25823bb2eee60cb11c83831d18ebfe902fb0b1eb5f3b8b9c6a`
+binds1038files/2329109943B; Root independently verifies every member hash/size
+and closed count. Both original failure states remain unchanged. A second
+independent assessment pins the same small originals and resource calculations:
+`690d92e7451bd4d35dcf2e0001cba5991b950a861df55c58d833d0f78bbf3dbc`.
+
+### Decision and ranked next steps
+
+1. Retain Local32 FAIL and capture one exact persistent pre-reject fault using
+   the existing opt-in execution sink: flags, point, peer/generation, token,
+   activation, required-since, now and active/completed host stage. End-only
+   summaries are insufficient. This is the smallest discriminating experiment;
+   new source/package provenance and focused regressions/CI are required before
+   another bounded physical attempt. No new health predicate or general tracer.
+2. Correct only a measured production or fixture owner exposed by that record,
+   preserving all deadlines, ordering and accounting; requalify fresh identities.
+3. If the measured owner is an execution-environment pause without a defensible
+   correction, review supported deployment isolation/platform requirements.
+   This record does not prove platform impossibility or authorize a contract change.
+
+The bounded investigation stops at the missing first-fault interval/ownership.
+No arbitrary deadline increase, speculative networking redesign or identical
+retry is performed. Real-TLS Node32 has no fresh identity/stage/launch and cannot
+follow a failed Local result. Final conjunction, parity and remaining physical
+resource/recovery gates remain unqualified. **KI-006 OPEN; Foundation3L
+NOT_COMPLETE; PR6 draft; no3M, release or merge.**
 
 ## Autonomous Full32 resource remediation (2026-10-15)
 

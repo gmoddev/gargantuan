@@ -1,7 +1,7 @@
 ---
 status: current
 owner: qualification
-last_verified: 2026-10-14
+last_verified: 2026-10-15
 related_code:
   - tests/foundation3l_acceptance.py
   - tests/test_foundation3l_acceptance.py
@@ -9,6 +9,32 @@ related_code:
 ---
 
 # Final Foundation 3L evidence conjunction
+
+## Latest continuation — actual Local32 FAIL (2026-10-15)
+
+Native source3182, official package961f, native32/recovery and corrected
+four-client PASS retain their exact scopes. Tooling head
+`bdef7003828553fee2fb2c41f368fb0c60886f8b` passes its six original hosted jobs;
+receipt `8bf1c20585b73c0f2d6a16913b6a2462c769f0f3b9941a2b02af65c50dc49dc7`.
+Earlier b629 CI FAIL remains unchanged.
+
+Controller RAM and verified worker disk remediation permit actual Local32.
+Run73f40b17 fails the capture-start disk reserve before gameplay; preserved
+fresh run `ab0df092-fe93-4e6e-918a-2ae448479b3e` then fails during gameplay
+on compound D03 execution-health guards. First retained rejection is peer13:1,
+stderr line627; exact first Main/turnover/invalid predicate, elapsed interval
+and execution owner are unmeasured. No native F1/publication/work-tick/fairness
+summary or native result is retained before the abort. Coarse resource samples
+and separately buffered log tails cannot supply the missing certificate.
+Diagnostic capture export/owned cleanup do not promote a failed provider.
+
+There is no successful Local host terminal or complete Local conjunction;
+real-TLS Node32 was not staged/launched. Final typed acceptance is therefore
+not invoked with fabricated or missing provider inputs. The five archived
+build trees preserve full cache state; restore BOTH native/quote trees to
+their identical C: paths before native build/test work. See the
+[physical failure assessment and ranked next steps](../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#actual-local32-attempts-and-execution-evidence-blocker-2026-10-15).
+**Foundation3L NOT_COMPLETE; KI-006 OPEN; PR6 draft. No retained D03 bound changes.**
 
 ## Latest continuation — worker disk resolved, controller RAM external (2026-10-15)
 

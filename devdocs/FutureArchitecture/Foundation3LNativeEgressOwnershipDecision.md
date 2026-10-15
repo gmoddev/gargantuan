@@ -1,12 +1,23 @@
 ---
 status: review-required-non-normative
 owner: runtime-networking
-evidence_date: 2026-10-14
+evidence_date: 2026-10-15
 ---
 
 # Foundation 3L — execution-domain and native-egress ownership decision
 
-**Current state (2026-10-15):** The autonomous Full32 continuation resolves
+**Current state (2026-10-15, later continuation):** Actual Local32
+`ab0df092-fe93-4e6e-918a-2ae448479b3e` fails during gameplay on compound D03
+execution-health guards. First retained complete rejection is peer13:1;
+first Main/turnover/invalid flags, elapsed interval and execution owner are
+unmeasured because native shutdown summaries were not retained before abort.
+Independent bounded reviews establish no source-supported service correction
+or platform impossibility. No blind retry, Node32 launch or deadline change
+follows. Native32/recovery and corrected four-client PASS remain valid subsets.
+See section30 and the [actual Local32 assessment](../CurrentArchitecture/PooledPhysicalQualification3L.md#actual-local32-attempts-and-execution-evidence-blocker-2026-10-15).
+**KI-006 OPEN; 3L NOT_COMPLETE; PR6 draft; no3M or merge.**
+
+**Earlier state (2026-10-15):** The autonomous Full32 continuation resolves
 worker capture disk through verified archival of24 closed task-owned build
 directories; actual C:38653771776B exceeds the unchanged34GiB floor.
 Controller free RAM5595303936B remains2994630656B short of8GiB, with no idle
@@ -2581,3 +2592,49 @@ The later qualifier child pins measured source3182 archive/probe bytes; it does
 not relabel the executable or supply physical qualification. Fresh four-client,
 canonical Local32, real-TLS Node32 and independent final acceptance remain open.
 No older failure is upgraded. KI-006 OPEN; PR6 draft; no3M or automatic merge.
+
+## 30. Actual Local32: retained hard failure and bounded attribution stop
+
+Execution remains native source3182/official package961f; the campaign uses
+tracked-clean tooling `bdef7003828553fee2fb2c41f368fb0c60886f8b`. Its six
+original hosted jobs pass97/53/97/53/11/11, separately from earlier b629's
+retained sampler-startup FAIL. The native32 and four-client evidence in
+section29 and the physical receipt are not upgraded to Full32.
+
+Controller headroom returns. First Local73f40b17 fails the unchanged capture
+disk reserve before gameplay. Five complete task build trees are then parked
+with full byte/metadata verification on D:, including the native/quote pair
+and its vcpkg state; both require identical-C-path restoration before native
+work. No cache purge, source/runtime change or resource-floor reduction occurs.
+
+Fresh Local `ab0df092-fe93-4e6e-918a-2ae448479b3e`, coordinator
+`a475ccc3-cf67-42e3-95a2-5c078940b3ec`, passes prepare/stage and fails during
+gameplay. First retained complete rejection is stderr line627/peer13:1;
+29 complete distinct peer rejections follow the two compound execution guards.
+Those strings combine monotonic/invalid state and sticky Main100ms/turnover150ms
+failure. They do not identify the first violated predicate or its duration.
+No native F1, publication, work-tick, fairness or result evidence survives the
+abort. Both log tails end mid-line and separate stdout/stderr buffering
+precludes assigning rejection time from adjacent phase lines.
+
+The last complete source offer478/tick9071 has an offer-body interval389us;
+that is not a completed peer admission or turnover interval. Two-second server
+samples show substantial free RAM and no sampled NIC errors/discards; neither
+they nor coarse aggregate CPU exclude a short scheduling/lock/dispatch delay.
+No such cause, first wait owner, stack or observer perturbation is measured.
+The earlier cold Aggregate reporting correction is a different qualified path;
+this failure does not demonstrate that defect has returned. Independent
+assessment SHA256 is
+`528f814cc99e9a6e0282a88b1f95816beee95f34c2a59d017edf3732e2a26caa`.
+
+Decision: retain hard Local FAIL and stop this qualification track for evidence
+review. No demonstrated production defect justifies a speculative correction
+or identical retry. The smallest next discriminator is one bounded persistent
+pre-reject snapshot using the existing opt-in execution sink: exact point,
+peer/generation, token, activation, required-since, now, Main/turnover/invalid
+flags and active/completed host stage. Persist before peer failure/teardown;
+end-only dumping is insufficient. It requires focused deterministic regressions,
+exact-source CI and explicit package/prerequisite provenance before another
+bounded physical attempt. It is not a new health predicate or tracing framework.
+Only measured ownership then justifies a Main-work correction or an execution
+environment review. No platform impossibility or new supported scope is inferred.

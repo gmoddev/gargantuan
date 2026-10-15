@@ -85,6 +85,33 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-15 — Local32 execution-health FAIL; first causal interval unmeasured.**
+Controller RAM recovered; no agent stopped user applications. Native source3182,
+official package961f and tooling head `bdef7003828553fee2fb2c41f368fb0c60886f8b`
+remain distinct; bdef's six original hosted jobs pass97/53/97/53/11/11.
+Local `73f40b17-edf1-4ea4-98ca-6488a77e0eac` fails before native gameplay:
+worker free disk falls2499641344B after preflight and the unchanged34GiB
+capture-start reserve rejects correctly. The new task roots explain19384326B;
+the remaining decline is unattributed. Original FAIL and cleanup are preserved.
+
+After verified archival of five additional complete task build trees,
+including the inseparable native/quote build pair, fresh Local32
+`ab0df092-fe93-4e6e-918a-2ae448479b3e` passes preparation/staging and fails
+during gameplay. First retained complete server rejection is peer13:1 at
+stderr line627;29 complete peer rejection lines invoke compound D03 execution
+guards. No first-fault flags, elapsed interval or ownership snapshot survives;
+shutdown-only native summaries/work-tick evidence are absent. Main100ms,
+turnover150ms and invalid-state causes cannot be distinguished. Independent
+bounded reviews find no demonstrated production correction or platform limit.
+No deadline change, identical retry or Node32 launch follows.
+
+Both archived build trees must return to their identical C: paths before any
+native build/test/cache-dependent probe; all cache bytes remain on D:.
+Prior native32/recovery and corrected four-client PASS remain source-specific.
+[Full attempts, custody and next discriminator](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#actual-local32-attempts-and-execution-evidence-blocker-2026-10-15).
+**KI-006 OPEN; 3L NOT_COMPLETE; Local32 FAIL, Node32/final acceptance unqualified;
+PR6 draft; no3M or merge.**
+
 **2026-10-15 — Worker disk remediated; actual-client RAM remains external.**
 The autonomous Full32 continuation preserves native source3182's qualified
 native32/official package and the corrected four-client PASS. It archives24
