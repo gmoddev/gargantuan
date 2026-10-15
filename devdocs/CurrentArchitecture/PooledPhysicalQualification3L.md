@@ -114,12 +114,22 @@ idle and free C:37288566784B, D:69818183680B, RAM21623705600B. Controller10:56UT
 has no owned native/Python/dumpcap processes or owned UDP listeners; child-tree
 reaping is retained. Client capture retains OwnedStopConfirmed=false and four
 producer-unsealed artifacts; stable diagnostic copies do not retroactively seal
-them. Complete custody index
+them. Initial complete custody index
 `d3b02400a3161b25823bb2eee60cb11c83831d18ebfe902fb0b1eb5f3b8b9c6a`
 binds1038files/2329109943B; Root independently verifies every member hash/size
 and closed count. Both original failure states remain unchanged. A second
 independent assessment pins the same small originals and resource calculations:
 `690d92e7451bd4d35dcf2e0001cba5991b950a861df55c58d833d0f78bbf3dbc`.
+
+Final custody appends two cleanup censuses and preserves that initial index as
+`custody-index-before-final-cleanup.json`; raw originals are unchanged. The
+frozen current `custody-closed-inventory.json` SHA256 is
+`d74f214b8fb0e0e3c94e3177b74dcef421c6bebb7c6064c228c87ff3fad0cceb`,
+1041members/2329327370B, all independently rehashed with exact closed count.
+Worker10:58:09UTC has no owned processes, listeners, firewall rules or active
+capture; source3182 is tracked-clean. Controller10:58:38UTC has no owned native,
+Python or dumpcap processes/UDP listeners and retains child-tree reaping.
+These are cleanup/custody observations, not successful delivery or capture gates.
 
 ### Decision and ranked next steps
 
