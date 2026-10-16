@@ -58,6 +58,15 @@ setter calls therefore cannot feed back into the authoritative source stream.
 Suppression is thread-local and deliberately narrow, not a general way to skip
 authoritative recording.
 
+Physical recovery qualification observes this same mapping explicitly. Its
+`source_replica_v1` witness binds each actual live Name-observed Instance to the
+current replica map's full source identity, records its distinct local identity
+and replica epoch, and rejects missing, stale, foreign or ambiguous bindings.
+The private Main-only observer scans the existing bounded map once for at most32
+targets per recovery case; it adds no persistent reverse map or public API.
+Comparing local numeric IDs directly with server IDs cannot prove source
+identity. Neither equal final Names nor object indices replace this witness.
+
 The network `ReplicaApplier` retains renderer dirtiness for its exact live
 receiver scope while suppressing journal history. Native create/property/parent/
 destroy commits still feed the bounded `RenderDirtyAccumulator`, using local

@@ -1,0 +1,54 @@
+"""One-use reverse handshake from the selected worker identity."""
+
+import csv
+import ctypes
+import json
+import re
+import socket
+import subprocess
+import sys
+import time
+import uuid
+
+
+WORKER_SID = "S-1-5-21-455006656-4040886684-1921607991-1006"
+INTERACTIVE_SID = "S-1-5-21-455006656-4040886684-1921607991-1001"
+REVERSE_ADDRESS = ("127.0.0.1", 49961)
+
+
+def Probe(Label, RunId, Interactive=False):
+    if not re.fullmatch(r"[0-9a-f]{16}", Label) or str(uuid.UUID(RunId)) != RunId:
+        raise ValueError("invalid reverse tunnel identity")
+    Identity = next(csv.reader([subprocess.check_output(
+        ["whoami", "/user", "/fo", "csv", "/nh"], text=True).strip()]))
+    IsAdmin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+    ExpectedSid = INTERACTIVE_SID if Interactive else WORKER_SID
+    if Identity[1] != ExpectedSid or IsAdmin:
+        raise PermissionError("reverse probe did not run as the expected worker user")
+    WorkerNonce = uuid.uuid4().hex
+    Started = time.time_ns() // 1000000
+    with socket.create_connection(REVERSE_ADDRESS, timeout=5) as Connection:
+        Connection.settimeout(5)
+        Request = {"Version": 1, "Label": Label, "RunId": RunId,
+                   "WorkerNonce": WorkerNonce}
+        Connection.sendall((json.dumps(Request) + "\n").encode("ascii"))
+        Response = json.loads(Connection.makefile("rb").readline(512))
+        if (Response.get("Version") != 1 or Response.get("Label") != Label or
+                Response.get("RunId") != RunId or
+                Response.get("WorkerNonce") != WorkerNonce or
+                not re.fullmatch(r"[0-9a-f]{32}", Response.get("HostNonce", ""))):
+            raise ValueError("reverse tunnel reached the wrong coordinator endpoint")
+        Connection.sendall((json.dumps({"HostNonce": Response["HostNonce"]}) +
+                            "\n").encode("ascii"))
+    return {"Success": True, "Label": Label, "RunId": RunId,
+            "Sid": Identity[1], "IsAdmin": IsAdmin,
+            "Address": REVERSE_ADDRESS[0], "Port": REVERSE_ADDRESS[1],
+            "WorkerNonce": WorkerNonce, "HostNonce": Response["HostNonce"],
+            "StartedUnixMs": Started, "CompletedUnixMs": time.time_ns() // 1000000}
+
+
+if __name__ == "__main__":
+    if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] != "INTERACTIVE"):
+        raise SystemExit("usage: worker_tunnel_preflight.py LABEL RUN_ID [INTERACTIVE]")
+    Result = Probe(sys.argv[1], sys.argv[2], len(sys.argv) == 4)
+    print(json.dumps(Result, sort_keys=True), flush=True)

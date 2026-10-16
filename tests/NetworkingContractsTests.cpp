@@ -13,6 +13,7 @@
 #include "PooledReliableServiceRecoveryContractFixture.hpp"
 #include "ReliableTransportFeedbackModelFixture.hpp"
 #include "PooledReliableServiceProductionFixture.hpp"
+#include "RecoveryCausalEvidenceFixture.hpp"
 
 #include <array>
 #include <iostream>
@@ -256,6 +257,8 @@ int main() {
 		"Foundation 3L reliable transport feedback executable proof passes");
 
 	Check(gargantuan::test::RunPooledReliableServiceProductionTests(), "Production pooled admission passes");
+	Check(gargantuan::test::HybridCapacityCandidate::RunTests(), "Hybrid candidate capacity contradictions remain detected");
+	Check(gargantuan::test::RunRecoveryCausalEvidenceTests(), "Causal recovery fence evidence passes");
 	if (Failures == 0) std::cout << "All networking contract tests passed\n";
 	return Failures == 0 ? 0 : 1;
 }

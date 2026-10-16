@@ -1,0 +1,681 @@
+{
+  "Format": "Foundation3LEgressStage1FirstFailedPoolInterval",
+  "AnalysisSha256": "75603f77e0235e64d14f9a5d266f50a30aecffa04463a4e5a1183b67c6afa379",
+  "NativeLogSha256": "8615311783b60d905ad1d7bfeab84393b50b6b8017e721322f7b6c0d04642d77",
+  "RunId": "d7af967d-c680-434b-8b72-c7ca245ab8f5",
+  "PoolWitness": {
+    "run": "d7af967d-c680-434b-8b72-c7ca245ab8f5",
+    "event": "witness",
+    "kind": "first_failed",
+    "observed": 1,
+    "start_us": 1150337269116,
+    "at_us": 1150337273773,
+    "minimum_at_us": 1150337269116,
+    "served": 239907,
+    "minimum_served": 0,
+    "deficit_byte_us": 72618979648,
+    "SourceFile": "server.stdout.log",
+    "SourceLine": 10822
+  },
+  "ServiceIdentity": {
+    "Pid": 54948,
+    "Tid": 25940,
+    "Creation100ns": 134360944011814062,
+    "Begin": 11501925107225,
+    "End": 11504516943452,
+    "Slot": 0
+  },
+  "ClockBrackets": [
+    {
+      "Boundary": "BEGIN",
+      "SteadyNs": 1150192496144800,
+      "QpcBefore": 11501924961445,
+      "QpcAfter": 11501924961449,
+      "Frequency": 10000000
+    },
+    {
+      "Boundary": "FAILURE_OBSERVER",
+      "SteadyNs": 1150337285828100,
+      "QpcBefore": 11503372858281,
+      "QpcAfter": 11503372858282,
+      "Frequency": 10000000
+    },
+    {
+      "Boundary": "SERVICE_THREAD",
+      "SteadyNs": 1150192510774900,
+      "QpcBefore": 11501925107743,
+      "QpcAfter": 11501925107749,
+      "Frequency": 10000000
+    }
+  ],
+  "MaximumClockErrorQpcTicks": 6,
+  "StartUs": 1150337269116,
+  "EndUs": 1150337273773,
+  "DurationUs": 4657,
+  "UniqueBytes": 239907,
+  "DeficitByteUs": 72618979648,
+  "BoundByteUs": 72100864000,
+  "RequiredSavingAtPoolRateUs": 7.720524787902832,
+  "ScheduledUs": 4657.0,
+  "OffCpuUs": 0.0,
+  "StateTicks": {
+    "ON_CPU": 46570
+  },
+  "OverlappingPhaseUs": {
+    "7": 4482.7,
+    "6": 4551.5,
+    "5": 4577.7,
+    "2": 10.5,
+    "3": 3.8,
+    "4": 36.9
+  },
+  "NestedPhasesNotAdditive": true,
+  "CompleteSnpCallbacks": 52,
+  "AllOverlappingSnpCallbacks": 54,
+  "CompleteCallbackComponentsUs": {
+    "SnpUs": 4398.2,
+    "RawUs": 3551.1,
+    "EncryptUs": 295.8,
+    "OtherUs": 551.3,
+    "RawCalls": 208,
+    "EncryptCalls": 208
+  },
+  "BoundarySnpCallbacks": [
+    {
+      "Sequence": 1600226,
+      "WholeUs": 96.5,
+      "OverlapUs": 63.2,
+      "RawUs": 75.3,
+      "EncryptUs": 6.9
+    },
+    {
+      "Sequence": 1600374,
+      "WholeUs": 88.2,
+      "OverlapUs": 21.3,
+      "RawUs": 71.9,
+      "EncryptUs": 6.0
+    }
+  ],
+  "CompleteCallbackPackets": 208,
+  "CompleteCallbackNativeBytes": 244192,
+  "CompleteCallbackRecords": [
+    {
+      "Sequence": 1600228,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372691813,
+      "EndQpc": 11503372692572,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 60.0,
+      "EncryptUs": 5.8
+    },
+    {
+      "Sequence": 1600230,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372692591,
+      "EndQpc": 11503372693408,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 64.2,
+      "EncryptUs": 6.1
+    },
+    {
+      "Sequence": 1600232,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372693426,
+      "EndQpc": 11503372694207,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 62.8,
+      "EncryptUs": 5.2
+    },
+    {
+      "Sequence": 1600237,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372694268,
+      "EndQpc": 11503372695097,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 65.7,
+      "EncryptUs": 5.9
+    },
+    {
+      "Sequence": 1600239,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372695110,
+      "EndQpc": 11503372695816,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 56.3,
+      "EncryptUs": 5.1
+    },
+    {
+      "Sequence": 1600241,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372695877,
+      "EndQpc": 11503372696672,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 65.2,
+      "EncryptUs": 5.1
+    },
+    {
+      "Sequence": 1600243,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372696689,
+      "EndQpc": 11503372697494,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 66.4,
+      "EncryptUs": 5.3
+    },
+    {
+      "Sequence": 1600248,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372697577,
+      "EndQpc": 11503372698467,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 72.1,
+      "EncryptUs": 5.9
+    },
+    {
+      "Sequence": 1600250,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372698514,
+      "EndQpc": 11503372699383,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 70.3,
+      "EncryptUs": 5.8
+    },
+    {
+      "Sequence": 1600252,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372699408,
+      "EndQpc": 11503372700337,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 76.7,
+      "EncryptUs": 5.7
+    },
+    {
+      "Sequence": 1600254,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372700353,
+      "EndQpc": 11503372701284,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 76.0,
+      "EncryptUs": 6.2
+    },
+    {
+      "Sequence": 1600260,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372701486,
+      "EndQpc": 11503372702418,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 76.0,
+      "EncryptUs": 6.0
+    },
+    {
+      "Sequence": 1600262,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372702433,
+      "EndQpc": 11503372703230,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 63.6,
+      "EncryptUs": 5.8
+    },
+    {
+      "Sequence": 1600264,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372703244,
+      "EndQpc": 11503372704070,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 66.7,
+      "EncryptUs": 5.6
+    },
+    {
+      "Sequence": 1600266,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372704084,
+      "EndQpc": 11503372704970,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 71.9,
+      "EncryptUs": 5.9
+    },
+    {
+      "Sequence": 1600271,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372705015,
+      "EndQpc": 11503372705911,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 73.1,
+      "EncryptUs": 6.4
+    },
+    {
+      "Sequence": 1600273,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372705926,
+      "EndQpc": 11503372706798,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 70.4,
+      "EncryptUs": 5.9
+    },
+    {
+      "Sequence": 1600275,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372706814,
+      "EndQpc": 11503372707841,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 84.8,
+      "EncryptUs": 6.2
+    },
+    {
+      "Sequence": 1600277,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372707857,
+      "EndQpc": 11503372708748,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 72.8,
+      "EncryptUs": 6.0
+    },
+    {
+      "Sequence": 1600282,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372708794,
+      "EndQpc": 11503372709564,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 60.9,
+      "EncryptUs": 6.0
+    },
+    {
+      "Sequence": 1600284,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372709579,
+      "EndQpc": 11503372710406,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 66.7,
+      "EncryptUs": 6.0
+    },
+    {
+      "Sequence": 1600286,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372710420,
+      "EndQpc": 11503372711347,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 75.2,
+      "EncryptUs": 6.2
+    },
+    {
+      "Sequence": 1600288,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372711362,
+      "EndQpc": 11503372712259,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 72.0,
+      "EncryptUs": 6.1
+    },
+    {
+      "Sequence": 1600293,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372712304,
+      "EndQpc": 11503372713187,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 71.8,
+      "EncryptUs": 6.1
+    },
+    {
+      "Sequence": 1600295,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372713201,
+      "EndQpc": 11503372714062,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 69.9,
+      "EncryptUs": 5.8
+    },
+    {
+      "Sequence": 1600297,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372714077,
+      "EndQpc": 11503372714942,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 69.9,
+      "EncryptUs": 6.1
+    },
+    {
+      "Sequence": 1600299,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372714957,
+      "EndQpc": 11503372715780,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 66.8,
+      "EncryptUs": 5.5
+    },
+    {
+      "Sequence": 1600305,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372715923,
+      "EndQpc": 11503372716827,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 73.5,
+      "EncryptUs": 5.7
+    },
+    {
+      "Sequence": 1600307,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372716845,
+      "EndQpc": 11503372717700,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 68.7,
+      "EncryptUs": 6.1
+    },
+    {
+      "Sequence": 1600309,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372717720,
+      "EndQpc": 11503372718484,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 61.6,
+      "EncryptUs": 5.0
+    },
+    {
+      "Sequence": 1600311,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372718498,
+      "EndQpc": 11503372719281,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 63.4,
+      "EncryptUs": 5.3
+    },
+    {
+      "Sequence": 1600316,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372719329,
+      "EndQpc": 11503372720124,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 64.7,
+      "EncryptUs": 5.2
+    },
+    {
+      "Sequence": 1600318,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372720139,
+      "EndQpc": 11503372720932,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 64.6,
+      "EncryptUs": 5.4
+    },
+    {
+      "Sequence": 1600320,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372720945,
+      "EndQpc": 11503372721741,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 65.2,
+      "EncryptUs": 5.1
+    },
+    {
+      "Sequence": 1600322,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372721754,
+      "EndQpc": 11503372722551,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 64.7,
+      "EncryptUs": 5.4
+    },
+    {
+      "Sequence": 1600327,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372722592,
+      "EndQpc": 11503372723362,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 62.1,
+      "EncryptUs": 5.7
+    },
+    {
+      "Sequence": 1600329,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372723375,
+      "EndQpc": 11503372724084,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 56.2,
+      "EncryptUs": 4.7
+    },
+    {
+      "Sequence": 1600331,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372724098,
+      "EndQpc": 11503372724811,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 56.6,
+      "EncryptUs": 4.8
+    },
+    {
+      "Sequence": 1600333,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372724825,
+      "EndQpc": 11503372725554,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 59.1,
+      "EncryptUs": 5.0
+    },
+    {
+      "Sequence": 1600338,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372725599,
+      "EndQpc": 11503372726380,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 63.7,
+      "EncryptUs": 5.2
+    },
+    {
+      "Sequence": 1600340,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372726395,
+      "EndQpc": 11503372727278,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 70.1,
+      "EncryptUs": 6.0
+    },
+    {
+      "Sequence": 1600342,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372727296,
+      "EndQpc": 11503372728073,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 63.8,
+      "EncryptUs": 5.0
+    },
+    {
+      "Sequence": 1600344,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372728086,
+      "EndQpc": 11503372728946,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 70.5,
+      "EncryptUs": 5.2
+    },
+    {
+      "Sequence": 1600349,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372728996,
+      "EndQpc": 11503372729824,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 67.4,
+      "EncryptUs": 5.6
+    },
+    {
+      "Sequence": 1600351,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372729842,
+      "EndQpc": 11503372730929,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 79.5,
+      "EncryptUs": 6.4
+    },
+    {
+      "Sequence": 1600353,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372730946,
+      "EndQpc": 11503372731944,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 80.3,
+      "EncryptUs": 6.9
+    },
+    {
+      "Sequence": 1600355,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372731959,
+      "EndQpc": 11503372732804,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 68.4,
+      "EncryptUs": 5.2
+    },
+    {
+      "Sequence": 1600361,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372732987,
+      "EndQpc": 11503372733909,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 74.6,
+      "EncryptUs": 6.0
+    },
+    {
+      "Sequence": 1600363,
+      "Handle": 1649817257,
+      "Token": 2184,
+      "BeginQpc": 11503372733925,
+      "EndQpc": 11503372734798,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 70.7,
+      "EncryptUs": 5.9
+    },
+    {
+      "Sequence": 1600365,
+      "Handle": 1623447418,
+      "Token": 2182,
+      "BeginQpc": 11503372734812,
+      "EndQpc": 11503372735683,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 70.6,
+      "EncryptUs": 5.9
+    },
+    {
+      "Sequence": 1600367,
+      "Handle": 4218842787,
+      "Token": 2183,
+      "BeginQpc": 11503372735698,
+      "EndQpc": 11503372736574,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 71.4,
+      "EncryptUs": 5.6
+    },
+    {
+      "Sequence": 1600372,
+      "Handle": 2105760547,
+      "Token": 2185,
+      "BeginQpc": 11503372736620,
+      "EndQpc": 11503372737502,
+      "Packets": 4,
+      "Bytes": 4696,
+      "RawUs": 71.5,
+      "EncryptUs": 5.8
+    }
+  ],
+  "Unmeasured": [
+    "raw call's overlap within boundary SNP callbacks",
+    "observer cost separate from productive SNP work",
+    "worker dispatch and actor result commit",
+    "exact receive lock owner"
+  ]
+}

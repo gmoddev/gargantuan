@@ -2,6 +2,7 @@
 
 #include "gargantuan/network/Connection.hpp"
 #include "gargantuan/network/ReliableServiceProfile.hpp"
+#include "ReliableByteAdmissionDiagnostics.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -50,17 +51,37 @@ public:
 		if (!Profile.IsPooled() || Found == Peers.end() || !Found->second.Seen || Active) return false;
 		auto &Value = Found->second;
 		Value.Service = Service;
-		if (Value.OwnsGrant && !Value.Debt && Service && !Service->OrdinaryDebt) {
+		// Retire has already verified the exact generation/token/byte receipt.
+		// GameSession's PooledReliableServiceFeedback ledger certifies Available
+		// from complete, fresh generation-valid native evidence at consumption;
+		// a missing/stale sample cannot release a permit.
+		// This permit owns structural debt. Ordinary followers remain charged by
+		// the independent server-wide funding ledger and retain reliable FIFO.
+		if (Value.OwnsGrant && !Value.Debt && Service && Service->Available) {
 			Value.OwnsGrant = false; --Totals.ActiveDrainGrants;
+			EmitGrantLifecycle(Id, Value, AdmissionEvidenceKind::GrantReleased, Now);
+			ClearDiagnosticGrant(Value);
 		}
 		return true;
 	}
 	void SetOrdinaryFunding(std::uint64_t Bytes) { OrdinaryFunding = Bytes; }
+	bool SetOrdinaryUnsent(ConnectionId Id, std::uint64_t Bytes) {
+		auto Found = Peers.find(Id);
+		if (!Profile.IsPooled() || Found == Peers.end() || !Found->second.Exposure) return false;
+		// Pooled debt and global funding already have exact owners. Reuse the
+		// existing FIFO exposure word for the conservative native-unsent prefix.
+		const auto Remaining = AggregateExposure - *Found->second.Exposure;
+		if (Bytes > std::numeric_limits<std::uint64_t>::max() - Remaining) return false;
+		AggregateExposure = Remaining + Bytes;
+		Found->second.Exposure = Bytes;
+		return true;
+	}
 	bool Retire(ConnectionId Id, std::uint64_t Token, std::uint64_t Bytes) {
 		auto Found = Peers.find(Id);
 		if (!Profile.IsPooled() || Found == Peers.end() || !Token || !Bytes ||
 			Found->second.DebtToken != Token || Found->second.Debt != Bytes ||
 			Bytes > std::numeric_limits<std::uint64_t>::max() - Totals.VerifiedAttributedRetirement) return false;
+		EmitGrantLifecycle(Id, Found->second, AdmissionEvidenceKind::GrantRetired, Now);
 		Found->second.Debt = Found->second.DebtToken = 0;
 		Totals.OutstandingBytes -= Bytes;
 		Totals.VerifiedAttributedRetirement += Bytes;
@@ -73,8 +94,13 @@ public:
 		if (Bytes > std::numeric_limits<std::uint64_t>::max() - Totals.TerminalReleasedBytes) return false;
 		Totals.TerminalReleasedBytes += Bytes; Totals.OutstandingBytes -= Bytes;
 		if (Found->second.OwnsGrant) --Totals.ActiveDrainGrants;
+		if (Found->second.OwnsGrant)
+			EmitGrantLifecycle(Id, Found->second, AdmissionEvidenceKind::GrantTerminalReleased, Now,
+				Bytes ? AdmissionEvidenceReason::TerminalRelease : AdmissionEvidenceReason::None);
 		Found->second.OwnsGrant = false;
 		Found->second.Debt = Found->second.DebtToken = 0;
+		ClearDiagnosticGrant(Found->second);
+		DisposeDemand(Id, Found->second, AdmissionEvidenceReason::TerminalRelease);
 		Remove(Id);
 		return true;
 	}
@@ -107,8 +133,10 @@ public:
 		auto &Value = Found->second;
 		Value.DemandStep = Step;
 		if (!Value.WaitSince) Value.WaitSince = Now;
+		const auto CreditBefore = Value.Credit;
 		Refill(Value.Credit, Profile.IsPooled() ? Profile.Pooled.PeerCreditRate : Profile.PeerStructuralRate(), PeerCap());
 		Totals.PeerCreditHighWater = std::max(Totals.PeerCreditHighWater, Value.Credit.Bytes);
+		ObserveEligibility(Id, Value, CreditBefore);
 		if (!FeedbackComplete || Unobserved || !Value.Seen || !Value.Exposure) {
 			Add(Totals.FeedbackDeferrals, 1); ReleaseWait(Id); return 0;
 		}
@@ -123,7 +151,9 @@ public:
 				Add(Totals.GrantDeferrals, 1); ReleaseWait(Id); return 0;
 			}
 		}
-		const auto PeerRoom = Profile.IsPooled() ? MaximumReliableServiceGroupBytes :
+		const auto PeerRoom = Profile.IsPooled()
+			? (*Value.Exposure <= PooledReliableServiceProfile::PeerOrdinaryUnsentLimit
+				? MaximumReliableServiceGroupBytes : std::uint64_t{0}) :
 			Room(*Value.Exposure, Profile.PeerBacklog - Profile.GameplayBurst, Value.Backlogged);
 		const auto GlobalRoom = Profile.IsPooled() ? FundedRoom() : Room(AggregateExposure,
 			Profile.GlobalBacklog - Profile.GameplayBurst * Profile.MaximumConnections, GlobalBacklogged);
@@ -140,14 +170,35 @@ public:
 		}
 		return std::min({Value.Credit.Bytes, Global.Bytes, PeerRoom, GlobalRoom, MaximumReliableServiceGroupBytes});
 	}
-	void DeferSize(ConnectionId Id, std::uint64_t CompleteBytes) {
+	void DeferSize(ConnectionId Id, std::uint64_t CompleteBytes,
+		std::array<std::uint64_t, 2> Fingerprint = {}) {
 		auto Found = Peers.find(Id);
 		if (Found == Peers.end() || CompleteBytes < MinimumFrameBytes || CompleteBytes > MaximumReliableServiceGroupBytes) return;
 		Found->second.Required = CompleteBytes;
+		ObserveExactDemand(Id, CompleteBytes, Now, Fingerprint);
 		Add(Totals.SizeDeferrals, 1); Add(Totals.DeferredBytes, CompleteBytes);
 		// Earmark global replenishment for this eligible peer before small peers
 		// can consume every subsequent refill. Local blockage never owns the turn.
 		(void)Allowance(Id, Now);
+	}
+	// Called only after an exact frame has been encoded. This records its byte
+	// identity without changing Required, credit, or any admission decision.
+	void ObserveExactDemand(ConnectionId Id, std::uint64_t CompleteBytes, std::uint64_t Microseconds,
+		std::array<std::uint64_t, 2> Fingerprint = {}) {
+		if (!ActiveAdmissionEvidence || CompleteBytes < MinimumFrameBytes ||
+			CompleteBytes > MaximumReliableServiceGroupBytes) return;
+		auto Found = Peers.find(Id);
+		if (Found == Peers.end()) return;
+		auto &Value = Found->second;
+		if (Value.DiagnosticBytes == CompleteBytes && Value.DiagnosticFingerprint == Fingerprint &&
+			Value.DiagnosticDemandId) return;
+		DisposeDemand(Id, Value, AdmissionEvidenceReason::Replaced);
+		if (NextDiagnosticDemandId == std::numeric_limits<std::uint64_t>::max()) return;
+		Value.DiagnosticBytes = CompleteBytes;
+		Value.DiagnosticFingerprint = Fingerprint;
+		Value.DiagnosticDemandId = ++NextDiagnosticDemandId;
+		Value.DiagnosticDemandAt = Microseconds;
+		Emit(Id, Value, AdmissionEvidenceKind::ExactDemand, AdmissionEvidenceReason::None, Microseconds);
 	}
 	std::optional<Reservation> Reserve(ConnectionId Id, std::uint64_t Bytes) {
 		if (Bytes < MinimumFrameBytes || Bytes > Allowance(Id, Now) || NextToken == std::numeric_limits<std::uint64_t>::max()) return {};
@@ -160,7 +211,7 @@ public:
 		Active = Reservation{++NextToken, Id, Bytes}; Add(Totals.ReservedBytes, Bytes);
 		return Active;
 	}
-	bool Commit(Reservation Receipt) {
+	bool Commit(Reservation Receipt, std::uint64_t DiagnosticAcceptedAt = std::numeric_limits<std::uint64_t>::max()) {
 		if (!Active || *Active != Receipt) return false;
 		auto &Value = Peers.at(Receipt.Connection);
 		if (Profile.IsPooled()) {
@@ -176,29 +227,55 @@ public:
 		}
 		if (Value.WaitSince) Totals.MaximumAdmissionWaitMicroseconds = std::max(
 			Totals.MaximumAdmissionWaitMicroseconds, Now - *Value.WaitSince);
+		Emit(Receipt.Connection, Value, AdmissionEvidenceKind::GrantAccepted,
+			AdmissionEvidenceReason::None,
+			DiagnosticAcceptedAt == std::numeric_limits<std::uint64_t>::max() ? Now : DiagnosticAcceptedAt,
+			Receipt.Token);
+		Value.DiagnosticGrantDemandId = Value.DiagnosticDemandId;
+		Value.DiagnosticGrantBytes = Receipt.Bytes;
+		Value.DiagnosticGrantToken = Receipt.Token;
+		ClearDiagnosticDemand(Value);
 		Value.WaitSince.reset(); Value.Required = MinimumFrameBytes;
 		Add(Totals.AcceptedBytes, Receipt.Bytes); Active.reset(); ReleaseWait(Receipt.Connection); return true;
 	}
 	bool Rollback(Reservation Receipt) {
 		if (!Active || *Active != Receipt) return false;
 		auto &Value = Peers.at(Receipt.Connection);
+		Emit(Receipt.Connection, Value, AdmissionEvidenceKind::ReservationRolledBack,
+			AdmissionEvidenceReason::Rollback, Now, Receipt.Token);
 		Value.Credit.Bytes += std::min(Receipt.Bytes, PeerCap() - Value.Credit.Bytes);
 		Global.Bytes += std::min(Receipt.Bytes, GlobalCap() - Global.Bytes);
 		if (!Profile.IsPooled()) { *Value.Exposure -= Receipt.Bytes; AggregateExposure -= Receipt.Bytes; }
 		Add(Totals.RolledBackBytes, Receipt.Bytes); Active.reset(); return true;
 	}
-	void NoWork(ConnectionId Id) {
+	// SourceEmpty is asserted only by the replication owner after checking
+	// journal, relevance, planning and prepared ownership. Generic callers and
+	// unexamined steps retain their original inconclusive diagnostic reason.
+	bool NoWork(ConnectionId Id, bool SourceEmpty = false,
+		std::uint64_t AtMicroseconds = std::numeric_limits<std::uint64_t>::max()) {
+		// Source-owned emptiness must be timed after its actual observation.
+		// Reject missing/backward time before changing any candidate or clock.
+		if (SourceEmpty && (AtMicroseconds == std::numeric_limits<std::uint64_t>::max() ||
+			!Peers.contains(Id) || !Advance(AtMicroseconds))) return false;
 		if (auto Found = Peers.find(Id); Found != Peers.end()) {
+			DisposeDemand(Id, Found->second, SourceEmpty
+				? AdmissionEvidenceReason::SourceEmpty : AdmissionEvidenceReason::NoWork);
 			Found->second.Required = MinimumFrameBytes; Found->second.WaitSince.reset(); Found->second.DemandStep = 0;
 		}
 		ReleaseWait(Id);
+		return true;
 	}
+	// A bounded source/planning deferral cannot monopolize aggregate funding.
+	// Yield only the funding turn: the exact candidate, original fair wait,
+	// required cost, credits and accepted debt keep their existing owners.
+	void DeferSource(ConnectionId Id) { ReleaseWait(Id); }
 	void Remove(ConnectionId Id) {
 		if (Active && Active->Connection == Id) (void)Rollback(*Active);
 		if (auto Found = Peers.find(Id); Found != Peers.end()) {
 			// Accepted pooled obligations require explicit irreversible terminal
 			// evidence. A generic disconnect request cannot erase them.
 			if (Profile.IsPooled() && Found->second.OwnsGrant) return;
+			DisposeDemand(Id, Found->second, AdmissionEvidenceReason::GenerationRemoved);
 			if (Found->second.Exposure) AggregateExposure -= std::min(AggregateExposure, *Found->second.Exposure);
 			if (!Found->second.Seen && Unobserved) --Unobserved;
 			Peers.erase(Found);
@@ -208,7 +285,10 @@ public:
 	void EndStep() {
 		Totals.OldestWaitMicroseconds = 0;
 		for (auto &[Id, Value] : Peers) {
-			if (Value.DemandStep != Step) NoWork(Id);
+			if (Value.DemandStep != Step) {
+				DisposeDemand(Id, Value, AdmissionEvidenceReason::Unexamined);
+				NoWork(Id);
+			}
 			if (Value.WaitSince) Totals.OldestWaitMicroseconds = std::max(Totals.OldestWaitMicroseconds, Now - *Value.WaitSince);
 		}
 		if (Peers.empty()) Totals.OldestWaitMicroseconds = 0;
@@ -229,7 +309,12 @@ private:
 		bool Seen = false, Backlogged = false;
 		std::optional<ServiceObservation> Service;
 		std::uint64_t Debt = 0, DebtToken = 0, NextQualification = 0;
+		std::uint64_t DiagnosticGrantDemandId = 0, DiagnosticGrantBytes = 0, DiagnosticGrantToken = 0;
 		bool OwnsGrant = false;
+		std::uint64_t DiagnosticDemandId = 0, DiagnosticBytes = 0, DiagnosticDemandAt = 0;
+		std::array<std::uint64_t, 2> DiagnosticFingerprint{};
+		std::uint64_t DiagnosticEligibleAt = 0, DiagnosticCreditThresholdAt = 0, DiagnosticEligibilityEpisode = 0;
+		std::optional<std::uint64_t> DiagnosticCreditReadyAt;
 	};
 	ReliableServiceProfile Profile;
 	std::map<ConnectionId, Peer> Peers;
@@ -239,8 +324,86 @@ private:
 	std::optional<Reservation> Active;
 	std::optional<std::uint64_t> OrdinaryFunding;
 	std::uint64_t Now = 0, Step = 0, NextToken = 0, AggregateExposure = 0;
+	std::uint64_t NextDiagnosticDemandId = 0;
 	std::size_t Unobserved = 0;
 	bool Initialized = false, FeedbackComplete = false, GlobalBacklogged = false;
+	void Emit(ConnectionId Id, const Peer &Value, AdmissionEvidenceKind Kind,
+		AdmissionEvidenceReason Reason, std::uint64_t At, std::uint64_t Token = 0) const noexcept {
+		const auto *Sink = ActiveAdmissionEvidence;
+		if (!Sink || !Sink->Record || !Value.DiagnosticDemandId) return;
+		Sink->Record(Sink->Context, AdmissionEvidenceEvent{
+			.Kind = Kind, .Reason = Reason, .Connection = Id,
+			.DemandId = Value.DiagnosticDemandId, .EligibilityEpisode = Value.DiagnosticEligibilityEpisode,
+			.GrantToken = Token, .ExactBytes = Value.DiagnosticBytes, .AtMicroseconds = At,
+			.CreditThresholdAtMicroseconds = Value.DiagnosticCreditThresholdAt,
+			.EligibleSinceMicroseconds = Value.DiagnosticEligibleAt,
+			.PeerCreditBytes = Value.Credit.Bytes, .GlobalCreditBytes = Global.Bytes,
+			.ActiveGrants = Totals.ActiveDrainGrants, .GrantDeferrals = Totals.GrantDeferrals,
+			.FundedDeferrals = Totals.FundedDeferrals, .CreditDeferrals = Totals.CreditDeferrals,
+			.FairnessDeferrals = Totals.FairnessDeferrals,
+			.ExactCandidateFingerprint = Value.DiagnosticFingerprint,
+		});
+	}
+	void EmitGrantLifecycle(ConnectionId Id, const Peer &Value, AdmissionEvidenceKind Kind,
+		std::uint64_t At, AdmissionEvidenceReason Reason = AdmissionEvidenceReason::None) const noexcept {
+		const auto *Sink = ActiveAdmissionEvidence;
+		if (!Sink || !Sink->Record || !Value.DiagnosticGrantDemandId) return;
+		Sink->Record(Sink->Context, AdmissionEvidenceEvent{
+			.Kind = Kind, .Reason = Reason, .Connection = Id, .DemandId = Value.DiagnosticGrantDemandId,
+			.GrantToken = Value.DiagnosticGrantToken, .ExactBytes = Value.DiagnosticGrantBytes,
+			.AtMicroseconds = At, .PeerCreditBytes = Value.Credit.Bytes,
+			.GlobalCreditBytes = Global.Bytes, .ActiveGrants = Totals.ActiveDrainGrants,
+			.GrantDeferrals = Totals.GrantDeferrals, .FundedDeferrals = Totals.FundedDeferrals,
+			.CreditDeferrals = Totals.CreditDeferrals, .FairnessDeferrals = Totals.FairnessDeferrals,
+		});
+	}
+	static void ClearDiagnosticGrant(Peer &Value) noexcept {
+		Value.DiagnosticGrantDemandId = Value.DiagnosticGrantBytes = Value.DiagnosticGrantToken = 0;
+	}
+	static void ClearDiagnosticDemand(Peer &Value) noexcept {
+		Value.DiagnosticDemandId = Value.DiagnosticBytes = Value.DiagnosticDemandAt = 0;
+		Value.DiagnosticFingerprint = {};
+		Value.DiagnosticEligibleAt = Value.DiagnosticCreditThresholdAt = Value.DiagnosticEligibilityEpisode = 0;
+		Value.DiagnosticCreditReadyAt.reset();
+	}
+	void DisposeDemand(ConnectionId Id, Peer &Value, AdmissionEvidenceReason Reason) noexcept {
+		Emit(Id, Value, AdmissionEvidenceKind::DemandDisposed, Reason, Now);
+		ClearDiagnosticDemand(Value);
+	}
+	void ObserveEligibility(ConnectionId Id, Peer &Value, const Bucket &Before) noexcept {
+		if (!ActiveAdmissionEvidence || !Value.DiagnosticDemandId) return;
+		if (!Value.DiagnosticCreditReadyAt && Value.Credit.Bytes >= Value.DiagnosticBytes) {
+			auto Crossing = Value.DiagnosticDemandAt;
+			if (Before.Bytes < Value.DiagnosticBytes) {
+				const auto NeededByteMicroseconds = (Value.DiagnosticBytes - Before.Bytes) * 1'000'000;
+				const auto Numerator = NeededByteMicroseconds > Before.Remainder
+					? NeededByteMicroseconds - Before.Remainder : 0;
+				const auto Rate = Profile.IsPooled() ? Profile.Pooled.PeerCreditRate : Profile.PeerStructuralRate();
+				Crossing = std::max(Value.DiagnosticDemandAt,
+					Before.Updated + Numerator / Rate + (Numerator % Rate != 0));
+			}
+			Value.DiagnosticCreditReadyAt = Crossing;
+		}
+		const bool FeedbackValid = FeedbackComplete && !Unobserved && Value.Seen && Value.Exposure &&
+			(!Profile.IsPooled() || (Value.Service && Value.Service->Available &&
+				Value.Service->ObservedAtMicroseconds <= Now &&
+				Now - Value.Service->ObservedAtMicroseconds <= Profile.Pooled.FeedbackFreshnessMicroseconds &&
+				(Value.Service->Qualified || Now >= Value.NextQualification)));
+		const bool Eligible = FeedbackValid && !Value.OwnsGrant && Value.Credit.Bytes >= Value.DiagnosticBytes;
+		if (!Eligible) {
+			if (Value.DiagnosticEligibleAt) {
+				Emit(Id, Value, AdmissionEvidenceKind::EligibilityInterrupted,
+					AdmissionEvidenceReason::FeedbackUnavailable, Now);
+				Value.DiagnosticEligibleAt = 0;
+			}
+			return;
+		}
+		if (Value.DiagnosticEligibleAt) return;
+		Value.DiagnosticEligibleAt = Now;
+		Value.DiagnosticCreditThresholdAt = *Value.DiagnosticCreditReadyAt;
+		++Value.DiagnosticEligibilityEpisode;
+		Emit(Id, Value, AdmissionEvidenceKind::CreditEligible, AdmissionEvidenceReason::None, Now);
+	}
 	static void Add(std::uint64_t &Value, std::uint64_t Amount) { Value += std::min(Amount, std::numeric_limits<std::uint64_t>::max() - Value); }
 	void ReleaseWait(ConnectionId Id) { if (GlobalWait == Id) GlobalWait.reset(); }
 	std::uint64_t PeerCap() const { return Profile.IsPooled() ? Profile.Pooled.PeerBurstCap : Profile.PeerBurst; }

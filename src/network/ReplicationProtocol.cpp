@@ -1,8 +1,10 @@
 #include "gargantuan/network/ReplicationProtocol.hpp"
+#include "BoundedReplicationEncoding.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/network/BinaryCodec.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "FrozenReplicationSchema.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
@@ -14,6 +16,7 @@
 #include <new>
 #include <set>
 #include <type_traits>
+#include <utility>
 
 namespace gargantuan::network {
 	namespace {
@@ -340,7 +343,7 @@ namespace gargantuan::network {
 
 	std::vector<SchemaCompatibilityEntry> CaptureReplicationSchemaCompatibility() {
 		std::vector<SchemaCompatibilityEntry> Result;
-		for (const auto *Definition : GetActiveRuntimeSchemaRegistry().EnumerateDefinitions())
+		for (const auto *Definition : detail::GetReplicationSchemaRegistry().EnumerateDefinitions())
 			Result.push_back(
 				{GetSchemaDefinitionId(*Definition),
 				 GetSchemaDefinitionVersion(*Definition),
@@ -356,11 +359,26 @@ namespace gargantuan::network {
 	}
 
 	SerializationResult<std::vector<std::byte>> EncodeReplicationFrame(const ReplicationFrame &Frame) {
+		return detail::EncodeReplicationFrameBounded(Frame, MaximumReplicationFrameBytes);
+	}
+
+	SerializationResult<std::vector<std::byte>> detail::EncodeReplicationFrameBounded(
+		const ReplicationFrame &Frame, std::size_t MaximumBytes
+	) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::StructuralEncode);
 		try {
 			if (!Frame.IsValid())
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Replication frame is invalid");
-			Writer Payload(MaximumReplicationFrameBytes - ReplicationHeaderBytes);
+			// Full validation above preserves invalid-data precedence even if an
+			// earlier valid prefix exceeds this bound. Available credit is unrelated.
+			MaximumBytes = std::min(MaximumBytes, MaximumReplicationFrameBytes);
+			if (MaximumBytes < ReplicationHeaderBytes) {
+				runtime_detail::CountWork(runtime_detail::WorkCounter::StructuralEncodeLimitFailures);
+				return SerializationFailure(
+					SerializationErrorCode::LimitExceeded, "Replication frame exceeds its byte limit"
+				);
+			}
+			Writer Payload(MaximumBytes - ReplicationHeaderBytes);
 			for (const auto &Entry : Frame.Schema) {
 				WriteSchemaId(Payload, Entry.Id);
 				Payload.Integer(Entry.DefinitionVersion);
@@ -368,11 +386,14 @@ namespace gargantuan::network {
 			}
 			for (const auto &Operation : Frame.Operations)
 				WriteOperation(Payload, Operation);
-			if (!Payload.Succeeded())
+			runtime_detail::CountWork(runtime_detail::WorkCounter::StructuralEncodePayloadBytes, Payload.Bytes.size());
+			if (!Payload.Succeeded()) {
+				runtime_detail::CountWork(runtime_detail::WorkCounter::StructuralEncodeLimitFailures);
 				return SerializationFailure(
 					SerializationErrorCode::LimitExceeded, "Replication frame exceeds its byte limit"
 				);
-			Writer Output(MaximumReplicationFrameBytes);
+			}
+			Writer Output(MaximumBytes);
 			Output.Integer(ReplicationMagic);
 			Output.Integer(Frame.Version);
 			Output.Integer(static_cast<std::uint8_t>(Frame.Kind));
@@ -383,7 +404,9 @@ namespace gargantuan::network {
 			Output.Integer(static_cast<std::uint32_t>(Frame.Operations.size()));
 			Output.Integer(static_cast<std::uint32_t>(Payload.Bytes.size()));
 			Output.Bytes.insert(Output.Bytes.end(), Payload.Bytes.begin(), Payload.Bytes.end());
-			return Output.Bytes;
+			// Output.Bytes is a member lvalue, not an implicitly movable local.
+			// Transfer its completed allocation into expected instead of copying it.
+			return std::move(Output.Bytes);
 		} catch (const std::bad_alloc &) {
 			return SerializationFailure(
 				SerializationErrorCode::LimitExceeded, "Replication frame allocation exceeded available resources"

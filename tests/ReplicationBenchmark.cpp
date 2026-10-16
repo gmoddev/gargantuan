@@ -5,6 +5,7 @@
 #include "gargantuan/network/ReplicationTransport.hpp"
 #include "gargantuan/network/Transport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <array>
@@ -47,6 +48,28 @@ namespace {
 
 	double Milliseconds(auto Start, auto End) {
 		return std::chrono::duration<double, std::milli>(End - Start).count();
+	}
+
+	bool RunJournalRead() {
+		auto World = std::make_shared<DataModel>();
+		auto &Journal = ChangeJournal::Get();
+		const auto Scope = World->GetObjectId();
+		const auto Cursor = Journal.CreateCursor(Scope);
+		const std::string Name(24 * 1024, 'N');
+		for (std::size_t Index = 0; Index < 4'096; ++Index)
+			(void)Journal.Commit(Scope, Scope, PropertyUpdatedChange{"Name", Name, true});
+		const auto PinnedStart = std::chrono::steady_clock::now();
+		auto Pinned = Journal.ReadPinned(Cursor, 4'096);
+		const auto PinnedEnd = std::chrono::steady_clock::now();
+		const auto CopiedStart = std::chrono::steady_clock::now();
+		auto Copied = Journal.Read(Cursor, 4'096);
+		const auto CopiedEnd = std::chrono::steady_clock::now();
+		if (Pinned.Records.size() != 4'096 || Copied.Records.size() != 4'096 ||
+			Pinned.Cursor.NextSequence != Copied.Cursor.NextSequence) return false;
+		std::cout << "[Replication:JournalRead] records=4096 value_bytes=" << Name.size()
+			<< " pinned_ms=" << Milliseconds(PinnedStart, PinnedEnd)
+			<< " copied_ms=" << Milliseconds(CopiedStart, CopiedEnd) << '\n';
+		return true;
 	}
 
 	bool RunIncrementalScaling(std::size_t Count) {
@@ -161,6 +184,7 @@ int main(int ArgumentCount, char **Arguments) {
 		return 1;
 	}
 	std::cout << "Workload,Objects,Bytes,GenerateMs,EncodeMs,DecodeMs,SchedulerTransportMs,ApplyMs\n";
+	if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--journal-read") return RunJournalRead() ? 0 : 1;
 	if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--incremental-scaling") {
 		for (const auto Count : {64u, 512u, 2048u, 8192u}) if (!RunIncrementalScaling(Count)) return 1;
 		return 0;

@@ -2184,9 +2184,14 @@ namespace {
 			(void)Journal.Commit(Scope, Scope, TagAddedChange{std::to_string(Index)});
 		const auto End = Journal.CreateCursor(Scope);
 		const auto Oldest = End.NextSequence - 137;
+		const auto Window = Journal.GetRetentionWindow(Scope);
+		Check(Window.OldestSequence == Oldest && Window.NextSequence == End.NextSequence &&
+			Window.RetainedRecords == 137 && Window.Capacity == 137,
+			"read-only journal retention window matches bounded cursor reference");
 		for (std::uint64_t Sequence = Start.NextSequence; Sequence <= End.NextSequence + 1; ++Sequence) {
 			for (const auto Limit : {0u, 1u, 17u, 137u, 512u}) {
 				const auto Read = Journal.Read({Scope, Sequence}, Limit);
+				const auto Pinned = Journal.ReadPinned({Scope, Sequence}, Limit);
 				const bool Stale = Sequence < Oldest;
 				const auto ExpectedCount = Stale || Sequence >= End.NextSequence ? std::uint64_t{0}
 					: std::min<std::uint64_t>(Limit, End.NextSequence - Sequence);
@@ -2194,8 +2199,15 @@ namespace {
 					Read.Records.size() == ExpectedCount && Read.Cursor.Scope == Scope &&
 					Read.Cursor.NextSequence == (Stale ? Oldest : Sequence + ExpectedCount),
 					"journal cursor range equals independent sequence reference including zero limits and future cursors");
+				Check(Pinned.Status == Read.Status && Pinned.Cursor.Scope == Read.Cursor.Scope &&
+					Pinned.Cursor.NextSequence == Read.Cursor.NextSequence && Pinned.Records.size() == Read.Records.size(),
+					"pinned read retains the value-read cursor, status and bound for every range");
 				for (std::size_t Index = 0; Index < Read.Records.size(); ++Index)
-					Check(Read.Records[Index].Sequence == Sequence + Index && Read.Records[Index].Scope == Scope &&
+					Check(Pinned.Records[Index]->Sequence == Read.Records[Index].Sequence &&
+						Pinned.Records[Index]->Scope == Read.Records[Index].Scope &&
+						std::get<TagAddedChange>(Pinned.Records[Index]->Payload).TagName ==
+							std::get<TagAddedChange>(Read.Records[Index].Payload).TagName &&
+						Read.Records[Index].Sequence == Sequence + Index && Read.Records[Index].Scope == Scope &&
 						std::get<TagAddedChange>(Read.Records[Index].Payload).TagName ==
 							std::to_string(Sequence + Index - Start.NextSequence),
 						"journal bounded range preserves record identity, payload and order");
@@ -2216,6 +2228,54 @@ namespace {
 		Check(Journal.Read(BatchEnd).Records.empty() &&
 			Journal.Read({Scope, BatchEnd.NextSequence - 1}).Status == ChangeReadStatus::ResnapshotRequired,
 			"zero retention keeps end-cursor and stale-cursor semantics");
+		Journal.SetCapacity(OriginalCapacity);
+	}
+
+	void TestPinnedJournalRead() {
+		using namespace gargantuan;
+		auto &Journal = ChangeJournal::Get();
+		const auto OriginalCapacity = Journal.GetCapacity();
+		auto World = std::make_shared<DataModel>();
+		const auto Scope = World->GetObjectId();
+		Journal.SetCapacity(4);
+		const auto Cursor = Journal.CreateCursor(Scope);
+		const std::string Value(24 * 1024, 'N');
+		(void)Journal.Commit(Scope, Scope, PropertyUpdatedChange{"Name", Value, true});
+		auto First = Journal.ReadPinned(Cursor, 1);
+		auto Again = Journal.ReadPinned(Cursor, 1);
+		auto ValueRead = Journal.Read(Cursor, 1);
+		const auto &PinnedValue = std::get<std::string>(
+			std::get<PropertyUpdatedChange>(First.Records.front()->Payload).Value);
+		const auto &CopiedValue = std::get<std::string>(
+			std::get<PropertyUpdatedChange>(ValueRead.Records.front().Payload).Value);
+		Check(First.Status == ChangeReadStatus::Available && First.Records.size() == 1 &&
+			First.Cursor.NextSequence == Cursor.NextSequence + 1 && First.Records.front() == Again.Records.front() &&
+			PinnedValue.data() != CopiedValue.data() && PinnedValue == CopiedValue,
+			"pinned reads share one immutable large value while legacy reads remain independent copies");
+		std::atomic<bool> Stop = false;
+		std::atomic<bool> ReaderValid = true;
+		std::thread Reader([&] {
+			while (!Stop.load(std::memory_order_relaxed)) {
+				auto Snapshot = Journal.ReadPinned(Cursor, 4);
+				if (Snapshot.Status == ChangeReadStatus::Available) {
+					for (const auto &Record : Snapshot.Records)
+						if (!Record || Record->Scope != Scope || Record->Sequence >= Snapshot.Cursor.NextSequence)
+							ReaderValid.store(false, std::memory_order_relaxed);
+				} else if (!Snapshot.Records.empty()) ReaderValid.store(false, std::memory_order_relaxed);
+				if (PinnedValue != Value) ReaderValid.store(false, std::memory_order_relaxed);
+			}
+		});
+		for (std::size_t Index = 0; Index < 256; ++Index)
+			(void)Journal.Commit(Scope, Scope, TagAddedChange{std::to_string(Index)});
+		Journal.Clear();
+		Stop.store(true, std::memory_order_relaxed);
+		Reader.join();
+		Check(ReaderValid.load(std::memory_order_relaxed) && PinnedValue == Value &&
+			Journal.ReadPinned(Cursor).Status == ChangeReadStatus::ResnapshotRequired,
+			"pinned record survives concurrent reads, eviction and clear without changing stale cursor behavior");
+		World.reset();
+		Check(PinnedValue == Value && Journal.CreateCursor(Scope).NextSequence == 1,
+			"pinned record survives scope retirement without retaining its stream");
 		Journal.SetCapacity(OriginalCapacity);
 	}
 
@@ -7045,6 +7105,7 @@ int main() {
 	TestInstanceTags();
 	TestBoundedJournalCursor();
 	TestJournalCursorRangeReference();
+	TestPinnedJournalRead();
 	TestWorldCacheRetirement();
 	TestSnapshotBaseline();
 	TestWireJournalAndLoopbackReplication();

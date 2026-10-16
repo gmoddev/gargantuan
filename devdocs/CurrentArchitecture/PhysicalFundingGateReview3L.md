@@ -13,6 +13,20 @@ related_adrs:
 
 ## Accepted decision
 
+**Current standard-profile amendment (2026-10-13):** D03's explicit
+`HYBRID_F1_V1` replaces the legacy packet-scale running-service release
+predicate, including raw four-grant/physical qualification. Keep the same
+funding, reserves, exact delivery and ordered prerequisite gates below.
+Four-client transport evidence requires explicit matching contract and exact
+native completion within37324.3865966796875us, attribution, packet accounting,
+ACK/retirement, reliability, order and lifecycle; legacy running deficits remain
+diagnostic only for HYBRID. Explicit F1 profiles and historical receipts retain
+their original semantics. The full Local32/real-TLS Node32 product conjunction
+independently requires50ms FIFO,100ms Main,150ms turnover,1181.25ms fair32
+admission, gameplay, resources and canonical recovery/convergence. Funding and
+configured rate are not measured delivered service. Earlier rate-floor prose
+below is historical for legacy profiles, not an additional HYBRID release gate.
+
 **B — RAW CAPACITY ESTABLISHED; PROCEED TO BOUNDED REAL-GNS PHYSICAL
 QUALIFICATION.** The operator approved this review against published
 `4d27238553fdc27b9f6772b438c49393eac3a8eb` on

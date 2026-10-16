@@ -6,6 +6,30 @@ last_verified: 2026-09-14
 
 # Foundation 3L pooled-service proof completion receipt
 
+## Structural requirements reassessment (2026-10-11)
+
+[D02 section 10](../../docs/adr/D02-pooled-service-product-contract-review.md#10-structural-requirements-reassessment-2026-10-11)
+recommends keeping funding separate from delivered byte/count/slot service. Existing
+deterministic CTest passes with 11 candidate cases, including continuous ordinary
+debt retaining already-retired structural slots, plus four count/ACK recovery
+discriminators. The candidate contract is not qualified: complete slot lifetime,
+ordinary-follower ownership and a supported path/Main premise remain unresolved.
+Original scalar, causal and measured native32 recovery verdicts remain unchanged.
+No production gate, physical run, new native32 campaign or scalar-rate retuning.
+
+## D02 candidate capacity follow-up (2026-10-11)
+
+**HYBRID F1 — CAPACITY/ARCHITECTURE DECISION REQUIRED.** The
+[D02 deterministic follow-up](../../docs/adr/D02-pooled-service-product-contract-review.md#9-deterministic-capacity-qualification--blocked-2026-10-11)
+extends existing fixtures with the real admission accountant and separate native,
+ACK, retirement and nominal Main opportunity times. Ten regression cases pass by
+detecting expected capacity/fairness contradictions; the 500-us scalar model's
+42 historical cases retain their original abstraction and verdict. The favorable
+nominal schedule reaches at most 59.9988 MiB/s and 233.338-ms eligible wait, so
+the replacement contract is not adopted. H1/H2 candidate arithmetic and existing
+causal/recovery tests pass; no physical or new native32 evidence follows.
+Production predicates, numerical policy and qualified recovery remain unchanged.
+
 ## Source and gate scope
 
 Target/published branch: `foundation/3l-content-availability`.

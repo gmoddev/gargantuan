@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -82,6 +83,19 @@ namespace gargantuan {
 		ChangeCursor Cursor;
 		std::vector<ChangeRecord> Records;
 	};
+	// A snapshot of immutable retained records. Handles keep records alive after
+	// eviction, Clear, or scope release without holding the journal mutex.
+	struct PinnedChangeReadResult {
+		ChangeReadStatus Status = ChangeReadStatus::Available;
+		ChangeCursor Cursor;
+		std::vector<std::shared_ptr<const ChangeRecord>> Records;
+	};
+	struct ChangeRetentionWindow {
+		std::uint64_t OldestSequence = 1;
+		std::uint64_t NextSequence = 1;
+		std::size_t RetainedRecords = 0;
+		std::size_t Capacity = DefaultChangeJournalCapacity;
+	};
 
 	struct ChangeJournalProfile {
 		std::uint64_t CommitCount = 0;
@@ -98,7 +112,9 @@ namespace gargantuan {
 		void EnsureCanCommit(ObjectId scope, std::size_t count) const;
 		[[nodiscard]] std::vector<ChangeRecord> ReadSince(std::uint64_t sequence) const;
 		[[nodiscard]] ChangeCursor CreateCursor(ObjectId scope = {}) const;
+		[[nodiscard]] ChangeRetentionWindow GetRetentionWindow(ObjectId scope = {}) const;
 		[[nodiscard]] ChangeReadResult Read(ChangeCursor cursor, std::size_t maximumRecords = std::numeric_limits<std::size_t>::max()) const;
+		[[nodiscard]] PinnedChangeReadResult ReadPinned(ChangeCursor Cursor, std::size_t MaximumRecords = std::numeric_limits<std::size_t>::max()) const;
 		void SetCapacity(std::size_t capacity);
 		[[nodiscard]] std::size_t GetCapacity() const;
 		void Clear();
@@ -115,7 +131,7 @@ namespace gargantuan {
 		void ReleaseScope(ObjectId Scope);
 		struct Stream {
 			std::uint64_t NextSequence = 1;
-			std::deque<ChangeRecord> Records;
+			std::deque<std::shared_ptr<const ChangeRecord>> Records;
 		};
 		mutable std::mutex Mutex;
 		std::size_t Capacity = DefaultChangeJournalCapacity;

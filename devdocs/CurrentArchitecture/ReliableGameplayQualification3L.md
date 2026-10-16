@@ -248,6 +248,25 @@ maximum admission gap in a fully instrumented aggregate game, worst-case journal
 retention, independent security and complete client/scale qualification remain
 separate obligations. Foundation 3L must not be marked Ready from this subset.
 
+## Same-head Windows CI timing divergence (2026-10-03)
+
+At `5e94d2323`, the Windows jobs in push run `37086491549` and dispatch run
+`37086492335` passed the complete Release workload step. The PR job in run
+`37086496363` passed its build and CTest matrix but failed the final ordinary
+recovery phase of `--reliable-workload-32-structural`. All eight active peers
+completed 48/48 RPCs with zero errors, yet their p99 latency reached roughly
+794–884 ms, above the unchanged 250 ms gate. That phase lasted 16.505 s and
+reported a 2,161.1 ms service gap; the two same-head successful final phases
+lasted 8.522/8.563 s with 33.455/38.277 ms maximum gaps. The cause of the
+long interval is **not measured** by those runs. Passing the other jobs does
+not erase the failed CI result or qualify that interval.
+
+The aggregate fixture now retains only its four slowest step intervals per
+phase and reports preceding observer/sleep time, work before the step, stage
+wall times, and matching thread/process CPU samples. This is diagnostic
+evidence to attribute another occurrence; the RPC thresholds, workload, and
+original service-gap observation point are unchanged.
+
 ## Validation receipt
 
 Final canonical MSVC validation exits 0: **11/11** affected CTests, the full

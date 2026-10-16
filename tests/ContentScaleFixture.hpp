@@ -5,6 +5,7 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/content/ContentAvailability.hpp"
 #include "gargantuan/network/CharacterProtocol.hpp"
+#include "gargantuan/network/Delivery.hpp"
 #include "gargantuan/network/ReplicationProtocol.hpp"
 #include "PublicationLatencyFixture.hpp"
 #include "StructuralBytesFixture.hpp"

@@ -13,6 +13,12 @@ option(
 	OFF
 )
 
+option(
+	GARGANTUAN_NATIVE_EGRESS_TEST_HOOKS
+	"Compile bounded native-egress race pause hooks for a dedicated test build"
+	OFF
+)
+
 set(BUILD_STATIC_LIB ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -37,9 +43,16 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(GameNetworkingSockets)
 include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyServiceFairness.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyReliableServiceFeedback.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyPreciseSenderWake.cmake")
 
 if(NOT TARGET GameNetworkingSockets::static)
 	message(FATAL_ERROR "Pinned GameNetworkingSockets source did not provide GameNetworkingSockets::static")
+endif()
+
+if(GARGANTUAN_NATIVE_EGRESS_TEST_HOOKS)
+	# This option is explicitly off for production packages. The hooks are
+	# bounded and require a separate diagnostic build to exist at all.
+	target_compile_definitions(GameNetworkingSockets_s PRIVATE GARGANTUAN_NATIVE_EGRESS_TEST_HOOKS=1)
 endif()
 
 # Two pinned-GNS implementation details conflict with Clang's full undefined

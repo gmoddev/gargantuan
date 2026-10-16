@@ -85,7 +85,24 @@ namespace gargantuan::network {
 		auto operator<=>(const RemoteRequestHandle &) const = default;
 	};
 
+	// Main-owned cumulative observations at the actual ownership transitions.
+	// Residence is diagnostic: existing request/work deadlines expire on Pump,
+	// and do not create a new handler execution or dispatch latency guarantee.
+	struct RemoteOwnershipMetrics {
+		std::uint64_t DispatchMessagesHigh = 0, DispatchBytesHigh = 0;
+		std::uint64_t DeferredMessagesHigh = 0, DeferredBytesHigh = 0;
+		std::uint64_t OutgoingRequestsHigh = 0, IncomingHandlersHigh = 0;
+		std::uint64_t PeerDispatchMessagesHigh = 0, PeerDispatchBytesHigh = 0;
+		std::uint64_t PeerDeferredBytesHigh = 0, PeerOutgoingRequestsHigh = 0, PeerIncomingHandlersHigh = 0;
+		std::uint64_t DispatchAccepted = 0, DispatchReleased = 0, DeferredAccepted = 0, DeferredReleased = 0;
+		std::uint64_t HandlersStarted = 0, HandlersReleased = 0, HandlersExpired = 0, DeferredExpired = 0;
+		std::uint64_t DispatchResidenceMaximumMicroseconds = 0, DeferredResidenceMaximumMicroseconds = 0;
+		std::uint64_t OutgoingResidenceMaximumMicroseconds = 0, HandlerResidenceMaximumMicroseconds = 0;
+		std::uint64_t DeadlineOvershootMaximumMicroseconds = 0, BoundViolations = 0;
+	};
 	struct RemoteMetrics {
+		bool Observed = false;
+		RemoteOwnershipMetrics Ownership;
 		std::uint64_t ReliableEventsAccepted = 0;
 		std::uint64_t ReliableEventsRejected = 0;
 		std::uint64_t UnreliableEventsAccepted = 0;
@@ -109,6 +126,7 @@ namespace gargantuan::network {
 		std::size_t DeferredReliableMessages = 0;
 		std::size_t DeferredReliableBytes = 0;
 		std::size_t InFlightRequests = 0;
+		std::size_t IncomingHandlers = 0;
 	};
 
 	class RemoteManager {

@@ -50,6 +50,7 @@ namespace gargantuan::network {
 		// Sender-local attribution follows the existing queued message. Never
 		// serialized and never an application acknowledgement or order key.
 		std::uint64_t ReliableRetirementToken = 0;
+		std::uint64_t ReliableGrantActivatedAtMicroseconds = 0;
 		friend std::optional<NetworkMessageIntent> MakeNetworkMessageIntent(
 			ConnectionId,
 			DeliveryMode,

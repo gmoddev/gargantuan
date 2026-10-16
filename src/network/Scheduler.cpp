@@ -1,5 +1,6 @@
 #include "gargantuan/network/Scheduler.hpp"
 #include "ReliableServiceFeedback.hpp"
+#include "OrdinaryServicePolicy.hpp"
 #include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
@@ -7,6 +8,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <limits>
 #include <map>
@@ -126,9 +130,13 @@ namespace gargantuan::network {
 		struct QueuedMessage : NetworkMessageIntent {
 			explicit QueuedMessage(NetworkMessageIntent Message)
 				: NetworkMessageIntent(std::move(Message)), Producer(runtime_detail::ActiveWorkProducer),
-				  EnqueuedNanoseconds(runtime_detail::ActiveWorkSample ? runtime_detail::WorkTimestamp() : 0) {}
+				  EnqueuedNanoseconds(runtime_detail::ActiveWorkSample ? runtime_detail::WorkTimestamp() : 0),
+				  OrdinaryDemand(Delivery() == DeliveryMode::ReliableOrdered && Traffic() != TrafficClass::StructuralReplication
+					? runtime_detail::QueueOrdinaryDemand(Destination(), Payload()) : runtime_detail::OrdinaryDemandTag{}) {}
 			runtime_detail::WorkProducer Producer;
 			std::uint64_t EnqueuedNanoseconds;
+			runtime_detail::OrdinaryDemandTag OrdinaryDemand;
+			runtime_detail::OrdinaryServiceMetadata OrdinaryService;
 		};
 		struct ConnectionQueue {
 			NetworkLimits Limits;
@@ -137,6 +145,7 @@ namespace gargantuan::network {
 			std::array<std::uint64_t, runtime_detail::WorkProducerNames.size()> LastServiceNanoseconds{};
 			SchedulerStatistics Statistics;
 			detail::ReliableServiceAcceptedBytes ServiceAccepted;
+			std::shared_ptr<detail::OrdinaryServicePolicy> OrdinaryPolicy;
 			std::uint32_t ConsecutiveStructuralReplicationMessages = 0;
 			bool Active = true;
 		};
@@ -145,6 +154,9 @@ namespace gargantuan::network {
 			: Transport(Transport), MaximumTotalQueuedReliableBytes(MaximumTotalQueuedReliableBytes) {}
 
 		static void Queue(ConnectionQueue &Connection, NetworkMessageIntent Message) {
+			// Freeze the acceptance clock before optional observer callbacks in
+			// QueuedMessage construction; instrumentation cannot move the origin.
+			const auto At = runtime_detail::PublicationLatencyNow() / 1'000;
 			const auto Precedence = SchedulerTrafficPrecedence(Message.Traffic());
 			const auto Producer = runtime_detail::ActiveWorkProducer;
 			auto &Depth = Connection.ProducerDepths[static_cast<std::size_t>(Producer)];
@@ -156,7 +168,13 @@ namespace gargantuan::network {
 			if (Message.Delivery() == DeliveryMode::ReliableOrdered) ++Connection.Statistics.QueuedReliableMessages;
 			else ++Connection.Statistics.QueuedUnreliableMessages;
 			Connection.Queues[*Precedence].emplace_back(std::move(Message));
-			const auto &Queued = Connection.Queues[*Precedence].back();
+			auto &Queued = Connection.Queues[*Precedence].back();
+			if (Queued.Delivery() == DeliveryMode::ReliableOrdered && Queued.Traffic() != TrafficClass::StructuralReplication) {
+				Queued.OrdinaryService = Connection.OrdinaryPolicy
+					? Connection.OrdinaryPolicy->Accept(Queued.Payload().size() + ReliableServiceEnvelopeBytes, *Precedence, At)
+					: runtime_detail::OrdinaryServiceMetadata{At, *Precedence, false};
+				if (Queued.OrdinaryDemand.Sequence) Queued.OrdinaryDemand.AcceptedAtMicroseconds = At;
+			}
 			runtime_detail::RecordPublicationPacket("SchedulerAccepted", Queued.Destination(), Queued.Payload());
 			++Depth;
 			++Connection.Statistics.QueuedMessages;
@@ -193,6 +211,17 @@ namespace gargantuan::network {
 			throw std::invalid_argument("NetworkScheduler aggregate reliable queue limit must be positive");
 	}
 	NetworkScheduler::~NetworkScheduler() = default;
+
+	bool NetworkScheduler::ActivateReliableGrant(ConnectionId Connection, std::uint64_t Token, std::uint64_t Time) {
+		if (!Connection.IsValid() || !Token || !Time) return false;
+		auto Found = State->Connections.find(Connection);
+		if (Found == State->Connections.end() || !Found->second.Active) return false;
+		for (auto &QueueValue : Found->second.Queues)
+			for (auto &Message : QueueValue)
+				if (detail::ReliableServiceFeedbackAccess::Token(Message) == Token)
+					return detail::ReliableServiceFeedbackAccess::Activate(Message, Token, Time);
+		return false;
+	}
 
 	bool NetworkScheduler::RegisterConnection(ConnectionId Connection, const NetworkLimits &Limits) {
 		if (!Connection.IsValid() || !Limits.IsValid()) return false;
@@ -292,7 +321,11 @@ namespace gargantuan::network {
 				++Connection.Statistics.BudgetLimitedFlushes;
 				return Result;
 			}
-			auto Submission = State->Transport.Send(Message);
+			const auto Submission = [&] {
+				runtime_detail::OrdinaryDemandScope Origin(Message.OrdinaryDemand);
+				runtime_detail::OrdinaryServiceScope ServiceOrigin(Message.OrdinaryService);
+				return State->Transport.Send(Message);
+			}();
 			if (Submission.Succeeded()) runtime_detail::RecordPublicationPacket("Handoff", Message.Destination(), Message.Payload());
 			if (Submission.Status == TransportOperationStatus::WouldBlock) {
 				if (ProducerSample) runtime_detail::AddWorkCounter(ProducerSample->CapacityDeferrals, 1);
@@ -301,6 +334,18 @@ namespace gargantuan::network {
 				return Result;
 			}
 			if (!Submission.Succeeded()) {
+				if (std::getenv("GARGANTUAN_GNS_LIFECYCLE_TRACE")) {
+					const auto Monotonic = std::chrono::duration_cast<std::chrono::nanoseconds>(
+						std::chrono::steady_clock::now().time_since_epoch()).count();
+					const auto Unix = std::chrono::duration_cast<std::chrono::nanoseconds>(
+						std::chrono::system_clock::now().time_since_epoch()).count();
+					std::fprintf(stderr, "[Network:Scheduler] event=terminal-send unix_ns=%lld monotonic_ns=%lld slot=%u generation=%u status=%u bytes=%zu delivery=%u traffic=%u queued_messages=%zu queued_reliable_bytes=%zu queued_unreliable_bytes=%zu submitted_this_flush=%zu\n",
+						static_cast<long long>(Unix), static_cast<long long>(Monotonic), ConnectionIdValue.Slot,
+						ConnectionIdValue.Generation, static_cast<unsigned>(Submission.Status), Bytes,
+						static_cast<unsigned>(Message.Delivery()), static_cast<unsigned>(Message.Traffic()),
+						Connection.Statistics.QueuedMessages, Connection.Statistics.QueuedReliableBytes,
+						Connection.Statistics.QueuedUnreliableBytes, static_cast<std::size_t>(Result.MessagesSubmitted));
+				}
 				Result.Status = SchedulerFlushStatus::TerminalFailure;
 				Result.TerminalDisconnect = Submission.TerminalDisconnect.value_or(DisconnectInfo{
 					DisconnectReason::TransportFailure, "Transport rejected scheduler submission"});
@@ -353,9 +398,49 @@ namespace gargantuan::network {
 		return true;
 	}
 
+	bool detail::ReliableServiceFeedbackAccess::DeclareOrdinaryPolicy(NetworkScheduler &Scheduler,
+		ConnectionId Connection, std::shared_ptr<OrdinaryServicePolicy> Policy) {
+		const auto Found = Scheduler.State->Connections.find(Connection);
+		if (!Policy || !Policy->OnOwnerThread() || Found == Scheduler.State->Connections.end() || !Found->second.Active ||
+			(Found->second.OrdinaryPolicy && Found->second.OrdinaryPolicy != Policy)) return false;
+		Found->second.OrdinaryPolicy = std::move(Policy);
+		return true;
+	}
+	std::optional<std::uint64_t> detail::ReliableServiceFeedbackAccess::OldestProtectedOrdinary(
+		const NetworkScheduler &Scheduler, ConnectionId Connection) {
+		const auto Found = Scheduler.State->Connections.find(Connection);
+		if (Found == Scheduler.State->Connections.end()) return {};
+		std::uint64_t Oldest = 0;
+		for (const auto &Queue : Found->second.Queues) for (const auto &Message : Queue) {
+			const auto &Metadata = Message.OrdinaryService;
+			if (!Metadata.Protected) continue;
+			if (!Metadata.AcceptedAtMicroseconds) return {};
+			if (!Oldest || Metadata.AcceptedAtMicroseconds < Oldest) Oldest = Metadata.AcceptedAtMicroseconds;
+			break;
+		}
+		return Oldest;
+	}
 	std::optional<SchedulerStatistics> NetworkScheduler::GetStatistics(ConnectionId Connection) const {
 		auto Iterator = State->Connections.find(Connection);
 		return Iterator == State->Connections.end() ? std::nullopt : std::optional(Iterator->second.Statistics);
+	}
+	std::optional<std::uint64_t> detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(
+		const NetworkScheduler &Scheduler, ConnectionId Connection) {
+		const auto Found = Scheduler.State->Connections.find(Connection);
+		if (Found == Scheduler.State->Connections.end()) return {};
+		std::uint64_t Oldest = 0;
+		for (const auto &Queue : Found->second.Queues) {
+			// Each priority deque is FIFO, but an unqualified head may precede
+			// qualified work. Find its first qualified entry without a new index.
+			for (const auto &Message : Queue) {
+				const auto &Tag = Message.OrdinaryDemand;
+				if (!Tag.Qualified) continue;
+				if (!Tag.AcceptedAtMicroseconds) return {};
+				if (!Oldest || Tag.AcceptedAtMicroseconds < Oldest) Oldest = Tag.AcceptedAtMicroseconds;
+				break;
+			}
+		}
+		return Oldest;
 	}
 	std::optional<detail::ReliableServiceAcceptedBytes> detail::ReliableServiceFeedbackAccess::Accepted(
 		const NetworkScheduler &Scheduler, ConnectionId Connection) {

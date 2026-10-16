@@ -7,7 +7,7 @@
 #include <memory>
 
 namespace gargantuan::network {
-	namespace detail { struct ReliableServiceFeedbackAccess; }
+	namespace detail { struct ReliableServiceFeedbackAccess; struct FarmCaptureEndpointAccess; struct GnsAckDiagnosticsAccess; }
 	inline constexpr std::uint32_t NativeMaximumGnsConnections = 4096;
 	inline constexpr std::uint32_t NativeMaximumGnsPendingEvents = 1'048'576;
 	inline constexpr std::size_t NativeMaximumGnsPendingReceiveBytes = 64 * 1024 * 1024;
@@ -18,6 +18,11 @@ namespace gargantuan::network {
 		std::size_t MaximumPendingReceiveBytes = 16 * 1024 * 1024;
 		// Trusted startup-only per-listener/connection setting, never global.
 		std::optional<std::uint32_t> SendRate;
+		// A pooled server claims the one supported GNS execution domain for its
+		// entire adapter lifetime. The experimental worker additionally requires
+		// this lease; ordinary adapters retain the existing shared behavior.
+		bool RequireExclusivePooledDomain = false;
+		bool EnableNativeEgressWorker = false;
 
 		[[nodiscard]] bool IsValid() const;
 	};
@@ -44,8 +49,14 @@ namespace gargantuan::network {
 
 	  private:
 		friend struct detail::ReliableServiceFeedbackAccess;
+		friend struct detail::FarmCaptureEndpointAccess;
+		friend struct detail::GnsAckDiagnosticsAccess;
 		bool EnableReliableServiceFeedback() override;
+		bool SetOrdinaryServicePolicy(ConnectionId Connection,
+			std::shared_ptr<detail::OrdinaryServicePolicy> Policy) override;
 		std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Connection) const override;
+		std::optional<detail::ReliableServiceFeedback> ReadResolvedReliableServiceFeedback(
+			ConnectionId Connection, std::uint64_t DeadlineMicroseconds) const override;
 		bool ReleaseReliableServiceFeedback(ConnectionId Connection) override;
 		struct Impl;
 		std::unique_ptr<Impl> State;

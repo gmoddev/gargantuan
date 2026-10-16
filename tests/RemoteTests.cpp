@@ -1026,6 +1026,78 @@ namespace {
 		Check(!HeldReplies.back()({}, std::nullopt), "cancelled handler acknowledgement is terminal and sanitized");
 	}
 
+	void TestOwnershipEvidenceBetweenObservations() {
+		RecordingScheduler Scheduler;
+		const ConnectionId Peer{75, 2};
+		const ObjectId Function{750, 1}, Event{751, 1};
+		auto Reference = std::make_shared<Folder>();
+		const auto Object = Reference->GetObjectId();
+		auto Time = std::chrono::steady_clock::time_point{};
+		RemoteManager Manager(RemoteManagerRole::Server, Scheduler,
+			[&](ConnectionId, ObjectId Value) { return Value == Function || Value == Event || Value == Object; },
+			[&](ObjectId Value) -> std::shared_ptr<Instance> { return Value == Object ? Reference : nullptr; }, [&] { return Time; });
+		Check(Manager.AddPeer(Peer, ReplicationEpoch(1), TestLimits(2)) &&
+			Manager.RegisterRemote(Function, RemoteInstanceKind::Function) && Manager.PublishRemote(Peer, Function) &&
+			Manager.RegisterRemote(Event, RemoteInstanceKind::ReliableEvent) && Manager.PublishRemote(Peer, Event),
+			"ownership evidence uses actual published Remote peers");
+		const auto EventMessage = Incoming(Peer, Message(RemoteMessageKind::ReliableEvent, Event));
+		Check(Manager.HandleTransportEvent(EventMessage) && Manager.HandleTransportEvent(EventMessage), "enqueue two actual dispatch records");
+		Time += 3ms;
+		Manager.Pump();
+		// First observation is AFTER both messages have left the queue.
+		auto M = Manager.GetMetrics();
+		Check(M.Observed && M.QueuedDispatchMessages == 0 && M.QueuedDispatchBytes == 0 &&
+			M.Ownership.DispatchMessagesHigh == 2 && M.Ownership.PeerDispatchMessagesHigh == 2 &&
+			M.Ownership.DispatchBytesHigh == 2 * EventMessage.Payload.size() &&
+			M.Ownership.DispatchAccepted == 2 && M.Ownership.DispatchReleased == 2 &&
+			M.Ownership.DispatchResidenceMaximumMicroseconds == 3000,
+			"source high-water and residence survive enqueue/drain between host observations");
+		Manager.SetRequestHandler(Function, [](const RemoteInvocation &, RemoteManager::RequestReply Reply) { (void)Reply({}, std::nullopt); });
+		Check(Manager.HandleTransportEvent(Incoming(Peer, Message(RemoteMessageKind::Request, Function))) && Manager.Pump() == 1,
+			"synchronous handler starts and finishes between observations");
+		M = Manager.GetMetrics();
+		Check(!M.IncomingHandlers && M.Ownership.IncomingHandlersHigh == 1 &&
+			M.Ownership.HandlersStarted == 1 && M.Ownership.HandlersReleased == 1,
+			"source handler high-water survives an immediate reply before the first host snapshot");
+		auto Request = Manager.StartRequest(Peer, Function, {WireObjectReference{WireObjectId::FromObjectId(Object)}}, {}, 100ms);
+		Check(Request.Status == RemoteSendStatus::DeferredForMaterialization && Request.Request, "actual missing dependency defers one RPC");
+		Time += 5ms;
+		Check(Manager.CancelRequest({Peer, *Request.Request}), "deferred request cancels once");
+		M = Manager.GetMetrics();
+		Check(!M.DeferredReliableMessages && !M.DeferredReliableBytes && !M.InFlightRequests &&
+			M.Ownership.DeferredMessagesHigh == 1 && M.Ownership.DeferredBytesHigh > 0 &&
+			M.Ownership.PeerDeferredBytesHigh == M.Ownership.DeferredBytesHigh &&
+			M.Ownership.OutgoingRequestsHigh == 1 && M.Ownership.PeerOutgoingRequestsHigh == 1 &&
+			M.Ownership.DeferredAccepted == 1 && M.Ownership.DeferredReleased == 1 && !M.Ownership.DeferredExpired &&
+			M.Ownership.DeferredResidenceMaximumMicroseconds == 5000 && M.Ownership.OutgoingResidenceMaximumMicroseconds == 5000,
+			"deferral/outgoing high-water survives terminal cancellation without false expiry");
+		RemoteManager::RequestReply Held;
+		Manager.SetRequestHandler(Function, [&](const RemoteInvocation &, RemoteManager::RequestReply Reply) { Held = std::move(Reply); });
+		auto IncomingRequest = Message(RemoteMessageKind::Request, Function);
+		IncomingRequest.Request = RemoteRequestId(2);
+		IncomingRequest.Deadline = 1ms;
+		Check(Manager.HandleTransportEvent(Incoming(Peer, IncomingRequest)) && Manager.Pump() == 1, "native handler work becomes owned");
+		Time += 2ms; Manager.Pump();
+		M = Manager.GetMetrics();
+		Check(M.IncomingHandlers == 1 && M.Ownership.IncomingHandlersHigh == 1 && M.Ownership.PeerIncomingHandlersHigh == 1 &&
+			M.Ownership.HandlersReleased == 1, "reply timeout does not hide retained handler-work ownership");
+		Time += 30s; Manager.Pump();
+		M = Manager.GetMetrics();
+		Check(!M.IncomingHandlers && M.Ownership.HandlersStarted == 2 && M.Ownership.HandlersReleased == 2 &&
+			M.Ownership.HandlersExpired == 1 && M.Ownership.HandlerResidenceMaximumMicroseconds == 30002000 &&
+			M.Ownership.DeadlineOvershootMaximumMicroseconds == 2000 && !Held({}, std::nullopt),
+			"work lease expiry is measured at actual Pump with exact overshoot, not a fabricated 30-second preemption gate");
+		Check(Manager.HandleTransportEvent(EventMessage), "one queued message remains for peer teardown");
+		auto Pending = Manager.StartRequest(Peer, Function, {WireObjectReference{WireObjectId::FromObjectId(Object)}}, {}, 100ms);
+		Check(Pending.Accepted() && Manager.RemovePeer(Peer), "peer teardown releases queued/deferred/pending ownership");
+		M = Manager.GetMetrics();
+		Check(!M.QueuedDispatchMessages && !M.DeferredReliableMessages && !M.InFlightRequests && !M.IncomingHandlers &&
+			M.Ownership.DispatchAccepted == M.Ownership.DispatchReleased &&
+			M.Ownership.DeferredAccepted == M.Ownership.DeferredReleased &&
+			M.RequestsStarted == M.RequestsCompleted && !M.Ownership.BoundViolations,
+			"shutdown conservation includes discarded dispatch and cancelled deferred ownership");
+	}
+
 	void TestDispatchFairnessAndBroadcastBudget() {
 		RecordingScheduler Scheduler;
 		const ConnectionId Noisy{81, 1};
@@ -1298,6 +1370,7 @@ int main() {
 	TestLifecycleAndEpochIsolation();
 	TestBroadcastIsolation();
 	TestTerminalDeferralAndHandlerAdmission();
+	TestOwnershipEvidenceBetweenObservations();
 	TestDispatchFairnessAndBroadcastBudget();
 	TestRejectionBudgetAndReentrantLifecycle();
 	TestHostileDispatch();

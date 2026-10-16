@@ -132,7 +132,7 @@ struct ReplicationCoordinator::PlanningContinuation {
 				const auto &Seeds = Pass == 0 ? Selection->DesiredObjects : Selection->RequiredObjects;
 				for (const auto Object : Seeds) { co_yield 0; Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds); }
 				for (const auto Object : Selection->RequiredObjects) { co_yield 0; Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds); }
-				if (Pass == 1 && Frontier.empty()) { Retain(Owner); Frontier.push_back({Owner.SourceRoot->GetObjectId(), 0}); }
+				if (Pass == 1 && Frontier.empty()) { Retain(Owner); Frontier.push_back({Owner.SourceRootId, 0}); }
 				while (!Frontier.empty()) {
 					co_yield 0;
 					const auto [Object, Depth] = Frontier.front();
@@ -397,7 +397,7 @@ struct ReplicationCoordinator::PlanningContinuation {
 
 ReplicationScheduleResult ReplicationCoordinator::RegisterPeerPlanned(ConnectionId Connection, ReplicationEpoch Epoch,
 	std::shared_ptr<const PeerRelevanceSelection> Selection) {
-	if (!SourceRoot || !Connection.IsValid() || !Epoch.IsValid() || !Selection) return {"Invalid replication peer or source"};
+	if (!SourceRootId.IsValid() || !Connection.IsValid() || !Epoch.IsValid() || !Selection) return {"Invalid replication peer or source"};
 	if (Peers.size() + DetachedPlanning.size() >= 1'024) return {"Structural planning peer limit exceeded"};
 	if (Peers.contains(Connection) || DetachedPlanning.contains(Connection)) return {"Replication peer identity is already registered or retiring"};
 	for (const auto &[Existing, State] : Peers) {
@@ -567,6 +567,7 @@ void ReplicationCoordinator::ProcessPlanning(std::uint64_t SimulationTick) {
 					PendingTransitionCount = CountWithoutPeer + Plan.Working.PendingTransitions.size();
 					Peer.DesiredObjects.swap(Plan.Working.DesiredObjects);
 					Peer.RequiredObjects.swap(Plan.Working.RequiredObjects);
+					RecordCausalPendingReplacement(Peer, Plan.Working.PendingTransitions);
 					Peer.PendingTransitions.swap(Plan.Working.PendingTransitions);
 					Peer.CriticalQueue.swap(Plan.Working.CriticalQueue);
 					Peer.OrdinaryQueue.swap(Plan.Working.OrdinaryQueue);
@@ -576,6 +577,17 @@ void ReplicationCoordinator::ProcessPlanning(std::uint64_t SimulationTick) {
 					Peer.DesiredDependencyCursor = DependencyCursor;
 					Peer.ResolvedSelection = Plan.Selection;
 					Plan.Installed = true;
+					if (!FrozenQuote && detail::ActiveStructuralCausalEvidence) {
+						std::vector<detail::StructuralPendingIdentity> Installed;
+						Installed.reserve(Peer.PendingTransitions.size());
+						for (const auto &[Object, Pending] : Peer.PendingTransitions)
+							Installed.push_back({Pending.Token, Object, Pending.Kind == PendingTransitionKind::Enter});
+						detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::PlanningInstalled,
+							.Connection = Connection, .SourceScope = SourceRootId,
+							.Sequence = Peer.NextSequence.Value(), .CursorBefore = Peer.JournalCursor.NextSequence,
+							.CursorAfter = Peer.JournalCursor.NextSequence, .AcceptedRevision = Peer.AcceptedRevision,
+							.ResolvedPending = Installed});
+					}
 					SaturatingAdd(Metrics.PlanningReadyBatches, 1);
 					runtime_detail::CountWork(runtime_detail::WorkCounter::PlanningReadyBatches);
 					if (Plan.Cost == 0) {
@@ -691,7 +703,7 @@ ReplicationProduceResult ReplicationCoordinator::ProducePlannedFrame(ConnectionI
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 		Metrics = CandidateMetrics;
-		return {{}, {}, Frame.Operations.size(), 0, {}, true, Encoded->size()};
+		return {{}, {}, Frame.Operations.size(), 0, {}, true, Encoded->size(), EvidenceFingerprint(*Encoded)};
 	}
 	auto Next = Peer.NextSequence.TryNext();
 	if (!Next) return {{}, "Reliable replication sequence is exhausted"};
@@ -727,6 +739,8 @@ ReplicationProduceResult ReplicationCoordinator::ProducePlannedFrame(ConnectionI
 	else SaturatingAdd(CandidateMetrics.IncrementalBytes, Encoded->size());
 	RequestedTemplates.merge(Requested);
 	Metrics = CandidateMetrics;
+	RecordCausalPreparation(Peer, Commit, *Encoded);
+	const auto Fingerprint = EvidenceFingerprint(*Encoded);
 	Peer.PreparedCommit = std::move(Commit);
-	return {std::move(Frame), {}, Count, 0, std::move(*Encoded)};
+	return {std::move(Frame), {}, Count, 0, std::move(*Encoded), false, 0, Fingerprint};
 }

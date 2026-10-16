@@ -231,7 +231,13 @@ scheduler.
 On both endpoints, a Character shell enters GCHR publication,
 prediction/presentation only while both the shell and its `RootPart` are in the
 committed peer view. Leave clears prediction and interpolation; reentry starts
-a fresh presentation lifetime. Remotes still require structural
+a fresh presentation lifetime. A current relevance selection is not itself an
+accepted Leave: the server retains already materialized Characters until their
+root leaves committed knowledge. A cancelled pending Leave therefore cannot
+advance the server's materialization epoch without a matching client transition.
+The candidate scan unions the current typed spatial selection with the bounded
+previously materialized set; it does not scan all world Characters per peer.
+Remotes still require structural
 knowledge. The Remote manager's argument-materialization set is initialized
 from the accepted view and then advanced from the same structural frames on
 both endpoints, so an Instance argument may target a known replica but cannot
