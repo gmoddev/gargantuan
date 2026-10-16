@@ -6,6 +6,27 @@ last_verified: 2026-10-15
 
 # Foundation 3L pooled physical qualification attempt
 
+## Final bounded D03 attribution (2026-10-16)
+
+Native sourcef30/toolingcf45 passes all14 original hosted jobs and fresh
+four-client `5c94df6a-3836-47d3-8a99-5bb80fcf0d6a` whole replay. The one
+subsequent Local32 `7efff6f1-8d59-4fa8-8cef-c1f27cfa9b80` is **FAIL**:
+the persistent pre-rejection record identifies exact turnover164.511ms
+against150ms, peer15:1/token2545/442850B. Native BODY completes24.319ms;
+Main15.738ms passes. No long runnable Main/actor starvation explains the
+remaining ACK/reference-retirement interval. Its first causal owner remains
+unresolved, with observer overhead unmeasured. No speculative correction or
+identical retry follows; real-TLS Node32 and final acceptance are unrun.
+
+Original failed evidence is preserved at `C:\Sandbox\Codex\L327e-v1`,
+965 members/3391172140B, closed index SHA256
+`28c1939ab2b880569cdb2cf065a2a1ebd98800d61819296df2467d430d8eadf8`.
+Both captures retain their failed/incomplete classifications, including four
+unsealed client files. All owned child trees are reaped; final owned process,
+port, task, firewall and capture checks are clear. [Full measured timeline,
+CI/package identities and architecture decision](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#32-final-bounded-local32-attribution-and-architecture-decision-2026-10-16).
+**KI-006 OPEN; Foundation3L NOT_COMPLETE; PR6 draft.**
+
 ## Actual Local32 attempts and execution evidence blocker (2026-10-15)
 
 Both actual attempts use native source

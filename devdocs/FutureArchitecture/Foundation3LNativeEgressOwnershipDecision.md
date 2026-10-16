@@ -2742,3 +2742,181 @@ production networking changes. Its native32/recovery results remain qualified
 only at their recorded source. Fresh f30 source/archive/probe identity and
 physical prerequisites must be established separately; the farm must use the
 new exact-source official hosted package. No historical result is relabeled.
+
+## 32. Final bounded Local32 attribution and architecture decision (2026-10-16)
+
+**Decision: stop qualification; recommend REVISE D03.** Current gates remain
+unchanged. Classification is **NOT DEMONSTRABLY GUARANTEED**; the selected
+physical Local32 profile is FAIL, not QUALIFIED. Neither PROVEN IMPOSSIBLE nor
+an unavoidable Windows/Linux platform limit is established. Existing passing
+subsets show practical feasibility in those workloads, not unconditional
+execution/ACK guarantees or complete qualification of the supported profile.
+
+### Qualified prerequisites and exact identities
+
+Native execution is `f30e80bacda8d06fa5969c4ac0bfc527cea91aff`, tree
+`542fb1f0365d5602c6eeca679a43c4bdf3b6d7e5`. Qualifier/analyzer source is
+`cf45f55a88ca8bc124a90b979962939abfa02817`, tree
+`215509623fc2979a1dcab45f5ea455b283633c56`. Subsequent documentation commits
+do not relabel either source. All original attempt1 hosted jobs succeed:
+
+| Source | Native push / PR / manual runs | GNS sanitizer push / PR runs |
+| --- | --- | --- |
+| f30 | 38814372765 / 38814381417 / 38814379105 | 38814372839 / 38814381310 |
+| cf45 | 38815899830 / 38815907458 / not dispatched | 38815899827 / 38815907556 |
+
+This is eight native-source and six qualifier-source jobs, including Windows,
+Linux headless ASan/UBSan and GNS sanitizers. Original JUnit, checkout, contract
+identity and package are independently joined; no rerun replaces a failed job.
+Native CI/package receipt SHA256:
+`640d6e3ddf64e51d4f2ebc80c0ba31d426fc7f443547edd520cc0b612733ea47`;
+qualifier CI receipt:
+`a111b99a23886d4b1c65cefff519b89cce6e020bf24545172613648ef36d59c5`.
+Official f30 ZIP SHA256:
+`dceeda1236e6cf0f1c80f38ece88a9e0067e0263337b7d96e32453bd7fbf304a`.
+
+The worker's installed PowerShell changed externally to7.6.7; update cause and
+chronology are unmeasured. Its actual signed executable is pinned as
+`fa2c8bb1e35cdd62ad15cd06a1d8f2c5961e9725a9bfa1e7cfd2c322f49e9619`.
+Affected actual endpoint/sampler/owned32 regressions pass with the original
+pinned Python process environment; receipt
+`795ac605474507b123e9e57898fe45c0127a316fa5b3a669dfa61287b0b60531`.
+Earlier caller/path/TEMP preflight failures remain preserved; no service or
+product threshold changed. Prelaunch stale-age/readiness stops made no probe
+attempt and retain separate originals. Both native/quote caches are restored
+and preserved. No user application is stopped.
+
+Fresh four-client run `5c94df6a-3836-47d3-8a99-5bb80fcf0d6a` completes at
+03:40:45.613Z. Existing cf45 whole replay returns **MEASURED_PASS**; Root
+independently reproduces the same semantic result.128 maximum grants,
+31693 native rows,67134512B accepted=retired, zero terminal/outstanding/open,
+80 RPC and80 Event samples, four matching bidirectional captured tuples and
+complete endpoint rollback/cleanup qualify the prerequisite. This is not
+Local32. Its204-member/295548758B closed mirror is
+`C:\Sandbox\Codex\P4F30v1`, index
+`25614d335f2b86b439e338e3adb19970fa3b3e176b625ec8f9c4be982edc364f`;
+whole receipt `271628f4c65ff8cf562a01b5630c03771b935f813a7a96ccf185a0794864ff0c`.
+
+### One actual Local32 and initiating obligation
+
+Run `7efff6f1-8d59-4fa8-8cef-c1f27cfa9b80`, coordinator
+`d056ccc6-7b29-4095-b8da-b24fd4b93dca`, passes preparation03:49:51.431Z,
+staging03:50:05.791Z and recorder READY. Canonical launch ends FAILED/exit1
+03:54:35.859Z. There is no retry or Node32 launch.
+
+The903-byte persistent record validates its exact run/header and792-byte body,
+SHA256 `d2f34be36b44e4ba914d7bf99aae9b920786f3e5477930e6725fced816eafdb6`.
+The first rejection is **TURNOVER**, peer15:generation1, tick8834,
+offer/token2545,442850B, at `AdmissionBegin`,31us into Session:
+
+| Event | Steady microseconds | From activation |
+| --- | --- | --- |
+| Activation | 1652156300689 | 0 |
+| First native-positive BODY send | 1652156300882 | 193us |
+| Complete native-positive unique BODY | 1652156325008 | 24319us |
+| Turnover deadline | 1652156450689 | 150000us |
+| First rejection | 1652156465200 | 164511us |
+
+Main elapsed15738us passes; peer maximum Main66773us. Result validity is1;
+invalid/backward flags are0. The permit is unavailable and exact debt remains
+token2545/442850B. First-sent9972459B minus ACK/retired9529609B equals442850B.
+This is adapter ACK/reference retirement, not proof that wire ACK packets were
+absent. Native completion passes37.3243865966796875ms; the140.192ms after it
+remains unattributed among ACK arrival/processing, reference retention and
+feedback reconciliation. AdmissionBegin's null feedback is normal bookkeeping,
+not proof of missing native feedback. Four retained peer summaries fail
+turnover (15–18); none reports Main, native-completion/evidence or ordinary
+service failure. These scoped facts do not qualify the aborted full gameplay,
+fairness, recovery, resource or provider conjunction.
+
+The first fault precedes rejection/unwind. A terminal-release TSV row uses a
+cached pre-fault admission timestamp; it cannot prove an earlier real permit
+return. Earlier `stop_sent phase=reload` controls are workload, not teardown.
+The final deliberate host sleep15066us explains detection after the deadline,
+not the preceding incomplete ACK-owned turnover. Fault-time Poll58us,
+Engine226us and Session31us are not long production work intervals.
+
+### Bounded attribution: measurements and limits
+
+The original circular ETL is291504128B, SHA256
+`63389f52eae3f951d1402236e46b7d422dbec2d62023c2d3205f8505e5349f64`.
+Record start/query/stop and reported loss counters are0; size/fault stop occurs
+within the420s/512MiB bounds. One existing-helper offline decode completes
+in14.859s,7140463 rows, with no unsupported layout or decode loss. PID72464,
+Main TID20440 and GNS actor TID48784 lifecycle/clock identities cover the
+whole activation-to-fault window; QPC frequency is10MHz. Two fixed offline
+CSV scans conserve the164.511ms interval exactly:
+
+| Thread | Running ms | Ready ms | Waiting ms | Unknown ms | Longest Ready |
+| --- | --- | --- | --- | --- | --- |
+| Main | 24.2998 | 0.1560 | 140.0258 | 0.0294 | 17.5us |
+| GNS actor | 38.4996 | 0.8733 | 125.1319 | 0.0062 | 22.5us |
+
+Both threads execute repeatedly. Actor longest individual wait is4.9372ms;
+no long recorded runnable scheduling delay explains this grant's turnover.
+Main's final sleep accounts14.1882ms of the14.511ms deadline-to-detection
+interval. Wait-reason codes do not identify a lock owner or stack. The packet
+worker identity and ACK/reference chronology are not captured; short measured
+lock/API spans do not rule out every receive/worker/native path.
+
+The8192-entry native callsite ring spans about152.689ms; the first12.516ms
+after activation are overwritten (6866065 lifetime overwrites, zero reported
+drops). Detailed callback/packet/ACK/reference events were intentionally disabled
+in this mode. Complete ETW scheduler coverage does not restore those events.
+Observer overhead and perturbation remain **NOT_MEASURED**; scalar persistence
+occurs after the initiating snapshot and cannot initiate its preceding delay.
+Offline assessment:
+`C:\Users\aiden\.codex\artifacts\foundation3l-local32-7eff-etw-analysis-v1\assessment.json`,
+SHA256 `0d498eebcc67e547c66f84a2671ab69827837110f2a9df134e3ac11cb2b997e3`.
+
+### Feasibility and ranked decision
+
+The150-ms turnover obligation couples local admission to remote ACK and native
+reference lifetime. Current contracts do not qualify a network loss/RTT and
+reference-release envelope sufficient to derive that deadline. Reliable retries
+may safely retain references; unconditional general-purpose OS timing is also
+not established. Neither source risk proves what happened here. Windows
+physical failure and Linux sanitizer success do not establish a universal
+platform contradiction. A credible subset implementation exists, but the actual
+required deployment remains unqualified; another identical attempt has no
+identified defect to discriminate.
+
+| Rank | Alternative | Engineering/operational cost and risk |
+| --- | --- | --- |
+| 1 | **REVISE D03** combined turnover rejection around independently enforced player service, eligible fairness and ownership liveness. | Moderate contract, production-health and focused fixture work, followed by fresh physical qualification. Must reject stalled permits and preserve exact debt/resource bounds. No timer deletion alone. |
+| 2 | KEEP D03 as an explicitly qualified execution/network profile. | Lower initial design change but continuing deployment/path certification and monitoring cost. The current Local FAIL still blocks it; no supported envelope is established. |
+| 3 | Stronger execution isolation or ACK/permit ownership redesign. | High implementation, lifecycle and cross-platform qualification cost. Current evidence does not show that isolation or pipelining addresses the unretired interval. |
+
+Costs are qualitative engineering estimates, not measured schedules. Recommend
+REVISE, not transport replacement: preserve exact native completion/FIFO,
+gameplay RPC/Event, security, reliability, conservation, resource safety and
+independent service-recovery/causal convergence requirements. The current
+1181.25ms fairness proof includes seven150-ms turnovers; any revised contract
+must independently establish its retained admission bound and starvation
+negatives. A direct timer is not a substitute for eligibility/ownership proof.
+No current Main/turnover/fairness or other hard limit is changed here.
+
+If KEEP is chosen, the only concrete next high-value discriminator is token-
+bound packet ACK, reference-release and feedback publication chronology across
+both endpoints. It would distinguish absent/late ACK from references retained
+after ACK and delayed reconciliation. Scheduler trace repetition cannot do so.
+It requires separately justified minimal instrumentation and renewed preflights;
+this record does not initiate another investigation or qualification campaign.
+
+### Evidence custody, cleanup and remaining gates
+
+Frozen failed-run mirror `C:\Sandbox\Codex\L327e-v1` contains965 members,
+3391172140B, closed index
+`28c1939ab2b880569cdb2cf065a2a1ebd98800d61819296df2467d430d8eadf8`.
+Root independently verifies every size/hash and exact closed membership.
+Failed/incomplete captures remain failed/incomplete, including four unsealed
+client originals; no canonical Collect/PASS promotion is made. All three
+original child trees report reaped. Final worker04:02:23Z/controller04:02:49Z
+checks show no owned native/role/decoder/capture processes, listeners, UDP,
+same-run tasks or firewall rule; worker packet capture and netsh are idle.
+No user process, global setting, unrelated cache or original evidence is removed.
+
+Native32/recovery at source3182 and all historical failures retain their original
+identities. This f30 physical Local run fails; real-TLS Node32, provider parity,
+remaining canonical conjunction and independent final acceptance are unrun.
+**KI-006 OPEN; Foundation3L NOT_COMPLETE; PR6 draft; no3M, release or merge.**

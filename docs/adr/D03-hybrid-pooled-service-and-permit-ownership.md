@@ -9,6 +9,22 @@ supersedes: D01/F1 hard packet timing and implied continuous delivered capacity
 
 ## Decision scope
 
+### Final physical attribution checkpoint — 2026-10-16
+
+One fresh bounded Local32 at nativef30/toolingcf45 fails the unchanged150-ms
+turnover predicate at164.511ms. The initiating grant completes native BODY
+in24.319ms and its Main opportunity is15.738ms. OS evidence does not attribute
+the remaining ACK/reference-retirement interval to long runnable starvation.
+No correctable defect, mathematical impossibility or unavoidable platform limit
+is established. Full Local32 remains FAIL; Node32 and final acceptance are unrun.
+
+Independent recommendation is **REVISE D03**, particularly the combined exact
+turnover rejection, with independent eligible fairness, ownership liveness and
+resource proofs. This is **not an accepted amendment**: all current hard gates
+remain binding. Feasibility is **NOT DEMONSTRABLY GUARANTEED**, not QUALIFIED or
+PROVEN IMPOSSIBLE. [Exact measurements, uncertainties and ranked alternatives](../../devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#32-final-bounded-local32-attribution-and-architecture-decision-2026-10-16)
+record the bounded stop. Historical native32/recovery evidence is unchanged.
+
 ### Qualification-scope amendment — 2026-10-13
 
 The product decision at this checkpoint removes the earlier exception that

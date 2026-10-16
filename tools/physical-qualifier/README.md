@@ -60,6 +60,16 @@ CI/official package, fresh same-source four-client prerequisite and Local32
 conjunction remain independent gates. The qualifier child has separate tooling
 provenance. Applying this pin update does not establish those gates or final3L.
 
+At the2026-10-16 checkpoint, f30's eight and qualifiercf45's six original hosted
+jobs pass. Fresh f30 four-client run `5c94df6a-3836-47d3-8a99-5bb80fcf0d6a`
+passes whole replay. The single subsequent Local32 run
+`7efff6f1-8d59-4fa8-8cef-c1f27cfa9b80` fails exact150-ms turnover at164.511ms;
+native BODY completion24.319ms and Main15.738ms pass for its first fault.
+No demonstrated production defect is established; no retry or Node32 follows.
+The [final attribution and architecture assessment](../../devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#32-final-bounded-local32-attribution-and-architecture-decision-2026-10-16)
+preserves original CI/package, failed evidence and cleanup identities. D03
+remains unchanged and Foundation3L remains incomplete.
+
 The [3182 manifest](phase1-hybrid-3182a164-source-manifest.json) remains historical:
 native source
 `3182a164d5bf87f5051e11ecbd1c749b73c282dc`, archive SHA-256
@@ -409,7 +419,7 @@ by this offline analysis path; its contents are not evidence of analyzer custody
 ## New F1 candidate source provenance
 
 The `make_f1_source_archive.py output.zip`, `--verify-pinned`, and `--verify-tree`
-modes select the 3182 hybrid manifest and reproduce the selected native source,
+modes select the pinned hybrid manifest and reproduce the selected native source,
 even when invoked from the later qualifier-only child. Prefix those arguments with
 `--legacy` to reproduce or verify the historical 31-file ce4733 archive using
 `phase1-f1-ce4733-source-manifest.json`. That historical inventory cannot claim
@@ -455,7 +465,7 @@ files together. Endpoint preflight still checks the externally pinned archive
 hash first, then dispatches only the pinned format and validates its complete
 embedded inventory against the pinned commit. `package.py` includes the new
 verifier beside both qualifier entrypoints. Historical legacy manifests remain
-unchanged; the current Phase 1 pins identify the measured 3182 build candidate.
+unchanged; the current Phase 1 pins identify the f30 diagnostic build candidate.
 The archive identifies the chosen native build commit. A later qualifier-only
 commit may pin that build's measured artifacts; its separately hashed qualifier
 bundle is the endpoint tooling provenance. Do not attempt a self-referential

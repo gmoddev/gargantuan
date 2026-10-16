@@ -85,6 +85,29 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+**2026-10-16 — Final bounded Local32 FAIL: exact turnover, architecture decision.**
+Native source `f30e80bacda8d06fa5969c4ac0bfc527cea91aff` and qualifier
+`cf45f55a88ca8bc124a90b979962939abfa02817` pass their eight and six original
+hosted jobs respectively. Fresh same-source four-client prerequisite
+`5c94df6a-3836-47d3-8a99-5bb80fcf0d6a` passes whole replay. The one fresh
+Local32 run `7efff6f1-8d59-4fa8-8cef-c1f27cfa9b80` fails before full acceptance.
+Its persistent first fault is peer15:1/token2545:442850B, turnover164.511ms
+against150ms. Native first-send is193us and BODY completion24.319ms; Main
+opportunity15.738ms passes. Invalid/backward flags are clear. Independent OS
+analysis finds no long runnable Main/actor starvation; the remaining140.192ms
+after native completion cannot be assigned among ACK delivery/processing,
+reference retention and feedback reconciliation. No production correction or
+unavoidable platform limit is demonstrated. Observer overhead is unmeasured.
+
+**Recommendation: REVISE D03; classification NOT DEMONSTRABLY GUARANTEED.**
+This is a recommendation, not an adopted relaxation: all hard gates remain
+fatal. Replacing combined turnover requires independent fairness/liveness and
+resource proofs, including re-establishing1181.25ms admission if its seven
+turnovers premise changes. Failed evidence is hash-closed and owned cleanup is
+verified. No retry or Node32 follows. See [final attribution and ranked
+decision](devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#32-final-bounded-local32-attribution-and-architecture-decision-2026-10-16).
+**KI-006 OPEN; Foundation3L NOT_COMPLETE; PR6 draft; no3M or merge.**
+
 **2026-10-15 — First-fault native preflight PASS; physical qualification pending.**
 The authorized continuation adds one persistent pre-rejection execution record
 and bounded correlation through the existing GNS/scheduler diagnostics. It
