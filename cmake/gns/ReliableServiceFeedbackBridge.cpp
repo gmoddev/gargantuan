@@ -4,22 +4,23 @@
 
 namespace SteamNetworkingSocketsLib {
 namespace {
-thread_local std::uint64_t PendingReliableRetirementToken = 0;
+thread_local GargantuanReliableAttribution PendingReliableRetirement;
 }
 
-bool GargantuanBeginReliableRetirementAttribution(std::uint64_t Token) noexcept {
-	if (!Token || PendingReliableRetirementToken) return false;
-	PendingReliableRetirementToken = Token;
+bool GargantuanBeginReliableRetirementAttribution(std::uint64_t Token,
+	std::uint64_t ActivatedAtMicroseconds) noexcept {
+	if (!Token || PendingReliableRetirement.Token) return false;
+	PendingReliableRetirement = {Token, ActivatedAtMicroseconds};
 	return true;
 }
 
 void GargantuanEndReliableRetirementAttribution() noexcept {
-	PendingReliableRetirementToken = 0;
+	PendingReliableRetirement = {};
 }
 
-std::uint64_t GargantuanTakeReliableRetirementAttribution() noexcept {
-	const auto Result = PendingReliableRetirementToken;
-	PendingReliableRetirementToken = 0;
+GargantuanReliableAttribution GargantuanTakeReliableRetirementAttribution() noexcept {
+	const auto Result = PendingReliableRetirement;
+	PendingReliableRetirement = {};
 	return Result;
 }
 
@@ -36,7 +37,10 @@ void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounte
 	const auto Time = std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count();
 	if (Time < 0) Result.Counters.Invalid = true;
-	else Result.ObservedAtMicroseconds = static_cast<std::uint64_t>(Time);
+	else {
+		Result.ObservedAtMicroseconds = static_cast<std::uint64_t>(Time);
+		Result.Counters.ObserveActiveService(Result.ObservedAtMicroseconds);
+	}
 }
 
 // Borrowed only for the synchronous existing CloseConnection call on this thread.

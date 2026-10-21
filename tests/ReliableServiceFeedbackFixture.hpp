@@ -75,6 +75,19 @@ struct NativePair {
 		Require(Sockets != nullptr, "native GNS interface available");
 		Require(Sockets->CreateSocketPair(&Sender, &Receiver, true, nullptr, nullptr),
 			"native network-loopback socket pair created");
+		const auto Deadline = std::chrono::steady_clock::now() + 2s;
+		bool Connected = false;
+		while (std::chrono::steady_clock::now() < Deadline) {
+			SteamNetConnectionInfo_t SenderInfo{}, ReceiverInfo{};
+			Connected = Sockets->GetConnectionInfo(Sender, &SenderInfo) &&
+				Sockets->GetConnectionInfo(Receiver, &ReceiverInfo) &&
+				SenderInfo.m_eState == k_ESteamNetworkingConnectionState_Connected &&
+				ReceiverInfo.m_eState == k_ESteamNetworkingConnectionState_Connected;
+			if (Connected) break;
+			Sockets->RunCallbacks();
+			std::this_thread::sleep_for(1ms);
+		}
+		Require(Connected, "native sender and receiver connected before service activation");
 	}
 	~NativePair() {
 		if (Sockets && Sender != k_HSteamNetConnection_Invalid)
@@ -295,12 +308,21 @@ inline bool Run() {
 			Active.Counters.ActiveAttributedMessageNumber == static_cast<std::uint64_t>(MessageNumber) &&
 			!Active.Counters.AttributedRetirementSequence, "real GNS send binds token to assigned message number before service");
 		const auto Retired = WaitNativeRetirement(Pair, 1);
+		std::cout << "[Network:ReliableFeedback] native_structural_first="
+			<< Retired.Counters.StructuralPayloadBytesFirstSent
+			<< " native_structural_ack=" << Retired.Counters.StructuralPayloadBytesAcked
+			<< " native_service_failed=" << Retired.Counters.StructuralServiceFailed
+			<< " native_max_deficit=" << Retired.Counters.StructuralMaximumDeficitByteMicroseconds << '\n';
 		Require(Retired.Counters.AttributedRetirementSequence == 1 &&
 			Retired.Counters.LastAttributedRetirementToken == Token &&
 			Retired.Counters.LastAttributedRetirementMessageNumber == static_cast<std::uint64_t>(MessageNumber) &&
 			Retired.Counters.LastAttributedRetiredPayloadBytes == 48 * 1024 &&
 			!Retired.Counters.ActiveAttributedRetirementToken,
 			"real GNS final-reference retirement reports exact sender-local identity and payload once");
+		Require(Retired.Counters.StructuralPayloadBytesFirstSent == 48 * 1024 &&
+			Retired.Counters.StructuralPayloadBytesAcked == 48 * 1024 &&
+			!Retired.Counters.StructuralServiceFailed,
+			"native structural payload has exact first-send and ACK attribution");
 		const auto BaselineSequence = Retired.Counters.AttributedRetirementSequence;
 		(void)NativeSend(Pair, 4 * 1024);
 		const auto Deadline = std::chrono::steady_clock::now() + 2s;
@@ -314,7 +336,9 @@ inline bool Run() {
 			std::this_thread::sleep_for(1ms);
 		}
 		Require(After.Counters.AttributedRetirementSequence == BaselineSequence &&
-			After.Counters.LastAttributedRetirementToken == Token,
+			After.Counters.LastAttributedRetirementToken == Token &&
+			After.Counters.StructuralPayloadBytesFirstSent == 48 * 1024 &&
+			After.Counters.StructuralPayloadBytesAcked == 48 * 1024,
 			"unattributed reliable traffic cannot overwrite structural retirement identity");
 	});
 	Case("CheckedCounterExhaustion", [] {
@@ -363,6 +387,10 @@ inline bool Run() {
 		NetworkScheduler Scheduler(*Pair.Server);
 		Require(Scheduler.RegisterConnection(Pair.ServerConnection, Pair.Limits) && Scheduler.Submit(std::move(*Intent)).Accepted(), "scheduler acceptance");
 		Require(!Sample(Pair).ActiveAttributedRetirementToken, "queued work has not reached native sender");
+		const auto ActivatedAt = std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+		Require(ActivatedAt > 0 && Scheduler.ActivateReliableGrant(Pair.ServerConnection, 81,
+			static_cast<std::uint64_t>(ActivatedAt)), "accepted grant gets its activation clock");
 		Require(Scheduler.Flush(Pair.ServerConnection, SchedulerTickBudget::FromNetworkLimits(Pair.Limits)).MessagesSubmitted == 1, "existing scheduler handoff");
 		auto Gameplay = Message(Pair.ServerConnection, DeliveryMode::ReliableOrdered,
 			std::vector<std::byte>(GameplayBytes, std::byte{0x42}), Pair.Limits);
@@ -385,6 +413,29 @@ inline bool Run() {
 		Require(Access::Release(*Pair.Server, Old) && !Access::Release(*Pair.Server, Old) && !Access::Observe(*Pair.Server, Old),
 			"terminal consumed exactly once before reuse");
 	});
+	Case("RunningStructuralGrantHintLifetime", [] {
+		using SteamNetworkingSocketsLib::GargantuanHasRunningStructuralGrant;
+		using SteamNetworkingSocketsLib::GargantuanSetRunningStructuralGrant;
+		bool FirstSender = false, SecondSender = false;
+		struct Cleanup {
+			bool &First, &Second;
+			~Cleanup() {
+				SteamNetworkingSocketsLib::GargantuanSetRunningStructuralGrant(First, false);
+				SteamNetworkingSocketsLib::GargantuanSetRunningStructuralGrant(Second, false);
+			}
+		} Guard{FirstSender, SecondSender};
+		Require(!GargantuanHasRunningStructuralGrant(), "no running grant before first native packet");
+		GargantuanSetRunningStructuralGrant(FirstSender, true);
+		GargantuanSetRunningStructuralGrant(FirstSender, true);
+		Require(FirstSender && GargantuanHasRunningStructuralGrant(), "one sender enters running interval exactly once");
+		GargantuanSetRunningStructuralGrant(SecondSender, true);
+		GargantuanSetRunningStructuralGrant(FirstSender, false);
+		Require(!FirstSender && SecondSender && GargantuanHasRunningStructuralGrant(),
+			"one completed sender cannot clear another sender's running interval");
+		GargantuanSetRunningStructuralGrant(SecondSender, false);
+		GargantuanSetRunningStructuralGrant(SecondSender, false);
+		Require(!GargantuanHasRunningStructuralGrant(), "last completion or shutdown clears the wake hint");
+	});
 	Case("SnapshotOverhead", [] {
 		OwnedPair Owner; auto &Pair = Owner.Pair;
 		const auto Before = Sample(Pair);
@@ -402,7 +453,7 @@ inline bool Run() {
 			<< " terminal_vector_bytes=" << sizeof(std::vector<std::optional<Feedback>>)
 			<< " snapshot_mean_ns=" << Elapsed / Count << " samples=" << Count << '\n';
 	});
-	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=10\n";
-	return Passed == 10;
+	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=11\n";
+	return Passed == 11;
 }
 }

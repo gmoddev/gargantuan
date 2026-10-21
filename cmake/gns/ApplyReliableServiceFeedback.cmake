@@ -47,23 +47,77 @@ endmacro()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.h 35a8d2721334f5632e042f3165095dcae90ced590b78392cc0f4346fceaba170)
 GargantuanReplaceFeedback("#pragma once" "#pragma once\n#include \"ReliableServiceFeedback.hpp\"")
-GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tGargantuanReliableServiceCounters GargantuanFeedback;")
+GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tbool GargantuanRunningStructuralGrant = false;")
+GargantuanReplaceFeedback("\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;" "\t// A failed SendEncryptedDataChunk queues retry without first-send service.\n\tbool m_bGargantuanEverSent;\n\n\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;")
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.cpp 99e2b190b17993139bd3251f8862b81b58903a119ea456edacfec68f3dd9d65c)
-GargantuanReplaceFeedback("void SSNPSenderState::Shutdown()\n{" "void SSNPSenderState::Shutdown()\n{\n\tGargantuanFeedback.Purged = true; // Purge is never ACK retirement.")
+GargantuanReplaceFeedback("void SSNPSenderState::Shutdown()\n{" "void SSNPSenderState::Shutdown()\n{\n\tGargantuanSetRunningStructuralGrant(GargantuanRunningStructuralGrant, false);\n\tGargantuanFeedback.Purged = true; // Purge is never ACK retirement.")
 GargantuanReplaceFeedback("\t\tpMsg->Unlink();\n\t\tpMsg->Release();" "\t\tGargantuanFeedback.AckMessage(pMsg->m_nMessageNumber, pMsg->m_cbSize, info.m_cbHdr);\n\t\tpMsg->Unlink();\n\t\tpMsg->Release();")
 GargantuanReplaceFeedback("\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight" "\t\t\t\t\t\tm_senderState.GargantuanFeedback.AckSegment(cbSeg, relSeg.m_hStatusOrRetry == SNPSendReliableSegment_t::k_nStatus_Acked);\n\n\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight")
-GargantuanReplaceFeedback("// First time sending this segment.  Fill out an inflight segment record" "m_senderState.GargantuanFeedback.FirstSend(pSeg->m_cbSegSize);\n\t\t\t\t// First time sending this segment.  Fill out an inflight segment record")
-GargantuanReplaceFeedback("// It's a retry\n\t\t\t\tpInFlightSeg" "m_senderState.GargantuanFeedback.Retransmit(pSeg->m_cbSegSize);\n\t\t\t\t// It's a retry\n\t\t\t\tpInFlightSeg")
+GargantuanReplaceFeedback("pInFlightSeg->m_hStatusOrRetry = SNPSendReliableSegment_t::k_nStatus_InFlight;" "pInFlightSeg->m_hStatusOrRetry = SNPSendReliableSegment_t::k_nStatus_InFlight;\n\t\t\t\tpInFlightSeg->m_bGargantuanEverSent = false;")
+GargantuanReplaceFeedback("\t// We sent a packet.  Track it" [=[
+	// Count service only after the transport accepted this native packet.  A
+	// failed send leaves the segment on the retry list with EverSent=false;
+	// its later successful retry is unique first-send, not retransmission.
+	m_senderState.GargantuanFeedback.NativePacket(nBytesSent);
+	const uint64 GargantuanPacketSentAt = GargantuanReliableServiceClock();
+	for (uint16 hGargantuanSeg : helper.InFlightPkt().m_vecReliableSegments)
+	{
+		SNPSendReliableSegment_t &GargantuanSeg = m_senderState.m_listSentReliableSegments[hGargantuanSeg];
+		if (!GargantuanSeg.m_bGargantuanEverSent)
+		{
+			const auto &GargantuanCounters = m_senderState.GargantuanFeedback;
+			int nGargantuanStructuralBytes = 0;
+			if (GargantuanCounters.ActiveAttributedRetirementToken &&
+				GargantuanCounters.ActiveAttributedMessageNumber == uint64_t(GargantuanSeg.m_pMsg->m_nMessageNumber))
+			{
+				const int nBodyBegin = std::max(GargantuanSeg.m_nOffset, GargantuanSeg.m_pMsg->ReliableSendInfo().m_cbHdr);
+				const int nBodyEnd = std::min(GargantuanSeg.m_nOffset + GargantuanSeg.m_cbSize,
+					GargantuanSeg.m_pMsg->ReliableSendInfo().m_cbHdr + GargantuanSeg.m_pMsg->m_cbSize);
+				nGargantuanStructuralBytes = std::max(0, nBodyEnd - nBodyBegin);
+			}
+			GargantuanSeg.m_bGargantuanEverSent = true;
+			m_senderState.GargantuanFeedback.FirstSend(GargantuanSeg.m_cbSize, nGargantuanStructuralBytes,
+				GargantuanPacketSentAt);
+		}
+		else
+			m_senderState.GargantuanFeedback.Retransmit(GargantuanSeg.m_cbSize);
+	}
+	const auto &GargantuanGrant = m_senderState.GargantuanFeedback;
+	GargantuanSetRunningStructuralGrant(m_senderState.GargantuanRunningStructuralGrant,
+		GargantuanGrant.StructuralActiveGrantBytes &&
+		GargantuanGrant.StructuralActiveGrantFirstSentBytes > 0 &&
+		GargantuanGrant.StructuralActiveGrantFirstSentBytes < GargantuanGrant.StructuralActiveGrantBytes);
+
+	// We sent a packet.  Track it]=])
 GargantuanReplaceFeedback("\tpSendMessage->m_nMessageNumber = ++lane.m_nLastSentMsgNum;" [=[
 	pSendMessage->m_nMessageNumber = ++lane.m_nLastSentMsgNum;
 	if ( pSendMessage->m_nFlags & k_nSteamNetworkingSend_Reliable )
 	{
-		const uint64_t nGargantuanRetirementToken = GargantuanTakeReliableRetirementAttribution();
-		if ( nGargantuanRetirementToken )
-			m_senderState.GargantuanFeedback.AttributeMessage( nGargantuanRetirementToken, pSendMessage->m_nMessageNumber );
+		const auto nGargantuanAttribution = GargantuanTakeReliableRetirementAttribution();
+		if ( nGargantuanAttribution.Token )
+			m_senderState.GargantuanFeedback.AttributeMessage( nGargantuanAttribution.Token,
+				pSendMessage->m_nMessageNumber, pSendMessage->m_cbSize,
+				nGargantuanAttribution.ActivatedAtMicroseconds );
 	}]=])
+GargantuanReplaceFeedback("\tint nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;" [=[
+	int nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;
+	int nGargantuanStructuralPacketsThisThink = 0;]=])
+GargantuanReplaceFeedback("\t\t// Sent too many packets in one burst?" [=[
+		// Give other finite structural grants a sender visit before one
+		// connection drains an accumulated pacing burst. Keep this sender's
+		// token bucket and the ordinary traffic packet limit unchanged.
+		const auto &GargantuanGrant = m_senderState.GargantuanFeedback;
+		if (GargantuanGrant.StructuralActiveGrantBytes > GargantuanGrant.StructuralActiveGrantFirstSentBytes &&
+			++nGargantuanStructuralPacketsThisThink >= 4)
+		{
+			const SteamNetworkingMicroseconds usecReschedule = SteamNetworkingSockets_GetLocalTimestamp();
+			SNP_TokenBucket_Accumulate(usecReschedule);
+			return std::max(usecReschedule + 1, SNP_GetNextThinkTime(usecReschedule));
+		}
+
+		// Sent too many packets in one burst?]=])
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b67e44c75c27c10867a863b56e2a0d0ac95849aa116b5274a9ef)
