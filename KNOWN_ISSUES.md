@@ -85,6 +85,152 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-01 corrected F1 Phase 1 checkpoint: [fresh physical run](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#corrected-f1-physical-phase-1-passed-2026-10-01)
+`e120a1f0-47ae-45e0-869f-9d0450795bc4` passed with four real clients,
+128 exact 512-KiB grants, all finite/running F1 peer curves, 29 common
+four-grant first-send episodes, and the derived pool bound. Accepted and
+retired both reached 67,134,512 B; captures were bidirectional for all four
+tuples with zero reported loss, and the physical coordinator, outer lifecycle,
+and cleanup all passed. This resolves the F1 Phase 1 transport-service blocker
+recorded below without changing any F1 constant or the 2 MiB/s admission
+model. The distinct 32-actual-client Local and real-TLS Node matrix, then the
+final Foundation 3L acceptance sweep, remain **NOT MEASURED**. The current
+benchmark still needs a qualified 32-actual-client farm rather than protocol
+observers. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
+
+The entries below are historical checkpoints at their recorded revisions.
+
+2026-09-30 final F1 Phase 1 checkpoint: the [second and last authorized fresh
+attempt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#f1-phase-1-reached-native-drain-and-failed-its-running-bound-2026-09-30)
+passed the corrected control and server-readiness barriers, connected four
+actual GNS clients, and captured all four tuples in both directions. Two
+legal 1,258-byte structural grants delayed their final 123 unique first-send
+bytes and exceeded the unchanged 18,025,216,000 byte-µs within-grant bound
+under valid/current native feedback. This is an **F1 PRODUCTION SERVICE
+FAILURE**, even though the separate finite completion envelope passed.
+No common four-peer interval or maximum-grant qualification occurred.
+The bounded retry budget is exhausted; accepted bytes converged and both
+endpoints were restored. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+The next task is native transport/packetization timing attribution and an
+explicit architecture decision before further physical authorization.
+
+2026-09-30 post-control-correction F1 checkpoint: a fresh attempt reached the
+real worker child, launched capture and the pinned F1 server probe, then
+stopped because the qualifier required a `event=listening` text marker absent
+from the F1 binary. A worker-local no-client loopback diagnostic verified that
+the probe owned the correct UDP port throughout the six-second timeout while
+the marker remained absent. No client probe or F1 grant began, so physical
+F1 service is **NOT MEASURED**. [Receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#f1-phase-1-stopped-at-an-impossible-server-live-marker-2026-09-30).
+The corrective qualifier uses live PID-owned socket state; its deterministic,
+package, CI and fresh physical preflights are required before the one remaining
+bounded attempt. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+
+2026-09-30 F1 physical checkpoint: the [single F1 Phase 1 attempt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#f1-physical-phase-1-stopped-at-the-worker-control-barrier-2026-09-30)
+stopped before GNS or capture when the actual worker endpoint timed out
+connecting to the client control barrier. Interactive normal-LAN preflight
+had passed, but did not qualify that exact execution path. The staged files
+and worker candidate payload were rolled back; no F1 physical service metric
+was measured. **KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY
+READY.** The next gate is control-connect diagnosis and deterministic
+qualification before a separately authorized fresh F1 Phase 1 attempt.
+
+2026-09-29 F1 architecture correction: [D01's F1 amendment](docs/adr/D01-pooled-service-curve.md#f1-amendment--finite-active-grant-drain-capacity-2026-09-29)
+defines 16 MiB/s as finite accepted-grant first-send drain capacity, with a
+separate within-grant running-rate proof. It supersedes generation-persistent,
+semantic-busy and sustained post-credit-offer service interpretations without
+changing 2 MiB/s peer admission or ACK-gated grant ownership. Deterministic
+tests obtain four exact 512 KiB grants through production admission, verify
+their finite and common running curves with controlled first-send events, and
+retire all four receipts. Native attribution, deliberately slow service,
+asymmetric grants and credit/ACK gaps pass separate deterministic checks.
+Physical Phase 1 remains pending; KI-006 stays OPEN and Foundation 3L stays
+B — PARTIALLY READY. Older entries
+below record their original checkpoint and are not F1 evidence.
+
+The [D01 service-curve decision](docs/adr/D01-pooled-service-curve.md)
+supersedes the short ACK-positive window rule discussed in the 2026-09-28
+receipt below. That receipt remains historical; no D01 physical Phase 1 has
+run and this issue remains open.
+
+2026-09-29 D01 implementation checkpoint: native and qualifier regression
+suites pass, and a D01 candidate probe and exact-source manifest are staged
+separately from the installed readiness probe. A worker-local four-process
+loopback preflight failed the new per-peer curve during its first full grant:
+the native maximum deficit reached 772,421,812,288 byte-µs against the exact
+101,911,296,000 byte-µs bound. This is a charged service gap, not an added
+handoff exemption or a physical Phase 1 result. The next physical Phase 1
+attempt remains unexecuted and KI-006 remains open.
+
+Current 2026-09-28 preflight: the worker's updated 30-second capture service
+passed installed-runtime and 26.656-second ETL export qualification. The
+32-wave four-peer workload candidate remains unqualified. Bounded loopback
+variants accepted and retired over 67 MiB aggregate with four-grant high
+water, but the corrected latest run formed zero all-peer eligible windows and
+retained a real feedable below-floor interval. ACK-positive samples were
+interrupted by ACK-empty samples; 17 synthetic evaluator cases pass, including
+an idempotency regression for an earlier double-counted diagnostic summary. The
+apparent terminal GNS limit result was misclassified: native result `3` is
+`k_EResultNoConnection`, after the qualifier producer exhausted its
+512-sample cap and shut down. This is now an architecture decision about the
+existing queue/grant and per-window ACK-positive measurement contract. No
+fresh physical Phase 1 attempt was launched and the physical probe pin was
+unchanged. The 16-MiB/s floor, POOLED_SERVICE profile, and all later
+acceptance gates remain unchanged. [Current receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#local-four-peer-contract-remains-blocked-after-bounded-demand-correction-2026-09-28).
+KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY READY.
+
+Single diagnostic Phase 1 attempt, 2026-09-28: **OPEN / UNDERFED QUALIFICATION
+WINDOW; CAPTURE EXPORT FAILED AS RUN.** Four real clients reached Ready and
+four grants activated, but 4,449 sampled journal-demand rows yielded only
+two four-grant attributed-backlog rows and no eligible service-floor interval
+or qualified batch. The producer completed 83 RPC and 82 Event samples
+without a terminal scheduler rejection; the worker failed the sustained
+overlap proof and the clients then lost the server. The old 6.714-ms under-floor
+row remains indeterminate. A complete client pcap was finalized, while the
+worker service's fixed 15-second hook deadline interrupted an export later
+measured at 19.262 seconds. Post-run raw-ETL recovery proved all four
+bidirectional tuples and cleared the owned service state, but did not change
+the failed capture gate. A bounded 30-second helper source correction and
+45-second endpoint acknowledgement wait have local regression coverage;
+the installed service is unchanged. The temporary worker probe was rolled
+back, and the one permitted physical attempt was not retried. Canonical
+per-peer/aggregate service, later 3L gates and 32 actual clients remain
+**not measured**. [Detailed receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#one-diagnostic-phase-1-attempt-no-sustained-four-grant-window-2026-09-28).
+KI-006 stays OPEN; Foundation 3L remains B — PARTIALLY READY; no 3M or merge.
+
+Post-run attribution, 2026-09-28: the corrected Phase 1 under-floor row is
+**INDETERMINATE** as a canonical service test. The 16-MiB/s arithmetic is
+correct, but continuous feedable four-peer backlog and the ordering of the
+producer's terminal transport rejection were not recorded. The producer's
+bounded gameplay cadence does not establish a flood defect. Local abort
+capture finalization and service-stop acknowledgement are corrected with
+regression coverage; neither the new instrumentation nor these adapter
+changes had been deployed to the physical endpoints at that checkpoint. The
+single later diagnostic run is recorded above.
+See the [attribution receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-run-attribution-of-the-corrected-phase-1-stop-2026-09-28).
+KI-006 stays OPEN and Foundation 3L remains B — PARTIALLY READY.
+
+
+Corrected strengthened four-client Phase 1, 2026-09-28: **OPEN / FAILED
+SERVICE-FEEDBACK GATE; CAUSE NOT YET ISOLATED**. The qualifier now launched
+exactly one producer and three non-producers. The runner-owned tunnel proof
+passed, four actual GNS clients connected and wave 1 began. Pinned native
+feedback observed four active grants with journal demand, then one peer
+first-sent 38,995 B in 6,714 microseconds against the unchanged 112,643-B
+floor. The worker recorded `floor_failure=1` and zero qualified four-grant
+batches. The producer client also saw `Transport rejected scheduler
+submission`; the evidence does not establish its causal order with the floor
+failure. Client abort capture was incomplete and worker capture stop timed
+out at the endpoint, so the full capture gate also failed. Both endpoint and
+outer lifecycle verdicts were FAIL. The single corrected attempt was not
+retried; temporary state was cleaned and evidence retained in the
+[current physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+Phase 2 Local/Node, 32 actual clients and final acceptance are not measured.
+Next: attribute the GNS submission status, native feedback interval and abort
+capture finalization before a correction or separately authorized physical
+attempt. Preserve the service targets. KI-006 remains OPEN; Foundation 3L is
+B — PARTIALLY READY; no 3M or merge. Historical updates below retain their
+original scope.
+
 Production-GNS Phase 1 on direct static fiber, 2026-09-24: **OPEN / STOPPED ON
 INCOMPLETE FOUR-GRANT PROOF**. Four actual GameSession clients applied eight
 512-KiB waves. Native feedback recorded exact accepted=retired 16,802,660 B,
@@ -94,9 +240,27 @@ the prescribed probe exited 1. This demonstrates no path-loss budget failure,
 but does not establish repeatable required service. The 32-actual-client Local
 and Node matrix, action/recovery and final Foundation sweep are not measured.
 KI-006 remains OPEN; [physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
-Next: a bounded actual-GNS workload with sustained qualified four-grant
-backlog and complete host measurements, then the unchanged 32-client matrix
-only after Phase 1 passes. The pre-existing static `/30` plan is retained as a
+The later one-client physical readiness retry PASSED with bidirectional
+captures. One separately authorized four-client readiness attempt then reached
+four distinct GNS connections, server Ready/active 4/4 for the canonical
+interval, and four clean client closes. It failed the capture gate: the client
+raw pcapng ended mid-block and the worker miniport missed inbound traffic for
+two of four source ports. A single later run independently qualified corrected
+client finalization, worker NDIS capture and four-client coordinator labeling
+before launching. Its physical results passed: four actual GameSession Ready
+clients, four clean closes, both complete captures with every tuple in both
+directions, and `FOUR_CLIENT_READINESS_ONLY` success at both endpoints and the
+physical coordinator. The outer lifecycle adapter nevertheless returned FAIL
+after its server agent ended `NEEDS_USER/MISSING_CAPABILITY` despite a successful
+host result. The run was not retried; cleanup passed. Four-client physical
+readiness evidence is recorded, while lifecycle wrapper completion and
+strengthened Phase 1 funding remain open; see the
+[physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+Next: reconcile the lifecycle wrapper status before treating the physical
+prerequisite as fully closed. The bounded actual-GNS structural workload still
+requires separate authorization and sustained qualified four-grant backlog with
+complete host measurements; the unchanged
+32-client matrix remains gated on Phase 1. The pre-existing static `/30` plan is retained as a
 candidate deployment configuration; temporary scoped rules were removed.
 
 Current funding review 2026-09-23: **OPEN / REAL-GNS PHYSICAL QUALIFICATION**.

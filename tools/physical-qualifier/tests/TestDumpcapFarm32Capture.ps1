@@ -1,0 +1,50 @@
+# No dumpcap/NIC operation: fixed-profile source and preexisting-file denial.
+$ErrorActionPreference = 'Stop'
+$ScriptPath = Join-Path $PSScriptRoot '..\DumpcapFarm32Capture.ps1'
+$Text = [IO.File]::ReadAllText([IO.Path]::GetFullPath($ScriptPath))
+function Assert([bool]$Value, [string]$Detail) { if (-not $Value) { throw $Detail } }
+$Tokens = $null; $Errors = $null
+[System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$Tokens, [ref]$Errors) | Out-Null
+Assert ($Errors.Count -eq 0) 'Farm32 dumpcap script does not parse'
+Assert ($Text -match '(?m)^\$CaptureSeconds = 600\r?$') 'Farm32 duration changed'
+Assert ($Text -match '(?m)^\$AutostopKilobytes = 1048576\r?$') 'Farm32 filesize autostop changed'
+Assert ($Text -match '(?m)^\$CompletenessBytes = 960MB\r?$') 'Farm32 completeness threshold changed'
+Assert ($Text -match "'udp port 39450 and host 10\.253\.3\.2'") 'Farm32 fixed UDP filter changed'
+$ExpectedAutostop = @'
+'-a', "duration:$CaptureSeconds", '-a', "filesize:$AutostopKilobytes"
+'@.Trim()
+Assert ($Text.Contains($ExpectedAutostop)) 'Farm32 dual autostop missing'
+Assert ($Text -notmatch "'-b'|--ring-buffer") 'Farm32 capture must not rotate or overwrite'
+
+# Hosted runner temp paths can be junctions. Use the checkout-local test directory
+# so this case reaches the artifact guard instead of the separate reparse guard.
+$FixtureParent = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+$Root = Join-Path $FixtureParent ('farm32-dumpcap-test-' + [guid]::NewGuid())
+[void][IO.Directory]::CreateDirectory($Root)
+try {
+    $RunId = [guid]::NewGuid().ToString('D')
+    $RunDir = Join-Path $Root $RunId
+    [void][IO.Directory]::CreateDirectory($RunDir)
+    $Existing = Join-Path $RunDir 'farm32-client-capture.pcapng'
+    [IO.File]::WriteAllText($Existing, 'preserved')
+    $Rejected = $false
+    $RejectionDetail = '<no exception>'
+    try {
+        & $ScriptPath -EvidenceRoot $Root -RunId $RunId -DumpcapPath 'C:\missing-dumpcap.exe' `
+            -DumpcapSha256 ('0' * 64) | Out-Null
+    } catch {
+        $RejectionDetail = $_.Exception.Message
+        $Rejected = $RejectionDetail -ceq "Farm32 client capture artifact already exists: $Existing"
+    }
+    Assert $Rejected "Preexisting Farm32 pcap was not rejected at the artifact guard. Actual: $RejectionDetail"
+    Assert (([IO.File]::ReadAllText($Existing)) -eq 'preserved') 'Preexisting Farm32 pcap changed'
+    Assert (-not (Test-Path -LiteralPath (Join-Path $RunDir 'farm32-client-capture.json'))) 'Denied capture created ownership state'
+    'DUMPCAP_FARM32_MOCK_OK'
+} finally {
+    $Resolved = [IO.Path]::GetFullPath($Root)
+    if ((Split-Path $Resolved -Parent) -cne $FixtureParent -or
+        (Split-Path $Resolved -Leaf) -notlike 'farm32-dumpcap-test-*') {
+        throw 'Unsafe Farm32 test cleanup target.'
+    }
+    Remove-Item -LiteralPath $Resolved -Recurse -Force
+}
