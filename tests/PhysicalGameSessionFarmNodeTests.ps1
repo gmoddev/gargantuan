@@ -49,6 +49,8 @@ $OldToken = [Environment]::GetEnvironmentVariable('GARGANTUAN_ENGINE_ADAPTER_TOK
 try {
 	$Tools = Join-Path $Root 'Tools'
 	[void][IO.Directory]::CreateDirectory($Tools)
+	$PinnedGo = Join-Path $Tools 'go.exe'
+	Copy-Item -LiteralPath (Get-Command $GoExecutable -CommandType Application).Source -Destination $PinnedGo
 	$Source = Join-Path $Tools 'PhysicalGameSessionFarmNode.ps1'
 	$Validator = Join-Path $Tools 'PhysicalGameSessionFarmEndpoint.ps1'
 	Copy-Item -LiteralPath $OriginalSource -Destination $Source
@@ -84,8 +86,12 @@ try {
 	$WrongKey = Join-Path $Root 'wrong-key.pem'
 	Write-TestCertificate -CertificatePath $WrongCertificate -KeyPath $WrongKey -IpAddress '127.0.0.2'
 
-	$MockSource = Join-Path $Root 'mock-node.go'
+	$MockSourceRoot = Join-Path $Root 'mock-source'
+	[void][IO.Directory]::CreateDirectory($MockSourceRoot)
+	$MockSource = Join-Path $MockSourceRoot 'mock-node.go'
 	$MockExecutable = Join-Path $Root 'mock-node.exe'
+	[IO.File]::WriteAllText((Join-Path $MockSourceRoot 'go.mod'),
+		"module example.com/farm-node-mock`n`ngo 1.22`n")
 	[IO.File]::WriteAllText($MockSource, @'
 package main
 import (
@@ -103,7 +109,21 @@ func main() {
  for { c, e := l.Accept(); if e != nil { return }; c.Close() }
 }
 '@)
-	& $GoExecutable build -o $MockExecutable $MockSource
+	& git -C $MockSourceRoot init -q
+	if ($LASTEXITCODE -ne 0) { throw 'mock Node Git initialization failed' }
+	& git -C $MockSourceRoot add -- go.mod mock-node.go
+	if ($LASTEXITCODE -ne 0) { throw 'mock Node source staging failed' }
+	$CommitEmail = (& git config --get user.email 2>$null)
+	if ([string]::IsNullOrWhiteSpace($CommitEmail)) {
+		$CommitEmail = 'farm-node-test@example.invalid'
+	}
+	& git -C $MockSourceRoot -c user.name=FarmNodeTest -c "user.email=$CommitEmail" `
+		commit -qm 'Create mock Node source'
+	if ($LASTEXITCODE -ne 0) { throw 'mock Node source commit failed' }
+	$MockCommit = (& git -C $MockSourceRoot rev-parse HEAD).Trim()
+	Push-Location $MockSourceRoot
+	try { & $GoExecutable build -buildvcs=true -trimpath -o $MockExecutable . }
+	finally { Pop-Location }
 	if ($LASTEXITCODE -ne 0) { throw 'mock Node build failed' }
 
 	$Listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
@@ -129,25 +149,51 @@ func main() {
 	}
 	$ManifestPath = Join-Path $Root 'run-manifest.json'
 	[IO.File]::WriteAllText($ManifestPath, ($Manifest | ConvertTo-Json -Depth 6))
-	[Environment]::SetEnvironmentVariable('GARGANTUAN_ENGINE_ADAPTER_TOKEN', 'test-only-value')
+	[Environment]::SetEnvironmentVariable('GARGANTUAN_ENGINE_ADAPTER_TOKEN', $null)
+	$TokenRoot = Join-Path $Root $Manifest.RunId
+	[void][IO.Directory]::CreateDirectory($TokenRoot)
+	$Sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+	& icacls.exe $TokenRoot /grant:r "*$($Sid):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' `
+		'*S-1-5-32-544:(OI)(CI)F' | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw 'could not protect test token root' }
+	& icacls.exe $TokenRoot /inheritance:r | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw 'could not remove test token inheritance' }
+	& icacls.exe $TokenRoot /setowner "*$Sid" | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw 'could not own test token root' }
+	$TokenFile = Join-Path $TokenRoot 'node-token.secret'
+	$TokenValue = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+	[IO.File]::WriteAllText($TokenFile, $TokenValue, [Text.Encoding]::ASCII)
 	$Stage = Join-Path $Root 'Stage'
 	$Prepare = @{
 		Mode = 'Prepare'; StageRoot = $Stage; RunManifestPath = $ManifestPath
 		RunManifestSha256 = Get-Pin $ManifestPath; ServerPackageRoot = $Package
 		DescriptorPath = $DescriptorPath; DescriptorSha256 = Get-Pin $DescriptorPath
 		NodeExecutablePath = $MockExecutable; NodeExecutableSha256 = Get-Pin $MockExecutable
-		NodeSourceCommit = 'f' * 40; CertificatePath = $Certificate
+		NodeSourceCommit = $MockCommit; GoExecutablePath = $PinnedGo
+		GoExecutableSha256 = Get-Pin $PinnedGo; CertificatePath = $Certificate
 		PrivateKeyPath = $PrivateKey; RootCertificatePath = $Certificate
+		NodeTokenFilePath = $TokenFile; NodeTokenFileSha256 = Get-Pin $TokenFile
 	}
+	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadRevision'
+	$Bad.NodeSourceCommit = 'f' * 40
+	Expect-Rejection { & $Source @Bad } 'binary VCS revision differs from declared Node source commit'
+	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadBuildMetadata'
+	$Bad.NodeExecutablePath = Join-Path $Root 'not-a-go-binary.exe'
+	[IO.File]::WriteAllText($Bad.NodeExecutablePath, 'not a Go binary')
+	$Bad.NodeExecutableSha256 = Get-Pin $Bad.NodeExecutablePath
+	Expect-Rejection { & $Source @Bad } 'hash-pinned binary lacks Go VCS metadata'
 	$StageOutput = & $Source @Prepare
 	if ($StageOutput -notmatch 'STAGED') { throw 'Node stage was not created' }
 	$Proof = Get-Content -LiteralPath (Join-Path $Stage 'node-stage.json') -Raw | ConvertFrom-Json -AsHashtable
 	$ConfigText = Get-Content -LiteralPath (Join-Path $Stage 'node.toml') -Raw
 	if ($Proof.ProjectId -cne $ProjectId -or $Proof.Revision -ne $Revision -or
+		$Proof.NodeSourceCommit -cne $MockCommit -or
+		$Proof.NodeBinaryVcsStatus -cne 'MATCHED_CLEAN' -or
+		$Proof.GoExecutableSha256 -cne (Get-Pin $PinnedGo) -or
 		$ConfigText -notmatch [regex]::Escape($ProjectId) -or
 		$ConfigText -notmatch 'package_version = 23' -or
 		$ConfigText -notmatch '(?m)^level = "info"$' -or
-		$ConfigText -match 'test-only-value' -or $Proof.Contains('TokenValue') -or
+		$ConfigText.Contains($TokenValue) -or ($Proof | ConvertTo-Json).Contains($TokenValue) -or
 		$Proof.Contains('PrivateKeyPem')) {
 		throw 'Node config identity or secret separation failed'
 	}
@@ -168,6 +214,12 @@ func main() {
 	if (Test-Path -LiteralPath $Claim) { throw 'tampered validator consumed its run claim' }
 	Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmEndpoint.ps1') `
 		-Destination $Validator -Force
+	[IO.File]::AppendAllText($PinnedGo, 'tampered inspector')
+	Expect-Rejection {
+		& $Source -Mode Run -StageRoot $Stage -StageSha256 $StagePin
+	} 'pinned Go metadata inspector changed after stage'
+	if (Test-Path -LiteralPath $Claim) { throw 'tampered inspector consumed its run claim' }
+	Copy-Item -LiteralPath (Get-Command $GoExecutable -CommandType Application).Source -Destination $PinnedGo -Force
 	$Info = [Diagnostics.ProcessStartInfo]::new()
 	$Info.FileName = (Get-Command pwsh).Source
 	$Info.UseShellExecute = $false
@@ -224,6 +276,11 @@ func main() {
 		$Receipt.StderrSha256 -cne (Get-Pin $Receipt.StderrPath)) {
 		throw 'Node child log retention is not bounded and hash-pinned'
 	}
+	. (Join-Path $PSScriptRoot 'PhysicalFarmNodeResources.ps1')
+	$ResourceObservation = Read-FarmNodeResources -RunReceiptPath (Join-Path $Stage 'node-run.json') `
+		-RunReceiptSha256 (Get-Pin (Join-Path $Stage 'node-run.json')) -RunId $Manifest.RunId
+	if ($ResourceObservation.State -cne 'MEASURED' -or $ResourceObservation.Samples -lt 2 -or
+		$ResourceObservation.Pid -ne $Receipt.Pid) { throw 'owned Node child resource evidence missing' }
 	Expect-Rejection { & $Source -Mode Run -StageRoot $Stage -StageSha256 $StagePin } 'single-use Node stage'
 	$BadDescriptor = Join-Path $Root 'bad-descriptor.json'
 	$Descriptor.revision = 24
@@ -244,12 +301,25 @@ func main() {
 	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadBinary'
 	$Bad.NodeExecutableSha256 = '0' * 64
 	Expect-Rejection { & $Source @Bad } 'unapproved Node binary'
+	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadGoInspector'
+	$Bad.GoExecutableSha256 = '0' * 64
+	Expect-Rejection { & $Source @Bad } 'unapproved Go metadata inspector'
+	$DirtyExecutable = Join-Path $Root 'dirty-node.exe'
+	[IO.File]::AppendAllText($MockSource, "`n// intentionally dirty at build`n")
+	Push-Location $MockSourceRoot
+	try { & $GoExecutable build -buildvcs=true -trimpath -o $DirtyExecutable . }
+	finally { Pop-Location }
+	if ($LASTEXITCODE -ne 0) { throw 'dirty mock Node build failed' }
+	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadDirtyBuild'
+	$Bad.NodeExecutablePath = $DirtyExecutable
+	$Bad.NodeExecutableSha256 = Get-Pin $DirtyExecutable
+	Expect-Rejection { & $Source @Bad } 'Node binary was built from a dirty source tree'
 	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadKey'
 	$Bad.PrivateKeyPath = $WrongKey
 	Expect-Rejection { & $Source @Bad } 'certificate/private-key mismatch'
 	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'MissingToken'
-	[Environment]::SetEnvironmentVariable('GARGANTUAN_ENGINE_ADAPTER_TOKEN', $null)
-	Expect-Rejection { & $Source @Bad } 'missing environment-backed token'
+	$Bad.NodeTokenFileSha256 = '0' * 64
+	Expect-Rejection { & $Source @Bad } 'missing pinned one-run token'
 	Write-Output '[Qualification:FarmNode] MOCK_TEST_OK'
 } finally {
 	[Environment]::SetEnvironmentVariable('GARGANTUAN_ENGINE_ADAPTER_TOKEN', $OldToken)

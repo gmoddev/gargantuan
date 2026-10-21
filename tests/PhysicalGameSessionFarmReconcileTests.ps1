@@ -189,6 +189,50 @@ try {
 			Where-Object State -eq 'MEASURED').Count -ne 1) {
 		throw 'valid role-local evidence was promoted to provider qualification or lost missing gates'
 	}
+	$PublicationFixture = Join-Path $PSScriptRoot '../tools/physical-qualifier/tests/make_farm_publication_fixture.py'
+	& python $PublicationFixture $ManifestPath $ServerRoot $ClientRoot
+	if ($LASTEXITCODE -ne 0) { throw '32-client publication fixture generation failed' }
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$PublicationReportPath = Join-Path $TestRoot 'publication-report.json'
+	& $Reconciler -RunManifestPath $ManifestPath -ManifestSha256 $ManifestSha256 `
+		-ServerEvidenceRoot $ServerRoot -ClientEvidenceRoot $ClientRoot `
+		-ReportPath $PublicationReportPath | Out-Null
+	$PublicationReport = Get-Content -LiteralPath $PublicationReportPath -Raw | ConvertFrom-Json
+	if ($PublicationReport.PublicationObservation.Status -cne 'ACCEPTED_STATE_CHAIN_OBSERVED' -or
+		$PublicationReport.PublicationObservation.Server.Accepted -ne 32 -or
+		$PublicationReport.PublicationObservation.Client.ClientHandled -ne 32 -or
+		$PublicationReport.PublicationObservation.ServerDueToAccepted.MaximumNs -ne 414 -or
+		$PublicationReport.PublicationObservation.ClientReceiveToHandled.MaximumNs -ne 100 -or
+		$PublicationReport.PublicationObservation.AnalyzerSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+		$PublicationReport.PublicationObservation.TraceParserSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+		$PublicationReport.PublicationObservation.CrossHostDueToHandled -cne 'NOT_MEASURED' -or
+		@($PublicationReport.Ledger | Where-Object Gate -eq 'Character publication state-chain and role-local delays' |
+			Where-Object State -eq 'MEASURED').Count -ne 1 -or
+		@($PublicationReport.Ledger | Where-Object Gate -eq 'Remote publication and recipient cadence' |
+			Where-Object State -eq 'NOT MEASURED').Count -ne 1) {
+		throw 'indexed 32-client Character publication subset was not measured conservatively'
+	}
+	$ClientTrace = Join-Path $ClientRoot 'publication-service-0.bin'
+	$ClientTraceBytes = [IO.File]::ReadAllBytes($ClientTrace)
+	$ClientTraceBytes[$ClientTraceBytes.Length - 1] = $ClientTraceBytes[$ClientTraceBytes.Length - 1] -bxor 1
+	[IO.File]::WriteAllBytes($ClientTrace, $ClientTraceBytes)
+	Assert-Rejected -Name 'tampered indexed Character trace' `
+		-ReportPath (Join-Path $TestRoot 'tampered-publication-report.json')
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehash of invalid Character state identity' `
+		-ReportPath (Join-Path $TestRoot 'invalid-publication-report.json')
+	$ClientTraceBytes[$ClientTraceBytes.Length - 1] = $ClientTraceBytes[$ClientTraceBytes.Length - 1] -bxor 1
+	[IO.File]::WriteAllBytes($ClientTrace, $ClientTraceBytes)
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$LastTrace = Join-Path $ClientRoot 'publication-service-31.bin'
+	$LastTraceBytes = [IO.File]::ReadAllBytes($LastTrace)
+	[IO.File]::Delete($LastTrace)
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'partial native Character trace set' `
+		-ReportPath (Join-Path $TestRoot 'partial-publication-report.json')
+	[IO.File]::WriteAllBytes($LastTrace, $LastTraceBytes)
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	$OriginalFairness = [IO.File]::ReadAllText($FairnessPath)
 	$HostPath = Join-Path $ServerRoot 'host-resources.csv'
 	$OriginalHost = [IO.File]::ReadAllText($HostPath)
@@ -300,6 +344,49 @@ try {
 	Assert-Rejected -Name 'duplicate client nonce across hosts' -ReportPath (Join-Path $TestRoot 'bad-nonce-report.json')
 	[IO.File]::WriteAllText($Client31Path, $Client31)
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$ClockFixture = Join-Path $PSScriptRoot '../tools/physical-qualifier/tests/make_farm_clock_fixture.py'
+	& python $ClockFixture $ManifestPath $ServerRoot $ClientRoot
+	if ($LASTEXITCODE -ne 0) { throw 'clock fixture generation failed' }
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$ClockPath = Join-Path $TestRoot 'clock-report.json'
+	& $Reconciler -RunManifestPath $ManifestPath -ManifestSha256 $ManifestSha256 `
+		-ServerEvidenceRoot $ServerRoot -ClientEvidenceRoot $ClientRoot -ReportPath $ClockPath | Out-Null
+	$ClockReport = Get-Content -LiteralPath $ClockPath -Raw | ConvertFrom-Json
+	if ($ClockReport.Status -cne 'INCOMPLETE' -or $ClockReport.ClockObservation.Status -cne 'BOUNDED_AT_PROBE' -or
+		$ClockReport.ClockObservation.Samples.Count -ne 640 -or
+		$ClockReport.ClockObservation.OneWayLatency -cne 'NOT_MEASURED') { throw 'clock reconciliation scope or matrix wrong' }
+	$ClockLog = [IO.File]::ReadAllText($Client31Path)
+	[IO.File]::WriteAllText($Client31Path, $ClockLog.Replace('stage=GnsReceive', 'stage=Missing'))
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehashed incomplete clock path' -ReportPath (Join-Path $TestRoot 'partial-clock.json')
+	[IO.File]::WriteAllText($Client31Path, $ClockLog)
+	. (Join-Path $PSScriptRoot 'PhysicalFarmLifecycleFixture.ps1')
+	Add-FarmLifecycleFixture -ServerRoot $ServerRoot -ClientRoot $ClientRoot -Manifest $Manifest
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$LifecyclePath = Join-Path $TestRoot 'lifecycle-report.json'
+	& $Reconciler -RunManifestPath $ManifestPath -ManifestSha256 $ManifestSha256 `
+		-ServerEvidenceRoot $ServerRoot -ClientEvidenceRoot $ClientRoot -ReportPath $LifecyclePath | Out-Null
+	$LifecycleReport = Get-Content -LiteralPath $LifecyclePath -Raw | ConvertFrom-Json
+	if ($LifecycleReport.Status -cne 'INCOMPLETE' -or $LifecycleReport.LifecycleObservation.State -cne 'MEASURED' -or
+		$LifecycleReport.LifecycleObservation.RoleCount -ne 33 -or
+		$LifecycleReport.RemoteOwnershipObservation.State -cne 'MEASURED' -or
+		$LifecycleReport.RemoteOwnershipObservation.RoleCount -ne 33) { throw 'post-Stop lifecycle/Remote ownership scope lost or promoted' }
+	$LifecycleLog = [IO.File]::ReadAllText($Client31Path)
+	[IO.File]::WriteAllText($Client31Path, $ClockLog)
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehashed partial post-Stop lifecycle' -ReportPath (Join-Path $TestRoot 'partial-lifecycle.json')
+	[IO.File]::WriteAllText($Client31Path, $LifecycleLog.Replace('journal_readers=0', 'journal_readers=1'))
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehashed retained post-Stop reader' -ReportPath (Join-Path $TestRoot 'leaked-lifecycle.json')
+	[IO.File]::WriteAllText($Client31Path, $LifecycleLog.Replace('[Qualification:RemoteOwnership]', '[Qualification:RemoteMissing]'))
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehashed partial Remote ownership' -ReportPath (Join-Path $TestRoot 'partial-remote.json')
+	[IO.File]::WriteAllText($Client31Path, $LifecycleLog.Replace('dispatch_current=0', 'dispatch_current=1'))
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehashed retained Remote dispatch' -ReportPath (Join-Path $TestRoot 'leaked-remote.json')
+	[IO.File]::WriteAllText($Client31Path, $LifecycleLog)
 	[IO.File]::WriteAllText((Join-Path $ClientRoot 'run-manifest.json'), '{}')
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	Assert-Rejected -Name 'mismatched role manifest' -ReportPath (Join-Path $TestRoot 'bad-manifest-report.json')

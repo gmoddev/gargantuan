@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -53,11 +54,19 @@ inline bool Run() {
 			Final.LastAttributedRetiredPayloadBytes != StructuralBytes ||
 			Final.ReliableStreamBytesRetransmitted != 0)
 			throw std::runtime_error("mixed ACK/retirement attribution failed");
+		// Native ACK/retirement can finish on GNS's service thread before the
+		// application polls any receive events. Complete's ACK predicate can
+		// therefore already be true at entry. Independently collect delivery;
+		// this wait does not extend or resample the first-send F1 gate above.
+		Pump(*Pair.Server, *Pair.Client, Pair.ServerEvents, Pair.ClientEvents, 2s, [&] {
+			return Payloads(Pair.ClientEvents).size() >= 3;
+		});
 		const auto Received = Payloads(Pair.ClientEvents);
 		if (Received.size() != 3 || Received[0] != std::vector<std::byte>(64, std::byte{0x11}) ||
 			Received[1] != std::vector<std::byte>(StructuralBytes - ReliableServiceEnvelopeBytes, std::byte{0x37}) ||
 			Received[2] != std::vector<std::byte>(64, std::byte{0x55}))
-			throw std::runtime_error("ordinary control/structural/gameplay FIFO changed");
+			throw std::runtime_error("ordinary control/structural/gameplay FIFO changed; received=" +
+				std::to_string(Received.size()));
 		std::cout << "[Network:GnsMixed] structural_bytes=" << StructuralBytes
 			<< " max_deficit_byte_us=" << Sample->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds
 			<< " ordinary_fifo=PASS ack_retirement=PASS\n";

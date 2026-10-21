@@ -35,7 +35,9 @@ def Pin(File):
 class FarmTicketStagingTests(unittest.TestCase):
     def setUp(self):
         self.Temporary = tempfile.TemporaryDirectory()
-        self.Root = Path(self.Temporary.name)
+        # GitHub-hosted Windows TEMP may use an 8.3 profile alias. Resolve the
+        # local fixture before sealing paths; fixed worker paths still reject ~.
+        self.Root = Path(self.Temporary.name).resolve(strict=True)
         self.Private = self.Root / "private"
         Staging.New(self.Private)
         self.Identity = json.loads((self.Private / "identity.json").read_text())

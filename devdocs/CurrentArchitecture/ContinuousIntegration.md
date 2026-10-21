@@ -50,6 +50,27 @@ the workflow makes no macOS CI claim.
 
 ## Fresh-checkout bootstrap
 
+The Windows complete CTest pass includes the funded structural ACK matrix,
+ordinary/FULL_RESERVATION and mixed FIFO isolation, simultaneous four-grant
+F1/pool verification, and one paired control/funded native statistics-boundary
+test. The latter observes actual pinned tracer and instantaneous-report paths
+over 32 seconds per arm; it does not claim 120-second lifetime path execution.
+It runs once, rather than inside every workload case. The GNS sanitizer job
+selects the separate failed-send retry-safety test for segment/message ownership,
+mixed FIFO, fault and exact conservation coverage without asserting healthy F1
+wall-clock timing under injected faults. The strict funded F1 matrix remains
+in Windows Release. No new CI gate is considered passed until its own execution
+is terminal green.
+
+All three CTest invocations write JUnit to an absolute path rooted at
+`GITHUB_WORKSPACE`. CTest changes its working directory to `--test-dir`, so
+passing another build-directory-relative JUnit path would create a nested file
+outside the artifact upload list. Each successful test step also requires its
+exact upload-path XML to exist and be nonempty. The diagnostics upload remains
+`if: always()`; a green test summary without retained raw JUnit is incomplete
+qualification evidence. The small Python regression executes real CTest against
+temporary passing/failing tests and checks these workflow/output boundaries.
+
 The workflow deliberately supports a cold runner:
 
 1. `actions/checkout` initializes every Git submodule recursively and a
@@ -148,6 +169,36 @@ must not be reported as having run on the current headless worker.
 
 ## Failure artifacts and hardening
 
+The standalone Release reliable-workload gate emits per-case
+`[Qualification:WorkloadTiming]` maxima for step intervals, each runtime step,
+session poll and session step, fixture observation, and sleep overshoot. These
+are wall times and can include host preemption; they do not by themselves
+attribute a stall to production CPU work. They reset between cases, unlike the
+session's lifetime remote-service-gap high-water. All RPC/Event/action latency
+gates remain unchanged: a host timing hypothesis does not turn a failed run into
+a PASS or permit its samples to be discarded.
+
+The bounded `[Qualification:WorkloadCpu]` rows supplement those maxima with the
+case, step, phase, wall duration, current-thread CPU delta, and whole-process CPU
+delta from the **same span that established that phase's maximum wall time**.
+Windows counters use `GetThreadTimes` and `GetProcessTimes`; unsupported or failed
+reads are `NOT_MEASURED`, not zero. The step-interval row also retains the prior
+step's requested and actual sleep durations. These fixed-size records are printed
+after the case, without logging on the measured per-step path. CPU counters are
+quantized diagnostics and never replace the elapsed-time latency samples. Small
+thread CPU with large wall time establishes time not spent on that thread's CPU;
+it does not by itself distinguish blocking from preemption. Process CPU can
+exceed wall time when several process threads execute concurrently.
+Windows CPU accounting may also advance in coarse quanta (15.625 ms was
+observed on the qualified worker). A short span can consequently report a
+thread CPU delta larger than its wall duration, such as 31.25 ms of accounted
+CPU for a 22.67 ms span, even though a single thread cannot execute on multiple
+cores simultaneously. Preserve that raw measurement; do not clamp it or treat
+it as a utilization ratio. Attribute long stalls using spans large enough to
+distinguish their CPU consumption from this quantization, and use scheduler
+tracing when the counters cannot resolve the question. CPU counter values and
+their observed granularity never alter any service or latency gate.
+
 CTest prints failing output and writes JUnit results. On any failed job, the
 workflow uploads the configure log, CTest log, and JUnit file when available.
 No dependency or compiler cache is required for correctness; only the
@@ -182,3 +233,22 @@ first-send curves in the uninstrumented Windows Release CTest matrix.
 Dedicated uninstrumented repeatability and fresh physical qualification are
 also required before claiming F1 capacity. A failure in either strict setting
 remains a qualification blocker even when sanitizer safety passes.
+
+The mixed-traffic fixture separately pumps application receive events after
+native ACK/retirement convergence. The funded ACK can complete on the native
+service thread before the fixture's ACK predicate is first evaluated; that
+predicate does not prove that the application has polled its ordered messages.
+The separate bounded receive wait retains exact control/structural/gameplay
+FIFO and payload checks. It does not extend or resample the preceding native
+first-send service-curve gate. Hosted GNS sanitizer run `37080031865` exposed
+the old fixture's FIFO failure at `140a2539f`; its exact collected payload count
+was not recorded and that failed run remains failed evidence.
+
+The deliberate receive-loss regression also exercises repeated fragmented ACK
+serialization. Native suite `1722a9ebb` passed 13 of 14 selected tests, but that
+case filled the bounded opt-in event log with the same packet identity and lost
+its later message-ACK event. Observation now retains the first fragmented-ACK
+event per changed identity plus exact count and last timestamps for repetitions,
+matching the existing ordinary-ACK strategy. Distinct-event and counter overflow
+remain failures. This observer change does not alter transport scheduling,
+packet accounting, injected loss, or the failed run's qualification result.

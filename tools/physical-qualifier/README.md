@@ -1,5 +1,16 @@
 # Gargantuan physical qualification adapter
 
+Current deployment provenance is recorded in the
+[active F1 source manifest](phase1-f1-source-manifest.json) and the
+[physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+The funded-ACK candidate requires a fresh four-client qualification before the
+Local/Node provider matrices. Its deployment includes five pinned native DLLs
+and twelve runtime assets. Earlier source/probe hashes and installed-service
+receipts below are historical; they do not override that manifest or qualify a
+new candidate. Required hosted CI includes the original uploaded JUnit evidence,
+not only a successful workflow status. Farm32 capture remains unqualified until
+the corrected stop path passes a fresh complete test near its storage limit.
+
 The development Phase 1 probe and result analyzer implement the
 [D01/F1 finite-grant drain contract](../../docs/adr/D01-pooled-service-curve.md):
 each accepted maximum-size grant must complete unique native first-send within
@@ -237,7 +248,7 @@ connects outbound; a nonce-bound control-only socket probe and the same-run
 and endpoint helper use bounded hidden processes. `collect` copies every worker
 index member with a fresh SHA-256 check, binds the coordinator and both role
 results, and invokes the existing offline capture reconciler. For Node, it
-mirrors the bounded Node receipts/logs at their original one-run absolute path
+mirrors the bounded Node receipts/logs and hash-pinned process-resource CSV at their original one-run absolute path
 so the receipt's immutable path and hash pins remain verifiable. These
 operations record execution and sealed evidence only. Capture directions, real
 Node TLS, workload
@@ -246,3 +257,97 @@ by the offline reconciliation and acceptance tools; no outer stage result is a
 physical or provider PASS. This path has source/mock coverage but requires an
 official workflow-dispatch package, installed side-by-side Farm32 service,
 endpoint runtime staging, and actual control-only qualification before use.
+
+The Farm32 client capture requests a fixed 64 MiB driver buffer and records
+`RequestedBufferMiB: 64` in its marker. This requested setting is pinned by
+campaign sealing and offline acceptance; it is not a verified driver allocation
+or capacity PASS. The [buffer candidate evidence and validation plan](docs/FARM32_CLIENT_CAPTURE_BUFFER.md)
+preserve the existing zero-drop, full-packet, duration, and retention gates.
+
+The fixed baseline/recovery frame ceilings cover their existing 300/420-second
+role-local runtime budgets at the Player's 16,667-us network cadence, including
+its first unslept frame: 18,001/25,201 client frames and the existing extra 1,000
+server ticks. These are process-lifetime ceilings, not workload duration or
+service allowances. Recovery convergence and ordinary-service deadlines remain
+unchanged; supervisors still enforce their original wall-clock budgets.
+
+Recovery collection preserves each `recovery-gameplay.tsv`,
+`recovery-structural.tsv`, and `recovery-mixed.tsv` server member up to its
+canonical 32 MiB limit and verifies its sealed hash. Offline recovery analysis
+runs from the repository `tests` directory: when staging those analysis scripts
+separately, keep `RecoveryCausalEvidence.ps1` beside
+`PhysicalGameSessionFarm.ps1`, `PhysicalGameSessionFarmReconcile.ps1`, and
+`PhysicalGameSessionFarmAcceptance.ps1`, together with their existing helpers.
+Keep `PhysicalFarmClockEvidence.ps1` beside the reconciliation/acceptance scripts;
+it independently joins the hash-indexed 32-client native calibration logs using
+`farm_clock_exchange.py`. Its 640 probe intervals do not synchronize whole phases
+or qualify one-way latency, and missing historical clock evidence remains unmeasured.
+The role-local endpoint supervisor does not import these analysis scripts.
+Also retain `PhysicalGameSessionFarmLifecycle.ps1` and
+`PhysicalGameSessionFarmRemoteOwnership.ps1` for independent post-Stop replay.
+`tests/PhysicalFarmAnalysisInventory.ps1` records the complete controller-side
+analysis dependency hashes and the selected Python/PowerShell executable pins
+for final preparation. The legacy `package.py` endpoint bundle is not consumed
+by this offline analysis path; its contents are not evidence of analyzer custody.
+
+## New F1 candidate source provenance
+
+The `make_f1_source_archive.py output.zip`, `--verify-pinned`, and `--verify-tree`
+modes select the format in the pinned manifest. Prefix those arguments with
+`--legacy` to reproduce or verify the historical 31-file ce4733 archive using
+`phase1-f1-ce4733-source-manifest.json`. That historical inventory cannot claim
+coverage of newer native execution. Explicit candidate modes accept an
+independently selected revision without changing either manifest:
+
+```text
+python tools/physical-qualifier/make_f1_source_archive.py --candidate <full-qualified-commit> <new-directory>/f1-native-source.zip
+python tools/physical-qualifier/make_f1_source_archive.py --verify-candidate <full-qualified-commit> <new-directory>/f1-native-source.zip
+python tools/physical-qualifier/make_f1_source_archive.py --verify-candidate-tree <full-qualified-commit> <new-directory>/f1-native-source.zip <exact-build-source-root>
+```
+
+`F1_OWNED_TREE_V2` archives every tracked ordinary file under the reviewed
+top-level inventory, including ACK instrumentation/funding, all native sources,
+tests, CMake recipes, runtime inputs, and code generators. It records exact
+Git blob IDs, SHA-256, byte counts, file modes and gitlink commits in
+`_f1-source-inventory.json`. The five existing documentation aliases are stored
+as ordinary ZIP data containing their exact reviewed link targets, never
+followed or extracted as links. Unknown roots, unreviewed symlink entries, path
+redirection, aliases, excessive sizes, overwritten outputs, extra/omitted
+archive entries, changed bytes, and an unexpected supplied commit fail closed.
+Limits are 10,000 files, 128 MiB total owned bytes and 32 MiB per file; changing
+that inventory or those bounds requires review. Git-backed verification joins
+the entire inventory to the independently supplied commit, so a consistently
+edited ZIP inventory cannot hide omitted source. Build-tree verification checks
+owned files, exact HEAD and initialized clean tracked submodule contents/pins;
+text-only CRLF normalization is permitted by the comparison rule.
+
+This is the complete **owned tracked source** archive, not a self-contained build
+or proof of binary equivalence. Gitlink contents, downloaded dependencies,
+toolchain/build configuration, ignored generated source and build output are
+explicit exclusions. Before building, separately verify recursive dependency
+pins and absence of unexpected untracked compilation inputs, regenerate using
+the pinned tools, and record generated/fetched/build/compiler provenance. After
+the qualified build, run the probe self-test and derive actual executable, DLL
+and runtime hashes; this generator does not manufacture any of those hashes.
+
+For a new candidate, create a new versioned source manifest and bundle. Update
+`PHASE1_SOURCE_FORMAT` to `F1_OWNED_TREE_V2`, include the matching
+`SourceArchiveFormat` field in that manifest, and deliberately update
+`PHASE1_BASE_HEAD`, archive/probe/runtime/dependency pins from the qualified
+files together. Endpoint preflight still checks the externally pinned archive
+hash first, then dispatches only the pinned format and validates its complete
+embedded inventory against the pinned commit. `package.py` includes the new
+verifier beside both qualifier entrypoints. The current committed legacy pins
+remain unchanged and intentionally reject an unpinned new candidate.
+The archive identifies the chosen native build commit. A later qualifier-only
+commit may pin that build's measured artifacts; its separately hashed qualifier
+bundle is the endpoint tooling provenance. Do not attempt a self-referential
+commit/archive hash or claim that older tooling files inside the native source
+snapshot are the newly packaged endpoint qualifier.
+
+The four-client stage command now fixes dumpcap's capture buffer to `-B 64`
+(MiB), matching the successful client-side V4 synthetic capture setting. F1
+preflight rejects omitted, changed or duplicate buffer arguments. The existing
+70-second Phase 1 capture duration and bounded finalization remain unchanged.
+This does not qualify worker capture or authorize reuse of a Farm32 service,
+run identity, rendered kit, installed tool, or historical physical receipt.

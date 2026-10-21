@@ -120,7 +120,7 @@ if PhysicalFarm then
                 PhaseAcknowledgements[PeerKey] = true
                 AcknowledgementCount += 1
             end
-        elseif Kind == "content_observed" and Phase == CurrentPhase then
+        elseif Kind == "content_observed" and type(Phase) == "string" and Phase == CurrentPhase then
             local PeerKey = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
             if not ContentObservations[PeerKey] then
                 ContentObservations[PeerKey] = true
@@ -311,6 +311,7 @@ local EventPending = nil
 local EventOffers = 0
 local EventAcks = 0
 local EventSamples = {}
+local EventTrace = {}
 local ActionSamples = {}
 local LastEventAck = 0
 local EventMaxGapUs = 0
@@ -337,10 +338,12 @@ local PhaseFinalized = false
 local PhaseTrafficFailure = false
 local RpcComplete = false
 local RpcSamples = {}
+local RpcTrace = {}
 local RpcErrors = 0
 local RpcTimeouts = 0
 local ProducerReported = false
 local CurrentOverloadCase = nil
+local RecoveryCallbackTick = 0
 local OverloadReadySent = false
 local OverloadOffered = 0
 local LastOverloadOfferAt = nil
@@ -390,6 +393,15 @@ Event.OnClientEvent:Connect(function(Message, Sequence)
     local RttUs = (Now - Started) * 1000000
     EventMaxRttUs = math.max(EventMaxRttUs, RttUs)
     if #EventSamples < 1200 then table.insert(EventSamples, RttUs) end
+    if PhysicalFarm then
+        if #EventTrace >= 1200 then
+            PhaseTrafficFailure = true
+        else
+            table.insert(EventTrace, string.format("%d:%d:%d", Sequence,
+                math.floor((Started - PhaseStartedAt) * 1000000000),
+                math.floor((Now - PhaseStartedAt) * 1000000000)))
+        end
+    end
     EventAcks += 1
     Control:SetAttribute("ScaleEventAcks", EventAcks)
 end)
@@ -401,6 +413,17 @@ local function Metrics(Kind, Samples)
     local function P(Fraction) return Samples[math.floor((#Samples - 1) * Fraction) + 1] end
     return string.format("[Content:Scale%s] phase=%s samples=%d mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f max_us=%.0f",
         Kind, Phase, #Samples, Total / #Samples, P(0.50), P(0.95), P(0.99), Samples[#Samples])
+end
+local function PublishRemoteTrace(Kind, RunningPhase, Trace)
+    if not PhysicalFarm then return end
+    local Chunks = math.ceil(#Trace / 32)
+    print(string.format("[Qualification:RemoteCadence] event=summary version=1 kind=%s phase=%s records=%d chunks=%d",
+        Kind, RunningPhase, #Trace, Chunks))
+    for Chunk = 1, Chunks do
+        local First = (Chunk - 1) * 32 + 1
+        print(string.format("[Qualification:RemoteCadence] event=chunk version=1 kind=%s phase=%s index=%d records=%s",
+            Kind, RunningPhase, Chunk, table.concat(Trace, ",", First, math.min(#Trace, First + 31))))
+    end
 end
 Control.ActionResolved:Connect(function(_, Name, Accepted)
     if Name ~= "ScaleLunge" or not Accepted then
@@ -441,6 +464,8 @@ Control.ActionEnded:Connect(function(_, Name)
     Control:SetAttribute("ScaleActionEndings", Endings)
 end)
 local function PublishPhaseMetrics(RunningPhase)
+    PublishRemoteTrace("rpc", RunningPhase, RpcTrace)
+    PublishRemoteTrace("event", RunningPhase, EventTrace)
     table.sort(RpcSamples)
     local Total = 0
     for _, Value in RpcSamples do Total += Value end
@@ -584,7 +609,8 @@ RunService.PostSimulation:Connect(function()
                     ReceivedPhase, Objects, LocalPlayer.PlayerId))
             end
         end
-        if ContentObservedPhase == ReceivedPhase and not ContentObservationSubmitted and
+        if ContentObservedPhase ~= nil and ContentObservedPhase == ReceivedPhase and
+            not ContentObservationSubmitted and
             ContentObservationAttempts < 20 and
             PhaseControlTick - LastContentObservationTick >= 60 then
             LastContentObservationTick = PhaseControlTick
@@ -634,6 +660,7 @@ RunService.PostSimulation:Connect(function()
         PhaseTrafficFailure = false
         PendingPhaseStop = nil
         EventSamples = {}
+        EventTrace = {}
         ActionSamples = {}
         EventPending = nil
         LastEventAck = 0
@@ -652,6 +679,7 @@ RunService.PostSimulation:Connect(function()
         PhaseActionUnexpectedEndingsStart = ActionUnexpectedEndings
         RpcComplete = false
         RpcSamples = {}
+        RpcTrace = {}
         RpcErrors = 0
         RpcTimeouts = 0
         local RunningPhase = Phase
@@ -659,10 +687,21 @@ RunService.PostSimulation:Connect(function()
             for Index = 1, 100 do
                 local Started = os.clock()
                 local Ok, Value, Status = pcall(function() return Function:InvokeServerWithTimeout(5, RunningPhase) end)
+                local Completed = os.clock()
                 if not Ok or Value ~= RunningPhase then RpcErrors += 1 end
                 if (Ok and Value == nil and Status == "timeout") or
                     (not Ok and type(Value) == "string" and string.find(Value, "timeout", 1, true)) then RpcTimeouts += 1 end
-                table.insert(RpcSamples, (os.clock() - Started) * 1000000)
+                table.insert(RpcSamples, (Completed - Started) * 1000000)
+                if PhysicalFarm then
+                    if #RpcTrace >= 100 then
+                        PhaseTrafficFailure = true
+                    else
+                        table.insert(RpcTrace, string.format("%d:%d:%d:%d", Index,
+                            math.floor((Started - PhaseStartedAt) * 1000000000),
+                            math.floor((Completed - PhaseStartedAt) * 1000000000),
+                            if Ok and Value == RunningPhase then 1 else 0))
+                    end
+                end
                 Control:SetAttribute("ScaleRemoteSamples", Index)
                 Control:SetAttribute("ScaleRemoteErrors", RpcErrors)
                 task.wait(if Qualified then 0.1 else 0)
@@ -728,6 +767,7 @@ if PhysicalFarm then
     -- This is a separate post-reload workload. The five content phases above
     -- retain their qualified traffic and completion semantics unchanged.
     RunService.PostSimulation:Connect(function()
+        RecoveryCallbackTick += 1
         local LocalPlayer = Players.LocalPlayer
         if not LocalPlayer or not PhaseControl then return end
         local Stage = game:GetAttribute("ScaleOverloadCase")
@@ -821,12 +861,19 @@ if PhysicalFarm then
             task.spawn(function()
                 for Index = 1, 10 do
                     local Started = os.clock()
+                    local StartedTick = RecoveryCallbackTick
                     local Ok, Value = pcall(function()
                         return OverloadFunction:InvokeServerWithTimeout(1, "recovery")
                     end)
-                    if Ok and Value == "recovery" then
+                    local Ended = os.clock()
+                    local Passed = Ok and Value == "recovery"
+                    print(string.format("[Qualification:Recovery] event=rpc_probe case=%s player_id=%d index=%d client_tick=%d started_clock_ns=%d ended_clock_ns=%d elapsed_us=%d ok=%d",
+                        CurrentOverloadCase, LocalPlayer.PlayerId, Index, StartedTick,
+                        math.floor(Started * 1000000000), math.floor(Ended * 1000000000),
+                        math.floor((Ended - Started) * 1000000), if Passed then 1 else 0))
+                    if Passed then
                         RecoveryProbeAcks += 1
-                        table.insert(RecoveryRpcLatencies, math.floor((os.clock() - Started) * 1000000))
+                        table.insert(RecoveryRpcLatencies, math.floor((Ended - Started) * 1000000))
                     else RecoveryProbeErrors += 1 end
                     OverloadSequence += 1
                     RecoveryEventStarted[OverloadSequence] = os.clock()

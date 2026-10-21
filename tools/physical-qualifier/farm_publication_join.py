@@ -2,8 +2,8 @@
 
 This joins exact generation-safe state identities across role-local traces.
 Server and client monotonic clocks are never subtracted from one another.
-Explicit recipient retirement is not present in PublicationV1 and stays
-NOT_MEASURED; an unresolved confirmed due relationship fails closed.
+The accepted-GRPL RecipientRetired stage closes only the pending obligation
+that precedes it. A later publication may reenter with the same ObjectId.
 """
 
 import argparse
@@ -28,6 +28,13 @@ READY_FIELD = re.compile(r"([a-z_]+)=([^\s]+)")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 RELATIONSHIP = ("ConnectionSlot", "ConnectionGeneration", "ObjectSlot", "ObjectGeneration")
 STATE = RELATIONSHIP + ("Tick", "Sequence", "MaterializationEpoch")
+PHASE_NAMES = ("baseline", "load", "resident", "evict", "reload")
+PHASE_START = "[Qualification:Scale] event=phase_start "
+PHASE_END = "[Qualification:Scale] event=phase_end "
+ROOT_MARKER = "[Qualification:Scale] event=tracked_root "
+MAX_RELATIONSHIP_REPORT = 4096
+MAX_CHARACTER_GAP_NS = 250_000_000
+MAX_CHARACTER_GAP_TICKS = 12
 
 
 def Identity(Value):
@@ -57,6 +64,73 @@ def ReadyNumber(Row, Field):
     Require(isinstance(Value, str) and re.fullmatch(r"(0|[1-9][0-9]*)", Value),
             "ready log invalid " + Field)
     return int(Value)
+
+
+def PhaseWindows(ServerLogPath, RunId):
+    """Read authoritative tick windows; absence remains explicitly unmeasured."""
+    Starts = {}
+    Ends = {}
+    for Prefix, Target in ((PHASE_START, Starts), (PHASE_END, Ends)):
+        for Row in ReadyRows(ServerLogPath, Prefix):
+            if Row.get("run") != RunId:
+                continue
+            Phase = Row.get("phase")
+            Require(Phase in PHASE_NAMES and Phase not in Target,
+                    "duplicate or unknown farm phase boundary")
+            Target[Phase] = (ReadyNumber(Row, "tick"), ReadyNumber(Row, "monotonic_us"))
+    if not Starts and not Ends:
+        return None
+    Require(set(Starts) == set(PHASE_NAMES) and set(Ends) == set(PHASE_NAMES),
+            "five farm phase tick windows are incomplete")
+    Windows = []
+    PreviousEnd = 0
+    PreviousEndNs = 0
+    for Phase in PHASE_NAMES:
+        StartTick, StartUs = Starts[Phase]
+        EndTick, EndUs = Ends[Phase]
+        Require(PreviousEnd < StartTick < EndTick and
+                PreviousEndNs < StartUs < EndUs,
+                "farm phase ticks or server-local times overlap")
+        Windows.append({"Phase": Phase, "StartTick": StartTick, "EndTick": EndTick})
+        PreviousEnd, PreviousEndNs = EndTick, EndUs
+    return Windows
+
+
+def RootMarkers(ServerLogPath, RunId, ExpectedClients, ReadyBySlot):
+    """Only an explicit setup marker can identify the eight measured roots."""
+    Roots = {}
+    Rows = [Row for Row in ReadyRows(ServerLogPath, ROOT_MARKER)
+            if Row.get("run") == RunId]
+    if not Rows:
+        return None
+    Require(ExpectedClients == 32 and len(Rows) == 8,
+            "farm root marker count does not prove eight active roots")
+    OwnerSlots = set()
+    Indices = set()
+    for Row in Rows:
+        Index = ReadyNumber(Row, "index")
+        OwnerSlot = ReadyNumber(Row, "client_index")
+        Neighborhood = ReadyNumber(Row, "neighborhood")
+        FirstSlot = ReadyNumber(Row, "recipient_first")
+        LastSlot = ReadyNumber(Row, "recipient_last")
+        ServerConnection = (ReadyNumber(Row, "peer_slot"),
+                            ReadyNumber(Row, "peer_generation"))
+        Root = (ReadyNumber(Row, "object_slot"),
+                ReadyNumber(Row, "object_generation"))
+        SetupTick = ReadyNumber(Row, "tick")
+        Require(Index in range(8) and Index not in Indices and
+                OwnerSlot == Index * 4 and OwnerSlot not in OwnerSlots and
+                Neighborhood == OwnerSlot // 8 + 1 and FirstSlot == (Neighborhood - 1) * 8 and
+                LastSlot == FirstSlot + 7 and all(Root) and Root not in Roots and
+                SetupTick > 0 and ServerConnection == ReadyBySlot[OwnerSlot][0],
+                "farm root marker identity or recipient mapping invalid")
+        Indices.add(Index)
+        OwnerSlots.add(OwnerSlot)
+        Roots[Root] = {"OwnerSlot": OwnerSlot, "SetupTick": SetupTick,
+                       "RecipientSlots": tuple(range(FirstSlot, LastSlot + 1))}
+    Require(Indices == set(range(8)) and OwnerSlots == set(range(0, 32, 4)),
+            "farm root marker owner set incomplete")
+    return Roots
 
 
 def Digest(PathValue):
@@ -148,13 +222,19 @@ def CreateDatabase(PathValue):
         CREATE TABLE Relationship (
             CS INTEGER, CG INTEGER, OS INTEGER, OG INTEGER,
             ForecastDue INTEGER, PendingDue INTEGER, Confirmed INTEGER NOT NULL DEFAULT 0,
+            Lifetime INTEGER NOT NULL DEFAULT 0, Retired INTEGER NOT NULL DEFAULT 0,
+            DueEpoch INTEGER NOT NULL DEFAULT 0, LastDispositionDue INTEGER,
             PRIMARY KEY (CS, CG, OS, OG));
         CREATE INDEX RelationshipForecast ON Relationship (ForecastDue)
-            WHERE PendingDue IS NULL;
+            WHERE PendingDue IS NULL AND Retired=0;
         CREATE TABLE DueEvent (
             CS INTEGER, CG INTEGER, OS INTEGER, OG INTEGER,
-            Due INTEGER, Forced INTEGER,
-            PRIMARY KEY (CS, CG, OS, OG, Due, Forced));
+            Lifetime INTEGER, DueEpoch INTEGER, Due INTEGER, Forced INTEGER,
+            PRIMARY KEY (CS, CG, OS, OG, Lifetime, DueEpoch, Due, Forced));
+        CREATE TABLE DueWork (
+            CS INTEGER, CG INTEGER, OS INTEGER, OG INTEGER,
+            Lifetime INTEGER, DueEpoch INTEGER, Due INTEGER, Resolution TEXT,
+            PRIMARY KEY (CS, CG, OS, OG, Lifetime, DueEpoch, Due));
         CREATE TABLE Built (
             OS INTEGER, OG INTEGER, Tick INTEGER, Seq INTEGER,
             Control INTEGER NOT NULL, Ns INTEGER NOT NULL,
@@ -165,11 +245,14 @@ def CreateDatabase(PathValue):
         CREATE TABLE Produced (
             CS INTEGER, CG INTEGER, OS INTEGER, OG INTEGER,
             Tick INTEGER, Seq INTEGER, Material INTEGER,
-            Control INTEGER NOT NULL, Due INTEGER NOT NULL, Forced INTEGER NOT NULL,
+            Control INTEGER NOT NULL, Due INTEGER, Forced INTEGER NOT NULL,
+            Origin INTEGER NOT NULL,
             BuiltNs INTEGER NOT NULL, ProducedNs INTEGER NOT NULL,
-            AcceptedNs INTEGER, FrameSeq INTEGER, ServiceBytes INTEGER,
-            ReceiveNs INTEGER, HandledNs INTEGER, ClientSlot INTEGER,
+            AcceptedNs INTEGER, RejectedNs INTEGER, FrameSeq INTEGER, ServiceBytes INTEGER,
+            ReceiveNs INTEGER, HandledNs INTEGER, ClientSlot INTEGER, Lifetime INTEGER,
             PRIMARY KEY (CS, CG, OS, OG, Tick, Seq, Material));
+        CREATE INDEX HandledCadence ON Produced
+            (CS, CG, OS, OG, Lifetime, HandledNs) WHERE HandledNs IS NOT NULL;
     """)
     return Database
 
@@ -182,9 +265,14 @@ def InsertUnique(Database, Sql, Values, Message):
 
 
 def ReadServer(Database, ServerPath, RunId, ReadyConnections):
-    Counts = {"Due": 0, "DueRediscoveries": 0, "ForecastRescheduled": 0,
+    Counts = {"Due": 0, "DueClasses": 0, "DueRediscoveries": 0,
+              "DueAccepted": 0, "Retired": 0, "RetiredPending": 0,
+              "RetiredDue": 0, "ForecastRescheduled": 0,
               "UnchangedSuppressed": 0, "Produced": 0, "ForcedProduced": 0,
-              "Accepted": 0, "ForcedAccepted": 0}
+              "Accepted": 0, "ForcedAccepted": 0,
+              "DirectOffered": 0, "DirectAccepted": 0, "DirectRejected": 0,
+              "DirectReliableOffered": 0, "DirectReliableAccepted": 0,
+              "DirectSatisfiedDue": 0}
     LastFrameTick = 0
     for Value in IterRecords(ServerPath, RunId, "SERVER"):
         Stage = Value.Stage
@@ -195,56 +283,94 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
                          (Value.Tick, Value.Nanoseconds), "duplicate FrameBegin")
             LastFrameTick = Value.Tick
             Database.execute("""UPDATE Relationship SET PendingDue=ForecastDue
-                WHERE PendingDue IS NULL AND ForecastDue<=?""", (Value.Tick,))
-        elif Stage in (2, 3, 6, 7, 8):
+                WHERE PendingDue IS NULL AND Retired=0 AND ForecastDue<=?""", (Value.Tick,))
+        elif Stage in (2, 3, 6, 7, 8, 11, 12, 13):
             FullRelationship(Value)
             Require(Value.Tick <= LastFrameTick, "Character event lacks preceding FrameBegin")
             if Stage in (2, 3, 6, 7):
                 Require(Value.DueTick > 0, "Character event lacks desired due tick")
             if Stage == 2:
-                Previous = Database.execute("""SELECT PendingDue, Confirmed FROM Relationship
+                Previous = Database.execute("""SELECT PendingDue, Confirmed, LastDispositionDue
+                    FROM Relationship
                     WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value)).fetchone()
+                # A completed obligation can be scheduled again within the same
+                # authoritative tick. Stage 2 is the explicit rearm boundary;
+                # repeating Stage 3 without it remains a rejected replay.
+                if Previous and Previous[2] is not None:
+                    Require(Previous[0] is None and Previous[1] == 0,
+                            "disposed due has an active pending obligation")
+                    Database.execute("""UPDATE Relationship SET DueEpoch=DueEpoch+1,
+                        LastDispositionDue=NULL WHERE CS=? AND CG=? AND OS=? AND OG=?""",
+                        Identity(Value))
                 if Previous and Previous[0] is not None and not Previous[1] and Value.DueTick > Value.Tick:
                     Counts["ForecastRescheduled"] += 1
                     Database.execute("""UPDATE Relationship SET PendingDue=NULL
                         WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value))
                 Database.execute("""INSERT INTO Relationship (CS,CG,OS,OG,ForecastDue)
                     VALUES (?,?,?,?,?) ON CONFLICT (CS,CG,OS,OG)
-                    DO UPDATE SET ForecastDue=excluded.ForecastDue""",
+                    DO UPDATE SET ForecastDue=excluded.ForecastDue, Retired=0""",
                     (*Identity(Value), Value.DueTick))
             elif Stage == 3:
                 Require(Value.Flags in (0, 1) and Value.DueTick <= Value.Tick,
                         "invalid confirmed due event")
-                Previous = Database.execute("""SELECT PendingDue, Confirmed FROM Relationship
+                DueOrigin = Database.execute("SELECT Ns FROM Frame WHERE Tick=?",
+                                             (Value.DueTick,)).fetchone()
+                Require(DueOrigin is not None and DueOrigin[0] <= Value.Nanoseconds,
+                        "confirmed due lacks authoritative FrameBegin origin")
+                Previous = Database.execute("""SELECT PendingDue, Confirmed, Lifetime, DueEpoch
+                    FROM Relationship
                     WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value)).fetchone()
+                Lifetime = Previous[2] if Previous else 0
+                DueEpoch = Previous[3] if Previous else 0
                 Seen = Database.execute("""SELECT 1 FROM DueEvent WHERE CS=? AND CG=? AND
-                    OS=? AND OG=? AND Due=? AND Forced=?""",
-                    (*Identity(Value), Value.DueTick, Value.Flags)).fetchone()
+                    OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=? AND Forced=?""",
+                    (*Identity(Value), Lifetime, DueEpoch, Value.DueTick, Value.Flags)).fetchone()
                 if Seen:
                     Require(Previous is not None and Previous[1] == 1 and
                             Previous[0] == Value.DueTick,
                             "confirmed due obligation reused after completion")
                     Counts["DueRediscoveries"] += 1
                 else:
-                    InsertUnique(Database, "INSERT INTO DueEvent VALUES (?,?,?,?,?,?)",
-                                 (*Identity(Value), Value.DueTick, Value.Flags),
+                    InsertUnique(Database, "INSERT INTO DueEvent VALUES (?,?,?,?,?,?,?,?)",
+                                 (*Identity(Value), Lifetime, DueEpoch, Value.DueTick, Value.Flags),
                                  "duplicate due obligation identity")
+                    Counts["DueClasses"] += 1
+                Work = Database.execute("""SELECT Resolution FROM DueWork WHERE CS=? AND CG=?
+                    AND OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=?""",
+                    (*Identity(Value), Lifetime, DueEpoch, Value.DueTick)).fetchone()
+                if Work is None:
+                    InsertUnique(Database, "INSERT INTO DueWork VALUES (?,?,?,?,?,?,?,NULL)",
+                                 (*Identity(Value), Lifetime, DueEpoch, Value.DueTick),
+                                 "duplicate due work identity")
                     Counts["Due"] += 1
+                else:
+                    Require(Work[0] is None and Previous is not None and Previous[1] == 1 and
+                            Previous[0] == Value.DueTick,
+                            "due work reused after disposition")
                 if Previous and Previous[0] is not None:
                     Require(Previous[0] == Value.DueTick,
                             "confirmed due changed without service or suppression")
                 Database.execute("""INSERT INTO Relationship
                     (CS,CG,OS,OG,ForecastDue,PendingDue,Confirmed)
                     VALUES (?,?,?,?,?,?,1) ON CONFLICT (CS,CG,OS,OG)
-                    DO UPDATE SET PendingDue=excluded.PendingDue, Confirmed=1""",
+                    DO UPDATE SET PendingDue=excluded.PendingDue, Confirmed=1,
+                    LastDispositionDue=NULL, Retired=0""",
                     (*Identity(Value), Value.DueTick, Value.DueTick))
             elif Stage == 7:
-                Previous = Database.execute("""SELECT PendingDue FROM Relationship
+                Previous = Database.execute("""SELECT PendingDue, Confirmed, Lifetime, DueEpoch
+                    FROM Relationship
                     WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value)).fetchone()
-                Require(Previous is not None and Previous[0] == Value.DueTick,
+                Require(Previous is not None and Previous[0] == Value.DueTick and Previous[1] == 1,
                         "unchanged suppression lacks matching due work")
-                Database.execute("""UPDATE Relationship SET PendingDue=NULL, Confirmed=0
-                    WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value))
+                Changed = Database.execute("""UPDATE DueWork SET Resolution='UNCHANGED'
+                    WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=?
+                    AND Resolution IS NULL""",
+                    (*Identity(Value), Previous[2], Previous[3], Value.DueTick)).rowcount
+                Require(Changed == 1, "unchanged suppression duplicated due disposition")
+                Database.execute("""UPDATE Relationship SET ForecastDue=NULL,
+                    PendingDue=NULL, Confirmed=0, LastDispositionDue=?
+                    WHERE CS=? AND CG=? AND OS=? AND OG=?""",
+                    (Value.DueTick, *Identity(Value)))
                 Counts["UnchangedSuppressed"] += 1
             elif Stage == 6:
                 Require(Value.Sequence > 0 and Value.MaterializationEpoch > 0 and
@@ -257,40 +383,129 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
                         Built[1] <= Built[2] <= Value.Nanoseconds,
                         "produced state lacks matching built/snapshot identity")
                 InsertUnique(Database, """INSERT INTO Produced
-                    (CS,CG,OS,OG,Tick,Seq,Material,Control,Due,Forced,BuiltNs,ProducedNs)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (CS,CG,OS,OG,Tick,Seq,Material,Control,Due,Forced,Origin,BuiltNs,ProducedNs)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (*StateIdentity(Value), Built[0], Value.DueTick, Value.Flags,
-                     Built[1], Value.Nanoseconds), "duplicate produced state")
+                     0, Built[1], Value.Nanoseconds), "duplicate produced state")
                 Counts["Produced"] += 1
                 Counts["ForcedProduced"] += Value.Flags
+            elif Stage == 12:
+                Built = Database.execute("""SELECT Control, Ns FROM Built
+                    WHERE OS=? AND OG=? AND Tick=? AND Seq=?""",
+                    (Value.ObjectSlot, Value.ObjectGeneration, Value.Tick,
+                     Value.Sequence)).fetchone()
+                Require(Built is not None and Built[0] > 0 and
+                        Built[1] <= Value.Nanoseconds,
+                        "direct Character offer lacks matching built state")
+                InsertUnique(Database, """INSERT INTO Produced
+                    (CS,CG,OS,OG,Tick,Seq,Material,Control,Due,Forced,Origin,BuiltNs,ProducedNs)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (*StateIdentity(Value), Built[0],
+                     Value.DueTick if Value.DueTick else None, Value.Flags,
+                     2 if Value.Flags else 1, Built[1], Value.Nanoseconds),
+                    "duplicate direct Character offer")
+                Counts["DirectOffered"] += 1
+                Counts["DirectReliableOffered"] += Value.Flags
+            elif Stage == 13:
+                Changed = Database.execute("""UPDATE Produced SET RejectedNs=?
+                    WHERE CS=? AND CG=? AND OS=? AND OG=? AND Tick=? AND Seq=? AND Material=?
+                    AND Origin=? AND Due IS ? AND AcceptedNs IS NULL AND RejectedNs IS NULL
+                    AND ProducedNs<=?""",
+                    (Value.Nanoseconds, *StateIdentity(Value), 2 if Value.Flags else 1,
+                     Value.DueTick if Value.DueTick else None, Value.Nanoseconds)).rowcount
+                Require(Changed == 1, "direct Character rejection lacks unique preceding offer")
+                Counts["DirectRejected"] += 1
             elif Stage == 8:
                 Require((Value.ConnectionSlot, Value.ConnectionGeneration) in ReadyConnections,
                         "accepted recipient lacks server ready identity")
                 Require(all((Value.Sequence, Value.ControlEpoch, Value.MaterializationEpoch,
                              Value.FrameSequence, Value.ServiceBytes)),
                         "accepted packet lacks full state/frame byte identity")
-                Produced = Database.execute("""SELECT Control, Due, Forced, ProducedNs, AcceptedNs
+                Produced = Database.execute("""SELECT Control, Due, Forced, ProducedNs,
+                    AcceptedNs, Origin, RejectedNs
                     FROM Produced WHERE CS=? AND CG=? AND OS=? AND OG=? AND Tick=?
                     AND Seq=? AND Material=?""", StateIdentity(Value)).fetchone()
                 Require(Produced is not None and Produced[0] == Value.ControlEpoch and
-                        Produced[4] is None and Value.Nanoseconds >= Produced[3],
+                        Produced[4] is None and Produced[6] is None and
+                        Value.Nanoseconds >= Produced[3],
                         "accepted packet is unmatched, duplicated, or precedes production")
-                Pending = Database.execute("""SELECT PendingDue, Confirmed FROM Relationship
+                Pending = Database.execute("""SELECT PendingDue, Confirmed, Lifetime, DueEpoch
+                    FROM Relationship
                     WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value)).fetchone()
-                Require(Pending is not None and Pending[0] == Produced[1] and
-                        Pending[1] == 1 and Value.Tick >= Produced[1],
-                        "accepted state lacks its full recipient due obligation")
-                Origin = Database.execute("SELECT Ns FROM Frame WHERE Tick=?", (Produced[1],)).fetchone()
-                Require(Origin is not None and Origin[0] <= Value.Nanoseconds,
-                        "accepted state lacks authoritative due-tick FrameBegin")
-                Database.execute("""UPDATE Produced SET AcceptedNs=?, FrameSeq=?, ServiceBytes=?
+                if Produced[5] == 0:
+                    Require(Pending is not None and Pending[0] == Produced[1] and
+                            Pending[1] == 1 and Value.Tick >= Produced[1],
+                            "accepted scheduled state lacks its recipient due obligation")
+                    Origin = Database.execute("SELECT Ns FROM Frame WHERE Tick=?",
+                                              (Produced[1],)).fetchone()
+                    Require(Origin is not None and Origin[0] <= Value.Nanoseconds,
+                            "accepted scheduled state lacks due-tick FrameBegin")
+                    Changed = Database.execute("""UPDATE DueWork SET Resolution='ACCEPTED'
+                        WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=?
+                        AND Resolution IS NULL""",
+                        (*Identity(Value), Pending[2], Pending[3], Produced[1])).rowcount
+                    Require(Changed == 1, "accepted state duplicates a due disposition")
+                    Database.execute("""UPDATE Relationship SET ForecastDue=NULL,
+                        PendingDue=NULL, Confirmed=0, LastDispositionDue=?
+                        WHERE CS=? AND CG=? AND OS=? AND OG=?""",
+                        (Produced[1], *Identity(Value)))
+                    Counts["DueAccepted"] += 1
+                    Counts["ForcedAccepted"] += Produced[2]
+                else:
+                    Require(Produced[5] in (1, 2), "direct Character origin is invalid")
+                    Require(not (Pending is not None and Pending[1] == 1 and Produced[1] is None),
+                            "direct Character acceptance hid confirmed due work")
+                    if Produced[1] is not None:
+                        Require(Pending is not None and Pending[0] == Produced[1] and
+                                Pending[1] == 1 and Value.Tick >= Produced[1],
+                                "direct Character offer cannot discharge unrelated due work")
+                        Changed = Database.execute("""UPDATE DueWork SET Resolution='DIRECT'
+                            WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=?
+                            AND Resolution IS NULL""",
+                            (*Identity(Value), Pending[2], Pending[3], Produced[1])).rowcount
+                        Require(Changed == 1, "direct Character acceptance duplicates due disposition")
+                        Database.execute("""UPDATE Relationship SET PendingDue=NULL,
+                            Confirmed=0, LastDispositionDue=?
+                            WHERE CS=? AND CG=? AND OS=? AND OG=?""",
+                            (Produced[1], *Identity(Value)))
+                        Counts["DirectSatisfiedDue"] += 1
+                    Counts["DirectAccepted"] += 1
+                    Counts["DirectReliableAccepted"] += Produced[5] == 2
+                    Counts["ForcedAccepted"] += Produced[5] == 2
+                Database.execute("""UPDATE Produced SET AcceptedNs=?, FrameSeq=?, ServiceBytes=?, Lifetime=?
                     WHERE CS=? AND CG=? AND OS=? AND OG=? AND Tick=? AND Seq=? AND Material=?""",
                     (Value.Nanoseconds, Value.FrameSequence, Value.ServiceBytes,
+                     Pending[2] if Pending is not None else 0,
                      *StateIdentity(Value)))
-                Database.execute("""UPDATE Relationship SET PendingDue=NULL, Confirmed=0
-                    WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value))
                 Counts["Accepted"] += 1
-                Counts["ForcedAccepted"] += Produced[2]
+            elif Stage == 11:
+                Previous = Database.execute("""SELECT PendingDue, Confirmed, Lifetime,
+                    Retired, DueEpoch
+                    FROM Relationship WHERE CS=? AND CG=? AND OS=? AND OG=?""",
+                    Identity(Value)).fetchone()
+                Require(Previous is None or Previous[3] == 0,
+                        "duplicate retirement without intervening reentry")
+                Counts["Retired"] += 1
+                if Previous and Previous[0] is not None:
+                    Require(Value.Tick >= Previous[0],
+                            "retirement precedes the pending due tick")
+                    Counts["RetiredPending"] += 1
+                    if Previous[1]:
+                        Changed = Database.execute("""UPDATE DueWork SET Resolution='RETIRED'
+                            WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=?
+                            AND Resolution IS NULL""",
+                            (*Identity(Value), Previous[2], Previous[4], Previous[0])).rowcount
+                        Require(Changed == 1, "retirement lacks its confirmed due work")
+                        Counts["RetiredDue"] += 1
+                if Previous:
+                    Database.execute("""UPDATE Relationship SET ForecastDue=NULL,
+                        PendingDue=NULL, Confirmed=0, Lifetime=Lifetime+1,
+                        DueEpoch=0, LastDispositionDue=NULL, Retired=1
+                        WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value))
+                else:
+                    Database.execute("""INSERT INTO Relationship
+                        (CS,CG,OS,OG,Lifetime,Retired) VALUES (?,?,?,?,1,1)""",
+                        Identity(Value))
         elif Stage == 4:
             Require(all((Value.ObjectSlot, Value.ObjectGeneration, Value.Tick,
                          Value.Sequence, Value.ControlEpoch, Value.Nanoseconds)),
@@ -310,13 +525,27 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
     Counts["UnresolvedDue"] = Database.execute(
         "SELECT count(*) FROM Relationship WHERE PendingDue IS NOT NULL").fetchone()[0]
     Counts["FutureForecasts"] = Database.execute(
-        "SELECT count(*) FROM Relationship WHERE ForecastDue>?", (LastFrameTick,)).fetchone()[0]
+        "SELECT count(*) FROM Relationship WHERE Retired=0 AND ForecastDue>?",
+        (LastFrameTick,)).fetchone()[0]
+    Counts["OverdueForecasts"] = Database.execute(
+        "SELECT count(*) FROM Relationship WHERE Retired=0 AND ForecastDue<=?",
+        (LastFrameTick,)).fetchone()[0]
     Counts["UnacceptedProduced"] = Database.execute(
-        "SELECT count(*) FROM Produced WHERE AcceptedNs IS NULL").fetchone()[0]
-    Require(Counts["UnresolvedDue"] == 0 and Counts["UnacceptedProduced"] == 0,
+        "SELECT count(*) FROM Produced WHERE AcceptedNs IS NULL AND RejectedNs IS NULL").fetchone()[0]
+    Counts["UnresolvedDueWork"] = Database.execute(
+        "SELECT count(*) FROM DueWork WHERE Resolution IS NULL").fetchone()[0]
+    Require(Counts["UnresolvedDue"] == 0 and Counts["UnresolvedDueWork"] == 0 and
+            Counts["OverdueForecasts"] == 0 and
+            Counts["UnacceptedProduced"] == 0 and
+            Counts["Due"] == Counts["DueAccepted"] + Counts["DirectSatisfiedDue"] +
+            Counts["UnchangedSuppressed"] + Counts["RetiredDue"],
             "server due/production/acceptance conservation incomplete")
-    Require(Counts["Accepted"] > 0 and Counts["ForcedAccepted"] == Counts["ForcedProduced"],
+    Require(Counts["Accepted"] > 0 and
+            Counts["ForcedAccepted"] == Counts["ForcedProduced"] + Counts["DirectReliableAccepted"],
             "accepted Character state or forced-state conservation missing")
+    Require(Counts["DirectAccepted"] + Counts["DirectRejected"] == Counts["DirectOffered"] and
+            Counts["Accepted"] == Counts["DueAccepted"] + Counts["DirectAccepted"],
+            "direct Character offer/acceptance conservation incomplete")
     return Counts
 
 
@@ -337,6 +566,10 @@ def ReadClients(Database, ClientSources, ReadyBySlot, RunId, ExpectedClients):
             Require(Connection == ClientConnection and
                     ConnectionBySlot.setdefault(Slot, Connection) == Connection,
                     "client slot maps to a different connection generation")
+            if Value.Stage >= 14:
+                # RPC timing uses the same sealed trace but is independent of
+                # Character state publication and its acceptance join.
+                continue
             ServerState = (*ServerConnection, Value.ObjectSlot, Value.ObjectGeneration,
                            Value.Tick, Value.Sequence, Value.MaterializationEpoch)
             Row = Database.execute("""SELECT Control, FrameSeq, ServiceBytes, Forced,
@@ -381,6 +614,184 @@ def Duration(Database, Predicate, Expression, ExtraJoin=""):
             "MeanNs": None if Count == 0 else Total // Count}
 
 
+def RelationshipCadence(Database, Windows, Roots, ExpectedClients):
+    """Measure only recipient-local handler gaps, grouped by server state ticks."""
+    if Windows is None:
+        return {"Status": "NOT_MEASURED", "RootIdentity": "NOT_MEASURED",
+                "RootCoverage": "NOT_MEASURED", "RawGapDiagnosticVerdict": "NOT_MEASURED",
+                "PhaseWindows": [], "Relationships": []}
+    def Empty(Phase):
+        return {"Phase": Phase, "States": 0, "Pairs": 0, "WithinPairs": 0,
+                "EntryPairs": 0, "ExitPairs": 0, "SpanningPairs": 0,
+                "MaximumHandledGapNs": None, "MaximumTickDelta": None,
+                "MaximumWithinHandledGapNs": None, "MaximumWithinTickDelta": None,
+                "MaximumBoundaryHandledGapNs": None, "MaximumBoundaryTickDelta": None,
+                "BoundaryUnresolved": 0, "DefiniteBoundaryTickFailures": 0}
+    Relationships = {}
+    StaleByKey = {}
+    PreviousKey = None
+    PreviousTick = PreviousNs = None
+    Cursor = Database.execute("""SELECT ClientSlot, CS, CG, OS, OG, Lifetime, Tick, HandledNs
+        FROM Produced WHERE AcceptedNs IS NOT NULL AND HandledNs IS NOT NULL
+        ORDER BY CS, CG, OS, OG, Lifetime, HandledNs, Tick, Seq, Material""")
+    for ClientSlot, CS, CG, OS, OG, Lifetime, Tick, HandledNs in Cursor:
+        Require(ClientSlot is not None and Lifetime is not None and Tick > 0 and HandledNs > 0,
+                "handled Character cadence identity is incomplete")
+        Key = (ClientSlot, CS, CG, OS, OG, Lifetime)
+        if Key not in Relationships:
+            Require(len(Relationships) < MAX_RELATIONSHIP_REPORT,
+                    "bounded Character relationship report exceeded")
+            Relationships[Key] = [Empty(Window["Phase"]) for Window in Windows]
+        Stats = Relationships[Key]
+        if Key == PreviousKey:
+            Require(HandledNs >= PreviousNs,
+                    "recipient-local Character handler time regressed")
+            if Tick < PreviousTick:
+                # An older handled state is not forward publication progress.
+                # Keep the prior forward point, so it cannot shorten a gap.
+                StaleByKey[Key] = StaleByKey.get(Key, 0) + 1
+                continue
+        for Index, Window in enumerate(Windows):
+            Start, End = Window["StartTick"], Window["EndTick"]
+            if Start <= Tick <= End:
+                Stats[Index]["States"] += 1
+        if Key == PreviousKey:
+            GapNs, GapTicks = HandledNs - PreviousNs, Tick - PreviousTick
+            for Index, Window in enumerate(Windows):
+                Start, End = Window["StartTick"], Window["EndTick"]
+                if PreviousTick > End or Tick < Start:
+                    continue
+                Result = Stats[Index]
+                Result["Pairs"] += 1
+                if PreviousTick < Start and Tick > End:
+                    Kind = "SpanningPairs"
+                elif PreviousTick < Start:
+                    Kind = "EntryPairs"
+                elif Tick > End:
+                    Kind = "ExitPairs"
+                else:
+                    Kind = "WithinPairs"
+                Result[Kind] += 1
+                Result["MaximumHandledGapNs"] = max(Result["MaximumHandledGapNs"] or 0, GapNs)
+                Result["MaximumTickDelta"] = max(Result["MaximumTickDelta"] or 0, GapTicks)
+                if Kind == "WithinPairs":
+                    Result["MaximumWithinHandledGapNs"] = max(
+                        Result["MaximumWithinHandledGapNs"] or 0, GapNs)
+                    Result["MaximumWithinTickDelta"] = max(
+                        Result["MaximumWithinTickDelta"] or 0, GapTicks)
+                else:
+                    Result["MaximumBoundaryHandledGapNs"] = max(
+                        Result["MaximumBoundaryHandledGapNs"] or 0, GapNs)
+                    Result["MaximumBoundaryTickDelta"] = max(
+                        Result["MaximumBoundaryTickDelta"] or 0, GapTicks)
+                    if GapNs > MAX_CHARACTER_GAP_NS:
+                        # The preceding/following state can be in calibration;
+                        # no cross-host timestamp exists to apportion that gap.
+                        Result["BoundaryUnresolved"] += 1
+                    ChargedTicks = (End - Start if Kind == "SpanningPairs" else
+                                    Tick - Start if Kind == "EntryPairs" else
+                                    End - PreviousTick)
+                    if ChargedTicks > MAX_CHARACTER_GAP_TICKS:
+                        Result["DefiniteBoundaryTickFailures"] += 1
+        PreviousKey, PreviousTick, PreviousNs = Key, Tick, HandledNs
+    Report = []
+    for (Slot, CS, CG, OS, OG, Lifetime), Stats in sorted(Relationships.items()):
+        Report.append({"ClientSlot": Slot, "ConnectionSlot": CS,
+                       "ConnectionGeneration": CG, "ObjectSlot": OS,
+                       "ObjectGeneration": OG, "Lifetime": Lifetime,
+                       "StaleHandled": StaleByKey.get((Slot, CS, CG, OS, OG, Lifetime), 0),
+                       "Phases": Stats})
+    Result = {"Status": "RECIPIENT_LOCAL_OBSERVED", "RootIdentity": "NOT_MEASURED",
+              "RootCoverage": "NOT_MEASURED", "RawGapDiagnosticVerdict": "NOT_MEASURED",
+              "PhaseWindows": Windows, "RelationshipCount": len(Report),
+              "Relationships": Report,
+              "MissingRootMarker": ROOT_MARKER.strip()}
+    if Roots is None:
+        return Result
+    Result["RootIdentity"] = "OBSERVED"
+    Index = {}
+    for Row in Report:
+        Index.setdefault((Row["ClientSlot"], Row["ObjectSlot"], Row["ObjectGeneration"]), []).append(Row)
+    Expected = {(Slot, *Root) for Root, Marker in Roots.items()
+                for Slot in Marker["RecipientSlots"]}
+    Require(len(Expected) == 64 and all(0 <= Slot < ExpectedClients for Slot, _, _ in Expected),
+            "farm root recipient mapping is incomplete")
+    Missing = []
+    Violations = []
+    Ambiguous = []
+    for Key in sorted(Expected):
+        Instances = Index.get(Key, [])
+        if len(Instances) != 1:
+            Missing.append({"ClientSlot": Key[0], "ObjectSlot": Key[1],
+                            "ObjectGeneration": Key[2], "Lifetimes": len(Instances)})
+            continue
+        for Phase in Instances[0]["Phases"]:
+            if (Phase["States"] < 2 or Phase["WithinPairs"] == 0 or
+                    Phase["EntryPairs"] == 0 or
+                    (Phase["Phase"] != PHASE_NAMES[-1] and Phase["ExitPairs"] == 0)):
+                Missing.append({"ClientSlot": Key[0], "ObjectSlot": Key[1],
+                                "ObjectGeneration": Key[2], "Phase": Phase["Phase"],
+                                "Reason": "insufficient phase or boundary observations"})
+            if (Phase["DefiniteBoundaryTickFailures"] > 0 or
+                    (Phase["MaximumWithinHandledGapNs"] is not None and
+                     (Phase["MaximumWithinHandledGapNs"] > MAX_CHARACTER_GAP_NS or
+                      Phase["MaximumWithinTickDelta"] > MAX_CHARACTER_GAP_TICKS))):
+                Violations.append({"ClientSlot": Key[0], "ObjectSlot": Key[1],
+                                   "ObjectGeneration": Key[2], "Phase": Phase["Phase"],
+                                   "MaximumWithinHandledGapNs": Phase["MaximumWithinHandledGapNs"],
+                                   "MaximumWithinTickDelta": Phase["MaximumWithinTickDelta"],
+                                   "DefiniteBoundaryTickFailures": Phase["DefiniteBoundaryTickFailures"]})
+            if Phase["BoundaryUnresolved"]:
+                Ambiguous.append({"ClientSlot": Key[0], "ObjectSlot": Key[1],
+                                  "ObjectGeneration": Key[2], "Phase": Phase["Phase"],
+                                  "UnresolvedBoundaryPairs": Phase["BoundaryUnresolved"]})
+    Result["ExpectedRootRelationships"] = 64
+    Result["MissingRootRelationships"] = Missing
+    Result["RawGapDiagnosticViolations"] = Violations
+    Result["AmbiguousBoundaryGaps"] = Ambiguous
+    Result["RootCoverage"] = "OBSERVED" if not Missing else "INCOMPLETE"
+    Result["RawGapDiagnosticVerdict"] = ("FAIL" if Violations else "NOT_MEASURED" if Missing or Ambiguous
+                                  else "PASS")
+    Result["MissingRootMarker"] = None
+    return Result
+
+
+def DueServiceCoverage(Database, Windows, Roots, ReadyBySlot, Server):
+    """Canonical due accounting, independent of diagnostic raw observation gaps.
+
+    RecipientServiceWorkload3L.md Measurement contract and
+    PhysicalFundingGateReview3L.md ordered gate 5 retain causal due service.
+    ReadServer/ReadClients already require exact due/accepted/handled conservation.
+    """
+    Result = {"Verdict": "NOT_MEASURED", "PhaseRelationships": [],
+              "SchedulerRejections": Server["DirectRejected"],
+              "CrossHostLatency": "NOT_MEASURED"}
+    if Windows is None or Roots is None:
+        return Result
+    Missing = []
+    for Root, Marker in sorted(Roots.items()):
+        for Slot in Marker["RecipientSlots"]:
+            Connection = ReadyBySlot[Slot][0]
+            for Window in Windows:
+                Counts = Database.execute("""SELECT count(*),
+                    sum(CASE WHEN Resolution IS NULL THEN 1 ELSE 0 END)
+                    FROM DueWork WHERE CS=? AND CG=? AND OS=? AND OG=?
+                    AND Due>=? AND Due<=?""",
+                    (*Connection, *Root, Window["StartTick"], Window["EndTick"])).fetchone()
+                Row = {"ClientSlot": Slot, "ObjectSlot": Root[0], "ObjectGeneration": Root[1],
+                       "Phase": Window["Phase"], "ConfirmedDue": Counts[0],
+                       "UnresolvedDue": Counts[1] or 0}
+                Result["PhaseRelationships"].append(Row)
+                if Counts[0] == 0:
+                    Missing.append(Row)
+    Require(len(Result["PhaseRelationships"]) == 320, "due-service root/phase mapping incomplete")
+    Failed = Server["DirectRejected"] or any(Row["UnresolvedDue"] for Row in Result["PhaseRelationships"])
+    Result.update({"Verdict": "FAIL" if Failed else "NOT_MEASURED" if Missing else "PASS",
+                   "MissingPhaseRelationships": Missing,
+                   "DueConservation": "OBSERVED", "AcceptedHandledConservation": "OBSERVED"})
+    return Result
+
+
 def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
          ExpectedClients=32):
     """Require complete trace conservation; return only role-local durations."""
@@ -403,6 +814,14 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
     Require(shutil.disk_usage(ScratchParent).free >= MAX_DATABASE_BYTES,
             "scratch volume has less than the bounded 4 GiB database cap free")
     ReadyBySlot = ReadyMappings(ServerReadyPath, ClientSources, RunId, ExpectedClients)
+    from farm_ordinary_demand import Analyze as AnalyzeOrdinaryDemand
+    Windows = PhaseWindows(ServerReadyPath, RunId)
+    Roots = RootMarkers(ServerReadyPath, RunId, ExpectedClients, ReadyBySlot)
+    Require(Roots is None or Windows is not None,
+            "farm roots lack measured phase windows")
+    Require(Roots is None or all(Marker["SetupTick"] < Windows[0]["StartTick"]
+                                 for Marker in Roots.values()),
+            "farm root setup does not precede measured phases")
     with tempfile.TemporaryDirectory(prefix="gargantuan-publication-join-",
                                      dir=ScratchParent) as Root:
         Root = Path(Root).resolve(strict=True)
@@ -412,6 +831,7 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
         Database = CreateDatabase(DatabasePath)
         try:
             with Database:
+                OrdinaryDemand = AnalyzeOrdinaryDemand(ServerPath, ServerReadyPath, ClientSources, ReadyBySlot, RunId, Database)
                 Server = ReadServer(Database, ServerPath, RunId,
                                     {Pair[0] for Pair in ReadyBySlot.values()})
                 Clients = ReadClients(Database, ClientSources, ReadyBySlot, RunId,
@@ -421,15 +841,20 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                         Server["ForcedAccepted"] == Clients["ForcedNativeReceive"] ==
                         Clients["ForcedClientHandled"],
                         "server/client Character conservation differs")
-                Ordinary = Duration(Database, "P.Forced=0 AND P.HandledNs IS NOT NULL",
+                Ordinary = Duration(Database, "P.Origin=0 AND P.Forced=0 AND P.HandledNs IS NOT NULL",
                                     "P.AcceptedNs-F.Ns", "JOIN Frame F ON F.Tick=P.Due")
-                Forced = Duration(Database, "P.Forced=1 AND P.HandledNs IS NOT NULL",
+                Forced = Duration(Database, "P.Origin=0 AND P.Forced=1 AND P.HandledNs IS NOT NULL",
+                                  "P.AcceptedNs-P.BuiltNs")
+                Direct = Duration(Database, "P.Origin IN (1,2) AND P.HandledNs IS NOT NULL",
                                   "P.AcceptedNs-P.BuiltNs")
                 Handled = Duration(Database, "P.HandledNs IS NOT NULL",
                                    "P.HandledNs-P.ReceiveNs")
-                Require(Ordinary["Count"] + Forced["Count"] == Server["Accepted"] and
+                Cadence = RelationshipCadence(Database, Windows, Roots, ExpectedClients)
+                DueCoverage = DueServiceCoverage(Database, Windows, Roots, ReadyBySlot, Server)
+                Require(Ordinary["Count"] + Forced["Count"] + Direct["Count"] ==
+                        Server["Accepted"] and
                         all(Value["MinimumNs"] is None or Value["MinimumNs"] >= 0
-                            for Value in (Ordinary, Forced, Handled)),
+                            for Value in (Ordinary, Forced, Direct, Handled)),
                         "role-local publication timing is incomplete or negative")
                 Pages = Database.execute("PRAGMA page_count").fetchone()[0]
                 Require(Pages <= MAX_DATABASE_PAGES, "offline join scratch bound exceeded")
@@ -439,11 +864,15 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                 return {"Format": "GargantuanFarmPublicationJoin", "Version": 1,
                         "RunId": RunId, "Status": "ACCEPTED_STATE_CHAIN_OBSERVED",
                         "Clients": ExpectedClients, "Server": Server, "Client": Clients,
-                        "DueCompleteness": "NOT_MEASURED",
+                        "DueCompleteness": "OBSERVED",
                         "ServerDueToAccepted": Ordinary,
                         "ServerForcedBuiltToAccepted": Forced,
+                        "ServerDirectBuiltToAccepted": Direct,
                         "ClientReceiveToHandled": Handled,
-                        "Retirement": "NOT_MEASURED",
+                        "RecipientCharacterCadence": Cadence,
+                        "CharacterDueService": DueCoverage,
+                        "OrdinaryDemand": OrdinaryDemand,
+                        "Retirement": "OBSERVED" if Server["Retired"] else "NONE_OBSERVED",
                         "CrossHostDueToHandled": "NOT_MEASURED",
                         "ScratchPeakDatabaseBytes": DatabaseBytes,
                         "ScratchMaximumDatabaseBytes": MAX_DATABASE_BYTES,

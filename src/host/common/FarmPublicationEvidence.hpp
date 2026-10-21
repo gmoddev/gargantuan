@@ -2,6 +2,9 @@
 
 #include "../../runtime/PublicationLatencyDiagnostics.hpp"
 #include "gargantuan/network/CharacterProtocol.hpp"
+#include "gargantuan/network/RemoteProtocol.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
+#include "gargantuan/network/BinaryCodec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +14,7 @@
 #include <filesystem>
 #include <limits>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -19,6 +23,16 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+// Keep the Win32 alias from rewriting Gargantuan's filesystem method names
+// in translation units that include this diagnostic before DiskFilesystem.
+#undef CreateDirectory
 #include <fcntl.h>
 #include <io.h>
 #include <share.h>
@@ -38,6 +52,12 @@ public:
 		FrameBegin = 1, CharacterNextDue, CharacterDue, StateBuilt,
 		CharacterSnapshot, CharacterProduced, CharacterUnchanged,
 		SchedulerAccepted, ClientNativeReceive, ClientHandled,
+		RecipientRetired, CharacterDirectOffered, CharacterDirectRejected,
+		RpcRequestStarted, RpcRequestSchedulerAccepted, RpcRequestGnsAccepted,
+		RpcRequestReceived, RpcHandler, RpcResponseProduced,
+		RpcResponseSchedulerAccepted, RpcResponseGnsAccepted,
+		RpcResponseReceived, RpcCompletion,
+		OrdinaryReliableSent, OrdinaryReliableRejected, TrafficPhase, OrdinaryReliableQueued,
 	};
 	struct Record {
 		std::uint64_t Nanoseconds = 0;
@@ -69,8 +89,10 @@ private:
 	bool Server;
 	bool Dumped = false, Overflow = false, WriteFailed = false;
 	std::uint64_t DecodeFailures = 0, FileBytes = 0;
+	std::uint64_t TrafficPhase = 0;
+	std::uint64_t OrdinarySequence = 0;
 	std::vector<Record> Records;
-	runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet};
+	runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet, QueueOrdinary};
 	runtime_detail::PublicationLatencySink *Previous = nullptr;
 
 	static bool Selected(void *Context, network::ConnectionId Connection) noexcept {
@@ -88,30 +110,119 @@ private:
 		if (Value == "SchedulerAccepted") return Stage::SchedulerAccepted;
 		if (Value == "ClientNativeReceive") return Stage::ClientNativeReceive;
 		if (Value == "ClientHandled") return Stage::ClientHandled;
+		if (Value == "RecipientRetired") return Stage::RecipientRetired;
+		if (Value == "CharacterDirectOffered") return Stage::CharacterDirectOffered;
+		if (Value == "CharacterDirectRejected") return Stage::CharacterDirectRejected;
+		if (Value == "RpcRequestStarted") return Stage::RpcRequestStarted;
+		if (Value == "RpcRequestSchedulerAccepted") return Stage::RpcRequestSchedulerAccepted;
+		if (Value == "RpcRequestReceived") return Stage::RpcRequestReceived;
+		if (Value == "RpcHandler") return Stage::RpcHandler;
+		if (Value == "RpcResponseProduced") return Stage::RpcResponseProduced;
+		if (Value == "RpcResponseSchedulerAccepted") return Stage::RpcResponseSchedulerAccepted;
+		if (Value == "RpcResponseReceived") return Stage::RpcResponseReceived;
+		if (Value == "RpcCompletion") return Stage::RpcCompletion;
+		if (Value == "OrdinaryReliableSent") return Stage::OrdinaryReliableSent;
+		if (Value == "OrdinaryReliableRejected") return Stage::OrdinaryReliableRejected;
+		if (Value == "OrdinaryReliableQueued") return Stage::OrdinaryReliableQueued;
+		if (Value == "TrafficPhaseStart" || Value == "TrafficPhaseEnd") return Stage::TrafficPhase;
 		return std::nullopt;
+	}
+	static std::uint64_t TrafficClockNow() noexcept {
+#if defined(_WIN32)
+		LARGE_INTEGER Counter{};
+		return QueryPerformanceCounter(&Counter) && Counter.QuadPart > 0
+			? static_cast<std::uint64_t>(Counter.QuadPart) : 0;
+#else
+		return 0; // The physical farm's shared-host domain is explicitly Windows QPC.
+#endif
 	}
 	void Add(Record Value) noexcept {
 		if (Records.size() >= Limit) { Overflow = true; return; }
 		try { Records.push_back(Value); } catch (...) { Overflow = true; }
 	}
+	static runtime_detail::OrdinaryDemandTag QueueOrdinary(void *Context, network::ConnectionId Connection,
+		std::span<const std::byte> Payload) noexcept {
+		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
+		// Origin metadata follows the existing bounded scheduler message.
+		if (Self.OrdinarySequence >= Self.Limit || Payload.size() > std::numeric_limits<std::uint32_t>::max() - network::ReliableServiceEnvelopeBytes) {
+			Self.Overflow = true; return {};
+		}
+		const runtime_detail::OrdinaryDemandTag Tag{++Self.OrdinarySequence, Self.TrafficPhase};
+		const bool Character = Payload.size() >= 7 && std::memcmp(Payload.data(), "GCHR", 4) == 0;
+		const bool Remote = Payload.size() >= 7 && std::memcmp(Payload.data(), "GRMT", 4) == 0;
+		runtime_detail::RecordPublicationLatency({.Stage="OrdinaryReliableQueued", .Connection=Connection,
+			.Sequence=Tag.Sequence, .Epoch=Tag.Phase, .Kind=Character ? 2u : Remote ? 1u : 0u,
+			.Bytes=static_cast<std::uint32_t>(Payload.size() + network::ReliableServiceEnvelopeBytes),
+			.Operations=Character && std::to_integer<unsigned>(Payload[6]) == 5 ? 1u : 0u});
+		return Tag;
+	}
 	static void Append(void *Context, runtime_detail::PublicationLatencyRecord Value) noexcept {
 		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
 		const auto Kind = StageOf(Value.Stage);
 		if (!Kind || (Self.Server && (*Kind == Stage::ClientNativeReceive || *Kind == Stage::ClientHandled)) ||
-			(!Self.Server && *Kind != Stage::ClientHandled)) return;
+			(!Self.Server && *Kind != Stage::ClientHandled && *Kind < Stage::RpcRequestStarted)) return;
+		if (*Kind >= Stage::OrdinaryReliableSent) {
+			const auto Counter = TrafficClockNow();
+			if (!Counter) { ++Self.DecodeFailures; return; }
+			if (*Kind == Stage::TrafficPhase) Self.TrafficPhase = Value.Operations ? Value.Sequence : 0;
+			Self.Add(Record{.Nanoseconds = Value.Nanoseconds, .Sequence = Value.Sequence,
+				.DueTick = Value.Kind, .ControlEpoch = Value.Epoch, .FrameSequence = Counter,
+				.ConnectionSlot = Value.Connection.Slot, .ConnectionGeneration = Value.Connection.Generation,
+				.Bytes = Value.Bytes, .Kind = *Kind,
+				.Flags = static_cast<std::uint16_t>(Value.Operations)});
+			return;
+		}
 		Self.Add(Record{
 			.Nanoseconds = Value.Nanoseconds, .Tick = Value.Tick,
 			.Sequence = Value.Sequence, .DueTick = Value.Due,
 			.ControlEpoch = *Kind == Stage::StateBuilt ? Value.Epoch : 0,
-			.MaterializationEpoch = *Kind == Stage::CharacterProduced ? Value.Epoch : 0,
+			.MaterializationEpoch = *Kind == Stage::CharacterProduced ||
+				*Kind == Stage::CharacterDirectOffered || *Kind == Stage::CharacterDirectRejected
+				? Value.Epoch : 0,
 			.ConnectionSlot = Value.Connection.Slot, .ConnectionGeneration = Value.Connection.Generation,
 			.ObjectSlot = Value.Object.Slot, .ObjectGeneration = Value.Object.Generation,
+			.Bytes = *Kind >= Stage::RpcRequestStarted ? Value.Bytes : 0,
 			.Kind = *Kind, .Flags = static_cast<std::uint16_t>(Value.Operations & 1u),
 		});
 	}
 	static void Packet(void *Context, const char *Name, network::ConnectionId Connection,
 		std::span<const std::byte> Payload, std::uint64_t Nanoseconds) noexcept {
 		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
+		if (std::string_view(Name) == "Handoff" && Payload.size() >= 32 &&
+			std::memcmp(Payload.data(), "GRMT", 4) == 0) {
+			// The fixed header is sufficient for request identity. Do not decode
+			// 16-KiB Event payloads or copy arguments on the measured send path.
+			const auto MessageKind = std::to_integer<std::uint8_t>(Payload[6]);
+			if (MessageKind != static_cast<std::uint8_t>(network::RemoteMessageKind::Request) &&
+				MessageKind != static_cast<std::uint8_t>(network::RemoteMessageKind::Response) &&
+				MessageKind != static_cast<std::uint8_t>(network::RemoteMessageKind::RequestError)) return;
+			try {
+				network::GameBinaryReader Input(Payload, "Remote diagnostic header");
+				std::uint32_t Magic = 0;
+				std::uint16_t Version = 0;
+				std::uint8_t Kind = 0, Reserved = 0;
+				ObjectId Remote;
+				std::uint64_t Publication = 0, Request = 0;
+				if (!Input.Integer(Magic) || !Input.Integer(Version) || !Input.Integer(Kind) ||
+					!Input.Integer(Reserved) || !network::ReadBinaryObjectId(Input, Remote) ||
+					!Input.Integer(Publication) || !Input.Integer(Request)) {
+					++Self.DecodeFailures;
+					return;
+				}
+				if (Version != network::RemoteProtocolVersion || Reserved != 0 ||
+					Publication == 0 || Request == 0) {
+					++Self.DecodeFailures;
+					return;
+				}
+				Self.Add(Record{.Nanoseconds = Nanoseconds, .Sequence = Request,
+					.ConnectionSlot = Connection.Slot, .ConnectionGeneration = Connection.Generation,
+					.ObjectSlot = Remote.Slot, .ObjectGeneration = Remote.Generation,
+					.Bytes = static_cast<std::uint32_t>(Payload.size()),
+					.Kind = Kind == static_cast<std::uint8_t>(network::RemoteMessageKind::Request)
+						? Stage::RpcRequestGnsAccepted : Stage::RpcResponseGnsAccepted});
+			} catch (...) { ++Self.DecodeFailures; }
+			return;
+		}
 		const auto Kind = StageOf(Name);
 		if (!Kind || (Self.Server && *Kind != Stage::SchedulerAccepted) ||
 			(!Self.Server && *Kind != Stage::ClientNativeReceive && *Kind != Stage::ClientHandled) ||
@@ -197,6 +308,31 @@ public:
 	FarmPublicationEvidence &operator=(const FarmPublicationEvidence &) = delete;
 	void MarkFrameBegin(std::uint64_t Tick) const noexcept {
 		if (Server) runtime_detail::RecordPublicationLatency({.Stage = "FrameBegin", .Tick = Tick});
+	}
+	void SetTrafficPhase(std::string_view Name, bool DeliberateOverload = false) noexcept {
+		constexpr std::array<std::string_view, 5> Names{"baseline", "load", "resident", "evict", "reload"};
+		std::uint64_t Next = 0;
+		for (std::size_t I = 0; !DeliberateOverload && I < Names.size(); ++I) if (Name == Names[I]) Next = I + 1;
+		if (Next == TrafficPhase) return;
+		if (TrafficPhase) runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseEnd",
+			.Connection=ClientConnection, .Sequence=TrafficPhase});
+		TrafficPhase = Next;
+		if (Next) runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseStart",
+			.Connection=ClientConnection, .Sequence=Next, .Operations=1});
+	}
+	void WriteTrafficClock(std::ostream &Out) const {
+		std::string Host = "unknown";
+		std::uint64_t Frequency = 0;
+#if defined(_WIN32)
+		char Buffer[MAX_COMPUTERNAME_LENGTH + 1]{}; DWORD Length = sizeof(Buffer);
+		LARGE_INTEGER Value{};
+		if (GetComputerNameA(Buffer, &Length) && QueryPerformanceFrequency(&Value) && Value.QuadPart > 0) {
+			Host.assign(Buffer, Length); Frequency = static_cast<std::uint64_t>(Value.QuadPart);
+		}
+#endif
+		Out << "[Qualification:TrafficClock] contract=sender_qpc_v1 run=" << RunId
+			<< " role=" << (Server ? "SERVER" : "CLIENT") << " slot=" << Slot << " nonce=" << Nonce
+			<< " host=" << Host << " frequency=" << Frequency << '\n';
 	}
 	void Dump() noexcept {
 		if (Dumped) return;

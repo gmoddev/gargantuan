@@ -53,7 +53,8 @@ namespace gargantuan {
 		if (stream.NextSequence == std::numeric_limits<std::uint64_t>::max())
 			throw std::overflow_error("Change journal sequence is exhausted");
 		const auto sequence = stream.NextSequence;
-		stream.Records.push_back({sequence, scope, object, std::move(payload)});
+		stream.Records.push_back(std::make_shared<const ChangeRecord>(
+			ChangeRecord{sequence, scope, object, std::move(payload)}));
 		++stream.NextSequence;
 		while (stream.Records.size() > Capacity) {
 			stream.Records.pop_front();
@@ -92,7 +93,8 @@ namespace gargantuan {
 		for (auto &[object, payload] : changes) {
 			if (nextSequence == std::numeric_limits<std::uint64_t>::max())
 				throw std::overflow_error("Change journal sequence is exhausted");
-			Replacement.push_back({nextSequence, scope, object, std::move(payload)});
+			Replacement.push_back(std::make_shared<const ChangeRecord>(
+				ChangeRecord{nextSequence, scope, object, std::move(payload)}));
 			++nextSequence;
 		}
 		std::uint64_t Evicted = 0;
@@ -125,7 +127,7 @@ namespace gargantuan {
 		const auto found = Streams.find({});
 		if (found == Streams.end()) return result;
 		for (const auto &record : found->second.Records) {
-			if (record.Sequence > sequence) result.push_back(record);
+			if (record->Sequence > sequence) result.push_back(*record);
 		}
 		return result;
 	}
@@ -141,17 +143,25 @@ namespace gargantuan {
 		const auto Found = Streams.find(Scope);
 		if (Found == Streams.end()) return {1, 1, 0, Capacity};
 		const auto &Stream = Found->second;
-		return {Stream.Records.empty() ? Stream.NextSequence : Stream.Records.front().Sequence,
+		return {Stream.Records.empty() ? Stream.NextSequence : Stream.Records.front()->Sequence,
 			Stream.NextSequence, Stream.Records.size(), Capacity};
 	}
 
 	ChangeReadResult ChangeJournal::Read(ChangeCursor Cursor, std::size_t MaximumRecords) const {
+		auto Pinned = ReadPinned(Cursor, MaximumRecords);
+		ChangeReadResult Result{.Status = Pinned.Status, .Cursor = Pinned.Cursor};
+		Result.Records.reserve(Pinned.Records.size());
+		for (const auto &Record : Pinned.Records) Result.Records.push_back(*Record);
+		return Result;
+	}
+
+	PinnedChangeReadResult ChangeJournal::ReadPinned(ChangeCursor Cursor, std::size_t MaximumRecords) const {
 		std::scoped_lock Lock(Mutex);
-		ChangeReadResult Result{.Cursor = Cursor};
+		PinnedChangeReadResult Result{.Cursor = Cursor};
 		auto Found = Streams.find(Cursor.Scope);
 		if (Found == Streams.end()) return Result;
 		const auto &Stream = Found->second;
-		const auto Oldest = Stream.Records.empty() ? Stream.NextSequence : Stream.Records.front().Sequence;
+		const auto Oldest = Stream.Records.empty() ? Stream.NextSequence : Stream.Records.front()->Sequence;
 		if (Cursor.NextSequence < Oldest) {
 			Result.Status = ChangeReadStatus::ResnapshotRequired;
 			Result.Cursor.NextSequence = Oldest;
@@ -169,7 +179,7 @@ namespace gargantuan {
 		for (std::size_t Index = 0; Index < Count; ++Index) {
 			const auto &Record = Stream.Records[First + Index];
 			Result.Records.push_back(Record);
-			Result.Cursor.NextSequence = Record.Sequence + 1;
+			Result.Cursor.NextSequence = Record->Sequence + 1;
 		}
 		return Result;
 	}

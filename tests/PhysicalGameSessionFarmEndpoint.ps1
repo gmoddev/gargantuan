@@ -63,11 +63,34 @@ function Get-TypedFields {
 	return $Fields
 }
 
+function Read-SharedLogLines {
+	param([Parameter(Mandatory = $true)][string]$Path)
+	$Stream = [IO.File]::Open($Path, [IO.FileMode]::Open,
+		[IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+	try {
+		if ($Stream.Length -gt 16777216) { throw 'live farm log exceeds the hard read bound' }
+		$Length = [int]$Stream.Length
+		if ($Length -eq 0) { return @() }
+		$Bytes = [byte[]]::new($Length)
+		$Offset = 0
+		while ($Offset -lt $Length) {
+			$Count = $Stream.Read($Bytes, $Offset, $Length - $Offset)
+			if ($Count -le 0) { throw 'live farm log changed during bounded read' }
+			$Offset += $Count
+		}
+		$Content = [Text.UTF8Encoding]::new($false, $true).GetString($Bytes)
+		$LastNewline = $Content.LastIndexOf("`n", [StringComparison]::Ordinal)
+		if ($LastNewline -lt 0) { return @() }
+		return @($Content.Substring(0, $LastNewline + 1) -split '\r?\n' |
+			Where-Object Length -gt 0)
+	} finally { $Stream.Dispose() }
+}
+
 function Get-TypedRecords {
 	param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Kind)
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
 	$Prefix = "[Qualification:$Kind] "
-	return @([IO.File]::ReadAllLines($Path) | Where-Object {
+	return @(Read-SharedLogLines -Path $Path | Where-Object {
 		$_.StartsWith($Prefix, [StringComparison]::Ordinal)
 	} | ForEach-Object { Get-TypedFields -Line $_ })
 }
@@ -459,7 +482,8 @@ function Assert-FairnessEvidence {
 	$Stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
 	$Reader = [IO.StreamReader]::new($Stream, [Text.UTF8Encoding]::new($false, $true))
 	try {
-		if ($Reader.ReadLine() -cne "format=GargantuanAdmissionEvidenceV1`trun=$LocalRunId") {
+		if ($Reader.ReadLine() -cnotin @("format=GargantuanAdmissionEvidenceV1`trun=$LocalRunId",
+			"format=GargantuanAdmissionEvidenceV2`trun=$LocalRunId")) {
 			throw 'native fairness evidence run/header mismatch'
 		}
 		$Count = 0
@@ -476,7 +500,8 @@ function Assert-FairnessEvidence {
 			}
 			if ($Ended -or $Fields.Count -ne 19 -or $Fields[0] -cne 'event' -or
 				$Fields[1] -cnotin @('exact_demand', 'credit_eligible', 'eligibility_interrupted',
-					'grant_accepted', 'reservation_rolled_back', 'demand_disposed') -or
+					'grant_accepted', 'reservation_rolled_back', 'demand_disposed',
+					'grant_retired', 'grant_released', 'grant_terminal_released') -or
 				$Fields[2] -cnotin @('none', 'no_work', 'unexamined', 'replaced', 'rollback',
 					'generation_removed', 'terminal_release', 'feedback_unavailable') -or $Count -ge 65536) {
 				throw 'native fairness evidence event schema/count is invalid'
@@ -489,7 +514,8 @@ function Assert-FairnessEvidence {
 				$Numbers[7] -gt $Numbers[6] -or $Numbers[8] -gt $Numbers[6] -or
 				($Fields[1] -cin @('credit_eligible', 'eligibility_interrupted', 'grant_accepted') -and
 					$Numbers[3] -eq 0) -or
-				($Fields[1] -cin @('grant_accepted', 'reservation_rolled_back') -and $Numbers[4] -eq 0)) {
+				($Fields[1] -cin @('grant_accepted', 'reservation_rolled_back',
+					'grant_retired', 'grant_released', 'grant_terminal_released') -and $Numbers[4] -eq 0)) {
 				throw 'native fairness evidence identity, size, or timestamp is invalid'
 			}
 			$Count++

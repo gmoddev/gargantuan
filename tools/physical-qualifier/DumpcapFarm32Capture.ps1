@@ -10,9 +10,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $CaptureSeconds = 600
-$AutostopKilobytes = 1048576
-$CompletenessBytes = 960MB
-$ReservedBytes = 2560MB
+$CaptureProfile = 'Farm32Capture16GiB-v2'
+$AutostopKilobytes = 16777216
+$CompletenessBytes = 15GB
+$ReservedBytes = 18GB
+# Requested Npcap buffer, not a measurement of the driver's allocation. The
+# pinned dumpcap passes -B in MiB to pcap_set_buffer_size before activation.
+# Actual zero-loss capacity must still pass the independently checked counters.
+$RequestedBufferMiB = 64
 $RunGuid = [guid]::Empty
 if (-not [guid]::TryParse($RunId, [ref]$RunGuid) -or $RunGuid.ToString('D') -cne $RunId) {
     throw 'Farm32 run ID must be a canonical UUID.'
@@ -46,7 +51,7 @@ foreach ($Artifact in @($Pcap, $Marker, $Output, $ErrorFile)) {
 }
 $Drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($EvidenceDir))
 if (-not $Drive.IsReady -or $Drive.AvailableFreeSpace -lt $ReservedBytes) {
-    throw 'Farm32 client evidence volume lacks the fixed 2.5 GiB capture reserve.'
+    throw 'Farm32 client evidence volume lacks the fixed 18 GiB capture reserve.'
 }
 $Executable = [IO.Path]::GetFullPath($DumpcapPath)
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf) -or
@@ -67,12 +72,14 @@ $Device = '\Device\NPF_' + ([guid]$Adapter.InterfaceGuid).ToString('B')
 $MarkerValue = [ordered]@{
     Format = 'GargantuanFarm32Dumpcap'
     Version = 1
+    Profile = $CaptureProfile
     RunId = $RunId
     Device = $Device
     Filter = 'udp port 39450 and host 10.253.3.2'
     DurationSeconds = $CaptureSeconds
     AutostopKilobytes = $AutostopKilobytes
     CompletenessBytes = $CompletenessBytes
+    RequestedBufferMiB = $RequestedBufferMiB
     DumpcapSha256 = $DumpcapSha256.ToLowerInvariant()
     Pcap = $Pcap
 }
@@ -86,7 +93,7 @@ $Start.UseShellExecute = $false
 $Start.CreateNoWindow = $true
 $Start.RedirectStandardOutput = $true
 $Start.RedirectStandardError = $true
-foreach ($Argument in @('-i', $Device, '-f', $MarkerValue.Filter,
+foreach ($Argument in @('-i', $Device, '-B', "$RequestedBufferMiB", '-f', $MarkerValue.Filter,
     '-a', "duration:$CaptureSeconds", '-a', "filesize:$AutostopKilobytes",
     '-w', $Pcap, '-q')) { [void]$Start.ArgumentList.Add($Argument) }
 $Child = [Diagnostics.Process]::Start($Start)

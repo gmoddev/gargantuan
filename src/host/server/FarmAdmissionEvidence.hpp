@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <sstream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -87,6 +88,9 @@ namespace gargantuan::host::detail {
 			case K::CreditEligible: return "credit_eligible";
 			case K::EligibilityInterrupted: return "eligibility_interrupted";
 			case K::GrantAccepted: return "grant_accepted";
+			case K::GrantRetired: return "grant_retired";
+			case K::GrantReleased: return "grant_released";
+			case K::GrantTerminalReleased: return "grant_terminal_released";
 			case K::ReservationRolledBack: return "reservation_rolled_back";
 			case K::DemandDisposed: return "demand_disposed";
 			}
@@ -125,6 +129,16 @@ namespace gargantuan::host::detail {
 			return Line.str();
 		}
 	  public:
+		// Recovery records share the run-local exclusive writer and hard file
+		// bound, but never the admission event schema or its conservation totals.
+		template<class WriteRecords>
+		void WriteRecovery(std::string_view Case, WriteRecords &&Write) const {
+			if (Case != "gameplay" && Case != "structural" && Case != "mixed")
+				throw std::invalid_argument("unknown recovery evidence case");
+			ExclusiveWriter Output(Path.parent_path() / ("recovery-" + std::string(Case) + ".tsv"));
+			Write(Output);
+			Output.Flush();
+		}
 		explicit FarmAdmissionEvidence(std::string Value, std::filesystem::path EvidencePath)
 			: RunId(std::move(Value)), Path(std::move(EvidencePath)) {
 			if (!Path.is_absolute() || Path.filename() != "admission-fairness.tsv" ||
@@ -144,7 +158,7 @@ namespace gargantuan::host::detail {
 			network::detail::ActiveAdmissionEvidence = Previous;
 			try {
 				ExclusiveWriter Output(Path);
-				Output.Write("format=GargantuanAdmissionEvidenceV1\trun=" + RunId + "\n");
+				Output.Write("format=GargantuanAdmissionEvidenceV2\trun=" + RunId + "\n");
 				for (const auto &Event : Events) Output.Write(Format(Event));
 				Output.Write("end\t" + std::to_string(Events.size()) + "\t" +
 					(Overflow ? std::string("1\n") : std::string("0\n")));
@@ -153,6 +167,13 @@ namespace gargantuan::host::detail {
 			} catch (...) { WriteFailed = true; }
 		}
 		[[nodiscard]] bool Valid() const { return Dumped && !Overflow && !WriteFailed; }
+		// Main-owned qualification audit reads a stable slice immediately after
+		// each session step. The returned view must not survive another append.
+		[[nodiscard]] std::span<const network::detail::AdmissionEvidenceEvent> EventsSince(
+			std::size_t Index) const {
+			if (Index > Events.size()) return {};
+			return std::span(Events).subspan(Index);
+		}
 		[[nodiscard]] bool Overflowed() const { return Overflow; }
 		[[nodiscard]] bool Failed() const { return WriteFailed; }
 		[[nodiscard]] std::uint64_t Count() const { return Events.size(); }

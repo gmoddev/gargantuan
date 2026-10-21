@@ -60,6 +60,79 @@ class QualificationTests(unittest.TestCase):
         self.Thread = None
         self.Links = []
 
+    def test_phase1_raw_evidence_is_collected_before_manifest_sealing(self):
+        Work = self.Root / "probe-work"
+        Work.mkdir()
+        Names = ("physical-gns-server.csv", "physical-gns-server-admissions.csv")
+        for Name in Names:
+            (Work / Name).write_text("header\nraw evidence\n")
+        Log = Q.Journal(self.Root / "sealed-evidence")
+        Run = Q.LocalRun({"Role": "SERVER", "QualificationMode": "PHASE1", "WorkDir": str(Work)}, Log)
+        Run.StartedUnixNs = 0
+        self.assertEqual([], Run.Cleanup())
+        self.assertEqual([], Run.Cleanup())
+        Log.Close({"Success": True})
+        Entries = {Row["Path"]: Row for Row in json.loads((Log.Directory / "evidence-manifest.json").read_text())["Files"]}
+        for Name in Names:
+            self.assertEqual(Q.Digest(Work / Name), Entries[Name]["SHA256"])
+            self.assertEqual((Work / Name).read_bytes(), (Log.Directory / Name).read_bytes())
+        Events = [json.loads(Line) for Line in (Log.Directory / "control.jsonl").read_text().splitlines()]
+        self.assertEqual(2, len([E for E in Events if E["Event"] == "RAW_EVIDENCE"]))
+
+    def test_phase1_raw_evidence_requires_all_four_client_csvs(self):
+        Work = self.Root / "client-work"
+        Work.mkdir()
+        Log = Q.Journal(self.Root / "client-raw")
+        Run = Q.LocalRun({"Role": "CLIENT", "QualificationMode": "PHASE1", "WorkDir": str(Work)}, Log)
+        Run.StartedUnixNs = 0
+        Run.ClientNonces = [11, 12, 13, 14]
+        for Nonce in Run.ClientNonces:
+            (Work / f"physical-gns-client-{Nonce}.csv").write_text("kind,sequence,rtt_ms\n")
+        Run.CollectPhase1Evidence()
+        Log.Close({"Success": True})
+        self.assertEqual(4, len(list(Log.Directory.glob("physical-gns-client-*.csv"))))
+        MissingLog = Q.Journal(self.Root / "missing-client-raw")
+        Missing = Q.LocalRun(Run.Config, MissingLog)
+        Missing.StartedUnixNs = 0
+        Missing.ClientNonces = [11, 12, 13, 15]
+        self.assertTrue(any("missing/redirected" in Error for Error in Missing.Cleanup()))
+        MissingLog.Close({"Success": False})
+
+    def test_phase1_raw_evidence_rejects_stale_and_oversized_files(self):
+        Work = self.Root / "bounded-work"
+        Work.mkdir()
+        Source = Work / "physical-gns-server.csv"
+        Source.write_text("retained earlier run\n")
+        Log = Q.Journal(self.Root / "bounded-raw")
+        Run = Q.LocalRun({"Role": "SERVER", "QualificationMode": "PHASE1", "WorkDir": str(Work)}, Log)
+        Run.StartedUnixNs = Source.stat().st_mtime_ns + 1
+        with self.assertRaisesRegex(ValueError, "stale/oversized"):
+            Run.CollectPhase1Evidence()
+        Run.StartedUnixNs = 0
+        with Source.open("wb") as Stream:
+            Stream.truncate(64 * 1024 * 1024 + 1)
+        with self.assertRaisesRegex(ValueError, "stale/oversized"):
+            Run.CollectPhase1Evidence()
+        self.assertFalse((Log.Directory / Source.name).exists())
+        Log.Close({"Success": False})
+
+    def test_phase1_raw_evidence_rejects_copy_race(self):
+        Work = self.Root / "racy-work"
+        Work.mkdir()
+        Source = Work / "physical-gns-server.csv"
+        Source.write_text("before\n")
+        Log = Q.Journal(self.Root / "racy-raw")
+        Run = Q.LocalRun({"Role": "SERVER", "QualificationMode": "PHASE1", "WorkDir": str(Work)}, Log)
+        Run.StartedUnixNs = 0
+        Copy = Q.shutil.copyfile
+        def MutatingCopy(From, To):
+            Copy(From, To)
+            From.write_text("after changed bytes\n")
+        with mock.patch.object(Q.shutil, "copyfile", side_effect=MutatingCopy):
+            with self.assertRaisesRegex(ValueError, "changed during collection"):
+                Run.CollectPhase1Evidence()
+        Log.Close({"Success": False})
+
     def test_server_ready_uses_owned_udp_socket_without_nonexistent_log_marker(self):
         class Log:
             def __init__(self, Directory):
@@ -207,6 +280,7 @@ class QualificationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "probe hash"):
                 Q.ValidateConfig({**Config, "ArtifactSHA256": Q.PROBE_SHA})
         self.assertEqual("duration:70", Client["CaptureCommand"][-3])
+        self.assertEqual(["-B", "64"], Client["CaptureCommand"][3:5])
         self.assertEqual(["server", "10.253.3.2", "39450", "4"], Server["ProbeArgs"])
         self.assertEqual(["client", "10.253.3.2", "39450", "92707", "1"], Client["ProbeArgs"])
         Probe = self.Root / "gargantuan_physical_gns_funding_probe.exe"
@@ -217,6 +291,7 @@ class QualificationTests(unittest.TestCase):
                                         "GnsPin": Q.GNS_PIN, "Contract": "F1",
                                         "ProbeSHA256": Q.PHASE1_PROBE_SHA,
                                         "SourceArchive": Q.PHASE1_SOURCE_ARCHIVE,
+                                        "SourceArchiveFormat": Q.PHASE1_SOURCE_FORMAT,
                                         "NativeDependenciesSha256": Q.PHASE1_NATIVE_DEPENDENCIES,
                                         "RuntimeSha256": RuntimeHashes}))
         (self.Root / Q.PHASE1_SOURCE_ARCHIVE).write_bytes(b"test source archive")
@@ -233,8 +308,14 @@ class QualificationTests(unittest.TestCase):
                 if PathValue.name in Q.PHASE1_NATIVE_DEPENDENCIES:
                     return Q.PHASE1_NATIVE_DEPENDENCIES[PathValue.name]
                 return Q.PHASE1_PROBE_SHA
-            with mock.patch.object(Q, "Digest", side_effect=TestDigest):
+            with mock.patch.object(Q, "Digest", side_effect=TestDigest), mock.patch.object(Q, "VerifyCandidateArchive"):
                 Q.LocalRun(Client, Log).Check()
+                OriginalCapture = list(Client["CaptureCommand"])
+                for Buffer in ([], ["-B", "1"], ["-B", "64", "-B", "64"]):
+                    Client["CaptureCommand"] = OriginalCapture[:3] + Buffer + OriginalCapture[5:]
+                    with self.assertRaisesRegex(ValueError, "capture buffer"):
+                        Q.LocalRun(Client, Log).Check()
+                Client["CaptureCommand"] = OriginalCapture
                 OldManifest = json.loads(Manifest.read_text())
                 OldManifest["Contract"] = "D01"
                 Manifest.write_text(json.dumps(OldManifest))

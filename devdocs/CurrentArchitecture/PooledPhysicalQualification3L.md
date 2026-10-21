@@ -2051,3 +2051,377 @@ idle, no Packet Monitor filters remain, and the Farm32 service has no active
 capture record. The exact 960-MiB completeness threshold and a 32-client
 application capture remain **NOT MEASURED**. The Local and Node provider matrices,
 resource, overload/recovery, and final acceptance gates remain open.
+
+## 2026-10-02 — 32-actual-client loopback farm preflight
+
+An isolated worker-local preflight used the task-owned diagnostic package built
+from `2cb7379fe` and the bounded direct farm runner. The first two diagnostic
+attempts (`farm-loopback-20261002-a` and `farm-loopback-20261002-b`) exposed
+qualification-tool defects before client workload: live log reads conflicted
+with open Windows writers, then a singleton hashtable's `.Count` obscured the
+server start record until its bounded tick budget expired. Both attempts
+cleaned up. The direct and two-host endpoint runners now read only complete
+lines through bounded, shared-read snapshots; the direct runner counts startup
+records as an array. Live-writer mock regressions cover both readers.
+
+Fresh loopback run `farm-loopback-20261002-c` passed the minimal actual-client
+farm gate: 32 independent Player/GameSession processes, 32 ready clients, 32
+unique run nonces, 32 unique connections, and 32 unique Players. The typed
+result reports 5,954 resource samples and is retained with 70 files at
+`C:\Sandbox\Codex\Evidence\Farm32LoopbackPreflight\farm-loopback-20261002-c`.
+Its evidence index SHA-256 is
+`4B8C8C710C57ABA0C8072A1A9EB3D632E2CCE74BEB70167FAEF546B04B5515F8`;
+the result SHA-256 is
+`4AC4BC9CCF5500827B244E798C8492C5342C4517847C17BEBF1F47F1BF7CEFF3`.
+After the run, no task-owned Gargantuan process or UDP 39450 listener remained.
+This same-host diagnostic preflight is not a direct-fiber Local provider matrix,
+real-TLS Node matrix, capture result, resource-headroom result, or Foundation
+3L acceptance. KI-006 remains OPEN and Foundation 3L remains B — PARTIALLY READY.
+
+## 2026-10-02 — recovery cessation-quote contract conflict
+
+The worker-only 32-actual-client Local loopback diagnostic at revision
+`1a8a9b704` reached the structural recovery case. Run
+`0db602d1-5c1e-4431-b618-1dd307546818` is retained under
+`C:\Sandbox\Codex\Evidence\Farm32_1a8a9bDiagnostic` on the worker. Its
+`server.stderr.log` SHA-256 is
+`f7ab8b26dff018216f2cd9eb2c00545641a99be84bd9dc0d9b8a2de15edb2943`;
+the `admission-fairness.tsv` SHA-256 is
+`24864d864ea1004fde8a806073e47f3ca3890d991acef70ffa1af66273a4b65f`.
+This is diagnostic evidence, not a provider qualification result.
+
+The first recorded quote mismatch was connection slot 6, generation 1, grant
+token 3424: live accepted complete bytes **118**, frozen quoted complete bytes
+**344,548**, quoted sequence 119. The diagnostic printed
+`observed_fingerprint=0:0`; the quote fingerprint was
+`9916901384590782373:9383686036810715964`. The source journal tail stayed
+at 23,272 while live pending Leaves rose from zero to six before the mismatch.
+The trace does not record the 118-byte frame's decoded operation, so its exact
+opcode is **NOT MEASURED**. A deterministic regression at `da6a37dfc` proves
+that a post-capture live relevance Leave can be accepted with no journal-tail
+change while a frozen journal-only quote cannot replay it.
+
+The [recovery contract](PooledReliableServiceRecoveryContract3L.md) defines
+`W_i` from semantically necessary work at excess-demand cessation. The
+[canonical physical workload](#actual-client-and-provider-gate) requires eight
+moving/root-motion Characters through the accepted overload/recovery cases.
+The current quote freezes relevance selection and journal state at cessation,
+but normal live relevance planning continues after that point. Consequently
+the strict frame-by-frame live/quote identity audit can encounter later
+legitimate relevance work that was unknowable to the frozen quote. Stopping
+motion would change the specified workload; counting future work in cessation
+`W_i` or ignoring live frames would change the current evidence contract.
+**ARCHITECTURE DECISION REQUIRED** on how recovery under continuing motion
+defines and verifies cessation work while preserving the fixed 20-second
+service-recovery gate, exact convergence, fairness and normal relevance.
+
+The frozen quote's proven oversize-Name preflight at `da6a37dfc` is independent
+of this conflict. Its native oracle matched 40 frames on sequence, complete
+bytes, fingerprint and cursor; it reduced encoding retries from 195 to 150
+without changing live production. A later worker-only instrumentation run at
+`403592934`, ID `43af4af0-06de-49b6-917d-f0557816b9ab`, ended in the
+baseline phase when client 00 reported seven action requests and zero action
+resolutions. It did not measure recovery and is not a retry PASS.
+
+The direct-fiber Local and real-TLS Node 32-client matrices remain **NOT
+MEASURED**. KI-006 remains **OPEN**; Foundation 3L remains **B — PARTIALLY
+READY**. No Foundation 3M work or PR merge is authorized by this diagnostic.
+
+## 2026-10-02 — causal recovery implementation in progress
+
+The [causal cessation fence amendment](PooledReliableServiceRecoveryContract3L.md#causal-cessation-fence-amendment--2026-10-02)
+selects C3/C5 under the current task's engineering-decision authorization.
+The preceding architecture-stop receipt remains historical evidence. It is not
+a claim that the new verifier or either provider has passed.
+
+The frozen quote remains an immutable exact reference under cessation state.
+Actual post-cessation bytes are audited at preparation/acceptance with source
+coverage and grant identity. Recovery closes a finite represented and retired
+prefix while moving relevance continues. The existing fixed service-recovery
+deadline, workload-derived reference deadline, F1, admission and reserve gates
+remain unchanged. Provider execution requires source-observer regressions,
+causal-ledger negative tests, farm parser tests and required CI first.
+
+The separate action investigation established that all seven failed requests in
+`43af4af0-06de-49b6-917d-f0557816b9ab` were refused locally: there were seven
+submission failures and no server action rejections. The retained evidence did
+not distinguish absent control, suspended prediction or scheduler refusal.
+Revision `be2b81bc8` adds bounded failure counters so a later diagnostic can
+attribute the exact branch. It does not retroactively establish that branch.
+
+At starting revision `82ecbd871`, Native run `37000058588` failed its Windows
+standalone reliable-workload small-case timing gates (RPC maximum 1107.5 ms),
+after CTest and 165 tooling tests passed. Same-head Native run `37000054845`
+passed; both sanitizer runs passed. Neither result erases the other. The added
+per-case wall-time diagnostics preserve every timing gate. The worker's
+`be2b81bc8` character-network suite and all eight real-GNS reliable-workload
+cases pass, with small-case RPC maximum 37.0447 ms. Hosted qualification of the
+eventual execution-changing recovery candidate is still required.
+
+Worker-only diagnostic `6eea014e-3a9d-44b9-bdfa-685ba8b8d2cf` at
+`1f4ba2cfb` exercised the integrated causal observer and independent verifier.
+All five workload phases reached their 32-client acknowledgments. Gameplay
+recovery recorded 165 causal events, 32 reference frames and exactly 14,875 B
+accepted/first-sent/ACKed/retired. Independent replay of its immutable TSV agrees;
+the earliest event-proven prefix convergence was 332,871 us, before the native
+333,318 us observation and 20,471,118 us deadline. This is a diagnostic subset,
+not a provider PASS.
+
+The run failed during structural recovery: client 0 exhausted its explicitly
+configured 18,000 frames and returned `scale_incomplete` (exit 15). The resulting
+required-peer disconnect invalidated recovery after 943 reference frames.
+Structural/mixed recovery and full-run acceptance remain NOT MEASURED.
+The retained quote, causal trace and logs were not relabeled as passing.
+Cleanup verified no Gargantuan client/server process and UDP 39450 unbound.
+Evidence: worker `C:\Sandbox\Codex\Evidence\Farm32_1f4ba2Diagnostic\`
+under that run ID. No capture or two-host physical attempt was performed.
+
+The synchronous reference replay measured 72–94 ms advances during this run,
+in addition to 62–85 ms live Session steps. The bounded oracle-worker correction
+is separately described in the recovery contract; live production cost still
+needs qualification. A later diagnostic must use a client frame lifetime that
+covers its explicit run budget, without changing the recovery deadline.
+
+At diagnostic revision `be2b81bc8`, hosted Native run `37054274530` passed build,
+complete CTest and farm tooling, then failed the standalone qualified recovery
+latency case: RPC p95 203.206 ms, maximum 817.236 ms; Event maximum 781.126 ms.
+The maximum step interval was 1355.57 ms, server Session wall time 402.852 ms,
+and sleep overshoot 147.483 ms. CPU work versus preemption/blocking was NOT
+MEASURED. These observations do not waive the failure or qualify the candidate.
+Both corresponding GNS sanitizer runs passed.
+
+The subsequent worker-only `a26235496` diagnostic
+`c90df074-8d40-4215-8814-3d616cb86e1c` used the qualified joined oracle worker
+and a 36,000-frame client lifetime covering its 540-second outer budget.
+Gameplay causal recovery converged in the native observation at 332,351 us
+with 6,462 B exactly accepted/first-sent/ACKed/retired. Structural recovery
+failed its unchanged deadline: immutable reference 553,184,194 B, 1,463 quoted
+frames, bound 35,112,492 us. When the quote finished and the deadline check ran
+at 80,340,963 us, the live prefix was still unfinished (`prefix_converged_us=0`):
+537,780,315 B accepted, 537,130,549 B first-sent and 537,115,771 B ACKed/retired.
+This is a valid recovery failure, not successful late convergence or a new
+architecture constant. The missing mixed case remains NOT MEASURED.
+
+Moving reference work off Main alone did not make live replication fast enough.
+Source inspection identified repeated encoding of oversized Name candidates
+before geometric byte-limit retries; correction must preserve exact frames,
+source cursors, errors and work-budget accounting. A separate diagnostic fix
+reports inclusive validation/encode time: the earlier exclusive wrapper value
+omitted its nested serialization scope. No production decision used that counter.
+Worker cleanup again found zero client/server processes and UDP 39450 unbound.
+Evidence is retained under `C:\Sandbox\Codex\Evidence\Farm32_a2623549Diagnostic\`
+and this run ID. No provider or physical PASS is inferred.
+
+Local/real-TLS Node 32-client qualification remains NOT MEASURED; KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY. The established corrected F1 physical Phase 1
+PASS is unchanged.
+
+Worker-only diagnostic `91f08244-fbc2-4103-b7e8-46d4d92f375d` at
+`fa5b91f9c` exercised the narrow Name preflight under the same continuing-motion
+workload after exact native A/B tests passed. Gameplay recovery converged at
+315,005 us with 15,674 B accepted/first-sent/ACKed/retired. Structural recovery
+still failed: the immutable reference was 481,343,350 B in 1,289 frames, with
+bound 36,461,766 us. At 60,943,667 us the prefix remained unfinished:
+473,394,819 B accepted and 473,001,167 B first-sent/ACKed/retired.
+The corrected inclusive counter measured 45–86 ms validation/encoding during
+56–105 ms live Session samples. The optimization therefore does not establish
+recovery qualification; further attributable encoder work remains.
+Mixed recovery is NOT MEASURED. Cleanup verified no client/server processes and
+UDP 39450 unbound. Logs and causal TSVs remain under the run ID in
+`C:\Sandbox\Codex\Evidence\Farm32_fa5b91f9Diagnostic\`.
+No physical/provider attempt or PASS is inferred from this diagnostic.
+
+The subsequent execution candidate `1dce88d9b` retains exact UTF-8 semantics
+while scanning complete ASCII words with bounded unaligned-safe reads and
+transferring the finished GRPL allocation rather than copying it. Native
+qualification passes 1,409,819 UTF-8 parity cases, the fixed GRPL wire/error
+regression, the full replication/relevance suites and seven oracle cases.
+The latter include more than 65,536 empty progress steps, exactly 65,536 real
+frames followed by completion, and rejection of frame 65,537. Name A/B tests
+retain exact outcomes with odd/exhausted budgets and atomic retry termination.
+The Release real-GNS workload passes all eight cases with 38,668,582 B created
+and retired, zero terminal release and zero outstanding debt. Its recovery RPC
+maximum was 37.1119 ms, Event maximum 37.1062 ms and action maximum 37.1747 ms.
+These are local native results. Hosted Native/sanitizer CI and official-package
+workflow `37065664987` remain pending; provider qualification is not inferred.
+
+Worker-only diagnostic `7b2333c6-bea0-43e7-9e0a-f1fd5fb29eba` exercised that
+candidate with 32 real clients and continuing motion. Gameplay recovery passed
+with 5,344 B conserved and prefix convergence at 332,047 us. Structural recovery
+still failed: reference 608,787,930 B in 1,608 frames, bound 33,798,602 us;
+at 46,220,886 us the prefix remained unfinished, with 565,137,624 B accepted,
+564,423,976 B first-sent and 563,661,224 B ACKed/retired. Mixed recovery remains
+NOT MEASURED. The narrower preflight and UTF-8 changes therefore remain
+insufficient for complete recovery qualification. Cleanup found no owned
+client/server process or UDP 39450 listener. Preserve the evidence under
+`C:\Sandbox\Codex\Evidence\Farm32_1dce88d9Diagnostic\` and the run ID.
+
+Source inspection next identified a separate avoidable cost: incremental
+production serializes doomed attempts up to the global 8 MiB codec bound before
+checking the negotiated complete-frame limit. A bounded-encoder correction must
+still validate the entire candidate first, preserve invalid-value precedence,
+and retain the exact existing geometric retry, journal charge and final frame.
+It may cap encoding at the hard negotiated limit, never available credit.
+
+The correction at `025577469` passes the complete replication and relevance
+CTest targets on worker Release candidate `e62955e91` (2/2, 8.87 s). Its 68
+focused codec cases preserve exact wire output, late-invalid error precedence,
+zero/header/exact boundaries and the public global cap. A doomed candidate
+writes 458,931 payload bytes instead of 8,326,011. Production A/B current and
+historical Name fixtures preserve exact bytes, errors, cursors and budgets;
+historical attempted payload falls from 386,919,616 to 40,712,792 bytes. These
+are deterministic work counters, not a physical throughput claim. The same run
+passes 1,409,819 UTF-8 parity cases. Evidence is retained as
+`C:\Users\aiden\.codex\artifacts\bounded-encoder-e62955e9-tests.log`.
+Fresh 32-client recovery and hosted qualification remain separate gates.
+
+Worker-only run `3f153c08-544d-4894-8098-1e08ecc17665` on `e62955e91`
+reached all three causal recovery cases. Independent PowerShell replay confirms:
+
+| Case | Events / reference frames | Accepted = first-sent = ACKed = retired B | Earliest prefix convergence us | Original bound us |
+| --- | ---: | ---: | ---: | ---: |
+| Gameplay | 156 / 32 | 5,344 | 316,646 | 20,470,580 |
+| Structural | 7,662 / 1,213 | 450,564,901 | 22,914,408 | 31,475,696 |
+| Mixed | 164 / 32 | 14,779 | 320,709 | 20,471,273 |
+
+The farm nevertheless **FAILS**, first reported as client 08 exit 16 after
+`phase=complete`. Five content phases were observed, but the native completion
+check read `ScaleOverloadCase` from CharacterControl instead of its actual
+DataModel owner, so its recovery-name observations remained unset. Independently,
+the client recovery probe log used server-only `PhaseTick`; the resulting nil
+format argument aborted the coroutine before recording probe completion. These
+are distinct harness defects. The causal subset above does not establish full
+recovery gameplay, terminal farm, capture, or provider PASS. No owned client or
+server process or UDP 39450 listener remained after cleanup.
+
+Evidence remains under
+`C:\Sandbox\Codex\Evidence\Farm32_e62955e9Diagnostic\` with this run ID;
+the local copy is `C:\Users\aiden\.codex\artifacts\farm32-e62955e9\`.
+`farm32-e62955e9-causal-replay.json` records the independent totals and TSV hashes.
+A fresh run is required after the completion and probe fixes are qualified.
+
+The completion fixes at `976fae8d5` pass 10 native DataModel owner/stage/type
+cases and the actual embedded client callback regression (three cases, 30 probes,
+three completion acknowledgments). Its negative control reproduces the exact
+historical missing-tick format error. A fresh worker run,
+`4da65aae-e7ab-4bfa-8d0c-4b2179080995`, records valid client probe summaries but
+**FAILS structural recovery at the unchanged deadline**. Reference work is
+783,570,166 B in 2,063 frames with a 36,344,307-us bound. At 36,348,017 us its
+prefix is unfinished: accepted 751,166,585 B, first-sent 750,772,933 B, and
+ACKed/retired 749,518,126 B. Mixed recovery is NOT MEASURED in this run.
+
+The final structural samples show 3,322–6,072-us Session work and
+935–1,063-us encoding, with four active grants. The previous serialization
+cost is reduced, but that alone does not qualify service. Grant delivery,
+retirement and slot reuse require causal attribution before another diagnostic;
+the earlier converged subset is not a substitute for this failure. Evidence is
+retained under `C:\Sandbox\Codex\Evidence\Farm32_976fae8d5Diagnostic\` and
+`C:\Users\aiden\.codex\artifacts\farm32-976fae8d5\`, with the run ID.
+Cleanup again found no owned farm processes or UDP 39450 listener.
+
+Focused native ACK diagnostic `e8163d99b` separately reproduces the delayed
+retirement mechanism using the production adapter and pinned GNS. Eight grants
+(393,652 and 524,288 B, two successive ACK-gated submissions at each of 1-ms and
+16.667-ms Main polling) conserve exact first-send, ACK and retirement with zero
+retransmission. Native ACK receipt follows first-send completion by
+28,978–30,234 us for 393,652 B and 21,584–22,941 us for 524,288 B; Main observation
+adds only 50–1,435 us in this fixture. Receiver traces record the ordinary
+50,000-us ACK deadline from the first reliable packet, completed message,
+successful ACK transmission and sender receipt. This identifies native delayed
+ACK behavior in the focused reproduction; exact native ACK timestamps in the
+earlier farm remain NOT MEASURED. Four grant slots remain ACK-owned. A transport
+correction still requires reserve, mode-isolation and fresh recovery qualification.
+The log is `C:\Users\aiden\.codex\artifacts\ack-cycle-e8163d99b.log`.
+
+The reviewed Farm32 capture-only hook update was applied on 2026-10-02 with
+fixed-input rollback protection and five passing transaction simulations.
+Installed hook SHA-256 is
+`DB8BDD022F3BB30128EBC3E1D8A22596494F2440ABA93DCECDC3334FAB3A8DC9`;
+configuration SHA-256 is
+`D0CCDBFD994A3BAEF78C7AF2105D88BE7FE29DD2C48E196A59EC84C25FFACCDC`.
+The executable, DLL, lease runtime and baseline F1 service are unchanged.
+The adoption receipt explicitly records **IDLE_HOOK_ADOPTED_UNQUALIFIED**.
+No capture was started by adoption. Near-capacity operational capture/export,
+zero-loss acceptance and cleanup remain required before provider use.
+Protected originals and the adoption receipt are retained under
+`C:\ProgramData\GantriaEngine\AgentCoordinatorCaptureFarm32\hook-adoption-Farm32Capture16GiB-v2`.
+
+Synthetic capacity exercise `9395c8bd-3d82-4159-acd4-8aa626d47fd9` used that
+installed hook and the pinned client capture helper. It is **INCOMPLETE**, not a
+provider or production run. The stopped worker ETL is 9,603,383,296 B, below the
+required 14-GiB exercise threshold. The client sent 3,042,800 marked data packets;
+the worker received 3,039,000. All 3,039,400 worker data packets reached the client.
+Terminal sequence markers agree with the sender counts, so the worker's missing
+3,800 data packets cannot be accepted as complete evidence. The retained receipts
+do not record which sequence ranges were absent; their cause remains under
+investigation. Neither zero NIC error deltas nor clean cleanup establish zero
+capture/socket loss.
+
+The first 80,000 client capture packets show median 100-packet batch spacings of
+15,527.6 us and 15,545.8 us by direction. This was initially attributed to the
+synthetic emitter's short blocking `select` wait. The later V3 reproduction below
+disproves that as a sufficient explanation. An artifact-only pacing correction preserves the original packet count,
+20,000-packet/s ceiling, burst, and 480-second traffic bound. The failed outer
+controller also stopped its client capture child before the child's normal
+600-second close, losing final dumpcap loss diagnostics; the correction preserves
+the existing bounded close phase even on emitter failure. Both corrections remain
+unqualified operationally. Worker capture/service and both endpoint process/socket
+cleanup succeeded. Raw evidence is retained under the run ID in worker
+`C:\Sandbox\Codex\Evidence\Foundation3LFarm32\` and client
+`C:\Sandbox\Codex\Evidence\Farm32NearCap-v1\`. Offline diagnostic export of the
+retained ETL is separate from near-capacity acceptance. No Local/Node qualification
+was performed and KI-006 remains open.
+
+Synthetic V3 run `845edec4-c1f7-4f6e-96c2-3747ae9caba1` remains **INCOMPLETE**.
+The run-bound, per-flow HELLO exchange preceded DATA; endpoint ledgers account
+for all 3,053,100 client DATA packets and all 3,052,400 worker DATA packets,
+with zero missing sequences. This establishes endpoint delivery for this run,
+not capture completeness. Worker ETL reached only 9,649,520,640 B. The client
+captured 6,113,310 packets and reported 1,022 pcap-buffer drops (dumpcap queue
+drops zero). The zero-loss gate therefore fails independently of capacity.
+Both capture services returned idle, both endpoint process inventories were
+empty, and task UDP sockets were released. Source/evidence is retained in the
+V3 artifact directory and the same endpoint evidence parents with this fresh UUID.
+
+Pinned Python 3.12.6 reports `monotonic()` as `GetTickCount64()` with 15.625-ms
+resolution. V3's nonblocking receive polling still produced median 100-packet
+spacings of 15,597.9/15,616.85 us. The 5-ms send deadlines used that coarse clock.
+V4 preparation uses monotonic, nonadjustable `QueryPerformanceCounter()` through
+`perf_counter()`, reported resolution 0.1 us, and rejects an inadequate pacing
+clock before opening sockets. A two-second no-network pacing check observed
+365 batches, median 5,475 us, minimum 5,007 us, maximum 6,375 us. Packet count,
+rate/burst ceilings, traffic duration and capture acceptance are unchanged.
+This local pacing check does not qualify live capture throughput or loss.
+
+The earlier V1 retained ETL was independently exported in 626,366 ms: 6,254,166
+complete frames, 6,255,341 events, zero reported ETW event loss, and a
+9,098,531,060-B pcapng. Bounded inspection finds all initial 3,800 client DATA
+packets in the worker NIC capture before the worker's first transmission. The
+missing V1 socket receipt packets therefore lie after that capture observation;
+the exact Windows filtering/drop mechanism was NOT MEASURED. Historical evidence
+is preserved and no later result upgrades either failed synthetic run.
+
+Synthetic V4 run `0309a027-a783-44e7-8465-584eb20babaf` reached the intended
+near-capacity exercise: worker ETL 15,054,929,920 B, below the unchanged 15-GiB
+completeness ceiling and above the 14-GiB exercise threshold. QueryPerformanceCounter
+pacing and the fixed client `-B 64` request were used. All 4,803,800 client DATA
+packets and 4,806,500 worker DATA packets reached the opposite application with
+exact per-flow sequence conservation. The client pcap contains 9,619,900 marked
+packets, zero reported drops, and passes its independent full-sequence verifier.
+
+The worker export completed, but **capture qualification remains INCOMPLETE**.
+Its 14,274,812,236-B pcap has 9,730,757 packet blocks, matching both the export
+count and the raw NDIS packet-event count; tracerpt reports zero lost ETW events.
+Independent offline inspection nevertheless finds 877 missing client-to-worker
+DATA packets and 1,138 missing worker-to-client DATA packets. These are interior
+sequence gaps, not missing terminal markers, duplicate sequences, or merely
+out-of-order recording. The raw event count and zero ETW-loss report do not
+establish packet completeness. The exact worker recording mechanism requires
+further attribution; neither application delivery nor the successful client
+capture waives the worker evidence gate.
+
+Client and worker cleanup receipts report no owned processes or task UDP
+sockets; both capture services are running and idle. Original evidence remains
+under the existing endpoint evidence parents with this UUID. The failed outer
+receipt remains unchanged. No production/provider run or Foundation 3L PASS is
+claimed by this synthetic infrastructure exercise.

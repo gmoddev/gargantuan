@@ -266,7 +266,12 @@ explicit-acceptance entry point.
 
 Every peer retains its own committed journal cursor. The initial accepted
 baseline advances that cursor to the catalog revision represented when bootstrap
-was prepared. Later reads are limited by the remaining 3J allowance. While both
+was prepared. Later reads are limited by the remaining 3J allowance. Both
+live catalog refresh and peer incremental preparation pin immutable journal records
+for the duration of their bounded work, avoiding repeated large value copies and
+releasing the journal lock before catalog or frame processing. Frozen cessation
+quotes still own their detached copied suffix. Neither representation changes the
+accepted cursor, Known, retry, or admission rules. While both
 materialization transitions and journal work exist, GameSession alternates the
 two bounded classes per peer; neither a dense Enter backlog nor a continuous
 stream of known-object updates can monopolize that peer's quantum.
@@ -317,6 +322,60 @@ metadata; resnapshot failure still requires a fresh baseline. Source reads and
 retry examinations retain their existing hard budgets. The additional marker
 contains no cached value and introduces no new map, wire field or payload queue.
 `tests/NameCoalescingFixture.hpp` covers these contracts.
+
+A live all-native-Name candidate may skip an encoding attempt only when its
+selected valid string bytes alone prove that the complete frame exceeds the
+existing message limit. This lower-bound proof retains the original geometric
+retry and charges the same pinned journal examinations; it is not an admission
+size estimate. The successful frame still uses the ordinary encoder. All
+selected strings are validated before skipping an attempt so an invalid later
+value retains its existing error precedence. Mixed or unprovable candidates
+use the original path. A bounded call-local cache avoids revalidating the same
+immutable strings across retries and clears when the catalog cursor changes;
+it cannot survive preparation, acceptance or a later public call.
+`tests/NameBytePreflightFixture.hpp` compares this path against the original
+encoder for exact bytes, fingerprints, sequence, cursor, error and work-budget
+results, including rejection, semantic barriers and the complete 512 KiB bound.
+
+Qualification can capture a detached 3J cessation input on Main after catalog
+refresh reaches the journal tail. The capture copies the bounded retained
+journal suffix and each peer's accepted value state, pins immutable catalog
+templates, and discards live planning coroutines before any replay. The detached
+reader stops at that tail and never reads the live DataModel or ChangeJournal;
+any continuation is rebuilt against the frozen catalog. A narrow journal-only
+replay uses the production `ProduceIncremental` encoder and scheduler-acceptance
+commit on this detached state, with the caller's negotiated frame limit, to
+record complete-message sizes and frame fingerprints. It fails closed if
+relevance transitions or an unaccepted preparation remain. This is a
+qualification measurement seam, not a new production queue, admission policy,
+or generic assertion that later live scheduling must choose identical frames.
+Already-accepted unretired complete-message debt is captured separately by the
+GameSession qualification accessor and must be added once, not replayed as
+unaccepted journal work. A convergence verdict still requires later accepted
+frames to be audited against the frozen quote.
+
+The 32-peer physical recovery controller performs that audit in memory. It
+records each later accepted complete-message size and encoded-frame fingerprint
+in admission order, compares it to the detached quote for the same connection,
+and checks the admission accepted-byte delta and unchanged source journal tail
+at the strict deadline. Only full terminal convergence and exact frame agreement
+allow a per-peer `W_i` complete-message upper envelope. Accepted-unretired debt
+is counted in full even if part was already first-sent at cessation, so this is
+conservative with respect to remaining native unique bytes. Frame grouping
+divergence, missing evidence, or late source mutation leaves `W_i` unmeasured;
+the frozen replay alone never establishes an exact live result.
+
+The recovery controller seals this quote after live acceptance matches, before
+requiring structural terminal convergence. It then derives the existing 3L
+service bound exactly from all 32 `W_i` values: 20 seconds plus the maximum of
+the 250-ms credit and 220.5-ms fairness terms with per-peer 2-MiB/s byte
+service, or aggregate 64-MiB/s byte service. The fixed ~20.4-second snapshot
+continues to observe ordinary service and client probes; pending structural
+bytes at that time are permitted until the measured `W_i` deadline. Terminal
+reader cursors, no pending debt, exact retirement, and final client Name
+observations are checked at the workload-derived deadline. The external farm
+runtime timeout remains a hard fail-closed limit; a measured bound extending
+beyond it cannot be reported as physical recovery PASS.
 
 No per-peer historical property queue is required. For already-known objects,
 the existing journal preserves ordered create/destroy/reparent/tag/attribute and

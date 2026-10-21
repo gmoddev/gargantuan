@@ -288,6 +288,97 @@ inline bool RunPooledReliableServiceProductionTests() {
 				Replaced == 1 && EligibleFirst == 1 && EligibleSecond == 1,
 				"identical retry keeps one demand; distinct same-size replan starts another");
 		});
+		Test("GrantLifecycleEvidenceIsTokenAndGenerationScoped", [&] {
+			struct EvidenceCapture {
+				std::vector<detail::AdmissionEvidenceEvent> Events;
+				detail::AdmissionEvidenceSink Sink{this, Record};
+				detail::AdmissionEvidenceSink *Previous = detail::ActiveAdmissionEvidence;
+				EvidenceCapture() { detail::ActiveAdmissionEvidence = &Sink; }
+				~EvidenceCapture() { detail::ActiveAdmissionEvidence = Previous; }
+				static void Record(void *Context, const detail::AdmissionEvidenceEvent &Event) noexcept {
+				try { static_cast<EvidenceCapture *>(Context)->Events.push_back(Event); } catch (...) {}
+				}
+			} Evidence;
+			Admission Production(ReliableServiceProfile::PooledService());
+			Step(Production, 0);
+			Production.DeferSize(Id, G, {1, 2});
+			Production.EndStep();
+			Step(Production, 250'000);
+			Production.DeferSize(Id, G, {1, 2});
+			auto First = Production.Reserve(Id, G);
+			Check(First && Production.Commit(*First), "first exact grant accepted");
+			Check(Production.Retire(Id, First->Token, G), "matching first receipt retired");
+			Check(Production.RefreshService(Id, Admission::ServiceObservation{250'000, true, true}),
+				"first ACK-gated grant released");
+			Production.EndStep();
+			Step(Production, 500'000);
+			Production.DeferSize(Id, G, {3, 4});
+			auto Second = Production.Reserve(Id, G);
+			Check(Second && Production.Commit(*Second) && Production.TerminalRelease(Id),
+				"second exact grant has a terminal release");
+			std::vector<detail::AdmissionEvidenceEvent> Lifecycle;
+			for (const auto &Event : Evidence.Events)
+				if (Event.Kind == detail::AdmissionEvidenceKind::GrantAccepted ||
+					Event.Kind == detail::AdmissionEvidenceKind::GrantRetired ||
+					Event.Kind == detail::AdmissionEvidenceKind::GrantReleased ||
+					Event.Kind == detail::AdmissionEvidenceKind::GrantTerminalReleased)
+					Lifecycle.push_back(Event);
+			Check(Lifecycle.size() == 5 &&
+				Lifecycle[0].Kind == detail::AdmissionEvidenceKind::GrantAccepted &&
+				Lifecycle[1].Kind == detail::AdmissionEvidenceKind::GrantRetired &&
+				Lifecycle[2].Kind == detail::AdmissionEvidenceKind::GrantReleased &&
+				Lifecycle[3].Kind == detail::AdmissionEvidenceKind::GrantAccepted &&
+				Lifecycle[4].Kind == detail::AdmissionEvidenceKind::GrantTerminalReleased,
+				"exact accept-retire-release and terminal chronology");
+			for (std::size_t Index = 0; Index < Lifecycle.size(); ++Index) {
+				const auto &Event = Lifecycle[Index];
+				Check(Event.Connection == Id && Event.ExactBytes == G &&
+					Event.GrantToken == (Index < 3 ? First->Token : Second->Token) &&
+					Event.DemandId == (Index < 3 ? Lifecycle[0].DemandId : Lifecycle[3].DemandId),
+					"lifecycle preserves generation, exact bytes, token and demand identity");
+			}
+			Check(Lifecycle[0].DemandId && Lifecycle[3].DemandId != Lifecycle[0].DemandId &&
+				Lifecycle[0].ActiveGrants == 1 && Lifecycle[1].ActiveGrants == 1 &&
+				Lifecycle[2].ActiveGrants == 0 && Lifecycle[3].ActiveGrants == 1 &&
+				Lifecycle[4].ActiveGrants == 0 &&
+				Lifecycle[4].Reason == detail::AdmissionEvidenceReason::TerminalRelease,
+				"native active count and positive-debt terminal release follow exact lifecycle");
+		});
+		Test("ZeroDebtTerminalOwnerReleaseDoesNotReleaseBytes", [&] {
+			struct EvidenceCapture {
+				std::vector<detail::AdmissionEvidenceEvent> Events;
+				detail::AdmissionEvidenceSink Sink{this, Record};
+				detail::AdmissionEvidenceSink *Previous = detail::ActiveAdmissionEvidence;
+				EvidenceCapture() { detail::ActiveAdmissionEvidence = &Sink; }
+				~EvidenceCapture() { detail::ActiveAdmissionEvidence = Previous; }
+				static void Record(void *Context, const detail::AdmissionEvidenceEvent &Event) noexcept {
+				try { static_cast<EvidenceCapture *>(Context)->Events.push_back(Event); } catch (...) {}
+				}
+			} Evidence;
+			Admission Production(ReliableServiceProfile::PooledService());
+			Step(Production, 0);
+			Production.DeferSize(Id, G, {5, 6});
+			Production.EndStep();
+			Step(Production, 250'000);
+			Production.DeferSize(Id, G, {5, 6});
+			const auto Grant = Production.Reserve(Id, G);
+			Check(Grant && Production.Commit(*Grant) && Production.Retire(Id, Grant->Token, G) &&
+				Production.TerminalRelease(Id), "retired grant may clear owned slot at teardown");
+			Check(Production.GetMetrics().TerminalReleasedBytes == 0 &&
+				Production.GetMetrics().VerifiedAttributedRetirement == G,
+				"zero-debt terminal owner cleanup preserves byte conservation");
+			unsigned Retired = 0, Terminal = 0;
+			for (const auto &Event : Evidence.Events) {
+				if (Event.Kind == detail::AdmissionEvidenceKind::GrantRetired) ++Retired;
+				if (Event.Kind == detail::AdmissionEvidenceKind::GrantTerminalReleased) {
+					++Terminal;
+					Check(Event.Reason == detail::AdmissionEvidenceReason::None &&
+						Event.GrantToken == Grant->Token && Event.ActiveGrants == 0,
+						"terminal owner release is distinct from terminal byte release");
+				}
+			}
+			Check(Retired == 1 && Terminal == 1, "zero-debt lifecycle emits both transitions");
+		});
 		Test("CreditEligibilityEvidenceExcludesWarmupAndStaleFeedback", [&] {
 			struct EvidenceCapture {
 				std::vector<detail::AdmissionEvidenceEvent> Events;
@@ -300,20 +391,21 @@ inline bool RunPooledReliableServiceProductionTests() {
 				}
 			} Evidence;
 			Admission Production(ReliableServiceProfile::PooledService());
+			const std::array<std::uint64_t, 2> FrameFingerprint{0x1234, 0x5678};
 			Check(Production.BeginStep(0) && Production.ObserveService(Id,
 				Admission::ServiceObservation{0, true, true}), "initial evidence step");
 			Production.SetOrdinaryFunding(224 * 1024);
-			Production.DeferSize(Id, G);
+			Production.DeferSize(Id, G, FrameFingerprint);
 			Production.EndStep();
 			Check(Production.BeginStep(250'000) && Production.ObserveService(Id,
 				Admission::ServiceObservation{250'000, false, false}), "unavailable feedback step");
 			Production.SetOrdinaryFunding(224 * 1024);
-			Production.DeferSize(Id, G);
+			Production.DeferSize(Id, G, FrameFingerprint);
 			Production.EndStep();
 			Check(Production.BeginStep(260'000) && Production.ObserveService(Id,
 				Admission::ServiceObservation{260'000, true, true}), "restored feedback step");
 			Production.SetOrdinaryFunding(224 * 1024);
-			Production.DeferSize(Id, G);
+			Production.DeferSize(Id, G, FrameFingerprint);
 			auto Receipt = Production.Reserve(Id, G);
 			Check(Receipt && Production.Commit(*Receipt), "restored credit-eligible grant");
 			Production.EndStep();
@@ -329,7 +421,8 @@ inline bool RunPooledReliableServiceProductionTests() {
 				}
 				if (Event.Kind == detail::AdmissionEvidenceKind::GrantAccepted) {
 					Check(Event.DemandId == Demand && Event.GrantToken == Receipt->Token &&
-						Event.EligibleSinceMicroseconds == 260'000,
+						Event.EligibleSinceMicroseconds == 260'000 &&
+						Event.ExactCandidateFingerprint == FrameFingerprint,
 						"grant joins qualified eligibility, not cold demand");
 					++Accepted;
 				}
@@ -482,6 +575,6 @@ inline bool RunPooledReliableServiceProductionTests() {
 		std::cerr << "[Network:PooledProduction] FAIL " << Error.what() << '\n'; return false;
 	}
 	std::cout << "[Network:PooledProduction] cases=" << Passed << " PASS\n";
-	return Passed == 15;
+	return Passed == 17;
 }
 }

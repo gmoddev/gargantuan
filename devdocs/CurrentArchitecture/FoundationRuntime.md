@@ -141,6 +141,12 @@ adopted subtree between DataModel scopes is rejected.
 
 Records remain an in-process prototype. Retention is bounded per scope and cursor reads
 detect eviction with `ResnapshotRequired`; the current default capacity is 16,384.
+Committed records are immutable and internally held by shared handles. `ReadPinned`
+captures a bounded sequence and its cursor under the journal lock, then lets the
+caller examine that stable snapshot without keeping the lock or copying payloads.
+Eviction, clear, and scope retirement drop journal ownership but cannot invalidate
+an active pinned read. The existing value-returning `Read` still returns independent
+record copies, with the same cursor and retention behavior.
 The process-global journal implements logical per-DataModel ownership. A
 DataModel's final shared-owner release retires only its own journal stream and
 render-dirty scope, including headless scopes without a renderer consumer.

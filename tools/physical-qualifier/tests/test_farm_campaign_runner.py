@@ -1,8 +1,10 @@
 """Source-only campaign launch boundary tests; no packet capture or farm runs."""
 
+import ctypes
 import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -13,6 +15,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import farm_campaign_runner as Campaign  # noqa: E402
+from private_ticket_acl import Harden  # noqa: E402
 
 
 MOCK_CAPTURE = r'''
@@ -54,7 +57,7 @@ def UtcNow():
 class CampaignTests(unittest.TestCase):
     def setUp(self):
         self.Temporary = tempfile.TemporaryDirectory()
-        self.Root = Path(self.Temporary.name)
+        self.Root = Path(self.Temporary.name).resolve(strict=True)
         self.RunId = str(uuid.uuid4())
         self.CoordinatorRunId = str(uuid.uuid4())
         self.SourceCommit = "a" * 40
@@ -71,6 +74,18 @@ class CampaignTests(unittest.TestCase):
 
     def tearDown(self):
         self.Temporary.cleanup()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows 8.3 path alias")
+    def test_pinned_file_resolves_existing_short_path_alias(self):
+        PowerShell = self.Root / "pwsh.exe"
+        PowerShell.write_bytes(b"pinned test PowerShell")
+        Buffer = ctypes.create_unicode_buffer(1024)
+        Length = ctypes.windll.kernel32.GetShortPathNameW(str(PowerShell), Buffer, len(Buffer))
+        if not Length or Length >= len(Buffer) or \
+                Buffer.value.casefold() == str(PowerShell.resolve(strict=True)).casefold():
+            self.skipTest("volume has no distinct 8.3 alias")
+        self.assertEqual(PowerShell.resolve(strict=True),
+                         Campaign.Pinned(Buffer.value, Hash(PowerShell), "PowerShell", "pwsh.exe"))
 
     def Role(self, Role):
         Directory = self.Root / Role.lower()
@@ -137,12 +152,18 @@ class CampaignTests(unittest.TestCase):
         Helper.write_bytes(b"pinned Node helper")
         StageRoot = self.Root / "node-stage"
         StageRoot.mkdir()
+        TokenRoot = self.Root / self.RunId
+        TokenRoot.mkdir()
+        Harden(TokenRoot)
+        TokenFile = TokenRoot / "node-token.secret"
+        TokenFile.write_text("f" * 64, encoding="ascii")
         StageFile = Save(StageRoot / "node-stage.json", {
             "Format": "GargantuanFarmNodeStage", "Version": 1,
             "Status": "STAGED_NOT_TLS_PROVEN", "RunId": self.RunId,
             "SourceCommit": self.SourceCommit, "RunManifestSha256": Hash(self.Manifest),
             "NodeEndpoint": Manifest["NodeEndpoint"],
             "NodeTokenEnvironment": Manifest["NodeTokenEnvironment"],
+            "NodeTokenFilePath": str(TokenFile), "NodeTokenFileSha256": Hash(TokenFile),
             "RootCertificateSha256": Manifest["NodeRootCertificateSha256"],
             "HelperSha256": Hash(Helper),
         })
@@ -218,10 +239,12 @@ class CampaignTests(unittest.TestCase):
 
         def FakeStart(Config, Farm, Manifest):
             Events.append("node-start")
+            self.assertEqual("f" * 64, os.environ[Manifest["NodeTokenEnvironment"]])
             return NodeProcess, StageRoot
 
         def FakeJoin(Endpoint, Workflows, Catalog, Journal):
             Events.append("join")
+            self.assertEqual("f" * 64, os.environ["GARGANTUAN_ENGINE_ADAPTER_TOKEN"])
             EvidenceRoot = Path(json.loads(FarmFile.read_text())["EvidenceRoot"])
             EvidenceRoot.mkdir()
             Save(EvidenceRoot / "evidence-sha256.json", {"RunId": self.RunId})
@@ -242,6 +265,7 @@ class CampaignTests(unittest.TestCase):
                 mock.patch.object(Campaign, "GetCatalog", return_value=object()):
             self.assertEqual(0, Campaign.RunRole(TicketFile))
         self.assertEqual(["node-start", "node-ready", "join", "node-stop"], Events)
+        self.assertNotEqual("f" * 64, os.environ.get("GARGANTUAN_ENGINE_ADAPTER_TOKEN"))
         Result = json.loads(Path(Ticket["ResultPath"]).read_text())
         self.assertEqual(Hash(StageRoot / "node-run.json"), Result["NodeRunReceiptSha256"])
         self.assertEqual(Ticket["NodeStageSha256"], Result["NodeStageSha256"])
@@ -261,6 +285,18 @@ class CampaignTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Node supervision ticket mismatch"):
             Campaign.VerifyRole(Client, "CLIENT")
 
+    def test_node_token_tamper_fails_before_child_and_restores_environment(self):
+        TicketFile, _, _, StageRoot = self.NodeRole()
+        Stage = json.loads((StageRoot / "node-stage.json").read_text())
+        Path(Stage["NodeTokenFilePath"]).write_text("e" * 64, encoding="ascii")
+        Previous = os.environ.get("GARGANTUAN_ENGINE_ADAPTER_TOKEN")
+        with mock.patch.object(Campaign, "GetCatalog", return_value=object()), \
+                mock.patch.object(Campaign, "StartNode") as Start:
+            with self.assertRaisesRegex(ValueError, "Node token file pin mismatch"):
+                Campaign.RunRole(TicketFile)
+            Start.assert_not_called()
+        self.assertEqual(Previous, os.environ.get("GARGANTUAN_ENGINE_ADAPTER_TOKEN"))
+
     def test_node_child_command_marker_and_run_receipt_are_bounded(self):
         _, Ticket, FarmFile, StageRoot = self.NodeRole()
         Farm = json.loads(FarmFile.read_text())
@@ -270,9 +306,9 @@ class CampaignTests(unittest.TestCase):
         with mock.patch.object(Campaign.subprocess, "Popen", return_value=Child) as Spawn:
             Process, Root = Campaign.StartNode(Ticket, Farm, json.loads(self.Manifest.read_text()))
         self.assertIs(Child, Process)
-        self.assertEqual(StageRoot, Root)
+        self.assertEqual(StageRoot.resolve(strict=True), Root)
         Args = Spawn.call_args.args[0]
-        self.assertEqual(Farm["PowerShellPath"], Args[0])
+        self.assertEqual(str(Path(Farm["PowerShellPath"]).resolve(strict=True)), Args[0])
         self.assertIn(Ticket["NodeStageSha256"], Args)
         self.assertIn("900", Args)
         Save(StageRoot / "node-tcp-ready.json", {
@@ -292,8 +328,14 @@ class CampaignTests(unittest.TestCase):
             "RunId": self.RunId, "StageSha256": Ticket["NodeStageSha256"],
             "Reason": "STOP_REQUESTED", "TcpReady": True, "ChildReaped": True,
         })
-        self.assertEqual(Receipt, Campaign.StopNode(Ticket, Child, StageRoot))
+        self.assertEqual(Receipt.resolve(strict=True), Campaign.StopNode(Ticket, Child, StageRoot))
         self.assertEqual(self.RunId, (StageRoot / "stop.request").read_text())
+        if sys.platform == "win32":
+            Buffer = ctypes.create_unicode_buffer(1024)
+            Length = ctypes.windll.kernel32.GetShortPathNameW(str(StageRoot), Buffer, len(Buffer))
+            if Length and Length < len(Buffer) and Buffer.value.casefold() != str(StageRoot).casefold():
+                self.assertEqual(Receipt.resolve(strict=True),
+                                 Campaign.StopNode(Ticket, Child, Path(Buffer.value)))
         Bad = json.loads(Receipt.read_text())
         Bad["Reason"] = "CHILD_EXITED"
         Save(Receipt, Bad)
@@ -416,7 +458,7 @@ class CampaignTests(unittest.TestCase):
         Save(ConfigFile, Config)
 
         def FakeMatch(Args, **Kwargs):
-            self.assertEqual(str(PowerShell), Args[0])
+            self.assertEqual(str(PowerShell.resolve(strict=True)), Args[0])
             self.assertIn(Hash(Stage), Args)
             self.assertIn(Hash(Run), Args)
             Save(Path(Config["NodeTlsMatchReceiptPath"]), {

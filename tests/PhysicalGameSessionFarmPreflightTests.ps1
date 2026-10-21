@@ -11,6 +11,12 @@ $Function = @($Ast.FindAll({ param($Node)
 }, $true))
 if ($Function.Count -ne 1) { throw 'preflight inventory validator is missing or duplicated' }
 . ([scriptblock]::Create($Function[0].Extent.Text))
+$TokenFunction = @($Ast.FindAll({ param($Node)
+	$Node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+	$Node.Name -eq 'Test-NodeTokenFile'
+}, $true))
+if ($TokenFunction.Count -ne 1) { throw 'preflight Node token validator is missing or duplicated' }
+. ([scriptblock]::Create($TokenFunction[0].Extent.Text))
 
 function Expect-Rejection {
 	param([scriptblock]$Case, [string]$Reason)
@@ -59,4 +65,33 @@ Expect-Rejection { Assert-PreflightInventory -Inventory $Server -LocalRole Serve
 $Server.NodeRootCertificateMatches = $true
 $Server.NodeTokenPresent = $true
 Assert-PreflightInventory -Inventory $Server -LocalRole Server -RunManifest $NodeManifest
+$TokenTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('farm-preflight-token-' + [Guid]::NewGuid().ToString('N'))
+$TokenRunId = [Guid]::NewGuid().ToString()
+try {
+	$TokenDirectory = Join-Path $TokenTestRoot $TokenRunId
+	[void][IO.Directory]::CreateDirectory($TokenDirectory)
+	$Sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+	& icacls.exe $TokenDirectory /grant:r "*$($Sid):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' `
+		'*S-1-5-32-544:(OI)(CI)F' | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw 'token test ACL grant failed' }
+	& icacls.exe $TokenDirectory /inheritance:r | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw 'token test ACL protection failed' }
+	& icacls.exe $TokenDirectory /setowner "*$Sid" | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw 'token test owner failed' }
+	$TokenPath = Join-Path $TokenDirectory 'node-token.secret'
+	$Token = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+	[IO.File]::WriteAllText($TokenPath, $Token, [Text.Encoding]::ASCII)
+	$TokenPin = (Get-FileHash -LiteralPath $TokenPath -Algorithm SHA256).Hash
+	if (-not (Test-NodeTokenFile -Path $TokenPath -Sha256 $TokenPin -RunId $TokenRunId)) {
+		throw 'private pinned preflight token was rejected'
+	}
+	if (Test-NodeTokenFile -Path $TokenPath -Sha256 ('0' * 64) -RunId $TokenRunId) {
+		throw 'preflight accepted a changed token pin'
+	}
+	if (Test-NodeTokenFile -Path $TokenPath -Sha256 $TokenPin -RunId ([Guid]::NewGuid().ToString())) {
+		throw 'preflight accepted a different run identity'
+	}
+} finally {
+	if (Test-Path -LiteralPath $TokenTestRoot) { Remove-Item -LiteralPath $TokenTestRoot -Recurse -Force }
+}
 Write-Output '[Qualification:FarmPreflight] MOCK_TEST_OK'

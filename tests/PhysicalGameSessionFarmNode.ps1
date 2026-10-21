@@ -12,14 +12,33 @@ param(
 	[string]$NodeExecutablePath,
 	[ValidatePattern('^[a-fA-F0-9]{64}$')][string]$NodeExecutableSha256,
 	[ValidatePattern('^[a-fA-F0-9]{40}$')][string]$NodeSourceCommit,
+	[string]$GoExecutablePath,
+	[ValidatePattern('^[a-fA-F0-9]{64}$')][string]$GoExecutableSha256,
 	[string]$CertificatePath,
 	[string]$PrivateKeyPath,
 	[string]$RootCertificatePath,
+	[string]$NodeTokenFilePath,
+	[ValidatePattern('^[a-fA-F0-9]{64}$')][string]$NodeTokenFileSha256,
 	[ValidatePattern('^[a-fA-F0-9]{64}$')][string]$StageSha256,
 	[ValidateRange(60, 1200)][int]$MaximumRuntimeSeconds = 900
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Add-NodeResourceSample {
+	param($Child, [string]$RunId, [Collections.Generic.List[object]]$Samples)
+	if ($Samples.Count -ge 1202) { throw 'Node resource sample bound exceeded' }
+	$Child.Refresh()
+	if ($Child.HasExited) { return }
+	$Samples.Add([pscustomobject][ordered]@{
+		RunId = $RunId; Pid = $Child.Id
+		MonotonicTicks = [Diagnostics.Stopwatch]::GetTimestamp()
+		MonotonicFrequency = [Diagnostics.Stopwatch]::Frequency
+		Cpu100ns = $Child.TotalProcessorTime.Ticks
+		WorkingSetBytes = $Child.WorkingSet64; PrivateBytes = $Child.PrivateMemorySize64
+		Threads = $Child.Threads.Count; Handles = $Child.HandleCount
+	})
+}
 
 function Assert-FilePin {
 	param([string]$Path, [string]$Sha256, [long]$MaximumBytes = 0)
@@ -128,6 +147,66 @@ function Get-Sha256 {
 	return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Assert-NodeTokenFile {
+	param([string]$Path, [string]$Sha256, [string]$RunId)
+	$Resolved = [IO.Path]::GetFullPath($Path)
+	if ([IO.Path]::GetFileName($Resolved) -cne 'node-token.secret' -or
+		[IO.Path]::GetFileName([IO.Path]::GetDirectoryName($Resolved)) -cne $RunId) {
+		throw 'Node token path is not bound to this run'
+	}
+	$Parent = [IO.Path]::GetDirectoryName($Resolved)
+	$ParentItem = Get-Item -LiteralPath $Parent -ErrorAction Stop
+	if ($ParentItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+		throw 'Node token parent is a link'
+	}
+	$Acl = Get-Acl -LiteralPath $Parent
+	$Sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+	$Allowed = @($Sid, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4')
+	$Observed = @($Acl.Access | ForEach-Object {
+		$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+	})
+	if (-not $Acl.AreAccessRulesProtected -or
+		$Acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $Sid -or
+		$Observed.Count -lt 1 -or $Sid -notin $Observed -or
+		@($Observed | Where-Object { $_ -notin $Allowed }).Count -ne 0) {
+		throw 'Node token directory is not private to this worker identity'
+	}
+	$File = Assert-FilePin -Path $Resolved -Sha256 $Sha256 -MaximumBytes 64
+	$Item = Get-Item -LiteralPath $File
+	if ($Item.Length -ne 64) { throw 'Node token length mismatch' }
+	$Value = [IO.File]::ReadAllText($File, [Text.Encoding]::ASCII)
+	if ($Value -cnotmatch '^[a-f0-9]{64}$') { throw 'Node token format mismatch' }
+	return $Value
+}
+
+function Assert-NodeBuildProvenance {
+	param([string]$ExecutablePath, [string]$SourceCommit, [string]$GoExecutable)
+	if ($SourceCommit -cnotmatch '^[a-fA-F0-9]{40}$') {
+		throw 'Node source commit pin is invalid'
+	}
+	$PreviousGoRoot = [Environment]::GetEnvironmentVariable('GOROOT', 'Process')
+	try {
+		# `version -m` needs no SDK tree. A hash-pinned standalone go.exe can
+		# inspect build metadata on a worker without an installed Go toolchain.
+		[Environment]::SetEnvironmentVariable('GOROOT', [IO.Path]::GetDirectoryName($GoExecutable), 'Process')
+		$Lines = @(& $GoExecutable version -m $ExecutablePath 2>&1)
+		$ExitCode = $LASTEXITCODE
+	} finally {
+		[Environment]::SetEnvironmentVariable('GOROOT', $PreviousGoRoot, 'Process')
+	}
+	if ($ExitCode -ne 0 -or $Lines.Count -gt 128 -or
+		($Lines -join "`n").Length -gt 65536) {
+		throw 'pinned Node binary build metadata is unavailable or unbounded'
+	}
+	$Revision = @($Lines | Where-Object { $_ -cmatch '^\s*build\s+vcs\.revision=([a-f0-9]{40})$' })
+	$Clean = @($Lines | Where-Object { $_ -cmatch '^\s*build\s+vcs\.modified=false$' })
+	$Git = @($Lines | Where-Object { $_ -cmatch '^\s*build\s+vcs=git$' })
+	if ($Revision.Count -ne 1 -or $Clean.Count -ne 1 -or $Git.Count -ne 1 -or
+		$Revision[0] -cnotmatch ('vcs\.revision=' + $SourceCommit.ToLowerInvariant() + '$')) {
+		throw 'pinned Node binary lacks the exact clean source revision'
+	}
+}
+
 function Assert-NodeEndpoint {
 	param([string]$Endpoint)
 	$Parts = $Endpoint -split ':'
@@ -177,7 +256,9 @@ if ($Mode -eq 'Prepare') {
 	}
 	foreach ($Required in @($RunManifestPath, $RunManifestSha256, $ServerPackageRoot,
 		$DescriptorPath, $DescriptorSha256, $NodeExecutablePath, $NodeExecutableSha256,
-		$NodeSourceCommit, $CertificatePath, $PrivateKeyPath, $RootCertificatePath)) {
+		$NodeSourceCommit, $GoExecutablePath, $GoExecutableSha256,
+		$CertificatePath, $PrivateKeyPath, $RootCertificatePath,
+		$NodeTokenFilePath, $NodeTokenFileSha256)) {
 		if ([string]::IsNullOrWhiteSpace($Required)) { throw 'Prepare needs every pinned Node input' }
 	}
 	$Manifest = Read-PinnedRunManifest -Path $RunManifestPath -ExpectedSha256 $RunManifestSha256
@@ -188,16 +269,19 @@ if ($Mode -eq 'Prepare') {
 	$Descriptor = Assert-FilePin -Path $DescriptorPath -Sha256 $DescriptorSha256 -MaximumBytes 65536
 	$Identity = Assert-PackageIdentity -PackageRoot $Server -DescriptorFile $Descriptor
 	$Executable = Assert-FilePin -Path $NodeExecutablePath -Sha256 $NodeExecutableSha256
+	$GoExecutable = Assert-FilePin -Path $GoExecutablePath -Sha256 $GoExecutableSha256 -MaximumBytes 33554432
+	Assert-NodeBuildProvenance -ExecutablePath $Executable -SourceCommit $NodeSourceCommit `
+		-GoExecutable $GoExecutable
 	$Certificate = Assert-FilePin -Path $CertificatePath -MaximumBytes 65536
 	$Key = Assert-FilePin -Path $PrivateKeyPath -MaximumBytes 65536
 	$Root = Assert-FilePin -Path $RootCertificatePath -Sha256 $Manifest.NodeRootCertificateSha256 `
 		-MaximumBytes 65536
 	$CertificateThumbprint = Assert-Certificate -Certificate $Certificate -PrivateKey $Key `
 		-Root $Root -HostName '127.0.0.1'
-	if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(
-		$Manifest.NodeTokenEnvironment))) { throw 'Node token environment is empty' }
-	$Stage = Assert-DisjointStage -Stage $StageRoot -Inputs @($Server, $Descriptor, $Executable,
-		$Certificate, $Key, $Root, $RunManifestPath)
+	$null = Assert-NodeTokenFile -Path $NodeTokenFilePath -Sha256 $NodeTokenFileSha256 `
+		-RunId $Manifest.RunId
+	$Stage = Assert-DisjointStage -Stage $StageRoot -Inputs @($Server, $Descriptor, $Executable, $GoExecutable,
+		$Certificate, $Key, $Root, $RunManifestPath, $NodeTokenFilePath)
 	$ConfigText = @(
 		'schema_version = 1', '', '[host]',
 		('id = ' + (Quote-Toml "farm32-$($Manifest.RunId)")),
@@ -234,8 +318,12 @@ if ($Mode -eq 'Prepare') {
 		DescriptorPath = $Descriptor; DescriptorSha256 = $DescriptorSha256.ToLowerInvariant()
 		ProjectId = $Identity.ProjectId; Revision = $Identity.Revision
 		NodeSourceCommit = $NodeSourceCommit.ToLowerInvariant()
+		NodeBinaryVcsStatus = 'MATCHED_CLEAN'
 		NodeExecutablePath = $Executable; NodeExecutableSha256 = $NodeExecutableSha256.ToLowerInvariant()
+		GoExecutablePath = $GoExecutable; GoExecutableSha256 = $GoExecutableSha256.ToLowerInvariant()
 		NodeEndpoint = $Manifest.NodeEndpoint; NodeTokenEnvironment = $Manifest.NodeTokenEnvironment
+		NodeTokenFilePath = [IO.Path]::GetFullPath($NodeTokenFilePath)
+		NodeTokenFileSha256 = $NodeTokenFileSha256.ToLowerInvariant()
 		RootCertificatePath = $Root; RootCertificateSha256 = (Get-Sha256 $Root)
 		CertificatePath = $Certificate; CertificateSha256 = (Get-Sha256 $Certificate)
 		CertificateThumbprint = $CertificateThumbprint
@@ -259,7 +347,9 @@ $StagePath = Assert-FilePin -Path (Join-Path $Stage 'node-stage.json') -Sha256 $
 $Proof = Get-Content -LiteralPath $StagePath -Raw | ConvertFrom-Json -AsHashtable
 if ($Proof.Format -cne 'GargantuanFarmNodeStage' -or $Proof.Version -ne 1 -or
 	$Proof.Status -cne 'STAGED_NOT_TLS_PROVEN' -or
+	$Proof.NodeBinaryVcsStatus -cne 'MATCHED_CLEAN' -or
 	$Proof.HelperSha256 -cne (Get-Sha256 $PSCommandPath) -or
+	[string]$Proof.GoExecutableSha256 -cnotmatch '^[a-f0-9]{64}$' -or
 	[string]$Proof.EndpointValidatorSha256 -cnotmatch '^[a-f0-9]{64}$' -or
 	$Proof.NodeEndpoint -cnotmatch '^127\.0\.0\.1:[0-9]{4,5}$') {
 	throw 'Node stage schema or helper pin is invalid'
@@ -287,6 +377,9 @@ if ($Identity.ProjectId -cne $Proof.ProjectId -or $Identity.Revision -ne $Proof.
 	throw 'Node stage package identity changed'
 }
 $Executable = Assert-FilePin -Path $Proof.NodeExecutablePath -Sha256 $Proof.NodeExecutableSha256
+$GoExecutable = Assert-FilePin -Path $Proof.GoExecutablePath -Sha256 $Proof.GoExecutableSha256 -MaximumBytes 33554432
+Assert-NodeBuildProvenance -ExecutablePath $Executable -SourceCommit $Proof.NodeSourceCommit `
+	-GoExecutable $GoExecutable
 $Config = Assert-FilePin -Path (Join-Path $Stage 'node.toml') -Sha256 $Proof.ConfigSha256 `
 	-MaximumBytes 65536
 $Root = Assert-FilePin -Path $Proof.RootCertificatePath -Sha256 $Proof.RootCertificateSha256 `
@@ -295,11 +388,11 @@ $Certificate = Assert-FilePin -Path $Proof.CertificatePath -Sha256 $Proof.Certif
 	-MaximumBytes 65536
 $Key = Assert-FilePin -Path $Proof.PrivateKeyPath -MaximumBytes 65536
 if ((Assert-Certificate -Certificate $Certificate -PrivateKey $Key -Root $Root `
-	-HostName '127.0.0.1') -cne $Proof.CertificateThumbprint -or
-	[string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(
-		$Proof.NodeTokenEnvironment))) {
-	throw 'Node TLS inputs or token environment changed'
+	-HostName '127.0.0.1') -cne $Proof.CertificateThumbprint) {
+	throw 'Node TLS inputs changed'
 }
+$NodeToken = Assert-NodeTokenFile -Path $Proof.NodeTokenFilePath `
+	-Sha256 $Proof.NodeTokenFileSha256 -RunId $Proof.RunId
 $ReceiptPath = Join-Path $Stage 'node-run.json'
 if (Test-Path -LiteralPath $ReceiptPath) { throw 'Node stage was already run' }
 $ClaimPath = Join-Path $Stage 'node-run.claim'
@@ -307,7 +400,10 @@ Write-NewFile -Path $ClaimPath -Bytes ([Text.UTF8Encoding]::new($false).GetBytes
 $MaximumLogBytes = 8MB
 $StdoutPath = Join-Path $Stage 'node.stdout.log'
 $StderrPath = Join-Path $Stage 'node.stderr.log'
-foreach ($LogPath in @($StdoutPath, $StderrPath)) {
+$ResourcePath = Join-Path $Stage 'node-resources.csv'
+$ResourceSamples = [Collections.Generic.List[object]]::new()
+$NextResourceSample = 0L
+foreach ($LogPath in @($StdoutPath, $StderrPath, $ResourcePath)) {
 	if (Test-Path -LiteralPath $LogPath) { throw 'Node stage contains an unexpected child log' }
 }
 $Info = [Diagnostics.ProcessStartInfo]::new()
@@ -317,6 +413,8 @@ $Info.UseShellExecute = $false
 $Info.CreateNoWindow = $true
 $Info.RedirectStandardOutput = $true
 $Info.RedirectStandardError = $true
+$Info.Environment[$Proof.NodeTokenEnvironment] = $NodeToken
+$NodeToken = $null
 foreach ($Argument in @('serve', '--config', $Config)) { [void]$Info.ArgumentList.Add($Argument) }
 $Child = [Diagnostics.Process]::new()
 $Child.StartInfo = $Info
@@ -336,6 +434,11 @@ try {
 	$Deadline = $StartedUtc.AddSeconds($MaximumRuntimeSeconds)
 	$ReadyDeadline = $StartedUtc.AddSeconds(15)
 	while (-not $Child.HasExited -and [DateTimeOffset]::UtcNow -lt $Deadline) {
+		$Now = [Diagnostics.Stopwatch]::GetTimestamp()
+		if ($Now -ge $NextResourceSample) {
+			Add-NodeResourceSample -Child $Child -RunId $Proof.RunId -Samples $ResourceSamples
+			$NextResourceSample = $Now + [Diagnostics.Stopwatch]::Frequency
+		}
 		if ($StdoutStream.Length -gt $MaximumLogBytes -or
 			$StderrStream.Length -gt $MaximumLogBytes -or
 			$Stdout.IsFaulted -or $Stderr.IsFaulted) {
@@ -377,6 +480,10 @@ try {
 	throw
 } finally {
 	if ($Started) {
+		if (-not $Child.HasExited) {
+			try { Add-NodeResourceSample -Child $Child -RunId $Proof.RunId -Samples $ResourceSamples }
+			catch { $Reason = 'RESOURCE_OBSERVATION_FAILED' }
+		}
 		if (-not $Child.HasExited) { try { $Child.Kill($true) } catch { } }
 		try { [void]$Child.WaitForExit(10000) } catch { }
 		if ($Child.HasExited) { $ExitCode = $Child.ExitCode }
@@ -390,6 +497,9 @@ try {
 	if ($StdoutBytes -gt $MaximumLogBytes -or $StderrBytes -gt $MaximumLogBytes) {
 		$Reason = 'LOG_BOUND'
 	}
+	$ResourceSamples.ToArray() | Export-Csv -LiteralPath $ResourcePath -NoTypeInformation -Encoding utf8
+	$ResourceBytes = (Get-Item -LiteralPath $ResourcePath).Length
+	if ($ResourceBytes -gt 1MB -or $ResourceSamples.Count -lt 2) { $Reason = 'RESOURCE_OBSERVATION_FAILED' }
 	$Receipt = [ordered]@{
 		Format = 'GargantuanFarmNodeRun'; Version = 1
 		RunId = $Proof.RunId; StageSha256 = $StageSha256.ToLowerInvariant()
@@ -402,6 +512,9 @@ try {
 		TcpReady = $Ready; TlsProven = $false; Reason = $Reason
 		ExitCode = $ExitCode; ChildReaped = [bool]($Started -and $Child.HasExited)
 		LogsDiscarded = $false
+		ResourceContract = 'node_process_resources_v1'; ResourcePath = $ResourcePath
+		ResourceBytes = $ResourceBytes; ResourceSamples = $ResourceSamples.Count
+		ResourceSha256 = if ($ResourceBytes -le 1MB) { Get-Sha256 $ResourcePath } else { $null }
 		StdoutPath = $StdoutPath; StdoutBytes = $StdoutBytes
 		StdoutSha256 = if ($StdoutBytes -le $MaximumLogBytes -and
 			(Test-Path -LiteralPath $StdoutPath)) { Get-Sha256 $StdoutPath } else { $null }

@@ -9,20 +9,34 @@ and certificate policy.
 
 `Prepare` requires the farm run manifest and its out-of-band SHA-256, the
 hash-verified Server package, the qualified-scale descriptor and its SHA-256,
-an approved Node binary and SHA-256/source commit, a certificate/private-key
-pair, and the manifest-pinned root CA. It checks the full Server deployment
+an approved Node binary and SHA-256/source commit, a hash-pinned Windows
+`go.exe` metadata inspector, and the worker's one-run certificate/private-key
+pair and manifest-pinned root CA. The outer preparation stages and hashes
+`NewPhysicalGameSessionFarmNodeTls.ps1`, which generates a two-hour CA and
+`127.0.0.1` server certificate in the protected worker run directory. Only
+the public CA and leaf are copied to the controller; the private key never
+leaves the worker. It checks the full Server deployment
 manifest, then requires the descriptor's dynamic `project_id`/`revision` to
 match `game.package.json` and `content/content.manifest.json`. The generated
+stage invokes the pinned `go.exe` with `version -m`
+on the exact hash-pinned Node binary. Its embedded `vcs=git`, `vcs.revision`,
+and `vcs.modified=false` must match the declared Node source commit. A binary
+built from a dirty source tree or a managed Git worktree without embedded VCS
+metadata fails closed. The stage records `NodeBinaryVcsStatus=MATCHED_CLEAN`;
+`Run` rechecks the inspector and binary hashes and embedded revision before launch. The generated
 TOML gives Node only a filesystem content package for that exact identity and
 the `content.manifest.read`/`content.blob.read` game-server principal. The
-Node token is read from the environment; neither it nor the private-key bytes
-are copied into the config or stage receipt. The helper checks key/certificate
+Node token is generated as a fresh 256-bit value in the protected worker run
+directory, and its path and SHA-256 are pinned in the stage. The role runner
+injects it into the Server and Node process environments; the capture child
+does not receive it. Neither the token value nor private-key bytes are copied
+into the config, ticket, log, or stage receipt. The helper checks key/certificate
 compatibility, endpoint SAN, validity, and a chain to the pinned CA. Its new
 stage directory contains `node.toml` and `node-stage.json`; the printed stage
 SHA-256 must be passed independently to `Run`.
 
-`Run` rechecks all public pins, package identity, certificate/key/CA, and token
-presence. The endpoint validator source imported for deployment checks is
+`Run` rechecks all public pins, package identity, certificate/key/CA, and the
+one-run token file's private ACL, identity, hash, and format. The endpoint validator source imported for deployment checks is
 pinned at `Prepare` and rechecked before import/use at `Run`. Run then creates
 an exclusive `node-run.claim`. It launches only the pinned
 binary with `serve --config <pinned TOML>`. The child is bounded by a hard
@@ -36,25 +50,40 @@ private-key bytes. A consumed stage is not reusable.
 The final `STOPPED` line prints the `node-run.json` SHA-256; retain this
 out-of-band value for the offline TLS matcher.
 
+The same run receipt pins `node-resources.csv` under the owned stage. The
+supervisor records only bounded process metadata: monotonic CPU time, working
+set, private bytes, thread and handle counts, at one-second opportunities and
+immediately before termination. The existing 1,200-second maximum lifetime
+bounds this to 1,202 samples and a 1-MiB CSV. Fewer than two samples or overflow
+fails closed. The outer collector verifies its size/hash before copying it.
+`PhysicalFarmNodeResources.ps1` independently verifies identity, monotonicity
+and receipt custody, reporting provider cost separately from Engine and clients.
+Sampling may miss transient peaks; these diagnostics introduce no CPU or memory
+PASS threshold. All-absent historical fields remain `NOT_MEASURED`.
+
 `node-tcp-ready.json` and `node-run.json` explicitly record `TlsProven=false`:
 a TCP connect does not prove TLS. Physical Node qualification still needs the
 Gargantuan Server's authenticated gRPC content request over the pinned CA,
 Node process/config/certificate provenance tied to the same run, and the
 independent TLS/provider transcript required by the farm reconciler. No
 campaign PASS should be inferred from helper staging or TCP readiness alone.
-The supplied Node source commit is a provenance claim paired with the binary
-hash; the build pipeline must independently attest their relationship.
+The embedded clean revision, binary hash, and successful Node CI form the
+source-to-binary provenance chain. Retain the clean-checkout build command and
+binary hash receipt independently; the helper does not itself build Node.
 
 Run the source-only deterministic fixture with:
 
 ```powershell
 pwsh -NoProfile -File tests/PhysicalGameSessionFarmNodeTests.ps1
+pwsh -NoProfile -File tests/NewPhysicalGameSessionFarmNodeTlsTests.ps1
+pwsh -NoProfile -File tests/PhysicalFarmNodeResourcesTests.ps1
 ```
 
 Optionally pass `-OfficialNodeBinary <path>` to also check the generated TOML
 with the pinned official `gargantuan-node validate-config --config` command.
 The fixture builds a local mock listener, tests bounded owned-child stop/reap,
-single-use staging, descriptor mismatch, wrong SAN, binary/validator-pin
+single-use staging, descriptor mismatch, wrong SAN, binary/validator-pin,
+wrong or absent embedded revision, dirty-source build, and inspector hash
 rejection, and exclusion of token/key material from staging. CMake registers it
 on Windows when both PowerShell 7 and Go are available. It never runs the
 physical farm.

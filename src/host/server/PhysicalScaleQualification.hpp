@@ -1,5 +1,6 @@
 #pragma once
 
+#include "host/common/FarmServerTickEvidence.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/animation/AnimationTrack.hpp"
 #include "gargantuan/classes/Animator.hpp"
@@ -12,16 +13,26 @@
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/WireValue.hpp"
 #include "../../network/GameSessionTestAccess.hpp"
+#include "FarmAdmissionEvidence.hpp"
+#include "FarmRecoveryEvidence.hpp"
+#include "FrozenRecoveryQuote.hpp"
+#include "../../runtime/RuntimeWorkDiagnostics.hpp"
+#include "../../runtime/PublicationLatencyDiagnostics.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <deque>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <map>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -29,6 +40,62 @@
 #include <vector>
 
 namespace gargantuan::host {
+	namespace detail {
+		[[nodiscard]] inline std::optional<std::uint32_t> DecodePhysicalScaleCounter(
+			const std::optional<WireValue> &Value) {
+			if (!Value) return std::nullopt;
+			if (const auto *Integer = std::get_if<int>(&*Value)) {
+				if (*Integer < 0) return std::nullopt;
+				return static_cast<std::uint32_t>(*Integer);
+			}
+			if (const auto *Number = std::get_if<double>(&*Value)) {
+				if (!std::isfinite(*Number) || *Number < 0 ||
+					*Number > static_cast<double>(std::numeric_limits<std::uint32_t>::max()) ||
+					std::trunc(*Number) != *Number) return std::nullopt;
+				return static_cast<std::uint32_t>(*Number);
+			}
+			return std::nullopt;
+		}
+
+		[[nodiscard]] inline bool HasPhysicalScaleTerminalConvergence(
+			const network::GameSessionMetrics &Metrics) {
+			const auto &Admission = Metrics.ReliableAdmission;
+			return Metrics.ReadyPeers == 32 && Admission.TerminalReleasedBytes == 0 &&
+				Admission.AcceptedBytes == Admission.VerifiedAttributedRetirement &&
+				Admission.OutstandingBytes == 0 && Admission.ActiveDrainGrants == 0 &&
+				Metrics.StructuralFeedbackPeersObserved == 32 &&
+				Metrics.NativeQueuedReliablePeersObserved == 32 &&
+				Metrics.SchedulerQueuedReliableBytes == 0 && Metrics.NativeQueuedReliableBytes == 0 &&
+				Metrics.StructuralPendingEnters == Metrics.StructuralPendingLeaves &&
+				Metrics.StructuralActivePeers == 0 && Metrics.MaterializationBacklog == 0 &&
+				Metrics.JournalBacklogRecords == 0;
+		}
+
+		// The canonical 3L recovery curve uses complete-message W_i at cessation,
+		// not raw journal history or a fixed 20.4705-second convergence deadline.
+		[[nodiscard]] inline std::optional<std::uint64_t> RecoveryConvergenceBoundMicroseconds(
+			std::span<const std::uint64_t> WorkByPeer) {
+			const auto Profile = network::ReliableServiceProfile::PooledService().Pooled;
+			if (WorkByPeer.size() != 32) return {};
+			const auto PeerRate = std::min(Profile.PeerCreditRate, Profile.StructuralPool / WorkByPeer.size());
+			const auto PoolRate = std::min(Profile.GlobalCreditRate, Profile.StructuralPool);
+			if (!PeerRate || !PoolRate) return {};
+			auto ServiceMicroseconds = [](std::uint64_t Bytes, std::uint64_t Rate) {
+				return Bytes / Rate * 1'000'000 +
+					((Bytes % Rate) * 1'000'000 + Rate - 1) / Rate;
+			};
+			std::uint64_t Total = 0, MaximumPeerService = 0;
+			for (const auto Work : WorkByPeer) {
+				if (Work > 40ULL * 1024 * 1024 * 1024 ||
+					Total > 768ULL * 1024 * 1024 * 1024 - Work) return {};
+				Total += Work;
+				MaximumPeerService = std::max(MaximumPeerService, ServiceMicroseconds(Work, PeerRate));
+			}
+			return 20'000'000 + std::max(250'000 + 220'500 + MaximumPeerService,
+				ServiceMicroseconds(Total, PoolRate));
+		}
+	}
+
 	// Trusted, bounded host-only controller for the accepted 32-client recipient
 	// workload. The package's server script relays the authoritative DataModel
 	// ScalePhase attribute to the single producer through ScalePhaseControl and
@@ -36,6 +103,19 @@ namespace gargantuan::host {
 	// This class neither injects relevance/Desired state nor bypasses admission.
 	class PhysicalScaleQualification final {
 	  public:
+		struct ServerTickTiming {
+			std::uint64_t PollMicroseconds = 0;
+			std::uint64_t EngineMicroseconds = 0;
+			std::uint64_t SessionMicroseconds = 0;
+			std::uint64_t SessionIncrementalMicroseconds = 0;
+			std::uint64_t SessionBuildMicroseconds = 0;
+			std::uint64_t SessionEncodeMicroseconds = 0;
+			std::uint64_t SessionEncodeRetries = 0;
+			std::uint64_t SessionNamePreflightRetries = 0;
+			std::uint64_t SessionNameValidationBytes = 0;
+			std::uint64_t SessionNameValidationCacheHits = 0;
+			std::uint64_t PreQualificationMicroseconds = 0;
+		};
 		static constexpr std::size_t PeerCount = 32;
 		static constexpr std::size_t ActiveCharacters = 8;
 		static constexpr std::size_t NeighborhoodSize = 8;
@@ -45,14 +125,29 @@ namespace gargantuan::host {
 		static constexpr std::string_view ContentRootName = "ContentScaleRegion";
 
 		PhysicalScaleQualification(Engine &RuntimeValue, network::GameSession &SessionValue, std::string RunIdValue,
-			bool RecoveryWorkloadValue = false)
+			bool RecoveryWorkloadValue = false, detail::FarmServerTickEvidence *TickEvidenceValue = nullptr)
 			: Runtime(RuntimeValue), Session(SessionValue), RunId(std::move(RunIdValue)),
-				RecoveryWorkload(RecoveryWorkloadValue) {
+				RecoveryWorkload(RecoveryWorkloadValue), TickEvidence(TickEvidenceValue) {
 			if (RunId.empty() || !Runtime.Content || !Runtime.DataModel || !Runtime.CharacterControl)
 				throw std::invalid_argument("physical scale qualification requires a content-backed server runtime");
 		}
+		void AttachAdmissionEvidence(detail::FarmAdmissionEvidence &Evidence) { AdmissionEvidence = &Evidence; }
+		~PhysicalScaleQualification() {
+			QuoteWorker.reset();
+			try { DumpRecoveryEvidence(); }
+			catch (const std::exception &Error) {
+				std::cerr << "[Qualification:Recovery] evidence_write_failed=" << Error.what() << '\n';
+			}
+		}
+		void DumpRecoveryEvidence() const {
+			if (!AdmissionEvidence) return;
+			if (RecoveryEvidence) RecoveryEvidence->Detach();
+			for (std::size_t Index = 0; Index < RecoveryRecords.size(); ++Index)
+				if (RecoveryRecords[Index]) RecoveryRecords[Index]->Dump(*AdmissionEvidence, RunId, OverloadCases[Index]);
+		}
 
-		void Step(std::uint64_t Tick) {
+		void Step(std::uint64_t Tick, ServerTickTiming Timing) {
+			CurrentServerTickTiming = Timing;
 			if (State == Stage::Complete) return;
 			if (State == Stage::OverloadReady || State == Stage::OverloadOffering ||
 				State == Stage::OverloadOffered || State == Stage::OverloadRecovery) {
@@ -60,14 +155,15 @@ namespace gargantuan::host {
 				return;
 			}
 			if (State == Stage::AwaitingClockQuiescence) {
-				const auto Acks = Runtime.CharacterControl->GetAttributeValue(
-					"ScaleClockQuiescedAcks", ScriptSecurityContext::CoreTrusted());
-				if (Acks == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)))) {
+				if (HasAllPeerAcks("ScaleClockQuiescedAcks")) {
 					std::cout << "[Qualification:FarmClock] event=quiesce_complete run=" << RunId
 						<< " epoch=" << CalibrationEpoch << " count=" << PeerCount << " tick=" << Tick
 						<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
 							std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
 					PublishClockState(true, Tick);
+					// Quiescence and active RPC calibration are separately bounded stages.
+					// A late final quiescence ACK must not consume the probe budget.
+					CalibrationTick = Tick;
 					State = Stage::Calibrating;
 					return;
 				}
@@ -76,9 +172,7 @@ namespace gargantuan::host {
 				return;
 			}
 			if (State == Stage::Calibrating) {
-				const auto Acks = Runtime.CharacterControl->GetAttributeValue(
-					"ScaleClockAcks", ScriptSecurityContext::CoreTrusted());
-				if (Acks == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)))) {
+				if (HasAllPeerAcks("ScaleClockAcks")) {
 					std::cout << "[Qualification:FarmClock] event=calibration_complete run=" << RunId
 						<< " epoch=" << CalibrationEpoch << " count=" << PeerCount << " tick=" << Tick << '\n';
 					PublishClockState(false, Tick);
@@ -90,17 +184,26 @@ namespace gargantuan::host {
 				return;
 			}
 			if (State == Stage::Concluding) {
-				// The final phase must reach the clients before the host closes GNS.
-				// A client may finish and disconnect during this bounded interval.
-				if (Tick - ConclusionTick >= CompletionPropagationTicks) {
+				const auto Metrics = Session.GetMetrics();
+				if (Metrics.ReadyPeers != PeerCount || Metrics.ReliableAdmission.TerminalReleasedBytes != 0)
+					Fail("client_or_grant_left_before_completion", Tick);
+				// Keep the clients connected until every accepted structural byte
+				// retires; their completion observation alone is not a drain proof.
+				if (Tick - ConclusionTick >= CompletionPropagationTicks &&
+					detail::HasPhysicalScaleTerminalConvergence(Metrics)) {
 					State = Stage::Complete;
 					const auto Provider = Runtime.Content->GetMetrics();
 					std::cout << "[Qualification:Scale] event=result run=" << RunId
 						<< " status=PASS phases=5 peers=32 active_characters=8 content_objects=512"
+						<< " native_observed=" << Metrics.NativeQueuedReliablePeersObserved
+						<< " feedback_observed=" << Metrics.StructuralFeedbackPeersObserved
 						<< " provider_acquisitions=" << Provider.Acquisitions
 						<< " provider_admissions=" << Provider.Admissions
 						<< " provider_evictions=" << Provider.Evictions << " tick=" << Tick << '\n';
+					return;
 				}
+				if (Tick - ConclusionTick >= MaximumPhaseTicks)
+					Fail("completion_did_not_converge", Tick);
 				return;
 			}
 			if (FirstTick == 0) FirstTick = Tick;
@@ -131,10 +234,8 @@ namespace gargantuan::host {
 			const bool ProducerFailed = Runtime.CharacterControl->GetAttributeValue("ScaleProducerFailed",
 				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(std::string(PhaseName)));
 			if (ProducerFailed) Fail("producer_phase_metrics_failed", Tick);
-			const bool AllPeersAcknowledged = Runtime.CharacterControl->GetAttributeValue("ScalePhaseAcks",
-				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)));
-			const bool AllContentObserved = Runtime.CharacterControl->GetAttributeValue("ScaleContentObservedAcks",
-				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)));
+			const bool AllPeersAcknowledged = HasAllPeerAcks("ScalePhaseAcks");
+			const bool AllContentObserved = HasAllPeerAcks("ScaleContentObservedAcks");
 			if (AllPeersAcknowledged && !PhaseAcksObserved) {
 				PhaseAcksObserved = true;
 				std::cout << "[Qualification:Scale] event=phase_acks run=" << RunId << " phase=" << PhaseName
@@ -198,6 +299,7 @@ namespace gargantuan::host {
 		network::GameSession &Session;
 		std::string RunId;
 		bool RecoveryWorkload = false;
+		detail::FarmServerTickEvidence *TickEvidence = nullptr;
 		Stage State = Stage::WaitingForPeers;
 		Phase CurrentPhase = Phase::Baseline;
 		std::uint64_t FirstTick = 0;
@@ -219,9 +321,32 @@ namespace gargantuan::host {
 		std::shared_ptr<Folder> OverloadRoot;
 		std::array<std::shared_ptr<Part>, 32> OverloadParts{};
 		std::uint64_t CessationJournalTail = 0;
+		std::uint64_t CessationAcceptedBytes = 0;
+		detail::FarmAdmissionEvidence *AdmissionEvidence = nullptr;
+		std::optional<network::detail::FrozenCessationQuote> CessationQuote;
+		std::unique_ptr<detail::FrozenRecoveryQuote> QuoteWorker;
+		std::array<std::unique_ptr<detail::FarmRecoveryEvidence>, 3> RecoveryRecords;
+		detail::FarmRecoveryEvidence *RecoveryEvidence = nullptr;
+		std::uint64_t RecoveryConvergedMicroseconds = 0;
+		std::map<network::ConnectionId, std::uint64_t> QuotedFutureBytes;
+		std::size_t AdmissionEvidenceCursor = 0;
+		std::uint64_t QuotedFrameCount = 0, AuditedFrameCount = 0, AuditedAcceptedBytes = 0;
+		std::uint64_t QuoteBoundMicroseconds = 0;
+		bool QuoteComplete = false, QuoteSealed = false, QuoteResultWritten = false;
+		std::string QuoteFailure;
+		ServerTickTiming CurrentServerTickTiming;
+		network::GameSessionMetrics PreviousRecoveryMetrics;
+		std::uint64_t LastQuoteAdvanceMicroseconds = 0;
+		std::uint64_t LastQuoteBuildMicroseconds = 0;
+		std::uint64_t LastQuoteEncodeMicroseconds = 0;
+		std::uint64_t LastQuoteEncodeRetries = 0;
+		std::uint64_t QuoteLagRecords = 0;
+		bool LastQuoteAdvanceAttempted = false;
+		bool LastQuoteAdvanceProducedFrame = false;
 		bool RecoverySnapshotWritten = false;
 		std::size_t OverloadRetainedHighWater = 0;
 		std::int64_t OverloadMinimumRetentionMargin = std::numeric_limits<std::int64_t>::max();
+		std::uint64_t OverloadRetentionMutationSamples = 0;
 		std::size_t OverloadCase = 0;
 		std::uint32_t OverloadOpportunities = 0;
 		std::chrono::steady_clock::time_point OverloadStageStarted;
@@ -231,10 +356,11 @@ namespace gargantuan::host {
 		static constexpr std::uint32_t OverloadOpportunityCount = 480;
 		static constexpr std::size_t OverloadNameBytes = 24 * 1024;
 		// Keep the fixed 20-second service observation separate from the
-		// stronger sufficient convergence proof. Sample close to its derived
-		// 20.4705-second ceiling so delivery has the full lawful interval.
+		// workload-derived structural convergence deadline. This snapshot is a
+		// service observation, not the structural terminal deadline.
 		static constexpr auto StrictSnapshotTarget = std::chrono::microseconds(20'400'000);
-		static constexpr auto StrictConvergenceDeadline = std::chrono::microseconds(20'470'500);
+		static constexpr std::uint64_t MaximumPeerRetainedCompleteBytes = 40ULL * 1024 * 1024 * 1024;
+		static constexpr std::uint64_t MaximumPoolRetainedCompleteBytes = 768ULL * 1024 * 1024 * 1024;
 
 		[[nodiscard]] static std::string_view Name(Phase Value) {
 			switch (Value) {
@@ -250,7 +376,152 @@ namespace gargantuan::host {
 		[[noreturn]] void Fail(std::string_view Reason, std::uint64_t Tick) const {
 			std::cout << "[Qualification:Scale] event=result run=" << RunId << " status=FAIL reason=" << Reason
 				<< " tick=" << Tick << '\n';
+			try { DumpRecoveryEvidence(); }
+			catch (const std::exception &Error) {
+				std::cerr << "[Qualification:Recovery] evidence_write_failed=" << Error.what() << '\n';
+			}
 			throw std::runtime_error("physical scale qualification failed: " + std::string(Reason));
+		}
+
+		void StepCessationQuote() {
+			LastQuoteAdvanceMicroseconds = 0;
+			LastQuoteBuildMicroseconds = LastQuoteEncodeMicroseconds = LastQuoteEncodeRetries = 0;
+			LastQuoteAdvanceAttempted = LastQuoteAdvanceProducedFrame = false;
+			if (!CessationQuote || !AdmissionEvidence || !QuoteFailure.empty()) return;
+			const auto Events = AdmissionEvidence->EventsSince(AdmissionEvidenceCursor);
+			AdmissionEvidenceCursor += Events.size();
+			for (const auto &Event : Events) {
+				if (Event.Kind != network::detail::AdmissionEvidenceKind::GrantAccepted) continue;
+				if (!CessationQuote->MaximumFrameBytes.contains(Event.Connection)) {
+					QuoteFailure = "a new peer accepted structural work after cessation";
+					return;
+				}
+				++AuditedFrameCount;
+				AuditedAcceptedBytes += Event.ExactBytes;
+			}
+			// Consume only bounded metadata on Main. The worker exclusively owns
+			// the detached reference and never observes or modifies the live session.
+			for (std::size_t Consumed = 0; !QuoteComplete && QuoteWorker && Consumed < 64; ++Consumed) {
+				auto Result = QuoteWorker->TryPop();
+				if (!Result) break;
+				LastQuoteAdvanceAttempted = true;
+				LastQuoteBuildMicroseconds += Result->BuildMicroseconds;
+				LastQuoteEncodeMicroseconds += Result->EncodeMicroseconds;
+				LastQuoteEncodeRetries += Result->EncodeRetries;
+				LastQuoteAdvanceMicroseconds += Result->AdvanceMicroseconds;
+				QuoteLagRecords = Result->JournalLagRecords;
+				const auto &Step = Result->Step;
+				LastQuoteAdvanceProducedFrame |= Step.Frame.has_value();
+				if (!Step.Error.empty()) { QuoteFailure = Step.Error; return; }
+				if (Step.Complete) QuoteComplete = true;
+				else if (Step.Frame) {
+					if (Step.Frame->CompleteBytes > network::MaximumReliableServiceGroupBytes ||
+						QuotedFrameCount >= detail::FarmAdmissionEvidence::EventLimit() ||
+						QuotedFutureBytes[Step.Frame->Connection] >
+							std::numeric_limits<std::uint64_t>::max() - Step.Frame->CompleteBytes) {
+						QuoteFailure = "cessation quote exceeded its bounded frame count or byte sum";
+						return;
+					}
+					QuotedFutureBytes[Step.Frame->Connection] += Step.Frame->CompleteBytes;
+					RecoveryEvidence->ReferenceFrame(*Step.Frame);
+					++QuotedFrameCount;
+				}
+			}
+			if (!RecoveryEvidence->Failure().empty()) QuoteFailure = RecoveryEvidence->Failure();
+		}
+
+		[[nodiscard]] static std::string QuoteReasonToken(std::string_view Reason) {
+			std::string Result;
+			for (const char Value : Reason.substr(0, 96)) {
+				if ((Value >= 'a' && Value <= 'z') || (Value >= 'A' && Value <= 'Z') ||
+					(Value >= '0' && Value <= '9') || Value == '_') Result.push_back(Value);
+				else Result.push_back('_');
+			}
+			return Result.empty() ? "none" : Result;
+		}
+
+		void EmitQuoteResult(std::uint64_t Tick, std::uint64_t Total = 0) {
+			if (QuoteResultWritten) return;
+			QuoteResultWritten = true;
+			std::cerr << "[Qualification:Recovery] event=quote_result run=" << RunId
+				<< " case=" << OverloadCases[OverloadCase]
+				<< " status=" << (QuoteFailure.empty() ? "PASS" : "NOT_MEASURED")
+				<< " w_complete_upper_bytes=" << (QuoteFailure.empty() ? std::to_string(Total) : "NOT_MEASURED")
+				<< " contract=causal_fence_v1 quoted_frames=" << QuotedFrameCount
+				<< " bound_us=" << (QuoteFailure.empty() ? std::to_string(QuoteBoundMicroseconds) : "NOT_MEASURED")
+				<< " reason=" << QuoteReasonToken(QuoteFailure)
+				<< " tick=" << Tick << '\n';
+		}
+
+		void TrySealCessationQuote(const network::GameSessionMetrics &Metrics, std::uint64_t Tick) {
+			if (!QuoteFailure.empty()) return;
+			if (AdmissionEvidence->Overflowed()) { QuoteFailure = "admission evidence overflowed during quote audit"; return; }
+			if (Metrics.ReliableAdmission.AcceptedBytes < CessationAcceptedBytes ||
+				Metrics.ReliableAdmission.AcceptedBytes - CessationAcceptedBytes != AuditedAcceptedBytes ||
+				!RecoveryEvidence || !RecoveryEvidence->Failure().empty() ||
+				RecoveryEvidence->Audit().Totals().AcceptedBytes != AuditedAcceptedBytes + RecoveryEvidence->InitialDebt()) {
+				QuoteFailure = "admission totals do not match causal accepted frames";
+				return;
+			}
+			if (QuoteSealed || !QuoteComplete) return;
+			std::map<network::ConnectionId, std::uint64_t> WorkByPeer;
+			std::uint64_t Total = 0;
+			for (const auto &[Connection, Debt] : CessationQuote->AcceptedUnretiredCompleteBytes) {
+				const auto Future = QuotedFutureBytes[Connection];
+				if (Debt > network::MaximumReliableServiceGroupBytes ||
+					Future > MaximumPeerRetainedCompleteBytes - Debt ||
+					Total > MaximumPoolRetainedCompleteBytes - Debt - Future) {
+					QuoteFailure = "cessation quote exceeds canonical retained work bounds";
+					return;
+				}
+				WorkByPeer.emplace(Connection, Debt + Future);
+				Total += Debt + Future;
+			}
+			std::vector<std::uint64_t> WorkValues;
+			WorkValues.reserve(WorkByPeer.size());
+			for (const auto &[Connection, Work] : WorkByPeer) WorkValues.push_back(Work);
+			const auto Bound = detail::RecoveryConvergenceBoundMicroseconds(WorkValues);
+			if (!Bound) { QuoteFailure = "cessation quote recovery bound is invalid"; return; }
+			QuoteBoundMicroseconds = *Bound;
+			for (const auto &[Connection, Work] : WorkByPeer) {
+			const auto Debt = CessationQuote->AcceptedUnretiredCompleteBytes.at(Connection);
+			std::cerr << "[Qualification:Recovery] event=quote_peer run=" << RunId
+				<< " case=" << OverloadCases[OverloadCase]
+				<< " connection_slot=" << Connection.Slot
+				<< " connection_generation=" << Connection.Generation
+				<< " accepted_unretired_complete_bytes=" << Debt
+				<< " future_complete_bytes=" << QuotedFutureBytes[Connection]
+				<< " w_complete_upper_bytes=" << Work << '\n';
+			}
+			QuoteSealed = true;
+			EmitQuoteResult(Tick, Total);
+		}
+
+		void EmitCausalResult(std::uint64_t Elapsed) {
+			RecoveryEvidence->ValidateSource(Session);
+			for (const auto &Peer : RecoveryEvidence->Peers()) {
+				const auto Snapshot = RecoveryEvidence->Audit().Snapshot(Peer.Connection);
+				if (!Snapshot) { QuoteFailure = "causal peer summary missing"; return; }
+				const auto &Prefix = Snapshot->Prefix;
+				std::cerr << "[Qualification:Recovery] event=causal_peer run=" << RunId
+					<< " case=" << OverloadCases[OverloadCase]
+					<< " connection_slot=" << Peer.Connection.Slot << " connection_generation=" << Peer.Connection.Generation
+					<< " journal_fence=" << Snapshot->JournalFence << " cursor=" << Snapshot->JournalCursor
+					<< " cut_token=" << Snapshot->CutGrantToken << " cut_sequence=" << Snapshot->CutSequence
+					<< " unresolved=" << Snapshot->UnresolvedBaselineTokens
+					<< " planning_unresolved=" << Snapshot->HasUnresolvedPlanning
+					<< " accepted=" << Prefix.AcceptedBytes << " first_sent=" << Prefix.FirstSentBytes
+					<< " acked=" << Prefix.AckedBytes << " retired=" << Prefix.RetiredBytes
+					<< " converged=" << Snapshot->Converged << '\n';
+			}
+			const auto &Totals = RecoveryEvidence->Audit().Totals();
+			std::cerr << "[Qualification:Recovery] event=causal_result run=" << RunId
+				<< " case=" << OverloadCases[OverloadCase] << " contract=causal_fence_v1"
+				<< " status=" << (RecoveryEvidence->Converged() ? "PASS" : "FAIL")
+				<< " events=" << RecoveryEvidence->EventCount()
+				<< " accepted=" << Totals.AcceptedBytes << " first_sent=" << Totals.FirstSentBytes
+				<< " acked=" << Totals.AckedBytes << " retired=" << Totals.RetiredBytes
+				<< " prefix_converged_us=" << RecoveryConvergedMicroseconds << " elapsed_us=" << Elapsed << '\n';
 		}
 
 		void Initialize(std::uint64_t Tick) {
@@ -331,6 +602,16 @@ namespace gargantuan::host {
 				Track->SetLooped(true);
 				Track->Play();
 				RootTracks.push_back(std::move(Track));
+				std::cout << "[Qualification:Scale] event=tracked_root run=" << RunId
+					<< " index=" << Active - 1 << " client_index=" << Slot
+					<< " peer_slot=" << Identity.Connection.Slot
+					<< " peer_generation=" << Identity.Connection.Generation
+					<< " neighborhood=" << Neighborhood
+					<< " recipient_first=" << (Neighborhood - 1) * NeighborhoodSize
+					<< " recipient_last=" << Neighborhood * NeighborhoodSize - 1
+					<< " object_slot=" << Character->GetObjectId().Slot
+					<< " object_generation=" << Character->GetObjectId().Generation
+					<< " tick=" << Tick << '\n';
 			}
 			if (Active != ActiveCharacters || RootTracks.size() != ActiveCharacters)
 				Fail("active_character_count_mismatch", Tick);
@@ -376,6 +657,9 @@ namespace gargantuan::host {
 			CurrentPhase = Value;
 			PhaseTick = Tick;
 			PhaseStarted = std::chrono::steady_clock::now();
+			runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseStart",
+				.Sequence=static_cast<std::uint64_t>(Value) + 1, .Operations=1});
+			if (TickEvidence) TickEvidence->PhaseStart(static_cast<std::uint8_t>(Value), Tick);
 			PhaseAcksObserved = false;
 			ContentAcksObserved = false;
 			ProducerAckObserved = false;
@@ -418,12 +702,10 @@ namespace gargantuan::host {
 				Fail("overload_control_publication_rejected", Tick);
 		}
 
-		[[nodiscard]] int OverloadCount(std::string_view Key) const {
+		[[nodiscard]] bool HasAllPeerAcks(std::string_view Key) const {
 			const auto Value = Runtime.CharacterControl->GetAttributeValue(std::string(Key),
 				ScriptSecurityContext::CoreTrusted());
-			if (!Value) return 0;
-			const auto *Number = std::get_if<int>(&*Value);
-			return Number ? *Number : -1;
+			return detail::DecodePhysicalScaleCounter(Value) == static_cast<std::uint32_t>(PeerCount);
 		}
 
 		struct RetentionObservation {
@@ -433,7 +715,7 @@ namespace gargantuan::host {
 			std::int64_t Margin = 0;
 		};
 
-		[[nodiscard]] RetentionObservation ObserveRetention() {
+		[[nodiscard]] RetentionObservation ObserveRetention(std::uint64_t Tick) {
 			const auto Window = ChangeJournal::Get().GetRetentionWindow(Runtime.DataModel->GetObjectId());
 			auto Required = Window.NextSequence;
 			for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
@@ -441,6 +723,7 @@ namespace gargantuan::host {
 			const auto Margin = static_cast<std::int64_t>(Required) - static_cast<std::int64_t>(Window.OldestSequence);
 			OverloadRetainedHighWater = std::max(OverloadRetainedHighWater, Window.RetainedRecords);
 			OverloadMinimumRetentionMargin = std::min(OverloadMinimumRetentionMargin, Margin);
+			if (Margin < 0) Fail("journal_reader_evicted_during_overload", Tick);
 			return {Window.RetainedRecords, Window.OldestSequence, Required, Margin};
 		}
 
@@ -449,6 +732,7 @@ namespace gargantuan::host {
 			OverloadOpportunities = 0;
 			OverloadRetainedHighWater = 0;
 			OverloadMinimumRetentionMargin = std::numeric_limits<std::int64_t>::max();
+			OverloadRetentionMutationSamples = 0;
 			PublishOverloadAttribute("ScaleOverloadCase", WireValue(std::string(OverloadCases[OverloadCase])), Tick);
 			OverloadStageStarted = std::chrono::steady_clock::now();
 			State = Stage::OverloadReady;
@@ -487,18 +771,27 @@ namespace gargantuan::host {
 			const auto First = ((OverloadOpportunities - 1) % 2) * 16;
 			for (std::size_t Index = First; Index < First + 16; ++Index) {
 				const auto Letter = static_cast<char>('a' + (OverloadCase * 7 + OverloadOpportunities + Index) % 26);
+				const auto TailBefore = ChangeJournal::Get().CreateCursor(
+					Runtime.DataModel->GetObjectId()).NextSequence;
 				OverloadParts[Index]->SetName(std::string(OverloadNameBytes, Letter));
+				if (ChangeJournal::Get().CreateCursor(Runtime.DataModel->GetObjectId()).NextSequence <= TailBefore)
+					Fail("overload_name_mutation_not_committed", Tick);
+				// Sample immediately after each committed workload mutation, not
+				// merely after the sixteen-mutation opportunity has completed.
+				(void)ObserveRetention(Tick);
+				++OverloadRetentionMutationSamples;
 			}
 			std::cout << "[Qualification:Recovery] event=structural_offer run=" << RunId
 				<< " case=" << OverloadCases[OverloadCase] << " opportunity=" << OverloadOpportunities
 				<< " mutations=16 name_bytes=" << OverloadNameBytes << " tick=" << Tick
 				<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
-			const auto Retention = ObserveRetention();
+			const auto Retention = ObserveRetention(Tick);
 			std::cout << "[Qualification:Recovery] event=retention run=" << RunId
 				<< " case=" << OverloadCases[OverloadCase] << " opportunity=" << OverloadOpportunities
 				<< " retained=" << Retention.Retained << " oldest=" << Retention.Oldest
-				<< " required=" << Retention.Required << " margin=" << Retention.Margin << '\n';
+				<< " required=" << Retention.Required << " margin=" << Retention.Margin
+				<< " mutation_samples=" << OverloadRetentionMutationSamples << '\n';
 		}
 
 		void StepOverload(std::uint64_t Tick) {
@@ -506,7 +799,7 @@ namespace gargantuan::host {
 			const auto CaseName = OverloadCases[OverloadCase];
 			if (Session.GetMetrics().ReadyPeers != PeerCount) Fail("client_left_during_overload", Tick);
 			if (State == Stage::OverloadReady) {
-				if (OverloadCount("ScaleOverloadReadyAcks") == static_cast<int>(PeerCount) &&
+				if (HasAllPeerAcks("ScaleOverloadReadyAcks") &&
 					Session.GetMetrics().MaterializationBacklog == 0) {
 					State = Stage::OverloadOffering;
 					OverloadStageStarted = Now;
@@ -522,7 +815,7 @@ namespace gargantuan::host {
 				LastOverloadOpportunity = Now;
 				++OverloadOpportunities;
 				OfferOverloadNameWork(Tick);
-				if (OverloadCase == 0) (void)ObserveRetention();
+				if (OverloadCase == 0) (void)ObserveRetention(Tick);
 				if (OverloadOpportunities == OverloadOpportunityCount) {
 					State = Stage::OverloadOffered;
 					std::cout << "[Qualification:Recovery] event=all_opportunities run=" << RunId
@@ -534,14 +827,55 @@ namespace gargantuan::host {
 			return;
 			}
 			if (State == Stage::OverloadOffered) {
-				if (OverloadCount("ScaleOverloadOfferedAcks") == static_cast<int>(PeerCount)) {
+				if (HasAllPeerAcks("ScaleOverloadOfferedAcks")) {
 					PublishOverloadAttribute("ScaleOverloadCase", WireValue("recover_" + std::string(CaseName)), Tick);
 					OverloadCeased = std::chrono::steady_clock::now();
 					CessationJournalTail = ChangeJournal::Get().CreateCursor(
 						Runtime.DataModel->GetObjectId()).NextSequence;
+					QuoteWorker.reset();
+					CessationQuote.reset();
+					if (RecoveryEvidence) RecoveryEvidence->Detach();
+					RecoveryEvidence = nullptr;
+					RecoveryConvergedMicroseconds = 0;
+					QuotedFutureBytes.clear();
+					QuotedFrameCount = AuditedFrameCount = AuditedAcceptedBytes = 0;
+					QuoteBoundMicroseconds = 0;
+					QuoteLagRecords = 0;
+					QuoteComplete = QuoteSealed = QuoteResultWritten = false;
+					QuoteFailure.clear();
+					std::uint64_t QuoteCaptureMicroseconds = 0;
+					if (!AdmissionEvidence) QuoteFailure = "admission evidence is unavailable";
+					else {
+						AdmissionEvidenceCursor = static_cast<std::size_t>(AdmissionEvidence->Count());
+						const auto CaptureStarted = std::chrono::steady_clock::now();
+						CessationQuote = network::detail::GameSessionTestAccess::CaptureFrozenCessationQuote(
+							Session, QuoteFailure);
+						QuoteCaptureMicroseconds = static_cast<std::uint64_t>(
+							std::chrono::duration_cast<std::chrono::microseconds>(
+								std::chrono::steady_clock::now() - CaptureStarted).count());
+						if (!CessationQuote && QuoteFailure.empty()) QuoteFailure = "cessation quote capture failed";
+						if (CessationQuote) {
+							auto Snapshot = network::detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(Session, QuoteFailure);
+							if (Snapshot) {
+								RecoveryRecords[OverloadCase] = std::make_unique<detail::FarmRecoveryEvidence>(std::move(*Snapshot));
+								RecoveryEvidence = RecoveryRecords[OverloadCase].get();
+								QuoteFailure = RecoveryEvidence->Failure();
+								if (QuoteFailure.empty())
+									QuoteWorker = std::make_unique<detail::FrozenRecoveryQuote>(
+										std::move(CessationQuote->Replication), CessationQuote->MaximumFrameBytes);
+							}
+						}
+					}
+					std::cerr << "[Qualification:Recovery] event=quote_capture run=" << RunId
+						<< " case=" << CaseName << " status=" << (CessationQuote ? "READY" : "NOT_MEASURED")
+						<< " capture_us=" << QuoteCaptureMicroseconds
+						<< " reason=" << QuoteReasonToken(QuoteFailure)
+						<< " tick=" << Tick << '\n';
 					RecoverySnapshotWritten = false;
 					State = Stage::OverloadRecovery;
 					const auto Metrics = Session.GetMetrics();
+					PreviousRecoveryMetrics = Metrics;
+					CessationAcceptedBytes = Metrics.ReliableAdmission.AcceptedBytes;
 					std::cout << "[Qualification:Recovery] event=cessation run=" << RunId
 						<< " case=" << CaseName << " tick=" << Tick
 						<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
@@ -551,6 +885,7 @@ namespace gargantuan::host {
 								OverloadOpportunityCount * 16 * OverloadNameBytes)
 						<< " retained_high=" << OverloadRetainedHighWater
 						<< " minimum_retention_margin=" << OverloadMinimumRetentionMargin
+						<< " retention_mutation_samples=" << OverloadRetentionMutationSamples
 						<< " journal_backlog=" << Metrics.JournalBacklogRecords
 						<< " outstanding=" << Metrics.ReliableAdmission.OutstandingBytes
 						<< " scheduler_queued=" << Metrics.SchedulerQueuedReliableBytes
@@ -565,15 +900,89 @@ namespace gargantuan::host {
 				return;
 			}
 			if (State == Stage::OverloadRecovery) {
+				const auto QuoteStarted = std::chrono::steady_clock::now();
+				StepCessationQuote();
+				const auto QuoteMicroseconds = static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::microseconds>(
+						std::chrono::steady_clock::now() - QuoteStarted).count());
 				const auto Metrics = Session.GetMetrics();
-				const auto Retention = ObserveRetention();
-				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(Now - OverloadCeased).count();
-				std::cerr << "[Qualification:Recovery] event=sample run=" << RunId
+				const auto RelevanceMicroseconds =
+					(Metrics.RelevanceCpuNanoseconds - PreviousRecoveryMetrics.RelevanceCpuNanoseconds) / 1000;
+				const auto PlanningMicroseconds =
+					(Metrics.PlanningCpuNanoseconds - PreviousRecoveryMetrics.PlanningCpuNanoseconds) / 1000;
+				const auto MaterializationMicroseconds =
+					(Metrics.MaterializationCpuNanoseconds - PreviousRecoveryMetrics.MaterializationCpuNanoseconds) / 1000;
+				const auto SelectionMicroseconds =
+					(Metrics.StructuralSelectionCpuNanoseconds - PreviousRecoveryMetrics.StructuralSelectionCpuNanoseconds) / 1000;
+				const auto EncodedBytes = Metrics.StructuralBytesEncoded - PreviousRecoveryMetrics.StructuralBytesEncoded;
+				const auto JournalRecords = Metrics.JournalRecordsExamined - PreviousRecoveryMetrics.JournalRecordsExamined;
+				const auto PlanningWork = Metrics.PlanningWork - PreviousRecoveryMetrics.PlanningWork;
+				PreviousRecoveryMetrics = Metrics;
+				const auto Remote = network::detail::GameSessionTestAccess::GetRemoteMetrics(Session);
+				TrySealCessationQuote(Metrics, Tick);
+				if (!QuoteFailure.empty()) {
+					if (QuoteResultWritten)
+						std::cerr << "[Qualification:Recovery] event=quote_revoked run=" << RunId
+							<< " case=" << CaseName << " reason=" << QuoteReasonToken(QuoteFailure)
+							<< " tick=" << Tick << '\n';
+					EmitQuoteResult(Tick);
+					Fail("recovery_quote_invalid", Tick);
+				}
+				const auto Retention = ObserveRetention(Tick);
+				// Timestamp the live observation after collecting available reference
+				// metadata. Oracle work never pauses or subtracts from this clock.
+				const auto ObservedAt = std::chrono::steady_clock::now();
+				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+					ObservedAt - OverloadCeased).count();
+				if (!RecoveryConvergedMicroseconds && RecoveryEvidence->Converged())
+					RecoveryConvergedMicroseconds = static_cast<std::uint64_t>(Elapsed);
+				// The binary tick record retains every server step. Keep textual
+				// recovery samples bounded when a large exact quote spans many ticks,
+				// while always recording the two acceptance observation points.
+				const bool SnapshotDue = !RecoverySnapshotWritten &&
+					ObservedAt - OverloadCeased >= StrictSnapshotTarget;
+				const bool DeadlineDue = (RecoverySnapshotWritten || SnapshotDue) && QuoteSealed &&
+					ObservedAt - OverloadCeased >= std::chrono::microseconds(QuoteBoundMicroseconds);
+				if (Tick % 16 == 0 || SnapshotDue || DeadlineDue)
+					std::cerr << "[Qualification:Recovery] event=sample run=" << RunId
 					<< " case=" << CaseName << " elapsed_us=" << Elapsed
+					<< " poll_us=" << CurrentServerTickTiming.PollMicroseconds
+					<< " engine_us=" << CurrentServerTickTiming.EngineMicroseconds
+					<< " session_us=" << CurrentServerTickTiming.SessionMicroseconds
+					<< " session_incremental_us=" << CurrentServerTickTiming.SessionIncrementalMicroseconds
+					<< " session_build_us=" << CurrentServerTickTiming.SessionBuildMicroseconds
+					<< " session_encode_us=" << CurrentServerTickTiming.SessionEncodeMicroseconds
+					<< " session_encode_retries=" << CurrentServerTickTiming.SessionEncodeRetries
+					<< " session_name_preflight_retries=" << CurrentServerTickTiming.SessionNamePreflightRetries
+					<< " session_name_validation_bytes=" << CurrentServerTickTiming.SessionNameValidationBytes
+					<< " session_name_validation_cache_hits=" << CurrentServerTickTiming.SessionNameValidationCacheHits
+					<< " relevance_us=" << RelevanceMicroseconds
+					<< " planning_us=" << PlanningMicroseconds
+					<< " materialization_us=" << MaterializationMicroseconds
+					<< " selection_us=" << SelectionMicroseconds
+					<< " encoded_bytes=" << EncodedBytes
+					<< " journal_records=" << JournalRecords
+					<< " planning_work=" << PlanningWork
+					<< " prequalification_us=" << CurrentServerTickTiming.PreQualificationMicroseconds
+					<< " quote_us=" << QuoteMicroseconds
+					<< " quote_advance_us=" << LastQuoteAdvanceMicroseconds
+					<< " quote_build_us=" << LastQuoteBuildMicroseconds
+					<< " quote_encode_us=" << LastQuoteEncodeMicroseconds
+					<< " quote_encode_retries=" << LastQuoteEncodeRetries
+					<< " quote_advance_attempted=" << LastQuoteAdvanceAttempted
+					<< " quote_advance_frame=" << LastQuoteAdvanceProducedFrame
+					<< " quote_complete=" << QuoteComplete << " quote_sealed=" << QuoteSealed
+					<< " quote_frames=" << QuotedFrameCount << " quote_audited=" << AuditedFrameCount
+					<< " quote_lag_records=" << QuoteLagRecords
 					<< " outstanding=" << Metrics.ReliableAdmission.OutstandingBytes
 					<< " active_grants=" << Metrics.ReliableAdmission.ActiveDrainGrants
 					<< " scheduler_queued=" << Metrics.SchedulerQueuedReliableBytes
 					<< " native_queued=" << Metrics.NativeQueuedReliableBytes
+					<< " remote_dispatch_messages=" << Remote.QueuedDispatchMessages
+					<< " remote_dispatch_bytes=" << Remote.QueuedDispatchBytes
+					<< " remote_deferred_messages=" << Remote.DeferredReliableMessages
+					<< " remote_deferred_bytes=" << Remote.DeferredReliableBytes
+					<< " remote_inflight_requests=" << Remote.InFlightRequests
 					<< " native_observed=" << Metrics.NativeQueuedReliablePeersObserved
 					<< " feedback_observed=" << Metrics.StructuralFeedbackPeersObserved
 					<< " accepted=" << Metrics.StructuralAcceptedFeedbackBytes
@@ -594,7 +1003,8 @@ namespace gargantuan::host {
 					<< " journal_lag_high=" << Metrics.StructuralMaximumJournalLagRecords
 					<< " journal_failures=" << Metrics.StructuralJournalLagFailures
 					<< " tick=" << Tick << '\n';
-				if (!RecoverySnapshotWritten && Now - OverloadCeased >= StrictSnapshotTarget) {
+				if (SnapshotDue) {
+					RecoveryEvidence->ValidateSource(Session);
 					RecoverySnapshotWritten = true;
 					for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
 						std::cerr << "[Qualification:Recovery] event=reader run=" << RunId
@@ -609,9 +1019,24 @@ namespace gargantuan::host {
 						<< " cessation_tail=" << CessationJournalTail
 						<< " retained_work_bytes=NOT_MEASURED tick=" << Tick << '\n';
 				}
-				if (Now - OverloadCeased >= StrictConvergenceDeadline) {
+				if (DeadlineDue) {
+					EmitCausalResult(Elapsed);
+					RecoveryEvidence->Detach();
+					if (RecoveryEvidence->Converged())
+						for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
+							std::cerr << "[Qualification:Recovery] event=terminal_reader run=" << RunId
+								<< " case=" << CaseName << " catalog=" << Reader.Catalog
+								<< " connection_slot=" << Reader.Connection.Slot
+								<< " connection_generation=" << Reader.Connection.Generation
+								<< " next_sequence=" << Reader.Cursor.NextSequence
+								<< " prepared=" << Reader.PreparedCommit
+								<< " pending_relevance=" << Reader.PendingRelevance << '\n';
 					std::cerr << "[Qualification:Recovery] event=strict_deadline_barrier run=" << RunId
-						<< " case=" << CaseName << " elapsed_us=" << Elapsed << '\n';
+						<< " case=" << CaseName << " elapsed_us=" << Elapsed
+						<< " bound_us=" << QuoteBoundMicroseconds << '\n';
+					if (!RecoveryEvidence->Converged() || !RecoveryConvergedMicroseconds ||
+						RecoveryConvergedMicroseconds > QuoteBoundMicroseconds)
+						Fail("recovery_work_did_not_converge_within_bound", Tick);
 					if (++OverloadCase < OverloadCases.size()) BeginOverloadCase(Tick);
 					else PublishCompletion(Tick);
 				}
@@ -619,6 +1044,9 @@ namespace gargantuan::host {
 		}
 
 		void PublishCompletion(std::uint64_t Tick) {
+			// The measured phases, including continuing-motion recovery, have
+			// finished. Stop the workload before requiring whole-run quiescence.
+			for (const auto &Track : RootTracks) Track->Stop();
 			if (Runtime.DataModel->ApplyAttributeMutation("ScalePhase", WireValue(std::string("complete")),
 				ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
 				Fail("completion_publication_rejected", Tick);
@@ -629,7 +1057,10 @@ namespace gargantuan::host {
 		}
 
 		void EndPhase(std::uint64_t Tick) {
+			runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseEnd",
+				.Sequence=static_cast<std::uint64_t>(CurrentPhase) + 1});
 			const auto Ended = std::chrono::steady_clock::now();
+			if (TickEvidence) TickEvidence->PhaseEnd(static_cast<std::uint8_t>(CurrentPhase), Tick);
 			const auto Metrics = Session.GetMetrics();
 			const auto Provider = Runtime.Content->GetMetrics();
 			const auto Root = GetContentRoot();

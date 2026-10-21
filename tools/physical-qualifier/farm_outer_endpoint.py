@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -29,7 +30,8 @@ from private_ticket_acl import AssertPrivate, Harden
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 MAX_CONFIG = 65536
 MAX_LOG = 8 * 1024 * 1024
-MAX_SECONDS = 850
+MAX_SECONDS = 3050  # 3000 s capture finish plus 50 s outer cleanup guard; no live-gate change.
+NODE_TOKEN_NAME = "node-token.secret"
 
 
 def Digest(File):
@@ -50,6 +52,48 @@ def Prepare(Root):
         raise ValueError("[Qualification:FarmOuter] stage root already exists")
     Root.mkdir(mode=0o700)
     Harden(Root)
+
+
+def NewNodeToken(Root):
+    AssertPrivate(Root)
+    Root = Path(Root).resolve(strict=True)
+    if str(uuid.UUID(Root.name)) != Root.name:
+        raise ValueError("[Qualification:FarmOuter] Node token run identity mismatch")
+    Token = Root / NODE_TOKEN_NAME
+    with Token.open("xb") as Stream:
+        Stream.write(secrets.token_hex(32).encode("ascii"))
+    print("[Qualification:FarmOuter] NODE_TOKEN_CREATED", flush=True)
+
+
+def RetireNodeToken(Root):
+    if Path(Root).is_symlink() or (hasattr(Path(Root), "is_junction") and Path(Root).is_junction()):
+        raise ValueError("[Qualification:FarmOuter] Node token root is a link")
+    if not Path(Root).exists():
+        return
+    AssertPrivate(Root)
+    Root = Path(Root).resolve(strict=True)
+    if str(uuid.UUID(Root.name)) != Root.name:
+        raise ValueError("[Qualification:FarmOuter] Node token run identity mismatch")
+    Token = Root / NODE_TOKEN_NAME
+    if Token.is_symlink():
+        raise ValueError("[Qualification:FarmOuter] Node token is a link")
+    Token.unlink(missing_ok=True)
+
+
+def RetireNodeTls(Root):
+    if Path(Root).is_symlink() or (hasattr(Path(Root), "is_junction") and Path(Root).is_junction()):
+        raise ValueError("[Qualification:FarmOuter] Node TLS root is a link")
+    if not Path(Root).exists():
+        return
+    AssertPrivate(Root)
+    Root = Path(Root).resolve(strict=True)
+    if str(uuid.UUID(Root.name)) != Root.name:
+        raise ValueError("[Qualification:FarmOuter] Node TLS run identity mismatch")
+    for Name in ("node-key.pem", "node-cert.pem", "node-root-ca.pem"):
+        File = Root / Name
+        if File.is_symlink():
+            raise ValueError("[Qualification:FarmOuter] Node TLS material is a link")
+        File.unlink(missing_ok=True)
 
 
 def Verify(Root, IndexPath):
@@ -218,13 +262,21 @@ def Run(Root, IndexPath, ConfigPath, Action):
 
 def Main():
     Parser = argparse.ArgumentParser(description=__doc__)
-    Parser.add_argument("Action", choices=("prepare", "verify", "digest", "probe", "abort", "host", "role"))
+    Parser.add_argument("Action", choices=("prepare", "new-node-token", "retire-node-token",
+                                           "retire-node-tls",
+                                           "verify", "digest", "probe", "abort", "host", "role"))
     Parser.add_argument("Root")
     Parser.add_argument("IndexOrPort", nargs="?")
     Parser.add_argument("ConfigOrRunId", nargs="?")
     Args = Parser.parse_args()
     if Args.Action == "prepare" and Args.IndexOrPort is None:
         Prepare(Args.Root)
+    elif Args.Action == "new-node-token" and Args.IndexOrPort is None:
+        NewNodeToken(Args.Root)
+    elif Args.Action == "retire-node-token" and Args.IndexOrPort is None:
+        RetireNodeToken(Args.Root)
+    elif Args.Action == "retire-node-tls" and Args.IndexOrPort is None:
+        RetireNodeTls(Args.Root)
     elif Args.Action == "verify" and Args.IndexOrPort is not None:
         Verify(Args.Root, Args.IndexOrPort)
     elif Args.Action == "digest" and Args.IndexOrPort is None:

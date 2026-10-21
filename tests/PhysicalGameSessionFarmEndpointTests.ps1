@@ -27,6 +27,26 @@ $Evidence = Join-Path $Root 'Evidence'
 $Registry = Join-Path $Root 'Registry'
 [void][IO.Directory]::CreateDirectory($Package)
 try {
+	$LiveLogPath = Join-Path $Root 'live-server.log'
+	$LiveWriter = [IO.File]::Open($LiveLogPath, [IO.FileMode]::CreateNew,
+		[IO.FileAccess]::Write, [IO.FileShare]::Read)
+	try {
+		$First = [Text.Encoding]::UTF8.GetBytes("[Qualification:Server] event=start run=live`n[Qualification:Server] event=res")
+		$LiveWriter.Write($First, 0, $First.Length)
+		$LiveWriter.Flush()
+		$Records = @(Get-TypedRecords -Path $LiveLogPath -Kind 'Server')
+		if ($Records.Count -ne 1 -or $Records[0].event -cne 'start') {
+			throw 'live endpoint log reader exposed an incomplete line or failed sharing'
+		}
+		$Tail = [Text.Encoding]::UTF8.GetBytes("ult run=live`n")
+		$LiveWriter.Write($Tail, 0, $Tail.Length)
+		$LiveWriter.Flush()
+		$Records = @(Get-TypedRecords -Path $LiveLogPath -Kind 'Server')
+		if ($Records.Count -ne 2 -or $Records[1].event -cne 'result') {
+			throw 'live endpoint log reader lost a completed line'
+		}
+	} finally { $LiveWriter.Dispose() }
+
 	$Prefix = [UInt64]4294967296
 	$Nonces = @(for ($Slot = 0; $Slot -lt 32; $Slot++) { [string]($Prefix + [UInt64]($Slot + 1)) })
 	$Manifest = [ordered]@{

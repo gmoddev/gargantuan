@@ -29,6 +29,7 @@ from agent_coordinator.control import Assignments, Host, Join  # noqa: E402
 from agent_coordinator.transport import Journal  # noqa: E402
 from agent_coordinator.workflow import Workflow  # noqa: E402
 from farm_lifecycle import GetCatalog  # noqa: E402
+from private_ticket_acl import AssertPrivate  # noqa: E402
 
 FORMAT = "GargantuanFarm32Campaign"
 ROLES = ("SERVER", "CLIENT")
@@ -57,7 +58,9 @@ NODE_RECONCILE_KEYS = ("NodePowerShellPath", "NodePowerShellSha256",
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 READY_SECONDS = 20
-CAPTURE_FINISH_SECONDS = 800  # Controller owns bounded stop/autostop and offline export.
+# 500 s role wait + 80 s Stop + 10 s status + 1800 s offline export +
+# 610 s streaming hash/receipt guard. This does not extend the live capture lease.
+CAPTURE_FINISH_SECONDS = 3000
 PREFLIGHT_AGE_SECONDS = 120
 TICKET_AGE_SECONDS = 3600
 MAX_JSON_BYTES = 65536
@@ -223,6 +226,9 @@ def VerifyNodeStage(Config, Farm, Manifest):
             Stage.get("RunManifestSha256") != Config["ManifestSha256"] or
             Stage.get("NodeEndpoint") != Manifest.get("NodeEndpoint") or
             Stage.get("NodeTokenEnvironment") != Manifest.get("NodeTokenEnvironment") or
+            not isinstance(Stage.get("NodeTokenFilePath"), str) or
+            not isinstance(Stage.get("NodeTokenFileSha256"), str) or
+            not re.fullmatch(r"[0-9a-f]{64}", Stage["NodeTokenFileSha256"]) or
             Stage.get("RootCertificateSha256") != str(Manifest.get("NodeRootCertificateSha256")).lower() or
             Stage.get("HelperSha256") != Config["NodeHelperSha256"]):
         raise ValueError("[Qualification:FarmCampaign] Node stage identity mismatch")
@@ -235,6 +241,21 @@ def VerifyNodeStage(Config, Farm, Manifest):
            ("node-run.claim", "node-run.json", "node-tcp-ready.json", "stop.request")):
         raise ValueError("[Qualification:FarmCampaign] Node stage already consumed")
     return PowerShell, Helper, StageRoot
+
+
+def ReadNodeToken(Config, Stage):
+    TokenFile = Path(Stage["NodeTokenFilePath"])
+    if (TokenFile.name != "node-token.secret" or TokenFile.parent.name != Config["RunId"] or
+            not TokenFile.is_absolute() or TokenFile.is_symlink()):
+        raise ValueError("[Qualification:FarmCampaign] Node token path or run identity mismatch")
+    AssertPrivate(TokenFile.parent)
+    if not TokenFile.is_file() or TokenFile.stat().st_size != 64 or \
+            Digest(TokenFile) != Stage["NodeTokenFileSha256"]:
+        raise ValueError("[Qualification:FarmCampaign] Node token file pin mismatch")
+    Token = TokenFile.read_text(encoding="ascii")
+    if not re.fullmatch(r"[0-9a-f]{64}", Token):
+        raise ValueError("[Qualification:FarmCampaign] Node token format mismatch")
+    return Token
 
 
 def WriteNewJson(File, Row):
@@ -291,7 +312,7 @@ def StopNode(Config, Process, StageRoot):
             Row.get("Reason") != "STOP_REQUESTED" or Row.get("TcpReady") is not True or
             Row.get("ChildReaped") is not True):
         raise ValueError("[Qualification:FarmCampaign] owned Node run receipt failed")
-    return Receipt
+    return Receipt.resolve(strict=True)
 
 
 def RunRole(TicketPath):
@@ -322,17 +343,27 @@ def RunRole(TicketPath):
     NodeProcess = None
     NodeRoot = None
     NodeReceipt = None
+    TokenEnvironment = None
+    PreviousToken = None
     Started = None
     JoinCode = 1
     try:
         if "NodeStagePath" in Config:
             Manifest = ReadJson(Pinned(Config["ManifestPath"], Config["ManifestSha256"], "manifest"))
+            Stage = ReadJson(Pinned(Config["NodeStagePath"], Config["NodeStageSha256"],
+                                    "Node stage", "node-stage.json"))
+            TokenEnvironment = Manifest["NodeTokenEnvironment"]
+            PreviousToken = os.environ.get(TokenEnvironment)
+            os.environ[TokenEnvironment] = ReadNodeToken(Config, Stage)
             NodeProcess, NodeRoot = StartNode(Config, Farm, Manifest)
             AwaitNodeReady(Config, NodeProcess, NodeRoot)
+        CaptureEnvironment = os.environ.copy()
+        if TokenEnvironment is not None:
+            CaptureEnvironment.pop(TokenEnvironment, None)
         CaptureProcess = subprocess.Popen(
             [sys.executable, "-B", str(Controller), "role", Config["CaptureConfigPath"]],
             cwd=str(Controller.parent), stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, creationflags=Flags)
+            stderr=subprocess.DEVNULL, creationflags=Flags, env=CaptureEnvironment)
         Started = time.monotonic()
         Deadline = Started + READY_SECONDS
         while not Ready.is_file():
@@ -371,20 +402,29 @@ def RunRole(TicketPath):
         WriteNewJson(Config["ResultPath"], Result)
         return 0
     finally:
-        if CaptureProcess is not None and CaptureProcess.poll() is None:
-            try:
-                # The fixed controller owns a bounded Stop/Abort path. Let it
-                # release the worker lease even after coordinator failure.
-                CaptureProcess.wait(timeout=max(0.1, Started + CAPTURE_FINISH_SECONDS - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                CaptureProcess.terminate()
+        try:
+            if CaptureProcess is not None and CaptureProcess.poll() is None:
                 try:
-                    CaptureProcess.wait(timeout=5)
+                    # The fixed controller owns a bounded Stop/Abort path. Let it
+                    # release the worker lease even after coordinator failure.
+                    CaptureProcess.wait(timeout=max(0.1, Started + CAPTURE_FINISH_SECONDS - time.monotonic()))
                 except subprocess.TimeoutExpired:
-                    CaptureProcess.kill()
-                    CaptureProcess.wait(timeout=5)
-        if NodeProcess is not None and NodeReceipt is None:
-            StopNode(Config, NodeProcess, NodeRoot)
+                    CaptureProcess.terminate()
+                    try:
+                        CaptureProcess.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        CaptureProcess.kill()
+                        CaptureProcess.wait(timeout=5)
+        finally:
+            try:
+                if NodeProcess is not None and NodeReceipt is None:
+                    StopNode(Config, NodeProcess, NodeRoot)
+            finally:
+                if TokenEnvironment is not None:
+                    if PreviousToken is None:
+                        os.environ.pop(TokenEnvironment, None)
+                    else:
+                        os.environ[TokenEnvironment] = PreviousToken
 
 
 def RunHost(ConfigPath):

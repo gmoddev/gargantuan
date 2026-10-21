@@ -9,11 +9,32 @@ param(
 	[Parameter(Mandatory = $true)][string]$NodeReportPath,
 	[Parameter(Mandatory = $true)][string]$NodeServerEvidenceRoot,
 	[Parameter(Mandatory = $true)][string]$NodeClientEvidenceRoot,
+	[string]$NodeTlsMatchReceiptPath,
+	[string]$NodeTlsMatchReceiptSha256,
+	[string]$NodeStagePath,
+	[string]$NodeStageSha256,
+	[string]$NodeRunReceiptPath,
+	[string]$NodeRunReceiptSha256,
+	[string]$LocalServerCaptureIndexPath,
+	[string]$LocalClientCaptureIndexPath,
+	[string]$LocalOuterCaptureReceiptPath,
+	[string]$LocalCoordinatorResultPath,
+	[string]$NodeServerCaptureIndexPath,
+	[string]$NodeClientCaptureIndexPath,
+	[string]$NodeOuterCaptureReceiptPath,
+	[string]$NodeCoordinatorResultPath,
 	[Parameter(Mandatory = $true)][string]$OutputPath
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
+. (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmClockEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmLifecycle.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmRemoteOwnership.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmF1.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmNodeResources.ps1')
 
 function Import-FarmRecoveryParser {
 	$Path = Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1'
@@ -21,8 +42,9 @@ function Import-FarmRecoveryParser {
 	$Errors = $null
 	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
 	if ($Errors.Count -ne 0) { throw 'canonical farm recovery parser has a syntax error' }
-	$Needed = @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
-		'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')
+	$Needed = @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
+		'Test-RecoveryQuiescent', 'Test-RecoveryServiceHealthy', 'Get-RecoveryUnsigned',
+		'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-RecoveryRecords', 'Assert-Records', 'Assert-ScaleRecords')
 	foreach ($Function in $Ast.FindAll({ param($Node)
 		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
 	}, $true)) {
@@ -33,11 +55,18 @@ function Import-FarmRecoveryParser {
 foreach ($Definition in @(Import-FarmRecoveryParser)) {
 	. ([scriptblock]::Create($Definition))
 }
-foreach ($Name in @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
-	'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')) {
+foreach ($Name in @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
+	'Test-RecoveryQuiescent', 'Test-RecoveryServiceHealthy', 'Get-RecoveryUnsigned',
+	'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-RecoveryRecords', 'Assert-Records', 'Assert-ScaleRecords')) {
 	if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
 		throw "canonical farm recovery parser lacks $Name"
 	}
+}
+
+$NodeTlsInputs = @($NodeTlsMatchReceiptPath, $NodeTlsMatchReceiptSha256,
+	$NodeStagePath, $NodeStageSha256, $NodeRunReceiptPath, $NodeRunReceiptSha256)
+if (@($NodeTlsInputs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0, 6)) {
+	throw 'Node TLS acceptance inputs must be supplied together'
 }
 
 function Read-BoundedJson {
@@ -47,6 +76,119 @@ function Read-BoundedJson {
 	if ($Item.PSIsContainer -or $Item.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or
 		$Item.Length -gt $MaximumBytes) { throw "missing, redirected, or oversized JSON: $Path" }
 	return Get-Content -LiteralPath $Resolved -Raw | ConvertFrom-Json -AsHashtable
+}
+
+function Read-FarmServerWorkTicks {
+	param([string]$ServerRoot, [System.Collections.IDictionary]$ServerIndex, [string]$RunId)
+	$Members = @($ServerIndex.Files | Where-Object Name -CEQ 'server-work-ticks.bin')
+	if ($Members.Count -eq 0) {
+		return [ordered]@{ Status = 'NOT_MEASURED'; Reason = 'indexed server work-tick evidence absent' }
+	}
+	if ($Members.Count -ne 1) { throw 'indexed server work-tick evidence is duplicated' }
+	$ScriptPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../tools/physical-qualifier/farm_server_tick.py'))
+	if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+		throw 'bounded server work-tick analyzer is missing'
+	}
+	$Python = @(Get-Command python -CommandType Application -ErrorAction Stop)[0]
+	$Output = @(& $Python.Source $ScriptPath (Join-Path $ServerRoot 'evidence-sha256.json') 2>&1)
+	$ExitCode = $LASTEXITCODE
+	if ($ExitCode -ne 0 -or $Output.Count -ne 1) {
+		$Detail = ((@($Output) | ForEach-Object { [string]$_ }) -join ' ')
+		if ($Detail.Length -gt 512) { $Detail = $Detail.Substring(0, 512) }
+		throw "bounded server work-tick analysis rejected indexed evidence: $Detail"
+	}
+	$Observation = [string]$Output[0] | ConvertFrom-Json -AsHashtable
+	if ($Observation.Format -cne 'GargantuanFarmServerWorkTicks' -or
+		$Observation.Version -ne 1 -or $Observation.RunId -cne $RunId -or
+		$Observation.Status -cnotin @('MEASURED_PASS', 'MEASURED_FAIL') -or
+		$Observation.Phases.Count -ne 5 -or
+		$Observation.CrossHostLatency -cne 'NOT_MEASURED') {
+		throw 'bounded server work-tick observation is invalid'
+	}
+	return $Observation
+}
+
+function Read-FarmCaptureObservation {
+	param([string]$ServerCaptureIndexPath, [string]$ClientCaptureIndexPath,
+		[string]$OuterCaptureReceiptPath, [string]$CoordinatorResultPath,
+		[string]$ServerRoot, [string]$ClientRoot, [string]$RunId, [string]$Provider)
+	$Inputs = @($ServerCaptureIndexPath, $ClientCaptureIndexPath,
+		$OuterCaptureReceiptPath, $CoordinatorResultPath)
+	$Supplied = @($Inputs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+	if ($Supplied -eq 0) {
+		return [ordered]@{ Status = 'NOT_MEASURED'
+			Reason = 'two hash-sealed capture roots and their outer receipt were not supplied' }
+	}
+	if ($Supplied -ne 4) { throw 'Farm32 capture acceptance inputs must be supplied together' }
+	$ScriptPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../tools/physical-qualifier/farm_capture_acceptance.py'))
+	if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+		throw 'bounded Farm32 capture analyzer is missing'
+	}
+	$Python = @(Get-Command python -CommandType Application -ErrorAction Stop)[0]
+	$Output = @(& $Python.Source $ScriptPath $ServerCaptureIndexPath $ClientCaptureIndexPath `
+		(Join-Path $ServerRoot 'evidence-sha256.json') `
+		(Join-Path $ClientRoot 'evidence-sha256.json') `
+		$OuterCaptureReceiptPath $CoordinatorResultPath 2>&1)
+	if ($LASTEXITCODE -ne 0 -or $Output.Count -ne 1) {
+		$Detail = ((@($Output) | ForEach-Object { [string]$_ }) -join ' ')
+		if ($Detail.Length -gt 512) { $Detail = $Detail.Substring(0, 512) }
+		throw "bounded Farm32 capture acceptance rejected evidence: $Detail"
+	}
+	$Observation = [string]$Output[0] | ConvertFrom-Json -AsHashtable
+	if ($Observation.Format -cne 'GargantuanFarm32CaptureAcceptance' -or
+		$Observation.Version -ne 1 -or $Observation.Status -cne 'MEASURED_PASS' -or
+		$Observation.RunId -cne $RunId -or $Observation.Provider -cne $Provider -or
+		$Observation.NonceBoundTuples -ne 32 -or
+		$Observation.Directions.Status -cne 'BIDIRECTIONAL_32_TUPLES' -or
+		$Observation.Loss.WorkerLostEvents -ne 0 -or
+		$Observation.Loss.ClientDroppedPackets -ne 0) {
+		throw 'bounded Farm32 capture observation identity or result is invalid'
+	}
+	return $Observation
+}
+
+function Read-FarmRemoteCadence {
+	param([string]$ClientRoot, [System.Collections.IDictionary]$ClientIndex, [string]$RunId)
+	$Members = @($ClientIndex.Files | Where-Object Name -CEQ 'client-00.stdout.log')
+	if ($Members.Count -eq 0) {
+		return [ordered]@{ Status = 'NOT_MEASURED'; Reason = 'indexed producer Luau log absent'
+			OtherClientsScaleRemoteRecipientService = 'NOT_MEASURED'
+			CrossHostOneWayLatency = 'NOT_MEASURED' }
+	}
+	if ($Members.Count -ne 1) { throw 'indexed producer Luau log is duplicated' }
+	$LogPath = Assert-IndexedFile -Root $ClientRoot -Index $ClientIndex `
+		-Name 'client-00.stdout.log' -MaximumBytes 4194304
+	if (-not [IO.File]::ReadAllText($LogPath).Contains('[Qualification:RemoteCadence] ')) {
+		return [ordered]@{ Status = 'NOT_MEASURED'; Reason = 'producer Luau offer/completion trace absent'
+			OtherClientsScaleRemoteRecipientService = 'NOT_MEASURED'
+			CrossHostOneWayLatency = 'NOT_MEASURED' }
+	}
+	$ScriptPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../tools/physical-qualifier/farm_remote_cadence.py'))
+	if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+		throw 'bounded Remote Luau cadence analyzer is missing'
+	}
+	$Python = @(Get-Command python -CommandType Application -ErrorAction Stop)[0]
+	$Output = @(& $Python.Source $ScriptPath --clients-index `
+		(Join-Path $ClientRoot 'evidence-sha256.json') --producer-slot 0 2>&1)
+	$ExitCode = $LASTEXITCODE
+	if ($ExitCode -notin @(0, 1) -or $Output.Count -ne 1) {
+		$Detail = ((@($Output) | ForEach-Object { [string]$_ }) -join ' ')
+		if ($Detail.Length -gt 512) { $Detail = $Detail.Substring(0, 512) }
+		throw "bounded Remote Luau cadence analysis rejected indexed evidence: $Detail"
+	}
+	$Observation = [string]$Output[0] | ConvertFrom-Json -AsHashtable
+	if ($Observation.Format -cne 'GargantuanFarmRemoteLuauCadence' -or
+		$Observation.Version -ne 1 -or $Observation.RunId -cne $RunId -or
+		$Observation.ProducerSlot -ne 0 -or
+		$Observation.Status -cne $(if ($ExitCode -eq 0) { 'MEASURED_PASS' } else { 'MEASURED_FAIL' }) -or
+		$Observation.SourceSha256 -ine $Members[0].Sha256 -or
+		$Observation.OtherClientsScaleRemoteRecipientService -cne 'NOT_MEASURED' -or
+		$Observation.CrossHostOneWayLatency -cne 'NOT_MEASURED' -or
+		$Observation.Phases.Count -ne 5 -or
+		@($Observation.Phases.Keys | Where-Object { $_ -cnotin @('baseline', 'load', 'resident', 'evict', 'reload') }).Count -ne 0) {
+		throw 'bounded Remote Luau cadence observation is invalid'
+	}
+	return $Observation
 }
 
 function Assert-IndexedFile {
@@ -113,7 +255,7 @@ function Read-RoleEvidence {
 			$Entry.Name -ieq 'evidence-sha256.json' -or
 			-not $Names.Add([string]$Entry.Name) -or [long]$Entry.Bytes -lt 0 -or
 			[long]$Entry.Bytes -gt $(if ($Role -ceq 'Server' -and
-				$Entry.Name -ceq 'admission-fairness.tsv') { 33554432 }
+				($Entry.Name -ceq 'admission-fairness.tsv' -or $Entry.Name -cmatch '^recovery-(gameplay|structural|mixed)\.tsv$')) { 33554432 }
 				elseif ($Role -ceq 'Server' -and $Entry.Name -ceq 'publication-service.bin') { 335544832 }
 				else { 16777216 })) {
 			throw "$Role evidence index has an invalid retained-file bound"
@@ -451,6 +593,18 @@ function Read-AdmissionObservation {
 	}
 	$ObservedFairness = Read-AdmissionFairnessEvidence -Path $FairnessPath `
 		-RunId $Report.RunId -ExpectedConnections $Connections
+	if ($ObservedFairness.TraceCanonicalCounterBounds -cne 'MEASURED_PASS' -or
+		$ObservedFairness.MaximumTraceActiveGrants -gt $Admission.grants_high -or
+		$ObservedFairness.MaximumTracePeerCreditBytes -gt $Admission.peer_credit_high -or
+		$ObservedFairness.MaximumTraceGlobalCreditBytes -gt $Admission.global_credit_high -or
+		$ObservedFairness.LastTraceGrantDeferrals -gt $Admission.grant_deferrals -or
+		$ObservedFairness.LastTraceFundedDeferrals -gt $Admission.funded_deferrals -or
+		$ObservedFairness.LastTraceCreditDeferrals -gt $Admission.credit_deferrals -or
+		$ObservedFairness.LastTraceFairnessDeferrals -gt $Admission.fairness_deferrals -or
+		$Admission.pending_leaves -gt $Admission.pending_enters -or
+		$Admission.pending_enters -ne $Admission.pending_leaves) {
+		throw 'sealed native admission timeline or terminal pending transitions violate canonical counter bounds'
+	}
 	$RecordedFairness = $Report.AdmissionFairnessObservation
 	if ($null -eq $RecordedFairness -or
 		($ObservedFairness | ConvertTo-Json -Depth 10 -Compress) -cne
@@ -474,6 +628,10 @@ function Read-AdmissionObservation {
 		CreditDeferrals = [long]$Admission.credit_deferrals
 		FairnessDeferrals = [long]$Admission.fairness_deferrals
 		FairnessRotations = [long]$Admission.fairness_rotations
+		AcceptedGrantWaitBound = $ObservedFairness.AcceptedGrantWaitBound
+		GrantLifecycleCoverage = $ObservedFairness.GrantLifecycleCoverage
+		TraceCanonicalCounterBounds = $ObservedFairness.TraceCanonicalCounterBounds
+		ExactDemandEpisodeCoverage = $ObservedFairness.ExactDemandEpisodeCoverage
 		PendingEnters = [long]$Admission.pending_enters
 		PendingLeaves = [long]$Admission.pending_leaves
 		TerminalMaterializationBacklog = [long]$Admission.materialization_backlog
@@ -481,6 +639,56 @@ function Read-AdmissionObservation {
 		JournalFailures = [long]$Admission.journal_failures
 		Fairness = $ObservedFairness
 	}
+}
+
+function Get-FixedWorkloadFairness {
+	param($Observation, [string[]]$ExpectedConnections)
+	$Expected = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	foreach ($Peer in $ExpectedConnections) {
+		if (-not $Expected.Add($Peer)) { throw 'fixed workload fairness has duplicate peer identity' }
+	}
+	if ($Expected.Count -ne 32) { throw 'fixed workload fairness requires 32 exact ready identities' }
+	$Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	$Granted = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	foreach ($Row in $Observation.PeerWaits) {
+		if (-not $Expected.Contains($Row.Peer) -or -not $Seen.Add($Row.Peer)) {
+			throw 'fixed workload fairness has foreign or duplicate observed peer'
+		}
+		if ($Row.GrantCount -gt 0) { [void]$Granted.Add($Row.Peer) }
+	}
+	$Missing = @($Expected | Where-Object { -not $Granted.Contains($_) } | Sort-Object)
+	$Parts = @($Observation.AcceptedGrantWaitBound, $Observation.ExactDemandEpisodeCoverage,
+		$Observation.GrantLifecycleCoverage)
+	$State = if ('MEASURED_FAIL' -cin $Parts) { 'MEASURED_FAIL' }
+		elseif ($Missing.Count -eq 0 -and @($Parts | Where-Object { $_ -cne 'MEASURED_PASS' }).Count -eq 0) { 'MEASURED_PASS' }
+		else { 'NOT_MEASURED' }
+	return [ordered]@{ State=$State; GrantedPeers=$Granted.Count; RequiredPeers=32; MissingGrantedPeers=$Missing;
+		AcceptedGrantWaitBound=$Observation.AcceptedGrantWaitBound;
+		ExactDemandEpisodeCoverage=$Observation.ExactDemandEpisodeCoverage;
+		GrantLifecycleCoverage=$Observation.GrantLifecycleCoverage;
+		Scope='recorded exact-demand episodes of this fixed 32-peer workload; no continuous-source claim' }
+}
+
+function Read-WorkloadObservation {
+	param($Report, $Manifest, $Server, $Clients)
+	$RunId = [string]$Report.RunId; $Provider = [string]$Manifest.Provider
+	$Peers = 32; $ScaleWorkload = $true
+	$ExpectedNonces = [Collections.Generic.List[string]]::new()
+	foreach ($Nonce in $Manifest.Nonces) { $ExpectedNonces.Add([string]$Nonce) }
+	$ServerLog = [pscustomobject]@{ OutputPath=(Assert-IndexedFile -Root $Server.Root -Index $Server.Index -Name 'server.stdout.log') }
+	$ClientLogs = @(0..31 | ForEach-Object {
+		[pscustomobject]@{ OutputPath=(Assert-IndexedFile -Root $Clients.Root -Index $Clients.Index -Name ('client-{0:D2}.stdout.log' -f $_)) }
+	})
+	$Identity = Assert-Records -Server $ServerLog -Clients $ClientLogs -ExpectedNonces $ExpectedNonces
+	Assert-ScaleRecords -Server $ServerLog -Clients $ClientLogs -ExpectedNonces $ExpectedNonces
+	foreach ($Name in @('Ready','UniqueNonces','UniqueConnections','UniquePlayers')) {
+		if ($Identity.$Name -ne $Report.Identity.$Name) { throw 'reconciled workload identity differs from native logs' }
+	}
+	if ((@($Identity.Connections | Sort-Object) -join ',') -cne
+		(@($Report.Identity.Connections | Sort-Object) -join ',')) { throw 'reconciled ready connections differ from native logs' }
+	return [ordered]@{ State='MEASURED_PASS'; Scope='canonical five-phase workload independently replayed';
+		Ready=32; Phases=5; ProducerSlot=0;
+		ParserSha256=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1')).Hash.ToLowerInvariant() }
 }
 
 function Read-ProviderObservation {
@@ -530,6 +738,56 @@ function Read-ProviderObservation {
 	}
 }
 
+function Import-NodeTlsMatcher {
+	$Path = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmNodeTls.ps1'
+	$Tokens = $null; $Errors = $null
+	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
+	if ($Errors.Count -ne 0) { throw 'canonical Node TLS matcher has a syntax error' }
+	$Needed = @('Get-NodeTimestamp', 'Get-NodeTlsLogMatchReceipt')
+	foreach ($Function in $Ast.FindAll({ param($Node)
+		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
+	}, $true)) {
+		if ($Function.Name -in $Needed) { $Function.Extent.Text }
+	}
+}
+
+function Read-NodeTlsObservation {
+	param([string]$ServerReceiptPath, [string]$MatchReceiptPath,
+		[string]$MatchReceiptSha256, [string]$StagePath, [string]$StageSha256,
+		[string]$RunReceiptPath, [string]$RunReceiptSha256)
+	foreach ($Pin in @($MatchReceiptSha256, $StageSha256, $RunReceiptSha256)) {
+		if ($Pin -cnotmatch '^[a-fA-F0-9]{64}$') { throw 'Node TLS evidence pin is invalid' }
+	}
+	$null = Read-BoundedJson -Path $MatchReceiptPath -MaximumBytes 4096
+	if ((Get-FileHash -LiteralPath $MatchReceiptPath -Algorithm SHA256).Hash -ine
+		$MatchReceiptSha256) { throw 'Node TLS match receipt differs from independent pin' }
+	$Derived = Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ServerReceiptPath `
+		-NodeStagePath $StagePath -NodeRunReceiptPath $RunReceiptPath `
+		-NodeRunReceiptSha256 $RunReceiptSha256 -NodeStageSha256 $StageSha256
+	$ExpectedBytes = [Text.UTF8Encoding]::new($false).GetBytes(($Derived | ConvertTo-Json -Depth 4))
+	$ExpectedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+		$ExpectedBytes)).ToLowerInvariant()
+	if ($ExpectedHash -ine $MatchReceiptSha256) {
+		throw 'Node TLS match receipt differs from pinned source'
+	}
+	return [ordered]@{
+		State = 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED'
+		TlsVersion = $Derived.TlsVersion; CipherSuite = $Derived.CipherSuite
+		RequestId = $Derived.RequestId; NodeRunReceiptSha256 = $Derived.NodeRunReceiptSha256
+		NodeStageSha256 = $Derived.NodeStageSha256
+		NodeTlsMatchReceiptSha256 = $MatchReceiptSha256.ToLowerInvariant()
+	}
+}
+
+if (-not [string]::IsNullOrWhiteSpace($NodeTlsMatchReceiptPath)) {
+	foreach ($Definition in @(Import-NodeTlsMatcher)) { . ([scriptblock]::Create($Definition)) }
+	foreach ($Name in @('Get-NodeTimestamp', 'Get-NodeTlsLogMatchReceipt')) {
+		if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
+			throw "canonical Node TLS matcher lacks $Name"
+		}
+	}
+}
+
 function Read-RecoveryObservation {
 	param([System.Collections.IDictionary]$Report, [System.Collections.IDictionary]$Manifest,
 		$Server, $Clients)
@@ -543,6 +801,7 @@ function Read-RecoveryObservation {
 		return [ordered]@{ State = 'NOT MEASURED'; Workload = 'NOT RUN'
 			FixedServiceRecovery = 'NOT MEASURED'
 			StrictConvergenceSufficientProof = 'NOT MEASURED'
+			SampledJournalRetention = 'NOT MEASURED'
 			ExactRetainedWorkBytes = 'NOT_MEASURED'; Cases = @() }
 	}
 	if ($null -eq $Report.RecoveryObservation -or
@@ -558,6 +817,9 @@ function Read-RecoveryObservation {
 	$ServerLog = [pscustomobject]@{
 		OutputPath = (Assert-IndexedFile -Root $Server.Root -Index $Server.Index -Name 'server.stdout.log')
 		ErrorPath = (Assert-IndexedFile -Root $Server.Root -Index $Server.Index -Name 'server.stderr.log')
+	}
+	foreach ($Case in @('gameplay', 'structural', 'mixed')) {
+		[void](Assert-IndexedFile -Root $Server.Root -Index $Server.Index -Name "recovery-$Case.tsv" -MaximumBytes 33554432)
 	}
 	$ClientLogs = @(0..31 | ForEach-Object {
 		$Label = 'client-{0:D2}' -f $_
@@ -584,8 +846,10 @@ function Read-RecoveryObservation {
 	$Cases = @($Observed.Cases)
 	if ($Cases.Count -ne 3 -or
 		(@($Cases | ForEach-Object Case) -join ',') -cne 'gameplay,structural,mixed' -or
-		$Observed.ExactRetainedWorkBytes -cne 'NOT_MEASURED' -or
-		@($Cases | Where-Object ExactRetainedWorkBytes -cne 'NOT_MEASURED').Count -ne 0) {
+		$Observed.ExactRetainedWorkBytes -isnot [long] -or
+		@($Cases | Where-Object { $_.ExactRetainedWorkBytes -isnot [long] }).Count -ne 0 -or
+		[long]$Observed.ExactRetainedWorkBytes -ne [long](@($Cases | ForEach-Object ExactRetainedWorkBytes |
+			Measure-Object -Sum).Sum)) {
 		throw 'recovery observation has invalid case or retained-work classification'
 	}
 	$Fixed = if (@($Cases | Where-Object FixedServiceRecovery -ne 'MEASURED_PASS').Count -eq 0) {
@@ -597,7 +861,10 @@ function Read-RecoveryObservation {
 	return [ordered]@{
 		State = $Observed.State; Workload = 'THREE_CASES_REPLAYED_FROM_INDEXED_LOGS'
 		FixedServiceRecovery = $Fixed; StrictConvergenceSufficientProof = $Strict
-		ExactRetainedWorkBytes = 'NOT_MEASURED'; Cases = $Cases
+		SampledJournalRetention = 'MEASURED_PASS'
+		MinimumCessationRetentionMarginRecords = [long](@($Cases | ForEach-Object MinimumRetentionMarginRecords |
+			Measure-Object -Minimum).Minimum)
+		ExactRetainedWorkBytes = [long]$Observed.ExactRetainedWorkBytes; Cases = $Cases
 	}
 }
 
@@ -644,13 +911,71 @@ function Read-ProviderRun {
 	}
 	$Admission = Read-AdmissionObservation -Report $Report -FairnessPath $Server.FairnessPath `
 		-ServerLogPath $Server.ServerLogPath
+	$Workload = Read-WorkloadObservation -Report $Report -Manifest $Manifest -Server $Server -Clients $Clients
+	$Admission['FixedWorkloadFairness'] = Get-FixedWorkloadFairness -Observation $Admission.Fairness -ExpectedConnections $Report.Identity.Connections
+	$Publication = Read-FarmPublicationObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+		-ServerIndex $Server.Index -ClientIndex $Clients.Index `
+		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json') `
+		-ScratchParent ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ReportPath)))
+	if ($Publication.OrdinaryDemand.State -ceq 'MEASURED_PASS' -and
+		($Publication.OrdinaryDemand.ServerClock.Host -ine $ServerHost.HostName -or
+		 $Publication.OrdinaryDemand.ClientClock.Host -ine $ClientHost.HostName)) {
+		throw 'sender QPC domains differ from independently indexed owning host resources'
+	}
+	if ($null -eq $Report.PublicationObservation -or
+		($Publication | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.PublicationObservation | ConvertTo-Json -Depth 12 -Compress)) {
+		throw 'reconciled Character publication observation differs from sealed native evidence'
+	}
+	$ServerWorkTicks = Read-FarmServerWorkTicks -ServerRoot $Server.Root `
+		-ServerIndex $Server.Index -RunId $Report.RunId
+	$Clock = Read-FarmClockObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json')
+	if ($null -eq $Report.ClockObservation) {
+		if ($Clock.Status -cne 'NOT_MEASURED') { throw 'reconciliation omitted present clock evidence' }
+	} elseif (($Clock | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.ClockObservation | ConvertTo-Json -Depth 12 -Compress)) {
+		throw 'reconciled clock observation differs from independently replayed indexed evidence'
+	}
+	$Lifecycle = Read-FarmLifecycleObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json')
+	Assert-FarmLifecycleAdmission -Observation $Lifecycle -Admission $Report.Admission
+	if ($null -eq $Report.LifecycleObservation) {
+		if ($Lifecycle.State -cne 'NOT_MEASURED') { throw 'reconciliation omitted present lifecycle evidence' }
+	} elseif (($Lifecycle | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.LifecycleObservation | ConvertTo-Json -Depth 12 -Compress)) {
+		throw 'reconciled lifecycle observation differs from independently replayed indexed evidence'
+	}
+	$F1 = Read-FarmF1Observation -ServerRoot $Server.Root -RunManifestPath (Join-Path $Server.Root 'run-manifest.json')
+	Assert-FarmF1Admission -Observation $F1 -Admission $Report.Admission
+	if ($null -eq $Report.F1Observation) {
+		if ($F1.State -cne 'NOT_MEASURED') { throw 'reconciliation omitted present native F1 evidence' }
+	} elseif (($F1 | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.F1Observation | ConvertTo-Json -Depth 12 -Compress)) { throw 'reconciliation native F1 differs from independent replay' }
+	$RemoteOwnership = Read-FarmRemoteOwnershipObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json')
+	if ($null -eq $Report.RemoteOwnershipObservation) {
+		if ($RemoteOwnership.State -cne 'NOT_MEASURED') { throw 'reconciliation omitted present Remote ownership evidence' }
+	} elseif (($RemoteOwnership | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.RemoteOwnershipObservation | ConvertTo-Json -Depth 12 -Compress)) {
+		throw 'reconciled Remote ownership differs from independently replayed indexed evidence'
+	}
+	$RemoteCadence = Read-FarmRemoteCadence -ClientRoot $Clients.Root `
+		-ClientIndex $Clients.Index -RunId $Report.RunId
 	$ProviderObservation = Read-ProviderObservation -Report $Report -Manifest $Manifest `
 		-NodeProviderPath $Server.NodeProviderPath
 	$Recovery = Read-RecoveryObservation -Report $Report -Manifest $Manifest `
 		-Server $Server -Clients $Clients
 	return [pscustomobject]@{
 		Report = $Report; Manifest = $Manifest
-		Admission = $Admission; ProviderObservation = $ProviderObservation; Recovery = $Recovery
+		Workload = $Workload
+		Admission = $Admission; Publication = $Publication; ServerWorkTicks = $ServerWorkTicks
+		Clock = $Clock
+		Lifecycle = $Lifecycle
+		RemoteOwnership = $RemoteOwnership
+		F1 = $F1
+		RemoteCadence = $RemoteCadence
+		ProviderObservation = $ProviderObservation; Recovery = $Recovery
 		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources
 			ServerHost = $ServerHost; ClientHost = $ClientHost }
 		EvidenceRetention = [ordered]@{
@@ -665,6 +990,30 @@ $Local = Read-ProviderRun -ReportPath $LocalReportPath -ServerRoot $LocalServerE
 	-ClientRoot $LocalClientEvidenceRoot -ExpectedProvider 'Local'
 $Node = Read-ProviderRun -ReportPath $NodeReportPath -ServerRoot $NodeServerEvidenceRoot `
 	-ClientRoot $NodeClientEvidenceRoot -ExpectedProvider 'Node'
+$Node.ProviderObservation['ProcessResources'] = [ordered]@{ State='NOT_MEASURED'; Reason='pinned Node owned-child receipt absent' }
+$LocalCapture = Read-FarmCaptureObservation -ServerCaptureIndexPath $LocalServerCaptureIndexPath `
+	-ClientCaptureIndexPath $LocalClientCaptureIndexPath `
+	-OuterCaptureReceiptPath $LocalOuterCaptureReceiptPath `
+	-CoordinatorResultPath $LocalCoordinatorResultPath `
+	-ServerRoot $LocalServerEvidenceRoot -ClientRoot $LocalClientEvidenceRoot `
+	-RunId $Local.Report.RunId -Provider 'Local'
+$NodeCapture = Read-FarmCaptureObservation -ServerCaptureIndexPath $NodeServerCaptureIndexPath `
+	-ClientCaptureIndexPath $NodeClientCaptureIndexPath `
+	-OuterCaptureReceiptPath $NodeOuterCaptureReceiptPath `
+	-CoordinatorResultPath $NodeCoordinatorResultPath `
+	-ServerRoot $NodeServerEvidenceRoot -ClientRoot $NodeClientEvidenceRoot `
+	-RunId $Node.Report.RunId -Provider 'Node'
+if (-not [string]::IsNullOrWhiteSpace($NodeTlsMatchReceiptPath)) {
+	$NodeTlsObservation = Read-NodeTlsObservation `
+		-ServerReceiptPath (Join-Path $NodeServerEvidenceRoot 'node-provider.json') `
+		-MatchReceiptPath $NodeTlsMatchReceiptPath -MatchReceiptSha256 $NodeTlsMatchReceiptSha256 `
+		-StagePath $NodeStagePath -StageSha256 $NodeStageSha256 `
+		-RunReceiptPath $NodeRunReceiptPath -RunReceiptSha256 $NodeRunReceiptSha256
+	$Node.ProviderObservation['RealTls'] = $NodeTlsObservation.State
+	$Node.ProviderObservation['TlsEvidence'] = $NodeTlsObservation
+	$Node.ProviderObservation['ProcessResources'] = Read-FarmNodeResources -RunReceiptPath $NodeRunReceiptPath `
+		-RunReceiptSha256 $NodeRunReceiptSha256 -RunId $Node.Report.RunId
+}
 if ($Local.Report.RunId -ceq $Node.Report.RunId) { throw 'Local and Node reused a physical run identity' }
 foreach ($Name in @('ServerHost', 'ClientHost')) {
 	foreach ($Field in @('HostName', 'InterfaceIndex', 'InterfaceMacAddress', 'InterfaceAddress')) {
@@ -693,35 +1042,71 @@ $Observed = [ordered]@{
 		ComparableFields = $ComparableFields
 	}
 	Local = [ordered]@{
+		Workload = $Local.Workload
 		Ready = $Local.Report.Identity.Ready; AcceptedBytes = $Local.Report.Admission.accepted
 		RetiredBytes = $Local.Report.Admission.retired; Admission = $Local.Admission
+		Publication = $Local.Publication
+		Clock = $Local.Clock
+		Lifecycle = $Local.Lifecycle
+		RemoteOwnership = $Local.RemoteOwnership
+		F1 = $Local.F1
+		ServerWorkTicks = $Local.ServerWorkTicks
+		Capture = $LocalCapture
+		RemoteCadence = $Local.RemoteCadence
 		Recovery = $Local.Recovery
 		Provider = $Local.ProviderObservation; Resources = $Local.Resources
 		EvidenceRetention = $Local.EvidenceRetention
 	}
 	Node = [ordered]@{
+		Workload = $Node.Workload
 		Ready = $Node.Report.Identity.Ready; AcceptedBytes = $Node.Report.Admission.accepted
 		RetiredBytes = $Node.Report.Admission.retired; Admission = $Node.Admission
+		Publication = $Node.Publication
+		Clock = $Node.Clock
+		Lifecycle = $Node.Lifecycle
+		RemoteOwnership = $Node.RemoteOwnership
+		F1 = $Node.F1
+		ServerWorkTicks = $Node.ServerWorkTicks
+		Capture = $NodeCapture
+		RemoteCadence = $Node.RemoteCadence
 		Recovery = $Node.Recovery
 		Provider = $Node.ProviderObservation; Resources = $Node.Resources
 		EvidenceRetention = $Node.EvidenceRetention
 	}
 	GateObservations = @(
+		[ordered]@{ Gate='Actual ordinary complete-message all-interval demand'; State=$(if ($Local.Publication.OrdinaryDemand.State -ceq 'MEASURED_PASS' -and $Node.Publication.OrdinaryDemand.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason='successful native transport sends, complete adapter-inclusive bytes, forced Character traffic, fixed five phase scopes and all32 sender traces; per-peer and per-direction aggregate budgets on explicit same-host QPC domains' },
+		[ordered]@{ Gate='Every finite native first-send grant, including final grants'; State=$(if ($Local.F1.State -ceq 'MEASURED_PASS' -and $Node.F1.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason='32 generation-scoped native grant histories independently replayed per provider; exact ACK/retirement cannot erase a failed last or earlier grant' },
+		[ordered]@{ Gate = 'Separate Node provider process resource measurement'; State = $Node.ProviderObservation.ProcessResources.State.Replace('_', ' '); Reason = 'bounded owned Go child CPU, memory, threads and handles, distinct from Engine and client farm; no invented utilization SLA' },
+		[ordered]@{ Gate = 'RemoteManager queue and handler ownership bounds'; State = $(if ($Local.RemoteOwnership.State -ceq 'MEASURED' -and $Node.RemoteOwnership.State -ceq 'MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'native insertion high-waters, zero post-Stop ownership and exact release totals for server and 32 clients; work residence/lease overshoot is diagnostic and does not substitute for response scheduler latency' },
+		[ordered]@{ Gate = 'Logical lifecycle, readers, content and debt cleanup'; State = $(if ($Local.Lifecycle.State -ceq 'MEASURED' -and $Node.Lifecycle.State -ceq 'MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'independently replayed post-Stop server and 32 client receipts per provider; zero transient ownership and exact admission conservation; cached/resident content remains diagnostic and does not replace pre-Stop successful convergence' },
+		[ordered]@{ Gate = 'Native clock correlation at calibration probes'; State = $(if ($Local.Clock.Status -ceq 'BOUNDED_AT_PROBE' -and $Node.Clock.Status -ceq 'BOUNDED_AT_PROBE') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'independent replay of 640 causal offset intervals per provider with indexed input and analyzer pins; phase-long offset and one-way latency remain unmeasured' },
 		[ordered]@{ Gate = 'Cross-provider exact workload/deployment pin parity'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Per-provider terminal native admission/debt conservation and bounded grants/credit'; State = 'MEASURED'; Reason = 'sealed final receipt, not an intra-run service or fairness bound' },
-		[ordered]@{ Gate = 'Per-provider exact-demand fairness event identity and observed eligibility waits'; State = 'MEASURED'; Reason = 'sealed native timeline, no canonical maximum-wait verdict from an observed maximum alone' },
-		[ordered]@{ Gate = 'Node authenticated manifest RPC and root/content pins'; State = 'MEASURED'; Reason = 'indexed provider receipt; negotiated TLS session remains unmeasured' },
+		[ordered]@{ Gate = 'Per-provider exact-demand fairness event identity and observed eligibility waits'; State = 'MEASURED'; Reason = 'sealed native timeline; the separate accepted-grant bound remains scoped to recorded episodes' },
+		[ordered]@{ Gate = 'Sealed admission credit, grant, deferral and terminal pending counter bounds'; State = 'MEASURED_PASS'; Reason = 'all native timeline snapshots obey canonical credit/grant caps and monotonic deferral counters; terminal pending transitions reconcile' },
+		[ordered]@{ Gate = 'Per-peer ACK-gated accepted-grant lifecycle'; State = $(if ($Local.Admission.GrantLifecycleCoverage -eq 'MEASURED_FAIL' -or $Node.Admission.GrantLifecycleCoverage -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.GrantLifecycleCoverage -eq 'MEASURED_PASS' -and $Node.Admission.GrantLifecycleCoverage -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'generation and token scoped acceptance, exact ACK retirement, release, and zero terminal debt in the sealed V2 native timeline; V1 traces remain historical and unmeasured for this gate' },
+		[ordered]@{ Gate = 'Recorded accepted-grant eligibility wait within 220.5 ms'; State = $(if ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL' -or $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS' -and $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'accepted exact-demand episodes only; interruptions, disposals and continuous semantic backlog remain separate' },
+		[ordered]@{ Gate = 'Node authenticated manifest RPC and root/content pins'; State = 'MEASURED'; Reason = 'indexed provider receipt' },
+		[ordered]@{ Gate = 'Node negotiated TLS for authenticated manifest RPC'; State = $(if ($Node.ProviderObservation.RealTls -ceq 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'requires independently pinned Node stage/run/log and exact request matcher; full provider parity remains separate' },
 		[ordered]@{ Gate = 'Role-local bounded process sampling'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Complete-sweep role-local working set within supervisor limit'; State = $(if ($Local.Resources.Server.CompleteSweepCount -gt 0 -and $Local.Resources.Clients.CompleteSweepCount -gt 0 -and $Node.Resources.Server.CompleteSweepCount -gt 0 -and $Node.Resources.Clients.CompleteSweepCount -gt 0) { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'sequential per-process sweep; not a synchronized host memory or network headroom result' },
 		[ordered]@{ Gate = 'Role-local host CPU, memory, simultaneous owned processes, and fiber NIC counters'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Role-local indexed evidence byte/file bounds'; State = 'MEASURED' },
-		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
+		[ordered]@{ Gate = 'Nonce-bound 32-tuple bidirectional zero-loss capture on both endpoints'; State = $(if ($LocalCapture.Status -ceq 'MEASURED_PASS' -and $NodeCapture.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-sealed two-endpoint pcaps, native ready-time nonce-to-port mapping, zero-loss diagnostics, and nontruncated packets; no packet-reserve or headroom claim' },
+		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED_PASS'; Reason = 'canonical Assert-Records and Assert-ScaleRecords independently replay all 33 logs, five content phases and designated producer RPC/Event/action requirements' },
+		[ordered]@{ Gate = 'Fixed 32-peer exact-demand fairness conjunction'; State = $(if ($Local.Admission.FixedWorkloadFairness.State -ceq 'MEASURED_FAIL' -or $Node.Admission.FixedWorkloadFairness.State -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.FixedWorkloadFairness.State -ceq 'MEASURED_PASS' -and $Node.Admission.FixedWorkloadFairness.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'all 32 ready peers granted, accepted wait bound, complete recorded eligibility episodes and V2 ACK-gated lifecycle; no general continuous-source claim' },
+		[ordered]@{ Gate = 'Character accepted-state chain and role-local publication delays'; State = $(if ($Local.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED' -and $Node.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'each provider independently rejoined all hash-sealed native Character traces; cross-host clocks remain separate' },
+		[ordered]@{ Gate = 'Tracked-root recipient Character cadence'; State = $(if ($Local.Publication.CharacterDueService.Verdict -ceq 'FAIL' -or $Node.Publication.CharacterDueService.Verdict -ceq 'FAIL') { 'MEASURED_FAIL' } elseif ($Local.Publication.CharacterDueService.Verdict -ceq 'PASS' -and $Node.Publication.CharacterDueService.Verdict -ceq 'PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'canonical FrameBegin/due, accepted and handled conservation for eight roots and 64 relationships in all five phases, with zero scheduler rejection; raw observation-gap limits remain diagnostics under RecipientServiceWorkload3L and PhysicalFundingGateReview3L' },
+		[ordered]@{ Gate = 'Server work-tick p95/p99/max in all five phases'; State = $(if ($Local.ServerWorkTicks.Status -ceq 'MEASURED_FAIL' -or $Node.ServerWorkTicks.Status -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.ServerWorkTicks.Status -ceq 'MEASURED_PASS' -and $Node.ServerWorkTicks.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-indexed FrameBegin-to-FrameEnd work time excludes deliberate 60-Hz pacing sleep; 16.667/33.334/100-ms phase limits' },
+		[ordered]@{ Gate = 'Designated producer Luau RPC and Event ACK cadence'; State = $(if ($Local.RemoteCadence.Status -ceq 'MEASURED_FAIL' -or $Node.RemoteCadence.Status -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.RemoteCadence.Status -ceq 'MEASURED_PASS' -and $Node.RemoteCadence.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-indexed client-00 Luau invoke/return and offer/OnClientEvent callback on one local clock; 150/250/500-ms RPC and 250-ms Event RTT/ACK-gap limits' },
+		[ordered]@{ Gate = 'Full Character and Remote recipient cadence'; State = 'NOT MEASURED'; Reason = 'canonical workload has one designated Remote/action producer; other 31 clients are Character recipients, not missing Remote producers. Due-tick Character service, producer Remote timing and cross-host diagnostics are separate evidence domains; final conjunctive review remains required' },
 		[ordered]@{ Gate = 'Full fairness, overload backpressure and journal retention margin'; State = 'NOT MEASURED'; Reason = 'terminal counters and exact-demand event waits do not prove saturated service, continuous backlog bounds, or the journal high-water margin' },
 		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'bounded host/NIC snapshots describe utilization, but no canonical CPU/memory/NIC pass percentage or concurrent packet-level reserve proof follows from those samples' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = $(if ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS' -and $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS') { 'MEASURED_PASS' } elseif ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL' -or $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } else { 'NOT MEASURED' }); Reason = 'three canonical cases per provider, replayed from indexed server/client recovery logs and matched to sealed reconciliation' },
-		[ordered]@{ Gate = 'Strict structural convergence sufficient proof'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'strict snapshot and client final-Name proof only; exact retained-work service bound remains unmeasured' },
-		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = 'NOT MEASURED'; Reason = 'phase observations and final debt do not locate final accepted byte versus client observation' },
-		[ordered]@{ Gate = 'Journal retention margin and overload'; State = 'NOT MEASURED'; Reason = 'final zero journal backlog lacks retained-history high-water and overload chronology' },
+		[ordered]@{ Gate = 'Strict structural convergence sufficient proof'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = '32-peer audited complete-message W_i, exact canonical deadline, terminal source/readers/debt, and client final-Name proof; separate fixed ordinary-service gate' },
+		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Local.Recovery.ExactRetainedWorkBytes -is [long] -and $Node.Recovery.ExactRetainedWorkBytes -is [long]) { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'immutable reference W_i is separately conserved; offline source-event replay proves finite baseline coverage and accepted-prefix first-send, ACK and retirement while later work remains live' },
+		[ordered]@{ Gate = 'Journal retention margin and overload'; State = 'NOT MEASURED'; Reason = 'the separate fixed-workload gate includes post-mutation retained-history high-water and minimum reader margin; general continuous overload/fairness coverage still requires conjunctive review' },
+		[ordered]@{ Gate = 'Sampled overload journal retention window'; State = $(if ($Local.Recovery.SampledJournalRetention -eq 'MEASURED_PASS' -and $Node.Recovery.SampledJournalRetention -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'indexed opportunity/recovery samples plus 7,680 immediate post-Name-mutation observations per structural/mixed case prove the fixed workload stays within 16,384 records with nonnegative reader margin; unrelated commits between these workload mutations are not inferred' },
 		[ordered]@{ Gate = 'Full Local/Node provider parity'; State = 'NOT MEASURED'; Reason = 'application service, real TLS, exact convergence, resource headroom and capture gates remain independent' }
 	)
 }
@@ -732,6 +1117,13 @@ foreach ($Root in @($LocalServerEvidenceRoot, $LocalClientEvidenceRoot,
 	if ($OutputPath.StartsWith($Resolved + [IO.Path]::DirectorySeparatorChar,
 		[StringComparison]::OrdinalIgnoreCase)) {
 		throw 'acceptance observation must remain outside immutable role-local roots'
+	}
+}
+if (-not [string]::IsNullOrWhiteSpace($NodeStagePath)) {
+	$StageRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($NodeStagePath)).TrimEnd('\', '/')
+	if ($OutputPath.StartsWith($StageRoot + [IO.Path]::DirectorySeparatorChar,
+		[StringComparison]::OrdinalIgnoreCase)) {
+		throw 'acceptance observation must remain outside the pinned Node stage'
 	}
 }
 if (Test-Path -LiteralPath $OutputPath) { throw 'acceptance observation path already exists' }

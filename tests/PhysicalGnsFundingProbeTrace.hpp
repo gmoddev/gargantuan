@@ -39,14 +39,23 @@ struct Trace {
 		std::uint64_t BaselineFirst = 0, BaselineAck = 0, BaselineActiveUs = 0;
 		std::uint64_t LastFirst = 0, LastAck = 0, LastActiveUs = 0, MaximumDeficit = 0;
 		std::uint64_t Retry = 0, QualifiedGrants = 0;
+		std::uint64_t AcceptedBytes = 0, LastAcceptedToken = 0;
+		bool AcceptedQualified = false;
 	};
+	struct Admission {
+		ConnectionId Connection;
+		std::uint64_t Token = 0, Bytes = 0, Activated = 0;
+		bool Certified = false, Retired = false;
+	};
+	std::array<Admission, PeerCount * MaximumGrantsPerPeer> Admissions{};
+	std::size_t AdmissionCount = 0;
 	std::vector<Row> Rows;
 	std::array<Peer, PeerCount> Peers{};
 	std::uint64_t CampaignStartedAt = 0, PoolQualifiedUs = 0;
 		std::uint64_t PoolEpisodes = 0;
 	unsigned Demand = 0;
 	bool Overflow = false, Invalid = false, FloorFailure = false, Installed = false;
-	detail::PooledServiceSink Sink{this, Record};
+	detail::PooledServiceSink Sink{this, Record, AcceptedGrant};
 	detail::GnsServiceSink BackendSink{this, BackendRecord, nullptr};
 	detail::PooledServiceSink *PreviousSink = nullptr;
 	detail::GnsServiceSink *PreviousBackend = nullptr;
@@ -65,6 +74,52 @@ struct Trace {
 		for (auto &P : Peers) if (!P.Id.IsValid()) { P.Id = Id; return &P; }
 		Invalid = true; return nullptr;
 	}
+	static void AcceptedGrant(void *Context, ConnectionId Id, std::uint64_t Token,
+		std::uint64_t Bytes, std::uint64_t Activated) noexcept {
+		auto &Self = *static_cast<Trace *>(Context);
+		auto *P = Self.GetPeer(Id); if (!P) return;
+		if (Self.AdmissionCount == Self.Admissions.size()) { Self.Overflow = true; return; }
+		const bool Bootstrap = Activated == std::numeric_limits<std::uint64_t>::max();
+		if (!Token || Token <= P->LastAcceptedToken || !Bytes || Bytes > GroupBytes || !Activated ||
+			(Bootstrap && P->AcceptedQualified) || Bytes > std::numeric_limits<std::uint64_t>::max() - P->AcceptedBytes ||
+			std::any_of(Self.Admissions.begin(), Self.Admissions.begin() + Self.AdmissionCount,
+				[&](const Admission &A) { return A.Connection == Id && !A.Retired; })) {
+			Self.Invalid = true; return;
+		}
+		P->LastAcceptedToken = Token; P->AcceptedBytes += Bytes; P->AcceptedQualified |= !Bootstrap;
+		Self.Admissions[Self.AdmissionCount++] = Admission{Id, Token, Bytes, Activated};
+	}
+	Admission *FindAdmission(ConnectionId Id, std::uint64_t Token) noexcept {
+		for (std::size_t I = 0; I < AdmissionCount; ++I)
+			if (Admissions[I].Connection == Id && Admissions[I].Token == Token) return &Admissions[I];
+		return nullptr;
+	}
+	void ObserveAdmission(const detail::PooledServiceRecord &S, const Peer &P) noexcept {
+		if (S.Accepted.Structural != P.AcceptedBytes) Invalid = true;
+		if (S.Feedback && S.Feedback->StructuralLastCompletedGrantToken) {
+			const auto &F = *S.Feedback;
+			auto *A = FindAdmission(S.Connection, F.StructuralLastCompletedGrantToken);
+			if (!A || A->Activated == std::numeric_limits<std::uint64_t>::max() ||
+				A->Bytes != F.StructuralLastCompletedGrantBytes || A->Activated != F.StructuralLastCompletedGrantActivatedAtMicroseconds)
+				Invalid = true;
+			else {
+				if (F.StructuralLastCompletedGrantFailed || F.StructuralServiceFailed ||
+					F.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds > RunningDeficitBound ||
+					F.StructuralLastCompletedGrantFirstSendAtMicroseconds < A->Activated ||
+					F.StructuralLastCompletedGrantCompletedAtMicroseconds < F.StructuralLastCompletedGrantFirstSendAtMicroseconds ||
+					F.StructuralLastCompletedGrantCompletedAtMicroseconds > F.ObservedAtMicroseconds ||
+					PeerDrainRate * (F.StructuralLastCompletedGrantCompletedAtMicroseconds - A->Activated) >
+						FiniteLatencyByteMicroseconds + A->Bytes * 1'000'000) FloorFailure = true;
+				A->Certified = true;
+			}
+		}
+		if (S.Result.RetiredBytes) {
+			auto *A = FindAdmission(S.Connection, S.Result.RetiredToken);
+			if (!A || A->Retired || A->Bytes != S.Result.RetiredBytes ||
+				A->Certified == (A->Activated == std::numeric_limits<std::uint64_t>::max())) Invalid = true;
+			else A->Retired = true;
+		}
+	}
 	static void BackendRecord(void *Context, detail::GnsServiceRecord Value, std::span<const std::byte>) noexcept {
 		auto &Self = *static_cast<Trace *>(Context);
 		if (auto *P = Self.GetPeer(Value.Connection)) P->Backend = Value;
@@ -79,6 +134,7 @@ struct Trace {
 		auto &Self = *static_cast<Trace *>(Context);
 		if (Self.Rows.size() == Capacity) { Self.Overflow = true; return; }
 		auto *P = Self.GetPeer(S.Connection); if (!P) return;
+		Self.ObserveAdmission(S, *P);
 		Row R{S, P->Backend};
 		if (S.Admission.ActiveDrainGrants > PeerCount) Self.Invalid = true;
 		if (Self.Demand && !Self.CampaignStartedAt) Self.CampaignStartedAt = S.NowMicroseconds;
@@ -201,6 +257,9 @@ struct Trace {
 		if (Overflow || Invalid || FloorFailure || !CampaignStartedAt ||
 			!PoolQualifiedUs || PoolEpisodes < 3)
 			return false;
+		if (!AdmissionCount || std::any_of(Admissions.begin(), Admissions.begin() + AdmissionCount,
+			[](const Admission &A) { return !A.Retired || A.Certified == (A.Activated == std::numeric_limits<std::uint64_t>::max()); }))
+			return false;
 		for (const auto &P : Peers) {
 			if (!P.Id.IsValid() || !P.CampaignBaseline || P.QualifiedGrants < 3 ||
 				P.LastFirst <= P.BaselineFirst || P.LastAck != P.LastFirst ||
@@ -215,6 +274,14 @@ struct Trace {
 					!P.Grants[I].CompletedAtMicroseconds) return false;
 		}
 		return true;
+	}
+	void DumpAdmissions(const char *Path) const {
+		std::ofstream Out(Path); Out.exceptions(std::ios::failbit | std::ios::badbit);
+		Out << "slot,generation,token,bytes,activated_us\n";
+		for (std::size_t I = 0; I < AdmissionCount; ++I) {
+			const auto &A = Admissions[I];
+			Out << A.Connection.Slot << ',' << A.Connection.Generation << ',' << A.Token << ',' << A.Bytes << ',' << A.Activated << '\n';
+		}
 	}
 	void Dump(const char *Path) const {
 		std::ofstream Out(Path); Out.exceptions(std::ios::failbit | std::ios::badbit);

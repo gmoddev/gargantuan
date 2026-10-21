@@ -30,7 +30,7 @@ function Save-NodeRunReceipt {
 $Endpoint = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmEndpoint.ps1'
 $Reconciler = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmReconcile.ps1'
 foreach ($Definition in @(Import-Functions -Path $Endpoint -Names @(
-	'Get-TypedFields', 'Get-TypedRecords', 'Get-AuthenticatedNodeManifestReceipt',
+	'Get-TypedFields', 'Read-SharedLogLines', 'Get-TypedRecords', 'Get-AuthenticatedNodeManifestReceipt',
 	'Write-AuthenticatedNodeManifestReceipt'))) {
 	. ([scriptblock]::Create($Definition.Extent.Text))
 }

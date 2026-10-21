@@ -1,6 +1,7 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "../src/network/ReliableServiceFeedback.hpp"
 #include "../src/network/GnsServiceDiagnostics.hpp"
+#include "../src/network/FarmCaptureEndpointAccess.hpp"
 #include "../src/host/common/FarmClockCalibration.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -238,6 +240,10 @@ namespace {
 #include "GnsPacketTailFixture.hpp"
 #include "GnsFourGrantFixture.hpp"
 #include "GnsMixedTrafficFixture.hpp"
+#include "GnsAckCycleFixture.hpp"
+#include "GnsFundedAckCompatibilityFixture.hpp"
+#include "GnsFundedAckFourGrantFixture.hpp"
+#include "GnsAckStatsBoundaryFixture.hpp"
 
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
@@ -245,6 +251,23 @@ int main(int ArgumentCount, char **Arguments) {
 	try { gargantuan::BootstrapNativeRuntimeSchema(); }
 	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
 	TestFarmClockCapture();
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle")
+		return GnsAckCycleFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-retry-safety")
+		return GnsAckCycleFixture::RunRetrySafety() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-compatibility")
+		return GnsFundedAckCompatibilityFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-four-grant")
+		return GnsFundedAckFourGrantFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-stats-boundary")
+		return GnsAckStatsBoundaryFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 3 && std::string_view(Arguments[1]) == "--ack-cycle-funded") {
+		const std::string_view Text(Arguments[2]);
+		std::uint64_t TailBudget = 0;
+		const auto Parsed = std::from_chars(Text.data(), Text.data() + Text.size(), TailBudget);
+		if (Parsed.ec != std::errc{} || Parsed.ptr != Text.data() + Text.size() || !TailBudget) return 2;
+		return GnsAckCycleFixture::Run(true, TailBudget) ? 0 : 1;
+	}
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--packet-tail")
 		return GnsPacketTailFixture::Run() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant")
@@ -306,6 +329,16 @@ int main(int ArgumentCount, char **Arguments) {
 		StopPair(Pair);
 		return 1;
 	}
+	const auto DirectRemote = detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+		*Pair.Server, Pair.ServerConnection);
+	Check(DirectRemote && DirectRemote->Host == "127.0.0.1" && DirectRemote->Port != 0,
+		"farm capture reads direct UDP port from the native server connection");
+	Check(!detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+		*Pair.Server, {Pair.ServerConnection.Slot, Pair.ServerConnection.Generation + 1}),
+		"farm capture rejects another generation in the same adapter slot");
+	Check(!detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+		*Pair.Client, Pair.ClientConnection),
+		"farm capture cannot treat a client-side server address as a client source port");
 	for (const auto &Event : Pair.ServerEvents) Check(IsValidTransportEvent(Event, Pair.Limits),
 		"server lifecycle events satisfy the backend-neutral contract");
 	for (const auto &Event : Pair.ClientEvents) Check(IsValidTransportEvent(Event, Pair.Limits),
@@ -760,6 +793,9 @@ int main(int ArgumentCount, char **Arguments) {
 	Check(HasDisconnect(Pair.ClientEvents, DisconnectReason::RemoteShutdown),
 		"client observes server close as a structured remote shutdown");
 	StopPair(Pair);
+	Check(!detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+		*Pair.Server, Pair.ServerConnection),
+		"farm capture rejects a stopped connection and stale native handle");
 
 	{
 		std::cout << "[Networking:GNS] receive queue exhaustion\n" << std::flush;

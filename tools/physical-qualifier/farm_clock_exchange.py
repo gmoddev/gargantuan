@@ -6,7 +6,13 @@ each probe, not an exact one-way latency or a phase-long drift guarantee.
 """
 
 from collections import defaultdict
+import argparse
+import hashlib
+import json
+from pathlib import Path
 import re
+import stat
+import sys
 
 NATIVE_PREFIX = "[Qualification:FarmClock] event=native "
 TERMINAL_PREFIX = "[Qualification:FarmClock] event=terminal "
@@ -204,3 +210,143 @@ def Analyze(ServerLines, ClientLinesBySlot, RunId, Peers=32, Epochs=5, Probes=4)
     return {"Format": "GargantuanFarm32NativeClockExchange", "Version": 1,
             "RunId": RunId, "Status": "BOUNDED_AT_PROBE", "Samples": Result,
             "PhaseLongOffset": "NOT_MEASURED", "OneWayLatency": "NOT_MEASURED"}
+
+
+# Keep the mathematical/native join above independent from filesystem custody.
+# The role supervisor permits at most 16 MiB per log and 128 indexed members.
+LOG_LIMIT = 16 * 1024 * 1024
+INDEX_LIMIT = 1024 * 1024
+RETAINED_LINES = 4096 + 128  # Native trace cap plus readiness/phase/barrier metadata.
+CLOCK_PREFIX = "[Qualification:FarmClock] "
+RELEVANT_PREFIXES = (CLOCK_PREFIX, SERVER_READY_PREFIX, CLIENT_READY_PREFIX,
+                     PHASE_START_PREFIX, PHASE_END_PREFIX)
+
+
+def RegularFile(File, Maximum):
+    File = Path(File)
+    for Part in (File, *File.parents):
+        Info = Part.lstat()
+        Require(not stat.S_ISLNK(Info.st_mode) and
+                not (getattr(Info, "st_file_attributes", 0) & 0x400),
+                "redirected evidence path")
+    Info = File.stat()
+    Require(stat.S_ISREG(Info.st_mode) and 0 <= Info.st_size <= Maximum,
+            "evidence file missing or oversized")
+    return File
+
+
+def ReadJsonFile(File):
+    with RegularFile(File, INDEX_LIMIT).open("rb") as Stream:
+        Data = Stream.read(INDEX_LIMIT + 1)
+    Require(len(Data) <= INDEX_LIMIT, "JSON evidence grew beyond bound")
+    return json.loads(Data.decode("utf-8-sig")), hashlib.sha256(Data).hexdigest()
+
+
+def ReadRole(IndexPath, RunId, Role, Names):
+    IndexPath = Path(IndexPath)
+    Require(IndexPath.name == "evidence-sha256.json", "unexpected evidence index name")
+    Index, IndexHash = ReadJsonFile(IndexPath)
+    Require(isinstance(Index, dict) and Index.get("RunId") == RunId and
+            Index.get("Role") == Role and isinstance(Index.get("Files"), list) and
+            0 < len(Index["Files"]) <= 128, "evidence index identity invalid")
+    Entries = {}
+    for Entry in Index["Files"]:
+        Require(isinstance(Entry, dict) and isinstance(Entry.get("Name"), str) and
+                re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", Entry["Name"]) and
+                Entry["Name"].lower() not in Entries, "duplicate or invalid indexed member")
+        Entries[Entry["Name"].lower()] = Entry
+    LinesByName, Sources = {}, []
+    for Name in Names:
+        Entry = Entries.get(Name)
+        Require(Entry is not None and Entry.get("Name") == Name and
+                set(Entry) == {"Name", "Bytes", "Sha256"} and
+                type(Entry["Bytes"]) is int and 0 <= Entry["Bytes"] <= LOG_LIMIT and
+                isinstance(Entry["Sha256"], str) and
+                re.fullmatch(r"[a-fA-F0-9]{64}", Entry["Sha256"]),
+                "required clock log missing or invalid")
+        File = RegularFile(IndexPath.parent / Name, LOG_LIMIT)
+        Require(File.stat().st_size == Entry["Bytes"], "clock log size mismatch")
+        Digest, Count, Lines = hashlib.sha256(), 0, []
+        with File.open("rb") as Stream:
+            for Data in iter(lambda: Stream.readline(LOG_LIMIT + 1), b""):
+                Count += len(Data)
+                Require(Count <= Entry["Bytes"], "clock log grew during read")
+                Digest.update(Data)
+                Line = Data.decode("utf-8", errors="strict")
+                if Line.startswith(RELEVANT_PREFIXES):
+                    Require(len(Data) <= 65536 and len(Lines) < RETAINED_LINES,
+                            "clock metadata bound exceeded")
+                    if Line.startswith(CLOCK_PREFIX):
+                        Require(Fields(Line, CLOCK_PREFIX).get("run") == RunId,
+                                "foreign run in clock metadata")
+                    Lines.append(Line)
+        Require(Count == Entry["Bytes"] and Digest.hexdigest() == Entry["Sha256"].lower(),
+                "clock log hash or size mismatch")
+        LinesByName[Name] = Lines
+        Sources.append({"Role": Role, "Name": Name, "Bytes": Count,
+                        "Sha256": Digest.hexdigest()})
+    return LinesByName, Sources, IndexHash
+
+
+def AnalyzeIndexed(ServerIndexPath, ClientIndexPath, ManifestPath):
+    Manifest, ManifestHash = ReadJsonFile(ManifestPath)
+    Require(isinstance(Manifest, dict) and
+            Manifest.get("Format") == "GargantuanPhysicalFarmEndpoint" and
+            Manifest.get("Version") == 1 and Manifest.get("ScaleWorkload") is True and
+            isinstance(Manifest.get("RunId"), str) and
+            re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", Manifest["RunId"]),
+            "clock manifest identity invalid")
+    Nonces = Manifest.get("Nonces")
+    Require(isinstance(Nonces, list) and len(Nonces) == 32 and
+            all(isinstance(Value, str) and re.fullmatch(r"[1-9][0-9]{0,19}", Value)
+                for Value in Nonces), "clock manifest nonces invalid")
+    Values = list(map(int, Nonces))
+    Require(all(Value <= (1 << 64) - 1 and Value >> 32 == Values[0] >> 32 and
+                (Value & 0xffffffff) == Slot + 1 for Slot, Value in enumerate(Values)),
+            "clock manifest nonce identities invalid")
+    RunId = Manifest["RunId"]
+    Server, ServerSources, ServerHash = ReadRole(ServerIndexPath, RunId, "Server", ["server.stdout.log"])
+    Names = [f"client-{Slot:02d}.stdout.log" for Slot in range(32)]
+    Clients, ClientSources, ClientHash = ReadRole(ClientIndexPath, RunId, "Clients", Names)
+    ServerLines = Server["server.stdout.log"]
+    ClientLines = {Slot: Clients[Name] for Slot, Name in enumerate(Names)}
+    Present = any(Line.startswith(CLOCK_PREFIX) for Lines in [ServerLines, *ClientLines.values()]
+                  for Line in Lines)
+    if Present:
+        for Slot, Lines in ClientLines.items():
+            Ready = [Fields(Line, CLIENT_READY_PREFIX) for Line in Lines
+                     if Line.startswith(CLIENT_READY_PREFIX)]
+            Require(len(Ready) == 1 and Ready[0].get("run_id") == RunId and
+                    Ready[0].get("nonce") == Nonces[Slot], "clock manifest/ready nonce mismatch")
+        Result = Analyze(ServerLines, ClientLines, RunId)
+        Require({(Row["Slot"], Row["Epoch"], Row["Sequence"]) for Row in Result["Samples"]} ==
+                {(Slot, Epoch, Sequence) for Slot in range(32) for Epoch in range(1, 6)
+                 for Sequence in range(1, 5)}, "clock probe matrix coverage incomplete")
+    else:
+        Result = {"Format": "GargantuanFarm32NativeClockExchange", "Version": 1,
+                  "RunId": RunId, "Status": "NOT_MEASURED", "Samples": [],
+                  "Reason": "all indexed role logs lack native clock metadata",
+                  "PhaseLongOffset": "NOT_MEASURED", "OneWayLatency": "NOT_MEASURED"}
+    Result.update({"Clients": 32, "Epochs": 5, "ProbesPerClientEpoch": 4,
+                   "ServerIndexSha256": ServerHash, "ClientIndexSha256": ClientHash,
+                   "RunManifestSha256": ManifestHash, "Sources": ServerSources + ClientSources,
+                   "AnalyzerSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})
+    return Result
+
+
+def Main():
+    Parser = argparse.ArgumentParser(description=__doc__)
+    Parser.add_argument("ServerIndex")
+    Parser.add_argument("ClientIndex")
+    Parser.add_argument("RunManifest")
+    Args = Parser.parse_args()
+    print(json.dumps(AnalyzeIndexed(Args.ServerIndex, Args.ClientIndex, Args.RunManifest),
+                     separators=(",", ":")))
+
+
+if __name__ == "__main__":
+    try:
+        Main()
+    except (ValueError, OSError) as Error:
+        print(str(Error), file=sys.stderr)
+        raise SystemExit(1)

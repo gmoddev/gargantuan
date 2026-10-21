@@ -50,6 +50,12 @@ physical acceptance gate. The host and role launchers still verify every pin.
    (`DumpcapFarm32Capture.ps1`) and `Dumpcap` (`dumpcap.exe`) pins. A Node
    manifest additionally requires `NodeRootCertificatePath` on both roles;
    each endpoint validates its root-certificate hash against the manifest.
+   Outer Node preparation generates a fresh short-lived CA and loopback leaf
+   under the protected worker run root, copies only the public CA and leaf to
+   the controller, and binds the identical CA hash into both role paths.
+   It also generates a fresh private worker token file; only its path and hash
+   enter the Node stage proof. The Server and Node children receive the token
+   through their process environments after stage-bound validation.
    The Node `SERVER` role also requires pinned `NodeStage` (`node-stage.json`)
    and `NodeHelper` (`PhysicalGameSessionFarmNode.ps1`) fields. Prepare and
    independently hash that worker-local stage before sealing tickets; it is

@@ -2,6 +2,8 @@
 
 #include "host/common/PackagedHost.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
+#include "host/common/FarmLifecycleEvidence.hpp"
+#include "host/player/FarmRecoveryObservation.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -255,6 +257,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<host::detail::FarmPublicationEvidence>(
 				false, FarmRunId, FarmSlot, FarmClientNonce,
 				std::filesystem::path(FarmPublicationEvidencePath), *Connection);
+			if (PublicationEvidence) PublicationEvidence->WriteTrafficClock(std::cout);
 			std::cout << "[Qualification:Client] event=ready run_id=" << FarmRunId << " slot=" << FarmSlot
 					  << " nonce=" << FarmClientNonce << " connection_slot=" << Connection->Slot
 					  << " connection_generation=" << Connection->Generation
@@ -307,6 +310,15 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		while (Runtime->ProcessService->Alive) {
 			const auto FrameStarted = std::chrono::steady_clock::now();
 			if (Session) (void)Session->Poll();
+			if (PublicationEvidence) {
+				const auto Phase = World->GetAttributeValue("ScalePhase");
+				const auto *Name = Phase ? std::get_if<std::string>(&*Phase) : nullptr;
+				// Recovery deliberately retains ScalePhase=reload. Its existing
+				// enable transition ends fixed demand before the next Luau step.
+				const bool Overload = World->GetAttributeValue("ScaleOverloadEnabled") ==
+					std::optional<WireValue>(WireValue(true));
+				PublicationEvidence->SetTrafficPhase(Name ? std::string_view(*Name) : std::string_view{}, Overload);
+			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (ClockCalibration) {
 				const bool ClockActive = World->GetAttributeValue("ScaleClockActive") ==
@@ -351,8 +363,16 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			const auto SessionStarted = std::chrono::steady_clock::now();
 			if (Session) {
 				Session->Step(Runtime->GetSimulationTick());
-				if (Session->GetStatus() == network::GameSessionStatus::Failed)
-					throw std::runtime_error(Session->GetFailure());
+				if (Session->GetStatus() == network::GameSessionStatus::Failed) {
+					if (!FarmScaleWorkload || !FarmScaleCompleted)
+						throw std::runtime_error(Session->GetFailure());
+					// The host closes the qualified session only after its final
+					// admission, first-send, ACK, and retirement checks converge.
+					std::cout << "[Qualification:Client] event=server_closed_after_scale_complete run_id="
+						<< FarmRunId << " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+						<< " steady_ns=" << FarmTimestamp() << '\n';
+					Runtime->ProcessService->MarkExit(0);
+				}
 				if (FarmEnabled) {
 					if (FarmScaleWorkload) {
 						const auto Beat = Runtime->CharacterControl->GetAttributeValue("ScaleCallbackBeat");
@@ -390,6 +410,41 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 						std::cout << "[Qualification:Client] event=character_ready run_id=" << FarmRunId << " slot="
 								  << FarmSlot << " nonce=" << FarmClientNonce << " steady_ns=" << FarmTimestamp() << std::endl;
 					}
+					// Observe replicated recovery data before evaluating completion in
+					// this same step; final data and the completion marker may arrive together.
+					if (FarmRecoveryWorkload) {
+						const auto CaseIndex = host::detail::FarmRecoveryCaseIndex(*Runtime->DataModel);
+						{
+							if (CaseIndex != 0 && !FarmRecoveryNamesObserved[CaseIndex]) {
+								const auto Root = Runtime->Workspace->FindFirstChild("ScaleOverloadRegion", false);
+								std::array<std::shared_ptr<Instance>, 32> Observed{};
+								bool Complete = Root != nullptr;
+								for (std::size_t Index = 0; Complete && Index < Observed.size(); ++Index) {
+									const auto Holder = Root->FindFirstChild("part" + std::to_string(Index), false);
+									const auto Children = Holder ? Holder->GetChildren() : std::vector<std::shared_ptr<Instance>>{};
+									const auto Opportunity = Index < 16 ? 479 : 480;
+									const auto Letter = static_cast<char>('a' + (CaseIndex * 7 + Opportunity + Index) % 26);
+									Complete = Children.size() == 1 &&
+										Children.front()->GetName() == std::string(24 * 1024, Letter);
+									if (Complete) Observed[Index] = Children.front();
+								}
+								if (Complete) {
+									FarmRecoveryNamesObserved[CaseIndex] = true;
+									for (std::size_t Index = 0; Index < Observed.size(); ++Index)
+										std::cout << "[Qualification:Client] event=name_object run_id=" << FarmRunId
+											<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+											<< " case=" << (CaseIndex == 1 ? "structural" : "mixed") << " index=" << Index
+											<< " object_slot=" << Observed[Index]->GetObjectId().Slot
+											<< " object_generation=" << Observed[Index]->GetObjectId().Generation
+											<< " name_bytes=24576 letter=" << static_cast<char>('a' +
+												(CaseIndex * 7 + (Index < 16 ? 479 : 480) + Index) % 26) << '\n';
+									std::cout << "[Qualification:Client] event=names_observed run_id=" << FarmRunId
+										<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+										<< " case=" << (CaseIndex == 1 ? "structural" : "mixed") << " objects=32 steady_ns=" << FarmTimestamp() << '\n';
+								}
+							}
+						}
+					}
 					if (FarmScaleWorkload && FarmReady && FarmPlayerReady) {
 						const auto Phase = Runtime->CharacterControl->GetAttributeValue("ScalePhase");
 						if (Phase) if (const auto *PhaseName = std::get_if<std::string>(&*Phase)) {
@@ -397,7 +452,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 								FarmScaleCurrentPhase = *PhaseName;
 								FarmScalePhaseSeen = std::chrono::steady_clock::now();
 							}
-							if (*PhaseName == "complete") {
+							if (*PhaseName == "complete" && !FarmScaleCompleted) {
 								FarmScaleCompleted = FarmScaleObservedPhases == FarmScalePhases.size() &&
 									(FarmSlot != 0 || FarmScaleProducerPhases == FarmScalePhases.size()) &&
 									(!FarmRecoveryWorkload || (FarmRecoveryNamesObserved[1] && FarmRecoveryNamesObserved[2]));
@@ -405,8 +460,11 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
 									<< " observed_phases=" << FarmScaleObservedPhases
 									<< " producer_phases=" << FarmScaleProducerPhases
+									<< " recovery_structural_observed=" << FarmRecoveryNamesObserved[1]
+									<< " recovery_mixed_observed=" << FarmRecoveryNamesObserved[2]
+									<< " completion_valid=" << FarmScaleCompleted
 									<< " steady_ns=" << FarmTimestamp() << std::endl;
-								Runtime->ProcessService->MarkExit(FarmScaleCompleted ? 0 : 16);
+								if (!FarmScaleCompleted) Runtime->ProcessService->MarkExit(16);
 							} else if (FarmScaleObservedPhases < FarmScalePhases.size() &&
 								*PhaseName == FarmScalePhases[FarmScaleObservedPhases]) {
 								const auto Root = Runtime->Workspace->FindFirstChild("ContentScaleRegion", false);
@@ -504,6 +562,22 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 									<< " action_rejections=" << ActionRejections - FarmScalePreviousActionRejections
 									<< " unexpected_endings=" << UnexpectedEndings - FarmScalePreviousUnexpectedEndings
 									<< " steady_ns=" << FarmTimestamp() << std::endl;
+								if (!Healthy) {
+									const auto Native = Session->GetMetrics();
+									std::cout << "[Qualification:Producer] event=action_submission_diagnostic run_id=" << FarmRunId
+										<< " slot=" << FarmSlot << " phase=" << *PhaseName
+										<< " attempts=" << Native.ClientActionSubmissionAttempts
+										<< " no_control=" << Native.ClientActionSubmissionNoControl
+										<< " suspended=" << Native.ClientActionSubmissionSuspended
+										<< " invalid=" << Native.ClientActionSubmissionInvalid
+										<< " pending_full=" << Native.ClientActionSubmissionPendingFull
+										<< " scheduler_rejected=" << Native.ClientActionSubmissionSchedulerRejected
+										<< " stale_states=" << Native.ClientCharacterStaleStatesDropped
+										<< " epoch_mismatches=" << Native.ClientMaterializationEpochMismatches
+										<< " expected_epoch=" << Native.ClientLastExpectedMaterializationEpoch
+										<< " received_epoch=" << Native.ClientLastReceivedMaterializationEpoch
+										<< " history_overflows=" << Native.ClientCharacterHistoryOverflows << std::endl;
+								}
 								FarmScalePreviousEventAcks = EventAcks;
 								FarmScalePreviousEventOffers = EventOffers;
 								FarmScalePreviousActionRequests = ActionRequests;
@@ -514,41 +588,6 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 								FarmScalePreviousUnexpectedEndings = UnexpectedEndings;
 								++FarmScaleProducerPhases;
 								if (!Healthy) Runtime->ProcessService->MarkExit(17);
-							}
-						}
-					}
-					if (FarmRecoveryWorkload) {
-						const auto Case = Runtime->CharacterControl->GetAttributeValue("ScaleOverloadCase");
-						if (Case) if (const auto *CaseName = std::get_if<std::string>(&*Case)) {
-							const std::size_t CaseIndex = *CaseName == "recover_structural" ? 1 :
-								*CaseName == "recover_mixed" ? 2 : 0;
-							if (CaseIndex != 0 && !FarmRecoveryNamesObserved[CaseIndex]) {
-								const auto Root = Runtime->Workspace->FindFirstChild("ScaleOverloadRegion", false);
-								std::array<std::shared_ptr<Instance>, 32> Observed{};
-								bool Complete = Root != nullptr;
-								for (std::size_t Index = 0; Complete && Index < Observed.size(); ++Index) {
-									const auto Holder = Root->FindFirstChild("part" + std::to_string(Index), false);
-									const auto Children = Holder ? Holder->GetChildren() : std::vector<std::shared_ptr<Instance>>{};
-									const auto Opportunity = Index < 16 ? 479 : 480;
-									const auto Letter = static_cast<char>('a' + (CaseIndex * 7 + Opportunity + Index) % 26);
-									Complete = Children.size() == 1 &&
-										Children.front()->GetName() == std::string(24 * 1024, Letter);
-									if (Complete) Observed[Index] = Children.front();
-								}
-								if (Complete) {
-									FarmRecoveryNamesObserved[CaseIndex] = true;
-									for (std::size_t Index = 0; Index < Observed.size(); ++Index)
-										std::cout << "[Qualification:Client] event=name_object run_id=" << FarmRunId
-											<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
-											<< " case=" << CaseName->substr(8) << " index=" << Index
-											<< " object_slot=" << Observed[Index]->GetObjectId().Slot
-											<< " object_generation=" << Observed[Index]->GetObjectId().Generation
-											<< " name_bytes=24576 letter=" << static_cast<char>('a' +
-												(CaseIndex * 7 + (Index < 16 ? 479 : 480) + Index) % 26) << '\n';
-									std::cout << "[Qualification:Client] event=names_observed run_id=" << FarmRunId
-										<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
-										<< " case=" << CaseName->substr(8) << " objects=32 steady_ns=" << FarmTimestamp() << '\n';
-								}
 							}
 						}
 					}
@@ -657,6 +696,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			if (const auto Value = Runtime->CharacterControl->GetAttributeValue("OfficialHostTimeline"))
 				if (const auto *TimelineText = std::get_if<std::string>(&*Value)) std::cout << *TimelineText << '\n';
 		}
+		host::detail::FarmLifecycleEvidence Lifecycle;
 		if (Session) {
 			const auto Metrics = Session->GetMetrics();
 			LOG_INFO(
@@ -674,9 +714,15 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				static_cast<unsigned long long>(Metrics.ActionPresentationStops)
 			);
 			Session->Stop();
+			if (FarmScaleWorkload) Lifecycle.ObserveSession(*Session);
 		}
 		Session.reset();
 		Runtime->Destroy();
+		if (FarmScaleWorkload) {
+			Lifecycle.ObserveContent(Runtime->Content.get());
+			Lifecycle.Write(std::cout, FarmRunId, "client", FarmSlot, FarmClientNonce);
+			if (!Lifecycle.Valid()) ExitCode = 18;
+		}
 		Runtime.reset();
 		Renderer.reset();
 		ReportFarmResult(ExitCode, PublicationEvidence && !PublicationEvidence->Valid() ? "publication_evidence_invalid" :

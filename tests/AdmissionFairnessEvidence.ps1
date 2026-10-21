@@ -1,5 +1,6 @@
 # Offline interpretation of the bounded farm admission trace. This validates
-# evidence identity and reports observed waits; it defines no fairness limit.
+# evidence identity and checks accepted-grant waits against the canonical model
+# bound; it does not prove sustained fairness or continuous source backlog.
 function Read-AdmissionFairnessEvidence {
 	param(
 		[Parameter(Mandatory = $true)][string]$Path,
@@ -16,18 +17,31 @@ function Read-AdmissionFairnessEvidence {
 	$Current = [Collections.Generic.Dictionary[string, UInt64]]::new([StringComparer]::Ordinal)
 	$Peers = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 	$Tokens = [Collections.Generic.HashSet[UInt64]]::new()
+	$AcceptedGrants = [Collections.Generic.Dictionary[UInt64, object]]::new()
+	$OpenGrantByPeer = [Collections.Generic.Dictionary[string, UInt64]]::new([StringComparer]::Ordinal)
+	$RetiredGrantCount = 0
+	$ReleasedGrantCount = 0
+	$TerminalReleasedGrantCount = 0
+	$TerminalDebtReleaseCount = 0
 	$PendingReplacement = $null
 	$Count = 0
 	$GrantCount = 0
+	$InterruptedEligibilityEpisodeCount = 0
 	$DisposedEligibleCount = 0
 	$DisposedEverEligibleCount = 0
 	$MaximumWait = [UInt64]0
 	$LatestTime = [UInt64]0
+	$MaximumTraceActiveGrants = [UInt64]0
+	$MaximumTracePeerCreditBytes = [UInt64]0
+	$MaximumTraceGlobalCreditBytes = [UInt64]0
+	$PreviousDeferrals = [UInt64[]]@(0, 0, 0, 0)
 	$Ended = $false
 	$Stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
 	$Reader = [IO.StreamReader]::new($Stream, [Text.UTF8Encoding]::new($false, $true))
 	try {
-		if ($Reader.ReadLine() -cne "format=GargantuanAdmissionEvidenceV1`trun=$RunId") {
+		$Header = $Reader.ReadLine()
+		$IsV2 = $Header -ceq "format=GargantuanAdmissionEvidenceV2`trun=$RunId"
+		if (-not $IsV2 -and $Header -cne "format=GargantuanAdmissionEvidenceV1`trun=$RunId") {
 			throw 'admission fairness evidence header or run identity is invalid'
 		}
 		while ($null -ne ($Line = $Reader.ReadLine())) {
@@ -40,7 +54,8 @@ function Read-AdmissionFairnessEvidence {
 			}
 			if ($Count -ge 65536 -or $Fields.Count -ne 19 -or $Fields[0] -cne 'event' -or
 				$Fields[1] -cnotin @('exact_demand', 'credit_eligible', 'eligibility_interrupted',
-					'grant_accepted', 'reservation_rolled_back', 'demand_disposed') -or
+					'grant_accepted', 'reservation_rolled_back', 'demand_disposed',
+					'grant_retired', 'grant_released', 'grant_terminal_released') -or
 				$Fields[2] -cnotin @('none', 'no_work', 'unexamined', 'replaced', 'rollback',
 					'generation_removed', 'terminal_release', 'feedback_unavailable')) {
 				throw "admission fairness evidence event $Count has an invalid schema"
@@ -64,13 +79,62 @@ function Read-AdmissionFairnessEvidence {
 			if ($N[0] -lt 1 -or $N[0] -gt 512 -or $N[1] -eq 0 -or $DemandId -eq 0 -or
 				$Bytes -eq 0 -or $Bytes -gt 524288 -or
 				$CreditAt -gt $At -or $EligibleSince -gt $At -or
+				$N[9] -gt 524288 -or $N[10] -gt 2097152 -or $N[11] -gt 4 -or
+				($Kind -ceq 'grant_accepted' -and $N[11] -eq 0) -or
 				($Expected.Count -gt 0 -and -not $Expected.Contains($Peer))) {
-				throw "admission fairness evidence event $Count has invalid identity, bytes, or chronology"
+				throw "admission fairness evidence event $Count has invalid identity, bytes, credit, grants, or chronology"
 			}
+			for ($Counter = 0; $Counter -lt 4; $Counter++) {
+				if ($N[12 + $Counter] -lt $PreviousDeferrals[$Counter]) {
+					throw "admission fairness evidence event $Count regresses a native deferral counter"
+				}
+				$PreviousDeferrals[$Counter] = $N[12 + $Counter]
+			}
+			$MaximumTracePeerCreditBytes = [Math]::Max($MaximumTracePeerCreditBytes, $N[9])
+			$MaximumTraceGlobalCreditBytes = [Math]::Max($MaximumTraceGlobalCreditBytes, $N[10])
+			$MaximumTraceActiveGrants = [Math]::Max($MaximumTraceActiveGrants, $N[11])
 			# Commit records a fresh ServiceTime() while other admission events
 			# may still use the step ledger's earlier Now. File order is causal,
 			# but timestamps need only be monotonic within one demand.
 			$LatestTime = [Math]::Max($LatestTime, $At)
+			if ($Kind -cin @('grant_retired', 'grant_released', 'grant_terminal_released')) {
+				if (-not $IsV2 -or $Reason -cnotin @('none', 'terminal_release') -or
+					($Kind -cne 'grant_terminal_released' -and $Reason -cne 'none') -or $Token -eq 0 -or
+					$Episode -ne 0 -or $CreditAt -ne 0 -or $EligibleSince -ne 0 -or
+					-not $AcceptedGrants.ContainsKey($Token) -or
+					-not $OpenGrantByPeer.ContainsKey($Peer) -or $OpenGrantByPeer[$Peer] -ne $Token) {
+					throw 'grant lifecycle event has no matching accepted generation and token'
+				}
+				$Grant = $AcceptedGrants[$Token]
+				if ($Grant.Peer -cne $Peer -or $Grant.DemandId -ne $DemandId -or
+					$Grant.Bytes -ne $Bytes -or $At -lt $Grant.AcceptedAt) {
+					throw 'grant lifecycle event changed accepted identity, bytes, or chronology'
+				}
+				if ($Kind -ceq 'grant_retired') {
+					if ($Grant.Retired) { throw 'grant was retired twice' }
+					$Grant.Retired = $true
+					$RetiredGrantCount++
+				} else {
+					if ($Kind -ceq 'grant_released' -and -not $Grant.Retired) {
+						throw 'grant released before exact ACK retirement'
+					}
+					if ($Kind -ceq 'grant_terminal_released') {
+						if (($Reason -ceq 'none') -ne [bool]$Grant.Retired) {
+							throw 'terminal owner release conflicts with exact debt retirement'
+						}
+						$TerminalReleasedGrantCount++
+						if ($Reason -ceq 'terminal_release') { $TerminalDebtReleaseCount++ }
+					}
+					$ReleasedGrantCount++
+					[void]$OpenGrantByPeer.Remove($Peer)
+					[void]$AcceptedGrants.Remove($Token)
+				}
+				if ($N[11] -ne $OpenGrantByPeer.Count) {
+					throw 'native active grant count disagrees with lifecycle chronology'
+				}
+				$Count++
+				continue
+			}
 			if ($PendingReplacement -and ($Kind -cne 'exact_demand' -or $Peer -cne $PendingReplacement)) {
 				throw 'replaced admission demand was not followed by the same generation replanning'
 			}
@@ -123,6 +187,7 @@ function Read-AdmissionFairnessEvidence {
 						throw 'eligibility interruption has no active exact-demand episode'
 					}
 					$Demand.Active = $false
+					$InterruptedEligibilityEpisodeCount++
 				}
 				'reservation_rolled_back' {
 					if ($Reason -cne 'rollback' -or $Token -eq 0 -or -not $Demand.Active -or
@@ -136,6 +201,15 @@ function Read-AdmissionFairnessEvidence {
 						$Episode -ne $Demand.Episode -or $EligibleSince -ne $Demand.EligibleSince -or
 						$CreditAt -ne $Demand.CreditAt -or -not $Tokens.Add($Token)) {
 						throw 'accepted grant has invalid episode or duplicate token'
+					}
+					if ($IsV2) {
+						if ($OpenGrantByPeer.ContainsKey($Peer)) { throw 'second ACK-gated grant accepted before release' }
+						$OpenGrantByPeer.Add($Peer, $Token)
+						$AcceptedGrants.Add($Token, @{ Peer = $Peer; DemandId = $DemandId;
+							Bytes = $Bytes; AcceptedAt = $At; Retired = $false })
+						if ($N[11] -ne $OpenGrantByPeer.Count) {
+							throw 'native active grant count disagrees with acceptance chronology'
+						}
 					}
 					$Wait = [UInt64]($At - $EligibleSince)
 					$Stats = $Peers[$Peer]
@@ -193,7 +267,36 @@ function Read-AdmissionFairnessEvidence {
 		})
 		return [pscustomobject]@{
 			Classification = 'EVIDENCE_INTEGRITY_AND_OBSERVED_TIMING_ONLY'
+			TraceCanonicalCounterBounds = 'MEASURED_PASS'
+			GrantLifecycleCoverage = $(if (-not $IsV2 -or $GrantCount -eq 0) { 'NOT_MEASURED' }
+				elseif ($TerminalDebtReleaseCount -gt 0 -or $OpenGrantByPeer.Count -gt 0 -or
+					$RetiredGrantCount -ne $GrantCount -or $ReleasedGrantCount -ne $GrantCount) { 'MEASURED_FAIL' }
+				else { 'MEASURED_PASS' })
+			RetiredGrantCount = $RetiredGrantCount
+			ReleasedGrantCount = $ReleasedGrantCount
+			TerminalReleasedGrantCount = $TerminalReleasedGrantCount
+			TerminalDebtReleaseCount = $TerminalDebtReleaseCount
+			OpenGrantCount = $OpenGrantByPeer.Count
+			MaximumTraceActiveGrants = $MaximumTraceActiveGrants
+			MaximumTracePeerCreditBytes = $MaximumTracePeerCreditBytes
+			MaximumTraceGlobalCreditBytes = $MaximumTraceGlobalCreditBytes
+			LastTraceGrantDeferrals = $PreviousDeferrals[0]
+			LastTraceFundedDeferrals = $PreviousDeferrals[1]
+			LastTraceCreditDeferrals = $PreviousDeferrals[2]
+			LastTraceFairnessDeferrals = $PreviousDeferrals[3]
+			# This is a verdict on recorded, accepted exact-demand episodes only.
+			# It does not establish continuous source backlog or universal fairness.
+			AcceptedGrantWaitBoundMicroseconds = [UInt64]220500
+			AcceptedGrantWaitBound = $(if ($GrantCount -eq 0) { 'NOT_MEASURED' }
+				elseif ($MaximumWait -gt 220500) { 'MEASURED_FAIL' }
+				else { 'MEASURED_PASS' })
+			ExactDemandEpisodeCoverage = $(if ($GrantCount -eq 0) { 'NOT_MEASURED' }
+				elseif ($MaximumWait -gt 220500) { 'MEASURED_FAIL' }
+				elseif ($InterruptedEligibilityEpisodeCount -gt 0 -or $DisposedEligibleCount -gt 0 -or
+					$Current.Count -gt 0 -or $OpenAfterInterruptionCount -gt 0) { 'INCONCLUSIVE_NOT_MEASURED' }
+				else { 'MEASURED_PASS' })
 			RunId = $RunId; EventCount = $Count; FileBytes = $File.Length
+			InterruptedEligibilityEpisodeCount = $InterruptedEligibilityEpisodeCount
 			ExactDemandCount = $Demands.Count; EverEligibleDemandCount = $EverEligibleCount
 			GrantedCount = $GrantCount; DisposedEverEligibleDemandCount = $DisposedEverEligibleCount
 			DisposedWhileEligibleCount = $DisposedEligibleCount

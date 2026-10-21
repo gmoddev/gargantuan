@@ -1,7 +1,9 @@
 #requires -Version 7.0
 # Offline reconciliation of two role-local Foundation 3L farm receipts. This
 # intentionally does not pronounce Local or Node provider qualification.
-# Stage AdmissionFairnessEvidence.ps1 beside this script; its absence fails closed.
+# Stage AdmissionFairnessEvidence.ps1, RecoveryCausalEvidence.ps1 and the
+# PhysicalFarmPublicationEvidence.ps1 / PhysicalFarmClockEvidence.ps1 and
+# PhysicalGameSessionFarmLifecycle.ps1 / PhysicalGameSessionFarmRemoteOwnership.ps1 beside it.
 
 param(
 	[Parameter(Mandatory = $true)][string]$RunManifestPath,
@@ -13,6 +15,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
+. (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmClockEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmLifecycle.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmRemoteOwnership.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmF1.ps1')
 
 function Get-RequiredJson {
 	param([string]$Path)
@@ -44,7 +52,7 @@ function Assert-EvidenceRoot {
 	$Expected = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 	foreach ($File in $Index.Files) {
 		$Name = [string]$File.Name
-		$MaximumBytes = if ($Name -ceq 'admission-fairness.tsv' -and $ExpectedRole -ceq 'Server') {
+		$MaximumBytes = if (($Name -ceq 'admission-fairness.tsv' -or $Name -cmatch '^recovery-(gameplay|structural|mixed)\.tsv$') -and $ExpectedRole -ceq 'Server') {
 			33554432
 		} elseif ($Name -ceq 'publication-service.bin' -and $ExpectedRole -ceq 'Server') {
 			335544832
@@ -261,7 +269,7 @@ function Assert-AuthenticatedNodeManifestReceipt {
 }
 
 function Get-Ledger {
-	param([bool]$ScaleValidated)
+	param([bool]$ScaleValidated, [bool]$PublicationMeasured)
 	# These are the independent gates in PooledPhysicalQualification3L.md.
 	# A phase-control receipt proves only the listed subset. Other gates need
 	# native trace/capture/provider analyses rather than inferred success.
@@ -271,7 +279,9 @@ function Get-Ledger {
 		[ordered]@{ Gate = 'One-producer RPC/Event/action metrics'; State = $(if ($ScaleValidated) { 'MEASURED' } else { 'NOT MEASURED' }); Evidence = 'five typed producer metric receipts' },
 		[ordered]@{ Gate = 'Role-local CPU/RSS/thread/handle sampling'; State = 'MEASURED'; Evidence = 'pinned process-resources.csv on both hosts' },
 		[ordered]@{ Gate = 'Authoritative server tick, network and full Character cadence'; State = 'NOT MEASURED'; Evidence = 'requires bounded native application trace analysis' },
-		[ordered]@{ Gate = 'RPC handler and response queue bounds'; State = 'NOT MEASURED'; Evidence = 'requires native queue trace analysis' },
+		[ordered]@{ Gate = 'Character publication state-chain and role-local delays'; State = $(if ($PublicationMeasured) { 'MEASURED' } else { 'NOT MEASURED' }); Evidence = 'hash-indexed native due/accept and receive/handler join; no cross-host clock subtraction or full cadence verdict' },
+		[ordered]@{ Gate = 'Remote publication and recipient cadence'; State = 'NOT MEASURED'; Evidence = 'Character publication trace has no Remote offer, send or handler records' },
+		[ordered]@{ Gate = 'RPC handler and response queue bounds'; State = 'NOT MEASURED'; Evidence = 'RemoteManager insertion/terminal ownership is separately replayed; NetworkScheduler RpcResponse queue service remains independent' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = 'NOT MEASURED'; Evidence = 'requires independently timed recovery workload and trace' },
 		[ordered]@{ Gate = 'Exact accepted/retired/terminal/debt/grant/journal conservation'; State = 'MEASURED'; Evidence = 'final native admission receipt, exact byte equality, zero debt/grants and zero journal failures' },
 		[ordered]@{ Gate = 'Fairness, backlog and backpressure'; State = 'NOT MEASURED'; Evidence = 'requires admission/scheduler trace and overload case' },
@@ -288,8 +298,10 @@ function Import-FarmParser {
 	$Errors = $null
 	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
 	if ($Errors.Count -ne 0) { throw 'canonical farm evidence parser has a syntax error' }
-	$Needed = @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
-		'Test-RecoveryQuiescent', 'Assert-Records', 'Assert-ScaleRecords', 'Assert-RecoveryRecords')
+	$Needed = @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
+		'Test-RecoveryQuiescent', 'Test-RecoveryServiceHealthy', 'Get-RecoveryUnsigned',
+		'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-Records', 'Assert-ScaleRecords',
+		'Assert-RecoveryRecords')
 	foreach ($Function in $Ast.FindAll({ param($Node)
 		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
 	}, $true)) {
@@ -342,8 +354,10 @@ $ClientHostSamples = Assert-HostResourceRows -Path (Join-Path $Clients.Root 'hos
 	-ExpectedCount ([long]$Clients.Result.HostResourceSamples)
 
 foreach ($Definition in @(Import-FarmParser)) { . ([scriptblock]::Create($Definition)) }
-foreach ($Name in @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
-	'Test-RecoveryQuiescent', 'Assert-Records', 'Assert-ScaleRecords', 'Assert-RecoveryRecords')) {
+foreach ($Name in @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
+	'Test-RecoveryQuiescent', 'Test-RecoveryServiceHealthy', 'Get-RecoveryUnsigned',
+	'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-Records', 'Assert-ScaleRecords',
+	'Assert-RecoveryRecords')) {
 	if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
 		throw "canonical farm evidence parser lacks $Name"
 	}
@@ -379,7 +393,43 @@ if ($FairnessSummary.Count -ne 1 -or $FairnessSummary[0].run -cne $RunId -or
 }
 $NodeAuthenticatedManifest = Assert-AuthenticatedNodeManifestReceipt -ServerRoot $Server.Root `
 	-RunManifest $Manifest
-$Ledger = Get-Ledger -ScaleValidated $true
+$ReportPath = [IO.Path]::GetFullPath($ReportPath)
+if ($ReportPath.StartsWith($Server.Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+	$ReportPath.StartsWith($Clients.Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+	throw 'reconciliation report must remain outside immutable role-local evidence roots'
+}
+if (Test-Path -LiteralPath $ReportPath) { throw 'reconciliation report path already exists' }
+$Publication = Read-FarmPublicationObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+	-ServerIndex $Server.Index -ClientIndex $Clients.Index -RunManifestPath $RunManifestPath `
+	-ScratchParent ([IO.Path]::GetDirectoryName($ReportPath))
+$Ledger = Get-Ledger -ScaleValidated $true `
+	-PublicationMeasured ($Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED')
+$Ledger += [ordered]@{ Gate='Actual ordinary complete-message all-interval demand';
+	State=$(if ($Publication.OrdinaryDemand.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' });
+	Evidence='fixed five phase scopes, complete successful transport messages, forced Character included; exact peer/global buckets on separate sender-owned QPC domains' }
+$Clock = Read-FarmClockObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+	-RunManifestPath $RunManifestPath
+$Lifecycle = Read-FarmLifecycleObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+	-RunManifestPath $RunManifestPath
+Assert-FarmLifecycleAdmission -Observation $Lifecycle -Admission $Admission
+$RemoteOwnership = Read-FarmRemoteOwnershipObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+	-RunManifestPath $RunManifestPath
+$F1 = Read-FarmF1Observation -ServerRoot $Server.Root -RunManifestPath $RunManifestPath
+Assert-FarmF1Admission -Observation $F1 -Admission $Admission
+$Ledger += [ordered]@{ Gate='Every finite native first-send grant, including final grants';
+	State=$F1.State; Evidence='32 generation-scoped sticky native verdict histories; exact completed, first-send, ACK and retirement conservation' }
+$Ledger += [ordered]@{ Gate = 'RemoteManager queue and handler ownership bounds';
+	State = $RemoteOwnership.State.Replace('_', ' ');
+	Evidence = '33 post-Stop native insertion high-waters, zero current ownership and exact accepted/released totals; residence diagnostics do not prove response scheduler latency' }
+foreach ($Gate in $Ledger) {
+	if ($Gate.Gate -ceq 'Logical lifecycle, readers, content and debt cleanup') {
+		$Gate.State = $Lifecycle.State.Replace('_', ' ')
+		$Gate.Evidence = 'independent post-Stop server and 32 client receipts prove terminal sessions, zero transient ownership and admission conservation; resident caches are diagnostic'
+	}
+}
+$Ledger += [ordered]@{ Gate = 'Native clock correlation at calibration probes';
+	State = $(if ($Clock.Status -ceq 'BOUNDED_AT_PROBE') { 'MEASURED' } else { 'NOT MEASURED' });
+	Evidence = '640 causal offset intervals across 32 clients and five epochs; no phase-long offset or one-way latency claim' }
 $Report = [ordered]@{
 	Format = 'GargantuanPhysicalFarmReconciliation'; Version = 1
 	RunId = $RunId; Provider = $Provider; ManifestSha256 = $ManifestSha256.ToLowerInvariant()
@@ -388,6 +438,11 @@ $Report = [ordered]@{
 	Identity = $Identity; Admission = $Admission
 	AdmissionFairnessObservation = $FairnessObservation
 	RecoveryObservation = $RecoveryObservation
+	PublicationObservation = $Publication
+	ClockObservation = $Clock
+	LifecycleObservation = $Lifecycle
+	RemoteOwnershipObservation = $RemoteOwnership
+	F1Observation = $F1
 	NodeAuthenticatedManifest = $NodeAuthenticatedManifest
 	ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
 	ServerHostResourceSamples = $ServerHostSamples; ClientHostResourceSamples = $ClientHostSamples
@@ -395,12 +450,6 @@ $Report = [ordered]@{
 	MeasuredGateCount = @($Ledger | Where-Object State -eq 'MEASURED').Count
 	MissingGateCount = @($Ledger | Where-Object State -eq 'NOT MEASURED').Count
 }
-$ReportPath = [IO.Path]::GetFullPath($ReportPath)
-if ($ReportPath.StartsWith($Server.Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
-	$ReportPath.StartsWith($Clients.Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-	throw 'reconciliation report must remain outside immutable role-local evidence roots'
-}
-if (Test-Path -LiteralPath $ReportPath) { throw 'reconciliation report path already exists' }
 $ReportBytes = [Text.UTF8Encoding]::new($false).GetBytes(($Report | ConvertTo-Json -Depth 8))
 $Stream = [IO.File]::Open($ReportPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
 try { $Stream.Write($ReportBytes) } finally { $Stream.Dispose() }

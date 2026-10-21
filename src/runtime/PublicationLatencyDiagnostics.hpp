@@ -17,19 +17,34 @@ struct PublicationLatencyRecord {
 	std::uint64_t Tick = 0, Sequence = 0, Due = 0, Epoch = 0, Nanoseconds = 0;
 	std::uint32_t Kind = 0, Tier = 0, Bytes = 0, Operations = 0;
 };
+struct OrdinaryDemandTag { std::uint64_t Sequence = 0, Phase = 0; };
 struct PublicationLatencySink {
 	void *Context = nullptr;
 	bool (*Selected)(void *, network::ConnectionId) noexcept = nullptr;
 	void (*Record)(void *, PublicationLatencyRecord) noexcept = nullptr;
 	void (*Packet)(void *, const char *, network::ConnectionId, std::span<const std::byte>, std::uint64_t) noexcept = nullptr;
+	OrdinaryDemandTag (*QueueOrdinary)(void *, network::ConnectionId, std::span<const std::byte>) noexcept = nullptr;
 };
 inline thread_local PublicationLatencySink *ActivePublicationLatency = nullptr;
+inline thread_local OrdinaryDemandTag ActiveOrdinaryDemand;
+class OrdinaryDemandScope final {
+	OrdinaryDemandTag Previous;
+public:
+	explicit OrdinaryDemandScope(OrdinaryDemandTag Value) noexcept : Previous(ActiveOrdinaryDemand) { ActiveOrdinaryDemand = Value; }
+	~OrdinaryDemandScope() { ActiveOrdinaryDemand = Previous; }
+	OrdinaryDemandScope(const OrdinaryDemandScope &) = delete;
+	OrdinaryDemandScope &operator=(const OrdinaryDemandScope &) = delete;
+};
 inline std::uint64_t PublicationLatencyNow() noexcept {
 	return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 inline bool PublicationLatencySelected(network::ConnectionId Connection) noexcept {
 	return ActivePublicationLatency && ActivePublicationLatency->Selected(ActivePublicationLatency->Context, Connection);
+}
+inline OrdinaryDemandTag QueueOrdinaryDemand(network::ConnectionId Connection, std::span<const std::byte> Payload) noexcept {
+	if (!PublicationLatencySelected(Connection) || !ActivePublicationLatency->QueueOrdinary) return {};
+	return ActivePublicationLatency->QueueOrdinary(ActivePublicationLatency->Context, Connection, Payload);
 }
 inline void RecordPublicationLatency(PublicationLatencyRecord Record) noexcept {
 	if (!PublicationLatencySelected(Record.Connection)) return;

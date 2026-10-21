@@ -129,9 +129,12 @@ namespace gargantuan::network {
 		struct QueuedMessage : NetworkMessageIntent {
 			explicit QueuedMessage(NetworkMessageIntent Message)
 				: NetworkMessageIntent(std::move(Message)), Producer(runtime_detail::ActiveWorkProducer),
-				  EnqueuedNanoseconds(runtime_detail::ActiveWorkSample ? runtime_detail::WorkTimestamp() : 0) {}
+				  EnqueuedNanoseconds(runtime_detail::ActiveWorkSample ? runtime_detail::WorkTimestamp() : 0),
+				  OrdinaryDemand(Delivery() == DeliveryMode::ReliableOrdered && Traffic() != TrafficClass::StructuralReplication
+					? runtime_detail::QueueOrdinaryDemand(Destination(), Payload()) : runtime_detail::OrdinaryDemandTag{}) {}
 			runtime_detail::WorkProducer Producer;
 			std::uint64_t EnqueuedNanoseconds;
+			runtime_detail::OrdinaryDemandTag OrdinaryDemand;
 		};
 		struct ConnectionQueue {
 			NetworkLimits Limits;
@@ -306,7 +309,10 @@ namespace gargantuan::network {
 				++Connection.Statistics.BudgetLimitedFlushes;
 				return Result;
 			}
-			auto Submission = State->Transport.Send(Message);
+			const auto Submission = [&] {
+				runtime_detail::OrdinaryDemandScope Origin(Message.OrdinaryDemand);
+				return State->Transport.Send(Message);
+			}();
 			if (Submission.Succeeded()) runtime_detail::RecordPublicationPacket("Handoff", Message.Destination(), Message.Payload());
 			if (Submission.Status == TransportOperationStatus::WouldBlock) {
 				if (ProducerSample) runtime_detail::AddWorkCounter(ProducerSample->CapacityDeferrals, 1);

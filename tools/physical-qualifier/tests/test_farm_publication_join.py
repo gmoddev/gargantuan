@@ -38,6 +38,9 @@ class FarmPublicationJoinTests(unittest.TestCase):
     def ClientRecord(self, Stage, Ns, **Values):
         return self.Record(Stage, Ns, CS=1, CG=1, **Values)
 
+    def Retirement(self, Ns, OS=9, OG=2, Tick=101, CS=17, CG=2):
+        return self.Record(11, Ns, CS=CS, CG=CG, OS=OS, OG=OG, Tick=Tick)
+
     def OrdinaryServer(self):
         R = self.Record
         return [R(1, 100, CS=0, CG=0, OS=0, OG=0, Tick=100),
@@ -87,12 +90,46 @@ class FarmPublicationJoinTests(unittest.TestCase):
         self.assertEqual(Result["Server"]["Accepted"], 1)
         self.assertEqual(Result["ServerDueToAccepted"]["MaximumNs"], 50)
         self.assertEqual(Result["ClientReceiveToHandled"]["MaximumNs"], 100)
-        self.assertEqual(Result["Retirement"], "NOT_MEASURED")
-        self.assertEqual(Result["DueCompleteness"], "NOT_MEASURED")
+        self.assertEqual(Result["Retirement"], "NONE_OBSERVED")
+        self.assertEqual(Result["DueCompleteness"], "OBSERVED")
         self.assertEqual(Result["CrossHostDueToHandled"], "NOT_MEASURED")
         self.assertLess(Result["ScratchPages"], MAX_DATABASE_PAGES)
         self.assertGreater(Result["ScratchPeakDatabaseBytes"], 0)
         self.assertEqual(list(self.Scratch.iterdir()), [])
+
+    def test_rpc_causal_records_do_not_enter_character_state_join(self):
+        Server = self.OrdinaryServer() + [
+            self.Record(17, 300, OS=18, OG=2, Bytes=64, Tick=0, Seq=7),
+            self.Record(18, 310, OS=18, OG=2, Tick=0, Seq=7),
+            self.Record(19, 320, OS=18, OG=2, Tick=0, Seq=7),
+            self.Record(20, 330, OS=18, OG=2, Tick=0, Seq=7),
+            self.Record(21, 340, OS=18, OG=2, Bytes=64, Tick=0, Seq=7)]
+        Client = self.ClientPair() + [
+            self.ClientRecord(14, 1200, OS=18, OG=2, Tick=0, Seq=7),
+            self.ClientRecord(15, 1210, OS=18, OG=2, Tick=0, Seq=7),
+            self.ClientRecord(16, 1220, OS=18, OG=2, Bytes=64, Tick=0, Seq=7),
+            self.ClientRecord(22, 1230, OS=18, OG=2, Bytes=64, Tick=0, Seq=7),
+            self.ClientRecord(23, 1240, OS=18, OG=2, Tick=0, Seq=7)]
+        self.Write(ServerRecords=Server, ClientRecords=Client)
+        self.assertEqual(self.Analyze()["Status"], "ACCEPTED_STATE_CHAIN_OBSERVED")
+
+    def test_join_reports_sealed_phase_local_cadence_without_inventing_roots(self):
+        self.Write()
+        with self.ServerReady.open("a", encoding="utf-8") as Stream:
+            for Index, Phase in enumerate(("baseline", "load", "resident", "evict", "reload")):
+                Start = 100 + 20 * Index
+                Stream.write(f"[Qualification:Scale] event=phase_start run={self.RunId} "
+                             f"phase={Phase} tick={Start} monotonic_us={Start * 1000}\n")
+                Stream.write(f"[Qualification:Scale] event=phase_end run={self.RunId} "
+                             f"phase={Phase} tick={Start + 4} monotonic_us={(Start + 4) * 1000}\n")
+        Result = self.Analyze()
+        Cadence = Result["RecipientCharacterCadence"]
+        self.assertEqual(Cadence["Status"], "RECIPIENT_LOCAL_OBSERVED")
+        self.assertEqual(Cadence["RootIdentity"], "NOT_MEASURED")
+        self.assertEqual(Cadence["RawGapDiagnosticVerdict"], "NOT_MEASURED")
+        self.assertEqual(Cadence["RelationshipCount"], 1)
+        self.assertEqual(Cadence["Relationships"][0]["Phases"][0]["States"], 1)
+        self.assertEqual(Result["CrossHostDueToHandled"], "NOT_MEASURED")
 
     def test_forced_state_has_separate_built_origin(self):
         R = self.Record
@@ -149,6 +186,159 @@ class FarmPublicationJoinTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.Analyze()
 
+    def test_same_tick_due_reentry_requires_explicit_schedule_after_acceptance(self):
+        R = self.Record
+        # The accepted first state closes due tick 101, then a later importance
+        # promotion schedules the same relationship again during tick 101.
+        self.ServerRecords += [R(2, 270, Due=101),
+                               R(3, 280, Due=101),
+                               R(4, 290, CS=0, CG=0, Seq=20, Control=4),
+                               R(5, 300, CS=0, CG=0, Seq=20),
+                               R(6, 310, Seq=20, Due=101, Material=8),
+                               R(8, 320, Bytes=76, Seq=20, Control=4,
+                                 Material=8, Frame=12)]
+        self.ClientRecords += [self.ClientRecord(9, 1200, Bytes=76, Seq=20,
+                                                 Control=4, Material=8, Frame=12),
+                               self.ClientRecord(10, 1300, Bytes=76, Seq=20,
+                                                 Control=4, Material=8, Frame=12)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Due"], 2)
+        self.assertEqual(Result["Server"]["DueClasses"], 2)
+        self.assertEqual(Result["Server"]["DueAccepted"], 2)
+        self.assertEqual(Result["Client"]["ClientHandled"], 2)
+        self.assertEqual(Result["ServerDueToAccepted"]["MaximumNs"], 120)
+
+        # A repeated discovery before the second acceptance is not new work.
+        self.ServerRecords.insert(-4, R(3, 285, Due=101))
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Due"], 2)
+        self.assertEqual(Result["Server"]["DueRediscoveries"], 1)
+
+        # Removing the explicit rearm must not launder a replay after service.
+        Reentered = list(self.ServerRecords)
+        self.ServerRecords = [Value for Index, Value in enumerate(Reentered)
+                              if Index not in (8, 9)]
+        self.Write()
+        with self.assertRaises(ValueError):
+            self.Analyze()
+
+        # A third copy after the second disposition also remains a replay.
+        self.ServerRecords = Reentered
+        self.ServerRecords += [R(3, 330, Due=101)]
+        self.Write()
+        with self.assertRaises(ValueError):
+            self.Analyze()
+
+    def test_direct_reliable_publication_is_not_invented_scheduled_due(self):
+        R = self.Record
+        self.ServerRecords += [R(1, 270, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               R(4, 280, CS=0, CG=0, Tick=102, Seq=20, Control=4),
+                               R(12, 290, Tick=102, Seq=20, Material=8, Flags=1),
+                               R(8, 300, Tick=102, Seq=20, Bytes=76, Control=4,
+                                 Material=8, Frame=12)]
+        self.ClientRecords += [self.ClientRecord(9, 1200, Tick=102, Seq=20,
+                                                 Bytes=76, Control=4, Material=8, Frame=12),
+                               self.ClientRecord(10, 1300, Tick=102, Seq=20,
+                                                 Bytes=76, Control=4, Material=8, Frame=12)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Due"], 1)
+        self.assertEqual(Result["Server"]["DirectOffered"], 1)
+        self.assertEqual(Result["Server"]["DirectReliableOffered"], 1)
+        self.assertEqual(Result["Server"]["DirectAccepted"], 1)
+        self.assertEqual(Result["Server"]["DirectReliableAccepted"], 1)
+        self.assertEqual(Result["Server"]["DirectSatisfiedDue"], 0)
+        self.assertEqual(Result["ServerDueToAccepted"]["Count"], 1)
+        self.assertEqual(Result["ServerDirectBuiltToAccepted"]["MaximumNs"], 20)
+
+        # A packet without the source marker cannot be inferred as direct.
+        self.Write(ServerRecords=self.ServerRecords[:11] + self.ServerRecords[12:])
+        with self.assertRaisesRegex(ValueError, "unmatched"):
+            self.Analyze()
+        # A direct offer without scheduler acceptance cannot pass conservation.
+        self.Write(ServerRecords=self.ServerRecords[:-1])
+        with self.assertRaises(ValueError):
+            self.Analyze()
+
+    def test_rejected_direct_offer_is_explicit_and_retry_has_new_identity(self):
+        R = self.Record
+        self.ServerRecords += [R(1, 270, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               R(4, 280, CS=0, CG=0, Tick=102, Seq=20, Control=4),
+                               R(12, 290, Tick=102, Seq=20, Material=8, Flags=1),
+                               R(13, 300, Tick=102, Seq=20, Material=8, Flags=1),
+                               R(4, 310, CS=0, CG=0, Tick=102, Seq=21, Control=4),
+                               R(12, 320, Tick=102, Seq=21, Material=8, Flags=1),
+                               R(8, 330, Tick=102, Seq=21, Bytes=76, Control=4,
+                                 Material=8, Frame=12)]
+        self.ClientRecords += [self.ClientRecord(9, 1200, Tick=102, Seq=21,
+                                                 Bytes=76, Control=4, Material=8, Frame=12),
+                               self.ClientRecord(10, 1300, Tick=102, Seq=21,
+                                                 Bytes=76, Control=4, Material=8, Frame=12)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["DirectOffered"], 2)
+        self.assertEqual(Result["Server"]["DirectRejected"], 1)
+        self.assertEqual(Result["Server"]["DirectAccepted"], 1)
+        self.assertEqual(Result["Server"]["ForcedAccepted"], 1)
+        self.ServerRecords += [R(13, 340, Tick=102, Seq=21, Material=8, Flags=1)]
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "rejection lacks unique preceding offer"):
+            self.Analyze()
+        self.ServerRecords[-1] = R(13, 340, Tick=102, Seq=20, Material=8, Flags=1)
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "rejection lacks unique preceding offer"):
+            self.Analyze()
+
+    def test_direct_reliable_publication_disposes_only_its_confirmed_due(self):
+        R = self.Record
+        self.ServerRecords += [R(1, 270, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               R(3, 280, Tick=102, Due=102),
+                               R(4, 290, CS=0, CG=0, Tick=102, Seq=20, Control=4),
+                               R(12, 300, Tick=102, Seq=20, Due=102, Material=8, Flags=1),
+                               R(2, 310, Tick=102, Due=105),
+                               R(8, 320, Tick=102, Seq=20, Bytes=76, Control=4,
+                                 Material=8, Frame=12)]
+        self.ClientRecords += [self.ClientRecord(9, 1200, Tick=102, Seq=20,
+                                                 Bytes=76, Control=4, Material=8, Frame=12),
+                               self.ClientRecord(10, 1300, Tick=102, Seq=20,
+                                                 Bytes=76, Control=4, Material=8, Frame=12)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Due"], 2)
+        self.assertEqual(Result["Server"]["DueAccepted"], 1)
+        self.assertEqual(Result["Server"]["DirectSatisfiedDue"], 1)
+        self.assertEqual(Result["Server"]["FutureForecasts"], 1)
+        self.ServerRecords[12] = R(12, 300, Tick=102, Seq=20, Due=101,
+                                    Material=8, Flags=1)
+        self.Write()
+        with self.assertRaises(ValueError):
+            self.Analyze()
+
+    def test_direct_publication_does_not_invent_due_from_unconfirmed_forecast(self):
+        R = self.Record
+        self.ServerRecords += [R(1, 270, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               R(2, 280, Tick=102, Due=102),
+                               R(4, 290, CS=0, CG=0, Tick=102, Seq=20, Control=4),
+                               R(12, 300, Tick=102, Seq=20, Material=8, Flags=1),
+                               R(8, 310, Tick=102, Seq=20, Bytes=76, Control=4,
+                                 Material=8, Frame=12),
+                               R(2, 320, Tick=102, Due=105)]
+        self.ClientRecords += [self.ClientRecord(9, 1200, Tick=102, Seq=20,
+                                                 Bytes=76, Control=4, Material=8, Frame=12),
+                               self.ClientRecord(10, 1300, Tick=102, Seq=20,
+                                                 Bytes=76, Control=4, Material=8, Frame=12)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["DirectSatisfiedDue"], 0)
+        self.assertEqual(Result["Server"]["FutureForecasts"], 1)
+        self.ServerRecords.insert(-4, R(3, 285, Tick=102, Due=102))
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "hid confirmed due work"):
+            self.Analyze()
+
+
     def test_client_missing_duplicate_wrong_generation_and_wrong_epoch_fail(self):
         R = self.Record
         Cases = [
@@ -166,11 +356,93 @@ class FarmPublicationJoinTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.Analyze()
 
-    def test_unresolved_due_or_retired_without_native_evidence_fails(self):
+    def test_unresolved_due_without_accepted_leave_fails(self):
         R = self.Record
         self.ServerRecords += [R(3, 270, OS=9, Due=101)]
         self.Write()
         with self.assertRaisesRegex(ValueError, "conservation incomplete"):
+            self.Analyze()
+
+    def test_accepted_leave_retires_only_prior_confirmed_due(self):
+        self.ServerRecords += [self.Record(3, 270, OS=9, Due=101),
+                               self.Retirement(280)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Due"], 2)
+        self.assertEqual(Result["Server"]["DueAccepted"], 1)
+        self.assertEqual(Result["Server"]["RetiredDue"], 1)
+        self.assertEqual(Result["Server"]["RetiredPending"], 1)
+        self.assertEqual(Result["Retirement"], "OBSERVED")
+        self.assertEqual(Result["DueCompleteness"], "OBSERVED")
+
+    def test_wrong_generation_leave_cannot_cancel_due_work(self):
+        self.ServerRecords += [self.Record(3, 270, OS=9, Due=101),
+                               self.Retirement(280, OG=3)]
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "conservation incomplete"):
+            self.Analyze()
+
+    def test_same_generation_reentry_and_second_retirement(self):
+        self.ServerRecords[-1] = self.Record(2, 260, Due=110)
+        self.ServerRecords += [self.Record(3, 270, OS=9, Due=101),
+                               self.Retirement(280),
+                               self.Record(1, 300, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               self.Record(2, 310, OS=9, Tick=102, Due=103),
+                               self.Record(1, 400, CS=0, CG=0, OS=0, OG=0, Tick=103),
+                               self.Record(3, 410, OS=9, Tick=103, Due=103),
+                               self.Retirement(420, Tick=103)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Retired"], 2)
+        self.assertEqual(Result["Server"]["RetiredDue"], 2)
+        self.assertEqual(Result["Server"]["Due"], 3)
+        self.assertEqual(Result["Server"]["DueAccepted"], 1)
+
+    def test_same_due_tick_may_reenter_after_retirement(self):
+        self.ServerRecords[-1] = self.Record(2, 260, Due=110)
+        self.ServerRecords += [self.Record(3, 270, OS=9, Due=101),
+                               self.Retirement(280),
+                               self.Record(1, 300, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               self.Record(3, 310, OS=9, Tick=102, Due=101),
+                               self.Retirement(320, Tick=102)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Due"], 3)
+        self.assertEqual(Result["Server"]["RetiredDue"], 2)
+
+    def test_forecast_retirement_is_not_confirmed_due_retirement(self):
+        self.ServerRecords[2:2] = [self.Record(2, 120, OS=9, Tick=100, Due=101)]
+        self.ServerRecords += [self.Retirement(270)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["RetiredPending"], 1)
+        self.assertEqual(Result["Server"]["RetiredDue"], 0)
+        self.assertEqual(Result["Server"]["Due"], 1)
+
+    def test_duplicate_retirement_without_reentry_fails(self):
+        self.ServerRecords += [self.Retirement(270), self.Retirement(280)]
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "duplicate retirement"):
+            self.Analyze()
+
+    def test_retirement_does_not_hide_unaccepted_or_unobserved_state(self):
+        Unaccepted = self.ServerRecords[:7] + [self.Retirement(245, OS=8)]
+        self.Write(ServerRecords=Unaccepted)
+        with self.assertRaises(ValueError):
+            self.Analyze()
+        self.Write(ServerRecords=self.ServerRecords + [self.Retirement(270, OS=8)],
+                   ClientRecords=self.ClientRecords[:1])
+        with self.assertRaises(ValueError):
+            self.Analyze()
+
+    def test_overdue_forecast_and_missing_due_origin_fail(self):
+        self.ServerRecords += [self.Record(2, 270, OS=9, Due=101)]
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "conservation incomplete"):
+            self.Analyze()
+        self.ServerRecords[-1] = self.Record(3, 270, OS=9, Due=99)
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "FrameBegin origin"):
             self.Analyze()
 
     def test_wrong_run_slot_nonce_and_overflow_fail(self):

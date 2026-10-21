@@ -50,6 +50,10 @@ if ($Observed.Count -lt 1 -or @($Observed | Where-Object { $_ -notin $Allowed })
     try:
         Run(["pwsh.exe", "-NoProfile", "-NonInteractive", "-Command", Script], Environment)
     except subprocess.CalledProcessError as Error:
+        for Reason in ("private ticket ACL inherits access", "private ticket owner changed",
+                       "private ticket ACL permits another principal"):
+            if Reason in (Error.stderr or ""):
+                raise ValueError("[Qualification:FarmTickets] " + Reason) from Error
         raise ValueError("[Qualification:FarmTickets] private ticket ACL is not confined") from Error
 
 
@@ -63,6 +67,7 @@ def Harden(Root):
             Run(["icacls.exe", str(Root), "/grant:r", f"*{Sid}:(OI)(CI)F",
                  "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"])
             Run(["icacls.exe", str(Root), "/inheritance:r"])
+            Run(["icacls.exe", str(Root), "/setowner", f"*{Sid}"])
         except subprocess.CalledProcessError as Error:
             raise ValueError("[Qualification:FarmTickets] could not confine private ticket ACL") from Error
     AssertPrivate(Root)

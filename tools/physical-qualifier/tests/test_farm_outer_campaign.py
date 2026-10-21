@@ -1,6 +1,7 @@
 """Mock transfer tests for fixed Farm32 two-host staging."""
 
 import base64
+import ctypes
 import hashlib
 import json
 from pathlib import Path
@@ -16,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 import farm_outer_campaign as Outer  # noqa: E402
 import farm_outer_endpoint as Endpoint  # noqa: E402
 import farm_campaign_runner as Campaign  # noqa: E402
+import farm_capture_campaign as Capture  # noqa: E402
 from test_farm_ticket_staging import FarmTicketStagingTests  # noqa: E402
 REAL_WORKER_SANDBOX = Outer.WorkerSandbox
 
@@ -23,6 +25,8 @@ REAL_WORKER_SANDBOX = Outer.WorkerSandbox
 class MockTransport:
     def __init__(self):
         self.ControlRules = []
+        self.RetiredNodeRoots = []
+        self.RetiredTlsRoots = []
 
     def AddControlFirewall(self, RunId):
         self.ControlRules.append(("add", RunId))
@@ -44,6 +48,10 @@ class MockTransport:
             Endpoint.Verify(*Arguments)
         elif Action == "abort":
             Endpoint.Abort(*Arguments)
+        elif Action == "retire-node-token":
+            self.RetiredNodeRoots.append(Arguments[0])
+        elif Action == "retire-node-tls":
+            self.RetiredTlsRoots.append(Arguments[0])
         else:
             raise AssertionError(Action)
 
@@ -58,6 +66,42 @@ class MockTransport:
 
 
 class OuterCampaignTests(unittest.TestCase):
+    def test_offline_budgets_enclose_export_without_extending_live_capture(self):
+        self.assertEqual(Capture.ROLE_DEADLINE_SECONDS, 500)
+        self.assertEqual(Capture.STOP_TIMEOUT_SECONDS, 80)
+        self.assertEqual(Capture.CLIENT_AUTOSTOP_SECONDS, 630)
+        self.assertEqual(Capture.FINALIZE_TIMEOUT_SECONDS, 1800)
+        self.assertGreater(Campaign.CAPTURE_FINISH_SECONDS,
+                           Capture.ROLE_DEADLINE_SECONDS + Capture.STOP_TIMEOUT_SECONDS +
+                           10 + Capture.FINALIZE_TIMEOUT_SECONDS)
+        self.assertEqual(Endpoint.MAX_SECONDS, Outer.OUTER_FINISH_SECONDS)
+        self.assertGreater(Endpoint.MAX_SECONDS, Campaign.CAPTURE_FINISH_SECONDS)
+
+    def test_capture_collection_uses_offline_transfer_budget_and_strict_limit(self):
+        Remote = self.Fixture.Root / "capture-transfer"
+        Remote.mkdir()
+        Member = Remote / "farm32-worker-capture.etl"
+        Member.write_bytes(b"small fixture")
+        Index = {"RunId": self.Fixture.Identity["RunId"], "Role": "SERVER",
+                 "Files": [{"Name": Member.name, "Bytes": Member.stat().st_size,
+                            "Sha256": Outer.Digest(Member)}]}
+        IndexFile = Remote / "capture-sha256.json"
+        IndexFile.write_text(json.dumps(Index))
+        Transport = MockTransport()
+        with mock.patch.object(Transport, "Fetch", wraps=Transport.Fetch) as Fetch:
+            Outer.FetchIndexed(Transport, str(Remote), self.Fixture.Root / "capture-copy",
+                               IndexFile.name, self.Fixture.Identity["RunId"], "SERVER",
+                               20, Outer.CAPTURE_MEMBER_MAX_BYTES)
+            self.assertEqual(Fetch.call_args.kwargs["Timeout"], 1800)
+        Index["Files"][0]["Bytes"] = 15 * 1024 ** 3
+        IndexFile.write_text(json.dumps(Index))
+        with mock.patch.object(Transport, "Fetch", wraps=Transport.Fetch) as Fetch:
+            with self.assertRaisesRegex(ValueError, "member invalid"):
+                Outer.FetchIndexed(Transport, str(Remote), self.Fixture.Root / "capped-copy",
+                                   IndexFile.name, self.Fixture.Identity["RunId"], "SERVER",
+                                   20, Outer.CAPTURE_MEMBER_MAX_BYTES)
+            self.assertEqual(Fetch.call_count, 1)  # Index only; capped member is never copied.
+
     def test_staged_entrypoints_import_siblings_with_isolated_python(self):
         for Name, Arguments in (("farm_outer_endpoint.py", ["--help"]),
                                 ("farm_campaign_runner.py", ["--help"]),
@@ -90,13 +134,21 @@ class OuterCampaignTests(unittest.TestCase):
             Path(self.Fixture.Spec["Roles"][Role]["StageRoot"]).rmdir()
 
     def test_recovery_manifest_profile_is_explicit_and_bounded(self):
-        self.assertEqual((9000, 10000,
-                          ["-ScaleWorkload", "-ClientFrames", "9000",
-                           "-ServerTicks", "10000"]), Outer.WorkloadProfile(False))
-        self.assertEqual((18000, 19000,
-                          ["-ScaleWorkload", "-ClientFrames", "18000",
-                           "-ServerTicks", "19000", "-RecoveryWorkload"]),
+        self.assertEqual((18001, 19001,
+                          ["-ScaleWorkload", "-ClientFrames", "18001",
+                           "-ServerTicks", "19001"]), Outer.WorkloadProfile(False))
+        self.assertEqual((25201, 26201,
+                          ["-ScaleWorkload", "-ClientFrames", "25201",
+                           "-ServerTicks", "26201", "-RecoveryWorkload"]),
                          Outer.WorkloadProfile(True))
+        for Recovery, RuntimeUs in ((False, 300000000), (True, 420000000)):
+            Frames, Ticks, _ = Outer.WorkloadProfile(Recovery)
+            # Independent runtime contract: the first iteration has no prior
+            # cadence sleep. Both ceilings must also satisfy endpoint bounds.
+            self.assertGreaterEqual((Frames - 1) * 16667, RuntimeUs)
+            self.assertLessEqual(Frames, 36000)
+            self.assertGreater(Ticks, Frames + 600)
+            self.assertLessEqual(Ticks, 48000)
         for Invalid in (None, 0, 1, "true"):
             with self.assertRaisesRegex(ValueError, "invalid recovery workload"):
                 Outer.WorkloadProfile(Invalid)
@@ -176,6 +228,59 @@ class OuterCampaignTests(unittest.TestCase):
         self.assertEqual([("add", self.Fixture.Identity["RunId"]),
                           ("remove", self.Fixture.Identity["RunId"])], Transport.ControlRules)
 
+    def test_node_token_retired_after_failed_launch_barrier(self):
+        Transport = MockTransport()
+        for Role in ("SERVER", "CLIENT"):
+            Source = Path(self.Fixture.Spec["Roles"][Role]["PreflightSource"])
+            Target = self.Fixture.Private / ("server-preflight.json" if Role == "SERVER" else
+                                             "client-preflight.json")
+            shutil.copyfile(Source, Target)
+        Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                    r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py", Transport)
+        self.Fixture.Spec["Roles"]["SERVER"]["NodeStage"] = {"Path": "pinned", "Sha256": "a" * 64}
+        self.Fixture.SpecFile.write_text(json.dumps(self.Fixture.Spec), encoding="utf-8")
+        with mock.patch.object(Outer, "ControlProbe", side_effect=TimeoutError("mock blocked")):
+            with self.assertRaisesRegex(TimeoutError, "mock blocked"):
+                Outer.Launch(self.Fixture.Private, self.Fixture.SpecFile,
+                             r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",
+                             Transport)
+        self.assertEqual([r"C:\Sandbox" + "\\" + self.Fixture.Identity["RunId"]],
+                         Transport.RetiredNodeRoots)
+        self.assertEqual(Transport.RetiredNodeRoots, Transport.RetiredTlsRoots)
+
+    def test_node_preparation_failure_retires_both_worker_secrets(self):
+        Transport = MockTransport()
+        Config = self.Fixture.Private / "node-preparation.json"
+        Config.write_text(json.dumps({"Provider": "Node", "PrivateRoot": str(self.Fixture.Private),
+                                      "WorkerToolRoot": r"C:\Sandbox",
+                                      "WorkerPython": r"C:\Python312\python.exe",
+                                      "WorkerHelper": r"C:\Sandbox\farm_outer_endpoint.py"}), encoding="utf-8")
+        def FailAfterIdentity(ConfigPath, TransportInstance, AttemptId):
+            Outer.WriteNew(self.Fixture.Private / "node-preparation-attempt.json", {
+                "Format": "GargantuanFarmNodePreparationAttempt", "Version": 1,
+                "RunId": self.Fixture.Identity["RunId"], "AttemptId": AttemptId})
+            raise ValueError("mock late failure")
+
+        with mock.patch.object(Outer, "PrepareInputsOnce", side_effect=FailAfterIdentity):
+            with self.assertRaisesRegex(ValueError, "mock late failure"):
+                Outer.PrepareInputs(Config, Transport)
+        Expected = [r"C:\Sandbox" + "\\" + self.Fixture.Identity["RunId"]]
+        self.assertEqual(Expected, Transport.RetiredNodeRoots)
+        self.assertEqual(Expected, Transport.RetiredTlsRoots)
+
+    def test_node_preparation_does_not_retire_a_preexisting_run(self):
+        Transport = MockTransport()
+        Config = self.Fixture.Private / "other-node-preparation.json"
+        Config.write_text(json.dumps({"Provider": "Node", "PrivateRoot": str(self.Fixture.Private),
+                                      "WorkerToolRoot": r"C:\Sandbox",
+                                      "WorkerPython": r"C:\Python312\python.exe",
+                                      "WorkerHelper": r"C:\Sandbox\farm_outer_endpoint.py"}), encoding="utf-8")
+        with mock.patch.object(Outer, "PrepareInputsOnce", side_effect=ValueError("preexisting root")):
+            with self.assertRaisesRegex(ValueError, "preexisting root"):
+                Outer.PrepareInputs(Config, Transport)
+        self.assertEqual([], Transport.RetiredNodeRoots)
+        self.assertEqual([], Transport.RetiredTlsRoots)
+
     def test_worker_firewall_commands_pin_one_program_port_and_peer(self):
         Calls = []
         def Capture(Arguments, Timeout):
@@ -242,6 +347,48 @@ class OuterCampaignTests(unittest.TestCase):
                                "evidence-sha256.json", self.Fixture.Identity["RunId"],
                                "SERVER", 128, 16 * 1024 * 1024)
 
+    def test_recovery_causal_members_use_canonical_32_mib_server_cap(self):
+        Remote = self.Fixture.Root / "recovery-worker-evidence"
+        Remote.mkdir()
+        for Case in ("gameplay", "structural", "mixed"):
+            with self.subTest(Case=Case):
+                Member = Remote / f"recovery-{Case}.tsv"
+                with Member.open("wb") as Stream:
+                    Stream.truncate(32 * 1024 * 1024)
+                Index = {"RunId": self.Fixture.Identity["RunId"], "Role": "Server",
+                         "Files": [{"Name": Member.name, "Bytes": Member.stat().st_size,
+                                    "Sha256": Outer.Digest(Member)}]}
+                (Remote / "evidence-sha256.json").write_text(json.dumps(Index), encoding="utf-8")
+                Output = self.Fixture.Root / f"recovery-{Case}-copied"
+                Outer.FetchIndexed(MockTransport(), str(Remote), Output,
+                                   "evidence-sha256.json", self.Fixture.Identity["RunId"],
+                                   "SERVER", 128, 16 * 1024 * 1024)
+                self.assertEqual(Member.stat().st_size, (Output / Member.name).stat().st_size)
+                Index["Files"][0]["Bytes"] += 1
+                (Remote / "evidence-sha256.json").write_text(json.dumps(Index), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "evidence member invalid"):
+                    Outer.FetchIndexed(MockTransport(), str(Remote), self.Fixture.Root / f"oversized-{Case}",
+                                       "evidence-sha256.json", self.Fixture.Identity["RunId"],
+                                       "SERVER", 128, 16 * 1024 * 1024)
+
+    def test_recovery_cap_does_not_expand_other_members_or_client_evidence(self):
+        Remote = self.Fixture.Root / "wrong-recovery-evidence"
+        Remote.mkdir()
+        for Number, (Name, Role, IndexName) in enumerate((
+                ("recovery-other.tsv", "SERVER", "evidence-sha256.json"),
+                ("recovery-gameplay.tsv", "CLIENT", "evidence-sha256.json"),
+                ("recovery-gameplay.tsv", "SERVER", "capture-sha256.json"))):
+            with self.subTest(Name=Name, Role=Role, IndexName=IndexName):
+                IndexRole = Role if IndexName == "capture-sha256.json" else (
+                    "Server" if Role == "SERVER" else "Clients")
+                Index = {"RunId": self.Fixture.Identity["RunId"], "Role": IndexRole,
+                         "Files": [{"Name": Name, "Bytes": 17 * 1024 * 1024, "Sha256": "a" * 64}]}
+                (Remote / IndexName).write_text(json.dumps(Index), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "evidence member invalid"):
+                    Outer.FetchIndexed(MockTransport(), str(Remote), self.Fixture.Root / f"wrong-{Number}",
+                                       IndexName, self.Fixture.Identity["RunId"],
+                                       Role, 128, 16 * 1024 * 1024)
+
     def test_failed_launch_aborts_each_run_owned_endpoint_and_binds_reap_receipts(self):
         RunId = self.Fixture.Identity["RunId"]
         Roots = {Role: str(self.Fixture.Root / (Role.lower() + "-cleanup"))
@@ -305,6 +452,16 @@ class OuterCampaignTests(unittest.TestCase):
     def test_real_worker_paths_remain_under_task_sandbox(self):
         self.assertRaisesRegex(ValueError, "outside task sandbox", REAL_WORKER_SANDBOX,
                                r"C:\Windows\System32\something.exe")
+        self.assertRaisesRegex(ValueError, "unsafe fixed worker path", Outer.RemoteText,
+                               r"C:\Sandbox\Codex\RUNNER~1\stage")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows 8.3 path alias")
+    def test_temp_alias_is_canonicalized_before_fixed_path_fixture(self):
+        Buffer = ctypes.create_unicode_buffer(1024)
+        Length = ctypes.windll.kernel32.GetShortPathNameW(str(self.Fixture.Root), Buffer, len(Buffer))
+        if not Length or Length >= len(Buffer) or Buffer.value.casefold() == str(self.Fixture.Root).casefold():
+            self.skipTest("volume has no distinct 8.3 alias")
+        self.assertEqual(self.Fixture.Root, Path(Buffer.value).resolve(strict=True))
 
 
 if __name__ == "__main__":

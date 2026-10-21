@@ -8,15 +8,48 @@ import argparse
 import hashlib
 import ipaddress
 import json
+import ntpath
 from pathlib import Path
+import re
 import struct
+import uuid
 
 
-MAX_CAPTURE_BYTES = 960 * 1024 * 1024
+CAPTURE_PROFILE = "Farm32Capture16GiB-v2"
+MAX_CAPTURE_BYTES = 15 * 1024 * 1024 * 1024
 MAX_BLOCK_BYTES = 1024 * 1024
 SERVER_ADDRESS = "10.253.3.2"
 CLIENT_ADDRESS = "10.253.3.1"
 SERVER_PORT = 39450
+WORKER_STOP_POLICY = "ExactOwnedControlTraceW-v1"
+
+
+def AssertWorkerStopIdentity(Marker, RunId, RequireStopped=False):
+    Etl = Marker.get("Etl")
+    Name = Marker.get("TraceSessionName")
+    Guid = Marker.get("TraceSessionGuid")
+    Handle = Marker.get("TraceSessionHandle")
+    if (Marker.get("StopPolicy") != WORKER_STOP_POLICY or Marker.get("TraceIdentityRecorded") is not True or
+            not isinstance(Etl, str) or not ntpath.isabs(Etl) or Etl.startswith("\\\\") or
+            ntpath.normpath(Etl) != Etl or ntpath.basename(Etl) != "farm32-worker-capture.etl" or
+            ntpath.basename(ntpath.dirname(Etl)) != RunId or
+            not isinstance(Name, str) or not 1 <= len(Name) <= 1024 or any(Char in Name for Char in "\r\n\0") or
+            not isinstance(Guid, str) or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", Guid) or
+            not isinstance(Handle, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", Handle) or
+            int(Handle) > 2**64 - 1):
+        raise ValueError("worker Farm32 stop policy or native identity is invalid")
+    ControlName = "GargantuanFarm32-" + hashlib.sha256(Etl.upper().encode("utf-8")).hexdigest()
+    if str(uuid.UUID(Guid)) != Guid or Marker.get("ControlSessionName") != ControlName or Name != "NetTrace-" + ControlName:
+        raise ValueError("worker Farm32 control-session identity is invalid")
+    Recorded = Marker.get("NativeStopRecorded")
+    if type(Recorded) is not bool:
+        raise ValueError("worker native stop state is missing")
+    for Key in ("NativeEventsLost", "NativeLogBuffersLost", "NativeBuffersWritten"):
+        Value = Marker.get(Key)
+        if (Recorded and (type(Value) is not int or not 0 <= Value <= 2**32 - 1)) or (not Recorded and Value is not None):
+            raise ValueError("worker native stop counter is invalid")
+    if RequireStopped and (not Recorded or Marker["NativeEventsLost"] != 0 or Marker["NativeLogBuffersLost"] != 0):
+        raise ValueError("worker native stop evidence is missing or records loss")
 
 
 def Digest(File):
@@ -31,6 +64,7 @@ def ReadIndex(File, Role):
     Index = json.loads(File.read_text(encoding="utf-8"))
     if (Index.get("Format") != "GargantuanFarm32CaptureEvidence" or
             Index.get("Version") != 1 or Index.get("Role") != Role or
+            Index.get("Profile") != CAPTURE_PROFILE or
             Index.get("State") != "SEALED_UNQUALIFIED" or
             not isinstance(Index.get("Files"), list) or
             not 1 <= len(Index["Files"]) <= 20):

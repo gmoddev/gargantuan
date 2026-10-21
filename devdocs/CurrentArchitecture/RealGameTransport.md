@@ -16,6 +16,32 @@ related_adrs:
 
 # Real game transport
 
+## Foundation 3L finite-grant delivery
+
+The [F1 amendment](../../docs/adr/D01-pooled-service-curve.md) governs the current
+token-bearing POOLED_SERVICE path. It uses reliable ordered NoNagle for unique
+first-send drain. Direct UDP additionally permits a funded immediate ACK request
+on the final unique packet of a multi-packet grant. The adapter activates the
+policy once per generation at its first attributed structural submission;
+native token/size/transport checks and conservative bidirectional wire funding
+decide each request. Unfunded grants retain ordinary ACK scheduling. The
+historical Q-only experiment is unavailable. Ordinary reliable and
+FULL_RESERVATION messages retain their flags and cannot initiate this policy.
+
+ACK remains independently observed delivery truth. A failed native packet
+releases only its temporary in-flight segment references after placing those
+segments on the existing retry list; zero packet references do not free a
+retry-owned segment or its message. This preserves mixed-message FIFO and lets
+the later real ACK release exact message/retirement ownership. It neither
+credits failed sends nor fabricates delivery. The bounded native observer is
+opt-in for qualification; normal connections do not allocate its event buffer.
+
+The source-derived request/response and periodic-control funding proof is in
+D01. F1, credit/fairness, pending/debt, four ACK-owned slots, and C3/C5 recovery
+deadlines are unchanged. Hosted CI and fresh physical recovery qualification
+remain separate from the native prototype results. Historical deployment
+captures below describe their original revisions, not this delivery policy.
+
 ## Trusted rate configuration (2026-09-12)
 
 The adapter now accepts an optional positive signed-range `SendRate` at startup.

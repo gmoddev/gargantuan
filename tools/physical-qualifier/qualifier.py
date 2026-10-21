@@ -19,6 +19,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dependency import Load
+from f1_candidate_source import FORMAT as F1_CANDIDATE_FORMAT, VerifyArchive as VerifyCandidateArchive
 
 Legacy, Transport = Load()
 MAX_FRAME, MAX_LOG = Transport.MAX_FRAME, Transport.MAX_LOG
@@ -28,14 +29,18 @@ BASE_HEAD = "14644a369f9e7bfb9a81c21354adae62902d63d7"
 OVERLAY = "2ED31AE67E0F99619940BBB130CD451DB37FEF3A5CEEDAB475E682C3FBEE7003"
 GNS_PIN = "2cb93a06350bb065db53abdb0d87cf297e0bfd34"
 PROBE_SHA = "F130DC868A807FFA4EF10887079162C562230854AE17C013559452791993E969"
-PHASE1_BASE_HEAD = "ce4733de8d68086667bc8fe5138bcc743f21c54e"
-PHASE1_OVERLAY = "18AF89DAEEF3D5DD8E1AC6ED7089EDBEF278990AA211CBB4E54BCF3555D846FB"
-PHASE1_PROBE_SHA = "925DC0684787B1D629901D5047FF9ECC968AFC5F4E579DE576F701322E9BB99F"
+PHASE1_BASE_HEAD = "9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad"
+PHASE1_OVERLAY = "B5ADF96F9BBF05043074547A884B1B44AA3AB68B78C669D5ECD29C7181A7B171"
+PHASE1_PROBE_SHA = "C253362C758E71AD739CAC720E89E506536B0634575071713B8A3E27435F5117"
 PHASE1_SOURCE_ARCHIVE = "f1-native-source.zip"
+PHASE1_SOURCE_FORMAT = "F1_OWNED_TREE_V2"
 PHASE1_RUNTIME_MANIFEST_SHA = "E105DBA76473990C5AE3AB410762851C7183396FF894A093E526ED26B335D7A9"
 PHASE1_NATIVE_DEPENDENCIES = {
-    "SDL3.dll": "6D4483E633AD0B0C12EC8870FD334134E5EBB4ACAE236A8284663D5B6531410A",
+    "SDL3.dll": "53D974AD36E2743A8F9A1B5B021AFF5C2E1AD262DEFE83826A08B9FB918F96DC",
     "libprotobuf.dll": "61D315DB6514446B7332261D4A064760E229D47A7B0738A367D612309D601D10",
+    "msvcp140.dll": "0F885B509A685D2BBFA652FED26B5FB31D88FBDAB0A978C641D1C7B8AA460AA9",
+    "vcruntime140.dll": "D5E4D9A3E835FA679450145D6A7D94E36573A509317111904D9B3712C30D9066",
+    "vcruntime140_1.dll": "1F2D41C4AA5DB0BC33EBF7B66D72943A817D7CE6CBE880502A9403823633093F",
 }
 SERVER_ADDRESS = "10.253.3.2"
 CLIENT_ADDRESS = "10.253.3.1"
@@ -202,6 +207,16 @@ class ProbeGroup:
         return self.poll()
 
 
+def CheckPhase1SourceArchive(Manifest, ArchivePath):
+    Format = Manifest.get("SourceArchiveFormat", "F1_LEGACY_31_V1")
+    if Format != PHASE1_SOURCE_FORMAT or Manifest.get("BaseHead") != PHASE1_BASE_HEAD:
+        raise ValueError("Phase 1 source archive format/revision pin mismatch")
+    if Format == F1_CANDIDATE_FORMAT:
+        VerifyCandidateArchive(ArchivePath, PHASE1_BASE_HEAD)
+    elif Format != "F1_LEGACY_31_V1":
+        raise ValueError("Phase 1 source archive format is unsupported")
+
+
 class LocalRun:
     def __init__(self, Config, Log):
         self.Config, self.Log = Config, Log
@@ -214,6 +229,7 @@ class LocalRun:
         self.HookHashes = {}
         self.CleanupResult = None
         self.ServerListenerLogged = False
+        self.StartedUnixNs = None
 
     def Check(self):
         Config = self.Config
@@ -233,6 +249,8 @@ class LocalRun:
         if IsPhase1(Config) and (Manifest.get("SourceArchive") != PHASE1_SOURCE_ARCHIVE or
                                  Digest(ManifestPath.parent / PHASE1_SOURCE_ARCHIVE) != PHASE1_OVERLAY):
             raise ValueError("Phase 1 native source archive hash mismatch")
+        if IsPhase1(Config):
+            CheckPhase1SourceArchive(Manifest, ManifestPath.parent / PHASE1_SOURCE_ARCHIVE)
         if IsPhase1(Config):
             RuntimeHashes = Manifest.get("RuntimeSha256")
             if not isinstance(RuntimeHashes, dict) or hashlib.sha256(json.dumps(
@@ -259,6 +277,9 @@ class LocalRun:
         if IsPhase1(Config) and Config["Role"] == "CLIENT":
             if Config["CaptureCommand"][-3] != "duration:" + str(PHASE1_CAPTURE_DURATION):
                 raise ValueError("Phase 1 requires the fixed client capture duration")
+            if Config["CaptureCommand"].count("-B") != 1 or Config["CaptureCommand"][
+                    Config["CaptureCommand"].index("-B"):Config["CaptureCommand"].index("-B") + 2] != ["-B", "64"]:
+                raise ValueError("Phase 1 requires the fixed 64 MiB client capture buffer")
         if Config["Role"] == "CLIENT" and not 1 <= Config["Nonce"] <= 2147483648 - Clients:
             raise ValueError("invalid nonce")
         if not Path(Config["WorkDir"]).is_dir():
@@ -349,6 +370,7 @@ class LocalRun:
     def Start(self):
         Env = dict(os.environ, GARGANTUAN_GNS_LIFECYCLE_TRACE="1")
         self.Started = time.monotonic()
+        self.StartedUnixNs = time.time_ns()
         Clients = self.Config.get("ReadinessClients", 1)
         Nonces = (range(self.Config["Nonce"], self.Config["Nonce"] + Clients)
                   if self.Config["Role"] == "CLIENT" else (None,))
@@ -479,6 +501,31 @@ class LocalRun:
                 "EvidencePath": str(self.Log.Directory), "Pid": self.Probe.pid,
                 "Detail": Stderr[-2048:]}
 
+    def CollectPhase1Evidence(self):
+        if not IsPhase1(self.Config) or self.Config.get("ControlPreflight") or self.StartedUnixNs is None:
+            return
+        Work = Path(self.Config["WorkDir"]).resolve()
+        Names = ({"physical-gns-server.csv": 64 * 1024 * 1024,
+                  "physical-gns-server-admissions.csv": 64 * 1024} if self.Config["Role"] == "SERVER" else
+                 {"physical-gns-client-" + str(Nonce) + ".csv": 64 * 1024 for Nonce in self.ClientNonces})
+        if self.Config["Role"] == "CLIENT" and len(Names) != 4:
+            raise ValueError("Phase 1 requires four raw client CSV identities")
+        for Name, Limit in Names.items():
+            Source, Destination = Work / Name, self.Log.Directory / Name
+            if not Source.is_file() or Source.is_symlink() or Source.resolve().parent != Work:
+                raise ValueError("Phase 1 raw evidence is missing/redirected: " + Name)
+            Before = Source.stat()
+            if not 0 < Before.st_size <= Limit or Before.st_mtime_ns < self.StartedUnixNs:
+                raise ValueError("Phase 1 raw evidence is stale/oversized: " + Name)
+            if Destination.exists():
+                raise ValueError("Phase 1 raw evidence destination already exists: " + Name)
+            shutil.copyfile(Source, Destination)
+            After = Source.stat()
+            Hash = Digest(Destination)
+            if (Before.st_size, Before.st_mtime_ns) != (After.st_size, After.st_mtime_ns) or Hash != Digest(Source):
+                raise ValueError("Phase 1 raw evidence changed during collection: " + Name)
+            self.Log.Write("RAW_EVIDENCE", Path=Name, SHA256=Hash, Bytes=After.st_size)
+
     def Cleanup(self):
         if self.CleanupResult is not None:
             return list(self.CleanupResult)
@@ -531,6 +578,12 @@ class LocalRun:
                 Errors.append("capture direction validation failed: " + str(Error))
         for File in self.Files:
             File.close()
+        try:
+            # Children are stopped and their files closed. Journal.Close then
+            # hashes these fixed bounded CSVs into the endpoint manifest.
+            self.CollectPhase1Evidence()
+        except Exception as Error:
+            Errors.append("raw Phase 1 evidence collection failed: " + str(Error))
         self.Log.Write("LOCAL_CLEANUP", Errors=Errors)
         self.CleanupResult = list(Errors)
         return list(Errors)
@@ -583,6 +636,7 @@ def Stage(Args):
                             "1" if Phase1 else "0"] + ([] if Phase1 else ["--readiness-smoke"]),
               "EvidenceDir": str(Directory / "client-evidence"),
               "CaptureCommand": [r"C:\Program Files\Wireshark\dumpcap.exe", "-i", Args.capture_device,
+                                 *(["-B", "64"] if Clients == 4 else []),
                                  "-s", "0", "-f", "udp and host 10.253.3.1 and host 10.253.3.2 and port 39450",
                                  "-a", "duration:" + str(PHASE1_CAPTURE_DURATION if Phase1 else
                                                            CLIENT_CAPTURE_DURATION if Clients == 4 else 90),

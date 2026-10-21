@@ -85,6 +85,66 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-03 UTC external-action checkpoint: candidate `9ae8f68c2` passes the
+exact-source hosted Windows Release job and GNS sanitizer workflow; Linux
+Native CI is still pending. The installed native-stop diagnostic
+`a17d3e70-d5c7-428e-afa2-2277ab550e3a` preserved every marked packet in both
+captures, but the client application missed 629 valid captured datagrams.
+The precise Windows receive-path loss remains **NOT MEASURED**. A subsequent
+manually elevated drop-diagnostic setup failed before capture because Windows
+ellipsized its filter name. Its one retained filter needs fixed-input,
+ownership-checked Administrator cleanup. The corrected short-name helper and
+103-test harness are prepared; the next manual-helper wait expired without
+capture or traffic. Both setup results remain failed/incomplete.
+See the [complete native-stop checkpoint](tools/physical-qualifier/docs/FARM32_ETL_NATIVE_STOP.md).
+The client briefly reported 8.54 GiB available, then fell below 1 GiB; the
+unchanged 8-GiB provider preflight is not currently cleared. No fresh F1,
+Local/Node provider or final acceptance PASS is claimed. **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY; no 3M or merge.**
+
+Capture-infrastructure implementation checkpoint: the Farm32
+[exact-session native ETW Stop candidate](tools/physical-qualifier/docs/FARM32_ETL_NATIVE_STOP.md)
+has bounded ownership, partial-Start/expired-lease cleanup, retained native-loss
+evidence, and UTF-8-without-BOM marker tests. A separate 5-GiB diagnostic
+preserved the previously affected ETL band and both captures independently
+contain every marked packet, but that run still failed with 290 client
+application receive gaps. Neither it nor source/mock validation qualifies the
+full near-capacity profile. Fresh capture qualification and subsequent
+provider gates remain outstanding; **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY**. Historical F1 physical PASS is unchanged.
+
+2026-10-02 causal recovery implementation checkpoint: the
+[C3/C5 cessation-fence amendment](devdocs/CurrentArchitecture/PooledReliableServiceRecoveryContract3L.md#causal-cessation-fence-amendment--2026-10-02)
+now has generation-safe source evidence, a finite accepted-prefix verifier and
+an independent offline reconciler. The immutable frozen reference includes
+captured pending/in-flight relevance planning; continuing motion remains live.
+Thirty-two tracker cases, 37 offline causal cases and the actual production
+source R1–R10 regressions pass. These are deterministic results, not a fresh
+Local or real-TLS Node 32-client provider qualification. The source tests also
+exposed and corrected missing preparation evidence and zero fingerprints in
+the planned-frame path; accepted bytes are now joined to their exact prepared
+candidate before payload ownership moves.
+
+A separate controlled old/new regression proves speculative, unaccepted Leave
+could retire server Character materialization while the client received no
+structural bytes, diverge materialization epochs and suspend owner actions.
+Retaining committed materialization until accepted structural removal fixes
+that reproduction, including repeated reversals and accepted Leave/reentry.
+The exact local-refusal branch in historical run
+`43af4af0-06de-49b6-917d-f0557816b9ab` remains **NOT MEASURED**; this new
+reproduction does not retroactively supply missing evidence. See the
+[current validation ledger](devdocs/CurrentArchitecture/ContentAvailabilityFoundation3L_3Validation.md#causal-recovery-and-materialization-corrections-deterministically-validated-2026-10-02).
+
+Final execution-changing candidate CI and fresh provider qualification remain
+outstanding. The client `DESKTOP-B8V8NAN` has approximately 1.27 GiB available
+against the unchanged 8-GiB preflight minimum; the worker `HOSTPC` has
+approximately 19.5 GiB, which does not waive the client gate. Provider execution
+still requires all existing preflights. The established F1 physical Phase
+1 PASS below remains valid. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY;
+no 3M.**
+
+The entries below are historical checkpoints at their recorded revisions.
+
 2026-10-01 corrected F1 Phase 1 checkpoint: [fresh physical run](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#corrected-f1-physical-phase-1-passed-2026-10-01)
 `e120a1f0-47ae-45e0-869f-9d0450795bc4` passed with four real clients,
 128 exact 512-KiB grants, all finite/running F1 peer curves, 29 common
@@ -97,8 +157,6 @@ model. The distinct 32-actual-client Local and real-TLS Node matrix, then the
 final Foundation 3L acceptance sweep, remain **NOT MEASURED**. The current
 benchmark still needs a qualified 32-actual-client farm rather than protocol
 observers. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
-
-The entries below are historical checkpoints at their recorded revisions.
 
 2026-09-30 final F1 Phase 1 checkpoint: the [second and last authorized fresh
 attempt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#f1-phase-1-reached-native-drain-and-failed-its-running-bound-2026-09-30)

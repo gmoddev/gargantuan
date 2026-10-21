@@ -39,7 +39,33 @@ barrier, zero trace overflow or decode errors, and server-side
 probe timestamps preceding the corresponding measured phase. Its
 PhaseLongOffset and OneWayLatency fields remain NOT_MEASURED.
 
+The indexed-log command is:
+
+```text
+python tools/physical-qualifier/farm_clock_exchange.py <server/evidence-sha256.json> <clients/evidence-sha256.json> <run-manifest.json>
+```
+
+It verifies the manifest's 32 nonce identities and both evidence indices, then
+hashes all 33 role logs while retaining only bounded clock/readiness/phase
+metadata. Log bytes remain subject to the supervisor's 16-MiB maximum; native
+metadata remains subject to its 4,096-record cap plus bounded lifecycle records.
+The receipt includes all input hashes and the analyzer hash. Complete evidence
+requires exactly 640 distinct client/epoch/probe exchanges. Completely absent
+historical clock metadata is explicitly `NOT_MEASURED`; partial, modified or
+foreign-run metadata fails closed.
+
+`PhysicalFarmClockEvidence.ps1` connects this receipt to the role reconciler.
+The cross-provider acceptance tool independently replays both providers' indexed
+logs and compares the complete receipt with each reconciliation, including the
+input/analyzer hashes and every offset interval. A missing historical receipt
+is accepted only when replay finds no clock metadata. The overall provider and
+Foundation verdicts remain `INCOMPLETE`; probe-scoped correlation is not a
+phase-long clock synchronization or one-way latency claim.
+
 Focused offline checks:
 
     python -m unittest tools.physical-qualifier.tests.test_farm_clock_exchange
+    python -m unittest discover -s tools/physical-qualifier/tests -p "test_farm_clock*.py"
+    pwsh -NoProfile -File tests/PhysicalGameSessionFarmReconcileTests.ps1
+    pwsh -NoProfile -File tests/PhysicalGameSessionFarmAcceptanceTests.ps1
     pwsh -NoProfile -File tests/ContentScaleGameplayLuauSyntaxTests.ps1

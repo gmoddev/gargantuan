@@ -1,10 +1,85 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-10-01
+last_verified: 2026-10-02
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Causal recovery and materialization corrections deterministically validated (2026-10-02)
+
+The [C3/C5 cessation-fence amendment](PooledReliableServiceRecoveryContract3L.md#causal-cessation-fence-amendment--2026-10-02)
+is implemented as an immutable cessation reference plus source-confirmed
+semantic coverage and exact accepted live obligations. Each captured generation
+must represent its journal fence and baseline pending transitions, then first-send,
+ACK and retire the finite accepted prefix. New live work remains audited without
+reopening that completed cut. An unresolved planning input holds the fence open
+until an actual valid planning installation supplies its baseline pending set.
+Absence from a sampled pending set is not cancellation evidence.
+
+The detached reference now quotes captured pending/in-flight relevance against
+the frozen catalog before journal replay, retaining exact complete bytes,
+fingerprints, sequences and cursor bounds. It remains a cessation-state
+counterfactual, not an unconditional bound on future live encoding. Its fixed
+workload-derived deadline is not enlarged by later deltas. The canonical moving
+workload must meet that deadline and the unchanged 20-second service-recovery
+gate. F1, admission/fairness, transport reserves and motion requirements are
+unchanged.
+
+| Evidence | Result and scope |
+| --- | --- |
+| Internal causal tracker | **32 cases PASS**, including missing/duplicate evidence, token reuse, callback ordering, unresolved planning and finite-prefix convergence negatives. |
+| Independent offline causal reconciliation | **37 cases PASS**; validates source dispositions, exact prepared/accepted byte identity and delivery/retirement prefix evidence. |
+| Actual replication source R1–R10 | **PASS** through production coordinator fixtures: no-motion exact replay; journal-independent Enter/Leave; cancellation versus acceptance; oscillation; coalescing; continued live mutation and withheld-baseline negative; generation isolation; provider-independent source behavior; exact byte evidence. |
+| Frozen reference | Pending and in-flight relevance planning regressions **PASS**, including exact cursor trace and no live source reads during replay. |
+| Worker native source suites | `gargantuan_networking_contracts` and `gargantuan_replication_relevance`: **2/2 PASS**, including the tracker and actual-source cases above. |
+| Final execution-changing hosted CI | **PENDING / NOT QUALIFIED** at this checkpoint; earlier green revisions do not qualify the new candidate. |
+| Fresh Local / real-TLS Node 32-client provider matrix | **NOT MEASURED**. No new provider result is inferred from these deterministic checks. |
+
+The source tests found an attributable instrumentation defect: the planned
+structural-frame path omitted the preparation callback and returned a zero
+diagnostic fingerprint. The correction records the exact encoded candidate
+before payload transfer and preserves its fingerprint for byte-deferred retry.
+This allows acceptance to bind to the actual prepared bytes rather than inventing
+coverage from aggregate counters. Integration revisions `979e1b72b`,
+`38abeca10` and `1f4ba2cfb` respectively retain the planned-frame correction,
+offline verifier and bounded farm failure/reference-cursor evidence.
+
+The separate Character materialization A/B regression used the same real
+bounded relevance-planning path. With the old predicate, an unaccepted
+speculative Leave reduced server materialization from 2 to 1 while the client
+received **0 structural bytes**. The client expected epoch 2 but received epoch
+4, recorded one history overflow and refused a valid owner action. The
+correction (`6c3bb0875`, owner-action regression `af77ce4f9`) retains previously
+materialized candidates while their Character and RootPart remain in committed
+knowledge. A speculative selection no longer retires that accepted lifetime.
+The corrected fixture preserves materialization at 2, records zero stale-state
+delta and history overflows, admits the owner action, and passes eight
+unaccepted reversals followed by accepted Leave and fresh Enter. The complete
+GameSession suite passes. Retained evidence is under
+`C:\Users\aiden\.codex\artifacts\baseline-action-attribution\` in
+`action-materialization-before.log`, `action-materialization-corrected.log`
+and `action-game-session-tests.log`.
+
+This does **not** retrospectively attribute the seven local submission failures
+in historical run `43af4af0-06de-49b6-917d-f0557816b9ab`: its exact absent-control,
+suspended-prediction or scheduler-refusal branch was **NOT MEASURED**. New
+bounded branch counters and the controlled A/B isolate a real production defect
+without replacing that missing historical evidence.
+
+The client `DESKTOP-B8V8NAN` currently has approximately **1.27 GiB** available;
+the worker `HOSTPC` has approximately **19.5 GiB**. The unchanged **8-GiB minimum
+on each endpoint** therefore blocks physical preflight on the client. New
+worker-local diagnostic execution is not a provider qualification. The next
+canonical work is final candidate CI and packaging/preflight, restoration of
+the client resource gate, then fresh canonical Local and real-TLS Node
+32-client matrices and the final Foundation 3L acceptance sweep. None is waived.
+
+The established corrected **F1 PHYSICAL PHASE 1 — PASS** remains valid.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M or automatic merge.**
+The dated entries below preserve their original source and measured scope;
+their descriptions of an unimplemented farm are historical, not current source
+status.
 
 ## Installed Farm32 capture infrastructure qualified separately (2026-10-01)
 
