@@ -323,19 +323,46 @@ retry examinations retain their existing hard budgets. The additional marker
 contains no cached value and introduces no new map, wire field or payload queue.
 `tests/NameCoalescingFixture.hpp` covers these contracts.
 
-A live all-native-Name candidate may skip an encoding attempt only when its
-selected valid string bytes alone prove that the complete frame exceeds the
-existing message limit. This lower-bound proof retains the original geometric
+A live native-Name candidate, optionally containing ordered Attribute updates,
+may skip an encoding attempt only when its selected valid Name string bytes
+alone prove that the complete frame exceeds the existing message limit.
+Selected Attributes count toward the operation limit but add no inferred bytes
+to this lower bound. Their immutable journal records are borrowed in a call-local
+pointer list bounded by the existing read/operation ceilings (at most 4,096
+pointers, 32 KiB on the qualified 64-bit build). The list is destroyed before
+recursive retry. Attribute values are copied and validated with the existing
+operation/reference rules only after Name bytes prove oversize; pure Attribute
+and small Name candidates receive no duplicate Attribute validation. Every
+selected Attribute must validate before the proof can skip an encoding attempt;
+failure returns to the ordinary producer with its original error precedence.
+Publication-covered, irrelevant and unknown Attribute records follow the normal
+producer's filters, and Attributes retain their existing global Name barrier.
+Other emitting record types retain ordinary fallback. This proof retains the original geometric
 retry and charges the same pinned journal examinations; it is not an admission
 size estimate. The successful frame still uses the ordinary encoder. All
-selected strings are validated before skipping an attempt so an invalid later
-value retains its existing error precedence. Mixed or unprovable candidates
+selected values are validated before skipping an attempt so an invalid later
+value retains its existing error precedence. Other mixed or unprovable candidates
 use the original path. A bounded call-local cache avoids revalidating the same
 immutable strings across retries and clears when the catalog cursor changes;
 it cannot survive preparation, acceptance or a later public call.
 `tests/NameBytePreflightFixture.hpp` compares this path against the original
 encoder for exact bytes, fingerprints, sequence, cursor, error and work-budget
 results, including rejection, semantic barriers and the complete 512 KiB bound.
+Mixed Attribute regressions also cover selected malformed suffixes, unselected
+malformed suffixes, deletion, reference errors, filtered history and the
+small-frame validation guard. Their [qualification receipt](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#14-parallel-native-service-and-recovery-investigations-2026-10-11)
+records five affected native tests and all six hosted jobs passing at `5de6135c8`.
+The fresh native32 campaign passes all three measured recovery cases, including
+28.178837 s structural convergence against 40.767221 s allowed with exact causal
+replay. Its distinct finite F1 failure leaves overall native service unqualified;
+no physical Local32/Node32 or Foundation 3L completion follows.
+The byte proof follows the producer's selection order: already-covered native
+Name history contributes no operation, then the selected operation limit ends
+the candidate before an unselected next record is inspected. Covered strings
+do not become newly selected validation inputs; every actually selected string
+retains full validation and error precedence. The detached frozen Name proof
+uses the same ordering. This avoids discarded encoder work without changing
+accepted source coverage, output bytes, geometric retry sizes or read charges.
 
 Qualification can capture a detached 3J cessation input on Main after catalog
 refresh reaches the journal tail. The capture copies the bounded retained

@@ -11,6 +11,13 @@ related_code:
 
 # Foundation 3L.2 final-correctness closure
 
+The later [2026-10-21 core acceptance](../../tests/Foundation3LFinalAcceptance.md#current-core-contract--2026-10-20)
+records KI-006 CLOSED / core Foundation3L COMPLETE under D03's
+`POOLED_CORRECTNESS_V1` on draftPR6. This report retains its original expanded
+assessment, measurements and uncompleted deployment campaigns. It is not
+relabeled PASS; physical/provider resources, performance and deployment
+certification remain explicitly deferred in the current core receipt.
+
 The current measured verdict is **B**. This report covers the expanded
 134-item/44-question closure request, not the older first-pass acceptance list.
 No automatic residency, generic QoS/scheduler, transport protocol or content

@@ -1,7 +1,7 @@
 ---
 status: current-infrastructure-extraction
 owner: qualification-tooling
-last_verified: 2026-09-28
+last_verified: 2026-10-04
 ---
 
 # Physical agent coordination ownership and migration
@@ -36,7 +36,10 @@ part of this dependency.
 
 Use a hash-verified immutable source bootstrap rather than adding a submodule or
 committing a second generic implementation. [The lock](../../tools/physical-qualifier/upstream.lock.json)
-pins `67b730e6dbf7a0524d4f29d0d9cb19a0abf8a614` and consumed-source SHA-256 values.
+pins `cf1628de587ee0ccfbd74742d62946dac1adf522` and the exact consumed
+source SHA-256 values, including the two local owned-process modules. The installed
+Farm32 baseline is `5ee889fab571a9047cbc0f8724f2077c7bb9eb74`; a later source
+pin does not qualify replacement endpoint artifacts or installed services.
 
 The pinned legacy control implementation now exposes a separate, bounded
 control-only preflight through the same lifecycle child-launch path used by
@@ -160,6 +163,50 @@ of the client-to-worker fiber GNS path before another fresh one-client run.
 
 ## Two-PC migration
 
+### Farm32 deployment envelope and native runtime closure
+
+The hash-pinned qualified role artifact is a deployment envelope. Its
+`deployment-sha256.json` is qualification evidence and is not native game
+content. Before ARM, source-owned staging derives a new run/role runtime
+projection from the exact game content table plus `game.package.json`, checks
+equality with the pinned deployment inventory, and verifies every copied byte.
+The inventory and projection receipt stay outside the executable's closed
+runtime root. Read-only preflight and the endpoint verify the prepared copy;
+the endpoint launches that copy. Original envelopes and all eight manifest pins
+remain unchanged. Stale or partial projections fail closed and remain evidence;
+staging never deletes or retries them. Native package integrity remains enforced.
+
+Projection preparation and prepared-copy validation also enforce the native
+package builder's existing 240-character absolute-path limit for every runtime
+member and its directory ancestors. The .NET copier's long-path support is not
+evidence that the pinned native host can read those paths. Oversized paths are
+rejected before any registry, attempt marker, runtime copy, or receipt is
+published. Choose compact, fresh run/role registry names; retain full run
+identity and exact content hashes. Do not change Windows global long-path
+settings or native package contents to accommodate qualifier naming.
+
+Before launching either farm role, the outer controller binds a temporary
+worker game-UDP permission to the sealed run's exact projected
+`GargantuanServer.exe`, its SHA-256, the verified native closure, and the
+preflight projection receipt. The rule allows only inbound UDP `39450` from
+`10.253.3.1` to `10.253.3.2` on the currently verified Private fiber interface.
+It is separate from the normal-LAN coordinator TCP permission. An original
+package-path exception does not authorize a different projected executable.
+
+The rule has a run UUID name and independent ownership marker. Existing names,
+changed projection bytes, ambiguous interfaces, non-Private profiles and
+potentially applicable explicit Blocks deny launch. Both persistent and
+effective rule filters must match before the roles start. Every launch exit
+reconciles this exact owned rule; altered ownership or scope denies removal
+and fails cleanup. Unrelated rules and firewall profiles remain unchanged.
+Rule publication is an infrastructure prerequisite, never application
+readiness, packet-delivery evidence or provider acceptance.
+
+The October 4 Local32 startup failure exposed the missing distinction. It is
+historical failed infrastructure evidence, not a production F1 measurement or a
+provider PASS. Projection preparation does not count as a physical run or
+replace native package validation and the canonical provider/evidence gates.
+
 Keep the currently installed tools/runtime/service on the controlling PC and
 dockerbox. Package the pinned adapter/library into a fresh sibling bundle, verify
 every manifest hash and run control/hook tests. Stage only when directed; do not
@@ -171,6 +218,77 @@ is separate, uses a fresh evidence root and a different service/pipe name, and
 must preserve the exact project capture hook. Do not alter a live worker's tools.
 
 ## Validation and limitations
+
+### Farm32 helper and staged ownership imports
+
+The fixed worker helper directory contains the endpoint adapter and ACL module;
+the per-run stage owns `dependency.py`, `upstream.lock.json` and the exact pinned
+Coordinator exports. The endpoint loads its ownership dependency by that verified
+stage path, rechecks the dependency/lock bytes against the stage index, and checks
+all pinned exports before loading the owned-process modules. A dedicated package
+namespace binds relative ownership imports to the same stage; ambient Python
+imports and a helper-directory dependency cannot supply this authority.
+
+Owned-child startup failures retain a bounded stage-local diagnostic with phase,
+error type and cleanup error. Unknown child ownership remains false and does not
+create a successful terminal receipt. The outer controller reports its original
+listener/launch refusal together with any subsequent cleanup refusal. These are
+qualification infrastructure diagnostics, not provider or Foundation 3L PASS.
+
+### Farm32 launch, sampling and failed-run evidence
+
+The failed Local32 run `68bfec9e-1335-4f45-b7ad-9ea502bd2592`
+reached 28 ready clients and stopped before the workload. Repeated synchronous
+resource queries on the client launch path delayed subsequent process starts.
+The individual blocking operating-system call was not measured. The
+[physical receipt](PooledPhysicalQualification3L.md) retains the original
+failure, incomplete capture collection and unproven worker tree cleanup.
+
+Resource sampling now runs in a separate bounded, hidden endpoint child.
+Startup publishes only the new owner's native process counters and immutable
+PID/start identity; it does not query the NIC or resample prior owners. The
+sampler takes the existing two-second process/host snapshots and retains the
+five-second snapshot-duration, row-count and log bounds. Its seven function
+definitions come from the staged endpoint source; configuration, extracted
+source, runtime, owner identities and partial evidence are hashed and sealed.
+The role prepares the fixed CPU/memory counter and dedicated pipe-reader C#
+assembly once in its generation/role-owned registry directory before the run
+clock. The separate child loads the bounded, source/runtime/identity-pinned assembly from
+verified held bytes instead of compiling those definitions again. Loaded type
+origins must match that assembly; ambient or replaced types cannot supply the
+counter authority. This is run-owned preparation, not an installed helper or
+shared cache. Startup still includes child launch, verification/loading and
+the complete actual first baseline within five seconds. Bounded phase records
+and the always-retained hosted fixture directory preserve future refusals;
+they do not extend any startup, query or stop deadline.
+Runtime preparation and sampling directories stay outside the sealed flat
+role-evidence root. After joined stop, the role retains the exact bounded
+assembly, preparation/source/index receipts and a complete sampler-raw archive
+as indexed top-level files. The archive obeys the existing 16-MiB member limit;
+overflow is a qualification failure with the original registry raw preserved.
+Every archive entry is joined to its raw byte/hash index. This preserves the
+existing 128-member complete flat-directory acceptance check and worker
+collection instead of exempting sampler directories from coverage.
+It is stopped and its streams joined before native owner objects are disposed.
+This changes sampling placement, not the bootstrap deadline or resource gates.
+
+The fixed local endpoint adapter uses generic Windows Job containment from
+process creation, including nested child launches. Job membership and checked
+handle release determine cleanup independently of workload exit status.
+Cleanup uses one bounded deadline; output draining has its own bounded phase.
+The existing terminal v1 representation remains unchanged. An optional separate
+terminal diagnostic records cleanup errors without manufacturing a successful
+exit or a tree-reaped result. This local facility adds no wire command or
+arbitrary remote process capability.
+
+A failed workload can retain a `FAILED_DIAGNOSTIC` capture export only after
+owned capture stop, the existing hook/profile checks and zero-loss validation.
+Success binding rejects that classification. Missing or invalid role evidence
+remains missing or invalid; diagnostic recovery cannot repair the original
+provider verdict. Hard-abort capture cleanup still belongs to the existing
+bounded service lease/watchdog. Installed capture services and hooks are not
+changed by these source corrections. A fresh candidate must independently pass
+source, dependency, hosted CI and endpoint preflight before another provider run.
 
 Standalone Python suites cover protocol/auth/replay, strict schema/capability
 denial, assignment freshness/expiry, separated budgets, cleanup and local two-role

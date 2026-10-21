@@ -5,6 +5,9 @@ description: Implemented slices, remaining work, and future architectural tracks
 
 Reviewed on **2026-09-12** across main, Studio, MCP, Node, and Telemetry.
 This is a source-and-test review, not a new release qualification run.
+Foundation3L rows were updated on **2026-10-21** from the
+[core acceptance receipt](../../../../../tests/Foundation3LFinalAcceptance.md#current-core-contract--2026-10-20)
+on draftPR6; this is not a mainline merge or physical deployment certificate.
 See the [revision and evidence ledger](../../../../../devdocs/FutureArchitecture/RoadmapEvidence20260912.md)
 and the [phase delivery roadmap](../../../../../devdocs/FutureArchitecture/Roadmap.md).
 
@@ -15,8 +18,9 @@ completed implementation. Existing version headings are planning buckets, not
 claims that a version or phase has shipped.
 
 The [Architectural Discipline and Subsystem Boundaries proposal](../../../../../devdocs/FutureArchitecture/ArchitecturalDisciplineAndSubsystemBoundaries.md)
-defines the new future tracks below. Foundation 3L remains **partially ready**;
-3M cannot begin until its independent exit gates close.
+defines the new future tracks below. Foundation3L core is **COMPLETE under
+POOLED_CORRECTNESS_V1** on draftPR6. Physical/provider certification is deferred;
+3M remains planned and requires separate authorization.
 
 ## Subsystem status
 
@@ -39,8 +43,8 @@ acceptance evidence. Blocked, deferred, and superseded describe planning state.
 | Node | Foundation implemented | Not assessed here | Durable storage, public gameplay admission and production operations remain. |
 | Telemetry | Foundation implemented | Not assessed here | Optional library and host integration exist; ABI/release operations and any new data collection need separate qualification. |
 | Foundations 3G / 3H / 3K | Documented slices implemented | Not reassessed here | Retain each milestone's existing scoped evidence; no blanket current-revision or public-hosting qualification claim. |
-| Foundation 3L | Substantially implemented | Partially qualified | Active closure: correctness, gameplay/client, overload/recovery, journal margin, scale/physics and security gates remain. |
-| Foundation 3M | Planned | Not yet qualified | **Blocked on 3L closure.** Trusted residency demand policy only. |
+| Foundation 3L | Core implemented on draftPR6 | Core correctness qualified atb420a7fd1; KI-006 CLOSED | Physical Local32/real-TLS Node32, deployment resources/performance and release certification deferred; not merged/released. |
+| Foundation 3M | Planned | Not started or qualified | Separate authorization required. Trusted residency demand policy only. |
 | ECS semantic migration | Superseded | Not applicable | Retain DataModel/Instance authority and subsystem-owned derived stores. |
 | ScriptSecurity privilege enum | Superseded | Not applicable | Domains remain separate from host-granted capabilities. |
 | Ribbon/plugin-first Studio plan | Superseded | Not applicable | First-party tools use the existing shell/panels; plugin support is additive. |
@@ -238,7 +242,7 @@ Player/server runtimes.
 - [x] Foundation 3G: bounded age-aware fair Character publication
 - [x] Foundation 3H: bounded derived spatial-cell and region candidate index
 - [x] Foundation 3K: generation-safe subsystem-owned spatial projections and spaces
-- [ ] **Partial — Foundation 3L:** ~~content acquisition/admission/eviction lifecycle, Local/Node providers, bounded planning, reliable-byte admission, numeric gameplay contract and canonical qualification fixtures~~; combined aggregate overload (KI-008), complete gameplay/client and journal guarantees, scale/physics, and current-source security qualification remain open
+- [x] **Foundation3L core:** content lifecycle, bounded planning/admission, native/ACK ownership, DATA arbitration, finite resources, security and causal recovery qualified under D03 `POOLED_CORRECTNESS_V1` on draftPR6. Physical/provider deployment and performance certification remain deferred; no merge/release claim.
 - [ ] Authenticated short-lived join grants and server identity through the
   hosting/Node control plane; DevelopmentLocal is not identity proof. Node player authentication is implemented, but does not yet gate GameSession gameplay allocation
 
@@ -300,7 +304,7 @@ contains ownership rules, rejection behavior, resource units, and acceptance cri
 
 ### Foundation 3L closure, then 3M
 
-- [ ] Close 3L's current correctness, service, resource, and qualification gates; passing the GNS sanitizer gate alone is insufficient
+- [x] Close3L's revised core correctness/resource gates through all three exact-source CI jobs, five complete Release workloads and the final acceptance reader. Physical/provider release gates remain separate.
 - [ ] Foundation 3M: trusted default-space residency demand policy over the existing 3L lifecycle
 - [ ] Bound coarse queries, candidates, retained policy state, and request/release deltas
 - [ ] Add semantic priority, deadlines, deterministic distance/cost ties, enter/leave hysteresis, and bounded trusted movement lookahead

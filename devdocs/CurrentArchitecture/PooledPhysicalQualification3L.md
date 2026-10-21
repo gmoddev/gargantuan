@@ -1,10 +1,1748 @@
 ---
-status: f1-phase1-pass-later-gates-pending
+status: historical-f1-phase1-pass-hybrid-physical-pending
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-10-01
+last_verified: 2026-10-15
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Scope after the2026-10-20 D03 product decision
+
+Physical/provider certification remains **DEFERRED / NOT QUALIFIED** under the
+new core `POOLED_CORRECTNESS_V1` acceptance scope. Core networking correctness
+can close independently through the existing native, packaged and sanitizer
+contracts. No result below is relabeled, no new physical run is claimed, and
+no Local32/Node32/provider performance certificate is implied by core closure.
+The current Farm readers still enforce their original contract identities.
+Before a later deployment/release claim, qualify actual Local32 and real-TLS
+Node32 compatibility, provider parity, resources and any performance profile
+selected for that deployment. See the [core acceptance ledger](../../tests/Foundation3LFinalAcceptance.md#current-core-contract--2026-10-20).
+
+## Final bounded D03 attribution (2026-10-16)
+
+Native sourcef30/toolingcf45 passes all14 original hosted jobs and fresh
+four-client `5c94df6a-3836-47d3-8a99-5bb80fcf0d6a` whole replay. The one
+subsequent Local32 `7efff6f1-8d59-4fa8-8cef-c1f27cfa9b80` is **FAIL**:
+the persistent pre-rejection record identifies exact turnover164.511ms
+against150ms, peer15:1/token2545/442850B. Native BODY completes24.319ms;
+Main15.738ms passes. No long runnable Main/actor starvation explains the
+remaining ACK/reference-retirement interval. Its first causal owner remains
+unresolved, with observer overhead unmeasured. No speculative correction or
+identical retry follows; real-TLS Node32 and final acceptance are unrun.
+
+Original failed evidence is preserved at `C:\Sandbox\Codex\L327e-v1`,
+965 members/3391172140B, closed index SHA256
+`28c1939ab2b880569cdb2cf065a2a1ebd98800d61819296df2467d430d8eadf8`.
+Both captures retain their failed/incomplete classifications, including four
+unsealed client files. All owned child trees are reaped; final owned process,
+port, task, firewall and capture checks are clear. [Full measured timeline,
+CI/package identities and architecture decision](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#32-final-bounded-local32-attribution-and-architecture-decision-2026-10-16).
+**KI-006 OPEN; Foundation3L NOT_COMPLETE; PR6 draft.**
+
+## Actual Local32 attempts and execution evidence blocker (2026-10-15)
+
+Both actual attempts use native source
+`3182a164d5bf87f5051e11ecbd1c749b73c282dc`, official package SHA256
+`961fef56761b563ecbf7b10708d724b41c7ea1bb9dd88fc96db50c6fb60bf9f6`,
+and tracked-clean tooling `bdef7003828553fee2fb2c41f368fb0c60886f8b`.
+No production code, health bound, capture reserve or accepted workload changes.
+The original eight native-source CI/package jobs and native32/recovery plus
+corrected four-client PASS remain qualified subsets. Current bdef's six original
+push/PR jobs pass97/53/97/53/11/11 with actual checkout/JUnit/contract joins;
+receipt `8bf1c20585b73c0f2d6a16913b6a2462c769f0f3b9941a2b02af65c50dc49dc7`.
+Earlier b629's original CI FAIL is not relabeled.
+
+### First attempt: infrastructure rejection before gameplay
+
+Run `73f40b17-edf1-4ea4-98ca-6488a77e0eac`, coordinator
+`5e642514-ccaa-4ebd-a1ed-ab7a6ce36edb`, passes prepare/stage, then fails
+capture startup. Worker preflight10:18:34UTC has37051441152B free C:;
+post-failure10:21:31UTC has34551799808B, a2499641344B decline. The installed
+hook checks34GiB36507222016B before starting capture and correctly rejects.
+New task roots total19384326B and cannot explain the decline; no past external
+owner or pagefile growth is established. There is no native gameplay/F1 result.
+Owned child trees are reaped. Server diagnostic capture confirms owned stop;
+client diagnostic marker retains OwnedStopConfirmed=false, with subsequent
+process/port/capture checks proving idle, not capture completeness.
+
+First-run custody is `C:\Sandbox\Codex\L32F73v1`:413files/38773249B,
+index SHA256 `76d9d703999ec7ffad8f384ad85fefaa0e45b8aa3f53b90462876120afc60737`.
+Original worker/controller roots and original FAIL remain unchanged. An initial
+long-path custody-copy failure and its partial copy are preserved; a fresh short
+custody destination supplies the verified complete copy without rerunning native.
+
+### Verified storage correction and dormant build state
+
+The earlier V2 resource operation archives four closed diagnostic builds,
+20123files/5999735894B; retirement receipt
+`84f5a7240082ed9792557d4e1ffaa261c6c82bd79381b59db8c8c850b913884a`.
+Its original copy interrupted by a build-activity guard remains preserved;
+only a separately reviewed remaining-leaf continuation completes the copy.
+The slim resulting headroom does not survive the first attempt above.
+
+V3 parks five entire closed task trees,6209files/5428611575B, under
+`D:\Sandbox\Codex\ArchivedBuilds\foundation3l-20261015-v3`. Full hashes,
+closed membership, creation/write times and attributes are verified before
+retiring exact C: duplicates; no ACL/owner/last-access preservation is claimed.
+Copy receipt `1a2af69b5c1ad715cb65ce999944b361aec2b49ffa1190873c9a1705d72f5c6d`;
+retirement `4256ec23396d1082e10bc231c1d8a14bc3281989c6631de5b0db58bb5e76147c`.
+All29 final support files2975644B are independently hash/size verified.
+Fresh10:38:40UTC worker C:39563481088B exceeds the unchanged floor by3056259072B.
+Controller10:39:37UTC RAM18578546688B, C:47482814464B and D:31116730368B
+support fresh canonical preflights and planned capture placement.
+
+Two V3 trees are the inseparable native build and quote/vcpkg dependency pair:
+`C:\Sandbox\Codex\Builds\foundation3l-native-egress-msvc-release-vcpkg` and
+`C:\Sandbox\Codex\Builds\farm32-quote-timing-msvc-release-gns`. Both caches
+remain byte-identical in their complete D: archives (4319/564d pins).
+**Native builds, native tests and cache-dependent probes are prohibited until
+BOTH entire trees are verified restored to their identical original C: paths.**
+Do not build from D:, rewrite CMake paths or create redirects. External source
+and Fetch caches are unchanged. Official F32A8 deployment, installed runtimes
+and capture tooling are independent of those dormant trees; both hosts'122
+package files37558554B match the official ZIP. Three additional parked trees
+are closed strengthened, ring and execution-study diagnostics. Restore maps,
+manifests and instructions are retained in the V3 support roots on both hosts.
+
+### Fresh actual Local32: hard execution-health FAIL
+
+Run `ab0df092-fe93-4e6e-918a-2ae448479b3e`, coordinator
+`a475ccc3-cf67-42e3-95a2-5c078940b3ec`, is created10:40:17.973UTC.
+Prepare10:40:37.887 and stage10:40:50.584 complete0/empty stderr. Native
+server listens on required fiber10.253.3.2:39450 at10:41:11.847UTC. Actual
+32-client workload runs; original outer launch terminates FAIL/exit1 at
+10:45:01.689UTC. Client12 exits7 with server connection closed; both worker
+host/role and controller owned child trees are reaped. This is distinct from
+the preceding infrastructure-only failure.
+
+The first retained complete server rejection is stderr line627, peer13:1,
+`Structural execution opportunity exceeded its product budget`. There are29
+complete unique peer rejection lines; other lines use the retirement/completed
+admission guard. Both guards combine invalid/monotonic state with sticky
+Main100000us and turnover150000us failures. The strings do not identify the
+first actual predicate, onset clock, obligation/token or measured interval.
+No native F1, publication, work-tick, fairness or result summary exists before
+abort. Stdout238196B and stderr204800B end mid-line; log buffering prevents
+ordering their tails or treating nearby reload stop messages as teardown.
+Last complete source offer478 of480, tick9071, spans389us inside its offer
+body. It does not certify a completed Main opportunity or turnover.
+
+The78 server resource samples are about2s apart: minimum available RAM
+20965130240B; peak server working/private sets311971840/600989696B; sampled
+NIC errors/discards0; maximum coarse aggregate host busy27.823%. They establish
+no sampled server RAM/NIC violation and cannot resolve100/150ms scheduling,
+per-core contention, lock waits or observer perturbation. No such cause is
+measured. All180 small mirrored files550849B match original worker bytes;
+index `0ada59b5e5d8a0b4b879cc3cd4118d95a03845a0db4c47e1e08aa1fb0d091748`.
+Independent attribution `528f814cc99e9a6e0282a88b1f95816beee95f34c2a59d017edf3732e2a26caa`
+finds no demonstrated correctable production defect.
+
+Diagnostic evidence is retained under `C:\Sandbox\Codex\L32Fab0v1` and
+original run-scoped worker/controller roots. Worker capture index
+`1f8b91accbddbf47240befbec88e6bf52062bfdebebc711e4a04accb15af2bf3`
+remains FAILED_DIAGNOSTIC, OwnedStopConfirmed=true and OfflineExportSucceeded=true;
+ETL805306368B and pcap740685144B are preserved. Successful export/idle cleanup
+does not qualify the failed provider. At10:51:36UTC worker capture/ports are
+idle and free C:37288566784B, D:69818183680B, RAM21623705600B. Controller10:56UTC
+has no owned native/Python/dumpcap processes or owned UDP listeners; child-tree
+reaping is retained. Client capture retains OwnedStopConfirmed=false and four
+producer-unsealed artifacts; stable diagnostic copies do not retroactively seal
+them. Initial complete custody index
+`d3b02400a3161b25823bb2eee60cb11c83831d18ebfe902fb0b1eb5f3b8b9c6a`
+binds1038files/2329109943B; Root independently verifies every member hash/size
+and closed count. Both original failure states remain unchanged. A second
+independent assessment pins the same small originals and resource calculations:
+`690d92e7451bd4d35dcf2e0001cba5991b950a861df55c58d833d0f78bbf3dbc`.
+
+Final custody appends two cleanup censuses and preserves that initial index as
+`custody-index-before-final-cleanup.json`; raw originals are unchanged. The
+frozen current `custody-closed-inventory.json` SHA256 is
+`d74f214b8fb0e0e3c94e3177b74dcef421c6bebb7c6064c228c87ff3fad0cceb`,
+1041members/2329327370B, all independently rehashed with exact closed count.
+Worker10:58:09UTC has no owned processes, listeners, firewall rules or active
+capture; source3182 is tracked-clean. Controller10:58:38UTC has no owned native,
+Python or dumpcap processes/UDP listeners and retains child-tree reaping.
+These are cleanup/custody observations, not successful delivery or capture gates.
+
+### Decision and ranked next steps
+
+1. Retain Local32 FAIL and capture one exact persistent pre-reject fault using
+   the existing opt-in execution sink: flags, point, peer/generation, token,
+   activation, required-since, now and active/completed host stage. End-only
+   summaries are insufficient. This is the smallest discriminating experiment;
+   new source/package provenance and focused regressions/CI are required before
+   another bounded physical attempt. No new health predicate or general tracer.
+2. Correct only a measured production or fixture owner exposed by that record,
+   preserving all deadlines, ordering and accounting; requalify fresh identities.
+3. If the measured owner is an execution-environment pause without a defensible
+   correction, review supported deployment isolation/platform requirements.
+   This record does not prove platform impossibility or authorize a contract change.
+
+The bounded investigation stops at the missing first-fault interval/ownership.
+No arbitrary deadline increase, speculative networking redesign or identical
+retry is performed. Real-TLS Node32 has no fresh identity/stage/launch and cannot
+follow a failed Local result. Final conjunction, parity and remaining physical
+resource/recovery gates remain unqualified. **KI-006 OPEN; Foundation3L
+NOT_COMPLETE; PR6 draft; no3M, release or merge.**
+
+## Autonomous Full32 resource remediation (2026-10-15)
+
+The continuation verifies PR6 OPEN/draft at `b629411b02d9a8625b542973597b0214e069a469`.
+Native source `3182a164d5bf87f5051e11ecbd1c749b73c282dc`, qualifier24bfd,
+offline analyzerdd394, official package SHA256
+`961fef56761b563ecbf7b10708d724b41c7ea1bb9dd88fc96db50c6fb60bf9f6`
+and corrected four-client evidence retain their existing qualified scopes.
+No native or physical campaign is repeated by this resource operation.
+
+Worker inventory finds a separate healthy local NTFS D: volume with
+108334825472B available. An explicit24-leaf allowlist selects only closed
+Foundation3L f1/farm/quote diagnostic build directories under
+`C:\Sandbox\Codex\Builds`:56634files/23206846575B. It excludes current native
+build/source, persistent quote-timing dependency caches, all raw evidence and
+other projects. Full source/destination inventories, SHA256, size, creation and
+write timestamps and attributes match before retirement. ACL/owner/last-access
+preservation is not claimed. Independent review and a fresh per-leaf check of
+both copies, reparse ancestry, process references and protected source/cache
+precede literal-path removal of only the redundant C: leaves. No process is
+stopped, junction created, service/config/firewall changed or raw evidence deleted.
+
+- Archive root: `D:\Sandbox\Codex\ArchivedBuilds\foundation3l-20261015-v1`.
+- Restore: copy a complete archived leaf to its identical original C: path
+  while inactive before reusing that historical CMake build; manifests and
+  original-to-archive maps remain outside the retired leaves and are mirrored
+  to the controller. No CMake path rewrite is implied.
+- Copy receipt: `09cf96b02d609dd9f8acf99ca22a153c94efbab70425c7c60ac356f6358b2e1f`.
+- Retirement receipt: `0657658695a071405dadad76d62fd30b171995dead408aee118263a04b928436`.
+- Actual worker free C:38653771776B (~36.00GiB) against unchanged
+  36507222016B (34GiB), measured after retirement; no projected-byte PASS.
+- Controller evidence: `foundation3l-autonomous-resource-assessment-20261015-v1`
+  under the retained task artifacts, including all original copy manifests.
+
+The05:29:22UTC post-census proves current source3182 tracked-clean, current
+cache4319 and persistent quote-timing cache564d unchanged, protected build roots
+present and qualification native/build processes, ports and captures idle.
+Census SHA256 `f6b55de480ae86d8763ee5779a9af2143b08f8570ec4b70edad29f69520a5ccb`;
+all63 final support members/24549063B are independently hash/size verified on
+the controller, inventory
+`c1c745f047ae60040318d888771b4f0e811cd04be78470cfff0b850c22f89ec8`.
+
+The remaining immediate external blocker is controller RAM. At
+`2026-10-15T05:28:52.8797726Z`, free5595303936B is2994630656B (~2.79GiB)
+below8589934592B. No idle task-owned native/qualifier process is present.
+Controller census SHA256 is
+`27ac51f397c55390f34869467a1194407a9b3ac7108e75b97d040bc094f0004e`.
+User applications remain untouched. Spare LAN Linux RAM is not a qualified
+replacement: its2500-Mb/s interface routes to the fiber addresses through the
+LAN gateway and lacks this Windows capture/runtime deployment. Swapping the
+Windows roles contradicts fixed client.1/server.2 capture, route and security
+bindings. Neither alternative is a ready placement change. Sampled native32
+memory omits transient/kernel/capture/controller costs and cannot justify
+lowering the protective8GiB client floor. All D03 product bounds remain intact.
+
+Inert LocalRecovery/NodeRecovery templates and the exact resumable plan are in
+`foundation3l-farm32-3182-b629-inert-plan-v1/inert-plan.json`, SHA256
+`ebf3764fdd41f62edd580179ef5edf20d4b0ebf248b8488f4c4d543c8b61481f`.
+They create no UUID, ticket, TLS secret, expiring preflight, capture or session.
+Existing outer-runner `--help` succeeds through the actual pinned local Python.
+Prospective private collection roots use controller D:, with client capture
+remaining C:. This placement alone does not prove capacity for two worker
+capture members each below15GiB. Before Collect, inspect actual immutable
+indexed byte totals and free capacity; before Node, recheck retained Local
+footprint and unchanged role/capture floors. Any needed offload must preserve
+complete verified copies, private-access boundaries, original index bytes and
+identical-path restoration before final conjunction. Do not delete unique
+evidence, use reparse redirects or silently waive storage requirements.
+
+### Later original CI failure remains separate
+
+Documentation head b629's original Native push run `38637417269`, job
+`116104012406`, attempt1, reports96/97 tests passed, with the endpoint fixture
+failed; dependent Linux is skipped. The injected `Throw` resource sampler has not
+reached its first baseline/readiness when the retained5000ms startup bound
+expires. Original QPC intervals total5058.0229ms through verified counter-load
+completion: parent closure1084.2961ms, closure-to-launch1885.0072ms,
+launch-to-child-entry1448.7686ms, child entry396.0334ms, next gap56.4052ms,
+assembly load187.5124ms. Fast/Blocked initializations are1081/1189ms.
+These wall intervals do not separate CPU, scheduling, filesystem waits or
+observer perturbation. No production D03 predicate failure or minimal
+implementation defect is demonstrated; no threshold tuning or rerun occurs.
+
+Original log SHA256
+`fdef2b8d18885dab5aeb44959b0685b88141677bd3400982271e6e1231ecb532`,
+original diagnostics ZIP
+`40add7ccf8bbcf27adac9afc25288c3861022f1b65a7657d676af7c03ccf7c61`,
+and structured assessment
+`58731b15c3e56eecafd02bf329cdbd892cf84fcd48f47d66c4cbbd4ec3b01ea0`
+are retained in `foundation3l-full32-b629-original-ci-failure-v1`.
+Earlier A8 native/package and qualifier/analyzer CI PASS remain source-specific;
+the later required CI FAIL is not relabeled or replaced by PR CI success.
+Final-source CI remains required for closeout.
+
+After external controller headroom: recheck all live prerequisites, verify and
+stage the official3182 package, perform one fresh canonical Local32, reconcile
+its full raw conjunction/cleanup, then separately prepare and run real-TLS
+Node32. Preserve both complete providers for parity/resources/recovery and
+independent final acceptance. **No Full32 run started; KI-006 OPEN;
+Foundation3L NOT_COMPLETE; PR6 draft; no3M, release or merge.**
+
+## Current qualification scope — 2026-10-14
+
+The product-authorized D03 `HYBRID_F1_V1` scope amendment removes the raw D01
+packet-scale running curve as a standard-profile release predicate. Fresh
+explicitly identified HYBRID evidence preserves finite native completion,
+first-send truth, exact accounting, reserves, reliability, order and lifetime.
+Four-client transport evidence is a subset; full native32/Local32/real-TLS
+Node32 must independently qualify FIFO, Main, turnover, fair32 admission,
+gameplay, resources, backpressure and recovery/convergence. Existing legacy
+profiles and all failures/PASS receipts below retain their original scope.
+The amendment alone establishes no new physical result. KI-006 remains OPEN;
+PR6 draft, no3M or merge.
+
+A7's same-host native32 subset remains preserved. Corrected observer source3182
+passes fresh native32 and hosted CI/package, as recorded below. The fresh control
+prerequisite passes; the subsequent A7 four-client attempt remains FAIL on a
+demonstrated observer classification defect. See the
+[current physical continuation](#d03-a7-four-client-continuation-2026-10-14).
+Neither result supplies Local32, real-TLS Node32 or final physical acceptance.
+
+The latest corrected whole four-client replay passes, as recorded below. Native
+source3182, qualifier24bfd and offline analyzerdd394 remain distinct; their
+required hosted CI and source/tool regressions pass. Full32 remains blocked by
+client memory and worker capture disk reserve; KI-006 OPEN, 3L NOT_COMPLETE.
+
+## Bounded investigation stops for networking architecture review (2026-10-09)
+
+The [two-strategy review](../FutureArchitecture/Foundation3LNetworkingCapacityReview.md)
+records exact retained peer/pool failures, execution-cost evidence, preimplementation
+counterexamples, external implementation comparisons and ranked options. No
+production correction or corrected native32 candidate was executed: neither
+deadline selection nor egress offload is a defensible narrow patch under the
+existing protected-work/ownership model. The isolated CPU model uses the exact
+production F1 curve and synthetic inputs; it cannot qualify native service.
+Implementation and physical retries stop for human review. Existing F1,
+admission, native truth, reserves, resources and recovery gates are unchanged.
+**FOUNDATION 3L — NETWORKING ARCHITECTURE REVIEW REQUIRED; KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY.** No third redesign, Node32, 3M or merge.
+
+## Native execution-cost evidence; private UDP candidate not adopted (2026-10-09)
+
+The loss-free `native-f1-etw-window-e51-01` sample binds the service thread to
+PID 26016 / TID 5304. Its frozen 53,987.7-us history has 53,975.1 us scheduled
+residency and 12.6 us off-CPU. The first measured failure observer is inside the
+sample. This rules out a substantial dispatch blackout in that observed history;
+it does not establish production WCET or the exact lost grant certificate.
+The 175 token-bearing four-packet sender callbacks cover 700 successful native UDP packets /
+821,978 B in 12,545.8 us, with no observed off-CPU interval. Separate bounded
+interrupt analysis finds 32 us of DPC and no ISR on the CPU used by these
+callbacks in the wider selected window. Even deliberately overcharging 272 us
+for interrupts and reporting precision (32 us plus one us for each of all 240
+retained DPC/ISR events across CPUs) leaves only about 63.87 MiB/s of native
+bytes, before structural attribution and the rest of service-loop work. This
+is diagnostic execution-cost evidence, not proof of hardware incapacity:
+loopback, recording overhead and whole production worst-case cost differ.
+
+A private component sample uses the existing sender spans to distinguish
+encryption and the synchronous Windows UDP call. In one unchanged funded
+four-grant test, 1,848 successful packets / 2,166,384 native B take 15,308.6 us
+of sender elapsed time: 1,129.9 us encryption, 11,991.2 us raw send and 2,187.5 us
+other work. Nested components are not summed twice. These QPC durations are
+elapsed measurements, not independently measured CPU or upper bounds.
+
+The narrowly scoped private candidate substitutes `WSASendTo` for `WSASendMsg`
+only when the existing message has no ancillary control. Nonempty control keeps
+the original call; datagram buffers, address, synchronous success/error result
+and first-send ownership remain unchanged. Eight supplied-API cases, 13 timing
+cases and the two existing applied-source checks pass. An initial fixture build
+failure from a missing IPv6 header is preserved and corrected with that include.
+One candidate funded-four test passes, transmitting exactly the same packet and
+wire counts as the baseline. Raw-call elapsed time is 11,527.4 us, only about
+3.87% lower in this single comparison. Peer/pool running maxima increase from
+2,650,800,128 / 7,180,648,448 to 3,674,210,304 / 8,321,499,136 byte-us, within
+unchanged bounds for this small fixture. Its tiny common-four sample is not a
+representative saturated interval.
+
+**The candidate is not adopted.** This comparison does not establish a useful
+correction for the actual Local32 failure. The candidate's four private worker
+source changes are restored to the component baseline after exact hash checks;
+no production or installed artifact changed. The
+candidate-linked development binary is stale against restored sources and is
+not eligible to run or package until rebuilt. Both experiment jobs are reaped;
+direct census finds no native process or UDP 39450/39451 listener. Comparison
+SHA-256 is `610d0e0f5d64989ca03a58dd92f745d06b944a91c78e4ad0553def9b2f45c890`;
+the retained private decision is
+`675acd525e1fa50130c12f23e88fc64b201be592404d25e3362d2c2509364aa7`.
+
+### Post-wake decision A: retain strict F1; measured profile unavailable
+
+**A — KEEP F1 STRICT** is selected again after the independently challenged
+execution-cost evidence. The actual Local32 path has not demonstrated the
+declared finite-grant service and cannot be treated as a qualified production
+profile. This applies the existing [profile refusal rule](PooledReliableServiceProof3L.md#physical-headroom),
+not a new service constant, lower admission rate or blanket Windows rejection.
+The two known wake fixes remain qualified; their correction does not erase
+the subsequent actual failure. Passing conservation/recovery, isolated native
+controls or configured 18-MiB/s pacing cannot substitute for this missing fact.
+
+B's first-send-anchored alternative still fails 17/32 retained witnesses and
+therefore cannot solve the measured capacity failure. C would need a coherent
+packet-boundary scheduler that separates urgent ACK/control, protected ordinary
+DATA and unsent finite-grant work while retaining FIFO, native first-send
+ownership and reserves. Current pinned connection callbacks bundle these duties
+under the serial global-lock actor. Prioritizing token-bearing callbacks or
+assigning an arbitrary per-pass quota can delay delivery/control and cannot
+create packet-processing capacity. D's batching/concurrent submission would
+need explicit datagram-buffer/completion/ordering ownership and portability
+qualification; no supported flag supplies that architecture automatically.
+
+The next canonical engineering slice is **bounded aggregate native service
+capacity**, with a CPU/work feasibility model and a challenged scheduler/IO
+design before implementation. Its available execution budget must cover four
+finite grants plus protected traffic; byte funding alone is insufficient. Even
+optimistically allocating all Q=1,248 B to unique structural service requires
+at least 67,108,864/1,248 =53,773.128205 packets/s; actual framing, underfilled
+packets, protected traffic, receive/ACK, retransmission and maintenance add work.
+The supported execution model must demonstrate that capacity and the unchanged
+F1 dispatch/blocking requirement in the complete 32-peer workload/recovery,
+rather than infer it from configured rates or isolated four-grant controls. The
+existing observer, raw events and direct cleanup census are enough to establish
+this refusal. No further evidence framework or timer/API micro-patch is added.
+Fresh Local32 follows only a justified, deterministically/native qualified
+correction with required execution-changing CI green. Real-TLS Node32 and later
+3L gates remain required afterward; this decision does not skip them.
+
+No F1 equation, eligible clock, running minimum, admission, reserve, resource,
+recovery or acceptance gate changes. No further physical attempt, provider PASS,
+3M work or merge is made. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+
+## Separate-process native witness: recurring capacity failure (2026-10-08)
+
+Development diagnostic `native-f1-452aa71d-9953c` runs one Server and 32 separate
+headless Players on worker loopback, with the original scale/recovery workload.
+It is not a physical provider result or a whole-source qualified package. Native
+diagnostic source is `452aa71dd`; GNS send/pacing/wake code is unchanged from
+qualified C916. The development Server and original C916 Player execute in new
+task-owned runtime copies; original packages and installed baselines are intact.
+Two preceding setup invocations fail before server start because the diagnostic
+descriptor first retained the old binary pin, then used sorted rather than
+PackageBuilder's ordered content-table keys. Those failures are preserved;
+the corrected diagnostic validates all 57 content members before starting.
+
+The measured native workload fails: 6,905 completed grants, 6,788 qualified,
+117 failed across all 32 peers, maximum 82,736,720,768 byte-us and zero finite
+shortfall. All 1,928,005,711 accepted bytes first-send, ACK and retire. The owned
+job is reaped; native processes and UDP 39450 are absent. All 107 indexed raw
+files (142,551,009 B) verify locally and against the worker index, SHA-256
+`382a4d57a490b73dd9d801d0895283e6a035e0d4e99060bfb7e3f0f4255a00c4`.
+
+The first Main-observed failed grant is peer `3:1`, token `2373`, 295,256 B:
+activation 1027058150896 us, first send 1027058151043, completion 1027058169635,
+observation 1027058185979. Its 260 segments independently reproduce the exact
+27,393,921,280 byte-us maximum. The first violating pre-send checkpoint spans
+4,068 us from the running minimum after segment 102 to segment 147, with
+50,028 B of intervening unique service:
+
+```text
+16,777,216 * 4,068 - 50,028 * 1,000,000
+= 18,221,714,688 >18,025,216,000 byte-us
+```
+
+Its largest adjacent segment gap is only 589 us. This is accumulated recurring
+under-rate service, not one >1.074-ms blackout. Peer `4:1` crosses arithmetically
+68 us earlier; the first observer is not necessarily the earliest native failure.
+These witnesses occur during structural offering, before cessation/recovery.
+They do not establish the phase or cause of the earlier physical failure.
+
+Frozen native history retains 8,192 contiguous records, sequence
+1954664–1962855, with zero drops/counter overflow. Its history-only QPC extent
+10270581189113–10270581867649 covers the failed grant at the measured 10-MHz
+steady/QPC bridge. The earlier timer-creation metadata is separate. During the
+4,068-us interval, thinker passes cover 4,033.9 us; nested SNP spans cover
+3,960.9 us, including 3,653.4 structural and 307.5 marked nonstructural us.
+Timer/poll totals 8.8 us, global-lock acquisition 3.5 us, receive drain zero.
+Nested durations must not be added. A 641.8-us pass visits four structural
+four-packet senders and 13 nonstructural single-packet senders. Nonstructural
+DATA versus pure ACK/control, actual CPU time and preemption are NOT MEASURED.
+Wall spans alone do not prove those causes or unavoidable platform jitter.
+
+**Post-wake decision: retain strict qualification refusal and investigate C's
+aggregate execution capacity.** Per-peer packet quanta and a byte pacer do not
+bound aggregate callback work. An arbitrary ordinary-callback cap cannot be
+derived from the byte reserves and may harm ACK/control. Alternative B's
+first-send-anchored prefix curve is independently defensible as an explicitly
+different finite-capacity contract, but counterfactual replay still rejects
+17/32 retained failed witnesses (only 15 pass). It does not correct this failure;
+no amendment or historical reclassification follows. Existing H_run, rates,
+running minima, admission, reserves and all acceptance gates remain unchanged.
+The next missing fact is execution versus ready/preempted time covering a failed
+interval, using a bounded adaptation of the existing scheduler diagnostic.
+No speculative quantum/timer patch or new physical attempt is made.
+
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; Node32 unrun; no 3M or merge.**
+
+## Fresh corrected-wake Local32: F1 production service failure (2026-10-08)
+
+Physical run `9953fd84-0d6f-444a-93eb-ff8efa1d96ce`, coordinator/lifecycle
+`981fbecc-0596-4f90-88b6-47d0cbb2df1c`, executes the qualified native candidate
+`c916b7d4f868177ae00b4b05dacfa7b8dbb1f563`. Thirty-two actual Player processes
+connect; server exits 10 and the role, coordinator and outer lifecycle fail.
+Of 7,133 completed Ready grants, 7,112 qualify; 21 fail across 16 peers.
+All reported finite shortfalls are zero. Maximum running deficit is
+**96,951,490,816 byte-us** (peer `2:1`), exceeding the unchanged
+**18,025,216,000 byte-us** bound. This is **F1 PRODUCTION SERVICE FAILURE**,
+not a provider PASS or an infrastructure-invalidated service measurement.
+
+All 1,994,813,588 accepted bytes are uniquely first-sent, ACKed and retired;
+terminal release, final pending tokens and active grants are zero. All five
+scale phases pass. Gameplay, structural and mixed recovery prefixes converge
+in 321,505, 38,775,827 and 315,804 us respectively, within their separate
+canonical quotes. Successful recovery and conservation do not erase F1 failure.
+
+The first violating token, interval, native segment/wake chronology, pool
+historical running deficit and OS cause are **NOT MEASURED**. Farm final records
+retain lifetime maxima and the last grant, which cannot reconstruct an earlier
+failure. No attribution to jitter, Nagle, receive work or an induced phase is
+made. The October 6 decision below is historical; this residual physical
+failure reopens its explicit post-wake decision gate. F1 remains unchanged
+while a bounded first-failure witness distinguishes an attributable scheduler
+defect from a contract/platform limitation. No further physical attempt follows
+this failure without a justified correction and required qualification.
+
+Failed server role evidence and worker capture bytes are retained under
+`farm32-9953fd84-failed-raw-v1`, with indexed sizes/SHA-256 verified. Worker
+capture reports `FAILED_DIAGNOSTIC` because the role failed, with owned stop and
+offline export confirmed. Full bidirectional acceptance is not inferred from
+that status. The client capture later exceeds its 500-second deadline;
+its failed diagnostic index reports owned stop/export false and no role-index
+pin. Client role `result.json` and `evidence-sha256.json` are absent. Existing
+client bytes are retained as unsealed diagnostics, never resealed as acceptance
+evidence. This separate capture failure does not invalidate the sealed native
+server service failure or supply a physical PASS. The retained public chronology
+places server exit at 21:28:41.2802105Z, coordinator abort at 21:28:41.878Z and
+client capture readiness at 21:23:49.702894Z. The abort occurs about 292 seconds
+after readiness, before the capture deadline; waiting afterward for the absent
+client role index causes the secondary timeout. All 32 unsealed native client
+logs contain scale completion PASS, which does not replace missing role sealing.
+No increase or restart of the 500-second capture clock is justified. Both child
+trees are reaped.
+Direct endpoint census verifies no
+task process, UDP/control listener or run firewall rule in either policy store;
+worker Packet Monitor is stopped, filters absent and capture service idle.
+Exactly six run control secrets are retired; cleanup receipt SHA-256 is
+`533b7f8f058373f9ce6319e4b418f175e9901279b0f5b481c3b1bf5d913c0dfa`.
+Raw failure evidence and installed baselines remain intact.
+
+Offline analyzer revision `4825df1bcc5f62a816fe35d68be4df9d83f9eb77` also has
+all six original hosted jobs green: Windows 96 native +387 Python each, Linux
+53 each, GNS 11 each, zero failures/errors/skips. Original archive index SHA-256
+is `ca714f838fbd34953c0de82a18018169d414817f29b96206f402e4d6244440eb`;
+source/merge tree reconciliation is `3c3eae3f1d7cb87314a0bdb83305ef95552c96d1`.
+These jobs qualify the analyzer, not the failed provider service.
+
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY. Node32 unrun; no 3M or merge.**
+
+## Post-wake decision A — keep F1 strict (2026-10-06)
+
+Native candidate `c916b7d4f868177ae00b4b05dacfa7b8dbb1f563` qualifies both
+identified wake corrections without changing F1. The old-source regressions
+fail and corrected applied Windows/Linux branches pass; native compatibility
+passes 13/13. All six original push/PR jobs pass with no failures/errors/skips:
+Windows **96 native +382 Python each**, Linux **53 each**, GNS **11 each**.
+Original index SHA-256 is
+`d954fa02e4d1fa853003585d178aeb7cdd4008eefb247d9e27d22f540487e062`;
+all actual source/PR merge trees reconcile to `7d44512879f37988c8029ae3650788efa48e712c`.
+Each Windows job's five required timing commands succeeds with normal-priority
+children, reaping and zero recorded loss. The official package dispatch
+`37539693115` separately passes Windows 96/Linux 53. Package artifact
+`11450431614` has SHA-256
+`f46f34192bb5316429d6385d4fd40732ad56cc5d8c07ddd127edcfe7c788102b`;
+its Player/Server byte closures verify. Passing package jobs do not replace any
+original job; all originals independently pass.
+
+One predeclared clean, diagnostics-off batch passes **14/14** fresh normal-priority
+children: four ACK-statistics, four funded four-grant, four mixed-traffic and two
+structural 32-peer workloads. No retries, remaining processes or listeners;
+all 58 retained files match their sizes/hashes. Matrix SHA-256 is
+`49c179511e3e0a1764ad16d8bb6561c23558998324a3c5adb1509309cef094a4`.
+ACK-statistics consumes 0.594–1.125 CPU seconds per approximately 64.3-s case;
+the two 32-peer cases consume 31.172/32.438 CPU seconds over 40.031/40.125 s.
+Default-off 32-peer and normal hosted outputs prove workload/conservation,
+but their whole-peer F1 certificates are **NOT MEASURED**. Separately retained
+instrumented development records qualify 2,408 grants/32 generations, with
+285,525,458 B exactly first-sent/ACKed/retired, maximum 9,324,008,704 byte-us,
+and common-four maximum 12,806,797,312 over 7,248 us. That worker cache remains
+development scope; no provider result is inferred from it.
+
+**Decision: A — KEEP F1 STRICT.** Independent challenge supports the existing
+finite and recurring equations, including slow-grant/blackout negative tests.
+Alternative B cannot derive a new constant from the old 1,109-us observation or
+remove running verification merely because finite completion passes. Alternative
+C needs measured remaining software monopolization; a dedicated thread alone
+does not prevent OS preemption. An explicit soft real-time alternative D would
+require a different, justified service/deployment contract and new negative
+proofs; no residual measured failure here justifies that semantic change.
+[Microsoft timer creation](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createwaitabletimerexw)
+and [thread scheduling](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-sleep)
+do not establish a universal bounded ready-to-running delay. Retaining the
+strict measured qualification requirement makes no such OS guarantee. A valid
+future violation still fails and requires attribution/architecture review;
+eligible clocks and failure history are never discounted. The original DA gap
+remains **NOT MEASURED** causally and its historical failure is preserved.
+
+Fresh Local32, real-TLS Node32 and the remaining resource/parity/final gates are
+still required. KI-006 is OPEN, Foundation 3L B — PARTIALLY READY. No physical
+PASS, 3M work or merge is claimed by this decision.
+
+## Absolute sender wake correction: source regression qualified (2026-10-06)
+
+The fixed FULL/ACK-statistics diagnostic on observation revision `b66ceb649`
+is a **non-reproduction**. Run `37530178397`, Windows job `112497231286`,
+passes both workloads and retains 48,896 control-phase records without overflow.
+The timer creation succeeds; this run does not exercise the NULL-timer path.
+Its diagnostic ZIP artifact `11445024420` has SHA-256
+`3a304236d23f287822ed6cad80b1c214e1b477006e19e8036c47eb21ff09e302`.
+It neither explains nor replaces the original `da16d5aba` failure below.
+
+Two independent defects are established by the actual applied pinned sender
+branches. Windows and Linux calculate remaining time with one clock reading,
+then add it to a later clock reading, moving the absolute deadline by the
+intervening pause. Windows also requires a timer handle for the existing
+at-most-1,000-us spin even though that path never uses the handle. The correction
+uses one clock sample for the target/clamp and requires the handle only for
+the long timer wait. Manual polling, no-running-grant and Never bypasses,
+long NULL-timer/error fallback, event wake, timer ownership and priorities remain
+unchanged. No F1, admission, reserve or transport-send constant changes.
+
+The existing native fairness target compiles test bodies extracted directly
+from the applied socketthread source. Bounded OS/clock stubs show old Windows
+and Linux deadline 210 us versus required 160 us, and old NULL-timer short wait
+falling back to an integer millisecond. Corrected branches reach 160 us and
+avoid that fallback; clamp, bypass, already-due, event, timer and error routes
+also pass. The worker native build and fairness test pass with owned jobs reaped;
+the final census finds no task process or UDP 39400/39450 listener. The worker
+cache is development evidence only. All 13 existing selected compatibility tests
+pass sequentially, including F1, mixed traffic/reserve, retry, funded ACK and
+feedback refresh; the actual applied pinned-source checks also pass. Original
+hosted CI and the exact-source physical package remain required before a fresh
+provider run.
+The original 1,109-us plateau's cause remains **NOT MEASURED**.
+
+## Original hosted ACK statistics fails; exact wake attribution pending (2026-10-06)
+
+Correction `da16d5aba83f2edffe789491aed8e8258a0ca967` is **not CI-qualified**.
+Original push run `37518739890`, Windows job `112458311111`, passes 95/96
+native tests but fails CTest 83, `gargantuan_gns_funded_ack_stats`. Its baseline
+control arm (`prompt=0`) token 24 has 347 unique first-send segments conserving
+393,652 B. The exact first running-bound crossing and maximum are the same
+zero-service interval: post-segment 12 at 2,921,128,165 us to pre-segment 13 at
+2,921,129,274 us, 1,109 us. Its maximum **18,605,932,544 byte-us** exceeds the
+unchanged **18,025,216,000** bound. Finite shortfall is zero; activation to
+completion is 21,818 us against 29,537.874 us allowed. All 1,969,723 cumulative
+accepted bytes first-send, ACK and retire; pending/unacked/active grant are zero
+and retransmission is zero. Those independent successes do not waive F1.
+
+The original job log SHA-256 is
+`251ba38201261b1a8f82669727e376486666d6217eb5e4a6fdd21d764c42a2d9`;
+original diagnostic ZIP artifact `11441327474` is 8,590,822 B with SHA-256
+`b692e1548c044424ba82653804591e359688db9903f7b8906adf86d615852eb3`.
+Both retained segment lists reproduce the same exact curve. The actual reason
+for the gap is **NOT MEASURED**: the original has no wake-phase or ETW record.
+The grant's unsent structural work bypasses the ordinary DATA pacer. Both
+original GNS sanitizer jobs pass 11 tests; successful counterpart/package jobs
+cannot substitute for this failed original.
+
+The existing exact ACK statistics diagnostic now reuses the ACK-cycle
+65,536-record timer/create/wait/lock/receive/thinker buffer under its existing
+opt-in environment. Detailed callbacks stay disabled. Phase recording stops
+after the control pair is destroyed/joined; both full native arms still run,
+and the borrowed buffer lives until their final destruction before rendering.
+Normal CTest/runtime has no added clock reads or allocation. The existing
+parser scopes phase records to the control arm and service thread and rejects
+prompt/inter-arm rows, overflow, missing phases or uncleared ownership. An
+initial worker probe passes both native arms but overflows when recording both;
+that diagnostic refusal is retained and the same buffer is narrowed to control
+without enlarging it. This bounded observation answers a demonstrated missing
+causal fact; it changes no timer, F1 equation or acceptance gate. No fresh
+physical run is made before attributable correction and required CI.
+
+The control-only successor compiles on the worker and passes all 42 existing
+scheduler/helper tests with no skips. Its exact native statistics probe runs
+both complete arms and passes, retaining 42,184 control-phase records with no
+overflow and a loss-free scheduler window. All seven raw files match their
+recorded sizes/hashes. This validates the bounded observation and is a
+**non-reproduction**, not an explanation or replacement of the hosted failure.
+
+## Pooled ordinary DATA pacing: native correction checkpoint (2026-10-06)
+
+Bounded worker development runs reproduce grant-scoped F1 failures while
+ordinary callbacks compete with four structural drains. An original failing
+gap overlaps 711 us of the remaining thinker batch and 329 us of 33-socket
+receive processing, with no ETW switch-out in that interval. DPC/ISR time is
+**NOT MEASURED**. Detailed native observations identify many ordinary sender
+visits; a packet quantum alone does not bound their aggregate wire work.
+
+The correction normalizes ASAP insertion to the current native timestamp and
+bounds attributed pooled ordinary DATA while another structural grant is
+partly first-sent. Its shared wire ceiling derives from existing reserves:
+96 - (64 + 8) = 24 MiB/s, with at most one native datagram plus 48 B of credit.
+Own unsent structural work and unmarked FULL/default clients retain their
+paths. Independent ACK/NACK/stat deadlines, FIFO, admission, retirement and
+every F1 constant remain unchanged. Failed/control-only sends refund credit;
+successful DATA, including retransmission, consumes actual native bytes +48.
+
+Corrected native run v8 retains **2,397/2,397** qualified grants across 32 peers,
+zero F1 failures, maximum running deficit **9,652,408,000 byte-us**, and exact
+common-four pool deficit **20,591,981,888 byte-us** over a **7,419-us** overlap.
+Accepted = first-sent = ACKed = retired = **285,820,072 B**, terminal release
+zero. Corrected active-eight ordinary control v9 retains **2,415/2,415**
+qualified grants, 32 valid peers, maximum **10,410,404,352 byte-us**, and exact
+retirement of **288,627,112 B**. Its native child exits zero; the old active-32
+coverage parser rejects the control identity, so wrapper coverage is not PASS.
+Both runs' seven raw files match their recorded lengths and SHA-256 hashes.
+
+The corrected worker compatibility sweep passes all 13 selected native tests:
+real transport, retirement/fairness, retry safety, funded ACK/compatibility/
+four-grant/statistics, packet tails, four-grant/reserve and sanitizer-safety
+fixtures, mixed traffic, observation source contract and pooled feedback
+refresh. The updated pinned mechanism source check passes. The earlier
+12/13 sweep's repeating-timer failure remains preserved; its initial poll
+now fences the native microsecond tick so both normalized ASAP deadlines are
+strictly due, without weakening its existing assertions.
+
+These are development results on an explicitly mixed worker cache, not a
+whole-checkout or provider qualification. The correction requires its own
+original hosted CI, exact-source package and fresh physical acceptance.
+Historical Local `2ca` remains F1 FAIL, Node32 is unrun, KI-006 OPEN and
+Foundation 3L B — PARTIALLY READY. No 3M or merge is authorized.
+
+## Fresh Local32 recovery passes; F1 running service fails (2026-10-06)
+
+Three fresh Local attempts execute qualified A
+`ed09e7126c158a1b8c0dae3e51081f54cb29339e`. Reviewed analyzer B
+`8c5a22327a14af09d397ba8c3e647201143cb06a` is used only for offline
+package verification; full strict provider replay is **NOT_REACHED**.
+Their original failed sequence and terminal receipts remain unchanged:
+
+| Run | Actual result |
+| --- | --- |
+| `d326a539-d817-4bfd-9015-b99ac3bef6aa` | Worker capture/export reserve volume is insufficient before Server native launch. Native recovery and F1 are **NOT MEASURED**. |
+| `3a5d4860-9063-4043-8619-adf6a1098f3b` | Prepared runtime projection receipt mismatch from the `PackageRoot` case in the operational input, before native launch. Native recovery and F1 are **NOT MEASURED**. |
+| `2ca63cf8-db11-4024-9ace-48725185bd74` | After the reserve and projection inputs are corrected, 32 actual native clients run. Server exits 10: causal recovery passes, but F1 running service fails. |
+
+The first two corrections change operational inputs, not production, admission,
+service limits or acceptance predicates. The third run uses coordinator
+`35274d15-318a-478e-a793-b8992fcdc4a6`. Its retained causal TSVs and
+`server.stderr.log` report all three cases **PASS** under their original bounds:
+
+| Case | Accepted = first-sent = ACKed = retired B | Earliest prefix convergence us | Original bound us |
+| --- | ---: | ---: | ---: |
+| Gameplay | 5,344 | 335,246 | 20,470,580 |
+| Structural | 355,274,682 | 13,079,486 | 26,536,577 |
+| Mixed | 13,087 | 350,132 | 20,471,117 |
+
+Later strict-barrier observations do not turn these converged cases into
+deadline failures. Whole-run accepted, first-sent, ACKed and retired bytes
+conserve at 1,486,393,002 B; terminal outstanding debt, active grants, pending
+tokens and terminal release are zero. Conservation and recovery do not waive
+F1. All 32 peers latch a running-service failure: their maximum running
+deficits are 21,984,479,872–44,012,964,480 byte-us, above the unchanged
+18,025,216,000-byte-us limit. Maximum finite-grant shortfall is zero.
+The earliest failing historical token and its first-send gap remain
+**NOT MEASURED**: retained summaries contain historical maxima and last-grant
+timestamps, not the missing per-grant first-send history. ACK retirement wait
+cannot substitute for first-send completion or identify that gap.
+
+Failed raw evidence is preserved under
+`C:\Users\aiden\.codex\artifacts\farm32-2ca63cf8-failed-raw-v1\`.
+`preservation.json` SHA-256 is
+`ba7e67adcfb3b38026e8bbe67d044c65d8dfa02e8f6f4c1f5b37a54f2859152b`:
+29 role/capture files plus four public receipts, including the 3,116,367,872-B
+ETL and 2,902,153,460-B pcapng, retain their verified hashes. Capture/controller
+failure remains failure; preserved bytes do not establish capture acceptance.
+
+Each attempt's exact six run-owned control secrets was retired through the
+existing held-object checks after fresh full census. For the third run,
+all twelve journals and the final receipt are under
+`farm32-ed09e712-local32-v3\cleanup-raw-2ca63cf8\retirement\` in the same
+artifact parent. `final-result.json` SHA-256 is
+`3890bc06b64368143a53e37ff42619221cb4c2b616f4e3d7c3d1d66b77a09713`.
+Final CLIENT/SERVER/native observations at 13:17:15–18 UTC show all six absent,
+no owned/task/native/capture processes, task listeners or firewall rules,
+and capture services running and idle with all eight service files matching.
+Raw evidence, private configs and original failures remain preserved.
+
+This is **Local32 FAIL**, not provider PASS. Node32 is not run; final acceptance,
+3M and merge remain blocked. The retained four-client physical F1 PASS keeps
+its historical source/run scope and does not qualify this later 32-client
+recovery campaign. No architecture or runtime-source change follows from this
+receipt. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
+## Qualified execution source and offline archive bound correction (2026-10-06)
+
+Execution candidate A is `ed09e7126c158a1b8c0dae3e51081f54cb29339e`.
+All six original jobs pass: Windows 96 native plus 378 Python each, Linux
+53 each and GNS 11 each, with zero failures/errors/skips. Original inventory
+SHA-256 is `9920da45cf0b1b6992e49ed449b139fa644652edbf88590364381095b9675cf0`;
+counts are `6a16e7539d3303a9a9a992cc07fdef453502185dbbb1c460b4a776fb8d393657`;
+checkout reconciliation is
+`9db5f8b30720e47f3b59645f2ddd9ee6aa06050a9ebc843a3571f7a01b87d754`.
+Pushes execute A, PR jobs execute merge `442a48c`, all with tree
+`a4074220e4d8baf86a5ad873750977fe1fa9954e`. Ten trace sets have original
+successful exits, zero drops, exact arguments/Normal priority and cleanup.
+PR late preparation validates and stops only System32 Appraiser PID 1080,
+then records actual absence; no unrelated CPU or old blocked-wait cause is
+inferred.
+
+Official dispatch `37441120894` also passes Windows 96/378 and Linux 53.
+Its Windows log SHA-256 is
+`7eb9cd3019db9b7fbd71ac4354b77a808318443ebcff69166122cc46a00cf107`;
+Linux log is `8e01c0de9079086c16335be45a959df31d936f3e523c3a4b4455adafae48523b`.
+Package collection then refuses the original diagnostics ZIP's 286,761,989
+aggregate expanded bytes against an obsolete 256-MiB reader bound. The ZIP
+is 40,829,539 compressed bytes/270 members, SHA-256
+`52d1acbff744b344b03aa7f29dca50f1020240541b6fe80aba6c75e0b5e92308`.
+Only 64,374-byte JUnit and 42-byte source-marker members are needed; unused
+trace/negative-fixture members are never extracted or decompressed by this
+reader. This is an offline tooling refusal, not CI or production failure.
+
+The minimal later analyzer B removes only that unused aggregate predicate.
+Compressed/member-count/path/duplicate/required-member/digest/source/JUnit
+checks remain. The complete offline acceptance unit suite passes 34 normal
+and 34 optimized tests, zero skips, including unread-large-member and required
+size/path/duplicate/count/source refusals. The existing A/B contract requires clean reviewed descendant
+B and separate focused validation, while native packages, live qualifier,
+CI and physical provenance remain exactly A. Partial collection and original
+ZIPs are preserved; no archive is repacked. Exact-source package verification
+still precedes versioned staging, startup checks and fresh physical preflight.
+No Local32 or Node32 result is inferred. **KI-006 OPEN; 3L B — PARTIALLY READY;
+no 3M or merge**.
+
+## Active hosted telemetry without a registered task (2026-10-06)
+
+Source `92e3c9b9627ee4ffb45fc086e1f285e5953ecf72` PR Windows job
+`112181731697`, run `37437173945`, correctly refuses setup at
+`2026-10-06T08:38:10.0921351Z`: successful enumeration finds no exact
+registered task, while the actual `CompatTelRunner.exe` census is one.
+Its raw log SHA-256 is
+`2cde6b41565616af7f9d5a3d5084eef4fa802cfbf1f9c2c8e82df116f6a062be`;
+diagnostics ZIP is `ff8c8ed0962ed4d46b56d3b6f9a001efe1512062a87cce231d861ba172e127e9`.
+PR native build/tests/timing are **NOT RUN** and PR Linux is skipped.
+No resource PASS, package or provider result is inferred. The new instance's
+PID, path and birth were **NOT MEASURED** by that earlier step.
+
+The image can run this competitor independently of the named task. Bounded
+preparation now handles only the exact Windows System32 Appraiser executable
+on the disposable GitHub-hosted VM. Every candidate must have the expected
+name, normalized System32 path, positive PID and nonnull native birth. A
+`System.Diagnostics.Process` object opens its handle before a second successful
+CIM PID/birth/name/path check. Termination and bounded exit wait use that same
+held object; identity change or API/handle error refuses termination, and
+the object is disposed on every path. This avoids reopening an arbitrary PID.
+Successful disappearance permits no kill and still requires a fresh empty
+final census. Reappearance or a persistent process fails; there is no cleanup
+retry loop, tree kill, arbitrary image or user-host operation.
+
+This same closed-target quiescence immediately precedes the five timing
+workloads. Its exit wait consumes only the remaining 15-second monotonic
+budget, and the one-minute outer step still bounds synchronous APIs. Actual
+PowerShell/runtime versions and checked fixed identities are retained in
+host logs. Optional exact-task disabling/stopping and Disabled readback remain
+unchanged. Only exact Appraiser absence is established; unrelated background
+CPU and the old 119-ms blocked API remain **NOT MEASURED**. No latency is
+discounted or production code, workload, priority, affinity, timer, service
+contract or acceptance gate changed. The two focused mocked boundary tests
+pass in normal and optimized modes with zero skips; their driver exits 0 and
+owned test-process census is empty. No real task/process method or native
+workload is exercised by those checks. All new original CI remain prerequisites to Local32. **KI-006 OPEN; 3L B —
+PARTIALLY READY; Node32 not run; no 3M or merge**.
+
+## Hosted task absence is a resource fact, not a setup defect (2026-10-06)
+
+Source `0dd022697622307fa49f53171a4f25347651ed8c` fails before native
+build or measurement. Push/PR Windows jobs `112174997839`/`112175015251`
+and official dispatch Windows `112175377621` reject the initial exact
+Appraiser task lookup: the hosted image reports no matching registered task.
+Disable/Stop, native build, Windows tests, timing and packaging are **NOT RUN**.
+The two downstream original Linux jobs and dispatch Linux are skipped.
+No package, stage, run identity or physical attempt is created. Push/PR logs
+have SHA-256 `a1138b8319bd777003cd517767d48d86aaf8ba6424b3a2e4c9a246c4cde7d9b6` /
+`949b34b16fd532b35814a920ca4d87d501ca1d4801b56674fb74141cb7bbc13e`;
+dispatch log is `0a7ac19acce47ac145daa4b783eb7451d2cc932600f7476aee80279247820a63`.
+
+This is an unnecessary harness requirement: acceptance needs absence of the
+measured CPU competitor, not proof that its scheduled task exists. The minimal
+correction successfully enumerates tasks with terminating errors, then filters
+the exact path/name. Zero matches permits no task mutation and requires an
+actual zero process census, logged **NOT_REGISTERED**, not Disabled. An active
+Appraiser without the registered target, duplicate target or provider error
+fails setup. A present exact target retains Disable→Stop, strict Disabled
+readback and bounded absence. A fresh read-only process census immediately
+before the five timing workloads also requires zero. No errors are swallowed
+as absence and no process-kill fallback is introduced.
+
+The two focused mocked host-boundary tests pass in normal and optimized
+modes with zero skips. Their driver exits 0 and owned test-process census is
+empty; no real task action or native workload is executed. All other
+source, helper, workload and acceptance logic is unchanged. The complete
+hosted inventory remains 40 helper plus 338 other Python checks. Both failed
+source revisions remain failed; fresh original CI and exact-source packaging
+remain required before actual Local32. **KI-006 OPEN; 3L B — PARTIALLY READY;
+Node32 not run; no 3M or merge**.
+
+## Hosted telemetry contention and pooled observation gap (2026-10-06)
+
+Candidate `be949192ca867b0c5dc07b364187120fcb4a0ea9` does not qualify:
+its six original jobs contain four successes, PR Windows failure and PR Linux
+skipped. Both Windows jobs pass 96 native and 374 Python checks; executed
+Linux has 53 and both GNS jobs have 11, with zero JUnit failures/errors/skips.
+Successful push results do not replace failed PR qualification. Original
+index SHA-256 is `267a4f726d11a178bbbbe7e2d77688e196ce1360e495e6f614663ca08133c5bc`.
+
+PR Windows job `112066581327`, run `37400561278`, fails Full/mixed RPC
+p95: 232.4581 ms >150 ms. All 49 RPCs complete without error; the four
+initial requests at steps 0–4 are the outliers. The loss-free trace retains
+Normal child priority, original exit 1 and successful cleanup. Its p95
+witness has 3.2167 ms scheduled and 229.2414 ms off CPU. Three completed
+fixture sleeps account for 58.4899 ms. Separate UserRequest waits retain
+119.2905 ms waiting and 51.0821 ms ready delay. The larger client-poll
+maximum at step 18 occurs after these RPCs and cannot explain them.
+
+Decoding the original ETL identifies competing PID 5596 as
+`CompatTelRunner.exe`, executing `appraiser.dll/DoScheduledTelemetryRun`.
+During ready delays of 28.8088, 22.2733 and 23.0174 ms, telemetry consumes
+105.425, 66.0638 and 85.8189 logical-CPU-ms across four processors.
+External CPU competition is **MEASURED**. The 119-ms blocking API, lock owner
+and exclusive cause remain **NOT MEASURED**; no delay is subtracted. Original
+ETL SHA-256 is `5bdfd1635b9504b3ddaf4b83734635297d9b08f1bd829ee4b40ddec66376d813`;
+read-only `tracerpt` decode SHA-256 is
+`89886860d459ea372ecb80d155aee6e3fd3082c1ad6d9a50aaa52ee50db7be14`.
+
+Separate official package dispatch `37400664975`, Windows job
+`112066902930`, fails the first direct pooled workload's mixed Event/action
+maxima: 2186.4521/2188.0690 ms >250 ms. Same-batch RPCs complete within
+73 ms; Event and action retain the same steps 120–126 as passing push,
+which observes 92.2021/92.3351 ms. Five completed sleeps consume 533.7300 ms
+versus 76.9633 ms requested, and client poll 126 consumes 1644.8528 ms.
+No thread/process CPU advance is recorded across the Event interval; its
+endpoint CPU-query brackets are only 1.6/2.9 µs. The later 2925.88-ms sleep
+is after completion. This is waiting/descheduling evidence, not a proven
+transport defect. Its exact lock/host cause and direct child priority are
+**NOT MEASURED** because the first command has no scheduler trace. Raw log
+SHA-256 is `b954696fe9277abea9ab8d00e97290c4643b69e628ffbcc7c328fe4327eece3b`;
+diagnostics ZIP is `22a4a5ee167885a4d959f6c4db388f9efe724d608a913e87fe29f290a123b465`.
+No official package is produced or staged.
+
+The bounded correction removes this measured scheduled-telemetry competitor
+only on the disposable GitHub-hosted Windows VM, using its exact registered
+task, disabled readback and actual process absence. It changes no user host,
+security service, production code, priority, affinity, timer or acceptance
+clock. `PooledFull` routes the unchanged first pooled command through the
+existing Normal launcher and trace; all five logical workloads still execute
+once in order. This closes the demonstrated first-command observation gap,
+without adding a verifier framework or declaring either failure repaired.
+The standalone helper builds with MSVC `/W4 /WX`; 40 normal and 40 optimized
+helper-enabled noncapture tests pass with zero skips. Hosted task actions in
+those boundary tests are mocked; no user endpoint task is changed. Both
+drivers exit 0 and final helper/compiler process censuses are empty.
+All new original CI remain required before a
+fresh package/preflight/Local32 measurement. Client RAM has reached 17.01 GiB,
+but fresh preflight remains mandatory. **KI-006 OPEN; 3L B — PARTIALLY READY;
+Node32 not run; no 3M or merge**.
+
+## Pooled aggregate hosted timing failure before scheduler capture (2026-10-05)
+
+Source `09aa075ad420c1ff1c647a8cf8a207cdb18e00e7` passes the four focused
+native regressions, both original GNS jobs and the PR Windows checks. Its
+original push `37393893089`, Windows job `112045140196`, nevertheless fails
+the second direct command, `--pooled --reliable-workload-32-structural`.
+At `2026-10-06T01:19:46.6824650Z`, aggregate-recovery peer 0's RPC p95 is
+170.268 ms against the unchanged 150-ms bound. All 48 requests complete with
+zero errors; p99/max are 178.411 ms. Native JUnit is 96/96 with zero
+failures/errors/skips and Python is 372/372. Push Linux is skipped. Successful
+PR or package-dispatch results do not replace this failed required original.
+
+The retained raw log SHA-256 is
+`4513c708b20a8cd1ae1002d322f5033f6401a11b85f6f1caac137510f8bc425c`;
+original diagnostic ZIP SHA-256 is
+`6cca2c70f10c086eebad8837ad717c7e13952f005a32a760ad9a3f8e2ecbc48b`.
+RPC 24 and RPCs 25–28 exceed the p95 bound. Their wall/CPU observations
+support an off-CPU or blocking contribution, but cannot distinguish native
+lock waits from host descheduling. Larger intervening tick stalls do not
+directly explain those request intervals. All scheduler wrappers were later
+commands and never ran: failing-window scheduler evidence and the original
+child's API priority are **NOT MEASURED**. No production cause is inferred.
+
+Only that second command now uses the existing bounded scheduler controller
+and verified Normal child launch. Its pooled flags, workload, logical order,
+single execution, original wall clocks and acceptance gates are unchanged.
+No new verifier or replay layer is introduced. The helper builds with
+MSVC `/W4 /WX`; 36 normal and 36 optimized focused noncapture checks pass
+with zero skips. The final helper/compiler process census is empty. The
+driver's earlier nonzero status from matching its SSH ancestor is retained;
+it does not replace the measured test exits or final process census.
+New original hosted qualification precedes another actual Local32 measurement;
+the failed job is preserved and not rerun. No fresh physical run is consumed
+at this checkpoint. Retained F1 PASS remains valid; **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY; Node32 not run; no 3M or merge**.
+
+## Corrected Name candidate: actual Local32 still fails recovery (2026-10-05)
+
+Candidate `b9f8ded29dcd3e9b1be805f5e76b03e901c9c162` passes all six
+original hosted jobs: Windows 95 native plus 372 Python checks each, Linux
+53 checks each, and GNS 10 checks each, with no JUnit failures/errors/skips.
+Native push/PR runs are `37378058515`/`37378065805`; GNS push/PR runs are
+`37378058572`/`37378065818`. Original index SHA-256 is
+`e19a41b99648db325a81718ce7ec85f0d91a5a2bdd511d0a50e2318f2c61fcef`.
+Official non-diagnostic dispatch `37378078144` also passes both jobs and
+package validation. Artifact `11376237179` has original ZIP SHA-256
+`84c8024f60711bb1657fb6b0aeda76c958741ce7a441cf1550bcff1e00079c0f`.
+Both endpoint inventories and projected startup smokes pass before launch.
+
+Fresh Local32 run `1072bd82-e3b6-4956-b919-778caa5dcaab`, coordinator
+`fbf1cc09-82fc-492c-a1a5-211ea871b9d7`, starts at
+`2026-10-05T23:19:53.181528Z` and finishes collection at
+`23:28:44.083276Z`. Both actual staged imports/configurations, fresh role
+preflights and the control barrier pass. Client preflight measures
+10,064,433,152 available bytes. All 32 clients reach readiness. The first
+production result is `recovery_work_did_not_converge_within_bound`.
+
+Structural cessation is tick 9,646 at monotonic 772,020,032,573 us, with
+fence 23,246. The frozen upper bound is 894,997,894 B across 2,341 frames;
+the unchanged derived deadline is 35,112,557 us. Prepared/accepted causal
+events reconstruct all 32 cursors below that fence at the deadline:
+22,431–22,648, or 598–815 records behind. The failure is real at the
+deadline. Reference completion only enables its report at 65,080,874 us;
+19 peers have converged by that later terminal observation and 13 have not.
+Post-cessation accepted/first-sent/ACKed/retired are
+883,606,031 / 882,610,010 / 882,498,588 / 882,498,588 B. Outstanding debt
+is 1,107,443 B and terminal release is zero; this is interrupted accounting,
+not convergence.
+
+The 1,174 completed recovery ticks average 55.28 ms of work. Sampled live
+Session work averages 55.47 ms, with 42.64 ms of incremental preparation
+and 11.38 ms of encoding. These are wall times, not thread CPU measurements.
+Process counters observe approximately 2.08 CPU cores across Main, the
+reference worker and transport, without an exclusive per-thread split.
+The final frame-to-failure interval is 41.350 ms; measured Main phases
+account for 39.303 ms, so final sealing cannot explain a 30-second stall.
+The asynchronous reference competes during measurement, but its exclusive
+effect is **NOT MEASURED**. Early allowance can also reject a stale native
+snapshot before reaching the existing post-encoding refresh; the separate
+feedback-deferral counter was not exported and its incidence is
+**NOT MEASURED**. No deadline or service allowance follows from these timings.
+
+The Name correction alone is insufficient. The next candidate preserves the
+t0 reference and measures live prefix convergence before starting the same
+bounded reference replay, then compares that original timestamp with the
+unchanged derived bound. It also refreshes genuinely stale native evidence
+before eligibility, retaining full ACK/retirement and funding validation.
+These execution changes require focused regression and hosted qualification;
+they are not a recovery PASS or authorization to skip Local32 acceptance.
+
+Focused worker qualification passes the corrected real-32-peer feedback test,
+GameSession suite, seven-case frozen-reference suite and admission-evidence
+suite (four CTest entries total). The exact same feedback fixture against the
+original `b9f8ded29` GameSession ages 31 real native snapshots, makes no
+refreshes, accepts one grant and records 62 freshness deferrals; it fails the
+required refresh assertion. Corrected production reads 31 fresh snapshots,
+accepts four grants and records zero freshness deferrals. Its unavailable
+refresh arm makes 62 actual queries but accepts only the one fresh peer's
+grant and records 62 deferrals. Both corrected arms converge native
+first-send, ACK and exact retirement without terminal release. The fixture
+uses the existing legal one-tick relevance setting to isolate eligibility
+from catalog-refresh cadence; production defaults are unchanged. Server
+compilation, the existing recovery parser and whitespace checks pass.
+Raw source/executable pins, original failing controls and corrected outputs
+remain in `farm32-feedback-refresh-native-b9-v1`. Hosted checks and fresh
+physical acceptance for this correction are still pending.
+
+Failed diagnostic captures, role/coordinator results and initiating errors
+remain preserved. Outer launch fails and collection refuses provider
+acceptance. Fresh cleanup at `23:41:32.522081Z` observes all six controls
+absent, no run-owned processes/listeners/rules, idle captures/services and
+no Packet Monitor filters. Final cleanup SHA-256 is
+`e5586c2f13a4d8a6c96e074870b1a4870415860a1b1b08f943f6dc7cd9a99ef6`.
+The earlier five-control attempt stops on a transient PID census refusal;
+its records remain, and only identity is retired in the fresh continuation.
+No unrelated process is killed. Raw evidence is retained in
+`farm32-b9f8ded29-local32-v1`, its private `collection/server-role`, and
+the read-only `farm32-1072-recovery-readonly-v1` artifact directory.
+Retained F1 PASS is unchanged. **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY; Local32 FAIL; Node32 not run; no 3M or merge.**
+
+## Actual Local32 recovery convergence failure (2026-10-05)
+
+Tooling `999d3b0ffe03bcb1f71d8f76d96623907169c965` passes all six original
+hosted jobs: both native Windows jobs pass 95 CTest entries and 372 Python
+checks, both native Linux jobs pass 53 entries, and both GNS sanitizer jobs
+pass 10 entries. Native push/PR runs are `37360882888`/`37360890152`;
+GNS push/PR runs are `37360882751`/`37360891066`. No rerun substitutes for an
+original result. The retained original-artifact index SHA-256 is
+`961c4672a44f561cd42fe2ba45f6f5292cc5e114e245e554bf3e9a76978cee84`.
+
+Fresh Local32 run `441c7f4c-870f-4e8f-92c9-66674adc86ff`, coordinator
+`caf625f2-335c-4412-b0eb-ec921ccb952b`, uses unchanged native/package
+`9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad`. Fresh resource preflight reports
+11.42 GiB client available RAM. Actual staging, installed pins, child imports,
+capture configuration and one-use control preflight pass. The run reaches
+production recovery. Its first native failure is
+`recovery_work_did_not_converge_within_bound`; subsequent client connection
+closures are consequences of server shutdown, not the first cause.
+
+At cessation the journal fence is 23,240. The immutable reference totals
+607,606,906 B across 1,604 frames, deriving the unchanged 31,088,518-us
+convergence bound. All 32 source cursors remain below the fence at that
+deadline. At the 37,494,756-us terminal observation only three have converged;
+29 remain incomplete. All 1,466 accepted post-cessation frames match their
+frozen per-peer prefix exactly in sequence, complete bytes, fingerprint and
+cursor coverage. There is no measured live-reference divergence or cancellation
+explaining this miss. Delayed quote sealing does not extend the deadline.
+
+The terminal live ledger records 555,370,399 B accepted, 554,025,459 B uniquely
+first-sent, and 553,795,791 B ACKed/retired, with zero terminal release. This
+is interrupted-run accounting, not terminal convergence. The 644 completed
+recovery ticks consume 37.457 s of measured work, with median 59.519 ms,
+p95 78.351 ms and maximum 90.092 ms. Preparation dominates sampled Session
+work. Source inspection finds Name preflight decisions that reject already
+represented history or an unselected trailing record, forcing avoidable
+oversized candidate copying/encoding. Their exclusive physical time contribution
+is **NOT MEASURED**. A narrow correction requires exact-output regression and
+new execution-changing CI; admission, freshness, recovery and F1 gates remain
+unchanged. No blind physical retry is justified.
+
+The narrow correction aligns both live and frozen Name byte proofs with the
+existing producer: skip transactionally covered native Name history before
+charging an operation, and stop at the selected operation limit before testing
+an unselected trailing record. Selected-string validation remains unchanged.
+On the cached MSVC/GNS worker, baseline `999d3b0f` with the new regression
+performs five encoder calls against the reference's six and fails the intended
+one-encode assertion. The corrected covered invalid-UTF8/embedded-NUL cases
+perform one call against six; the unselected-barrier case performs one against
+two. Deferral, rejected preparation and accepted preparation all retain exact
+bytes, fingerprints, cursors, read charges and transaction results. The selected
+declaring-class guard remains a fallback; its fixture now places that operation
+inside every reduced candidate rather than outside the selected prefix.
+Corrected `gargantuan_replication_relevance` passes at 21:44 UTC (8.31 s), and
+`FrozenRecoveryQuoteTests` passes with the same production source (68.78 s).
+Both CTest entries have zero failures. Initial missing-DLL test startup and the
+intermediate fixture failure remain preserved alongside the final results in
+`farm32-name-preflight-native-999d-v1/worker-logs-v1`. Hosted qualification and a
+new official package are still required; this deterministic improvement does
+not establish corrected Local32 recovery or provider PASS.
+
+The current run's F1 terminal result is **NOT MEASURED**: the recovery exception
+occurs before the normal terminal F1 writer, and the existing reader finds zero
+observations. Fresh feedback observations and ongoing ACK/retirement progress
+are not substitutes for that service-contract verdict. This absent result
+neither invalidates the separate retained F1 Phase 1 PASS nor proves F1 passed
+in this failed provider attempt.
+
+Both capture indices retain the correct identities but are
+`FAILED_DIAGNOSTIC`, so collection correctly refuses provider acceptance. The
+worker owned stop and offline export succeed with zero recorded event/buffer
+losses and 1,759,989 diagnostic frames. Client owned stop/export are unconfirmed;
+its four unsealed files remain diagnostic. Native traces, role logs, resource
+samples, captures and original errors remain preserved under the run's sealed
+roots. Managed terminals report owned child trees reaped, and direct endpoint
+census observes no task processes, owned listeners/firewall rules or active
+capture. All six exact one-run control secrets are retired in order using the
+existing held-object guards, and the final fresh endpoint census passes at
+21:14 UTC. The retained direct cleanup result SHA-256 is
+`24b5575d6ee012f9298c90acd26b6ed1c54a0a8b8052efe7f0535e4064e4c9fa`.
+An earlier cleanup lease refused a temporarily present historical PID before
+any disposition; that refusal remains preserved. Its replacement process
+identity is **NOT MEASURED**. The later census finds every original owner PID
+absent; no unrelated process is terminated or exempted.
+
+**Local32 recovery FAIL; Node32 NOT RUN; KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY.** Retained F1 Phase 1 PASS is unchanged. No 3M or merge.
+
+## Corrected sampler passes; separate aggregate RPC CI failure (2026-10-05)
+
+Tooling `d66444f3eb2a283e37ab6fb5451d55cab2849f92` passes all 95 native
+CTest entries, including the corrected sampler, and 371 Python tooling checks.
+Original push `37275013641`, Windows job `111650013022`, subsequently fails
+five unchanged RPC p95 gates in the fourth standalone command,
+`--reliable-workload-32`, FULL_RESERVATION aggregate recovery. The failing
+peer p95 values are 162.058, 165.997, 163.524, 165.514 and 166.892 ms against
+150 ms. All eight active peers accept and complete 48 requests each with zero
+errors; structural accepted bytes and the final pending/journal backlog are
+zero. This is separate from the earlier sampler startup refusal.
+
+The third command's Full scheduler trace completes successfully before this
+failure; it does not cover the failing fourth command. The latter's raw
+operation/CPU/sleep spans contain wall-time stalls, but exact blocking versus
+host scheduling and its inherited process priority are **NOT MEASURED**.
+The existing fixed-case diagnostic is extended to the exact fourth command,
+once in original order, with the same bounded owned Job/ETW machinery and
+verified ordinary Normal child scheduling. No argument, sample, latency gate,
+production implementation or F1 constant changes. The original failure remains
+failed; no timing discount or passing PR substitution is permitted.
+
+Original PR Windows passes 95/95 and 371 Python checks, PR Linux passes 53/53,
+and both GNS jobs pass 10/10; push Linux is skipped. The failed original log
+SHA-256 is `8e2282ed193635911ffc03a516232bb95133b9ffe20cb0357216123b8315126d`.
+Corrected-source CI must qualify before fresh Local32 preflight and execution.
+The fixed-case helper compiles with the hosted `/O2 /W4 /WX` contract on the
+worker and passes all 34 focused helper tests with zero skips. The checks
+exercise case binding, original failure/crash propagation, coverage denials,
+ownership and cleanup without starting a kernel session or native workload;
+owned helper/test processes are absent afterward. This is tooling validation,
+not an RPC timing or provider acceptance result.
+Retained F1 Phase 1 PASS is unchanged; **KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY; no Local32/Node32 acceptance or 3M.**
+
+## Original tooling CI sampler startup refusal (2026-10-05)
+
+Execution-changing tooling `a4baec8370328d57244aaec58da7bc69ab84e147`
+does not qualify for physical execution. Original native push `37267234328`,
+Windows job `111626513015`, passes 94 of 95 native tests and fails the
+resource-sampler fixture's unchanged five-second initialization gate. Its
+dependent Linux job `111636804701` is skipped. A successful original PR
+Windows job is separate evidence and cannot replace this failed push. The
+completed original PR jobs pass Windows 95/95, Linux 53/53 and 371 separate
+Windows Python checks; both original GNS jobs pass 10/10. These outcomes
+preserve the failed original push and do not qualify `a4baec83`.
+
+The reported 6,133 ms parent counter preparation occurred before the timed
+startup and is not the failed child initialization duration. The first fixture
+sampler starts before any of its 32 harmless child owners, and uses supplied
+NIC values with actual kernel32 CPU/memory reads. Source inspection establishes
+that the separate sampler child compiles the same fixed C# counter/pipe-reader
+definitions again. Its exclusive compilation, PowerShell startup, source/hash
+preparation and first-baseline times are **NOT MEASURED** in the failed receipt.
+The original artifact upload omitted that retained temporary sampler directory.
+Duplicate compilation is an implementation fact, not a proven exclusive cause
+of the original timeout.
+
+Source review also found a reachable evidence-layout defect: the sampler's
+runtime subdirectory was inside the role-evidence root, while its seal indexed
+only top-level files and canonical acceptance required complete flat coverage.
+The correction keeps run-owned runtime directories in the registry and retains
+their complete bounded raw archive and exact prepared assembly as indexed flat
+role files. It does not exempt a directory, omit raw records or expand the
+128-file/16-MiB acceptance limits.
+
+The failed push JUnit SHA-256 is
+`d351d32b00326fdf437ba54d4262b22dde870458a80ce52b89fa21c0c2ec4763`.
+No physical retry or CI rerun reclassifies the failure. Corrected source must
+retain the five-second startup/query/stop bounds and actual first baseline,
+pass its deterministic checks and new original hosted jobs, and pass fresh
+endpoint preflights before Local32 or real-TLS Node32 execution.
+Retained F1 Phase 1 PASS is unchanged; **KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY; no 3M.**
+
+The corrected focused worker endpoint fixture passes with 32 actual harmless
+children, 64 process rows and two host rows. Counter preparation takes 527 ms
+outside startup; cold sampler startup with verified assembly loading takes
+584 ms. Native-path 18, projection 23 and source-AST nine checks pass, as does
+the separate actual host-resource fixture. The two staging failures (missing
+unchanged projection helper and Windows Python alias selection) are retained;
+they are not production failures. Hosted CI for the corrected source remains
+required. These fixture results do not supply Local32 or Node32 acceptance.
+
+The preceding failed Local run `78b900ef-4784-4cc2-8704-ce5c37edf332`
+has separately completed control retirement. Independent raw replay joins
+12 ordered journals, 51 raw observations and nine original indexed inputs;
+all six exact run-control secrets are absent and both endpoints are observed
+idle. Raw closure SHA-256
+`a019fdccb5ecef362e05bac24f614dde43980ffb9c63b5dddc2085ded59a90eb`;
+independent actual review SHA-256
+`47f4be989ccac144b0041f5e66b01257a115315b748a7d94ffd9ffffbd087e39`.
+This closes that run's cleanup prerequisite and supersedes its earlier pending
+cleanup statement below; it does not change its failed launch or supply a
+provider acceptance result.
+
+## Local attempt stopped before the coordinator listener (2026-10-05)
+
+Fresh Local run `78b900ef-4784-4cc2-8704-ce5c37edf332`, coordinator
+`fed720f9-703f-4cdd-ba8f-0517f0696092`, consumed execution tooling
+`eaf956be2873855b69eb6a9672dc0beb23f7c10f` and unchanged native `9ae8f68c2`.
+Both staged actual-import and configured checks passed. The worker host stdout
+and stderr files are empty; no host terminal, listening marker, control barrier
+or role launch was recorded. The original wrapper stderr was discarded and is
+**NOT MEASURED**. The original launch summary reports cleanup unproven because
+the host terminal is absent; it does not establish a live descendant or child
+reaping. No provider workload or service metric was measured.
+
+A separate harmless actual-worker `StartOwned` witness reproduced
+`ModuleNotFoundError: dependency`. The fixed helper directory has only the
+adapter and ACL module; the run stage already has the verified dependency,
+lock and 13 pinned Coordinator exports. The bounded adapter correction selects
+those exact stage-owned sources, retains a startup diagnostic without inventing
+reap truth, and reports the original launch error alongside cleanup refusal.
+New source and original hosted CI must qualify before another physical attempt.
+
+The post-failure read-only installed observation passed all eight inventory
+checks and reported no task processes or listeners, with native and Packet
+Monitor capture idle. That observation is not secret-retirement evidence.
+Current failed-run control retirement remains separate and pending. All original
+failure receipts are preserved; Local24, real-TLS Node26 and final54 acceptance
+remain unmeasured. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
+
+## Local32 correction qualified; client resource preflight blocked (2026-10-04)
+
+Execution-changing tooling `eaf956be2873855b69eb6a9672dc0beb23f7c10f`
+passes all six original attempt-1 hosted jobs. Native push `37253600366`
+and PR `37253602633` each pass Windows 95 and Linux 53 native tests,
+plus 364 separate Windows Python checks, with no failed or skipped tests.
+GNS push `37253600339` and PR `37253602820` each pass 10 sanitizer tests.
+Both original Windows Full and Aggregate32Structural traces replay exactly
+against the pinned source. Original checkout head/merge/tree, logs, artifact
+digests and test identities are reconciled without workflow retries.
+The earlier `ce26e26a` failed/skipped push results remain unchanged.
+
+Original raw CI independent review SHA-256:
+`aded719f9b60e21b42ac30962a410f9239279a61611b6de3c9357a7c74bc53d2`.
+The complete source-bound current-CI verifier also passes; its receipt is
+`C:\Users\aiden\.codex\artifacts\farm32-v14-independent-finalization-eaf956be-v1\current-ci-independent-review.json`,
+SHA-256 `ebb27c658ed409933ae579122cffa46b2bd247a0423e5aca622171c95507f759`.
+Independent rejoin review SHA-256:
+`8104a94bd5ee76a9c9af88d8f47d693e48b22172332572d361e4adb21c659a7c`.
+
+Failed Local `68bfec9e` cleanup is independently complete. The original
+four-control STOPPED result and eight journals are preserved. A separately
+qualified, fresh two-control continuation supplies the remaining four journals,
+final six-leaf absence and idle observations. The composite verifier checks
+12 logical journals, 32 raw observations and all 31 original indexed inputs.
+Raw closure SHA-256
+`6d2058f99c23b8caf9243646dbc1be1eb592621c172f475939d08b3efa458fa5`;
+independent actual audit SHA-256
+`a3e3082f1adc2b5b324ead92aeff7b06300d4b1f7e7a7f406513178e4bdd913b`.
+This cleanup evidence does not reclassify the original provider failure.
+
+V14's applied source bindings pass 101 candidate tests and 162 framework tests
+in each of normal and optimized Python, with zero skips. The independent
+refreeze review verifies the six CI literal bindings, byte-exact current
+cleanup reader, all 14 intended source changes and preserved predecessor
+snapshots. Candidate adoption and physical launch remain pending.
+
+Read-only installed observation at `2026-10-05T03:50:15Z` verifies both endpoint
+package and source pins, no observed task processes/listeners, running idle
+capture services, all eight worker service files and four Node/config pins.
+Its resource gate fails: client `DESKTOP-B8V8NAN` has 3.357 GiB available RAM
+against the unchanged 8-GiB floor; worker `HOSTPC` has 19.657 GiB available RAM
+and 36.382 GiB free on C:. This is an installed observation, not a physical
+attempt. Mapped receipt SHA-256:
+`84a4453dbb5796e4ebcecb15ea91673c8dbfd3dadeb97b3f365d27f84f13585e`.
+Fresh full source, installed, resource, projection, capture and lifecycle
+preflights remain mandatory before launch. No unrelated applications are
+stopped to satisfy the resource gate.
+
+Retained F1 PASS is unchanged. Local32, real-TLS Node32 and final acceptance
+remain unqualified; **KI-006 OPEN; Foundation 3L B — PARTIALLY READY**.
+No new physical attempt, Foundation 3M work or merge is performed.
+
+## Local32 bootstrap launch/sampling failure (2026-10-04)
+
+Tooling `929da7d071029d945a461d9631a97d1b2398f701` passes all six
+original push/PR Windows, Linux and GNS jobs. The preceding `1aeb7221` run is
+separately closed with its six exact control leaves retired and fresh idle
+evidence; its original failed terminals and captures remain unchanged.
+Fresh Local run `68bfec9e-1335-4f45-b7ad-9ea502bd2592`, coordinator
+`ed6d0a59-463f-4a6d-846c-c6b37e924432`, passes staged imports, strict capture
+configuration and exact runtime projection checks. The run-owned projected
+Server UDP permission allows real connectivity: 28 clients reach Ready.
+
+The first causal failure is `clients_or_manifest_not_ready` at server tick
+1,201. No workload clock records are produced. On the server's own monotonic
+clock, ticks 1 through 1,200 span 19,987.143 ms; the 28th client reaches Ready
+14,936.061 ms after tick 1. On the client host's independent clock, slot
+19-to-20 starts are 6,356.758 ms apart and slot 27-to-28 starts are
+5,613.952 ms apart. Slots 0 through 29 span 18,153.388 ms; slots 30/31 have
+no native start record. These clocks are not subtracted across hosts.
+
+Source places a synchronous resource sweep and adapter/CIM queries between
+successive client starts. This is a launcher infrastructure defect: resource
+observation can delay the workload it observes. The precise OS call responsible
+for each retained gap is **NOT MEASURED**; the old supervisor did not timestamp
+each call. The 1,200-tick bootstrap limit, 75-ms startup stagger, role deadlines,
+resource evidence limits and all production service/acceptance gates remain
+unchanged. Correcting the launch/sampling coupling requires independent bounded
+sampling, preserving startup coverage and exact process identity.
+
+The native server exits 7 and retains `Status=FAIL`. The original worker host
+and role terminals remain `FAILED`, exit 1 and `ChildTreeReaped=false`; the
+client terminal is `ABORTED`, exit 1 and `ChildTreeReaped=true`. The outer
+endpoint forces a false reap bit for a naturally exited unsuccessful runner,
+while its exited-PID shortcut cannot independently prove descendant absence.
+A sound correction needs containment evidence separate from workload status.
+The capture controller also rejects failed role evidence before offline export,
+so the original worker `capture-sha256.json` is missing. Failed diagnostic
+export must remain explicitly failed and cannot satisfy capture acceptance.
+
+Original public input index:
+`C:\Users\aiden\.codex\artifacts\farm32-68bf-root-public-evidence-v1\public-input-index.json`,
+SHA-256 `21e14443e34d19c074fec23019d447b1e0dfbd7a619c3a1ce72a02d90ddf5c9e`.
+Independent source/native chronology:
+`C:\Users\aiden\.codex\artifacts\farm32-68bf-bootstrap-independent-attribution-v1\analysis.json`,
+SHA-256 `a5620c986755c4277d25f3c7ee43b7b9dfcb061119bdf456435917fd0ba4e58e`.
+Later read-only absence observations do not rewrite the original terminals.
+Exact fresh failed-run cleanup and correction qualification remain required.
+The source correction separates bounded resource sampling from client launch,
+adopts upstream checked Windows Job containment at
+`cf1628de587ee0ccfbd74742d62946dac1adf522`, and permits explicitly failed
+diagnostic capture export without satisfying success binding. The full
+production-pinned farm suite passes 258 tests without skips. The focused
+ownership, outer endpoint and capture suites pass 24, 14 and 26 tests in both
+normal and optimized Python; an independent review confirms checked release,
+rollback and interruption behavior. A 32-harmless-child sampler regression
+passes with a six-second supplied network query: all owner publications finish
+in 477 ms, initialization in 1,567 ms, with 64 process rows, two host rows and
+retained failure partials. This is source/infrastructure evidence only.
+
+Independent lifecycle review SHA-256:
+`7b57ee6659328fb9186bb498cd1002fcde9b30109d69be3afa8ab03403f6207c`.
+Portable sampler qualification SHA-256:
+`035178ec34d057b8732d4d6827c690ae151d2d880560c4e694f3e5b5199820ab`.
+The original tooling `ce26e26a` push Windows job `111573334011` passes
+94 of 95 native tests and fails the endpoint fixture's five-second sampler
+initialization check. Its Linux job is skipped; these failed/skipped results
+remain historical and cannot be replaced by the separately passing PR Windows
+job. The fixture omitted production's parent-counter preparation before the
+sampler clock. The correction restores that precondition only in the fixture,
+retains both actual five-second checks and cold child initialization, and adds
+six AST checks plus bounded timing diagnostics. The exclusive slow phase of
+the original CI failure is **NOT MEASURED**.
+
+The corrected standalone sampler and full endpoint fixtures pass locally with
+32 harmless children each, 64 process rows, two host rows, and all 36 recorded
+owned processes exited or absent in each suite. Their six initialization
+measurements range from 1,081 to 1,528 ms. The full endpoint also passes its
+18 native-path and 23 projection cases. Retained qualification SHA-256:
+`dcc04b870be4c645ce67b135bbe444147eb5c87f72047d4e7f8969996625dc64`.
+Production endpoint code, deadlines and acceptance limits are unchanged.
+This fixture correction requires its own original hosted candidate checks;
+local harmless tests do not qualify a physical farm.
+
+Required hosted candidate CI, exact cleanup, fresh source closure and endpoint
+preflight must pass before a subsequent provider run. No installed service,
+native production code, admission, resource limit or acceptance gate changes.
+Retained F1 physical PASS is unchanged. **KI-006 OPEN; Foundation 3L B —
+PARTIALLY READY; Local32/real-TLS Node32 and final acceptance remain unqualified;
+no 3M.**
+
+## Local32 projected-server UDP permission omission (2026-10-04)
+
+Fresh tooling `7a3e7ea8` run `1aeb7221-8c47-4ccd-98c1-389d486e1c4c`,
+coordinator `3f9857cd-746d-44da-9750-19fb8307df19`, follows successful
+original six-job hosted checks and independently closed `f0c18bed` cleanup.
+Both staged imports and capture configurations pass. The unchanged native
+Server starts in 14 ms from the compact exact runtime projection and publishes
+its ready socket before client slot 0 starts. The client bootstrap times out
+before Ready; the provider workload does not begin. All three outer terminals
+remain FAILED with original `ChildTreeReaped=false`. Collection lacks the
+worker evidence index; both original capture gates remain INCOMPLETE.
+
+The retained client pcap contains 21 requests from `10.253.3.1:64428` to
+`10.253.3.2:39450`, each UDP length 520. Offline export of the original worker
+ETL through its exact pinned NDIS exporter yields 125,851 frames and the same
+21 requests, matched by payload SHA-256 and tuple in order, with no response
+in either capture. The export is diagnostic only and does not repair either
+capture gate. Cross-host one-way latency and an original per-packet WFP drop
+decision are **NOT MEASURED**.
+
+Read-only effective firewall inspection finds Private inbound default Block
+and no rule for the projected Server path. The apparently broad UWP exceptions
+are package SID/family restricted in compiled WFP filters, including the
+`ALE_PACKAGE_FAMILY_NAME` restriction omitted from the high-level Package
+field. This supports the firewall explanation; it is not an observed original
+drop verdict. Source inspection proves the independent infrastructure defect:
+the launcher establishes coordinator TCP permission but does not establish or
+verify game UDP permission for the newly projected executable. Historical
+package/probe exceptions do not follow an executable into a new path.
+
+The correction binds a temporary worker permission to the sealed run, exact
+verified native projection, Private fiber interface, local UDP 39450 and the
+single peer fiber address. Both persistent and effective scope must match;
+stale ownership, changed hashes, ambiguous profiles/interfaces and explicit
+matching Blocks deny launch. Every launch exit reconciles only its unchanged
+owned rule and propagates cleanup failures. Unrelated rules, production
+transport, admission, F1 constants and installed services remain unchanged.
+Local deterministic qualification passes 240 farm tests and 47 optimized outer
+tests without skips; ROOT separately replays the 12 focused game-rule cases.
+Generated PowerShell runs against mocked network/security getters, including
+exact scope, explicit Blocks, failed publication, stale ownership, altered
+rules, AST-name duplication and the bounded hash-checked compressed transport.
+No test publishes an operational rule or starts a physical workload. Receipt:
+`C:\Users\aiden\.codex\artifacts\farm32-game-udp-lifecycle-source-qualification-v1\result.json`,
+SHA-256 `6d7c0f85f4dac5651dd6b1c6e7943669984dc68bc757830328a4d8cd7c36e3b3`.
+Current execution-changing CI, exact failed-run retirement and fresh endpoint
+preflights remain separate required gates before another provider attempt.
+
+Diagnostic raw/reconciliation files remain under
+`C:\Users\aiden\.codex\artifacts\farm32-1aeb-failed-packet-attribution-v1`.
+Its `packet-reconciliation.json` SHA-256 is
+`fe208d2e5f6123e3e996359bd8a52a0863b62c960cfe1aa0aba028d6e8e4c131`;
+compiled WFP XML SHA-256 is
+`913048a629a411c7aa1a78e59da377b8b6551d4febf989f1ef53bdea03791a1f`.
+Retained F1 Phase 1 remains PASS. **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY; no 3M.** No completed Local32, real-TLS Node32 or final acceptance PASS
+is inferred from this failed attempt or the correction.
+
+## Local32 native path-length startup failure (2026-10-04)
+
+Fresh run `f0c18bed-722e-4820-86f6-20be1e6f60c1`, coordinator
+`8400bb71-e929-48b6-93c9-c443467dc0ce`, uses tooling `578edaa4` after
+its six original hosted jobs pass and the earlier `cf89463c` run's six secrets
+are independently confirmed retired. Both staged imports and strict capture
+configuration pass. The worker Server exits 3 before readiness, reporting native
+package integrity failure. Its failed host/role terminals also report child
+reaping false; missing worker capture evidence cannot close the run. No Local
+provider service, recovery, resource, or readiness PASS is claimed.
+
+The runtime projection has exactly the same 58 file paths, sizes and hashes as
+the passing NativeA startup diagnostic below. However, its root is 173 characters
+and eight asset paths reach 270 characters, versus 132/229 in that diagnostic.
+The unchanged Server executable has no `longPathAware` application manifest;
+native package validation uses ordinary unprefixed Windows file APIs.
+
+A separate startup-only regression preserves the package and executable hashes
+and reproduces the exact integrity error/exit 3 at root/member lengths 173/270.
+The same Server bytes at 134/231 and unchanged Player at 136/233 exit 0. All
+three owned children are reaped; original envelopes and runtime inventories are
+unchanged. No bind, connect, capture or farm workload occurs. Receipt:
+`C:\Users\aiden\.codex\artifacts\farm32-f0-path-native-regression-v2\result.json`,
+SHA-256 `c5097a7d850ea5e914d1e7289d8186e3fe9871b2c6c4197b80084f53915c9963`.
+The physical failure's precise syscall/exception is **NOT MEASURED** because the
+native catch reports only integrity failure. The controlled native comparison
+establishes the path-length cause without changing native package validation.
+
+Projection now checks every full member and directory-ancestor path against
+the native package builder's existing 240-character limit before publishing any
+copy/attempt/receipt and again on prepared validation. Eighteen new tests cover
+both roles, the actual AST-extracted helper, 240 acceptance, 241/270 denial, and
+absence of published state after denial. The existing 23 projection cases pass.
+Use shorter fresh run/role registry names for the next candidate; required
+current-source CI and this failed run's exact secret/idle cleanup remain
+separate gates before a fresh provider launch. Historical receipts are preserved.
+
+Retained F1 physical Phase 1 remains PASS. KI-006 remains OPEN; Foundation 3L
+remains B — PARTIALLY READY. Local32, real-TLS Node32 and the final acceptance
+sweep remain **NOT MEASURED** for a qualified completed provider campaign.
+
+## Local32 package-envelope startup failure (2026-10-04)
+
+The corrected source separates the deployment envelope from a fresh, exact
+native runtime projection before preflight and ticket sealing. The final
+projection suite passes 23 cases, including UTF8 path bounds/order, stale or
+partial copies, redirection, missing/extra content, tampering and receipt
+identity. The complete farm Python scope passes 228 tests, and acceptance
+passes 32 tests normally and with optimization. These are distinct scopes.
+
+Actual unchanged NativeA Server startup (12 ticks, no bind) and headless Player
+startup (12 frames, no connect) both exit 0 from the projected 58-file roots.
+Both child processes are reaped; runtime and original envelope inventories are
+unchanged. The diagnostic receipt is
+`C:\Users\aiden\.codex\artifacts\farm32-native-runtime-startup-v1\result.json`,
+SHA-256 `bc103808f4a52581278cf047a5f85a8db274fae630b4621fa7c788a5e335c21e`.
+This is package-startup qualification, not a physical provider attempt. Required
+execution-changing CI and failed-run secret retirement remain separate gates.
+
+Tooling head `2537f4517733a25990fd5f6456a59c962b39ff13` is qualified by all
+six original hosted jobs: Native push `37165435339`, Native PR `37165437335`,
+GNS push `37165435338` and GNS PR `37165437338`. Both Windows jobs pass 95
+native tests, both Linux jobs pass 53, and both GNS jobs pass 10. Complete
+original checkout/log/artifact reconciliation and the four independent raw
+scheduler trace replays pass. Earlier CI failures remain historical failures.
+
+The fresh Local32 attempt is physical run
+`cf89463c-cd4a-4d18-849a-cb66b51ba97e`, coordinator run
+`9e0aa139-56f9-436b-a7e9-87c5288f8f4a`. Both staged imports and strict capture
+configuration pass. SERVER control acknowledges launch at 02:26:56.454 UTC;
+the endpoint reports native exit **3** at 02:26:58.671107 UTC, before readiness.
+CLIENT never receives its launch operation. No client probe evidence or F1
+service measurement exists. Missing capture collection and conservative
+false child-reap terminal bits are downstream failures, not alternate causes.
+
+Both deployed and official Server envelopes contain 57 declared content files,
+`game.package.json`, and the undeclared qualifier `deployment-sha256.json`.
+Every declared size/hash matches, and the ordered content-table hash matches.
+`PackageBuilder::ParseManifest` permits only declared content and the game
+manifest; CI writes the qualifier inventory after the generator's native
+validation. The exact thrown native exception text and emission timestamp are
+**NOT MEASURED** because the native catch exposes only the generic integrity
+diagnostic. The retained source and byte-closure evidence establish the layout
+defect without inferring missing native events.
+
+Attribution is retained in
+`C:\Users\aiden\.codex\artifacts\role-startup-cf89463c-v1\attribution.json`,
+SHA-256 `29f24058cecb6e350d8a8d1b4457267a993a37984ccd28d3d0159b605335b4ef`.
+Fresh supplemental observation confirms idle endpoints; the original failed
+terminals and sequence remain unchanged. Exact-secret cleanup and independently
+qualified clean runtime staging precede any fresh attempt. Local32, real-TLS
+Node32 and the final acceptance sweep remain unqualified. The retained F1 PASS
+is unchanged and must not be rerun. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
+## Full diagnostic decoder qualified locally; original CI required (2026-10-04)
+
+The Full development native child passes, while its original diagnostic remains
+failed at the obsolete five-million-row cutoff. The corrected SDK helper passes
+31 tests in each Python mode without skips. A separate read-only replay of the
+unchanged retained ETL decodes all 7,731,540 rows within the existing byte/time
+bounds. Original evidence is preserved; this replay launches no workload or
+capture and does not explain the earlier hosted timing failure. See the
+[decoder validation receipt](ContentAvailabilityFoundation3L_3Validation.md#full-decoder-correction-and-retained-etl-reconstruction-2026-10-04).
+New original push/PR CI and independent candidate review are still required
+before fresh Local32/Node32 adoption. V5 remains unadopted with null pins.
+Retained F1 PASS is unchanged; **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
+## c33 original CI failure blocks physical launch (2026-10-03)
+
+Original Native PR `37158397178` fails FULL_RESERVATION's third command,
+`--reliable-workload`, upper case: RPC p95 218.8903 ms exceeds 150 ms and
+action 17's 556.5228 ms exceeds 250 ms. Windows CTest 95, helper 20 and hosted
+tooling 295 pass; Linux is skipped. The fourth/fifth commands never start, so
+their scheduler evidence cannot diagnose this failure. Exact request/phase
+overlaps exist, but the scheduling or blocking mechanism remains **NOT MEASURED**.
+
+The existing bounded Full helper will instrument this exact invocation once
+after deterministic qualification. Workload, flags, clocks, gates, production,
+admission and reserves remain unchanged. Dormant V5's independent static review
+is complete, with 71 pure tests in each mode and unchanged 54-gate/20-field
+assembly; both adoption pins remain null. No new physical attempt occurred.
+Retained F1 PASS and the failed b52d supplemental cleanup remain unchanged.
+**KI-006 OPEN; 3L B — PARTIALLY READY**. Earlier pending paragraphs are historical
+and do not authorize launch.
+
+## Aggregate diagnostic candidate awaits original CI (2026-10-03)
+
+The fixed original aggregate command passes a bounded worker development trace
+with all three phases and 7,424 paired request/resource records, loss-free native
+scheduler evidence and verified cleanup. Source `8854feecf` additionally preserves
+negative native failures in every standalone CI guard and retains the actual
+helper/workload binaries for hash verification. It changes no production,
+admission, transport, workload or latency gate. The earlier failed development
+staging and 92/95 environment-affected native suite remain failed; corrected
+runtime selection passes the three affected tests separately.
+
+These are development results, not hosted CI or physical acceptance. New original
+CI, exact-source review and a fresh dormant launcher precede Local32/Node32.
+Retained F1 PASS is unchanged; **KI-006 OPEN; 3L B — PARTIALLY READY**. The
+[development validation entry](ContentAvailabilityFoundation3L_3Validation.md#aggregate-diagnostic-development-qualified-hosted-ci-pending-2026-10-03)
+records the immutable evidence and remaining gates.
+
+## Corrected capture staging awaits aggregate timing qualification (2026-10-03)
+
+Capture-root correction at tooling `3c8f65d39` passes 315 local tooling tests.
+Its original Native PR run `37151679339` passes 95 CTest cases and the tooling
+step, then fails three aggregate RPC p99 gates in FULL_RESERVATION's first
+normal phase of `--reliable-workload-32-structural` (354.201/355.002/418.106 ms
+against 250 ms). No pooled structural work is active in that phase. The exact
+mechanism remains unmeasured because aggregate request chronology was absent.
+Bounded request-linked scheduler instrumentation is the next correction;
+no latency sample, threshold, admission or transport policy is adjusted.
+
+Failed Local `b52d6e7b` has a separate completed cleanup chain proving all six
+one-run secrets absent and both endpoints idle. Its original failed role
+terminals and incomplete first cleanup receipt are preserved. Dormant V4 was
+reviewed but not adopted or executed. No physical attempt followed this hosted
+failure. Retained F1 PASS remains valid; fresh Local32/Node32 and final audit
+remain outstanding. See the [current validation entry](ContentAvailabilityFoundation3L_3Validation.md#original-aggregate-timing-failure-after-capture-correction-2026-10-03).
+
+## Local startup failure before service measurement (2026-10-03 20:30 UTC)
+
+Local attempt `b52d6e7b-6ebb-44e2-b12c-a2b4fb88bbc0` and Coordinator
+`067e0c39-c482-4fda-8e37-6a1571b4178b` failed before either capture became
+ready. Both actual staged imports passed; both strict capture configurations
+then rejected missing sealed parent directories. This is an attributed staging
+defect, with no native farm or production service measurement. Original failed
+cleanup terminals are preserved. The
+[validation ledger](ContentAvailabilityFoundation3L_3Validation.md#local-capture-startup-attribution-2026-10-03-2030-utc)
+records raw evidence and the reviewed provisioning correction. V3 is revoked;
+new candidate qualification, exact-run cleanup and fresh preflights precede
+another attempt. The client RAM gate passed at 19:52 UTC. Retained F1 physical
+PASS remains valid; Local32, real-TLS Node32 and final acceptance remain pending.
+
+## Provider continuation checkpoint (2026-10-03 15:10 UTC)
+
+All four original required workflows for tooling source `1ccefb336` and the
+separately predeclared controlled 95-case/five-workload run are complete and
+successful. Original artifacts, checkout identities and raw controlled evidence
+are independently verified in the
+[validation ledger](ContentAvailabilityFoundation3L_3Validation.md#current-tooling-and-controlled-capacity-qualification-2026-10-03-1510-utc).
+The frozen native candidate remains `9ae8f68c2`; exact-tooling offline replay
+reproduces the F1 physical PASS below. No fresh physical attempt occurred during
+this continuation. Local32 and real-TLS Node32 remain **NOT MEASURED**; their
+reviewed launchers remain dormant while client RAM is below the existing 8-GiB
+gate (7.781 GiB at 15:09:45 UTC). Final guarded adoption and fresh per-run
+preflights precede any launch. Historical failed runs retain their verdicts.
+
+## Funded-ACK candidate F1 physical Phase 1 passed (2026-10-03 UTC)
+
+**F1 PHYSICAL PHASE 1 — PASS** for execution source
+`9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad`, with pin-only qualifier
+`d4fa8b64f2645a87e798f7a0a858a7d4d4285771`. This fresh run qualifies the
+reserve-funded ACK/retry correction; it does not replace the historical
+October 1 result below. Before execution, exact-source Native CI `37091176350`
+and GNS sanitizer CI `37091175492` passed; original JUnit verifies 95 Windows,
+53 Linux and 10 GNS tests. Both endpoints passed all eight socket-free probe
+self-tests, exact installed-file checks and fresh evidence/control preflights.
+
+Physical run `454bf4f8-c8f2-4c18-9866-1b61218da514` and lifecycle
+`7a48260b-6911-4394-bbb5-65a65e17bac0` completed four actual clients and
+32 maximum-grant waves per peer through unchanged production admission.
+The raw replay establishes 128 complete 524,288-byte grants and two subsequent
+1,258-byte certificates. Four pre-ready bootstrap admissions (5,171, 5,171,
+6,361 and 6,361 B) carry the explicit pre-ready timestamp sentinel; they are
+conserved separately and are not invented qualified F1 certificates.
+
+| Slot | Maximum grants | First-send completion min–max, µs | Maximum running deficit, byte-µs |
+| --- | ---: | ---: | ---: |
+| 1 | 32 | 28,025–28,940 | 7,230,980,096 |
+| 2 | 32 | 28,012–28,846 | 7,012,876,288 |
+| 3 | 32 | 27,980–28,984 | 6,392,119,296 |
+| 4 | 32 | 27,880–28,857 | 5,653,921,792 |
+
+All finite and native latched running certificates pass the unchanged F1
+bounds. There are 32 common four-grant intervals totaling 857,089 µs. The pool
+proof sums the four native all-subinterval certificates: the conservative
+sum of peer maxima is 26,289,897,472 byte-µs, below 72,100,864,000. A directly
+sampled pool maximum is **NOT MEASURED**. Each peer first-sent and ACKed
+16,777,216 campaign bytes. Separately counted retry bytes are 18,328, 25,150,
+29,698 and 44,479; none count as new service. Accepted = retired =
+67,134,444 B, with terminal release, outstanding debt and active grants zero.
+Pending high-water is 2,097,152 B. The designated gameplay producer completed
+80 RPCs and 80 events within the unchanged latency gates.
+
+Both sealed captures contain 68,209 complete frames with zero reported loss.
+Ports 57170–57173 are bidirectional at both endpoints, with exact matching
+opposite-direction counts. The worker ETL is 93,847,552 B, below the independent
+four-client profile's 240-MiB threshold. This does not qualify the different
+Farm32 16-GiB profile. Endpoint, physical coordinator and outer lifecycle
+results all succeed; both endpoints finish IDLE.
+
+The offline replayer initially rejected the canonical preassignment request
+UUIDs because it required every journal envelope to use the assigned lifecycle
+UUID. The correction pairs each request/reply with its endpoint, assigned run,
+canonical workflow schema/hash and subsequent registration; other rows retain
+their run checks. Twenty-one replay tests and 24 final-acceptance tests pass.
+The original physical evidence is unchanged. Independent agent and root replay
+both return `MEASURED_PASS`; no additional physical attempt was performed.
+
+Evidence is retained under
+`C:\Sandbox\Codex\Evidence\physical-qualifier\lifecycle-cfb2fec6b24c5d02`,
+including the hash-verified worker copy. Native CSV SHA-256 is
+`9BD15A23C9A8C408C17DA60B8ED511F37E72BCC86CC64F6289A433585FF5780C`;
+admission CSV SHA-256 is
+`668C2FC83E076C99B82128B9A67C8A367B7AE9C82C813B32FBA45F193614AAAB`.
+The complete replay, input hashes and analyzer provenance are retained at
+`C:\Users\aiden\.codex\artifacts\f1-replay-454bf4f8-v1`; `result.json`
+SHA-256 is `EE58D7894B9122232B494579C4767BAFCE336F80E0C8F30AE3529B21CD90CA1B`.
+
+Owner-verified cleanup restored both installed baselines and removed temporary
+profiles, tickets, keys, scheduled task and daemons. Both rollback checks report
+zero owned processes, lifecycle listeners and UDP 39450 bindings; tunnel cleanup
+passes. The capture service is Running/idle, Packet Monitor and Windows trace
+are stopped, and no filters remain. The restoration receipt is retained in
+`prepared-cfb2fec6b24c5d02\lifecycle\endpoint-restoration.json` under the
+`gargantuan-f1-funded-ack-final-stage-9ae8-d4fa-v2` artifact. The previous stage
+`822b60a9-6d33-40c4-9559-f74dc19c0475` was rejected for an expired readiness
+proof before assignment, capture or probe; it was fully rolled back and retired.
+
+**KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY READY.** Fresh
+Local/real-TLS Node 32-client matrices, their resource/recovery/evidence gates
+and final acceptance remain outstanding. No 3M work or merge is authorized by
+this result.
 
 ## Corrected F1 physical Phase 1 passed (2026-10-01)
 
@@ -2425,3 +4163,198 @@ sockets; both capture services are running and idle. Original evidence remains
 under the existing endpoint evidence parents with this UUID. The failed outer
 receipt remains unchanged. No production/provider run or Foundation 3L PASS is
 claimed by this synthetic infrastructure exercise.
+
+## D03 A7 four-client continuation (2026-10-14)
+
+Native source A7 is `5a2e735c96dd2a7983681a090a4610b90772d368`.
+Qualifier-only B2 is `372cb83cd72bd241ced43feb9865ddf2305b8f97`; its
+closed package SHA256 is
+`67627050dfec9ead90cbaf40f0d454d46f824ee7b2979af1da231304488ca777`.
+These identities remain separate. A7's native32 and hosted CI/package subset
+PASS does not qualify physical delivery or either provider campaign.
+
+Fresh control run `3f1df06a-2e89-4db8-8809-91cb6dad7df9`, lifecycle
+`20009b7c-2e72-4bc4-b0bf-2938f58d5e4d`, passes both actual evidence
+preflights, forward/reverse tunnel proofs and the control-only lifecycle in
+25.1684134s. This is **CONTROL_PREFLIGHT_ONLY**, with no native or capture
+qualification. Its final receipt SHA256 is
+`ea32973333cfc1b5e750fec60247da5a6bab3464ff0462bab47e9578911566ac`.
+The controller independently verifies all99 mirrored files/34366586B.
+
+The first cleanup stop falsely rejected the matching client daemon: PowerShell
+7.6.5 `ConvertFrom-Json` converted its recorded ISO timestamp to `DateTime`,
+so the exact string comparison used a locale representation. Actual PID44784,
+executable, command line and creation timestamp matched the ownership marker.
+The external stop helper now parses only that marker with `-DateKind String`;
+the exact timestamp, PID, image, wrapper, stage hash, port and task checks are
+unchanged. Same timestamp and changed-timestamp regressions pass, and an
+independent review finds no weakened guard. Failed stop/rollback outputs remain
+preserved. Both endpoints subsequently stop and restore their baselines.
+
+Fresh physical run `237be7c6-2c47-42d2-96cc-0f06664116b9`, lifecycle
+`a152c1cd-1205-4df6-9a41-5c583c94fe0d`, remains **FAIL**. Its sole bounded
+attempt exits1 after36.0701401s. Server classification is
+`D-feedback-or-attribution`, `invalid=1`, `floor_failure=0`,
+`native_completion_invalid=0`; clients report the server connection closed.
+The retained legacy deficits do not exceed their old threshold. Four maximum
+grants remain incomplete; their2097152B terminal release after abort is not
+service, ACKed delivery or retirement.
+
+The first invalid witness is original server CSV line5067/data ordinal5066:
+tick510, connection1:1, consumed1472891222935us, no feedback, valid accounting,
+unavailable service, bootstrap accepted6429B and no structural debt. It precedes
+the new maximum grants. Production `ObserveOrdinaryQueue` deliberately emits
+valid accounting observations without a native snapshot; the Phase1 observer
+incorrectly requires every record after demand starts to contain fresh native
+feedback. This is a demonstrated fixture classification defect. The old CSV
+does not record the observation point or native state, so the exact emit site
+and later unavailable cleanup rows are source inferences, not measured labels.
+No scheduling, native-completion or platform failure is attributed by this run.
+
+Strict existing replay rejects the original failed native result. Failed-run
+receipt SHA256 is
+`d6a2737158f1fd540435667baaece6267b4daf3242c0123704024fc1ac05778b`;
+original CSV SHA256 is
+`b17ef17cfbf54d30c9fd86c25b7b693844d0394f646266592e7db96d7040465d`.
+The controller independently verifies111 mirrored files/49897198B, including
+both worker capture formats. Both endpoint baselines and all33 original worker
+files are restored; relevant listeners/UDP, owned tasks/processes and capture
+are clear. A focused fixture correction is pending qualification; it cannot
+reinterpret this failed run as PASS. Local32, real-TLS Node32, physical provider
+parity and final acceptance remain unqualified. KI-006 OPEN; PR6 draft; no3M.
+
+### Focused observer correction awaiting native qualification
+
+The HYBRID-only fixture uses `HYBRID_OBSERVATION_V2`: all bounded raw rows have
+sequential ordinal, existing observation point, native state, counter-validity,
+cleanup phase and fatal owner/D03 flags. A valid null accounting row retains
+acceptance/debt without advancing any native clock, counters or certificate.
+Only genuine fresh connected native observations update the separate native
+history and exact deltas. Every bookkeeping acceptance value must have an exact
+recorded per-peer admission prefix. Missing snapshots cannot certify retirement
+or satisfy the complete bounded campaign.
+
+Only a successfully completed live run with all required native certificates,
+ACK/retirement and zero owned debt can mark the cleanup cut. Later owned close
+rows remain retained; they cannot add service or alter certified totals. Early
+close, terminal release, invalid connected counters, changed timestamps/counters
+and retained D03 failures remain fatal, including the final process exit.
+The37324.3865966796875us native certificate budget and all other D03 constants
+are unchanged. Legacy F1 observer, schema and contract semantics remain strict.
+This changes qualification code only; no provider, admission or runtime-health
+code changes. Python replay30tests and final conjunction50tests pass locally.
+At source3182 freeze the changed native self-test, hosted CI and fresh physical
+attempt were pending. Subsequent preflight, hosted CI/package and native32 pass
+as recorded below; the corrected physical attempt remains unexecuted.
+
+### Corrected source3182: native subset qualified, new physical inputs pinned
+
+Native source `3182a164d5bf87f5051e11ecbd1c749b73c282dc` passes all original
+hosted jobs97/53/97/53/11/11/97/53 and independent CI/package verification,
+receipt `bf7ba58d06e38c8052f0ee628156ea05231398c872f25de341a41a6d9ff39e00`.
+The sole native32 run `3102a9ac-ec36-4190-b690-c827957e3441` has strict
+`MEASURED_SUBSET_PASS`, failures[], conjunction SHA256
+`933d74cb4a547251ef707a49fd4d34aa1d77133d86b23669cb901d294ebb6700`.
+All32 D03 peers, exact2145891493B accepted/first-sent/ACKed/retired,7424 eligible
+fair episodes and all three service/causal recovery cases pass. This does not
+supply physical or final provider qualification.
+
+The later qualifier child pins the measured native probe SHA256
+`2e7f33f1fbeb7198cab1a14091d2dd5ac12a356d72afdaa6e82a7886451e5164`,
+owned source archive
+`68d48757a85c7706578140ebd022691d10dfb3c335e7b1359e0bf3b706266655`
+and source-manifest
+`a180ba7a0bc45e1eee4e7db2b6ebe43a52334c5eead2d9839633a7dba9bccf9d`.
+Five DLLs and twelve runtime assets remain unchanged and independently verified.
+Native source3182 and qualifier child identities remain separate. New pins and
+completed native qualification do not upgrade the A7 physical FAIL or establish
+a new four-client result. Fresh physical execution and strict raw replay remain
+mandatory, then Local32, real-TLS Node32 and final acceptance. KI-006 OPEN.
+
+### Fresh corrected physical execution: completed; nonce-order reader correction
+
+Physical run `a9f5e41e-78f3-414f-a742-3115243a5891`, lifecycle
+`54e292fc-2c3e-4e73-9e43-fd2e67439157`, executes native source3182 with
+qualifier child `24bfd2e0bd46551026a0a64f7ab9f88b986cfaea`. Its sole bounded
+attempt exits0 in94.2239142s; native V2 replay passes128 maximum grants over
+32 waves, with32961 raw observations/live cut32957. Each peer first-sends and
+ACKs16777216B of demanded maximum grants. Overall accepted=retired67134512B,
+including25648B bootstrap; terminal/outstanding/open0. This native subset alone
+does not establish the full physical result.
+
+Original full replay rejects at the client nonce-array comparison. Client
+launch order is305196775,305196776,305196777,305196778; GNS slot order is
+305196776,305196775,305196777,305196778. The same four unique identities and
+producer305196775 agree; source promises no ordering equality across independently
+assigned connections. The original rejection receipt remains unchanged, SHA256
+`286548d725ef4e1c2aba57780d32e3453f340453d222570fae8d911383b9a5af`.
+The smallest offline correction requires exactly four unique integer identities
+with the same set, retaining full native slot/generation and per-nonce producer,
+CSV/log, gameplay and lifecycle bindings. Thirty-two replay tests and independent
+source review pass, including reordered positive and malformed/duplicate/missing/
+foreign-identity negatives. Legacy F1 timing semantics remain unchanged.
+Corrected whole replay is pending at this analyzer commit; no native retry is
+needed or authorized to correct a reader-only ordering premise.
+
+All111 worker originals/raw members215508851B are mirrored with exact inventory,
+size and hash closure, index
+`2561f13c81b6c1521ce53efa53bd4d25d00259a57ffceddb8b37bd62f4754b3b`.
+Both endpoint baselines and all33 worker original files are restored; owned
+daemons, tunnels, native processes, listeners and capture are idle. The rejected
+backup-path invocation and stale helper source-manifest pin stop before worker
+mutation are retained separately; the latter changes exactly one external hash
+6936→a180, with independent review and all ownership guards preserved.
+Current full32 client RAM5691133952B at05:11:17Z is below8589934592B required.
+Local32, real-TLS Node32 and final acceptance remain open; KI-006 OPEN; PR6 draft.
+
+### Corrected whole four-client PASS and resource closeout
+
+Clean offline analyzer `dd39472182d59715be40503f7f028aae71c59653` replays the
+SAME original run `a9f5e41e-78f3-414f-a742-3115243a5891` once, returning full
+**MEASURED_PASS**, result SHA256
+`da7b1b93a985bc1c06432efe1b5aca5e845174e34687fbb02c2f1a53d76259da`.
+Root independently repeats the read-only whole conjunction and matches that
+result exactly. Actual controlling-host completion is
+`2026-10-14T05:08:28.676000+00:00`; clock domain CONTROLLING_HOST_UTC.
+Native source3182 and endpoint qualifier24bfd are not relabeled as analyzer C.
+The original nonce-order reader rejection286548 and all failed invocation
+outputs remain immutable. No native or physical retry follows the reader fix.
+
+All128 maximum grants over32 waves complete with exact native first-send/ACK/
+retirement certificates; largest activation-to-native completion28.962ms is
+below37.324386ms. Overall accepted=retired67134512B, terminal/debt/open0.
+Producer305196775 completes80 RPC and80 Event samples; the other three retain
+their qualified nonproducer roles. Full source/archive/runtime, CSV, gameplay,
+capture, tunnel, endpoint/coordinator, lifecycle and cleanup checks pass. Client
+capture66120 packets and worker66202 packets contain four matching bidirectional
+tuples; per-tuple native directions agree, full frames and zero recorded loss
+are required. Counts need not equal because unmarked captured frames differ.
+Root independently hash-checks all111 mirrored originals215508851B against
+index2561f13c, including the preserved rejected reader receipt.
+
+Both qualifier24bfd and analyzerdd394 original six-job hosted regressions pass
+97/53/97/53/11/11; Root verifies original ZIP/log/JUnit/contract and actual tree
+joins. Qualifier receipt SHA256
+`e559dc8d16fa061ca5cbc0e95b5cdcd655b254ee2d53bae6704e65f9e7b5037d`;
+analyzer receipt
+`2b045145d53837f7509ff8409fed619fc8375eba8ade5749635a88b8c99ddc12`.
+Root checkout-review pins areed652fe64a4662c146f72dc016be9ab0fc982117e0df4cb354152cab8af4f3f6
+and0c2836953cce8ba78ac9e0e71fd11b878ae3b9904b939212a086ed1475c169e5.
+Earlier bounded GET network timeouts are preserved separately from successful
+original attempt1 outcomes. No later run substitutes for an original attempt.
+
+At20:57:26UTC client RAM4235452416B (3.94GiB) is below8GiB8589934592B.
+At20:59:26UTC worker RAM21814652928B passes, but disk29550948352B (27.52GiB)
+is below the unchanged Farm32 capture reserve34GiB36507222016B, short6.48GiB.
+The worker floor is `PktMonFarm32Capture.ps1`'s34GB reserve, not the smaller
+Phase1 capture profile. The bounded read-only disk audit finds no safely
+deletable set of that size with established complete controller custody. All33
+baseline worker files, workflows/policies/catalogs, keys/profiles and ports are
+freshly reverified restored/absent; capture remains idle. User applications,
+build caches and unverified evidence are untouched.
+
+**External headroom is required before Local32.** Then canonical Local32,
+real-TLS Node32, provider parity, resources/backpressure/recovery and final
+independent acceptance must complete on the same native source/package. This
+four-client PASS does not establish those gates. KI-006 OPEN; Foundation3L
+NOT_COMPLETE; PR6 draft; no3M, release or automatic merge.

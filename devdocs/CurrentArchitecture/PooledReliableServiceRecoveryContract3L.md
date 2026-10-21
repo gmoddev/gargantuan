@@ -21,6 +21,27 @@ causal semantic coverage, and exact accepted live obligations.** Implementation
 and qualification of this amendment are in progress; this decision alone does
 not qualify the provider campaign.
 
+The native-egress cessation capture preserves the original cessation time,
+detached source reference and accepted-debt identity. Before resolving native
+feedback it captures all Main-owned source/grant fields. A private resolved
+feedback query waits only for already-owned native tickets, reconciles their real
+results and bounded receive journal under the existing GNS ownership locks, then
+copies complete native counters. All peers share one absolute deadline at
+cessation plus the existing feedback-freshness limit. The query never cancels a
+send, fences the worker domain or changes a service clock. Source, pending-token
+identity and accepted debt must be unchanged after the wait. Timeout, invalid
+feedback, changed identity or expiry during final source revalidation produces
+NOT_MEASURED.
+
+The actual native baseline may complete after cessation. Recovery causal V2
+records that completion time separately from the immutable source/debt cut;
+offline replay rejects earlier causal events and cannot backdate initial
+convergence to cessation. The entire capture/wait remains included in F1 and
+recovery elapsed time and supplies no extra service allowance. Retained V1
+evidence keeps its original interpretation in standalone replay. A new farm
+qualification requires V2 and exact equality between its native-baseline header
+and the server's `quote_capture.native_baseline_us` field.
+
 The cessation snapshot answers what is necessary under the state known at
 cessation. It cannot predict subsequent relevance Enter/Leave transitions.
 Relevance is derived from current spatial/semantic state and may change without
@@ -131,9 +152,22 @@ measured server step. A worker-only diagnostic at `1f4ba2cfb` measured 72–94 m
 reference advances alongside 62–85 ms live Session steps. Limiting replay to
 one frame per step bounded frame count, not its interference with service.
 
-Capture remains on Main. One joined, cancellable oracle worker exclusively
-owns the detached coordinator, frozen journal/catalog and captured immutable
-schema. It publishes a bounded queue of frame identities, exact bytes, cursors,
+Capture remains on Main at the original cessation timestamp. Main retains the
+detached immutable reference while observing the live finite causal prefix; it
+does not replay that reference concurrently with measured drain. The causal
+verifier establishes prefix convergence from the captured fence, accepted cut
+and exact retirement independently of reference frames. Record that live
+convergence timestamp first, then start one joined, cancellable oracle worker.
+Compare the recorded timestamp against the unchanged bound computed from the
+original captured reference. Late quote completion cannot extend that bound.
+Missing live convergence or reference completion cannot produce PASS; the
+existing finite campaign runtime and tick limits still fail closed. This avoids
+unnecessary observer computation during provider measurement without excusing
+slow production or discarding any acceptance fact.
+
+Once started, the oracle exclusively owns the detached coordinator, frozen
+journal/catalog and captured immutable schema. It publishes a bounded queue
+of frame identities, exact bytes, cursors,
 timing and terminal status; it owns no live Session, payload queue, evidence
 writer or Main observer. Main consumes bounded metadata without waiting for
 encoding. Schema replacement cannot change the captured reference. Cancellation
@@ -478,6 +512,16 @@ journal globally for the sake of one peer.
 The revised convergence contract keeps the accepted fairness model unchanged:
 finite rotating peer service, one grant per peer, four active grants, large-waiter
 earmark, generation-safe cleanup and no small-vs-large starvation.
+
+GameSession checks the age of its actual native envelope before initial
+structural eligibility as well as after lengthy encoding. If earlier peer work
+has aged the envelope, it queries native feedback again and applies the same
+generation/counter validation, exact token retirement and ordinary funding
+checks. It never retimestamps cached feedback or relaxes the 50-ms limit.
+Missing feedback still defers admission; invalid or terminal evidence follows
+the existing failure path. A peer that submitted a structural group in this
+step retains its grant until the next step, preserving lifecycle ordering and
+the existing one-group-per-peer step behavior.
 
 A large retained backlog does not create a new priority class. Existing 3J policy
 already alternates materialization transitions and journal work, keeps critical

@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-13
+last_verified: 2026-10-21
 related_code:
   - include/gargantuan/network/GameNetworkingSocketsTransport.hpp
   - src/network/GameNetworkingSocketsTransport.cpp
@@ -16,7 +16,77 @@ related_adrs:
 
 # Real game transport
 
+## Current D03 non-real-time contract (2026-10-20)
+
+`PooledServiceNonRealtime()` / Server `POOLED_SERVICE` select
+`POOLED_CORRECTNESS_V1`, with separate native capacity and exact ACK retention.
+The supported Server composition uses one exclusive native-worker domain and
+actual DATA arbitration; standard native flags are still explicit constructor
+state. `PooledService(false)` / Server `POOLED_SERVICE_LEGACY_V1` retain the old
+strict profile as a safe fallback. A latency-compatibility requirement rejects
+the non-real-time profile. No client preference or handshake grants this policy.
+
+Timing flags and maxima remain observable, but elapsed time alone cannot make
+the new ledger unhealthy, deny future eligible service or forgive ownership.
+Counter, chronology, generation, reference, FIFO and resource violations remain
+fatal. Native completion returns only execution capacity; ACK/verified terminal
+purge returns retention. Existing21/3-MiB/s nested DATA allocation and bounded
+class/request rotation preserve algorithmic service under continuing execution.
+The100/150ms,37.3243865966796875ms and50ms values remain diagnostic targets.
+
+The existing packaged session test composes worker/arbitration in distinct
+Server/Player processes; shared-process workload adapters retain their compatibility
+topology. Physical Farm mode requires the explicit legacy profile because its
+readers retain historical strict identities. New core acceptance cannot certify
+physical or Node32 deployment behavior. See [D03](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md#final-adoption--2026-10-20-non-real-time-correctness-contract).
+Core correctness is qualified on execution sourceb420a7fd1 by Windows97/97,
+Linux53/53, GNS11/11 and all five Release workloads. The
+[final receipt](../../tests/Foundation3LCoreAcceptance20261021.json) closes
+KI-006/core3L under this scope. Physical/provider certification remains deferred;
+the later offline reader and closure records are not relabeled native executions.
+
+The following candidate checkpoints describe their original pre-adoption scope.
+
+## Unqualified capacity/ACK candidate (2026-10-20)
+
+The Main-owned production admission/feedback code has an explicit native opt-in
+for four send leases independent of exact per-peer ACK retention, with a 32G
+retained ceiling. It is disabled by the standard profile and reports not latency
+compatible. A second default-off `EnableNativeDataArbitration` flag selects
+protected unique ordinary DATA separately from positive retained retries inside
+the existing pinned SNP collector. It requires the exclusive worker domain and
+single native lane. The residual24-MiB/s wire allocation becomes21MiB/s protected
+and3MiB/s retained/bulk beneath the unchanged24-MiB/s parent and its one-packet
+burst, with bounded ready-flow FIFOs and a seven-protected-packet retry
+opportunity quantum. Pending/native-rate-blocked requests suspend without losing
+age, so they cannot own another peer's ready turn. Serialized control-only packets
+refund DATA reservations before native queueing. Packet/nonce, ACK and reliable reference ownership
+remain with GNS; all positive native bytes are charged, including partial
+results that cannot receive unique service credit. The original shared-bucket
+66646-us counterexample remains historical. Split-bucket allocation feasibility
+alone does not qualify native execution or activate capacity separation. See the
+[D03 implementation checkpoint](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md#capacity-separation-implementation-checkpoint--2026-10-20-partial--blocked).
+No V2 runtime or physical qualification is claimed by the focused tests.
+
 ## Foundation 3L finite-grant delivery
+
+The current coordinated health contract is
+[D03 / HYBRID_F1_V1](../../docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md).
+It preserves native-positive truth, exact generation/token retirement and
+bounded protected ordinary completion while retaining the legacy F1 curves as
+diagnostics. Qualification remains pending. Ready pooled server policy and an
+explicit trusted client declaration classify the existing combined ordinary
+source envelope independently of optional publication observers. Acceptance
+metadata remains on the existing scheduler/native message; positive unique
+BODY completion and a complete pending-result frontier drive runtime health.
+Seven non-owning per-origin native lists add no payload queue or scheduler.
+Diagnostic table overflow cannot invalidate production byte accounting or
+change runtime protection membership. Hard protection breaches remain sticky
+for the connection lifetime. Native metadata footprint is covered by resource
+qualification rather than claimed unchanged.
+
+The following finite-grant experiment describes the prior D01 mechanism and
+its historical qualification. D03 supersedes its hard timing/health conjunction.
 
 The [F1 amendment](../../docs/adr/D01-pooled-service-curve.md) governs the current
 token-bearing POOLED_SERVICE path. It uses reliable ordered NoNagle for unique
@@ -37,8 +107,9 @@ credits failed sends nor fabricates delivery. The bounded native observer is
 opt-in for qualification; normal connections do not allocate its event buffer.
 
 The source-derived request/response and periodic-control funding proof is in
-D01. F1, credit/fairness, pending/debt, four ACK-owned slots, and C3/C5 recovery
-deadlines are unchanged. Hosted CI and fresh physical recovery qualification
+D01. Credit, pending/debt, four ACK-owned slots and independent C3/C5 recovery
+deadlines remain intact; D03 explicitly amends hard completion and fairness.
+Hosted CI and fresh physical recovery qualification
 remain separate from the native prototype results. Historical deployment
 captures below describe their original revisions, not this delivery policy.
 
@@ -235,11 +306,50 @@ and compatibility design. See the
 
 ### Main-thread and backend ownership
 
-The adapter creates no Gargantuan worker thread. GNS may use its own internal
-service thread for transport mechanics. Gargantuan lifecycle callbacks are run
+The default adapter uses GNS's internal service thread for transport mechanics.
+The Windows opt-in native-egress candidate additionally owns four OS-only
+workers and 64 fixed tickets inside one exclusive pooled process domain.
+Workers copy datagrams and publish native results; SNP retains all protocol
+ownership and permits one unresolved numbered packet per peer. Ready results
+receive bounded actor checkpoints before socket draining, between receive
+callbacks and after thinker callbacks. The actor reconciles the native outcome
+and replays ordered receive feedback before preparing another packet. A busy
+connection lock is skipped and receives an ASAP thinker request; earlier
+deadlines and KI-008's fixed thinker eligibility cutoff remain intact. The
+[ownership decision](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#12-bounded-actor-reconciliation-investigation-2026-10-11)
+records bounds and outstanding capacity qualification. Gargantuan lifecycle callbacks are run
 only when `PollEvents` calls GNS `RunCallbacks`, and application code receives
 only copied `TransportEvent` values through caller-owned output storage. No
 DataModel mutation, Luau callback, or scheduler action occurs in a GNS callback.
+
+The existing opt-in Farm service-timing observer can retain a bounded private
+initial-service trace in the native worker path: one active and one completed
+value per peer, copied into existing feedback and the bounded first-failed
+witness. It joins original activation, adapter/native API boundaries, initial
+SNP entry, packet preparation and actual worker/OS timestamps by token/message.
+Two QPC phases observe native Send connection-lock acquisition and payload copy.
+The observer owner outlives native joins; disabled tracing adds no clock reads,
+and no diagnostic value changes F1 or protocol decisions. Full callback observer
+cost is unmeasured, so these traces cannot qualify capacity. The
+[initial-service assessment](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#15-initial-service-causal-investigation-2026-10-11)
+records the bounded diagnostic's non-reproduction of the delayed initial witness
+and the remaining execution-boundary decision.
+
+The final `GARGANTUAN_FARM_SERVICE_TIMING=initial` diagnostic mode retains
+zero-first-send breaches separately from general running failures. Its pure
+predicate uses the canonical finite intercept: elapsed µs times 16,777,216
+strictly exceeds 101,911,296,000 byte-µs. The first integer-clock breach is
+6,075 µs, independent of grant size. A valid first native-positive event invokes
+the existing borrowed observer during actor reconciliation, before remaining
+grant drain can overwrite the pre-event history. An atomic once claim owns the
+freeze fields; they are read only after native joins. The actual native event
+and later observer clock remain distinct. Main retains the completed initial
+witness independently, with unchanged F1 verdicts and chronology validation.
+This mode suppresses individual thinker callbacks and post-first-send sender
+spans before QPC capture, while keeping aggregate wait/receive/thinker and API
+lock/copy spans. Existing local SNP eligibility and the first prior packet's
+immutable worker result supplement the stage chain. Eligibility is a requested
+data deadline, not proof of actor dispatch; total observer cost remains unmeasured.
 
 GNS global initialization, callback routing, adapter lifetime, and public adapter
 operations are serialized by one recursive mutex. Registries are removed before

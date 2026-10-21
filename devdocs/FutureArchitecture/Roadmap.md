@@ -11,6 +11,13 @@ defect throughput.
 
 ## Review status — 2026-09-12
 
+**Foundation3L update — 2026-10-21:** the
+[core acceptance receipt](../../tests/Foundation3LFinalAcceptance.md#current-core-contract--2026-10-20)
+qualifies `POOLED_CORRECTNESS_V1` atb420a7fd1 on draftPR6. KI-006 CLOSED;
+core3L COMPLETE. Physical/provider deployment and performance certification
+remain deferred. This update does not certify another subsystem, merge, release
+or authorize3M. Older reviewed-revision statements retain their original scope.
+
 Reviewed across main, Node, MCP, Telemetry, and Studio; see the
 [revision/evidence ledger](RoadmapEvidence20260912.md) and the
 [feature checklist](../../docs/src/content/docs/developing/roadmap.mdx).
@@ -23,7 +30,7 @@ this documentation review, and the runtime suites were not rerun.
 | 0 | Partial; build, security and test foundations exist | Full finding closure/release blocks, complete configuration/tooling matrix and clean-machine safety qualification. |
 | 1 | Partial; identity/schema/journal/capabilities/persistence are implemented | Broader migrations, API conformance and end-to-end quota/lifecycle qualification. |
 | 2 | Partial; input, audio/animation, retained GUI, assets, Lighting/Sky and Windows packaging exist | Mesh collision, rendering breadth/performance and every minimum-game acceptance gate. |
-| 3 | Partial; packaged authoritative networking through 3K and the 3L lifecycle exist | 3L correctness/service/resource qualification and authenticated admission before public hosting. |
+| 3 | Foundation3L core correctness qualified on draftPR6 | Deferred physical/provider deployment certification; authenticated admission before public hosting; broader release qualification. |
 | 4 | Partial; native Studio shell, docking, source editing/history, local Play and MCP exist | Two-way source sync, advanced authoring/language tooling, multi-client orchestration and plugin trust. |
 | 5 | Partial; Node and telemetry foundations exist | Durable backend storage, creator distribution, public operations, signing/provenance and external-creator qualification. |
 | 6 | Future, demand-led | Default-space 3M precedes semantic regions/topology; other expansion requires its own measured gates. |
@@ -49,8 +56,8 @@ acceptance evidence. Blocked, deferred, and superseded describe planning state.
 | Node | Foundation implemented | Not assessed here | Durable storage, public gameplay admission and production operations remain. |
 | Telemetry | Foundation implemented | Not assessed here | Optional library and host integration exist; ABI/release operations and any new data collection need separate qualification. |
 | Foundations 3G / 3H / 3K | Documented slices implemented | Not reassessed here | Retain each milestone's existing scoped evidence; no blanket current-revision or public-hosting qualification claim. |
-| Foundation 3L | Substantially implemented; numeric gameplay contract and canonical fixtures exist | Partially qualified; scoped single-peer, official upper-RPC and corrected 32-peer overload/recovery evidence | Complete gameplay/client and production journal guarantees, scale/physics and current-source security remain. |
-| Foundation 3M | Planned | Not yet qualified | **Blocked on 3L closure.** Trusted residency demand policy only. |
+| Foundation 3L | Core implemented on draftPR6 | Core correctness qualified atb420a7fd1; KI-006 CLOSED | Physical Local32/real-TLS Node32, deployment resources/performance and release certification deferred; not merged/released. |
+| Foundation 3M | Planned | Not started or qualified | Separate authorization required. Trusted residency demand policy only. |
 | ECS semantic migration | Superseded | Not applicable | Retain DataModel/Instance authority and subsystem-owned derived stores. |
 | ScriptSecurity privilege enum | Superseded | Not applicable | Domains remain separate from host-granted capabilities. |
 | Ribbon/plugin-first Studio plan | Superseded | Not applicable | First-party tools use the existing shell/panels; plugin support is additive. |
@@ -71,7 +78,7 @@ proposal is non-normative design input. Priorities are scoped per track.
 
 - [ ] Architecture 0A–0C: machine-readable dependency extraction, declared allowed/forbidden edges, reporting, then CI enforcement.
 - [ ] **Partial — Architecture 0D/0E:** ~~separate GNS adapter and packaged host targets~~; graph-backed transitive-boundary tightening, neutral protocol/publication extraction, then progressive isolation.
-- [ ] Close Foundation 3L before starting 3M. The [current validation ledger](../CurrentArchitecture/ContentAvailabilityFoundation3L_3Validation.md) records **partially ready; no 3M**, despite the closed GNS sanitizer gate.
+- [x] Close Foundation3L core under the revised D03 contract. The [current receipt](../../tests/Foundation3LCoreAcceptance20261021.json) records all mandatory core gates PASS; physical/provider certification is deferred. No3M work is authorized by this closure.
 - [ ] Foundation 3M: bounded trusted demand policy with semantic priority, deadlines, deterministic distance/cost ties, hysteresis, bounded lookahead and revision-stamped request/release deltas into 3L.
 - [ ] **P0 before untrusted public hosting:** signed short-lived server/session-bound join grants and bounded admission before Player/Character, relevance/materialization, Remote, pin or gameplay-capability allocation; GSES retains compatibility validation.
 - [ ] **Partial:** ~~existing planning/selection/transport budgets~~; finite per-stage service/resource envelopes through discovery, encoding, backend service, client application and cleanup/recovery, including overload and fairness.

@@ -33,9 +33,19 @@ them. An accepted ADR may lead implementation, so it is not evidence that every
 described facility already exists.
 
 The Foundation 3L [D01 pooled service-curve decision](../adr/D01-pooled-service-curve.md)
-starts the canonical `docs/adr/` series. Its F1 amendment governs finite
+starts the canonical `docs/adr/` series. Its historical F1 amendment governed finite
 accepted-grant drain capacity and supersedes D01's earlier cross-grant
 deficit and the short-window POOLED_SERVICE health/qualification models.
+The [D02 product-contract review](../adr/D02-pooled-service-product-contract-review.md)
+preserves the reviewed proposal and its deterministic capacity failures.
+The accepted [D03 hybrid service and permit ownership decision](../adr/D03-hybrid-pooled-service-and-permit-ownership.md)
+is the current D01 amendment. Its final `POOLED_CORRECTNESS_V1` revision keeps
+exact ownership, native-positive attribution, FIFO, bounded resources,
+algorithmic fairness and causal recovery mandatory. Elapsed service, gameplay,
+turnover and recovery targets remain measured nonfatal diagnostics. Funding is
+separate from delivered capacity. Core correctness qualification and deferred
+physical/provider certification have separate acceptance scopes; historical
+failures retain their original contracts and verdicts.
 Other documents explicitly
 labeled accepted design direction, including the game networking architecture,
 retain ADR-like authority until migrated into that series.

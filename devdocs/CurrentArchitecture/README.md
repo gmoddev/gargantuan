@@ -1,5 +1,11 @@
 # Current architecture
 
+- [Foundation3L core acceptance](../../tests/Foundation3LFinalAcceptance.md#current-core-contract--2026-10-20)
+  records the2026-10-21 `POOLED_CORRECTNESS_V1` PASS on draftPR6, exact source
+  and analyzer receipts, KI-006 CLOSED and core3L COMPLETE. Physical Local32,
+  real-TLS Node32 and deployment/resource/performance certification remain
+  deferred. Earlier3L reports below retain their original scoped verdicts.
+
 - [Physical agent coordination ownership and migration](PhysicalAgentCoordination.md)
   records the pinned GantriaEngine library, local Gargantuan adapter, validation
   scope and preservation of installed physical-PC tooling.

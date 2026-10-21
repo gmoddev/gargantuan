@@ -6,6 +6,23 @@ last_verified: 2026-09-13
 
 # Foundation 3L client and scale qualification
 
+## Current-source checkpoint — 2026-10-13
+
+Execution candidate `e792482e8a9f326bb0f2861576e87e163d0c7537` is not
+qualification-complete. Focused deterministic and affected native preflights
+pass, but mandatory original manual CI `38346195711` fails the retained raw
+four-grant running-service gate. Its official package is unqualified. One
+bounded diagnostic does not reproduce the failure and does not supersede it.
+Source restoration and owned-process/port cleanup are verified.
+
+Retained b65 native32 subsets pass D03 Main/turnover, ordinary service,
+conservation, fairness and server-only convergence; the full b65 run remains
+FAIL. No e792 native32, current-source four-client, Local32, real-TLS Node32,
+provider-parity or final acceptance PASS is claimed. Historical matrices below
+retain their original source and scope. KI-006 stays OPEN, PR6 stays draft and
+Foundation3L stays B — PARTIALLY READY. See
+[the final attribution assessment](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#21-final-required-raw-service-attribution-and-qualification-boundary-2026-10-13).
+
 **B — FOUNDATION 3L PARTIALLY READY.** The qualified 32- and 200-protocol-peer
 Local/Node workload passes recipient service, gameplay budgets and lifecycle
 checks. This narrows KI-006; it does not qualify physical 200/500 clients or
@@ -315,7 +332,7 @@ Existing inactive runtime taps remain no-ops without a scoped test sink.
 | --- | --- |
 | T0 | Start of the existing authoritative due tick, joined from `CharacterNextDue` and `FrameBegin`; not an invented continuous-wall deadline |
 | Root request / commit | Existing Animator request and successful Main-thread admission, with matching Engine tick |
-| T1 | `StateBuilt`: generation-safe authoritative snapshot constructed |
+| T1 | `StateBuilt`: generation-safe, compact-encodable authoritative snapshot constructed |
 | T2 | `CharacterSnapshot` / `CharacterProduced`: cached snapshot and selected recipient frame ready |
 | T3 | New structural dependency **not applicable** to these already-materialized Character endpoints; both frames use materialization epoch 11 |
 | T4 | Existing scheduler accepts the GCHR frame; this is not a new 3J structural acceptance or reliable-credit charge |
@@ -329,6 +346,43 @@ facts, not a live replicated Character transform. The separate real client's
 unreliable sequenced Character frames, reliable byte admission is **not
 applicable**. An observer does not acquire a live-application timestamp merely
 because it decoded a message.
+
+The 2026-10-13 rejected-build diagnostic correction preserves this successful
+snapshot boundary. Compact-invalid candidates retain the existing protocol
+rejection, sequence and due/requeue behavior but do not emit `StateBuilt`.
+Repeated rejected attempts are not unique completed snapshots. Inactive
+diagnostics add no extra compact-validation work. Historical trace failures
+remain unchanged; this clarification does not infer the actual rejected field
+in native32 run `9196af39-8da8-4200-95da-a07e604a92a2`.
+
+The farm-only additive stage28 `RpcNativeReceive` uses the unchanged80-byte
+record and existing retention caps. It observes fixed-header RPC requests,
+responses and request errors after GNS dequeue, before adapter decoding/enqueue.
+It changes no GRMT/GCHR wire, source membership or production health predicate.
+Older evidence keeps its original source/parser pins. Updated readers accept
+legacy stages and strictly validate stage28; older pinned readers can reject
+new28 records and are not silently substituted in historical results.
+
+| Stage28 field | Meaning |
+| --- | --- |
+| Nanoseconds | Steady timestamp after GNS dequeue and fixed header selection |
+| Tick | GNS-local age in microseconds since a complete ordered message became receivable |
+| Sequence / Object / Connection | Exact RPC request, full RemoteId and ConnectionId |
+| DueTick | All adapter events pending before enqueueing this message |
+| ControlEpoch | Remote message kind: request, response or request error |
+| MaterializationEpoch | Positive GNS message number |
+| FrameSequence | Steady timestamp after sampling GNS-local age |
+| ServiceBytes | Dequeued RPC payload bytes |
+
+The two steady timestamps bracket the age sample; their difference is measured
+sampling uncertainty, not permission to assume overall observer overhead zero.
+An invalid signed age, regressing bracket, identity, protocol header or depth
+invalidates diagnostic evidence. The fixed header is validated without retaining
+arguments. Inactive or unselected sinks read no extra clocks. Age starts after
+complete ordered reassembly; it is neither first UDP arrival nor sender native
+first-send. Adapter queue depth includes non-RPC events. Cross-host sender to
+receiver latency still requires the existing clock qualification; same-process
+receive-to-dispatch uses local steady time.
 
 ### Worst Local and Node state joins
 
