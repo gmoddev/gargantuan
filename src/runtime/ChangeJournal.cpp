@@ -136,6 +136,15 @@ namespace gargantuan {
 		return {scope, found == Streams.end() ? 1 : found->second.NextSequence};
 	}
 
+	ChangeRetentionWindow ChangeJournal::GetRetentionWindow(ObjectId Scope) const {
+		std::scoped_lock Lock(Mutex);
+		const auto Found = Streams.find(Scope);
+		if (Found == Streams.end()) return {1, 1, 0, Capacity};
+		const auto &Stream = Found->second;
+		return {Stream.Records.empty() ? Stream.NextSequence : Stream.Records.front().Sequence,
+			Stream.NextSequence, Stream.Records.size(), Capacity};
+	}
+
 	ChangeReadResult ChangeJournal::Read(ChangeCursor Cursor, std::size_t MaximumRecords) const {
 		std::scoped_lock Lock(Mutex);
 		ChangeReadResult Result{.Cursor = Cursor};

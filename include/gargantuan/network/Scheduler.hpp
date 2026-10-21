@@ -101,6 +101,9 @@ namespace gargantuan::network {
 
 		bool RegisterConnection(ConnectionId Connection, const NetworkLimits &Limits) override;
 		SchedulerSubmitResult Submit(NetworkMessageIntent Intent) override;
+		// Stamp the already accepted structural obligation immediately after its
+		// byte-admission commit, before any transport flush can submit it.
+		bool ActivateReliableGrant(ConnectionId Connection, std::uint64_t Token, std::uint64_t Time);
 		SchedulerFlushResult Flush(ConnectionId Connection, SchedulerTickBudget Budget) override;
 		bool CancelConnection(ConnectionId Connection) override;
 		[[nodiscard]] std::optional<SchedulerStatistics> GetStatistics(ConnectionId Connection) const override;

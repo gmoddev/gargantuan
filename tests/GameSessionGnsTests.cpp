@@ -230,7 +230,9 @@ end)
 	if (!Server) return 1;
 
 	auto ClientTransport = std::make_shared<GameNetworkingSocketsTransport>();
-	GameSession Client(ClientTransport, Configuration(GameSessionRole::Client, Port, false));
+	auto ClientConfiguration = Configuration(GameSessionRole::Client, Port, false);
+	ClientConfiguration.ClientNonce = 0x32f1a69u;
+	GameSession Client(ClientTransport, ClientConfiguration);
 	Check(Client.Start().Succeeded(), "real GNS GameSession client starts");
 
 	std::unique_ptr<HeadlessRenderer> ClientRenderer;
@@ -270,6 +272,12 @@ end)
 	Check(
 		Server->GetMetrics().ReadyPeers == 1 && Client.GetStatus() == GameSessionStatus::Ready,
 		"real GNS completes accepted peer, trusted LocalPlayer, and gameplay-ready phases"
+	);
+	const auto PeerIdentities = Server->GetPeerIdentities();
+	Check(PeerIdentities.size() == 1 && PeerIdentities.front().Ready &&
+		PeerIdentities.front().Nonce == ClientConfiguration.ClientNonce &&
+		PeerIdentities.front().PlayerId != 0 && PeerIdentities.front().SessionEpoch != 0,
+		"real GNS exposes the run-scoped client nonce and accepted ready Player identity"
 	);
 	if (Profiled) {
 		const auto Metrics = Server->GetMetrics();

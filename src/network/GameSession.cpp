@@ -4,6 +4,7 @@
 #include "SessionSendAllowance.hpp"
 #include "ReliableByteAdmission.hpp"
 #include "PooledReliableServiceFeedback.hpp"
+#include "PooledServiceDiagnostics.hpp"
 
 #include "GameSessionTestAccess.hpp"
 
@@ -1472,8 +1473,18 @@ namespace gargantuan::network {
 							if (!Accepted) {
 								FailSession({DisconnectReason::ResourceExhaustion, "Pooled acceptance accounting unavailable"}); return;
 							}
+							const auto ObservedNow = ServiceTime();
 							const auto Result = Peers.at(Connection).ReliableFeedback.Observe(Connection, *Accepted, Sample,
-								ServiceTime(), ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+								ObservedNow, ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+							if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Record)
+								Sink->Record(Sink->Context, detail::PooledServiceRecord{
+									.Connection = Connection, .SimulationTick = SimulationTick,
+									.NowMicroseconds = ObservedNow,
+									.DebtToken = ByteAdmission->DebtToken(Connection),
+									.DebtBytes = ByteAdmission->Debt(Connection),
+									.StructuralJournalLag = Replication->GetJournalLag(Connection),
+									.Accepted = *Accepted, .Feedback = Sample, .Result = Result,
+									.Admission = ByteAdmission->GetMetrics()});
 							if (!Result.Valid || (Result.RetiredBytes &&
 								!ByteAdmission->Retire(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
 								PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
@@ -1565,10 +1576,13 @@ namespace gargantuan::network {
 									Result.ObservedAtMicroseconds, Result.Qualified, Result.Available, PeerValue.ReliableFeedback.OrdinaryDebt});
 							}
 							if (IsPooled()) (void)ByteAdmission->Allowance(Connection, ServiceTime());
+							if (IsPooled()) ByteAdmission->ObserveExactDemand(Connection,
+								Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes, ServiceTime(), Produced.DiagnosticFingerprint);
 							Receipt = ByteAdmission->Reserve(Connection, Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes);
 							if (!Receipt) {
 								if (IsPooled() && Replication->DiscardSchedulerPreparation(Connection, Produced.Frame->Sequence).Succeeded()) {
-									ByteAdmission->DeferSize(Connection, Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes);
+									ByteAdmission->DeferSize(Connection, Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes,
+										Produced.DiagnosticFingerprint);
 									PeerValue.ByteDeferredThisStep = true;
 									PeerValue.StructuralTransitionsConsumedThisStep += Produced.SelectedTransitions;
 									GlobalConsumed += Produced.SelectedTransitions;
@@ -1597,9 +1611,17 @@ namespace gargantuan::network {
 							);
 							return false;
 						}
+						// The scheduler has accepted the exact grant, but has not sent it.
+						// Preparation and a rolled-back reservation are not F1 drain time.
+						const auto GrantActivatedAt = IsPooled() && Receipt && PeerValue.Phase == PeerPhase::Ready
+							? ServiceTime() : std::numeric_limits<std::uint64_t>::max();
 						// Once queued, bytes are charged even if a later semantic invariant
 						// terminates the peer. Do not refund already accepted traffic.
-						if (Receipt && !ByteAdmission->Commit(*Receipt)) {
+						const bool OfferPublished = !Receipt || !IsPooled() || PeerValue.Phase != PeerPhase::Ready ||
+							PeerValue.ReliableFeedback.PublishOffer(Receipt->Token, Receipt->Bytes, GrantActivatedAt);
+						if (Receipt && (!ByteAdmission->Commit(*Receipt, GrantActivatedAt) ||
+							(IsPooled() && !Scheduler.ActivateReliableGrant(Connection, Receipt->Token, GrantActivatedAt)) ||
+							!OfferPublished)) {
 							PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ResourceExhaustion,
 								"Reliable byte reservation commit failed"});
 							return false;
@@ -1627,6 +1649,16 @@ namespace gargantuan::network {
 						}
 						PeerValue.StructuralSubmittedThisStep = true;
 						LastServicedConnection = Connection;
+						// An accepted F1 grant is already on its finite first-send clock.
+						// Submit it before planning the next peer's large frame; the
+						// shared step allowance keeps normal scheduler precedence/bounds.
+						if (IsPooled() && Receipt && PeerValue.Phase == PeerPhase::Ready) {
+							auto Flushed = PeerValue.SendAllowance.Flush(Scheduler, Connection, PeerValue.Limits);
+							if (auto Failure = SchedulerFlushFailure(Flushed)) {
+								PendingPeerFailures.try_emplace(Connection, std::move(*Failure));
+								return false;
+							}
+						}
 						return true;
 					};
 
@@ -1669,7 +1701,8 @@ namespace gargantuan::network {
 							}
 							auto DeferBytes = [&](const ReplicationProduceResult &Produced) {
 								if (!Produced.DeferredForBytes) return false;
-								ByteAdmission->DeferSize(Connection, Produced.RequiredFrameBytes + ReliableServiceEnvelopeBytes);
+								ByteAdmission->DeferSize(Connection, Produced.RequiredFrameBytes + ReliableServiceEnvelopeBytes,
+									Produced.DiagnosticFingerprint);
 								Peer->second.ByteDeferredThisStep = true;
 								Consumed += Produced.SelectedTransitions;
 								GlobalConsumed += Produced.SelectedTransitions;
@@ -2167,6 +2200,20 @@ namespace gargantuan::network {
 			Result.CharacterMaximumCurrentPublicationAgeTicks = CharacterMetrics.MaximumCurrentPublicationAgeTicks;
 		}
 		for (const auto &[Connection, PeerValue] : State->Peers) {
+			Result.StructuralAcceptedFeedbackBytes += PeerValue.ReliableFeedback.Accepted.Structural;
+			if (PeerValue.ReliableFeedback.Previous) {
+				Result.StructuralFirstSentFeedbackBytes +=
+					PeerValue.ReliableFeedback.Previous->StructuralPayloadBytesFirstSent;
+				Result.StructuralAckedFeedbackBytes +=
+					PeerValue.ReliableFeedback.Previous->StructuralPayloadBytesAcked;
+				++Result.StructuralFeedbackPeersObserved;
+			}
+			if (const auto Scheduler = State->Scheduler.GetStatistics(Connection))
+				Result.SchedulerQueuedReliableBytes += Scheduler->QueuedReliableBytes;
+			if (const auto Native = State->Transport->GetStatistics(Connection); Native && Native->QueuedReliableBytes) {
+				Result.NativeQueuedReliableBytes += *Native->QueuedReliableBytes;
+				++Result.NativeQueuedReliablePeersObserved;
+			}
 			if (const auto *View = State->Replication ? State->Replication->GetView(Connection) : nullptr)
 				Result.MaterializedObjects += View->KnownObjects.size();
 			Result.MaterializedCharacters += PeerValue.MaterializedCharacters.size();
@@ -2185,6 +2232,20 @@ namespace gargantuan::network {
 					   (Iterator->second.Phase == PeerPhase::Accepted || Iterator->second.Phase == PeerPhase::Ready)
 				   ? Iterator->second.PlayerValue
 				   : nullptr;
+	}
+	std::vector<GameSessionPeerIdentity> GameSession::GetPeerIdentities() const {
+		std::vector<GameSessionPeerIdentity> Result;
+		Result.reserve(State->Peers.size());
+		for (const auto &[Connection, PeerValue] : State->Peers)
+			if (PeerValue.Phase == PeerPhase::Accepted || PeerValue.Phase == PeerPhase::Ready)
+				Result.push_back(GameSessionPeerIdentity{
+					.Connection = Connection,
+					.Nonce = PeerValue.Nonce,
+					.SessionEpoch = PeerValue.SessionEpoch,
+					.PlayerId = PeerValue.PlayerId,
+					.Ready = PeerValue.Phase == PeerPhase::Ready,
+				});
+		return Result;
 	}
 	bool GameSession::SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints) {
 		return State->Configuration.Role == GameSessionRole::Server && State->Relevance &&
@@ -2220,7 +2281,8 @@ namespace gargantuan::network {
 		if (!Replication) return Result;
 		Result.push_back({Replication->CatalogCursor, {}, true, false, Replication->NameCoalescingBegin});
 		for (const auto &[Connection, Peer] : Replication->Peers)
-			Result.push_back({Peer.JournalCursor, Connection, false, Peer.PreparedCommit.has_value(), Replication->NameCoalescingBegin});
+			Result.push_back({Peer.JournalCursor, Connection, false, Peer.PreparedCommit.has_value(),
+				Replication->NameCoalescingBegin, Replication->HasPendingRelevance(Connection)});
 		return Result;
 	}
 	ReplicationMetrics detail::GameSessionTestAccess::GetReplicationMetrics(const GameSession &Session) {
