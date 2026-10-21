@@ -611,7 +611,7 @@ function Read-AdmissionObservation {
 		($RecordedFairness | ConvertTo-Json -Depth 10 -Compress)) {
 		throw 'reconciled admission fairness observation differs from sealed native timeline'
 	}
-	return [ordered]@{
+	$Result = [ordered]@{
 		Classification = 'TERMINAL_CONSERVATION_AND_BOUNDED_ADMISSION_SUBSETS_ONLY'
 		AcceptedBytes = [long]$Admission.accepted
 		RetiredBytes = [long]$Admission.retired
@@ -639,6 +639,11 @@ function Read-AdmissionObservation {
 		JournalFailures = [long]$Admission.journal_failures
 		Fairness = $ObservedFairness
 	}
+	if ($ObservedFairness.ServiceContract -ceq 'HYBRID_F1_V1') {
+		$Result.ContinuousEligiblePeerEpisodeCoverage = $ObservedFairness.ContinuousEligiblePeerEpisodeCoverage
+		$Result.MaximumObservedPeerEligibilityToGrantMicroseconds = $ObservedFairness.MaximumObservedPeerEligibilityToGrantMicroseconds
+	}
+	return $Result
 }
 
 function Get-FixedWorkloadFairness {
@@ -657,16 +662,24 @@ function Get-FixedWorkloadFairness {
 		if ($Row.GrantCount -gt 0) { [void]$Granted.Add($Row.Peer) }
 	}
 	$Missing = @($Expected | Where-Object { -not $Granted.Contains($_) } | Sort-Object)
-	$Parts = @($Observation.AcceptedGrantWaitBound, $Observation.ExactDemandEpisodeCoverage,
+	$IsHybrid = $Observation.ServiceContract -ceq 'HYBRID_F1_V1'
+	$EpisodeCoverage = if ($IsHybrid) { $Observation.ContinuousEligiblePeerEpisodeCoverage }
+		else { $Observation.ExactDemandEpisodeCoverage }
+	$Parts = @($Observation.AcceptedGrantWaitBound, $EpisodeCoverage,
 		$Observation.GrantLifecycleCoverage)
 	$State = if ('MEASURED_FAIL' -cin $Parts) { 'MEASURED_FAIL' }
 		elseif ($Missing.Count -eq 0 -and @($Parts | Where-Object { $_ -cne 'MEASURED_PASS' }).Count -eq 0) { 'MEASURED_PASS' }
 		else { 'NOT_MEASURED' }
-	return [ordered]@{ State=$State; GrantedPeers=$Granted.Count; RequiredPeers=32; MissingGrantedPeers=$Missing;
+	$Result = [ordered]@{ State=$State; GrantedPeers=$Granted.Count; RequiredPeers=32; MissingGrantedPeers=$Missing;
 		AcceptedGrantWaitBound=$Observation.AcceptedGrantWaitBound;
 		ExactDemandEpisodeCoverage=$Observation.ExactDemandEpisodeCoverage;
 		GrantLifecycleCoverage=$Observation.GrantLifecycleCoverage;
 		Scope='recorded exact-demand episodes of this fixed 32-peer workload; no continuous-source claim' }
+	if ($IsHybrid) {
+		$Result.ContinuousEligiblePeerEpisodeCoverage = $EpisodeCoverage
+		$Result.Scope = 'recorded continuous independent peer eligibility of this fixed 32-peer workload; distinct candidates and no continuous-source claim'
+	}
+	return $Result
 }
 
 function Read-WorkloadObservation {
@@ -802,6 +815,7 @@ function Read-RecoveryObservation {
 			FixedServiceRecovery = 'NOT MEASURED'
 			StrictConvergenceSufficientProof = 'NOT MEASURED'
 			SampledJournalRetention = 'NOT MEASURED'
+			FinalNameIdentityContract = 'NOT_MEASURED'
 			ExactRetainedWorkBytes = 'NOT_MEASURED'; Cases = @() }
 	}
 	if ($null -eq $Report.RecoveryObservation -or
@@ -862,6 +876,7 @@ function Read-RecoveryObservation {
 		State = $Observed.State; Workload = 'THREE_CASES_REPLAYED_FROM_INDEXED_LOGS'
 		FixedServiceRecovery = $Fixed; StrictConvergenceSufficientProof = $Strict
 		SampledJournalRetention = 'MEASURED_PASS'
+		FinalNameIdentityContract = $Observed.FinalNameIdentityContract
 		MinimumCessationRetentionMarginRecords = [long](@($Cases | ForEach-Object MinimumRetentionMarginRecords |
 			Measure-Object -Minimum).Minimum)
 		ExactRetainedWorkBytes = [long]$Observed.ExactRetainedWorkBytes; Cases = $Cases
@@ -948,6 +963,7 @@ function Read-ProviderRun {
 	}
 	$F1 = Read-FarmF1Observation -ServerRoot $Server.Root -RunManifestPath (Join-Path $Server.Root 'run-manifest.json')
 	Assert-FarmF1Admission -Observation $F1 -Admission $Report.Admission
+	Assert-FarmHybridService -Observation $F1 -Publication $Publication -Fairness $Admission.Fairness
 	if ($null -eq $Report.F1Observation) {
 		if ($F1.State -cne 'NOT_MEASURED') { throw 'reconciliation omitted present native F1 evidence' }
 	} elseif (($F1 | ConvertTo-Json -Depth 12 -Compress) -cne
@@ -1075,6 +1091,7 @@ $Observed = [ordered]@{
 	}
 	GateObservations = @(
 		[ordered]@{ Gate='Actual ordinary complete-message all-interval demand'; State=$(if ($Local.Publication.OrdinaryDemand.State -ceq 'MEASURED_PASS' -and $Node.Publication.OrdinaryDemand.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason='successful native transport sends, complete adapter-inclusive bytes, forced Character traffic, fixed five phase scopes and all32 sender traces; per-peer and per-direction aggregate budgets on explicit same-host QPC domains' },
+		[ordered]@{ Gate='Qualified ordinary native FIFO completion on all 33 processes'; State=$(if ($Local.Publication.OrdinaryFIFO.State -ceq 'MEASURED_PASS' -and $Node.Publication.OrdinaryFIFO.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason='mandatory for HYBRID_F1_V1: 32 server-connection and 32 client native certificates, exact originating five-phase successful-send counts, zero pending/failure and 50-ms maximum; enqueue or RPC percentiles cannot substitute' },
 		[ordered]@{ Gate='Every finite native first-send grant, including final grants'; State=$(if ($Local.F1.State -ceq 'MEASURED_PASS' -and $Node.F1.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason='32 generation-scoped native grant histories independently replayed per provider; exact ACK/retirement cannot erase a failed last or earlier grant' },
 		[ordered]@{ Gate = 'Separate Node provider process resource measurement'; State = $Node.ProviderObservation.ProcessResources.State.Replace('_', ' '); Reason = 'bounded owned Go child CPU, memory, threads and handles, distinct from Engine and client farm; no invented utilization SLA' },
 		[ordered]@{ Gate = 'RemoteManager queue and handler ownership bounds'; State = $(if ($Local.RemoteOwnership.State -ceq 'MEASURED' -and $Node.RemoteOwnership.State -ceq 'MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'native insertion high-waters, zero post-Stop ownership and exact release totals for server and 32 clients; work residence/lease overshoot is diagnostic and does not substitute for response scheduler latency' },
@@ -1085,7 +1102,7 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Per-provider exact-demand fairness event identity and observed eligibility waits'; State = 'MEASURED'; Reason = 'sealed native timeline; the separate accepted-grant bound remains scoped to recorded episodes' },
 		[ordered]@{ Gate = 'Sealed admission credit, grant, deferral and terminal pending counter bounds'; State = 'MEASURED_PASS'; Reason = 'all native timeline snapshots obey canonical credit/grant caps and monotonic deferral counters; terminal pending transitions reconcile' },
 		[ordered]@{ Gate = 'Per-peer ACK-gated accepted-grant lifecycle'; State = $(if ($Local.Admission.GrantLifecycleCoverage -eq 'MEASURED_FAIL' -or $Node.Admission.GrantLifecycleCoverage -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.GrantLifecycleCoverage -eq 'MEASURED_PASS' -and $Node.Admission.GrantLifecycleCoverage -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'generation and token scoped acceptance, exact ACK retirement, release, and zero terminal debt in the sealed V2 native timeline; V1 traces remain historical and unmeasured for this gate' },
-		[ordered]@{ Gate = 'Recorded accepted-grant eligibility wait within 220.5 ms'; State = $(if ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL' -or $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS' -and $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'accepted exact-demand episodes only; interruptions, disposals and continuous semantic backlog remain separate' },
+		[ordered]@{ Gate = 'Recorded accepted-grant eligibility wait within versioned contract bound'; State = $(if ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL' -or $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS' -and $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'accepted exact-demand episodes only under the matching service contract; legacy 220.5-ms and hybrid 1,181.25-ms bounds remain distinct; interruptions, disposals and continuous semantic backlog remain separate' },
 		[ordered]@{ Gate = 'Node authenticated manifest RPC and root/content pins'; State = 'MEASURED'; Reason = 'indexed provider receipt' },
 		[ordered]@{ Gate = 'Node negotiated TLS for authenticated manifest RPC'; State = $(if ($Node.ProviderObservation.RealTls -ceq 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'requires independently pinned Node stage/run/log and exact request matcher; full provider parity remains separate' },
 		[ordered]@{ Gate = 'Role-local bounded process sampling'; State = 'MEASURED' },

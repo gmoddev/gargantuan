@@ -22,18 +22,40 @@ function New-Event {
 function Write-Trace {
 	param([string[]]$Events, [string]$Trailer, [int]$Version = 1)
 	$Lines = @("format=GargantuanAdmissionEvidenceV$Version`trun=$RunId") + $Events + @($Trailer)
+	if ($Version -eq 3) { $Lines[0] += "`tcontract=HYBRID_F1_V1" }
 	[IO.File]::WriteAllText($Path, ($Lines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
 }
 
 function Assert-Rejected {
-	param([string[]]$Events, [string]$Case)
-	Write-Trace -Events $Events -Trailer "end`t$($Events.Count)`t0"
+	param([string[]]$Events, [string]$Case, [int]$Version = 1)
+	Write-Trace -Events $Events -Trailer "end`t$($Events.Count)`t0" -Version $Version
 	$Rejected = $false
 	try {
 		[void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId `
 			-ExpectedConnections @('1:1', '2:1', '3:1', '4:1'))
 	} catch { $Rejected = $true }
 	if (-not $Rejected) { throw "analyzer accepted invalid $Case" }
+}
+
+function Read-HybridTrace([string[]]$Rows) {
+	Write-Trace -Events $Rows -Trailer "end`t$($Rows.Count)`t0" -Version 3
+	return Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId
+}
+
+function New-LineageTrace([UInt64]$GrantAt) {
+	return @(
+		(New-Event exact_demand 100 1000),
+		(New-Event credit_eligible 100 1100 -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 100),
+		(New-Event demand_disposed 100 401100 -Reason replaced -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 100),
+		(New-Event exact_demand 101 401100 -Bytes 90 -PeerCredit 100),
+		(New-Event credit_eligible 101 401100 -Bytes 90 -Episode 1 -CreditAt 401100 -EligibleAt 401100 -PeerCredit 100),
+		(New-Event demand_disposed 101 801100 -Bytes 90 -Reason replaced -Episode 1 -CreditAt 401100 -EligibleAt 401100 -PeerCredit 100),
+		(New-Event exact_demand 102 801100 -Bytes 80 -PeerCredit 100),
+		(New-Event credit_eligible 102 801100 -Bytes 80 -Episode 1 -CreditAt 801100 -EligibleAt 801100 -PeerCredit 100),
+		(New-Event grant_accepted 102 $GrantAt -Bytes 80 -Episode 1 -Token 900 -CreditAt 801100 -EligibleAt 801100),
+		(New-Event grant_retired 102 ($GrantAt+1) -Bytes 80 -Token 900 -ActiveGrants 1),
+		(New-Event grant_released 102 ($GrantAt+2) -Bytes 80 -Token 900 -ActiveGrants 0)
+	)
 }
 
 try {
@@ -163,6 +185,9 @@ try {
 		$BoundedResult.ExactDemandEpisodeCoverage -cne 'MEASURED_PASS') {
 		throw 'exact 220.5-ms accepted-grant bound failed'
 	}
+	if ($BoundedResult.PSObject.Properties.Name -contains 'ContinuousEligiblePeerEpisodeCoverage') {
+		throw 'legacy contract acquired hybrid peer-lineage semantics'
+	}
 	$OverBound = @($Bounded)
 	$OverBound[2] = New-Event grant_accepted 10 221601 -Episode 1 -Token 10 -CreditAt 1050 -EligibleAt 1100
 	Write-Trace -Events $OverBound -Trailer "end`t3`t0"
@@ -173,6 +198,163 @@ try {
 	}
 	$Changed = @($Events)
 	$Changed[1] = New-Event credit_eligible 1 1100 -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 524289
+	$HybridBoundary = @($Bounded)
+	$HybridBoundary[2] = New-Event grant_accepted 10 1182350 -Episode 1 -Token 10 -CreditAt 1050 -EligibleAt 1100
+	Write-Trace -Events $HybridBoundary -Trailer "end`t3`t0" -Version 3
+	$HybridResult = Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId
+	if ($HybridResult.ServiceContract -cne 'HYBRID_F1_V1' -or
+		$HybridResult.AcceptedGrantWaitBoundMicroseconds -ne 1181250 -or
+		$HybridResult.AcceptedGrantWaitBound -cne 'MEASURED_PASS') { throw 'hybrid exact fairness boundary failed' }
+	$HybridBoundary[2] = New-Event grant_accepted 10 1182351 -Episode 1 -Token 10 -CreditAt 1050 -EligibleAt 1100
+	Write-Trace -Events $HybridBoundary -Trailer "end`t3`t0" -Version 3
+	if ((Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId).AcceptedGrantWaitBound -cne 'MEASURED_FAIL') {
+		throw 'hybrid overdue accepted demand did not fail'
+	}
+	$Starved = @($Bounded[0..1])
+	$Starved += New-Event exact_demand 20 1182351 -Slot 2
+	Write-Trace -Events $Starved -Trailer "end`t3`t0" -Version 3
+	if ((Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId).ExactDemandEpisodeCoverage -cne 'MEASURED_FAIL') {
+		throw 'hybrid retained starvation did not fail'
+	}
+	$Lineage = @(New-LineageTrace 1182350)
+	$LineageResult = Read-HybridTrace $Lineage
+	if ($LineageResult.ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_PASS' -or
+		$LineageResult.MaximumObservedPeerEligibilityToGrantMicroseconds -ne 1181250 -or
+		$LineageResult.MaximumObservedEligibilityToGrantMicroseconds -ne 381250 -or
+		$LineageResult.ExactDemandEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED' -or
+		$LineageResult.ExactDemandCount -ne 3 -or $LineageResult.GrantedCount -ne 1 -or
+		$LineageResult.CarriedEligibleReplacementCount -ne 2 -or
+		$LineageResult.ContinuousPeerEligibleEpisodeCount -ne 1 -or
+		$LineageResult.CompletedContinuousPeerEligibleEpisodeCount -ne 1 -or
+		$LineageResult.GrantLifecycleCoverage -cne 'MEASURED_PASS') {
+		throw 'same-clock replacements lost peer age, distinct candidate identity or exact successor retirement'
+	}
+	$LateLineage = Read-HybridTrace @(New-LineageTrace 1182351)
+	if ($LateLineage.AcceptedGrantWaitBound -cne 'MEASURED_PASS' -or
+		$LateLineage.ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_FAIL') {
+		throw 'young successor candidates hid an overdue continuous eligible peer'
+	}
+	$Gap = @($Lineage)
+	$Gap[3] = New-Event exact_demand 101 401101 -Bytes 90 -PeerCredit 100
+	$Gap[4] = New-Event credit_eligible 101 401101 -Bytes 90 -Episode 1 -CreditAt 401101 -EligibleAt 401101 -PeerCredit 100
+	$Gap[5] = New-Event demand_disposed 101 801100 -Bytes 90 -Reason replaced -Episode 1 -CreditAt 401101 -EligibleAt 401101 -PeerCredit 100
+	if ((Read-HybridTrace $Gap).ContinuousEligiblePeerEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED') {
+		throw 'later replacement clock invented continuous peer eligibility'
+	}
+	$Interleaved = @($Lineage[0..3]) + @(
+		(New-Event exact_demand 200 401100 -Slot 2),
+		(New-Event demand_disposed 200 401100 -Slot 2 -Reason no_work)
+	) + @($Lineage[4..10])
+	if ((Read-HybridTrace $Interleaved).ContinuousEligiblePeerEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED') {
+		throw 'per-peer filtering concealed a global replacement bridge gap'
+	}
+	$LifecycleGap = @(
+		(New-Event exact_demand 300 800 -Slot 2),
+		(New-Event credit_eligible 300 900 -Slot 2 -Episode 1 -CreditAt 850 -EligibleAt 900 -PeerCredit 100),
+		(New-Event grant_accepted 300 950 -Slot 2 -Episode 1 -Token 901 -CreditAt 850 -EligibleAt 900),
+		(New-Event exact_demand 100 1000 -ActiveGrants 1),
+		(New-Event credit_eligible 100 1100 -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 100 -ActiveGrants 1),
+		(New-Event demand_disposed 100 401100 -Reason replaced -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 100 -ActiveGrants 1),
+		(New-Event grant_retired 300 401100 -Slot 2 -Token 901 -ActiveGrants 1),
+		(New-Event grant_released 300 401100 -Slot 2 -Token 901 -ActiveGrants 0)
+	) + @($Lineage[3..10])
+	if ((Read-HybridTrace $LifecycleGap).ContinuousEligiblePeerEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED') {
+		throw 'lifecycle early-continue concealed a global replacement bridge gap'
+	}
+	$InventedCredit = @($Lineage)
+	$InventedCredit[3] = New-Event exact_demand 101 401100 -Bytes 120 -PeerCredit 200
+	$InventedCredit[4] = New-Event credit_eligible 101 401100 -Bytes 120 -Episode 1 -CreditAt 401100 -EligibleAt 401100 -PeerCredit 200
+	$InventedCredit[5] = New-Event demand_disposed 101 801100 -Bytes 120 -Reason replaced -Episode 1 -CreditAt 401100 -EligibleAt 401100 -PeerCredit 200
+	$InventedCredit[6] = New-Event exact_demand 102 801100 -Bytes 80 -PeerCredit 200
+	$InventedCredit[7] = New-Event credit_eligible 102 801100 -Bytes 80 -Episode 1 -CreditAt 801100 -EligibleAt 801100 -PeerCredit 200
+	if ((Read-HybridTrace $InventedCredit).ContinuousEligiblePeerEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED') {
+		throw 'same-clock invented refill qualified a successor exceeding original peer credit'
+	}
+	$ChangedGlobal = @($Lineage)
+	$ChangedGlobal[3] = New-Event exact_demand 101 401100 -Bytes 90 -PeerCredit 100 -GlobalCredit 524289
+	if ((Read-HybridTrace $ChangedGlobal).ContinuousEligiblePeerEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED') {
+		throw 'same-clock changed funding witness qualified replacement continuity'
+	}
+	foreach ($FieldIndex in 14..18) {
+		$ChangedWitness = @($Lineage)
+		foreach ($RowIndex in 3..10) {
+			$Fields = $ChangedWitness[$RowIndex].Split([char]9)
+			$Fields[$FieldIndex] = [string]([UInt64]$Fields[$FieldIndex]+1)
+			$ChangedWitness[$RowIndex] = $Fields -join "`t"
+		}
+		$RejectedWitness = $false
+		try {
+			$WitnessResult = Read-HybridTrace $ChangedWitness
+			$RejectedWitness = $WitnessResult.ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_PASS'
+		} catch { $RejectedWitness = $true }
+		if (-not $RejectedWitness) { throw "same-clock owner/counter witness column $FieldIndex invented continuity" }
+	}
+	$MissingEligible = @($Lineage[0..3]) + @(
+		(New-Event demand_disposed 101 401100 -Bytes 90 -Reason no_work)
+	)
+	if ((Read-HybridTrace $MissingEligible).ContinuousEligiblePeerEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED') {
+		throw 'successor exact demand alone falsely proved eligible continuity'
+	}
+	foreach ($Reason in @('no_work','unexamined','generation_removed','terminal_release')) {
+		foreach ($EndAt in @(1200,1182351)) {
+			$Withdrawal = @($Lineage[0..1]) + @(
+				(New-Event demand_disposed 100 $EndAt -Reason $Reason -Episode 1 -CreditAt 1050 -EligibleAt 1100)
+			)
+			$ExpectedState = if ($EndAt -eq 1200) { 'INCONCLUSIVE_NOT_MEASURED' } else { 'MEASURED_FAIL' }
+			if ((Read-HybridTrace $Withdrawal).ContinuousEligiblePeerEpisodeCoverage -cne $ExpectedState) {
+				throw "eligible withdrawal $Reason reset or hid the peer deadline"
+			}
+		}
+	}
+	foreach ($EndAt in @(1182350,1182351)) {
+		$SourceEmpty = @($Lineage[0..1]) + @(
+			(New-Event demand_disposed 100 $EndAt -Reason source_empty -Episode 1 -CreditAt 1050 -EligibleAt 1100)
+		)
+		$EmptyResult = Read-HybridTrace $SourceEmpty
+		$ExpectedState = if ($EndAt -eq 1182350) { 'MEASURED_PASS' } else { 'MEASURED_FAIL' }
+		if ($EmptyResult.ContinuousEligiblePeerEpisodeCoverage -cne $ExpectedState -or
+			$EmptyResult.SourceEmptyPeerEligibleEpisodeCount -ne 1 -or
+			$EmptyResult.CompletedContinuousPeerEligibleEpisodeCount -ne 0 -or $EmptyResult.GrantedCount -ne 0 -or
+			$EmptyResult.MaximumObservedPeerEligibilityToGrantMicroseconds -ne 0 -or
+			$EmptyResult.MaximumObservedSourceEmptyPeerEligibleWaitMicroseconds -ne $EndAt-1100 -or
+			$EmptyResult.GrantLifecycleCoverage -cne 'NOT_MEASURED' -or
+			$EmptyResult.ExactDemandEpisodeCoverage -cne 'NOT_MEASURED') {
+			throw 'source-owned empty end hid an overdue wait or invented delivered service'
+		}
+		Assert-Rejected $SourceEmpty 'legacy source-empty waiver' -Version 1
+		Assert-Rejected $SourceEmpty 'legacy lifecycle source-empty waiver' -Version 2
+	}
+	$EmptyReplacement = @($Lineage[0..7]) + @(
+		(New-Event demand_disposed 102 1182350 -Bytes 80 -Reason source_empty -Episode 1 -CreditAt 801100 -EligibleAt 801100)
+	)
+	$EmptyReplacementResult = Read-HybridTrace $EmptyReplacement
+	if ($EmptyReplacementResult.ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_PASS' -or
+		$EmptyReplacementResult.MaximumObservedSourceEmptyPeerEligibleWaitMicroseconds -ne 1181250 -or
+		$EmptyReplacementResult.CompletedContinuousPeerEligibleEpisodeCount -ne 0 -or
+		$EmptyReplacementResult.SourceEmptyPeerEligibleEpisodeCount -ne 1) {
+		throw 'source-empty end reset the original eligible replacement clock'
+	}
+	Assert-Rejected ($EmptyReplacement + @($EmptyReplacement[-1])) 'duplicate source-empty end' -Version 3
+	$Interrupted = @($Lineage[0..1]) + @(
+		(New-Event eligibility_interrupted 100 1182351 -Reason feedback_unavailable -Episode 1 -CreditAt 1050 -EligibleAt 1100),
+		(New-Event credit_eligible 100 1182400 -Episode 2 -CreditAt 1050 -EligibleAt 1182400 -PeerCredit 100),
+		(New-Event grant_accepted 100 1182500 -Episode 2 -Token 901 -CreditAt 1050 -EligibleAt 1182400),
+		(New-Event grant_retired 100 1182501 -Token 901 -ActiveGrants 1),
+		(New-Event grant_released 100 1182502 -Token 901 -ActiveGrants 0)
+	)
+	if ((Read-HybridTrace $Interrupted).ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_FAIL') {
+		throw 'feedback interruption and fresh eligibility erased an overdue prior episode'
+	}
+	$OpenLineage = @($Lineage[0..7]) + @(
+		(New-Event exact_demand 200 1182351 -Slot 2),
+		(New-Event demand_disposed 200 1182351 -Slot 2 -Reason no_work)
+	)
+	if ((Read-HybridTrace $OpenLineage).ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_FAIL') {
+		throw 'open replacement chain forgot the first eligible clock'
+	}
+	$WrongGeneration = @($Lineage); $WrongGeneration[3] = New-Event exact_demand 101 401100 -Generation 2 -Bytes 90
+	Assert-Rejected $WrongGeneration 'hybrid replacement generation changed' -Version 3
+	Assert-Rejected @($Lineage[0..2]) 'unfinished hybrid replacement' -Version 3
 	Assert-Rejected $Changed 'peer credit beyond canonical burst cap'
 	$Changed = @($Events)
 	$Changed[1] = New-Event credit_eligible 1 1100 -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 100 -GlobalCredit 2097153
@@ -218,7 +400,7 @@ try {
 	Write-Trace -Events $Events -Trailer "end`t15`t0"
 	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'bad trailer accepted' }
 	catch { if ($_.Exception.Message -ceq 'bad trailer accepted') { throw } }
-Write-Output '[Qualification:Admission] analyzer_cases=28 PASS'
+Write-Output '[Qualification:Admission] analyzer_cases=31 peer_lineage_cases=25 source_empty_cases=8 PASS'
 } finally {
 	$Resolved = [IO.Path]::GetFullPath($Root)
 	if ($Resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase) -and

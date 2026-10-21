@@ -31,9 +31,10 @@ try {
 	$Output = Join-Path $Root 'inventory.json'
 	& $CopiedScript -SourceCommit $Head -PythonPath $Python -PythonSha256 $PythonHash -OutputPath $Output | Out-Null
 	$Result = Get-Content -LiteralPath $Output -Raw | ConvertFrom-Json
-	if ($Result.Files.Count -ne 22 -or $Result.SourceCommit -cne $Head -or
+	if ($Result.Files.Count -ne 23 -or $Result.SourceCommit -cne $Head -or
 		$Result.PythonPath -ine $Python -or @($Result.Files | Where-Object Path -ceq 'tests/PhysicalFarmClockEvidence.ps1').Count -ne 1 -or
-		@($Result.Files | Where-Object Path -ceq 'tests/PhysicalGameSessionFarmLifecycle.ps1').Count -ne 1) {
+		@($Result.Files | Where-Object Path -ceq 'tests/PhysicalGameSessionFarmLifecycle.ps1').Count -ne 1 -or
+		@($Result.Files | Where-Object Path -ceq 'tests/PhysicalFarmPipeDrain.ps1').Count -ne 1) {
 		throw 'analysis dependency/runtime inventory incomplete'
 	}
 	foreach ($File in $Result.Files) {

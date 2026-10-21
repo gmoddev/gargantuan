@@ -69,6 +69,7 @@ if PhysicalFarm then
     local OverloadFunction = game:FindFirstChild("ScaleOverloadFunction")
     local RunService = game:GetService("RunService")
     local CurrentOverloadCase = nil
+    local RecoveryCessationNotified = nil
     local OverloadReady = {}
     local OverloadOffered = {}
     local RecoveryProbeSeen = {}
@@ -93,7 +94,7 @@ if PhysicalFarm then
     local ClockQuiescedCount = 0
     local LastBroadcastTick = -60
     local LastStopTick = -60
-    PhaseControl.OnServerEvent:Connect(function(Peer, Kind, Phase)
+    PhaseControl.OnServerEvent:Connect(function(Peer, Kind, Phase, Attempt)
         if Kind == "clock_quiesced" and CurrentPhase == "calibrating" and
             Phase == game:GetAttribute("ScaleClockEpoch") then
             local PeerKey = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
@@ -157,13 +158,15 @@ if PhysicalFarm then
                 print(string.format("[Qualification:Recovery] event=offered_ack case=%s peer_slot=%d peer_generation=%d count=%d",
                     Phase, Peer.Slot, Peer.Generation, OverloadOfferedCount))
             end
-        elseif Kind == "recovery_done" and
+        elseif Kind == "recovery_done" and Phase == CurrentOverloadCase and
+            type(Attempt) == "number" and Attempt == math.floor(Attempt) and Attempt >= 1 and Attempt <= 20 and
             game:GetAttribute("ScaleOverloadCase") == "recover_" .. tostring(Phase) then
+            local ReceivedAtUs = math.floor(math.floor(os.clock() * 1000000000) / 1000)
             local Key = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
             if not RecoveryProbeSeen[Key] then
                 RecoveryProbeSeen[Key] = true
-                print(string.format("[Qualification:Recovery] event=probe_ack case=%s peer_slot=%d peer_generation=%d",
-                    Phase, Peer.Slot, Peer.Generation))
+                print(string.format("[Qualification:Recovery] event=probe_ack case=%s peer_slot=%d peer_generation=%d contract=bounded_recovery_cohort_v1 attempt=%d monotonic_us=%d",
+                    Phase, Peer.Slot, Peer.Generation, Attempt, ReceivedAtUs))
             end
         elseif Kind == "name_converged" and
             game:GetAttribute("ScaleOverloadCase") == "recover_" .. tostring(Phase) then
@@ -192,6 +195,7 @@ if PhysicalFarm then
         if type(NextOverload) == "string" and NextOverload ~= CurrentOverloadCase and
             (NextOverload == "gameplay" or NextOverload == "structural" or NextOverload == "mixed") then
             CurrentOverloadCase = NextOverload
+            RecoveryCessationNotified = nil
             OverloadReady = {}
             OverloadOffered = {}
             RecoveryProbeSeen = {}
@@ -200,6 +204,18 @@ if PhysicalFarm then
             OverloadOfferedCount = 0
             Control:SetAttribute("ScaleOverloadReadyAcks", 0)
             Control:SetAttribute("ScaleOverloadOfferedAcks", 0)
+        end
+        if CurrentOverloadCase and NextOverload == "recover_" .. CurrentOverloadCase and
+            RecoveryCessationNotified == nil then
+            -- The native host has already ceased offers and published its
+            -- immutable cessation fence. Ordinary service cannot be tested by
+            -- waiting for this attribute at the tail of the structural journal.
+            -- Mark before submission: a failed/partial broadcast is not replayed.
+            RecoveryCessationNotified = CurrentOverloadCase
+            local Ok = pcall(function() PhaseControl:FireAllClients("recover", CurrentOverloadCase) end)
+            print(string.format("[Qualification:Recovery] event=cessation_notice_sent case=%s ok=%d",
+                CurrentOverloadCase, if Ok then 1 else 0))
+            if not Ok then Control:SetAttribute("ScaleProducerFailed", CurrentOverloadCase) end
         end
         if type(NextPhase) == "string" and NextPhase ~= CurrentPhase then
             CurrentPhase = NextPhase
@@ -289,18 +305,6 @@ local FarmCallbackPhase = nil
 local FarmCallbackPhaseCount = 0
 local FarmClockStartedEpoch = 0
 local FarmClockQuiescedEpoch = 0
-if PhaseControl then
-    PhaseControl.OnClientEvent:Connect(function(Kind, Phase)
-        if Kind == "phase" and type(Phase) == "string" then
-            Control:SetAttribute("ScalePhase", Phase)
-            if Phase ~= "calibrating" then PendingPhaseAcknowledgement = Phase end
-            print(string.format("[Content:ScalePhase] event=received phase=%s", Phase))
-        elseif Kind == "stop" and Phase == Control:GetAttribute("ScalePhase") then
-            PendingPhaseStop = Phase
-            print(string.format("[Content:ScalePhase] event=stop_received phase=%s", Phase))
-        end
-    end)
-end
 Control:SetAttribute("ScaleClientStarted", true)
 local Tick = 0
 local StartedActionAt = 0
@@ -337,6 +341,7 @@ local StopDrainStartedAt = 0
 local PhaseFinalized = false
 local PhaseTrafficFailure = false
 local RpcComplete = false
+local RpcStarted = false
 local RpcSamples = {}
 local RpcTrace = {}
 local RpcErrors = 0
@@ -362,23 +367,80 @@ local RecoveryEventAcks = 0
 local RecoveryRpcLatencies = {}
 local RecoveryEventLatencies = {}
 local RecoveryEventStarted = {}
+local RecoveryEventErrors = 0
+local RecoveryStartedNs = nil
+local RecoveryDeadlineNs = nil
+local RecoveryCohortStartedNs = nil
+local RecoveryLastCohortStartedNs = nil
+local RecoveryAttempt = 0
+local RecoveryCohortClosed = false
+local RecoveryFailed = false
+local RecoveryFailureReason = "none"
+local RecoveryFailureReported = false
 local RecoveryNameSent = false
 local RecoveryResultSent = false
+local RecoveryCessationCase = nil
 local OverloadSequence = 0
+if PhaseControl then
+    PhaseControl.OnClientEvent:Connect(function(Kind, Phase)
+        if Kind == "phase" and type(Phase) == "string" then
+            Control:SetAttribute("ScalePhase", Phase)
+            if Phase ~= "calibrating" then PendingPhaseAcknowledgement = Phase end
+            print(string.format("[Content:ScalePhase] event=received phase=%s", Phase))
+        elseif Kind == "stop" and Phase == Control:GetAttribute("ScalePhase") then
+            PendingPhaseStop = Phase
+            print(string.format("[Content:ScalePhase] event=stop_received phase=%s", Phase))
+        elseif Kind == "recover" and type(Phase) == "string" and Phase == CurrentOverloadCase and
+            Players.LocalPlayer ~= nil and
+            OverloadOfferedSent and OverloadRpcPending == 0 and RecoveryCessationCase == nil and
+            not RecoveryFailed then
+            RecoveryCessationCase = Phase
+            RecoveryStartedNs = math.floor(os.clock() * 1000000000)
+            RecoveryDeadlineNs = RecoveryStartedNs + 20000000000
+            print(string.format("[Qualification:Recovery] event=cessation_notice_received case=%s player_id=%d started_clock_ns=%d",
+                Phase, Players.LocalPlayer.PlayerId, RecoveryStartedNs))
+        end
+    end)
+end
 if OverloadEvent then
     OverloadEvent.OnClientEvent:Connect(function(Message, Sequence, Case)
         if Case ~= CurrentOverloadCase then return end
         if Message == "recovery" then
             local Started = RecoveryEventStarted[Sequence]
             if Started then
+                local EndedNs = math.floor(os.clock() * 1000000000)
+                local ElapsedUs = math.floor((EndedNs - Started.Nanoseconds) / 1000)
                 RecoveryEventStarted[Sequence] = nil
                 RecoveryEventAcks += 1
-                table.insert(RecoveryEventLatencies, math.floor((os.clock() - Started) * 1000000))
+                table.insert(RecoveryEventLatencies, ElapsedUs)
+                print(string.format("[Qualification:Recovery] event=event_probe contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d index=%d sequence=%d started_clock_ns=%d ended_clock_ns=%d elapsed_us=%d ok=1",
+                    Case, Players.LocalPlayer.PlayerId, Started.Attempt, Started.Index, Sequence,
+                    Started.Nanoseconds, EndedNs, ElapsedUs))
             end
         else
             OverloadEventAcks += 1
         end
     end)
+end
+local function CloseRecoveryCohort(Status, Reason)
+    if RecoveryCohortClosed then return false end
+    RecoveryCohortClosed = true
+    table.sort(RecoveryRpcLatencies)
+    table.sort(RecoveryEventLatencies)
+    local Pending = 0
+    for _ in RecoveryEventStarted do Pending += 1 end
+    local EndedNs = math.floor(os.clock() * 1000000000)
+    if EndedNs >= RecoveryDeadlineNs then
+        Status, Reason = "FAILED", "deadline"
+        RecoveryFailed, RecoveryFailureReason = true, "deadline"
+    end
+    print(string.format("[Qualification:Recovery] event=cohort_end contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d recovery_started_clock_ns=%d deadline_clock_ns=%d started_clock_ns=%d ended_clock_ns=%d rpc_acks=%d rpc_errors=%d event_acks=%d event_errors=%d pending_events=%d rpc_p95_us=%d rpc_p99_us=%d rpc_max_us=%d event_max_us=%d status=%s reason=%s",
+        CurrentOverloadCase, Players.LocalPlayer.PlayerId, RecoveryAttempt, RecoveryStartedNs, RecoveryDeadlineNs,
+        RecoveryCohortStartedNs, EndedNs, RecoveryProbeAcks, RecoveryProbeErrors,
+        RecoveryEventAcks, RecoveryEventErrors, Pending, RecoveryRpcLatencies[10] or 0,
+        RecoveryRpcLatencies[10] or 0, RecoveryRpcLatencies[10] or 0,
+        RecoveryEventLatencies[#RecoveryEventLatencies] or 0, Status, Reason))
+    return Status == "QUALIFIED"
 end
 Event.OnClientEvent:Connect(function(Message, Sequence)
     if not EventPending or EventPending.Sequence ~= Sequence or EventPending.Phase ~= Message then
@@ -541,8 +603,16 @@ RunService.PostSimulation:Connect(function()
     end
     if PhaseControl then
         PhaseControlTick += 1
+        local ReceivedScopePhase = Control:GetAttribute("ScalePhase")
+        local ScopeReady = ReceivedScopePhase ~= nil and
+            Control:GetAttribute("ScaleOrdinarySourcePhase") == ReceivedScopePhase
+        -- Initial ready remains outside measured traffic. All phase-dependent
+        -- control waits for the host to open OR close its prospective class.
+        if not PhaseReadySent then
+            PhaseReadySent = pcall(function() PhaseControl:FireServer("ready", "") end)
+        end
         local ClockEpoch = game:GetAttribute("ScaleClockEpoch")
-        if Control:GetAttribute("ScalePhase") == "calibrating" and
+        if ScopeReady and Control:GetAttribute("ScalePhase") == "calibrating" and
             type(ClockEpoch) == "number" and ClockEpoch > FarmClockQuiescedEpoch then
             -- This callback has already stopped counting the measured phase.
             -- The server cannot enable any probe until all 32 peers submit this marker.
@@ -552,7 +622,7 @@ RunService.PostSimulation:Connect(function()
                 print(string.format("[Qualification:FarmClock] event=client_quiesced epoch=%d", ClockEpoch))
             end
         end
-        if game:GetAttribute("ScaleClockActive") == true and type(ClockEpoch) == "number" and
+        if ScopeReady and game:GetAttribute("ScaleClockActive") == true and type(ClockEpoch) == "number" and
             ClockEpoch > FarmClockStartedEpoch and FarmClockQuiescedEpoch >= ClockEpoch and
             Control:GetAttribute("ScalePhase") == "calibrating" then
             FarmClockStartedEpoch = ClockEpoch
@@ -579,10 +649,8 @@ RunService.PostSimulation:Connect(function()
                 print(string.format("[Qualification:FarmClock] event=ack_failed epoch=%d", ClockEpoch))
             end)
         end
-        if not PhaseReadySent then
-            PhaseReadySent = pcall(function() PhaseControl:FireServer("ready", "") end)
-        end
-        if PendingPhaseAcknowledgement then
+        if ScopeReady and PendingPhaseAcknowledgement and (
+            Control:GetAttribute("ScaleOrdinarySourcePhase") == PendingPhaseAcknowledgement) then
             local Acknowledged = pcall(function()
                 PhaseControl:FireServer("phase_ack", PendingPhaseAcknowledgement)
             end)
@@ -610,6 +678,8 @@ RunService.PostSimulation:Connect(function()
             end
         end
         if ContentObservedPhase ~= nil and ContentObservedPhase == ReceivedPhase and
+            ScopeReady and
+            Control:GetAttribute("ScaleOrdinarySourcePhase") == ContentObservedPhase and
             not ContentObservationSubmitted and
             ContentObservationAttempts < 20 and
             PhaseControlTick - LastContentObservationTick >= 60 then
@@ -626,7 +696,8 @@ RunService.PostSimulation:Connect(function()
                 ContentObservationSubmitted = true
             end
         end
-        if PendingPhaseCompletion then
+        if ScopeReady and PendingPhaseCompletion and
+            Control:GetAttribute("ScaleOrdinarySourcePhase") == PendingPhaseCompletion then
             local Completed = pcall(function()
                 PhaseControl:FireServer(if PendingPhaseCompletionHealthy then "complete" else "failed",
                     PendingPhaseCompletion)
@@ -678,10 +749,17 @@ RunService.PostSimulation:Connect(function()
         PhaseActionRejectionsStart = ActionRejections
         PhaseActionUnexpectedEndingsStart = ActionUnexpectedEndings
         RpcComplete = false
+        RpcStarted = false
         RpcSamples = {}
         RpcTrace = {}
         RpcErrors = 0
         RpcTimeouts = 0
+    end
+    -- Keep the received-phase clock above. This prospective handoff delays
+    -- only new ordinary sends; it cannot retimestamp an accepted message.
+    if PhysicalFarm and Control:GetAttribute("ScaleOrdinarySourcePhase") ~= Phase then return end
+    if not RpcStarted then
+        RpcStarted = true
         local RunningPhase = Phase
         task.spawn(function()
             for Index = 1, 100 do
@@ -771,8 +849,31 @@ if PhysicalFarm then
         local LocalPlayer = Players.LocalPlayer
         if not LocalPlayer or not PhaseControl then return end
         local Stage = game:GetAttribute("ScaleOverloadCase")
+        if CurrentOverloadCase ~= nil and Stage == CurrentOverloadCase and
+            RecoveryCessationCase == CurrentOverloadCase then
+            Stage = "recover_" .. CurrentOverloadCase
+        end
         if Stage == "gameplay" or Stage == "structural" or Stage == "mixed" then
             if Stage ~= CurrentOverloadCase then
+                if CurrentOverloadCase ~= nil and not (RecoveryResultSent and RecoveryProbesDone and
+                    next(RecoveryEventStarted) == nil) then
+                    -- A failed/deadline case may still own an accepted RPC or
+                    -- Event. Retain that context for late results; never reset
+                    -- its clocks/counters or begin the next case's offers.
+                    RecoveryFailed, RecoveryFailureReason = true, "case_transition"
+                    if RecoveryProbesStarted and not RecoveryCohortClosed then
+                        CloseRecoveryCohort("FAILED", "case_transition")
+                    end
+                    if not RecoveryFailureReported then
+                        RecoveryFailureReported = true
+                        local Pending = 0
+                        for _ in RecoveryEventStarted do Pending += 1 end
+                        print(string.format("[Qualification:Recovery] event=recovery_failed contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d recovery_started_clock_ns=%d deadline_clock_ns=%d ended_clock_ns=%d pending_events=%d reason=case_transition",
+                            CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryAttempt, RecoveryStartedNs or 0,
+                            RecoveryDeadlineNs or 0, math.floor(os.clock() * 1000000000), Pending))
+                    end
+                    return
+                end
                 CurrentOverloadCase = Stage
                 OverloadReadySent = false
                 OverloadOffered = 0
@@ -792,8 +893,19 @@ if PhysicalFarm then
                 RecoveryRpcLatencies = {}
                 RecoveryEventLatencies = {}
                 RecoveryEventStarted = {}
+                RecoveryEventErrors = 0
+                RecoveryStartedNs = nil
+                RecoveryDeadlineNs = nil
+                RecoveryCohortStartedNs = nil
+                RecoveryLastCohortStartedNs = nil
+                RecoveryAttempt = 0
+                RecoveryCohortClosed = false
+                RecoveryFailed = false
+                RecoveryFailureReason = "none"
+                RecoveryFailureReported = false
                 RecoveryNameSent = false
                 RecoveryResultSent = false
+                RecoveryCessationCase = nil
             end
             if not OverloadReadySent then
                 local Root = Workspace:FindFirstChild("ScaleOverloadRegion")
@@ -855,50 +967,118 @@ if PhysicalFarm then
             end
             return
         end
-        if Stage ~= "recover_" .. tostring(CurrentOverloadCase) then return end
-        if not RecoveryProbesStarted then
+        if Stage ~= "recover_" .. tostring(CurrentOverloadCase) or
+            RecoveryCessationCase ~= CurrentOverloadCase then return end
+        local NowNs = math.floor(os.clock() * 1000000000)
+        -- The ordinary notification owns the immutable local observation.
+        -- The server's independent cessation-to-receipt20s gate remains final.
+        if not RecoveryResultSent and not RecoveryFailed and NowNs >= RecoveryDeadlineNs then
+            RecoveryFailed, RecoveryFailureReason = true, "deadline"
+            if RecoveryProbesStarted and not RecoveryCohortClosed then CloseRecoveryCohort("FAILED", "deadline") end
+        end
+        if RecoveryFailed and not RecoveryFailureReported then
+            RecoveryFailureReported = true
+            local Pending = 0
+            for _ in RecoveryEventStarted do Pending += 1 end
+            print(string.format("[Qualification:Recovery] event=recovery_failed contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d recovery_started_clock_ns=%d deadline_clock_ns=%d ended_clock_ns=%d pending_events=%d reason=%s",
+                CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryAttempt, RecoveryStartedNs,
+                RecoveryDeadlineNs, NowNs, Pending, RecoveryFailureReason))
+        end
+        local Settled = RecoveryProbesStarted and RecoveryProbesDone and
+            RecoveryProbeAcks == 10 and RecoveryEventAcks == 10 and next(RecoveryEventStarted) == nil
+        if Settled and not RecoveryCohortClosed and not RecoveryFailed then
+            table.sort(RecoveryRpcLatencies)
+            table.sort(RecoveryEventLatencies)
+            local Healthy = RecoveryProbeErrors == 0 and RecoveryEventErrors == 0 and
+                RecoveryRpcLatencies[10] <= 150000 and RecoveryRpcLatencies[10] <= 250000 and
+                RecoveryRpcLatencies[10] <= 500000 and RecoveryEventLatencies[10] <= 250000
+            Healthy = CloseRecoveryCohort(if Healthy then "QUALIFIED" else "UNPROVEN", "none")
+            if Healthy then
+                RecoveryResultSent = pcall(function()
+                    PhaseControl:FireServer("recovery_done", CurrentOverloadCase, RecoveryAttempt)
+                end)
+                if RecoveryResultSent then
+                    print(string.format("[Qualification:Recovery] event=client_probes case=%s contract=bounded_recovery_cohort_v1 player_id=%d attempt=%d rpc_acks=%d rpc_errors=%d event_acks=%d rpc_p95_us=%d rpc_p99_us=%d rpc_max_us=%d event_max_us=%d",
+                        CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryAttempt, RecoveryProbeAcks,
+                        RecoveryProbeErrors, RecoveryEventAcks, RecoveryRpcLatencies[10],
+                        RecoveryRpcLatencies[10], RecoveryRpcLatencies[10], RecoveryEventLatencies[10]))
+                else RecoveryFailed, RecoveryFailureReason = true, "control_error" end
+            end
+        end
+        NowNs = math.floor(os.clock() * 1000000000)
+        if not RecoveryResultSent and not RecoveryFailed and
+            (NowNs >= RecoveryDeadlineNs or (RecoveryAttempt >= 20 and
+                (not RecoveryProbesStarted or (RecoveryCohortClosed and Settled)))) then
+            RecoveryFailed, RecoveryFailureReason = true,
+                if NowNs >= RecoveryDeadlineNs then "deadline" else "attempt_limit"
+        end
+        if not RecoveryResultSent and not RecoveryFailed and
+            (not RecoveryProbesStarted or (RecoveryCohortClosed and Settled)) and
+            (not RecoveryLastCohortStartedNs or NowNs - RecoveryLastCohortStartedNs >= 1000000000) then
+            -- These are fresh invocations after a settled, unsuitable cohort;
+            -- no accepted request/Event is replayed, cancelled or abandoned.
+            RecoveryAttempt += 1
             RecoveryProbesStarted = true
+            RecoveryProbesDone = false
+            RecoveryCohortClosed = false
+            RecoveryCohortStartedNs = NowNs
+            RecoveryLastCohortStartedNs = NowNs
+            RecoveryProbeAcks, RecoveryEventAcks = 0, 0
+            RecoveryRpcLatencies, RecoveryEventLatencies = {}, {}
+            print(string.format("[Qualification:Recovery] event=cohort_start contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d recovery_started_clock_ns=%d deadline_clock_ns=%d started_clock_ns=%d client_tick=%d",
+                CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryAttempt, RecoveryStartedNs,
+                RecoveryDeadlineNs, RecoveryCohortStartedNs, RecoveryCallbackTick))
+            local RunningCase, RunningAttempt, RunningDeadlineNs = CurrentOverloadCase, RecoveryAttempt, RecoveryDeadlineNs
             task.spawn(function()
                 for Index = 1, 10 do
-                    local Started = os.clock()
+                    if RecoveryFailed or math.floor(os.clock() * 1000000000) >= RunningDeadlineNs then break end
+                    local StartedNs = math.floor(os.clock() * 1000000000)
                     local StartedTick = RecoveryCallbackTick
                     local Ok, Value = pcall(function()
                         return OverloadFunction:InvokeServerWithTimeout(1, "recovery")
                     end)
-                    local Ended = os.clock()
+                    local EndedNs = math.floor(os.clock() * 1000000000)
+                    local ElapsedUs = math.floor((EndedNs - StartedNs) / 1000)
                     local Passed = Ok and Value == "recovery"
-                    print(string.format("[Qualification:Recovery] event=rpc_probe case=%s player_id=%d index=%d client_tick=%d started_clock_ns=%d ended_clock_ns=%d elapsed_us=%d ok=%d",
-                        CurrentOverloadCase, LocalPlayer.PlayerId, Index, StartedTick,
-                        math.floor(Started * 1000000000), math.floor(Ended * 1000000000),
-                        math.floor((Ended - Started) * 1000000), if Passed then 1 else 0))
+                    print(string.format("[Qualification:Recovery] event=rpc_probe case=%s player_id=%d index=%d client_tick=%d started_clock_ns=%d ended_clock_ns=%d elapsed_us=%d ok=%d contract=bounded_recovery_cohort_v1 attempt=%d",
+                        RunningCase, LocalPlayer.PlayerId, Index, StartedTick, StartedNs, EndedNs,
+                        ElapsedUs, if Passed then 1 else 0, RunningAttempt))
                     if Passed then
                         RecoveryProbeAcks += 1
-                        table.insert(RecoveryRpcLatencies, math.floor((Ended - Started) * 1000000))
-                    else RecoveryProbeErrors += 1 end
+                        table.insert(RecoveryRpcLatencies, ElapsedUs)
+                    else
+                        RecoveryProbeErrors += 1
+                        RecoveryFailed, RecoveryFailureReason = true, "rpc_error"
+                        CloseRecoveryCohort("FAILED", "rpc_error")
+                        break
+                    end
+                    if RecoveryFailed or EndedNs >= RunningDeadlineNs then break end
                     OverloadSequence += 1
-                    RecoveryEventStarted[OverloadSequence] = os.clock()
-                    pcall(function()
-                        OverloadEvent:FireServer("recovery", OverloadSequence, CurrentOverloadCase)
+                    local EventStartedNs = math.floor(os.clock() * 1000000000)
+                    RecoveryEventStarted[OverloadSequence] = {Nanoseconds = EventStartedNs,
+                        Attempt = RunningAttempt, Index = Index}
+                    local EventOk = pcall(function()
+                        OverloadEvent:FireServer("recovery", OverloadSequence, RunningCase)
                     end)
-                    task.wait(0.2)
+                    print(string.format("[Qualification:Recovery] event=event_offer contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d index=%d sequence=%d started_clock_ns=%d ok=%d",
+                        RunningCase, LocalPlayer.PlayerId, RunningAttempt, Index, OverloadSequence,
+                        EventStartedNs, if EventOk then 1 else 0))
+                    if not EventOk then
+                        RecoveryEventErrors += 1
+                        RecoveryFailed, RecoveryFailureReason = true, "event_error"
+                        local EventEndedNs = math.floor(os.clock() * 1000000000)
+                        print(string.format("[Qualification:Recovery] event=event_probe contract=bounded_recovery_cohort_v1 case=%s player_id=%d attempt=%d index=%d sequence=%d started_clock_ns=%d ended_clock_ns=%d elapsed_us=%d ok=0",
+                            RunningCase, LocalPlayer.PlayerId, RunningAttempt, Index, OverloadSequence,
+                            EventStartedNs, EventEndedNs, math.floor((EventEndedNs - EventStartedNs) / 1000)))
+                        CloseRecoveryCohort("FAILED", "event_error")
+                        break
+                    end
+                    -- Pace the next offer; a completed final offer owns no
+                    -- further pacing interval before its receipt can qualify.
+                    if Index < 10 then task.wait(0.2) end
                 end
                 RecoveryProbesDone = true
             end)
-        end
-        if RecoveryProbesDone and not RecoveryResultSent and
-            RecoveryProbeAcks == 10 and RecoveryProbeErrors == 0 and RecoveryEventAcks == 10 then
-            table.sort(RecoveryRpcLatencies)
-            table.sort(RecoveryEventLatencies)
-            RecoveryResultSent = pcall(function()
-                PhaseControl:FireServer("recovery_done", CurrentOverloadCase)
-            end)
-            if RecoveryResultSent then
-                print(string.format("[Qualification:Recovery] event=client_probes case=%s player_id=%d rpc_acks=%d rpc_errors=%d event_acks=%d rpc_p95_us=%d rpc_p99_us=%d rpc_max_us=%d event_max_us=%d",
-                    CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryProbeAcks,
-                    RecoveryProbeErrors, RecoveryEventAcks,
-                    RecoveryRpcLatencies[10], RecoveryRpcLatencies[10],
-                    RecoveryRpcLatencies[10], RecoveryEventLatencies[10]))
-            end
         end
         if CurrentOverloadCase ~= "gameplay" and not RecoveryNameSent then
             local Root = Workspace:FindFirstChild("ScaleOverloadRegion")

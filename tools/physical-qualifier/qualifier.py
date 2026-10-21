@@ -29,18 +29,18 @@ BASE_HEAD = "14644a369f9e7bfb9a81c21354adae62902d63d7"
 OVERLAY = "2ED31AE67E0F99619940BBB130CD451DB37FEF3A5CEEDAB475E682C3FBEE7003"
 GNS_PIN = "2cb93a06350bb065db53abdb0d87cf297e0bfd34"
 PROBE_SHA = "F130DC868A807FFA4EF10887079162C562230854AE17C013559452791993E969"
-PHASE1_BASE_HEAD = "9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad"
-PHASE1_OVERLAY = "B5ADF96F9BBF05043074547A884B1B44AA3AB68B78C669D5ECD29C7181A7B171"
-PHASE1_PROBE_SHA = "C253362C758E71AD739CAC720E89E506536B0634575071713B8A3E27435F5117"
+PHASE1_BASE_HEAD = "f30e80bacda8d06fa5969c4ac0bfc527cea91aff"
+PHASE1_OVERLAY = "CDD202D416428C6136F5D837F04AD5AD264CBAE68AE9CD58378277A8DAD2D835"
+PHASE1_PROBE_SHA = "2E7F33F1FBEB7198CAB1A14091D2DD5AC12A356D72AFDAA6E82A7886451E5164"
 PHASE1_SOURCE_ARCHIVE = "f1-native-source.zip"
 PHASE1_SOURCE_FORMAT = "F1_OWNED_TREE_V2"
 PHASE1_RUNTIME_MANIFEST_SHA = "E105DBA76473990C5AE3AB410762851C7183396FF894A093E526ED26B335D7A9"
 PHASE1_NATIVE_DEPENDENCIES = {
-    "SDL3.dll": "53D974AD36E2743A8F9A1B5B021AFF5C2E1AD262DEFE83826A08B9FB918F96DC",
+    "SDL3.dll": "E6DAF575A1A2E35D8E25233FCE9E5C6F6245C38B2F3EE0A1EE6587C275DEB662",
     "libprotobuf.dll": "61D315DB6514446B7332261D4A064760E229D47A7B0738A367D612309D601D10",
-    "msvcp140.dll": "0F885B509A685D2BBFA652FED26B5FB31D88FBDAB0A978C641D1C7B8AA460AA9",
-    "vcruntime140.dll": "D5E4D9A3E835FA679450145D6A7D94E36573A509317111904D9B3712C30D9066",
-    "vcruntime140_1.dll": "1F2D41C4AA5DB0BC33EBF7B66D72943A817D7CE6CBE880502A9403823633093F",
+    "MSVCP140.dll": "7C26614E1D733892C2DEAC7E245CE115504B1D80592DD0A01B08E3E5A55F89CA",
+    "VCRUNTIME140.dll": "D1F4225DF2CD877DBF130D5668A021DCE3F94118455FF5EC952061C30AFC9CE7",
+    "VCRUNTIME140_1.dll": "A7146C08F89FE5B04541AB507CDB59FF7B44534D4BA3C668A426C6450A03434E",
 }
 SERVER_ADDRESS = "10.253.3.2"
 CLIENT_ADDRESS = "10.253.3.1"
@@ -51,6 +51,17 @@ PHASE1_CAPTURE_DURATION = 70
 PHASE1_CAPTURE_STOP_TIMEOUT = 75
 CAPTURE_SERVICE_STOP_TIMEOUT = 45
 PHASE1_CLASSIFICATION = "FOUR_CLIENT_PHASE1_ONLY"
+# The qualifier-only child pins the measured f30 native build, not its own source.
+# A config cannot select a different binary contract or reuse a legacy verdict.
+PHASE1_CONTRACT = "HYBRID_F1_V1"
+SERVICE_CONTRACTS = ("F1", "HYBRID_F1_V1")
+
+
+def ServiceContract(Config):
+    Contract = Config.get("ServiceContract", "F1")
+    if Contract not in SERVICE_CONTRACTS:
+        raise ValueError("unsupported service contract")
+    return Contract
 
 
 def IsPhase1(Config):
@@ -146,6 +157,9 @@ def CaptureDirections(File, Role, IncludeTuples=False):
 
 def ValidateConfig(Config):
     uuid.UUID(Config["RunId"])
+    Contract = ServiceContract(Config)
+    if (IsPhase1(Config) and Contract != PHASE1_CONTRACT) or (not IsPhase1(Config) and Contract != "F1"):
+        raise ValueError("service contract does not match the pinned qualification mode")
     ControlPreflight = Config.get("ControlPreflight")
     if ControlPreflight is not None and ControlPreflight is not True:
         raise ValueError("invalid control preflight mode")
@@ -243,9 +257,9 @@ class LocalRun:
         if (Manifest["BaseHead"] != ExpectedHead or Manifest["OverlayArchiveSha256"].upper() != ExpectedOverlay or
                 Manifest["GnsPin"] != GNS_PIN):
             raise ValueError("source manifest provenance mismatch")
-        if IsPhase1(Config) and (Manifest.get("Contract") != "F1" or
+        if IsPhase1(Config) and (Manifest.get("Contract") != ServiceContract(Config) or
                                  Manifest.get("ProbeSHA256", "").upper() != PHASE1_PROBE_SHA):
-            raise ValueError("Phase 1 requires the F1 probe source manifest")
+            raise ValueError("Phase 1 requires the matching service contract probe source manifest")
         if IsPhase1(Config) and (Manifest.get("SourceArchive") != PHASE1_SOURCE_ARCHIVE or
                                  Digest(ManifestPath.parent / PHASE1_SOURCE_ARCHIVE) != PHASE1_OVERLAY):
             raise ValueError("Phase 1 native source archive hash mismatch")
@@ -272,6 +286,8 @@ class LocalRun:
                   "1" if IsPhase1(Config) else "0"])
         if not IsPhase1(Config):
             Fixed.append("--readiness-smoke")
+        elif ServiceContract(Config) == "HYBRID_F1_V1":
+            Fixed.append("--hybrid-f1")
         if Config["ProbeArgs"] != Fixed:
             raise ValueError("probe arguments do not match the fixed qualification mode")
         if IsPhase1(Config) and Config["Role"] == "CLIENT":
@@ -431,6 +447,8 @@ class LocalRun:
     def Result(self):
         Clients = self.Config.get("ReadinessClients", 1)
         Phase1 = IsPhase1(self.Config)
+        Contract = ServiceContract(self.Config)
+        Hybrid = Contract == "HYBRID_F1_V1"
         Classification = PHASE1_CLASSIFICATION if Phase1 else "FOUR_CLIENT_READINESS_ONLY"
         if Clients == 4 and self.Config["Role"] == "CLIENT":
             Reports = []
@@ -439,11 +457,13 @@ class LocalRun:
                 Stdout = (self.Log.Directory / (Stem + ".stdout.log")).read_text(errors="replace")
                 Stderr = (self.Log.Directory / (Stem + ".stderr.log")).read_text(errors="replace")
                 Proof = ("[Probe:Result] pass=1 scope=Phase1-only" in Stdout and
-                         "[Probe:Summary] role=client" in Stdout) if Phase1 else (
+                         "[Probe:Summary] role=client" in Stdout and
+                         (not Hybrid or "contract=HYBRID_F1_V1" in Stdout)) if Phase1 else (
                          "[Probe:Readiness] result=pass role=client ready=1 expected=1 clean_remote_shutdown=1" in Stdout)
                 Passed = Process.returncode == 0 and Proof and "[Probe:Cleanup] good=1" in Stdout
                 Reports.append((Passed, Stderr))
             return {"Classification": Classification,
+                    "ServiceContract": Contract,
                     "Success": len(Reports) == 4 and all(Passed for Passed, _ in Reports),
                     "ExitCode": self.Probe.returncode, "EvidencePath": str(self.Log.Directory),
                     "Pid": self.Probe.pid, "ClientNonces": self.ClientNonces,
@@ -468,10 +488,12 @@ class LocalRun:
                                  int(P["structural_first"]) > 0 and
                                  int(P["structural_ack"]) == int(P["structural_first"]) and
                                  int(P["running_us"]) > 0 and
-                                 int(P["max_run_deficit_byte_us"]) <= int(Curve["peer_running_bound_byte_us"])
+                                 (Hybrid or int(P["max_run_deficit_byte_us"]) <= int(Curve["peer_running_bound_byte_us"]))
                                  for P in Peers))
-                PoolProof = (Curve["contract"] == "F1" and Curve["verdict"] == "PASS" and
-                             Curve["pool_curve"] == "derived-from-four-native-grant-curves" and
+                PoolProof = (Curve["contract"] == Contract and Curve["verdict"] == "PASS" and
+                             (not Hybrid or (Curve.get("completion_budget_byte_us") == "626199296000" and
+                                             Curve.get("native_completion_invalid") == "0")) and
+                             Curve["pool_curve"] == ("diagnostic-four-grant-overlap" if Hybrid else "derived-from-four-native-grant-curves") and
                              int(Curve["peer_rate_Bps"]) == 16 * 1024 * 1024 and
                              int(Curve["pool_rate_Bps"]) == 64 * 1024 * 1024 and
                              int(Curve["quantum_B"]) == 1248 and
@@ -497,6 +519,7 @@ class LocalRun:
             Success = (Success and
                        "[Probe:Readiness] result=pass role=server ready=4 expected=4" in Stdout)
         return {**({"Classification": Classification} if Clients == 4 else {}),
+                "ServiceContract": Contract,
                 "Success": Success, "ExitCode": self.Probe.returncode,
                 "EvidencePath": str(self.Log.Directory), "Pid": self.Probe.pid,
                 "Detail": Stderr[-2048:]}
@@ -624,6 +647,7 @@ def Stage(Args):
                                           PHASE1_CLASSIFICATION if Phase1 else "FOUR_CLIENT_READINESS_ONLY")
     if Phase1:
         Shared["QualificationMode"] = "PHASE1"
+        Shared["ServiceContract"] = getattr(Args, "contract", PHASE1_CONTRACT)
     if ControlPreflight:
         Shared["ControlPreflight"] = True
     ValidateConfig(Shared)
@@ -633,7 +657,7 @@ def Stage(Args):
               "ProbePath": str(Path(ClientBundle) / "gargantuan_physical_gns_funding_probe.exe"),
               "SourceManifest": str(Path(ClientBundle) / "source-manifest.json"), "WorkDir": ClientBundle,
               "ProbeArgs": ["client", "10.253.3.2", "39450", str(Args.nonce),
-                            "1" if Phase1 else "0"] + ([] if Phase1 else ["--readiness-smoke"]),
+                            "1" if Phase1 else "0"] + (["--hybrid-f1"] if Phase1 and ServiceContract(Shared) == "HYBRID_F1_V1" else [] if Phase1 else ["--readiness-smoke"]),
               "EvidenceDir": str(Directory / "client-evidence"),
               "CaptureCommand": [r"C:\Program Files\Wireshark\dumpcap.exe", "-i", Args.capture_device,
                                  *(["-B", "64"] if Clients == 4 else []),
@@ -649,7 +673,7 @@ def Stage(Args):
                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", Args.server_capture_stop, "{EvidenceDir}", "Stop"])
     Server = {**Shared, "Role": "SERVER", "ProbePath": ServerBundle + r"\gargantuan_physical_gns_funding_probe.exe",
               "SourceManifest": ServerBundle + r"\source-manifest.json", "WorkDir": ServerBundle,
-              "ProbeArgs": ["server", "10.253.3.2", "39450", str(Clients)] + ([] if Phase1 else ["--readiness-smoke"]),
+              "ProbeArgs": ["server", "10.253.3.2", "39450", str(Clients)] + (["--hybrid-f1"] if Phase1 and ServiceContract(Shared) == "HYBRID_F1_V1" else [] if Phase1 else ["--readiness-smoke"]),
               "EvidenceDir": Args.server_evidence,
               "CaptureStart": CaptureStart,
               "CaptureStop": CaptureStop}
@@ -674,6 +698,7 @@ def Main():
     Child.add_argument("--nonce", type=int, default=92707)
     Child.add_argument("--clients", type=int, choices=(1, 4), default=1)
     Child.add_argument("--phase1", action="store_true")
+    Child.add_argument("--contract", choices=SERVICE_CONTRACTS, default=PHASE1_CONTRACT)
     Child.add_argument("--control-preflight", action="store_true")
     Args = Parser.parse_args()
     try:

@@ -49,6 +49,15 @@ $FarmStopEvent = $null
 $StartedUtc = [DateTimeOffset]::UtcNow
 $Result = $null
 
+function Assert-ClosedNativeRuntimeRoot {
+	param([string]$Root)
+	# This direct launcher accepts native runtime roots, not deployment envelopes.
+	# PackageBuilder remains authoritative for full native content validation.
+	if (Test-Path -LiteralPath (Join-Path $Root 'deployment-sha256.json')) {
+		throw 'direct farm requires an already-closed native runtime projection; deployment envelope sidecar is not runtime content'
+	}
+}
+
 function Get-Fields {
 	param([Parameter(Mandatory = $true)][string]$Line)
 	$Fields = @{}
@@ -106,6 +115,16 @@ function Get-RecoveryDiagnostics {
 		$Offset = $Lines[$Index].IndexOf($Prefix, [StringComparison]::Ordinal)
 		if ($Offset -lt 0) { continue }
 		$Fields = Get-Fields -Line $Lines[$Index].Substring($Offset + $Prefix.Length)
+		if ($Fields.contract -ceq 'bounded_recovery_cohort_v1') {
+			foreach ($Token in $Lines[$Index].Substring($Offset + $Prefix.Length).Trim().Split(' ', [StringSplitOptions]::RemoveEmptyEntries)) {
+				if ($Token -cnotmatch '^[a-z][a-z0-9_]*=[^\s=]+$') { throw 'malformed recovery cohort field' }
+			}
+			$Keys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+			foreach ($Match in [regex]::Matches($Lines[$Index].Substring($Offset + $Prefix.Length),
+				'(?:^|\s)([a-z][a-z0-9_]*)=([^\s]+)')) {
+				if (-not $Keys.Add($Match.Groups[1].Value)) { throw 'duplicate recovery cohort field' }
+			}
+		}
 		$Fields['__line'] = $Index
 		$Rows.Add($Fields)
 	}
@@ -191,6 +210,11 @@ function Assert-RecoveryQuote {
 		[long]$Results[0].__line -ge [long]$Deadline.__line) {
 		throw "recovery case $Case lacks a complete ordered frozen quote audit"
 	}
+	if ($Causal.FormatVersion -ne 2 -or
+		$Causal.NativeBaselineMicroseconds -ne (Get-RecoveryUnsigned -Row $Captures[0] -Field 'native_baseline_us') -or
+		$Causal.NativeBaselineMicroseconds -lt $CessationMicroseconds) {
+		throw "recovery case $Case native baseline differs from its server capture"
+	}
 	$Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 	$Total = 0L
 	$FutureTotal = 0L
@@ -268,6 +292,116 @@ function Assert-RecoveryRecords {
 		[Parameter(Mandatory = $true)]$ExpectedNonces,
 		[Parameter(Mandatory = $true)][string[]]$ExpectedConnections,
 		[long]$MaximumRunMicroseconds = 900000000L)
+	# Prospective version only. Historical summaries retain the original strict
+	# ten-probe interpretation; no old failed run is repaired by this branch.
+	function Assert-RecoveryCohorts($Rows, $Summary, [long]$PlayerId) {
+		$Contract = 'bounded_recovery_cohort_v1'
+		if ($PlayerId -le 0 -or @($Rows | Where-Object event -ceq 'recovery_failed').Count) { throw 'recovery cohort failed or lacks positive player identity' }
+		$Starts = @($Rows | Where-Object event -ceq 'cohort_start')
+		$Ends = @($Rows | Where-Object event -ceq 'cohort_end')
+		$Rpc = @($Rows | Where-Object event -ceq 'rpc_probe')
+		$Offers = @($Rows | Where-Object event -ceq 'event_offer')
+		$Events = @($Rows | Where-Object event -ceq 'event_probe')
+		if ($Starts.Count -lt 1 -or $Starts.Count -gt 20 -or $Ends.Count -ne $Starts.Count -or
+			$Rpc.Count -ne 10 * $Starts.Count -or $Offers.Count -ne 10 * $Starts.Count -or $Events.Count -ne 10 * $Starts.Count -or
+			(Get-RecoveryUnsigned $Summary 'attempt') -ne $Starts.Count) { throw 'recovery cohort attempt coverage incomplete' }
+		foreach ($Row in @($Starts) + @($Ends) + @($Rpc) + @($Offers) + @($Events) + @($Summary)) {
+			$Specific = switch ($Row.event) {
+				'cohort_start' { @('recovery_started_clock_ns', 'deadline_clock_ns', 'started_clock_ns', 'client_tick') }
+				'cohort_end' { @('recovery_started_clock_ns', 'deadline_clock_ns', 'started_clock_ns', 'ended_clock_ns',
+					'rpc_acks', 'rpc_errors', 'event_acks', 'event_errors', 'pending_events', 'rpc_p95_us', 'rpc_p99_us', 'rpc_max_us', 'event_max_us', 'status', 'reason') }
+				'rpc_probe' { @('index', 'client_tick', 'started_clock_ns', 'ended_clock_ns', 'elapsed_us', 'ok') }
+				'event_offer' { @('index', 'sequence', 'started_clock_ns', 'ok') }
+				'event_probe' { @('index', 'sequence', 'started_clock_ns', 'ended_clock_ns', 'elapsed_us', 'ok') }
+				'client_probes' { @('rpc_acks', 'rpc_errors', 'event_acks', 'rpc_p95_us', 'rpc_p99_us', 'rpc_max_us', 'event_max_us') }
+				default { throw 'unknown recovery cohort event' }
+			}
+			$Fields = @('event', 'contract', 'case', 'player_id', 'attempt', '__line') + @($Specific)
+			if ($Row.Count -ne $Fields.Count -or @($Fields | Where-Object { -not $Row.ContainsKey($_) }).Count) { throw 'recovery cohort schema partial or extended' }
+			foreach ($Field in $Fields | Where-Object { $_ -cnotin @('event', 'contract', 'case', '__line', 'status', 'reason') }) {
+				if ($Row[$Field] -cnotmatch '^(0|[1-9][0-9]*)$') { throw 'recovery cohort integer malformed' }
+			}
+			if ($Row.contract -cne $Contract -or $Row.case -cne $Summary.case -or
+				(Get-RecoveryUnsigned $Row 'player_id') -ne $PlayerId) { throw 'recovery cohort identity or version mismatch' }
+		}
+		$Origin = Get-RecoveryUnsigned $Starts[0] 'recovery_started_clock_ns'
+		$Deadline = Get-RecoveryUnsigned $Starts[0] 'deadline_clock_ns'
+		if ($Origin -le 0 -or [bigint]$Deadline - [bigint]$Origin -ne 20000000000L) { throw 'recovery cohort deadline is not immutable20s' }
+		$PreviousStart = 0L; $PreviousEnd = 0L; $PreviousEndLine = -1L
+		$Sequences = [Collections.Generic.HashSet[long]]::new()
+		for ($Attempt = 1; $Attempt -le $Starts.Count; $Attempt++) {
+			$Start = $Starts[$Attempt - 1]
+			$EndRows = @($Ends | Where-Object { (Get-RecoveryUnsigned $_ 'attempt') -eq $Attempt })
+			if ((Get-RecoveryUnsigned $Start 'attempt') -ne $Attempt -or $EndRows.Count -ne 1) { throw 'recovery cohort attempt gap or duplicate' }
+			$End = $EndRows[0]
+			$Started = Get-RecoveryUnsigned $Start 'started_clock_ns'
+			$Ended = Get-RecoveryUnsigned $End 'ended_clock_ns'
+			foreach ($Row in @($Start, $End)) {
+				if ((Get-RecoveryUnsigned $Row 'recovery_started_clock_ns') -ne $Origin -or
+					(Get-RecoveryUnsigned $Row 'deadline_clock_ns') -ne $Deadline) { throw 'recovery cohort origin or deadline restarted' }
+			}
+			if ((Get-RecoveryUnsigned $End 'started_clock_ns') -ne $Started -or
+				$Started -lt $Origin -or $Ended -lt $Started -or $Ended -gt $Deadline -or
+				($Attempt -gt 1 -and ($Started - $PreviousStart -lt 1000000000L -or $Started -lt $PreviousEnd)) -or
+				[long]$End.__line -le [long]$Start.__line -or
+				($Attempt -gt 1 -and [long]$Start.__line -le $PreviousEndLine)) {
+				throw 'recovery cohort cadence, overlap, deadline or chronology invalid'
+			}
+			$RpcRows = @($Rpc | Where-Object { (Get-RecoveryUnsigned $_ 'attempt') -eq $Attempt })
+			$OfferRows = @($Offers | Where-Object { (Get-RecoveryUnsigned $_ 'attempt') -eq $Attempt })
+			$EventRows = @($Events | Where-Object { (Get-RecoveryUnsigned $_ 'attempt') -eq $Attempt })
+			if ($RpcRows.Count -ne 10 -or $OfferRows.Count -ne 10 -or $EventRows.Count -ne 10) { throw 'recovery cohort lacks ten RPC/Event invocations' }
+			$RpcTimes = [Collections.Generic.List[long]]::new(); $EventTimes = [Collections.Generic.List[long]]::new()
+			$PriorRpcEnd = $Started
+			for ($Index = 1; $Index -le 10; $Index++) {
+				$Request = @($RpcRows | Where-Object { (Get-RecoveryUnsigned $_ 'index') -eq $Index })
+				$Offer = @($OfferRows | Where-Object { (Get-RecoveryUnsigned $_ 'index') -eq $Index })
+				$Event = @($EventRows | Where-Object { (Get-RecoveryUnsigned $_ 'index') -eq $Index })
+				if ($Request.Count -ne 1 -or $Offer.Count -ne 1 -or $Event.Count -ne 1) { throw 'recovery cohort invocation index duplicate or gap' }
+				if ((Get-RecoveryUnsigned $Offer[0] 'ok') -ne 1 -or
+					(Get-RecoveryUnsigned $Offer[0] 'sequence') -ne (Get-RecoveryUnsigned $Event[0] 'sequence') -or
+					(Get-RecoveryUnsigned $Offer[0] 'started_clock_ns') -ne (Get-RecoveryUnsigned $Event[0] 'started_clock_ns') -or
+					[long]$Offer[0].__line -le [long]$Start.__line -or [long]$Offer[0].__line -ge [long]$Event[0].__line) {
+					throw 'recovery Event offer/completion identity or original clock mismatch'
+				}
+				foreach ($Row in @($Request[0], $Event[0])) {
+					$Begin = Get-RecoveryUnsigned $Row 'started_clock_ns'
+					$Finish = Get-RecoveryUnsigned $Row 'ended_clock_ns'
+					$Remainder = 0L
+					$Elapsed = if ($Finish -ge $Begin) { [math]::DivRem([long]($Finish - $Begin), 1000L, [ref]$Remainder) } else { -1L }
+					if ((Get-RecoveryUnsigned $Row 'ok') -ne 1 -or $Begin -lt $Started -or $Finish -lt $Begin -or $Finish -gt $Ended -or
+						(Get-RecoveryUnsigned $Row 'elapsed_us') -ne $Elapsed -or
+						[long]$Row.__line -le [long]$Start.__line -or [long]$Row.__line -ge [long]$End.__line) {
+						throw 'recovery cohort invocation failed or original clock changed'
+					}
+				}
+				$RpcBegin = Get-RecoveryUnsigned $Request[0] 'started_clock_ns'
+				$RpcEnd = Get-RecoveryUnsigned $Request[0] 'ended_clock_ns'
+				if ($RpcBegin -lt $PriorRpcEnd -or (Get-RecoveryUnsigned $Event[0] 'started_clock_ns') -lt $RpcEnd -or
+					(Get-RecoveryUnsigned $Event[0] 'sequence') -le 0 -or
+					-not $Sequences.Add((Get-RecoveryUnsigned $Event[0] 'sequence'))) { throw 'recovery cohort ownership/order invalid' }
+				$PriorRpcEnd = $RpcEnd
+				$RpcTimes.Add((Get-RecoveryUnsigned $Request[0] 'elapsed_us'))
+				$EventTimes.Add((Get-RecoveryUnsigned $Event[0] 'elapsed_us'))
+			}
+			$RpcMax = [long]($RpcTimes | Measure-Object -Maximum).Maximum
+			$EventMax = [long]($EventTimes | Measure-Object -Maximum).Maximum
+			foreach ($Field in @('rpc_acks', 'event_acks')) { if ((Get-RecoveryUnsigned $End $Field) -ne 10) { throw 'recovery cohort completion counts invalid' } }
+			foreach ($Field in @('rpc_errors', 'event_errors', 'pending_events')) { if ((Get-RecoveryUnsigned $End $Field) -ne 0) { throw 'recovery accepted error or pending work is fatal' } }
+			foreach ($Field in @('rpc_p95_us', 'rpc_p99_us', 'rpc_max_us')) { if ((Get-RecoveryUnsigned $End $Field) -ne $RpcMax) { throw 'recovery cohort percentile differs from raw ten invocations' } }
+			if ((Get-RecoveryUnsigned $End 'event_max_us') -ne $EventMax -or $End.reason -cne 'none') { throw 'recovery cohort event summary or terminal reason invalid' }
+			$Qualified = $RpcMax -le 150000 -and $EventMax -le 250000
+			$ExpectedStatus = if ($Qualified) { 'QUALIFIED' } else { 'UNPROVEN' }
+			if ($End.status -cne $ExpectedStatus -or $Qualified -ne ($Attempt -eq $Starts.Count)) { throw 'recovery cohort qualification is not sole final truthful result' }
+			$PreviousStart = $Started; $PreviousEnd = $Ended; $PreviousEndLine = [long]$End.__line
+		}
+		$Final = $End
+		foreach ($Field in @('rpc_acks', 'rpc_errors', 'event_acks', 'rpc_p95_us', 'rpc_p99_us', 'rpc_max_us', 'event_max_us')) {
+			if ((Get-RecoveryUnsigned $Summary $Field) -ne (Get-RecoveryUnsigned $Final $Field)) { throw 'recovery final summary differs from qualified cohort' }
+		}
+		if ([long]$Summary.__line -le [long]$Final.__line) { throw 'recovery summary predates qualified cohort' }
+		return $Starts.Count
+	}
 	$Output = Get-Records -Path $Server.OutputPath -Kind 'Recovery'
 	$Diagnostics = @(Get-RecoveryDiagnostics -Path $Server.ErrorPath)
 	$Cases = @('gameplay', 'structural', 'mixed')
@@ -287,6 +421,7 @@ function Assert-RecoveryRecords {
 	foreach ($Connection in $ExpectedConnections) { [void]$ExpectedPeers.Add($Connection) }
 	if ($ExpectedPeers.Count -ne 32) { throw 'recovery workload lacks original peer generations' }
 	$CaseObservations = [Collections.Generic.List[object]]::new()
+	$CadenceBoundary = $null
 	foreach ($CaseIndex in 0..2) {
 		$Case = $Cases[$CaseIndex]
 		$Starts = @($Output | Where-Object { $_.event -eq 'case_start' -and $_.case -eq $Case -and $_.run -eq $RunId })
@@ -311,9 +446,33 @@ function Assert-RecoveryRecords {
 		if ($ExpectedOffers -gt 0) {
 			$MinimumObservedRetentionMargin = [long]::MaxValue
 			$MaximumObservedRetained = 0L
+			$PreviousOpportunityStart = 0L
+			$PreviousOpportunityCompleted = 0L
 			for ($Index = 0; $Index -lt 480; $Index++) {
 				$Offer = $Offers[$Index]
 				$RetentionRow = $Retention[$Index]
+				$HasBoundary = $Offer.ContainsKey('cadence_boundary')
+				$HasStart = $Offer.ContainsKey('opportunity_start_us')
+				if ($HasBoundary -ne $HasStart) { throw "recovery case $Case has partial structural cadence boundaries" }
+				$Boundary = if ($HasBoundary) { [string]$Offer.cadence_boundary } else { 'legacy_completion_v1' }
+				if ($Boundary -cnotin @('legacy_completion_v1', 'opportunity_start_v1') -or
+					($HasBoundary -and $Boundary -cne 'opportunity_start_v1')) { throw 'unknown explicit structural cadence boundary' }
+				if ($null -eq $CadenceBoundary) { $CadenceBoundary = $Boundary }
+				if ($Boundary -cne $CadenceBoundary) { throw 'mixed structural cadence boundary versions' }
+				$Completed = Get-RecoveryUnsigned -Row $Offer -Field 'monotonic_us'
+				$OpportunityStart = if ($HasStart) { Get-RecoveryUnsigned -Row $Offer -Field 'opportunity_start_us' } else { $Completed }
+				# Completion timestamps retain their original meaning. Variable work
+				# duration cannot establish invocation cadence; new rows explicitly
+				# identify the same entry boundary used by the unchanged native gate.
+				if ($OpportunityStart -le 0 -or $Completed -lt $OpportunityStart -or
+					($Index -gt 0 -and $OpportunityStart - $PreviousOpportunityStart -lt 16667) -or
+					($HasStart -and ($OpportunityStart -lt [long]$Starts[0].monotonic_us -or
+						$Completed -ge [long]$Cessations[0].monotonic_us -or
+						($Index -gt 0 -and $PreviousOpportunityCompleted -gt $OpportunityStart)))) {
+					throw "recovery case $Case has an invalid structural offer cadence"
+				}
+				$PreviousOpportunityStart = $OpportunityStart
+				$PreviousOpportunityCompleted = $Completed
 				$Oldest = Get-RecoveryUnsigned -Row $RetentionRow -Field 'oldest'
 				$Required = Get-RecoveryUnsigned -Row $RetentionRow -Field 'required'
 				$Margin = Get-RecoveryUnsigned -Row $RetentionRow -Field 'margin'
@@ -326,8 +485,7 @@ function Assert-RecoveryRecords {
 					($Index -lt 479 -and [long]$RetentionRow.__line -ge [long]$Offers[$Index + 1].__line) -or
 					$Oldest -lt 1 -or $Required -lt $Oldest -or $Required -gt $Tail -or
 					$Margin -ne ($Required - $Oldest) -or $Retained -gt 16384 -or
-					$SampleCount -ne 16 * ($Index + 1) -or
-					($Index -gt 0 -and [long]$Offer.monotonic_us - [long]$Offers[$Index - 1].monotonic_us -lt 16667)) {
+					$SampleCount -ne 16 * ($Index + 1)) {
 					throw "recovery case $Case has an invalid structural offer cadence"
 				}
 				$MinimumObservedRetentionMargin = [math]::Min($MinimumObservedRetentionMargin, $Margin)
@@ -392,6 +550,8 @@ function Assert-RecoveryRecords {
 		if ($Samples.Count -eq 0) { throw "recovery $Case lacks native service samples" }
 		$ObservedRetainedHigh = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'retained_high'
 		$ObservedMinimumMargin = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'minimum_retention_margin'
+		$PreviousReportedHigh = $ObservedRetainedHigh
+		$PreviousReportedMinimum = $ObservedMinimumMargin
 		$PreviousTail = $Tail
 		foreach ($Sample in $Samples) {
 			$Oldest = Get-RecoveryUnsigned -Row $Sample -Field 'oldest'
@@ -400,19 +560,39 @@ function Assert-RecoveryRecords {
 			$Retained = Get-RecoveryUnsigned -Row $Sample -Field 'retained'
 			$ObservedRetainedHigh = [math]::Max($ObservedRetainedHigh, $Retained)
 			$ObservedMinimumMargin = [math]::Min($ObservedMinimumMargin, $Margin)
+			# Native extrema include every recovery tick; these text samples are sparse.
+			# Preserve the all-tick source's bounds/monotonicity without claiming that
+			# printed rows contain the instant at which either extremum changed.
+			$ReportedHigh = Get-RecoveryUnsigned -Row $Sample -Field 'retained_high'
+			$ReportedMinimum = Get-RecoveryUnsigned -Row $Sample -Field 'minimum_retention_margin'
 			$CurrentTail = Get-RecoveryUnsigned -Row $Sample -Field 'current_tail'
 			if ($Oldest -lt 1 -or $Required -lt $Oldest -or $Required -gt $CurrentTail -or
 				$Margin -ne ($Required - $Oldest) -or $Retained -gt 16384 -or
-				(Get-RecoveryUnsigned -Row $Sample -Field 'retained_high') -ne $ObservedRetainedHigh -or
-				(Get-RecoveryUnsigned -Row $Sample -Field 'minimum_retention_margin') -ne $ObservedMinimumMargin -or
-				[long]$Sample.journal_failures -ne 0 -or $CurrentTail -lt $PreviousTail) {
+				$ReportedHigh -lt $ObservedRetainedHigh -or $ReportedHigh -lt $PreviousReportedHigh -or $ReportedHigh -gt 16384 -or
+				$ReportedMinimum -gt $ObservedMinimumMargin -or $ReportedMinimum -gt $PreviousReportedMinimum -or
+				(Get-RecoveryUnsigned -Row $Sample -Field 'journal_failures') -ne 0 -or $CurrentTail -lt $PreviousTail) {
 				throw "recovery $Case lost retained journal coverage"
 			}
 			$PreviousTail = $CurrentTail
+			$PreviousReportedHigh = $ReportedHigh
+			$PreviousReportedMinimum = $ReportedMinimum
 		}
 		$LastProbeLine = [long]($ProbeRows | Measure-Object -Property __line -Maximum).Maximum
+		$VersionedAcks = @($ProbeRows | Where-Object { $_.ContainsKey('contract') })
+		$LastProbeElapsed = 0L
+		if ($VersionedAcks.Count) {
+			if ($VersionedAcks.Count -ne 32) { throw 'partial recovery ACK enrollment version' }
+			$CessationAt = Get-RecoveryUnsigned $Cessations[0] 'monotonic_us'
+			foreach ($Ack in $VersionedAcks) {
+				$Elapsed = (Get-RecoveryUnsigned $Ack 'monotonic_us') - $CessationAt
+				if ($Ack.contract -cne 'bounded_recovery_cohort_v1' -or $Elapsed -lt 0 -or $Elapsed -gt 20000000L) {
+					throw 'recovery ACK missed immutable server20s deadline or version'
+				}
+				$LastProbeElapsed = [math]::Max($LastProbeElapsed, $Elapsed)
+			}
+		}
 		$Service = @($Samples | Where-Object { [long]$_.__line -gt $LastProbeLine -and
-			[long]$_.elapsed_us -le 20000000 -and (Test-RecoveryServiceHealthy -Sample $_) })
+			[long]$_.elapsed_us -ge $LastProbeElapsed -and [long]$_.elapsed_us -le 20000000 -and (Test-RecoveryServiceHealthy -Sample $_) })
 		$ServiceState = if ($Service.Count -gt 0) { 'MEASURED_PASS' } else { 'MEASURED_FAIL' }
 		$SnapshotSample = @($Samples | Where-Object { [long]$_.__line -lt [long]$Snapshots[0].__line -and
 			[long]$_.elapsed_us -eq [long]$Snapshots[0].elapsed_us })
@@ -482,6 +662,11 @@ function Assert-RecoveryRecords {
 			ObservedStructuralConvergenceUs = $Quote.ConvergedUs
 		})
 	}
+	$EnrollmentContract = $null
+	$ServerReady = @(Get-Records -Path $Server.OutputPath -Kind 'Server' | Where-Object { $_.event -ceq 'ready' -and $_.run -ceq $RunId })
+	$CohortConnections = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	$CohortPlayers = [Collections.Generic.HashSet[long]]::new()
+	$FinalNameIdentityContract = $null
 	foreach ($Slot in 0..31) {
 		$Client = $Clients[$Slot]
 		$ClientOutput = Get-Records -Path $Client.OutputPath -Kind 'Client'
@@ -491,6 +676,32 @@ function Assert-RecoveryRecords {
 			$Probes = @($ClientDiagnostics | Where-Object { $_.event -eq 'client_probes' -and $_.case -eq $Case })
 			$ExpectedRpc = if ($Case -eq 'structural') { 1 } else { 16 }
 			$ExpectedEvents = if ($Case -eq 'structural') { 60 } else { 480 }
+			$CohortRows = @($ClientDiagnostics | Where-Object { $_.case -ceq $Case -and $_.event -cin @('cohort_start', 'cohort_end', 'rpc_probe', 'event_offer', 'event_probe', 'recovery_failed') })
+			$NewEnrollment = $Probes.Count -eq 1 -and $Probes[0].ContainsKey('contract')
+			$Version = if ($NewEnrollment) { $Probes[0].contract } else { 'legacy_immediate_cohort' }
+			if ($null -eq $EnrollmentContract) { $EnrollmentContract = $Version }
+			if ($Version -cne $EnrollmentContract -or ($NewEnrollment -and $Version -cne 'bounded_recovery_cohort_v1') -or
+				(-not $NewEnrollment -and @($Diagnostics | Where-Object { $_.event -ceq 'probe_ack' -and $_.case -ceq $Case -and $_.ContainsKey('contract') }).Count) -or
+				(-not $NewEnrollment -and @($CohortRows | Where-Object { $_.event -cin @('cohort_start', 'cohort_end') -or $_.ContainsKey('contract') }).Count)) {
+				throw 'recovery enrollment version mixed, partial or unknown'
+			}
+			if ($NewEnrollment) {
+				$Ready = @($ServerReady | Where-Object { $_.nonce -ceq [string]$ExpectedNonces[$Slot] })
+				if ($Ready.Count -ne 1 -or "$($Ready[0].connection_slot):$($Ready[0].connection_generation)" -cnotin $ExpectedConnections) { throw 'recovery cohort lacks original Ready identity' }
+				$PlayerId = Get-RecoveryUnsigned $Ready[0] 'player_id'
+				if ($Case -ceq 'gameplay' -and (-not $CohortConnections.Add("$($Ready[0].connection_slot):$($Ready[0].connection_generation)") -or
+					-not $CohortPlayers.Add($PlayerId))) { throw 'recovery cohort duplicate original player or connection' }
+				[void](Assert-RecoveryCohorts $CohortRows $Probes[0] $PlayerId)
+				$Ack = @($Diagnostics | Where-Object { $_.event -ceq 'probe_ack' -and $_.case -ceq $Case -and
+					$_.peer_slot -ceq $Ready[0].connection_slot -and $_.peer_generation -ceq $Ready[0].connection_generation })
+				$Cessation = @($Output | Where-Object { $_.event -ceq 'cessation' -and $_.case -ceq $Case -and $_.run -ceq $RunId })
+				if ($Ack.Count -ne 1 -or $Ack[0].contract -cne 'bounded_recovery_cohort_v1' -or
+					(Get-RecoveryUnsigned $Ack[0] 'attempt') -ne (Get-RecoveryUnsigned $Probes[0] 'attempt') -or
+					(Get-RecoveryUnsigned $Ack[0] 'monotonic_us') -lt (Get-RecoveryUnsigned $Cessation[0] 'monotonic_us') -or
+					(Get-RecoveryUnsigned $Ack[0] 'monotonic_us') - (Get-RecoveryUnsigned $Cessation[0] 'monotonic_us') -gt 20000000L) {
+					throw 'qualified recovery cohort missed original server cessation deadline'
+				}
+			}
 			if ($Offered.Count -ne 1 -or $Probes.Count -ne 1 -or
 				[int]$Offered[0].opportunities -ne 480 -or
 				[int]$Offered[0].rpc_completed + [int]$Offered[0].rpc_errors -ne $ExpectedRpc -or
@@ -513,8 +724,35 @@ function Assert-RecoveryRecords {
 				throw "client $Slot lacks 32 final $Case ObjectId/Name observations"
 			}
 			$Seen = [Collections.Generic.HashSet[int]]::new()
+			$LocalIdentities = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+			$ReplicaEpoch = $null
 			$CaseIndex = if ($Case -eq 'structural') { 1 } else { 2 }
 			foreach ($Name in $Names) {
+				$IdentityContract = if ($Name.ContainsKey('identity_contract')) { $Name.identity_contract } else { 'legacy_literal_object_id' }
+				if ($null -eq $FinalNameIdentityContract) { $FinalNameIdentityContract = $IdentityContract }
+				if ($IdentityContract -cne $FinalNameIdentityContract -or
+					$IdentityContract -cnotin @('legacy_literal_object_id', 'source_replica_v1') -or
+					($NewEnrollment -and $IdentityContract -cne 'source_replica_v1')) {
+					throw 'recovery final Name identity contract missing, mixed or unknown'
+				}
+				if ($IdentityContract -ceq 'source_replica_v1') {
+					$Fields = @('event', 'run_id', 'slot', 'nonce', 'case', 'index', 'object_slot', 'object_generation',
+						'name_bytes', 'letter', 'identity_contract', 'local_object_slot', 'local_object_generation', 'replica_epoch', '__line')
+					if ($Name.Count -ne $Fields.Count -or @($Fields | Where-Object { -not $Name.ContainsKey($_) }).Count) {
+						throw 'recovery source replica identity schema partial or extended'
+					}
+					$LocalSlot = Get-RecoveryUnsigned $Name 'local_object_slot'
+					$LocalGeneration = Get-RecoveryUnsigned $Name 'local_object_generation'
+					$Epoch = Get-RecoveryUnsigned $Name 'replica_epoch'
+					if ($null -eq $ReplicaEpoch) { $ReplicaEpoch = $Epoch }
+					if ($LocalSlot -le 0 -or $LocalSlot -gt [uint32]::MaxValue -or
+						$LocalGeneration -le 0 -or $LocalGeneration -gt [uint32]::MaxValue -or
+						$Epoch -le 0 -or $Epoch -ne $ReplicaEpoch -or -not $LocalIdentities.Add("${LocalSlot}:${LocalGeneration}")) {
+						throw 'recovery source replica identity has invalid, duplicate or mixed live local bindings'
+					}
+				} elseif (@('local_object_slot', 'local_object_generation', 'replica_epoch') | Where-Object { $Name.ContainsKey($_) }) {
+					throw 'legacy recovery identity cannot partially claim source replica binding'
+				}
 				$Index = [int]$Name.index
 				$Opportunity = if ($Index -lt 16) { 479 } else { 480 }
 				$Letter = [char]([int][char]'a' + (($CaseIndex * 7 + $Opportunity + $Index) % 26))
@@ -537,7 +775,7 @@ function Assert-RecoveryRecords {
 	$TotalRetainedAcrossCases = 0L
 	foreach ($Observation in $CaseObservations) { $TotalRetainedAcrossCases += [long]$Observation.ExactRetainedWorkBytes }
 	return [ordered]@{ State = $State; Cases = @($CaseObservations);
-		ExactRetainedWorkBytes = $TotalRetainedAcrossCases }
+		ExactRetainedWorkBytes = $TotalRetainedAcrossCases; FinalNameIdentityContract = $FinalNameIdentityContract }
 }
 
 function Start-LoggedProcess {
@@ -618,8 +856,9 @@ function Test-SealedFarmPublicationTrace {
 		}
 		if ($HeaderBytes[$HeaderBytes.Count - 1] -ne 10) { return $false }
 		$Header = [Text.Encoding]::ASCII.GetString($HeaderBytes.ToArray())
-		$Prefix = "format=GargantuanFarmPublicationV1`trun=$ExpectedRunId`trole=SERVER`tslot=-1`tnonce=0`t"
-		if (-not $Header.StartsWith($Prefix, [StringComparison]::Ordinal)) { return $false }
+		$Prefixes = @("format=GargantuanFarmPublicationV1`trun=$ExpectedRunId`trole=SERVER`tslot=-1`tnonce=0`t",
+			"format=GargantuanFarmPublicationV2`trun=$ExpectedRunId`trole=SERVER`tslot=-1`tnonce=0`t")
+		if (-not @($Prefixes | Where-Object { $Header.StartsWith($_, [StringComparison]::Ordinal) }).Count) { return $false }
 		if ($Header -cnotmatch 'count=([0-9]+)\x09dropped=0\x09decode_failures=0\x0A$') { return $false }
 		$Count = [long]$Matches[1]
 		return $Stream.Length -eq ($HeaderBytes.Count + 80L * $Count)
@@ -922,6 +1161,8 @@ try {
 		-not (Test-Path -LiteralPath $PlayerExecutable -PathType Leaf)) {
 		throw 'packaged GargantuanServer.exe or GargantuanPlayer.exe is missing'
 	}
+	Assert-ClosedNativeRuntimeRoot -Root $ServerPackageRoot
+	Assert-ClosedNativeRuntimeRoot -Root $PlayerPackageRoot
 	if ($Provider -eq 'Node') {
 		if ([string]::IsNullOrWhiteSpace($NodeEndpoint) -or
 			-not (Test-Path -LiteralPath $NodeRootCertificate -PathType Leaf) -or

@@ -2,11 +2,16 @@ name: GNS sanitizer CI
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   linux-gns-sanitizers:
@@ -130,10 +135,12 @@ jobs:
           AdapterCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_transport | grep -m1 'GameNetworkingSocketsTransport.cpp')"
           FeedbackCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_feedback_counters | grep -m1 'ReliableServiceFeedback.cpp')"
           BridgeCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_feedback_snapshot | grep -m1 'ReliableServiceFeedbackBridge.cpp')"
+          PacerCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_ordinary_pacer | grep -m1 'OrdinaryWirePacer.cpp')"
           printf 'GNS compile command: %s\n' "$GNSCommand"
           printf 'Gargantuan adapter compile command: %s\n' "$AdapterCommand"
           printf 'Gargantuan feedback compile command: %s\n' "$FeedbackCommand"
           printf 'Gargantuan bridge compile command: %s\n' "$BridgeCommand"
+          printf 'Gargantuan ordinary pacer compile command: %s\n' "$PacerCommand"
 
           grep -Fq -- '-fsanitize=address,undefined' <<<"$GNSCommand"
           grep -Fq -- '-fno-sanitize=function' <<<"$GNSCommand"
@@ -146,7 +153,7 @@ jobs:
             exit 1
           fi
 
-          for OwnedCommand in "$FeedbackCommand" "$BridgeCommand"; do
+          for OwnedCommand in "$FeedbackCommand" "$BridgeCommand" "$PacerCommand"; do
             grep -Fq -- '-fsanitize=address,undefined' <<<"$OwnedCommand"
             if grep -Fq -- '-fno-sanitize=' <<<"$OwnedCommand"; then
               echo "GNS-only compatibility exclusions leaked into owned feedback code."
@@ -178,13 +185,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          printf 'POOLED_CORRECTNESS_V1\n' > qualification-contract.txt
           ctest --test-dir build-gns-sanitizers \
             --parallel 1 \
             --timeout 300 \
             --output-on-failure \
             --no-tests=error \
             --output-junit "$GITHUB_WORKSPACE/build-gns-sanitizers/ctest-gns-results.xml" \
-            -R '^(gargantuan_replication|gargantuan_real_transport|gargantuan_gns_failed_send_retry_safety|gargantuan_f1_packet_tail|gargantuan_f1_four_grant_sanitizer_safety|gargantuan_f1_mixed_traffic|gargantuan_gns_service_fairness|gargantuan_remote_real_transport|gargantuan_character_real_transport|gargantuan_game_session_real_transport)$'
+            -R '^(gargantuan_replication|gargantuan_real_transport|gargantuan_gns_failed_send_retry_safety|gargantuan_hybrid_packet_tail|gargantuan_f1_four_grant_sanitizer_safety|gargantuan_hybrid_mixed_traffic|gargantuan_gns_service_fairness|gargantuan_remote_real_transport|gargantuan_character_real_transport|gargantuan_game_session_real_transport|gargantuan_pooled_feedback_refresh)$'
           test -s "$GITHUB_WORKSPACE/build-gns-sanitizers/ctest-gns-results.xml"
 
       - name: Run profiled GameSession over GNS under sanitizers
@@ -214,6 +222,7 @@ jobs:
           if-no-files-found: ignore
           path: |
             qualified-source-commit.txt
+            qualification-contract.txt
             build-gns-sanitizers/CMakeFiles/CMakeConfigureLog.yaml
             build-gns-sanitizers/Testing/Temporary/LastTest.log
             build-gns-sanitizers/ctest-gns-results.xml

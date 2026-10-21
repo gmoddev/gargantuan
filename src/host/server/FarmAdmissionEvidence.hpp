@@ -75,6 +75,7 @@ namespace gargantuan::host::detail {
 		static constexpr std::uint64_t MaximumEvents = 65'536;
 		static constexpr std::uint64_t MaximumFileBytes = 32ull * 1024 * 1024;
 		std::string RunId;
+		bool HybridContract = false;
 		std::filesystem::path Path;
 		std::vector<network::detail::AdmissionEvidenceEvent> Events;
 		bool Overflow = false, WriteFailed = false, Dumped = false;
@@ -107,6 +108,7 @@ namespace gargantuan::host::detail {
 			case R::GenerationRemoved: return "generation_removed";
 			case R::TerminalRelease: return "terminal_release";
 			case R::FeedbackUnavailable: return "feedback_unavailable";
+			case R::SourceEmpty: return "source_empty";
 			}
 			return "invalid";
 		}
@@ -115,9 +117,11 @@ namespace gargantuan::host::detail {
 			if (Self.Events.size() == MaximumEvents) { Self.Overflow = true; return; }
 			try { Self.Events.push_back(Event); } catch (...) { Self.Overflow = true; }
 		}
-		static std::string Format(const network::detail::AdmissionEvidenceEvent &Event) {
+		static std::string Format(const network::detail::AdmissionEvidenceEvent &Event, bool Hybrid) {
 			std::ostringstream Line;
-			Line << "event\t" << Kind(Event.Kind) << '\t' << Reason(Event.Reason)
+			const auto ReasonValue = !Hybrid && Event.Reason == network::detail::AdmissionEvidenceReason::SourceEmpty
+				? network::detail::AdmissionEvidenceReason::NoWork : Event.Reason;
+			Line << "event\t" << Kind(Event.Kind) << '\t' << Reason(ReasonValue)
 				<< '\t' << Event.Connection.Slot << '\t' << Event.Connection.Generation
 				<< '\t' << Event.DemandId << '\t' << Event.EligibilityEpisode
 				<< '\t' << Event.GrantToken << '\t' << Event.ExactBytes
@@ -139,8 +143,8 @@ namespace gargantuan::host::detail {
 			Write(Output);
 			Output.Flush();
 		}
-		explicit FarmAdmissionEvidence(std::string Value, std::filesystem::path EvidencePath)
-			: RunId(std::move(Value)), Path(std::move(EvidencePath)) {
+		explicit FarmAdmissionEvidence(std::string Value, std::filesystem::path EvidencePath, bool Hybrid = false)
+			: RunId(std::move(Value)), HybridContract(Hybrid), Path(std::move(EvidencePath)) {
 			if (!Path.is_absolute() || Path.filename() != "admission-fairness.tsv" ||
 				!std::filesystem::is_directory(Path.parent_path()) ||
 				std::filesystem::is_symlink(Path.parent_path()) || std::filesystem::exists(Path))
@@ -158,8 +162,10 @@ namespace gargantuan::host::detail {
 			network::detail::ActiveAdmissionEvidence = Previous;
 			try {
 				ExclusiveWriter Output(Path);
-				Output.Write("format=GargantuanAdmissionEvidenceV2\trun=" + RunId + "\n");
-				for (const auto &Event : Events) Output.Write(Format(Event));
+				Output.Write(HybridContract
+					? "format=GargantuanAdmissionEvidenceV3\trun=" + RunId + "\tcontract=HYBRID_F1_V1\n"
+					: "format=GargantuanAdmissionEvidenceV2\trun=" + RunId + "\n");
+				for (const auto &Event : Events) Output.Write(Format(Event, HybridContract));
 				Output.Write("end\t" + std::to_string(Events.size()) + "\t" +
 					(Overflow ? std::string("1\n") : std::string("0\n")));
 				Output.Flush();

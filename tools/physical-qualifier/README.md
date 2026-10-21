@@ -1,26 +1,104 @@
 # Gargantuan physical qualification adapter
 
-Current deployment provenance is recorded in the
-[active F1 source manifest](phase1-f1-source-manifest.json) and the
-[physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
-The funded-ACK candidate requires a fresh four-client qualification before the
-Local/Node provider matrices. Its deployment includes five pinned native DLLs
-and twelve runtime assets. Earlier source/probe hashes and installed-service
-receipts below are historical; they do not override that manifest or qualify a
-new candidate. Required hosted CI includes the original uploaded JUnit evidence,
-not only a successful workflow status. Farm32 capture remains unqualified until
-the corrected stop path passes a fresh complete test near its storage limit.
+The retained F1 physical Phase 1 PASS is run
+`454bf4f8-c8f2-4c18-9866-1b61218da514`, execution source
+`9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad`. The
+[physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
+owns current deployment provenance, capture qualification and subsequent failed
+Local32 infrastructure evidence. Local32, real-TLS Node32 and final Foundation
+3L acceptance remain unqualified. Earlier source/probe hashes, the
+[historical F1 manifest](phase1-f1-source-manifest.json) and installed-service
+receipts below remain deployment history. A new tooling pin requires its own
+source, hosted CI and endpoint preflight; it does not invalidate or rerun the
+retained F1 qualification. Required hosted CI includes the original uploaded
+JUnit evidence, not only a successful workflow status.
 
-The development Phase 1 probe and result analyzer implement the
+## Versioned qualification scope (2026-10-14)
+
+Standard `HYBRID_F1_V1` releases qualify D03. The retained legacy packet-scale
+running curve is diagnostic under that profile; it cannot independently reject
+a release. Native-positive unique BODY completion within the exact
+`626199296000 / 16777216 = 37324.3865966796875`-us budget, original activation
+and first-send identity, fresh complete feedback, exact ACK/retirement,
+conservation, reserves, ordering, gameplay and lifecycle remain fatal. The
+four-client Phase 1 result is only a prerequisite: Native32/Local32/Node32 must
+separately establish the full D03 completion/FIFO/execution/turnover/fairness and
+recovery conjunction.
+
+The probe selects this scope explicitly with `--hybrid-f1`; its summaries and
+source manifest must identify `HYBRID_F1_V1`. The current Hybrid CSV uses
+`HYBRID_OBSERVATION_V2`: three native completion failure/evidence flags plus
+raw ordinal, existing observation point, native state/counter validity,
+verified cleanup cut and fatal owner/D03 flags. Valid null bookkeeping rows
+cannot replace genuine native history, advance its clock or certify delivery.
+Every accepted row must match a recorded admission prefix. Owned cleanup can
+follow only a completely verified live campaign; early termination, terminal
+release, changed native totals and retained hard failures remain fatal.
+`Replay(..., ExpectedContract="HYBRID_F1_V1")`
+requires that exact schema and all endpoint identities; a legacy PASS cannot
+substitute. The default replay and probe command remain strict legacy `F1`.
+`stage --contract` and config `ServiceContract` must match the pinned
+`PHASE1_CONTRACT`. Current staging selects `HYBRID_F1_V1` and the
+[f30 manifest](phase1-hybrid-f30e80ba-source-manifest.json): native execution
+source `f30e80bacda8d06fa5969c4ac0bfc527cea91aff`, archive SHA-256
+`CDD202D416428C6136F5D837F04AD5AD264CBAE68AE9CD58378277A8DAD2D835`.
+Its freshly collected probe SHA-256 is
+`2E7F33F1FBEB7198CAB1A14091D2DD5AC12A356D72AFDAA6E82A7886451E5164`;
+all five native DLLs and twelve runtime assets also match the measured3182
+bytes. Source identity is the new verified owned-tree archive and exact clean
+incremental build receipt. The probe's cached source label is informational;
+it is not an embedded commit certificate and is not rewritten.
+
+The f30 change adds bounded host first-fault evidence and server-child
+diagnostic settings. There are no changes from3182 in `src/network`,
+`include/gargantuan/network`, `cmake/gns`, the GNS recipe, runtime Luau or the
+physical probe and trace sources. The retained3182 native32 result keeps its
+original execution source and scope; no new f30 native32 result is claimed.
+The f30 affected native preflight passes all23 selected CTests, scheduler
+and endpoint tests, Luau recovery and aggregate checks. Its exact-source hosted
+CI/official package, fresh same-source four-client prerequisite and Local32
+conjunction remain independent gates. The qualifier child has separate tooling
+provenance. Applying this pin update does not establish those gates or final3L.
+
+At the2026-10-16 checkpoint, f30's eight and qualifiercf45's six original hosted
+jobs pass. Fresh f30 four-client run `5c94df6a-3836-47d3-8a99-5bb80fcf0d6a`
+passes whole replay. The single subsequent Local32 run
+`7efff6f1-8d59-4fa8-8cef-c1f27cfa9b80` fails exact150-ms turnover at164.511ms;
+native BODY completion24.319ms and Main15.738ms pass for its first fault.
+No demonstrated production defect is established; no retry or Node32 follows.
+The [final attribution and architecture assessment](../../devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#32-final-bounded-local32-attribution-and-architecture-decision-2026-10-16)
+preserves original CI/package, failed evidence and cleanup identities. D03
+remains unchanged and Foundation3L remains incomplete.
+
+The [3182 manifest](phase1-hybrid-3182a164-source-manifest.json) remains historical:
+native source
+`3182a164d5bf87f5051e11ecbd1c749b73c282dc`, archive SHA-256
+`68D48757A85C7706578140EBD022691D10DFB3C335E7B1359E0BF3B706266655`, and
+probe SHA-256 `2E7F33F1FBEB7198CAB1A14091D2DD5AC12A356D72AFDAA6E82A7886451E5164`.
+Its five measured native DLLs and twelve runtime assets are pinned together.
+That native execution source is `3182a164d5bf87f5051e11ecbd1c749b73c282dc`.
+Its exact-source CI and native32 PASS are retained as recorded in the
+[ownership decision](../../devdocs/FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#29-hybrid-observer-correction-exact-source-ci-and-native-subset-pass).
+Preparing or applying a pin patch does not independently prove either gate. No self-referential
+source/archive hash is required. Hybrid four-client physical qualification,
+Local32, Node32 and final 3L acceptance are not established by this pin change.
+No installed coordinator service or historical manifest is changed.
+
+CI selects the hybrid four-grant and funded-ACK fixtures and uploads an exact
+`qualification-contract.txt` marker. Official package evidence carries that
+marker outside both closed deployment role inventories. Historic artifacts
+without it retain their original strict identity and verdict.
+
+The retained development Phase 1 probe and result analyzer implement the
 [D01/F1 finite-grant drain contract](../../docs/adr/D01-pooled-service-curve.md):
 each accepted maximum-size grant must complete unique native first-send within
 its finite rate-latency envelope, pass its independent intra-grant running-rate
 check, and participate in a real four-peer first-send overlap. Four native
 all-subinterval peer checks imply the 64 MiB/s running-pool bound on that
 common interval. ACK, retirement, capture, and gameplay gates remain separate.
-Earlier short-window and D01 cross-grant receipts are historical. The installed
-physical probe and capture-service pins remain unchanged until the corrected
-F1 candidate completes deterministic and hosted CI gates. The old staged D01
+Earlier short-window and D01 cross-grant receipts are historical. The deployment
+history below retains the pins and prerequisites that applied to those earlier
+candidates. The old staged D01
 candidate remains pinned separately
 from readiness: probe SHA-256
 `2E543D0983D66895569A0E270905086200C6E478A8C313B206E6BC64C0081ABC`,
@@ -39,13 +117,13 @@ F1 native-source archive SHA-256
 `18AF89DAEEF3D5DD8E1AC6ED7089EDBEF278990AA211CBB4E54BCF3555D846FB`,
 and Windows probe SHA-256
 `925DC0684787B1D629901D5047FF9ECC968AFC5F4E579DE576F701322E9BB99F`.
-The [F1 manifest](phase1-f1-source-manifest.json) also pins all twelve runtime
+The [historical ce4733 F1 manifest](phase1-f1-ce4733-source-manifest.json) also pins all twelve runtime
 assets and the two native DLLs required beside the probe executable; the Phase 1
 adapter checks their hashes and rejects the earlier D01
 candidate. [Generate the archive](make_f1_source_archive.py) with
-`python tools/physical-qualifier/make_f1_source_archive.py <output.zip>` from
-the pinned native source. Use `--verify-pinned <archive.zip>` to compare the
-archive with the historical source revision; `--verify-tree <archive.zip>
+`python tools/physical-qualifier/make_f1_source_archive.py --legacy <output.zip>` from
+the pinned native source. Use `--legacy --verify-pinned <archive.zip>` to compare the
+archive with the historical source revision; `--legacy --verify-tree <archive.zip>
 <source-root>` checks a separate build tree. The candidate bundle is staged
 separately from installed tools; endpoint artifact, capture, evidence-root and
 normal-LAN preflights remain required before an authorized physical attempt.
@@ -120,8 +198,10 @@ The lifecycle runner performs its own forward/reverse tunnel proof before
 assignment. That worker proof is one-use per stage label: do not call the
 tunnel preflight separately with the same label and then invoke the runner.
 
-[upstream.lock.json](upstream.lock.json) pins commit
-`67b730e6dbf7a0524d4f29d0d9cb19a0abf8a614` and SHA-256 of the consumed sources.
+[upstream.lock.json](upstream.lock.json) pins the exact consumed commit and
+SHA-256 of its sources. The installed Farm32 runtime remains
+`5ee889fab571a9047cbc0f8724f2077c7bb9eb74` until a new pinned bundle completes
+separate endpoint qualification; the published `v0.1.0` tag is unchanged.
 The pinned coordinator and endpoint now share the same listener, source-bind,
 connect, and authenticated `STAGE_READY` path in production and the control-only
 preflight. The latter records the actual child process and token, completes the
@@ -241,10 +321,38 @@ manifest bytes for the client, performs fresh role-local inventory (including
 the 8 GiB client free-memory floor), and seals `farm_ticket_staging.py`'s fixed
 copy plan. `stage` copies only those planned files plus the pinned coordinator
 runtime into private endpoint roots, verifies every copied member locally at
-each endpoint, and rechecks the worker Python/helper hash pins. The worker owns
+each endpoint, and rechecks the worker Python/helper hash pins. It then uses the
+fixed `prepare-capture` endpoint operation to create only each sealed role's
+fresh CaptureRoot under that endpoint's identity. The parent must already exist;
+stale roots, reparse ancestry and overlap with the stage, package, private or
+role-owned outputs are rejected. The one-use ticket, exact config pins and fresh
+role preflight bind this preparation. Actual capture `Configured` validation
+passes before any role launches; `farm_capture_campaign.py validate CONFIG`
+exposes the same read-only check. Staging does not create CaptureRoot/RunId or
+RoleEvidenceRoot: the capture controller and native farm respectively retain
+those ownership boundaries. No capture, probe, service or installed config is
+started or replaced by preparation.
+
+If coordinator join fails, the runner promptly requests cooperative capture
+cancellation through a fixed local marker outside the sealed capture directory.
+Exact run/coordinator/role/readiness identity is required; publication is atomic
+and exclusive, and reading is bounded with reparse paths rejected. The existing
+owned abort/stop/export path preserves failed diagnostic evidence. Missing role
+indexes remain unsealed. Ordinary completion and the 500-second role,
+80-second stop and 600-second lease bounds are unchanged.
+
+The worker owns
 the normal-LAN coordinator listener on `192.168.0.108:39451`, while the client
 connects outbound; a nonce-bound control-only socket probe and the same-run
 `LISTENING_UNQUALIFIED` marker precede the two role launches. The fixed runner
+also verifies and publishes a run-owned inbound game-UDP rule for the exact
+hash-verified projected worker Server executable: local `10.253.3.2:39450`,
+remote `10.253.3.1`, and the verified Private fiber interface. This permission
+is distinct from coordinator TCP. Stale names, changed deployment/projection
+pins, ambiguous interfaces, explicit matching Blocks or differing effective
+filters deny launch. Its sealed ownership receipt permits cleanup of only
+that unchanged rule on every launch exit; cleanup failures remain failures.
+No global firewall profile or unrelated exception changes. The fixed runner
 and endpoint helper use bounded hidden processes. `collect` copies every worker
 index member with a fresh SHA-256 check, binds the coordinator and both role
 results, and invokes the existing offline capture reconciler. For Node, it
@@ -263,6 +371,24 @@ The Farm32 client capture requests a fixed 64 MiB driver buffer and records
 campaign sealing and offline acceptance; it is not a verified driver allocation
 or capacity PASS. The [buffer candidate evidence and validation plan](docs/FARM32_CLIENT_CAPTURE_BUFFER.md)
 preserve the existing zero-drop, full-packet, duration, and retention gates.
+
+Farm publication evidence V2 retains the80-byte record and existing bounds.
+Its server-only `CharacterRelationshipRetired` record identifies the successful
+GCHR materialization owner removal, separately from GRPL object retirement.
+The reader requires a known live, generation-specific relationship and ready
+connection. Retirement disposes that lifetime's pending due obligation without
+manufacturing accepted service or client delivery; confirmed obligations cannot
+retire before their due tick. Reentry starts a fresh lifetime. Missing, duplicate,
+stale or wrong-generation ends and unexplained due changes remain fatal. V1
+traces retain their original strict interpretation; mixed schema versions reject.
+
+Prospective bounded recovery cohorts also require `source_replica_v1` final-Name
+witnesses. The native client records authoritative source IDs from the actual
+live replica map, alongside local IDs and epoch. The reader retains exact
+source-ID/Name checks and rejects missing, partial, mixed, stale or ambiguous
+witnesses. Local runtime IDs are not server IDs. Historical logs retain their
+original literal comparison and verdict; server causal/ACK replay alone cannot
+repair a missing client binding.
 
 The fixed baseline/recovery frame ceilings cover their existing 300/420-second
 role-local runtime budgets at the Player's 16,667-us network cadence, including
@@ -293,7 +419,8 @@ by this offline analysis path; its contents are not evidence of analyzer custody
 ## New F1 candidate source provenance
 
 The `make_f1_source_archive.py output.zip`, `--verify-pinned`, and `--verify-tree`
-modes select the format in the pinned manifest. Prefix those arguments with
+modes select the pinned hybrid manifest and reproduce the selected native source,
+even when invoked from the later qualifier-only child. Prefix those arguments with
 `--legacy` to reproduce or verify the historical 31-file ce4733 archive using
 `phase1-f1-ce4733-source-manifest.json`. That historical inventory cannot claim
 coverage of newer native execution. Explicit candidate modes accept an
@@ -337,8 +464,8 @@ For a new candidate, create a new versioned source manifest and bundle. Update
 files together. Endpoint preflight still checks the externally pinned archive
 hash first, then dispatches only the pinned format and validates its complete
 embedded inventory against the pinned commit. `package.py` includes the new
-verifier beside both qualifier entrypoints. The current committed legacy pins
-remain unchanged and intentionally reject an unpinned new candidate.
+verifier beside both qualifier entrypoints. Historical legacy manifests remain
+unchanged; the current Phase 1 pins identify the f30 diagnostic build candidate.
 The archive identifies the chosen native build commit. A later qualifier-only
 commit may pin that build's measured artifacts; its separately hashed qualifier
 bundle is the endpoint tooling provenance. Do not attempt a self-referential

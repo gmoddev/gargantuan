@@ -276,19 +276,20 @@ class QualificationTests(unittest.TestCase):
             self.assertEqual(4, Config["ReadinessClients"])
             self.assertEqual(90, Config["RunTimeout"])
             self.assertEqual(Q.PHASE1_PROBE_SHA, Config["ArtifactSHA256"])
+            self.assertEqual("HYBRID_F1_V1", Config["ServiceContract"])
             Q.ValidateConfig(Config)
             with self.assertRaisesRegex(ValueError, "probe hash"):
                 Q.ValidateConfig({**Config, "ArtifactSHA256": Q.PROBE_SHA})
         self.assertEqual("duration:70", Client["CaptureCommand"][-3])
         self.assertEqual(["-B", "64"], Client["CaptureCommand"][3:5])
-        self.assertEqual(["server", "10.253.3.2", "39450", "4"], Server["ProbeArgs"])
-        self.assertEqual(["client", "10.253.3.2", "39450", "92707", "1"], Client["ProbeArgs"])
+        self.assertEqual(["server", "10.253.3.2", "39450", "4", "--hybrid-f1"], Server["ProbeArgs"])
+        self.assertEqual(["client", "10.253.3.2", "39450", "92707", "1", "--hybrid-f1"], Client["ProbeArgs"])
         Probe = self.Root / "gargantuan_physical_gns_funding_probe.exe"
         Probe.write_bytes(b"qualification-only test")
         Manifest = self.Root / "phase1-source-manifest.json"
-        RuntimeHashes = json.loads((Path(__file__).parents[1] / "phase1-f1-source-manifest.json").read_text())["RuntimeSha256"]
+        RuntimeHashes = json.loads((Path(__file__).parents[1] / "phase1-hybrid-f30e80ba-source-manifest.json").read_text())["RuntimeSha256"]
         Manifest.write_text(json.dumps({"BaseHead": Q.PHASE1_BASE_HEAD, "OverlayArchiveSha256": Q.PHASE1_OVERLAY,
-                                        "GnsPin": Q.GNS_PIN, "Contract": "F1",
+                                        "GnsPin": Q.GNS_PIN, "Contract": Q.PHASE1_CONTRACT,
                                         "ProbeSHA256": Q.PHASE1_PROBE_SHA,
                                         "SourceArchive": Q.PHASE1_SOURCE_ARCHIVE,
                                         "SourceArchiveFormat": Q.PHASE1_SOURCE_FORMAT,
@@ -319,9 +320,13 @@ class QualificationTests(unittest.TestCase):
                 OldManifest = json.loads(Manifest.read_text())
                 OldManifest["Contract"] = "D01"
                 Manifest.write_text(json.dumps(OldManifest))
-                with self.assertRaisesRegex(ValueError, "F1 probe source"):
+                with self.assertRaisesRegex(ValueError, "matching service contract probe source"):
                     Q.LocalRun(Client, Log).Check()
                 OldManifest["Contract"] = "F1"
+                Manifest.write_text(json.dumps(OldManifest))
+                with self.assertRaisesRegex(ValueError, "matching service contract probe source"):
+                    Q.LocalRun(Client, Log).Check()
+                OldManifest["Contract"] = Q.PHASE1_CONTRACT
                 Manifest.write_text(json.dumps(OldManifest))
                 InvalidRuntime = {**OldManifest, "RuntimeSha256": {**RuntimeHashes}}
                 InvalidRuntime["RuntimeSha256"]["DefaultActionMap.luau"] = "0" * 64
@@ -370,6 +375,12 @@ class QualificationTests(unittest.TestCase):
                          {"RunTimeout": 60}, {"QualificationMode": "UNSAFE"}):
             with self.assertRaises(ValueError):
                 Q.ValidateConfig({**Coordinator, **Mutation})
+        with self.assertRaisesRegex(ValueError, "service contract"):
+            Q.ValidateConfig({**Coordinator, "ServiceContract": "F1"})
+        with mock.patch.object(Q, "PHASE1_CONTRACT", "F1"):
+            Q.ValidateConfig({**Coordinator, "ServiceContract": "F1"})
+            with self.assertRaisesRegex(ValueError, "service contract"):
+                Q.ValidateConfig(Coordinator)
 
     def test_f1_source_archive_reproduces_pinned_manifest(self):
         ArchivePath = self.Root / Q.PHASE1_SOURCE_ARCHIVE
@@ -377,11 +388,11 @@ class QualificationTests(unittest.TestCase):
         subprocess.run([sys.executable, str(Generator), str(ArchivePath)], check=True,
                        capture_output=True, text=True)
         self.assertEqual(Q.PHASE1_OVERLAY, Q.Digest(ArchivePath))
-        Manifest = json.loads((Generator.parent / "phase1-f1-source-manifest.json").read_text())
+        Manifest = json.loads((Generator.parent / "phase1-hybrid-f30e80ba-source-manifest.json").read_text())
         self.assertEqual(Q.PHASE1_BASE_HEAD, Manifest["BaseHead"])
         self.assertEqual(Q.PHASE1_OVERLAY, Manifest["OverlayArchiveSha256"])
         self.assertEqual(Q.PHASE1_PROBE_SHA, Manifest["ProbeSHA256"])
-        self.assertEqual("F1", Manifest["Contract"])
+        self.assertEqual("HYBRID_F1_V1", Manifest["Contract"])
         self.assertEqual(Q.PHASE1_NATIVE_DEPENDENCIES, Manifest["NativeDependenciesSha256"])
         RuntimeHashes = Manifest["RuntimeSha256"]
         self.assertEqual(Q.PHASE1_RUNTIME_MANIFEST_SHA, hashlib.sha256(json.dumps(
@@ -428,6 +439,18 @@ class QualificationTests(unittest.TestCase):
         self.assertFalse(Run.Result()["Success"])
         (Directory / "probe-server.stdout.log").write_text(Good.replace("max_run_deficit_byte_us=9000000000", "max_run_deficit_byte_us=18025216001", 1))
         self.assertFalse(Run.Result()["Success"])
+        Hybrid = Good.replace("contract=F1", "contract=HYBRID_F1_V1").replace(
+            "pool_curve=derived-from-four-native-grant-curves", "pool_curve=diagnostic-four-grant-overlap").replace(
+            "pool_episodes=3", "pool_episodes=3 completion_budget_byte_us=626199296000 native_completion_invalid=0").replace(
+            "max_run_deficit_byte_us=9000000000", "max_run_deficit_byte_us=18025216001")
+        HybridRun = Q.LocalRun({**Config, "ServiceContract": "HYBRID_F1_V1"}, SimpleNamespace(Directory=Directory))
+        HybridRun.Probe = Run.Probe
+        (Directory / "probe-server.stdout.log").write_text(Hybrid)
+        self.assertTrue(HybridRun.Result()["Success"])
+        self.assertEqual("HYBRID_F1_V1", HybridRun.Result()["ServiceContract"])
+        self.assertFalse(Run.Result()["Success"])
+        (Directory / "probe-server.stdout.log").write_text(Hybrid.replace("native_completion_invalid=0", "native_completion_invalid=1"))
+        self.assertFalse(HybridRun.Result()["Success"])
         (Directory / "probe-server.stdout.log").write_text(Good.replace("completed_grants=3", "completed_grants=2", 1))
         self.assertFalse(Run.Result()["Success"])
         (Directory / "probe-server.stdout.log").write_text(Good.replace("pool_running_bound_byte_us=72100864000", "pool_running_bound_byte_us=72100864001"))
@@ -447,6 +470,7 @@ class QualificationTests(unittest.TestCase):
 
     def test_phase1_control_requires_matching_endpoint_classifications(self):
         self.Config.update(QualificationMode="PHASE1", ReadinessClients=4,
+                           ServiceContract=Q.PHASE1_CONTRACT,
                            ResultClassification=Q.PHASE1_CLASSIFICATION, RunTimeout=90,
                            ArtifactSHA256=Q.PHASE1_PROBE_SHA)
         self.Start()
@@ -460,12 +484,31 @@ class QualificationTests(unittest.TestCase):
         Client.Send("CLIENT_RUNNING", Pid=456)
         Server.Send("SERVER_DONE", Success=True, Classification=Q.PHASE1_CLASSIFICATION)
         Client.Send("CLIENT_DONE", Success=True, Classification="FOUR_CLIENT_READINESS_ONLY")
-        self.Read(Server, "RUN_DONE")
+        # The coordinator may read CLIENT_DONE first on its separate socket,
+        # issuing one legal late FINALIZE before it reads the already-sent
+        # SERVER_DONE. A completed endpoint does not send its result twice.
+        self.Read(Server, "RUN_DONE", AllowLateFinalize=True)
         self.Read(Client, "RUN_DONE")
         self.Finish(1)
         Result = json.loads((self.Root / "coordinator" / "result.json").read_text())
         self.assertFalse(Result["Success"])
         self.assertEqual("endpoint result classification mismatch", Result["Detail"])
+
+    def test_completed_server_terminal_reader_accepts_both_socket_orders(self):
+        for Types in (("RUN_DONE",), ("FINALIZE", "RUN_DONE")):
+            with self.subTest(Types=Types):
+                Frames = iter({"Type": Type} for Type in Types)
+                Link = SimpleNamespace(Read=lambda: next(Frames))
+                self.assertEqual("RUN_DONE", self.Read(Link, "RUN_DONE", AllowLateFinalize=True)["Type"])
+                self.assertEqual(list(Frames), [])
+        for Types in (("FINALIZE", "FINALIZE", "RUN_DONE"), ("ABORT",), ("SERVER_DONE",)):
+            with self.subTest(Invalid=Types):
+                Frames = iter({"Type": Type} for Type in Types)
+                with self.assertRaises(AssertionError):
+                    self.Read(SimpleNamespace(Read=lambda: next(Frames)), "RUN_DONE", AllowLateFinalize=True)
+        # Every other fixture retains its strict next-frame expectation.
+        with self.assertRaises(AssertionError):
+            self.Read(SimpleNamespace(Read=lambda: {"Type": "FINALIZE"}), "RUN_DONE")
 
     def tearDown(self):
         for Link in self.Links:
@@ -500,11 +543,17 @@ class QualificationTests(unittest.TestCase):
         Link.Send("STAGE_READY", Role=Role, ArtifactSHA256=self.Config["ArtifactSHA256"], Endpoint=self.Config["Endpoint"])
         return Link
 
-    def Read(self, Link, Expected):
+    def Read(self, Link, Expected, AllowLateFinalize=False):
+        if AllowLateFinalize:
+            self.assertEqual(Expected, "RUN_DONE")
+        Finalized = False
         Deadline = time.monotonic() + 3
         while time.monotonic() < Deadline:
             Row = Link.Read()
             if Row:
+                if AllowLateFinalize and not Finalized and Row["Type"] == "FINALIZE":
+                    Finalized = True
+                    continue
                 self.assertEqual(Expected, Row["Type"])
                 return Row
         self.fail("missing " + Expected)

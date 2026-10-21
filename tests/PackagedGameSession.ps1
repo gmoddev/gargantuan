@@ -244,7 +244,7 @@ end)
 	$Server = Join-Path $ServerPackageRoot 'GargantuanServer.exe'
 	$Port = 40000 + ($PID % 1000)
 	$Endpoint = "127.0.0.1:$Port"
-	$ServerProcess = Start-RuntimeProcess -Executable $Server -WorkingDirectory $ServerPackageRoot -Arguments @('--bind', $Endpoint, '--session-smoke', '--max-ticks', '360')
+	$ServerProcess = Start-RuntimeProcess -Executable $Server -WorkingDirectory $ServerPackageRoot -Arguments @('--bind', $Endpoint, '--session-smoke', '--reliable-mode', 'POOLED_SERVICE', '--max-ticks', '360')
 	# Smoke profiling can exceed redirected pipe capacity before either host
 	# exits. Drain both streams concurrently, as in the official Node vertical.
 	$ServerOutputRead = $ServerProcess.StandardOutput.ReadToEndAsync()
@@ -274,6 +274,9 @@ end)
 	$ServerOutput = $ServerOutputRead.GetAwaiter().GetResult() + $ServerErrorRead.GetAwaiter().GetResult()
 	if ($ServerProcess.ExitCode -ne 0) {
 		throw "Packaged server session proof failed: server=$($ServerProcess.ExitCode) output=$ServerOutput"
+	}
+	if (-not $ServerOutput.Contains('contract=POOLED_CORRECTNESS_V1 native_capacity=separate native_arbitration=1 latency_guarantee=0')) {
+		throw 'Packaged session did not execute the process-isolated native capacity/arbitration composition'
 	}
 	Write-Output ("[Package:Session] packaged GNS server/{0} client bootstrap passed" -f $(
 		if ($GraphicalClient -eq 'ON') { 'graphical' } else { 'headless' }

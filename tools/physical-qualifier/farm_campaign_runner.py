@@ -14,8 +14,10 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -64,6 +66,55 @@ CAPTURE_FINISH_SECONDS = 3000
 PREFLIGHT_AGE_SECONDS = 120
 TICKET_AGE_SECONDS = 3600
 MAX_JSON_BYTES = 65536
+CAPTURE_STDERR_BYTES = 65536
+
+
+class CaptureStderr:
+    """Drain the child continuously, retaining only a bounded raw stderr prefix."""
+    def __init__(self, File):
+        self.File = Path(File)
+        self.Output = self.File.open("xb", buffering=0)
+        self.Thread = None
+        self.Total = 0
+        self.Retained = 0
+        self.Error = None
+
+    def Start(self, Stream):
+        def Drain():
+            try:
+                while True:
+                    Block = Stream.read(4096)
+                    if not Block:
+                        break
+                    self.Total += len(Block)
+                    Prefix = Block[:max(0, CAPTURE_STDERR_BYTES - self.Retained)]
+                    if self.Error is None:
+                        try:
+                            Written = self.Output.write(Prefix)
+                            self.Retained += Written
+                            if Written != len(Prefix):
+                                self.Error = "short stderr log write"
+                        except OSError as Error:
+                            # A full log disk must not block the controller on
+                            # its stderr pipe while it is releasing capture.
+                            self.Error = str(Error)[:1024]
+            except OSError as Error:
+                self.Error = str(Error)[:1024]
+            finally:
+                self.Output.close()
+                Stream.close()
+        self.Thread = threading.Thread(target=Drain, name="FarmCaptureStderr", daemon=True)
+        self.Thread.start()
+
+    def Finish(self):
+        if self.Thread is None:
+            self.Output.close()
+        else:
+            self.Thread.join(timeout=5)
+        Complete = self.Thread is None or not self.Thread.is_alive()
+        return {"RetainedBytes": self.Retained, "ObservedBytes": self.Total,
+                "LimitBytes": CAPTURE_STDERR_BYTES, "Truncated": self.Total > CAPTURE_STDERR_BYTES,
+                "DrainComplete": Complete, "ReadError": self.Error}
 
 
 def Exact(Value, Keys, Name):
@@ -268,6 +319,39 @@ def WriteNewJson(File, Row):
     return File
 
 
+def RequestCaptureCancel(Capture, Config, ReadyUtc, JoinCode):
+    Cancel = Path(Capture["CaptureRoot"]) / (Config["RunId"] + ".capture-controller-cancel.json")
+    if not Cancel.is_absolute() or str(Cancel).startswith("\\\\") or len(str(Cancel)) > 512:
+        raise ValueError("[Qualification:FarmCampaign] invalid fixed cancellation path")
+    for Current in (Cancel, *Cancel.parents):
+        try:
+            Attributes = Current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(Attributes.st_mode) or \
+                getattr(Attributes, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise ValueError("[Qualification:FarmCampaign] cancellation reparse path forbidden")
+    Signal = {"Format": "GargantuanFarm32CaptureCancel", "Version": 1,
+              "RunId": Config["RunId"], "CoordinatorRunId": Config["CoordinatorRunId"],
+              "Role": Config["Role"], "ReadyUtc": ReadyUtc,
+              "Reason": "COORDINATOR_JOIN_FAILED", "JoinExitCode": JoinCode}
+    Payload = (json.dumps(Signal, sort_keys=True) + "\n").encode("utf-8")
+    if len(Payload) > 1024:
+        raise ValueError("[Qualification:FarmCampaign] cancellation exceeds fixed bound")
+    Temporary = Cancel.with_name(Cancel.name + "." + str(uuid.uuid4()) + ".tmp")
+    Created = False
+    try:
+        with Temporary.open("xb") as Stream:
+            Created = True
+            Stream.write(Payload)
+        # Atomic exclusive publication on Windows and POSIX: no reader sees
+        # partial JSON, and an existing destination can never be overwritten.
+        os.link(Temporary, Cancel, follow_symlinks=False)
+    finally:
+        if Created:
+            Temporary.unlink()
+
+
 def StartNode(Config, Farm, Manifest):
     PowerShell, Helper, StageRoot = VerifyNodeStage(Config, Farm, Manifest)
     Flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -323,8 +407,9 @@ def RunRole(TicketPath):
     Schema, Farm, Capture = VerifyRole(Config, Role)
     Ready = Path(Capture["CaptureRoot"]).resolve() / Config["RunId"] / "capture-controller-ready.json"
     CaptureIndex = Ready.parent / "capture-sha256.json"
+    CaptureCancel = Ready.parent.parent / (Config["RunId"] + ".capture-controller-cancel.json")
     RoleIndex = Path(Farm["EvidenceRoot"]).resolve() / "evidence-sha256.json"
-    if Ready.exists() or CaptureIndex.exists() or RoleIndex.exists():
+    if Ready.exists() or CaptureIndex.exists() or RoleIndex.exists() or CaptureCancel.exists() or CaptureCancel.is_symlink():
         raise ValueError("[Qualification:FarmCampaign] stale role or capture evidence")
     JournalRoot = Path(Config["JournalRoot"]).resolve()
     if JournalRoot.exists() or not JournalRoot.parent.is_dir():
@@ -332,6 +417,12 @@ def RunRole(TicketPath):
     ResultPath = Path(Config["ResultPath"]).resolve()
     if ResultPath.exists() or not ResultPath.parent.is_dir():
         raise ValueError("[Qualification:FarmCampaign] stale role result")
+    # Result files can share the outer artifact directory across roles/runs.
+    # Bind diagnostic names to this one-use result identity, not its parent.
+    StderrPath = ResultPath.with_name(ResultPath.stem + ".capture-controller.stderr.log")
+    DiagnosticPath = ResultPath.with_name(ResultPath.stem + ".capture-controller-diagnostic.json")
+    if StderrPath.exists() or DiagnosticPath.exists():
+        raise ValueError("[Qualification:FarmCampaign] stale capture diagnostic")
     for Root in (Path(Farm["EvidenceRoot"]).resolve(), Path(Capture["CaptureRoot"]).resolve()):
         if (JournalRoot == Root or JournalRoot in Root.parents or Root in JournalRoot.parents or
                 ResultPath == Root or Root in ResultPath.parents):
@@ -347,6 +438,7 @@ def RunRole(TicketPath):
     PreviousToken = None
     Started = None
     JoinCode = 1
+    Stderr = None
     try:
         if "NodeStagePath" in Config:
             Manifest = ReadJson(Pinned(Config["ManifestPath"], Config["ManifestSha256"], "manifest"))
@@ -360,11 +452,13 @@ def RunRole(TicketPath):
         CaptureEnvironment = os.environ.copy()
         if TokenEnvironment is not None:
             CaptureEnvironment.pop(TokenEnvironment, None)
+        Stderr = CaptureStderr(StderrPath)
         CaptureProcess = subprocess.Popen(
             [sys.executable, "-B", str(Controller), "role", Config["CaptureConfigPath"]],
             cwd=str(Controller.parent), stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, creationflags=Flags, env=CaptureEnvironment)
+            stderr=subprocess.PIPE, creationflags=Flags, env=CaptureEnvironment)
         Started = time.monotonic()
+        Stderr.Start(CaptureProcess.stderr)
         Deadline = Started + READY_SECONDS
         while not Ready.is_file():
             if CaptureProcess.poll() is not None:
@@ -383,11 +477,20 @@ def RunRole(TicketPath):
         Endpoint["RunId"] = Config["CoordinatorRunId"]
         JoinCode = Join(Endpoint, {(Schema.Value["SchemaId"], 1): Schema},
                         Catalog, Journal(JournalRoot))
+        if JoinCode and CaptureProcess.poll() is None:
+            try:
+                RequestCaptureCancel(Capture, Config, Marker["ReadyUtc"], JoinCode)
+            except (ValueError, OSError) as Error:
+                raise RuntimeError("[Qualification:FarmCampaign] coordinator join failed exit_code=" +
+                                   str(JoinCode) + "; cooperative capture cancellation request failed") from Error
         try:
             CaptureCode = CaptureProcess.wait(timeout=max(0.1, Started + CAPTURE_FINISH_SECONDS - time.monotonic()))
         except subprocess.TimeoutExpired as Error:
             raise TimeoutError("[Qualification:FarmCampaign] capture finalization deadline") from Error
-        if JoinCode or CaptureCode or not CaptureIndex.is_file() or not RoleIndex.is_file():
+        if JoinCode:
+            raise RuntimeError("[Qualification:FarmCampaign] coordinator join failed exit_code=" + str(JoinCode) +
+                               "; capture_exit_code=" + str(CaptureCode))
+        if CaptureCode or not CaptureIndex.is_file() or not RoleIndex.is_file():
             raise RuntimeError("[Qualification:FarmCampaign] role, capture, or evidence index failed")
         if NodeProcess is not None:
             NodeReceipt = StopNode(Config, NodeProcess, NodeRoot)
@@ -425,6 +528,12 @@ def RunRole(TicketPath):
                         os.environ.pop(TokenEnvironment, None)
                     else:
                         os.environ[TokenEnvironment] = PreviousToken
+                if Stderr is not None:
+                    Diagnostic = Stderr.Finish()
+                    Diagnostic.update({"Format": "GargantuanFarmCaptureControllerDiagnostic", "Version": 1,
+                                       "RunId": Config["RunId"], "Role": Role,
+                                       "ExitCode": CaptureProcess.poll() if CaptureProcess is not None else None})
+                    WriteNewJson(DiagnosticPath, Diagnostic)
 
 
 def RunHost(ConfigPath):

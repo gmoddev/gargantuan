@@ -20,6 +20,8 @@ RATE = 16_777_216
 GROUP = 524_288
 RUN_BOUND = 18_025_216_000
 FINITE_INTERCEPT = 101_911_296_000
+COMPLETION_BUDGET = FINITE_INTERCEPT + GROUP * 1_000_000
+CONTRACTS = ("F1", "HYBRID_F1_V1")
 MAX_ROWS = 65_536
 TOOLS = Path(__file__).resolve().parents[1] / "tools" / "physical-qualifier"
 FIELDS = ("simulation_step,slot,generation,consumed_us,feedback_us,present,valid,available,qualified,"
@@ -30,6 +32,12 @@ FIELDS = ("simulation_step,slot,generation,consumed_us,feedback_us,present,valid
           "last_completed_max_run_deficit_byte_us,last_completed_failed,retry,pending,unacked,retirement_sequence,"
           "retired_token,result_retired_bytes,grants,total_debt,created,retired,terminal,delta_first,delta_ack,"
           "delta_retry,backend_ns,queue_us,rate").split(",")
+HYBRID_FIELDS = FIELDS + ["completion_failed", "last_completion_failed", "completion_evidence_invalid",
+    "observation_ordinal", "observation_point", "native_state", "counters_valid", "cleanup", "result_terminal",
+    "execution_rejected", "invalid_after", "execution_failed", "main_failed", "turnover_failed", "ordinary_failed"]
+ACCOUNTING_FIELDS = {"simulation_step", "slot", "generation", "consumed_us", "debt_token", "debt_bytes",
+                    "journal_lag", "accepted_structural", "grants", "total_debt", "created", "retired", "terminal",
+                    "backend_ns", "queue_us", "rate", "valid"}
 
 
 def Require(Condition, Message):
@@ -100,16 +108,25 @@ def NativePass(Text, Role):
     return Summary
 
 
-def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
+def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None, ExpectedContract="F1"):
     """Replay the fixed probe's bounded snapshot schema and native certificate."""
     Text = Read(ServerLog)
+    Require(ExpectedContract in CONTRACTS, "unsupported service contract")
+    Hybrid = ExpectedContract == "HYBRID_F1_V1"
     Summary = NativePass(Text, "server")
     Curve = One(Text, "ServiceCurve")
-    Expected = {"contract": "F1", "verdict": "PASS", "pool_curve": "derived-from-four-native-grant-curves",
+    Expected = {"contract": ExpectedContract, "verdict": "PASS", "pool_curve": "diagnostic-four-grant-overlap" if Hybrid else "derived-from-four-native-grant-curves",
                 "peer_rate_Bps": str(RATE), "pool_rate_Bps": str(4 * RATE), "quantum_B": "1248",
                 "startup_us": "5000", "run_us": "1000", "peer_finite_intercept_byte_us": str(FINITE_INTERCEPT),
                 "peer_running_bound_byte_us": str(RUN_BOUND), "pool_running_bound_byte_us": str(4 * RUN_BOUND)}
     Require(all(Curve.get(Key) == Value for Key, Value in Expected.items()), "F1 constants/certificate mismatch")
+    if Hybrid:
+        Require(Summary.get("contract") == ExpectedContract and
+                Curve.get("completion_budget_byte_us") == str(COMPLETION_BUDGET) and
+                        Curve.get("native_completion_invalid") == "0", "hybrid native certificate missing/invalid")
+        Require(Curve.get("trace_format") == "HYBRID_OBSERVATION_V2", "hybrid observation identity missing")
+        LiveCut = UInt(Curve.get("live_cut_ordinal", "0"))
+        Require(LiveCut > 0, "successful live campaign cut missing")
     Admission = One(Text, "Admission")
     Require(all(Admission.get(Key) == "0" for Key in ("terminal", "outstanding", "grants")) and
             Admission.get("accepted") == Admission.get("retired") and Admission.get("grants_high_water") == "4",
@@ -145,6 +162,18 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
         Require(Boundary == {"format": "F1_ACCEPTED_ACTIVATION_V1", "records": str(len(Admitted))},
                 "admission record count differs from native summary")
     Peers = {}
+    AdmissionPrefixes = {}
+    if Hybrid and AdmissionsCsv is not None:
+        for Slot in Identity:
+            Total = 0
+            AdmissionPrefixes[Slot] = {0: []}
+            Prefix = []
+            for Key, Value in Admitted.items():
+                if Key[0] != Slot:
+                    continue
+                Total += Value["bytes"]
+                Prefix = [*Prefix, Value]
+                AdmissionPrefixes[Slot][Total] = Prefix
     Completed = {}
     Grants = {}
     Retired = set()
@@ -152,17 +181,32 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
     Rows = 0
     SeenSamples = set()
     PreviousGlobal = None
+    PreviousAccounting = {}
     with Path(ServerCsv).open(encoding="utf-8-sig", newline="") as Stream:
         Reader = csv.DictReader(Stream)
-        Require(Reader.fieldnames == FIELDS, "native CSV schema mismatch")
+        Require(Reader.fieldnames == (HYBRID_FIELDS if Hybrid else FIELDS), "native CSV schema mismatch")
         for Raw in Reader:
             Rows += 1
             Require(Rows <= MAX_ROWS and None not in Raw and all(V is not None for V in Raw.values()), "truncated/oversized CSV")
-            Row = {Key: UInt(Value) for Key, Value in Raw.items()}
+            Row = {Key: (-1 if Hybrid and Key in ("queue_us", "rate") and Value == "-1" else UInt(Value))
+                   for Key, Value in Raw.items()}
             Slot = Row["slot"]
             Sample = (Row["simulation_step"], Slot)
-            Require(Sample not in SeenSamples, "duplicate native snapshot")
-            SeenSamples.add(Sample)
+            if Hybrid:
+                Require(Row["observation_ordinal"] == Rows and Row["observation_point"] in range(4),
+                        "missing/duplicate/reordered observation ordinal or point")
+                Require(Row["cleanup"] == int(Rows > LiveCut), "cleanup crossed successful live cut")
+                Require(all(Row[K] in (0, 1) for K in ("present", "valid", "available", "qualified", "counters_valid",
+                        "cleanup", "result_terminal", "execution_rejected", "invalid_after", "execution_failed",
+                        "main_failed", "turnover_failed", "ordinary_failed")), "invalid observation boolean")
+                Require(Row["valid"] == 1 and all(Row[K] == 0 for K in ("execution_rejected", "invalid_after",
+                        "execution_failed", "main_failed", "turnover_failed", "ordinary_failed")),
+                        "fatal owner or D03 execution/ordinary failure")
+                Require(Row["completion_failed"] == Row["last_completion_failed"] ==
+                        Row["completion_evidence_invalid"] == 0, "latched native completion failure")
+            else:
+                Require(Sample not in SeenSamples, "duplicate native snapshot")
+                SeenSamples.add(Sample)
             Require(Slot in Identity and Row["generation"] == UInt(Identity[Slot]["generation"]), "generation/slot mismatch")
             Require(Row["grants"] <= 4 and Row["terminal"] == 0 and Row["retired"] <= Row["created"] and
                     Row["created"] - Row["retired"] == Row["total_debt"], "row debt conservation failed")
@@ -170,6 +214,63 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
                 Require(all(Row[K] >= PreviousGlobal[K] for K in ("simulation_step", "consumed_us", "created", "retired")),
                         "global counters regressed")
             PreviousGlobal = Row
+            if Hybrid:
+                Accounting = PreviousAccounting.get(Slot)
+                Require(Accounting is None or Row["accepted_structural"] >= Accounting["accepted_structural"],
+                        "accepted accounting regressed")
+                PreviousAccounting[Slot] = Row
+                # Every accepted owner row remains evidence, including a null
+                # native result. It cannot replace or refresh a native snapshot.
+                Token = Row["debt_token"]
+                if Token:
+                    Key = (Slot, Token)
+                    Require(0 < Row["debt_bytes"] <= GROUP and Key not in Retired and
+                            (Key not in Grants or Grants[Key] == Row["debt_bytes"]), "invalid/reused accepted token")
+                    Grants[Key] = Row["debt_bytes"]
+                    if AdmissionsCsv is not None:
+                        Require(Key in Admitted and Admitted[Key]["bytes"] == Row["debt_bytes"],
+                                "unrecorded/changed accepted obligation")
+                if AdmissionsCsv is not None:
+                    Require(Row["accepted_structural"] in AdmissionPrefixes[Slot], "accepted accounting has no exact admission prefix")
+                    Prefix = AdmissionPrefixes[Slot][Row["accepted_structural"]]
+                    Require(all(A["activated_us"] == 2**64 - 1 or A["activated_us"] <= Row["consumed_us"] for A in Prefix),
+                            "accepted accounting precedes qualified admission")
+                else:
+                    Require(Row["accepted_structural"] == sum(V for K, V in Grants.items() if K[0] == Slot),
+                            "accepted accounting differs from observed exact grants")
+                if Row["cleanup"]:
+                    Require(Slot in Peers and Row["accepted_structural"] == Peers[Slot]["accepted_structural"] and
+                            Row["debt_token"] == Row["debt_bytes"] == Row["result_retired_bytes"] ==
+                            Row["grants"] == Row["total_debt"] == 0, "cleanup has new or unresolved ownership")
+                if not Row["present"]:
+                    Require(Row["native_state"] == 255 and Row["counters_valid"] == 0 and
+                            Row["available"] == Row["qualified"] == Row["result_terminal"] ==
+                            Row["result_retired_bytes"] == Row["delta_first"] == Row["delta_ack"] == Row["delta_retry"] == 0,
+                            "null accounting claimed native evidence")
+                    Require(all(Row[K] == 0 for K in FIELDS if K not in ACCOUNTING_FIELDS),
+                            "null accounting contains fabricated native fields")
+                    continue
+                Require(Row["native_state"] in range(5) and 0 <= Row["consumed_us"] - Row["feedback_us"] <= 50_000,
+                        "native feedback future/stale or invalid state")
+                Require(Row["completion_failed"] == Row["last_completion_failed"] ==
+                        Row["completion_evidence_invalid"] == 0, "latched native completion failure")
+                if Row["cleanup"]:
+                    Require(Row["native_state"] in (2, 3, 4) and
+                            Row["result_terminal"] == int(Row["native_state"] == 4) and
+                            Row["delta_first"] == Row["delta_ack"] == Row["delta_retry"] == 0,
+                            "cleanup cannot certify new native service")
+                    Require((Row["available"] == Row["qualified"] == 1) if Row["native_state"] == 2 else
+                            (Row["available"] == Row["qualified"] == 0), "cleanup state/availability mismatch")
+                    Require(Row["counters_valid"] == 1 or Row["native_state"] == 4 and Row["result_terminal"] == 1,
+                            "cleanup invalid counters require exact closed terminal receipt")
+                    if Row["counters_valid"]:
+                        Require(Row["structural_first"] == Peers[Slot]["structural_first"] and
+                                Row["structural_ack"] == Peers[Slot]["structural_ack"] and
+                                Row["active_grant_bytes"] == Row["pending"] == 0,
+                                "cleanup native totals differ from certified live cut")
+                    continue
+                Require(Row["available"] == Row["qualified"] == Row["counters_valid"] == 1 and
+                        Row["native_state"] == 2 and Row["result_terminal"] == 0, "native service observation unavailable/invalid")
             Previous = Peers.get(Slot)
             if Previous:
                 # SyncStructuralGrant accumulates elapsed deltas and takes a
@@ -179,11 +280,23 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
                 Require(all(Row[K] >= Previous[K] for K in ("feedback_us", "structural_first", "structural_ack",
                         "running_us", "max_run_deficit_byte_us", "retry", "accepted_structural", "retirement_sequence")),
                         "native cumulative counters regressed")
+                if Hybrid:
+                    Require(Row["last_completed_token"] >= Previous["last_completed_token"], "native completed certificate disappeared")
+                    Require(Row["delta_first"] == Row["structural_first"] - Previous["structural_first"] and
+                            Row["delta_ack"] == Row["structural_ack"] - Previous["structural_ack"] and
+                            Row["delta_retry"] == Row["retry"] - Previous["retry"], "native deltas changed across accounting rows")
+            elif Hybrid:
+                Require(Row["delta_first"] == Row["delta_ack"] == Row["delta_retry"] == 0,
+                        "initial native snapshot claimed invented deltas")
             Require(Row["structural_ack"] <= Row["structural_first"] <= Row["accepted_structural"] and
                     Row["structural_first"] - Row["structural_ack"] <= GROUP, "native first-send/ACK conservation failed")
-            Require(Row["service_failed"] == Row["last_completed_failed"] == 0 and
-                    max(Row["current_run_deficit_byte_us"], Row["max_run_deficit_byte_us"],
-                        Row["last_completed_max_run_deficit_byte_us"]) <= RUN_BOUND, "latched native running service failure")
+            if Hybrid:
+                Require(Row["completion_failed"] == Row["last_completion_failed"] ==
+                        Row["completion_evidence_invalid"] == 0, "latched native completion failure")
+            else:
+                Require(Row["service_failed"] == Row["last_completed_failed"] == 0 and
+                        max(Row["current_run_deficit_byte_us"], Row["max_run_deficit_byte_us"],
+                            Row["last_completed_max_run_deficit_byte_us"]) <= RUN_BOUND, "latched native running service failure")
             # The maximum-size campaign, unlike preliminary connection setup,
             # must have current valid native feedback on every sampled row.
             Campaign = any(Key[0] == Slot and Value == GROUP for Key, Value in Grants.items())
@@ -203,8 +316,10 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
                             Row["first_sent_in_grant"] <= Row["active_grant_bytes"], "active grant attribution mismatch")
                     Demand = min(Row["active_grant_bytes"] * 1_000_000,
                                  max(0, RATE * (Row["feedback_us"] - Row["active_grant_started_us"]) - FINITE_INTERCEPT))
-                    Require(Row["active_grant_started_us"] > 0 and
-                            Demand <= Row["first_sent_in_grant"] * 1_000_000, "sampled finite envelope failed")
+                    Require(0 < Row["active_grant_started_us"] <= Row["feedback_us"] and (Hybrid and
+                            (Row["first_sent_in_grant"] == Row["active_grant_bytes"] or
+                             RATE * (Row["feedback_us"] - Row["active_grant_started_us"]) <= COMPLETION_BUDGET) or
+                            not Hybrid and Demand <= Row["first_sent_in_grant"] * 1_000_000), "sampled finite envelope failed")
             Token = Row["last_completed_token"]
             if Token:
                 Key = (Slot, Token)
@@ -216,7 +331,8 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
                 if AdmissionsCsv is not None:
                     Require(Key in Admitted and Admitted[Key]["activated_us"] == Start, "completion activation differs from admission boundary")
                 Require(0 < Start <= First <= Finish <= Row["feedback_us"] and
-                        RATE * (Finish - Start) <= FINITE_INTERCEPT + Size * 1_000_000, "finite completion envelope failed")
+                        RATE * (Finish - Start) <= (COMPLETION_BUDGET if Hybrid else
+                        FINITE_INTERCEPT + Size * 1_000_000), "finite completion envelope failed")
                 Completed[Key] = Certificate
             if Row["result_retired_bytes"]:
                 Key = (Slot, Row["retired_token"])
@@ -236,6 +352,8 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
                 Retired.add(Key)
             Peers[Slot] = Row
     Require(Rows == UInt(Summary["samples"]) and Rows > 0, "CSV row count differs from sealed native summary")
+    if Hybrid:
+        Require(LiveCut <= Rows, "successful live cut exceeds observed prefix")
     Require(len(Peers) == 4 and set(Grants) == Retired and set(Completed) <= Retired, "missing/unretired grant evidence")
     if AdmissionsCsv is not None:
         Require(set(Admitted) == set(Grants) and all((Key in Completed) == (A["activated_us"] != 2**64 - 1)
@@ -275,10 +393,10 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
         At = Time
     Require(CommonUs > 0 and Episodes >= 3 and Curve.get("pool_common_run_us") == str(CommonUs) and
             Curve.get("pool_episodes") == str(Episodes), "common first-send overlap differs from native summary")
-    return {"Rows": Rows, "MaximumGrants": 128, "Peers": sorted(PerPeer, key=lambda P: P["Slot"]),
+    return {"Contract": ExpectedContract, "Rows": Rows, "MaximumGrants": 128, "Peers": sorted(PerPeer, key=lambda P: P["Slot"]),
             "Accepted": UInt(Admission["accepted"]), "Retired": UInt(Admission["retired"]),
             "CommonRunningUs": CommonUs, "CommonEpisodes": Episodes, "PoolBoundByteUs": 4 * RUN_BOUND,
-            "PoolProof": "sum-of-four-native-all-subinterval-certificates", "MeasuredPoolMaximum": "NOT_MEASURED",
+            "PoolProof": "LEGACY_DIAGNOSTIC" if Hybrid else "sum-of-four-native-all-subinterval-certificates", "MeasuredPoolMaximum": "NOT_MEASURED",
             "NativeEvidenceKind": "consumed-feedback-snapshots-with-latched-native-certificates",
             "PreCampaignUncertifiedBootstrap": Bootstrap,
             "AdmissionBoundaryState": "MEASURED" if AdmissionsCsv is not None else "NOT_MEASURED",
@@ -344,11 +462,68 @@ def Needed(Files, Name):
     return Files[Name.casefold()]
 
 
+def LifecycleAssignments(Rows, RunId):
+    # The pinned coordinator replies under the request UUID, then switches its
+    # Link.Config to the assigned run before REGISTER. These are two identities,
+    # not a general exemption from run binding (control.py Host/Agent).
+    Workflow = json.loads(Read(TOOLS / "workflows" / "four-client-phase1-lifecycle.json"))
+    Schema = {K: Workflow[K] for K in ("SchemaId", "SchemaVersion")}
+    Schema["SchemaHash"] = hashlib.sha256(json.dumps(Workflow, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    Requests, Assigned, Registered, Exempt = {}, set(), set(), set()
+    for Index, Row in enumerate(Rows):
+        Kind = Row.get("Type")
+        if Kind in ("PULL_ASSIGNMENT", "ASSIGNMENT"):
+            RequestId = Row.get("RunId")
+            try:
+                ValidUuid = str(uuid.UUID(RequestId)) == RequestId
+            except (ValueError, TypeError, AttributeError):
+                ValidUuid = False
+            Require(ValidUuid and RequestId != RunId and type(Row.get("Version")) is int and Row["Version"] == 1 and
+                    type(Row.get("Sequence")) is int and Row["Sequence"] == 1,
+                    "invalid lifecycle assignment request envelope")
+            if Kind == "PULL_ASSIGNMENT":
+                Role = Row.get("EndpointId")
+                Require(Row.get("Event") == "RECEIVE" and Role in Workflow["Roles"] and
+                        Role not in Requests.values() and RequestId not in Requests,
+                        "duplicate/invalid lifecycle assignment endpoint")
+                Requests[RequestId] = Role
+            else:
+                Assignment = Row.get("Assignment")
+                Require(Row.get("Event") == "SEND" and RequestId in Requests and
+                        isinstance(Assignment, dict), "unpaired lifecycle assignment")
+                Role = Requests[RequestId]
+                Require(Role not in Assigned and Assignment.get("Role") == Role and
+                        Assignment.get("RunId") == RunId and
+                        type(Assignment.get("SchemaVersion")) is int and
+                        all(Assignment.get(K) == V for K, V in Schema.items()) and
+                        Assignment.get("Parameters") == {}, "lifecycle assignment identity/schema mismatch")
+                Expiry = Assignment.get("ExpiresUnixMs")
+                Require(type(Expiry) is int and Expiry > 0 and
+                        (type(Row.get("TimestampUnixMs")) is not int or Expiry >= Row["TimestampUnixMs"]),
+                        "invalid/expired lifecycle assignment")
+                Assigned.add(Role)
+            Exempt.add(Index)
+        elif Kind == "REGISTER":
+            Role = Row.get("Role")
+            Require(Row.get("Event") == "RECEIVE" and Row.get("RunId") == RunId and
+                    type(Row.get("Version")) is int and Row["Version"] == 1 and
+                    type(Row.get("Sequence")) is int and Row["Sequence"] == 2 and
+                    Role in Assigned and Role not in Registered and
+                    type(Row.get("SchemaVersion")) is int and
+                    all(Row.get(K) == V for K, V in Schema.items()),
+                    "lifecycle registration identity/schema mismatch")
+            Registered.add(Role)
+    Require(len(Requests) == 2 and Assigned == Registered == set(Workflow["Roles"]),
+            "missing lifecycle assignment/registration evidence")
+    return Exempt
+
+
 def Journal(Files, Result, RunId, Lifecycle=False):
     Rows = [json.loads(Line) for Line in Read(Needed(Files, "control.jsonl")).splitlines()]
     Require(0 < len(Rows) <= 4096 and all(isinstance(R, dict) for R in Rows), "invalid control journal")
-    Require(all(R.get("RunId", RunId) == RunId and R.get("Success", True) is True and
-                R.get("Event") not in ("ERROR", "ABORT") and R.get("Type") not in ("ABORT", "ERROR") for R in Rows),
+    Exempt = LifecycleAssignments(Rows, RunId) if Lifecycle else set()
+    Require(all((Index in Exempt or R.get("RunId", RunId) == RunId) and R.get("Success", True) is True and
+                R.get("Event") not in ("ERROR", "ABORT") and R.get("Type") not in ("ABORT", "ERROR") for Index, R in enumerate(Rows)),
             "control journal records failure/wrong run")
     Results = [R for R in Rows if R.get("Event") == "RESULT"]
     Require(len(Results) == 1 and all(Results[0].get(K) == V for K, V in Result.items()), "control journal result mismatch")
@@ -406,14 +581,14 @@ def FullPackets(File):
     return Count
 
 
-def Replay(Inputs, ExpectedCommit):
+def Replay(Inputs, ExpectedCommit, ExpectedContract="F1"):
     try:
-        return ReplayInputs(Inputs, ExpectedCommit)
+        return ReplayInputs(Inputs, ExpectedCommit, ExpectedContract)
     except (KeyError, TypeError, IndexError, OSError, UnicodeError, OverflowError) as Error:
         raise ValueError("[Foundation3L:FourClient] malformed/inaccessible retained evidence: " + str(Error)) from Error
 
 
-def ReplayInputs(Inputs, ExpectedCommit):
+def ReplayInputs(Inputs, ExpectedCommit, ExpectedContract="F1"):
     """Fixed, offline entry point. Inputs map paths to retained raw evidence.
 
     Missing inputs are NOT_MEASURED. Present malformed/failed evidence raises.
@@ -421,6 +596,7 @@ def ReplayInputs(Inputs, ExpectedCommit):
     from probe working directories; endpoint files match original manifests.
     """
     Require(isinstance(Inputs, dict) and re.fullmatch(r"[0-9a-f]{40}", ExpectedCommit), "invalid replay request")
+    Require(ExpectedContract in CONTRACTS, "unsupported service contract")
     Required = ("ClientRoot", "ServerRoot", "CoordinatorRoot", "LifecycleHostRoot", "LifecycleQualification",
                 "Cleanup", "ServerCsv", "AdmissionsCsv", "ClientCsv", "RawCsvSha256", "CandidateRoot")
     if any(Key not in Inputs for Key in Required):
@@ -434,7 +610,7 @@ def ReplayInputs(Inputs, ExpectedCommit):
                                         ("ClientRoot", "ServerRoot", "CoordinatorRoot", "LifecycleHostRoot")]
     Source = Object(Needed(Client, "source-manifest.json"))
     Require(Source == Object(Needed(Server, "source-manifest.json")), "endpoints ran different candidates")
-    Require(Source.get("BaseHead") == ExpectedCommit and Source.get("Contract") == "F1" and
+    Require(Source.get("BaseHead") == ExpectedCommit and Source.get("Contract") == ExpectedContract and
             Source.get("GnsPin") == "2cb93a06350bb065db53abdb0d87cf297e0bfd34" and
             Source.get("SourceArchiveFormat") == "F1_OWNED_TREE_V2", "candidate source provenance mismatch")
     sys.path.insert(0, str(TOOLS))
@@ -462,11 +638,14 @@ def ReplayInputs(Inputs, ExpectedCommit):
                 "raw CSV differs from endpoint sealed evidence: " + Key)
     ServerLogs = [File for Name, File in Server.items() if re.fullmatch(r"probe-server(?:-[0-9]+)?\.stdout\.log", Name)]
     Require(len(ServerLogs) == 1, "missing/ambiguous server log")
-    Native = ReplayNative(Inputs["ServerCsv"], ServerLogs[0], Inputs["AdmissionsCsv"])
+    Native = ReplayNative(Inputs["ServerCsv"], ServerLogs[0], Inputs["AdmissionsCsv"], ExpectedContract)
     Nonces = [P["Nonce"] for P in Native["Peers"]]
     Require(set(Inputs["ClientCsv"]) == {str(N) for N in Nonces}, "raw client identity mismatch")
     Gameplay = {}
     for Nonce in Nonces:
+        if ExpectedContract == "HYBRID_F1_V1":
+            Require(One(Read(Needed(Client, f"probe-client-{Nonce}.stdout.log")), "Summary").get("contract") ==
+                    ExpectedContract, "mixed client service contract")
         Gameplay[str(Nonce)] = ReplayGameplay(Inputs["ClientCsv"][str(Nonce)],
             Read(Needed(Client, f"probe-client-{Nonce}.stdout.log")), Nonce, Nonce == Native["ProducerNonce"])
     Results = {Role: Object(Needed(Files, "result.json")) for Role, Files in
@@ -476,7 +655,16 @@ def ReplayInputs(Inputs, ExpectedCommit):
                 "physical endpoint/coordinator failed: " + Role)
         if Role != "COORDINATOR":
             Require(Result.get("ExitCode") == 0, "physical child failed")
-    Require(Results["CLIENT"].get("ClientNonces") == Nonces, "client result nonces mismatch")
+            if ExpectedContract == "HYBRID_F1_V1":
+                Require(Result.get("ServiceContract") == ExpectedContract, "mixed endpoint service contract")
+    # Client launch order and server connection-slot assignment are independent.
+    # Bind the same four identities; per-nonce gameplay above still binds the
+    # native full connection and the unique producer without reassigning them.
+    ClientNonces = Results["CLIENT"].get("ClientNonces")
+    Require(type(ClientNonces) is list and len(ClientNonces) == 4 and
+            all(type(Nonce) is int for Nonce in ClientNonces) and
+            len(set(ClientNonces)) == 4 and set(ClientNonces) == set(Nonces),
+            "client result nonces mismatch")
     Endpoint = Results["COORDINATOR"]["Endpoints"]
     Require(set(Endpoint) == {"CLIENT", "SERVER"}, "coordinator endpoint set mismatch")
     RunId = Endpoint["CLIENT"]["RunId"]
@@ -541,7 +729,7 @@ def ReplayInputs(Inputs, ExpectedCommit):
         Captures[Role] = {"Packets": Count, "Tuples": Tuples}
         EndpointJournal(Files, Results[Role], Source, RunId, Tuples)
     Require(set(Captures["CLIENT"]["Tuples"]) == set(Captures["SERVER"]["Tuples"]), "capture endpoint tuple mismatch")
-    return {"State": "MEASURED_PASS", "SourceCommit": ExpectedCommit, "RunId": RunId, "LifecycleRunId": LifecycleRunId,
+    return {"State": "MEASURED_PASS", "Contract": ExpectedContract, "SourceCommit": ExpectedCommit, "RunId": RunId, "LifecycleRunId": LifecycleRunId,
             "CompletedUtc": CompletedUtc, "CompletionClockDomain": "CONTROLLING_HOST_UTC",
             "CandidatePins": Pins, "InputHashes": Hashes, "Native": Native,
             "Gameplay": Gameplay, "Capture": Captures}

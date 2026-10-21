@@ -13,11 +13,15 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import time
 import uuid
 
+# The verified role stage is absent from isolated Python / the worker's ._pth.
+# This controller runs as its own child, so the parent's sys.path is not inherited.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from farm_capture_directions import AssertWorkerStopIdentity
 
 
@@ -75,8 +79,12 @@ def LocalPath(Value, MustExist=False):
         raise ValueError("[Qualification:FarmCapture] path must be local and absolute")
     Current = File
     while True:
-        if Current.exists() and (Current.is_symlink() or
-                                 (hasattr(Current, "is_junction") and Current.is_junction())):
+        try:
+            Attributes = Current.lstat()
+        except FileNotFoundError:
+            Attributes = None
+        if Attributes is not None and (stat.S_ISLNK(Attributes.st_mode) or
+                getattr(Attributes, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
             raise ValueError("[Qualification:FarmCapture] reparse path is forbidden")
         if Current == Current.parent:
             break
@@ -93,7 +101,7 @@ def PinnedFile(Value, Expected, Name):
     return File
 
 
-def Configured(ConfigPath):
+def ReadConfig(ConfigPath, CaptureRootMustExist=True):
     Config = ReadJson(ConfigPath, 8192)
     if not isinstance(Config, dict) or Config.get("Format") != "GargantuanFarm32CaptureCampaign" or \
             type(Config.get("Version")) is not int or Config["Version"] != 1 or \
@@ -116,9 +124,11 @@ def Configured(ConfigPath):
     for Name, ExpectedName in RequiredNames.items():
         if Name in Config and Config[Name].name.lower() != ExpectedName.lower():
             raise ValueError("[Qualification:FarmCapture] unexpected fixed capture executable")
-    Config["CaptureRoot"] = LocalPath(Config["CaptureRoot"], MustExist=True)
+    Config["CaptureRoot"] = LocalPath(Config["CaptureRoot"], MustExist=CaptureRootMustExist)
     Config["RoleEvidenceRoot"] = LocalPath(Config["RoleEvidenceRoot"])
-    if not Config["CaptureRoot"].is_dir() or not Config["RoleEvidenceRoot"].parent.is_dir() or \
+    if ((CaptureRootMustExist and not Config["CaptureRoot"].is_dir()) or
+            not Config["CaptureRoot"].parent.is_dir() or
+            not Config["RoleEvidenceRoot"].parent.is_dir()) or \
             Config["CaptureRoot"] == Config["RoleEvidenceRoot"] or \
             Config["CaptureRoot"] in Config["RoleEvidenceRoot"].parents or \
             Config["RoleEvidenceRoot"] in Config["CaptureRoot"].parents:
@@ -129,12 +139,40 @@ def Configured(ConfigPath):
     return Config
 
 
+def Configured(ConfigPath):
+    """Strict, read-only validation; capture starts only in RunRole."""
+    return ReadConfig(ConfigPath)
+
+
+class FixedOperationError(RuntimeError):
+    def __init__(self, Result):
+        super().__init__("[Qualification:FarmCapture] fixed operation failed or exceeded output bound")
+        self.Result = {"ExitCode": Result.returncode, "Stdout": Result.stdout[:MAX_TEXT_BYTES],
+                       "Stderr": Result.stderr[:MAX_TEXT_BYTES],
+                       "OutputBoundExceeded": len(Result.stdout) > MAX_TEXT_BYTES or len(Result.stderr) > MAX_TEXT_BYTES}
+
+
+class FixedOperationTimeout(TimeoutError):
+    def __init__(self, Error):
+        super().__init__("[Qualification:FarmCapture] fixed operation exceeded its deadline")
+        def Text(Value):
+            if Value is None:
+                return ""
+            return Value[:MAX_TEXT_BYTES].decode("utf-8", errors="replace") if isinstance(Value, bytes) else Value[:MAX_TEXT_BYTES]
+        self.Result = {"ExitCode": None, "TimeoutSeconds": Error.timeout,
+                       "Stdout": Text(Error.stdout), "Stderr": Text(Error.stderr),
+                       "OutputBoundExceeded": len(Error.stdout or b"") > MAX_TEXT_BYTES or len(Error.stderr or b"") > MAX_TEXT_BYTES}
+
+
 def FixedRun(Command, Timeout, Runner=subprocess.run):
-    Result = Runner([str(Item) for Item in Command], capture_output=True, text=True,
-                    timeout=Timeout, check=False,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    try:
+        Result = Runner([str(Item) for Item in Command], capture_output=True, text=True,
+                        timeout=Timeout, check=False,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    except subprocess.TimeoutExpired as Error:
+        raise FixedOperationTimeout(Error) from Error
     if len(Result.stdout) > MAX_TEXT_BYTES or len(Result.stderr) > MAX_TEXT_BYTES or Result.returncode:
-        raise RuntimeError("[Qualification:FarmCapture] fixed operation failed or exceeded output bound")
+        raise FixedOperationError(Result)
     return Result.stdout
 
 
@@ -145,7 +183,7 @@ def ServiceReply(Text, Operation, RunId, State):
         raise ValueError("[Qualification:FarmCapture] capture service response mismatch")
 
 
-def RoleEvidence(Root, RunId, Role):
+def RoleEvidence(Root, RunId, Role, RequirePass=True):
     Root = LocalPath(str(Root), MustExist=True)
     Index = Root / "evidence-sha256.json"
     Result = Root / "result.json"
@@ -154,7 +192,7 @@ def RoleEvidence(Root, RunId, Role):
     ExpectedRole = "Server" if Role == "SERVER" else "Clients"
     if IndexRow.get("RunId") != RunId or IndexRow.get("Role") != ExpectedRole or \
             ResultRow.get("RunId") != RunId or ResultRow.get("Role") != ExpectedRole or \
-            ResultRow.get("Status") != "PASS":
+            ResultRow.get("Status") not in (("PASS",) if RequirePass else ("PASS", "FAIL")):
         raise ValueError("[Qualification:FarmCapture] role receipt failed or has wrong identity")
     Matches = [Item for Item in IndexRow.get("Files", []) if Item.get("Name") == "result.json"]
     if len(Matches) != 1 or Matches[0].get("Sha256", "").lower() != Digest(Result):
@@ -225,6 +263,69 @@ class FarmCaptureController:
         self.StartedUtc = self.ReadyUtc = None
         self.Child = None
         self.WorkerActive = False
+        self.StopConfirmed = False
+        self.FinalizeAttempted = False
+        self.ExportSucceeded = False
+
+    def FinalizeWorker(self):
+        if self.FinalizeAttempted:
+            raise RuntimeError("[Qualification:FarmCapture] offline export already attempted")
+        if not self.StopConfirmed:
+            raise RuntimeError("[Qualification:FarmCapture] owned stop is unproven")
+        AssertCaptureProfile(self.Config, RequireStopped=True)
+        self.FinalizeAttempted = True
+        Config = self.Config
+        try:
+            Output = FixedRun([Config["PowerShellPath"], "-NoProfile", "-NonInteractive", "-File",
+                               Config["HookPath"], "-EvidenceDir", Config["CaptureDirectory"],
+                               "-Action", "Finalize"], FINALIZE_TIMEOUT_SECONDS, self.Runner)
+        except (FixedOperationError, FixedOperationTimeout) as Error:
+            with (Config["CaptureDirectory"] / "capture-controller-finalize-failure.json").open("x", encoding="utf-8") as Stream:
+                json.dump(Error.Result, Stream)
+            raise
+        with (Config["CaptureDirectory"] / "capture-controller-finalize.log").open("x", encoding="utf-8") as Stream:
+            Stream.write(Output)
+        self.ExportSucceeded = True
+
+    def FailureEvidence(self, Error):
+        """Retain bounded diagnostic bytes; this state can never qualify a run."""
+        Config = self.Config
+        Directory = Config["CaptureDirectory"]
+        if not Directory.is_dir():
+            return
+        Reasons = [str(Error)[:512]]
+        if Config["Role"] == "SERVER" and self.StopConfirmed and not self.FinalizeAttempted:
+            try:
+                self.FinalizeWorker()
+            except Exception as ExportError:
+                Reasons.append("offline export: " + str(ExportError)[:512])
+        RoleHash = None
+        try:
+            RoleIndex, _ = RoleEvidence(Config["RoleEvidenceRoot"], Config["RunId"],
+                                        Config["Role"], RequirePass=False)
+            RoleHash = Digest(RoleIndex)
+        except (ValueError, OSError):
+            pass  # Unmeasured role evidence stays explicitly absent.
+        Files, Excluded = [], []
+        ImmutableControllerFiles = {"capture-controller-ready.json", "capture-controller-incomplete.json",
+                                    "capture-controller-finalize-failure.json"}
+        for File in sorted(Directory.iterdir()):
+            if File.name == "capture-sha256.json":
+                raise ValueError("[Qualification:FarmCapture] diagnostic index already exists")
+            if File.is_symlink() or not File.is_file() or len(Files) + len(Excluded) >= 20 or File.stat().st_size >= MAX_CAPTURE_BYTES:
+                raise ValueError("[Qualification:FarmCapture] unsafe or oversized diagnostic artifact")
+            if not self.StopConfirmed and File.name not in ImmutableControllerFiles:
+                Excluded.append(File.name)  # A still-active writer cannot provide a sealed hash.
+                continue
+            Files.append({"Name": File.name, "Bytes": File.stat().st_size, "Sha256": Digest(File)})
+        with (Directory / "capture-sha256.json").open("x", encoding="utf-8") as Stream:
+            json.dump({"Format": "GargantuanFarm32CaptureEvidence", "Version": 1,
+                       "Profile": CAPTURE_PROFILE, "RunId": Config["RunId"],
+                       "CoordinatorRunId": Config["CoordinatorRunId"], "Role": Config["Role"],
+                       "State": "FAILED_DIAGNOSTIC", "RoleIndexSha256": RoleHash,
+                       "OwnedStopConfirmed": self.StopConfirmed, "OfflineExportSucceeded": self.ExportSucceeded,
+                       "FailureReasons": Reasons, "UnsealedArtifacts": Excluded, "Files": Files}, Stream, indent=2)
+            Stream.write("\n")
 
     def Service(self, Operation, State, Timeout):
         Config = self.Config
@@ -277,6 +378,35 @@ class FarmCaptureController:
     def AwaitRole(self):
         Config = self.Config
         while self.Clock() - self.Started < ROLE_DEADLINE_SECONDS:
+            # Fixed local cancellation belongs to this controller's readiness
+            # generation. It has no caller-selected path or service operation.
+            # Keep it outside the capture directory so a late request cannot
+            # add bytes to an already sealed capture index.
+            Cancel = Config["CaptureRoot"] / (Config["RunId"] + ".capture-controller-cancel.json")
+            if self.ReadyUtc is not None:
+                try:
+                    Cancel = LocalPath(str(Cancel), MustExist=True)
+                    with Cancel.open("rb") as Stream:
+                        if not stat.S_ISREG(os.fstat(Stream.fileno()).st_mode):
+                            raise ValueError("non-file cancellation")
+                        Payload = Stream.read(1025)
+                    if len(Payload) > 1024:
+                        raise ValueError("oversized cancellation")
+                    Signal = json.loads(Payload.decode("utf-8"))
+                except (ValueError, OSError, UnicodeError):
+                    pass  # A partial, malformed or foreign signal is not authority.
+                else:
+                    Expected = {"Format": "GargantuanFarm32CaptureCancel", "Version": 1,
+                                "RunId": Config["RunId"], "CoordinatorRunId": Config["CoordinatorRunId"],
+                                "Role": Config["Role"], "ReadyUtc": self.ReadyUtc,
+                                "Reason": "COORDINATOR_JOIN_FAILED"}
+                    if (isinstance(Signal, dict) and set(Signal) == set(Expected) | {"JoinExitCode"} and
+                            type(Signal["Version"]) is int and
+                            all(Signal.get(Key) == Value for Key, Value in Expected.items()) and
+                            type(Signal["JoinExitCode"]) is int and
+                            -2147483648 <= Signal["JoinExitCode"] <= 2147483647 and Signal["JoinExitCode"] != 0):
+                        raise RuntimeError("[Qualification:FarmCapture] coordinator join failed exit_code=" +
+                                           str(Signal["JoinExitCode"]))
             Index = Config["RoleEvidenceRoot"] / "evidence-sha256.json"
             if Index.is_file():
                 try:
@@ -305,10 +435,8 @@ class FarmCaptureController:
             self.WorkerActive = False
             StoppedUtc = UtcNow()
             self.Service("status", "idle", 10)
-            Output = FixedRun([Config["PowerShellPath"], "-NoProfile", "-NonInteractive", "-File",
-                               Config["HookPath"], "-EvidenceDir", Config["CaptureDirectory"],
-                               "-Action", "Finalize"], FINALIZE_TIMEOUT_SECONDS, self.Runner)
-            (Config["CaptureDirectory"] / "capture-controller-finalize.log").write_text(Output, encoding="utf-8")
+            self.StopConfirmed = True
+            self.FinalizeWorker()
         else:
             Remaining = max(1, CLIENT_AUTOSTOP_SECONDS - (self.Clock() - self.Started))
             if self.Child.wait(timeout=Remaining) != 0:
@@ -333,6 +461,7 @@ class FarmCaptureController:
             else:
                 self.Service("status", "idle", 10)
             self.WorkerActive = False
+            self.StopConfirmed = True
         if self.Child is not None and self.Child.poll() is None:
             if os.name == "nt":
                 subprocess.run(["taskkill.exe", "/PID", str(self.Child.pid), "/T", "/F"],
@@ -362,7 +491,11 @@ def RunRole(ConfigPath):
             with (Directory / "capture-controller-incomplete.json").open("x", encoding="utf-8") as Stream:
                 json.dump({"RunId": Config["RunId"], "Role": Config["Role"],
                            "State": "INCOMPLETE", "Reason": str(Error)[:512]}, Stream)
-        raise
+            try:
+                Controller.FailureEvidence(Error)
+            except Exception as EvidenceError:
+                raise RuntimeError(str(Error) + "; diagnostic evidence: " + str(EvidenceError)) from Error
+        raise Error
 
 
 def BindReceipt(RunId, CoordinatorRunId, CoordinatorResult, ServerIndex, ClientIndex,
@@ -400,6 +533,8 @@ def Main():
     Sub = Parser.add_subparsers(dest="Operation", required=True)
     Role = Sub.add_parser("role")
     Role.add_argument("Config")
+    Validate = Sub.add_parser("validate")
+    Validate.add_argument("Config")
     Bind = Sub.add_parser("bind")
     for Name in ("RunId", "CoordinatorRunId", "CoordinatorResult", "ServerIndex", "ClientIndex",
                  "ServerCapture", "ClientCapture", "Receipt"):
@@ -407,6 +542,10 @@ def Main():
     Args = Parser.parse_args()
     if Args.Operation == "role":
         return RunRole(Args.Config)
+    if Args.Operation == "validate":
+        Configured(Args.Config)
+        print("[Qualification:FarmCapture] CONFIGURED_ONLY", flush=True)
+        return 0
     BindReceipt(Args.RunId, Args.CoordinatorRunId, Args.CoordinatorResult,
                 Args.ServerIndex, Args.ClientIndex, Args.ServerCapture, Args.ClientCapture, Args.Receipt)
     return 0

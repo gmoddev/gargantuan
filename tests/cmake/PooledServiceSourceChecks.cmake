@@ -35,9 +35,19 @@ RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
 RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
 	"GargantuanSeg.m_bGargantuanEverSent = true")
 RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
-	"nGargantuanStructuralPacketsThisThink >= 4")
+	"GargantuanGrant.SenderPacketQuantum(GargantuanHasRunningStructuralGrant())")
+RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
+	"nGargantuanStructuralPacketsThisThink >= nGargantuanPacketQuantum")
+RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
+	"GargantuanOrdinaryPermit.Reserve(")
+RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
+	"GargantuanOrdinaryPermit.Complete(nBytesSent, helper.GargantuanHasData)")
+RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
+	"GargantuanOrdinaryDataDeadline(usecNextSend, GargantuanNow, GargantuanEligible)")
 RequireSource("steamnetworkingsockets_thinker.cpp"
 	"GargantuanHasRunningStructuralGrant()")
+RequireSource("steamnetworkingsockets_thinker.cpp"
+	"usecTargetThinkTime = SteamNetworkingSockets_GetLocalTimestamp();")
 RequireSource("steamnetworkingsockets_thinker.cpp"
 	"usecRetry = usecNow + 25")
 

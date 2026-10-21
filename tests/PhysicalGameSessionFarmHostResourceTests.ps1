@@ -5,7 +5,7 @@ $Source = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmEndpoint.ps1'
 $Tokens = $null; $Errors = $null
 $Ast = [Management.Automation.Language.Parser]::ParseFile($Source, [ref]$Tokens, [ref]$Errors)
 if ($Errors.Count -ne 0) { throw 'farm endpoint syntax is invalid' }
-$Names = @('Initialize-HostResourceCounters', 'Add-HostResourceSample')
+$Names = @('Initialize-HostResourceCounters', 'Add-HostResourceSample', 'Write-EndpointSamplerJson')
 $Definitions = @($Ast.FindAll({ param($Node)
 	$Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -in $Names
 }, $true))
@@ -27,7 +27,9 @@ function Get-NetAdapterStatistics {
 	}
 }
 
-Initialize-HostResourceCounters
+$PreparationRoot = Join-Path ([IO.Path]::GetTempPath()) ('farm-host-resource-test-' + [Guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($PreparationRoot)
+$CounterPreparation = Initialize-HostResourceCounters -PreparationRoot (Join-Path $PreparationRoot 'CounterRegistry') -EvidenceDirectory $PreparationRoot
 $Owner = [pscustomobject]@{ Process = (Get-Process -Id $PID) }
 $Interface = [pscustomobject]@{ Index = 22; MacAddress = 'AA-BB-CC-DD-EE-02'
 	Address = '10.253.3.2'; Name = 'Mellanox Mock'; HostName = 'WORKER' }
@@ -56,4 +58,9 @@ try {
 	Write-Output '[Qualification:FarmHostResources] MOCK_TEST_OK'
 } finally {
 	$Owner.Process.Dispose()
+	$Resolved = [IO.Path]::GetFullPath($PreparationRoot)
+	$Temporary = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\','/')
+	if (-not $Resolved.StartsWith($Temporary+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -or
+		[IO.Path]::GetFileName($Resolved) -cnotmatch '^farm-host-resource-test-[a-f0-9]{32}$') { throw 'host resource cleanup outside owned root' }
+	Remove-Item -LiteralPath $Resolved -Recurse -Force
 }

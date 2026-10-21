@@ -3,6 +3,7 @@
 import ctypes
 import datetime
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -32,6 +33,21 @@ Directory.mkdir()
         __import__('datetime').timezone.utc).isoformat()}))
 Deadline = time.monotonic() + 5
 while not (Path(Config['RoleEvidenceRoot']) / 'evidence-sha256.json').exists():
+    Cancel = Directory.parent / (Config['RunId'] + '.capture-controller-cancel.json')
+    if Cancel.is_file():
+        try:
+            Signal = json.loads(Cancel.read_text())
+        except json.JSONDecodeError:
+            time.sleep(.01)
+            continue
+        Ready = json.loads((Directory / 'capture-controller-ready.json').read_text())
+        assert Signal['RunId'] == Config['RunId'] and Signal['CoordinatorRunId'] == Config['CoordinatorRunId']
+        assert Signal['Role'] == Config['Role'] and Signal['ReadyUtc'] == Ready['ReadyUtc']
+        assert Signal['Reason'] == 'COORDINATOR_JOIN_FAILED' and Signal['JoinExitCode'] == 7
+        (Directory / 'capture-sha256.json').write_text(json.dumps({
+            'RunId': Config['RunId'], 'Role': Config['Role'], 'State': 'FAILED_DIAGNOSTIC',
+            'RoleIndexSha256': None, 'FailureReasons': ['coordinator join failed exit_code=7']}))
+        sys.exit(1)
     if time.monotonic() >= Deadline:
         sys.exit(7)
     time.sleep(.01)
@@ -210,6 +226,9 @@ class CampaignTests(unittest.TestCase):
         Result = json.loads(Path(Ticket["ResultPath"]).read_text())
         self.assertEqual("SEALED_UNQUALIFIED", Result["Status"])
         self.assertEqual(self.CoordinatorRunId, Result["CoordinatorRunId"])
+        Capture = json.loads(Path(Ticket["CaptureConfigPath"]).read_text())
+        self.assertFalse((Path(Capture["CaptureRoot"]) /
+                          (self.RunId + ".capture-controller-cancel.json")).exists())
         with self.assertRaisesRegex(ValueError, "stale role or capture"):
             Campaign.RunRole(TicketFile)
 
@@ -229,6 +248,151 @@ class CampaignTests(unittest.TestCase):
         Save(TicketFile, Ticket)
         with self.assertRaisesRegex(ValueError, "capture controller pin changed"):
             Campaign.RunRole(TicketFile)
+
+    def test_known_join_failure_requests_capture_abort_before_wait_and_preserves_cause(self):
+        TicketFile, Ticket, _, CaptureFile, _ = self.Role("CLIENT")
+        Capture = json.loads(CaptureFile.read_text())
+        Cancel = Path(Capture["CaptureRoot"]) / (self.RunId + ".capture-controller-cancel.json")
+        RoleIndex = Path(Capture["RoleEvidenceRoot"]) / "evidence-sha256.json"
+
+        def FailedJoin(Endpoint, Workflows, Catalog, Journal):
+            Journal.Close({"Success": False})
+            return 7
+
+        with mock.patch.object(Campaign, "Join", side_effect=FailedJoin), \
+                mock.patch.object(Campaign, "GetCatalog", return_value=object()):
+            with self.assertRaisesRegex(RuntimeError, "coordinator join failed exit_code=7; capture_exit_code=1"):
+                Campaign.RunRole(TicketFile)
+        Signal = json.loads(Cancel.read_text())
+        self.assertEqual(Signal["CoordinatorRunId"], self.CoordinatorRunId)
+        self.assertEqual(Signal["RunId"], self.RunId)
+        self.assertFalse(RoleIndex.exists())
+        CaptureIndex = Cancel.parent / self.RunId / "capture-sha256.json"
+        Receipt = json.loads(CaptureIndex.read_text())
+        self.assertEqual(Receipt["State"], "FAILED_DIAGNOSTIC")
+        self.assertIsNone(Receipt["RoleIndexSha256"])
+        self.assertIn("coordinator join failed exit_code=7", Receipt["FailureReasons"][0])
+        Diagnostic = json.loads(Path(Ticket["ResultPath"]).with_name("result.capture-controller-diagnostic.json").read_text())
+        self.assertEqual(Diagnostic["ExitCode"], 1)
+
+    def test_stale_cancel_request_is_rejected_before_starting_capture(self):
+        TicketFile, Ticket, _, CaptureFile, _ = self.Role("CLIENT")
+        Capture = json.loads(CaptureFile.read_text())
+        Cancel = Path(Capture["CaptureRoot"]) / (self.RunId + ".capture-controller-cancel.json")
+        Save(Cancel, {"RunId": str(uuid.uuid4())})
+        with mock.patch.object(Campaign.subprocess, "Popen") as Spawner:
+            with self.assertRaisesRegex(ValueError, "stale role or capture"):
+                Campaign.RunRole(TicketFile)
+            Spawner.assert_not_called()
+
+    def test_cancel_publication_is_complete_exclusive_and_removes_owned_temporary(self):
+        _, Ticket, _, CaptureFile, _ = self.Role("CLIENT")
+        Capture = json.loads(CaptureFile.read_text())
+        Cancel = Path(Capture["CaptureRoot"]) / (self.RunId + ".capture-controller-cancel.json")
+        ReadyUtc = UtcNow()
+        Link = os.link
+
+        def Publish(Source, Destination, **Options):
+            self.assertFalse(Cancel.exists())
+            Signal = json.loads(Path(Source).read_bytes())
+            self.assertEqual(Signal["ReadyUtc"], ReadyUtc)
+            self.assertEqual(Signal["JoinExitCode"], 1)
+            Link(Source, Destination, **Options)
+
+        with mock.patch.object(Campaign.os, "link", side_effect=Publish):
+            Campaign.RequestCaptureCancel(Capture, Ticket, ReadyUtc, 1)
+        Original = Cancel.read_bytes()
+        with self.assertRaises(FileExistsError):
+            Campaign.RequestCaptureCancel(Capture, Ticket, ReadyUtc, 7)
+        self.assertEqual(Cancel.read_bytes(), Original)
+        self.assertEqual(list(Cancel.parent.glob("*.tmp")), [])
+
+    def test_cancel_reparse_leaf_is_rejected_without_writing(self):
+        _, Ticket, _, CaptureFile, _ = self.Role("CLIENT")
+        Capture = json.loads(CaptureFile.read_text())
+        Cancel = Path(Capture["CaptureRoot"]) / (self.RunId + ".capture-controller-cancel.json")
+        Stat = Path.lstat
+
+        def Attributes(File, **Options):
+            if File == Cancel:
+                return mock.Mock(st_mode=Campaign.stat.S_IFREG,
+                                 st_file_attributes=Campaign.stat.FILE_ATTRIBUTE_REPARSE_POINT)
+            return Stat(File, **Options)
+
+        with mock.patch.object(Path, "lstat", Attributes):
+            with self.assertRaisesRegex(ValueError, "reparse"):
+                Campaign.RequestCaptureCancel(Capture, Ticket, UtcNow(), 1)
+        self.assertEqual(list(Cancel.parent.iterdir()), [])
+
+    def FailedCapture(self, Source, Role="CLIENT", ResultName=None):
+        self.Controller.write_text(Source, encoding="utf-8")
+        TicketFile, Ticket, _, _, _ = self.Role(Role)
+        if ResultName is not None:
+            Ticket["ResultPath"] = str(self.Root / ResultName)
+            Save(TicketFile, Ticket)
+        with mock.patch.object(Campaign, "GetCatalog", return_value=object()), mock.patch.object(Campaign, "Join") as Join:
+            with self.assertRaisesRegex(RuntimeError, "capture controller ended before ready"):
+                Campaign.RunRole(TicketFile)
+            Join.assert_not_called()
+        Result = Path(Ticket["ResultPath"])
+        return Result.with_name(Result.stem + ".capture-controller.stderr.log").read_bytes(), json.loads(
+            Result.with_name(Result.stem + ".capture-controller-diagnostic.json").read_text())
+
+    def test_capture_diagnostics_are_unique_for_two_runs_sharing_result_parent(self):
+        FirstRunId = self.RunId
+        FirstText, FirstDiagnostic = self.FailedCapture("import first_run_missing_dependency\n", ResultName="first-run.json")
+        FirstLog = self.Root / "first-run.capture-controller.stderr.log"
+        FirstReceipt = self.Root / "first-run.capture-controller-diagnostic.json"
+        OriginalReceipt = FirstReceipt.read_bytes()
+        self.RunId = str(uuid.uuid4())
+        self.CoordinatorRunId = str(uuid.uuid4())
+        SecondManifestRoot = self.Root / "second-run-manifest"
+        SecondManifestRoot.mkdir()
+        self.Manifest = Save(SecondManifestRoot / "run-manifest.json", {
+            "Format": "GargantuanPhysicalFarmEndpoint", "Version": 1,
+            "RunId": self.RunId, "SourceCommit": self.SourceCommit,
+            "Provider": "Local", "Nonces": [str(Number) for Number in range(32)]})
+        SecondText, SecondDiagnostic = self.FailedCapture("import second_run_missing_dependency\n",
+                                                        Role="SERVER", ResultName="second-run.json")
+        self.assertIn(b"first_run_missing_dependency", FirstText)
+        self.assertIn(b"second_run_missing_dependency", SecondText)
+        self.assertEqual(FirstDiagnostic["RunId"], FirstRunId)
+        self.assertEqual(SecondDiagnostic["RunId"], self.RunId)
+        self.assertEqual(FirstLog.read_bytes(), FirstText)
+        self.assertEqual(FirstReceipt.read_bytes(), OriginalReceipt)
+        self.assertEqual(len(list(self.Root.glob("*.capture-controller.stderr.log"))), 2)
+
+    def test_capture_import_error_is_retained_without_role_launch(self):
+        Text, Diagnostic = self.FailedCapture("import farm_capture_missing_dependency_for_test\n")
+        self.assertIn(b"ModuleNotFoundError", Text)
+        self.assertIn(b"farm_capture_missing_dependency_for_test", Text)
+        self.assertEqual(Diagnostic["ExitCode"], 1)
+        self.assertEqual(Diagnostic["RunId"], self.RunId)
+        self.assertTrue(Diagnostic["DrainComplete"])
+        self.assertFalse(Diagnostic["Truncated"])
+        self.assertIsNone(Diagnostic["ReadError"])
+
+    def test_capture_stderr_flood_is_drained_but_retained_prefix_is_bounded(self):
+        Size = Campaign.CAPTURE_STDERR_BYTES * 3
+        Text, Diagnostic = self.FailedCapture(f"import sys\nsys.stderr.buffer.write(b'x' * {Size})\nsys.exit(4)\n")
+        self.assertEqual(Text, b"x" * Campaign.CAPTURE_STDERR_BYTES)
+        self.assertEqual(Diagnostic["ObservedBytes"], Size)
+        self.assertEqual(Diagnostic["RetainedBytes"], Campaign.CAPTURE_STDERR_BYTES)
+        self.assertEqual(Diagnostic["ExitCode"], 4)
+        self.assertTrue(Diagnostic["Truncated"])
+        self.assertTrue(Diagnostic["DrainComplete"])
+
+    def test_capture_stderr_write_failure_does_not_block_pipe_drain(self):
+        Logger = Campaign.CaptureStderr(self.Root / "failed-disk.log")
+        Logger.Output = mock.Mock(wraps=Logger.Output)
+        Logger.Output.write.side_effect = OSError("simulated full disk")
+        Logger.Start(io.BytesIO(b"x" * (Campaign.CAPTURE_STDERR_BYTES * 2)))
+        Diagnostic = Logger.Finish()
+        self.assertTrue(Diagnostic["DrainComplete"])
+        self.assertEqual(Diagnostic["ObservedBytes"], Campaign.CAPTURE_STDERR_BYTES * 2)
+        self.assertEqual(Diagnostic["RetainedBytes"], 0)
+        self.assertIn("full disk", Diagnostic["ReadError"])
+        Logger.Output.write.assert_called_once()
 
     def test_node_server_requires_pinned_stage_and_stops_owned_child(self):
         TicketFile, Ticket, FarmFile, StageRoot = self.NodeRole()

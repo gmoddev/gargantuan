@@ -4,6 +4,8 @@
 #include "host/common/FarmPublicationEvidence.hpp"
 #include "host/common/FarmLifecycleEvidence.hpp"
 #include "host/player/FarmRecoveryObservation.hpp"
+#include "network/ReliableServiceFeedback.hpp"
+#include "network/GameSessionTestAccess.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -174,6 +176,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 
 #if defined(GARGANTUAN_WITH_GNS)
 	TransportServiceSmoke TransportTrace(Program.is_used("--session-smoke"), "player");
+	std::shared_ptr<network::GameNetworkingSocketsTransport> FarmNativeTransport;
+	std::optional<network::ConnectionId> FarmConnection;
 #endif
 	std::unique_ptr<BaseRenderer> Renderer;
 	std::unique_ptr<Engine> Runtime;
@@ -189,16 +193,25 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		std::shared_ptr<DataModel> World;
 #if defined(GARGANTUAN_WITH_GNS)
 		if (!ClientText.empty()) {
+			auto ClientTransport = std::make_shared<network::GameNetworkingSocketsTransport>();
+			if (FarmScaleWorkload) {
+				if (!network::detail::ReliableServiceFeedbackAccess::Enable(*ClientTransport))
+					throw std::runtime_error("farm client terminal feedback could not be enabled");
+				FarmNativeTransport = ClientTransport;
+			}
 			Session = std::make_unique<network::GameSession>(
-				std::make_shared<network::GameNetworkingSocketsTransport>(),
+				ClientTransport,
 				network::GameSessionConfiguration{
 					.Role = network::GameSessionRole::Client,
 					.Endpoint = *ClientEndpoint,
 					.Limits = network::GameSessionConfiguration::DefaultLimits(),
 					.ClientNonce = FarmEnabled ? FarmClientNonce : 0,
 					.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
+					.DeclareNormalOrdinaryService = true,
 				}
 			);
+			if (FarmScaleWorkload && !network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, false))
+				throw std::runtime_error("[Network:OrdinaryService] Client bootstrap source scope failed");
 			if (!Session->Start().Succeeded()) throw std::runtime_error("client game-session endpoint failed to start");
 			SDLHost BootstrapHost;
 			for (std::uint64_t Tick = 1; Tick <= network::DefaultGameSessionHandshakeTimeoutTicks; ++Tick) {
@@ -254,6 +267,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			const auto Connection = Session->GetPrimaryConnection();
 			FarmReady = Session->GetStatus() == network::GameSessionStatus::Ready && Connection.has_value();
 			if (!FarmReady) throw std::runtime_error("client farm game session did not reach Ready");
+			if (FarmScaleWorkload) FarmConnection = Connection;
 			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<host::detail::FarmPublicationEvidence>(
 				false, FarmRunId, FarmSlot, FarmClientNonce,
 				std::filesystem::path(FarmPublicationEvidencePath), *Connection);
@@ -310,14 +324,33 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		while (Runtime->ProcessService->Alive) {
 			const auto FrameStarted = std::chrono::steady_clock::now();
 			if (Session) (void)Session->Poll();
-			if (PublicationEvidence) {
-				const auto Phase = World->GetAttributeValue("ScalePhase");
+			if (FarmScaleWorkload) {
+				// The existing phase Remote updates this client-owned control state
+				// before the independently replicated DataModel Attribute arrives.
+				const auto Phase = Runtime->CharacterControl->GetAttributeValue("ScalePhase");
 				const auto *Name = Phase ? std::get_if<std::string>(&*Phase) : nullptr;
 				// Recovery deliberately retains ScalePhase=reload. Its existing
 				// enable transition ends fixed demand before the next Luau step.
 				const bool Overload = World->GetAttributeValue("ScaleOverloadEnabled") ==
 					std::optional<WireValue>(WireValue(true));
-				PublicationEvidence->SetTrafficPhase(Name ? std::string_view(*Name) : std::string_view{}, Overload);
+				const auto PhaseName = Name ? std::string_view(*Name) : std::string_view{};
+				const bool Normal = !Overload && (PhaseName == "baseline" || PhaseName == "load" ||
+					PhaseName == "resident" || PhaseName == "evict" || PhaseName == "reload");
+				if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, Normal))
+					throw std::runtime_error("[Network:OrdinaryService] Client source scope failed");
+				if (PublicationEvidence) PublicationEvidence->SetTrafficPhase(PhaseName, Overload);
+				// Qualification-only handoff to the existing Luau producer. A phase
+				// callback in this same frame must not enqueue normal ACKs before the
+				// host has prospectively enrolled their source and trace boundary.
+				// Also acknowledge closing/calibration labels, so those callbacks
+				// cannot send under the preceding normal phase's membership.
+				const bool KnownPhase = PhaseName == "baseline" || PhaseName == "load" || PhaseName == "resident" ||
+					PhaseName == "evict" || PhaseName == "reload" || PhaseName == "calibrating" || PhaseName == "complete";
+				const auto SourcePhase = KnownPhase ? std::optional<WireValue>(WireValue(std::string(PhaseName))) : std::nullopt;
+				if (Runtime->CharacterControl->GetAttributeValue("ScaleOrdinarySourcePhase") != SourcePhase &&
+					Runtime->CharacterControl->ApplyAttributeMutation("ScaleOrdinarySourcePhase", SourcePhase,
+						ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+					throw std::runtime_error("[Network:OrdinaryService] Client source enrollment handoff failed");
 			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (ClockCalibration) {
@@ -429,13 +462,23 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 									if (Complete) Observed[Index] = Children.front();
 								}
 								if (Complete) {
+									if (!Session)
+										throw std::runtime_error("[Qualification:Identity] Recovery observations lack an active client session");
+									const auto Identities = network::detail::GameSessionTestAccess::ReadClientReplicaIdentities(
+										*Session, Observed);
+									if (!Identities || Identities->size() != Observed.size())
+										throw std::runtime_error("[Qualification:Identity] Recovery observations lack exact live source-to-replica bindings");
 									FarmRecoveryNamesObserved[CaseIndex] = true;
 									for (std::size_t Index = 0; Index < Observed.size(); ++Index)
 										std::cout << "[Qualification:Client] event=name_object run_id=" << FarmRunId
 											<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
 											<< " case=" << (CaseIndex == 1 ? "structural" : "mixed") << " index=" << Index
-											<< " object_slot=" << Observed[Index]->GetObjectId().Slot
-											<< " object_generation=" << Observed[Index]->GetObjectId().Generation
+											<< " identity_contract=source_replica_v1"
+											<< " object_slot=" << (*Identities)[Index].Source.Slot
+											<< " object_generation=" << (*Identities)[Index].Source.Generation
+											<< " local_object_slot=" << (*Identities)[Index].Local.Slot
+											<< " local_object_generation=" << (*Identities)[Index].Local.Generation
+											<< " replica_epoch=" << (*Identities)[Index].Epoch.Value()
 											<< " name_bytes=24576 letter=" << static_cast<char>('a' +
 												(CaseIndex * 7 + (Index < 16 ? 479 : 480) + Index) % 26) << '\n';
 									std::cout << "[Qualification:Client] event=names_observed run_id=" << FarmRunId
@@ -714,6 +757,31 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				static_cast<unsigned long long>(Metrics.ActionPresentationStops)
 			);
 			Session->Stop();
+			if (FarmScaleWorkload) {
+#if defined(GARGANTUAN_WITH_GNS)
+				const auto Final = FarmNativeTransport && FarmConnection
+					? network::detail::ReliableServiceFeedbackAccess::Observe(*FarmNativeTransport, *FarmConnection)
+					: std::optional<network::detail::ReliableServiceFeedback>{};
+				if (!Final || Final->State != network::ConnectionState::Closed || !Final->CountersValid) {
+					ExitCode = 20;
+				} else {
+					std::cout << "[Qualification:OrdinaryFIFO] event=client contract=HYBRID_F1_V1 run=" << FarmRunId
+						<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+						<< " connection=" << FarmConnection->Slot << ':' << FarmConnection->Generation
+						<< " registered=" << Final->QualifiedOrdinaryRegisteredMessages
+						<< " completed=" << Final->QualifiedOrdinaryCompletedMessages
+						<< " pending=" << Final->QualifiedOrdinaryPendingMessages
+						<< " max_latency_us=" << Final->QualifiedOrdinaryMaximumLatencyMicroseconds
+						<< " ever_failed=" << Final->QualifiedOrdinaryEverFailed
+						<< " last_failed=" << Final->QualifiedOrdinaryLastCompletedFailed
+						<< " active_failed=" << Final->QualifiedOrdinaryActiveDeadlineFailed
+						<< " invalid=" << Final->QualifiedOrdinaryEvidenceInvalid
+						<< " queued_failed=" << (Session->GetMetrics().QualifiedOrdinaryQueueFailures != 0) << '\n';
+					if (!network::detail::ReliableServiceFeedbackAccess::Release(*FarmNativeTransport, *FarmConnection))
+						ExitCode = 20;
+				}
+#endif
+			}
 			if (FarmScaleWorkload) Lifecycle.ObserveSession(*Session);
 		}
 		Session.reset();

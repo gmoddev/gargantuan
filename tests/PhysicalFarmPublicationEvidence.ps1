@@ -46,6 +46,20 @@ function Read-FarmPublicationObservation {
 		$Observation.CrossHostDueToHandled -cne 'NOT_MEASURED') {
 		throw 'bounded publication join output is invalid'
 	}
+	if ($null -eq $Observation.OrdinaryFIFO -or
+		$Observation.OrdinaryFIFO.State -cnotin @('MEASURED_PASS', 'NOT_MEASURED')) {
+		throw 'native ordinary FIFO observation is missing or invalid'
+	}
+	if ($Observation.OrdinaryFIFO.State -ceq 'MEASURED_PASS' -and
+		($Observation.OrdinaryFIFO.Contract -cne 'HYBRID_F1_V1' -or
+		 $Observation.OrdinaryFIFO.RoleProcesses -ne 33 -or $Observation.OrdinaryFIFO.ServerConnections -ne 32 -or
+		 $Observation.OrdinaryFIFO.ClientCertificates -ne 32 -or $Observation.OrdinaryFIFO.Certificates -ne 64 -or
+		 $Observation.OrdinaryFIFO.MaximumLatencyMicroseconds -gt 50000 -or
+		 $Observation.OrdinaryFIFO.Boundary -cne 'SCHEDULER_ACCEPTED_TO_COMPLETE_POSITIVE_NATIVE_FIRST_SEND' -or
+		 $Observation.OrdinaryFIFO.Scope -cne 'ORIGINATING_FIXED_PHASES_1_TO_5' -or
+		 $Observation.OrdinaryDemand.State -cne 'MEASURED_PASS')) {
+		throw 'native ordinary FIFO certificate/demand conjunction is incomplete'
+	}
 	$Observation['AnalyzerSha256'] = (Get-FileHash -LiteralPath $ScriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
 	$Observation['TraceParserSha256'] = (Get-FileHash -LiteralPath `
 		(Join-Path ([IO.Path]::GetDirectoryName($ScriptPath)) 'farm_publication_trace.py') `

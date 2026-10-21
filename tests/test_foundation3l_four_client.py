@@ -79,13 +79,154 @@ class FourClientTests(unittest.TestCase):
         self.Log = self.Root / "server.log"
         self.Rows, self.Text = Fixture()
 
-    def RunNative(self, Rows=None, Text=None):
+    def RunNative(self, Rows=None, Text=None, Contract="F1"):
         with self.Csv.open("w", newline="") as Stream:
-            Writer = csv.DictWriter(Stream, fieldnames=Replay.FIELDS)
+            Writer = csv.DictWriter(Stream, fieldnames=Replay.HYBRID_FIELDS if Contract == "HYBRID_F1_V1" else Replay.FIELDS)
             Writer.writeheader()
             Writer.writerows(self.Rows if Rows is None else Rows)
         self.Log.write_text(self.Text if Text is None else Text)
-        return Replay.ReplayNative(self.Csv, self.Log)
+        return Replay.ReplayNative(self.Csv, self.Log, ExpectedContract=Contract)
+
+    def HybridFixture(self):
+        Rows = copy.deepcopy(self.Rows)
+        Previous = {}
+        for Ordinal, Row in enumerate(Rows, 1):
+            Row.update(completion_failed=0, last_completion_failed=0, completion_evidence_invalid=0,
+                       service_failed=1, last_completed_failed=int(Row["last_completed_token"] != 0),
+                       max_run_deficit_byte_us=Replay.RUN_BOUND + 1,
+                       last_completed_max_run_deficit_byte_us=Replay.RUN_BOUND + 1 if Row["last_completed_token"] else 0,
+                       observation_ordinal=Ordinal, observation_point=0, native_state=2, counters_valid=1,
+                       cleanup=0, result_terminal=0, execution_rejected=0, invalid_after=0,
+                       execution_failed=0, main_failed=0, turnover_failed=0, ordinary_failed=0)
+            Before = Previous.get(Row["slot"], Row)
+            Row.update(delta_first=Row["structural_first"] - Before["structural_first"],
+                       delta_ack=Row["structural_ack"] - Before["structural_ack"], delta_retry=Row["retry"] - Before["retry"])
+            Previous[Row["slot"]] = Row
+        Text = self.Text.replace("contract=F1", "contract=HYBRID_F1_V1").replace(
+            "pool_curve=derived-from-four-native-grant-curves", "pool_curve=diagnostic-four-grant-overlap").replace(
+            "role=server nonce=", "role=server contract=HYBRID_F1_V1 nonce=").replace(
+            "max_run_deficit_byte_us=1000", f"max_run_deficit_byte_us={Replay.RUN_BOUND + 1}").replace(
+            "pool_episodes=32", f"pool_episodes=32 completion_budget_byte_us={Replay.COMPLETION_BUDGET} native_completion_invalid=0 trace_format=HYBRID_OBSERVATION_V2 live_cut_ordinal={len(Rows)}")
+        return Rows, Text
+
+    def test_hybrid_accepts_legacy_deficit_diagnostic_only(self):
+        Rows, Text = self.HybridFixture()
+        Result = self.RunNative(Rows, Text, "HYBRID_F1_V1")
+        self.assertEqual(Result["Contract"], "HYBRID_F1_V1")
+        self.assertEqual(Result["PoolProof"], "LEGACY_DIAGNOSTIC")
+
+    def InterleavedHybrid(self):
+        Native, Text = self.HybridFixture()
+        Rows = []
+        for Row in Native:
+            Rows.append(Row)
+            Null = {K: Row[K] if K in Replay.ACCOUNTING_FIELDS else 0 for K in Replay.HYBRID_FIELDS}
+            Null.update(valid=1, native_state=255, observation_point=2, queue_us=-1, rate=-1)
+            Rows.append(Null)
+        for Ordinal, Row in enumerate(Rows, 1):
+            Row["observation_ordinal"] = Ordinal
+        Text = Text.replace(f"samples={len(Native)}", f"samples={len(Rows)}").replace(
+            f"live_cut_ordinal={len(Native)}", f"live_cut_ordinal={len(Rows)}")
+        return Rows, Text
+
+    def test_hybrid_all_accounting_rows_preserved_without_native_deltas_reset(self):
+        Rows, Text = self.InterleavedHybrid()
+        Result = self.RunNative(Rows, Text, "HYBRID_F1_V1")
+        self.assertEqual(len(Rows), Result["Rows"])
+        self.assertEqual(128, Result["MaximumGrants"])
+        self.assertEqual(Result["Accepted"], Result["Retired"])
+
+    def test_hybrid_null_rows_cannot_claim_native_evidence_or_mask_hard_failure(self):
+        Rows, Text = self.InterleavedHybrid()
+        for Field in ("feedback_us", "structural_first", "last_completed_token", "result_retired_bytes",
+                      "delta_first", "completion_failed", "execution_failed", "main_failed", "turnover_failed",
+                      "ordinary_failed", "execution_rejected", "invalid_after", "terminal"):
+            Bad = copy.deepcopy(Rows)
+            Bad[1][Field] = 1
+            with self.subTest(Field=Field), self.assertRaises(ValueError):
+                self.RunNative(Bad, Text, "HYBRID_F1_V1")
+
+    def test_hybrid_ordinals_and_actual_native_frontier_remain_strict(self):
+        Rows, Text = self.InterleavedHybrid()
+        for Mutation in ("ordinal", "point", "future", "stale", "unavailable", "counters", "unqualified", "delta"):
+            Bad = copy.deepcopy(Rows)
+            if Mutation == "ordinal": Bad[2]["observation_ordinal"] -= 1
+            if Mutation == "point": Bad[2]["observation_point"] = 4
+            if Mutation == "future": Bad[2]["feedback_us"] = Bad[2]["consumed_us"] + 1
+            if Mutation == "stale": Bad[2]["feedback_us"] = Bad[2]["consumed_us"] - 50_001
+            if Mutation == "unavailable": Bad[2]["available"] = 0
+            if Mutation == "counters": Bad[2]["counters_valid"] = 0
+            if Mutation == "unqualified": Bad[2]["qualified"] = 0
+            if Mutation == "delta": Bad[8]["delta_first"] += 1
+            with self.subTest(Mutation=Mutation), self.assertRaises(ValueError):
+                self.RunNative(Bad, Text, "HYBRID_F1_V1")
+
+    def test_hybrid_missing_native_or_retirement_certificate_cannot_pass(self):
+        Rows, Text = self.InterleavedHybrid()
+        # All owner rows can be valid while every native service fact is absent.
+        Bad = [R if not R["present"] else {K: R[K] if K in Replay.ACCOUNTING_FIELDS else 0
+               for K in Replay.HYBRID_FIELDS} for R in copy.deepcopy(Rows)]
+        for Ordinal, Row in enumerate(Bad, 1):
+            Row.update(observation_ordinal=Ordinal, observation_point=0, native_state=255, valid=1)
+        with self.assertRaises(ValueError):
+            self.RunNative(Bad, Text, "HYBRID_F1_V1")
+        for Field in ("structural_ack", "last_completed_token", "last_completed_first_us", "last_completed_finish_us"):
+            Bad = copy.deepcopy(Rows)
+            Bad[-2][Field] = 0
+            with self.subTest(Field=Field), self.assertRaises(ValueError):
+                self.RunNative(Bad, Text, "HYBRID_F1_V1")
+
+    def test_hybrid_final_null_accounting_cannot_add_phantom_accepted_byte(self):
+        Rows, Text = self.InterleavedHybrid()
+        Rows[-1]["accepted_structural"] += 1
+        self.assertEqual(0, Rows[-1]["debt_token"])
+        with self.assertRaisesRegex(ValueError, "accepted accounting"):
+            self.RunNative(Rows, Text, "HYBRID_F1_V1")
+
+    def test_hybrid_cleanup_requires_complete_live_cut_and_exact_owned_totals(self):
+        Rows, Text = self.InterleavedHybrid()
+        Last = {R["slot"]: R for R in Rows if R["present"]}
+        for Slot in range(1, 5):
+            Row = copy.deepcopy(Last[Slot])
+            Row.update(observation_ordinal=len(Rows) + 1, observation_point=3, cleanup=1,
+                       consumed_us=Rows[-1]["consumed_us"] + 1, native_state=4, available=0, qualified=0,
+                       result_terminal=1, result_retired_bytes=0, delta_first=0, delta_ack=0, delta_retry=0,
+                       created=Rows[-1]["created"], retired=Rows[-1]["retired"], total_debt=0, grants=0)
+            Row["feedback_us"] = Row["consumed_us"]
+            Rows.append(Row)
+        Text = Text.replace("samples=768", "samples=772")
+        self.RunNative(Rows, Text, "HYBRID_F1_V1")
+        for Mutation in ("early", "missing", "terminal", "first", "ack", "invalid_connected", "connected_unavailable"):
+            Bad, BadText = copy.deepcopy(Rows), Text
+            if Mutation == "early": BadText = BadText.replace("live_cut_ordinal=768", "live_cut_ordinal=1")
+            if Mutation == "missing": BadText = BadText.replace("live_cut_ordinal=768", "live_cut_ordinal=0")
+            if Mutation == "terminal": Bad[-1]["terminal"] = 1
+            if Mutation == "first": Bad[-1]["structural_first"] += 1
+            if Mutation == "ack": Bad[-1]["structural_ack"] -= 1
+            if Mutation == "invalid_connected": Bad[-1].update(native_state=2, result_terminal=0, available=1, qualified=1, counters_valid=0)
+            if Mutation == "connected_unavailable": Bad[-1].update(native_state=2, result_terminal=0)
+            with self.subTest(Mutation=Mutation), self.assertRaises(ValueError):
+                self.RunNative(Bad, BadText, "HYBRID_F1_V1")
+
+    def test_hybrid_fatal_completion_flags_and_deadline(self):
+        Rows, Text = self.HybridFixture()
+        for Field in ("completion_failed", "last_completion_failed", "completion_evidence_invalid"):
+            Bad = copy.deepcopy(Rows)
+            Bad[4][Field] = 1
+            with self.subTest(Field=Field), self.assertRaisesRegex(ValueError, "native completion"):
+                self.RunNative(Bad, Text, "HYBRID_F1_V1")
+        Bad = copy.deepcopy(Rows)
+        Bad[4]["last_completed_finish_us"] = Bad[4]["last_completed_activated_us"] + 37_325
+        Bad[4]["feedback_us"] = Bad[4]["consumed_us"] = Bad[4]["last_completed_finish_us"]
+        with self.assertRaisesRegex(ValueError, "finite"):
+            self.RunNative(Bad, Text, "HYBRID_F1_V1")
+
+    def test_contract_identity_cannot_be_inferred_from_a_pass(self):
+        Rows, Text = self.HybridFixture()
+        with self.assertRaisesRegex(ValueError, "constants/certificate"):
+            self.RunNative(Text=Text)
+        with self.assertRaisesRegex(ValueError, "constants/certificate"):
+            self.RunNative(Rows, self.Text, "HYBRID_F1_V1")
 
     def test_exact_128_grants_and_pool_derivation(self):
         Result = self.RunNative()
@@ -204,7 +345,7 @@ class FourClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "truncation"):
             Replay.FullPackets(File)
 
-    def FullFixture(self):
+    def FullFixture(self, ClientNonces=None):
         self.RunNative()
         Inputs = {Key: str(self.Root / Key) for Key in
                   ("ClientRoot", "ServerRoot", "CoordinatorRoot", "LifecycleHostRoot", "CandidateRoot")}
@@ -249,7 +390,7 @@ class FourClientTests(unittest.TestCase):
         Run = "11111111-1111-4111-8111-111111111111"
         Lifecycle = "22222222-2222-4222-8222-222222222222"
         Result = {"Success": True, "ExitCode": 0, "Classification": "FOUR_CLIENT_PHASE1_ONLY"}
-        ClientResult = {**Result, "ClientNonces": [101, 102, 103, 104]}
+        ClientResult = {**Result, "ClientNonces": [101, 102, 103, 104] if ClientNonces is None else ClientNonces}
         Save(Client / "result.json", ClientResult)
         Save(Server / "result.json", Result)
         Endpoints = {"CLIENT": {**ClientResult, "RunId": Run, "Type": "CLIENT_DONE"},
@@ -267,7 +408,20 @@ class FourClientTests(unittest.TestCase):
             {"Success": True, "RunId": Lifecycle, "Type": "RESULT", "Role": "CLIENT", "Evidence":
              [Evidence(Client / "result.json"), Evidence(Coordinator / "result.json")]}]}
         Save(Host / "result.json", Outer)
-        Journal = [{"Event": "RECEIVE", "RunId": Lifecycle, "Type": "CLEANED", "Role": R, "Success": True}
+        Workflow = json.loads((Replay.TOOLS / "workflows" / "four-client-phase1-lifecycle.json").read_text())
+        Schema = {K: Workflow[K] for K in ("SchemaId", "SchemaVersion")}
+        Schema["SchemaHash"] = Replay.hashlib.sha256(json.dumps(Workflow, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        Journal = []
+        for Index, Role in enumerate(("CLIENT", "SERVER"), 3):
+            Request = str(Replay.uuid.UUID(int=Index))
+            Journal += [{"Event": "RECEIVE", "Version": 1, "RunId": Request, "Sequence": 1,
+                         "Type": "PULL_ASSIGNMENT", "EndpointId": Role},
+                        {"Event": "SEND", "Version": 1, "RunId": Request, "Sequence": 1, "TimestampUnixMs": 1_799_999_999_000,
+                         "Type": "ASSIGNMENT", "Assignment": {"RunId": Lifecycle, "Role": Role,
+                         **Schema, "Parameters": {}, "ExpiresUnixMs": 1_800_000_000_000}},
+                        {"Event": "RECEIVE", "Version": 1, "RunId": Lifecycle, "Sequence": 2,
+                         "Type": "REGISTER", "Role": Role, **Schema}]
+        Journal += [{"Event": "RECEIVE", "RunId": Lifecycle, "Type": "CLEANED", "Role": R, "Success": True}
                    for R in ("CLIENT", "SERVER")] + [{**Outer, "Event": "RESULT"}]
         (Host / "control.jsonl").write_text("\n".join(json.dumps(R) for R in Journal))
         Inputs["LifecycleQualification"] = str(self.Root / "qualification.json")
@@ -352,6 +506,28 @@ class FourClientTests(unittest.TestCase):
         self.assertEqual(Result["CompletionClockDomain"], "CONTROLLING_HOST_UTC")
         self.assertEqual(Result["CompletedUtc"], "2027-01-15T08:00:00+00:00")
 
+    def test_client_launch_order_does_not_reassign_native_connections_or_producer(self):
+        Result = self.FullReplay(self.FullFixture([102, 101, 104, 103]))
+        self.assertEqual(Result["State"], "MEASURED_PASS")
+        self.assertEqual(Result["Native"]["ProducerNonce"], 101)
+        self.assertEqual({Peer["Slot"]: Peer["Nonce"] for Peer in Result["Native"]["Peers"]},
+                         {1: 101, 2: 102, 3: 103, 4: 104})
+        self.assertEqual(set(Result["Gameplay"]), {"101", "102", "103", "104"})
+
+    def test_client_result_requires_four_unique_exact_integer_identities(self):
+        OriginalRoot = self.Root
+        Cases = ([101, 102, 103], [101, 102, 103, 104, 105], [101, 102, 103, 103],
+                 [101, 102, 103, 105], [101, 102, 103, "104"], [101, 102, 103, 104.0],
+                 [101, 102, 103, True], {"101": 1, "102": 1, "103": 1, "104": 1})
+        try:
+            for Index, Nonces in enumerate(Cases):
+                self.Root = OriginalRoot / str(Index)
+                self.Root.mkdir()
+                with self.subTest(Nonces=Nonces), self.assertRaisesRegex(ValueError, "client result nonces"):
+                    self.FullReplay(self.FullFixture(Nonces))
+        finally:
+            self.Root = OriginalRoot
+
     def test_validly_resealed_capture_loss_fails(self):
         Inputs = self.FullFixture()
         for Key, Name, Bad in (("ClientRoot", "capture.log", "Packets received/dropped on interface 'test': 8/1 (pcap:1/dumpcap:0/flushed:0/ps_ifdrop:0)\n"),
@@ -384,10 +560,66 @@ class FourClientTests(unittest.TestCase):
     def test_missing_cleaned_event_cannot_be_replaced_by_success_summary(self):
         Inputs = self.FullFixture()
         File = Path(Inputs["LifecycleHostRoot"])/"control.jsonl"
-        File.write_text("\n".join(File.read_text().splitlines()[1:]))
+        Rows = [json.loads(Line) for Line in File.read_text().splitlines()]
+        Rows.pop(next(I for I, Row in enumerate(Rows) if Row.get("Type") == "CLEANED"))
+        File.write_text("\n".join(json.dumps(Row) for Row in Rows))
         self.SealInputs(Inputs)
         with self.assertRaisesRegex(ValueError, "CLEANED"):
             self.FullReplay(Inputs)
+
+    def test_assignment_request_identity_and_schema_mutations_fail(self):
+        Inputs = self.FullFixture()
+        File = Path(Inputs["LifecycleHostRoot"]) / "control.jsonl"
+        Original = File.read_text()
+        Cases = [
+            (0, "RunId", "not-a-uuid"), (0, "RunId", "22222222-2222-4222-8222-222222222222"),
+            (0, "EndpointId", "OTHER"), (0, "Sequence", 2), (0, "Event", "SEND"),
+            (1, "RunId", str(Replay.uuid.UUID(int=99))), (1, "Version", 2), (1, "Version", True), (1, "Success", False),
+            (2, "SchemaVersion", True), (2, "Version", True),
+            (2, "RunId", str(Replay.uuid.UUID(int=3))), (2, "SchemaHash", "0" * 64),
+            (3, "RunId", str(Replay.uuid.UUID(int=3))), (3, "EndpointId", "CLIENT"),
+            (6, "RunId", str(Replay.uuid.UUID(int=3))),
+        ]
+        for Index, Key, Value in Cases:
+            Rows = [json.loads(Line) for Line in Original.splitlines()]
+            Rows[Index][Key] = Value
+            File.write_text("\n".join(json.dumps(Row) for Row in Rows))
+            self.SealInputs(Inputs)
+            with self.subTest(Index=Index, Key=Key), self.assertRaises(ValueError):
+                self.FullReplay(Inputs)
+        for Key, Value in (("RunId", str(Replay.uuid.UUID(int=99))), ("Role", "SERVER"),
+                           ("SchemaHash", "0" * 64), ("SchemaId", "other"), ("SchemaVersion", 2),
+                           ("SchemaVersion", True), ("ExpiresUnixMs", True), ("ExpiresUnixMs", 0),
+                           ("ExpiresUnixMs", 1_799_999_998_999)):
+            Rows = [json.loads(Line) for Line in Original.splitlines()]
+            Rows[1]["Assignment"][Key] = Value
+            File.write_text("\n".join(json.dumps(Row) for Row in Rows))
+            self.SealInputs(Inputs)
+            with self.subTest(Assignment=Key), self.assertRaises(ValueError):
+                self.FullReplay(Inputs)
+
+    def test_assignment_pair_missing_duplicate_or_reordered_fails(self):
+        Inputs = self.FullFixture()
+        File = Path(Inputs["LifecycleHostRoot"]) / "control.jsonl"
+        Original = [json.loads(Line) for Line in File.read_text().splitlines()]
+        for Index in range(6):
+            for Mode in ("missing", "duplicate"):
+                Rows = list(Original)
+                if Mode == "missing":
+                    Rows.pop(Index)
+                else:
+                    Rows.insert(Index, Original[Index])
+                File.write_text("\n".join(json.dumps(Row) for Row in Rows))
+                self.SealInputs(Inputs)
+                with self.subTest(Index=Index, Mode=Mode), self.assertRaises(ValueError):
+                    self.FullReplay(Inputs)
+        for Left, Right in ((0, 1), (1, 2)):
+            Rows = list(Original)
+            Rows[Left], Rows[Right] = Rows[Right], Rows[Left]
+            File.write_text("\n".join(json.dumps(Row) for Row in Rows))
+            self.SealInputs(Inputs)
+            with self.subTest(Reorder=(Left, Right)), self.assertRaises(ValueError):
+                self.FullReplay(Inputs)
 
     def test_admission_activation_cannot_be_moved_or_reclassified(self):
         Inputs = self.FullFixture()

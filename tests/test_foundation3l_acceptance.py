@@ -2,9 +2,11 @@ import copy
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
+import xml.etree.ElementTree as ET
 import zipfile
 
 import foundation3l_acceptance as A
@@ -48,6 +50,72 @@ def Xml(Names, Suffix=""):
     return ('<testsuite tests="%d" failures="0" errors="0">' % len(Names) +
             "".join(f'<testcase name="{Name}" status="run">{Suffix}</testcase>' for Name in sorted(Names)) +
             '</testsuite>').encode()
+
+
+class AnalyzerProvenanceTests(unittest.TestCase):
+    AUTHOR = ("-c", "user.email=foundation3l-fixture@users.noreply.github.com",
+              "-c", "user.name=Foundation3L Fixture")
+
+    def setUp(self):
+        self.Temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.Temporary.cleanup)
+        self.Root = Path(self.Temporary.name)
+        subprocess.run(["git", "init", "-q", str(self.Root)], check=True, capture_output=True)
+        (self.Root / ".git/fixture-hooks").mkdir()
+        for Name in A.ANALYZER_FILES:
+            File = self.Root / Name
+            File.parent.mkdir(parents=True, exist_ok=True)
+            File.write_text("frozen A\n", encoding="utf-8")
+        self.Git("add", "--", *A.ANALYZER_FILES)
+        self.Git(*self.AUTHOR, "commit", "-qm", "A")
+        self.Source = self.Git("rev-parse", "HEAD").strip()
+        (self.Root / "tests/foundation3l_four_client.py").write_text("reviewed B\n", encoding="utf-8")
+        self.Git("add", "--", "tests/foundation3l_four_client.py")
+        self.Git(*self.AUTHOR, "commit", "-qm", "B")
+        self.Analyzer = self.Git("rev-parse", "HEAD").strip()
+
+    def Git(self, *Arguments):
+        Result = subprocess.run(["git", "-c", f"core.hooksPath={self.Root / '.git/fixture-hooks'}",
+                                 *Arguments], cwd=self.Root,
+                                capture_output=True, text=True)
+        self.assertEqual(Result.returncode, 0, Result.stderr or Result.stdout)
+        return Result.stdout
+
+    def test_clean_descendant_b_records_exact_analyzer_without_relabeling_a(self):
+        Result = A.VerifyAnalyzerCheckout(self.Root, self.Source, self.Analyzer)
+        self.assertEqual(Result["ExecutionSourceCommit"], self.Source)
+        self.assertEqual(Result["AnalyzerCommit"], self.Analyzer)
+        self.assertEqual([Row["Path"] for Row in Result["Files"]], list(A.ANALYZER_FILES))
+        for Row in Result["Files"]:
+            self.assertEqual(Row["Sha256"], A.Digest((self.Root / Row["Path"]).read_bytes()))
+        # Omitting the explicit B pin must retain the old exact-A-head rule.
+        with self.assertRaisesRegex(A.EvidenceError, "exact reviewed analyzer commit"):
+            A.VerifyAnalyzerCheckout(self.Root, self.Source, self.Source)
+
+    def test_wrong_head_divergent_source_and_dirty_analyzer_fail(self):
+        with self.assertRaisesRegex(A.EvidenceError, "exact reviewed analyzer commit"):
+            A.VerifyAnalyzerCheckout(self.Root, self.Source, "f" * 40)
+        Tree = self.Git("rev-parse", "HEAD^{tree}").strip()
+        Unrelated = self.Git(*self.AUTHOR, "commit-tree", Tree, "-m", "unrelated").strip()
+        with self.assertRaisesRegex(A.EvidenceError, "not a descendant"):
+            A.VerifyAnalyzerCheckout(self.Root, Unrelated, self.Analyzer)
+        (self.Root / "tests/foundation3l_four_client.py").write_text("uncommitted bypass\n", encoding="utf-8")
+        with self.assertRaisesRegex(A.EvidenceError, "tracked analyzer source is dirty"):
+            A.VerifyAnalyzerCheckout(self.Root, self.Source, self.Analyzer)
+
+    def test_missing_tracked_analyzer_dependency_fails_in_clean_descendant(self):
+        Missing = A.ANALYZER_FILES[-1]
+        self.Git("rm", "--", Missing)
+        self.Git(*self.AUTHOR, "commit", "-qm", "remove required analyzer")
+        Head = self.Git("rev-parse", "HEAD").strip()
+        with self.assertRaisesRegex(A.EvidenceError, "untracked fixed analyzer dependency"):
+            A.VerifyAnalyzerCheckout(self.Root, self.Source, Head)
+
+    def test_execution_source_is_analyzer_when_head_is_a(self):
+        self.Git("checkout", "-q", "--detach", self.Source)
+        Result = A.VerifyAnalyzerCheckout(self.Root, self.Source, self.Source)
+        self.assertEqual(Result["ExecutionSourceCommit"], self.Source)
+        self.assertEqual(Result["AnalyzerCommit"], self.Source)
 
 
 class FinalTests(unittest.TestCase):
@@ -142,6 +210,88 @@ class FinalTests(unittest.TestCase):
                 A.ReplayFourClient(Path(Root), {"Status": "PASS"}, SOURCE)
 
 
+class RetainedFourTests(unittest.TestCase):
+    def Evidence(self):
+        return {Key: Value for Key, Value in A.RETAINED_FOUR_CLIENT.items()
+                if Key != 'ProviderSourceCommit'} | {
+                    'State': 'MEASURED_PASS', 'EvidenceScope': 'RETAINED_F1_PHASE1'}
+
+    def Final(self, Evidence=None, Farm=None, Provenance=None):
+        Source = A.RETAINED_FOUR_CLIENT['ProviderSourceCommit']
+        Farm = Farm or Providers()
+        Farm['WorkloadPinParity']['SourceCommit'] = Source
+        return A.FinalObservation(Source, Farm, {'State': 'MEASURED_PASS', 'SourceCommit': Source},
+                                  Evidence or self.Evidence(), Provenance or {
+                                      'Package': {'State': 'MEASURED_PASS'},
+                                      'Sequence': {'State': 'MEASURED_PASS'}})
+
+    def test_exact_retention_keeps_historical_identity_and_current_provider_gates(self):
+        Result = self.Final()
+        self.assertEqual(Result['Status'], 'PASS')  # Supplied conjunction fixture, no physical replay.
+        self.assertEqual(Result['SourceCommit'], A.RETAINED_FOUR_CLIENT['ProviderSourceCommit'])
+        self.assertEqual(Result['FourClient']['SourceCommit'], A.RETAINED_FOUR_CLIENT['SourceCommit'])
+        self.assertIn({'Gate': 'RetainedFourClientMixed', 'State': 'MEASURED_PASS'}, Result['Gates'])
+        self.assertNotIn('FreshFourClientMixed', [Gate['Gate'] for Gate in Result['Gates']])
+        for Role in ('Local', 'Node'):
+            Farm = Providers()
+            Put(Farm, Role + '.F1.State', 'MEASURED_FAIL')
+            self.assertEqual(self.Final(Farm=Farm)['Status'], 'FAIL')
+            Put(Farm, Role + '.F1.State', None)
+            self.assertEqual(self.Final(Farm=Farm)['Status'], 'INCOMPLETE')
+        self.assertEqual(self.Final(Provenance={
+            'Package': {'State': 'MEASURED_PASS'}, 'Sequence': {'State': 'NOT_MEASURED'}})['Status'], 'INCOMPLETE')
+
+    def test_wrong_pair_pin_native_run_lifecycle_and_reuse_are_denied(self):
+        Source = A.RETAINED_FOUR_CLIENT['ProviderSourceCommit']
+        with self.assertRaises(A.EvidenceError):
+            A.FourClientGate('2' * 40, self.Evidence())
+        for Key, Value in (('InputMapSha256', '0' * 64), ('SourceCommit', Source),
+                           ('RunId', Four()['RunId']), ('LifecycleRunId', Four()['LifecycleRunId']),
+                           ('EvidenceScope', 'CURRENT_SOURCE_FOUR_CLIENT_MIXED')):
+            Bad = self.Evidence()
+            Bad[Key] = Value
+            with self.subTest(Key=Key), self.assertRaises(A.EvidenceError):
+                self.Final(Evidence=Bad)
+        Farm = Providers()
+        Farm['LocalRunId'] = A.RETAINED_FOUR_CLIENT['RunId']
+        with self.assertRaises(A.EvidenceError):
+            self.Final(Farm=Farm)
+
+    def test_retained_failure_and_pending_never_become_pass(self):
+        for State, Expected in (('MEASURED_FAIL', 'FAIL'), ('NOT_MEASURED', 'INCOMPLETE')):
+            Evidence = self.Evidence()
+            Evidence['State'] = State
+            self.assertEqual(self.Final(Evidence=Evidence)['Status'], Expected)
+
+    def test_exact_map_selects_unchanged_raw_replayer_source_before_parsing(self):
+        Raw = b'{"ClientRoot":"supplied-public-fixture"}'
+        Source = A.RETAINED_FOUR_CLIENT['ProviderSourceCommit']
+        # Only the fixture map digest is replaced; exact source/run/lifecycle stay literal.
+        with mock.patch.dict(A.RETAINED_FOUR_CLIENT, {'InputMapSha256': A.Digest(Raw)}), \
+                mock.patch.object(A, 'ReadBytes', return_value=Raw), \
+                mock.patch.object(A, 'ReplayFourClient', return_value=self.Evidence()) as Replay:
+            Result = A.ReplayFourClientInputs(Path('.'), Path('fixture.json'), Source)
+            Replay.assert_called_once_with(Path('.'), {'ClientRoot': 'supplied-public-fixture'},
+                                           A.RETAINED_FOUR_CLIENT['SourceCommit'])
+            self.assertEqual(Result['InputMapSha256'], A.Digest(Raw))
+            self.assertEqual(Result['SourceCommit'], A.RETAINED_FOUR_CLIENT['SourceCommit'])
+
+    def test_changed_map_or_different_provider_cannot_select_retained_source(self):
+        Raw = b'{"ClientRoot":"supplied-public-fixture"}'
+        Source = A.RETAINED_FOUR_CLIENT['ProviderSourceCommit']
+        with mock.patch.dict(A.RETAINED_FOUR_CLIENT, {'InputMapSha256': A.Digest(Raw)}):
+            for Data, Provider in ((Raw + b' ', Source), (Raw, '2' * 40)):
+                with mock.patch.object(A, 'ReadBytes', return_value=Data), \
+                        mock.patch.object(A, 'ReplayFourClient', return_value=self.Evidence()) as Replay, \
+                        self.assertRaises(A.EvidenceError):
+                    A.ReplayFourClientInputs(Path('.'), Path('fixture.json'), Provider)
+                self.assertEqual(Replay.call_args.args[2], Provider)
+            with mock.patch.object(A, 'ReadBytes', return_value=b'{"ClientRoot":1,"ClientRoot":2}'), \
+                    mock.patch.object(A, 'ReplayFourClient') as Replay, self.assertRaises(A.EvidenceError):
+                A.ReplayFourClientInputs(Path('.'), Path('fixture.json'), Source)
+            Replay.assert_not_called()
+
+
 class CITests(unittest.TestCase):
     def setUp(self):
         self.Temporary = tempfile.TemporaryDirectory()
@@ -185,7 +335,7 @@ class CITests(unittest.TestCase):
             Zip.writestr('qualified-source-commit.txt', Source + '\n')
         return Buffer.getvalue()
 
-    def Write(self):
+    def Write(self, Version=1):
         for Entry in self.Entries:
             for Key in ('Run', 'Jobs', 'ArtifactMetadata', 'Archive'):
                 Item = Entry[Key]
@@ -193,7 +343,7 @@ class CITests(unittest.TestCase):
                         json.dumps(self.Documents[Item['Path']]).encode())
                 (self.Root / Item['Path']).write_bytes(Data)
                 Item['Sha256'] = A.Digest(Data)
-        Data = json.dumps({"Format": "GargantuanFoundation3LCI", "Version": 1, "Jobs": self.Entries}).encode()
+        Data = json.dumps({"Format": "GargantuanFoundation3LCI", "Version": Version, "Jobs": self.Entries}).encode()
         Index = self.Root / 'index.json'
         Index.write_bytes(Data)
         return Index, A.Digest(Data)
@@ -206,6 +356,279 @@ class CITests(unittest.TestCase):
         Result = self.Verify()
         self.assertEqual(Result['State'], 'MEASURED_PASS')
         self.assertEqual(len(Result['Jobs']), 3)
+
+    def SetHybridArchives(self, Contract='HYBRID_F1_V1', LegacyNames=False):
+        for Number, (Name, (_, _, Required, _)) in enumerate(A.CI_JOBS.items()):
+            if not LegacyNames:
+                Required = {A.HYBRID_TEST_IDENTITIES.get(Test, Test) for Test in Required}
+                if Name.startswith('Windows '):
+                    Required.add('gargantuan_four_grant_contract')
+                    if Contract == A.CORE_CONTRACT:
+                        Required.add('gargantuan_packaged_game_session')
+            Buffer = io.BytesIO()
+            with zipfile.ZipFile(Buffer, 'w') as Zip:
+                Zip.writestr('build/ctest-results.xml', Xml(Required))
+                Zip.writestr('qualified-source-commit.txt', SOURCE + '\n')
+                if Contract is not None:
+                    Zip.writestr('qualification-contract.txt', Contract + '\n')
+            Archive = Buffer.getvalue()
+            self.Archives[f'{Number}-artifact.zip'] = Archive
+            self.Documents[f'{Number}-ArtifactMetadata.json'].update(
+                digest='sha256:' + A.Digest(Archive), size_in_bytes=len(Archive))
+
+    def test_hybrid_ci_requires_contract_and_distinct_required_tests(self):
+        self.SetHybridArchives()
+        Index, Pin = self.Write()
+        Result = A.VerifyCI(Index, Pin, SOURCE, 'HYBRID_F1_V1')
+        self.assertEqual(Result['Contract'], 'HYBRID_F1_V1')
+        with self.assertRaisesRegex(A.EvidenceError, 'contract mismatch'):
+            A.VerifyCI(Index, Pin, SOURCE)
+        for Contract, LegacyNames in ((None, False), ('F1', False), ('unknown', False), ('HYBRID_F1_V1', True)):
+            with self.subTest(Contract=Contract, LegacyNames=LegacyNames):
+                self.SetHybridArchives(Contract, LegacyNames)
+                Index, Pin = self.Write()
+                with self.assertRaises(A.EvidenceError):
+                    A.VerifyCI(Index, Pin, SOURCE, 'HYBRID_F1_V1')
+
+    def test_core_requires_new_contract_and_all_five_completed_workloads(self):
+        self.SetHybridArchives(A.CORE_CONTRACT)
+        Job = self.Documents['0-Jobs.json']['jobs'][0]
+        Job['id'] = 201
+        Workloads = [('single-peer', A.CORE_CONTRACT), ('structural32', A.CORE_CONTRACT),
+                     ('single-peer', 'FULL_RESERVATION'), ('ordinary32', 'FULL_RESERVATION'),
+                     ('structural32', 'FULL_RESERVATION')]
+        for Count in (5, 4):
+            Raw = ''.join(f'[Qualification:Correctness] contract={A.CORE_CONTRACT} workload={Name} profile={Profile} completed=1 failures=0\n'
+                          for Name, Profile in Workloads[:Count]).encode()
+            if Count == 5:
+                Raw = b' ' * (17 * 1024 * 1024) + b'\n' + Raw
+            (self.Root / 'windows.log').write_bytes(Raw)
+            self.Entries[0]['OriginalJobLog'] = {'JobId': 201, 'RunId': 101, 'Attempt': 1,
+                'Url': 'https://api.github.com/repos/gmoddev/gargantuan/actions/jobs/201/logs',
+                'File': {'Path': 'windows.log', 'Sha256': A.Digest(Raw)}}
+            Index, Pin = self.Write()
+            if Count == 5:
+                CI = A.VerifyCI(Index, Pin, SOURCE, A.CORE_CONTRACT)
+                Result = A.FinalObservation(SOURCE, None, CI, None, ExpectedContract=A.CORE_CONTRACT)
+                self.assertEqual((Result['Status'], Result['KI006'], Result['Foundation3L']), ('PASS', 'CLOSED', 'COMPLETE'))
+                self.assertEqual(Result['Scope'], 'CORE_ENGINE_CORRECTNESS')
+                with self.assertRaises(A.EvidenceError):
+                    A.FinalObservation(SOURCE, Providers(), CI, Four(), ExpectedContract=A.CORE_CONTRACT)
+                for Change in ({'Contract': 'HYBRID_F1_V1'}, {'SourceCommit': '2' * 40}, {'Jobs': CI['Jobs'][:2]}):
+                    with self.assertRaises(A.EvidenceError):
+                        A.FinalObservation(SOURCE, None, {**CI, **Change}, None, ExpectedContract=A.CORE_CONTRACT)
+            else:
+                with self.assertRaisesRegex(A.EvidenceError, 'five Release workloads'):
+                    A.VerifyCI(Index, Pin, SOURCE, A.CORE_CONTRACT)
+
+    def StaleHybridJob(self):
+        self.SetHybridArchives()
+        Job = self.Documents['1-Jobs.json']['jobs'][1]
+        Job.update(id=201, url='https://api.github.com/repos/gmoddev/gargantuan/actions/jobs/201',
+                   run_url='https://api.github.com/repos/gmoddev/gargantuan/actions/runs/101')
+        Job['steps'][0].update(status='pending', conclusion=None)
+        with zipfile.ZipFile(io.BytesIO(self.Archives['1-artifact.zip'])) as Zip:
+            Cases = ET.fromstring(Zip.read('build/ctest-results.xml')).findall('.//testcase')
+        Names = sorted(Case.get('name') for Case in Cases)
+        Count = len(Names)
+        Prefix = '2026-10-02T01:58:00Z '
+        Lines = [Prefix + 'ctest --test-dir build-sanitizers \\']
+        Lines += [Prefix + f'{Index}/{Count} Test #{Index}: {Name} .... Passed 0.01 sec'
+                  for Index, Name in enumerate(Names, 1)]
+        Lines += [Prefix + f'100% tests passed, 0 tests failed out of {Count}',
+                  '2026-10-02T01:59:01Z Artifact sanitizer-ci-diagnostics.zip successfully finalized. Artifact ID 2',
+                  '2026-10-02T01:59:01Z Artifact download URL: https://github.com/gmoddev/gargantuan/actions/runs/101/artifacts/2']
+        Data = ('\n'.join(Lines) + '\n').encode()
+        (self.Root / 'original-job.log').write_bytes(Data)
+        self.Entries[1]['OriginalJobLog'] = {'File': {'Path': 'original-job.log', 'Sha256': A.Digest(Data)},
+                                           'JobId': 201, 'RunId': 101, 'Attempt': 1, 'Url': Job['url'] + '/logs'}
+        return Job, Lines
+
+    def VerifyStaleHybrid(self, Version=2):
+        Index, Pin = self.Write(Version)
+        return A.VerifyCI(Index, Pin, SOURCE, 'HYBRID_F1_V1')
+
+    def ReplaceOriginalLog(self, Lines):
+        Data = ('\n'.join(Lines) + '\n').encode()
+        (self.Root / 'original-job.log').write_bytes(Data)
+        self.Entries[1]['OriginalJobLog']['File']['Sha256'] = A.Digest(Data)
+
+    def test_hybrid_v2_original_job_log_corroborates_stale_pending_step(self):
+        Job, _ = self.StaleHybridJob()
+        Result = self.VerifyStaleHybrid()
+        Evidence = Result['Jobs'][1]['CTestStepEvidence']
+        self.assertEqual(Result['InventoryVersion'], 2)
+        self.assertEqual(Evidence['ApiStep'], Job['steps'][0])
+        self.assertEqual(Evidence['Kind'], 'ORIGINAL_JOB_LOG_AND_JUNIT')
+        self.assertEqual(Evidence['PassedTests'], Result['Jobs'][1]['Tests'])
+        self.assertEqual(Job['steps'][0]['status'], 'pending')
+        with self.assertRaisesRegex(A.EvidenceError, 'required CTest step missing/failed'):
+            self.VerifyStaleHybrid(Version=1)
+        Index, Pin = self.Write(Version=2)
+        with self.assertRaisesRegex(A.EvidenceError, 'unknown CI inventory format'):
+            A.VerifyCI(Index, Pin, SOURCE, 'F1')
+
+    def test_hybrid_v2_failed_skipped_missing_duplicate_or_unknown_step_stays_fatal(self):
+        for Steps in ([], [{'status': 'completed', 'conclusion': 'failure'}],
+                      [{'status': 'completed', 'conclusion': 'skipped'}],
+                      [{'status': 'in_progress', 'conclusion': None}], [{'status': 'pending'}],
+                      [{'status': 'pending', 'conclusion': None}] * 2):
+            with self.subTest(Steps=Steps):
+                self.setUp()
+                Job, _ = self.StaleHybridJob()
+                Name = Job['steps'][0]['name']
+                Job['steps'] = [dict(Step, name=Name) for Step in Steps]
+                with self.assertRaisesRegex(A.EvidenceError, 'required CTest step missing/failed'):
+                    self.VerifyStaleHybrid()
+
+    def test_hybrid_v2_wrong_or_missing_original_log_provenance_stays_fatal(self):
+        for Field, Value in (('JobId', 202), ('RunId', 102), ('Attempt', 2), ('Url', 'https://example.com/log')):
+            with self.subTest(Field=Field):
+                self.setUp()
+                self.StaleHybridJob()
+                self.Entries[1]['OriginalJobLog'][Field] = Value
+                with self.assertRaises(A.EvidenceError):
+                    self.VerifyStaleHybrid()
+        self.setUp()
+        self.StaleHybridJob()
+        del self.Entries[1]['OriginalJobLog']
+        with self.assertRaisesRegex(A.EvidenceError, 'original job log provenance'):
+            self.VerifyStaleHybrid()
+
+    def test_hybrid_v2_original_full_ctest_and_artifact_counterexamples(self):
+        Changes = (
+            lambda Lines: Lines[1:],
+            lambda Lines: [Lines[0], *Lines],
+            lambda Lines: [*Lines[:1], *Lines[2:]],
+            lambda Lines: [Line.replace(' Passed ', ' Failed ') for Line in Lines],
+            lambda Lines: [Line.replace('0 tests failed', '1 tests failed') for Line in Lines],
+            lambda Lines: [*Lines, Lines[-3]],
+            lambda Lines: [Line.replace('Artifact ID 2', 'Artifact ID 3') for Line in Lines],
+            lambda Lines: [Line.replace('Artifact ID 2', 'Artifact ID 20').replace('/artifacts/2', '/artifacts/20')
+                           for Line in Lines],
+            lambda Lines: [Line.replace('/runs/101/artifacts/2', '/runs/102/artifacts/2') for Line in Lines],
+            lambda Lines: [Line.replace('build-sanitizers', 'build-sanitizers-other') for Line in Lines],
+            lambda Lines: [Line.replace('01:59:01Z', '02:01:00Z') for Line in Lines],
+            lambda Lines: [Line.replace('01:58:00Z', '00:59:00Z') for Line in Lines],
+            lambda Lines: [*Lines, '2026-10-02T01:59:02Z ##[error]execution failed'],
+        )
+        for Change in Changes:
+            with self.subTest(Change=Change):
+                self.setUp()
+                _, Lines = self.StaleHybridJob()
+                self.ReplaceOriginalLog(Change(Lines))
+                with self.assertRaises(A.EvidenceError):
+                    self.VerifyStaleHybrid()
+
+    def test_hybrid_v2_full_case_identity_and_log_pin_remain_required(self):
+        self.StaleHybridJob()
+        self.Entries[1]['OriginalJobLog']['File']['Sha256'] = '0' * 64
+        with self.assertRaisesRegex(A.EvidenceError, 'evidence hash mismatch'):
+            self.VerifyStaleHybrid()
+        self.setUp()
+        _, Lines = self.StaleHybridJob()
+        Lines[1] = Lines[1].replace(' .... ', '_wrong .... ')
+        self.ReplaceOriginalLog(Lines)
+        with self.assertRaisesRegex(A.EvidenceError, 'case identity mismatch'):
+            self.VerifyStaleHybrid()
+        self.setUp()
+        self.StaleHybridJob()
+        self.Documents['1-Run.json']['conclusion'] = 'failure'
+        with self.assertRaisesRegex(A.EvidenceError, 'CI is not successful'):
+            self.VerifyStaleHybrid()
+
+    def DiagnosticMetadataReader(self, Reads, Sizes=None, ExtraNames=('diagnostics/scheduler.etl',), SourceData=None):
+        # Model central-directory expanded sizes without allocating or reading
+        # a large diagnostic payload. Required members remain real ZIP data.
+        OriginalZip = zipfile.ZipFile
+
+        def Open(*Arguments, **Keywords):
+            Zip = OriginalZip(*Arguments, **Keywords)
+            Infos = Zip.infolist()
+            for Info in Infos:
+                if Sizes and Info.filename in Sizes:
+                    Info.file_size = Sizes[Info.filename]
+            for Name in ExtraNames:
+                Info = zipfile.ZipInfo(Name)
+                # Preserve the supplied central-directory name in this mock;
+                # ZipInfo's Windows constructor otherwise normalizes '\\'.
+                Info.filename = Name
+                Info.file_size = 286761989
+                Infos.append(Info)
+            Zip.infolist = mock.Mock(return_value=Infos)
+            OriginalOpen = Zip.open
+
+            def SelectedOpen(Member, *Arguments, **Keywords):
+                Name = Member.filename if isinstance(Member, zipfile.ZipInfo) else Member
+                self.assertIn(Name, ('build/ctest-results.xml', 'qualified-source-commit.txt'),
+                              'unused diagnostic must never be opened')
+                Cap = 128 if Name == 'qualified-source-commit.txt' else 16 * 1024 * 1024
+                self.assertLessEqual(Member.file_size, Cap)
+                Reads.append(Name)
+                Stream = (io.BytesIO(SourceData) if Name == 'qualified-source-commit.txt' and SourceData is not None else
+                          OriginalOpen(Member, *Arguments, **Keywords))
+                Owner = self
+
+                class SelectedStream:
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *Arguments):
+                        Stream.close()
+
+                    def read(self, Maximum):
+                        Owner.assertEqual(Maximum, Cap + 1, 'selected read must have an explicit cap')
+                        return Stream.read(Maximum)
+
+                return SelectedStream()
+
+            Zip.open = SelectedOpen
+            return Zip
+
+        return Open
+
+    def test_large_unused_diagnostic_is_not_read_or_an_expanded_size_gate(self):
+        Reads = []
+        with mock.patch.object(A.zipfile, 'ZipFile', side_effect=self.DiagnosticMetadataReader(Reads)):
+            Result = self.Verify()
+        self.assertEqual(Result['State'], 'MEASURED_PASS')
+        self.assertEqual(len(Result['Jobs']), 3)
+        self.assertEqual(Reads, ['qualified-source-commit.txt', 'build/ctest-results.xml'] * 3)
+
+    def test_required_size_caps_and_all_unused_names_still_reject(self):
+        for Sizes, Names, Error in (
+            ({'build/ctest-results.xml': 16 * 1024 * 1024 + 1}, ('diagnostics/scheduler.etl',), 'JUnit evidence'),
+            ({'qualified-source-commit.txt': 129}, ('diagnostics/scheduler.etl',), 'actual CI checkout'),
+            (None, ('../unused.etl',), 'invalid ZIP member'),
+            (None, ('/unused.etl',), 'invalid ZIP member'),
+            (None, ('C:/unused.etl',), 'invalid ZIP member'),
+            (None, ('diagnostics\\unused.etl',), 'invalid ZIP member'),
+            (None, ('diagnostics/unused.etl', 'diagnostics/unused.etl'), 'duplicate ZIP member'),
+            (None, tuple(f'diagnostics/{Index}.etl' for Index in range(9999)), 'unbounded CI artifact'),
+        ):
+            with self.subTest(Sizes=Sizes, Names=Names[:2]):
+                Reads = []
+                with mock.patch.object(A.zipfile, 'ZipFile', side_effect=self.DiagnosticMetadataReader(Reads, Sizes, Names)):
+                    with self.assertRaisesRegex(A.EvidenceError, Error):
+                        self.Verify()
+                self.assertEqual(Reads, [])
+        Reads = []
+        with mock.patch.object(A.zipfile, 'ZipFile', side_effect=self.DiagnosticMetadataReader(Reads, SourceData=b'x' * 129)):
+            with self.assertRaisesRegex(A.EvidenceError, 'actual CI checkout'):
+                self.Verify()
+        self.assertEqual(Reads, ['qualified-source-commit.txt'])
+
+    def test_successful_diagnostic_dispatch_is_not_native_qualification(self):
+        # Even a successful diagnostic with the correct source/artifact pins
+        # cannot stand in for the complete Windows and Linux qualification.
+        Windows = self.Documents['0-Jobs.json']['jobs'][0]
+        Windows['name'] = 'Windows causal diagnostic - not qualification'
+        with self.assertRaisesRegex(A.EvidenceError, 'unexpected/missing workflow jobs'):
+            self.Verify()
+        Windows['name'] = self.Entries[0]['Name']
+        Windows['steps'][0]['conclusion'] = 'skipped'
+        with self.assertRaisesRegex(A.EvidenceError, 'required CTest step missing/failed'):
+            self.Verify()
 
     def test_metadata_failures(self):
         Changes = [('0-Run.json', 'head_sha', '2' * 40), ('0-Run.json', 'conclusion', 'failure'),
@@ -295,10 +718,22 @@ class ProvenanceTests(unittest.TestCase):
         self.Pins = {}
         for Role in ('Player', 'Server'):
             Records = []
-            for Name in (f'Gargantuan{Role}.exe', 'game.package.json', 'content/content.manifest.json'):
+            for Name in (f'Gargantuan{Role}.exe', 'content/content.manifest.json'):
                 Data = (Role + Name).encode()
                 self.Files[f'{Role}/{Name}'] = Data
                 Records.append({'Path': Name, 'Bytes': len(Data), 'Sha256': A.Digest(Data)})
+            Content = [{'Path': Record['Path'], 'Size': Record['Bytes'], 'Sha256': Record['Sha256'],
+                        'Category': 'Runtime' if Record['Path'].endswith('.exe') else 'Project'}
+                       for Record in Records]
+            Table = json.dumps(Content, ensure_ascii=False, separators=(',', ':')).encode()
+            Package = {'Format': 'GargantuanGamePackage', 'PackageFormatVersion': 2,
+                       'RuntimeCompatibility': 1, 'ProjectId': 'a' * 32, 'DisplayName': 'Test',
+                       'Configuration': 'Release', 'Revision': 1, 'UnsavedChanges': False,
+                       'Player': f'Gargantuan{Role}.exe', 'Startup': {},
+                       'ContentTableSha256': A.Digest(Table), 'Content': Content}
+            Data = json.dumps(Package).encode()
+            self.Files[f'{Role}/game.package.json'] = Data
+            Records.insert(1, {'Path': 'game.package.json', 'Bytes': len(Data), 'Sha256': A.Digest(Data)})
             Data = json.dumps({'Format': 'GargantuanFarmDeployment', 'Version': 1,
                                'SourceCommit': SOURCE, 'Files': Records}).encode()
             self.Files[f'{Role}/deployment-sha256.json'] = Data
@@ -324,6 +759,76 @@ class ProvenanceTests(unittest.TestCase):
         Result = A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
         self.assertEqual(Result['Pins'], self.Pins)
         self.assertEqual(Result['State'], 'MEASURED_PASS')
+        self.assertEqual(Result['RuntimeInventories']['Server']['Files'], 3)
+        self.assertEqual(Result['RuntimeInventories']['Server']['Layout'],
+                         'DEPLOYMENT_ENVELOPE_REQUIRES_RUNTIME_PROJECTION')
+
+    def test_hybrid_package_requires_exact_contract_without_changing_runtime_closure(self):
+        self.CI['Contract'] = 'HYBRID_F1_V1'
+        with self.assertRaisesRegex(A.EvidenceError, 'package qualification contract'):
+            A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
+        for Contract in ('F1', 'unknown', 'HYBRID_F1_V1'):
+            self.Files['qualification-contract.txt'] = (Contract + '\n').encode()
+            if Contract == 'HYBRID_F1_V1':
+                Result = A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
+                self.assertEqual(Result['Contract'], Contract)
+                self.assertEqual(Result['Pins'], self.Pins)
+            else:
+                with self.assertRaisesRegex(A.EvidenceError, 'package qualification contract'):
+                    A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
+        self.CI['Contract'] = 'F1'
+        with self.assertRaises(A.EvidenceError):
+            A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
+
+    def test_deployment_cannot_extend_native_content_closure(self):
+        # This is hash-consistent deployment evidence, but the native host
+        # would reject its extra file. Inventory hashes alone are insufficient.
+        Name = 'Server/extra.dll'
+        self.Files[Name] = b'new deployment member'
+        Manifest = json.loads(self.Files['Server/deployment-sha256.json'])
+        Manifest['Files'].append({'Path': 'extra.dll', 'Bytes': len(self.Files[Name]),
+                                  'Sha256': A.Digest(self.Files[Name])})
+        self.Files['Server/deployment-sha256.json'] = json.dumps(Manifest).encode()
+        with self.assertRaisesRegex(A.EvidenceError, 'outside native runtime closure'):
+            A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
+
+    def test_native_table_and_exact_deployment_basis(self):
+        Original = json.loads(self.Files['Server/game.package.json'])
+        Deployment = json.loads(self.Files['Server/deployment-sha256.json'])['Files']
+        for Mode in ('table', 'size', 'digest', 'missing', 'duplicate', 'order', 'redirect', 'bool-size'):
+            with self.subTest(Mode=Mode):
+                Package = json.loads(json.dumps(Original))
+                if Mode == 'table':
+                    Package['ContentTableSha256'] = '0' * 64
+                elif Mode == 'size':
+                    Package['Content'][0]['Size'] += 1
+                elif Mode == 'digest':
+                    Package['Content'][0]['Sha256'] = '0' * 64
+                elif Mode == 'missing':
+                    Package['Content'].pop()
+                elif Mode == 'duplicate':
+                    Package['Content'].append(dict(Package['Content'][0]))
+                elif Mode == 'order':
+                    Package['Content'].reverse()
+                elif Mode == 'redirect':
+                    Package['Content'][0]['Path'] = '../escape'
+                else:
+                    Package['Content'][0]['Size'] = True
+                if Mode != 'table':
+                    Package['ContentTableSha256'] = A.Digest(json.dumps(
+                        Package['Content'], ensure_ascii=False, separators=(',', ':')).encode())
+                with self.assertRaises(A.EvidenceError):
+                    A.VerifyNativeRuntimeInventory(json.dumps(Package).encode(), Deployment)
+
+    def test_native_inventory_rejects_nonobject_and_boolean_compatibility(self):
+        Deployment = json.loads(self.Files['Server/deployment-sha256.json'])['Files']
+        for Value in (None, [], ['Content']):
+            with self.assertRaises(A.EvidenceError):
+                A.VerifyNativeRuntimeInventory(json.dumps(Value).encode(), Deployment)
+        Package = json.loads(self.Files['Server/game.package.json'])
+        Package['RuntimeCompatibility'] = True
+        with self.assertRaises(A.EvidenceError):
+            A.VerifyNativeRuntimeInventory(json.dumps(Package).encode(), Deployment)
 
     def test_extra_omitted_corrupt_and_case_alias_members(self):
         for Mode in ('extra', 'missing', 'corrupt', 'alias', 'redirect'):
@@ -425,6 +930,73 @@ class ProvenanceTests(unittest.TestCase):
             Index.write_bytes(Raw)
             with self.assertRaises(A.EvidenceError):
                 A.VerifyProvenance(Index, A.Digest(Raw), Inputs, self.CI, Physical, SOURCE)
+
+
+class HybridFinalTests(unittest.TestCase):
+    def Inputs(self):
+        Farm = Providers()
+        for Role in ('Local', 'Node'):
+            Put(Farm[Role], 'F1.Contract', 'HYBRID_F1_V1')
+            Put(Farm[Role], 'Admission.Fairness.ServiceContract', 'HYBRID_F1_V1')
+            Put(Farm[Role], 'Publication.OrdinaryFIFO.Contract', 'HYBRID_F1_V1')
+            Put(Farm[Role], 'Publication.OrdinaryFIFO.State', 'MEASURED_PASS')
+            Put(Farm[Role], 'Recovery.FinalNameIdentityContract', 'source_replica_v1')
+            Put(Farm[Role], 'Admission.ContinuousEligiblePeerEpisodeCoverage', 'MEASURED_PASS')
+        CI = {'State': 'MEASURED_PASS', 'SourceCommit': SOURCE, 'Contract': 'HYBRID_F1_V1'}
+        Physical = {**Four(), 'Contract': 'HYBRID_F1_V1'}
+        Provenance = {'Package': {'State': 'MEASURED_PASS', 'Contract': 'HYBRID_F1_V1'},
+                      'Sequence': {'State': 'MEASURED_PASS'}}
+        return Farm, CI, Physical, Provenance
+
+    def test_matching_hybrid_contract_is_required_across_all_independent_evidence(self):
+        Inputs = self.Inputs()
+        self.assertEqual(A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')['Status'], 'PASS')
+        for Index, Path in ((0, 'Local.F1.Contract'), (0, 'Node.F1.Contract'),
+                            (0, 'Local.Admission.Fairness.ServiceContract'),
+                            (0, 'Node.Publication.OrdinaryFIFO.Contract'), (1, 'Contract'),
+                            (2, 'Contract'), (3, 'Package.Contract')):
+            for Bad in (None, 'F1', 'unknown'):
+                Changed = copy.deepcopy(Inputs)
+                Put(Changed[Index], Path, Bad)
+                with self.subTest(Index=Index, Path=Path, Bad=Bad), self.assertRaises(A.EvidenceError):
+                    A.FinalObservation(SOURCE, *Changed, 'HYBRID_F1_V1')
+        with self.assertRaises(A.EvidenceError):
+            A.FinalObservation(SOURCE, *Inputs)
+
+    def test_hybrid_cannot_pass_without_independent_fifo_or_recovery(self):
+        for Role in ('Local', 'Node'):
+            for Path in ('Publication.OrdinaryFIFO.State', 'Recovery.FixedServiceRecovery',
+                         'Admission.FixedWorkloadFairness.State', 'F1.State'):
+                for State, Expected in ((None, 'INCOMPLETE'), ('MEASURED_FAIL', 'FAIL')):
+                    Inputs = self.Inputs()
+                    Put(Inputs[0][Role], Path, State)
+                    with self.subTest(Role=Role, Path=Path, State=State):
+                        self.assertEqual(A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')['Status'], Expected)
+
+    def test_hybrid_requires_live_source_identity_witness_from_each_provider(self):
+        for Role in ('Local', 'Node'):
+            for Identity, Expected in ((None, 'INCOMPLETE'), ('legacy_literal_object_id', 'FAIL')):
+                Inputs = self.Inputs()
+                Put(Inputs[0][Role], 'Recovery.FinalNameIdentityContract', Identity)
+                with self.subTest(Role=Role, Identity=Identity):
+                    self.assertEqual(A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')['Status'], Expected)
+            Inputs = self.Inputs()
+            Put(Inputs[0][Role], 'Recovery.FinalNameIdentityContract', 'forged_source_binding')
+            with self.subTest(Role=Role), self.assertRaises(A.EvidenceError):
+                A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')
+
+    def test_hybrid_requires_peer_eligibility_lineage_from_each_provider(self):
+        for Role in ('Local', 'Node'):
+            for State, Expected in ((None, 'INCOMPLETE'), ('INCONCLUSIVE_NOT_MEASURED', 'INCOMPLETE'),
+                                    ('MEASURED_FAIL', 'FAIL')):
+                Inputs = self.Inputs()
+                Put(Inputs[0][Role], 'Admission.ContinuousEligiblePeerEpisodeCoverage', State)
+                with self.subTest(Role=Role, State=State):
+                    self.assertEqual(A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')['Status'], Expected)
+        Inputs = self.Inputs()
+        for Role in ('Local', 'Node'):
+            Put(Inputs[0][Role], 'Admission.ExactDemandEpisodeCoverage', 'INCONCLUSIVE_NOT_MEASURED')
+        self.assertEqual(A.FinalObservation(SOURCE, *Inputs, 'HYBRID_F1_V1')['Status'], 'PASS')
 
 
 if __name__ == '__main__':

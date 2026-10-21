@@ -102,17 +102,30 @@ function Save-FairnessRows {
 }
 
 function Save-CompleteFairness {
-	param($Run, [switch]$MissingPeer, [switch]$OpenEligible)
+	param($Run, [switch]$MissingPeer, [switch]$OpenEligible, [switch]$Hybrid,
+		[switch]$EligibleReplacement, [switch]$OverduePeer, [switch]$BridgeGap)
 	$Rows=[Collections.Generic.List[string]]::new()
-	$Rows.Add("format=GargantuanAdmissionEvidenceV2`trun=$($Run.Report.RunId)")
+	$Rows.Add($(if ($Hybrid) { "format=GargantuanAdmissionEvidenceV3`trun=$($Run.Report.RunId)`tcontract=HYBRID_F1_V1" }
+		else { "format=GargantuanAdmissionEvidenceV2`trun=$($Run.Report.RunId)" }))
 	$Last=if ($MissingPeer) {31} else {32}
 	foreach ($Peer in 1..$Last) {
 		$At=1000*$Peer
-		$Rows.Add((@('event','exact_demand','none',$Peer,1,$Peer,0,0,256,$At,0,0,0,0,0,0,0,0,0) -join "`t"))
-		$Rows.Add((@('event','credit_eligible','none',$Peer,1,$Peer,1,0,256,($At+100),($At+50),($At+100),256,256,0,0,0,0,0) -join "`t"))
-		$Rows.Add((@('event','grant_accepted','none',$Peer,1,$Peer,1,$Peer,256,($At+200),($At+50),($At+100),0,0,1,0,0,0,0) -join "`t"))
-		$Rows.Add((@('event','grant_retired','none',$Peer,1,$Peer,0,$Peer,256,($At+300),0,0,0,0,1,0,0,0,0) -join "`t"))
-		$Rows.Add((@('event','grant_released','none',$Peer,1,$Peer,0,$Peer,256,($At+400),0,0,0,0,0,0,0,0,0) -join "`t"))
+		$Demand = if ($EligibleReplacement -and $Peer -gt 1) { $Peer+1 } else { $Peer }
+		$Bytes = if ($EligibleReplacement -and $Peer -eq 1) { 512 } else { 256 }
+		$CreditAt=$At+50; $EligibleAt=$At+100; $GrantAt=$At+200
+		$Rows.Add((@('event','exact_demand','none',$Peer,1,$Demand,0,0,$Bytes,$At,0,0,0,0,0,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','credit_eligible','none',$Peer,1,$Demand,1,0,$Bytes,$EligibleAt,$CreditAt,$EligibleAt,$Bytes,$Bytes,0,0,0,0,0) -join "`t"))
+		if ($EligibleReplacement -and $Peer -eq 1) {
+			$ReplacedAt=$At+250100
+			$Rows.Add((@('event','demand_disposed','replaced',1,1,$Demand,1,0,$Bytes,$ReplacedAt,$CreditAt,$EligibleAt,512,512,0,0,0,0,0) -join "`t"))
+			$Demand=2; $Bytes=256; $CreditAt=$ReplacedAt; $EligibleAt=$ReplacedAt+[int][bool]$BridgeGap
+			$Rows.Add((@('event','exact_demand','none',1,1,$Demand,0,0,$Bytes,$ReplacedAt,0,0,512,512,0,0,0,0,0) -join "`t"))
+			$Rows.Add((@('event','credit_eligible','none',1,1,$Demand,1,0,$Bytes,$EligibleAt,$CreditAt,$EligibleAt,512,512,0,0,0,0,0) -join "`t"))
+			$GrantAt=if ($OverduePeer) { $At+1181351 } else { $ReplacedAt+4 }
+		}
+		$Rows.Add((@('event','grant_accepted','none',$Peer,1,$Demand,1,$Peer,$Bytes,$GrantAt,$CreditAt,$EligibleAt,0,0,1,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','grant_retired','none',$Peer,1,$Demand,0,$Peer,$Bytes,($GrantAt+100),0,0,0,0,1,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','grant_released','none',$Peer,1,$Demand,0,$Peer,$Bytes,($GrantAt+200),0,0,0,0,0,0,0,0,0) -join "`t"))
 	}
 	if ($OpenEligible) {
 		$Rows.Add((@('event','exact_demand','none',1,1,33,0,0,256,40000,0,0,0,0,0,0,0,0,0) -join "`t"))
@@ -171,8 +184,10 @@ function Save-RecoveryLogs {
 		$ServerOutput.Add("[Qualification:Recovery] event=all_opportunities run=$RunId case=$Case opportunities=480 elapsed_us=8000000 tick=$($Tick + 480)")
 		$RawBytes = if ($Case -eq 'gameplay') { 0 } else { 188743680 }
 		$MutationSamples = if ($Case -eq 'gameplay') { 0 } else { 7680 }
-		$ServerOutput.Add("[Qualification:Recovery] event=cessation run=$RunId case=$Case tick=$($Tick + 481) monotonic_us=$(100000000 * ($CaseIndex + 1) + 8000001) journal_tail=$Tail raw_name_bytes=$RawBytes retained_high=16 minimum_retention_margin=99 retention_mutation_samples=$MutationSamples")
-		$ServerError.Add("[Qualification:Recovery] event=quote_capture run=$RunId case=$Case status=READY reason=none tick=$($Tick + 481)")
+		$CessationMicroseconds = 100000000 * ($CaseIndex + 1) + 8000001
+		$NativeBaselineMicroseconds = $CessationMicroseconds + 500
+		$ServerOutput.Add("[Qualification:Recovery] event=cessation run=$RunId case=$Case tick=$($Tick + 481) monotonic_us=$CessationMicroseconds journal_tail=$Tail raw_name_bytes=$RawBytes retained_high=16 minimum_retention_margin=99 retention_mutation_samples=$MutationSamples")
+		$ServerError.Add("[Qualification:Recovery] event=quote_capture run=$RunId case=$Case status=READY reason=none native_baseline_us=$NativeBaselineMicroseconds tick=$($Tick + 481)")
 		$ServerError.Add("[Qualification:Recovery] event=cessation_barrier run=$RunId case=$Case journal_tail=$Tail")
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
 			$ServerError.Add("[Qualification:Recovery] event=probe_ack case=$Case peer_slot=$Peer peer_generation=1")
@@ -196,7 +211,7 @@ function Save-RecoveryLogs {
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
 			$ServerError.Add("[Qualification:Recovery] event=terminal_reader run=$RunId case=$Case catalog=0 connection_slot=$Peer connection_generation=1 next_sequence=$Tail prepared=0 pending_relevance=0")
 		}
-		foreach ($Row in @(Save-RecoveryCausalFixture -Root $ServerRoot -RunId $RunId -Case $Case -Tail $Tail -CessationMicroseconds (100000000 * ($CaseIndex + 1) + 8000001))) { $ServerError.Add($Row) }
+		foreach ($Row in @(Save-RecoveryCausalFixture -Root $ServerRoot -RunId $RunId -Case $Case -Tail $Tail -CessationMicroseconds $CessationMicroseconds -NativeBaselineMicroseconds $NativeBaselineMicroseconds)) { $ServerError.Add($Row) }
 		$ServerError.Add("[Qualification:Recovery] event=strict_deadline_barrier run=$RunId case=$Case elapsed_us=20471000 bound_us=20470537")
 	}
 	[IO.File]::AppendAllLines($ServerOutputPath, $ServerOutput)
@@ -544,7 +559,7 @@ try {
 			$_.Gate -ceq 'Per-peer ACK-gated accepted-grant lifecycle' -and
 			$_.State -ceq 'NOT MEASURED' }).Count -ne 1 -or
 		@($Observed.GateObservations | Where-Object {
-			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within 220.5 ms' -and
+			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within versioned contract bound' -and
 			$_.State -ceq 'MEASURED_PASS' }).Count -ne 1 -or
 		$Observed.Node.Provider.State -cne 'AUTHENTICATED_MANIFEST_RPC_MEASURED' -or
 		$Observed.Node.Provider.RealTls -cne 'NOT_MEASURED' -or
@@ -553,7 +568,7 @@ try {
 		$Observed.Local.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Node.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 23 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 24 -or
 		$Observed.Local.F1.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.Workload.State -cne 'MEASURED_PASS' -or
 		$Observed.Local.Admission.FixedWorkloadFairness.State -cne 'NOT_MEASURED' -or
@@ -781,7 +796,7 @@ try {
 	if ($SlowObserved.Node.Admission.AcceptedGrantWaitBound -cne 'MEASURED_FAIL' -or
 		$SlowObserved.Node.Admission.FixedWorkloadFairness.State -cne 'MEASURED_FAIL' -or
 		@($SlowObserved.GateObservations | Where-Object {
-			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within 220.5 ms' -and
+			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within versioned contract bound' -and
 			$_.State -ceq 'MEASURED_FAIL' }).Count -ne 1 -or
 		@($SlowObserved.GateObservations | Where-Object {
 			$_.Gate -ceq 'Full fairness, overload backpressure and journal retention margin' -and
@@ -1096,6 +1111,38 @@ try {
 	$Node.Report.AdmissionFairnessObservation.ExactDemandEpisodeCoverage='MEASURED_PASS'
 	Save-Json -Path $Node.ReportPath -Value $Node.Report
 	Assert-Rejected -Name 'forged complete fairness hides open eligibility' -OutputPath (Join-Path $TestRoot 'forged-complete-fairness.json')
+	Save-CompleteFairness -Run $Node
+	Save-CompleteFairness -Run $Local -Hybrid -EligibleReplacement
+	Save-CompleteFairness -Run $Node -Hybrid -EligibleReplacement
+	$HybridPath=Join-Path $TestRoot 'hybrid-peer-lineage.json'
+	Invoke-Analyzer -OutputPath $HybridPath
+	$HybridObserved=Get-Content $HybridPath -Raw|ConvertFrom-Json
+	if ($HybridObserved.Node.Admission.FixedWorkloadFairness.State -cne 'MEASURED_PASS' -or
+		$HybridObserved.Node.Admission.ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_PASS' -or
+		$HybridObserved.Node.Admission.MaximumObservedPeerEligibilityToGrantMicroseconds -ne 250004 -or
+		$HybridObserved.Node.Admission.ExactDemandEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED') {
+		throw 'HYBRID peer-lineage propagation lost age or relabeled the exact-candidate diagnostic'
+	}
+	Save-CompleteFairness -Run $Node -Hybrid -EligibleReplacement -OverduePeer
+	$HybridLatePath=Join-Path $TestRoot 'hybrid-overdue-peer.json'
+	Invoke-Analyzer -OutputPath $HybridLatePath
+	$HybridLate=Get-Content $HybridLatePath -Raw|ConvertFrom-Json
+	if ($HybridLate.Node.Admission.AcceptedGrantWaitBound -cne 'MEASURED_PASS' -or
+		$HybridLate.Node.Admission.FixedWorkloadFairness.State -cne 'MEASURED_FAIL' -or
+		$HybridLate.Node.Admission.ContinuousEligiblePeerEpisodeCoverage -cne 'MEASURED_FAIL') {
+		throw 'accepted young replacement hid an overdue peer in fixed fairness'
+	}
+	Save-CompleteFairness -Run $Node -Hybrid -EligibleReplacement -BridgeGap
+	$HybridGapPath=Join-Path $TestRoot 'hybrid-peer-gap.json'
+	Invoke-Analyzer -OutputPath $HybridGapPath
+	$HybridGap=Get-Content $HybridGapPath -Raw|ConvertFrom-Json
+	if ($HybridGap.Node.Admission.FixedWorkloadFairness.State -cne 'NOT_MEASURED') {
+		throw 'missing immediate successor eligibility qualified fixed peer fairness'
+	}
+	$Node.Report.AdmissionFairnessObservation.ContinuousEligiblePeerEpisodeCoverage='MEASURED_PASS'
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged peer lineage hides replacement gap' -OutputPath (Join-Path $TestRoot 'forged-peer-lineage.json')
+	Save-CompleteFairness -Run $Local
 	Save-CompleteFairness -Run $Node
 	$Node.Report.Remove('AdmissionFairnessObservation')
 	Save-Json -Path $Node.ReportPath -Value $Node.Report

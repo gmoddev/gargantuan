@@ -2,8 +2,10 @@
 
 This joins exact generation-safe state identities across role-local traces.
 Server and client monotonic clocks are never subtracted from one another.
-The accepted-GRPL RecipientRetired stage closes only the pending obligation
-that precedes it. A later publication may reenter with the same ObjectId.
+V1 retains its accepted-GRPL RecipientRetired interpretation. In V2 that raw
+stage is diagnostic only: the explicit native GCHR relationship retirement
+closes its pending obligation. A later publication may reenter with the same
+ObjectId; retirement never invents accepted or client-applied service.
 """
 
 import argparse
@@ -16,7 +18,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from farm_publication_trace import IterRecords, Require
+from farm_publication_trace import IterRecords, Require, CHARACTER_RELATIONSHIP_RETIRED
 
 
 MAX_DATABASE_PAGES = 1_048_576  # At 4 KiB/page, at most 4 GiB of scratch data.
@@ -272,9 +274,10 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
               "Accepted": 0, "ForcedAccepted": 0,
               "DirectOffered": 0, "DirectAccepted": 0, "DirectRejected": 0,
               "DirectReliableOffered": 0, "DirectReliableAccepted": 0,
-              "DirectSatisfiedDue": 0}
+              "DirectSatisfiedDue": 0, "GrplRetirementDiagnostic": 0, "SchemaVersion": 0}
     LastFrameTick = 0
     for Value in IterRecords(ServerPath, RunId, "SERVER"):
+        Counts["SchemaVersion"] = Value.SchemaVersion
         Stage = Value.Stage
         if Stage == 1:
             Require(Value.Tick > LastFrameTick and Value.Nanoseconds > 0,
@@ -284,7 +287,7 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
             LastFrameTick = Value.Tick
             Database.execute("""UPDATE Relationship SET PendingDue=ForecastDue
                 WHERE PendingDue IS NULL AND Retired=0 AND ForecastDue<=?""", (Value.Tick,))
-        elif Stage in (2, 3, 6, 7, 8, 11, 12, 13):
+        elif Stage in (2, 3, 6, 7, 8, 11, 12, 13, CHARACTER_RELATIONSHIP_RETIRED):
             FullRelationship(Value)
             Require(Value.Tick <= LastFrameTick, "Character event lacks preceding FrameBegin")
             if Stage in (2, 3, 6, 7):
@@ -478,16 +481,28 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
                      Pending[2] if Pending is not None else 0,
                      *StateIdentity(Value)))
                 Counts["Accepted"] += 1
-            elif Stage == 11:
+            elif Stage == 11 and Value.SchemaVersion == 2:
+                # A GRPL Part/root may leave while the same GCHR Character
+                # relationship remains alive. Its original due stays immutable.
+                Counts["GrplRetirementDiagnostic"] += 1
+            elif Stage == CHARACTER_RELATIONSHIP_RETIRED or Stage == 11 and Value.SchemaVersion == 1:
                 Previous = Database.execute("""SELECT PendingDue, Confirmed, Lifetime,
                     Retired, DueEpoch
                     FROM Relationship WHERE CS=? AND CG=? AND OS=? AND OG=?""",
                     Identity(Value)).fetchone()
+                if Stage == CHARACTER_RELATIONSHIP_RETIRED:
+                    Require((Value.ConnectionSlot, Value.ConnectionGeneration) in ReadyConnections,
+                            "GCHR retirement lacks known ready connection identity")
+                    # The complete native prefix includes MarkMaterialized's
+                    # MakeRelationshipDue before any successful owner removal.
+                    # An unknown end cannot create a synthetic lifetime marker.
+                    Require(Previous is not None,
+                            "GCHR retirement lacks existing live relationship")
                 Require(Previous is None or Previous[3] == 0,
                         "duplicate retirement without intervening reentry")
                 Counts["Retired"] += 1
                 if Previous and Previous[0] is not None:
-                    Require(Value.Tick >= Previous[0],
+                    Require(Value.Tick >= Previous[0] or Value.SchemaVersion == 2 and not Previous[1],
                             "retirement precedes the pending due tick")
                     Counts["RetiredPending"] += 1
                     if Previous[1]:
@@ -549,7 +564,7 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
     return Counts
 
 
-def ReadClients(Database, ClientSources, ReadyBySlot, RunId, ExpectedClients):
+def ReadClients(Database, ClientSources, ReadyBySlot, RunId, ExpectedClients, ExpectedSchemaVersion=1):
     Require(set(ClientSources) == set(range(ExpectedClients)) and
             1 <= ExpectedClients <= 32, "client slot set is incomplete")
     Nonces = [Value[1] for Value in ClientSources.values()]
@@ -562,6 +577,8 @@ def ReadClients(Database, ClientSources, ReadyBySlot, RunId, ExpectedClients):
         PathValue, Nonce, _ = ClientSources[Slot]
         ServerConnection, ClientConnection = ReadyBySlot[Slot]
         for Value in IterRecords(PathValue, RunId, "CLIENT", Slot, Nonce):
+            Require(Value.SchemaVersion == ExpectedSchemaVersion,
+                    "server/client publication schema versions differ")
             Connection = Value.ConnectionSlot, Value.ConnectionGeneration
             Require(Connection == ClientConnection and
                     ConnectionBySlot.setdefault(Slot, Connection) == Connection,
@@ -835,7 +852,7 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                 Server = ReadServer(Database, ServerPath, RunId,
                                     {Pair[0] for Pair in ReadyBySlot.values()})
                 Clients = ReadClients(Database, ClientSources, ReadyBySlot, RunId,
-                                      ExpectedClients)
+                                      ExpectedClients, Server["SchemaVersion"])
                 Require(Server["Accepted"] == Clients["NativeReceive"] ==
                         Clients["ClientHandled"] and
                         Server["ForcedAccepted"] == Clients["ForcedNativeReceive"] ==
@@ -872,6 +889,8 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                         "RecipientCharacterCadence": Cadence,
                         "CharacterDueService": DueCoverage,
                         "OrdinaryDemand": OrdinaryDemand,
+                        "OrdinaryFIFO": OrdinaryDemand.get("OrdinaryFIFO", {"State": "NOT_MEASURED",
+                            "Reason": "ordinary native certificates and exact demand coverage required"}),
                         "Retirement": "OBSERVED" if Server["Retired"] else "NONE_OBSERVED",
                         "CrossHostDueToHandled": "NOT_MEASURED",
                         "ScratchPeakDatabaseBytes": DatabaseBytes,

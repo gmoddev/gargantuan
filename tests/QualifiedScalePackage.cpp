@@ -118,6 +118,20 @@ namespace {
 				.Payload = Payload, .RuntimeDistributionRoot = Runtime,
 				.OutputDirectory = Output / Name, .Configuration = PackageConfiguration::Release,
 			});
+			if (!Result.Ok || HasError(Result.Diagnostics)) {
+				const auto Count = std::min<std::size_t>(Result.Diagnostics.size(), 16);
+				for (std::size_t Index = 0; Index < Count; ++Index) {
+					const auto &Diagnostic = Result.Diagnostics[Index];
+					std::cerr << "[Content:ScalePackage] role=" << Name
+						<< " category=" << Diagnostic.Category.substr(0, 512)
+						<< " code=" << Diagnostic.Code.substr(0, 512)
+						<< " message=" << Diagnostic.Message.substr(0, 512)
+						<< " item=" << Diagnostic.Item.substr(0, 512) << '\n';
+				}
+				if (Result.Diagnostics.size() > Count)
+					std::cerr << "[Content:ScalePackage] diagnostics_truncated="
+						<< Result.Diagnostics.size() - Count << '\n';
+			}
 			Require(Result.Ok && !HasError(Result.Diagnostics), "Qualified scale runtime package build failed");
 		}
 		const auto PlayerManifest = CheckPackage(Output / "Player", Expected);

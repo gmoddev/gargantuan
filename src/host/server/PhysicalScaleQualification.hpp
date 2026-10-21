@@ -114,6 +114,14 @@ namespace gargantuan::host {
 			std::uint64_t SessionNamePreflightRetries = 0;
 			std::uint64_t SessionNameValidationBytes = 0;
 			std::uint64_t SessionNameValidationCacheHits = 0;
+			std::uint64_t SessionNameProofCalls = 0;
+			std::uint64_t SessionNameNonPropertyFallback = 0;
+			std::uint64_t SessionNameNonNameFallback = 0;
+			std::uint64_t SessionNameNonReplicatedFallback = 0;
+			std::uint64_t SessionNameStateFallback = 0;
+			std::uint64_t SessionNameInvalidFallback = 0;
+			std::uint64_t SessionNameAttributeFallback = 0;
+			std::uint64_t SessionNameFilteredFallback = 0;
 			std::uint64_t PreQualificationMicroseconds = 0;
 		};
 		static constexpr std::size_t PeerCount = 32;
@@ -130,6 +138,8 @@ namespace gargantuan::host {
 				RecoveryWorkload(RecoveryWorkloadValue), TickEvidence(TickEvidenceValue) {
 			if (RunId.empty() || !Runtime.Content || !Runtime.DataModel || !Runtime.CharacterControl)
 				throw std::invalid_argument("physical scale qualification requires a content-backed server runtime");
+			if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(Session, false))
+				throw std::invalid_argument("[Network:OrdinaryService] Server bootstrap source scope failed");
 		}
 		void AttachAdmissionEvidence(detail::FarmAdmissionEvidence &Evidence) { AdmissionEvidence = &Evidence; }
 		~PhysicalScaleQualification() {
@@ -643,6 +653,8 @@ namespace gargantuan::host {
 		}
 
 		void BeginPhase(Phase Value, std::uint64_t Tick) {
+			if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(Session, true))
+				Fail("ordinary_source_scope_failed", Tick);
 			if (Value == Phase::Load || Value == Phase::Reload) {
 				if (!Runtime.Content->RequestContent(ContentKey)) Fail("content_demand_rejected", Tick);
 			} else if (Value == Phase::Evict) {
@@ -743,6 +755,8 @@ namespace gargantuan::host {
 		}
 
 		void InitializeOverload(std::uint64_t Tick) {
+			if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(Session, false))
+				Fail("ordinary_overload_scope_failed", Tick);
 			OverloadRoot = std::make_shared<Folder>();
 			OverloadRoot->SetName("ScaleOverloadRegion");
 			OverloadRoot->SetParent(Runtime.Workspace);
@@ -766,7 +780,7 @@ namespace gargantuan::host {
 			BeginOverloadCase(Tick);
 		}
 
-		void OfferOverloadNameWork(std::uint64_t Tick) {
+		void OfferOverloadNameWork(std::uint64_t Tick, std::chrono::steady_clock::time_point OpportunityStarted) {
 			if (OverloadCase == 0) return;
 			const auto First = ((OverloadOpportunities - 1) % 2) * 16;
 			for (std::size_t Index = First; Index < First + 16; ++Index) {
@@ -784,6 +798,8 @@ namespace gargantuan::host {
 			std::cout << "[Qualification:Recovery] event=structural_offer run=" << RunId
 				<< " case=" << OverloadCases[OverloadCase] << " opportunity=" << OverloadOpportunities
 				<< " mutations=16 name_bytes=" << OverloadNameBytes << " tick=" << Tick
+				<< " cadence_boundary=opportunity_start_v1 opportunity_start_us="
+				<< std::chrono::duration_cast<std::chrono::microseconds>(OpportunityStarted.time_since_epoch()).count()
 				<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
 			const auto Retention = ObserveRetention(Tick);
@@ -814,7 +830,7 @@ namespace gargantuan::host {
 				if (Now - LastOverloadOpportunity < std::chrono::microseconds(16'667)) return;
 				LastOverloadOpportunity = Now;
 				++OverloadOpportunities;
-				OfferOverloadNameWork(Tick);
+				OfferOverloadNameWork(Tick, Now);
 				if (OverloadCase == 0) (void)ObserveRetention(Tick);
 				if (OverloadOpportunities == OverloadOpportunityCount) {
 					State = Stage::OverloadOffered;
@@ -844,6 +860,7 @@ namespace gargantuan::host {
 					QuoteComplete = QuoteSealed = QuoteResultWritten = false;
 					QuoteFailure.clear();
 					std::uint64_t QuoteCaptureMicroseconds = 0;
+					std::uint64_t NativeBaselineMicroseconds = 0;
 					if (!AdmissionEvidence) QuoteFailure = "admission evidence is unavailable";
 					else {
 						AdmissionEvidenceCursor = static_cast<std::size_t>(AdmissionEvidence->Count());
@@ -855,20 +872,34 @@ namespace gargantuan::host {
 								std::chrono::steady_clock::now() - CaptureStarted).count());
 						if (!CessationQuote && QuoteFailure.empty()) QuoteFailure = "cessation quote capture failed";
 						if (CessationQuote) {
-							auto Snapshot = network::detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(Session, QuoteFailure);
+							// Native counts are resolved after the fixed source/accepted cut.
+							// One absolute budget covers every peer; the wait is included in
+							// F1 and recovery clocks, never added to their service allowances.
+							const auto NativeDeadline = static_cast<std::uint64_t>(
+								std::chrono::duration_cast<std::chrono::microseconds>(
+									OverloadCeased.time_since_epoch()).count()) +
+								network::PooledReliableServiceProfile{}.FeedbackFreshnessMicroseconds;
+							auto Snapshot = network::detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(
+								Session, QuoteFailure, NativeDeadline);
 							if (Snapshot) {
-								RecoveryRecords[OverloadCase] = std::make_unique<detail::FarmRecoveryEvidence>(std::move(*Snapshot));
+								NativeBaselineMicroseconds = static_cast<std::uint64_t>(
+									std::chrono::duration_cast<std::chrono::microseconds>(
+										std::chrono::steady_clock::now().time_since_epoch()).count());
+								RecoveryRecords[OverloadCase] = std::make_unique<detail::FarmRecoveryEvidence>(
+									std::move(*Snapshot), NativeBaselineMicroseconds);
 								RecoveryEvidence = RecoveryRecords[OverloadCase].get();
 								QuoteFailure = RecoveryEvidence->Failure();
-								if (QuoteFailure.empty())
-									QuoteWorker = std::make_unique<detail::FrozenRecoveryQuote>(
-										std::move(CessationQuote->Replication), CessationQuote->MaximumFrameBytes);
+								// Retain the immutable t0 reference without replaying it alongside
+								// measured live service. The causal cut does not depend on the
+								// reference; start the same bounded oracle after recording it.
 							}
 						}
 					}
 					std::cerr << "[Qualification:Recovery] event=quote_capture run=" << RunId
-						<< " case=" << CaseName << " status=" << (CessationQuote ? "READY" : "NOT_MEASURED")
+						<< " case=" << CaseName << " status=" <<
+							(CessationQuote && RecoveryEvidence && QuoteFailure.empty() ? "READY" : "NOT_MEASURED")
 						<< " capture_us=" << QuoteCaptureMicroseconds
+						<< " native_baseline_us=" << NativeBaselineMicroseconds
 						<< " reason=" << QuoteReasonToken(QuoteFailure)
 						<< " tick=" << Tick << '\n';
 					RecoverySnapshotWritten = false;
@@ -934,8 +965,14 @@ namespace gargantuan::host {
 				const auto ObservedAt = std::chrono::steady_clock::now();
 				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 					ObservedAt - OverloadCeased).count();
-				if (!RecoveryConvergedMicroseconds && RecoveryEvidence->Converged())
+				if (!RecoveryConvergedMicroseconds && RecoveryEvidence->Converged()) {
 					RecoveryConvergedMicroseconds = static_cast<std::uint64_t>(Elapsed);
+					QuoteWorker = std::make_unique<detail::FrozenRecoveryQuote>(
+						std::move(CessationQuote->Replication), CessationQuote->MaximumFrameBytes);
+					std::cerr << "[Qualification:Recovery] event=quote_start run=" << RunId
+						<< " case=" << CaseName << " prefix_converged_us=" << RecoveryConvergedMicroseconds
+						<< " tick=" << Tick << '\n';
+				}
 				// The binary tick record retains every server step. Keep textual
 				// recovery samples bounded when a large exact quote spans many ticks,
 				// while always recording the two acceptance observation points.
@@ -956,6 +993,14 @@ namespace gargantuan::host {
 					<< " session_name_preflight_retries=" << CurrentServerTickTiming.SessionNamePreflightRetries
 					<< " session_name_validation_bytes=" << CurrentServerTickTiming.SessionNameValidationBytes
 					<< " session_name_validation_cache_hits=" << CurrentServerTickTiming.SessionNameValidationCacheHits
+					<< " session_name_proof_calls=" << CurrentServerTickTiming.SessionNameProofCalls
+					<< " session_name_nonproperty_fallback=" << CurrentServerTickTiming.SessionNameNonPropertyFallback
+					<< " session_name_nonname_fallback=" << CurrentServerTickTiming.SessionNameNonNameFallback
+					<< " session_name_nonreplicated_fallback=" << CurrentServerTickTiming.SessionNameNonReplicatedFallback
+					<< " session_name_state_fallback=" << CurrentServerTickTiming.SessionNameStateFallback
+					<< " session_name_invalid_fallback=" << CurrentServerTickTiming.SessionNameInvalidFallback
+					<< " session_name_attribute_fallback=" << CurrentServerTickTiming.SessionNameAttributeFallback
+					<< " session_name_filtered_fallback=" << CurrentServerTickTiming.SessionNameFilteredFallback
 					<< " relevance_us=" << RelevanceMicroseconds
 					<< " planning_us=" << PlanningMicroseconds
 					<< " materialization_us=" << MaterializationMicroseconds
@@ -971,11 +1016,13 @@ namespace gargantuan::host {
 					<< " quote_encode_retries=" << LastQuoteEncodeRetries
 					<< " quote_advance_attempted=" << LastQuoteAdvanceAttempted
 					<< " quote_advance_frame=" << LastQuoteAdvanceProducedFrame
+					<< " quote_started=" << static_cast<bool>(QuoteWorker)
 					<< " quote_complete=" << QuoteComplete << " quote_sealed=" << QuoteSealed
 					<< " quote_frames=" << QuotedFrameCount << " quote_audited=" << AuditedFrameCount
 					<< " quote_lag_records=" << QuoteLagRecords
 					<< " outstanding=" << Metrics.ReliableAdmission.OutstandingBytes
 					<< " active_grants=" << Metrics.ReliableAdmission.ActiveDrainGrants
+					<< " feedback_deferrals=" << Metrics.ReliableAdmission.FeedbackDeferrals
 					<< " scheduler_queued=" << Metrics.SchedulerQueuedReliableBytes
 					<< " native_queued=" << Metrics.NativeQueuedReliableBytes
 					<< " remote_dispatch_messages=" << Remote.QueuedDispatchMessages
@@ -1057,6 +1104,8 @@ namespace gargantuan::host {
 		}
 
 		void EndPhase(std::uint64_t Tick) {
+			if (!network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(Session, false))
+				Fail("ordinary_phase_end_scope_failed", Tick);
 			runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseEnd",
 				.Sequence=static_cast<std::uint64_t>(CurrentPhase) + 1});
 			const auto Ended = std::chrono::steady_clock::now();

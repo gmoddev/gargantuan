@@ -45,7 +45,7 @@ NATIVE_SOURCE_PATHS = (
 
 
 def PinnedManifest(Legacy=False):
-    Name = "phase1-f1-ce4733-source-manifest.json" if Legacy else "phase1-f1-source-manifest.json"
+    Name = "phase1-f1-ce4733-source-manifest.json" if Legacy else "phase1-hybrid-f30e80ba-source-manifest.json"
     return json.loads((Path(__file__).resolve().parent / Name).read_text(encoding="utf-8"))
 
 

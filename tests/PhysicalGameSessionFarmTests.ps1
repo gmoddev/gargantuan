@@ -22,6 +22,13 @@ $Directory = Join-Path ([IO.Path]::GetTempPath()) ('physical-farm-test-' + [Guid
 $ServerPath = Join-Path $Directory 'server.log'
 $ClientPath = Join-Path $Directory 'client.log'
 try {
+	Assert-ClosedNativeRuntimeRoot -Root $Directory
+	$Sidecar = Join-Path $Directory 'deployment-sha256.json'
+	[IO.File]::WriteAllText($Sidecar, 'harmless envelope marker')
+	$Rejected = $false
+	try { Assert-ClosedNativeRuntimeRoot -Root $Directory } catch { $Rejected = $true }
+	if (-not $Rejected) { throw 'direct launcher accepted a deployment envelope as native runtime' }
+	Remove-Item -LiteralPath $Sidecar
 	$LiveLogPath = Join-Path $Directory 'live-server.log'
 	$LiveWriter = [IO.File]::Open($LiveLogPath, [IO.FileMode]::CreateNew,
 		[IO.FileAccess]::Write, [IO.FileShare]::Read)

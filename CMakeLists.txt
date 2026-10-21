@@ -948,12 +948,14 @@ if(BUILD_TESTING)
 	if(GARGANTUAN_WITH_GNS)
 		add_executable(gargantuan_real_transport_tests "tests/GameNetworkingSocketsTransportTests.cpp")
 		add_executable(gargantuan_gns_service_fairness_tests "tests/GnsServiceFairnessTests.cpp")
-		add_executable(gargantuan_gns_service_reproducer "tests/GnsServiceStarvationReproducer.cpp")
+		# Investigation-only executable: retain the explicit target, not an ALL build.
+		add_executable(gargantuan_gns_service_reproducer EXCLUDE_FROM_ALL "tests/GnsServiceStarvationReproducer.cpp")
 		target_compile_features(gargantuan_gns_service_reproducer PRIVATE cxx_std_17)
 		target_link_libraries(gargantuan_gns_service_reproducer PRIVATE GameNetworkingSockets::static)
 		target_compile_features(gargantuan_gns_service_fairness_tests PRIVATE cxx_std_17)
 		target_link_libraries(gargantuan_gns_service_fairness_tests PRIVATE GameNetworkingSockets::static)
 		target_include_directories(gargantuan_gns_service_fairness_tests PRIVATE
+			"${CMAKE_CURRENT_BINARY_DIR}"
 			"${gamenetworkingsockets_SOURCE_DIR}/src/steamnetworkingsockets"
 			$<TARGET_PROPERTY:GameNetworkingSockets_s,INCLUDE_DIRECTORIES>)
 		target_compile_definitions(gargantuan_gns_service_fairness_tests PRIVATE
@@ -962,6 +964,37 @@ if(BUILD_TESTING)
 			target_compile_options(gargantuan_gns_service_fairness_tests PRIVATE $<IF:$<CONFIG:Debug>,/GR,/GR->)
 		endif()
 		add_test(NAME gargantuan_gns_service_fairness COMMAND gargantuan_gns_service_fairness_tests)
+		if(GARGANTUAN_NATIVE_EGRESS_TEST_HOOKS AND WIN32)
+			add_executable(gargantuan_gns_native_pending_ownership_tests "tests/GnsNativePendingOwnershipTests.cpp")
+			target_compile_features(gargantuan_gns_native_pending_ownership_tests PRIVATE cxx_std_17)
+			target_link_libraries(gargantuan_gns_native_pending_ownership_tests PRIVATE GameNetworkingSockets::static)
+			target_include_directories(gargantuan_gns_native_pending_ownership_tests PRIVATE
+				"${CMAKE_CURRENT_SOURCE_DIR}/cmake/gns"
+				"${gamenetworkingsockets_SOURCE_DIR}/src/steamnetworkingsockets"
+				$<TARGET_PROPERTY:GameNetworkingSockets_s,INCLUDE_DIRECTORIES>)
+			target_compile_definitions(gargantuan_gns_native_pending_ownership_tests PRIVATE
+				$<TARGET_PROPERTY:GameNetworkingSockets_s,COMPILE_DEFINITIONS>)
+			if(MSVC)
+				target_compile_options(gargantuan_gns_native_pending_ownership_tests PRIVATE $<IF:$<CONFIG:Debug>,/GR,/GR->)
+			endif()
+			add_test(NAME gargantuan_gns_native_pending_ownership COMMAND gargantuan_gns_native_pending_ownership_tests)
+			set_tests_properties(gargantuan_gns_native_pending_ownership PROPERTIES TIMEOUT 30 LABELS "network;qualification;native-egress")
+			add_executable(gargantuan_gns_native_egress_worker_tests "tests/GnsNativeEgressWorkerTests.cpp")
+			target_compile_features(gargantuan_gns_native_egress_worker_tests PRIVATE cxx_std_17)
+			target_link_libraries(gargantuan_gns_native_egress_worker_tests PRIVATE GameNetworkingSockets::static)
+			target_include_directories(gargantuan_gns_native_egress_worker_tests PRIVATE
+				"${CMAKE_CURRENT_BINARY_DIR}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/cmake/gns"
+				"${gamenetworkingsockets_SOURCE_DIR}/src/steamnetworkingsockets"
+				$<TARGET_PROPERTY:GameNetworkingSockets_s,INCLUDE_DIRECTORIES>)
+			target_compile_definitions(gargantuan_gns_native_egress_worker_tests PRIVATE
+				$<TARGET_PROPERTY:GameNetworkingSockets_s,COMPILE_DEFINITIONS>)
+			if(MSVC)
+				target_compile_options(gargantuan_gns_native_egress_worker_tests PRIVATE $<IF:$<CONFIG:Debug>,/GR,/GR->)
+			endif()
+			add_test(NAME gargantuan_gns_native_egress_worker COMMAND gargantuan_gns_native_egress_worker_tests)
+			set_tests_properties(gargantuan_gns_native_egress_worker PROPERTIES TIMEOUT 30 LABELS "network;qualification;native-egress")
+		endif()
 		add_executable(gargantuan_gns_capacity_benchmark "tests/GnsCapacityBenchmark.cpp")
 		target_compile_features(gargantuan_gns_capacity_benchmark PRIVATE cxx_std_23)
 		target_link_libraries(gargantuan_gns_capacity_benchmark PRIVATE gargantuan_core GameNetworkingSockets::static)
@@ -1327,23 +1360,26 @@ if(BUILD_TESTING)
 		add_test(NAME gargantuan_gns_failed_send_retry_safety COMMAND gargantuan_real_transport_tests --ack-retry-safety)
 		set_tests_properties(gargantuan_gns_failed_send_retry_safety
 			PROPERTIES LABELS "networking;optional;sanitizer-safety" TIMEOUT 45 RUN_SERIAL TRUE)
-		add_test(NAME gargantuan_gns_funded_ack COMMAND gargantuan_real_transport_tests --ack-cycle-funded 1348)
-		add_test(NAME gargantuan_gns_funded_ack_compatibility COMMAND gargantuan_real_transport_tests --ack-funded-compatibility)
-		add_test(NAME gargantuan_gns_funded_ack_four_grant COMMAND gargantuan_real_transport_tests --ack-funded-four-grant)
+		add_test(NAME gargantuan_gns_funded_ack COMMAND gargantuan_real_transport_tests --ack-cycle-funded-hybrid 1348 --non-realtime)
+		add_test(NAME gargantuan_gns_funded_ack_compatibility COMMAND gargantuan_real_transport_tests --ack-funded-compatibility-hybrid --non-realtime)
+		add_test(NAME gargantuan_gns_funded_ack_four_grant_hybrid COMMAND gargantuan_real_transport_tests --ack-funded-four-grant-hybrid --non-realtime)
 		set_tests_properties(gargantuan_gns_funded_ack gargantuan_gns_funded_ack_compatibility
-			gargantuan_gns_funded_ack_four_grant PROPERTIES LABELS "networking;optional;f1;funded-ack" TIMEOUT 60 RUN_SERIAL TRUE)
+			gargantuan_gns_funded_ack_four_grant_hybrid PROPERTIES LABELS "networking;optional;f1;funded-ack" TIMEOUT 60 RUN_SERIAL TRUE)
+		add_test(NAME gargantuan_four_grant_contract COMMAND gargantuan_real_transport_tests --four-grant-contract)
+		set_tests_properties(gargantuan_four_grant_contract PROPERTIES LABELS "networking;optional;contract" TIMEOUT 10)
 		# Actual pinned 5/20-second control paths: one control/funded pair, not
 		# repeated in each workload fixture or the sanitizer timing matrix.
-		add_test(NAME gargantuan_gns_funded_ack_stats COMMAND gargantuan_real_transport_tests --ack-stats-boundary)
+		add_test(NAME gargantuan_gns_funded_ack_stats COMMAND gargantuan_real_transport_tests --ack-stats-boundary --non-realtime)
 		set_tests_properties(gargantuan_gns_funded_ack_stats
 			PROPERTIES LABELS "networking;optional;funded-ack" TIMEOUT 100 RUN_SERIAL TRUE)
-		add_test(NAME gargantuan_f1_packet_tail COMMAND gargantuan_real_transport_tests --packet-tail)
-		add_test(NAME gargantuan_f1_four_grant COMMAND gargantuan_real_transport_tests --four-grant)
+		add_test(NAME gargantuan_hybrid_packet_tail COMMAND gargantuan_real_transport_tests --packet-tail-hybrid --non-realtime)
+		# Standard releases qualify D03; --four-grant remains an explicit legacy probe.
+		add_test(NAME gargantuan_hybrid_four_grant COMMAND gargantuan_real_transport_tests --four-grant-hybrid --non-realtime)
 		add_test(NAME gargantuan_f1_four_grant_sanitizer_safety
 			COMMAND gargantuan_real_transport_tests --four-grant-sanitizer-safety)
-		add_test(NAME gargantuan_f1_mixed_traffic COMMAND gargantuan_real_transport_tests --mixed-traffic)
-		set_tests_properties(gargantuan_f1_packet_tail gargantuan_f1_four_grant
-			gargantuan_f1_four_grant_sanitizer_safety gargantuan_f1_mixed_traffic
+		add_test(NAME gargantuan_hybrid_mixed_traffic COMMAND gargantuan_real_transport_tests --mixed-traffic-hybrid --non-realtime)
+		set_tests_properties(gargantuan_hybrid_packet_tail gargantuan_hybrid_four_grant
+			gargantuan_f1_four_grant_sanitizer_safety gargantuan_hybrid_mixed_traffic
 			PROPERTIES LABELS "networking;optional;f1" TIMEOUT 30 RUN_SERIAL TRUE)
 		add_test(NAME gargantuan_pooled_service_source_contract
 			COMMAND ${CMAKE_COMMAND}
@@ -1361,6 +1397,10 @@ if(BUILD_TESTING)
 		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
 		add_test(NAME gargantuan_character_real_transport COMMAND gargantuan_character_real_transport_tests)
 		add_test(NAME gargantuan_game_session_real_transport COMMAND gargantuan_game_session_real_transport_tests)
+		add_test(NAME gargantuan_pooled_feedback_refresh
+			COMMAND gargantuan_game_session_real_transport_tests --pooled-feedback-refresh)
+		set_tests_properties(gargantuan_pooled_feedback_refresh PROPERTIES
+			LABELS "networking;transport;optional;pooled;feedback" TIMEOUT 180 RUN_SERIAL TRUE)
 		add_test(NAME gargantuan_physical_gns_probe_self_test COMMAND gargantuan_physical_gns_funding_probe --self-test)
 		add_test(NAME gargantuan_physical_gns_probe_invalid_arguments COMMAND gargantuan_physical_gns_funding_probe server 10.253.3.2 39450 3)
 		set_tests_properties(gargantuan_physical_gns_probe_self_test gargantuan_physical_gns_probe_invalid_arguments

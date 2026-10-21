@@ -13,16 +13,19 @@ from typing import NamedTuple
 
 RECORD = struct.Struct("<HHIIIIIQQQQQQQ")
 HEADER = re.compile(
-    rb"format=GargantuanFarmPublicationV1\trun=([A-Za-z0-9_-]{1,64})"
+    rb"format=GargantuanFarmPublicationV([12])\trun=([A-Za-z0-9_-]{1,64})"
     rb"\trole=(SERVER|CLIENT)\tslot=(-1|[0-9]{1,2})\tnonce=([0-9]+)"
     rb"\tcount=([0-9]+)\tdropped=([0-9]+)\tdecode_failures=([0-9]+)\n"
 )
 RPC_STAGES = set(range(14, 24))
 TRAFFIC_STAGES = {24, 25, 26, 27}
-SERVER_STAGES = set(range(1, 9)) | {11, 12, 13} | RPC_STAGES | TRAFFIC_STAGES
-CLIENT_STAGES = {9, 10} | RPC_STAGES | TRAFFIC_STAGES
+SERVER_STAGES = set(range(1, 9)) | {11, 12, 13, 28, 29} | RPC_STAGES | TRAFFIC_STAGES
+CLIENT_STAGES = {9, 10, 28} | RPC_STAGES | TRAFFIC_STAGES
 SERVER_CAP = 4_194_304
 CLIENT_CAP = 131_072
+RPC_NATIVE_RECEIVE = 28
+MAXIMUM_ADAPTER_EVENT_DEPTH = 1_048_576
+CHARACTER_RELATIONSHIP_RETIRED = 29
 
 
 class PublicationRecord(NamedTuple):
@@ -40,6 +43,28 @@ class PublicationRecord(NamedTuple):
     ControlEpoch: int
     MaterializationEpoch: int
     FrameSequence: int
+    # Header metadata only. The binary record remains exactly 80 bytes.
+    SchemaVersion: int = 1
+
+    # Stage 28 metadata is orthogonal to the existing RPC causal stages. The
+    # native GNS clock age starts at complete ordered-message readiness, not
+    # the first UDP packet. Nanoseconds is sampled after dequeue and fixed
+    # prefix selection, before decode/copy and adapter QueueEvent.
+    @property
+    def RpcReadyQueueAgeMicroseconds(self):
+        return self.Tick if self.Stage == RPC_NATIVE_RECEIVE else None
+
+    @property
+    def RpcAdapterPendingEventDepth(self):
+        return self.DueTick if self.Stage == RPC_NATIVE_RECEIVE else None
+
+    @property
+    def RpcAgeSamplingSpanNanoseconds(self):
+        return self.FrameSequence - self.Nanoseconds if self.Stage == RPC_NATIVE_RECEIVE else None
+
+    @property
+    def RpcNativeMessageNumber(self):
+        return self.MaterializationEpoch if self.Stage == RPC_NATIVE_RECEIVE else None
 
 
 def Require(Condition, Message):
@@ -55,9 +80,10 @@ def IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, Expecte
         HeaderLine = Stream.readline(513)
         Match = HEADER.fullmatch(HeaderLine)
         Require(Match is not None, "invalid bounded trace header")
-        RunId = Match.group(1).decode("ascii")
-        Role = Match.group(2).decode("ascii")
-        Slot, Nonce, Count, Dropped, DecodeFailures = map(int, Match.groups()[2:])
+        Version = int(Match.group(1))
+        RunId = Match.group(2).decode("ascii")
+        Role = Match.group(3).decode("ascii")
+        Slot, Nonce, Count, Dropped, DecodeFailures = map(int, Match.groups()[3:])
         Require((RunId, Role, Slot, Nonce) ==
                 (ExpectedRunId, ExpectedRole, ExpectedSlot, ExpectedNonce), "trace identity mismatch")
         Cap = SERVER_CAP if Role == "SERVER" else CLIENT_CAP
@@ -66,15 +92,17 @@ def IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, Expecte
         Require(PathValue.stat().st_size == len(HeaderLine) + Count * RECORD.size,
                 "trace length differs from declared records")
         Stages = SERVER_STAGES if Role == "SERVER" else CLIENT_STAGES
+        if Version == 1:
+            Stages = Stages - {CHARACTER_RELATIONSHIP_RETIRED}
         PreviousNs = 0
         Counts = {}
         for _ in range(Count):
             Bytes = Stream.read(RECORD.size)
             Require(len(Bytes) == RECORD.size, "truncated trace record")
-            Value = PublicationRecord(*RECORD.unpack(Bytes))
+            Value = PublicationRecord(*RECORD.unpack(Bytes), SchemaVersion=Version)
             (Stage, Flags, ConnectionSlot, ConnectionGeneration, ObjectSlot, ObjectGeneration,
              ServiceBytes, Nanoseconds, Tick, Sequence, DueTick, ControlEpoch,
-             MaterializationEpoch, FrameSequence) = Value
+             MaterializationEpoch, FrameSequence) = Value[:14]
             Require(Stage in Stages and Flags <= 1 and Nanoseconds >= PreviousNs,
                     "invalid stage, flags, or process-local time order")
             PreviousNs = Nanoseconds
@@ -83,7 +111,7 @@ def IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, Expecte
                         ObjectGeneration > 0 and Tick > 0 and Sequence > 0 and ControlEpoch > 0 and
                         MaterializationEpoch > 0 and FrameSequence > 0 and ServiceBytes > 0,
                         "packet stage lacks full Character identity")
-            if Stage == 11:
+            if Stage in (11, CHARACTER_RELATIONSHIP_RETIRED):
                 Require(Flags == 0 and ConnectionSlot > 0 and ConnectionGeneration > 0 and
                         ObjectSlot > 0 and ObjectGeneration > 0 and Nanoseconds > 0 and
                         Tick > 0 and ServiceBytes == Sequence == DueTick == ControlEpoch ==
@@ -103,6 +131,17 @@ def IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, Expecte
                         (ServiceBytes > 0 if Stage in (16, 17, 21, 22) else ServiceBytes == 0) and
                         Tick == 0 and Flags == 0,
                         "RPC stage lacks request/remote identity or carries unrelated fields")
+            if Stage == RPC_NATIVE_RECEIVE:
+                Require(Flags == 0 and ConnectionSlot > 0 and ConnectionGeneration > 0 and
+                        ObjectSlot > 0 and ObjectGeneration > 0 and Sequence > 0 and
+                        Nanoseconds > 0 and ServiceBytes >= 32 and
+                        Tick <= (1 << 63) - 1 and DueTick <= MAXIMUM_ADAPTER_EVENT_DEPTH and
+                        ControlEpoch in (3, 4, 5) and 0 < MaterializationEpoch <= (1 << 63) - 1 and
+                        FrameSequence >= Nanoseconds,
+                        "RPC native dequeue identity, complete-ready age, event depth or protocol invalid")
+                # The next record cannot precede the end of this sampled span.
+                # Legacy stages keep their existing point-timestamp frontier.
+                PreviousNs = FrameSequence
             if Stage in (24, 25, 27):
                 Require(ConnectionSlot > 0 and ConnectionGeneration > 0 and ServiceBytes > 32 and
                         DueTick in (0, 1, 2) and FrameSequence > 0 and
@@ -129,9 +168,10 @@ def Validate(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, ExpectedNo
     for Value in IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot, ExpectedNonce):
         Counts[Value.Stage] = Counts.get(Value.Stage, 0) + 1
         Count += 1
+        Version = Value.SchemaVersion
     return {"RunId": ExpectedRunId, "Role": ExpectedRole, "Slot": ExpectedSlot,
             "Nonce": ExpectedNonce, "Records": Count, "Stages": Counts,
-            "Bytes": Path(PathValue).stat().st_size, "CrossHostLatency": "NOT_MEASURED"}
+            "Bytes": Path(PathValue).stat().st_size, "SchemaVersion": Version, "CrossHostLatency": "NOT_MEASURED"}
 
 
 if __name__ == "__main__":

@@ -15,9 +15,11 @@ from pathlib import Path
 import re
 import secrets
 import socket
+import stat
 import subprocess
 import sys
 import time
+import threading
 import uuid
 
 # The pinned worker Python uses python312._pth and omits the script directory.
@@ -34,6 +36,65 @@ MAX_SECONDS = 3050  # 3000 s capture finish plus 50 s outer cleanup guard; no li
 NODE_TOKEN_NAME = "node-token.secret"
 
 
+def StartOwned(Args, Directory, Index):
+    """Only consume the explicitly exported, hash-verified upstream primitive."""
+    Directory = UnlinkedPath(Directory).resolve(strict=True)
+    Members = {Entry["Name"]: Entry["Sha256"] for Entry in Index["Files"]}
+    for Name in ("dependency.py", "upstream.lock.json"):
+        File = UnlinkedPath(Directory / Name)
+        if Name not in Members or Digest(File) != Members[Name]:
+            raise ValueError("[Qualification:FarmOuter] staged owned dependency changed or missing")
+    Spec = importlib.util.spec_from_file_location("farm32_owned_dependency", Directory / "dependency.py")
+    if Spec is None or Spec.loader is None:
+        raise ValueError("[Qualification:FarmOuter] staged owned dependency is unavailable")
+    Dependency = importlib.util.module_from_spec(Spec)
+    Spec.loader.exec_module(Dependency)
+    Root = Dependency.GetRoot()
+    if Root.resolve() != (Directory / ".agent-coordinator").resolve():
+        raise ValueError("[Qualification:FarmOuter] owned dependency escaped its stage")
+    Lock = ReadJson(Directory / "upstream.lock.json")
+    Names = ("agent_coordinator/__init__.py", "agent_coordinator/owned_process.py",
+             "agent_coordinator/windows_owned_process.py")
+    if not set(Names).issubset(Lock["Files"]):
+        raise ValueError("[Qualification:FarmOuter] owned runner source export is not pinned")
+    Alias = "_farm32_stage_agent_coordinator"
+    for Name, Relative in zip((Alias, Alias + ".owned_process", Alias + ".windows_owned_process"), Names):
+        File = UnlinkedPath(Root / Relative)
+        if Digest(File) != Lock["Files"][Relative]:
+            raise ValueError("[Qualification:FarmOuter] owned runner source changed")
+        Cached = sys.modules.get(Name)
+        if Cached is not None and Path(getattr(Cached, "__file__", "")).resolve() != File:
+            raise ValueError("[Qualification:FarmOuter] unexpected staged ownership module")
+    if Alias not in sys.modules:
+        Spec = importlib.util.spec_from_file_location(Alias, Root / Names[0],
+                                                     submodule_search_locations=[str(Root / "agent_coordinator")])
+        Package = importlib.util.module_from_spec(Spec)
+        sys.modules[Alias] = Package
+        try:
+            Spec.loader.exec_module(Package)
+        except BaseException:
+            sys.modules.pop(Alias, None)
+            raise
+    Module = importlib.import_module(Alias + ".owned_process")
+    return Module.OwnedProcess.Start(Args, Directory)
+
+
+def DrainOwned(Stream, Output, Errors):
+    Total = 0
+    try:
+        while Chunk := Stream.read(65536):
+            Keep = max(0, MAX_LOG + 1 - Total)
+            Output.write(Chunk[:Keep])
+            Output.flush()
+            Total += len(Chunk)
+            if Total > MAX_LOG and not Errors:
+                Errors.append("owned process log bound")
+    except (OSError, ValueError) as Error:
+        Errors.append(str(Error))
+    finally:
+        Stream.close()
+
+
 def Digest(File):
     with Path(File).open("rb") as Stream:
         return hashlib.file_digest(Stream, "sha256").hexdigest()
@@ -47,11 +108,83 @@ def ReadJson(File):
 
 
 def Prepare(Root):
-    Root = Path(Root).resolve()
+    Root = UnlinkedPath(Root)
     if Root.exists() or not Root.parent.is_dir():
         raise ValueError("[Qualification:FarmOuter] stage root already exists")
+    ParentIdentity = Root.parent.stat()
     Root.mkdir(mode=0o700)
+    UnlinkedPath(Root)
+    CurrentParent = Root.parent.stat()
+    if (ParentIdentity.st_dev, ParentIdentity.st_ino) != (CurrentParent.st_dev, CurrentParent.st_ino):
+        raise ValueError("[Qualification:FarmOuter] preparation parent changed")
     Harden(Root)
+    UnlinkedPath(Root)
+
+
+def UnlinkedPath(Value):
+    if not isinstance(Value, (str, Path)) or not 1 <= len(str(Value)) <= 512:
+        raise ValueError("[Qualification:FarmOuter] invalid preparation path")
+    Root = Path(Value)
+    if not Root.is_absolute() or str(Root).startswith("\\\\") or ".." in Root.parts:
+        raise ValueError("[Qualification:FarmOuter] preparation path is not local and absolute")
+    for Current in (Root, *Root.parents):
+        try:
+            Attributes = Current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(Attributes.st_mode) or \
+                getattr(Attributes, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise ValueError("[Qualification:FarmOuter] preparation reparse path is forbidden")
+    return Root.resolve()
+
+
+def PrepareCapture(Root, IndexPath):
+    """Provision only the capture root named by the verified one-use role ticket."""
+    Root = UnlinkedPath(Root).resolve(strict=True)
+    if UnlinkedPath(IndexPath) != Root / "stage-index.json":
+        raise ValueError("[Qualification:FarmOuter] capture preparation index escaped its stage")
+    Index = Verify(Root, IndexPath)
+    Required = {"ticket.json", "farm-config.json", "capture-config.json", "farm_campaign_runner.py",
+                "farm_capture_campaign.py", "farm_lifecycle.py", "private_ticket_acl.py",
+                "dependency.py", "upstream.lock.json", "farm_capture_directions.py"}
+    if not Required <= {Entry["Name"] for Entry in Index["Files"]}:
+        raise ValueError("[Qualification:FarmOuter] capture preparation stage is incomplete")
+    Ticket = ReadJson(Root / "ticket.json")
+    # Load only verified stage modules. VerifyRole binds the pinned configs,
+    # identity, manifest, workflow and fresh actual-role preflight.
+    Modules = []
+    for Name in ("farm_campaign_runner", "farm_capture_campaign"):
+        Spec = importlib.util.spec_from_file_location("prepared_" + Name, Root / (Name + ".py"))
+        Module = importlib.util.module_from_spec(Spec)
+        Spec.loader.exec_module(Module)
+        Modules.append(Module)
+    Campaign, Capture = Modules
+    for Name, BaseName in (("FarmConfigPath", "farm-config.json"),
+                           ("CaptureConfigPath", "capture-config.json"),
+                           ("CaptureControllerPath", "farm_capture_campaign.py")):
+        if UnlinkedPath(Ticket.get(Name, "")) != Root / BaseName:
+            raise ValueError("[Qualification:FarmOuter] capture preparation escaped its stage")
+    _, Farm, _ = Campaign.VerifyRole(Ticket, Ticket.get("Role"))
+    Config = Capture.ReadConfig(Root / "capture-config.json", CaptureRootMustExist=False)
+    CaptureRoot = Config["CaptureRoot"]
+    Protected = [Root, *[UnlinkedPath(Farm[Name]) for Name in
+                         ("EvidenceRoot", "PackageRoot", "RunRegistryRoot")],
+                 UnlinkedPath(Ticket["JournalRoot"]), UnlinkedPath(Ticket["ResultPath"])]
+    if "NodeStagePath" in Ticket:
+        Protected.append(UnlinkedPath(Ticket["NodeStagePath"]).parent)
+    for Boundary in Protected:
+        if CaptureRoot == Boundary or CaptureRoot in Boundary.parents or Boundary in CaptureRoot.parents:
+            raise ValueError("[Qualification:FarmOuter] capture preparation overlaps a protected root")
+    if CaptureRoot.exists():
+        raise ValueError("[Qualification:FarmOuter] capture preparation root already exists")
+    Prepare(CaptureRoot)
+    Verify(Root, IndexPath)
+    # Exercise the exact consumer before any service, capture or role is started.
+    Configured = Capture.Configured(Root / "capture-config.json")
+    if any(Configured[Name] != Config[Name] for Name in
+           ("CaptureRoot", "RoleEvidenceRoot", "RunId", "CoordinatorRunId", "Role")):
+        raise ValueError("[Qualification:FarmOuter] capture preparation config changed")
+    print("[Qualification:FarmOuter] CAPTURE_ROOT_PREPARED_CONFIGURED_ONLY", flush=True)
 
 
 def NewNodeToken(Root):
@@ -218,13 +351,52 @@ def Run(Root, IndexPath, ConfigPath, Action):
     Error = Root / (Action + ".stderr.log")
     AbortMarker = Root / (Action + ".abort.request")
     Terminal = Root / (Action + ".terminal.json")
-    if AbortMarker.exists() or Terminal.exists():
+    DiagnosticPath = Root / (Action + ".terminal-diagnostic.json")
+    if AbortMarker.exists() or Terminal.exists() or DiagnosticPath.exists():
         raise ValueError("[Qualification:FarmOuter] stale abort or terminal marker")
     with Output.open("xb") as Stdout, Error.open("xb") as Stderr:
-        Process = subprocess.Popen([sys.executable, "-B", str(Root / Config["RunnerName"]),
-                                    Action, str(Root / Config["InputName"])],
-                                   cwd=str(Root), stdout=Stdout, stderr=Stderr,
-                                   creationflags=Flags)
+        Args = [sys.executable, "-B", str(Root / Config["RunnerName"]),
+                Action, str(Root / Config["InputName"])]
+        Tree = None
+        Drains, DrainErrors = [], []
+        if os.name == "nt":
+            Process = None
+            try:
+                Process, Tree = StartOwned(Args, Root, Index)
+                Process.stdin.close()
+                for Stream, OutputFile in ((Process.stdout, Stdout), (Process.stderr, Stderr)):
+                    Thread = threading.Thread(target=DrainOwned, args=(Stream, OutputFile, DrainErrors), daemon=True)
+                    Thread.start()
+                    Drains.append(Thread)
+            except BaseException as Failure:
+                CleanupError = None
+                if Tree is not None:
+                    try:
+                        Tree.Close()
+                    except BaseException as CleanupFailure:
+                        CleanupError = str(CleanupFailure)[:512]
+                DrainDeadline = time.monotonic() + 5
+                for Thread in Drains:
+                    Thread.join(timeout=max(0, DrainDeadline - time.monotonic()))
+                if Process is not None:
+                    for Stream in (Process.stdout, Process.stderr):
+                        if not Stream.closed:
+                            try:
+                                Stream.close()
+                            except (OSError, ValueError) as CloseFailure:
+                                CleanupError = ((CleanupError or "") + "; output release: " +
+                                                str(CloseFailure))[:512]
+                Diagnostic = {"Format": "GargantuanFarm32TerminalDiagnostic", "Version": 1,
+                              "RunId": RunId, "Action": Action, "Phase": "OWNED_CHILD_STARTUP",
+                              "ChildPid": Process.pid if Process is not None else None,
+                              "ChildTreeReaped": False, "ErrorType": type(Failure).__name__,
+                              "Error": str(Failure)[:512], "CleanupError": CleanupError}
+                with DiagnosticPath.open("xb") as Stream:
+                    Stream.write((json.dumps(Diagnostic, sort_keys=True) + "\n").encode("utf-8"))
+                raise
+        else:
+            Process = subprocess.Popen(Args, cwd=str(Root), stdout=Stdout, stderr=Stderr,
+                                       creationflags=Flags)
         Deadline = time.monotonic() + MAX_SECONDS
         Outcome = "FAILED"
         try:
@@ -235,7 +407,7 @@ def Run(Root, IndexPath, ConfigPath, Action):
                         raise ValueError("[Qualification:FarmOuter] abort marker identity mismatch")
                     Outcome = "ABORTED"
                     raise RuntimeError("[Qualification:FarmOuter] run-bound abort requested")
-                if time.monotonic() >= Deadline or Output.stat().st_size > MAX_LOG or Error.stat().st_size > MAX_LOG:
+                if DrainErrors or time.monotonic() >= Deadline or Output.stat().st_size > MAX_LOG or Error.stat().st_size > MAX_LOG:
                     Outcome = "BOUND_EXCEEDED"
                     raise TimeoutError("[Qualification:FarmOuter] owned process time or log bound")
                 time.sleep(0.1)
@@ -244,25 +416,49 @@ def Run(Root, IndexPath, ConfigPath, Action):
             Outcome = "COMPLETED"
         finally:
             WasRunning = Process.poll() is None
-            Reaped = StopOwned(Process)
+            Reaped = False
+            CleanupError = None
+            try:
+                Reaped = Tree.Close() if Tree is not None else StopOwned(Process)
+            except (OSError, TimeoutError, subprocess.TimeoutExpired) as Failure:
+                CleanupError = str(Failure)
+            DrainDeadline = time.monotonic() + 5
+            for Thread in Drains:
+                Thread.join(timeout=max(0, DrainDeadline - time.monotonic()))
+            if any(Thread.is_alive() for Thread in Drains):
+                Reaped = False
+                CleanupError = "owned output did not drain"
+            OutputFailed = bool(DrainErrors) or Output.stat().st_size > MAX_LOG or Error.stat().st_size > MAX_LOG
+            if OutputFailed and Outcome == "COMPLETED":
+                Outcome = "BOUND_EXCEEDED"
             # A failed runner that already exited may have left an unowned
             # descendant; PID-tree termination can only prove the live case.
-            if Outcome != "COMPLETED" and not WasRunning:
+            if Tree is None and Outcome != "COMPLETED" and not WasRunning:
                 Reaped = False
             Row = {"Format": "GargantuanFarm32Terminal", "Version": 1,
                    "RunId": RunId, "Action": Action, "ChildPid": Process.pid,
-                   "ChildExitCode": Process.poll(), "ChildTreeReaped": Reaped,
+                   "ChildExitCode": Process.returncode if Tree is not None else Process.poll(), "ChildTreeReaped": Reaped,
                    "Outcome": Outcome,
                    "EndedUtc": datetime.now(timezone.utc).isoformat()}
             with Terminal.open("xb") as Stream:
                 Stream.write((json.dumps(Row, sort_keys=True) + "\n").encode("utf-8"))
+            if CleanupError is not None or OutputFailed:
+                Diagnostic = {"Format": "GargantuanFarm32TerminalDiagnostic", "Version": 1,
+                              "RunId": RunId, "Action": Action, "ChildPid": Process.pid,
+                              "CleanupError": CleanupError[:512] if CleanupError is not None else None,
+                              "OutputError": (DrainErrors[0] if DrainErrors else "owned process log bound")[:512]
+                                             if OutputFailed else None}
+                with DiagnosticPath.open("xb") as Stream:
+                    Stream.write((json.dumps(Diagnostic, sort_keys=True) + "\n").encode("utf-8"))
             if not Reaped:
                 raise RuntimeError("[Qualification:FarmOuter] owned child tree was not reaped")
+            if OutputFailed:
+                raise RuntimeError("[Qualification:FarmOuter] owned process output failed or exceeded log bound")
 
 
 def Main():
     Parser = argparse.ArgumentParser(description=__doc__)
-    Parser.add_argument("Action", choices=("prepare", "new-node-token", "retire-node-token",
+    Parser.add_argument("Action", choices=("prepare", "prepare-capture", "new-node-token", "retire-node-token",
                                            "retire-node-tls",
                                            "verify", "digest", "probe", "abort", "host", "role"))
     Parser.add_argument("Root")
@@ -271,6 +467,8 @@ def Main():
     Args = Parser.parse_args()
     if Args.Action == "prepare" and Args.IndexOrPort is None:
         Prepare(Args.Root)
+    elif Args.Action == "prepare-capture" and Args.IndexOrPort is not None and Args.ConfigOrRunId is None:
+        PrepareCapture(Args.Root, Args.IndexOrPort)
     elif Args.Action == "new-node-token" and Args.IndexOrPort is None:
         NewNodeToken(Args.Root)
     elif Args.Action == "retire-node-token" and Args.IndexOrPort is None:

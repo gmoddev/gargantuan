@@ -1,8 +1,11 @@
 # Pure offline evidence fixture; never starts a process or contacts an endpoint.
 function Save-RecoveryCausalFixture {
-	param([string]$Root, [string]$RunId, [string]$Case, [long]$Tail, [long]$CessationMicroseconds)
+	param([string]$Root, [string]$RunId, [string]$Case, [long]$Tail, [long]$CessationMicroseconds,
+		[long]$NativeBaselineMicroseconds = 0)
 	$Lines = [Collections.Generic.List[string]]::new()
-	$Lines.Add("format=GargantuanRecoveryCausalV1`trun=$RunId`tcase=$Case")
+	if ($NativeBaselineMicroseconds) {
+		$Lines.Add("format=GargantuanRecoveryCausalV2`trun=$RunId`tcase=$Case`tnative_baseline_us=$NativeBaselineMicroseconds")
+	} else { $Lines.Add("format=GargantuanRecoveryCausalV1`trun=$RunId`tcase=$Case") }
 	for ($Peer = 1; $Peer -le 32; $Peer++) {
 		$Lines.Add((@('capture', $Peer, 1, 100, 1, ($Tail - 1), $Tail, 2, 1, 0, 0, 0, 0, 0, 0, 0, 100, 100, 100, 0, 0) -join "`t"))
 	}

@@ -59,11 +59,11 @@ class FarmPublicationJoinTests(unittest.TestCase):
                 R(10, 1100, Bytes=74, Seq=19, Control=3, Material=7, Frame=11)]
 
     def Write(self, ServerRecords=None, ClientRecords=None, ServerDropped=0,
-              ClientDropped=0, ServerDecode=0, ClientDecode=0, RunId=None):
+              ClientDropped=0, ServerDecode=0, ClientDecode=0, RunId=None, Version=1):
         if RunId is not None:
             self.RunId = RunId
         def Trace(PathValue, Role, Slot, Nonce, Records, Dropped, Decode):
-            Header = (f"format=GargantuanFarmPublicationV1\trun={self.RunId}\trole={Role}"
+            Header = (f"format=GargantuanFarmPublicationV{Version}\trun={self.RunId}\trole={Role}"
                       f"\tslot={Slot}\tnonce={Nonce}\tcount={len(Records)}"
                       f"\tdropped={Dropped}\tdecode_failures={Decode}\n").encode()
             PathValue.write_bytes(Header + b"".join(Records))
@@ -361,6 +361,122 @@ class FarmPublicationJoinTests(unittest.TestCase):
         self.ServerRecords += [R(3, 270, OS=9, Due=101)]
         self.Write()
         with self.assertRaisesRegex(ValueError, "conservation incomplete"):
+            self.Analyze()
+
+    def test_v2_part_grpl_leave_does_not_end_character_relationship_or_due(self):
+        R = self.Record
+        self.ServerRecords += [R(3, 270, OS=9, Due=101), self.Retirement(280),
+                               R(3, 290, OS=9, Due=101), R(29, 300, OS=9)]
+        self.Write(Version=2)
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["SchemaVersion"], 2)
+        self.assertEqual(Result["Server"]["GrplRetirementDiagnostic"], 1)
+        self.assertEqual(Result["Server"]["DueRediscoveries"], 1)
+        self.assertEqual(Result["Server"]["RetiredDue"], 1)
+        self.assertEqual(Result["Server"]["Retired"], 1)
+        # An unsuccessful or merely structural leave lacks Stage29: the old
+        # confirmed obligation remains, and cannot become retrospectively complete.
+        self.Write(ServerRecords=self.ServerRecords[:-1], Version=2)
+        with self.assertRaisesRegex(ValueError, "conservation incomplete"):
+            self.Analyze()
+
+    def test_v2_grpl_leave_cannot_hide_same_lifetime_due_change(self):
+        R = self.Record
+        self.ServerRecords += [R(3, 270, OS=9, Due=101), self.Retirement(280),
+                               R(1, 300, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               R(3, 310, OS=9, Tick=102, Due=102)]
+        self.Write(Version=2)
+        with self.assertRaisesRegex(ValueError, "confirmed due changed"):
+            self.Analyze()
+
+    def test_v2_character_grpl_and_gchr_end_are_one_retirement(self):
+        R = self.Record
+        self.ServerRecords[-1] = R(2, 260, Due=110)
+        self.ServerRecords += [R(3, 270, OS=9, Due=101), self.Retirement(280),
+                               R(29, 290, OS=9),
+                               R(1, 300, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               R(2, 310, OS=9, Tick=102, Due=103),
+                               R(1, 400, CS=0, CG=0, OS=0, OG=0, Tick=103),
+                               R(3, 410, OS=9, Tick=103, Due=103),
+                               self.Retirement(420, Tick=103), R(29, 430, OS=9, Tick=103)]
+        self.Write(Version=2)
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Retired"], 2)
+        self.assertEqual(Result["Server"]["GrplRetirementDiagnostic"], 2)
+        self.assertEqual(Result["Server"]["RetiredDue"], 2)
+        self.assertEqual(Result["Server"]["Due"], 3)
+
+    def test_v2_duplicate_end_and_wrong_generation_remain_fatal(self):
+        R = self.Record
+        Pending = self.ServerRecords + [R(3, 270, OS=9, Due=101)]
+        self.Write(ServerRecords=Pending + [R(29, 280, OS=9), R(29, 290, OS=9)], Version=2)
+        with self.assertRaisesRegex(ValueError, "duplicate retirement"):
+            self.Analyze()
+        for Changes in ({"OG": 3}, {"CG": 3}):
+            self.Write(ServerRecords=Pending + [R(29, 280, OS=9, **Changes)], Version=2)
+            with self.subTest(Changes=Changes), self.assertRaisesRegex(ValueError, "existing live relationship|ready connection identity"):
+                self.Analyze()
+
+    def test_v2_unknown_or_stale_owner_end_cannot_create_retirement_placeholder(self):
+        R = self.Record
+        for Changes in ({"OS": 999}, {"OG": 3}, {"CS": 99}, {"CG": 3}):
+            self.Write(ServerRecords=self.ServerRecords + [R(29, 270, **Changes)], Version=2)
+            with self.subTest(Changes=Changes), self.assertRaisesRegex(ValueError, "existing live relationship|ready connection identity"):
+                self.Analyze()
+        # V1 still permits an unknown raw GRPL retirement record as before.
+        self.Write(ServerRecords=self.ServerRecords + [self.Retirement(270, OS=999)])
+        self.assertEqual(self.Analyze()["Server"]["Retired"], 1)
+
+    def test_v2_cannot_mix_legacy_client_trace(self):
+        self.Write(Version=2)
+        self.Client.write_bytes(self.Client.read_bytes().replace(b'GargantuanFarmPublicationV2', b'GargantuanFarmPublicationV1', 1))
+        with self.assertRaisesRegex(ValueError, "schema versions differ"):
+            self.Analyze()
+
+    def test_v2_rootpart_leave_with_actual_character_end_and_reentry(self):
+        R = self.Record
+        self.ServerRecords[-1] = R(2, 260, Due=110)
+        self.ServerRecords += [R(3, 270, OS=9, Due=101), self.Retirement(280, OS=10),
+                               R(29, 290, OS=9),
+                               R(1, 300, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               R(2, 310, OS=9, Tick=102, Due=103),
+                               R(1, 400, CS=0, CG=0, OS=0, OG=0, Tick=103),
+                               R(3, 410, OS=9, Tick=103, Due=103), R(29, 420, OS=9, Tick=103)]
+        self.Write(Version=2)
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["GrplRetirementDiagnostic"], 1)
+        self.assertEqual(Result["Server"]["Retired"], 2)
+        self.assertEqual(Result["Server"]["RetiredDue"], 2)
+        self.assertEqual(Result["Server"]["Due"], 3)
+
+    def test_v2_end_before_confirmed_discovery_retires_only_forecast(self):
+        R = self.Record
+        self.ServerRecords[2:2] = [R(2, 120, OS=9, Tick=100, Due=101)]
+        self.ServerRecords += [R(29, 270, OS=9, Tick=100)]
+        self.Write(Version=2)
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["RetiredPending"], 1)
+        self.assertEqual(Result["Server"]["RetiredDue"], 0)
+        self.assertEqual(Result["Server"]["Due"], 1)
+        # V1's old tick check remains strict on the same old-form retirement.
+        self.ServerRecords[-1] = self.Retirement(270, Tick=100)
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "precedes the pending due"):
+            self.Analyze()
+
+    def test_v2_end_never_invents_accepted_or_client_applied_service(self):
+        R = self.Record
+        self.ServerRecords += [R(3, 270, OS=9, Due=101),
+                               R(4, 280, CS=0, CG=0, OS=9, Seq=20, Control=3),
+                               R(5, 290, CS=0, CG=0, OS=9, Seq=20),
+                               R(6, 300, OS=9, Seq=20, Due=101, Material=7),
+                               R(29, 310, OS=9)]
+        self.Write(Version=2)
+        with self.assertRaisesRegex(ValueError, "conservation incomplete"):
+            self.Analyze()
+        self.Write(ServerRecords=self.OrdinaryServer() + [R(29, 270)],
+                   ClientRecords=self.ClientPair()[:1], Version=2)
+        with self.assertRaises(ValueError):
             self.Analyze()
 
     def test_accepted_leave_retires_only_prior_confirmed_due(self):

@@ -203,6 +203,234 @@ class CaptureCampaignTests(unittest.TestCase):
         self.assertEqual([Row[1] for Row in Calls[:3]], ["start", "stop", "status"])
         self.assertEqual(Calls[3][-1], "Finalize")
 
+    def FailedServer(self, ExportCode=0, Lost=0, MissingRole=False, WrongRun=False, StopDenied=False, ExportTimeout=False, MissingStop=False, LostStopReply=False, CancelJoin=False):
+        Config = self.Config("SERVER")
+        Calls = []
+        def Runner(Command, **_):
+            Calls.append([str(Item) for Item in Command])
+            if Command[0] == str(Config["ServicePath"]):
+                Operation = Command[1]
+                if Operation == "start":
+                    (self.Capture / "farm32-capture-active.txt").write_text("active")
+                    self.CaptureMarker("SERVER")
+                    Marker = self.Capture / "farm32-netsh-owner.json"
+                    Row = campaign.ReadJson(Marker)
+                    Row.update(NativeStopRecorded=False, NativeEventsLost=None,
+                               NativeLogBuffersLost=None, NativeBuffersWritten=None)
+                    WriteJson(Marker, Row)
+                if StopDenied and Operation in ("stop", "status"):
+                    return subprocess.CompletedProcess(Command, 1, "", "stop denied")
+                if Operation == "stop" and not MissingStop:
+                    Marker = self.Capture / "farm32-netsh-owner.json"
+                    Row = campaign.ReadJson(Marker)
+                    Row.update(NativeStopRecorded=True, NativeEventsLost=Lost,
+                               NativeLogBuffersLost=0, NativeBuffersWritten=10)
+                    WriteJson(Marker, Row)
+                if Operation == "stop" and LostStopReply:
+                    return subprocess.CompletedProcess(Command, 1, "", "stop reply lost after owned stop")
+                return subprocess.CompletedProcess(Command, 0, json.dumps({
+                    "Success": True, "Operation": Operation, "RunId": self.RunId,
+                    "State": {"start": "running", "stop": "stopped", "status": "idle"}[Operation]}), "")
+            if ExportTimeout:
+                raise subprocess.TimeoutExpired(Command, campaign.FINALIZE_TIMEOUT_SECONDS,
+                                                output=b"partial export", stderr=b"partial error\xff")
+            if ExportCode:
+                return subprocess.CompletedProcess(Command, ExportCode, "export progress", "original export failure")
+            (self.Capture / "farm32-worker-capture.etl").write_bytes(b"etl")
+            (self.Capture / "farm32-worker-capture.pcapng").write_bytes(b"\x0a\x0d\x0d\x0a" + b"diagnostic")
+            (self.Capture / "farm32-capture-summary.txt").write_text("Total Events Lost 0\n")
+            return subprocess.CompletedProcess(Command, 0, "exported diagnostic", "")
+        if not MissingRole:
+            Result = {"RunId": str(uuid.uuid4()) if WrongRun else self.RunId, "Role": "Server",
+                      "Status": "FAIL", "Reason": "server exited 7", "CompletedUtc": datetime.now(timezone.utc).isoformat()}
+            ResultFile = self.RoleRoot / "result.json"
+            WriteJson(ResultFile, Result)
+            WriteJson(self.RoleRoot / "evidence-sha256.json", {"RunId": Result["RunId"], "Role": "Server",
+                "Files": [{"Name": "result.json", "Bytes": ResultFile.stat().st_size,
+                           "Sha256": campaign.Digest(ResultFile)}]})
+        Controller = campaign.FarmCaptureController(Config, Runner=Runner, Clock=self.Clock, Sleep=self.Clock.Sleep)
+        if CancelJoin:
+            Finish = Controller.Finish
+            def CancelledFinish():
+                WriteJson(self.CaptureRoot / (self.RunId + ".capture-controller-cancel.json"), {
+                    "Format": "GargantuanFarm32CaptureCancel", "Version": 1,
+                    "RunId": self.RunId, "CoordinatorRunId": self.CoordinatorRunId,
+                    "Role": "SERVER", "ReadyUtc": Controller.ReadyUtc,
+                    "Reason": "COORDINATOR_JOIN_FAILED", "JoinExitCode": 1})
+                return Finish()
+            Controller.Finish = CancelledFinish
+        with mock.patch.object(campaign, "Configured", return_value=Config), \
+                mock.patch.object(campaign, "FarmCaptureController", return_value=Controller):
+            with self.assertRaises(Exception):
+                campaign.RunRole("unused fixed test config")
+        return campaign.ReadJson(self.Capture / "capture-sha256.json"), Calls, Controller
+
+    def test_known_join_failure_cancels_before_role_deadline_and_exports_missing_role(self):
+        Row, Calls, Controller = self.FailedServer(MissingRole=True, CancelJoin=True)
+        self.assertLess(self.Clock.Value, 1)
+        self.assertEqual(Row["State"], "FAILED_DIAGNOSTIC")
+        self.assertIsNone(Row["RoleIndexSha256"])
+        self.assertTrue(Row["OwnedStopConfirmed"])
+        self.assertTrue(Row["OfflineExportSucceeded"])
+        self.assertIn("coordinator join failed exit_code=1", Row["FailureReasons"][0])
+        self.assertEqual([Call[1] for Call in Calls[:3]], ["start", "stop", "status"])
+        self.assertEqual(Calls[3][-1], "Finalize")
+        self.assertTrue(Controller.FinalizeAttempted)
+        self.assertFalse((self.RoleRoot / "evidence-sha256.json").exists())
+
+    def test_cancel_signal_is_exactly_bound_to_run_role_and_capture_readiness(self):
+        Config = self.Config("SERVER")
+        # ReadConfig normally canonicalizes this root. TEMP can contain a
+        # Windows 8.3 alias, so the supplied fixture must use that same path.
+        Config["CaptureRoot"] = Config["CaptureRoot"].resolve()
+        self.Capture.mkdir()
+        Controller = campaign.FarmCaptureController(Config, Clock=self.Clock, Sleep=self.Clock.Sleep)
+        Controller.Started = self.Clock()
+        Controller.ReadyUtc = datetime.now(timezone.utc).isoformat()
+        Index = self.RoleEvidence("SERVER").resolve()
+        Signal = {"Format": "GargantuanFarm32CaptureCancel", "Version": 1,
+                  "RunId": self.RunId, "CoordinatorRunId": self.CoordinatorRunId,
+                  "Role": "SERVER", "ReadyUtc": Controller.ReadyUtc,
+                  "Reason": "COORDINATOR_JOIN_FAILED", "JoinExitCode": 1}
+        Cancel = Controller.Config["CaptureRoot"] / (self.RunId + ".capture-controller-cancel.json")
+        Changes = (("RunId", str(uuid.uuid4())), ("CoordinatorRunId", str(uuid.uuid4())),
+                   ("Role", "CLIENT"), ("ReadyUtc", "2020-01-01T00:00:00Z"),
+                   ("Reason", "OTHER"), ("Version", True), ("JoinExitCode", True),
+                   ("JoinExitCode", "1"), ("JoinExitCode", 0), ("JoinExitCode", 2147483648),
+                   ("UnexpectedPath", "C:\\Unrelated"))
+        for Key, Value in Changes:
+            with self.subTest(Key=Key, Value=Value):
+                WriteJson(Cancel, {**Signal, Key: Value})
+                self.assertEqual(Controller.AwaitRole()[0], Index)
+                self.assertFalse(Controller.StopConfirmed)
+        for Text in ("{", "x" * 1025, json.dumps({Key: Value for Key, Value in Signal.items() if Key != "Role"})):
+            Cancel.write_text(Text, encoding="utf-8")
+            self.assertEqual(Controller.AwaitRole()[0], Index)
+        WriteJson(Cancel, Signal)
+        Stat = Path.lstat
+        def Attributes(File, **Options):
+            if File == Cancel:
+                return mock.Mock(st_mode=campaign.stat.S_IFREG,
+                                 st_file_attributes=campaign.stat.FILE_ATTRIBUTE_REPARSE_POINT)
+            return Stat(File, **Options)
+        with mock.patch.object(Path, "lstat", Attributes):
+            self.assertEqual(Controller.AwaitRole()[0], Index)
+        Open = Path.open
+        with mock.patch.object(Path, "open", autospec=True) as Opened:
+            def Bounded(File, *Args, **Options):
+                Stream = Open(File, *Args, **Options)
+                if File != Cancel:
+                    return Stream
+                Wrapped = mock.MagicMock(wraps=Stream)
+                Wrapped.__enter__.return_value = Wrapped
+                Wrapped.__exit__.side_effect = lambda *Unused: Stream.close()
+                def ReadBounded(Maximum):
+                    self.assertEqual(Maximum, 1025)
+                    return Stream.read(Maximum)
+                Wrapped.read.side_effect = ReadBounded
+                return Wrapped
+            Opened.side_effect = Bounded
+            with self.assertRaisesRegex(RuntimeError, "coordinator join failed exit_code=1"):
+                Controller.AwaitRole()
+            CancelStream = next(Call for Call in Opened.call_args_list if Call.args[0] == Cancel)
+            self.assertEqual(CancelStream.args[1:], ("rb",))
+        with self.assertRaisesRegex(RuntimeError, "coordinator join failed exit_code=1"):
+            Controller.AwaitRole()
+        self.assertEqual(self.Clock.Value, 0)
+
+    def test_native_fail_without_started_time_exports_diagnostic_and_preserves_failure(self):
+        Row, Calls, _ = self.FailedServer()
+        self.assertEqual(Row["State"], "FAILED_DIAGNOSTIC")
+        self.assertTrue(Row["OwnedStopConfirmed"])
+        self.assertTrue(Row["OfflineExportSucceeded"])
+        self.assertEqual(Row["RoleIndexSha256"], campaign.Digest(self.RoleRoot / "evidence-sha256.json"))
+        self.assertEqual([Call[1] for Call in Calls[:3]], ["start", "stop", "status"])
+        self.assertEqual(Calls[3][-1], "Finalize")
+        self.assertEqual(campaign.ReadJson(self.RoleRoot / "result.json")["Reason"], "server exited 7")
+        self.assertTrue((self.Capture / "capture-controller-incomplete.json").is_file())
+
+    def test_failure_diagnostic_cannot_bind_as_qualified_capture(self):
+        self.FailedServer()
+        Coordinator = self.Root / "coordinator.json"
+        WriteJson(Coordinator, {"RunId": self.CoordinatorRunId, "Success": True})
+        with self.assertRaisesRegex(ValueError, "binding mismatch"):
+            campaign.BindReceipt(self.RunId, self.CoordinatorRunId, Coordinator,
+                self.RoleRoot / "evidence-sha256.json", "unused client",
+                self.Capture / "capture-sha256.json", "unused client", self.Root / "receipt.json")
+        self.assertFalse((self.Root / "receipt.json").exists())
+
+    def test_diagnostic_missing_role_index_stays_unmeasured(self):
+        Row, _, _ = self.FailedServer(MissingRole=True)
+        self.assertIsNone(Row["RoleIndexSha256"])
+        self.assertEqual(Row["State"], "FAILED_DIAGNOSTIC")
+        self.assertGreaterEqual(self.Clock.Value, campaign.ROLE_DEADLINE_SECONDS)
+
+    def test_diagnostic_wrong_run_role_index_is_not_attributed(self):
+        Row, _, _ = self.FailedServer(WrongRun=True)
+        self.assertIsNone(Row["RoleIndexSha256"])
+
+    def test_diagnostic_export_requires_zero_loss_native_stop(self):
+        Row, Calls, _ = self.FailedServer(Lost=1)
+        self.assertFalse(Row["OfflineExportSucceeded"])
+        self.assertFalse(any(Call[-1] == "Finalize" for Call in Calls))
+        self.assertEqual(Row["State"], "FAILED_DIAGNOSTIC")
+
+    def test_diagnostic_export_requires_confirmed_idle(self):
+        Row, Calls, _ = self.FailedServer(StopDenied=True)
+        self.assertFalse(Row["OwnedStopConfirmed"])
+        self.assertFalse(Row["OfflineExportSucceeded"])
+        self.assertFalse(any(Call[-1] == "Finalize" for Call in Calls))
+        self.assertIn("farm32-netsh-owner.json", Row["UnsealedArtifacts"])
+        self.assertTrue(all(Member["Name"].startswith("capture-controller-") for Member in Row["Files"]))
+
+    def test_idle_without_native_stop_receipt_cannot_export(self):
+        Row, Calls, _ = self.FailedServer(MissingStop=True)
+        self.assertTrue(Row["OwnedStopConfirmed"])
+        self.assertFalse(Row["OfflineExportSucceeded"])
+        self.assertFalse(any(Call[-1] == "Finalize" for Call in Calls))
+
+    def test_lost_stop_reply_requires_idle_and_real_native_zero_loss_receipt(self):
+        Row, Calls, _ = self.FailedServer(LostStopReply=True)
+        self.assertTrue(Row["OwnedStopConfirmed"])
+        self.assertTrue(Row["OfflineExportSucceeded"])
+        self.assertEqual([Call[1] for Call in Calls[:3]], ["start", "stop", "status"])
+        self.assertEqual(sum(Call[-1] == "Finalize" for Call in Calls), 1)
+
+    def test_export_timeout_preserves_partial_bytes_and_never_retries(self):
+        Row, Calls, Controller = self.FailedServer(ExportTimeout=True)
+        Raw = campaign.ReadJson(self.Capture / "capture-controller-finalize-failure.json")
+        self.assertEqual(Raw["TimeoutSeconds"], campaign.FINALIZE_TIMEOUT_SECONDS)
+        self.assertEqual(Raw["Stdout"], "partial export")
+        self.assertEqual(Raw["Stderr"], "partial error\ufffd")
+        self.assertIsNone(Raw["ExitCode"])
+        self.assertFalse(Row["OfflineExportSucceeded"])
+        self.assertTrue(Controller.FinalizeAttempted)
+        self.assertEqual(sum(Call[-1] == "Finalize" for Call in Calls), 1)
+
+    def test_export_failure_retains_bounded_raw_result_and_never_retries(self):
+        Row, Calls, Controller = self.FailedServer(ExportCode=7)
+        self.assertFalse(Row["OfflineExportSucceeded"])
+        Raw = campaign.ReadJson(self.Capture / "capture-controller-finalize-failure.json")
+        self.assertEqual(Raw["ExitCode"], 7)
+        self.assertEqual(Raw["Stderr"], "original export failure")
+        self.assertEqual(Raw["Stdout"], "export progress")
+        Before = len(Calls)
+        with self.assertRaises(ValueError):
+            Controller.FailureEvidence(RuntimeError("another caller"))
+        self.assertEqual(len(Calls), Before)
+
+    def test_diagnostic_index_hashes_all_retained_members(self):
+        Row, _, _ = self.FailedServer()
+        for Member in Row["Files"]:
+            self.assertEqual(Member["Sha256"], campaign.Digest(self.Capture / Member["Name"]))
+            self.assertEqual(Member["Bytes"], (self.Capture / Member["Name"]).stat().st_size)
+
+    def test_fixed_operation_error_caps_retained_raw_output(self):
+        Result = subprocess.CompletedProcess([], 1, "x" * (campaign.MAX_TEXT_BYTES + 1), "error")
+        Error = campaign.FixedOperationError(Result)
+        self.assertEqual(len(Error.Result["Stdout"]), campaign.MAX_TEXT_BYTES)
+        self.assertTrue(Error.Result["OutputBoundExceeded"])
+
     def test_client_capture_is_owned_until_autostop(self):
         Config = self.Config("CLIENT")
 
