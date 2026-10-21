@@ -413,6 +413,16 @@ namespace gargantuan::network {
 			if (Value.Controller == Connection) Controlled.push_back(Id);
 		for (const auto Id : Controlled)
 			(void)RevokeControl(Id, AuthoritativeTick);
+		// A GCHR relationship is owned by this materialization, independently
+		// of which GRPL object or dependency ended the recipient's knowledge.
+		// Record once at the committed owner removal; control revocation alone
+		// does not end any remaining recipient relationship.
+		if (runtime_detail::PublicationLatencySelected(Connection))
+			for (const auto &[Character, Channel] : Peers.at(Connection).Materialized) {
+				(void)Channel;
+				runtime_detail::RecordPublicationLatency({.Stage = "CharacterRelationshipRetired",
+					.Connection = Connection, .Object = Character, .Tick = std::max(AuthoritativeTick, std::uint64_t{1})});
+			}
 		Peers.erase(Connection);
 		if (Peers.empty()) PublicationPeerCursor.reset();
 		return true;
@@ -444,11 +454,14 @@ namespace gargantuan::network {
 		}
 		(void)RevokeControl(Character, AuthoritativeTick);
 		for (auto &[Connection, Peer] : Peers) {
-			(void)Connection;
-			if (Peer.Materialized.erase(Character))
+			const bool Removed = Peer.Materialized.erase(Character) != 0;
+			if (Removed)
 				Peer.MaterializationEpoch = *NextMaterializationEpoch(Peer.MaterializationEpoch);
 			Peer.Unlink(Character);
 			Peer.Published.erase(Character);
+			if (Removed)
+				runtime_detail::RecordPublicationLatency({.Stage = "CharacterRelationshipRetired",
+					.Connection = Connection, .Object = Character, .Tick = std::max(AuthoritativeTick, std::uint64_t{1})});
 		}
 		Characters.erase(Found);
 		return true;
@@ -478,7 +491,9 @@ namespace gargantuan::network {
 		return true;
 	}
 
-	bool AuthoritativeCharacterNetwork::MarkUnmaterialized(ConnectionId Connection, ObjectId Character) {
+	bool AuthoritativeCharacterNetwork::MarkUnmaterialized(
+		ConnectionId Connection, ObjectId Character, std::uint64_t AuthoritativeTick
+	) {
 		auto Peer = Peers.find(Connection);
 		auto NextEpoch = Peer == Peers.end() ? std::nullopt
 											 : NextMaterializationEpoch(Peer->second.MaterializationEpoch);
@@ -486,6 +501,9 @@ namespace gargantuan::network {
 		Peer->second.MaterializationEpoch = *NextEpoch;
 		Peer->second.Unlink(Character);
 		Peer->second.Published.erase(Character);
+		runtime_detail::RecordPublicationLatency({.Stage = "CharacterRelationshipRetired",
+			.Connection = Connection, .Object = Character,
+			.Tick = std::max(AuthoritativeTick ? AuthoritativeTick : LastAuthoritativeTick, std::uint64_t{1})});
 		auto Found = Characters.find(Character);
 		if (Found != Characters.end() && Found->second.Controller == Connection)
 			(void)RevokeControl(Character, std::max<std::uint64_t>(LastAuthoritativeTick, 1));
@@ -1098,8 +1116,13 @@ namespace gargantuan::network {
 			),
 			.ActiveAction = Runtime.ActiveAction,
 		};
-		runtime_detail::RecordPublicationLatency({.Stage = "StateBuilt", .Object = Character,
-			.Tick = AuthoritativeTick, .Sequence = Result.StateSequence.Value(), .Epoch = Result.ControlEpoch.Value(), .Kind = 5});
+		// StateBuilt certifies an encodable snapshot, not an attempted candidate.
+		// Preserve the candidate return: callers still own rejection, counters,
+		// sequence advancement and due requeue. Only scoped diagnostics repeat
+		// the compact preflight; an inactive observer adds no encoding work.
+		if (runtime_detail::PublicationLatencySelected({}) && GetCompactCharacterStateEncodedBytes(Result) != 0)
+			runtime_detail::RecordPublicationLatency({.Stage = "StateBuilt", .Object = Character,
+				.Tick = AuthoritativeTick, .Sequence = Result.StateSequence.Value(), .Epoch = Result.ControlEpoch.Value(), .Kind = 5});
 		return Result;
 	}
 

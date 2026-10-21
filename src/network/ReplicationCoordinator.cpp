@@ -464,12 +464,21 @@ namespace gargantuan::network {
 						const auto &Record = FrozenJournalRecords[Index];
 						const auto *Name = std::get_if<PropertyUpdatedChange>(&Record.Payload);
 						const auto Accepted = Peer.AcceptedParents.find(Record.Object);
+						const bool NativeName = Name && Name->Replicated && !Name->DeclaringClassSchemaId &&
+							Name->PropertyName == "Name" && std::holds_alternative<std::string>(Name->Value);
+						// Match the producer's zero-operation coverage before its operation
+						// limit. Covered history and an unselected next record cannot make
+						// an otherwise exact Name-only size proof uncertain.
+						if (NativeName && Peer.View.Knows(Record.Object) &&
+							(CurrentNames.contains(Record.Object) || (Accepted != Peer.AcceptedParents.end() &&
+								Record.Sequence < Accepted->second.NameJournalEnd))) continue;
+						if (OperationCount == Transitions) break;
 						const auto Published = Peer.PublicationJournalEnds.find(Record.Object);
 						const auto CatalogObject = Catalog.find(Record.Object);
 						if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId ||
 							Name->PropertyName != "Name" || !std::holds_alternative<std::string>(Name->Value) ||
 							!Peer.View.Knows(Record.Object) || !Peer.View.RelevantObjects.contains(Record.Object) ||
-							Accepted == Peer.AcceptedParents.end() || Record.Sequence < Accepted->second.NameJournalEnd ||
+							Accepted == Peer.AcceptedParents.end() ||
 							(Published != Peer.PublicationJournalEnds.end() && Record.Sequence < Published->second) ||
 							CatalogObject == Catalog.end() || RetiredObjects.contains(Record.Object) ||
 							CatalogObject->second->Publication.Properties.contains("Name")) {
@@ -477,8 +486,7 @@ namespace gargantuan::network {
 							break;
 						}
 						const bool CoalescedName = Record.Sequence >= NameCoalescingBegin;
-						if (CoalescedName && !CurrentNames.insert(Record.Object).second) continue;
-						if (OperationCount == Transitions) break;
+						if (CoalescedName) CurrentNames.insert(Record.Object);
 						const auto &Value = CoalescedName
 							? CatalogObject->second->Publication.Name : std::get<std::string>(Name->Value);
 						const bool Inserted = CoalescedName
@@ -2084,14 +2092,15 @@ namespace gargantuan::network {
 					.AcceptedRevision = Peer->second.AcceptedRevision});
 			return Finish({{}, "No relevant replication changes are available"});
 		}
-		// Prove only an all-native-Name candidate that the normal encoder would
-		// reject for size. This is a lower bound, never an alternate serializer or
+		// Prove a native-Name/Attribute candidate that the normal encoder would
+		// reject for size. Name payload alone is a lower bound, never a serializer or
 		// admission estimate. Validate every selected value before skipping a retry:
 		// Frame::IsValid checks the whole candidate before the writer's size limit,
 		// so a bad later string must not disappear behind an earlier oversize prefix.
 		auto ProvenOversizedNames = [&]() {
 			if (!IncrementalEncodingOptimizationsEnabled || FrozenQuote || !PolicyManaged ||
 				MaximumTransitions <= 1 || Records.size() <= 1) return false;
+			runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightProofCalls);
 			if (Validation.Catalog.Scope != CatalogCursor.Scope ||
 				Validation.Catalog.NextSequence != CatalogCursor.NextSequence) {
 				Validation.Validated.clear();
@@ -2099,33 +2108,99 @@ namespace gargantuan::network {
 			}
 			std::set<ObjectId> CurrentNames;
 			std::size_t NameBytes = 0, OperationCount = 0;
+			std::vector<const ChangeRecord *> SelectedAttributes;
 			for (const auto *Record : Records) {
 				const auto *Name = std::get_if<PropertyUpdatedChange>(&Record->Payload);
 				const auto Accepted = Peer->second.AcceptedParents.find(Record->Object);
+				const bool NativeName = Name && Name->Replicated && !Name->DeclaringClassSchemaId &&
+					Name->PropertyName == "Name" && std::holds_alternative<std::string>(Name->Value);
+				if (NativeName && Peer->second.View.Knows(Record->Object) &&
+					(CurrentNames.contains(Record->Object) || (Accepted != Peer->second.AcceptedParents.end() &&
+						Record->Sequence < Accepted->second.NameJournalEnd))) continue;
+				if (OperationCount == MaximumTransitions) break;
 				const auto Published = Peer->second.PublicationJournalEnds.find(Record->Object);
 				const auto Object = Catalog.find(Record->Object);
-				if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId || Name->PropertyName != "Name" ||
-					!std::holds_alternative<std::string>(Name->Value) ||
-					!Peer->second.View.Knows(Record->Object) || !Peer->second.View.RelevantObjects.contains(Record->Object) ||
-					Accepted == Peer->second.AcceptedParents.end() || Record->Sequence < Accepted->second.NameJournalEnd ||
+				// Fixed opt-in reason counts identify the first selected proof blocker.
+				// They neither change selection nor retain source identity or values.
+				auto CountFilteredFallback = [&]() {
+					if ((Published != Peer->second.PublicationJournalEnds.end() && Record->Sequence < Published->second) ||
+						!Peer->second.View.RelevantObjects.contains(Record->Object))
+						runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightFilteredFallback);
+				};
+				if (!Name) {
+					if (const auto *Attribute = std::get_if<AttributeUpdatedChange>(&Record->Payload)) {
+						// Match the normal producer's filters before validating an emitted
+						// Attribute. This candidate contains no lifecycle operations, so
+						// accepted membership stays unchanged throughout this proof.
+						if ((Published != Peer->second.PublicationJournalEnds.end() && Record->Sequence < Published->second) ||
+							!Peer->second.View.RelevantObjects.contains(Record->Object) ||
+							!Peer->second.View.Knows(Record->Object)) continue;
+						// Pinned records outlive this call-local list. Attribute values are
+						// copied/validated only if Names alone prove this candidate too big.
+						SelectedAttributes.push_back(Record);
+						++OperationCount;
+						continue;
+					}
+					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightNonPropertyFallback);
+					if (std::holds_alternative<AttributeUpdatedChange>(Record->Payload))
+						runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightAttributeFallback);
+					CountFilteredFallback();
+					return false;
+				}
+				if (!Name->Replicated) {
+					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightNonReplicatedFallback);
+					CountFilteredFallback();
+					return false;
+				}
+				if (!NativeName) {
+					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightNonNameFallback);
+					CountFilteredFallback();
+					return false;
+				}
+				if (!Peer->second.View.Knows(Record->Object) || !Peer->second.View.RelevantObjects.contains(Record->Object) ||
+					Accepted == Peer->second.AcceptedParents.end() ||
 					(Published != Peer->second.PublicationJournalEnds.end() && Record->Sequence < Published->second) ||
 					Object == Catalog.end() || RetiredObjects.contains(Record->Object) ||
-					Object->second->Publication.Properties.contains("Name")) return false;
+					Object->second->Publication.Properties.contains("Name")) {
+					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightNameStateFallback);
+					CountFilteredFallback();
+					return false;
+				}
 				const bool Coalesced = Record->Sequence >= NameCoalescingBegin;
-				if (Coalesced && !CurrentNames.insert(Record->Object).second) continue;
-				if (OperationCount == MaximumTransitions) break;
+				if (Coalesced) CurrentNames.insert(Record->Object);
 				const auto &Value = Coalesced ? Object->second->Publication.Name : std::get<std::string>(Name->Value);
 				if (!Validation.Validated.contains(&Value)) {
 					if (Value.size() > MaximumProtocolStringBytes || Value.find('\0') != std::string::npos ||
-						Validation.Validated.size() == MaximumStructuralJournalRecordsPerCall) return false;
+						Validation.Validated.size() == MaximumStructuralJournalRecordsPerCall) {
+						runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightNameInvalidFallback);
+						return false;
+					}
 					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightValidationBytes, Value.size());
-					if (!IsValidProtocolUtf8(Value)) return false;
+					if (!IsValidProtocolUtf8(Value)) {
+						runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightNameInvalidFallback);
+						return false;
+					}
 					Validation.Validated.insert(&Value);
 				} else runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightCacheHits);
 				NameBytes += Value.size();
 				++OperationCount;
 			}
-			return NameBytes > MaximumFrameBytes;
+			if (NameBytes <= MaximumFrameBytes) return false;
+			// Do not hide malformed Attributes behind an oversized Name prefix.
+			// The list is bounded by the existing selected-operation/read limits and
+			// cannot survive this proof or create an alternative serialization queue.
+			for (const auto *Record : SelectedAttributes) {
+				const auto &Attribute = std::get<AttributeUpdatedChange>(Record->Payload);
+				runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightAttributeValidations);
+				const ReplicationOperation Operation{Peer->second.View.Epoch,
+					AttributeReplicationUpdate{Record->Object, Attribute.AttributeName, Attribute.Value}};
+				if ((Attribute.Value && !ReferencesKnown(Peer->second.View, *Attribute.Value)) || !Operation.IsValid()) {
+					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightNonPropertyFallback);
+					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightAttributeFallback);
+					return false;
+				}
+			}
+			return true;
 		};
 		if (ProvenOversizedNames()) {
 			// Keep the existing geometric attempt and full pinned-read charge. Only
@@ -2577,6 +2652,22 @@ namespace gargantuan::network {
 			if (!Peer.PendingTransitions.empty()) return true;
 		}
 		return false;
+	}
+
+	bool ReplicationCoordinator::HasPendingStructuralWork(ConnectionId Connection) const {
+		const auto Peer = Peers.find(Connection);
+		// Missing ownership cannot certify an empty, generation-valid source.
+		if (Peer == Peers.end() || !SourceRootId.IsValid() || CatalogCursor.Scope != SourceRootId ||
+			Peer->second.JournalCursor.Scope != SourceRootId ||
+			Peer->second.JournalCursor.NextSequence > CatalogCursor.NextSequence ||
+			Peer->second.PreparedCommit.has_value() || GetJournalLag(Connection) != 0 || HasPendingRelevance(Connection)) return true;
+		// Catalog refresh may not run when planning has no active peers. Read
+		// only the committed frontier; never certify a newer raw suffix empty.
+		// Detached cessation replay owns its frozen frontier, not later mutation.
+		if (FrozenQuote) return FrozenJournalTail != CatalogCursor.NextSequence;
+		if (!SourceRoot || SourceRoot->GetDestroyed() || SourceRoot->GetObjectId() != SourceRootId) return true;
+		const auto SourceCursor = ChangeJournal::Get().CreateCursor(SourceRootId);
+		return SourceCursor.Scope != SourceRootId || SourceCursor.NextSequence != CatalogCursor.NextSequence;
 	}
 
 	ReplicationScheduleResult

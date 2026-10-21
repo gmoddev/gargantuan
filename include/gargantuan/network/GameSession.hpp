@@ -55,6 +55,9 @@ namespace gargantuan::network {
 		bool AllowInsecureDevelopmentNetwork = false;
 		// Trusted startup-only server input; absent means legacy/unqualified.
 		std::optional<ReliableServiceProfile> ReliableService;
+		// Trusted startup-only client declaration of the canonical ordinary source
+		// class. It neither configures server funding nor changes the wire protocol.
+		bool DeclareNormalOrdinaryService = false;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();
@@ -84,6 +87,7 @@ namespace gargantuan::network {
 		std::uint64_t StructuralAckedFeedbackBytes = 0;
 		std::uint32_t StructuralFeedbackPeersObserved = 0;
 		std::uint64_t TransportConnections = 0;
+		std::uint64_t QualifiedOrdinaryQueueFailures = 0;
 		std::uint64_t AcceptedPeers = 0;
 		std::uint64_t ReadyPeers = 0;
 		std::uint64_t RejectedHandshakes = 0;

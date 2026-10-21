@@ -5,6 +5,7 @@
 #include "ReliableByteAdmission.hpp"
 #include "PooledReliableServiceFeedback.hpp"
 #include "PooledServiceDiagnostics.hpp"
+#include "OrdinaryServicePolicy.hpp"
 
 #include "GameSessionTestAccess.hpp"
 
@@ -26,6 +27,8 @@
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationTransport.hpp"
 #include "gargantuan/network/Scheduler.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/Players.hpp"
 
@@ -94,6 +97,7 @@ namespace gargantuan::network {
 			   StructuralReplication.IsValid() &&
 			   (!ReliableService || (Role == GameSessionRole::Server && ReliableService->IsValid() &&
 				ReliableService->MaximumConnections <= MaximumGameSessionPeers)) &&
+			   (!DeclareNormalOrdinaryService || Role == GameSessionRole::Client) &&
 			   (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint));
 	}
 
@@ -132,6 +136,7 @@ namespace gargantuan::network {
 			std::set<ObjectId> RemoteMaterializedObjects;
 			detail::SessionSendAllowance SendAllowance;
 			detail::PooledReliableServiceFeedback ReliableFeedback;
+			std::shared_ptr<detail::OrdinaryServicePolicy> OrdinaryPolicy;
 			// Bounded evidence for the one ACK-gated accepted grant. Populated only
 			// with internal evidence enabled; never used for admission.
 			std::uint64_t CausalGrantToken = 0, CausalGrantSequence = 0, CausalGrantBytes = 0, CausalAcceptedBefore = 0;
@@ -160,6 +165,7 @@ namespace gargantuan::network {
 		std::map<ConnectionId, Peer> Peers;
 		std::optional<ConnectionId> PrimaryConnection;
 		std::optional<ConnectionId> StructuralFairnessCursor;
+		std::optional<ConnectionId> StructuralJournalFairnessCursor;
 		std::vector<ConnectionId> StructuralConnectionsScratch;
 
 		std::unique_ptr<ReplicationCoordinator> Replication;
@@ -183,6 +189,7 @@ namespace gargantuan::network {
 		std::optional<DisconnectInfo> PendingSessionFailure;
 		bool BaselineApplied = false;
 		bool ClientRuntimeAttached = false;
+		std::shared_ptr<detail::OrdinaryServiceBudget> OrdinarySource;
 		detail::GameSessionFailurePoint FailurePoint = detail::GameSessionFailurePoint::None;
 
 		Implementation(
@@ -208,6 +215,18 @@ namespace gargantuan::network {
 					Configuration.Limits.MaximumReliableMessageBytes,
 					MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes);
 			}
+			if ((Configuration.ReliableService && Configuration.ReliableService->IsPooled()) ||
+				Configuration.DeclareNormalOrdinaryService)
+				OrdinarySource = std::make_shared<detail::OrdinaryServiceBudget>();
+		}
+		bool ArmOrdinaryPolicy(ConnectionId Connection, Peer &PeerValue) {
+			if (!OrdinarySource || PeerValue.OrdinaryPolicy) return true;
+			auto Policy = std::make_shared<detail::OrdinaryServicePolicy>(OrdinarySource);
+			if (!detail::ReliableServiceFeedbackAccess::DeclareOrdinaryPolicy(Scheduler, Connection, Policy) ||
+				!detail::ReliableServiceFeedbackAccess::DeclareOrdinaryPolicy(*Transport, Connection, Policy) ||
+				!Policy->SetReady(true)) return false;
+			PeerValue.OrdinaryPolicy = std::move(Policy);
+			return true;
 		}
 
 		~Implementation() {
@@ -534,8 +553,15 @@ namespace gargantuan::network {
 			Runtime = nullptr;
 		}
 
+		void RecordPooledLifecycle(detail::PooledLifecyclePoint Point, ConnectionId Connection, DisconnectReason Reason) {
+			if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Lifecycle)
+				Sink->Lifecycle(Sink->Context, {Point, Connection, ServiceTime(),
+					static_cast<std::uint8_t>(Configuration.Role), static_cast<std::uint8_t>(Status),
+					static_cast<std::uint32_t>(Reason)});
+		}
 		void FailSession(DisconnectInfo Information) {
 			if (Status == GameSessionStatus::Failed || Status == GameSessionStatus::Closed) return;
+			RecordPooledLifecycle(detail::PooledLifecyclePoint::FailSession, PrimaryConnection.value_or(ConnectionId{}), Information.Reason);
 			const auto Diagnostic = Information.Diagnostic.size() <= 512 ? Information.Diagnostic
 																		 : Information.Diagnostic.substr(0, 512);
 			Status = GameSessionStatus::Closing;
@@ -547,6 +573,7 @@ namespace gargantuan::network {
 
 		void Stop() {
 			if (Status == GameSessionStatus::Closed || Status == GameSessionStatus::Failed) return;
+			RecordPooledLifecycle(detail::PooledLifecyclePoint::LocalStop, PrimaryConnection.value_or(ConnectionId{}), DisconnectReason::LocalShutdown);
 			const bool TransportStarted = Status != GameSessionStatus::Created;
 			Status = GameSessionStatus::Closing;
 			ReleaseSessionResources();
@@ -588,6 +615,7 @@ namespace gargantuan::network {
 		}
 
 		void FailPeer(ConnectionId Connection, DisconnectReason Reason, std::string Diagnostic) {
+			RecordPooledLifecycle(detail::PooledLifecyclePoint::FailPeer, Connection, Reason);
 			if (Reason == DisconnectReason::ProtocolViolation) ++Metrics.ProtocolRejects;
 			LOG_WARN(
 				App,
@@ -633,6 +661,10 @@ namespace gargantuan::network {
 				return;
 			}
 			Peer Value;
+			Value.ReliableFeedback.SeparateNativeCapacity = IsPooled() &&
+				Configuration.ReliableService->Pooled.SeparateNativeCapacity;
+			Value.ReliableFeedback.DiagnosticPerformance = IsPooled() &&
+				Configuration.ReliableService->Pooled.DiagnosticPerformance;
 			Value.ConnectedTick = CurrentTick;
 			if (!Peers.emplace(Connection, Value).second) return;
 			++Metrics.TransportConnections;
@@ -923,6 +955,10 @@ namespace gargantuan::network {
 				return;
 			}
 			PeerValue.Phase = PeerPhase::Ready;
+			if (!ArmOrdinaryPolicy(Connection, PeerValue)) {
+				Reject(Connection, DisconnectReason::ResourceExhaustion, "Ordinary source policy registration failed");
+				return;
+			}
 			if (const auto *View = Replication->GetView(Connection)) {
 				PeerValue.RemoteMaterializedObjects = std::set<ObjectId>(
 					View->KnownObjects.begin(), View->KnownObjects.end()
@@ -1135,7 +1171,7 @@ namespace gargantuan::network {
 				for (const auto Character : PeerValue.MaterializedCharacters)
 					if (!DesiredCharacters.contains(Character)) {
 						runtime_detail::CountWork(runtime_detail::WorkCounter::GraphChanges);
-						if (!Authority->MarkUnmaterialized(Connection, Character)) PeerHealthy = false;
+						if (!Authority->MarkUnmaterialized(Connection, Character, CurrentTick)) PeerHealthy = false;
 						else if (PeerValue.ControlledCharacter == Character) {
 							// MarkUnmaterialized revokes the native control lease. Clear the
 							// session's mirror so the same Player.Character can rebind when
@@ -1296,6 +1332,9 @@ namespace gargantuan::network {
 		void RecordCausalDelivery(ConnectionId Connection, Peer &PeerValue,
 			const std::optional<detail::ReliableServiceFeedback> &Sample, bool Valid) const {
 			if (!detail::ActiveStructuralCausalEvidence || !ByteAdmission || !ByteAdmission->Debt(Connection)) return;
+			// A pending native result leaves this observation incomplete.  Keep the
+			// last causal delivery until a complete snapshot can advance it.
+			if (Valid && !Sample) return;
 			const auto Before = PeerValue.CausalAcceptedBefore;
 			Valid = Valid && Sample && Sample->CountersValid && Sample->Connection == Connection &&
 				PeerValue.CausalGrantToken == ByteAdmission->DebtToken(Connection) &&
@@ -1324,6 +1363,14 @@ namespace gargantuan::network {
 				.GrantToken = Token, .CompleteBytes = Bytes});
 			return true;
 		}
+		bool ReturnStructuralNativeCapacity(ConnectionId Connection,
+			const detail::PooledReliableServiceFeedback::Result &Result) {
+			const auto Now = ServiceTime();
+			return !Result.NativeCompletedToken || (ByteAdmission->CompleteNativeSend(Connection,
+				Result.NativeCompletedToken, Result.NativeCompletedBytes, Result.ObservedAtMicroseconds, Now,
+				Result.NativeCompletedAtMicroseconds) &&
+				Peers.at(Connection).ReliableFeedback.CompleteNativeCapacity(Result, Now));
+		}
 
 		bool UpdateOrdinaryFunding() {
 			std::uint64_t Debt = 0, Lower = 0, Upper = 0;
@@ -1335,6 +1382,7 @@ namespace gargantuan::network {
 					ByteAdmission->DebtToken(Id), ByteAdmission->Debt(Id));
 				if (!Updated.Valid || Value.ReliableFeedback.OrdinaryDebt > std::numeric_limits<std::uint64_t>::max() - Debt)
 					return false;
+				if (!ByteAdmission->SetOrdinaryUnsent(Id, Value.ReliableFeedback.OrdinaryUnsent)) return false;
 				Debt += Value.ReliableFeedback.OrdinaryDebt;
 				Lower += Value.ReliableFeedback.GameplayLower;
 				Upper += Value.ReliableFeedback.GameplayUpper;
@@ -1344,19 +1392,45 @@ namespace gargantuan::network {
 			ByteAdmission->SetOrdinaryFunding(*Funded);
 			return true;
 		}
+		void RecordPooledExecutionWithoutAcceptance(ConnectionId Connection, const detail::PooledReliableServiceFeedback &Ledger,
+			detail::PooledObservationPoint Point, detail::PooledExecutionState Before, std::uint64_t Now, bool WorkReady) {
+			const auto *Sink = detail::ActivePooledService;
+			if (!Sink || !Sink->CaptureExecution || !Sink->Record) return;
+			// No synthetic accounting observation is forwarded to qualification sinks.
+			detail::PooledServiceRecord Record;
+			Record.Connection = Connection; Record.SimulationTick = CurrentTick; Record.NowMicroseconds = Now;
+			Record.Point = Point; Record.ExecutionBefore = Before; Record.ExecutionRejected = true;
+			Record.InvalidAfter = Ledger.Invalid; Record.WorkReady = WorkReady;
+			Record.AcceptanceAvailable = false; Record.DiagnosticOnly = true;
+			Record.DebtToken = ByteAdmission->DebtToken(Connection); Record.DebtBytes = ByteAdmission->Debt(Connection);
+			Record.Result.ExecutionFailed = Ledger.ExecutionFailed;
+			Record.Result.MainOpportunityFailed = Ledger.MainOpportunityFailed; Record.Result.TurnoverFailed = Ledger.TurnoverFailed;
+			Record.Result.MaximumMainOpportunityMicroseconds = Ledger.MaximumMainOpportunityMicroseconds;
+			Record.Result.MaximumTurnoverMicroseconds = Ledger.MaximumTurnoverMicroseconds;
+			Sink->Record(Sink->Context, Record);
+		}
 		void RecordPooledObservation(ConnectionId Connection, const detail::ReliableServiceAcceptedBytes &Accepted,
 			const std::optional<detail::ReliableServiceFeedback> &Sample,
-			const detail::PooledReliableServiceFeedback::Result &Result, std::uint64_t Now) {
-			if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Record)
+			const detail::PooledReliableServiceFeedback::Result &Result, std::uint64_t Now,
+			detail::PooledObservationPoint Point = detail::PooledObservationPoint::Other,
+			detail::PooledExecutionState Before = {}, bool ExecutionRejected = false, bool WorkReady = false) {
+			if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Record) {
+				if (Sink->CaptureExecution && !Before.Captured && Peers.contains(Connection))
+					Before = detail::CapturePooledExecution(Peers.at(Connection).ReliableFeedback);
 				Sink->Record(Sink->Context, detail::PooledServiceRecord{
 					.Connection = Connection, .SimulationTick = CurrentTick, .NowMicroseconds = Now,
 					.DebtToken = ByteAdmission->DebtToken(Connection), .DebtBytes = ByteAdmission->Debt(Connection),
-					.StructuralJournalLag = Replication->GetJournalLag(Connection),
+					.StructuralJournalLag = Replication ? Replication->GetJournalLag(Connection) : 0,
 					.Accepted = Accepted, .Feedback = Sample, .Result = Result,
-					.Admission = ByteAdmission->GetMetrics()});
+					.Admission = ByteAdmission->GetMetrics(), .Point = Point,
+					.ExecutionBefore = Before, .ExecutionRejected = ExecutionRejected,
+					.InvalidAfter = Sink->CaptureExecution && Peers.contains(Connection) && Peers.at(Connection).ReliableFeedback.Invalid,
+					.WorkReady = WorkReady});
+			}
 		}
 
 		void TearDownPeer(ConnectionId Connection) {
+			RecordPooledLifecycle(detail::PooledLifecyclePoint::PeerTeardown, Connection, DisconnectReason::LocalShutdown);
 			auto Iterator = Peers.find(Connection);
 			if (IsPooled()) {
 				// Closing is not a release. Purge first, reconcile the immutable
@@ -1374,6 +1448,7 @@ namespace gargantuan::network {
 					const auto Last = Iterator->second.ReliableFeedback.Observe(Connection, *Accepted, Final, ServiceTime(),
 						ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
 					RecordCausalDelivery(Connection, Iterator->second, Final, Last.Valid);
+					RecordPooledObservation(Connection, *Accepted, Final, Last, ServiceTime(), detail::PooledObservationPoint::PeerTeardown);
 					if (Last.Valid && Last.RetiredBytes)
 						(void)RetireStructural(Connection, Last.RetiredToken, Last.RetiredBytes);
 					(void)Scheduler.CancelConnection(Connection);
@@ -1387,6 +1462,7 @@ namespace gargantuan::network {
 			if (ByteAdmission) ByteAdmission->Remove(Connection);
 			if (Peers.empty()) {
 				StructuralFairnessCursor.reset();
+				StructuralJournalFairnessCursor.reset();
 				StructuralConnectionsScratch.clear();
 			}
 			if (Authority) (void)Authority->RemovePeer(Connection, std::max(CurrentTick, std::uint64_t{1}));
@@ -1409,6 +1485,31 @@ namespace gargantuan::network {
 			}
 		}
 
+		void ObserveOrdinaryQueue(ConnectionId Connection, Peer &PeerValue, std::uint64_t Now) {
+			const auto Oldest = detail::ReliableServiceFeedbackAccess::OldestProtectedOrdinary(Scheduler, Connection);
+			const bool Failed = !Oldest || (*Oldest && (Now < *Oldest ||
+				Now - *Oldest > PooledReliableServiceProfile::QueueWindowMicroseconds));
+			const auto EvidenceOldest = detail::ReliableServiceFeedbackAccess::OldestQualifiedOrdinary(Scheduler, Connection);
+			const bool EvidenceFailed = !EvidenceOldest || (*EvidenceOldest && (Now < *EvidenceOldest ||
+				Now - *EvidenceOldest > PooledReliableServiceProfile::QueueWindowMicroseconds));
+			auto &Ledger = PeerValue.ReliableFeedback;
+			// Missing/retrograde queue evidence is correctness, independently of
+			// whether the ordinary latency target is enforced by this profile.
+			if (!Oldest || (*Oldest && Now < *Oldest)) Ledger.Invalid = true;
+			Ledger.QueuedOrdinaryFailed = Failed;
+			if (Failed) Ledger.QueuedOrdinaryEverFailed = true;
+			if (EvidenceFailed && !Ledger.QueuedQualifiedOrdinaryEverFailed) {
+				Ledger.QueuedQualifiedOrdinaryEverFailed = true;
+				SaturatingAdd(Metrics.QualifiedOrdinaryQueueFailures, 1);
+			}
+			if (IsPooled()) {
+				if (const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection)) {
+					const auto Result = Ledger.Observe(Connection, *Accepted, {}, Now,
+						ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+					RecordPooledObservation(Connection, *Accepted, {}, Result, Now);
+				}
+			}
+		}
 		void Step(std::uint64_t SimulationTick) {
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::SessionStep);
 			if (Status == GameSessionStatus::Created || Status == GameSessionStatus::Starting ||
@@ -1417,6 +1518,32 @@ namespace gargantuan::network {
 				return;
 			if (!DrainFailures()) return;
 			CurrentTick = SimulationTick;
+			for (auto &[Connection, PeerValue] : Peers)
+				if (PeerValue.Phase == PeerPhase::Ready) ObserveOrdinaryQueue(Connection, PeerValue, ServiceTime());
+			if (IsPooled() && Replication) {
+				// Arm before reconciliation, relevance, planning and encoding. The
+				// endpoint below certifies a completed pass, never its entry alone.
+				for (auto &[Connection, PeerValue] : Peers) {
+					if (PeerValue.Phase != PeerPhase::Ready) continue;
+					const bool WorkReady = Replication->HasPendingRelevance(Connection) ||
+						Replication->IsPlanningReady(Connection) || Replication->GetJournalLag(Connection) != 0;
+					const auto OpportunityAt = ServiceTime();
+					const auto ExecutionBefore = detail::ActivePooledService && detail::ActivePooledService->CaptureExecution
+						? detail::CapturePooledExecution(PeerValue.ReliableFeedback) : detail::PooledExecutionState{};
+					if (!PeerValue.ReliableFeedback.BeginAdmissionOpportunity(OpportunityAt, WorkReady)) {
+						if (const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection)) {
+							const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, {}, OpportunityAt,
+								ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+							RecordPooledObservation(Connection, *Accepted, {}, Result, OpportunityAt,
+								detail::PooledObservationPoint::AdmissionBegin, ExecutionBefore, true, WorkReady);
+						} else RecordPooledExecutionWithoutAcceptance(Connection, PeerValue.ReliableFeedback,
+							detail::PooledObservationPoint::AdmissionBegin, ExecutionBefore, OpportunityAt, WorkReady);
+						PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+							"[Network:PooledService] Structural execution opportunity exceeded its product budget"});
+					}
+				}
+				if (!DrainFailures()) return;
+			}
 			if (Replication) Replication->ProcessCatalogRetirement(SimulationTick);
 			for (auto &[Connection, PeerValue] : Peers) {
 				(void)Connection;
@@ -1544,7 +1671,7 @@ namespace gargantuan::network {
 								ObservedNow, ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
 							RecordCausalDelivery(Connection, Peers.at(Connection), Sample, Result.Valid);
 							RecordPooledObservation(Connection, *Accepted, Sample, Result, ObservedNow);
-							if (!Result.Valid || (Result.RetiredBytes &&
+							if (!Result.Valid || !ReturnStructuralNativeCapacity(Connection, Result) || (Result.RetiredBytes &&
 								!RetireStructural(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
 								PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
 									Result.Terminal ? "[Network:PooledService] Native connection terminated before event delivery" :
@@ -1587,6 +1714,12 @@ namespace gargantuan::network {
 							Replication->GetJournalLag(Connection));
 					HasPendingBootstrap = HasPendingBootstrap || PeerValue.Phase == PeerPhase::BootstrapPending;
 				}
+				std::optional<ConnectionId> JournalStartConnection;
+				if (IsPooled() && !StructuralConnections.empty() && StructuralJournalFairnessCursor) {
+					const auto Found = std::lower_bound(StructuralConnections.begin(), StructuralConnections.end(),
+						*StructuralJournalFairnessCursor);
+					JournalStartConnection = Found == StructuralConnections.end() ? StructuralConnections.front() : *Found;
+				}
 				if (!StructuralConnections.empty()) {
 					std::size_t Start = 0;
 					if (StructuralFairnessCursor) {
@@ -1606,36 +1739,57 @@ namespace gargantuan::network {
 				}
 
 				std::optional<ConnectionId> LastServicedConnection;
+				std::optional<ConnectionId> LastGrantedConnection;
 				std::optional<ConnectionId> LastJournalServicedConnection;
 				std::size_t GlobalConsumed = 0;
 				std::size_t GlobalJournalConsumed = 0;
 				bool MadeProgress = false;
+				auto RefreshStructuralService = [&](ConnectionId Connection, Peer &PeerValue, bool BeforeEligibility) {
+					if (!IsPooled()) return true;
+					// The old loop did not reconcile a just-submitted peer again until
+					// the next step. Preserve that behavior and its lifecycle timestamps;
+					// this refresh must not introduce another grant for that peer here.
+					if (BeforeEligibility && PeerValue.StructuralSubmittedThisStep) return true;
+					const auto Now = ServiceTime();
+					const auto &Previous = PeerValue.ReliableFeedback.Previous;
+					if (Previous && Previous->ObservedAtMicroseconds <= Now &&
+						Now - Previous->ObservedAtMicroseconds <= Configuration.ReliableService->Pooled.FeedbackFreshnessMicroseconds)
+						return true;
+					// Query native evidence, never retimestamp the earlier envelope.
+					// Relevance/planning or a preceding peer's encoding may age it before
+					// eligibility; this same reconciliation also protects acceptance.
+					const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
+					if (!Accepted) {
+						PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+							"[Network:PooledService] Acceptance accounting disappeared during preparation"}); return false;
+					}
+					const auto Sample = detail::ReliableServiceFeedbackAccess::Observe(*Transport, Connection);
+					const auto ObservedNow = ServiceTime();
+					const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, Sample,
+						ObservedNow, ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+					RecordCausalDelivery(Connection, PeerValue, Sample, Result.Valid);
+					RecordPooledObservation(Connection, *Accepted, Sample, Result, ObservedNow);
+					if (!Result.Valid || !ReturnStructuralNativeCapacity(Connection, Result) || (Result.RetiredBytes &&
+						!RetireStructural(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
+						PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+							"[Network:PooledService] Native evidence failed during preparation"}); return false;
+					}
+					if (!ByteAdmission->RefreshService(Connection, detail::ReliableByteAdmission::ServiceObservation{
+						Result.ObservedAtMicroseconds, Result.Qualified, Result.Available, PeerValue.ReliableFeedback.OrdinaryDebt})) {
+						PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+							"[Network:PooledService] Structural service evidence could not refresh"}); return false;
+					}
+					if (!UpdateOrdinaryFunding()) {
+						PendingSessionFailure = DisconnectInfo{DisconnectReason::TransportFailure,
+							"Pooled ordinary funding became invalid"}; return false;
+					}
+					return true;
+				};
 				auto SubmitStructural =
 					[&](ConnectionId Connection, Peer &PeerValue, ReplicationProduceResult &Produced) {
 						std::optional<detail::ReliableByteAdmission::Reservation> Receipt;
 						if (ByteAdmission) {
-							if (IsPooled() && (!PeerValue.ReliableFeedback.Previous || ServiceTime() -
-								PeerValue.ReliableFeedback.Previous->ObservedAtMicroseconds > Configuration.ReliableService->Pooled.FeedbackFreshnessMicroseconds)) {
-								// Encoding and bounded retries may outlive a feedback window.
-								// Read current native evidence at the actual acceptance boundary.
-								const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
-								if (!Accepted) {
-									PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
-										"[Network:PooledService] Acceptance accounting disappeared during preparation"}); return false;
-								}
-								const auto Sample = detail::ReliableServiceFeedbackAccess::Observe(*Transport, Connection);
-								const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, Sample,
-									ServiceTime(), ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
-								RecordCausalDelivery(Connection, PeerValue, Sample, Result.Valid);
-								RecordPooledObservation(Connection, *Accepted, Sample, Result, ServiceTime());
-								if (!Result.Valid || (Result.RetiredBytes &&
-									!RetireStructural(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
-									PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
-										"[Network:PooledService] Native evidence failed during preparation"}); return false;
-								}
-								(void)ByteAdmission->RefreshService(Connection, detail::ReliableByteAdmission::ServiceObservation{
-									Result.ObservedAtMicroseconds, Result.Qualified, Result.Available, PeerValue.ReliableFeedback.OrdinaryDebt});
-							}
+							if (!RefreshStructuralService(Connection, PeerValue, false)) return false;
 							if (IsPooled()) {
 								// The encoded demand and its immediate eligibility check share
 								// one timestamp. Sampling twice can put eligibility before the
@@ -1694,7 +1848,10 @@ namespace gargantuan::network {
 							? ServiceTime() : std::numeric_limits<std::uint64_t>::max();
 						// Once queued, bytes are charged even if a later semantic invariant
 						// terminates the peer. Do not refund already accepted traffic.
-						const bool OfferPublished = !Receipt || !IsPooled() || PeerValue.Phase != PeerPhase::Ready ||
+						// Bootstrap has no performance activation clock, but separated
+						// capacity still needs its exact token/byte offer before ACK.
+						const bool OfferPublished = !Receipt || !IsPooled() ||
+							(PeerValue.Phase != PeerPhase::Ready && !Configuration.ReliableService->Pooled.SeparateNativeCapacity) ||
 							PeerValue.ReliableFeedback.PublishOffer(Receipt->Token, Receipt->Bytes, GrantActivatedAt);
 						if (Receipt && (!ByteAdmission->Commit(*Receipt, GrantActivatedAt) ||
 							(IsPooled() && !Scheduler.ActivateReliableGrant(Connection, Receipt->Token, GrantActivatedAt)) ||
@@ -1752,6 +1909,7 @@ namespace gargantuan::network {
 						}
 						PeerValue.StructuralSubmittedThisStep = true;
 						LastServicedConnection = Connection;
+						LastGrantedConnection = Connection;
 						// An accepted F1 grant is already on its finite first-send clock.
 						// Submit it before planning the next peer's large frame; the
 						// shared step allowance keeps normal scheduler precedence/bounds.
@@ -1778,6 +1936,7 @@ namespace gargantuan::network {
 					while (MadeProgress && GlobalConsumed < PassLimit) {
 						MadeProgress = false;
 						for (const auto Connection : StructuralConnections) {
+							if (PendingSessionFailure) { (void)DrainFailures(); return; }
 							auto Peer = Peers.find(Connection);
 							if (Peer == Peers.end() || PendingPeerFailures.contains(Connection)) continue;
 							if (Peer->second.ByteDeferredThisStep) continue;
@@ -1792,8 +1951,15 @@ namespace gargantuan::network {
 							if (Allowance == 0) break;
 							std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes;
 							if (ByteAdmission) {
-								if (!Replication->IsPlanningReady(Connection) && Replication->GetJournalLag(Connection) == 0) {
-									ByteAdmission->NoWork(Connection); continue;
+								if (!Replication->HasPendingStructuralWork(Connection)) {
+									if (!ByteAdmission->NoWork(Connection, true, ServiceTime())) {
+										FailSession({DisconnectReason::ResourceExhaustion, "Reliable source-empty clock/ownership failed"}); return;
+									}
+									continue;
+								}
+								if (!RefreshStructuralService(Connection, Peer->second, true)) {
+									if (PendingSessionFailure) { (void)DrainFailures(); return; }
+									continue;
 								}
 								if (IsPooled() && !UpdateOrdinaryFunding()) {
 									FailSession({DisconnectReason::TransportFailure, "Pooled ordinary funding became invalid"}); return;
@@ -1813,7 +1979,10 @@ namespace gargantuan::network {
 								return true;
 							};
 							if (Peer->second.Phase == PeerPhase::BootstrapPending) {
-								if (!Replication->IsPlanningReady(Connection)) continue;
+								if (!Replication->IsPlanningReady(Connection)) {
+									if (ByteAdmission) ByteAdmission->DeferSource(Connection);
+									continue;
+								}
 								const auto CriticalTransitions = Replication->GetPendingCriticalTransitionCount(Connection);
 								if (CriticalTransitions == 0) {
 									PendingPeerFailures.try_emplace(
@@ -1825,7 +1994,10 @@ namespace gargantuan::network {
 									);
 									continue;
 								}
-								if (CriticalTransitions > Allowance) continue;
+								if (CriticalTransitions > Allowance) {
+									if (ByteAdmission) ByteAdmission->DeferSource(Connection);
+									continue;
+								}
 								const auto ReplicationMetricsBefore = Replication->GetCumulativeMetrics();
 								auto Produced = Replication->ProducePendingBaseline(Connection, Allowance, SimulationTick,
 									Peer->second.Limits.MaximumReliableMessageBytes, AvailableFrameBytes);
@@ -1842,7 +2014,10 @@ namespace gargantuan::network {
 									ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
 								// A world revision can obsolete a queued bootstrap while its
 								// peer awaits bounded 3E service. Defer, never accept stale work.
-								if (Produced.Error == "No replication relevance changes are available") continue;
+								if (Produced.Error == "No replication relevance changes are available") {
+									if (ByteAdmission) ByteAdmission->DeferSource(Connection);
+									continue;
+								}
 								if (!Produced.Succeeded() || !Produced.Frame) {
 									PendingPeerFailures.try_emplace(
 										Connection,
@@ -1953,7 +2128,15 @@ namespace gargantuan::network {
 								if (ProduceJournal()) continue;
 								if (ProduceRelevance()) continue;
 							}
-							if (ByteAdmission) ByteAdmission->NoWork(Connection);
+							// No frame can mean exhausted journal allowance or unfinished
+							// planning. Neither may erase the exact candidate or fair wait.
+							if (ByteAdmission) {
+								if (!Replication->HasPendingStructuralWork(Connection)) {
+									if (!ByteAdmission->NoWork(Connection, true, ServiceTime())) {
+										FailSession({DisconnectReason::ResourceExhaustion, "Reliable source-empty clock/ownership failed"}); return;
+									}
+								} else ByteAdmission->DeferSource(Connection);
+							}
 						}
 					}
 				}
@@ -1961,7 +2144,11 @@ namespace gargantuan::network {
 				// many ticks. Preserve independent progress for journal prefixes that
 				// provably cannot emit structural work, under the unchanged read caps.
 				if (ByteAdmission || GlobalConsumed >= Configuration.StructuralReplication.MaximumTransitionsPerTick) {
-					for (const auto Connection : StructuralConnections) {
+					const auto JournalStart = JournalStartConnection
+						? static_cast<std::size_t>(std::ranges::find(StructuralConnections, *JournalStartConnection) - StructuralConnections.begin())
+						: std::size_t{0};
+					for (std::size_t Offset = 0; Offset < StructuralConnections.size(); ++Offset) {
+						const auto Connection = StructuralConnections[(JournalStart + Offset) % StructuralConnections.size()];
 						if (GlobalJournalConsumed >= Configuration.StructuralReplication.MaximumJournalRecordsPerTick) break;
 						auto Peer = Peers.find(Connection);
 						if (Peer == Peers.end() || PendingPeerFailures.contains(Connection) ||
@@ -1981,6 +2168,18 @@ namespace gargantuan::network {
 				}
 				if (ByteAdmission) ByteAdmission->EndStep();
 				if (!StructuralConnections.empty()) {
+					if (IsPooled()) {
+						// Slot opportunity rotates only after accepted work. A shadow
+						// journal reader must not redirect the next free structural slot.
+						if (LastGrantedConnection) {
+							auto Last = std::ranges::find(StructuralConnections, *LastGrantedConnection);
+							StructuralFairnessCursor = ++Last == StructuralConnections.end() ? StructuralConnections.front() : *Last;
+						}
+						if (LastJournalServicedConnection) {
+							auto Last = std::ranges::find(StructuralConnections, *LastJournalServicedConnection);
+							StructuralJournalFairnessCursor = ++Last == StructuralConnections.end() ? StructuralConnections.front() : *Last;
+						}
+					} else {
 					auto Last = LastServicedConnection
 						? std::ranges::find(StructuralConnections, *LastServicedConnection) : StructuralConnections.begin();
 					// Coalesced/skipped records consume service even with no frame.
@@ -1992,6 +2191,7 @@ namespace gargantuan::network {
 						StructuralFairnessCursor = StructuralConnections.front();
 					else
 						StructuralFairnessCursor = *Last;
+					}
 				}
 				if (GlobalConsumed >= Configuration.StructuralReplication.MaximumTransitionsPerTick &&
 					Replication->HasPendingStructuralWork())
@@ -2029,6 +2229,31 @@ namespace gargantuan::network {
 				}
 				Metrics.JournalBacklogRecordsHighWater = std::max(Metrics.JournalBacklogRecordsHighWater, Metrics.JournalBacklogRecords);
 				Metrics.JournalMaximumBacklogEpisodeAgeTicks = std::max(Metrics.JournalMaximumBacklogEpisodeAgeTicks, Metrics.JournalOldestBacklogEpisodeAgeTicks);
+				if (IsPooled()) {
+					for (auto &[Connection, PeerValue] : Peers) {
+						if (PeerValue.Phase != PeerPhase::Ready || PendingPeerFailures.contains(Connection)) continue;
+						const bool WorkReady = Replication->HasPendingRelevance(Connection) ||
+							Replication->IsPlanningReady(Connection) || Replication->GetJournalLag(Connection) != 0;
+						const auto CompletedAt = ServiceTime();
+						const auto ExecutionBefore = detail::ActivePooledService && detail::ActivePooledService->CaptureExecution
+							? detail::CapturePooledExecution(PeerValue.ReliableFeedback) : detail::PooledExecutionState{};
+						const bool Fits = PeerValue.ReliableFeedback.CompleteAdmissionOpportunity(CompletedAt, WorkReady);
+						const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
+						if (!Accepted) {
+							RecordPooledExecutionWithoutAcceptance(Connection, PeerValue.ReliableFeedback,
+								detail::PooledObservationPoint::AdmissionComplete, ExecutionBefore, CompletedAt, WorkReady);
+							FailSession({DisconnectReason::TransportFailure, "[Network:PooledService] Completed opportunity lost acceptance accounting"});
+							return;
+						}
+						const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, {}, CompletedAt,
+							ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+						RecordPooledObservation(Connection, *Accepted, {}, Result, CompletedAt,
+							detail::PooledObservationPoint::AdmissionComplete, ExecutionBefore, !Fits, WorkReady);
+						if (!Fits)
+							PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+								"[Network:PooledService] Structural retirement or completed admission opportunity exceeded its product budget"});
+					}
+				}
 				if (!DrainFailures()) return;
 				SynchronizeServerGraph();
 				if (!DrainFailures()) return;
@@ -2064,6 +2289,8 @@ namespace gargantuan::network {
 			}
 			for (auto &[Connection, Information] : TerminalConnections)
 				FailPeer(Connection, Information.Reason, std::move(Information.Diagnostic));
+			for (auto &[Connection, PeerValue] : Peers)
+				if (PeerValue.Phase == PeerPhase::Ready) ObserveOrdinaryQueue(Connection, PeerValue, ServiceTime());
 		}
 
 		bool AttachClientRuntime(Engine &RuntimeValue) {
@@ -2114,6 +2341,10 @@ namespace gargantuan::network {
 			}
 			ClientRuntimeAttached = true;
 			PeerValue.Phase = PeerPhase::Ready;
+			if (!ArmOrdinaryPolicy(*PrimaryConnection, PeerValue)) {
+				FailSession({DisconnectReason::ResourceExhaustion, "Client ordinary source policy registration failed"});
+				return false;
+			}
 			Status = GameSessionStatus::Ready;
 			++Metrics.ReadyPeers;
 			return true;
@@ -2372,6 +2603,109 @@ namespace gargantuan::network {
 	bool detail::GameSessionTestAccess::VerifySpatialIndex(const GameSession &Session) {
 		return !Session.State->SpatialValidationRequested && Session.State->SpatialValidationPassed;
 	}
+	std::optional<std::vector<detail::ClientReplicaIdentity>> detail::GameSessionTestAccess::ReadClientReplicaIdentities(
+		const GameSession &Session, std::span<const std::shared_ptr<Instance>> Observed) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return {};
+		if (!Session.State || Session.State->Configuration.Role != GameSessionRole::Client ||
+			Session.State->Status != GameSessionStatus::Ready) return {};
+		return ReadClientReplicaIdentities(Session.State->Replica, Observed);
+	}
+	std::optional<std::vector<detail::ClientReplicaIdentity>> detail::GameSessionTestAccess::ReadClientReplicaIdentities(
+		const ReplicaApplier &Replica, std::span<const std::shared_ptr<Instance>> Observed) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return {};
+		// The existing replica object cap bounds the one map traversal; the farm
+		// supplies at most 32 live final observations, once per recovery case.
+		const auto Epoch = Replica.GetEpoch();
+		const auto Root = Replica.GetReplicaRoot();
+		if (Observed.empty() || Observed.size() > 32 || !Epoch.IsValid() || !Root ||
+			Root->GetDestroyed() || Root->IsDestroying() || Replica.Receiver.Objects.size() > MaximumSnapshotObjects) return {};
+		std::vector<ClientReplicaIdentity> Result(Observed.size());
+		for (std::size_t Index = 0; Index < Observed.size(); ++Index) {
+			const auto &Object = Observed[Index];
+			if (!Object || Object->GetDestroyed() || Object->IsDestroying() || !Object->GetObjectId().IsValid() ||
+				Object->GetReplicationScopeId() != Root->GetObjectId() ||
+				ObjectRegistry::Get().Lookup(Object->GetObjectId()) != Object) return {};
+			for (std::size_t Prior = 0; Prior < Index; ++Prior)
+				if (Observed[Prior] == Object || Observed[Prior]->GetObjectId() == Object->GetObjectId()) return {};
+			Result[Index].Local = Object->GetObjectId(); Result[Index].Epoch = Epoch;
+		}
+		for (const auto &[WireId, InstanceValue] : Replica.Receiver.Objects) {
+			for (std::size_t Index = 0; Index < Observed.size(); ++Index) {
+				if (InstanceValue != Observed[Index]) continue;
+				if (!WireId.IsValid() || Result[Index].Source.IsValid() ||
+					InstanceValue->GetObjectId() != Result[Index].Local || InstanceValue->GetDestroyed() ||
+					InstanceValue->IsDestroying()) return {};
+				Result[Index].Source = WireId.ToObjectId();
+			}
+		}
+		for (std::size_t Index = 0; Index < Result.size(); ++Index)
+			if (!Result[Index].Source.IsValid() || Replica.Resolve(Result[Index].Source) != Observed[Index]) return {};
+		if (Replica.GetEpoch() != Epoch || Replica.GetReplicaRoot() != Root) return {};
+		return Result;
+	}
+	bool detail::GameSessionTestAccess::VerifyClientReplicaIdentities(const GameSession &Session,
+		std::span<const std::shared_ptr<Instance>> Observed, std::span<const ClientReplicaIdentity> Identities) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return false;
+		if (!Session.State || Session.State->Configuration.Role != GameSessionRole::Client ||
+			Session.State->Status != GameSessionStatus::Ready) return false;
+		return VerifyClientReplicaIdentities(Session.State->Replica, Observed, Identities);
+	}
+	bool detail::GameSessionTestAccess::VerifyClientReplicaIdentities(const ReplicaApplier &Replica,
+		std::span<const std::shared_ptr<Instance>> Observed, std::span<const ClientReplicaIdentity> Identities) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return false;
+		if (Observed.empty() || Observed.size() > 32 || Observed.size() != Identities.size()) return false;
+		const auto Epoch = Replica.GetEpoch();
+		const auto Root = Replica.GetReplicaRoot();
+		if (!Epoch.IsValid() || !Root || Root->GetDestroyed() || Root->IsDestroying()) return false;
+		for (std::size_t Index = 0; Index < Observed.size(); ++Index) {
+			const auto &Object = Observed[Index]; const auto &Identity = Identities[Index];
+			if (!Object || Object->GetDestroyed() || Object->IsDestroying() || !Identity.Source.IsValid() ||
+				!Identity.Local.IsValid() || Identity.Epoch != Epoch || Object->GetObjectId() != Identity.Local ||
+				Object->GetReplicationScopeId() != Root->GetObjectId() ||
+				ObjectRegistry::Get().Lookup(Identity.Local) != Object || Replica.Resolve(Identity.Source) != Object) return false;
+			for (std::size_t Prior = 0; Prior < Index; ++Prior)
+				if (Observed[Prior] == Object || Identities[Prior].Source == Identity.Source ||
+					Identities[Prior].Local == Identity.Local) return false;
+		}
+		return Replica.GetEpoch() == Epoch && Replica.GetReplicaRoot() == Root;
+	}
+	std::optional<detail::PooledPostpassSnapshot> detail::GameSessionTestAccess::ReadPooledPostpass(const GameSession &Session) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return {};
+		const auto *State = Session.State.get();
+		if (!State || State->Configuration.Role != GameSessionRole::Server || !State->IsPooled() ||
+			!State->ByteAdmission || State->Peers.size() > MaximumGameSessionPeers) return {};
+		PooledPostpassSnapshot Result;
+		Result.Admission = State->ByteAdmission->GetMetrics();
+		Result.Peers.reserve(State->Peers.size());
+		for (const auto &[Connection, Peer] : State->Peers) {
+			const auto Accepted = ReliableServiceFeedbackAccess::Accepted(State->Scheduler, Connection);
+			if (!Accepted) return {};
+			const auto &Ledger = Peer.ReliableFeedback;
+			PooledPostpassPeer Value;
+			Value.Connection = Connection; Value.Ready = Peer.Phase == PeerPhase::Ready;
+			Value.Execution = CapturePooledExecution(Ledger);
+			Value.Healthy = !Ledger.Invalid && (Ledger.DiagnosticPerformance ||
+				(!Ledger.ExecutionFailed && !Ledger.QueuedOfferFailed && !Ledger.QueuedOrdinaryFailed && !Ledger.QueuedOrdinaryEverFailed));
+			Value.Accepted = *Accepted; Value.ReconciledAccepted = Ledger.Accepted;
+			Value.Retired = Ledger.StructuralRetired; Value.OrdinaryDebt = Ledger.OrdinaryDebt;
+			Value.OrdinaryUnsent = Ledger.OrdinaryUnsent;
+			Value.Debt = State->ByteAdmission->Debt(Connection); Value.DebtToken = State->ByteAdmission->DebtToken(Connection);
+			if (Ledger.Previous) {
+				const auto &Native = *Ledger.Previous;
+				Value.FeedbackComplete = Native.Connection == Connection && Native.CountersValid &&
+					Native.State == ConnectionState::Connected;
+				Value.Healthy &= !Native.StructuralCompletionEvidenceInvalid && !Native.ProtectedOrdinaryEvidenceInvalid &&
+					(Ledger.DiagnosticPerformance || (!Native.StructuralCompletionServiceFailed && !Native.StructuralLastCompletedCompletionFailed &&
+					 !Native.ProtectedOrdinaryEverFailed && !Native.ProtectedOrdinaryActiveDeadlineFailed));
+				Value.FirstSent = Native.StructuralPayloadBytesFirstSent; Value.Acked = Native.StructuralPayloadBytesAcked;
+				Value.ReliableAcked = Native.ReliablePayloadBytesAcked;
+				Value.NativePending = Native.PendingReliableStreamBytes; Value.NativeUnacked = Native.SentUnackedReliableStreamBytes;
+				Value.NativeGrantToken = Native.ActiveAttributedRetirementToken;
+			}
+			Result.Peers.push_back(Value);
+		}
+		return Result;
+	}
 	void detail::GameSessionTestAccess::RequestSpatialValidation(GameSession &Session) {
 		Session.State->SpatialValidationRequested = true;
 		Session.State->SpatialValidationPassed = false;
@@ -2413,7 +2747,8 @@ namespace gargantuan::network {
 		return Session.State->Replication ? Session.State->Replication->GetMetrics() : ReplicationMetrics{};
 	}
 	std::optional<std::vector<detail::StructuralCausalSnapshot>>
-	detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(const GameSession &Session, std::string &Error) {
+	detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(const GameSession &Session, std::string &Error,
+		std::uint64_t NativeDeadlineMicroseconds) {
 		const auto *State = Session.State.get();
 		if (!State || !State->Replication || !State->ByteAdmission || !State->IsPooled()) {
 			Error = "Causal snapshot requires a pooled server"; return {};
@@ -2445,28 +2780,118 @@ namespace gargantuan::network {
 			Snapshot.GrantBytes = State->ByteAdmission->Debt(Connection);
 			Snapshot.GrantToken = Snapshot.GrantBytes ? State->ByteAdmission->DebtToken(Connection) : 0;
 			const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(State->Scheduler, Connection);
-			const auto Native = detail::ReliableServiceFeedbackAccess::Observe(*State->Transport, Connection);
-			if (!Accepted || !Native || !Native->CountersValid || Native->Connection != Connection ||
-				Native->StructuralPayloadBytesAcked > Native->StructuralPayloadBytesFirstSent ||
-				Native->StructuralPayloadBytesFirstSent > Accepted->Structural) {
-				Error = "Causal snapshot requires valid structural native conservation"; return {};
-			}
+			if (!Accepted) { Error = "Causal snapshot requires accepted structural conservation"; return {}; }
 			Snapshot.CumulativeAccepted = Accepted->Structural;
-			Snapshot.CumulativeFirstSent = Native->StructuralPayloadBytesFirstSent;
-			Snapshot.CumulativeAcked = Native->StructuralPayloadBytesAcked;
 			if (Snapshot.GrantBytes) {
 				if (Peer.CausalGrantToken != Snapshot.GrantToken || Peer.CausalGrantBytes != Snapshot.GrantBytes ||
 					Peer.CausalGrantFingerprint == std::array<std::uint64_t, 2>{} ||
-					!Peer.CausalGrantSequence || Peer.CausalAcceptedBefore > Snapshot.CumulativeAcked ||
+					!Peer.CausalGrantSequence || Peer.CausalAcceptedBefore > Snapshot.CumulativeAccepted ||
 					Snapshot.CumulativeAccepted - Peer.CausalAcceptedBefore != Snapshot.GrantBytes) {
 					Error = "Causal snapshot accepted grant lacks exact captured identity"; return {};
 				}
 				Snapshot.GrantSequence = Peer.CausalGrantSequence;
 				Snapshot.GrantFingerprint = Peer.CausalGrantFingerprint;
 				Snapshot.GrantAcceptedBefore = Peer.CausalAcceptedBefore;
-				Snapshot.GrantFirstSent = Snapshot.CumulativeFirstSent - Peer.CausalAcceptedBefore;
-				Snapshot.GrantAcked = Snapshot.CumulativeAcked - Peer.CausalAcceptedBefore;
 			}
+			Result.push_back(std::move(Snapshot));
+		}
+		// Freeze all Main-owned source/accepted identities before resolving native
+		// feedback. No Session step, admission or retirement occurs during this wait.
+		for (auto &Snapshot : Result) {
+			const auto Native = NativeDeadlineMicroseconds
+				? detail::ReliableServiceFeedbackAccess::ObserveResolved(*State->Transport, Snapshot.Connection,
+					NativeDeadlineMicroseconds)
+				: detail::ReliableServiceFeedbackAccess::Observe(*State->Transport, Snapshot.Connection);
+			if (!Native || !Native->CountersValid || Native->Connection != Snapshot.Connection ||
+				Native->StructuralPayloadBytesAcked > Native->StructuralPayloadBytesFirstSent ||
+				Native->StructuralPayloadBytesFirstSent > Snapshot.CumulativeAccepted ||
+				(NativeDeadlineMicroseconds && ServiceTime() >= NativeDeadlineMicroseconds) ||
+				(Snapshot.GrantBytes && Snapshot.GrantAcceptedBefore > Native->StructuralPayloadBytesAcked)) {
+				Error = "Causal snapshot requires valid resolved structural native conservation"; return {};
+			}
+			Snapshot.CumulativeFirstSent = Native->StructuralPayloadBytesFirstSent;
+			Snapshot.CumulativeAcked = Native->StructuralPayloadBytesAcked;
+			if (Snapshot.GrantBytes) {
+				Snapshot.GrantFirstSent = Snapshot.CumulativeFirstSent - Snapshot.GrantAcceptedBefore;
+				Snapshot.GrantAcked = Snapshot.CumulativeAcked - Snapshot.GrantAcceptedBefore;
+			}
+		}
+		for (const auto &Snapshot : Result) {
+			const auto Found = Replication.Peers.find(Snapshot.Connection);
+			const auto Peer = State->Peers.find(Snapshot.Connection);
+			const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(State->Scheduler, Snapshot.Connection);
+			if (Found == Replication.Peers.end() || Peer == State->Peers.end() || Peer->second.Phase != PeerPhase::Ready ||
+				!Accepted || Accepted->Structural != Snapshot.CumulativeAccepted || Found->second.PreparedCommit ||
+				Found->second.JournalCursor.Scope != Snapshot.SourceScope ||
+				Found->second.JournalCursor.NextSequence != Snapshot.JournalCursor ||
+				Found->second.NextSequence.Value() != Snapshot.NextSequence ||
+				Found->second.AcceptedRevision != Snapshot.AcceptedRevision ||
+				Found->second.NextPendingToken != Snapshot.PendingTokenWatermark ||
+				Found->second.PendingTransitions.size() != Snapshot.Pending.size() ||
+				State->ByteAdmission->Debt(Snapshot.Connection) != Snapshot.GrantBytes ||
+				(Snapshot.GrantBytes && State->ByteAdmission->DebtToken(Snapshot.Connection) != Snapshot.GrantToken)) {
+				Error = "Causal snapshot source or accepted debt changed during native resolution"; return {};
+			}
+			const auto &Value = Found->second;
+			const bool PlanningUnresolved = Value.Planned &&
+				(Value.PlanningSelection != Value.ResolvedSelection ||
+				 Value.DesiredDependencyCursor.Scope != Replication.DependencyCursor.Scope ||
+				 Value.DesiredDependencyCursor.NextSequence != Replication.DependencyCursor.NextSequence);
+			if (PlanningUnresolved != Snapshot.HasUnresolvedPlanning ||
+				(Snapshot.GrantBytes && (Peer->second.CausalGrantToken != Snapshot.GrantToken ||
+				 Peer->second.CausalGrantBytes != Snapshot.GrantBytes ||
+				 Peer->second.CausalGrantSequence != Snapshot.GrantSequence ||
+				 Peer->second.CausalGrantFingerprint != Snapshot.GrantFingerprint ||
+				 Peer->second.CausalAcceptedBefore != Snapshot.GrantAcceptedBefore))) {
+				Error = "Causal snapshot planning or grant identity changed during native resolution"; return {};
+			}
+			for (const auto &Pending : Snapshot.Pending) {
+				const auto Value = Found->second.PendingTransitions.find(Pending.Object);
+				if (Value == Found->second.PendingTransitions.end() || Value->second.Token != Pending.Token ||
+					(Value->second.Kind == ReplicationCoordinator::PendingTransitionKind::Enter) != Pending.Enter) {
+					Error = "Causal snapshot pending identity changed during native resolution"; return {};
+				}
+			}
+		}
+		if (State->Peers.size() != Result.size() || Replication.Peers.size() != Result.size() ||
+			ChangeJournal::Get().CreateCursor(Replication.SourceRootId).NextSequence != Tail) {
+			Error = "Causal snapshot journal changed during native resolution"; return {};
+		}
+		if (NativeDeadlineMicroseconds && ServiceTime() >= NativeDeadlineMicroseconds) {
+			Error = "Causal snapshot native resolution exceeded its shared deadline"; return {};
+		}
+		Error.clear(); return Result;
+	}
+	bool detail::GameSessionTestAccess::SetOrdinarySourceNormal(GameSession &Session, bool Normal) {
+		return !Session.State->OrdinarySource || Session.State->OrdinarySource->SetNormal(Normal);
+	}
+	std::optional<std::vector<detail::StructuralCausalSnapshot>>
+	detail::GameSessionTestAccess::CaptureStructuralSourceSnapshot(const GameSession &Session, std::string &Error) {
+		const auto *State = Session.State.get();
+		if (!State || !State->Replication || !State->ByteAdmission || !State->IsPooled()) {
+			Error = "Causal source snapshot requires a pooled server"; return {};
+		}
+		const auto &Replication = *State->Replication;
+		const auto Tail = ChangeJournal::Get().CreateCursor(Replication.SourceRootId).NextSequence;
+		std::vector<StructuralCausalSnapshot> Result;
+		Result.reserve(State->Peers.size());
+		for (const auto &[Connection, Peer] : State->Peers) {
+			const auto Found = Replication.Peers.find(Connection);
+			if (Peer.Phase != PeerPhase::Ready || Found == Replication.Peers.end() || Found->second.PreparedCommit) {
+				Error = "Causal source snapshot requires ready peers without outstanding preparation"; return {};
+			}
+			const auto &Value = Found->second;
+			if (Value.JournalCursor.Scope != Replication.SourceRootId || Value.JournalCursor.NextSequence > Tail) {
+				Error = "Causal source snapshot journal cursor is invalid"; return {};
+			}
+			StructuralCausalSnapshot Snapshot{.Connection = Connection, .SourceScope = Replication.SourceRootId,
+				.JournalCursor = Value.JournalCursor.NextSequence, .JournalTail = Tail,
+				.NextSequence = Value.NextSequence.Value(), .AcceptedRevision = Value.AcceptedRevision,
+				.PendingTokenWatermark = Value.NextPendingToken};
+			Snapshot.Pending.reserve(Value.PendingTransitions.size());
+			for (const auto &[Object, Pending] : Value.PendingTransitions)
+				Snapshot.Pending.push_back({Pending.Token, Object,
+					Pending.Kind == ReplicationCoordinator::PendingTransitionKind::Enter});
 			Result.push_back(std::move(Snapshot));
 		}
 		Error.clear(); return Result;

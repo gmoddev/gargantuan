@@ -11,9 +11,12 @@
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationTransport.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
+#include "../src/network/GameSessionTestAccess.hpp"
+#include "../src/network/ReliableByteAdmission.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "ProtocolUtf8ParityFixture.hpp"
 #include "BoundedReplicationEncodingFixture.hpp"
 #include "FarmRecoveryObservationFixture.hpp"
@@ -93,6 +96,300 @@ namespace {
 				Publish && Publish->Object == Object)
 				return Publish;
 		return nullptr;
+	}
+
+	void TestSourceOwnedAdmissionEmptiness() {
+		using Admission = gargantuan::network::detail::ReliableByteAdmission;
+		using Kind = gargantuan::network::detail::AdmissionEvidenceKind;
+		using Reason = gargantuan::network::detail::AdmissionEvidenceReason;
+		struct Capture {
+			std::array<gargantuan::network::detail::AdmissionEvidenceEvent, 64> Events{};
+			std::size_t Count = 0;
+			gargantuan::network::detail::AdmissionEvidenceSink Sink{this, Record};
+			gargantuan::network::detail::AdmissionEvidenceSink *Previous = gargantuan::network::detail::ActiveAdmissionEvidence;
+			Capture() { gargantuan::network::detail::ActiveAdmissionEvidence = &Sink; }
+			~Capture() { gargantuan::network::detail::ActiveAdmissionEvidence = Previous; }
+			static void Record(void *Context, const gargantuan::network::detail::AdmissionEvidenceEvent &Event) noexcept {
+				auto &Value = *static_cast<Capture *>(Context);
+				if (Value.Count < Value.Events.size()) Value.Events[Value.Count++] = Event;
+			}
+		} Evidence;
+		auto World = std::make_shared<DataModel>();
+		auto Object = std::make_shared<Folder>(); Object->SetParent(World);
+		const ConnectionId Connection{87, 3};
+		StructuralReplicationConfiguration Configuration;
+		Configuration.PlanningWorkPerTick = 2; Configuration.PlanningPeerQuantum = 1;
+		ReplicationCoordinator Coordinator(World, {}, true, Configuration);
+		PeerRelevanceSelection Selection{.RequiredObjects = {World->GetObjectId()},
+			.DesiredObjects = {World->GetObjectId(), Object->GetObjectId()}};
+		std::ranges::sort(Selection.DesiredObjects);
+		auto Input = std::make_shared<const PeerRelevanceSelection>(Selection);
+		Check(Coordinator.RegisterPeerPlanned(Connection, ReplicationEpoch(1), Input).Succeeded(), "source-empty fixture registers actual bounded planner");
+		std::uint64_t Tick = 0;
+		for (int Attempt = 0; Attempt < 2000 && !Coordinator.IsPlanningReady(Connection); ++Attempt)
+			Coordinator.ProcessPlanning(++Tick);
+		auto Deferred = Coordinator.ProducePendingBaseline(Connection, 8, Tick, MaximumReplicationFrameBytes, 0);
+		Check(Deferred.DeferredForBytes && Deferred.RequiredFrameBytes != 0, "source-empty fixture obtains real encoded baseline candidate");
+		if (!Deferred.DeferredForBytes) { Coordinator.RemovePeer(Connection); World->Destroy(); return; }
+		Admission Account(ReliableServiceProfile::PooledService());
+		const ConnectionId ReadyPeer{88, 3};
+		const std::array<ConnectionId, 4> WarmupPeers{{{89, 3}, {90, 3}, {91, 3}, {92, 3}}};
+		auto Step = [&](std::uint64_t At) {
+			Check(Account.BeginStep(At) && Account.ObserveService(Connection, Admission::ServiceObservation{At, true, true}),
+				"source-empty fixture retains complete generation-valid service");
+			Check(Account.ObserveService(ReadyPeer, Admission::ServiceObservation{At, true, true}), "ready competing peer has fresh service");
+			for (const auto Peer : WarmupPeers)
+				Check(Account.ObserveService(Peer, Admission::ServiceObservation{At, true, true}), "prior ACK consumers retain fresh full-generation service");
+			Account.SetOrdinaryFunding(224 * 1024);
+			(void)Account.Allowance(Connection, At);
+			(void)Account.Allowance(ReadyPeer, At);
+			for (const auto Peer : WarmupPeers) (void)Account.Allowance(Peer, At);
+		};
+		Step(0);
+		Account.DeferSize(Connection, Deferred.RequiredFrameBytes + ReliableServiceEnvelopeBytes, Deferred.DiagnosticFingerprint);
+		Account.EndStep(); Step(250'000); Account.EndStep();
+		// Four previously serviced peers consume the actual pooled burst. Their
+		// exact ACK retirement releases every slot before the two subject peers
+		// compete, without changing rates, credits or admission ownership.
+		for (const auto Peer : WarmupPeers) {
+			auto Receipt = Account.Reserve(Peer, MaximumReliableServiceGroupBytes);
+			Check(Receipt && Account.Commit(*Receipt) && Account.Retire(Peer, Receipt->Token, Receipt->Bytes) &&
+				Account.RefreshService(Peer, Admission::ServiceObservation{250'000, true, true}), "prior exact grants drain funded credit and retire ACK-owned slots");
+		}
+		Check(Account.GlobalCredit() == 0 && Account.Allowance(Connection, 250'000) == 0,
+			"real encoded candidate owns global refill turn after prior exact service");
+		const auto Eligible = std::ranges::find_if(Evidence.Events.begin(), Evidence.Events.begin() + Evidence.Count,
+			[](const auto &Event) { return Event.Kind == Kind::CreditEligible; });
+		Check(Eligible != Evidence.Events.begin() + Evidence.Count, "real exact baseline candidate becomes credit eligible");
+		const auto DemandId = Eligible != Evidence.Events.begin() + Evidence.Count ? Eligible->DemandId : 0;
+		const auto Since = Eligible != Evidence.Events.begin() + Evidence.Count ? Eligible->EligibleSinceMicroseconds : 0;
+		// Replacing a selection invalidates the completed plan without creating
+		// journal history. One charged planning slice cannot finish its disposal.
+		auto Replacement = std::make_shared<const PeerRelevanceSelection>(*Input);
+		Check(Coordinator.RequestPlanning(Connection, Replacement, Tick + 1).Succeeded(), "source-empty fixture replaces actual planning input");
+		Coordinator.ProcessPlanning(++Tick);
+		auto NoPlan = Coordinator.ProducePendingBaseline(Connection, 8, Tick);
+		Check(!Coordinator.IsPlanningReady(Connection) && Coordinator.GetJournalLag(Connection) == 0 &&
+			NoPlan.Error == "No replication relevance changes are available" && Coordinator.HasPendingStructuralWork(Connection),
+			"zero journal lag and no frame do not erase bounded planning ownership");
+		Step(260'000);
+		Account.DeferSource(ReadyPeer);
+		Check(Account.Allowance(ReadyPeer, 260'000) == 0,
+			"another generation-valid peer cannot release the retained candidate funding turn");
+		if (!Coordinator.HasPendingStructuralWork(Connection)) (void)Account.NoWork(Connection, true, 260'000);
+		else if (!Coordinator.IsPlanningReady(Connection)) Account.DeferSource(Connection);
+		const auto Ready = Account.Reserve(ReadyPeer, 128);
+		Check(Ready && Account.Commit(*Ready) && Account.Retire(ReadyPeer, Ready->Token, Ready->Bytes) &&
+			Account.RefreshService(ReadyPeer, Admission::ServiceObservation{260'000, true, true}),
+			"actual non-ready planning yields only the funding turn so a ready competing peer accepts and retires");
+		Account.EndStep();
+		Check(Evidence.Count == 2 && DemandId != 0 && Since == 250'000,
+			"bounded planning funding yield preserves exact demand identity and original eligibility without disposal");
+		Check(Account.GetMetrics().OldestWaitMicroseconds == 260'000 &&
+			Account.GlobalCredit() == 671088 - 128 && Account.Debt(Connection) == 0,
+			"funding yield retains original admission wait and leaves credit/debt unchanged except ready peer exact grant");
+		for (int Attempt = 0; Attempt < 2000 && !Coordinator.IsPlanningReady(Connection); ++Attempt)
+			Coordinator.ProcessPlanning(++Tick);
+		auto Baseline = Coordinator.ProducePendingBaseline(Connection, 8, Tick);
+		Check(Baseline.Frame.has_value() && Coordinator.HasPendingStructuralWork(Connection), "unaccepted prepared baseline remains source-owned work");
+		if (!Baseline.Frame) { Coordinator.RemovePeer(Connection); World->Destroy(); return; }
+		Check(Coordinator.CommitSchedulerAcceptance(Connection, Baseline.Frame->Sequence).Succeeded(), "actual baseline acceptance commits planning work");
+		for (int Attempt = 0; Attempt < 2000 && Coordinator.HasPendingRelevance(Connection); ++Attempt) Coordinator.ProcessPlanning(++Tick);
+		Check(!Coordinator.HasPendingStructuralWork(Connection), "accepted baseline and completed planning disposal establish actual empty source");
+		Step(270'000);
+		if (!Coordinator.HasPendingStructuralWork(Connection)) Check(Account.NoWork(Connection, true, 270'000), "actual source-empty end supplies fresh time");
+		Account.EndStep();
+		Check(Evidence.Count == 3 && Evidence.Events[2].Kind == Kind::DemandDisposed && Evidence.Events[2].Reason == Reason::SourceEmpty &&
+			Evidence.Events[2].DemandId == DemandId && Evidence.Events[2].EligibleSinceMicroseconds == Since &&
+			Account.GetMetrics().AcceptedBytes == 4 * MaximumReliableServiceGroupBytes + 128,
+			"source-empty end closes original eligibility without manufacturing candidate delivery");
+		// A capped no-frame journal read consumes only one irrelevant record.
+		// Remaining source records and an exact current Name candidate survive.
+		for (int Index = 0; Index < 3; ++Index)
+			ChangeJournal::Get().Commit(World->GetObjectId(), Object->GetObjectId(), PropertyUpdatedChange{"Archivable", WireValue(Index != 0), false});
+		Object->SetName("source-budget-final");
+		auto Name = Coordinator.ProduceIncremental(Connection, 8, MaximumReplicationFrameBytes, 32, 0);
+		Check(Name.DeferredForBytes, "journal fixture gets a real deferred current Name candidate");
+		Step(280'000); Account.DeferSize(Connection, Name.RequiredFrameBytes + ReliableServiceEnvelopeBytes, Name.DiagnosticFingerprint); Account.EndStep();
+		const auto BeforeCapped = Evidence.Count;
+		auto Capped = Coordinator.ProduceIncremental(Connection, 0, MaximumReplicationFrameBytes, 2);
+		Check(!Capped.Frame && Capped.JournalRecordsExamined == 1 && Coordinator.GetJournalLag(Connection) == 3 &&
+			Coordinator.HasPendingStructuralWork(Connection), "capped no-frame read cannot certify remaining source empty");
+		Step(290'000);
+		if (!Coordinator.HasPendingStructuralWork(Connection)) (void)Account.NoWork(Connection, true, 290'000);
+		else if (!Capped.Frame) Account.DeferSource(Connection);
+		Account.EndStep();
+		Check(Evidence.Count == BeforeCapped, "insufficient journal budget retains exact demand and eligible clock");
+		auto Final = Coordinator.ProduceIncremental(Connection, 8, MaximumReplicationFrameBytes, 32);
+		Check(Final.Frame.has_value(), "remaining journal candidate eventually prepares under unchanged bounded read allowance");
+		if (Final.Frame) {
+			Step(300'000);
+			Account.ObserveExactDemand(Connection, Final.EncodedFrame.size() + ReliableServiceEnvelopeBytes, 300'000, Final.DiagnosticFingerprint);
+			auto Receipt = Account.Reserve(Connection, Final.EncodedFrame.size() + ReliableServiceEnvelopeBytes);
+			Check(Receipt && Account.Commit(*Receipt) && Coordinator.CommitSchedulerAcceptance(Connection, Final.Frame->Sequence).Succeeded(),
+				"unchanged admission and source owners accept eventual exact journal frame");
+			if (Receipt) Check(Account.Retire(Connection, Receipt->Token, Receipt->Bytes) &&
+				Account.RefreshService(Connection, Admission::ServiceObservation{300'000, true, true}), "exact eventual grant retires and releases");
+			Account.EndStep();
+		}
+		Check(!Coordinator.HasPendingStructuralWork(Connection) && Coordinator.HasPendingStructuralWork({87, 4}),
+			"actual drained source is empty and unknown full generation fails closed");
+		std::string FrozenError;
+		auto Frozen = Coordinator.CaptureFrozenQuote(FrozenError);
+		Check(Frozen && FrozenError.empty() && !Frozen->HasPendingStructuralWork(Connection),
+			"actual drained source captures an independently empty cessation frontier");
+		Object->SetName("source-frontier-final");
+		Check(Coordinator.GetJournalLag(Connection) == 0 && Coordinator.HasPendingStructuralWork(Connection),
+			"fresh committed Name cannot be declared empty by a stale catalog cursor");
+		Check(Frozen && !Frozen->HasPendingStructuralWork(Connection), "later live mutation cannot invent work in the frozen cessation frontier");
+		auto Fresh = Coordinator.ProduceIncremental(Connection, 8, MaximumReplicationFrameBytes, 32);
+		Check(Fresh.Frame && Coordinator.HasPendingStructuralWork(Connection) &&
+			Coordinator.CommitSchedulerAcceptance(Connection, Fresh.Frame->Sequence).Succeeded() &&
+			!Coordinator.HasPendingStructuralWork(Connection),
+			"fresh source suffix prepares and accepts through unchanged bounded production ownership before empty proof");
+		{
+			Admission ClockAccount(ReliableServiceProfile::PooledService());
+			auto ClockStep = [&](std::uint64_t At) {
+				Check(ClockAccount.BeginStep(At) && ClockAccount.ObserveService(Connection,
+					Admission::ServiceObservation{At, true, true}), "source-empty clock fixture observes complete service");
+				ClockAccount.SetOrdinaryFunding(224 * 1024);
+				(void)ClockAccount.Allowance(Connection, At);
+			};
+			ClockStep(0); ClockAccount.DeferSize(Connection, 100, {7, 8}); ClockAccount.EndStep();
+			ClockStep(100); ClockAccount.EndStep();
+			ClockStep(1'181'350); ClockAccount.EndStep();
+			const auto Before = Evidence.Count;
+			const auto Credit = ClockAccount.GlobalCredit();
+			Check(!ClockAccount.NoWork(Connection, true) && !ClockAccount.NoWork(Connection, true, 1'181'349) &&
+				Evidence.Count == Before && ClockAccount.GlobalCredit() == Credit && ClockAccount.Debt(Connection) == 0,
+				"missing or backward source-empty time cannot dispose the obligation or alter funding/debt");
+			if (!Coordinator.HasPendingStructuralWork(Connection))
+				Check(ClockAccount.NoWork(Connection, true, 1'181'351), "actual empty source end advances to its fresh observed time");
+			Check(Evidence.Count == Before + 1 && Evidence.Events[Before].Reason == Reason::SourceEmpty &&
+				Evidence.Events[Before].AtMicroseconds == 1'181'351 && Evidence.Events[Before].EligibleSinceMicroseconds == 100 &&
+				Evidence.Events[Before].AtMicroseconds - Evidence.Events[Before].EligibleSinceMicroseconds == 1'181'251,
+				"cached exact-bound time cannot conceal source-empty end one microsecond beyond the unchanged fair deadline");
+			Check(ClockAccount.Allowance(Connection, 1'181'350) == 0 && ClockAccount.GetMetrics().AcceptedBytes == 0,
+				"fresh source-empty time remains monotonic and creates no delivery");
+		}
+		Coordinator.RemovePeer(Connection); World->Destroy();
+	}
+
+	void TestClientReplicaIdentityObservations() {
+		using Access = gargantuan::network::detail::GameSessionTestAccess;
+		auto World = std::make_shared<DataModel>();
+		auto First = std::make_shared<Part>(), Second = std::make_shared<Part>();
+		First->SetName("same"); Second->SetName("same");
+		First->SetParent(World); Second->SetParent(World);
+		const auto FirstSource = First->GetObjectId(), SecondSource = Second->GetObjectId();
+		ReplicationCoordinator Coordinator(World);
+		ReplicaApplier Replica;
+		auto Baseline = Coordinator.AddPeer({703, 1}, ReplicationEpoch(11));
+		Check(Baseline.Succeeded() && Replica.ApplyFrame(*Baseline.Frame).Succeeded(),
+			"identity observation establishes an actual live source-to-replica map");
+		const auto FirstLocal = Replica.Resolve(FirstSource), SecondLocal = Replica.Resolve(SecondSource);
+		if (!FirstLocal || !SecondLocal) { Check(false, "identity observation requires both actual live replicas"); return; }
+		const std::array Observed{SecondLocal, FirstLocal};
+		for (const auto Domain : {ExecutionDomain::Worker, ExecutionDomain::IO, ExecutionDomain::Simulation}) {
+			ExecutionDomainScope Scope(Domain);
+			Check(!Access::ReadClientReplicaIdentities(Replica, Observed),
+				"non-Main qualification caller is rejected before traversing the live replica");
+		}
+		const auto Identities = Access::ReadClientReplicaIdentities(Replica, Observed);
+		Check(FirstLocal->GetObjectId() != FirstSource && SecondLocal->GetObjectId() != SecondSource &&
+			FirstLocal->GetName() == SecondLocal->GetName() && Identities && Identities->size() == 2 &&
+			(*Identities)[0].Source == SecondSource && (*Identities)[0].Local == SecondLocal->GetObjectId() &&
+			(*Identities)[1].Source == FirstSource && (*Identities)[1].Local == FirstLocal->GetObjectId() &&
+			(*Identities)[0].Epoch == ReplicationEpoch(11) && (*Identities)[1].Epoch == ReplicationEpoch(11),
+			"distinct local/source generations are joined by exact live binding, never duplicate Name or array order");
+		if (!Identities || Identities->size() != 2) return;
+		Check(Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities),
+			"immutable cut verifies exact current forward bindings despite equal Names");
+		for (const auto Domain : {ExecutionDomain::Worker, ExecutionDomain::IO, ExecutionDomain::Simulation}) {
+			ExecutionDomainScope Scope(Domain);
+			Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities),
+				"forward cut rejects non-Main calls before reading replica state");
+		}
+		auto RejectIdentity = [&](auto &&Change, const char *Reason) {
+			auto Wrong = *Identities; Change(Wrong);
+			Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, Wrong), Reason);
+		};
+		RejectIdentity([](auto &Ids) { std::swap(Ids[0].Source, Ids[1].Source); },
+			"same-Name aliases cannot swap their authoritative source witnesses");
+		RejectIdentity([](auto &Ids) { Ids[0].Source = Ids[1].Source; }, "duplicate source witness fails the cut");
+		RejectIdentity([](auto &Ids) { Ids[0].Local = Ids[1].Local; }, "duplicate local witness fails the cut");
+		RejectIdentity([](auto &Ids) { ++Ids[0].Source.Generation; }, "wrong full source generation fails the cut");
+		RejectIdentity([](auto &Ids) { ++Ids[0].Local.Generation; }, "wrong full local generation fails the cut");
+		RejectIdentity([](auto &Ids) { Ids[0].Epoch = ReplicationEpoch(12); }, "stale or forecast replica epoch fails the cut");
+		RejectIdentity([](auto &Ids) { Ids[0].Source = {}; }, "missing source identity fails the cut");
+		const std::array Duplicate{FirstLocal, FirstLocal};
+		const std::array<std::shared_ptr<Instance>, 1> Null{nullptr};
+		const std::array<std::shared_ptr<Instance>, 1> Foreign{First};
+		std::array<std::shared_ptr<Instance>, 33> Oversized{};
+		Check(!Access::ReadClientReplicaIdentities(Replica, Duplicate) && !Access::ReadClientReplicaIdentities(Replica, Null) &&
+			!Access::ReadClientReplicaIdentities(Replica, Foreign) && !Access::ReadClientReplicaIdentities(Replica, Oversized) &&
+			!Access::ReadClientReplicaIdentities(Replica, {}),
+			"duplicate/ambiguous observations, null, foreign scope and empty/oversized batches fail closed");
+		Check(!Access::VerifyClientReplicaIdentities(Replica, Duplicate, *Identities) &&
+			!Access::VerifyClientReplicaIdentities(Replica, Null, std::span(*Identities).first(1)) &&
+			!Access::VerifyClientReplicaIdentities(Replica, Foreign, std::span(*Identities).first(1)) &&
+			!Access::VerifyClientReplicaIdentities(Replica, Oversized, *Identities) &&
+			!Access::VerifyClientReplicaIdentities(Replica, {}, {}) &&
+			!Access::VerifyClientReplicaIdentities(Replica, Observed, std::span(*Identities).first(1)),
+			"forward cut rejects duplicate pointers, null/foreign targets and missing or excessive bindings");
+		ReplicationFrame Remove{ReplicationProtocolVersion, ReplicationMessageKind::Incremental, ReplicationEpoch(11),
+			ReliableReplicationSequence(2), {}, {{ReplicationEpoch(11), UnpublishReplication{FirstSource}}}};
+		Check(Replica.ApplyFrame(Remove).Succeeded() && !Replica.Resolve(FirstSource) &&
+			!Access::ReadClientReplicaIdentities(Replica, std::array{FirstLocal}),
+			"unpublished source cannot retain an observation through its stale local replica pointer");
+		Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities),
+			"servicing that unpublishes a previously discovered replica invalidates the final cohort cut");
+		// A complete subsequent epoch reuses the same wire slot with a new
+		// generation. It constructs a new live object and cannot bind the old one.
+		const ObjectId ReusedSource{FirstSource.Slot, static_cast<std::uint32_t>(FirstSource.Generation + 1)};
+		// Coordinator baselines retain immutable PreparedPublish templates.
+		// ApplyFrame normalizes them through this actual wire codec; mutate the
+		// resulting Publish representation rather than a template or absent arm.
+		const auto EncodedBaseline = EncodeReplicationFrame(*Baseline.Frame);
+		Check(EncodedBaseline.has_value(), "identity fixture encodes its actual prepared baseline");
+		if (!EncodedBaseline) return;
+		const auto DecodedBaseline = DecodeReplicationFrame(*EncodedBaseline);
+		Check(DecodedBaseline.has_value(), "identity fixture decodes the actual source-ID wire representation");
+		if (!DecodedBaseline) return;
+		auto Reused = *DecodedBaseline;
+		Reused.Epoch = ReplicationEpoch(12);
+		bool ReusedPublication = false;
+		for (auto &Operation : Reused.Operations) {
+			Operation.Epoch = Reused.Epoch;
+			if (auto *Publish = std::get_if<PublishReplication>(&Operation.Intent); Publish && Publish->Object == FirstSource) {
+				Publish->Object = ReusedSource; ReusedPublication = true;
+			}
+		}
+		Check(ReusedPublication, "reused-generation fixture changes the actual baseline source identity");
+		Check(Replica.ApplyFrame(Reused).Succeeded() && !Replica.Resolve(FirstSource),
+			"fresh epoch accepts only the full reused source generation");
+		const auto ReusedLocal = Replica.Resolve(ReusedSource);
+		const auto ReusedIdentity = ReusedLocal ? Access::ReadClientReplicaIdentities(Replica, std::array{ReusedLocal}) : std::nullopt;
+		Check(ReusedIdentity && (*ReusedIdentity)[0].Source == ReusedSource &&
+			(*ReusedIdentity)[0].Local == ReusedLocal->GetObjectId() && (*ReusedIdentity)[0].Epoch == ReplicationEpoch(12) &&
+			!Access::ReadClientReplicaIdentities(Replica, std::array{FirstLocal}) &&
+			!Access::ReadClientReplicaIdentities(Replica, std::array{SecondLocal}),
+			"epoch replacement invalidates every old replica binding even while a test retains its old Instance");
+		Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities) && ReusedIdentity &&
+			Access::VerifyClientReplicaIdentities(Replica, std::array{ReusedLocal}, *ReusedIdentity),
+			"fresh epoch and source generation validate only the new live replica at the final cut");
+		if (ReusedLocal) {
+			ReusedLocal->Destroy();
+			Check(!Access::ReadClientReplicaIdentities(Replica, std::array{ReusedLocal}),
+				"destroyed local target cannot certify a source binding");
+			Check(!ReusedIdentity || !Access::VerifyClientReplicaIdentities(Replica, std::array{ReusedLocal}, *ReusedIdentity),
+				"destroyed target invalidates a previously captured forward witness");
+		}
+		Replica.Reset();
+		Check(!Replica.GetEpoch().IsValid() && !Access::ReadClientReplicaIdentities(Replica, Observed),
+			"reset replica owns no epoch or valid historical source/local witness");
+		Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities),
+			"reset invalidates every immutable-cut epoch and generation witness");
 	}
 
 	void TestRepeatedReplicaPropertyPreflight() {
@@ -639,6 +936,8 @@ int main() {
 	Check(test::RunFarmRecoveryObservationTests(), "farm recovery stage comes from the replicated DataModel");
 	TestReplicaRenderDirtiness();
 	TestRepeatedReplicaPropertyPreflight();
+	TestClientReplicaIdentityObservations();
+	TestSourceOwnedAdmissionEmptiness();
 	TestRevisionedStructuralMaterialization();
 	TestStructuralTemplateDifferential();
 

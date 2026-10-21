@@ -33,6 +33,7 @@ namespace gargantuan::network::detail {
 		GrantTerminalReleased,
 		ReservationRolledBack,
 		DemandDisposed,
+		NativeCapacityReturned,
 	};
 	enum class AdmissionEvidenceReason : std::uint8_t {
 		None,
@@ -43,6 +44,8 @@ namespace gargantuan::network::detail {
 		GenerationRemoved,
 		TerminalRelease,
 		FeedbackUnavailable,
+		SourceEmpty,
+		ResourceUnavailable,
 	};
 	struct AdmissionEvidenceEvent {
 		AdmissionEvidenceKind Kind = AdmissionEvidenceKind::ExactDemand;
@@ -54,6 +57,7 @@ namespace gargantuan::network::detail {
 		std::uint64_t ActiveGrants = 0, GrantDeferrals = 0, FundedDeferrals = 0;
 		std::uint64_t CreditDeferrals = 0, FairnessDeferrals = 0;
 		std::array<std::uint64_t, 2> ExactCandidateFingerprint{};
+		std::uint64_t RetainedBytes = 0, NativeCapacityBytes = 0, OrdinaryFundingBytes = 0, OrdinaryUnsentBytes = 0;
 	};
 	struct AdmissionEvidenceSink {
 		void *Context = nullptr;

@@ -227,6 +227,9 @@ namespace gargantuan::network {
 		[[nodiscard]] bool HasPendingRelevance(ConnectionId Connection) const;
 		[[nodiscard]] std::size_t GetPendingCriticalTransitionCount(ConnectionId Connection) const;
 		[[nodiscard]] bool HasPendingStructuralWork() const;
+		// Main-owned source state, including bounded planning and unaccepted
+		// preparation. A producer's no-frame result is not proof of emptiness.
+		[[nodiscard]] bool HasPendingStructuralWork(ConnectionId Connection) const;
 		[[nodiscard]] ReplicationScheduleResult
 		CommitSchedulerAcceptance(ConnectionId Connection, ReliableReplicationSequence Sequence);
 		[[nodiscard]] ReplicationScheduleResult

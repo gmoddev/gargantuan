@@ -8,6 +8,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "../src/runtime/PublicationLatencyDiagnostics.hpp"
 
 #include <Luau/Compiler.h>
 #include <lua.h>
@@ -1278,6 +1279,163 @@ namespace {
 			Server.Step(World, Cycle + 1);
 		}
 		Check(true, "ten active-action Character destruction and manager teardown cycles remain generation-safe");
+	}
+
+	void TestPublicationRelationshipRetirementEvidence() {
+		struct Capture {
+			std::array<runtime_detail::PublicationLatencyRecord, 16> Ends{};
+			std::size_t Count = 0;
+			bool Overflow = false;
+			runtime_detail::PublicationLatencySink *Previous = runtime_detail::ActivePublicationLatency;
+			runtime_detail::PublicationLatencySink Sink{
+				this, [](void *, ConnectionId) noexcept { return true; },
+				[](void *Context, runtime_detail::PublicationLatencyRecord Record) noexcept {
+					if (std::string_view(Record.Stage) != "CharacterRelationshipRetired") return;
+					auto &Self = *static_cast<Capture *>(Context);
+					if (Self.Count == Self.Ends.size()) { Self.Overflow = true; return; }
+					Self.Ends[Self.Count++] = Record;
+				},
+				[](void *, const char *, ConnectionId, std::span<const std::byte>, std::uint64_t) noexcept {},
+			};
+			Capture() { runtime_detail::ActivePublicationLatency = &Sink; }
+			~Capture() { runtime_detail::ActivePublicationLatency = Previous; }
+		} Evidence;
+		RecordingScheduler Scheduler;
+		AuthoritativeCharacterNetwork Server(Scheduler, TestLimits(), Movement);
+		const ConnectionId First{1'720, 3}, Second{1'721, 4}, Reused{1'720, 5};
+		auto Character = std::make_shared<KinematicCharacter>();
+		auto Other = std::make_shared<KinematicCharacter>();
+		const auto Id = Character->GetObjectId(), OtherId = Other->GetObjectId();
+		Check(Server.AddPeer(First) && Server.AddPeer(Second) && Server.RegisterCharacter(Character) &&
+			Server.RegisterCharacter(Other) && Server.MarkMaterialized(First, Id, StateChannelId(810)) &&
+			Server.MarkMaterialized(Second, Id, StateChannelId(811)) &&
+			Server.MarkMaterialized(First, OtherId, StateChannelId(812)), "retirement evidence owns three exact relationships");
+		const auto Original = Server.GetPublicationSchedulingState(First, Id);
+		Check(Original && Original->Due && Evidence.Count == 0, "new forced due is not a retirement");
+		WorldRoot World;
+		Scheduler.NextSubmission = {SchedulerSubmitStatus::DroppedUnreliable};
+		Server.Step(World, 1);
+		const auto Deferred = Server.GetPublicationSchedulingState(First, Id);
+		Check(Original && Deferred && Deferred->Due && Deferred->DesiredDueTick == Original->DesiredDueTick &&
+			Evidence.Count == 0, "scheduler rejection preserves the original due and cannot emit lifetime retirement");
+		Scheduler.NextSubmission = {SchedulerSubmitStatus::Accepted};
+		Check(!Server.MarkMaterialized(First, Id, StateChannelId(810)) &&
+			!Server.MarkUnmaterialized(Reused, Id, 20) && !Server.UnregisterCharacter({}, 20) &&
+			!Server.RemovePeer(Reused, 20) && Evidence.Count == 0,
+			"rejected or stale-generation lifetime operations cannot dispose a pending due");
+		Check(Server.BindControl(First, OtherId, 20).has_value() && Server.RevokeControl(OtherId, 21) &&
+			Evidence.Count == 0, "control lease revocation alone retains materialized recipient relationships");
+		Check(Server.MarkUnmaterialized(First, Id, 22) && Evidence.Count == 1 &&
+			Evidence.Ends[0].Connection == First && Evidence.Ends[0].Object == Id && Evidence.Ends[0].Tick == 22 &&
+			Evidence.Ends[0].Nanoseconds != 0 && !Server.GetPublicationSchedulingState(First, Id) &&
+			Server.GetPublicationSchedulingState(Second, Id).has_value(),
+			"successful dependency-driven unmaterialization retires one full generation relationship, not service");
+		Check(!Server.MarkUnmaterialized(First, Id, 23) && Evidence.Count == 1,
+			"duplicate relationship removal emits no second retirement");
+		Check(Server.MarkMaterialized(First, Id, StateChannelId(813)) && Evidence.Count == 1,
+			"reentry owns a fresh due without erasing or duplicating the prior lifetime disposition");
+		Check(Server.UnregisterCharacter(Id, 24) && Evidence.Count == 3 &&
+			std::count_if(Evidence.Ends.begin() + 1, Evidence.Ends.begin() + 3,
+				[&](const auto &End) { return End.Object == Id && End.Tick == 24 &&
+					(End.Connection == First || End.Connection == Second); }) == 2,
+			"authoritative Character removal ends exactly its two live recipient lifetimes");
+		Check(!Server.UnregisterCharacter(Id, 25) && Server.RemovePeer(First, 26) && Evidence.Count == 4 &&
+			Evidence.Ends[3].Connection == First && Evidence.Ends[3].Object == OtherId && Evidence.Ends[3].Tick == 26 &&
+			!Server.RemovePeer(First, 27) && Server.RemovePeer(Second, 27) && Evidence.Count == 4,
+			"peer teardown ends remaining relationships once and empty/duplicate teardown emits none");
+		Check(Server.AddPeer(Reused) && Server.MarkMaterialized(Reused, OtherId, StateChannelId(814)) &&
+			!Server.MarkUnmaterialized(First, OtherId, 28) && Evidence.Count == 4 &&
+			Server.RemovePeer(Reused, 29) && Evidence.Count == 5 && Evidence.Ends[4].Connection == Reused,
+			"reused connection slot keeps new generation lifetime separate from stale removal");
+		for (std::size_t Index = 0; Index < Evidence.Count; ++Index) {
+			const auto &End = Evidence.Ends[Index];
+			Check(!End.Sequence && !End.Due && !End.Epoch && !End.Bytes && !End.Operations && !Evidence.Overflow,
+				"relationship retirement carries identity only and never invents a state or serviced due");
+		}
+	}
+
+	void TestStateBuiltRequiresCompactSnapshot() {
+		struct Capture {
+			std::array<runtime_detail::PublicationLatencyRecord, 64> Records{};
+			std::size_t Count = 0;
+			bool Overflow = false;
+			runtime_detail::PublicationLatencySink *Previous = runtime_detail::ActivePublicationLatency;
+			runtime_detail::PublicationLatencySink Sink{
+				this,
+				[](void *, ConnectionId) noexcept { return true; },
+				[](void *Context, runtime_detail::PublicationLatencyRecord Record) noexcept {
+					auto &Self = *static_cast<Capture *>(Context);
+					if (Self.Count == Self.Records.size()) { Self.Overflow = true; return; }
+					Self.Records[Self.Count++] = Record;
+				},
+				[](void *, const char *, ConnectionId, std::span<const std::byte>, std::uint64_t) noexcept {},
+			};
+			Capture() { runtime_detail::ActivePublicationLatency = &Sink; }
+			~Capture() { runtime_detail::ActivePublicationLatency = Previous; }
+			std::size_t StageCount(std::string_view Stage) const {
+				return static_cast<std::size_t>(std::count_if(Records.begin(), Records.begin() + Count,
+					[Stage](const auto &Record) { return std::string_view(Record.Stage) == Stage; }));
+			}
+		};
+		RecordingScheduler Scheduler;
+		AuthoritativeCharacterNetwork Server(Scheduler, TestLimits(), Movement);
+		WorldRoot World;
+		const ConnectionId First{1'700, 1}, Second{1'701, 1};
+		auto Character = std::make_shared<KinematicCharacter>();
+		// Keep the moving classification stable across the compact-range fault.
+		// A stationary-to-moving transition promotes and reschedules the wheel
+		// before due processing, which would test cadence instead of rejection.
+		Character->ApplyRuntimeControllerFacts({1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, false);
+		const auto Id = Character->GetObjectId();
+		Check(Server.AddPeer(First) && Server.AddPeer(Second) && Server.RegisterCharacter(Character) &&
+			Server.MarkMaterialized(First, Id, StateChannelId(800)) &&
+			Server.MarkMaterialized(Second, Id, StateChannelId(801)), "snapshot evidence fixture registers two recipients");
+		Capture Evidence;
+		Server.Step(World, 1);
+		Check(Scheduler.Messages.size() == 2 && Evidence.StageCount("StateBuilt") == 1 &&
+			Evidence.StageCount("CharacterSnapshot") == 1, "one valid snapshot retains one unique build across two peers");
+		std::uint64_t InitialSequence = 0;
+		if (!Scheduler.Messages.empty()) {
+			auto Message = DecodeCharacterMessage(Scheduler.Messages.front().Payload());
+			const auto *Frame = Message ? std::get_if<CharacterStateFrame>(&*Message) : nullptr;
+			if (Frame && Frame->StateCount == 1) InitialSequence = Frame->States[0].StateSequence.Value();
+		}
+		Check(InitialSequence != 0, "initial successful state has a protocol sequence");
+		Scheduler.Messages.clear();
+		Evidence.Count = 0;
+		Character->ApplyRuntimeControllerFacts({600.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, false);
+		const CharacterAuthoritativeState Unencodable{
+			.Character = Id, .ControlEpoch = CharacterControlEpoch(1), .StateSequence = RealtimeStateSequence(1),
+			.AuthoritativeTick = 4, .Transform = Character->GetCFrame(), .Velocity = Character->GetVelocity(),
+			.FloorNormal = Character->GetFloorNormal(),
+		};
+		Check(Unencodable.IsValid() && GetCompactCharacterStateEncodedBytes(Unencodable) == 0,
+			"finite candidate velocity outside compact range is deterministically rejected");
+		Check(!Server.PublishState(Id, 4) && !Server.PublishState(Id, 4),
+			"direct publication preserves rejection of repeated unencodable candidates");
+		const auto RejectsBefore = Server.GetMetrics().ProtocolRejects;
+		Server.Step(World, 4);
+		const auto FirstState = Server.GetPublicationSchedulingState(First, Id);
+		const auto SecondState = Server.GetPublicationSchedulingState(Second, Id);
+		Check(Scheduler.Messages.empty() && Evidence.StageCount("StateBuilt") == 0 &&
+			Evidence.StageCount("CharacterSnapshot") == 0 && Server.GetMetrics().ProtocolRejects > RejectsBefore,
+			"rejected builds remain counted and never claim completed snapshot evidence or packets");
+		Check(FirstState && SecondState && FirstState->Due && SecondState->Due &&
+			FirstState->LastAcceptedPublicationTick == 1 && SecondState->LastAcceptedPublicationTick == 1,
+			"compact rejection preserves both due obligations and their prior accepted history");
+		Evidence.Count = 0;
+		Character->ApplyRuntimeControllerFacts({}, {0.0f, 1.0f, 0.0f}, false);
+		Server.Step(World, 5);
+		Check(Scheduler.Messages.size() == 2 && Evidence.StageCount("StateBuilt") == 1 &&
+			Evidence.StageCount("CharacterSnapshot") == 1 && !Evidence.Overflow,
+			"restored valid state produces one successful build and snapshot shared across recipients");
+		for (const auto &Queued : Scheduler.Messages) {
+			auto Message = DecodeCharacterMessage(Queued.Payload());
+			const auto *Frame = Message ? std::get_if<CharacterStateFrame>(&*Message) : nullptr;
+			Check(Frame && Frame->StateCount == 1 && Frame->States[0].Character == Id &&
+				Frame->States[0].StateSequence.Value() == InitialSequence + 3,
+				"direct rejected candidates still consume their existing sequences before valid recovery");
+		}
 	}
 
 	void TestStateBatchingCadenceAndSuppression() {
@@ -2984,6 +3142,8 @@ int main() {
 		TestLossReorderAndLifecycle();
 		TestRemotePresentationFaultMatrix();
 		TestRepeatedManagerChurn();
+		TestPublicationRelationshipRetirementEvidence();
+		TestStateBuiltRequiresCompactSnapshot();
 		TestStateBatchingCadenceAndSuppression();
 		TestImportanceCadenceAndLifecycle();
 		TestBoundedPublicationScheduling();

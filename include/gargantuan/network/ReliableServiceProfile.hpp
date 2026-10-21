@@ -13,7 +13,14 @@ enum class ReliableServiceMode : std::uint8_t { FULL_RESERVATION, POOLED_SERVICE
 // The single accepted Option C candidate. These are eligibility and funded
 // service bounds, never measurements of the configured host or path.
 struct PooledReliableServiceProfile {
-	// F1: finite accepted-grant latency and in-grant running capacity.
+	// Trusted native ownership selection, never a client preference. Legacy V1
+	// keeps false; the explicit non-real-time profile selects independent leases.
+	bool SeparateNativeCapacity = false;
+	// D03 non-real-time contract: retain target measurements without making
+	// elapsed wall time a service/ownership failure. Legacy profiles keep false.
+	bool DiagnosticPerformance = false;
+	// Legacy F1 diagnostic arithmetic; D03/HYBRID_F1_V1 uses a separate
+	// uniform completion certificate and actual FIFO/capacity outcomes.
 	// Neither allowance accumulates across grants or during credit/ACK wait.
 	static constexpr std::uint64_t PeerActiveGrantDrainCapacityFloor = 16ULL * 1024 * 1024;
 	static constexpr std::uint64_t ServiceQuantumBytes = 1'248;
@@ -26,6 +33,11 @@ struct PooledReliableServiceProfile {
 		ServiceQuantumBytes * 1'000'000 + PeerActiveGrantDrainCapacityFloor * ServiceSchedulingMicroseconds;
 	static constexpr std::uint64_t FourGrantPoolRunningBoundByteMicroseconds =
 		4 * RunningGrantBoundByteMicroseconds;
+	// Accepted D03/HYBRID_F1_V1 product class. Legacy packet curves above
+	// remain independent diagnostics; funding is not measured capacity.
+	static constexpr std::uint64_t StructuralTurnoverMicroseconds = 150'000;
+	static constexpr std::uint64_t AdmissionOpportunityMicroseconds = 100'000;
+	static constexpr std::uint64_t EligibleAdmissionWaitMicroseconds = 1'181'250;
 	std::uint64_t BackendCap = 96 * 1024 * 1024;
 	std::uint64_t StructuralPool = 64 * 1024 * 1024;
 	std::uint64_t GameplayReserve = 8 * 1024 * 1024;
@@ -46,6 +58,12 @@ struct PooledReliableServiceProfile {
 	static constexpr std::uint64_t GameplayBurst = 160 * 1024;
 	static constexpr std::uint64_t GameplaySteadyRate = 256 * 1024;
 	static constexpr std::uint64_t ControlBurst = 64 * 1024;
+	// Prospective peer FIFO resource eligibility, not measured native capacity.
+	// Reserve the uniform G completion budget and a complete protected burst.
+	static constexpr std::uint64_t PeerOrdinaryUnsentLimit =
+		(PeerActiveGrantDrainCapacityFloor * QueueWindowMicroseconds -
+		 (FiniteGrantInterceptByteMicroseconds + MaximumReliableServiceGroupBytes * 1'000'000)) / 1'000'000 -
+		PeerGameplayBurst - ControlBurst;
 	[[nodiscard]] std::string_view ValidationError() const;
 };
 
@@ -59,6 +77,7 @@ struct ReliableByteAdmissionMetrics {
 	std::uint64_t VerifiedAttributedRetirement = 0, TerminalReleasedBytes = 0, OutstandingBytes = 0;
 	std::uint64_t OutstandingHighWater = 0, ActiveDrainGrants = 0, DrainGrantsHighWater = 0;
 	std::uint64_t GrantDeferrals = 0, FundedDeferrals = 0, QualificationGrants = 0;
+	std::uint64_t NativeCapacityBytes = 0, NativeCapacityReturns = 0;
 };
 
 // Trusted native deployment input, never a negotiated client preference. Rates
@@ -84,11 +103,21 @@ struct ReliableServiceProfile {
 	ReliableServiceMode Mode = ReliableServiceMode::FULL_RESERVATION;
 	PooledReliableServiceProfile Pooled;
 
-	[[nodiscard]] static ReliableServiceProfile PooledService() {
+	[[nodiscard]] static ReliableServiceProfile PooledService(bool SeparateNativeCapacity = false) {
 		ReliableServiceProfile Result;
 		Result.Mode = ReliableServiceMode::POOLED_SERVICE;
+		Result.Pooled.SeparateNativeCapacity = SeparateNativeCapacity;
 		Result.MaximumConnections = 32;
 		return Result;
+	}
+	[[nodiscard]] static ReliableServiceProfile PooledServiceNonRealtime() {
+		auto Result = PooledService(true);
+		Result.Pooled.DiagnosticPerformance = true;
+		return Result;
+	}
+	[[nodiscard]] bool HasDiagnosticPerformance() const { return IsPooled() && Pooled.DiagnosticPerformance; }
+	[[nodiscard]] std::string_view ContractIdentity() const {
+		return HasDiagnosticPerformance() ? "POOLED_CORRECTNESS_V1" : IsPooled() ? "HYBRID_F1_V1" : "FULL_RESERVATION";
 	}
 	[[nodiscard]] bool IsPooled() const { return Mode == ReliableServiceMode::POOLED_SERVICE; }
 	// GNS charges physical packets, whereas PeerDrainFloor measures unique

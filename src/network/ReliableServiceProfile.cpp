@@ -36,7 +36,8 @@ std::string_view ResourceError(const ReliableServiceProfile &Value) {
 }
 
 bool ReliableServiceProfile::IsLatencyCompatible() const {
-	if (IsPooled()) return MaximumConnections == 32 && NonQueueAllowanceMilliseconds == 100 && Pooled.ValidationError().empty();
+	if (IsPooled()) return MaximumConnections == 32 && NonQueueAllowanceMilliseconds == 100 &&
+		!Pooled.SeparateNativeCapacity && !Pooled.DiagnosticPerformance && Pooled.ValidationError().empty();
 	if (Mode != ReliableServiceMode::FULL_RESERVATION) return false;
 	if (!ResourceError(*this).empty()) return false;
 	const auto QueueMilliseconds = 250 - NonQueueAllowanceMilliseconds;
@@ -49,8 +50,13 @@ bool ReliableServiceProfile::IsLatencyCompatible() const {
 
 std::string_view ReliableServiceProfile::ValidationError() const {
 	if (IsPooled()) {
+		if (Pooled.DiagnosticPerformance && !Pooled.SeparateNativeCapacity)
+			return "Non-real-time pooled service requires separate native capacity and exact retained ACK ownership";
 		if (MaximumConnections != 32 || NonQueueAllowanceMilliseconds != 100)
 			return "POOLED_SERVICE requires the accepted 32-peer, 100 ms nonqueue candidate";
+		if (RequireLatencyCompatibility && Pooled.SeparateNativeCapacity)
+			return Pooled.DiagnosticPerformance ? "Non-real-time service cannot satisfy RequireLatencyCompatibility" :
+				"Separated native capacity is unqualified for retained-retry ordinary FIFO service";
 		return Pooled.ValidationError();
 	}
 	if (Mode != ReliableServiceMode::FULL_RESERVATION) return "Unknown reliable service mode";

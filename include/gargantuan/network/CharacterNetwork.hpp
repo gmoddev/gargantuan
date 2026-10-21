@@ -270,7 +270,7 @@ namespace gargantuan::network {
 		bool RegisterCharacter(const std::shared_ptr<KinematicCharacter> &Character);
 		bool UnregisterCharacter(ObjectId Character, std::uint64_t AuthoritativeTick);
 		bool MarkMaterialized(ConnectionId Connection, ObjectId Character, StateChannelId Channel);
-		bool MarkUnmaterialized(ConnectionId Connection, ObjectId Character);
+		bool MarkUnmaterialized(ConnectionId Connection, ObjectId Character, std::uint64_t AuthoritativeTick = 0);
 		bool SetPeerPublicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
 		[[nodiscard]] std::optional<CharacterControlEpoch>
 		BindControl(ConnectionId Connection, ObjectId Character, std::uint64_t AuthoritativeTick);

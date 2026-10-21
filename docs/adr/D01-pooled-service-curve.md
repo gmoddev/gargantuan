@@ -12,6 +12,19 @@ production health and physical qualification. Historical receipts remain
 evidence of the rule under which they were evaluated; they do not establish
 compliance with D01.
 
+**Current governing amendment:** the explicitly accepted
+[D03 hybrid service and permit ownership decision](D03-hybrid-pooled-service-and-permit-ownership.md)
+supersedes F1's hard packet timing and implied continuous delivered capacity.
+The earlier text remains decision history. New production/evidence uses
+`HYBRID_F1_V1`; historical `finite_grant_v1` failures remain failures.
+
+The2026-10-13 D03 qualification-scope amendment also supersedes the exception
+that required raw four-grant running curves for standard HYBRID release.
+Explicit legacy profiles retain the complete rules below; new HYBRID fixtures
+keep these measurements as diagnostics while enforcing their hard native
+completion, attribution, accounting, reserve, reliability and lifetime checks.
+No historical measurement or verdict changes.
+
 ## Rates and the native quantum
 
 Peer credit refills at **2 MiB/s** between grants. Credit is admission
@@ -198,6 +211,29 @@ fail even if its total completion appears to fit the startup allowance.
 
 ### Native transport implementation of the unchanged F1 bound
 
+#### Post-wake decision A — keep F1 strict (2026-10-06)
+
+After qualifying both absolute-wake implementation corrections on native source
+`c916b7d4f868177ae00b4b05dacfa7b8dbb1f563`, retain the existing finite and
+within-grant running equations, constants and common-four contract unchanged.
+Source-extracted old-fail/new-pass regressions, 13 native compatibility tests,
+the observed 32-peer F1 development workload, a fixed 14-child clean batch and
+all six original hosted jobs pass. An independent review challenged the
+platform assumptions and supports retaining the strict requirement on this
+evidence. The [decision receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-wake-decision-a-keep-f1-strict-2026-10-06)
+records counts, source scopes, alternatives and limitations.
+
+F1 remains a strict deployment-qualification and runtime-health requirement.
+A violating qualified grant still fails: do not pause its clock, omit it,
+erase history or excuse host lateness. Requested timer precision is not a
+universal Windows thread-dispatch guarantee. A finite passing campaign proves
+its recorded observations, not every future schedule; the untraced historical
+1,109-us failure remains unattributed. No benchmark-derived slack or stronger
+execution environment is introduced. Fresh current-source Local32 and Node32
+F1 evidence remains mandatory. A future residual failure without an attributable
+software cause requires the architecture decision procedure rather than another
+sequence of speculative micro-timing patches.
+
 The first physical F1 trace found a 1,258 B grant whose first UDP packet
 carried 1,135 structural bytes and whose 123 B final segment remained behind
 GNS's ordinary 5 ms Nagle timer. The finite envelope passed, but the
@@ -217,6 +253,14 @@ active. Unique
 first-send and retransmission accounting commit only after a positive native
 UDP send result, and all segments in that packet share one timestamp. These
 are transport implementation requirements, not new F1 service allowances.
+
+The precise wait preserves its clamped absolute deadline using one clock sample;
+a pause between calculations cannot retimestamp that deadline later. Windows'
+existing final short spin does not depend on successful creation of the timer
+used by longer waits. The source-extracted native regression and
+[correction receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#absolute-sender-wake-correction-source-regression-qualified-2026-10-06)
+verify these implementation corrections without changing the F1 contract or
+claiming a cause for an earlier uninstrumented CI gap.
 
 The extra packet cost of scoped NoNagle is bounded by the production grant
 cadence. A server step admits at most four complete structural grants and
@@ -364,3 +408,33 @@ one 1,258-byte grant used 1,451 IPv4 wire bytes, exceeding the 8/64 reserve
 ratio. Funded eligibility leaves that grant's ACK policy unchanged. Existing
 historical failures and the separate F1 physical PASS retain their original
 meaning; native prototype success does not qualify a later recovery campaign.
+
+## HYBRID_F1_V1 amendment — product service and exact permits (2026-10-11)
+
+Adopt D03 after coordinated deterministic/affected Windows preflight. Require
+its conjunction: exact uniform native completion at 37324.3865966796875 us,
+actual protected ordinary FIFO within 50000 us, exact structural turnover
+through a completed Main opportunity within 150000 us, completed ready-work
+Main opportunity within 100000 us, and qualified 32-peer admission within
+1181250 us. Keep all original player latency, security, reliability, reserves,
+resource, native-positive truth and exact delivery guarantees.
+
+64 MiB/s remains funded structural capacity/refill. Neither refill nor these
+finite clocks proves continuous delivered service. Qualify actual offered group
+shapes, Main/source work, fairness, ACK retirement and regrant. Preserve the
+20-second service recovery and the original C3/C5 immutable reference deadline
+as additional hard outcomes; no generic byte-count convergence proof follows
+from the replacement clocks alone.
+
+Structural permits return after exact generation-correct retirement and fresh
+complete feedback, independently of unrelated ordinary ACK debt. Ordinary
+funding stays charged and native-unsent exposure remains prospectively bounded.
+Neither timeout nor incomplete evidence returns capacity. Separate committed
+grant rotation from the existing journal-reader rotation.
+
+Legacy F1 curve arithmetic and histories remain unchanged, diagnostic under
+this version. Hard completion/counter integrity, generation and feedback errors
+remain fatal or bounded service failures as D03 specifies. Explicitly version
+health/evidence migration across native, adapter and GameSession; old readers
+remain strict. No historical verdict is rewritten. KI-006 remains OPEN pending
+all exact-source CI, native32, Local32, real-TLS Node32 and independent acceptance.

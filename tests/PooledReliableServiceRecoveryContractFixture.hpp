@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PooledReliableServiceModelFixture.hpp"
+#include "../src/network/FiniteGrantServiceCurve.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationProtocol.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
@@ -36,11 +37,94 @@ namespace gargantuan::test::pooled_recovery_contract {
 		return CeilDiv(Bytes * 1'000'000, BytesPerSecond);
 	}
 
+	// Retained numerical canonical outcome. The new turnover class does not
+	// imply this formula for every legal group shape or live relevance history.
 	constexpr U ConvergenceBoundUs(U MaximumPeerWork, U AggregateWork) {
 		const U PeerBound = MaximumFreshCreditWarmupUs + MaximumFirstGrantFairnessUs +
 			ServiceUs(MaximumPeerWork, PeerCreditRate);
 		const U AggregateBound = ServiceUs(AggregateWork, StructuralPool);
 		return ServiceRecoveryDeadlineUs + std::max(PeerBound, AggregateBound);
+	}
+
+	// Proposed product-class oracle, not a production health implementation.
+	// The combined turnover budget is newly selected from the existing 50-ms
+	// queue plus 100-ms nonqueue product allocation. It is not an inferred ACK
+	// guarantee. A completed opportunity includes reconciliation AND admission.
+	namespace ProductStructuralClass {
+		inline constexpr U TurnoverBudgetUs = 150'000;
+		inline constexpr U OpportunityBudgetUs = 100'000;
+		inline constexpr U DrainSlots = 4;
+		inline constexpr U GlobalWarmupUs = ServiceUs(4 * CompleteGroupBytes, StructuralPool);
+		inline constexpr U ReadyFairWaitUs = OpportunityBudgetUs + GlobalWarmupUs +
+			(32 / DrainSlots - 1) * TurnoverBudgetUs;
+		inline constexpr U NativeBudgetNumerator = PeerDrainFloor * 6'000 +
+			(CompleteGroupBytes + 1'248) * 1'000'000;
+
+		struct Turnover {
+			U Activated = 0, NativeCompleted = 0, Acked = 0, MainRetired = 0, OpportunityCompleted = 0;
+			U Bytes = 0, NativeBytes = 0, AckedBytes = 0, RetiredBytes = 0;
+			bool EvidenceComplete = true;
+		};
+		inline bool CompletedTurnoverFits(const Turnover &Value) {
+			if (!Value.EvidenceComplete || !Value.Activated || !Value.Bytes || Value.Bytes > CompleteGroupBytes ||
+				Value.NativeBytes != Value.Bytes || Value.AckedBytes != Value.Bytes || Value.RetiredBytes != Value.Bytes ||
+				Value.NativeCompleted < Value.Activated || Value.Acked < Value.NativeCompleted ||
+				Value.MainRetired < Value.Acked || Value.OpportunityCompleted < Value.MainRetired)
+				return false;
+			const U NativeElapsed = Value.NativeCompleted - Value.Activated;
+			return NativeElapsed <= std::numeric_limits<U>::max() / PeerDrainFloor &&
+				NativeElapsed * PeerDrainFloor <= NativeBudgetNumerator &&
+				Value.OpportunityCompleted - Value.Activated <= TurnoverBudgetUs;
+		}
+		inline bool CompletedOpportunityFits(U PreviousCompleted, U Completed) {
+			return Completed != 0 && Completed >= PreviousCompleted &&
+				Completed - PreviousCompleted <= OpportunityBudgetUs;
+		}
+		constexpr U FirstAdmissionBoundUs(U Rank) {
+			return OpportunityBudgetUs + GlobalWarmupUs + (Rank / DrainSlots) * TurnoverBudgetUs;
+		}
+	}
+
+	// Hypothetical product-policy review only. These supplied schedules do not
+	// change D03 production health, establish host timing, or qualify a source.
+	// Keep its existing 32-peer fair outcome as a direct entitlement, not a
+	// derivation from a 100-ms Main opportunity and seven 150-ms slot lifetimes.
+	namespace ProductProgressReview {
+		inline constexpr U FairWaitUs = ProductStructuralClass::ReadyFairWaitUs;
+		struct Episode {
+			// Symbolic oldest qualifying unit and NoFrame fence are supplied by
+			// this review. This is not an implementation of 3J unit identification,
+			// relevance cancellation, current-state coverage or exact byte quoting.
+			U SourceReadyAt = 0, CreditReadyAt = 0, Frontier = 0, OldestUnit = 0;
+			U CoveredThrough = 0, ResolvedAt = 0, LastObservedAt = 0;
+			bool Invalid = false, Failed = false;
+			bool PartialNoFrame(U Through) {
+				if (Through < CoveredThrough) { Invalid = true; return false; }
+				CoveredThrough = Through;
+				return true; // Cursor advance is not complete source discharge.
+			}
+			bool NoFrame(U At, U Through, bool RelevanceComplete) {
+				if (ResolvedAt || !At || At < SourceReadyAt || At < LastObservedAt || !PartialNoFrame(Through) ||
+					Through < Frontier || !RelevanceComplete) return false;
+				ResolvedAt = At; return true;
+			}
+			bool Accepted(U At, U CompleteBytes, U AcceptedUnit) {
+				if (!OldestUnit || AcceptedUnit != OldestUnit || !CompleteBytes ||
+					CompleteBytes > CompleteGroupBytes || ResolvedAt || At < CreditReadyAt || At < LastObservedAt) return false;
+				ResolvedAt = At; return true; // Caller supplies an actual complete scheduler acceptance.
+			}
+			bool Fits(U ObservedAt) {
+				if (Invalid || !SourceReadyAt || CreditReadyAt < SourceReadyAt ||
+					CreditReadyAt - SourceReadyAt > MaximumFreshCreditWarmupUs || ObservedAt < LastObservedAt) {
+					Invalid = true; return false;
+				}
+				LastObservedAt = ObservedAt;
+				const U End = ResolvedAt ? ResolvedAt : ObservedAt;
+				if (End < SourceReadyAt || End > ObservedAt) { Invalid = true; return false; }
+				Failed |= End >= CreditReadyAt && End - CreditReadyAt > FairWaitUs;
+				return !Failed;
+			}
+		};
 	}
 
 	inline bool RunPooledReliableServiceRecoveryContractTests() {
@@ -57,6 +141,384 @@ namespace gargantuan::test::pooled_recovery_contract {
 		static_assert(network::MaximumStructuralPendingTransitions == 1'048'576);
 		static_assert(CompleteGroupBytes == 512 * KiB);
 		static_assert(32 * PeerCreditRate == StructuralPool);
+		{
+			using Legacy = network::FiniteGrantServiceCurve;
+			using Native = network::NativeGrantCompletionCurve;
+			using namespace ProductStructuralClass;
+			constexpr U Epoch = 1'000'000, Bytes = 65'536;
+			Legacy Curve; Native Completion;
+			Check(Curve.Activate(1, Bytes, Epoch) && Completion.Activate(1, Bytes, Epoch) &&
+				Curve.FirstSend(1, Bytes, Epoch + 100) && Completion.FirstSend(1, Bytes, Epoch + 100),
+				"D03 counterexamples begin with truthful native BODY and healthy legacy packet service");
+			Check(!Curve.GrantFailed && Curve.MaximumRunningDeficitByteMicroseconds == 0,
+				"completed grants stop the legacy running clock without claiming future product progress");
+			const Turnover Timely{Epoch, Epoch + 100, Epoch + 1'000, Epoch + 2'000, Epoch + 3'000,
+				Bytes, Bytes, Bytes, Bytes};
+			Check(CompletedTurnoverFits(Timely), "timely exact native/ACK/retirement baseline");
+			auto AckHeld = Timely;
+			AckHeld.Acked = Epoch + 149'000; AckHeld.MainRetired = Epoch + 150'000;
+			AckHeld.OpportunityCompleted = Epoch + 150'001;
+			Check(Curve.Observe(Epoch + 150'001) && !CompletedTurnoverFits(AckHeld),
+				"healthy legacy packet service cannot hide 150001-us exact permit turnover");
+			Check(Curve.Observe(Epoch + 200'001) && !CompletedOpportunityFits(Epoch + 100'000, Epoch + 200'001),
+				"idle native curve cannot hide a 100001-us completed Main opportunity gap with ready source work");
+			std::array<U, 32> FirstAdmission{};
+			for (U Peer = 0; Peer < 4; ++Peer) FirstAdmission[Peer] = Epoch;
+			// Repeatedly servicing these same four peers leaves the other 28
+			// independently Ready peers unaccepted, regardless of their packet gaps.
+			Check(Curve.Observe(Epoch + ReadyFairWaitUs + 1) &&
+				!std::ranges::all_of(FirstAdmission, [&](U At) { return At >= Epoch && At - Epoch <= ReadyFairWaitUs; }),
+				"acceptable packet gaps on admitted peers cannot certify 32-peer fair admission");
+			constexpr U OrdinaryAccepted = Epoch + 200'000, OrdinaryCompleted = OrdinaryAccepted + 50'001;
+			Legacy FifoLegacy;
+			Check(FifoLegacy.Activate(1, Bytes, Epoch) && FifoLegacy.FirstSend(1, Bytes, Epoch + 100) &&
+				FifoLegacy.Observe(OrdinaryCompleted) && OrdinaryCompleted - OrdinaryAccepted > 50'000,
+				"native structural legacy PASS cannot grant another 50-ms FIFO allowance to an accepted ordinary follower");
+			Legacy DelayedFirst; Native LateNative;
+			Check(DelayedFirst.Activate(1, Bytes, Epoch) && LateNative.Activate(1, Bytes, Epoch), "late first-send activation");
+			(void)DelayedFirst.FirstSend(1, Bytes, Epoch + 37'325);
+			Check(!LateNative.FirstSend(1, Bytes, Epoch + 37'325) && LateNative.GrantFailed &&
+				DelayedFirst.MaximumRunningDeficitByteMicroseconds == 0 && DelayedFirst.HasFirstSend,
+				"zero legacy running gap cannot hide a missed 37324.3865966796875-us native completion");
+			Legacy RecoveryLegacy;
+			Check(RecoveryLegacy.Activate(1, Bytes, Epoch) && RecoveryLegacy.FirstSend(1, Bytes, Epoch + 100) &&
+				RecoveryLegacy.Observe(Epoch + ServiceRecoveryDeadlineUs + 1), "healthy accepted-grant packet chronology in recovery");
+			const U Retained = MiB, Required = ConvergenceBoundUs(Retained, 32 * Retained);
+			const U SourceProduced = Retained - 1, SourceFinished = Epoch + Required + 1;
+			Check(SourceProduced < Retained && SourceFinished - Epoch > Required &&
+				ServiceRecoveryDeadlineUs + 1 > ServiceRecoveryDeadlineUs,
+				"prompt accepted-grant service cannot hide unproduced immutable recovery bytes or a missed service-return deadline");
+			Legacy Diagnostic; Native Hybrid;
+			Check(Diagnostic.Activate(1, Bytes, Epoch) && Hybrid.Activate(1, Bytes, Epoch) &&
+				Diagnostic.FirstSend(1, 100, Epoch + 100) && Hybrid.FirstSend(1, 100, Epoch + 100), "same positive native prefix");
+			(void)Diagnostic.FirstSend(1, Bytes - 100, Epoch + 5'000);
+			const Turnover HybridTurn{Epoch, Epoch + 5'000, Epoch + 6'000, Epoch + 7'000, Epoch + 8'000,
+				Bytes, Bytes, Bytes, Bytes};
+			Check(Diagnostic.GrantFailed && Hybrid.FirstSend(1, Bytes - 100, Epoch + 5'000) &&
+				CompletedTurnoverFits(HybridTurn) && CompletedOpportunityFits(Epoch, Epoch + 8'000),
+				"legacy running failure alone does not invalidate exact timely D03 native/ACK/retirement/opportunity service");
+			for (U Peer = 0; Peer < 32; ++Peer) FirstAdmission[Peer] = Epoch + (Peer / 4) * 8'000;
+			Check(std::ranges::all_of(FirstAdmission, [&](U At) { return At >= Epoch && At - Epoch <= ReadyFairWaitUs; }) &&
+				(Epoch + 9'000) - (Epoch + 5'000) <= 50'000 &&
+				8 * 8'000 <= ServiceRecoveryDeadlineUs && 8 * 8'000 <= ConvergenceBoundUs(Bytes, 32 * Bytes),
+				"otherwise timely supplied HYBRID schedule retains direct FIFO, all32 admission and independent recovery budgets");
+			std::cout << "[PooledRecoveryContract] contract=HYBRID_F1_V1 independent_legacy_gap_counterexamples=PASS\n";
+		}
+		{
+			using namespace ProductProgressReview;
+			using Native = network::NativeGrantCompletionCurve;
+			constexpr U Epoch = 1'000'000, Frontier = 900;
+			// A gap before acceptance is different from withholding an already
+			// accepted ordinary message. Supply positive BODY completions and exact
+			// ACK/retirement times; none is a measured GNS or OS bound.
+			for (const bool SlowFirstAck : {false, true}) {
+				const U InitialOpportunity = SlowFirstAck ? 0 : 110'000;
+				const U Bytes = SlowFirstAck ? 1'057 : CompleteGroupBytes;
+				const U NativeUs = SlowFirstAck ? 1'000 : 31'250;
+				std::array<Episode, 32> Episodes;
+				std::array<Native, 32> Curves;
+				U AcceptedBytes = 0, NativeBytes = 0, AckedBytes = 0, RetiredBytes = 0;
+				U CompletionAt = Epoch, WaveAt = Epoch + InitialOpportunity;
+				for (U Wave = 0; Wave < 8; ++Wave) {
+					const U TurnoverUs = SlowFirstAck && Wave == 0 ? 170'000 : 50'000;
+					for (U Lane = 0; Lane < 4; ++Lane) {
+						const U Index = Wave * 4 + Lane;
+						Episodes[Index] = {Epoch, Epoch, Frontier, Index + 1};
+						Check(Episodes[Index].Accepted(WaveAt, Bytes, Index + 1) && Episodes[Index].Fits(WaveAt),
+							"hypothetical source-ready fairness covers all 32 complete group acceptances");
+						Check(Curves[Index].Activate(Index + 1, Bytes, WaveAt) &&
+							Curves[Index].FirstSend(Index + 1, Bytes, WaveAt + NativeUs) &&
+							Curves[Index].CompletedAtMicroseconds == WaveAt + NativeUs,
+							"actual native completion oracle retains unchanged positive BODY deadline");
+						AcceptedBytes += Bytes; NativeBytes += Curves[Index].FirstSentBytes;
+						// ACKs are supplied separately, strictly after native completion.
+						Check(TurnoverUs >= NativeUs, "ACK cannot precede native BODY completion");
+						AckedBytes += Bytes; RetiredBytes += Bytes;
+					}
+					CompletionAt = WaveAt + TurnoverUs;
+					WaveAt = CompletionAt; // Next four slots wait for the exact prior receipts.
+				}
+				Check(AcceptedBytes == NativeBytes && NativeBytes == AckedBytes && AckedBytes == RetiredBytes &&
+					CompletionAt - Epoch <= ServiceRecoveryDeadlineUs &&
+					CompletionAt - Epoch <= ConvergenceBoundUs(Bytes, 32 * Bytes),
+					"supplied finite source conserves exact BODY/ACK/debt and retains both recovery outcomes");
+				// These accepted ordinary messages complete at positive native send;
+				// a 110-ms handler wait is included in invocation latency, not retimed.
+				const U RequestAccepted = Epoch, RequestNative = Epoch + 1'000;
+				const U ReplyAccepted = Epoch + 110'000, ReplyNative = Epoch + 112'000;
+				Check(RequestNative - RequestAccepted <= 50'000 && ReplyNative - ReplyAccepted <= 50'000 &&
+					ReplyNative - RequestAccepted <= 150'000 && ReplyNative - RequestAccepted <= 250'000 &&
+					ReplyNative - RequestAccepted <= 500'000,
+					"supplied positive ordinary BODY and end-to-end RPC/Event/action clocks stay independent");
+				Check(SlowFirstAck ? 170'000 > ProductStructuralClass::TurnoverBudgetUs :
+					InitialOpportunity > ProductStructuralClass::OpportunityBudgetUs,
+					"healthy supplied product outcomes do not imply either selected internal D03 timer");
+			}
+			std::array<Episode, 32> Held;
+			for (U Index = 0; Index < Held.size(); ++Index) Held[Index] = {Epoch, Epoch, Frontier, Index + 1};
+			for (U Index = 0; Index < 4; ++Index) Check(Held[Index].Accepted(Epoch, 1'057, Index + 1), "first four accepted");
+			const U FairDeadline = Epoch + FairWaitUs;
+			for (U Index = 4; Index < 32; ++Index)
+				Check(Held[Index].Fits(FairDeadline) && !Held[Index].Fits(FairDeadline + 1),
+					"all-slot ACK hold cannot hide the 28 waiting source episodes");
+			Episode OwnNext{Epoch, Epoch, Frontier, 2};
+			Check(!OwnNext.Fits(FairDeadline + 1), "a prior owned slot cannot exempt its own next source work");
+			// No pending source episode exists for a quiet ACK-owned grant. Its
+			// bounded bytes and exact references remain owned; no timer retires them.
+			Episode Unfair{Epoch, Epoch, Frontier, 1};
+			Check(!Unfair.Fits(FairDeadline + 1), "rotating other peers never resets an excluded peer's source clock");
+			Episode Unprepared{Epoch, Epoch + MaximumFreshCreditWarmupUs, Frontier, 1};
+			const U WarmDeadline = Epoch + MaximumFreshCreditWarmupUs + FairWaitUs;
+			Check(Unprepared.Fits(WarmDeadline) && !Unprepared.Fits(WarmDeadline + 1),
+				"fixed source readiness and separate credit warmup cannot be delayed until encoding or fresh feedback");
+			const U TinyCreditUs = ServiceUs(1'057, PeerCreditRate);
+			Episode ColdTiny{Epoch, Epoch + TinyCreditUs, Frontier, 1};
+			Check(TinyCreditUs < MaximumFreshCreditWarmupUs &&
+				!ColdTiny.Accepted(Epoch + TinyCreditUs - 1, 1'057, 1) &&
+				ColdTiny.Accepted(Epoch + TinyCreditUs, 1'057, 1) && ColdTiny.Fits(Epoch + TinyCreditUs),
+				"actual complete-unit credit cost, not a uniform extra G warmup, precedes tiny admission");
+			constexpr U SuppliedRecoveryTailBytes = 40 * MiB; // Bytes are not journal cursor units.
+			Episode Oldest{Epoch, Epoch, Frontier, 1};
+			Check(!Oldest.Accepted(Epoch + 10'000, 77, 99) && !Oldest.Fits(FairDeadline + 1),
+				"a tiny unrelated new relevance group cannot clear the oldest owed semantic unit");
+			Check(!Oldest.Accepted(Epoch + 20'000, 1'057, 1) && !Oldest.Fits(FairDeadline + 1),
+				"an earlier-looking receipt cannot repair an already observed source wait breach");
+			Episode MatchingOldest{Epoch, Epoch, Frontier, 1};
+			Check(SuppliedRecoveryTailBytes > CompleteGroupBytes &&
+				MatchingOldest.Accepted(Epoch + 20'000, 1'057, 1) && MatchingOldest.Fits(FairDeadline + 1),
+				"matching complete-unit progress need not deliver an entire 40-MiB recovery fence in one fair wait");
+			Episode Filtered{Epoch, Epoch, Frontier};
+			Check(Filtered.PartialNoFrame(100) && !Filtered.NoFrame(FairDeadline, 100, true) &&
+				!Filtered.Fits(FairDeadline + 1), "partial irrelevant prefix cannot discharge a captured relevant suffix");
+			Episode NoFrame{Epoch, Epoch, Frontier};
+			Check(!NoFrame.NoFrame(Epoch + 20'000, Frontier, false) &&
+				NoFrame.NoFrame(Epoch + 30'000, Frontier, true) && NoFrame.Fits(FairDeadline + 1),
+				"complete semantic NoFrame discharge can resolve irrelevant work without manufacturing a grant");
+			Episode ColdNoFrame{Epoch, Epoch + MaximumFreshCreditWarmupUs, Frontier};
+			Check(ColdNoFrame.NoFrame(Epoch + 30'000, Frontier, true) && ColdNoFrame.Fits(FairDeadline + 1),
+				"semantic irrelevant-source discharge needs no fabricated complete-group credit");
+			Episode CoveredNoFrame{Epoch, Epoch, Frontier};
+			Check(CoveredNoFrame.NoFrame(Epoch + 30'000, Frontier + 1, true) && CoveredNoFrame.Fits(FairDeadline + 1),
+				"a complete semantic prefix beyond the frozen fence covers that fence without needing exact equality");
+			Episode LateDischarge{Epoch, Epoch, Frontier};
+			Check(LateDischarge.NoFrame(FairDeadline + 1, Frontier, true) && !LateDischarge.Fits(FairDeadline + 1),
+				"eventual semantic discharge cannot erase an earlier product wait breach");
+			Check(!LateDischarge.NoFrame(Epoch + 10'000, Frontier, true) && !LateDischarge.Fits(FairDeadline + 1),
+				"a second earlier receipt cannot retrospectively repair a closed late source episode");
+			// This finite hypothetical reference has 64 complete groups per peer,
+			// all ready at cessation. Complete group acceptance resolves one source
+			// episode and immediately exposes its next ready remainder. NoFrame or
+			// partial filtering cannot do that. Fair progress alone is insufficient.
+			constexpr U GroupsPerPeer = 64, SmallBytes = 1'057, SlowWaveUs = 100'000;
+			std::array<Native, 32> SlowCurves;
+			std::array<U, 32> NextReady; NextReady.fill(Epoch);
+			U SlowAccepted = 0, SlowNative = 0, SlowRetired = 0, SlowCompleted = Epoch;
+			for (U Round = 0; Round < GroupsPerPeer; ++Round) {
+				for (U Wave = 0; Wave < 8; ++Wave) {
+					const U At = Epoch + (Round * 8 + Wave) * SlowWaveUs;
+					for (U Lane = 0; Lane < 4; ++Lane) {
+						const U Index = Wave * 4 + Lane, Token = Round * 32 + Index + 1;
+						Episode Ready{NextReady[Index], NextReady[Index], Frontier, Token};
+						Check(Ready.Accepted(At, SmallBytes, Token) && Ready.Fits(At) &&
+							SlowCurves[Index].Activate(Token, SmallBytes, At) &&
+							SlowCurves[Index].FirstSend(Token, SmallBytes, At + 1'000),
+							"every slow finite-reference group has fair source progress and timely positive native BODY");
+						SlowAccepted += SmallBytes; SlowNative += SlowCurves[Index].FirstSentBytes;
+						SlowRetired += SmallBytes; // Supplied exact ACK at the end of this wave.
+						NextReady[Index] = At;
+					}
+					SlowCompleted = At + SlowWaveUs;
+				}
+			}
+			const U ReferenceBound = ConvergenceBoundUs(GroupsPerPeer * SmallBytes, 32 * GroupsPerPeer * SmallBytes);
+			Check(SlowAccepted == 32 * GroupsPerPeer * SmallBytes && SlowAccepted == SlowNative &&
+				SlowNative == SlowRetired && SlowCompleted - Epoch > ReferenceBound,
+				"fair bounded group progress and exact terminal conservation cannot hide a late immutable reference prefix");
+			std::cout << "[PooledRecoveryContract:ProductProgressReview] hypothetical_only=1 peers=32 fair_wait_us="
+				<< FairWaitUs << " production_policy_unchanged=1\n";
+		}
+
+		// This is a declared finite, fully ready 32-peer workload. Its supplied
+		// opportunities and exact receipts establish the count/fairness seam, not
+		// WCET, native sends, or a bound for live C3/C5 frame counts under motion.
+		{
+			using namespace ProductStructuralClass;
+			static_assert(GlobalWarmupUs == 31'250 && ReadyFairWaitUs == 1'181'250);
+			// Capacity negatives follow an actual shared deadline, not a retained
+			// scalar delivered-rate entitlement. All four G grants share activation.
+			constexpr U SlowAggregateRate = 14 * MiB;
+			constexpr U SingleGrantAtFourteenUs = ServiceUs(CompleteGroupBytes, SlowAggregateRate);
+			constexpr U FourGrantsAtFourteenAggregateUs = ServiceUs(4 * CompleteGroupBytes, SlowAggregateRate);
+			constexpr U NativeBudgetUs = NativeBudgetNumerator / PeerDrainFloor;
+			Check(SingleGrantAtFourteenUs <= NativeBudgetUs &&
+				ServiceUs(CompleteGroupBytes + PeerGameplayBurst, SlowAggregateRate) <= 50'000,
+				"14 MiB per-peer arithmetic is feasible when actual hard completion and FIFO outcomes pass");
+			Check(FourGrantsAtFourteenAggregateUs > NativeBudgetUs,
+				"14 MiB aggregate cannot complete four simultaneous maximum grants within their shared hard deadline");
+			constexpr U Epoch = 1'000'000;
+			const Turnover Boundary{Epoch, Epoch + 31'250, Epoch + 149'000,
+				Epoch + 150'000, Epoch + 150'000, CompleteGroupBytes,
+				CompleteGroupBytes, CompleteGroupBytes, CompleteGroupBytes};
+			Check(CompletedTurnoverFits(Boundary), "new exact 150-ms combined turnover boundary passes");
+			auto Late = Boundary; ++Late.OpportunityCompleted;
+			Check(!CompletedTurnoverFits(Late), "later admission cannot receive another opportunity budget after turnover");
+			auto MissingAck = Boundary;
+			MissingAck.Acked = MissingAck.MainRetired = MissingAck.OpportunityCompleted = 0;
+			MissingAck.AckedBytes = MissingAck.RetiredBytes = 0;
+			const U ObservedAfterDeadline = Epoch + 151'000;
+			Check(!CompletedTurnoverFits(MissingAck) && ObservedAfterDeadline - Epoch > TurnoverBudgetUs &&
+				MissingAck.Bytes - MissingAck.RetiredBytes == CompleteGroupBytes,
+				"withheld ACK fails turnover at 151 ms without manufacturing retirement or releasing debt");
+			auto PendingEvidence = Boundary; PendingEvidence.EvidenceComplete = false;
+			Check(!CompletedTurnoverFits(PendingEvidence), "incomplete feedback cannot certify combined turnover");
+			auto Reversed = Boundary; Reversed.MainRetired = Reversed.Acked - 1;
+			Check(!CompletedTurnoverFits(Reversed), "retirement before ACK cannot qualify");
+			Check(CompletedOpportunityFits(Epoch, Epoch + 100'000) &&
+				!CompletedOpportunityFits(Epoch, Epoch + 101'000) &&
+				!CompletedOpportunityFits(Epoch, Epoch - 1) && !CompletedOpportunityFits(Epoch, 0),
+				"completed Main opportunities have an exact 100-ms maximum, independent of ACK timing");
+
+			std::array<U, 32> FirstAdmission{};
+			// The global warmup can complete during the initial opportunity in
+			// this supplied schedule. The sum in ReadyFairWaitUs remains a
+			// conservative class budget, not a claimed tight source execution.
+			U GlobalCredit = std::min(4 * CompleteGroupBytes,
+				StructuralPool * OpportunityBudgetUs / 1'000'000);
+			U ExactRetired = 0;
+			for (U Wave = 0; Wave < 8; ++Wave) {
+				const U Activated = Epoch + OpportunityBudgetUs + Wave * TurnoverBudgetUs;
+				Check(Activated - Epoch <= FirstAdmissionBoundUs(Wave * DrainSlots),
+					"initial global refill and a completed opportunity precede fair admission");
+				Check(GlobalCredit >= DrainSlots * CompleteGroupBytes, "ready wave is globally credited");
+				GlobalCredit -= DrainSlots * CompleteGroupBytes;
+				for (U Lane = 0; Lane < DrainSlots; ++Lane) {
+					const U Rank = Wave * DrainSlots + Lane;
+					FirstAdmission[Rank] = Activated;
+					const Turnover Value{Activated, Activated + 31'250, Activated + 149'000,
+						Activated + TurnoverBudgetUs, Activated + TurnoverBudgetUs, CompleteGroupBytes,
+						CompleteGroupBytes, CompleteGroupBytes, CompleteGroupBytes};
+					Check(CompletedTurnoverFits(Value), "each ready peer consumes one exact turnover");
+					ExactRetired += Value.RetiredBytes;
+				}
+				// An intermediate completed pass keeps opportunities bounded even
+				// while the current receipts remain outstanding. No debt is released.
+				Check(CompletedOpportunityFits(Activated, Activated + TurnoverBudgetUs / 2) &&
+					CompletedOpportunityFits(Activated + TurnoverBudgetUs / 2, Activated + TurnoverBudgetUs),
+					"receipt waits do not pause the Main opportunity clock");
+				GlobalCredit = std::min(4 * CompleteGroupBytes,
+					GlobalCredit + StructuralPool * TurnoverBudgetUs / 1'000'000);
+			}
+			Check(FirstAdmission.back() - Epoch <= ReadyFairWaitUs && ExactRetired == 32 * CompleteGroupBytes,
+				"32-peer count-aware first admission and exact retirement are finite under the new premises");
+			FirstAdmission.back() = 0; // Corrupted rotation never admits the last ready peer.
+			Check(!std::ranges::all_of(FirstAdmission, [&](U At) {
+				return At >= Epoch && At - Epoch <= ReadyFairWaitUs;
+			}), "aggregate progress cannot conceal an excluded ready peer");
+
+			// The original numerical formula stays an additional hard canonical
+			// outcome. Class-compliant individual turnovers do not imply that outcome
+			// for every supplied finite group stream, including this large count.
+			constexpr U SuppliedGroupsPerPeer = 1'280;
+			constexpr U SuppliedPeerBytes = SuppliedGroupsPerPeer * CompleteGroupBytes;
+			constexpr U SuppliedAggregateBytes = 32 * SuppliedPeerBytes;
+			constexpr U SuppliedCompleteUs = OpportunityBudgetUs +
+				CeilDiv(32 * SuppliedGroupsPerPeer, DrainSlots) * TurnoverBudgetUs;
+			Check(SuppliedCompleteUs > ConvergenceBoundUs(SuppliedPeerBytes, SuppliedAggregateBytes),
+				"timely 150-ms turnovers do not imply the unchanged canonical byte-reference outcome");
+			Check(8 * TurnoverBudgetUs >= MaximumFreshCreditWarmupUs,
+				"a supplied repeated-wave peer can replenish its G credit between turns");
+
+			std::cout << "[PooledRecoveryContract:ProductClass] turnover_us=" << TurnoverBudgetUs
+				<< " opportunity_us=" << OpportunityBudgetUs << " global_warmup_us=" << GlobalWarmupUs
+				<< " ready_first_admission_bound_us=" << ReadyFairWaitUs
+				<< " repeated_count_complete_us=" << SuppliedCompleteUs
+				<< " independent_reference_bound_us=" << ConvergenceBoundUs(SuppliedPeerBytes, SuppliedAggregateBytes)
+				<< " source_shape=SUPPLIED qualified_live_count_bound=0\n";
+		}
+
+		// Historical pre-adoption candidate discriminators. These finite supplied schedules
+		// are not a new recovery formula, actual GRPL source replay or evidence of
+		// a numerical ACK/slot-service maximum. Keep the existing scalar proof and
+		// qualified causal recovery verdicts in their original scope.
+		constexpr U NominalMainStepUs = 16'667;
+		constexpr U DrainSlots = 4;
+		constexpr U CompletionNumerator = PeerDrainFloor * 6'000 +
+			(CompleteGroupBytes + 1'248) * 1'000'000;
+		constexpr U MaximumIntegerCompletionUs = CompletionNumerator / PeerDrainFloor;
+		constexpr U NativeCompleteUs = ServiceUs(CompleteGroupBytes, PeerDrainFloor);
+		Check(MaximumIntegerCompletionUs == 37'324 && NativeCompleteUs <= MaximumIntegerCompletionUs,
+			"candidate maximum-grant native completion can meet H1 without supplying ACK or slot release");
+		constexpr U AckReadyAfterServiceRecoveryUs = NativeCompleteUs + ServiceRecoveryDeadlineUs;
+		constexpr U NativeWaveBytes = DrainSlots * CompleteGroupBytes;
+		Check(32 * PeerCreditRate == StructuralPool && NativeWaveBytes == 4 * CompleteGroupBytes &&
+			AckReadyAfterServiceRecoveryUs > ServiceRecoveryDeadlineUs,
+			"unchanged funding and native completion cannot bound a supplied ACK-held slot schedule");
+		// In this schedule all four accepted groups have native-completed, but no
+		// matching ACK exists before the observation deadline. Ownership must keep
+		// four slots and 4G debt charged; native completion cannot authorize a fifth.
+		constexpr U OutstandingBeforeAck = NativeWaveBytes;
+		constexpr U RetiredBeforeAck = 0;
+		constexpr U FreshFeedbackObservedUs = ServiceRecoveryDeadlineUs;
+		Check(OutstandingBeforeAck == 4 * CompleteGroupBytes && RetiredBeforeAck == 0 &&
+			NativeWaveBytes < ServiceRecoveryDeadlineUs * StructuralPool / 1'000'000,
+			"one timely native wave does not imply sustained structural service or exact retirement");
+		Check(FreshFeedbackObservedUs == ServiceRecoveryDeadlineUs &&
+			AckReadyAfterServiceRecoveryUs > FreshFeedbackObservedUs && RetiredBeforeAck == 0,
+			"a current coherent feedback timestamp is not evidence that structural ACK or retirement occurred");
+
+		// Optimistic opportunity/count ceilings: zero payload, encoding, OS, ACK
+		// and ordinary-debt cost; one grant per peer and at most four global grants
+		// per nominal Main step, with retirement/regrant on the following step.
+		// Actual source work and nonzero slot holds can only increase these costs
+		// within this declared schedule. Catch-up/within-step phases are not modeled.
+		constexpr U TinyCompleteBytes = 77;
+		constexpr U TinyGrantsPerPeer = DefaultChangeJournalCapacity;
+		constexpr U SamePeerBytes = TinyCompleteBytes * TinyGrantsPerPeer;
+		constexpr U SameAggregateBytes = 32 * SamePeerBytes;
+		constexpr U PackedGrantsPerPeer = CeilDiv(SamePeerBytes, CompleteGroupBytes);
+		constexpr U TinyPeerCountUs = TinyGrantsPerPeer * NominalMainStepUs;
+		constexpr U TinyGlobalCountUs = CeilDiv(32 * TinyGrantsPerPeer, DrainSlots) * NominalMainStepUs;
+		constexpr U PackedGlobalCountUs = CeilDiv(32 * PackedGrantsPerPeer, DrainSlots) * NominalMainStepUs;
+		constexpr U ByteOnlyBoundUs = ConvergenceBoundUs(SamePeerBytes, SameAggregateBytes);
+		Check(SamePeerBytes == 1'261'568 && PackedGrantsPerPeer == 3,
+			"equal-byte finite inputs can require 16,384 tiny grants or three packed groups per peer");
+		Check(TinyPeerCountUs == 273'072'128 && TinyGlobalCountUs == 2'184'577'024 &&
+			PackedGlobalCountUs == 400'008 && ByteOnlyBoundUs == 21'072'063,
+			"nominal grant opportunities impose a count cost absent from the unchanged byte-only bound");
+		Check(TinyGlobalCountUs > ByteOnlyBoundUs && PackedGlobalCountUs < ByteOnlyBoundUs,
+			"same bytes and credit do not give tiny and packed schedules the same feasible convergence time");
+		// The journal capacity supplies only a finite count for this arithmetic.
+		// It does not establish that actual journal operations force these exact
+		// 77-byte GRPL groups, nor that source coalescing can produce the packed case.
+
+		constexpr U MediumCompleteBytes = 64 * KiB;
+		constexpr U MediumGrantsPerPeer = CompleteGroupBytes / MediumCompleteBytes;
+		constexpr U MixedGrantsPerPeer = MediumGrantsPerPeer + 1;
+		constexpr U MixedPeerBytes = CompleteGroupBytes + TinyCompleteBytes;
+		constexpr U PackedMixedGrantsPerPeer = CeilDiv(MixedPeerBytes, CompleteGroupBytes);
+		Check(MediumGrantsPerPeer == 8 && MediumGrantsPerPeer * MediumCompleteBytes == CompleteGroupBytes,
+			"eight medium groups carry the same complete bytes as one maximum group");
+		Check(MixedGrantsPerPeer == 9 && PackedMixedGrantsPerPeer == 2 &&
+			CeilDiv(32 * MixedGrantsPerPeer, DrainSlots) * NominalMainStepUs >
+				CeilDiv(32 * PackedMixedGrantsPerPeer, DrainSlots) * NominalMainStepUs,
+			"mixed size distribution changes slot-opportunity work even with equal exact byte totals");
+
+		// A supplied per-grant slot cost is independent of byte funding. Doubling
+		// it doubles this lower-bound count component. No ACK constant is selected:
+		// neither a gameplay Event maximum nor a shutdown timeout bounds structural
+		// ACK, Main observation, ordinary-debt release or source readiness.
+		auto CountCostUs = [](U Grants, U SuppliedSlotCostUs) {
+			return CeilDiv(Grants, DrainSlots) * SuppliedSlotCostUs;
+		};
+		Check(CountCostUs(32 * MixedGrantsPerPeer, 2 * NominalMainStepUs) ==
+			2 * CountCostUs(32 * MixedGrantsPerPeer, NominalMainStepUs),
+			"count-sensitive slot cost cannot be inferred from bytes or native completion alone");
+		std::cout << "[PooledRecoveryContract:CandidateDiscriminator] groups=4 qualified_contract=0"
+			<< " historical_scope=1"
+			<< " same_peer_bytes=" << SamePeerBytes << " tiny_groups_per_peer=" << TinyGrantsPerPeer
+			<< " packed_groups_per_peer=" << PackedGrantsPerPeer << " byte_only_bound_us=" << ByteOnlyBoundUs
+			<< " tiny_count_floor_us=" << TinyGlobalCountUs << " packed_count_floor_us=" << PackedGlobalCountUs
+			<< " ack_slot_maximum=NOT_SELECTED source_group_shape=NOT_MEASURED\n";
 
 		// The pooled admission model bounds only the next serialized offer/debt.
 		// Current 3J semantics independently retain bounded semantic work in the

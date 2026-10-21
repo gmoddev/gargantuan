@@ -19,6 +19,17 @@ struct FiniteGrantServiceCurve {
 	static const std::uint64_t RunningBoundByteMicroseconds =
 		PeerRateBytesPerSecond * RunningHandoffMicroseconds + QuantumBytes * 1000000;
 
+	// Pure diagnostic predicate for a qualified activation and its first
+	// native-positive event. With pre-event D_g == 0 and W_g > 0, F1 has a
+	// positive unmet demand exactly when accrued byte-us exceeds the intercept.
+	// Invalid chronology/exhausted arithmetic cannot certify a measured breach.
+	static bool ZeroFirstSendBreach(std::uint64_t ActivatedAt, std::uint64_t FirstAt) noexcept {
+		if (!ActivatedAt || ActivatedAt == std::numeric_limits<std::uint64_t>::max() || FirstAt < ActivatedAt) return false;
+		const auto Elapsed = FirstAt - ActivatedAt;
+		return Elapsed <= std::numeric_limits<std::uint64_t>::max() / PeerRateBytesPerSecond &&
+			Elapsed * PeerRateBytesPerSecond > FiniteInterceptByteMicroseconds;
+	}
+
 	bool Invalid = false;
 	// Failure is latched for this grant and its ACK gap. A later independently
 	// admitted grant may requalify; EverFailed remains diagnostic history.
@@ -157,6 +168,60 @@ private:
 	}
 
 	std::uint64_t FirstSentBytesAtFirstEvent = 0;
+};
+
+// Separate native completion certificate. The legacy F1 curve above remains
+// byte-for-byte unchanged; these fields do not grant admission or retire debt.
+// Clock inputs are real positive native send events or complete evidence
+// frontiers. An unresolved native result must never be supplied as a frontier.
+struct NativeGrantCompletionCurve {
+	static const std::uint64_t RateBytesPerSecond = 16ULL * 1024 * 1024;
+	static const std::uint64_t MaximumGrantBytes = 512ULL * 1024;
+	static const std::uint64_t CompletionBudgetByteMicroseconds =
+		RateBytesPerSecond * 6000 + (MaximumGrantBytes + 1248) * 1000000;
+	bool Invalid = false, GrantFailed = false, EverFailed = false, HasFirstSend = false;
+	std::uint64_t ActiveToken = 0, LastToken = 0, GrantBytes = 0, FirstSentBytes = 0;
+	std::uint64_t ActivatedAtMicroseconds = 0, FirstSentAtMicroseconds = 0, CompletedAtMicroseconds = 0;
+	std::uint64_t LastObservedAtMicroseconds = 0;
+
+	bool Activate(std::uint64_t Token, std::uint64_t Bytes, std::uint64_t At) noexcept {
+		if (Invalid || !Token || Token <= LastToken || !Bytes || Bytes > MaximumGrantBytes ||
+			!At || At == std::numeric_limits<std::uint64_t>::max() ||
+			(ActiveToken && (FirstSentBytes != GrantBytes || At < LastObservedAtMicroseconds))) {
+			Invalid = true; return false;
+		}
+		ActiveToken = LastToken = Token; GrantBytes = Bytes; FirstSentBytes = 0;
+		ActivatedAtMicroseconds = LastObservedAtMicroseconds = At;
+		FirstSentAtMicroseconds = CompletedAtMicroseconds = 0;
+		HasFirstSend = GrantFailed = false;
+		return true;
+	}
+
+	bool Observe(std::uint64_t At) noexcept {
+		if (Invalid || !ActiveToken || At < LastObservedAtMicroseconds) { Invalid = true; return false; }
+		if (FirstSentBytes != GrantBytes) {
+			CheckElapsed(At - ActivatedAtMicroseconds, CompletionBudgetByteMicroseconds);
+		}
+		LastObservedAtMicroseconds = At;
+		return !Invalid && !GrantFailed;
+	}
+
+	bool FirstSend(std::uint64_t Token, std::uint64_t Bytes, std::uint64_t At) noexcept {
+		if (Invalid || !ActiveToken || Token != ActiveToken || !Bytes || Bytes > GrantBytes - FirstSentBytes ||
+			At < LastObservedAtMicroseconds) { Invalid = true; return false; }
+		(void)Observe(At);
+		if (Invalid) return false;
+		if (!HasFirstSend) { HasFirstSend = true; FirstSentAtMicroseconds = At; }
+		FirstSentBytes += Bytes;
+		if (FirstSentBytes == GrantBytes) CompletedAtMicroseconds = At;
+		return !GrantFailed;
+	}
+
+private:
+	void CheckElapsed(std::uint64_t Elapsed, std::uint64_t Budget) noexcept {
+		if (Elapsed > std::numeric_limits<std::uint64_t>::max() / RateBytesPerSecond) { Invalid = true; return; }
+		if (Elapsed * RateBytesPerSecond > Budget) GrantFailed = EverFailed = true;
+	}
 };
 
 }} // namespace gargantuan::network
