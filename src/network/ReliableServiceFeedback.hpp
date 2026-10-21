@@ -2,14 +2,17 @@
 #include "gargantuan/network/Connection.hpp"
 #include "gargantuan/network/MessageIntent.hpp"
 #include "gargantuan/network/Transport.hpp"
+#include "InitialServiceTrace.hpp"
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 namespace gargantuan::network {
 class GameNetworkingSocketsTransport;
 class NetworkScheduler;
 namespace detail {
+	class OrdinaryServicePolicy;
 	struct ReliableServiceAcceptedBytes {
 		std::uint64_t All = 0, Structural = 0, Gameplay = 0;
 	};
@@ -60,12 +63,41 @@ struct ReliableServiceFeedback {
 	};
 	std::array<StructuralSegmentEvent, 512> LastCompletedStructuralSegmentEvents{};
 	std::uint32_t LastCompletedStructuralSegmentEventCount = 0;
+	InitialServiceTrace LastCompletedInitialTrace{};
 	std::uint64_t NativePacketsSent = 0;
 	std::uint64_t NativePacketBytesSent = 0;
 	std::uint64_t NativeMaximumPacketBytes = 0;
+	// Separate native completion certificate; old F1 fields above retain
+	// their exact diagnostic semantics. Neither native completion nor this
+	// certificate supplies an ACK or releases a structural permit.
+	bool StructuralCompletionServiceFailed = false;
+	bool StructuralLastCompletedCompletionFailed = false;
+	bool StructuralCompletionEvidenceInvalid = false;
+	std::uint64_t OrdinaryPayloadBytesFirstSent = 0;
+	// Production health is independent of optional diagnostic certificate scope.
+	bool ProtectedOrdinaryEverFailed = false, ProtectedOrdinaryActiveDeadlineFailed = false;
+	bool ProtectedOrdinaryEvidenceInvalid = false;
+	std::uint64_t QualifiedOrdinaryRegisteredMessages = 0, QualifiedOrdinaryCompletedMessages = 0;
+	std::uint64_t QualifiedOrdinaryPendingMessages = 0, QualifiedOrdinaryMaximumLatencyMicroseconds = 0;
+	bool QualifiedOrdinaryEverFailed = false, QualifiedOrdinaryLastCompletedFailed = false;
+	bool QualifiedOrdinaryActiveDeadlineFailed = false, QualifiedOrdinaryEvidenceInvalid = false;
+	std::uint64_t QualifiedOrdinaryFailureSequence = 0, QualifiedOrdinaryFailurePhase = 0;
+	std::uint64_t QualifiedOrdinaryFailureMessageNumber = 0, QualifiedOrdinaryFailureAcceptedAtMicroseconds = 0;
+	std::uint64_t QualifiedOrdinaryFailureCompletedAtMicroseconds = 0;
+	std::uint32_t QualifiedOrdinaryFailureExpectedBytes = 0, QualifiedOrdinaryFailureFirstSentBytes = 0;
 };
 struct ReliableServiceFeedbackAccess {
+	[[nodiscard]] static bool DeclareOrdinaryPolicy(IGameTransport &, ConnectionId,
+		std::shared_ptr<OrdinaryServicePolicy>);
+	[[nodiscard]] static bool DeclareOrdinaryPolicy(NetworkScheduler &, ConnectionId,
+		std::shared_ptr<OrdinaryServicePolicy>);
+	[[nodiscard]] static std::optional<std::uint64_t> OldestProtectedOrdinary(
+		const NetworkScheduler &, ConnectionId);
 	[[nodiscard]] static std::optional<ReliableServiceAcceptedBytes> Accepted(const NetworkScheduler &Scheduler, ConnectionId Connection);
+	// Read only, bounded by the scheduler's existing six queue/input limits.
+	// Zero means no qualified ordinary message remains before native handoff.
+	[[nodiscard]] static std::optional<std::uint64_t> OldestQualifiedOrdinary(
+		const NetworkScheduler &Scheduler, ConnectionId Connection);
 	static bool Attribute(NetworkMessageIntent &Message, std::uint64_t Token) {
 		if (!Token || Message.ReliableRetirementToken || Message.Delivery() != DeliveryMode::ReliableOrdered ||
 			Message.Traffic() != TrafficClass::StructuralReplication) return false;
@@ -86,6 +118,10 @@ struct ReliableServiceFeedbackAccess {
 	static bool Release(IGameTransport &Transport, ConnectionId Connection) { return Transport.ReleaseReliableServiceFeedback(Connection); }
 	[[nodiscard]] static std::optional<ReliableServiceFeedback> Observe(
 		const IGameTransport &Transport, ConnectionId Connection) { return Transport.ReadReliableServiceFeedback(Connection); }
+	[[nodiscard]] static std::optional<ReliableServiceFeedback> ObserveResolved(
+		const IGameTransport &Transport, ConnectionId Connection, std::uint64_t DeadlineMicroseconds) {
+		return Transport.ReadResolvedReliableServiceFeedback(Connection, DeadlineMicroseconds);
+	}
 };
 }
 }

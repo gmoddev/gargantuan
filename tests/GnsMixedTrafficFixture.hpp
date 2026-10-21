@@ -1,6 +1,9 @@
 #pragma once
 
 #include "../src/network/FiniteGrantServiceCurve.hpp"
+#include "GnsFourGrantFixture.hpp"
+#include "../src/runtime/OrdinaryServiceMetadata.hpp"
+#include "../src/runtime/PublicationLatencyDiagnostics.hpp"
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -13,7 +16,9 @@ namespace GnsMixedTrafficFixture {
 using namespace gargantuan::network;
 using namespace std::chrono_literals;
 
-inline bool Run() {
+inline bool Run(GnsFourGrantFixture::Contract Selected = GnsFourGrantFixture::Contract::LegacyFiniteGrant) {
+	std::cout << "[Network:GnsMixed] contract=" << GnsFourGrantFixture::Identity(Selected) << '\n';
+	if (Selected == GnsFourGrantFixture::Contract::SanitizerSafety) return false;
 	constexpr std::size_t StructuralBytes = 64 * 1024;
 	auto Pair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024}, TestLimits(), true);
 	struct Cleanup {
@@ -22,10 +27,17 @@ inline bool Run() {
 	} Guard{Pair};
 	try {
 		if (!Pair.ServerConnection.IsValid()) throw std::runtime_error("mixed pair did not connect");
+		std::uint64_t OrdinarySequence = 0;
 		const auto SendOrdinary = [&](TrafficClass Traffic, std::byte Marker) {
 			auto Intent = MakeNetworkMessageIntent(Pair.ServerConnection, DeliveryMode::ReliableOrdered,
 				Traffic, std::monostate{}, std::vector<std::byte>(64, Marker), Pair.Limits);
-			if (!Intent || !Pair.Server->Send(*Intent).Succeeded())
+			if (!Intent) throw std::runtime_error("ordinary reliable intent failed");
+			const auto At = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count());
+			const bool Hybrid = Selected == GnsFourGrantFixture::Contract::HybridF1 || Selected == GnsFourGrantFixture::Contract::PooledCorrectness;
+			gargantuan::runtime_detail::OrdinaryServiceScope Protected({Hybrid ? At : 0, 6, Hybrid});
+			gargantuan::runtime_detail::OrdinaryDemandScope Demand({Hybrid ? ++OrdinarySequence : 0, 1, Hybrid ? At : 0, Hybrid});
+			if (!Pair.Server->Send(*Intent).Succeeded())
 				throw std::runtime_error("ordinary reliable send failed");
 		};
 		SendOrdinary(TrafficClass::Control, std::byte{0x11});
@@ -40,14 +52,25 @@ inline bool Run() {
 			!Pair.Server->Send(*Structural).Succeeded())
 			throw std::runtime_error("mixed structural send failed");
 		SendOrdinary(TrafficClass::ReliableApplication, std::byte{0x55});
-		std::this_thread::sleep_for(15ms);
-		const auto Sample = detail::ReliableServiceFeedbackAccess::Observe(*Pair.Server, Pair.ServerConnection);
+		// Only the snapshot frontier changes. Actual native event timestamps,
+		// the uniform completion budget and ordinary acceptance clocks do not.
+		const bool Diagnostic = Selected == GnsFourGrantFixture::Contract::PooledCorrectness;
+		std::this_thread::sleep_for(Selected == GnsFourGrantFixture::Contract::HybridF1 ? 55ms : 15ms);
+		auto Sample = detail::ReliableServiceFeedbackAccess::Observe(*Pair.Server, Pair.ServerConnection);
+		// Reuse the existing bounded completion capture. A pre-completion snapshot
+		// after a latency target cannot prove missing/invalid native ownership.
+		if (Diagnostic) Sample = FeedbackFixture::Complete(Pair, StructuralBytes + 2 * (64 + ReliableServiceEnvelopeBytes));
 		if (!Sample || !Sample->CountersValid || Sample->StructuralLastCompletedGrantToken != 1 ||
 			Sample->StructuralLastCompletedGrantBytes != StructuralBytes ||
-			Sample->StructuralLastCompletedGrantFailed ||
-			Sample->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds >
-				FiniteGrantServiceCurve::RunningBoundByteMicroseconds)
-			throw std::runtime_error("mixed structural finite grant failed F1");
+			!GnsFourGrantFixture::SelectedTimingValid(*Sample, 1, StructuralBytes, Selected))
+			throw std::runtime_error("mixed structural grant failed selected native contract");
+		if ((Selected == GnsFourGrantFixture::Contract::HybridF1 || Diagnostic) &&
+			(Sample->QualifiedOrdinaryRegisteredMessages != 2 || Sample->QualifiedOrdinaryCompletedMessages != 2 ||
+			Sample->QualifiedOrdinaryPendingMessages || Sample->QualifiedOrdinaryEvidenceInvalid ||
+			(!Diagnostic && (Sample->QualifiedOrdinaryEverFailed || Sample->QualifiedOrdinaryMaximumLatencyMicroseconds > 50'000 ||
+			Sample->ProtectedOrdinaryEverFailed || Sample->ProtectedOrdinaryActiveDeadlineFailed)) ||
+			Sample->ProtectedOrdinaryEvidenceInvalid))
+			throw std::runtime_error("mixed accepted ordinary native FIFO exceeded its single 50-ms budget");
 		const auto Final = FeedbackFixture::Complete(Pair, StructuralBytes + 2 * (64 + ReliableServiceEnvelopeBytes));
 		if (Final.StructuralPayloadBytesAcked != StructuralBytes ||
 			Final.LastAttributedRetirementToken != 1 ||
@@ -67,12 +90,15 @@ inline bool Run() {
 			Received[2] != std::vector<std::byte>(64, std::byte{0x55}))
 			throw std::runtime_error("ordinary control/structural/gameplay FIFO changed; received=" +
 				std::to_string(Received.size()));
-		std::cout << "[Network:GnsMixed] structural_bytes=" << StructuralBytes
+		std::cout << "[Network:GnsMixed] contract=" << GnsFourGrantFixture::Identity(Selected)
+			<< " structural_bytes=" << StructuralBytes
 			<< " max_deficit_byte_us=" << Sample->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds
+			<< " legacy_curve_failed=" << Sample->StructuralLastCompletedGrantFailed
+			<< " native_ordinary_max_us=" << Sample->QualifiedOrdinaryMaximumLatencyMicroseconds
 			<< " ordinary_fifo=PASS ack_retirement=PASS\n";
 		return true;
 	} catch (const std::exception &Error) {
-		std::cerr << "[Network:GnsMixed] FAIL " << Error.what() << '\n';
+		std::cerr << "[Network:GnsMixed] contract=" << GnsFourGrantFixture::Identity(Selected) << " FAIL " << Error.what() << '\n';
 		return false;
 	}
 }

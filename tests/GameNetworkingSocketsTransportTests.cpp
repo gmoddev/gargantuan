@@ -22,6 +22,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <variant>
@@ -192,6 +193,92 @@ namespace {
 			(void)Pair.Server->Stop({DisconnectReason::LocalShutdown, "Test server shutdown"});
 	}
 
+	void TestExclusivePooledDomain() {
+		std::cout << "[Networking:GNS] exclusive pooled execution domain\n" << std::flush;
+		GameNetworkingSocketsTransportConfiguration ArbitrationOnly;
+		Check(!ArbitrationOnly.EnableNativeDataArbitration, "native DATA candidate is off by default");
+		ArbitrationOnly.EnableNativeDataArbitration = true;
+		Check(!ArbitrationOnly.IsValid(), "native DATA arbitration requires bounded native worker domain");
+		GameNetworkingSocketsTransportConfiguration WorkerOnly;
+		WorkerOnly.EnableNativeEgressWorker = true;
+		Check(!WorkerOnly.IsValid(), "native egress worker requires exclusive pooled domain");
+		GameNetworkingSocketsTransportConfiguration StrictConfiguration;
+		StrictConfiguration.RequireExclusivePooledDomain = true;
+		Check(StrictConfiguration.IsValid(), "strict pooled domain is a valid opt-in configuration");
+		WorkerOnly.RequireExclusivePooledDomain = true;
+		WorkerOnly.MaximumConnections = 33;
+		Check(!WorkerOnly.IsValid(), "worker domain rejects a thirty-third supported peer");
+		WorkerOnly.MaximumConnections = 32;
+		Check(WorkerOnly.IsValid(), "worker experiment and strict domain configure together");
+		WorkerOnly.EnableNativeDataArbitration = true;
+		Check(WorkerOnly.IsValid(), "native DATA candidate shares the existing exclusive bounded domain");
+
+		GameNetworkingSocketsTransport Regular;
+		TransportStartConfiguration Start{.Role = TransportRole::Server,
+			.Endpoint = {"127.0.0.1", 0}, .AdvertisedLimits = TestLimits()};
+		bool RegularStarted = false;
+		for (std::uint32_t Candidate = 39150; Candidate < 39250; ++Candidate) {
+			Start.Endpoint.Port = static_cast<std::uint16_t>(Candidate);
+			if (Regular.Start(Start).Succeeded()) { RegularStarted = true; break; }
+		}
+		Check(RegularStarted, "regular adapter acquires a real localhost listener");
+		if (!RegularStarted) return;
+		GameNetworkingSocketsTransport Strict(StrictConfiguration);
+		auto Denied = Strict.Start(Start);
+		Check(Denied.Status == TransportOperationStatus::InvalidState && Denied.IsTerminal(),
+			"strict pooled owner cannot start beside an active GNS adapter");
+		Check(Regular.Stop({DisconnectReason::LocalShutdown, "Domain fixture regular stop"}).Succeeded(),
+			"regular owner releases its GNS reference");
+		Check(Strict.Start(Start).Succeeded(), "strict pooled adapter claims empty process domain");
+		TransportStartConfiguration ClientStart{.Role = TransportRole::Client,
+			.Endpoint = {"127.0.0.1", Start.Endpoint.Port}, .AdvertisedLimits = TestLimits()};
+		Denied = Regular.Start(ClientStart);
+		Check(Denied.Status == TransportOperationStatus::InvalidState && Denied.IsTerminal(),
+			"strict owner blocks a new ordinary GNS adapter");
+		GameNetworkingSocketsTransport AnotherStrict(StrictConfiguration);
+		Denied = AnotherStrict.Start(ClientStart);
+		Check(Denied.Status == TransportOperationStatus::InvalidState && Denied.IsTerminal(),
+			"strict owner blocks a second strict adapter");
+		Check(Strict.Stop({DisconnectReason::LocalShutdown, std::string(4097, 'x')}).Status ==
+			TransportOperationStatus::MessageRejected,
+			"rejected Stop cannot release the exclusive lease");
+		Check(Regular.Start(ClientStart).Status == TransportOperationStatus::InvalidState,
+			"rejected Stop retains exclusivity");
+		Check(Strict.Stop({DisconnectReason::LocalShutdown, "Domain fixture strict stop"}).Succeeded(),
+			"valid Stop releases strict owner exactly once");
+		Check(Strict.Stop({DisconnectReason::LocalShutdown, "Duplicate domain stop"}).Status ==
+			TransportOperationStatus::InvalidState, "duplicate Stop cannot release another owner's lease");
+		#ifdef _WIN32
+		GameNetworkingSocketsTransport WorkerServer(WorkerOnly);
+		Check(WorkerServer.Start(Start).Succeeded(),
+			"experimental native workers start only under an exclusive pooled lease");
+		Check(WorkerServer.Stop({DisconnectReason::LocalShutdown, "Worker domain fixture stop"}).Succeeded(),
+			"idle native workers stop and release their exclusive lease");
+		#endif
+		Check(Regular.Start(ClientStart).Succeeded(), "ordinary adapter can start after strict Stop");
+		Check(Regular.Stop({DisconnectReason::LocalShutdown, "Domain fixture client stop"}).Succeeded(),
+			"ordinary adapter cleans up after lease release");
+		(void)Drain(Regular); // Stop preserves terminal events until the owner consumes them.
+
+		Start.Endpoint.Host = "203.0.113.17"; // TEST-NET-3 cannot be a local listen address.
+		const auto Failed = Strict.Start(Start);
+		Check(Failed.Status == TransportOperationStatus::TransportFailure && Failed.IsTerminal(),
+			"native listener failure after global acquisition is structured");
+		Check(Regular.Start(ClientStart).Succeeded(),
+			"failed strict Start releases its process-wide lease");
+		Check(Regular.Stop({DisconnectReason::LocalShutdown, "Domain fixture failure cleanup"}).Succeeded(),
+			"ordinary adapter cleans up after strict failure");
+		(void)Drain(Regular);
+
+		Start.Endpoint.Host = "127.0.0.1";
+		auto DestroyedStrict = std::make_unique<GameNetworkingSocketsTransport>(StrictConfiguration);
+		Check(DestroyedStrict->Start(Start).Succeeded(), "strict adapter starts before destructor cleanup");
+		DestroyedStrict.reset();
+		Check(Regular.Start(ClientStart).Succeeded(),
+			"destroying an active strict adapter releases the lease");
+		(void)Regular.Stop({DisconnectReason::LocalShutdown, "Domain fixture destruction cleanup"});
+	}
+
 	void TestFarmClockCapture() {
 		const gargantuan::ObjectId Remote{123, 1};
 		auto Clock = std::make_unique<gargantuan::host::FarmClockCalibration>("test-run", "client", 0);
@@ -246,36 +333,60 @@ namespace {
 #include "GnsAckStatsBoundaryFixture.hpp"
 
 int main(int ArgumentCount, char **Arguments) {
+	const bool NonRealtime = ArgumentCount > 1 && std::string_view(Arguments[ArgumentCount - 1]) == "--non-realtime";
+	if (NonRealtime) --ArgumentCount;
+	const auto HybridContract = NonRealtime ? GnsFourGrantFixture::Contract::PooledCorrectness : GnsFourGrantFixture::Contract::HybridF1;
 	using namespace gargantuan;
 	using namespace gargantuan::network;
 	try { gargantuan::BootstrapNativeRuntimeSchema(); }
 	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
 	TestFarmClockCapture();
+	Check(GnsFourGrantFixture::RunContractTests(), "four-grant explicit contract semantics");
+	if (Failures) return 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant-contract") return 0;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--pooled-domain") {
+		TestExclusivePooledDomain();
+		return Failures == 0 ? 0 : 1;
+	}
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle")
 		return GnsAckCycleFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle-hybrid")
+		return GnsAckCycleFixture::Run(false, 0, HybridContract) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-retry-safety")
 		return GnsAckCycleFixture::RunRetrySafety() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-compatibility")
 		return GnsFundedAckCompatibilityFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-compatibility-hybrid")
+		return GnsFundedAckCompatibilityFixture::Run(HybridContract) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-four-grant")
 		return GnsFundedAckFourGrantFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-four-grant-hybrid")
+		return GnsFundedAckFourGrantFixture::Run(HybridContract) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-stats-boundary")
-		return GnsAckStatsBoundaryFixture::Run() ? 0 : 1;
-	if (ArgumentCount == 3 && std::string_view(Arguments[1]) == "--ack-cycle-funded") {
+		return GnsAckStatsBoundaryFixture::Run(NonRealtime) ? 0 : 1;
+	if (ArgumentCount == 3 && (std::string_view(Arguments[1]) == "--ack-cycle-funded" ||
+		std::string_view(Arguments[1]) == "--ack-cycle-funded-hybrid")) {
 		const std::string_view Text(Arguments[2]);
 		std::uint64_t TailBudget = 0;
 		const auto Parsed = std::from_chars(Text.data(), Text.data() + Text.size(), TailBudget);
 		if (Parsed.ec != std::errc{} || Parsed.ptr != Text.data() + Text.size() || !TailBudget) return 2;
-		return GnsAckCycleFixture::Run(true, TailBudget) ? 0 : 1;
+		return GnsAckCycleFixture::Run(true, TailBudget, std::string_view(Arguments[1]) == "--ack-cycle-funded-hybrid" ?
+			HybridContract : GnsFourGrantFixture::Contract::LegacyFiniteGrant) ? 0 : 1;
 	}
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--packet-tail")
 		return GnsPacketTailFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--packet-tail-hybrid")
+		return GnsPacketTailFixture::Run(HybridContract) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant")
 		return GnsFourGrantFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant-hybrid")
+		return GnsFourGrantFixture::Run(HybridContract) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant-sanitizer-safety")
 		return GnsFourGrantFixture::Run(false) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--mixed-traffic")
 		return GnsMixedTrafficFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--mixed-traffic-hybrid")
+		return GnsMixedTrafficFixture::Run(HybridContract) ? 0 : 1;
 	const bool FeedbackPassed = FeedbackFixture::Run();
 	const bool ServiceCurvePassed = ServiceCurveFixture::Run();
 	const bool FiniteGrantPassed = FiniteGrantServiceCurveFixture::Run();
@@ -284,6 +395,7 @@ int main(int ArgumentCount, char **Arguments) {
 	Check(FeedbackPassed, "native reliable-service feedback contract");
 	Check(ServiceCurvePassed, "native pooled service curve contract");
 	Check(FiniteGrantPassed, "finite-grant service reference differential");
+	TestExclusivePooledDomain();
 	std::cout << "[Networking:GNS] validating configuration\n" << std::flush;
 
 	{

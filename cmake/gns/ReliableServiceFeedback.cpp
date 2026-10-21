@@ -1,4 +1,6 @@
 #include "ReliableServiceFeedback.hpp"
+#include "ServiceTimingDiagnostics.hpp"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <limits>
@@ -38,6 +40,11 @@ void GargantuanReliableServiceCounters::Add(std::uint64_t &Value, int Bytes) noe
 	Value += static_cast<std::uint64_t>(Bytes);
 }
 
+void GargantuanReliableServiceCounters::SyncCompletionGrant() noexcept {
+	StructuralCompletionEvidenceInvalid = StructuralCompletionCurve.Invalid;
+	StructuralCompletionServiceFailed = StructuralCompletionCurve.GrantFailed;
+}
+
 void GargantuanReliableServiceCounters::SyncStructuralGrant() noexcept {
 	if (Invalid) return;
 	const auto &Grant = StructuralGrantCurve;
@@ -71,8 +78,10 @@ void GargantuanReliableServiceCounters::SyncStructuralGrant() noexcept {
 		StructuralLastCompletedGrantCompletedAtMicroseconds = Grant.CompletedAtMicroseconds;
 		StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds = Grant.MaximumRunningDeficitByteMicroseconds;
 		StructuralLastCompletedGrantFailed = Grant.GrantFailed;
+		StructuralLastCompletedCompletionFailed = StructuralCompletionCurve.GrantFailed;
 		LastCompletedStructuralSegmentEvents = StructuralSegmentEvents;
 		LastCompletedStructuralSegmentEventCount = StructuralSegmentEventCount;
+		LastCompletedInitialTrace = InitialTrace;
 		StructuralActiveGrantStartedAtMicroseconds = 0;
 		StructuralActiveGrantBytes = 0;
 		StructuralActiveGrantFirstSentBytes = 0;
@@ -82,10 +91,15 @@ void GargantuanReliableServiceCounters::SyncStructuralGrant() noexcept {
 }
 
 void GargantuanReliableServiceCounters::NativePacket(int Bytes) noexcept {
-	if (Bytes <= 0) { Invalid = true; return; }
-	Add(NativePacketsSent, 1);
-	Add(NativePacketBytesSent, Bytes);
-	if (!Invalid && static_cast<std::uint64_t>(Bytes) > NativeMaximumPacketBytes)
+	// Physical exposure remains physical after a fatal service/ownership fault.
+	// Keep counting it without unfreezing any unique BODY or ACK certificate.
+	if (Bytes <= 0 || NativePacketsSent == std::numeric_limits<std::uint64_t>::max() ||
+		static_cast<std::uint64_t>(Bytes) > std::numeric_limits<std::uint64_t>::max() - NativePacketBytesSent) {
+		Invalid = true; return;
+	}
+	++NativePacketsSent;
+	NativePacketBytesSent += static_cast<std::uint64_t>(Bytes);
+	if (static_cast<std::uint64_t>(Bytes) > NativeMaximumPacketBytes)
 		NativeMaximumPacketBytes = static_cast<std::uint64_t>(Bytes);
 }
 
@@ -93,12 +107,15 @@ void GargantuanReliableServiceCounters::ObserveActiveService(std::uint64_t NowMi
 	if (Invalid || !StructuralActiveGrantBytes ||
 		StructuralGrantCurve.ActiveToken != ActiveAttributedRetirementToken) return;
 	(void)StructuralGrantCurve.Observe(NowMicroseconds);
+	(void)StructuralCompletionCurve.Observe(NowMicroseconds);
+	SyncCompletionGrant();
 	SyncStructuralGrant();
 }
 
 void GargantuanReliableServiceCounters::FirstSend(int Bytes, int StructuralPayloadBytes,
-	std::uint64_t NowMicroseconds) noexcept {
-	if (StructuralPayloadBytes < 0 || StructuralPayloadBytes > Bytes) { Invalid = true; return; }
+	std::uint64_t NowMicroseconds, int OrdinaryPayloadBytes) noexcept {
+	if (StructuralPayloadBytes < 0 || OrdinaryPayloadBytes < 0 || StructuralPayloadBytes > Bytes ||
+		OrdinaryPayloadBytes > Bytes - StructuralPayloadBytes) { Invalid = true; return; }
 	if (StructuralPayloadBytes) {
 		if (!StructuralActiveGrantBytes ||
 			StructuralPayloadBytes > StructuralActiveGrantBytes - StructuralActiveGrantFirstSentBytes) {
@@ -109,9 +126,23 @@ void GargantuanReliableServiceCounters::FirstSend(int Bytes, int StructuralPaylo
 			if (StructuralSegmentEventCount < MaximumStructuralSegmentEvents)
 				StructuralSegmentEvents[StructuralSegmentEventCount++] =
 					{EventTime, static_cast<std::uint64_t>(StructuralPayloadBytes)};
+			// Observer only: freeze before a late initial packet's remaining grant
+			// drains. Neither callback state nor result changes the F1 evaluator.
+			if (!Invalid && !StructuralGrantCurve.Invalid && !StructuralGrantCurve.HasFirstSend &&
+				EventTime >= StructuralGrantCurve.LastObservedAtMicroseconds &&
+				gargantuan::network::FiniteGrantServiceCurve::ZeroFirstSendBreach(
+					StructuralGrantCurve.ActivatedAtMicroseconds, EventTime)) {
+				auto *Observer = SteamNetworkingSocketsLib::GargantuanServiceTimingObserver.load(std::memory_order_acquire);
+				if (Observer && Observer->InitialBreach)
+					Observer->InitialBreach(Observer->Context, ActiveAttributedRetirementToken,
+						StructuralGrantCurve.ActivatedAtMicroseconds, EventTime);
+			}
 			(void)StructuralGrantCurve.FirstSend(ActiveAttributedRetirementToken,
 				static_cast<std::uint64_t>(StructuralPayloadBytes),
 				EventTime);
+			(void)StructuralCompletionCurve.FirstSend(ActiveAttributedRetirementToken,
+				static_cast<std::uint64_t>(StructuralPayloadBytes), EventTime);
+			SyncCompletionGrant();
 			SyncStructuralGrant();
 		} else {
 			StructuralActiveGrantFirstSentBytes += static_cast<std::uint64_t>(StructuralPayloadBytes);
@@ -126,6 +157,78 @@ void GargantuanReliableServiceCounters::FirstSend(int Bytes, int StructuralPaylo
 	}
 	Add(UniqueReliableStreamBytesFirstSent, Bytes);
 	Add(StructuralPayloadBytesFirstSent, StructuralPayloadBytes);
+	Add(OrdinaryPayloadBytesFirstSent, OrdinaryPayloadBytes);
+}
+
+void GargantuanReliableServiceCounters::RegisterQualifiedOrdinary(std::int64_t MessageNumber,
+	int PayloadBytes, std::uint64_t Sequence, std::uint64_t Phase, std::uint64_t AcceptedAtMicroseconds) noexcept {
+	if (!Sequence) return; // Unclassified traffic is not a qualification exemption.
+	if (MessageNumber <= 0 || PayloadBytes <= 0 || !AcceptedAtMicroseconds ||
+		QualifiedOrdinaryRegisteredMessages == UINT64_MAX) { QualifiedOrdinaryEvidenceInvalid = true; return; }
+	QualifiedOrdinaryPending *Free = nullptr;
+	for (auto &Value : QualifiedOrdinaryPendingMessagesStorage) {
+		if (Value.MessageNumber == static_cast<std::uint64_t>(MessageNumber) ||
+			(Value.MessageNumber && Value.Sequence == Sequence && Value.Phase == Phase)) {
+			QualifiedOrdinaryEvidenceInvalid = true; return;
+		}
+		if (!Value.MessageNumber && !Free) Free = &Value;
+	}
+	if (!Free) { QualifiedOrdinaryEvidenceInvalid = true; return; }
+	*Free = {static_cast<std::uint64_t>(MessageNumber), Sequence, Phase, AcceptedAtMicroseconds,
+		static_cast<std::uint32_t>(PayloadBytes), 0};
+	++QualifiedOrdinaryRegisteredMessages; ++QualifiedOrdinaryPendingMessages;
+}
+
+void GargantuanReliableServiceCounters::LatchQualifiedOrdinaryFailure(const QualifiedOrdinaryPending &Message,
+	std::uint64_t CompletedAtMicroseconds) noexcept {
+	QualifiedOrdinaryEverFailed = true;
+	if (QualifiedOrdinaryFailureSequence) return;
+	QualifiedOrdinaryFailureSequence = Message.Sequence; QualifiedOrdinaryFailurePhase = Message.Phase;
+	QualifiedOrdinaryFailureMessageNumber = Message.MessageNumber;
+	QualifiedOrdinaryFailureAcceptedAtMicroseconds = Message.AcceptedAtMicroseconds;
+	QualifiedOrdinaryFailureCompletedAtMicroseconds = CompletedAtMicroseconds;
+	QualifiedOrdinaryFailureExpectedBytes = Message.ExpectedBytes;
+	QualifiedOrdinaryFailureFirstSentBytes = Message.FirstSentBytes;
+}
+
+void GargantuanReliableServiceCounters::FirstSendQualifiedOrdinary(std::int64_t MessageNumber,
+	int PayloadBytes, std::uint64_t CompletedAtMicroseconds) noexcept {
+	if (Invalid || Purged || PayloadBytes < 0) { QualifiedOrdinaryEvidenceInvalid = true; return; }
+	if (PayloadBytes == 0) return;
+	if (!QualifiedOrdinaryPendingMessages) return;
+	for (auto &Value : QualifiedOrdinaryPendingMessagesStorage) {
+		if (Value.MessageNumber != static_cast<std::uint64_t>(MessageNumber)) continue;
+		if (!CompletedAtMicroseconds || CompletedAtMicroseconds < Value.AcceptedAtMicroseconds ||
+			static_cast<std::uint32_t>(PayloadBytes) > Value.ExpectedBytes - Value.FirstSentBytes) {
+			QualifiedOrdinaryEvidenceInvalid = true; return;
+		}
+		Value.FirstSentBytes += static_cast<std::uint32_t>(PayloadBytes);
+		const auto Latency = CompletedAtMicroseconds - Value.AcceptedAtMicroseconds;
+		if (Latency > QualifiedOrdinaryDeadlineMicroseconds)
+			LatchQualifiedOrdinaryFailure(Value,
+				Value.FirstSentBytes == Value.ExpectedBytes ? CompletedAtMicroseconds : 0);
+		if (Value.FirstSentBytes == Value.ExpectedBytes) {
+			if (!QualifiedOrdinaryPendingMessages || QualifiedOrdinaryCompletedMessages == UINT64_MAX) {
+				QualifiedOrdinaryEvidenceInvalid = true; return;
+			}
+			QualifiedOrdinaryMaximumLatencyMicroseconds = std::max(QualifiedOrdinaryMaximumLatencyMicroseconds, Latency);
+			QualifiedOrdinaryLastCompletedFailed = Latency > QualifiedOrdinaryDeadlineMicroseconds;
+			++QualifiedOrdinaryCompletedMessages; --QualifiedOrdinaryPendingMessages; Value = {};
+		}
+		return;
+	}
+}
+
+void GargantuanReliableServiceCounters::ObserveQualifiedOrdinary(std::uint64_t ResolvedThroughMicroseconds) noexcept {
+	QualifiedOrdinaryActiveDeadlineFailed = false;
+	if (!QualifiedOrdinaryPendingMessages) return;
+	for (const auto &Value : QualifiedOrdinaryPendingMessagesStorage) {
+		if (!Value.MessageNumber) continue;
+		if (ResolvedThroughMicroseconds < Value.AcceptedAtMicroseconds) { QualifiedOrdinaryEvidenceInvalid = true; continue; }
+		if (ResolvedThroughMicroseconds - Value.AcceptedAtMicroseconds > QualifiedOrdinaryDeadlineMicroseconds) {
+			QualifiedOrdinaryActiveDeadlineFailed = true; LatchQualifiedOrdinaryFailure(Value, 0);
+		}
+	}
 }
 
 void GargantuanReliableServiceCounters::Retransmit(int Bytes) noexcept {
@@ -165,12 +268,16 @@ void GargantuanReliableServiceCounters::AttributeMessage(
 	StructuralGrantFirstSendAtMicroseconds = 0;
 	StructuralGrantCompletedAtMicroseconds = 0;
 	StructuralSegmentEventCount = 0;
+	InitialTrace = {};
 	StructuralCurrentDeficitByteMicroseconds = 0;
 	StructuralActiveGrantStartedAtMicroseconds = PayloadBytes && ActivatedAtMicroseconds &&
 		ActivatedAtMicroseconds != std::numeric_limits<std::uint64_t>::max()
 		? ActivatedAtMicroseconds : 0;
 	if (StructuralActiveGrantStartedAtMicroseconds) {
 		StructuralGrantLastRunningMicroseconds = 0;
+		(void)StructuralCompletionCurve.Activate(Token, static_cast<std::uint64_t>(PayloadBytes),
+			StructuralActiveGrantStartedAtMicroseconds);
+		SyncCompletionGrant();
 		if (!StructuralGrantCurve.Activate(Token, static_cast<std::uint64_t>(PayloadBytes),
 			StructuralActiveGrantStartedAtMicroseconds)) Invalid = true;
 		else StructuralServiceFailed = false;

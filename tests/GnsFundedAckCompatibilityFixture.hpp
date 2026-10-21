@@ -1,6 +1,9 @@
 #pragma once
 
 #include "../src/network/FiniteGrantServiceCurve.hpp"
+#include "GnsFourGrantFixture.hpp"
+#include "../src/runtime/OrdinaryServiceMetadata.hpp"
+#include "../src/runtime/PublicationLatencyDiagnostics.hpp"
 #include "../src/network/GnsAckDiagnosticsAccess.hpp"
 #include "gargantuan/network/ReliableServiceProfile.hpp"
 #include <algorithm>
@@ -97,6 +100,14 @@ inline NetworkMessageIntent Intent(PairFixture &Pair, TrafficClass Traffic, std:
 inline void Send(PairFixture &Pair, const NetworkMessageIntent &Value) {
 	Require(Pair.Server->Send(Value).Succeeded(), "compatibility message native submission failed");
 }
+inline void SendOrdinary(PairFixture &Pair, const NetworkMessageIntent &Value, std::uint64_t Sequence,
+	GnsFourGrantFixture::Contract Selected) {
+	const bool Hybrid = Selected == GnsFourGrantFixture::Contract::HybridF1 || Selected == GnsFourGrantFixture::Contract::PooledCorrectness;
+	const auto At = Now();
+	gargantuan::runtime_detail::OrdinaryServiceScope Protected({Hybrid ? At : 0, 6, Hybrid});
+	gargantuan::runtime_detail::OrdinaryDemandScope Demand({Hybrid ? Sequence : 0, 1, Hybrid ? At : 0, Hybrid});
+	Send(Pair, Value);
+}
 inline void StartObserver(PairFixture &Pair) {
 	Require(Pair.ServerConnection.IsValid() && Pair.ClientConnection.IsValid(), "real GNS pair must connect");
 	Require(AckAccess::PromptFinalGrantAck(*Pair.Server, Pair.ServerConnection, true, 1348),
@@ -112,7 +123,9 @@ struct Completion {
 	WireCost Whole, Tail;
 };
 inline Completion Complete(PairFixture &Pair, const WireSnapshot &Before,
-	std::uint64_t AllAcceptedBytes, std::uint64_t StructuralBytes, std::uint64_t Token) {
+	std::uint64_t AllAcceptedBytes, std::uint64_t StructuralBytes, std::uint64_t Token,
+	GnsFourGrantFixture::Contract Selected = GnsFourGrantFixture::Contract::LegacyFiniteGrant,
+	std::uint64_t ExpectedOrdinary = 0) {
 	// Observe after the native finite envelope; do not repeatedly take the GNS
 	// lock while the independent service thread is draining the grant.
 	std::this_thread::sleep_for(50ms);
@@ -135,13 +148,19 @@ inline Completion Complete(PairFixture &Pair, const WireSnapshot &Before,
 		Final.LastAttributedRetiredPayloadBytes == StructuralBytes,
 		"retirement must consume exactly the attributed grant, never ordinary payload");
 	if (Token) {
-		Require(Final.StructuralLastCompletedGrantToken == Token &&
-			Final.StructuralLastCompletedGrantBytes == StructuralBytes &&
-			!Final.StructuralLastCompletedGrantFailed && !Final.StructuralServiceFailed &&
-			Final.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds <=
-				FiniteGrantServiceCurve::RunningBoundByteMicroseconds &&
-			Final.StructuralMaximumFiniteShortfallByteMicroseconds == 0,
-			"mixed native grant must retain the exact F1 finite and running gates");
+		Require(GnsFourGrantFixture::SelectedTimingValid(Final, Token, StructuralBytes, Selected),
+			"mixed native grant must retain the exact selected completion contract");
+	}
+	if ((Selected == GnsFourGrantFixture::Contract::HybridF1 || Selected == GnsFourGrantFixture::Contract::PooledCorrectness) && ExpectedOrdinary) {
+		const bool Diagnostic = Selected == GnsFourGrantFixture::Contract::PooledCorrectness;
+		Require(Final.QualifiedOrdinaryRegisteredMessages == ExpectedOrdinary &&
+			Final.QualifiedOrdinaryCompletedMessages == ExpectedOrdinary && !Final.QualifiedOrdinaryPendingMessages &&
+			!Final.QualifiedOrdinaryEvidenceInvalid && !Final.ProtectedOrdinaryEvidenceInvalid &&
+			(Diagnostic || (!Final.QualifiedOrdinaryEverFailed && Final.QualifiedOrdinaryMaximumLatencyMicroseconds <= 50'000 &&
+			 !Final.ProtectedOrdinaryEverFailed && !Final.ProtectedOrdinaryActiveDeadlineFailed)),
+			"funded mixed accepted ordinary service exceeded its one 50-ms native FIFO budget");
+		std::cout << "[Qualification:Performance] contract=" << GnsFourGrantFixture::Identity(Selected)
+			<< " ordinary_max_us=" << Final.QualifiedOrdinaryMaximumLatencyMicroseconds << " target_us=50000 fatal=" << !Diagnostic << '\n';
 	}
 	// This is a stated observation horizon, not a claim that ACK convergence
 	// prevents all later periodic control. Include both endpoints after retirement.
@@ -169,8 +188,10 @@ inline void ExactPayloads(const PairFixture &Pair, const std::vector<std::vector
 inline std::vector<std::byte> Payload(std::size_t CompleteBytes, std::byte Marker) {
 	return std::vector<std::byte>(CompleteBytes - ReliableServiceEnvelopeBytes, Marker);
 }
-inline void Print(const char *Case, const Completion &Result, std::uint64_t Token) {
-	std::cout << "[Network:FundedAckCompatibility] case=" << Case << " requests=" << Requests(Result.Sender, Token)
+inline void Print(const char *Case, const Completion &Result, std::uint64_t Token,
+	GnsFourGrantFixture::Contract Selected = GnsFourGrantFixture::Contract::LegacyFiniteGrant) {
+	std::cout << "[Network:FundedAckCompatibility] contract=" << GnsFourGrantFixture::Identity(Selected)
+		<< " case=" << Case << " requests=" << Requests(Result.Sender, Token)
 		<< " sender_packets=" << Result.Whole.SenderPackets << " receiver_packets=" << Result.Whole.ReceiverPackets
 		<< " whole_wire_ipv4=" << Result.Whole.Ipv4Bytes << " whole_wire_ipv6_bound=" << Result.Whole.ConservativeIpv6Bytes
 		<< " post_retirement_us=100000 tail_wire_ipv6_bound=" << Result.Tail.ConservativeIpv6Bytes
@@ -179,7 +200,7 @@ inline void Print(const char *Case, const Completion &Result, std::uint64_t Toke
 		<< " result=PASS\n";
 }
 
-inline void OrdinaryAndFullReservationIsolation() {
+inline void OrdinaryAndFullReservationIsolation(GnsFourGrantFixture::Contract Selected) {
 	OwnedPair Owner; auto &Pair = Owner.Pair; StartObserver(Pair);
 	const auto Before = ReadWire(Pair);
 	const std::array<std::size_t, 3> Sizes{96, 128, 8192};
@@ -193,10 +214,10 @@ inline void OrdinaryAndFullReservationIsolation() {
 		"ordinary/FULL_RESERVATION traffic must not activate a pooled prompt or F1 clock");
 	ExactPayloads(Pair, {Payload(Sizes[0], std::byte{0x11}), Payload(Sizes[1], std::byte{0x22}),
 		Payload(Sizes[2], std::byte{0x33})});
-	Print("ordinary-and-full-reservation", Result, 0);
+	Print("ordinary-and-full-reservation", Result, 0, Selected);
 }
 
-inline void FundedMixedGrant() {
+inline void FundedMixedGrant(GnsFourGrantFixture::Contract Selected) {
 	OwnedPair Owner; auto &Pair = Owner.Pair; StartObserver(Pair);
 	constexpr std::uint64_t Token = 41, Bytes = 393652;
 	auto Control = Intent(Pair, TrafficClass::Control, 96, std::byte{0x11});
@@ -205,10 +226,10 @@ inline void FundedMixedGrant() {
 	Require(Access::Attribute(Structural, Token), "mixed grant token attribution failed");
 	const auto Before = ReadWire(Pair);
 	const auto SubmittedAt = Now();
-	Send(Pair, Control);
+	SendOrdinary(Pair, Control, 1, Selected);
 	Require(Access::Activate(Structural, Token, Now()), "mixed grant activation failed");
-	Send(Pair, Structural); Send(Pair, Gameplay);
-	const auto Result = Complete(Pair, Before, Bytes + 96 + 128, Bytes, Token);
+	Send(Pair, Structural); SendOrdinary(Pair, Gameplay, 2, Selected);
+	const auto Result = Complete(Pair, Before, Bytes + 96 + 128, Bytes, Token, Selected, 2);
 	Require(Requests(Result.Sender, Token) == 1 && Result.Sender.PromptFinalWireAllowed &&
 		!Result.Sender.GrantWireInvalid, "funded multi-packet grant must request exactly one immediate ACK");
 	// Independent endpoint counters include startup packets, reverse ACK, ordinary
@@ -228,10 +249,10 @@ inline void FundedMixedGrant() {
 		}
 	}
 	Require(OrdinaryReceived == 2, "ordinary latency must be checked against actual native delivery");
-	Print("funded-mixed-grant", Result, Token);
+	Print("funded-mixed-grant", Result, Token, Selected);
 }
 
-inline void TinySplitByOrdinaryPacketOccupancy() {
+inline void TinySplitByOrdinaryPacketOccupancy(GnsFourGrantFixture::Contract Selected) {
 	std::size_t SplitCases = 0;
 	// Bounded packet-boundary sweep, not a synthetic segment counter. The preceding
 	// ordinary Reliable messages are followed immediately by production NoNagle.
@@ -248,8 +269,8 @@ inline void TinySplitByOrdinaryPacketOccupancy() {
 		Require(Access::Attribute(Tiny, Token), "tiny grant attribution failed");
 		const auto Before = ReadWire(Pair);
 		Require(Access::Activate(Tiny, Token, Now()), "tiny grant activation failed");
-		Send(Pair, Ordinary); Send(Pair, SecondOrdinary); Send(Pair, Tiny);
-		const auto Result = Complete(Pair, Before, PrefixBytes + SecondPrefixBytes + Bytes, Bytes, Token);
+		SendOrdinary(Pair, Ordinary, 1, Selected); SendOrdinary(Pair, SecondOrdinary, 2, Selected); Send(Pair, Tiny);
+		const auto Result = Complete(Pair, Before, PrefixBytes + SecondPrefixBytes + Bytes, Bytes, Token, Selected, 2);
 		Require(Requests(Result.Sender, Token) == 0 && !Result.Sender.PromptFinalWireAllowed,
 			"multi-packet tiny grant must not bypass the funded-wire predicate");
 		ExactPayloads(Pair, {Payload(PrefixBytes, std::byte{0x61}), Payload(SecondPrefixBytes, std::byte{0x63}),
@@ -265,7 +286,7 @@ inline void TinySplitByOrdinaryPacketOccupancy() {
 				"tiny split regression must observe a real partial unique first send");
 			++SplitCases;
 		}
-		Print("tiny-mixed-boundary", Result, Token);
+		Print("tiny-mixed-boundary", Result, Token, Selected);
 		std::cout << "[Network:FundedAckCompatibility] ordinary_prefix_bytes=" << PrefixBytes
 			<< " second_prefix_bytes=" << SecondPrefixBytes << " tiny_bytes=" << Bytes
 			<< " tiny_segments=" << Final.LastCompletedStructuralSegmentEventCount << '\n';
@@ -274,11 +295,13 @@ inline void TinySplitByOrdinaryPacketOccupancy() {
 	std::cout << "[Network:FundedAckCompatibility] tiny_split_cases=" << SplitCases << " result=PASS\n";
 }
 
-inline bool Run() {
+inline bool Run(GnsFourGrantFixture::Contract Selected = GnsFourGrantFixture::Contract::LegacyFiniteGrant) {
+	std::cout << "[Network:FundedAckCompatibility] contract=" << GnsFourGrantFixture::Identity(Selected) << '\n';
+	if (Selected == GnsFourGrantFixture::Contract::SanitizerSafety) return false;
 	try {
-		OrdinaryAndFullReservationIsolation();
-		FundedMixedGrant();
-		TinySplitByOrdinaryPacketOccupancy();
+		OrdinaryAndFullReservationIsolation(Selected);
+		FundedMixedGrant(Selected);
+		TinySplitByOrdinaryPacketOccupancy(Selected);
 		std::cout << "[Network:FundedAckCompatibility] 3 cases PASS\n";
 		return true;
 	} catch (const std::exception &Error) {
