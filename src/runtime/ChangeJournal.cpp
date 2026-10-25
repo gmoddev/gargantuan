@@ -2,12 +2,14 @@
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
 namespace gargantuan {
 	namespace {
 		thread_local std::size_t SuppressionDepth = 0;
+		thread_local ObjectId SuppressedRenderScope;
 		thread_local std::vector<BufferedChangeRecord> *CapturedRecords = nullptr;
 		using ProfileClock = std::chrono::steady_clock;
 
@@ -23,13 +25,21 @@ namespace gargantuan {
 		return Journal;
 	}
 
+	bool ChangeJournal::DiscardsPayload(ObjectId Scope) {
+		return SuppressionDepth != 0 && (!Scope.IsValid() || Scope != SuppressedRenderScope);
+	}
+
 	std::uint64_t ChangeJournal::Commit(ObjectId object, ChangePayload payload) {
 		return Commit({}, object, std::move(payload));
 	}
 
 	std::uint64_t ChangeJournal::Commit(ObjectId scope, ObjectId object, ChangePayload payload) {
 		AssertAuthoritativeMutation("ChangeJournal::Commit");
-		if (SuppressionDepth != 0) return 0;
+		if (SuppressionDepth != 0) {
+			if (scope.IsValid() && scope == SuppressedRenderScope)
+				RenderDirtyAccumulator::Get().RecordChange(scope, object, payload);
+			return 0;
+		}
 		if (CapturedRecords) {
 			CapturedRecords->push_back({scope, object, std::move(payload)});
 			return 0;
@@ -43,7 +53,8 @@ namespace gargantuan {
 		if (stream.NextSequence == std::numeric_limits<std::uint64_t>::max())
 			throw std::overflow_error("Change journal sequence is exhausted");
 		const auto sequence = stream.NextSequence;
-		stream.Records.push_back({sequence, scope, object, std::move(payload)});
+		stream.Records.push_back(std::make_shared<const ChangeRecord>(
+			ChangeRecord{sequence, scope, object, std::move(payload)}));
 		++stream.NextSequence;
 		while (stream.Records.size() > Capacity) {
 			stream.Records.pop_front();
@@ -59,7 +70,13 @@ namespace gargantuan {
 
 	void ChangeJournal::CommitBatch(ObjectId scope, std::vector<std::pair<ObjectId, ChangePayload>> changes) {
 		AssertAuthoritativeMutation("ChangeJournal::CommitBatch");
-		if (SuppressionDepth != 0 || changes.empty()) return;
+		if (changes.empty()) return;
+		if (SuppressionDepth != 0) {
+			if (scope.IsValid() && scope == SuppressedRenderScope)
+				for (const auto &[Object, Payload] : changes)
+					RenderDirtyAccumulator::Get().RecordChange(scope, Object, Payload);
+			return;
+		}
 		if (CapturedRecords) {
 			for (auto &[object, payload] : changes)
 				CapturedRecords->push_back({scope, object, std::move(payload)});
@@ -76,7 +93,8 @@ namespace gargantuan {
 		for (auto &[object, payload] : changes) {
 			if (nextSequence == std::numeric_limits<std::uint64_t>::max())
 				throw std::overflow_error("Change journal sequence is exhausted");
-			Replacement.push_back({nextSequence, scope, object, std::move(payload)});
+			Replacement.push_back(std::make_shared<const ChangeRecord>(
+				ChangeRecord{nextSequence, scope, object, std::move(payload)}));
 			++nextSequence;
 		}
 		std::uint64_t Evicted = 0;
@@ -109,7 +127,7 @@ namespace gargantuan {
 		const auto found = Streams.find({});
 		if (found == Streams.end()) return result;
 		for (const auto &record : found->second.Records) {
-			if (record.Sequence > sequence) result.push_back(record);
+			if (record->Sequence > sequence) result.push_back(*record);
 		}
 		return result;
 	}
@@ -120,26 +138,50 @@ namespace gargantuan {
 		return {scope, found == Streams.end() ? 1 : found->second.NextSequence};
 	}
 
-	ChangeReadResult ChangeJournal::Read(ChangeCursor cursor, std::size_t maximumRecords) const {
-		std::scoped_lock lock(Mutex);
-		ChangeReadResult result{.Cursor = cursor};
-		auto found = Streams.find(cursor.Scope);
-		if (found == Streams.end()) return result;
-		const auto &stream = found->second;
-		const auto oldest = stream.Records.empty() ? stream.NextSequence : stream.Records.front().Sequence;
-		if (cursor.NextSequence < oldest) {
-			result.Status = ChangeReadStatus::ResnapshotRequired;
-			result.Cursor.NextSequence = oldest;
-			return result;
+	ChangeRetentionWindow ChangeJournal::GetRetentionWindow(ObjectId Scope) const {
+		std::scoped_lock Lock(Mutex);
+		const auto Found = Streams.find(Scope);
+		if (Found == Streams.end()) return {1, 1, 0, Capacity};
+		const auto &Stream = Found->second;
+		return {Stream.Records.empty() ? Stream.NextSequence : Stream.Records.front()->Sequence,
+			Stream.NextSequence, Stream.Records.size(), Capacity};
+	}
+
+	ChangeReadResult ChangeJournal::Read(ChangeCursor Cursor, std::size_t MaximumRecords) const {
+		auto Pinned = ReadPinned(Cursor, MaximumRecords);
+		ChangeReadResult Result{.Status = Pinned.Status, .Cursor = Pinned.Cursor};
+		Result.Records.reserve(Pinned.Records.size());
+		for (const auto &Record : Pinned.Records) Result.Records.push_back(*Record);
+		return Result;
+	}
+
+	PinnedChangeReadResult ChangeJournal::ReadPinned(ChangeCursor Cursor, std::size_t MaximumRecords) const {
+		std::scoped_lock Lock(Mutex);
+		PinnedChangeReadResult Result{.Cursor = Cursor};
+		auto Found = Streams.find(Cursor.Scope);
+		if (Found == Streams.end()) return Result;
+		const auto &Stream = Found->second;
+		const auto Oldest = Stream.Records.empty() ? Stream.NextSequence : Stream.Records.front()->Sequence;
+		if (Cursor.NextSequence < Oldest) {
+			Result.Status = ChangeReadStatus::ResnapshotRequired;
+			Result.Cursor.NextSequence = Oldest;
+			return Result;
 		}
 
-		for (const auto &record : stream.Records) {
-			if (record.Sequence < cursor.NextSequence) continue;
-			if (result.Records.size() == maximumRecords) break;
-			result.Records.push_back(record);
-			result.Cursor.NextSequence = record.Sequence + 1;
+		if (MaximumRecords == 0 || Cursor.NextSequence >= Stream.NextSequence) return Result;
+		// Commits append consecutive sequences only after successful insertion;
+		// retention removes a prefix and Clear removes the whole tail. The retained
+		// deque therefore maps a valid sequence directly to an index. Never scan
+		// historical records before an already-current peer/catalog cursor.
+		const auto First = static_cast<std::size_t>(Cursor.NextSequence - Oldest);
+		const auto Count = std::min(MaximumRecords, Stream.Records.size() - First);
+		Result.Records.reserve(Count);
+		for (std::size_t Index = 0; Index < Count; ++Index) {
+			const auto &Record = Stream.Records[First + Index];
+			Result.Records.push_back(Record);
+			Result.Cursor.NextSequence = Record->Sequence + 1;
 		}
-		return result;
+		return Result;
 	}
 
 	void ChangeJournal::SetCapacity(std::size_t capacity) {
@@ -184,11 +226,14 @@ namespace gargantuan {
 		};
 	}
 
-	ScopedChangeJournalSuppression::ScopedChangeJournalSuppression() {
+	ScopedChangeJournalSuppression::ScopedChangeJournalSuppression(ObjectId RenderScope)
+		: PreviousRenderScope(SuppressedRenderScope) {
 		++SuppressionDepth;
+		SuppressedRenderScope = RenderScope;
 	}
 
 	ScopedChangeJournalSuppression::~ScopedChangeJournalSuppression() {
+		SuppressedRenderScope = PreviousRenderScope;
 		--SuppressionDepth;
 	}
 

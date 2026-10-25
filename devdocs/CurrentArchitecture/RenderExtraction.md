@@ -42,6 +42,12 @@ version cursors, byte estimates, and bounded diagnostics. It stores no raw or
 shared Instance pointers and is independent of the general `ChangeJournal`
 retention window.
 
+Committed network replica changes also feed this accumulator for the live
+receiver's exact DataModel scope. Their journal feedback remains suppressed;
+temporary replica validation worlds are not render producers. Thus ordinary
+GRPL create/update/destroy reaches incremental extraction without a whole-world
+render rescan, and renderer identities remain the receiver's local lifetimes.
+
 Domains are transform, material, visibility, geometry, deformable geometry, and
 hierarchy/render presence. Repeated writes union flags into one entry and
 `RenderPublisher` reads the final authoritative object state once. Create plus

@@ -1,0 +1,905 @@
+"""Offline final conjunction. Input summaries are never an executable replay seam.
+
+The farm observation passed to Evaluate is produced by the fixed repository
+replayer in this invocation. Evaluate is separated only for negative tests.
+"""
+from __future__ import annotations
+
+import argparse
+from datetime import datetime
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import subprocess
+import sys
+import tempfile
+import uuid
+import xml.etree.ElementTree as ET
+import zipfile
+
+
+class EvidenceError(ValueError):
+    pass
+
+
+CORE_CONTRACT = "POOLED_CORRECTNESS_V1"
+# One original job log now contains build output and all five bounded workload
+# reports. Use the existing diagnostic-archive read cap, not the JUnit cap.
+MAXIMUM_CI_JOB_LOG_BYTES = 128 * 1024 * 1024
+
+
+def Require(Condition, Message):
+    if not Condition:
+        raise EvidenceError(Message)
+
+
+def ObjectPairs(Pairs):
+    Result = {}
+    for Key, Value in Pairs:
+        Require(Key not in Result, f"duplicate JSON field: {Key}")
+        Result[Key] = Value
+    return Result
+
+
+def ReadBytes(PathValue, Maximum=8 * 1024 * 1024):
+    File = Path(PathValue).absolute()
+    for Part in (File, *File.parents):
+        Require(not Part.is_symlink() and not getattr(Part, "is_junction", lambda: False)(),
+                f"redirected evidence path: {Part}")
+    Require(File.is_file() and File.stat().st_size <= Maximum, f"missing/oversized evidence: {File}")
+    Data = File.read_bytes()
+    Require(len(Data) <= Maximum, f"evidence changed size: {File}")
+    return Data
+
+
+def ReadJson(PathValue):
+    return json.loads(ReadBytes(PathValue), object_pairs_hook=ObjectPairs,
+                      parse_constant=lambda Value: (_ for _ in ()).throw(EvidenceError(f"invalid number: {Value}")))
+
+
+def Digest(Data):
+    return hashlib.sha256(Data).hexdigest()
+
+
+def Hash(Value):
+    Require(isinstance(Value, str) and re.fullmatch(r"[0-9a-f]{64}", Value), "invalid SHA-256")
+    return Value
+
+
+def Commit(Value):
+    Require(isinstance(Value, str) and re.fullmatch(r"[0-9a-f]{40}", Value), "full source commit required")
+    return Value
+
+
+ANALYZER_FILES = (
+    "tests/foundation3l_acceptance.py",
+    "tests/foundation3l_four_client.py",
+    "tests/PhysicalFarmAnalysisInventory.ps1",
+    "tests/PhysicalGameSessionFarmAcceptance.ps1",
+    "tests/PhysicalGameSessionFarmReconcile.ps1",
+    "tests/PhysicalGameSessionFarm.ps1",
+    "tests/PhysicalGameSessionFarmEndpoint.ps1",
+    "tests/PhysicalFarmPipeDrain.ps1",
+    "tests/PhysicalGameSessionFarmNodeTls.ps1",
+    "tests/AdmissionFairnessEvidence.ps1",
+    "tests/RecoveryCausalEvidence.ps1",
+    "tests/PhysicalFarmPublicationEvidence.ps1",
+    "tests/PhysicalFarmClockEvidence.ps1",
+    "tests/PhysicalGameSessionFarmLifecycle.ps1",
+    "tests/PhysicalGameSessionFarmRemoteOwnership.ps1",
+    "tests/PhysicalGameSessionFarmF1.ps1",
+    "tests/PhysicalFarmNodeResources.ps1",
+    "tools/physical-qualifier/qualifier.py",
+    "tools/physical-qualifier/dependency.py",
+    "tools/physical-qualifier/upstream.lock.json",
+    "tools/physical-qualifier/f1_candidate_source.py",
+    "tools/physical-qualifier/workflows/four-client-phase1-lifecycle.json",
+    "tools/physical-qualifier/farm_publication_join.py",
+    "tools/physical-qualifier/farm_publication_trace.py",
+    "tools/physical-qualifier/farm_ordinary_demand.py",
+    "tools/physical-qualifier/farm_clock_exchange.py",
+    "tools/physical-qualifier/farm_server_tick.py",
+    "tools/physical-qualifier/farm_remote_cadence.py",
+    "tools/physical-qualifier/farm_capture_acceptance.py",
+    "tools/physical-qualifier/farm_capture_directions.py",
+)
+
+
+def VerifyAnalyzerCheckout(Root, SourceCommit, AnalyzerCommit):
+    """Bind the clean offline replayer to B without relabeling native candidate A."""
+    SourceCommit, AnalyzerCommit = Commit(SourceCommit), Commit(AnalyzerCommit)
+    Head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Root, text=True).strip()
+    Require(Head == AnalyzerCommit, "run the final replay from its exact reviewed analyzer commit")
+    Require(not subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=Root),
+            "tracked analyzer source is dirty")
+    Ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", SourceCommit, AnalyzerCommit],
+                             cwd=Root, capture_output=True, timeout=10,
+                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    Require(Ancestor.returncode == 0, "analyzer is not a descendant of the physical execution source")
+    Files = []
+    for Name in ANALYZER_FILES:
+        Tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "--", Name],
+                                 cwd=Root, capture_output=True, timeout=10,
+                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        Require(Tracked.returncode == 0, f"untracked fixed analyzer dependency: {Name}")
+        Files.append({"Path": Name, "Sha256": Digest(ReadBytes(Root / Name))})
+    return {"Format": "GargantuanFoundation3LAnalyzerProvenance", "Version": 1,
+            "ExecutionSourceCommit": SourceCommit, "AnalyzerCommit": AnalyzerCommit,
+            "DescendsFromExecutionSource": True, "Files": Files}
+
+
+def Pinned(Root, Entry, Maximum=8 * 1024 * 1024):
+    Require(isinstance(Entry, dict) and set(Entry) == {"Path", "Sha256"}, "invalid pinned file entry")
+    Relative = PurePosixPath(Entry["Path"])
+    Require(not Relative.is_absolute() and str(Relative) == Entry["Path"] and
+            all(Part not in ("", ".", "..") for Part in Relative.parts) and
+            ":" not in Entry["Path"] and "\\" not in Entry["Path"], "noncanonical evidence path")
+    Data = ReadBytes(Path(Root).joinpath(*Relative.parts), Maximum)
+    Require(Digest(Data) == Hash(Entry["Sha256"]), f"evidence hash mismatch: {Relative}")
+    return Data
+
+
+def JsonData(Data):
+    return json.loads(Data, object_pairs_hook=ObjectPairs,
+                      parse_constant=lambda Value: (_ for _ in ()).throw(EvidenceError(f"invalid number: {Value}")))
+
+
+def Timestamp(Value):
+    Require(isinstance(Value, str), "UTC timestamp missing")
+    Parsed = datetime.fromisoformat(Value.replace("Z", "+00:00"))
+    Require(Parsed.utcoffset() is not None, "timezone-less timestamp")
+    return Parsed
+
+
+COMMON = {
+    "GameSessionTests", "FrozenRecoveryQuoteTests", "gargantuan_networking_contracts",
+    "gargantuan_replication_relevance", "gargantuan_content_availability",
+    "gargantuan_content_ownership", "gargantuan_remote", "gargantuan_character_networking",
+}
+FUNDED = {
+    "gargantuan_gns_funded_ack", "gargantuan_gns_funded_ack_compatibility",
+    "gargantuan_gns_funded_ack_four_grant", "gargantuan_gns_funded_ack_stats",
+    "gargantuan_gns_failed_send_retry_safety", "gargantuan_f1_packet_tail",
+    "gargantuan_f1_four_grant", "gargantuan_f1_mixed_traffic",
+}
+GNS_SAFETY = {
+    "gargantuan_replication", "gargantuan_real_transport", "gargantuan_gns_failed_send_retry_safety",
+    "gargantuan_f1_packet_tail", "gargantuan_f1_four_grant_sanitizer_safety",
+    "gargantuan_f1_mixed_traffic", "gargantuan_gns_service_fairness",
+    "gargantuan_remote_real_transport", "gargantuan_character_real_transport",
+    "gargantuan_game_session_real_transport",
+}
+CI_JOBS = {
+    "Windows x64 / MSVC 19.50+ / Release": (
+        ".github/workflows/native-ci.yml", "native-ci-diagnostics", COMMON | FUNDED,
+        "Run complete headless CTest contract"),
+    "Ubuntu 24.04 / Clang 19 / ASan + UBSan / Headless": (
+        ".github/workflows/native-ci.yml", "sanitizer-ci-diagnostics", COMMON,
+        "Run complete sanitizer headless CTest contract"),
+    "Ubuntu 24.04 / Clang 19 / ASan + UBSan + LSan / GNS": (
+        ".github/workflows/gns-sanitizers.yml", "gns-sanitizer-diagnostics", GNS_SAFETY,
+        "Run GNS transport sanitizer CTest contract"),
+}
+
+HYBRID_TEST_IDENTITIES = {
+    "gargantuan_f1_packet_tail": "gargantuan_hybrid_packet_tail",
+    "gargantuan_f1_four_grant": "gargantuan_hybrid_four_grant",
+    "gargantuan_f1_mixed_traffic": "gargantuan_hybrid_mixed_traffic",
+    "gargantuan_gns_funded_ack_four_grant": "gargantuan_gns_funded_ack_four_grant_hybrid",
+}
+
+
+def ReadJUnit(Data, Required):
+    Require(b"<!DOCTYPE" not in Data.upper() and b"<!ENTITY" not in Data.upper(), "XML declarations forbidden")
+    Root = ET.fromstring(Data)
+    Require(Root.tag in ("testsuite", "testsuites"), "invalid JUnit root")
+    Cases = Root.findall(".//testcase")
+    Require(0 < len(Cases) <= 10000, "invalid test count")
+    Names = [Case.get("name") for Case in Cases]
+    Require(all(Names) and len(Names) == len(set(Names)), "missing/duplicate test identity")
+    Require(Required <= set(Names), f"missing required tests: {sorted(Required - set(Names))}")
+    for Case in Cases:
+        Require(not any(Case.find(Tag) is not None for Tag in ("failure", "error")) and
+                (Case.get("name") not in Required or
+                 (Case.get("status", "run") in ("run", "passed") and Case.find("skipped") is None)),
+                f"test failed/skipped: {Case.get('name')}")
+    for Suite in Root.iter("testsuite"):
+        for Field in ("failures", "errors"):
+            Require(int(Suite.get(Field, "0")) == 0, f"JUnit {Field} is nonzero")
+    return len(Cases)
+
+
+def VerifyCIJobLog(Root, Entry, Run, Job, Metadata, Step, XmlData):
+    """Corroborate one stale pending step without changing its raw API state."""
+    Original = Entry.get("OriginalJobLog")
+    Require(isinstance(Original, dict) and set(Original) == {"File", "JobId", "RunId", "Attempt", "Url"},
+            "missing/invalid original job log provenance")
+    for Field, Value in (("JobId", Job.get("id")), ("RunId", Run["id"]), ("Attempt", Run["run_attempt"])):
+        Require(type(Original.get(Field)) is int and Original[Field] > 0 and Original[Field] == Value,
+                "original job log identity mismatch")
+    JobUrl = f"https://api.github.com/repos/gmoddev/gargantuan/actions/jobs/{Job['id']}"
+    Require(Job.get("url") == JobUrl and Original["Url"] == JobUrl + "/logs" and
+            Job.get("run_url") == f"https://api.github.com/repos/gmoddev/gargantuan/actions/runs/{Run['id']}",
+            "original job log URL mismatch")
+    Data = Pinned(Root, Original["File"], MAXIMUM_CI_JOB_LOG_BYTES)
+    Text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", Data.decode("utf-8"))
+    Lines = Text.splitlines()
+    Require(not any("##[error]" in Line for Line in Lines), "original job log contains a runner error")
+    Directory = {"Windows x64 / MSVC 19.50+ / Release": "build-ci",
+                 "Ubuntu 24.04 / Clang 19 / ASan + UBSan / Headless": "build-sanitizers",
+                 "Ubuntu 24.04 / Clang 19 / ASan + UBSan + LSan / GNS": "build-gns-sanitizers"}[Job["name"]]
+    Commands = [Number for Number, Line in enumerate(Lines)
+                if re.search(r"\bctest --test-dir " + Directory + r"(?=\s|$)", Line)]
+    Require(len(Commands) == 1, "missing/ambiguous original CTest execution")
+    Start = Commands[0]
+    Summaries = [(Number, re.search(r"(\d+)% tests passed, (\d+) tests failed out of (\d+)", Line))
+                 for Number, Line in enumerate(Lines) if Number > Start and "tests failed out of" in Line]
+    Require(len(Summaries) == 1 and Summaries[0][1] is not None, "missing/ambiguous original CTest summary")
+    End, Summary = Summaries[0]
+    Require(Summary[1] == "100" and Summary[2] == "0", "original CTest execution failed")
+    Cases = ET.fromstring(XmlData).findall(".//testcase")
+    Require(all(Case.get("status", "run") in ("run", "passed") and Case.find("skipped") is None
+                for Case in Cases), "original CTest/JUnit case skipped")
+    Names = {Case.get("name") for Case in Cases}
+    Count = len(Cases)
+    Require(int(Summary[3]) == Count, "original CTest/JUnit count mismatch")
+    Pattern = r"^\S+Z\s+(\d+)/(\d+) Test\s+#(\d+):\s+(\S+)\s+\.+\s+Passed\s+[0-9.]+ sec\s*$"
+    Rows = [(Number, re.fullmatch(Pattern, Line)) for Number, Line in enumerate(Lines)
+            if Start < Number < End and re.search(r"\d+/\d+ Test\s+#", Line)]
+    Require(len(Rows) == Count and all(Match is not None for _, Match in Rows),
+            "incomplete/failed original CTest rows")
+    Require([int(Match[1]) for _, Match in Rows] == list(range(1, Count + 1)) and
+            all(int(Match[2]) == Count for _, Match in Rows) and
+            all(int(Match[3]) > 0 for _, Match in Rows) and
+            len({Match[3] for _, Match in Rows}) == Count and
+            {Match[4] for _, Match in Rows} == Names, "original CTest/JUnit case identity mismatch")
+    Finalized = f"Artifact {Metadata['name']}.zip successfully finalized. Artifact ID {Metadata['id']}"
+    Uploads = [Number for Number, Line in enumerate(Lines) if re.search(re.escape(Finalized) + r"\s*$", Line)]
+    DownloadUrl = f"https://github.com/gmoddev/gargantuan/actions/runs/{Run['id']}/artifacts/{Metadata['id']}"
+    Links = [Number for Number, Line in enumerate(Lines)
+             if re.search("Artifact download URL: " + re.escape(DownloadUrl) + r"\s*$", Line)]
+    Require(len(Uploads) == 1 and len(Links) == 1 and End < Uploads[0] < Links[0],
+            "original job log artifact provenance mismatch")
+    Points = [Start, *[Number for Number, _ in Rows], End, Uploads[0], Links[0]]
+    Times = [Timestamp(Lines[Number].split()[0]) for Number in Points]
+    Require(Times == sorted(Times) and Timestamp(Job["started_at"]) <= Times[0] and
+            Times[-1] <= Timestamp(Job["completed_at"]) and
+            Times[-3] <= Timestamp(Metadata["created_at"]) <= Times[-2],
+            "original job log execution clock mismatch")
+    return {"Kind": "ORIGINAL_JOB_LOG_AND_JUNIT", "ApiStep": Step, "JobId": Job["id"],
+            "RunId": Run["id"], "Attempt": Run["run_attempt"], "ArtifactId": Metadata["id"],
+            "OriginalJobLogUrl": Original["Url"], "OriginalJobLogSha256": Digest(Data),
+            "PassedTests": Count, "CTestStartedUtc": Lines[Start].split()[0],
+            "CTestCompletedUtc": Lines[End].split()[0]}
+
+
+def VerifyCI(IndexPath, IndexSha256, ExpectedCommit, ExpectedContract="F1"):
+    """Pinned raw GitHub API metadata plus original download ZIPs, never a PASS label."""
+    Require(ExpectedContract in ("F1", "HYBRID_F1_V1", CORE_CONTRACT), "unknown qualification contract")
+    Data = ReadBytes(IndexPath)
+    Require(Digest(Data) == Hash(IndexSha256), "CI index pin mismatch")
+    Index = JsonData(Data)
+    Version = Index.get("Version")
+    Require(Index.get("Format") == "GargantuanFoundation3LCI" and type(Version) is int and
+            Version in (1, 2) and (Version == 1 or ExpectedContract in ("HYBRID_F1_V1", CORE_CONTRACT)),
+            "unknown CI inventory format")
+    Entries = Index.get("Jobs")
+    Require(isinstance(Entries, list) and len(Entries) == len(CI_JOBS), "CI job inventory incomplete")
+    Root = Path(IndexPath).parent
+    Seen = set()
+    WorkflowRuns = {}
+    Observed = []
+    for Entry in Entries:
+        Name = Entry.get("Name")
+        Require(Name in CI_JOBS and Name not in Seen, "unknown/duplicate CI job")
+        Seen.add(Name)
+        Workflow, ArtifactName, Required, StepName = CI_JOBS[Name]
+        if ExpectedContract in ("HYBRID_F1_V1", CORE_CONTRACT):
+            Required = {HYBRID_TEST_IDENTITIES.get(Test, Test) for Test in Required}
+            if Name.startswith("Windows "):
+                Required.add("gargantuan_four_grant_contract")
+                if ExpectedContract == CORE_CONTRACT:
+                    Required.add("gargantuan_packaged_game_session")
+        Run = JsonData(Pinned(Root, Entry["Run"]))
+        Jobs = JsonData(Pinned(Root, Entry["Jobs"]))
+        Metadata = JsonData(Pinned(Root, Entry["ArtifactMetadata"]))
+        Require(Run.get("repository", {}).get("full_name") == "gmoddev/gargantuan" and
+                Run.get("head_sha") == ExpectedCommit and Run.get("path") == Workflow and
+                Run.get("event") in ("push", "workflow_dispatch") and
+                Run.get("status") == "completed" and Run.get("conclusion") == "success",
+                f"CI is not successful on expected source: {Name}")
+        Require(type(Run.get("id")) is int and Run["id"] > 0 and
+                type(Run.get("run_attempt")) is int and Run["run_attempt"] > 0, "invalid CI run identity")
+        Identity = (Run["id"], Run["run_attempt"])
+        Require(WorkflowRuns.setdefault(Workflow, Identity) == Identity, "mixed attempts within one workflow")
+        JobRows = Jobs.get("jobs", [])
+        Require(Jobs.get("total_count") == len(JobRows) and 0 < len(JobRows) <= 20, "truncated CI job listing")
+        ExpectedNames = {Key for Key, Value in CI_JOBS.items() if Value[0] == Workflow}
+        Require({Item.get("name") for Item in JobRows} == ExpectedNames and len(JobRows) == len(ExpectedNames),
+                "unexpected/missing workflow jobs")
+        Matches = [Job for Job in JobRows if Job.get("name") == Name]
+        Require(len(Matches) == 1, "required CI job missing/duplicated")
+        Job = Matches[0]
+        Require(Job.get("run_id") == Run["id"] and Job.get("run_attempt") == Run["run_attempt"] and
+                Job.get("head_sha") == ExpectedCommit and Job.get("status") == "completed" and
+                Job.get("conclusion") == "success", "stale/failed CI job")
+        Steps = [Step for Step in Job.get("steps", []) if Step.get("name") == StepName]
+        Require(len(Steps) == 1, "required CTest step missing/failed")
+        Step = Steps[0]
+        StepSuccessful = Step.get("status") == "completed" and Step.get("conclusion") == "success"
+        Require(StepSuccessful or (Version == 2 and Step.get("status") == "pending" and
+                "conclusion" in Step and Step["conclusion"] is None), "required CTest step missing/failed")
+        Require(Metadata.get("name") == ArtifactName and Metadata.get("expired") is False and
+                Metadata.get("workflow_run", {}).get("id") == Run["id"] and
+                Metadata.get("workflow_run", {}).get("head_sha") == ExpectedCommit,
+                "artifact provenance mismatch")
+        Require(Timestamp(Job.get("started_at")) <= Timestamp(Metadata.get("created_at")) <=
+                Timestamp(Job.get("completed_at")), "artifact came from a different job attempt")
+        Archive = Pinned(Root, Entry["Archive"], 128 * 1024 * 1024)
+        Require(Metadata.get("digest") == "sha256:" + Digest(Archive) and
+                Metadata.get("size_in_bytes") == len(Archive), "GitHub artifact digest/size mismatch")
+        import io
+        with zipfile.ZipFile(io.BytesIO(Archive)) as Zip:
+            Infos = Zip.infolist()
+            Require(0 < len(Infos) <= 10000,
+                    "unbounded CI artifact")
+            Names = [Item.filename for Item in Infos]
+            Require(len(Names) == len(set(Names)), "duplicate ZIP member")
+            for FileName in Names:
+                PathName = PurePosixPath(FileName)
+                Require(not PathName.is_absolute() and ".." not in PathName.parts and
+                        "\\" not in FileName and ":" not in FileName, "invalid ZIP member")
+            Xml = [Item for Item in Infos if PurePosixPath(Item.filename).name in
+                   ("ctest-results.xml", "ctest-gns-results.xml")]
+            Require(len(Xml) == 1 and Xml[0].file_size <= 16 * 1024 * 1024, "missing/ambiguous JUnit evidence")
+            Sources = [Item for Item in Infos if PurePosixPath(Item.filename).name == "qualified-source-commit.txt"]
+            Require(len(Sources) == 1 and Sources[0].file_size <= 128,
+                    "actual CI checkout differs from candidate source")
+            with Zip.open(Sources[0]) as File:
+                SourceData = File.read(129)
+            Require(len(SourceData) <= 128 and SourceData.decode("ascii").strip() == ExpectedCommit,
+                    "actual CI checkout differs from candidate source")
+            Contracts = [Item for Item in Infos if PurePosixPath(Item.filename).name == "qualification-contract.txt"]
+            if ExpectedContract in ("HYBRID_F1_V1", CORE_CONTRACT) or Contracts:
+                Require(len(Contracts) == 1 and Contracts[0].file_size <= 64,
+                        "CI qualification contract missing/ambiguous/oversized")
+                Require(Zip.read(Contracts[0]).decode("ascii").strip() == ExpectedContract,
+                        "CI qualification contract mismatch")
+            with Zip.open(Xml[0]) as File:
+                XmlData = File.read(16 * 1024 * 1024 + 1)
+            Require(len(XmlData) <= 16 * 1024 * 1024, "oversized JUnit evidence")
+            Count = ReadJUnit(XmlData, Required)
+        StepEvidence = None
+        if not StepSuccessful:
+            StepEvidence = VerifyCIJobLog(Root, Entry, Run, Job, Metadata, Step, XmlData)
+        Observation = {"Name": Name, "RunId": Run["id"], "Attempt": Run["run_attempt"],
+                         "Event": Run["event"], "StartedUtc": Job["started_at"], "CompletedUtc": Job["completed_at"],
+                         "ArtifactId": Metadata["id"], "Tests": Count, "ArchiveSha256": Digest(Archive)}
+        if StepEvidence is not None:
+            Observation["CTestStepEvidence"] = StepEvidence
+        if ExpectedContract == CORE_CONTRACT and Name.startswith("Windows "):
+            Original = Entry.get("OriginalJobLog")
+            Require(isinstance(Original, dict) and Original.get("JobId") == Job["id"] and
+                    Original.get("RunId") == Run["id"] and Original.get("Attempt") == Run["run_attempt"] and
+                    Original.get("Url") == f"https://api.github.com/repos/gmoddev/gargantuan/actions/jobs/{Job['id']}/logs",
+                    "core correctness requires the original Windows job log")
+            Log = Pinned(Root, Original["File"], MAXIMUM_CI_JOB_LOG_BYTES).decode("utf-8")
+            Completed = re.findall(r"\[Qualification:Correctness\] contract=POOLED_CORRECTNESS_V1 workload=(\S+) profile=(\S+) completed=1 failures=(\d+)", Log)
+            Require(sorted(Completed) == sorted([
+                ("single-peer", CORE_CONTRACT, "0"), ("structural32", CORE_CONTRACT, "0"),
+                ("single-peer", "FULL_RESERVATION", "0"), ("ordinary32", "FULL_RESERVATION", "0"),
+                ("structural32", "FULL_RESERVATION", "0")]),
+                "five Release workloads did not complete their mandatory correctness checks")
+            Observation["CompletedCorrectnessWorkloads"] = len(Completed)
+        Observed.append(Observation)
+    Result = {"State": "MEASURED_PASS", "SourceCommit": ExpectedCommit, "Contract": ExpectedContract, "Jobs": Observed,
+              "InventorySha256": Digest(Data)}
+    if Version == 2:
+        Result["InventoryVersion"] = Version
+    return Result
+
+
+def VerifyNativeRuntimeInventory(PackageData, DeploymentFiles):
+    """Join a deployment envelope to the native closed runtime projection.
+
+    The inventory sidecar is evidence outside that projection, not native
+    content. This checks byte closure; native Validate/Load still owns package
+    startup semantics.
+    """
+    Require(len(PackageData) <= 4 * 1024 ** 2, "native package manifest exceeds 4 MiB")
+    Package = JsonData(PackageData)
+    Require(isinstance(Package, dict), "native package manifest must be an object")
+    Fields = {'Format', 'PackageFormatVersion', 'RuntimeCompatibility', 'ProjectId',
+              'DisplayName', 'Configuration', 'Revision', 'UnsavedChanges', 'Player',
+              'Startup', 'ContentTableSha256', 'Content'}
+    Require(set(Package) == Fields and Package.get('Format') == 'GargantuanGamePackage' and
+            type(Package.get('PackageFormatVersion')) is int and Package['PackageFormatVersion'] in (1, 2) and
+            type(Package.get('RuntimeCompatibility')) is int and Package['RuntimeCompatibility'] == 1 and
+            isinstance(Package.get('Content'), list) and
+            0 < len(Package['Content']) <= 16384, "invalid native package inventory shape")
+    Expected = {Record['Path']: Record for Record in DeploymentFiles}
+    Require('game.package.json' in Expected, "deployment lacks native manifest")
+    Native = {'game.package.json'}
+    Folded = {'game.package.json'}
+    Canonical = []
+    Prior = ''
+    Total = 0
+    for Record in Package['Content']:
+        Require(isinstance(Record, dict) and set(Record) == {'Path', 'Size', 'Sha256', 'Category'},
+                "invalid native content record")
+        Name = Record.get('Path')
+        Require(isinstance(Name, str) and 0 < len(Name.encode('utf-8')) <= 512 and
+                re.fullmatch(r'[^\\/:*?"<>|\x00-\x1f]+(?:/[^\\/:*?"<>|\x00-\x1f]+)*', Name) and
+                all(Part not in ('.', '..') for Part in Name.split('/')) and Name > Prior and
+                Name.casefold() not in Folded, "unsafe/duplicate/unordered native content path")
+        Size = Record.get('Size')
+        Require(type(Size) is int and 0 <= Size <= 512 * 1024 ** 2 and
+                Record.get('Category') in ('Runtime', 'Project', 'Asset', 'Shader', 'Notice'),
+                "invalid native content size/category")
+        Pin = Hash(Record.get('Sha256'))
+        Total += Size
+        Require(Total <= 8 * 1024 ** 3, "native content exceeds aggregate bound")
+        Match = Expected.get(Name)
+        Require(Match is not None and Match['Bytes'] == Size and Match['Sha256'].lower() == Pin,
+                "native/deployment byte basis differs")
+        Native.add(Name)
+        Folded.add(Name.casefold())
+        Prior = Name
+        # PackageBuilder::EncodeContent uses ordered_json with this exact key order.
+        Canonical.append({'Path': Name, 'Size': Size, 'Sha256': Pin, 'Category': Record['Category']})
+    Table = json.dumps(Canonical, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    Require(Digest(Table) == Hash(Package.get('ContentTableSha256')), "native content table hash mismatch")
+    Require(set(Expected) == Native, "deployment includes content outside native runtime closure")
+    return {'State': 'BYTE_CLOSURE_VERIFIED', 'Layout': 'DEPLOYMENT_ENVELOPE_REQUIRES_RUNTIME_PROJECTION',
+            'Files': len(Native), 'ContentTableSha256': Digest(Table), 'ContentBytes': Total}
+
+
+def VerifyQualifiedPackage(IndexRoot, Entry, ExpectedCommit, CI):
+    """Stream the original GitHub ZIP; never extract, execute, or trust its manifest alone."""
+    Require(CI.get("State") == "MEASURED_PASS", "qualified package needs verified CI")
+    ExpectedContract = CI.get("Contract", "F1")
+    Require(ExpectedContract in ("F1", "HYBRID_F1_V1"), "unknown package qualification contract")
+    Windows = next(Job for Job in CI["Jobs"] if Job["Name"].startswith("Windows "))
+    Require(Windows["Event"] == "workflow_dispatch", "qualified package requires dispatch build")
+    Metadata = JsonData(Pinned(IndexRoot, Entry["ArtifactMetadata"]))
+    Require(Metadata.get("name") == "qualified-scale-" + ExpectedCommit and
+            Metadata.get("expired") is False and Metadata.get("workflow_run", {}).get("id") == Windows["RunId"] and
+            Metadata.get("workflow_run", {}).get("head_sha") == ExpectedCommit and
+            Timestamp(Windows["StartedUtc"]) <= Timestamp(Metadata.get("created_at")) <= Timestamp(Windows["CompletedUtc"]),
+            "qualified package does not belong to the verified Windows build")
+    Item = Entry["Archive"]
+    Relative = PurePosixPath(Item["Path"])
+    Require(not Relative.is_absolute() and str(Relative) == Item["Path"] and
+            ".." not in Relative.parts and ":" not in Item["Path"] and "\\" not in Item["Path"],
+            "invalid package archive path")
+    Archive = Path(IndexRoot).joinpath(*Relative.parts).absolute()
+    for Part in (Archive, *Archive.parents):
+        Require(not Part.is_symlink() and not getattr(Part, "is_junction", lambda: False)(), "redirected package path")
+    Require(Archive.is_file() and Archive.stat().st_size <= 1024 * 1024 * 1024, "package archive exceeds 1 GiB")
+    with Archive.open('rb') as File:
+        ActualHash = hashlib.file_digest(File, 'sha256').hexdigest()
+    Require(ActualHash == Hash(Item["Sha256"]) and Metadata.get("digest") == "sha256:" + ActualHash and
+            Metadata.get("size_in_bytes") == Archive.stat().st_size, "qualified artifact ZIP digest mismatch")
+    Pins = {}
+    RuntimeInventories = {}
+    with zipfile.ZipFile(Archive) as Zip:
+        Infos = Zip.infolist()
+        Require(0 < len(Infos) <= 22000 and sum(Item.file_size for Item in Infos) <= 2 * 1024 ** 3,
+                "unbounded qualified package inventory")
+        Files = {}
+        Folded = set()
+        for Info in Infos:
+            Name = Info.filename
+            PathName = PurePosixPath(Name)
+            Require(not PathName.is_absolute() and ".." not in PathName.parts and "\\" not in Name and
+                    ":" not in Name and PathName.parts[0] in ("Player", "Server", "fixture", "qualification-descriptor.json",
+                        *(["qualification-contract.txt"] if ExpectedContract == "HYBRID_F1_V1" else [])) and
+                    Name.casefold() not in Folded and Info.file_size <= 256 * 1024 ** 2 and
+                    ((Info.external_attr >> 16) & 0o170000) != 0o120000, "invalid qualified ZIP member")
+            Folded.add(Name.casefold())
+            if not Info.is_dir():
+                Files[Name] = Info
+        # QualifiedScalePackage deliberately retains its two source fixture
+        # files and descriptor beside the two deployment roots.
+        ExpectedFiles = {'fixture/content/content.manifest.json', 'fixture/content/regions/scale.instance.json',
+                         'qualification-descriptor.json'}
+        if ExpectedContract == "HYBRID_F1_V1":
+            ExpectedFiles.add('qualification-contract.txt')
+            Require('qualification-contract.txt' in Files and Files['qualification-contract.txt'].file_size <= 64 and
+                    Zip.read('qualification-contract.txt').decode('ascii').strip() == ExpectedContract,
+                    "package qualification contract missing/mismatched")
+        Require(ExpectedFiles <= set(Files) and all(Files[Key].file_size <= 1024 * 1024 for Key in ExpectedFiles),
+                "qualified source fixture/descriptor missing or oversized")
+        Descriptor = JsonData(Zip.read('qualification-descriptor.json'))
+        Require(Descriptor.get('format') == 'GargantuanQualifiedScalePackage' and Descriptor.get('version') == 1 and
+                Descriptor.get('expected_clients') == 32 and Descriptor.get('content_objects') == 512 and
+                Descriptor.get('content_bytes') == 273032 and
+                Descriptor.get('phases') == ['baseline', 'load', 'resident', 'evict', 'reload'],
+                "qualified workload descriptor differs from canonical workload")
+        for Role in ("Player", "Server"):
+            Name = Role + '/deployment-sha256.json'
+            Require(Name in Files and Files[Name].file_size <= 4 * 1024 ** 2, "deployment inventory absent/oversized")
+            Raw = Zip.read(Name)
+            Manifest = JsonData(Raw)
+            Require(Manifest.get('Format') == 'GargantuanFarmDeployment' and Manifest.get('Version') == 1 and
+                    Manifest.get('SourceCommit') == ExpectedCommit and isinstance(Manifest.get('Files'), list) and
+                    3 <= len(Manifest['Files']) <= 10000, "invalid qualified deployment inventory")
+            Pins[Role + 'DeploymentSha256'] = Digest(Raw)
+            ExpectedFiles.add(Name)
+            Seen = set()
+            for Record in Manifest['Files']:
+                Relative = Record.get('Path')
+                Require(isinstance(Relative, str) and Relative.casefold() not in Seen and
+                        Relative != 'deployment-sha256.json', "duplicate qualified deployment member")
+                Seen.add(Relative.casefold())
+                Full = Role + '/' + Relative
+                Require(Full in Files and Full not in ExpectedFiles and type(Record.get('Bytes')) is int and
+                        Record['Bytes'] == Files[Full].file_size, "deployment member missing/size mismatch")
+                with Zip.open(Full) as File:
+                    Actual = hashlib.file_digest(File, 'sha256').hexdigest()
+                Require(Actual == Hash(Record.get('Sha256', '').lower()), "deployment member hash mismatch")
+                ExpectedFiles.add(Full)
+                Field = {f'Gargantuan{Role}.exe': 'Sha256', 'game.package.json': 'PackageSha256',
+                         'content/content.manifest.json': 'ContentManifestSha256'}.get(Relative)
+                if Field:
+                    Pins[Role + Field] = Actual
+            PackageName = Role + '/game.package.json'
+            Require(PackageName in Files and Files[PackageName].file_size <= 4 * 1024 ** 2,
+                    "native package manifest absent/oversized")
+            RuntimeInventories[Role] = VerifyNativeRuntimeInventory(Zip.read(PackageName), Manifest['Files'])
+        Require(set(Files) == ExpectedFiles and len(Pins) == 8, "qualified package contains extra/missing files")
+    return {"State": "MEASURED_PASS", "Contract": ExpectedContract, "ArtifactId": Metadata["id"], "ArchiveSha256": ActualHash,
+            "Pins": Pins, "RuntimeInventories": RuntimeInventories}
+
+
+def VerifyProvenance(IndexPath, IndexPin, Inputs, CI, Four, Source):
+    Data = ReadBytes(IndexPath)
+    Require(Digest(Data) == Hash(IndexPin), "provenance index pin mismatch")
+    Index = JsonData(Data)
+    Require(Index.get('Format') == 'GargantuanFoundation3LProvenance' and Index.get('Version') == 1,
+            "unrecognized provenance index")
+    Root = Path(IndexPath).parent
+    Package = VerifyQualifiedPackage(Root, Index['QualifiedPackage'], Source, CI)
+    Stages = []
+    StageRecords = []
+    for Provider in ('Local', 'Node'):
+        ManifestBytes = ReadBytes(Path(Inputs[Provider + 'ClientEvidenceRoot']) / 'run-manifest.json')
+        Manifest = JsonData(ManifestBytes)
+        Require(Manifest.get('SourceCommit') == Source and Manifest.get('Provider') == Provider,
+                "provider provenance identity mismatch")
+        for Key, Expected in Package['Pins'].items():
+            Require(Manifest.get(Key) == Expected, f"{Provider}: deployed {Key} differs from CI package")
+        Stage = JsonData(Pinned(Root, Index[Provider + 'ClientStage']))
+        Require(Stage.get('Format') == 'GargantuanFarm32Campaign' and Stage.get('Version') == 1 and
+                Stage.get('Role') == 'CLIENT' and Stage.get('SourceCommit') == Source and
+                Stage.get('RunId') == Manifest.get('RunId') and Stage.get('ManifestSha256') == Digest(ManifestBytes),
+                "controller stage does not bind the replayed provider manifest")
+        Require(str(uuid.UUID(Stage['CoordinatorRunId'])) == Stage['CoordinatorRunId'],
+                'controller stage coordinator identity is not canonical')
+        Stages.append(Timestamp(Stage.get('CreatedUtc')))
+        StageRecords.append(Stage)
+    Sequence = {'State': 'NOT_MEASURED', 'Reason': 'four-client or Local controller completion evidence absent'}
+    LocalCompletion = None
+    if 'LocalHostTerminal' in Index:
+        Terminal = JsonData(Pinned(Root, Index['LocalHostTerminal']))
+        Coordinator = ReadJson(Inputs['LocalCoordinatorResultPath'])
+        Require(Terminal.get('Format') == 'GargantuanFarm32Terminal' and Terminal.get('Version') == 1 and
+                Terminal.get('RunId') == StageRecords[0]['RunId'] and Terminal.get('Action') == 'host' and
+                type(Terminal.get('ChildExitCode')) is int and Terminal['ChildExitCode'] == 0 and
+                Terminal.get('ChildTreeReaped') is True and Terminal.get('Outcome') == 'COMPLETED' and
+                Coordinator.get('RunId') == StageRecords[0].get('CoordinatorRunId') and
+                Coordinator.get('Success') is True, 'Local controller completion/coordinator mismatch')
+        LocalCompletion = Timestamp(Terminal.get('EndedUtc'))
+        Require(Stages[0] <= LocalCompletion <= Stages[1], 'Node campaign was staged before Local completed')
+    if (Four.get('State') == 'MEASURED_PASS' and Four.get('CompletedUtc') is not None and
+            LocalCompletion is not None):
+        Require(Four.get('CompletionClockDomain') == 'CONTROLLING_HOST_UTC', 'four-client completion clock domain absent')
+        Require(Timestamp(Four['CompletedUtc']) <= min(Stages), 'provider campaign was staged before fresh four-client completion')
+        Sequence = {'State': 'MEASURED_PASS', 'ClockDomain': 'CONTROLLING_HOST_UTC',
+                    'FourCompletedUtc': Four['CompletedUtc'], 'LocalCreatedUtc': Stages[0].isoformat(),
+                    'LocalCompletedUtc': LocalCompletion.isoformat(),
+                    'NodeCreatedUtc': Stages[1].isoformat()}
+    return {'Package': Package, 'Sequence': Sequence, 'InventorySha256': Digest(Data)}
+
+
+def At(Value, Path):
+    for Key in Path.split("."):
+        if not isinstance(Value, dict) or Key not in Value:
+            return None
+        Value = Value[Key]
+    return Value
+
+
+PROVIDER_GATES = {
+    "Workload.State": "MEASURED_PASS", "Ready": 32,
+    "Admission.GrantLifecycleCoverage": "MEASURED_PASS",
+    "Admission.AcceptedGrantWaitBound": "MEASURED_PASS",
+    "Admission.FixedWorkloadFairness.State": "MEASURED_PASS",
+    "F1.State": "MEASURED_PASS",
+    "Publication.Status": "ACCEPTED_STATE_CHAIN_OBSERVED",
+    "Publication.CharacterDueService.Verdict": "PASS",
+    "Publication.OrdinaryDemand.State": "MEASURED_PASS",
+    "Clock.Status": "BOUNDED_AT_PROBE", "Lifecycle.State": "MEASURED",
+    "RemoteOwnership.State": "MEASURED", "ServerWorkTicks.Status": "MEASURED_PASS",
+    "RemoteCadence.Status": "MEASURED_PASS", "Capture.Status": "MEASURED_PASS",
+    "Recovery.FixedServiceRecovery": "MEASURED_PASS",
+    "Recovery.StrictConvergenceSufficientProof": "MEASURED_PASS",
+    "Recovery.SampledJournalRetention": "MEASURED_PASS",
+    "Resources.Server.CompleteSweepLimitObservation": "WITHIN_ROLE_LIMIT",
+    "Resources.Clients.CompleteSweepLimitObservation": "WITHIN_ROLE_LIMIT",
+    "Resources.ServerHost.Classification": "BOUNDED_SAME_HOST_SNAPSHOT_SERIES",
+    "Resources.ClientHost.Classification": "BOUNDED_SAME_HOST_SNAPSHOT_SERIES",
+    "EvidenceRetention.Classification": "RECONCILED_ROLE_LOCAL_INDEX_BOUNDS_ONLY",
+}
+
+
+def EvaluateProviders(Observation, ExpectedCommit, ExpectedContract="F1"):
+    Require(Observation.get("Format") == "GargantuanPhysicalFarmAcceptanceObservation" and
+            Observation.get("Version") == 1, "unrecognized provider observation")
+    Require(At(Observation, "WorkloadPinParity.SourceCommit") == ExpectedCommit and
+            At(Observation, "WorkloadPinParity.State") == "MEASURED", "provider source mismatch")
+    Ids = [str(uuid.UUID(Observation[Provider + "RunId"])) for Provider in ("Local", "Node")]
+    Require(Ids[0] != Ids[1], "providers reused run identity")
+    Gates = []
+    for Provider in ("Local", "Node"):
+        Value = Observation[Provider]
+        Contract = At(Value, "F1.Contract")
+        Require(Contract == "HYBRID_F1_V1" if ExpectedContract == "HYBRID_F1_V1" else
+                Contract in (None, "finite_grant_v1"), f"{Provider}: qualification contract mismatch")
+        if ExpectedContract == "HYBRID_F1_V1":
+            Identity = At(Value, "Recovery.FinalNameIdentityContract")
+            Require(Identity in (None, "legacy_literal_object_id", "source_replica_v1"),
+                    f"{Provider}: unknown client source identity witness")
+            Gates.append({"Gate": Provider + ".Recovery.FinalNameIdentityContract", "State":
+                          "MEASURED_PASS" if Identity == "source_replica_v1" else
+                          "MEASURED_FAIL" if Identity == "legacy_literal_object_id" else "NOT_MEASURED"})
+            Require(At(Value, "Admission.Fairness.ServiceContract") == ExpectedContract and
+                    At(Value, "Publication.OrdinaryFIFO.Contract") == ExpectedContract,
+                    f"{Provider}: admission/FIFO contract mismatch")
+            Gates.append({"Gate": Provider + ".Publication.OrdinaryFIFO.State",
+                          "State": "MEASURED_PASS" if At(Value, "Publication.OrdinaryFIFO.State") == "MEASURED_PASS" else
+                          "MEASURED_FAIL" if At(Value, "Publication.OrdinaryFIFO.State") == "MEASURED_FAIL" else "NOT_MEASURED"})
+            PeerCoverage = At(Value, "Admission.ContinuousEligiblePeerEpisodeCoverage")
+            Gates.append({"Gate": Provider + ".Admission.ContinuousEligiblePeerEpisodeCoverage",
+                          "State": "MEASURED_PASS" if PeerCoverage == "MEASURED_PASS" else
+                          "MEASURED_FAIL" if PeerCoverage == "MEASURED_FAIL" else "NOT_MEASURED"})
+        for Key, Expected in PROVIDER_GATES.items():
+            Actual = At(Value, Key)
+            Gates.append({"Gate": f"{Provider}.{Key}", "State":
+                          "MEASURED_PASS" if type(Actual) is type(Expected) and Actual == Expected else
+                          "MEASURED_FAIL" if Actual in ("FAIL", "MEASURED_FAIL") else "NOT_MEASURED"})
+        Accepted, Retired = Value.get("AcceptedBytes"), Value.get("RetiredBytes")
+        Require(type(Accepted) is int and Accepted > 0 and Accepted == Retired,
+                f"{Provider}: invalid terminal conservation")
+        Require(type(At(Value, "Recovery.ExactRetainedWorkBytes")) is int and
+                At(Value, "Recovery.ExactRetainedWorkBytes") > 0, f"{Provider}: exact recovery W absent")
+    for Key, Expected in {
+        "Local.Provider.State": "LOCAL_PINNED_PACKAGE_ONLY",
+        "Node.Provider.State": "AUTHENTICATED_MANIFEST_RPC_MEASURED",
+        "Node.Provider.RealTls": "NEGOTIATED_TLS_MANIFEST_RPC_MEASURED",
+        "Node.Provider.ProcessResources.State": "MEASURED",
+    }.items():
+        Gates.append({"Gate": Key, "State": "MEASURED_PASS" if At(Observation, Key) == Expected else "NOT_MEASURED"})
+    return Gates
+
+
+# One explicitly retained historical prerequisite, not native-source equivalence.
+RETAINED_FOUR_CLIENT = {
+    "ProviderSourceCommit": "c916b7d4f868177ae00b4b05dacfa7b8dbb1f563",
+    "SourceCommit": "9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad",
+    "RunId": "454bf4f8-c8f2-4c18-9866-1b61218da514",
+    "LifecycleRunId": "7a48260b-6911-4394-bbb5-65a65e17bac0",
+    "InputMapSha256": "d4ebc1849258d0bf30abeb37ca9e0de3737d533e7ac7df99fd449351d861e8ca",
+}
+
+
+def FourClientGate(Source, Four, ExpectedContract="F1"):
+    Retained = Four.get("EvidenceScope") == "RETAINED_F1_PHASE1"
+    if Retained:
+        Require(Source == RETAINED_FOUR_CLIENT["ProviderSourceCommit"] and
+                Four.get("InputMapSha256") == RETAINED_FOUR_CLIENT["InputMapSha256"],
+                "retained four-client source pair/input pin mismatch")
+    if Four["State"] == "MEASURED_PASS":
+        Require(Four.get("Contract") == ExpectedContract if ExpectedContract == "HYBRID_F1_V1" else
+                Four.get("Contract") in (None, "F1"), "four-client qualification contract mismatch")
+        if Retained:
+            Require(all(Four.get(Key) == RETAINED_FOUR_CLIENT[Key]
+                        for Key in ("SourceCommit", "RunId", "LifecycleRunId")),
+                    "retained four-client native source/run/lifecycle mismatch")
+        else:
+            Require(Four.get("SourceCommit") == Source, "four-client candidate mismatch")
+    return {"Gate": "RetainedFourClientMixed" if Retained else "FreshFourClientMixed", "State": Four["State"]}
+
+
+def FinalObservation(SourceCommit, ProviderObservation, CI, FourClient, Provenance=None, ExpectedContract="F1"):
+    if ExpectedContract == CORE_CONTRACT:
+        Require(ProviderObservation is None and FourClient is None and Provenance is None,
+                "core scope cannot certify or relabel physical/provider evidence")
+        Require(CI.get("SourceCommit") == SourceCommit and CI.get("Contract") == CORE_CONTRACT,
+                "core CI source/contract mismatch")
+        Jobs = CI.get("Jobs", [])
+        Require(len(Jobs) == len(CI_JOBS) and {Job.get("Name") for Job in Jobs} == set(CI_JOBS),
+                "core CI cohort is incomplete")
+        Require(all(Job.get("CompletedCorrectnessWorkloads") == 5 for Job in Jobs if Job["Name"].startswith("Windows ")),
+                "core workloads incomplete")
+        Status = "PASS" if CI["State"] == "MEASURED_PASS" else "INCOMPLETE"
+        return {"Format": "GargantuanFoundation3LFinalAcceptance", "Version": 2,
+                "Status": Status, "SourceCommit": Commit(SourceCommit), "Contract": CORE_CONTRACT,
+                "Scope": "CORE_ENGINE_CORRECTNESS", "CI": CI,
+                "KI006": "CLOSED" if Status == "PASS" else "OPEN",
+                "Foundation3L": "COMPLETE" if Status == "PASS" else "NOT_COMPLETE",
+                "Performance": "NONFATAL_DIAGNOSTICS_WITH_UNCHANGED_TARGETS",
+                "Deferred": ["Local32 physical certification", "real-TLS Node32 deployment/provider parity",
+                             "physical resource/performance envelopes", "future engine-level latency requalification"],
+                "ReleaseOrMergeAuthorized": False}
+    Require(ExpectedContract in ("F1", "HYBRID_F1_V1"), "unknown qualification contract")
+    Gates = EvaluateProviders(ProviderObservation, SourceCommit, ExpectedContract)
+    Gates.append({"Gate": "ExactHeadCI", "State": CI["State"]})
+    Gates.append(FourClientGate(SourceCommit, FourClient, ExpectedContract))
+    Provenance = Provenance or {'Package': {'State': 'NOT_MEASURED'}, 'Sequence': {'State': 'NOT_MEASURED'}}
+    Gates.extend({'Gate': Key, 'State': Provenance[Key]['State']} for Key in ('Package', 'Sequence'))
+    if CI["State"] == "MEASURED_PASS":
+        Require(CI.get("SourceCommit") == SourceCommit, "CI candidate mismatch")
+        Require(CI.get("Contract") == ExpectedContract if ExpectedContract == "HYBRID_F1_V1" else
+                CI.get("Contract") in (None, "F1"), "CI qualification contract mismatch")
+    if Provenance['Package']['State'] == 'MEASURED_PASS':
+        Require(Provenance['Package'].get('Contract') == ExpectedContract if ExpectedContract == "HYBRID_F1_V1" else
+                Provenance['Package'].get('Contract') in (None, "F1"), "package qualification contract mismatch")
+    if FourClient["State"] == "MEASURED_PASS":
+        FourId = str(uuid.UUID(FourClient["RunId"]))
+        Require(FourId not in (ProviderObservation["LocalRunId"], ProviderObservation["NodeRunId"]),
+                "four-client/provider run identity reused")
+        uuid.UUID(FourClient["LifecycleRunId"])
+    Status = "FAIL" if any(Item["State"] == "MEASURED_FAIL" for Item in Gates) else (
+        "PASS" if all(Item["State"] == "MEASURED_PASS" for Item in Gates) else "INCOMPLETE")
+    return {"Format": "GargantuanFoundation3LFinalAcceptance", "Version": 1,
+            "Status": Status, "SourceCommit": SourceCommit, "Contract": ExpectedContract,
+            "LocalRunId": ProviderObservation["LocalRunId"], "NodeRunId": ProviderObservation["NodeRunId"],
+            "Gates": Gates, "CI": CI, "FourClient": FourClient,
+            "Provenance": Provenance,
+            "Scope": "canonical fixed Foundation 3L workload; no Foundation 3M or merge authorization",
+            "ResourcePolicy": "measured canonical bounds; no invented CPU/RSS/NIC percentage SLA"}
+
+
+def PinnedPowerShell(PathValue, ExpectedHash):
+    Require(isinstance(PathValue, str) and Path(PathValue).is_absolute() and
+            Path(PathValue).name.lower() in ('pwsh', 'pwsh.exe'), 'absolute PowerShell 7 executable path required')
+    Require(Digest(ReadBytes(PathValue, 64 * 1024 * 1024)) == Hash(ExpectedHash), 'PowerShell executable pin mismatch')
+    return Path(PathValue)
+
+
+def ReplayProviders(Root, Arguments, Destination, PowerShell):
+    Required = {"LocalReportPath", "LocalServerEvidenceRoot", "LocalClientEvidenceRoot",
+                "NodeReportPath", "NodeServerEvidenceRoot", "NodeClientEvidenceRoot"}
+    Optional = {"NodeTlsMatchReceiptPath", "NodeTlsMatchReceiptSha256", "NodeStagePath", "NodeStageSha256",
+                "NodeRunReceiptPath", "NodeRunReceiptSha256"}
+    for Provider in ("Local", "Node"):
+        Optional.update(Provider + Suffix for Suffix in ("ServerCaptureIndexPath", "ClientCaptureIndexPath",
+                                                       "OuterCaptureReceiptPath", "CoordinatorResultPath"))
+    Require(isinstance(Arguments, dict) and Required <= set(Arguments) and
+            set(Arguments) <= Required | Optional and all(isinstance(Value, str) and Value for Value in Arguments.values()),
+            "invalid raw farm replay arguments")
+    Require(isinstance(PowerShell, Path) and PowerShell.is_absolute(), 'pinned PowerShell executable required')
+    Command = [str(PowerShell), "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+               str(Root / "tests/PhysicalGameSessionFarmAcceptance.ps1")]
+    for Key, Value in Arguments.items():
+        Command.extend(("-" + Key, Value))
+    Command.extend(("-OutputPath", str(Destination)))
+    subprocess.run(Command, check=True, timeout=1800,
+                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+    return ReadJson(Destination)
+
+
+def ReplayFourClient(Root, Inputs, Source, ExpectedContract="F1"):
+    Script = Root / "tests/foundation3l_four_client.py"
+    Require(Script.is_file(), "four-client raw replayer has not been integrated")
+    subprocess.run(["git", "ls-files", "--error-unmatch", "tests/foundation3l_four_client.py"],
+                   cwd=Root, check=True, stdout=subprocess.DEVNULL)
+    Spec = importlib.util.spec_from_file_location("foundation3l_four_client", Script)
+    Module = importlib.util.module_from_spec(Spec)
+    sys.modules[Spec.name] = Module
+    Spec.loader.exec_module(Module)
+    Result = Module.Replay(Inputs, Source, ExpectedContract)
+    Require(isinstance(Result, dict) and Result.get("State") in
+            ("MEASURED_PASS", "MEASURED_FAIL", "NOT_MEASURED"), "invalid four-client replay result")
+    return Result
+
+
+def ReplayFourClientInputs(Root, InputPath, Source, ExpectedContract="F1"):
+    Data = ReadBytes(InputPath)
+    Pin = Digest(Data)
+    Retained = (Source == RETAINED_FOUR_CLIENT["ProviderSourceCommit"] and
+                Pin == RETAINED_FOUR_CLIENT["InputMapSha256"])
+    NativeSource = RETAINED_FOUR_CLIENT["SourceCommit"] if Retained else Source
+    Result = (ReplayFourClient(Root, JsonData(Data), NativeSource) if ExpectedContract == "F1" else
+              ReplayFourClient(Root, JsonData(Data), NativeSource, ExpectedContract))
+    Result = {**Result, "InputMapSha256": Pin,
+              "EvidenceScope": "RETAINED_F1_PHASE1" if Retained else "CURRENT_SOURCE_FOUR_CLIENT_MIXED"}
+    FourClientGate(Source, Result, ExpectedContract)
+    return Result
+
+
+def Main():
+    Parser = argparse.ArgumentParser(description=__doc__)
+    Parser.add_argument("--source-commit", required=True)
+    Parser.add_argument("--contract", choices=("F1", "HYBRID_F1_V1", CORE_CONTRACT), default="F1",
+                        help="explicit qualification profile; historical F1 remains strict")
+    Parser.add_argument("--analyzer-commit", help="clean reviewed offline analyzer HEAD; defaults to execution source")
+    Parser.add_argument("--farm-inputs", type=Path,
+                        help="JSON raw parameter map for the fixed offline farm acceptance script")
+    Parser.add_argument("--powershell-path", help="absolute pinned PowerShell 7 executable; no PATH lookup")
+    Parser.add_argument("--powershell-sha256")
+    Parser.add_argument("--ci-index", type=Path)
+    Parser.add_argument("--ci-index-sha256")
+    Parser.add_argument("--four-client-inputs", type=Path, help="raw input map for fixed four-client evidence replay")
+    Parser.add_argument("--provenance-index", type=Path)
+    Parser.add_argument("--provenance-index-sha256")
+    Parser.add_argument("--output", required=True, type=Path)
+    Args = Parser.parse_args()
+    Source = Commit(Args.source_commit)
+    Analyzer = Commit(Args.analyzer_commit) if Args.analyzer_commit is not None else Source
+    Root = Path(__file__).resolve().parents[1]
+    AnalyzerProvenance = VerifyAnalyzerCheckout(Root, Source, Analyzer)
+    Require(not Args.output.exists(), "output already exists")
+    for Part in (Args.output.absolute(), *Args.output.absolute().parents):
+        Require(not Part.is_symlink() and not getattr(Part, "is_junction", lambda: False)(), "redirected output path")
+    if Args.contract == CORE_CONTRACT:
+        Require(Args.farm_inputs is None and Args.four_client_inputs is None and Args.provenance_index is None and
+                Args.powershell_path is None and Args.powershell_sha256 is None,
+                "physical/provider arguments require their separate historical contract")
+        Require(Args.ci_index is not None and Args.ci_index_sha256 is not None, "core scope requires exact-source CI")
+        CI = VerifyCI(Args.ci_index, Args.ci_index_sha256, Source, CORE_CONTRACT)
+        Result = FinalObservation(Source, None, CI, None, ExpectedContract=CORE_CONTRACT)
+        Result["AnalyzerProvenance"] = AnalyzerProvenance
+        with Args.output.open("x", encoding="utf-8", newline="\n") as File:
+            json.dump(Result, File, indent=2)
+            File.write("\n")
+        print(f"[Qualification:Foundation3L] {Result['Status']} scope=CORE_ENGINE_CORRECTNESS output={Args.output}")
+        return 0 if Result["Status"] == "PASS" else 2
+    Require(Args.farm_inputs is not None and Args.powershell_path is not None and Args.powershell_sha256 is not None,
+            "physical acceptance requires raw farm inputs and pinned PowerShell")
+    PowerShell = PinnedPowerShell(Args.powershell_path, Args.powershell_sha256)
+    Inputs = ReadJson(Args.farm_inputs)
+    # The output and transient replay receipt must never enter immutable inputs.
+    for Key, Value in Inputs.items():
+        if Key.endswith("EvidenceRoot"):
+            Require(not Args.output.absolute().is_relative_to(Path(Value).absolute()), "output lies in evidence root")
+    CI = {"State": "NOT_MEASURED", "Reason": "exact-head GitHub metadata/artifact inventory absent"}
+    if Args.ci_index is not None:
+        Require(Args.ci_index_sha256 is not None, "independent CI inventory pin required")
+        CI = VerifyCI(Args.ci_index, Args.ci_index_sha256, Source, Args.contract)
+    else:
+        Require(Args.ci_index_sha256 is None, "CI pin without inventory")
+    with tempfile.TemporaryDirectory(prefix="gargantuan-3l-final-") as Temporary:
+        Farm = ReplayProviders(Root, Inputs, Path(Temporary) / "farm.json", PowerShell)
+        Four = (ReplayFourClientInputs(Root, Args.four_client_inputs, Source, Args.contract)
+                if Args.four_client_inputs else
+                {"State": "NOT_MEASURED", "Reason": "fresh four-client raw replay required"})
+        Provenance = None
+        if Args.provenance_index is not None:
+            Require(Args.provenance_index_sha256 is not None, "independent provenance inventory pin required")
+            Provenance = VerifyProvenance(Args.provenance_index, Args.provenance_index_sha256, Inputs, CI, Four, Source)
+        else:
+            Require(Args.provenance_index_sha256 is None, "provenance pin without inventory")
+        Result = FinalObservation(Source, Farm, CI, Four, Provenance, Args.contract)
+        Result["FarmReplaySha256"] = Digest(ReadBytes(Path(Temporary) / "farm.json"))
+        Result["FarmInputMapPath"] = str(Args.farm_inputs.absolute())
+        Result["FarmInputMapSha256"] = Digest(ReadBytes(Args.farm_inputs))
+        if Args.four_client_inputs:
+            Result["FourClientInputMapSha256"] = Four["InputMapSha256"]
+        Result["AnalyzerSha256"] = Digest(ReadBytes(__file__))
+        Result["AnalyzerProvenance"] = AnalyzerProvenance
+        Result["PowerShellPath"] = str(PowerShell)
+        Result["PowerShellSha256"] = Args.powershell_sha256
+        with Args.output.open("x", encoding="utf-8", newline="\n") as File:
+            json.dump(Result, File, indent=2)
+            File.write("\n")
+    print(f"[Qualification:Foundation3L] {Result['Status']} output={Args.output}")
+    return 0 if Result["Status"] == "PASS" else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(Main())

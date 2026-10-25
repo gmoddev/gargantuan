@@ -2,8 +2,10 @@
 
 #include "gargantuan/network/Limits.hpp"
 #include "gargantuan/network/Outcome.hpp"
+#include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationRelevance.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "gargantuan/network/Transport.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 
@@ -13,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace gargantuan {
 	class DataModel;
@@ -50,13 +53,41 @@ namespace gargantuan::network {
 		ReplicationRelevanceConfiguration Relevance;
 		StructuralReplicationConfiguration StructuralReplication;
 		bool AllowInsecureDevelopmentNetwork = false;
+		// Trusted startup-only server input; absent means legacy/unqualified.
+		std::optional<ReliableServiceProfile> ReliableService;
+		// Trusted startup-only client declaration of the canonical ordinary source
+		// class. It neither configures server funding nor changes the wire protocol.
+		bool DeclareNormalOrdinaryService = false;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();
 	};
 
+	// Read-only connection evidence for a bounded host qualification run. The
+	// nonce is client-supplied identity, not authentication or Player authority.
+	struct GameSessionPeerIdentity {
+		ConnectionId Connection;
+		std::uint64_t Nonce = 0;
+		std::uint64_t SessionEpoch = 0;
+		std::uint32_t PlayerId = 0;
+		bool Ready = false;
+	};
+
 	struct GameSessionMetrics {
+		ReliableByteAdmissionMetrics ReliableAdmission;
+		std::uint64_t ReliableAdmissionPeerStates = 0;
+		std::uint64_t ReliableAdmissionLogicalBytes = 0;
+		// Read-only aggregate queue observations. A missing native value is
+		// explicit so qualification cannot mistake unavailable feedback for zero.
+		std::uint64_t SchedulerQueuedReliableBytes = 0;
+		std::uint64_t NativeQueuedReliableBytes = 0;
+		std::uint32_t NativeQueuedReliablePeersObserved = 0;
+		std::uint64_t StructuralAcceptedFeedbackBytes = 0;
+		std::uint64_t StructuralFirstSentFeedbackBytes = 0;
+		std::uint64_t StructuralAckedFeedbackBytes = 0;
+		std::uint32_t StructuralFeedbackPeersObserved = 0;
 		std::uint64_t TransportConnections = 0;
+		std::uint64_t QualifiedOrdinaryQueueFailures = 0;
 		std::uint64_t AcceptedPeers = 0;
 		std::uint64_t ReadyPeers = 0;
 		std::uint64_t RejectedHandshakes = 0;
@@ -70,6 +101,25 @@ namespace gargantuan::network {
 		std::uint64_t ActionsPresented = 0;
 		std::uint64_t ActionPresentationStops = 0;
 		std::uint64_t ActionPresentationDeferrals = 0;
+		std::uint64_t ClientStructuralBytesReceived = 0;
+		std::uint64_t ClientStructuralDecodeNanoseconds = 0;
+		std::uint64_t ClientStructuralApplyNanoseconds = 0;
+		std::uint64_t ClientCharacterMessagesHandled = 0;
+		std::uint64_t ClientActionSubmissionAttempts = 0;
+		std::uint64_t ClientActionSubmissionNoControl = 0;
+		std::uint64_t ClientActionSubmissionSuspended = 0;
+		std::uint64_t ClientActionSubmissionInvalid = 0;
+		std::uint64_t ClientActionSubmissionPendingFull = 0;
+		std::uint64_t ClientActionSubmissionSchedulerRejected = 0;
+		std::uint64_t ClientCharacterStaleStatesDropped = 0;
+		std::uint64_t ClientMaterializationEpochMismatches = 0;
+		std::uint64_t ClientLastExpectedMaterializationEpoch = 0;
+		std::uint64_t ClientLastReceivedMaterializationEpoch = 0;
+		std::uint64_t ClientCharacterHistoryOverflows = 0;
+		std::uint64_t ClientRemoteMessagesHandled = 0;
+		std::uint64_t ClientCharacterMaximumServiceGapNanoseconds = 0;
+		std::uint64_t ClientRemoteMaximumServiceGapNanoseconds = 0;
+		ReplicaMetrics ClientReplica;
 		std::uint64_t SessionAcceptanceCpuNanoseconds = 0;
 		std::uint64_t PlayerCreationCpuNanoseconds = 0;
 		std::uint64_t ServerGraphSynchronizationCpuNanoseconds = 0;
@@ -96,6 +146,17 @@ namespace gargantuan::network {
 		std::uint64_t SpatialQueryLimitFailures = 0;
 		std::uint64_t SpatialCandidateLimitFailures = 0;
 		std::uint64_t RelevanceCpuNanoseconds = 0;
+		std::uint64_t RelevancePeerEvaluations = 0;
+		std::uint64_t RelevanceSelectionCacheHits = 0;
+		std::uint64_t RelevancePeerEvaluationsHighWater = 0;
+		std::uint64_t RelevanceDeferredPeers = 0;
+		std::uint64_t RelevanceDeferredPeersHighWater = 0;
+		std::uint64_t RelevanceOldestPendingAgeTicks = 0;
+		std::uint64_t RelevanceMaximumPendingAgeTicks = 0;
+		std::uint64_t RelevanceStagingBytes = 0;
+		std::uint64_t RelevanceCharacterCandidateBytes = 0;
+		std::uint64_t DependencyPlanRebuilds = 0;
+		std::uint64_t DependencyPlanCacheHits = 0;
 		std::uint64_t MaterializedObjects = 0;
 		std::uint64_t MaterializedCharacters = 0;
 		std::uint64_t MaterializationBacklog = 0;
@@ -137,6 +198,37 @@ namespace gargantuan::network {
 		std::uint64_t StructuralCriticalOldestAgeTicks = 0;
 		std::uint64_t StructuralSelectionCpuNanoseconds = 0;
 		std::uint64_t StructuralMaximumTransitionsSelectedPerTick = 0;
+		std::uint64_t AcceptedAncestryObjects = 0;
+		std::uint64_t AcceptedAncestryLogicalBytes = 0;
+		std::uint64_t CatalogRetiredObjects = 0;
+		std::uint64_t CatalogRetiredHighWater = 0;
+		std::uint64_t CatalogRetirementExaminations = 0;
+		std::uint64_t CatalogRetirementMaximumTickExaminations = 0;
+		std::uint64_t CatalogRetirementReleases = 0;
+		std::uint64_t CatalogRetentionLogicalBytes = 0;
+		std::uint64_t CatalogReferenceIndexBytes = 0;
+		std::uint64_t PlanningWork = 0;
+		std::uint64_t PlanningMaximumTickWork = 0;
+		std::uint64_t PlanningServiceOpportunities = 0;
+		std::uint64_t PlanningMaximumServiceGapTicks = 0;
+		std::uint64_t PlanningMaximumPeerSlice = 0;
+		std::uint64_t PlanningResumes = 0;
+		std::uint64_t PlanningInvalidations = 0;
+		std::uint64_t PlanningReadyBatches = 0;
+		std::uint64_t PlanningRecords = 0;
+		std::uint64_t PlanningRecordsHighWater = 0;
+		std::uint64_t PlanningPeerRecordsHighWater = 0;
+		std::uint64_t PlanningCpuNanoseconds = 0;
+		std::uint64_t JournalRecordsExamined = 0;
+		std::uint64_t JournalRecordsPerTickHighWater = 0;
+		std::uint64_t JournalRecordsPerPeerTickHighWater = 0;
+		std::uint64_t JournalBudgetDeferrals = 0;
+		std::uint64_t JournalBacklogRecords = 0;
+		std::uint64_t JournalBacklogRecordsHighWater = 0;
+		// Age of a continuously nonempty peer backlog, not a per-record timestamp.
+		std::uint64_t JournalOldestBacklogEpisodeAgeTicks = 0;
+		std::uint64_t JournalMaximumBacklogEpisodeAgeTicks = 0;
+		std::uint64_t JournalStagingBytes = 0;
 		std::uint64_t CharacterImportanceEvaluations = 0;
 		std::uint64_t CharacterImportanceTierTransitions = 0;
 		std::uint64_t CharacterTemporaryPromotions = 0;
@@ -193,6 +285,7 @@ namespace gargantuan::network {
 		[[nodiscard]] std::shared_ptr<DataModel> GetClientDataModel() const;
 		[[nodiscard]] std::optional<ConnectionId> GetPrimaryConnection() const;
 		[[nodiscard]] std::shared_ptr<Player> GetAcceptedPlayer(ConnectionId Connection) const;
+		[[nodiscard]] std::vector<GameSessionPeerIdentity> GetPeerIdentities() const;
 		bool SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
 
 	  private:

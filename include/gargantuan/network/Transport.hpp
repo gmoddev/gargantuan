@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -16,6 +17,7 @@
 #include <vector>
 
 namespace gargantuan::network {
+	namespace detail { struct ReliableServiceFeedback; struct ReliableServiceFeedbackAccess; class OrdinaryServicePolicy; }
 	inline constexpr std::size_t MaximumTransportEndpointBytes = 1024;
 	inline constexpr std::size_t MaximumOpaqueHandshakeMaterialBytes = 64 * 1024;
 
@@ -78,5 +80,15 @@ namespace gargantuan::network {
 		virtual std::size_t PollEvents(std::span<TransportEvent> Output) = 0;
 		[[nodiscard]] virtual std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Connection) const = 0;
 		[[nodiscard]] virtual std::optional<NetworkStatistics> GetStatistics(ConnectionId Connection) const = 0;
+	  private:
+		friend struct detail::ReliableServiceFeedbackAccess;
+		virtual bool SetOrdinaryServicePolicy(ConnectionId Connection, std::shared_ptr<detail::OrdinaryServicePolicy> Policy);
+		virtual bool EnableReliableServiceFeedback();
+		virtual std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Connection) const;
+		// Internal cessation capture only. Absolute deadline uses the feedback clock;
+		// ordinary health/admission observations remain nonblocking.
+		virtual std::optional<detail::ReliableServiceFeedback> ReadResolvedReliableServiceFeedback(
+			ConnectionId Connection, std::uint64_t DeadlineMicroseconds) const;
+		virtual bool ReleaseReliableServiceFeedback(ConnectionId Connection);
 	};
 }

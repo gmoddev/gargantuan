@@ -1,6 +1,16 @@
 #include "../src/network/GameSessionTestAccess.hpp"
+#include "../src/runtime/RuntimeWorkDiagnostics.hpp"
+#include "../src/host/common/FarmPublicationEvidence.hpp"
+#include "../src/host/common/FarmLifecycleEvidence.hpp"
+#include "../src/host/server/PhysicalScaleQualification.hpp"
+#include "PublicationLatencyFixture.hpp"
+#include "JoinedCharacterFixture.hpp"
+#include "FarmF1EvidenceFixture.hpp"
+#include "FarmOrdinaryEvidenceFixture.hpp"
+#include "FarmServiceTimingEvidenceFixture.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
@@ -13,6 +23,7 @@
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/Players.hpp"
@@ -22,9 +33,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <memory>
+#include <limits>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -40,9 +55,531 @@ namespace {
 		++Failures;
 	}
 
+	void TestPhysicalScaleCounterDecoding() {
+		using host::detail::DecodePhysicalScaleCounter;
+		Check(DecodePhysicalScaleCounter(WireValue(32)) == 32,
+			"host-authored integral scale count is accepted");
+		Check(DecodePhysicalScaleCounter(WireValue(32.0)) == 32,
+			"Luau-authored integral double scale count is accepted");
+		for (const auto Value : {31.0, 33.0, 31.5,
+			std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()})
+			Check(!DecodePhysicalScaleCounter(WireValue(Value)).has_value() ||
+				DecodePhysicalScaleCounter(WireValue(Value)) != 32,
+				"incorrect or nonfinite scale count cannot satisfy the 32-peer gate");
+		Check(!DecodePhysicalScaleCounter(std::nullopt).has_value() &&
+			!DecodePhysicalScaleCounter(WireValue(std::string("32"))).has_value() &&
+			!DecodePhysicalScaleCounter(WireValue(true)).has_value() &&
+			!DecodePhysicalScaleCounter(WireValue(-1)).has_value(),
+			"missing, wrong-type, and negative scale counts are rejected");
+
+		using host::detail::HasPhysicalScaleTerminalConvergence;
+		GameSessionMetrics Metrics;
+		Metrics.ReadyPeers = 32;
+		Metrics.StructuralFeedbackPeersObserved = 32;
+		Metrics.NativeQueuedReliablePeersObserved = 32;
+		Metrics.ReliableAdmission.AcceptedBytes = 774;
+		Metrics.ReliableAdmission.VerifiedAttributedRetirement = 774;
+		Check(HasPhysicalScaleTerminalConvergence(Metrics),
+			"connected peers with exact grant retirement may conclude");
+		Metrics.ReliableAdmission.VerifiedAttributedRetirement = 0;
+		Metrics.ReliableAdmission.OutstandingBytes = 774;
+		Check(!HasPhysicalScaleTerminalConvergence(Metrics),
+			"completion observation cannot replace accepted-grant retirement");
+		Metrics.ReliableAdmission.OutstandingBytes = 0;
+		Metrics.ReliableAdmission.TerminalReleasedBytes = 774;
+		Check(!HasPhysicalScaleTerminalConvergence(Metrics),
+			"terminal release cannot masquerade as retirement");
+		Metrics.ReliableAdmission.TerminalReleasedBytes = 0;
+		Metrics.ReliableAdmission.VerifiedAttributedRetirement = 774;
+		Metrics.ReadyPeers = 31;
+		Check(!HasPhysicalScaleTerminalConvergence(Metrics),
+			"a disconnected client cannot satisfy the terminal farm gate");
+		Metrics.ReadyPeers = 32;
+		Metrics.StructuralPendingEnters = 1;
+		Check(!HasPhysicalScaleTerminalConvergence(Metrics),
+			"unresolved structural pending work blocks terminal convergence");
+		Metrics.StructuralPendingLeaves = 1;
+		Metrics.NativeQueuedReliablePeersObserved = 31;
+		Check(!HasPhysicalScaleTerminalConvergence(Metrics),
+			"unobserved native queue feedback cannot masquerade as zero");
+	}
+
+	void TestRecoveryConvergenceBound() {
+		using host::detail::RecoveryConvergenceBoundMicroseconds;
+		std::array<std::uint64_t, 32> Work{};
+		Check(RecoveryConvergenceBoundMicroseconds(Work) == 20'470'500,
+			"zero retained structural work preserves the fixed service and credit/fairness envelope");
+		Work[0] = 77;
+		Check(RecoveryConvergenceBoundMicroseconds(Work) == 20'470'537,
+			"a positive tiny complete message extends the structural deadline by exact peer service time");
+		Work.fill(512 * 1024);
+		Check(RecoveryConvergenceBoundMicroseconds(Work) == 20'720'500,
+			"32 positive peer workloads use per-peer and pool capacity without a fixed cutoff");
+		Work.fill(0);
+		Work[0] = 40ULL * 1024 * 1024 * 1024;
+		Check(RecoveryConvergenceBoundMicroseconds(Work) == 20'500'470'500ULL,
+			"canonical hard peer envelope remains exact and finite");
+		Work[0]++;
+		Check(!RecoveryConvergenceBoundMicroseconds(Work),
+			"a quote above the canonical peer retained-work bound is rejected");
+		Check(!RecoveryConvergenceBoundMicroseconds(std::span(Work).first(31)),
+			"an incomplete peer quote cannot establish a 32-peer recovery bound");
+	}
+
+	struct RetirementEvidenceCapture {
+		using Record = runtime_detail::PublicationLatencyRecord;
+		std::array<Record, 128> Records{};
+		std::size_t Count = 0;
+		bool Overflow = false;
+		runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet};
+		runtime_detail::PublicationLatencySink *Previous = runtime_detail::ActivePublicationLatency;
+		static bool Selected(void *, ConnectionId) noexcept { return true; }
+		static void Append(void *Context, Record Value) noexcept {
+			if (std::string_view(Value.Stage) != "RecipientRetired") return;
+			auto &Self = *static_cast<RetirementEvidenceCapture *>(Context);
+			if (Self.Count == Self.Records.size()) { Self.Overflow = true; return; }
+			Self.Records[Self.Count++] = Value;
+		}
+		static void Packet(void *, const char *, ConnectionId, std::span<const std::byte>,
+			std::uint64_t) noexcept {}
+		RetirementEvidenceCapture() { runtime_detail::ActivePublicationLatency = &Sink; }
+		~RetirementEvidenceCapture() { runtime_detail::ActivePublicationLatency = Previous; }
+		RetirementEvidenceCapture(const RetirementEvidenceCapture &) = delete;
+		RetirementEvidenceCapture &operator=(const RetirementEvidenceCapture &) = delete;
+	};
+
 	float HorizontalDistance(const glm::vec3 &Left, const glm::vec3 &Right) {
 		return glm::distance(glm::vec2(Left.x, Left.z), glm::vec2(Right.x, Right.z));
 	}
+
+	void TestGroundedNetworkLocomotion() {
+		auto World = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(32, 32));
+		Engine Runtime(World, &Renderer, nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+		Runtime.ProcessService->Alive = true;
+		Runtime.Step();
+		auto Character = std::make_shared<KinematicCharacter>();
+		Character->SetParent(World);
+		Character->ApplyRuntimeControllerFacts({0, -700, 0}, {0, 1, 0}, true);
+		CharacterInputCommand Command;
+		Command.DeltaSeconds = 1.0f / 60;
+		for (int Index = 0; Index < 600; ++Index) {
+			const auto Motion = Runtime.CharacterControl->EvaluateMovement(Command, *Character);
+			Check(Motion.Velocity.y < 0 && Motion.Velocity.y > -4,
+				"default grounded network movement cannot accumulate unencodable falling velocity");
+			Character->ApplyRuntimeControllerFacts(Motion.Velocity, {0, 1, 0}, true);
+		}
+		Command.Flags = static_cast<std::uint8_t>(CharacterInputFlag::JumpRequested);
+		Check(Runtime.CharacterControl->EvaluateMovement(Command, *Character).Velocity.y == 50,
+			"grounded velocity reset preserves default jump admission");
+		Command.Flags = 0;
+		Character->ApplyRuntimeControllerFacts({0, 20, 0}, {0, 1, 0}, true);
+		Check(Runtime.CharacterControl->EvaluateMovement(Command, *Character).Velocity.y > 16,
+			"grounded velocity reset preserves upward motion");
+		Character->ApplyRuntimeControllerFacts({0, -20, 0}, {}, false);
+		Check(Runtime.CharacterControl->EvaluateMovement(Command, *Character).Velocity.y < -20,
+			"airborne default movement still applies gravity");
+		Runtime.Destroy();
+	}
+
+	void TestPublicationLatencyBounds() {
+		using Record = runtime_detail::PublicationLatencyRecord;
+		std::vector<Record> DueRecords{
+			{.Stage="FrameBegin", .Tick=10, .Nanoseconds=1'000'000'000},
+			{.Stage="CharacterNextDue", .Connection={1,1}, .Object={9,2}, .Tick=10, .Due=22},
+			{.Stage="FrameBegin", .Tick=22, .Nanoseconds=1'600'000'000},
+			{.Stage="CharacterDue", .Connection={1,1}, .Object={9,2}, .Tick=22, .Due=22},
+			{.Stage="StateBuilt", .Object={9,2}, .Tick=22, .Sequence=7, .Epoch=3, .Nanoseconds=1'601'000'000},
+			{.Stage="CharacterProduced", .Connection={1,1}, .Object={9,2}, .Tick=22, .Sequence=7, .Due=22, .Nanoseconds=1'602'000'000},
+			{.Stage="SchedulerAccepted", .Connection={1,1}, .Object={9,2}, .Tick=22, .Sequence=7, .Due=3, .Nanoseconds=1'603'000'000, .Kind=5},
+			{.Stage="CharacterNextDue", .Connection={1,1}, .Object={9,2}, .Tick=22, .Due=34},
+			{.Stage="ObserverState", .Connection={1,1}, .Object={9,2}, .Tick=22, .Sequence=7, .Due=3, .Nanoseconds=1'652'000'000}
+		};
+		auto Due = test::MeasureDueService(DueRecords, {{9,2}});
+		Check(Due.Milliseconds == std::vector<double>{52} && Due.RootMilliseconds == Due.Milliseconds &&
+			Due.Missing == 0 && Due.Unresolved == 0 && Due.Future == 1,
+			"due service excludes twelve sparse cadence ticks and counts future work separately");
+		DueRecords.back().Due = 4;
+		Check(test::MeasureDueService(DueRecords).Missing == 1, "due service never joins a different control epoch");
+		DueRecords.back().Due = 3; DueRecords.back().Object.Generation = 3;
+		Check(test::MeasureDueService(DueRecords).Missing == 1, "due service never joins a recycled ObjectId");
+		DueRecords.back().Object.Generation = 2; DueRecords.back().Connection.Generation = 2;
+		Check(test::MeasureDueService(DueRecords).Missing == 1, "due service never joins a recycled recipient");
+		DueRecords.resize(4);
+		Check(test::MeasureDueService(DueRecords).Unresolved == 1, "scheduled due work without production is observable");
+		DueRecords.push_back({.Stage="CharacterUnchanged", .Connection={1,1}, .Object={9,2}, .Tick=22, .Due=22});
+		Due = test::MeasureDueService(DueRecords);
+		Check(Due.Unresolved == 0 && Due.Suppressed == 1 && Due.Milliseconds.empty(),
+			"legitimate unchanged suppression is not a missing delivery or latency sample");
+		DueRecords.resize(3);
+		DueRecords.push_back({.Stage="CharacterNextDue", .Connection={1,1}, .Object={9,2}, .Tick=22, .Due=34});
+		Due = test::MeasureDueService(DueRecords);
+		Check(Due.Unresolved == 0 && Due.Rescheduled == 1, "cadence refresh before discovery can supersede a forecast");
+		DueRecords.insert(DueRecords.begin() + 3, {.Stage="CharacterDue", .Connection={1,1}, .Object={9,2}, .Tick=22, .Due=22});
+		Due = test::MeasureDueService(DueRecords);
+		Check(Due.Unresolved == 1 && Due.Rescheduled == 0, "rescheduling cannot hide confirmed due work without service");
+		DueRecords.push_back({.Stage="RecipientRetired", .Connection={1,1}, .Object={9,3}});
+		Check(test::MeasureDueService(DueRecords).Unresolved == 1, "stale retirement cannot erase another generation's due work");
+		DueRecords.back().Object.Generation = 2;
+		Due = test::MeasureDueService(DueRecords);
+		Check(Due.Unresolved == 0 && Due.Retired == 1 && Due.RetiredDue == 1,
+			"explicit materialization retirement is terminal accounting, not a delivered sample");
+		test::ServiceBucket Bucket;
+		Bucket.Add(8, 0, 64); Bucket.Add(8, .125, 64); Bucket.Add(10, .125, 64);
+		Check(Bucket.Required == 18, "all-window accounting detects bursts that one-second averages hide");
+		test::RecipientGapHistogram Histogram;
+		Histogram.Add(1.25); Histogram.Add(20.75); Histogram.Add(5000);
+		Check(Histogram.Count == 3 && Histogram.Upper(.50) == 21 && Histogram.Maximum == 5000 &&
+			Histogram.Upper(1.0) == -1, "recipient histogram retains exact max and does not invent overflow percentiles");
+		const auto Previous = runtime_detail::ActivePublicationLatency;
+		{
+			test::PublicationLatencyFixture Fixture(true, {1, 1}, {2, 1});
+			Fixture.Begin("load");
+			runtime_detail::RecordPublicationLatency({.Connection = {1, 2}});
+			Check(Fixture.GetCount() == 0, "latency probe rejects a stale peer generation");
+			for (std::size_t Index = 0; Index < 131075; ++Index)
+				runtime_detail::RecordPublicationLatency({.Stage = "BoundTest", .Connection = {1, 1}});
+			Check(Fixture.GetCount() == 131072 && Fixture.GetDropped() == 3, "latency diagnostic storage has a hard cap");
+			Fixture.End();
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous && test::ActiveRecipientGaps == nullptr,
+			"latency probe releases borrowed sink and histogram on scope teardown");
+		{
+			const std::array<ConnectionId, 2> Connections{{{2, 1}, {1, 1}}};
+			test::JoinedCharacterFixture Joined(true, Connections);
+			Joined.Begin("baseline");
+			Joined.Mark("NotLoad", 1);
+			Check(Joined.GetCount() == 0, "joined diagnostic records only its bounded load phase");
+			Joined.Begin("load");
+			runtime_detail::RecordPublicationLatency({.Connection = {1, 2}});
+			Check(Joined.GetCount() == 1, "joined diagnostic rejects stale peer generation");
+			CharacterStateFrame Frame{.ServerTick = 31, .FrameSequence = CharacterStateFrameSequence{1}, .StateCount = 1};
+			Frame.States[0] = CharacterAuthoritativeState{.Character = {9, 2}, .ControlEpoch = CharacterControlEpoch{7},
+				.StateSequence = RealtimeStateSequence{12}, .AuthoritativeTick = 31};
+			const auto Bytes = EncodeCharacterMessage(Frame);
+			Check(Bytes.has_value(), "joined trace fixture encodes a valid state");
+			runtime_detail::RecordPublicationPacket("EgressSubmit", {1, 1}, *Bytes);
+			const auto Records = Joined.GetRecords();
+			Check(Records.size() == 3 && Records[1].Kind == 405 && Records[1].Bytes == Bytes->size() &&
+				Records[2].Object == ObjectId{9, 2} && Records[2].Sequence == 12 && Records[2].Tick == 31 &&
+				Records[2].Due == 7, "joined packet preserves full state identity and counts packet bytes only once");
+			for (std::size_t Index = 0; Index < 1'048'574; ++Index) Joined.Mark("Bound", Index);
+			Check(Joined.GetCount() == 1'048'576 && Joined.GetDropped() == 1, "joined diagnostic hard cap is observable");
+			Joined.End();
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous, "joined diagnostic restores scoped sink");
+	}
+
+	void TestFarmPublicationEvidence() {
+		const auto Root = std::filesystem::temp_directory_path() /
+			("gargantuan-farm-publication-" + std::to_string(
+				std::chrono::steady_clock::now().time_since_epoch().count()));
+		std::filesystem::create_directory(Root);
+		const auto Previous = runtime_detail::ActivePublicationLatency;
+		const auto ServerPath = Root / "publication-service.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0, ServerPath, {}, 3);
+			Evidence.MarkFrameBegin(10);
+			runtime_detail::RecordPublicationLatency({.Stage = "CharacterDue", .Connection = {1, 1},
+				.Object = {9, 2}, .Tick = 10, .Due = 10});
+			runtime_detail::RecordPublicationLatency({.Stage = "RecipientRetired", .Connection = {4, 7},
+				.Object = {9, 3}, .Tick = 11});
+			Evidence.Dump();
+			Check(Evidence.Valid() && Evidence.Count() == 3 && Evidence.BytesWritten() >= 240,
+				"farm server trace seals bounded records after measured work");
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous, "farm server trace restores scoped sink");
+		const auto LifetimeDirectory = Root / "lifetime";
+		std::filesystem::create_directory(LifetimeDirectory);
+		const auto LifetimePath = LifetimeDirectory / "publication-service.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0, LifetimePath, {}, 2);
+			Evidence.MarkFrameBegin(11);
+			runtime_detail::RecordPublicationLatency({.Stage = "CharacterRelationshipRetired", .Connection = {4, 7},
+				.Object = {9, 3}, .Tick = 11});
+			Evidence.Dump();
+			Check(Evidence.Valid() && Evidence.Count() == 2, "farm owner lifetime end stays in the existing fixed record budget");
+		}
+		{
+			std::ifstream File(LifetimePath, std::ios::binary);
+			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
+			const auto HeaderEnd = Bytes.find('\n');
+			Check(Bytes.starts_with("format=GargantuanFarmPublicationV2\t"), "new lifetime evidence explicitly identifies V2");
+			if (HeaderEnd != std::string::npos && Bytes.size() == HeaderEnd + 1 + 2 * 80) {
+				const auto Offset = HeaderEnd + 1 + 80;
+				auto Read = [&](std::size_t Index, std::size_t Length) {
+					std::uint64_t Value = 0;
+					for (std::size_t Byte = 0; Byte < Length; ++Byte)
+						Value |= static_cast<std::uint64_t>(static_cast<unsigned char>(Bytes[Offset + Index + Byte])) << (8 * Byte);
+					return Value;
+				};
+				Check(Read(0, 2) == 29 && Read(2, 2) == 0 && Read(4, 4) == 4 && Read(8, 4) == 7 &&
+					Read(12, 4) == 9 && Read(16, 4) == 3 && Read(20, 4) == 0 && Read(24, 8) != 0 &&
+					Read(32, 8) == 11 && Read(40, 8) == 0 && Read(48, 8) == 0 && Read(56, 8) == 0 &&
+					Read(64, 8) == 0 && Read(72, 8) == 0,
+					"Stage29 preserves exact lifetime identity and tick without ordinary clock or packet-field remapping");
+			} else Check(false, "fixed80-byte lifetime record is present without trailing or missing bytes");
+		}
+		const auto DirectDirectory = Root / "direct";
+		std::filesystem::create_directory(DirectDirectory);
+		const auto DirectPath = DirectDirectory / "publication-service.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0, DirectPath, {}, 2);
+			Evidence.MarkFrameBegin(12);
+			runtime_detail::RecordPublicationLatency({.Stage = "CharacterDirectOffered", .Connection = {4, 7},
+				.Object = {9, 3}, .Tick = 12, .Sequence = 17, .Due = 11, .Epoch = 23,
+				.Operations = 1});
+			Evidence.Dump();
+			Check(Evidence.Valid() && Evidence.Count() == 2,
+				"farm direct Character source marker seals after FrameBegin");
+		}
+		bool InvalidNameRejected = false;
+		try {
+			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0,
+				Root / "publication-service-direct.bin", {}, 2);
+		} catch (const std::invalid_argument &) { InvalidNameRejected = true; }
+		Check(InvalidNameRejected, "farm publication evidence requires its canonical file name");
+		{
+			std::ifstream File(DirectPath, std::ios::binary);
+			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
+			const auto HeaderEnd = Bytes.find('\n');
+			if (HeaderEnd != std::string::npos && Bytes.size() >= HeaderEnd + 1 + 2 * 80) {
+				const auto Offset = HeaderEnd + 1 + 80;
+				auto Read32 = [&](std::size_t Index) {
+					std::uint32_t Value = 0;
+					for (std::size_t Byte = 0; Byte < 4; ++Byte)
+						Value |= static_cast<std::uint32_t>(static_cast<unsigned char>(Bytes[Offset + Index + Byte])) << (8 * Byte);
+					return Value;
+				};
+				auto Read64 = [&](std::size_t Index) {
+					std::uint64_t Value = 0;
+					for (std::size_t Byte = 0; Byte < 8; ++Byte)
+						Value |= static_cast<std::uint64_t>(static_cast<unsigned char>(Bytes[Offset + Index + Byte])) << (8 * Byte);
+					return Value;
+				};
+				Check(static_cast<unsigned char>(Bytes[Offset]) == 12 &&
+					static_cast<unsigned char>(Bytes[Offset + 1]) == 0 &&
+					static_cast<unsigned char>(Bytes[Offset + 2]) == 1 &&
+					Read32(4) == 4 && Read32(8) == 7 && Read32(12) == 9 && Read32(16) == 3 &&
+					Read64(32) == 12 && Read64(40) == 17 && Read64(48) == 11 && Read64(56) == 0 &&
+					Read64(64) == 23 && Read64(72) == 0,
+					"farm direct marker retains source, due, reliability and generation identity");
+			} else Check(false, "farm direct marker is present in sealed binary trace");
+		}
+		{
+			std::ifstream File(ServerPath, std::ios::binary);
+			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
+			const auto HeaderEnd = Bytes.find('\n');
+			if (HeaderEnd != std::string::npos && Bytes.size() >= HeaderEnd + 1 + 3 * 80) {
+				const auto Offset = HeaderEnd + 1 + 2 * 80;
+				auto Read32 = [&](std::size_t Index) {
+					std::uint32_t Value = 0;
+					for (std::size_t Byte = 0; Byte < 4; ++Byte)
+						Value |= static_cast<std::uint32_t>(static_cast<unsigned char>(Bytes[Offset + Index + Byte])) << (8 * Byte);
+					return Value;
+				};
+				Check(static_cast<unsigned char>(Bytes[Offset]) == 11 &&
+					Read32(4) == 4 && Read32(8) == 7 && Read32(12) == 9 && Read32(16) == 3 &&
+					static_cast<unsigned char>(Bytes[Offset + 32]) == 11 &&
+					static_cast<unsigned char>(Bytes[Offset + 40]) == 0,
+					"farm retirement stage preserves full recipient/object generations and tick without state sequence");
+			} else Check(false, "farm retirement record is present in the sealed binary trace");
+		}
+		const auto ClientPath = Root / "publication-service-0.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(false, "test-run", 0, 17, ClientPath, {1, 1}, 2);
+			runtime_detail::RecordPublicationLatency({.Stage = "CharacterRelationshipRetired", .Connection = {1, 1},
+				.Object = {9, 2}, .Tick = 20});
+			CharacterStateFrame Frame{.ServerTick = 31, .FrameSequence = CharacterStateFrameSequence{1}, .StateCount = 1};
+			Frame.States[0] = CharacterAuthoritativeState{.Character = {9, 2},
+				.ControlEpoch = CharacterControlEpoch{7}, .StateSequence = RealtimeStateSequence{12},
+				.AuthoritativeTick = 31};
+			const auto Bytes = EncodeCharacterMessage(Frame);
+			Check(Bytes.has_value(), "farm client trace fixture encodes a valid state");
+			if (Bytes) {
+				runtime_detail::RecordPublicationPacket("ClientNativeReceive", {1, 2}, *Bytes);
+				runtime_detail::RecordPublicationPacket("ClientNativeReceive", {1, 1}, *Bytes);
+				runtime_detail::RecordPublicationPacket("ClientHandled", {1, 1}, *Bytes);
+			}
+			Evidence.Dump();
+			Check(Evidence.Valid() && Evidence.Count() == 2,
+				"farm client trace retains only its actual full-generation recipient");
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous, "farm client trace restores scoped sink");
+		const auto OverflowPath = Root / "publication-service-1.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(false, "test-run", 1, 18, OverflowPath, {1, 1}, 1);
+			std::array<std::byte, 4> Invalid{std::byte{0x47}, std::byte{0x43}, std::byte{0x48}, std::byte{0x52}};
+			runtime_detail::RecordPublicationPacket("ClientHandled", {1, 1}, Invalid);
+			CharacterStateFrame Frame{.ServerTick = 31, .FrameSequence = CharacterStateFrameSequence{1}, .StateCount = 1};
+			Frame.States[0] = CharacterAuthoritativeState{.Character = {9, 2},
+				.ControlEpoch = CharacterControlEpoch{7}, .StateSequence = RealtimeStateSequence{12},
+				.AuthoritativeTick = 31};
+			if (const auto Bytes = EncodeCharacterMessage(Frame)) {
+				runtime_detail::RecordPublicationPacket("ClientNativeReceive", {1, 1}, *Bytes);
+				runtime_detail::RecordPublicationPacket("ClientHandled", {1, 1}, *Bytes);
+			}
+			Evidence.Dump();
+			Check(!Evidence.Valid() && Evidence.Overflowed() && Evidence.Failures() == 1,
+				"farm trace overflow and malformed GCHR invalidate the evidence");
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous, "failed farm trace restores scoped sink");
+		const auto RpcDirectory = Root / "rpc";
+		std::filesystem::create_directory(RpcDirectory);
+		const auto RpcClientPath = RpcDirectory / "publication-service-0.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(false, "test-run", 0, 17,
+				RpcClientPath, {1, 1}, 3);
+			runtime_detail::RecordPublicationLatency({.Stage = "RpcRequestStarted",
+				.Connection = {1, 1}, .Object = {18, 2}, .Sequence = 7});
+			runtime_detail::RecordPublicationLatency({.Stage = "RpcResponseReceived",
+				.Connection = {1, 1}, .Object = {18, 2}, .Sequence = 7, .Bytes = 42});
+			RemoteMessage Request{.Kind = RemoteMessageKind::Request, .Remote = {18, 2},
+				.Request = RemoteRequestId{7}, .Deadline = std::chrono::milliseconds(1'000),
+				.Arguments = {WireValue(std::string("recovery"))}};
+			const auto Encoded = EncodeRemoteMessage(Request);
+			Check(Encoded.has_value(), "farm RPC diagnostic fixture encodes a real request");
+			if (Encoded) runtime_detail::RecordPublicationPacket("Handoff", {1, 1}, *Encoded);
+			Evidence.Dump();
+			Check(Evidence.Valid() && Evidence.Count() == 3,
+				"farm RPC diagnostic retains only bounded request metadata");
+		}
+		{
+			std::ifstream File(RpcClientPath, std::ios::binary);
+			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
+			const auto HeaderEnd = Bytes.find('\n');
+			if (HeaderEnd != std::string::npos && Bytes.size() >= HeaderEnd + 1 + 3 * 80) {
+				const auto Offset = HeaderEnd + 1 + 2 * 80;
+				Check(static_cast<unsigned char>(Bytes[Offset]) == 16 &&
+					static_cast<unsigned char>(Bytes[Offset + 12]) == 18 &&
+					static_cast<unsigned char>(Bytes[Offset + 16]) == 2 &&
+					static_cast<unsigned char>(Bytes[Offset + 40]) == 7,
+					"farm RPC GNS-accept marker retains remote and request identity");
+				Check(static_cast<unsigned char>(Bytes[HeaderEnd + 1 + 80]) == 22 &&
+					static_cast<unsigned char>(Bytes[HeaderEnd + 1 + 80 + 20]) == 42,
+					"farm RPC receive marker retains exact received bytes");
+			} else Check(false, "farm RPC GNS-accept marker is present in sealed binary trace");
+		}
+		RemoteMessage NativeRequest{.Kind = RemoteMessageKind::Request, .Remote = {18, 2},
+			.Request = RemoteRequestId{7}, .Deadline = std::chrono::milliseconds(1'000),
+			.Arguments = {WireValue(std::string("recovery"))}};
+		const auto NativeEncoded = EncodeRemoteMessage(NativeRequest);
+		Check(NativeEncoded.has_value(), "native receive diagnostic fixture encodes a real RPC");
+		if (NativeEncoded) {
+			// Old aggregate initializers have no callback and must remain no-op.
+			runtime_detail::PublicationLatencySink LegacySink{nullptr,
+				+[](void *, ConnectionId) noexcept { return true; }};
+			runtime_detail::ActivePublicationLatency = &LegacySink;
+			Check(!runtime_detail::PublicationRpcNativeReceiveSelected({1, 1}, *NativeEncoded),
+				"legacy diagnostic sink leaves optional native receive disabled");
+			runtime_detail::RecordPublicationRpcNativeReceive({1, 1}, *NativeEncoded, 100, 101, 0, 0, 1);
+			runtime_detail::ActivePublicationLatency = Previous;
+			for (int Case = 0; Case < 14; ++Case) {
+				const auto Directory = Root / ("native-" + std::to_string(Case));
+				std::filesystem::create_directory(Directory);
+				const auto Output = Directory / "publication-service-0.bin";
+				auto Payload = *NativeEncoded;
+				std::int64_t Age = 500'000, Number = 23;
+				std::size_t Depth = 4096;
+				ConnectionId Connection{1, 1};
+				if (Case == 1) Payload[4] = std::byte{1}; // Protocol version.
+				if (Case == 2) Payload[7] = std::byte{1}; // Reserved.
+				if (Case == 3) for (std::size_t I = 12; I < 16; ++I) Payload[I] = std::byte{0};
+				if (Case == 4) for (std::size_t I = 24; I < 32; ++I) Payload[I] = std::byte{0};
+				if (Case == 5) Age = -1;
+				if (Case == 6) Depth = host::detail::FarmPublicationEvidence::MaximumNativeReceiveEventDepth + 1;
+				if (Case == 7) Number = 0;
+				if (Case == 8) Connection.Generation = 2; // Not this client's lifetime.
+				if (Case == 9) Payload[6] = std::byte{0}; // Event: not an RPC.
+				if (Case == 10) Payload.resize(31); // Fixed-header selection requires 32 bytes.
+				if (Case == 12) { Age = 0; Depth = 0; }
+				{
+					host::detail::FarmPublicationEvidence Evidence(false, "test-run", 0, 17, Output, {1, 1}, 1);
+					const auto At = runtime_detail::PublicationLatencyNow();
+					const auto After = Case == 13 ? At - 1 : At + 100;
+					runtime_detail::RecordPublicationRpcNativeReceive(Connection, Payload,
+						At, After, Age, Depth, Number);
+					if (Case == 11) runtime_detail::RecordPublicationRpcNativeReceive(Connection, Payload,
+						At + 100, After + 100, Age, Depth, Number);
+					Evidence.Dump();
+					if (Case == 0 || Case == 12)
+						Check(Evidence.Valid() && Evidence.Count() == 1, "native dequeue retains exact RPC metadata including zero age/depth");
+					else if (Case >= 8 && Case <= 10)
+						Check(Evidence.Valid() && Evidence.Count() == 0, "native dequeue ignores other generations, Events and short headers");
+					else if (Case == 11)
+						Check(!Evidence.Valid() && Evidence.Overflowed() && Evidence.Count() == 1,
+							"native dequeue overflow invalidates evidence without growing storage");
+					else Check(!Evidence.Valid() && Evidence.Failures() == 1 && Evidence.Count() == 0,
+						"invalid native dequeue protocol, identity, signed age, depth or message number invalidates evidence");
+				}
+				if (Case == 0) {
+					std::ifstream File(Output, std::ios::binary);
+					const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
+					const auto Offset = Bytes.find('\n') + 1;
+					auto Read = [&](std::size_t Field, std::size_t Width) {
+						std::uint64_t Value = 0;
+						for (std::size_t I = 0; I < Width; ++I)
+							Value |= static_cast<std::uint64_t>(static_cast<unsigned char>(Bytes[Offset + Field + I])) << (8 * I);
+						return Value;
+					};
+					Check(Offset && Bytes.size() >= Offset + 80 && Read(0, 2) == 28 &&
+						Read(4, 4) == 1 && Read(8, 4) == 1 && Read(12, 4) == 18 && Read(16, 4) == 2 &&
+						Read(32, 8) == 500'000 && Read(40, 8) == 7 && Read(48, 8) == 4096 &&
+						Read(56, 8) == 3 && Read(64, 8) == 23 && Read(72, 8) - Read(24, 8) == 100,
+						"native dequeue binary stage preserves ready age, pre-enqueue depth, clock bracket and both identities");
+				}
+				std::filesystem::remove(Output);
+				std::filesystem::remove(Directory);
+			}
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous, "native receive fixture restores scoped callback");
+		std::filesystem::remove(ServerPath);
+		std::filesystem::remove(DirectPath);
+		std::filesystem::remove(ClientPath);
+		std::filesystem::remove(OverflowPath);
+		std::filesystem::remove(RpcClientPath);
+		std::filesystem::remove(RpcDirectory);
+		std::filesystem::remove(DirectDirectory);
+		std::filesystem::remove(LifetimePath);
+		std::filesystem::remove(LifetimeDirectory);
+		std::filesystem::remove(Root);
+	}
+
+	class HandoffTransport final : public IGameTransport {
+	  public:
+		explicit HandoffTransport(std::shared_ptr<IGameTransport> Value) : Inner(std::move(Value)) {}
+		TransportOperationResult Start(const TransportStartConfiguration &Value) override { return Inner->Start(Value); }
+		TransportOperationResult Stop(DisconnectInfo Value) override { return Inner->Stop(std::move(Value)); }
+		TransportOperationResult Disconnect(ConnectionId Id, DisconnectInfo Value) override {
+			return Inner->Disconnect(Id, std::move(Value));
+		}
+		TransportOperationResult Send(const NetworkMessageIntent &Message) override {
+			auto Result = Inner->Send(Message);
+			if (Result.Succeeded() && Started != 0) {
+				Bytes += Message.Payload().size();
+				++Messages;
+				if (const auto *Sample = runtime_detail::ActiveWorkSample) {
+					const bool Character = Message.Traffic() == TrafficClass::RealtimeState;
+					const bool Remote = Message.Traffic() == TrafficClass::ReliableApplication;
+					const auto Phase = Character ? runtime_detail::WorkPhase::CharacterPublication : runtime_detail::WorkPhase::RemotePump;
+					if ((Character || Remote) && (*Sample)[static_cast<std::size_t>(Phase)].Calls != 0) {
+						const auto Index = static_cast<std::size_t>(Character ? runtime_detail::WorkProducer::Gchr
+							: runtime_detail::WorkProducer::RemoteEventReliable);
+						++Fresh[Index];
+					}
+				}
+			}
+			return Result;
+		}
+		std::size_t PollEvents(std::span<TransportEvent> Events) override { return Inner->PollEvents(Events); }
+		std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Id) const override { return Inner->GetAvailableDatagramBytes(Id); }
+		std::optional<NetworkStatistics> GetStatistics(ConnectionId Id) const override { return Inner->GetStatistics(Id); }
+		void Begin() { Fresh.fill(0); Bytes = Messages = 0; Started = runtime_detail::WorkTimestamp(); }
+		std::shared_ptr<IGameTransport> Inner;
+		std::array<std::uint64_t, runtime_detail::WorkProducerNames.size()> Fresh{};
+		std::uint64_t Started = 0, Bytes = 0, Messages = 0;
+	};
 
 	GameSessionConfiguration Configuration(GameSessionRole Role, std::string Endpoint = "game-session") {
 		return {
@@ -56,13 +593,17 @@ namespace {
 	}
 
 	void Advance(
-		const std::shared_ptr<SimulatedNetwork> &Network, GameSession &Server, GameSession &Client, std::uint64_t Tick
+		const std::shared_ptr<SimulatedNetwork> &Network, GameSession &Server, GameSession &Client, std::uint64_t Tick,
+		runtime_detail::WorkSample *ServerWork = nullptr
 	) {
 		(void)Network->Advance(2ms);
 		Network->Pump();
 		(void)Server.Poll();
 		(void)Client.Poll();
-		Server.Step(Tick);
+		{
+			runtime_detail::WorkCapture Capture(ServerWork);
+			Server.Step(Tick);
+		}
 		Client.Step(Tick);
 		(void)Network->Advance(20ms);
 	}
@@ -157,6 +698,13 @@ namespace {
 			!Restricted.IsValid() && Configuration(GameSessionRole::Server, "10.0.0.2").IsValid(),
 			"non-loopback DevelopmentLocal endpoints require the explicit insecure-development override"
 		);
+		auto DeclaredClient = Configuration(GameSessionRole::Client);
+		DeclaredClient.DeclareNormalOrdinaryService = true;
+		Check(DeclaredClient.IsValid() && !DeclaredClient.ReliableService,
+			"trusted client ordinary source declaration is independent of server funding and the wire profile");
+		auto WrongRoleDeclaration = Configuration(GameSessionRole::Server);
+		WrongRoleDeclaration.DeclareNormalOrdinaryService = true;
+		Check(!WrongRoleDeclaration.IsValid(), "server normal declaration remains selected only by its pooled profile");
 
 		auto World = std::make_shared<DataModel>();
 		auto Control = std::dynamic_pointer_cast<CharacterControlService>(World->GetService("CharacterControlService"));
@@ -200,7 +748,13 @@ namespace {
 		AfterUnstarted.reset();
 		GameSession Session(Transport, Configuration(GameSessionRole::Server, "one-shot-session"), &Runtime);
 		Check(Session.Start().Succeeded(), "one-shot GameSession starts once");
+		host::detail::FarmLifecycleEvidence BeforeStop;
+		BeforeStop.ObserveSession(Session);
+		Check(!BeforeStop.Valid(), "logical lifecycle receipt rejects a live session even with no peers");
 		Session.Stop();
+		host::detail::FarmLifecycleEvidence AfterStopEvidence;
+		AfterStopEvidence.ObserveSession(Session);
+		Check(AfterStopEvidence.Valid(), "post-Stop native snapshot proves terminal ownership release");
 		Check(
 			Session.GetStatus() == GameSessionStatus::Closed &&
 				Session.Start().Status == TransportOperationStatus::InvalidState,
@@ -575,6 +1129,8 @@ namespace {
 		ServerConfiguration.StructuralReplication.MaximumTransitionsPerPeerTick = 64;
 		ServerConfiguration.StructuralReplication.MaximumTransitionsPerTick = 256;
 		ServerConfiguration.StructuralReplication.PeerQuantum = 64;
+		ServerConfiguration.StructuralReplication.MaximumJournalRecordsPerPeerTick = 128;
+		ServerConfiguration.StructuralReplication.MaximumJournalRecordsPerTick = 512;
 		GameSession Server(ServerTransport, ServerConfiguration, &ServerRuntime);
 		Check(Server.Start().Succeeded(), "burst-admission server starts");
 		std::vector<RawPeer> Peers;
@@ -616,7 +1172,9 @@ namespace {
 			Check(Intent && Transport->Send(*Intent).Succeeded(), "burst-admission raw client submits hello");
 			Peers.push_back({std::move(Transport), Connection});
 		}
+		std::uint64_t LastAdmissionTick = 0;
 		for (std::uint64_t Tick = 1; Tick <= 80 && Server.GetMetrics().ReadyPeers != PeerCount; ++Tick) {
+			LastAdmissionTick = Tick;
 			(void)Network->Advance(1ms);
 			Network->Pump();
 			(void)Server.Poll();
@@ -653,6 +1211,11 @@ namespace {
 			}
 		}
 		const auto Metrics = Server.GetMetrics();
+		std::cout << "[Network:BurstTest] ready=" << Metrics.ReadyPeers << " accepted=" << Metrics.AcceptedPeers
+			<< " removed=" << Metrics.PlayersRemoved << " rejected=" << Metrics.ProtocolRejects
+			<< " selected=" << Metrics.StructuralTransitionsSelected << " committed=" << Metrics.StructuralTransitionsCommitted
+			<< " cap=" << Metrics.StructuralMaximumTransitionsSelectedPerTick
+			<< " capTicks=" << Metrics.StructuralGlobalBudgetExhaustions << " ticks=" << LastAdmissionTick << '\n';
 		Check(
 			Metrics.ReadyPeers == PeerCount && Metrics.AcceptedPeers == PeerCount && Metrics.PlayersRemoved == 0 &&
 				Metrics.ProtocolRejects == 0 && ServerRuntime.Players->GetPlayers().size() == PeerCount &&
@@ -662,13 +1225,45 @@ namespace {
 				Metrics.StructuralGlobalBudgetExhaustions != 0,
 			"bounded fair burst admission keeps every peer current without exceeding the global structural cap"
 		);
+		auto DrainJournalTick = [&](std::uint64_t Tick) {
+			(void)Network->Advance(1ms); Network->Pump(); (void)Server.Poll(); Server.Step(Tick);
+			(void)Network->Advance(1ms); Network->Pump();
+			for (auto &Peer : Peers) {
+				std::array<TransportEvent, 128> Events;
+				(void)Peer.Transport->PollEvents(Events);
+			}
+		};
+		std::uint64_t Tick = LastAdmissionTick;
+		for (std::size_t Iteration = 0; Iteration < 1024 && Server.GetMetrics().JournalBacklogRecords != 0; ++Iteration)
+			DrainJournalTick(++Tick);
+		Check(Server.GetMetrics().JournalBacklogRecords == 0, "bounded journal service drains bootstrap history for every peer");
+		// Inject ordinary non-replicated journal records. Archivable itself does
+		// not journal, so toggling that property would not exercise this reader.
+		for (std::size_t Index = 0; Index < 32; ++Index)
+			ChangeJournal::Get().Commit(ServerWorld->GetObjectId(), ServerWorld->GetObjectId(),
+				PropertyUpdatedChange{"Archivable", WireValue(Index % 2 != 0), false});
+		const auto BeforeJournal = Server.GetMetrics();
+		std::size_t JournalTicks = 0;
+		do { DrainJournalTick(++Tick); ++JournalTicks; }
+		while (Server.GetMetrics().JournalBacklogRecords != 0 && JournalTicks < 64);
+		const auto AfterJournal = Server.GetMetrics();
+		Check(AfterJournal.JournalBacklogRecords == 0 && AfterJournal.ReadyPeers == PeerCount &&
+			AfterJournal.JournalRecordsPerTickHighWater == 512 && AfterJournal.JournalRecordsPerPeerTickHighWater <= 128 &&
+			AfterJournal.JournalRecordsExamined - BeforeJournal.JournalRecordsExamined == 32 * PeerCount && JournalTicks > 1 &&
+			AfterJournal.StructuralJournalLagFailures == 0,
+			"global journal budget rotates fairly across no-frame readers and preserves retention");
+		std::cout << "[Network:JournalBudgetTest] ticks=" << JournalTicks << " read="
+			<< AfterJournal.JournalRecordsExamined - BeforeJournal.JournalRecordsExamined
+			<< " globalHighWater=" << AfterJournal.JournalRecordsPerTickHighWater
+			<< " peerHighWater=" << AfterJournal.JournalRecordsPerPeerTickHighWater
+			<< " remaining=" << AfterJournal.JournalBacklogRecords << '\n';
 		for (auto &Peer : Peers)
 			(void)Peer.Transport->Stop({DisconnectReason::LocalShutdown, "burst-admission complete"});
 		Server.Stop();
 		ServerRuntime.Destroy();
 	}
 
-	void TestRejectedStructuralAdmissionIsPeerTerminal() {
+	void TestRejectedStructuralAdmissionIsPeerTerminal(bool WithByteAdmission = false) {
 		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
 		auto ServerTransport = Network->CreateTransport();
 		auto ClientTransport = Network->CreateTransport();
@@ -681,15 +1276,21 @@ namespace {
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
 		);
 		ServerRuntime.ProcessService->Alive = true;
-		GameSession Server(
-			ServerTransport, Configuration(GameSessionRole::Server, "structural-rejection"), &ServerRuntime
-		);
+		auto ServerConfiguration = Configuration(GameSessionRole::Server, "structural-rejection");
+		if (WithByteAdmission) {
+			ServerConfiguration.ReliableService.emplace();
+			auto &Profile = *ServerConfiguration.ReliableService;
+			Profile.ConnectionRate = Profile.AggregateRate = 8 * 1024 * 1024;
+			Profile.BackendRate = 16 * 1024 * 1024;
+		}
+		GameSession Server(ServerTransport, ServerConfiguration, &ServerRuntime);
 		GameSession Client(ClientTransport, Configuration(GameSessionRole::Client, "structural-rejection"));
 		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "structural-rejection session starts");
 		std::unique_ptr<HeadlessRenderer> ClientRenderer;
 		std::unique_ptr<Engine> ClientRuntime;
 		std::uint64_t Tick = 1;
 		for (; Tick <= 100 && Server.GetMetrics().ReadyPeers != 1; ++Tick) {
+			if (WithByteAdmission) std::this_thread::sleep_for(1ms);
 			Advance(Network, Server, Client, Tick);
 			if (!ClientRuntime && Client.GetClientDataModel()) {
 				ClientRenderer = std::make_unique<HeadlessRenderer>(Vector2(64, 64));
@@ -715,14 +1316,25 @@ namespace {
 		auto Mutation = std::make_shared<Script>();
 		Mutation->SetName("TerminalStructuralMutation");
 		Mutation->SetParent(ServerWorld);
+		if (WithByteAdmission) std::this_thread::sleep_for(2ms);
 		Server.Step(Tick);
 		Check(
 			Server.GetStatus() == GameSessionStatus::Listening && Server.GetMetrics().PlayersRemoved == 1 &&
 				ServerRuntime.Players->GetPlayers().empty(),
 			"rejected reliable structural admission tears down its Player and peer in the same processing cycle"
 		);
+		if (WithByteAdmission) {
+			const auto Metrics = Server.GetMetrics();
+			Check(Metrics.ReliableAdmission.AcceptedBytes > 0 && Metrics.ReliableAdmission.RolledBackBytes > 0 &&
+				Metrics.ReliableAdmissionPeerStates == 0, "failed scheduler admission refunds reservation and clears generation-safe accounting");
+		}
 		Client.Stop();
 		Server.Stop();
+		host::detail::FarmLifecycleEvidence ClientStopped, ServerStopped;
+		ClientStopped.ObserveSession(Client);
+		ServerStopped.ObserveSession(Server);
+		Check(ClientStopped.Valid() && ServerStopped.Valid(),
+			"connected production lifecycle leaves exact terminal session/admission/readers snapshots");
 		if (ClientRuntime) ClientRuntime->Destroy();
 		ServerRuntime.Destroy();
 	}
@@ -783,16 +1395,23 @@ namespace {
 		ServerRuntime.Destroy();
 	}
 
-	void TestProductionLifecycleComposition() {
+	void TestProductionLifecycleComposition(
+		bool MeasureHandoff = false, bool WithByteAdmission = false, bool TestControlRebind = false
+	) {
 		SimulatedTransportConfiguration TransportConfiguration;
 		TransportConfiguration.BaseLatency = 1ms;
 		auto Network = SimulatedNetwork::Create(TransportConfiguration);
-		auto ServerTransport = Network->CreateTransport();
+		auto ServerTransport = std::make_shared<HandoffTransport>(Network->CreateTransport());
 		auto ClientTransport = Network->CreateTransport();
 		Check(Network && ServerTransport && ClientTransport, "session test allocates bounded transports");
 		if (!Network || !ServerTransport || !ClientTransport) return;
 
 		auto ServerWorld = std::make_shared<DataModel>();
+		if (TestControlRebind) {
+			auto Marker = std::make_shared<Folder>();
+			Marker->SetName("ControlRebindMarker");
+			Marker->SetParent(ServerWorld);
+		}
 		DiskFilesystem SampleFilesystem(std::filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT));
 		auto ServerAssets = std::dynamic_pointer_cast<AssetService>(ServerWorld->GetService("AssetService"));
 		ServerAssets->LoadProjectAssets(SampleFilesystem);
@@ -810,6 +1429,8 @@ local SessionRemote = game:FindFirstChild("SessionRemote")
 SessionRemote.OnServerEvent:Connect(function(Peer, Message)
 	if type(Peer) == "table" and Message == "session-ready" then
 		CharacterControl:SetAttribute("SessionRemoteReceived", true)
+		SessionRemote:FireClient(Peer.Slot, Peer.Generation, "service-probe", 1)
+		SessionRemote:FireClient(Peer.Slot, Peer.Generation, "service-probe", 2)
 	end
 end)
 local function InstallPresentationRig(Player)
@@ -867,6 +1488,11 @@ local CharacterControl = game:GetService("CharacterControlService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local SessionRemote = game:FindFirstChild("SessionRemote")
+SessionRemote.OnClientEvent:Connect(function(Message, Sequence)
+	if Message == "service-probe" and (Sequence == 1 or Sequence == 2) then
+		CharacterControl:SetAttribute("ServiceProbeReplies", (CharacterControl:GetAttribute("ServiceProbeReplies") or 0) + 1)
+	end
+end)
 assert(CharacterControl:RegisterAction(
 	"SessionLunge",
 	"asset://d9d9e9649adbad59588d137c2a642e1d",
@@ -902,6 +1528,8 @@ CharacterControl.ActionEnded:Connect(function(Character, ActionName)
 end)
 local Requested = false
 local RemoteSent = false
+local SawRootAbsent = false
+local ReboundActionRequested = false
 RunService.PreSimulation:Connect(function()
 	if DeniedDelay > 0 then
 		DeniedDelay -= 1
@@ -921,6 +1549,17 @@ RunService.PreSimulation:Connect(function()
 		SessionRemote:FireServer("session-ready")
 		RemoteSent = true
 	end
+	local Character = Players.LocalPlayer and Players.LocalPlayer.Character
+	if Requested and Character and game:FindFirstChild("ControlRebindMarker") then
+		if Character.RootPart == nil then
+			SawRootAbsent = true
+		elseif SawRootAbsent and not ReboundActionRequested then
+			ReboundActionRequested = CharacterControl:RequestAction("SessionLunge")
+			if ReboundActionRequested then
+				Character:SetAttribute("ReboundActionRequested", true)
+			end
+		end
+	end
 end)
 )");
 		ClientActionPolicy->SetParent(ServerWorld);
@@ -934,14 +1573,59 @@ end)
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
 		);
 		ServerRuntime.ProcessService->Alive = true;
-		GameSession Server(ServerTransport, Configuration(GameSessionRole::Server), &ServerRuntime);
+		auto ServerConfiguration = Configuration(GameSessionRole::Server);
+		if (WithByteAdmission) {
+			ServerConfiguration.ReliableService.emplace();
+			auto &Profile = *ServerConfiguration.ReliableService;
+			Profile.ConnectionRate = Profile.AggregateRate = 8 * 1024 * 1024;
+			Profile.BackendRate = 16 * 1024 * 1024;
+			Profile.RequireLatencyCompatibility = true;
+		}
+		GameSession Server(ServerTransport, ServerConfiguration, &ServerRuntime);
 		GameSession Client(ClientTransport, Configuration(GameSessionRole::Client));
 		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "production session endpoints start");
+		std::shared_ptr<Folder> HandoffMarker;
+		if (MeasureHandoff) {
+			HandoffMarker = std::make_shared<Folder>();
+			HandoffMarker->SetParent(ServerWorld);
+		}
+		std::size_t LateCharacterTicks = 0, LateRemoteTicks = 0;
+		auto TraceAdvance = [&](std::uint64_t Tick) {
+			if (WithByteAdmission) std::this_thread::sleep_for(1ms);
+			if (!MeasureHandoff) { Advance(Network, Server, Client, Tick); return; }
+			// A small real structural mutation ensures the early flush precedes
+			// Character authority and the ordinary Luau Remote pump in this step.
+			HandoffMarker->SetName("Handoff" + std::to_string(Tick));
+			runtime_detail::WorkSample Sample{};
+			ServerTransport->Begin();
+			Advance(Network, Server, Client, Tick, &Sample);
+			const auto Limits = GameSessionConfiguration::DefaultLimits();
+			Check(ServerTransport->Bytes <= Limits.MaximumSendBytesPerTick && ServerTransport->Messages <= Limits.MaximumMessagesPerTick,
+				"all service points share the negotiated per-step transport allowance");
+			const auto &Structural = Sample.Producers[static_cast<std::size_t>(runtime_detail::WorkProducer::Structural)];
+			if (Structural.Serviced == 0) return;
+			for (const auto Producer : {runtime_detail::WorkProducer::Gchr, runtime_detail::WorkProducer::RemoteEventReliable}) {
+				const auto &Value = Sample.Producers[static_cast<std::size_t>(Producer)];
+				if (Value.Enqueued == 0) continue;
+				Check(ServerTransport->Fresh[static_cast<std::size_t>(Producer)] >= Value.Enqueued,
+					"late-produced gameplay reaches actual transport in the same step after drained structural service");
+				if (Producer == runtime_detail::WorkProducer::Gchr) ++LateCharacterTicks;
+				else ++LateRemoteTicks;
+				// Serviced is recorded only after the real transport Send succeeds,
+				// not after local scheduler acceptance. At most 120 test rows.
+				std::cout << "[Network:LateHandoff] tick=" << Tick << " producer="
+					<< runtime_detail::WorkProducerNames[static_cast<std::size_t>(Producer)]
+					<< " accepted=" << Value.Enqueued << " sent=" << Value.Serviced
+					<< " sentAfterProduction=" << ServerTransport->Fresh[static_cast<std::size_t>(Producer)]
+					<< " handoffMaxMs=" << Value.ServiceAgeMaximumNanoseconds / 1e6
+					<< " flushes=" << Sample[static_cast<std::size_t>(runtime_detail::WorkPhase::SchedulerFlush)].Calls << '\n';
+			}
+		};
 
 		std::unique_ptr<HeadlessRenderer> ClientRenderer;
 		std::unique_ptr<Engine> ClientRuntime;
 		for (std::uint64_t Tick = 1; Tick <= 80; ++Tick) {
-			Advance(Network, Server, Client, Tick);
+			TraceAdvance(Tick);
 			if (!ClientRuntime && Client.GetClientDataModel()) {
 				auto ClientAssets = std::dynamic_pointer_cast<AssetService>(
 					Client.GetClientDataModel()->GetService("AssetService")
@@ -1009,7 +1693,20 @@ end)
 			for (std::uint64_t Tick = 81; Tick <= 120; ++Tick) {
 				ClientRuntime->Step();
 				ServerRuntime.Step();
-				Advance(Network, Server, Client, Tick);
+				TraceAdvance(Tick);
+			}
+			Check(!MeasureHandoff || (LateCharacterTicks > 0 && LateRemoteTicks > 0),
+				"late-handoff fixture observes actual Character and Remote acceptance after structural service");
+			if (MeasureHandoff) {
+				// This variant proves service ordering, not the original timed action
+				// presentation scenario. The unchanged scenario runs separately below.
+				Check(Server.GetMetrics().ReadyPeers == 1 && Client.GetStatus() == GameSessionStatus::Ready,
+					"recorded handoff workload retains the live authenticated session");
+				Client.Stop();
+				Server.Stop();
+				ClientRuntime->Destroy();
+				ServerRuntime.Destroy();
+				return;
 			}
 			if (ServerCharacter)
 				std::cout << "[Network:SessionTest] actionDeltaX="
@@ -1085,10 +1782,71 @@ end)
 				ServerCharacter && glm::distance(ServerCharacter->GetPosition(), BeforeInput) > 0.25f,
 				"ordinary ActionMap policy reaches authoritative Character movement through the native bridge"
 			);
+			const auto ServiceMetrics = Client.GetMetrics();
+			Check(ServiceMetrics.ClientCharacterMessagesHandled > 1 && ServiceMetrics.ClientRemoteMessagesHandled == 2 &&
+				ServiceMetrics.ClientCharacterMaximumServiceGapNanoseconds > 0 &&
+				ServiceMetrics.ClientRemoteMaximumServiceGapNanoseconds > 0 &&
+				ClientRuntime->CharacterControl->GetAttributeValue("ServiceProbeReplies") == std::optional<WireValue>(2.0),
+				"client service metrics observe validated Character and Remote processing without changing delivery");
+			Check(host::detail::DecodePhysicalScaleCounter(
+				ClientRuntime->CharacterControl->GetAttributeValue("ServiceProbeReplies")) == 2,
+				"Luau SetAttribute numeric output is readable by the scale count gate");
+			std::uint64_t ReplacementTick = 161;
+			if (TestControlRebind && ServerCharacter && ServerCharacter->GetRootPart()) {
+				const auto CharacterId = ServerCharacter->GetObjectId();
+				const auto RootPart = *ServerCharacter->GetRootPart();
+				const auto RootId = RootPart->GetObjectId();
+				const auto InitialLocalPlayer = ClientRuntime->Players->GetLocalPlayer();
+				const auto InitialLocalCharacter = InitialLocalPlayer && (*InitialLocalPlayer)->GetCharacter()
+					? *(*InitialLocalPlayer)->GetCharacter() : nullptr;
+				const auto InitialLocalRoot = InitialLocalCharacter ? InitialLocalCharacter->GetRootPart() : std::nullopt;
+				const auto LocalCharacterId = InitialLocalCharacter ? InitialLocalCharacter->GetObjectId() : ObjectId{};
+				const auto LocalRootId = InitialLocalRoot ? (*InitialLocalRoot)->GetObjectId() : ObjectId{};
+				Check(LocalCharacterId.IsValid() && LocalRootId.IsValid(),
+					"client begins with a materialized owner Character and RootPart in its own ObjectId scope");
+				const auto BindingsBefore = Server.GetMetrics().CharacterControlBindings;
+				const auto RevocationsBefore = Server.GetMetrics().CharacterControlRevocations;
+				const auto ActionsBefore = detail::GameSessionTestAccess::GetCharacterMetrics(Server).ActionRequestsAccepted;
+				ServerCharacter->SetRootPart(std::nullopt);
+				for (std::uint64_t Tick = 161; Tick <= 190; ++Tick) {
+					ClientRuntime->Step();
+					ServerRuntime.Step();
+					Advance(Network, Server, Client, Tick);
+				}
+				const auto LocalPlayerDuringRevoke = ClientRuntime->Players->GetLocalPlayer();
+				const auto LocalCharacterDuringRevoke = LocalPlayerDuringRevoke && (*LocalPlayerDuringRevoke)->GetCharacter()
+					? *(*LocalPlayerDuringRevoke)->GetCharacter() : nullptr;
+				Check(ServerPlayers[0]->GetCharacter() && (*ServerPlayers[0]->GetCharacter())->GetObjectId() == CharacterId &&
+					RootPart->GetObjectId() == RootId && Server.GetMetrics().CharacterControlBindings == BindingsBefore &&
+					Server.GetMetrics().CharacterControlRevocations == RevocationsBefore + 1 &&
+					LocalCharacterDuringRevoke && LocalCharacterDuringRevoke->GetObjectId() == LocalCharacterId &&
+					!LocalCharacterDuringRevoke->GetRootPart() &&
+					detail::GameSessionTestAccess::GetCharacterMetrics(Server).ActionRequestsAccepted == ActionsBefore &&
+					Client.GetStatus() == GameSessionStatus::Ready,
+					"same owner Character and RootPart lose one control lease when RootPart materialization becomes false");
+				ServerCharacter->SetRootPart(RootPart);
+				for (std::uint64_t Tick = 191; Tick <= 220; ++Tick) {
+					ClientRuntime->Step();
+					ServerRuntime.Step();
+					Advance(Network, Server, Client, Tick);
+				}
+				const auto LocalPlayer = ClientRuntime->Players->GetLocalPlayer();
+				const auto LocalCharacter = LocalPlayer && (*LocalPlayer)->GetCharacter()
+					? *(*LocalPlayer)->GetCharacter() : nullptr;
+				Check(ServerPlayers[0]->GetCharacter() && (*ServerPlayers[0]->GetCharacter())->GetObjectId() == CharacterId &&
+					RootPart->GetObjectId() == RootId && Server.GetMetrics().CharacterControlBindings == BindingsBefore + 1 &&
+					Server.GetMetrics().CharacterControlRevocations == RevocationsBefore + 1 && LocalCharacter &&
+					LocalCharacter->GetObjectId() == LocalCharacterId && LocalCharacter->GetRootPart() &&
+					(*LocalCharacter->GetRootPart())->GetObjectId() == LocalRootId &&
+					LocalCharacter->GetAttributeValue("ReboundActionRequested").has_value() &&
+					detail::GameSessionTestAccess::GetCharacterMetrics(Server).ActionRequestsAccepted == ActionsBefore + 1,
+					"same owner Character and RootPart regain a fresh control lease and accept another semantic action");
+				ReplacementTick = 221;
+			} else if (TestControlRebind) Check(false, "control rebind fixture establishes a root-bearing owner Character");
 
 			auto PreviousCharacter = ServerCharacter;
 			ServerPlayers[0]->LoadCharacter();
-			for (std::uint64_t Tick = 161; Tick <= 190; ++Tick) {
+			for (std::uint64_t Tick = ReplacementTick; Tick < ReplacementTick + 30; ++Tick) {
 				ClientRuntime->Step();
 				ServerRuntime.Step();
 				Advance(Network, Server, Client, Tick);
@@ -1111,12 +1869,23 @@ end)
 			(void)ClientTransport->Disconnect(
 				*ClientConnection, {DisconnectReason::LocalShutdown, "session lifecycle test disconnect"}
 			);
-		for (std::uint64_t Tick = 191; Tick <= 200; ++Tick)
+		for (std::uint64_t Tick = TestControlRebind ? 251 : 191;
+			Tick < (TestControlRebind ? 261 : 201); ++Tick)
 			Advance(Network, Server, Client, Tick);
 		Check(
 			ServerRuntime.Players->GetPlayers().empty(), "disconnect tears down the authoritative Player and Character"
 		);
 		Check(Server.GetMetrics().PlayersRemoved == 1, "disconnect Player teardown is measured exactly once");
+		if (WithByteAdmission) {
+			const auto Metrics = Server.GetMetrics();
+			Check(Metrics.ReliableAdmission.AcceptedBytes > 0 && Metrics.ReliableAdmissionPeerStates == 0 &&
+				Metrics.ReliableAdmission.GlobalCreditHighWater <= MaximumReliableServiceGroupBytes &&
+				Metrics.StructuralMaximumTransitionsSelectedPerTick <= 8192,
+				"profile-enabled action/Remote/Character lifecycle preserves byte, peer cleanup and 3J bounds");
+			std::cout << "[Network:ByteAdmissionSession] accepted=" << Metrics.ReliableAdmission.AcceptedBytes
+				<< " deferred=" << Metrics.ReliableAdmission.SizeDeferrals
+				<< " waitMaxUs=" << Metrics.ReliableAdmission.MaximumAdmissionWaitMicroseconds << '\n';
+		}
 		Check(
 			Client.GetStatus() == GameSessionStatus::Failed && !Client.GetClientDataModel(),
 			"failed client session exposes no accepted replica through ordinal status ordering"
@@ -1230,6 +1999,13 @@ end)
 				SecondCharacter = CharacterValue;
 		}
 		const auto FirstConnection = First.GetPrimaryConnection();
+		std::vector<std::shared_ptr<KinematicCharacter>> DistantCharacters;
+		for (int Index = 0; Index < 32; ++Index) {
+			auto Distant = std::make_shared<KinematicCharacter>();
+			Distant->SetPosition({100000.0f + Index * 1024.0f, 0.0f, 0.0f});
+			Distant->SetParent(ServerWorld);
+			DistantCharacters.push_back(std::move(Distant));
+		}
 		for (std::uint64_t Tick = 161; Tick <= 180; ++Tick) {
 			if (FirstRuntime) FirstRuntime->Step();
 			if (SecondRuntime) SecondRuntime->Step();
@@ -1238,7 +2014,13 @@ end)
 			(void)Server.Poll();
 			(void)First.Poll();
 			(void)Second.Poll();
-			Server.Step(Tick);
+			runtime_detail::WorkSample GraphWork{};
+			{
+				runtime_detail::WorkCapture Capture(&GraphWork);
+				Server.Step(Tick);
+			}
+			Check(GraphWork.Counters[static_cast<std::size_t>(runtime_detail::WorkCounter::GraphCharacters)] <= 4,
+				"steady graph synchronization does not inspect distant registered Characters for each peer");
 			First.Step(Tick);
 			Second.Step(Tick);
 			(void)Network->Advance(20ms);
@@ -1336,11 +2118,39 @@ end)
 			"first connection cannot move the other Player's Character"
 		);
 
+		std::uint64_t NextTick = 251;
+		if (SecondCharacter && FirstConnection && SecondCharacter->GetRootPart()) {
+			const auto RootId = (*SecondCharacter->GetRootPart())->GetObjectId();
+			RetirementEvidenceCapture RetirementTrace;
+			auto StepRelevance = [&](int Steps) {
+				for (int Index = 0; Index < Steps; ++Index) {
+					if (FirstRuntime) FirstRuntime->Step();
+					if (SecondRuntime) SecondRuntime->Step();
+					ServerRuntime.Step();
+					Network->Pump();
+					(void)Server.Poll(); (void)First.Poll(); (void)Second.Poll();
+					Server.Step(NextTick); First.Step(NextTick); Second.Step(NextTick);
+					++NextTick;
+					(void)Network->Advance(20ms);
+				}
+			};
+			auto RootRetirements = [&] {
+				return std::count_if(RetirementTrace.Records.begin(),
+					RetirementTrace.Records.begin() + RetirementTrace.Count, [&](const auto &Record) {
+						return Record.Object == RootId && Record.Connection == *FirstConnection;
+					});
+			};
+			SecondCharacter->SetPosition({100000.0f, 6.0f, 0.0f});
+			StepRelevance(20);
+			Check(!RetirementTrace.Overflow && RootRetirements() == 1,
+				"accepted GRPL unpublish retires the remote RootPart relationship once");
+		} else Check(false, "remote RootPart unpublish regression has two live recipients");
+
 		if (FirstConnection)
 			(void)FirstTransport->Disconnect(
 				*FirstConnection, {DisconnectReason::LocalShutdown, "two-client isolation disconnect"}
 			);
-		for (std::uint64_t Tick = 251; Tick <= 265; ++Tick) {
+		for (std::uint64_t Tick = NextTick; Tick < NextTick + 15; ++Tick) {
 			Network->Pump();
 			(void)Server.Poll();
 			(void)First.Poll();
@@ -1361,6 +2171,204 @@ end)
 		if (FirstRuntime) FirstRuntime->Destroy();
 		if (SecondRuntime) SecondRuntime->Destroy();
 		ServerRuntime.Destroy();
+	}
+
+	void TestCharacterRetirementAcrossStructuralFrames() {
+		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+		auto World = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(64, 64));
+		Engine Runtime(World, &Renderer, nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+		Runtime.ProcessService->Alive = true;
+		auto ServerConfiguration = Configuration(GameSessionRole::Server, "character-retirement");
+		ServerConfiguration.StructuralReplication.MaximumTransitionsPerPeerTick = 64;
+		ServerConfiguration.StructuralReplication.PeerQuantum = 64;
+		std::unique_ptr<HeadlessRenderer> ClientRenderer;
+		std::unique_ptr<Engine> ClientRuntime;
+		GameSession Server(Network->CreateTransport(), ServerConfiguration, &Runtime);
+		GameSession Client(Network->CreateTransport(), Configuration(GameSessionRole::Client, "character-retirement"));
+		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "retirement regression sessions start");
+		std::uint64_t Tick = 1;
+		auto Step = [&] {
+			Advance(Network, Server, Client, Tick++);
+			if (!ClientRuntime && Client.GetClientDataModel()) {
+				ClientRenderer = std::make_unique<HeadlessRenderer>(Vector2(64, 64));
+				ClientRuntime = std::make_unique<Engine>(Client.GetClientDataModel(), ClientRenderer.get(), nullptr,
+					EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+				Check(Client.AttachClientRuntime(*ClientRuntime), "retirement client runtime attaches");
+			}
+		};
+		for (int Index = 0; Index < 60; ++Index) Step();
+		const auto Players = Runtime.Players->GetPlayers();
+		if (Players.size() == 1 && Players.front()->GetCharacter() && ClientRuntime) {
+			auto CharacterValue = *Players.front()->GetCharacter();
+			const auto OldId = CharacterValue->GetObjectId();
+			for (int Index = 0; Index < 40; ++Index) {
+				auto Child = std::make_shared<Folder>();
+				Child->SetName("RetirementChild" + std::to_string(Index));
+				Child->SetParent(CharacterValue);
+			}
+			for (int Index = 0; Index < 30; ++Index) Step();
+			const auto Local = ClientRuntime->Players->GetLocalPlayer();
+			const auto Previous = Local && (*Local)->GetCharacter() ? *(*Local)->GetCharacter() : nullptr;
+			Check(Previous && Previous->GetDescendants().size() >= 40,
+				"retirement regression materializes a dependency group within the per-peer structural cap");
+			const auto RevokesBefore = Server.GetMetrics().CharacterControlRevocations;
+			RetirementEvidenceCapture RetirementTrace;
+			Players.front()->RemoveCharacter();
+			for (int Index = 0; Index < 30 && Client.GetStatus() != GameSessionStatus::Failed; ++Index) Step();
+			std::cout << "[Network:RetirementTest] ready=" << (Client.GetStatus() == GameSessionStatus::Ready)
+				<< " localCharacter=" << (Local && (*Local)->GetCharacter().has_value())
+				<< " previousDestroyed=" << (Previous && Previous->GetDestroyed())
+				<< " oldServerRegistered=" << static_cast<bool>(ObjectRegistry::Get().Lookup(OldId))
+				<< " revokes=" << Server.GetMetrics().CharacterControlRevocations - RevokesBefore
+				<< " failure=" << Client.GetFailure() << '\n';
+			Check(Client.GetStatus() == GameSessionStatus::Ready && Local && !(*Local)->GetCharacter() &&
+				Previous && Previous->GetDestroyed() && !ObjectRegistry::Get().Lookup(OldId) &&
+				Server.GetMetrics().CharacterControlRevocations == RevokesBefore + 1,
+				"relationship-driven recursive destruction and later bounded Leave frames retire each registry only once");
+			const auto OldRetirements = std::count_if(RetirementTrace.Records.begin(),
+				RetirementTrace.Records.begin() + RetirementTrace.Count, [&](const auto &Record) {
+					return Record.Object == OldId;
+				});
+			Check(!RetirementTrace.Overflow && OldRetirements == 1 &&
+				std::any_of(RetirementTrace.Records.begin(),
+					RetirementTrace.Records.begin() + RetirementTrace.Count, [&](const auto &Record) {
+						return Record.Object == OldId && Record.Connection.IsValid() && Record.Tick > 0 &&
+							Record.Sequence == 0;
+					}),
+				"accepted GRPL destroy retires the exact old recipient/Character generation once");
+			if (Client.GetStatus() != GameSessionStatus::Failed) {
+				Players.front()->LoadCharacter();
+				for (int Index = 0; Index < 30; ++Index) Step();
+				Check(Client.GetStatus() == GameSessionStatus::Ready && Local && (*Local)->GetCharacter() &&
+					*(*Local)->GetCharacter() != Previous && Players.front()->GetCharacter() &&
+					(*Players.front()->GetCharacter())->GetObjectId() != OldId,
+					"fresh Character materializes after delayed old-lifetime retirement");
+				if (Players.front()->GetCharacter()) {
+					const auto NewId = (*Players.front()->GetCharacter())->GetObjectId();
+					Check(std::none_of(RetirementTrace.Records.begin(),
+						RetirementTrace.Records.begin() + RetirementTrace.Count, [&](const auto &Record) {
+							return Record.Object == NewId;
+						}), "old-generation GRPL destroy never retires the new Character identity");
+				}
+			}
+		} else Check(false, "retirement regression establishes a Player and Character");
+		Client.Stop();
+		Server.Stop();
+		if (ClientRuntime) ClientRuntime->Destroy();
+		Runtime.Destroy();
+	}
+
+	void TestSpeculativeRelevanceMaterialization() {
+		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+		auto World = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(64, 64));
+		Engine Runtime(World, &Renderer, nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+		Runtime.ProcessService->Alive = true;
+		auto Npc = std::make_shared<KinematicCharacter>();
+		auto Root = std::make_shared<Part>();
+		Root->SetAnchored(true);
+		Root->SetParent(Npc);
+		Npc->SetRootPart(Root);
+		Npc->SetParent(Runtime.Workspace);
+		for (int Index = 0; Index < 96; ++Index) {
+			auto Child = std::make_shared<Folder>();
+			Child->SetName("PlanningWork" + std::to_string(Index));
+			Child->SetParent(Npc);
+		}
+		auto Settings = Configuration(GameSessionRole::Server, "speculative-relevance");
+		auto Ground = std::make_shared<Part>();
+		Ground->SetAnchored(true);
+		Ground->SetSize({1024, 1, 1024});
+		Ground->SetParent(Runtime.Workspace);
+		// Real bounded planning intentionally spans more than one server step.
+		// Relevance can reverse before a planned Leave has ever been accepted.
+		Settings.StructuralReplication.PlanningWorkPerTick = 64;
+		Settings.StructuralReplication.PlanningPeerQuantum = 64;
+		Settings.HandshakeTimeoutTicks = 600;
+		GameSession Server(Network->CreateTransport(), Settings, &Runtime);
+		GameSession Client(Network->CreateTransport(), Configuration(GameSessionRole::Client, "speculative-relevance"));
+		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "speculative relevance sessions start");
+		std::unique_ptr<HeadlessRenderer> ClientRenderer;
+		std::unique_ptr<Engine> ClientRuntime;
+		std::uint64_t Tick = 1;
+		auto Step = [&] {
+			Advance(Network, Server, Client, Tick++);
+			if (!ClientRuntime && Client.GetClientDataModel()) {
+				ClientRenderer = std::make_unique<HeadlessRenderer>(Vector2(64, 64));
+				ClientRuntime = std::make_unique<Engine>(Client.GetClientDataModel(), ClientRenderer.get(), nullptr,
+					EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+				ClientRuntime->ProcessService->Alive = true;
+				Check(Client.AttachClientRuntime(*ClientRuntime), "speculative relevance client attaches");
+			}
+			if (ClientRuntime) ClientRuntime->Step();
+			Runtime.Step();
+		};
+		for (int Index = 0; Index < 500; ++Index) Step();
+		std::cout << "[Network:SpeculativeRelevance] ready=" << Server.GetMetrics().ReadyPeers
+			<< " materialized=" << Server.GetMetrics().MaterializedCharacters
+			<< " server_failure=" << Server.GetFailure() << " client_failure=" << Client.GetFailure() << '\n';
+		const auto Identities = Server.GetPeerIdentities();
+		if (Identities.size() == 1 && ClientRuntime && Server.GetMetrics().MaterializedCharacters >= 2) {
+			const auto Connection = Identities.front().Connection;
+			const auto Before = Server.GetMetrics().MaterializedCharacters;
+			const auto BeforeOverflows = Client.GetMetrics().ClientCharacterHistoryOverflows;
+			const auto BeforeBytes = Client.GetMetrics().ClientStructuralBytesReceived;
+			const std::array Far{glm::vec3{10000, 0, 0}};
+			Check(Server.SetTrustedReplicationFocus(Connection, Far), "far trusted focus is accepted");
+			Step();
+			std::cout << "[Network:SpeculativeRelevance] before=" << Before
+				<< " after=" << Server.GetMetrics().MaterializedCharacters
+				<< " bytes=" << Client.GetMetrics().ClientStructuralBytesReceived - BeforeBytes << '\n';
+			Check(Server.GetMetrics().MaterializedCharacters == Before,
+				"an unaccepted speculative Leave cannot retire a committed Character materialization");
+			const std::array Near{glm::vec3{0, 0, 0}};
+			Check(Server.SetTrustedReplicationFocus(Connection, Near), "near trusted focus cancels the speculative Leave");
+			for (int Index = 0; Index < 500; ++Index) Step();
+			const auto StaleBefore = Client.GetMetrics().ClientCharacterStaleStatesDropped;
+			for (int Index = 0; Index < 30; ++Index) Step();
+			std::cout << "[Network:SpeculativeRelevance] stale_delta="
+				<< Client.GetMetrics().ClientCharacterStaleStatesDropped - StaleBefore
+				<< " history_overflows=" << Client.GetMetrics().ClientCharacterHistoryOverflows
+				<< " expected_epoch=" << Client.GetMetrics().ClientLastExpectedMaterializationEpoch
+				<< " received_epoch=" << Client.GetMetrics().ClientLastReceivedMaterializationEpoch << '\n';
+			Check(Server.GetMetrics().MaterializedCharacters == Before &&
+				Client.GetMetrics().ClientCharacterStaleStatesDropped == StaleBefore &&
+				Client.GetMetrics().ClientCharacterHistoryOverflows == BeforeOverflows,
+				"Leave cancellation preserves the shared GCHR epoch and ongoing owner state service");
+			Check(detail::GameSessionTestAccess::RequestClientCharacterAction(Client, 1, Tick) &&
+				Client.GetMetrics().ClientActionSubmissionSuspended == 0,
+				"speculative Leave cancellation cannot suspend a locally valid owner action request");
+			for (int Index = 0; Index < 8; ++Index) {
+				Check(Server.SetTrustedReplicationFocus(Connection, Far), "oscillating far focus is accepted");
+				Step();
+				Check(Server.SetTrustedReplicationFocus(Connection, Near), "oscillating near focus is accepted");
+				Step();
+			}
+			for (int Index = 0; Index < 100; ++Index) Step();
+			const auto OscillationStale = Client.GetMetrics().ClientCharacterStaleStatesDropped;
+			for (int Index = 0; Index < 30; ++Index) Step();
+			Check(Server.GetMetrics().MaterializedCharacters == Before &&
+				Client.GetMetrics().ClientCharacterStaleStatesDropped == OscillationStale,
+				"repeated unaccepted relevance reversals cannot accumulate materialization epochs");
+			Check(Server.SetTrustedReplicationFocus(Connection, Far), "lasting far focus is accepted");
+			for (int Index = 0; Index < 500; ++Index) Step();
+			Check(Server.GetMetrics().MaterializedCharacters == Before - 1,
+				"an actually accepted structural Leave still retires the NPC publication lifetime");
+			Check(Server.SetTrustedReplicationFocus(Connection, Near), "lasting near focus is accepted");
+			for (int Index = 0; Index < 500; ++Index) Step();
+			const auto ReentryStale = Client.GetMetrics().ClientCharacterStaleStatesDropped;
+			for (int Index = 0; Index < 30; ++Index) Step();
+			Check(Server.GetMetrics().MaterializedCharacters == Before &&
+				Client.GetMetrics().ClientCharacterStaleStatesDropped == ReentryStale,
+				"accepted Leave and fresh Enter maintain matching GCHR materialization epochs");
+		} else Check(false, "speculative relevance fixture materializes both owner and NPC");
+		Client.Stop();
+		Server.Stop();
+		if (ClientRuntime) ClientRuntime->Destroy();
+		Runtime.Destroy();
 	}
 
 	void TestServerCharacterAutoLoadsPolicy() {
@@ -1422,9 +2430,108 @@ end)
 	}
 }
 
-int main() {
+int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--relevance-materialization") {
+			TestSpeculativeRelevanceMaterialization();
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--farm-publication-overhead") {
+			constexpr int Samples = 500'000;
+			const auto Sample = [] {
+				for (int Index = 0; Index < Samples; ++Index)
+					runtime_detail::RecordPublicationLatency({.Stage = "CharacterDue", .Connection = {1, 1},
+						.Object = {9, 1}, .Tick = static_cast<std::uint64_t>(Index), .Due = 1, .Kind = 5});
+			};
+			const auto OffBegin = std::chrono::steady_clock::now();
+			Sample();
+			const auto OffEnd = std::chrono::steady_clock::now();
+			const auto Directory = std::filesystem::temp_directory_path() /
+				("farm-publication-overhead-" + std::to_string(
+					std::chrono::steady_clock::now().time_since_epoch().count()));
+			std::filesystem::create_directory(Directory);
+			const auto Path = Directory / "publication-service.bin";
+			std::chrono::steady_clock::time_point OnBegin, OnEnd;
+			{
+				host::detail::FarmPublicationEvidence Evidence(true, "overhead", -1, 0, Path);
+				OnBegin = std::chrono::steady_clock::now();
+				Sample();
+				OnEnd = std::chrono::steady_clock::now();
+				if (Evidence.Count() != Samples) throw std::runtime_error("farm publication overhead sample lost records");
+			}
+			std::filesystem::remove(Path);
+			CharacterStateFrame Frame{.ServerTick = 31, .FrameSequence = CharacterStateFrameSequence{1},
+				.StateCount = 8};
+			for (int Index = 0; Index < 8; ++Index)
+				Frame.States[Index] = CharacterAuthoritativeState{.Character = {static_cast<std::uint32_t>(9 + Index), 1},
+					.ControlEpoch = CharacterControlEpoch{7}, .StateSequence = RealtimeStateSequence{12},
+					.AuthoritativeTick = 31};
+			const auto Packet = EncodeCharacterMessage(Frame);
+			if (!Packet) throw std::runtime_error("farm publication packet benchmark fixture is invalid");
+			constexpr int Packets = 100'000;
+			const auto PacketSample = [&] {
+				for (int Index = 0; Index < Packets; ++Index)
+					runtime_detail::RecordPublicationPacket("SchedulerAccepted", {1, 1}, *Packet);
+			};
+			const auto PacketOffBegin = std::chrono::steady_clock::now();
+			PacketSample();
+			const auto PacketOffEnd = std::chrono::steady_clock::now();
+			std::chrono::steady_clock::time_point PacketOnBegin, PacketOnEnd;
+			{
+				host::detail::FarmPublicationEvidence Evidence(true, "overhead", -1, 0, Path);
+				PacketOnBegin = std::chrono::steady_clock::now();
+				PacketSample();
+				PacketOnEnd = std::chrono::steady_clock::now();
+				if (Evidence.Count() != Packets * 8)
+					throw std::runtime_error("farm publication packet sample lost records");
+			}
+			std::filesystem::remove(Path);
+			std::filesystem::remove(Directory);
+			const auto OffNs = std::chrono::duration_cast<std::chrono::nanoseconds>(OffEnd - OffBegin).count();
+			const auto OnNs = std::chrono::duration_cast<std::chrono::nanoseconds>(OnEnd - OnBegin).count();
+			std::cout << "[Qualification:Publication] benchmark_samples=" << Samples
+				<< " off_ns_per_event=" << double(OffNs) / Samples
+				<< " on_ns_per_event=" << double(OnNs) / Samples
+				<< " packet_states=8 packet_samples=" << Packets
+				<< " packet_off_ns=" << double(std::chrono::duration_cast<std::chrono::nanoseconds>(
+					PacketOffEnd - PacketOffBegin).count()) / Packets
+				<< " packet_on_ns=" << double(std::chrono::duration_cast<std::chrono::nanoseconds>(
+					PacketOnEnd - PacketOnBegin).count()) / Packets << '\n';
+			return 0;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--character-retirement") {
+			TestCharacterRetirementAcrossStructuralFrames();
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--control-rebind") {
+			TestProductionLifecycleComposition(false, false, true);
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--scale-counter") {
+			TestPhysicalScaleCounterDecoding();
+			TestRecoveryConvergenceBound();
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--late-handoff") {
+			TestProductionLifecycleComposition(true);
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--byte-admission") {
+			TestRejectedStructuralAdmissionIsPeerTerminal(true);
+			TestProductionLifecycleComposition(true, true);
+			TestProductionLifecycleComposition(false, true);
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount != 1) throw std::invalid_argument("Unknown game-session test selection");
+		TestGroundedNetworkLocomotion();
+		TestPhysicalScaleCounterDecoding();
+		TestRecoveryConvergenceBound();
+		TestPublicationLatencyBounds();
+		TestFarmPublicationEvidence();
+		TestFarmF1Evidence();
+		TestFarmServiceTimingEvidence();
+		TestFarmOrdinaryEvidence();
 		TestProtocolBounds();
 		TestServerSessionSignalLifetime();
 		TestSessionOwnershipAndEndpointPolicy();
@@ -1434,11 +2541,17 @@ int main() {
 		TestSpoofedReadyPlayerRejection();
 		TestBurstAdmissionKeepsJournalCursorsCurrent();
 		TestRejectedStructuralAdmissionIsPeerTerminal();
+		TestRejectedStructuralAdmissionIsPeerTerminal(true);
+		TestProductionLifecycleComposition(true, true);
+		TestProductionLifecycleComposition(false, true);
 		TestAcceptedConnectionChurn();
 		for (int Cycle = 0; Cycle < 100; ++Cycle)
 			TestProductionLifecycleComposition();
 		TestTwoClientIdentityAndControlIsolation();
+		TestProductionLifecycleComposition(false, false, true);
+		TestCharacterRetirementAcrossStructuralFrames();
 		TestServerCharacterAutoLoadsPolicy();
+		TestSpeculativeRelevanceMaterialization();
 	} catch (const std::exception &Error) {
 		std::cerr << "Unexpected game-session test exception: " << Error.what() << '\n';
 		++Failures;

@@ -1,0 +1,25 @@
+{
+  "SchemaId": "gargantuan.thirty-two-client-farm-control",
+  "SchemaVersion": 1,
+  "Roles": {
+    "SERVER": ["farm.server-launch.v1", "farm.server-ready.v1", "farm.server-progress.v1", "farm.server-result.v1"],
+    "CLIENT": ["farm.client-launch.v1", "farm.client-ready.v1", "farm.client-progress.v1", "farm.client-result.v1"]
+  },
+  "States": ["staged", "server-launched", "server-ready", "clients-launched", "producer-ready", "server-progress-1", "client-progress-1", "server-progress-2", "client-progress-2", "server-result", "complete"],
+  "Transitions": [
+    {"From": "staged", "To": "server-launched", "Role": "SERVER", "Capability": "farm.server-launch.v1", "Response": "LIVE", "Parameters": [], "Timeout": 20},
+    {"From": "server-launched", "To": "server-ready", "Role": "SERVER", "Capability": "farm.server-ready.v1", "Response": "LIVE", "Parameters": [], "Timeout": 75},
+    {"From": "server-ready", "To": "clients-launched", "Role": "CLIENT", "Capability": "farm.client-launch.v1", "Response": "LIVE", "Parameters": [], "Timeout": 20},
+    {"From": "clients-launched", "To": "producer-ready", "Role": "CLIENT", "Capability": "farm.client-ready.v1", "Response": "LIVE", "Parameters": [], "Timeout": 90},
+    {"From": "producer-ready", "To": "server-progress-1", "Role": "SERVER", "Capability": "farm.server-progress.v1", "Response": "LIVE", "Parameters": [], "Timeout": 60},
+    {"From": "server-progress-1", "To": "client-progress-1", "Role": "CLIENT", "Capability": "farm.client-progress.v1", "Response": "LIVE", "Parameters": [], "Timeout": 60},
+    {"From": "client-progress-1", "To": "server-progress-2", "Role": "SERVER", "Capability": "farm.server-progress.v1", "Response": "LIVE", "Parameters": [], "Timeout": 60},
+    {"From": "server-progress-2", "To": "client-progress-2", "Role": "CLIENT", "Capability": "farm.client-progress.v1", "Response": "LIVE", "Parameters": [], "Timeout": 60},
+    {"From": "client-progress-2", "To": "server-result", "Role": "SERVER", "Capability": "farm.server-result.v1", "Response": "RESULT", "Parameters": [], "Timeout": 90},
+    {"From": "server-result", "To": "complete", "Role": "CLIENT", "Capability": "farm.client-result.v1", "Response": "RESULT", "Parameters": [], "Timeout": 90}
+  ],
+  "Parameters": {},
+  "RegistrationTimeout": 180,
+  "ExecutionTimeout": 540,
+  "Abort": "local-cleanup"
+}

@@ -3,8 +3,11 @@
 #include "gargantuan/content/ContentAvailability.hpp"
 
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace gargantuan::host {
@@ -24,6 +27,19 @@ namespace gargantuan::host {
 		std::chrono::milliseconds RequestDeadline{10'000};
 	};
 
+	// Snapshot from a successful authenticated RPC over this provider's pinned
+	// gRPC TLS channel. ContentAvailability separately validates this manifest
+	// against the package digest before the ServerHost publishes farm evidence.
+	struct NodeAuthenticatedManifestEvidence final {
+		std::string RequestId;
+		PackageContentNamespace Package;
+		AssetContentId RootCertificateDigest;
+		AssetContentId ManifestDigest;
+		std::size_t ManifestBytes = 0;
+		std::uint64_t SuccessfulRequests = 0;
+		bool TlsChannelConnected = false;
+	};
+
 	class NodeContentProvider final : public IContentAvailabilityProvider {
 	  public:
 		struct Impl;
@@ -37,6 +53,7 @@ namespace gargantuan::host {
 		GetManifest(const ContentRequestContext &Context, const PackageContentNamespace &Package) override;
 		[[nodiscard]] ContentPayloadProviderResult
 		GetContent(const ContentRequestContext &Context, const PackageContentIdentity &Identity) override;
+		[[nodiscard]] std::optional<NodeAuthenticatedManifestEvidence> GetAuthenticatedManifestEvidence() const;
 
 	  private:
 		std::unique_ptr<Impl> State;

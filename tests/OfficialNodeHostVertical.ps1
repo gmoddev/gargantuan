@@ -9,8 +9,13 @@ param(
 	[string]$NodeEndpoint,
 	[string]$RootCertificateFile,
 	[int]$RemoteFunctionCallCount = 5,
+	# Trusted test harness only. Production rates enter through ServerHost CLI,
+	# not content, client scripts, or a backend-global environment override.
+	[UInt64]$ReliableRate = [UInt64]$env:GARGANTUAN_TEST_RELIABLE_RATE,
+	[ValidateSet(0, 16384)][int]$QualifiedRpcFrameBytes = [int]$env:GARGANTUAN_TEST_QUALIFIED_RPC_FRAME_BYTES,
 	[ValidateRange(0, 512)][int]$ContentObjectCount = 0,
 	[ValidateRange(0, 1536)][int]$ContentNamePadding = 0,
+	[ValidateSet('representative', 'lightweight', 'property-heavy')][string]$ContentShape = 'representative',
 	[ValidateRange(1, 10000)][int]$ChurnCycles = 1000,
 	[switch]$ServerOnlyChurn,
 	[ValidateRange(0, 65535)][int]$LifecycleGamePort = 0,
@@ -23,6 +28,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$ReliableArguments = @()
+if ($ReliableRate -ne 0) {
+	$ReliableArguments = @('--reliable-rate', [string]$ReliableRate,
+		'--reliable-aggregate-rate', [string]$ReliableRate, '--reliable-peers', '1')
+}
 
 function Require-Value {
 	param([string]$Name, [string]$Value)
@@ -101,10 +111,12 @@ function Complete-RuntimeProcess {
 	param(
 		[Parameter(Mandatory = $true)]$Process,
 		[Parameter(Mandatory = $true)][string]$Label,
-		[int]$TimeoutMilliseconds = 30000
+		[int]$TimeoutMilliseconds = 30000,
+		$OutputRead = $null,
+		$ErrorRead = $null
 	)
-	$OutputRead = $Process.StandardOutput.ReadToEndAsync()
-	$ErrorRead = $Process.StandardError.ReadToEndAsync()
+	if ($null -eq $OutputRead) { $OutputRead = $Process.StandardOutput.ReadToEndAsync() }
+	if ($null -eq $ErrorRead) { $ErrorRead = $Process.StandardError.ReadToEndAsync() }
 	if (-not $Process.WaitForExit($TimeoutMilliseconds)) {
 		Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
 		throw "$Label timed out"
@@ -166,6 +178,7 @@ if ($Mode -eq 'Prepare') {
 		$WorkspaceNode = $ProjectDocument.Children | Where-Object Name -eq 'Workspace'
 		$CourseNode = $WorkspaceNode.Children | Where-Object Name -eq 'CollectionCourse'
 		$GroundNode = $CourseNode.Children | Where-Object Name -eq 'Ground'
+		if ($ContentShape -eq 'lightweight') { $CourseNode.Children = @($GroundNode) }
 		$CurrentCount = Get-DocumentObjectCount -Node $CourseNode
 		if (-not $GroundNode -or $CurrentCount -gt $ContentObjectCount) { throw 'Invalid content memory profile' }
 		while ($CurrentCount -lt $ContentObjectCount) {
@@ -177,10 +190,17 @@ if ($Mode -eq 'Prepare') {
 			$Part.Properties.CFrame.CFrame[0] = $CurrentCount % 32
 			$Part.Properties.CFrame.CFrame[1] = 2
 			$Part.Properties.CFrame.CFrame[2] = [math]::Floor($CurrentCount / 32)
+			if ($ContentShape -eq 'property-heavy') {
+				$Part.Attributes | Add-Member -NotePropertyName 'MemoryPayload' -NotePropertyValue ([pscustomobject]@{ Type = 'String'; Value = ('v' * 1400) })
+				$Part.Attributes | Add-Member -NotePropertyName 'MemoryCounter' -NotePropertyValue ([pscustomobject]@{ Type = 'Int'; Value = $CurrentCount })
+			}
 			$CourseNode.Children = @($CourseNode.Children) + @($Part)
 			$CurrentCount++
 		}
 	}
+	$ContentWorkspace = $ProjectDocument.Children | Where-Object Name -eq 'Workspace'
+	$ContentRegion = $ContentWorkspace.Children | Where-Object Name -eq 'CollectionCourse'
+	$ExpectedContentObjects = Get-DocumentObjectCount -Node $ContentRegion
 	$GameScripts = $ProjectDocument.Children | Where-Object {
 		$_.Name -eq 'GameScripts' -and $_.ClassName -eq 'Folder'
 	} | Select-Object -First 1
@@ -235,13 +255,22 @@ end
 Players.PlayerAdded:Connect(PreparePlayer)
 for _, Player in Players:GetPlayers() do PreparePlayer(Player) end
 
-Event.OnServerEvent:Connect(function(Peer, Message)
+Event.OnServerEvent:Connect(function(Peer, Message, Sequence)
+	if Message == "materialization-probe" then
+		Event:FireClient(Peer.Slot, Peer.Generation, Message, Sequence)
+		return
+	end
 	if type(Peer) == "table" and type(Message) == "string" then PendingAttributes[Message] = true end
 end)
+local RpcTraceCount = 0
 Function:SetServerHandler(function(Peer, Message)
 	if type(Peer) == "table" and Message == "node-content-ping" then
+		RpcTraceCount += 1
+		if RpcTraceCount <= 100 then
+			print(string.format("[Content:RpcServer] index=%d handler_us=%.0f", RpcTraceCount, os.clock() * 1000000))
+		end
 		PendingAttributes.RemoteFunctionObserved = true
-		return "node-content-pong"
+		return "node-content-pong", os.clock()
 	end
 	return "rejected"
 end)
@@ -296,6 +325,45 @@ local EvictedVisibleUs = 0
 local ReloadVisibleUs = 0
 local BeforeContentEventSent = false
 local TimelinePublished = false
+local ExpectedContentObjects = __EXPECTED_CONTENT_OBJECTS__
+local PropertyHeavy = __PROPERTY_HEAVY__
+local FirstRegion = nil
+local FirstGround = nil
+local EventSequence = 0
+local EventPendingAt = nil
+local EventSamples = {}
+local EventTicks = 0
+local EventMetricsPublished = false
+local LastEventAck = nil
+local MaximumEventAckGap = 0
+Event.OnClientEvent:Connect(function(Message, Sequence)
+	if Message ~= "materialization-probe" or Sequence ~= EventSequence or not EventPendingAt then return end
+	local Now = os.clock()
+	if #EventSamples < 2048 then table.insert(EventSamples, (Now - EventPendingAt) * 1000000) end
+	if LastEventAck then MaximumEventAckGap = math.max(MaximumEventAckGap, (Now - LastEventAck) * 1000000) end
+	LastEventAck = Now
+	EventPendingAt = nil
+end)
+local function ContentComplete(Region)
+	if not Region then return false end
+	local Descendants = Region:GetDescendants()
+	if #Descendants + 1 ~= ExpectedContentObjects then return false end
+	local Ground = Region:FindFirstChild("Ground", false)
+	if not Ground or not Ground:IsA("Part") or not Ground.Anchored or Ground.Size ~= Vector3.new(32, 1, 32) then return false end
+	for _, Object in Descendants do
+		local Index = tonumber(string.match(Object.Name, "^MemoryPart(%d+)"))
+		if Index then
+			assert(Object:IsA("Part") and Object.Parent == Region and Object.Anchored)
+			assert(not Object.CanCollide and not Object.CanTouch and Object.Size == Vector3.new(2, 1, 3))
+			assert(Object.Position == Vector3.new(Index % 32, 2, math.floor(Index / 32)))
+			if PropertyHeavy then
+				assert(Object:GetAttribute("MemoryPayload") == string.rep("v", 1400))
+				assert(Object:GetAttribute("MemoryCounter") == Index)
+			end
+		end
+	end
+	return true
+end
 local function ElapsedUs()
 	return (os.clock() - ClientStartedAt) * 1000000
 end
@@ -311,6 +379,12 @@ RunService.PostSimulation:Connect(function()
 	local Character = LocalPlayer and LocalPlayer.Character
 	if Character == nil then return end
 	if CharacterReadyUs == 0 then CharacterReadyUs = ElapsedUs() end
+	EventTicks += 1
+	if EventTicks % 4 == 1 and not EventPendingAt then
+		EventSequence += 1
+		EventPendingAt = os.clock()
+		Event:FireServer("materialization-probe", EventSequence)
+	end
 	if not BeforeContentEventSent then
 		BeforeContentEventSent = true
 		Event:FireServer("BeforeContentEventObserved")
@@ -330,7 +404,7 @@ RunService.PostSimulation:Connect(function()
 			local Errors = 0
 			for _ = 1, 5 do
 				local StartedAt = os.clock()
-				local Invoked, Result = pcall(function()
+				local Invoked, Result, Status = pcall(function()
 					return Function:InvokeServerWithTimeout(5, "node-content-ping")
 				end)
 				if not Invoked then
@@ -338,8 +412,13 @@ RunService.PostSimulation:Connect(function()
 					if type(Result) == "string" and string.find(Result, "timeout", 1, true) then Timeouts += 1 end
 				elseif Result ~= "node-content-pong" then
 					Errors += 1
+					if Result == nil and Status == "timeout" then Timeouts += 1 end
 				end
 				local Elapsed = (os.clock() - StartedAt) * 1000000
+				print(string.format("[Content:RpcClient] index=%d started_us=%.0f completed_us=%.0f elapsed_us=%.0f handler_us=%.0f ok=%s",
+					#Samples + 1, StartedAt * 1000000, os.clock() * 1000000, Elapsed,
+					type(Status) == "number" and Status * 1000000 or 0,
+					tostring(Invoked and Result == "node-content-pong")))
 				Total += Elapsed
 				table.insert(Samples, Elapsed)
 				task.wait()
@@ -363,19 +442,25 @@ RunService.PostSimulation:Connect(function()
 		Stage = 1
 	elseif Stage == 1 and Region then
 		local Ground = Region:FindFirstChild("Ground", false)
-		if Ground and Ground:IsA("Part") and Ground.Anchored and Ground.Size == Vector3.new(32, 1, 32) then
+		if ContentComplete(Region) then
+			FirstRegion = Region
+			FirstGround = Ground
 			FirstVisibleUs = ElapsedUs()
+			print(string.format("[Content:ClientPhase] phase=full objects=%d elapsed_us=%.0f", ExpectedContentObjects, FirstVisibleUs))
 			Event:FireServer("ContentResidentObserved")
 			Stage = 2
 		end
 	elseif Stage == 2 and Region == nil then
 		EvictedVisibleUs = ElapsedUs()
+		print(string.format("[Content:ClientPhase] phase=evicted elapsed_us=%.0f", EvictedVisibleUs))
 		Event:FireServer("ContentEvictedObserved")
 		Stage = 3
 	elseif Stage == 3 and Region then
 		local Ground = Region:FindFirstChild("Ground", false)
-		if Ground and Ground:IsA("Part") and Ground.Anchored then
+		if ContentComplete(Region) then
+			assert(Region ~= FirstRegion and Ground ~= FirstGround, "reload reused an obsolete client lifetime")
 			ReloadVisibleUs = ElapsedUs()
+			print(string.format("[Content:ClientPhase] phase=reloaded objects=%d elapsed_us=%.0f", ExpectedContentObjects, ReloadVisibleUs))
 			Event:FireServer("ContentReloadedObserved")
 			Stage = 4
 		end
@@ -391,6 +476,18 @@ RunService.PostSimulation:Connect(function()
 	if Stage == 4 and FunctionComplete and Requested and Resolved and Ended and
 		Character:GetAttribute("PackageActionAuthorized") == true then Step = 1 end
 	CharacterControl:SetAttribute("SessionSmokeStep", Step)
+	-- Retain the event distribution even when a completed RPC reports a timeout.
+	-- Success still requires FunctionComplete and the original smoke gate below.
+	if not EventMetricsPublished and Stage == 4 and RemoteFunctionCompleteUs > 0 then
+		EventMetricsPublished = true
+		assert(#EventSamples > 0, "RemoteEvent acknowledgments never arrived")
+		table.sort(EventSamples)
+		local Total = 0
+		for _, Value in EventSamples do Total += Value end
+		local function EventPercentile(Fraction) return EventSamples[math.floor((#EventSamples - 1) * Fraction) + 1] end
+		print(string.format("[Content:OfficialEvent] samples=%d mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f max_us=%.0f max_ack_gap_us=%.0f",
+			#EventSamples, Total / #EventSamples, EventPercentile(0.50), EventPercentile(0.95), EventPercentile(0.99), EventSamples[#EventSamples], MaximumEventAckGap))
+	end
 	if Step == 1 then
 		if not TimelinePublished then
 			TimelinePublished = true
@@ -406,6 +503,20 @@ RunService.PostSimulation:Connect(function()
 end)
 '@
 	$ClientSource = $ClientSource.Replace('for _ = 1, 5 do', "for _ = 1, $RemoteFunctionCallCount do")
+	if ($QualifiedRpcFrameBytes -ne 0) {
+		# Exact GRMT frame sizes: request 52+5+string; response adds a double.
+		# Small Event probes remain at their existing cadence while upper-size
+		# RPCs are paced below the common 32 KiB/s budget in each direction.
+		$RequestExpression = 'string.rep("q", 16327)'
+		$ResponseExpression = 'string.rep("r", 16318)'
+		$ServerSource = $ServerSource.Replace('"node-content-ping"', $RequestExpression).Replace('"node-content-pong"', $ResponseExpression)
+		$ClientSource = $ClientSource.Replace('"node-content-ping"', $RequestExpression).Replace('"node-content-pong"', $ResponseExpression)
+		$ClientSource = $ClientSource.Replace('task.wait()', 'task.wait(1.25)')
+		$ClientSource = $ClientSource.Replace('table.sort(Samples)', 'assert(Errors == 0 and Timeouts == 0, "qualified RPC failed"); table.sort(Samples)')
+		$ClientSource = $ClientSource.Replace('print(MetricsText)', 'assert(Percentile(95) <= 150000 and Percentile(99) <= 250000 and Samples[#Samples] <= 500000, "qualified RPC latency gate failed"); print(MetricsText)')
+	}
+	$ClientSource = $ClientSource.Replace('__EXPECTED_CONTENT_OBJECTS__', [string]$ExpectedContentObjects)
+	$ClientSource = $ClientSource.Replace('__PROPERTY_HEAVY__', ($ContentShape -eq 'property-heavy').ToString().ToLowerInvariant())
 	$ServerScript = Copy-ScriptTemplate -Template $ScriptTemplate -Name 'OfficialNodeHostServerProof' -RunContext 'Server' -Source $ServerSource
 	$ClientScript = Copy-ScriptTemplate -Template $ScriptTemplate -Name 'OfficialNodeHostClientProof' -RunContext 'Client' -Source $ClientSource
 	# Keep Remotes at the DataModel root, matching the retained healthy 3L.1
@@ -490,7 +601,7 @@ if ($Mode -eq 'Churn') {
 		$ServerProcess = Start-RuntimeProcess -Executable $Server -WorkingDirectory $Descriptor.ServerPackageRoot -Arguments (
 			$RoleArguments + @('--max-ticks', '300000',
 			'--content-residency', 'on-demand', '--content-lifecycle-smoke', $ContentKey,
-			'--content-churn-cycles', [string]$ChurnCycles) + $ProviderArguments)
+			'--content-churn-cycles', [string]$ChurnCycles) + $ProviderArguments + $ReliableArguments)
 		# Drain both pipes from launch: sustained lifecycle diagnostics must never
 		# turn a full redirected pipe into artificial Server backpressure.
 		$ServerOutput = $ServerProcess.StandardOutput.ReadToEndAsync()
@@ -503,7 +614,7 @@ if ($Mode -eq 'Churn') {
 				Threads = $ServerProcess.Threads.Count; Handles = $ServerProcess.HandleCount })
 			if (-not $ServerOnlyChurn -and -not $PlayerProcess -and $Watch.ElapsedMilliseconds -ge 2300) {
 				$PlayerProcess = Start-RuntimeProcess -Executable $Player -WorkingDirectory $Descriptor.PlayerPackageRoot -Arguments @(
-					'--headless', '--connect', $GameEndpoint, '--session-smoke', '--max-frames', '1800'
+					'--headless', '--connect', $GameEndpoint, '--session-smoke', '--max-frames', $(if ($QualifiedRpcFrameBytes) { '10000' } else { '1800' })
 				) -RemoveEnvironmentVariables $NodeSecretEnvironmentNames
 				$PlayerOutput = $PlayerProcess.StandardOutput.ReadToEndAsync()
 				$PlayerError = $PlayerProcess.StandardError.ReadToEndAsync()
@@ -578,12 +689,16 @@ if ($Mode -eq 'Node' -or $Mode -eq 'NodeCycle') {
 		$ServerArguments = @(
 			'--bind', $GameEndpoint, '--session-smoke', '--max-ticks', $ServerMaximumTicks,
 			'--content-lifecycle-smoke', $ContentKey
-		) + $NodeArguments
+		) + $NodeArguments + $ReliableArguments
 		$ServerProcess = Start-RuntimeProcess -Executable $Server -WorkingDirectory $Descriptor.ServerPackageRoot -Arguments $ServerArguments
+		# Keep diagnostics flowing while the peer runs; do not let redirected
+		# output stop the Server before the Player's handshake can be serviced.
+		$ServerOutputRead = $ServerProcess.StandardOutput.ReadToEndAsync()
+		$ServerErrorRead = $ServerProcess.StandardError.ReadToEndAsync()
 		Start-Sleep -Seconds 2
 		Start-Sleep -Milliseconds 300
 		if ($ServerProcess.HasExited) {
-			$Failed = Complete-RuntimeProcess -Process $ServerProcess -Label 'Node OnDemand Server'
+			$Failed = Complete-RuntimeProcess -Process $ServerProcess -Label 'Node OnDemand Server' -OutputRead $ServerOutputRead -ErrorRead $ServerErrorRead
 			throw "Node OnDemand Server stopped before Player startup ($($Failed.ExitCode))`n$($Failed.Output)"
 		}
 		$PlayerProcess = Start-RuntimeProcess -Executable $Player -WorkingDirectory $Descriptor.PlayerPackageRoot -Arguments @(
@@ -594,10 +709,10 @@ if ($Mode -eq 'Node' -or $Mode -eq 'NodeCycle') {
 			if (-not $ServerProcess.HasExited) {
 				Stop-Process -Id $ServerProcess.Id -Force -ErrorAction SilentlyContinue
 			}
-			$ServerFailure = Complete-RuntimeProcess -Process $ServerProcess -Label 'Official GargantuanServer failure readback'
+			$ServerFailure = Complete-RuntimeProcess -Process $ServerProcess -Label 'Official GargantuanServer failure readback' -OutputRead $ServerOutputRead -ErrorRead $ServerErrorRead
 			throw "Official GargantuanPlayer returned $($PlayerResult.ExitCode)`n$($PlayerResult.Output)`nSERVER:`n$($ServerFailure.Output)"
 		}
-		$ServerResult = Complete-RuntimeProcess -Process $ServerProcess -Label 'Official GargantuanServer' -TimeoutMilliseconds 30000
+		$ServerResult = Complete-RuntimeProcess -Process $ServerProcess -Label 'Official GargantuanServer' -TimeoutMilliseconds 30000 -OutputRead $ServerOutputRead -ErrorRead $ServerErrorRead
 		if ($ServerResult.ExitCode -ne 0) {
 			throw "Official GargantuanServer returned $($ServerResult.ExitCode)`n$($ServerResult.Output)"
 		}

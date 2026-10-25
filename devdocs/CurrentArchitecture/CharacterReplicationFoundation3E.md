@@ -53,6 +53,14 @@ position is the default focus.
 
 ## Policy and spatial lookup
 
+The measured [3L derivation slice](ReplicationDerivationAssessment3L.md) preserves
+these semantics while replacing duplicate root/projection lookups and per-candidate
+tree membership searches with a call-local ordered join. Every due evaluation
+still reads current positions and applies enter/leave hysteresis. Root membership
+revision alone is not sufficient to skip queries when other Characters move.
+Spatial queries remain Main-owned and mutate internal deduplication state; the
+assessment's pinned worker read boundary is a proposal, not current capability.
+
 Foundation 3H now supplies the renderer- and physics-independent canonical
 uniform region index behind this policy. A spatial root is a `Character`, or otherwise the nearest ancestor
 `BasePart`; its descendants share that root's membership. Objects without a
@@ -183,6 +191,12 @@ destruction retains tombstone structure only while a peer still knows the
 identity, allowing deterministic child-before-parent retirement without
 confusing unpublish with authoritative destruction.
 
+The later 3L.3 reclamation refinement retains that terminal structure through
+prepared/accepted identity leases and removes it with a bounded rotating sweep
+after the last owner releases it. This changes reclamation timing only, not
+Desired, Known, dependency closure or 3J acceptance; see
+[3L.3](ContentAvailabilityFoundation3L_3.md#implemented-ownership-proof).
+
 Off-interest journal records are skipped rather than queued. Reentry therefore
 publishes one fresh current snapshot and never replays the object's historical
 backlog. Native property changes in one journal batch coalesce to current state;
@@ -217,7 +231,13 @@ scheduler.
 On both endpoints, a Character shell enters GCHR publication,
 prediction/presentation only while both the shell and its `RootPart` are in the
 committed peer view. Leave clears prediction and interpolation; reentry starts
-a fresh presentation lifetime. Remotes still require structural
+a fresh presentation lifetime. A current relevance selection is not itself an
+accepted Leave: the server retains already materialized Characters until their
+root leaves committed knowledge. A cancelled pending Leave therefore cannot
+advance the server's materialization epoch without a matching client transition.
+The candidate scan unions the current typed spatial selection with the bounded
+previously materialized set; it does not scan all world Characters per peer.
+Remotes still require structural
 knowledge. The Remote manager's argument-materialization set is initialized
 from the accepted view and then advanced from the same structural frames on
 both endpoints, so an Instance argument may target a known replica but cannot

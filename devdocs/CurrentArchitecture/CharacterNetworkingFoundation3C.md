@@ -51,6 +51,13 @@ metrics, presentation update, compact codec, and `BasePart::GetRenderCFrame`
 surface are internal engine integration seams. Node, Studio, MCP, and Telemetry
 are unchanged.
 
+Client action-admission metrics distinguish absent control, suspended prediction,
+invalid local sequence/tick, full pending-action storage, and scheduler refusal
+from authoritative action-policy rejection. These bounded cumulative counters
+do not change admission or retry semantics. The physical farm prints them only
+when a producer phase fails, so local refusal cannot be misreported as a missing
+server action resolution.
+
 ## Why 3C exists
 
 The reproduced 3B state was one 112-byte state message per relevant Character

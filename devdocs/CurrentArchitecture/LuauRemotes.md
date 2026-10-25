@@ -332,6 +332,12 @@ decode does not make a client's claim trustworthy.
 
 ## Resource policy
 
+These are legal/resource ceilings, not a qualified latency workload. The
+[Foundation 3L gameplay contract assessment](ReliableGameplayWorkloadContract3L.md)
+distinguishes legal, qualified and overload traffic and records the missing
+product decisions for payloads, rates, bursts, concurrency and active-peer mix.
+It verifies existing RPC-count enforcement without reducing the limits below.
+
 The initial hard ceilings are intentionally small in number:
 
 | Resource | Ceiling |

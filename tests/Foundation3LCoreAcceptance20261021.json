@@ -1,0 +1,190 @@
+{
+  "Format": "GargantuanFoundation3LFinalAcceptance",
+  "Version": 2,
+  "Status": "PASS",
+  "SourceCommit": "b420a7fd1567632b376760e65fc71386c9bddcf4",
+  "Contract": "POOLED_CORRECTNESS_V1",
+  "Scope": "CORE_ENGINE_CORRECTNESS",
+  "CI": {
+    "State": "MEASURED_PASS",
+    "SourceCommit": "b420a7fd1567632b376760e65fc71386c9bddcf4",
+    "Contract": "POOLED_CORRECTNESS_V1",
+    "Jobs": [
+      {
+        "Name": "Windows x64 / MSVC 19.50+ / Release",
+        "RunId": 39537685852,
+        "Attempt": 1,
+        "Event": "workflow_dispatch",
+        "StartedUtc": "2026-10-21T03:16:44Z",
+        "CompletedUtc": "2026-10-21T04:14:02Z",
+        "ArtifactId": 12319114918,
+        "Tests": 97,
+        "ArchiveSha256": "1ea83158f9570ba8dfe38aa21ddde52f55d1b3e8eabb0b6868c6950db71e5f97",
+        "CompletedCorrectnessWorkloads": 5
+      },
+      {
+        "Name": "Ubuntu 24.04 / Clang 19 / ASan + UBSan / Headless",
+        "RunId": 39537685852,
+        "Attempt": 1,
+        "Event": "workflow_dispatch",
+        "StartedUtc": "2026-10-21T03:16:45Z",
+        "CompletedUtc": "2026-10-21T03:52:19Z",
+        "ArtifactId": 12318918882,
+        "Tests": 53,
+        "ArchiveSha256": "8dc824b6f86f1ab99a00c0f8dd1dc3a5ab7025b40164ce688dce6fe97f11bbd1"
+      },
+      {
+        "Name": "Ubuntu 24.04 / Clang 19 / ASan + UBSan + LSan / GNS",
+        "RunId": 39537688764,
+        "Attempt": 1,
+        "Event": "workflow_dispatch",
+        "StartedUtc": "2026-10-21T03:16:46Z",
+        "CompletedUtc": "2026-10-21T03:34:23Z",
+        "ArtifactId": 12318846048,
+        "Tests": 11,
+        "ArchiveSha256": "a028ba270206784e8f81e898cd33e9d7259f4b86d8dd4d6e27772e4058025889"
+      }
+    ],
+    "InventorySha256": "be050c699c0e9ecee90cfbbf71f3903d47cf4965d2e5ee780f7e7ff0da38cb34",
+    "InventoryVersion": 2
+  },
+  "KI006": "CLOSED",
+  "Foundation3L": "COMPLETE",
+  "Performance": "NONFATAL_DIAGNOSTICS_WITH_UNCHANGED_TARGETS",
+  "Deferred": [
+    "Local32 physical certification",
+    "real-TLS Node32 deployment/provider parity",
+    "physical resource/performance envelopes",
+    "future engine-level latency requalification"
+  ],
+  "ReleaseOrMergeAuthorized": false,
+  "AnalyzerProvenance": {
+    "Format": "GargantuanFoundation3LAnalyzerProvenance",
+    "Version": 1,
+    "ExecutionSourceCommit": "b420a7fd1567632b376760e65fc71386c9bddcf4",
+    "AnalyzerCommit": "70088e119e5f4f68cb030035d025d5068da63240",
+    "DescendsFromExecutionSource": true,
+    "Files": [
+      {
+        "Path": "tests/foundation3l_acceptance.py",
+        "Sha256": "3582b09c54cfb84c5b047265b72721e5ae09896229027e32a849d4b9a8cd71aa"
+      },
+      {
+        "Path": "tests/foundation3l_four_client.py",
+        "Sha256": "fba2e91123996ec959f6248fa94d4373aec489837fa95e7bfc7020f0cb571531"
+      },
+      {
+        "Path": "tests/PhysicalFarmAnalysisInventory.ps1",
+        "Sha256": "f90a8715e9a0f8633421c624d4351853c365f8edfdb5b47b0b48ffdd8bee1e78"
+      },
+      {
+        "Path": "tests/PhysicalGameSessionFarmAcceptance.ps1",
+        "Sha256": "19d4e61dcc15c5b5c7396754124756c230deb1e9ec6463631e584e7e350f6807"
+      },
+      {
+        "Path": "tests/PhysicalGameSessionFarmReconcile.ps1",
+        "Sha256": "2ccf1734d8e18372a9041e6f61ab50036d37b6e2137cb2f57bb79814cbc62c25"
+      },
+      {
+        "Path": "tests/PhysicalGameSessionFarm.ps1",
+        "Sha256": "48ab4f5ba6f0a827bc8a78d15c4e7f2e48941747165d27c0504a7e20de624ce9"
+      },
+      {
+        "Path": "tests/PhysicalGameSessionFarmEndpoint.ps1",
+        "Sha256": "4b7eb049e45f4351cfc3b50ce848c6c8efe5571a2520217e2cbae917ec209373"
+      },
+      {
+        "Path": "tests/PhysicalFarmPipeDrain.ps1",
+        "Sha256": "5f08e95a28bc5f26a7c0d4342769650e6543eb4b046168d73e5287a14dcecc92"
+      },
+      {
+        "Path": "tests/PhysicalGameSessionFarmNodeTls.ps1",
+        "Sha256": "9432c92cdadf7a0af54fc3acb69adf55c1687ffbf9b4cc994a67061c277f48d3"
+      },
+      {
+        "Path": "tests/AdmissionFairnessEvidence.ps1",
+        "Sha256": "9c279396977990488a294553b225c7f36fa0893e7bd24b45825616e702ae77b1"
+      },
+      {
+        "Path": "tests/RecoveryCausalEvidence.ps1",
+        "Sha256": "9757c1784946856a08732ed118a59566942d04f41fb61e921bff411eaa205eea"
+      },
+      {
+        "Path": "tests/PhysicalFarmPublicationEvidence.ps1",
+        "Sha256": "b27d10e34250fba502e00cf4dc77c59954b5f337e3947ac3989098f5e37ad7be"
+      },
+      {
+        "Path": "tests/PhysicalFarmClockEvidence.ps1",
+        "Sha256": "9dad0a16928579f569b7972d865e2b7f026919a3118ae708debdd03d089a9fb3"
+      },
+      {
+        "Path": "tests/PhysicalGameSessionFarmLifecycle.ps1",
+        "Sha256": "2f7699936014a0ebe069d2e4dc19705a1788c37163a24ac0701aa0387dce6b23"
+      },
+      {
+        "Path": "tests/PhysicalGameSessionFarmRemoteOwnership.ps1",
+        "Sha256": "f46a3886a8c7d0edb020d4bb7dd8bbfd4f5dc3c3dac93a154176628f8e710119"
+      },
+      {
+        "Path": "tests/PhysicalGameSessionFarmF1.ps1",
+        "Sha256": "571abf786aaedab8b905015a6360f0311c0024639b27a63901b17cc5ba3189b4"
+      },
+      {
+        "Path": "tests/PhysicalFarmNodeResources.ps1",
+        "Sha256": "c974bf67d48d490f735a049b4c117b02767481c84637484e0b4779b5bfbad2c5"
+      },
+      {
+        "Path": "tools/physical-qualifier/qualifier.py",
+        "Sha256": "2d4970f175ea77e56667b70afa8159d1a39dfeee818e2fae4e3f6bf85e1a4c77"
+      },
+      {
+        "Path": "tools/physical-qualifier/dependency.py",
+        "Sha256": "896cfe181d743d2e311e8da1160d3510623905219205f20aa68bc0c21737ad40"
+      },
+      {
+        "Path": "tools/physical-qualifier/upstream.lock.json",
+        "Sha256": "730af8d0a5cfa8a1735a3a80ca3dc050ca9a25fca246fb435ac387aa3b43f236"
+      },
+      {
+        "Path": "tools/physical-qualifier/f1_candidate_source.py",
+        "Sha256": "555e582df77c0f7dbb2ea9a70092e1a6092a6ffa45cf534ff5de143930b4592d"
+      },
+      {
+        "Path": "tools/physical-qualifier/workflows/four-client-phase1-lifecycle.json",
+        "Sha256": "aa23772cb7e8e1450dbb5958f433a790967ba0e146e135d4bb9488de5f0ff32b"
+      },
+      {
+        "Path": "tools/physical-qualifier/farm_publication_join.py",
+        "Sha256": "37c800c8663f6a7bcce2b49f723a813b079513d85cbe5219667e2cbedb2b5219"
+      },
+      {
+        "Path": "tools/physical-qualifier/farm_publication_trace.py",
+        "Sha256": "97e73711eb14fccc258900f7ce30203d7990715623cee40cdec5ecb082423e77"
+      },
+      {
+        "Path": "tools/physical-qualifier/farm_ordinary_demand.py",
+        "Sha256": "6ffadfdd133440cc2f3063330f0657d13ada095f99a1c6edfcc9d0151e60a8ea"
+      },
+      {
+        "Path": "tools/physical-qualifier/farm_clock_exchange.py",
+        "Sha256": "ebbf74c3fdb5f9fd114c6737a061390d5d7ac5223873f9b3574fd917573063d0"
+      },
+      {
+        "Path": "tools/physical-qualifier/farm_server_tick.py",
+        "Sha256": "6c416e9de11f67b6ecd2262eea42c916bb71b3122898c5b93f2774305fcefb2a"
+      },
+      {
+        "Path": "tools/physical-qualifier/farm_remote_cadence.py",
+        "Sha256": "89aa5b1638bb9b05877d16cb0c4b22c63a156087269594f06632d3a0c9b40513"
+      },
+      {
+        "Path": "tools/physical-qualifier/farm_capture_acceptance.py",
+        "Sha256": "75a212ad21913532e6983558cbb43a7b4f4366d65f008643da855703c0781db7"
+      },
+      {
+        "Path": "tools/physical-qualifier/farm_capture_directions.py",
+        "Sha256": "f169c4d39fe46bb2984e81ce6d99d810b88086714764dceba856712752fff83b"
+      }
+    ]
+  }
+}

@@ -53,6 +53,17 @@ Repeated or reentrant `Destroy` calls are no-ops. `Destroyed` is reflected as a
 read-only, non-editable property; scripts and ordinary native callers cannot
 move the lifecycle backwards.
 
+## Engine composition lifetime
+
+Engine constructor-body failure uses a local RAII construction lifetime to run
+normal Engine teardown before its initialized members are destroyed. This
+disconnects native world/descendant callbacks, stops content/provider workers,
+detaches runtime services, and clears script-owned handlers while their VM is
+alive. A world retained by the caller cannot retain callbacks into an Engine
+whose construction failed. Ordinary destruction remains idempotent. Hosts and
+fixtures must also keep the borrowed renderer alive until Engine destruction,
+and keep Engine alive until all borrowing GameSessions are destroyed.
+
 ## ObjectId semantics
 
 `ObjectId` is a pair of 32-bit values: a registry slot and its generation. It is
@@ -130,6 +141,12 @@ adopted subtree between DataModel scopes is rejected.
 
 Records remain an in-process prototype. Retention is bounded per scope and cursor reads
 detect eviction with `ResnapshotRequired`; the current default capacity is 16,384.
+Committed records are immutable and internally held by shared handles. `ReadPinned`
+captures a bounded sequence and its cursor under the journal lock, then lets the
+caller examine that stable snapshot without keeping the lock or copying payloads.
+Eviction, clear, and scope retirement drop journal ownership but cannot invalidate
+an active pinned read. The existing value-returning `Read` still returns independent
+record copies, with the same cursor and retention behavior.
 The process-global journal implements logical per-DataModel ownership. A
 DataModel's final shared-owner release retires only its own journal stream and
 render-dirty scope, including headless scopes without a renderer consumer.

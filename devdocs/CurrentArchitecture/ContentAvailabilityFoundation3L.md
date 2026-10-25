@@ -126,8 +126,10 @@ provider may use either mode when selected by trusted host composition.
 
 The compact states are `Unavailable`, `Requested`, `Acquiring`, `Available`,
 `Admitting`, `Resident`, `Evicting`, and `Failed`. Available means verified
-immutable bytes and a worker-validated parsed document are retained without a
-live Instance hierarchy. Resident means the detached hierarchy successfully
+immutable bytes are retained without a live Instance hierarchy. A worker-validated
+parsed document may also be retained within the decoded budget; under pressure or
+blocked dependencies it is released and later prepared again from verified cached
+bytes through the bounded worker path. Resident means the detached hierarchy successfully
 crossed the authoritative commit boundary. Peer structural convergence is later
 3J state and is never represented here.
 
@@ -264,8 +266,25 @@ prefixes; payloads, tokens, paths, and provider error internals are not emitted.
 A pending request retains fixed record/counter state and the manifest key; an
 in-flight request retains its exact identity/context. A completed or cached unit
 retains at most its bounded immutable bytes. A Resident unit retains its normal
-live hierarchy plus a pointer set used only to distinguish package-owned objects
-from runtime-created children. Its verified raw bytes may remain in the bounded
+live hierarchy plus an `unordered_set<ObjectId>` of complete slot/generation
+identities used only to distinguish original package lifetimes from runtime
+children. Native address or registry-slot reuse does not confer package ownership.
+Admission snapshots the original detached hierarchy, allocates the bounded set's
+buckets/nodes before commit, and fills them with full identities only after
+successful authoritative `SetParent(Workspace)`. The snapshot excludes runtime
+children added by admission callbacks. Failed commit leaves the record's set
+empty. Eviction compares the current root and descendants' full identities;
+any unknown lifetime pins the root. Eviction, external-root cleanup and Stop
+clear ownership metadata; it holds no owning Instance references.
+
+The bound remains 512 identities per unit and 65,536 manifest units: at 8 bytes
+per ObjectId, at most 4 KiB per unit or 256 MiB of logical identity payload across
+the conservative aggregate ceiling. This adds zero logical payload bytes over
+64-bit pointers on the validated x64 targets. Hash nodes/buckets, allocator
+overhead and transient node-handle storage are not exactly measured. See the
+[SEC-3L-001 closure receipt](ContentAvailabilitySecurityClosure3L.md).
+
+Its verified raw bytes may remain in the bounded
 immutable cache for reload, but the parsed document is dropped after commit;
 the cache never owns mutable Instances or runtime ObjectIds. All caches are
 session-owned.
@@ -375,6 +394,11 @@ The charge conservatively counts STL-owned container/string capacity, not
 allocator bookkeeping or transient parser memory. See
 [`ContentAvailabilityFoundation3L_2.md`](ContentAvailabilityFoundation3L_2.md)
 for the memory attribution and measured validation status.
+The [final-correctness closure report](ContentAvailabilityFoundation3L_2Closure.md)
+records the corrected exception ownership/client preflight defects and the
+remaining reliable-service and healthy-workload degradation. These measured
+failures keep Foundation 3M gated; finite content convergence is not a latency
+acceptance result.
 There is no historical event queue, per-object future, or timer. The benchmark
 executable replaces global allocation only for the benchmark process and
 records requested allocation count, peak live requested bytes, and bytes still

@@ -1,4 +1,5 @@
 #include "gargantuan/network/ReplicaApplier.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -9,9 +10,9 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
-#include "runtime/SnapshotValidation.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <set>
 #include <type_traits>
@@ -218,6 +219,7 @@ namespace gargantuan::network {
 			auto Target = Found->second;
 			Target->Destroy();
 			for (auto Iterator = Receiver.Objects.begin(); Iterator != Receiver.Objects.end();) {
+				runtime_detail::CountWork(runtime_detail::WorkCounter::ClientRemovalVisits);
 				if (!Iterator->second || !Iterator->second->GetDestroyed()) {
 					++Iterator;
 					continue;
@@ -235,6 +237,7 @@ namespace gargantuan::network {
 	}
 
 	ReplicaApplyResult ReplicaApplier::ApplyFrame(const ReplicationFrame &Frame) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::ClientApply);
 		if (std::ranges::any_of(Frame.Operations, [](const auto &Operation) {
 				return std::holds_alternative<PreparedPublishReplication>(Operation.Intent);
 			})) {
@@ -268,6 +271,13 @@ namespace gargantuan::network {
 		if (!FollowingSequence)
 			return {ReplicaApplyStatus::SemanticRejection, 0, "Reliable replication sequence is exhausted"};
 
+		auto PhaseStarted = std::chrono::steady_clock::now();
+		auto FinishPhase = [&](std::uint64_t &Nanoseconds) {
+			const auto Now = std::chrono::steady_clock::now();
+			Nanoseconds += static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(Now - PhaseStarted).count());
+			PhaseStarted = Now;
+		};
 		Snapshot Candidate;
 		if (Frame.Kind == ReplicationMessageKind::Baseline) {
 			Candidate.Version = SnapshotFormatVersion;
@@ -282,8 +292,11 @@ namespace gargantuan::network {
 			if (Root == Candidate.Objects.end())
 				return {ReplicaApplyStatus::SemanticRejection, 0, "Baseline has no root object"};
 			Candidate.Cursor.Scope = Root->Id.ToObjectId();
-		} else
+		} else {
+			runtime_detail::CountWork(runtime_detail::WorkCounter::ClientCopiedIdentities, SemanticState.Objects.size());
 			Candidate = SemanticState;
+		}
+		FinishPhase(Metrics.CandidateCopyNanoseconds);
 
 		std::map<WireObjectId, std::size_t> CandidateIndex;
 		std::map<WireObjectId, std::set<WireObjectId>> CandidateChildren;
@@ -291,6 +304,7 @@ namespace gargantuan::network {
 		std::set<WireObjectId> CandidateLifecycleObjects;
 		if (Frame.Kind == ReplicationMessageKind::Incremental) {
 			for (std::size_t Index = 0; Index < Candidate.Objects.size(); ++Index) {
+				runtime_detail::CountWork(runtime_detail::WorkCounter::ClientIndexedIdentities);
 				CandidateIndex.emplace(Candidate.Objects[Index].Id, Index);
 				if (Candidate.Objects[Index].Parent)
 					CandidateChildren[*Candidate.Objects[Index].Parent].insert(Candidate.Objects[Index].Id);
@@ -322,12 +336,19 @@ namespace gargantuan::network {
 		};
 
 		bool LiveCommitStarted = false;
+		// The committed semantic snapshot has already passed full static/native
+		// preflight. A frame containing only identical native property assignments
+		// cannot change that validation input. Live writes still execute: prediction
+		// or local presentation may have changed the receiver since that snapshot.
+		bool RequiresNativePreflight = Frame.Kind == ReplicationMessageKind::Baseline;
 		try {
 			for (const auto &Operation : Frame.Operations) {
 				if (Frame.Kind == ReplicationMessageKind::Baseline) continue;
 				std::visit(
 					[&](const auto &Value) {
 						using Type = std::decay_t<decltype(Value)>;
+						if constexpr (!std::is_same_v<Type, PropertyReplicationUpdate>)
+							RequiresNativePreflight = true;
 						if constexpr (std::is_same_v<Type, PublishReplication>) {
 							if (!CandidateLifecycleObjects.insert(WireObjectId::FromObjectId(Value.Object)).second)
 								throw std::invalid_argument("Object has multiple lifecycle operations in one frame");
@@ -349,9 +370,13 @@ namespace gargantuan::network {
 							auto *Object = FindCandidate(Value.Object);
 							if (!Object)
 								throw std::invalid_argument("Replication operation targets an unpublished object");
-							if constexpr (std::is_same_v<Type, PropertyReplicationUpdate>)
+							if constexpr (std::is_same_v<Type, PropertyReplicationUpdate>) {
+								const auto Previous = Object->Properties.find(Value.PropertyName);
+								if (Value.DeclaringClassSchemaId || Previous == Object->Properties.end() ||
+									Previous->second != Value.Value)
+									RequiresNativePreflight = true;
 								ApplyPropertyUpdate(*Object, Value);
-							else if constexpr (std::is_same_v<Type, ExtensionPropertyReplicationUpdate>)
+							} else if constexpr (std::is_same_v<Type, ExtensionPropertyReplicationUpdate>)
 								ApplyExtensionUpdate(*Object, Value);
 							else if constexpr (std::is_same_v<Type, ReparentReplication>) {
 								if (Value.Parent && !FindCandidate(*Value.Parent))
@@ -383,21 +408,27 @@ namespace gargantuan::network {
 				std::erase_if(Candidate.Objects, [&](const auto &Object) {
 					return RemovedCandidateObjects.contains(Object.Id);
 				});
-			ValidateSnapshotSemantic(Candidate);
+			// LoadSnapshot begins with the same complete semantic validation before
+			// constructing anything. Do not traverse the whole candidate twice.
+			// Its native materialization preflight remains mandatory below.
+			FinishPhase(Metrics.SemanticValidationNanoseconds);
 			SnapshotLoadResult Loaded;
-			{
+			if (RequiresNativePreflight) {
+				runtime_detail::CountWork(runtime_detail::WorkCounter::ClientPreflightIdentities, Candidate.Objects.size());
 				ScopedChangeJournalSuppression SuppressReplicaJournal;
-				Loaded = LoadSnapshot(Candidate);
+				Loaded = LoadSnapshot(Candidate, &Metrics.ValidationLoad);
 			}
-			if (!Loaded.Succeeded())
+			FinishPhase(Metrics.ValidationLoadNanoseconds);
+			if (RequiresNativePreflight && !Loaded.Succeeded())
 				throw std::invalid_argument(
 					Loaded.Errors.empty() ? "Replica materialization failed" : Loaded.Errors.front()
 				);
 			if (Frame.Kind == ReplicationMessageKind::Incremental) {
 				LiveCommitStarted = true;
-				ScopedChangeJournalSuppression SuppressReplicaJournal;
+				ScopedChangeJournalSuppression SuppressReplicaJournal(Receiver.Root->GetObjectId());
 				ScopedSignalDeferral DeferNotifications;
 				std::map<const Instance *, WireObjectId> ReplicaIds;
+				runtime_detail::CountWork(runtime_detail::WorkCounter::ClientReceiverVisits, Receiver.Objects.size());
 				for (const auto &[Id, Value] : Receiver.Objects)
 					ReplicaIds.emplace(Value.get(), Id);
 				for (const auto &Operation : Frame.Operations)
@@ -500,6 +531,7 @@ namespace gargantuan::network {
 				DeferNotifications.Commit();
 			} else
 				Receiver = std::move(Loaded);
+			FinishPhase(Metrics.LiveApplyNanoseconds);
 			SemanticState = std::move(Candidate);
 			Epoch = Frame.Epoch;
 			NextSequence = *FollowingSequence;

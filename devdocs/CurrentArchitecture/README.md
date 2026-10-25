@@ -1,5 +1,31 @@
 # Current architecture
 
+- [Foundation3L core acceptance](../../tests/Foundation3LFinalAcceptance.md#current-core-contract--2026-10-20)
+  records the2026-10-21 `POOLED_CORRECTNESS_V1` PASS on draftPR6, exact source
+  and analyzer receipts, KI-006 CLOSED and core3L COMPLETE. Physical Local32,
+  real-TLS Node32 and deployment/resource/performance certification remain
+  deferred. Earlier3L reports below retain their original scoped verdicts.
+
+- [Physical agent coordination ownership and migration](PhysicalAgentCoordination.md)
+  records the pinned GantriaEngine library, local Gargantuan adapter, validation
+  scope and preservation of installed physical-PC tooling.
+
+- [Foundation 3L security closure](ContentAvailabilitySecurityClosure3L.md)
+  preserves SEC-3L-001's raw-address lifetime ABA finding and records full-ObjectId
+  package ownership, deterministic address-reuse regression, bounded metadata,
+  affected validation and the focused security verdict.
+- [Content Availability Foundation 3L.3 runtime work isolation](ContentAvailabilityFoundation3L_3.md)
+  records compiled server/client phase attribution, the CPU fan-out and reliable
+  delivery regressions, and the still-open non-starvation gate. Its
+  [validation ledger](ContentAvailabilityFoundation3L_3Validation.md) distinguishes
+  current checks from retained evidence and uncompleted acceptance criteria.
+- [Content Availability Foundation 3L.2 final correctness](ContentAvailabilityFoundation3L_2Closure.md)
+  separates corrected lifetime/client CPU defects from the remaining measured
+  critical-service and healthy-baseline streaming degradation, with the expanded
+  acceptance report and exact-source validation status.
+- [Content Availability Foundation 3L.2 validation](ContentAvailabilityFoundation3L_2Validation.md)
+  records bounded-memory and content-coupled peer-scale measurements, explicit
+  gameplay/materialization blockers, and the still-closed Foundation 3M gate.
 - [Content Availability Foundation 3L](ContentAvailabilityFoundation3L.md)
   defines deterministic immutable package content units, provider-neutral local
   and private Node acquisition, bounded asynchronous residency, transactional

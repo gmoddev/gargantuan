@@ -128,6 +128,13 @@ The canonical list is in
    prevented from running.
 8. Review the final diff for unrelated files, generated artifacts, and stale claims.
 
+Apply the [qualification and evidence invariants](../../../../invariants/Core.md#qualification-and-evidence):
+qualify tooling only as far as needed to establish the actual acceptance fact
+with reasonable confidence. Extra proof layers require a concrete missing
+acceptance fact, demonstrated failure or explicit repository requirement.
+After a minimal harness correction and required verification, return to actual
+production measurements without weakening their acceptance gates.
+
 Never stage, discard, rewrite, or commit unrelated work. When another task is
 active in the same worktree, stage explicit paths only.
 

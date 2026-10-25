@@ -1,4 +1,5 @@
 #include "gargantuan/network/SimulatedTransport.hpp"
+#include "../runtime/PublicationLatencyDiagnostics.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -450,6 +451,10 @@ namespace gargantuan::network {
 				return;
 			}
 
+			runtime_detail::RecordPublicationPacket("SimulatedDelivered",
+				Source->Role == TransportRole::Server ? Item.SourceConnection : Item.DestinationConnection, Item.Payload);
+			runtime_detail::RecordPublicationPacket(Source->Role == TransportRole::Server ? "EgressDelivered" : "IngressDelivered",
+				Source->Role == TransportRole::Server ? Item.SourceConnection : Item.DestinationConnection, Item.Payload);
 			SaturatingIncrement(SourceConnection.Statistics.MessagesDelivered);
 			if (Item.Duplicate) SaturatingIncrement(SourceConnection.Statistics.DuplicatedUnreliableMessages);
 			SaturatingIncrement(DestinationConnection.Statistics.MessagesReceived);
@@ -824,6 +829,11 @@ namespace gargantuan::network {
 		} else {
 			Connection.QueuedUnreliableMessages += Copies;
 		}
+		runtime_detail::RecordPublicationPacket(State->Role == TransportRole::Server ? "EgressSubmit" : "IngressSubmit",
+			State->Role == TransportRole::Server ? Message.Destination() : Connection.RemoteConnection, Payload);
+		if (Message.Delivery() == DeliveryMode::ReliableOrdered)
+			runtime_detail::RecordPublicationPacket(State->Role == TransportRole::Server ? "EgressReliable" : "IngressReliable",
+				State->Role == TransportRole::Server ? Message.Destination() : Connection.RemoteConnection, Payload);
 		return Operation(TransportOperationStatus::Succeeded);
 	}
 

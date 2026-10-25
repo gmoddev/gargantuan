@@ -1,7 +1,7 @@
 ---
 status: current
 owner: physics
-last_verified: 2026-08-26
+last_verified: 2026-09-09
 related_code:
   - include/gargantuan/physics/
   - src/physics/
@@ -204,6 +204,36 @@ moving-platform metadata, and soft-body query participation are not implemented.
 - the backend destroys joints before bodies and destroys the Box3D world last.
 
 ## Box3D confinement and replaceability
+
+### Settled all-static world no-work path (3L investigation)
+
+The adapter maintains one live dynamic-body count and a static-world dirty
+flag. After a complete step processes mutations, an entirely static world
+returns fresh empty motion/contact events until a participating mutation.
+It never replays native event buffers. Even sleeping dynamic bodies always
+take the full backend step. There is no new queue, partial activation, public
+budget, worker-thread mutation or alternative transform authority.
+
+Body create/destroy, anchor transitions, constraint create/destroy, gravity,
+impulse and collision/touch-participating body updates invalidate the no-work
+path. Only updates whose old and new descriptions are both anchored,
+non-colliding and non-touching can leave it clean. Native transforms, shape
+replacement and broadphase query proxies still update immediately; queries do
+not wait for a later step. Box3D's moved-proxy bitset coalesces repeat moves of
+one live proxy and destruction removes its entry, so these moves do not add
+an unbounded deferred update list. Generation validation occurs before state
+accounting. Dynamic count follows successful native body creation, failed
+shape cleanup, anchor changes and valid destruction.
+
+This is not a work cap for dynamic worlds, frequently mutated static worlds,
+dense sensor overlaps, or atomic content activation. Those retain their
+existing costs/limits. `TestStaticWorldStepReference` compares contact events
+and body states against a world forced to run every native step by a distant,
+non-interacting dynamic body. It covers seeded shape/touch/transform changes,
+idle no-replay, destroy/reload, stale identities, dynamic transitions,
+constraints and immediate queries. The current targeted MSVC and Clang 19
+ASan/UBSan/LSan tests pass; end-to-end envelope validation is recorded separately in
+the [3L.3 ledger](ContentAvailabilityFoundation3L_3Validation.md).
 
 Runtime Box3D includes and `b3*` symbols are confined to
 `src/physics/Box3DPhysicsBackend.cpp` and its private conversion header. CMake

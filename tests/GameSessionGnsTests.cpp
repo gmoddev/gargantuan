@@ -11,13 +11,22 @@
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Players.hpp"
+#include "../src/host/server/FarmF1Evidence.hpp"
+#include "../src/network/GameSessionTestAccess.hpp"
+#include "../src/network/ReliableServiceFeedback.hpp"
+#include "PooledRecoveryEvidence.hpp"
+#include "GnsServiceTimingDiagnosticsFixture.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <set>
+#include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 	using namespace gargantuan;
@@ -25,30 +34,299 @@ namespace {
 	using namespace std::chrono_literals;
 
 	int Failures = 0;
+	std::uint32_t QualificationPeerCount = 1;
+	bool QualificationAggregateStructural = false;
+	bool QualificationDiagnostic = false;
+	bool QualificationPooled = false;
+	bool QualificationFeedbackRefresh = false;
 
 	void Check(bool Condition, const char *Message) {
 		if (Condition) return;
 		std::cerr << "FAIL: " << Message << '\n';
 		++Failures;
 	}
+	// Bounded capture exhaustion and missing completion are still fatal Check
+	// calls. This helper is only for comparisons of measured performance.
+	void Performance(bool WithinTarget, const char *Target) {
+		std::cout << "[Qualification:Performance] contract=POOLED_CORRECTNESS_V1 target=" << Target
+			<< " within_target=" << WithinTarget << " fatal=0\n";
+	}
 
-	GameSessionConfiguration Configuration(GameSessionRole Role, std::uint16_t Port) {
-		return {
+	ReliableServiceProfile CandidateReliableService() {
+		if (QualificationPooled) return ReliableServiceProfile::PooledServiceNonRealtime();
+		ReliableServiceProfile Profile;
+		Profile.ConnectionRate = 8ull * 1024 * 1024;
+		Profile.AggregateRate = Profile.ConnectionRate * QualificationPeerCount;
+		Profile.BackendRate = 2 * Profile.ConnectionRate;
+		Profile.MaximumConnections = QualificationPeerCount;
+		Profile.GlobalBacklog = MaximumReliableServiceGroupBytes +
+			2 * QualificationPeerCount * Profile.GameplayBurst;
+		Profile.RequireLatencyCompatibility = true;
+		return Profile;
+	}
+
+	GameSessionConfiguration Configuration(GameSessionRole Role, std::uint16_t Port, bool Profiled) {
+		GameSessionConfiguration Result{
 			.Role = Role,
 			.Endpoint = {"127.0.0.1", Port},
 			.Limits = GameSessionConfiguration::DefaultLimits(),
 			.HandshakeTimeoutTicks = 600,
 			.ClientNonce = Role == GameSessionRole::Client ? 0x3dfeed1234ull : 0,
 		};
+		if (Profiled && Role == GameSessionRole::Server) Result.ReliableService = CandidateReliableService();
+		// This fixture measures feedback ordering on the offered step, independent
+		// of the normal six-tick relevance/catalog refresh cadence.
+		if (QualificationFeedbackRefresh && Role == GameSessionRole::Server) Result.Relevance.UpdateIntervalTicks = 1;
+		return Result;
+	}
+
+	// Delay one real native query, not the timestamp or contents it returns.
+	// Only armed after all 32 actual peers and their accepted debt are idle.
+	class DelayedFeedbackTransport final : public IGameTransport {
+		std::shared_ptr<IGameTransport> Delegate;
+		PooledRecoveryEvidence::Recorder *Recovery = nullptr;
+		mutable std::size_t Remaining = 0;
+		bool Recording = false, Withhold = false;
+		bool EnableReliableServiceFeedback() override { return detail::ReliableServiceFeedbackAccess::Enable(*Delegate); }
+		bool ReleaseReliableServiceFeedback(ConnectionId Id) override { return detail::ReliableServiceFeedbackAccess::Release(*Delegate, Id); }
+		std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Id) const override {
+			if (Recovery) return Recovery->Read(*Delegate, Id);
+			if (!Recording) return detail::ReliableServiceFeedbackAccess::Observe(*Delegate, Id);
+			const bool Initial = Remaining != 0;
+			if (Initial && --Remaining == 0) {
+				std::this_thread::sleep_for(60ms);
+				++Delays;
+			}
+			auto Sample = detail::ReliableServiceFeedbackAccess::Observe(*Delegate, Id);
+			if (Initial) {
+				InitialQueries.emplace_back(Id, Sample);
+			} else {
+				++RefreshQueries;
+				if (Withhold) return {};
+				RefreshedQueries.emplace_back(Id, Sample);
+			}
+			return Sample;
+		}
+	  public:
+		mutable std::size_t Delays = 0, RefreshQueries = 0;
+		std::size_t StructuralSends = 0;
+		mutable std::vector<std::pair<ConnectionId, std::optional<detail::ReliableServiceFeedback>>> InitialQueries, RefreshedQueries;
+		explicit DelayedFeedbackTransport(std::shared_ptr<IGameTransport> Input,
+			PooledRecoveryEvidence::Recorder *Diagnostic = nullptr) : Delegate(std::move(Input)), Recovery(Diagnostic) {}
+		TransportOperationResult Start(const TransportStartConfiguration &Input) override { return Delegate->Start(Input); }
+		TransportOperationResult Stop(DisconnectInfo Input) override { return Delegate->Stop(std::move(Input)); }
+		TransportOperationResult Disconnect(ConnectionId Id, DisconnectInfo Input) override { return Delegate->Disconnect(Id, std::move(Input)); }
+		TransportOperationResult Send(const NetworkMessageIntent &Input) override {
+			auto Result = Delegate->Send(Input);
+			if (Recording && Result.Succeeded() && detail::ReliableServiceFeedbackAccess::Token(Input)) ++StructuralSends;
+			return Result;
+		}
+		std::size_t PollEvents(std::span<TransportEvent> Output) override { return Delegate->PollEvents(Output); }
+		std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Id) const override { return Delegate->GetAvailableDatagramBytes(Id); }
+		std::optional<NetworkStatistics> GetStatistics(ConnectionId Id) const override { return Delegate->GetStatistics(Id); }
+		void Arm(bool Missing) {
+			Remaining = 32; Delays = RefreshQueries = StructuralSends = 0; InitialQueries.clear(); RefreshedQueries.clear();
+			Withhold = Missing; Recording = true;
+		}
+		void Disarm() { Recording = false; }
+	};
+
+	void TestPooledFeedbackRefresh(Engine &ServerRuntime, Engine &PrimaryRuntime, GameSession &Server,
+		GameSession &Primary, DelayedFeedbackTransport &Transport, std::uint16_t Port, std::uint64_t &Tick) {
+		struct Peer {
+			std::shared_ptr<GameNetworkingSocketsTransport> Transport;
+			std::unique_ptr<GameSession> Session;
+			std::unique_ptr<HeadlessRenderer> Renderer;
+			std::unique_ptr<Engine> Runtime;
+			~Peer() { if (Session) Session->Stop(); if (Runtime) Runtime->Destroy(); }
+		};
+		std::vector<std::unique_ptr<Peer>> Peers;
+		auto Step = [&] {
+			(void)Server.Poll(); (void)Primary.Poll();
+			PrimaryRuntime.Step(); ServerRuntime.Step();
+			Server.Step(Tick); Primary.Step(Tick);
+			for (auto &Value : Peers) {
+				(void)Value->Session->Poll();
+				if (!Value->Runtime && Value->Session->GetClientDataModel()) {
+					Value->Renderer = std::make_unique<HeadlessRenderer>(Vector2(32, 32));
+					Value->Runtime = std::make_unique<Engine>(Value->Session->GetClientDataModel(), Value->Renderer.get(),
+						std::function<void(std::string, std::string)>{},
+						EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+					Value->Runtime->ProcessService->Alive = true;
+					Check(Value->Session->AttachClientRuntime(*Value->Runtime), "feedback fixture peer attaches after production bootstrap");
+				}
+				if (Value->Runtime) Value->Runtime->Step();
+				Value->Session->Step(Tick);
+			}
+			++Tick;
+			std::this_thread::sleep_for(1ms);
+		};
+		const auto SetupDeadline = std::chrono::steady_clock::now() + 20s;
+		for (std::uint32_t Index = 1; Index < 32; ++Index) {
+			auto Value = std::make_unique<Peer>();
+			Value->Transport = std::make_shared<GameNetworkingSocketsTransport>();
+			auto Config = Configuration(GameSessionRole::Client, Port, false);
+			Config.ClientNonce += Index;
+			Value->Session = std::make_unique<GameSession>(Value->Transport, Config);
+			Check(Value->Session->Start().Succeeded(), "feedback fixture actual GNS peer starts");
+			Peers.push_back(std::move(Value));
+			while (Server.GetMetrics().ReadyPeers != Index + 1 && std::chrono::steady_clock::now() < SetupDeadline) Step();
+			Check(Server.GetMetrics().ReadyPeers == Index + 1, "feedback fixture reaches each actual Ready peer within its bound");
+			if (Failures) return;
+		}
+		auto Idle = [&] {
+			const auto M = Server.GetMetrics();
+			return M.ReadyPeers == 32 && M.JournalBacklogRecords == 0 && M.MaterializationBacklog == 0 &&
+				M.ReliableAdmission.AcceptedBytes == M.ReliableAdmission.VerifiedAttributedRetirement &&
+				M.ReliableAdmission.OutstandingBytes == 0 && M.ReliableAdmission.ActiveDrainGrants == 0 &&
+				M.ReliableAdmission.TerminalReleasedBytes == 0;
+		};
+		auto Drain = [&] {
+			const auto Deadline = std::chrono::steady_clock::now() + 5s;
+			do { Step(); } while (!Idle() && std::chrono::steady_clock::now() < Deadline);
+			Check(Idle() && Server.GetStatus() == GameSessionStatus::Listening,
+				"feedback fixture converges exact native ACK/retirement and source debt without terminal release");
+		};
+		Drain();
+		if (Failures) return;
+		auto Floor = ServerRuntime.DataModel->FindFirstChild("QualificationFloor", true);
+		Check(Floor && PrimaryRuntime.DataModel->FindFirstChild("QualificationFloor", true),
+			"feedback work targets the existing server and primary materialized Floor");
+		for (const auto &Value : Peers)
+			Check(Value->Runtime && Value->Runtime->DataModel->FindFirstChild("QualificationFloor", true),
+				"feedback work target is already materialized for every actual peer");
+		if (Failures || !Floor) return;
+		for (const bool Missing : {false, true}) {
+			const auto BeforeCursor = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId());
+			Check(Floor->ApplyAttributeMutation("FeedbackRefreshRegression", WireValue(Missing ? 2 : 1),
+				ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success,
+				"feedback regression offers one legitimate tiny current-state attribute to all peers");
+			const auto Committed = ChangeJournal::Get().Read(BeforeCursor, 1);
+			Check(Committed.Records.size() == 1 && Committed.Records.front().Object == Floor->GetObjectId() &&
+				std::holds_alternative<AttributeUpdatedChange>(Committed.Records.front().Payload),
+				"feedback work is an actual committed attribute on the materialized source object");
+			(void)Server.Poll();
+			ServerRuntime.Step();
+			const auto WorkTail = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId()).NextSequence;
+			std::size_t BackloggedPeers = 0;
+			for (const auto &Reader : detail::GameSessionTestAccess::GetJournalRequirements(Server)) {
+				if (Reader.Catalog) continue;
+				Check(Reader.Cursor.Scope == BeforeCursor.Scope && Reader.Cursor.NextSequence < WorkTail,
+					"each actual structural peer cursor is behind committed work before the delayed query sweep");
+				if (Reader.Cursor.Scope == BeforeCursor.Scope && Reader.Cursor.NextSequence < WorkTail) ++BackloggedPeers;
+			}
+			Check(BackloggedPeers == 32, "all 32 actual source readers require structural progress before eligibility");
+			if (Failures) return;
+			const auto Before = Server.GetMetrics().ReliableAdmission;
+			Transport.Arm(Missing);
+			Server.Step(Tick++);
+			Transport.Disarm();
+			Check(Server.GetStatus() == GameSessionStatus::Listening && Server.GetMetrics().ReadyPeers == 32,
+				"both delayed-query phases preserve the healthy actual 32-peer server");
+			const auto After = Server.GetMetrics().ReliableAdmission;
+			const auto At = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count());
+			std::size_t OldSamples = 0;
+			std::set<ConnectionId> InitialPeers;
+			for (const auto &[Id, Sample] : Transport.InitialQueries) {
+				Check(Sample && Sample->Connection == Id && Sample->CountersValid &&
+					Sample->State == ConnectionState::Connected && Sample->ObservedAtMicroseconds <= At,
+					"feedback regression retains unchanged generation-valid real native snapshots");
+				InitialPeers.insert(Id);
+				if (Sample && At - Sample->ObservedAtMicroseconds > 50'000) ++OldSamples;
+			}
+			Check(Transport.Delays == 1 && Transport.InitialQueries.size() == 32 && InitialPeers.size() == 32 && OldSamples >= 31,
+				"one bounded native query delay ages at least the first 31 envelope snapshots");
+			for (const auto &[Id, Sample] : Transport.RefreshedQueries) {
+				const auto Prior = std::ranges::find_if(Transport.InitialQueries, [&](const auto &Row) { return Row.first == Id; });
+				Check(Sample && Prior != Transport.InitialQueries.end() && Prior->second &&
+					Sample->ObservedAtMicroseconds > Prior->second->ObservedAtMicroseconds,
+					"eligibility refresh reads a later native snapshot instead of retimestamping cached data");
+			}
+			const auto Grants = Transport.StructuralSends;
+			std::cout << "[Network:PooledFeedbackRefresh] unavailable=" << Missing << " initial_old=" << OldSamples
+				<< " refresh_queries=" << Transport.RefreshQueries << " accepted_grants=" << Grants
+				<< " feedback_deferrals=" << After.FeedbackDeferrals - Before.FeedbackDeferrals << '\n';
+			Check(Transport.RefreshQueries >= 31, "actual GameSession refreshes stale evidence before first eligibility");
+			Check(Missing ? (Grants <= 1 && After.FeedbackDeferrals > Before.FeedbackDeferrals) :
+				(Grants >= 2 && Grants <= 4 && After.AcceptedBytes > Before.AcceptedBytes &&
+				 After.ActiveDrainGrants >= 2 && After.ActiveDrainGrants <= 4),
+				"native refresh restores real eligible service while unavailable feedback remains denied by unchanged admission");
+			Drain();
+			if (Failures) return;
+		}
+		const auto Native = Server.GetMetrics();
+		Check(Native.StructuralAcceptedFeedbackBytes == Native.StructuralFirstSentFeedbackBytes &&
+			Native.StructuralFirstSentFeedbackBytes == Native.StructuralAckedFeedbackBytes &&
+			Native.StructuralAckedFeedbackBytes == Native.ReliableAdmission.VerifiedAttributedRetirement,
+			"feedback ordering preserves unique native first-send, ACK and exact retirement conservation");
 	}
 }
 
-int main() {
+#include "ReliableGameplayWorkloadFixture.hpp"
+
+int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--execution-capture-self-test") {
+		const bool Scalars = TestPooledExecutionCapture();
+		const bool Spans = TestGnsServiceTimingDiagnostics();
+		return Scalars && Spans ? 0 : 1;
+	}
+	if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--pooled") {
+		QualificationPooled = true; --ArgumentCount; ++Arguments;
+	}
+	const bool FeedbackRefresh = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--pooled-feedback-refresh";
+	QualificationFeedbackRefresh = FeedbackRefresh;
+	if (FeedbackRefresh) { QualificationPooled = true; QualificationPeerCount = 32; }
+	QualificationDiagnostic = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ki008-attribution";
+	QualificationAggregateStructural = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload-32-structural";
+	QualificationAggregateStructural = QualificationAggregateStructural || QualificationDiagnostic;
+	const bool Aggregate = QualificationAggregateStructural || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload-32");
+	if (Aggregate) QualificationPeerCount = 32;
+	if (QualificationDiagnostic) QualificationPeerCount = DiagnosticDimension("KI008_PEERS", 32, 1, 32);
+	const bool Workload = Aggregate || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload");
+	const bool Profiled = FeedbackRefresh || Workload || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-profile");
+	if (ArgumentCount > 1 && !Profiled) {
+		std::cerr << "usage: gargantuan_game_session_real_transport_tests [--pooled] [--reliable-profile|--reliable-workload|--reliable-workload-32|--reliable-workload-32-structural|--ki008-attribution|--pooled-feedback-refresh]\n";
+		return 2;
+	}
+	if (!Profiled) Check(TestPooledExecutionCapture(), "bounded execution/poll capture preserves the first fault before live GNS tests");
+	if (Profiled) {
+		SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *Message) {
+			std::cerr << Message << '\n';
+		}, nullptr);
+		SDL_SetLogPriorities(SDL_LOG_PRIORITY_WARN);
+		const auto Profile = CandidateReliableService();
+		Check(Profile.IsValid() && (Profile.HasDiagnosticPerformance() || Profile.IsLatencyCompatible()),
+			"profiled real GNS fixture uses the approved capacity-compatible candidate");
+	}
 	gargantuan::BootstrapNativeRuntimeSchema();
+	// This holder precedes every transport; borrowed timing storage outlives GNS shutdown/join.
+	std::unique_ptr<PooledRecoveryEvidence::Recorder> RecoveryEvidence;
+	if (QualificationPooled && QualificationAggregateStructural && QualificationPeerCount == 32 &&
+		!QualificationDiagnostic && PooledRecoveryEvidence::Enabled()) {
+		Check(PooledRecoveryEvidence::Recorder::TestSupplied(), "bounded pooled recovery supplied certificates/sink chain");
+		RecoveryEvidence = std::make_unique<PooledRecoveryEvidence::Recorder>();
+	}
 
 	auto ServerWorld = std::make_shared<DataModel>();
+	auto QualificationFunction = std::make_shared<RemoteFunction>();
+	auto QualificationEvent = std::make_shared<RemoteEvent>();
+	{
+		auto Floor = std::make_shared<Part>();
+		Floor->SetName("QualificationFloor");
+		Floor->SetAnchored(true);
+		Floor->SetSize({1024.0f, 1.0f, 1024.0f});
+		Floor->SetPosition({0.0f, -1.0f, 0.0f});
+		Floor->SetParent(ServerWorld->GetService("Workspace"));
+	}
+	if (Workload) {
+		QualificationFunction->SetName("QualificationFunction");
+		QualificationFunction->SetParent(ServerWorld);
+		QualificationEvent->SetName("QualificationEvent");
+		QualificationEvent->SetParent(ServerWorld);
+	}
 	DiskFilesystem SampleFilesystem(std::filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT));
 	auto ServerAssets = std::dynamic_pointer_cast<AssetService>(ServerWorld->GetService("AssetService"));
 	ServerAssets->LoadProjectAssets(SampleFilesystem);
@@ -103,6 +381,28 @@ RunService.PreSimulation:Connect(function()
 end)
 )");
 	ClientActionPolicy->SetParent(ServerWorld);
+	if (Workload) ClientActionPolicy->SetSource(ClientActionPolicy->GetSource() + R"(
+local WorkloadStarted = 0
+local WorkloadSequence = 0
+CharacterControl.ActionResolved:Connect(function(Character, ActionName, Accepted)
+	if WorkloadSequence > 0 and ActionName == "GnsLunge" then
+		CharacterControl:SetAttribute("WorkloadResolved", WorkloadSequence)
+		CharacterControl:SetAttribute("WorkloadAccepted", Accepted)
+		WorkloadSequence = 0
+	end
+end)
+RunService.PreSimulation:Connect(function()
+	local Sequence = CharacterControl:GetAttribute("WorkloadRequest") or 0
+	if Sequence > WorkloadStarted and WorkloadSequence == 0 then
+		WorkloadStarted = Sequence
+		WorkloadSequence = Sequence
+		if not CharacterControl:RequestAction("GnsLunge") then
+			CharacterControl:SetAttribute("WorkloadRejected", Sequence)
+			WorkloadSequence = 0
+		end
+	end
+end)
+)");
 	auto RelevanceNpc = std::make_shared<KinematicCharacter>();
 	RelevanceNpc->SetName("GnsRelevanceNpc");
 	auto RelevanceRoot = std::make_shared<Part>();
@@ -120,14 +420,36 @@ end)
 	);
 	ServerRuntime.ProcessService->Alive = true;
 
+	std::unique_ptr<host::detail::FarmF1Evidence> FiniteEvidence;
+	if (QualificationPooled) FiniteEvidence = std::make_unique<host::detail::FarmF1Evidence>(host::detail::FarmF1Evidence::Contract::PooledCorrectnessV1);
+	const auto *CaptureValue = std::getenv("GARGANTUAN_EXECUTION_ATTRIBUTION");
+	std::unique_ptr<PooledExecutionAttribution> ExecutionAttribution;
+	if (CaptureValue && std::string_view(CaptureValue) == "1") {
+		if (!QualificationPooled || !Workload || Aggregate) { std::cerr << "execution attribution requires fixed PooledFull\n"; return 2; }
+		ExecutionAttribution = std::make_unique<PooledExecutionAttribution>(true);
+	}
 	std::shared_ptr<GameNetworkingSocketsTransport> ServerTransport;
+	std::shared_ptr<DelayedFeedbackTransport> FeedbackTransport;
+	std::optional<PooledRecoveryEvidence::Recorder::Chain> RecoveryChain;
+	if (RecoveryEvidence) RecoveryChain.emplace(*RecoveryEvidence);
 	std::unique_ptr<GameSession> Server;
 	std::uint16_t Port = 0;
 	for (std::uint32_t Candidate = 39400; Candidate < 39500; ++Candidate) {
-		auto CandidateTransport = std::make_shared<GameNetworkingSocketsTransport>();
+		GameNetworkingSocketsTransportConfiguration TransportConfiguration;
+		if (Profiled) {
+			const auto Profile = CandidateReliableService();
+			TransportConfiguration.MaximumConnections = Profile.MaximumConnections;
+			TransportConfiguration.SendRate = static_cast<std::uint32_t>(Profile.BackendSendRate());
+		}
+		auto CandidateTransport = std::make_shared<GameNetworkingSocketsTransport>(TransportConfiguration);
+		std::shared_ptr<IGameTransport> SessionTransport = CandidateTransport;
+		if (FeedbackRefresh || RecoveryEvidence) {
+			FeedbackTransport = std::make_shared<DelayedFeedbackTransport>(CandidateTransport, RecoveryEvidence.get());
+			SessionTransport = FeedbackTransport;
+		}
 		auto CandidateSession = std::make_unique<GameSession>(
-			CandidateTransport,
-			Configuration(GameSessionRole::Server, static_cast<std::uint16_t>(Candidate)),
+			SessionTransport,
+			Configuration(GameSessionRole::Server, static_cast<std::uint16_t>(Candidate), Profiled),
 			&ServerRuntime
 		);
 		if (!CandidateSession->Start().Succeeded()) continue;
@@ -140,7 +462,12 @@ end)
 	if (!Server) return 1;
 
 	auto ClientTransport = std::make_shared<GameNetworkingSocketsTransport>();
-	GameSession Client(ClientTransport, Configuration(GameSessionRole::Client, Port));
+	auto ClientConfiguration = Configuration(GameSessionRole::Client, Port, false);
+	ClientConfiguration.ClientNonce = 0x32f1a69u;
+	// The single-peer product workload declares both ordinary source directions.
+	// Aggregate and feedback-only fixtures retain their independently scoped setup.
+	ClientConfiguration.DeclareNormalOrdinaryService = QualificationPooled && Workload && !Aggregate;
+	GameSession Client(ClientTransport, ClientConfiguration);
 	Check(Client.Start().Succeeded(), "real GNS GameSession client starts");
 
 	std::unique_ptr<HeadlessRenderer> ClientRenderer;
@@ -181,6 +508,46 @@ end)
 		Server->GetMetrics().ReadyPeers == 1 && Client.GetStatus() == GameSessionStatus::Ready,
 		"real GNS completes accepted peer, trusted LocalPlayer, and gameplay-ready phases"
 	);
+	const auto PeerIdentities = Server->GetPeerIdentities();
+	if (FiniteEvidence && !Workload) {
+		// Real GameSession bootstrap uses production admission and pinned GNS,
+		// unlike a synthetic completed-certificate fixture. Retain exact bootstrap
+		// debt while deliberately excluding its sentinel activation from F1.
+		const auto Deadline = std::chrono::steady_clock::now() + 2s;
+		while (std::chrono::steady_clock::now() < Deadline && Server->GetMetrics().ReliableAdmission.OutstandingBytes) {
+			(void)Server->Poll(); (void)Client.Poll();
+			Server->Step(Tick); Client.Step(Tick++); std::this_thread::sleep_for(1ms);
+		}
+		const auto Observations = FiniteEvidence->Observations();
+		Check(Observations.size() == 1 && Observations[0].BootstrapAccepted > 0 &&
+			Observations[0].BootstrapBytes > 0 && Observations[0].BootstrapBytes == Observations[0].BootstrapRetired &&
+			Observations[0].BootstrapBytes + Observations[0].QualifiedBytes == Observations[0].Accepted &&
+			Observations[0].Accepted == Observations[0].FirstSent && Observations[0].FirstSent == Observations[0].Acked &&
+			Observations[0].Acked == Observations[0].Retired && !Observations[0].PendingToken && !Observations[0].Failed,
+			"real pooled GameSession bootstrap keeps exact admission/send/ACK/retirement outside qualified F1 certificates");
+		const auto BootstrapAdmission = Server->GetMetrics().ReliableAdmission;
+		Check(BootstrapAdmission.NativeCapacityReturns > 0 && !BootstrapAdmission.NativeCapacityBytes && !BootstrapAdmission.ActiveDrainGrants,
+			"real non-real-time bootstrap publishes and returns its exact native lease before ACK-owned grant release");
+	}
+	Check(PeerIdentities.size() == 1 && PeerIdentities.front().Ready &&
+		PeerIdentities.front().Nonce == ClientConfiguration.ClientNonce &&
+		PeerIdentities.front().PlayerId != 0 && PeerIdentities.front().SessionEpoch != 0,
+		"real GNS exposes the run-scoped client nonce and accepted ready Player identity"
+	);
+	if (Profiled) {
+		const auto Metrics = Server->GetMetrics();
+		Check(Metrics.ReliableAdmissionPeerStates == 1,
+			"profiled real GNS session owns one generation-scoped byte-admission peer state");
+		Check(Metrics.ReliableAdmission.AcceptedBytes > 0,
+			"profiled real GNS session admits structural bytes through the production accountant");
+		Check(Metrics.ReliableAdmission.PeerCreditHighWater > 0 &&
+			Metrics.ReliableAdmission.GlobalCreditHighWater > 0,
+			"profiled real GNS session exercises finite peer and global elapsed-time credit");
+		// Whether this real-time bootstrap happens to defer is timing-dependent:
+		// service time accrues finite credit while the connection/bootstrap work runs.
+		// Deterministic zero-credit and exact-size deferral behavior is covered by
+		// ReliableByteAdmissionFixture and the production-admission matrix.
+	}
 	auto ServerPlayers = ServerRuntime.Players->GetPlayers();
 	Check(
 		ServerPlayers.size() == 1 && ServerPlayers.front()->GetCharacter().has_value(),
@@ -190,8 +557,41 @@ end)
 		ClientRuntime && ClientRuntime->Players->GetLocalPlayer().has_value(),
 		"real GNS client resolves its exact trusted LocalPlayer ObjectId"
 	);
+	if (FeedbackRefresh && ClientRuntime && FeedbackTransport && !Failures) {
+		TestPooledFeedbackRefresh(ServerRuntime, *ClientRuntime, *Server, Client, *FeedbackTransport, Port, Tick);
+		Client.Stop(); Server->Stop();
+		ClientRuntime->Destroy(); ServerRuntime.Destroy();
+		return Failures == 0 ? 0 : 1;
+	}
 
 	if (ClientRuntime && !ServerPlayers.empty() && ServerPlayers.front()->GetCharacter()) {
+		if (Workload) {
+			if (Aggregate) RunAggregateReliableGameplay(ServerRuntime, *ClientRuntime, *Server, Client, Port,
+				Tick, QualificationFunction, QualificationEvent);
+			else RunReliableGameplayWorkload(ServerRuntime, *ClientRuntime, *Server, Client,
+				*ClientTransport, Tick, *ServerTransport, QualificationFunction, QualificationEvent, ExecutionAttribution.get());
+			Client.Stop();
+			Server->Stop();
+			Check(Server->GetMetrics().ReliableAdmissionPeerStates == 0,
+				"qualification shutdown releases admission peer state");
+			if (QualificationPooled) {
+				if (RecoveryEvidence && FiniteEvidence) FiniteEvidence->Write(std::cout, "pooled-recovery-diagnostic");
+				if (RecoveryEvidence) Check(!RecoveryEvidence->Failed(CandidateReliableService().HasDiagnosticPerformance()), "observed recovery has invalid native evidence or diagnostic identity");
+				const auto M = Server->GetMetrics().ReliableAdmission;
+				Check(M.AcceptedBytes == M.VerifiedAttributedRetirement + M.TerminalReleasedBytes + M.OutstandingBytes &&
+					!M.OutstandingBytes && !M.ActiveDrainGrants && M.VerifiedAttributedRetirement,
+					"pooled workload shutdown conserves exact structural debt and clears grants");
+				std::cout << "[Network:PooledGns] created=" << M.AcceptedBytes << " retired=" << M.VerifiedAttributedRetirement
+					<< " terminal=" << M.TerminalReleasedBytes << " outstanding=" << M.OutstandingBytes
+					<< " grants_high=" << M.DrainGrantsHighWater << " debt_high=" << M.OutstandingHighWater << '\n';
+			}
+			ClientRuntime->Destroy();
+			ServerRuntime.Destroy();
+			std::cout << "[Qualification:Correctness] contract=POOLED_CORRECTNESS_V1 workload="
+				<< (Aggregate ? (QualificationAggregateStructural ? "structural32" : "ordinary32") : "single-peer")
+				<< " profile=" << CandidateReliableService().ContractIdentity() << " completed=1 failures=" << Failures << '\n';
+			return Failures == 0 ? 0 : 1;
+		}
 		auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(*ServerPlayers.front()->GetCharacter());
 		auto FindClientRelevanceNpc = [&]() {
 			return ClientRuntime ? std::dynamic_pointer_cast<KinematicCharacter>(
@@ -234,6 +634,9 @@ end)
 			CharacterValue && glm::distance(CharacterValue->GetPosition(), InitialPosition) > 0.25f,
 			"real GNS carries ordinary Luau semantic input to authoritative Character movement"
 		);
+		(void)ClientRuntime->ProcessEvent(KeyEvent{
+			.Device = {1}, .Physical = PhysicalKey::W, .Logical = LogicalKey::W, .State = ButtonState::Released,
+		});
 
 		const auto BeforeAction = CharacterValue ? CharacterValue->GetPosition() : glm::vec3{};
 		const auto ActionDeadline = std::chrono::steady_clock::now() + 10s;
@@ -270,6 +673,17 @@ end)
 		while (std::chrono::steady_clock::now() < FirstNpcDeadline && !FindClientRelevanceNpc())
 			StepNetwork();
 		auto FirstNpcReplica = FindClientRelevanceNpc();
+		if (QualificationPooled) {
+			const auto M = Server->GetMetrics();
+			std::cout << "[Network:PooledNpc] present=" << bool(FirstNpcReplica)
+				<< " root=" << bool(FirstNpcReplica && FirstNpcReplica->GetRootPart())
+				<< " target_distance=" << (FirstNpcReplica ? glm::distance(FirstNpcReplica->GetPosition(), FirstNpcTarget) : -1.0f)
+				<< " authoritative_distance=" << (FirstNpcReplica ? glm::distance(FirstNpcReplica->GetPosition(), RelevanceNpc->GetPosition()) : -1.0f)
+				<< " peer_distance=" << glm::distance(CharacterValue->GetPosition(), RelevanceNpc->GetPosition())
+				<< " peer_y=" << CharacterValue->GetPosition().y << " npc_y=" << RelevanceNpc->GetPosition().y
+				<< " outstanding=" << M.ReliableAdmission.OutstandingBytes << " grants=" << M.ReliableAdmission.ActiveDrainGrants
+				<< " probes=" << M.ReliableAdmission.QualificationGrants << " pending_enters=" << M.StructuralPendingEnters << '\n';
+		}
 		Check(
 			FirstNpcReplica && FirstNpcReplica->GetRootPart() &&
 				glm::distance(FirstNpcReplica->GetPosition(), FirstNpcTarget) < 1.0f,
@@ -320,12 +734,25 @@ end)
 			Client.GetStatus() == GameSessionStatus::Failed && !ClientRuntime->Players->GetLocalPlayer().has_value(),
 			"real GNS hard disconnect stops client control and clears trusted LocalPlayer"
 		);
+		if (Profiled)
+			Check(Server->GetMetrics().ReliableAdmissionPeerStates == 0,
+				"profiled real GNS disconnect releases generation-scoped byte-admission state");
 	}
 
 	Client.Stop();
 	Server->Stop();
+	if (QualificationPooled) {
+		const auto M = Server->GetMetrics().ReliableAdmission;
+		Check(M.AcceptedBytes == M.VerifiedAttributedRetirement + M.TerminalReleasedBytes &&
+			!M.OutstandingBytes && !M.ActiveDrainGrants && !Server->GetMetrics().ReliableAdmissionPeerStates && M.VerifiedAttributedRetirement,
+			"pooled lifecycle conserves debt and clears every generation owner");
+		std::cout << "[Network:PooledGns] created=" << M.AcceptedBytes << " retired=" << M.VerifiedAttributedRetirement
+			<< " terminal=" << M.TerminalReleasedBytes << " outstanding=" << M.OutstandingBytes << '\n';
+	}
 	if (ClientRuntime) ClientRuntime->Destroy();
 	ServerRuntime.Destroy();
-	if (Failures == 0) std::cout << "Real GNS game-session lifecycle tests passed\n";
+	if (Failures == 0)
+		std::cout << (Profiled ? "Profiled real GNS game-session lifecycle tests passed\n"
+							   : "Real GNS game-session lifecycle tests passed\n");
 	return Failures == 0 ? 0 : 1;
 }

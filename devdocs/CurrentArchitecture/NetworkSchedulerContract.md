@@ -13,6 +13,20 @@ related_adrs:
 
 # Network scheduler contract
 
+## Profiled structural byte admission (2026-09-12)
+
+The trusted [reliable deployment profile](NetworkingReliableDeploymentContract.md)
+adds an optional GameSession resource check **before** this scheduler accepts a
+prepared structural frame. It uses exact encoded bytes plus adapter framing,
+finite elapsed-time peer/global credit and observed reliable backlog. Insufficient
+capacity leaves 3J work pending; it does not add a message queue or mutate Known.
+Accepted submission retains the existing acceptance/ordering contract below.
+Failed submission refunds its reservation and follows existing terminal cleanup.
+The scheduler's own queue, per-step limits, late-send allowance, traffic ordering,
+and 3J operation/planning bounds are not increased or repurposed as a rate limit.
+Legacy sessions without a profile remain unqualified for the approved latency
+class; actual profiled service qualification requires the official-path gates.
+
 ## Validation checkpoint
 
 The deterministic simulator and pure contracts now prove the transport and
@@ -186,6 +200,19 @@ prediction, input sequence, and replay history do not advance for that drop.
 `NetworkLimits`. It is nonzero, fits the session's per-tick bytes/messages
 ceilings, and can submit any one session-valid message. The scheduler does not
 invent an independent unbounded budget.
+
+`GameSession` additionally shares one per-peer negotiated send allowance across
+its early, structural and final flush opportunities within one `Step`. A drained
+earlier flush permits newly produced Character/Remote work to use only remaining
+bytes/messages at the final service point. Any non-drained result stops further
+flush attempts for that peer in the step, preserving queued structural
+prerequisites and avoiding backpressure retries. A residual smaller than the
+existing minimum valid `SchedulerTickBudget` waits for the next step; no credit
+accumulates. This fixed counter state owns no messages and does not change
+scheduler precedence, reliable ordering, queue ceilings or 3J acceptance.
+It guarantees a bounded local service opportunity, not backend delivery or
+same-step service when capacity is exhausted. See the Foundation 3L.3 ledger
+for recording-transport and tight-byte/message-budget validation.
 
 ## Scheduler statistics
 

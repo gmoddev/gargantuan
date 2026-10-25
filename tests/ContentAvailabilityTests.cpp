@@ -3,6 +3,7 @@
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/content/ContentAvailability.hpp"
@@ -20,6 +21,10 @@
 #include <random>
 #include <sstream>
 #include <thread>
+
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+#include "ContentOwnershipAllocator.hpp"
+#endif
 
 namespace {
 	using namespace gargantuan;
@@ -138,11 +143,153 @@ namespace {
 			);
 		}
 	};
+
+	void TestPackageOwnershipLifetime() {
+		Fixture Data;
+		auto World = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		ContentAvailabilityService Service(World, WorkspaceValue, {
+			.Provider = Data.Provider, .Package = Data.Package, .ManifestDigest = Data.ManifestDigest,
+			.Mode = ContentResidencyMode::OnDemand});
+		constexpr auto Key = "workspace/00000000";
+		Check(Pump(Service, [&] { return Service.IsManifestAvailable(); }), "ownership manifest loads");
+		Check(Service.RequestContent(Key), "ownership demand accepted");
+		Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Resident; }), "ownership package admits");
+		auto Root = WorkspaceValue->FindFirstChild("StreamedRegion", false);
+		auto Original = Root ? Root->FindFirstChild("AuthoredChild", false) : nullptr;
+		Check(Root && Original, "ownership package root and child exist");
+		if (!Root || !Original) return;
+		const auto RootId = Root->GetObjectId(), OriginalId = Original->GetObjectId();
+		const auto OriginalAddress = reinterpret_cast<std::uintptr_t>(Original.get());
+		std::weak_ptr<Instance> OriginalWeak = Original;
+		Original->Destroy();
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+		ContentOwnershipAllocation::Target = OriginalAddress;
+#endif
+		Original.reset();
+		Check(OriginalWeak.expired(), "package metadata does not retain destroyed original object");
+		// Release the final weak control-block reference before reusing its allocation.
+		OriginalWeak.reset();
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+		Check(ContentOwnershipAllocation::Held != nullptr, "original native allocation was captured for exact reuse");
+		ContentOwnershipAllocation::Reuse = true;
+#endif
+		auto Replacement = std::make_shared<Folder>();
+		const auto ReplacementId = Replacement->GetObjectId();
+		Check(ReplacementId.Slot == OriginalId.Slot && ReplacementId.Generation != OriginalId.Generation,
+			"replacement reuses registry slot with a distinct generation");
+		Check(!ObjectRegistry::Get().Lookup(OriginalId) && ObjectRegistry::Get().Lookup(ReplacementId) == Replacement,
+			"stale identity cannot resolve replacement lifetime");
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+		Check(reinterpret_cast<std::uintptr_t>(Replacement.get()) == OriginalAddress && !ContentOwnershipAllocation::Held,
+			"replacement occupies the exact original native address");
+		ContentOwnershipAllocation::Reset();
+#endif
+		Replacement->SetParent(Root);
+		Check(Service.ReleaseContent(Key), "ownership demand released");
+		for (int Attempt = 0; Attempt < 8; ++Attempt) Service.Step();
+		Check(Service.GetState(Key) == ContentResidencyState::Resident && !Root->GetDestroyed() && !Replacement->GetDestroyed(),
+			"SEC-3L-001 replacement lifetime pins root despite historical address or slot reuse");
+		if (Root->GetDestroyed()) { Service.Stop(); World->Destroy(); return; }
+		auto Second = std::make_shared<Folder>();
+		Second->SetParent(Root);
+		Replacement->SetParent(nullptr);
+		for (int Attempt = 0; Attempt < 8; ++Attempt) Service.Step();
+		Check(Service.GetState(Key) == ContentResidencyState::Resident && !Second->GetDestroyed(),
+			"remaining runtime descendant independently pins root");
+		Second->Destroy();
+		Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Unavailable; }),
+			"removing every runtime pin permits automatic eviction");
+		Check(Root->GetDestroyed() && !Replacement->GetDestroyed() && !ObjectRegistry::Get().Lookup(RootId),
+			"eviction ends package lifetime without destroying detached runtime state");
+		std::weak_ptr<Instance> RootWeak = Root;
+		Root.reset();
+		Check(RootWeak.expired(), "evicted record does not retain original root");
+		Replacement->Destroy(); Replacement.reset(); Second.reset();
+		Check(Service.RequestContent(Key), "ownership reload requested");
+		Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Resident; }), "ownership reload admits");
+		auto Reloaded = WorkspaceValue->FindFirstChild("StreamedRegion", false);
+		auto ReloadedChild = Reloaded ? Reloaded->FindFirstChild("AuthoredChild", false) : nullptr;
+		Check(Reloaded && ReloadedChild && Reloaded->GetObjectId() != RootId && ReloadedChild->GetObjectId() != OriginalId,
+			"reloaded root and child have fresh full identities");
+		Check(Service.ReleaseContent(Key), "unchanged reload demand released");
+		Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Unavailable; }),
+			"unchanged original package hierarchy remains automatically evictable");
+		Service.Stop();
+		Check(Service.GetMetrics().RetainedRecordCount == 0 && Service.GetMetrics().ResidentPackageObjects == 0,
+			"ownership records and object accounting clear on Stop");
+		World->Destroy();
+		std::cout << "[Content:Ownership] forced_address_reuse="
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+			<< 1
+#else
+			<< 0
+#endif
+			<< " object_id_bytes=" << sizeof(ObjectId) << " pointer_bytes=" << sizeof(const Instance *) << '\n';
+	}
+
+	void TestPackageOwnershipAdmissionEdges() {
+		// Each case owns an independent service and authoritative hierarchy.
+		for (int Case = 0; Case < 4; ++Case) {
+			Fixture Data;
+			auto World = std::make_shared<DataModel>();
+			auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+			bool CommitRejected = false;
+			ContentAvailabilityService Service(World, WorkspaceValue, {
+				.Provider = Data.Provider, .Package = Data.Package, .ManifestDigest = Data.ManifestDigest,
+				.Mode = ContentResidencyMode::OnDemand},
+				[&](std::string Code, std::string) { CommitRejected |= Code == "AdmissionCommitRejected"; });
+			constexpr auto Key = "workspace/00000000";
+			Check(Pump(Service, [&] { return Service.IsManifestAvailable(); }), "edge manifest loads");
+			std::shared_ptr<Folder> CallbackChild;
+			auto Added = WorkspaceValue->ChildAdded->Connect([&](std::shared_ptr<Instance> Root) {
+				if (Case != 1 || Root->GetName() != "StreamedRegion") return;
+				CallbackChild = std::make_shared<Folder>();
+				CallbackChild->SetParent(Root);
+			});
+			if (Case == 3) WorkspaceValue->Destroy();
+			Check(Service.RequestContent(Key), "edge demand accepted");
+			if (Case == 3) {
+				Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Failed; }) && CommitRejected,
+					"failed authoritative admission reports commit rejection");
+				Check(Service.GetMetrics().ResidentPackageObjects == 0 && Service.GetMetrics().Admissions == 0,
+					"failed admission publishes no package ownership");
+			} else {
+				Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Resident; }), "edge package admits");
+				auto Root = WorkspaceValue->FindFirstChild("StreamedRegion", false);
+				Check(Root != nullptr, "edge package root exists");
+				if (Root) {
+					if (Case == 0) Root->FindFirstChild("AuthoredChild", false)->Destroy();
+					if (Case == 2) Root->Destroy();
+					Check(Service.ReleaseContent(Key), "edge demand released");
+					if (Case == 1) {
+						for (int Attempt = 0; Attempt < 8; ++Attempt) Service.Step();
+						Check(CallbackChild && !CallbackChild->GetDestroyed() && !Root->GetDestroyed() &&
+							Service.GetState(Key) == ContentResidencyState::Resident,
+							"admission callback child is runtime state and pins root");
+						if (CallbackChild && !CallbackChild->GetDestroyed()) CallbackChild->Destroy();
+					}
+					Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Unavailable; }),
+						"destroyed original, removed callback pin, or externally destroyed root cleans up");
+					Check(Service.GetMetrics().ResidentPackageObjects == 0, "edge cleanup releases ownership metadata");
+				}
+			}
+			Added->Disconnect();
+			Service.Stop();
+			Check(Service.GetMetrics().RetainedRecordCount == 0, "edge stop releases records");
+			World->Destroy();
+		}
+	}
 }
 
 int main() {
 	using namespace gargantuan;
 	BootstrapNativeRuntimeSchema();
+	TestPackageOwnershipLifetime();
+	TestPackageOwnershipAdmissionEdges();
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+	return Failures == 0 ? 0 : 1;
+#endif
 
 	Fixture Data;
 	auto Parsed = ParsePackageContentManifest(Data.Provider->Manifest);
@@ -810,6 +957,116 @@ int main() {
 		"1023/1024/1025 queue pressure did not remain explicitly bounded");
 	QueueService.Stop();
 
+	// Exercise actual retained-document charges at the configured session ceiling,
+	// not only configuration validation. Leave worker completions queued before
+	// Step so admission cannot consume their independently reserved documents.
+	Fixture DecodedBoundaryData;
+	auto DecodedRegion = std::static_pointer_cast<Instance>(std::make_shared<Folder>());
+	DecodedRegion->SetName("DecodedBoundaryRegion");
+	DecodedRegion->SetArchivable(true);
+	for (std::size_t Index = 1; Index < MaximumPackageContentObjectsPerUnit; ++Index) {
+		auto Child = std::make_shared<Part>();
+		Child->SetName("Part" + std::to_string(Index) + std::string(1000, 'x'));
+		Child->SetArchivable(true);
+		Child->SetParent(DecodedRegion);
+	}
+	const auto DecodedPayload = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, DecodedRegion);
+	auto DecodedBytes = std::make_shared<std::vector<std::uint8_t>>(DecodedPayload.begin(), DecodedPayload.end());
+	Check(DecodedBytes->size() <= MaximumPackageContentPayloadBytes, "decoded-boundary payload exceeds the legal byte limit");
+	DecodedRegion->Destroy();
+	DecodedRegion.reset();
+	const auto DecodedDigest = AssetContentId::Hash(*DecodedBytes);
+	auto LargeEntry = DecodedBoundaryData.Manifest.Entries.front();
+	LargeEntry.Digest = DecodedDigest;
+	LargeEntry.ObjectCount = MaximumPackageContentObjectsPerUnit;
+	LargeEntry.CompressedBytes = LargeEntry.UncompressedBytes = DecodedBytes->size();
+	DecodedBoundaryData.Manifest.Entries.front() = LargeEntry;
+	DecodedBoundaryData.Provider->Payloads[LargeEntry.Key] = {{DecodedBoundaryData.Package, LargeEntry.Key}, DecodedDigest, DecodedBytes};
+	auto RefreshDecodedManifest = [&] {
+		DecodedBoundaryData.Provider->Manifest = EncodePackageContentManifest(DecodedBoundaryData.Manifest);
+		DecodedBoundaryData.ManifestDigest = AssetContentId::Hash(std::span(
+			reinterpret_cast<const std::uint8_t *>(DecodedBoundaryData.Provider->Manifest.data()),
+			DecodedBoundaryData.Provider->Manifest.size()));
+	};
+	RefreshDecodedManifest();
+	std::size_t DocumentCharge = 0;
+	{
+		auto BoundaryWorld = std::make_shared<DataModel>();
+		auto BoundaryWorkspace = std::dynamic_pointer_cast<Workspace>(BoundaryWorld->GetService("Workspace"));
+		ContentAvailabilityService BoundaryService(BoundaryWorld, BoundaryWorkspace, {
+			.Provider = DecodedBoundaryData.Provider, .Package = DecodedBoundaryData.Package,
+			.ManifestDigest = DecodedBoundaryData.ManifestDigest, .Mode = ContentResidencyMode::OnDemand});
+		Check(Pump(BoundaryService, [&] { return BoundaryService.IsManifestAvailable(); }), "decoded charge manifest failed");
+		Check(BoundaryService.RequestContent(LargeEntry.Key), "decoded charge request failed");
+		Check(Pump(BoundaryService, [&] { return BoundaryService.GetState(LargeEntry.Key) == ContentResidencyState::Resident; }),
+			"decoded charge measurement did not admit");
+		DocumentCharge = BoundaryService.GetMetrics().DecodedDocumentBytesHighWater;
+		BoundaryService.Stop();
+		Check(BoundaryService.GetMetrics().DecodedDocumentBytes == 0, "charge measurement leaked decoded bytes");
+	}
+	Check(DocumentCharge * 2 > MaximumPackageContentPayloadBytes &&
+		DocumentCharge * 2 + 1 <= MaximumContentAvailabilityDecodedDocumentBytes,
+		"decoded boundary charge is outside configurable session limits");
+	if (DocumentCharge * 2 > MaximumPackageContentPayloadBytes &&
+		DocumentCharge * 2 + 1 <= MaximumContentAvailabilityDecodedDocumentBytes) {
+		DecodedBoundaryData.Manifest.Entries.clear();
+		DecodedBoundaryData.Provider->Payloads.clear();
+		for (const auto *Key : {"boundary/a", "boundary/b"}) {
+			auto Entry = LargeEntry;
+			Entry.Key = Key;
+			Entry.BlobReference = "content/" + Entry.Key;
+			Entry.Dependencies.clear();
+			DecodedBoundaryData.Manifest.Entries.push_back(Entry);
+			DecodedBoundaryData.Provider->Payloads[Entry.Key] = {{DecodedBoundaryData.Package, Entry.Key}, DecodedDigest, DecodedBytes};
+		}
+		RefreshDecodedManifest();
+		for (const int Offset : {-1, 0, 1}) {
+			auto BoundaryWorld = std::make_shared<DataModel>();
+			auto BoundaryWorkspace = std::dynamic_pointer_cast<Workspace>(BoundaryWorld->GetService("Workspace"));
+			auto BoundaryLimits = ContentAvailabilityLimits{};
+			BoundaryLimits.MaximumDecodedDocumentBytes = static_cast<std::size_t>(static_cast<std::int64_t>(DocumentCharge * 2) + Offset);
+			ContentAvailabilityService BoundaryService(BoundaryWorld, BoundaryWorkspace, {
+				.Provider = DecodedBoundaryData.Provider, .Package = DecodedBoundaryData.Package,
+				.ManifestDigest = DecodedBoundaryData.ManifestDigest, .Mode = ContentResidencyMode::OnDemand,
+				.Limits = BoundaryLimits});
+			Check(Pump(BoundaryService, [&] { return BoundaryService.IsManifestAvailable(); }), "decoded boundary manifest failed");
+			Check(BoundaryService.RequestContent("boundary/a") && BoundaryService.RequestContent("boundary/b"),
+				"decoded boundary demand failed");
+			BoundaryService.Step();
+			const auto BoundaryDeadline = std::chrono::steady_clock::now() + 5s;
+			auto BoundarySettled = [&] {
+				const auto Metrics = BoundaryService.GetMetrics();
+				return Offset < 0 ? Metrics.DecodedCapacityDeferrals != 0 : Metrics.DecodedDocumentBytes == DocumentCharge * 2;
+			};
+			while (!BoundarySettled() && std::chrono::steady_clock::now() < BoundaryDeadline) std::this_thread::yield();
+			Check(BoundarySettled(), "decoded reservation boundary did not settle");
+			const auto Metrics = BoundaryService.GetMetrics();
+			Check(Metrics.DecodedDocumentBytes == DocumentCharge * (Offset < 0 ? 1 : 2) &&
+				Metrics.DecodedDocumentBytesHighWater <= BoundaryLimits.MaximumDecodedDocumentBytes && Metrics.Admissions == 0,
+				"decoded reservation exceeded its exact boundary or admitted undrained content");
+			std::cout << "[Content:DecodedBoundary] charge=" << DocumentCharge << " limit=" << BoundaryLimits.MaximumDecodedDocumentBytes
+				<< " current=" << Metrics.DecodedDocumentBytes << " high_water=" << Metrics.DecodedDocumentBytesHighWater
+				<< " deferrals=" << Metrics.DecodedCapacityDeferrals << '\n';
+			Check(BoundaryService.ReleaseContent("boundary/a") && BoundaryService.ReleaseContent("boundary/b"),
+				"decoded boundary cancellation failed");
+			Check(Pump(BoundaryService, [&] {
+				return BoundaryService.GetMetrics().DecodedDocumentBytes == 0 && BoundaryService.GetActiveRequestCount() == 0 &&
+					BoundaryService.GetState("boundary/a") == ContentResidencyState::Unavailable &&
+					BoundaryService.GetState("boundary/b") == ContentResidencyState::Unavailable;
+			}),
+				"decoded boundary cancellation retained documents");
+			Check(BoundaryService.RequestContent("boundary/a"), "decoded boundary recovery request failed");
+			Check(Pump(BoundaryService, [&] { return BoundaryService.GetState("boundary/a") == ContentResidencyState::Resident; }),
+				"decoded boundary did not recover after pressure removal");
+			Check(BoundaryService.ReleaseContent("boundary/a"), "decoded boundary recovery release failed");
+			Check(Pump(BoundaryService, [&] { return BoundaryService.GetState("boundary/a") == ContentResidencyState::Unavailable; }),
+				"decoded boundary recovery eviction failed");
+			BoundaryService.Stop();
+			Check(BoundaryService.GetMetrics().DecodedDocumentBytes == 0 && BoundaryService.GetActiveRequestCount() == 0,
+				"decoded boundary Stop retained documents or workers");
+		}
+	}
+
 	Fixture CancellationData;
 	CancellationData.Provider->Delay = 2ms;
 	auto CancellationWorld = std::make_shared<DataModel>();
@@ -1033,6 +1290,34 @@ int main() {
 	} catch (const std::exception &Error) {
 		std::cerr << "[Content:Test] FullyResident backlog: " << Error.what() << '\n';
 		Check(false, "FullyResident Engine failed with an available admission backlog");
+	}
+
+	// A failed Engine constructor does not run ~Engine. The still-owned input
+	// world must not retain native callbacks into its abandoned construction.
+	for (std::size_t Attempt = 0; Attempt < 24; ++Attempt) {
+		Fixture FailedBootstrap;
+		FailedBootstrap.Provider->Corrupt = true;
+		auto FailedWorld = std::make_shared<DataModel>();
+		HeadlessRenderer FailedRenderer(Vector2(64, 64));
+		ContentAvailabilityLimits FailureLimits;
+		if (Attempt % 3 == 1) FailureLimits.MaximumAdmissionObjectsPerTick = 0;
+		bool Rejected = false;
+		try {
+			auto FailedRuntime = std::make_unique<Engine>(FailedWorld, &FailedRenderer, nullptr,
+				EngineProviderConfiguration{
+					.Content = ContentAvailabilityConfiguration{
+						.Provider = FailedBootstrap.Provider, .Package = FailedBootstrap.Package,
+						.ManifestDigest = FailedBootstrap.ManifestDigest, .Mode = ContentResidencyMode::FullyResident,
+						.Limits = FailureLimits},
+					.AudioEnabled = false, .Mode = Attempt % 3 == 2 ? RuntimeMode::NetworkClient : RuntimeMode::NetworkServer});
+		} catch (const std::exception &) {
+			Rejected = true;
+		}
+		Check(Rejected, "invalid Engine bootstrap was accepted");
+		auto AfterFailure = std::make_shared<Folder>();
+		AfterFailure->SetParent(FailedWorld);
+		FailedWorld->Destroy();
+		Check(FailedWorld->GetDestroyed(), "failed Engine input world could not be destroyed safely");
 	}
 
 	auto RunRejectedPayload = [&](std::string Encoded, std::uint32_t DeclaredObjects, const char *Message) {

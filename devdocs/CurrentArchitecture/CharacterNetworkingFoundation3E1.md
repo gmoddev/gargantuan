@@ -97,7 +97,11 @@ Duplicate semantics are deliberate: `AddPeer`, `RegisterCharacter`, and
 `RegisterRemote` reject duplicate ownership; materialization marking is
 idempotent only where the owning manager documents it; `BindControl` creates a
 fresh control epoch; and runtime attachment rejects overlap rather than
-silently replacing an owner.
+silently replacing an owner. When a materialized owner Character loses its
+required RootPart relationship, `MarkUnmaterialized` revokes native control and
+the session clears its matching control cache. If that same Character and
+RootPart become materialized again, the session issues a new bind and control
+epoch. The old control epoch cannot authorize an action after the loss.
 
 ## Failure atomicity
 

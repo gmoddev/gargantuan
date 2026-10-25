@@ -415,17 +415,20 @@ namespace gargantuan {
 		AssertAuthoritativeMutation("Instance property mutation");
 		auto *property = FindProperty(std::string(propertyName));
 		if (!property) throw std::runtime_error("Committed property does not exist");
-		auto committedValue = EncodeCommittedProperty(this, *property);
 		const bool replicated = property->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated;
-		ChangeJournal::Get().Commit(
-			replicated ? GetReplicationScopeId() : ObjectId{},
-			GetObjectId(),
-			PropertyUpdatedChange{
-				std::string(propertyName),
-				std::move(committedValue),
-				replicated,
-			}
-		);
+		const auto Scope = replicated ? GetReplicationScopeId() : ObjectId{};
+		if (!ChangeJournal::DiscardsPayload(Scope)) {
+			auto committedValue = EncodeCommittedProperty(this, *property);
+			ChangeJournal::Get().Commit(
+				Scope,
+				GetObjectId(),
+				PropertyUpdatedChange{
+					std::string(propertyName),
+					std::move(committedValue),
+					replicated,
+				}
+			);
+		}
 		if (propertyName == "Name" || property->PersistencePolicy == InstanceProperty::Persistence::Saved)
 			if (auto dataModel = GetDataModel()) dataModel->AdvanceAuthoritativeRevision();
 		GetPropertyChangedSignal(std::string(propertyName))->Fire({});
@@ -444,7 +447,7 @@ namespace gargantuan {
 	}
 
 	void Instance::PublishReplicationSubtree(ObjectId scope) {
-		if (!scope.IsValid()) return;
+		if (!scope.IsValid() || ChangeJournal::DiscardsPayload(scope)) return;
 		std::vector<std::pair<ObjectId, ChangePayload>> Changes;
 		std::function<void(Instance *)> Append = [&](Instance *Current) {
 			auto *definition = InstanceClassRegistry::GetDefinition(Current);

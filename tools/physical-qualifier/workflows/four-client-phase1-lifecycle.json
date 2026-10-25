@@ -1,0 +1,18 @@
+{
+  "SchemaId": "gargantuan.four-client-physical-phase1",
+  "SchemaVersion": 1,
+  "Roles": {
+    "CLIENT": ["physical.client-start.v1", "physical.client-result.v1"],
+    "SERVER": ["physical.server-run.v1"]
+  },
+  "States": ["staged", "client-live", "server-result", "complete"],
+  "Transitions": [
+    {"From": "staged", "To": "client-live", "Role": "CLIENT", "Capability": "physical.client-start.v1", "Response": "LIVE", "Parameters": [], "Timeout": 20},
+    {"From": "client-live", "To": "server-result", "Role": "SERVER", "Capability": "physical.server-run.v1", "Response": "RESULT", "Parameters": [], "Timeout": 90},
+    {"From": "server-result", "To": "complete", "Role": "CLIENT", "Capability": "physical.client-result.v1", "Response": "RESULT", "Parameters": [], "Timeout": 90}
+  ],
+  "Parameters": {},
+  "RegistrationTimeout": 180,
+  "ExecutionTimeout": 240,
+  "Abort": "local-cleanup"
+}

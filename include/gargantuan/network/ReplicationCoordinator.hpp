@@ -3,20 +3,26 @@
 #include "gargantuan/network/ReplicationProtocol.hpp"
 #include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
 
 #include <deque>
+#include <array>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 
 namespace gargantuan {
 	class Instance;
+	class InstanceProperty;
+	class RuntimeSchemaRegistry;
 }
 
 namespace gargantuan::network {
+	namespace detail { class GameSessionTestAccess; }
 	inline constexpr std::size_t MaximumRelevanceTransitionsPerFrame = 4'096;
 	inline constexpr std::size_t DefaultStructuralTransitionsPerPeerTick = 512;
 	inline constexpr std::size_t DefaultStructuralTransitionsPerTick = 8'192;
@@ -24,6 +30,13 @@ namespace gargantuan::network {
 	inline constexpr std::uint64_t DefaultStructuralTransitionDeadlineTicks = 600;
 	inline constexpr std::size_t MaximumStructuralTransitionsPerTick = 65'536;
 	inline constexpr std::size_t MaximumStructuralPendingTransitions = 1'048'576;
+	inline constexpr std::size_t MaximumStructuralJournalRecordsPerCall = 2 * MaximumWireJournalRecords;
+	inline constexpr std::size_t MaximumStructuralJournalRecordsPerTick = 65'536;
+	inline constexpr std::size_t MaximumCatalogRetirementExaminationsPerTick = 4'096;
+	inline constexpr std::size_t MaximumRetiredCatalogObjects = MaximumStructuralPendingTransitions;
+	inline constexpr std::size_t MaximumPlanningWorkPerTick = 262'144;
+	inline constexpr std::size_t MaximumPlanningRecordsPerPeer = 262'144;
+	inline constexpr std::size_t MaximumPlanningRecords = 8'388'608;
 
 	struct StructuralReplicationConfiguration {
 		std::size_t MaximumTransitionsPerPeerTick = DefaultStructuralTransitionsPerPeerTick;
@@ -32,6 +45,10 @@ namespace gargantuan::network {
 		std::size_t MaximumPendingTransitionsPerPeer = MaximumPeerDesiredObjects;
 		std::size_t MaximumPendingTransitions = MaximumStructuralPendingTransitions;
 		std::uint64_t TransitionDeadlineTicks = DefaultStructuralTransitionDeadlineTicks;
+		std::size_t MaximumJournalRecordsPerPeerTick = 1'024;
+		std::size_t MaximumJournalRecordsPerTick = 32'768;
+		std::size_t PlanningWorkPerTick = 65'536;
+		std::size_t PlanningPeerQuantum = 2'048;
 
 		[[nodiscard]] bool IsValid() const;
 	};
@@ -53,6 +70,8 @@ namespace gargantuan::network {
 		std::uint64_t CatalogObjects = 0;
 		std::uint64_t CatalogRefreshes = 0;
 		std::uint64_t DependencyObjects = 0;
+		std::uint64_t DependencyPlanRebuilds = 0;
+		std::uint64_t DependencyPlanCacheHits = 0;
 		std::uint64_t DependencyLimitFailures = 0;
 		std::uint64_t SoftReferenceFixups = 0;
 		std::uint64_t RelevanceTransitions = 0;
@@ -93,12 +112,42 @@ namespace gargantuan::network {
 		std::uint64_t StructuralOldestPendingAgeTicks = 0;
 		std::uint64_t StructuralCriticalOldestAgeTicks = 0;
 		std::uint64_t StructuralSelectionCpuNanoseconds = 0;
+		std::uint64_t AcceptedAncestryObjects = 0;
+		std::uint64_t AcceptedAncestryLogicalBytes = 0;
+		std::uint64_t CatalogRetiredObjects = 0;
+		std::uint64_t CatalogRetiredHighWater = 0;
+		std::uint64_t CatalogRetirementExaminations = 0;
+		std::uint64_t CatalogRetirementMaximumTickExaminations = 0;
+		std::uint64_t CatalogRetirementReleases = 0;
+		std::uint64_t CatalogRetentionLogicalBytes = 0;
+		std::uint64_t CatalogReferenceIndexBytes = 0;
+		std::uint64_t PlanningWork = 0;
+		std::uint64_t PlanningMaximumTickWork = 0;
+		std::uint64_t PlanningServiceOpportunities = 0;
+		std::uint64_t PlanningMaximumServiceGapTicks = 0;
+		std::uint64_t PlanningMaximumPeerSlice = 0;
+		std::uint64_t PlanningResumes = 0;
+		std::uint64_t PlanningInvalidations = 0;
+		std::uint64_t PlanningReadyBatches = 0;
+		std::uint64_t PlanningRecords = 0;
+		std::uint64_t PlanningRecordsHighWater = 0;
+		std::uint64_t PlanningPeerRecordsHighWater = 0;
+		std::uint64_t PlanningCpuNanoseconds = 0;
 	};
 
 	struct ReplicationProduceResult {
 		std::optional<ReplicationFrame> Frame;
 		std::string Error;
 		std::size_t SelectedTransitions = 0;
+		// Includes copied/coalesced/skipped records and byte-limit retries, not just emitted operations.
+		std::size_t JournalRecordsExamined = 0;
+		// Exact pre-acceptance encoding, reused by the runtime submission path.
+		std::vector<std::byte> EncodedFrame;
+		bool DeferredForBytes = false;
+		std::size_t RequiredFrameBytes = 0;
+		// Qualification-only identity of the exact encoded candidate, including
+		// candidates deferred before scheduler acceptance.
+		std::array<std::uint64_t, 2> DiagnosticFingerprint{};
 		[[nodiscard]] bool Succeeded() const {
 			return Frame.has_value();
 		}
@@ -111,7 +160,21 @@ namespace gargantuan::network {
 		}
 	};
 
+	struct FrozenJournalQuoteFrame {
+		ConnectionId Connection;
+		ReliableReplicationSequence Sequence;
+		std::uint64_t CompleteBytes = 0;
+		std::array<std::uint64_t, 2> Fingerprint{};
+		std::uint64_t CursorBefore = 0, CursorAfter = 0;
+	};
+	struct FrozenJournalQuoteStep {
+		std::optional<FrozenJournalQuoteFrame> Frame;
+		bool Complete = false;
+		std::string Error;
+	};
+
 	class ReplicationCoordinator {
+		friend class detail::GameSessionTestAccess;
 	  public:
 		using InitialRelevancePolicy = std::function<bool(ObjectId)>;
 		explicit ReplicationCoordinator(
@@ -128,6 +191,14 @@ namespace gargantuan::network {
 		AddPeerBounded(ConnectionId Connection, ReplicationEpoch Epoch, const PeerRelevanceSelection &Selection);
 		[[nodiscard]] ReplicationScheduleResult
 		RegisterPeerBounded(ConnectionId Connection, ReplicationEpoch Epoch, const PeerRelevanceSelection &Selection);
+		// Internal runtime continuation path. Legacy synchronous fixture helpers
+		// remain available as an independent semantic oracle.
+		[[nodiscard]] ReplicationScheduleResult RegisterPeerPlanned(ConnectionId Connection, ReplicationEpoch Epoch,
+			std::shared_ptr<const PeerRelevanceSelection> Selection);
+		[[nodiscard]] ReplicationScheduleResult RequestPlanning(ConnectionId Connection,
+			std::shared_ptr<const PeerRelevanceSelection> Selection, std::uint64_t SimulationTick);
+		void ProcessPlanning(std::uint64_t SimulationTick);
+		[[nodiscard]] bool IsPlanningReady(ConnectionId Connection) const;
 		[[nodiscard]] ReplicationProduceResult
 		UpdateRelevance(ConnectionId Connection, const PeerRelevanceSelection &Selection);
 		[[nodiscard]] ReplicationScheduleResult RecordDesiredState(
@@ -135,29 +206,63 @@ namespace gargantuan::network {
 		);
 		[[nodiscard]] ReplicationProduceResult
 		ProducePendingRelevance(ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick,
-			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes);
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes,
+			std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes);
 		[[nodiscard]] ReplicationProduceResult
 		ProducePendingBaseline(ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick,
-			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes);
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes,
+			std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes);
 		[[nodiscard]] ReplicationProduceResult
 		ProduceIncremental(ConnectionId Connection, std::size_t MaximumTransitions = MaximumWireJournalRecords,
-			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes);
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes,
+			std::size_t MaximumJournalRecords = MaximumStructuralJournalRecordsPerCall,
+			std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes);
+		[[nodiscard]] std::uint64_t GetJournalLag(ConnectionId Connection) const;
 		[[nodiscard]] ReplicationProduceResult SetRelevant(ConnectionId Connection, ObjectId Object, bool Relevant);
 		bool RemovePeer(ConnectionId Connection);
+		// Internal Main-thread maintenance. Repeated/older tick values cannot refill
+		// the shared retirement budget; no per-peer or per-refresh allowance exists.
+		void ProcessCatalogRetirement(std::uint64_t SimulationTick);
 		[[nodiscard]] const ReplicationView *GetView(ConnectionId Connection) const;
 		[[nodiscard]] bool HasPendingRelevance(ConnectionId Connection) const;
 		[[nodiscard]] std::size_t GetPendingCriticalTransitionCount(ConnectionId Connection) const;
 		[[nodiscard]] bool HasPendingStructuralWork() const;
+		// Main-owned source state, including bounded planning and unaccepted
+		// preparation. A producer's no-frame result is not proof of emptiness.
+		[[nodiscard]] bool HasPendingStructuralWork(ConnectionId Connection) const;
 		[[nodiscard]] ReplicationScheduleResult
 		CommitSchedulerAcceptance(ConnectionId Connection, ReliableReplicationSequence Sequence);
+		[[nodiscard]] ReplicationScheduleResult
+		DiscardSchedulerPreparation(ConnectionId Connection, ReliableReplicationSequence Sequence);
 		void RecordPeerFairnessRotation();
 		void RecordGlobalBudgetExhaustion();
 		[[nodiscard]] const ReplicationMetrics &GetCumulativeMetrics() const {
 			return Metrics;
 		}
 		[[nodiscard]] ReplicationMetrics GetMetrics() const;
+		// Qualification-only detached input for exact retained-work replay. Capture
+		// on Main at the cessation boundary; the result owns its journal suffix and
+		// peer value state plus an immutable schema pin. It cannot read the live
+		// source or ChangeJournal. Transfer exclusive ownership for detached replay.
+		[[nodiscard]] std::unique_ptr<ReplicationCoordinator> CaptureFrozenQuote(std::string &Error);
+		// One bounded detached planning / complete-GRPL replay step using only the
+		// captured selection/catalog/journal/schema. This is the worker replay entry;
+		// it must not race another call on this detached coordinator. Pending relevance is represented before
+		// journal work; an unfinished planning step is not completion. Caller supplies
+		// negotiated frame limits. Already-accepted unretired debt is separate.
+		[[nodiscard]] FrozenJournalQuoteStep AdvanceFrozenJournalQuote(
+			const std::map<ConnectionId, std::size_t> &MaximumFrameBytes);
 
 	  private:
+		struct NameBytePreflightCache {
+			ChangeCursor Catalog;
+			std::set<const std::string *> Validated;
+		};
+		bool IncrementalEncodingOptimizationsEnabled = true;
+		[[nodiscard]] ReplicationProduceResult ProduceIncrementalImpl(
+			ConnectionId Connection, std::size_t MaximumTransitions, std::size_t MaximumFrameBytes,
+			std::size_t MaximumJournalRecords, std::size_t AvailableFrameBytes, NameBytePreflightCache &Validation);
+		struct PlanningContinuation;
 		enum class PendingTransitionKind : std::uint8_t { Enter, Leave };
 		struct PendingTransition {
 			PendingTransitionKind Kind = PendingTransitionKind::Enter;
@@ -169,10 +274,39 @@ namespace gargantuan::network {
 			ObjectId Object;
 			std::uint64_t Token = 0;
 		};
+		struct AcceptedParentState {
+			// Exclusive journal boundary represented by accepted current Name.
+			// No value cache; the existing materialization lifetime owns this marker.
+			std::uint64_t NameJournalEnd = 0;
+			ObjectId Parent; // Invalid denotes no parent, not an unknown identity.
+			std::uint64_t JournalEnd = 0; // Parent-only coalescing watermark.
+			// Ownership only, not Known or a materialization epoch. Prepared parents
+			// retain it before acceptance; accepted parents retain it until removal.
+			std::shared_ptr<const ObjectId> CatalogRetention;
+			// Exact non-nil native references represented by accepted GRPL work.
+			// Frozen schema pointers, never Instance pointers or authoritative edges.
+			std::vector<std::pair<const InstanceProperty *, ObjectId>> References;
+		};
+		struct CatalogEntry {
+			std::shared_ptr<const StructuralMaterializationTemplate> Template;
+			// Stable across publication revisions, never across full ObjectIds.
+			std::shared_ptr<const ObjectId> Retention;
+			// Borrowed nodes of this entry's immutable publication, selected using
+			// canonical native reference metadata. Replaced with the whole entry.
+			std::vector<const std::map<std::string, WireValue>::value_type *> ReferenceProperties;
+			CatalogEntry(std::shared_ptr<const StructuralMaterializationTemplate> Value,
+				std::shared_ptr<const ObjectId> RetentionValue = {});
+			std::size_t GetReferenceIndexBytes() const {
+				return sizeof(ReferenceProperties) + ReferenceProperties.capacity() * sizeof(decltype(ReferenceProperties)::value_type);
+			}
+			const StructuralMaterializationTemplate *operator->() const { return Template.get(); }
+		};
+		using AcceptedParentMap = std::map<ObjectId, AcceptedParentState>;
 		struct PreparedStructuralCommit {
 			ReliableReplicationSequence Sequence;
 			ReliableReplicationSequence NextSequence;
 			std::optional<ChangeCursor> JournalCursor;
+			std::uint64_t PublicationJournalEnd = 0;
 			std::vector<ObjectId> Entering;
 			std::vector<ObjectId> Leaving;
 			std::uint64_t PublishedObjects = 0;
@@ -180,16 +314,24 @@ namespace gargantuan::network {
 			std::uint64_t DestroyedObjects = 0;
 			std::uint64_t DeadlineMisses = 0;
 			std::size_t TransitionCount = 0;
+			AcceptedParentMap Parents;
 		};
 
 		struct PeerState {
 			ReplicationView View;
 			ChangeCursor JournalCursor;
 			ReliableReplicationSequence NextSequence{1};
+			// Exclusive source cursor captured by each accepted complete Enter.
+			// Only lagging current materializations need an entry; never a payload.
+			std::map<ObjectId, std::uint64_t> PublicationJournalEnds;
+			// Derived metadata for actual Known identities, changed only with the
+			// accepted frame. Current catalog ancestry is not accepted ancestry.
+			AcceptedParentMap AcceptedParents;
+			std::size_t AcceptedReferenceBytes = 0;
 			std::set<ObjectId> DesiredObjects;
 			std::set<ObjectId> RequiredObjects;
 			PeerRelevanceSelection LastSelection;
-			ChangeCursor DesiredCatalogCursor;
+			ChangeCursor DesiredDependencyCursor;
 			std::map<ObjectId, PendingTransition> PendingTransitions;
 			std::deque<PendingQueueEntry> CriticalQueue;
 			std::deque<PendingQueueEntry> OrdinaryQueue;
@@ -198,23 +340,62 @@ namespace gargantuan::network {
 			std::uint64_t NextPendingToken = 1;
 			bool ExplicitSchedulerCommit = false;
 			bool PolicyManaged = false;
+			std::shared_ptr<const PeerRelevanceSelection> PlanningSelection;
+			std::shared_ptr<const PeerRelevanceSelection> ResolvedSelection;
+			std::shared_ptr<PlanningContinuation> Planning;
+			std::uint64_t AcceptedRevision = 0;
+			std::uint64_t LastPlanningServiceTick = 0;
+			std::size_t PlanningFrameLimit = 0;
+			std::size_t PlanningInputRecords = 0;
+			bool Planned = false;
+			bool PlanningAwaitingSelection = false;
+			std::string PlanningError;
 		};
 		std::shared_ptr<Instance> SourceRoot;
+		ObjectId SourceRootId;
+		bool FrozenQuote = false;
+		std::shared_ptr<const RuntimeSchemaRegistry> FrozenSchema;
+		std::uint64_t FrozenJournalOldest = 0;
+		std::uint64_t FrozenJournalTail = 0;
+		std::vector<ChangeRecord> FrozenJournalRecords;
+		ConnectionId FrozenQuoteAfter;
 		InitialRelevancePolicy IsInitiallyRelevant;
 		bool StructuralTemplateReuseEnabled = true;
 		StructuralReplicationConfiguration Configuration;
 		std::uint64_t StandaloneSchedulingTick = 0;
 		std::uint64_t LatestSchedulingTick = 0;
 		ObjectId WorldGeneration;
-		std::map<ObjectId, std::shared_ptr<const StructuralMaterializationTemplate>> Catalog;
+		std::map<ObjectId, CatalogEntry> Catalog;
 		std::set<ObjectId> RequestedTemplates;
 		std::set<ObjectId> RetiredObjects;
+		ObjectId RetirementAfter;
+		std::uint64_t RetirementTick = 0;
+		std::size_t RetirementRemaining = MaximumCatalogRetirementExaminationsPerTick;
 		ChangeCursor CatalogCursor;
+		// Only the suffix after every non-Name record can use today's Name.
+		// A conservative global barrier also covers hierarchy/reference effects
+		// on other objects without maintaining a second dependency graph.
+		std::uint64_t NameCoalescingBegin = 0;
+		// Latest committed catalog boundary that changed live identities, ancestry,
+		// or hard-reference edges. Ordinary publication revisions are independent.
+		ChangeCursor DependencyCursor;
+		ChangeCursor PlanningCursor;
+		std::uint64_t PlanningTick = 0;
+		std::size_t PlanningRemaining = 0;
+		std::size_t PlanningRecordCount = 0;
+		ConnectionId PlanningAfter;
+		std::set<ConnectionId> PlanningPeers;
+		std::map<ConnectionId, std::shared_ptr<PlanningContinuation>> DetachedPlanning;
 		std::map<ConnectionId, PeerState> Peers;
 		std::size_t PendingTransitionCount = 0;
 		ReplicationMetrics Metrics;
+		ReplicationProduceResult ProducePlannedFrame(ConnectionId Connection, ReplicationMessageKind Kind,
+			std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes,
+			std::size_t AvailableFrameBytes);
 
 		bool RefreshCatalog(std::string &Error);
+		void BeginRetirementTick(std::uint64_t SimulationTick);
+		void ReclaimRetiredTemplates();
 		bool BuildDependencyClosure(
 			const PeerRelevanceSelection &Selection, std::set<ObjectId> &Closure, std::string &Error
 		);
@@ -224,6 +405,12 @@ namespace gargantuan::network {
 		void RefreshPendingMetrics(ReplicationMetrics &Snapshot) const;
 		void CompactPendingQueues(PeerState &Peer);
 		void ApplyPreparedCommit(PeerState &Peer, PreparedStructuralCommit Commit);
+		void RecordCausalPreparation(const PeerState &Peer, const PreparedStructuralCommit &Commit,
+			std::span<const std::byte> Encoded) const;
+		void RecordCausalPendingReplacement(const PeerState &Peer,
+			const std::map<ObjectId, PendingTransition> &Replacement) const;
+		AcceptedParentMap CaptureAcceptedParents(const PeerState &Peer, const ReplicationFrame &Frame, std::uint64_t JournalEnd);
+		static void ApplyAcceptedParents(PeerState &Peer, AcceptedParentMap Parents);
 		PreparedPublishReplication MakePeerPublish(
 			ObjectId Object,
 			const std::set<ObjectId> &Known,
@@ -246,7 +433,8 @@ namespace gargantuan::network {
 			std::size_t MaximumTransitions,
 			std::uint64_t SimulationTick,
 			bool CriticalOnly = false,
-			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes,
+			std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes
 		);
 		ReplicationProduceResult AddPeer(
 			ConnectionId Connection,

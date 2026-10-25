@@ -1,6 +1,23 @@
 include(FetchContent)
 
+# Gargantuan's root project is C++-only, but pinned GNS publishes a c_std_99
+# requirement for its C sources. Enable C in the parent GNS integration scope so
+# CMake retains the compiler feature table when the fetched target is consumed.
+enable_language(C)
+
 set(GARGANTUAN_GNS_REVISION "2cb93a06350bb065db53abdb0d87cf297e0bfd34")
+
+option(
+	GARGANTUAN_GNS_UPSTREAM_UBSAN_COMPAT
+	"Apply pinned GNS's upstream UBSan compatibility exclusions only to the upstream target"
+	OFF
+)
+
+option(
+	GARGANTUAN_NATIVE_EGRESS_TEST_HOOKS
+	"Compile bounded native-egress race pause hooks for a dedicated test build"
+	OFF
+)
 
 set(BUILD_STATIC_LIB ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
@@ -24,9 +41,37 @@ FetchContent_Declare(
 	GIT_PROGRESS TRUE
 )
 FetchContent_MakeAvailable(GameNetworkingSockets)
+include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyServiceFairness.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyReliableServiceFeedback.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyPreciseSenderWake.cmake")
 
 if(NOT TARGET GameNetworkingSockets::static)
 	message(FATAL_ERROR "Pinned GameNetworkingSockets source did not provide GameNetworkingSockets::static")
+endif()
+
+if(GARGANTUAN_NATIVE_EGRESS_TEST_HOOKS)
+	# This option is explicitly off for production packages. The hooks are
+	# bounded and require a separate diagnostic build to exist at all.
+	target_compile_definitions(GameNetworkingSockets_s PRIVATE GARGANTUAN_NATIVE_EGRESS_TEST_HOOKS=1)
+endif()
+
+# Two pinned-GNS implementation details conflict with Clang's full undefined
+# sanitizer even though Gargantuan does not own either operation:
+# - the low-level callback wrapper deliberately erases a typed callback through
+#   a void* function signature;
+# - SNP packet serialization performs typed integer accesses into byte buffers.
+# The pinned dependency's own cmake/FindUBSan.cmake has intentionally disabled
+# the alignment sub-check since upstream commit cfe781c4a95800de4707ac1ab9a83d2368a2bdd3.
+# Keep these exclusions opt-in and private to the upstream GNS target. Gargantuan
+# targets retain full -fsanitize=undefined coverage, including alignment.
+if(GARGANTUAN_GNS_UPSTREAM_UBSAN_COMPAT)
+	if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+		message(FATAL_ERROR "GARGANTUAN_GNS_UPSTREAM_UBSAN_COMPAT is supported only with Clang")
+	endif()
+	target_compile_options(GameNetworkingSockets_s PRIVATE
+		"$<$<COMPILE_LANGUAGE:CXX>:-fno-sanitize=function>"
+		-fno-sanitize=alignment
+	)
 endif()
 
 # MSVC's C frontend does not advertise CMake's c_std_99 feature even though the

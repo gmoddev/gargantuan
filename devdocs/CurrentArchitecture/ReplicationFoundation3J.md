@@ -1,13 +1,15 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-06
+last_verified: 2026-09-14
 related_code:
   - include/gargantuan/network/ReplicationCoordinator.hpp
   - include/gargantuan/network/GameSession.hpp
   - src/network/ReplicationCoordinator.cpp
+  - src/network/ReplicationPlanning.hpp
   - src/network/GameSession.cpp
   - tests/ReplicationRelevanceTests.cpp
+  - tests/NameCoalescingFixture.hpp
   - tests/GameSessionTests.cpp
   - tests/GameSessionBenchmark.cpp
 related_adrs:
@@ -16,8 +18,12 @@ related_adrs:
 
 # Replication foundation 3J
 
-Foundation 3J bounds server preparation and reliable submission of structural
-work after 3E has decided a peer's desired objects. It preserves 3I's immutable
+Foundation 3J bounds selected structural operations and reliable submission
+after 3E has decided a peer's desired objects. It does not bound all surrounding
+Desired/dependency/fixup inspection by itself. Runtime peers now use the separate,
+private dependency-complete continuation described in the measured
+[3L.3 planning checkpoint](ContentAvailabilityFoundation3L_3.md) before offering
+READY work to these unchanged selection limits. It preserves 3I's immutable
 authoritative templates, GRPL v1, peer materialization epochs, and 3E.1's
 reliable failure rules.
 
@@ -36,6 +42,28 @@ reliable failure rules.
 This is not the lossy newest-wins policy used by 3G. Budget exhaustion leaves a
 semantic transition pending. It does not make an object irrelevant, drop an
 operation, advance a peer cursor, or claim materialization.
+
+KI-007 in `KNOWN_ISSUES.md` records the formerly omitted accepted soft edge when
+a replacement precedes old-target removal. The current local correction tracks
+accepted native reference targets beside accepted ancestry and charges their
+clear/replacement work to removal groups. Current authoritative values alone are
+not sufficient. See the [3L.3 correctness gate](ContentAvailabilityFoundation3L_3.md)
+and validation ledger for exact-source results; no client validation, budget or
+authority is weakened.
+
+The subsequent call-local ordered planning lookup joins sorted Desired identities
+to catalog/accepted maps. At most eight iterator advances precede a tree-search
+fallback for each lookup. This bounds sparse lookup walking only, not total
+planning. No iterator survives the non-mutating pass and no candidate becomes
+accepted early. This remains the synchronous/reference path. Runtime continuation
+state instead validates immutable selection and catalog/accepted revisions at
+each service slice, and reacquires reference values by ObjectId after suspension.
+Only complete, lifecycle-valid, fully costed batches become READY. Incomplete
+scratch is neither Pending nor Known; READY is not acceptance. KI-007 never sees
+partial groups. The separate default 65,536 planning-step allowance, 2,048 peer
+slice, finite memory ceilings and cancellation rules do not raise any 3J budget.
+The 3L.3 ledger records improved reload tails, slower convergence and still-failing
+healthy service gates; bounded planning is not an end-to-end latency guarantee.
 
 ## Ownership and work limits
 
@@ -74,9 +102,13 @@ One peer owns:
 
 - the existing committed `ReplicationView`, `JournalCursor`, replication epoch,
   and next reliable sequence;
+- a sparse ObjectId-to-exclusive-journal-boundary map for accepted complete
+  publications whose represented state is ahead of that peer's journal cursor;
 - the current dependency-closed desired and required object sets;
 - one `PendingTransition` per current `Desired - Known` Enter or `Known -
   Desired` Leave;
+- accepted ancestry records with compact non-nil native reference targets from
+  the actual accepted frame; these are replica bookkeeping, not semantic truth;
 - critical and ordinary FIFO scheduling entries containing only ObjectId and a
   generation token; and
 - at most one bounded prepared commit while synchronous scheduler admission is
@@ -130,6 +162,27 @@ transition pass. Required same-frame nil/reference fixups consume work units
 alongside the object transitions that caused them. A group plus its fixups that
 cannot fit the peer quantum is detected as an explicit resource failure instead
 of overshooting the cap or remaining silently unserviceable forever.
+
+Old reference targets come from accepted object metadata, including peer-specific
+nil patches and accepted journal property updates, not the current catalog alone.
+Surviving referrers must receive a current available replacement or nullable nil
+in the same group before a target Leave. Unavailable hard replacements defer the
+Leave until existing prerequisite Enter work progresses. A surviving referrer's
+clear is one charged operation. Hard referrers also pending Leave join dependency
+closure; soft referrers may leave independently. If their departure can reduce a
+temporary oversized clear set to a legal group, selection defers the target and
+continues peer queue service. A genuinely oversized surviving-reference group
+retains the existing peer-local failure policy. No unbounded retry/debt queue or
+new semantic dependency graph is created.
+
+Accepted reference records are prepared with the frame and installed only at its
+matching scheduler acceptance. Parent-only updates preserve the references;
+reference-only updates preserve the ancestry journal watermark. Leave/destroy and
+peer/session teardown release them. Frozen canonical property pointers plus full
+ObjectIds cannot resolve to replacement Instance identities. Three fixed debug
+counters measure inspection/removal work; accepted ancestry logical bytes now also
+include the reference vector capacity. This finite representation does not close
+the separate whole-peer planning CPU bound.
 
 Dependency and current-revision validation occurs again when work is selected.
 Pending Enter work resolves the current 3I template, so property mutations while
@@ -213,14 +266,145 @@ explicit-acceptance entry point.
 
 Every peer retains its own committed journal cursor. The initial accepted
 baseline advances that cursor to the catalog revision represented when bootstrap
-was prepared. Later reads are limited by the remaining 3J allowance. While both
+was prepared. Later reads are limited by the remaining 3J allowance. Both
+live catalog refresh and peer incremental preparation pin immutable journal records
+for the duration of their bounded work, avoiding repeated large value copies and
+releasing the journal lock before catalog or frame processing. Frozen cessation
+quotes still own their detached copied suffix. Neither representation changes the
+accepted cursor, Known, retry, or admission rules. While both
 materialization transitions and journal work exist, GameSession alternates the
 two bounded classes per peer; neither a dense Enter backlog nor a continuous
 stream of known-object updates can monopolize that peer's quantum.
 
 For an unknown pending-Enter object, journal property records are skipped and the
 cursor may advance because eventual Enter reconstructs the current complete 3I
-template. No per-peer historical property queue is required. For known objects,
+template. The converse scheduling order must also be safe: when Enter is accepted
+first, its prepared commit records the catalog's **prepare-time** exclusive
+journal boundary. Earlier records for that ObjectId are already represented by
+the complete publication and are skipped on subsequent bounded journal reads.
+Otherwise old Attributes/tags can roll current materialization backwards and
+bulk content repeats its initialization history. A newer catalog refresh by
+another peer before acceptance cannot move this captured boundary. Records at or
+after it and all unrelated objects keep their normal handling. Only exact
+scheduler acceptance installs the boundary; rejected preparation installs none.
+
+This is native server materialization bookkeeping, not a wire field, new
+scheduler, payload queue, relevance decision, or journal-cursor shortcut. Each
+map entry is one generation-bearing ObjectId plus one uint64 boundary, bounded
+to 65,536 current entries per peer; it contains no strings or snapshots. Entries
+are removed with the corresponding accepted Leave/destroy and all are released
+on peer/session destruction. Baselines whose cursor already represents the
+publication need no entry. Unchanged resident objects may retain this compact
+bookkeeping for their current materialization lifetime, never historical reload
+lifetimes. Maximum map payload is 65,536 times sizeof(pair<const ObjectId,
+uint64_t>), plus allocator/tree overhead; the validation failure is peer-local.
+
+Known native `Name` uses a narrow current-state derivation rule. Catalog refresh
+records the exclusive boundary after the most recent non-Name journal record.
+Only Name records in that barrier-free suffix may use the existing immutable
+publication's separate `Name` field; earlier segments retain historical order.
+Every non-Name record is conservatively a global barrier, including unrelated
+create/destroy, reparent, reference/nil, Attributes, tags and extension changes.
+Other scalar properties retain their existing behavior; this is not general
+journal compaction or a new property policy.
+
+For each already-Known full ObjectId, the first suffix Name emits current
+authoritative state and subsequent covered Names need no output. Existing
+accepted ancestry/reference metadata carries one additional uint64 exclusive
+Name boundary, captured at preparation from the catalog cursor. Only matching
+scheduler acceptance installs it and commits the prepared source cursor. Byte
+deferral, encoding failure, mismatched acceptance and discarded preparation
+install nothing. Later bounded reads may skip history already covered by an
+accepted Name, but cannot skip a later mutation beyond its captured boundary.
+Another peer refreshing the catalog cannot extend a prepared frame's coverage.
+Leave/destroy, full identity replacement and session destruction release this
+metadata; resnapshot failure still requires a fresh baseline. Source reads and
+retry examinations retain their existing hard budgets. The additional marker
+contains no cached value and introduces no new map, wire field or payload queue.
+`tests/NameCoalescingFixture.hpp` covers these contracts.
+
+A live native-Name candidate, optionally containing ordered Attribute updates,
+may skip an encoding attempt only when its selected valid Name string bytes
+alone prove that the complete frame exceeds the existing message limit.
+Selected Attributes count toward the operation limit but add no inferred bytes
+to this lower bound. Their immutable journal records are borrowed in a call-local
+pointer list bounded by the existing read/operation ceilings (at most 4,096
+pointers, 32 KiB on the qualified 64-bit build). The list is destroyed before
+recursive retry. Attribute values are copied and validated with the existing
+operation/reference rules only after Name bytes prove oversize; pure Attribute
+and small Name candidates receive no duplicate Attribute validation. Every
+selected Attribute must validate before the proof can skip an encoding attempt;
+failure returns to the ordinary producer with its original error precedence.
+Publication-covered, irrelevant and unknown Attribute records follow the normal
+producer's filters, and Attributes retain their existing global Name barrier.
+Other emitting record types retain ordinary fallback. This proof retains the original geometric
+retry and charges the same pinned journal examinations; it is not an admission
+size estimate. The successful frame still uses the ordinary encoder. All
+selected values are validated before skipping an attempt so an invalid later
+value retains its existing error precedence. Other mixed or unprovable candidates
+use the original path. A bounded call-local cache avoids revalidating the same
+immutable strings across retries and clears when the catalog cursor changes;
+it cannot survive preparation, acceptance or a later public call.
+`tests/NameBytePreflightFixture.hpp` compares this path against the original
+encoder for exact bytes, fingerprints, sequence, cursor, error and work-budget
+results, including rejection, semantic barriers and the complete 512 KiB bound.
+Mixed Attribute regressions also cover selected malformed suffixes, unselected
+malformed suffixes, deletion, reference errors, filtered history and the
+small-frame validation guard. Their [qualification receipt](../FutureArchitecture/Foundation3LNativeEgressOwnershipDecision.md#14-parallel-native-service-and-recovery-investigations-2026-10-11)
+records five affected native tests and all six hosted jobs passing at `5de6135c8`.
+The fresh native32 campaign passes all three measured recovery cases, including
+28.178837 s structural convergence against 40.767221 s allowed with exact causal
+replay. Its distinct finite F1 failure leaves overall native service unqualified;
+no physical Local32/Node32 or Foundation 3L completion follows.
+The byte proof follows the producer's selection order: already-covered native
+Name history contributes no operation, then the selected operation limit ends
+the candidate before an unselected next record is inspected. Covered strings
+do not become newly selected validation inputs; every actually selected string
+retains full validation and error precedence. The detached frozen Name proof
+uses the same ordering. This avoids discarded encoder work without changing
+accepted source coverage, output bytes, geometric retry sizes or read charges.
+
+Qualification can capture a detached 3J cessation input on Main after catalog
+refresh reaches the journal tail. The capture copies the bounded retained
+journal suffix and each peer's accepted value state, pins immutable catalog
+templates, and discards live planning coroutines before any replay. The detached
+reader stops at that tail and never reads the live DataModel or ChangeJournal;
+any continuation is rebuilt against the frozen catalog. A narrow journal-only
+replay uses the production `ProduceIncremental` encoder and scheduler-acceptance
+commit on this detached state, with the caller's negotiated frame limit, to
+record complete-message sizes and frame fingerprints. It fails closed if
+relevance transitions or an unaccepted preparation remain. This is a
+qualification measurement seam, not a new production queue, admission policy,
+or generic assertion that later live scheduling must choose identical frames.
+Already-accepted unretired complete-message debt is captured separately by the
+GameSession qualification accessor and must be added once, not replayed as
+unaccepted journal work. A convergence verdict still requires later accepted
+frames to be audited against the frozen quote.
+
+The 32-peer physical recovery controller performs that audit in memory. It
+records each later accepted complete-message size and encoded-frame fingerprint
+in admission order, compares it to the detached quote for the same connection,
+and checks the admission accepted-byte delta and unchanged source journal tail
+at the strict deadline. Only full terminal convergence and exact frame agreement
+allow a per-peer `W_i` complete-message upper envelope. Accepted-unretired debt
+is counted in full even if part was already first-sent at cessation, so this is
+conservative with respect to remaining native unique bytes. Frame grouping
+divergence, missing evidence, or late source mutation leaves `W_i` unmeasured;
+the frozen replay alone never establishes an exact live result.
+
+The recovery controller seals this quote after live acceptance matches, before
+requiring structural terminal convergence. It then derives the existing 3L
+service bound exactly from all 32 `W_i` values: 20 seconds plus the maximum of
+the 250-ms credit and 220.5-ms fairness terms with per-peer 2-MiB/s byte
+service, or aggregate 64-MiB/s byte service. The fixed ~20.4-second snapshot
+continues to observe ordinary service and client probes; pending structural
+bytes at that time are permitted until the measured `W_i` deadline. Terminal
+reader cursors, no pending debt, exact retirement, and final client Name
+observations are checked at the workload-derived deadline. The external farm
+runtime timeout remains a hard fail-closed limit; a measured bound extending
+beyond it cannot be reported as physical recovery PASS.
+
+No per-peer historical property queue is required. For already-known objects,
 the existing journal preserves ordered create/destroy/reparent/tag/attribute and
 other structural barriers; ordinary property values use current authoritative
 state where the established replication semantics permit coalescing. A peer that

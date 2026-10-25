@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/content/ContentAvailability.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -36,6 +37,7 @@ namespace gargantuan::host {
 
 	struct ServerHostConfiguration final {
 		ServerContentConfiguration Content = LocalServerContentConfiguration{};
+		std::optional<network::ReliableServiceProfile> ReliableService;
 	};
 
 	int RunDedicatedServer(

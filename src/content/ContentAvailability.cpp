@@ -1,10 +1,12 @@
 #include "gargantuan/content/ContentAvailability.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "assets/PreparedInstanceSerialization.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
+#include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "serialization/JsonCodec.hpp"
@@ -685,7 +687,7 @@ namespace gargantuan {
 			std::optional<AvailabilityTimePoint> QueuedAt;
 			ContentTimes Times;
 			std::shared_ptr<Instance> Root;
-			std::unordered_set<const Instance *> PackageObjects;
+			std::unordered_set<ObjectId> PackageObjects;
 		};
 		struct PreparedManifest final {
 			PackageContentManifest Manifest;
@@ -1114,6 +1116,7 @@ namespace gargantuan {
 	ContentAvailabilityService::~ContentAvailabilityService() { Stop(); }
 
 	void ContentAvailabilityService::Step() {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::ContentStep);
 		if (!State || State->Stopped) return;
 		DurationScope StepDuration(State->Metrics.Timing.Step);
 		std::vector<Impl::Completion> Completed;
@@ -1254,7 +1257,8 @@ namespace gargantuan {
 				continue;
 			}
 			RecordValue.Residency = ContentResidencyState::Admitting;
-			auto Prepared = InstanceSerialization::Internal::MaterializeDetachedJson(RecordValue.Prepared->Document);
+			auto Prepared = runtime_detail::MeasureWork(runtime_detail::WorkPhase::DetachedPreparation,
+				[&] { return InstanceSerialization::Internal::MaterializeDetachedJson(RecordValue.Prepared->Document); });
 			State->Metrics.DetachedObjectsHighWater = std::max<std::uint64_t>(
 				State->Metrics.DetachedObjectsHighWater, Prepared.ObjectsDecoded);
 			const auto PreparationFinished = AvailabilityClock::now();
@@ -1275,11 +1279,19 @@ namespace gargantuan {
 			}
 			auto Descendants = Prepared.Instance->GetDescendants();
 			RecordValue.PackageObjects.clear();
-			RecordValue.PackageObjects.reserve(Descendants.size() + 1);
-			RecordValue.PackageObjects.insert(Prepared.Instance.get());
-			for (const auto &Object : Descendants) RecordValue.PackageObjects.insert(Object.get());
+			// Allocate buckets and nodes before commit without publishing detached IDs.
+			// The snapshot excludes runtime children created by admission callbacks.
+			std::unordered_set<ObjectId> PackageObjects;
+			PackageObjects.reserve(Descendants.size() + 1);
+			std::vector<decltype(PackageObjects)::node_type> PackageNodes;
+			PackageNodes.reserve(Descendants.size() + 1);
+			for (std::size_t Index = 0; Index <= Descendants.size(); ++Index) {
+				PackageObjects.insert(ObjectId{});
+				PackageNodes.push_back(PackageObjects.extract(PackageObjects.begin()));
+			}
 			const auto CommitStarted = AvailabilityClock::now();
 			try {
+				runtime_detail::WorkScope CommitWork(runtime_detail::WorkPhase::ContentCommit);
 				Prepared.Instance->SetParent(State->WorkspaceValue);
 			} catch (const std::exception &Error) {
 				State->CachedBytes -= RecordValue.EncodedBytes;
@@ -1292,6 +1304,15 @@ namespace gargantuan {
 				State->Report("AdmissionCommitRejected", Error.what());
 				continue;
 			}
+			// SetParent has published the original hierarchy's full runtime identities.
+			// Reinsert the prepared nodes without a new allocation after commit.
+			PackageNodes.front().value() = Prepared.Instance->GetObjectId();
+			PackageObjects.insert(std::move(PackageNodes.front()));
+			for (std::size_t Index = 0; Index < Descendants.size(); ++Index) {
+				PackageNodes[Index + 1].value() = Descendants[Index]->GetObjectId();
+				PackageObjects.insert(std::move(PackageNodes[Index + 1]));
+			}
+			RecordValue.PackageObjects.swap(PackageObjects);
 			RecordValue.Root = std::move(Prepared.Instance);
 			RecordValue.Residency = ContentResidencyState::Resident;
 			const auto ResidentAt = AvailabilityClock::now();
@@ -1334,9 +1355,9 @@ namespace gargantuan {
 				continue;
 			}
 			auto Live = RecordValue.Root->GetDescendants();
-			bool RuntimeChild = !RecordValue.PackageObjects.contains(RecordValue.Root.get());
+			bool RuntimeChild = !RecordValue.PackageObjects.contains(RecordValue.Root->GetObjectId());
 			for (const auto &Object : Live)
-				if (!RecordValue.PackageObjects.contains(Object.get())) {
+				if (!RecordValue.PackageObjects.contains(Object->GetObjectId())) {
 					RuntimeChild = true;
 					break;
 				}

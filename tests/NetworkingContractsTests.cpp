@@ -8,6 +8,12 @@
 #include "gargantuan/network/Sequence.hpp"
 #include "gargantuan/network/Statistics.hpp"
 #include "gargantuan/network/Transport.hpp"
+#include "PooledReliableServiceModelFixture.hpp"
+#include "PooledReliableServiceProofHardening.hpp"
+#include "PooledReliableServiceRecoveryContractFixture.hpp"
+#include "ReliableTransportFeedbackModelFixture.hpp"
+#include "PooledReliableServiceProductionFixture.hpp"
+#include "RecoveryCausalEvidenceFixture.hpp"
 
 #include <array>
 #include <iostream>
@@ -241,6 +247,18 @@ int main() {
 	Check(!IsValidTransportEvent(OversizedReceive, FirstLimits),
 		"received events enforce delivery-specific negotiated message ceilings");
 
+	Check(gargantuan::test::pooled_service_model::RunPooledReliableServiceModelTests(),
+		"Foundation 3L pooled reliable service executable proof passes");
+	Check(gargantuan::test::pooled_service_model::hardening::RunPooledReliableServiceProofHardeningTests(),
+		"Foundation 3L pooled reliable service proof hardening passes");
+	Check(gargantuan::test::pooled_recovery_contract::RunPooledReliableServiceRecoveryContractTests(),
+		"Foundation 3L pooled recovery contract proof passes");
+	Check(gargantuan::test::reliable_feedback_model::RunReliableTransportFeedbackModelTests(),
+		"Foundation 3L reliable transport feedback executable proof passes");
+
+	Check(gargantuan::test::RunPooledReliableServiceProductionTests(), "Production pooled admission passes");
+	Check(gargantuan::test::HybridCapacityCandidate::RunTests(), "Hybrid candidate capacity contradictions remain detected");
+	Check(gargantuan::test::RunRecoveryCausalEvidenceTests(), "Causal recovery fence evidence passes");
 	if (Failures == 0) std::cout << "All networking contract tests passed\n";
 	return Failures == 0 ? 0 : 1;
 }

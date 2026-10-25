@@ -32,9 +32,23 @@ append-only history: later decisions supersede earlier ADRs rather than rewritin
 them. An accepted ADR may lead implementation, so it is not evidence that every
 described facility already exists.
 
-The repository does not yet have a canonical `docs/adr/` series. Until that
-series is introduced, documents explicitly labeled accepted design direction,
-including the game networking architecture, have ADR-like authority.
+The Foundation 3L [D01 pooled service-curve decision](../adr/D01-pooled-service-curve.md)
+starts the canonical `docs/adr/` series. Its historical F1 amendment governed finite
+accepted-grant drain capacity and supersedes D01's earlier cross-grant
+deficit and the short-window POOLED_SERVICE health/qualification models.
+The [D02 product-contract review](../adr/D02-pooled-service-product-contract-review.md)
+preserves the reviewed proposal and its deterministic capacity failures.
+The accepted [D03 hybrid service and permit ownership decision](../adr/D03-hybrid-pooled-service-and-permit-ownership.md)
+is the current D01 amendment. Its final `POOLED_CORRECTNESS_V1` revision keeps
+exact ownership, native-positive attribution, FIFO, bounded resources,
+algorithmic fairness and causal recovery mandatory. Elapsed service, gameplay,
+turnover and recovery targets remain measured nonfatal diagnostics. Funding is
+separate from delivered capacity. Core correctness qualification and deferred
+physical/provider certification have separate acceptance scopes; historical
+failures retain their original contracts and verdicts.
+Other documents explicitly
+labeled accepted design direction, including the game networking architecture,
+retain ADR-like authority until migrated into that series.
 
 ### Protocol specifications
 
@@ -129,6 +143,8 @@ The following documents describe recently implemented, source-verified slices:
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [SourceMount and FileLink compatibility](../../devdocs/CurrentArchitecture/SourceMount.md)
 - [Continuous native build and test contract](../../devdocs/CurrentArchitecture/ContinuousIntegration.md)
+- [Physical agent coordination ownership and migration](../../devdocs/CurrentArchitecture/PhysicalAgentCoordination.md)
+  routes the project adapter to the pinned GantriaEngine implementation.
 - [Optional telemetry host integration](../../devdocs/CurrentArchitecture/TelemetryIntegration.md)
 - [EditorHost protocol](../../devdocs/CurrentArchitecture/EditorHostProtocol.md)
 - [Editor viewport](../../devdocs/CurrentArchitecture/EditorViewport.md)
@@ -139,6 +155,11 @@ a goal; each migration must verify claims against current code and tests.
 
 ## Accepted and future direction
 
+- [Gargantuan physical readiness profile](../../tools/physical-qualifier/docs/PROTOCOL.md)
+  retains project-specific probe/capture/evidence policy; generic coordination is
+  owned by [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator).
+  Production transport and Foundation 3L acceptance gates are unchanged.
+
 - [Future architecture](../src/content/docs/developing/future-architecture.mdx)
   is the broad accepted direction, with implementation status stated per section.
 - [Future architecture concerns](../src/content/docs/developing/future-architecture-concerns.mdx)
@@ -147,6 +168,12 @@ a goal; each migration must verify claims against current code and tests.
   records accepted boundaries and the evidence-backed GNS transport selection;
   gameplay networking layers remain deferred.
 - [Roadmap](../src/content/docs/developing/roadmap.mdx) is non-normative ordering.
+- [Architectural discipline and subsystem boundaries](../../devdocs/FutureArchitecture/ArchitecturalDisciplineAndSubsystemBoundaries.md)
+  is future design input for dependency enforcement, admission, service/resource
+  envelopes, trusted 3M demand policy, and later hardening/topology.
+- [Cross-repository roadmap evidence review](../../devdocs/FutureArchitecture/RoadmapEvidence20260912.md)
+  records the 2026-09-12 source/test basis for completed and partial roadmap
+  slices across main, Node, MCP, Telemetry, and Studio; it is not release qualification.
 - Files under `devdocs/FutureArchitecture/` are design input and must be
   reconciled with newer accepted documents before implementation.
 

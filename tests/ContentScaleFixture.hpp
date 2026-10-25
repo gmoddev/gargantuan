@@ -5,9 +5,13 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/content/ContentAvailability.hpp"
 #include "gargantuan/network/CharacterProtocol.hpp"
+#include "gargantuan/network/Delivery.hpp"
 #include "gargantuan/network/ReplicationProtocol.hpp"
+#include "PublicationLatencyFixture.hpp"
+#include "StructuralBytesFixture.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -94,10 +98,16 @@ namespace gargantuan::test {
 	}
 
 	struct ContentScalePeer final {
+		network::ConnectionId LatencyConnection;
 		std::unordered_set<ObjectId> Objects;
 		ObjectId Root;
 		std::optional<network::CharacterControlTransition> Control;
 		std::map<ObjectId, std::uint64_t> LastStateTick;
+		std::map<ObjectId, std::chrono::steady_clock::time_point> LastStateWall;
+		double MaximumGapWallMilliseconds = 0;
+		std::chrono::steady_clock::time_point MaximumGapStarted{}, MaximumGapEnded{};
+		std::uint64_t MaximumGapFromTick = 0, MaximumGapToTick = 0;
+		double RootMotionMaximumGapWallMilliseconds = 0;
 		std::unordered_set<ObjectId> RootMotionCharacters;
 		std::uint64_t RootMotionStates = 0;
 		std::uint64_t RootMotionMaximumGapTicks = 0;
@@ -107,11 +117,14 @@ namespace gargantuan::test {
 		std::uint64_t InputSequence = 0;
 		std::string DisconnectDiagnostic;
 
-		void Observe(std::span<const std::byte> Bytes) {
+		void Observe(std::span<const std::byte> Bytes, network::DeliveryMode Delivery = network::DeliveryMode::UnreliableUnordered) {
+			if (ActiveStructuralBytes && Delivery == network::DeliveryMode::ReliableOrdered) ActiveStructuralBytes->Reliable(Bytes.size());
+			runtime_detail::PublicationPacketScope ObservationScope("Observer", "ObserverApplied", LatencyConnection, Bytes);
 			if (Bytes.size() < 4) return;
 			if (std::memcmp(Bytes.data(), "GRPL", 4) == 0) {
 				auto Frame = network::DecodeReplicationFrame(Bytes);
 				if (!Frame) throw std::runtime_error("scale peer received invalid GRPL");
+				if (ActiveStructuralBytes) ActiveStructuralBytes->Observe(*Frame, Bytes.size(), LatencyConnection);
 				for (const auto &Operation : Frame->Operations) {
 					if (const auto *Publish = std::get_if<network::PublishReplication>(&Operation.Intent)) {
 						if (Publish->Name.starts_with("ContentScale")) {
@@ -136,6 +149,8 @@ namespace gargantuan::test {
 					} else if (std::holds_alternative<network::UnpublishReplication>(Operation.Intent) ||
 						std::holds_alternative<network::DestroyReplication>(Operation.Intent)) {
 						const auto Object = network::GetReplicationObject(Operation.Intent);
+						runtime_detail::RecordPublicationLatency({.Stage = "RecipientRetired", .Connection = LatencyConnection,
+							.Object = Object, .Kind = 503});
 						Objects.erase(Object);
 						if (Object == Root) Root = {};
 					}
@@ -147,7 +162,35 @@ namespace gargantuan::test {
 					if (Binding->Bound) Control = *Binding;
 					else Control.reset();
 				}
+				const auto ReceivedAt = std::chrono::steady_clock::now();
 				auto ObserveState = [&](const network::CharacterAuthoritativeState &State) {
+					if (runtime_detail::PublicationLatencySelected(LatencyConnection)) {
+						const runtime_detail::PublicationLatencyRecord Record{.Stage = "ObserverState", .Connection = LatencyConnection,
+							.Object = State.Character, .Tick = State.AuthoritativeTick, .Sequence = State.StateSequence.Value(),
+							.Due = State.ControlEpoch.Value(),
+							.Nanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+								ReceivedAt.time_since_epoch()).count()), .Kind = 5};
+						auto *Sink = runtime_detail::ActivePublicationLatency;
+						Sink->Record(Sink->Context, Record);
+					}
+					auto &LastWall = LastStateWall[State.Character];
+					if (LastWall != std::chrono::steady_clock::time_point{}) {
+						const auto Gap = std::chrono::duration<double, std::milli>(ReceivedAt - LastWall).count();
+						if (ActiveRecipientGaps) {
+							(*ActiveRecipientGaps)[0].Add(Gap);
+							if (RootMotionCharacters.contains(State.Character)) (*ActiveRecipientGaps)[1].Add(Gap);
+						}
+						if (Gap > MaximumGapWallMilliseconds) {
+							MaximumGapWallMilliseconds = Gap;
+							MaximumGapStarted = LastWall;
+							MaximumGapEnded = ReceivedAt;
+							MaximumGapFromTick = LastStateTick[State.Character];
+							MaximumGapToTick = State.AuthoritativeTick;
+						}
+						if (RootMotionCharacters.contains(State.Character))
+							RootMotionMaximumGapWallMilliseconds = std::max(RootMotionMaximumGapWallMilliseconds, Gap);
+					}
+					LastWall = ReceivedAt;
 					auto &Last = LastStateTick[State.Character];
 					if (RootMotionCharacters.contains(State.Character)) {
 						++RootMotionStates;

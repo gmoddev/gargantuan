@@ -1,4 +1,11 @@
 #include "host/server/ServerHost.hpp"
+#include "host/server/PhysicalScaleQualification.hpp"
+#include "host/server/FarmAdmissionEvidence.hpp"
+#include "host/common/FarmPublicationEvidence.hpp"
+#include "host/server/FarmF1Evidence.hpp"
+#include "host/server/FarmD03FirstFault.hpp"
+#include "host/common/FarmServerTickEvidence.hpp"
+#include "host/common/FarmLifecycleEvidence.hpp"
 
 #include "host/common/PackagedHost.hpp"
 #include "gargantuan/Engine.hpp"
@@ -10,11 +17,16 @@
 #include "gargantuan/render/Renderer.hpp"
 
 #include <argparse/argparse.hpp>
+#include <algorithm>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -23,8 +35,22 @@
 #include <unordered_set>
 #include <variant>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
+
 #if defined(GARGANTUAN_WITH_GNS)
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "network/FarmCaptureEndpointAccess.hpp"
+#include "host/common/TransportServiceSmoke.hpp"
+#include "host/common/FarmClockCalibration.hpp"
+#include "host/server/FarmServiceTimingEvidence.hpp"
 #endif
 #if defined(GARGANTUAN_WITH_NODE_CONTENT)
 #include "host/server/NodeContentProvider.hpp"
@@ -32,6 +58,62 @@
 
 namespace gargantuan::host {
 	namespace {
+		struct FarmExecutionFaultContext {
+			detail::FarmD03FirstFault *Evidence = nullptr;
+#if defined(GARGANTUAN_WITH_GNS)
+			detail::FarmServiceTimingEvidence *Timing = nullptr;
+#endif
+			static bool Persist(void *Context, const network::detail::PooledServiceRecord &Value) noexcept {
+				auto &Self = *static_cast<FarmExecutionFaultContext *>(Context);
+#if defined(GARGANTUAN_WITH_GNS)
+				if (Self.Timing) Self.Timing->Freeze(Value.NowMicroseconds);
+				const auto Clock = detail::FarmServiceTimingEvidence::Clock::Capture();
+				Self.Evidence->SetClock({Clock.Process, Clock.Thread, Clock.SteadyNs,
+					Clock.QpcBefore, Clock.QpcAfter, Clock.Frequency, Clock.Valid});
+#endif
+				return Self.Evidence->Persist(Value);
+			}
+		};
+#if defined(GARGANTUAN_WITH_GNS)
+		// Only constructed by the trusted bounded session-smoke mode. This observes
+		// ordinary sends unchanged; it has no queue, scheduling or authority policy.
+		class SessionSmokeTransport final : public network::IGameTransport {
+			std::shared_ptr<network::IGameTransport> Delegate;
+			std::uint32_t ApplicationTraces = 0;
+			std::uint32_t StructuralTraces = 0;
+			bool EnableReliableServiceFeedback() override { return network::detail::ReliableServiceFeedbackAccess::Enable(*Delegate); }
+			bool ReleaseReliableServiceFeedback(network::ConnectionId Id) override { return network::detail::ReliableServiceFeedbackAccess::Release(*Delegate, Id); }
+			std::optional<network::detail::ReliableServiceFeedback> ReadReliableServiceFeedback(network::ConnectionId Id) const override {
+				return network::detail::ReliableServiceFeedbackAccess::Observe(*Delegate, Id);
+			}
+			bool SetOrdinaryServicePolicy(network::ConnectionId Id, std::shared_ptr<network::detail::OrdinaryServicePolicy> Policy) override {
+				return network::detail::ReliableServiceFeedbackAccess::DeclareOrdinaryPolicy(*Delegate, Id, std::move(Policy));
+			}
+		  public:
+			explicit SessionSmokeTransport(std::shared_ptr<network::IGameTransport> Value) : Delegate(std::move(Value)) {}
+			network::TransportOperationResult Start(const network::TransportStartConfiguration &Value) override { return Delegate->Start(Value); }
+			network::TransportOperationResult Stop(network::DisconnectInfo Value) override { return Delegate->Stop(std::move(Value)); }
+			network::TransportOperationResult Disconnect(network::ConnectionId Connection, network::DisconnectInfo Value) override { return Delegate->Disconnect(Connection, std::move(Value)); }
+			std::size_t PollEvents(std::span<network::TransportEvent> Output) override { return Delegate->PollEvents(Output); }
+			std::optional<std::size_t> GetAvailableDatagramBytes(network::ConnectionId Connection) const override { return Delegate->GetAvailableDatagramBytes(Connection); }
+			std::optional<network::NetworkStatistics> GetStatistics(network::ConnectionId Connection) const override { return Delegate->GetStatistics(Connection); }
+			network::TransportOperationResult Send(const network::NetworkMessageIntent &Message) override {
+				const bool Structural = Message.Traffic() == network::TrafficClass::StructuralReplication;
+				const bool Application = Message.Traffic() == network::TrafficClass::ReliableApplication;
+				auto &Count = Structural ? StructuralTraces : ApplicationTraces;
+				if ((!Structural && !Application) || Count >= 256) return Delegate->Send(Message);
+				++Count;
+				const auto Before = Delegate->GetStatistics(Message.Destination());
+				const auto Result = Delegate->Send(Message);
+				std::cout << "[Content:TransportSend] monotonic_us="
+					<< std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()
+					<< " structural=" << Structural << " bytes=" << Message.Payload().size()
+					<< " queued_reliable_before=" << (Before && Before->QueuedReliableBytes ? *Before->QueuedReliableBytes : 0)
+					<< " accepted=" << Result.Succeeded() << '\n';
+				return Result;
+			}
+		};
+#endif
 		volatile std::sig_atomic_t StopRequested = 0;
 
 		void RequestStop(int) {
@@ -55,6 +137,40 @@ namespace gargantuan::host {
 			using Handler = void (*)(int);
 			Handler PreviousInterrupt = SIG_DFL;
 			Handler PreviousTerminate = SIG_DFL;
+		};
+
+		// The farm runner signals this only after its result has already failed.
+		// Checking the event does not touch disk or alter transport state.
+		class FarmDiagnosticStop final {
+		  public:
+			explicit FarmDiagnosticStop(std::string_view Name) {
+				if (Name.empty()) return;
+#if defined(_WIN32)
+				const std::wstring WideName(Name.begin(), Name.end());
+				Event = OpenEventW(SYNCHRONIZE, FALSE, WideName.c_str());
+				if (!Event) throw std::runtime_error("farm diagnostic stop event is unavailable");
+#else
+				throw std::runtime_error("farm diagnostic stop event requires Windows");
+#endif
+			}
+			~FarmDiagnosticStop() {
+#if defined(_WIN32)
+				if (Event) CloseHandle(Event);
+#endif
+			}
+			FarmDiagnosticStop(const FarmDiagnosticStop &) = delete;
+			FarmDiagnosticStop &operator=(const FarmDiagnosticStop &) = delete;
+			bool Requested() const noexcept {
+#if defined(_WIN32)
+				return Event && WaitForSingleObject(Event, 0) == WAIT_OBJECT_0;
+#else
+				return false;
+#endif
+			}
+		  private:
+#if defined(_WIN32)
+			HANDLE Event = nullptr;
+#endif
 		};
 
 		bool IsPlayerOnlyArgument(std::string_view Argument) {
@@ -94,6 +210,26 @@ namespace gargantuan::host {
 		Program.add_argument("--startup-smoke").flag().help("exit after a bounded authoritative startup smoke");
 		Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 		Program.add_argument("--max-ticks").scan<'i', int>().default_value(0).help("bounded test-only server tick count");
+		Program.add_argument("--farm-run-id").default_value(std::string()).help("bounded qualification run identity");
+		Program.add_argument("--farm-diagnostic-stop-event").default_value(std::string())
+			.help("run-owned Windows event for sealing failed farm diagnostics");
+		Program.add_argument("--farm-peers").scan<'i', int>().default_value(0).help("expected actual GameSession clients (1-32)");
+		Program.add_argument("--farm-scale-workload").flag().help("run the bounded 32-client qualified scale matrix");
+		Program.add_argument("--farm-recovery-workload").flag().help("run bounded post-reload overload and recovery cases");
+		Program.add_argument("--farm-admission-evidence").default_value(std::string())
+			.help("fixed new role-local fairness evidence file for the 32-client scale run");
+		Program.add_argument("--farm-publication-evidence").default_value(std::string())
+			.help("fixed new role-local Character publication evidence file for the scale run");
+		Program.add_argument("--reliable-rate").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
+			.help("trusted per-connection application byte reservation per second; requires aggregate rate and peers");
+		Program.add_argument("--reliable-mode").default_value(std::string("FULL_RESERVATION"))
+			.help("trusted service mode: FULL_RESERVATION, non-real-time POOLED_SERVICE, or POOLED_SERVICE_LEGACY_V1");
+		Program.add_argument("--reliable-aggregate-rate").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
+			.help("trusted application egress reservation for this Server process, bytes/second");
+		Program.add_argument("--reliable-peers").scan<'u', std::uint32_t>().default_value(std::uint32_t{0})
+			.help("maximum connections funded by the reliable deployment profile");
+		Program.add_argument("--reliable-require-latency-compatible").flag()
+			.help("reject numerically unqualified profiles; actual path qualification is still required");
 		Program.add_argument("--content-provider")
 			.default_value(std::string("local"))
 			.help("trusted content origin: local (default) or node");
@@ -133,6 +269,62 @@ namespace gargantuan::host {
 			return 2;
 		}
 
+		const bool HasReliableArgument = Program.is_used("--reliable-rate") || Program.is_used("--reliable-aggregate-rate") ||
+			Program.is_used("--reliable-peers") || Program.is_used("--reliable-require-latency-compatible") || Program.is_used("--reliable-mode");
+		if (HasReliableArgument) {
+			const auto Mode = Program.get<std::string>("--reliable-mode");
+			if (Mode == "POOLED_SERVICE" || Mode == "POOLED_SERVICE_LEGACY_V1") {
+				if (HostConfiguration.ReliableService || Program.is_used("--reliable-rate") ||
+					Program.is_used("--reliable-aggregate-rate") || Program.is_used("--reliable-peers")) {
+					std::cerr << "[Network:ServiceProfile] POOLED_SERVICE selects the fixed Option C candidate; full-reservation overrides are invalid.\n";
+					return 2;
+				}
+				HostConfiguration.ReliableService = Mode == "POOLED_SERVICE" ? network::ReliableServiceProfile::PooledServiceNonRealtime() :
+					network::ReliableServiceProfile::PooledService(false);
+			} else {
+			if (Mode != "FULL_RESERVATION") {
+				std::cerr << "[Network:ServiceProfile] Unknown reliable service mode.\n"; return 2;
+			}
+			if (HostConfiguration.ReliableService || !Program.is_used("--reliable-rate") ||
+				!Program.is_used("--reliable-aggregate-rate") || !Program.is_used("--reliable-peers")) {
+				std::cerr << "[Network:ServiceProfile] Supply rate, aggregate rate and peers together; do not override an injected profile.\n";
+				return 2;
+			}
+			network::ReliableServiceProfile Profile;
+			Profile.ConnectionRate = Program.get<std::uint64_t>("--reliable-rate");
+			Profile.AggregateRate = Program.get<std::uint64_t>("--reliable-aggregate-rate");
+			Profile.MaximumConnections = Program.get<std::uint32_t>("--reliable-peers");
+			if (Profile.ConnectionRate > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) / 2 ||
+				Profile.MaximumConnections > network::MaximumGameSessionPeers) {
+				std::cerr << "[Network:ServiceProfile] Rate plus backend headroom or peer count exceeds the native envelope.\n";
+				return 2;
+			}
+			Profile.BackendRate = 2 * Profile.ConnectionRate;
+			Profile.GlobalBacklog = Profile.GlobalBurst + 2 * Profile.GameplayBurst * Profile.MaximumConnections;
+			Profile.RequireLatencyCompatibility = Program.is_used("--reliable-require-latency-compatible");
+			HostConfiguration.ReliableService = Profile;
+			}
+		}
+		if (HostConfiguration.ReliableService) {
+			const auto &Profile = *HostConfiguration.ReliableService;
+			if (!Profile.IsValid() || Profile.MaximumConnections > network::MaximumGameSessionPeers) {
+				std::cerr << "[Network:ServiceProfile] Invalid: " << Profile.ValidationError() << " (session peer maximum 512).\n";
+				return 2;
+			}
+			if (Profile.IsPooled()) {
+				std::cout << "[Network:ServiceProfile] Mode=POOLED_SERVICE N=" << Profile.MaximumConnections
+					<< " BackendCap=" << Profile.Pooled.BackendCap << " StructuralPool=" << Profile.Pooled.StructuralPool
+					<< " PeerDrainFloor=" << Profile.Pooled.PeerDrainFloor << " Grants=" << Profile.Pooled.MaximumDrainGrants
+					<< " Class=" << (Profile.HasDiagnosticPerformance() ? "non-real-time-correctness" : "capacity-compatible-path-unqualified") << '\n';
+			} else std::cout << "[Network:ServiceProfile] Mode=FULL_RESERVATION R=" << Profile.ConnectionRate << " A=" << Profile.AggregateRate
+				<< " N=" << Profile.MaximumConnections << " BackendRate=" << Profile.BackendRate
+				<< " StructuralPermille=" << Profile.StructuralPermille << " PeerBurst=" << Profile.PeerBurst
+				<< " GlobalBurst=" << Profile.GlobalBurst << " GameplayBurst=" << Profile.GameplayBurst
+				<< " PeerBacklog=" << Profile.PeerBacklog << " GlobalBacklog=" << Profile.GlobalBacklog
+				<< " Class=" << (Profile.IsLatencyCompatible() ? "capacity-compatible-path-unqualified" : "unqualified-low-capacity") << '\n';
+		} else {
+			std::cout << "[Network:ServiceProfile] Class=unqualified-legacy No byte-admission profile supplied\n";
+		}
 		bool HasContentArgument = false;
 		for (int Index = 1; Index < ArgumentCount; ++Index)
 			HasContentArgument = HasContentArgument || IsContentArgument(Arguments[Index]);
@@ -200,9 +392,57 @@ namespace gargantuan::host {
 		const auto BindEndpoint = BindText.empty() ? std::nullopt : ParseEndpoint(BindText);
 		const bool StartupSmoke = Program.is_used("--startup-smoke");
 		const bool SessionSmoke = Program.is_used("--session-smoke");
+		const auto FarmRunId = Program.get<std::string>("--farm-run-id");
+		const auto FarmDiagnosticStopEvent = Program.get<std::string>("--farm-diagnostic-stop-event");
+		const auto FarmPeers = Program.get<int>("--farm-peers");
+		const bool FarmScaleWorkload = Program.is_used("--farm-scale-workload");
+		const bool FarmRecoveryWorkload = Program.is_used("--farm-recovery-workload");
+		const auto FarmAdmissionEvidencePath = Program.get<std::string>("--farm-admission-evidence");
+		const auto FarmPublicationEvidencePath = Program.get<std::string>("--farm-publication-evidence");
+		const bool FarmMode = !FarmRunId.empty() || !FarmDiagnosticStopEvent.empty() || FarmPeers != 0 ||
+			FarmScaleWorkload || FarmRecoveryWorkload ||
+			!FarmAdmissionEvidencePath.empty() || !FarmPublicationEvidencePath.empty();
+#if defined(GARGANTUAN_WITH_GNS)
+		const char *NativeEgressSetting = std::getenv("GARGANTUAN_NATIVE_EGRESS_EXPERIMENT");
+		const std::string_view NativeEgressValue = NativeEgressSetting ? NativeEgressSetting : "0";
+		const bool NonRealtimeService = HostConfiguration.ReliableService && HostConfiguration.ReliableService->HasDiagnosticPerformance();
+		const bool EnableNativeEgressWorker = NonRealtimeService || NativeEgressValue == "1";
+		if ((NativeEgressValue != "0" && NativeEgressValue != "1") ||
+			(!NonRealtimeService && EnableNativeEgressWorker && (!FarmScaleWorkload || !HostConfiguration.ReliableService ||
+				!HostConfiguration.ReliableService->IsPooled()))) {
+			std::cerr << "[Network:NativeEgress] Experimental worker requires a bounded pooled farm run and setting 1.\n";
+			return 2;
+		}
+#endif
+		const auto ValidFarmRunId = std::all_of(FarmRunId.begin(), FarmRunId.end(), [](char Value) {
+			return (Value >= 'A' && Value <= 'Z') || (Value >= 'a' && Value <= 'z') ||
+				(Value >= '0' && Value <= '9') || Value == '-';
+		});
+		if (FarmMode && (FarmRunId.empty() || FarmRunId.size() > 64 || !ValidFarmRunId ||
+			FarmPeers < 1 || FarmPeers > 32 || Program.get<int>("--max-ticks") <= 0 ||
+			!BindEndpoint || SessionSmoke || StartupSmoke ||
+			(FarmScaleWorkload != !FarmAdmissionEvidencePath.empty()) ||
+			(FarmScaleWorkload != !FarmPublicationEvidencePath.empty()) ||
+			(!FarmDiagnosticStopEvent.empty() &&
+				(!FarmScaleWorkload || FarmDiagnosticStopEvent != "Local\\GargantuanFarmStop-" + FarmRunId)) ||
+			(FarmRecoveryWorkload && (!FarmScaleWorkload || Program.get<int>("--max-ticks") < 19000)) ||
+			(FarmScaleWorkload && (FarmPeers != 32 || Program.get<int>("--max-ticks") < 7200 ||
+				Residency != ContentResidencyMode::OnDemand)))) {
+			std::cerr << "[Qualification:Server] Invalid bounded farm arguments.\n";
+			return 2;
+		}
+#if defined(GARGANTUAN_WITH_GNS)
+		if (FarmMode && NonRealtimeService) {
+			std::cerr << "[Qualification:Server] Physical provider readers retain their historical contract; use POOLED_SERVICE_LEGACY_V1 for those historical campaigns. Core correctness is separately qualified.\n";
+			return 2;
+		}
+#endif
+#if defined(GARGANTUAN_WITH_GNS)
+		TransportServiceSmoke TransportTrace(SessionSmoke, "server");
+#endif
 		// Keep bounded acceptance diagnostics available even if the harness must
 		// terminate a failed long-running smoke process.
-		if (SessionSmoke || ContentChurnCycles != 0) {
+		if (SessionSmoke || FarmMode || ContentChurnCycles != 0) {
 			std::cout << std::unitbuf;
 			SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *Message) {
 				std::cerr << Message << '\n';
@@ -233,16 +473,60 @@ namespace gargantuan::host {
 		auto Payload = BootstrapPackagedRuntime(PackageRoot, RuntimeRoot, "GargantuanServer", BootstrapExitCode);
 		if (!Payload) return BootstrapExitCode;
 
+		// These owners also outlive the catch handler. Engine::Destroy borrows
+		// Renderer, and GameSession::Stop borrows Engine during exception cleanup.
+		std::unique_ptr<HeadlessRenderer> Renderer;
 		std::unique_ptr<Engine> Runtime;
+		const auto *ExecutionCaptureValue = std::getenv("GARGANTUAN_FARM_EXECUTION_CAPTURE");
+		const bool CaptureExecution = FarmScaleWorkload && ExecutionCaptureValue &&
+			std::string_view(ExecutionCaptureValue) == "1";
+		std::unique_ptr<detail::FarmD03FirstFault> ExecutionFault;
+		FarmExecutionFaultContext ExecutionContext;
+		std::ofstream ExecutionTimingOutput;
+#if defined(GARGANTUAN_WITH_GNS)
+		// Installed before native initialization; released after transport joins.
+		std::unique_ptr<detail::FarmServiceTimingEvidence> ServiceTimingEvidence;
+#endif
+		// Retain native grant certificates through exception handlers. Inner
+		// observer scopes unwind before this sink is exported and unregistered;
+		// its optional timing observer also outlives it.
+		std::unique_ptr<detail::FarmF1Evidence> F1Evidence;
+		bool F1EvidenceWritten = false;
 		std::unique_ptr<network::GameSession> Session;
+#if defined(GARGANTUAN_WITH_GNS)
+		std::shared_ptr<network::GameNetworkingSocketsTransport> FarmTransport;
+#endif
 		try {
+#if defined(GARGANTUAN_WITH_GNS)
+			if (FarmScaleWorkload && (CaptureExecution || detail::FarmServiceTimingEvidence::Requested()))
+				ServiceTimingEvidence = std::make_unique<detail::FarmServiceTimingEvidence>(true,
+					!CaptureExecution && detail::FarmServiceTimingEvidence::InitialRequested(), CaptureExecution);
+#endif
+			if (CaptureExecution) {
+				const auto EvidenceRoot = std::filesystem::path(FarmPublicationEvidencePath).parent_path();
+				ExecutionFault = std::make_unique<detail::FarmD03FirstFault>(
+					EvidenceRoot / "first-execution-fault.bin", FarmRunId);
+				const auto TimingPath = EvidenceRoot / "execution-native-timing.log";
+				if (std::filesystem::exists(TimingPath))
+					throw std::runtime_error("[Qualification:D03] native timing sidecar already exists");
+				ExecutionTimingOutput.open(TimingPath, std::ios::binary | std::ios::out);
+				if (!ExecutionTimingOutput)
+					throw std::runtime_error("[Qualification:D03] native timing sidecar could not be opened");
+				ExecutionContext.Evidence = ExecutionFault.get();
+#if defined(GARGANTUAN_WITH_GNS)
+				ExecutionContext.Timing = ServiceTimingEvidence.get();
+#endif
+			}
 			const auto HostStartupStarted = std::chrono::steady_clock::now();
 			const auto HostStartupUnixMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::system_clock::now().time_since_epoch()).count();
 			auto World = PackageBuilder::LoadWorld(*Payload, PackageRoot);
-			HeadlessRenderer Renderer(Vector2(320, 180));
+			Renderer = std::make_unique<HeadlessRenderer>(Vector2(320, 180));
 			std::optional<ContentAvailabilityConfiguration> Content;
 			const bool IsNodeProvider = std::holds_alternative<NodeServerContentConfiguration>(HostConfiguration.Content);
+#if defined(GARGANTUAN_WITH_NODE_CONTENT)
+			std::shared_ptr<NodeContentProvider> NodeProvider;
+#endif
 			ContentResidencyMode ContentMode = ContentResidencyMode::FullyResident;
 			std::string_view EffectiveProviderName = "local";
 			std::string NodeEndpointDiagnostic;
@@ -274,6 +558,7 @@ namespace gargantuan::host {
 					.RootCertificateFile = Node->RootCertificateFile,
 					.WorkloadTokenEnvironment = Node->WorkloadTokenEnvironment,
 				});
+				NodeProvider = Provider;
 				Content = ContentAvailabilityConfiguration{
 					.Provider = std::move(Provider),
 					.Package = {Payload->Inspection.Identity, Payload->Inspection.Revision},
@@ -308,7 +593,7 @@ namespace gargantuan::host {
 			const auto ContentBootstrapStarted = std::chrono::steady_clock::now();
 			Runtime = std::make_unique<Engine>(
 				World,
-				&Renderer,
+				Renderer.get(),
 				[](std::string Code, std::string Message) {
 					if (Code == "Information") return;
 					std::cerr << "[Runtime:Server] [" << Code << "] " << Message << '\n';
@@ -319,6 +604,15 @@ namespace gargantuan::host {
 					.Mode = RuntimeMode::NetworkServer,
 				}
 			);
+#if defined(GARGANTUAN_WITH_GNS)
+			std::unique_ptr<FarmClockCalibration> ClockCalibration;
+			if (FarmScaleWorkload) {
+				auto ClockRemote = World->FindFirstChild("ScaleFunction", false);
+				if (!ClockRemote) throw std::runtime_error("farm clock RemoteFunction is absent from the package");
+				ClockCalibration = std::make_unique<FarmClockCalibration>(FarmRunId, "server", -1);
+				ClockCalibration->SetTarget(ClockRemote->GetObjectId());
+			}
+#endif
 			if (IsNodeProvider) {
 				auto *Availability = Runtime->GetContentAvailability();
 				const auto Deadline = ContentBootstrapStarted + NodeBootstrapDeadline;
@@ -341,16 +635,53 @@ namespace gargantuan::host {
 				std::cout << "[Content:Server] Node bootstrap ready ManifestBytes="
 						  << Availability->GetMetrics().ManifestBytes
 						  << " WallMilliseconds=" << BootstrapMilliseconds << '\n';
+				if (FarmScaleWorkload) {
+#if defined(GARGANTUAN_WITH_NODE_CONTENT)
+					const auto Evidence = NodeProvider ? NodeProvider->GetAuthenticatedManifestEvidence() : std::nullopt;
+					if (!Evidence || !Evidence->TlsChannelConnected || Evidence->SuccessfulRequests == 0 ||
+						Evidence->RequestId.empty() || Evidence->RequestId.size() > 128 ||
+						Evidence->Package != PackageContentNamespace{Payload->Inspection.Identity, Payload->Inspection.Revision} ||
+						Evidence->ManifestDigest != Payload->ContentManifestDigest ||
+						Evidence->ManifestBytes != Availability->GetMetrics().ManifestBytes ||
+						!Evidence->RootCertificateDigest.IsValid())
+						throw std::runtime_error("Node authenticated manifest evidence differs from validated package bootstrap");
+					std::cout << "[Qualification:NodeProvider] event=authenticated_manifest run=" << FarmRunId
+						<< " request_id=" << Evidence->RequestId
+						<< " project=" << Evidence->Package.Project.ToString()
+						<< " revision=" << Evidence->Package.PackageVersion
+						<< " endpoint=" << NodeEndpointDiagnostic
+						<< " root_sha256=" << Evidence->RootCertificateDigest.ToString()
+						<< " manifest_sha256=" << Evidence->ManifestDigest.ToString()
+						<< " manifest_bytes=" << Evidence->ManifestBytes
+						<< " rpc_count=" << Evidence->SuccessfulRequests
+						<< " channel=grpc_ssl_credentials authenticated_rpc=1"
+						<< " tls_session_details=not_measured\n";
+#endif
+				}
 			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (BindEndpoint) {
+				network::GameNetworkingSocketsTransportConfiguration TransportConfiguration;
+				if (HostConfiguration.ReliableService) {
+					TransportConfiguration.MaximumConnections = HostConfiguration.ReliableService->MaximumConnections;
+					TransportConfiguration.SendRate = static_cast<std::uint32_t>(HostConfiguration.ReliableService->BackendSendRate());
+					TransportConfiguration.RequireExclusivePooledDomain = HostConfiguration.ReliableService->IsPooled();
+				}
+				TransportConfiguration.EnableNativeEgressWorker = EnableNativeEgressWorker;
+				TransportConfiguration.EnableNativeDataArbitration = NonRealtimeService;
+				if (NonRealtimeService) std::cout << "[Network:ServiceProfile] contract=POOLED_CORRECTNESS_V1 native_capacity=separate native_arbitration=1 latency_guarantee=0\n";
+				auto NativeTransport = std::make_shared<network::GameNetworkingSocketsTransport>(TransportConfiguration);
+				if (FarmMode) FarmTransport = NativeTransport;
+				std::shared_ptr<network::IGameTransport> Transport = NativeTransport;
+				if (SessionSmoke) Transport = std::make_shared<SessionSmokeTransport>(std::move(Transport));
 				Session = std::make_unique<network::GameSession>(
-					std::make_shared<network::GameNetworkingSocketsTransport>(),
+					std::move(Transport),
 					network::GameSessionConfiguration{
 						.Role = network::GameSessionRole::Server,
 						.Endpoint = *BindEndpoint,
 						.Limits = network::GameSessionConfiguration::DefaultLimits(),
 						.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
+						.ReliableService = HostConfiguration.ReliableService,
 					},
 					Runtime.get()
 				);
@@ -419,13 +750,162 @@ namespace gargantuan::host {
 			if ((!ContentLifecycleKey.empty() || !StopInFlightKey.empty()) && !Runtime->Content)
 				throw std::runtime_error("trusted content smoke requires package content availability");
 			auto TickDeadline = std::chrono::steady_clock::now();
+			auto PreviousTickStarted = TickDeadline;
+			auto PreviousSessionMetrics = network::GameSessionMetrics{};
+			std::uint32_t ProfileTicks = 0;
+			std::map<std::uint64_t, network::ConnectionId> FarmIdentities;
+			std::size_t FarmReadyHighWater = 0;
+			bool FarmIdentityConflict = false;
+			std::unique_ptr<detail::FarmServerTickEvidence> ServerTickEvidence;
+			if (FarmScaleWorkload) ServerTickEvidence = std::make_unique<detail::FarmServerTickEvidence>(
+				FarmRunId, std::filesystem::path(FarmPublicationEvidencePath).parent_path() / "server-work-ticks.bin");
+			std::unique_ptr<detail::FarmAdmissionEvidence> AdmissionEvidence;
+			if (FarmScaleWorkload) AdmissionEvidence = std::make_unique<detail::FarmAdmissionEvidence>(
+				FarmRunId, std::filesystem::path(FarmAdmissionEvidencePath), true);
+			// The writer outlives recovery buffers, including exception unwinding.
+			std::unique_ptr<PhysicalScaleQualification> ScaleQualification;
+			if (FarmScaleWorkload) ScaleQualification = std::make_unique<PhysicalScaleQualification>(
+				*Runtime, *Session, FarmRunId, FarmRecoveryWorkload, ServerTickEvidence.get());
+			if (ScaleQualification && AdmissionEvidence)
+				ScaleQualification->AttachAdmissionEvidence(*AdmissionEvidence);
+			std::unique_ptr<detail::FarmPublicationEvidence> PublicationEvidence;
+			if (FarmScaleWorkload) F1Evidence = std::make_unique<detail::FarmF1Evidence>(
+				detail::FarmF1Evidence::Contract::HybridF1V1);
+			if (F1Evidence && ExecutionFault)
+				F1Evidence->SetExecutionFaultObserver(&ExecutionContext, FarmExecutionFaultContext::Persist);
+#if defined(GARGANTUAN_WITH_GNS)
+			if (F1Evidence && ServiceTimingEvidence && !ExecutionFault)
+				F1Evidence->SetFailureObserver(ServiceTimingEvidence.get(), detail::FarmServiceTimingEvidence::Failed,
+					ServiceTimingEvidence->InitialOnly());
+#endif
+			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<detail::FarmPublicationEvidence>(
+				true, FarmRunId, -1, 0, std::filesystem::path(FarmPublicationEvidencePath));
+			if (PublicationEvidence) PublicationEvidence->WriteTrafficClock(std::cout);
+			FarmDiagnosticStop DiagnosticStop(FarmDiagnosticStopEvent);
+			if (FarmMode)
+				std::cout << "[Qualification:Server] event=start run=" << FarmRunId
+					<< " provider=" << ProviderName << " expected=" << FarmPeers << '\n';
+			if (SessionSmoke)
+				std::cout << "[Runtime:ServerFrame] unix_us,tick,interval_ns,poll_ns,engine_ns,session_ns,encode_ns,relevance_ns,materialize_ns,selected,committed,pending,wire_bytes\n";
 			while (Runtime->ProcessService->Alive && StopRequested == 0) {
+				if (DiagnosticStop.Requested()) {
+					std::cout << "[Qualification:Server] event=diagnostic_stop run=" << FarmRunId << '\n';
+					break;
+				}
+				const auto TickStarted = std::chrono::steady_clock::now();
+				auto MarkExecutionStage = [&](detail::FarmD03FirstFault::Stage Stage,
+					std::chrono::steady_clock::time_point At) {
+					if (ExecutionFault) ExecutionFault->MarkStage(Stage, Runtime->GetSimulationTick() +
+						(Stage == detail::FarmD03FirstFault::Stage::Poll || Stage == detail::FarmD03FirstFault::Stage::Engine ? 1 : 0),
+						static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(At.time_since_epoch()).count()));
+				};
+				MarkExecutionStage(detail::FarmD03FirstFault::Stage::Poll, TickStarted);
+				if (ServerTickEvidence) ServerTickEvidence->BeginTick(Runtime->GetSimulationTick() + 1);
+				if (PublicationEvidence) PublicationEvidence->MarkFrameBegin(Runtime->GetSimulationTick() + 1);
 				if (Session) (void)Session->Poll();
+				const auto EngineStarted = std::chrono::steady_clock::now();
+				MarkExecutionStage(detail::FarmD03FirstFault::Stage::Engine, EngineStarted);
 				Runtime->Step();
-				if (Session) {
+			const auto SessionStarted = std::chrono::steady_clock::now();
+			MarkExecutionStage(detail::FarmD03FirstFault::Stage::Session, SessionStarted);
+			if (Session) {
+				runtime_detail::WorkSample SessionWork;
+				if (FarmRecoveryWorkload) {
+					runtime_detail::WorkCapture Capture(&SessionWork);
 					Session->Step(Runtime->GetSimulationTick());
+				} else {
+					Session->Step(Runtime->GetSimulationTick());
+				}
+				const auto SessionEnded = std::chrono::steady_clock::now();
+					// The initiating scalar record is already persisted before rejection.
+					// Unwind this diagnostic farm promptly so native joins can export its
+					// frozen history before a remote supervisor reacts to disconnects.
+					if (ExecutionFault && ExecutionFault->HasFault())
+						throw std::runtime_error("[Qualification:D03] first execution fault captured before peer rejection");
+					MarkExecutionStage(detail::FarmD03FirstFault::Stage::Qualifier, SessionEnded);
 					if (Session->GetStatus() == network::GameSessionStatus::Failed)
 						throw std::runtime_error(Session->GetFailure());
+					if (FarmMode) {
+						const auto Current = Session->GetMetrics();
+						FarmReadyHighWater = std::max(FarmReadyHighWater, static_cast<std::size_t>(Current.ReadyPeers));
+						for (const auto &Peer : Session->GetPeerIdentities()) {
+							if (!Peer.Ready) continue;
+							const auto [Iterator, Inserted] = FarmIdentities.emplace(Peer.Nonce, Peer.Connection);
+							if (!Inserted && Iterator->second != Peer.Connection) FarmIdentityConflict = true;
+							if (Inserted) {
+#if defined(GARGANTUAN_WITH_GNS)
+								const auto Remote = FarmTransport
+									? network::detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+										*FarmTransport, Peer.Connection) : std::nullopt;
+								if (!Remote || (BindEndpoint->Host == "10.253.3.2" && Remote->Host != "10.253.3.1") ||
+									(network::IsLoopbackTransportEndpoint(*BindEndpoint) && Remote->Host != "127.0.0.1"))
+									throw std::runtime_error("farm ready peer lacks a matching direct UDP endpoint");
+#endif
+								std::cout << "[Qualification:Server] event=ready run=" << FarmRunId
+									<< " nonce=" << Peer.Nonce << " connection_slot=" << Peer.Connection.Slot
+									<< " connection_generation=" << Peer.Connection.Generation
+									<< " session_epoch=" << Peer.SessionEpoch << " player_id=" << Peer.PlayerId
+									<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+										std::chrono::steady_clock::now().time_since_epoch()).count();
+#if defined(GARGANTUAN_WITH_GNS)
+								std::cout << " client_port=" << Remote->Port;
+#endif
+								std::cout << '\n';
+							}
+						}
+						if (ScaleQualification) {
+							const auto QualificationStarted = std::chrono::steady_clock::now();
+							auto Microseconds = [](auto Duration) {
+								return static_cast<std::uint64_t>(std::chrono::duration_cast<
+									std::chrono::microseconds>(Duration).count());
+							};
+							ScaleQualification->Step(Runtime->GetSimulationTick(), {
+								.PollMicroseconds = Microseconds(EngineStarted - TickStarted),
+								.EngineMicroseconds = Microseconds(SessionStarted - EngineStarted),
+								.SessionMicroseconds = Microseconds(SessionEnded - SessionStarted),
+								.SessionIncrementalMicroseconds = SessionWork[static_cast<std::size_t>(
+									runtime_detail::WorkPhase::IncrementalPreparation)].ExclusiveNanoseconds / 1'000,
+								.SessionBuildMicroseconds = SessionWork[static_cast<std::size_t>(
+									runtime_detail::WorkPhase::StructuralFrameBuild)].ExclusiveNanoseconds / 1'000,
+								.SessionEncodeMicroseconds = SessionWork[static_cast<std::size_t>(
+									// Include the nested StructuralEncode scope that performs
+									// validation/serialization, not just its wrapper overhead.
+									runtime_detail::WorkPhase::StructuralValidationEncode)].Nanoseconds / 1'000,
+								.SessionEncodeRetries = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::EncodeRetries)],
+								.SessionNamePreflightRetries = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightRetries)],
+								.SessionNameValidationBytes = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightValidationBytes)],
+								.SessionNameValidationCacheHits = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightCacheHits)],
+								.SessionNameProofCalls = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightProofCalls)],
+								.SessionNameNonPropertyFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightNonPropertyFallback)],
+								.SessionNameNonNameFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightNonNameFallback)],
+								.SessionNameNonReplicatedFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightNonReplicatedFallback)],
+								.SessionNameStateFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightNameStateFallback)],
+								.SessionNameInvalidFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightNameInvalidFallback)],
+								.SessionNameAttributeFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightAttributeFallback)],
+								.SessionNameFilteredFallback = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightFilteredFallback)],
+								.PreQualificationMicroseconds = Microseconds(QualificationStarted - SessionEnded),
+							});
+#if defined(GARGANTUAN_WITH_GNS)
+							if (ClockCalibration)
+								ClockCalibration->SetActive(World->GetAttributeValue(
+									"ScaleClockActive", ScriptSecurityContext::CoreTrusted()) ==
+									std::optional<WireValue>(WireValue(true)));
+#endif
+							if (ScaleQualification->IsComplete()) Runtime->ProcessService->MarkExit(0);
+						}
+					}
 					if (SessionSmoke) {
 						const auto Metrics = Session->GetMetrics();
 						const bool ContentProofComplete = ContentLifecycleKey.empty() ||
@@ -439,6 +919,24 @@ namespace gargantuan::host {
 							Runtime->ProcessService->MarkExit(0);
 					}
 				}
+				if (SessionSmoke && Session && ProfileTicks < 4096) {
+					const auto Now = std::chrono::steady_clock::now();
+					const auto Metrics = Session->GetMetrics();
+					auto Ns = [](auto Duration) { return std::chrono::duration_cast<std::chrono::nanoseconds>(Duration).count(); };
+					std::cout << "[Runtime:ServerFrame] "
+						<< std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count()
+						<< ',' << ++ProfileTicks << ',' << Ns(TickStarted - PreviousTickStarted) << ',' << Ns(EngineStarted - TickStarted)
+						<< ',' << Ns(SessionStarted - EngineStarted) << ',' << Ns(Now - SessionStarted)
+						<< ',' << Metrics.BaselineEncodeCpuNanoseconds - PreviousSessionMetrics.BaselineEncodeCpuNanoseconds
+						<< ',' << Metrics.RelevanceCpuNanoseconds - PreviousSessionMetrics.RelevanceCpuNanoseconds
+						<< ',' << Metrics.MaterializationCpuNanoseconds - PreviousSessionMetrics.MaterializationCpuNanoseconds
+						<< ',' << Metrics.StructuralTransitionsSelected - PreviousSessionMetrics.StructuralTransitionsSelected
+						<< ',' << Metrics.StructuralTransitionsCommitted - PreviousSessionMetrics.StructuralTransitionsCommitted
+						<< ',' << Metrics.StructuralPendingEnters + Metrics.StructuralPendingLeaves
+						<< ',' << Metrics.StructuralBytesEncoded - PreviousSessionMetrics.StructuralBytesEncoded << '\n';
+					PreviousSessionMetrics = Metrics;
+				}
+				PreviousTickStarted = TickStarted;
 				if (!ContentLifecycleKey.empty()) {
 					const int ContentHoldTicks = ContentChurnCycles == 0 || CompletedContentCycles <= 1 ? 45 : 6;
 					switch (ContentStage) {
@@ -626,11 +1124,16 @@ namespace gargantuan::host {
 				}
 				if (MaximumTicks > 0 && ++Ticks >= MaximumTicks) {
 					const bool ContentIncomplete = !ContentLifecycleKey.empty() && ContentStage != ContentSmokeStage::Complete;
-					Runtime->ProcessService->MarkExit(SessionSmoke ? 8 : (ContentIncomplete ? 9 : 0));
+					const bool FarmIncomplete = FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
+						FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
+						(ScaleQualification && !ScaleQualification->IsComplete()));
+					Runtime->ProcessService->MarkExit(SessionSmoke ? 8 : (FarmIncomplete ? 10 : (ContentIncomplete ? 9 : 0)));
 				}
+				if (ServerTickEvidence) ServerTickEvidence->EndTick(Runtime->GetSimulationTick());
 				if (BindEndpoint) {
 					TickDeadline += std::chrono::microseconds(16'667);
 					const auto Now = std::chrono::steady_clock::now();
+					MarkExecutionStage(detail::FarmD03FirstFault::Stage::Sleep, Now);
 					if (TickDeadline > Now)
 						std::this_thread::sleep_until(TickDeadline);
 					else if (Now - TickDeadline > std::chrono::milliseconds(250))
@@ -639,7 +1142,83 @@ namespace gargantuan::host {
 					std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 
-			const auto ExitCode = Runtime->ProcessService->ExitCode;
+			if (ScaleQualification) ScaleQualification->DumpRecoveryEvidence();
+			if (AdmissionEvidence) AdmissionEvidence->Dump();
+			if (PublicationEvidence) PublicationEvidence->Dump();
+			if (ServerTickEvidence) ServerTickEvidence->Dump();
+			int ExitCode = Runtime->ProcessService->ExitCode;
+			if (AdmissionEvidence && !AdmissionEvidence->Valid()) ExitCode = 10;
+			if (PublicationEvidence && !PublicationEvidence->Valid()) ExitCode = 10;
+			if (ServerTickEvidence && !ServerTickEvidence->Valid()) ExitCode = 10;
+			if (ExecutionFault && ExecutionFault->Failed()) ExitCode = 10;
+			if (F1Evidence && !F1Evidence->Valid()) ExitCode = 10;
+			if (F1Evidence) {
+				F1Evidence->Write(std::cout, FarmRunId);
+				F1EvidenceWritten = true;
+			}
+			if (FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
+				FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
+				(ScaleQualification && !ScaleQualification->IsComplete())))
+				ExitCode = 10;
+			if (FarmMode)
+				std::cout << "[Qualification:Server] event=result run=" << FarmRunId
+					<< " provider=" << ProviderName << " expected=" << FarmPeers
+					<< " ready_high_water=" << FarmReadyHighWater
+					<< " unique_ready=" << FarmIdentities.size()
+					<< " identity_conflict=" << FarmIdentityConflict
+					<< " exit=" << ExitCode << '\n';
+			if (AdmissionEvidence)
+				std::cout << "[Qualification:Admission] event=evidence_result run=" << FarmRunId
+					<< " file=admission-fairness.tsv events=" << AdmissionEvidence->Count()
+					<< " bytes=" << AdmissionEvidence->BytesWritten()
+					<< " overflow=" << AdmissionEvidence->Overflowed()
+					<< " write_failed=" << AdmissionEvidence->Failed() << '\n';
+			if (PublicationEvidence)
+				std::cout << "[Qualification:Publication] event=evidence_result run=" << FarmRunId
+					<< " file=publication-service.bin records=" << PublicationEvidence->Count()
+					<< " bytes=" << PublicationEvidence->BytesWritten()
+					<< " overflow=" << PublicationEvidence->Overflowed()
+					<< " decode_failures=" << PublicationEvidence->Failures()
+					<< " valid=" << PublicationEvidence->Valid() << '\n';
+			if (Session && HostConfiguration.ReliableService) {
+				const auto Metrics = Session->GetMetrics();
+				const auto &M = Metrics.ReliableAdmission;
+				if (FarmMode)
+					std::cout << "[Qualification:Admission] event=result run=" << FarmRunId
+						<< " accepted=" << M.AcceptedBytes
+						<< " retired=" << M.VerifiedAttributedRetirement
+						<< " terminal_release=" << M.TerminalReleasedBytes
+						<< " outstanding=" << M.OutstandingBytes
+						<< " outstanding_high=" << M.OutstandingHighWater
+						<< " active_grants=" << M.ActiveDrainGrants
+						<< " grants_high=" << M.DrainGrantsHighWater
+						<< " grant_deferrals=" << M.GrantDeferrals
+						<< " funded_deferrals=" << M.FundedDeferrals
+						<< " credit_deferrals=" << M.CreditDeferrals
+						<< " fairness_deferrals=" << M.FairnessDeferrals
+						<< " max_wait_us=" << M.MaximumAdmissionWaitMicroseconds
+						<< " peer_backlog_high=" << M.PeerBacklogHighWater
+						<< " global_backlog_high=" << M.GlobalBacklogHighWater
+						<< " peer_credit_high=" << M.PeerCreditHighWater
+						<< " global_credit_high=" << M.GlobalCreditHighWater
+						<< " fairness_rotations=" << Metrics.StructuralPeerFairnessRotations
+						<< " pending_enters=" << Metrics.StructuralPendingEnters
+						<< " pending_leaves=" << Metrics.StructuralPendingLeaves
+						<< " materialization_backlog=" << Metrics.MaterializationBacklog
+						<< " journal_backlog=" << Metrics.JournalBacklogRecords
+						<< " structural_active_peers=" << Metrics.StructuralActivePeers
+						<< " oldest_pending_ticks=" << Metrics.StructuralOldestPendingAgeTicks
+						<< " backlog_failures=" << Metrics.StructuralBacklogLimitFailures
+						<< " journal_failures=" << Metrics.StructuralJournalLagFailures << '\n';
+				std::cout << "[Network:Admission] accepted=" << M.AcceptedBytes << " reserved=" << M.ReservedBytes
+					<< " rolledBack=" << M.RolledBackBytes << " creditDeferrals=" << M.CreditDeferrals
+					<< " sizeDeferrals=" << M.SizeDeferrals << " deferredByteAttempts=" << M.DeferredBytes
+					<< " backlogDeferrals=" << M.BacklogDeferrals << " feedbackDeferrals=" << M.FeedbackDeferrals
+					<< " fairnessDeferrals=" << M.FairnessDeferrals << " waitMaxUs=" << M.MaximumAdmissionWaitMicroseconds
+					<< " peerBacklogHigh=" << M.PeerBacklogHighWater << " globalBacklogHigh=" << M.GlobalBacklogHighWater
+					<< " peerCreditHigh=" << M.PeerCreditHighWater << " globalCreditHigh=" << M.GlobalCreditHighWater
+					<< " peerStates=" << Metrics.ReliableAdmissionPeerStates << " logicalBytes=" << Metrics.ReliableAdmissionLogicalBytes << '\n';
+			}
 			if (Runtime->Content) {
 				const auto Metrics = Runtime->Content->GetMetrics();
 				LOG_INFO(
@@ -678,12 +1257,31 @@ namespace gargantuan::host {
 						  << " step_us=" << Metrics.Timing.Step.TotalMicroseconds << '\n';
 			}
 			const auto ShutdownStarted = std::chrono::steady_clock::now();
+			detail::FarmLifecycleEvidence Lifecycle;
 			LOG_INFO(App, "[Runtime:Server] Stopping peer acceptance and game session");
 			if (Session) Session->Stop();
+			if (FarmScaleWorkload && Session) Lifecycle.ObserveSession(*Session);
 			Session.reset();
 			LOG_INFO(App, "[Runtime:Server] Stopping authoritative runtime and content provider");
 			Runtime->Destroy();
+			if (FarmScaleWorkload) {
+				Lifecycle.ObserveContent(Runtime->Content.get());
+				Lifecycle.Write(std::cout, FarmRunId, "server", -1, 0);
+				if (!Lifecycle.Valid() || !Lifecycle.ContentPresent) ExitCode = 18;
+			}
 			Runtime.reset();
+#if defined(GARGANTUAN_WITH_GNS)
+			if (ServiceTimingEvidence) {
+				FarmTransport.reset(); // Last transport owner: native shutdown/join.
+				const bool Stopped = ServiceTimingEvidence->Stop();
+				if (ExecutionTimingOutput.is_open()) {
+					ServiceTimingEvidence->Write(ExecutionTimingOutput, FarmRunId, Stopped);
+					ExecutionTimingOutput.flush();
+					if (!ExecutionTimingOutput) ExitCode = 10;
+				}
+				ServiceTimingEvidence->Write(std::cout, FarmRunId, Stopped);
+			}
+#endif
 			std::cout << "[Runtime:Server] ShutdownMicroseconds="
 					  << std::chrono::duration_cast<std::chrono::microseconds>(
 							 std::chrono::steady_clock::now() - ShutdownStarted
@@ -691,11 +1289,36 @@ namespace gargantuan::host {
 					  << '\n';
 			return ExitCode;
 		} catch (const std::exception &Error) {
-			std::cerr << "GargantuanServer stopped because packaged runtime startup failed: " << Error.what() << '\n';
+			const bool CapturedExecutionFault = ExecutionFault && ExecutionFault->HasFault();
+			if (!CapturedExecutionFault)
+				std::cerr << "GargantuanServer stopped because packaged runtime startup failed: " << Error.what() << '\n';
+			if (F1Evidence && !F1EvidenceWritten) {
+				if (CapturedExecutionFault && ExecutionTimingOutput.is_open()) {
+					F1Evidence->Write(ExecutionTimingOutput, FarmRunId);
+					ExecutionTimingOutput.flush();
+				} else {
+					F1Evidence->Write(std::cout, FarmRunId);
+					std::cout.flush();
+				}
+			}
+			F1Evidence.reset(); // Restore the borrowed previous sink before teardown.
 			if (Session) Session->Stop();
 			Session.reset();
 			if (Runtime) Runtime->Destroy();
 			Runtime.reset();
+#if defined(GARGANTUAN_WITH_GNS)
+			if (ServiceTimingEvidence) {
+				FarmTransport.reset();
+				const bool Stopped = ServiceTimingEvidence->Stop();
+				if (ExecutionTimingOutput.is_open()) {
+					ServiceTimingEvidence->Write(ExecutionTimingOutput, FarmRunId, Stopped);
+					ExecutionTimingOutput.flush();
+				}
+				ServiceTimingEvidence->Write(std::cout, FarmRunId, Stopped);
+			}
+#endif
+			if (CapturedExecutionFault)
+				std::cerr << "GargantuanServer stopped because packaged runtime startup failed: " << Error.what() << '\n';
 			return 7;
 		}
 	}

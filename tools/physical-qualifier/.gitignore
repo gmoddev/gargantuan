@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.agent-coordinator/
+bin/
+obj/
+publish/

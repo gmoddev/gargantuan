@@ -1,0 +1,587 @@
+---
+status: selected-contract-executable-proof
+owner: runtime-networking
+last_verified: 2026-09-14
+related_code:
+  - include/gargantuan/network/ReplicationCoordinator.hpp
+  - src/network/ReplicationCoordinator.cpp
+  - src/network/ReliableByteAdmission.hpp
+  - tests/PooledReliableServiceRecoveryContractFixture.hpp
+  - tests/NetworkingContractsTests.cpp
+related_adrs:
+  - ../FutureArchitecture/Foundation3LServiceCoverageDecision.md
+---
+
+# Foundation 3L pooled-service overload and recovery contract
+
+## Causal cessation fence amendment — 2026-10-02
+
+**Selected design: C3, implemented by C5 — immutable cessation reference,
+causal semantic coverage, and exact accepted live obligations.** Implementation
+and qualification of this amendment are in progress; this decision alone does
+not qualify the provider campaign.
+
+The native-egress cessation capture preserves the original cessation time,
+detached source reference and accepted-debt identity. Before resolving native
+feedback it captures all Main-owned source/grant fields. A private resolved
+feedback query waits only for already-owned native tickets, reconciles their real
+results and bounded receive journal under the existing GNS ownership locks, then
+copies complete native counters. All peers share one absolute deadline at
+cessation plus the existing feedback-freshness limit. The query never cancels a
+send, fences the worker domain or changes a service clock. Source, pending-token
+identity and accepted debt must be unchanged after the wait. Timeout, invalid
+feedback, changed identity or expiry during final source revalidation produces
+NOT_MEASURED.
+
+The actual native baseline may complete after cessation. Recovery causal V2
+records that completion time separately from the immutable source/debt cut;
+offline replay rejects earlier causal events and cannot backdate initial
+convergence to cessation. The entire capture/wait remains included in F1 and
+recovery elapsed time and supplies no extra service allowance. Retained V1
+evidence keeps its original interpretation in standalone replay. A new farm
+qualification requires V2 and exact equality between its native-baseline header
+and the server's `quote_capture.native_baseline_us` field.
+
+The cessation snapshot answers what is necessary under the state known at
+cessation. It cannot predict subsequent relevance Enter/Leave transitions.
+Relevance is derived from current spatial/semantic state and may change without
+a ChangeJournal mutation. Moving Characters continue throughout recovery.
+
+The invariant is that the finite cessation backlog becomes represented, and
+every accepted byte obligation through its completion cut is delivered and
+retired exactly once. It is not that obsolete unaccepted work must be emitted,
+nor that the entire moving world becomes permanently idle.
+
+### Reference work and live byte obligations
+
+At cessation, capture the source scope and exclusive journal fence `J0`, each
+connection generation, accepted replication sequence, pending-transition token
+watermark and outstanding accepted grants. The existing detached quote retains
+its exact sequence, complete-byte size, fingerprint and cursor trace. Its sum,
+including accepted unretired debt, is the immutable cessation reference
+`W_i^0`. Quote construction must fail closed if its bounded replay cannot
+represent the captured source state. No subsequent live bytes enlarge this
+reference or move the deadline.
+
+The reference is an exact counterfactual replay under cessation state, not a
+second production payload queue. Where live state and planning remain identical,
+the byte-for-byte replay remains a regression oracle. After live state diverges,
+discarding a delta frame and comparing the remaining frame sequence to the
+frozen replay is invalid: that delta can change Known, replication sequence,
+packetization and the work still semantically necessary.
+
+Actual complete encoded frames become exact byte obligations only at matching
+scheduler acceptance. Record their generation, sequence, source coverage, exact
+complete service bytes and fingerprint before moving their payload; bind that
+identity to the accepted grant/retirement token. Rejection advances no accepted
+bytes. Missing fingerprints, mismatching accepted bytes, duplicate identities,
+unmatched retirement and evidence overflow invalidate qualification.
+
+Each accepted frame is recorded once. Semantic coverage tags may identify both
+pre-fence work and post-fence live work in one frame; they do not duplicate its
+framing bytes or create two grants. All post-cessation accepted work remains in
+the exact live ledger, including work accepted after recovery completes.
+
+### Semantic coverage and finite convergence
+
+Unaccepted current-state work retains existing 3J semantics. A later publication
+may represent prior property history; an irrelevant object may need no journal
+operation; an unaccepted pending Enter may legally cancel. Record the actual
+source-owned cursor/transition disposition. Absence from an arbitrary sample,
+elapsed time or healthy unrelated traffic is not proof of coverage. Ordered
+barriers remain ordered. Once bytes are accepted, later source changes cannot
+cancel or shrink that byte obligation.
+
+For each captured generation, baseline representation requires the production
+journal cursor to cover `J0` and every pre-fence pending token to have accepted
+coverage or an explicit legal cancellation/supersession. Freeze a finite accepted
+sequence/grant cut at that point. Convergence requires exact unique first-send,
+ACK and retirement of that prefix, including the accepted debt at cessation.
+Later live grants do not reopen the cut. A disconnect has an explicit terminal
+accounting disposition but is not successful recovery of a required conforming
+32-client run; a reused slot cannot inherit another generation's coverage.
+
+An unfinished cessation planning input is a separate baseline barrier, not an
+empty pending set. Repeated requests or invalidated continuations cannot clear
+it. The first source-confirmed valid complete planning installation resolves
+that barrier and transfers its installed pending tokens into baseline coverage.
+Those tokens must then be accepted or explicitly superseded/cancelled. The
+detached reference recomputes the captured input against its frozen catalog;
+unfinished scratch is never promoted directly into production Pending/Known.
+
+The separate 20-second service-recovery gate is unchanged. The existing
+workload-derived convergence deadline below uses immutable `W_i^0`; ordinary
+motion is part of the canonical workload and must pass that same deadline.
+Arbitrary continuing overload can consume the same 2 MiB/s credit and cannot
+be promised convergence from `W_i^0` alone. It is not cessation of excess demand.
+Qualification fails if the canonical live workload misses the deadline; it may
+not extend the deadline with observed delta bytes. No rate, fairness, reserve,
+queue, pending, debt or F1 constant changes.
+
+During continuing motion require bounded live operation and finite-prefix
+convergence. Require whole-run terminal conservation after the workload stops;
+do not substitute a transient globally empty queue for causal recovery proof.
+
+### Alternatives and counterexamples
+
+| Candidate | Decision and distinguishing counterexample |
+| --- | --- |
+| C1 frozen relevance | Retain only for reference replay. Freezing production relevance suppresses a necessary Leave and changes the moving workload. |
+| C2 future closure | Reject: a future Enter is unknowable at cessation; retrospective closure can expand forever. |
+| C3 reference plus live deltas | Select: preserves current-state semantics and exact accepted ownership without attributing future bytes to the past. |
+| C4 evolving obligation alone | Keep only as the live conservation ledger: continuous legal mutation need never make it empty. |
+| C5 causal fence | Select as C3's implementation, reusing generation, cursor, sequence and pending tokens instead of a public epoch API. |
+| C6 full causal shadow replay | Possible stronger offline diagnostic, but requires replaying every relevance/planning input and adds a second costly execution. Exact source dispositions plus fixed encoded-byte audit suffice for the acceptance contract. |
+
+Discriminating qualification must cover no-motion exact replay; post-fence
+Leave without a journal mutation; Enter; Enter then Leave both before and after
+acceptance; bounded oscillation; legal current-state coalescing; continuous
+mutation with a finite cut and a withheld-baseline negative; disconnect and slot
+reuse; provider-independent semantics; and exact byte/ACK/retirement conservation.
+The source-event regressions and ledger negatives are both required: a tracker
+that accepts invented coverage events is not proof of correct source semantics.
+
+The historical text and receipts below retain their original measured scope.
+Any interpretation requiring every later live frame to equal the frozen quote,
+or global quiescence while motion continues, is superseded by this amendment.
+
+### Detached reference execution
+
+The reference oracle must not synchronously encode large frames inside the
+measured server step. A worker-only diagnostic at `1f4ba2cfb` measured 72–94 ms
+reference advances alongside 62–85 ms live Session steps. Limiting replay to
+one frame per step bounded frame count, not its interference with service.
+
+Capture remains on Main at the original cessation timestamp. Main retains the
+detached immutable reference while observing the live finite causal prefix; it
+does not replay that reference concurrently with measured drain. The causal
+verifier establishes prefix convergence from the captured fence, accepted cut
+and exact retirement independently of reference frames. Record that live
+convergence timestamp first, then start one joined, cancellable oracle worker.
+Compare the recorded timestamp against the unchanged bound computed from the
+original captured reference. Late quote completion cannot extend that bound.
+Missing live convergence or reference completion cannot produce PASS; the
+existing finite campaign runtime and tick limits still fail closed. This avoids
+unnecessary observer computation during provider measurement without excusing
+slow production or discarding any acceptance fact.
+
+Once started, the oracle exclusively owns the detached coordinator, frozen
+journal/catalog and captured immutable schema. It publishes a bounded queue
+of frame identities, exact bytes, cursors,
+timing and terminal status; it owns no live Session, payload queue, evidence
+writer or Main observer. Main consumes bounded metadata without waiting for
+encoding. Schema replacement cannot change the captured reference. Cancellation
+is checked between bounded advances and the worker joins before runtime teardown.
+Serial and worker replay must produce identical reference frames and totals.
+
+The 65,536 reference-frame evidence limit counts **frames**, not calls to the
+oracle. Filtered journal coverage and bounded planning continuations can legally
+produce more calls without producing any frame; terminal completion also needs
+its own call after the final frame. The metadata queue remains capped at 64.
+Replay execution remains owned by the campaign's existing explicit finite
+runtime, finite host/client tick limits, and stop-aware cancellation/join; no
+new total-work constant or service allowance is introduced. The farm's runtime
+deadline fails the run and cleans up its owned process tree when exhausted.
+Cancellation is not successful reference completion. Focused oracle tests cover
+more than 65,536 empty journal/planning advances, exactly 65,536 frames followed
+by completion, and rejection of a genuine 65,537th frame.
+
+The original cessation timestamp, 20-second service observation and immutable
+workload-derived deadline remain unchanged. Oracle execution never pauses the
+clock or extends a deadline. Removing oracle work does not excuse slow live
+replication; production-equivalent resource and gameplay gates still apply.
+This execution correction requires deterministic and hosted qualification before
+provider use.
+
+## Decision
+
+**B — SEPARATE SERVICE RECOVERY FROM STRUCTURAL CONVERGENCE.**
+
+The former workload contract used one fixed 20-second requirement for both
+ordinary service recovery and complete structural convergence after overload.
+That is not mathematically implied by the accepted Option C service floor or by
+the existing 3J/journal hard limits.
+
+The 20-second gate remains useful and conservative as a **service-recovery**
+requirement: after excess offered demand stops, accepted transport debt, pooled
+admission state, ordinary scheduler service and qualified gameplay must return
+to their ordinary bounded behavior within 20 seconds. It is no longer a universal
+promise that every semantically necessary structural state retained by 3J and the
+journal must also have reached every conforming peer by that same instant.
+
+Complete **structural convergence** instead uses a bounded workload-derived
+service curve over the semantically necessary retained work that exists when
+offered excess stops. This does not raise the accepted profile, enlarge a queue,
+weaken Known semantics or permit history to disappear without representation.
+
+The stopped production checkpoint is
+`d2742796fc15a56f30048edcc20d1f3a444d62e2`, directly on published base
+`222c5beb318552a9cc07ec043c5b34581d64980f`. No production pooled-service source
+is resumed or qualified by this contract task.
+
+## Five distinct guarantees
+
+### Resource boundedness
+
+All delivery machinery remains finite:
+
+- ChangeJournal retention is 16,384 records per scope.
+- current 3J pending transitions are bounded to 65,536 per peer and 1,048,576
+  across the session;
+- the pooled admission model/implementation may retain at most one next
+  complete-group offer per peer, G = 512 KiB, with at most 32G pending globally;
+- peer/global credit remain capped at G / 4G;
+- at most four accepted structural drain grants exist globally;
+- committed pooled structural debt remains at most 4G;
+- only one prepared structural frame may await scheduler acceptance for a peer;
+- generation teardown releases peer-local pending/prepared/admission ownership.
+
+These are different bounds. In particular, the pooled `PerPeerPendingCap = G`
+does **not** mean the peer can have only G bytes of semantically retained journal
+or materialization work behind the next admission opportunity.
+
+### Service boundedness
+
+For a connected, conforming peer with fresh feedback and the accepted drain
+floor, structural service opportunity remains finite and fair. The accepted
+profile provides:
+
+```text
+PeerCreditRate = 2 MiB/s
+GlobalCreditRate = 64 MiB/s
+StructuralPool = 64 MiB/s
+PeerDrainFloor = 16 MiB/s while a grant is active
+MaxConcurrentDrainGrants = 4
+N = 32
+```
+
+The sustained per-peer service guarantee is therefore limited by 2 MiB/s credit,
+not by the 16 MiB/s active-grant drain burst. Aggregate sustainable structural
+service is 64 MiB/s. The accepted model's maximum first-grant fairness wait from
+credit eligibility remains 220.5 ms; a zero-credit maximum group needs at most
+250 ms to earn G credit.
+
+### Overload containment
+
+When offered structural demand exceeds sustainable service:
+
+- no extra semantic payload queue is created by pooled admission;
+- a peer cannot own more than one active structural grant;
+- unrelated gameplay/control retirement cannot retire structural debt;
+- Known and journal progress remain acceptance-only;
+- gameplay retains the existing reserve/FIFO guarantees for qualified traffic;
+- non-draining or unqualified peers stop receiving new structural grants;
+- finite journal and pending-transition limits remain fail-closed boundaries.
+
+Overload may increase retained semantic work up to those existing bounds. It may
+also make the 3J diagnostic age deadline fire. Neither condition licenses false
+progress or time-based debt release.
+
+### Service recovery
+
+After excess offered demand stops, ordinary service must return to its qualified
+behavior within the existing **20-second service-recovery deadline**. This gate
+covers bounded transport/admission cleanup and subsequent gameplay probes. It is
+not proportional to historical mutation volume and therefore does not claim
+complete structural convergence.
+
+Accepted structural debt itself is much smaller than retained semantic history:
+4G maximum committed debt plus bounded pending admission is already covered by
+the accepted pooled debt and drain proofs. The 20-second gate remains deliberately
+conservative for that state.
+
+### Structural convergence
+
+Let, at excess-demand cessation:
+
+- `W_i` be the complete-message bytes of **semantically necessary** structural
+  work retained for conforming peer `i`, after only semantics-preserving
+  coalescing already permitted by the 3J contract;
+- `W_sum = sum(W_i)` across conforming peers;
+- `r_i = min(PeerCreditRate, StructuralPool / N) = 2 MiB/s` for the selected
+  32-peer profile;
+- `R = min(GlobalCreditRate, StructuralPool) = 64 MiB/s`;
+- `T_credit <= 250 ms` be the conservative zero-credit G warmup;
+- `T_fair <= 220.5 ms` be the accepted maximum first-grant fairness delay from
+  credit eligibility;
+- `T_service <= 20 s` be the separate fixed service-recovery allowance.
+
+A conservative complete-convergence bound is:
+
+```text
+T_converge
+  <= T_service
+   + max(
+       max_i(T_credit + T_fair + ceil(W_i / r_i)),
+       ceil(W_sum / R)
+     )
+```
+
+This is intentionally conservative because structural draining may proceed during
+the 20-second service-recovery interval. The formula is a hard upper envelope,
+not an instruction to delay structural service until service recovery completes.
+
+The guarantee is conditional on the peer remaining connected and continuing to
+supply fresh feedback at or above the required drain floor. A peer that cannot
+meet that deployment contract remains contained and ineligible for new grants;
+terminal peer policy is not converted into a false convergence promise.
+
+## Retained-demand lifecycle
+
+The relevant stages are separate and remain owned by their existing subsystems:
+
+1. **Discovered** — relevance/catalog/journal inspection observes authoritative
+   current state or a committed mutation. Discovery does not imply delivery.
+2. **Planned** — 3L dependency-complete continuation derives a bounded complete
+   candidate. Incomplete scratch is neither Pending nor Known.
+3. **Journal-retained** — authoritative committed mutation history remains in
+   the bounded ChangeJournal window. This is delivery evidence, not a second
+   semantic authority.
+4. **Peer pending** — 3J records current Desired/Known Enter/Leave relationships,
+   bounded by the existing per-peer/session transition limits. Journal cursor lag
+   is a separate source of peer work.
+5. **Credit eligible** — a complete encoded group no larger than G is offered to
+   pooled admission. No backlog-sized serialized queue is created.
+6. **Granted/reserved** — finite peer/global credit, debt funding and one of four
+   drain slots are reserved synchronously.
+7. **Accepted** — matching scheduler acceptance commits exactly the prepared
+   frame. Rejected or expired preparation does not advance sequence, journal or
+   Known state.
+8. **Known / cursor represented** — Enter membership and represented journal
+   progress change only at the matching accepted commit.
+9. **Retired** — exact sender-local native retirement receipt releases accepted
+   structural debt. Terminal release remains a separate accounting outcome.
+
+No new authority layer is introduced at any stage.
+
+## Journal semantics and safe coalescing
+
+The current 3J contract already distinguishes history that must remain ordered
+from current-state replication that may collapse:
+
+- an unknown pending Enter reconstructs the current complete materialization and
+  skips pre-publication property history already represented by that Enter;
+- create/destroy, reparent, Attributes, tags and other structural barriers retain
+  their established ordered handling;
+- hard-reference changes remain dependency-sensitive and cannot be collapsed
+  across a state where doing so would make a required target unavailable;
+- for already-known ordinary native properties stored in the catalog property
+  map, `ProduceIncremental` already substitutes current authoritative values where
+  the established replication semantics permit current-state projection.
+
+`Name` is a narrow special case. Snapshot/materialization stores it in the
+separate `SnapshotObject::Name` / `PublishReplication::Name` field and explicitly
+excludes `Name` from the generic native `Properties` map. At the stopped
+`d2742796f` checkpoint the known-object journal path did **not** perform the
+generic current-catalog value substitution for `Name`; it replayed each retained
+`Change.Value`. The subsequent [Name correction](ReplicationFoundation3J.md#journal-mutation-and-cancellation)
+reads the separate current publication field only in the suffix after every
+non-Name barrier, with accepted source coverage and unchanged bounded reads.
+
+That does not make every historical Name mutation semantically necessary. GRPL
+is a state-projection boundary: `ChangeJournal.Sequence` never crosses it, a
+newly materialized object publishes one current complete Name, and 3J already
+permits ordinary property history to coalesce where no ordered structural barrier
+requires intermediate states. `Name` is a scalar current-state field and carries
+no parent/reference dependency edge. Repeated Name writes for the same live
+object between lifecycle/hierarchy/dependency barriers may therefore be represented
+by the final current Name without creating a new authority or weakening an
+accepted ordering dependency.
+
+The stopped canonical workload exposes that special-case implementation gap. It
+mutates only `Name`, alternating two cohorts of 16 already materialized Parts
+(32 distinct objects), so the stopped production source serialized
+thousands of historical scalar values even though semantic convergence requires
+only the final Name for each live object.
+
+A safe implementation may collapse repeated coalescible scalar property records
+for the same `(ObjectId, property)` to one final current-state operation **within
+the existing ordered barriers**. For `Name`, the final value must come from the
+current catalog publication's separate `Name` field. Cursor advancement must
+remain transactional: no skipped/coalesced record becomes represented until the
+frame that semantically covers it is accepted. This contract does not authorize
+coalescing lifecycle, hierarchy, tag/attribute or dependency-sensitive reference
+barriers merely because a benchmark becomes smaller.
+
+The DataModel remains authoritative. Coalescing removes redundant delivery
+history, not semantic state. If a peer falls outside the 16,384-record journal
+window, current 3J behavior remains `ResnapshotRequired` / peer-local failure;
+this task does not invent automatic rebaseline or a second semantic truth set.
+
+## Canonical 180 MiB workload
+
+The workload is:
+
+```text
+480 offered opportunities
+* 16 already-known object updates (alternating across 32 Parts)
+* 24 KiB Name value
+= 7,680 journal records
+= 180 MiB raw value history
+```
+
+It is below the 16,384-record hard journal window, so it is a valid finite bounded
+overload. However, its 180 MiB raw history is not semantically necessary retained
+work under the existing GRPL state-projection and 3J coalescing semantics.
+
+The measured remainder is:
+
+```text
+7,248 records * 24 KiB = 169.875 MiB
+169.875 MiB / 2 MiB/s = 84.9375 s
+```
+
+Thus the old 20-second complete-convergence requirement was impossible for the
+current replay behavior even with perfect transport feedback and no packet delay.
+That explains the remainder without attributing a starvation defect, gameplay
+defect or numeric-profile contradiction.
+
+**Canonical classification: C — production is retaining semantically redundant
+history that existing safe coalescing semantics permit it to collapse.** It is
+also finite bounded overload in the descriptive sense of A, but A is not the
+root cause of the failed fixture: the raw 180 MiB is not the semantic work that
+must be delivered.
+
+## Hard retained-work envelope
+
+A conservative byte-service upper bound can be derived without assuming average
+traffic. Treat every retained journal record or pending transition as potentially
+requiring its own maximum serviceable complete group G. This is deliberately loose
+but mechanically derived from existing limits.
+
+Per peer:
+
+```text
+journal:     16,384 * 512 KiB = 8 GiB
+transitions: 65,536 * 512 KiB = 32 GiB
+combined:                         40 GiB
+```
+
+Across the selected 32-peer session:
+
+```text
+journal fanout: 16,384 * 32 * 512 KiB = 256 GiB
+pending transitions: 1,048,576 * 512 KiB = 512 GiB
+combined aggregate service work:                 768 GiB
+```
+
+At the accepted guaranteed rates:
+
+```text
+40 GiB / 2 MiB/s   = 20,480 s = 5 h 41 m 20 s
+768 GiB / 64 MiB/s = 12,288 s = 3 h 24 m 48 s
+```
+
+Adding the conservative 20-second service-recovery allowance plus 250-ms credit
+warmup and 220.5-ms fairness term yields a worst selected-profile envelope of
+approximately **20,500.4705 seconds = 5 h 41 m 40.4705 s**.
+
+That number is operationally absurd as a normal recovery target, but it is the
+honest consequence of combining the current hard semantic-retention ceilings
+with the accepted 2 MiB/s per-peer service floor. It proves that a universal
+20-second complete-convergence promise cannot be derived from the current hard
+limits. It does **not** require increasing rates or reducing safety bounds: normal
+qualification should measure realistic semantic retained work, while the hard
+ceiling remains a fail-closed resource envelope.
+
+## Backpressure placement
+
+Backpressure does not belong before authoritative DataModel mutation merely
+because one peer is slow. The authoritative mutation and bounded journal remain
+server truth/delivery evidence.
+
+Existing boundaries already provide the correct containment points:
+
+- journal retention stays bounded and eventually returns `ResnapshotRequired` to
+  a lagging consumer rather than growing without limit;
+- pending Enter/Leave state stores current peer-object relationships, not encoded
+  history;
+- one prepared frame and one next pooled pending group prevent serialization from
+  running arbitrarily ahead of transport admission;
+- pooled admission refuses another obligation while a peer owns pending/reserved/
+  accepted structural work;
+- exact retirement, not elapsed time, reopens structural debt capacity.
+
+Safe current-state property coalescing belongs in the journal-to-frame derivation
+path because that layer already owns current authoritative template lookup and
+journal cursor representation. It must not discard DataModel state or mutate the
+journal globally for the sake of one peer.
+
+## Fairness, freshness and gameplay
+
+The revised convergence contract keeps the accepted fairness model unchanged:
+finite rotating peer service, one grant per peer, four active grants, large-waiter
+earmark, generation-safe cleanup and no small-vs-large starvation.
+
+GameSession checks the age of its actual native envelope before initial
+structural eligibility as well as after lengthy encoding. If earlier peer work
+has aged the envelope, it queries native feedback again and applies the same
+generation/counter validation, exact token retirement and ordinary funding
+checks. It never retimestamps cached feedback or relaxes the 50-ms limit.
+Missing feedback still defers admission; invalid or terminal evidence follows
+the existing failure path. A peer that submitted a structural group in this
+step retains its grant until the next step, preserving lifecycle ordering and
+the existing one-group-per-peer step behavior.
+
+A large retained backlog does not create a new priority class. Existing 3J policy
+already alternates materialization transitions and journal work, keeps critical
+structural work ahead of ordinary work, and preserves FIFO age inside a class.
+If later evidence shows newly relevant ordinary state can be starved despite
+those rules, that is a separate scheduler-policy issue; this contract does not
+invent freshness priority.
+
+The accepted FIFO gameplay proof also remains unchanged. One G structural group
+followed by the qualified 20 KiB peer gameplay burst drains through the required
+16 MiB/s grant floor in approximately 32.47 ms, leaving the accepted nonqueue
+allowance inside the RPC/Event gates. Historical retained work cannot bypass the
+one-grant-per-peer rule and become an unbounded FIFO prefix.
+
+## Executable proof
+
+`tests/PooledReliableServiceRecoveryContractFixture.hpp`, invoked by
+`gargantuan_networking_contracts`, mechanically checks:
+
+- canonical 7,680 records remain below the 16,384-record journal bound;
+- 180 MiB raw history requires 90 seconds at 2 MiB/s;
+- the measured 7,248-record remainder represents 169.875 MiB / 84.9375 seconds
+  of raw replay at the same rate;
+- the conservative hard retained-work ceilings are 40 GiB per peer and 768 GiB
+  aggregate;
+- the resulting workload-derived hard convergence envelope exceeds 20 seconds;
+- one final Name update for each object of a 16-object canonical cohort is encoded and
+  decoded through the real GRPL codec with exact object identity/property/value,
+  and must fit one accepted complete group; this codec/model case covers one
+  cohort, while production's two alternating cohorts require up to 32 final Names;
+- the existing G + 20 KiB gameplay follower still fits the funded 50-ms queue
+  window;
+- repeated bounded canonical overload/recovery cycles return semantic retained
+  work to zero rather than accumulating historical debt.
+
+The proof passes on final coalescing source `ab3f0d61d` on the worker alongside
+the 42 pooled and 19 feedback-model cases. The [production receipt](PooledReliableServiceIntegration3L.md#publication-gates-and-reproducibility)
+records exact-source hosted publication gates; a running check is not a pass.
+
+## Effect on the stopped production checkpoint
+
+The production pooled admission/debt work in `d2742796f` is not rejected by this
+reconciliation. Exact retirement, generation cleanup, debt conservation, grant
+bounds and gameplay evidence remain applicable at their measured scope.
+
+The subsequent narrow implementation at `555354bb5` makes known-object native
+`Name` history collapse to the current catalog Name in the suffix after every
+non-Name barrier. It preserves complete-group atomicity and acceptance-only
+source coverage/cursor/Known commit. The final `ab3f0d61d` fixture separately
+measures service recovery throughout the bounded window. The canonical
+structural/mixed worker cases pass with:
+
+1. the unchanged 20-second **service-recovery** gate;
+2. measured semantically necessary retained bytes at demand cessation;
+3. the workload-derived **structural-convergence** bound above;
+4. unchanged gameplay, fairness, lifecycle and debt-conservation checks.
+
+The [current receipt](PooledReliableServiceIntegration3L.md#current-disposition)
+owns results, limits and hosted publication gates. Once that corrected published
+source is terminal green, the exact next task is the separate funded physical
+32-actual-client Local/Node qualification. Physical evidence is not measured;
+KI-006 remains open, Foundation 3L **B — PARTIALLY READY**, and Foundation 3M
+**BLOCKED / NOT STARTED**.
