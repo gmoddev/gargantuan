@@ -111,6 +111,7 @@ them in scope rather than silently selecting one source.
 The following documents describe recently implemented, source-verified slices:
 
 - [Runtime schema](../src/content/docs/developing/runtime-schema.mdx)
+- [Concrete-class property default foundation](../../devdocs/CurrentArchitecture/ConcreteClassPropertyDefaults.md)
 - [Render extraction](../src/content/docs/developing/render-extraction.mdx)
 - [Platform and input boundary](../../devdocs/CurrentArchitecture/PlatformInputBoundary.md)
 - [Player runtime](../../devdocs/CurrentArchitecture/PlayerRuntime.md)
@@ -127,6 +128,7 @@ The following documents describe recently implemented, source-verified slices:
 - [EditorHost and Studio boundary](../src/content/docs/developing/editor-host.mdx)
 - [Runtime foundation](../../devdocs/CurrentArchitecture/FoundationRuntime.md)
 - [Mutation gateway](../../devdocs/CurrentArchitecture/MutationGateway.md)
+- [Authoritative reset-to-default](../../devdocs/CurrentArchitecture/AuthoritativePropertyResetToDefault.md)
 - [Snapshot baseline](../../devdocs/CurrentArchitecture/SnapshotBaseline.md)
 - [Loopback replication](../../devdocs/CurrentArchitecture/LoopbackReplication.md)
 - [Networking contracts](../../devdocs/CurrentArchitecture/NetworkingContracts.md)
@@ -160,6 +162,12 @@ a goal; each migration must verify claims against current code and tests.
   owned by [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator).
   Production transport and Foundation 3L acceptance gates are unchanged.
 
+- [Gargantuan Studio Authoring and UX Architecture](https://github.com/gmoddev/gargantuan-studio/blob/docs/studio-authoring-ux-architecture/devdocs/AcceptedArchitecture/StudioAuthoringAndUXArchitecture.md)
+  is an accepted Studio-owned product/ownership decision (private repository
+  access required), not a claim that generalized documents, PreRun editing or
+  multi-client testing are implemented. The public
+  [Studio checkpoint and order](../src/content/docs/developing/roadmap.mdx#studio-authoring-checkpoint)
+  routes implementation status; Engine retains EditorHost/schema/history authority.
 - [Future architecture](../src/content/docs/developing/future-architecture.mdx)
   is the broad accepted direction, with implementation status stated per section.
 - [Future architecture concerns](../src/content/docs/developing/future-architecture-concerns.mdx)

@@ -6,6 +6,14 @@ return c({
 	description = "A bounded UTF-8 editable text control with code-point-safe caret and selection state",
 	since = "0.3.0",
 
+	defaultOverrides = {
+		{ Property = "BackgroundTransparency", Value = 0 },
+		{ Property = "BackgroundColor3", Value = { 0.08, 0.10, 0.14 } },
+		{ Property = "TextXAlignment", Value = "Left" },
+		{ Property = "Interactable", Value = true },
+		{ Property = "Selectable", Value = true },
+		{ Property = "InputSink", Value = "All" },
+	},
 	properties = {
 		PlaceholderText = {
 			description = "Text shown when the editable value is empty",

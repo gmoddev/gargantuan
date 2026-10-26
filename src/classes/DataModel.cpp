@@ -40,6 +40,10 @@ namespace gargantuan {
 			throw std::overflow_error("Authoritative project revision is exhausted");
 	}
 
+	bool DataModel::HasDeferredRevision() const noexcept {
+		return RevisionBatchActive || DeferredRevisionWorld == this;
+	}
+
 	void DataModel::AdvanceAuthoritativeRevision() {
 		EnsureAuthoritativeRevisionAvailable();
 		if (DeferredRevisionWorld == this && DeferredRevisionChanged) {

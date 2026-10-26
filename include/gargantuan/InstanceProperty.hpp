@@ -52,6 +52,11 @@ namespace gargantuan {
 
 	class InstanceProperty {
 	  private:
+		friend class PreparedPropertyCommit;
+		using PreparedStore = void (*)(Instance &, std::any &) noexcept;
+		PreparedStore StorePrepared = nullptr;
+		bool (*MatchesPreparedType)(const std::any &) noexcept = nullptr;
+		std::any (*PrepareEnum)(int) = nullptr;
 		template <typename T> struct MemberPointerTraits;
 
 		template <typename Class, typename T> struct MemberPointerTraits<T Class::*> {
@@ -372,6 +377,25 @@ namespace gargantuan {
 
 			return *this;
 		};
+
+		// Generator-only backing-member registration. Handwritten setters never
+		// acquire this capability merely by having a reflection writer.
+		template <auto Pointer> InstanceProperty &UsePreparedStore() {
+			using Traits = MemberPointerTraits<decltype(Pointer)>;
+			using ClassType = typename Traits::ClassType;
+			using ValueType = typename Traits::MemberType;
+			if constexpr (std::is_nothrow_move_assignable_v<ValueType> &&
+				!SharedInstancePointer<ValueType>::value && !OptionalSharedInstancePointer<ValueType>::value) {
+				static_assert(std::is_nothrow_move_assignable_v<ValueType>);
+				StorePrepared = [](Instance &Object, std::any &Value) noexcept {
+					(static_cast<ClassType &>(Object).*Pointer) = std::move(*std::any_cast<ValueType>(&Value));
+				};
+				MatchesPreparedType = [](const std::any &Value) noexcept { return std::any_cast<ValueType>(&Value) != nullptr; };
+				if constexpr (std::is_enum_v<ValueType>)
+					PrepareEnum = [](int Value) -> std::any { return static_cast<ValueType>(Value); };
+			}
+			return *this;
+		}
 
 		template <auto Pointer> InstanceProperty &UseWrite() {
 			using Traits = MemberPointerTraits<decltype(Pointer)>;

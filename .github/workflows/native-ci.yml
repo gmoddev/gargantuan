@@ -173,6 +173,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Class generation failed. Verify the pinned Lute installation and clang-format availability."
           }
+          lute tools/tests/DefaultOverrides
+          if ($LASTEXITCODE -ne 0) { throw "Class default override generation tests failed." }
           $RequiredGeneratedFiles = @(
             'include/gargantuan/classes/generated/Instance.hpp',
             'src/classes/generated/Instance.cpp',
@@ -536,6 +538,12 @@ jobs:
             build-ci/gargantuan_real_transport_tests.exe
             build-ci/scheduler-trace-pair.json
 
+      - name: Report concrete-default qualification measurements
+        shell: pwsh
+        run: |
+          Select-String -Path build-ci/Testing/Temporary/LastTest.log -SimpleMatch '[Schema:ConcreteDefaults]', '[Schema:ResetDefaults]' |
+            ForEach-Object { $_.Line }
+
   linux-sanitizers:
     name: Ubuntu 24.04 / Clang 19 / ASan + UBSan / Headless
     if: "!(github.event_name == 'workflow_dispatch' && (inputs.scheduler_trace || inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic))"
@@ -608,6 +616,7 @@ jobs:
         run: |
           set -euo pipefail
           lute tools/classgen
+          lute tools/tests/DefaultOverrides
           test -f include/gargantuan/classes/generated/Instance.hpp
           test -f src/classes/generated/Instance.cpp
           test -f include/gargantuan/services/generated/Workspace.hpp
@@ -662,3 +671,7 @@ jobs:
             build-sanitizers/CMakeFiles/CMakeConfigureLog.yaml
             build-sanitizers/Testing/Temporary/LastTest.log
             build-sanitizers/ctest-results.xml
+
+      - name: Report concrete-default sanitizer measurements
+        shell: bash
+        run: grep -E '\[Schema:(ConcreteDefaults|ResetDefaults)\]' build-sanitizers/Testing/Temporary/LastTest.log

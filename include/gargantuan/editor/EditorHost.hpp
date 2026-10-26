@@ -28,6 +28,7 @@
 
 namespace gargantuan {
 	inline constexpr std::uint32_t EditorHostProtocolVersion = 1;
+	inline constexpr std::uint32_t EditorHostPropertyBatchVersion = 1;
 	inline constexpr std::size_t EditorHostMaximumRequestBytes = 1024 * 1024;
 	inline constexpr std::size_t EditorHostMaximumResponseBytes = 8 * 1024 * 1024;
 	inline constexpr std::uint32_t EditorHostMaximumViewportWidth = 3840;

@@ -164,19 +164,19 @@ namespace gargantuan {
 	void AuthoritativeTransactionHistory::Retain(CommittedTransaction Transaction) {
 		bool PruneMappings = false;
 		while (History.size() > Cursor) {
-			RetainedBytes -= History.back().SemanticBytes;
+			RetainedBytes -= History.back()->SemanticBytes;
 			History.pop_back();
 			PruneMappings = true;
 		}
 		while (!History.empty() && (History.size() >= RetainedTransactionLimit ||
 									Transaction.SemanticBytes > RetainedByteLimit - RetainedBytes)) {
-			RetainedBytes -= History.front().SemanticBytes;
+			RetainedBytes -= History.front()->SemanticBytes;
 			History.pop_front();
 			if (Cursor != 0) --Cursor;
 			PruneMappings = true;
 		}
 		RetainedBytes += Transaction.SemanticBytes;
-		History.push_back(std::move(Transaction));
+		History.push_back(std::make_shared<const CommittedTransaction>(std::move(Transaction)));
 		Cursor = History.size();
 		if (PruneMappings && !IdentityMappings.empty()) {
 			std::unordered_set<ObjectId> Referenced;
@@ -185,7 +185,7 @@ namespace gargantuan {
 					Referenced.insert(Reference->Object.ToObjectId());
 			};
 			for (const auto &Retained : History)
-				for (const auto &Change : Retained.Changes)
+				for (const auto &Change : Retained->Changes)
 					std::visit([&](const auto &Typed) {
 						using ChangeType = std::decay_t<decltype(Typed)>;
 						if constexpr (std::is_same_v<ChangeType, PropertyTransactionChange>) {
@@ -225,22 +225,22 @@ namespace gargantuan {
 			.SemanticBytes = RetainedBytes,
 		};
 		if (Status.CanUndo) {
-			Status.UndoTransaction = History[Cursor - 1].Id;
-			Status.UndoLabel = History[Cursor - 1].Label;
+			Status.UndoTransaction = History[Cursor - 1]->Id;
+			Status.UndoLabel = History[Cursor - 1]->Label;
 		}
 		if (Status.CanRedo) {
-			Status.RedoTransaction = History[Cursor].Id;
-			Status.RedoLabel = History[Cursor].Label;
+			Status.RedoTransaction = History[Cursor]->Id;
+			Status.RedoLabel = History[Cursor]->Label;
 		}
 		return Status;
 	}
 
 	const CommittedTransaction *AuthoritativeTransactionHistory::GetUndoTransaction() const {
-		return Cursor == 0 ? nullptr : &History[Cursor - 1];
+		return Cursor == 0 ? nullptr : History[Cursor - 1].get();
 	}
 
 	const CommittedTransaction *AuthoritativeTransactionHistory::GetRedoTransaction() const {
-		return Cursor >= History.size() ? nullptr : &History[Cursor];
+		return Cursor >= History.size() ? nullptr : History[Cursor].get();
 	}
 
 	ObjectId AuthoritativeTransactionHistory::ResolveIdentity(ObjectId Historical) const {
@@ -275,7 +275,7 @@ namespace gargantuan {
 		if (Open) return Failure(TransactionStatus::InvalidState, {}, "Undo is unavailable while a transaction is open");
 		if (Cursor == 0) return Failure(TransactionStatus::NothingToUndo, {}, "There is nothing to undo");
 		World.EnsureAuthoritativeRevisionAvailable();
-		const auto &Transaction = History[Cursor - 1];
+		const auto &Transaction = *History[Cursor - 1];
 		const auto StartingRevision = World.GetAuthoritativeRevision();
 		World.AdvanceAuthoritativeRevision();
 		--Cursor;
@@ -288,7 +288,7 @@ namespace gargantuan {
 		if (Open) return Failure(TransactionStatus::InvalidState, {}, "Redo is unavailable while a transaction is open");
 		if (Cursor >= History.size()) return Failure(TransactionStatus::NothingToRedo, {}, "There is nothing to redo");
 		World.EnsureAuthoritativeRevisionAvailable();
-		const auto &Transaction = History[Cursor];
+		const auto &Transaction = *History[Cursor];
 		const auto StartingRevision = World.GetAuthoritativeRevision();
 		World.AdvanceAuthoritativeRevision();
 		++Cursor;
@@ -390,6 +390,19 @@ namespace gargantuan {
 
 	bool AuthoritativeTransactionHistory::IsOpen(TransactionId Id, std::uint64_t Owner) const {
 		return Open && Open->Id == Id && Open->Owner == Owner;
+	}
+
+	TransactionId AuthoritativeTransactionHistory::AllocatePreparedIdentity() {
+		return AllocateTransactionId();
+	}
+
+	void AuthoritativeTransactionHistory::InstallPrepared(AuthoritativeTransactionHistory &Candidate) noexcept {
+		static_assert(noexcept(History.swap(Candidate.History)));
+		static_assert(noexcept(IdentityMappings.swap(Candidate.IdentityMappings)));
+		History.swap(Candidate.History);
+		IdentityMappings.swap(Candidate.IdentityMappings);
+		RetainedBytes = Candidate.RetainedBytes;
+		Cursor = Candidate.Cursor;
 	}
 
 	void AuthoritativeTransactionHistory::Reset() {

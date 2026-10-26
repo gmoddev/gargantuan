@@ -17,6 +17,77 @@ EditorHost probe have zero missing interior pixels. This does not claim arbitrar
 distant sub-unit separation or resolve separate viewport input-latency reports.
 See the receipt and final-source CI checks before merging; Studio is unchanged.
 
+## KI-009: Concrete inherited defaults and authoritative reset
+
+- Status: Resolved on 2026-09-18 for the supported native reset surface;
+  concrete defaults and production reset are implemented and qualified.
+- Priority: Medium.
+- Area: Runtime schema / native class construction / EditorHost Properties defaults.
+- Relevant code: `tools/classgen.luau`, `src/classes/TextLabel.cpp`,
+  `src/classes/ImageLabel.cpp`, `src/classes/TextBox.cpp`,
+  `src/classes/TextButton.cpp`, `src/classes/ScrollingFrame.cpp`,
+  `src/classes/Instance.cpp::ResetPropertyToDefault`,
+  `src/editor/EditorHost.cpp::GetSchema`.
+- Architecture:
+  [Concrete-class property defaults](devdocs/FutureArchitecture/ConcreteClassPropertyDefaults.md).
+
+At the property-batch baseline, several concrete GUI classes directly assigned inherited generated backing members
+during construction. Those authored initial values can differ from the declaring
+`InstanceProperty::Unmodified` value that EditorHost currently exposes as
+`Default`. For example, a fresh `TextLabel` has
+`BackgroundTransparency = 1` while `GuiObject` declares `0`;
+the baseline `Instance::ResetPropertyToDefault` restored `0`.
+
+The baseline mismatch also affected TextBox, TextButton, ImageLabel and
+ScrollingFrame constructor assignments. Those persistent defaults now use
+generated initialization and matching sparse schema overrides.
+Transient/read-only initialization such as `GuiState` and
+`Workspace.CurrentCamera` is a separate construction concern. Native
+persistence currently serializes all saved writable values, so this is not a
+save/reopen loss defect.
+
+`ResetPropertyToDefault` now consumes the effective concrete default through
+ordinary wire mutation. Editor single reset uses SetProperty and multi-reset
+uses one existing SetPropertyBatch with per-target defaults. See the
+[reset contract](devdocs/CurrentArchitecture/AuthoritativePropertyResetToDefault.md)
+and [qualification receipt](devdocs/Validation/AuthoritativePropertyResetToDefault.md).
+
+The concrete-default foundation now moves the 16 persistent GUI assignments into
+one typed classgen declaration, generates construction and sparse schema
+overrides, and exposes effective resolution in schema discovery v7. See the
+[qualification receipt](devdocs/Validation/ConcreteClassPropertyDefaults.md).
+The foundation passed 179 construction/schema property cases and 15
+persistence/Clone scenarios on MSVC Release and Linux ASan/UBSan/LSan. Reset
+qualification now also passes 20 native cases, single authoring history/replay,
+four selection modes, 256 per-target resets and 257-write rejection, with normal
+journal/replication and atomic prepared Undo/Redo. Full hosted Windows 60/60 and
+Linux sanitizer 52/52 gates pass on the implementation revision recorded in the
+reset receipt. Explicit v7 discovery preserves parameterless v6 ordinary editing.
+Contextual, custom and other unsupported cases remain excluded as documented;
+Studio reset controls are the next separate task.
+
+## KI-008: JSON tree cleanup can allocate during memory-exhaustion unwinding
+
+- Status: Open outside the prepared-property primitive; avoided by that primitive.
+- Priority: Medium.
+- Area: Serialization under sustained allocation failure.
+- Relevant code: `src/runtime/WireCodec.cpp::MeasureWireValueJsonBytes`,
+  `vendor/json/include/nlohmann/json.hpp::json_value::destroy`.
+
+Prepared-property qualification on MSVC Release exposed process termination at
+preparation allocation index 7 when JSON-based byte measurement ran with all
+subsequent allocations rejected. The vendored JSON tree destructor builds a
+heap-backed traversal stack, so cleanup can itself allocate while unwinding.
+This happened before the authoritative boundary; no prepared batch committed.
+
+The prepared primitive now uses allocation-free conservative closed-WireValue
+size accounting and passes sustained preparation-failure sweeps. General JSON
+serialization remains unchanged in this task. Resolving this broader issue
+requires a separate allocation-failure contract and qualification of JSON
+construction, cleanup, and error formatting; ordinary exception catches alone
+do not establish recovery under sustained exhaustion. See the
+[prepared-property evidence](devdocs/CurrentArchitecture/PreparedPropertyCommitValidation.md).
+
 ## KI-002: Box3D diagnostics are not integrated with engine logging
 
 - Status: Open

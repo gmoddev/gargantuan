@@ -1,4 +1,5 @@
 const classes = require("@tools/classes")
+const DefaultOverrides = require("@tools/defaultOverrides")
 const cli = require("@batteries/cli")
 const fs = require("@std/fs")
 const luau = require("@std/luau")
@@ -27,6 +28,7 @@ type GenerationState = {
 	publicBody: StringBuilder.StringBuilder,
 
 	includes: { [string]: true },
+	DefaultOverrides: { any },
 }
 
 const TARGETS: { [string]: Target } = {
@@ -47,6 +49,13 @@ const TARGETS: { [string]: Target } = {
 const args = cli.parser()
 args:add("force", "flag", { help = "whether to force regeneration", aliases = { "f" } })
 args:parse({ ... })
+
+-- Any declaring/base-class edit can change the type or legality of an inherited
+-- override. Include generator inputs in freshness, not only the leaf file.
+local GenerationModified = 0
+for _, File in { "tools/classgen.luau", "tools/libs/classes.luau", "tools/libs/types.luau", "tools/libs/defaultOverrides.luau" } do
+	GenerationModified = math.max(GenerationModified, fs.metadata(File).modified:toSeconds())
+end
 
 const function pushTypeDependencies(state: GenerationState, type: types.Type)
 	if type.cIncludes then
@@ -92,8 +101,11 @@ const function assembleProperties(state: GenerationState)
 		if property.type.objectClassName then
 			state.definitionProperties:line(`.SetObjectReferenceType(SchemaId::FromNativeName("Engine", {string.format("%q", property.type.objectClassName)}), {tostring(property.type.nullable == true)})`)
 		end
-		state.definitionProperties
-			:line(`.SetUnmodified({property.unmodified})`)
+		-- Materialize the declared native string type in std::any, just as the
+		-- backing member does; an unconverted const char* is not a wire value.
+		const declaredDefault = if property.type.editorDataType == "String"
+			then `static_cast<{property.type.cType}>({property.unmodified})` else property.unmodified
+		state.definitionProperties:line(`.SetUnmodified({declaredDefault})`)
 		if property.serializable then
 			state.definitionProperties:line(`.SetSerializable()`)
 		end
@@ -154,6 +166,9 @@ const function assembleProperties(state: GenerationState)
 			state.definitionProperties:line(`.UseRead<&{state.class.name}::{getIdentifier}>()`)
 			if property.writable ~= false then
 				state.definitionProperties:line(`.UseWrite<&{state.class.name}::{setIdentifier}>()`)
+				if isEditable then
+					state.definitionProperties:line(`.UsePreparedStore<&{state.class.name}::{key}>()`)
+				end
 			end
 		end
 
@@ -308,6 +323,13 @@ const function assembleImplFile(state: GenerationState)
 		then `SchemaId::FromNativeName("Engine", {string.format("%q", state.superclass)})`
 		else "std::nullopt"
 	output:line(`.BaseSchemaId = {baseSchemaId},`)
+	if #state.DefaultOverrides > 0 then
+		output:line(".DefaultOverrides = {"):tab()
+		for _, Override in state.DefaultOverrides do
+			output:line(`\{SchemaId::FromNativeName("Engine", "{Override.DeclaringClass}"), 1, "{Override.Property}", {state.class.name}::DefaultOverride{Override.Property}()},`)
+		end
+		output:untab():line("},")
+	end
 	output
 		:line(".Properties = {")
 		:tab()
@@ -347,8 +369,17 @@ end
 
 const function assembleFile(target: Target, inputFilepath: path.Pathlike)
 	const class: classes.Class = luau.loadModule(inputFilepath)
-
-	local inputLastModified = fs.metadata(inputFilepath).modified:toSeconds()
+	local inputLastModified = math.max(GenerationModified, fs.metadata(inputFilepath).modified:toSeconds())
+	const ResolvedOverrides = DefaultOverrides.Resolve(class, function(Name)
+		for _, Target in TARGETS do
+			const File = path.join(Target.input, Name .. ".luau")
+			if fs.exists(File) then
+				inputLastModified = math.max(inputLastModified, fs.metadata(File).modified:toSeconds())
+				return luau.loadModule(File)
+			end
+		end
+		return nil
+	end)
 
 	local headerOutput = path.join(target.headerOutput, class.name .. ".hpp")
 	local isHeaderUpdated = not args:has("force")
@@ -381,6 +412,7 @@ const function assembleFile(target: Target, inputFilepath: path.Pathlike)
 			['"gargantuan/InstanceProperty.hpp"'] = true,
 			['"gargantuan/reflection/InstanceClassRegistry.hpp"'] = true,
 		},
+		DefaultOverrides = ResolvedOverrides,
 	}
 
 	if state.superclass then
@@ -390,6 +422,18 @@ const function assembleFile(target: Target, inputFilepath: path.Pathlike)
 	assembleMethods(state)
 	assembleProperties(state)
 	assembleSignals(state)
+	if #ResolvedOverrides > 0 then
+		for _, Override in ResolvedOverrides do
+			state.protectedBody:line(`static {Override.NativeType} DefaultOverride{Override.Property}() \{ return {Override.Expression}; }`)
+		end
+		-- Default member initialization runs after the base constructor and before
+		-- the handwritten body, including for direct make_shared construction.
+		state.protectedBody:line(`const bool {class.name}DefaultOverridesInitialized = [this]() \{`):tab()
+		for _, Override in ResolvedOverrides do
+			state.protectedBody:line(`{Override.Property} = DefaultOverride{Override.Property}();`)
+		end
+		state.protectedBody:line("return true;"):untab():line("}();")
+	end
 
 	if not isHeaderUpdated then
 		fs.writeStringToFile(headerOutput, assembleHeaderFile(state):build())
