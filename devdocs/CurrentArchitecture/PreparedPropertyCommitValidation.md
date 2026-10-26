@@ -15,6 +15,11 @@ Engine-only EditorHost exposure based on `8cb1d7519`. The optional
 [EditorHost protocol](./EditorHostProtocol.md#prepared-native-property-batches-capability-version-1).
 Studio and Foundation 3L remain unchanged.
 
+The [2026-10-26 integration record](../Validation/PropertySystemIntegration20261026.md)
+describes adaptation to main's immutable pinned journal records and the new
+integration preflight. Historical measurements and execution identities below
+remain scoped to their original revisions.
+
 ## Implementation ownership
 
 - `src/runtime/PreparedPropertyCommit.{hpp,cpp}` owns synchronous Main admission,
