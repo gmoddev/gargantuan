@@ -52,6 +52,28 @@ class CIJUnitTests(unittest.TestCase):
             self.assertIn('qualified-source-commit.txt', Text)
             self.assertIn('qualification-contract.txt', Text)
 
+    def test_pages_publication_requires_manual_main_opt_in(self):
+        Text = (ROOT / '.github/workflows/docs.yml').read_text()
+        Events, Jobs = Text.split('\njobs:\n', 1)
+        Build, Deploy = Jobs.split('\n    deploy:\n', 1)
+        self.assertRegex(Events, r'workflow_dispatch:\n\s+inputs:\n\s+deploy:\n')
+        self.assertRegex(Events, r'type: boolean\n\s+default: false')
+        self.assertIn('branches: [main]', Events)
+        self.assertNotIn('pages: write', Events + Build)
+        self.assertNotIn('id-token: write', Events + Build)
+        self.assertNotIn('deploy-pages', Build)
+        Condition = re.search(r'^\s+if: (.+)$', Deploy, re.MULTILINE)
+        self.assertIsNotNone(Condition)
+        # All three are required: pushes, PRs, feature-branch dispatches and
+        # default/manual build-only dispatches must never publish Pages.
+        self.assertEqual(Condition.group(1),
+                         "github.event_name == 'workflow_dispatch' && "
+                         "github.ref == 'refs/heads/main' && inputs.deploy == true")
+        self.assertIn('needs: build', Deploy)
+        self.assertIn('pages: write', Deploy)
+        self.assertIn('id-token: write', Deploy)
+        self.assertEqual(Text.count('uses: actions/deploy-pages@'), 1)
+
     def test_capture_mocks_have_one_ctest_owner_and_reproducer_is_explicit(self):
         Native = (ROOT / '.github/workflows/native-ci.yml').read_text()
         CMake = (ROOT / 'CMakeLists.txt').read_text()

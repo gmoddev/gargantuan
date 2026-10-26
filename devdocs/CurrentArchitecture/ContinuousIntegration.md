@@ -14,6 +14,12 @@ related_adrs: []
 
 ## Supported CI configuration
 
+Documentation builds on ordinary main pushes. Pages publication requires an
+explicit `Documentation` workflow dispatch on `main` with boolean `deploy=true`;
+the default dispatch builds only. Pages/OIDC write permissions belong only to
+that guarded deployment job. Native/PR qualification does not authorize or
+trigger publication.
+
 `.github/workflows/native-ci.yml` runs on pull requests, `main` pushes and
 manual dispatch. Branch pushes do not duplicate the PR checks. Windows x64 runs on
 GitHub's explicit `windows-2025-vs2026` image. It matches the production
