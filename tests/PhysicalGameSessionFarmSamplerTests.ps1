@@ -261,9 +261,34 @@ function Add-HostResourceSample {
 		[IO.File]::WriteAllText($PhasePath, (@{RunId=$Fast.RunId;StartedTicks=([Diagnostics.Stopwatch]::GetTimestamp()-6*[Diagnostics.Stopwatch]::Frequency)} | ConvertTo-Json -Compress))
 		Assert-EndpointSampler -Sampler $Probe # A diagnostic phase is never a host-query clock.
 	} finally { [IO.File]::WriteAllBytes($PhasePath,$PhaseBytes) }
-	Write-EndpointSamplerJson -Path (Join-Path $Fast.Root '0002.started.json') -Value @{
-		RunId=$Fast.RunId;Sequence=2;StartedTicks=([Diagnostics.Stopwatch]::GetTimestamp()-6*[Diagnostics.Stopwatch]::Frequency) }
-	Expect-SamplerRejection { Assert-EndpointSampler -Sampler $Probe } 'five-second bound'
+	# The stopped real sampler may already have completed sequence 0002 (or
+	# more). Keep negative probes separate from its immutable publications.
+	# Cover empty history and histories that deterministically occupy 0002.
+	foreach ($CompletedCount in @(0,3,8)) {
+		$Probe.Root = Join-Path $Root ('StaleSweepProbe-' + $CompletedCount)
+		[void][IO.Directory]::CreateDirectory($Probe.Root)
+		for ($Sequence = 0; $Sequence -lt $CompletedCount; $Sequence++) {
+			$Prefix = '{0:D4}' -f $Sequence
+			Write-EndpointSamplerJson -Path (Join-Path $Probe.Root ($Prefix + '.started.json')) -Value @{
+				RunId=$Fast.RunId;Sequence=$Sequence;StartedTicks=([Diagnostics.Stopwatch]::GetTimestamp()-6*[Diagnostics.Stopwatch]::Frequency) }
+			Write-EndpointSamplerJson -Path (Join-Path $Probe.Root ($Prefix + '.completed.json')) -Value @{
+				RunId=$Fast.RunId;Sequence=$Sequence;EndedTicks=[Diagnostics.Stopwatch]::GetTimestamp() }
+		}
+		$Published = @(Get-ChildItem -LiteralPath $Probe.Root -File | Get-FileHash -Algorithm SHA256)
+		Assert-EndpointSampler -Sampler $Probe # Completed old sweeps are healthy.
+		$Latest = @(Get-ChildItem -LiteralPath $Probe.Root -Filter '*.started.json' -File |
+			Where-Object Name -cmatch '^[0-9]{4}\.started\.json$' | Sort-Object Name | Select-Object -Last 1)
+		$NextSequence = if ($Latest.Count) { [int]$Latest[0].Name.Substring(0,4) + 1 } else { 0 }
+		if ($NextSequence -ne $CompletedCount) { throw 'stale sweep fixture did not select the next unused sequence' }
+		$Prefix = '{0:D4}' -f $NextSequence
+		if ([IO.File]::Exists((Join-Path $Probe.Root ($Prefix + '.completed.json')))) { throw 'stale sweep fixture has a completion record' }
+		Write-EndpointSamplerJson -Path (Join-Path $Probe.Root ($Prefix + '.started.json')) -Value @{
+			RunId=$Fast.RunId;Sequence=$NextSequence;StartedTicks=([Diagnostics.Stopwatch]::GetTimestamp()-6*[Diagnostics.Stopwatch]::Frequency) }
+		Expect-SamplerRejection { Assert-EndpointSampler -Sampler $Probe } 'five-second bound'
+		foreach ($File in $Published) {
+			if ((Get-FileHash -LiteralPath $File.Path -Algorithm SHA256).Hash -cne $File.Hash) { throw 'stale sweep fixture changed a completed publication' }
+		}
+	}
 	$Slow = Start-TestSampler Blocked
 	Publish-EndpointSamplerOwner -Sampler $Slow -Owner $Children[0]
 	Wait-SamplerFile (Join-Path $Slow.Root '0001.started.json')
