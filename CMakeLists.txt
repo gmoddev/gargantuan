@@ -890,6 +890,10 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_gui_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")
 	target_link_libraries(gargantuan_prerun_bootstrap_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_prerun_editor_host_tests "tests/PreRunEditorHostTests.cpp")
+	target_link_libraries(gargantuan_prerun_editor_host_tests PRIVATE gargantuan_core nlohmann_json)
+	add_test(NAME gargantuan_prerun_editor_host COMMAND gargantuan_prerun_editor_host_tests)
+	set_tests_properties(gargantuan_prerun_editor_host PROPERTIES LABELS "prerun;editorhost;schema;security;headless" TIMEOUT 120)
 	add_executable(gargantuan_replicated_storage_tests "tests/ReplicatedStorageTests.cpp")
 	target_link_libraries(gargantuan_replicated_storage_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_replicated_storage_editor_host_tests "tests/ReplicatedStorageEditorHostTests.cpp")
@@ -1132,6 +1136,7 @@ if(BUILD_TESTING)
 			gargantuan_renderer_publication_tests
 			gargantuan_environment_lighting_benchmark
 			gargantuan_prerun_bootstrap_tests
+			gargantuan_prerun_editor_host_tests
 			gargantuan_replicated_storage_tests
 			gargantuan_replicated_storage_editor_host_tests
 			gargantuan_replicated_storage_session_tests

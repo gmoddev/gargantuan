@@ -4,6 +4,27 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-010: PreRun deadline interrupt can recurse during GC error construction
+
+- Status: Corrected in the PreRun authoring candidate; focused validation and
+  required hosted CI are tracked with that candidate.
+- Area: PreRun VM deadline enforcement.
+
+The old callback called `lua_break` from GC safepoints. Pinned Luau rejects a
+break across that C boundary; constructing the error can allocate, enter GC and
+re-enter the same expired interrupt until native stack overflow. A Release
+debugger trace and link map established the repeated Interrupt → lua_break →
+luaG_runerrorL → pusherror → lua_pushstring → luaC_step cycle.
+
+The callback now skips GC callbacks and aborts at an ordinary VM safepoint using
+an allocation-free native cancellation tag. Pinned Luau does not catch this tag
+as a script error; the outer native boundary discards the disposable VM and emits
+the bounded diagnostic. `pcall`, `xpcall` and metamethods cannot catch the deadline
+and continue. Source, time
+(250 ms) and memory (16 MiB) bounds remain unchanged. Allocation-churn timeout
+regressions require a diagnostic with no active-schema publication. See
+[PreRun authoring](devdocs/CurrentArchitecture/PreRunAuthoring.md).
+
 ## Originating Studio KI-008: camera-dependent geometry slicing
 
 - Status: Corrected for the reproduced Engine fixture; native Studio requalification remains separate.

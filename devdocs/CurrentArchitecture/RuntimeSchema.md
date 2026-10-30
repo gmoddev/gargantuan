@@ -51,6 +51,12 @@ or component composition.
 
 ## Candidate lifecycle and PreRun
 
+[PreRun authoring](PreRunAuthoring.md) adds a disposable candidate validation
+operation using this same validator and sandbox. It does not publish a registry.
+Saving source and activating schema remain separate; activation requires project
+reopen, and pending source cannot be combined with the old schema in Play/package
+capture. Project bootstrap returns the exact source it executed for that status.
+
 PreRun custom classes may declare strict optional `Service` and `Replicated`
 booleans. `Replicated=true` requires `Service=true`; an omitted replication flag
 on a service selects server-only visibility. This is one frozen class policy,

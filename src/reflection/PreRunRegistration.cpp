@@ -19,8 +19,20 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#undef RegisterClass
+#endif
+
 namespace gargantuan {
 	namespace {
+		// Deliberately not std::exception: pinned Luau turns std::exception into a
+		// catchable script error. Cancellation must escape pcall/xpcall and discard
+		// this disposable VM at the native execution boundary.
+		struct PreRunExecutionInterrupted {};
 		struct PreRunState {
 			RuntimeSchemaLifecycle *Lifecycle = nullptr;
 			const RuntimeSchemaBootstrapAuthority *Authority = nullptr;
@@ -66,12 +78,16 @@ namespace gargantuan {
 			return *state;
 		}
 
-		void Interrupt(lua_State *L, int) {
+		void Interrupt(lua_State *L, int Gc) {
+			// GC callbacks cannot yield/break across their C boundary. The native
+			// cancellation tag allocates no Lua error and cannot be caught in source.
+			if (Gc >= 0) return;
 			auto &state = GetState(L);
 			if (std::chrono::steady_clock::now() <= state.Deadline) return;
 			state.Failure = PreRunDiagnosticCode::ExecutionBudgetExceeded;
 			state.HasFailure = true;
-			lua_break(L);
+			lua_callbacks(L)->interrupt = nullptr;
+			throw PreRunExecutionInterrupted{};
 		}
 
 		std::string ReadBoundedString(lua_State *L, int index, std::size_t maximum, std::string_view field) {
@@ -483,6 +499,9 @@ namespace gargantuan {
 					Fail(state, PreRunDiagnosticCode::RuntimeError, message ? message : "PreRun execution failed");
 				}
 				close();
+			} catch (const PreRunExecutionInterrupted &) {
+				close();
+				Fail(state, PreRunDiagnosticCode::ExecutionBudgetExceeded, "PreRun execution budget exceeded");
 			} catch (...) {
 				close();
 				throw;
@@ -497,9 +516,31 @@ namespace gargantuan {
 		return projectRoot / ".gargantuan" / "prerun.luau";
 	}
 
+	std::filesystem::path ResolveProjectPreRunPath(const std::filesystem::path &ProjectRoot) {
+		const auto CanonicalRoot = std::filesystem::canonical(ProjectRoot);
+		if (!std::filesystem::is_directory(CanonicalRoot)) throw std::runtime_error("PreRun project root is not a directory");
+		auto Current = CanonicalRoot;
+		for (const auto *Component : {".gargantuan", "prerun.luau"}) {
+			Current /= Component;
+			std::error_code Error;
+			const auto Status = std::filesystem::symlink_status(Current, Error);
+			if (Error && Error != std::errc::no_such_file_or_directory) throw std::filesystem::filesystem_error("PreRun path inspection failed", Current, Error);
+			bool Linked = std::filesystem::is_symlink(Status);
+#if defined(_WIN32)
+			const auto Attributes = GetFileAttributesW(Current.c_str());
+			Linked |= Attributes != INVALID_FILE_ATTRIBUTES && (Attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+#endif
+			if (Linked) throw std::runtime_error("PreRun source cannot traverse a link or reparse point");
+			if (!IsPathWithin(CanonicalRoot, std::filesystem::weakly_canonical(Current)))
+				throw std::runtime_error("PreRun source resolves outside its project root");
+		}
+		return Current;
+	}
+
 	std::optional<std::string> ReadProjectPreRunSource(const std::filesystem::path &projectRoot) {
 		const auto RequestedPath = GetProjectPreRunPath(projectRoot);
 		try {
+			(void)ResolveProjectPreRunPath(projectRoot);
 			const auto CanonicalRoot = std::filesystem::weakly_canonical(projectRoot);
 			if (!std::filesystem::is_directory(CanonicalRoot))
 				throw PreRunRegistrationError({
@@ -546,6 +587,8 @@ namespace gargantuan {
 				PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {},
 				"source path could not be resolved: " + std::string(Error.what())
 			});
+		} catch (const std::exception &Error) {
+			throw PreRunRegistrationError({PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, Error.what()});
 		}
 	}
 
