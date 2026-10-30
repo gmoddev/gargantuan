@@ -78,6 +78,7 @@ int main() {
 			"Absent canonical source is an editable document, not a Script Instance"
 		);
 		const auto InitialSchema = GetRuntimeSchemaLifecycle().GetActiveGeneration();
+		const auto CallerDomain = GetCurrentScriptSecurityContext().Domain;
 		const auto InitialState = Call("GetProjectState", Json::object())["Result"];
 		auto Parameters = [&](const Json &State, std::string_view Source) {
 			return Json{
@@ -92,11 +93,34 @@ Schema:RegisterExtension({Namespace="Game",Name="Marker",Version=1,Target="Engin
 Schema:RegisterClass({Namespace="Game",Name="PreRunFolder",Version=1,Base="Engine.Folder",Properties={Enabled={Type="Boolean",Default=true}}})
 )";
 		for (int Attempt = 0; Attempt < 3; ++Attempt) {
-			auto Churn = Call("ValidatePreRun", Parameters(Initial["Result"], "while true do local Values = table.create(1024, 'temporary') end"));
-			Check(Churn["Ok"] && !Churn["Result"]["Validated"] &&
-				Churn["Result"]["Diagnostics"][0]["Code"] == "PreRunBudgetExceeded" &&
-				GetRuntimeSchemaLifecycle().GetActiveGeneration() == InitialSchema,
-				"GC allocation churn times out without recursive interrupt or partial schema publication");
+			auto Churn = Call(
+				"ValidatePreRun",
+				Parameters(Initial["Result"], "while true do local Values = table.create(1024, 'temporary') end")
+			);
+			Check(
+				Churn["Ok"] && !Churn["Result"]["Validated"] &&
+					Churn["Result"]["Diagnostics"][0]["Code"] == "PreRunBudgetExceeded" &&
+					GetRuntimeSchemaLifecycle().GetActiveGeneration() == InitialSchema,
+				"GC allocation churn times out without recursive interrupt or partial schema publication"
+			);
+		}
+		for (const auto *ProtectedLoop :
+			 {"while true do pcall(function() while true do end end) end",
+			  "local T=setmetatable({}, {__index=function() while true do end end}); pcall(function() return T.Value "
+			  "end); while true do end",
+			  "Schema:RegisterClass({Namespace='Game',Name='NeverPublished',Version=1,Base='Engine.Folder',Properties={"
+			  "Marker={Type='Boolean',Default=true}}}); while true do xpcall(function() while true do end end, "
+			  "function() return 'caught' end) end"}) {
+			auto Cancelled = Call("ValidatePreRun", Parameters(Initial["Result"], ProtectedLoop));
+			Check(
+				Cancelled["Ok"] && !Cancelled["Result"]["Validated"] &&
+					Cancelled["Result"]["Diagnostics"][0]["Code"] == "PreRunBudgetExceeded" &&
+					GetRuntimeSchemaLifecycle().GetActiveGeneration() == InitialSchema &&
+					!GetActiveRuntimeSchemaRegistry().FindClassByName("Game.NeverPublished") &&
+					GetCurrentScriptSecurityContext().Domain == CallerDomain,
+				"Deadline cancellation escapes protected calls and metamethod C boundaries without granting more "
+				"execution"
+			);
 		}
 		auto Validate = Call("ValidatePreRun", Parameters(Initial["Result"], ValidSource));
 		Check(

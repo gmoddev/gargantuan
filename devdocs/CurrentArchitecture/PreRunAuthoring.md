@@ -55,8 +55,12 @@ source file or generation. The response includes `Validated`,
 with stable Code, canonical Source, Definition and Message (up to 4 KiB).
 Compiler source locations are retained when supplied by the existing VM.
 
-Deadline interrupts abort only at ordinary VM safepoints and disarm before
-raising their diagnostic. GC callbacks cannot break across a C boundary; allowing
+Deadline interrupts abort only at ordinary VM safepoints using an allocation-free
+native cancellation tag, then the native execution boundary closes the disposable
+VM before constructing the diagnostic. The tag deliberately does not derive from
+std::exception, which pinned Luau converts into catchable script errors. Protected
+calls and metamethods cannot consume the timeout and continue. GC callbacks cannot
+break across a C boundary; allowing
 an expired callback to re-enter during error-string allocation caused the
 verified native stack overflow recorded as KI-010. The correction retains the
 existing time/memory bounds and follows the pinned Luau interrupt convention.

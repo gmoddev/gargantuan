@@ -29,6 +29,10 @@
 
 namespace gargantuan {
 	namespace {
+		// Deliberately not std::exception: pinned Luau turns std::exception into a
+		// catchable script error. Cancellation must escape pcall/xpcall and discard
+		// this disposable VM at the native execution boundary.
+		struct PreRunExecutionInterrupted {};
 		struct PreRunState {
 			RuntimeSchemaLifecycle *Lifecycle = nullptr;
 			const RuntimeSchemaBootstrapAuthority *Authority = nullptr;
@@ -75,16 +79,15 @@ namespace gargantuan {
 		}
 
 		void Interrupt(lua_State *L, int Gc) {
-			// GC callbacks cannot yield/break across their C boundary. Abort only at
-			// a VM safepoint, and disarm before creating the diagnostic: formatting
-			// an error may itself allocate and enter the GC interrupt callback.
+			// GC callbacks cannot yield/break across their C boundary. The native
+			// cancellation tag allocates no Lua error and cannot be caught in source.
 			if (Gc >= 0) return;
 			auto &state = GetState(L);
 			if (std::chrono::steady_clock::now() <= state.Deadline) return;
 			state.Failure = PreRunDiagnosticCode::ExecutionBudgetExceeded;
 			state.HasFailure = true;
 			lua_callbacks(L)->interrupt = nullptr;
-			luaL_error(L, "PreRun execution budget exceeded");
+			throw PreRunExecutionInterrupted{};
 		}
 
 		std::string ReadBoundedString(lua_State *L, int index, std::size_t maximum, std::string_view field) {
@@ -496,6 +499,9 @@ namespace gargantuan {
 					Fail(state, PreRunDiagnosticCode::RuntimeError, message ? message : "PreRun execution failed");
 				}
 				close();
+			} catch (const PreRunExecutionInterrupted &) {
+				close();
+				Fail(state, PreRunDiagnosticCode::ExecutionBudgetExceeded, "PreRun execution budget exceeded");
 			} catch (...) {
 				close();
 				throw;
