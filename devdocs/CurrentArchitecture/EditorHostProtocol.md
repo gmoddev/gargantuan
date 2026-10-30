@@ -32,6 +32,11 @@ format. Studio supplies its observed revision for Save As; MCP exposes no Save A
 
 ## Envelope and limits
 
+The optional version-1 `AnimationRig` / `AnimationPreview` extension is specified
+in [Animation authoring preview](AnimationAuthoringPreview.md). It adds bounded
+asset inspection and a disposable script-free preview without changing project
+mutation, Play, schema, viewport transport or persistence formats.
+
 Requests have exactly these fields:
 
 ```json
