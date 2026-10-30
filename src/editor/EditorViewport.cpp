@@ -179,11 +179,11 @@ namespace gargantuan {
 		: State(std::make_unique<Backend>()) {
 		State->Width = Width;
 		State->Height = Height;
-		if ((SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) == 0) {
-			if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
-				throw std::runtime_error(std::format("Failed to initialize SDL video: {}", SDL_GetError()));
-			State->OwnsVideoSubsystem = true;
-		}
+		// Each offscreen renderer holds its own SDL subsystem reference. A preview
+		// must survive recreation/destruction of the authoring viewport, and vice versa.
+		if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+			throw std::runtime_error(std::format("Failed to initialize SDL video: {}", SDL_GetError()));
+		State->OwnsVideoSubsystem = true;
 		State->Gpu = SDL_CreateGPUDevice(ShaderFormats, true, nullptr);
 		if (!State->Gpu) {
 			State->Destroy();

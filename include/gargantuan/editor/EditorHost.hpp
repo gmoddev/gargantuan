@@ -61,6 +61,9 @@ namespace gargantuan {
 
 	  private:
 		struct PackageJob;
+		struct AnimationPreviewJob;
+		std::unique_ptr<AnimationPreviewJob> ActiveAnimationPreview;
+		std::uint64_t NextAnimationPreviewId = 1;
 		std::string SessionToken;
 		static constexpr std::uint64_t TransactionOwner = 1;
 		std::unique_ptr<DiskFilesystem> Filesystem;

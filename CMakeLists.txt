@@ -723,6 +723,10 @@ if(BUILD_TESTING)
 	)
 	add_executable(gargantuan_animation_foundation_tests "tests/AnimationFoundationTests.cpp")
 	target_link_libraries(gargantuan_animation_foundation_tests PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_animation_preview_editorhost_tests "tests/AnimationPreviewEditorHostTests.cpp")
+	target_link_libraries(gargantuan_animation_preview_editorhost_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_animation_preview_editorhost_tests PRIVATE
+		GARGANTUAN_ANIMATION_PREVIEW_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/animation-preview-rig.gltf")
 	add_executable(gargantuan_animation_foundation_benchmark "tests/AnimationFoundationBenchmark.cpp")
 	target_link_libraries(gargantuan_animation_foundation_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_audio_foundation_tests "tests/AudioFoundationTests.cpp")
@@ -1130,6 +1134,7 @@ if(BUILD_TESTING)
 			gargantuan_asset_foundation_tests
 			gargantuan_asset_foundation_benchmark
 			gargantuan_animation_foundation_tests
+			gargantuan_animation_preview_editorhost_tests
 			gargantuan_animation_foundation_benchmark
 			gargantuan_audio_foundation_tests
 			gargantuan_audio_foundation_benchmark
@@ -1250,6 +1255,7 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
 	add_test(NAME gargantuan_asset_foundation COMMAND gargantuan_asset_foundation_tests)
 	add_test(NAME gargantuan_animation_foundation COMMAND gargantuan_animation_foundation_tests)
+	add_test(NAME gargantuan_animation_preview_editorhost COMMAND gargantuan_animation_preview_editorhost_tests)
 	add_test(NAME gargantuan_animation_foundation_benchmark_smoke
 		COMMAND gargantuan_animation_foundation_benchmark --quick)
 	add_test(NAME gargantuan_audio_foundation COMMAND gargantuan_audio_foundation_tests)

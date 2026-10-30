@@ -4,6 +4,8 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/editor/EditorHost.hpp"
+#include "gargantuan/editor/AnimationPreview.hpp"
+#include "gargantuan/animation/AnimationTrack.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/classes/BasePart.hpp"
@@ -485,6 +487,14 @@ namespace gargantuan {
 							{"Material", Primitive.Material ? Json(Primitive.Material->ToString()) : Json(nullptr)},
 						});
 					Metadata["Primitives"] = std::move(Primitives);
+					if (Asset.Skeleton && Asset.Skeleton->Joints) {
+						Metadata["JointCount"] = Asset.Skeleton->Joints->size();
+						Metadata["SkeletonCompatibilityId"] = Asset.Skeleton->CompatibilityId.ToString();
+					}
+				} else if constexpr (std::is_same_v<T, ImportedAnimation>) {
+					Metadata["Duration"] = Asset.Duration;
+					Metadata["ChannelCount"] = Asset.Tracks ? Asset.Tracks->size() : 0;
+					Metadata["SkeletonCompatibilityId"] = Asset.SkeletonCompatibilityId.ToString();
 				} else if constexpr (std::is_same_v<T, ImportedFont>) {
 					Metadata["FaceCount"] = Asset.FaceCount;
 				} else if constexpr (std::is_same_v<T, ImportedMaterial>) {
@@ -516,6 +526,53 @@ namespace gargantuan {
 				{"BuiltIn", Record.BuiltIn}, {"Diagnostic", std::move(Diagnostic)},
 				{"Dependencies", std::move(Dependencies)}, {"Metadata", std::move(Metadata)},
 			};
+		}
+
+		Json DescribeAnimationRig(const std::shared_ptr<AssetService> &Assets, std::string Reference) {
+			if (!Assets || !AssetReference::Parse(Reference))
+				throw std::invalid_argument("A strict asset reference is required");
+			if (auto Clip = Assets->ResolveAnimation(Reference); Clip && Clip->Value.SkeletonAsset)
+				Reference = "asset://" + Clip->Value.SkeletonAsset->ToString();
+			const auto Mesh = Assets->ResolveMeshResource(Reference);
+			if (!Mesh || !Mesh->Value.Skeleton || !Mesh->Value.Skeleton->Joints)
+				throw std::invalid_argument("Select an available skinned Mesh or Animation asset");
+			const auto Record = Assets->GetAsset(Reference);
+			const auto &Skeleton = *Mesh->Value.Skeleton;
+			Json Joints = Json::array(), Clips = Json::array();
+			for (const auto &Joint : *Skeleton.Joints) {
+				const auto Separator = Joint.Path.find_last_of('/');
+				Joints.push_back({{"Name", Joint.Path.substr(Separator == std::string::npos ? 0 : Separator + 1)},
+					{"Path", Joint.Path}, {"Parent", Joint.Parent},
+					{"Translation", {Joint.BindTranslation.x, Joint.BindTranslation.y, Joint.BindTranslation.z}},
+					{"Rotation", {Joint.BindRotation.x, Joint.BindRotation.y, Joint.BindRotation.z, Joint.BindRotation.w}},
+					{"Scale", {Joint.BindScale.x, Joint.BindScale.y, Joint.BindScale.z}}});
+			}
+			std::size_t ChannelCount = 0;
+			for (const auto &Entry : Assets->GetCatalog(false)) {
+				if (Entry.Kind != AssetKind::Animation || !Entry.Asset) continue;
+				const auto &Clip = std::get<ImportedAnimation>(*Entry.Asset);
+				if (Clip.SkeletonCompatibilityId != Skeleton.CompatibilityId) continue;
+				ChannelCount += Clip.Tracks ? Clip.Tracks->size() : 0;
+				if (Clips.size() >= 256 || ChannelCount > 4096)
+					throw std::length_error("Rig inspection exceeds the 256 clip / 4096 channel response bound");
+				Json Channels = Json::array();
+				if (Clip.Tracks) for (const auto &Track : *Clip.Tracks)
+					Channels.push_back({{"JointPath", Track.JointPath},
+						{"TranslationInterpolation", Track.TranslationInterpolation == AssetAnimationInterpolation::Step ? "STEP" : "LINEAR"},
+						{"RotationInterpolation", Track.RotationInterpolation == AssetAnimationInterpolation::Step ? "STEP" : "LINEAR"},
+						{"ScaleInterpolation", Track.ScaleInterpolation == AssetAnimationInterpolation::Step ? "STEP" : "LINEAR"},
+						{"TranslationKeys", Track.TranslationKeys ? Track.TranslationKeys->size() : 0},
+						{"RotationKeys", Track.RotationKeys ? Track.RotationKeys->size() : 0},
+						{"ScaleKeys", Track.ScaleKeys ? Track.ScaleKeys->size() : 0}});
+				Clips.push_back({{"Reference", Entry.Reference.Value}, {"Name", Entry.Name},
+					{"ContentRevision", Entry.ContentRevision}, {"Duration", Clip.Duration}, {"Channels", std::move(Channels)}});
+			}
+			return {{"RigVersion", 1}, {"MeshReference", Reference}, {"ContentRevision", Record->ContentRevision},
+				{"Diagnostic", Record->Diagnostic ? Json{{"Code", Record->Diagnostic->Code}, {"Message", Record->Diagnostic->Message}} : Json(nullptr)},
+				{"SkeletonCompatibilityId", Skeleton.CompatibilityId.ToString()}, {"Joints", std::move(Joints)},
+				{"Clips", std::move(Clips)},
+				{"BoundsMinimum", {Mesh->Value.Bounds.Minimum.x, Mesh->Value.Bounds.Minimum.y, Mesh->Value.Bounds.Minimum.z}},
+				{"BoundsMaximum", {Mesh->Value.Bounds.Maximum.x, Mesh->Value.Bounds.Maximum.y, Mesh->Value.Bounds.Maximum.z}}};
 		}
 
 		std::optional<std::filesystem::path> ValidateProjectDestination(const Json &value) {
@@ -659,6 +716,15 @@ namespace gargantuan {
 		}
 	}
 
+	struct EditorHost::AnimationPreviewJob final {
+		std::uint64_t Id = 0;
+		std::unique_ptr<AnimationPreview> Scene;
+		std::unique_ptr<EditorViewportRenderer> Renderer;
+		std::unique_ptr<SharedFrameRing> Ring;
+		std::chrono::steady_clock::time_point LastStep = std::chrono::steady_clock::now();
+		Json Rig;
+	};
+
 	struct EditorHost::PackageJob final {
 		std::uint64_t Id = 0;
 		std::uint64_t CapturedRevision = 0;
@@ -686,6 +752,7 @@ namespace gargantuan {
 	}
 
 	EditorHost::~EditorHost() {
+		ActiveAnimationPreview.reset();
 		ViewportPresentationActive = false;
 		ViewportLatestFrameMailbox.reset();
 		if (ActivePackageJob) {
@@ -911,6 +978,7 @@ namespace gargantuan {
 					"CustomServiceDeclarations", "ReplicatedStorage",
 					"PlaySession", "DiagnosticStream", "SendPlayInput",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
+					"AnimationRig", "AnimationPreview",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
 					"ViewportLatestFrame", "ViewportPresentationDiagnostics"
@@ -1560,6 +1628,7 @@ namespace gargantuan {
 				if (World) {
 					(void)World->Transactions.TerminateOwner(*World, TransactionOwner); World->Destroy();
 				}
+				ActiveAnimationPreview.reset();
 				World.reset();
 				Filesystem.reset();
 				CurrentProject.reset();
@@ -1685,6 +1754,7 @@ namespace gargantuan {
 						(void)World->Transactions.TerminateOwner(*World, TransactionOwner);
 						World->Destroy();
 					}
+					ActiveAnimationPreview.reset();
 					World.reset();
 					Filesystem.reset();
 					CurrentProject.reset();
@@ -1741,6 +1811,112 @@ namespace gargantuan {
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId, EncodeProjectState(World, PersistedRevision, CurrentProject)
 				));
+			}
+
+			if (method == "GetAnimationRig" || method == "OpenAnimationPreview" ||
+				method == "ControlAnimationPreview" || method == "CaptureAnimationPreview" || method == "CloseAnimationPreview") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					(method != "GetAnimationRig" && !StudioSecurity.HasCapability(ScriptCapability::ViewportControl)))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Animation access requires ReadDataModel and preview requires ViewportControl"));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+				if (method == "GetAnimationRig" || method == "OpenAnimationPreview") {
+					if (!HasOnlyFields(parameters, {"Reference"}) || !parameters.contains("Reference") || !parameters["Reference"].is_string())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "A strict asset Reference is required"));
+					auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+					auto Rig = DescribeAnimationRig(Assets, parameters["Reference"].get<std::string>());
+					if (method == "GetAnimationRig") return SerializeBoundedResponse(SuccessResponse(requestId, Rig));
+					if (ActiveAnimationPreview)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PreviewActive", "Close the current Animation Preview first"));
+					if (NextAnimationPreviewId == 0) throw std::overflow_error("Animation Preview identity exhausted");
+					auto Candidate = std::make_unique<AnimationPreviewJob>();
+					Candidate->Id = NextAnimationPreviewId++;
+					Candidate->Scene = std::make_unique<AnimationPreview>(Assets->CaptureProjectAssets(), Rig["MeshReference"].get<std::string>());
+					Candidate->Rig = Rig;
+					Json Transport = {{"Transport", "Base64"}};
+					if (SharedFrameRing::IsSupported()) {
+						Candidate->Ring = std::make_unique<SharedFrameRing>();
+						Transport = {{"Transport", "SharedMemoryRing"}, {"Version", SharedFrameRingLayout::Version},
+							{"Name", Candidate->Ring->GetName()}, {"MappingBytes", Candidate->Ring->GetMappingBytes()},
+							{"HeaderBytes", SharedFrameRingLayout::HeaderBytes}, {"SlotCount", SharedFrameRingLayout::SlotCount},
+							{"SlotHeaderBytes", SharedFrameRingLayout::SlotHeaderBytes}, {"SlotStride", SharedFrameRingLayout::SlotStride},
+							{"MaximumPayloadBytes", SharedFrameRingLayout::MaximumPayloadBytes}, {"PixelFormat", "RGB8"}};
+					}
+					Json Result = {{"PreviewId", std::to_string(Candidate->Id)}, {"Rig", std::move(Rig)}, {"FrameTransport", std::move(Transport)}};
+					ActiveAnimationPreview = std::move(Candidate);
+					return SerializeBoundedResponse(SuccessResponse(requestId, Result));
+				}
+				auto Id = parameters.contains("PreviewId") ? DecodeCanonicalJobId(parameters["PreviewId"]) : std::nullopt;
+				if (!Id || !ActiveAnimationPreview || ActiveAnimationPreview->Id != *Id)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePreview", "PreviewId is not the active owned preview"));
+				auto &Preview = *ActiveAnimationPreview;
+				if (method == "CloseAnimationPreview") {
+					if (!HasOnlyFields(parameters, {"PreviewId"}))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Close accepts only PreviewId"));
+					ActiveAnimationPreview.reset();
+					return SerializeBoundedResponse(SuccessResponse(requestId, {{"Closed", true}}));
+				}
+				if (method == "ControlAnimationPreview") {
+					if (!HasOnlyFields(parameters, {"PreviewId", "Action", "Value"}) || !parameters.contains("Action") || !parameters["Action"].is_string())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Control requires Action and optional Value"));
+					const auto Action = parameters["Action"].get<std::string>();
+					auto Track = Preview.Scene->GetTrack();
+					if (Action == "Clip" && parameters.contains("Value") && parameters["Value"].is_string())
+						Preview.Scene->SelectClip(parameters["Value"].get<std::string>());
+					else if (!Track) return SerializeBoundedResponse(ErrorResponse(requestId, "ClipRequired", "Select a clip first"));
+					else if (Action == "Play" && !parameters.contains("Value")) {
+						if (Track->GetPlaybackState() == Enums::AnimationPlaybackState::Paused) Track->Resume();
+						else Track->Play();
+					}
+					else if (Action == "Pause" && !parameters.contains("Value")) Track->Pause();
+					else if ((Action == "Stop" || Action == "Reset") && !parameters.contains("Value")) Track->Stop();
+					else if (Action == "Loop" && parameters.contains("Value") && parameters["Value"].is_boolean()) Track->SetLooped(parameters["Value"].get<bool>());
+					else if ((Action == "Seek" || Action == "Speed") && parameters.contains("Value") && parameters["Value"].is_number()) {
+						const auto Value = parameters["Value"].get<float>();
+						if (!std::isfinite(Value) || Value < 0 || (Action == "Speed" && Value > AnimationTrack::MaximumSpeed))
+							return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayback", "Playback value is out of bounds"));
+						if (Action == "Seek") {
+							if (Track->GetPlaybackState() == Enums::AnimationPlaybackState::Stopped) { Track->Play(); Track->Pause(); }
+							Track->SetTimePosition(Value);
+						} else Track->SetSpeed(Value);
+					} else return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid animation control action/value"));
+					Preview.Scene->Step(0.0f);
+					Preview.LastStep = std::chrono::steady_clock::now();
+					return SerializeBoundedResponse(SuccessResponse(requestId, {{"PreviewId", std::to_string(*Id)}}));
+				}
+				if (!HasOnlyFields(parameters, {"PreviewId", "Width", "Height", "Position", "Target"}) ||
+					!parameters.contains("Width") || !parameters.contains("Height") ||
+					!parameters["Width"].is_number_unsigned() || !parameters["Height"].is_number_unsigned() ||
+					!parameters.contains("Position") || !parameters.contains("Target"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Capture requires bounded dimensions and camera Position/Target"));
+				const auto Width = JsonCodec::DecodeUnsigned32(parameters["Width"]), Height = JsonCodec::DecodeUnsigned32(parameters["Height"]);
+				const auto Position = DecodeVector3(parameters["Position"]), Target = DecodeVector3(parameters["Target"]);
+				if (!Width || !Height || *Width == 0 || *Height == 0 || *Width > 1024 || *Height > 1024 ||
+					!Position || !Target || glm::length(*Position - *Target) < 0.001f)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid preview camera or dimensions"));
+				if (glm::length(glm::cross(glm::normalize(*Target - *Position), glm::vec3(0, 1, 0))) < 0.001f)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Preview camera direction is parallel to its up axis"));
+				const auto Now = std::chrono::steady_clock::now();
+				Preview.Scene->Step(std::min(60.0f, std::chrono::duration<float>(Now - Preview.LastStep).count()));
+				Preview.LastStep = Now;
+				if (!Preview.Renderer) Preview.Renderer = std::make_unique<EditorViewportRenderer>(*Width, *Height);
+				else Preview.Renderer->Resize(*Width, *Height);
+				auto Publication = Preview.Scene->Publish(MakeLookAtRenderCameraInput(*Position, *Target, {0, 1, 0}), *Width, *Height);
+				auto Frame = Preview.Renderer->Capture(Publication);
+				Json Result = {{"PreviewId", std::to_string(*Id)}, {"Width", *Width}, {"Height", *Height}, {"Format", "RGB8"}};
+				if (Preview.Ring) {
+					Result["FrameNumber"] = Preview.Ring->Publish(*Width, *Height, Frame.RgbPixels,
+						static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Now.time_since_epoch()).count()));
+				} else Result["Pixels"] = EncodeBase64(Frame.RgbPixels);
+				if (auto Track = Preview.Scene->GetTrack()) {
+					Result["TimePosition"] = Track->GetTimePosition();
+					Result["PlaybackState"] = magic_enum::enum_name(Track->GetPlaybackState());
+				}
+				Json Positions = Json::array();
+				if (auto Pose = Preview.Scene->GetPose(); Pose && Pose->JointModelTransforms)
+					for (const auto &Transform : *Pose->JointModelTransforms) Positions.push_back({Transform[3].x, Transform[3].y, Transform[3].z});
+				Result["JointPositions"] = std::move(Positions);
+				return SerializeBoundedResponse(SuccessResponse(requestId, Result));
 			}
 
 			if (method == "GetAssetCatalog") {
