@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <cstdint>
 
@@ -47,6 +48,8 @@ namespace gargantuan {
 			const PersistenceSnapshot &snapshot,
 			const std::function<void()> &beforeReplace = {}
 		) const;
+		[[nodiscard]] bool ReplacePreRunSource(const std::optional<std::string> &ExpectedSource,
+			std::string_view Source, const std::function<void()> &BeforeReplace = {}) const;
 
 	  private:
 		BaseFilesystem *Filesystem;

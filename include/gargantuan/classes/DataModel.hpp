@@ -49,6 +49,8 @@ namespace gargantuan {
 		bool RevisionBatchActive = false;
 		bool RevisionBatchChanged = false;
 		std::size_t OwnedInstanceCount = 1;
+		mutable ServiceDefinitions RegisteredServices;
+		mutable std::uint64_t ServiceSchemaGeneration = 0;
 	};
 
 	class ScopedAuthoritativeRevisionDeferral {

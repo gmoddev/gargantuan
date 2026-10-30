@@ -22,6 +22,9 @@ namespace gargantuan {
 	std::optional<std::shared_ptr<Instance>> ServiceProvider::FindService(std::string Name) {
 		auto Definition = GetServiceDefinitions().find(Name);
 		if (Definition == GetServiceDefinitions().end()) return std::nullopt;
+		const auto *Class = InstanceClassRegistry::GetDefinitionBySchemaId(Definition->second);
+		if (Class && Class->ServicePolicy == SchemaServicePolicy::ServerOnly &&
+			GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client) return std::nullopt;
 		auto Existing = Services.find(Name);
 		if (Existing == Services.end()) return std::nullopt;
 		if (IsCanonicalService(this, Existing->second, Definition->second)) return Existing->second;
@@ -37,17 +40,22 @@ namespace gargantuan {
 		if (auto Existing = FindService(Name)) return Existing;
 
 		auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(Registered->second);
-		if (!Definition || !Definition->Constructor)
+		if (!Definition || !InstanceClassRegistry::IsConstructible(*Definition))
 			throw std::runtime_error(std::format("Service '{}' has no constructible schema", Name));
+		if (Definition->ServicePolicy == SchemaServicePolicy::ServerOnly &&
+			GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client) return std::nullopt;
 
-		if (auto Existing = FindFirstChildOfClass(Definition->ClassName, std::nullopt);
+		const auto ClassName = Definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+			? Definition->CanonicalName : Definition->ClassName;
+		if (auto Existing = FindFirstChildOfClass(ClassName, std::nullopt);
 			IsCanonicalService(this, Existing, Registered->second)) {
 			Services.emplace(Name, Existing);
 			return Existing;
 		}
 
-		auto Service = Definition->Constructor();
+		auto Service = InstanceClassRegistry::Construct(*Definition);
 		Service->SetName(Name);
+		if (GetArchivable()) Service->MarkPersistenceSubtreeArchivable();
 		Service->SetParent(this->shared_from_this());
 		Services.emplace(Name, Service);
 		return Service;

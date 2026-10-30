@@ -16,6 +16,7 @@
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
@@ -385,6 +386,7 @@ namespace gargantuan {
 			return Method == "OpenProject" || Method == "CreateProject" || Method == "SaveProject" ||
 				Method == "SaveProjectAs" || Method == "BeginTransaction" || Method == "CommitTransaction" ||
 				Method == "Undo" || Method == "Redo" || Method == "SetScriptSource" ||
+				Method == "SetPreRunSource" || Method == "ValidatePreRun" ||
 				Method == "SetProperty" || Method == "SetPropertyBatch" || Method == "SetTransform" || Method == "SetAttribute" || Method == "SetExtensionProperty" ||
 				Method == "SetCustomProperty" || Method == "AddTag" || Method == "RemoveTag" ||
 				Method == "CreateInstance" || Method == "DestroyInstance" ||
@@ -663,6 +665,55 @@ namespace gargantuan {
 			}
 			return result;
 		}
+
+		std::string PreRunRevision(const std::optional<std::string> &Source) {
+			if (!Source) return "missing";
+			return AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Source->data()), Source->size())).ToString();
+		}
+
+		Json EncodePreRunSource(std::string_view Source) {
+			ValidateProtocolString(Source, MaximumPreRunSourceBytes, "PreRun source");
+			const auto Encoded = EncodeBase64(std::vector<std::uint8_t>(Source.begin(), Source.end()));
+			Json Chunks = Json::array();
+			for (std::size_t Offset = 0; Offset < Encoded.size(); Offset += MaximumProtocolStringBytes)
+				Chunks.push_back(Encoded.substr(Offset, MaximumProtocolStringBytes));
+			if (Chunks.empty()) Chunks.push_back("");
+			return Chunks;
+		}
+
+		std::string DecodePreRunSource(const Json &Chunks) {
+			if (!Chunks.is_array() || Chunks.empty() || Chunks.size() > 6)
+				throw std::invalid_argument("PreRun SourceBase64 requires one to six bounded chunks");
+			std::string Encoded;
+			for (const auto &Chunk : Chunks) {
+				if (!Chunk.is_string()) throw std::invalid_argument("PreRun source chunk must be a string");
+				const auto &Text = Chunk.get_ref<const std::string &>();
+				if (Text.size() > MaximumProtocolStringBytes || Encoded.size() + Text.size() > ((MaximumPreRunSourceBytes + 2) / 3) * 4)
+					throw std::invalid_argument("PreRun source exceeds its byte limit");
+				Encoded += Text;
+			}
+			if (Encoded.size() % 4 != 0) throw std::invalid_argument("PreRun source Base64 length is invalid");
+			constexpr std::string_view Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+			std::vector<std::uint8_t> Bytes;
+			Bytes.reserve(Encoded.size() / 4 * 3);
+			for (std::size_t Offset = 0; Offset < Encoded.size(); Offset += 4) {
+				std::uint32_t Value = 0;
+				for (std::size_t Index = 0; Index < 4; ++Index) {
+					const char Character = Encoded[Offset + Index];
+					const auto Digit = Alphabet.find(Character);
+					if (Digit == std::string_view::npos && !(Character == '=' && Index >= 2 && Offset + 4 == Encoded.size()))
+						throw std::invalid_argument("PreRun source Base64 is invalid");
+					Value = (Value << 6) | (Character == '=' ? 0 : static_cast<std::uint32_t>(Digit));
+				}
+				Bytes.push_back(static_cast<std::uint8_t>(Value >> 16));
+				if (Encoded[Offset + 2] != '=') Bytes.push_back(static_cast<std::uint8_t>(Value >> 8));
+				if (Encoded[Offset + 3] != '=') Bytes.push_back(static_cast<std::uint8_t>(Value));
+			}
+			if (EncodeBase64(Bytes) != Encoded) throw std::invalid_argument("PreRun source Base64 is not canonical");
+			std::string Source(Bytes.begin(), Bytes.end());
+			ValidateProtocolString(Source, MaximumPreRunSourceBytes, "PreRun source");
+			return Source;
+		}
 	}
 
 	struct EditorHost::AnimationPreviewJob final {
@@ -923,7 +974,8 @@ namespace gargantuan {
 					"AuthoritativeTransactions",
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
-					"ReadScriptSource", "WriteScriptSource",
+					"ReadScriptSource", "WriteScriptSource", "PreRunSource", "ValidatePreRun",
+					"CustomServiceDeclarations", "ReplicatedStorage",
 					"PlaySession", "DiagnosticStream", "SendPlayInput",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"AnimationRig", "AnimationPreview",
@@ -968,6 +1020,68 @@ namespace gargantuan {
 				));
 			}
 
+			if (method == "GetPreRunSource" || method == "SetPreRunSource" || method == "ValidatePreRun") {
+				const bool Write = method == "SetPreRunSource", Read = method == "GetPreRunSource";
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(Write ? ScriptCapability::MutateDataModel : ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "PreRun authoring requires explicit EditorCommands and read/write authority"));
+				if (!World || !CurrentProject) return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "Open a project first"));
+				if (!HasOnlyFields(parameters, Read ? std::initializer_list<std::string_view>{} :
+					std::initializer_list<std::string_view>{"ProjectRoot", "ExpectedSourceRevision", "SourceBase64"}) ||
+					(!Read && (!parameters.contains("ProjectRoot") || !parameters.contains("ExpectedSourceRevision") ||
+						!parameters["ExpectedSourceRevision"].is_string() || !parameters.contains("SourceBase64"))))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid PreRun authoring fields"));
+				if (ActivePreRunSchemaGeneration != GetRuntimeSchemaLifecycle().GetActiveGeneration())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleSchema", "Reopen the project after schema replacement"));
+				const auto Saved = ReadProjectPreRunSource(CurrentProject->Root);
+				const auto Location = CurrentProject->Root.generic_string();
+				const auto LocationRevision = AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Location.data()), Location.size())).ToString();
+				const auto Revision = PreRunRevision(Saved) + "@" + LocationRevision;
+				auto State = [&] {
+					return Json{{"ProjectRoot", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()))},
+						{"Path", ".gargantuan/prerun.luau"}, {"Exists", Saved.has_value()}, {"SourceRevision", Revision},
+						{"ActiveSourceRevision", PreRunRevision(ActivePreRunSource)}, {"SchemaGeneration", ActivePreRunSchemaGeneration},
+						{"ReloadRequired", Saved != ActivePreRunSource}, {"MaximumSourceBytes", MaximumPreRunSourceBytes}};
+				};
+				if (Read) {
+					auto Result = State(); Result["SourceBase64"] = EncodePreRunSource(Saved.value_or(""));
+					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
+				}
+				const auto Root = JsonCodec::DecodeObjectId(parameters["ProjectRoot"]);
+				if (!Root || Root->ToObjectId() != World->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleProject", "PreRun buffer belongs to another project generation"));
+				if (parameters["ExpectedSourceRevision"] != Revision)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Conflict", "PreRun source changed; reload or preserve the local buffer"));
+				if (World->Transactions.GetOpenCount() != 0 || (ActivePackageJob && !ActivePackageJob->Complete.load()))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "LifecycleConflict", "Finish the active transaction or package job first"));
+				std::string Source;
+				try { Source = DecodePreRunSource(parameters["SourceBase64"]); }
+				catch (const std::invalid_argument &Error) { return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidSource", Error.what())); }
+				if (Write) {
+					try {
+						if (!CurrentProject->ReplacePreRunSource(Saved, Source, PersistenceCheckpointForTesting))
+							throw PreRunSourceConflict("PreRun source changed before commit");
+					} catch (const PreRunSourceConflict &Error) {
+						return SerializeBoundedResponse(ErrorResponse(requestId, "Conflict", Error.what()));
+					}
+					auto Result = State(); Result["Exists"] = true; Result["SourceRevision"] = PreRunRevision(Source) + "@" + LocationRevision;
+					Result["ReloadRequired"] = std::optional<std::string>(Source) != ActivePreRunSource;
+					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
+				}
+				auto Result = State();
+				const auto Diagnostic = ValidatePreRunSource(Source);
+				Result["Validated"] = !Diagnostic; Result["ActiveSchemaChanged"] = false;
+				Result["ValidatedSourceRevision"] = PreRunRevision(Source);
+				Result["Diagnostics"] = Json::array();
+				if (Diagnostic) {
+					auto Message = Diagnostic->Message.substr(0, 4096);
+					while (!Message.empty() && !IsValidProtocolUtf8(Message)) Message.pop_back();
+					Result["Diagnostics"].push_back({{"Code", GetPreRunDiagnosticCodeName(Diagnostic->Code)},
+						{"Source", ".gargantuan/prerun.luau"}, {"Definition", Diagnostic->Definition.substr(0, 256)}, {"Message", Message}});
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
+			}
+
 			if (method == "StartPackageBuild") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
 					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
@@ -988,6 +1102,8 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "TransactionOpen", "Commit the open authoring transaction before packaging"
 					));
+				if (ReadProjectPreRunSource(CurrentProject->Root) != ActivePreRunSource)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PreRunReloadRequired", "Reopen the project to activate saved PreRun before packaging"));
 				if (HasRevisionConflict())
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "Conflict", "The authoritative project revision changed before package capture"
@@ -1011,6 +1127,8 @@ namespace gargantuan {
 					Payload = PackageBuilder::Capture(
 						*CurrentProject, World, World->GetAuthoritativeRevision(), PersistedRevision
 					);
+					if (Payload.PreRunSource != ActivePreRunSource)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PreRunReloadRequired", "PreRun source changed during package capture; reopen the project"));
 				} catch (const std::exception &) {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "PackageCaptureFailed", "The authoritative project snapshot could not be captured for packaging"
@@ -1128,6 +1246,8 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
 				if (World->Transactions.GetOpenCount() != 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "TransactionOpen", "Commit the open authoring transaction before Play"));
+				if (ReadProjectPreRunSource(CurrentProject->Root) != ActivePreRunSource)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PreRunReloadRequired", "Reopen the project to activate saved PreRun before Play"));
 				if (ActivePlaySession)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "One local Play session is already active"));
 				if (NextPlaySessionId == 0)
@@ -1522,7 +1642,8 @@ namespace gargantuan {
 				ViewportHeight = 0;
 				ViewportPresentationActive = false;
 				AdvanceViewportGeneration();
-				BootstrapProjectRuntimeSchema(root);
+				ActivePreRunSource = BootstrapProjectRuntimeSchema(root);
+				ActivePreRunSchemaGeneration = GetRuntimeSchemaLifecycle().GetActiveGeneration();
 				auto filesystem = std::make_unique<DiskFilesystem>(root);
 				auto project = Project::fromExisting(filesystem.get());
 				auto world = project.DeserializeGame();
@@ -1647,7 +1768,8 @@ namespace gargantuan {
 					ViewportHeight = 0;
 					ViewportPresentationActive = false;
 					AdvanceViewportGeneration();
-					BootstrapProjectRuntimeSchema(*Destination);
+					ActivePreRunSource = BootstrapProjectRuntimeSchema(*Destination);
+					ActivePreRunSchemaGeneration = GetRuntimeSchemaLifecycle().GetActiveGeneration();
 					auto NewFilesystem = std::make_unique<DiskFilesystem>(*Destination);
 					auto NewProject = Project::fromExisting(NewFilesystem.get());
 					auto LoadedWorld = NewProject.DeserializeGame();
@@ -2039,14 +2161,10 @@ namespace gargantuan {
 				}
 				try {
 					if (saveAs && project.Root != CurrentProject->Root) {
-						const auto sourcePreRun = CurrentProject->RootConfiguration / "prerun.luau";
-						const auto destinationPreRun = project.RootConfiguration / "prerun.luau";
-						if (std::filesystem::is_regular_file(sourcePreRun)) {
-							std::filesystem::create_directories(project.RootConfiguration);
-							std::filesystem::copy_file(
-								sourcePreRun, destinationPreRun,
-								std::filesystem::copy_options::overwrite_existing
-							);
+						if (auto Source = ReadProjectPreRunSource(CurrentProject->Root)) {
+							std::filesystem::create_directories(project.Root);
+							if (!project.ReplacePreRunSource(ReadProjectPreRunSource(project.Root), *Source))
+								throw PreRunSourceConflict("PreRun destination changed during Save As");
 						}
 					}
 					project.PersistGameAtomically(snapshot, PersistenceCheckpointForTesting);

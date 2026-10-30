@@ -1,4 +1,5 @@
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ServiceProvider.hpp"
@@ -363,6 +364,9 @@ namespace gargantuan {
 	void Instance::Destroy() {
 		AssertAuthoritativeMutation("Instance::Destroy");
 		if (Destroyed || DestroyingState) return;
+		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client &&
+			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated)
+			throw std::runtime_error("[Storage:Authority] Replicated service state is server-authoritative");
 		if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
 		DestroyingState = true;
 		Destroyed = true;
@@ -627,6 +631,9 @@ namespace gargantuan {
 	void Instance::AssertCanMutate() const {
 		AssertAuthoritativeMutation("Instance property mutation");
 		AssertIsAlive();
+		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client &&
+			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated)
+			throw std::runtime_error("[Storage:Authority] Replicated service state is server-authoritative");
 	}
 
 	void Instance::ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const {
@@ -644,6 +651,8 @@ namespace gargantuan {
 		const ScriptSecurityContext &securityContext
 	) {
 		if (Destroyed || DestroyingState) return MutationStatus::StaleObject;
+		if (securityContext.Domain == ScriptExecutionDomain::Client &&
+			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated) return MutationStatus::Unauthorized;
 		auto *property = FindProperty(std::string(propertyName));
 		if (!property) return MutationStatus::InvalidProperty;
 		if (!property->Write || property->WritePermission == Enums::Permission::Never) return MutationStatus::ReadOnly;
@@ -723,6 +732,8 @@ namespace gargantuan {
 		Enums::Permission Permission,
 		const ScriptSecurityContext &SecurityContext
 	) const {
+		if (SecurityContext.Domain == ScriptExecutionDomain::Client &&
+			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated) return MutationStatus::Unauthorized;
 		if (Destroyed || DestroyingState) return MutationStatus::StaleObject;
 		auto *Property = const_cast<Instance *>(this)->FindProperty(std::string(PropertyName));
 		if (!Property) return MutationStatus::InvalidProperty;
@@ -817,6 +828,8 @@ namespace gargantuan {
 	) {
 		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return MutationStatus::WrongExecutionDomain;
 		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel)) return MutationStatus::Unauthorized;
+		if (securityContext.Domain == ScriptExecutionDomain::Client &&
+			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated) return MutationStatus::Unauthorized;
 		AssertIsAlive();
 		ValidateAttributeName(name);
 		if (value) (void)ValidateAttributeValue(*value);
@@ -888,6 +901,8 @@ namespace gargantuan {
 	) {
 		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return MutationStatus::WrongExecutionDomain;
 		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel)) return MutationStatus::Unauthorized;
+		if (securityContext.Domain == ScriptExecutionDomain::Client &&
+			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated) return MutationStatus::Unauthorized;
 		AssertIsAlive();
 		const auto &registry = GetActiveRuntimeSchemaRegistry();
 		auto *extension = registry.FindExtensionById(extensionId);
@@ -971,6 +986,8 @@ namespace gargantuan {
 	) {
 		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return MutationStatus::WrongExecutionDomain;
 		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel)) return MutationStatus::Unauthorized;
+		if (securityContext.Domain == ScriptExecutionDomain::Client &&
+			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated) return MutationStatus::Unauthorized;
 		AssertIsAlive();
 		const auto &registry = GetActiveRuntimeSchemaRegistry();
 		auto *declaringClass = registry.FindClassById(declaringClassId);
@@ -1117,6 +1134,10 @@ namespace gargantuan {
 		if (!DestroyingState) AssertIsAlive();
 
 		std::shared_ptr<Instance> newParent = value.has_value() ? value.value() : nullptr;
+		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client &&
+			(GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated ||
+				(newParent && GetInstanceServicePolicy(*newParent) == SchemaServicePolicy::Replicated)))
+			throw std::runtime_error("[Storage:Authority] Replicated service state is server-authoritative");
 		if (DestroyingState && newParent) throw std::runtime_error("A destroying Instance cannot be reparented");
 		if (newParent) newParent->AssertIsAlive();
 		auto oldParent = ParentReference.lock();

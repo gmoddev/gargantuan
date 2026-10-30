@@ -7,5 +7,11 @@
 namespace gargantuan {
 	class ModuleScript : public LuaSourceContainer {
 		I_ModuleScript;
+
+		ModuleScript();
+
+	  private:
+		bool SourceWasShared = false;
+		void RefreshReplicatedSource(bool SourceChanged);
 	};
 }

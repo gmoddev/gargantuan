@@ -70,6 +70,8 @@ namespace gargantuan {
 		std::optional<Project> CurrentProject;
 		std::shared_ptr<DataModel> World;
 		std::uint64_t PersistedRevision = 0;
+		std::optional<std::string> ActivePreRunSource;
+		std::uint64_t ActivePreRunSchemaGeneration = 0;
 		std::function<void()> PersistenceCheckpointForTesting;
 		std::function<void(std::string_view)> ViewportPresentationCheckpointForTesting;
 		std::function<EditorViewportCaptureView(RenderPublicationPtr)> ViewportCaptureForTesting;

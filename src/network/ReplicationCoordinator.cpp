@@ -756,6 +756,23 @@ namespace gargantuan::network {
 		return false;
 	}
 
+	bool ReplicationCoordinator::IsServiceVisible(ObjectId Object) const {
+		const auto &Schema = FrozenSchema ? *FrozenSchema : detail::GetReplicationSchemaRegistry();
+		for (std::size_t Depth = 0; Object.IsValid(); ++Depth) {
+			if (Depth > MaximumDependencyClosureDepth)
+				throw std::runtime_error("Replication service ancestry exceeds the existing closure limit");
+			const auto Found = Catalog.find(Object);
+			if (Found == Catalog.end()) return true; // Existing stale-object validation owns this case.
+			const auto &Publication = Found->second->Publication;
+			const auto *Definition = Schema.FindClassById(Publication.ClassSchemaId);
+			if (!Definition) throw std::runtime_error("Replication service class definition is missing");
+			if (Definition->ServicePolicy == SchemaServicePolicy::ServerOnly) return false;
+			if (!Publication.Parent) return true;
+			Object = *Publication.Parent;
+		}
+		return true;
+	}
+
 	bool ReplicationCoordinator::BuildDependencyClosure(
 		const PeerRelevanceSelection &Selection, std::set<ObjectId> &Closure, std::string &Error
 	) {
@@ -777,9 +794,14 @@ namespace gargantuan::network {
 		Pending.reserve(Selection.DesiredObjects.size());
 		Required.insert(Selection.RequiredObjects.begin(), Selection.RequiredObjects.end());
 		for (const auto Object : Selection.DesiredObjects)
+			if (IsServiceVisible(Object)) Pending.push_back({Object, 0});
+		for (const auto Object : Selection.RequiredObjects) {
+			if (!IsServiceVisible(Object)) {
+				Error = "Required object belongs to a server-only service";
+				return false;
+			}
 			Pending.push_back({Object, 0});
-		for (const auto Object : Selection.RequiredObjects)
-			Pending.push_back({Object, 0});
+		}
 		runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds, Pending.size());
 		}
 		runtime_detail::WorkScope EdgeWork(runtime_detail::WorkPhase::DependencyEdgeWalk);
@@ -815,6 +837,10 @@ namespace gargantuan::network {
 				return false;
 			}
 			const auto &Publication = Found->second->Publication;
+			if (!IsServiceVisible(Object)) {
+				Error = "Hard replication dependency belongs to a server-only service";
+				return false;
+			}
 			if (Publication.Parent) {
 				runtime_detail::CountWork(runtime_detail::WorkCounter::DependencyEdges);
 				Pending.push_back({*Publication.Parent, Depth + 1});
@@ -1296,6 +1322,7 @@ namespace gargantuan::network {
 	) {
 		auto Found = Catalog.find(Object);
 		if (Found == Catalog.end()) return {};
+		if (!IsServiceVisible(Object)) throw std::runtime_error("Cannot publish a server-only service object");
 		PreparedPublishReplication Publish{Object, Found->second.Template};
 		if (!StructuralTemplateReuseEnabled ||
 			(!RequestedTemplates.contains(Object) && CandidateRequestedTemplates.insert(Object).second))
@@ -1857,7 +1884,7 @@ namespace gargantuan::network {
 		if (!RefreshCatalog(Error)) return {{}, std::move(Error)};
 		PeerRelevanceSelection Selection;
 		for (const auto &[Object, State] : Catalog) {
-			if (!State->Publication.Parent || !IsInitiallyRelevant || IsInitiallyRelevant(Object))
+			if (IsServiceVisible(Object) && (!State->Publication.Parent || !IsInitiallyRelevant || IsInitiallyRelevant(Object)))
 				Selection.DesiredObjects.push_back(Object);
 		}
 		Selection.RequiredObjects = Selection.DesiredObjects;
@@ -2268,6 +2295,11 @@ namespace gargantuan::network {
 			}
 			const auto Known = ReadView().Knows(Record.Object);
 			const auto Relevant = ReadView().RelevantObjects.contains(Record.Object);
+			if (!IsServiceVisible(Record.Object)) {
+				if (Known && !PolicyManaged)
+					return {{}, "Service visibility changed; this peer requires relevance reconciliation"};
+				continue;
+			}
 			if (PolicyManaged && !Relevant) continue;
 			if (!Known && !PolicyManaged && IsInitiallyRelevant && !IsInitiallyRelevant(Record.Object)) continue;
 			if (std::holds_alternative<ObjectReparentedChange>(Record.Payload)) {

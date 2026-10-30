@@ -267,7 +267,7 @@ namespace gargantuan {
 		}
 	}
 
-	void BootstrapProjectRuntimeSchema(const std::filesystem::path &projectRoot) {
+	std::optional<std::string> BootstrapProjectRuntimeSchema(const std::filesystem::path &projectRoot) {
 		auto Source = ReadProjectPreRunSource(projectRoot);
 		if (Source) {
 			auto &lifecycle = GetMutableRuntimeSchemaLifecycle();
@@ -296,9 +296,39 @@ namespace gargantuan {
 				if (lifecycle.HasCandidate()) lifecycle.AbortCandidate(authority);
 				throw;
 			}
-			return;
+			return Source;
 		}
 		BootstrapPackagedRuntimeSchema(std::nullopt);
+		return std::nullopt;
+	}
+
+	std::optional<PreRunDiagnostic> ValidatePreRunSource(std::string_view Source) {
+		RuntimeSchemaLifecycle Candidate;
+		const auto &Authority = GetRuntimeSchemaBootstrapAuthority();
+		std::vector<NativeSchemaSeed> Seeds;
+		{
+			std::scoped_lock Lock(GetNativeSchemaSeedMutex());
+			Seeds = GetNativeSchemaSeeds();
+		}
+		try {
+			if (Seeds.empty()) throw std::logic_error("Native schema seeds are unavailable");
+			std::sort(Seeds.begin(), Seeds.end(), [](const auto &Left, const auto &Right) {
+				return CanonicalName(Left.Definition) < CanonicalName(Right.Definition);
+			});
+			Candidate.BeginCandidate(Authority);
+			for (auto &Seed : Seeds) Candidate.RegisterNative(Authority, Seed.NativeType, std::move(Seed.Definition));
+			Candidate.AdvanceRegistrationPhase(Authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
+			Candidate.AdvanceRegistrationPhase(Authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
+			ExecutePreRunRegistration(Candidate, Authority, Source, ".gargantuan/prerun.luau");
+			Candidate.AdvanceRegistrationPhase(Authority, RuntimeSchemaLifecyclePhase::Validation);
+			Candidate.ValidateCandidate(Authority);
+			Candidate.FreezeCandidate(Authority);
+			return std::nullopt;
+		} catch (const PreRunRegistrationError &Error) {
+			return Error.GetDiagnostic();
+		} catch (const std::exception &Error) {
+			return PreRunDiagnostic{PreRunDiagnosticCode::SchemaRegistrationError, ".gargantuan/prerun.luau", {}, Error.what()};
+		}
 	}
 
 	void BootstrapPackagedRuntimeSchema(const std::optional<std::string> &PreRunSource) {
