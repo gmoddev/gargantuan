@@ -77,6 +77,27 @@ namespace gargantuan {
 			return true;
 		}
 
+		[[nodiscard]] constexpr bool IsPlayPhysicalKey(std::uint32_t Value) {
+			return Value == static_cast<std::uint32_t>(PhysicalKey::Unknown) ||
+				(Value >= static_cast<std::uint32_t>(PhysicalKey::A) && Value <= static_cast<std::uint32_t>(PhysicalKey::Space)) ||
+				(Value >= static_cast<std::uint32_t>(PhysicalKey::Right) && Value <= static_cast<std::uint32_t>(PhysicalKey::Up)) ||
+				(Value >= static_cast<std::uint32_t>(PhysicalKey::LeftControl) && Value <= static_cast<std::uint32_t>(PhysicalKey::RightMeta));
+		}
+
+		[[nodiscard]] constexpr bool IsPlayLogicalKey(std::uint32_t Value) {
+			return Value == static_cast<std::uint32_t>(LogicalKey::Backspace) ||
+				Value == static_cast<std::uint32_t>(LogicalKey::Tab) ||
+				(Value >= static_cast<std::uint32_t>(LogicalKey::Clear) && Value <= static_cast<std::uint32_t>(LogicalKey::Return)) ||
+				Value == static_cast<std::uint32_t>(LogicalKey::Pause) ||
+				Value == static_cast<std::uint32_t>(LogicalKey::Escape) ||
+				Value == static_cast<std::uint32_t>(LogicalKey::Space) ||
+				(Value >= static_cast<std::uint32_t>(LogicalKey::QuotedDouble) && Value <= static_cast<std::uint32_t>(LogicalKey::At)) ||
+				(Value >= static_cast<std::uint32_t>(LogicalKey::LeftBracket) && Value <= static_cast<std::uint32_t>(LogicalKey::Delete)) ||
+				(Value >= static_cast<std::uint32_t>(LogicalKey::KeypadZero) && Value <= static_cast<std::uint32_t>(LogicalKey::F15)) ||
+				(Value >= static_cast<std::uint32_t>(LogicalKey::NumLock) && Value <= static_cast<std::uint32_t>(LogicalKey::Undo)) ||
+				Value == static_cast<std::uint32_t>(LogicalKey::Unknown);
+		}
+
 		Json ErrorResponse(const Json &requestId, std::string code, std::string message) {
 			return Json{
 				{"Version", EditorHostProtocolVersion},
@@ -1353,8 +1374,7 @@ namespace gargantuan {
 					auto ModifierValue = parameters.contains("Modifiers") ? JsonCodec::DecodeUnsigned32(parameters["Modifiers"]) : std::optional<std::uint32_t>{0};
 					const auto StateName = parameters["State"].get<std::string>();
 					if (!PhysicalValue || !LogicalValue || !ModifierValue || *ModifierValue > 63 ||
-						!magic_enum::enum_contains<PhysicalKey>(static_cast<std::uint16_t>(*PhysicalValue)) ||
-						!magic_enum::enum_contains<LogicalKey>(static_cast<std::uint16_t>(*LogicalValue)) ||
+						!IsPlayPhysicalKey(*PhysicalValue) || !IsPlayLogicalKey(*LogicalValue) ||
 						(StateName != "Pressed" && StateName != "Released"))
 						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Key input is outside the closed HostEvent vocabulary"));
 					InputResult = ActivePlaySession->ProcessEvent(KeyEvent{
