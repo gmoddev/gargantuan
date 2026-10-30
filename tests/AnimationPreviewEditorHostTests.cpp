@@ -35,7 +35,7 @@ int main(int ArgumentCount, char **Arguments) {
 			{"SessionToken", "denied-preview-test"}, {"Method", "GetAnimationRig"},
 			{"Params", {{"Reference", "asset://00000000000000000000000000000000"}}}}.dump()));
 		Check(!Denied["Ok"] && Denied["Error"]["Code"] == "Unauthorized", "Read capability is required before asset access");
-		auto Call = [&](std::string Method, Json Parameters = Json::object()) {
+		auto Call = [&](std::string Method, Json Parameters) {
 			auto Result = Json::parse(Host.HandleRequest(Json{{"Version", 1}, {"RequestId", std::to_string(++Sequence)},
 				{"SessionToken", "animation-preview-test"}, {"Method", Method}, {"Params", std::move(Parameters)}}.dump()));
 			if (!Result["Ok"]) std::cout << "[Animation:EditorHost] " << Method << " " << Result["Error"].dump() << '\n';
@@ -59,7 +59,7 @@ int main(int ArgumentCount, char **Arguments) {
 			"Read-only inspector exposes hierarchy and three clips");
 		Check(Rig["Result"]["Joints"][1]["Path"] == "BeaconRoot/BeaconTip" && Rig["Result"]["Joints"][1]["Parent"] == 0,
 			"Inspector retains canonical joint paths and parents");
-		const auto State = Call("GetProjectState")["Result"];
+		const auto State = Call("GetProjectState", Json::object())["Result"];
 		auto Open = Call("OpenAnimationPreview", {{"Reference", Reference}});
 		Check(Open["Ok"], "Open native-only preview");
 		const auto Id = Open["Result"]["PreviewId"];
@@ -72,14 +72,14 @@ int main(int ArgumentCount, char **Arguments) {
 		Check(!Call("ControlAnimationPreview", {{"PreviewId", Id}, {"Action", "Speed"}, {"Value", 17.0}})["Ok"], "Invalid speed is rejected");
 		Check(!Call("ControlAnimationPreview", {{"PreviewId", Id}, {"Action", "Play"}, {"Extra", true}})["Ok"], "Unknown control fields are rejected");
 		Check(!Call("CaptureAnimationPreview", {{"PreviewId", Id}, {"Width", 1025}, {"Height", 1}, {"Position", {2, 2, 2}}, {"Target", {0, 0, 0}}})["Ok"], "Capture size fails before GPU allocation");
-		Check(Call("GetProjectState")["Result"] == State, "Preview controls never change authoring state/history");
+		Check(Call("GetProjectState", Json::object())["Result"] == State, "Preview controls never change authoring state/history");
 		Check(Call("CloseAnimationPreview", {{"PreviewId", Id}})["Ok"], "Close releases preview");
 		Check(!Call("ControlAnimationPreview", {{"PreviewId", Id}, {"Action", "Play"}})["Ok"], "Closed preview identity is stale");
 		Check(Call("ReimportAsset", {{"Reference", Reference}})["Ok"], "Compatible reimport succeeds");
 		auto Reimported = Call("GetAnimationRig", {{"Reference", Reference}});
 		Check(Reimported["Ok"] && Reimported["Result"]["MeshReference"] == Reference &&
 			Reimported["Result"]["SkeletonCompatibilityId"] == Rig["Result"]["SkeletonCompatibilityId"], "Compatible reimport preserves asset and skeleton identity");
-		Check(Call("SaveProject")["Ok"], "Save imported canonical assets");
+		Check(Call("SaveProject", Json::object())["Ok"], "Save imported canonical assets");
 		auto Second = Call("OpenAnimationPreview", {{"Reference", Reference}});
 		Check(Second["Ok"] && Second["Result"]["PreviewId"] != Id, "New preview receives fresh identity");
 		Check(Call("OpenProject", {{"Root", Root.generic_string()}})["Ok"], "Reopen project");
