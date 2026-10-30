@@ -59,6 +59,10 @@ authoring camera mutation are intentionally unavailable during Play.
 Input is a closed `HostEvent` subset: focus, bounded key transitions, finite
 pointer movement, and semantic pointer-button transitions. Studio forwards input
 only while the runtime viewport is focused and sends focus release on blur.
+Key IDs are validated against the complete declared physical and logical key
+vocabularies before narrowing to their 16-bit storage. This admits arrows,
+modifiers, and keypad/function keys while rejecting undefined gaps and high
+integers that would alias a valid key after narrowing.
 `PointerMoveEvent.Delta` is relative motion regardless of host implementation;
 `PlaySession`, `Engine`, `UserInputService`, and gameplay never reconstruct it
 from absolute cursor positions. EditorHost returns relative-pointer commands to
