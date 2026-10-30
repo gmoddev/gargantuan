@@ -32,6 +32,13 @@ format. Studio supplies its observed revision for Save As; MCP exposes no Save A
 
 ## Envelope and limits
 
+The optional `ReplicatedStorage` and `CustomServiceDeclarations` handshake
+capabilities expose the [frozen service declaration contract](ReplicatedStorage.md).
+Native and custom roots use normal schema/snapshot records. Existing structural
+commands author eligible descendants and reject replacement, duplication,
+destruction or reparenting of protected service roots. No storage-specific editor
+transport or arbitrary filesystem capability is introduced.
+
 Requests have exactly these fields:
 
 ```json

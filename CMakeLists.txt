@@ -890,6 +890,19 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_gui_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")
 	target_link_libraries(gargantuan_prerun_bootstrap_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_replicated_storage_tests "tests/ReplicatedStorageTests.cpp")
+	target_link_libraries(gargantuan_replicated_storage_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_replicated_storage_editor_host_tests "tests/ReplicatedStorageEditorHostTests.cpp")
+	target_link_libraries(gargantuan_replicated_storage_editor_host_tests PRIVATE gargantuan_core nlohmann_json)
+	add_dependencies(gargantuan_replicated_storage_editor_host_tests gargantuan_runtime_distribution)
+	add_test(NAME gargantuan_replicated_storage_editor_host COMMAND gargantuan_replicated_storage_editor_host_tests)
+	set_tests_properties(gargantuan_replicated_storage_editor_host PROPERTIES LABELS "replication;editor;packaging;headless" TIMEOUT 120)
+	add_executable(gargantuan_replicated_storage_session_tests "tests/ReplicatedStorageSessionTests.cpp")
+	target_link_libraries(gargantuan_replicated_storage_session_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_replicated_storage_session COMMAND gargantuan_replicated_storage_session_tests)
+	set_tests_properties(gargantuan_replicated_storage_session PROPERTIES LABELS "replication;runtime;security;headless" TIMEOUT 120)
+	add_test(NAME gargantuan_replicated_storage COMMAND gargantuan_replicated_storage_tests)
+	set_tests_properties(gargantuan_replicated_storage PROPERTIES LABELS "replication;schema;security;headless" TIMEOUT 120)
 	add_executable(gargantuan_attributes_tags_profile "tests/AttributesTagsProfile.cpp")
 	target_link_libraries(gargantuan_attributes_tags_profile PRIVATE gargantuan_core)
 	add_executable(gargantuan_networking_contract_tests "tests/NetworkingContractsTests.cpp")
@@ -1119,6 +1132,9 @@ if(BUILD_TESTING)
 			gargantuan_renderer_publication_tests
 			gargantuan_environment_lighting_benchmark
 			gargantuan_prerun_bootstrap_tests
+			gargantuan_replicated_storage_tests
+			gargantuan_replicated_storage_editor_host_tests
+			gargantuan_replicated_storage_session_tests
 			gargantuan_attributes_tags_profile
 			gargantuan_physics_backend_tests
 			gargantuan_physics_query_benchmark
