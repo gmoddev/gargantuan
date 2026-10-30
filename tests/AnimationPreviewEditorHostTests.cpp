@@ -43,7 +43,9 @@ int main(int ArgumentCount, char **Arguments) {
 		};
 		Check(Call("CreateProject", {{"Destination", Root.generic_string()}, {"Name", "Animation Preview"}})["Ok"], "Create preview test project");
 		std::filesystem::create_directory(Root / "assets");
-		std::filesystem::copy_file(GARGANTUAN_ANIMATION_PREVIEW_FIXTURE, Root / "assets" / "rig.gltf");
+		const auto FixturePath = ArgumentCount == 3 && std::string_view(Arguments[1]) == "--gpu"
+			? std::filesystem::path(Arguments[2]) : std::filesystem::path(GARGANTUAN_ANIMATION_PREVIEW_FIXTURE);
+		std::filesystem::copy_file(FixturePath, Root / "assets" / "rig.gltf");
 		Check(Call("ImportAsset", {{"Source", "assets/rig.gltf"}})["Ok"], "Import three-clip rig through EditorHost");
 		auto Catalog = Call("GetAssetCatalog", {{"IncludeBuiltIns", false}});
 		std::string Reference;
@@ -86,7 +88,7 @@ int main(int ArgumentCount, char **Arguments) {
 		Check(Reopened["Ok"] && Reopened["Result"]["Joints"] == Rig["Result"]["Joints"] && Reopened["Result"]["Clips"].size() == 3,
 			"Save/reopen retains canonical rig and clip references");
 		// Explicit manual GPU gate; ordinary CI remains genuinely headless.
-		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--gpu") {
+		if ((ArgumentCount == 2 || ArgumentCount == 3) && std::string_view(Arguments[1]) == "--gpu") {
 			DiskFilesystem Filesystem(Root);
 			auto ProjectValue = Project::fromExisting(&Filesystem);
 			auto SourceWorld = ProjectValue.DeserializeGame();
@@ -100,7 +102,7 @@ int main(int ArgumentCount, char **Arguments) {
 			auto Secondary = std::make_unique<EditorViewportRenderer>(320, 240);
 			Primary.reset();
 			Check(SDL_WasInit(SDL_INIT_VIDEO) != 0, "Preview retains SDL video after authoring renderer teardown");
-			const auto Camera = MakeLookAtRenderCameraInput({2, 2, 4}, {0, .5f, 0}, {0, 1, 0});
+			const auto Camera = MakeLookAtRenderCameraInput({2, 2, -4}, {0, .5f, 0}, {0, 1, 0});
 			Scene.GetTrack()->SetTimePosition(0);
 			Scene.Step(0);
 			auto First = Secondary->Capture(Scene.Publish(Camera, 320, 240));
@@ -110,7 +112,6 @@ int main(int ArgumentCount, char **Arguments) {
 			std::size_t Changed = 0;
 			for (std::size_t Index = 0; Index < First.RgbPixels.size(); ++Index)
 				if (First.RgbPixels[Index] != Second.RgbPixels[Index]) ++Changed;
-			Check(Changed > 30, "Native GPU skinning changes rendered mesh pixels after seek");
 			auto WriteFrame = [](const char *Path, const EditorViewportFrame &Frame) {
 				std::ofstream Output(Path, std::ios::binary);
 				Output << "P6\n" << Frame.Width << ' ' << Frame.Height << "\n255\n";
@@ -119,6 +120,7 @@ int main(int ArgumentCount, char **Arguments) {
 			};
 			WriteFrame("animation-preview-0.ppm", First);
 			WriteFrame("animation-preview-seek.ppm", Second);
+			Check(Changed > 30, "Native GPU skinning changes rendered mesh pixels after seek");
 			Secondary.reset();
 			Check(SDL_WasInit(SDL_INIT_VIDEO) == VideoBefore, "Preview renderer releases only its own video reference");
 			SourceWorld->Destroy();
