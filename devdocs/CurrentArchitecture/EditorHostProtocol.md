@@ -32,6 +32,11 @@ format. Studio supplies its observed revision for Save As; MCP exposes no Save A
 
 ## Envelope and limits
 
+Optional `PreRunSource` / `ValidatePreRun` operations are specified in
+[PreRun authoring](PreRunAuthoring.md). They address one canonical project source
+with an expected source revision and live project identity. They neither reuse a
+Script ObjectId nor grant arbitrary filesystem or schema-publication authority.
+
 Requests have exactly these fields:
 
 ```json
