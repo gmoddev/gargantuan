@@ -307,6 +307,9 @@ const function assembleImplFile(state: GenerationState)
 	if state.class.customSubclassPolicy then
 		output:line(`.ProjectSubclassPolicy = CustomSubclassPolicy::{state.class.customSubclassPolicy},`)
 	end
+	if state.class.servicePolicy then
+		output:line(`.ServicePolicy = SchemaServicePolicy::{state.class.servicePolicy},`)
+	end
 	if not state.class.abstract then
 		output
 			:line(`.Constructor = []() -> std::shared_ptr<Instance> \{`)

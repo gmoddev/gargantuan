@@ -1,4 +1,5 @@
 #include "gargantuan/runtime/MutationGateway.hpp"
+#include "gargantuan/runtime/ServicePolicy.hpp"
 #include "PreparedPropertyCommit.hpp"
 
 #include "gargantuan/assets/InstanceSerialization.hpp"
@@ -197,6 +198,24 @@ namespace gargantuan {
 		const auto &securityContext = Authority.GetSecurityContext();
 		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel))
 			return {MutationStatus::Unauthorized, std::nullopt, "Mutation requires MutateDataModel"};
+		if (securityContext.Domain == ScriptExecutionDomain::Client) {
+			auto Shared = [](ObjectId Id) {
+				const auto Object = ObjectRegistry::Get().Lookup(Id);
+				return Object && GetInstanceServicePolicy(*Object) == SchemaServicePolicy::Replicated;
+			};
+			const bool TargetsSharedState = std::visit([&](const auto &CommandValue) {
+				using Command = std::decay_t<decltype(CommandValue)>;
+				if constexpr (requires { CommandValue.Object; })
+					if (Shared(CommandValue.Object)) return true;
+				if constexpr (std::is_same_v<Command, CreateObjectCommand> || std::is_same_v<Command, RestoreSubtreeCommand>)
+					return Shared(CommandValue.Parent);
+				if constexpr (std::is_same_v<Command, ReparentObjectCommand>)
+					return CommandValue.Parent && Shared(*CommandValue.Parent);
+				return false;
+			}, command);
+			if (TargetsSharedState)
+				return {MutationStatus::Unauthorized, std::nullopt, "[Storage:Authority] Replicated service state is server-authoritative"};
+		}
 
 		auto ApplyAuthoringTransaction = [&]<typename Operation, typename BuildChange>(
 											 const std::shared_ptr<DataModel> &World,

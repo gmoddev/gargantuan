@@ -324,7 +324,18 @@ namespace gargantuan {
 				if (!state.Security.HasCapability(ScriptCapability::DefineSchema))
 					throw std::runtime_error("Schema registration requires DefineSchema");
 				luaL_checktype(L, 2, LUA_TTABLE);
-				RejectUnknownFields(L, 2, {"Namespace", "Name", "Version", "Base", "Properties"});
+				RejectUnknownFields(L, 2, {"Namespace", "Name", "Version", "Base", "Properties", "Service", "Replicated"});
+				auto ReadOptionalBoolean = [&](const char *Name) {
+					lua_getfield(L, 2, Name);
+					if (!lua_isnil(L, -1) && lua_type(L, -1) != LUA_TBOOLEAN)
+						throw std::invalid_argument(std::string(Name) + " must be a boolean");
+					const bool Value = lua_toboolean(L, -1) != 0;
+					lua_pop(L, 1);
+					return Value;
+				};
+				const bool Service = ReadOptionalBoolean("Service");
+				const bool Replicated = ReadOptionalBoolean("Replicated");
+				if (Replicated && !Service) throw std::invalid_argument("Replicated requires Service = true");
 				lua_getfield(L, 2, "Namespace");
 				auto schemaNamespace = ReadBoundedString(L, -1, MaximumSchemaNamespaceBytes, "Namespace");
 				lua_pop(L, 1);
@@ -391,6 +402,8 @@ namespace gargantuan {
 					.DefinitionVersion = version,
 					.Provenance = SchemaProvenance::Game,
 					.ConstructionKind = SchemaClassConstructionKind::CustomData,
+					.ServicePolicy = !Service ? SchemaServicePolicy::None :
+						Replicated ? SchemaServicePolicy::Replicated : SchemaServicePolicy::ServerOnly,
 					.DeclaredCustomProperties = std::move(properties),
 					.OriginDetail = state.SourceName,
 				};

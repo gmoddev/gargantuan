@@ -18,6 +18,8 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <limits>
+#include <algorithm>
+#include <vector>
 #include <stdexcept>
 
 namespace gargantuan {
@@ -116,6 +118,15 @@ namespace gargantuan {
 		(void)GetService("Workspace");
 		(void)GetService("AssetService");
 		(void)GetService("Lighting");
+		(void)GetService("ReplicatedStorage");
+		std::vector<std::string> CustomServices;
+		for (const auto &[Name, Id] : GetServiceDefinitions()) {
+			const auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(Id);
+			if (Definition && Definition->ConstructionKind == SchemaClassConstructionKind::CustomData)
+				CustomServices.push_back(Name);
+		}
+		std::ranges::sort(CustomServices);
+		for (const auto &Name : CustomServices) (void)GetService(Name);
 		AuthoritativeRevision = InitialProjectRevision;
 		Transactions.Reset();
 	}
@@ -144,11 +155,23 @@ namespace gargantuan {
 			{"Lighting", SchemaId::FromNativeName("Engine", "Lighting")},
 			{"Players", SchemaId::FromNativeName("Engine", "Players")},
 			{"ProcessService", SchemaId::FromNativeName("Engine", "ProcessService")},
+			{"ReplicatedStorage", SchemaId::FromNativeName("Engine", "ReplicatedStorage")},
 			{"RunService", SchemaId::FromNativeName("Engine", "RunService")},
 			{"Tags", SchemaId::FromNativeName("Engine", "Tags")},
 			{"UserInputService", SchemaId::FromNativeName("Engine", "UserInputService")},
 			{"Workspace", SchemaId::FromNativeName("Engine", "Workspace")},
 		};
-		return CONSTRUCTORS;
+		const auto Generation = GetRuntimeSchemaLifecycle().GetActiveGeneration();
+		if (RegisteredServices.empty() || ServiceSchemaGeneration != Generation) {
+			auto Definitions = CONSTRUCTORS;
+			for (const auto *Definition : GetActiveRuntimeSchemaRegistry().EnumerateClasses()) {
+				if (Definition->ConstructionKind == SchemaClassConstructionKind::CustomData &&
+					Definition->ServicePolicy != SchemaServicePolicy::None)
+					Definitions.emplace(Definition->CanonicalName, Definition->Id);
+			}
+			RegisteredServices = std::move(Definitions);
+			ServiceSchemaGeneration = Generation;
+		}
+		return RegisteredServices;
 	};
 }

@@ -38,6 +38,7 @@ namespace gargantuan {
 	enum class SchemaExtensionPropertyType : std::uint8_t { Boolean, Integer, Number, String };
 	enum class SchemaClassConstructionKind : std::uint8_t { Native, CustomData };
 	enum class CustomSubclassPolicy : std::uint8_t { Forbidden, DataOnly };
+	enum class SchemaServicePolicy : std::uint8_t { None, ServerOnly, Replicated };
 
 	inline constexpr std::size_t MaximumSchemaNamespaceBytes = 100;
 	inline constexpr std::size_t MaximumSchemaDefinitionNameBytes = 100;
@@ -88,6 +89,7 @@ namespace gargantuan {
 		SchemaProvenance Provenance = SchemaProvenance::NativeEngine;
 		SchemaClassConstructionKind ConstructionKind = SchemaClassConstructionKind::Native;
 		CustomSubclassPolicy ProjectSubclassPolicy = CustomSubclassPolicy::Forbidden;
+		SchemaServicePolicy ServicePolicy = SchemaServicePolicy::None;
 		std::shared_ptr<Instance> (*Constructor)() = nullptr;
 		std::string Description = "(No description provided.)";
 		std::optional<std::string> Superclass = "Instance";

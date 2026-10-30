@@ -22,6 +22,10 @@ namespace gargantuan {
 	  private:
 		std::string Source;
 		int SourceVersion = 1;
+		void AssignSource(std::string Value, bool Authoritative);
+
+	  protected:
+		void ApplyReplicatedSource(std::string Value);
 
 	  public:
 		std::string ChunkName = GetFullName();
