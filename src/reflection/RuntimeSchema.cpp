@@ -217,6 +217,10 @@ namespace gargantuan {
 			InvalidDefinition(definition, "RegisterNative requires NativeEngine provenance");
 		if (definition.ConstructionKind != SchemaClassConstructionKind::Native)
 			InvalidDefinition(definition, "RegisterNative requires native construction metadata");
+		if (definition.ServicePolicy != SchemaServicePolicy::None &&
+			definition.ServicePolicy != SchemaServicePolicy::ServerOnly &&
+			definition.ServicePolicy != SchemaServicePolicy::Replicated)
+			InvalidDefinition(definition, "native service policy is invalid");
 		if (definition.DefaultOverrides.size() > MaximumClassDefaultOverrides)
 			InvalidDefinition(definition, "too many class default overrides");
 		std::sort(definition.DefaultOverrides.begin(), definition.DefaultOverrides.end(),
@@ -361,7 +365,12 @@ namespace gargantuan {
 			baseCanonicalName.size() > MaximumSchemaNamespaceBytes + MaximumSchemaDefinitionNameBytes + 1 ||
 			baseCanonicalName.find('\0') != std::string_view::npos || !IsValidUtf8(baseCanonicalName))
 			InvalidDefinition(definition, "base must be a valid canonical class name");
-		if (definition.DeclaredCustomProperties.empty()) InvalidDefinition(definition, "custom class has no properties");
+		if (definition.ServicePolicy != SchemaServicePolicy::None &&
+			definition.ServicePolicy != SchemaServicePolicy::ServerOnly &&
+			definition.ServicePolicy != SchemaServicePolicy::Replicated)
+			InvalidDefinition(definition, "custom service policy is invalid");
+		if (definition.DeclaredCustomProperties.empty() && definition.ServicePolicy == SchemaServicePolicy::None)
+			InvalidDefinition(definition, "custom class has no properties");
 		if (definition.DeclaredCustomProperties.size() > MaximumCustomClassProperties)
 			InvalidDefinition(definition, "custom class exceeds its property limit");
 
@@ -370,7 +379,8 @@ namespace gargantuan {
 		definition.BaseSchemaId.reset();
 		definition.Superclass.reset();
 		definition.NativeHostClassId = {};
-		definition.ProjectSubclassPolicy = CustomSubclassPolicy::DataOnly;
+		definition.ProjectSubclassPolicy = definition.ServicePolicy == SchemaServicePolicy::None
+			? CustomSubclassPolicy::DataOnly : CustomSubclassPolicy::Forbidden;
 		definition.Flattened = false;
 		definition.InheritedClasses.clear();
 		definition.InheritedClassIds.clear();

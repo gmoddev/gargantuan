@@ -857,6 +857,7 @@ namespace gargantuan {
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
 					"ReadScriptSource", "WriteScriptSource",
+					"CustomServiceDeclarations", "ReplicatedStorage",
 					"PlaySession", "DiagnosticStream", "SendPlayInput",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",

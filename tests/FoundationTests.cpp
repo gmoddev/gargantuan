@@ -348,16 +348,16 @@ namespace {
 
 		auto OrdinaryWorld = std::make_shared<DataModel>();
 		auto OrdinaryChild = std::make_shared<Folder>();
-		OrdinaryChild->SetName("ReplicatedStorage");
+		OrdinaryChild->SetName("UnregisteredStorage");
 		OrdinaryChild->SetParent(OrdinaryWorld);
 		auto ServiceNameDecoy = std::make_shared<Folder>();
 		ServiceNameDecoy->SetName("Tags");
 		ServiceNameDecoy->SetParent(OrdinaryWorld);
 		Check(Execute(OrdinaryWorld, R"(
-			local Ordinary = game.ReplicatedStorage
-			assert(Ordinary == game:FindFirstChild("ReplicatedStorage"))
-			assert(game:FindService("ReplicatedStorage") == nil)
-			assert(not pcall(function() game:GetService("ReplicatedStorage") end))
+			local Ordinary = game.UnregisteredStorage
+			assert(Ordinary == game:FindFirstChild("UnregisteredStorage"))
+			assert(game:FindService("UnregisteredStorage") == nil)
+			assert(not pcall(function() game:GetService("UnregisteredStorage") end))
 			assert(game.DefinitelyUnknown == nil)
 			assert(game:FindService("DefinitelyUnknown") == nil)
 			assert(not pcall(function() game:GetService("DefinitelyUnknown") end))
@@ -366,7 +366,7 @@ namespace {
 			assert(Canonical:IsA("Tags") and Canonical ~= Decoy)
 		)", "service-unknown-and-decoy"),
 			"unknown names remain safe ordinary members while registered service identity ignores child Name decoys");
-		Check(!OrdinaryWorld->FindService("ReplicatedStorage") && OrdinaryWorld->FindService("Tags") &&
+		Check(!OrdinaryWorld->FindService("UnregisteredStorage") && OrdinaryWorld->FindService("Tags") &&
 			OrdinaryWorld->GetService("Tags") != ServiceNameDecoy,
 			"unregistered child names never enter the canonical service registry");
 
@@ -5133,7 +5133,7 @@ namespace {
 		const auto CreatedProjectDocument = Json::parse(CreatedProjectStream);
 		CreatedProjectStream.close();
 		Check(CreatedProjectDocument["Version"] == 4 && CreatedProjectDocument["Name"] == "Created Project" &&
-			CreatedProjectDocument["Children"].size() == 3 &&
+			CreatedProjectDocument["Children"].size() == 4 &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "Workspace" && Child["Name"] == "Workspace";
 			}) &&
@@ -5142,15 +5142,18 @@ namespace {
 			}) &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "Lighting" && Child["Name"] == "Lighting";
+			}) &&
+			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
+				return Child["ClassName"] == "ReplicatedStorage" && Child["Name"] == "ReplicatedStorage";
 			}),
-			"CreateProject immediately persists the canonical Workspace, AssetService, and Lighting in project format v4");
+			"CreateProject immediately persists canonical Workspace, AssetService, Lighting, and ReplicatedStorage in project format v4");
 		auto ExistingProjectCreate = call("CreateProject", {
 			{"Destination", CreatedRoot.string()}, {"Name", "Overwrite Attempt"}
 		}, "test-token");
 		Check(!ExistingProjectCreate["Ok"].get<bool>() && ExistingProjectCreate["Error"]["Code"] == "ExistingProject",
 			"CreateProject never overwrites an existing Gargantuan project");
 		auto CreatedSnapshot = call("GetSnapshot", Json::object(), "test-token");
-		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 4,
+		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 5,
 			"the minimum new project is immediately available through the normal authoritative snapshot path");
 		auto CreatedWorkspace = std::find_if(
 			CreatedSnapshot["Result"]["Snapshot"]["Objects"].begin(),
