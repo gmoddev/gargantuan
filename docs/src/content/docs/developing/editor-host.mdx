@@ -56,6 +56,14 @@ The initial protocol supports:
 - bounded runtime diagnostics and focused key, pointer, wheel, touch, committed
   text, and preedit forwarding.
 
+The optional `PlayInputInspection` capability adds `GetPlayInputSnapshot` for an
+exact running `PlaySessionId`, requiring `ReadDataModel`. Its bounded version-1
+owning snapshot exposes local contexts/actions/bindings, pressed keys, modifier
+masks, conflict/consumption state and cancellation reasons. Runtime scope and
+ObjectIds remain separate from authoring identity; this read operation grants no
+authoring or server gameplay authority. Clients must capability-gate the method
+and discard stale session/scope responses.
+
 The handshake advertises supported viewport transports. On Windows, Studio can
 explicitly negotiate shared-memory ring version 1 for RGB8 frames. The ring has
 three fixed-capacity slots; EditorHost overwrites old slots instead of waiting

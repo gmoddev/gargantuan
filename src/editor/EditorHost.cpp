@@ -19,6 +19,7 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/InputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "serialization/JsonCodec.hpp"
 
@@ -41,6 +42,19 @@
 #include <type_traits>
 #include <unordered_set>
 #include <vector>
+
+// Host key enums include modifiers/navigation above magic_enum's default 127.
+// Keep validation tied to the declared vocabulary rather than admitting integer ranges.
+namespace magic_enum::customize {
+	template <> struct enum_range<gargantuan::PhysicalKey> {
+		static constexpr int min = 0;
+		static constexpr int max = 231;
+	};
+	template <> struct enum_range<gargantuan::LogicalKey> {
+		static constexpr int min = 0;
+		static constexpr int max = 322;
+	};
+}
 
 namespace gargantuan {
 	namespace {
@@ -391,6 +405,52 @@ namespace gargantuan {
 			if (Encoded.empty() || Encoded.front() == '0' || Error != std::errc{} ||
 				End != Encoded.data() + Encoded.size() || Parsed == 0) return std::nullopt;
 			return PlaySessionId{Parsed};
+		}
+
+		Json EncodePlayInputSnapshot(const std::shared_ptr<DataModel> &RuntimeWorld, InputService &Input) {
+			const auto Snapshot = Input.Inspect();
+			const auto EncodeId = [](ObjectId Id) -> Json {
+				return Id.IsValid() ? Json(JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Id))) : Json(nullptr);
+			};
+			const auto Label = [&](ObjectId Id) -> std::string {
+				const auto Object = ObjectRegistry::Get().Lookup(Id);
+				if (!Object || Object->GetReplicationScopeId() != RuntimeWorld->GetObjectId()) return {};
+				const auto &Name = Object->GetName();
+				// Labels are presentation only. Never truncate a UTF-8 sequence or use a label as identity.
+				return Name.size() <= 256 ? Name : "[name exceeds inspection limit]";
+			};
+			Json Result = {
+				{"Version", 1}, {"Scope", EncodeId(RuntimeWorld->GetObjectId())},
+				{"Revision", Snapshot.Stats.Revision}, {"MemoryBytes", Snapshot.Stats.MemoryBytes},
+				{"Modifiers", Snapshot.Modifiers}, {"PressedKeys", Snapshot.PressedKeys},
+				{"Contexts", Json::array()}, {"Actions", Json::array()}, {"Bindings", Json::array()},
+				{"ValidationErrors", Input.GetValidationErrors()},
+			};
+			for (const auto &Context : Snapshot.Contexts) Result["Contexts"].push_back({
+				{"Id", EncodeId(Context.Id)}, {"Name", Label(Context.Id)},
+				{"Enabled", Context.Enabled}, {"Priority", Context.Priority}, {"Consume", Context.Consume},
+			});
+			for (const auto &Action : Snapshot.Actions) Result["Actions"].push_back({
+				{"Id", EncodeId(Action.Definition.Id)}, {"Context", EncodeId(Action.Definition.Context)},
+				{"Name", Label(Action.Definition.Id)},
+				{"Enabled", Action.Definition.Enabled}, {"Type", magic_enum::enum_name(Action.Definition.ValueType)},
+				{"Down", Action.State.Down}, {"Value", Action.State.Value},
+				{"Vector", {{"X", Action.State.X}, {"Y", Action.State.Y}}},
+				{"LastTransition", Action.State.LastTransition},
+				{"LastReason", magic_enum::enum_name(Action.State.LastReason)},
+			});
+			for (const auto &Binding : Snapshot.Bindings) Result["Bindings"].push_back({
+				{"Id", EncodeId(Binding.Definition.Id)}, {"Action", EncodeId(Binding.Definition.Action)},
+				{"Name", Label(Binding.Definition.Id)},
+				{"Enabled", Binding.Definition.Enabled}, {"Type", magic_enum::enum_name(Binding.Definition.InputKind)},
+				{"Code", Binding.Definition.Code}, {"Modifiers", Binding.Definition.Modifiers},
+				{"ExactModifiers", Binding.Definition.ExactModifiers},
+				{"Priority", Binding.Definition.Priority}, {"Consume", Binding.Definition.Consume},
+				{"Matched", Binding.Matched}, {"Active", Binding.Active},
+				{"Suppressed", Binding.Suppressed}, {"Eligible", Binding.Eligible},
+				{"WinningContext", EncodeId(Binding.WinningContext)},
+			});
+			return Result;
 		}
 
 		Json EncodePlayDiagnostics(std::vector<PlayDiagnostic> Diagnostics) {
@@ -825,7 +885,7 @@ namespace gargantuan {
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
 					"ReadScriptSource", "WriteScriptSource",
-					"PlaySession", "DiagnosticStream", "SendPlayInput",
+					"PlaySession", "DiagnosticStream", "SendPlayInput", "PlayInputInspection",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
@@ -1094,6 +1154,28 @@ namespace gargantuan {
 				}));
 			}
 
+			if (method == "GetPlayInputSnapshot") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Input inspection requires ReadDataModel"));
+				if (!HasOnlyFields(parameters, {"PlaySessionId"}) || !parameters.contains("PlaySessionId"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetPlayInputSnapshot requires PlaySessionId"));
+				const auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
+				if (!Id)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PlaySessionId is invalid"));
+				if (!ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "PlaySessionId is not active"));
+				if (ActivePlaySession->GetState() != PlaySessionState::Running)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionNotRunning", "Input inspection requires a running session"));
+				const auto RuntimeWorld = ActivePlaySession->GetWorld();
+				const auto Input = ActivePlaySession->GetInputForInspection();
+				if (!Input)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InputInspectionUnavailable", "Runtime input service is unavailable"));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"PlaySessionId", std::to_string(Id->Value)},
+					{"Snapshot", EncodePlayInputSnapshot(RuntimeWorld, *Input)},
+				}));
+			}
+
 			if (method == "PollPlayDiagnostics") {
 				if (!HasOnlyFields(parameters, {"PlaySessionId"}) || !parameters.contains("PlaySessionId"))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PollPlayDiagnostics requires PlaySessionId"));
@@ -1132,6 +1214,8 @@ namespace gargantuan {
 					auto ModifierValue = parameters.contains("Modifiers") ? JsonCodec::DecodeUnsigned32(parameters["Modifiers"]) : std::optional<std::uint32_t>{0};
 					const auto StateName = parameters["State"].get<std::string>();
 					if (!PhysicalValue || !LogicalValue || !ModifierValue || *ModifierValue > 63 ||
+						*PhysicalValue > std::numeric_limits<std::uint16_t>::max() ||
+						*LogicalValue > std::numeric_limits<std::uint16_t>::max() ||
 						!magic_enum::enum_contains<PhysicalKey>(static_cast<std::uint16_t>(*PhysicalValue)) ||
 						!magic_enum::enum_contains<LogicalKey>(static_cast<std::uint16_t>(*LogicalValue)) ||
 						(StateName != "Pressed" && StateName != "Released"))

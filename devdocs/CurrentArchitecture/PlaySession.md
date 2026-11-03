@@ -32,10 +32,14 @@ and destroys the owned session.
 ## Protocol and lifecycle
 
 `StartPlaySession`, `StopPlaySession`, `GetPlaySessionState`,
-`PollPlayDiagnostics`, and `SendPlayInput` require the token-bound EditorHost session.
+`PollPlayDiagnostics`, `GetPlayInputSnapshot`, and `SendPlayInput` require the token-bound EditorHost session.
 Start also requires `EditorCommands` and `ReadDataModel`; input requires
 `ViewportControl`. IDs are engine-issued canonical nonzero decimal strings, and every
 session-scoped request must carry the exact active ID. A stale ID fails closed.
+Input inspection additionally requires `ReadDataModel`, the advertised
+`PlayInputInspection` capability and a running session. Its independently
+versioned [bounded owning DTO](PlayInputInspection.md) never exposes authoring IDs
+or advances authoring history.
 
 The states are `Stopped`, `Starting`, `Running`, `Stopping`, and `Failed`. Start is
 rejected when no project is open, an authoring transaction is open, or another
