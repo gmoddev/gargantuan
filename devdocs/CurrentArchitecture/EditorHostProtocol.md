@@ -95,6 +95,7 @@ UTF-8 bytes with no NUL.
 | `CommitTransaction` | Commits the exact owned open group, advances one revision, and releases its journal batch. |
 | `Undo` / `Redo` | Traverses only the current engine history cursor entry and publishes ordinary authoritative journal state. |
 | `GetScriptSource` | Reads exact bounded Source plus its conflict token for one live supported script ObjectId. |
+| `GetScriptBinding` / `ResolveScriptBinding` | Optional `ScriptDocumentBinding`; obtains or resolves a version-1 project/SourceId/class binding to a fresh authoring ObjectId, without source or persistence mutation. See [Script document bindings](ScriptDocumentBindings.md). |
 | `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion and optional project `ExpectedRevision`. |
 | `StartPlaySession` / `StopPlaySession` | Starts or destroys the one isolated local runtime from current authoritative in-memory state using an exact engine-issued session identity. |
 | `GetPlaySessionState` / `PollPlayDiagnostics` | Observes bounded lifecycle and runtime diagnostics without granting mutation authority. |

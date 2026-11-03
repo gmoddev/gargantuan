@@ -566,7 +566,7 @@ namespace gargantuan {
 		InstanceSerialization::DeserializationState State;
 		{
 			ScopedChangeJournalSuppression Suppression;
-			State = InstanceSerialization::DeserializeDetached(InstanceSerialization::InstanceFormat::Json, Input);
+			State = InstanceSerialization::DeserializeClone(InstanceSerialization::InstanceFormat::Json, Input);
 		}
 		if (!State.Ok || !State.Instance) {
 			const auto Reason = State.Errors.empty() ? std::string("persistent state could not be reconstructed") : State.Errors.front();

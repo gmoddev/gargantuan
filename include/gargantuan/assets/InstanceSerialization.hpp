@@ -8,6 +8,7 @@
 #include <string_view>
 #include <utility>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace gargantuan::InstanceSerialization {
@@ -19,6 +20,8 @@ namespace gargantuan::InstanceSerialization {
 
 		std::vector<std::string> CurrentPath{"(TOP)"};
 		std::size_t ObjectsDecoded = 0;
+		bool PreserveSourceIds = true;
+		std::unordered_set<std::string> SourceIds;
 		std::unordered_map<std::shared_ptr<gargantuan::Instance>, std::vector<std::string>> PendingTags;
 		std::string FormatCurrentPath();
 
@@ -38,4 +41,7 @@ namespace gargantuan::InstanceSerialization {
 	std::string SerializeEmptyProject(InstanceFormat Format, std::string_view ProjectName);
 	DeserializationState Deserialize(InstanceFormat format, std::istream &input);
 	DeserializationState DeserializeDetached(InstanceFormat format, std::istream &input);
+	// Clone/duplicate create new logical resources. Undo/Redo uses the ordinary
+	// identity-preserving detached reconstruction above.
+	DeserializationState DeserializeClone(InstanceFormat Format, std::istream &Input);
 }

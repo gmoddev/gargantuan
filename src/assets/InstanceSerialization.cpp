@@ -2,6 +2,7 @@
 #include "assets/PreparedInstanceSerialization.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Enum.hpp"
@@ -78,6 +79,7 @@ namespace gargantuan::InstanceSerialization {
 
 		struct SerializationState {
 			std::unordered_map<std::shared_ptr<Instance>, json> InstanceMap;
+			std::unordered_set<std::string> SourceIds;
 		};
 
 		using SerializedPair = std::pair<const char *, json>;
@@ -173,6 +175,9 @@ namespace gargantuan::InstanceSerialization {
 			if (state.InstanceMap.contains(instance)) {
 				return state.InstanceMap.at(instance);
 			}
+			if (auto Script = std::dynamic_pointer_cast<LuaSourceContainer>(instance))
+				if (!ProjectId::Parse(Script->GetSourceId()) || !state.SourceIds.insert(Script->GetSourceId()).second)
+					throw std::invalid_argument("Persisted Script SourceId is invalid or duplicated");
 
 			std::vector<json> children;
 			children.reserve(instance->Children.size());
@@ -656,6 +661,12 @@ namespace gargantuan::InstanceSerialization {
 			auto deserialized = maybeDeserialized.value();
 
 			try {
+				if (key == "SourceId" && !state.PreserveSourceIds &&
+					std::dynamic_pointer_cast<LuaSourceContainer>(instance)) {
+					const auto *Identity = std::any_cast<std::string>(&deserialized);
+					if (!Identity || !ProjectId::Parse(*Identity)) throw std::invalid_argument("Cloned Script SourceId is invalid");
+					continue;
+				}
 				if (auto *EnumValue = std::any_cast<EnumItem>(&deserialized)) {
 					if (!EnumValue->EnumType || instance->ApplyPropertyWireMutation(
 							key,
@@ -691,6 +702,12 @@ namespace gargantuan::InstanceSerialization {
 			} catch (...) {
 				instance->Destroy();
 				return state.ReturnError("Unknown error setting property '{}' in {}", key, state.FormatCurrentPath());
+			}
+		}
+		if (auto Script = std::dynamic_pointer_cast<LuaSourceContainer>(instance)) {
+			if (!state.SourceIds.insert(Script->GetSourceId()).second) {
+				instance->Destroy();
+				return state.ReturnError("Duplicate Script SourceId in {}", state.FormatCurrentPath());
 			}
 		}
 		try {
@@ -849,8 +866,9 @@ namespace gargantuan::InstanceSerialization {
 			return std::move(*Parsed);
 		}
 
-		DeserializationState MaterializeJson(const json &Contents, bool ApplyPendingTags) {
+		DeserializationState MaterializeJson(const json &Contents, bool ApplyPendingTags, bool PreserveSourceIds = true) {
 			DeserializationState state;
+			state.PreserveSourceIds = PreserveSourceIds;
 			const auto version = Contents["Version"].get<int>();
 			std::optional<std::shared_ptr<Instance>> maybeInstance;
 			try {
@@ -884,7 +902,7 @@ namespace gargantuan::InstanceSerialization {
 			return state;
 		}
 
-		DeserializationState DeserializeImpl(InstanceFormat format, std::istream &input, bool ApplyPendingTags) {
+		DeserializationState DeserializeImpl(InstanceFormat format, std::istream &input, bool ApplyPendingTags, bool PreserveSourceIds = true) {
 			DeserializationState state;
 			if (!input.good()) {
 				state.PushError("Bad stream from instance contents");
@@ -904,7 +922,7 @@ namespace gargantuan::InstanceSerialization {
 				state.Errors.push_back(std::move(Prepared.error()));
 				return state;
 			}
-			return MaterializeJson(*Prepared, ApplyPendingTags);
+			return MaterializeJson(*Prepared, ApplyPendingTags, PreserveSourceIds);
 		}
 	}
 
@@ -947,5 +965,8 @@ namespace gargantuan::InstanceSerialization {
 
 	DeserializationState DeserializeDetached(InstanceFormat format, std::istream &input) {
 		return DeserializeImpl(format, input, false);
+	}
+	DeserializationState DeserializeClone(InstanceFormat Format, std::istream &Input) {
+		return DeserializeImpl(Format, Input, false, false);
 	}
 }

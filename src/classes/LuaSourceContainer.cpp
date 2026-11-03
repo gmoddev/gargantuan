@@ -12,6 +12,17 @@
 #include <string>
 
 namespace gargantuan {
+	std::string LuaSourceContainer::GetSourceId() const { return SourceId; }
+	void LuaSourceContainer::SetSourceId(std::string Value) {
+		AssertCanMutate();
+		if (!ProjectId::Parse(Value)) throw std::invalid_argument("Script SourceId must be canonical nonzero 128-bit hex");
+		// Only hydration of an unadopted native Instance may restore identity.
+		// Public Luau and EditorHost property writes also fail Engine permission.
+		if (GetDataModel() || SourceIdLoaded) throw std::invalid_argument("Script SourceId is immutable after hydration");
+		SourceId = std::move(Value);
+		SourceIdLoaded = true;
+	}
+
 	std::string LuaSourceContainer::GetSource() const {
 		return Source;
 	}

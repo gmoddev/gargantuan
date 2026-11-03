@@ -127,6 +127,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Instance attributes](../src/content/docs/developing/instance-attributes.mdx)
 - [Instance tags](../src/content/docs/developing/instance-tags.mdx)
 - [EditorHost and Studio boundary](../src/content/docs/developing/editor-host.mdx)
+- [Durable Script document bindings](../../devdocs/CurrentArchitecture/ScriptDocumentBindings.md)
 - [Runtime foundation](../../devdocs/CurrentArchitecture/FoundationRuntime.md)
 - [Mutation gateway](../../devdocs/CurrentArchitecture/MutationGateway.md)
 - [Authoritative reset-to-default](../../devdocs/CurrentArchitecture/AuthoritativePropertyResetToDefault.md)

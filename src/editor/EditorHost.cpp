@@ -451,6 +451,50 @@ namespace gargantuan {
 			return PlaySessionId{Parsed};
 		}
 
+		struct ScriptResourceLookup {
+			std::shared_ptr<LuaSourceContainer> Script;
+			const char *Error = nullptr;
+		};
+
+		ScriptResourceLookup FindScriptResource(const std::shared_ptr<DataModel> &World, std::string_view SourceId) {
+			// Disposable bounded traversal of the canonical graph, never a second
+			// durable registry. Only a fully persistent ancestor chain can reopen.
+			std::vector<std::pair<std::shared_ptr<Instance>, bool>> Pending{{World, true}};
+			std::shared_ptr<LuaSourceContainer> Match;
+			std::size_t Visited = 0;
+			while (!Pending.empty()) {
+				auto [Object, Persistent] = std::move(Pending.back());
+				Pending.pop_back();
+				if (++Visited > MaximumPersistenceObjects ||
+					Object->Children.size() > MaximumPersistenceObjects - Visited - Pending.size())
+					return {{}, "ResourceLimit"};
+				if (Object->GetDestroyed() || Object->GetReplicationScopeId() != World->GetObjectId()) continue;
+				Persistent = Persistent && Object->GetArchivable();
+				if (Persistent) if (auto Script = std::dynamic_pointer_cast<LuaSourceContainer>(Object);
+					Script && Script->GetSourceId() == SourceId) {
+					if (Match) return {{}, "AmbiguousResource"};
+					Match = std::move(Script);
+				}
+				for (const auto &Child : Object->Children) Pending.emplace_back(Child, Persistent);
+			}
+			return {std::move(Match), nullptr};
+		}
+
+		Json EncodeScriptBinding(const Project &ProjectValue, const std::shared_ptr<LuaSourceContainer> &Script) {
+			const auto *Definition = InstanceClassRegistry::GetDefinition(Script.get());
+			return {{"Version", 1}, {"ProjectId", ProjectValue.Identity.ToString()}, {"SourceId", Script->GetSourceId()},
+				{"ClassSchemaId", Definition->Id.ToString()}, {"ClassDefinitionVersion", Definition->DefinitionVersion}};
+		}
+
+		Json EncodeScriptBindingResult(const Project &ProjectValue, const std::shared_ptr<DataModel> &World,
+			std::uint64_t PersistedRevision, const std::shared_ptr<LuaSourceContainer> &Script) {
+			return {{"Binding", EncodeScriptBinding(ProjectValue, Script)},
+				{"Object", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Script->GetObjectId()))},
+				{"Scope", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()))},
+				{"ProjectId", ProjectValue.Identity.ToString()}, {"AuthoritativeRevision", World->GetAuthoritativeRevision()},
+				{"PersistedRevision", PersistedRevision}, {"IdentityOrigin", Script->WasSourceIdLoaded() ? "Loaded" : "Generated"}};
+		}
+
 		Json EncodePlayInputSnapshot(const std::shared_ptr<DataModel> &RuntimeWorld, InputService &Input) {
 			const auto Snapshot = Input.Inspect();
 			const auto EncodeId = [](ObjectId Id) -> Json {
@@ -1042,7 +1086,7 @@ namespace gargantuan {
 					"AuthoritativeTransactions",
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
-					"ReadScriptSource", "WriteScriptSource", "PreRunSource", "ValidatePreRun",
+					"ReadScriptSource", "WriteScriptSource", "ScriptDocumentBinding", "PreRunSource", "ValidatePreRun",
 					"CustomServiceDeclarations", "ReplicatedStorage",
 					"PlaySession", "DiagnosticStream", "SendPlayInput", "PlayInputInspection",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
@@ -2415,7 +2459,7 @@ namespace gargantuan {
 				}));
 			}
 
-			if (method == "GetScriptSource" &&
+			if ((method == "GetScriptSource" || method == "GetScriptBinding" || method == "ResolveScriptBinding") &&
 				(!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
 					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands)))
 				return SerializeBoundedResponse(ErrorResponse(
@@ -2747,6 +2791,59 @@ namespace gargantuan {
 						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
 					}
 				));
+			}
+
+			if (method == "GetScriptBinding" || method == "ResolveScriptBinding") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Script binding requires EditorCommands and ReadDataModel"));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "Open a project first"));
+				std::shared_ptr<LuaSourceContainer> Script;
+				if (method == "GetScriptBinding") {
+					if (!HasOnlyFields(parameters, {"Object"}) || !parameters.contains("Object"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetScriptBinding requires Object"));
+					const auto Id = JsonCodec::DecodeObjectId(parameters["Object"]);
+					if (!Id) return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "ObjectId is invalid"));
+					const auto Target = ObjectRegistry::Get().Lookup(Id->ToObjectId());
+					if (!Target || Target->GetReplicationScopeId() != World->GetObjectId())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Object is not live in the authoring project"));
+					Script = std::dynamic_pointer_cast<LuaSourceContainer>(Target);
+					if (!Script) return SerializeBoundedResponse(ErrorResponse(requestId, "NotScript", "Object is not a supported script"));
+					const auto Found = FindScriptResource(World, Script->GetSourceId());
+					if (Found.Error) return SerializeBoundedResponse(ErrorResponse(requestId, Found.Error, "Script resource lookup rejected"));
+					if (Found.Script != Script)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "ResourceNotPersistent", "Script is not in the persistent project hierarchy"));
+				} else {
+					if (!HasOnlyFields(parameters, {"Binding"}) || !parameters.contains("Binding"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "ResolveScriptBinding requires Binding"));
+					const auto &Binding = parameters["Binding"];
+					if (!Binding.is_object() || Binding.size() != 5 ||
+						!HasOnlyFields(Binding, {"Version", "ProjectId", "SourceId", "ClassSchemaId", "ClassDefinitionVersion"}) ||
+						!Binding.contains("Version") || !Binding["Version"].is_number_unsigned() || Binding["Version"] != 1 ||
+						!Binding.contains("ProjectId") || !Binding["ProjectId"].is_string() ||
+						!Binding.contains("SourceId") || !Binding["SourceId"].is_string() ||
+						!Binding.contains("ClassSchemaId") || !Binding["ClassSchemaId"].is_string() ||
+						!Binding.contains("ClassDefinitionVersion"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Script binding fields are invalid"));
+					const auto ProjectIdentity = ProjectId::Parse(Binding["ProjectId"].get_ref<const std::string &>());
+					const auto SourceIdentity = ProjectId::Parse(Binding["SourceId"].get_ref<const std::string &>());
+					const auto ClassId = SchemaId::Parse(Binding["ClassSchemaId"].get_ref<const std::string &>());
+					const auto Version = JsonCodec::DecodeUnsigned32(Binding["ClassDefinitionVersion"]);
+					if (!ProjectIdentity || !SourceIdentity || !ClassId ||
+						ClassId->ToString() != Binding["ClassSchemaId"].get_ref<const std::string &>() || !Version || *Version == 0)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Script binding identities are invalid"));
+					if (*ProjectIdentity != CurrentProject->Identity)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "StaleProject", "Binding belongs to another project"));
+					const auto Found = FindScriptResource(World, Binding["SourceId"].get_ref<const std::string &>());
+					if (Found.Error) return SerializeBoundedResponse(ErrorResponse(requestId, Found.Error, "Script resource lookup rejected"));
+					Script = Found.Script;
+					if (!Script) return SerializeBoundedResponse(ErrorResponse(requestId, "ResourceNotFound", "Script resource no longer exists"));
+					const auto *Definition = InstanceClassRegistry::GetDefinition(Script.get());
+					if (Definition->Id != *ClassId || Definition->DefinitionVersion != *Version)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "IncompatibleBinding", "Script resource schema changed"));
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, EncodeScriptBindingResult(*CurrentProject, World, PersistedRevision, Script)));
 			}
 
 			if (method == "GetScriptSource") {

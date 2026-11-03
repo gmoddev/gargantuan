@@ -11,6 +11,17 @@ return c({
 	since = "0.1.0",
 
 	properties = {
+		SourceId = {
+			description = "Engine-owned persistent Script resource identity; not a live ObjectId or authority token",
+			type = t.String,
+			unmodified = "std::string()",
+			overrideRead = "GetSourceId",
+			overrideWrite = "SetSourceId",
+			serializable = true,
+			editable = false,
+			readLevel = "Engine",
+			writeLevel = "Engine",
+		},
 		Source = {
 			description = "Authoritative Luau source code",
 			type = t.String,
