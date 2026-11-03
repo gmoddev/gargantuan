@@ -98,6 +98,7 @@ UTF-8 bytes with no NUL.
 | `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion and optional project `ExpectedRevision`. |
 | `StartPlaySession` / `StopPlaySession` | Starts or destroys the one isolated local runtime from current authoritative in-memory state using an exact engine-issued session identity. |
 | `GetPlaySessionState` / `PollPlayDiagnostics` | Observes bounded lifecycle and runtime diagnostics without granting mutation authority. |
+| `GetPlayInputSnapshot` | Optional `PlayInputInspection` capability; returns an owned input diagnostic snapshot v1 for the exact running `PlaySessionId`, requiring `ReadDataModel`. |
 | `SendPlayInput` | Sends the closed focus/key/pointer/wheel/touch/committed-text/preedit `HostEvent` subset to the exact active runtime and returns any bounded relative-pointer or text-input host state, including secure/multiline/autocorrect policy without text contents. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
@@ -321,6 +322,8 @@ mutation, persistence, transactions, and Undo/Redo are implemented. Script
 authoring uses project-v4 persistence and a journaled SourceVersion invalidation
 without exposing Source through ordinary snapshots or gameplay replication.
 Minimal isolated Play/Stop is implemented in [PlaySession.md](./PlaySession.md).
+The optional [Play input inspection contract](./PlayInputInspection.md) exposes
+bounded latest-state diagnostics, separately scoped from authoring identity.
 The next creator-loop increment may build a first playable vertical slice on that
 boundary; project revision remains separate from play identity, transaction identity,
 source version, and journal sequence.

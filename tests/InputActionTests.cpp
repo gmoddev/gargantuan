@@ -863,6 +863,29 @@ assert(Context.Jump.Enabled == false and #Context.Jump:GetChildren() == 0)
 		lua_settop(Engine.L, 0);
 	}
 
+	void TestInspectionUsesRuntimeEvaluator() {
+		Fixture Test;
+		std::shared_ptr<Instance> World = Test.World;
+		PlaySession Session({1}, InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, World),
+			InstanceSerialization::InstanceFormat::Json, std::filesystem::current_path(), 64, 64, 1);
+		const auto Input = Session.GetInputForInspection();
+		Check(Input != nullptr, "native inspection resolves the Engine-owned evaluator");
+		if (!Input) return;
+		Input->SetParent(std::nullopt);
+		const auto Replacement = std::make_shared<InputService>();
+		Replacement->SetParent(Session.GetWorld());
+		Check(Session.GetInputForInspection() == Input && Session.GetInputForInspection() != Replacement,
+			"inspection retains the exact detached evaluator without adopting a replacement");
+		Input->SetParent(Session.GetWorld());
+		Check(Session.GetInputForInspection() == Input && Session.GetInputForInspection() != Replacement,
+			"inspection keeps exact evaluator identity when the active service returns to its runtime scope");
+		Replacement->Destroy();
+		Input->Destroy();
+		Check(!Session.GetInputForInspection(), "destroyed active evaluator cannot be inspected through a replacement");
+		Session.Stop();
+		Check(!Session.GetInputForInspection(), "stopped sessions retain no inspectable input evaluator");
+	}
+
 	void TestEditorHostAuthoring() {
 		using Json = nlohmann::ordered_json;
 		const auto Root = std::filesystem::temp_directory_path() /
@@ -878,7 +901,11 @@ assert(Context.Jump.Enabled == false and #Context.Jump:GetChildren() == 0)
 		std::filesystem::create_directories(Root / ".gargantuan");
 		{
 			Fixture FixtureValue;
-			(void)FixtureValue.Context();
+			const auto Context = FixtureValue.Context();
+			const auto Save = FixtureValue.Action(Context, "SaveInspection");
+			const auto Chord = FixtureValue.Binding(Save, Enums::KeyCode::S);
+			Chord->SetModifier1(Enums::KeyCode::LeftControl);
+			Chord->SetModifier2(Enums::KeyCode::LeftShift);
 			std::shared_ptr<Instance> World = FixtureValue.World;
 			std::ofstream File(Root / ".gargantuan" / "project.instance.json", std::ios::binary);
 			File << InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, World);
@@ -966,6 +993,101 @@ assert(Context.Jump.Enabled == false and #Context.Jump:GetChildren() == 0)
 			),
 			"reopened Studio snapshot retains an action created through authoring authority"
 		);
+
+		const auto Handshake = Call("Handshake");
+		Check(std::ranges::contains(Handshake["Result"]["Capabilities"], Json("PlayInputInspection")),
+			"EditorHost advertises explicit optional input inspection capability");
+		Check(Call("GetPlayInputSnapshot", {{"PlaySessionId", "1"}})["Error"]["Code"] == "StalePlaySession",
+			"input inspection rejects an absent session");
+		for (const auto &Parameters : {
+			Json::object(), Json{{"PlaySessionId", "01"}}, Json{{"PlaySessionId", 1}},
+			Json{{"PlaySessionId", "1"}, {"Object", (*Context)["Id"]}},
+		}) Check(Call("GetPlayInputSnapshot", Parameters)["Error"]["Code"] == "MalformedRequest",
+			"input inspection rejects missing/noncanonical identity and unknown fields");
+		const auto StateBeforePlay = Call("GetProjectState")["Result"];
+		const auto Started = Call("StartPlaySession");
+		Check(Started["Ok"].get<bool>(), "input inspection fixture starts isolated runtime");
+		if (!Started["Ok"].get<bool>()) return;
+		const auto PlayId = Started["Result"]["PlaySessionId"];
+		Host.PumpPlaySessionForTesting();
+		const auto Inspect = [&] { return Call("GetPlayInputSnapshot", {{"PlaySessionId", PlayId}}); };
+		auto Initial = Inspect();
+		Check(Initial["Ok"].get<bool>() && Initial["Result"]["PlaySessionId"] == PlayId &&
+			Initial["Result"]["Snapshot"]["Version"] == 1,
+			"input inspection returns versioned owned snapshot for exact runtime");
+		if (!Initial["Ok"].get<bool>()) return;
+		const auto RuntimeScope = Initial["Result"]["Snapshot"]["Scope"];
+		const auto RuntimeContext = std::ranges::find_if(Initial["Result"]["Snapshot"]["Contexts"], [](const Json &Row) {
+			return Row["Name"] == "Gameplay";
+		});
+		Check(RuntimeContext != Initial["Result"]["Snapshot"]["Contexts"].end() &&
+			(*RuntimeContext)["Id"] != (*Context)["Id"] && (*RuntimeContext)["Priority"] == 200,
+			"inspection uses runtime identities and persisted definitions, not authoring IDs");
+		const auto SendKey = [&](LogicalKey Key, bool Down) {
+			const auto Physical = Key == LogicalKey::LeftControl ? PhysicalKey::LeftControl :
+				Key == LogicalKey::LeftShift ? PhysicalKey::LeftShift : PhysicalKey::S;
+			const auto Reply = Call("SendPlayInput", {
+				{"PlaySessionId", PlayId}, {"Type", "Key"}, {"Physical", static_cast<std::uint32_t>(Physical)},
+				{"Logical", static_cast<std::uint32_t>(Key)}, {"State", Down ? "Pressed" : "Released"},
+			});
+			if (!Reply["Ok"].get<bool>()) std::cerr << "[Input:EditorHostTest] Key denial " << Reply.dump() << '\n';
+			return Reply;
+		};
+		for (const auto &Fields : {Json{{"Physical", 65536u}, {"Logical", 115u}},
+			Json{{"Physical", 22u}, {"Logical", 65651u}}, Json{{"Physical", 45u}, {"Logical", 115u}},
+			Json{{"Physical", 22u}, {"Logical", 297u}}}) {
+			auto Parameters=Fields;
+			Parameters["PlaySessionId"]=PlayId; Parameters["Type"]="Key"; Parameters["State"]="Pressed";
+			Check(Call("SendPlayInput",Parameters)["Error"]["Code"]=="InvalidPlayInput",
+				"Play key validation rejects wraparound and enum holes before casts");
+		}
+		Check(Call("SendPlayInput", {{"PlaySessionId", PlayId}, {"Type", "Focus"}, {"Focused", true}})["Ok"].get<bool>(),
+			"inspection fixture focuses runtime through physical authority");
+		Check(SendKey(LogicalKey::LeftControl, true)["Ok"].get<bool>() &&
+			SendKey(LogicalKey::LeftShift, true)["Ok"].get<bool>() && SendKey(LogicalKey::S, true)["Ok"].get<bool>(),
+			"inspection fixture sends Ctrl+Shift+S through existing input pipeline");
+		auto Pressed = Inspect();
+		const auto FindSave = [](const Json &Snapshot) -> Json {
+			for (const auto &Row : Snapshot["Actions"]) if (Row["Name"] == "SaveInspection") return Row;
+			return nullptr;
+		};
+		const auto PressedAction = FindSave(Pressed["Result"]["Snapshot"]);
+		Check(!PressedAction.is_null() && PressedAction["Down"] == true && PressedAction["Value"] == 1 &&
+			Pressed["Result"]["Snapshot"]["Modifiers"] == 5 &&
+			std::ranges::contains(Pressed["Result"]["Snapshot"]["PressedKeys"], Json(static_cast<std::uint16_t>(LogicalKey::S))),
+			"snapshot accurately observes chord action, pressed keys and modifier mask");
+		Pressed["Result"]["Snapshot"]["Actions"] = Json::array();
+		Check(FindSave(Inspect()["Result"]["Snapshot"])["Down"] == true,
+			"mutating a returned DTO cannot change live action state");
+		Check(Call("SendPlayInput", {{"PlaySessionId", PlayId}, {"Type", "Focus"}, {"Focused", false}})["Ok"].get<bool>(),
+			"inspection fixture loses focus through physical authority");
+		const auto Canceled = Inspect()["Result"]["Snapshot"];
+		Check(FindSave(Canceled)["Down"] == false && FindSave(Canceled)["LastReason"] == "FocusLost" &&
+			Canceled["PressedKeys"].empty() && Canceled["Scope"] == RuntimeScope,
+			"snapshot observes focus cancellation and stable runtime scope");
+		Check(Canceled["Contexts"].size() <= CompiledInputGraph::MaximumContexts &&
+			Canceled["Actions"].size() <= CompiledInputGraph::MaximumActions &&
+			Canceled["Bindings"].size() <= CompiledInputGraph::MaximumBindings && Canceled["ValidationErrors"].size() <= 64,
+			"inspection arrays retain evaluator bounds");
+		Check(Call("StopPlaySession", {{"PlaySessionId", PlayId}})["Ok"].get<bool>() &&
+			Inspect()["Error"]["Code"] == "StalePlaySession" && Call("GetProjectState")["Result"] == StateBeforePlay,
+			"stop invalidates snapshot access without changing authoring revision, dirty state or history");
+		const auto Restarted = Call("StartPlaySession");
+		Check(Restarted["Ok"].get<bool>() && Inspect()["Error"]["Code"] == "StalePlaySession",
+			"old session ID cannot inspect a replacement runtime");
+		if (Restarted["Ok"].get<bool>()) {
+			const auto NewId = Restarted["Result"]["PlaySessionId"];
+			const auto Replacement = Call("GetPlayInputSnapshot", {{"PlaySessionId", NewId}});
+			Check(Replacement["Result"]["Snapshot"]["Scope"] != RuntimeScope,
+				"replacement runtime has a fresh generation-safe inspection scope");
+			(void)Call("StopPlaySession", {{"PlaySessionId", NewId}});
+		}
+		EditorHost Denied("denied", ScriptSecurityContext{});
+		const auto DeniedResult = Json::parse(Denied.HandleRequest(Json{
+			{"Version", EditorHostProtocolVersion}, {"RequestId", "denied"}, {"SessionToken", "denied"},
+			{"Method", "GetPlayInputSnapshot"}, {"Params", {{"PlaySessionId", "1"}}},
+		}.dump()));
+		Check(DeniedResult["Error"]["Code"] == "Unauthorized", "inspection enforces ReadDataModel at native boundary");
 	}
 }
 
@@ -986,6 +1108,7 @@ int main() {
 		TestDefinitionObserversRemainBounded();
 		TestLuauSurface();
 		TestDefaultBindingsPreserveAuthoredDefinitions();
+		TestInspectionUsesRuntimeEvaluator();
 		TestEditorHostAuthoring();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Input:FoundationTest] " << Error.what() << '\n';

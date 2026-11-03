@@ -200,8 +200,10 @@ the Bool/Scalar `GetVector()` convenience conversion is not applied to that fiel
 Cancellation reasons are None, Released, FocusLost, DefinitionChanged, Disabled,
 Suppressed and GuiConsumed. Snapshots are latest-state observations, not unbounded
 event history. Validation errors are bounded text in this slice; associating every
-error with an offending ObjectId and adding an EditorHost runtime DTO are follow-on
-debugger work. No private Engine pointer or native handle crosses EditorHost.
+error with an offending ObjectId remains follow-on debugger work. The additive
+[Play input inspection DTO](PlayInputInspection.md) exposes owned runtime snapshots
+through an explicit capability-gated EditorHost method. No private Engine pointer
+or native handle crosses EditorHost.
 
 ## Qualification and subsequent stages
 
@@ -219,7 +221,7 @@ excludes Instance snapshot extraction; compiled signal dispatch is excluded whil
 baseline empty native signals remain included. Results must state these limits.
 There is no performance acceptance threshold or unsupported improvement claim.
 
-Next stages: extend the read-only EditorHost inspection DTO and Studio visualizer;
+Next stages: qualify the read-only EditorHost inspection DTO and Studio visualizer;
 add source-associated validation and editor chord authoring; qualify physical
 device behavior; design explicit vector composites/gamepad axes/touch gestures;
 then author remapping UI. Each stage retains the same Instance authority and
