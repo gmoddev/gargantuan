@@ -4,6 +4,24 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-011: Soft-body stale-work fixture has an unresolved intermittent premise
+
+- Status: Open qualification gate; no production defect established.
+- Area: `tests/SoftBodyPhysicsTests.cpp`, destroy/reuse while work is in flight.
+- Evidence: [LUI input composition qualification](devdocs/CurrentArchitecture/LuiInputIntegration.md).
+
+The Windows MSVC 19.44 integrated 82-test run failed the stale-in-flight
+destroy/reuse assertion. One isolated repetition of the identical binary passed.
+The unchanged fixture spins up to 1000 yields, then sleeps 2 ms without asserting
+that an in-flight step was observed before mutation. A missed premise is a
+source-backed hypothesis, not an excuse to waive the generation-safety assertion.
+The physics implementation and its test assertions were not changed.
+
+Close this gate only after establishing a deterministic in-flight premise and
+qualifying stale-result rejection under serial and concurrent runs. Investigate
+production behavior if that controlled reproduction fails. An isolated pass does
+not turn the original full-suite result into a clean 82/82 qualification.
+
 ## KI-010: PreRun deadline interrupt can recurse during GC error construction
 
 - Status: Corrected in the PreRun authoring candidate; focused validation and

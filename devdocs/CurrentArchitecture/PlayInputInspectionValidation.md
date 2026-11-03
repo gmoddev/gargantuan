@@ -1,4 +1,4 @@
-# Play input inspection qualification — 2026-11-03
+# Historical input-branch inspection qualification — 2026-11-03
 
 The implementation is based on the explicitly unmerged Input Action foundation
 `60baf9c61437cd23fbc957531466122013aa4e70`. It is a separate additive branch,

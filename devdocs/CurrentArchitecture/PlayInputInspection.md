@@ -73,11 +73,14 @@ Qualification: InputActionTests exercises capability/field/identity rejection,
 runtime identity isolation, persisted definitions, Ctrl+Shift+S, copy ownership,
 focus cancellation, bounds, Stop/restart and unchanged authoring state. Native
 physical devices and a Studio UI are separate qualification gates.
-See [source-bound qualification](PlayInputInspectionValidation.md) for the
-Windows 54-test result, binary hash, limits and continuation.
+See [historical input-branch qualification](PlayInputInspectionValidation.md) for
+the Windows 54-test result and its older Engine-base limits. The integration
+branch composes this API onto Studio's newer `eeb760eda` baseline and requires
+its own source-bound compatibility results before adoption.
 
-The chord integration test also identified an existing EditorHost admission bug:
-the default enum reflection range omitted modifiers/navigation above 127. The
-host now validates against the declared key enums with explicit reflection
-ranges, rejecting holes and values above uint16 before casting. No second input
-authority or enlarged arbitrary numeric vocabulary is introduced.
+The chord test reproduced an older EditorHost admission bug where the default
+enum reflection range omitted modifiers/navigation above 127. This integration
+retains `eeb760eda`'s already qualified closed-vocabulary key validators; it does
+not import redundant reflection-range customization from the older input branch.
+Tests reject holes and wraparound values. No second input authority or enlarged
+arbitrary numeric vocabulary is introduced.
