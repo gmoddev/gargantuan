@@ -56,6 +56,22 @@ contract and owns its own integration/performance/native receipts.
 
 ## Continuation
 
+This branch retains the foundation's older `eb2ce26ab` Engine base. A Studio
+adapter integration probe correctly rejected `GetSchema` version 7: the current
+LUI Studio dependency `eeb760eda` additionally includes newer schema, property
+batch/default, PreRun, animation and Foundation 3L contracts. Therefore the
+`00A859...` executable is **not adopted by LUI Studio**. Composition is being
+qualified separately on `integration/lui-input-actions`, based on `eeb760eda`.
+Do not weaken Studio's bootstrap or replace its newer contracts with this older
+binary merely because this branch's own 54-test matrix passes.
+
+Hosted foundation Native CI [41597505372](https://github.com/gmoddev/gargantuan/actions/runs/41597505372)
+failed compiling the new test's lambda default argument under MSVC 19.51;
+the separate [GNS sanitizer run](https://github.com/gmoddev/gargantuan/actions/runs/41597505401)
+passed. The test request helper now uses a callable object with unchanged wire
+semantics. Its MSVC 19.44 rebuild and focused InputAction test pass; hosted 19.51
+qualification must be reported separately rather than inferred from that result.
+
 Studio must check `PlayInputInspection`, send one exact active PlaySessionId and
 discard old session/scope responses. It can author Input Instances through the
 ordinary schema/creation/property/history APIs. It must not map runtime IDs to
