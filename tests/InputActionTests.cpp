@@ -912,19 +912,19 @@ assert(Context.Jump.Enabled == false and #Context.Jump:GetChildren() == 0)
 			if (!File) throw std::runtime_error("[Input:EditorHostTest] Could not write owned fixture");
 		}
 		EditorHost Host("input-test");
-		std::size_t Request = 0;
-		auto Call = [&](std::string Method, Json Parameters = Json::object()) {
-			return Json::parse(Host.HandleRequest(
-				Json{
-					{"Version", EditorHostProtocolVersion},
-					{"RequestId", std::to_string(++Request)},
-					{"SessionToken", "input-test"},
-					{"Method", std::move(Method)},
-					{"Params", std::move(Parameters)},
-				}
-					.dump()
-			));
+		// MSVC 19.51 rejects the local alias in this lambda's default argument.
+		// Keep the same request semantics in a callable object across toolchains.
+		struct Client {
+			EditorHost &Host;
+			std::size_t Request = 0;
+			Json operator()(std::string Method, Json Parameters = Json::object()) {
+				return Json::parse(Host.HandleRequest(Json{
+					{"Version", EditorHostProtocolVersion}, {"RequestId", std::to_string(++Request)},
+					{"SessionToken", "input-test"}, {"Method", std::move(Method)}, {"Params", std::move(Parameters)},
+				}.dump()));
+			}
 		};
+		Client Call{Host};
 		Check(
 			Call("OpenProject", {{"Root", Root.generic_string()}})["Ok"].get<bool>(),
 			"EditorHost opens a project containing persistent input Instances"
