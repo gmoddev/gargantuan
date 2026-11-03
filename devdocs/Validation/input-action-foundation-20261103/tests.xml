@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="Win32-ninja"
+	tests="7"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname="HostPC"
+	time="3"
+	timestamp="2026-11-03T02:31:42"
+	>
+	<testcase name="gargantuan_foundation" classname="gargantuan_foundation" time="1.19284" status="run">
+		<properties>
+			<property name="cmake_labels" value="editorhost;foundation;protocol;renderer;runtime;serialization"/>
+		</properties>
+		<system-out>ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Instance.Workspace.DiagnosticSpam] error after spam
+METRIC transaction_single_property_ms 0.0408
+ME...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_platform_input_boundary" classname="gargantuan_platform_input_boundary" time="0.0408709" status="run">
+		<properties>
+			<property name="cmake_labels" value="input;platform;runtime"/>
+		</properties>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="gargantuan_player_runtime" classname="gargantuan_player_runtime" time="0.365154" status="run">
+		<properties>
+			<property name="cmake_labels" value="headless;player;runtime"/>
+		</properties>
+		<system-out>All player runtime tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_input_action" classname="gargantuan_input_action" time="0.158165" status="run">
+		<properties>
+			<property name="cmake_labels" value="headless;input;runtime"/>
+		</properties>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="gargantuan_input_action_benchmark_smoke" classname="gargantuan_input_action_benchmark_smoke" time="3.83009" status="run">
+		<properties>
+			<property name="cmake_labels" value="headless;input;runtime"/>
+		</properties>
+		<system-out>{
+  "AllocationScope": "Ordinary executable C++ new/new[] requests during event evaluation, after warmup; aligned allocations excluded.",
+  "BaselineSource": "eb2ce26ab:src/services/ActionMap.cpp",
+  "MemoryScope": "Capacity-based storage estimates excluding allocator bookkeeping, temporary compiler storage, and Instance graphs.",
+  "Rows": [
+    {
+      "Actions": 16,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 176.0,
+        "AllocationsPerEvent": 2.0,
+        "EstimatedStorageBytes": 3464,
+        "EventNs": {
+          "P50": 200.0,
+          "P95": 300.0,
+          "P99": 300.0
+        }
+      },
+      "Bindings": 16,
+      "CompileEditUs": {
+        "P50": 65.2,
+        "P95": 69.8,
+        "P99": 73.2
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 0.0,
+        "EstimatedStorageBytes": 118824,
+        "EventNs": {
+          "P50": 100.0,
+          "P95": 100.0,
+          "P99": 100.0
+        }
+      },
+     ...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_interaction_foundation" classname="gargantuan_interaction_foundation" time="0.100899" status="run">
+		<properties>
+			<property name="cmake_labels" value="gui;headless;input;interaction;player;runtime"/>
+		</properties>
+		<system-out>[Interaction:Test] All interaction foundation tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_gui_foundation" classname="gargantuan_gui_foundation" time="0.237487" status="run">
+		<properties/>
+		<system-out>[Gui:FoundationTest] BEGIN LayoutTextPresentationAndResources
+[Gui:FoundationTest] PASS LayoutTextPresentationAndResources
+[Gui:FoundationTest] BEGIN AutomaticSizeListAndClipping
+[Gui:FoundationTest] PASS AutomaticSizeListAndClipping
+[Gui:FoundationTest] BEGIN RotationOrderingAndAlpha
+[Gui:FoundationTest] PASS RotationOrderingAndAlpha
+[Gui:FoundationTest] BEGIN InputRoutingFocusAndMutationSafety
+[Gui:FoundationTest] PASS InputRoutingFocusAndMutationSafety
+[Gui:FoundationTest] BEGIN DisabledButtonNeverActivates
+[Gui:FoundationTest] PASS DisabledButtonNeverActivates
+[Gui:FoundationTest] BEGIN PersistencePlayIsolationAndSignalRetirement
+[Gui:FoundationTest] PASS PersistencePlayIsolationAndSignalRetirement
+[Gui:FoundationTest] BEGIN IncrementalInvalidationAndUiRetention
+[Gui:FoundationTest] PASS IncrementalInvalidationAndUiRetention
+[Gui:FoundationTest] BEGIN SiblingStackingContexts
+[Gui:FoundationTest] PASS SiblingStackingContexts
+[Gui:FoundationTest] BEGIN ScrollingAndEditableText
+[Gui:FoundationTest] PASS Scro...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

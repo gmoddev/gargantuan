@@ -9,6 +9,9 @@
 - [Physical agent coordination ownership and migration](PhysicalAgentCoordination.md)
   records the pinned GantriaEngine library, local Gargantuan adapter, validation
   scope and preservation of installed physical-PC tooling.
+- [Persistent input actions](InputActions.md) defines canonical schema-backed
+  contexts/actions/bindings, one indexed native evaluator, the ActionMap facade,
+  chord and cancellation semantics, local diagnostics, and qualification bounds.
 
 - [Foundation 3L security closure](ContentAvailabilitySecurityClosure3L.md)
   preserves SEC-3L-001's raw-address lifetime ABA finding and records full-ObjectId

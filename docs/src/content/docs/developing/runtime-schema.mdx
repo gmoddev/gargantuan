@@ -152,6 +152,12 @@ effective defaults through ordinary wire mutation. Editor resets use existing
 SetProperty or one SetPropertyBatch with each target's own default; Studio reset
 controls remain subsequent work.
 
+Luau native-enum property writes validate the source EnumItem's declared enum
+type before converting it to the native value. Equal numeric values from another
+enum cannot bypass the canonical property's enum identity.
+Native EnumItems compare by declared enum type and item value, so reading a
+reflected enum property compares equal to its corresponding `Enum.Type.Item`.
+
 Extension values are sparse per-Instance runtime state distinct from Attributes.
 Missing overrides read the frozen default. Each Instance is limited to 128
 physical overrides and 32 KiB of aggregate extension state. Luau reads/writes by

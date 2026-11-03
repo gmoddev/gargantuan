@@ -115,6 +115,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Render extraction](../src/content/docs/developing/render-extraction.mdx)
 - [Platform and input boundary](../../devdocs/CurrentArchitecture/PlatformInputBoundary.md)
 - [Player runtime](../../devdocs/CurrentArchitecture/PlayerRuntime.md)
+- [Persistent input actions](../../devdocs/CurrentArchitecture/InputActions.md)
 - [Entitlement service](../../devdocs/CurrentArchitecture/EntitlementService.md)
 - [Backend Provider Integration Foundation 1](../../devdocs/CurrentArchitecture/BackendProviderIntegration1.md)
 - [Renderer backend boundary](../../devdocs/CurrentArchitecture/RendererBackendBoundary.md)

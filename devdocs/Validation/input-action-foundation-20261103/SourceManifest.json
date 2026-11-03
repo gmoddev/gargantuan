@@ -1,0 +1,730 @@
+{
+  "Version": 1,
+  "BaseCommit": "eb2ce26ab1455670f4e7b53426cc3521403110c5",
+  "Branch": "feature/input-action-foundation",
+  "SourceDigest": "1c954844bc007637c43071a2accf18ad579131e8b361b7616e9d9f9d972525cc",
+  "Sources": [
+    {
+      "Path": "assets/classes/InputAction.luau",
+      "Sha256": "d71a6a1e0a6ce0832c6593da76bbcb1e2bbf21bc10f212bc3311753d105959b2",
+      "GitBlob": "15879ae4d884fab0d7f409697a6e10850e82866b"
+    },
+    {
+      "Path": "assets/classes/InputBinding.luau",
+      "Sha256": "0c3e7aa5f487c34aa72e964d2509404b89fb058342f74075acc751d77550d033",
+      "GitBlob": "bb254855ba69c46030b0aa6a7f6f013603947d46"
+    },
+    {
+      "Path": "assets/classes/InputContext.luau",
+      "Sha256": "c1c5823dadf0f184f912a6920409426f2cad7d3dc48a011f0006e8bb8490dbae",
+      "GitBlob": "30a46fb00eab198e4f13e42566dbc4c2dc1e6d0b"
+    },
+    {
+      "Path": "assets/runtime/DefaultActionMap.luau",
+      "Sha256": "762a326a5cf27e65c0ec645ee1903afd5e82e2404fddc74d7509a23360f3d51a",
+      "GitBlob": "b6e53398dbf0f805dea6b995f61c643510e5e305"
+    },
+    {
+      "Path": "assets/runtime/DefaultInteractionRuntime.luau",
+      "Sha256": "6a886d0e04406b528ad486a85c490fb05752bc78ba542d4cc4c83c5316bec90e",
+      "GitBlob": "2e3739e73ceba20e6f7c3f844591a930ce61d42c"
+    },
+    {
+      "Path": "assets/services/InputService.luau",
+      "Sha256": "5015bb9f37c15593342c2a69d8dd085130429473f1c67afceefd9d153f260399",
+      "GitBlob": "824c698ce4d01248762857a78bfcb42df25aff4b"
+    },
+    {
+      "Path": "CMakeLists.txt",
+      "Sha256": "2445aea77b20268a739f68c60b7e72e6f06a7a01750686ae651c02c523672fb0",
+      "GitBlob": "8ffc7fe2f10481a6e49889cff57cc5114830ba05"
+    },
+    {
+      "Path": "include/gargantuan/classes/InputAction.hpp",
+      "Sha256": "0ae1b215d15553e43af9443caaef29de3fbdbe1b09446cd9d4ab424e394870a1",
+      "GitBlob": "70a5e8e3e91fd99b4482e02c2192a79136d4bcec"
+    },
+    {
+      "Path": "include/gargantuan/classes/InputBinding.hpp",
+      "Sha256": "af97ad123f3ea4f2c4ee331c935fd2fe3c9e7d82b5b68c21adc06c266fe63c8d",
+      "GitBlob": "7530922f6fdbfccf9e5a78646af65212bc623056"
+    },
+    {
+      "Path": "include/gargantuan/classes/InputContext.hpp",
+      "Sha256": "e356e504a49838b31f66fd18d2d0ef721bdf0d41cb0343376a7ee70a6475da99",
+      "GitBlob": "c6cd416f6e226ff737daafe524e7c419d27c66a1"
+    },
+    {
+      "Path": "include/gargantuan/Engine.hpp",
+      "Sha256": "b59455e4d1e0f0481d8816a954357996daca40ec8fa890d22bd68b59c87bf7b9",
+      "GitBlob": "50550ac99a8e3e0306a4a839390180b97459aef6"
+    },
+    {
+      "Path": "include/gargantuan/input/CompiledInputGraph.hpp",
+      "Sha256": "b3c49ff2926ff8367c25b18e808fcdd63cb39e31f3de61ad03c582b8ceebabcd",
+      "GitBlob": "afe1bfe123d595f45f25aef66d79e887e8d815c0"
+    },
+    {
+      "Path": "include/gargantuan/input/InputConstruction.hpp",
+      "Sha256": "90e1c08af931e313178a65abf23b6a0973cd0284fa4c75672e9d45aeb510381b",
+      "GitBlob": "2b119d055d256e5101fe2373c11cdf7082fe4a80"
+    },
+    {
+      "Path": "include/gargantuan/input/InputDefinitions.hpp",
+      "Sha256": "fab52f3e83ef032a614b4af353204fcca7b2d572ddb5af7b890643f6ead061d6",
+      "GitBlob": "44222f9c2f99cde48ac59f5118e41a0366630e45"
+    },
+    {
+      "Path": "include/gargantuan/services/ActionMap.hpp",
+      "Sha256": "51ed859db83f790b2caa918324b1a474c991d9a4bbe7793ce0e3b9dea68a6c80",
+      "GitBlob": "ce67fd70b273a11b800ba5ed4fd77a71a68bf600"
+    },
+    {
+      "Path": "include/gargantuan/services/InputService.hpp",
+      "Sha256": "140b01dbf19570350f507d916b6c7c755243892556b6039c07b825f88f8d68f7",
+      "GitBlob": "1384ce02493b4b9501e5b0ad0da9f13cd4d36a5d"
+    },
+    {
+      "Path": "src/classes/DataModel.cpp",
+      "Sha256": "2bde1bfdca5cc5cc52c4c426beac5ae9374d139e8800174b8e3aeb45e1e75e4f",
+      "GitBlob": "5ea413596ec0e0906cb132ccd6180066252ffc76"
+    },
+    {
+      "Path": "src/classes/InputAction.cpp",
+      "Sha256": "6013966ee6c9852cd996b60832532611ac719e5b6f9e57a81fdee9a9314ffbeb",
+      "GitBlob": "3eb91699da7358371db71fcf8fdd7fbd8a17601b"
+    },
+    {
+      "Path": "src/classes/InputBinding.cpp",
+      "Sha256": "043ce59e43cb6cf0c36445ca234c972a67f60c17cf355f63014df4f9a75aa0dd",
+      "GitBlob": "39094a06d40064b246f0af4441d76babc172521c"
+    },
+    {
+      "Path": "src/classes/InputContext.cpp",
+      "Sha256": "4dceef90d17bf0e92a931ed24c44ec074901c2e29d355a904cfad87848f850de",
+      "GitBlob": "e5c44cf0b117f141e3ccdaa20ec353fa5aefeb11"
+    },
+    {
+      "Path": "src/classes/Instance.cpp",
+      "Sha256": "cdb3645f789bcdecc0a2deac67b5f3496f01e0c618f8f48629d2b88f77809d87",
+      "GitBlob": "b8c8df1dbf615d4271c24c67277897ff406af3db"
+    },
+    {
+      "Path": "src/datatypes/Enum.cpp",
+      "Sha256": "530d6a83c35e521b3e0108a5b79a6dd3b5e87cb14b3474395f9cf902d62f222d",
+      "GitBlob": "b10e5091798a68edc97bdf96e148b4048ca13298"
+    },
+    {
+      "Path": "src/Engine.cpp",
+      "Sha256": "7c9cfded12732f4504f53c1d9e755314204ab225fa6f7f27da86d17b1cf3db10",
+      "GitBlob": "cf86274ee742237ae64e249719e1ddaa49d82111"
+    },
+    {
+      "Path": "src/input/CompiledInputGraph.cpp",
+      "Sha256": "4923639fe076ab131f45985aef6b18f230c14337f251e2f45f3b9f276b1cf10c",
+      "GitBlob": "2163a433e0c9f3027fe41c1dcc197cf4c4d25b97"
+    },
+    {
+      "Path": "src/services/ActionMap.cpp",
+      "Sha256": "667a5097cf546d2f97c6bc150e0c8d4807e7d1f3216e30e04f02a2c1034b9f04",
+      "GitBlob": "061640a28fd3ee6929672162f3297b39de8b9862"
+    },
+    {
+      "Path": "src/services/InputService.cpp",
+      "Sha256": "a49060ea17b7fe18285dd27ba8b68d39368668843b8d1f010dab5ce0aaa547f4",
+      "GitBlob": "f840847e65dcfb9abf4472341aeed5a07d25a109"
+    },
+    {
+      "Path": "tests/ActionMapBaseline.cpp",
+      "Sha256": "930932cac556ea4e2207eb239938dda9a3e8a0105da26c0ad3622b1c2983f81a",
+      "GitBlob": "cf8fe4990fee70a9d77d62509945223cd7cb8e3d"
+    },
+    {
+      "Path": "tests/ActionMapBaseline.hpp",
+      "Sha256": "30c7637265cbc8c080f8d10a5490e3e847b692585015734b71affb9114451a13",
+      "GitBlob": "e1b71b7210f38f4d519dc37150e2d02f14147f4d"
+    },
+    {
+      "Path": "tests/FoundationTests.cpp",
+      "Sha256": "a2130d87ab55f054f5aa9718a52429e92807e808460f4d09c9d1178f09525275",
+      "GitBlob": "df58fc27059aaf2520453af24cd022000f3eff7b"
+    },
+    {
+      "Path": "tests/InputActionBenchmark.cpp",
+      "Sha256": "a304b9426b4254b4aa46c4df9910df2beca35f584ff9e49b739722d6d7b83ab9",
+      "GitBlob": "c56ea7f8e4f1126351eb994cbf56ef44d689d3be"
+    },
+    {
+      "Path": "tests/InputActionTests.cpp",
+      "Sha256": "6b48ac980c934df5576ae24ade0d094824ca695ce6cdf15fe8d9210483e6ac07",
+      "GitBlob": "a7b34a72a02b1ce538dacc35dea2eb30ec29f7fb"
+    }
+  ],
+  "Generated": [
+    {
+      "Path": "include/gargantuan/classes/generated/Animator.hpp",
+      "Sha256": "5a1f3eb6ba05a5a1ed6f0d05245183ad24af4b725d828a7b38441d041576f9f1"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Attachment.hpp",
+      "Sha256": "83d45a536dd96f87d6384b2b7f7316c93bc255a490602308e472264b4e9c65d9"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/BasePart.hpp",
+      "Sha256": "ca8aea6f199a143b12678363496875f66d1f5d9e19b299bd3088c177ea964620"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Camera.hpp",
+      "Sha256": "d1b4a9f8176783d6690f17c45aa4d4abe50d473f18e4637506c0c48e547e6e80"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Character.hpp",
+      "Sha256": "a763d4cd8c938a24ebc98cbfac8a1e5978a1909ee746366d5d360a2383f4ad42"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Cloth.hpp",
+      "Sha256": "09dca178ea96f0bb0e21265cb7ff138a70d373524aae8c4a8ffc5aea4da74572"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Constraint.hpp",
+      "Sha256": "55f9829e4372ed36de3257d9145c4388a2a2e7136bc8e40e172e4bdbf42230e9"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/DataModel.hpp",
+      "Sha256": "449f47d17535de89b47b0f0177010ad1f58f236c7c4aa9ca081a91f2fffb4410"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/DeformableBody.hpp",
+      "Sha256": "3158cb9c4a2286e3b5460dac5794ddd9a15ba7c4f308a2f48734ef6c112be856"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/FileLink.hpp",
+      "Sha256": "30576d7c3f50465fb8ddda7b75fd338e6d63ee9d24001635436125be27264e95"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Folder.hpp",
+      "Sha256": "8f7820d79e9579a2d766685a7ccfd716c2d1e5df05cec960d54c743424a57333"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Frame.hpp",
+      "Sha256": "63399f298cbf0a95d3f29f43a4a73ea5959a6f406d6aea0a4647c0cc71e99732"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/GlslSourceContainer.hpp",
+      "Sha256": "db39d08f8928e8635f920dbefa9335459f7f93023795882d5565f2f7c6c99514"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/GuiBase.hpp",
+      "Sha256": "36dc28ff71e15f44f92609071c315536980aef9b057f460aaa47fd47b0b7541c"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/GuiBase2d.hpp",
+      "Sha256": "01fc1da7525c8ab9c86eea73668df7671608273701d16121704f4bc204be0b4b"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/GuiInputEvent.hpp",
+      "Sha256": "96b5f4429738201ecd899a484b60acc6061af372e6471abe6ce6c73f113b1372"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/GuiObject.hpp",
+      "Sha256": "37fe738fecd148abef3ae41f0cd535916efa1cfe0005496138348dddd35af5d1"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/ImageLabel.hpp",
+      "Sha256": "ca937007d1609795984b371940cd3d97f2a5f58fefb1a315ed7fd8caba5305fe"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/InputAction.hpp",
+      "Sha256": "9b42c9541424ba4a5afbdd3f38a91364023bd6b0476137e1ab82d804adedda50"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/InputBinding.hpp",
+      "Sha256": "0ad287427dfeb65d7f45b0d652b622fd9a7ad575e87dda65cba41413857a3df7"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/InputContext.hpp",
+      "Sha256": "7322b41f1bfe16ad7e9cf19416f10676d962e6a74a792bb889d151291147d074"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/InputObject.hpp",
+      "Sha256": "8e79ad1313dbac49f9f9ef237dd1174e137005d708a94e733af085a3c760f556"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Instance.hpp",
+      "Sha256": "b8b95f8aa26eb8d2b6a107545702d6a3645799bb5ccf3b5c2085b0fde504cc13"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/KinematicCharacter.hpp",
+      "Sha256": "4d9d4c4264286fcde21cf1d93bf40a4af71013a7f2122275b08bd4804d6fea96"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/LayerCollector.hpp",
+      "Sha256": "5ed468d6a343ccda3e874ee4df8da1d451fa208e8673466b5826738c059ede27"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/LuaSourceContainer.hpp",
+      "Sha256": "44f6d8863d3458a4d002263752df49be804298b08780bd0095c9d5cb8f57d2b0"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/MeshPart.hpp",
+      "Sha256": "d85c00e216572c51e0a6272275e85e492dcb65966cee34a8de9d85fff8ac2ce1"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/ModuleScript.hpp",
+      "Sha256": "1588d31b7fa78dbddda7b703838ff89f9fc4bb806c9ef9eee1c5e7c2a3fa6ef4"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Part.hpp",
+      "Sha256": "eb7e6502987eea797a1c88ce3be4ffeb589be34db3506397930974444c705397"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Player.hpp",
+      "Sha256": "89fe7ea5fcbb4148881071ab7dd88b2e2ff95c63557a51ad8c81369700f7c5d6"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/ProximityPrompt.hpp",
+      "Sha256": "dd822aed78cbd79fe58973f2e3af43be59a895ccff6bdfc9650b80bc5da124c6"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/RemoteBase.hpp",
+      "Sha256": "3ea0de066d85d9357899fa78d407ba924bf8e0a6622833740d0cd1ada5048fdb"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/RemoteEvent.hpp",
+      "Sha256": "55c03aec078200d816ce3e47aa0c6a3691d9e8d0d30d693a69dd2ffd9d402008"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/RemoteEventBase.hpp",
+      "Sha256": "062ad03f69302a2aa28b7c0a89fa734d935f9abf57df7972ff913e95522ad1bb"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/RemoteFunction.hpp",
+      "Sha256": "7c0575f5fb120b011af508dd282b24c2d3d7e3dea2df05af5455b008c55dfb3f"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/RubberBody.hpp",
+      "Sha256": "f464034ba66004d352c33f72601a44c423eb7eae00a64a3459091c80012640f7"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/ScreenGui.hpp",
+      "Sha256": "2cf2c3459a47faed373410175a4abf3efa4b1605801439b77c434596945f0121"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Script.hpp",
+      "Sha256": "85f351cc52dfb648e9bb56bb5229fb6dc15e9a6427354c4fe224c2c0ba00885f"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/ScrollingFrame.hpp",
+      "Sha256": "641c30fe4e53dbd019ce948dd67ce46d41cdbe5cb4acb184e1235333a3a0fbd3"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/ServiceProvider.hpp",
+      "Sha256": "977ee4d097c8e9b08d756897d866ed62fe4259ec59edc9a00e13f7dbc54ecad7"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Sky.hpp",
+      "Sha256": "353b61691c27c83df20501bbc9b3c17bf6d13d59c5675b2e52cbac1b7e655733"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/SoftBodyAttachment.hpp",
+      "Sha256": "31ac5efbc0d913b3b1c0d7f6fbd3e9dc52314813f7caec7a0c597acebdcf59ed"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/SoftBodyMaterial.hpp",
+      "Sha256": "7c96b3ae83214e1a11c25e4d23bfcda2adcaab3718298fec214a1cd6d18daa48"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/Sound.hpp",
+      "Sha256": "50281b88582216dbb0c96042bf8c5795825f9252673458b1f36bf617e8ef31f6"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/TextBox.hpp",
+      "Sha256": "c6d88010b44c3a9a5f7679a50c717aeb40df3784fe90e4e70121e3c6c0f0e829"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/TextButton.hpp",
+      "Sha256": "71763e5f3ab32d00d7c4bb3c3bdda78ec03df7258a99875c47c2a428151a0893"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/TextLabel.hpp",
+      "Sha256": "798c7d39fdb962a260e02c304fe1ee4abed864c4974b446ad99ee4e6b2e00298"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/UIListLayout.hpp",
+      "Sha256": "58f894ae922f67538b8f5047173f02d720ec531e821e97a505d4ccfd5d6c25fa"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/UnreliableRemoteEvent.hpp",
+      "Sha256": "07150f796b8080499b6a338db8be66b0f1457a4085bc768d80c0a7a146736b21"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/UnreliableSequencedRemoteEvent.hpp",
+      "Sha256": "6a17934ddee6ac4e10215ccf7681d23f8783cbedd1b9c1b239a34ac41fa670eb"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/WeldConstraint.hpp",
+      "Sha256": "820545626a9757d8c744aa66a3945c80e1a8e3a85478db52f0a148206cf78e69"
+    },
+    {
+      "Path": "include/gargantuan/classes/generated/WorldRoot.hpp",
+      "Sha256": "6be006b9c278d917349786f55ff932eea071aefe2c5d53e9fa49c6b67e76a880"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/ActionMap.hpp",
+      "Sha256": "e7507340f5a344e5583c9464839b82605fc880d448a33315ff61851d5b281539"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/AssetService.hpp",
+      "Sha256": "aec83cf758650e32d8dacad1f979da6d9e712926413a83a2ca7e908d3b0567f6"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/CharacterControlService.hpp",
+      "Sha256": "5fc94e42a7789fa6010f2720cbb37b7c0338ccb5ae831a86ba509b66455eb040"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/EntitlementService.hpp",
+      "Sha256": "c9fdbc6c6be6b82f54f75f28f0da8e77ebcafe05d7aaa55c4a38b97ccf434adc"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/InputService.hpp",
+      "Sha256": "4aa0743528844a536aef647cdce04b8409c44c52150a221d9c42e8db0984a89e"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/InteractionService.hpp",
+      "Sha256": "d29fcc9de9ec37d49029a70d4e14eff78fbd549396d1bc8e4cebbbdd1e92fecc"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/Lighting.hpp",
+      "Sha256": "69547200262086ab56844c6134bb9befabeadf3fdfde3b296c167d04a12b54db"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/Players.hpp",
+      "Sha256": "5885ebea1ac00ca1a859ce7c0ae3d90f979032c27ed67874347db5a842f9af44"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/ProcessService.hpp",
+      "Sha256": "b38524bf482be67659c2f8aef6b8328908469d8e36f0d54f901948c42e175b29"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/ReplicatedStorage.hpp",
+      "Sha256": "4e255d7bf04b1183f0a0a90f013c546f20ffbcea1d154957f55fde6377aea08a"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/RunService.hpp",
+      "Sha256": "02d455461a4405ca953af87fb1d2504691445dbaceda48c027fa7b10cce2ff1c"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/Tags.hpp",
+      "Sha256": "691cb312854c4309b081eb8a6049632cb567105c92379fe94326d1b50fac5934"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/UserInputService.hpp",
+      "Sha256": "5df8ec5e8895c98780cdac60d0c6a6f612b6514363c37dc60ff372043f9ae421"
+    },
+    {
+      "Path": "include/gargantuan/services/generated/Workspace.hpp",
+      "Sha256": "f0f6ccd1f166f18554bdf3ef8fd8aa0833e1780e59d20630e6c8801d60016c77"
+    },
+    {
+      "Path": "src/classes/generated/Animator.cpp",
+      "Sha256": "f9e068efa79350ba2ef9e1f7f7aab5f85b737fc4b00854fd4ca79f7be0fb2e16"
+    },
+    {
+      "Path": "src/classes/generated/Attachment.cpp",
+      "Sha256": "def90fbb6c507d4616b74cfd1bf37daf57a35012f1066bb7f1106fa0a7c27348"
+    },
+    {
+      "Path": "src/classes/generated/BasePart.cpp",
+      "Sha256": "b1896e9642e39bd9d603d785d8d9e84f954fa7a344959a2e08064f6406cae5d2"
+    },
+    {
+      "Path": "src/classes/generated/Camera.cpp",
+      "Sha256": "517a614afcce149bae6cb6d98775ca9fd0906a243019ba8b49f7d806a81905b9"
+    },
+    {
+      "Path": "src/classes/generated/Character.cpp",
+      "Sha256": "622d45a5252bcf33feaef2ab2e0ffcf5382daf6f32f6650b3151531cdb7a9f16"
+    },
+    {
+      "Path": "src/classes/generated/Cloth.cpp",
+      "Sha256": "fb656b905b68abd369b359ef130fc790d1d8a17cb928b98b7867fceec05d0a20"
+    },
+    {
+      "Path": "src/classes/generated/Constraint.cpp",
+      "Sha256": "bdd575e40b09ec6b24c9fedf6216b0e20b8bc010528c1a2ea5ca5547efec94af"
+    },
+    {
+      "Path": "src/classes/generated/DataModel.cpp",
+      "Sha256": "720637463613f01ad94b04384150bf1d3b1cee91ebeb4c7523f2c86ab136631c"
+    },
+    {
+      "Path": "src/classes/generated/DeformableBody.cpp",
+      "Sha256": "5a3051e7afef73eed2b359c36cbd70a4941c760546254a06def78b5c66d94289"
+    },
+    {
+      "Path": "src/classes/generated/FileLink.cpp",
+      "Sha256": "62230e6b1f385bb7731db9eeb5a4bb364ff9ba963b87c2ccb77209eadc395990"
+    },
+    {
+      "Path": "src/classes/generated/Folder.cpp",
+      "Sha256": "4fc3b7e843cdae6cc3f6c3ec34dc12714be11df5fc29f5335403c4cb26f368e6"
+    },
+    {
+      "Path": "src/classes/generated/Frame.cpp",
+      "Sha256": "1453a8b93d0a530a8c76d94d3b5bd70137dd2af7dc07a7e22ae7068c36fb64e0"
+    },
+    {
+      "Path": "src/classes/generated/GlslSourceContainer.cpp",
+      "Sha256": "11784ab0c94643a157b1a03e20a55510b573c56b6c945361ee3763bf308836e2"
+    },
+    {
+      "Path": "src/classes/generated/GuiBase.cpp",
+      "Sha256": "56c2c9d805585fbbb933c6e3db911d6772f39e09e8b4f0a063bf40b6741785a0"
+    },
+    {
+      "Path": "src/classes/generated/GuiBase2d.cpp",
+      "Sha256": "50244eb6898f36ad3242f83dbc1be9265622167b3c60c7a2123f4827469e8015"
+    },
+    {
+      "Path": "src/classes/generated/GuiInputEvent.cpp",
+      "Sha256": "c43fd7cc107d6a0d913181c11215917e8a3b869a5a1fc61921dc6f231498e979"
+    },
+    {
+      "Path": "src/classes/generated/GuiObject.cpp",
+      "Sha256": "e63d3049eeca89677b3c5b0eab043835469f4ce1f13553d66253ef4c628abf03"
+    },
+    {
+      "Path": "src/classes/generated/ImageLabel.cpp",
+      "Sha256": "fa71329014016e0a35284bddebdd136fa464edc639f34880c8b5a6bcb824f116"
+    },
+    {
+      "Path": "src/classes/generated/InputAction.cpp",
+      "Sha256": "290aa0c15c509c54c4b34b926c683523400374c2adae7ac49eff84f1d9eb91c9"
+    },
+    {
+      "Path": "src/classes/generated/InputBinding.cpp",
+      "Sha256": "79e991c0ee1e97bf38b2fba50e8fdc495c2a852f5f4d5b43ad690ce3e6063a05"
+    },
+    {
+      "Path": "src/classes/generated/InputContext.cpp",
+      "Sha256": "8321a8a7cfe9cf2f5d73b19b05ff171ad5a3eff9e466d8a4a026a950b478873c"
+    },
+    {
+      "Path": "src/classes/generated/InputObject.cpp",
+      "Sha256": "7dcbd5f1745b74b4dfb7e8a722881f6b5e86586c0a67aef1e831dba1f849c25a"
+    },
+    {
+      "Path": "src/classes/generated/Instance.cpp",
+      "Sha256": "cc51b1410e4289310c9e8070bb311bb1453e3f639df478ea1f26a639900c8fc2"
+    },
+    {
+      "Path": "src/classes/generated/KinematicCharacter.cpp",
+      "Sha256": "03581323e858199a63b7d7cc1c3f95359cd0f8ea029d942d8472addfc6262b67"
+    },
+    {
+      "Path": "src/classes/generated/LayerCollector.cpp",
+      "Sha256": "cef3fdc7bf83c988c8101ec44168f0bd8495685b8ac65511c32270a91d234d02"
+    },
+    {
+      "Path": "src/classes/generated/LuaSourceContainer.cpp",
+      "Sha256": "db79abfb7fdf67b8a304dc47b27ce039887773699233a3c73508c0eeb6f97c8a"
+    },
+    {
+      "Path": "src/classes/generated/MeshPart.cpp",
+      "Sha256": "edf0fd4a37da49e6509fd7127dfe2d236740e22fe6a702635d0147be23e1ef5c"
+    },
+    {
+      "Path": "src/classes/generated/ModuleScript.cpp",
+      "Sha256": "799fc4cd937c3cd272d313131b97652abb8a43e4bd8a1c12a7f97a2589432d30"
+    },
+    {
+      "Path": "src/classes/generated/Part.cpp",
+      "Sha256": "145651849b557b3cdf0d659524257a50000331885b9a3850847222cecc9431f8"
+    },
+    {
+      "Path": "src/classes/generated/Player.cpp",
+      "Sha256": "8579e5c9dceb63c1964876a653ae361efa6038384c376fc31d12f6f64ffabf30"
+    },
+    {
+      "Path": "src/classes/generated/ProximityPrompt.cpp",
+      "Sha256": "c8aae1276a0d73bf9de3062120632b2539ca700c6cd4bde650a0aba80f3b9216"
+    },
+    {
+      "Path": "src/classes/generated/RemoteBase.cpp",
+      "Sha256": "93a9435edd6763677b939d78d1e0cc8a9e0bce20fa827c1aac15898342316a98"
+    },
+    {
+      "Path": "src/classes/generated/RemoteEvent.cpp",
+      "Sha256": "6dee4cd194f1feb5979353ea11c0a32fc0efbfb8f0dad640094689282ac60e90"
+    },
+    {
+      "Path": "src/classes/generated/RemoteEventBase.cpp",
+      "Sha256": "04cb034fdd5742237e168a32363011a31d31f9cc924929106240f0fd474dc2ed"
+    },
+    {
+      "Path": "src/classes/generated/RemoteFunction.cpp",
+      "Sha256": "e6fdf97f36e1ea10c56282377684b9cd6da8fc411617891f1692c51f414e8437"
+    },
+    {
+      "Path": "src/classes/generated/RubberBody.cpp",
+      "Sha256": "f8ed654505146e713ceba2113ef7b16f2dee6e629b22dd9cbbde3ce494ff9601"
+    },
+    {
+      "Path": "src/classes/generated/ScreenGui.cpp",
+      "Sha256": "f5f275d08f391705ae3568c69e6040d5422dc5b3fa3bd7ee1e2566df64644609"
+    },
+    {
+      "Path": "src/classes/generated/Script.cpp",
+      "Sha256": "a5d1b969b63f32a4ed1f317ff636588dec0765d79d50e0f4eb2add126447238b"
+    },
+    {
+      "Path": "src/classes/generated/ScrollingFrame.cpp",
+      "Sha256": "f38faa1ab7fdbe096231dd6a3f4bc46b4c27cb4f04dba184688dad2944afdf1c"
+    },
+    {
+      "Path": "src/classes/generated/ServiceProvider.cpp",
+      "Sha256": "fecdfceeca53f865ca761c7eacec8799e11e8245590dfab75c424b1fd5b442df"
+    },
+    {
+      "Path": "src/classes/generated/Sky.cpp",
+      "Sha256": "377183b4ad59747fc9be380ff8d7253c7b28714be9d6e02ff26ace325104c075"
+    },
+    {
+      "Path": "src/classes/generated/SoftBodyAttachment.cpp",
+      "Sha256": "adb08e7e5b7acc4e6d332e507a889030120a1c7387185549c5dae97b125979ec"
+    },
+    {
+      "Path": "src/classes/generated/SoftBodyMaterial.cpp",
+      "Sha256": "9672d0cc6113fca824f9592917b7e02ec18b0af9a19e530966eeecca17b99846"
+    },
+    {
+      "Path": "src/classes/generated/Sound.cpp",
+      "Sha256": "0dcd14e1ffea1c6d0f6800fabb1dd8df0950cfc8ea0e65c38aa09a839689bef8"
+    },
+    {
+      "Path": "src/classes/generated/TextBox.cpp",
+      "Sha256": "3ac672336ade964b1c221906d69b4b988e5c1055c7adaff283a775a491b75ca4"
+    },
+    {
+      "Path": "src/classes/generated/TextButton.cpp",
+      "Sha256": "51a9f0e94851dbc39de040f8d9beaf8ca352a0bcfe2a33b6bb1f4f00568aa4f8"
+    },
+    {
+      "Path": "src/classes/generated/TextLabel.cpp",
+      "Sha256": "a82e3990bad10e30dd1af315192bbf3b8073a3b1246c244338c7b82107b72985"
+    },
+    {
+      "Path": "src/classes/generated/UIListLayout.cpp",
+      "Sha256": "5f02d3d778307364a5211097986720ece774c77fb5fca85dff5caf490afb9e50"
+    },
+    {
+      "Path": "src/classes/generated/UnreliableRemoteEvent.cpp",
+      "Sha256": "dfe8eb32f4fc71d0b8901377d194c3289031b594e8c3030ebf4f3e6b56c2a88f"
+    },
+    {
+      "Path": "src/classes/generated/UnreliableSequencedRemoteEvent.cpp",
+      "Sha256": "34fb877fb3d85847eebf820b6e459e28f6329711dc1a83c6f30898f6a8719c40"
+    },
+    {
+      "Path": "src/classes/generated/WeldConstraint.cpp",
+      "Sha256": "2e1f2b491afd9295e4f86cc7185b85826ffe914bf0d44e1fbef9d0919006973e"
+    },
+    {
+      "Path": "src/classes/generated/WorldRoot.cpp",
+      "Sha256": "02abf188a8f2dcd4b0e7cdfa53874abd23f85ffa2e9f49c2ef32341800f46751"
+    },
+    {
+      "Path": "src/services/generated/ActionMap.cpp",
+      "Sha256": "412f18c2a7ac5395e2c2f02a2b2af2df073e788d6f95525a53da9bbac872b5c7"
+    },
+    {
+      "Path": "src/services/generated/AssetService.cpp",
+      "Sha256": "d8e62bc9a6375b6c37bf0791ad9491e78a498cd49753b8ed43599ce641460939"
+    },
+    {
+      "Path": "src/services/generated/CharacterControlService.cpp",
+      "Sha256": "e52b1bf014c66120c53615aac68584c2eed3e4940ad4c16b57c4428862949d53"
+    },
+    {
+      "Path": "src/services/generated/EntitlementService.cpp",
+      "Sha256": "ceeeb9a55ca517ca106a59ae4ac23336f7418eb80fa44d33efbebacf4b8dec49"
+    },
+    {
+      "Path": "src/services/generated/InputService.cpp",
+      "Sha256": "9d90225231e69e4e9ee5461541b9622ec78771b6b0ea279fa4fe206d7f9f6a6e"
+    },
+    {
+      "Path": "src/services/generated/InteractionService.cpp",
+      "Sha256": "0a2625c8ce07d120e93e554bf566fafdb6f769fb838b21304aaa96e1ddc63062"
+    },
+    {
+      "Path": "src/services/generated/Lighting.cpp",
+      "Sha256": "67c55e6bd9f0929ee06101dcc6f8a2b2223a636d37d3b8532048f996f9919178"
+    },
+    {
+      "Path": "src/services/generated/Players.cpp",
+      "Sha256": "7e7fd85b8d0b57bc8494c89cee18289171250bcb350b8bb0cebd369f64946c4b"
+    },
+    {
+      "Path": "src/services/generated/ProcessService.cpp",
+      "Sha256": "ef73fa058f056d5546a3d98c5f55a0b7e7d720a383019fd789af6c1bf8a3e718"
+    },
+    {
+      "Path": "src/services/generated/ReplicatedStorage.cpp",
+      "Sha256": "f371cb015fb270a02ceffcdf148e3d13336bbb4dc82b55b4d30af947db553908"
+    },
+    {
+      "Path": "src/services/generated/RunService.cpp",
+      "Sha256": "7c36bea4db74328f8de4b037ee0b3ff495abe692be4fcda4b99040a3ee100acc"
+    },
+    {
+      "Path": "src/services/generated/Tags.cpp",
+      "Sha256": "eb71a1720e6d019b7fd99da0b5e006b18a213bfebcb4414511af3c42a77f2d71"
+    },
+    {
+      "Path": "src/services/generated/UserInputService.cpp",
+      "Sha256": "16fbee77ab9fcb5394c1ef1ffd980774e90219ad5493e0354c68853f603f4973"
+    },
+    {
+      "Path": "src/services/generated/Workspace.cpp",
+      "Sha256": "69c8a43274d14b088732b231c0cdc0b03da05b3cd667eb3a64f6b1ffc01afdb9"
+    }
+  ],
+  "Submodules": [
+    " d924b84eba1f0f0adf38b20b7b4829f6f65b6570 vendor/argparse (v3.2-2-gd924b84)",
+    " 8441b4a06d6d09dcfb0b0f704df4d847d1437b92 vendor/box3d (v0.1.0)",
+    " 7521e2ab262acd7a0d625354e26876cd9c35a231 vendor/glaze (v8.0.0-2-g7521e2ab)",
+    " 8d1fd52e5ab5590e2c81768ace50c72bae28f2ed vendor/glm (0.9.5.3-2955-g8d1fd52e)",
+    " 2e23687092840a66876b4bea48060bd79595ea4b vendor/json (v3.11.2-522-g2e2368709)",
+    " 3fc82b1071ab387531175869afc4fb528464afa4 vendor/luau (0.734)",
+    " 61173726dbdfb0ea2ce87f0c474e89dea2690a5a vendor/magicenum (v0.9.8-38-g6117372)",
+    " f87239e71e42da91ca317a12eefb82cfbf3393eb vendor/sdl (release-3.4.12)",
+    " 0ee698ef02cf38026c476e28157c182685861d18 vendor/sdl_image (release-3.4.0-77-g0ee698ef)",
+    " 2d51f32cb8a588e21f20e96fcb2004fca72501ba vendor/sdl_image/external/aom (v3.6.1-17-g2d51f32cb8)",
+    " a6b395b472c2b1911a49936840e18535b071c1bd vendor/sdl_image/external/dav1d (1.2.1-25-ga6b395b4)",
+    " 191c46e84624aa9e0ed49b33efa86bebcdaf11e2 vendor/sdl_image/external/jpeg (remotes/origin/v10-SDL)",
+    " ee829431ceaed31a34b7e1420f7f18180e7eae23 vendor/sdl_image/external/libavif (v1.1.1-14-gee829431)",
+    " 2dac6356c045c0773b109b3f9ef67df208fca05b vendor/sdl_image/external/libjxl (v0.7.3-10-g2dac6356)",
+    " d81acaca8e037d9514f3211045c77e7467bcb814 vendor/sdl_image/external/libjxl/testdata (d81acac)",
+    " 74f08a53cdf7138867bc3bf88e6762ebe43b53a4 vendor/sdl_image/external/libjxl/third_party/brotli (go/cbrotli/v1.1.0-2-g74f08a5)",
+    " 58d77fa8070e8cec2dc1ed015d66b454c8d78850 vendor/sdl_image/external/libjxl/third_party/googletest (release-1.8.0-2986-g58d77fa8)",
+    " 86a01250cb32386f3c8fc4906f9805db12635df1 vendor/sdl_image/external/libjxl/third_party/highway (1.2.0-4-g86a01250)",
+    " 65c63bf549d78253c14b30b3d62cb668bbbe612c vendor/sdl_image/external/libjxl/third_party/lcms (lcms2.9rc1-45-g65c63bf)",
+    " a40189cf881e9f0db80511c382292a5604c3c3d1 vendor/sdl_image/external/libjxl/third_party/libpng (libpng-1.6.31-master-signed-1073-ga40189cf8)",
+    " 94e0df6d0f8b44228de5be0ff35efb9f946a13c9 vendor/sdl_image/external/libjxl/third_party/sjpeg (94e0df6)",
+    " 64374756e03700d649f897dbd98c95e78c30c7da vendor/sdl_image/external/libjxl/third_party/skcms (6437475)",
+    " 09155eaa2f9270dc4ed1fa13e2b4b2613e6e4851 vendor/sdl_image/external/libjxl/third_party/zlib (v1.3)",
+    " 4b9e071b2fc4216369372a3ed260d335dd036f15 vendor/sdl_image/external/libpng (v1.6.58-4-g4b9e071b2)",
+    " 9a51cfd52c32d0b0b8ff718387e4290cab887d5e vendor/sdl_image/external/libtiff (v4.7.2-3-g9a51cfd5)",
+    " 0b4545ee8210ff72ec47ab1ad56c2e7460663d11 vendor/sdl_image/external/libwebp (v1.3.2-11-g0b4545ee)",
+    " 0e68590d11e618d60866aa86629fbda128bc068a vendor/sdl_image/external/zlib (v1.3.1-4-g0e68590)",
+    " a42434b8c96daaf7650dbd0befe480c090d1c2eb vendor/sdl_ttf (release-3.2.0-107-ga42434b)",
+    " 535d2993d2cab67cc8b270132b1b1bcb62f269aa vendor/sdl_ttf/external/freetype (VER-2-13-3-8-g535d2993d)",
+    " 72dfcc858c040c54a6a0b88fcb7e70ee186d3167 vendor/sdl_ttf/external/freetype/subprojects/dlg (v0.2.2-49-g72dfcc8)",
+    " 950d232cdcd29e2e83a2099307e5624a8f1aa937 vendor/sdl_ttf/external/harfbuzz (8.5.0-17-g950d232cd)",
+    " 96e115bc0f837dbccf260a05ad23978b6b54f731 vendor/sdl_ttf/external/plutosvg (v0.0.8-2-g96e115b)",
+    " bbd91f0d06a71491691b36330f29dffa4af87ccf vendor/sdl_ttf/external/plutosvg/plutovg (v1.3.3)",
+    " a6e0d682d08a5e993694ad82a23e5d45e831f315 vendor/sdl_ttf/external/plutovg (v1.1.0-4-ga6e0d68)",
+    " 05cceee0df3b8d7c6fa87e9638af311dbabc63cb vendor/tracy (v0.13.1)"
+  ]
+}

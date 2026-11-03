@@ -35,6 +35,7 @@
 #include <type_traits>
 
 namespace gargantuan {
+	class InputService;
 	struct CharacterRootMotionMetrics {
 		std::uint64_t Requests = 0;
 		std::uint64_t Accepted = 0;
@@ -61,6 +62,7 @@ namespace gargantuan {
 		std::shared_ptr<ProcessService> ProcessService;
 		std::shared_ptr<UserInputService> UserInputService;
 		std::shared_ptr<ActionMap> ActionMap;
+		std::shared_ptr<InputService> Input;
 		std::shared_ptr<AssetService> Assets;
 		std::shared_ptr<CharacterControlService> CharacterControl;
 		std::unique_ptr<AnimationRuntime> Animation;

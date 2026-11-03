@@ -5145,15 +5145,18 @@ namespace {
 			}) &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "ReplicatedStorage" && Child["Name"] == "ReplicatedStorage";
+			}) &&
+			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
+				return Child["ClassName"] == "InputService" && Child["Name"] == "InputService";
 			}),
-			"CreateProject immediately persists canonical Workspace, AssetService, Lighting, and ReplicatedStorage in project format v4");
+			"CreateProject immediately persists Workspace, AssetService, Lighting, ReplicatedStorage, and InputService in project format v4");
 		auto ExistingProjectCreate = call("CreateProject", {
 			{"Destination", CreatedRoot.string()}, {"Name", "Overwrite Attempt"}
 		}, "test-token");
 		Check(!ExistingProjectCreate["Ok"].get<bool>() && ExistingProjectCreate["Error"]["Code"] == "ExistingProject",
 			"CreateProject never overwrites an existing Gargantuan project");
 		auto CreatedSnapshot = call("GetSnapshot", Json::object(), "test-token");
-		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 5,
+		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 6,
 			"the minimum new project is immediately available through the normal authoritative snapshot path");
 		auto CreatedWorkspace = std::find_if(
 			CreatedSnapshot["Result"]["Snapshot"]["Objects"].begin(),

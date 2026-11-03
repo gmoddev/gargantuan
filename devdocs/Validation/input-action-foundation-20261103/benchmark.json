@@ -1,0 +1,728 @@
+{
+  "AllocationScope": "Ordinary executable C++ new/new[] requests during event evaluation, after warmup; aligned allocations excluded.",
+  "BaselineSource": "eb2ce26ab:src/services/ActionMap.cpp",
+  "MemoryScope": "Capacity-based storage estimates excluding allocator bookkeeping, temporary compiler storage, and Instance graphs.",
+  "Rows": [
+    {
+      "Actions": 16,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 176.0,
+        "AllocationsPerEvent": 2.0,
+        "EstimatedStorageBytes": 3464,
+        "EventNs": {
+          "P50": 200.0,
+          "P95": 300.0,
+          "P99": 300.0
+        }
+      },
+      "Bindings": 16,
+      "CompileEditUs": {
+        "P50": 63.0,
+        "P95": 64.4,
+        "P99": 68.3
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 0.0,
+        "EstimatedStorageBytes": 118824,
+        "EventNs": {
+          "P50": 100.0,
+          "P95": 100.0,
+          "P99": 100.0
+        }
+      },
+      "Contexts": 1,
+      "Distribution": "Spread",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 84.0,
+      "LegacyRemoveAddUs": {
+        "P50": 0.8,
+        "P95": 0.8,
+        "P99": 1.0
+      }
+    },
+    {
+      "Actions": 16,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 4248.0,
+        "AllocationsPerEvent": 35.0,
+        "EstimatedStorageBytes": 3464,
+        "EventNs": {
+          "P50": 7000.0,
+          "P95": 7700.0,
+          "P99": 8200.0
+        }
+      },
+      "Bindings": 16,
+      "CompileEditUs": {
+        "P50": 63.6,
+        "P95": 65.8,
+        "P99": 69.1
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 16.0,
+        "EstimatedStorageBytes": 118824,
+        "EventNs": {
+          "P50": 1100.0,
+          "P95": 1200.0,
+          "P99": 1300.0
+        }
+      },
+      "Contexts": 1,
+      "Distribution": "Dense",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 64.0,
+      "LegacyRemoveAddUs": {
+        "P50": 0.8,
+        "P95": 0.9,
+        "P99": 1.0
+      }
+    },
+    {
+      "Actions": 16,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 176.0,
+        "AllocationsPerEvent": 2.0,
+        "EstimatedStorageBytes": 3464,
+        "EventNs": {
+          "P50": 200.0,
+          "P95": 200.0,
+          "P99": 300.0
+        }
+      },
+      "Bindings": 16,
+      "CompileEditUs": {
+        "P50": 64.8,
+        "P95": 70.3,
+        "P99": 115.6
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 0.0,
+        "EstimatedStorageBytes": 118936,
+        "EventNs": {
+          "P50": 100.0,
+          "P95": 100.0,
+          "P99": 100.0
+        }
+      },
+      "Contexts": 8,
+      "Distribution": "Spread",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 44.0,
+      "LegacyRemoveAddUs": {
+        "P50": 0.8,
+        "P95": 1.0,
+        "P99": 1.3
+      }
+    },
+    {
+      "Actions": 16,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 4248.0,
+        "AllocationsPerEvent": 35.0,
+        "EstimatedStorageBytes": 3464,
+        "EventNs": {
+          "P50": 7000.0,
+          "P95": 7400.0,
+          "P99": 8000.0
+        }
+      },
+      "Bindings": 16,
+      "CompileEditUs": {
+        "P50": 66.3,
+        "P95": 72.0,
+        "P99": 84.7
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 16.0,
+        "EstimatedStorageBytes": 118936,
+        "EventNs": {
+          "P50": 1000.0,
+          "P95": 1200.0,
+          "P99": 1200.0
+        }
+      },
+      "Contexts": 8,
+      "Distribution": "Dense",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 45.4,
+      "LegacyRemoveAddUs": {
+        "P50": 0.8,
+        "P95": 1.0,
+        "P99": 2.5
+      }
+    },
+    {
+      "Actions": 16,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 176.0,
+        "AllocationsPerEvent": 2.0,
+        "EstimatedStorageBytes": 3464,
+        "EventNs": {
+          "P50": 200.0,
+          "P95": 300.0,
+          "P99": 300.0
+        }
+      },
+      "Bindings": 16,
+      "CompileEditUs": {
+        "P50": 71.3,
+        "P95": 77.5,
+        "P99": 93.0
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 0.0,
+        "EstimatedStorageBytes": 119320,
+        "EventNs": {
+          "P50": 100.0,
+          "P95": 100.0,
+          "P99": 100.0
+        }
+      },
+      "Contexts": 32,
+      "Distribution": "Spread",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 71.9,
+      "LegacyRemoveAddUs": {
+        "P50": 0.8,
+        "P95": 1.7,
+        "P99": 2.3
+      }
+    },
+    {
+      "Actions": 16,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 4248.0,
+        "AllocationsPerEvent": 35.0,
+        "EstimatedStorageBytes": 3464,
+        "EventNs": {
+          "P50": 7000.0,
+          "P95": 7400.0,
+          "P99": 8200.0
+        }
+      },
+      "Bindings": 16,
+      "CompileEditUs": {
+        "P50": 71.9,
+        "P95": 76.6,
+        "P99": 90.4
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 16.0,
+        "EstimatedStorageBytes": 119320,
+        "EventNs": {
+          "P50": 1000.0,
+          "P95": 1100.0,
+          "P99": 1200.0
+        }
+      },
+      "Contexts": 32,
+      "Distribution": "Dense",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 70.6,
+      "LegacyRemoveAddUs": {
+        "P50": 0.8,
+        "P95": 1.0,
+        "P99": 1.8
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 1056.0,
+        "AllocationsPerEvent": 17.0,
+        "EstimatedStorageBytes": 22104,
+        "EventNs": {
+          "P50": 5200.0,
+          "P95": 5300.0,
+          "P99": 5900.0
+        }
+      },
+      "Bindings": 128,
+      "CompileEditUs": {
+        "P50": 158.8,
+        "P95": 170.4,
+        "P99": 197.8
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 5.0,
+        "EstimatedStorageBytes": 135400,
+        "EventNs": {
+          "P50": 400.0,
+          "P95": 500.0,
+          "P99": 500.0
+        }
+      },
+      "Contexts": 1,
+      "Distribution": "Spread",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 106.0,
+      "LegacyRemoveAddUs": {
+        "P50": 1.7,
+        "P95": 2.3,
+        "P99": 4.9
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 32614.0,
+        "AllocationsPerEvent": 158.0,
+        "EstimatedStorageBytes": 22104,
+        "EventNs": {
+          "P50": 113500.0,
+          "P95": 121000.0,
+          "P99": 139500.0
+        }
+      },
+      "Bindings": 128,
+      "CompileEditUs": {
+        "P50": 124.8,
+        "P95": 171.6,
+        "P99": 187.4
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 128.0,
+        "EstimatedStorageBytes": 135400,
+        "EventNs": {
+          "P50": 9200.0,
+          "P95": 10500.0,
+          "P99": 11800.0
+        }
+      },
+      "Contexts": 1,
+      "Distribution": "Dense",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 116.0,
+      "LegacyRemoveAddUs": {
+        "P50": 1.7,
+        "P95": 2.1,
+        "P99": 2.9
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 1056.0,
+        "AllocationsPerEvent": 17.0,
+        "EstimatedStorageBytes": 22104,
+        "EventNs": {
+          "P50": 5300.0,
+          "P95": 5300.0,
+          "P99": 6000.0
+        }
+      },
+      "Bindings": 128,
+      "CompileEditUs": {
+        "P50": 164.1,
+        "P95": 172.7,
+        "P99": 239.6
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 5.0,
+        "EstimatedStorageBytes": 135512,
+        "EventNs": {
+          "P50": 400.0,
+          "P95": 500.0,
+          "P99": 500.0
+        }
+      },
+      "Contexts": 8,
+      "Distribution": "Spread",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 154.5,
+      "LegacyRemoveAddUs": {
+        "P50": 1.8,
+        "P95": 2.0,
+        "P99": 3.9
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 32614.0,
+        "AllocationsPerEvent": 158.0,
+        "EstimatedStorageBytes": 22104,
+        "EventNs": {
+          "P50": 113400.0,
+          "P95": 119300.0,
+          "P99": 133700.0
+        }
+      },
+      "Bindings": 128,
+      "CompileEditUs": {
+        "P50": 175.6,
+        "P95": 194.7,
+        "P99": 227.4
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 128.0,
+        "EstimatedStorageBytes": 135512,
+        "EventNs": {
+          "P50": 8400.0,
+          "P95": 9700.0,
+          "P99": 11300.0
+        }
+      },
+      "Contexts": 8,
+      "Distribution": "Dense",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 107.0,
+      "LegacyRemoveAddUs": {
+        "P50": 1.8,
+        "P95": 2.2,
+        "P99": 3.4
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 1056.0,
+        "AllocationsPerEvent": 17.0,
+        "EstimatedStorageBytes": 22104,
+        "EventNs": {
+          "P50": 5300.0,
+          "P95": 5300.0,
+          "P99": 5900.0
+        }
+      },
+      "Bindings": 128,
+      "CompileEditUs": {
+        "P50": 105.8,
+        "P95": 182.7,
+        "P99": 192.4
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 5.0,
+        "EstimatedStorageBytes": 135896,
+        "EventNs": {
+          "P50": 400.0,
+          "P95": 400.0,
+          "P99": 500.0
+        }
+      },
+      "Contexts": 32,
+      "Distribution": "Spread",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 159.1,
+      "LegacyRemoveAddUs": {
+        "P50": 1.0,
+        "P95": 2.9,
+        "P99": 3.3
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 32614.0,
+        "AllocationsPerEvent": 158.0,
+        "EstimatedStorageBytes": 22104,
+        "EventNs": {
+          "P50": 113500.0,
+          "P95": 119300.0,
+          "P99": 135900.0
+        }
+      },
+      "Bindings": 128,
+      "CompileEditUs": {
+        "P50": 177.4,
+        "P95": 192.4,
+        "P99": 232.8
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 128.0,
+        "EstimatedStorageBytes": 135896,
+        "EventNs": {
+          "P50": 8200.0,
+          "P95": 9400.0,
+          "P99": 10900.0
+        }
+      },
+      "Contexts": 32,
+      "Distribution": "Dense",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 165.1,
+      "LegacyRemoveAddUs": {
+        "P50": 1.7,
+        "P95": 2.4,
+        "P99": 3.5
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 4392.0,
+        "AllocationsPerEvent": 38.0,
+        "EstimatedStorageBytes": 63144,
+        "EventNs": {
+          "P50": 53200.0,
+          "P95": 54600.0,
+          "P99": 59600.0
+        }
+      },
+      "Bindings": 512,
+      "CompileEditUs": {
+        "P50": 368.2,
+        "P95": 375.7,
+        "P99": 379.1
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 19.0,
+        "EstimatedStorageBytes": 158440,
+        "EventNs": {
+          "P50": 1600.0,
+          "P95": 1800.0,
+          "P99": 2100.0
+        }
+      },
+      "Contexts": 1,
+      "Distribution": "Spread",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 201.8,
+      "LegacyRemoveAddUs": {
+        "P50": 4.1,
+        "P95": 4.2,
+        "P99": 4.7
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 46349.0,
+        "AllocationsPerEvent": 162.0,
+        "EstimatedStorageBytes": 63144,
+        "EventNs": {
+          "P50": 370300.0,
+          "P95": 391100.0,
+          "P99": 435200.0
+        }
+      },
+      "Bindings": 512,
+      "CompileEditUs": {
+        "P50": 398.6,
+        "P95": 441.0,
+        "P99": 604.0
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 512.0,
+        "EstimatedStorageBytes": 158440,
+        "EventNs": {
+          "P50": 14800.0,
+          "P95": 19600.0,
+          "P99": 22000.0
+        }
+      },
+      "Contexts": 1,
+      "Distribution": "Dense",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 359.0,
+      "LegacyRemoveAddUs": {
+        "P50": 4.1,
+        "P95": 4.6,
+        "P99": 5.2
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 4392.0,
+        "AllocationsPerEvent": 38.0,
+        "EstimatedStorageBytes": 63144,
+        "EventNs": {
+          "P50": 53200.0,
+          "P95": 55100.0,
+          "P99": 61000.0
+        }
+      },
+      "Bindings": 512,
+      "CompileEditUs": {
+        "P50": 374.3,
+        "P95": 400.9,
+        "P99": 502.7
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 19.0,
+        "EstimatedStorageBytes": 158552,
+        "EventNs": {
+          "P50": 1300.0,
+          "P95": 1500.0,
+          "P99": 1900.0
+        }
+      },
+      "Contexts": 8,
+      "Distribution": "Spread",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 352.7,
+      "LegacyRemoveAddUs": {
+        "P50": 4.1,
+        "P95": 5.0,
+        "P99": 8.0
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 46349.0,
+        "AllocationsPerEvent": 162.0,
+        "EstimatedStorageBytes": 63144,
+        "EventNs": {
+          "P50": 370000.0,
+          "P95": 390500.0,
+          "P99": 429700.0
+        }
+      },
+      "Bindings": 512,
+      "CompileEditUs": {
+        "P50": 433.4,
+        "P95": 494.4,
+        "P99": 529.0
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 512.0,
+        "EstimatedStorageBytes": 158552,
+        "EventNs": {
+          "P50": 14200.0,
+          "P95": 19100.0,
+          "P99": 23000.0
+        }
+      },
+      "Contexts": 8,
+      "Distribution": "Dense",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 405.9,
+      "LegacyRemoveAddUs": {
+        "P50": 4.1,
+        "P95": 5.1,
+        "P99": 7.6
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 4392.0,
+        "AllocationsPerEvent": 38.0,
+        "EstimatedStorageBytes": 63144,
+        "EventNs": {
+          "P50": 53200.0,
+          "P95": 58000.0,
+          "P99": 70000.0
+        }
+      },
+      "Bindings": 512,
+      "CompileEditUs": {
+        "P50": 377.8,
+        "P95": 398.7,
+        "P99": 433.5
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 19.0,
+        "EstimatedStorageBytes": 158936,
+        "EventNs": {
+          "P50": 1200.0,
+          "P95": 1500.0,
+          "P99": 2000.0
+        }
+      },
+      "Contexts": 32,
+      "Distribution": "Spread",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 354.2,
+      "LegacyRemoveAddUs": {
+        "P50": 4.1,
+        "P95": 4.8,
+        "P99": 7.8
+      }
+    },
+    {
+      "Actions": 128,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 46349.0,
+        "AllocationsPerEvent": 162.0,
+        "EstimatedStorageBytes": 63144,
+        "EventNs": {
+          "P50": 369400.0,
+          "P95": 389600.0,
+          "P99": 428700.0
+        }
+      },
+      "Bindings": 512,
+      "CompileEditUs": {
+        "P50": 441.7,
+        "P95": 496.4,
+        "P99": 559.4
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 512.0,
+        "EstimatedStorageBytes": 158936,
+        "EventNs": {
+          "P50": 14000.0,
+          "P95": 18900.0,
+          "P99": 23700.0
+        }
+      },
+      "Contexts": 32,
+      "Distribution": "Dense",
+      "EditedBucketsTotal": 400,
+      "Events": 20000,
+      "InitialCompileUs": 266.2,
+      "LegacyRemoveAddUs": {
+        "P50": 4.1,
+        "P95": 5.4,
+        "P99": 8.2
+      }
+    }
+  ],
+  "Scope": "Native evaluator only; UIS dispatch, Instance snapshot construction, and Luau subscribers excluded. Baseline includes empty native signals; compiled transition dispatch excluded. Legacy has no contexts: compiled partitions use passthrough semantics."
+}
