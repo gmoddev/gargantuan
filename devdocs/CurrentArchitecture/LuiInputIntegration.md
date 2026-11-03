@@ -50,7 +50,7 @@ dependencies plus Engine were built; unused ALL targets were avoided.
 | All configured CTests | All 82 executed; 81 without observed intermittency, one unresolved SoftBody gate |
 | Initial full run | 77 PASS / 5 FAIL, 205.10 s |
 | Four script failures | PASS after restoring existing controlled Python/Git to process-local PATH; no source or binary changes |
-| SoftBody isolated repetition | PASS, 0.36 s; initial failure retained, KI-011 remains open |
+| SoftBody isolated repetition | PASS, 0.36 s; initial failure retained, KI-011 remained open at this checkpoint |
 
 This is **selected Studio/Input contract qualification**, not a clean full-Engine
 gate. Do not promote/merge on an invented 82/82 result. GNS-enabled/hosted,
@@ -92,8 +92,10 @@ complete LastTest.log and extracted 18-row benchmark JSON remain authoritative
 for smoke output. SHA manifests cover changed sources, generated files and
 binaries before/after testing.
 
-Resume from source `942c4f8d9` without resetting the cache or changing production
-networking. Resolve KI-011 with a deterministic fixture, then rerun applicable
-gates; retain every original result. Studio may use the selected contract-qualified
+This receipt remains bound to source `942c4f8d9`; later
+[KI-011 deterministic lifecycle qualification](../Validation/ki011-20261103/README.md)
+corrects the fixture premise without rewriting this original result. Retain
+the cache and all historical evidence, and run applicable gates for each new
+source. Studio may use the selected contract-qualified
 FD8 candidate on its isolated development branch, while mainline promotion and
 release remain blocked. The bounded protocol is [PlayInputInspection.md](PlayInputInspection.md).

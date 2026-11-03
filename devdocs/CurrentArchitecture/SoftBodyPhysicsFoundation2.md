@@ -7,6 +7,7 @@ related_code:
   - include/gargantuan/physics/SoftBodyBackend.hpp
   - src/physics/SoftBodyBackend.cpp
   - src/physics/XpbdSoftBodyBackend.cpp
+  - src/physics/SoftBodyTestHooks.hpp
   - include/gargantuan/classes/DeformableBody.hpp
   - src/classes/DeformableBody.cpp
   - src/classes/WorldRoot.cpp
@@ -232,9 +233,19 @@ recovery, attachments, and rigid collision.
 - the Foundation 1 persistence/reload, Play/Stop, renderer restart, and world
   restart paths.
 
-The tests deliberately force a large High-quality job before racing lifecycle
-operations. Same-build/platform deterministic equality is retained. Cross-ISA
-or cross-compiler bitwise equality is still not promised.
+The lifecycle tests retain the large High-quality fixtures but use the private
+native test factory to hold completed real solver jobs before merge, outside
+the backend mutex. This establishes that the old body was captured before
+disable/reconfigure/destroy/reuse/shutdown. The stale-result assertions remain
+mandatory, with additional empty-publication and unchanged-current-state checks.
+A separate admission-only counterexample proves that `HasInFlightStep` reports
+admission, not ownership of a particular body snapshot. The ordinary factory
+installs no hooks. Five-second barrier deadlines bound test synchronization;
+RAII releases and joins on failure, rather than relying on solver duration or
+blind retries. [KI-011 qualification](../Validation/ki011-20261103/README.md)
+records the 2026-11-03 serial/concurrent evidence and original failure. Same-build
+deterministic equality is retained. Cross-ISA or cross-compiler bitwise equality
+is still not promised.
 
 ## Release benchmark method
 
