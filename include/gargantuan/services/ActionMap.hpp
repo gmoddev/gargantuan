@@ -8,13 +8,18 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
-#include <vector>
+#include <unordered_set>
 
 namespace gargantuan {
 	class Engine;
 	class UserInputService;
+	class InputService;
+	class InputContext;
+	class InputAction;
+	class InputBinding;
 	struct ActionMapTestAccess;
 
+	// Compatibility names and binding IDs over InputService's canonical graph.
 	class ActionMap : public Instance {
 		I_ActionMap;
 
@@ -22,32 +27,21 @@ namespace gargantuan {
 		static constexpr std::size_t MaximumActions = 128;
 		static constexpr std::size_t MaximumBindings = 512;
 		static constexpr std::size_t MaximumActionNameBytes = 64;
+		~ActionMap() override;
 
 	  private:
-		enum class BindingKind : std::uint8_t { Key, MouseButton, PointerDelta };
-		struct Binding {
-			int Id = 0;
-			std::string ActionName;
-			BindingKind Kind = BindingKind::Key;
-			Enums::KeyCode KeyCode = Enums::KeyCode::None;
-			Enums::UserInputType InputType = Enums::UserInputType::None;
-			float ScalarScale = 1.0f;
-			Vector2 VectorScale{1.0f, 1.0f};
-			int Priority = 0;
-			bool Consume = false;
-		};
-
-		struct ActionState {
-			float Scalar = 0.0f;
-			Vector2 Vector;
-			bool Down = false;
-		};
-
-		std::weak_ptr<UserInputService> InputService;
-		std::vector<Binding> Bindings;
-		std::unordered_map<std::string, ActionState> States;
+		std::shared_ptr<InputService> LocalInput;
+		std::weak_ptr<InputService> RuntimeInput;
+		std::weak_ptr<InputContext> LegacyContext;
+		std::unordered_map<int, std::weak_ptr<InputBinding>> Bindings;
+		std::unordered_map<std::string, std::weak_ptr<InputAction>> OwnedActions;
+		std::unordered_map<std::string, std::weak_ptr<InputAction>> NamedActions;
+		std::unordered_map<ObjectId, std::string> PublishedNames;
+		SignalConnection::Pointer TransitionConnection;
+		std::uint64_t CachedDefinitionRevision = 0;
+		bool NamesNeedPublication = false;
+		bool RefreshingNames = false;
 		int NextBindingId = 1;
-
 		friend class Engine;
 		friend struct ActionMapTestAccess;
 		void AttachInputService(const std::shared_ptr<UserInputService> &Service);
@@ -55,8 +49,12 @@ namespace gargantuan {
 		void ProcessConsumedRelease(const HostEvent &Event);
 		void EndFrame();
 		void Reset();
-		[[nodiscard]] int AddBinding(Binding Value);
-		void RefreshAction(const std::string &ActionName);
-		[[nodiscard]] bool IsBindingActive(const Binding &Value) const;
+		[[nodiscard]] std::shared_ptr<InputService> GetInput();
+		[[nodiscard]] std::shared_ptr<InputContext> GetLegacyContext();
+		[[nodiscard]] std::shared_ptr<InputAction> GetAction(const std::string &Name);
+		[[nodiscard]] int
+		AddBinding(const std::string &Name, const std::shared_ptr<InputBinding> &Binding, bool Pointer);
+		void RefreshNames(ObjectId CurrentTransition = {});
+		void CleanBindings();
 	};
 }

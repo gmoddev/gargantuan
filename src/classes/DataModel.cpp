@@ -9,6 +9,7 @@
 #include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/EntitlementService.hpp"
 #include "gargantuan/services/InteractionService.hpp"
+#include "gargantuan/services/InputService.hpp"
 #include "gargantuan/services/Lighting.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/ProcessService.hpp"
@@ -112,6 +113,9 @@ namespace gargantuan {
 		(void)GetService("Workspace");
 		(void)GetService("AssetService");
 		(void)GetService("Lighting");
+		// The editor cannot insert protected services through CreateInstance.
+		// Establish a visible, persistent input root before publishing revision 1.
+		GetService("InputService")->SetArchivable(true);
 		AuthoritativeRevision = InitialProjectRevision;
 		Transactions.Reset();
 	}
@@ -137,6 +141,7 @@ namespace gargantuan {
 			{"CharacterControlService", SchemaId::FromNativeName("Engine", "CharacterControlService")},
 			{"EntitlementService", SchemaId::FromNativeName("Engine", "EntitlementService")},
 			{"InteractionService", SchemaId::FromNativeName("Engine", "InteractionService")},
+			{"InputService", SchemaId::FromNativeName("Engine", "InputService")},
 			{"Lighting", SchemaId::FromNativeName("Engine", "Lighting")},
 			{"Players", SchemaId::FromNativeName("Engine", "Players")},
 			{"ProcessService", SchemaId::FromNativeName("Engine", "ProcessService")},

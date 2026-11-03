@@ -1390,6 +1390,14 @@ namespace gargantuan {
 						if (!property->IsStack(L, 3))
 							luaL_error(L, "Cannot set %s.%s: expected %s, got %s",
 								ClassName.c_str(), key, property->ReflectedTypedef.c_str(), luaL_typename(L, 3));
+						// Validate enum identity before native conversion loses the source tag.
+						if (property->NativeEnumType && StackValue<EnumItem>::Is(L, 3)) {
+							const auto Item = StackValue<EnumItem>::From(L, 3);
+							if (!Item.EnumType || Item.EnumType->Name != *property->NativeEnumType ||
+								!Item.EnumType->FromValue(Item.Value))
+								luaL_error(L, "Cannot set %s.%s: expected Enum.%s",
+									ClassName.c_str(), key, property->NativeEnumType->c_str());
+						}
 						auto value = property->FromStack(L, 3);
 						const auto status = self->ApplyPropertyMutation(key, value);
 						if (status != MutationStatus::Success)

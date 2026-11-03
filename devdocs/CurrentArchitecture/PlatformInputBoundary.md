@@ -1,12 +1,14 @@
 ---
 status: current
 owner: runtime
-last_verified: 2026-08-23
+last_verified: 2026-11-03
 related_code:
   - include/gargantuan/platform/HostEvent.hpp
   - src/platform/sdl/
   - src/Engine.cpp
   - src/services/ActionMap.cpp
+  - src/services/InputService.cpp
+  - src/input/CompiledInputGraph.cpp
   - src/services/UserInputService.cpp
   - src/classes/Camera.cpp
 related_adrs: []
@@ -18,7 +20,7 @@ related_adrs: []
 
 The executable's SDL host adapter owns `SDL_Event` polling and translates one
 event at a time into the closed Gargantuan `HostEvent` variant. `Engine`,
-`UserInputService`, `ActionMap`, `InputObject`, and `Camera` consume only these engine-owned
+`UserInputService`, `InputService`, `InputObject`, and `Camera` consume only these engine-owned
 values:
 
 ```text
@@ -28,7 +30,7 @@ SDLHost / SDL_Event
     -> Engine::ProcessEvent
        |- UserInputService physical state
        |- GuiRuntime routed input
-       |- ActionMap
+       |- InputService (single evaluator; ActionMap compatibility facade)
        `- native Camera controller when unconsumed
 ```
 
@@ -111,17 +113,28 @@ escaping the adapter.
 
 `Engine::ProcessEvent` handles window lifecycle, records physical state in
 `UserInputService`, routes against the last coherent `GuiRuntime` snapshot, then
-continues to `ActionMap` and the current native Camera controller only when the
-GUI did not consume the event. A consuming ActionMap binding prevents only
-lower-level host/camera routing; it does not hide the event from
-`UserInputService`. Focus loss clears physical and semantic active state, fires
+continues to `InputService` with the GUI-consumed flag. The evaluator records
+physical changes even when GUI routing blocks semantic activation, so consumed
+key and modifier releases still retire active chords. Only unconsumed input
+continues to the current native Camera controller. A consuming legacy ActionMap
+binding prevents lower-level host/camera routing while retaining sibling legacy
+action evaluation; consuming canonical contexts also suppress lower contexts.
+Neither mode hides input from `UserInputService`.
+Focus loss clears physical and semantic active state, fires
 the normal end/focus signals, retires GUI capture/composition, and releases
 relative-pointer and native text-input modes.
 
-`ActionMap` is the gameplay-semantic layer for keyboard, normalized gamepad
-buttons, mouse buttons, and relative pointer-delta bindings. Bindings are bounded, support multiple sources
-per action, carry priority/consumption metadata, and expose digital, scalar, and
-frame-transient vector state. The shipped default binding module declares
+`InputService` is the gameplay-semantic layer for keyboard, normalized gamepad
+buttons, mouse buttons, and relative pointer-delta bindings. Persistent
+`InputContext`, `InputAction`, and `InputBinding` Instances compile into one
+bounded native indexed graph. `ActionMap` preserves the existing name-based
+API through that same graph. Bindings support multiple sources per action,
+up to four side-specific keyboard modifiers, deterministic priority and
+consumption, and digital, scalar, and frame-transient vector state. Canonical
+chords admit on a fresh primary press with required modifiers already held;
+repeat, focus, cancellation, held-key edits, and inspection follow the
+[Input action foundation](InputActions.md) contract.
+The shipped default binding module declares
 movement, jump, orbit, and Look actions. Binding policy is not part of the host
 adapter and the low-level UserInputService route remains public. See
 [Player runtime](PlayerRuntime.md) for exact API and lifecycle semantics.

@@ -104,6 +104,7 @@ rather than a duplicated numeric count in this document, is authoritative.
 | Soft-body runtime and bounded Release smoke | `gargantuan_soft_body_physics`, `gargantuan_soft_body_physics_benchmark_smoke` |
 | Platform input | `gargantuan_platform_input_boundary` |
 | Player runtime | `gargantuan_player_runtime` |
+| Persistent input actions, authoring/history, chords, local diagnostics, and evaluator comparison smoke | `gargantuan_input_action`, `gargantuan_input_action_benchmark_smoke` |
 | Provider-neutral entitlement semantics, Luau authority, vectors, headless lifecycle, and provider overhead smoke | `gargantuan_entitlement_service`, `gargantuan_entitlement_provider_benchmark_smoke` |
 | GUI retained runtime and bounded Release smoke | `gargantuan_gui_foundation`, `gargantuan_gui_foundation_benchmark_smoke` |
 | PreRun bootstrap | `gargantuan_prerun_bootstrap` |

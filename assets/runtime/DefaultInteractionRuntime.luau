@@ -1,10 +1,19 @@
 local ActionMap = game:GetService("ActionMap")
 local InteractionService = game:GetService("InteractionService")
 
-local BindingIds = {
-	ActionMap:BindKey("Interact", Enum.KeyCode.E, 1, 100, true),
-	ActionMap:BindKey("Interact", Enum.KeyCode.ButtonA, 1, 100, true),
-}
+local BindingIds = {}
+local HasInteract = false
+for _, Context in game:GetService("InputService"):GetChildren() do
+	if Context:IsA("InputContext") then
+		for _, Action in Context:GetChildren() do
+			if Action:IsA("InputAction") and Action.Name == "Interact" then HasInteract = true end
+		end
+	end
+end
+if not HasInteract then
+	table.insert(BindingIds, ActionMap:BindKey("Interact", Enum.KeyCode.E, 1, 100, true))
+	table.insert(BindingIds, ActionMap:BindKey("Interact", Enum.KeyCode.ButtonA, 1, 100, true))
+end
 
 local Connections = {}
 local Root = nil

@@ -1,0 +1,36 @@
+{
+    "SourceDigest":  "1c954844bc007637c43071a2accf18ad579131e8b361b7616e9d9f9d972525cc",
+    "SourceCount":  31,
+    "GeneratedCount":  132,
+    "VerifiedUtc":  "2026-11-03T07:31:42.1352761Z",
+    "Binaries":  [
+                     {
+                         "Path":  "gargantuan_input_action_tests.exe",
+                         "Sha256":  "05519f4b91ce3f48a1c71f619ad010750d3a12be9c6e6e9b3d03984ad5d777dc"
+                     },
+                     {
+                         "Path":  "gargantuan_input_action_benchmark.exe",
+                         "Sha256":  "7162266abc5c0d88ec2728e82f54d030cd3ae3857add38edadd3b7eaadfa2a38"
+                     },
+                     {
+                         "Path":  "gargantuan_foundation_tests.exe",
+                         "Sha256":  "018f92dc097b269a8d7d29c3e4814718adc2a38fa8784b6a9fb07ce043dd323c"
+                     },
+                     {
+                         "Path":  "gargantuan_player_runtime_tests.exe",
+                         "Sha256":  "3c0d6e2854f5352b49db15f6fee421cf6fd4078a4f246a52da7094b80eab3bc2"
+                     },
+                     {
+                         "Path":  "gargantuan_platform_input_boundary_tests.exe",
+                         "Sha256":  "443429fb3af30f8f9d283caf328a0f764cc492ff2c361d2f411e072d59d17a04"
+                     },
+                     {
+                         "Path":  "gargantuan_interaction_foundation_tests.exe",
+                         "Sha256":  "d291a0237077bf44fc04656b4d75fbfb326a46ad93406aa3feb84cd07429e627"
+                     },
+                     {
+                         "Path":  "gargantuan_gui_foundation_tests.exe",
+                         "Sha256":  "6e84110bd10917913cb64b373f4f23275fb45aa265acb33ac07dffa3278ea38d"
+                     }
+                 ]
+}

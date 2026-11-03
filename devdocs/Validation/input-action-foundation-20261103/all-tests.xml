@@ -1,0 +1,679 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="Win32-ninja"
+	tests="54"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname="HostPC"
+	time="45"
+	timestamp="2026-11-03T02:32:20"
+	>
+	<testcase name="gargantuan_runtime_host_roles" classname="gargantuan_runtime_host_roles" time="0.368539" status="run">
+		<properties>
+			<property name="cmake_labels" value="cli;host;runtime;security"/>
+		</properties>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="gargantuan_shader_tool_validation" classname="gargantuan_shader_tool_validation" time="0.0459506" status="run">
+		<properties>
+			<property name="cmake_labels" value="build;shader"/>
+		</properties>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="gargantuan_packaged_shaders" classname="gargantuan_packaged_shaders" time="0.0289478" status="run">
+		<properties>
+			<property name="cmake_labels" value="build;packaging;shader"/>
+		</properties>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="gargantuan_content_availability" classname="gargantuan_content_availability" time="1.80878" status="run">
+		<properties>
+			<property name="cmake_labels" value="content;lifecycle;packaging;runtime;security"/>
+		</properties>
+		<system-out>[Content:Ownership] forced_address_reuse=0 object_id_bytes=8 pointer_bytes=8
+[Content:DecodedBoundary] charge=2122096 limit=4244191 current=2122096 high_water=2122096 deferrals=1
+[Content:DecodedBoundary] charge=2122096 limit=4244192 current=4244192 high_water=4244192 deferrals=0
+[Content:DecodedBoundary] charge=2122096 limit=4244193 current=4244192 high_water=4244192 deferrals=0
+content availability foundation tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_content_ownership" classname="gargantuan_content_ownership" time="0.0417939" status="run">
+		<properties>
+			<property name="cmake_labels" value="content;lifecycle;runtime;security"/>
+		</properties>
+		<system-out>[Content:Ownership] forced_address_reuse=1 object_id_bytes=8 pointer_bytes=8
+</system-out>
+	</testcase>
+	<testcase name="GameSessionTests" classname="GameSessionTests" time="14.2593" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>[Network:BurstTest] ready=192 accepted=192 removed=0 rejected=0 selected=1408 committed=1408 cap=256 capTicks=1 ticks=18
+[Network:JournalBudgetTest] ticks=13 read=6144 globalHighWater=512 peerHighWater=32 remaining=0
+[Network:LateHandoff] tick=5 producer=Gchr accepted=1 sent=1 sentAfterProduction=1 handoffMaxMs=0.0054 flushes=2
+[Network:LateHandoff] tick=81 producer=Gchr accepted=1 sent=1 sentAfterProduction=1 handoffMaxMs=0.0537 flushes=2
+[Network:LateHandoff] tick=81 producer=RemoteEventReliable accepted=2 sent=2 sentAfterProduction=2 handoffMaxMs=0.0069 flushes=2
+[Network:LateHandoff] tick=87 producer=Gchr accepted=1 sent=1 sentAfterProduction=1 handoffMaxMs=0.0047 flushes=2
+[Network:LateHandoff] tick=93 producer=Gchr accepted=1 sent=1 sentAfterProduction=1 handoffMaxMs=0.0052 flushes=2
+[Network:LateHandoff] tick=99 producer=Gchr accepted=1 sent=1 sentAfterProduction=1 handoffMaxMs=0.0049 flushes=2
+[Network:LateHandoff] tick=105 producer=Gchr accepted=1 sent=1 sentAfterProduction=1 handoffMaxMs=0.005 flush...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="ContentScaleUnwindTests" classname="ContentScaleUnwindTests" time="4.51454" status="run">
+		<properties>
+			<property name="cmake_labels" value="content;lifecycle"/>
+		</properties>
+		<system-out>-- Content exception cleanup: 100 same-process iterations passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_renderer_projection_headless" classname="gargantuan_renderer_projection_headless" time="0.0352108" status="run">
+		<properties>
+			<property name="cmake_labels" value="headless;renderer"/>
+		</properties>
+		<system-out>Scenario,Objects,Backend,Frames,SetupMs,BackendStartupMs,ResizeRoundTripMs,FirstExtractionMs,ExtractionMeanMs,ExtractionP95Ms,FirstSubmissionMs,SubmissionMeanMs,SubmissionP95Ms,NominalDrawCalls,PublishedObjects,InitialProjectionCreated,ProjectionCreated,ProjectionUpdated,ProjectionRemoved,ProjectionUnchanged,ProjectionScanMeanMs,ChangedApplyMeanMs,RenderSubmitMeanMs,GpuFrameMeanMs,GpuFrameSamples,RendererMemoryBytes,ActualDrawCalls,BackendDriver,AutomaticInstancing,MaxAutomaticInstances,Shadows
+mixed,3,projection,2,0.377,0.000,0.000,0.020,0.003,0.004,0.012,0.001,0.001,NA,3,3,0,0,0,6,NA,NA,NA,NA,0,NA,NA,NA,NA,NA,off
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_renderer_backend_headless" classname="gargantuan_renderer_backend_headless" time="0.0261596" status="run">
+		<properties>
+			<property name="cmake_labels" value="headless;renderer"/>
+		</properties>
+		<system-out>Scenario,Objects,Backend,Frames,SetupMs,BackendStartupMs,ResizeRoundTripMs,FirstExtractionMs,ExtractionMeanMs,ExtractionP95Ms,FirstSubmissionMs,SubmissionMeanMs,SubmissionP95Ms,NominalDrawCalls,PublishedObjects,InitialProjectionCreated,ProjectionCreated,ProjectionUpdated,ProjectionRemoved,ProjectionUnchanged,ProjectionScanMeanMs,ChangedApplyMeanMs,RenderSubmitMeanMs,GpuFrameMeanMs,GpuFrameSamples,RendererMemoryBytes,ActualDrawCalls,BackendDriver,AutomaticInstancing,MaxAutomaticInstances,Shadows
+mixed,3,headless,2,0.427,0.003,0.000,0.022,0.003,0.004,0.034,0.005,0.005,NA,3,0,0,0,0,0,NA,NA,NA,NA,0,NA,NA,NA,NA,NA,off
+</system-out>
+	</testcase>
+	<testcase name="SerializationBenchmarkSmoke" classname="SerializationBenchmarkSmoke" time="0.144922" status="run">
+		<properties>
+			<property name="cmake_labels" value="runtime;serialization"/>
+		</properties>
+		<system-out>Backend,Workload,Items,Bytes,ConstructMs,EncodeMs,DecodeMs,CodecTotalMs,Status
+nlohmann,Snapshot,1000,351667,0.87,15.3082,30.7128,46.021,Ok
+nlohmann,Journal,100,18901,0.0365,0.9569,1.2052,2.1621,Ok
+nlohmann,EditorHost,100,11900,N/A,N/A,N/A,1.1299,Ok
+nlohmann,Project,100,21312,2.2041,1.6063,3.6842,7.5109,Ok
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_foundation" classname="gargantuan_foundation" time="1.3502" status="run">
+		<properties>
+			<property name="cmake_labels" value="editorhost;foundation;protocol;renderer;runtime;serialization"/>
+		</properties>
+		<system-out>ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Created Project.Workspace.AuthoringScript] runtime failure
+ERROR: [Runtime:Luau] [Instance.Workspace.DiagnosticSpam] error after spam
+METRIC transaction_single_property_ms 0.0405
+ME...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_asset_foundation" classname="gargantuan_asset_foundation" time="0.937524" status="run">
+		<properties>
+			<property name="cmake_labels" value="assets;editorhost;headless;renderer;runtime;serialization"/>
+		</properties>
+		<system-out>All Asset Foundation 2A tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_animation_foundation" classname="gargantuan_animation_foundation" time="6.11571" status="run">
+		<properties/>
+		<system-out>All Animation Foundation 1 and GPU publication tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_animation_foundation_benchmark_smoke" classname="gargantuan_animation_foundation_benchmark_smoke" time="11.6607" status="run">
+		<properties/>
+		<system-out>[Animation:Benchmark] scenario rigs=1 bones=64 tracks=1 anchorsPerRig=0 anchorJointOffset=0 totalMs=0.0459 runtimeMs=0.0260 trackAdvanceMs=0.0001 keyframeLookupMs=0.0000 interpolationMs=0.0000 trackBlendingMs=0.0000 bindFallbackMs=0.0000 sampleBlendMs=0.0044 hierarchyMs=0.0104 skinMatrixMs=0.0089 cpuSkinMs=0.0000 semanticJointCacheMs=0.0001 poseBuildMs=0.0001 policyMs=0.0001 poseWorkerCpuMs=0.0239 poseJobSchedulingMs=0.0000 poseJobWaitMs=0.0000 poseMergeMs=0.0006 publisherMs=0.0101 projectionMs=0.0083 bindingBookkeepingUs=0.0500 transformResolutionUs=0.0000 semanticStepUsP50=0.2000 semanticStepUsP95=0.3000 semanticStepUsP99=0.3000 soundUpdateUsP50=0.0000 soundUpdateUsP95=0.0000 soundUpdateUsP99=0.0000 interactionUpdateUsP50=0.0000 interactionUpdateUsP95=0.0000 interactionUpdateUsP99=0.0000 totalSemanticUsP50=0.2000 totalSemanticUsP95=0.3000 totalSemanticUsP99=0.3000 anchorResolutions=0 rigVisits=0 poseEvaluations=2 poseJobsScheduled=0 poseJobBatches=0 stalePoseJobDrops=0 poseWorkerCapacity=0 runtimeBufferAllo...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_audio_foundation" classname="gargantuan_audio_foundation" time="0.117565" status="run">
+		<properties>
+			<property name="cmake_labels" value="assets;audio;headless;lifecycle;runtime;serialization"/>
+		</properties>
+		<system-out>Audio Foundation 1 tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_audio_foundation_benchmark_smoke" classname="gargantuan_audio_foundation_benchmark_smoke" time="0.305994" status="run">
+		<properties>
+			<property name="cmake_labels" value="assets;audio;benchmark;headless;runtime"/>
+		</properties>
+		<system-out>LargestDecodeUs=77642
+AssetResolveIterations=1000 AssetResolveUs=437 ResolvedFrames=1440000000
+PlayToFirstSubmissionUs=33
+Case=1Voices Steps=20 WallUs=376 MixCpuUs=414 SteadyAllocations=0 Admissions=1 Rejections=0 SubmittedFrames=22528 QueueEmptyObservations=21
+PlayToFirstSubmissionUs=572
+Case=32Voices Steps=20 WallUs=10566 MixCpuUs=11594 SteadyAllocations=0 Admissions=32 Rejections=0 SubmittedFrames=22528 QueueEmptyObservations=21
+PlayToFirstSubmissionUs=2268
+Case=128Voices Steps=20 WallUs=41561 MixCpuUs=45593 SteadyAllocations=0 Admissions=128 Rejections=0 SubmittedFrames=22528 QueueEmptyObservations=21
+PlayToFirstSubmissionUs=4802
+Case=257Voices Steps=20 WallUs=69907 MixCpuUs=78151 SteadyAllocations=0 Admissions=256 Rejections=1 SubmittedFrames=22528 QueueEmptyObservations=21
+PlayToFirstSubmissionUs=374
+Case=MovingPositional32 Steps=20 WallUs=8016 MixCpuUs=8638 SteadyAllocations=22 Admissions=32 Rejections=0 SubmittedFrames=22528 QueueEmptyObservations=21
+PlayToFirstSubmissionUs=311
+Case=LoopingShortSfx St...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_renderer_publication" classname="gargantuan_renderer_publication" time="0.0379686" status="run">
+		<properties>
+			<property name="cmake_labels" value="headless;renderer;runtime"/>
+		</properties>
+		<system-out>[Render:PublicationTest] All incremental publication tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_environment_lighting_benchmark_smoke" classname="gargantuan_environment_lighting_benchmark_smoke" time="0.813117" status="run">
+		<properties>
+			<property name="cmake_labels" value="benchmark;environment;headless;renderer"/>
+		</properties>
+		<system-out>PartCount,Scenario,Frames,DirtyNanosecondsPerFrame,PublicationNanosecondsPerFrame,ApplicationNanosecondsPerFrame,EnvironmentChanges,ObjectOperations,TextureCreates,TextureUpdates,EstimatedCacheBytes,EstimatedSkyResidentBytes
+1000,Static,4,125,4675,2250,0,0,0,0,160240,0
+1000,ClockTime,4,3075,3950,1850,4,0,0,0,160240,0
+1000,Fog,4,1450,3300,1775,4,0,0,0,160240,0
+1000,Exposure,4,1750,3300,1650,4,0,0,0,160240,0
+1000,SkyReimport,4,3200,10150,2025,4,0,0,4,160368,128
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_optional_telemetry" classname="gargantuan_optional_telemetry" time="0.0337932" status="run">
+		<properties>
+			<property name="cmake_labels" value="fail-open;runtime;telemetry"/>
+		</properties>
+		<system-out>[Telemetry:Host] Optional telemetry is incompatible or unhealthy; telemetry is disabled.
+[Telemetry:Host] Optional telemetry is incompatible or unhealthy; telemetry is disabled.
+[Telemetry:Host] Optional telemetry is incompatible or unhealthy; telemetry is disabled.
+[Telemetry:Host] Optional telemetry is incompatible or unhealthy; telemetry is disabled.
+[Telemetry:Host] Optional telemetry is incompatible or unhealthy; telemetry is disabled.
+[Telemetry:Host] Optional telemetry is incompatible or unhealthy; telemetry is disabled.
+Optional telemetry host tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_physics_backend" classname="gargantuan_physics_backend" time="0.0622248" status="run">
+		<properties>
+			<property name="cmake_labels" value="physics;runtime"/>
+		</properties>
+		<system-out>All physics backend tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_physics_query_benchmark_smoke" classname="gargantuan_physics_query_benchmark_smoke" time="0.126599" status="run">
+		<properties>
+			<property name="cmake_labels" value="benchmark;headless;physics;query"/>
+		</properties>
+		<system-out>{
+  "quick": true,
+  "results": [
+    {
+      "cases": [
+        {
+          "backendQueryUs": {
+            "p50": 0.6,
+            "p95": 0.8,
+            "p99": 10.5
+          },
+          "case": "nearest-hit",
+          "filterPreparationUs": {
+            "p50": 0.2,
+            "p95": 0.3,
+            "p99": 7.3
+          },
+          "semanticResolutionUs": {
+            "p50": 0.1,
+            "p95": 0.2,
+            "p99": 2.3
+          },
+          "totalUs": {
+            "p50": 1.0,
+            "p95": 1.2,
+            "p99": 2.9
+          }
+        },
+        {
+          "backendQueryUs": {
+            "p50": 0.2,
+            "p95": 0.3,
+            "p99": 0.5
+          },
+          "case": "miss",
+          "filterPreparationUs": {
+            "p50": 0.2,
+            "p95": 0.2,
+            "p99": 0.5
+          },
+          "semanticResolutionUs": {
+            "p50": 0.0,
+            "p95": 0.1,
+            "p99": 0.1
+          },
+          "totalUs": {
+            "p50": 0.5,
+            "p95"...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_soft_body_physics" classname="gargantuan_soft_body_physics" time="0.37626" status="run">
+		<properties>
+			<property name="cmake_labels" value="deformable;headless;physics;renderer;serialization"/>
+		</properties>
+		<system-out>[Physics:SoftBodyTest] All soft-body foundation tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_soft_body_physics_benchmark_smoke" classname="gargantuan_soft_body_physics_benchmark_smoke" time="0.0385376" status="run">
+		<properties>
+			<property name="cmake_labels" value="benchmark;deformable;headless;physics"/>
+		</properties>
+		<system-out>{"Type":"SoftBodyPhysicsFoundationBenchmark","Cpu":"AMD Ryzen 9 5900X 12-Core Processor","Build":"Release","SimulationThreading":"BoundedIndependentBodyJobs","RendererApplication":"HeadlessRenderProjection"}
+{"Case":"Cloth-1024-HangingPinned","Kind":"Cloth","Scenario":"HangingPinned","Vertices":1024,"WarmupFrames":1,"MeasuredFrames":3,"FixedDeltaSeconds":0.01666666753590107,"AllocationMilliseconds":2.0467,"EstimatedSolverBytes":239440,"ProcessWorkingSetBytes":14340096,"WorkerCount":8,"JobsPerFrame":1,"WorkerUtilization":0.1198510993598664,"ColliderQueries":0,"CandidateColliders":0,"CandidatesPerBody":0.0,"QueuedResultBytes":12288,"BacklogDrops":0,"FrozenBodies":0,"StaleResults":0,"Step":{"MeanMs":0.7156333333333333,"P50Ms":0.7238,"P95Ms":0.73,"P99Ms":0.73,"MaximumMs":0.73},"MainSnapshot":{"MeanMs":0.001,"P50Ms":0.001,"P95Ms":0.0012,"P99Ms":0.0012,"MaximumMs":0.0012},"JobDispatch":{"MeanMs":0.005733333333333333,"P50Ms":0.0061,"P95Ms":0.0062,"P99Ms":0.0062,"MaximumMs":0.0062},"WorkerWait":{"MeanMs":0.6991666666...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_platform_input_boundary" classname="gargantuan_platform_input_boundary" time="0.034286" status="run">
+		<properties>
+			<property name="cmake_labels" value="input;platform;runtime"/>
+		</properties>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="gargantuan_player_runtime" classname="gargantuan_player_runtime" time="0.380759" status="run">
+		<properties>
+			<property name="cmake_labels" value="headless;player;runtime"/>
+		</properties>
+		<system-out>All player runtime tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_input_action" classname="gargantuan_input_action" time="0.159249" status="run">
+		<properties>
+			<property name="cmake_labels" value="headless;input;runtime"/>
+		</properties>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="gargantuan_input_action_benchmark_smoke" classname="gargantuan_input_action_benchmark_smoke" time="3.9764" status="run">
+		<properties>
+			<property name="cmake_labels" value="headless;input;runtime"/>
+		</properties>
+		<system-out>{
+  "AllocationScope": "Ordinary executable C++ new/new[] requests during event evaluation, after warmup; aligned allocations excluded.",
+  "BaselineSource": "eb2ce26ab:src/services/ActionMap.cpp",
+  "MemoryScope": "Capacity-based storage estimates excluding allocator bookkeeping, temporary compiler storage, and Instance graphs.",
+  "Rows": [
+    {
+      "Actions": 16,
+      "Baseline": {
+        "AllocatedBytesPerEvent": 176.0,
+        "AllocationsPerEvent": 2.0,
+        "EstimatedStorageBytes": 3464,
+        "EventNs": {
+          "P50": 200.0,
+          "P95": 200.0,
+          "P99": 300.0
+        }
+      },
+      "Bindings": 16,
+      "CompileEditUs": {
+        "P50": 64.9,
+        "P95": 76.3,
+        "P99": 120.0
+      },
+      "Compiled": {
+        "AllocatedBytesPerEvent": 0.0,
+        "AllocationsPerEvent": 0.0,
+        "CandidatesPerEvent": 0.0,
+        "EstimatedStorageBytes": 118824,
+        "EventNs": {
+          "P50": 100.0,
+          "P95": 100.0,
+          "P99": 100.0
+        }
+      },
+    ...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_interaction_foundation" classname="gargantuan_interaction_foundation" time="0.111015" status="run">
+		<properties>
+			<property name="cmake_labels" value="gui;headless;input;interaction;player;runtime"/>
+		</properties>
+		<system-out>[Interaction:Test] All interaction foundation tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_interaction_foundation_benchmark_smoke" classname="gargantuan_interaction_foundation_benchmark_smoke" time="0.738458" status="run">
+		<properties>
+			<property name="cmake_labels" value="benchmark;headless;interaction;runtime"/>
+		</properties>
+		<system-out>ERROR: [Physics:Query] Raycast failed: Physics backend returned an invalid raycast hit
+ERROR: [Physics:Query] Raycast failed: Physics backend returned an invalid raycast hit
+{
+  "quick": true,
+  "results": [
+    {
+      "distribution": "sparse",
+      "holdAndPresentationUpdateUs": null,
+      "prompts": 1,
+      "propertyUpdateCount": 1,
+      "propertyUpdateUs": 3.6,
+      "queries": [
+        {
+          "meanPromptsConsideredPerPlayer": 1.0,
+          "meanRaycastsPerPlayer": 0.0,
+          "players": 1,
+          "queryBatchUs": {
+            "p50": 11.1,
+            "p95": 12.0,
+            "p99": 14.6
+          }
+        },
+        {
+          "meanPromptsConsideredPerPlayer": 1.0,
+          "meanRaycastsPerPlayer": 0.0,
+          "players": 4,
+          "queryBatchUs": {
+            "p50": 44.4,
+            "p95": 44.7,
+            "p99": 52.8
+          }
+        },
+        {
+          "meanPromptsConsideredPerPlayer": 1.0,
+          "meanRaycastsPerPlayer": 0.0,
+          "players": 16,
+          "qu...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_entitlement_service" classname="gargantuan_entitlement_service" time="0.159299" status="run">
+		<properties>
+			<property name="cmake_labels" value="entitlements;headless;runtime;security"/>
+		</properties>
+		<system-out>Entitlement foundation tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_entitlement_provider_benchmark_smoke" classname="gargantuan_entitlement_provider_benchmark_smoke" time="0.0373431" status="run">
+		<properties>
+			<property name="cmake_labels" value="benchmark;entitlements"/>
+		</properties>
+		<system-out>{
+  "benchmark": "entitlement-provider-foundation-1",
+  "quick": true,
+  "local_provider": {
+    "samples": 512,
+    "p50_ns": 100,
+    "p95_ns": 100,
+    "p99_ns": 100
+  },
+  "custom_provider": {
+    "samples": 512,
+    "p50_ns": 0,
+    "p95_ns": 100,
+    "p99_ns": 100
+  },
+  "service_cache_miss": {
+    "samples": 512,
+    "p50_ns": 1000,
+    "p95_ns": 1100,
+    "p99_ns": 2600
+  },
+  "service_cache_hit": {
+    "samples": 512,
+    "p50_ns": 400,
+    "p95_ns": 400,
+    "p99_ns": 500
+  },
+  "provider_swap": {
+    "samples": 512,
+    "p50_ns": 600,
+    "p95_ns": 600,
+    "p99_ns": 600
+  }
+}
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_gui_foundation" classname="gargantuan_gui_foundation" time="0.236884" status="run">
+		<properties/>
+		<system-out>[Gui:FoundationTest] BEGIN LayoutTextPresentationAndResources
+[Gui:FoundationTest] PASS LayoutTextPresentationAndResources
+[Gui:FoundationTest] BEGIN AutomaticSizeListAndClipping
+[Gui:FoundationTest] PASS AutomaticSizeListAndClipping
+[Gui:FoundationTest] BEGIN RotationOrderingAndAlpha
+[Gui:FoundationTest] PASS RotationOrderingAndAlpha
+[Gui:FoundationTest] BEGIN InputRoutingFocusAndMutationSafety
+[Gui:FoundationTest] PASS InputRoutingFocusAndMutationSafety
+[Gui:FoundationTest] BEGIN DisabledButtonNeverActivates
+[Gui:FoundationTest] PASS DisabledButtonNeverActivates
+[Gui:FoundationTest] BEGIN PersistencePlayIsolationAndSignalRetirement
+[Gui:FoundationTest] PASS PersistencePlayIsolationAndSignalRetirement
+[Gui:FoundationTest] BEGIN IncrementalInvalidationAndUiRetention
+[Gui:FoundationTest] PASS IncrementalInvalidationAndUiRetention
+[Gui:FoundationTest] BEGIN SiblingStackingContexts
+[Gui:FoundationTest] PASS SiblingStackingContexts
+[Gui:FoundationTest] BEGIN ScrollingAndEditableText
+[Gui:FoundationTest] PASS Scro...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_first_complete_game" classname="gargantuan_first_complete_game" time="2.13538" status="run">
+		<properties>
+			<property name="cmake_labels" value="assets;audio;game;gui;headless;interaction;physics;player;sample;studio"/>
+		</properties>
+		<system-out>[Game:FirstCompleteGameTest] objects=40 gui=9 importedAssets=8 representativeFrameMs=0.2656 openRootMotion=0.539465 blockedRootMotion=0.155 playStopCycles=10
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_packaging" classname="gargantuan_packaging" time="11.6135" status="run">
+		<properties>
+			<property name="cmake_labels" value="assets;audio;headless;packaging;runtime;security"/>
+		</properties>
+		<system-out>[Package:Test] manifestEntries=54 totalBytes=14218011 assetBytes=1381884 buildMs=382.37
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_packaging_editor_host" classname="gargantuan_packaging_editor_host" time="0.549784" status="run">
+		<properties>
+			<property name="cmake_labels" value="editorhost;headless;packaging;protocol;runtime;studio"/>
+		</properties>
+		<system-out>[Package:EditorHostTest] revision=2 totalBytes=14218237
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_packaging_benchmark_smoke" classname="gargantuan_packaging_benchmark_smoke" time="1.39999" status="run">
+		<properties>
+			<property name="cmake_labels" value="benchmark;headless;packaging;runtime"/>
+		</properties>
+		<system-out>[Package:Benchmark] authoritativeCaptureMs=6.4563 assetEnumerationMs=0.1039 assetCount=8
+[Package:Benchmark] case=small snapshotBytes=20303 totalBytes=14218011 totalMs=392.189 SnapshotUs=118 ValidateUs=9879 Stage runtimeUs=194775 Stage contentUs=31278 Hash/manifestUs=155269 FinalizeUs=837
+[Package:Benchmark] case=medium snapshotBytes=50840 totalBytes=14248548 totalMs=406.859 SnapshotUs=131 ValidateUs=7955 Stage runtimeUs=196545 Stage contentUs=36729 Hash/manifestUs=164599 FinalizeUs=873
+[Package:Benchmark] case=large snapshotBytes=173432 totalBytes=14371141 totalMs=426.096 SnapshotUs=136 ValidateUs=8452 Stage runtimeUs=201976 Stage contentUs=39152 Hash/manifestUs=175433 FinalizeUs=826
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_first_complete_game_package_smoke" classname="gargantuan_first_complete_game_package_smoke" time="2.59662" status="run">
+		<properties>
+			<property name="cmake_labels" value="game;headless;interaction;packaging;relocation;runtime"/>
+		</properties>
+		<system-out>-- FirstCompleteGame package build/validate/inspect/relocation/startup/rejection smoke passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_dedicated_server_package_smoke" classname="gargantuan_dedicated_server_package_smoke" time="1.04006" status="run">
+		<properties>
+			<property name="cmake_labels" value="headless;lifecycle;packaging;runtime;security;server"/>
+		</properties>
+		<system-out>-- Dedicated Server package/headless startup smoke passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_gui_foundation_benchmark_smoke" classname="gargantuan_gui_foundation_benchmark_smoke" time="2.1311" status="run">
+		<properties/>
+		<system-out>scenario,nodes,total_mean_us,total_p50_us,total_p95_us,total_p99_us,semantic_mean_us,semantic_p50_us,semantic_p95_us,semantic_p99_us,observation_mean_us,observation_p50_us,observation_p95_us,observation_p99_us,layout_mean_us,layout_p50_us,layout_p95_us,layout_p99_us,text_mean_us,text_p50_us,text_p95_us,text_p99_us,presentation_mean_us,presentation_p50_us,presentation_p95_us,presentation_p99_us,accessibility_mean_us,accessibility_p50_us,accessibility_p95_us,accessibility_p99_us,snapshot_commit_mean_us,snapshot_commit_p50_us,snapshot_commit_p95_us,snapshot_commit_p99_us,display_mean_us,display_p50_us,display_p95_us,display_p99_us,frame_construction_mean_us,frame_construction_p50_us,frame_construction_p95_us,frame_construction_p99_us,frame_copy_mean_us,frame_copy_p50_us,frame_copy_p95_us,frame_copy_p99_us,publication_mean_us,publication_p50_us,publication_p95_us,publication_p99_us,projection_mean_us,projection_p50_us,projection_p95_us,projection_p99_us,batches,primitives,texture_updates,uploaded_bytes
+frames_100...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_prerun_bootstrap" classname="gargantuan_prerun_bootstrap" time="0.0988662" status="run">
+		<properties>
+			<property name="cmake_labels" value="prerun;runtime"/>
+		</properties>
+		<system-out>PreRun bootstrap ordering passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_networking_contracts" classname="gargantuan_networking_contracts" time="0.0921527" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>[PooledServiceModel] SmallGroupSinglePeer=pass
+[PooledServiceModel] MaximumGroupSinglePeer=pass
+[PooledServiceModel] MaximumGroupPlusOneRejected=pass
+[PooledServiceModel] CreditInsufficientDefers=pass
+[PooledServiceModel] AggregateCapacityInsufficientDefers=pass
+[PooledServiceModel] GameplayBehindMaximumGroup delay_us=32500 e2e_bound_us=132500
+[PooledServiceModel] GameplayBehindMaximumGroup=pass
+[PooledServiceModel] GameplayBurstBeforeStructuralGrant=pass
+[PooledServiceModel] ThirtyTwoMaximumGroups p50_us=376000 p95_us=502000 p99_us=502000 max_us=502000 max_first_grant_from_eligible_us=220500 max_first_service_from_eligible_us=221000 committed_high=2097152 pending_high=16777216
+[PooledServiceModel] ThirtyTwoMaximumGroups=pass
+[PooledServiceModel] TinyDoesNotStarveLarge large_complete_us=281500
+[PooledServiceModel] TinyDoesNotStarveLarge=pass
+[PooledServiceModel] LargeDoesNotStarveTiny tiny_complete_us=471000
+[PooledServiceModel] LargeDoesNotStarveTiny=pass
+[PooledServiceModel] AlternatingTinyAndLargeFair larg...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_simulated_transport" classname="gargantuan_simulated_transport" time="0.037209" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>All simulated transport tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_scheduler_contract" classname="gargantuan_scheduler_contract" time="0.124728" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>[Network:ByteAdmission] Rate=262144 GroupWaitUs=2666667 GlobalCreditHighWater=524288 CapacityCompatible=0
+[Network:ByteAdmission] Rate=524288 GroupWaitUs=1333334 GlobalCreditHighWater=524288 CapacityCompatible=0
+[Network:ByteAdmission] Rate=1048576 GroupWaitUs=666667 GlobalCreditHighWater=524288 CapacityCompatible=0
+[Network:ByteAdmission] Rate=2097152 GroupWaitUs=333334 GlobalCreditHighWater=524288 CapacityCompatible=0
+[Network:ByteAdmission] Rate=4194304 GroupWaitUs=166667 GlobalCreditHighWater=524288 CapacityCompatible=0
+[Network:ByteAdmission] Rate=8388608 GroupWaitUs=83334 GlobalCreditHighWater=524288 CapacityCompatible=1
+[Network:ByteAdmission] FairPeers=200 MaxWaitUs=283000 PeerStates=200 LogicalBytes=30944 GlobalBacklogLimit=105394688
+[Network:ByteAdmission] FairPeers=500 MaxWaitUs=583000 PeerStates=500 LogicalBytes=76544 GlobalBacklogLimit=262700288
+[Network:ByteAdmission] deterministic profiles/credit/fairness/lifecycle/backlog result=pass
+[Network:SessionAllowance] bytes=16
+All scheduler contract t...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_replication" classname="gargantuan_replication" time="0.121471" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>All basic client replication tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_replication_relevance" classname="gargantuan_replication_relevance" time="17.9629" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>[Network:EnvelopeContract] profileCases=18 result=pass runtimeAdmission=not-tested-by-model
+[Network:GroupDistribution] case=player-character groups=1 bytesP50P95P99Max=/334/334/334/334 opsP50P95P99Max=/2/2/2/2
+[Network:GroupDistribution] case=player-character-legal-large groups=1 bytesP50P95P99Max=/123183/123183/123183/123183 opsP50P95P99Max=/2/2/2/2
+[Network:GroupDistribution] case=ordinary-part groups=128 bytesP50P95P99Max=/338/339/339/339 opsP50P95P99Max=/1/1/1/1
+[Network:GroupDistribution] case=ordinary-destroy groups=128 bytesP50P95P99Max=/45/45/45/45 opsP50P95P99Max=/1/1/1/1
+[Network:GroupDistribution] case=ancestry-32-enter groups=1 bytesP50P95P99Max=/2788/2788/2788/2788 opsP50P95P99Max=/32/32/32/32
+[Network:GroupDistribution] case=legal-large-7 groups=1 bytesP50P95P99Max=/459292/459292/459292/459292 opsP50P95P99Max=/7/7/7/7
+[Network:GroupDistribution] case=legal-gns-incompatible-8 groups=1 bytesP50P95P99Max=/524900/524900/524900/524900 opsP50P95P99Max=/8/8/8/8
+[Network:GroupDistribution] case=legal-g...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_spatial_region_index" classname="gargantuan_spatial_region_index" time="0.156616" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>Spatial region index tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_spatial_region_index_benchmark_smoke" classname="gargantuan_spatial_region_index_benchmark_smoke" time="0.15307" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>Kind,RegionSize,ObjectCount,BuildMs,BuildAllocations,BuildAllocatedBytes,OperationMs,OperationAllocations,OperationAllocatedBytes,RegionCount,MembershipCount,AverageOccupancy,PeakOccupancy,QueryRegions,Candidates,Relevant,FalsePositives,DedupHits,CrossMs,CrossAllocations,CrossAllocatedBytes,SameRegionUpdates,MembershipMoves
+WorldScale,128,10000,8.4748,24140,1768400,0.280841,0,0,2070,10000,4.83092,8,216,1728,515,1213,0,0,0,0,0,0
+Movement,128,1000,0,0,0,0.3202,0,0,1000,1000,1,1,0,0,0,0,0,0.9168,3000,160000,1000,1000
+Teleport,128,1000,0,0,0,0.9185,3000,160000,1000,1000,1,1,0,0,0,0,0,0,0,0,1000,2000
+Dense,128,1000,0.6015,2002,152120,0.0807,0,0,1,1000,1000,1000,8,1000,0,0,0,0,0,0,0,0
+MultiFocusOverlap,128,10000,0,0,0,0.494831,0,0,2070,10000,4.83092,8,324,2592,702,1890,0,0,0,0,0,0
+MultiFocusDisjoint,128,10000,0,0,0,0.073383,0,0,2070,10000,4.83092,8,108,666,132,534,0,0,0,0,0,0
+SpaceIsolation,128,0,0.0015,4,272,0.000587,0,0,1,1,1,1,27,1,1,0,0,0,0,0,0,0
+SpaceIsolation,128,10000,9.4104,40004,2720272,0.000926,0,0,10001,...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_remote" classname="gargantuan_remote" time="0.0453034" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>Bounded Remote codec, manager, simulator, request, visibility, and epoch tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_remote_luau" classname="gargantuan_remote_luau" time="0.0434888" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>ERROR: [Networking:Remote] request completion error: Remote schema enum values are not exposed to Luau
+ERROR: [Networking:Remote] handler error: task.wait is unavailable in this handler context
+Luau RemoteEvent signals/directions/arguments and RemoteFunction coroutine lifecycle passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_character_networking" classname="gargantuan_character_networking" time="0.206949" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>Character networking tests passed
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_character_networking_benchmark_smoke" classname="gargantuan_character_networking_benchmark_smoke" time="0.0456646" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>Kind,Workload,Characters,Relevant,CadenceHz,SimulationTicks,PayloadBytes,PayloadBytesPerSecond,SchedulerMessages,SchedulerMessagesPerSecond,BytesPerSecondIncludingInput,MessagesPerSecondIncludingInput,States,StatesPerSecond,Considered,Suppressed,Batches,AverageStatesPerBatch,BatchSplits,SemanticBytes,CompactBytes,CompactReductionPercent,StepOrReconcileMeanUs,P95Us,P99Us,ChangeDetectionNs,AssemblyNs,EncodeNs,SchedulerNs,Allocations,AllocationsPerPublicationTick,ImportanceEvaluations,TierTransitions,TemporaryPromotions,ForcedSemanticPublications,FullRateStates,ReducedRateStates,LowRateStates,FullRateStateBytes,ReducedRateStateBytes,LowRateStateBytes,MeanStateAgeTicks,MaximumStateAgeTicks,FullRateRelationships,ReducedRateRelationships,LowRateRelationships,ImportanceEvaluationNs,DueSetNs,FullRateMeanAgeTicks,ReducedRateMeanAgeTicks,LowRateMeanAgeTicks,MaximumFullRateAgeTicks,MaximumReducedRateAgeTicks,MaximumLowRateAgeTicks
+Baseline3B,Moving,1,1,60,60,6720,6720,60,60,10320,120,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_content_availability_benchmark_smoke" classname="gargantuan_content_availability_benchmark_smoke" time="0.882168" status="run">
+		<properties>
+			<property name="cmake_labels" value="benchmark;content;packaging;runtime"/>
+		</properties>
+		<system-out>[Content:Benchmark] manifest entries=100 encodedBytes=32734 parseMs=2.0444 indexMs=0.0354 memberships=100 lookupMeanUs=0.680273 lookupP50Us=0.7 lookupP95Us=0.8 lookupP99Us=0.9 lookupMaxUs=28.7
+[Content:Benchmark] manifest entries=1000 encodedBytes=327934 parseMs=19.6818 indexMs=0.261 memberships=1000 lookupMeanUs=0.356592 lookupP50Us=0.3 lookupP95Us=0.5 lookupP99Us=0.6 lookupMaxUs=1.2
+[Content:Benchmark] manifest entries=10000 encodedBytes=3297934 parseMs=243.483 indexMs=6.0575 memberships=10000 lookupMeanUs=0.753223 lookupP50Us=0.7 lookupP95Us=1.2 lookupP99Us=1.5 lookupMaxUs=14.9
+[Content:Benchmark] offeredObjects=10 admittedByUnitLimit=true maximum=512
+[Content:Benchmark] offeredObjects=100 admittedByUnitLimit=true maximum=512
+[Content:Benchmark] offeredObjects=512 admittedByUnitLimit=true maximum=512
+[Content:Benchmark] offeredObjects=1000 admittedByUnitLimit=false maximum=512
+[Content:Benchmark] offeredObjects=10000 admittedByUnitLimit=false maximum=512
+[Content:Benchmark] preparation profile=light-wide o...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_replication_benchmark_smoke" classname="gargantuan_replication_benchmark_smoke" time="0.188999" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>Workload,Objects,Bytes,GenerateMs,EncodeMs,DecodeMs,SchedulerTransportMs,ApplyMs
+ReplicationBaseline,1000,82393,7.6004,0.3501,1.4379,0.2819,8.2905
+</system-out>
+	</testcase>
+	<testcase name="gargantuan_remote_benchmark_smoke" classname="gargantuan_remote_benchmark_smoke" time="0.525062" status="run">
+		<properties>
+			<property name="cmake_labels" value="networking;runtime"/>
+		</properties>
+		<system-out>Remote benchmark
+codec encode: 1.83979 us/message
+codec decode: 0.563138 us/message
+reliable admission: 2.27528 us/message
+unreliable admission: 1.98104 us/message
+sequenced admission: 2.29043 us/message
+request start/response/dispatch: 4.46808 us/request
+scheduler submissions: 160000
+output bytes: 10920000
+</system-out>
+	</testcase>
+</testsuite>
