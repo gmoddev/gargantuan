@@ -5133,7 +5133,7 @@ namespace {
 		const auto CreatedProjectDocument = Json::parse(CreatedProjectStream);
 		CreatedProjectStream.close();
 		Check(CreatedProjectDocument["Version"] == 4 && CreatedProjectDocument["Name"] == "Created Project" &&
-			CreatedProjectDocument["Children"].size() == 4 &&
+			CreatedProjectDocument["Children"].size() == 5 &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "Workspace" && Child["Name"] == "Workspace";
 			}) &&
