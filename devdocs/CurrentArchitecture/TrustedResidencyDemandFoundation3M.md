@@ -108,6 +108,9 @@ ownership. The local-package integration writes real manifests and immutable
 payload files, then uses `LocalPackageContentProvider` and production 3L
 dependency/admission/eviction. A GameSession fixture drives the actual default
 server policy from authoritative Character lifetime.
+That fixture also continuously updates 500 native policy focuses while a real
+accepted GameSession publishes Character state and reliable Remote round trips;
+progress and exact replies are mandatory, and observed frame cost is diagnostic.
 
 The benchmark separates index/policy construction, isolated query/update cost,
 allocations and retained state, a linear reference, and live 3L service cost.

@@ -3,11 +3,14 @@
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/content/ResidencyDemandPolicy.hpp"
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
+#include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -148,6 +151,9 @@ namespace {
 		PlayersValue->SetCharacterAutoLoads(false);
 		PlayersValue->SetDefaultControllerEnabled(false);
 		PlayersValue->SetDefaultCameraEnabled(false);
+		auto Probe = std::make_shared<RemoteEvent>();
+		Probe->SetName("ResidencyProbe");
+		Probe->SetParent(World);
 		HeadlessRenderer Renderer(Vector2(32, 32));
 		Engine Runtime(World, &Renderer, {}, {.Content = Fixture.Configuration(), .Mode = RuntimeMode::NetworkServer,
 			.EnableResidencyDemandPolicy = true});
@@ -208,6 +214,45 @@ namespace {
 		}
 		Check(Runtime.Content->GetState("ahead") == ContentResidencyState::Resident,
 			"authoritative controller velocity did not drive the production predictive corridor");
+		const auto ClientProbe = std::dynamic_pointer_cast<RemoteEvent>(
+			ClientRuntime->DataModel->FindFirstChild("ResidencyProbe", false));
+		Check(ClientProbe && ClientProbe->GetRemoteManager() && Probe->GetRemoteManager(),
+			"normal accepted materialization did not expose the service probe Remote");
+		std::size_t Replies = 0;
+		bool ReplyRejected = false;
+		Check(ClientProbe->GetRemoteManager()->SetEventHandler(ClientProbe->GetNetworkObjectId(),
+			[&](const RemoteInvocation &) { ++Replies; }), "client probe handler registration failed");
+		Check(Probe->GetRemoteManager()->SetEventHandler(Probe->GetNetworkObjectId(),
+			[&](const RemoteInvocation &Invocation) {
+				if (!Probe->GetRemoteManager()->SendEvent(Invocation.Peer.Connection,
+					Probe->GetNetworkObjectId(), Invocation.Arguments).Accepted()) ReplyRejected = true;
+			}), "server probe handler registration failed");
+		const auto CharacterBefore = Server.GetMetrics().CharacterPublicationStatesAccepted;
+		std::size_t Sent = 0;
+		std::chrono::nanoseconds MaximumFrame{};
+		for (std::uint64_t Tick = 0; Tick < 192; ++Tick) {
+			const auto Started = std::chrono::steady_clock::now();
+			for (std::uint64_t Focus = 1; Focus <= 499; ++Focus)
+				Check(Runtime.GetResidencyDemandPolicy()->UpdateFocus(0xffff'ffff'ffff'ffffULL - Focus,
+					{Tick % 2 ? 1.0f : 0.0f, 0, 0}), "server gameplay focus load rejected");
+			if (Tick % 8 == 0) {
+				Check(ClientProbe->GetRemoteManager()->SendEvent(*ClientProbe->GetDefaultServerConnection(),
+					ClientProbe->GetNetworkObjectId(), {WireValue(static_cast<int>(++Sent))}).Accepted(),
+					"ordinary Remote request was starved by policy work");
+			}
+			Step();
+			MaximumFrame = std::max(MaximumFrame, std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now() - Started));
+		}
+		for (int Tick = 0; Tick < 8; ++Tick) Step();
+		Check(!ReplyRejected && Replies == Sent && Server.GetMetrics().ReadyPeers == 1 &&
+			Server.GetMetrics().CharacterPublicationStatesAccepted > CharacterBefore,
+			"Character or reliable Remote service failed to progress under 500 moving policy focuses");
+		std::cout << "[Content:ResidencyService] focuses=500 remoteSent=" << Sent << " remoteReplies=" << Replies
+			<< " characterAccepted=" << Server.GetMetrics().CharacterPublicationStatesAccepted - CharacterBefore
+			<< " maxFrameUs=" << std::chrono::duration<double, std::micro>(MaximumFrame).count() << '\n';
+		for (std::uint64_t Focus = 1; Focus <= 499; ++Focus)
+			Check(Runtime.GetResidencyDemandPolicy()->RemoveFocus(0xffff'ffff'ffff'ffffULL - Focus), "gameplay focus removal failed");
 		Client.Stop();
 		for (int Attempt = 0; Attempt < 40; ++Attempt) Step();
 		Check(Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 0,
@@ -298,6 +343,29 @@ namespace {
 		NewService.Stop(); Service.Stop();
 		NewWorld->Destroy(); World->Destroy();
 	}
+
+	void PreparationStop() {
+		LocalFixture Fixture;
+		for (int Attempt = 0; Attempt < 8; ++Attempt) {
+			auto World = std::make_shared<DataModel>();
+			auto PlayersValue = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
+			PlayersValue->SetDefaultControllerEnabled(false);
+			PlayersValue->SetDefaultCameraEnabled(false);
+			HeadlessRenderer Renderer(Vector2(32, 32));
+			Engine Runtime(World, &Renderer, {}, {.Content = Fixture.Configuration(), .Mode = RuntimeMode::NetworkServer,
+				.EnableResidencyDemandPolicy = true});
+			Runtime.ProcessService->Alive = true;
+			Pump(*Runtime.Content, [&] { return Runtime.Content->IsManifestAvailable(); });
+			Runtime.Step();
+			Runtime.Content->Stop();
+			for (int Tick = 0; Tick < 32; ++Tick) {
+				Runtime.Step();
+				Check(!Runtime.GetResidencyDemandPolicy(), "stale asynchronous preparation published after direct content stop");
+				std::this_thread::yield();
+			}
+			Runtime.Destroy();
+		}
+	}
 }
 
 int main() {
@@ -306,6 +374,7 @@ int main() {
 		LocalLifecycle();
 		FailureAndStalePending();
 		PublicationAndManifestIdentity();
+		PreparationStop();
 		ProductionFocusFeed();
 		std::cout << "[Content:ResidencyIntegration] passed\n";
 		return 0;
