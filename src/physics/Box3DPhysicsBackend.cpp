@@ -61,7 +61,9 @@ namespace gargantuan {
 
 		[[nodiscard]] bool IsValidScaledMesh(const PhysicsBodyDesc &Description) {
 			const auto &Mesh = Description.Shape.Mesh;
-			if (!Mesh || Mesh->ResourceId.empty() || !Mesh->Positions || !Mesh->Indices ||
+			if (!Mesh || Mesh->ResourceId.empty() ||
+				Mesh->ResourceId.size() > MaximumPhysicsCollisionResourceIdBytes ||
+				!Mesh->Positions || !Mesh->Indices ||
 				Mesh->Positions->size() < 3 || Mesh->Positions->size() > 262144 ||
 				Mesh->Indices->empty() || Mesh->Indices->size() > 1048575 ||
 				Mesh->Indices->size() % 3 != 0) return false;
@@ -91,6 +93,10 @@ namespace gargantuan {
 		class Box3DPhysicsBackend final : public IPhysicsBackend {
 		  public:
 			explicit Box3DPhysicsBackend(const PhysicsWorldConfig &Config) {
+				CollisionResourceLimit = std::min(Config.CollisionResourceLimit, MaximumPhysicsCollisionResources);
+				CollisionConsumerLimit = std::min(Config.CollisionConsumerLimit, MaximumPhysicsCollisionConsumers);
+				CollisionCanonicalByteLimit = std::min(Config.CollisionCanonicalByteLimit, MaximumPhysicsCollisionCanonicalBytes);
+				CollisionNativeByteLimit = std::min(Config.CollisionNativeByteLimit, MaximumPhysicsCollisionNativeBytes);
 				if (!IsFinite(Config.Gravity)) return;
 				b3WorldDef Definition = b3DefaultWorldDef();
 				Definition.enableSleep = Config.EnableSleep;
@@ -110,6 +116,7 @@ namespace gargantuan {
 				for (std::size_t Index = 1; Index < BodySlots.size(); ++Index) {
 					auto &Entry = BodySlots[Index];
 					if (Entry.Record && b3Body_IsValid(Entry.Record->Body)) b3DestroyBody(Entry.Record->Body);
+					if (Entry.Record && Entry.Record->Mesh) RetireMeshConsumer();
 					Entry.Record.reset();
 				}
 				ShapeOwners.clear();
@@ -130,7 +137,10 @@ namespace gargantuan {
 			[[nodiscard]] PhysicsBodyId CreateBody(const PhysicsBodyDesc &Description) override {
 				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsBodyCreate);
 				if (!b3World_IsValid(World) || !IsValidBodyDescription(Description)) {
-					if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) ++FailedMeshAdmissions;
+					if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) {
+						++FailedMeshAdmissions;
+						LastMeshAdmissionFailure = "Static mesh collision description is invalid";
+					}
 					return {};
 				}
 				const auto Id = AllocateBody();
@@ -170,11 +180,15 @@ namespace gargantuan {
 				auto *Record = FindBody(Body);
 				if (!Record) return InvalidBody();
 				if (!IsValidBodyDescription(Description)) {
-					if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) ++FailedMeshAdmissions;
+					if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) {
+						++FailedMeshAdmissions;
+						LastMeshAdmissionFailure = "Static mesh collision description is invalid";
+					}
 					return {PhysicsOperationStatus::InvalidDescription, "Physics body description is invalid"};
 				}
 				if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh && !IsValidScaledMesh(Description)) {
 					++FailedMeshAdmissions;
+					LastMeshAdmissionFailure = "Scaled mesh collision geometry is invalid";
 					return {PhysicsOperationStatus::InvalidDescription, "Scaled mesh collision geometry is invalid"};
 				}
 
@@ -193,9 +207,12 @@ namespace gargantuan {
 					std::shared_ptr<NativeMesh> ReplacementMesh;
 					const auto Replacement = CreateShape(Record->Body, Body, Description, false, ReplacementMesh);
 					if (!b3Shape_IsValid(Replacement))
-						return {PhysicsOperationStatus::BackendFailure, "Physics shape replacement failed"};
+						return {PhysicsOperationStatus::BackendFailure,
+							Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh && !LastMeshAdmissionFailure.empty()
+								? LastMeshAdmissionFailure : "Physics shape replacement failed"};
 					ShapeOwners.erase(b3StoreShapeId(Record->Shape));
 					b3DestroyShape(Record->Shape, false);
+					if (Record->Mesh) RetireMeshConsumer();
 					Record->Shape = Replacement;
 					Record->Mesh = std::move(ReplacementMesh);
 					b3Body_ApplyMassFromShapes(Record->Body);
@@ -233,6 +250,7 @@ namespace gargantuan {
 				for (const auto Constraint : Attached) DestroyConstraint(Constraint);
 				ShapeOwners.erase(b3StoreShapeId(Record->Shape));
 				if (b3Body_IsValid(Record->Body)) b3DestroyBody(Record->Body);
+				if (Record->Mesh) RetireMeshConsumer();
 				if (!Record->Description.Anchored) --DynamicBodyCount;
 				ReleaseBody(Body);
 				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsBodyDestroy);
@@ -314,18 +332,20 @@ namespace gargantuan {
 
 			[[nodiscard]] PhysicsCollisionResidency GetCollisionResidency() const override {
 				PhysicsCollisionResidency Result;
+				Result.ResourceLimit = CollisionResourceLimit;
+				Result.ConsumerLimit = CollisionConsumerLimit;
+				Result.CanonicalByteLimit = CollisionCanonicalByteLimit;
+				Result.NativeByteLimit = CollisionNativeByteLimit;
 				Result.FailedAdmissions = FailedMeshAdmissions;
-				std::set<const NativeMesh *> Seen;
-				for (const auto &Slot : BodySlots) {
-					if (!Slot.Record || !Slot.Record->Mesh) continue;
-					++Result.ActiveConsumers;
-					const auto *Mesh = Slot.Record->Mesh.get();
-					if (!Seen.insert(Mesh).second) continue;
-					++Result.ActiveResources;
-					Result.CanonicalBytes += Mesh->Source->Positions->size() * sizeof(glm::vec3) +
-						Mesh->Source->Indices->size() * sizeof(std::uint32_t);
-					Result.NativeMeshBytes += static_cast<std::size_t>(Mesh->Data->byteCount);
-				}
+				Result.ActiveResources = ActiveMeshResources;
+				Result.ActiveConsumers = ActiveMeshConsumers;
+				Result.CanonicalBytes = ActiveCanonicalBytes;
+				Result.NativeMeshBytes = ActiveNativeBytes;
+				Result.CreatedResources = CreatedMeshResources;
+				Result.RetiredResources = RetiredMeshResources;
+				Result.CreatedConsumers = CreatedMeshConsumers;
+				Result.RetiredConsumers = RetiredMeshConsumers;
+				Result.LastAdmissionFailure = LastMeshAdmissionFailure;
 				return Result;
 			}
 
@@ -678,7 +698,13 @@ namespace gargantuan {
 			struct NativeMesh {
 				b3MeshData *Data = nullptr;
 				std::shared_ptr<const PhysicsTriangleMesh> Source;
-				~NativeMesh() { if (Data) b3DestroyMesh(Data); }
+				Box3DPhysicsBackend *Owner = nullptr;
+				std::size_t CanonicalBytes = 0;
+				std::size_t NativeBytes = 0;
+				~NativeMesh() {
+					if (Data) b3DestroyMesh(Data);
+					if (Owner) Owner->RetireNativeMesh(*this);
+				}
 			};
 
 			struct BodyRecord {
@@ -703,6 +729,19 @@ namespace gargantuan {
 			b3WorldId World{};
 			std::size_t DynamicBodyCount = 0;
 			std::size_t FailedMeshAdmissions = 0;
+			std::size_t ActiveMeshResources = 0;
+			std::size_t ActiveMeshConsumers = 0;
+			std::size_t ActiveCanonicalBytes = 0;
+			std::size_t ActiveNativeBytes = 0;
+			std::size_t CreatedMeshResources = 0;
+			std::size_t RetiredMeshResources = 0;
+			std::size_t CreatedMeshConsumers = 0;
+			std::size_t RetiredMeshConsumers = 0;
+			std::string LastMeshAdmissionFailure;
+			std::size_t CollisionResourceLimit = MaximumPhysicsCollisionResources;
+			std::size_t CollisionConsumerLimit = MaximumPhysicsCollisionConsumers;
+			std::size_t CollisionCanonicalByteLimit = MaximumPhysicsCollisionCanonicalBytes;
+			std::size_t CollisionNativeByteLimit = MaximumPhysicsCollisionNativeBytes;
 			bool StaticWorldDirty = true;
 			std::vector<SlotEntry<BodyRecord>> BodySlots;
 			std::vector<std::uint32_t> FreeBodySlots;
@@ -711,33 +750,66 @@ namespace gargantuan {
 			std::unordered_map<std::uint64_t, PhysicsBodyId> ShapeOwners;
 			std::unordered_map<std::string, std::weak_ptr<NativeMesh>> NativeMeshes;
 
+			void RetireMeshConsumer() {
+				--ActiveMeshConsumers;
+				++RetiredMeshConsumers;
+			}
+
+			void RetireNativeMesh(const NativeMesh &Mesh) {
+				--ActiveMeshResources;
+				ActiveCanonicalBytes -= Mesh.CanonicalBytes;
+				ActiveNativeBytes -= Mesh.NativeBytes;
+				++RetiredMeshResources;
+			}
+
 			[[nodiscard]] std::shared_ptr<NativeMesh> GetNativeMesh(
 				const std::shared_ptr<const PhysicsTriangleMesh> &Source
 			) {
 				if (!Source || !Source->Positions || !Source->Indices || Source->ResourceId.empty() ||
+					Source->ResourceId.size() > MaximumPhysicsCollisionResourceIdBytes ||
 					Source->Positions->size() < 3 || Source->Positions->size() > 262144 ||
 					Source->Indices->empty() || Source->Indices->size() > 1048575 ||
-					Source->Indices->size() % 3 != 0) return {};
+					Source->Indices->size() % 3 != 0) {
+					LastMeshAdmissionFailure = "Mesh collision resource exceeds a geometry bound or is malformed";
+					return {};
+				}
 				const auto Key = Source->ResourceId + ":" + std::to_string(Source->ContentRevision);
 				if (auto Found = NativeMeshes.find(Key); Found != NativeMeshes.end()) {
 					if (auto Cached = Found->second.lock()) {
 						if (Cached->Source->Positions == Source->Positions && Cached->Source->Indices == Source->Indices)
 							return Cached;
+						LastMeshAdmissionFailure = "Mesh collision resource revision conflicts with an active resource";
 						return {};
 					}
 					NativeMeshes.erase(Found);
+				}
+				const auto CanonicalBytes = Source->Positions->size() * sizeof(glm::vec3) +
+					Source->Indices->size() * sizeof(std::uint32_t);
+				if (ActiveMeshResources >= CollisionResourceLimit) {
+					LastMeshAdmissionFailure = "Mesh collision resource limit reached";
+					return {};
+				}
+				if (CanonicalBytes > CollisionCanonicalByteLimit - ActiveCanonicalBytes) {
+					LastMeshAdmissionFailure = "Mesh collision canonical-byte limit reached";
+					return {};
 				}
 				std::erase_if(NativeMeshes, [](const auto &Entry) { return Entry.second.expired(); });
 				std::vector<b3Vec3> Vertices;
 				Vertices.reserve(Source->Positions->size());
 				for (const auto &Position : *Source->Positions) {
-					if (!IsFinite(Position)) return {};
+					if (!IsFinite(Position)) {
+						LastMeshAdmissionFailure = "Mesh collision contains non-finite vertices";
+						return {};
+					}
 					Vertices.push_back(Box3DConversions::ToBox3(Position));
 				}
 				std::vector<std::int32_t> Indices;
 				Indices.reserve(Source->Indices->size());
 				for (const auto Index : *Source->Indices) {
-					if (Index >= Vertices.size()) return {};
+					if (Index >= Vertices.size()) {
+						LastMeshAdmissionFailure = "Mesh collision index exceeds vertex count";
+						return {};
+					}
 					Indices.push_back(static_cast<std::int32_t>(Index));
 				}
 				for (std::size_t Index = 0; Index < Indices.size(); Index += 3) {
@@ -745,7 +817,10 @@ namespace gargantuan {
 					const auto &B = (*Source->Positions)[Indices[Index + 1]];
 					const auto &C = (*Source->Positions)[Indices[Index + 2]];
 					const auto Cross = glm::cross(B - A, C - A);
-					if (!IsFinite(Cross) || glm::dot(Cross, Cross) < 1.0e-10f) return {};
+					if (!IsFinite(Cross) || glm::dot(Cross, Cross) < 1.0e-10f) {
+						LastMeshAdmissionFailure = "Mesh collision contains degenerate triangles";
+						return {};
+					}
 				}
 				b3MeshDef Definition{};
 				Definition.vertices = Vertices.data();
@@ -755,8 +830,23 @@ namespace gargantuan {
 				Definition.identifyEdges = true;
 				auto Mesh = std::make_shared<NativeMesh>();
 				Mesh->Data = b3CreateMesh(&Definition, nullptr, 0);
-				if (!Mesh->Data) return {};
+				if (!Mesh->Data) {
+					LastMeshAdmissionFailure = "Box3D mesh construction failed";
+					return {};
+				}
+				if (Mesh->Data->byteCount <= 0 ||
+					static_cast<std::size_t>(Mesh->Data->byteCount) > CollisionNativeByteLimit - ActiveNativeBytes) {
+					LastMeshAdmissionFailure = "Mesh collision native-byte limit reached";
+					return {};
+				}
 				Mesh->Source = Source;
+				Mesh->Owner = this;
+				Mesh->CanonicalBytes = CanonicalBytes;
+				Mesh->NativeBytes = static_cast<std::size_t>(Mesh->Data->byteCount);
+				++ActiveMeshResources;
+				ActiveCanonicalBytes += CanonicalBytes;
+				ActiveNativeBytes += Mesh->NativeBytes;
+				++CreatedMeshResources;
 				NativeMeshes[Key] = Mesh;
 				return Mesh;
 			}
@@ -842,10 +932,24 @@ namespace gargantuan {
 				b3ShapeId Shape{};
 				switch (Description.Shape.Kind) {
 				case PhysicsShapeKind::StaticTriangleMesh: {
+					LastMeshAdmissionFailure.clear();
+					if (ActiveMeshConsumers >= CollisionConsumerLimit) {
+						++FailedMeshAdmissions;
+						LastMeshAdmissionFailure = "Mesh collision consumer limit reached";
+						break;
+					}
 					if (IsValidScaledMesh(Description)) Mesh = GetNativeMesh(Description.Shape.Mesh);
+					else LastMeshAdmissionFailure = "Scaled mesh collision geometry is invalid";
 					if (Mesh)
 						Shape = b3CreateMeshShape(Body, &ShapeDefinition, Mesh->Data, Box3DConversions::ToBox3(Size));
-					if (!b3Shape_IsValid(Shape)) ++FailedMeshAdmissions;
+					if (!b3Shape_IsValid(Shape)) {
+						++FailedMeshAdmissions;
+						if (LastMeshAdmissionFailure.empty()) LastMeshAdmissionFailure = "Box3D mesh shape construction failed";
+					}
+					else {
+						++ActiveMeshConsumers;
+						++CreatedMeshConsumers;
+					}
 					break;
 				}
 				case PhysicsShapeKind::Box: {

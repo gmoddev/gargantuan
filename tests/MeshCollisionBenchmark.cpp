@@ -103,9 +103,14 @@ namespace {
 	}
 
 	[[nodiscard]] Json EncodeResidency(const PhysicsCollisionResidency &Value) {
-		return {{"activeResources", Value.ActiveResources}, {"activeConsumers", Value.ActiveConsumers},
+		return {{"resourceLimit", Value.ResourceLimit}, {"consumerLimit", Value.ConsumerLimit},
+			{"canonicalByteLimit", Value.CanonicalByteLimit}, {"nativeByteLimit", Value.NativeByteLimit},
+			{"activeResources", Value.ActiveResources}, {"activeConsumers", Value.ActiveConsumers},
 			{"canonicalPositionIndexBytes", Value.CanonicalBytes}, {"nativeMeshBytes", Value.NativeMeshBytes},
-			{"nativeShapeBytesKnown", Value.NativeShapeBytesKnown}, {"failedAdmissions", Value.FailedAdmissions}};
+			{"nativeShapeBytesKnown", Value.NativeShapeBytesKnown}, {"failedAdmissions", Value.FailedAdmissions},
+			{"createdResources", Value.CreatedResources}, {"retiredResources", Value.RetiredResources},
+			{"createdConsumers", Value.CreatedConsumers}, {"retiredConsumers", Value.RetiredConsumers},
+			{"lastAdmissionFailure", Value.LastAdmissionFailure}};
 	}
 
 	[[nodiscard]] Json RunCase(bool MeshCase, std::size_t Count, int Cells, int RevisionRounds) {

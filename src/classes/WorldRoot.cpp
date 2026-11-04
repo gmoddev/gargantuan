@@ -149,8 +149,11 @@ namespace gargantuan {
 		const auto Body = Physics.CreateBody(DescribePart(*Part));
 		if (!Body.IsValid()) {
 			if (std::dynamic_pointer_cast<MeshPart>(Part)) {
-				if (FailedMeshUpdatesLogged.insert(Object).second)
-					LOG_WARN(App, "[Physics:Mesh] Failed to create collision body for %s", Part->GetFullName().c_str());
+				if (FailedMeshUpdatesLogged.insert(Object).second) {
+					const auto Failure = Physics.GetCollisionResidency().LastAdmissionFailure;
+					LOG_WARN(App, "[Physics:Mesh] Failed to create collision body for %s: %s",
+						Part->GetFullName().c_str(), Failure.c_str());
+				}
 			} else LOG_ERROR(App, "[Physics:Backend] Failed to create body for %s", Part->GetFullName().c_str());
 			return {};
 		}

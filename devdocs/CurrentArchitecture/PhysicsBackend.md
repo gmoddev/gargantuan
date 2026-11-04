@@ -133,9 +133,21 @@ engine does not claim silent physics synchronization success.
 
 `PhysicsWorld::GetCollisionResidency` reports active shared resources, active
 shape consumers, neutral position/index bytes, native Box3D mesh-data bytes,
-and failed mesh admissions. Box3D does not expose per-shape storage size, so
-native shape bytes remain explicitly unknown. Weak cache entries do not pin a
-resource or prevent retirement.
+failed mesh admissions, and cumulative admitted/retired resource and consumer
+counts. A bounded last-failure message identifies the rejected ceiling. Each
+PhysicsWorld admits at most 1,024 distinct live native mesh
+resources, 65,536 live mesh shapes, 64 MiB of retained neutral position/index
+buffers, and 64 MiB of `b3MeshData::byteCount`. `PhysicsWorldConfig` may lower
+each ceiling for a world but cannot raise the hard maximum. Shared consumers
+charge one resource and one canonical/native copy, plus one shape consumer
+each. Candidate and prior shapes are both charged until replacement succeeds.
+When a ceiling denies admission, the prior shape and body identity remain live
+and retryable; final retirement releases the budget. Native byte count is known
+only after one bounded candidate construction from a per-mesh-limited input,
+and a denied candidate is destroyed before publication. Box3D does not expose
+per-shape storage size, so native shape bytes remain explicitly unknown. Weak
+cache entries do not pin a resource or prevent retirement.
+The neutral collision resource key is capped at 128 bytes before caching.
 
 ## Main-domain safe points
 

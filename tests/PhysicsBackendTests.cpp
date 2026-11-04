@@ -238,6 +238,127 @@ namespace {
 		Check(!World.IsBodyValid(First), "destroyed mesh body identity is stale");
 	}
 
+	void TestMeshCollisionResidencyLimits() {
+		using namespace gargantuan;
+		PhysicsWorld Clamped(PhysicsWorldConfig{
+			.CollisionResourceLimit = MaximumPhysicsCollisionResources + 1,
+			.CollisionConsumerLimit = MaximumPhysicsCollisionConsumers + 1,
+			.CollisionCanonicalByteLimit = MaximumPhysicsCollisionCanonicalBytes + 1,
+			.CollisionNativeByteLimit = MaximumPhysicsCollisionNativeBytes + 1,
+		});
+		const auto ClampedStats = Clamped.GetCollisionResidency();
+		Check(ClampedStats.ResourceLimit == MaximumPhysicsCollisionResources &&
+			ClampedStats.ConsumerLimit == MaximumPhysicsCollisionConsumers &&
+			ClampedStats.CanonicalByteLimit == MaximumPhysicsCollisionCanonicalBytes &&
+			ClampedStats.NativeByteLimit == MaximumPhysicsCollisionNativeBytes,
+			"world configuration cannot raise the hard collision residency ceilings");
+		const auto Positions = std::make_shared<const std::vector<glm::vec3>>(std::vector<glm::vec3>{
+			{-1.0f, 0.0f, -1.0f}, {-1.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 1.0f},
+		});
+		const auto Indices = std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0, 1, 2});
+		const auto CanonicalBytes = Positions->size() * sizeof(glm::vec3) + Indices->size() * sizeof(std::uint32_t);
+		auto MakeDescription = [&](std::uint64_t Revision) {
+			PhysicsBodyDesc Value;
+			Value.Anchored = true;
+			Value.Shape.Kind = PhysicsShapeKind::StaticTriangleMesh;
+			Value.Shape.Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+				.ResourceId = "asset://residency-fixture", .ContentRevision = Revision,
+				.Positions = Positions, .Indices = Indices,
+			});
+			return Value;
+		};
+		PhysicsWorld IdentifierWorld(PhysicsWorldConfig{});
+		auto LongIdentifier = MakeDescription(1);
+		LongIdentifier.Shape.Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = std::string(MaximumPhysicsCollisionResourceIdBytes + 1, 'x'),
+			.ContentRevision = 1, .Positions = Positions, .Indices = Indices,
+		});
+		Check(!IdentifierWorld.CreateBody(LongIdentifier).IsValid() &&
+			IdentifierWorld.GetCollisionResidency().FailedAdmissions == 1,
+			"oversized collision resource identity fails closed before native admission");
+		PhysicsWorld World(PhysicsWorldConfig{
+			.CollisionResourceLimit = 1, .CollisionConsumerLimit = 2,
+			.CollisionCanonicalByteLimit = CanonicalBytes * 2,
+		});
+		const auto First = World.CreateBody(MakeDescription(1));
+		const auto Second = World.CreateBody(MakeDescription(1));
+		Check(First.IsValid() && Second.IsValid(), "shared mesh consumers fit a one-resource limit");
+		auto Stats = World.GetCollisionResidency();
+		Check(Stats.ActiveResources == 1 && Stats.ActiveConsumers == 2 && Stats.CanonicalBytes == CanonicalBytes &&
+			Stats.CreatedResources == 1 && Stats.CreatedConsumers == 2,
+			"one immutable mesh is charged once while each shape is charged as a consumer");
+		Check(!World.CreateBody(MakeDescription(1)).IsValid(), "consumer limit rejects a third shared shape");
+		Check(World.DestroyBody(Second).Succeeded(), "one shared consumer can retire independently");
+		Check(!World.UpdateBody(First, MakeDescription(2)).Succeeded() && World.IsBodyValid(First),
+			"resource limit rejects replacement while the prior revision remains live");
+		const auto State = World.GetBodyState(First);
+		Check(State && State->Description.Shape.Mesh->ContentRevision == 1,
+			"denied revision replacement retains the old coherent description");
+		const auto Ray = World.Raycast({.Origin = {-0.5f, 2.0f, 0.0f}, .Direction = {0.0f, -4.0f, 0.0f}});
+		Check(Ray.Succeeded() && Ray.HasHit() && Ray.Candidates.front().Body == First,
+			"denied replacement leaves the prior collider queryable");
+		Check(World.DestroyBody(First).Succeeded(), "last old-revision consumer retires");
+		Stats = World.GetCollisionResidency();
+		Check(Stats.ActiveResources == 0 && Stats.ActiveConsumers == 0 && Stats.CanonicalBytes == 0 &&
+			Stats.NativeMeshBytes == 0 && Stats.RetiredResources == 1 && Stats.RetiredConsumers == 2,
+			"last shape retirement releases all native and canonical resource budget");
+		const auto Recovered = World.CreateBody(MakeDescription(2));
+		Check(Recovered.IsValid() && Recovered != First && !World.IsBodyValid(First),
+			"retired budget admits a new revision with a fresh generation");
+		Check(World.DestroyBody(Recovered).Succeeded(), "recovered resource retires");
+		Stats = World.GetCollisionResidency();
+		Check(Stats.CreatedResources == 2 && Stats.RetiredResources == 2 &&
+			Stats.CreatedConsumers == 3 && Stats.RetiredConsumers == 3 && Stats.FailedAdmissions >= 2,
+			"admission, creation, and retirement counters reconcile after recovery");
+
+		PhysicsWorld CanonicalWorld(PhysicsWorldConfig{
+			.CollisionResourceLimit = 2, .CollisionConsumerLimit = 2,
+			.CollisionCanonicalByteLimit = CanonicalBytes,
+		});
+		const auto CanonicalBody = CanonicalWorld.CreateBody(MakeDescription(1));
+		Check(CanonicalBody.IsValid() && !CanonicalWorld.UpdateBody(CanonicalBody, MakeDescription(2)).Succeeded(),
+			"canonical-byte ceiling counts old and candidate revisions together");
+		Check(CanonicalWorld.GetCollisionResidency().ActiveResources == 1,
+			"canonical-byte denial does not retire prior resource");
+		Check(CanonicalWorld.DestroyBody(CanonicalBody).Succeeded(), "canonical-budget fixture retires");
+
+		PhysicsWorld ConsumerWorld(PhysicsWorldConfig{.CollisionConsumerLimit = 1});
+		const auto ConsumerBody = ConsumerWorld.CreateBody(MakeDescription(1));
+		auto Resized = MakeDescription(1);
+		Resized.Shape.Size.x = 2.0f;
+		Check(ConsumerBody.IsValid() && !ConsumerWorld.UpdateBody(ConsumerBody, Resized).Succeeded() &&
+			ConsumerWorld.GetCollisionResidency().ActiveConsumers == 1 &&
+			ConsumerWorld.GetCollisionResidency().LastAdmissionFailure == "Mesh collision consumer limit reached",
+			"consumer ceiling includes both old and candidate shapes during replacement");
+		Check(ConsumerWorld.DestroyBody(ConsumerBody).Succeeded(), "consumer-budget fixture retires");
+
+		PhysicsWorld MeasureWorld(PhysicsWorldConfig{});
+		const auto MeasureBody = MeasureWorld.CreateBody(MakeDescription(1));
+		const auto NativeBytes = MeasureWorld.GetCollisionResidency().NativeMeshBytes;
+		Check(MeasureBody.IsValid() && NativeBytes > 1, "native-byte fixture measures exact Box3D mesh size");
+		Check(MeasureWorld.DestroyBody(MeasureBody).Succeeded(), "native-byte measurement retires");
+		PhysicsWorld NativeAggregateWorld(PhysicsWorldConfig{
+			.CollisionResourceLimit = 2, .CollisionConsumerLimit = 2,
+			.CollisionNativeByteLimit = NativeBytes,
+		});
+		const auto NativeAggregateBody = NativeAggregateWorld.CreateBody(MakeDescription(1));
+		Check(NativeAggregateBody.IsValid() &&
+			!NativeAggregateWorld.UpdateBody(NativeAggregateBody, MakeDescription(2)).Succeeded() &&
+			NativeAggregateWorld.GetCollisionResidency().NativeMeshBytes == NativeBytes,
+			"native-byte ceiling counts old and candidate revision data together");
+		Check(NativeAggregateWorld.DestroyBody(NativeAggregateBody).Succeeded(),
+			"native aggregate-budget fixture retires");
+
+		PhysicsWorld NativeWorld(PhysicsWorldConfig{.CollisionNativeByteLimit = 1});
+		Check(!NativeWorld.CreateBody(MakeDescription(1)).IsValid(),
+			"native-byte ceiling rejects a mesh after bounded candidate construction");
+		Stats = NativeWorld.GetCollisionResidency();
+		Check(Stats.ActiveResources == 0 && Stats.CreatedResources == 0 && Stats.RetiredResources == 0 &&
+			Stats.FailedAdmissions == 1 &&
+			Stats.LastAdmissionFailure == "Mesh collision native-byte limit reached",
+			"native admission failure publishes no resource ownership and identifies the ceiling");
+	}
+
 	void TestKinematicWorldQueries() {
 		using namespace gargantuan;
 		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
@@ -852,6 +973,7 @@ int main() {
 	TestNeutralContract();
 	TestBackendIdentityAndLifecycle();
 	TestStaticTriangleMeshBackend();
+	TestMeshCollisionResidencyLimits();
 	TestKinematicWorldQueries();
 	TestCommittedBodyUpdates();
 	TestMeshPartCollisionFallback();

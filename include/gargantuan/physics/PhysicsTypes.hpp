@@ -19,6 +19,11 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumRaycastCandidates = 4096;
 	inline constexpr float MaximumRaycastDistance = 100'000.0f;
 	inline constexpr float MinimumRaycastDistance = 0.0001f;
+	inline constexpr std::size_t MaximumPhysicsCollisionResources = 1024;
+	inline constexpr std::size_t MaximumPhysicsCollisionConsumers = 65536;
+	inline constexpr std::size_t MaximumPhysicsCollisionCanonicalBytes = 64 * 1024 * 1024;
+	inline constexpr std::size_t MaximumPhysicsCollisionNativeBytes = 64 * 1024 * 1024;
+	inline constexpr std::size_t MaximumPhysicsCollisionResourceIdBytes = 128;
 
 	struct PhysicsBodyId {
 		std::uint32_t Slot = 0;
@@ -83,6 +88,10 @@ namespace gargantuan {
 	struct PhysicsWorldConfig {
 		glm::vec3 Gravity{0.0f, -196.2f, 0.0f};
 		bool EnableSleep = true;
+		std::size_t CollisionResourceLimit = MaximumPhysicsCollisionResources;
+		std::size_t CollisionConsumerLimit = MaximumPhysicsCollisionConsumers;
+		std::size_t CollisionCanonicalByteLimit = MaximumPhysicsCollisionCanonicalBytes;
+		std::size_t CollisionNativeByteLimit = MaximumPhysicsCollisionNativeBytes;
 	};
 
 	struct PhysicsStepConfig {
@@ -97,11 +106,20 @@ namespace gargantuan {
 	};
 
 	struct PhysicsCollisionResidency {
+		std::size_t ResourceLimit = 0;
+		std::size_t ConsumerLimit = 0;
+		std::size_t CanonicalByteLimit = 0;
+		std::size_t NativeByteLimit = 0;
 		std::size_t ActiveResources = 0;
 		std::size_t ActiveConsumers = 0;
 		std::size_t CanonicalBytes = 0;
 		std::size_t NativeMeshBytes = 0;
 		std::size_t FailedAdmissions = 0;
+		std::size_t CreatedResources = 0;
+		std::size_t RetiredResources = 0;
+		std::size_t CreatedConsumers = 0;
+		std::size_t RetiredConsumers = 0;
+		std::string LastAdmissionFailure;
 		// Box3D does not expose per-shape storage size.
 		bool NativeShapeBytesKnown = false;
 	};
