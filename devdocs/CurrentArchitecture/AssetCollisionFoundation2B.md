@@ -107,8 +107,11 @@ identity, dependency propagation, repeated replacement with bounded retained
 Collision artifacts, cancellation, stale last-known-good behavior, save/reopen,
 Play clone, packaged runtime resolution, and tampered artifact denial. Integrated
 Source13 passes the Windows/Linux focused suites and strict Linux ASan/UBSan/leak
-checks, with the exact profile and evidence in the
-[campaign report](../Validation/AssetGeometryCampaignValidation.md). This is scoped
-qualification: Box3D's 256-triangle local rigid-contact candidate cap can leave
-admitted dense meshes with incomplete contacts (KI-2B-001), as documented in the
-[physics contract](PhysicsBackend.md#dense-mesh-contact-limit-ki-2b-001).
+checks, with the exact profile and evidence in the historical
+[campaign report](../Validation/AssetGeometryCampaignValidation.md). The
+[KI-2B-001 follow-up](../Validation/DenseMeshContactKI2B001.md) supersedes its
+dense-contact limitation: native resources now own globally edge-identified
+chunks with at most 255 triangles per native shape, bounded shape/staging
+admission and neutral body-level event aggregation. Canonical artifact formats
+and service ownership remain unchanged. See the current
+[physics contract](PhysicsBackend.md#dense-mesh-contact-correction-ki-2b-001).

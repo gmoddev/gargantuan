@@ -1,7 +1,8 @@
 {
   "Version": 2,
   "Campaign": "Asset Foundation 2B and Geometry Foundation 1A",
-  "Status": "Implemented and locally qualified within documented limits; KI-2B-001 open; hosted PR CI separate",
+  "Status": "Historical Source13 delivery receipt; superseded by KI2B001Continuation.json for dense contacts and current CI",
+  "FollowUpReceipt": "KI2B001Continuation.json",
   "BaseCommit": "e682be08df84d776bfa455137728265c6494b5e8",
   "Branch": "feature/asset2b-geometry1a",
   "PullRequest": "https://github.com/gmoddev/gargantuan/pull/14",

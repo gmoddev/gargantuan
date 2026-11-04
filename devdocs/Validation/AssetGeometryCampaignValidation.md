@@ -1,5 +1,5 @@
 ---
-status: current
+status: historical
 date: 2026-11-04
 owner: runtime-assets
 related_code:
@@ -12,6 +12,11 @@ related_code:
 ---
 
 # Asset 2B and Geometry 1A campaign qualification
+
+This is the frozen Source13 delivery record. The
+[KI-2B-001 correction](DenseMeshContactKI2B001.md) supersedes its open dense-contact
+limitation and hosted-CI continuation. Measurements and earlier verdicts below
+retain their original source scope.
 
 ## Source and evidence boundary
 
