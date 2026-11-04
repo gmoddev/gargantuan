@@ -416,10 +416,18 @@ int main() {
 			const auto Record = Assets->GetAsset(RepeatedMesh.Record->Reference.Value);
 			const auto Collision = Assets->ResolveCollisionForMesh(RepeatedMesh.Record->Reference.Value);
 			const auto Hit = WorldRootTestAccess::Raycast(*WorkspaceValue);
+			const auto VisualMesh = Assets->ResolveMeshResource(RepeatedMesh.Record->Reference.Value);
+			auto Reopened = std::make_shared<DataModel>();
+			auto ReopenedAssets = GetAssets(Reopened);
+			ReopenedAssets->LoadProjectAssetSnapshot(Assets->CaptureProjectAssets());
+			const auto SavedCollision = ReopenedAssets->ResolveCollisionForMesh(RepeatedMesh.Record->Reference.Value);
 			Check(Record && Record->State == AssetState::Importing && Collision && PriorCollision &&
 				Collision->Id == PriorCollision->Id && Collision->ContentRevision == PriorCollision->ContentRevision &&
 				Hit.Succeeded() && Hit.Instance == CollisionConsumer && std::abs(Hit.Distance - 2.0f) < 0.001f,
 				"in-flight reimport keeps the complete previous triangle collision queryable");
+			Check(VisualMesh && SavedCollision && PriorCollision && SavedCollision->Id == PriorCollision->Id &&
+				SavedCollision->ContentRevision == PriorCollision->ContentRevision,
+				"in-flight project capture and visual resolution retain the complete published bake");
 		};
 		Filesystem.BeforeRead = VerifyInFlight;
 		Check(Assets->ReimportProjectAsset(Mount, RepeatedMesh.Record->Reference.Value).Ok && !Filesystem.BeforeRead,
@@ -457,6 +465,55 @@ int main() {
 		"Cancelled Mesh", CancelledCollision);
 	Check(!CancelledMesh.Ok && CancelledMesh.Records.empty() && CancelledMesh.Diagnostic.Code == "Cancelled",
 		"cancelled mesh import publishes neither mesh nor collision child");
+	{
+		// Exercise the compiler through the actual compound transaction, not only
+		// its candidate API. Runtime receives the bake without its source graph.
+		auto SolidWorld = std::make_shared<DataModel>();
+		auto SolidAssets = GetAssets(SolidWorld);
+		nlohmann::ordered_json SolidSource = {
+			{"Version", 1}, {"Root", "cut"}, {"Nodes", nlohmann::ordered_json::array({
+				{{"Id", "box"}, {"Kind", "Box"}, {"Size", {2, 2, 2}}},
+				{{"Id", "sphere"}, {"Kind", "Sphere"}, {"Radius", 0.5}},
+				{{"Id", "cut"}, {"Kind", "Subtraction"}, {"Inputs", {"box", "sphere"}}},
+			})},
+		};
+		WriteText(Root / "assets" / "cut.solid", SolidSource.dump());
+		const auto First = SolidAssets->ImportProjectAsset(Mount, "assets/cut.solid", AssetKind::Mesh, "Cut");
+		const auto FirstCollision = First.Record ? SolidAssets->ResolveCollisionForMesh(First.Record->Reference.Value) : std::nullopt;
+		Check(First.Ok && First.Record && First.Records.size() == 2 && FirstCollision,
+			"solid compilation atomically publishes an ordinary mesh and collision pair");
+		if (First.Record && FirstCollision) {
+			const auto SavedFirst = SolidAssets->CaptureProjectAssets();
+			SolidSource["Nodes"][0]["Size"][0] = 3;
+			WriteText(Root / "assets" / "cut.solid", SolidSource.dump());
+			const auto Second = SolidAssets->ReimportProjectAsset(Mount, First.Record->Reference.Value);
+			const auto SecondCollision = SolidAssets->ResolveCollisionForMesh(First.Record->Reference.Value);
+			Check(Second.Ok && Second.Record && SecondCollision && Second.Record->Id == First.Record->Id &&
+				SecondCollision->Id == FirstCollision->Id && Second.Record->ContentId != First.Record->ContentId &&
+				SecondCollision->ContentRevision > FirstCollision->ContentRevision,
+				"compatible solid recompilation retains both logical identities and advances changed revisions");
+			WriteText(Root / "assets" / "cut.solid", "{invalid source}");
+			const auto Failed = SolidAssets->ReimportProjectAsset(Mount, First.Record->Reference.Value);
+			Check(!Failed.Ok && Failed.Record && Second.Record && Failed.Record->State == AssetState::Stale &&
+				Failed.Record->ContentId == Second.Record->ContentId &&
+				SolidAssets->ResolveCollisionForMesh(First.Record->Reference.Value).has_value(),
+				"failed solid recompilation preserves the complete last-known-good bake");
+			auto RuntimeWorld = std::make_shared<DataModel>();
+			auto RuntimeAssets = GetAssets(RuntimeWorld);
+			RuntimeAssets->LoadRuntimeAssetSnapshot(SolidAssets->CaptureRuntimeAssets());
+			Check(RuntimeAssets->ResolveMesh(First.Record->Reference.Value).has_value() &&
+				RuntimeAssets->ResolveCollisionForMesh(First.Record->Reference.Value).has_value(),
+				"packaged solid runtime resolves compiled artifacts without source or Boolean evaluation");
+			auto OldWorld = std::make_shared<DataModel>();
+			auto OldAssets = GetAssets(OldWorld);
+			OldAssets->LoadProjectAssetSnapshot(SavedFirst);
+			const auto OldMesh = OldAssets->GetAsset(First.Record->Reference.Value);
+			const auto OldCollision = OldAssets->ResolveCollisionForMesh(First.Record->Reference.Value);
+			Check(OldMesh && OldCollision && OldMesh->ContentId == First.Record->ContentId &&
+				OldCollision->ContentRevision == FirstCollision->ContentRevision,
+				"captured old revisions remain independently reopenable after service artifact retirement");
+		}
+	}
 	{
 		auto PackageWorld = std::make_shared<DataModel>();
 		auto PackageAssets = GetAssets(PackageWorld);

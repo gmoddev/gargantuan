@@ -4,6 +4,10 @@
 cmake_minimum_required(VERSION 3.25)
 project(gargantuan CXX)
 
+option(GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION
+	"Configure focused native geometry/asset/physics tests without shader tooling; graphical/package targets fail closed"
+	OFF)
+
 # On Windows, vcpkg appends z-applocal to each Ninja link rule. Those commands
 # copy dependencies into the same output directory, so parallel links can race
 # on a DLL even when the link inputs themselves are independent. Keep compile
@@ -102,7 +106,9 @@ endforeach()
 ################################################################################
 
 include(cmake/ShaderTools.cmake)
-GargantuanFindGlslc(GARGANTUAN_GLSLC_EXECUTABLE)
+if(NOT GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
+	GargantuanFindGlslc(GARGANTUAN_GLSLC_EXECUTABLE)
+endif()
 if(APPLE)
 	find_program(SPIRV_CROSS spirv-cross)
 	find_program(XCRUN xcrun)
@@ -125,6 +131,9 @@ file(GLOB_RECURSE SHADER_INCLUDE_SOURCES CONFIGURE_DEPENDS "assets/shaders/*.gls
 set(SHADER_OUTPUTS "")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 foreach(SHADER IN LISTS SHADER_SOURCES)
+	if(GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
+		continue()
+	endif()
 	get_filename_component(SHADER_NAME ${SHADER} NAME)
 
 	set(SPIRV_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/shaders/${SHADER_NAME}.spv")
@@ -162,7 +171,14 @@ foreach(SHADER IN LISTS SHADER_SOURCES)
 	endif()
 endforeach()
 
-add_custom_target(gargantuan_shaders DEPENDS ${SHADER_OUTPUTS})
+if(GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
+	add_custom_target(gargantuan_shaders
+		COMMAND ${CMAKE_COMMAND} -E echo "[Build:HeadlessGeometry] Graphical and packaged targets require the normal shader-qualified build profile"
+		COMMAND ${CMAKE_COMMAND} -E false
+		VERBATIM)
+else()
+	add_custom_target(gargantuan_shaders DEPENDS ${SHADER_OUTPUTS})
+endif()
 
 ################################################################################
 # Vendors
@@ -400,6 +416,11 @@ set_target_properties(gargantuan_packager PROPERTIES OUTPUT_NAME "gargantuan-pac
 target_link_libraries(gargantuan_packager PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
 
 # Shader generation and executable-local staging are separate dependencies.
+if(GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
+	foreach(GARGANTUAN_GRAPHICAL_TARGET IN ITEMS gargantuan gargantuan_player gargantuan_server)
+		add_dependencies(${GARGANTUAN_GRAPHICAL_TARGET} gargantuan_shaders)
+	endforeach()
+endif()
 # Keep staging in ALL so an incremental build that adds a shader refreshes the
 # runtime directory even when the executable itself does not relink.
 add_custom_target(gargantuan_stage_shaders ALL
@@ -719,8 +740,11 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_solid_geometry PROPERTIES LABELS "geometry;assets;headless" TIMEOUT 120)
 	add_executable(gargantuan_solid_geometry_benchmark "tests/SolidGeometryBenchmark.cpp")
 	target_link_libraries(gargantuan_solid_geometry_benchmark PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_mesh_collision_benchmark "tests/MeshCollisionBenchmark.cpp")
+	target_link_libraries(gargantuan_mesh_collision_benchmark PRIVATE gargantuan_core nlohmann_json)
 	if(WIN32)
 		target_link_libraries(gargantuan_solid_geometry_benchmark PRIVATE Psapi)
+		target_link_libraries(gargantuan_mesh_collision_benchmark PRIVATE Psapi)
 	endif()
 	target_link_libraries(gargantuan_asset_foundation_tests PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_asset_foundation_tests PRIVATE

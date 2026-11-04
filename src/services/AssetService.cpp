@@ -321,7 +321,8 @@ namespace gargantuan {
 		}
 
 		bool IsAvailableRecord(const AssetRecord &Record) {
-			return Record.Asset && (Record.State == AssetState::Ready || Record.State == AssetState::Stale);
+			return Record.Asset && (Record.State == AssetState::Ready || Record.State == AssetState::Stale ||
+				(Record.State == AssetState::Importing && Record.ContentRevision > 0 && Record.ContentId.IsValid()));
 		}
 
 		std::string ArtifactPath(const AssetContentId &Id) {
@@ -1280,9 +1281,7 @@ namespace gargantuan {
 	std::optional<AssetCollisionResource> AssetService::ResolveCollision(std::string_view Reference) const {
 		std::scoped_lock Lock(State->Mutex);
 		const auto Record = State->Records.find(std::string(Reference));
-		if (Record == State->Records.end() || !Record->second.Asset ||
-			(!IsAvailableRecord(Record->second) && !(Record->second.State == AssetState::Importing &&
-				Record->second.ContentRevision > 0 && Record->second.ContentId.IsValid()))) return std::nullopt;
+		if (Record == State->Records.end() || !IsAvailableRecord(Record->second)) return std::nullopt;
 		const auto *Collision = std::get_if<ImportedCollision>(Record->second.Asset.get());
 		return Collision ? std::optional(AssetCollisionResource{
 			Record->second.Id, *Collision, Record->second.ContentRevision, AssetBytes(*Record->second.Asset)}) : std::nullopt;
@@ -1293,15 +1292,11 @@ namespace gargantuan {
 		const auto MeshRecord = State->Records.find(std::string(MeshReference));
 		// Reimport retains one complete previous revision until its atomic commit.
 		// Physics must continue to resolve that revision while the worker runs.
-		const auto HasPublishedContent = [](const AssetRecord &Record) {
-			return Record.Asset && (IsAvailableRecord(Record) ||
-				(Record.State == AssetState::Importing && Record.ContentRevision > 0 && Record.ContentId.IsValid()));
-		};
-		if (MeshRecord == State->Records.end() || !HasPublishedContent(MeshRecord->second)) return std::nullopt;
+		if (MeshRecord == State->Records.end() || !IsAvailableRecord(MeshRecord->second)) return std::nullopt;
 		const auto *Mesh = std::get_if<ImportedMesh>(MeshRecord->second.Asset.get());
 		if (!Mesh || !Mesh->CollisionAsset) return std::nullopt;
 		const auto CollisionRecord = State->Records.find(AssetReference::FromAssetId(*Mesh->CollisionAsset).Value);
-		if (CollisionRecord == State->Records.end() || !HasPublishedContent(CollisionRecord->second)) return std::nullopt;
+		if (CollisionRecord == State->Records.end() || !IsAvailableRecord(CollisionRecord->second)) return std::nullopt;
 		const auto *Collision = std::get_if<ImportedCollision>(CollisionRecord->second.Asset.get());
 		return Collision ? std::optional(AssetCollisionResource{
 			CollisionRecord->second.Id, *Collision, CollisionRecord->second.ContentRevision,
@@ -1498,7 +1493,8 @@ namespace gargantuan {
 		std::vector<const AssetRecord *> Ordered;
 		for (const auto &[Reference, Record] : State->Records) {
 			(void)Reference;
-			if (!Record.BuiltIn && Record.State != AssetState::Importing) Ordered.push_back(&Record);
+			if (!Record.BuiltIn && (Record.State != AssetState::Importing || IsAvailableRecord(Record)))
+				Ordered.push_back(&Record);
 		}
 		std::ranges::sort(Ordered, {}, [](const AssetRecord *Record) { return Record->Reference.Value; });
 		std::unordered_set<std::string> RequiredArtifacts;
@@ -1512,7 +1508,8 @@ namespace gargantuan {
 				{"Kind", GetAssetKindName(Record->Kind)}, {"Name", Record->Name}, {"Source", Record->Source},
 				{"ContentId", Record->ContentId.IsValid() ? Json(Record->ContentId.ToString()) : Json(nullptr)},
 				{"ContentRevision", Record->ContentRevision},
-				{"State", GetAssetStateName(Record->State)}, {"Diagnostic", std::move(Diagnostic)},
+				{"State", GetAssetStateName(Record->State == AssetState::Importing ? AssetState::Stale : Record->State)},
+				{"Diagnostic", std::move(Diagnostic)},
 				{"SourceGroupId", Record->SourceGroupId.ToString()}, {"LogicalKey", Record->LogicalKey},
 				{"PrimarySourceAsset", Record->PrimarySourceAsset}, {"Dependencies", std::move(Dependencies)},
 			});
@@ -1546,8 +1543,7 @@ namespace gargantuan {
 		for (const auto &[Reference, Record] : State->Records) {
 			(void)Reference;
 			if (Record.BuiltIn) continue;
-			if ((Record.State != AssetState::Ready && Record.State != AssetState::Stale) ||
-				!Record.ContentId.IsValid() || !Record.Asset)
+			if (!IsAvailableRecord(Record) || !Record.ContentId.IsValid())
 				throw std::runtime_error("Runtime packaging requires every project asset to have canonical content");
 			Ordered.push_back(&Record);
 		}
@@ -1560,7 +1556,8 @@ namespace gargantuan {
 				{"AssetId", Record->Id.ToString()}, {"Reference", Record->Reference.Value},
 				{"Kind", GetAssetKindName(Record->Kind)}, {"Name", Record->Name},
 				{"ContentId", Record->ContentId.ToString()}, {"ContentRevision", Record->ContentRevision},
-				{"State", GetAssetStateName(Record->State)}, {"Dependencies", std::move(Dependencies)},
+				{"State", GetAssetStateName(Record->State == AssetState::Importing ? AssetState::Stale : Record->State)},
+				{"Dependencies", std::move(Dependencies)},
 			});
 			RequiredArtifacts.insert(Record->ContentId.ToString());
 		}

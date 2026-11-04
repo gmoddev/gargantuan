@@ -14,6 +14,15 @@ related_adrs: []
 
 ## Supported CI configuration
 
+The opt-in local `GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION=ON` profile permits
+focused Asset 2B/Geometry 1A native tests on an existing worker without shader
+tooling. It uses the real production C++ core and test targets; it supplies no
+fake shader compiler. Shader, graphical executable, and packaged runtime targets
+fail closed in that profile. Build named asset/physics/geometry targets and run
+their selected tests only. This profile cannot replace the complete Windows or
+Linux hosted CI contracts, shader validation, or runtime package qualification.
+The option defaults to OFF, preserving the normal compiler preflight and build.
+
 Documentation builds on ordinary main pushes. Pages publication requires an
 explicit `Documentation` workflow dispatch on `main` with boolean `deploy=true`;
 the default dispatch builds only. Pages/OIDC write permissions belong only to

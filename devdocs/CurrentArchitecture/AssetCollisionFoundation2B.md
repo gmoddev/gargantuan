@@ -80,6 +80,14 @@ one service lock. First imports without published content remain unavailable;
 failed reimports retain their prior coherent collision. Geometry replacement still
 occurs only at the normal physics safe point.
 
+The same published-content rule applies to visual and other asset resolvers.
+An in-flight project/runtime snapshot serializes a retained complete revision as
+`Stale`, never as an unfinished `Importing` candidate, and includes all its
+artifacts/dependencies. An initial import without published content still cannot
+enter a runtime package. The existing synchronous import caller still waits for
+its worker; this change does not introduce asynchronous Studio import or another
+publication authority.
+
 The headless asset tests cover OBJ and glTF companion publication, stable
 identity, dependency propagation, repeated replacement with bounded retained
 Collision artifacts, cancellation, stale last-known-good behavior, save/reopen,
