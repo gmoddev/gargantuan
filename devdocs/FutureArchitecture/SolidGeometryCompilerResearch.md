@@ -9,6 +9,12 @@ related_current_architecture:
 
 # Solid geometry compiler research
 
+The initial implementation is now recorded in
+[Geometry Foundation 1A](../CurrentArchitecture/SolidGeometryFoundation1A.md) and
+the [collision/compiler decisions](../CurrentArchitecture/AssetCollisionGeometryDecisions.md).
+This research remains non-normative; its broader material/provenance and Studio
+directions do not imply that those features are implemented or qualified.
+
 ## Validated direction
 
 Gargantuan should treat constructive solid geometry (CSG) as a versioned,

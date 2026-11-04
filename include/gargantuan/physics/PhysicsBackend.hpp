@@ -21,6 +21,7 @@ namespace gargantuan {
 		virtual PhysicsOperationResult ApplyLinearImpulse(PhysicsBodyId Body, glm::vec3 Impulse) = 0;
 		virtual PhysicsOperationResult SetGravity(glm::vec3 Gravity) = 0;
 		[[nodiscard]] virtual std::optional<PhysicsBodyState> GetBodyState(PhysicsBodyId Body) const = 0;
+		[[nodiscard]] virtual PhysicsCollisionResidency GetCollisionResidency() const { return {}; }
 		[[nodiscard]] virtual PhysicsKinematicMotionResult
 		MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const = 0;
 		[[nodiscard]] virtual PhysicsRaycastResult Raycast(const PhysicsRaycastRequest &Request) const = 0;
@@ -51,6 +52,7 @@ namespace gargantuan {
 		PhysicsOperationResult ApplyLinearImpulse(PhysicsBodyId Body, glm::vec3 Impulse);
 		PhysicsOperationResult SetGravity(glm::vec3 Gravity);
 		[[nodiscard]] std::optional<PhysicsBodyState> GetBodyState(PhysicsBodyId Body) const;
+		[[nodiscard]] PhysicsCollisionResidency GetCollisionResidency() const;
 		[[nodiscard]] PhysicsKinematicMotionResult
 		MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const;
 		[[nodiscard]] PhysicsRaycastResult Raycast(const PhysicsRaycastRequest &Request) const;

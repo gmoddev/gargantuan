@@ -37,6 +37,33 @@ Closure requires a separately scoped package/asset metadata correction and a
 non-normalized imported/generated mesh regression; 3M's current scale receipt
 does not certify this integration.
 
+## KI-2B-001: Dense mesh rigid contacts can reach Box3D's candidate cap
+
+- Status: Corrected in PR14's bounded native chunk policy; exact local evidence
+  and final-head hosted qualification are tracked in the follow-up report.
+- Area: Native rigid-contact projection for admitted static triangle meshes.
+- Relevant code: pinned Box3D `src/mesh_contact.c`,
+  `src/physics/Box3DPhysicsBackend.cpp`.
+- Evidence: [KI-2B-001 correction and qualification](devdocs/Validation/DenseMeshContactKI2B001.md).
+
+The pinned backend gathers at most 256 triangles per local rigid-contact query
+and processes that subset. Reaching the cap emits a warning once per process;
+it is not a per-asset admission rejection or a neutral truncation diagnostic.
+The prior single-shape projection could therefore omit rigid contacts. The Source13
+2048-triangle Windows stress fixture reaches the cap and produces contacts, but
+does not prove a missed contact or complete coverage. Rays and mover queries have
+separate paths and evidence. Canonical collision artifacts remain valid,
+backend-neutral data; their triangle limit is not this local query limit.
+
+The 300-decoy/one-support regression reproduces the miss on the old Windows and
+Linux runtimes, while the corrected runtime contacts the support. Each native
+shape now contains at most 255 triangles, retaining global edge adjacency.
+Per-world native shape and byte bounds, staged rollback, shared residency and
+neutral seam events are tested. The allocator alignment defect exposed by this
+path is corrected in a hash-checked private vendor build copy. This closes the
+candidate-omission mechanism within the qualified policy; it does not remove
+the independent solver, event/query bounds or dynamic-concave limitation.
+
 ## KI-010: PreRun deadline interrupt can recurse during GC error construction
 
 - Status: Corrected in the PreRun authoring candidate; focused validation and

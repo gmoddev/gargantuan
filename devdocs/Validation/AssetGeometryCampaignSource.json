@@ -1,0 +1,74 @@
+{
+  "Version": 2,
+  "Campaign": "Asset Foundation 2B and Geometry Foundation 1A",
+  "Status": "Historical Source13 delivery receipt; superseded by KI2B001Continuation.json for dense contacts and current CI",
+  "FollowUpReceipt": "KI2B001Continuation.json",
+  "BaseCommit": "e682be08df84d776bfa455137728265c6494b5e8",
+  "Branch": "feature/asset2b-geometry1a",
+  "PullRequest": "https://github.com/gmoddev/gargantuan/pull/14",
+  "FunctionalCommit": "efbe1b88ef860c749c9edf335b5a6ff31c8009a4",
+  "Archive": "Candidate13.tar",
+  "ArchiveSHA256": "3623F4960260FDB73194389BB8D39E25C7B6E23EE40233E2D0B8C22D6B094375",
+  "GeneratedArchive": "Candidate01Generated.tar",
+  "GeneratedArchiveSHA256": "D054C25BC9188845AD2650E728EC8DE80F86CB74C621FBE1EF4DFAE77E687B32",
+  "LocalArtifacts": "C:/Users/aiden/.codex/artifacts/asset-geometry-20261104",
+  "WorkerNamespace": "C:/Sandbox/Codex/Workspaces/asset-geometry-20261104",
+  "Evidence": {
+    "QualificationArtifact": "Candidate13-Qualification.json",
+    "QualificationSHA256": "C2DF273FD5DC43FFF8A6D555980DFF699F60917EE90B6835E7EEE2BA79C9C1AA",
+    "LogManifest": "Candidate13-LogManifest.json",
+    "LogManifestSHA256": "E0FF3FC4C59A17D45F6939FE7336EAD7940EE0B9776744BEF6BBC6AA6DB486CC",
+    "HashedFiles": 233,
+    "WindowsBenchmarkProcesses": 15,
+    "LinuxPostBenchmarkProcesses": 15,
+    "AllBenchmarkProcessExitCodes": 0
+  },
+  "CompilerDependency": {
+    "Name": "Manifold",
+    "Release": "v3.5.4",
+    "Commit": "ce50d78021d64507f89e8c9fc2c2e51018117857",
+    "ArchiveSHA256": "ce2f8b7798409b9f07e092c0ec0524ed0806431e01aea4020b65d0e934ea9438",
+    "ManifestFiles": 46,
+    "IndependentArchiveAndGitBlobVerification": true,
+    "Build": "Serial static 3D core; offline; no optional downloads"
+  },
+  "Qualification": {
+    "Windows": "Source13 MSVC19.51 Release focused 8/8 and related 7/7 passed; 128-case seeded mutation corpus passed; real glslc; first packaging TEMP-prefix failure retained with unchanged-binary short-TEMP A/B pass",
+    "Linux": "Source13 Release focused 8/8 passed; 128-case seeded mutation corpus passed; GCC13 focused headless profile; two jobs",
+    "Sanitizers": "Source13 GCC13.3 C17/C++23 strict ASan/UBSan/leak detection focused 8/8 and 128-case corpus passed; alignment enabled; no reported sanitizer errors; Source11 failure retained",
+    "Performance": "Source11 versus Source13 same-host GCC13 Release paired 101-call measurements complete; Windows absolute geometry/import/native-query baselines complete; seven fixed repeated candidate Mesh hashes match across measured Windows/Linux profiles; near-cap/cancellation single observations separate",
+    "CppAllocations": "Paired simple/medium/near probe complete: +1 allocation and +72 requested/peak-live bytes; retained counts unchanged 0/224/0; excludes malloc/native heaps",
+    "IndependentReview": "Read-only lifecycle, transaction, dependency, final compatibility and evidence review complete through Source13; incremental hash-guard finding corrected; KI-2B-001 explicitly limits dense-contact claims",
+    "HostedCi": "Automatic draft PR checks are separate full hosted profiles; first delivery commit 7ea1e81c30581d781bda83e9f4df19e582530c96 has runs 41784250200 (native) and 41784250179 (GNS) still running at report preparation; no hosted pass claimed"
+  },
+  "Box3DCompatibility": {
+    "PinnedCommit": "8441b4a06d6d09dcfb0b0f704df4d847d1437b92",
+    "OriginalHeaderCanonicalLF": "688fef3ccbbda3f0923ab5a227bf143408ae02aefa63f79ffbb1798ec71c37b4",
+    "OriginalRawHeaderBothWorkers": "CEAB82F8C72FE58DC74F2BA0C8DB1F721A793A859FC9DA3CF058A18028BBFD62",
+    "PatchedHeaderCanonicalLF": "3A8CDE9621D4509B083B7429E6EBFF1FA2C9EF9F28F114F977D2DE4EB7E3F72D",
+    "PatchedWindowsRawCRLF": "8ACAF6951B55B80682F5E8F5900B56DCC0469852AA49C147C7E405C724248DB5",
+    "VendorUnchanged": true,
+    "Scope": "Checked private build copy; unknown source and incremental changes fail closed"
+  },
+  "FinalWorkerState": {
+    "WindowsCensusUTC": "2026-11-04T06:36:03.9088019Z",
+    "WindowsCompilerAndBenchmarkProcesses": 0,
+    "LinuxCensusUTC": "2026-11-04T06:34:59Z",
+    "LinuxTaskContainersAndCompilers": 0,
+    "ExistingCachesAndServicesPreserved": true
+  },
+  "Boundaries": {
+    "StaticMeshOptIn": true,
+    "LegacyDefaultBoxPreserved": true,
+    "DynamicConcave": "Explicit Box alternative; no dynamic concave simulation",
+    "DenseRigidContactCompleteness": "Not established when Box3D's local 256-triangle contact candidate cap is reached; admitted meshes may have incomplete contacts; KI-2B-001 open",
+    "KernelHardAllocatorQuota": false,
+    "KernelPreemptiveDeadline": false,
+    "UniversalCrossToolchainByteDeterminism": false,
+    "StudioChanged": false,
+    "Foundation3MDemandPolicyChanged": false,
+    "Foundation3LNetworkingLifecycleChanged": false,
+    "MainMerged": false
+  },
+  "Continuation": "Verify PR14 delivery head and hosted checks; runtime/build/test source is frozen efbe1b88 and later delivery edits are documentation. Preserve Candidate13 and its evidence hashes. Next targeted implementation: deterministic Box3D local contact overflow/missed-contact fixture and an observable bounded mitigation for KI-2B-001, then scope Studio authoring/material provenance separately. Do not merge main, alter 3M/3L contracts, or rerun unrelated physical campaigns."
+}

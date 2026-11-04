@@ -986,7 +986,7 @@ namespace gargantuan {
 
 			AssetImportGraphCandidate Graph;
 			Graph.PrimaryLogicalKey = MeshKeys.front();
-			Graph.Nodes.reserve(ImageCount + MaterialCount + Root["meshes"].size() + Animations.size());
+			Graph.Nodes.reserve(ImageCount + MaterialCount + Root["meshes"].size() * 2 + Animations.size());
 			for (std::size_t Index = 0; Index < ImageCount; ++Index) {
 				if (Cancelled(Context)) return std::unexpected(Error("Cancelled", "glTF import was cancelled"));
 				const auto &Image = Root["images"][Index];
@@ -1328,6 +1328,15 @@ namespace gargantuan {
 				ImportedMesh Mesh{Vertices, Indices, Bounds, static_cast<std::uint32_t>(Primitives->size()), Primitives,
 					Skin ? std::make_shared<const ImportedSkeleton>(Skin->Skeleton) : nullptr,
 					Skin ? std::shared_ptr<const std::vector<ImportedSkinInfluence>>(std::move(SkinInfluences)) : nullptr};
+				if (!Skin) {
+					auto Collision = BuildCollisionFromMesh(Mesh);
+					if (!Collision) return std::unexpected(Collision.error());
+					const auto CollisionKey = MeshKeys[MeshIndex] + "/collision";
+					Bindings.push_back({AssetImportBindingKind::MeshCollision, 0, CollisionKey});
+					Graph.Nodes.push_back({CollisionKey, AssetKind::Collision,
+						BoundedName(SourceMesh, "Mesh " + std::to_string(MeshIndex)) + " Collision",
+						std::move(*Collision)});
+				}
 				Graph.Nodes.push_back({MeshKeys[MeshIndex], AssetKind::Mesh,
 					BoundedName(SourceMesh, "Mesh " + std::to_string(MeshIndex)), Mesh, {}, {}, std::move(Bindings)});
 			}

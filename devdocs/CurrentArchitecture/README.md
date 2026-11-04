@@ -112,6 +112,13 @@
   `AssetService`, strict stable references, content-addressed image/mesh/font
   artifacts, bounded import/cache behavior, GUI/render residency, persistence,
   Play cloning, and Studio/EditorHost commands.
+- [Asset 2B and Geometry 1A decisions](AssetCollisionGeometryDecisions.md) define
+  canonical collision ownership, persistent MeshPart policy, offline solid
+  compilation and atomic Mesh/Collision publication. The
+  [collision](AssetCollisionFoundation2B.md) and
+  [compiler](SolidGeometryFoundation1A.md) contracts provide formats, APIs and
+  bounds; the [campaign report](../Validation/AssetGeometryCampaignValidation.md)
+  records exact-source qualification and remaining limitations.
 - [Physics backend](PhysicsBackend.md) defines neutral rigid-body semantics,
   generation-safe physics identity, safe-point updates, and Box3D confinement.
 - [Soft-body Physics Foundation 2](SoftBodyPhysicsFoundation2.md) defines the

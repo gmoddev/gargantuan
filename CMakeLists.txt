@@ -4,6 +4,10 @@
 cmake_minimum_required(VERSION 3.25)
 project(gargantuan CXX)
 
+option(GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION
+	"Configure focused native geometry/asset/physics tests without shader tooling; graphical/package targets fail closed"
+	OFF)
+
 # On Windows, vcpkg appends z-applocal to each Ninja link rule. Those commands
 # copy dependencies into the same output directory, so parallel links can race
 # on a DLL even when the link inputs themselves are independent. Keep compile
@@ -102,7 +106,9 @@ endforeach()
 ################################################################################
 
 include(cmake/ShaderTools.cmake)
-GargantuanFindGlslc(GARGANTUAN_GLSLC_EXECUTABLE)
+if(NOT GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
+	GargantuanFindGlslc(GARGANTUAN_GLSLC_EXECUTABLE)
+endif()
 if(APPLE)
 	find_program(SPIRV_CROSS spirv-cross)
 	find_program(XCRUN xcrun)
@@ -125,6 +131,9 @@ file(GLOB_RECURSE SHADER_INCLUDE_SOURCES CONFIGURE_DEPENDS "assets/shaders/*.gls
 set(SHADER_OUTPUTS "")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 foreach(SHADER IN LISTS SHADER_SOURCES)
+	if(GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
+		continue()
+	endif()
 	get_filename_component(SHADER_NAME ${SHADER} NAME)
 
 	set(SPIRV_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/shaders/${SHADER_NAME}.spv")
@@ -162,7 +171,14 @@ foreach(SHADER IN LISTS SHADER_SOURCES)
 	endif()
 endforeach()
 
-add_custom_target(gargantuan_shaders DEPENDS ${SHADER_OUTPUTS})
+if(GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
+	add_custom_target(gargantuan_shaders
+		COMMAND ${CMAKE_COMMAND} -E echo "[Build:HeadlessGeometry] Graphical and packaged targets require the normal shader-qualified build profile"
+		COMMAND ${CMAKE_COMMAND} -E false
+		VERBATIM)
+else()
+	add_custom_target(gargantuan_shaders DEPENDS ${SHADER_OUTPUTS})
+endif()
 
 ################################################################################
 # Vendors
@@ -189,9 +205,20 @@ set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(vendor/argparse SYSTEM)
-add_subdirectory(vendor/box3d SYSTEM)
+enable_language(C)
+include(cmake/Box3DCompatibility.cmake)
+GargantuanPrepareBox3DCompatibility("${CMAKE_CURRENT_SOURCE_DIR}/vendor/box3d" GARGANTUAN_BOX3D_SOURCE_DIR)
+add_subdirectory("${GARGANTUAN_BOX3D_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-build" SYSTEM)
+# Only the private implementation header changes. Keep the identical public API
+# include path stable for consumers and avoid recompiling unrelated core sources.
+set_property(TARGET box3d PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+	"$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/vendor/box3d/include>;$<INSTALL_INTERFACE:include>")
 add_subdirectory(vendor/glm SYSTEM)
-add_subdirectory(vendor/glaze SYSTEM)
+# The optional codec prototype is outside focused headless geometry qualification.
+# Its CMake 3.31 requirement must not become an unused native-test dependency.
+if(NOT GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION OR GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE)
+	add_subdirectory(vendor/glaze SYSTEM)
+endif()
 add_subdirectory(vendor/json SYSTEM)
 add_subdirectory(vendor/luau SYSTEM)
 add_subdirectory(vendor/sdl SYSTEM)
@@ -353,7 +380,9 @@ if(NOT GARGANTUAN_WITH_FILAMENT)
 endif()
 list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/network/GameNetworkingSocketsTransport.cpp")
 
+include(cmake/Manifold.cmake)
 add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
+target_link_libraries(gargantuan_core PUBLIC GargantuanManifold)
 add_executable(gargantuan "src/Main.cpp" ${GARGANTUAN_TELEMETRY_HOST_SOURCES} ${SHADER_OUTPUTS})
 target_link_libraries(gargantuan PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
 add_library(gargantuan_runtime_host STATIC "src/host/common/PackagedHost.cpp")
@@ -398,6 +427,11 @@ set_target_properties(gargantuan_packager PROPERTIES OUTPUT_NAME "gargantuan-pac
 target_link_libraries(gargantuan_packager PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
 
 # Shader generation and executable-local staging are separate dependencies.
+if(GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
+	foreach(GARGANTUAN_GRAPHICAL_TARGET IN ITEMS gargantuan gargantuan_player gargantuan_server)
+		add_dependencies(${GARGANTUAN_GRAPHICAL_TARGET} gargantuan_shaders)
+	endforeach()
+endif()
 # Keep staging in ALL so an incremental build that adds a shader refreshes the
 # runtime directory even when the executable itself does not relink.
 add_custom_target(gargantuan_stage_shaders ALL
@@ -711,6 +745,57 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_prepared_property PROPERTIES LABELS "runtime;property;history;journal;editorhost")
 	target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_asset_foundation_tests "tests/AssetFoundationTests.cpp")
+	add_executable(gargantuan_solid_geometry_tests "tests/SolidGeometryTests.cpp")
+	target_link_libraries(gargantuan_solid_geometry_tests PRIVATE gargantuan_core nlohmann_json)
+	add_test(NAME gargantuan_solid_geometry COMMAND gargantuan_solid_geometry_tests)
+	set_tests_properties(gargantuan_solid_geometry PROPERTIES LABELS "geometry;assets;headless" TIMEOUT 120)
+	add_executable(gargantuan_solid_geometry_benchmark "tests/SolidGeometryBenchmark.cpp")
+	target_link_libraries(gargantuan_solid_geometry_benchmark PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_mesh_collision_benchmark "tests/MeshCollisionBenchmark.cpp")
+	target_link_libraries(gargantuan_mesh_collision_benchmark PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_solid_allocation_probe "tests/SolidGeometryAllocationProbe.cpp")
+	target_link_libraries(gargantuan_solid_allocation_probe PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_solid_allocation_probe COMMAND gargantuan_solid_allocation_probe --scenario simple)
+	set_tests_properties(gargantuan_solid_allocation_probe PROPERTIES LABELS "geometry;allocation;headless" TIMEOUT 30)
+	add_executable(gargantuan_box3d_compatibility_tests "tests/Box3DCompatibilityTests.c")
+	target_compile_features(gargantuan_box3d_compatibility_tests PRIVATE c_std_17)
+	target_include_directories(gargantuan_box3d_compatibility_tests PRIVATE
+		"${GARGANTUAN_BOX3D_SOURCE_DIR}/src" "${GARGANTUAN_BOX3D_SOURCE_DIR}/include")
+	target_link_libraries(gargantuan_box3d_compatibility_tests PRIVATE box3d::box3d)
+	add_test(NAME gargantuan_box3d_compatibility COMMAND gargantuan_box3d_compatibility_tests)
+	add_executable(gargantuan_box3d_mesh_chunk_tests "tests/Box3DMeshChunkTests.cpp")
+	target_link_libraries(gargantuan_box3d_mesh_chunk_tests PRIVATE box3d::box3d)
+	add_test(NAME gargantuan_box3d_mesh_chunks COMMAND gargantuan_box3d_mesh_chunk_tests)
+	set_tests_properties(gargantuan_box3d_mesh_chunks PROPERTIES LABELS "physics;geometry;dependency;headless" TIMEOUT 60)
+	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-guard-test")
+	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-smoke-test")
+	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-incremental-test")
+	add_test(NAME gargantuan_box3d_source_guard COMMAND ${CMAKE_COMMAND}
+		"-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/Box3DCompatibilityGuard.cmake")
+	add_test(NAME gargantuan_box3d_source_smoke COMMAND ${CMAKE_COMMAND}
+		"-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+		"-DBOX3D_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/vendor/box3d"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/Box3DCompatibilitySmoke.cmake")
+	add_test(NAME gargantuan_box3d_incremental_guard COMMAND ${CMAKE_COMMAND}
+		"-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+		"-DBOX3D_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/vendor/box3d"
+		"-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+		"-DTEST_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/Box3DCompatibilityIncremental.cmake")
+	set_tests_properties(gargantuan_box3d_source_guard PROPERTIES
+		WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-guard-test")
+	set_tests_properties(gargantuan_box3d_source_smoke PROPERTIES
+		WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-smoke-test")
+	set_tests_properties(gargantuan_box3d_incremental_guard PROPERTIES
+		WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-incremental-test")
+	set_tests_properties(gargantuan_box3d_compatibility gargantuan_box3d_source_guard gargantuan_box3d_source_smoke
+		gargantuan_box3d_incremental_guard
+		PROPERTIES LABELS "physics;dependency;headless" TIMEOUT 30)
+	if(WIN32)
+		target_link_libraries(gargantuan_solid_geometry_benchmark PRIVATE Psapi)
+		target_link_libraries(gargantuan_mesh_collision_benchmark PRIVATE Psapi)
+	endif()
 	target_link_libraries(gargantuan_asset_foundation_tests PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_asset_foundation_tests PRIVATE
 		GARGANTUAN_ASSET_TEST_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"

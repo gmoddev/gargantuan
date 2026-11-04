@@ -52,7 +52,8 @@ The engine-facing contract is defined by `PhysicsTypes.hpp` and
 `PhysicsBackend.hpp`:
 
 - `PhysicsBodyId` and `PhysicsConstraintId` are slot/generation value IDs;
-- `PhysicsShapeDesc` describes the supported Part primitives and size;
+- `PhysicsShapeDesc` describes the supported Part primitives, size, and optional
+  immutable collision triangle resource;
 - `PhysicsBodyDesc` describes transform, shape, anchoring, collision, touch, and density;
 - `PhysicsConstraintDesc` currently describes only a weld between neutral body IDs;
 - `PhysicsWorldConfig` and `PhysicsStepConfig` define gravity and explicit fixed-step input;
@@ -63,7 +64,7 @@ The engine-facing contract is defined by `PhysicsTypes.hpp` and
 - `PhysicsOperationResult` reports neutral success, invalid-ID,
   invalid-description, or backend-failure states.
 
-The rigid contract intentionally has no mesh collider, controller policy,
+The rigid contract intentionally has no controller policy,
 projectile, network ownership, prediction, rollback, or deformable vocabulary.
 Deformable vocabulary lives in the separate `SoftBodyTypes.hpp` contract.
 
@@ -79,7 +80,7 @@ destroy operations fail closed with a structured result. Generation exhaustion
 retires the slot rather than wrapping it.
 
 The Box3D adapter privately maps a live neutral ID to a body record containing
-the current `b3BodyId` and `b3ShapeId`. Box3D body user data points only to a
+the current `b3BodyId` and its primary/additional `b3ShapeId` values. Box3D body user data points only to a
 backend-owned stable record. The adapter normalizes that record back to a
 generation-checked `PhysicsBodyId` before returning an event. No Instance pointer
 is stored in Box3D.
@@ -95,15 +96,74 @@ the body slot can be reused.
 semantics. Box, ball, cylinder, wedge, and corner-wedge Box3D geometry is
 constructed only inside `Box3DPhysicsBackend.cpp`.
 
+`MeshPart` defaults to inherited Box collision. `CollisionMode = StaticMesh`
+resolves a separately validated canonical Collision asset from `AssetService`;
+render triangles do not enter the physics contract. Its neutral immutable
+resource contains positions, indices, asset reference, and revision. The adapter
+reuses a native chunk set for bodies on the same revision; each consumer projects
+one shape per chunk. Chunks contain at most 255 triangles and retain global edge
+adjacency, so the backend's 256-triangle contact cache cannot omit a candidate.
+MeshPart.Size scales canonical vertices per axis, matching
+the renderer. Native mesh data retires after its last live shape.
+Before native shape creation, the adapter rejects scaled triangles whose cross
+product squared is below `1e-10`, non-finite scaled coordinates, and transformed
+mesh vertices or body translation beyond 100,000 world units. This is the pinned
+Box3D float-coordinate sanity bound; rejected updates keep the prior shape,
+including transform-only updates.
+`CFrame` can contain a directly constructed non-rigid matrix. Static mesh
+collision requires unit orthogonal axes with positive handedness within
+`1e-5`; shear, reflection, and non-unit bases fail before native mutation.
+World-bound checks use the same normalized quaternion rotation as the Box3D
+adapter, so a matrix accepted by this gate is checked in the projected pose.
+
+Box3D creates mesh contacts only on static bodies. Unanchored MeshParts that
+request `StaticMesh` use the inherited Box collision, including anchor
+transitions, and receive one bounded `[Physics:Mesh]` diagnostic per WorldRoot.
+Unavailable collision content fails the requested update, retaining any previous
+coherent backend shape and neutral body identity. Initial body creation waits
+for valid content. A bounded `[Physics:Mesh]` diagnostic reports failure. The
+asset change journal schedules safe-point retry when content changes.
+For Size components below 0.01, Box3D would silently clamp mesh scale; the
+semantic projection instead uses the inherited Box with a bounded diagnostic.
+Invalid direct neutral mesh descriptions fail closed before Box3D admission.
+
 `BasePart` does not create Box3D shapes or hold a backend handle. `WorldRoot`
 builds a `PhysicsBodyDesc` from committed Part state. The backend chooses whether
-an update is an in-place transform/body-type change, an event-flag update, or a
+an update is an in-place transform/body-type change or a
 private shape replacement.
+CanTouch changes replace shapes transactionally: the pinned backend copies event
+flags when creating a contact and does not refresh them for an in-place flag write.
 
 An unsuccessful shape replacement leaves the previous backend shape and neutral
 identity intact. The update reports failure, `WorldRoot` logs it with the
-`[Physics:Backend]` prefix, and the dirty update remains eligible for retry. The
+`[Physics:Backend]` or bounded `[Physics:Mesh]` prefix, and the dirty update
+remains eligible for retry. The
 engine does not claim silent physics synchronization success.
+
+`PhysicsWorld::GetCollisionResidency` reports active shared resources, active
+shape consumers, neutral position/index bytes, native Box3D mesh-data bytes,
+failed mesh admissions, and cumulative admitted/retired resource and consumer
+counts. A bounded last-failure message identifies the rejected ceiling. Each
+PhysicsWorld admits at most 1,024 distinct live native mesh
+resources, 65,536 consumers, 65,536 projected mesh shapes, 64 MiB of retained neutral position/index
+buffers, and 64 MiB of `b3MeshData::byteCount`. `PhysicsWorldConfig` may lower
+each ceiling for a world but cannot raise the hard maximum. Shared consumers
+charge one resource and one canonical/native chunk set, plus one consumer and
+the set's shape count each. Candidate and prior shapes are both charged until replacement succeeds.
+When a ceiling denies admission, the prior shape and body identity remain live
+and retryable; final retirement releases the budget. Build admission conservatively
+reserves the complete global adjacency mesh plus staged chunk blobs within the
+remaining native-byte budget, using geometry-derived blob upper bounds before
+construction. The reported native bytes sum retained chunks. `PeakBuildNativeBytes`
+records peak charged blobs for completed builds; builder scratch, C++ arrays and
+unsuccessful-build peaks are excluded. A denied candidate is destroyed before publication. Box3D does not expose
+per-shape storage size, so native shape bytes remain explicitly unknown. Weak
+cache entries do not pin a resource or prevent retirement.
+The neutral collision resource key is capped at 128 bytes before caching.
+Read-only residency additionally reports `NativeChunks`, `ChunkTriangleLimit`,
+`MeshShapeLimit`, active/created/retired mesh shapes and completed build peak bytes.
+`CollisionMeshShapeLimit` lowers the mesh projection ceiling without changing
+primitive admission or any residency-demand policy.
 
 ## Main-domain safe points
 
@@ -112,12 +172,21 @@ property signal. For a tracked `BasePart`, `WorldRoot` observes `CFrame`, `Size`
 `Anchored`, `CanCollide`, `CanTouch`, and `Shape` and records only a dirty neutral
 body intent. It does not call Box3D from the setter callback.
 
+For MeshPart, it also observes `Mesh` and `CollisionMode`.
+
 At the beginning of `StepPhysics`, on Main and before any Box3D step,
 `WorldRoot` applies dirty body updates in sorted `ObjectId` order. Gravity and
 constraint changes use the same pre-step boundary. Pending impulses are applied
 immediately before a fixed simulation step. Removal or destruction erases dirty
 work before destroying the body, so a dead Part cannot be recreated by an older
 intent.
+
+Mesh asset revision changes are observed through the bounded AssetService
+journal at the same safe point. Matching MeshParts are marked dirty; a journal
+gap causes a rescan of tracked Parts. Failed shape replacement preserves the
+previous body, shape, and constraint identity for retry.
+Detached stack WorldRoots have no asset observer and remain usable for native
+kinematic queries; asset observation does not call shared ownership APIs on them.
 
 Creating or removing a descendant is also a Main-domain non-stepping safe point.
 Those operations may create or destroy neutral bodies immediately because the
@@ -157,8 +226,15 @@ server physics, replicated transforms, prediction, or developer ownership.
 
 The Box3D adapter enables contact/sensor event collection according to neutral
 `CanCollide` and `CanTouch` state. It copies both contact and sensor begin/end
-events, resolves their shapes to generation-checked body IDs, and deduplicates
-body pairs within the step.
+events and tracks native shape-pair membership against generation-checked body
+pairs. It applies the complete native event batch before emitting a neutral
+zero-to-positive Begin or positive-to-zero End transition. Crossing a native chunk
+seam does not end a still-touching body pair. Destroying a body purges its contact
+membership; shape replacement retains old pair identity until queued End events
+are applied. Native pairs and changed body pairs are each capped at 65536. An
+observation overflow latches `EventsTruncated` for the remaining world lifetime,
+marking subsequent event history incomplete until teardown/reset. Physical
+collision still evaluates all admitted chunks.
 
 `WorldRoot` resolves both bodies to live Parts before firing `Touched` or
 `TouchEnded`. Each Part receives the signal only when its current `CanTouch` is
@@ -184,6 +260,11 @@ and 32 collision planes per collection. Reaching the plane bound is explicit in
 `PlanesTruncated`. Current `CanCollide` state filters both plane collection and
 casts. Non-finite positions/translations/velocities, non-positive radii, and
 heights below the capsule diameter fail closed.
+Exact duplicate mover planes are coalesced across chunks. Ray candidates are
+deduplicated to the nearest hit per neutral body before the candidate bound;
+ties within a body use a deterministic normal ordering. Query scratch epochs in
+native body records are disposable derived state, accessed on the existing Main
+physics/query boundary.
 
 This primitive supplies collision authority rather than movement policy. The
 engine-shipped Luau controller decides gravity integration, walk speed, floor
@@ -236,9 +317,53 @@ ASan/UBSan/LSan tests pass; end-to-end envelope validation is recorded separatel
 the [3L.3 ledger](ContentAvailabilityFoundation3L_3Validation.md).
 
 Runtime Box3D includes and `b3*` symbols are confined to
-`src/physics/Box3DPhysicsBackend.cpp` and its private conversion header. CMake
+`src/physics/Box3DPhysicsBackend.cpp`, its private conversion header and
+`src/physics/Box3DMeshChunks.hpp`. CMake
 still names the Box3D dependency and include directory; that is unavoidable
 build/dependency integration rather than a runtime semantic leak.
+
+The pinned Box3D submodule `8441b4a06d6d09dcfb0b0f704df4d847d1437b92`
+has an SSE2 `b3LoadV` load that casts a 4-byte-aligned three-float vector to
+`double*`. Alignment sanitizers reject this before a physics raycast can return.
+`cmake/Box3DCompatibility.cmake` verifies the exact pinned `src/simd.h` SHA256
+(LF `688fef3ccbbda3f0923ab5a227bf143408ae02aefa63f79ffbb1798ec71c37b4`,
+Windows CRLF `ceab82f8c72fe58dc74f2ba0c8db1f721a793a859fc9da3cf058a18028bbfd62`), copies the
+required Box3D build sources and public headers into the build directory, and
+patches that private `simd.h`. The correction copies the first eight bytes
+into an aligned local `double` before `_mm_load_sd`, preserving the three float
+lanes and zero fourth lane. The vendor checkout and public Box3D API remain
+unchanged; unknown source hashes fail configuration. A direct 4-byte-aligned
+12-byte-lane test and an unknown-source guard test cover the compatibility
+boundary, while the physics and asset sanitizer suites exercise actual queries.
+
+The same checked private-copy recipe corrects the pinned block allocator's
+unaligned free-list pointer load/store using `memcpy`, without changing element
+stride, layout or byte accounting. Original `block_allocator.c` hashes are LF
+`0e7f3cf86b6ae33d4650853681f409d2a9f9259801dbeb56914f3da0a376fd60`
+and CRLF `7d663bd7b0690fad773f332c7dee71c8965f6dcb06fab10695ad9aa185b38076`;
+the patched canonical LF hash is
+`0863d789b5cc260a6645e4e2430e501e974235a9f1c369e3b4e272acc8316794`.
+The C17 regression uses 12/20-byte strides, growth/preallocation, LIFO reuse and
+final byte balance. Smoke/incremental guards cover both patched input files.
+
+### Dense mesh contact correction (KI-2B-001)
+
+The pinned Box3D rigid-contact path has a 256-candidate local triangle cache.
+The old single-shape projection could fill it with noncontacting AABB candidates
+and miss a real support surface. A 300-decoy/one-support regression proves that
+miss in the old Windows/Linux profiles while a filtered ray still hits support.
+The adapter now builds globally identified adjacency, partitions spatial BVH order
+into at most 255 triangles per native shape, and preserves edge flags through each
+chunk's triangle reorder. No native contact query can overflow on an admitted
+chunk. The vendor source and canonical artifact formats are unchanged.
+
+Shared-resource accounting, staged rollback and body-level event aggregation
+preserve lifetime and identity across chunks. Standalone tests check edge flags,
+geometry coverage, hashes and budgets; physics tests check the missed contact,
+seam transitions, shared shapes, denial/recovery and stale identities. Exact
+qualification and remaining independent physics limits belong in the
+[KI-2B-001 report](../Validation/DenseMeshContactKI2B001.md). This corrects candidate
+omission; it is not a claim of mathematically exact contacts for arbitrary geometry.
 
 `IPhysicsBackend` can be implemented and tested without including Box3D. The
 focused test suite supplies a recording backend to prove neutral creation,
@@ -250,7 +375,7 @@ physics implementation choice.
 ## Deliberately deferred
 
 This rigid boundary does not implement another rigid engine, advanced rigid
-constraints, mesh collision, a native character motor, projectiles, terrain
+constraints, dynamic concave collision, a native character motor, projectiles, terrain
 physics, physics networking, ownership, interpolation, prediction, or rollback.
 Deformation is implemented only through the sibling boundary documented above.
 Rendering has no dependency on either physics backend's native handles.

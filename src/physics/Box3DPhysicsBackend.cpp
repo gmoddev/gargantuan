@@ -1,5 +1,6 @@
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "physics/Box3DConversions.hpp"
+#include "Box3DMeshChunks.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <box3d/box3d.h>
@@ -12,6 +13,7 @@
 #include <cfloat>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
 #include <set>
 #include <tuple>
@@ -22,6 +24,7 @@
 namespace gargantuan {
 	namespace {
 		constexpr int CylinderSides = 24;
+		constexpr float MaximumMeshCoordinate = 100'000.0f;
 
 		[[nodiscard]] bool IsFinite(const glm::vec3 &Value) {
 			return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
@@ -35,7 +38,23 @@ namespace gargantuan {
 			return true;
 		}
 
+		[[nodiscard]] bool IsRigidRotation(const CFrame &Value) {
+			if (!IsFinite(Value)) return false;
+			constexpr float Tolerance = 1.0e-5f;
+			const auto &Rotation = Value.Rotation;
+			for (int Axis = 0; Axis < 3; ++Axis) {
+				if (std::abs(glm::dot(Rotation[Axis], Rotation[Axis]) - 1.0f) > Tolerance) return false;
+				for (int Other = Axis + 1; Other < 3; ++Other)
+					if (std::abs(glm::dot(Rotation[Axis], Rotation[Other])) > Tolerance) return false;
+			}
+			return std::abs(glm::dot(glm::cross(Rotation[0], Rotation[1]), Rotation[2]) - 1.0f) <= Tolerance;
+		}
+
 		[[nodiscard]] bool IsValidBodyDescription(const PhysicsBodyDesc &Description) {
+			if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh &&
+				(!Description.Anchored || !Description.Shape.Mesh ||
+				Description.Shape.Size.x < 0.01f || Description.Shape.Size.y < 0.01f ||
+				Description.Shape.Size.z < 0.01f || !IsRigidRotation(Description.Transform))) return false;
 			return IsFinite(Description.Transform) && IsFinite(Description.Shape.Size) &&
 				Description.Shape.Size.x > 0.0f && Description.Shape.Size.y > 0.0f &&
 				Description.Shape.Size.z > 0.0f && std::isfinite(Description.Density) && Description.Density >= 0.0f;
@@ -45,9 +64,56 @@ namespace gargantuan {
 			return A.x == B.x && A.y == B.y && A.z == B.z;
 		}
 
+		[[nodiscard]] bool SameMesh(
+			const std::shared_ptr<const PhysicsTriangleMesh> &A,
+			const std::shared_ptr<const PhysicsTriangleMesh> &B
+		) {
+			if (!A || !B) return A == B;
+			return A->ResourceId == B->ResourceId && A->ContentRevision == B->ContentRevision &&
+				A->Positions == B->Positions && A->Indices == B->Indices;
+		}
+
+		[[nodiscard]] bool IsValidScaledMesh(const PhysicsBodyDesc &Description) {
+			const auto &Mesh = Description.Shape.Mesh;
+			if (!Mesh || Mesh->ResourceId.empty() ||
+				Mesh->ResourceId.size() > MaximumPhysicsCollisionResourceIdBytes ||
+				!Mesh->Positions || !Mesh->Indices ||
+				Mesh->Positions->size() < 3 || Mesh->Positions->size() > 262144 ||
+				Mesh->Indices->empty() || Mesh->Indices->size() > 1048575 ||
+				Mesh->Indices->size() % 3 != 0) return false;
+			const auto OriginLength = glm::length(Description.Transform.Position);
+			if (!std::isfinite(OriginLength) || OriginLength > MaximumMeshCoordinate) return false;
+			const auto NativeRotation = glm::mat3_cast(Box3DConversions::FromBox3(
+				Box3DConversions::ToBox3(Description.Transform.ToQuaternion())));
+			for (const auto &Position : *Mesh->Positions) {
+				const auto Scaled = Position * Description.Shape.Size;
+				const auto WorldPosition = NativeRotation * Scaled + Description.Transform.Position;
+				const auto Distance = glm::length(WorldPosition);
+				if (!IsFinite(Scaled) || !IsFinite(WorldPosition) || !std::isfinite(Distance) ||
+					Distance > MaximumMeshCoordinate) return false;
+			}
+			for (std::size_t Index = 0; Index < Mesh->Indices->size(); Index += 3) {
+				const auto A = (*Mesh->Indices)[Index];
+				const auto B = (*Mesh->Indices)[Index + 1];
+				const auto C = (*Mesh->Indices)[Index + 2];
+				if (A >= Mesh->Positions->size() || B >= Mesh->Positions->size() ||
+					C >= Mesh->Positions->size()) return false;
+				const auto EdgeA = ((*Mesh->Positions)[B] - (*Mesh->Positions)[A]) * Description.Shape.Size;
+				const auto EdgeB = ((*Mesh->Positions)[C] - (*Mesh->Positions)[A]) * Description.Shape.Size;
+				const auto Cross = glm::cross(EdgeA, EdgeB);
+				if (!IsFinite(Cross) || glm::dot(Cross, Cross) < 1.0e-10f) return false;
+			}
+			return true;
+		}
+
 		class Box3DPhysicsBackend final : public IPhysicsBackend {
 		  public:
 			explicit Box3DPhysicsBackend(const PhysicsWorldConfig &Config) {
+				CollisionResourceLimit = std::min(Config.CollisionResourceLimit, MaximumPhysicsCollisionResources);
+				CollisionConsumerLimit = std::min(Config.CollisionConsumerLimit, MaximumPhysicsCollisionConsumers);
+				CollisionCanonicalByteLimit = std::min(Config.CollisionCanonicalByteLimit, MaximumPhysicsCollisionCanonicalBytes);
+				CollisionNativeByteLimit = std::min(Config.CollisionNativeByteLimit, MaximumPhysicsCollisionNativeBytes);
+				CollisionMeshShapeLimit = std::min(Config.CollisionMeshShapeLimit, MaximumPhysicsCollisionMeshShapes);
 				if (!IsFinite(Config.Gravity)) return;
 				b3WorldDef Definition = b3DefaultWorldDef();
 				Definition.enableSleep = Config.EnableSleep;
@@ -67,6 +133,7 @@ namespace gargantuan {
 				for (std::size_t Index = 1; Index < BodySlots.size(); ++Index) {
 					auto &Entry = BodySlots[Index];
 					if (Entry.Record && b3Body_IsValid(Entry.Record->Body)) b3DestroyBody(Entry.Record->Body);
+					if (Entry.Record && Entry.Record->Mesh) RetireMeshConsumer(*Entry.Record);
 					Entry.Record.reset();
 				}
 				ShapeOwners.clear();
@@ -86,7 +153,13 @@ namespace gargantuan {
 
 			[[nodiscard]] PhysicsBodyId CreateBody(const PhysicsBodyDesc &Description) override {
 				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsBodyCreate);
-				if (!b3World_IsValid(World) || !IsValidBodyDescription(Description)) return {};
+				if (!b3World_IsValid(World) || !IsValidBodyDescription(Description)) {
+					if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) {
+						++FailedMeshAdmissions;
+						LastMeshAdmissionFailure = "Static mesh collision description is invalid";
+					}
+					return {};
+				}
 				const auto Id = AllocateBody();
 				auto &Entry = BodySlots[Id.Slot];
 				Entry.Record = std::make_unique<BodyRecord>();
@@ -106,7 +179,8 @@ namespace gargantuan {
 				StaticWorldDirty = true;
 				if (!Description.Anchored) ++DynamicBodyCount;
 
-				Entry.Record->Shape = CreateShape(Entry.Record->Body, Id, Description, true);
+				Entry.Record->Shape = CreateShape(Entry.Record->Body, Id, Description, true,
+					Entry.Record->Mesh, Entry.Record->AdditionalShapes);
 				if (!b3Shape_IsValid(Entry.Record->Shape)) {
 					b3DestroyBody(Entry.Record->Body);
 					if (!Description.Anchored) --DynamicBodyCount;
@@ -123,8 +197,18 @@ namespace gargantuan {
 			) override {
 				auto *Record = FindBody(Body);
 				if (!Record) return InvalidBody();
-				if (!IsValidBodyDescription(Description))
+				if (!IsValidBodyDescription(Description)) {
+					if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) {
+						++FailedMeshAdmissions;
+						LastMeshAdmissionFailure = "Static mesh collision description is invalid";
+					}
 					return {PhysicsOperationStatus::InvalidDescription, "Physics body description is invalid"};
+				}
+				if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh && !IsValidScaledMesh(Description)) {
+					++FailedMeshAdmissions;
+					LastMeshAdmissionFailure = "Scaled mesh collision geometry is invalid";
+					return {PhysicsOperationStatus::InvalidDescription, "Scaled mesh collision geometry is invalid"};
+				}
 
 				const auto &Previous = Record->Description;
 				// A non-colliding, non-touching anchored body cannot change any
@@ -135,18 +219,27 @@ namespace gargantuan {
 					StaticWorldDirty = true;
 				const bool RebuildShape = Previous.Shape.Kind != Description.Shape.Kind ||
 					!SameSize(Previous.Shape.Size, Description.Shape.Size) ||
-					Previous.CanCollide != Description.CanCollide || Previous.Density != Description.Density;
+					!SameMesh(Previous.Shape.Mesh, Description.Shape.Mesh) ||
+					Previous.CanCollide != Description.CanCollide || Previous.CanTouch != Description.CanTouch ||
+					Previous.Density != Description.Density;
 				if (RebuildShape) {
-					const auto Replacement = CreateShape(Record->Body, Body, Description, false);
+					std::shared_ptr<NativeMesh> ReplacementMesh;
+					std::vector<b3ShapeId> ReplacementAdditionalShapes;
+					const auto Replacement = CreateShape(Record->Body, Body, Description, false,
+						ReplacementMesh, ReplacementAdditionalShapes);
 					if (!b3Shape_IsValid(Replacement))
-						return {PhysicsOperationStatus::BackendFailure, "Physics shape replacement failed"};
-					ShapeOwners.erase(b3StoreShapeId(Record->Shape));
-					b3DestroyShape(Record->Shape, false);
+						return {PhysicsOperationStatus::BackendFailure,
+							Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh && !LastMeshAdmissionFailure.empty()
+								? LastMeshAdmissionFailure : "Physics shape replacement failed"};
+					ForEachShape(*Record, [&](b3ShapeId Shape) {
+						ShapeOwners.erase(b3StoreShapeId(Shape));
+						b3DestroyShape(Shape, false);
+					});
+					if (Record->Mesh) RetireMeshConsumer(*Record);
 					Record->Shape = Replacement;
+					Record->AdditionalShapes = std::move(ReplacementAdditionalShapes);
+					Record->Mesh = std::move(ReplacementMesh);
 					b3Body_ApplyMassFromShapes(Record->Body);
-				} else if (Previous.CanTouch != Description.CanTouch) {
-					b3Shape_EnableSensorEvents(Record->Shape, Description.CanTouch);
-					b3Shape_EnableContactEvents(Record->Shape, Description.CanCollide && Description.CanTouch);
 				}
 
 				if (Previous.Anchored != Description.Anchored) {
@@ -176,8 +269,10 @@ namespace gargantuan {
 						Attached.push_back({static_cast<std::uint32_t>(Index), Entry.Generation});
 				}
 				for (const auto Constraint : Attached) DestroyConstraint(Constraint);
-				ShapeOwners.erase(b3StoreShapeId(Record->Shape));
+				ForEachShape(*Record, [&](b3ShapeId Shape) { ShapeOwners.erase(b3StoreShapeId(Shape)); });
+				ForgetBodyContacts(Body);
 				if (b3Body_IsValid(Record->Body)) b3DestroyBody(Record->Body);
+				if (Record->Mesh) RetireMeshConsumer(*Record);
 				if (!Record->Description.Anchored) --DynamicBodyCount;
 				ReleaseBody(Body);
 				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsBodyDestroy);
@@ -257,6 +352,32 @@ namespace gargantuan {
 				};
 			}
 
+			[[nodiscard]] PhysicsCollisionResidency GetCollisionResidency() const override {
+				PhysicsCollisionResidency Result;
+				Result.ResourceLimit = CollisionResourceLimit;
+				Result.ConsumerLimit = CollisionConsumerLimit;
+				Result.CanonicalByteLimit = CollisionCanonicalByteLimit;
+				Result.NativeByteLimit = CollisionNativeByteLimit;
+				Result.FailedAdmissions = FailedMeshAdmissions;
+				Result.ActiveResources = ActiveMeshResources;
+				Result.ActiveConsumers = ActiveMeshConsumers;
+				Result.CanonicalBytes = ActiveCanonicalBytes;
+				Result.NativeMeshBytes = ActiveNativeBytes;
+				Result.CreatedResources = CreatedMeshResources;
+				Result.RetiredResources = RetiredMeshResources;
+				Result.CreatedConsumers = CreatedMeshConsumers;
+				Result.RetiredConsumers = RetiredMeshConsumers;
+				Result.MeshShapeLimit = CollisionMeshShapeLimit;
+				Result.ActiveMeshShapes = ActiveMeshShapes;
+				Result.CreatedMeshShapes = CreatedMeshShapes;
+				Result.RetiredMeshShapes = RetiredMeshShapes;
+				Result.NativeChunks = ActiveNativeChunks;
+				Result.ChunkTriangleLimit = physics_detail::MaximumBox3DMeshChunkTriangles;
+				Result.PeakBuildNativeBytes = PeakBuildNativeBytes;
+				Result.LastAdmissionFailure = LastMeshAdmissionFailure;
+				return Result;
+			}
+
 			[[nodiscard]] PhysicsKinematicMotionResult
 			MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const override {
 				PhysicsKinematicMotionResult Result{
@@ -312,6 +433,17 @@ namespace gargantuan {
 						const auto *Record = Context->Self->FindBody(*Owner);
 						if (!Record || !Record->Description.CanCollide) return true;
 						for (int Index = 0; Index < PlaneCount; ++Index) {
+							const auto &Plane = Planes[Index].plane;
+							bool Duplicate = false;
+							for (std::size_t Existing = 0; Existing < Context->PlaneCount; ++Existing) {
+								const auto &Prior = Context->Planes[Existing].plane;
+								if (Prior.normal.x == Plane.normal.x && Prior.normal.y == Plane.normal.y &&
+									Prior.normal.z == Plane.normal.z && Prior.offset == Plane.offset) {
+									Duplicate = true;
+									break;
+								}
+							}
+							if (Duplicate) continue;
 							if (Context->PlaneCount == MaximumKinematicCollisionPlanes) {
 								Context->Truncated = true;
 								return false;
@@ -435,9 +567,16 @@ namespace gargantuan {
 				struct RayContext {
 					const Box3DPhysicsBackend *Self = nullptr;
 					const PhysicsQueryFilter *Filter = nullptr;
+					std::uint64_t Epoch = 0;
 					std::vector<RayHit> Hits;
 					bool Truncated = false;
 				} Context{.Self = this, .Filter = &Request.Filter};
+				if (++RaycastEpoch == 0) {
+					for (const auto &Entry : BodySlots)
+						if (Entry.Record) Entry.Record->RaycastEpoch = 0;
+					++RaycastEpoch;
+				}
+				Context.Epoch = RaycastEpoch;
 				Context.Hits.reserve(std::min<std::size_t>(BodySlots.size(), MaximumRaycastCandidates));
 
 				auto CollectHit = [](b3ShapeId Shape,
@@ -458,17 +597,28 @@ namespace gargantuan {
 					);
 					const bool Accepted = Context->Filter->Type == PhysicsQueryFilterType::Include ? Listed : !Listed;
 					if (!Accepted) return 1.0f;
+					const RayHit Candidate{
+						.Body = *Owner,
+						.Position = {static_cast<float>(Point.x), static_cast<float>(Point.y), static_cast<float>(Point.z)},
+						.Normal = Box3DConversions::FromBox3(Normal),
+						.Fraction = Fraction,
+					};
+					if (Record->RaycastEpoch == Context->Epoch) {
+						auto &Previous = Context->Hits[Record->RaycastHitIndex];
+						if (Candidate.Fraction < Previous.Fraction ||
+							(Candidate.Fraction == Previous.Fraction &&
+							 std::tie(Candidate.Normal.x, Candidate.Normal.y, Candidate.Normal.z) <
+							 std::tie(Previous.Normal.x, Previous.Normal.y, Previous.Normal.z)))
+							Previous = Candidate;
+						return 1.0f;
+					}
 					if (Context->Hits.size() == MaximumRaycastCandidates) {
 						Context->Truncated = true;
 						return 0.0f;
 					}
-					Context->Hits.push_back({
-						.Body = *Owner,
-						.Position =
-							{static_cast<float>(Point.x), static_cast<float>(Point.y), static_cast<float>(Point.z)},
-						.Normal = Box3DConversions::FromBox3(Normal),
-						.Fraction = Fraction,
-					});
+					Record->RaycastEpoch = Context->Epoch;
+					Record->RaycastHitIndex = Context->Hits.size();
+					Context->Hits.push_back(Candidate);
 					return 1.0f;
 				};
 
@@ -515,6 +665,7 @@ namespace gargantuan {
 
 			[[nodiscard]] PhysicsStepResult Step(const PhysicsStepConfig &Config) override {
 				PhysicsStepResult Result;
+				Result.EventsTruncated = ContactTrackingOverflow;
 				if (!b3World_IsValid(World) || !std::isfinite(Config.DeltaTime) || Config.DeltaTime <= 0.0f ||
 					Config.SubStepCount <= 0) return Result;
 				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsBackendStep);
@@ -555,20 +706,37 @@ namespace gargantuan {
 					Result.Motions.push_back({Record->Id, Record->Description.Transform});
 				}
 
-				std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, PhysicsContactPhase>> Seen;
+				std::map<BodyPair, bool> PreviousContacts;
 				auto AddContact = [&](b3ShapeId ShapeA, b3ShapeId ShapeB, PhysicsContactPhase Phase) {
-					if (Result.Contacts.size() >= MaximumPhysicsEventsPerStep) {
-						Result.EventsTruncated = true;
+					const auto ShapeKeyA = b3StoreShapeId(ShapeA);
+					const auto ShapeKeyB = b3StoreShapeId(ShapeB);
+					const NativePair NativeKey{std::min(ShapeKeyA, ShapeKeyB), std::max(ShapeKeyA, ShapeKeyB)};
+					auto Existing = NativeContacts.find(NativeKey);
+					if (Phase == PhysicsContactPhase::Began && Existing != NativeContacts.end()) return;
+					if (Phase == PhysicsContactPhase::Ended && Existing == NativeContacts.end()) return;
+					BodyPair Bodies;
+					if (Existing != NativeContacts.end()) Bodies = Existing->second;
+					else {
+						auto BodyA = FindShapeOwner(ShapeA);
+						auto BodyB = FindShapeOwner(ShapeB);
+						if (!BodyA || !BodyB || *BodyA == *BodyB) return;
+						if (*BodyB < *BodyA) std::swap(BodyA, BodyB);
+						Bodies = {*BodyA, *BodyB};
+					}
+					if ((!PreviousContacts.contains(Bodies) && PreviousContacts.size() == MaximumPhysicsEventsPerStep) ||
+						(Phase == PhysicsContactPhase::Began && NativeContacts.size() == MaximumPhysicsEventsPerStep)) {
+						ContactTrackingOverflow = true;
 						return;
 					}
-					auto BodyA = FindShapeOwner(ShapeA);
-					auto BodyB = FindShapeOwner(ShapeB);
-					if (!BodyA || !BodyB || *BodyA == *BodyB) return;
-					if (*BodyB < *BodyA) std::swap(BodyA, BodyB);
-					auto Key = std::tuple{
-						BodyA->Slot, BodyA->Generation, BodyB->Slot, BodyB->Generation, Phase
-					};
-					if (Seen.insert(Key).second) Result.Contacts.push_back({*BodyA, *BodyB, Phase});
+					PreviousContacts.try_emplace(Bodies, BodyContacts.contains(Bodies));
+					if (Phase == PhysicsContactPhase::Began) {
+						NativeContacts.emplace(NativeKey, Bodies);
+						++BodyContacts[Bodies];
+					} else {
+						NativeContacts.erase(Existing);
+						auto Count = BodyContacts.find(Bodies);
+						if (Count != BodyContacts.end() && --Count->second == 0) BodyContacts.erase(Count);
+					}
 				};
 
 				const auto ContactEvents = b3World_GetContactEvents(World);
@@ -578,13 +746,6 @@ namespace gargantuan {
 						ContactEvents.beginEvents[Index].shapeIdB,
 						PhysicsContactPhase::Began
 					);
-				for (int Index = 0; Index < ContactEvents.endCount; ++Index)
-					AddContact(
-						ContactEvents.endEvents[Index].shapeIdA,
-						ContactEvents.endEvents[Index].shapeIdB,
-						PhysicsContactPhase::Ended
-					);
-
 				const auto SensorEvents = b3World_GetSensorEvents(World);
 				for (int Index = 0; Index < SensorEvents.beginCount; ++Index)
 					AddContact(
@@ -592,23 +753,67 @@ namespace gargantuan {
 						SensorEvents.beginEvents[Index].visitorShapeId,
 						PhysicsContactPhase::Began
 					);
+				for (int Index = 0; Index < ContactEvents.endCount; ++Index)
+					AddContact(ContactEvents.endEvents[Index].shapeIdA,
+						ContactEvents.endEvents[Index].shapeIdB, PhysicsContactPhase::Ended);
 				for (int Index = 0; Index < SensorEvents.endCount; ++Index)
 					AddContact(
 						SensorEvents.endEvents[Index].sensorShapeId,
 						SensorEvents.endEvents[Index].visitorShapeId,
 						PhysicsContactPhase::Ended
 					);
+				for (const auto &[Bodies, WasTouching] : PreviousContacts) {
+					const bool IsTouching = BodyContacts.contains(Bodies);
+					if (IsTouching != WasTouching && FindBody(Bodies.first) && FindBody(Bodies.second))
+						Result.Contacts.push_back({Bodies.first, Bodies.second,
+							IsTouching ? PhysicsContactPhase::Began : PhysicsContactPhase::Ended});
+				}
+				Result.EventsTruncated = Result.EventsTruncated || ContactTrackingOverflow;
 				StaticWorldDirty = false;
 				return Result;
 			}
 
 		  private:
+			using BodyPair = std::pair<PhysicsBodyId, PhysicsBodyId>;
+			using NativePair = std::pair<std::uint64_t, std::uint64_t>;
+			std::map<NativePair, BodyPair> NativeContacts;
+			std::map<BodyPair, std::size_t> BodyContacts;
+			bool ContactTrackingOverflow = false;
+
+			void ForgetBodyContacts(PhysicsBodyId Body) {
+				std::erase_if(NativeContacts, [&](const auto &Entry) {
+					return Entry.second.first == Body || Entry.second.second == Body;
+				});
+				std::erase_if(BodyContacts, [&](const auto &Entry) {
+					return Entry.first.first == Body || Entry.first.second == Body;
+				});
+			}
+			struct NativeMesh {
+				std::vector<physics_detail::OwnedBox3DMesh> Chunks;
+				std::shared_ptr<const PhysicsTriangleMesh> Source;
+				Box3DPhysicsBackend *Owner = nullptr;
+				std::size_t CanonicalBytes = 0;
+				std::size_t NativeBytes = 0;
+				~NativeMesh() {
+					if (Owner) Owner->RetireNativeMesh(*this);
+				}
+			};
+
 			struct BodyRecord {
 				PhysicsBodyId Id{};
 				PhysicsBodyDesc Description{};
 				b3BodyId Body{};
 				b3ShapeId Shape{};
+				std::vector<b3ShapeId> AdditionalShapes;
+				std::shared_ptr<NativeMesh> Mesh;
+				mutable std::uint64_t RaycastEpoch = 0;
+				mutable std::size_t RaycastHitIndex = 0;
 			};
+
+			template <typename Callback> static void ForEachShape(const BodyRecord &Record, Callback &&Visit) {
+				Visit(Record.Shape);
+				for (const auto Shape : Record.AdditionalShapes) Visit(Shape);
+			}
 
 			struct ConstraintRecord {
 				PhysicsConstraintId Id{};
@@ -623,12 +828,132 @@ namespace gargantuan {
 
 			b3WorldId World{};
 			std::size_t DynamicBodyCount = 0;
+			std::size_t FailedMeshAdmissions = 0;
+			std::size_t ActiveMeshResources = 0;
+			std::size_t ActiveMeshConsumers = 0;
+			std::size_t ActiveCanonicalBytes = 0;
+			std::size_t ActiveNativeBytes = 0;
+			std::size_t CreatedMeshResources = 0;
+			std::size_t RetiredMeshResources = 0;
+			std::size_t CreatedMeshConsumers = 0;
+			std::size_t RetiredMeshConsumers = 0;
+			std::size_t ActiveMeshShapes = 0;
+			std::size_t CreatedMeshShapes = 0;
+			std::size_t RetiredMeshShapes = 0;
+			std::size_t ActiveNativeChunks = 0;
+			std::size_t PeakBuildNativeBytes = 0;
+			std::string LastMeshAdmissionFailure;
+			std::size_t CollisionResourceLimit = MaximumPhysicsCollisionResources;
+			std::size_t CollisionConsumerLimit = MaximumPhysicsCollisionConsumers;
+			std::size_t CollisionCanonicalByteLimit = MaximumPhysicsCollisionCanonicalBytes;
+			std::size_t CollisionNativeByteLimit = MaximumPhysicsCollisionNativeBytes;
+			std::size_t CollisionMeshShapeLimit = MaximumPhysicsCollisionMeshShapes;
+			mutable std::uint64_t RaycastEpoch = 0;
 			bool StaticWorldDirty = true;
 			std::vector<SlotEntry<BodyRecord>> BodySlots;
 			std::vector<std::uint32_t> FreeBodySlots;
 			std::vector<SlotEntry<ConstraintRecord>> ConstraintSlots;
 			std::vector<std::uint32_t> FreeConstraintSlots;
 			std::unordered_map<std::uint64_t, PhysicsBodyId> ShapeOwners;
+			std::unordered_map<std::string, std::weak_ptr<NativeMesh>> NativeMeshes;
+
+			void RetireMeshConsumer(const BodyRecord &Record) {
+				--ActiveMeshConsumers;
+				++RetiredMeshConsumers;
+				ActiveMeshShapes -= Record.Mesh->Chunks.size();
+				RetiredMeshShapes += Record.Mesh->Chunks.size();
+			}
+
+			void RetireNativeMesh(const NativeMesh &Mesh) {
+				--ActiveMeshResources;
+				ActiveCanonicalBytes -= Mesh.CanonicalBytes;
+				ActiveNativeBytes -= Mesh.NativeBytes;
+				ActiveNativeChunks -= Mesh.Chunks.size();
+				++RetiredMeshResources;
+			}
+
+			[[nodiscard]] std::shared_ptr<NativeMesh> GetNativeMesh(
+				const std::shared_ptr<const PhysicsTriangleMesh> &Source
+			) {
+				if (!Source || !Source->Positions || !Source->Indices || Source->ResourceId.empty() ||
+					Source->ResourceId.size() > MaximumPhysicsCollisionResourceIdBytes ||
+					Source->Positions->size() < 3 || Source->Positions->size() > 262144 ||
+					Source->Indices->empty() || Source->Indices->size() > 1048575 ||
+					Source->Indices->size() % 3 != 0) {
+					LastMeshAdmissionFailure = "Mesh collision resource exceeds a geometry bound or is malformed";
+					return {};
+				}
+				const auto Key = Source->ResourceId + ":" + std::to_string(Source->ContentRevision);
+				if (auto Found = NativeMeshes.find(Key); Found != NativeMeshes.end()) {
+					if (auto Cached = Found->second.lock()) {
+						if (Cached->Source->Positions == Source->Positions && Cached->Source->Indices == Source->Indices)
+							return Cached;
+						LastMeshAdmissionFailure = "Mesh collision resource revision conflicts with an active resource";
+						return {};
+					}
+					NativeMeshes.erase(Found);
+				}
+				const auto CanonicalBytes = Source->Positions->size() * sizeof(glm::vec3) +
+					Source->Indices->size() * sizeof(std::uint32_t);
+				if (ActiveMeshResources >= CollisionResourceLimit) {
+					LastMeshAdmissionFailure = "Mesh collision resource limit reached";
+					return {};
+				}
+				if (CanonicalBytes > CollisionCanonicalByteLimit - ActiveCanonicalBytes) {
+					LastMeshAdmissionFailure = "Mesh collision canonical-byte limit reached";
+					return {};
+				}
+				std::erase_if(NativeMeshes, [](const auto &Entry) { return Entry.second.expired(); });
+				std::vector<b3Vec3> Vertices;
+				Vertices.reserve(Source->Positions->size());
+				for (const auto &Position : *Source->Positions) {
+					if (!IsFinite(Position)) {
+						LastMeshAdmissionFailure = "Mesh collision contains non-finite vertices";
+						return {};
+					}
+					Vertices.push_back(Box3DConversions::ToBox3(Position));
+				}
+				std::vector<std::int32_t> Indices;
+				Indices.reserve(Source->Indices->size());
+				for (const auto Index : *Source->Indices) {
+					if (Index >= Vertices.size()) {
+						LastMeshAdmissionFailure = "Mesh collision index exceeds vertex count";
+						return {};
+					}
+					Indices.push_back(static_cast<std::int32_t>(Index));
+				}
+				for (std::size_t Index = 0; Index < Indices.size(); Index += 3) {
+					const auto &A = (*Source->Positions)[Indices[Index]];
+					const auto &B = (*Source->Positions)[Indices[Index + 1]];
+					const auto &C = (*Source->Positions)[Indices[Index + 2]];
+					const auto Cross = glm::cross(B - A, C - A);
+					if (!IsFinite(Cross) || glm::dot(Cross, Cross) < 1.0e-10f) {
+						LastMeshAdmissionFailure = "Mesh collision contains degenerate triangles";
+						return {};
+					}
+				}
+				auto Built = physics_detail::BuildBox3DMeshChunks(Vertices, Indices,
+					CollisionNativeByteLimit - ActiveNativeBytes);
+				if (!Built) {
+					LastMeshAdmissionFailure = Built.error() == "Mesh chunk staging exceeds native-byte budget"
+						? "Mesh collision native-byte limit reached" : Built.error();
+					return {};
+				}
+				auto Mesh = std::make_shared<NativeMesh>();
+				Mesh->Chunks = std::move(Built->Chunks);
+				Mesh->Source = Source;
+				Mesh->Owner = this;
+				Mesh->CanonicalBytes = CanonicalBytes;
+				Mesh->NativeBytes = Built->NativeBytes;
+				PeakBuildNativeBytes = std::max(PeakBuildNativeBytes, ActiveNativeBytes + Built->PeakStagingNativeBytes);
+				++ActiveMeshResources;
+				ActiveCanonicalBytes += CanonicalBytes;
+				ActiveNativeBytes += Mesh->NativeBytes;
+				ActiveNativeChunks += Mesh->Chunks.size();
+				++CreatedMeshResources;
+				NativeMeshes[Key] = Mesh;
+				return Mesh;
+			}
 
 			[[nodiscard]] BodyRecord *FindBody(PhysicsBodyId Id) {
 				return const_cast<BodyRecord *>(std::as_const(*this).FindBody(Id));
@@ -697,7 +1022,9 @@ namespace gargantuan {
 				b3BodyId Body,
 				PhysicsBodyId Owner,
 				const PhysicsBodyDesc &Description,
-				bool UpdateMass
+				bool UpdateMass,
+				std::shared_ptr<NativeMesh> &Mesh,
+				std::vector<b3ShapeId> &AdditionalShapes
 			) {
 				b3ShapeDef ShapeDefinition = b3DefaultShapeDef();
 				ShapeDefinition.density = Description.Density;
@@ -708,7 +1035,69 @@ namespace gargantuan {
 				const auto Size = Description.Shape.Size;
 				const auto HalfSize = Size * 0.5f;
 				b3ShapeId Shape{};
+				auto Rollback = [&] {
+					if (b3Shape_IsValid(Shape)) {
+						ShapeOwners.erase(b3StoreShapeId(Shape));
+						b3DestroyShape(Shape, false);
+					}
+					for (const auto Extra : AdditionalShapes) {
+						ShapeOwners.erase(b3StoreShapeId(Extra));
+						b3DestroyShape(Extra, false);
+					}
+					AdditionalShapes.clear();
+					Mesh.reset();
+				};
+				try {
 				switch (Description.Shape.Kind) {
+				case PhysicsShapeKind::StaticTriangleMesh: {
+					LastMeshAdmissionFailure.clear();
+					if (ActiveMeshConsumers >= CollisionConsumerLimit) {
+						++FailedMeshAdmissions;
+						LastMeshAdmissionFailure = "Mesh collision consumer limit reached";
+						break;
+					}
+					if (!IsValidScaledMesh(Description)) {
+						LastMeshAdmissionFailure = "Scaled mesh collision geometry is invalid";
+					} else {
+						const auto Count = (Description.Shape.Mesh->Indices->size() / 3 +
+							physics_detail::MaximumBox3DMeshChunkTriangles - 1) /
+							physics_detail::MaximumBox3DMeshChunkTriangles;
+						if (Count > CollisionMeshShapeLimit - ActiveMeshShapes) {
+							++FailedMeshAdmissions;
+							LastMeshAdmissionFailure = "Mesh collision native-shape limit reached";
+							return {};
+						}
+						Mesh = GetNativeMesh(Description.Shape.Mesh);
+					}
+					if (Mesh) {
+						AdditionalShapes.reserve(Mesh->Chunks.size() - 1);
+						ShapeOwners.reserve(ShapeOwners.size() + Mesh->Chunks.size());
+						for (const auto &Chunk : Mesh->Chunks) {
+							const auto Created = b3CreateMeshShape(Body, &ShapeDefinition, Chunk.get(),
+								Box3DConversions::ToBox3(Size));
+							if (!b3Shape_IsValid(Created)) {
+								Rollback();
+								++FailedMeshAdmissions;
+								LastMeshAdmissionFailure = "Box3D mesh chunk shape construction failed";
+								return {};
+							}
+							if (!b3Shape_IsValid(Shape)) Shape = Created;
+							else AdditionalShapes.push_back(Created);
+							ShapeOwners.emplace(b3StoreShapeId(Created), Owner);
+						}
+					}
+					if (!b3Shape_IsValid(Shape)) {
+						++FailedMeshAdmissions;
+						if (LastMeshAdmissionFailure.empty()) LastMeshAdmissionFailure = "Box3D mesh shape construction failed";
+					}
+					else {
+						++ActiveMeshConsumers;
+						++CreatedMeshConsumers;
+						ActiveMeshShapes += Mesh->Chunks.size();
+						CreatedMeshShapes += Mesh->Chunks.size();
+					}
+					break;
+				}
 				case PhysicsShapeKind::Box: {
 					auto Hull = b3MakeBoxHull(HalfSize.x, HalfSize.y, HalfSize.z);
 					Shape = b3CreateHullShape(Body, &ShapeDefinition, &Hull.base);
@@ -764,8 +1153,16 @@ namespace gargantuan {
 					break;
 				}
 				}
-				if (b3Shape_IsValid(Shape)) ShapeOwners[b3StoreShapeId(Shape)] = Owner;
+				if (b3Shape_IsValid(Shape) && !Mesh) ShapeOwners[b3StoreShapeId(Shape)] = Owner;
 				return Shape;
+				} catch (const std::exception &) {
+					Rollback();
+					if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) {
+						++FailedMeshAdmissions;
+						LastMeshAdmissionFailure = "GeometryMemory";
+					}
+					return {};
+				}
 			}
 
 			[[nodiscard]] std::optional<PhysicsBodyId> FindShapeOwner(b3ShapeId Shape) const {

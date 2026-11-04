@@ -1,5 +1,6 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -46,6 +48,10 @@ namespace gargantuan {
 		}
 		static bool IsConstraintValid(const WorldRoot &World, PhysicsConstraintId Constraint) {
 			return World.Physics.IsConstraintValid(Constraint);
+		}
+		static PhysicsKinematicMotionResult DetachedKinematicMotion(const PhysicsKinematicMotionRequest &Request) {
+			WorldRoot Detached;
+			return Detached.ResolveKinematicMotion(Request);
 		}
 	};
 }
@@ -157,6 +163,472 @@ namespace {
 		Check(Joint.IsValid() && World.IsConstraintValid(Joint), "constraint uses neutral body identities");
 		Check(World.DestroyBody(Second).Succeeded() && !World.IsConstraintValid(Joint),
 			"body destruction invalidates attached constraints safely");
+	}
+
+	void TestStaticTriangleMeshBackend() {
+		using namespace gargantuan;
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		auto Positions = std::make_shared<const std::vector<glm::vec3>>(std::vector<glm::vec3>{
+			{-1.0f, 0.0f, -1.0f}, {-1.0f, 0.0f, 1.0f},
+			{1.0f, 0.0f, 1.0f}, {1.0f, 0.0f, -1.0f},
+		});
+		auto Indices = std::make_shared<const std::vector<std::uint32_t>>(
+			std::vector<std::uint32_t>{0, 1, 2, 0, 2, 3});
+		auto Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = "asset://collision-fixture",
+			.ContentRevision = 1,
+			.Positions = Positions,
+			.Indices = Indices,
+		});
+		PhysicsBodyDesc Description;
+		Description.Anchored = true;
+		Description.Shape = {.Kind = PhysicsShapeKind::StaticTriangleMesh, .Size = {2.0f, 1.0f, 3.0f}, .Mesh = Mesh};
+		Description.Transform = CFrame(0.0f, 4.0f, 0.0f);
+		const auto First = World.CreateBody(Description);
+		if (!First.IsValid()) {
+			const auto Failure = World.GetCollisionResidency();
+			std::cerr << "[Physics:MeshAdmission] " << Failure.LastAdmissionFailure
+				<< "; resources=" << Failure.ActiveResources << "; consumers=" << Failure.ActiveConsumers
+				<< "; failures=" << Failure.FailedAdmissions << "; rotation=";
+			for (int Column = 0; Column < 3; ++Column)
+				for (int Row = 0; Row < 3; ++Row)
+					std::cerr << Description.Transform.Rotation[Column][Row] << ',';
+			std::cerr << '\n';
+		}
+		Check(First.IsValid(), "validated static triangle mesh creates a backend shape");
+		const auto Second = World.CreateBody(Description);
+		Check(Second.IsValid(), "a second body shares immutable collision mesh data");
+		auto Residency = World.GetCollisionResidency();
+		Check(Residency.ActiveResources == 1 && Residency.ActiveConsumers == 2 &&
+			Residency.CanonicalBytes == Positions->size() * sizeof(glm::vec3) +
+				Indices->size() * sizeof(std::uint32_t) && Residency.NativeMeshBytes > 0,
+			"collision residency accounts one native resource and two live consumers");
+		auto Cast = World.Raycast({.Origin = {0.0f, 8.0f, 0.0f}, .Direction = {0.0f, -8.0f, 0.0f}});
+		Check(Cast.Succeeded() && Cast.HasHit() && Near(Cast.Candidates.front().Position.y, 4.0f),
+			"raycast sees the scaled translated static mesh");
+		const auto Mover = World.MoveKinematicCapsule({
+			.Position = {0.0f, 6.0f, 0.0f}, .Radius = 0.5f, .Height = 2.0f,
+			.Translation = {0.0f, -3.0f, 0.0f}, .Velocity = {0.0f, -3.0f, 0.0f},
+		});
+		Check(Mover.Succeeded() && Mover.Collided && Mover.Position.y >= 4.9f,
+			"kinematic capsule motion collides with the active static triangle mesh");
+		Description.Transform = CFrame(0.0f, 2.0f, 0.0f);
+		Check(World.UpdateBody(First, Description).Succeeded(), "mesh transform update retains body identity");
+		Check(World.IsBodyValid(First), "mesh update leaves neutral identity live");
+		auto Invalid = Description;
+		Invalid.Shape.Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = "asset://invalid-collision-fixture", .ContentRevision = 1,
+			.Positions = Positions,
+			.Indices = std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0, 1, 99}),
+		});
+		Check(!World.UpdateBody(First, Invalid).Succeeded(), "invalid replacement rejects without deleting old shape");
+		Check(World.IsBodyValid(First) && World.GetBodyState(First)->Description.Shape.Kind ==
+			PhysicsShapeKind::StaticTriangleMesh, "failed mesh replacement retains previous neutral body state");
+		auto Thin = Description;
+		Thin.Shape.Size = {0.01f, 1.0f, 0.01f};
+		Thin.Shape.Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = "asset://thin-collision-fixture", .ContentRevision = 1,
+			.Positions = std::make_shared<const std::vector<glm::vec3>>(
+				std::vector<glm::vec3>{{0.0f, 0.0f, 0.0f}, {0.02f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.02f}}),
+			.Indices = std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0, 2, 1}),
+		});
+		Check(!World.UpdateBody(First, Thin).Succeeded() && World.IsBodyValid(First),
+			"anisotropic scale that collapses triangle area rejects before native shape creation");
+		auto Far = Description;
+		Far.Transform = CFrame(100'001.0f, 2.0f, 0.0f);
+		Check(!World.UpdateBody(First, Far).Succeeded() && World.IsBodyValid(First),
+			"mesh outside the Box3D float coordinate bound preserves prior shape");
+		for (int Case = 0; Case < 3; ++Case) {
+			auto InvalidRotation = Description;
+			auto Rotation = glm::mat3(1.0f);
+			if (Case == 0) Rotation[0].y = 0.25f; // shear
+			if (Case == 1) Rotation[0].x = -1.0f; // reflection
+			if (Case == 2) Rotation[0].x = 1.25f; // non-unit basis
+			InvalidRotation.Transform = CFrame({0.0f, 6.0f, 0.0f}, Rotation);
+			Check(World.UpdateBody(First, InvalidRotation).Status == PhysicsOperationStatus::InvalidDescription &&
+				World.GetBodyState(First)->Description.Transform.FuzzyEq(Description.Transform),
+				"non-rigid mesh CFrame rejects before changing the old body transform");
+			const auto Prior = World.Raycast({
+				.Origin = {0.0f, 5.0f, 0.0f}, .Direction = {0.0f, -5.0f, 0.0f},
+				.Filter = {.Type = PhysicsQueryFilterType::Include, .Bodies = {First}},
+			});
+			Check(Prior.Succeeded() && Prior.HasHit() && Prior.Candidates.front().Body == First &&
+				Near(Prior.Candidates.front().Position.y, 2.0f),
+				"non-rigid mesh update leaves previous collider queryable at its old pose");
+		}
+		Description.Anchored = false;
+		Check(World.UpdateBody(First, Description).Status == PhysicsOperationStatus::InvalidDescription,
+			"dynamic triangle mesh request fails closed at neutral backend boundary");
+		Description.Anchored = true;
+		Description.Shape.Size.x = 0.001f;
+		Check(World.UpdateBody(First, Description).Status == PhysicsOperationStatus::InvalidDescription,
+			"mesh scale below Box3D's 0.01 limit is rejected before native clamping");
+		Check(World.DestroyBody(First).Succeeded() && World.DestroyBody(Second).Succeeded(),
+			"both mesh shapes retire before their shared native resource");
+		Residency = World.GetCollisionResidency();
+		Check(Residency.ActiveResources == 0 && Residency.ActiveConsumers == 0 && Residency.NativeMeshBytes == 0 &&
+			Residency.FailedAdmissions >= 1, "collision resource retirement and failed admission are accounted");
+		Check(!World.IsBodyValid(First), "destroyed mesh body identity is stale");
+	}
+
+	void TestDenseMeshContactCandidateOverflow() {
+		// Box3D's mesh BVH visits lower-Y leaves first. These 300 triangles
+		// overlap the Ball's expanded query AABB but sit beyond contact range.
+		// The real support is last in the higher-Y leaf, after the old 256-slot
+		// candidate cache would stop traversal.
+		struct Observation {
+			bool RayHitSupport = false;
+			int BeganContacts = 0;
+		};
+		auto RunFixture = [](bool Dense) {
+			std::vector<glm::vec3> Positions;
+			std::vector<std::uint32_t> Indices;
+			auto AddTriangle = [&](float Y, float OffsetX, float OffsetZ) {
+				const auto Base = static_cast<std::uint32_t>(Positions.size());
+				Positions.insert(Positions.end(), {
+					{-1.0f + OffsetX, Y, -1.0f + OffsetZ},
+					{OffsetX, Y, 1.0f + OffsetZ},
+					{1.0f + OffsetX, Y, -1.0f + OffsetZ},
+				});
+				Indices.insert(Indices.end(), {Base, Base + 1, Base + 2});
+			};
+			if (Dense) for (int Index = 0; Index < 300; ++Index)
+				AddTriangle(-0.05f, static_cast<float>(Index % 20) * 0.0001f,
+					static_cast<float>(Index / 20) * 0.0001f);
+			AddTriangle(0.0f, 0.0f, 0.0f);
+			auto Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+				.ResourceId = Dense ? "asset://dense-contact-overflow" : "asset://sparse-contact-reference",
+				.ContentRevision = 1,
+				.Positions = std::make_shared<const std::vector<glm::vec3>>(std::move(Positions)),
+				.Indices = std::make_shared<const std::vector<std::uint32_t>>(std::move(Indices)),
+			});
+			PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+			PhysicsBodyDesc Floor;
+			Floor.Anchored = true;
+			Floor.Shape = {.Kind = PhysicsShapeKind::StaticTriangleMesh, .Size = {1.0f, 1.0f, 1.0f}, .Mesh = Mesh};
+			const auto FloorId = World.CreateBody(Floor);
+			Check(FloorId.IsValid(), "dense-contact fixture admits its static mesh");
+			if (!FloorId.IsValid()) return Observation{};
+			const auto Ray = World.Raycast({
+				.Origin = {0.0f, 1.0f, 0.0f}, .Direction = {0.0f, -2.0f, 0.0f},
+				.Filter = {.Type = PhysicsQueryFilterType::Include, .Bodies = {FloorId}},
+			});
+			Observation Result;
+			Result.RayHitSupport = Ray.Succeeded() && Ray.HasHit() &&
+				Ray.Candidates.front().Body == FloorId && Near(Ray.Candidates.front().Position.y, 0.0f);
+			PhysicsBodyDesc Ball;
+			Ball.Shape = {.Kind = PhysicsShapeKind::Ball, .Size = {1.0f, 1.0f, 1.0f}};
+			Ball.Transform = CFrame(0.0f, 0.49f, 0.0f);
+			const auto BallId = World.CreateBody(Ball);
+			Check(BallId.IsValid(), "dense-contact fixture admits its overlapping dynamic Ball");
+			if (!BallId.IsValid()) return Result;
+			for (int Step = 0; Step < 8; ++Step) {
+				for (const auto &Contact : World.Step({}).Contacts)
+					if (Contact.Phase == PhysicsContactPhase::Began &&
+						((Contact.BodyA == FloorId && Contact.BodyB == BallId) ||
+						 (Contact.BodyA == BallId && Contact.BodyB == FloorId)))
+						++Result.BeganContacts;
+			}
+			return Result;
+		};
+		const auto Sparse = RunFixture(false);
+		const auto Dense = RunFixture(true);
+		std::cout << "[Physics:DenseContactRegression] decoys=300 cache=256 sparse_ray=" << Sparse.RayHitSupport
+			<< " dense_ray=" << Dense.RayHitSupport << " sparse_began=" << Sparse.BeganContacts
+			<< " dense_began=" << Dense.BeganContacts << '\n';
+		Check(Sparse.RayHitSupport && Dense.RayHitSupport,
+			"sparse and dense meshes retain the support triangle for filtered raycasts");
+		Check(Sparse.BeganContacts >= 1, "sparse support produces a dynamic Ball contact");
+		Check(Dense.BeganContacts >= 1, "dense support remains contactable after 300 irrelevant AABB candidates");
+	}
+
+	void TestDetachedWorldRootKinematicMotion() {
+		const auto Result = WorldRootTestAccess::DetachedKinematicMotion({
+			.Position = {0.0f, 3.0f, 0.0f}, .Radius = 0.5f, .Height = 2.0f,
+			.Translation = {0.0f, -1.0f, 0.0f}, .Velocity = {0.0f, -1.0f, 0.0f},
+		});
+		Check(Result.Succeeded() && Near(Result.Position.y, 2.0f) && !Result.Collided,
+			"detached stack WorldRoot resolves kinematic motion without a shared owner");
+	}
+
+	void TestChunkedMeshShapeLifecycle() {
+		auto Positions = std::make_shared<std::vector<glm::vec3>>();
+		auto Indices = std::make_shared<std::vector<std::uint32_t>>();
+		for (int Z = 0; Z <= 8; ++Z)
+			for (int X = 0; X <= 16; ++X)
+				Positions->push_back({-1.0f + static_cast<float>(X) / 8.0f, 0.0f,
+					-1.0f + static_cast<float>(Z) / 4.0f});
+		for (int Z = 0; Z < 8; ++Z)
+			for (int X = 0; X < 16; ++X) {
+				const auto A = static_cast<std::uint32_t>(Z * 17 + X);
+				const auto B = A + 17;
+				Indices->insert(Indices->end(), {A, B, B + 1, A, B + 1, A + 1});
+			}
+		Check(Indices->size() / 3 == 256, "chunk lifecycle fixture crosses the 255-triangle boundary");
+		auto MeshAt = [&](std::uint64_t Revision) {
+			return std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+				.ResourceId = "asset://chunk-lifecycle", .ContentRevision = Revision,
+				.Positions = Positions, .Indices = Indices,
+			});
+		};
+		auto DescriptionAt = [&](std::uint64_t Revision) {
+			PhysicsBodyDesc Description;
+			Description.Anchored = true;
+			Description.Shape = {.Kind = PhysicsShapeKind::StaticTriangleMesh,
+				.Size = {1.0f, 1.0f, 1.0f}, .Mesh = MeshAt(Revision)};
+			return Description;
+		};
+		const PhysicsRaycastRequest Ray{
+			.Origin = {0.04f, 1.0f, 0.04f}, .Direction = {0.0f, -2.0f, 0.0f},
+		};
+		{
+			PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+			const auto First = World.CreateBody(DescriptionAt(1));
+			const auto Second = World.CreateBody(DescriptionAt(1));
+			Check(First.IsValid() && Second.IsValid(), "two chunked mesh consumers create successfully");
+			if (!First.IsValid() || !Second.IsValid()) return;
+			const auto Live = World.GetCollisionResidency();
+			Check(Live.ActiveResources == 1 && Live.ActiveConsumers == 2 && Live.ActiveMeshShapes == 4 &&
+				Live.NativeChunks == 2 && Live.ChunkTriangleLimit == 255 && Live.NativeMeshBytes > 0 &&
+				Live.PeakBuildNativeBytes >= Live.NativeMeshBytes,
+				"one resource shares two native chunks across four live shapes");
+			Check(World.Raycast(Ray).HasHit(), "chunked mesh remains queryable");
+			Check(World.DestroyBody(First).Succeeded() && World.DestroyBody(Second).Succeeded(),
+				"both chunked mesh consumers retire");
+			const auto Retired = World.GetCollisionResidency();
+			Check(Retired.ActiveResources == 0 && Retired.ActiveConsumers == 0 &&
+				Retired.ActiveMeshShapes == 0 && Retired.NativeChunks == 0 && Retired.NativeMeshBytes == 0 &&
+				Retired.CreatedMeshShapes == 4 && Retired.RetiredMeshShapes == 4,
+				"last consumer retires both native chunks and all four shapes");
+		}
+		{
+			PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f},
+				.CollisionMeshShapeLimit = 2});
+			const auto First = World.CreateBody(DescriptionAt(1));
+			Check(First.IsValid(), "two-shape limit admits one chunked mesh consumer");
+			if (!First.IsValid()) return;
+			Check(!World.CreateBody(DescriptionAt(1)).IsValid(),
+				"two-shape limit denies a second shared chunked mesh consumer");
+			Check(!World.UpdateBody(First, DescriptionAt(2)).Succeeded(),
+				"replacement needs shape headroom while old chunks remain live");
+			const auto State = World.GetBodyState(First);
+			const auto Denied = World.GetCollisionResidency();
+			Check(State && State->Description.Shape.Mesh && State->Description.Shape.Mesh->ContentRevision == 1 &&
+				Denied.ActiveResources == 1 && Denied.ActiveConsumers == 1 && Denied.ActiveMeshShapes == 2 &&
+				Denied.FailedAdmissions >= 2 && World.Raycast(Ray).HasHit(),
+				"shape-budget denial preserves the prior revision and queryable body");
+			Check(World.DestroyBody(First).Succeeded(), "old chunked consumer frees shape headroom");
+			const auto Replacement = World.CreateBody(DescriptionAt(2));
+			Check(Replacement.IsValid() && World.Raycast(Ray).HasHit(),
+				"shape budget recovers for a new revision after retirement");
+			if (Replacement.IsValid()) Check(World.DestroyBody(Replacement).Succeeded(),
+				"recovered chunked consumer retires");
+			const auto Final = World.GetCollisionResidency();
+			Check(Final.ActiveResources == 0 && Final.ActiveConsumers == 0 && Final.ActiveMeshShapes == 0 &&
+				Final.CreatedMeshShapes == Final.RetiredMeshShapes,
+				"denied and recovered chunked shapes leave balanced accounting");
+		}
+		PhysicsWorld Clamped(PhysicsWorldConfig{
+			.CollisionMeshShapeLimit = MaximumPhysicsCollisionMeshShapes + 1,
+		});
+		Check(Clamped.GetCollisionResidency().MeshShapeLimit == MaximumPhysicsCollisionMeshShapes,
+			"world configuration cannot raise the hard native mesh-shape ceiling");
+	}
+
+	void TestChunkSeamContactEvents() {
+		std::vector<glm::vec3> Positions;
+		std::vector<std::uint32_t> Indices;
+		auto AddTriangle = [&](glm::vec3 A, glm::vec3 B, glm::vec3 C) {
+			const auto Base = static_cast<std::uint32_t>(Positions.size());
+			Positions.insert(Positions.end(), {A, B, C});
+			Indices.insert(Indices.end(), {Base, Base + 1, Base + 2});
+		};
+		// Global Box3D DFS orders these distant negative-X filler leaves first.
+		// The two touching support triangles straddle the 255/256 chunk boundary.
+		for (int Index = 0; Index < 254; ++Index) {
+			const float X = -20.0f + static_cast<float>(Index) * 0.00001f;
+			AddTriangle({X, 0.0f, -0.5f}, {X, 0.0f, 0.5f}, {X + 1.0f, 0.0f, 0.0f});
+		}
+		const auto SupportBase = static_cast<std::uint32_t>(Positions.size());
+		Positions.insert(Positions.end(), {
+			{-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -1.0f},
+			{0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f},
+		});
+		Indices.insert(Indices.end(), {
+			SupportBase, SupportBase + 2, SupportBase + 1,
+			SupportBase + 1, SupportBase + 2, SupportBase + 3,
+		});
+		auto Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = "asset://chunk-contact-seam", .ContentRevision = 1,
+			.Positions = std::make_shared<const std::vector<glm::vec3>>(std::move(Positions)),
+			.Indices = std::make_shared<const std::vector<std::uint32_t>>(std::move(Indices)),
+		});
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		PhysicsBodyDesc Floor;
+		Floor.Anchored = true;
+		Floor.Shape = {.Kind = PhysicsShapeKind::StaticTriangleMesh, .Size = {1.0f, 1.0f, 1.0f}, .Mesh = Mesh};
+		const auto FloorId = World.CreateBody(Floor);
+		Check(FloorId.IsValid() && World.GetCollisionResidency().NativeChunks == 2,
+			"seam fixture builds two native mesh chunks");
+		if (!FloorId.IsValid()) return;
+		for (const float X : {-0.3f, 0.3f}) {
+			const auto Ray = World.Raycast({
+				.Origin = {X, 1.0f, 0.0f}, .Direction = {0.0f, -2.0f, 0.0f},
+				.Filter = {.Type = PhysicsQueryFilterType::Include, .Bodies = {FloorId}},
+			});
+			Check(Ray.Succeeded() && Ray.HasHit() && Near(Ray.Candidates.front().Position.y, 0.0f),
+				"both sides of the native chunk seam remain ray-queryable");
+		}
+		PhysicsBodyDesc Ball;
+		Ball.Shape = {.Kind = PhysicsShapeKind::Ball, .Size = {0.5f, 0.5f, 0.5f}};
+		Ball.Transform = CFrame(-0.3f, 0.24f, 0.0f);
+		const auto BallId = World.CreateBody(Ball);
+		Check(BallId.IsValid(), "seam fixture creates a moving dynamic Ball");
+		if (!BallId.IsValid()) return;
+		auto CountEvents = [&](float X) {
+			Ball.Transform = CFrame(X, 0.24f, 0.0f);
+			Check(World.UpdateBody(BallId, Ball).Succeeded(), "seam fixture moves the Ball");
+			std::array<int, 2> Counts{};
+			for (int Step = 0; Step < 2; ++Step)
+				for (const auto &Contact : World.Step({}).Contacts) {
+					if (!((Contact.BodyA == FloorId && Contact.BodyB == BallId) ||
+						(Contact.BodyA == BallId && Contact.BodyB == FloorId))) continue;
+					++Counts[Contact.Phase == PhysicsContactPhase::Began ? 0 : 1];
+				}
+			return Counts;
+		};
+		const auto Left = CountEvents(-0.3f);
+		const auto Across = CountEvents(0.0f);
+		const auto Right = CountEvents(0.3f);
+		const auto Away = CountEvents(2.0f);
+		std::cout << "[Physics:ChunkSeam] left=" << Left[0] << '/' << Left[1]
+			<< " across=" << Across[0] << '/' << Across[1]
+			<< " right=" << Right[0] << '/' << Right[1]
+			<< " away=" << Away[0] << '/' << Away[1] << '\n';
+		Check(Left == std::array{1, 0} && Across == std::array{0, 0} &&
+			Right == std::array{0, 0} && Away == std::array{0, 1},
+			"neutral contact begins once, persists across a native chunk seam, and ends once after departure");
+	}
+
+	void TestMeshCollisionResidencyLimits() {
+		using namespace gargantuan;
+		PhysicsWorld Clamped(PhysicsWorldConfig{
+			.CollisionResourceLimit = MaximumPhysicsCollisionResources + 1,
+			.CollisionConsumerLimit = MaximumPhysicsCollisionConsumers + 1,
+			.CollisionCanonicalByteLimit = MaximumPhysicsCollisionCanonicalBytes + 1,
+			.CollisionNativeByteLimit = MaximumPhysicsCollisionNativeBytes + 1,
+		});
+		const auto ClampedStats = Clamped.GetCollisionResidency();
+		Check(ClampedStats.ResourceLimit == MaximumPhysicsCollisionResources &&
+			ClampedStats.ConsumerLimit == MaximumPhysicsCollisionConsumers &&
+			ClampedStats.CanonicalByteLimit == MaximumPhysicsCollisionCanonicalBytes &&
+			ClampedStats.NativeByteLimit == MaximumPhysicsCollisionNativeBytes,
+			"world configuration cannot raise the hard collision residency ceilings");
+		const auto Positions = std::make_shared<const std::vector<glm::vec3>>(std::vector<glm::vec3>{
+			{-1.0f, 0.0f, -1.0f}, {-1.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 1.0f},
+		});
+		const auto Indices = std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0, 1, 2});
+		const auto CanonicalBytes = Positions->size() * sizeof(glm::vec3) + Indices->size() * sizeof(std::uint32_t);
+		auto MakeDescription = [&](std::uint64_t Revision) {
+			PhysicsBodyDesc Value;
+			Value.Anchored = true;
+			Value.Shape.Kind = PhysicsShapeKind::StaticTriangleMesh;
+			Value.Shape.Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+				.ResourceId = "asset://residency-fixture", .ContentRevision = Revision,
+				.Positions = Positions, .Indices = Indices,
+			});
+			return Value;
+		};
+		PhysicsWorld IdentifierWorld(PhysicsWorldConfig{});
+		auto LongIdentifier = MakeDescription(1);
+		LongIdentifier.Shape.Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = std::string(MaximumPhysicsCollisionResourceIdBytes + 1, 'x'),
+			.ContentRevision = 1, .Positions = Positions, .Indices = Indices,
+		});
+		Check(!IdentifierWorld.CreateBody(LongIdentifier).IsValid() &&
+			IdentifierWorld.GetCollisionResidency().FailedAdmissions == 1,
+			"oversized collision resource identity fails closed before native admission");
+		PhysicsWorld World(PhysicsWorldConfig{
+			.CollisionResourceLimit = 1, .CollisionConsumerLimit = 2,
+			.CollisionCanonicalByteLimit = CanonicalBytes * 2,
+		});
+		const auto First = World.CreateBody(MakeDescription(1));
+		const auto Second = World.CreateBody(MakeDescription(1));
+		Check(First.IsValid() && Second.IsValid(), "shared mesh consumers fit a one-resource limit");
+		auto Stats = World.GetCollisionResidency();
+		Check(Stats.ActiveResources == 1 && Stats.ActiveConsumers == 2 && Stats.CanonicalBytes == CanonicalBytes &&
+			Stats.CreatedResources == 1 && Stats.CreatedConsumers == 2,
+			"one immutable mesh is charged once while each shape is charged as a consumer");
+		Check(!World.CreateBody(MakeDescription(1)).IsValid(), "consumer limit rejects a third shared shape");
+		Check(World.DestroyBody(Second).Succeeded(), "one shared consumer can retire independently");
+		Check(!World.UpdateBody(First, MakeDescription(2)).Succeeded() && World.IsBodyValid(First),
+			"resource limit rejects replacement while the prior revision remains live");
+		const auto State = World.GetBodyState(First);
+		Check(State && State->Description.Shape.Mesh->ContentRevision == 1,
+			"denied revision replacement retains the old coherent description");
+		const auto Ray = World.Raycast({.Origin = {-0.5f, 2.0f, 0.0f}, .Direction = {0.0f, -4.0f, 0.0f}});
+		Check(Ray.Succeeded() && Ray.HasHit() && Ray.Candidates.front().Body == First,
+			"denied replacement leaves the prior collider queryable");
+		Check(World.DestroyBody(First).Succeeded(), "last old-revision consumer retires");
+		Stats = World.GetCollisionResidency();
+		Check(Stats.ActiveResources == 0 && Stats.ActiveConsumers == 0 && Stats.CanonicalBytes == 0 &&
+			Stats.NativeMeshBytes == 0 && Stats.RetiredResources == 1 && Stats.RetiredConsumers == 2,
+			"last shape retirement releases all native and canonical resource budget");
+		const auto Recovered = World.CreateBody(MakeDescription(2));
+		Check(Recovered.IsValid() && Recovered != First && !World.IsBodyValid(First),
+			"retired budget admits a new revision with a fresh generation");
+		Check(World.DestroyBody(Recovered).Succeeded(), "recovered resource retires");
+		Stats = World.GetCollisionResidency();
+		Check(Stats.CreatedResources == 2 && Stats.RetiredResources == 2 &&
+			Stats.CreatedConsumers == 3 && Stats.RetiredConsumers == 3 && Stats.FailedAdmissions >= 2,
+			"admission, creation, and retirement counters reconcile after recovery");
+
+		PhysicsWorld CanonicalWorld(PhysicsWorldConfig{
+			.CollisionResourceLimit = 2, .CollisionConsumerLimit = 2,
+			.CollisionCanonicalByteLimit = CanonicalBytes,
+		});
+		const auto CanonicalBody = CanonicalWorld.CreateBody(MakeDescription(1));
+		Check(CanonicalBody.IsValid() && !CanonicalWorld.UpdateBody(CanonicalBody, MakeDescription(2)).Succeeded(),
+			"canonical-byte ceiling counts old and candidate revisions together");
+		Check(CanonicalWorld.GetCollisionResidency().ActiveResources == 1,
+			"canonical-byte denial does not retire prior resource");
+		Check(CanonicalWorld.DestroyBody(CanonicalBody).Succeeded(), "canonical-budget fixture retires");
+
+		PhysicsWorld ConsumerWorld(PhysicsWorldConfig{.CollisionConsumerLimit = 1});
+		const auto ConsumerBody = ConsumerWorld.CreateBody(MakeDescription(1));
+		auto Resized = MakeDescription(1);
+		Resized.Shape.Size.x = 2.0f;
+		Check(ConsumerBody.IsValid() && !ConsumerWorld.UpdateBody(ConsumerBody, Resized).Succeeded() &&
+			ConsumerWorld.GetCollisionResidency().ActiveConsumers == 1 &&
+			ConsumerWorld.GetCollisionResidency().LastAdmissionFailure == "Mesh collision consumer limit reached",
+			"consumer ceiling includes both old and candidate shapes during replacement");
+		Check(ConsumerWorld.DestroyBody(ConsumerBody).Succeeded(), "consumer-budget fixture retires");
+
+		PhysicsWorld MeasureWorld(PhysicsWorldConfig{});
+		const auto MeasureBody = MeasureWorld.CreateBody(MakeDescription(1));
+		const auto NativeBytes = MeasureWorld.GetCollisionResidency().NativeMeshBytes;
+		Check(MeasureBody.IsValid() && NativeBytes > 1, "native-byte fixture measures exact Box3D mesh size");
+		Check(MeasureWorld.DestroyBody(MeasureBody).Succeeded(), "native-byte measurement retires");
+		PhysicsWorld NativeAggregateWorld(PhysicsWorldConfig{
+			.CollisionResourceLimit = 2, .CollisionConsumerLimit = 2,
+			.CollisionNativeByteLimit = NativeBytes,
+		});
+		const auto NativeAggregateBody = NativeAggregateWorld.CreateBody(MakeDescription(1));
+		Check(NativeAggregateBody.IsValid() &&
+			!NativeAggregateWorld.UpdateBody(NativeAggregateBody, MakeDescription(2)).Succeeded() &&
+			NativeAggregateWorld.GetCollisionResidency().NativeMeshBytes == NativeBytes,
+			"native-byte ceiling counts old and candidate revision data together");
+		Check(NativeAggregateWorld.DestroyBody(NativeAggregateBody).Succeeded(),
+			"native aggregate-budget fixture retires");
+
+		PhysicsWorld NativeWorld(PhysicsWorldConfig{.CollisionNativeByteLimit = 1});
+		Check(!NativeWorld.CreateBody(MakeDescription(1)).IsValid(),
+			"native-byte ceiling rejects a mesh after bounded candidate construction");
+		Stats = NativeWorld.GetCollisionResidency();
+		Check(Stats.ActiveResources == 0 && Stats.CreatedResources == 0 && Stats.RetiredResources == 0 &&
+			Stats.FailedAdmissions == 1 &&
+			Stats.LastAdmissionFailure == "Mesh collision native-byte limit reached",
+			"native admission failure publishes no resource ownership and identifies the ceiling");
 	}
 
 	void TestKinematicWorldQueries() {
@@ -275,6 +747,44 @@ namespace {
 		State = WorldRootTestAccess::State(*Workspace, Body);
 		Check(State && State->Description.Anchored && State->Description.CanCollide && State->Description.CanTouch,
 			"repeated toggles restore anchored collision and touch semantics");
+	}
+
+	void TestMeshPartCollisionFallback() {
+		using namespace gargantuan;
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		auto Part = std::make_shared<MeshPart>();
+		Part->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+		Part->SetAnchored(false);
+		Part->SetParent(Workspace);
+		const auto Body = WorldRootTestAccess::Body(*Workspace, *Part);
+		auto State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(State && State->Description.Shape.Kind == PhysicsShapeKind::Box,
+			"unanchored StaticMesh request explicitly projects inherited Box collision");
+		Part->SetAnchored(true);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(State && State->Description.Shape.Kind == PhysicsShapeKind::Box && !State->Description.Anchored &&
+			WorldRootTestAccess::Body(*Workspace, *Part) == Body,
+			"unavailable collision asset retains the previous complete Box body state and identity");
+		const auto PriorHit = Workspace->ResolveRaycast({-2.0f, 0.0f, 0.0f}, {4.0f, 0.0f, 0.0f});
+		Check(PriorHit.Succeeded() && PriorHit.Instance == Part,
+			"failed StaticMesh update preserves previous queryable collision");
+		Part->SetCollisionMode(Enums::MeshCollisionMode::Box);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(WorldRootTestAccess::Body(*Workspace, *Part) == Body && State && State->Description.Anchored,
+			"collision mode changes project at the normal safe point");
+		auto Missing = std::make_shared<MeshPart>();
+		Missing->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+		Missing->SetAnchored(true);
+		Missing->SetParent(Workspace);
+		Check(!WorldRootTestAccess::Body(*Workspace, *Missing).IsValid(),
+			"a new anchored StaticMesh body waits for valid collision content");
+		Missing->SetCollisionMode(Enums::MeshCollisionMode::Box);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::Body(*Workspace, *Missing).IsValid(),
+			"a previously unavailable MeshPart can recover through a later safe point");
 	}
 
 	void TestConstraintAndPendingDestroy() {
@@ -732,10 +1242,22 @@ int main() {
 		std::cerr << "Runtime schema bootstrap failed: " << Exception.what() << '\n';
 		return 1;
 	}
+	if (const auto *DenseOnly = std::getenv("GARGANTUAN_DENSE_CONTACT_REGRESSION");
+		DenseOnly && DenseOnly[0] == '1') {
+		TestDenseMeshContactCandidateOverflow();
+		return Failures == 0 ? 0 : 1;
+	}
 	TestNeutralContract();
 	TestBackendIdentityAndLifecycle();
+	TestStaticTriangleMeshBackend();
+	TestDenseMeshContactCandidateOverflow();
+	TestDetachedWorldRootKinematicMotion();
+	TestChunkedMeshShapeLifecycle();
+	TestChunkSeamContactEvents();
+	TestMeshCollisionResidencyLimits();
 	TestKinematicWorldQueries();
 	TestCommittedBodyUpdates();
+	TestMeshPartCollisionFallback();
 	TestConstraintAndPendingDestroy();
 	TestSimulationPublicationAndImpulse();
 	TestTouchAndSensorUpdates();
