@@ -92,6 +92,47 @@ peak-memory and cancellation measurements are required qualification evidence.
 
 ## Scope and staged integration
 
+The existing native authoring API imports a source file into the canonical pair:
+
+```cpp
+auto Result = Assets.ImportProjectAsset(Mount, "assets/Cut.solid", AssetKind::Mesh);
+// Result.Ok, Result.Diagnostic and Result.Records describe the one transaction.
+// Result.Record is the ordinary primary Mesh; its explicit dependency resolves:
+auto Collision = Result.Record
+    ? Assets.ResolveCollisionForMesh(Result.Record->Reference.Value)
+    : std::nullopt;
+```
+
+The source can use existing stable node IDs and ordered subtraction:
+
+```json
+{
+  "Version": 1,
+  "Root": "cut",
+  "Nodes": [
+    {"Id": "body", "Kind": "Box", "Size": [4, 4, 4]},
+    {"Id": "cutter", "Kind": "Box", "Size": [2, 6, 2]},
+    {"Id": "cut", "Kind": "Subtraction", "Inputs": ["body", "cutter"]}
+  ]
+}
+```
+
+After import, normal Luau Instance construction uses the published Mesh reference:
+
+```luau
+local Part = Instance.new("MeshPart")
+Part.Anchored = true
+Part.Mesh = MeshReference -- The primary reference returned by native authoring.
+Part.Size = Vector3.new(1, 1, 1)
+Part.CollisionMode = Enum.MeshCollisionMode.StaticMesh
+Part.Parent = workspace
+```
+
+This creates the same schema-backed MeshPart as manual construction. Source graph
+compilation is native authoring work, not a new Luau gameplay service. Existing
+`AssetService:GetAssetMetadata(Reference)` remains the bounded read-only Luau
+metadata entry point; native tools additionally read collision residency snapshots.
+
 1. Canonical collision value/codec and atomic mesh companion publication.
 2. MeshPart projection, native sharing, scale validation and safe retirement.
 3. Persistence, packaged runtime, reimport and resource accounting.
