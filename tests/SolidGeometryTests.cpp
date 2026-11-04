@@ -86,6 +86,26 @@ namespace {
 		Mesh.Indices = std::make_shared<const std::vector<std::uint32_t>>(Indices);
 		return std::make_shared<const ImportedMesh>(std::move(Mesh));
 	}
+
+	std::shared_ptr<const ImportedMesh> DisconnectedCubes(std::size_t Count) {
+		const auto Cube = CubeOperand();
+		std::vector<RenderVertex> Vertices;
+		std::vector<std::uint32_t> Indices;
+		Vertices.reserve(Count * Cube->Vertices->size());
+		Indices.reserve(Count * Cube->Indices->size());
+		for (std::size_t Copy = 0; Copy < Count; ++Copy) {
+			const auto Base = static_cast<std::uint32_t>(Vertices.size());
+			for (auto Vertex : *Cube->Vertices) {
+				Vertex.Position.x += float(Copy * 4);
+				Vertices.push_back(Vertex);
+			}
+			for (const auto Index : *Cube->Indices) Indices.push_back(Base + Index);
+		}
+		ImportedMesh Mesh;
+		Mesh.Vertices = std::make_shared<const std::vector<RenderVertex>>(std::move(Vertices));
+		Mesh.Indices = std::make_shared<const std::vector<std::uint32_t>>(std::move(Indices));
+		return std::make_shared<const ImportedMesh>(std::move(Mesh));
+	}
 }
 
 int main() {
@@ -313,6 +333,26 @@ int main() {
 		std::cout << "[Geometry:Benchmark] 16 box differences: " << Milliseconds << " ms\n";
 	}
 	if (std::getenv("GARGANTUAN_SOLID_FUZZ")) {
+		SolidNode Many;
+		Many.Id = "many";
+		Many.Kind = SolidNodeKind::ImportedMesh;
+		Many.Mesh = DisconnectedCubes(84); // 1008 triangles; pair estimate is 1,016,064.
+		SolidGraph OverPairLimit{1, "result", {Many, Move("copy", "many", {0.1f, 0, 0}),
+			Boolean("result", SolidNodeKind::Intersection, {"many", "copy"})}};
+		const auto Denied = CompileSolidGeometry(OverPairLimit);
+		Check(!Denied && Denied.error().Code == "GeometryLimit",
+			"disconnected closed components over the pair-work cap reject before Boolean evaluation");
+		auto Degenerate = *CubeOperand();
+		auto DegenerateVertices = *Degenerate.Vertices;
+		DegenerateVertices[0].Position = DegenerateVertices[1].Position;
+		Degenerate.Vertices = std::make_shared<const std::vector<RenderVertex>>(
+			std::move(DegenerateVertices));
+		SolidNode BadOperand;
+		BadOperand.Id = "bad";
+		BadOperand.Kind = SolidNodeKind::ImportedMesh;
+		BadOperand.Mesh = std::make_shared<const ImportedMesh>(std::move(Degenerate));
+		Check(!CompileSolidGeometry({1, "bad", {BadOperand}}),
+			"zero-area and collapsed-edge imported geometry returns a diagnostic");
 		std::uint32_t Seed = 0x4ac8172du;
 		for (int Iteration = 0; Iteration < 128; ++Iteration) {
 			auto Next = [&] { Seed ^= Seed << 13; Seed ^= Seed >> 17; Seed ^= Seed << 5; return Seed; };

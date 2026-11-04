@@ -126,5 +126,14 @@ probe reports whether cancellation was requested while the Boolean kernel
 call was active; a completed call without that observation is not evidence
 of cancellation responsiveness. Join latency and outcome are recorded in
 either case.
+`SolidGeometryAllocationProbe` is a separate optional executable for one-call
+allocation accounting. It intercepts the complete program's C++ global
+new/delete family, including aligned, sized and nothrow forms, and reports
+allocation count, summed requested bytes, peak live requested bytes, live bytes
+with the candidate, and bytes retained after candidate release. Graph setup,
+one-time warmup and result formatting are outside its counted scope. This is
+not total process memory: C malloc, custom native allocators, heap overhead,
+and GPU memory are not observed. It must not be used for compile-time latency
+comparisons; use the uninstrumented benchmark for those.
 The implementation remains pending qualification until those tests and
 the compound asset tests run on the integrated build.
