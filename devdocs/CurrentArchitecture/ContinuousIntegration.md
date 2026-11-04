@@ -729,7 +729,11 @@ source must therefore restore successfully on a cold runner.
 ASan/UBSan are deliberately a dependent second gate rather than part of the
 Windows production configuration. Ubuntu 24.04 uses Clang 19 plus the GCC 14 C++
 runtime, `-fsanitize=address,undefined`, leak detection, immediate failure, and
-symbolized stacks. It runs registered tests serially with the SDL dummy video
+symbolized stacks. Both C and C++ compilation receive these flags in the native
+and GNS sanitizer workflows. This is necessary for the C17 compatibility tests
+and Box3D C implementation: KI-2B-001 qualification exposed an unaligned free-list
+pointer access in `block_allocator.c` that C++-only instrumentation could miss.
+No sanitizer category or acceptance gate is disabled. It runs registered tests serially with the SDL dummy video
 driver. The sanitizer job uploads the same configure, CTest, and JUnit evidence
 as the Windows gate on failure. UBSan is not described as an MSVC feature, and
 the workflow does not weaken the normal Windows ABI/toolchain contract to obtain
