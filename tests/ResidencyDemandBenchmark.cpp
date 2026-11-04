@@ -894,7 +894,7 @@ namespace {
 		for (std::size_t Focus = 0; Focus < FocusCount; ++Focus)
 			BasePositions.push_back(FocusPosition(Focus, FocusCount, EntryCount));
 		std::vector<ResourcePoint> Points;
-		Points.reserve(DurationSeconds + 2);
+		Points.reserve(DurationSeconds + 7); // Include the five-second overrun guard and endpoints.
 		std::vector<double> UpdateAndStepSamples;
 		std::vector<double> CoreEvaluationSamples;
 		std::vector<double> CoreReconciliationSamples;
@@ -984,7 +984,7 @@ namespace {
 		const std::uint64_t MaximumTicks = DurationSeconds * 60;
 		auto Fixture = MakeInMemoryServiceFixture(EntryCount);
 		std::vector<ResourcePoint> Points;
-		Points.reserve(DurationSeconds + 2);
+		Points.reserve(DurationSeconds + 7); // Keep sampler growth outside the tracked policy scope.
 		std::vector<double> PolicySamples;
 		std::vector<double> AvailabilitySamples;
 		std::vector<double> CoreEvaluationSamples;
