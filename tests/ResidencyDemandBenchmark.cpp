@@ -857,7 +857,7 @@ namespace {
 			throw std::runtime_error("[Content:ResidencyReadiness] policy resource gauge exceeded fixture bound");
 	}
 
-	void CheckMeasuredPlateau(const std::vector<ResourcePoint> &Points, bool Quick, std::string_view Phase) {
+	void CheckTailRetainedSpan(const std::vector<ResourcePoint> &Points, bool Quick, std::string_view Phase) {
 		if (Quick) return;
 		if (Points.size() < 20)
 			throw std::runtime_error("[Content:ResidencyReadiness] too few one-second resource samples");
@@ -868,9 +868,9 @@ namespace {
 			});
 		const auto Span = Maximum->Allocations.RetainedBytes - Minimum->Allocations.RetainedBytes;
 		std::cout << "[Content:ResidencyResource] phase=" << Phase << " tailSamples=10"
-			<< " trackedRetainedSpanBytes=" << Span << " plateauLimitBytes=" << 16 * 1024 * 1024 << '\n';
+			<< " trackedTailRetainedSpanBytes=" << Span << " tailRetainedSpanLimitBytes=" << 16 * 1024 * 1024 << '\n';
 		if (Span > 16 * 1024 * 1024)
-			throw std::runtime_error("[Content:ResidencyReadiness] tracked retained memory did not plateau");
+			throw std::runtime_error("[Content:ResidencyReadiness] tracked tail retained span exceeded finite gate");
 	}
 
 	void RunPolicyResource(bool Quick) {
@@ -933,7 +933,7 @@ namespace {
 		const auto MeasuredTicks = UpdateAndStepSamples.size();
 		const auto Timings = Summarize(std::move(UpdateAndStepSamples));
 		PrintResourcePoints("policy-only", Points);
-		CheckMeasuredPlateau(Points, Quick, "policy-only");
+		CheckTailRetainedSpan(Points, Quick, "policy-only");
 		std::cout << "[Content:ResidencyResource] phase=policy-only-final entryCount=" << EntryCount
 			<< " focuses=" << FocusCount << " measuredTicks=" << MeasuredTicks
 			<< " lastPolicyTick=" << LastTick
@@ -961,6 +961,7 @@ namespace {
 		ResidencyDemandPolicyLimits Limits;
 		std::uint64_t LastTick = 0;
 		std::uint64_t ReplacementRequests = 0;
+		std::size_t StoppedRequestsVerified = 0;
 		ContentAvailabilityMetrics BeforeStopMetrics;
 		StartAllocationSample();
 		{
@@ -1011,9 +1012,20 @@ namespace {
 			if (BeforeStopMetrics.Failures != 0 || BeforeStopMetrics.Requests != FinalPolicyMetrics.Requests ||
 				BeforeStopMetrics.Requests > 1'000 || FinalPolicyMetrics.DemandRecords > 64)
 				throw std::runtime_error("[Content:ResidencyReadiness] in-memory reconciliation failed resource bound");
+			std::vector<std::string> RequestedKeys;
+			for (const auto &Demand : Policy->GetDemands())
+				if (Demand.Requested) RequestedKeys.push_back(Demand.Key);
+			if (RequestedKeys.empty())
+				throw std::runtime_error("[Content:ResidencyReadiness] no direct request to verify at policy stop");
 			Policy->Stop(Fixture.Service.get());
-			if (Policy->GetMetrics().Focuses != 0 || Policy->GetMetrics().DemandRecords != 0)
+			const auto StoppedMetrics = Policy->GetMetrics();
+			if (StoppedMetrics.Focuses != 0 || StoppedMetrics.DemandRecords != 0 ||
+				StoppedMetrics.RetainedCandidates != 0 || StoppedMetrics.PendingDeltas != 0)
 				throw std::runtime_error("[Content:ResidencyReadiness] in-memory policy stop retained demand state");
+			for (const auto &Key : RequestedKeys)
+				if (Fixture.Service->ReleaseContent(Key))
+					throw std::runtime_error("[Content:ResidencyReadiness] policy stop left direct service demand");
+			StoppedRequestsVerified = RequestedKeys.size();
 			Policy.reset();
 			const auto RequestsBeforeReplacement = Fixture.Service->GetMetrics().Requests;
 			auto Replacement = std::make_unique<ResidencyDemandPolicy>(Fixture.Snapshot, Limits);
@@ -1042,7 +1054,7 @@ namespace {
 		const auto PolicyTime = Summarize(std::move(PolicySamples));
 		const auto AvailabilityTime = Summarize(std::move(AvailabilitySamples));
 		PrintResourcePoints("in-memory-cas", Points);
-		CheckMeasuredPlateau(Points, Quick, "in-memory-cas");
+		CheckTailRetainedSpan(Points, Quick, "in-memory-cas");
 		std::cout << "[Content:ResidencyResource] phase=in-memory-cas-final entryCount=" << EntryCount
 			<< " focuses=" << FocusCount << " measuredTicks=" << MeasuredTicks
 			<< " lastPolicyTick=" << LastTick
@@ -1061,6 +1073,7 @@ namespace {
 			<< " admissionCommitMaxUs=" << BeforeStopMetrics.Timing.Commit.MaximumMicroseconds
 			<< " casStepMaxUs=" << BeforeStopMetrics.Timing.Step.MaximumMicroseconds
 			<< " replacementRequests=" << ReplacementRequests
+			<< " stoppedRequestsVerified=" << StoppedRequestsVerified
 			<< " trackedAfterStopBytes=" << FinalAllocations.RetainedBytes
 			<< " rssAfterStopBytes=" << ProcessResidentBytes()
 			<< " provider=in-memory trackedScope=policy-and-post-ready-service-allocations" << '\n';
