@@ -41,4 +41,16 @@ execute_process(COMMAND "${CMAKE_COMMAND}" --build "${FixtureBuild}" --target Ch
 if(ChangedStatus EQUAL 0 OR NOT "${ChangedOutput}\n${ChangedError}" MATCHES "Unknown Box3D src/simd.h SHA256")
 	message(FATAL_ERROR "Incremental build failed to rerun the source guard: ${ChangedStatus}\n${ChangedOutput}\n${ChangedError}")
 endif()
-message(STATUS "Incremental build reconfigures and rejects an altered SIMD source")
+configure_file("${BOX3D_SOURCE_DIR}/src/simd.h" "${FixtureBox3D}/src/simd.h" COPYONLY)
+execute_process(COMMAND "${CMAKE_COMMAND}" --build "${FixtureBuild}" --target Check
+	RESULT_VARIABLE RestoredStatus OUTPUT_VARIABLE RestoredOutput ERROR_VARIABLE RestoredError)
+if(NOT RestoredStatus EQUAL 0)
+	message(FATAL_ERROR "Restored SIMD fixture failed: ${RestoredOutput}\n${RestoredError}")
+endif()
+file(APPEND "${FixtureBox3D}/src/block_allocator.c" "\n/* Unknown source revision. */\n")
+execute_process(COMMAND "${CMAKE_COMMAND}" --build "${FixtureBuild}" --target Check
+	RESULT_VARIABLE BlockStatus OUTPUT_VARIABLE BlockOutput ERROR_VARIABLE BlockError)
+if(BlockStatus EQUAL 0 OR NOT "${BlockOutput}\n${BlockError}" MATCHES "Unknown Box3D src/block_allocator.c SHA256")
+	message(FATAL_ERROR "Incremental build failed to rerun the block allocator guard: ${BlockStatus}\n${BlockOutput}\n${BlockError}")
+endif()
+message(STATUS "Incremental build reconfigures and rejects altered SIMD and block allocator sources")
