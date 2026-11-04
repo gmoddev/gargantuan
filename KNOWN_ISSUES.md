@@ -28,8 +28,10 @@ changing Asset 2B collision contracts, or injecting ghost runtime projections.
 The isolated `ResidencySpatialMetadata` v1 native consumer can compare a supplied
 sorted package/key/digest/space/AABB proof with a validated manifest and report
 missing or underbounded units. It does not provide the geometry calculation,
-package-writer integration or qualified metadata producer, so the issue remains
-open even when a detached compatibility fixture passes.
+package-writer integration or qualified metadata producer. The supplied unit
+aggregate must already be transformed into manifest package-space coordinates;
+a mesh-local bound cannot replace it. The issue remains open even when a
+detached compatibility fixture passes.
 
 Closure requires a separately scoped package/asset metadata correction and a
 non-normalized imported/generated mesh regression; 3M's current scale receipt

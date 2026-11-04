@@ -209,13 +209,18 @@ extension does not create a streaming provider or policy.
 
 `Policy` includes `Enabled`, `Stopped`, `Tick`, `Revision`, `ManifestUnits`,
 `Focuses`, `PendingFocuses`, `UnhealthyFocuses`, `Candidates`, `DemandRecords`,
-`DesiredUnits`, `GraceExpiryRecords`, `OwnedRequests`, `PendingDeltas`,
+`FocusContributionRecords`, `DesiredUnits`, `GraceExpiryRecords`, `OwnedRequests`, `PendingDeltas`,
 `Requests`, `Releases`, `RequestDeferrals`, `StaleDecisions`, `QueryFailures`,
-`ServiceBindingFailures`, `BudgetLimitedTicks`, `MemoryAccounting`, the three
+`ServiceBindingFailures`, `BudgetLimitedTicks`, `MemoryAccounting`,
+`TimingAccounting`, the three
 logical-byte fields, `Limits`, `Units`, `NextIndex`, and `TimingSamples`.
 `MemoryAccounting` is `LogicalPayloadV1`; `PolicyStateLogicalBytes`,
 `ReferencedManifestEntryBytes`, and `IndexMembershipPayloadBytes` omit
 allocator, container-node, map-cell and separately allocated string overhead.
+`FocusContributionRecords` counts attached committed focus contributions
+through the bounded focus maps; the logical policy estimate includes their
+demand-map and ranked-focus-set pair payloads. `TimingAccounting` is
+`CorePhasesExcludeObservation`.
 `Limits` contains `Focuses`, `CandidatesPerFocus`, `QueryPagesPerTick`,
 `QueryCellsPerTick`, `MembershipVisitsPerTick`, `DemandDeltasPerTick`,
 `CandidateRevalidationsPerTick`, and `RequestEligibilityVisitsPerTick`.
@@ -234,7 +239,7 @@ visits (32). Bit 8 is defined for candidate revalidation but this implementation
 does not emit it. The phase durations end before observer aggregation and JSON
 encoding.
 
-`Content` has `Requests`, `Acquisitions`, `Admissions`, `Evictions`, `Failures`,
+`Content` has `Stopped`, `Requests`, `Acquisitions`, `Admissions`, `Evictions`, `Failures`,
 `Cancellations`, `CacheHits`, `CompletionCapacityDeferrals`,
 `AdmissionDeferrals`, `DecodedCapacityDeferrals`, `ReservedCompletionBytes`,
 `CachedPayloadBytes`, `DecodedDocumentBytes`, and `RetainedRecords`. Its
@@ -243,6 +248,8 @@ encoding.
 `Commit`, `EndToEnd`, and `Step`, each with `Samples`, `TotalMicroseconds`,
 and `MaximumMicroseconds`. Provider duration includes the provider boundary;
 these values do not include a remote client's materialization or presentation.
+When `Content.Stopped` is true, Engine immediately reports `Status: "Stopped"`
+and omits stale policy rows, even before its next simulation step.
 
 Unknown fields, negative/nonintegral/oversized counts, a missing or invalid
 `Enabled`, and the ordinary malformed envelope return `MalformedRequest`.

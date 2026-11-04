@@ -61,8 +61,13 @@ names the package namespace, sorted unit key, content digest, logical package
 space and finite ordered conservative AABB. The report merges at most 65,536
 records against a 3L-validated, sorted manifest. It checks namespace, version,
 identity, space and that the manifest AABB contains the supplied conservative
-AABB. It returns `Compatible`, `Incomplete` or `Rejected`, aggregate counts and
-at most 64 issue details with an explicit truncation bit. Missing evidence is
+AABB. The aggregate must already be in the same manifest package-space
+coordinates; its producer performs all geometry transforms outside 3M. A
+mesh-local bound is not substituted for that aggregate. `Compatible` requires
+coverage for every spatial manifest unit; a dependency with no manifest bounds
+needs no row. It returns `Compatible`, `Incomplete` or `Rejected`, aggregate
+counts and at most 64 issue details with an explicit truncation bit. The issue
+cap limits only details, not verdict validation. Missing evidence is
 `Incomplete`; malformed, mismatched or underbounded evidence is `Rejected`.
 
 The adapter does not calculate MeshPart bounds, transform geometry, amend a
@@ -93,10 +98,16 @@ request/release and stale/failure/budget counters, bounded unit rows, and a
 fixed chronological timing sample ring. A unit row distinguishes desired
 policy demand, an accepted policy-owned 3L request, grace, pending release and
 current 3L availability state. It does not imply client Known state.
+The projection counts attached committed focus contributions by summing at
+most 512 focus-map sizes, without a manifest or demand-map scan for that gauge.
+If 3L has stopped, `Content.Stopped` is true and Engine immediately reports
+`Stopped` without exposing stale policy rows.
 
 `EvaluationNanoseconds` covers policy evaluation; `ReconciliationNanoseconds`
 covers expiry and request/release application. Their timestamp interval ends
 before observer metric assembly, ring write and diagnostic serialization.
+The wire field `Policy.TimingAccounting` is
+`CorePhasesExcludeObservation` for this boundary.
 `LastContentStepNanoseconds` measures one 3L `Step` call with diagnostics
 enabled. `Content.Timing` reports selected 3L accepted-to-queue,
 queue-to-provider, provider, verification, worker preparation,
@@ -108,6 +119,9 @@ themselves. No P50/P95/P99 is inferred from a sum and maximum.
 
 Memory fields use `LogicalPayloadV1`: policy structure/value estimates, shared
 manifest entry vector capacity times entry size, and index membership payload.
+`FocusContributionRecords` counts attached committed contributions; the
+policy-state estimate includes both their demand-map value pairs and ranked
+focus-set pair payloads.
 They exclude allocator headers, STL node and map-cell overhead, separately
 allocated strings/dependencies, provider/cache data and process working set.
 These are diagnostic gauges, not a complete retained-memory or allocation
