@@ -22,6 +22,7 @@
 namespace gargantuan {
 	namespace {
 		constexpr int CylinderSides = 24;
+		constexpr float MaximumMeshCoordinate = 100'000.0f;
 
 		[[nodiscard]] bool IsFinite(const glm::vec3 &Value) {
 			return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
@@ -56,6 +57,31 @@ namespace gargantuan {
 			if (!A || !B) return A == B;
 			return A->ResourceId == B->ResourceId && A->ContentRevision == B->ContentRevision &&
 				A->Positions == B->Positions && A->Indices == B->Indices;
+		}
+
+		[[nodiscard]] bool IsValidScaledMesh(const PhysicsBodyDesc &Description) {
+			const auto &Mesh = Description.Shape.Mesh;
+			if (!Mesh || !Mesh->Positions || !Mesh->Indices || Mesh->Indices->size() % 3 != 0) return false;
+			const auto OriginLength = glm::length(Description.Transform.Position);
+			if (!std::isfinite(OriginLength) || OriginLength > MaximumMeshCoordinate) return false;
+			for (const auto &Position : *Mesh->Positions) {
+				const auto Scaled = Position * Description.Shape.Size;
+				const auto Distance = glm::length(Scaled);
+				if (!IsFinite(Scaled) || !std::isfinite(Distance) ||
+					Distance + OriginLength > MaximumMeshCoordinate) return false;
+			}
+			for (std::size_t Index = 0; Index < Mesh->Indices->size(); Index += 3) {
+				const auto A = (*Mesh->Indices)[Index];
+				const auto B = (*Mesh->Indices)[Index + 1];
+				const auto C = (*Mesh->Indices)[Index + 2];
+				if (A >= Mesh->Positions->size() || B >= Mesh->Positions->size() ||
+					C >= Mesh->Positions->size()) return false;
+				const auto EdgeA = ((*Mesh->Positions)[B] - (*Mesh->Positions)[A]) * Description.Shape.Size;
+				const auto EdgeB = ((*Mesh->Positions)[C] - (*Mesh->Positions)[A]) * Description.Shape.Size;
+				const auto Cross = glm::cross(EdgeA, EdgeB);
+				if (!IsFinite(Cross) || glm::dot(Cross, Cross) < 1.0e-10f) return false;
+			}
+			return true;
 		}
 
 		class Box3DPhysicsBackend final : public IPhysicsBackend {
@@ -803,7 +829,7 @@ namespace gargantuan {
 				b3ShapeId Shape{};
 				switch (Description.Shape.Kind) {
 				case PhysicsShapeKind::StaticTriangleMesh: {
-					Mesh = GetNativeMesh(Description.Shape.Mesh);
+					if (IsValidScaledMesh(Description)) Mesh = GetNativeMesh(Description.Shape.Mesh);
 					if (Mesh)
 						Shape = b3CreateMeshShape(Body, &ShapeDefinition, Mesh->Data, Box3DConversions::ToBox3(Size));
 					if (!b3Shape_IsValid(Shape)) ++FailedMeshAdmissions;

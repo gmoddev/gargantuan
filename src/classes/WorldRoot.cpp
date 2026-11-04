@@ -77,17 +77,11 @@ namespace gargantuan {
 			}
 			return Description;
 		}
+		Description.Shape.Kind = PhysicsShapeKind::StaticTriangleMesh;
 		auto DataModelValue = GetDataModel();
 		auto Assets = DataModelValue ? std::dynamic_pointer_cast<AssetService>(DataModelValue->GetService("AssetService")) : nullptr;
 		auto Collision = Assets ? Assets->ResolveCollisionForMesh(Mesh->GetMesh()) : std::nullopt;
-		if (!Collision || !Collision->Value.Positions || !Collision->Value.Indices) {
-			if (!MissingMeshCollisionLogged) {
-				LOG_WARN(App, "[Physics:Mesh] StaticMesh collision is unavailable; using the inherited Box shape");
-				MissingMeshCollisionLogged = true;
-			}
-			return Description;
-		}
-		Description.Shape.Kind = PhysicsShapeKind::StaticTriangleMesh;
+		if (!Collision || !Collision->Value.Positions || !Collision->Value.Indices) return Description;
 		Description.Shape.Mesh = std::make_shared<PhysicsTriangleMesh>(PhysicsTriangleMesh{
 			.ResourceId = AssetReference::FromAssetId(Collision->Id).Value,
 			.ContentRevision = Collision->ContentRevision,

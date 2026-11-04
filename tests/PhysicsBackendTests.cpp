@@ -203,6 +203,20 @@ namespace {
 		Check(!World.UpdateBody(First, Invalid).Succeeded(), "invalid replacement rejects without deleting old shape");
 		Check(World.IsBodyValid(First) && World.GetBodyState(First)->Description.Shape.Kind ==
 			PhysicsShapeKind::StaticTriangleMesh, "failed mesh replacement retains previous neutral body state");
+		auto Thin = Description;
+		Thin.Shape.Size = {0.01f, 1.0f, 0.01f};
+		Thin.Shape.Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = "asset://thin-collision-fixture", .ContentRevision = 1,
+			.Positions = std::make_shared<const std::vector<glm::vec3>>(
+				std::vector<glm::vec3>{{0.0f, 0.0f, 0.0f}, {0.02f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.02f}}),
+			.Indices = std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0, 2, 1}),
+		});
+		Check(!World.UpdateBody(First, Thin).Succeeded() && World.IsBodyValid(First),
+			"anisotropic scale that collapses triangle area rejects before native shape creation");
+		auto Far = Description;
+		Far.Transform = CFrame(100'001.0f, 2.0f, 0.0f);
+		Check(!World.UpdateBody(First, Far).Succeeded() && World.IsBodyValid(First),
+			"mesh outside the Box3D float coordinate bound preserves prior shape");
 		Description.Anchored = false;
 		Check(World.UpdateBody(First, Description).Status == PhysicsOperationStatus::InvalidDescription,
 			"dynamic triangle mesh request fails closed at neutral backend boundary");
@@ -351,13 +365,27 @@ namespace {
 		Part->SetAnchored(true);
 		Workspace->StepPhysics(0.0, std::nullopt);
 		State = WorldRootTestAccess::State(*Workspace, Body);
-		Check(State && State->Description.Shape.Kind == PhysicsShapeKind::Box &&
+		Check(State && State->Description.Shape.Kind == PhysicsShapeKind::Box && !State->Description.Anchored &&
 			WorldRootTestAccess::Body(*Workspace, *Part) == Body,
-			"unavailable collision asset retains Box with stable body identity");
+			"unavailable collision asset retains the previous complete Box body state and identity");
+		const auto PriorHit = Workspace->ResolveRaycast({-2.0f, 0.0f, 0.0f}, {4.0f, 0.0f, 0.0f});
+		Check(PriorHit.Succeeded() && PriorHit.Instance == Part,
+			"failed StaticMesh update preserves previous queryable collision");
 		Part->SetCollisionMode(Enums::MeshCollisionMode::Box);
 		Workspace->StepPhysics(0.0, std::nullopt);
-		Check(WorldRootTestAccess::Body(*Workspace, *Part) == Body,
+		State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(WorldRootTestAccess::Body(*Workspace, *Part) == Body && State && State->Description.Anchored,
 			"collision mode changes project at the normal safe point");
+		auto Missing = std::make_shared<MeshPart>();
+		Missing->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+		Missing->SetAnchored(true);
+		Missing->SetParent(Workspace);
+		Check(!WorldRootTestAccess::Body(*Workspace, *Missing).IsValid(),
+			"a new anchored StaticMesh body waits for valid collision content");
+		Missing->SetCollisionMode(Enums::MeshCollisionMode::Box);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::Body(*Workspace, *Missing).IsValid(),
+			"a previously unavailable MeshPart can recover through a later safe point");
 	}
 
 	void TestConstraintAndPendingDestroy() {

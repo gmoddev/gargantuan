@@ -79,7 +79,6 @@ namespace gargantuan {
 		bool ShuttingDownPhysics = false;
 		bool RaycastFailureLogged = false;
 		bool DynamicMeshFallbackLogged = false;
-		bool MissingMeshCollisionLogged = false;
 		bool MeshScaleFallbackLogged = false;
 		std::weak_ptr<AssetService> CollisionAssets;
 		std::uint64_t CollisionAssetChangeSequence = 0;

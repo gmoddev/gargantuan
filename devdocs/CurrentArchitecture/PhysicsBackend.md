@@ -103,12 +103,20 @@ resource contains positions, indices, asset reference, and revision. Box3D
 reuses native mesh data for bodies on the same revision and borrows it for each
 per-instance shape. MeshPart.Size scales canonical vertices per axis, matching
 the renderer. Native mesh data retires after its last live shape.
+Before native shape creation, the adapter rejects scaled triangles whose cross
+product squared is below `1e-10`, non-finite scaled coordinates, and local mesh
+vertices plus body translation beyond 100,000 world units. This is the pinned
+Box3D float-coordinate sanity bound; rejected updates keep the prior shape.
 
 Box3D creates mesh contacts only on static bodies. Unanchored MeshParts that
 request `StaticMesh` use the inherited Box collision, including anchor
 transitions, and receive one bounded `[Physics:Mesh]` diagnostic per WorldRoot.
-Unavailable collision content also uses Box with a bounded diagnostic. The
-asset change journal schedules safe-point replacement when content changes.
+Unavailable collision content fails the requested update, retaining any previous
+coherent backend shape and neutral body identity. Initial body creation waits
+for valid content. A bounded `[Physics:Mesh]` diagnostic reports failure. The
+asset change journal schedules safe-point retry when content changes.
+For Size components below 0.01, Box3D would silently clamp mesh scale; the
+semantic projection instead uses the inherited Box with a bounded diagnostic.
 Invalid direct neutral mesh descriptions fail closed before Box3D admission.
 
 `BasePart` does not create Box3D shapes or hold a backend handle. `WorldRoot`
@@ -118,7 +126,8 @@ private shape replacement.
 
 An unsuccessful shape replacement leaves the previous backend shape and neutral
 identity intact. The update reports failure, `WorldRoot` logs it with the
-`[Physics:Backend]` prefix, and the dirty update remains eligible for retry. The
+`[Physics:Backend]` or bounded `[Physics:Mesh]` prefix, and the dirty update
+remains eligible for retry. The
 engine does not claim silent physics synchronization success.
 
 `PhysicsWorld::GetCollisionResidency` reports active shared resources, active
