@@ -286,7 +286,7 @@ namespace gargantuan {
 						ResidencyPolicyManifest = Content->GetManifestSnapshot();
 						ResidencyPolicyPreparation = std::async(std::launch::async, [Manifest = ResidencyPolicyManifest] {
 							ExecutionDomainScope Domain(ExecutionDomain::Worker);
-							return std::make_unique<ResidencyDemandPolicy>(*Manifest);
+						return std::make_unique<ResidencyDemandPolicy>(std::move(Manifest));
 						});
 					}
 					if (ResidencyPolicyPreparation.valid() &&

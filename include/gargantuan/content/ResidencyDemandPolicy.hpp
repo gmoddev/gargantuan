@@ -57,6 +57,7 @@ namespace gargantuan {
 		std::uint64_t QueryMembershipVisits = 0;
 		std::uint64_t QueryFailures = 0;
 		std::uint64_t ServiceBindingFailures = 0;
+		std::uint64_t ManifestBindingEntriesCompared = 0;
 		std::uint64_t StaleRevisions = 0;
 		std::uint64_t CompletedFocusEvaluations = 0;
 		std::uint64_t MovingSweepCompletions = 0;
@@ -81,6 +82,13 @@ namespace gargantuan {
 	  public:
 		explicit ResidencyDemandPolicy(
 			const PackageContentManifest &Manifest,
+			ResidencyDemandPolicyLimits Limits = {}
+		);
+		// Reuse the exact immutable manifest already validated and owned by 3L.
+		// This policy binds only to that snapshot, even if another service later
+		// publishes equal bytes. Engine prepares it off Main.
+		explicit ResidencyDemandPolicy(
+			std::shared_ptr<const PackageContentManifest> Manifest,
 			ResidencyDemandPolicyLimits Limits = {}
 		);
 		~ResidencyDemandPolicy();

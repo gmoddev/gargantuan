@@ -119,6 +119,15 @@ namespace gargantuan {
 				throw std::invalid_argument("[Content:ResidencyPolicy] query volume exceeds coarse cell limit");
 			return Manifest;
 		}
+
+		std::shared_ptr<const PackageContentManifest> ValidatePolicySnapshot(
+			std::shared_ptr<const PackageContentManifest> Manifest,
+			const ResidencyDemandPolicyLimits &Limits
+		) {
+			if (!Manifest) throw std::invalid_argument("[Content:ResidencyPolicy] missing manifest snapshot");
+			(void)ValidatePolicyInput(*Manifest, Limits);
+			return Manifest;
+		}
 	}
 
 	struct ResidencyDemandPolicy::Impl {
@@ -180,7 +189,8 @@ namespace gargantuan {
 			}
 		};
 
-		PackageContentManifest Manifest;
+		std::shared_ptr<const PackageContentManifest> ManifestOwner;
+		const PackageContentManifest &Manifest;
 		PackageContentCoarseIndex Index;
 		ResidencyDemandPolicyLimits Limits;
 		ResidencyDemandPolicyMetrics Metrics;
@@ -197,9 +207,19 @@ namespace gargantuan {
 		bool Stopped = false;
 		ContentAvailabilityService *BoundAvailability = nullptr;
 		std::shared_ptr<const PackageContentManifest> BoundManifest;
+		bool ExactSnapshotRequired = false;
 
 		explicit Impl(const PackageContentManifest &Input, ResidencyDemandPolicyLimits InputLimits)
-			: Manifest(ValidatePolicyInput(Input, InputLimits)), Index(Manifest), Limits(InputLimits) {}
+			: Impl(std::make_shared<const PackageContentManifest>(ValidatePolicyInput(Input, InputLimits)),
+				InputLimits, false) {}
+
+		explicit Impl(std::shared_ptr<const PackageContentManifest> Input, ResidencyDemandPolicyLimits InputLimits)
+			: Impl(std::move(Input), InputLimits, true) {}
+
+		Impl(std::shared_ptr<const PackageContentManifest> Input, ResidencyDemandPolicyLimits InputLimits,
+			bool RequireExactSnapshot)
+			: ManifestOwner(ValidatePolicySnapshot(std::move(Input), InputLimits)), Manifest(*ManifestOwner),
+			  Index(Manifest), Limits(InputLimits), ExactSnapshotRequired(RequireExactSnapshot) {}
 
 		bool Better(const Candidate &Left, const Candidate &Right) const {
 			if (Left.Class != Right.Class) return Left.Class < Right.Class;
@@ -516,7 +536,11 @@ namespace gargantuan {
 				++Metrics.ServiceBindingFailures;
 				return;
 			}
-			if (!BoundAvailability) {
+			if (!BoundAvailability && CurrentManifest != ManifestOwner) {
+				if (ExactSnapshotRequired) {
+					++Metrics.ServiceBindingFailures;
+					return;
+				}
 				if (CurrentManifest->Package != Manifest.Package ||
 					CurrentManifest->InstanceSchemaVersion != Manifest.InstanceSchemaVersion ||
 					CurrentManifest->Entries.size() != Manifest.Entries.size()) {
@@ -524,6 +548,7 @@ namespace gargantuan {
 					return;
 				}
 				for (std::size_t Unit = 0; Unit < Manifest.Entries.size(); ++Unit) {
+					++Metrics.ManifestBindingEntriesCompared;
 					const auto &Left = Manifest.Entries[Unit];
 					const auto &Right = CurrentManifest->Entries[Unit];
 					if (Left.Key != Right.Key || Left.BlobReference != Right.BlobReference ||
@@ -540,6 +565,8 @@ namespace gargantuan {
 						return;
 					}
 				}
+			}
+			if (!BoundAvailability) {
 				BoundAvailability = Availability;
 				BoundManifest = CurrentManifest;
 			}
@@ -645,6 +672,10 @@ namespace gargantuan {
 	ResidencyDemandPolicy::ResidencyDemandPolicy(
 		const PackageContentManifest &Manifest, ResidencyDemandPolicyLimits Limits
 	) : State(std::make_unique<Impl>(Manifest, Limits)) {}
+
+	ResidencyDemandPolicy::ResidencyDemandPolicy(
+		std::shared_ptr<const PackageContentManifest> Manifest, ResidencyDemandPolicyLimits Limits
+	) : State(std::make_unique<Impl>(std::move(Manifest), Limits)) {}
 
 	ResidencyDemandPolicy::~ResidencyDemandPolicy() = default;
 
