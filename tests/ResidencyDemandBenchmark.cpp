@@ -327,6 +327,23 @@ namespace {
 		const auto ChurnAllocations = FinishAllocationSample();
 		PrintPolicyRow("policy_churn", EntryCount, FocusCount, Samples, ChurnAllocations,
 			ChurnBefore, Policy.GetMetrics());
+		Samples.clear();
+		const auto MovingBefore = Policy.GetMetrics();
+		StartAllocationSample();
+		for (std::size_t Sample = 0; Sample < Iterations; ++Sample) {
+			const auto Before = Policy.GetMetrics();
+			const auto StartedAt = Clock::now();
+			for (std::size_t Focus = 0; Focus < FocusCount; ++Focus)
+				if (!Policy.UpdateFocus(Focus + 1, FocusPosition(Focus, FocusCount, EntryCount) +
+					glm::vec3(Sample % 2 == 0 ? 1.0f : -1.0f, 0, 0), {32, 0, 0}))
+					throw std::runtime_error("[Content:ResidencyBenchmark] moving focus rejected");
+			Policy.Step(nullptr, Tick++);
+			Samples.push_back(Microseconds(StartedAt));
+			CheckWorkBound(Before, Policy.GetMetrics(), Limits);
+		}
+		const auto MovingAllocations = FinishAllocationSample();
+		PrintPolicyRow("policy_all_moving", EntryCount, FocusCount, Samples, MovingAllocations,
+			MovingBefore, Policy.GetMetrics());
 		const auto CleanupBefore = Policy.GetMetrics();
 		const auto CleanupStartedAt = Clock::now();
 		for (std::size_t Focus = 0; Focus < FocusCount; ++Focus)
