@@ -577,17 +577,23 @@ namespace {
 				throw std::runtime_error("[Content:ResidencyBenchmark] scale requirement rejected");
 		std::vector<double> PolicySamples;
 		std::vector<double> ServiceSamples;
-		PolicySamples.reserve(32);
-		ServiceSamples.reserve(32);
+		PolicySamples.reserve(31);
+		ServiceSamples.reserve(31);
+		double FirstPolicyStepMicroseconds = 0.0;
+		double FirstServiceStepMicroseconds = 0.0;
 		for (std::uint64_t Tick = 1; Tick <= 32; ++Tick) {
 			const auto Before = Policy.GetMetrics();
 			const auto PolicyStartedAt = Clock::now();
 			Policy.Step(&Service, Tick);
-			PolicySamples.push_back(Microseconds(PolicyStartedAt));
+			const auto PolicyStepMicroseconds = Microseconds(PolicyStartedAt);
+			if (Tick == 1) FirstPolicyStepMicroseconds = PolicyStepMicroseconds;
+			else PolicySamples.push_back(PolicyStepMicroseconds);
 			CheckWorkBound(Before, Policy.GetMetrics(), Limits);
 			const auto ServiceStartedAt = Clock::now();
 			Service.Step();
-			ServiceSamples.push_back(Microseconds(ServiceStartedAt));
+			const auto ServiceStepMicroseconds = Microseconds(ServiceStartedAt);
+			if (Tick == 1) FirstServiceStepMicroseconds = ServiceStepMicroseconds;
+			else ServiceSamples.push_back(ServiceStepMicroseconds);
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 		const auto TimedPolicyMetrics = Policy.GetMetrics();
@@ -611,7 +617,9 @@ namespace {
 			<< " serviceConstructUs=" << ConstructMicroseconds
 			<< " manifestReadyUs=" << ManifestReadyMicroseconds
 			<< " policyBuildUs=" << PolicyBuildMicroseconds
-			<< " sampledTicks=32 policyMeanUs=" << PolicyTime.Mean
+			<< " policyFirstStepUs=" << FirstPolicyStepMicroseconds
+			<< " serviceFirstStepUs=" << FirstServiceStepMicroseconds
+			<< " sampledHotTicks=31 policyMeanUs=" << PolicyTime.Mean
 			<< " policyP50Us=" << PolicyTime.P50
 			<< " policyP95Us=" << PolicyTime.P95 << " policyP99Us=" << PolicyTime.P99
 			<< " policyMaxUs=" << PolicyTime.Maximum
