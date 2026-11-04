@@ -351,53 +351,67 @@ namespace {
 			"admitted Parts did not enter normal spatial projection");
 		Client.Stop();
 		for (int Index = 0; Index < 40; ++Index) Advance();
-		Check(Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 0,
-			"disconnect retained generation-scoped network focus");
+		Check(Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 0 && Server.GetMetrics().ReadyPeers == 0,
+			"disconnect retained generation-scoped network focus or ready peer");
 		ClientRuntime->Destroy();
 		ClientRuntime.reset();
 		ClientRenderer.reset();
-		GameSession Replacement(Network->CreateTransport(), ClientConfig);
-		std::unique_ptr<HeadlessRenderer> ReplacementRenderer;
-		std::unique_ptr<Engine> ReplacementRuntime;
-		Check(Replacement.Start().Succeeded(), "replacement client session failed to start");
-		auto AdvanceReplacement = [&] {
-			Check(Network->Advance(16ms), "replacement transport clock failed");
-			Network->Pump();
-			(void)Server.Poll();
-			(void)Replacement.Poll();
-			if (!ReplacementRuntime && Replacement.GetClientDataModel()) {
-				ReplacementRenderer = std::make_unique<HeadlessRenderer>(Vector2(32, 32));
-				ReplacementRuntime = std::make_unique<Engine>(Replacement.GetClientDataModel(),
-					ReplacementRenderer.get(), nullptr, EngineProviderConfiguration{.Mode = RuntimeMode::NetworkClient});
-				ReplacementRuntime->ProcessService->Alive = true;
-				Check(Replacement.AttachClientRuntime(*ReplacementRuntime), "replacement runtime attachment failed");
-			}
-			if (ReplacementRuntime) ReplacementRuntime->Step();
-			Runtime.Step();
-			Server.Step(Runtime.GetSimulationTick());
-			Replacement.Step(Runtime.GetSimulationTick());
-		};
-		Until(AdvanceReplacement, [&] { return Replacement.GetStatus() == GameSessionStatus::Ready &&
-			ReplacementRuntime && !Runtime.Players->GetPlayers().empty(); }, "replacement session did not become ready");
-		const auto ReplacementPlayer = Runtime.Players->GetPlayers().front();
-		auto ReplacementCharacter = std::make_shared<KinematicCharacter>();
-		auto ReplacementRoot = std::make_shared<Part>();
-		ReplacementRoot->SetAnchored(true);
-		ReplacementRoot->SetCanCollide(false);
-		ReplacementRoot->SetParent(ReplacementCharacter);
-		ReplacementCharacter->SetRootPart(ReplacementRoot);
-		ReplacementCharacter->ApplyRuntimeTransform(CFrame(2048, 0, 0));
-		ReplacementCharacter->SetParent(Runtime.Workspace);
-		ReplacementPlayer->SetCharacter(ReplacementCharacter);
-		Until(AdvanceReplacement, [&] { return Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 1 &&
-			ReplacementRuntime->Workspace->FindFirstChild("StreamingUnit_4", false); },
-			"replacement session did not receive current admitted cell");
-		std::cout << "[Content:StreamingScenario] network readyPeers=" << Server.GetMetrics().ReadyPeers
+		for (int Cycle = 0; Cycle < 3; ++Cycle) {
+			GameSession Replacement(Network->CreateTransport(), ClientConfig);
+			std::unique_ptr<HeadlessRenderer> ReplacementRenderer;
+			std::unique_ptr<Engine> ReplacementRuntime;
+			Check(Replacement.Start().Succeeded(), "replacement client session failed to start");
+			auto AdvanceReplacement = [&] {
+				Check(Network->Advance(16ms), "replacement transport clock failed");
+				Network->Pump();
+				(void)Server.Poll();
+				(void)Replacement.Poll();
+				if (!ReplacementRuntime && Replacement.GetClientDataModel()) {
+					ReplacementRenderer = std::make_unique<HeadlessRenderer>(Vector2(32, 32));
+					ReplacementRuntime = std::make_unique<Engine>(Replacement.GetClientDataModel(),
+						ReplacementRenderer.get(), nullptr, EngineProviderConfiguration{.Mode = RuntimeMode::NetworkClient});
+					ReplacementRuntime->ProcessService->Alive = true;
+					Check(Replacement.AttachClientRuntime(*ReplacementRuntime), "replacement runtime attachment failed");
+				}
+				if (ReplacementRuntime) ReplacementRuntime->Step();
+				Runtime.Step();
+				Server.Step(Runtime.GetSimulationTick());
+				Replacement.Step(Runtime.GetSimulationTick());
+			};
+			Until(AdvanceReplacement, [&] { return Replacement.GetStatus() == GameSessionStatus::Ready &&
+				ReplacementRuntime && !Runtime.Players->GetPlayers().empty(); }, "replacement session did not become ready");
+			const auto ReplacementPlayer = Runtime.Players->GetPlayers().back();
+			auto ReplacementCharacter = std::make_shared<KinematicCharacter>();
+			auto ReplacementRoot = std::make_shared<Part>();
+			ReplacementRoot->SetAnchored(true);
+			ReplacementRoot->SetCanCollide(false);
+			ReplacementRoot->SetParent(ReplacementCharacter);
+			ReplacementCharacter->SetRootPart(ReplacementRoot);
+			const bool FarCell = Cycle % 2 == 0;
+			ReplacementCharacter->ApplyRuntimeTransform(CFrame(FarCell ? 2048 : 0, 0, 0));
+			ReplacementCharacter->SetParent(Runtime.Workspace);
+			ReplacementPlayer->SetCharacter(ReplacementCharacter);
+			Until(AdvanceReplacement, [&] { return Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 1 &&
+				ReplacementRuntime->Workspace->FindFirstChild(FarCell ? "StreamingUnit_4" : "StreamingUnit_0", false); },
+				"replacement session did not receive current admitted cell");
+			Check(Server.GetMetrics().ReadyPeers == 1, "replacement materialization disrupted ready peer");
+			std::cout << "[Content:StreamingScenario] reconnectCycle=" << Cycle + 1
+				<< " cell=" << (FarCell ? 4 : 0)
+				<< " focuses=" << Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses
+				<< " readyPeers=" << Server.GetMetrics().ReadyPeers << '\n';
+			Replacement.Stop();
+			for (int Index = 0; Index < 40; ++Index) AdvanceReplacement();
+			Check(Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 0 && Server.GetMetrics().ReadyPeers == 0,
+				"replacement disconnect retained focus or ready peer before next session");
+			std::cout << "[Content:StreamingScenario] reconnectCycle=" << Cycle + 1
+				<< " teardownFocuses=" << Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses
+				<< " teardownReadyPeers=" << Server.GetMetrics().ReadyPeers << '\n';
+			if (ReplacementRuntime) ReplacementRuntime->Destroy();
+		}
+		std::cout << "[Content:StreamingScenario] reconnectCycles=3"
 			<< " spatialMembership=" << Server.GetMetrics().SpatialMembershipCount
 			<< " admissions=" << Runtime.Content->GetMetrics().Admissions << '\n';
-		Replacement.Stop();
 		Server.Stop();
-		if (ReplacementRuntime) ReplacementRuntime->Destroy();
 		Runtime.Destroy();
 	}
 }
