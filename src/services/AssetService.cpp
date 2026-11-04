@@ -124,6 +124,9 @@ namespace gargantuan {
 						(Value.SkinInfluences ? Value.SkinInfluences->size() * sizeof(ImportedSkinInfluence) : 0) +
 						(Value.Skeleton && Value.Skeleton->Joints
 							? Value.Skeleton->Joints->size() * sizeof(ImportedSkeletonJoint) : 0);
+				else if constexpr (std::is_same_v<T, ImportedCollision>)
+					return (Value.Positions ? Value.Positions->size() * sizeof(glm::vec3) : 0) +
+						(Value.Indices ? Value.Indices->size() * sizeof(std::uint32_t) : 0);
 				else if constexpr (std::is_same_v<T, ImportedAudio>)
 					return Value.Pcm16 ? Value.Pcm16->size() * sizeof(std::int16_t) : 0;
 				else if constexpr (std::is_same_v<T, ImportedAnimation>) {
@@ -207,6 +210,9 @@ namespace gargantuan {
 					if (Binding.Kind == AssetImportBindingKind::AnimationSkeletonMesh &&
 						(Node.Kind != AssetKind::Animation || Kinds.at(Binding.LogicalKey) != AssetKind::Mesh))
 						return std::unexpected(Error("InvalidDependency", "Animation skeleton dependency must target a Mesh asset"));
+					if (Binding.Kind == AssetImportBindingKind::MeshCollision &&
+						(Node.Kind != AssetKind::Mesh || Kinds.at(Binding.LogicalKey) != AssetKind::Collision))
+						return std::unexpected(Error("InvalidDependency", "Mesh collision dependency must target a Collision asset"));
 					if (!std::ranges::contains(Edges, Binding.LogicalKey)) Edges.push_back(Binding.LogicalKey);
 				}
 				if (Edges.size() > AssetLimits::MaximumDependencies)
@@ -242,6 +248,11 @@ namespace gargantuan {
 						auto Primitives = std::make_shared<std::vector<ImportedMeshPrimitive>>(*Mesh->Primitives);
 						(*Primitives)[Binding.TargetIndex].Material = DependencyId;
 						Mesh->Primitives = std::move(Primitives);
+					} else if (Binding.Kind == AssetImportBindingKind::MeshCollision) {
+						auto *Mesh = std::get_if<ImportedMesh>(&Node.Asset);
+						if (!Mesh || Mesh->CollisionAsset)
+							return std::unexpected(Error("InvalidDependency", "Mesh collision binding target is invalid or duplicated"));
+						Mesh->CollisionAsset = DependencyId;
 					} else if (Binding.Kind == AssetImportBindingKind::AnimationSkeletonMesh) {
 						auto *Animation = std::get_if<ImportedAnimation>(&Node.Asset);
 						if (!Animation) return std::unexpected(Error("InvalidDependency", "Animation skeleton binding target is invalid"));
@@ -363,6 +374,9 @@ namespace gargantuan {
 		std::deque<AssetChange> Changes;
 		std::uint64_t NextChangeSequence = 1;
 		std::size_t CpuBytes = 0;
+		std::uint64_t RetiredCollisionArtifactBytes = 0;
+		std::uint64_t RetiredCollisionArtifacts = 0;
+		std::uint64_t FailedCollisionAdmissions = 0;
 		std::size_t InFlight = 0;
 		std::unordered_set<AssetId, AssetIdHash> InFlightGroups;
 
@@ -563,6 +577,23 @@ namespace gargantuan {
 			}
 		}
 
+		void RetireCollisionArtifacts(const std::vector<AssetRecord> &Previous) {
+			std::unordered_set<std::string> PriorIds;
+			for (const auto &Record : Previous) if (Record.Kind == AssetKind::Collision && Record.ContentId.IsValid())
+				PriorIds.insert(Record.ContentId.ToString());
+			for (const auto &Content : PriorIds) {
+				const bool StillReferenced = std::ranges::any_of(Records, [&](const auto &Entry) {
+					return Entry.second.ContentId.IsValid() && Entry.second.ContentId.ToString() == Content;
+				});
+				if (StillReferenced) continue;
+				const auto Artifact = Artifacts.find(Content);
+				if (Artifact == Artifacts.end()) continue;
+				RetiredCollisionArtifactBytes += Artifact->second->size();
+				++RetiredCollisionArtifacts;
+				Artifacts.erase(Artifact);
+			}
+		}
+
 		using ArtifactReader = std::function<std::expected<
 			std::shared_ptr<const std::vector<std::uint8_t>>, AssetDiagnostic
 		>(const AssetContentId &)>;
@@ -716,6 +747,8 @@ namespace gargantuan {
 					} else if (const auto *Mesh = std::get_if<ImportedMesh>(Record->Asset.get()); Mesh && Mesh->Primitives) {
 						for (const auto &Primitive : *Mesh->Primitives) if (Primitive.Material &&
 							!std::ranges::contains(SemanticDependencies, *Primitive.Material)) SemanticDependencies.push_back(*Primitive.Material);
+						if (Mesh->CollisionAsset && !std::ranges::contains(SemanticDependencies, *Mesh->CollisionAsset))
+							SemanticDependencies.push_back(*Mesh->CollisionAsset);
 					} else if (const auto *Animation = std::get_if<ImportedAnimation>(Record->Asset.get());
 						Animation && Animation->SkeletonAsset) {
 						SemanticDependencies.push_back(*Animation->SkeletonAsset);
@@ -785,6 +818,8 @@ namespace gargantuan {
 			State->InFlightGroups.erase(GroupId);
 			if (!Prepared) {
 				Operation.Diagnostic = Prepared.error();
+				if (Operation.Diagnostic.Code == "CacheLimit" && *Kind == AssetKind::Mesh)
+					++State->FailedCollisionAdmissions;
 				if (!Compound) {
 					AssetRecord Failed{GroupId, AssetReference::FromAssetId(GroupId), *Kind, Name, Source, {}, 0,
 						AssetState::Failed, Prepared.error()};
@@ -798,6 +833,9 @@ namespace gargantuan {
 			} else if (Prepared->Records.size() > AssetLimits::MaximumCatalogRecords - State->Records.size() ||
 				Prepared->CpuBytes > AssetLimits::MaximumCpuCacheBytes - State->CpuBytes) {
 				Operation.Diagnostic = Error("CacheLimit", "Import graph would exceed catalog or CPU cache limits");
+				if (std::ranges::any_of(Prepared->Records, [](const AssetRecord &Record) {
+				return Record.Kind == AssetKind::Collision;
+				})) ++State->FailedCollisionAdmissions;
 			} else {
 				for (const auto &Record : Prepared->Records)
 					if (State->Records.contains(Record.Reference.Value)) {
@@ -941,6 +979,9 @@ namespace gargantuan {
 				if (Prepared->CpuBytes > AssetLimits::MaximumCpuCacheBytes ||
 					State->CpuBytes - PreviousBytes > AssetLimits::MaximumCpuCacheBytes - Prepared->CpuBytes)
 					CommitFailure = Error("CacheLimit", "Reimport graph would exceed the bounded CPU cache");
+				if (CommitFailure.Code == "CacheLimit" && std::ranges::any_of(Prepared->Records,
+					[](const AssetRecord &Record) { return Record.Kind == AssetKind::Collision; }))
+					++State->FailedCollisionAdmissions;
 				if (!CommitFailure.Code.empty()) {
 					for (const auto &Previous : PreviousRecords) {
 						auto Restored = Previous;
@@ -1010,6 +1051,7 @@ namespace gargantuan {
 							if (Next.PrimarySourceAsset) Operation.Record = Next;
 						}
 						State->CpuBytes = State->CpuBytes - PreviousBytes + Prepared->CpuBytes;
+						State->RetireCollisionArtifacts(PreviousRecords);
 						Operation.Ok = true;
 						Operation.Records = Prepared->Records;
 					}
@@ -1112,6 +1154,7 @@ namespace gargantuan {
 				Operation.Records.push_back(Removed);
 				if (Removed.PrimarySourceAsset) Operation.Record = Removed;
 			}
+			State->RetireCollisionArtifacts(Group);
 			Operation.Ok = true;
 		}
 		if (auto World = GetDataModel()) World->AdvanceAuthoritativeRevision();
@@ -1230,6 +1273,48 @@ namespace gargantuan {
 		if (!Record || !IsAvailableRecord(*Record) || !Record->Asset) return std::nullopt;
 		const auto *Animation = std::get_if<ImportedAnimation>(Record->Asset.get());
 		return Animation ? std::optional(AssetAnimationResource{*Animation, Record->ContentRevision}) : std::nullopt;
+	}
+
+	std::optional<AssetCollisionResource> AssetService::ResolveCollision(std::string_view Reference) const {
+		std::scoped_lock Lock(State->Mutex);
+		const auto Record = State->Records.find(std::string(Reference));
+		if (Record == State->Records.end() || !IsAvailableRecord(Record->second)) return std::nullopt;
+		const auto *Collision = std::get_if<ImportedCollision>(Record->second.Asset.get());
+		return Collision ? std::optional(AssetCollisionResource{
+			Record->second.Id, *Collision, Record->second.ContentRevision, AssetBytes(*Record->second.Asset)}) : std::nullopt;
+	}
+
+	std::optional<AssetCollisionResource> AssetService::ResolveCollisionForMesh(std::string_view MeshReference) const {
+		std::scoped_lock Lock(State->Mutex);
+		const auto MeshRecord = State->Records.find(std::string(MeshReference));
+		if (MeshRecord == State->Records.end() || !IsAvailableRecord(MeshRecord->second)) return std::nullopt;
+		const auto *Mesh = std::get_if<ImportedMesh>(MeshRecord->second.Asset.get());
+		if (!Mesh || !Mesh->CollisionAsset) return std::nullopt;
+		const auto CollisionRecord = State->Records.find(AssetReference::FromAssetId(*Mesh->CollisionAsset).Value);
+		if (CollisionRecord == State->Records.end() || !IsAvailableRecord(CollisionRecord->second)) return std::nullopt;
+		const auto *Collision = std::get_if<ImportedCollision>(CollisionRecord->second.Asset.get());
+		return Collision ? std::optional(AssetCollisionResource{
+			CollisionRecord->second.Id, *Collision, CollisionRecord->second.ContentRevision,
+			AssetBytes(*CollisionRecord->second.Asset)}) : std::nullopt;
+	}
+
+	AssetCollisionStats AssetService::ReadCollisionStats() const {
+		std::scoped_lock Lock(State->Mutex);
+		AssetCollisionStats Stats;
+		Stats.RetiredArtifactBytes = State->RetiredCollisionArtifactBytes;
+		Stats.RetiredArtifacts = State->RetiredCollisionArtifacts;
+		Stats.FailedAdmissions = State->FailedCollisionAdmissions;
+		std::unordered_set<std::string> ContentIds;
+		for (const auto &[Reference, Record] : State->Records) {
+			(void)Reference;
+			if (Record.Kind != AssetKind::Collision || !IsAvailableRecord(Record)) continue;
+			++Stats.ResidentRecords;
+			Stats.CanonicalBytes += AssetBytes(*Record.Asset);
+			ContentIds.insert(Record.ContentId.ToString());
+		}
+		for (const auto &Content : ContentIds) if (const auto Artifact = State->Artifacts.find(Content);
+			Artifact != State->Artifacts.end()) Stats.RetainedArtifactBytes += Artifact->second->size();
+		return Stats;
 	}
 
 	AssetTextureChanges AssetService::DrainTextureChanges() {

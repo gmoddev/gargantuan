@@ -35,6 +35,7 @@ namespace gargantuan {
 		MaterialBaseColorTexture,
 		MaterialNormalTexture,
 		AnimationSkeletonMesh,
+		MeshCollision,
 	};
 
 	struct AssetImportBinding {
@@ -81,6 +82,8 @@ namespace gargantuan {
 
 	[[nodiscard]] std::vector<std::unique_ptr<IAssetImporter>> CreateFoundationAssetImporters();
 	[[nodiscard]] std::unique_ptr<IAssetImporter> CreateGltfImporter(AssetKind Kind = AssetKind::Mesh);
+	[[nodiscard]] std::unique_ptr<IAssetImporter> CreateSolidImporter();
+	[[nodiscard]] std::expected<ImportedCollision, AssetDiagnostic> BuildCollisionFromMesh(const ImportedMesh &Mesh);
 	[[nodiscard]] std::expected<std::shared_ptr<const std::vector<std::uint8_t>>, AssetDiagnostic> EncodeAssetArtifact(
 		const ImportedAsset &Asset,
 		AssetKind Kind

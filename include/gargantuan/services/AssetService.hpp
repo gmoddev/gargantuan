@@ -52,6 +52,9 @@ namespace gargantuan {
 		[[nodiscard]] std::optional<AssetMaterialResource> ResolveMaterial(std::string_view Reference);
 		[[nodiscard]] std::optional<AssetAudioResource> ResolveAudio(std::string_view Reference) const;
 		[[nodiscard]] std::optional<AssetAnimationResource> ResolveAnimation(std::string_view Reference) const;
+		[[nodiscard]] std::optional<AssetCollisionResource> ResolveCollision(std::string_view Reference) const;
+		[[nodiscard]] std::optional<AssetCollisionResource> ResolveCollisionForMesh(std::string_view MeshReference) const;
+		[[nodiscard]] AssetCollisionStats ReadCollisionStats() const;
 		[[nodiscard]] AssetTextureChanges DrainTextureChanges();
 		[[nodiscard]] AssetMeshChanges DrainMeshChanges();
 		[[nodiscard]] AssetChangeBatch ReadChanges(std::uint64_t Sequence) const;

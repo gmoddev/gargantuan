@@ -22,7 +22,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 namespace gargantuan {
-	enum class AssetKind : std::uint8_t { Image, Mesh, Font, Material, Audio, Animation };
+	enum class AssetKind : std::uint8_t { Image, Mesh, Font, Material, Audio, Animation, Collision };
 	enum class AssetState : std::uint8_t { Missing, Importing, Ready, Failed, Stale };
 	enum class AssetMaterialAlphaMode : std::uint8_t { Opaque, Mask, Blend };
 	enum class AssetAnimationInterpolation : std::uint8_t { Step, Linear };
@@ -117,6 +117,14 @@ namespace gargantuan {
 		std::shared_ptr<const std::vector<ImportedMeshPrimitive>> Primitives;
 		std::shared_ptr<const ImportedSkeleton> Skeleton;
 		std::shared_ptr<const std::vector<ImportedSkinInfluence>> SkinInfluences;
+		std::optional<AssetId> CollisionAsset;
+	};
+
+	// Canonical local-space triangles. Backend shapes and instance scaling are derived separately.
+	struct ImportedCollision {
+		std::shared_ptr<const std::vector<glm::vec3>> Positions;
+		std::shared_ptr<const std::vector<std::uint32_t>> Indices;
+		RenderBounds Bounds;
 	};
 
 	struct ImportedAnimationVectorKey {
@@ -170,7 +178,7 @@ namespace gargantuan {
 	};
 
 	using ImportedAsset = std::variant<ImportedImage, ImportedMesh, ImportedFont, ImportedMaterial, ImportedAudio,
-		ImportedAnimation>;
+		ImportedAnimation, ImportedCollision>;
 
 	struct AssetDiagnostic {
 		std::string Code;
@@ -228,6 +236,22 @@ namespace gargantuan {
 	struct AssetAnimationResource {
 		ImportedAnimation Value;
 		std::uint64_t ContentRevision = 0;
+	};
+
+	struct AssetCollisionResource {
+		AssetId Id;
+		ImportedCollision Value;
+		std::uint64_t ContentRevision = 0;
+		std::size_t CanonicalBytes = 0;
+	};
+
+	struct AssetCollisionStats {
+		std::size_t ResidentRecords = 0;
+		std::size_t CanonicalBytes = 0;
+		std::size_t RetainedArtifactBytes = 0;
+		std::uint64_t RetiredArtifactBytes = 0;
+		std::uint64_t RetiredArtifacts = 0;
+		std::uint64_t FailedAdmissions = 0;
 	};
 
 	struct AssetTextureChanges {
@@ -307,6 +331,8 @@ namespace gargantuan {
 		static constexpr std::size_t MaximumMeshVertices = 262144;
 		static constexpr std::size_t MaximumMeshIndices = 1048576;
 		static constexpr std::size_t MaximumMeshSubmeshes = 256;
+		static constexpr std::size_t MaximumCollisionPositions = MaximumMeshVertices;
+		static constexpr std::size_t MaximumCollisionIndices = MaximumMeshIndices;
 		static constexpr std::size_t MaximumSkeletonBones = 256;
 		static constexpr std::size_t MaximumJointPathBytes = 256;
 		static constexpr std::size_t MaximumAnimationTracks = 256;
