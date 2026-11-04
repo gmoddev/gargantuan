@@ -1,6 +1,7 @@
 ---
-status: implementation-pending-qualification
-date: 2026-11-03
+status: current
+date: 2026-11-04
+last_verified: 2026-11-04
 owner: runtime-assets
 related_code:
   - include/gargantuan/geometry/SolidGeometryCompiler.hpp
@@ -125,8 +126,14 @@ was 2.090/2.121/4.147 ms, and the 906304-pair intersection P50 was 30.925 ms.
 The small-scenario floor included an observer thread's 2 ms polling sleep
 at teardown. The observer now uses a stop-token-aware 2 ms wait, so its normal
 teardown wakes immediately while cancellation/deadline polling retains the
-same cadence. A speedup requires a new same-host, same-profile measurement;
-these pre-change figures do not establish a post-change result.
+same cadence. The same-host Source13 rerun measured simple union P50/P95/P99
+0.093171/0.112941/0.150551 ms, medium nested
+0.840287/0.887368/1.11524 ms, and dense intersection
+2.35518/2.43152/2.49642 ms. The seven fixed 101-call scenarios retain their
+pre-change hashes. The separate requested-payload probe measures one additional
+allocation and 72 bytes for the wait, with unchanged candidate/post-release live
+counts. Full paired measurements, single-call limits and process-memory caveats
+are in the [campaign report](../Validation/AssetGeometryCampaignValidation.md).
 On Windows memory is private commit with the OS peak pagefile-usage counter;
 on Linux it is current/peak RSS. The before/after difference is observed
 retention, not an allocation count. The dedicated executable intentionally
@@ -147,5 +154,10 @@ one-time warmup and result formatting are outside its counted scope. This is
 not total process memory: C malloc, custom native allocators, heap overhead,
 and GPU memory are not observed. It must not be used for compile-time latency
 comparisons; use the uninstrumented benchmark for those.
-The implementation remains pending qualification until those tests and
-the compound asset tests run on the integrated build.
+Source13 passes integrated Windows/Linux compiler/compound-asset suites and strict
+Linux ASan/UBSan/leak checks. Seven fixed 101-call candidate Mesh hash scenarios
+also match between the measured Windows and Linux profiles. The
+[campaign report](../Validation/AssetGeometryCampaignValidation.md) records exact
+source, toolchains, performance, known backend contact limits and hosted CI status.
+These results do not establish universal toolchain determinism or dense rigid-
+contact completeness for every admitted output mesh.

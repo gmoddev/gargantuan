@@ -4,6 +4,29 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-2B-001: Dense mesh rigid contacts can reach Box3D's candidate cap
+
+- Status: Open; scoped Asset 2B foundation limitation.
+- Area: Native rigid-contact projection for admitted static triangle meshes.
+- Relevant code: pinned Box3D `src/mesh_contact.c`,
+  `src/physics/Box3DPhysicsBackend.cpp`.
+- Evidence: [Asset 2B / Geometry 1A qualification](devdocs/Validation/AssetGeometryCampaignValidation.md).
+
+The pinned backend gathers at most 256 triangles per local rigid-contact query
+and processes that subset. Reaching the cap emits a warning once per process;
+it is not a per-asset admission rejection or a neutral truncation diagnostic.
+Admitted dense meshes can therefore have incomplete rigid contacts. The Source13
+2048-triangle Windows stress fixture reaches the cap and produces contacts, but
+does not prove a missed contact or complete coverage. Rays and mover queries have
+separate paths and evidence. Canonical collision artifacts remain valid,
+backend-neutral data; their triangle limit is not this local query limit.
+
+Resolution requires a deterministic overflow/missed-contact regression and a
+measured, observable bounded backend strategy, with replacement, sharing and
+retirement qualification preserved. Raising an unmeasured constant or treating
+the warning as a per-asset failure does not close this issue. Do not claim full
+dense rigid-contact coverage while it remains open.
+
 ## KI-010: PreRun deadline interrupt can recurse during GC error construction
 
 - Status: Corrected in the PreRun authoring candidate; focused validation and

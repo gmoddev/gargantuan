@@ -310,6 +310,23 @@ unchanged; unknown source hashes fail configuration. A direct 4-byte-aligned
 12-byte-lane test and an unknown-source guard test cover the compatibility
 boundary, while the physics and asset sanitizer suites exercise actual queries.
 
+### Dense mesh contact limit (KI-2B-001)
+
+The pinned Box3D rigid-contact path gathers at most 256 triangle candidates per
+local mesh contact query (`src/mesh_contact.c`). On reaching that capacity it
+processes the gathered subset and emits a warning once per process. This is not
+a per-asset admission failure or an exposed neutral truncation counter. An
+admitted dense mesh can therefore have incomplete rigid contacts for a sufficiently
+large/dense local contact footprint. The 2048-triangle stress fixture reaches the
+cap and produces contacts, but does not prove contact completeness. Raycasts and
+kinematic mover queries follow separate paths and have their own bounds/tests.
+
+This foundation's qualification does not establish complete rigid contacts beyond
+that backend budget. A follow-up must add a deterministic missed-contact/overflow
+fixture and choose an observable bounded native strategy before claiming broader
+dense-contact coverage. Canonical collision assets remain backend-neutral; their
+triangle limit is not silently reduced to this Box3D contact-query budget.
+
 `IPhysicsBackend` can be implemented and tested without including Box3D. The
 focused test suite supplies a recording backend to prove neutral creation,
 update, and step delegation. A different rigid backend can implement the

@@ -105,6 +105,10 @@ publication authority.
 The headless asset tests cover OBJ and glTF companion publication, stable
 identity, dependency propagation, repeated replacement with bounded retained
 Collision artifacts, cancellation, stale last-known-good behavior, save/reopen,
-Play clone, packaged runtime resolution, and tampered artifact denial. Build and
-test qualification is pending integration with the geometry importer and physics
-projection in the Asset 2B / Geometry 1A campaign.
+Play clone, packaged runtime resolution, and tampered artifact denial. Integrated
+Source13 passes the Windows/Linux focused suites and strict Linux ASan/UBSan/leak
+checks, with the exact profile and evidence in the
+[campaign report](../Validation/AssetGeometryCampaignValidation.md). This is scoped
+qualification: Box3D's 256-triangle local rigid-contact candidate cap can leave
+admitted dense meshes with incomplete contacts (KI-2B-001), as documented in the
+[physics contract](PhysicsBackend.md#dense-mesh-contact-limit-ki-2b-001).
