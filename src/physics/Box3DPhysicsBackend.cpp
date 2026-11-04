@@ -61,14 +61,18 @@ namespace gargantuan {
 
 		[[nodiscard]] bool IsValidScaledMesh(const PhysicsBodyDesc &Description) {
 			const auto &Mesh = Description.Shape.Mesh;
-			if (!Mesh || !Mesh->Positions || !Mesh->Indices || Mesh->Indices->size() % 3 != 0) return false;
+			if (!Mesh || Mesh->ResourceId.empty() || !Mesh->Positions || !Mesh->Indices ||
+				Mesh->Positions->size() < 3 || Mesh->Positions->size() > 262144 ||
+				Mesh->Indices->empty() || Mesh->Indices->size() > 1048575 ||
+				Mesh->Indices->size() % 3 != 0) return false;
 			const auto OriginLength = glm::length(Description.Transform.Position);
 			if (!std::isfinite(OriginLength) || OriginLength > MaximumMeshCoordinate) return false;
 			for (const auto &Position : *Mesh->Positions) {
 				const auto Scaled = Position * Description.Shape.Size;
-				const auto Distance = glm::length(Scaled);
-				if (!IsFinite(Scaled) || !std::isfinite(Distance) ||
-					Distance + OriginLength > MaximumMeshCoordinate) return false;
+				const auto WorldPosition = Description.Transform.Rotation * Scaled + Description.Transform.Position;
+				const auto Distance = glm::length(WorldPosition);
+				if (!IsFinite(Scaled) || !IsFinite(WorldPosition) || !std::isfinite(Distance) ||
+					Distance > MaximumMeshCoordinate) return false;
 			}
 			for (std::size_t Index = 0; Index < Mesh->Indices->size(); Index += 3) {
 				const auto A = (*Mesh->Indices)[Index];
@@ -125,7 +129,10 @@ namespace gargantuan {
 
 			[[nodiscard]] PhysicsBodyId CreateBody(const PhysicsBodyDesc &Description) override {
 				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsBodyCreate);
-				if (!b3World_IsValid(World) || !IsValidBodyDescription(Description)) return {};
+				if (!b3World_IsValid(World) || !IsValidBodyDescription(Description)) {
+					if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) ++FailedMeshAdmissions;
+					return {};
+				}
 				const auto Id = AllocateBody();
 				auto &Entry = BodySlots[Id.Slot];
 				Entry.Record = std::make_unique<BodyRecord>();
@@ -162,8 +169,14 @@ namespace gargantuan {
 			) override {
 				auto *Record = FindBody(Body);
 				if (!Record) return InvalidBody();
-				if (!IsValidBodyDescription(Description))
+				if (!IsValidBodyDescription(Description)) {
+					if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) ++FailedMeshAdmissions;
 					return {PhysicsOperationStatus::InvalidDescription, "Physics body description is invalid"};
+				}
+				if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh && !IsValidScaledMesh(Description)) {
+					++FailedMeshAdmissions;
+					return {PhysicsOperationStatus::InvalidDescription, "Scaled mesh collision geometry is invalid"};
+				}
 
 				const auto &Previous = Record->Description;
 				// A non-colliding, non-touching anchored body cannot change any

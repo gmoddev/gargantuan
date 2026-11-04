@@ -104,9 +104,10 @@ reuses native mesh data for bodies on the same revision and borrows it for each
 per-instance shape. MeshPart.Size scales canonical vertices per axis, matching
 the renderer. Native mesh data retires after its last live shape.
 Before native shape creation, the adapter rejects scaled triangles whose cross
-product squared is below `1e-10`, non-finite scaled coordinates, and local mesh
-vertices plus body translation beyond 100,000 world units. This is the pinned
-Box3D float-coordinate sanity bound; rejected updates keep the prior shape.
+product squared is below `1e-10`, non-finite scaled coordinates, and transformed
+mesh vertices or body translation beyond 100,000 world units. This is the pinned
+Box3D float-coordinate sanity bound; rejected updates keep the prior shape,
+including transform-only updates.
 
 Box3D creates mesh contacts only on static bodies. Unanchored MeshParts that
 request `StaticMesh` use the inherited Box collision, including anchor
