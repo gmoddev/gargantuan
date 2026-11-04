@@ -2,6 +2,7 @@
 #include "../src/assets/AssetImporter.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -12,6 +13,8 @@
 #include <glm/geometric.hpp>
 
 using namespace gargantuan;
+
+namespace gargantuan { std::unique_ptr<IAssetImporter> CreateSolidImporter(); }
 
 namespace {
 	int Failures = 0;
@@ -212,6 +215,23 @@ int main() {
 	Check(CompileSolidGeometry(Thin).has_value(), "thin but representable solid compiles");
 	SolidGraph Huge{1, "huge", {Box("huge", {1e8f, 2, 2})}};
 	Check(!CompileSolidGeometry(Huge), "extreme input scale is rejected");
+	{
+		const auto Importer = CreateSolidImporter();
+		AssetImportContext Context;
+		Context.RequestedKind = AssetKind::Mesh;
+		Context.SourceExtension = ".solid";
+		Context.Deadline = std::chrono::steady_clock::time_point::max();
+		const auto Parse = [&](const std::string &Source) {
+			return Importer->ImportGraph(std::span<const std::uint8_t>(
+				reinterpret_cast<const std::uint8_t *>(Source.data()), Source.size()), Context);
+		};
+		const auto WrongVersion = Parse(R"({"Version":4294967297,"Root":"a","Nodes":[{"Id":"a","Kind":"Box","Size":[1,1,1]}]})");
+		Check(!WrongVersion && WrongVersion.error().Code == "InvalidSolidGraph",
+			"oversized unsigned version cannot wrap into supported version one");
+		const auto OversizedIndex = Parse(R"({"Version":1,"Root":"a","Nodes":[{"Id":"a","Kind":"ImportedMesh","Positions":[[0,0,0],[1,0,0],[0,1,0]],"Indices":[4294967296,1,2]}]})");
+		Check(!OversizedIndex && OversizedIndex.error().Code == "InvalidSolidMesh",
+			"oversized unsigned triangle index cannot wrap to vertex zero");
+	}
 
 	if (std::getenv("GARGANTUAN_SOLID_BENCH")) {
 		const auto Start = std::chrono::steady_clock::now();
@@ -220,6 +240,24 @@ int main() {
 		const auto Milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
 			std::chrono::steady_clock::now() - Start).count();
 		std::cout << "[Geometry:Benchmark] 16 box differences: " << Milliseconds << " ms\n";
+	}
+	if (std::getenv("GARGANTUAN_SOLID_FUZZ")) {
+		std::uint32_t Seed = 0x4ac8172du;
+		for (int Iteration = 0; Iteration < 128; ++Iteration) {
+			auto Next = [&] { Seed ^= Seed << 13; Seed ^= Seed >> 17; Seed ^= Seed << 5; return Seed; };
+			const auto Offset = glm::vec3(float(Next() % 401) / 100.0f - 2.0f,
+				float(Next() % 401) / 100.0f - 2.0f,
+				float(Next() % 401) / 100.0f - 2.0f);
+			SolidGraph Case{1, "result", {Box("a"), Move("b", "a", Offset),
+				Boolean("result", static_cast<SolidNodeKind>(4 + Next() % 3), {"a", "b"})}};
+			if (Iteration % 7 == 0) Case.Nodes[1].Inputs = {"result"};
+			if (Iteration % 11 == 0) Case.Nodes[0].Size.x = 0;
+			const auto Compiled = CompileSolidGeometry(Case);
+			Check(!Compiled || (Compiled->Mesh.Indices && Compiled->Collision.Indices &&
+				Compiled->Mesh.Indices->size() == Compiled->Collision.Indices->size()),
+				"seeded malformed/overlap corpus returns complete candidates or diagnostics");
+		}
+		std::cout << "[Geometry:Fuzz] seed 0x4ac8172d, 128 cases\n";
 	}
 	if (Failures) return 1;
 	std::cout << "All Solid Geometry tests passed\n";

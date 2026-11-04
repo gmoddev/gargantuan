@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <expected>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -56,7 +57,9 @@ namespace gargantuan {
 				return std::unexpected(Error("SolidSourceLimit", "Solid source exceeds size or nesting limit"));
 			const auto Document = Json::parse(Source.begin(), Source.end(), nullptr, false);
 			if (Document.is_discarded() || !Document.is_object() || !Document.contains("Version") ||
-				!Document["Version"].is_number_unsigned() || !Document.contains("Root") ||
+				!Document["Version"].is_number_unsigned() ||
+				Document["Version"].get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max() ||
+				!Document.contains("Root") ||
 				!Document["Root"].is_string() || !Document.contains("Nodes") || !Document["Nodes"].is_array())
 				return std::unexpected(Error("InvalidSolidGraph", "Solid source requires Version, Root, and Nodes"));
 			SolidGraph Graph;
@@ -121,7 +124,8 @@ namespace gargantuan {
 						Vertices.push_back(Vertex);
 					}
 					for (const auto &Index : Value["Indices"]) {
-						if (!Index.is_number_unsigned())
+						if (!Index.is_number_unsigned() ||
+							Index.get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
 							return std::unexpected(Error("InvalidSolidMesh", "Imported operand index is invalid"));
 						Indices.push_back(Index.get<std::uint32_t>());
 					}

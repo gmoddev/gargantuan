@@ -47,6 +47,8 @@ The downloaded GitHub tag archive SHA-256 is
 and `AUTHORS` files; excluded upstream CMake, cross-section sources, bindings,
 tests, documentation, and sample assets are not needed for 3D Booleans. The
 per-file hashes are recorded in `vendor/manifold/SOURCE_MANIFEST.sha256`.
+The repository `.gitattributes` pins vendored source line endings to LF so
+those file hashes remain meaningful on Windows checkouts.
 The [upstream license](https://github.com/elalish/manifold/blob/v3.5.4/LICENSE)
 is Apache-2.0 and is retained in the vendored subset. Gargantuan's private
 `cmake/Manifold.cmake` builds a static, serial 3D kernel with no downloads,
@@ -96,5 +98,6 @@ who needs retained source materials must use the ordinary imported Mesh path.
 `tests/SolidGeometryTests.cpp` checks Boolean behavior, ordered subtraction,
 imported-operand denial, whole-graph validation, cancellation, limits, and
 repeat hashes. `GARGANTUAN_SOLID_BENCH=1` runs a small repeated Boolean timing
-hook. The implementation remains pending qualification until those tests and
+hook; `GARGANTUAN_SOLID_FUZZ=1` runs 128 seeded valid and invalid graph cases.
+The implementation remains pending qualification until those tests and
 the compound asset tests run on the integrated build.

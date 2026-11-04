@@ -333,7 +333,10 @@ namespace gargantuan {
 			auto Root = Evaluate(Evaluate, NodeById.at(Graph.Root));
 			if (!Root) return std::unexpected(Root.error());
 			if (Execution.Cancelled()) return std::unexpected(Error("Cancelled", "Solid compilation was cancelled"));
-			return BuildCandidate(*Root, std::min(Limits.MaximumOutputTriangles, std::size_t{32768}));
+			auto Candidate = BuildCandidate(*Root, std::min(Limits.MaximumOutputTriangles, std::size_t{32768}));
+			if (Execution.Cancelled() || Cancellation.IsCancelled() || std::chrono::steady_clock::now() >= Deadline)
+				return std::unexpected(Error("Cancelled", "Solid compilation was cancelled before candidate publication"));
+			return Candidate;
 		} catch (const std::bad_alloc &) {
 			return std::unexpected(Error("GeometryMemory", "Solid compiler allocation failed"));
 		} catch (const std::exception &) {
