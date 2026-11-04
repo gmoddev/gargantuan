@@ -6,6 +6,9 @@ function(GargantuanPrepareBox3DCompatibility SourceDirectory OutputVariable)
 	if(NOT EXISTS "${SourceDirectory}/CMakeLists.txt" OR NOT EXISTS "${SourceSimd}")
 		message(FATAL_ERROR "Box3D compatibility requires the pinned source tree")
 	endif()
+	# file(READ) alone does not make Ninja/Make rerun this hash guard after a
+	# submodule update. Track the unpatched input as a configure dependency.
+	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SourceSimd}")
 
 	# Git's LF blob and Windows' CRLF checkout are the only accepted byte forms.
 	file(SHA256 "${SourceSimd}" RawSha256)

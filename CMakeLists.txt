@@ -765,6 +765,7 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_box3d_compatibility COMMAND gargantuan_box3d_compatibility_tests)
 	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-guard-test")
 	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-smoke-test")
+	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-incremental-test")
 	add_test(NAME gargantuan_box3d_source_guard COMMAND ${CMAKE_COMMAND}
 		"-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/Box3DCompatibilityGuard.cmake")
@@ -772,11 +773,20 @@ if(BUILD_TESTING)
 		"-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
 		"-DBOX3D_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/vendor/box3d"
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/Box3DCompatibilitySmoke.cmake")
+	add_test(NAME gargantuan_box3d_incremental_guard COMMAND ${CMAKE_COMMAND}
+		"-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+		"-DBOX3D_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/vendor/box3d"
+		"-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+		"-DTEST_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/Box3DCompatibilityIncremental.cmake")
 	set_tests_properties(gargantuan_box3d_source_guard PROPERTIES
 		WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-guard-test")
 	set_tests_properties(gargantuan_box3d_source_smoke PROPERTIES
 		WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-smoke-test")
+	set_tests_properties(gargantuan_box3d_incremental_guard PROPERTIES
+		WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-incremental-test")
 	set_tests_properties(gargantuan_box3d_compatibility gargantuan_box3d_source_guard gargantuan_box3d_source_smoke
+		gargantuan_box3d_incremental_guard
 		PROPERTIES LABELS "physics;dependency;headless" TIMEOUT 30)
 	if(WIN32)
 		target_link_libraries(gargantuan_solid_geometry_benchmark PRIVATE Psapi)
