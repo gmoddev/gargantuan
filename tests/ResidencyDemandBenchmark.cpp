@@ -1072,9 +1072,24 @@ int main(int ArgumentCount, char **Arguments) {
 		const bool Quick = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--quick";
 		const bool ReadinessQuick = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--readiness-quick";
 		const bool ReadinessLong = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--readiness-long";
-		if (ArgumentCount > 2 || (ArgumentCount == 2 && !Quick && !ReadinessQuick && !ReadinessLong))
-			throw std::invalid_argument("usage: ResidencyDemandBenchmark [--quick|--readiness-quick|--readiness-long]");
+		const bool ReadinessPolicyLong = ArgumentCount == 2 &&
+			std::string_view(Arguments[1]) == "--readiness-policy-long";
+		const bool ReadinessServiceLong = ArgumentCount == 2 &&
+			std::string_view(Arguments[1]) == "--readiness-service-long";
+		if (ArgumentCount > 2 || (ArgumentCount == 2 && !Quick && !ReadinessQuick && !ReadinessLong &&
+			!ReadinessPolicyLong && !ReadinessServiceLong))
+			throw std::invalid_argument("usage: ResidencyDemandBenchmark "
+				"[--quick|--readiness-quick|--readiness-long|--readiness-policy-long|--readiness-service-long]");
 		BootstrapNativeRuntimeSchema();
+		if (ReadinessPolicyLong || ReadinessServiceLong) {
+			std::cout << "[Content:ResidencyReadiness] mode="
+				<< (ReadinessPolicyLong ? "policy-long" : "service-long")
+				<< " durationSeconds=30 manifestEntries=65536 focuses=500"
+				<< " providerQualification=false clientMaterializationMeasured=false" << '\n';
+			if (ReadinessPolicyLong) RunPolicyResource(false);
+			else RunInMemoryReconciliationResource(false);
+			return 0;
+		}
 		if (ReadinessQuick || ReadinessLong) {
 			std::cout << "[Content:ResidencyReadiness] mode=" << (ReadinessQuick ? "quick" : "long")
 				<< " resourceScope=policy-only-then-in-memory-cas"
