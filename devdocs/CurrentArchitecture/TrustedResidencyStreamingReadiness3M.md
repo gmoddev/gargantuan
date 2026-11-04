@@ -72,7 +72,11 @@ cap limits only details, not verdict validation. Missing evidence is
 
 The adapter does not calculate MeshPart bounds, transform geometry, amend a
 manifest, request content, or grant a producer qualification. There is no
-qualified asset/package metadata producer integrated into this slice.
+qualified asset/package metadata producer in the independently qualified PR15
+slice. The separately composed
+[cross-foundation integration](CrossFoundationPackageSpatialIntegration.md)
+implements package production/verification using this same adapter; its new
+combined qualification is recorded separately from PR15 evidence.
 [KI-3M-001](../../KNOWN_ISSUES.md#ki-3m-001-packaged-mesh-coarse-bounds-need-conservative-geometry-metadata)
 therefore remains open. Spatial policy can use only bounds already present in
 the validated manifest; affected geometry still needs conservative authored

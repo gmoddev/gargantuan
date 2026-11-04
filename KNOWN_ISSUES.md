@@ -6,12 +6,13 @@ open until its resolution criteria are implemented and verified.
 
 ## KI-3M-001: Packaged mesh coarse bounds need conservative geometry metadata
 
-- Status: Open; pre-existing package-metadata integration gap identified during 3M coordination.
+- Status: Implemented in the cross-foundation integration candidate; runtime and hosted qualification pending.
 - Area: Package partition bounds / trusted spatial demand.
 - Relevant code: `src/packaging/PackageBuilder.cpp::InspectSerializedSubtree` and
   `src/render/RenderPublisher.cpp::ExtractMeshPart`.
 
-The package partition inspection derives a transformed `abs(Size) * 0.5` box.
+At the pinned PR15 source, package partition inspection derives a transformed
+`abs(Size) * 0.5` box.
 MeshPart rendering uses canonical mesh positions transformed by `CFrame * Size`;
 Size is a scale and does not normalize mesh coordinates into that box. Mesh
 coordinates outside +/-0.5 can therefore extend beyond the generated package
@@ -36,6 +37,15 @@ detached compatibility fixture passes.
 Closure requires a separately scoped package/asset metadata correction and a
 non-normalized imported/generated mesh regression; 3M's current scale receipt
 does not certify this integration.
+
+The [cross-foundation candidate](devdocs/CurrentArchitecture/CrossFoundationPackageSpatialIntegration.md)
+now derives supported static unit aggregates from exact canonical Mesh and
+Collision artifacts plus inherited Box coverage, retaining unsupported whole
+subtrees in bootstrap. Build and full Validate/Load rederive and bind the proof
+to verified bytes; a consistently rehashed historical underbound is a regression
+case. Geometry-aware standalone MeshPart relevance is separately included.
+These changes are source-reviewed, not yet runtime-qualified, so this entry is
+not marked closed and earlier PR13/PR15 evidence is not promoted.
 
 ## KI-2B-001: Dense mesh rigid contacts can reach Box3D's candidate cap
 

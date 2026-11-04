@@ -90,6 +90,30 @@ candidate, desired, and transition order
 uses `ObjectId` ordering. Pointer identity and hash iteration never define wire
 results.
 
+Standalone MeshPart roots use conservative transformed canonical Mesh,
+explicit Collision companion and inherited Box envelopes for candidate lookup
+and exact point-to-AABB enter/leave distance. Their pivot alone no longer
+excludes nearby geometry. Character-rooted descendants retain the Character
+point predicate and ordinary Parts retain their existing root-position
+predicate. The [cross-foundation integration](CrossFoundationPackageSpatialIntegration.md)
+records qualification and package ownership separately.
+
+Mesh/CollisionMode/transform changes and the canonical AssetService change
+journal invalidate derived geometry at the relevance safe point. A bounded
+per-reference cache validates shared geometry once per current revision;
+ordinary peer evaluation performs no vertex traversal. Unqualified standalone
+mesh geometry has an explicit bounded conservative relevance reason only for
+peers with a trusted or Character-derived focus. This may retain more objects;
+it never invents geometry, demand or peer Known state. Existing selection caps
+fail visibly rather than silently truncating that fallback.
+
+Native metrics expose `GeometryBoundsRebuilds`, `GeometryVertexVisits`,
+`GeometryCacheEntries`, `GeometryCacheLogicalBytes` and `UnqualifiedMeshRoots`.
+The logical cache estimate is separate from total process/allocator memory.
+The envelope describes current canonical semantic geometry, not an old native
+physics shape retained by a failed projection update. That existing failure
+and retry state never grants content or materialization authority.
+
 `SpatialCellAddress` is derived acceleration locality rather than physics, render, or network
 identity. Regions return a conservative bounded candidate superset while 3E
 retains exact policy ownership:

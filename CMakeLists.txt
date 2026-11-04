@@ -1040,7 +1040,58 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_residency_spatial_metadata COMMAND gargantuan_residency_spatial_metadata_tests)
 	add_executable(gargantuan_streaming_diagnostics_tests "tests/StreamingDiagnosticsTests.cpp")
 	target_link_libraries(gargantuan_streaming_diagnostics_tests PRIVATE gargantuan_core nlohmann_json)
+	target_include_directories(gargantuan_streaming_diagnostics_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 	add_test(NAME gargantuan_streaming_diagnostics COMMAND gargantuan_streaming_diagnostics_tests)
+	add_executable(gargantuan_package_spatial_metadata_tests "tests/PackageSpatialMetadataTests.cpp")
+	target_link_libraries(gargantuan_package_spatial_metadata_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_package_spatial_metadata_tests PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
+	add_test(NAME gargantuan_package_spatial_metadata COMMAND gargantuan_package_spatial_metadata_tests)
+	add_executable(gargantuan_cross_foundation_streaming_tests "tests/CrossFoundationStreamingTests.cpp")
+	target_link_libraries(gargantuan_cross_foundation_streaming_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_cross_foundation_streaming_tests PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+		GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution")
+	add_dependencies(gargantuan_cross_foundation_streaming_tests gargantuan_runtime_distribution)
+	add_test(NAME gargantuan_cross_foundation_streaming COMMAND gargantuan_cross_foundation_streaming_tests)
+	set_tests_properties(gargantuan_package_spatial_metadata gargantuan_cross_foundation_streaming
+		PROPERTIES LABELS "content;geometry;integration;runtime" TIMEOUT 180)
+	foreach(GARGANTUAN_CROSS_FOUNDATION_KIND bounds consumer performance)
+		set(GARGANTUAN_CROSS_FOUNDATION_TARGET "gargantuan_cross_foundation_independent_${GARGANTUAN_CROSS_FOUNDATION_KIND}_tests")
+		if(GARGANTUAN_CROSS_FOUNDATION_KIND STREQUAL "bounds")
+			set(GARGANTUAN_CROSS_FOUNDATION_SOURCE "tests/CrossFoundationIndependentBoundsTests.cpp")
+		elseif(GARGANTUAN_CROSS_FOUNDATION_KIND STREQUAL "consumer")
+			set(GARGANTUAN_CROSS_FOUNDATION_SOURCE "tests/CrossFoundationIndependentConsumerTests.cpp")
+		else()
+			set(GARGANTUAN_CROSS_FOUNDATION_SOURCE "tests/CrossFoundationIndependentPerformanceTests.cpp")
+		endif()
+		add_executable(${GARGANTUAN_CROSS_FOUNDATION_TARGET} "${GARGANTUAN_CROSS_FOUNDATION_SOURCE}")
+		target_link_libraries(${GARGANTUAN_CROSS_FOUNDATION_TARGET} PRIVATE gargantuan_core nlohmann_json)
+		target_compile_definitions(${GARGANTUAN_CROSS_FOUNDATION_TARGET} PRIVATE
+			GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+			GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution")
+		add_dependencies(${GARGANTUAN_CROSS_FOUNDATION_TARGET} gargantuan_packager gargantuan_runtime_distribution)
+		add_test(NAME "gargantuan_cross_foundation_independent_${GARGANTUAN_CROSS_FOUNDATION_KIND}"
+			COMMAND ${GARGANTUAN_CROSS_FOUNDATION_TARGET})
+		set_tests_properties("gargantuan_cross_foundation_independent_${GARGANTUAN_CROSS_FOUNDATION_KIND}"
+			PROPERTIES LABELS "content;geometry;integration;independent" TIMEOUT 180)
+	endforeach()
+	add_executable(gargantuan_cross_foundation_independent_lifecycle_tests "tests/CrossFoundationIndependentLifecycleTests.cpp")
+	target_link_libraries(gargantuan_cross_foundation_independent_lifecycle_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_cross_foundation_independent_lifecycle COMMAND gargantuan_cross_foundation_independent_lifecycle_tests)
+	set_tests_properties(gargantuan_cross_foundation_independent_lifecycle
+		PROPERTIES LABELS "content;residency;physics;render;network;lifecycle" TIMEOUT 180)
+	add_executable(gargantuan_cross_foundation_independent_authoring_tests "tests/CrossFoundationIndependentAuthoringTests.cpp")
+	target_link_libraries(gargantuan_cross_foundation_independent_authoring_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_cross_foundation_independent_authoring_tests PRIVATE
+		GARGANTUAN_ANIMATION_PREVIEW_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/animation-preview-rig.gltf")
+	add_test(NAME gargantuan_cross_foundation_independent_authoring COMMAND gargantuan_cross_foundation_independent_authoring_tests)
+	set_tests_properties(gargantuan_cross_foundation_independent_authoring
+		PROPERTIES LABELS "geometry;editor;integration;authority" TIMEOUT 120)
+	add_executable(gargantuan_mesh_geometry_relevance_tests "tests/MeshGeometryRelevanceTests.cpp")
+	target_link_libraries(gargantuan_mesh_geometry_relevance_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_mesh_geometry_relevance COMMAND gargantuan_mesh_geometry_relevance_tests)
+	set_tests_properties(gargantuan_mesh_geometry_relevance PROPERTIES LABELS "geometry;relevance;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_residency_readiness_smoke gargantuan_residency_demand_startup
 		gargantuan_residency_streaming_scenarios gargantuan_residency_spatial_metadata gargantuan_streaming_diagnostics
 		PROPERTIES LABELS "content;residency;streaming;runtime" TIMEOUT 120)
@@ -1296,6 +1347,14 @@ if(BUILD_TESTING)
 			gargantuan_residency_streaming_scenario_tests
 			gargantuan_residency_spatial_metadata_tests
 			gargantuan_streaming_diagnostics_tests
+			gargantuan_package_spatial_metadata_tests
+			gargantuan_cross_foundation_streaming_tests
+			gargantuan_cross_foundation_independent_bounds_tests
+			gargantuan_cross_foundation_independent_consumer_tests
+			gargantuan_cross_foundation_independent_performance_tests
+			gargantuan_cross_foundation_independent_lifecycle_tests
+			gargantuan_cross_foundation_independent_authoring_tests
+			gargantuan_mesh_geometry_relevance_tests
 			gargantuan_content_ownership_tests
 			gargantuan_content_availability_benchmark
 			gargantuan_game_session_benchmark

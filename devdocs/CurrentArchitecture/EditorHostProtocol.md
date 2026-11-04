@@ -404,6 +404,27 @@ not imply partial batch installation.
 This is Engine API exposure only. Studio multi-object Properties UX is a separate
 task gated on the [final-source qualification receipt](./PreparedPropertyCommitValidation.md#editorhost-exposure-qualification).
 
+## Asset-local geometry inspection, version 1
+
+The existing `GetAssetCatalog` response retains `CatalogVersion: 2` and its
+existing session token, `ReadDataModel` capability and catalog/resource limits.
+Mesh and Collision records add `Metadata.GeometryInspectionVersion: 1` and
+`LocalBounds`, containing `Space: AssetLocal`, three-component `Minimum` and
+`Maximum` arrays, and `Coverage`. Coverage is `DeclaredMesh`,
+`DeclaredBindPose` for skinned Meshes, or `DeclaredCollision`. These are stored
+canonical asset declarations. They are not a package-space aggregate, animation
+envelope, geometry-validation verdict or native readiness proof.
+
+Mesh metadata additionally contains nullable `CollisionAssetId`, the declared
+explicit dependency. The referenced Collision catalog row supplies its own
+`ContentId` and `ContentRevision`; callers must not substitute the Mesh revision
+for the Collision revision. Collision metadata includes
+`Representation: StaticTriangles`, `VertexCount` and `IndexCount`. No vertices,
+triangles, mutable asset pointers or native shape handles are returned. The
+extension adds only fixed-size geometry values to each existing bounded record
+and performs no resolver, filesystem or physics operation. All geometry
+compilation/import commands and their existing capabilities remain unchanged.
+
 ## Licensing and repository contract
 
 - Gargantuan and EditorHost remain public MPL-2.0 code.

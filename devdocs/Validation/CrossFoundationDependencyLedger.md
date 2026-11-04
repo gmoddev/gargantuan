@@ -34,9 +34,11 @@ reviews, test results, performance and source identities will be recorded here
 as they are established. KI-3M-001 remains open until the authoritative producer
 and actual package/consumer regression are implemented and qualified.
 
-Worker preparation is local only. GodotLuau holds the current independently
-coordinated lease; this campaign has no active reservation, transfer or remote
-process. A new private Sandbox namespace, fixed build recipe and explicit
+Worker preparation is local only. GodotLuau held the lease at campaign start
+and reported checked release at `2026-11-04T23:17:01Z`. This implementation
+root has no active reservation, transfer or remote process. Qualification must
+check and acquire the current host-local WorkerLeases ledger. A new private
+Sandbox namespace, fixed build recipe and explicit
 checked handoff are required before sustained worker execution. Compiler
 parallelism is capped at two; historical physical certification is out of scope.
 

@@ -64,13 +64,18 @@ Only logical package space `default` participates in the first policy.
 The metadata integration contract requires conservative unit bounds covering
 actual geometry. For MeshParts, verified asset-local bounds must be transformed
 by `CFrame * Size` and unioned with the rest of the unit; Size does not normalize
-canonical mesh coordinates. The existing package writer's Size-box approximation
-can under-bound such meshes ([KI-3M-001](../../KNOWN_ISSUES.md#ki-3m-001-packaged-mesh-coarse-bounds-need-conservative-geometry-metadata)).
-3M's detached native compatibility adapter can inspect supplied conservative
-bounds but does not produce, install or qualify them. The issue remains open;
-affected units require conservative authored metadata, trusted critical demand
-or fully resident composition until a separate metadata producer is qualified.
-3M does not read collision artifacts or repair payload geometry.
+canonical mesh coordinates. The PR15 source retained a Size-box approximation
+that could under-bound such meshes. The separate
+[cross-foundation package producer](CrossFoundationPackageSpatialIntegration.md)
+now derives and checks complete supported static aggregates from captured
+canonical Mesh/Collision artifacts and the inherited Box envelope. Unsupported
+subtrees remain bootstrap; full package validation rejects underbounded legacy
+units. Its source/qualification state is recorded under
+[KI-3M-001](../../KNOWN_ISSUES.md#ki-3m-001-packaged-mesh-coarse-bounds-need-conservative-geometry-metadata).
+3M still consumes only the validated immutable manifest and its native
+compatibility report. It does not read collision artifacts, repair payload
+geometry or become the producer. Geometry-aware peer relevance remains owned
+by 3E and accepted materialization by 3J.
 
 Queries have separate budgets for cells, memberships and emitted candidates.
 A cursor is bound to an immutable index epoch, exact space and query volume.

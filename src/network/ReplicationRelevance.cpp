@@ -7,7 +7,9 @@
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/RemoteBase.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
 #include <algorithm>
@@ -16,13 +18,16 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <utility>
 
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
+#include <glm/matrix.hpp>
 
 namespace gargantuan::network {
 	namespace {
@@ -47,6 +52,88 @@ namespace gargantuan::network {
 									   glm::abs(Rotation[2]) * Half.z;
 			const glm::dvec3 Position(Frame.Position);
 			return {Position - Extents, Position + Extents};
+		}
+
+		bool IncludeLocalBounds(SpatialBounds &Bounds, const RenderBounds &Candidate) {
+			for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+				if (!std::isfinite(Candidate.Minimum[Axis]) || !std::isfinite(Candidate.Maximum[Axis]) ||
+					Candidate.Minimum[Axis] > Candidate.Maximum[Axis]) return false;
+				Bounds.Minimum[Axis] = std::min(Bounds.Minimum[Axis], static_cast<double>(Candidate.Minimum[Axis]));
+				Bounds.Maximum[Axis] = std::max(Bounds.Maximum[Axis], static_cast<double>(Candidate.Maximum[Axis]));
+			}
+			return true;
+		}
+
+		struct MeshGeometry final {
+			SpatialBounds Bounds;
+			std::string Reference;
+			std::uint64_t MeshRevision = 0;
+			std::uint64_t CollisionRevision = 0;
+			bool HasCollision = false;
+		};
+
+		std::optional<MeshGeometry> MeshLocalBounds(const AssetService &Assets, std::string_view Reference,
+			std::uint64_t &VertexVisits) {
+			const auto Mesh = Assets.ResolveMeshResource(Reference);
+			if (!Mesh || !Mesh->Value.Vertices || Mesh->Value.Vertices->empty() || Mesh->Value.Skeleton) return std::nullopt;
+			SpatialBounds Bounds{glm::dvec3(-0.5), glm::dvec3(0.5)};
+			if (!IncludeLocalBounds(Bounds, Mesh->Value.Bounds)) return std::nullopt;
+			for (const auto &Vertex : *Mesh->Value.Vertices) {
+				SaturatingIncrement(VertexVisits);
+				for (std::size_t Axis = 0; Axis < 3; ++Axis)
+					if (!std::isfinite(Vertex.Position[Axis]) ||
+						Vertex.Position[Axis] < Mesh->Value.Bounds.Minimum[Axis] ||
+						Vertex.Position[Axis] > Mesh->Value.Bounds.Maximum[Axis]) return std::nullopt;
+			}
+			const auto Collision = Assets.ResolveCollisionForMesh(Reference);
+			if (Collision) {
+				if (!Collision->Value.Positions || Collision->Value.Positions->empty() ||
+					!IncludeLocalBounds(Bounds, Collision->Value.Bounds)) return std::nullopt;
+				for (const auto &Position : *Collision->Value.Positions) {
+					SaturatingIncrement(VertexVisits);
+					for (std::size_t Axis = 0; Axis < 3; ++Axis)
+						if (!std::isfinite(Position[Axis]) ||
+							Position[Axis] < Collision->Value.Bounds.Minimum[Axis] ||
+							Position[Axis] > Collision->Value.Bounds.Maximum[Axis]) return std::nullopt;
+				}
+			}
+			const auto Current = Assets.ResolveMeshResource(Reference);
+			if (!Current || Current->ContentRevision != Mesh->ContentRevision) return std::nullopt;
+			return MeshGeometry{Bounds, std::string(Reference), Mesh->ContentRevision,
+				Collision ? Collision->ContentRevision : 0, Collision.has_value()};
+		}
+
+		std::optional<SpatialBounds> TransformedMeshBounds(const MeshPart &Part, const SpatialBounds &Local) {
+			const auto Frame = Part.GetCFrame();
+			const auto Size = glm::dvec3(Part.GetSize());
+			const auto Rotation = glm::dmat3(Frame.Rotation);
+			if (!Finite(Frame.Position) || !std::isfinite(Size.x) || !std::isfinite(Size.y) ||
+				!std::isfinite(Size.z)) return std::nullopt;
+			constexpr double RigidTolerance = 0.000001;
+			for (std::size_t Column = 0; Column < 3; ++Column) {
+				const auto Basis = Rotation[Column];
+				if (!std::isfinite(Basis.x) || !std::isfinite(Basis.y) || !std::isfinite(Basis.z) ||
+					std::abs(glm::dot(Basis, Basis) - 1.0) > RigidTolerance) return std::nullopt;
+				for (std::size_t Other = 0; Other < Column; ++Other)
+					if (std::abs(glm::dot(Basis, Rotation[Other])) > RigidTolerance) return std::nullopt;
+			}
+			if (std::abs(glm::determinant(Rotation) - 1.0) > RigidTolerance) return std::nullopt;
+			SpatialBounds Result{glm::dvec3(std::numeric_limits<double>::infinity()),
+				glm::dvec3(-std::numeric_limits<double>::infinity())};
+			for (std::size_t Corner = 0; Corner < 8; ++Corner) {
+				glm::dvec3 LocalPoint;
+				for (std::size_t Axis = 0; Axis < 3; ++Axis)
+					LocalPoint[Axis] = (Corner & (1u << Axis)) ? Local.Maximum[Axis] : Local.Minimum[Axis];
+				const auto Scaled = Size * LocalPoint;
+				const auto World = glm::dvec3(Frame.Position) + Rotation * Scaled;
+				const double Magnitude = std::abs(Scaled.x) + std::abs(Scaled.y) + std::abs(Scaled.z);
+				for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+					const double Margin = 0.0001 * (std::abs(World[Axis]) + Magnitude + 1.0);
+					Result.Minimum[Axis] = std::min(Result.Minimum[Axis], World[Axis] - Margin);
+					Result.Maximum[Axis] = std::max(Result.Maximum[Axis], World[Axis] + Margin);
+				}
+			}
+			return Result.IsValid() ? std::optional(Result) : std::nullopt;
 		}
 	}
 
@@ -90,6 +177,10 @@ namespace gargantuan::network {
 		struct SpatialEntry {
 			std::weak_ptr<Instance> Object;
 			bool CharacterRoot = false;
+			bool MeshRoot = false;
+			bool GeometryDirty = false;
+			bool QualifiedBounds = false;
+			std::optional<MeshGeometry> MeshLocal;
 			std::set<ObjectId> Members;
 			std::vector<SignalConnection::Pointer> SpatialChanged;
 		};
@@ -111,12 +202,20 @@ namespace gargantuan::network {
 		};
 
 		std::shared_ptr<Instance> SourceRoot;
+		std::shared_ptr<AssetService> Assets;
+		std::uint64_t AssetSequence = 0;
 		ExclusionPolicy IsExcluded;
 		ReplicationRelevanceConfiguration Configuration;
 		std::map<ObjectId, ObjectLocation> ObjectLocations;
 		std::set<ObjectId> GlobalObjects;
 		std::set<ObjectId> ReplicatedServiceRoots;
 		std::map<ObjectId, SpatialEntry> SpatialObjects;
+		std::set<ObjectId> UnqualifiedMeshRoots;
+		std::size_t MeshRootCount = 0;
+		// One current derived value per reference. Clear on journal mutation and
+		// root reference lifecycle changes; no historical asset revisions survive.
+		std::map<std::string, std::optional<MeshGeometry>> GeometryCache;
+		std::uint64_t GeometryCacheLogicalBytes = 0;
 		SpatialRuntimeProjectionStore Spatial;
 		SpatialRegionQueryScratch QueryScratch;
 		std::map<ConnectionId, PeerState> Peers;
@@ -143,8 +242,10 @@ namespace gargantuan::network {
 			: SourceRoot(std::move(SourceRootValue)), IsExcluded(std::move(IsExcludedValue)),
 			  Configuration(ConfigurationValue),
 			  Spatial({.Index = ConfigurationValue.SpatialConfiguration(), .MaximumSpaces = 1}) {
-			if (!SourceRoot || !std::dynamic_pointer_cast<DataModel>(SourceRoot) || !Configuration.IsValid())
+			if (!SourceRoot || !Configuration.IsValid())
 				throw std::invalid_argument("[Replication:Relevance] configuration or source root is invalid");
+			Assets = LookupAssets();
+			if (Assets) AssetSequence = Assets->ReadChanges(0).NextSequence;
 			QueryScratch.Reserve(Configuration.SpatialConfiguration());
 			RegisterObject(SourceRoot);
 			for (const auto &Object : SourceRoot->GetDescendants())
@@ -185,6 +286,13 @@ namespace gargantuan::network {
 			Fail(std::move(Message));
 		}
 
+		std::shared_ptr<AssetService> LookupAssets() const {
+			auto World = std::dynamic_pointer_cast<DataModel>(SourceRoot);
+			if (!World) World = SourceRoot->GetDataModel();
+			return World ? std::dynamic_pointer_cast<AssetService>(
+				World->FindFirstChildOfClass("AssetService", false)) : nullptr;
+		}
+
 		void MarkSpatialDirty(ObjectId Object) {
 			if (!SpatialObjects.contains(Object)) return;
 			const auto Status = Spatial.MarkDirty(Object);
@@ -211,9 +319,42 @@ namespace gargantuan::network {
 			return std::nullopt;
 		}
 
-		std::optional<SpatialBounds> BoundsOf(const std::shared_ptr<Instance> &Object) const {
+		void ClearGeometryCache() {
+			GeometryCache.clear();
+			GeometryCacheLogicalBytes = 0;
+		}
+
+		std::optional<MeshGeometry> ResolveGeometry(const MeshPart &Part) {
+			if (!Assets) return std::nullopt;
+			const auto Reference = Part.GetMesh();
+			if (auto Found = GeometryCache.find(Reference); Found != GeometryCache.end()) return Found->second;
+			if (GeometryCache.size() >= Configuration.MaximumSpatialObjects) return std::nullopt;
+			SaturatingIncrement(Metrics.GeometryBoundsRebuilds);
+			auto Geometry = MeshLocalBounds(*Assets, Reference, Metrics.GeometryVertexVisits);
+			GeometryCache.emplace(Reference, Geometry);
+			SaturatingIncrement(GeometryCacheLogicalBytes, static_cast<std::uint64_t>(
+				sizeof(decltype(GeometryCache)::value_type) + 3 * sizeof(void *) + Reference.size() +
+				(Geometry ? Geometry->Reference.size() : 0)));
+			return Geometry;
+		}
+
+		std::optional<SpatialBounds> BoundsOf(const std::shared_ptr<Instance> &Object,
+			SpatialEntry *Entry = nullptr) const {
 			if (auto CharacterValue = std::dynamic_pointer_cast<Character>(Object))
 				return SpatialBounds::Point(glm::dvec3(CharacterValue->GetPosition()));
+			if (auto Mesh = std::dynamic_pointer_cast<MeshPart>(Object)) {
+				if (Entry && Entry->MeshLocal &&
+					(Mesh->GetCollisionMode() != Enums::MeshCollisionMode::StaticMesh ||
+						Entry->MeshLocal->HasCollision))
+					if (const auto Bounds = TransformedMeshBounds(*Mesh, Entry->MeshLocal->Bounds)) {
+						Entry->QualifiedBounds = true;
+						return Bounds;
+					}
+				if (Entry) Entry->QualifiedBounds = false;
+				const auto Box = PartBounds(*Mesh);
+				return Box.IsValid() ? std::optional(Box) :
+					std::optional(SpatialBounds::Point(glm::dvec3(Mesh->GetCFrame().Position)));
+			}
 			if (auto PartValue = std::dynamic_pointer_cast<BasePart>(Object)) return PartBounds(*PartValue);
 			return std::nullopt;
 		}
@@ -221,13 +362,24 @@ namespace gargantuan::network {
 		bool AddSpatialRoot(const std::shared_ptr<Instance> &Object) {
 			const auto Id = Object->GetObjectId();
 			if (SpatialObjects.contains(Id)) return true;
+			SpatialEntry Entry{.Object = Object,
+				.CharacterRoot = static_cast<bool>(std::dynamic_pointer_cast<Character>(Object)),
+				.MeshRoot = static_cast<bool>(std::dynamic_pointer_cast<MeshPart>(Object))};
+			if (Entry.MeshRoot) {
+				if (MeshRootCount == 0) {
+					Assets = LookupAssets();
+					AssetSequence = Assets ? Assets->ReadChanges(0).NextSequence : 0;
+					ClearGeometryCache();
+				}
+				RefreshAssetGeometry();
+				Entry.MeshLocal = ResolveGeometry(*std::dynamic_pointer_cast<MeshPart>(Object));
+			}
 			auto Pose = PoseOf(Object);
-			auto Bounds = BoundsOf(Object);
+			auto Bounds = BoundsOf(Object, &Entry);
 			if (!Pose || !Finite(Pose->Position) || !Bounds) {
 				Fail("Spatial object has invalid authoritative bounds");
 				return false;
 			}
-			SpatialEntry Entry{.Object = Object, .CharacterRoot = static_cast<bool>(std::dynamic_pointer_cast<Character>(Object))};
 			Entry.Members.insert(Id);
 			const auto Status = Spatial.Register(Id, {Spatial.GetDefaultSpace(), *Pose}, *Bounds);
 			if (Status != SpatialRuntimeProjectionStatus::Success) {
@@ -246,7 +398,13 @@ namespace gargantuan::network {
 				(void)Spatial.Remove(Id);
 				return true;
 			}
+			bool MeshCounted = false;
 			try {
+				if (Found->second.MeshRoot) {
+					++MeshRootCount;
+					MeshCounted = true;
+					if (!Found->second.QualifiedBounds) UnqualifiedMeshRoots.insert(Id);
+				}
 				Found->second.SpatialChanged.push_back(Object->GetPropertyChangedSignal("CFrame")->Connect(
 					[this, Id](std::monostate) { MarkSpatialDirty(Id); }
 				));
@@ -254,10 +412,30 @@ namespace gargantuan::network {
 					Found->second.SpatialChanged.push_back(Object->GetPropertyChangedSignal("Size")->Connect(
 						[this, Id](std::monostate) { MarkSpatialDirty(Id); }
 					));
+				if (Found->second.MeshRoot) {
+					Found->second.SpatialChanged.push_back(Object->GetPropertyChangedSignal("Mesh")->Connect(
+						[this, Id](std::monostate) {
+							if (auto Found = SpatialObjects.find(Id); Found != SpatialObjects.end())
+								Found->second.GeometryDirty = true;
+							ClearGeometryCache();
+							MarkSpatialDirty(Id);
+							WorldDirty = true;
+							NextWorkTick = 0;
+						}
+					));
+					Found->second.SpatialChanged.push_back(Object->GetPropertyChangedSignal("CollisionMode")->Connect(
+						[this, Id](std::monostate) {
+							if (auto Found = SpatialObjects.find(Id); Found != SpatialObjects.end())
+								Found->second.GeometryDirty = true;
+							MarkSpatialDirty(Id); WorldDirty = true; NextWorkTick = 0;
+						}
+					));
+				}
 			} catch (...) {
 				for (auto &Connection : Found->second.SpatialChanged)
 					if (Connection) Connection->Disconnect();
 				SpatialObjects.erase(Found);
+				if (MeshCounted) { --MeshRootCount; UnqualifiedMeshRoots.erase(Id); }
 				(void)Spatial.Remove(Id);
 				throw;
 			}
@@ -301,6 +479,8 @@ namespace gargantuan::network {
 				auto Root = SpatialObjects.find(*Location->second.SpatialRoot);
 				if (Root != SpatialObjects.end()) Root->second.Members.erase(Object);
 				if (*Location->second.SpatialRoot == Object && Root != SpatialObjects.end()) {
+				if (Root->second.MeshRoot) { --MeshRootCount; UnqualifiedMeshRoots.erase(Object); }
+				if (Root->second.MeshRoot) ClearGeometryCache();
 					for (auto &Connection : Root->second.SpatialChanged)
 						if (Connection) Connection->Disconnect();
 					const auto Status = Spatial.Remove(Object);
@@ -324,8 +504,17 @@ namespace gargantuan::network {
 			auto Found = SpatialObjects.find(Object);
 			if (Found == SpatialObjects.end()) return;
 			auto InstanceValue = Found->second.Object.lock();
+			if (Found->second.MeshRoot && Found->second.GeometryDirty) {
+				Found->second.MeshLocal = Assets && InstanceValue ?
+					ResolveGeometry(*std::dynamic_pointer_cast<MeshPart>(InstanceValue)) : std::nullopt;
+				Found->second.GeometryDirty = false;
+			}
 			auto Pose = PoseOf(InstanceValue);
-			auto Bounds = BoundsOf(InstanceValue);
+			auto Bounds = BoundsOf(InstanceValue, &Found->second);
+			if (Found->second.MeshRoot) {
+				if (Found->second.QualifiedBounds) UnqualifiedMeshRoots.erase(Object);
+				else UnqualifiedMeshRoots.insert(Object);
+			}
 			if (!InstanceValue || !Pose || !Finite(Pose->Position) || !Bounds) {
 				Fail("Spatial root lost valid authoritative bounds");
 				return;
@@ -343,11 +532,67 @@ namespace gargantuan::network {
 			Spatial.ClearDirtyObjects();
 		}
 
+		void RefreshAssetGeometry() {
+			if (MeshRootCount == 0) return;
+			auto CurrentAssets = LookupAssets();
+			const bool ServiceChanged = CurrentAssets != Assets;
+			if (ServiceChanged) {
+				Assets = std::move(CurrentAssets);
+				AssetSequence = Assets ? Assets->ReadChanges(0).NextSequence : 0;
+			}
+			bool AffectsMesh = ServiceChanged;
+			if (Assets && !ServiceChanged) {
+				const auto Changes = Assets->ReadChanges(AssetSequence);
+				AssetSequence = Changes.NextSequence;
+				AffectsMesh = Changes.RescanRequired;
+				for (const auto &Change : Changes.Changes)
+					if (Change.Kind == AssetKind::Mesh || Change.Kind == AssetKind::Collision) {
+						AffectsMesh = true;
+						break;
+					}
+			}
+			if (!AffectsMesh) return;
+			ClearGeometryCache();
+			// Asset changes are rare; scan the bounded root table rather than retain
+			// another ownership registry. Reimport may advance a mesh for its collision dependency.
+			for (auto &[Id, Entry] : SpatialObjects) {
+				if (!Entry.MeshRoot) continue;
+				Entry.GeometryDirty = true;
+				MarkSpatialDirty(Id);
+				if (!Healthy) return;
+			}
+			WorldDirty = true;
+			NextWorkTick = 0;
+		}
+
 		bool WithinAnyFocus(glm::vec3 Position, std::span<const glm::vec3> Focus, float Radius) const {
 			const auto RadiusSquared = static_cast<double>(Radius) * Radius;
 			for (const auto Point : Focus) {
 				const auto Difference = glm::dvec3(Position) - glm::dvec3(Point);
 				if (glm::dot(Difference, Difference) <= RadiusSquared) return true;
+			}
+			return false;
+		}
+
+		bool WithinRootFocus(ObjectId Root, const SpatialRuntimeProjection &Projection,
+			std::span<const glm::vec3> Focus, float Radius) const {
+			if (Focus.empty()) return false;
+			const auto Found = SpatialObjects.find(Root);
+			if (Found == SpatialObjects.end() || !Found->second.MeshRoot)
+				return WithinAnyFocus(Projection.Pose.LocalTransform.Position, Focus, Radius);
+			if (!Found->second.QualifiedBounds) return true;
+			const double RadiusSquared = static_cast<double>(Radius) * Radius;
+			for (const auto Point : Focus) {
+				double DistanceSquared = 0.0;
+				for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+					const double Coordinate = static_cast<double>(Point[Axis]);
+					const double Difference = Coordinate < Projection.Bounds.Minimum[Axis] ?
+						Projection.Bounds.Minimum[Axis] - Coordinate :
+						Coordinate > Projection.Bounds.Maximum[Axis] ?
+							Coordinate - Projection.Bounds.Maximum[Axis] : 0.0;
+					DistanceSquared += Difference * Difference;
+				}
+				if (DistanceSquared <= RadiusSquared) return true;
 			}
 			return false;
 		}
@@ -461,20 +706,24 @@ namespace gargantuan::network {
 			const bool SameRoots =
 				(!Peer.OwnerCharacter.IsValid() || !SpatialObjects.contains(Peer.OwnerCharacter) ||
 					Peer.RelevantSpatialRoots.contains(Peer.OwnerCharacter)) &&
+				std::ranges::all_of(UnqualifiedMeshRoots, [&](ObjectId Root) {
+					return Peer.RelevantSpatialRoots.contains(Root) ==
+						(!Focus.empty() || Root == Peer.OwnerCharacter);
+				}) &&
 				std::ranges::all_of(Peer.RelevantSpatialRoots, [&](ObjectId Existing) {
 					runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceOldRootVisits);
 					// A healthy projection store and SpatialObjects have the same root
 					// identities (transactional AddSpatialRoot / UnregisterObject).
 					const auto *Projection = Spatial.Get(Existing);
 					return Projection && (Existing == Peer.OwnerCharacter ||
-						WithinAnyFocus(Projection->Pose.LocalTransform.Position, Focus, Configuration.LeaveRadius));
+						WithinRootFocus(Existing, *Projection, Focus, Configuration.LeaveRadius));
 				}) && [&] {
 					for (const auto Candidate : QueryScratch.Candidates) {
 						runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceCandidateVisits);
 						while (KnownRoot != Peer.RelevantSpatialRoots.end() && *KnownRoot < Candidate) ++KnownRoot;
 						if (KnownRoot != Peer.RelevantSpatialRoots.end() && *KnownRoot == Candidate) continue;
 						const auto *Projection = Spatial.Get(Candidate);
-						if (Projection && WithinAnyFocus(Projection->Pose.LocalTransform.Position, Focus, Configuration.EnterRadius)) return false;
+						if (Projection && WithinRootFocus(Candidate, *Projection, Focus, Configuration.EnterRadius)) return false;
 					}
 					return true;
 				}();
@@ -493,19 +742,20 @@ namespace gargantuan::network {
 				return true;
 			}
 			std::set<ObjectId> Relevant;
+			if (!Focus.empty()) Relevant.insert(UnqualifiedMeshRoots.begin(), UnqualifiedMeshRoots.end());
 			for (const auto Existing : Peer.RelevantSpatialRoots) {
 				runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceOldRootVisits);
 				const auto *Projection = Spatial.Get(Existing);
 				if (Projection &&
 					(Existing == Peer.OwnerCharacter ||
-					 WithinAnyFocus(Projection->Pose.LocalTransform.Position, Focus, Configuration.LeaveRadius)))
+					 WithinRootFocus(Existing, *Projection, Focus, Configuration.LeaveRadius)))
 					Relevant.insert(Existing);
 			}
 			for (const auto Candidate : QueryScratch.Candidates) {
 				runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceCandidateVisits);
 				const auto *Projection = Spatial.Get(Candidate);
 				if (Projection &&
-					WithinAnyFocus(Projection->Pose.LocalTransform.Position, Focus, Configuration.EnterRadius))
+					WithinRootFocus(Candidate, *Projection, Focus, Configuration.EnterRadius))
 					Relevant.insert(Candidate);
 			}
 			if (Peer.OwnerCharacter.IsValid() && SpatialObjects.contains(Peer.OwnerCharacter))
@@ -562,6 +812,8 @@ namespace gargantuan::network {
 		if (!State->Healthy || !Connection.IsValid() || !LocalPlayer.IsValid() ||
 			State->Peers.size() >= MaximumReplicationRelevancePeers || State->Peers.contains(Connection))
 			return false;
+		State->RefreshAssetGeometry();
+		if (!State->Healthy) return false;
 		State->RefreshDirtySpatialPositions();
 		if (!State->Healthy) return false;
 		for (const auto &[Existing, Peer] : State->Peers) {
@@ -630,7 +882,7 @@ namespace gargantuan::network {
 				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Started).count()));
 		};
 		runtime_detail::MeasureWork(runtime_detail::WorkPhase::SpatialUpdate,
-			[&] { State->RefreshDirtySpatialPositions(); });
+			[&] { State->RefreshAssetGeometry(); if (State->Healthy) State->RefreshDirtySpatialPositions(); });
 		if (!State->Healthy) return false;
 		if (State->WorldDirty) {
 			++State->WorldRevision;
@@ -723,6 +975,9 @@ namespace gargantuan::network {
 
 	ReplicationRelevanceMetrics ReplicationRelevance::GetMetrics() const {
 		auto Result = State->Metrics;
+		Result.UnqualifiedMeshRoots = State->UnqualifiedMeshRoots.size();
+		Result.GeometryCacheEntries = State->GeometryCache.size();
+		Result.GeometryCacheLogicalBytes = State->GeometryCacheLogicalBytes;
 		for (const auto &[Connection, Peer] : State->Peers) {
 			(void)Connection;
 			SaturatingIncrement(Result.CharacterCandidateBytes,

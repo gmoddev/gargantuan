@@ -446,6 +446,12 @@ Tests should enforce them where practical.
     distinct from runtime initialization.
 101. Host separation does not alter package semantic versions, GRPL, GCHR,
     ordinary Luau authority, EditorHost trust, or generation-safe teardown.
+102. Standalone MeshPart peer relevance uses derived canonical geometry bounds
+    for both candidates and exact hysteresis; Character-rooted descendants and
+    ordinary Parts keep their owning policy. Unqualified geometry is an
+    explicit bounded conservative reason only for focused peers. Canonical
+    asset lookup for observation never creates services or changes the live
+    graph, and shared vertex validation is cached outside peer evaluation.
 
 ## Trusted residency demand
 
@@ -479,6 +485,12 @@ Tests should enforce them where practical.
    cannot advance policy, acquire/release content, mutate the DataModel or expire
    an unrelated editor transaction. Observer work is outside policy phase timing;
    logical payload estimates do not claim complete process memory accounting.
+10. Automatic package partitioning may publish spatial units only after every
+    supported static member is covered by a finite conservative aggregate from
+    the exact captured canonical geometry. Missing, dynamic, skinned, malformed
+    or unindexable coverage retains the whole subtree in bootstrap. Full package
+    validation rederives coverage from bytes bound to the verified manifest and
+    asset catalog; file integrity alone never proves conservative geometry.
 
 ## Qualification and evidence
 

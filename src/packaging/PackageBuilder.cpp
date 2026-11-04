@@ -4,9 +4,11 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/content/ResidencySpatialMetadata.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "assets/AssetImporter.hpp"
 #include "serialization/JsonCodec.hpp"
 
 #include <SDL3/SDL.h>
@@ -16,8 +18,10 @@
 #include <bit>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -117,7 +121,8 @@ namespace gargantuan {
 			std::optional<PackageCoarseBounds> Bounds;
 		};
 
-		SerializedSubtreeInspection InspectSerializedSubtree(const Json &Root);
+		class PackageSpatialMeshResolver;
+		SerializedSubtreeInspection InspectSerializedSubtree(const Json &Root, PackageSpatialMeshResolver &Meshes);
 
 		class Sha256 final {
 		  public:
@@ -619,8 +624,7 @@ namespace gargantuan {
 							);
 							if (!UnitDocument || !UnitDocument->is_object() ||
 								UnitDocument->value("Version", 0u) != PackageContentInstanceSchemaVersion ||
-								UnitDocument->value("ClassName", "") == "DataModel" ||
-								InspectSerializedSubtree(*UnitDocument).Objects != Unit.ObjectCount)
+								UnitDocument->value("ClassName", "") == "DataModel")
 								throw std::runtime_error("Package content unit payload is malformed");
 						}
 					}
@@ -823,7 +827,137 @@ namespace gargantuan {
 				Size.OtherBytes += Bytes;
 		}
 
-		SerializedSubtreeInspection InspectSerializedSubtree(const Json &Root) {
+		class PackageSpatialMeshResolver final {
+			struct MeshRecord final {
+				AssetContentId Content;
+				std::set<std::string> Dependencies;
+				bool Inspected = false;
+				std::optional<RenderBounds> Bounds;
+				bool HasCollision = false;
+			};
+			std::map<std::string, MeshRecord> Records;
+			std::map<std::string, AssetContentId> Collisions;
+			std::function<std::shared_ptr<const std::vector<std::uint8_t>>(std::string_view)> LoadArtifact;
+
+		  public:
+			PackageSpatialMeshResolver(std::string_view Catalog,
+				std::function<std::shared_ptr<const std::vector<std::uint8_t>>(std::string_view)> Loader)
+				: LoadArtifact(std::move(Loader)) {
+				if (Catalog.size() > 1024 * 1024) throw std::runtime_error("Spatial asset catalog exceeds its bound");
+				auto Parsed = JsonCodec::Parse(Catalog, 1024 * 1024, "spatial asset catalog");
+				if (!Parsed || !Parsed->is_object() || !Parsed->contains("Format") ||
+					(*Parsed)["Format"] != "GargantuanRuntimeAssets" || !Parsed->contains("Version") ||
+					(*Parsed)["Version"] != 1 || !Parsed->contains("Assets") ||
+					!(*Parsed)["Assets"].is_array() || (*Parsed)["Assets"].size() > AssetLimits::MaximumCatalogRecords)
+					throw std::runtime_error("Spatial asset catalog is invalid");
+				for (const auto &Entry : (*Parsed)["Assets"]) {
+					if (!Entry.is_object() || !Entry.contains("Kind") || !Entry["Kind"].is_string())
+						throw std::runtime_error("Spatial asset record is malformed");
+					if (Entry["Kind"] != "Mesh" && Entry["Kind"] != "Collision") continue;
+					if (!Entry.contains("Reference") || !Entry["Reference"].is_string() ||
+						!Entry.contains("ContentId") || !Entry["ContentId"].is_string() ||
+						!Entry.contains("AssetId") || !Entry["AssetId"].is_string())
+						throw std::runtime_error("Spatial mesh identity is malformed");
+					const auto &Reference = Entry["Reference"].get_ref<const std::string &>();
+					const auto Content = AssetContentId::Parse(Entry["ContentId"].get_ref<const std::string &>());
+					const auto Identity = AssetId::Parse(Entry["AssetId"].get_ref<const std::string &>());
+					if (!Identity || !Content || AssetReference::FromAssetId(*Identity).Value != Reference)
+						throw std::runtime_error("Spatial mesh identity is invalid or duplicated");
+					if (Entry["Kind"] == "Mesh") {
+						if (!Entry.contains("Dependencies") || !Entry["Dependencies"].is_array() ||
+							Entry["Dependencies"].size() > AssetLimits::MaximumDependencies)
+							throw std::runtime_error("Spatial mesh dependencies are malformed");
+						MeshRecord Record{};
+						Record.Content = *Content;
+						for (const auto &Dependency : Entry["Dependencies"])
+							if (!Dependency.is_string() ||
+								!AssetId::Parse(Dependency.get_ref<const std::string &>()) ||
+								!Record.Dependencies.insert(Dependency.get<std::string>()).second)
+								throw std::runtime_error("Spatial mesh dependency identity is invalid");
+						if (!Records.emplace(Reference, std::move(Record)).second)
+							throw std::runtime_error("Spatial mesh identity is duplicated");
+					} else if (!Collisions.emplace(Reference, *Content).second)
+						throw std::runtime_error("Spatial collision identity is duplicated");
+				}
+			}
+
+			[[nodiscard]] std::optional<RenderBounds> Resolve(std::string_view Reference, bool RequireCollision) {
+				auto Found = Records.find(std::string(Reference));
+				if (Found == Records.end()) return std::nullopt;
+				auto &Record = Found->second;
+				if (Record.Inspected) return RequireCollision && !Record.HasCollision ? std::nullopt : Record.Bounds;
+				Record.Inspected = true;
+				const auto Bytes = LoadArtifact(Record.Content.ToString());
+				if (!Bytes || Bytes->empty() || Bytes->size() > AssetLimits::MaximumArtifactBytes) return std::nullopt;
+				const auto Decoded = DecodeAssetArtifact(*Bytes, AssetKind::Mesh, Record.Content);
+				if (!Decoded) return std::nullopt;
+				const auto *Mesh = std::get_if<ImportedMesh>(&Decoded->Asset);
+				if (!Mesh || !Mesh->Vertices || Mesh->Vertices->empty() || Mesh->Skeleton) return std::nullopt;
+				const auto &Bounds = Mesh->Bounds;
+				for (std::size_t Axis = 0; Axis < 3; ++Axis)
+					if (!std::isfinite(Bounds.Minimum[Axis]) || !std::isfinite(Bounds.Maximum[Axis]) ||
+						Bounds.Minimum[Axis] > Bounds.Maximum[Axis]) return std::nullopt;
+				for (const auto &Vertex : *Mesh->Vertices)
+					for (std::size_t Axis = 0; Axis < 3; ++Axis)
+						if (!std::isfinite(Vertex.Position[Axis]) || Vertex.Position[Axis] < Bounds.Minimum[Axis] ||
+							Vertex.Position[Axis] > Bounds.Maximum[Axis]) return std::nullopt;
+				RenderBounds Aggregate = Bounds;
+				if (Mesh->CollisionAsset) {
+					if (!Record.Dependencies.contains(Mesh->CollisionAsset->ToString())) return std::nullopt;
+					const auto CollisionReference = AssetReference::FromAssetId(*Mesh->CollisionAsset).Value;
+					const auto Companion = Collisions.find(CollisionReference);
+					if (Companion == Collisions.end()) return std::nullopt;
+					const auto CollisionBytes = LoadArtifact(Companion->second.ToString());
+					if (!CollisionBytes || CollisionBytes->empty() ||
+						CollisionBytes->size() > AssetLimits::MaximumArtifactBytes) return std::nullopt;
+					const auto CollisionDecoded = DecodeAssetArtifact(*CollisionBytes, AssetKind::Collision, Companion->second);
+					if (!CollisionDecoded) return std::nullopt;
+					const auto *Collision = std::get_if<ImportedCollision>(&CollisionDecoded->Asset);
+					if (!Collision || !Collision->Positions || Collision->Positions->empty()) return std::nullopt;
+					for (std::size_t Axis = 0; Axis < 3; ++Axis)
+						if (!std::isfinite(Collision->Bounds.Minimum[Axis]) ||
+							!std::isfinite(Collision->Bounds.Maximum[Axis]) ||
+							Collision->Bounds.Minimum[Axis] > Collision->Bounds.Maximum[Axis]) return std::nullopt;
+					for (const auto &Position : *Collision->Positions)
+						for (std::size_t Axis = 0; Axis < 3; ++Axis)
+							if (!std::isfinite(Position[Axis]) || Position[Axis] < Collision->Bounds.Minimum[Axis] ||
+								Position[Axis] > Collision->Bounds.Maximum[Axis]) return std::nullopt;
+					for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+						Aggregate.Minimum[Axis] = std::min(Aggregate.Minimum[Axis], Collision->Bounds.Minimum[Axis]);
+						Aggregate.Maximum[Axis] = std::max(Aggregate.Maximum[Axis], Collision->Bounds.Maximum[Axis]);
+					}
+					Record.HasCollision = true;
+				}
+				Record.Bounds = Aggregate;
+				if (RequireCollision && !Record.HasCollision) return std::nullopt;
+				return Record.Bounds;
+			}
+		};
+
+		PackageSpatialMeshResolver SnapshotSpatialMeshes(const AssetRuntimeSnapshot &Assets) {
+			std::map<std::string, std::shared_ptr<const std::vector<std::uint8_t>>> Artifacts;
+			for (const auto &Artifact : Assets.Artifacts)
+				if (!Artifacts.emplace(Artifact.RelativePath, Artifact.Bytes).second)
+					throw std::runtime_error("Spatial asset artifact path is duplicated");
+			return PackageSpatialMeshResolver(Assets.CatalogJson, [Artifacts = std::move(Artifacts)](std::string_view Content) {
+				const std::string Path = "assets/artifacts/" + std::string(Content) + ".gasset";
+				const auto Found = Artifacts.find(Path);
+				return Found == Artifacts.end() ? std::shared_ptr<const std::vector<std::uint8_t>>{} : Found->second;
+			});
+		}
+
+		PackageSpatialMeshResolver PackageSpatialMeshes(const std::filesystem::path &Root,
+			std::string_view Catalog) {
+			return PackageSpatialMeshResolver(Catalog, [Root](std::string_view Content) {
+				const auto Path = ResolvePackageFile(Root,
+					"content/assets/artifacts/" + std::string(Content) + ".gasset", true);
+				if (!Path) return std::shared_ptr<const std::vector<std::uint8_t>>{};
+				const auto Bytes = ReadBoundedText(*Path, AssetLimits::MaximumArtifactBytes);
+				return std::make_shared<const std::vector<std::uint8_t>>(Bytes.begin(), Bytes.end());
+			});
+		}
+
+		SerializedSubtreeInspection InspectSerializedSubtree(const Json &Root, PackageSpatialMeshResolver &Meshes) {
 			SerializedSubtreeInspection Result;
 			std::vector<const Json *> Pending{&Root};
 			std::array<double, 3> Minimum{
@@ -846,66 +980,186 @@ namespace gargantuan {
 					ClassName == "RemoteFunction" || ClassName == "Character" || ClassName == "KinematicCharacter" ||
 					ClassName == "Player" || ClassName == "Camera" || ClassName == "Terrain" || ClassName == "FileLink")
 					Result.BootstrapOnly = true;
-				if (Node->contains("Properties") && (*Node)["Properties"].is_object()) {
+				const bool Primitive = ClassName == "Part";
+				const bool MeshPartValue = ClassName == "MeshPart";
+				if (Primitive || MeshPartValue || (Node->contains("Properties") &&
+					(*Node)["Properties"].is_object() &&
+					((*Node)["Properties"].contains("CFrame") || (*Node)["Properties"].contains("Size")))) {
+					if (!Primitive && !MeshPartValue) { Result.BootstrapOnly = true; continue; }
+					if (!Node->contains("Properties") || !(*Node)["Properties"].is_object()) {
+						Result.BootstrapOnly = true; continue;
+					}
 					const auto &Properties = (*Node)["Properties"];
-					if (Properties.contains("CFrame") && Properties["CFrame"].is_object() &&
-						Properties["CFrame"].contains("CFrame") && Properties["CFrame"]["CFrame"].is_array() &&
-						Properties["CFrame"]["CFrame"].size() == 12 && Properties.contains("Size") &&
-						Properties["Size"].is_object() && Properties["Size"].contains("Vector3") &&
-						Properties["Size"]["Vector3"].is_array() && Properties["Size"]["Vector3"].size() == 3) {
-						const auto &Frame = Properties["CFrame"]["CFrame"];
-						const auto &Size = Properties["Size"]["Vector3"];
-						bool Finite = true;
-						std::array<double, 3> Center{}, Half{};
-						for (std::size_t Axis = 0; Axis < 3; ++Axis) {
-							if (!Frame[Axis].is_number() || !Size[Axis].is_number()) Finite = false;
-							else {
-								Center[Axis] = Frame[Axis].get<double>();
-								Half[Axis] = std::abs(Size[Axis].get<double>()) * 0.5;
-								Finite = Finite && std::isfinite(Center[Axis]) && std::isfinite(Half[Axis]);
-							}
-						}
-						std::array<double, 3> Extent{};
-						for (std::size_t Row = 0; Row < 3 && Finite; ++Row)
-							for (std::size_t Column = 0; Column < 3; ++Column) {
-								const auto Component = 3 + Column * 3 + Row;
-								if (!Frame[Component].is_number()) {
-									Finite = false;
-									break;
-								}
-								const auto Rotation = Frame[Component].get<double>();
-								if (!std::isfinite(Rotation)) {
-									Finite = false;
-									break;
-								}
-								Extent[Row] += std::abs(Rotation) * Half[Column];
-							}
-						if (Finite) {
-							HasBounds = true;
-							for (std::size_t Axis = 0; Axis < 3; ++Axis) {
-								Minimum[Axis] = std::min(Minimum[Axis], Center[Axis] - Extent[Axis]);
-								Maximum[Axis] = std::max(Maximum[Axis], Center[Axis] + Extent[Axis]);
-							}
+					if (!Properties.contains("Anchored") || !Properties["Anchored"].is_object() ||
+						!Properties["Anchored"].contains("Bool") || Properties["Anchored"]["Bool"] != true) {
+						Result.BootstrapOnly = true; continue;
+					}
+					if (!Properties.contains("CFrame") || !Properties["CFrame"].is_object() ||
+						!Properties["CFrame"].contains("CFrame") || !Properties["CFrame"]["CFrame"].is_array() ||
+						Properties["CFrame"]["CFrame"].size() != 12 || !Properties.contains("Size") ||
+						!Properties["Size"].is_object() || !Properties["Size"].contains("Vector3") ||
+						!Properties["Size"]["Vector3"].is_array() || Properties["Size"]["Vector3"].size() != 3) {
+						Result.BootstrapOnly = true; continue;
+					}
+					const auto &Frame = Properties["CFrame"]["CFrame"];
+					const auto &Size = Properties["Size"]["Vector3"];
+					std::array<double, 12> Transform{};
+					std::array<double, 3> Scale{};
+					bool Finite = true;
+					for (std::size_t Index = 0; Index < Transform.size(); ++Index) {
+						if (!Frame[Index].is_number()) { Finite = false; break; }
+						Transform[Index] = Frame[Index].get<double>();
+						Finite = Finite && std::isfinite(Transform[Index]);
+					}
+					for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+						if (!Size[Axis].is_number()) { Finite = false; break; }
+						Scale[Axis] = Size[Axis].get<double>();
+						Finite = Finite && std::isfinite(Scale[Axis]);
+					}
+					if (!Finite) { Result.BootstrapOnly = true; continue; }
+					// Box3D converts CFrame rotation through a quaternion. Only rigid, proper
+					// bases have the same spatial envelope as the renderer's matrix path.
+					constexpr double RigidTolerance = 0.000001;
+					for (std::size_t Column = 0; Column < 3; ++Column) {
+						double LengthSquared = 0.0;
+						for (std::size_t Row = 0; Row < 3; ++Row)
+							LengthSquared += Transform[3 + Column * 3 + Row] * Transform[3 + Column * 3 + Row];
+						if (std::abs(LengthSquared - 1.0) > RigidTolerance) Finite = false;
+						for (std::size_t Other = 0; Other < Column; ++Other) {
+							double Dot = 0.0;
+							for (std::size_t Row = 0; Row < 3; ++Row)
+								Dot += Transform[3 + Column * 3 + Row] * Transform[3 + Other * 3 + Row];
+							if (std::abs(Dot) > RigidTolerance) Finite = false;
 						}
 					}
+					const double Determinant =
+						Transform[3] * (Transform[7] * Transform[11] - Transform[10] * Transform[8]) -
+						Transform[6] * (Transform[4] * Transform[11] - Transform[10] * Transform[5]) +
+						Transform[9] * (Transform[4] * Transform[8] - Transform[7] * Transform[5]);
+					if (!std::isfinite(Determinant) || std::abs(Determinant - 1.0) > RigidTolerance || !Finite) {
+						Result.BootstrapOnly = true; continue;
+					}
+					std::array<double, 3> LocalMinimum{-0.5, -0.5, -0.5};
+					std::array<double, 3> LocalMaximum{0.5, 0.5, 0.5};
+					if (MeshPartValue) {
+						if (!Properties.contains("CollisionMode")) { Result.BootstrapOnly = true; continue; }
+						const auto &Mode = Properties["CollisionMode"];
+						if (!Mode.is_object() || !Mode.contains("EnumItem") || !Mode["EnumItem"].is_array() ||
+							Mode["EnumItem"].size() != 2 || Mode["EnumItem"][0] != "MeshCollisionMode" ||
+							!Mode["EnumItem"][1].is_string()) {
+							Result.BootstrapOnly = true; continue;
+						}
+						const auto &Name = Mode["EnumItem"][1];
+						if (Name != "Box" && Name != "StaticMesh") { Result.BootstrapOnly = true; continue; }
+						const bool RequireCollision = Name == "StaticMesh";
+						if (!Properties.contains("Mesh") || !Properties["Mesh"].is_object() ||
+							!Properties["Mesh"].contains("String") || !Properties["Mesh"]["String"].is_string()) {
+							Result.BootstrapOnly = true; continue;
+						}
+						const auto Bounds = Meshes.Resolve(Properties["Mesh"]["String"].get_ref<const std::string &>(),
+							RequireCollision);
+						if (!Bounds) { Result.BootstrapOnly = true; continue; }
+						for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+							LocalMinimum[Axis] = std::min(LocalMinimum[Axis], static_cast<double>(Bounds->Minimum[Axis]));
+							LocalMaximum[Axis] = std::max(LocalMaximum[Axis], static_cast<double>(Bounds->Maximum[Axis]));
+						}
+					}
+					for (std::size_t Corner = 0; Corner < 8; ++Corner) {
+						std::array<double, 3> Local{};
+						for (std::size_t Axis = 0; Axis < 3; ++Axis)
+							Local[Axis] = (Corner & (1u << Axis)) ? LocalMaximum[Axis] : LocalMinimum[Axis];
+						for (std::size_t Row = 0; Row < 3; ++Row) {
+							double Position = Transform[Row];
+							double Magnitude = std::abs(Position);
+							for (std::size_t Column = 0; Column < 3; ++Column) {
+								const double Term = Transform[3 + Column * 3 + Row] * Scale[Column] * Local[Column];
+								Position += Term;
+								Magnitude += std::abs(Term);
+							}
+							// Leave room for float matrix arithmetic and Box3D's quat_cast and
+							// normalization of an accepted near-rigid basis.
+							const double Margin =
+								(32.0 * std::numeric_limits<float>::epsilon() + 64.0 * RigidTolerance) *
+								(Magnitude + 1.0);
+							if (!std::isfinite(Position) || !std::isfinite(Margin)) { Result.BootstrapOnly = true; break; }
+							Minimum[Row] = std::min(Minimum[Row], Position - Margin);
+							Maximum[Row] = std::max(Maximum[Row], Position + Margin);
+						}
+						if (Result.BootstrapOnly) break;
+					}
+					HasBounds = true;
 				}
-				if (Node->contains("Children") && (*Node)["Children"].is_array())
-					for (const auto &Child : (*Node)["Children"]) Pending.push_back(&Child);
+				if (Node->contains("Children")) {
+					if (!(*Node)["Children"].is_array()) Result.BootstrapOnly = true;
+					else {
+						if ((*Node)["Children"].size() > MaximumPackageContentObjectsPerUnit -
+							std::min<std::size_t>(MaximumPackageContentObjectsPerUnit, Pending.size())) {
+							Result.BootstrapOnly = true; return Result;
+						}
+						for (const auto &Child : (*Node)["Children"]) Pending.push_back(&Child);
+					}
+				}
 			}
-			if (HasBounds) {
+			if (HasBounds && !Result.BootstrapOnly) {
 				PackageCoarseBounds Encoded;
 				for (std::size_t Axis = 0; Axis < 3; ++Axis) {
-					if (Minimum[Axis] < -std::numeric_limits<float>::max() ||
-						Maximum[Axis] > std::numeric_limits<float>::max()) return Result;
-					Encoded.Minimum[Axis] = static_cast<float>(Minimum[Axis]);
-					Encoded.Maximum[Axis] = static_cast<float>(Maximum[Axis]);
+					if (!std::isfinite(Minimum[Axis]) || !std::isfinite(Maximum[Axis]) ||
+						Minimum[Axis] <= -std::numeric_limits<float>::max() ||
+						Maximum[Axis] >= std::numeric_limits<float>::max()) return Result;
+					Encoded.Minimum[Axis] = std::nextafter(static_cast<float>(Minimum[Axis]),
+						-std::numeric_limits<float>::infinity());
+					Encoded.Maximum[Axis] = std::nextafter(static_cast<float>(Maximum[Axis]),
+						std::numeric_limits<float>::infinity());
+					if (!std::isfinite(Encoded.Minimum[Axis]) || !std::isfinite(Encoded.Maximum[Axis])) return Result;
 				}
 				Result.Bounds = Encoded;
 			}
 			return Result;
 		}
 
-		void PartitionPackageContent(GamePayload &Payload) {
+		std::optional<std::size_t> CoarseMembershipCount(const PackageCoarseBounds &Bounds) {
+			std::size_t Count = 1;
+			for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+				const double MinimumCell = std::floor(static_cast<double>(Bounds.Minimum[Axis]) / 512.0);
+				const double MaximumCell = std::floor(static_cast<double>(Bounds.Maximum[Axis]) / 512.0);
+				if (!std::isfinite(MinimumCell) || !std::isfinite(MaximumCell) ||
+					MinimumCell < std::numeric_limits<std::int32_t>::min() ||
+					MaximumCell > std::numeric_limits<std::int32_t>::max()) return std::nullopt;
+				const auto Span = static_cast<std::uint64_t>(MaximumCell - MinimumCell + 1.0);
+				if (Span == 0 || Span > MaximumPackageCoarseQueryCells / Count) return std::nullopt;
+				Count *= static_cast<std::size_t>(Span);
+			}
+			return Count;
+		}
+
+		std::optional<ResidencyUnitBoundsMetadata> InspectSpatialContentUnit(std::string_view Payload,
+			const PackageContentEntry &Entry, PackageSpatialMeshResolver &Meshes) {
+			if (Entry.PackageSpaceKey != "default" || Payload.empty() ||
+				Payload.size() > MaximumPackageContentPayloadBytes)
+				throw std::runtime_error("Package content unit has no qualified default-space bounds");
+			auto Parsed = JsonCodec::Parse(Payload, MaximumPackageContentPayloadBytes, "package spatial content unit");
+			if (!Parsed || !Parsed->is_object() || Parsed->value("Version", 0u) != PackageContentInstanceSchemaVersion ||
+				Parsed->value("ClassName", "") == "DataModel")
+				throw std::runtime_error("Package spatial content unit is malformed");
+			const auto Inspection = InspectSerializedSubtree(*Parsed, Meshes);
+			if (Inspection.BootstrapOnly || Inspection.Objects != Entry.ObjectCount ||
+				Inspection.Bounds.has_value() != Entry.CoarseBounds.has_value() ||
+				(Inspection.Bounds && !CoarseMembershipCount(*Inspection.Bounds)))
+				throw std::runtime_error("Package spatial content unit lacks a conservative aggregate");
+			if (!Inspection.Bounds) return std::nullopt;
+			return ResidencyUnitBoundsMetadata{Entry.Key, Entry.Digest, Entry.PackageSpaceKey, *Inspection.Bounds};
+		}
+
+		void CheckSpatialProof(const PackageContentManifest &Manifest,
+			ResidencySpatialMetadata &Metadata) {
+			const auto Report = InspectResidencySpatialMetadata(Manifest, Metadata);
+			if (Report.Status != ResidencyMetadataStatus::Compatible ||
+				Report.CompatibleUnits != Report.SpatialUnits)
+				throw std::runtime_error("Package manifest does not contain qualified content bounds");
+			(void)PackageContentCoarseIndex(Manifest);
+		}
+
+		void PartitionPackageContent(GamePayload &Payload, PackageSpatialMeshResolver &Meshes) {
 			auto Project = JsonCodec::Parse(Payload.ProjectJson, MaximumProjectSnapshotBytes, "package project snapshot");
 			if (!Project || !Project->is_object() || !Project->contains("Children") || !(*Project)["Children"].is_array())
 				throw std::runtime_error("Package project snapshot cannot be partitioned");
@@ -919,10 +1173,20 @@ namespace gargantuan {
 				throw std::runtime_error("Package project has no serializable Workspace");
 			Json Retained = Json::array();
 			std::size_t UnitNumber = 0;
+			std::size_t Memberships = 0;
 			for (auto &Child : (*Workspace)["Children"]) {
-				auto Inspection = InspectSerializedSubtree(Child);
+				const auto SpatialStarted = std::chrono::steady_clock::now();
+				auto Inspection = InspectSerializedSubtree(Child, Meshes);
+				Payload.SpatialInspectionDuration += std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - SpatialStarted);
 				if (Inspection.BootstrapOnly || !Inspection.Bounds || Inspection.Objects == 0 ||
 					Inspection.Objects > MaximumPackageContentObjectsPerUnit) {
+					Retained.push_back(std::move(Child));
+					continue;
+				}
+				const auto Cells = CoarseMembershipCount(*Inspection.Bounds);
+				if (!Cells || *Cells > MaximumPackageCoarseIndexCells - Memberships ||
+					Payload.ContentUnits.size() >= MaximumPackageContentUnits) {
 					Retained.push_back(std::move(Child));
 					continue;
 				}
@@ -951,6 +1215,7 @@ namespace gargantuan {
 					},
 					.Payload = std::move(*Encoded),
 				});
+				Memberships += *Cells;
 			}
 			(*Workspace)["Children"] = std::move(Retained);
 			auto Bootstrap = JsonCodec::Encode(*Project, "package bootstrap project");
@@ -1049,7 +1314,17 @@ namespace gargantuan {
 		};
 		if (Result.DisplayName.empty() || Result.DisplayName.size() > MaximumDisplayNameBytes)
 			throw std::runtime_error("Project display name exceeds the package bound");
-		PartitionPackageContent(Result);
+		auto Meshes = SnapshotSpatialMeshes(Result.Assets);
+		PartitionPackageContent(Result, Meshes);
+		PackageContentManifest Manifest{{Result.Identity, Result.AuthoritativeRevision},
+			PackageContentInstanceSchemaVersion, {}};
+		ResidencySpatialMetadata Metadata{ResidencySpatialMetadataVersion, Manifest.Package, {}};
+		for (const auto &Unit : Result.ContentUnits) {
+			Manifest.Entries.push_back(Unit.Entry);
+			if (auto Spatial = InspectSpatialContentUnit(Unit.Payload, Unit.Entry, Meshes))
+				Metadata.Units.push_back(std::move(*Spatial));
+		}
+		CheckSpatialProof(Manifest, Metadata);
 		return Result;
 	}
 
@@ -1088,6 +1363,8 @@ namespace gargantuan {
 					.Package = {Request.Payload.Identity, Request.Payload.AuthoritativeRevision},
 					.InstanceSchemaVersion = PackageContentInstanceSchemaVersion,
 				};
+				auto Meshes = SnapshotSpatialMeshes(Request.Payload.Assets);
+				ResidencySpatialMetadata Metadata{ResidencySpatialMetadataVersion, ContentManifest.Package, {}};
 				for (const auto &Unit : Request.Payload.ContentUnits) {
 					if (Unit.Payload.size() != Unit.Entry.CompressedBytes ||
 						Unit.Entry.UncompressedBytes != Unit.Entry.CompressedBytes ||
@@ -1096,8 +1373,11 @@ namespace gargantuan {
 						)) != Unit.Entry.Digest)
 						throw std::runtime_error("Package content unit does not match its immutable metadata");
 					ContentManifest.Entries.push_back(Unit.Entry);
+					if (auto Spatial = InspectSpatialContentUnit(Unit.Payload, Unit.Entry, Meshes))
+						Metadata.Units.push_back(std::move(*Spatial));
 				}
 				(void)ParsePackageContentManifest(EncodePackageContentManifest(ContentManifest)).value();
+				CheckSpatialProof(ContentManifest, Metadata);
 			});
 
 			std::optional<RuntimeDistributionDescription> Distribution;
@@ -1281,7 +1561,8 @@ namespace gargantuan {
 		return Result;
 	}
 
-	std::vector<PackageDiagnostic> PackageBuilder::Validate(const std::filesystem::path &PackageRoot) {
+	static std::vector<PackageDiagnostic> ValidatePackageRoot(const std::filesystem::path &PackageRoot,
+		std::optional<ParsedPackageManifest> *VerifiedManifest) {
 		std::vector<PackageDiagnostic> Diagnostics;
 		if (!PackageRoot.is_absolute() || !std::filesystem::is_directory(PackageRoot) || IsReparseOrLink(PackageRoot)) {
 			AddDiagnostic(
@@ -1314,7 +1595,41 @@ namespace gargantuan {
 			);
 		}
 		ValidateRuntimeAssetCatalog(PackageRoot, *Manifest, Diagnostics);
-		if (!HasErrors(Diagnostics))
+		if (!HasErrors(Diagnostics) && Manifest->ContentManifestPath) {
+			try {
+				const auto ContentManifestPath = ResolvePackageFile(PackageRoot, *Manifest->ContentManifestPath, true);
+				const auto CatalogPath = ResolvePackageFile(PackageRoot, Manifest->AssetCatalogPath, true);
+				if (!ContentManifestPath || !CatalogPath)
+					throw std::runtime_error("Package spatial inputs are unavailable");
+				const auto ManifestText = ReadBoundedText(*ContentManifestPath, MaximumPackageContentManifestBytes);
+				if (HashText(ManifestText) != Manifest->ContentManifestDigest.ToString())
+					throw std::runtime_error("Package spatial manifest changed after content verification");
+				const auto Parsed = ParsePackageContentManifest(ManifestText);
+				if (!Parsed) throw std::runtime_error("Package spatial manifest is invalid");
+				const auto CatalogText = ReadBoundedText(*CatalogPath, 1024 * 1024);
+				const auto CatalogEntry = std::ranges::find(Manifest->Content, Manifest->AssetCatalogPath,
+					&ContentEntry::Path);
+				if (CatalogEntry == Manifest->Content.end() || HashText(CatalogText) != CatalogEntry->Sha256)
+					throw std::runtime_error("Package spatial catalog changed after content verification");
+				auto Meshes = PackageSpatialMeshes(PackageRoot, CatalogText);
+				ResidencySpatialMetadata Metadata{ResidencySpatialMetadataVersion, Parsed->Package, {}};
+				for (const auto &Unit : Parsed->Entries) {
+					const auto UnitPath = ResolvePackageFile(PackageRoot, Unit.BlobReference, true);
+					if (!UnitPath) throw std::runtime_error("Package spatial unit path is invalid");
+					const auto UnitText = ReadBoundedText(*UnitPath, MaximumPackageContentPayloadBytes);
+					if (HashText(UnitText) != Unit.Digest.ToString())
+						throw std::runtime_error("Package spatial unit changed after content verification");
+					if (auto Spatial = InspectSpatialContentUnit(UnitText, Unit, Meshes))
+						Metadata.Units.push_back(std::move(*Spatial));
+				}
+				CheckSpatialProof(*Parsed, Metadata);
+			} catch (const std::exception &) {
+				AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "Content",
+					"InvalidSpatialMetadata", "The package contains unverified or underbounded spatial content.");
+			}
+		}
+		if (!HasErrors(Diagnostics)) {
+			if (VerifiedManifest) *VerifiedManifest = std::move(Manifest);
 			AddDiagnostic(
 				Diagnostics,
 				PackageDiagnosticSeverity::Info,
@@ -1323,7 +1638,12 @@ namespace gargantuan {
 				"The standalone package manifest, content hashes, project payload, assets, and runtime resources are "
 				"valid."
 			);
+		}
 		return Diagnostics;
+	}
+
+	std::vector<PackageDiagnostic> PackageBuilder::Validate(const std::filesystem::path &PackageRoot) {
+		return ValidatePackageRoot(PackageRoot, nullptr);
 	}
 
 	std::optional<PackageInspection>
@@ -1335,24 +1655,28 @@ namespace gargantuan {
 
 	std::optional<RuntimePackagePayload>
 	PackageBuilder::Load(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics) {
-		Diagnostics = Validate(PackageRoot);
+		std::optional<ParsedPackageManifest> Manifest;
+		Diagnostics = ValidatePackageRoot(PackageRoot, &Manifest);
 		if (HasErrors(Diagnostics)) return std::nullopt;
-		auto Manifest = ParseManifest(PackageRoot, Diagnostics, false);
 		if (!Manifest) return std::nullopt;
 		try {
+			auto ReadPinned = [&](std::string_view RelativePath, std::size_t MaximumBytes) {
+				const auto Entry = std::ranges::find(Manifest->Content, RelativePath, &ContentEntry::Path);
+				const auto Path = ResolvePackageFile(PackageRoot, RelativePath, true);
+				if (Entry == Manifest->Content.end() || !Path)
+					throw std::runtime_error("Package payload has no pinned content entry");
+				auto Bytes = ReadBoundedText(*Path, MaximumBytes);
+				if (Bytes.size() != Entry->Size || HashText(Bytes) != Entry->Sha256)
+					throw std::runtime_error("Package payload changed after spatial validation");
+				return Bytes;
+			};
 			RuntimePackagePayload Result{.Inspection = Manifest->Inspection};
 			Result.ContentManifestReference = Manifest->ContentManifestPath;
 			Result.ContentManifestDigest = Manifest->ContentManifestDigest;
-			Result.ProjectJson = ReadBoundedText(
-				*ResolvePackageFile(PackageRoot, Manifest->ProjectPath, true), MaximumProjectSnapshotBytes
-			);
-			Result.Assets.CatalogJson = ReadBoundedText(
-				*ResolvePackageFile(PackageRoot, Manifest->AssetCatalogPath, true), 1024 * 1024
-			);
+			Result.ProjectJson = ReadPinned(Manifest->ProjectPath, MaximumProjectSnapshotBytes);
+			Result.Assets.CatalogJson = ReadPinned(Manifest->AssetCatalogPath, 1024 * 1024);
 			if (Manifest->PreRunPath)
-				Result.PreRunSource = ReadBoundedText(
-					*ResolvePackageFile(PackageRoot, *Manifest->PreRunPath, true), MaximumPreRunSourceBytes
-				);
+				Result.PreRunSource = ReadPinned(*Manifest->PreRunPath, MaximumPreRunSourceBytes);
 			auto Catalog = JsonCodec::Parse(Result.Assets.CatalogJson, 1024 * 1024, "runtime asset catalog");
 			if (!Catalog || !Catalog->contains("Assets") || !(*Catalog)["Assets"].is_array())
 				throw std::runtime_error("Runtime asset catalog is malformed");
@@ -1369,7 +1693,9 @@ namespace gargantuan {
 				std::ifstream Input(*Path, std::ios::binary);
 				auto Bytes = std::make_shared<std::vector<std::uint8_t>>(static_cast<std::size_t>(Size));
 				Input.read(reinterpret_cast<char *>(Bytes->data()), static_cast<std::streamsize>(Bytes->size()));
-				if (!Input && !Input.eof()) throw std::runtime_error("Runtime asset artifact could not be read");
+				if (Input.gcount() != static_cast<std::streamsize>(Bytes->size()) ||
+					AssetContentId::Hash(*Bytes).ToString() != ContentId)
+					throw std::runtime_error("Runtime asset artifact changed after spatial validation");
 				Result.Assets.Artifacts.push_back({"assets/artifacts/" + ContentId + ".gasset", std::move(Bytes)});
 			}
 			return Result;
