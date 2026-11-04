@@ -3,6 +3,7 @@
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/content/ResidencyDemandPolicy.hpp"
 #include "gargantuan/network/GameSession.hpp"
@@ -200,6 +201,11 @@ namespace {
 			"an accepted peer without authoritative Character gained spatial demand");
 		const auto PlayerValue = Runtime.Players->GetPlayers().front();
 		auto CharacterValue = std::make_shared<KinematicCharacter>();
+		auto RootPart = std::make_shared<Part>();
+		RootPart->SetAnchored(true);
+		RootPart->SetCanCollide(false);
+		RootPart->SetParent(CharacterValue);
+		CharacterValue->SetRootPart(RootPart);
 		CharacterValue->ApplyRuntimeTransform(CFrame(0, 0, 0));
 		CharacterValue->SetParent(Runtime.Workspace);
 		PlayerValue->SetCharacter(CharacterValue);
@@ -249,12 +255,13 @@ namespace {
 				std::chrono::steady_clock::now() - Started));
 		}
 		for (int Tick = 0; Tick < 8; ++Tick) Step();
+		std::cout << "[Content:ResidencyService] focuses=500 remoteSent=" << Sent << " remoteReplies=" << Replies
+			<< " characterAccepted=" << Server.GetMetrics().CharacterPublicationStatesAccepted - CharacterBefore
+			<< " readyPeers=" << Server.GetMetrics().ReadyPeers << " replyRejected=" << ReplyRejected
+			<< " maxFrameUs=" << std::chrono::duration<double, std::micro>(MaximumFrame).count() << '\n';
 		Check(!ReplyRejected && Replies == Sent && Server.GetMetrics().ReadyPeers == 1 &&
 			Server.GetMetrics().CharacterPublicationStatesAccepted > CharacterBefore,
 			"Character or reliable Remote service failed to progress under 500 moving policy focuses");
-		std::cout << "[Content:ResidencyService] focuses=500 remoteSent=" << Sent << " remoteReplies=" << Replies
-			<< " characterAccepted=" << Server.GetMetrics().CharacterPublicationStatesAccepted - CharacterBefore
-			<< " maxFrameUs=" << std::chrono::duration<double, std::micro>(MaximumFrame).count() << '\n';
 		for (std::uint64_t Focus = 1; Focus <= 499; ++Focus)
 			Check(Runtime.GetResidencyDemandPolicy()->RemoveFocus(0xffff'ffff'ffff'ffffULL - Focus), "gameplay focus removal failed");
 		Client.Stop();
