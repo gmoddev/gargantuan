@@ -861,6 +861,7 @@ namespace gargantuan {
 		Result.Tick = State->LastTick;
 		Result.Revision = State->Revision;
 		Result.ManifestUnits = State->Manifest.Entries.size();
+		Result.Package = State->Manifest.Package;
 		Result.DesiredUnits = State->DesiredUnits;
 		Result.GraceExpiryRecords = State->Expiries.size();
 		Result.OwnedRequests = State->OwnedRequests;
@@ -893,6 +894,11 @@ namespace gargantuan {
 					Best.CostBytes, Best.Revision, Record.DesiredObserved, Record.Requested},
 				Record.GraceUntil, Record.GraceUntil && State->LastTick < *Record.GraceUntil,
 				Pending != State->PendingByIndex.end() && Pending->second.Release});
+			auto &Projection = Result.Units.back();
+			const auto &Entry = State->Manifest.Entries[Unit];
+			Projection.ContentDigest = Entry.Digest;
+			Projection.PackageSpaceKey = Entry.PackageSpaceKey;
+			Projection.CoarseBounds = Entry.CoarseBounds;
 		}
 		if (Current != State->Demands.end()) Result.NextIndex = Current->first;
 		const auto &Diagnostics = *State->Diagnostics;

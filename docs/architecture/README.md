@@ -108,6 +108,10 @@ them in scope rather than silently selecting one source.
 
 ## Current architecture routing
 
+- [Cross-foundation package spatial integration](../../devdocs/CurrentArchitecture/CrossFoundationPackageSpatialIntegration.md)
+  records the accepted producer/consumer composition being implemented and
+  qualified; its dependency ledger preserves exact geometry/streaming sources.
+
 - [Trusted residency demand Foundation 3M](../../devdocs/CurrentArchitecture/TrustedResidencyDemandFoundation3M.md)
   documents bounded default-space policy layered over the existing 3L lifecycle;
   qualification scope is stated separately from physical/provider certification.

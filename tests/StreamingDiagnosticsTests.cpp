@@ -4,6 +4,7 @@
 #include "gargantuan/content/ResidencyDemandPolicy.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "editor/StreamingDiagnosticsEncoding.hpp"
 
 #include <SDL3/SDL.h>
 #include <chrono>
@@ -26,6 +27,7 @@ namespace {
 		for (std::size_t Index = 0; Index < 200; ++Index) {
 			PackageContentEntry Entry;
 			Entry.Key = "unit/" + std::to_string(1000 + Index);
+			Entry.Digest = *AssetContentId::Parse(std::string(64, 'a'));
 			Entry.CoarseBounds = PackageCoarseBounds{{0, 0, 0}, {1, 1, 1}};
 			Manifest.Entries.push_back(std::move(Entry));
 		}
@@ -41,6 +43,22 @@ namespace {
 			"stable focus contribution accounting differs from committed candidate count");
 		Check(Page.Units.size() == 2 && Page.NextIndex == 2 && Page.Units[0].ManifestIndex == 0,
 			"bounded diagnostic page order/cursor differs");
+		Check(Page.Package == Manifest.Package && Page.Units[0].ContentDigest == Manifest.Entries[0].Digest &&
+			Page.Units[0].PackageSpaceKey == "default" && Page.Units[0].CoarseBounds &&
+			Page.Units[0].CoarseBounds->Minimum == Manifest.Entries[0].CoarseBounds->Minimum &&
+			Page.Units[0].CoarseBounds->Maximum == Manifest.Entries[0].CoarseBounds->Maximum,
+			"bounded package bounds inspection lost its manifest identity or extent");
+		StreamingDiagnostics Snapshot;
+		Snapshot.Policy = Page;
+		const auto Wire = EncodeStreamingDiagnosticsSnapshot(Snapshot);
+		Check(Wire["Policy"]["PackageNamespace"]["ProjectId"] == Manifest.Package.Project.ToString() &&
+			Wire["Policy"]["PackageNamespace"]["PackageVersion"] == Manifest.Package.PackageVersion &&
+			Wire["Policy"]["BoundsAccounting"] == "ManifestCoarseBoundsV1" &&
+			Wire["Policy"]["Units"].size() == 2 &&
+			Wire["Policy"]["Units"][0]["ContentDigest"] == Manifest.Entries[0].Digest.ToString() &&
+			Wire["Policy"]["Units"][0]["PackageSpaceKey"] == "default" &&
+			Wire["Policy"]["Units"][0]["CoarseBounds"]["Maximum"][0] == 1.0f,
+			"wire bounds inspection is unbounded or differs from immutable manifest metadata");
 		Check(Page.TimingSamples.size() == MaximumResidencyDiagnosticSamples && Page.TimingSamples.front().Tick == 73 &&
 			Page.TimingSamples.back().Tick == 200, "fixed timing ring did not retire old samples");
 		Check(Page.BudgetLimitedTicks != 0 && Page.PolicyStateLogicalBytes != 0 && Page.ReferencedManifestEntryBytes != 0,

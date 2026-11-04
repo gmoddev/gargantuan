@@ -103,6 +103,9 @@ namespace gargantuan {
 		bool InGrace = false;
 		bool PendingRelease = false;
 		std::optional<ContentResidencyState> AvailabilityState;
+		AssetContentId ContentDigest;
+		std::string PackageSpaceKey;
+		std::optional<PackageCoarseBounds> CoarseBounds;
 	};
 
 	struct ResidencyPolicyDiagnostics final {
@@ -112,6 +115,7 @@ namespace gargantuan {
 		std::uint64_t Tick = 0;
 		std::uint64_t Revision = 0;
 		std::size_t ManifestUnits = 0;
+		PackageContentNamespace Package;
 		std::size_t DesiredUnits = 0;
 		std::size_t GraceExpiryRecords = 0;
 		std::size_t OwnedRequests = 0;

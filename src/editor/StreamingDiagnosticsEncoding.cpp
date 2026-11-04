@@ -37,6 +37,10 @@ namespace gargantuan {
 		for (const auto &Unit : Policy.Units) {
 			const auto &Demand = Unit.Demand;
 			Units.push_back({{"ManifestIndex", Unit.ManifestIndex}, {"Key", Demand.Key},
+				{"ContentDigest", Unit.ContentDigest.IsValid() ? Json(Unit.ContentDigest.ToString()) : Json(nullptr)},
+				{"PackageSpaceKey", Unit.PackageSpaceKey},
+				{"CoarseBounds", Unit.CoarseBounds ?
+					Json{{"Minimum", Unit.CoarseBounds->Minimum}, {"Maximum", Unit.CoarseBounds->Maximum}} : Json(nullptr)},
 				{"Class", ClassName(Demand.Class)}, {"DeadlineTick", Demand.DeadlineTick ? Json(*Demand.DeadlineTick) : Json(nullptr)},
 				{"Revision", Demand.Revision}, {"DistanceSquared", Demand.DistanceSquared}, {"CostBytes", Demand.CostBytes},
 				{"Desired", Demand.Desired}, {"PolicyRequestOwned", Demand.Requested}, {"InGrace", Unit.InGrace},
@@ -54,6 +58,9 @@ namespace gargantuan {
 			{"LastContentStepNanoseconds", Snapshot.LastContentStepNanoseconds},
 			{"Policy", {{"Enabled", Policy.Enabled}, {"Stopped", Policy.Stopped}, {"Tick", Policy.Tick},
 				{"Revision", Policy.Revision}, {"ManifestUnits", Policy.ManifestUnits}, {"Focuses", Metrics.Focuses},
+				{"PackageNamespace", {{"ProjectId", Policy.Package.Project.IsValid() ?
+					Json(Policy.Package.Project.ToString()) : Json(nullptr)}, {"PackageVersion", Policy.Package.PackageVersion}}},
+				{"BoundsAccounting", "ManifestCoarseBoundsV1"},
 				{"PendingFocuses", Metrics.PendingFocuses}, {"UnhealthyFocuses", Metrics.UnhealthyFocuses},
 				{"Candidates", Metrics.RetainedCandidates}, {"DemandRecords", Metrics.DemandRecords},
 				{"DesiredUnits", Policy.DesiredUnits}, {"GraceExpiryRecords", Policy.GraceExpiryRecords},

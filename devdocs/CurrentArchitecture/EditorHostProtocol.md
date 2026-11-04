@@ -212,7 +212,7 @@ extension does not create a streaming provider or policy.
 `FocusContributionRecords`, `DesiredUnits`, `GraceExpiryRecords`, `OwnedRequests`, `PendingDeltas`,
 `Requests`, `Releases`, `RequestDeferrals`, `StaleDecisions`, `QueryFailures`,
 `ServiceBindingFailures`, `BudgetLimitedTicks`, `MemoryAccounting`,
-`TimingAccounting`, the three
+`TimingAccounting`, `PackageNamespace`, `BoundsAccounting`, the three
 logical-byte fields, `Limits`, `Units`, `NextIndex`, and `TimingSamples`.
 `MemoryAccounting` is `LogicalPayloadV1`; `PolicyStateLogicalBytes`,
 `ReferencedManifestEntryBytes`, and `IndexMembershipPayloadBytes` omit
@@ -220,7 +220,10 @@ allocator, container-node, map-cell and separately allocated string overhead.
 `FocusContributionRecords` counts attached committed focus contributions
 through the bounded focus maps; the logical policy estimate includes their
 demand-map and ranked-focus-set pair payloads. `TimingAccounting` is
-`CorePhasesExcludeObservation`.
+`CorePhasesExcludeObservation`. `PackageNamespace` has nullable `ProjectId`
+and unsigned `PackageVersion`; it is empty when there is no observed policy.
+`BoundsAccounting` is `ManifestCoarseBoundsV1`, identifying the existing
+immutable manifest representation rather than granting producer trust.
 `Limits` contains `Focuses`, `CandidatesPerFocus`, `QueryPagesPerTick`,
 `QueryCellsPerTick`, `MembershipVisitsPerTick`, `DemandDeltasPerTick`,
 `CandidateRevalidationsPerTick`, and `RequestEligibilityVisitsPerTick`.
@@ -229,7 +232,12 @@ Each unit row contains `ManifestIndex`, `Key`, `Class` (`Critical`, `Gameplay`,
 `Predictive`, `Presentation`, or `Speculative`), nullable `DeadlineTick`,
 `Revision`, `DistanceSquared`, `CostBytes`, `Desired`, `PolicyRequestOwned`,
 `InGrace`, nullable `AvailabilityState`, nullable `GraceUntilTick`, and
-`PendingRelease`. Availability states are the existing 3L states from
+`PendingRelease`. Additive version-1 fields are nullable canonical hex
+`ContentDigest`, `PackageSpaceKey`, and nullable `CoarseBounds` with finite
+three-component `Minimum` and `Maximum` arrays. They copy exactly the unit's
+manifest entry, share the existing 128-unit page limit and remain present only
+for returned demand rows; they do not enumerate all package geometry or expose
+provider paths. Availability states are the existing 3L states from
 `Unavailable` through `Failed`; a policy-owned request does not imply a
 resident unit or a peer Known state. Timing rows contain `Tick`,
 `EvaluationNanoseconds`, `ReconciliationNanoseconds`, `MembershipVisits`,
