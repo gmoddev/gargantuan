@@ -353,8 +353,9 @@ namespace {
 			"admitted Parts did not enter normal spatial projection");
 		Client.Stop();
 		for (int Index = 0; Index < 40; ++Index) Advance();
-		Check(Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 0 && Server.GetMetrics().ReadyPeers == 0,
-			"disconnect retained generation-scoped network focus or ready peer");
+		Check(Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 0 &&
+			Server.GetPeerIdentities().empty() && Runtime.Players->GetPlayers().empty(),
+			"disconnect retained generation-scoped focus, live peer or session Player");
 		ClientRuntime->Destroy();
 		ClientRuntime.reset();
 		ClientRenderer.reset();
@@ -396,18 +397,25 @@ namespace {
 			Until(AdvanceReplacement, [&] { return Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 1 &&
 				ReplacementRuntime->Workspace->FindFirstChild(FarCell ? "StreamingUnit_4" : "StreamingUnit_0", false); },
 				"replacement session did not receive current admitted cell");
-			Check(Server.GetMetrics().ReadyPeers == 1, "replacement materialization disrupted ready peer");
+			const auto ActivePeers = Server.GetPeerIdentities();
+			Check(ActivePeers.size() == 1 && ActivePeers.front().Ready &&
+				Server.GetMetrics().ReadyPeers == static_cast<std::uint64_t>(Cycle + 2),
+				"replacement materialization disrupted live peer or cumulative readiness events");
 			std::cout << "[Content:StreamingScenario] reconnectCycle=" << Cycle + 1
 				<< " cell=" << (FarCell ? 4 : 0)
 				<< " focuses=" << Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses
-				<< " readyPeers=" << Server.GetMetrics().ReadyPeers << '\n';
+				<< " activePeers=" << ActivePeers.size()
+				<< " cumulativeReadyEvents=" << Server.GetMetrics().ReadyPeers << '\n';
 			Replacement.Stop();
 			for (int Index = 0; Index < 40; ++Index) AdvanceReplacement();
-			Check(Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 0 && Server.GetMetrics().ReadyPeers == 0,
-				"replacement disconnect retained focus or ready peer before next session");
+			const auto RetiredPeers = Server.GetPeerIdentities();
+			Check(Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 0 && RetiredPeers.empty() &&
+				Runtime.Players->GetPlayers().empty(),
+				"replacement disconnect retained focus, live peer or session Player before next session");
 			std::cout << "[Content:StreamingScenario] reconnectCycle=" << Cycle + 1
 				<< " teardownFocuses=" << Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses
-				<< " teardownReadyPeers=" << Server.GetMetrics().ReadyPeers << '\n';
+				<< " teardownActivePeers=" << RetiredPeers.size()
+				<< " teardownPlayers=" << Runtime.Players->GetPlayers().size() << '\n';
 			if (ReplacementRuntime) ReplacementRuntime->Destroy();
 		}
 		std::cout << "[Content:StreamingScenario] reconnectCycles=3"
