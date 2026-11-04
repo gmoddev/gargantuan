@@ -74,7 +74,7 @@ not a universal accuracy ranking.
 ## Bounds, failure, and determinism
 
 The hard input caps are 1 MiB of source JSON, 32 nesting levels, 128 graph
-nodes, 24 graph edges in a dependency path, 8192 input triangles, 24576 aggregate
+nodes, 24 nodes along a dependency path, 8192 input triangles, 24576 aggregate
 imported vertices (including unused vertices), 32 Boolean
 steps, one million estimated pairwise triangle comparisons, 32768 triangles
 per intermediate and final result, and ±100000 coordinates. Matrices must be
@@ -93,6 +93,9 @@ An observer forwards cancellation and deadline expiry into Manifold's
 occur between sub-Booleans and at input-ingest phases. A single Boolean phase
 is not preemptible. The kernel has no allocator budget, so these topology and
 work caps are admission guards, not a hard peak-memory or wall-clock bound.
+`EvaluatedTrianglePairs` reports the sum of operand triangle-count products charged
+for attempted Boolean calls. It is the conservative admission estimate, not an
+instrumented count of intersection tests inside Manifold.
 An allocation failure becomes a diagnostic; it never publishes partial assets.
 Editor work should run this compiler off the main/render thread.
 

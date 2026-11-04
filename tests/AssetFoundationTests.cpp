@@ -482,9 +482,19 @@ int main() {
 		WriteText(Root / "assets" / "projection.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
 		const auto First = ProjectionAssets->ImportProjectAsset(Mount, "assets/projection.obj", AssetKind::Mesh);
 		RenderPublisher Publisher;
+		if (First.Record) for (int Revision = 2; Revision <= 3; ++Revision) {
+			WriteText(Root / "assets" / "projection.obj", "v 0 0 0\nv " + std::to_string(Revision) +
+				" 0 0\nv 0 1 0\nf 1 2 3\n");
+			Check(ProjectionAssets->ReimportProjectAsset(Mount, First.Record->Reference.Value).Ok,
+				"several mesh revisions can complete before the first renderer drain");
+		}
 		auto Initial = ProjectionAssets->DrainMeshChanges();
+		Check(Initial.Creates.size() == 1 && Initial.Removes.empty(),
+			"an unpublished mesh retains one final creation and no stale removals");
 		Publisher.SetAssetMeshChanges(std::move(Initial.Creates), std::move(Initial.Removes));
-		(void)Publisher.Publish(*ProjectionWorkspace, RenderCameraInput{}, 320, 180);
+		const auto FirstPublication = Publisher.Publish(*ProjectionWorkspace, RenderCameraInput{}, 320, 180);
+		Check(FirstPublication->MeshCreates.size() == 1 && FirstPublication->MeshRemoves.empty(),
+			"the latest undrained mesh revision publishes successfully to a fresh renderer");
 		if (First.Record) {
 			for (int Revision = 2; Revision <= 3; ++Revision) {
 				WriteText(Root / "assets" / "projection.obj", "v 0 0 0\nv " + std::to_string(Revision) +
