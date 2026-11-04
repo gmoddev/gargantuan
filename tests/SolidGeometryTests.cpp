@@ -108,6 +108,21 @@ int main() {
 				std::abs(A.Tangent.w) == 1.0f;
 		}
 		Check(FaceUvOkay, "all six box face orientations have nondegenerate UVs and aligned tangents");
+		SolidNode RoundTripOperand;
+		RoundTripOperand.Id = "baked";
+		RoundTripOperand.Kind = SolidNodeKind::ImportedMesh;
+		RoundTripOperand.Mesh = std::make_shared<const ImportedMesh>(Oriented->Mesh);
+		SolidGraph RoundTrip{1, "baked", {RoundTripOperand}};
+		const auto First = CompileSolidGeometry(RoundTrip);
+		const auto Second = CompileSolidGeometry(RoundTrip);
+		Check(First && Second && Hash(First->Mesh) == Hash(Second->Mesh),
+			"compiler-produced flat mesh round-trips as a closed imported operand with repeat hash");
+		RoundTrip.Root = "combined";
+		RoundTrip.Nodes.push_back(Box("other"));
+		RoundTrip.Nodes.push_back(Move("offset", "other", {0.5f, 0, 0}));
+		RoundTrip.Nodes.push_back(Boolean("combined", SolidNodeKind::Union, {"baked", "offset"}));
+		Check(CompileSolidGeometry(RoundTrip).has_value(),
+			"compiler-produced flat mesh participates in a later Boolean");
 	} else Check(false, "single box compiles for face orientation test");
 	Graph.Nodes.back().Kind = SolidNodeKind::Intersection;
 	auto Intersection = CompileSolidGeometry(Graph);

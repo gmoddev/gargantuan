@@ -5,7 +5,9 @@
 
 #include "gargantuan/assets/AssetTypes.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <memory>
@@ -36,6 +38,14 @@ namespace gargantuan {
 	struct SolidCompilation {
 		ImportedMesh Mesh;
 		ImportedCollision Collision;
+		std::size_t InputTriangles = 0;
+		std::size_t EvaluatedTrianglePairs = 0;
+		std::size_t PeakIntermediateTriangles = 0;
+	};
+
+	// Optional measurement hook. The caller must keep this alive until compilation returns.
+	struct SolidCompileProbe {
+		std::atomic_bool InsideBoolean{false};
 	};
 
 	struct SolidCompileLimits {
@@ -54,6 +64,7 @@ namespace gargantuan {
 		const SolidGraph &Graph,
 		const AssetCancellationToken &Cancellation = {},
 		std::chrono::steady_clock::time_point Deadline = std::chrono::steady_clock::time_point::max(),
-		const SolidCompileLimits &Limits = {}
+		const SolidCompileLimits &Limits = {},
+		SolidCompileProbe *Probe = nullptr
 	);
 }

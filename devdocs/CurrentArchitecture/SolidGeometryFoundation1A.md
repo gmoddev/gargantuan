@@ -28,6 +28,12 @@ input after the first in listed order. Union and intersection also evaluate
 in listed order, making evaluation order explicit. An imported operand is an
 inline closed, oriented triangle mesh in canonical Gargantuan coordinates;
 the file importer does not resolve external paths or asset references.
+Before kernel ingestion, imported geometry vertices with bit-identical finite
+positions are welded exactly, with negative zero normalized to positive zero.
+This permits a compiled flat-shaded Mesh to be used as a later Boolean input
+without treating its per-face render vertices as open geometry. Distinct
+positions are never fused by tolerance, and malformed topology is still
+rejected by the kernel.
 
 The `.solid` importer emits logical child `asset` (Mesh, primary) and
 `collision` (Collision) through one compound AssetService commit. The mesh
@@ -101,13 +107,20 @@ imported-operand denial, whole-graph validation, cancellation, limits, and
 repeat hashes. `GARGANTUAN_SOLID_BENCH=1` runs a small repeated Boolean timing
 hook; `GARGANTUAN_SOLID_FUZZ=1` runs 128 seeded valid and invalid graph cases.
 `SolidGeometryBenchmark` emits one JSON record per scenario with P50/P95/P99
-compile time, output triangles, repeat hash, and process current/peak memory.
+compile time, input/output triangles, evaluated pair counts, repeat hash, and
+process current/peak memory. The OS peak is a process-lifetime high-water
+mark; run `--scenario NAME` in a fresh process for an isolated peak. The
+`--full101` option uses 101 repetitions for useful percentile estimates.
 On Windows memory is private commit with the OS peak pagefile-usage counter;
 on Linux it is current/peak RSS. The before/after difference is observed
 retention, not an allocation count. The dedicated executable intentionally
 does not override the production kernel allocator; it does not claim complete
-C++ allocation accounting. `--stress` adds a near-limit admission case and
-128 seeded mutation cases. The cancellation result and join latency are
-reported even when a small graph finishes before cancellation is observed.
+C++ allocation accounting. `--stress` adds near-limit prism intersections
+with 906304 requested triangle pairs accepted and 1008016 denied by the
+one-million-pair guard, plus 128 seeded mutation cases. A measurement-only
+probe reports whether cancellation was requested while the Boolean kernel
+call was active; a completed call without that observation is not evidence
+of cancellation responsiveness. Join latency and outcome are recorded in
+either case.
 The implementation remains pending qualification until those tests and
 the compound asset tests run on the integrated build.

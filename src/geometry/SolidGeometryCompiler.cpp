@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <stop_token>
@@ -168,7 +170,8 @@ namespace gargantuan {
 
 	std::expected<SolidCompilation, AssetDiagnostic> CompileSolidGeometry(
 		const SolidGraph &Graph, const AssetCancellationToken &Cancellation,
-		std::chrono::steady_clock::time_point Deadline, const SolidCompileLimits &Limits
+		std::chrono::steady_clock::time_point Deadline, const SolidCompileLimits &Limits,
+		SolidCompileProbe *Probe
 	) {
 		try {
 			if (Graph.Version != 1) return std::unexpected(Error("UnsupportedSolidVersion", "Unknown solid graph version"));
@@ -199,7 +202,9 @@ namespace gargantuan {
 					if (!Node.Inputs.empty() || !std::isfinite(Node.Radius) ||
 						Node.Radius <= 0 || Node.Radius > 10'000)
 						return std::unexpected(Error("InvalidSolidGraph", "Sphere radius is invalid"));
-					InputTriangles += 1'152;
+					// Manifold's 24-segment geodesic sphere refines eight octahedron faces
+					// into six-by-six triangles per face.
+					InputTriangles += 288;
 					break;
 				case SolidNodeKind::ImportedMesh:
 					if (!Node.Inputs.empty() || !Node.Mesh || !Node.Mesh->Vertices || !Node.Mesh->Indices ||
@@ -273,6 +278,7 @@ namespace gargantuan {
 			std::unordered_map<std::size_t, manifold::Manifold> Compiled;
 			std::size_t BooleanSteps = 0;
 			std::size_t TrianglePairs = 0;
+			std::size_t PeakIntermediateTriangles = 0;
 			const auto Evaluate = [&](const auto &Self, std::size_t Index)
 				-> std::expected<manifold::Manifold, AssetDiagnostic> {
 				if (Execution.Cancelled()) return std::unexpected(Error("Cancelled", "Solid compilation was cancelled"));
@@ -287,12 +293,30 @@ namespace gargantuan {
 					manifold::MeshGL64 Input;
 					Input.numProp = 3;
 					Input.vertProperties.reserve(Node.Mesh->Vertices->size() * 3);
+					std::map<std::array<std::uint32_t, 3>, std::uint64_t> ExactVertices;
+					std::vector<std::uint64_t> Remap;
+					Remap.reserve(Node.Mesh->Vertices->size());
 					for (const auto &Vertex : *Node.Mesh->Vertices) {
-						Input.vertProperties.push_back(Vertex.Position.x);
-						Input.vertProperties.push_back(Vertex.Position.y);
-						Input.vertProperties.push_back(Vertex.Position.z);
+						const auto X = Vertex.Position.x == 0.0f ? 0.0f : Vertex.Position.x;
+						const auto Y = Vertex.Position.y == 0.0f ? 0.0f : Vertex.Position.y;
+						const auto Z = Vertex.Position.z == 0.0f ? 0.0f : Vertex.Position.z;
+						const std::array<std::uint32_t, 3> Key{
+							std::bit_cast<std::uint32_t>(X), std::bit_cast<std::uint32_t>(Y), std::bit_cast<std::uint32_t>(Z)};
+						const auto [Found, Inserted] = ExactVertices.try_emplace(Key, Input.vertProperties.size() / 3);
+						if (Inserted) {
+							Input.vertProperties.push_back(X);
+							Input.vertProperties.push_back(Y);
+							Input.vertProperties.push_back(Z);
+						}
+						Remap.push_back(Found->second);
 					}
-					Input.triVerts.assign(Node.Mesh->Indices->begin(), Node.Mesh->Indices->end());
+					Input.triVerts.reserve(Node.Mesh->Indices->size());
+					for (const auto OldIndex : *Node.Mesh->Indices) Input.triVerts.push_back(Remap[OldIndex]);
+					for (std::size_t Corner = 0; Corner < Input.triVerts.size(); Corner += 3)
+						if (Input.triVerts[Corner] == Input.triVerts[Corner + 1] ||
+							Input.triVerts[Corner + 1] == Input.triVerts[Corner + 2] ||
+							Input.triVerts[Corner + 2] == Input.triVerts[Corner])
+							return std::unexpected(Error("InvalidSolidMesh", "Imported operand has a triangle collapsed by exact position welding"));
 					Result = Execution.FromMeshGL(Input);
 				} else {
 					auto First = Self(Self, NodeById.at(Node.Inputs.front()));
@@ -315,11 +339,24 @@ namespace gargantuan {
 								return std::unexpected(Error("GeometryLimit", "Solid Boolean work estimate exceeds limit"));
 							TrianglePairs += Result.NumTri() * Next->NumTri();
 							Result = Result.Boolean(*Next, Operation);
-							const auto Status = Result.WithContext(Execution).Status();
+							struct BooleanScope {
+								SolidCompileProbe *Probe;
+								explicit BooleanScope(SolidCompileProbe *Value) : Probe(Value) {
+									if (Probe) Probe->InsideBoolean.store(true, std::memory_order_release);
+								}
+								~BooleanScope() {
+									if (Probe) Probe->InsideBoolean.store(false, std::memory_order_release);
+								}
+							};
+							const auto Status = [&] {
+								BooleanScope Scope(Probe);
+								return Result.WithContext(Execution).Status();
+							}();
 							if (Status != manifold::Manifold::Error::NoError)
 								return std::unexpected(KernelError(Status, Node.Id));
 							if (Result.NumTri() > std::min(Limits.MaximumIntermediateTriangles, std::size_t{32768}))
 								return std::unexpected(Error("GeometryLimit", "Solid intermediate exceeds triangle limit"));
+							PeakIntermediateTriangles = std::max(PeakIntermediateTriangles, Result.NumTri());
 						}
 					}
 				}
@@ -328,6 +365,7 @@ namespace gargantuan {
 					return std::unexpected(KernelError(Status, Node.Id));
 				if (Result.NumTri() > std::min(Limits.MaximumIntermediateTriangles, std::size_t{32768}))
 					return std::unexpected(Error("GeometryLimit", "Solid node exceeds intermediate triangle limit"));
+				PeakIntermediateTriangles = std::max(PeakIntermediateTriangles, Result.NumTri());
 				if (!Result.IsEmpty()) {
 					const auto Bounds = Result.BoundingBox();
 					const auto Valid = [](manifold::vec3 Value) {
@@ -347,6 +385,11 @@ namespace gargantuan {
 			auto Candidate = BuildCandidate(*Root, std::min(Limits.MaximumOutputTriangles, std::size_t{32768}));
 			if (Execution.Cancelled() || Cancellation.IsCancelled() || std::chrono::steady_clock::now() >= Deadline)
 				return std::unexpected(Error("Cancelled", "Solid compilation was cancelled before candidate publication"));
+			if (Candidate) {
+				Candidate->InputTriangles = InputTriangles;
+				Candidate->EvaluatedTrianglePairs = TrianglePairs;
+				Candidate->PeakIntermediateTriangles = PeakIntermediateTriangles;
+			}
 			return Candidate;
 		} catch (const std::bad_alloc &) {
 			return std::unexpected(Error("GeometryMemory", "Solid compiler allocation failed"));
