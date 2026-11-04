@@ -14,13 +14,17 @@
 #include <SDL3/SDL.h>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace gargantuan {
@@ -261,7 +265,8 @@ namespace {
 		const auto FirstPhysics = WorldRootTestAccess::CollisionResidency(*Space);
 		const auto FirstHit = WorldRootTestAccess::Raycast(*Space, {300, 0, 2}, {0, 0, -4});
 		Check(FirstPhysics.ActiveResources == 1 && FirstPhysics.ActiveConsumers == 1 &&
-			FirstPhysics.ActiveMeshShapes > 0 && FirstHit.HasHit() && FirstHit.Instance == First,
+			FirstPhysics.ActiveMeshShapes > 0 && FirstHit.Succeeded() && FirstHit.HasHit() &&
+			FirstHit.Instance == First,
 			"admitted offset geometry did not create an owned shape and real query hit");
 		Check(Renderer.GetProjection().GetItem(FirstId),
 			"render publication did not follow authoritative MeshPart admission");
