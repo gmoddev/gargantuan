@@ -122,12 +122,16 @@ namespace {
 			std::memory_order_release);
 	}
 
-	AllocationSample FinishAllocationSample() {
-		const AllocationSample Result{
+	AllocationSample SnapshotAllocationSample() {
+		return {
 			.Count = AllocationCount.load(std::memory_order_relaxed),
 			.PeakBytes = PeakAllocationBytes.load(std::memory_order_relaxed),
 			.RetainedBytes = LiveAllocationBytes.load(std::memory_order_relaxed),
 		};
+	}
+
+	AllocationSample FinishAllocationSample() {
+		const auto Result = SnapshotAllocationSample();
 		ActiveAllocationGeneration.store(0, std::memory_order_release);
 		return Result;
 	}
@@ -267,13 +271,7 @@ namespace {
 		const auto BuildStartedAt = Clock::now();
 		ResidencyDemandPolicy Policy(Manifest, Limits);
 		const auto BuildMicroseconds = Microseconds(BuildStartedAt);
-		const auto BuildAllocations = FinishAllocationSample();
-		std::cout << "policy_build," << EntryCount << ',' << FocusCount << ",1," << BuildMicroseconds
-			<< ',' << BuildMicroseconds << ',' << BuildMicroseconds << ',' << BuildMicroseconds << ','
-			<< BuildMicroseconds << ',' << BuildAllocations.Count << ',' << BuildAllocations.PeakBytes << ','
-			<< BuildAllocations.RetainedBytes;
-		PrintEmptyColumns(15);
-		std::cout << "0\n";
+		const auto BuildAllocations = SnapshotAllocationSample();
 		for (std::size_t Focus = 0; Focus < FocusCount; ++Focus)
 			if (!Policy.UpdateFocus(Focus + 1, FocusPosition(Focus, FocusCount, EntryCount)))
 				throw std::runtime_error("[Content:ResidencyBenchmark] focus rejected");
@@ -287,6 +285,17 @@ namespace {
 			WarmMetrics.PendingFocuses != 0 || WarmMetrics.QueryFailures != 0 ||
 			WarmMetrics.DemandRecords > EntryCount)
 			throw std::runtime_error("[Content:ResidencyBenchmark] warm policy state did not converge");
+		const auto StateMicroseconds = Microseconds(BuildStartedAt);
+		const auto StateAllocations = FinishAllocationSample();
+		const auto PrintAllocationRow = [&](std::string_view Phase, double Duration, const AllocationSample &Allocations) {
+			std::cout << Phase << ',' << EntryCount << ',' << FocusCount << ",1," << Duration
+				<< ',' << Duration << ',' << Duration << ',' << Duration << ',' << Duration << ','
+				<< Allocations.Count << ',' << Allocations.PeakBytes << ',' << Allocations.RetainedBytes;
+			PrintEmptyColumns(15);
+			std::cout << "0\n";
+		};
+		PrintAllocationRow("policy_build", BuildMicroseconds, BuildAllocations);
+		PrintAllocationRow("policy_state", StateMicroseconds, StateAllocations);
 		const auto Iterations = Quick ? 12u : 64u;
 		const auto SteadyBefore = Policy.GetMetrics();
 		StartAllocationSample();
