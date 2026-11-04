@@ -558,6 +558,17 @@ int main() {
 			Check(RuntimeAssets->ResolveMesh(First.Record->Reference.Value).has_value() &&
 				RuntimeAssets->ResolveCollisionForMesh(First.Record->Reference.Value).has_value(),
 				"packaged solid runtime resolves compiled artifacts without source or Boolean evaluation");
+			auto RuntimeWorkspace = std::dynamic_pointer_cast<Workspace>(RuntimeWorld->GetService("Workspace"));
+			auto RuntimePart = std::make_shared<MeshPart>();
+			RuntimePart->SetAnchored(true);
+			RuntimePart->SetSize({1.0f, 1.0f, 1.0f});
+			RuntimePart->SetMesh(First.Record->Reference.Value);
+			RuntimePart->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+			RuntimePart->SetParent(RuntimeWorkspace);
+			const auto RuntimeHit = WorldRootTestAccess::Raycast(*RuntimeWorkspace);
+			Check(RuntimeHit.Succeeded() && RuntimeHit.Instance == RuntimePart &&
+				std::abs(RuntimeHit.Distance - 1.0f) < 0.001f,
+				"a packaged Boolean bake creates queryable triangle collision without its source graph");
 			auto OldWorld = std::make_shared<DataModel>();
 			auto OldAssets = GetAssets(OldWorld);
 			OldAssets->LoadProjectAssetSnapshot(SavedFirst);
@@ -662,6 +673,8 @@ int main() {
 		"MeshPart rejects raw mesh source paths");
 	MeshPartA->SetName("Imported Mesh A"); MeshPartB->SetName("Imported Mesh B");
 	MeshPartA->SetMesh(GltfMeshRecord->Reference.Value); MeshPartB->SetMesh(GltfMeshRecord->Reference.Value);
+	MeshPartA->SetAnchored(true);
+	MeshPartA->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
 	MeshPartA->SetParent(WorkspaceValue); MeshPartB->SetParent(WorkspaceValue);
 	auto CompoundTextures = Assets->DrainTextureChanges();
 	auto CompoundMeshes = Assets->DrainMeshChanges();
@@ -697,7 +710,8 @@ int main() {
 		++Failures;
 	}
 	Check(DuplicatedMeshPart && DuplicatedMeshPart->GetMesh() == MeshPartA->GetMesh() &&
-		DuplicatedMeshPart->GetMaterial() == MeshPartA->GetMaterial(),
+		DuplicatedMeshPart->GetMaterial() == MeshPartA->GetMaterial() &&
+		DuplicatedMeshPart->GetCollisionMode() == Enums::MeshCollisionMode::StaticMesh,
 		"MeshPart duplication preserves strict mesh and material references");
 	if (DuplicatedMeshPart) {
 		DuplicatedMeshPart->SetParent(WorkspaceValue);
@@ -945,7 +959,8 @@ int main() {
 		"saved image, mesh, material dependency graph, and font assets survive restart/reload");
 	auto ReopenedMeshPart = std::dynamic_pointer_cast<MeshPart>(ReopenedWorld->FindFirstDescendant("Imported Mesh A"));
 	Check(ReopenedMeshPart && ReopenedMeshPart->GetMesh() == GltfMeshRecord->Reference.Value &&
-		ReopenedMeshPart->GetMaterial().empty(),
+		ReopenedMeshPart->GetMaterial().empty() &&
+		ReopenedMeshPart->GetCollisionMode() == Enums::MeshCollisionMode::StaticMesh,
 		"MeshPart schema properties survive save and reopen");
 	auto ReopenedCancelled = ReopenedAssets->GetAsset(CancelledImport.Record->Reference.Value);
 	Check(ReopenedCancelled && ReopenedCancelled->State == AssetState::Failed && ReopenedCancelled->Diagnostic &&
