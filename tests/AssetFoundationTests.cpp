@@ -273,6 +273,8 @@ int main() {
 		"v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nf 1/1 2/2 3/3\n");
 	WriteText(Root / "assets" / "bad-index.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 4\n");
 	WriteText(Root / "assets" / "non-finite.obj", "v nan 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+	WriteText(Root / "assets" / "thin.obj", "v 0 0 0\nv 1 0 0\nv 0 0.000001 0\nf 1 2 3\n");
+	WriteText(Root / "assets" / "extreme.obj", "v 0 0 0\nv 1000001 0 0\nv 0 1 0\nf 1 2 3\n");
 	WriteText(Root / "assets" / "bad.png", "not a png");
 	WriteText(Root / "assets" / "bad.ttf", "not a font");
 	std::filesystem::copy_file(std::filesystem::path(GARGANTUAN_ASSET_TEST_FONT_PATH),
@@ -408,9 +410,13 @@ int main() {
 	}
 	auto InvalidIndex = Assets->ImportProjectAsset(Mount, "assets/bad-index.obj", AssetKind::Mesh, "Bad Index");
 	auto NonFinite = Assets->ImportProjectAsset(Mount, "assets/non-finite.obj", AssetKind::Mesh, "Non-finite");
+	auto Thin = Assets->ImportProjectAsset(Mount, "assets/thin.obj", AssetKind::Mesh, "Thin Collision");
+	auto Extreme = Assets->ImportProjectAsset(Mount, "assets/extreme.obj", AssetKind::Mesh, "Extreme Collision");
 	Check(!InvalidIndex.Ok && InvalidIndex.Diagnostic.Code == "InvalidMeshIndex" &&
-		!NonFinite.Ok && NonFinite.Diagnostic.Code == "MalformedMesh",
-		"OBJ import rejects invalid indices and non-finite attributes");
+		!NonFinite.Ok && NonFinite.Diagnostic.Code == "MalformedMesh" &&
+		!Thin.Ok && Thin.Diagnostic.Code == "MalformedCollision" && Thin.Records.empty() &&
+		!Extreme.Ok && Extreme.Diagnostic.Code == "MalformedCollision" && Extreme.Records.empty(),
+		"OBJ import atomically rejects invalid, non-finite, thin, and extreme collision geometry");
 	auto MeshChanges = Assets->DrainMeshChanges();
 	RenderPublisher Publisher;
 	Publisher.SetUiTextureChanges(
