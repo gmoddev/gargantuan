@@ -1,5 +1,12 @@
 # Content Availability Foundation 3L
 
+The default trusted server demand composition is described by
+[Foundation 3M](TrustedResidencyDemandFoundation3M.md). It uses the existing
+request/release interface and does not replace this lifecycle or acquisition
+scheduler. The resumable coarse query adds explicit per-page work limits and
+aggregate index storage ceilings; immutable content identity and package format
+remain unchanged.
+
 ## Decision
 
 Foundation 3L separates immutable authored package content from its current

@@ -442,6 +442,29 @@ Tests should enforce them where practical.
 101. Host separation does not alter package semantic versions, GRPL, GCHR,
     ordinary Luau authority, EditorHost trust, or generation-safe teardown.
 
+## Trusted residency demand
+
+1. Foundation 3M owns desired/grace reasons only. ContentAvailability owns all
+   acquisition, dependency, admission, residency and eviction state. 3E relevance
+   and 3J accepted materialization remain independent downstream authorities.
+2. Default policy focus derives from committed server Character state and its
+   full Player ObjectId lifetime. Client messages and ordinary Luau cannot name
+   content keys, select providers or directly force policy acquisition.
+3. Package coarse queries have explicit cell, membership, candidate and aggregate
+   storage ceilings. An incomplete or failed query cannot masquerade as a complete
+   empty spatial result. Unloaded metadata never becomes a ghost ObjectId.
+4. Current native requirements and bounded current-valid spatial candidates
+   determine deterministic semantic/deadline/distance/cost/identity ordering.
+   Moving bounded approximations remain observable and converge after quiescence.
+5. Superseded focus work cannot publish a new request from obsolete facts.
+   Evaluation, candidate revalidation and request/release deltas have per-tick
+   bounds; equivalent demand coalesces to one policy-owned 3L request per key.
+6. Policy release retires only its accepted direct-demand contribution. Other
+   native owners, hard dependencies, pins and ordinary 3L lifecycle remain intact.
+7. Policy work is bound to one immutable manifest and service lifetime. Engine
+   joins immutable policy preparation before the content owner stops; stopped or
+   replacement lifetimes cannot accept an old policy result.
+
 ## Qualification and evidence
 
 Foundation3L's accepted D03 `POOLED_CORRECTNESS_V1` separates correctness from

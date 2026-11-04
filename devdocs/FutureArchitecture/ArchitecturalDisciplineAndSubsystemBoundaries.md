@@ -1145,6 +1145,11 @@ Eviction policy should follow measurement rather than precede it.
 
 # 8. Foundation 3M — Trusted Spatial Residency Policy
 
+Implementation and qualification of the first default-space slice are tracked
+in [the current policy contract](../CurrentArchitecture/TrustedResidencyDemandFoundation3M.md).
+The ownership rules below remain the design constraints; the current contract
+states the bounded moving-query approximation and actual production composition.
+
 ## 8.1 Purpose
 
 Foundation 3M owns:

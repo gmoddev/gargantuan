@@ -446,6 +446,7 @@ namespace gargantuan {
 		float CellSize = 512.0f;
 		std::map<Cell, std::vector<std::size_t>> Cells;
 		std::size_t Memberships = 0;
+		std::uint64_t Epoch = 0;
 	};
 
 	PackageContentCoarseIndex::PackageContentCoarseIndex(const PackageContentManifest &Manifest, float CellSize) {
@@ -453,6 +454,14 @@ namespace gargantuan {
 		if (Manifest.Entries.size() > MaximumPackageContentUnits)
 			throw std::length_error("Package coarse index exceeds the content-unit limit");
 		auto Mutable = std::make_shared<Impl>();
+		static std::atomic<std::uint64_t> NextEpoch{1};
+		auto Epoch = NextEpoch.load(std::memory_order_relaxed);
+		for (;;) {
+			if (Epoch == std::numeric_limits<std::uint64_t>::max())
+				throw std::length_error("Package coarse index epoch exhausted");
+			if (NextEpoch.compare_exchange_weak(Epoch, Epoch + 1, std::memory_order_relaxed)) break;
+		}
+		Mutable->Epoch = Epoch;
 		Mutable->CellSize = CellSize;
 		for (std::size_t Index = 0; Index < Manifest.Entries.size(); ++Index) {
 			const auto &Entry = Manifest.Entries[Index];
@@ -476,13 +485,18 @@ namespace gargantuan {
 					throw std::length_error("Package content overlaps too many coarse cells");
 				MembershipCount *= Extent;
 			}
+			if (MembershipCount > MaximumPackageCoarseIndexMemberships - Mutable->Memberships)
+				throw std::length_error("[Content:CoarseIndex] aggregate membership limit exceeded");
 			for (std::int64_t X = Minimum[0]; X <= Maximum[0]; ++X)
 				for (std::int64_t Y = Minimum[1]; Y <= Maximum[1]; ++Y)
 					for (std::int64_t Z = Minimum[2]; Z <= Maximum[2]; ++Z) {
-						Mutable->Cells[{
+						Impl::Cell Cell{
 							Entry.PackageSpaceKey,
 							{static_cast<std::int32_t>(X), static_cast<std::int32_t>(Y), static_cast<std::int32_t>(Z)},
-						}].push_back(Index);
+						};
+						if (!Mutable->Cells.contains(Cell) && Mutable->Cells.size() >= MaximumPackageCoarseIndexCells)
+							throw std::length_error("[Content:CoarseIndex] populated cell limit exceeded");
+						Mutable->Cells[std::move(Cell)].push_back(Index);
 						++Mutable->Memberships;
 					}
 		}
@@ -530,6 +544,90 @@ namespace gargantuan {
 	}
 
 	std::size_t PackageContentCoarseIndex::GetMembershipCount() const { return State ? State->Memberships : 0; }
+
+	PackageCoarseQueryPage PackageContentCoarseIndex::QueryPage(
+		std::string_view PackageSpaceKey,
+		const PackageCoarseBounds &Bounds,
+		const PackageCoarseQueryLimits &Limits,
+		const std::optional<PackageCoarseQueryCursor> &Cursor
+	) const {
+		PackageCoarseQueryPage Page;
+		if (!State || PackageSpaceKey.empty() || PackageSpaceKey.size() > MaximumPackageSpaceKeyBytes ||
+			!BoundsValid(Bounds) || Limits.MaximumCells == 0 || Limits.MaximumCells > MaximumPackageCoarseQueryCells ||
+			Limits.MaximumMembershipVisits == 0 ||
+			Limits.MaximumMembershipVisits > MaximumPackageCoarseQueryMembershipVisits ||
+			Limits.MaximumResults == 0 || Limits.MaximumResults > MaximumPackageContentUnits)
+			return Page;
+		std::array<std::int32_t, 3> Minimum{};
+		std::array<std::size_t, 3> Extents{};
+		std::size_t TotalCells = 1;
+		for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+			const auto First = std::floor(static_cast<double>(Bounds.Minimum[Axis]) / State->CellSize);
+			const auto Last = std::floor(static_cast<double>(Bounds.Maximum[Axis]) / State->CellSize);
+			if (First < std::numeric_limits<std::int32_t>::min() ||
+				Last > std::numeric_limits<std::int32_t>::max()) return Page;
+			Minimum[Axis] = static_cast<std::int32_t>(First);
+			Extents[Axis] = static_cast<std::size_t>(Last - First + 1);
+			if (Extents[Axis] > MaximumPackageCoarseQueryCells / TotalCells) {
+				Page.Status = PackageCoarseQueryStatus::QueryCellLimit;
+				return Page;
+			}
+			TotalCells *= Extents[Axis];
+		}
+		if (Cursor && (Cursor->IndexEpoch != State->Epoch || Cursor->PackageSpaceKey != PackageSpaceKey ||
+			Cursor->Bounds.Minimum != Bounds.Minimum || Cursor->Bounds.Maximum != Bounds.Maximum ||
+			Cursor->NextCell >= TotalCells)) {
+			Page.Status = PackageCoarseQueryStatus::InvalidCursor;
+			return Page;
+		}
+		try {
+			const std::string Space(PackageSpaceKey);
+			std::size_t NextCell = Cursor ? Cursor->NextCell : 0;
+			std::size_t NextMembership = Cursor ? Cursor->NextMembership : 0;
+			while (NextCell < TotalCells && Page.CellsVisited < Limits.MaximumCells &&
+				Page.MembershipVisits < Limits.MaximumMembershipVisits && Page.Entries.size() < Limits.MaximumResults) {
+				const auto X = NextCell / (Extents[1] * Extents[2]);
+				const auto Y = (NextCell / Extents[2]) % Extents[1];
+				const auto Z = NextCell % Extents[2];
+				auto Found = State->Cells.find({Space, {
+					static_cast<std::int32_t>(static_cast<std::int64_t>(Minimum[0]) + static_cast<std::int64_t>(X)),
+					static_cast<std::int32_t>(static_cast<std::int64_t>(Minimum[1]) + static_cast<std::int64_t>(Y)),
+					static_cast<std::int32_t>(static_cast<std::int64_t>(Minimum[2]) + static_cast<std::int64_t>(Z)),
+				}});
+				++Page.CellsVisited;
+				if (Found == State->Cells.end()) {
+					if (NextMembership != 0) {
+						Page.Status = PackageCoarseQueryStatus::InvalidCursor;
+						return Page;
+					}
+					++NextCell;
+					continue;
+				}
+				const auto &Members = Found->second;
+				if (NextMembership > Members.size()) {
+					Page.Status = PackageCoarseQueryStatus::InvalidCursor;
+					return Page;
+				}
+				while (NextMembership < Members.size() &&
+					Page.MembershipVisits < Limits.MaximumMembershipVisits && Page.Entries.size() < Limits.MaximumResults) {
+					Page.Entries.push_back(Members[NextMembership++]);
+					++Page.MembershipVisits;
+				}
+				if (NextMembership != Members.size()) break;
+				++NextCell;
+				NextMembership = 0;
+			}
+			if (NextCell == TotalCells) Page.Status = PackageCoarseQueryStatus::Complete;
+			else {
+				Page.NextCursor = PackageCoarseQueryCursor{
+					State->Epoch, Space, Bounds, NextCell, NextMembership};
+				Page.Status = PackageCoarseQueryStatus::More;
+			}
+		} catch (const std::bad_alloc &) {
+			return {.Status = PackageCoarseQueryStatus::AllocationFailure};
+		}
+		return Page;
+	}
 
 	bool ContentRequestContext::IsCancelled() const {
 		return Cancelled && Cancelled->load(std::memory_order_acquire);

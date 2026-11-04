@@ -150,6 +150,8 @@ namespace gargantuan {
 		DataModelDestroyingConnection = DataModel->Destroying->Once([this](std::monostate) { Destroy(); });
 		const bool PreloadAllContent = ProviderConfiguration.Content &&
 			ProviderConfiguration.Content->Mode == ContentResidencyMode::FullyResident;
+		ResidencyPolicyEnabled = ProviderConfiguration.Mode == RuntimeMode::NetworkServer &&
+			ProviderConfiguration.Content && ProviderConfiguration.Content->Mode == ContentResidencyMode::OnDemand;
 		const auto ContentStartupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 		if (ProviderConfiguration.Content) {
 			Content = std::make_unique<ContentAvailabilityService>(
@@ -186,6 +188,14 @@ namespace gargantuan {
 		if (Destroyed) return;
 		Destroyed = true;
 		LOG_INFO(App, "Destroying engine");
+		if (ResidencyPolicy) ResidencyPolicy->Stop(Content.get());
+		ResidencyPolicy.reset();
+		// Preparation reads only the immutable manifest. Join before its owning
+		// content service can release that storage; stopped work never publishes.
+		if (ResidencyPolicyPreparation.valid()) {
+			ResidencyPolicyPreparation.wait();
+			ResidencyPolicyPreparation = {};
+		}
 		if (Content) Content->Stop();
 		if (DataModelDestroyingConnection) {
 			DataModelDestroyingConnection->Disconnect();
@@ -259,9 +269,30 @@ namespace gargantuan {
 
 	void Engine::Step() {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineStep);
-		if (!ProcessService->Alive) return;
+		if (Destroyed || !ProcessService->Alive) return;
 		Mutations.Drain();
-		if (Content) Content->Step();
+		if (Content) {
+			if (ResidencyPolicyEnabled && !ResidencyPolicy) {
+				try {
+					if (!ResidencyPolicyPreparation.valid() && Content->GetManifest()) {
+						const auto *Manifest = Content->GetManifest();
+						ResidencyPolicyPreparation = std::async(std::launch::async, [Manifest] {
+							return std::make_unique<ResidencyDemandPolicy>(*Manifest);
+						});
+					}
+					if (ResidencyPolicyPreparation.valid() &&
+						ResidencyPolicyPreparation.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+						ResidencyPolicy = ResidencyPolicyPreparation.get();
+				} catch (const std::exception &Error) {
+					ResidencyPolicyEnabled = false;
+					LOG_WARN(App, "[Content:ResidencyPolicy] preparation failed: %s", Error.what());
+				}
+			}
+			if (ResidencyPolicy)
+				ResidencyPolicy->Step(Content.get(), SimulationTick == std::numeric_limits<std::uint64_t>::max()
+					? SimulationTick : SimulationTick + 1);
+			Content->Step();
+		}
 
 		CurrentTick = std::chrono::steady_clock::now();
 		if (LastTick.time_since_epoch().count() == 0) LastTick = CurrentTick;

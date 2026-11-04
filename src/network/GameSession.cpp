@@ -1472,6 +1472,10 @@ namespace gargantuan::network {
 			if (Replication) (void)Replication->RemovePeer(Connection);
 			(void)Scheduler.CancelConnection(Connection);
 			if (Configuration.Role == GameSessionRole::Server && PeerValue.PlayerValue) {
+				if (auto *Policy = Runtime->GetResidencyDemandPolicy()) {
+					const auto PlayerObject = PeerValue.PlayerValue->GetObjectId();
+					(void)Policy->RemoveFocus((static_cast<std::uint64_t>(PlayerObject.Generation) << 32) | PlayerObject.Slot);
+				}
 				if (Runtime->Players->RemoveSessionPlayer(PeerValue.PlayerValue)) ++Metrics.PlayersRemoved;
 			} else if (Configuration.Role == GameSessionRole::Client) {
 				if (Runtime) Runtime->Players->ClearTrustedLocalPlayer();
@@ -1518,6 +1522,28 @@ namespace gargantuan::network {
 				return;
 			if (!DrainFailures()) return;
 			CurrentTick = SimulationTick;
+			// Residency consumes committed server Character facts, independently of
+			// 3E relevance and 3J accepted materialization. Full Player ObjectId
+			// generations scope focus lifetime across disconnect/session replacement.
+			if (Configuration.Role == GameSessionRole::Server && Runtime) {
+				if (auto *Policy = Runtime->GetResidencyDemandPolicy()) {
+					for (const auto &[Connection, PeerValue] : Peers) {
+						if (!PeerValue.PlayerValue) continue;
+						const auto PlayerObject = PeerValue.PlayerValue->GetObjectId();
+						const auto Focus = (static_cast<std::uint64_t>(PlayerObject.Generation) << 32) | PlayerObject.Slot;
+						const auto CharacterValue = PeerValue.PlayerValue->GetCharacter().value_or(nullptr);
+						if (PeerValue.Phase != PeerPhase::Ready || !CharacterValue || CharacterValue->GetDestroyed() ||
+							CharacterValue->IsDestroying() || CharacterValue->GetDataModel() != Runtime->DataModel) {
+							(void)Policy->RemoveFocus(Focus);
+							continue;
+						}
+						const auto Kinematic = std::dynamic_pointer_cast<KinematicCharacter>(CharacterValue);
+						if (!Policy->UpdateFocus(Focus, CharacterValue->GetCFrame().Position,
+							Kinematic ? Kinematic->GetVelocity() : glm::vec3(0.0f)))
+							(void)Policy->RemoveFocus(Focus);
+					}
+				}
+			}
 			for (auto &[Connection, PeerValue] : Peers)
 				if (PeerValue.Phase == PeerPhase::Ready) ObserveOrdinaryQueue(Connection, PeerValue, ServiceTime());
 			if (IsPooled() && Replication) {

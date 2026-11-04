@@ -102,6 +102,44 @@ namespace gargantuan {
 	[[nodiscard]] PackageContentManifestResult ParsePackageContentManifest(std::string_view Encoded);
 	[[nodiscard]] bool IsValidPackageContentKey(std::string_view Value);
 
+	inline constexpr std::size_t MaximumPackageCoarseQueryCells = 4'096;
+	inline constexpr std::size_t MaximumPackageCoarseQueryMembershipVisits = 262'144;
+	inline constexpr std::size_t MaximumPackageCoarseIndexMemberships = 1'048'576;
+	inline constexpr std::size_t MaximumPackageCoarseIndexCells = 262'144;
+
+	struct PackageCoarseQueryLimits final {
+		std::size_t MaximumCells = MaximumPackageCoarseQueryCells;
+		std::size_t MaximumMembershipVisits = 4'096;
+		std::size_t MaximumResults = 1'024;
+	};
+
+	enum class PackageCoarseQueryStatus : std::uint8_t {
+		Complete,
+		More,
+		InvalidInput,
+		InvalidCursor,
+		QueryCellLimit,
+		AllocationFailure,
+	};
+
+	// A cursor belongs to one immutable index and one exact query. Reusing it
+	// with a replacement index, space, or volume is rejected.
+	struct PackageCoarseQueryCursor final {
+		std::uint64_t IndexEpoch = 0;
+		std::string PackageSpaceKey;
+		PackageCoarseBounds Bounds;
+		std::size_t NextCell = 0;
+		std::size_t NextMembership = 0;
+	};
+
+	struct PackageCoarseQueryPage final {
+		PackageCoarseQueryStatus Status = PackageCoarseQueryStatus::InvalidInput;
+		std::vector<std::size_t> Entries;
+		std::optional<PackageCoarseQueryCursor> NextCursor;
+		std::size_t CellsVisited = 0;
+		std::size_t MembershipVisits = 0;
+	};
+
 	class PackageContentCoarseIndex final {
 	  public:
 		explicit PackageContentCoarseIndex(const PackageContentManifest &Manifest, float CellSize = 512.0f);
@@ -111,6 +149,15 @@ namespace gargantuan {
 			std::size_t MaximumResults
 		) const;
 		[[nodiscard]] std::size_t GetMembershipCount() const;
+		// Pages are deterministic but may repeat an entry across cells or pages.
+		// Callers that publish a complete candidate set must deduplicate and wait
+		// for Complete before applying a demand/release delta.
+		[[nodiscard]] PackageCoarseQueryPage QueryPage(
+			std::string_view PackageSpaceKey,
+			const PackageCoarseBounds &Bounds,
+			const PackageCoarseQueryLimits &Limits,
+			const std::optional<PackageCoarseQueryCursor> &Cursor = std::nullopt
+		) const;
 
 	  private:
 		struct Impl;

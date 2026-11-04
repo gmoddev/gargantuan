@@ -108,6 +108,10 @@ them in scope rather than silently selecting one source.
 
 ## Current architecture routing
 
+- [Trusted residency demand Foundation 3M](../../devdocs/CurrentArchitecture/TrustedResidencyDemandFoundation3M.md)
+  documents bounded default-space policy layered over the existing 3L lifecycle;
+  qualification scope is stated separately from physical/provider certification.
+
 The following documents describe recently implemented, source-verified slices:
 
 - [Runtime schema](../src/content/docs/developing/runtime-schema.mdx)

@@ -902,6 +902,21 @@ if(BUILD_TESTING)
 	add_executable(gargantuan_content_availability_tests "tests/ContentAvailabilityTests.cpp")
 	target_link_libraries(gargantuan_content_availability_tests PRIVATE gargantuan_core)
 	add_test(NAME gargantuan_content_availability COMMAND gargantuan_content_availability_tests)
+	add_executable(gargantuan_content_coarse_policy_tests "tests/PackageContentCoarsePolicyTests.cpp")
+	target_link_libraries(gargantuan_content_coarse_policy_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_content_coarse_policy COMMAND gargantuan_content_coarse_policy_tests)
+	add_executable(gargantuan_residency_demand_policy_tests "tests/ResidencyDemandPolicyTests.cpp")
+	target_link_libraries(gargantuan_residency_demand_policy_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_residency_demand_policy COMMAND gargantuan_residency_demand_policy_tests)
+	add_executable(gargantuan_residency_demand_integration_tests "tests/ResidencyDemandIntegrationTests.cpp")
+	target_link_libraries(gargantuan_residency_demand_integration_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_residency_demand_integration COMMAND gargantuan_residency_demand_integration_tests)
+	add_executable(gargantuan_residency_demand_benchmark "tests/ResidencyDemandBenchmark.cpp")
+	target_link_libraries(gargantuan_residency_demand_benchmark PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_residency_demand_benchmark_smoke COMMAND gargantuan_residency_demand_benchmark --quick)
+	set_tests_properties(gargantuan_content_coarse_policy gargantuan_residency_demand_policy
+		gargantuan_residency_demand_integration gargantuan_residency_demand_benchmark_smoke
+		PROPERTIES LABELS "content;residency;runtime" TIMEOUT 180)
 	add_executable(gargantuan_content_ownership_tests "tests/ContentAvailabilityTests.cpp")
 	target_compile_definitions(gargantuan_content_ownership_tests PRIVATE GARGANTUAN_TEST_REUSE_ALLOCATION=1)
 	target_link_libraries(gargantuan_content_ownership_tests PRIVATE gargantuan_core)
@@ -1136,6 +1151,10 @@ if(BUILD_TESTING)
 			gargantuan_character_networking_tests
 			gargantuan_character_networking_benchmark
 			gargantuan_content_availability_tests
+			gargantuan_content_coarse_policy_tests
+			gargantuan_residency_demand_policy_tests
+			gargantuan_residency_demand_integration_tests
+			gargantuan_residency_demand_benchmark
 			gargantuan_content_ownership_tests
 			gargantuan_content_availability_benchmark
 			gargantuan_game_session_benchmark
