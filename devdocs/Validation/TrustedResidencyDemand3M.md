@@ -1,5 +1,11 @@
 # Foundation 3M qualification
 
+This is a pinned historical qualification receipt for PR #13. The subsequent
+[streaming readiness integration](../CurrentArchitecture/TrustedResidencyStreamingReadiness3M.md)
+changes official startup to exact shared-snapshot ownership and adds optional
+diagnostics. The binding and construction measurements below describe the pinned
+source, not a new measurement or qualification of that integration.
+
 ## Source and scope
 
 Measured implementation source: `1cacc5ac200d209ef4a2c126e98127876b4273dd`, based on

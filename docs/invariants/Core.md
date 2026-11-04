@@ -468,7 +468,17 @@ Tests should enforce them where practical.
    native owners, hard dependencies, pins and ordinary 3L lifecycle remain intact.
 7. Policy work is bound to one immutable manifest and service lifetime. Engine
    joins immutable policy preparation before the content owner stops; stopped or
-   replacement lifetimes cannot accept an old policy result.
+   replacement lifetimes cannot accept an old policy result. Official shared
+   binding requires pointer and shared ownership equivalence. The native value
+   compatibility path verifies complete manifest contents once before binding.
+8. Detached spatial metadata inspection is evidence about compatibility only.
+   Missing, mismatched or underbounded evidence cannot create conservative
+   geometry, publish manifest bounds or close KI-3M-001 without a qualified
+   producer and package integration.
+9. Streaming diagnostics are opt-in bounded value projections. Reading them
+   cannot advance policy, acquire/release content, mutate the DataModel or expire
+   an unrelated editor transaction. Observer work is outside policy phase timing;
+   logical payload estimates do not claim complete process memory accounting.
 
 ## Qualification and evidence
 

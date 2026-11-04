@@ -26,14 +26,19 @@ request ownership. Native Engine composition opts in with the internal
 `EnableResidencyDemandPolicy` setting in `NetworkServer` mode. Existing 3L
 fixtures retain their original composition. Once enabled, the Engine prepares
 one policy after the verified manifest becomes available. Fully resident and
-client compositions retain their existing behavior. Preparation copies immutable
-manifest metadata and constructs its index on one bounded asynchronous task;
-Main polls for completion without waiting. The task retains one immutable
-manifest snapshot, independent of provider and residency state; even a direct
-native service stop cannot invalidate that metadata. Publication checks that
-the exact snapshot is still current. Destruction joins preparation before
-stopping its content owner. Failed preparation emits a structured diagnostic
-and disables automatic policy; no partial index or demand is installed.
+client compositions retain their existing behavior. Preparation shares the
+3L-validated immutable manifest snapshot and constructs its index on one bounded
+asynchronous task; Main polls for completion without waiting. The task retains
+metadata independent of provider and residency state; even a direct native
+service stop cannot invalidate that metadata. Publication and first service
+binding require the exact pointer and shared ownership control block. The
+official first binding therefore avoids a manifest-entry comparison on Main;
+the defensive value constructor retains a one-time full comparison.
+Destruction joins preparation before stopping its content owner. Failed
+preparation emits a structured diagnostic, drops Engine's saved snapshot and
+disables automatic policy; no partial index or demand is installed. The
+[streaming readiness integration](TrustedResidencyStreamingReadiness3M.md)
+records this startup and diagnostic contract.
 
 GameSession supplies only ready peers' current authoritative Character position
 and controller-owned accepted velocity. Full Player ObjectId slot and generation
@@ -61,9 +66,11 @@ actual geometry. For MeshParts, verified asset-local bounds must be transformed
 by `CFrame * Size` and unioned with the rest of the unit; Size does not normalize
 canonical mesh coordinates. The existing package writer's Size-box approximation
 can under-bound such meshes ([KI-3M-001](../../KNOWN_ISSUES.md#ki-3m-001-packaged-mesh-coarse-bounds-need-conservative-geometry-metadata)).
-3M does not read collision artifacts or repair payload geometry. Affected units
-require conservative authored metadata, trusted critical demand or fully resident
-composition until a separate metadata integration is qualified.
+3M's detached native compatibility adapter can inspect supplied conservative
+bounds but does not produce, install or qualify them. The issue remains open;
+affected units require conservative authored metadata, trusted critical demand
+or fully resident composition until a separate metadata producer is qualified.
+3M does not read collision artifacts or repair payload geometry.
 
 Queries have separate budgets for cells, memberships and emitted candidates.
 A cursor is bound to an immutable index epoch, exact space and query volume.

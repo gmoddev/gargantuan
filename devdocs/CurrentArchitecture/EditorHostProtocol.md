@@ -98,6 +98,7 @@ UTF-8 bytes with no NUL.
 | `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion and optional project `ExpectedRevision`. |
 | `StartPlaySession` / `StopPlaySession` | Starts or destroys the one isolated local runtime from current authoritative in-memory state using an exact engine-issued session identity. |
 | `GetPlaySessionState` / `PollPlayDiagnostics` | Observes bounded lifecycle and runtime diagnostics without granting mutation authority. |
+| `ConfigureStreamingDiagnostics` / `GetStreamingDiagnostics` | Optional version-1, exact-Play-session opt-in collection and bounded read-only residency diagnostics. |
 | `SendPlayInput` | Sends the closed focus/key/pointer/wheel/touch/committed-text/preedit `HostEvent` subset to the exact active runtime and returns any bounded relative-pointer or text-input host state, including secure/multiline/autocorrect policy without text contents. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
@@ -164,6 +165,91 @@ Replacing an open project closes and releases the prior live DataModel and
 viewport snapshot before entering the next schema candidate lifecycle. If the
 replacement PreRun or project load fails, no old world remains live against the
 new or prior registry; a later `OpenProject` may construct a fresh document.
+
+## Streaming diagnostics extension, version 1
+
+`Handshake.Result.Capabilities` contains `StreamingDiagnostics` and
+`Handshake.Result.StreamingDiagnosticsVersion` is `1` on a supporting host.
+This is an optional protocol-1 extension. Clients must check both before using
+it. The launch `SessionToken` still applies to every call. The method further
+requires `ReadDataModel`; configuration also requires `EditorCommands`. Neither
+method accepts an object, content key, focus, provider, priority, acquisition
+command or project mutation. There is no Studio-side implementation in this
+repository.
+
+`ConfigureStreamingDiagnostics.Params` has exactly `PlaySessionId` and
+`Enabled`. `PlaySessionId` is the canonical decimal string issued by
+`StartPlaySession`; it must name the currently active owned session. `Enabled`
+is required boolean. The call opts a fixed native timing ring in or out and
+returns the same bounded snapshot envelope as a read. Collection is disabled
+by default; disabling drops its history. This operation does not edit the
+authoritative document or journal. It and `GetStreamingDiagnostics` are exempt
+from the ordinary legacy transaction-expiry check, so observation cannot
+commit an unrelated expired authoring group.
+
+`GetStreamingDiagnostics.Params` requires that exact `PlaySessionId` and accepts
+only optional unsigned `StartIndex` (default `0`, maximum `65,536`),
+`MaximumUnits` (default `64`, maximum `128`) and `MaximumTimingSamples`
+(default `32`, maximum `128`). Zero is valid for either count. `StartIndex`
+denotes a manifest index, not an offset into a materialized result. Returned
+`Policy.Units` are ordered by manifest index, include only current demand
+records at or after it, and contain at most `MaximumUnits` rows. `NextIndex`
+is the next index or null; use it for the next page. `Policy.TimingSamples` is a
+chronological tail of at most `MaximumTimingSamples` samples from a fixed
+128-sample ring. A read never advances policy evaluation or simulation.
+
+Both successes return `Result.PlaySessionId` and `Result.Diagnostics`. The
+diagnostic object has `Version: 1`, `Enabled`, `Status`, `SimulationTick`,
+`ContentConfigured`, `ManifestAvailable`, `LastContentStepNanoseconds`,
+`Policy`, and `Content`. Status is one of `Disabled`, `NotConfigured`,
+`AwaitingManifest`, `Preparing`, `Active`, `PreparationFailed`, or `Stopped`.
+When disabled, the projection carries no policy rows or timing history. A Play
+session without an on-demand server policy can report `NotConfigured`; the
+extension does not create a streaming provider or policy.
+
+`Policy` includes `Enabled`, `Stopped`, `Tick`, `Revision`, `ManifestUnits`,
+`Focuses`, `PendingFocuses`, `UnhealthyFocuses`, `Candidates`, `DemandRecords`,
+`DesiredUnits`, `GraceExpiryRecords`, `OwnedRequests`, `PendingDeltas`,
+`Requests`, `Releases`, `RequestDeferrals`, `StaleDecisions`, `QueryFailures`,
+`ServiceBindingFailures`, `BudgetLimitedTicks`, `MemoryAccounting`, the three
+logical-byte fields, `Limits`, `Units`, `NextIndex`, and `TimingSamples`.
+`MemoryAccounting` is `LogicalPayloadV1`; `PolicyStateLogicalBytes`,
+`ReferencedManifestEntryBytes`, and `IndexMembershipPayloadBytes` omit
+allocator, container-node, map-cell and separately allocated string overhead.
+`Limits` contains `Focuses`, `CandidatesPerFocus`, `QueryPagesPerTick`,
+`QueryCellsPerTick`, `MembershipVisitsPerTick`, `DemandDeltasPerTick`,
+`CandidateRevalidationsPerTick`, and `RequestEligibilityVisitsPerTick`.
+
+Each unit row contains `ManifestIndex`, `Key`, `Class` (`Critical`, `Gameplay`,
+`Predictive`, `Presentation`, or `Speculative`), nullable `DeadlineTick`,
+`Revision`, `DistanceSquared`, `CostBytes`, `Desired`, `PolicyRequestOwned`,
+`InGrace`, nullable `AvailabilityState`, nullable `GraceUntilTick`, and
+`PendingRelease`. Availability states are the existing 3L states from
+`Unavailable` through `Failed`; a policy-owned request does not imply a
+resident unit or a peer Known state. Timing rows contain `Tick`,
+`EvaluationNanoseconds`, `ReconciliationNanoseconds`, `MembershipVisits`,
+`Requests`, `Releases`, and `BudgetFlags`. Set budget bits identify cells (1),
+memberships (2), focus pages (4), demand deltas (16), and request eligibility
+visits (32). Bit 8 is defined for candidate revalidation but this implementation
+does not emit it. The phase durations end before observer aggregation and JSON
+encoding.
+
+`Content` has `Requests`, `Acquisitions`, `Admissions`, `Evictions`, `Failures`,
+`Cancellations`, `CacheHits`, `CompletionCapacityDeferrals`,
+`AdmissionDeferrals`, `DecodedCapacityDeferrals`, `ReservedCompletionBytes`,
+`CachedPayloadBytes`, `DecodedDocumentBytes`, and `RetainedRecords`. Its
+`Timing` fields are `AcceptedToQueued`, `QueuedToProviderStart`,
+`Provider`, `Verification`, `WorkerPreparation`, `PreparationToCommit`,
+`Commit`, `EndToEnd`, and `Step`, each with `Samples`, `TotalMicroseconds`,
+and `MaximumMicroseconds`. Provider duration includes the provider boundary;
+these values do not include a remote client's materialization or presentation.
+
+Unknown fields, negative/nonintegral/oversized counts, a missing or invalid
+`Enabled`, and the ordinary malformed envelope return `MalformedRequest`.
+Wrong launch token or missing capability returns `Unauthorized`. An absent,
+stopped or mismatched Play session returns `StalePlaySession`. The usual 1 MiB
+request and 8 MiB response limits still apply. The response carries only
+bounded value data; it exposes no provider credentials or raw engine pointer.
 
 ## Prepared native property batches, capability version 1
 

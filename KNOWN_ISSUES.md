@@ -24,6 +24,13 @@ when the writer has mesh metadata. Until that metadata is available, affected
 units need trusted critical demand or fully resident composition. Foundation 3M
 consumes authored bounds and cannot infer missing geometry by scanning payloads,
 changing Asset 2B collision contracts, or injecting ghost runtime projections.
+
+The isolated `ResidencySpatialMetadata` v1 native consumer can compare a supplied
+sorted package/key/digest/space/AABB proof with a validated manifest and report
+missing or underbounded units. It does not provide the geometry calculation,
+package-writer integration or qualified metadata producer, so the issue remains
+open even when a detached compatibility fixture passes.
+
 Closure requires a separately scoped package/asset metadata correction and a
 non-normalized imported/generated mesh regression; 3M's current scale receipt
 does not certify this integration.

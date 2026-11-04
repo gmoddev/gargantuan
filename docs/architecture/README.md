@@ -111,6 +111,9 @@ them in scope rather than silently selecting one source.
 - [Trusted residency demand Foundation 3M](../../devdocs/CurrentArchitecture/TrustedResidencyDemandFoundation3M.md)
   documents bounded default-space policy layered over the existing 3L lifecycle;
   qualification scope is stated separately from physical/provider certification.
+- [Trusted residency streaming readiness 3M](../../devdocs/CurrentArchitecture/TrustedResidencyStreamingReadiness3M.md)
+  documents exact shared-manifest startup, detached metadata compatibility and
+  bounded Engine/EditorHost diagnostics. KI-3M-001 remains open.
 
 The following documents describe recently implemented, source-verified slices:
 
