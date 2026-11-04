@@ -75,10 +75,11 @@ namespace gargantuan {
 		std::expected<SolidCompilation, AssetDiagnostic> BuildCandidate(
 			const manifold::Manifold &Solid, std::size_t MaximumOutputTriangles
 		) {
-			const auto Raw = Solid.GetMeshGL64();
-			if (Raw.NumTri() == 0) return std::unexpected(Error("EmptySolid", "Solid result has no surface"));
-			if (Raw.NumTri() > MaximumOutputTriangles || Raw.NumTri() > AssetLimits::MaximumMeshIndices / 3)
+			const auto TriangleCount = Solid.NumTri();
+			if (TriangleCount == 0) return std::unexpected(Error("EmptySolid", "Solid result has no surface"));
+			if (TriangleCount > MaximumOutputTriangles || TriangleCount > AssetLimits::MaximumMeshIndices / 3)
 				return std::unexpected(Error("GeometryLimit", "Solid output exceeds the triangle limit"));
+			const auto Raw = Solid.GetMeshGL64();
 			if (Raw.numProp < 3 || Raw.triVerts.size() % 3 != 0 ||
 				Raw.vertProperties.size() % Raw.numProp != 0)
 				return std::unexpected(Error("InvalidGeometry", "Boolean kernel returned malformed mesh arrays"));
@@ -327,6 +328,16 @@ namespace gargantuan {
 					return std::unexpected(KernelError(Status, Node.Id));
 				if (Result.NumTri() > std::min(Limits.MaximumIntermediateTriangles, std::size_t{32768}))
 					return std::unexpected(Error("GeometryLimit", "Solid node exceeds intermediate triangle limit"));
+				if (!Result.IsEmpty()) {
+					const auto Bounds = Result.BoundingBox();
+					const auto Valid = [](manifold::vec3 Value) {
+						return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z) &&
+							std::abs(Value.x) <= MaximumCoordinate && std::abs(Value.y) <= MaximumCoordinate &&
+							std::abs(Value.z) <= MaximumCoordinate;
+					};
+					if (!Valid(Bounds.min) || !Valid(Bounds.max))
+						return std::unexpected(Error("GeometryLimit", "Evaluated solid node exceeds coordinate limit"));
+				}
 				Compiled.emplace(Index, Result);
 				return Result;
 			};

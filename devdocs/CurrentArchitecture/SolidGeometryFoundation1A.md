@@ -8,6 +8,7 @@ related_code:
   - src/geometry/SolidAssetImporter.cpp
   - cmake/Manifold.cmake
   - tests/SolidGeometryTests.cpp
+  - tests/SolidGeometryBenchmark.cpp
 ---
 
 # Solid geometry foundation 1A
@@ -99,5 +100,14 @@ who needs retained source materials must use the ordinary imported Mesh path.
 imported-operand denial, whole-graph validation, cancellation, limits, and
 repeat hashes. `GARGANTUAN_SOLID_BENCH=1` runs a small repeated Boolean timing
 hook; `GARGANTUAN_SOLID_FUZZ=1` runs 128 seeded valid and invalid graph cases.
+`SolidGeometryBenchmark` emits one JSON record per scenario with P50/P95/P99
+compile time, output triangles, repeat hash, and process current/peak memory.
+On Windows memory is private commit with the OS peak pagefile-usage counter;
+on Linux it is current/peak RSS. The before/after difference is observed
+retention, not an allocation count. The dedicated executable intentionally
+does not override the production kernel allocator; it does not claim complete
+C++ allocation accounting. `--stress` adds a near-limit admission case and
+128 seeded mutation cases. The cancellation result and join latency are
+reported even when a small graph finishes before cancellation is observed.
 The implementation remains pending qualification until those tests and
 the compound asset tests run on the integrated build.

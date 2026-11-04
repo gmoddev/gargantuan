@@ -215,6 +215,14 @@ int main() {
 	Check(CompileSolidGeometry(Thin).has_value(), "thin but representable solid compiles");
 	SolidGraph Huge{1, "huge", {Box("huge", {1e8f, 2, 2})}};
 	Check(!CompileSolidGeometry(Huge), "extreme input scale is rejected");
+	SolidGraph NestedOverflow{1, "empty", {
+		Box("base"), Move("first", "base", {90'000, 0, 0}),
+		Move("second", "first", {90'000, 0, 0}),
+		Boolean("empty", SolidNodeKind::Intersection, {"base", "second"}),
+	}};
+	const auto Overflow = CompileSolidGeometry(NestedOverflow);
+	Check(!Overflow && Overflow.error().Code == "GeometryLimit",
+		"nested transforms exceeding coordinate bounds reject before an empty final intersection");
 	{
 		const auto Importer = CreateSolidImporter();
 		AssetImportContext Context;
