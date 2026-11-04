@@ -1072,15 +1072,23 @@ int main(int ArgumentCount, char **Arguments) {
 		const bool Quick = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--quick";
 		const bool ReadinessQuick = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--readiness-quick";
 		const bool ReadinessLong = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--readiness-long";
+		const bool ReadinessStartup = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--readiness-startup";
 		const bool ReadinessPolicyLong = ArgumentCount == 2 &&
 			std::string_view(Arguments[1]) == "--readiness-policy-long";
 		const bool ReadinessServiceLong = ArgumentCount == 2 &&
 			std::string_view(Arguments[1]) == "--readiness-service-long";
-		if (ArgumentCount > 2 || (ArgumentCount == 2 && !Quick && !ReadinessQuick && !ReadinessLong &&
+		if (ArgumentCount > 2 || (ArgumentCount == 2 && !Quick && !ReadinessQuick && !ReadinessLong && !ReadinessStartup &&
 			!ReadinessPolicyLong && !ReadinessServiceLong))
 			throw std::invalid_argument("usage: ResidencyDemandBenchmark "
-				"[--quick|--readiness-quick|--readiness-long|--readiness-policy-long|--readiness-service-long]");
+				"[--quick|--readiness-quick|--readiness-startup|--readiness-long|--readiness-policy-long|--readiness-service-long]");
 		BootstrapNativeRuntimeSchema();
+		if (ReadinessStartup) {
+			std::cout << "[Content:ResidencyReadiness] mode=startup manifestEntries=1000,10000,65536"
+				<< " repetitions=3 provider=in-memory providerQualification=false" << '\n';
+			for (const auto Entries : {std::size_t{1'000}, std::size_t{10'000}, std::size_t{65'536}})
+				RunStartupComparison(Entries, 3);
+			return 0;
+		}
 		if (ReadinessPolicyLong || ReadinessServiceLong) {
 			std::cout << "[Content:ResidencyReadiness] mode="
 				<< (ReadinessPolicyLong ? "policy-long" : "service-long")
