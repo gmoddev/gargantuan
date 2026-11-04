@@ -7,10 +7,12 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <stop_token>
@@ -284,13 +286,16 @@ namespace gargantuan {
 				return std::unexpected(Error("Cancelled", "Solid compilation was cancelled before evaluation"));
 
 			manifold::ExecutionContext Execution;
+			std::mutex ObserverMutex;
+			std::condition_variable_any ObserverWake;
 			std::jthread Observer([&](std::stop_token Stop) {
 				while (!Stop.stop_requested()) {
 					if (Cancellation.IsCancelled() || std::chrono::steady_clock::now() >= Deadline) {
 						Execution.Cancel();
 						return;
 					}
-					std::this_thread::sleep_for(std::chrono::milliseconds(2));
+					std::unique_lock Lock(ObserverMutex);
+					ObserverWake.wait_for(Lock, Stop, std::chrono::milliseconds(2), [] { return false; });
 				}
 			});
 			std::unordered_map<std::size_t, manifold::Manifold> Compiled;

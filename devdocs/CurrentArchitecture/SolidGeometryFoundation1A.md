@@ -118,6 +118,15 @@ compile time, input/output triangles, evaluated pair counts, repeat hash, and
 process current/peak memory. The OS peak is a process-lifetime high-water
 mark; run `--scenario NAME` in a fresh process for an isolated peak. The
 `--full101` option uses 101 repetitions for useful percentile estimates.
+The pre-change Linux GCC 13 Release baseline supplied by the campaign's
+Source11 run used 101 calls per scenario: simple union P50/P95/P99 was
+2.104/2.122/2.139 ms, medium nested was 2.089/2.116/2.146 ms, complex union
+was 2.090/2.121/4.147 ms, and the 906304-pair intersection P50 was 30.925 ms.
+The small-scenario floor included an observer thread's 2 ms polling sleep
+at teardown. The observer now uses a stop-token-aware 2 ms wait, so its normal
+teardown wakes immediately while cancellation/deadline polling retains the
+same cadence. A speedup requires a new same-host, same-profile measurement;
+these pre-change figures do not establish a post-change result.
 On Windows memory is private commit with the OS peak pagefile-usage counter;
 on Linux it is current/peak RSS. The before/after difference is observed
 retention, not an allocation count. The dedicated executable intentionally
