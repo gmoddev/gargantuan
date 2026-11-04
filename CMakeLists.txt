@@ -205,7 +205,14 @@ set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(vendor/argparse SYSTEM)
-add_subdirectory(vendor/box3d SYSTEM)
+enable_language(C)
+include(cmake/Box3DCompatibility.cmake)
+GargantuanPrepareBox3DCompatibility("${CMAKE_CURRENT_SOURCE_DIR}/vendor/box3d" GARGANTUAN_BOX3D_SOURCE_DIR)
+add_subdirectory("${GARGANTUAN_BOX3D_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-build" SYSTEM)
+# Only the private implementation header changes. Keep the identical public API
+# include path stable for consumers and avoid recompiling unrelated core sources.
+set_property(TARGET box3d PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+	"$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/vendor/box3d/include>;$<INSTALL_INTERFACE:include>")
 add_subdirectory(vendor/glm SYSTEM)
 # The optional codec prototype is outside focused headless geometry qualification.
 # Its CMake 3.31 requirement must not become an unused native-test dependency.
@@ -750,6 +757,27 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_solid_allocation_probe PRIVATE gargantuan_core)
 	add_test(NAME gargantuan_solid_allocation_probe COMMAND gargantuan_solid_allocation_probe --scenario simple)
 	set_tests_properties(gargantuan_solid_allocation_probe PROPERTIES LABELS "geometry;allocation;headless" TIMEOUT 30)
+	add_executable(gargantuan_box3d_compatibility_tests "tests/Box3DCompatibilityTests.c")
+	target_compile_features(gargantuan_box3d_compatibility_tests PRIVATE c_std_17)
+	target_include_directories(gargantuan_box3d_compatibility_tests PRIVATE
+		"${GARGANTUAN_BOX3D_SOURCE_DIR}/src" "${GARGANTUAN_BOX3D_SOURCE_DIR}/include")
+	target_link_libraries(gargantuan_box3d_compatibility_tests PRIVATE box3d::box3d)
+	add_test(NAME gargantuan_box3d_compatibility COMMAND gargantuan_box3d_compatibility_tests)
+	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-guard-test")
+	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-smoke-test")
+	add_test(NAME gargantuan_box3d_source_guard COMMAND ${CMAKE_COMMAND}
+		"-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/Box3DCompatibilityGuard.cmake")
+	add_test(NAME gargantuan_box3d_source_smoke COMMAND ${CMAKE_COMMAND}
+		"-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+		"-DBOX3D_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/vendor/box3d"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/Box3DCompatibilitySmoke.cmake")
+	set_tests_properties(gargantuan_box3d_source_guard PROPERTIES
+		WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-guard-test")
+	set_tests_properties(gargantuan_box3d_source_smoke PROPERTIES
+		WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-smoke-test")
+	set_tests_properties(gargantuan_box3d_compatibility gargantuan_box3d_source_guard gargantuan_box3d_source_smoke
+		PROPERTIES LABELS "physics;dependency;headless" TIMEOUT 30)
 	if(WIN32)
 		target_link_libraries(gargantuan_solid_geometry_benchmark PRIVATE Psapi)
 		target_link_libraries(gargantuan_mesh_collision_benchmark PRIVATE Psapi)
