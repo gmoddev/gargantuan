@@ -16,5 +16,8 @@ namespace gargantuan {
 		std::optional<ContentAvailabilityConfiguration> Content;
 		bool AudioEnabled = false;
 		RuntimeMode Mode = RuntimeMode::Offline;
+		// The official on-demand server enables 3M. Native 3L fixtures and
+		// manual-demand hosts keep their established request ownership.
+		bool EnableResidencyDemandPolicy = false;
 	};
 }

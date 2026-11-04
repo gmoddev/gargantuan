@@ -602,6 +602,7 @@ namespace gargantuan::host {
 					.Content = std::move(Content),
 					.AudioEnabled = false,
 					.Mode = RuntimeMode::NetworkServer,
+					.EnableResidencyDemandPolicy = !FarmMode && ContentLifecycleKey.empty() && StopInFlightKey.empty(),
 				}
 			);
 #if defined(GARGANTUAN_WITH_GNS)

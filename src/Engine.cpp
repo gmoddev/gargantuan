@@ -151,7 +151,8 @@ namespace gargantuan {
 		const bool PreloadAllContent = ProviderConfiguration.Content &&
 			ProviderConfiguration.Content->Mode == ContentResidencyMode::FullyResident;
 		ResidencyPolicyEnabled = ProviderConfiguration.Mode == RuntimeMode::NetworkServer &&
-			ProviderConfiguration.Content && ProviderConfiguration.Content->Mode == ContentResidencyMode::OnDemand;
+			ProviderConfiguration.EnableResidencyDemandPolicy && ProviderConfiguration.Content &&
+			ProviderConfiguration.Content->Mode == ContentResidencyMode::OnDemand;
 		const auto ContentStartupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 		if (ProviderConfiguration.Content) {
 			Content = std::make_unique<ContentAvailabilityService>(

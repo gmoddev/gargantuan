@@ -19,8 +19,12 @@ retains peer relevance; 3J retains accepted structural materialization.
 
 ## Composition and authority
 
-An Engine in trusted `NetworkServer` mode with `OnDemand` content prepares one
-policy after the verified manifest becomes available. The fully resident and
+The official server enables policy for ordinary `OnDemand` content. Its explicit
+manual lifecycle/stop and historical Farm qualification paths retain manual
+request ownership. Native Engine composition opts in with the internal
+`EnableResidencyDemandPolicy` setting in `NetworkServer` mode. Existing 3L
+fixtures retain their original composition. Once enabled, the Engine prepares
+one policy after the verified manifest becomes available. Fully resident and
 client compositions retain their existing behavior. Preparation copies immutable
 manifest metadata and constructs its index on one bounded asynchronous task;
 Main polls for completion without waiting. Destruction joins that task before

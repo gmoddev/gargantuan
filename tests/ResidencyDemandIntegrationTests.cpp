@@ -141,7 +141,8 @@ namespace {
 		PlayersValue->SetDefaultControllerEnabled(false);
 		PlayersValue->SetDefaultCameraEnabled(false);
 		HeadlessRenderer Renderer(Vector2(32, 32));
-		Engine Runtime(World, &Renderer, {}, {.Content = Fixture.Configuration(), .Mode = RuntimeMode::NetworkServer});
+		Engine Runtime(World, &Renderer, {}, {.Content = Fixture.Configuration(), .Mode = RuntimeMode::NetworkServer,
+			.EnableResidencyDemandPolicy = true});
 		Runtime.ProcessService->Alive = true;
 		auto Network = SimulatedNetwork::Create({});
 		GameSessionConfiguration ServerConfig;
