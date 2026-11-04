@@ -17,6 +17,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <stdexcept>
@@ -301,6 +302,29 @@ namespace {
 			Runtime.GetResidencyDemandPolicy() && ClientRuntime; }, "network streaming session did not become ready");
 		Check(Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 0,
 			"connected client without authoritative Character gained policy focus");
+		using Clock = std::chrono::steady_clock;
+		auto WaitForUnit = [&](std::string_view Marker, std::string_view Key, const char *Name,
+			Clock::time_point Trigger, const char *Message) {
+			std::optional<Clock::time_point> CasResident;
+			std::optional<Clock::time_point> ClientMaterialized;
+			std::size_t Observations = 0;
+			Until(Advance, [&] {
+				++Observations;
+				const auto Observed = Clock::now();
+				const bool IsResident = Runtime.Content->GetState(Key) == ContentResidencyState::Resident;
+				const bool IsMaterialized = ClientRuntime->Workspace->FindFirstChild(Name, false) != nullptr;
+				if (!CasResident && IsResident)
+					CasResident = Observed;
+				if (!ClientMaterialized && IsMaterialized)
+					ClientMaterialized = Observed;
+				return IsResident && IsMaterialized;
+			}, Message);
+			std::cout << "[Content:StreamingScenario] movement=" << Marker
+				<< " casResidentUs=" << std::chrono::duration_cast<std::chrono::microseconds>(*CasResident - Trigger).count()
+				<< " clientMaterializedUs=" << std::chrono::duration_cast<std::chrono::microseconds>(
+					*ClientMaterialized - Trigger).count()
+				<< " observations=" << Observations << " marker=simulated-network-observation\n";
+		};
 		const auto PlayerValue = Runtime.Players->GetPlayers().front();
 		auto CharacterValue = std::make_shared<KinematicCharacter>();
 		auto RootPart = std::make_shared<Part>();
@@ -310,18 +334,18 @@ namespace {
 		CharacterValue->SetRootPart(RootPart);
 		CharacterValue->ApplyRuntimeTransform(CFrame(0, 0, 0));
 		CharacterValue->SetParent(Runtime.Workspace);
+		const auto InitialTrigger = Clock::now();
 		PlayerValue->SetCharacter(CharacterValue);
-		Until(Advance, [&] { return Runtime.Content->GetState("cell/00") == ContentResidencyState::Resident &&
-			ClientRuntime->Workspace->FindFirstChild("StreamingUnit_0", false); },
+		WaitForUnit("initial", "cell/00", "StreamingUnit_0", InitialTrigger,
 			"first admitted cell did not reach accepted client materialization");
 		Check(Server.GetMetrics().ReadyPeers == 1, "content admission disrupted ready peer");
+		const auto TraverseTrigger = Clock::now();
 		CharacterValue->ApplyRuntimeTransform(CFrame(1024, 0, 0));
-		Until(Advance, [&] { return Runtime.Content->GetState("cell/02") == ContentResidencyState::Resident &&
-			ClientRuntime->Workspace->FindFirstChild("StreamingUnit_2", false); },
+		WaitForUnit("traverse", "cell/02", "StreamingUnit_2", TraverseTrigger,
 			"second cell did not reach accepted client materialization");
+		const auto TeleportTrigger = Clock::now();
 		CharacterValue->ApplyRuntimeTransform(CFrame(2048, 0, 0));
-		Until(Advance, [&] { return Runtime.Content->GetState("cell/04") == ContentResidencyState::Resident &&
-			ClientRuntime->Workspace->FindFirstChild("StreamingUnit_4", false); },
+		WaitForUnit("teleport", "cell/04", "StreamingUnit_4", TeleportTrigger,
 			"teleport cell did not reach accepted client materialization");
 		Check(Server.GetMetrics().SpatialMembershipCount >= 2,
 			"admitted Parts did not enter normal spatial projection");
