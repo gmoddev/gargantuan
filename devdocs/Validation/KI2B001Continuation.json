@@ -20,10 +20,10 @@
   "LocalArtifacts": "C:/Users/aiden/.codex/artifacts/asset-geometry-20261104",
   "FinalLocalEvidence": {
     "QualificationArtifact": "KI001-Candidate17-Qualification.json",
-    "QualificationSHA256": "6DE2F95D2AA180BD4574AC8E17D51D52D786BA49484F0D57D73EFADC5834DD74",
+    "QualificationSHA256": "DA4DD3DE17DF08EDE3D2448062073ABE0AFABD6C2A6551B2D9A109BB1151326C",
     "LogManifest": "KI001-Candidate17-LogManifest.json",
-    "LogManifestSHA256": "9D9BFD833A275CB1EBF8229AEEC80BEC52EB12AEF9C3777E5BA88BE35B8FDAAA",
-    "HashedRawFiles": 176,
+    "LogManifestSHA256": "5C70A6D59F8DE9E3E7EAB769270CD4599F09782A9D2C5E4BDE72E4FBFBA0826F",
+    "HashedRawFiles": 177,
     "ZeroExitFinalBuildTestBenchmarkChildren": 18,
     "BenchmarkProcesses": 4,
     "WindowsFocused": "10/10",

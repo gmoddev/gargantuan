@@ -142,9 +142,11 @@ hosted Clang 19 profile. Local Windows GNS is disabled; real transport is gated
 by the final hosted workflows.
 
 The final aggregate `KI001-Candidate17-Qualification.json` has SHA-256
-`6DE2F95D2AA180BD4574AC8E17D51D52D786BA49484F0D57D73EFADC5834DD74`.
-`KI001-Candidate17-LogManifest.json` binds 176 raw files, SHA-256
-`9D9BFD833A275CB1EBF8229AEEC80BEC52EB12AEF9C3777E5BA88BE35B8FDAAA`.
+`DA4DD3DE17DF08EDE3D2448062073ABE0AFABD6C2A6551B2D9A109BB1151326C`.
+`KI001-Candidate17-LogManifest.json` binds 177 raw files, SHA-256
+`5C70A6D59F8DE9E3E7EAB769270CD4599F09782A9D2C5E4BDE72E4FBFBA0826F`.
+This frozen revision includes the explicit excluded-ASan16 no-op diagnostic note;
+the measured run results are unchanged from the initial 176-file packet.
 Eighteen final build/test/benchmark child receipts exit zero. The four final
 benchmark processes are distinct serial default/stress runs on each host.
 The original Box3D sources are unchanged; private allocator hashes match across
