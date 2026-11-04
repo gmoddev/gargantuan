@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -264,6 +265,77 @@ namespace {
 		Check(Residency.ActiveResources == 0 && Residency.ActiveConsumers == 0 && Residency.NativeMeshBytes == 0 &&
 			Residency.FailedAdmissions >= 1, "collision resource retirement and failed admission are accounted");
 		Check(!World.IsBodyValid(First), "destroyed mesh body identity is stale");
+	}
+
+	void TestDenseMeshContactCandidateOverflow() {
+		// Box3D's mesh BVH visits lower-Y leaves first. These 300 triangles
+		// overlap the Ball's expanded query AABB but sit beyond contact range.
+		// The real support is last in the higher-Y leaf, after the old 256-slot
+		// candidate cache would stop traversal.
+		struct Observation {
+			bool RayHitSupport = false;
+			int BeganContacts = 0;
+		};
+		auto RunFixture = [](bool Dense) {
+			std::vector<glm::vec3> Positions;
+			std::vector<std::uint32_t> Indices;
+			auto AddTriangle = [&](float Y, float OffsetX, float OffsetZ) {
+				const auto Base = static_cast<std::uint32_t>(Positions.size());
+				Positions.insert(Positions.end(), {
+					{-1.0f + OffsetX, Y, -1.0f + OffsetZ},
+					{OffsetX, Y, 1.0f + OffsetZ},
+					{1.0f + OffsetX, Y, -1.0f + OffsetZ},
+				});
+				Indices.insert(Indices.end(), {Base, Base + 1, Base + 2});
+			};
+			if (Dense) for (int Index = 0; Index < 300; ++Index)
+				AddTriangle(-0.05f, static_cast<float>(Index % 20) * 0.0001f,
+					static_cast<float>(Index / 20) * 0.0001f);
+			AddTriangle(0.0f, 0.0f, 0.0f);
+			auto Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+				.ResourceId = Dense ? "asset://dense-contact-overflow" : "asset://sparse-contact-reference",
+				.ContentRevision = 1,
+				.Positions = std::make_shared<const std::vector<glm::vec3>>(std::move(Positions)),
+				.Indices = std::make_shared<const std::vector<std::uint32_t>>(std::move(Indices)),
+			});
+			PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+			PhysicsBodyDesc Floor;
+			Floor.Anchored = true;
+			Floor.Shape = {.Kind = PhysicsShapeKind::StaticTriangleMesh, .Size = {1.0f, 1.0f, 1.0f}, .Mesh = Mesh};
+			const auto FloorId = World.CreateBody(Floor);
+			Check(FloorId.IsValid(), "dense-contact fixture admits its static mesh");
+			if (!FloorId.IsValid()) return Observation{};
+			const auto Ray = World.Raycast({
+				.Origin = {0.0f, 1.0f, 0.0f}, .Direction = {0.0f, -2.0f, 0.0f},
+				.Filter = {.Type = PhysicsQueryFilterType::Include, .Bodies = {FloorId}},
+			});
+			Observation Result;
+			Result.RayHitSupport = Ray.Succeeded() && Ray.HasHit() &&
+				Ray.Candidates.front().Body == FloorId && Near(Ray.Candidates.front().Position.y, 0.0f);
+			PhysicsBodyDesc Ball;
+			Ball.Shape = {.Kind = PhysicsShapeKind::Ball, .Size = {1.0f, 1.0f, 1.0f}};
+			Ball.Transform = CFrame(0.0f, 0.49f, 0.0f);
+			const auto BallId = World.CreateBody(Ball);
+			Check(BallId.IsValid(), "dense-contact fixture admits its overlapping dynamic Ball");
+			if (!BallId.IsValid()) return Result;
+			for (int Step = 0; Step < 8; ++Step) {
+				for (const auto &Contact : World.Step({}).Contacts)
+					if (Contact.Phase == PhysicsContactPhase::Began &&
+						((Contact.BodyA == FloorId && Contact.BodyB == BallId) ||
+						 (Contact.BodyA == BallId && Contact.BodyB == FloorId)))
+						++Result.BeganContacts;
+			}
+			return Result;
+		};
+		const auto Sparse = RunFixture(false);
+		const auto Dense = RunFixture(true);
+		std::cout << "[Physics:DenseContactRegression] decoys=300 cache=256 sparse_ray=" << Sparse.RayHitSupport
+			<< " dense_ray=" << Dense.RayHitSupport << " sparse_began=" << Sparse.BeganContacts
+			<< " dense_began=" << Dense.BeganContacts << '\n';
+		Check(Sparse.RayHitSupport && Dense.RayHitSupport,
+			"sparse and dense meshes retain the support triangle for filtered raycasts");
+		Check(Sparse.BeganContacts >= 1, "sparse support produces a dynamic Ball contact");
+		Check(Dense.BeganContacts >= 1, "dense support remains contactable after 300 irrelevant AABB candidates");
 	}
 
 	void TestMeshCollisionResidencyLimits() {
@@ -998,9 +1070,15 @@ int main() {
 		std::cerr << "Runtime schema bootstrap failed: " << Exception.what() << '\n';
 		return 1;
 	}
+	if (const auto *DenseOnly = std::getenv("GARGANTUAN_DENSE_CONTACT_REGRESSION");
+		DenseOnly && DenseOnly[0] == '1') {
+		TestDenseMeshContactCandidateOverflow();
+		return Failures == 0 ? 0 : 1;
+	}
 	TestNeutralContract();
 	TestBackendIdentityAndLifecycle();
 	TestStaticTriangleMeshBackend();
+	TestDenseMeshContactCandidateOverflow();
 	TestMeshCollisionResidencyLimits();
 	TestKinematicWorldQueries();
 	TestCommittedBodyUpdates();
