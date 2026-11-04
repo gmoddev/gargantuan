@@ -108,6 +108,11 @@ product squared is below `1e-10`, non-finite scaled coordinates, and transformed
 mesh vertices or body translation beyond 100,000 world units. This is the pinned
 Box3D float-coordinate sanity bound; rejected updates keep the prior shape,
 including transform-only updates.
+`CFrame` can contain a directly constructed non-rigid matrix. Static mesh
+collision requires unit orthogonal axes with positive handedness within
+`1e-5`; shear, reflection, and non-unit bases fail before native mutation.
+World-bound checks use the same normalized quaternion rotation as the Box3D
+adapter, so a matrix accepted by this gate is checked in the projected pose.
 
 Box3D creates mesh contacts only on static bodies. Unanchored MeshParts that
 request `StaticMesh` use the inherited Box collision, including anchor

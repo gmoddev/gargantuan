@@ -223,6 +223,24 @@ namespace {
 		Far.Transform = CFrame(100'001.0f, 2.0f, 0.0f);
 		Check(!World.UpdateBody(First, Far).Succeeded() && World.IsBodyValid(First),
 			"mesh outside the Box3D float coordinate bound preserves prior shape");
+		for (int Case = 0; Case < 3; ++Case) {
+			auto InvalidRotation = Description;
+			auto Rotation = glm::mat3(1.0f);
+			if (Case == 0) Rotation[0].y = 0.25f; // shear
+			if (Case == 1) Rotation[0].x = -1.0f; // reflection
+			if (Case == 2) Rotation[0].x = 1.25f; // non-unit basis
+			InvalidRotation.Transform = CFrame({0.0f, 6.0f, 0.0f}, Rotation);
+			Check(World.UpdateBody(First, InvalidRotation).Status == PhysicsOperationStatus::InvalidDescription &&
+				World.GetBodyState(First)->Description.Transform.FuzzyEq(Description.Transform),
+				"non-rigid mesh CFrame rejects before changing the old body transform");
+			const auto Prior = World.Raycast({
+				.Origin = {0.0f, 5.0f, 0.0f}, .Direction = {0.0f, -5.0f, 0.0f},
+				.Filter = {.Type = PhysicsQueryFilterType::Include, .Bodies = {First}},
+			});
+			Check(Prior.Succeeded() && Prior.HasHit() && Prior.Candidates.front().Body == First &&
+				Near(Prior.Candidates.front().Position.y, 2.0f),
+				"non-rigid mesh update leaves previous collider queryable at its old pose");
+		}
 		Description.Anchored = false;
 		Check(World.UpdateBody(First, Description).Status == PhysicsOperationStatus::InvalidDescription,
 			"dynamic triangle mesh request fails closed at neutral backend boundary");

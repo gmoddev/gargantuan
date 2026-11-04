@@ -36,11 +36,23 @@ namespace gargantuan {
 			return true;
 		}
 
+		[[nodiscard]] bool IsRigidRotation(const CFrame &Value) {
+			if (!IsFinite(Value)) return false;
+			constexpr float Tolerance = 1.0e-5f;
+			const auto &Rotation = Value.Rotation;
+			for (int Axis = 0; Axis < 3; ++Axis) {
+				if (std::abs(glm::dot(Rotation[Axis], Rotation[Axis]) - 1.0f) > Tolerance) return false;
+				for (int Other = Axis + 1; Other < 3; ++Other)
+					if (std::abs(glm::dot(Rotation[Axis], Rotation[Other])) > Tolerance) return false;
+			}
+			return std::abs(glm::dot(glm::cross(Rotation[0], Rotation[1]), Rotation[2]) - 1.0f) <= Tolerance;
+		}
+
 		[[nodiscard]] bool IsValidBodyDescription(const PhysicsBodyDesc &Description) {
 			if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh &&
 				(!Description.Anchored || !Description.Shape.Mesh ||
 				Description.Shape.Size.x < 0.01f || Description.Shape.Size.y < 0.01f ||
-				Description.Shape.Size.z < 0.01f)) return false;
+				Description.Shape.Size.z < 0.01f || !IsRigidRotation(Description.Transform))) return false;
 			return IsFinite(Description.Transform) && IsFinite(Description.Shape.Size) &&
 				Description.Shape.Size.x > 0.0f && Description.Shape.Size.y > 0.0f &&
 				Description.Shape.Size.z > 0.0f && std::isfinite(Description.Density) && Description.Density >= 0.0f;
@@ -69,9 +81,11 @@ namespace gargantuan {
 				Mesh->Indices->size() % 3 != 0) return false;
 			const auto OriginLength = glm::length(Description.Transform.Position);
 			if (!std::isfinite(OriginLength) || OriginLength > MaximumMeshCoordinate) return false;
+			const auto NativeRotation = glm::mat3_cast(Box3DConversions::FromBox3(
+				Box3DConversions::ToBox3(Description.Transform.ToQuaternion())));
 			for (const auto &Position : *Mesh->Positions) {
 				const auto Scaled = Position * Description.Shape.Size;
-				const auto WorldPosition = Description.Transform.Rotation * Scaled + Description.Transform.Position;
+				const auto WorldPosition = NativeRotation * Scaled + Description.Transform.Position;
 				const auto Distance = glm::length(WorldPosition);
 				if (!IsFinite(Scaled) || !IsFinite(WorldPosition) || !std::isfinite(Distance) ||
 					Distance > MaximumMeshCoordinate) return false;
