@@ -151,6 +151,13 @@ only while `CanCollide` is true; the existing schema has no separate `CanQuery`
 property. Soft-body cloth/rubber participation is deferred and is not faked by
 inserting XPBD meshes into Box3D.
 
+Asset Foundation 2B adds opted-in anchored MeshPart static triangle colliders
+to this same query path. The backend still returns only neutral body IDs and
+copied hit values; WorldRoot resolves them through its existing generation-safe
+owner map. Unanchored, unavailable, or below-minimum-scale mesh collision uses
+MeshPart's documented Box fallback. Kinematic capsule motion queries the same
+active static mesh shape.
+
 The public call has no additional global per-frame quota. Its input, traversal,
 filter-body, candidate, and distance work are already hard bounded. Higher-level
 systems remain responsible for narrowing how often they query; InteractionService

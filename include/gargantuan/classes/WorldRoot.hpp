@@ -17,6 +17,7 @@
 #include <vector>
 
 namespace gargantuan {
+	class AssetService;
 	struct WorldRootTestAccess;
 
 	struct WorldRaycastResult {
@@ -66,6 +67,7 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, std::weak_ptr<Constraint>> TrackedConstraints;
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> PhysicsConnections;
 		std::unordered_set<ObjectId> DirtyBodies;
+		std::unordered_set<ObjectId> FailedMeshUpdatesLogged;
 		std::unordered_set<ObjectId> DirtyDeformables;
 		std::unordered_set<ObjectId> DirtyConstraints;
 		SignalConnection::Pointer GravityConnection;
@@ -76,6 +78,11 @@ namespace gargantuan {
 		bool PublishingPhysicsState = false;
 		bool ShuttingDownPhysics = false;
 		bool RaycastFailureLogged = false;
+		bool DynamicMeshFallbackLogged = false;
+		bool MissingMeshCollisionLogged = false;
+		bool MeshScaleFallbackLogged = false;
+		std::weak_ptr<AssetService> CollisionAssets;
+		std::uint64_t CollisionAssetChangeSequence = 0;
 
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
 		[[nodiscard]] WorldRaycastResult
@@ -85,7 +92,7 @@ namespace gargantuan {
 
 	  private:
 		friend struct WorldRootTestAccess;
-		[[nodiscard]] PhysicsBodyDesc DescribePart(const BasePart &Part) const;
+		[[nodiscard]] PhysicsBodyDesc DescribePart(const BasePart &Part);
 		[[nodiscard]] SoftBodyDefinition DescribeDeformable(DeformableBody &Body) const;
 		[[nodiscard]] PhysicsBodyId CreatePartBody(const std::shared_ptr<BasePart> &Part);
 		[[nodiscard]] SoftBodyId CreateDeformableBody(const std::shared_ptr<DeformableBody> &Body);
@@ -101,6 +108,7 @@ namespace gargantuan {
 		void RemoveSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);
 		void RemoveConstraint(const std::shared_ptr<Constraint> &Constraint);
 		void ApplyPendingPhysicsChanges();
+		void ObserveCollisionAssetChanges();
 		void ApplyPendingImpulses();
 		void ApplyPendingDeformableForces();
 		[[nodiscard]] std::vector<SoftBodyCollider> BuildSoftBodyColliders() const;

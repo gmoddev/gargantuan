@@ -52,7 +52,8 @@ The engine-facing contract is defined by `PhysicsTypes.hpp` and
 `PhysicsBackend.hpp`:
 
 - `PhysicsBodyId` and `PhysicsConstraintId` are slot/generation value IDs;
-- `PhysicsShapeDesc` describes the supported Part primitives and size;
+- `PhysicsShapeDesc` describes the supported Part primitives, size, and optional
+  immutable collision triangle resource;
 - `PhysicsBodyDesc` describes transform, shape, anchoring, collision, touch, and density;
 - `PhysicsConstraintDesc` currently describes only a weld between neutral body IDs;
 - `PhysicsWorldConfig` and `PhysicsStepConfig` define gravity and explicit fixed-step input;
@@ -63,7 +64,7 @@ The engine-facing contract is defined by `PhysicsTypes.hpp` and
 - `PhysicsOperationResult` reports neutral success, invalid-ID,
   invalid-description, or backend-failure states.
 
-The rigid contract intentionally has no mesh collider, controller policy,
+The rigid contract intentionally has no controller policy,
 projectile, network ownership, prediction, rollback, or deformable vocabulary.
 Deformable vocabulary lives in the separate `SoftBodyTypes.hpp` contract.
 
@@ -95,6 +96,21 @@ the body slot can be reused.
 semantics. Box, ball, cylinder, wedge, and corner-wedge Box3D geometry is
 constructed only inside `Box3DPhysicsBackend.cpp`.
 
+`MeshPart` defaults to inherited Box collision. `CollisionMode = StaticMesh`
+resolves a separately validated canonical Collision asset from `AssetService`;
+render triangles do not enter the physics contract. Its neutral immutable
+resource contains positions, indices, asset reference, and revision. Box3D
+reuses native mesh data for bodies on the same revision and borrows it for each
+per-instance shape. MeshPart.Size scales canonical vertices per axis, matching
+the renderer. Native mesh data retires after its last live shape.
+
+Box3D creates mesh contacts only on static bodies. Unanchored MeshParts that
+request `StaticMesh` use the inherited Box collision, including anchor
+transitions, and receive one bounded `[Physics:Mesh]` diagnostic per WorldRoot.
+Unavailable collision content also uses Box with a bounded diagnostic. The
+asset change journal schedules safe-point replacement when content changes.
+Invalid direct neutral mesh descriptions fail closed before Box3D admission.
+
 `BasePart` does not create Box3D shapes or hold a backend handle. `WorldRoot`
 builds a `PhysicsBodyDesc` from committed Part state. The backend chooses whether
 an update is an in-place transform/body-type change, an event-flag update, or a
@@ -105,6 +121,12 @@ identity intact. The update reports failure, `WorldRoot` logs it with the
 `[Physics:Backend]` prefix, and the dirty update remains eligible for retry. The
 engine does not claim silent physics synchronization success.
 
+`PhysicsWorld::GetCollisionResidency` reports active shared resources, active
+shape consumers, neutral position/index bytes, native Box3D mesh-data bytes,
+and failed mesh admissions. Box3D does not expose per-shape storage size, so
+native shape bytes remain explicitly unknown. Weak cache entries do not pin a
+resource or prevent retirement.
+
 ## Main-domain safe points
 
 Generated setters commit authoritative Instance state and then fire their normal
@@ -112,12 +134,19 @@ property signal. For a tracked `BasePart`, `WorldRoot` observes `CFrame`, `Size`
 `Anchored`, `CanCollide`, `CanTouch`, and `Shape` and records only a dirty neutral
 body intent. It does not call Box3D from the setter callback.
 
+For MeshPart, it also observes `Mesh` and `CollisionMode`.
+
 At the beginning of `StepPhysics`, on Main and before any Box3D step,
 `WorldRoot` applies dirty body updates in sorted `ObjectId` order. Gravity and
 constraint changes use the same pre-step boundary. Pending impulses are applied
 immediately before a fixed simulation step. Removal or destruction erases dirty
 work before destroying the body, so a dead Part cannot be recreated by an older
 intent.
+
+Mesh asset revision changes are observed through the bounded AssetService
+journal at the same safe point. Matching MeshParts are marked dirty; a journal
+gap causes a rescan of tracked Parts. Failed shape replacement preserves the
+previous body, shape, and constraint identity for retry.
 
 Creating or removing a descendant is also a Main-domain non-stepping safe point.
 Those operations may create or destroy neutral bodies immediately because the
@@ -250,7 +279,7 @@ physics implementation choice.
 ## Deliberately deferred
 
 This rigid boundary does not implement another rigid engine, advanced rigid
-constraints, mesh collision, a native character motor, projectiles, terrain
+constraints, dynamic concave collision, a native character motor, projectiles, terrain
 physics, physics networking, ownership, interpolation, prediction, or rollback.
 Deformation is implemented only through the sibling boundary documented above.
 Rendering has no dependency on either physics backend's native handles.

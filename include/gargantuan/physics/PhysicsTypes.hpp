@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -41,11 +42,22 @@ namespace gargantuan {
 		Cylinder,
 		Wedge,
 		CornerWedge,
+		StaticTriangleMesh,
+	};
+
+	// Immutable, validated collision geometry. AssetService owns canonical content;
+	// a physics body retains these buffers while its backend shape is live.
+	struct PhysicsTriangleMesh {
+		std::string ResourceId;
+		std::uint64_t ContentRevision = 0;
+		std::shared_ptr<const std::vector<glm::vec3>> Positions;
+		std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 	};
 
 	struct PhysicsShapeDesc {
 		PhysicsShapeKind Kind = PhysicsShapeKind::Box;
 		glm::vec3 Size{1.0f};
+		std::shared_ptr<const PhysicsTriangleMesh> Mesh;
 	};
 
 	struct PhysicsBodyDesc {
@@ -82,6 +94,16 @@ namespace gargantuan {
 		CFrame Transform{};
 		glm::vec3 LinearVelocity{0.0f};
 		PhysicsBodyDesc Description{};
+	};
+
+	struct PhysicsCollisionResidency {
+		std::size_t ActiveResources = 0;
+		std::size_t ActiveConsumers = 0;
+		std::size_t CanonicalBytes = 0;
+		std::size_t NativeMeshBytes = 0;
+		std::size_t FailedAdmissions = 0;
+		// Box3D does not expose per-shape storage size.
+		bool NativeShapeBytesKnown = false;
 	};
 
 	struct PhysicsBodyMotion {

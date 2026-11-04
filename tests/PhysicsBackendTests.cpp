@@ -1,5 +1,6 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
@@ -159,6 +160,64 @@ namespace {
 			"body destruction invalidates attached constraints safely");
 	}
 
+	void TestStaticTriangleMeshBackend() {
+		using namespace gargantuan;
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		auto Positions = std::make_shared<const std::vector<glm::vec3>>(std::vector<glm::vec3>{
+			{-1.0f, 0.0f, -1.0f}, {-1.0f, 0.0f, 1.0f},
+			{1.0f, 0.0f, 1.0f}, {1.0f, 0.0f, -1.0f},
+		});
+		auto Indices = std::make_shared<const std::vector<std::uint32_t>>(
+			std::vector<std::uint32_t>{0, 1, 2, 0, 2, 3});
+		auto Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = "asset://collision-fixture",
+			.ContentRevision = 1,
+			.Positions = Positions,
+			.Indices = Indices,
+		});
+		PhysicsBodyDesc Description;
+		Description.Anchored = true;
+		Description.Shape = {.Kind = PhysicsShapeKind::StaticTriangleMesh, .Size = {2.0f, 1.0f, 3.0f}, .Mesh = Mesh};
+		Description.Transform = CFrame(0.0f, 4.0f, 0.0f);
+		const auto First = World.CreateBody(Description);
+		Check(First.IsValid(), "validated static triangle mesh creates a backend shape");
+		const auto Second = World.CreateBody(Description);
+		Check(Second.IsValid(), "a second body shares immutable collision mesh data");
+		auto Residency = World.GetCollisionResidency();
+		Check(Residency.ActiveResources == 1 && Residency.ActiveConsumers == 2 &&
+			Residency.CanonicalBytes == Positions->size() * sizeof(glm::vec3) +
+				Indices->size() * sizeof(std::uint32_t) && Residency.NativeMeshBytes > 0,
+			"collision residency accounts one native resource and two live consumers");
+		auto Cast = World.Raycast({.Origin = {0.0f, 8.0f, 0.0f}, .Direction = {0.0f, -8.0f, 0.0f}});
+		Check(Cast.Succeeded() && Cast.HasHit() && Near(Cast.Candidates.front().Position.y, 4.0f),
+			"raycast sees the scaled translated static mesh");
+		Description.Transform = CFrame(0.0f, 2.0f, 0.0f);
+		Check(World.UpdateBody(First, Description).Succeeded(), "mesh transform update retains body identity");
+		Check(World.IsBodyValid(First), "mesh update leaves neutral identity live");
+		auto Invalid = Description;
+		Invalid.Shape.Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = "asset://invalid-collision-fixture", .ContentRevision = 1,
+			.Positions = Positions,
+			.Indices = std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0, 1, 99}),
+		});
+		Check(!World.UpdateBody(First, Invalid).Succeeded(), "invalid replacement rejects without deleting old shape");
+		Check(World.IsBodyValid(First) && World.GetBodyState(First)->Description.Shape.Kind ==
+			PhysicsShapeKind::StaticTriangleMesh, "failed mesh replacement retains previous neutral body state");
+		Description.Anchored = false;
+		Check(World.UpdateBody(First, Description).Status == PhysicsOperationStatus::InvalidDescription,
+			"dynamic triangle mesh request fails closed at neutral backend boundary");
+		Description.Anchored = true;
+		Description.Shape.Size.x = 0.001f;
+		Check(World.UpdateBody(First, Description).Status == PhysicsOperationStatus::InvalidDescription,
+			"mesh scale below Box3D's 0.01 limit is rejected before native clamping");
+		Check(World.DestroyBody(First).Succeeded() && World.DestroyBody(Second).Succeeded(),
+			"both mesh shapes retire before their shared native resource");
+		Residency = World.GetCollisionResidency();
+		Check(Residency.ActiveResources == 0 && Residency.ActiveConsumers == 0 && Residency.NativeMeshBytes == 0 &&
+			Residency.FailedAdmissions >= 1, "collision resource retirement and failed admission are accounted");
+		Check(!World.IsBodyValid(First), "destroyed mesh body identity is stale");
+	}
+
 	void TestKinematicWorldQueries() {
 		using namespace gargantuan;
 		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
@@ -275,6 +334,30 @@ namespace {
 		State = WorldRootTestAccess::State(*Workspace, Body);
 		Check(State && State->Description.Anchored && State->Description.CanCollide && State->Description.CanTouch,
 			"repeated toggles restore anchored collision and touch semantics");
+	}
+
+	void TestMeshPartCollisionFallback() {
+		using namespace gargantuan;
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		auto Part = std::make_shared<MeshPart>();
+		Part->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+		Part->SetAnchored(false);
+		Part->SetParent(Workspace);
+		const auto Body = WorldRootTestAccess::Body(*Workspace, *Part);
+		auto State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(State && State->Description.Shape.Kind == PhysicsShapeKind::Box,
+			"unanchored StaticMesh request explicitly projects inherited Box collision");
+		Part->SetAnchored(true);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(State && State->Description.Shape.Kind == PhysicsShapeKind::Box &&
+			WorldRootTestAccess::Body(*Workspace, *Part) == Body,
+			"unavailable collision asset retains Box with stable body identity");
+		Part->SetCollisionMode(Enums::MeshCollisionMode::Box);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::Body(*Workspace, *Part) == Body,
+			"collision mode changes project at the normal safe point");
 	}
 
 	void TestConstraintAndPendingDestroy() {
@@ -734,8 +817,10 @@ int main() {
 	}
 	TestNeutralContract();
 	TestBackendIdentityAndLifecycle();
+	TestStaticTriangleMeshBackend();
 	TestKinematicWorldQueries();
 	TestCommittedBodyUpdates();
+	TestMeshPartCollisionFallback();
 	TestConstraintAndPendingDestroy();
 	TestSimulationPublicationAndImpulse();
 	TestTouchAndSensorUpdates();

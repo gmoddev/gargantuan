@@ -1,4 +1,7 @@
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
@@ -46,8 +49,8 @@ namespace gargantuan {
 		}
 	}
 
-	PhysicsBodyDesc WorldRoot::DescribePart(const BasePart &Part) const {
-		return {
+	PhysicsBodyDesc WorldRoot::DescribePart(const BasePart &Part) {
+		PhysicsBodyDesc Description{
 			.Transform = Part.GetCFrame(),
 			.Shape = Part.GetPhysicsShape(),
 			.Anchored = Part.GetAnchored(),
@@ -55,6 +58,43 @@ namespace gargantuan {
 			.CanTouch = Part.GetCanTouch(),
 			.Density = 0.7f,
 		};
+		const auto *Mesh = dynamic_cast<const MeshPart *>(&Part);
+		if (!Mesh || Mesh->GetCollisionMode() != Enums::MeshCollisionMode::StaticMesh) return Description;
+		if (!Description.Anchored) {
+			if (!DynamicMeshFallbackLogged) {
+				LOG_WARN(App, "[Physics:Mesh] Unanchored StaticMesh collision uses the inherited Box shape");
+				DynamicMeshFallbackLogged = true;
+			}
+			return Description;
+		}
+		// The pinned Box3D adapter clamps each mesh scale component below 0.01.
+		// Preserve authored geometry alignment by using Box for smaller sizes.
+		if (Description.Shape.Size.x < 0.01f || Description.Shape.Size.y < 0.01f ||
+			Description.Shape.Size.z < 0.01f) {
+			if (!MeshScaleFallbackLogged) {
+				LOG_WARN(App, "[Physics:Mesh] StaticMesh size below Box3D scale limit uses the inherited Box shape");
+				MeshScaleFallbackLogged = true;
+			}
+			return Description;
+		}
+		auto DataModelValue = GetDataModel();
+		auto Assets = DataModelValue ? std::dynamic_pointer_cast<AssetService>(DataModelValue->GetService("AssetService")) : nullptr;
+		auto Collision = Assets ? Assets->ResolveCollisionForMesh(Mesh->GetMesh()) : std::nullopt;
+		if (!Collision || !Collision->Value.Positions || !Collision->Value.Indices) {
+			if (!MissingMeshCollisionLogged) {
+				LOG_WARN(App, "[Physics:Mesh] StaticMesh collision is unavailable; using the inherited Box shape");
+				MissingMeshCollisionLogged = true;
+			}
+			return Description;
+		}
+		Description.Shape.Kind = PhysicsShapeKind::StaticTriangleMesh;
+		Description.Shape.Mesh = std::make_shared<PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = AssetReference::FromAssetId(Collision->Id).Value,
+			.ContentRevision = Collision->ContentRevision,
+			.Positions = Collision->Value.Positions,
+			.Indices = Collision->Value.Indices,
+		});
+		return Description;
 	}
 
 	SoftBodyDefinition WorldRoot::DescribeDeformable(DeformableBody &Body) const {
@@ -114,9 +154,13 @@ namespace gargantuan {
 		}
 		const auto Body = Physics.CreateBody(DescribePart(*Part));
 		if (!Body.IsValid()) {
-			LOG_ERROR(App, "[Physics:Backend] Failed to create body for %s", Part->GetFullName().c_str());
+			if (std::dynamic_pointer_cast<MeshPart>(Part)) {
+				if (FailedMeshUpdatesLogged.insert(Object).second)
+					LOG_WARN(App, "[Physics:Mesh] Failed to create collision body for %s", Part->GetFullName().c_str());
+			} else LOG_ERROR(App, "[Physics:Backend] Failed to create body for %s", Part->GetFullName().c_str());
 			return {};
 		}
+		FailedMeshUpdatesLogged.erase(Object);
 		if (std::find(Parts.begin(), Parts.end(), Part) == Parts.end()) Parts.push_back(Part);
 		PartBodies[Object] = Body;
 		BodyParts[Body] = Part;
@@ -189,6 +233,10 @@ namespace gargantuan {
 			Connections.push_back(Part->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
 		if (Part->FindProperty("Shape"))
 			Connections.push_back(Part->GetPropertyChangedSignal("Shape")->Connect(MarkDirty));
+		if (std::dynamic_pointer_cast<MeshPart>(Part)) {
+			for (const std::string_view Name : {"Mesh", "CollisionMode"})
+				Connections.push_back(Part->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
+		}
 	}
 
 	void WorldRoot::TrackDeformable(const std::shared_ptr<DeformableBody> &Body) {
@@ -276,6 +324,7 @@ namespace gargantuan {
 		const auto Object = Part->GetObjectId();
 		erase(Parts, Part);
 		DirtyBodies.erase(Object);
+		FailedMeshUpdatesLogged.erase(Object);
 		TrackedParts.erase(Object);
 		if (auto Connections = PhysicsConnections.find(Object); Connections != PhysicsConnections.end()) {
 			for (const auto &Connection : Connections->second) Connection->Disconnect();
@@ -397,8 +446,33 @@ namespace gargantuan {
 		ConstraintJoints[Object] = Replacement;
 	}
 
+	void WorldRoot::ObserveCollisionAssetChanges() {
+		auto DataModelValue = GetDataModel();
+		auto Assets = DataModelValue ? std::dynamic_pointer_cast<AssetService>(DataModelValue->GetService("AssetService")) : nullptr;
+		if (Assets != CollisionAssets.lock()) {
+			CollisionAssets = Assets;
+			CollisionAssetChangeSequence = 0;
+		}
+		if (!Assets) return;
+		const auto Changes = Assets->ReadChanges(CollisionAssetChangeSequence);
+		CollisionAssetChangeSequence = Changes.NextSequence;
+		if (Changes.RescanRequired) {
+			for (const auto &[Id, WeakPart] : TrackedParts)
+				if (std::dynamic_pointer_cast<MeshPart>(WeakPart.lock())) DirtyBodies.insert(Id);
+			return;
+		}
+		for (const auto &Change : Changes.Changes) {
+			if (Change.Kind != AssetKind::Mesh) continue;
+			for (const auto &[Id, WeakPart] : TrackedParts) {
+				auto Part = std::dynamic_pointer_cast<MeshPart>(WeakPart.lock());
+				if (Part && Part->GetMesh() == Change.Reference) DirtyBodies.insert(Id);
+			}
+		}
+	}
+
 	void WorldRoot::ApplyPendingPhysicsChanges() {
 		if (ShuttingDownPhysics || !Physics.IsValid()) return;
+		ObserveCollisionAssetChanges();
 		if (GravityDirty) {
 			auto Result = Physics.SetGravity({0.0f, -GetGravity(), 0.0f});
 			if (Result.Succeeded()) GravityDirty = false;
@@ -419,9 +493,12 @@ namespace gargantuan {
 			}
 			auto Result = Physics.UpdateBody(Found->second, DescribePart(*Part));
 			if (!Result.Succeeded()) {
-				LOG_ERROR(App, "[Physics:Backend] Body update failed for %s: %s", Part->GetFullName().c_str(), Result.Message.c_str());
+				if (std::dynamic_pointer_cast<MeshPart>(Part)) {
+					if (FailedMeshUpdatesLogged.insert(Object).second)
+						LOG_WARN(App, "[Physics:Mesh] Collision update failed for %s: %s", Part->GetFullName().c_str(), Result.Message.c_str());
+				} else LOG_ERROR(App, "[Physics:Backend] Body update failed for %s: %s", Part->GetFullName().c_str(), Result.Message.c_str());
 				DirtyBodies.insert(Object);
-			}
+			} else FailedMeshUpdatesLogged.erase(Object);
 		}
 
 		const auto DeformableUpdates = SortedIds(DirtyDeformables);
@@ -548,9 +625,11 @@ namespace gargantuan {
 			for (const auto &Connection : Connections) Connection->Disconnect();
 		PhysicsConnections.clear();
 		DirtyBodies.clear();
+		FailedMeshUpdatesLogged.clear();
 		DirtyDeformables.clear();
 		DirtyConstraints.clear();
 		TrackedParts.clear();
+		CollisionAssets.reset();
 		TrackedDeformables.clear();
 		TrackedSoftBodyMaterials.clear();
 		SoftBodyAttachmentOwners.clear();

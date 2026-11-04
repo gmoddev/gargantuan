@@ -36,6 +36,10 @@ namespace gargantuan {
 		}
 
 		[[nodiscard]] bool IsValidBodyDescription(const PhysicsBodyDesc &Description) {
+			if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh &&
+				(!Description.Anchored || !Description.Shape.Mesh ||
+				Description.Shape.Size.x < 0.01f || Description.Shape.Size.y < 0.01f ||
+				Description.Shape.Size.z < 0.01f)) return false;
 			return IsFinite(Description.Transform) && IsFinite(Description.Shape.Size) &&
 				Description.Shape.Size.x > 0.0f && Description.Shape.Size.y > 0.0f &&
 				Description.Shape.Size.z > 0.0f && std::isfinite(Description.Density) && Description.Density >= 0.0f;
@@ -43,6 +47,15 @@ namespace gargantuan {
 
 		[[nodiscard]] bool SameSize(const glm::vec3 &A, const glm::vec3 &B) {
 			return A.x == B.x && A.y == B.y && A.z == B.z;
+		}
+
+		[[nodiscard]] bool SameMesh(
+			const std::shared_ptr<const PhysicsTriangleMesh> &A,
+			const std::shared_ptr<const PhysicsTriangleMesh> &B
+		) {
+			if (!A || !B) return A == B;
+			return A->ResourceId == B->ResourceId && A->ContentRevision == B->ContentRevision &&
+				A->Positions == B->Positions && A->Indices == B->Indices;
 		}
 
 		class Box3DPhysicsBackend final : public IPhysicsBackend {
@@ -106,7 +119,7 @@ namespace gargantuan {
 				StaticWorldDirty = true;
 				if (!Description.Anchored) ++DynamicBodyCount;
 
-				Entry.Record->Shape = CreateShape(Entry.Record->Body, Id, Description, true);
+				Entry.Record->Shape = CreateShape(Entry.Record->Body, Id, Description, true, Entry.Record->Mesh);
 				if (!b3Shape_IsValid(Entry.Record->Shape)) {
 					b3DestroyBody(Entry.Record->Body);
 					if (!Description.Anchored) --DynamicBodyCount;
@@ -135,14 +148,17 @@ namespace gargantuan {
 					StaticWorldDirty = true;
 				const bool RebuildShape = Previous.Shape.Kind != Description.Shape.Kind ||
 					!SameSize(Previous.Shape.Size, Description.Shape.Size) ||
+					!SameMesh(Previous.Shape.Mesh, Description.Shape.Mesh) ||
 					Previous.CanCollide != Description.CanCollide || Previous.Density != Description.Density;
 				if (RebuildShape) {
-					const auto Replacement = CreateShape(Record->Body, Body, Description, false);
+					std::shared_ptr<NativeMesh> ReplacementMesh;
+					const auto Replacement = CreateShape(Record->Body, Body, Description, false, ReplacementMesh);
 					if (!b3Shape_IsValid(Replacement))
 						return {PhysicsOperationStatus::BackendFailure, "Physics shape replacement failed"};
 					ShapeOwners.erase(b3StoreShapeId(Record->Shape));
 					b3DestroyShape(Record->Shape, false);
 					Record->Shape = Replacement;
+					Record->Mesh = std::move(ReplacementMesh);
 					b3Body_ApplyMassFromShapes(Record->Body);
 				} else if (Previous.CanTouch != Description.CanTouch) {
 					b3Shape_EnableSensorEvents(Record->Shape, Description.CanTouch);
@@ -255,6 +271,23 @@ namespace gargantuan {
 					.LinearVelocity = Box3DConversions::FromBox3(b3Body_GetLinearVelocity(Record->Body)),
 					.Description = Record->Description,
 				};
+			}
+
+			[[nodiscard]] PhysicsCollisionResidency GetCollisionResidency() const override {
+				PhysicsCollisionResidency Result;
+				Result.FailedAdmissions = FailedMeshAdmissions;
+				std::set<const NativeMesh *> Seen;
+				for (const auto &Slot : BodySlots) {
+					if (!Slot.Record || !Slot.Record->Mesh) continue;
+					++Result.ActiveConsumers;
+					const auto *Mesh = Slot.Record->Mesh.get();
+					if (!Seen.insert(Mesh).second) continue;
+					++Result.ActiveResources;
+					Result.CanonicalBytes += Mesh->Source->Positions->size() * sizeof(glm::vec3) +
+						Mesh->Source->Indices->size() * sizeof(std::uint32_t);
+					Result.NativeMeshBytes += static_cast<std::size_t>(Mesh->Data->byteCount);
+				}
+				return Result;
 			}
 
 			[[nodiscard]] PhysicsKinematicMotionResult
@@ -603,11 +636,18 @@ namespace gargantuan {
 			}
 
 		  private:
+			struct NativeMesh {
+				b3MeshData *Data = nullptr;
+				std::shared_ptr<const PhysicsTriangleMesh> Source;
+				~NativeMesh() { if (Data) b3DestroyMesh(Data); }
+			};
+
 			struct BodyRecord {
 				PhysicsBodyId Id{};
 				PhysicsBodyDesc Description{};
 				b3BodyId Body{};
 				b3ShapeId Shape{};
+				std::shared_ptr<NativeMesh> Mesh;
 			};
 
 			struct ConstraintRecord {
@@ -623,12 +663,64 @@ namespace gargantuan {
 
 			b3WorldId World{};
 			std::size_t DynamicBodyCount = 0;
+			std::size_t FailedMeshAdmissions = 0;
 			bool StaticWorldDirty = true;
 			std::vector<SlotEntry<BodyRecord>> BodySlots;
 			std::vector<std::uint32_t> FreeBodySlots;
 			std::vector<SlotEntry<ConstraintRecord>> ConstraintSlots;
 			std::vector<std::uint32_t> FreeConstraintSlots;
 			std::unordered_map<std::uint64_t, PhysicsBodyId> ShapeOwners;
+			std::unordered_map<std::string, std::weak_ptr<NativeMesh>> NativeMeshes;
+
+			[[nodiscard]] std::shared_ptr<NativeMesh> GetNativeMesh(
+				const std::shared_ptr<const PhysicsTriangleMesh> &Source
+			) {
+				if (!Source || !Source->Positions || !Source->Indices || Source->ResourceId.empty() ||
+					Source->Positions->size() < 3 || Source->Positions->size() > 262144 ||
+					Source->Indices->empty() || Source->Indices->size() > 1048575 ||
+					Source->Indices->size() % 3 != 0) return {};
+				const auto Key = Source->ResourceId + ":" + std::to_string(Source->ContentRevision);
+				if (auto Found = NativeMeshes.find(Key); Found != NativeMeshes.end()) {
+					if (auto Cached = Found->second.lock()) {
+						if (Cached->Source->Positions == Source->Positions && Cached->Source->Indices == Source->Indices)
+							return Cached;
+						return {};
+					}
+					NativeMeshes.erase(Found);
+				}
+				std::erase_if(NativeMeshes, [](const auto &Entry) { return Entry.second.expired(); });
+				std::vector<b3Vec3> Vertices;
+				Vertices.reserve(Source->Positions->size());
+				for (const auto &Position : *Source->Positions) {
+					if (!IsFinite(Position)) return {};
+					Vertices.push_back(Box3DConversions::ToBox3(Position));
+				}
+				std::vector<std::int32_t> Indices;
+				Indices.reserve(Source->Indices->size());
+				for (const auto Index : *Source->Indices) {
+					if (Index >= Vertices.size()) return {};
+					Indices.push_back(static_cast<std::int32_t>(Index));
+				}
+				for (std::size_t Index = 0; Index < Indices.size(); Index += 3) {
+					const auto &A = (*Source->Positions)[Indices[Index]];
+					const auto &B = (*Source->Positions)[Indices[Index + 1]];
+					const auto &C = (*Source->Positions)[Indices[Index + 2]];
+					const auto Cross = glm::cross(B - A, C - A);
+					if (!IsFinite(Cross) || glm::dot(Cross, Cross) < 1.0e-10f) return {};
+				}
+				b3MeshDef Definition{};
+				Definition.vertices = Vertices.data();
+				Definition.indices = Indices.data();
+				Definition.vertexCount = static_cast<int>(Vertices.size());
+				Definition.triangleCount = static_cast<int>(Indices.size() / 3);
+				Definition.identifyEdges = true;
+				auto Mesh = std::make_shared<NativeMesh>();
+				Mesh->Data = b3CreateMesh(&Definition, nullptr, 0);
+				if (!Mesh->Data) return {};
+				Mesh->Source = Source;
+				NativeMeshes[Key] = Mesh;
+				return Mesh;
+			}
 
 			[[nodiscard]] BodyRecord *FindBody(PhysicsBodyId Id) {
 				return const_cast<BodyRecord *>(std::as_const(*this).FindBody(Id));
@@ -697,7 +789,8 @@ namespace gargantuan {
 				b3BodyId Body,
 				PhysicsBodyId Owner,
 				const PhysicsBodyDesc &Description,
-				bool UpdateMass
+				bool UpdateMass,
+				std::shared_ptr<NativeMesh> &Mesh
 			) {
 				b3ShapeDef ShapeDefinition = b3DefaultShapeDef();
 				ShapeDefinition.density = Description.Density;
@@ -709,6 +802,13 @@ namespace gargantuan {
 				const auto HalfSize = Size * 0.5f;
 				b3ShapeId Shape{};
 				switch (Description.Shape.Kind) {
+				case PhysicsShapeKind::StaticTriangleMesh: {
+					Mesh = GetNativeMesh(Description.Shape.Mesh);
+					if (Mesh)
+						Shape = b3CreateMeshShape(Body, &ShapeDefinition, Mesh->Data, Box3DConversions::ToBox3(Size));
+					if (!b3Shape_IsValid(Shape)) ++FailedMeshAdmissions;
+					break;
+				}
 				case PhysicsShapeKind::Box: {
 					auto Hull = b3MakeBoxHull(HalfSize.x, HalfSize.y, HalfSize.z);
 					Shape = b3CreateHullShape(Body, &ShapeDefinition, &Hull.base);
