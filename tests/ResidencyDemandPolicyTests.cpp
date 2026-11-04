@@ -319,10 +319,10 @@ namespace {
 		Check(Rejected, "zero demand-delta budget was admitted");
 	}
 
-	void RevalidationBudgetFairness() {
+	void RevalidationBudgetFairness(bool MixedCosts) {
 		PackageContentManifest Manifest;
 		Manifest.Package = {*ProjectId::Parse("0123456789abcdef0123456789abcdef"), 7};
-		for (std::size_t Group = 0; Group < 12; ++Group)
+		for (std::size_t Group = 0; Group < (MixedCosts ? 9 : 12); ++Group)
 			for (std::size_t Index = 0; Index < 1'000; ++Index) {
 				const auto GroupNumber = std::to_string(Group);
 				const auto Number = std::to_string(Index);
@@ -348,7 +348,7 @@ namespace {
 				Limits.MaximumCandidateRevalidationsPerTick, "revalidation exhausted its per-tick bound");
 		}
 		const auto Demands = Policy.GetDemands();
-		for (std::size_t Group = 0; Group < 12; ++Group) {
+		for (std::size_t Group = 0; Group < (MixedCosts ? 9 : 12); ++Group) {
 			const auto Number = std::to_string(Group);
 			const auto *Demand = Find(Demands, "budget/" + std::string(2 - Number.size(), '0') + Number + "/0000");
 			Check(Demand && Demand->Revision > 12,
@@ -386,7 +386,8 @@ int main() {
 		DenseMovingSweep();
 		EquivalentFocusAndLifetime();
 		BoundsAndDenial();
-		RevalidationBudgetFairness();
+		RevalidationBudgetFairness(false);
+		RevalidationBudgetFairness(true);
 		ManifestLifetime();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Content:ResidencyTests] " << Error.what() << '\n';

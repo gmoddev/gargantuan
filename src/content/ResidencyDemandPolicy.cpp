@@ -453,7 +453,7 @@ namespace gargantuan {
 				auto &Value = Current->second;
 				if (Value.NeedsRevalidation) {
 					const auto Work = Value.Committed.size() + Value.Working.size();
-					if (Work > RevalidationsLeft) continue;
+					if (Work > RevalidationsLeft) break;
 					RevalidationsLeft -= Work;
 					Revalidate(Value, Current->first, Tick);
 				}
