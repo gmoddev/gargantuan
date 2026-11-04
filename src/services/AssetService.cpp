@@ -577,19 +577,21 @@ namespace gargantuan {
 			}
 		}
 
-		void RetireCollisionArtifacts(const std::vector<AssetRecord> &Previous) {
-			std::unordered_set<std::string> PriorIds;
-			for (const auto &Record : Previous) if (Record.Kind == AssetKind::Collision && Record.ContentId.IsValid())
-				PriorIds.insert(Record.ContentId.ToString());
-			for (const auto &Content : PriorIds) {
+		void RetireUnreferencedArtifacts(const std::vector<AssetRecord> &Previous) {
+			std::unordered_map<std::string, AssetKind> PriorIds;
+			for (const auto &Record : Previous) if (Record.ContentId.IsValid())
+				PriorIds.emplace(Record.ContentId.ToString(), Record.Kind);
+			for (const auto &[Content, Kind] : PriorIds) {
 				const bool StillReferenced = std::ranges::any_of(Records, [&](const auto &Entry) {
 					return Entry.second.ContentId.IsValid() && Entry.second.ContentId.ToString() == Content;
 				});
 				if (StillReferenced) continue;
 				const auto Artifact = Artifacts.find(Content);
 				if (Artifact == Artifacts.end()) continue;
-				RetiredCollisionArtifactBytes += Artifact->second->size();
-				++RetiredCollisionArtifacts;
+				if (Kind == AssetKind::Collision) {
+					RetiredCollisionArtifactBytes += Artifact->second->size();
+					++RetiredCollisionArtifacts;
+				}
 				Artifacts.erase(Artifact);
 			}
 		}
@@ -1051,7 +1053,7 @@ namespace gargantuan {
 							if (Next.PrimarySourceAsset) Operation.Record = Next;
 						}
 						State->CpuBytes = State->CpuBytes - PreviousBytes + Prepared->CpuBytes;
-						State->RetireCollisionArtifacts(PreviousRecords);
+					State->RetireUnreferencedArtifacts(PreviousRecords);
 						Operation.Ok = true;
 						Operation.Records = Prepared->Records;
 					}
@@ -1154,7 +1156,7 @@ namespace gargantuan {
 				Operation.Records.push_back(Removed);
 				if (Removed.PrimarySourceAsset) Operation.Record = Removed;
 			}
-			State->RetireCollisionArtifacts(Group);
+			State->RetireUnreferencedArtifacts(Group);
 			Operation.Ok = true;
 		}
 		if (auto World = GetDataModel()) World->AdvanceAuthoritativeRevision();
@@ -1278,7 +1280,9 @@ namespace gargantuan {
 	std::optional<AssetCollisionResource> AssetService::ResolveCollision(std::string_view Reference) const {
 		std::scoped_lock Lock(State->Mutex);
 		const auto Record = State->Records.find(std::string(Reference));
-		if (Record == State->Records.end() || !IsAvailableRecord(Record->second)) return std::nullopt;
+		if (Record == State->Records.end() || !Record->second.Asset ||
+			(!IsAvailableRecord(Record->second) && !(Record->second.State == AssetState::Importing &&
+				Record->second.ContentRevision > 0 && Record->second.ContentId.IsValid()))) return std::nullopt;
 		const auto *Collision = std::get_if<ImportedCollision>(Record->second.Asset.get());
 		return Collision ? std::optional(AssetCollisionResource{
 			Record->second.Id, *Collision, Record->second.ContentRevision, AssetBytes(*Record->second.Asset)}) : std::nullopt;
@@ -1287,11 +1291,17 @@ namespace gargantuan {
 	std::optional<AssetCollisionResource> AssetService::ResolveCollisionForMesh(std::string_view MeshReference) const {
 		std::scoped_lock Lock(State->Mutex);
 		const auto MeshRecord = State->Records.find(std::string(MeshReference));
-		if (MeshRecord == State->Records.end() || !IsAvailableRecord(MeshRecord->second)) return std::nullopt;
+		// Reimport retains one complete previous revision until its atomic commit.
+		// Physics must continue to resolve that revision while the worker runs.
+		const auto HasPublishedContent = [](const AssetRecord &Record) {
+			return Record.Asset && (IsAvailableRecord(Record) ||
+				(Record.State == AssetState::Importing && Record.ContentRevision > 0 && Record.ContentId.IsValid()));
+		};
+		if (MeshRecord == State->Records.end() || !HasPublishedContent(MeshRecord->second)) return std::nullopt;
 		const auto *Mesh = std::get_if<ImportedMesh>(MeshRecord->second.Asset.get());
 		if (!Mesh || !Mesh->CollisionAsset) return std::nullopt;
 		const auto CollisionRecord = State->Records.find(AssetReference::FromAssetId(*Mesh->CollisionAsset).Value);
-		if (CollisionRecord == State->Records.end() || !IsAvailableRecord(CollisionRecord->second)) return std::nullopt;
+		if (CollisionRecord == State->Records.end() || !HasPublishedContent(CollisionRecord->second)) return std::nullopt;
 		const auto *Collision = std::get_if<ImportedCollision>(CollisionRecord->second.Asset.get());
 		return Collision ? std::optional(AssetCollisionResource{
 			CollisionRecord->second.Id, *Collision, CollisionRecord->second.ContentRevision,
@@ -1301,6 +1311,10 @@ namespace gargantuan {
 	AssetCollisionStats AssetService::ReadCollisionStats() const {
 		std::scoped_lock Lock(State->Mutex);
 		AssetCollisionStats Stats;
+		for (const auto &[Content, Artifact] : State->Artifacts) {
+			(void)Content;
+			Stats.TotalRetainedArtifactBytes += Artifact->size();
+		}
 		Stats.RetiredArtifactBytes = State->RetiredCollisionArtifactBytes;
 		Stats.RetiredArtifacts = State->RetiredCollisionArtifacts;
 		Stats.FailedAdmissions = State->FailedCollisionAdmissions;
@@ -1615,7 +1629,11 @@ namespace gargantuan {
 				lua_pushnumber(L, Asset.Channels); lua_setfield(L, -2, "Channels");
 				lua_pushnumber(L, Asset.FrameCount); lua_setfield(L, -2, "FrameCount");
 				lua_pushnumber(L, static_cast<double>(Asset.FrameCount) / Asset.SampleRate); lua_setfield(L, -2, "Duration");
-			} else {
+			} else if constexpr (std::is_same_v<T, ImportedCollision>) {
+				PushStringField(L, "Representation", "StaticTriangleMesh");
+				lua_pushnumber(L, Asset.Positions ? Asset.Positions->size() : 0); lua_setfield(L, -2, "VertexCount");
+				lua_pushnumber(L, Asset.Indices ? Asset.Indices->size() : 0); lua_setfield(L, -2, "IndexCount");
+			} else if constexpr (std::is_same_v<T, ImportedAnimation>) {
 				lua_pushnumber(L, Asset.Duration); lua_setfield(L, -2, "Duration");
 				lua_pushnumber(L, Asset.Tracks ? Asset.Tracks->size() : 0); lua_setfield(L, -2, "TrackCount");
 			}

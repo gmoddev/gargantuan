@@ -60,16 +60,25 @@ the same artifact decoder and dependency check.
 Collision positions and indices count against the existing 64 MiB decoded CPU
 cache. Each artifact and compound graph retains the existing 64 MiB artifact
 bound; no new eviction policy exists. A successful replacement or source-group
-deletion removes a prior Collision artifact from service ownership once no
-current catalog record references its content hash. Captured snapshots retain
+deletion removes each prior source-group artifact from service ownership once no
+current catalog record references its content hash. This includes the paired Mesh
+artifact; retaining obsolete render revisions would defeat collision memory bounds.
+Captured snapshots retain
 their own immutable shared pointer safely. Failed replacement leaves the old
 artifact and decoded content available. `ReadCollisionStats` reports current
 resident record count, decoded canonical bytes, currently retained Collision
 artifact bytes, cumulative retired artifact bytes/count, and failed CPU
-admissions. These are service-owned resource counts. The physics projection owns
+admissions. `TotalRetainedArtifactBytes` additionally reports the complete artifact
+map across all kinds. These are service-owned resource counts. The physics projection owns
 the exact active native shape/consumer counts and native byte estimates.
 
 ## Qualification state
+
+Collision resolution continues to return the complete previous published revision
+while a reimport is `Importing`. Both mesh and collision records are resolved under
+one service lock. First imports without published content remain unavailable;
+failed reimports retain their prior coherent collision. Geometry replacement still
+occurs only at the normal physics safe point.
 
 The headless asset tests cover OBJ and glTF companion publication, stable
 identity, dependency propagation, repeated replacement with bounded retained

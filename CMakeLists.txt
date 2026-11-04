@@ -717,6 +717,11 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_solid_geometry_tests PRIVATE gargantuan_core nlohmann_json)
 	add_test(NAME gargantuan_solid_geometry COMMAND gargantuan_solid_geometry_tests)
 	set_tests_properties(gargantuan_solid_geometry PROPERTIES LABELS "geometry;assets;headless" TIMEOUT 120)
+	add_executable(gargantuan_solid_geometry_benchmark "tests/SolidGeometryBenchmark.cpp")
+	target_link_libraries(gargantuan_solid_geometry_benchmark PRIVATE gargantuan_core nlohmann_json)
+	if(WIN32)
+		target_link_libraries(gargantuan_solid_geometry_benchmark PRIVATE Psapi)
+	endif()
 	target_link_libraries(gargantuan_asset_foundation_tests PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_asset_foundation_tests PRIVATE
 		GARGANTUAN_ASSET_TEST_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"

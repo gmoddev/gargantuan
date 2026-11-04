@@ -23,6 +23,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -30,9 +31,45 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+namespace gargantuan {
+	struct WorldRootTestAccess {
+		static WorldRaycastResult Raycast(WorldRoot &World) {
+			return World.ResolveRaycast({0.25f, 0.25f, 2.0f}, {0.0f, 0.0f, -4.0f});
+		}
+	};
+}
+
 namespace {
+	// Observe the real SourceMount read boundary after reimport marks records
+	// Importing, without timing races or a test-only hook in production code.
+	class ObservingFilesystem final : public gargantuan::BaseFilesystem {
+		gargantuan::DiskFilesystem Backend;
+	  public:
+		std::function<void()> BeforeRead;
+		explicit ObservingFilesystem(const std::filesystem::path &Path) : BaseFilesystem(Path), Backend(Path) {}
+		gargantuan::FileMetadata Metadata(const std::filesystem::path &Path) const override { return Backend.Metadata(Path); }
+		bool Exists(const std::filesystem::path &Path) const override { return Backend.Exists(Path); }
+		std::unique_ptr<gargantuan::FileHandle> Open(const std::filesystem::path &Path,
+			const gargantuan::FileOpen &Mode = gargantuan::FileOpen::Read) override {
+			if (Mode == gargantuan::FileOpen::Read && BeforeRead) {
+				auto Observe = std::exchange(BeforeRead, {});
+				Observe();
+			}
+			return Backend.Open(Path, Mode);
+		}
+		void CreateDirectory(const std::filesystem::path &Path) override { Backend.CreateDirectory(Path); }
+		void Remove(const std::filesystem::path &Path) override { Backend.Remove(Path); }
+		std::vector<gargantuan::DirectoryEntry> GetChildren(const std::filesystem::path &Path) override {
+			return Backend.GetChildren(Path);
+		}
+		std::vector<gargantuan::DirectoryEntry> GetDescendants(const std::filesystem::path &Path) override {
+			return Backend.GetDescendants(Path);
+		}
+	};
+
 	int Failures = 0;
 
 	void Check(bool Condition, const char *Message) {
@@ -318,7 +355,7 @@ int main() {
 		LimitDocument["meshes"].push_back(nlohmann::ordered_json::object());
 	WriteText(Root / "assets" / "limit.gltf", LimitDocument.dump());
 
-	DiskFilesystem Filesystem(Root);
+	ObservingFilesystem Filesystem(Root);
 	SourceMount Mount(Filesystem);
 	auto World = std::make_shared<DataModel>();
 	World->Root = Root;
@@ -367,6 +404,35 @@ int main() {
 	WriteText(Root / "assets" / "repeated.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
 	auto RepeatedMesh = Assets->ImportProjectAsset(Mount, "assets/repeated.obj", AssetKind::Mesh, "Repeated");
 	bool RepeatedReimportsOk = RepeatedMesh.Ok && RepeatedMesh.Record.has_value();
+	auto CollisionConsumer = std::make_shared<MeshPart>();
+	if (RepeatedMesh.Record) {
+		CollisionConsumer->SetMesh(RepeatedMesh.Record->Reference.Value);
+		CollisionConsumer->SetAnchored(true);
+		CollisionConsumer->SetSize({1.0f, 1.0f, 1.0f});
+		CollisionConsumer->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+		CollisionConsumer->SetParent(WorkspaceValue);
+		const auto PriorCollision = Assets->ResolveCollisionForMesh(RepeatedMesh.Record->Reference.Value);
+		const auto VerifyInFlight = [&] {
+			const auto Record = Assets->GetAsset(RepeatedMesh.Record->Reference.Value);
+			const auto Collision = Assets->ResolveCollisionForMesh(RepeatedMesh.Record->Reference.Value);
+			const auto Hit = WorldRootTestAccess::Raycast(*WorkspaceValue);
+			Check(Record && Record->State == AssetState::Importing && Collision && PriorCollision &&
+				Collision->Id == PriorCollision->Id && Collision->ContentRevision == PriorCollision->ContentRevision &&
+				Hit.Succeeded() && Hit.Instance == CollisionConsumer && std::abs(Hit.Distance - 2.0f) < 0.001f,
+				"in-flight reimport keeps the complete previous triangle collision queryable");
+		};
+		Filesystem.BeforeRead = VerifyInFlight;
+		Check(Assets->ReimportProjectAsset(Mount, RepeatedMesh.Record->Reference.Value).Ok && !Filesystem.BeforeRead,
+			"successful reimport exercises the importing-state collision boundary");
+		WriteText(Root / "assets" / "repeated.obj", "invalid mesh");
+		Filesystem.BeforeRead = VerifyInFlight;
+		const auto Rejected = Assets->ReimportProjectAsset(Mount, RepeatedMesh.Record->Reference.Value);
+		const auto RetainedHit = WorldRootTestAccess::Raycast(*WorkspaceValue);
+		Check(!Rejected.Ok && !Filesystem.BeforeRead && RetainedHit.Instance == CollisionConsumer &&
+			std::abs(RetainedHit.Distance - 2.0f) < 0.001f,
+			"rejected reimport preserves the previous collision rather than projecting a temporary box");
+		WriteText(Root / "assets" / "repeated.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+	}
 	if (RepeatedReimportsOk) for (std::uint32_t Iteration = 0; Iteration < 8; ++Iteration) {
 		WriteText(Root / "assets" / "repeated.obj", "v 0 0 0\nv " + std::to_string(Iteration + 2) +
 			" 0 0\nv 0 1 0\nf 1 2 3\n");
@@ -376,9 +442,11 @@ int main() {
 	const auto RepeatedStats = Assets->ReadCollisionStats();
 	Check(RepeatedReimportsOk && RepeatedStats.ResidentRecords == InitialCollisionStats.ResidentRecords + 1 &&
 		RepeatedStats.RetainedArtifactBytes < InitialCollisionStats.RetainedArtifactBytes + 1024 &&
+		RepeatedStats.TotalRetainedArtifactBytes < InitialCollisionStats.TotalRetainedArtifactBytes + 2048 &&
 		RepeatedStats.RetiredArtifacts >= 8 && RepeatedStats.RetiredArtifactBytes > 0,
 		"repeated collision replacement retains only the current bounded canonical artifact");
 	if (RepeatedMesh.Record) {
+		CollisionConsumer->Destroy();
 		Check(Assets->DeleteProjectAsset(RepeatedMesh.Record->Reference.Value).Ok &&
 			Assets->ReadCollisionStats().ResidentRecords == InitialCollisionStats.ResidentRecords,
 			"deleting a mesh source group retires its collision record and artifact");
