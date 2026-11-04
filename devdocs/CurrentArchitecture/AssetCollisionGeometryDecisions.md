@@ -53,6 +53,8 @@ constraint IDs remain generation-safe and unchanged by successful shape
 replacement. Native mesh data is shared by immutable asset identity/revision
 within one physics world and retained until the last consuming shape is gone.
 Native handles never enter assets, Instances, snapshots, Luau or renderer state.
+This slice covers rigid contacts and queries. The sibling XPBD deformable
+collider projection retains its existing primitive approximations.
 
 Asset admission counts canonical collision bytes and retires unreferenced old
 source-group artifacts after successful publication/deletion. Captured snapshots
@@ -104,3 +106,10 @@ CMake additions are recorded independently; neither campaign incorporates the
 other's unmerged branch. Production Studio, frozen Avalonia, a modeling interface,
 runtime game-facing CSG, convex decomposition and dynamic concave simulation are
 outside this slice.
+
+Canonical mesh positions are transformed by `CFrame * Size`; Size is the existing
+2A scale, not automatic normalization to a unit bounding box. Existing 3L package
+coarse bounds derived only from Size/2 need not cover arbitrary mesh positions.
+Consumers must supply conservative spatial metadata under their owning contract;
+this campaign does not silently alter package bounds, 3K regions or 3M selection.
+The concurrent 3M campaign records that pre-existing bounds limitation separately.
