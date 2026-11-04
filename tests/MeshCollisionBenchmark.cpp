@@ -113,6 +113,10 @@ namespace {
 			{"nativeShapeBytesKnown", Value.NativeShapeBytesKnown}, {"failedAdmissions", Value.FailedAdmissions},
 			{"createdResources", Value.CreatedResources}, {"retiredResources", Value.RetiredResources},
 			{"createdConsumers", Value.CreatedConsumers}, {"retiredConsumers", Value.RetiredConsumers},
+			{"meshShapeLimit", Value.MeshShapeLimit}, {"activeMeshShapes", Value.ActiveMeshShapes},
+			{"createdMeshShapes", Value.CreatedMeshShapes}, {"retiredMeshShapes", Value.RetiredMeshShapes},
+			{"nativeChunks", Value.NativeChunks}, {"chunkTriangleLimit", Value.ChunkTriangleLimit},
+			{"peakBuildNativeBytes", Value.PeakBuildNativeBytes},
 			{"lastAdmissionFailure", Value.LastAdmissionFailure}};
 	}
 

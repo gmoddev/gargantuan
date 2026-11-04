@@ -935,7 +935,8 @@ namespace gargantuan {
 				auto Built = physics_detail::BuildBox3DMeshChunks(Vertices, Indices,
 					CollisionNativeByteLimit - ActiveNativeBytes);
 				if (!Built) {
-					LastMeshAdmissionFailure = Built.error();
+					LastMeshAdmissionFailure = Built.error() == "Mesh chunk staging exceeds native-byte budget"
+						? "Mesh collision native-byte limit reached" : Built.error();
 					return {};
 				}
 				auto Mesh = std::make_shared<NativeMesh>();
