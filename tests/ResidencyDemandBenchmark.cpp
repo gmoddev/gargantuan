@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -188,6 +189,10 @@ namespace {
 			static_cast<float>(Index / Width) * 256.0f + 508.0f};
 	}
 
+	void PrintEmptyColumns(std::size_t Count) {
+		for (std::size_t Index = 0; Index < Count; ++Index) std::cout << ',';
+	}
+
 	// Deliberately linear reference. This is a geometry-only scan, not a second policy.
 	void RunLinearReference(const PackageContentManifest &Manifest, std::size_t FocusCount, std::size_t Samples) {
 		std::vector<double> Durations;
@@ -210,14 +215,24 @@ namespace {
 		}
 		const auto Time = Summarize(std::move(Durations));
 		std::cout << "linear_reference," << Manifest.Entries.size() << ',' << FocusCount << ',' << Samples
-			<< ',' << Time.Mean << ',' << Time.P50 << ',' << Time.P95 << ',' << Time.P99 << ',' << Time.Maximum
-			<< ",,,,,,,,,,,,,," << LastHits << '\n';
+			<< ',' << Time.Mean << ',' << Time.P50 << ',' << Time.P95 << ',' << Time.P99 << ',' << Time.Maximum;
+		PrintEmptyColumns(18);
+		std::cout << LastHits << '\n';
 	}
 
 	void CheckWorkBound(const ResidencyDemandPolicyMetrics &Before, const ResidencyDemandPolicyMetrics &After,
 		const ResidencyDemandPolicyLimits &Limits) {
+		const auto Visits = After.QueryMembershipVisits - Before.QueryMembershipVisits;
+		const auto Revalidations = After.CandidateRevalidations - Before.CandidateRevalidations;
+		const auto Ranking = After.RankingOperations - Before.RankingOperations;
+		const auto RankingDepth = std::max<std::uint64_t>(1, std::bit_width(Limits.MaximumCandidatesPerFocus));
+		const auto RankingBound = (Visits + Revalidations +
+			8ull * Limits.MaximumFocusEvaluationsPerTick * Limits.MaximumCandidatesPerFocus) * RankingDepth;
 		if (After.QueryCellsVisited - Before.QueryCellsVisited > Limits.MaximumQueryCellsPerTick ||
-			After.QueryMembershipVisits - Before.QueryMembershipVisits > Limits.MaximumMembershipVisitsPerTick ||
+			Visits > Limits.MaximumMembershipVisitsPerTick ||
+			Revalidations > Limits.MaximumCandidateRevalidationsPerTick ||
+			After.RequestValidationVisits - Before.RequestValidationVisits > Limits.MaximumRequestValidationVisitsPerTick ||
+			Ranking > RankingBound ||
 			After.CompletedFocusEvaluations - Before.CompletedFocusEvaluations > Limits.MaximumFocusEvaluationsPerTick)
 			throw std::runtime_error("[Content:ResidencyBenchmark] policy exceeded a per-step work bound");
 	}
@@ -234,6 +249,10 @@ namespace {
 			<< After.QueryMembershipVisits - Before.QueryMembershipVisits << ','
 			<< After.CompletedFocusEvaluations - Before.CompletedFocusEvaluations << ','
 			<< After.StaleRevisions - Before.StaleRevisions << ','
+			<< After.MovingSweepCompletions - Before.MovingSweepCompletions << ','
+			<< After.CandidateRevalidations - Before.CandidateRevalidations << ','
+			<< After.RequestValidationVisits - Before.RequestValidationVisits << ','
+			<< After.RankingOperations - Before.RankingOperations << ','
 			<< After.Requests - Before.Requests << ',' << After.Releases - Before.Releases << ','
 			<< After.RetainedCandidates << ',' << After.DemandRecords << ',' << After.PendingDeltas << ",0\n";
 	}
@@ -252,7 +271,9 @@ namespace {
 		std::cout << "policy_build," << EntryCount << ',' << FocusCount << ",1," << BuildMicroseconds
 			<< ',' << BuildMicroseconds << ',' << BuildMicroseconds << ',' << BuildMicroseconds << ','
 			<< BuildMicroseconds << ',' << BuildAllocations.Count << ',' << BuildAllocations.PeakBytes << ','
-			<< BuildAllocations.RetainedBytes << ",,,,,,,,,,,0\n";
+			<< BuildAllocations.RetainedBytes;
+		PrintEmptyColumns(15);
+		std::cout << "0\n";
 		for (std::size_t Focus = 0; Focus < FocusCount; ++Focus)
 			if (!Policy.UpdateFocus(Focus + 1, FocusPosition(Focus, FocusCount, EntryCount)))
 				throw std::runtime_error("[Content:ResidencyBenchmark] focus rejected");
@@ -319,6 +340,10 @@ namespace {
 			<< CleanupAfter.QueryMembershipVisits - CleanupBefore.QueryMembershipVisits << ','
 			<< CleanupAfter.CompletedFocusEvaluations - CleanupBefore.CompletedFocusEvaluations << ','
 			<< CleanupAfter.StaleRevisions - CleanupBefore.StaleRevisions << ','
+			<< CleanupAfter.MovingSweepCompletions - CleanupBefore.MovingSweepCompletions << ','
+			<< CleanupAfter.CandidateRevalidations - CleanupBefore.CandidateRevalidations << ','
+			<< CleanupAfter.RequestValidationVisits - CleanupBefore.RequestValidationVisits << ','
+			<< CleanupAfter.RankingOperations - CleanupBefore.RankingOperations << ','
 			<< CleanupAfter.Requests - CleanupBefore.Requests << ','
 			<< CleanupAfter.Releases - CleanupBefore.Releases << ',' << CleanupAfter.RetainedCandidates << ','
 			<< CleanupAfter.DemandRecords << ',' << CleanupAfter.PendingDeltas << ",0\n";
@@ -335,7 +360,7 @@ namespace {
 		Policy.Step(nullptr, 1);
 		if (Policy.GetMetrics().PendingFocuses != 1)
 			throw std::runtime_error("[Content:ResidencyBenchmark] dense query did not retain a cursor");
-		const auto Iterations = Quick ? 12u : 64u;
+		const auto Iterations = Quick ? 32u : 64u;
 		std::vector<double> Samples;
 		Samples.reserve(Iterations);
 		const auto BeforePhase = Policy.GetMetrics();
@@ -351,18 +376,44 @@ namespace {
 		}
 		const auto Allocations = FinishAllocationSample();
 		const auto AfterPhase = Policy.GetMetrics();
-		if (AfterPhase.StaleRevisions - BeforePhase.StaleRevisions != Iterations)
-			throw std::runtime_error("[Content:ResidencyBenchmark] query revision was not invalidated");
-		PrintPolicyRow("policy_stale_cursor", Manifest.Entries.size(), 1, Samples, Allocations, BeforePhase, AfterPhase);
-		for (std::uint64_t Tick = Iterations + 2; Tick < Iterations + 66 && Policy.GetMetrics().PendingFocuses != 0; ++Tick) {
+		if (AfterPhase.StaleRevisions != BeforePhase.StaleRevisions ||
+			AfterPhase.MovingSweepCompletions == BeforePhase.MovingSweepCompletions ||
+			AfterPhase.CompletedFocusEvaluations == BeforePhase.CompletedFocusEvaluations ||
+			AfterPhase.DemandRecords == 0 || Policy.GetDemands().empty())
+			throw std::runtime_error("[Content:ResidencyBenchmark] moving dense focus made no completed demand progress");
+		PrintPolicyRow("policy_moving_cursor", Manifest.Entries.size(), 1, Samples, Allocations, BeforePhase, AfterPhase);
+		std::uint64_t NextTick = Iterations + 2;
+		const auto SettleDeadline = NextTick + 64;
+		for (; NextTick < SettleDeadline && Policy.GetMetrics().PendingFocuses != 0; ++NextTick) {
 			const auto Before = Policy.GetMetrics();
-			Policy.Step(nullptr, Tick);
+			Policy.Step(nullptr, NextTick);
 			CheckWorkBound(Before, Policy.GetMetrics(), Limits);
 		}
 		const auto Settled = Policy.GetMetrics();
 		if (Settled.PendingFocuses != 0 || Settled.DemandRecords == 0 || Settled.RetainedCandidates == 0 ||
 			Policy.GetDemands().empty())
 			throw std::runtime_error("[Content:ResidencyBenchmark] moving dense focus did not converge after updates stopped");
+		if (!Policy.UpdateFocus(1, {509.5f, 0.0f, 508.0f}))
+			throw std::runtime_error("[Content:ResidencyBenchmark] restart focus update rejected");
+		Policy.Step(nullptr, NextTick++);
+		if (Policy.GetMetrics().PendingFocuses != 1)
+			throw std::runtime_error("[Content:ResidencyBenchmark] restart did not retain a paged cursor");
+		const auto BeforeTeleport = Policy.GetMetrics();
+		std::vector<double> TeleportSamples;
+		TeleportSamples.reserve(1);
+		StartAllocationSample();
+		const auto TeleportStartedAt = Clock::now();
+		if (!Policy.UpdateFocus(1, {5'000.0f, 0.0f, 5'000.0f}))
+			throw std::runtime_error("[Content:ResidencyBenchmark] teleport focus update rejected");
+		Policy.Step(nullptr, NextTick++);
+		TeleportSamples.push_back(Microseconds(TeleportStartedAt));
+		CheckWorkBound(BeforeTeleport, Policy.GetMetrics(), Limits);
+		const auto TeleportAllocations = FinishAllocationSample();
+		const auto AfterTeleport = Policy.GetMetrics();
+		if (AfterTeleport.StaleRevisions != BeforeTeleport.StaleRevisions + 1)
+			throw std::runtime_error("[Content:ResidencyBenchmark] teleport did not invalidate old cursor");
+		PrintPolicyRow("policy_teleport_restart", Manifest.Entries.size(), 1, TeleportSamples,
+			TeleportAllocations, BeforeTeleport, AfterTeleport);
 	}
 
 	class BenchmarkContentProvider final : public IContentAvailabilityProvider {
@@ -588,7 +639,9 @@ int main(int ArgumentCount, char **Arguments) {
 		BootstrapNativeRuntimeSchema();
 		std::cout << "phase,manifest_entries,focuses,samples,mean_us,p50_us,p95_us,p99_us,max_us,"
 			"allocations,peak_alloc_bytes,retained_alloc_bytes,query_pages,query_cells,membership_visits,"
-			"completed_focus_evaluations,stale_revisions,requests,releases,retained_candidates,demand_records,pending_deltas,reference_hits\n";
+			"completed_focus_evaluations,stale_revisions,moving_sweep_completions,candidate_revalidations,"
+			"request_validation_visits,ranking_operations,requests,releases,retained_candidates,demand_records,"
+			"pending_deltas,reference_hits\n";
 		for (const auto Entries : Quick ? std::vector<std::size_t>{1'000, 10'000}
 										 : std::vector<std::size_t>{1'000, 10'000, 65'536}) {
 			for (const auto Focuses : Quick ? std::vector<std::size_t>{1, 10, 100}
