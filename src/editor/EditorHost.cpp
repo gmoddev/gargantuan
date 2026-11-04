@@ -473,12 +473,25 @@ namespace gargantuan {
 			Json Dependencies = Json::array();
 			for (const auto &Dependency : Record.Dependencies) Dependencies.push_back(Dependency.ToString());
 			Json Metadata = Json::object();
+			// Report stored asset declarations; package geometry coverage is validated separately.
+			const auto EncodeLocalBounds = [](const RenderBounds &Bounds, const char *Coverage) {
+				return Json{
+					{"Space", "AssetLocal"}, {"Coverage", Coverage},
+					{"Minimum", {Bounds.Minimum.x, Bounds.Minimum.y, Bounds.Minimum.z}},
+					{"Maximum", {Bounds.Maximum.x, Bounds.Maximum.y, Bounds.Maximum.z}},
+				};
+			};
 			if (Record.Asset) std::visit([&](const auto &Asset) {
 				using T = std::decay_t<decltype(Asset)>;
 				if constexpr (std::is_same_v<T, ImportedImage>) {
 					Metadata["Width"] = Asset.Width;
 					Metadata["Height"] = Asset.Height;
 				} else if constexpr (std::is_same_v<T, ImportedMesh>) {
+					Metadata["GeometryInspectionVersion"] = 1;
+					Metadata["LocalBounds"] = EncodeLocalBounds(Asset.Bounds,
+						Asset.Skeleton || Asset.SkinInfluences ? "DeclaredBindPose" : "DeclaredMesh");
+					Metadata["CollisionAssetId"] = Asset.CollisionAsset
+						? Json(Asset.CollisionAsset->ToString()) : Json(nullptr);
 					Metadata["VertexCount"] = Asset.Vertices ? Asset.Vertices->size() : 0;
 					Metadata["IndexCount"] = Asset.Indices ? Asset.Indices->size() : 0;
 					Metadata["SubmeshCount"] = Asset.SubmeshCount;
@@ -492,6 +505,12 @@ namespace gargantuan {
 						Metadata["JointCount"] = Asset.Skeleton->Joints->size();
 						Metadata["SkeletonCompatibilityId"] = Asset.Skeleton->CompatibilityId.ToString();
 					}
+				} else if constexpr (std::is_same_v<T, ImportedCollision>) {
+					Metadata["GeometryInspectionVersion"] = 1;
+					Metadata["LocalBounds"] = EncodeLocalBounds(Asset.Bounds, "DeclaredCollision");
+					Metadata["Representation"] = "StaticTriangles";
+					Metadata["VertexCount"] = Asset.Positions ? Asset.Positions->size() : 0;
+					Metadata["IndexCount"] = Asset.Indices ? Asset.Indices->size() : 0;
 				} else if constexpr (std::is_same_v<T, ImportedAnimation>) {
 					Metadata["Duration"] = Asset.Duration;
 					Metadata["ChannelCount"] = Asset.Tracks ? Asset.Tracks->size() : 0;
