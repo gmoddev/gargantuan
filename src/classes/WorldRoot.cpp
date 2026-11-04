@@ -444,6 +444,9 @@ namespace gargantuan {
 	}
 
 	void WorldRoot::ObserveCollisionAssetChanges() {
+		// Detached stack worlds are supported native query/prediction fixtures.
+		// They cannot own an AssetService, and GetDataModel needs shared ownership.
+		if (weak_from_this().expired()) return;
 		auto DataModelValue = GetDataModel();
 		auto Assets = DataModelValue ? std::dynamic_pointer_cast<AssetService>(DataModelValue->GetService("AssetService")) : nullptr;
 		if (Assets != CollisionAssets.lock()) {

@@ -21,6 +21,7 @@ namespace gargantuan {
 	inline constexpr float MinimumRaycastDistance = 0.0001f;
 	inline constexpr std::size_t MaximumPhysicsCollisionResources = 1024;
 	inline constexpr std::size_t MaximumPhysicsCollisionConsumers = 65536;
+	inline constexpr std::size_t MaximumPhysicsCollisionMeshShapes = 65536;
 	inline constexpr std::size_t MaximumPhysicsCollisionCanonicalBytes = 64 * 1024 * 1024;
 	inline constexpr std::size_t MaximumPhysicsCollisionNativeBytes = 64 * 1024 * 1024;
 	inline constexpr std::size_t MaximumPhysicsCollisionResourceIdBytes = 128;
@@ -92,6 +93,7 @@ namespace gargantuan {
 		std::size_t CollisionConsumerLimit = MaximumPhysicsCollisionConsumers;
 		std::size_t CollisionCanonicalByteLimit = MaximumPhysicsCollisionCanonicalBytes;
 		std::size_t CollisionNativeByteLimit = MaximumPhysicsCollisionNativeBytes;
+		std::size_t CollisionMeshShapeLimit = MaximumPhysicsCollisionMeshShapes;
 	};
 
 	struct PhysicsStepConfig {
@@ -119,6 +121,14 @@ namespace gargantuan {
 		std::size_t RetiredResources = 0;
 		std::size_t CreatedConsumers = 0;
 		std::size_t RetiredConsumers = 0;
+		std::size_t MeshShapeLimit = 0;
+		std::size_t ActiveMeshShapes = 0;
+		std::size_t CreatedMeshShapes = 0;
+		std::size_t RetiredMeshShapes = 0;
+		std::size_t NativeChunks = 0;
+		std::size_t ChunkTriangleLimit = 0;
+		// Peak charged native mesh blobs during building; excludes builder scratch.
+		std::size_t PeakBuildNativeBytes = 0;
 		std::string LastAdmissionFailure;
 		// Box3D does not expose per-shape storage size.
 		bool NativeShapeBytesKnown = false;

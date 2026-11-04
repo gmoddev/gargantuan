@@ -154,3 +154,30 @@ coarse bounds derived only from Size/2 need not cover arbitrary mesh positions.
 Consumers must supply conservative spatial metadata under their owning contract;
 this campaign does not silently alter package bounds, 3K regions or 3M selection.
 The concurrent 3M campaign records that pre-existing bounds limitation separately.
+
+## Bounded dense-contact correction (KI-2B-001)
+
+The correction keeps one canonical Collision asset and one shared native resource
+per identity/revision. The adapter builds global adjacency once, partitions the
+native BVH's spatial triangle order into at most 255 triangles per chunk, preserves
+each triangle's global edge flags, and projects one native shape per chunk. Each
+shape fits below Box3D's 256-candidate contact buffer; no triangles are selected
+or dropped to meet that buffer. Native geometry and chunk handles remain private.
+
+A separate per-world mesh-shape ceiling defaults to and cannot exceed 65536.
+It bounds chunk amplification without changing existing primitive admission or
+3M policy. Both old and staged replacement shapes consume that ceiling. Candidate
+creation rolls back all native shapes on failure before the previous body changes.
+Canonical bytes count once, native bytes sum all chunks, and conservative build
+admission charges the full adjacency mesh plus chunks against remaining native
+mesh-data bytes. Builder scratch is not a hard allocator quota.
+
+Ray hits are deduplicated to the nearest hit per neutral body. Exact duplicate
+mover planes are coalesced. Begin/end events aggregate native shape-pair membership
+to neutral body pairs across complete steps, preventing false events at chunk
+seams. At most 65536 native pairs and step changes are tracked; observation overflow
+latches `EventsTruncated` for the remaining world lifetime, explicitly marking
+subsequent contact-event history incomplete. It does not drop physical triangles.
+CanTouch changes stage shape replacement because the pinned backend copies event
+flags at contact creation. The missed-contact, seam, bounds, replacement and
+sharing regressions must pass before this correction is marked qualified.
