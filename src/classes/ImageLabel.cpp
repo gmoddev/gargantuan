@@ -6,7 +6,7 @@
 #include <utility>
 
 namespace gargantuan {
-	ImageLabel::ImageLabel() { BackgroundTransparency = 1.0f; }
+	ImageLabel::ImageLabel() = default;
 
 	std::string ImageLabel::GetImage() const { return Image; }
 

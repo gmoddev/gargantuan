@@ -4,15 +4,21 @@ on:
     push:
         branches: [main]
     workflow_dispatch:
+        inputs:
+            deploy:
+                description: Publish documentation from main (explicit deployment authorization)
+                type: boolean
+                default: false
 
 permissions:
     contents: read
-    pages: write
-    id-token: write
 
 jobs:
     build:
         runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            pages: read
         steps:
             - name: Checkout
               uses: actions/checkout@v7
@@ -22,8 +28,12 @@ jobs:
                   path: "docs"
 
     deploy:
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy == true
         needs: build
         runs-on: ubuntu-latest
+        permissions:
+            pages: write
+            id-token: write
         environment:
             name: github-pages
             url: ${{ steps.deployment.outputs.page_url }}

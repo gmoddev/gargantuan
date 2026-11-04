@@ -4,6 +4,8 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 #include "serialization/JsonCodec.hpp"
+#include "gargantuan/reflection/PreRunRegistration.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 
 #include <SDL3/SDL.h>
 #include <format>
@@ -28,7 +30,8 @@ namespace gargantuan {
 		constexpr std::string_view ProjectMetadataFilename = "project.json";
 		constexpr std::uint32_t ProjectMetadataVersion = 1;
 
-		void PersistBytesAtomically(const std::filesystem::path &Destination, std::span<const std::uint8_t> Bytes) {
+		void PersistBytesAtomically(const std::filesystem::path &Destination, std::span<const std::uint8_t> Bytes,
+			const std::function<void()> &BeforeReplace = {}) {
 			std::filesystem::create_directories(Destination.parent_path());
 			static std::atomic_uint64_t Counter = 1;
 			const auto Suffix = std::format(
@@ -47,6 +50,7 @@ namespace gargantuan {
 					Output.close();
 					if (!Output) throw std::runtime_error("Could not close a temporary project file");
 				}
+				if (BeforeReplace) BeforeReplace();
 #if defined(_WIN32)
 				if (!MoveFileExW(Temporary.c_str(), Destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
 					throw std::runtime_error(std::format("Atomic project replacement failed ({})", GetLastError()));
@@ -245,5 +249,18 @@ namespace gargantuan {
 			PersistStringAtomically(Root / ".gargantuan" / "assets" / "catalog.json", snapshot.Assets.CatalogJson);
 		if (beforeReplace) beforeReplace();
 		PersistStringAtomically(InstanceFilePath, snapshot.Contents);
+	}
+
+	bool Project::ReplacePreRunSource(const std::optional<std::string> &ExpectedSource,
+		std::string_view Source, const std::function<void()> &BeforeReplace) const {
+		ValidateProtocolString(Source, MaximumPreRunSourceBytes, "PreRun source");
+		const auto Destination = ResolveProjectPreRunPath(Root);
+		if (ReadProjectPreRunSource(Root) != ExpectedSource) return false;
+		PersistBytesAtomically(Destination, std::span(reinterpret_cast<const std::uint8_t *>(Source.data()), Source.size()), [&] {
+			if (BeforeReplace) BeforeReplace();
+			if (ResolveProjectPreRunPath(Root) != Destination || ReadProjectPreRunSource(Root) != ExpectedSource)
+				throw PreRunSourceConflict("PreRun source changed during atomic replacement");
+		});
+		return true;
 	}
 }

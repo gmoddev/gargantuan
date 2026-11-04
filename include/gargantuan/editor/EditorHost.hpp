@@ -28,6 +28,7 @@
 
 namespace gargantuan {
 	inline constexpr std::uint32_t EditorHostProtocolVersion = 1;
+	inline constexpr std::uint32_t EditorHostPropertyBatchVersion = 1;
 	inline constexpr std::size_t EditorHostMaximumRequestBytes = 1024 * 1024;
 	inline constexpr std::size_t EditorHostMaximumResponseBytes = 8 * 1024 * 1024;
 	inline constexpr std::uint32_t EditorHostMaximumViewportWidth = 3840;
@@ -60,12 +61,17 @@ namespace gargantuan {
 
 	  private:
 		struct PackageJob;
+		struct AnimationPreviewJob;
+		std::unique_ptr<AnimationPreviewJob> ActiveAnimationPreview;
+		std::uint64_t NextAnimationPreviewId = 1;
 		std::string SessionToken;
 		static constexpr std::uint64_t TransactionOwner = 1;
 		std::unique_ptr<DiskFilesystem> Filesystem;
 		std::optional<Project> CurrentProject;
 		std::shared_ptr<DataModel> World;
 		std::uint64_t PersistedRevision = 0;
+		std::optional<std::string> ActivePreRunSource;
+		std::uint64_t ActivePreRunSchemaGeneration = 0;
 		std::function<void()> PersistenceCheckpointForTesting;
 		std::function<void(std::string_view)> ViewportPresentationCheckpointForTesting;
 		std::function<EditorViewportCaptureView(RenderPublicationPtr)> ViewportCaptureForTesting;

@@ -4,6 +4,8 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/editor/EditorHost.hpp"
+#include "gargantuan/editor/AnimationPreview.hpp"
+#include "gargantuan/animation/AnimationTrack.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/classes/BasePart.hpp"
@@ -14,6 +16,7 @@
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
@@ -21,6 +24,7 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "serialization/JsonCodec.hpp"
+#include "runtime/PreparedPropertyCommit.hpp"
 
 #include <algorithm>
 #include <array>
@@ -108,6 +112,50 @@ namespace gargantuan {
 			return std::move(*Parsed);
 		}
 
+		bool AtomicBatchWritable(const InstanceProperty &Property, const ScriptSecurityContext &Security) {
+			return PreparedPropertyCommit::SupportsProperty(Property) &&
+				Security.HasCapability(ScriptCapability::MutateDataModel) &&
+				Property.Read && Property.Write && Property.CanRead(Security) && Property.CanWrite(Security) &&
+				static_cast<int>(Enums::Permission::None) >= static_cast<int>(Property.ReadPermission) &&
+				static_cast<int>(Enums::Permission::None) >= static_cast<int>(Property.WritePermission);
+		}
+
+		// Reserve and encode everything fallible before Apply. Fixed-width JSON
+		// number slots use trailing whitespace, so completing a committed response
+		// needs neither allocation nor a JSON tree (including its allocating cleanup).
+		struct PropertyBatchResponse {
+			std::string Encoded;
+			std::array<std::size_t, 5> Offsets{};
+			explicit PropertyBatchResponse(const Json &RequestId) {
+				Encoded = "{\"Version\":1,\"RequestId\":" + RequestId.dump() + ",\"Ok\":true,\"Result\":{";
+				constexpr std::array Names{"StartingRevision", "ResultingRevision", "ChangedWriteCount",
+					"TransactionId", "NotificationFailures"};
+				for (std::size_t Index = 0; Index < Names.size(); ++Index) {
+					if (Index != 0) Encoded += ',';
+					Encoded += '"';
+					Encoded += Names[Index];
+					Encoded += "\":";
+					Offsets[Index] = Encoded.size();
+					Encoded.append(22, ' '); // uint64 plus optional string quotes
+				}
+				Encoded += "}}";
+			}
+			void Complete(const PreparedPropertyResult &Result) noexcept {
+				const std::array<std::uint64_t, 5> Values{Result.StartingRevision, Result.ResultingRevision,
+					Result.ChangedWrites, Result.HistoryId.Value, Result.NotificationFailures};
+				for (std::size_t Index = 0; Index < Values.size(); ++Index) {
+					auto *Slot = Encoded.data() + Offsets[Index];
+					if (Index == 3 && Values[Index] == 0) {
+						std::copy_n("null", 4, Slot);
+						continue;
+					}
+					if (Index == 3) *Slot++ = '"';
+					const auto Converted = std::to_chars(Slot, Slot + 20, Values[Index]);
+					if (Index == 3) *Converted.ptr = '"';
+				}
+			}
+		};
+
 		const char *MutationStatusName(MutationStatus status) {
 			switch (status) {
 				case MutationStatus::Success: return "Success";
@@ -174,21 +222,6 @@ namespace gargantuan {
 			return "Unsupported";
 		}
 
-		std::optional<WireValue> EncodePropertyDefault(const InstanceProperty &Property) {
-			if (Property.SemanticType == InstanceProperty::DataType::NativeEnum &&
-				Property.NativeEnumType && Property.ReadEncodedEnumValue) {
-				auto Value = Property.ReadEncodedEnumValue(Property.Unmodified);
-				auto Type = Enums::GetEnums().find(*Property.NativeEnumType);
-				if (!Value || Type == Enums::GetEnums().end()) return std::nullopt;
-				auto Item = Type->second->FromValue(*Value);
-				if (!Item) return std::nullopt;
-				return WireEnumItem{*Property.NativeEnumType, std::string(Item->Name)};
-			}
-			if (Property.SemanticType == InstanceProperty::DataType::ObjectReference)
-				return Property.Nullable ? std::optional<WireValue>(std::monostate{}) : std::nullopt;
-			return EncodeNativeWireValue(Property.Unmodified);
-		}
-
 		Json EncodeNativePropertyMetadata(
 			const SchemaClassDefinition &Owner,
 			const InstanceProperty &Property,
@@ -210,6 +243,7 @@ namespace gargantuan {
 				{"Readable", Readable},
 				{"Writable", Writable},
 				{"Editable", Supported && Property.Editable && Readable && Writable},
+				{"AtomicBatchWritable", AtomicBatchWritable(Property, Security)},
 				{"Category", Property.Category},
 				{"NumericRange", nullptr},
 				{"EditorHint", Property.EditorHint ? Json(*Property.EditorHint) : Json(nullptr)},
@@ -247,7 +281,7 @@ namespace gargantuan {
 			} else if (Property.SemanticType == InstanceProperty::DataType::SchemaEnum) {
 				Encoded["EnumKind"] = "Schema";
 			}
-			if (auto Default = EncodePropertyDefault(Property))
+			if (auto Default = EncodePropertyDefault(Property, Property.Unmodified))
 				Encoded["Default"] = JsonCodec::EncodeWireValue(*Default);
 			return Encoded;
 		}
@@ -271,6 +305,7 @@ namespace gargantuan {
 				{"DataType", DataType}, {"WireType", WireType},
 				{"Default", JsonCodec::EncodeWireValue(Default)},
 				{"Readable", true}, {"Writable", true}, {"Editable", Editable},
+				{"AtomicBatchWritable", false},
 				{"Category", "Data"}, {"NumericRange", nullptr}, {"EditorHint", nullptr},
 				{"CompoundType", nullptr}, {"EnumKind", nullptr}, {"EnumType", nullptr},
 				{"EnumSchemaId", nullptr}, {"EnumDefinitionVersion", nullptr}, {"EnumItems", Json::array()},
@@ -351,7 +386,8 @@ namespace gargantuan {
 			return Method == "OpenProject" || Method == "CreateProject" || Method == "SaveProject" ||
 				Method == "SaveProjectAs" || Method == "BeginTransaction" || Method == "CommitTransaction" ||
 				Method == "Undo" || Method == "Redo" || Method == "SetScriptSource" ||
-				Method == "SetProperty" || Method == "SetTransform" || Method == "SetAttribute" || Method == "SetExtensionProperty" ||
+				Method == "SetPreRunSource" || Method == "ValidatePreRun" ||
+				Method == "SetProperty" || Method == "SetPropertyBatch" || Method == "SetTransform" || Method == "SetAttribute" || Method == "SetExtensionProperty" ||
 				Method == "SetCustomProperty" || Method == "AddTag" || Method == "RemoveTag" ||
 				Method == "CreateInstance" || Method == "DestroyInstance" ||
 				Method == "DuplicateInstance" || Method == "ReparentInstance" ||
@@ -451,6 +487,14 @@ namespace gargantuan {
 							{"Material", Primitive.Material ? Json(Primitive.Material->ToString()) : Json(nullptr)},
 						});
 					Metadata["Primitives"] = std::move(Primitives);
+					if (Asset.Skeleton && Asset.Skeleton->Joints) {
+						Metadata["JointCount"] = Asset.Skeleton->Joints->size();
+						Metadata["SkeletonCompatibilityId"] = Asset.Skeleton->CompatibilityId.ToString();
+					}
+				} else if constexpr (std::is_same_v<T, ImportedAnimation>) {
+					Metadata["Duration"] = Asset.Duration;
+					Metadata["ChannelCount"] = Asset.Tracks ? Asset.Tracks->size() : 0;
+					Metadata["SkeletonCompatibilityId"] = Asset.SkeletonCompatibilityId.ToString();
 				} else if constexpr (std::is_same_v<T, ImportedFont>) {
 					Metadata["FaceCount"] = Asset.FaceCount;
 				} else if constexpr (std::is_same_v<T, ImportedMaterial>) {
@@ -482,6 +526,53 @@ namespace gargantuan {
 				{"BuiltIn", Record.BuiltIn}, {"Diagnostic", std::move(Diagnostic)},
 				{"Dependencies", std::move(Dependencies)}, {"Metadata", std::move(Metadata)},
 			};
+		}
+
+		Json DescribeAnimationRig(const std::shared_ptr<AssetService> &Assets, std::string Reference) {
+			if (!Assets || !AssetReference::Parse(Reference))
+				throw std::invalid_argument("A strict asset reference is required");
+			if (auto Clip = Assets->ResolveAnimation(Reference); Clip && Clip->Value.SkeletonAsset)
+				Reference = "asset://" + Clip->Value.SkeletonAsset->ToString();
+			const auto Mesh = Assets->ResolveMeshResource(Reference);
+			if (!Mesh || !Mesh->Value.Skeleton || !Mesh->Value.Skeleton->Joints)
+				throw std::invalid_argument("Select an available skinned Mesh or Animation asset");
+			const auto Record = Assets->GetAsset(Reference);
+			const auto &Skeleton = *Mesh->Value.Skeleton;
+			Json Joints = Json::array(), Clips = Json::array();
+			for (const auto &Joint : *Skeleton.Joints) {
+				const auto Separator = Joint.Path.find_last_of('/');
+				Joints.push_back({{"Name", Joint.Path.substr(Separator == std::string::npos ? 0 : Separator + 1)},
+					{"Path", Joint.Path}, {"Parent", Joint.Parent},
+					{"Translation", {Joint.BindTranslation.x, Joint.BindTranslation.y, Joint.BindTranslation.z}},
+					{"Rotation", {Joint.BindRotation.x, Joint.BindRotation.y, Joint.BindRotation.z, Joint.BindRotation.w}},
+					{"Scale", {Joint.BindScale.x, Joint.BindScale.y, Joint.BindScale.z}}});
+			}
+			std::size_t ChannelCount = 0;
+			for (const auto &Entry : Assets->GetCatalog(false)) {
+				if (Entry.Kind != AssetKind::Animation || !Entry.Asset) continue;
+				const auto &Clip = std::get<ImportedAnimation>(*Entry.Asset);
+				if (Clip.SkeletonCompatibilityId != Skeleton.CompatibilityId) continue;
+				ChannelCount += Clip.Tracks ? Clip.Tracks->size() : 0;
+				if (Clips.size() >= 256 || ChannelCount > 4096)
+					throw std::length_error("Rig inspection exceeds the 256 clip / 4096 channel response bound");
+				Json Channels = Json::array();
+				if (Clip.Tracks) for (const auto &Track : *Clip.Tracks)
+					Channels.push_back({{"JointPath", Track.JointPath},
+						{"TranslationInterpolation", Track.TranslationInterpolation == AssetAnimationInterpolation::Step ? "STEP" : "LINEAR"},
+						{"RotationInterpolation", Track.RotationInterpolation == AssetAnimationInterpolation::Step ? "STEP" : "LINEAR"},
+						{"ScaleInterpolation", Track.ScaleInterpolation == AssetAnimationInterpolation::Step ? "STEP" : "LINEAR"},
+						{"TranslationKeys", Track.TranslationKeys ? Track.TranslationKeys->size() : 0},
+						{"RotationKeys", Track.RotationKeys ? Track.RotationKeys->size() : 0},
+						{"ScaleKeys", Track.ScaleKeys ? Track.ScaleKeys->size() : 0}});
+				Clips.push_back({{"Reference", Entry.Reference.Value}, {"Name", Entry.Name},
+					{"ContentRevision", Entry.ContentRevision}, {"Duration", Clip.Duration}, {"Channels", std::move(Channels)}});
+			}
+			return {{"RigVersion", 1}, {"MeshReference", Reference}, {"ContentRevision", Record->ContentRevision},
+				{"Diagnostic", Record->Diagnostic ? Json{{"Code", Record->Diagnostic->Code}, {"Message", Record->Diagnostic->Message}} : Json(nullptr)},
+				{"SkeletonCompatibilityId", Skeleton.CompatibilityId.ToString()}, {"Joints", std::move(Joints)},
+				{"Clips", std::move(Clips)},
+				{"BoundsMinimum", {Mesh->Value.Bounds.Minimum.x, Mesh->Value.Bounds.Minimum.y, Mesh->Value.Bounds.Minimum.z}},
+				{"BoundsMaximum", {Mesh->Value.Bounds.Maximum.x, Mesh->Value.Bounds.Maximum.y, Mesh->Value.Bounds.Maximum.z}}};
 		}
 
 		std::optional<std::filesystem::path> ValidateProjectDestination(const Json &value) {
@@ -574,7 +665,65 @@ namespace gargantuan {
 			}
 			return result;
 		}
+
+		std::string PreRunRevision(const std::optional<std::string> &Source) {
+			if (!Source) return "missing";
+			return AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Source->data()), Source->size())).ToString();
+		}
+
+		Json EncodePreRunSource(std::string_view Source) {
+			ValidateProtocolString(Source, MaximumPreRunSourceBytes, "PreRun source");
+			const auto Encoded = EncodeBase64(std::vector<std::uint8_t>(Source.begin(), Source.end()));
+			Json Chunks = Json::array();
+			for (std::size_t Offset = 0; Offset < Encoded.size(); Offset += MaximumProtocolStringBytes)
+				Chunks.push_back(Encoded.substr(Offset, MaximumProtocolStringBytes));
+			if (Chunks.empty()) Chunks.push_back("");
+			return Chunks;
+		}
+
+		std::string DecodePreRunSource(const Json &Chunks) {
+			if (!Chunks.is_array() || Chunks.empty() || Chunks.size() > 6)
+				throw std::invalid_argument("PreRun SourceBase64 requires one to six bounded chunks");
+			std::string Encoded;
+			for (const auto &Chunk : Chunks) {
+				if (!Chunk.is_string()) throw std::invalid_argument("PreRun source chunk must be a string");
+				const auto &Text = Chunk.get_ref<const std::string &>();
+				if (Text.size() > MaximumProtocolStringBytes || Encoded.size() + Text.size() > ((MaximumPreRunSourceBytes + 2) / 3) * 4)
+					throw std::invalid_argument("PreRun source exceeds its byte limit");
+				Encoded += Text;
+			}
+			if (Encoded.size() % 4 != 0) throw std::invalid_argument("PreRun source Base64 length is invalid");
+			constexpr std::string_view Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+			std::vector<std::uint8_t> Bytes;
+			Bytes.reserve(Encoded.size() / 4 * 3);
+			for (std::size_t Offset = 0; Offset < Encoded.size(); Offset += 4) {
+				std::uint32_t Value = 0;
+				for (std::size_t Index = 0; Index < 4; ++Index) {
+					const char Character = Encoded[Offset + Index];
+					const auto Digit = Alphabet.find(Character);
+					if (Digit == std::string_view::npos && !(Character == '=' && Index >= 2 && Offset + 4 == Encoded.size()))
+						throw std::invalid_argument("PreRun source Base64 is invalid");
+					Value = (Value << 6) | (Character == '=' ? 0 : static_cast<std::uint32_t>(Digit));
+				}
+				Bytes.push_back(static_cast<std::uint8_t>(Value >> 16));
+				if (Encoded[Offset + 2] != '=') Bytes.push_back(static_cast<std::uint8_t>(Value >> 8));
+				if (Encoded[Offset + 3] != '=') Bytes.push_back(static_cast<std::uint8_t>(Value));
+			}
+			if (EncodeBase64(Bytes) != Encoded) throw std::invalid_argument("PreRun source Base64 is not canonical");
+			std::string Source(Bytes.begin(), Bytes.end());
+			ValidateProtocolString(Source, MaximumPreRunSourceBytes, "PreRun source");
+			return Source;
+		}
 	}
+
+	struct EditorHost::AnimationPreviewJob final {
+		std::uint64_t Id = 0;
+		std::unique_ptr<AnimationPreview> Scene;
+		std::unique_ptr<EditorViewportRenderer> Renderer;
+		std::unique_ptr<SharedFrameRing> Ring;
+		std::chrono::steady_clock::time_point LastStep = std::chrono::steady_clock::now();
+		Json Rig;
+	};
 
 	struct EditorHost::PackageJob final {
 		std::uint64_t Id = 0;
@@ -603,6 +752,7 @@ namespace gargantuan {
 	}
 
 	EditorHost::~EditorHost() {
+		ActiveAnimationPreview.reset();
 		ViewportPresentationActive = false;
 		ViewportLatestFrameMailbox.reset();
 		if (ActivePackageJob) {
@@ -754,7 +904,7 @@ namespace gargantuan {
 				));
 			auto message = std::move(*ParsedMessage);
 			if (!HasOnlyFields(message, {"Version", "RequestId", "SessionToken", "Method", "Params"}) ||
-				message.value("Version", 0u) != EditorHostProtocolVersion ||
+				!message.contains("Version") || JsonCodec::DecodeUnsigned32(message["Version"]) != EditorHostProtocolVersion ||
 				!message.contains("RequestId") || !message["RequestId"].is_string() ||
 				message["RequestId"].get_ref<const std::string &>().size() > 128 ||
 				!message.contains("SessionToken") || !message["SessionToken"].is_string() ||
@@ -766,9 +916,9 @@ namespace gargantuan {
 			requestId = message["RequestId"];
 			if (message["SessionToken"].get<std::string>() != SessionToken)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Session token was rejected"));
-			if (World) (void)World->Transactions.ExpireOwner(*World, TransactionOwner);
-
 			const auto method = message["Method"].get<std::string>();
+			// Batch failures cannot commit an unrelated expired legacy group.
+			if (World && method != "SetPropertyBatch") (void)World->Transactions.ExpireOwner(*World, TransactionOwner);
 			const auto &parameters = message["Params"];
 			if (ActivePlaySession && IsAuthoringMethodWhilePlaying(method))
 				return SerializeBoundedResponse(ErrorResponse(
@@ -816,7 +966,7 @@ namespace gargantuan {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));
 				Json capabilities = {
-					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetTransform", "SetAttribute", "SetExtensionProperty", "SetCustomProperty",
+					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetPropertyBatch", "SetTransform", "SetAttribute", "SetExtensionProperty", "SetCustomProperty",
 					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
 					"CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
 					"BeginTransaction",
@@ -824,9 +974,11 @@ namespace gargantuan {
 					"AuthoritativeTransactions",
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
-					"ReadScriptSource", "WriteScriptSource",
+					"ReadScriptSource", "WriteScriptSource", "PreRunSource", "ValidatePreRun",
+					"CustomServiceDeclarations", "ReplicatedStorage",
 					"PlaySession", "DiagnosticStream", "SendPlayInput",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
+					"AnimationRig", "AnimationPreview",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
 					"ViewportLatestFrame", "ViewportPresentationDiagnostics"
@@ -857,6 +1009,7 @@ namespace gargantuan {
 					{
 						{"Engine", "Gargantuan"},
 						{"ProtocolVersion", EditorHostProtocolVersion},
+						{"PropertyBatchVersion", EditorHostPropertyBatchVersion},
 						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 2},
 						{"ViewportTransports", std::move(viewportTransports)},
@@ -865,6 +1018,68 @@ namespace gargantuan {
 						{"StudioCapabilities", EncodeCapabilities(StudioSecurity.Capabilities)},
 					}
 				));
+			}
+
+			if (method == "GetPreRunSource" || method == "SetPreRunSource" || method == "ValidatePreRun") {
+				const bool Write = method == "SetPreRunSource", Read = method == "GetPreRunSource";
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(Write ? ScriptCapability::MutateDataModel : ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "PreRun authoring requires explicit EditorCommands and read/write authority"));
+				if (!World || !CurrentProject) return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "Open a project first"));
+				if (!HasOnlyFields(parameters, Read ? std::initializer_list<std::string_view>{} :
+					std::initializer_list<std::string_view>{"ProjectRoot", "ExpectedSourceRevision", "SourceBase64"}) ||
+					(!Read && (!parameters.contains("ProjectRoot") || !parameters.contains("ExpectedSourceRevision") ||
+						!parameters["ExpectedSourceRevision"].is_string() || !parameters.contains("SourceBase64"))))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid PreRun authoring fields"));
+				if (ActivePreRunSchemaGeneration != GetRuntimeSchemaLifecycle().GetActiveGeneration())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleSchema", "Reopen the project after schema replacement"));
+				const auto Saved = ReadProjectPreRunSource(CurrentProject->Root);
+				const auto Location = CurrentProject->Root.generic_string();
+				const auto LocationRevision = AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Location.data()), Location.size())).ToString();
+				const auto Revision = PreRunRevision(Saved) + "@" + LocationRevision;
+				auto State = [&] {
+					return Json{{"ProjectRoot", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()))},
+						{"Path", ".gargantuan/prerun.luau"}, {"Exists", Saved.has_value()}, {"SourceRevision", Revision},
+						{"ActiveSourceRevision", PreRunRevision(ActivePreRunSource)}, {"SchemaGeneration", ActivePreRunSchemaGeneration},
+						{"ReloadRequired", Saved != ActivePreRunSource}, {"MaximumSourceBytes", MaximumPreRunSourceBytes}};
+				};
+				if (Read) {
+					auto Result = State(); Result["SourceBase64"] = EncodePreRunSource(Saved.value_or(""));
+					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
+				}
+				const auto Root = JsonCodec::DecodeObjectId(parameters["ProjectRoot"]);
+				if (!Root || Root->ToObjectId() != World->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleProject", "PreRun buffer belongs to another project generation"));
+				if (parameters["ExpectedSourceRevision"] != Revision)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Conflict", "PreRun source changed; reload or preserve the local buffer"));
+				if (World->Transactions.GetOpenCount() != 0 || (ActivePackageJob && !ActivePackageJob->Complete.load()))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "LifecycleConflict", "Finish the active transaction or package job first"));
+				std::string Source;
+				try { Source = DecodePreRunSource(parameters["SourceBase64"]); }
+				catch (const std::invalid_argument &Error) { return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidSource", Error.what())); }
+				if (Write) {
+					try {
+						if (!CurrentProject->ReplacePreRunSource(Saved, Source, PersistenceCheckpointForTesting))
+							throw PreRunSourceConflict("PreRun source changed before commit");
+					} catch (const PreRunSourceConflict &Error) {
+						return SerializeBoundedResponse(ErrorResponse(requestId, "Conflict", Error.what()));
+					}
+					auto Result = State(); Result["Exists"] = true; Result["SourceRevision"] = PreRunRevision(Source) + "@" + LocationRevision;
+					Result["ReloadRequired"] = std::optional<std::string>(Source) != ActivePreRunSource;
+					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
+				}
+				auto Result = State();
+				const auto Diagnostic = ValidatePreRunSource(Source);
+				Result["Validated"] = !Diagnostic; Result["ActiveSchemaChanged"] = false;
+				Result["ValidatedSourceRevision"] = PreRunRevision(Source);
+				Result["Diagnostics"] = Json::array();
+				if (Diagnostic) {
+					auto Message = Diagnostic->Message.substr(0, 4096);
+					while (!Message.empty() && !IsValidProtocolUtf8(Message)) Message.pop_back();
+					Result["Diagnostics"].push_back({{"Code", GetPreRunDiagnosticCodeName(Diagnostic->Code)},
+						{"Source", ".gargantuan/prerun.luau"}, {"Definition", Diagnostic->Definition.substr(0, 256)}, {"Message", Message}});
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
 			}
 
 			if (method == "StartPackageBuild") {
@@ -887,6 +1102,8 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "TransactionOpen", "Commit the open authoring transaction before packaging"
 					));
+				if (ReadProjectPreRunSource(CurrentProject->Root) != ActivePreRunSource)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PreRunReloadRequired", "Reopen the project to activate saved PreRun before packaging"));
 				if (HasRevisionConflict())
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "Conflict", "The authoritative project revision changed before package capture"
@@ -910,6 +1127,8 @@ namespace gargantuan {
 					Payload = PackageBuilder::Capture(
 						*CurrentProject, World, World->GetAuthoritativeRevision(), PersistedRevision
 					);
+					if (Payload.PreRunSource != ActivePreRunSource)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PreRunReloadRequired", "PreRun source changed during package capture; reopen the project"));
 				} catch (const std::exception &) {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "PackageCaptureFailed", "The authoritative project snapshot could not be captured for packaging"
@@ -1027,6 +1246,8 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
 				if (World->Transactions.GetOpenCount() != 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "TransactionOpen", "Commit the open authoring transaction before Play"));
+				if (ReadProjectPreRunSource(CurrentProject->Root) != ActivePreRunSource)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PreRunReloadRequired", "Reopen the project to activate saved PreRun before Play"));
 				if (ActivePlaySession)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "One local Play session is already active"));
 				if (NextPlaySessionId == 0)
@@ -1407,6 +1628,7 @@ namespace gargantuan {
 				if (World) {
 					(void)World->Transactions.TerminateOwner(*World, TransactionOwner); World->Destroy();
 				}
+				ActiveAnimationPreview.reset();
 				World.reset();
 				Filesystem.reset();
 				CurrentProject.reset();
@@ -1420,7 +1642,8 @@ namespace gargantuan {
 				ViewportHeight = 0;
 				ViewportPresentationActive = false;
 				AdvanceViewportGeneration();
-				BootstrapProjectRuntimeSchema(root);
+				ActivePreRunSource = BootstrapProjectRuntimeSchema(root);
+				ActivePreRunSchemaGeneration = GetRuntimeSchemaLifecycle().GetActiveGeneration();
 				auto filesystem = std::make_unique<DiskFilesystem>(root);
 				auto project = Project::fromExisting(filesystem.get());
 				auto world = project.DeserializeGame();
@@ -1531,6 +1754,7 @@ namespace gargantuan {
 						(void)World->Transactions.TerminateOwner(*World, TransactionOwner);
 						World->Destroy();
 					}
+					ActiveAnimationPreview.reset();
 					World.reset();
 					Filesystem.reset();
 					CurrentProject.reset();
@@ -1544,7 +1768,8 @@ namespace gargantuan {
 					ViewportHeight = 0;
 					ViewportPresentationActive = false;
 					AdvanceViewportGeneration();
-					BootstrapProjectRuntimeSchema(*Destination);
+					ActivePreRunSource = BootstrapProjectRuntimeSchema(*Destination);
+					ActivePreRunSchemaGeneration = GetRuntimeSchemaLifecycle().GetActiveGeneration();
 					auto NewFilesystem = std::make_unique<DiskFilesystem>(*Destination);
 					auto NewProject = Project::fromExisting(NewFilesystem.get());
 					auto LoadedWorld = NewProject.DeserializeGame();
@@ -1586,6 +1811,112 @@ namespace gargantuan {
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId, EncodeProjectState(World, PersistedRevision, CurrentProject)
 				));
+			}
+
+			if (method == "GetAnimationRig" || method == "OpenAnimationPreview" ||
+				method == "ControlAnimationPreview" || method == "CaptureAnimationPreview" || method == "CloseAnimationPreview") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					(method != "GetAnimationRig" && !StudioSecurity.HasCapability(ScriptCapability::ViewportControl)))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Animation access requires ReadDataModel and preview requires ViewportControl"));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+				if (method == "GetAnimationRig" || method == "OpenAnimationPreview") {
+					if (!HasOnlyFields(parameters, {"Reference"}) || !parameters.contains("Reference") || !parameters["Reference"].is_string())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "A strict asset Reference is required"));
+					auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+					auto Rig = DescribeAnimationRig(Assets, parameters["Reference"].get<std::string>());
+					if (method == "GetAnimationRig") return SerializeBoundedResponse(SuccessResponse(requestId, Rig));
+					if (ActiveAnimationPreview)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PreviewActive", "Close the current Animation Preview first"));
+					if (NextAnimationPreviewId == 0) throw std::overflow_error("Animation Preview identity exhausted");
+					auto Candidate = std::make_unique<AnimationPreviewJob>();
+					Candidate->Id = NextAnimationPreviewId++;
+					Candidate->Scene = std::make_unique<AnimationPreview>(Assets->CaptureProjectAssets(), Rig["MeshReference"].get<std::string>());
+					Candidate->Rig = Rig;
+					Json Transport = {{"Transport", "Base64"}};
+					if (SharedFrameRing::IsSupported()) {
+						Candidate->Ring = std::make_unique<SharedFrameRing>();
+						Transport = {{"Transport", "SharedMemoryRing"}, {"Version", SharedFrameRingLayout::Version},
+							{"Name", Candidate->Ring->GetName()}, {"MappingBytes", Candidate->Ring->GetMappingBytes()},
+							{"HeaderBytes", SharedFrameRingLayout::HeaderBytes}, {"SlotCount", SharedFrameRingLayout::SlotCount},
+							{"SlotHeaderBytes", SharedFrameRingLayout::SlotHeaderBytes}, {"SlotStride", SharedFrameRingLayout::SlotStride},
+							{"MaximumPayloadBytes", SharedFrameRingLayout::MaximumPayloadBytes}, {"PixelFormat", "RGB8"}};
+					}
+					Json Result = {{"PreviewId", std::to_string(Candidate->Id)}, {"Rig", std::move(Rig)}, {"FrameTransport", std::move(Transport)}};
+					ActiveAnimationPreview = std::move(Candidate);
+					return SerializeBoundedResponse(SuccessResponse(requestId, Result));
+				}
+				auto Id = parameters.contains("PreviewId") ? DecodeCanonicalJobId(parameters["PreviewId"]) : std::nullopt;
+				if (!Id || !ActiveAnimationPreview || ActiveAnimationPreview->Id != *Id)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePreview", "PreviewId is not the active owned preview"));
+				auto &Preview = *ActiveAnimationPreview;
+				if (method == "CloseAnimationPreview") {
+					if (!HasOnlyFields(parameters, {"PreviewId"}))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Close accepts only PreviewId"));
+					ActiveAnimationPreview.reset();
+					return SerializeBoundedResponse(SuccessResponse(requestId, {{"Closed", true}}));
+				}
+				if (method == "ControlAnimationPreview") {
+					if (!HasOnlyFields(parameters, {"PreviewId", "Action", "Value"}) || !parameters.contains("Action") || !parameters["Action"].is_string())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Control requires Action and optional Value"));
+					const auto Action = parameters["Action"].get<std::string>();
+					auto Track = Preview.Scene->GetTrack();
+					if (Action == "Clip" && parameters.contains("Value") && parameters["Value"].is_string())
+						Preview.Scene->SelectClip(parameters["Value"].get<std::string>());
+					else if (!Track) return SerializeBoundedResponse(ErrorResponse(requestId, "ClipRequired", "Select a clip first"));
+					else if (Action == "Play" && !parameters.contains("Value")) {
+						if (Track->GetPlaybackState() == Enums::AnimationPlaybackState::Paused) Track->Resume();
+						else Track->Play();
+					}
+					else if (Action == "Pause" && !parameters.contains("Value")) Track->Pause();
+					else if ((Action == "Stop" || Action == "Reset") && !parameters.contains("Value")) Track->Stop();
+					else if (Action == "Loop" && parameters.contains("Value") && parameters["Value"].is_boolean()) Track->SetLooped(parameters["Value"].get<bool>());
+					else if ((Action == "Seek" || Action == "Speed") && parameters.contains("Value") && parameters["Value"].is_number()) {
+						const auto Value = parameters["Value"].get<float>();
+						if (!std::isfinite(Value) || Value < 0 || (Action == "Speed" && Value > AnimationTrack::MaximumSpeed))
+							return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayback", "Playback value is out of bounds"));
+						if (Action == "Seek") {
+							if (Track->GetPlaybackState() == Enums::AnimationPlaybackState::Stopped) { Track->Play(); Track->Pause(); }
+							Track->SetTimePosition(Value);
+						} else Track->SetSpeed(Value);
+					} else return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid animation control action/value"));
+					Preview.Scene->Step(0.0f);
+					Preview.LastStep = std::chrono::steady_clock::now();
+					return SerializeBoundedResponse(SuccessResponse(requestId, {{"PreviewId", std::to_string(*Id)}}));
+				}
+				if (!HasOnlyFields(parameters, {"PreviewId", "Width", "Height", "Position", "Target"}) ||
+					!parameters.contains("Width") || !parameters.contains("Height") ||
+					!parameters["Width"].is_number_unsigned() || !parameters["Height"].is_number_unsigned() ||
+					!parameters.contains("Position") || !parameters.contains("Target"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Capture requires bounded dimensions and camera Position/Target"));
+				const auto Width = JsonCodec::DecodeUnsigned32(parameters["Width"]), Height = JsonCodec::DecodeUnsigned32(parameters["Height"]);
+				const auto Position = DecodeVector3(parameters["Position"]), Target = DecodeVector3(parameters["Target"]);
+				if (!Width || !Height || *Width == 0 || *Height == 0 || *Width > 1024 || *Height > 1024 ||
+					!Position || !Target || glm::length(*Position - *Target) < 0.001f)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid preview camera or dimensions"));
+				if (glm::length(glm::cross(glm::normalize(*Target - *Position), glm::vec3(0, 1, 0))) < 0.001f)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Preview camera direction is parallel to its up axis"));
+				const auto Now = std::chrono::steady_clock::now();
+				Preview.Scene->Step(std::min(60.0f, std::chrono::duration<float>(Now - Preview.LastStep).count()));
+				Preview.LastStep = Now;
+				if (!Preview.Renderer) Preview.Renderer = std::make_unique<EditorViewportRenderer>(*Width, *Height);
+				else Preview.Renderer->Resize(*Width, *Height);
+				auto Publication = Preview.Scene->Publish(MakeLookAtRenderCameraInput(*Position, *Target, {0, 1, 0}), *Width, *Height);
+				auto Frame = Preview.Renderer->Capture(Publication);
+				Json Result = {{"PreviewId", std::to_string(*Id)}, {"Width", *Width}, {"Height", *Height}, {"Format", "RGB8"}};
+				if (Preview.Ring) {
+					Result["FrameNumber"] = Preview.Ring->Publish(*Width, *Height, Frame.RgbPixels,
+						static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Now.time_since_epoch()).count()));
+				} else Result["Pixels"] = EncodeBase64(Frame.RgbPixels);
+				if (auto Track = Preview.Scene->GetTrack()) {
+					Result["TimePosition"] = Track->GetTimePosition();
+					Result["PlaybackState"] = magic_enum::enum_name(Track->GetPlaybackState());
+				}
+				Json Positions = Json::array();
+				if (auto Pose = Preview.Scene->GetPose(); Pose && Pose->JointModelTransforms)
+					for (const auto &Transform : *Pose->JointModelTransforms) Positions.push_back({Transform[3].x, Transform[3].y, Transform[3].z});
+				Result["JointPositions"] = std::move(Positions);
+				return SerializeBoundedResponse(SuccessResponse(requestId, Result));
 			}
 
 			if (method == "GetAssetCatalog") {
@@ -1830,14 +2161,10 @@ namespace gargantuan {
 				}
 				try {
 					if (saveAs && project.Root != CurrentProject->Root) {
-						const auto sourcePreRun = CurrentProject->RootConfiguration / "prerun.luau";
-						const auto destinationPreRun = project.RootConfiguration / "prerun.luau";
-						if (std::filesystem::is_regular_file(sourcePreRun)) {
-							std::filesystem::create_directories(project.RootConfiguration);
-							std::filesystem::copy_file(
-								sourcePreRun, destinationPreRun,
-								std::filesystem::copy_options::overwrite_existing
-							);
+						if (auto Source = ReadProjectPreRunSource(CurrentProject->Root)) {
+							std::filesystem::create_directories(project.Root);
+							if (!project.ReplacePreRunSource(ReadProjectPreRunSource(project.Root), *Source))
+								throw PreRunSourceConflict("PreRun destination changed during Save As");
 						}
 					}
 					project.PersistGameAtomically(snapshot, PersistenceCheckpointForTesting);
@@ -1859,8 +2186,12 @@ namespace gargantuan {
 			}
 
 			if (method == "GetSchema") {
-				if (!parameters.empty())
-					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetSchema takes no parameters"));
+				if (!HasOnlyFields(parameters, {"SchemaDiscoveryVersion"}))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid GetSchema fields"));
+				const auto DiscoveryVersion = parameters.contains("SchemaDiscoveryVersion")
+					? JsonCodec::DecodeUnsigned32(parameters["SchemaDiscoveryVersion"]) : std::optional<std::uint32_t>(6);
+				if (!DiscoveryVersion || (*DiscoveryVersion != 6 && *DiscoveryVersion != 7))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "UnsupportedCapabilityVersion", "Supported schema discovery versions are 6 and 7"));
 				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Schema access requires ReadDataModel"));
 				auto IsEditorConstructible = [&](const InstanceClassDefinition &Definition) {
@@ -1889,6 +2220,7 @@ namespace gargantuan {
 							{"Readable", static_cast<bool>(property->Read)},
 							{"Writable", static_cast<bool>(property->Write)},
 							{"Editable", property->Editable},
+							{"AtomicBatchWritable", AtomicBatchWritable(*property, StudioSecurity)},
 							{"Persistence", property->PersistencePolicy == InstanceProperty::Persistence::Saved ? "Saved" : "Transient"},
 							{"Replication", property->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated ? "Replicated" : "None"},
 							{"Authority", property->WriteAuthority == InstanceProperty::Authority::Main ? "Main" : "Any"},
@@ -1955,6 +2287,20 @@ namespace gargantuan {
 								));
 						}
 						encoded["Properties"] = std::move(properties);
+						if (*DiscoveryVersion >= 7 && !classDefinition->DefaultOverrides.empty()) {
+							Json Overrides = Json::array();
+							for (const auto &Override : classDefinition->DefaultOverrides) {
+								const auto &Property = *classDefinition->AllProperties.at(Override.Property);
+								const auto *Declaring = GetActiveRuntimeSchemaRegistry().FindClassById(Override.DeclaringClassSchemaId);
+								Overrides.push_back({
+									{"DeclaringClassSchemaId", Override.DeclaringClassSchemaId.ToString()},
+									{"DeclaringDefinitionVersion", Override.DeclaringDefinitionVersion},
+									{"Property", Override.Property},
+									{"CanonicalName", Declaring->CanonicalName + "." + Override.Property},
+									{"Default", JsonCodec::EncodeWireValue(*EncodePropertyDefault(Property, Override.Value))}});
+							}
+							encoded["DefaultOverrides"] = std::move(Overrides);
+						}
 					} else if (const auto *enumDefinition = std::get_if<SchemaEnumDefinition>(entry)) {
 						Json items = Json::array();
 						for (const auto &item : enumDefinition->Items)
@@ -1973,7 +2319,7 @@ namespace gargantuan {
 					definitions.push_back(std::move(encoded));
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"SchemaDiscoveryVersion", 6},
+					{"SchemaDiscoveryVersion", *DiscoveryVersion},
 					{"RegistryGeneration", GetRuntimeSchemaLifecycle().GetActiveGeneration()},
 					{"Definitions", std::move(definitions)},
 					{"Classes", std::move(classes)},
@@ -1992,6 +2338,84 @@ namespace gargantuan {
 				return SerializeBoundedResponse(ErrorResponse(
 					requestId, "Unauthorized", "Script source mutation requires EditorCommands and MutateDataModel"
 				));
+			if (method == "SetPropertyBatch") {
+				auto Fail = [&](const char *Code, const char *Message) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, Code, Message));
+				};
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return Fail("Unauthorized", "SetPropertyBatch requires MutateDataModel");
+				if (!World || !CurrentProject) return Fail("ProjectRequired", "OpenProject must succeed first");
+				if (!HasOnlyFields(parameters, {"PropertyBatchVersion", "Scope", "ExpectedRevision", "Writes"}) ||
+					!parameters.contains("PropertyBatchVersion") || !parameters.contains("Scope") ||
+					!ExpectedRevision || !parameters.contains("Writes") || !parameters["Writes"].is_array())
+					return Fail("MalformedRequest", "SetPropertyBatch requires version, scope, revision, and writes");
+				const auto Version = JsonCodec::DecodeUnsigned32(parameters["PropertyBatchVersion"]);
+				if (!Version || *Version != EditorHostPropertyBatchVersion)
+					return Fail("UnsupportedCapabilityVersion", "PropertyBatchVersion is not supported");
+				const auto Scope = JsonCodec::DecodeObjectId(parameters["Scope"]);
+				if (!Scope) return Fail("MalformedRequest", "Scope must be a canonical ObjectId");
+				if (Scope->ToObjectId() != World->GetObjectId())
+					return Fail("StaleProject", "Scope does not identify the current project instance");
+				if (!Cursor) return Fail("SnapshotRequired", "GetSnapshot must establish a cursor");
+				if (HasRevisionConflict()) return Fail("Conflict", "The authoritative project revision changed");
+				if (World->Transactions.GetOpenCount() != 0)
+					return Fail("TransactionOpen", "Commit the open authoring transaction before a property batch");
+				const auto &EncodedWrites = parameters["Writes"];
+				if (EncodedWrites.empty()) return Fail("MalformedRequest", "Writes must not be empty");
+				if (EncodedWrites.size() > MaximumPreparedPropertyWrites)
+					return Fail("ResourceLimit", "Writes exceeds the 256-write limit");
+				std::vector<PreparedPropertyWrite> Writes;
+				Writes.reserve(EncodedWrites.size());
+				for (const auto &Encoded : EncodedWrites) {
+					if (!HasOnlyFields(Encoded, {"Object", "DeclaringClassSchemaId", "DeclaringDefinitionVersion", "Property", "Value"}) ||
+						!Encoded.contains("Object") || !Encoded.contains("DeclaringClassSchemaId") ||
+						!Encoded["DeclaringClassSchemaId"].is_string() || !Encoded.contains("DeclaringDefinitionVersion") ||
+						!Encoded.contains("Property") || !Encoded["Property"].is_string() || !Encoded.contains("Value"))
+						return Fail("MalformedRequest", "A batch write has invalid fields");
+					const auto &Name = Encoded["Property"].get_ref<const std::string &>();
+					const auto &SchemaText = Encoded["DeclaringClassSchemaId"].get_ref<const std::string &>();
+					if (Name.empty() || Name.size() > MaximumProtocolIdentifierBytes || SchemaText.size() != 32)
+						return Fail("MalformedRequest", "A property or schema identifier has invalid length");
+					const auto Object = JsonCodec::DecodeObjectId(Encoded["Object"]);
+					const auto Schema = SchemaId::Parse(SchemaText);
+					const auto DefinitionVersion = JsonCodec::DecodeUnsigned32(Encoded["DeclaringDefinitionVersion"]);
+					if (!Object || !Schema || !DefinitionVersion || *DefinitionVersion == 0)
+						return Fail("MalformedRequest", "A batch write has invalid identity or version");
+					for (const auto &Previous : Writes)
+						if (Previous.Object == Object->ToObjectId() && Previous.PropertyName == Name)
+							return Fail("DuplicateWrite", "An object/property pair occurs more than once");
+					auto Target = ObjectRegistry::Get().Lookup(Object->ToObjectId());
+					if (!Target || Target->GetDestroyed() || Target->IsDestroying() ||
+						Target->GetReplicationScopeId() != World->GetObjectId())
+						return Fail("StaleObject", "Object is not live in the current project instance");
+					const auto *Property = Target->FindProperty(Name);
+					if (!Property || Property->DeclaringSchemaId != *Schema ||
+						Property->DeclaringDefinitionVersion != *DefinitionVersion)
+						return Fail("StaleSchema", "Property identity or declaring schema version is incompatible");
+					if (!Property->Write || Property->WritePermission == Enums::Permission::Never)
+						return Fail("ReadOnly", "Property is read-only");
+					if (!PreparedPropertyCommit::SupportsProperty(*Property))
+						return Fail("UnsupportedProperty", "Property does not support prepared atomic writes");
+					if (!AtomicBatchWritable(*Property, StudioSecurity))
+						return Fail("Unauthorized", "Property access is not permitted");
+					auto Value = JsonCodec::DecodeWireValue(Encoded["Value"]);
+					if (!Value) return Fail("ValidationFailed", "WireValue is invalid");
+					Writes.push_back({Object->ToObjectId(), *Schema, *DefinitionVersion, Name, std::move(*Value)});
+				}
+				PropertyBatchResponse Response(requestId);
+				// Release the parsed tree while failures still precede mutation. No
+				// references into parameters or EncodedWrites are used after this point.
+				message = nullptr;
+				const auto Result = PreparedPropertyCommit::Apply(*World, *ExpectedRevision, Writes, StudioSecurity);
+				if (Result.Status != MutationStatus::Success) {
+					const auto *Code = Result.Status == MutationStatus::Conflict ? "Conflict" :
+						Result.Status == MutationStatus::InvalidProperty ? "StaleSchema" : MutationStatusName(Result.Status);
+					return Fail(Code, "Prepared property batch was rejected without mutation");
+				}
+				Response.Complete(Result);
+				return std::move(Response.Encoded);
+			}
+
 			if (!World)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
 			auto StudioMutationAuthority = [&] {

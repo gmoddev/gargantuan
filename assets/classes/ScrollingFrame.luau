@@ -6,6 +6,11 @@ return c({
 	description = "A retained clipped viewport whose children are translated by a semantic canvas position",
 	since = "0.3.0",
 
+	defaultOverrides = {
+		{ Property = "Interactable", Value = true },
+		{ Property = "Selectable", Value = true },
+		{ Property = "InputSink", Value = "All" },
+	},
 	properties = {
 		CanvasPosition = {
 			description = "Current logical scroll offset; persisted as intentional game state",

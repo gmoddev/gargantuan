@@ -284,6 +284,11 @@ to an unrelated joint.
 
 ## Packaging, generic Studio authoring, and sample proof
 
+The later [animation authoring preview](AnimationAuthoringPreview.md) exposes
+canonical rig/clip inspection and disposable native playback controls. It uses
+the same assets, sampling and skinning publication, independently from Play and
+without executing project gameplay source.
+
 Runtime snapshots and packages contain version-3 Mesh/Animation `.gasset`
 files, the explicit dependency edge, and compiled opaque/shadow skinning shader
 artifacts; source glTF and shader source are unnecessary. Package validation

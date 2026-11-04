@@ -14,6 +14,12 @@ related_adrs: []
 
 ## Supported CI configuration
 
+Documentation builds on ordinary main pushes. Pages publication requires an
+explicit `Documentation` workflow dispatch on `main` with boolean `deploy=true`;
+the default dispatch builds only. Pages/OIDC write permissions belong only to
+that guarded deployment job. Native/PR qualification does not authorize or
+trigger publication.
+
 `.github/workflows/native-ci.yml` runs on pull requests, `main` pushes and
 manual dispatch. Branch pushes do not duplicate the PR checks. Windows x64 runs on
 GitHub's explicit `windows-2025-vs2026` image. It matches the production
@@ -172,6 +178,7 @@ rather than a duplicated numeric count in this document, is authoritative.
 | Provider-neutral entitlement semantics, Luau authority, vectors, headless lifecycle, and provider overhead smoke | `gargantuan_entitlement_service`, `gargantuan_entitlement_provider_benchmark_smoke` |
 | GUI retained runtime and bounded Release smoke | `gargantuan_gui_foundation`, `gargantuan_gui_foundation_benchmark_smoke` |
 | PreRun bootstrap | `gargantuan_prerun_bootstrap` |
+| Concrete defaults: construction, discovery, persistence/Clone, native reset and single/batch editor reset/history/replication | `gargantuan_concrete_property_defaults`; generation steps also run `lute tools/tests/DefaultOverrides` |
 | Serialization smoke | `SerializationBenchmarkSmoke` |
 | Networking contracts and deterministic transport | `gargantuan_networking_contracts`, `gargantuan_simulated_transport`, `gargantuan_scheduler_contract` |
 | Replication and remotes | `gargantuan_replication`, `gargantuan_remote`, `gargantuan_remote_luau` |

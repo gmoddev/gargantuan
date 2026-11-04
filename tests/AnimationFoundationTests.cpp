@@ -1,4 +1,5 @@
 #include "gargantuan/animation/AnimationRuntime.hpp"
+#include "gargantuan/editor/AnimationPreview.hpp"
 #include "gargantuan/animation/AnimationTrack.hpp"
 #include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
@@ -2441,6 +2442,44 @@ int main() {
 			ModifiedFixture,
 			IncompatibleFixture
 		);
+
+	try { if (MeshRecord && WaveRecord) {
+		const auto Revision = World->GetAuthoritativeRevision();
+		auto InstanceValue = std::static_pointer_cast<Instance>(World);
+		const auto Before = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, InstanceValue);
+		{
+			AnimationPreview Preview(Assets->CaptureProjectAssets(), MeshRecord->Reference.Value);
+			Preview.SelectClip(WaveRecord->Reference.Value);
+			Check(Preview.GetTrack()->GetPlaybackState() == Enums::AnimationPlaybackState::Paused,
+				"preview opens a clip paused without executing gameplay");
+			Preview.GetTrack()->SetTimePosition(0.5f);
+			Preview.Step(0.0f);
+			const auto Pose = Preview.GetPose();
+			Check(Pose && Pose->JointModelTransforms && Pose->JointModelTransforms->size() == 3,
+				"preview seek samples the canonical complete joint pose");
+			const auto Frame = Preview.Publish(MakeLookAtRenderCameraInput({4, 3, 5}, {0, 0, 0}, {0, 1, 0}), 320, 240);
+			Check(Frame && !Frame->AnimationPoseUpdates.empty(), "preview publishes evaluated skinning through the production renderer seam");
+			Preview.GetTrack()->Resume();
+			Preview.Step(0.125f);
+			Check(Near(Preview.GetTrack()->GetTimePosition(), 0.625f), "preview playback uses native AnimationTrack time");
+			Preview.GetTrack()->Pause();
+			Preview.Step(0.125f);
+			Check(Near(Preview.GetTrack()->GetTimePosition(), 0.625f), "preview pause preserves the sampled time");
+			bool Rejected = false;
+			try { Preview.SelectClip("asset://00000000000000000000000000000000"); } catch (const std::exception &) { Rejected = true; }
+			Check(Rejected && Near(Preview.GetTrack()->GetTimePosition(), 0.625f), "invalid preview clip preserves current playback");
+			Preview.GetTrack()->Stop();
+			Preview.Step(0.0f);
+			Check(!Preview.GetPose() && Preview.GetTrack()->GetTimePosition() == 0.0f, "preview reset retires transient pose");
+			Check(Preview.GetWorld() != World, "preview owns a distinct DataModel scope");
+		}
+		const auto After = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, InstanceValue);
+		Check(Before == After && World->GetAuthoritativeRevision() == Revision,
+			"preview playback, seek, rejection and destruction leave authored state and revision untouched");
+	} } catch (const std::exception &Error) {
+		std::cerr << "[Animation:PreviewTest] " << Error.what() << '\n';
+		Check(false, "preview regression completed without unexpected exception");
+	}
 
 	ValidationWorld->Destroy();
 	PackagedRuntime.Shutdown();

@@ -29,21 +29,33 @@ namespace gargantuan {
 	}
 
 	void LuaSourceContainer::SetSource(std::string Value) {
+		AssignSource(std::move(Value), true);
+	}
+
+	void LuaSourceContainer::ApplyReplicatedSource(std::string Value) {
+		// SourceVersion is a separate exact server-owned wire value. Applying
+		// projected source must not advance it again or depend on property order.
+		AssignSource(std::move(Value), false);
+	}
+
+	void LuaSourceContainer::AssignSource(std::string Value, bool Authoritative) {
 		AssertCanMutate();
 		ValidateProtocolString(Value, MaximumScriptSourceBytes, "Script source");
 		ValidatePropertyMutation("Source", Value);
 		if (Source == Value) return;
-		if (SourceVersion == std::numeric_limits<int>::max())
+		if (Authoritative && SourceVersion == std::numeric_limits<int>::max())
 			throw std::overflow_error("Script source version is exhausted");
 
 		Source = std::move(Value);
-		++SourceVersion;
+		if (Authoritative) ++SourceVersion;
 		Bytecode.clear();
 		BytecodeSize = 0;
 		BytecodeCompileStatus = BytecodeCompileStatus::Uncompiled;
 		BytecodeCompileError.reset();
-		NotifyPropertyCommitted("SourceVersion");
-		if (auto DataModelValue = GetDataModel()) DataModelValue->AdvanceAuthoritativeRevision();
+		if (Authoritative) {
+			NotifyPropertyCommitted("SourceVersion");
+			if (auto DataModelValue = GetDataModel()) DataModelValue->AdvanceAuthoritativeRevision();
+		}
 		GetPropertyChangedSignal("Source")->Fire({});
 	}
 

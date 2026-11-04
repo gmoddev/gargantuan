@@ -1,4 +1,5 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/animation/AnimationTrack.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -281,6 +282,7 @@ namespace gargantuan {
 	}
 
 	bool ScriptEngine::CanRunScript(const Script &ScriptValue) const {
+		if (GetInstanceServicePolicy(ScriptValue) == SchemaServicePolicy::Replicated) return false;
 		if (Mode == RuntimeMode::Offline) return true;
 		if (Mode == RuntimeMode::NetworkClient) return ScriptValue.GetRunContext() == Enums::RunContext::Client;
 		return ScriptValue.GetRunContext() != Enums::RunContext::Client;

@@ -97,7 +97,7 @@ namespace gargantuan {
 
 	void RegisterNativeSchemaSeed(std::type_index nativeType, SchemaClassDefinition definition);
 	void BootstrapNativeRuntimeSchema();
-	void BootstrapProjectRuntimeSchema(const std::filesystem::path &projectRoot);
+	std::optional<std::string> BootstrapProjectRuntimeSchema(const std::filesystem::path &projectRoot);
 	void BootstrapPackagedRuntimeSchema(const std::optional<std::string> &PreRunSource);
 	void RequireFrozenRuntimeSchema(std::string_view operation);
 

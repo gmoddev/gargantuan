@@ -50,10 +50,14 @@ export type Class = {
 	read root: boolean?,
 	read abstract: boolean?,
 	read customSubclassPolicy: "DataOnly"?,
+	read servicePolicy: "ServerOnly" | "Replicated"?,
 	read extends: string?,
 	read deprecated: boolean?,
 
 	read properties: { [string]: ClassProperty }?,
+	-- Ordered records preserve duplicate declarations for validation. Values are
+	-- typed literals, never executable C++ expressions or property metadata.
+	read defaultOverrides: { { Property: string, Value: any } }?,
 	read signals: { [string]: ClassSignal }?,
 	read methods: { [string]: ClassMethod }?,
 }

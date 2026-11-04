@@ -701,6 +701,14 @@ if(BUILD_TESTING)
 		add_test(NAME GlazeSerializationTests COMMAND gargantuan_glaze_serialization_tests)
 	endif()
 	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
+	add_executable(gargantuan_prepared_property_tests "tests/PreparedPropertyTests.cpp")
+	add_executable(gargantuan_concrete_property_default_tests "tests/ConcretePropertyDefaultTests.cpp")
+	target_link_libraries(gargantuan_concrete_property_default_tests PRIVATE gargantuan_core nlohmann_json)
+	add_test(NAME gargantuan_concrete_property_defaults COMMAND gargantuan_concrete_property_default_tests)
+	set_tests_properties(gargantuan_concrete_property_defaults PROPERTIES LABELS "schema;construction;persistence;editorhost")
+	target_link_libraries(gargantuan_prepared_property_tests PRIVATE gargantuan_core nlohmann_json)
+	add_test(NAME gargantuan_prepared_property COMMAND gargantuan_prepared_property_tests)
+	set_tests_properties(gargantuan_prepared_property PROPERTIES LABELS "runtime;property;history;journal;editorhost")
 	target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_asset_foundation_tests "tests/AssetFoundationTests.cpp")
 	target_link_libraries(gargantuan_asset_foundation_tests PRIVATE gargantuan_core nlohmann_json)
@@ -715,6 +723,10 @@ if(BUILD_TESTING)
 	)
 	add_executable(gargantuan_animation_foundation_tests "tests/AnimationFoundationTests.cpp")
 	target_link_libraries(gargantuan_animation_foundation_tests PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_animation_preview_editorhost_tests "tests/AnimationPreviewEditorHostTests.cpp")
+	target_link_libraries(gargantuan_animation_preview_editorhost_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_animation_preview_editorhost_tests PRIVATE
+		GARGANTUAN_ANIMATION_PREVIEW_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/animation-preview-rig.gltf")
 	add_executable(gargantuan_animation_foundation_benchmark "tests/AnimationFoundationBenchmark.cpp")
 	target_link_libraries(gargantuan_animation_foundation_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_audio_foundation_tests "tests/AudioFoundationTests.cpp")
@@ -882,6 +894,23 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_gui_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")
 	target_link_libraries(gargantuan_prerun_bootstrap_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_prerun_editor_host_tests "tests/PreRunEditorHostTests.cpp")
+	target_link_libraries(gargantuan_prerun_editor_host_tests PRIVATE gargantuan_core nlohmann_json)
+	add_test(NAME gargantuan_prerun_editor_host COMMAND gargantuan_prerun_editor_host_tests)
+	set_tests_properties(gargantuan_prerun_editor_host PROPERTIES LABELS "prerun;editorhost;schema;security;headless" TIMEOUT 120)
+	add_executable(gargantuan_replicated_storage_tests "tests/ReplicatedStorageTests.cpp")
+	target_link_libraries(gargantuan_replicated_storage_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_replicated_storage_editor_host_tests "tests/ReplicatedStorageEditorHostTests.cpp")
+	target_link_libraries(gargantuan_replicated_storage_editor_host_tests PRIVATE gargantuan_core nlohmann_json)
+	add_dependencies(gargantuan_replicated_storage_editor_host_tests gargantuan_runtime_distribution)
+	add_test(NAME gargantuan_replicated_storage_editor_host COMMAND gargantuan_replicated_storage_editor_host_tests)
+	set_tests_properties(gargantuan_replicated_storage_editor_host PROPERTIES LABELS "replication;editor;packaging;headless" TIMEOUT 120)
+	add_executable(gargantuan_replicated_storage_session_tests "tests/ReplicatedStorageSessionTests.cpp")
+	target_link_libraries(gargantuan_replicated_storage_session_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_replicated_storage_session COMMAND gargantuan_replicated_storage_session_tests)
+	set_tests_properties(gargantuan_replicated_storage_session PROPERTIES LABELS "replication;runtime;security;headless" TIMEOUT 120)
+	add_test(NAME gargantuan_replicated_storage COMMAND gargantuan_replicated_storage_tests)
+	set_tests_properties(gargantuan_replicated_storage PROPERTIES LABELS "replication;schema;security;headless" TIMEOUT 120)
 	add_executable(gargantuan_attributes_tags_profile "tests/AttributesTagsProfile.cpp")
 	target_link_libraries(gargantuan_attributes_tags_profile PRIVATE gargantuan_core)
 	add_executable(gargantuan_networking_contract_tests "tests/NetworkingContractsTests.cpp")
@@ -1115,15 +1144,22 @@ if(BUILD_TESTING)
 		set(GARGANTUAN_SDL_RUNTIME_TARGETS
 			gargantuan
 			gargantuan_foundation_tests
+			gargantuan_prepared_property_tests
+			gargantuan_concrete_property_default_tests
 			gargantuan_asset_foundation_tests
 			gargantuan_asset_foundation_benchmark
 			gargantuan_animation_foundation_tests
+			gargantuan_animation_preview_editorhost_tests
 			gargantuan_animation_foundation_benchmark
 			gargantuan_audio_foundation_tests
 			gargantuan_audio_foundation_benchmark
 			gargantuan_renderer_publication_tests
 			gargantuan_environment_lighting_benchmark
 			gargantuan_prerun_bootstrap_tests
+			gargantuan_prerun_editor_host_tests
+			gargantuan_replicated_storage_tests
+			gargantuan_replicated_storage_editor_host_tests
+			gargantuan_replicated_storage_session_tests
 			gargantuan_attributes_tags_profile
 			gargantuan_physics_backend_tests
 			gargantuan_physics_query_benchmark
@@ -1238,6 +1274,7 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
 	add_test(NAME gargantuan_asset_foundation COMMAND gargantuan_asset_foundation_tests)
 	add_test(NAME gargantuan_animation_foundation COMMAND gargantuan_animation_foundation_tests)
+	add_test(NAME gargantuan_animation_preview_editorhost COMMAND gargantuan_animation_preview_editorhost_tests)
 	add_test(NAME gargantuan_animation_foundation_benchmark_smoke
 		COMMAND gargantuan_animation_foundation_benchmark --quick)
 	add_test(NAME gargantuan_audio_foundation COMMAND gargantuan_audio_foundation_tests)

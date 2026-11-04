@@ -130,8 +130,12 @@ struct ReplicationCoordinator::PlanningContinuation {
 			for (int Pass = 0; Pass != 2; ++Pass) {
 				auto &Closure = Pass == 0 ? Working.DesiredObjects : Working.RequiredObjects;
 				const auto &Seeds = Pass == 0 ? Selection->DesiredObjects : Selection->RequiredObjects;
-				for (const auto Object : Seeds) { co_yield 0; Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds); }
-				for (const auto Object : Selection->RequiredObjects) { co_yield 0; Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds); }
+				for (const auto Object : Seeds) { co_yield 0; if (!Owner.IsServiceVisible(Object)) continue; Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds); }
+				for (const auto Object : Selection->RequiredObjects) {
+					co_yield 0;
+					if (!Owner.IsServiceVisible(Object)) { AwaitingSelection = true; co_return; }
+					Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds);
+				}
 				if (Pass == 1 && Frontier.empty()) { Retain(Owner); Frontier.push_back({Owner.SourceRootId, 0}); }
 				while (!Frontier.empty()) {
 					co_yield 0;
@@ -152,6 +156,8 @@ struct ReplicationCoordinator::PlanningContinuation {
 					}
 					if (Depth > MaximumDependencyClosureDepth || Closure.size() == MaximumPeerDesiredObjects)
 						throw std::runtime_error("Replication dependency closure limit exceeded");
+					if (!Owner.IsServiceVisible(Object))
+						throw std::runtime_error("Hard replication dependency belongs to a server-only service");
 					Retain(Owner);
 					Closure.insert(Object);
 					if (Found->second->Publication.Parent) {

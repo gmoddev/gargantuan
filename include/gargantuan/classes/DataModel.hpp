@@ -42,10 +42,15 @@ namespace gargantuan {
 	  private:
 		friend class ScopedAuthoritativeRevisionDeferral;
 		friend class AssetService;
+		friend class PreparedPropertyCommit;
+		friend struct PreparedPropertyTestAccess;
+		[[nodiscard]] bool HasDeferredRevision() const noexcept;
 		std::uint64_t AuthoritativeRevision = InitialProjectRevision;
 		bool RevisionBatchActive = false;
 		bool RevisionBatchChanged = false;
 		std::size_t OwnedInstanceCount = 1;
+		mutable ServiceDefinitions RegisteredServices;
+		mutable std::uint64_t ServiceSchemaGeneration = 0;
 	};
 
 	class ScopedAuthoritativeRevisionDeferral {

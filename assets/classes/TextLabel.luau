@@ -6,6 +6,9 @@ return c({
 	description = "A retained GUI object that presents shaped UTF-8 text",
 	since = "0.2.0",
 
+	defaultOverrides = {
+		{ Property = "BackgroundTransparency", Value = 1 },
+	},
 	properties = {
 		Text = {
 			description = "UTF-8 text content",

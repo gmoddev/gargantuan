@@ -1,4 +1,5 @@
 #include "gargantuan/runtime/TagIndex.hpp"
+#include "gargantuan/runtime/ServicePolicy.hpp"
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
@@ -21,6 +22,13 @@ namespace gargantuan {
 			AssertAuthoritativeMutation("Tag mutation");
 			if (!securityContext.HasCapability(ScriptCapability::MutateDataModel))
 				throw std::runtime_error("Tag mutation requires MutateDataModel");
+		}
+
+		void DemandTargetMutation(const ScriptSecurityContext &Context, ObjectId Object) {
+			const auto Target = ObjectRegistry::Get().Lookup(Object);
+			if (Context.Domain == ScriptExecutionDomain::Client && Target &&
+				GetInstanceServicePolicy(*Target) == SchemaServicePolicy::Replicated)
+				throw std::runtime_error("[Storage:Authority] Replicated service tags are server-authoritative");
 		}
 	}
 
@@ -128,6 +136,7 @@ namespace gargantuan {
 		const ScriptSecurityContext &securityContext
 	) {
 		DemandMutation(securityContext);
+		DemandTargetMutation(securityContext, object);
 		ValidateTagName(name);
 		if (!scope.IsValid() || !IsLiveInScope(scope, object)) throw std::invalid_argument("Tag target is stale or belongs to another DataModel");
 		auto forward = ObjectToTags.find(object);
@@ -182,6 +191,7 @@ namespace gargantuan {
 		const ScriptSecurityContext &securityContext
 	) {
 		DemandMutation(securityContext);
+		DemandTargetMutation(securityContext, object);
 		ValidateTagName(name);
 		if (!scope.IsValid() || !IsLiveInScope(scope, object)) throw std::invalid_argument("Tag target is stale or belongs to another DataModel");
 		const auto id = Find(name);

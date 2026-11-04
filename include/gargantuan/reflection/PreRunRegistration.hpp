@@ -48,6 +48,11 @@ namespace gargantuan {
 		PreRunDiagnostic Diagnostic;
 	};
 
+	class PreRunSourceConflict : public std::runtime_error {
+	  public:
+		using std::runtime_error::runtime_error;
+	};
+
 	void ExecutePreRunRegistration(
 		RuntimeSchemaLifecycle &lifecycle,
 		const RuntimeSchemaBootstrapAuthority &authority,
@@ -57,6 +62,10 @@ namespace gargantuan {
 	);
 
 	[[nodiscard]] std::optional<std::string> ReadProjectPreRunSource(const std::filesystem::path &projectRoot);
+	// Builds, validates and freezes a disposable candidate. Never publishes it.
+	[[nodiscard]] std::optional<PreRunDiagnostic> ValidatePreRunSource(std::string_view Source);
 	[[nodiscard]] std::filesystem::path GetProjectPreRunPath(const std::filesystem::path &projectRoot);
+	// Fixed canonical resource only; rejects linked/reparse path components.
+	[[nodiscard]] std::filesystem::path ResolveProjectPreRunPath(const std::filesystem::path &ProjectRoot);
 	[[nodiscard]] std::string_view GetPreRunDiagnosticCodeName(PreRunDiagnosticCode code);
 }

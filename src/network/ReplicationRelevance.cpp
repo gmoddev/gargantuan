@@ -1,4 +1,6 @@
 #include "gargantuan/network/ReplicationRelevance.hpp"
+#include "gargantuan/runtime/ServicePolicy.hpp"
+#include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/classes/BasePart.hpp"
@@ -113,6 +115,7 @@ namespace gargantuan::network {
 		ReplicationRelevanceConfiguration Configuration;
 		std::map<ObjectId, ObjectLocation> ObjectLocations;
 		std::set<ObjectId> GlobalObjects;
+		std::set<ObjectId> ReplicatedServiceRoots;
 		std::map<ObjectId, SpatialEntry> SpatialObjects;
 		SpatialRuntimeProjectionStore Spatial;
 		SpatialRegionQueryScratch QueryScratch;
@@ -191,6 +194,7 @@ namespace gargantuan::network {
 
 		std::optional<ObjectId> FindSpatialRoot(const std::shared_ptr<Instance> &Object) const {
 			if (!Object || std::dynamic_pointer_cast<RemoteBase>(Object)) return std::nullopt;
+			if (GetInstanceServicePolicy(*Object) == SchemaServicePolicy::Replicated) return std::nullopt;
 			std::optional<ObjectId> PartRoot;
 			for (auto Current = Object; Current;) {
 				if (std::dynamic_pointer_cast<Character>(Current)) return Current->GetObjectId();
@@ -265,6 +269,11 @@ namespace gargantuan::network {
 			if (!Healthy || !Object || Object->GetDestroyed() || Object->IsDestroying()) return;
 			const auto Id = Object->GetObjectId();
 			if (!Id.IsValid() || ObjectLocations.contains(Id) || (IsExcluded && IsExcluded(Id))) return;
+			if (GetInstanceServicePolicy(*Object) == SchemaServicePolicy::ServerOnly) return;
+			const auto *Definition = InstanceClassRegistry::GetDefinition(Object.get());
+			const auto Parent = Object->GetParent();
+			if (Definition && Definition->ServicePolicy == SchemaServicePolicy::Replicated && Parent && *Parent == SourceRoot)
+				ReplicatedServiceRoots.insert(Id);
 			auto SpatialRoot = FindSpatialRoot(Object);
 			if (SpatialRoot) {
 				if (*SpatialRoot == Id && !AddSpatialRoot(Object)) return;
@@ -305,6 +314,7 @@ namespace gargantuan::network {
 				GlobalObjects.erase(Object);
 			}
 			ObjectLocations.erase(Location);
+			ReplicatedServiceRoots.erase(Object);
 			Metrics.SpatialEntries = SpatialObjects.size();
 			WorldDirty = true;
 			NextWorkTick = 0;
@@ -368,7 +378,8 @@ namespace gargantuan::network {
 
 		bool BuildSelection(PeerState &Peer) {
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RelevanceSelection);
-			std::set<ObjectId> Required;
+			std::set<ObjectId> Required = ReplicatedServiceRoots;
+			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::RelevanceSelection, Required.size());
 			std::set<ObjectId> Desired = GlobalObjects;
 			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::RelevanceSelection, GlobalObjects.size());
 			if (Peer.LocalPlayer.IsValid()) Required.insert(Peer.LocalPlayer);

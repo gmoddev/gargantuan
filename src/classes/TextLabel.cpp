@@ -6,7 +6,7 @@
 #include <utility>
 
 namespace gargantuan {
-	TextLabel::TextLabel() { BackgroundTransparency = 1.0f; }
+	TextLabel::TextLabel() = default;
 
 	std::string TextLabel::GetFontFace() const { return FontFace; }
 
