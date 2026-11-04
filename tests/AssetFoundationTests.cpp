@@ -462,13 +462,46 @@ int main() {
 	Check(RepeatedReimportsOk && RepeatedStats.ResidentRecords == InitialCollisionStats.ResidentRecords + 1 &&
 		RepeatedStats.RetainedArtifactBytes < InitialCollisionStats.RetainedArtifactBytes + 1024 &&
 		RepeatedStats.TotalRetainedArtifactBytes < InitialCollisionStats.TotalRetainedArtifactBytes + 2048 &&
+		RepeatedStats.PendingMeshPublications == InitialCollisionStats.PendingMeshPublications + 1 &&
+		RepeatedStats.PendingMeshRemovals == InitialCollisionStats.PendingMeshRemovals &&
+		RepeatedStats.PendingMeshBytes < InitialCollisionStats.PendingMeshBytes + 1024 &&
 		RepeatedStats.RetiredArtifacts == InitialCollisionStats.RetiredArtifacts + 7 && RepeatedStats.RetiredArtifactBytes > 0,
 		"repeated collision replacement retains only the current bounded canonical artifact");
 	if (RepeatedMesh.Record) {
 		CollisionConsumer->Destroy();
 		Check(Assets->DeleteProjectAsset(RepeatedMesh.Record->Reference.Value).Ok &&
-			Assets->ReadCollisionStats().ResidentRecords == InitialCollisionStats.ResidentRecords,
+			Assets->ReadCollisionStats().ResidentRecords == InitialCollisionStats.ResidentRecords &&
+			Assets->ReadCollisionStats().PendingMeshPublications == InitialCollisionStats.PendingMeshPublications &&
+			Assets->ReadCollisionStats().PendingMeshRemovals == InitialCollisionStats.PendingMeshRemovals,
 			"deleting a mesh source group retires its collision record and artifact");
+	}
+	{
+		auto ProjectionWorld = std::make_shared<DataModel>();
+		auto ProjectionAssets = GetAssets(ProjectionWorld);
+		auto ProjectionWorkspace = std::dynamic_pointer_cast<Workspace>(ProjectionWorld->GetService("Workspace"));
+		WriteText(Root / "assets" / "projection.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+		const auto First = ProjectionAssets->ImportProjectAsset(Mount, "assets/projection.obj", AssetKind::Mesh);
+		RenderPublisher Publisher;
+		auto Initial = ProjectionAssets->DrainMeshChanges();
+		Publisher.SetAssetMeshChanges(std::move(Initial.Creates), std::move(Initial.Removes));
+		(void)Publisher.Publish(*ProjectionWorkspace, RenderCameraInput{}, 320, 180);
+		if (First.Record) {
+			for (int Revision = 2; Revision <= 3; ++Revision) {
+				WriteText(Root / "assets" / "projection.obj", "v 0 0 0\nv " + std::to_string(Revision) +
+					" 0 0\nv 0 1 0\nf 1 2 3\n");
+				Check(ProjectionAssets->ReimportProjectAsset(Mount, First.Record->Reference.Value).Ok,
+					"multiple mesh revisions prepare before the next renderer drain");
+			}
+			const auto Queued = ProjectionAssets->ReadCollisionStats();
+			auto Latest = ProjectionAssets->DrainMeshChanges();
+			Check(Queued.PendingMeshPublications == 1 && Queued.PendingMeshRemovals == 1 &&
+				Latest.Creates.size() == 1 && Latest.Removes.size() == 1,
+				"mesh projection retains only the latest creation and the last delivered removal");
+			Publisher.SetAssetMeshChanges(std::move(Latest.Creates), std::move(Latest.Removes));
+			const auto Publication = Publisher.Publish(*ProjectionWorkspace, RenderCameraInput{}, 320, 180);
+			Check(Publication->MeshCreates.size() == 1 && Publication->MeshRemoves.size() == 1,
+				"coalesced mesh revisions publish without a stale intermediate resource removal");
+		}
 	}
 	AssetCancellationToken CancelledCollision;
 	CancelledCollision.Cancel();

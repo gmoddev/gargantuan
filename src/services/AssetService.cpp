@@ -506,6 +506,18 @@ namespace gargantuan {
 			return Decode(Kind, Extension, std::move(Bytes), std::move(Resources), Cancellation);
 		}
 
+		void QueueMeshRemoval(RenderMeshIdentity Identity) {
+			// A resource not yet drained has never reached the renderer. Cancel
+			// its queued creation instead of publishing a stale removal, and
+			// release the superseded vertex/index buffers immediately.
+			const auto Unpublished = std::erase_if(PendingMeshes.Creates, [&](const auto &Create) {
+				return Create.Mesh == Identity;
+			});
+			if (Unpublished == 0 && !std::ranges::any_of(PendingMeshes.Removes, [&](const auto &Remove) {
+				return Remove.Mesh == Identity;
+			})) PendingMeshes.Removes.push_back({Identity});
+		}
+
 		void QueueResidency(const AssetRecord &Record, bool Replacing) {
 			if (!Record.Asset) return;
 			if (const auto *Image = std::get_if<ImportedImage>(Record.Asset.get())) {
@@ -541,7 +553,7 @@ namespace gargantuan {
 			if (const auto *Mesh = std::get_if<ImportedMesh>(Record.Asset.get())) {
 				auto Existing = Meshes.find(Record.Reference.Value);
 				if (Existing != Meshes.end() && Replacing) {
-					PendingMeshes.Removes.push_back({Existing->second.Identity});
+					QueueMeshRemoval(Existing->second.Identity);
 					++Existing->second.Identity.Generation;
 					Existing->second.Revision = Record.ContentRevision;
 					Existing->second.Mesh = *Mesh;
@@ -573,7 +585,7 @@ namespace gargantuan {
 				Textures.erase(Texture);
 			}
 			if (auto Mesh = Meshes.find(Record.Reference.Value); Mesh != Meshes.end()) {
-				PendingMeshes.Removes.push_back({Mesh->second.Identity});
+				QueueMeshRemoval(Mesh->second.Identity);
 				Meshes.erase(Mesh);
 			}
 		}
@@ -1313,6 +1325,14 @@ namespace gargantuan {
 	AssetCollisionStats AssetService::ReadCollisionStats() const {
 		std::scoped_lock Lock(State->Mutex);
 		AssetCollisionStats Stats;
+		Stats.PendingMeshPublications = State->PendingMeshes.Creates.size();
+		Stats.PendingMeshRemovals = State->PendingMeshes.Removes.size();
+		for (const auto &Create : State->PendingMeshes.Creates) {
+			Stats.PendingMeshBytes += Create.Vertices->size() * sizeof(RenderVertex) +
+				Create.Indices->size() * sizeof(std::uint32_t);
+			if (Create.SkinInfluences)
+				Stats.PendingMeshBytes += Create.SkinInfluences->size() * sizeof(RenderSkinInfluence);
+		}
 		for (const auto &[Content, Artifact] : State->Artifacts) {
 			(void)Content;
 			Stats.TotalRetainedArtifactBytes += Artifact->size();

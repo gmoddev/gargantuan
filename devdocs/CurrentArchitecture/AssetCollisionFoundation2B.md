@@ -70,13 +70,20 @@ current catalog record references its content hash. This includes the paired Mes
 artifact; retaining obsolete render revisions would defeat collision memory bounds.
 Equal collision bytes can be shared by distinct catalog records; retirement
 therefore counts unreachable content hashes rather than import attempts.
+Undrained render-mesh changes retain only the newest creation for each logical
+resource. Replacing or deleting an unpublished generation cancels that creation
+rather than emitting a removal for a resource the renderer never received.
+The last already-delivered generation still receives its normal removal. This
+also retires obsolete pending render buffers during repeated headless compilation;
+it is derived-queue lifecycle management, not an asset eviction policy.
 Captured snapshots retain
 their own immutable shared pointer safely. Failed replacement leaves the old
 artifact and decoded content available. `ReadCollisionStats` reports current
 resident record count, decoded canonical bytes, currently retained Collision
 artifact bytes, cumulative retired artifact bytes/count, and failed CPU
 admissions. `TotalRetainedArtifactBytes` additionally reports the complete artifact
-map across all kinds. These are service-owned resource counts. The physics projection owns
+map across all kinds. Pending mesh publication/removal counts and vertex/index/
+skin payload bytes are separately inspectable. These are service-owned resource counts. The physics projection owns
 the exact active native shape/consumer counts and native byte estimates.
 
 ## Qualification state

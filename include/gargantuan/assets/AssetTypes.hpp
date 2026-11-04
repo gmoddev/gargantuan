@@ -251,6 +251,9 @@ namespace gargantuan {
 		std::size_t RetainedArtifactBytes = 0;
 		// All kinds in the service's artifact map, including paired render meshes.
 		std::size_t TotalRetainedArtifactBytes = 0;
+		std::size_t PendingMeshPublications = 0;
+		std::size_t PendingMeshRemovals = 0;
+		std::size_t PendingMeshBytes = 0;
 		std::uint64_t RetiredArtifactBytes = 0;
 		std::uint64_t RetiredArtifacts = 0;
 		std::uint64_t FailedAdmissions = 0;
