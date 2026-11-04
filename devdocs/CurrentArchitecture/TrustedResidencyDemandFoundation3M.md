@@ -1,6 +1,7 @@
 ---
-status: implementation-under-qualification
+status: current
 owner: engine-content-policy
+last_verified: 2026-11-04
 related_code:
   - include/gargantuan/content/ResidencyDemandPolicy.hpp
   - src/content/ResidencyDemandPolicy.cpp
@@ -55,6 +56,15 @@ only already resident ObjectIds, and 3K continues to derive live DefaultSpace
 projections after 3L admission. 3M does not insert ghost objects into either.
 Only logical package space `default` participates in the first policy.
 
+The metadata integration contract requires conservative unit bounds covering
+actual geometry. For MeshParts, verified asset-local bounds must be transformed
+by `CFrame * Size` and unioned with the rest of the unit; Size does not normalize
+canonical mesh coordinates. The existing package writer's Size-box approximation
+can under-bound such meshes ([KI-3M-001](../../KNOWN_ISSUES.md#ki-3m-001-packaged-mesh-coarse-bounds-need-conservative-geometry-metadata)).
+3M does not read collision artifacts or repair payload geometry. Affected units
+require conservative authored metadata, trusted critical demand or fully resident
+composition until a separate metadata integration is qualified.
+
 Queries have separate budgets for cells, memberships and emitted candidates.
 A cursor is bound to an immutable index epoch, exact space and query volume.
 Invalid, exhausted or incomplete lookup is explicit; an incomplete page is never
@@ -81,7 +91,7 @@ before a superseded focus can publish new demand. Teleports invalidate unrelated
 query continuations. Within a conservative query envelope, moving focuses can
 continue a sweep and publish only candidates valid under current facts. Such a
 moving sweep is a bounded approximation: earlier discarded candidates may have
-become better after movement. Moving/saturated evaluation is observable, and a
+become better after movement. Moving sweeps and retained counts are observable, and a
 fresh sweep follows to converge after movement settles. A quiescent complete
 sweep selects the deterministic best retained subset.
 
@@ -100,6 +110,28 @@ or exposed as unhealthy; they do not fabricate an empty complete result.
 The coarse index additionally caps total memberships at 1,048,576 and populated
 cells at 262,144. These are internal safety ceilings, separate from the 65,536
 manifest-unit fixture ceiling and the per-unit 4,096-cell overlap ceiling.
+
+| Internal policy bound | Default | Hard ceiling |
+| --- | ---: | ---: |
+| Focuses | 512 | 512 |
+| Retained candidates per focus/set | 256 | 1,024 |
+| Focus query pages per tick | 16 | 512 |
+| Query cells per tick | 512 | 4,096 |
+| Membership visits per tick | 4,096 | 262,144 |
+| Candidate revalidations per tick | 8,192 | 65,536 |
+| Request eligibility visits per tick | 4,096 | 65,536 |
+| Accepted request/release deltas per tick | 32 | 1,024 |
+| Grace ticks | 30 | 60,000 |
+| Lookahead seconds / distance | 1 / 128 | 10 / 4,096 |
+
+Entry/leave radii default to 256/320; leave must exceed entry, be at most 4,096,
+and fit the complete conservative 4,096-cell query-volume ceiling. Candidate
+revalidation capacity must fit both retained sets for one focus. Focus positions
+are finite and confined to +/-10,000,000 on each axis. These are native safety
+limits, not a declaration that every combination meets a wall-clock target.
+When remaining revalidation capacity cannot fit the next focus, evaluation
+stops at that focus and resumes it first on the next tick. Cheaper later focuses
+cannot repeatedly advance the rotation past a deferred dense focus.
 
 ## Qualification scope
 

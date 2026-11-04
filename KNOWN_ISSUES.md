@@ -4,6 +4,30 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-3M-001: Packaged mesh coarse bounds need conservative geometry metadata
+
+- Status: Open; pre-existing package-metadata integration gap identified during 3M coordination.
+- Area: Package partition bounds / trusted spatial demand.
+- Relevant code: `src/packaging/PackageBuilder.cpp::InspectSerializedSubtree` and
+  `src/render/RenderPublisher.cpp::ExtractMeshPart`.
+
+The package partition inspection derives a transformed `abs(Size) * 0.5` box.
+MeshPart rendering uses canonical mesh positions transformed by `CFrame * Size`;
+Size is a scale and does not normalize mesh coordinates into that box. Mesh
+coordinates outside +/-0.5 can therefore extend beyond the generated package
+CoarseBounds. A focus near that extended geometry can miss the content unit in
+an indexed demand query. This is independent of collision artifact/shape semantics.
+
+The required integration contract is a conservative per-unit PackageCoarseBounds
+covering actual transformed geometry, derived from verified asset-local bounds
+when the writer has mesh metadata. Until that metadata is available, affected
+units need trusted critical demand or fully resident composition. Foundation 3M
+consumes authored bounds and cannot infer missing geometry by scanning payloads,
+changing Asset 2B collision contracts, or injecting ghost runtime projections.
+Closure requires a separately scoped package/asset metadata correction and a
+non-normalized imported/generated mesh regression; 3M's current scale receipt
+does not certify this integration.
+
 ## Originating Studio KI-008: camera-dependent geometry slicing
 
 - Status: Corrected for the reproduced Engine fixture; native Studio requalification remains separate.

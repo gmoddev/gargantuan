@@ -1,5 +1,11 @@
 # Current architecture
 
+- [Trusted residency demand Foundation 3M](TrustedResidencyDemandFoundation3M.md)
+  defines Engine-owned default-space policy, bounded resumable queries,
+  deterministic priorities, revision-safe demand and its existing 3L integration.
+  The [3M receipt](../Validation/TrustedResidencyDemand3M.md) records separate
+  correctness and scale evidence; physical/provider certification stays separate.
+
 - [Foundation3L core acceptance](../../tests/Foundation3LFinalAcceptance.md#current-core-contract--2026-10-20)
   records the2026-10-21 `POOLED_CORRECTNESS_V1` PASS on draftPR6, exact source
   and analyzer receipts, KI-006 CLOSED and core3L COMPLETE. Physical Local32,
@@ -25,7 +31,8 @@
   acceptance report and exact-source validation status.
 - [Content Availability Foundation 3L.2 validation](ContentAvailabilityFoundation3L_2Validation.md)
   records bounded-memory and content-coupled peer-scale measurements, explicit
-  gameplay/materialization blockers, and the still-closed Foundation 3M gate.
+  gameplay/materialization blockers and the historical Foundation 3M gate at
+  that checkpoint. The core closeout above supersedes that gate disposition.
 - [Content Availability Foundation 3L](ContentAvailabilityFoundation3L.md)
   defines deterministic immutable package content units, provider-neutral local
   and private Node acquisition, bounded asynchronous residency, transactional

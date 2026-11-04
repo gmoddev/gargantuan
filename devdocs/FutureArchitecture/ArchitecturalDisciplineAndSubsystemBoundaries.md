@@ -22,6 +22,11 @@ closed; that does not close the foundation. See the
 [roadmap evidence review](RoadmapEvidence20260912.md), and
 [delivery roadmap](Roadmap.md).
 
+That dated gate is superseded for core correctness by the accepted D03
+`POOLED_CORRECTNESS_V1` [3L closeout](../../tests/Foundation3LFinalAcceptance.md#current-core-contract--2026-10-20).
+The separately authorized first 3M implementation and its qualification scope
+are described in [the current policy contract](../CurrentArchitecture/TrustedResidencyDemandFoundation3M.md).
+
 This document records architectural improvements identified through comparative review of other engine implementations, particularly Atomic Game Engine, while preserving Gargantuan's existing semantic ownership model.
 
 It is not an instruction to reproduce another engine's architecture.
