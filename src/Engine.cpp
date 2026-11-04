@@ -292,13 +292,20 @@ namespace gargantuan {
 					if (ResidencyPolicyPreparation.valid() &&
 						ResidencyPolicyPreparation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
 						auto PreparedPolicy = ResidencyPolicyPreparation.get();
-						if (Content->GetManifestSnapshot() == ResidencyPolicyManifest)
+						const auto CurrentManifest = Content->GetManifestSnapshot();
+						if (CurrentManifest && ResidencyPolicyManifest &&
+							CurrentManifest.get() == ResidencyPolicyManifest.get() &&
+							!CurrentManifest.owner_before(ResidencyPolicyManifest) &&
+							!ResidencyPolicyManifest.owner_before(CurrentManifest))
 							ResidencyPolicy = std::move(PreparedPolicy);
 						else ResidencyPolicyEnabled = false;
 						ResidencyPolicyManifest.reset();
 					}
 				} catch (const std::exception &Error) {
 					ResidencyPolicyEnabled = false;
+					// get() consumes a failed preparation; a launch failure has no future.
+					// Keep any still-running future for Destroy to join off this path.
+					ResidencyPolicyManifest.reset();
 					LOG_WARN(App, "[Content:ResidencyPolicy] preparation failed: %s", Error.what());
 				}
 			}

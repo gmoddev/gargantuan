@@ -25,6 +25,13 @@ namespace gargantuan {
 			return Class >= ResidencyDemandClass::Critical && Class <= ResidencyDemandClass::Speculative;
 		}
 
+		bool SameSnapshotOwner(
+			const std::shared_ptr<const PackageContentManifest> &Left,
+			const std::shared_ptr<const PackageContentManifest> &Right
+		) {
+			return Left.get() == Right.get() && !Left.owner_before(Right) && !Right.owner_before(Left);
+		}
+
 		float DistanceSquared(glm::vec3 Point, const PackageCoarseBounds &Bounds) {
 			double Result = 0.0;
 			for (std::size_t Axis = 0; Axis < 3; ++Axis) {
@@ -532,11 +539,11 @@ namespace gargantuan {
 				return;
 			}
 			const auto CurrentManifest = Availability->GetManifestSnapshot();
-			if (!CurrentManifest || (BoundManifest && CurrentManifest != BoundManifest)) {
+			if (!CurrentManifest || (BoundManifest && !SameSnapshotOwner(CurrentManifest, BoundManifest))) {
 				++Metrics.ServiceBindingFailures;
 				return;
 			}
-			if (!BoundAvailability && CurrentManifest != ManifestOwner) {
+			if (!BoundAvailability && !SameSnapshotOwner(CurrentManifest, ManifestOwner)) {
 				if (ExactSnapshotRequired) {
 					++Metrics.ServiceBindingFailures;
 					return;
@@ -754,7 +761,7 @@ namespace gargantuan {
 		if (!State || State->Stopped) return;
 		State->Stopped = true;
 		if (Availability && Availability == State->BoundAvailability &&
-			Availability->GetManifestSnapshot() == State->BoundManifest)
+			SameSnapshotOwner(Availability->GetManifestSnapshot(), State->BoundManifest))
 			for (const auto &[Unit, Record] : State->Demands)
 				if (Record.Requested) (void)Availability->ReleaseContent(State->Manifest.Entries[Unit].Key);
 		State->Focuses.clear();

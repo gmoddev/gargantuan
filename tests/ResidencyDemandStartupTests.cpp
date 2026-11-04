@@ -1,6 +1,9 @@
+#include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/content/ContentAvailability.hpp"
 #include "gargantuan/content/ResidencyDemandPolicy.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <array>
@@ -116,6 +119,20 @@ namespace {
 			EqualPolicy.Stop(nullptr);
 		}
 		{
+			// The same address with a second control block is not the service's
+			// validated immutable ownership. Keep Snapshot alive beyond Spoofed.
+			std::shared_ptr<const PackageContentManifest> FalseOwner(
+				Snapshot.get(), [](const PackageContentManifest *) {});
+			ResidencyDemandPolicy Spoofed(FalseOwner);
+			Check(Spoofed.SetRequirement("unit/0001", ResidencyDemandClass::Critical),
+				"aliased snapshot requirement rejected");
+			Spoofed.Step(Fixture.Service.get(), 1);
+			const auto Metrics = Spoofed.GetMetrics();
+			Check(Metrics.Requests == 0 && Metrics.ManifestBindingEntriesCompared == 0 &&
+				Metrics.ServiceBindingFailures == 1, "same address with different owner bound to service");
+			Spoofed.Stop(nullptr);
+		}
+		{
 			PackageContentManifest Mutable = *Snapshot;
 			ResidencyDemandPolicy ValuePolicy(Mutable);
 			Mutable.Entries.front().Key = "unit/changed";
@@ -163,12 +180,56 @@ namespace {
 			"equal replacement manifest accepted an old session's prepared policy");
 		Prepared.Stop(nullptr);
 	}
+
+	void FailedEnginePreparationReleasesSnapshot() {
+		// Every entry is individually legal but the whole index crosses its
+		// aggregate membership cap on the worker's 257th entry.
+		auto Manifest = MakeManifest(257);
+		for (auto &Entry : Manifest.Entries)
+			Entry.CoarseBounds = PackageCoarseBounds{{0, 0, 0}, {8191, 8191, 8191}};
+		const auto Encoded = EncodePackageContentManifest(Manifest);
+		const auto Bytes = std::span(reinterpret_cast<const std::uint8_t *>(Encoded.data()), Encoded.size());
+		ContentAvailabilityConfiguration Configuration;
+		Configuration.Provider = std::make_shared<ManifestProvider>(Manifest.Package, Encoded);
+		Configuration.Package = Manifest.Package;
+		Configuration.ManifestDigest = AssetContentId::Hash(Bytes);
+		Configuration.Mode = ContentResidencyMode::OnDemand;
+		auto World = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(64, 64));
+		Engine Runtime(World, &Renderer, {}, {
+			.Content = std::move(Configuration), .Mode = RuntimeMode::NetworkServer,
+			.EnableResidencyDemandPolicy = true});
+		Runtime.ProcessService->Alive = true;
+		const auto Deadline = std::chrono::steady_clock::now() + 20s;
+		while (!Runtime.Content->IsManifestAvailable() && std::chrono::steady_clock::now() < Deadline) {
+			Runtime.Step();
+			std::this_thread::yield();
+		}
+		Check(Runtime.Content->IsManifestAvailable(), "Engine failure fixture manifest did not load");
+		Runtime.Step();
+		auto Snapshot = Runtime.Content->GetManifestSnapshot();
+		Check(Snapshot && !Runtime.GetResidencyDemandPolicy(),
+			"Engine failure fixture unexpectedly published a policy");
+		std::weak_ptr<const PackageContentManifest> Weak = Snapshot;
+		Snapshot.reset();
+		Runtime.Content->Stop();
+		while (!Weak.expired() && std::chrono::steady_clock::now() < Deadline) {
+			Runtime.Step();
+			std::this_thread::yield();
+		}
+		Check(Weak.expired(), "failed Engine preparation retained the old manifest snapshot");
+		Check(!Runtime.GetResidencyDemandPolicy(), "failed Engine preparation published after Content stopped");
+		Runtime.Destroy();
+		World->Destroy();
+	}
 }
 
 int main() {
 	try {
+		BootstrapNativeRuntimeSchema();
 		ExactSnapshotBindingAndValueCompatibility();
 		SnapshotStopAndReplacementLifetime();
+		FailedEnginePreparationReleasesSnapshot();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Content:ResidencyStartup] " << Error.what() << '\n';
 		return 1;
