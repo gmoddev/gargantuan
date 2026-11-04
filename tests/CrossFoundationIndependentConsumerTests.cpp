@@ -12,7 +12,9 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <SDL3/SDL.h>
+#include <nlohmann/json.hpp>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -54,6 +56,8 @@ namespace {
 		PackageContentManifest Manifest;
 		std::string ManifestBytes;
 		AssetContentId ManifestDigest;
+		std::array<std::string, 3> CandidateKeys;
+		std::array<AssetContentId, 3> CandidateDigests;
 
 		PackageFixture() {
 			std::filesystem::create_directory(Root);
@@ -70,6 +74,7 @@ namespace {
 			Check(Space != nullptr, "production project has no Workspace");
 			for (int Index = 0; Index < 3; ++Index) {
 				auto PartValue = std::make_shared<Part>();
+				PartValue->SetArchivable(true);
 				PartValue->SetName("CrossConsumerCandidate" + std::to_string(Index));
 				PartValue->SetAnchored(true);
 				PartValue->SetSize({2, 2, 2});
@@ -78,8 +83,20 @@ namespace {
 			}
 			const auto Revision = World->GetAuthoritativeRevision();
 			auto Payload = PackageBuilder::Capture(ProjectValue, World, Revision, Revision);
-			Check(Payload.ContentUnits.size() >= 3,
-				"production capture did not partition the three independent candidate parts");
+			std::array<std::size_t, 3> CandidateCounts{};
+			for (const auto &Unit : Payload.ContentUnits) {
+				const auto Document = nlohmann::json::parse(Unit.Payload);
+				for (std::size_t Index = 0; Index < CandidateCounts.size(); ++Index) {
+					if (Document.value("Name", "") != "CrossConsumerCandidate" + std::to_string(Index)) continue;
+					Check(Document.value("ClassName", "") == "Part" && Unit.Entry.CoarseBounds.has_value(),
+						"named candidate did not become a spatial Part unit");
+					++CandidateCounts[Index];
+					CandidateKeys[Index] = Unit.Entry.Key;
+					CandidateDigests[Index] = Unit.Entry.Digest;
+				}
+			}
+			Check(std::ranges::all_of(CandidateCounts, [](std::size_t Count) { return Count == 1; }),
+				"production capture did not partition each named Part exactly once");
 			const auto Build = PackageBuilder::Build({
 				.Payload = std::move(Payload),
 				.RuntimeDistributionRoot = std::filesystem::path(GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT),
@@ -97,6 +114,13 @@ namespace {
 			Manifest = std::move(*Parsed);
 			Check(Manifest.Package.Project == ProjectValue.Identity && Manifest.Package.PackageVersion == Revision,
 				"package-produced namespace changed");
+			for (std::size_t Index = 0; Index < CandidateKeys.size(); ++Index) {
+				const auto Entry = std::ranges::find_if(Manifest.Entries, [&](const PackageContentEntry &Value) {
+					return Value.Key == CandidateKeys[Index];
+				});
+				Check(Entry != Manifest.Entries.end() && Entry->Digest == CandidateDigests[Index] &&
+					Entry->CoarseBounds.has_value(), "named candidate identity was absent from emitted manifest bytes");
+			}
 			World->Destroy();
 		}
 
@@ -212,13 +236,10 @@ namespace {
 
 		PackageContentCoarseIndex First(Package.Manifest);
 		PackageContentCoarseIndex Second(Package.Manifest);
-		const auto Unit = std::ranges::find_if(Proof.Units, [](const ResidencyUnitBoundsMetadata &Value) {
-			for (std::size_t Axis = 0; Axis < 3; ++Axis)
-				if (Value.ConservativeBounds.Minimum[Axis] > 0 || Value.ConservativeBounds.Maximum[Axis] < 0)
-					return false;
-			return true;
+		const auto Unit = std::ranges::find_if(Proof.Units, [&](const ResidencyUnitBoundsMetadata &Value) {
+			return Value.Key == Package.CandidateKeys.front();
 		});
-		Check(Unit != Proof.Units.end(), "package lost the spatial candidates at the origin");
+		Check(Unit != Proof.Units.end(), "named spatial candidate was absent from metadata coverage");
 		const PackageCoarseBounds Query{{0, 0, 0}, {0, 0, 0}};
 		std::optional<PackageCoarseQueryCursor> FirstCursor;
 		std::optional<PackageCoarseQueryCursor> SecondCursor;
@@ -242,10 +263,12 @@ namespace {
 			FirstCursor = A.NextCursor;
 			SecondCursor = B.NextCursor;
 		}
-		Check(Completed && Candidates.size() >= 3 && std::ranges::is_sorted(Candidates) &&
-			std::ranges::any_of(Candidates, [&](std::size_t Index) {
-				return Index < Package.Manifest.Entries.size() && Package.Manifest.Entries[Index].Key == Unit->Key;
-			}), "package spatial candidates were absent or not in deterministic manifest order");
+		Check(Completed && std::ranges::is_sorted(Candidates),
+			"package spatial candidate page did not complete in deterministic manifest order");
+		for (const auto &Key : Package.CandidateKeys)
+			Check(std::ranges::any_of(Candidates, [&](std::size_t Index) {
+				return Index < Package.Manifest.Entries.size() && Package.Manifest.Entries[Index].Key == Key;
+			}), "a named package candidate was absent from the shared origin cell");
 		Check(First.QueryPage(Unit->PackageSpaceKey, Query, {0, 1, 1}).Status ==
 			PackageCoarseQueryStatus::InvalidInput, "invalid candidate budget became an empty spatial miss");
 	}
