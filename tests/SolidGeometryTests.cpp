@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/geometric.hpp>
 
 using namespace gargantuan;
 
@@ -88,6 +89,23 @@ int main() {
 		Check(Again && FirstHash != "encode-failed" && Hash(Again->Mesh) == FirstHash,
 			"repeated same-profile compilation produces identical canonical mesh bytes");
 	}
+	SolidGraph OneBox{1, "box", {Box("box")}};
+	auto Oriented = CompileSolidGeometry(OneBox);
+	if (Oriented) {
+		bool FaceUvOkay = true;
+		for (std::size_t Index = 0; Index < Oriented->Mesh.Vertices->size(); Index += 3) {
+			const auto &A = (*Oriented->Mesh.Vertices)[Index];
+			const auto &B = (*Oriented->Mesh.Vertices)[Index + 1];
+			const auto &C = (*Oriented->Mesh.Vertices)[Index + 2];
+			const auto Du = B.TextureCoordinate - A.TextureCoordinate;
+			const auto Dv = C.TextureCoordinate - A.TextureCoordinate;
+			const auto UvArea = Du.x * Dv.y - Du.y * Dv.x;
+			FaceUvOkay &= std::abs(UvArea) > 1.0e-5f &&
+				std::abs(glm::dot(A.Normal, glm::vec3(A.Tangent))) < 1.0e-5f &&
+				std::abs(A.Tangent.w) == 1.0f;
+		}
+		Check(FaceUvOkay, "all six box face orientations have nondegenerate UVs and aligned tangents");
+	} else Check(false, "single box compiles for face orientation test");
 	Graph.Nodes.back().Kind = SolidNodeKind::Intersection;
 	auto Intersection = CompileSolidGeometry(Graph);
 	Check(Intersection && Intersection->Mesh.Bounds.Minimum.x >= -0.001f &&
@@ -132,6 +150,32 @@ int main() {
 	Nested.Nodes.push_back(Box("base"));
 	Check(!CompileSolidGeometry(Nested), "duplicate stable node ID is rejected");
 	Nested.Nodes.pop_back();
+	Nested.Nodes.push_back(Box("invalid", {-1, 1, 1}));
+	Check(!CompileSolidGeometry(Nested), "unreachable invalid primitive is rejected");
+	Nested.Nodes.pop_back();
+	Nested.Nodes.push_back(Move("invalid", "base", {0, 0, 0}));
+	Nested.Nodes.back().Matrix[0][0] = 0;
+	Check(!CompileSolidGeometry(Nested), "unreachable singular transform is rejected");
+	Nested.Nodes.pop_back();
+	SolidNode InvalidImported = Imported;
+	InvalidImported.Id = "invalid";
+	auto BadMesh = *Imported.Mesh;
+	auto BadIndices = *Imported.Mesh->Indices;
+	BadIndices[0] = 999;
+	BadMesh.Indices = std::make_shared<const std::vector<std::uint32_t>>(std::move(BadIndices));
+	InvalidImported.Mesh = std::make_shared<const ImportedMesh>(std::move(BadMesh));
+	Nested.Nodes.push_back(std::move(InvalidImported));
+	Check(!CompileSolidGeometry(Nested), "unreachable imported mesh with invalid index is rejected");
+	Nested.Nodes.pop_back();
+	SolidGraph SharedDepth{1, "long", {Box("leaf"), Move("short", "leaf", {0, 0, 0})}};
+	for (int Index = 0; Index < 8; ++Index)
+		SharedDepth.Nodes.push_back(Move("long" + std::to_string(Index),
+			Index ? "long" + std::to_string(Index - 1) : "leaf", {0, 0, 0}));
+	SharedDepth.Root = "long7";
+	SolidCompileLimits DepthLimit;
+	DepthLimit.MaximumDepth = 7;
+	Check(!CompileSolidGeometry(SharedDepth, {}, std::chrono::steady_clock::time_point::max(), DepthLimit),
+		"longest graph path is enforced even when a shared leaf was visited first by a short path");
 
 	AssetCancellationToken Cancelled;
 	Cancelled.Cancel();

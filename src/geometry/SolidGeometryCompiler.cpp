@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <stop_token>
 #include <thread>
@@ -128,15 +129,20 @@ namespace gargantuan {
 			for (const auto &Face : Triangles) {
 				const auto Normal = glm::normalize(glm::cross(Face.Positions[1] - Face.Positions[0],
 					Face.Positions[2] - Face.Positions[0]));
-				const auto Reference = std::abs(Normal.y) < 0.9f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
-				const auto Tangent = glm::normalize(glm::cross(Reference, Normal));
+				const auto Absolute = glm::abs(Normal);
+				const auto UAxis = Absolute.x >= Absolute.y && Absolute.x >= Absolute.z
+					? glm::vec3(0, 0, 1) : glm::vec3(1, 0, 0);
+				const auto VAxis = Absolute.x >= Absolute.y && Absolute.x >= Absolute.z
+					? glm::vec3(0, 1, 0) : Absolute.y >= Absolute.z
+						? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+				const auto Tangent = glm::normalize(UAxis - Normal * glm::dot(UAxis, Normal));
+				const float Handedness = glm::dot(glm::cross(Normal, Tangent), VAxis) < 0 ? -1.0f : 1.0f;
 				for (const auto Position : Face.Positions) {
 					RenderVertex Vertex;
 					Vertex.Position = Position;
 					Vertex.Normal = Normal;
-					Vertex.Tangent = glm::vec4(Tangent, 1.0f);
-					Vertex.TextureCoordinate = std::abs(Normal.y) > std::abs(Normal.z)
-						? glm::vec2(Position.x, Position.z) : glm::vec2(Position.x, Position.y);
+					Vertex.Tangent = glm::vec4(Tangent, Handedness);
+					Vertex.TextureCoordinate = {glm::dot(Position, UAxis), glm::dot(Position, VAxis)};
 					Vertices.push_back(Vertex);
 					CollisionPositions.push_back(Position);
 					Indices.push_back(static_cast<std::uint32_t>(Indices.size()));
@@ -223,23 +229,33 @@ namespace gargantuan {
 					if (Node.Inputs.size() < 2 || Node.Inputs.size() > 16)
 						return std::unexpected(Error("InvalidSolidGraph", "Boolean node requires 2-16 ordered inputs"));
 					break;
+				default:
+					return std::unexpected(Error("InvalidSolidGraph", "Unknown solid node kind"));
 			}
 		}
 			if (InputTriangles > std::min(Limits.MaximumInputTriangles, std::size_t{8192}))
 				return std::unexpected(Error("GeometryLimit", "Solid graph exceeds the input triangle limit"));
 			std::vector<std::uint8_t> Visit(Graph.Nodes.size(), 0);
-			const auto CheckCycles = [&](const auto &Self, std::size_t Index, std::size_t Depth) -> bool {
-				if (Depth > std::min(Limits.MaximumDepth, std::size_t{24}) || Visit[Index] == 1) return false;
-				if (Visit[Index] == 2) return true;
+			std::vector<std::size_t> LongestPath(Graph.Nodes.size(), 0);
+			const auto CheckCycles = [&](const auto &Self, std::size_t Index) -> std::optional<std::size_t> {
+				if (Visit[Index] == 1) return std::nullopt;
+				if (Visit[Index] == 2) return LongestPath[Index];
 				Visit[Index] = 1;
-				for (const auto &Input : Graph.Nodes[Index].Inputs)
-					if (!Self(Self, NodeById.at(Input), Depth + 1)) return false;
+				std::size_t MaximumChildPath = 0;
+				for (const auto &Input : Graph.Nodes[Index].Inputs) {
+					const auto ChildPath = Self(Self, NodeById.at(Input));
+					if (!ChildPath) return std::nullopt;
+					MaximumChildPath = std::max(MaximumChildPath, *ChildPath);
+				}
+				LongestPath[Index] = MaximumChildPath + 1;
 				Visit[Index] = 2;
-				return true;
+				return LongestPath[Index];
 			};
-			for (std::size_t Index = 0; Index < Graph.Nodes.size(); ++Index)
-				if (!CheckCycles(CheckCycles, Index, 1))
+			for (std::size_t Index = 0; Index < Graph.Nodes.size(); ++Index) {
+				const auto Path = CheckCycles(CheckCycles, Index);
+				if (!Path || *Path > std::min(Limits.MaximumDepth, std::size_t{24}))
 					return std::unexpected(Error("InvalidSolidGraph", "Solid graph contains a cycle or exceeds depth limit"));
+			}
 			if (Cancellation.IsCancelled() || std::chrono::steady_clock::now() >= Deadline)
 				return std::unexpected(Error("Cancelled", "Solid compilation was cancelled before evaluation"));
 
