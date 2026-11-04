@@ -191,6 +191,12 @@ namespace {
 		auto Cast = World.Raycast({.Origin = {0.0f, 8.0f, 0.0f}, .Direction = {0.0f, -8.0f, 0.0f}});
 		Check(Cast.Succeeded() && Cast.HasHit() && Near(Cast.Candidates.front().Position.y, 4.0f),
 			"raycast sees the scaled translated static mesh");
+		const auto Mover = World.MoveKinematicCapsule({
+			.Position = {0.0f, 6.0f, 0.0f}, .Radius = 0.5f, .Height = 2.0f,
+			.Translation = {0.0f, -3.0f, 0.0f}, .Velocity = {0.0f, -3.0f, 0.0f},
+		});
+		Check(Mover.Succeeded() && Mover.Collided && Mover.Position.y >= 4.9f,
+			"kinematic capsule motion collides with the active static triangle mesh");
 		Description.Transform = CFrame(0.0f, 2.0f, 0.0f);
 		Check(World.UpdateBody(First, Description).Succeeded(), "mesh transform update retains body identity");
 		Check(World.IsBodyValid(First), "mesh update leaves neutral identity live");
