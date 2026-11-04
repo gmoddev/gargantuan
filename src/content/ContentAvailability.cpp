@@ -1627,6 +1627,16 @@ namespace gargantuan {
 		}
 		return Result;
 	}
+	ContentAvailabilityDiagnosticCounters ContentAvailabilityService::GetDiagnosticCounters() const {
+		if (!State) return {};
+		const auto &Metrics = State->Metrics;
+		return {Metrics.Requests, Metrics.Acquisitions, Metrics.Admissions, Metrics.Evictions,
+			Metrics.Failures, Metrics.Cancellations, Metrics.CacheHits,
+			Metrics.CompletionCapacityDeferrals, Metrics.AdmissionDeferrals,
+			State->Decoded->Deferrals.load(std::memory_order_relaxed), State->ReservedCompletionBytes,
+			State->CachedBytes, State->Decoded->Bytes.load(std::memory_order_relaxed),
+			State->Records.size(), Metrics.Timing, State->Stopped};
+	}
 	const PackageContentManifest *ContentAvailabilityService::GetManifest() const {
 		return State && State->Manifest ? &*State->Manifest : nullptr;
 	}

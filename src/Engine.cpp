@@ -151,6 +151,7 @@ namespace gargantuan {
 		DataModelDestroyingConnection = DataModel->Destroying->Once([this](std::monostate) { Destroy(); });
 		const bool PreloadAllContent = ProviderConfiguration.Content &&
 			ProviderConfiguration.Content->Mode == ContentResidencyMode::FullyResident;
+		StreamingDiagnosticsEnabled = ProviderConfiguration.EnableStreamingDiagnostics;
 		ResidencyPolicyEnabled = ProviderConfiguration.Mode == RuntimeMode::NetworkServer &&
 			ProviderConfiguration.EnableResidencyDemandPolicy && ProviderConfiguration.Content &&
 			ProviderConfiguration.Content->Mode == ContentResidencyMode::OnDemand;
@@ -270,6 +271,37 @@ namespace gargantuan {
 		return Entitlements && !Entitlements->GetDestroyed() && Entitlements->ConfigureProvider(std::move(Provider));
 	}
 
+	void Engine::SetStreamingDiagnosticsEnabled(bool Enabled) {
+		if (ResidencyPolicy) ResidencyPolicy->SetDiagnosticsEnabled(Enabled);
+		StreamingDiagnosticsEnabled = Enabled;
+		if (!Enabled) LastContentStepNanoseconds = 0;
+	}
+
+	StreamingDiagnostics Engine::GetStreamingDiagnostics(ResidencyDiagnosticQuery Query) const {
+		if (Query.MaximumUnits > MaximumResidencyDiagnosticUnits ||
+			Query.MaximumTimingSamples > MaximumResidencyDiagnosticSamples || Query.StartIndex > MaximumPackageContentUnits)
+			throw std::invalid_argument("[Content:StreamingDiagnostics] query exceeds native limits");
+		StreamingDiagnostics Result;
+		Result.Enabled = StreamingDiagnosticsEnabled;
+		if (!StreamingDiagnosticsEnabled) return Result;
+		Result.SimulationTick = SimulationTick;
+		Result.ContentConfigured = Content != nullptr;
+		Result.ManifestAvailable = Content && Content->IsManifestAvailable();
+		Result.LastContentStepNanoseconds = LastContentStepNanoseconds;
+		if (Content) Result.Content = Content->GetDiagnosticCounters();
+		if (Destroyed || Result.Content.Stopped) Result.Status = StreamingDiagnosticStatus::Stopped;
+		else if (ResidencyPreparationFailed) Result.Status = StreamingDiagnosticStatus::PreparationFailed;
+		else if (ResidencyPolicy) Result.Status = StreamingDiagnosticStatus::Active;
+		else if (!ResidencyPolicyEnabled) Result.Status = StreamingDiagnosticStatus::NotConfigured;
+		else if (ResidencyPolicyPreparation.valid()) Result.Status = StreamingDiagnosticStatus::Preparing;
+		else Result.Status = StreamingDiagnosticStatus::AwaitingManifest;
+		if (ResidencyPolicy && Result.Status == StreamingDiagnosticStatus::Active) {
+			Result.Policy = ResidencyPolicy->GetDiagnostics(Query);
+			if (Content) for (auto &Unit : Result.Policy.Units) Unit.AvailabilityState = Content->GetState(Unit.Demand.Key);
+		}
+		return Result;
+	}
+
 	void Engine::Step() {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineStep);
 		if (Destroyed || !ProcessService->Alive) return;
@@ -300,9 +332,17 @@ namespace gargantuan {
 							ResidencyPolicy = std::move(PreparedPolicy);
 						else ResidencyPolicyEnabled = false;
 						ResidencyPolicyManifest.reset();
+						if (ResidencyPolicy && StreamingDiagnosticsEnabled) {
+							try { ResidencyPolicy->SetDiagnosticsEnabled(true); }
+							catch (const std::exception &) {
+								StreamingDiagnosticsEnabled = false;
+								LOG_WARN(App, "[Content:StreamingDiagnostics] collection unavailable");
+							}
+						}
 					}
 				} catch (const std::exception &Error) {
 					ResidencyPolicyEnabled = false;
+					ResidencyPreparationFailed = true;
 					// get() consumes a failed preparation; a launch failure has no future.
 					// Keep any still-running future for Destroy to join off this path.
 					ResidencyPolicyManifest.reset();
@@ -312,7 +352,12 @@ namespace gargantuan {
 			if (ResidencyPolicy)
 				ResidencyPolicy->Step(Content.get(), SimulationTick == std::numeric_limits<std::uint64_t>::max()
 					? SimulationTick : SimulationTick + 1);
-			Content->Step();
+			if (StreamingDiagnosticsEnabled) {
+				const auto ContentStarted = std::chrono::steady_clock::now();
+				Content->Step();
+				LastContentStepNanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now() - ContentStarted).count());
+			} else Content->Step();
 		}
 
 		CurrentTick = std::chrono::steady_clock::now();

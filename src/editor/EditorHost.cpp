@@ -25,6 +25,7 @@
 #include "gargantuan/services/Workspace.hpp"
 #include "serialization/JsonCodec.hpp"
 #include "runtime/PreparedPropertyCommit.hpp"
+#include "editor/StreamingDiagnosticsEncoding.hpp"
 
 #include <algorithm>
 #include <array>
@@ -917,8 +918,11 @@ namespace gargantuan {
 			if (message["SessionToken"].get<std::string>() != SessionToken)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Session token was rejected"));
 			const auto method = message["Method"].get<std::string>();
-			// Batch failures cannot commit an unrelated expired legacy group.
-			if (World && method != "SetPropertyBatch") (void)World->Transactions.ExpireOwner(*World, TransactionOwner);
+			// Batch failures and diagnostic operations cannot commit an unrelated
+			// expired legacy group. These diagnostics do not edit document state.
+			if (World && method != "SetPropertyBatch" && method != "GetStreamingDiagnostics" &&
+				method != "ConfigureStreamingDiagnostics")
+				(void)World->Transactions.ExpireOwner(*World, TransactionOwner);
 			const auto &parameters = message["Params"];
 			if (ActivePlaySession && IsAuthoringMethodWhilePlaying(method))
 				return SerializeBoundedResponse(ErrorResponse(
@@ -976,7 +980,7 @@ namespace gargantuan {
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
 					"ReadScriptSource", "WriteScriptSource", "PreRunSource", "ValidatePreRun",
 					"CustomServiceDeclarations", "ReplicatedStorage",
-					"PlaySession", "DiagnosticStream", "SendPlayInput",
+					"PlaySession", "DiagnosticStream", "SendPlayInput", "StreamingDiagnostics",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"AnimationRig", "AnimationPreview",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
@@ -1010,6 +1014,7 @@ namespace gargantuan {
 						{"Engine", "Gargantuan"},
 						{"ProtocolVersion", EditorHostProtocolVersion},
 						{"PropertyBatchVersion", EditorHostPropertyBatchVersion},
+						{"StreamingDiagnosticsVersion", 1},
 						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 2},
 						{"ViewportTransports", std::move(viewportTransports)},
@@ -1313,6 +1318,39 @@ namespace gargantuan {
 					{"PlaySessionId", Id.Value == 0 ? Json(nullptr) : Json(std::to_string(Id.Value))},
 					{"State", GetPlaySessionStateName(State)}, {"Active", ActivePlaySession != nullptr},
 				}));
+			}
+
+			if (method == "ConfigureStreamingDiagnostics" || method == "GetStreamingDiagnostics") {
+				const bool Configure = method == "ConfigureStreamingDiagnostics";
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					(Configure && !StudioSecurity.HasCapability(ScriptCapability::EditorCommands)))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Streaming diagnostics require owner read access"));
+				if (!(Configure ? HasOnlyFields(parameters, {"PlaySessionId", "Enabled"}) :
+					HasOnlyFields(parameters, {"PlaySessionId", "StartIndex", "MaximumUnits", "MaximumTimingSamples"})) ||
+					!parameters.contains("PlaySessionId"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Streaming diagnostic fields are malformed"));
+				const auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
+				if (!Id || !ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "Streaming diagnostics require the active owned Play session"));
+				if (Configure) {
+					if (!parameters.contains("Enabled") || !parameters["Enabled"].is_boolean())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Enabled must be boolean"));
+					ActivePlaySession->SetStreamingDiagnosticsEnabled(parameters["Enabled"].get<bool>());
+				}
+				const auto Size = [&](const char *Name, std::size_t Default, std::size_t Maximum) -> std::optional<std::size_t> {
+					if (!parameters.contains(Name)) return Default;
+					if (!parameters[Name].is_number_unsigned()) return std::nullopt;
+					const auto Value = parameters[Name].get<std::uint64_t>();
+					return Value <= Maximum ? std::optional<std::size_t>(static_cast<std::size_t>(Value)) : std::nullopt;
+				};
+				const auto Start = Size("StartIndex", 0, MaximumPackageContentUnits);
+				const auto Units = Size("MaximumUnits", 64, MaximumResidencyDiagnosticUnits);
+				const auto Samples = Size("MaximumTimingSamples", 32, MaximumResidencyDiagnosticSamples);
+				if (!Start || !Units || !Samples)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Streaming diagnostic query exceeds bounds"));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"PlaySessionId", std::to_string(Id->Value)},
+					{"Diagnostics", EncodeStreamingDiagnosticsSnapshot(ActivePlaySession->GetStreamingDiagnostics({*Start, *Units, *Samples}))}}));
 			}
 
 			if (method == "PollPlayDiagnostics") {

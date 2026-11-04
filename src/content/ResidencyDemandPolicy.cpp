@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <limits>
 #include <map>
 #include <set>
@@ -176,6 +177,7 @@ namespace gargantuan {
 			std::optional<Requirement> Required;
 			std::optional<std::uint64_t> GraceUntil;
 			bool Requested = false;
+			bool DesiredObserved = false;
 		};
 		struct PendingDelta final {
 			bool Release = false;
@@ -196,6 +198,16 @@ namespace gargantuan {
 			}
 		};
 
+		struct DiagnosticState final {
+			std::array<ResidencyTimingSample, MaximumResidencyDiagnosticSamples> Samples{};
+			std::size_t Next = 0;
+			std::size_t Count = 0;
+			std::uint64_t BudgetLimitedTicks = 0;
+			std::uint32_t BudgetFlags = 0;
+		};
+		std::unique_ptr<DiagnosticState> Diagnostics;
+		std::size_t DesiredUnits = 0;
+		std::size_t OwnedRequests = 0;
 		std::shared_ptr<const PackageContentManifest> ManifestOwner;
 		const PackageContentManifest &Manifest;
 		PackageContentCoarseIndex Index;
@@ -273,6 +285,11 @@ namespace gargantuan {
 			auto &Record = Found->second;
 			RemovePending(Unit);
 			const bool Desired = !Record.Focuses.empty() || Record.Required.has_value();
+			if (Desired != Record.DesiredObserved) {
+				if (Desired) ++DesiredUnits;
+				else --DesiredUnits;
+				Record.DesiredObserved = Desired;
+			}
 			if (Desired) {
 				if (Record.GraceUntil) Expiries.erase({*Record.GraceUntil, Unit});
 				Record.GraceUntil.reset();
@@ -480,7 +497,10 @@ namespace gargantuan {
 				auto &Value = Current->second;
 				if (Value.NeedsRevalidation) {
 					const auto Work = Value.Committed.size() + Value.Working.size();
-					if (Work > RevalidationsLeft) break;
+					if (Work > RevalidationsLeft) {
+						if (Diagnostics) Diagnostics->BudgetFlags |= 8;
+						break;
+					}
 					RevalidationsLeft -= Work;
 					Revalidate(Value, Current->first, Tick);
 				}
@@ -595,7 +615,10 @@ namespace gargantuan {
 				}
 				for (const auto &[RankValue, Id] : Found->second.RankedFocuses) {
 					(void)RankValue;
-					if (!ValidationLeft) break;
+					if (!ValidationLeft) {
+						if (Diagnostics) Diagnostics->BudgetFlags |= 32;
+						break;
+					}
 					--ValidationLeft;
 					++Metrics.RequestValidationVisits;
 					const auto FocusValue = Focuses.find(Id);
@@ -667,6 +690,8 @@ namespace gargantuan {
 					break;
 				}
 				Found->second.Requested = !Delta.Release;
+				if (Delta.Release) --OwnedRequests;
+				else ++OwnedRequests;
 				if (Delta.Release) ++Metrics.Releases;
 				else ++Metrics.Requests;
 				RemovePending(Delta.Index);
@@ -752,9 +777,39 @@ namespace gargantuan {
 	void ResidencyDemandPolicy::Step(ContentAvailabilityService *Availability, std::uint64_t Tick) {
 		if (!State || State->Stopped || Tick == 0 || Tick <= State->LastTick) return;
 		State->LastTick = Tick;
+		if (!State->Diagnostics) {
+			State->Evaluate(Tick);
+			State->Expire(Tick);
+			State->Apply(Availability);
+			return;
+		}
+		auto &Diagnostics = *State->Diagnostics;
+		Diagnostics.BudgetFlags = 0;
+		const auto Before = State->Metrics;
+		const auto Started = std::chrono::steady_clock::now();
 		State->Evaluate(Tick);
+		const auto Evaluated = std::chrono::steady_clock::now();
 		State->Expire(Tick);
 		State->Apply(Availability);
+		const auto Reconciled = std::chrono::steady_clock::now();
+		const auto After = GetMetrics();
+		if (After.PendingFocuses) {
+			if (After.QueryCellsVisited - Before.QueryCellsVisited == State->Limits.MaximumQueryCellsPerTick) Diagnostics.BudgetFlags |= 1;
+			if (After.QueryMembershipVisits - Before.QueryMembershipVisits == State->Limits.MaximumMembershipVisitsPerTick) Diagnostics.BudgetFlags |= 2;
+			if (After.QueryPages - Before.QueryPages == State->Limits.MaximumFocusEvaluationsPerTick) Diagnostics.BudgetFlags |= 4;
+		}
+		if (After.PendingDeltas) {
+			if (After.Requests + After.Releases - Before.Requests - Before.Releases == State->Limits.MaximumDemandDeltasPerTick) Diagnostics.BudgetFlags |= 16;
+			if (After.RequestValidationVisits - Before.RequestValidationVisits == State->Limits.MaximumRequestValidationVisitsPerTick) Diagnostics.BudgetFlags |= 32;
+		}
+		if (Diagnostics.BudgetFlags) ++Diagnostics.BudgetLimitedTicks;
+		Diagnostics.Samples[Diagnostics.Next] = {Tick,
+			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Evaluated - Started).count()),
+			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Reconciled - Evaluated).count()),
+			After.QueryMembershipVisits - Before.QueryMembershipVisits,
+			After.Requests - Before.Requests, After.Releases - Before.Releases, Diagnostics.BudgetFlags};
+		Diagnostics.Next = (Diagnostics.Next + 1) % MaximumResidencyDiagnosticSamples;
+		Diagnostics.Count = std::min(Diagnostics.Count + 1, MaximumResidencyDiagnosticSamples);
 	}
 
 	void ResidencyDemandPolicy::Stop(ContentAvailabilityService *Availability) {
@@ -769,6 +824,8 @@ namespace gargantuan {
 		State->Expiries.clear();
 		State->Pending.clear();
 		State->PendingByIndex.clear();
+		State->DesiredUnits = 0;
+		State->OwnedRequests = 0;
 	}
 
 	ResidencyDemandPolicyMetrics ResidencyDemandPolicy::GetMetrics() const {
@@ -783,6 +840,66 @@ namespace gargantuan {
 			Result.UnhealthyFocuses += Value.Unhealthy;
 			Result.RetainedCandidates += Value.Committed.size() + Value.Working.size();
 		}
+		return Result;
+	}
+
+	void ResidencyDemandPolicy::SetDiagnosticsEnabled(bool Enabled) {
+		if (!State) return;
+		if (Enabled && !State->Diagnostics) State->Diagnostics = std::make_unique<Impl::DiagnosticState>();
+		if (!Enabled) State->Diagnostics.reset();
+	}
+
+	ResidencyPolicyDiagnostics ResidencyDemandPolicy::GetDiagnostics(ResidencyDiagnosticQuery Query) const {
+		if (Query.MaximumUnits > MaximumResidencyDiagnosticUnits ||
+			Query.MaximumTimingSamples > MaximumResidencyDiagnosticSamples || Query.StartIndex > MaximumPackageContentUnits)
+			throw std::invalid_argument("[Content:ResidencyDiagnostics] query exceeds native limits");
+		ResidencyPolicyDiagnostics Result;
+		if (!State) return Result;
+		Result.Stopped = State->Stopped;
+		if (!State->Diagnostics) return Result;
+		Result.Enabled = true;
+		Result.Tick = State->LastTick;
+		Result.Revision = State->Revision;
+		Result.ManifestUnits = State->Manifest.Entries.size();
+		Result.DesiredUnits = State->DesiredUnits;
+		Result.GraceExpiryRecords = State->Expiries.size();
+		Result.OwnedRequests = State->OwnedRequests;
+		Result.Metrics = GetMetrics();
+		Result.Limits = State->Limits;
+		Result.BudgetLimitedTicks = State->Diagnostics->BudgetLimitedTicks;
+		Result.ReferencedManifestEntryBytes = State->Manifest.Entries.capacity() * sizeof(PackageContentEntry);
+		Result.IndexMembershipPayloadBytes = State->Index.GetMembershipCount() * sizeof(std::size_t);
+		// Each attached committed candidate has one demand contribution and one
+		// rank entry. Count through at most 512 focus-map sizes, never all units.
+		for (const auto &[Id, Focus] : State->Focuses) {
+			(void)Id;
+			if (Focus.Attached) Result.FocusContributionRecords += Focus.Committed.size();
+		}
+		Result.PolicyStateLogicalBytes = sizeof(Impl) + sizeof(Impl::DiagnosticState) +
+			State->Focuses.size() * sizeof(std::pair<const ResidencyFocusId, Impl::Focus>) +
+			Result.Metrics.RetainedCandidates * sizeof(std::pair<const std::size_t, Impl::Candidate>) +
+			Result.FocusContributionRecords * (sizeof(std::pair<const ResidencyFocusId, Impl::Candidate>) +
+				sizeof(std::pair<Impl::RankKey, ResidencyFocusId>)) +
+			State->Demands.size() * sizeof(std::pair<const std::size_t, Impl::DemandRecord>) +
+			State->Pending.size() * (sizeof(Impl::PendingDelta) + sizeof(std::pair<const std::size_t, Impl::PendingDelta>)) +
+			State->Expiries.size() * sizeof(std::pair<std::uint64_t, std::size_t>);
+		auto Current = State->Demands.lower_bound(Query.StartIndex);
+		for (std::size_t Count = 0; Count < Query.MaximumUnits && Current != State->Demands.end(); ++Count, ++Current) {
+			const auto &[Unit, Record] = *Current;
+			const auto Best = State->Best(Unit, Record);
+			const auto Pending = State->PendingByIndex.find(Unit);
+			Result.Units.push_back({Unit,
+				{State->Manifest.Entries[Unit].Key, Best.Class, Best.DeadlineTick, Best.DistanceSquared,
+					Best.CostBytes, Best.Revision, Record.DesiredObserved, Record.Requested},
+				Record.GraceUntil, Record.GraceUntil && State->LastTick < *Record.GraceUntil,
+				Pending != State->PendingByIndex.end() && Pending->second.Release});
+		}
+		if (Current != State->Demands.end()) Result.NextIndex = Current->first;
+		const auto &Diagnostics = *State->Diagnostics;
+		const auto Count = std::min(Query.MaximumTimingSamples, Diagnostics.Count);
+		for (std::size_t Index = 0; Index < Count; ++Index)
+			Result.TimingSamples.push_back(Diagnostics.Samples[
+				(Diagnostics.Next + MaximumResidencyDiagnosticSamples - Count + Index) % MaximumResidencyDiagnosticSamples]);
 		return Result;
 	}
 

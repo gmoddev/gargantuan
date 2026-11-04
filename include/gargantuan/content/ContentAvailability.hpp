@@ -340,6 +340,17 @@ namespace gargantuan {
 		ContentAvailabilityTimingMetrics Timing;
 	};
 
+	// Bounded read-only counters; unlike GetMetrics this never scans unit records.
+	struct ContentAvailabilityDiagnosticCounters final {
+		std::uint64_t Requests = 0, Acquisitions = 0, Admissions = 0, Evictions = 0;
+		std::uint64_t Failures = 0, Cancellations = 0, CacheHits = 0;
+		std::uint64_t CompletionCapacityDeferrals = 0, AdmissionDeferrals = 0, DecodedCapacityDeferrals = 0;
+		std::uint64_t ReservedCompletionBytes = 0, CachedPayloadBytes = 0, DecodedDocumentBytes = 0;
+		std::size_t RetainedRecords = 0;
+		ContentAvailabilityTimingMetrics Timing;
+		bool Stopped = false;
+	};
+
 	class ContentAvailabilityService final {
 	  public:
 		ContentAvailabilityService(
@@ -363,6 +374,7 @@ namespace gargantuan {
 		[[nodiscard]] bool IsFullyResident() const;
 		[[nodiscard]] std::size_t GetActiveRequestCount() const;
 		[[nodiscard]] ContentAvailabilityMetrics GetMetrics() const;
+		[[nodiscard]] ContentAvailabilityDiagnosticCounters GetDiagnosticCounters() const;
 		[[nodiscard]] const PackageContentManifest *GetManifest() const;
 		// Immutable metadata only. A bounded policy preparation may retain this
 		// snapshot across Stop without retaining any residency or provider state.

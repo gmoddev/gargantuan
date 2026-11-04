@@ -19,5 +19,6 @@ namespace gargantuan {
 		// The official on-demand server enables 3M. Native 3L fixtures and
 		// manual-demand hosts keep their established request ownership.
 		bool EnableResidencyDemandPolicy = false;
+		bool EnableStreamingDiagnostics = false;
 	};
 }

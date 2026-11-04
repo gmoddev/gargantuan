@@ -943,6 +943,22 @@ if(BUILD_TESTING)
 	add_executable(gargantuan_residency_demand_benchmark "tests/ResidencyDemandBenchmark.cpp")
 	target_link_libraries(gargantuan_residency_demand_benchmark PRIVATE gargantuan_core)
 	add_test(NAME gargantuan_residency_demand_benchmark_smoke COMMAND gargantuan_residency_demand_benchmark --quick)
+	add_test(NAME gargantuan_residency_readiness_smoke COMMAND gargantuan_residency_demand_benchmark --readiness-quick)
+	add_executable(gargantuan_residency_demand_startup_tests "tests/ResidencyDemandStartupTests.cpp")
+	target_link_libraries(gargantuan_residency_demand_startup_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_residency_demand_startup COMMAND gargantuan_residency_demand_startup_tests)
+	add_executable(gargantuan_residency_streaming_scenario_tests "tests/ResidencyStreamingScenarioTests.cpp")
+	target_link_libraries(gargantuan_residency_streaming_scenario_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_residency_streaming_scenarios COMMAND gargantuan_residency_streaming_scenario_tests)
+	add_executable(gargantuan_residency_spatial_metadata_tests "tests/ResidencySpatialMetadataTests.cpp")
+	target_link_libraries(gargantuan_residency_spatial_metadata_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_residency_spatial_metadata COMMAND gargantuan_residency_spatial_metadata_tests)
+	add_executable(gargantuan_streaming_diagnostics_tests "tests/StreamingDiagnosticsTests.cpp")
+	target_link_libraries(gargantuan_streaming_diagnostics_tests PRIVATE gargantuan_core nlohmann_json)
+	add_test(NAME gargantuan_streaming_diagnostics COMMAND gargantuan_streaming_diagnostics_tests)
+	set_tests_properties(gargantuan_residency_readiness_smoke gargantuan_residency_demand_startup
+		gargantuan_residency_streaming_scenarios gargantuan_residency_spatial_metadata gargantuan_streaming_diagnostics
+		PROPERTIES LABELS "content;residency;streaming;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_content_coarse_policy gargantuan_residency_demand_policy
 		gargantuan_residency_demand_integration gargantuan_residency_demand_benchmark_smoke
 		PROPERTIES LABELS "content;residency;runtime" TIMEOUT 180)
@@ -1191,6 +1207,10 @@ if(BUILD_TESTING)
 			gargantuan_residency_demand_policy_tests
 			gargantuan_residency_demand_integration_tests
 			gargantuan_residency_demand_benchmark
+			gargantuan_residency_demand_startup_tests
+			gargantuan_residency_streaming_scenario_tests
+			gargantuan_residency_spatial_metadata_tests
+			gargantuan_streaming_diagnostics_tests
 			gargantuan_content_ownership_tests
 			gargantuan_content_availability_benchmark
 			gargantuan_game_session_benchmark
