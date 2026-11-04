@@ -4,9 +4,9 @@
   "Status": "Implementation integrated; qualification in progress",
   "BaseCommit": "e682be08df84d776bfa455137728265c6494b5e8",
   "Branch": "feature/asset2b-geometry1a",
-  "FunctionalCommit": "ad135a164607dde708b7856e3ee0a7a0f6a3657a",
-  "Archive": "Candidate06.tar",
-  "ArchiveSHA256": "DE0EEC80BE272C28EB7E2BA3C064059F5BD8A6229B65640354061860F480788A",
+  "FunctionalCommit": "efbe1b88ef860c749c9edf335b5a6ff31c8009a4",
+  "Archive": "Candidate13.tar",
+  "ArchiveSHA256": "3623F4960260FDB73194389BB8D39E25C7B6E23EE40233E2D0B8C22D6B094375",
   "GeneratedArchive": "Candidate01Generated.tar",
   "GeneratedArchiveSHA256": "D054C25BC9188845AD2650E728EC8DE80F86CB74C621FBE1EF4DFAE77E687B32",
   "LocalArtifacts": "C:/Users/aiden/.codex/artifacts/asset-geometry-20261104",
@@ -21,12 +21,12 @@
     "Build": "Serial static 3D core; offline; no optional downloads"
   },
   "Qualification": {
-    "Windows": "IN_PROGRESS; MSVC19.51 Release; two jobs; previous source packets not final qualification",
-    "Linux": "IN_PROGRESS; cached GCC13 environment; explicit focused headless profile; two jobs",
-    "Sanitizers": "PENDING",
-    "Performance": "PENDING; no numerical improvements claimed",
-    "CppAllocations": "PENDING; separate benchmark-only probe",
-    "IndependentReview": "Source review complete through Source03; corrections and final execution evidence require follow-up",
+    "Windows": "Source10 focused four tests passed after timestamp and ABI correction; Source13 final rerun in progress; MSVC19.51 Release; two jobs",
+    "Linux": "Source11 focused four tests passed; Source13 final rerun in progress; GCC13 focused headless profile; two jobs",
+    "Sanitizers": "Source11 strict alignment failure in pinned Box3D simd.h:66; Source13 checked private-copy fix awaits strict rerun; no suppression",
+    "Performance": "Source11 same-host baseline recorded; Source13 observer wake change awaits paired measurement; no improvement claimed",
+    "CppAllocations": "Source11 separate C++ new/delete probe recorded; Source13 rerun pending",
+    "IndependentReview": "Read-only lifecycle, transaction and final compatibility review complete through Source13; incremental hash-guard finding corrected; execution evidence review pending",
     "HostedCi": "Not requested manually; feature PR pending local qualification"
   },
   "Boundaries": {
@@ -41,5 +41,5 @@
     "Foundation3LNetworkingLifecycleChanged": false,
     "MainMerged": false
   },
-  "Continuation": "Verify identities and active worker jobs before further work; finish frozen Source06 Windows/Linux focused tests, sanitizer tests, quiet-worker uninstrumented benchmarks and separate allocation probe; correct actual failures, review independently, push an isolated feature PR, and replace this in-progress receipt with terminal evidence."
+  "Continuation": "Verify identities and active worker jobs before further work; finish frozen Source13 Windows/Linux focused tests, strict sanitizer tests, quiet-worker uninstrumented benchmarks and separate allocation probe; preserve original vendor hashes; correct demonstrated failures, complete independent evidence review, push an isolated feature PR, and replace this in-progress receipt with terminal evidence."
 }

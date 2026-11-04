@@ -34,3 +34,18 @@ physics boundaries. This campaign does not implement or modify 3M demand policy,
 package content queries, hysteresis, lookahead or 3L lifecycle/networking. Neither
 campaign merges the other's unfinished source. This document reserves no resources
 after the active campaign's processes have actually retired.
+
+Strict Linux sanitization exposed the pinned Box3D SIMD vector load's unaligned
+`double*` access. The compatibility recipe verifies the original header hash and
+builds a private corrected source copy inside this campaign's build directory.
+Borrowed vendor source, public headers and the pinned submodule remain unchanged.
+The unknown-source guard refuses an unrecognized header rather than guessing at
+a patch. No sanitizer category is disabled to obtain a passing result.
+
+Windows compilation paused for the separate Studio profiling reservation. An
+already-started task-owned regression build was retired at 05:48:16 UTC on
+November 4; the preceding overlapping interval is excluded from timing claims.
+Studio subsequently released its reservation explicitly. The 3M campaign then
+completed its own two-job build, tests and short benchmark, reporting retirement
+at approximately 06:05:22 UTC. Only then was Source12 Windows qualification
+released. These reservations coordinate worker load, not source ownership.
