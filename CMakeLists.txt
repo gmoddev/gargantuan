@@ -207,7 +207,11 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(vendor/argparse SYSTEM)
 add_subdirectory(vendor/box3d SYSTEM)
 add_subdirectory(vendor/glm SYSTEM)
-add_subdirectory(vendor/glaze SYSTEM)
+# The optional codec prototype is outside focused headless geometry qualification.
+# Its CMake 3.31 requirement must not become an unused native-test dependency.
+if(NOT GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION OR GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE)
+	add_subdirectory(vendor/glaze SYSTEM)
+endif()
 add_subdirectory(vendor/json SYSTEM)
 add_subdirectory(vendor/luau SYSTEM)
 add_subdirectory(vendor/sdl SYSTEM)

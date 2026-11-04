@@ -22,6 +22,9 @@ fail closed in that profile. Build named asset/physics/geometry targets and run
 their selected tests only. This profile cannot replace the complete Windows or
 Linux hosted CI contracts, shader validation, or runtime package qualification.
 The option defaults to OFF, preserving the normal compiler preflight and build.
+The disabled Glaze codec prototype is not configured in this focused profile;
+enabling that prototype still brings its real toolchain requirements. Production
+builds retain their existing dependency configuration.
 
 Documentation builds on ordinary main pushes. Pages publication requires an
 explicit `Documentation` workflow dispatch on `main` with boolean `deploy=true`;
