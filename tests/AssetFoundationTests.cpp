@@ -39,6 +39,9 @@ namespace gargantuan {
 		static WorldRaycastResult Raycast(WorldRoot &World) {
 			return World.ResolveRaycast({0.25f, 0.25f, 2.0f}, {0.0f, 0.0f, -4.0f});
 		}
+		static bool IsDirty(const WorldRoot &World, const BasePart &Part) {
+			return World.DirtyBodies.contains(Part.GetObjectId());
+		}
 	};
 }
 
@@ -432,6 +435,14 @@ int main() {
 		Filesystem.BeforeRead = VerifyInFlight;
 		Check(Assets->ReimportProjectAsset(Mount, RepeatedMesh.Record->Reference.Value).Ok && !Filesystem.BeforeRead,
 			"successful reimport exercises the importing-state collision boundary");
+		const auto UnchangedCollision = Assets->ResolveCollisionForMesh(RepeatedMesh.Record->Reference.Value);
+		const auto UnchangedHit = WorldRootTestAccess::Raycast(*WorkspaceValue);
+		Check(UnchangedCollision && PriorCollision &&
+			UnchangedCollision->ContentRevision == PriorCollision->ContentRevision &&
+			UnchangedCollision->Value.Positions == PriorCollision->Value.Positions &&
+			UnchangedCollision->Value.Indices == PriorCollision->Value.Indices &&
+			UnchangedHit.Instance == CollisionConsumer && !WorldRootTestAccess::IsDirty(*WorkspaceValue, *CollisionConsumer),
+			"unchanged reimport retains canonical buffers and completes the existing native projection without retry");
 		WriteText(Root / "assets" / "repeated.obj", "invalid mesh");
 		Filesystem.BeforeRead = VerifyInFlight;
 		const auto Rejected = Assets->ReimportProjectAsset(Mount, RepeatedMesh.Record->Reference.Value);
@@ -451,7 +462,7 @@ int main() {
 	Check(RepeatedReimportsOk && RepeatedStats.ResidentRecords == InitialCollisionStats.ResidentRecords + 1 &&
 		RepeatedStats.RetainedArtifactBytes < InitialCollisionStats.RetainedArtifactBytes + 1024 &&
 		RepeatedStats.TotalRetainedArtifactBytes < InitialCollisionStats.TotalRetainedArtifactBytes + 2048 &&
-		RepeatedStats.RetiredArtifacts >= 8 && RepeatedStats.RetiredArtifactBytes > 0,
+		RepeatedStats.RetiredArtifacts == InitialCollisionStats.RetiredArtifacts + 7 && RepeatedStats.RetiredArtifactBytes > 0,
 		"repeated collision replacement retains only the current bounded canonical artifact");
 	if (RepeatedMesh.Record) {
 		CollisionConsumer->Destroy();

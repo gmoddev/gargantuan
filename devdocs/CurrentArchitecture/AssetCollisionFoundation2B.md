@@ -37,6 +37,11 @@ retains the previous graph as stale content on failure. The compiler's native
 source importer uses this same compound path; it does not create another catalog
 or history.
 
+An unchanged canonical content hash retains its existing decoded shared buffers
+and artifact storage. Reimport cannot replace immutable content under the same
+identity/revision with unrelated buffer ownership. This avoids false native-cache
+identity conflicts and needless retry after an unchanged source import.
+
 ## Canonical artifact and resolver
 
 Collision artifacts use `GARGAS01`, artifact version 4, kind 6, then little-endian
@@ -63,6 +68,8 @@ bound; no new eviction policy exists. A successful replacement or source-group
 deletion removes each prior source-group artifact from service ownership once no
 current catalog record references its content hash. This includes the paired Mesh
 artifact; retaining obsolete render revisions would defeat collision memory bounds.
+Equal collision bytes can be shared by distinct catalog records; retirement
+therefore counts unreachable content hashes rather than import attempts.
 Captured snapshots retain
 their own immutable shared pointer safely. Failed replacement leaves the old
 artifact and decoded content available. `ReadCollisionStats` reports current

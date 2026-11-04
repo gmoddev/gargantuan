@@ -847,7 +847,7 @@ namespace gargantuan {
 					}
 				if (Operation.Diagnostic.Code.empty()) {
 					for (const auto &[Content, Artifact] : Prepared->Artifacts)
-						State->Artifacts.insert_or_assign(Content, Artifact);
+						State->Artifacts.try_emplace(Content, Artifact);
 					for (const auto &Record : Prepared->Records) {
 						State->Records.emplace(Record.Reference.Value, Record);
 						State->QueueResidency(Record, false);
@@ -1040,10 +1040,17 @@ namespace gargantuan {
 							State->PublishChange(Removed, AssetChangeKind::Removed);
 						}
 						for (const auto &[Content, Artifact] : Prepared->Artifacts)
-							State->Artifacts.insert_or_assign(Content, Artifact);
-						for (const auto &Next : Prepared->Records) {
+							State->Artifacts.try_emplace(Content, Artifact);
+						for (auto &Next : Prepared->Records) {
 							auto Previous = PreviousByKey.find(Next.LogicalKey);
 							const bool NewRecord = Previous == PreviousByKey.end();
+							if (!NewRecord && Previous->second.Asset && Previous->second.Kind == Next.Kind &&
+								Previous->second.ContentId == Next.ContentId) {
+								// One immutable revision must not acquire different canonical
+								// buffers during an unchanged reimport. Native projections
+								// retain and validate this ownership until replacement.
+								Next.Asset = Previous->second.Asset;
+							}
 							if (!NewRecord && ContentChanged.contains(Next.Id)) State->QueueResidency(Next, true);
 							else if (NewRecord) State->QueueResidency(Next, false);
 							State->Records.insert_or_assign(Next.Reference.Value, Next);
