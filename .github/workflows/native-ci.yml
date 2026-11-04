@@ -635,6 +635,7 @@ jobs:
             -DCMAKE_C_FLAGS="$SanitizerFlags" \
             -DCMAKE_CXX_FLAGS="$SanitizerFlags" \
             -DCMAKE_EXE_LINKER_FLAGS="--gcc-install-dir=$GccInstallDir -fsanitize=address,undefined" \
+            -DLINKER_SUPPORTS_WL_NO_UNDEFINED=OFF \
             -DBUILD_TESTING=ON \
             -DGARGANTUAN_TRACY=OFF \
             -DGARGANTUAN_WITH_GNS=OFF \

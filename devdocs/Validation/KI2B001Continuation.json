@@ -15,6 +15,14 @@
   "CandidateArchive": "Candidate17.tar",
   "CandidateArchiveSHA256": "0200E14556F5C5712926FB5DB272C52DF62C461F5BFF298CDE59E84BC6393058",
   "HostedCiRecipeCommit": "88c65737b3d8155135aa0150ea0f5dfa915e3a57",
+  "HostedFirstCInstrumentationAttempt": {
+    "Head": "f0e73878ecbaa7b63740d68ac66aa68c8cc14f49",
+    "NativeRun": 41811972911,
+    "GnsRun": 41811972560,
+    "LinuxFailure": "SDL shared link adds --no-undefined and rejects sanitizer runtime references from instrumented C objects before tests",
+    "Correction": "Both sanitizer recipes preseed LINKER_SUPPORTS_WL_NO_UNDEFINED=OFF; shared SDL, C/C++ instrumentation, executable sanitizer runtime and all acceptance gates retained",
+    "Evidence": "Hosted-Final-* logs retained separately from frozen Source17 evidence; use final delivery head hosted checks"
+  },
   "GeneratedArchive": "Candidate01Generated.tar",
   "GeneratedArchiveSHA256": "D054C25BC9188845AD2650E728EC8DE80F86CB74C621FBE1EF4DFAE77E687B32",
   "LocalArtifacts": "C:/Users/aiden/.codex/artifacts/asset-geometry-20261104",

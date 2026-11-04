@@ -120,6 +120,15 @@ The functional source is `90d7cacec62f3e4e3da9453892f266df1e270b5b`,
 `0200E14556F5C5712926FB5DB272C52DF62C461F5BFF298CDE59E84BC6393058`.
 The following CI-only commit `88c65737b3d8155135aa0150ea0f5dfa915e3a57`
 adds C sanitizer flags and their documentation; it changes no runtime source.
+The first hosted runs containing those flags, Native `41811972911` and GNS
+`41811972560` at `f0e73878ecbaa7b63740d68ac66aa68c8cc14f49`, demonstrated a
+shared SDL link failure before Linux tests: `--no-undefined` rejected sanitizer
+symbols that Clang supplies from the final executable. The follow-up recipes
+preseed SDL's `LINKER_SUPPORTS_WL_NO_UNDEFINED=OFF`; SDL remains shared and fully
+instrumented, and executable sanitizer flags and test gates remain intact.
+Those failed raw logs are retained separately under `Hosted-Final-*`; the
+frozen Source17 local evidence remains unchanged. Full hosted qualification must
+use the following delivery head, not infer a pass from this earlier attempt.
 The generated reflection packet remains `Candidate01Generated.tar`, SHA-256
 `D054C25BC9188845AD2650E728EC8DE80F86CB74C621FBE1EF4DFAE77E687B32`.
 

@@ -733,6 +733,14 @@ symbolized stacks. Both C and C++ compilation receive these flags in the native
 and GNS sanitizer workflows. This is necessary for the C17 compatibility tests
 and Box3D C implementation: KI-2B-001 qualification exposed an unaligned free-list
 pointer access in `block_allocator.c` that C++-only instrumentation could miss.
+Both sanitizer configurations preseed SDL's `LINKER_SUPPORTS_WL_NO_UNDEFINED`
+check to `OFF`. The pinned SDL otherwise adds `--no-undefined` to its shared
+library link; instrumented C objects require sanitizer symbols supplied by the
+final executable. [Clang's ASan guidance](https://clang.llvm.org/docs/AddressSanitizer.html#usage)
+explicitly excludes that strict shared-library link mode. The executable link
+retains the sanitizer flags, and SDL remains shared and instrumented. The first
+KI-2B-001 hosted runs at `f0e73878` demonstrated this link failure before tests;
+their logs remain failed evidence. Production Windows link policy is unchanged.
 No sanitizer category or acceptance gate is disabled. It runs registered tests serially with the SDL dummy video
 driver. The sanitizer job uploads the same configure, CTest, and JUnit evidence
 as the Windows gate on failure. UBSan is not described as an MSVC feature, and
