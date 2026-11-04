@@ -268,6 +268,7 @@ int main(int ArgumentCount, char **Arguments) {
 			<< " artifactBytes=" << ArtifactBytes << " contentUnitBytes=" << Unit.Payload.size()
 			<< " captureBoundsCoverGeometry=" << CapturedBoundsCoverGeometry
 			<< " manifestBoundsCoverGeometry=" << ManifestBoundsCoverGeometry
+			<< " underboundDetected=" << (!CapturedBoundsCoverGeometry || !ManifestBoundsCoverGeometry)
 			<< " importUs=" << ImportUs << " captureUs=" << CaptureUs
 			<< " spatialInspectionUs=" << SpatialInspectionMicroseconds(Payload)
 			<< " buildUs=" << BuildUs;
