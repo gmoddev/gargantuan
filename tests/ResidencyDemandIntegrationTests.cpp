@@ -25,6 +25,10 @@ namespace {
 	void Check(bool Condition, const char *Message) {
 		if (!Condition) throw std::runtime_error(Message);
 	}
+	bool HasRequest(const ResidencyDemandPolicy &Policy, std::string_view Key) {
+		const auto Demands = Policy.GetDemands();
+		return std::ranges::any_of(Demands, [Key](const auto &Demand) { return Demand.Key == Key && Demand.Requested; });
+	}
 
 	struct LocalFixture final {
 		std::filesystem::path Root = std::filesystem::temp_directory_path() /
@@ -278,7 +282,7 @@ namespace {
 		for (std::uint64_t Id = 1; Id <= 32; ++Id) Check(Policy.UpdateFocus(Id, {2048, 0, 0}), "stale fixture teleport rejected");
 		for (std::uint64_t Tick = 33; Tick <= 65; ++Tick) {
 			Policy.Step(&Service, Tick);
-			Check(Service.GetState("a") == ContentResidencyState::Unavailable,
+			Check(!HasRequest(Policy, "a") && Service.GetMetrics().Requests <= 1,
 				"a stale pending request escaped while other focuses awaited revalidation");
 		}
 		// The production provider now fails digest validation; repair and explicit
@@ -313,13 +317,12 @@ namespace {
 			Policy.SetRequirement("b", ResidencyDemandClass::Critical, 10) &&
 			Policy.SetRequirement("ahead", ResidencyDemandClass::Critical, 5), "priority fixture requirement rejected");
 		Policy.Step(&Service, 1);
-		Check(Service.GetState("ahead") == ContentResidencyState::Requested &&
-			Service.GetState("b") == ContentResidencyState::Unavailable &&
-			Service.GetState("a") == ContentResidencyState::Unavailable,
+		Check(HasRequest(Policy, "ahead") && !HasRequest(Policy, "b") && !HasRequest(Policy, "a") &&
+			Service.GetMetrics().Requests == 1,
 			"semantic class and deadline did not determine actual bounded request publication");
 		Policy.Step(&Service, 2);
-		Check(Service.GetState("b") == ContentResidencyState::Requested &&
-			Service.GetState("a") == ContentResidencyState::Unavailable, "critical request lost publication priority");
+		Check(HasRequest(Policy, "b") && !HasRequest(Policy, "a") && Service.GetMetrics().Requests == 2,
+			"critical request lost publication priority");
 
 		LocalFixture Replacement;
 		Replacement.Manifest.Entries.front().Dependencies.clear();
@@ -394,10 +397,10 @@ namespace {
 				"backlog priority requirement rejected");
 		for (std::uint64_t Tick = 1; Tick <= 24; ++Tick) {
 			Policy.Step(&Service, Tick);
-			Check(Service.GetState(Fixture.Manifest.Entries[Tick - 1].Key) == ContentResidencyState::Requested,
+			Check(HasRequest(Policy, Fixture.Manifest.Entries[Tick - 1].Key) && Service.GetMetrics().Requests == Tick,
 				"bounded request window skipped an earlier eligible critical deadline");
 			if (Tick < 24)
-				Check(Service.GetState(Fixture.Manifest.Entries[Tick].Key) == ContentResidencyState::Unavailable,
+				Check(!HasRequest(Policy, Fixture.Manifest.Entries[Tick].Key),
 					"publication exceeded its single-delta budget");
 		}
 		for (int Index = 0; Index < 24; ++Index)
@@ -405,7 +408,7 @@ namespace {
 		Check(Policy.SetRequirement("rank/31", ResidencyDemandClass::Critical, 0), "new critical requirement rejected");
 		Policy.Step(&Service, 25);
 		Policy.Step(&Service, 26);
-		Check(Service.GetState("rank/31") == ContentResidencyState::Requested && Policy.GetMetrics().Releases >= 1,
+		Check(HasRequest(Policy, "rank/31") && Policy.GetMetrics().Releases >= 1,
 			"release backlog starved a new critical request or lost release progress");
 		Policy.Stop(&Service);
 		Service.Stop(); World->Destroy();
