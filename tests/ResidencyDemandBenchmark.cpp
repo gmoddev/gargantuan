@@ -28,6 +28,18 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+#pragma comment(lib, "Psapi.lib")
+#elif defined(__linux__)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace {
 	struct AllocationHeader final {
 		void *Raw = nullptr;
@@ -156,6 +168,30 @@ namespace {
 
 	double Microseconds(Clock::time_point StartedAt) {
 		return std::chrono::duration<double, std::micro>(Clock::now() - StartedAt).count();
+	}
+
+	std::uint64_t ProcessResidentBytes() {
+#ifdef _WIN32
+		PROCESS_MEMORY_COUNTERS_EX Counters{};
+		Counters.cb = sizeof(Counters);
+		if (!GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&Counters), sizeof(Counters)))
+			throw std::runtime_error("[Content:ResidencyReadiness] process memory query failed");
+		return Counters.WorkingSetSize;
+#elif defined(__linux__)
+		const int File = ::open("/proc/self/statm", O_RDONLY);
+		if (File < 0) throw std::runtime_error("[Content:ResidencyReadiness] process memory query failed");
+		char Buffer[128]{};
+		const auto Count = ::read(File, Buffer, sizeof(Buffer) - 1);
+		::close(File);
+		if (Count <= 0) throw std::runtime_error("[Content:ResidencyReadiness] process memory query failed");
+		char *Next = nullptr;
+		(void)std::strtoull(Buffer, &Next, 10);
+		if (!Next || *Next != ' ') throw std::runtime_error("[Content:ResidencyReadiness] process memory query failed");
+		const auto ResidentPages = std::strtoull(Next, nullptr, 10);
+		return ResidentPages * static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
+#else
+		return 0;
+#endif
 	}
 
 	PackageContentManifest MakeManifest(std::size_t Count) {
@@ -663,14 +699,393 @@ namespace {
 		Policy.Stop(&Service);
 		Service.Stop();
 	}
+
+	struct InMemoryServiceFixture final {
+		std::shared_ptr<Instance> Root;
+		std::shared_ptr<const std::vector<std::uint8_t>> PayloadBytes;
+		PackageContentManifest InputManifest;
+		std::shared_ptr<BenchmarkContentProvider> Provider;
+		std::shared_ptr<DataModel> World;
+		std::shared_ptr<Workspace> WorkspaceValue;
+		std::unique_ptr<ContentAvailabilityService> Service;
+		std::shared_ptr<const PackageContentManifest> Snapshot;
+		double ManifestBuildMicroseconds = 0.0;
+		double ManifestEncodeMicroseconds = 0.0;
+		double ServiceConstructMicroseconds = 0.0;
+		double ProviderReadyMicroseconds = 0.0;
+		double SnapshotAcquireMicroseconds = 0.0;
+	};
+
+	InMemoryServiceFixture MakeInMemoryServiceFixture(std::size_t EntryCount) {
+		InMemoryServiceFixture Fixture;
+		Fixture.Root = std::make_shared<Folder>();
+		Fixture.Root->SetArchivable(true);
+		Fixture.Root->SetName("");
+		const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Fixture.Root);
+		Fixture.PayloadBytes = std::make_shared<const std::vector<std::uint8_t>>(Encoded.begin(), Encoded.end());
+		const auto ManifestStartedAt = Clock::now();
+		Fixture.InputManifest = MakeManifest(EntryCount);
+		const auto Digest = AssetContentId::Hash(*Fixture.PayloadBytes);
+		for (auto &Entry : Fixture.InputManifest.Entries) {
+			Entry.Digest = Digest;
+			Entry.CompressedBytes = Fixture.PayloadBytes->size();
+			Entry.UncompressedBytes = Fixture.PayloadBytes->size();
+		}
+		Fixture.InputManifest.Entries.front().Dependencies = {Fixture.InputManifest.Entries[1].Key};
+		Fixture.ManifestBuildMicroseconds = Microseconds(ManifestStartedAt);
+		Fixture.Provider = std::make_shared<BenchmarkContentProvider>();
+		const auto EncodeStartedAt = Clock::now();
+		Fixture.Provider->Manifest = EncodePackageContentManifest(Fixture.InputManifest);
+		Fixture.ManifestEncodeMicroseconds = Microseconds(EncodeStartedAt);
+		Fixture.Provider->Payload = {{Fixture.InputManifest.Package, ""}, Digest, Fixture.PayloadBytes};
+		const auto ManifestDigest = AssetContentId::Hash(std::span(
+			reinterpret_cast<const std::uint8_t *>(Fixture.Provider->Manifest.data()), Fixture.Provider->Manifest.size()));
+		Fixture.World = std::make_shared<DataModel>();
+		Fixture.WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Fixture.World->GetService("Workspace"));
+		const auto ReadyStartedAt = Clock::now();
+		Fixture.Service = std::make_unique<ContentAvailabilityService>(Fixture.World, Fixture.WorkspaceValue,
+			ContentAvailabilityConfiguration{
+				.Provider = Fixture.Provider, .Package = Fixture.InputManifest.Package,
+				.ManifestDigest = ManifestDigest, .Mode = ContentResidencyMode::OnDemand,
+			});
+		Fixture.ServiceConstructMicroseconds = Microseconds(ReadyStartedAt);
+		const auto Deadline = Clock::now() + std::chrono::seconds(30);
+		while (!Fixture.Service->IsManifestAvailable() && Clock::now() < Deadline) {
+			Fixture.Service->Step();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		Fixture.ProviderReadyMicroseconds = Microseconds(ReadyStartedAt);
+		if (!Fixture.Service->IsManifestAvailable())
+			throw std::runtime_error("[Content:ResidencyReadiness] in-memory provider manifest unavailable");
+		const auto SnapshotStartedAt = Clock::now();
+		Fixture.Snapshot = Fixture.Service->GetManifestSnapshot();
+		Fixture.SnapshotAcquireMicroseconds = Microseconds(SnapshotStartedAt);
+		if (!Fixture.Snapshot || Fixture.Snapshot->Entries.size() != EntryCount)
+			throw std::runtime_error("[Content:ResidencyReadiness] service manifest snapshot unavailable");
+		return Fixture;
+	}
+
+	void RunStartupComparison(std::size_t EntryCount, std::size_t Repetitions) {
+		auto Fixture = MakeInMemoryServiceFixture(EntryCount);
+		std::cout << "[Content:ResidencyStartup] phase=manifest entryCount=" << EntryCount
+			<< " manifestBuildUs=" << Fixture.ManifestBuildMicroseconds
+			<< " manifestEncodeUs=" << Fixture.ManifestEncodeMicroseconds
+			<< " manifestBytes=" << Fixture.Provider->Manifest.size()
+			<< " serviceConstructUs=" << Fixture.ServiceConstructMicroseconds
+			<< " providerReadyUs=" << Fixture.ProviderReadyMicroseconds
+			<< " snapshotAcquireUs=" << Fixture.SnapshotAcquireMicroseconds
+			<< " provider=in-memory" << '\n';
+		for (std::size_t Repetition = 0; Repetition < Repetitions; ++Repetition)
+			for (const bool Shared : {false, true}) {
+				StartAllocationSample();
+				const auto ConstructStartedAt = Clock::now();
+				std::unique_ptr<ResidencyDemandPolicy> Policy;
+				if (Shared) Policy = std::make_unique<ResidencyDemandPolicy>(Fixture.Snapshot);
+				else Policy = std::make_unique<ResidencyDemandPolicy>(*Fixture.Snapshot);
+				const auto ConstructMicroseconds = Microseconds(ConstructStartedAt);
+				const auto ConstructAllocations = SnapshotAllocationSample();
+				const auto BindingStartedAt = Clock::now();
+				Policy->Step(Fixture.Service.get(), 1);
+				const auto BindingMicroseconds = Microseconds(BindingStartedAt);
+				const auto Metrics = Policy->GetMetrics();
+				const auto BindingAllocations = FinishAllocationSample();
+				if (Metrics.ServiceBindingFailures != 0 ||
+					Metrics.ManifestBindingEntriesCompared != (Shared ? 0u : EntryCount))
+					throw std::runtime_error("[Content:ResidencyReadiness] startup binding comparison mismatch");
+				std::cout << "[Content:ResidencyStartup] phase=policy entryCount=" << EntryCount
+					<< " repetition=" << Repetition << " constructor=" << (Shared ? "shared-snapshot" : "value-compat")
+					<< " constructorUs=" << ConstructMicroseconds
+					<< " constructorAllocations=" << ConstructAllocations.Count
+					<< " constructorRetainedBytes=" << ConstructAllocations.RetainedBytes
+					<< " firstBindingUs=" << BindingMicroseconds
+					<< " bindingEntriesCompared=" << Metrics.ManifestBindingEntriesCompared
+					<< " boundRetainedBytes=" << BindingAllocations.RetainedBytes << '\n';
+				Policy->Stop(Fixture.Service.get());
+			}
+		Fixture.Service->Stop();
+	}
+
+	struct ResourcePoint final {
+		double ElapsedSeconds = 0.0;
+		std::uint64_t Tick = 0;
+		AllocationSample Allocations;
+		std::uint64_t ResidentBytes = 0;
+		ResidencyDemandPolicyMetrics Policy;
+		ContentAvailabilityMetrics Availability;
+	};
+
+	void PrintResourcePoints(std::string_view Phase, const std::vector<ResourcePoint> &Points) {
+		for (const auto &Point : Points)
+			std::cout << "[Content:ResidencyResource] phase=" << Phase
+				<< " elapsedSeconds=" << Point.ElapsedSeconds << " tick=" << Point.Tick
+				<< " allocations=" << Point.Allocations.Count
+				<< " trackedPeakBytes=" << Point.Allocations.PeakBytes
+				<< " trackedRetainedBytes=" << Point.Allocations.RetainedBytes
+				<< " processRssBytes=" << Point.ResidentBytes
+				<< " focuses=" << Point.Policy.Focuses
+				<< " pendingFocuses=" << Point.Policy.PendingFocuses
+				<< " candidates=" << Point.Policy.RetainedCandidates
+				<< " demandRecords=" << Point.Policy.DemandRecords
+				<< " pendingDeltas=" << Point.Policy.PendingDeltas
+				<< " policyRequests=" << Point.Policy.Requests
+				<< " policyReleases=" << Point.Policy.Releases
+				<< " serviceRequests=" << Point.Availability.Requests
+				<< " acquisitions=" << Point.Availability.Acquisitions
+				<< " admissions=" << Point.Availability.Admissions
+				<< " evictions=" << Point.Availability.Evictions
+				<< " serviceRetainedRecords=" << Point.Availability.RetainedRecordCount
+				<< " cachedBytes=" << Point.Availability.CachedPayloadBytes << '\n';
+	}
+
+	void AddResourcePoint(std::vector<ResourcePoint> &Points, Clock::time_point StartedAt, std::uint64_t Tick,
+		const ResidencyDemandPolicy &Policy, const ContentAvailabilityService *Availability = nullptr) {
+		Points.push_back({
+			.ElapsedSeconds = std::chrono::duration<double>(Clock::now() - StartedAt).count(),
+			.Tick = Tick,
+			.Allocations = SnapshotAllocationSample(),
+			.ResidentBytes = ProcessResidentBytes(),
+			.Policy = Policy.GetMetrics(),
+			.Availability = Availability ? Availability->GetMetrics() : ContentAvailabilityMetrics{},
+		});
+	}
+
+	void CheckResourceGauges(const ResidencyDemandPolicyMetrics &Metrics, std::size_t FocusCount,
+		std::size_t ManifestEntries, const ResidencyDemandPolicyLimits &Limits) {
+		if (Metrics.Focuses > FocusCount || Metrics.RetainedCandidates > 2 * FocusCount * Limits.MaximumCandidatesPerFocus ||
+			Metrics.DemandRecords > ManifestEntries || Metrics.PendingDeltas > ManifestEntries ||
+			Metrics.QueryFailures != 0 || Metrics.ServiceBindingFailures != 0)
+			throw std::runtime_error("[Content:ResidencyReadiness] policy resource gauge exceeded fixture bound");
+	}
+
+	void CheckMeasuredPlateau(const std::vector<ResourcePoint> &Points, bool Quick, std::string_view Phase) {
+		if (Quick) return;
+		if (Points.size() < 20)
+			throw std::runtime_error("[Content:ResidencyReadiness] too few one-second resource samples");
+		const auto TailBegin = Points.end() - 10;
+		const auto [Minimum, Maximum] = std::minmax_element(TailBegin, Points.end(),
+			[](const ResourcePoint &Left, const ResourcePoint &Right) {
+				return Left.Allocations.RetainedBytes < Right.Allocations.RetainedBytes;
+			});
+		const auto Span = Maximum->Allocations.RetainedBytes - Minimum->Allocations.RetainedBytes;
+		std::cout << "[Content:ResidencyResource] phase=" << Phase << " tailSamples=10"
+			<< " trackedRetainedSpanBytes=" << Span << " plateauLimitBytes=" << 16 * 1024 * 1024 << '\n';
+		if (Span > 16 * 1024 * 1024)
+			throw std::runtime_error("[Content:ResidencyReadiness] tracked retained memory did not plateau");
+	}
+
+	void RunPolicyResource(bool Quick) {
+		const std::size_t EntryCount = Quick ? 1'000 : 65'536;
+		const std::size_t FocusCount = Quick ? 10 : 500;
+		const std::uint64_t DurationSeconds = Quick ? 2 : 30;
+		const std::uint64_t MaximumTicks = DurationSeconds * 60;
+		auto ManifestSnapshot = std::make_shared<const PackageContentManifest>(MakeManifest(EntryCount));
+		std::vector<glm::vec3> BasePositions;
+		BasePositions.reserve(FocusCount);
+		for (std::size_t Focus = 0; Focus < FocusCount; ++Focus)
+			BasePositions.push_back(FocusPosition(Focus, FocusCount, EntryCount));
+		std::vector<ResourcePoint> Points;
+		Points.reserve(DurationSeconds + 2);
+		std::vector<double> UpdateAndStepSamples;
+		UpdateAndStepSamples.reserve(MaximumTicks);
+		ResidencyDemandPolicyLimits Limits;
+		std::uint64_t LastTick = 0;
+		StartAllocationSample();
+		{
+			auto Policy = std::make_unique<ResidencyDemandPolicy>(ManifestSnapshot, Limits);
+			for (std::size_t Focus = 0; Focus < FocusCount; ++Focus)
+				if (!Policy->UpdateFocus(Focus + 1, BasePositions[Focus]))
+					throw std::runtime_error("[Content:ResidencyReadiness] policy-only initial focus rejected");
+			for (std::size_t Warm = 0; Warm < (Quick ? 32u : 128u); ++Warm)
+				Policy->Step(nullptr, ++LastTick);
+			const auto StartedAt = Clock::now();
+			auto NextSampleAt = StartedAt + std::chrono::seconds(1);
+			AddResourcePoint(Points, StartedAt, LastTick, *Policy);
+			for (std::uint64_t Sample = 0; Sample < MaximumTicks; ++Sample) {
+				if (Clock::now() >= StartedAt + std::chrono::seconds(DurationSeconds + 5)) break;
+				const auto Cycle = Sample % 360;
+				const float Offset = Cycle < 120 ? static_cast<float>(Cycle) * 4.0f
+					: Cycle < 240 ? static_cast<float>(240 - Cycle) * 4.0f
+					: Cycle < 300 ? 4'096.0f : 0.0f;
+				const auto Velocity = Cycle < 120 ? glm::vec3(240.0f, 0.0f, 0.0f)
+					: Cycle < 240 ? glm::vec3(-240.0f, 0.0f, 0.0f) : glm::vec3{};
+				const auto Before = Policy->GetMetrics();
+				const auto StepStartedAt = Clock::now();
+				for (std::size_t Focus = 0; Focus < FocusCount; ++Focus)
+					if (!Policy->UpdateFocus(Focus + 1, BasePositions[Focus] + glm::vec3(Offset, 0.0f, 0.0f), Velocity))
+						throw std::runtime_error("[Content:ResidencyReadiness] policy-only movement rejected");
+				Policy->Step(nullptr, ++LastTick);
+				UpdateAndStepSamples.push_back(Microseconds(StepStartedAt));
+				const auto After = Policy->GetMetrics();
+				CheckWorkBound(Before, After, Limits);
+				CheckResourceGauges(After, FocusCount, EntryCount, Limits);
+				if (Clock::now() >= NextSampleAt) {
+					AddResourcePoint(Points, StartedAt, LastTick, *Policy);
+					NextSampleAt = Clock::now() + std::chrono::seconds(1);
+				}
+				std::this_thread::sleep_until(StartedAt + std::chrono::milliseconds((Sample + 1) * 1'000 / 60));
+			}
+			AddResourcePoint(Points, StartedAt, LastTick, *Policy);
+			Policy->Stop(nullptr);
+			if (Policy->GetMetrics().DemandRecords != 0 || Policy->GetMetrics().Focuses != 0)
+				throw std::runtime_error("[Content:ResidencyReadiness] policy-only stop retained demand state");
+		}
+		const auto FinalAllocations = FinishAllocationSample();
+		const auto MeasuredTicks = UpdateAndStepSamples.size();
+		const auto Timings = Summarize(std::move(UpdateAndStepSamples));
+		PrintResourcePoints("policy-only", Points);
+		CheckMeasuredPlateau(Points, Quick, "policy-only");
+		std::cout << "[Content:ResidencyResource] phase=policy-only-final entryCount=" << EntryCount
+			<< " focuses=" << FocusCount << " measuredTicks=" << MeasuredTicks
+			<< " lastPolicyTick=" << LastTick
+			<< " updateAndStepP50Us=" << Timings.P50 << " updateAndStepP95Us=" << Timings.P95
+			<< " updateAndStepP99Us=" << Timings.P99 << " updateAndStepMaxUs=" << Timings.Maximum
+			<< " trackedAfterPolicyDestructionBytes=" << FinalAllocations.RetainedBytes
+			<< " rssAfterPolicyDestructionBytes=" << ProcessResidentBytes()
+			<< " constructor=shared-snapshot trackedScope=policy-allocations-snapshot-excluded" << '\n';
+		if (FinalAllocations.RetainedBytes != 0)
+			throw std::runtime_error("[Content:ResidencyReadiness] policy-only tracked allocations survived destruction");
+	}
+
+	void RunInMemoryReconciliationResource(bool Quick) {
+		const std::size_t EntryCount = Quick ? 1'000 : 65'536;
+		const std::size_t FocusCount = Quick ? 10 : 500;
+		const std::uint64_t DurationSeconds = Quick ? 2 : 30;
+		const std::uint64_t MaximumTicks = DurationSeconds * 60;
+		auto Fixture = MakeInMemoryServiceFixture(EntryCount);
+		std::vector<ResourcePoint> Points;
+		Points.reserve(DurationSeconds + 2);
+		std::vector<double> PolicySamples;
+		std::vector<double> AvailabilitySamples;
+		PolicySamples.reserve(MaximumTicks);
+		AvailabilitySamples.reserve(MaximumTicks);
+		ResidencyDemandPolicyLimits Limits;
+		std::uint64_t LastTick = 0;
+		std::uint64_t ReplacementRequests = 0;
+		ContentAvailabilityMetrics BeforeStopMetrics;
+		StartAllocationSample();
+		{
+			auto Policy = std::make_unique<ResidencyDemandPolicy>(Fixture.Snapshot, Limits);
+			for (std::size_t Focus = 0; Focus < FocusCount; ++Focus)
+				if (!Policy->UpdateFocus(Focus + 1, {508.0f + static_cast<float>(Focus % 5) * 2.0f, 0.0f, 508.0f}))
+					throw std::runtime_error("[Content:ResidencyReadiness] in-memory initial focus rejected");
+			const auto StartedAt = Clock::now();
+			auto NextSampleAt = StartedAt + std::chrono::seconds(1);
+			AddResourcePoint(Points, StartedAt, LastTick, *Policy, Fixture.Service.get());
+			for (std::uint64_t Sample = 0; Sample < MaximumTicks; ++Sample) {
+				if (Clock::now() >= StartedAt + std::chrono::seconds(DurationSeconds + 5)) break;
+				const auto Cycle = Sample % 360;
+				if (Cycle == 0)
+					for (std::size_t Focus = 0; Focus < std::min<std::size_t>(FocusCount, 100); ++Focus)
+						if (!Policy->RemoveFocus(Focus + 1))
+							throw std::runtime_error("[Content:ResidencyReadiness] in-memory focus retirement rejected");
+				const std::size_t Cell = Cycle < 120 ? Cycle / 15
+					: Cycle < 240 ? (239 - Cycle) / 15 : Cycle < 300 ? 7 : 0;
+				const auto Velocity = Cycle < 120 ? glm::vec3(512.0f, 0.0f, 0.0f)
+					: Cycle < 240 ? glm::vec3(-512.0f, 0.0f, 0.0f) : glm::vec3{};
+				const auto Before = Policy->GetMetrics();
+				const auto PolicyStartedAt = Clock::now();
+				for (std::size_t Focus = 0; Focus < FocusCount; ++Focus) {
+					if (Cycle < 30 && Focus < std::min<std::size_t>(FocusCount, 100)) continue;
+					if (!Policy->UpdateFocus(Focus + 1,
+						{508.0f + static_cast<float>(Cell) * 256.0f + static_cast<float>(Focus % 5) * 2.0f,
+							0.0f, 508.0f}, Velocity))
+						throw std::runtime_error("[Content:ResidencyReadiness] in-memory movement rejected");
+				}
+				Policy->Step(Fixture.Service.get(), ++LastTick);
+				PolicySamples.push_back(Microseconds(PolicyStartedAt));
+				const auto After = Policy->GetMetrics();
+				CheckWorkBound(Before, After, Limits);
+				CheckResourceGauges(After, FocusCount, EntryCount, Limits);
+				const auto AvailabilityStartedAt = Clock::now();
+				Fixture.Service->Step();
+				AvailabilitySamples.push_back(Microseconds(AvailabilityStartedAt));
+				if (Clock::now() >= NextSampleAt) {
+					AddResourcePoint(Points, StartedAt, LastTick, *Policy, Fixture.Service.get());
+					NextSampleAt = Clock::now() + std::chrono::seconds(1);
+				}
+				std::this_thread::sleep_until(StartedAt + std::chrono::milliseconds((Sample + 1) * 1'000 / 60));
+			}
+			AddResourcePoint(Points, StartedAt, LastTick, *Policy, Fixture.Service.get());
+			BeforeStopMetrics = Fixture.Service->GetMetrics();
+			const auto FinalPolicyMetrics = Policy->GetMetrics();
+			if (BeforeStopMetrics.Failures != 0 || BeforeStopMetrics.Requests != FinalPolicyMetrics.Requests ||
+				BeforeStopMetrics.Requests > 1'000 || FinalPolicyMetrics.DemandRecords > 64)
+				throw std::runtime_error("[Content:ResidencyReadiness] in-memory reconciliation failed resource bound");
+			Policy->Stop(Fixture.Service.get());
+			if (Policy->GetMetrics().Focuses != 0 || Policy->GetMetrics().DemandRecords != 0)
+				throw std::runtime_error("[Content:ResidencyReadiness] in-memory policy stop retained demand state");
+			Policy.reset();
+			const auto RequestsBeforeReplacement = Fixture.Service->GetMetrics().Requests;
+			auto Replacement = std::make_unique<ResidencyDemandPolicy>(Fixture.Snapshot, Limits);
+			if (!Replacement->SetRequirement(Fixture.Snapshot->Entries.front().Key, ResidencyDemandClass::Critical))
+				throw std::runtime_error("[Content:ResidencyReadiness] replacement requirement rejected");
+			const auto Deadline = Clock::now() + std::chrono::seconds(5);
+			while (Clock::now() < Deadline) {
+				Replacement->Step(Fixture.Service.get(), ++LastTick);
+				Fixture.Service->Step();
+				ReplacementRequests = Fixture.Service->GetMetrics().Requests - RequestsBeforeReplacement;
+				if (ReplacementRequests == 1 &&
+					Fixture.Service->GetState(Fixture.Snapshot->Entries.front().Key) == ContentResidencyState::Resident)
+					break;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			if (ReplacementRequests != 1 ||
+				Fixture.Service->GetState(Fixture.Snapshot->Entries.front().Key) != ContentResidencyState::Resident)
+				throw std::runtime_error("[Content:ResidencyReadiness] replacement demand did not acquire content");
+			Replacement->Stop(Fixture.Service.get());
+			Fixture.Service->Stop();
+			if (Fixture.Service->GetMetrics().RetainedRecordCount != 0)
+				throw std::runtime_error("[Content:ResidencyReadiness] service stop retained session records");
+		}
+		const auto FinalAllocations = FinishAllocationSample();
+		const auto MeasuredTicks = PolicySamples.size();
+		const auto PolicyTime = Summarize(std::move(PolicySamples));
+		const auto AvailabilityTime = Summarize(std::move(AvailabilitySamples));
+		PrintResourcePoints("in-memory-cas", Points);
+		CheckMeasuredPlateau(Points, Quick, "in-memory-cas");
+		std::cout << "[Content:ResidencyResource] phase=in-memory-cas-final entryCount=" << EntryCount
+			<< " focuses=" << FocusCount << " measuredTicks=" << MeasuredTicks
+			<< " lastPolicyTick=" << LastTick
+			<< " policyUpdateAndStepP50Us=" << PolicyTime.P50
+			<< " policyUpdateAndStepP95Us=" << PolicyTime.P95
+			<< " policyUpdateAndStepP99Us=" << PolicyTime.P99
+			<< " casStepP50Us=" << AvailabilityTime.P50
+			<< " casStepP95Us=" << AvailabilityTime.P95
+			<< " casStepP99Us=" << AvailabilityTime.P99
+			<< " serviceRequests=" << BeforeStopMetrics.Requests
+			<< " acquisitions=" << BeforeStopMetrics.Acquisitions
+			<< " admissions=" << BeforeStopMetrics.Admissions
+			<< " evictions=" << BeforeStopMetrics.Evictions
+			<< " providerMaxUs=" << BeforeStopMetrics.Timing.Provider.MaximumMicroseconds
+			<< " preparationMaxUs=" << BeforeStopMetrics.Timing.Preparation.MaximumMicroseconds
+			<< " admissionCommitMaxUs=" << BeforeStopMetrics.Timing.Commit.MaximumMicroseconds
+			<< " casStepMaxUs=" << BeforeStopMetrics.Timing.Step.MaximumMicroseconds
+			<< " replacementRequests=" << ReplacementRequests
+			<< " trackedAfterStopBytes=" << FinalAllocations.RetainedBytes
+			<< " rssAfterStopBytes=" << ProcessResidentBytes()
+			<< " provider=in-memory trackedScope=policy-and-post-ready-service-allocations" << '\n';
+	}
 }
 
 int main(int ArgumentCount, char **Arguments) {
 	try {
 		const bool Quick = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--quick";
-		if (ArgumentCount > 2 || (ArgumentCount == 2 && !Quick))
-			throw std::invalid_argument("usage: ResidencyDemandBenchmark [--quick]");
+		const bool ReadinessQuick = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--readiness-quick";
+		const bool ReadinessLong = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--readiness-long";
+		if (ArgumentCount > 2 || (ArgumentCount == 2 && !Quick && !ReadinessQuick && !ReadinessLong))
+			throw std::invalid_argument("usage: ResidencyDemandBenchmark [--quick|--readiness-quick|--readiness-long]");
 		BootstrapNativeRuntimeSchema();
+		if (ReadinessQuick || ReadinessLong) {
+			std::cout << "[Content:ResidencyReadiness] mode=" << (ReadinessQuick ? "quick" : "long")
+				<< " resourceScope=policy-only-then-in-memory-cas"
+				<< " providerQualification=false clientMaterializationMeasured=false" << '\n';
+			for (const auto Entries : ReadinessQuick ? std::vector<std::size_t>{1'000}
+											  : std::vector<std::size_t>{1'000, 10'000, 65'536})
+				RunStartupComparison(Entries, ReadinessQuick ? 2 : 5);
+			RunPolicyResource(ReadinessQuick);
+			RunInMemoryReconciliationResource(ReadinessQuick);
+			return 0;
+		}
 		std::cout << "phase,manifest_entries,focuses,samples,mean_us,p50_us,p95_us,p99_us,max_us,"
 			"allocations,peak_alloc_bytes,retained_alloc_bytes,query_pages,query_cells,membership_visits,"
 			"completed_focus_evaluations,stale_revisions,moving_sweep_completions,candidate_revalidations,"
