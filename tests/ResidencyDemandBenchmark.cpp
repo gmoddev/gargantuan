@@ -873,6 +873,16 @@ namespace {
 			throw std::runtime_error("[Content:ResidencyReadiness] tracked tail retained span exceeded finite gate");
 	}
 
+	void AddCorePhaseTiming(const ResidencyDemandPolicy &Policy, std::uint64_t Tick,
+		std::vector<double> &EvaluationSamples, std::vector<double> &ReconciliationSamples) {
+		const auto Observation = Policy.GetDiagnostics(ResidencyDiagnosticQuery{0, 0, 1});
+		if (!Observation.Enabled || Observation.TimingSamples.size() != 1 ||
+			Observation.TimingSamples.front().Tick != Tick)
+			throw std::runtime_error("[Content:ResidencyReadiness] core timing observation missing current tick");
+		EvaluationSamples.push_back(static_cast<double>(Observation.TimingSamples.front().EvaluationNanoseconds) / 1'000.0);
+		ReconciliationSamples.push_back(static_cast<double>(Observation.TimingSamples.front().ReconciliationNanoseconds) / 1'000.0);
+	}
+
 	void RunPolicyResource(bool Quick) {
 		const std::size_t EntryCount = Quick ? 1'000 : 65'536;
 		const std::size_t FocusCount = Quick ? 10 : 500;
@@ -886,7 +896,11 @@ namespace {
 		std::vector<ResourcePoint> Points;
 		Points.reserve(DurationSeconds + 2);
 		std::vector<double> UpdateAndStepSamples;
+		std::vector<double> CoreEvaluationSamples;
+		std::vector<double> CoreReconciliationSamples;
 		UpdateAndStepSamples.reserve(MaximumTicks);
+		CoreEvaluationSamples.reserve(MaximumTicks);
+		CoreReconciliationSamples.reserve(MaximumTicks);
 		ResidencyDemandPolicyLimits Limits;
 		std::uint64_t LastTick = 0;
 		StartAllocationSample();
@@ -897,6 +911,7 @@ namespace {
 					throw std::runtime_error("[Content:ResidencyReadiness] policy-only initial focus rejected");
 			for (std::size_t Warm = 0; Warm < (Quick ? 32u : 128u); ++Warm)
 				Policy->Step(nullptr, ++LastTick);
+			Policy->SetDiagnosticsEnabled(true);
 			const auto StartedAt = Clock::now();
 			auto NextSampleAt = StartedAt + std::chrono::seconds(1);
 			AddResourcePoint(Points, StartedAt, LastTick, *Policy);
@@ -915,6 +930,7 @@ namespace {
 						throw std::runtime_error("[Content:ResidencyReadiness] policy-only movement rejected");
 				Policy->Step(nullptr, ++LastTick);
 				UpdateAndStepSamples.push_back(Microseconds(StepStartedAt));
+				AddCorePhaseTiming(*Policy, LastTick, CoreEvaluationSamples, CoreReconciliationSamples);
 				const auto After = Policy->GetMetrics();
 				CheckWorkBound(Before, After, Limits);
 				CheckResourceGauges(After, FocusCount, EntryCount, Limits);
@@ -931,7 +947,12 @@ namespace {
 		}
 		const auto FinalAllocations = FinishAllocationSample();
 		const auto MeasuredTicks = UpdateAndStepSamples.size();
+		const auto CoreSamples = CoreEvaluationSamples.size();
+		if (CoreSamples != MeasuredTicks || CoreReconciliationSamples.size() != MeasuredTicks)
+			throw std::runtime_error("[Content:ResidencyReadiness] policy core timing sample count mismatch");
 		const auto Timings = Summarize(std::move(UpdateAndStepSamples));
+		const auto EvaluationTime = Summarize(std::move(CoreEvaluationSamples));
+		const auto ReconciliationTime = Summarize(std::move(CoreReconciliationSamples));
 		PrintResourcePoints("policy-only", Points);
 		CheckTailRetainedSpan(Points, Quick, "policy-only");
 		std::cout << "[Content:ResidencyResource] phase=policy-only-final entryCount=" << EntryCount
@@ -939,6 +960,16 @@ namespace {
 			<< " lastPolicyTick=" << LastTick
 			<< " updateAndStepP50Us=" << Timings.P50 << " updateAndStepP95Us=" << Timings.P95
 			<< " updateAndStepP99Us=" << Timings.P99 << " updateAndStepMaxUs=" << Timings.Maximum
+			<< " coreSamples=" << CoreSamples
+			<< " coreEvaluationP50Us=" << EvaluationTime.P50
+			<< " coreEvaluationP95Us=" << EvaluationTime.P95
+			<< " coreEvaluationP99Us=" << EvaluationTime.P99
+			<< " coreReconciliationP50Us=" << ReconciliationTime.P50
+			<< " coreReconciliationP95Us=" << ReconciliationTime.P95
+			<< " coreReconciliationP99Us=" << ReconciliationTime.P99
+			<< " diagnosticsEnabled=true corePhasesExcludeObservation=true"
+			<< " externalPolicyClockIncludesCollector=true"
+			<< " observerAllocationsIncludedInResourceCensus=true"
 			<< " trackedAfterPolicyDestructionBytes=" << FinalAllocations.RetainedBytes
 			<< " rssAfterPolicyDestructionBytes=" << ProcessResidentBytes()
 			<< " constructor=shared-snapshot trackedScope=policy-allocations-snapshot-excluded" << '\n';
@@ -956,8 +987,12 @@ namespace {
 		Points.reserve(DurationSeconds + 2);
 		std::vector<double> PolicySamples;
 		std::vector<double> AvailabilitySamples;
+		std::vector<double> CoreEvaluationSamples;
+		std::vector<double> CoreReconciliationSamples;
 		PolicySamples.reserve(MaximumTicks);
 		AvailabilitySamples.reserve(MaximumTicks);
+		CoreEvaluationSamples.reserve(MaximumTicks);
+		CoreReconciliationSamples.reserve(MaximumTicks);
 		ResidencyDemandPolicyLimits Limits;
 		std::uint64_t LastTick = 0;
 		std::uint64_t ReplacementRequests = 0;
@@ -969,6 +1004,7 @@ namespace {
 			for (std::size_t Focus = 0; Focus < FocusCount; ++Focus)
 				if (!Policy->UpdateFocus(Focus + 1, {508.0f + static_cast<float>(Focus % 5) * 2.0f, 0.0f, 508.0f}))
 					throw std::runtime_error("[Content:ResidencyReadiness] in-memory initial focus rejected");
+			Policy->SetDiagnosticsEnabled(true);
 			const auto StartedAt = Clock::now();
 			auto NextSampleAt = StartedAt + std::chrono::seconds(1);
 			AddResourcePoint(Points, StartedAt, LastTick, *Policy, Fixture.Service.get());
@@ -994,6 +1030,7 @@ namespace {
 				}
 				Policy->Step(Fixture.Service.get(), ++LastTick);
 				PolicySamples.push_back(Microseconds(PolicyStartedAt));
+				AddCorePhaseTiming(*Policy, LastTick, CoreEvaluationSamples, CoreReconciliationSamples);
 				const auto After = Policy->GetMetrics();
 				CheckWorkBound(Before, After, Limits);
 				CheckResourceGauges(After, FocusCount, EntryCount, Limits);
@@ -1051,8 +1088,13 @@ namespace {
 		}
 		const auto FinalAllocations = FinishAllocationSample();
 		const auto MeasuredTicks = PolicySamples.size();
+		const auto CoreSamples = CoreEvaluationSamples.size();
+		if (CoreSamples != MeasuredTicks || CoreReconciliationSamples.size() != MeasuredTicks)
+			throw std::runtime_error("[Content:ResidencyReadiness] in-memory core timing sample count mismatch");
 		const auto PolicyTime = Summarize(std::move(PolicySamples));
 		const auto AvailabilityTime = Summarize(std::move(AvailabilitySamples));
+		const auto EvaluationTime = Summarize(std::move(CoreEvaluationSamples));
+		const auto ReconciliationTime = Summarize(std::move(CoreReconciliationSamples));
 		PrintResourcePoints("in-memory-cas", Points);
 		CheckTailRetainedSpan(Points, Quick, "in-memory-cas");
 		std::cout << "[Content:ResidencyResource] phase=in-memory-cas-final entryCount=" << EntryCount
@@ -1061,6 +1103,16 @@ namespace {
 			<< " policyUpdateAndStepP50Us=" << PolicyTime.P50
 			<< " policyUpdateAndStepP95Us=" << PolicyTime.P95
 			<< " policyUpdateAndStepP99Us=" << PolicyTime.P99
+			<< " coreSamples=" << CoreSamples
+			<< " coreEvaluationP50Us=" << EvaluationTime.P50
+			<< " coreEvaluationP95Us=" << EvaluationTime.P95
+			<< " coreEvaluationP99Us=" << EvaluationTime.P99
+			<< " coreReconciliationP50Us=" << ReconciliationTime.P50
+			<< " coreReconciliationP95Us=" << ReconciliationTime.P95
+			<< " coreReconciliationP99Us=" << ReconciliationTime.P99
+			<< " diagnosticsEnabled=true corePhasesExcludeObservation=true"
+			<< " externalPolicyClockIncludesCollector=true"
+			<< " observerAllocationsIncludedInResourceCensus=true"
 			<< " casStepP50Us=" << AvailabilityTime.P50
 			<< " casStepP95Us=" << AvailabilityTime.P95
 			<< " casStepP99Us=" << AvailabilityTime.P99
