@@ -434,7 +434,7 @@ namespace {
 	};
 
 	void RunServiceIntegration() {
-		auto Root = std::make_shared<Folder>();
+		std::shared_ptr<Instance> Root = std::make_shared<Folder>();
 		Root->SetArchivable(true);
 		Root->SetName("");
 		const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
@@ -525,7 +525,7 @@ namespace {
 	}
 
 	void RunServiceScale(std::size_t EntryCount, std::size_t FocusCount) {
-		auto Root = std::make_shared<Folder>();
+		std::shared_ptr<Instance> Root = std::make_shared<Folder>();
 		Root->SetArchivable(true);
 		Root->SetName("");
 		const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);

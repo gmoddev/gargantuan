@@ -36,7 +36,7 @@ namespace {
 			std::filesystem::create_directories(Root / "content");
 			Manifest.Package = {*ProjectId::Parse("0123456789abcdef0123456789abcdef"), 29};
 			for (const auto *Key : {"a", "ahead", "b", "shared"}) {
-				auto Object = std::make_shared<Folder>();
+				std::shared_ptr<Instance> Object = std::make_shared<Folder>();
 				Object->SetName(std::string("Unit_") + Key);
 				Object->SetArchivable(true);
 				const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Object);
