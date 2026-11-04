@@ -74,8 +74,9 @@ namespace gargantuan {
 		std::size_t PendingDeltas = 0;
 	};
 
-	// One policy per Engine/manifest. All methods run on Main. The caller owns
-	// generation-safe focus IDs and must remove them when their native owner ends.
+	// One policy per Engine/manifest. Construction may consume immutable metadata
+	// on a worker; mutable methods run on Main. The caller owns generation-safe
+	// focus IDs and must remove them when their native owner ends.
 	class ResidencyDemandPolicy final {
 	  public:
 		explicit ResidencyDemandPolicy(

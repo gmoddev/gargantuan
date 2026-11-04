@@ -196,7 +196,7 @@ namespace gargantuan {
 		bool NextRelease = false;
 		bool Stopped = false;
 		ContentAvailabilityService *BoundAvailability = nullptr;
-		const PackageContentManifest *BoundManifest = nullptr;
+		std::shared_ptr<const PackageContentManifest> BoundManifest;
 
 		explicit Impl(const PackageContentManifest &Input, ResidencyDemandPolicyLimits InputLimits)
 			: Manifest(ValidatePolicyInput(Input, InputLimits)), Index(Manifest), Limits(InputLimits) {}
@@ -509,7 +509,7 @@ namespace gargantuan {
 				++Metrics.ServiceBindingFailures;
 				return;
 			}
-			const auto *CurrentManifest = Availability->GetManifest();
+			const auto CurrentManifest = Availability->GetManifestSnapshot();
 			if (!CurrentManifest || (BoundManifest && CurrentManifest != BoundManifest)) {
 				++Metrics.ServiceBindingFailures;
 				return;
@@ -541,21 +541,15 @@ namespace gargantuan {
 				BoundAvailability = Availability;
 				BoundManifest = CurrentManifest;
 			}
-			std::size_t ValidationLeft = Limits.MaximumRequestValidationVisitsPerTick;
+			std::size_t FrontValidationLeft = std::max<std::size_t>(
+				1, Limits.MaximumRequestValidationVisitsPerTick / 2);
+			std::size_t ContinuationValidationLeft =
+				Limits.MaximumRequestValidationVisitsPerTick - FrontValidationLeft;
 			std::vector<PendingDelta> Requests;
 			std::vector<PendingDelta> Releases;
-			auto Cursor = PendingScanAfter ? Pending.upper_bound(*PendingScanAfter) : Pending.begin();
-			const auto SearchLimit = std::min(Pending.size(), 8 * Limits.MaximumDemandDeltasPerTick);
-			for (std::size_t Inspected = 0; Inspected < SearchLimit; ++Inspected) {
-				if (Cursor == Pending.end()) Cursor = Pending.begin();
-				const auto Delta = *Cursor++;
-				PendingScanAfter = Delta;
+			auto InspectRequest = [&](const PendingDelta &Delta, std::size_t &ValidationLeft) {
 				auto Found = Demands.find(Delta.Index);
-				if (Found == Demands.end()) continue;
-				if (Delta.Release) {
-					Releases.push_back(Delta);
-					continue;
-				}
+				if (Found == Demands.end()) return;
 				std::optional<Candidate> CurrentBest;
 				if (Found->second.Required) {
 					CurrentBest = Candidate{.Index = Delta.Index, .Class = Found->second.Required->Class,
@@ -577,12 +571,44 @@ namespace gargantuan {
 						CurrentBest = CandidateValue->second;
 					break;
 				}
-				if (!CurrentBest) continue;
+				if (!CurrentBest) return;
 				PendingDelta Fresh{false, CurrentBest->Class,
 					CurrentBest->DeadlineTick.value_or(std::numeric_limits<std::uint64_t>::max()),
 					CurrentBest->DistanceSquared, CurrentBest->CostBytes, Delta.Key, Delta.Index};
 				Requests.push_back(std::move(Fresh));
+			};
+			const auto SearchLimit = 8 * Limits.MaximumDemandDeltasPerTick;
+			auto RequestCursor = Pending.begin();
+			std::optional<PendingDelta> LastFront;
+			for (std::size_t Inspected = 0;
+				Inspected < SearchLimit && RequestCursor != Pending.end() && !RequestCursor->Release;
+				++Inspected, ++RequestCursor) {
+				LastFront = *RequestCursor;
+				InspectRequest(*RequestCursor, FrontValidationLeft);
 			}
+			// The front is authoritative for ordinary priority. Only if every
+			// front request is stale or blocked do we search a bounded continuation.
+			if (Requests.empty() && LastFront && ContinuationValidationLeft) {
+				if (!PendingScanAfter) PendingScanAfter = LastFront;
+				auto Cursor = Pending.upper_bound(*PendingScanAfter);
+				for (std::size_t Inspected = 0; Inspected < SearchLimit; ++Inspected) {
+					if (Cursor == Pending.end() || Cursor->Release) Cursor = Pending.begin();
+					if (Cursor == Pending.end() || Cursor->Release) break;
+					const auto Delta = *Cursor++;
+					PendingScanAfter = Delta;
+					InspectRequest(Delta, ContinuationValidationLeft);
+					if (!ContinuationValidationLeft) break;
+				}
+			}
+			PendingDelta ReleaseBoundary;
+			ReleaseBoundary.Release = true;
+			ReleaseBoundary.Class = ResidencyDemandClass::Critical;
+			ReleaseBoundary.DeadlineTick = 0;
+			ReleaseBoundary.DistanceSquared = 0.0f;
+			auto ReleaseCursor = Pending.lower_bound(ReleaseBoundary);
+			for (std::size_t Inspected = 0;
+				Inspected < SearchLimit && ReleaseCursor != Pending.end() && ReleaseCursor->Release;
+				++Inspected, ++ReleaseCursor) Releases.push_back(*ReleaseCursor);
 			std::sort(Requests.begin(), Requests.end());
 			std::sort(Releases.begin(), Releases.end());
 			std::size_t RequestIndex = 0;
@@ -694,7 +720,8 @@ namespace gargantuan {
 	void ResidencyDemandPolicy::Stop(ContentAvailabilityService *Availability) {
 		if (!State || State->Stopped) return;
 		State->Stopped = true;
-		if (Availability && Availability == State->BoundAvailability && Availability->GetManifest() == State->BoundManifest)
+		if (Availability && Availability == State->BoundAvailability &&
+			Availability->GetManifestSnapshot() == State->BoundManifest)
 			for (const auto &[Unit, Record] : State->Demands)
 				if (Record.Requested) (void)Availability->ReleaseContent(State->Manifest.Entries[Unit].Key);
 		State->Focuses.clear();

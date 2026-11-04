@@ -366,6 +366,50 @@ namespace {
 			Runtime.Destroy();
 		}
 	}
+
+	void PriorityBacklog() {
+		LocalFixture Fixture;
+		auto Prototype = Fixture.Manifest.Entries.front();
+		Prototype.Dependencies.clear();
+		Prototype.CoarseBounds.reset();
+		Fixture.Manifest.Entries.clear();
+		for (int Index = 0; Index < 32; ++Index) {
+			auto Entry = Prototype;
+			Entry.Key = "rank/" + std::string(Index < 10 ? "0" : "") + std::to_string(Index);
+			Fixture.Manifest.Entries.push_back(std::move(Entry));
+		}
+		const auto Encoded = EncodePackageContentManifest(Fixture.Manifest);
+		Fixture.Digest = AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Encoded.data()), Encoded.size()));
+		{ std::ofstream Output(Fixture.Root / "content/manifest.json", std::ios::binary); Output << Encoded; }
+		auto World = std::make_shared<DataModel>();
+		auto Space = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		ContentAvailabilityService Service(World, Space, Fixture.Configuration());
+		Pump(Service, [&] { return Service.IsManifestAvailable(); });
+		ResidencyDemandPolicyLimits Limits;
+		Limits.MaximumDemandDeltasPerTick = 1;
+		Limits.GraceTicks = 0;
+		ResidencyDemandPolicy Policy(*Service.GetManifest(), Limits);
+		for (int Index = 23; Index >= 0; --Index)
+			Check(Policy.SetRequirement(Fixture.Manifest.Entries[Index].Key, ResidencyDemandClass::Critical, Index + 1),
+				"backlog priority requirement rejected");
+		for (std::uint64_t Tick = 1; Tick <= 24; ++Tick) {
+			Policy.Step(&Service, Tick);
+			Check(Service.GetState(Fixture.Manifest.Entries[Tick - 1].Key) == ContentResidencyState::Requested,
+				"bounded request window skipped an earlier eligible critical deadline");
+			if (Tick < 24)
+				Check(Service.GetState(Fixture.Manifest.Entries[Tick].Key) == ContentResidencyState::Unavailable,
+					"publication exceeded its single-delta budget");
+		}
+		for (int Index = 0; Index < 24; ++Index)
+			Check(Policy.ClearRequirement(Fixture.Manifest.Entries[Index].Key), "backlog release rejected");
+		Check(Policy.SetRequirement("rank/31", ResidencyDemandClass::Critical, 0), "new critical requirement rejected");
+		Policy.Step(&Service, 25);
+		Policy.Step(&Service, 26);
+		Check(Service.GetState("rank/31") == ContentResidencyState::Requested && Policy.GetMetrics().Releases >= 1,
+			"release backlog starved a new critical request or lost release progress");
+		Policy.Stop(&Service);
+		Service.Stop(); World->Destroy();
+	}
 }
 
 int main() {
@@ -375,6 +419,7 @@ int main() {
 		FailureAndStalePending();
 		PublicationAndManifestIdentity();
 		PreparationStop();
+		PriorityBacklog();
 		ProductionFocusFeed();
 		std::cout << "[Content:ResidencyIntegration] passed\n";
 		return 0;

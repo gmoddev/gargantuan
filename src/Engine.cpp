@@ -14,6 +14,7 @@
 #include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/UserInputService.hpp"
@@ -284,6 +285,7 @@ namespace gargantuan {
 					if (!ResidencyPolicyPreparation.valid() && Content->GetManifest()) {
 						ResidencyPolicyManifest = Content->GetManifestSnapshot();
 						ResidencyPolicyPreparation = std::async(std::launch::async, [Manifest = ResidencyPolicyManifest] {
+							ExecutionDomainScope Domain(ExecutionDomain::Worker);
 							return std::make_unique<ResidencyDemandPolicy>(*Manifest);
 						});
 					}
