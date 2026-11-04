@@ -54,7 +54,8 @@ namespace {
 				Object->SetSize({1, 1, 1});
 				Object->SetCFrame(CFrame(X, 0, 0));
 				Object->SetArchivable(true);
-				const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Object);
+				std::shared_ptr<Instance> SerializableObject = Object;
+				const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, SerializableObject);
 				const auto Bytes = std::span(reinterpret_cast<const std::uint8_t *>(Encoded.data()), Encoded.size());
 				PackageContentEntry Entry;
 				Entry.Key = Key;
@@ -71,7 +72,8 @@ namespace {
 			auto Shared = std::make_shared<Folder>();
 			Shared->SetName("StreamingShared");
 			Shared->SetArchivable(true);
-			const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Shared);
+			std::shared_ptr<Instance> SerializableShared = Shared;
+			const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, SerializableShared);
 			const auto Bytes = std::span(reinterpret_cast<const std::uint8_t *>(Encoded.data()), Encoded.size());
 			PackageContentEntry Entry;
 			Entry.Key = "shared";

@@ -81,7 +81,8 @@ namespace {
 			Object->SetCanCollide(false);
 			Object->SetSize({1, 1, 1});
 			Object->SetCFrame(CFrame(0, 0, 0));
-			const auto Payload = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Object);
+			std::shared_ptr<Instance> SerializableObject = Object;
+			const auto Payload = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, SerializableObject);
 			const auto PayloadBytes = std::span(reinterpret_cast<const std::uint8_t *>(Payload.data()), Payload.size());
 			PackageContentEntry Entry;
 			Entry.Key = "unit/0";
