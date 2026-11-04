@@ -180,6 +180,16 @@ namespace {
 		Description.Shape = {.Kind = PhysicsShapeKind::StaticTriangleMesh, .Size = {2.0f, 1.0f, 3.0f}, .Mesh = Mesh};
 		Description.Transform = CFrame(0.0f, 4.0f, 0.0f);
 		const auto First = World.CreateBody(Description);
+		if (!First.IsValid()) {
+			const auto Failure = World.GetCollisionResidency();
+			std::cerr << "[Physics:MeshAdmission] " << Failure.LastAdmissionFailure
+				<< "; resources=" << Failure.ActiveResources << "; consumers=" << Failure.ActiveConsumers
+				<< "; failures=" << Failure.FailedAdmissions << "; rotation=";
+			for (int Column = 0; Column < 3; ++Column)
+				for (int Row = 0; Row < 3; ++Row)
+					std::cerr << Description.Transform.Rotation[Column][Row] << ',';
+			std::cerr << '\n';
+		}
 		Check(First.IsValid(), "validated static triangle mesh creates a backend shape");
 		const auto Second = World.CreateBody(Description);
 		Check(Second.IsValid(), "a second body shares immutable collision mesh data");
