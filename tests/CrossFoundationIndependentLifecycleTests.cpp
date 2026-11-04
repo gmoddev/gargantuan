@@ -1,5 +1,6 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
@@ -7,12 +8,14 @@
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/network/GameSession.hpp"
+#include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/services/AssetService.hpp"
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -187,6 +190,108 @@ namespace {
 		}
 	};
 
+	void CanonicalGeometryAndRetainedNativeShape() {
+		const auto Root = std::filesystem::temp_directory_path() /
+			("gargantuan-cross-foundation-native-replacement-" +
+				std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+		struct Cleanup final {
+			std::filesystem::path Root;
+			~Cleanup() { std::error_code Ignored; std::filesystem::remove_all(Root, Ignored); }
+		} CleanupValue{Root};
+		const auto Source = Root / "assets/replacement.obj";
+		auto WriteMesh = [&](int Offset) {
+			WriteText(Source,
+				"v " + std::to_string(Offset) + " -1 0\n" +
+				"v " + std::to_string(Offset + 2) + " -1 0\n" +
+				"v " + std::to_string(Offset + 1) + " 1 0\n" +
+				"f 1 2 3\n");
+		};
+		WriteMesh(-400);
+		DiskFilesystem Filesystem(Root);
+		SourceMount Mount(Filesystem);
+		auto World = std::make_shared<DataModel>();
+		World->Root = Root;
+		World->Filesystem = &Filesystem;
+		auto Space = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+		Check(Space && Assets, "native replacement fixture services unavailable");
+		const auto InitialImport = Assets->ImportProjectAsset(Mount, "assets/replacement.obj", AssetKind::Mesh);
+		Check(InitialImport.Ok && InitialImport.Record && InitialImport.Records.size() == 2,
+			"native replacement fixture compound import failed");
+		const auto Reference = InitialImport.Record->Reference.Value;
+		const auto InitialCollision = Assets->ResolveCollisionForMesh(Reference);
+		Check(InitialCollision.has_value(), "initial canonical collision companion unavailable");
+		auto PartValue = std::make_shared<MeshPart>();
+		PartValue->SetName("CanonicalReplacementMesh");
+		PartValue->SetAnchored(true);
+		PartValue->SetSize({1, 1, 1});
+		PartValue->SetCFrame(CFrame(0, 0, 0));
+		PartValue->SetMesh(Reference);
+		PartValue->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+		PartValue->SetParent(Space);
+		Space->StepPhysics(0.0, std::nullopt);
+		const auto PartId = PartValue->GetObjectId();
+		auto Ray = [&](float X) {
+			return WorldRootTestAccess::Raycast(*Space, {X, 0, 2}, {0, 0, -4});
+		};
+		Check(Ray(-399.0f).Instance == PartValue &&
+			WorldRootTestAccess::CollisionResidency(*Space).ActiveResources == 1,
+			"initial native collision shape was not queryable");
+
+		ReplicationRelevanceConfiguration Configuration;
+		Configuration.UpdateIntervalTicks = 1;
+		ReplicationRelevance Relevance(World, {}, Configuration);
+		auto PlayerIdentity = std::make_shared<Folder>();
+		PlayerIdentity->SetParent(World);
+		const ConnectionId Peer{54, 1};
+		Check(Relevance.AddPeer(Peer, PlayerIdentity->GetObjectId()), "native replacement peer rejected");
+		std::uint64_t Tick = 0;
+		auto DesiredAt = [&](float X) {
+			const glm::vec3 Focus{X, 0, 0};
+			Check(Relevance.SetTrustedFocus(Peer, std::span(&Focus, 1)) && Relevance.Update(++Tick),
+				"native replacement relevance update failed");
+			const auto *Selection = Relevance.GetSelection(Peer);
+			Check(Selection != nullptr, "native replacement peer selection unavailable");
+			return std::ranges::binary_search(Selection->DesiredObjects, PartId);
+		};
+		Check(DesiredAt(-399.0f), "initial canonical mesh was not relevant at its geometry");
+		const auto BeforeFailure = WorldRootTestAccess::CollisionResidency(*Space).FailedAdmissions;
+
+		// The canonical importer accepts this revision, while the pinned native
+		// mesh backend rejects world vertices beyond its coordinate envelope.
+		WriteMesh(200000);
+		const auto InvalidNative = Assets->ReimportProjectAsset(Mount, Reference);
+		const auto InvalidNativeCollision = Assets->ResolveCollisionForMesh(Reference);
+		Check(InvalidNative.Ok && InvalidNativeCollision &&
+			InvalidNativeCollision->ContentRevision > InitialCollision->ContentRevision,
+			"canonical replacement revision did not publish before native rejection");
+		Space->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::CollisionResidency(*Space).FailedAdmissions > BeforeFailure &&
+			Ray(-399.0f).Instance == PartValue,
+			"failed native replacement did not retain and expose its previous queryable shape");
+		Check(!DesiredAt(-399.0f) && DesiredAt(200001.0f),
+			"3E selection did not follow current authoritative canonical geometry");
+
+		WriteMesh(400);
+		const auto ValidNative = Assets->ReimportProjectAsset(Mount, Reference);
+		const auto ValidCollision = Assets->ResolveCollisionForMesh(Reference);
+		Check(ValidNative.Ok && ValidCollision &&
+			ValidCollision->ContentRevision > InvalidNativeCollision->ContentRevision,
+			"later valid canonical replacement did not advance revision");
+		Space->StepPhysics(0.0, std::nullopt);
+		const auto NewHit = Ray(401.0f);
+		const auto Retired = WorldRootTestAccess::CollisionResidency(*Space);
+		Check(!Ray(-399.0f).HasHit() && NewHit.Succeeded() && NewHit.Instance == PartValue &&
+			Retired.ActiveResources == 1 && Retired.ActiveConsumers == 1 && Retired.RetiredResources >= 1,
+			"successful native replacement did not retire the previous collision resource");
+		Check(!DesiredAt(-399.0f) && DesiredAt(401.0f),
+			"valid canonical replacement did not retire the old relevance bounds");
+		PartValue->Destroy();
+		Check(WorldRootTestAccess::CollisionResidency(*Space).ActiveResources == 0,
+			"destroy retained the replacement native collision resource");
+		World->Destroy();
+	}
+
 	void IndependentLifecycle() {
 		RuntimeFixture Fixture(51);
 		auto &Runtime = *Fixture.Runtime;
@@ -340,6 +445,7 @@ int main() {
 		Check(SDL_Init(0), "SDL initialization failed");
 		struct SdlLifetime final { ~SdlLifetime() { SDL_Quit(); } } Sdl;
 		gargantuan::BootstrapNativeRuntimeSchema();
+		CanonicalGeometryAndRetainedNativeShape();
 		IndependentLifecycle();
 		return 0;
 	} catch (const std::exception &Failure) {
