@@ -1,0 +1,45 @@
+{
+  "Version": 1,
+  "Campaign": "Asset Foundation 2B and Geometry Foundation 1A",
+  "Status": "Implementation integrated; qualification in progress",
+  "BaseCommit": "e682be08df84d776bfa455137728265c6494b5e8",
+  "Branch": "feature/asset2b-geometry1a",
+  "FunctionalCommit": "ad135a164607dde708b7856e3ee0a7a0f6a3657a",
+  "Archive": "Candidate06.tar",
+  "ArchiveSHA256": "DE0EEC80BE272C28EB7E2BA3C064059F5BD8A6229B65640354061860F480788A",
+  "GeneratedArchive": "Candidate01Generated.tar",
+  "GeneratedArchiveSHA256": "D054C25BC9188845AD2650E728EC8DE80F86CB74C621FBE1EF4DFAE77E687B32",
+  "LocalArtifacts": "C:/Users/aiden/.codex/artifacts/asset-geometry-20261104",
+  "WorkerNamespace": "C:/Sandbox/Codex/Workspaces/asset-geometry-20261104",
+  "CompilerDependency": {
+    "Name": "Manifold",
+    "Release": "v3.5.4",
+    "Commit": "ce50d78021d64507f89e8c9fc2c2e51018117857",
+    "ArchiveSHA256": "ce2f8b7798409b9f07e092c0ec0524ed0806431e01aea4020b65d0e934ea9438",
+    "ManifestFiles": 46,
+    "IndependentArchiveAndGitBlobVerification": true,
+    "Build": "Serial static 3D core; offline; no optional downloads"
+  },
+  "Qualification": {
+    "Windows": "IN_PROGRESS; MSVC19.51 Release; two jobs; previous source packets not final qualification",
+    "Linux": "IN_PROGRESS; cached GCC13 environment; explicit focused headless profile; two jobs",
+    "Sanitizers": "PENDING",
+    "Performance": "PENDING; no numerical improvements claimed",
+    "CppAllocations": "PENDING; separate benchmark-only probe",
+    "IndependentReview": "Source review complete through Source03; corrections and final execution evidence require follow-up",
+    "HostedCi": "Not requested manually; feature PR pending local qualification"
+  },
+  "Boundaries": {
+    "StaticMeshOptIn": true,
+    "LegacyDefaultBoxPreserved": true,
+    "DynamicConcave": "Explicit Box alternative; no dynamic concave simulation",
+    "KernelHardAllocatorQuota": false,
+    "KernelPreemptiveDeadline": false,
+    "UniversalCrossToolchainByteDeterminism": false,
+    "StudioChanged": false,
+    "Foundation3MDemandPolicyChanged": false,
+    "Foundation3LNetworkingLifecycleChanged": false,
+    "MainMerged": false
+  },
+  "Continuation": "Verify identities and active worker jobs before further work; finish frozen Source06 Windows/Linux focused tests, sanitizer tests, quiet-worker uninstrumented benchmarks and separate allocation probe; correct actual failures, review independently, push an isolated feature PR, and replace this in-progress receipt with terminal evidence."
+}
