@@ -52,6 +52,7 @@ namespace gargantuan {
 		std::size_t MaximumNodes = 128;
 		std::size_t MaximumDepth = 24;
 		std::size_t MaximumInputTriangles = 8192;
+		std::size_t MaximumInputVertices = 24576;
 		std::size_t MaximumIntermediateTriangles = 32768;
 		std::size_t MaximumOutputTriangles = 32768;
 		std::size_t MaximumBooleanSteps = 32;

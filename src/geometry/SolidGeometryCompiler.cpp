@@ -174,6 +174,10 @@ namespace gargantuan {
 		SolidCompileProbe *Probe
 	) {
 		try {
+			const auto IsCancelled = [&] {
+				return Cancellation.IsCancelled() || std::chrono::steady_clock::now() >= Deadline;
+			};
+			if (IsCancelled()) return std::unexpected(Error("Cancelled", "Solid compilation was cancelled before validation"));
 			if (Graph.Version != 1) return std::unexpected(Error("UnsupportedSolidVersion", "Unknown solid graph version"));
 			if (Graph.Nodes.empty() || Graph.Nodes.size() > std::min(Limits.MaximumNodes, std::size_t{128}))
 				return std::unexpected(Error("GeometryLimit", "Solid graph node count is outside the supported range"));
@@ -183,12 +187,16 @@ namespace gargantuan {
 				if (Node.Id.empty() || Node.Id.size() > 64 || !NodeById.emplace(Node.Id, Index).second)
 					return std::unexpected(Error("InvalidSolidGraph", "Solid node IDs must be unique and 1-64 bytes"));
 			}
-			if (!NodeById.contains(Graph.Root))
+			if (Graph.Root.empty() || Graph.Root.size() > 64 || !NodeById.contains(Graph.Root))
 				return std::unexpected(Error("InvalidSolidGraph", "Solid root does not name a node"));
 			std::size_t InputTriangles = 0;
+			std::size_t InputVertices = 0;
 			for (const auto &Node : Graph.Nodes) {
+				if (IsCancelled()) return std::unexpected(Error("Cancelled", "Solid compilation was cancelled during validation"));
+				if (Node.Inputs.size() > 16)
+					return std::unexpected(Error("InvalidSolidGraph", "Solid node has too many input references"));
 				for (const auto &Input : Node.Inputs)
-					if (!NodeById.contains(Input))
+					if (Input.empty() || Input.size() > 64 || !NodeById.contains(Input))
 						return std::unexpected(Error("InvalidSolidGraph", "Solid node references a missing input"));
 				switch (Node.Kind) {
 				case SolidNodeKind::Box:
@@ -214,10 +222,20 @@ namespace gargantuan {
 						Node.Mesh->Indices->size() > AssetLimits::MaximumMeshIndices)
 						return std::unexpected(Error("InvalidSolidMesh", "Imported operand arrays are invalid"));
 					InputTriangles += Node.Mesh->Indices->size() / 3;
-					for (const auto &Vertex : *Node.Mesh->Vertices)
+					if (InputTriangles > std::min(Limits.MaximumInputTriangles, std::size_t{8192}))
+						return std::unexpected(Error("GeometryLimit", "Solid graph exceeds the input triangle limit"));
+					if (Node.Mesh->Vertices->size() > std::min(Limits.MaximumInputVertices, std::size_t{24576}) ||
+						InputVertices > std::min(Limits.MaximumInputVertices, std::size_t{24576}) - Node.Mesh->Vertices->size())
+						return std::unexpected(Error("GeometryLimit", "Solid graph exceeds the aggregate imported vertex limit"));
+					InputVertices += Node.Mesh->Vertices->size();
+					for (std::size_t VertexIndex = 0; VertexIndex < Node.Mesh->Vertices->size(); ++VertexIndex) {
+						if (VertexIndex % 256 == 0 && IsCancelled())
+							return std::unexpected(Error("Cancelled", "Solid compilation was cancelled during vertex validation"));
+						const auto &Vertex = (*Node.Mesh->Vertices)[VertexIndex];
 						if (!Finite(Vertex.Position) ||
 							glm::any(glm::greaterThan(glm::abs(Vertex.Position), glm::vec3(MaximumCoordinate))))
 							return std::unexpected(Error("InvalidSolidMesh", "Imported operand has invalid coordinates"));
+					}
 					for (const auto Index : *Node.Mesh->Indices)
 						if (Index >= Node.Mesh->Vertices->size())
 							return std::unexpected(Error("InvalidSolidMesh", "Imported operand has an invalid index"));

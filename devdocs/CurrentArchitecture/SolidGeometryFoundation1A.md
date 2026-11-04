@@ -74,11 +74,15 @@ not a universal accuracy ranking.
 ## Bounds, failure, and determinism
 
 The hard input caps are 1 MiB of source JSON, 32 nesting levels, 128 graph
-nodes, 24 graph edges in a dependency path, 8192 input triangles, 32 Boolean
+nodes, 24 graph edges in a dependency path, 8192 input triangles, 24576 aggregate
+imported vertices (including unused vertices), 32 Boolean
 steps, one million estimated pairwise triangle comparisons, 32768 triangles
 per intermediate and final result, and ±100000 coordinates. Matrices must be
 finite, affine, and invertible; primitive sizes must be positive. The compiler
 validates the entire graph, including unreachable nodes, before evaluation.
+Cancellation is checked before validation and during imported vertex traversal.
+Input-reference count and ID lengths are checked before lookup, including for
+the public in-memory graph API; its bounds do not rely on the file-size limit.
 Cycles, missing and duplicate IDs, malformed arrays, open/nonmanifold imported
 meshes, degenerate final triangles, and empty final surfaces return structured
 diagnostics. The caller receives no partial candidate. The AssetService layer

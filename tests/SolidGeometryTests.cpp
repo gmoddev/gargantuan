@@ -2,6 +2,7 @@
 #include "../src/assets/AssetImporter.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -52,6 +53,18 @@ namespace {
 		return Encoded ? AssetContentId::Hash(**Encoded).ToString() : "encode-failed";
 	}
 
+	double Volume(const ImportedMesh &Mesh) {
+		if (!Mesh.Vertices || !Mesh.Indices) return 0;
+		double SixTimesVolume = 0;
+		for (std::size_t Corner = 0; Corner < Mesh.Indices->size(); Corner += 3) {
+			const glm::dvec3 A((*Mesh.Vertices)[(*Mesh.Indices)[Corner]].Position);
+			const glm::dvec3 B((*Mesh.Vertices)[(*Mesh.Indices)[Corner + 1]].Position);
+			const glm::dvec3 C((*Mesh.Vertices)[(*Mesh.Indices)[Corner + 2]].Position);
+			SixTimesVolume += glm::dot(A, glm::cross(B, C));
+		}
+		return std::abs(SixTimesVolume / 6.0);
+	}
+
 	std::shared_ptr<const ImportedMesh> CubeOperand() {
 		const std::vector<glm::vec3> Positions = {
 			{-1,-1,-1}, {1,-1,-1}, {1,1,-1}, {-1,1,-1},
@@ -85,6 +98,8 @@ int main() {
 		Union->Mesh.Indices->size() == Union->Collision.Indices->size(),
 		"overlapping box union produces both mesh and collision candidates");
 	if (Union) {
+		Check(std::abs(Volume(Union->Mesh) - 12.0) < 0.001,
+			"overlapping box union has the independently expected volume");
 		Check(Union->Mesh.Bounds.Minimum.x <= -1 && Union->Mesh.Bounds.Maximum.x >= 2,
 			"union bounds contain both operands");
 		const auto FirstHash = Hash(Union->Mesh);
@@ -126,11 +141,15 @@ int main() {
 	} else Check(false, "single box compiles for face orientation test");
 	Graph.Nodes.back().Kind = SolidNodeKind::Intersection;
 	auto Intersection = CompileSolidGeometry(Graph);
+	Check(Intersection && std::abs(Volume(Intersection->Mesh) - 4.0) < 0.001,
+		"box intersection has the independently expected common volume");
 	Check(Intersection && Intersection->Mesh.Bounds.Minimum.x >= -0.001f &&
 		Intersection->Mesh.Bounds.Maximum.x <= 1.001f,
 		"overlapping box intersection keeps only common volume");
 	Graph.Nodes.back().Kind = SolidNodeKind::Subtraction;
 	auto Difference = CompileSolidGeometry(Graph);
+	Check(Difference && std::abs(Volume(Difference->Mesh) - 4.0) < 0.001,
+		"box subtraction removes the independently expected volume");
 	Check(Difference && Difference->Mesh.Bounds.Minimum.x <= -1 &&
 		Difference->Mesh.Bounds.Maximum.x <= 0.001f,
 		"ordered subtraction cuts the first operand by the second");
@@ -138,6 +157,19 @@ int main() {
 	auto ReverseDifference = CompileSolidGeometry(Graph);
 	Check(ReverseDifference && Difference && Hash(ReverseDifference->Mesh) != Hash(Difference->Mesh),
 		"reversing subtraction operands changes the output");
+	if (Difference) {
+		SolidNode CutOperand;
+		CutOperand.Id = "cut";
+		CutOperand.Kind = SolidNodeKind::ImportedMesh;
+		CutOperand.Mesh = std::make_shared<const ImportedMesh>(Difference->Mesh);
+		const auto RoundTrip = CompileSolidGeometry({1, "cut", {CutOperand}});
+		Check(RoundTrip && std::abs(Volume(RoundTrip->Mesh) - 4.0) < 0.001,
+			"a compiled coplanar Boolean cut remains a closed reusable imported operand");
+		const auto Combined = CompileSolidGeometry({1, "result", {CutOperand, Box("whole"),
+			Boolean("result", SolidNodeKind::Union, {"cut", "whole"})}});
+		Check(Combined && std::abs(Volume(Combined->Mesh) - 8.0) < 0.001,
+			"a reimported Boolean cut participates in a second correct Boolean operation");
+	}
 
 	SolidNode Imported;
 	Imported.Id = "imported";
@@ -215,6 +247,22 @@ int main() {
 	Small.MaximumBooleanSteps = 0;
 	Check(!CompileSolidGeometry(Graph, {}, std::chrono::steady_clock::time_point::max(), Small),
 		"Boolean step budget is enforced");
+	Small = {};
+	Small.MaximumInputVertices = 7;
+	const auto VertexLimited = CompileSolidGeometry({1, "imported", {Imported}}, {},
+		std::chrono::steady_clock::time_point::max(), Small);
+	Check(!VertexLimited && VertexLimited.error().Code == "GeometryLimit",
+		"imported vertex admission is bounded independently of triangle count");
+	auto OversizedMesh = *Imported.Mesh;
+	OversizedMesh.Vertices = std::make_shared<const std::vector<RenderVertex>>(24577);
+	auto OversizedOperand = Imported;
+	OversizedOperand.Mesh = std::make_shared<const ImportedMesh>(std::move(OversizedMesh));
+	const auto TooManyVertices = CompileSolidGeometry({1, "imported", {OversizedOperand}});
+	Check(!TooManyVertices && TooManyVertices.error().Code == "GeometryLimit",
+		"mostly unused imported vertices cannot amplify the in-memory graph beyond its hard cap");
+	const auto CancelledOversized = CompileSolidGeometry({1, "imported", {OversizedOperand}}, Cancelled);
+	Check(!CancelledOversized && CancelledOversized.error().Code == "Cancelled",
+		"pre-cancelled compilation exits before traversing imported arrays");
 
 	SolidGraph Touch{1, "result", {
 		Box("a"), Move("b", "a", {2, 0, 0}),
