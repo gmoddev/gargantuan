@@ -42,6 +42,16 @@ namespace {
 			Manifest.Package = {*ProjectId::Parse("0123456789abcdef0123456789abcdef"), 29};
 			for (const auto *Key : {"a", "ahead", "b", "shared"}) {
 				std::shared_ptr<Instance> Object = std::make_shared<Folder>();
+				const bool SpatialUnit = std::string_view(Key) != "shared";
+				const float X = std::string_view(Key) == "a" ? 0.0f : std::string_view(Key) == "ahead" ? 360.0f : 2048.0f;
+				if (SpatialUnit) {
+					auto PartValue = std::make_shared<Part>();
+					PartValue->SetAnchored(true);
+					PartValue->SetCanCollide(false);
+					PartValue->SetSize({1, 1, 1});
+					PartValue->SetCFrame(CFrame(X, 0, 0));
+					Object = std::move(PartValue);
+				}
 				Object->SetName(std::string("Unit_") + Key);
 				Object->SetArchivable(true);
 				const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Object);
@@ -52,10 +62,9 @@ namespace {
 				Entry.Digest = AssetContentId::Hash(Bytes);
 				Entry.CompressedBytes = Entry.UncompressedBytes = Bytes.size();
 				Entry.ObjectCount = 1;
-				if (Entry.Key != "shared") {
+				if (SpatialUnit) {
 					Entry.Dependencies = {"shared"};
-					const float X = Entry.Key == "a" ? 0.0f : Entry.Key == "ahead" ? 360.0f : 2048.0f;
-					Entry.CoarseBounds = PackageCoarseBounds{{X, 0, 0}, {X + 1, 1, 1}};
+					Entry.CoarseBounds = PackageCoarseBounds{{X - 0.5f, -0.5f, -0.5f}, {X + 0.5f, 0.5f, 0.5f}};
 				}
 				std::ofstream Output(Root / Entry.BlobReference, std::ios::binary);
 				Output << Encoded;
@@ -224,6 +233,9 @@ namespace {
 		}
 		Check(Runtime.Content->GetState("ahead") == ContentResidencyState::Resident,
 			"authoritative controller velocity did not drive the production predictive corridor");
+		for (int Tick = 0; Tick < 8; ++Tick) Step();
+		Check(Server.GetMetrics().SpatialMembershipCount >= 3,
+			"normal admitted Part units did not enter the existing 3K/3H spatial projection path");
 		const auto ClientProbe = std::dynamic_pointer_cast<RemoteEvent>(
 			ClientRuntime->DataModel->FindFirstChild("ResidencyProbe", false));
 		Check(ClientProbe && ClientProbe->GetRemoteManager() && Probe->GetRemoteManager(),

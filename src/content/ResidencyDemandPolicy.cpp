@@ -450,7 +450,6 @@ namespace gargantuan {
 				++Inspected;
 				if (!Current->second.NeedsEvaluation) continue;
 				if (Current->second.Unhealthy && Tick < Current->second.RetryAtTick) continue;
-				NextFocus = Current->first;
 				auto &Value = Current->second;
 				if (Value.NeedsRevalidation) {
 					const auto Work = Value.Committed.size() + Value.Working.size();
@@ -458,6 +457,9 @@ namespace gargantuan {
 					RevalidationsLeft -= Work;
 					Revalidate(Value, Current->first, Tick);
 				}
+				// Deferred revalidation must not move the rotation past work that
+				// has not received an opportunity under the remaining tick budget.
+				NextFocus = Current->first;
 				if (!Value.Cursor) BuildBounds(Value);
 				const PackageCoarseQueryLimits QueryLimits{
 					std::min(CellsLeft, MaximumPackageCoarseQueryCells),

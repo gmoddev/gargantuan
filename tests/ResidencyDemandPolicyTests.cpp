@@ -319,6 +319,43 @@ namespace {
 		Check(Rejected, "zero demand-delta budget was admitted");
 	}
 
+	void RevalidationBudgetFairness() {
+		PackageContentManifest Manifest;
+		Manifest.Package = {*ProjectId::Parse("0123456789abcdef0123456789abcdef"), 7};
+		for (std::size_t Group = 0; Group < 12; ++Group)
+			for (std::size_t Index = 0; Index < 1'000; ++Index) {
+				const auto GroupNumber = std::to_string(Group);
+				const auto Number = std::to_string(Index);
+				Manifest.Entries.push_back(Unit("budget/" + std::string(2 - GroupNumber.size(), '0') + GroupNumber +
+					"/" + std::string(4 - Number.size(), '0') + Number, static_cast<float>(Group) * 2048.0f));
+			}
+		ResidencyDemandPolicyLimits Limits;
+		Limits.MaximumCandidatesPerFocus = 1'024;
+		Limits.MaximumQueryCellsPerTick = MaximumPackageCoarseQueryCells;
+		Limits.MaximumMembershipVisitsPerTick = MaximumPackageCoarseQueryMembershipVisits;
+		ResidencyDemandPolicy Policy(Manifest, Limits);
+		for (std::uint64_t Group = 0; Group < 12; ++Group)
+			Check(Policy.UpdateFocus(Group + 1, {static_cast<float>(Group) * 2048.0f, 0, 0}), "budget focus rejected");
+		Policy.Step(nullptr, 1);
+		Check(Policy.GetMetrics().PendingFocuses == 0, "budget fixture failed to establish every dense focus");
+		for (std::uint64_t Tick = 2; Tick <= 5; ++Tick) {
+			for (std::uint64_t Group = 0; Group < 12; ++Group)
+				Check(Policy.UpdateFocus(Group + 1,
+					{static_cast<float>(Group) * 2048.0f + (Tick % 2 ? 1.0f : -1.0f), 0, 0}), "budget update rejected");
+			const auto Before = Policy.GetMetrics();
+			Policy.Step(nullptr, Tick);
+			Check(Policy.GetMetrics().CandidateRevalidations - Before.CandidateRevalidations <=
+				Limits.MaximumCandidateRevalidationsPerTick, "revalidation exhausted its per-tick bound");
+		}
+		const auto Demands = Policy.GetDemands();
+		for (std::size_t Group = 0; Group < 12; ++Group) {
+			const auto Number = std::to_string(Group);
+			const auto *Demand = Find(Demands, "budget/" + std::string(2 - Number.size(), '0') + Number + "/0000");
+			Check(Demand && Demand->Revision > 12,
+				"later dense focus starved behind exhausted revalidation despite continuing opportunities");
+		}
+	}
+
 	void ManifestLifetime() {
 		auto Original = ManifestWith({Unit("old", 0.0f)});
 		auto Replacement = ManifestWith({Unit("new", 0.0f)});
@@ -349,6 +386,7 @@ int main() {
 		DenseMovingSweep();
 		EquivalentFocusAndLifetime();
 		BoundsAndDenial();
+		RevalidationBudgetFairness();
 		ManifestLifetime();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Content:ResidencyTests] " << Error.what() << '\n';
