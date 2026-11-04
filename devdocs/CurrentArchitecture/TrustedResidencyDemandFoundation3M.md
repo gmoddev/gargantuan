@@ -27,8 +27,11 @@ fixtures retain their original composition. Once enabled, the Engine prepares
 one policy after the verified manifest becomes available. Fully resident and
 client compositions retain their existing behavior. Preparation copies immutable
 manifest metadata and constructs its index on one bounded asynchronous task;
-Main polls for completion without waiting. Destruction joins that task before
-stopping its manifest owner. Failed preparation emits a structured diagnostic
+Main polls for completion without waiting. The task retains one immutable
+manifest snapshot, independent of provider and residency state; even a direct
+native service stop cannot invalidate that metadata. Publication checks that
+the exact snapshot is still current. Destruction joins preparation before
+stopping its content owner. Failed preparation emits a structured diagnostic
 and disables automatic policy; no partial index or demand is installed.
 
 GameSession supplies only ready peers' current authoritative Character position

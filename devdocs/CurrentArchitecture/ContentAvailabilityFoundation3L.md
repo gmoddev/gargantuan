@@ -7,6 +7,11 @@ scheduler. The resumable coarse query adds explicit per-page work limits and
 aggregate index storage ceilings; immutable content identity and package format
 remain unchanged.
 
+The internal read-only `GetManifestSnapshot` seam shares the single immutable
+validated manifest for bounded policy preparation across a direct service stop.
+It retains neither provider work nor runtime objects; Stop still retires all
+acquisition/residency state. No historical manifest cache is introduced.
+
 ## Decision
 
 Foundation 3L separates immutable authored package content from its current

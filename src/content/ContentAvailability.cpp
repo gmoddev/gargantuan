@@ -788,7 +788,7 @@ namespace gargantuan {
 			std::unordered_set<ObjectId> PackageObjects;
 		};
 		struct PreparedManifest final {
-			PackageContentManifest Manifest;
+			std::shared_ptr<PackageContentManifest> Manifest;
 			std::unordered_map<std::string, std::size_t> Indices;
 			std::vector<std::vector<std::size_t>> Dependents;
 			std::vector<Record> Records;
@@ -815,7 +815,7 @@ namespace gargantuan {
 		std::vector<Completion> Completions;
 		std::size_t CompletionBytes = 0;
 		std::size_t CompletionBytesHighWater = 0;
-		std::optional<PackageContentManifest> Manifest;
+		std::shared_ptr<const PackageContentManifest> Manifest;
 		std::unordered_map<std::string, std::size_t> Indices;
 		std::vector<std::vector<std::size_t>> Dependents;
 		std::vector<Record> Records;
@@ -926,14 +926,14 @@ namespace gargantuan {
 					} else {
 						PreparedManifest Prepared;
 						Prepared.EncodedBytes = Encoded->size();
-						Prepared.Manifest = std::move(*Parsed);
-						Prepared.Records.resize(Prepared.Manifest.Entries.size());
-						Prepared.Dependents.resize(Prepared.Manifest.Entries.size());
-						Prepared.Indices.reserve(Prepared.Manifest.Entries.size());
-						for (std::size_t Index = 0; Index < Prepared.Manifest.Entries.size(); ++Index)
-							Prepared.Indices.emplace(Prepared.Manifest.Entries[Index].Key, Index);
-						for (std::size_t Index = 0; Index < Prepared.Manifest.Entries.size(); ++Index)
-							for (const auto &Dependency : Prepared.Manifest.Entries[Index].Dependencies)
+						Prepared.Manifest = std::make_shared<PackageContentManifest>(std::move(*Parsed));
+						Prepared.Records.resize(Prepared.Manifest->Entries.size());
+						Prepared.Dependents.resize(Prepared.Manifest->Entries.size());
+						Prepared.Indices.reserve(Prepared.Manifest->Entries.size());
+						for (std::size_t Index = 0; Index < Prepared.Manifest->Entries.size(); ++Index)
+							Prepared.Indices.emplace(Prepared.Manifest->Entries[Index].Key, Index);
+						for (std::size_t Index = 0; Index < Prepared.Manifest->Entries.size(); ++Index)
+							for (const auto &Dependency : Prepared.Manifest->Entries[Index].Dependencies)
 								Prepared.Dependents[Prepared.Indices.at(Dependency)].push_back(Index);
 						Result.Manifest = std::move(Prepared);
 					}
@@ -1561,7 +1561,7 @@ namespace gargantuan {
 		return Found == State->Indices.end() ? std::nullopt : std::optional(State->Records[Found->second].Residency);
 	}
 
-	bool ContentAvailabilityService::IsManifestAvailable() const { return State && State->Manifest.has_value(); }
+	bool ContentAvailabilityService::IsManifestAvailable() const { return State && static_cast<bool>(State->Manifest); }
 	bool ContentAvailabilityService::IsBootstrapComplete() const {
 		if (!State || !State->Manifest) return false;
 		for (std::size_t Index = 0; Index < State->Manifest->Entries.size(); ++Index)
@@ -1629,5 +1629,8 @@ namespace gargantuan {
 	}
 	const PackageContentManifest *ContentAvailabilityService::GetManifest() const {
 		return State && State->Manifest ? &*State->Manifest : nullptr;
+	}
+	std::shared_ptr<const PackageContentManifest> ContentAvailabilityService::GetManifestSnapshot() const {
+		return State ? State->Manifest : nullptr;
 	}
 }

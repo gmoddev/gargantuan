@@ -129,7 +129,15 @@ namespace {
 		Pump(Service, [&] { return Service.GetMetrics().ResidentUnits == 0; });
 		Check(Service.GetMetrics().DecodedDocumentBytes == 0 && Service.GetActiveRequestCount() == 0,
 			"policy stop retained active demand or decoded resources");
+		const auto Snapshot = Service.GetManifestSnapshot();
 		Service.Stop();
+		Check(Snapshot && Snapshot->Entries.size() == 4 && !Service.GetManifestSnapshot(),
+			"immutable preparation metadata did not survive direct service stop safely");
+		ResidencyDemandPolicy StoppedPreparation(*Snapshot);
+		Check(StoppedPreparation.SetRequirement("a", ResidencyDemandClass::Critical), "stopped snapshot fixture rejected key");
+		StoppedPreparation.Step(&Service, 1);
+		Check(StoppedPreparation.GetMetrics().Requests == 0, "stopped service accepted old snapshot preparation");
+		StoppedPreparation.Stop(nullptr);
 		World->Destroy();
 	}
 

@@ -191,12 +191,13 @@ namespace gargantuan {
 		LOG_INFO(App, "Destroying engine");
 		if (ResidencyPolicy) ResidencyPolicy->Stop(Content.get());
 		ResidencyPolicy.reset();
-		// Preparation reads only the immutable manifest. Join before its owning
-		// content service can release that storage; stopped work never publishes.
+		// Preparation owns immutable metadata only. Join before Engine teardown;
+		// stopped work never publishes even if native code stopped Content first.
 		if (ResidencyPolicyPreparation.valid()) {
 			ResidencyPolicyPreparation.wait();
 			ResidencyPolicyPreparation = {};
 		}
+		ResidencyPolicyManifest.reset();
 		if (Content) Content->Stop();
 		if (DataModelDestroyingConnection) {
 			DataModelDestroyingConnection->Disconnect();
@@ -273,17 +274,27 @@ namespace gargantuan {
 		if (Destroyed || !ProcessService->Alive) return;
 		Mutations.Drain();
 		if (Content) {
+			if (ResidencyPolicy && !Content->IsManifestAvailable()) {
+				ResidencyPolicy->Stop(Content.get());
+				ResidencyPolicy.reset();
+				ResidencyPolicyEnabled = false;
+			}
 			if (ResidencyPolicyEnabled && !ResidencyPolicy) {
 				try {
 					if (!ResidencyPolicyPreparation.valid() && Content->GetManifest()) {
-						const auto *Manifest = Content->GetManifest();
-						ResidencyPolicyPreparation = std::async(std::launch::async, [Manifest] {
+						ResidencyPolicyManifest = Content->GetManifestSnapshot();
+						ResidencyPolicyPreparation = std::async(std::launch::async, [Manifest = ResidencyPolicyManifest] {
 							return std::make_unique<ResidencyDemandPolicy>(*Manifest);
 						});
 					}
 					if (ResidencyPolicyPreparation.valid() &&
-						ResidencyPolicyPreparation.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-						ResidencyPolicy = ResidencyPolicyPreparation.get();
+						ResidencyPolicyPreparation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+						auto PreparedPolicy = ResidencyPolicyPreparation.get();
+						if (Content->GetManifestSnapshot() == ResidencyPolicyManifest)
+							ResidencyPolicy = std::move(PreparedPolicy);
+						else ResidencyPolicyEnabled = false;
+						ResidencyPolicyManifest.reset();
+					}
 				} catch (const std::exception &Error) {
 					ResidencyPolicyEnabled = false;
 					LOG_WARN(App, "[Content:ResidencyPolicy] preparation failed: %s", Error.what());

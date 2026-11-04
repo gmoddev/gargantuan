@@ -106,6 +106,7 @@ namespace gargantuan {
 		bool ResidencyPolicyEnabled = false;
 		std::unique_ptr<ResidencyDemandPolicy> ResidencyPolicy;
 		std::future<std::unique_ptr<ResidencyDemandPolicy>> ResidencyPolicyPreparation;
+		std::shared_ptr<const PackageContentManifest> ResidencyPolicyManifest;
 		std::uint64_t SimulationTick = 0;
 		CharacterRootMotionMetrics RootMotionMetrics;
 		std::function<void()> UnbindDescendants;

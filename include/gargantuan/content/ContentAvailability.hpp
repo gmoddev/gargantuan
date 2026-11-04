@@ -364,6 +364,9 @@ namespace gargantuan {
 		[[nodiscard]] std::size_t GetActiveRequestCount() const;
 		[[nodiscard]] ContentAvailabilityMetrics GetMetrics() const;
 		[[nodiscard]] const PackageContentManifest *GetManifest() const;
+		// Immutable metadata only. A bounded policy preparation may retain this
+		// snapshot across Stop without retaining any residency or provider state.
+		[[nodiscard]] std::shared_ptr<const PackageContentManifest> GetManifestSnapshot() const;
 
 		ContentAvailabilityService(const ContentAvailabilityService &) = delete;
 		ContentAvailabilityService &operator=(const ContentAvailabilityService &) = delete;
