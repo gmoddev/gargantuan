@@ -296,6 +296,20 @@ Runtime Box3D includes and `b3*` symbols are confined to
 still names the Box3D dependency and include directory; that is unavoidable
 build/dependency integration rather than a runtime semantic leak.
 
+The pinned Box3D submodule `8441b4a06d6d09dcfb0b0f704df4d847d1437b92`
+has an SSE2 `b3LoadV` load that casts a 4-byte-aligned three-float vector to
+`double*`. Alignment sanitizers reject this before a physics raycast can return.
+`cmake/Box3DCompatibility.cmake` verifies the exact pinned `src/simd.h` SHA256
+(LF `688fef3ccbbda3f0923ab5a227bf143408ae02aefa63f79ffbb1798ec71c37b4`,
+Windows CRLF `ceab82f8c72fe58dc74f2ba0c8db1f721a793a859fc9da3cf058a18028bbfd62`), copies the
+required Box3D build sources and public headers into the build directory, and
+patches only that private `simd.h`. The correction copies the first eight bytes
+into an aligned local `double` before `_mm_load_sd`, preserving the three float
+lanes and zero fourth lane. The vendor checkout and public Box3D API remain
+unchanged; unknown source hashes fail configuration. A direct 4-byte-aligned
+12-byte-lane test and an unknown-source guard test cover the compatibility
+boundary, while the physics and asset sanitizer suites exercise actual queries.
+
 `IPhysicsBackend` can be implemented and tested without including Box3D. The
 focused test suite supplies a recording backend to prove neutral creation,
 update, and step delegation. A different rigid backend can implement the
