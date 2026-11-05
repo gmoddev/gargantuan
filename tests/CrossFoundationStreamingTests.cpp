@@ -285,6 +285,11 @@ namespace {
 			"packaged GameSession did not become ready");
 		Require(Runtime.GetResidencyDemandPolicy()->GetMetrics().Focuses == 0,
 			"ready client without authoritative Character created a content focus");
+		Require(Runtime.Content->GetState(OffsetKey) != ContentResidencyState::Resident &&
+			Runtime.Content->GetState(SolidKey) != ContentResidencyState::Resident &&
+			!ClientRuntime->Workspace->FindFirstDescendant("OffsetA") &&
+			!ClientRuntime->Workspace->FindFirstDescendant("OffsetB"),
+			"packaged MeshParts were already resident or materialized before trusted geometry focus");
 		auto PlayerValue = Runtime.Players->GetPlayers().front();
 		auto CharacterValue = std::make_shared<KinematicCharacter>();
 		auto RootPart = std::make_shared<Part>();
@@ -313,10 +318,12 @@ namespace {
 		const auto GeometryBId = GeometryB->GetObjectId();
 		GeometryA.reset(); GeometryB.reset();
 		const auto RootFocusStarted = Clock::now();
+		const auto EvaluationsBeforeRootMove = Server.GetMetrics().RelevancePeerEvaluations;
 		// x128 also lies within both existing spatial radii; accepted instances
 		// must remain current as the trusted Character crosses toward their roots.
 		CharacterValue->ApplyRuntimeTransform(CFrame(128, 0, 0));
-		Until([&] { return ClientRuntime->Workspace->FindFirstDescendant("OffsetA") &&
+		Until([&] { return Server.GetMetrics().RelevancePeerEvaluations > EvaluationsBeforeRootMove &&
+			ClientRuntime->Workspace->FindFirstDescendant("OffsetA") &&
 			ClientRuntime->Workspace->FindFirstDescendant("OffsetB"); },
 			"root-near traversal lost accepted client MeshParts");
 		const auto RootFocusToRetainedUs = Microseconds(RootFocusStarted);
@@ -358,7 +365,7 @@ namespace {
 		std::cout << "[Content:CrossFoundationNetwork] transport=simulated provider=local-package"
 			<< " geometryFocusResidentUs=" << GeometryFocusToResidentUs
 			<< " geometryFocusMaterializedUs=" << GeometryFocusToMaterializedUs
-			<< " rootFocusRetainedUs=" << RootFocusToRetainedUs
+			<< " rootFocusEvaluatedRetainedUs=" << RootFocusToRetainedUs
 			<< " traverseMaterializedUs=" << TraverseToMaterializedUs
 			<< " teleportRemovedUs=" << TeleportToRemovalUs
 			<< " reentryMaterializedUs=" << ReentryToMaterializedUs
@@ -558,7 +565,7 @@ namespace {
 		const auto OldSolidId = LiveSolid->GetObjectId();
 		const auto ProjectionStarted = Clock::now();
 		Space->StepPhysics(0.0f, std::nullopt);
-		const auto PhysicsProjectionUs = Microseconds(ProjectionStarted);
+		const auto PostAdmissionPhysicsStepUs = Microseconds(ProjectionStarted);
 		const auto Native = WorldRootTestAccess::Collision(*Space);
 		Require(Native.ActiveResources == 2 && Native.ActiveConsumers == 3 &&
 			Native.ActiveMeshShapes >= 3 && Native.NativeMeshBytes > 0 && Native.FailedAdmissions == 0,
@@ -622,7 +629,7 @@ namespace {
 		const auto RetirementUs = Microseconds(RetirementStarted);
 		const auto PhysicsRetirementStarted = Clock::now();
 		Space->StepPhysics(0.0f, std::nullopt);
-		const auto PhysicsRetirementProjectionUs = Microseconds(PhysicsRetirementStarted);
+		const auto PostEvictionPhysicsStepUs = Microseconds(PhysicsRetirementStarted);
 		const auto Retired = WorldRootTestAccess::Collision(*Space);
 		Require(Retired.ActiveResources == 0 && Retired.ActiveConsumers == 0 &&
 			Retired.ActiveMeshShapes == 0 && Retired.NativeMeshBytes == 0 &&
@@ -651,7 +658,7 @@ namespace {
 		const auto ReacquireUs = Microseconds(ReacquireStarted);
 		const auto PhysicsReprojectionStarted = Clock::now();
 		Space->StepPhysics(0.0f, std::nullopt);
-		const auto PhysicsReprojectionUs = Microseconds(PhysicsReprojectionStarted);
+		const auto PostReacquirePhysicsStepUs = Microseconds(PhysicsReprojectionStarted);
 		auto NewOffset = std::dynamic_pointer_cast<Folder>(Space->FindFirstChild("OffsetUnit", false));
 		auto NewSolid = std::dynamic_pointer_cast<Folder>(Space->FindFirstChild("SolidUnit", false));
 		Require(NewOffset && NewSolid && NewOffset->GetObjectId() != OldOffsetId &&
@@ -687,11 +694,12 @@ namespace {
 			<< " packageValidateUs=" << PackageValidateUs << " packageLoadUs=" << PackageLoadUs
 			<< " worldLoadUs=" << WorldLoadUs << " policyBuildUs=" << PolicyBuildUs
 			<< " firstPolicyStepIncludingBindUs=" << FirstPolicyStepUs << " admissionWaitUs=" << AdmissionUs
-			<< " physicsProjectionUs=" << PhysicsProjectionUs << " renderPublishUs=" << RenderPublishUs
+			<< " postAdmissionPhysicsStepUs=" << PostAdmissionPhysicsStepUs << " renderPublishUs=" << RenderPublishUs
 			<< " contactLoopUs=" << ContactLoopUs << " contactTicks=180"
 			<< " retirementWaitUs=" << RetirementUs << " reacquireWaitUs=" << ReacquireUs
-			<< " physicsRetirementProjectionUs=" << PhysicsRetirementProjectionUs
-			<< " physicsReprojectionUs=" << PhysicsReprojectionUs
+			<< " postEvictionPhysicsStepUs=" << PostEvictionPhysicsStepUs
+			<< " postReacquirePhysicsStepUs=" << PostReacquirePhysicsStepUs
+			<< " admissionWaitIncludesNativeCreation=true retirementWaitIncludesNativeRetirement=true"
 			<< " initialNativeResources=" << Native.ActiveResources
 			<< " initialNativeConsumers=" << Native.ActiveConsumers
 			<< " initialNativeShapes=" << Native.ActiveMeshShapes

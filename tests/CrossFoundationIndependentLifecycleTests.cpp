@@ -69,7 +69,7 @@ namespace {
 		explicit PackageFixture(std::uint64_t PackageVersion, std::string_view MeshName = "CrossMeshA") {
 			// The asset importer publishes one canonical render Mesh and its separate
 			// Collision companion. The mesh is offset from its semantic root so the
-			// package-space geometry and 3E root relevance remain distinct.
+			// semantic root and geometry-aware relevance can be exercised separately.
 			WriteText(Root / "assets/offset.obj",
 				"v 299 -1 0\nv 301 -1 0\nv 300 1 0\nf 1 2 3\n");
 			DiskFilesystem Filesystem(Root);
@@ -140,8 +140,11 @@ namespace {
 			Object->SetCFrame(Frame);
 			Object->SetMesh(MeshReference);
 			Object->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+			// Handwritten CAS/lifecycle fixture, not PackageBuilder qualification.
+			// Include the inherited Box and pad the declared mesh extent.
 			AddUnit(std::move(Key), Object,
-				PackageCoarseBounds{{MinimumX, -1, 0}, {MaximumX, 1, 0}});
+				PackageCoarseBounds{{std::min(Frame.Position.x - 0.5f, MinimumX) - 1.0f, -2, -2},
+					{std::max(Frame.Position.x + 0.5f, MaximumX) + 1.0f, 2, 2}});
 			Object->Destroy();
 		}
 
