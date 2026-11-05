@@ -1,0 +1,197 @@
+{
+  "Version": 1,
+  "Campaign": "Cross-repository canonical mainline integration 2026-11-05",
+  "Repository": "gmoddev/Gargantuan",
+  "OriginalMain": "e682be08df84d776bfa455137728265c6494b5e8",
+  "OriginalHistoryBackup": {
+    "File": "EngineOriginalHistory.bundle",
+    "Sha256": "CE94C5023DEBC3C378D2AA610FFB8FDC6F00557CF611260F645FAB748CA6E175",
+    "Verification": "git bundle verify: complete history; all three preserved refs verified",
+    "Location": "C:/Users/aiden/.codex/worktrees/mainline-integration-20261105/Evidence"
+  },
+  "Sources": [
+    {
+      "PullRequest": 11,
+      "Head": "eeb760edac2dea6bf3a398f69bdd320e81ba499b",
+      "Disposition": "CONSOLIDATE"
+    },
+    {
+      "PullRequest": 12,
+      "Head": "de4cddf0a3fc28b2e6959c91231cca796e2917fe",
+      "Disposition": "CONSOLIDATE"
+    },
+    {
+      "PullRequest": 13,
+      "Head": "470c9c7d51eaeddac107a279560581032bc8265c",
+      "Disposition": "CONSOLIDATE"
+    },
+    {
+      "PullRequest": 14,
+      "Head": "30750f88bb76cd5d363eb84f72e117ce1446f940",
+      "Disposition": "CONSOLIDATE"
+    },
+    {
+      "PullRequest": 15,
+      "Head": "96226fc4d46581154e02a71486a36c26766ec361",
+      "Disposition": "CONSOLIDATE"
+    },
+    {
+      "PullRequest": 16,
+      "Head": "4bbee7fa40cfe7669a2901c9a80ec2667a61d87d",
+      "Disposition": "CONSOLIDATE"
+    }
+  ],
+  "Stages": [
+    {
+      "Commit": "dc2459f23d7ff35cba1e9716afe233c86af1b48a",
+      "OriginalHead": "4bbee7fa40cfe7669a2901c9a80ec2667a61d87d",
+      "ExactTree": "370cff80c982223a956a55205d44381ccdf2e22b",
+      "OriginalCommits": [
+        "4bbee7fa40cfe7669a2901c9a80ec2667a61d87d",
+        "de0cf4850eda262075d0741219b795508a30b10c",
+        "be7079a6b816b05960c3bf35695aaf80ea40c9ef",
+        "980a1a2ae6375d65a8ff5b98e7b832cea70d3b73",
+        "b4e7f750bfa4d1e6b907dea2a18d7b71da552a6b",
+        "716d99f20aebe7f378a5cf3a39196f493b0c0105",
+        "c996e039b48ee7cf9f9993812365bf6e09899a47",
+        "2eb505a5da96fe85486ada922f951af34f1476de",
+        "cc8ac93730f4432456e332aa714ecbc77919cdf2",
+        "16b58c8f4da9d1b1194f1d2d50818b822985c4d1",
+        "fe0ab70aa1706711be034d21ea9598bc16da44e7",
+        "4f7fce597bfb682f0e0e3a4ec2f619983a5b6704",
+        "d1fcb9e914b33d83f8d56f7f85d51cb6d3dd9258",
+        "0e1e58b94fc9561718b48ddf3cf4820dec4583fb",
+        "aa2b46e8d22635718eb33b22c160d7bef3aa80c6",
+        "58f4ebe3dcf675934e2847f14d1617be899ccbb6",
+        "927a7617ce26962a92e8ab2002cb85e1f8a17e57",
+        "f8c3408b785811068f1972e1ccb1a23676d19325",
+        "fc0ea5eac46386016a3bfc4d28435eaf0ea6e833",
+        "8a5a339e6f4c2d11b4190e746f6891d89d5e6e38",
+        "0a66593f8b89144ab01075925b434b4e0e8919c5",
+        "96a88d9e68b1e9b8bca54fc8d26e93b22ac69d29",
+        "96226fc4d46581154e02a71486a36c26766ec361",
+        "f74933c52041d60ddf9e652798ea39aa4de5b074",
+        "a6128ff9748918a48687db8ba2e9959d094a3162",
+        "ee2c2d135668d078fb72d204b08ef9f42925bf26",
+        "89880609fcc448fd6711c3f6ce0371f5d69998bc",
+        "06f3cd8dd452af7857a86dd680a2a48ddc4123e8",
+        "0eb75b72f4e2b1f56786a8e180c0bb671508e769",
+        "894f3f18aa55de137f8fffec6b46ba51be0986b4",
+        "52bc8bc4d1fe4deffde79b8368130fe0ae6e35f3",
+        "a972dfc5e16afb752db7213c1147ef7a6012f42b",
+        "7670eb3fcd881498af29b1608a433e7ce46c1333",
+        "e7ccd9d6bf5afd47f90f2d0033950ff66ad462f5",
+        "742c7317e66f65269bb34687f9069f2686d86aae",
+        "79cc566589b48494c5e1e4be47edfe5d94404c34",
+        "123888c5a946d8136ae4874e0c3543ebf7410467",
+        "855316560bb476df7818037d3d098cfc44d52d4a",
+        "763f0684b4dddded04a9a27abe97dbd12f754a34",
+        "30750f88bb76cd5d363eb84f72e117ce1446f940",
+        "f0e73878ecbaa7b63740d68ac66aa68c8cc14f49",
+        "97469b757ab2ed4236b24f1d27d877dead317ab3",
+        "88c65737b3d8155135aa0150ea0f5dfa915e3a57",
+        "90d7cacec62f3e4e3da9453892f266df1e270b5b",
+        "c07883bfed8e0af43773f0e062f325b1c63aabe7",
+        "6d2d15a461c199582792df7bb2a964b511c74c48",
+        "7cc17f28a630ad7c2ce2bf64fb308f1d4f7f4d31",
+        "c62ecec4bab346657b7a6b8749d313e5d2013109",
+        "7ea1e81c30581d781bda83e9f4df19e582530c96",
+        "470c9c7d51eaeddac107a279560581032bc8265c",
+        "efbe1b88ef860c749c9edf335b5a6ff31c8009a4",
+        "847e7d0b80ef5ee98c35725ee7227bf0730491e2",
+        "e9c254a7073c1011a78a0a00848e2b0d2cab0a97",
+        "1cacc5ac200d209ef4a2c126e98127876b4273dd",
+        "8883a7873272376934c48ccd9790a6fdd4af63e2",
+        "7d130296e5e719ad60dba15f9bccbe9b39bf1d25",
+        "aa9128fdf582e0e6fa53d27961b34cceaee8f87a",
+        "019409a7bbfb3824717e610b0b15b2b4c55a89e0",
+        "29b112d6931f0f858e490cf9e9da8b3b63d6dc1e",
+        "ec71672ba2ac504dedb0c1ca2a49f1687d8f4b32",
+        "38771988b18f582703fad174f623e8d3518a7e02",
+        "3c08db026b8507b277eb788d4c6f47e365f63a87",
+        "bb81e32f4d2aa8525972ff3cc425c91ac618c6dc",
+        "625e826c017c1de4edf87f39e3db2e0c0712bb6c",
+        "41e3cecafe6628349b8c177d3b1b9b78edac9013",
+        "2c3f2e5c1c09b08e709103467381047bf11244a5",
+        "5eba1f76c581e97037f9ede00fa8e15253a17863",
+        "e8992e36987a87f5aec6b95614b07d35f006a912",
+        "d6be80d4b6d3673f15805a9f0aeaae0dc555a6c0",
+        "ad135a164607dde708b7856e3ee0a7a0f6a3657a",
+        "09802b6521dff5e7bd766c9b3275a91159857062",
+        "e518188e6b5649fc9b44c16c7b8eac1cce12367f",
+        "36b59bb665105a9f95a6ebc558fb0c9bc74e3581",
+        "c805269720218360124e057403db9ff5338459d4",
+        "f6a3e95e764b43a01e334c5b8e6f6040aefb4bb8",
+        "6277c4c0ee576f5bfdcb2c5f33b8efebcf33d76f",
+        "94395813e80809ffbf074f6ccf9001d5feab49a0",
+        "c3665e78307933bd5f2486e0d2575aa3f8357e67",
+        "adac72ca75643c62737c95b98dc9d8657b739a77",
+        "91a835498d676b0c1c507f5865e9adc27a215c69",
+        "88f87b4bf46785aa9df1f715f1cc4e56ead33adf",
+        "f091b46f0be2616df55e553fd23181896a4ddb04",
+        "13b05424b5c2406ca575add0d56946fe06f76e71",
+        "40a38ca6428088c24beaaef5e4d13b8e541af776",
+        "c5c8f2d6b30ded7c719cd22cdb3f8850023b294c",
+        "551c3d55a25f0662b18d4a868f504a0ea8465e78",
+        "e4af6e0bd9f7a3bd345c3c919a3e026898bc875e",
+        "dba9c36348ebbdee8990299d48a7b0db47f0efbf",
+        "0ba027568fcfde0f65e45774764ef472458d677e",
+        "4dc6ae416df2c07e3b23ca41295879e0690108dc",
+        "b028235f99d80555da3f53458f6f041b9086dbea",
+        "650d6cc7226947c2b68d5cf221dd62f9df247ed9",
+        "fb81a73df18fe2411402a8f3fb684bdcd39404c9",
+        "264b7730e946459f81b041204eae8869ce3403f3",
+        "ea81c65d55d0c1b5f3d819720b1bffd4c0f0a042",
+        "a98bd6029a8ada877926de61b1a4ba94dd516b38",
+        "a5b9a44fdcca2c626059afa4136d2875003a9259"
+      ]
+    },
+    {
+      "Commit": "a56a99cc785959383157261a166b22f22f47a7f9",
+      "OriginalHead": "de4cddf0a3fc28b2e6959c91231cca796e2917fe",
+      "CombinedTree": "916ba374adb4e2a8ec77d29ff31e1ed5ccf6a5f8",
+      "OriginalCommits": [
+        "de4cddf0a3fc28b2e6959c91231cca796e2917fe",
+        "6ee7bfd03f231cc6cda8d638a446a5770b7f7119",
+        "183e6d119ef51dab262ed84af7d31eb77f9e073b",
+        "624135ed10f4915c1cadc7c3ab1fe30b3ad1e883",
+        "942c4f8d9d4849da5e82f08810d4f7fda228a1d8",
+        "3e11031aeefd31ea77c3df324ffa598a6799e980",
+        "f05f8d77ed0830375c2c04d931e1c0904a863b32",
+        "cefdb6cf3785ce610c3daa7df03e3bf53a4a6d2a",
+        "66ca19a1898b23c4c9ab4ef9b9f7a115e604b990",
+        "eeb760edac2dea6bf3a398f69bdd320e81ba499b"
+      ]
+    }
+  ],
+  "CompositionReview": {
+    "Conflicts": [
+      "KNOWN_ISSUES.md",
+      "devdocs/CurrentArchitecture/EditorHostProtocol.md",
+      "src/editor/EditorHost.cpp",
+      "src/editor/PlaySession.cpp"
+    ],
+    "Resolution": "Preserve both capability strings, independent RPC handlers and PlaySession accessors, and all known issue records. Retain auto-merged Input runtime initialization and 3M lifecycle.",
+    "AdditionalCorrection": "Read-only Input snapshot cannot expire unrelated authoring transactions; combined-session regression added.",
+    "DocumentationCorrection": "Qualify PR15 open-bounds wording as historical after separately qualified PR16 producer resolution.",
+    "Review": "Independent Engine reviewer checked dependency ancestry and combined ownership/dispatch/CMake paths; no remaining blocker in reviewed scope."
+  },
+  "Qualification": {
+    "State": "PENDING on this new combined source; upstream green checks do not qualify it",
+    "Required": [
+      "Focused Input/Script/streaming/geometry contracts",
+      "Complete Windows MSVC Release CTest",
+      "Complete Linux Clang 19 ASan/UBSan headless CTest",
+      "GNS ASan/UBSan/LSan matrix",
+      "Five separate Release reliable workload processes"
+    ],
+    "FinalReceipt": "Campaign Evidence directory records exact integration PR source, actual CI checkout/tree, final main and post-merge checks."
+  },
+  "PreservedDeferrals": [
+    "Historical Local32 and real-TLS Node32 physical certification is not restarted or promoted to this source",
+    "GPU, physical-display, broad provider/product and allocator qualification remain separately scoped",
+    "Foundation 3L core correctness acceptance and POOLED_CORRECTNESS_V1 remain preserved"
+  ],
+  "DeploymentSafety": "docs.yml deployment requires explicit workflow_dispatch on main with deploy=true; no deployment/release/publication is authorized. Native and GNS checks remain unchanged.",
+  "Retirement": "Do not close source PRs until this combined integration is qualified and main tree is verified. Existing branches/worktrees remain preserved; no branch deletion is authorized by stale metadata."
+}
