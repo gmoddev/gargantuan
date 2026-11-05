@@ -52,7 +52,7 @@ namespace {
 
 	struct Fixture final {
 		std::filesystem::path Root = std::filesystem::temp_directory_path() /
-			("gargantuan-package-spatial-" + std::to_string(
+			("g-cf-spatial-" + std::to_string(
 				std::chrono::steady_clock::now().time_since_epoch().count()));
 		std::filesystem::path ProjectRoot = Root / "Project";
 		std::unique_ptr<DiskFilesystem> Filesystem;

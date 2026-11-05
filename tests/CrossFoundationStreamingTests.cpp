@@ -140,7 +140,7 @@ namespace {
 
 	struct FixtureDirectory final {
 		std::filesystem::path Root = std::filesystem::temp_directory_path() /
-			("gargantuan-cross-foundation-" + std::to_string(Clock::now().time_since_epoch().count()));
+			("g-cf-stream-" + std::to_string(Clock::now().time_since_epoch().count()));
 		std::filesystem::path ProjectRoot = Root / "Project";
 		std::filesystem::path PackageRoot = Root / "Release";
 		FixtureDirectory() {
