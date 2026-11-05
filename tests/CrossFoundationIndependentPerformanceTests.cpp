@@ -238,6 +238,10 @@ int main(int ArgumentCount, char **Arguments) {
 			.OutputDirectory = Output,
 		});
 		const auto BuildUs = Microseconds(BuildStarted);
+		if (!Built.Ok || HasError(Built.Diagnostics))
+			for (const auto &Diagnostic : Built.Diagnostics)
+				std::cerr << "[Package:IndependentPerformance] diagnostic=" << Diagnostic.Code
+					<< " message=" << Diagnostic.Message << " item=" << Diagnostic.Item << '\n';
 		Require(Built.Ok && !HasError(Built.Diagnostics), "real Release package build failed");
 		const auto ValidateStarted = Clock::now();
 		const auto Validation = PackageBuilder::Validate(Output);
