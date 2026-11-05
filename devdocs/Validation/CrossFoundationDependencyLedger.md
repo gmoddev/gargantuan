@@ -1,7 +1,7 @@
 ---
 status: integration-in-progress
 owner: cross-foundation-integration
-last_verified: 2026-11-04
+last_verified: 2026-11-05
 ---
 
 # Cross-foundation dependency ledger
@@ -16,8 +16,8 @@ their combined behavior. Neither owner branch nor main is changed.
 | Foundation 3M, Engine PR13 | `470c9c7d51eaeddac107a279560581032bc8265c` | Verified current head; preserved ancestor of PR15 |
 | 3M streaming readiness, Engine PR15 | `96226fc4d46581154e02a71486a36c26766ec361` | Verified current head; Windows113/Linux69/GNS11 qualification; starting integration parent |
 | Common ancestor of PR14 and PR15 | `e682be08df84d776bfa455137728265c6494b5e8` | Documented common source; original histories preserved |
-| Studio PR8 | `d20aa9868b3b651809b359660b8d16d5e8eea43f` | Verified open in gmoddev/gargantuan-studio; presentation dependency only, no source imported |
-| Studio PR9 | `d1016d98eee2536dd798c83c4763cefed1d4a327` | Verified open in gmoddev/gargantuan-studio; presentation dependency only, no source imported |
+| Studio PR8 | `d20aa9868b3b651809b359660b8d16d5e8eea43f` | Verified open in GantriaEngine/gargantuan-studio after repository transfer; presentation dependency only, no source imported |
+| Studio PR9 | `d1016d98eee2536dd798c83c4763cefed1d4a327` | Verified open in GantriaEngine/gargantuan-studio after repository transfer; presentation dependency only, no source imported |
 
 The integration checkout is
 `C:\Users\aiden\.codex\worktrees\cross-foundation-integration`, branch
@@ -34,13 +34,20 @@ reviews, test results, performance and source identities will be recorded here
 as they are established. KI-3M-001 remains open until the authoritative producer
 and actual package/consumer regression are implemented and qualified.
 
-Worker preparation is local only. GodotLuau held the lease at campaign start
-and reported checked release at `2026-11-04T23:17:01Z`. This implementation
-root has no active reservation, transfer or remote process. Qualification must
-check and acquire the current host-local WorkerLeases ledger. A new private
-Sandbox namespace, fixed build recipe and explicit
-checked handoff are required before sustained worker execution. Compiler
-parallelism is capped at two; historical physical certification is out of scope.
+GodotLuau reported checked release at `2026-11-04T23:17:01Z`. The independent
+operator reconciled the expired migration hold using actual bounded workload
+inspection, then acquired host-local WorkerLeases generation 2 at
+`2026-11-04T23:52:42.735Z`. Source/build/artifacts are private Sandbox paths;
+compiler parallelism is two. Tokens remain private, renewal is bounded, and
+release requires checked owned-job reaping. This implementation root performs
+no parallel remote operation. Historical physical certification is out of scope.
+
+Windows worker source `de0cf4850eda262075d0741219b795508a30b10c`, tree
+`f55ff8c2e93678dfbf0a84a8e7540b80400beaa8`, passed all 18 strict executables.
+The diagnostic baseline is `54b3530b6705f424a241c0413e65a433402519b0`, with
+the identical performance fixture blob. Exact source/input seals, original failed
+attempts, measurements and hosted results are kept in
+[CrossFoundationQualification.md](CrossFoundationQualification.md) and PR16.
 
 ## Campaign coordination
 

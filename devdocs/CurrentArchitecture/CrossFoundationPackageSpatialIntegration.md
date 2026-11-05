@@ -15,8 +15,9 @@ related_adrs:
 
 This accepted integration design composes the exact independently qualified
 dependencies in the [ledger](../Validation/CrossFoundationDependencyLedger.md).
-Implementation and qualification are in progress; the design alone does not
-close KI-3M-001 or qualify the merged source.
+The implementation follows this design. Exact-source execution and KI-3M-001
+status are recorded in the [qualification report](../Validation/CrossFoundationQualification.md)
+and draft PR16; design text alone is not runtime evidence.
 
 ## One package producer and one spatial policy
 

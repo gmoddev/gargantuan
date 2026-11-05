@@ -6,7 +6,7 @@ open until its resolution criteria are implemented and verified.
 
 ## KI-3M-001: Packaged mesh coarse bounds need conservative geometry metadata
 
-- Status: Implemented in the cross-foundation integration candidate; runtime and hosted qualification pending.
+- Status: Fix implemented in integration PR16; exact-source qualification is recorded in the cross-foundation report.
 - Area: Package partition bounds / trusted spatial demand.
 - Relevant code: `src/packaging/PackageBuilder.cpp::InspectSerializedSubtree` and
   `src/render/RenderPublisher.cpp::ExtractMeshPart`.
@@ -44,8 +44,12 @@ Collision artifacts plus inherited Box coverage, retaining unsupported whole
 subtrees in bootstrap. Build and full Validate/Load rederive and bind the proof
 to verified bytes; a consistently rehashed historical underbound is a regression
 case. Geometry-aware standalone MeshPart relevance is separately included.
-These changes are source-reviewed, not yet runtime-qualified, so this entry is
-not marked closed and earlier PR13/PR15 evidence is not promoted.
+Actual Windows package/provider/physics/render/peer fixtures now exercise this
+correction, including offset imported/generated geometry and consistently
+rehashed historical underbounds. The [qualification report](devdocs/Validation/CrossFoundationQualification.md)
+and [draft PR16](https://github.com/gmoddev/gargantuan/pull/16) record exact-source
+results and closure status. This entry continues to describe the pinned PR15
+defect; earlier PR13/PR15 qualification is not promoted to the integration.
 
 ## KI-2B-001: Dense mesh rigid contacts can reach Box3D's candidate cap
 

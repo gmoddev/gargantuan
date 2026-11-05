@@ -109,6 +109,11 @@ fail visibly rather than silently truncating that fallback.
 
 Native metrics expose `GeometryBoundsRebuilds`, `GeometryVertexVisits`,
 `GeometryCacheEntries`, `GeometryCacheLogicalBytes` and `UnqualifiedMeshRoots`.
+`VerifySpatialIndex` recomputes expected transformed bounds from each root's
+cached local geometry, preserving exact projection/identity/pose checks. It is
+read-only and does not resolve assets or rescan vertices. The existing
+`UpdateCpuNanoseconds` counter uses a steady clock and measures elapsed update
+time, not OS thread/process CPU.
 The logical cache estimate is separate from total process/allocator memory.
 The envelope describes current canonical semantic geometry, not an old native
 physics shape retained by a failed projection update. That existing failure
