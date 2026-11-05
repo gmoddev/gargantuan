@@ -72,7 +72,7 @@ namespace {
 		TestWorkspace() {
 			const auto Suffix = std::to_string(Clock::now().time_since_epoch().count()) + "-" +
 				std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id()));
-			Root = Filesystem::temp_directory_path() / ("gargantuan-independent-performance-" + Suffix);
+			Root = Filesystem::temp_directory_path() / ("g-cf-perf-" + Suffix);
 			Filesystem::create_directory(Root);
 			ProjectRoot = Root / "project";
 			Filesystem::copy(Filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT), ProjectRoot,
