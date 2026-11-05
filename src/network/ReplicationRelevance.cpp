@@ -339,7 +339,8 @@ namespace gargantuan::network {
 		}
 
 		std::optional<SpatialBounds> BoundsOf(const std::shared_ptr<Instance> &Object,
-			SpatialEntry *Entry = nullptr) const {
+			const SpatialEntry *Entry = nullptr, bool *Qualified = nullptr) const {
+			if (Qualified) *Qualified = false;
 			if (auto CharacterValue = std::dynamic_pointer_cast<Character>(Object))
 				return SpatialBounds::Point(glm::dvec3(CharacterValue->GetPosition()));
 			if (auto Mesh = std::dynamic_pointer_cast<MeshPart>(Object)) {
@@ -347,10 +348,9 @@ namespace gargantuan::network {
 					(Mesh->GetCollisionMode() != Enums::MeshCollisionMode::StaticMesh ||
 						Entry->MeshLocal->HasCollision))
 					if (const auto Bounds = TransformedMeshBounds(*Mesh, Entry->MeshLocal->Bounds)) {
-						Entry->QualifiedBounds = true;
+						if (Qualified) *Qualified = true;
 						return Bounds;
 					}
-				if (Entry) Entry->QualifiedBounds = false;
 				const auto Box = PartBounds(*Mesh);
 				return Box.IsValid() ? std::optional(Box) :
 					std::optional(SpatialBounds::Point(glm::dvec3(Mesh->GetCFrame().Position)));
@@ -375,7 +375,7 @@ namespace gargantuan::network {
 				Entry.MeshLocal = ResolveGeometry(*std::dynamic_pointer_cast<MeshPart>(Object));
 			}
 			auto Pose = PoseOf(Object);
-			auto Bounds = BoundsOf(Object, &Entry);
+			auto Bounds = BoundsOf(Object, &Entry, &Entry.QualifiedBounds);
 			if (!Pose || !Finite(Pose->Position) || !Bounds) {
 				Fail("Spatial object has invalid authoritative bounds");
 				return false;
@@ -510,7 +510,7 @@ namespace gargantuan::network {
 				Found->second.GeometryDirty = false;
 			}
 			auto Pose = PoseOf(InstanceValue);
-			auto Bounds = BoundsOf(InstanceValue, &Found->second);
+			auto Bounds = BoundsOf(InstanceValue, &Found->second, &Found->second.QualifiedBounds);
 			if (Found->second.MeshRoot) {
 				if (Found->second.QualifiedBounds) UnqualifiedMeshRoots.erase(Object);
 				else UnqualifiedMeshRoots.insert(Object);
@@ -1023,8 +1023,10 @@ namespace gargantuan::network {
 			auto InstanceValue = Entry.Object.lock();
 			const auto *Projection = State->Spatial.Get(Object);
 			auto Pose = State->PoseOf(InstanceValue);
-			auto Bounds = State->BoundsOf(InstanceValue);
+			bool QualifiedBounds = false;
+			auto Bounds = State->BoundsOf(InstanceValue, &Entry, &QualifiedBounds);
 			if (!InstanceValue || !Projection || !Pose || !Bounds ||
+				(Entry.MeshRoot && Entry.QualifiedBounds != QualifiedBounds) ||
 				ObjectRegistry::Get().Lookup(Object).get() != InstanceValue.get() ||
 				Projection->Pose.Space != State->Spatial.GetDefaultSpace() ||
 				!Projection->Pose.LocalTransform.FuzzyEq(*Pose) ||
