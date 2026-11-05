@@ -32,7 +32,7 @@ int main() {
 			++Checks;
 		};
 		EditorHost Host("cross-inspection");
-		auto Call = [&](const char *Method, Json Parameters = Json::object(), const char *Token = "cross-inspection") {
+		auto Call = [&](const char *Method, Json Parameters, const char *Token = "cross-inspection") {
 			return Json::parse(Host.HandleRequest(Json{
 				{"Version", EditorHostProtocolVersion}, {"RequestId", std::to_string(++Sequence)},
 				{"SessionToken", Token}, {"Method", Method}, {"Params", std::move(Parameters)},
@@ -57,7 +57,7 @@ int main() {
 		}
 		auto Imported = Call("ImportAsset", {{"Source", "assets/offset.obj"}, {"Kind", "Mesh"}});
 		Check(Imported["Ok"] && Imported["Result"]["OperationSucceeded"], "Import canonical Mesh/Collision pair");
-		const auto State = Call("GetProjectState")["Result"];
+		const auto State = Call("GetProjectState", Json::object())["Result"];
 		auto Catalog = Call("GetAssetCatalog", {{"IncludeBuiltIns", false}});
 		Check(Catalog["Ok"] && Catalog["Result"]["CatalogVersion"] == 2, "Existing catalog version is preserved");
 		Json Mesh, Collision;
@@ -87,7 +87,7 @@ int main() {
 			!Collision["ContentId"].is_null() && Collision["ContentRevision"].get<std::uint64_t>() > 0,
 			"Declared collision identity remains associated with each exact catalog content revision");
 		Check(Call("GetAssetCatalog", {{"IncludeBuiltIns", false}})["Result"] == Catalog["Result"] &&
-			Call("GetProjectState")["Result"] == State,
+			Call("GetProjectState", Json::object())["Result"] == State,
 			"Repeated inspection is stable and changes no authoring state or history");
 		std::filesystem::copy_file(std::filesystem::path(GARGANTUAN_ANIMATION_PREVIEW_FIXTURE), Root / "assets" / "rig.gltf");
 		auto RigImport = Call("ImportAsset", {{"Source", "assets/rig.gltf"}});
