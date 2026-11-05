@@ -70,6 +70,8 @@ namespace gargantuan {
 		std::string ProjectJson;
 		std::optional<std::string> PreRunSource;
 		AssetRuntimeSnapshot Assets;
+		// Native capture observation only; includes lazy canonical mesh decoding.
+		std::chrono::microseconds SpatialInspectionDuration{};
 		struct ContentUnit final {
 			PackageContentEntry Entry;
 			std::string Payload;

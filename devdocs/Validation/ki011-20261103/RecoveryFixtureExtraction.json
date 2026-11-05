@@ -1,0 +1,35 @@
+{
+  "Scope": "Execute the actual embedded Luau fixture across explicit native raw-literal addition boundaries",
+  "BaselineHead": "624135ed10f4915c1cadc7c3ab1fe30b3ad1e883",
+  "FailedHostedMergeCheckout": "e797950b04d88634ac58137fcc015a8e049dd5f1",
+  "FailedHostedRun": 41609236180,
+  "FailedHostedJob": 125826660880,
+  "FirstFailure": "Recovery tooling extracted only the first client raw-literal chunk, producing incomplete Luau: line394 Expected ')' to close '(' at line391, got 'local'",
+  "NativeCTest": "106/106 passed before this independent tooling step; SoftBody passed in0.35s",
+  "PayloadProof": [
+    {
+      "Script": "ServerScript",
+      "Bytes": 12020,
+      "BeforeChunkingSHA256": "B7B7191E188A93833B849DF1451F124A24D76225A68B51FE11910EDB0C344A28",
+      "ExtractedSHA256": "B7B7191E188A93833B849DF1451F124A24D76225A68B51FE11910EDB0C344A28"
+    },
+    {
+      "Script": "ClientScript",
+      "Bytes": 45244,
+      "BeforeChunkingSHA256": "E5442D65B289B4EA36E00FCF568A5A07B06855A3A76E8EBFC58CF76E149745F8",
+      "ExtractedSHA256": "E5442D65B289B4EA36E00FCF568A5A07B06855A3A76E8EBFC58CF76E149745F8"
+    }
+  ],
+  "Validation": [
+    "Pinned Lute1.0.0 executes actual client/server scope, recovery, pacing, cohort and notification checks successfully",
+    "Historical missing-client-tick negative control still fails at the exact fifth formatting argument",
+    "Single/chunked extraction preserves an exact CRLF-bearing probe payload",
+    "Unsupported chunk operators and trailing native expressions fail closed",
+    "git diff --check passes"
+  ],
+  "Reproduce": [
+    "pwsh -NoProfile -File tests/ContentScaleGameplayRecoveryTests.ps1 -LutePath <pinned-lute-1.0.0>",
+    "pwsh -NoProfile -File tests/ContentScaleGameplayRecoveryTests.ps1 -LutePath <pinned-lute-1.0.0> -ReproduceMissingClientTick"
+  ],
+  "Limits": "This repairs the demonstrated extraction boundary. It does not qualify skipped subsequent hosted workload steps or resolve the independent KI-011 soft-body timing premise. Production fixture payload, traffic, thresholds and physics algorithms are unchanged."
+}

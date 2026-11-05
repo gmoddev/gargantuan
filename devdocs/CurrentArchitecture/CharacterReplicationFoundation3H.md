@@ -84,6 +84,10 @@ The current canonical roots remain intentionally narrow:
   transform; all Character descendants belong to that replication root;
 - outside a Character, a `BasePart` owns its rotated world-axis-aligned bounds
   and its non-spatial descendants;
+- standalone MeshParts extend that envelope with transformed canonical Mesh
+  and declared Collision geometry under the owning 3E integration; their exact
+  distance test uses the AABB. Unknown mesh coverage is an explicit bounded
+  3E fallback reason, without synthetic large-object geometry;
 - Player/session objects, Remotes, services, Models without a canonical
   aggregate bounds owner, and other non-spatial Instances stay global under
   3E policy.

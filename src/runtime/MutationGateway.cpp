@@ -968,7 +968,7 @@ namespace gargantuan {
 							InstanceSerialization::DeserializationState State;
 							{
 								ScopedChangeJournalSuppression Suppression;
-								State = InstanceSerialization::DeserializeDetached(
+								State = InstanceSerialization::DeserializeClone(
 									InstanceSerialization::InstanceFormat::Json, Input
 								);
 							}
@@ -980,6 +980,9 @@ namespace gargantuan {
 								};
 							auto Clone = State.Instance;
 							Clone->MarkPersistenceSubtreeArchivable();
+							// History restores this duplicate's logical resource identities,
+							// rather than reusing the source Script's identities on Redo.
+							Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Clone);
 							if (Authority.GetOrigin() == MutationCommandOrigin::Studio &&
 								Encoded.size() > MaximumTransactionSubtreeBytes)
 								return {

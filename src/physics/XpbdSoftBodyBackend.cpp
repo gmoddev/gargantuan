@@ -5,6 +5,7 @@
 
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
+#include "physics/SoftBodyTestHooks.hpp"
 
 #include <algorithm>
 #include <array>
@@ -835,8 +836,11 @@ namespace gargantuan {
 
 		class XpbdSoftBodyBackend final : public ISoftBodyBackend {
 		  public:
-			explicit XpbdSoftBodyBackend(SoftBodyWorldLimits LimitsValue)
-				: Limits(LimitsValue), Jobs(DefaultWorkerCount(LimitsValue)) {
+			explicit XpbdSoftBodyBackend(
+				SoftBodyWorldLimits LimitsValue,
+				std::unique_ptr<const detail::SoftBodyStepTestHooks> HooksValue = {}
+			)
+				: Limits(LimitsValue), Jobs(DefaultWorkerCount(LimitsValue)), TestHooks(std::move(HooksValue)) {
 				if (Limits.MaximumBodies == 0 || Limits.MaximumVerticesPerBody == 0 ||
 					Limits.MaximumWorldVertices == 0 || Limits.MaximumConstraints == 0 ||
 					Limits.MaximumAttachments == 0 || Limits.MaximumColliders == 0 || Limits.MaximumWorkers == 0 ||
@@ -1009,6 +1013,7 @@ namespace gargantuan {
 
 				std::shared_ptr<SoftBodySimulationBatch> Batch;
 				try {
+					if (TestHooks && TestHooks->StepAdmitted) TestHooks->StepAdmitted();
 					const auto SnapshotStart = ProfileClock::now();
 					Batch = std::make_shared<SoftBodySimulationBatch>();
 					Batch->DeltaTime = Config.DeltaTime;
@@ -1111,6 +1116,7 @@ namespace gargantuan {
 						WorkerWindowNanoseconds = Nanoseconds(ProfileClock::now() - WindowStart);
 					}
 
+					if (TestHooks && TestHooks->BeforeMerge) TestHooks->BeforeMerge(Result.Profile);
 					const auto MergeStart = ProfileClock::now();
 					std::uint64_t WorkerNanoseconds = 0;
 					{
@@ -1215,6 +1221,7 @@ namespace gargantuan {
 		  private:
 			SoftBodyWorldLimits Limits;
 			JobSystem Jobs;
+			const std::unique_ptr<const detail::SoftBodyStepTestHooks> TestHooks;
 			mutable std::mutex Mutex;
 			std::condition_variable StepCompleted;
 			std::vector<SoftBodySlot> Slots = std::vector<SoftBodySlot>(1);
@@ -1265,5 +1272,14 @@ namespace gargantuan {
 
 	std::unique_ptr<ISoftBodyBackend> CreateSoftBodyBackend(SoftBodyWorldLimits Limits) {
 		return std::make_unique<XpbdSoftBodyBackend>(Limits);
+	}
+
+	std::unique_ptr<ISoftBodyBackend> detail::CreateSoftBodyBackendForTesting(
+		SoftBodyStepTestHooks Hooks,
+		SoftBodyWorldLimits Limits
+	) {
+		return std::make_unique<XpbdSoftBodyBackend>(
+			Limits, std::make_unique<const SoftBodyStepTestHooks>(std::move(Hooks))
+		);
 	}
 }

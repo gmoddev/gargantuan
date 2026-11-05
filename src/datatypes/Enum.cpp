@@ -12,6 +12,15 @@
 #include <string_view>
 
 namespace gargantuan {
+	namespace {
+		int EqualEnumItems(lua_State *L, EnumItem *Left) {
+			if (!StackValue<EnumItem>::Is(L, 2)) { lua_pushboolean(L, false); return 1; }
+			const auto Right = StackValue<EnumItem>::From(L, 2);
+			lua_pushboolean(L, Left->EnumType && Right.EnumType &&
+				Left->EnumType->Name == Right.EnumType->Name && Left->Value == Right.Value);
+			return 1;
+		}
+	}
 	G_USERDATA_IMPL(
 		EnumItem,
 		.Tag = UserdataTag::EnumItem,
@@ -24,6 +33,7 @@ namespace gargantuan {
 			},
 		.Methods = {
 			{"__tostring", Method{&EnumItem::LTostring}},
+			{"__eq", Method{&EqualEnumItems}},
 		}
 	);
 

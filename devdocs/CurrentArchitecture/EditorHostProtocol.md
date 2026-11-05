@@ -95,9 +95,12 @@ UTF-8 bytes with no NUL.
 | `CommitTransaction` | Commits the exact owned open group, advances one revision, and releases its journal batch. |
 | `Undo` / `Redo` | Traverses only the current engine history cursor entry and publishes ordinary authoritative journal state. |
 | `GetScriptSource` | Reads exact bounded Source plus its conflict token for one live supported script ObjectId. |
+| `GetScriptBinding` / `ResolveScriptBinding` | Optional `ScriptDocumentBinding`; obtains or resolves a version-1 project/SourceId/class binding to a fresh authoring ObjectId, without source or persistence mutation. See [Script document bindings](ScriptDocumentBindings.md). |
 | `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion and optional project `ExpectedRevision`. |
 | `StartPlaySession` / `StopPlaySession` | Starts or destroys the one isolated local runtime from current authoritative in-memory state using an exact engine-issued session identity. |
 | `GetPlaySessionState` / `PollPlayDiagnostics` | Observes bounded lifecycle and runtime diagnostics without granting mutation authority. |
+| `ConfigureStreamingDiagnostics` / `GetStreamingDiagnostics` | Optional version-1, exact-Play-session opt-in collection and bounded read-only residency diagnostics. |
+| `GetPlayInputSnapshot` | Optional `PlayInputInspection` capability; returns an owned input diagnostic snapshot v1 for the exact running `PlaySessionId`, requiring `ReadDataModel`. |
 | `SendPlayInput` | Sends the closed focus/key/pointer/wheel/touch/committed-text/preedit `HostEvent` subset to the exact active runtime and returns any bounded relative-pointer or text-input host state, including secure/multiline/autocorrect policy without text contents. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
@@ -164,6 +167,106 @@ Replacing an open project closes and releases the prior live DataModel and
 viewport snapshot before entering the next schema candidate lifecycle. If the
 replacement PreRun or project load fails, no old world remains live against the
 new or prior registry; a later `OpenProject` may construct a fresh document.
+
+## Streaming diagnostics extension, version 1
+
+`Handshake.Result.Capabilities` contains `StreamingDiagnostics` and
+`Handshake.Result.StreamingDiagnosticsVersion` is `1` on a supporting host.
+This is an optional protocol-1 extension. Clients must check both before using
+it. The launch `SessionToken` still applies to every call. The method further
+requires `ReadDataModel`; configuration also requires `EditorCommands`. Neither
+method accepts an object, content key, focus, provider, priority, acquisition
+command or project mutation. There is no Studio-side implementation in this
+repository.
+
+`ConfigureStreamingDiagnostics.Params` has exactly `PlaySessionId` and
+`Enabled`. `PlaySessionId` is the canonical decimal string issued by
+`StartPlaySession`; it must name the currently active owned session. `Enabled`
+is required boolean. The call opts a fixed native timing ring in or out and
+returns the same bounded snapshot envelope as a read. Collection is disabled
+by default; disabling drops its history. This operation does not edit the
+authoritative document or journal. It and `GetStreamingDiagnostics` are exempt
+from the ordinary legacy transaction-expiry check, so observation cannot
+commit an unrelated expired authoring group.
+
+`GetStreamingDiagnostics.Params` requires that exact `PlaySessionId` and accepts
+only optional unsigned `StartIndex` (default `0`, maximum `65,536`),
+`MaximumUnits` (default `64`, maximum `128`) and `MaximumTimingSamples`
+(default `32`, maximum `128`). Zero is valid for either count. `StartIndex`
+denotes a manifest index, not an offset into a materialized result. Returned
+`Policy.Units` are ordered by manifest index, include only current demand
+records at or after it, and contain at most `MaximumUnits` rows. `NextIndex`
+is the next index or null; use it for the next page. `Policy.TimingSamples` is a
+chronological tail of at most `MaximumTimingSamples` samples from a fixed
+128-sample ring. A read never advances policy evaluation or simulation.
+
+Both successes return `Result.PlaySessionId` and `Result.Diagnostics`. The
+diagnostic object has `Version: 1`, `Enabled`, `Status`, `SimulationTick`,
+`ContentConfigured`, `ManifestAvailable`, `LastContentStepNanoseconds`,
+`Policy`, and `Content`. Status is one of `Disabled`, `NotConfigured`,
+`AwaitingManifest`, `Preparing`, `Active`, `PreparationFailed`, or `Stopped`.
+When disabled, the projection carries no policy rows or timing history. A Play
+session without an on-demand server policy can report `NotConfigured`; the
+extension does not create a streaming provider or policy.
+
+`Policy` includes `Enabled`, `Stopped`, `Tick`, `Revision`, `ManifestUnits`,
+`Focuses`, `PendingFocuses`, `UnhealthyFocuses`, `Candidates`, `DemandRecords`,
+`FocusContributionRecords`, `DesiredUnits`, `GraceExpiryRecords`, `OwnedRequests`, `PendingDeltas`,
+`Requests`, `Releases`, `RequestDeferrals`, `StaleDecisions`, `QueryFailures`,
+`ServiceBindingFailures`, `BudgetLimitedTicks`, `MemoryAccounting`,
+`TimingAccounting`, `PackageNamespace`, `BoundsAccounting`, the three
+logical-byte fields, `Limits`, `Units`, `NextIndex`, and `TimingSamples`.
+`MemoryAccounting` is `LogicalPayloadV1`; `PolicyStateLogicalBytes`,
+`ReferencedManifestEntryBytes`, and `IndexMembershipPayloadBytes` omit
+allocator, container-node, map-cell and separately allocated string overhead.
+`FocusContributionRecords` counts attached committed focus contributions
+through the bounded focus maps; the logical policy estimate includes their
+demand-map and ranked-focus-set pair payloads. `TimingAccounting` is
+`CorePhasesExcludeObservation`. `PackageNamespace` has nullable `ProjectId`
+and unsigned `PackageVersion`; it is empty when there is no observed policy.
+`BoundsAccounting` is `ManifestCoarseBoundsV1`, identifying the existing
+immutable manifest representation rather than granting producer trust.
+`Limits` contains `Focuses`, `CandidatesPerFocus`, `QueryPagesPerTick`,
+`QueryCellsPerTick`, `MembershipVisitsPerTick`, `DemandDeltasPerTick`,
+`CandidateRevalidationsPerTick`, and `RequestEligibilityVisitsPerTick`.
+
+Each unit row contains `ManifestIndex`, `Key`, `Class` (`Critical`, `Gameplay`,
+`Predictive`, `Presentation`, or `Speculative`), nullable `DeadlineTick`,
+`Revision`, `DistanceSquared`, `CostBytes`, `Desired`, `PolicyRequestOwned`,
+`InGrace`, nullable `AvailabilityState`, nullable `GraceUntilTick`, and
+`PendingRelease`. Additive version-1 fields are nullable canonical hex
+`ContentDigest`, `PackageSpaceKey`, and nullable `CoarseBounds` with finite
+three-component `Minimum` and `Maximum` arrays. They copy exactly the unit's
+manifest entry, share the existing 128-unit page limit and remain present only
+for returned demand rows; they do not enumerate all package geometry or expose
+provider paths. Availability states are the existing 3L states from
+`Unavailable` through `Failed`; a policy-owned request does not imply a
+resident unit or a peer Known state. Timing rows contain `Tick`,
+`EvaluationNanoseconds`, `ReconciliationNanoseconds`, `MembershipVisits`,
+`Requests`, `Releases`, and `BudgetFlags`. Set budget bits identify cells (1),
+memberships (2), focus pages (4), demand deltas (16), and request eligibility
+visits (32). Bit 8 is defined for candidate revalidation but this implementation
+does not emit it. The phase durations end before observer aggregation and JSON
+encoding.
+
+`Content` has `Stopped`, `Requests`, `Acquisitions`, `Admissions`, `Evictions`, `Failures`,
+`Cancellations`, `CacheHits`, `CompletionCapacityDeferrals`,
+`AdmissionDeferrals`, `DecodedCapacityDeferrals`, `ReservedCompletionBytes`,
+`CachedPayloadBytes`, `DecodedDocumentBytes`, and `RetainedRecords`. Its
+`Timing` fields are `AcceptedToQueued`, `QueuedToProviderStart`,
+`Provider`, `Verification`, `WorkerPreparation`, `PreparationToCommit`,
+`Commit`, `EndToEnd`, and `Step`, each with `Samples`, `TotalMicroseconds`,
+and `MaximumMicroseconds`. Provider duration includes the provider boundary;
+these values do not include a remote client's materialization or presentation.
+When `Content.Stopped` is true, Engine immediately reports `Status: "Stopped"`
+and omits stale policy rows, even before its next simulation step.
+
+Unknown fields, negative/nonintegral/oversized counts, a missing or invalid
+`Enabled`, and the ordinary malformed envelope return `MalformedRequest`.
+Wrong launch token or missing capability returns `Unauthorized`. An absent,
+stopped or mismatched Play session returns `StalePlaySession`. The usual 1 MiB
+request and 8 MiB response limits still apply. The response carries only
+bounded value data; it exposes no provider credentials or raw engine pointer.
 
 ## Prepared native property batches, capability version 1
 
@@ -303,6 +406,27 @@ not imply partial batch installation.
 This is Engine API exposure only. Studio multi-object Properties UX is a separate
 task gated on the [final-source qualification receipt](./PreparedPropertyCommitValidation.md#editorhost-exposure-qualification).
 
+## Asset-local geometry inspection, version 1
+
+The existing `GetAssetCatalog` response retains `CatalogVersion: 2` and its
+existing session token, `ReadDataModel` capability and catalog/resource limits.
+Mesh and Collision records add `Metadata.GeometryInspectionVersion: 1` and
+`LocalBounds`, containing `Space: AssetLocal`, three-component `Minimum` and
+`Maximum` arrays, and `Coverage`. Coverage is `DeclaredMesh`,
+`DeclaredBindPose` for skinned Meshes, or `DeclaredCollision`. These are stored
+canonical asset declarations. They are not a package-space aggregate, animation
+envelope, geometry-validation verdict or native readiness proof.
+
+Mesh metadata additionally contains nullable `CollisionAssetId`, the declared
+explicit dependency. The referenced Collision catalog row supplies its own
+`ContentId` and `ContentRevision`; callers must not substitute the Mesh revision
+for the Collision revision. Collision metadata includes
+`Representation: StaticTriangles`, `VertexCount` and `IndexCount`. No vertices,
+triangles, mutable asset pointers or native shape handles are returned. The
+extension adds only fixed-size geometry values to each existing bounded record
+and performs no resolver, filesystem or physics operation. All geometry
+compilation/import commands and their existing capabilities remain unchanged.
+
 ## Licensing and repository contract
 
 - Gargantuan and EditorHost remain public MPL-2.0 code.
@@ -321,6 +445,8 @@ mutation, persistence, transactions, and Undo/Redo are implemented. Script
 authoring uses project-v4 persistence and a journaled SourceVersion invalidation
 without exposing Source through ordinary snapshots or gameplay replication.
 Minimal isolated Play/Stop is implemented in [PlaySession.md](./PlaySession.md).
+The optional [Play input inspection contract](./PlayInputInspection.md) exposes
+bounded latest-state diagnostics, separately scoped from authoring identity.
 The next creator-loop increment may build a first playable vertical slice on that
 boundary; project revision remains separate from play identity, transaction identity,
 source version, and journal sequence.

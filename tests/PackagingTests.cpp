@@ -1,6 +1,7 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
@@ -146,6 +147,16 @@ int main() {
 			"project identity did not remain stable across reopen"
 		);
 		auto World = ProjectValue.DeserializeGame();
+		// The sample's dynamic and skinned subtrees correctly remain bootstrap.
+		// Give this partition/determinism fixture an explicitly static unit.
+		auto StaticContent = std::make_shared<Part>();
+		StaticContent->SetName("PackagingStaticFixture");
+		StaticContent->SetArchivable(true);
+		StaticContent->SetAnchored(true);
+		StaticContent->SetCFrame(CFrame(10000, 0, 0));
+		auto ContentRoot = World->FindFirstChildOfClass("Workspace", false);
+		Require(ContentRoot != nullptr, "packaging fixture has no Workspace");
+		StaticContent->SetParent(ContentRoot);
 		World->InitializeLoadedProjectRevision();
 		World->Root = Workspace.ProjectRoot;
 		World->Filesystem = &Filesystem;

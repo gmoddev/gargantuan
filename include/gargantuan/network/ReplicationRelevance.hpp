@@ -91,6 +91,11 @@ namespace gargantuan::network {
 		std::uint64_t MaximumPendingAgeTicks = 0;
 		std::uint64_t StagingBytes = 0;
 		std::uint64_t CharacterCandidateBytes = 0;
+		std::uint64_t GeometryBoundsRebuilds = 0;
+		std::uint64_t GeometryVertexVisits = 0;
+		std::uint64_t GeometryCacheEntries = 0;
+		std::uint64_t GeometryCacheLogicalBytes = 0;
+		std::uint64_t UnqualifiedMeshRoots = 0;
 	};
 
 	class ReplicationRelevance final {

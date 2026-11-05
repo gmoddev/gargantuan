@@ -22,9 +22,11 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/InputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "serialization/JsonCodec.hpp"
 #include "runtime/PreparedPropertyCommit.hpp"
+#include "editor/StreamingDiagnosticsEncoding.hpp"
 
 #include <algorithm>
 #include <array>
@@ -75,6 +77,27 @@ namespace gargantuan {
 				if (std::find(allowed.begin(), allowed.end(), name) == allowed.end()) return false;
 			}
 			return true;
+		}
+
+		[[nodiscard]] constexpr bool IsPlayPhysicalKey(std::uint32_t Value) {
+			return Value == static_cast<std::uint32_t>(PhysicalKey::Unknown) ||
+				(Value >= static_cast<std::uint32_t>(PhysicalKey::A) && Value <= static_cast<std::uint32_t>(PhysicalKey::Space)) ||
+				(Value >= static_cast<std::uint32_t>(PhysicalKey::Right) && Value <= static_cast<std::uint32_t>(PhysicalKey::Up)) ||
+				(Value >= static_cast<std::uint32_t>(PhysicalKey::LeftControl) && Value <= static_cast<std::uint32_t>(PhysicalKey::RightMeta));
+		}
+
+		[[nodiscard]] constexpr bool IsPlayLogicalKey(std::uint32_t Value) {
+			return Value == static_cast<std::uint32_t>(LogicalKey::Backspace) ||
+				Value == static_cast<std::uint32_t>(LogicalKey::Tab) ||
+				(Value >= static_cast<std::uint32_t>(LogicalKey::Clear) && Value <= static_cast<std::uint32_t>(LogicalKey::Return)) ||
+				Value == static_cast<std::uint32_t>(LogicalKey::Pause) ||
+				Value == static_cast<std::uint32_t>(LogicalKey::Escape) ||
+				Value == static_cast<std::uint32_t>(LogicalKey::Space) ||
+				(Value >= static_cast<std::uint32_t>(LogicalKey::QuotedDouble) && Value <= static_cast<std::uint32_t>(LogicalKey::At)) ||
+				(Value >= static_cast<std::uint32_t>(LogicalKey::LeftBracket) && Value <= static_cast<std::uint32_t>(LogicalKey::Delete)) ||
+				(Value >= static_cast<std::uint32_t>(LogicalKey::KeypadZero) && Value <= static_cast<std::uint32_t>(LogicalKey::F15)) ||
+				(Value >= static_cast<std::uint32_t>(LogicalKey::NumLock) && Value <= static_cast<std::uint32_t>(LogicalKey::Undo)) ||
+				Value == static_cast<std::uint32_t>(LogicalKey::Unknown);
 		}
 
 		Json ErrorResponse(const Json &requestId, std::string code, std::string message) {
@@ -429,6 +452,96 @@ namespace gargantuan {
 			return PlaySessionId{Parsed};
 		}
 
+		struct ScriptResourceLookup {
+			std::shared_ptr<LuaSourceContainer> Script;
+			const char *Error = nullptr;
+		};
+
+		ScriptResourceLookup FindScriptResource(const std::shared_ptr<DataModel> &World, std::string_view SourceId) {
+			// Disposable bounded traversal of the canonical graph, never a second
+			// durable registry. Only a fully persistent ancestor chain can reopen.
+			std::vector<std::pair<std::shared_ptr<Instance>, bool>> Pending{{World, true}};
+			std::shared_ptr<LuaSourceContainer> Match;
+			std::size_t Visited = 0;
+			while (!Pending.empty()) {
+				auto [Object, Persistent] = std::move(Pending.back());
+				Pending.pop_back();
+				if (++Visited > MaximumPersistenceObjects ||
+					Object->Children.size() > MaximumPersistenceObjects - Visited - Pending.size())
+					return {{}, "ResourceLimit"};
+				if (Object->GetDestroyed() || Object->GetReplicationScopeId() != World->GetObjectId()) continue;
+				Persistent = Persistent && Object->GetArchivable();
+				if (Persistent) if (auto Script = std::dynamic_pointer_cast<LuaSourceContainer>(Object);
+					Script && Script->GetSourceId() == SourceId) {
+					if (Match) return {{}, "AmbiguousResource"};
+					Match = std::move(Script);
+				}
+				for (const auto &Child : Object->Children) Pending.emplace_back(Child, Persistent);
+			}
+			return {std::move(Match), nullptr};
+		}
+
+		Json EncodeScriptBinding(const Project &ProjectValue, const std::shared_ptr<LuaSourceContainer> &Script) {
+			const auto *Definition = InstanceClassRegistry::GetDefinition(Script.get());
+			return {{"Version", 1}, {"ProjectId", ProjectValue.Identity.ToString()}, {"SourceId", Script->GetSourceId()},
+				{"ClassSchemaId", Definition->Id.ToString()}, {"ClassDefinitionVersion", Definition->DefinitionVersion}};
+		}
+
+		Json EncodeScriptBindingResult(const Project &ProjectValue, const std::shared_ptr<DataModel> &World,
+			std::uint64_t PersistedRevision, const std::shared_ptr<LuaSourceContainer> &Script) {
+			return {{"Binding", EncodeScriptBinding(ProjectValue, Script)},
+				{"Object", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Script->GetObjectId()))},
+				{"Scope", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()))},
+				{"ProjectId", ProjectValue.Identity.ToString()}, {"AuthoritativeRevision", World->GetAuthoritativeRevision()},
+				{"PersistedRevision", PersistedRevision}, {"IdentityOrigin", Script->WasSourceIdLoaded() ? "Loaded" : "Generated"}};
+		}
+
+		Json EncodePlayInputSnapshot(const std::shared_ptr<DataModel> &RuntimeWorld, InputService &Input) {
+			const auto Snapshot = Input.Inspect();
+			const auto EncodeId = [](ObjectId Id) -> Json {
+				return Id.IsValid() ? Json(JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Id))) : Json(nullptr);
+			};
+			const auto Label = [&](ObjectId Id) -> std::string {
+				const auto Object = ObjectRegistry::Get().Lookup(Id);
+				if (!Object || Object->GetReplicationScopeId() != RuntimeWorld->GetObjectId()) return {};
+				const auto &Name = Object->GetName();
+				// Labels are presentation only. Never truncate a UTF-8 sequence or use a label as identity.
+				return Name.size() <= 256 ? Name : "[name exceeds inspection limit]";
+			};
+			Json Result = {
+				{"Version", 1}, {"Scope", EncodeId(RuntimeWorld->GetObjectId())},
+				{"Revision", Snapshot.Stats.Revision}, {"MemoryBytes", Snapshot.Stats.MemoryBytes},
+				{"Modifiers", Snapshot.Modifiers}, {"PressedKeys", Snapshot.PressedKeys},
+				{"Contexts", Json::array()}, {"Actions", Json::array()}, {"Bindings", Json::array()},
+				{"ValidationErrors", Input.GetValidationErrors()},
+			};
+			for (const auto &Context : Snapshot.Contexts) Result["Contexts"].push_back({
+				{"Id", EncodeId(Context.Id)}, {"Name", Label(Context.Id)},
+				{"Enabled", Context.Enabled}, {"Priority", Context.Priority}, {"Consume", Context.Consume},
+			});
+			for (const auto &Action : Snapshot.Actions) Result["Actions"].push_back({
+				{"Id", EncodeId(Action.Definition.Id)}, {"Context", EncodeId(Action.Definition.Context)},
+				{"Name", Label(Action.Definition.Id)},
+				{"Enabled", Action.Definition.Enabled}, {"Type", magic_enum::enum_name(Action.Definition.ValueType)},
+				{"Down", Action.State.Down}, {"Value", Action.State.Value},
+				{"Vector", {{"X", Action.State.X}, {"Y", Action.State.Y}}},
+				{"LastTransition", Action.State.LastTransition},
+				{"LastReason", magic_enum::enum_name(Action.State.LastReason)},
+			});
+			for (const auto &Binding : Snapshot.Bindings) Result["Bindings"].push_back({
+				{"Id", EncodeId(Binding.Definition.Id)}, {"Action", EncodeId(Binding.Definition.Action)},
+				{"Name", Label(Binding.Definition.Id)},
+				{"Enabled", Binding.Definition.Enabled}, {"Type", magic_enum::enum_name(Binding.Definition.InputKind)},
+				{"Code", Binding.Definition.Code}, {"Modifiers", Binding.Definition.Modifiers},
+				{"ExactModifiers", Binding.Definition.ExactModifiers},
+				{"Priority", Binding.Definition.Priority}, {"Consume", Binding.Definition.Consume},
+				{"Matched", Binding.Matched}, {"Active", Binding.Active},
+				{"Suppressed", Binding.Suppressed}, {"Eligible", Binding.Eligible},
+				{"WinningContext", EncodeId(Binding.WinningContext)},
+			});
+			return Result;
+		}
+
 		Json EncodePlayDiagnostics(std::vector<PlayDiagnostic> Diagnostics) {
 			Json Result = Json::array();
 			for (auto &Diagnostic : Diagnostics) Result.push_back({
@@ -472,12 +585,25 @@ namespace gargantuan {
 			Json Dependencies = Json::array();
 			for (const auto &Dependency : Record.Dependencies) Dependencies.push_back(Dependency.ToString());
 			Json Metadata = Json::object();
+			// Report stored asset declarations; package geometry coverage is validated separately.
+			const auto EncodeLocalBounds = [](const RenderBounds &Bounds, const char *Coverage) {
+				return Json{
+					{"Space", "AssetLocal"}, {"Coverage", Coverage},
+					{"Minimum", {Bounds.Minimum.x, Bounds.Minimum.y, Bounds.Minimum.z}},
+					{"Maximum", {Bounds.Maximum.x, Bounds.Maximum.y, Bounds.Maximum.z}},
+				};
+			};
 			if (Record.Asset) std::visit([&](const auto &Asset) {
 				using T = std::decay_t<decltype(Asset)>;
 				if constexpr (std::is_same_v<T, ImportedImage>) {
 					Metadata["Width"] = Asset.Width;
 					Metadata["Height"] = Asset.Height;
 				} else if constexpr (std::is_same_v<T, ImportedMesh>) {
+					Metadata["GeometryInspectionVersion"] = 1;
+					Metadata["LocalBounds"] = EncodeLocalBounds(Asset.Bounds,
+						Asset.Skeleton || Asset.SkinInfluences ? "DeclaredBindPose" : "DeclaredMesh");
+					Metadata["CollisionAssetId"] = Asset.CollisionAsset
+						? Json(Asset.CollisionAsset->ToString()) : Json(nullptr);
 					Metadata["VertexCount"] = Asset.Vertices ? Asset.Vertices->size() : 0;
 					Metadata["IndexCount"] = Asset.Indices ? Asset.Indices->size() : 0;
 					Metadata["SubmeshCount"] = Asset.SubmeshCount;
@@ -491,6 +617,12 @@ namespace gargantuan {
 						Metadata["JointCount"] = Asset.Skeleton->Joints->size();
 						Metadata["SkeletonCompatibilityId"] = Asset.Skeleton->CompatibilityId.ToString();
 					}
+				} else if constexpr (std::is_same_v<T, ImportedCollision>) {
+					Metadata["GeometryInspectionVersion"] = 1;
+					Metadata["LocalBounds"] = EncodeLocalBounds(Asset.Bounds, "DeclaredCollision");
+					Metadata["Representation"] = "StaticTriangles";
+					Metadata["VertexCount"] = Asset.Positions ? Asset.Positions->size() : 0;
+					Metadata["IndexCount"] = Asset.Indices ? Asset.Indices->size() : 0;
 				} else if constexpr (std::is_same_v<T, ImportedAnimation>) {
 					Metadata["Duration"] = Asset.Duration;
 					Metadata["ChannelCount"] = Asset.Tracks ? Asset.Tracks->size() : 0;
@@ -917,8 +1049,11 @@ namespace gargantuan {
 			if (message["SessionToken"].get<std::string>() != SessionToken)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Session token was rejected"));
 			const auto method = message["Method"].get<std::string>();
-			// Batch failures cannot commit an unrelated expired legacy group.
-			if (World && method != "SetPropertyBatch") (void)World->Transactions.ExpireOwner(*World, TransactionOwner);
+			// Batch failures and diagnostic operations cannot commit an unrelated
+			// expired legacy group. These diagnostics do not edit document state.
+			if (World && method != "SetPropertyBatch" && method != "GetStreamingDiagnostics" &&
+				method != "ConfigureStreamingDiagnostics" && method != "GetPlayInputSnapshot")
+				(void)World->Transactions.ExpireOwner(*World, TransactionOwner);
 			const auto &parameters = message["Params"];
 			if (ActivePlaySession && IsAuthoringMethodWhilePlaying(method))
 				return SerializeBoundedResponse(ErrorResponse(
@@ -974,9 +1109,9 @@ namespace gargantuan {
 					"AuthoritativeTransactions",
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
-					"ReadScriptSource", "WriteScriptSource", "PreRunSource", "ValidatePreRun",
+					"ReadScriptSource", "WriteScriptSource", "ScriptDocumentBinding", "PreRunSource", "ValidatePreRun",
 					"CustomServiceDeclarations", "ReplicatedStorage",
-					"PlaySession", "DiagnosticStream", "SendPlayInput",
+					"PlaySession", "DiagnosticStream", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"AnimationRig", "AnimationPreview",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
@@ -1010,6 +1145,7 @@ namespace gargantuan {
 						{"Engine", "Gargantuan"},
 						{"ProtocolVersion", EditorHostProtocolVersion},
 						{"PropertyBatchVersion", EditorHostPropertyBatchVersion},
+						{"StreamingDiagnosticsVersion", 1},
 						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 2},
 						{"ViewportTransports", std::move(viewportTransports)},
@@ -1315,6 +1451,61 @@ namespace gargantuan {
 				}));
 			}
 
+			if (method == "ConfigureStreamingDiagnostics" || method == "GetStreamingDiagnostics") {
+				const bool Configure = method == "ConfigureStreamingDiagnostics";
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					(Configure && !StudioSecurity.HasCapability(ScriptCapability::EditorCommands)))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Streaming diagnostics require owner read access"));
+				if (!(Configure ? HasOnlyFields(parameters, {"PlaySessionId", "Enabled"}) :
+					HasOnlyFields(parameters, {"PlaySessionId", "StartIndex", "MaximumUnits", "MaximumTimingSamples"})) ||
+					!parameters.contains("PlaySessionId"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Streaming diagnostic fields are malformed"));
+				const auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
+				if (!Id || !ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "Streaming diagnostics require the active owned Play session"));
+				if (Configure) {
+					if (!parameters.contains("Enabled") || !parameters["Enabled"].is_boolean())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Enabled must be boolean"));
+					ActivePlaySession->SetStreamingDiagnosticsEnabled(parameters["Enabled"].get<bool>());
+				}
+				const auto Size = [&](const char *Name, std::size_t Default, std::size_t Maximum) -> std::optional<std::size_t> {
+					if (!parameters.contains(Name)) return Default;
+					if (!parameters[Name].is_number_unsigned()) return std::nullopt;
+					const auto Value = parameters[Name].get<std::uint64_t>();
+					return Value <= Maximum ? std::optional<std::size_t>(static_cast<std::size_t>(Value)) : std::nullopt;
+				};
+				const auto Start = Size("StartIndex", 0, MaximumPackageContentUnits);
+				const auto Units = Size("MaximumUnits", 64, MaximumResidencyDiagnosticUnits);
+				const auto Samples = Size("MaximumTimingSamples", 32, MaximumResidencyDiagnosticSamples);
+				if (!Start || !Units || !Samples)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Streaming diagnostic query exceeds bounds"));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"PlaySessionId", std::to_string(Id->Value)},
+					{"Diagnostics", EncodeStreamingDiagnosticsSnapshot(ActivePlaySession->GetStreamingDiagnostics({*Start, *Units, *Samples}))}}));
+			}
+
+			if (method == "GetPlayInputSnapshot") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Input inspection requires ReadDataModel"));
+				if (!HasOnlyFields(parameters, {"PlaySessionId"}) || !parameters.contains("PlaySessionId"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetPlayInputSnapshot requires PlaySessionId"));
+				const auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
+				if (!Id)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PlaySessionId is invalid"));
+				if (!ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "PlaySessionId is not active"));
+				if (ActivePlaySession->GetState() != PlaySessionState::Running)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionNotRunning", "Input inspection requires a running session"));
+				const auto RuntimeWorld = ActivePlaySession->GetWorld();
+				const auto Input = ActivePlaySession->GetInputForInspection();
+				if (!Input)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InputInspectionUnavailable", "Runtime input service is unavailable"));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"PlaySessionId", std::to_string(Id->Value)},
+					{"Snapshot", EncodePlayInputSnapshot(RuntimeWorld, *Input)},
+				}));
+			}
+
 			if (method == "PollPlayDiagnostics") {
 				if (!HasOnlyFields(parameters, {"PlaySessionId"}) || !parameters.contains("PlaySessionId"))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PollPlayDiagnostics requires PlaySessionId"));
@@ -1353,8 +1544,7 @@ namespace gargantuan {
 					auto ModifierValue = parameters.contains("Modifiers") ? JsonCodec::DecodeUnsigned32(parameters["Modifiers"]) : std::optional<std::uint32_t>{0};
 					const auto StateName = parameters["State"].get<std::string>();
 					if (!PhysicalValue || !LogicalValue || !ModifierValue || *ModifierValue > 63 ||
-						!magic_enum::enum_contains<PhysicalKey>(static_cast<std::uint16_t>(*PhysicalValue)) ||
-						!magic_enum::enum_contains<LogicalKey>(static_cast<std::uint16_t>(*LogicalValue)) ||
+						!IsPlayPhysicalKey(*PhysicalValue) || !IsPlayLogicalKey(*LogicalValue) ||
 						(StateName != "Pressed" && StateName != "Released"))
 						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Key input is outside the closed HostEvent vocabulary"));
 					InputResult = ActivePlaySession->ProcessEvent(KeyEvent{
@@ -2326,7 +2516,7 @@ namespace gargantuan {
 				}));
 			}
 
-			if (method == "GetScriptSource" &&
+			if ((method == "GetScriptSource" || method == "GetScriptBinding" || method == "ResolveScriptBinding") &&
 				(!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
 					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands)))
 				return SerializeBoundedResponse(ErrorResponse(
@@ -2658,6 +2848,59 @@ namespace gargantuan {
 						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
 					}
 				));
+			}
+
+			if (method == "GetScriptBinding" || method == "ResolveScriptBinding") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Script binding requires EditorCommands and ReadDataModel"));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "Open a project first"));
+				std::shared_ptr<LuaSourceContainer> Script;
+				if (method == "GetScriptBinding") {
+					if (!HasOnlyFields(parameters, {"Object"}) || !parameters.contains("Object"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetScriptBinding requires Object"));
+					const auto Id = JsonCodec::DecodeObjectId(parameters["Object"]);
+					if (!Id) return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "ObjectId is invalid"));
+					const auto Target = ObjectRegistry::Get().Lookup(Id->ToObjectId());
+					if (!Target || Target->GetReplicationScopeId() != World->GetObjectId())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Object is not live in the authoring project"));
+					Script = std::dynamic_pointer_cast<LuaSourceContainer>(Target);
+					if (!Script) return SerializeBoundedResponse(ErrorResponse(requestId, "NotScript", "Object is not a supported script"));
+					const auto Found = FindScriptResource(World, Script->GetSourceId());
+					if (Found.Error) return SerializeBoundedResponse(ErrorResponse(requestId, Found.Error, "Script resource lookup rejected"));
+					if (Found.Script != Script)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "ResourceNotPersistent", "Script is not in the persistent project hierarchy"));
+				} else {
+					if (!HasOnlyFields(parameters, {"Binding"}) || !parameters.contains("Binding"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "ResolveScriptBinding requires Binding"));
+					const auto &Binding = parameters["Binding"];
+					if (!Binding.is_object() || Binding.size() != 5 ||
+						!HasOnlyFields(Binding, {"Version", "ProjectId", "SourceId", "ClassSchemaId", "ClassDefinitionVersion"}) ||
+						!Binding.contains("Version") || !Binding["Version"].is_number_unsigned() || Binding["Version"] != 1 ||
+						!Binding.contains("ProjectId") || !Binding["ProjectId"].is_string() ||
+						!Binding.contains("SourceId") || !Binding["SourceId"].is_string() ||
+						!Binding.contains("ClassSchemaId") || !Binding["ClassSchemaId"].is_string() ||
+						!Binding.contains("ClassDefinitionVersion"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Script binding fields are invalid"));
+					const auto ProjectIdentity = ProjectId::Parse(Binding["ProjectId"].get_ref<const std::string &>());
+					const auto SourceIdentity = ProjectId::Parse(Binding["SourceId"].get_ref<const std::string &>());
+					const auto ClassId = SchemaId::Parse(Binding["ClassSchemaId"].get_ref<const std::string &>());
+					const auto Version = JsonCodec::DecodeUnsigned32(Binding["ClassDefinitionVersion"]);
+					if (!ProjectIdentity || !SourceIdentity || !ClassId ||
+						ClassId->ToString() != Binding["ClassSchemaId"].get_ref<const std::string &>() || !Version || *Version == 0)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Script binding identities are invalid"));
+					if (*ProjectIdentity != CurrentProject->Identity)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "StaleProject", "Binding belongs to another project"));
+					const auto Found = FindScriptResource(World, Binding["SourceId"].get_ref<const std::string &>());
+					if (Found.Error) return SerializeBoundedResponse(ErrorResponse(requestId, Found.Error, "Script resource lookup rejected"));
+					Script = Found.Script;
+					if (!Script) return SerializeBoundedResponse(ErrorResponse(requestId, "ResourceNotFound", "Script resource no longer exists"));
+					const auto *Definition = InstanceClassRegistry::GetDefinition(Script.get());
+					if (Definition->Id != *ClassId || Definition->DefinitionVersion != *Version)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "IncompatibleBinding", "Script resource schema changed"));
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, EncodeScriptBindingResult(*CurrentProject, World, PersistedRevision, Script)));
 			}
 
 			if (method == "GetScriptSource") {

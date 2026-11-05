@@ -1,276 +1,353 @@
 #include "gargantuan/services/ActionMap.hpp"
 
-#include "gargantuan/runtime/ProtocolInput.hpp"
-#include "gargantuan/scripting/ScriptSecurity.hpp"
+#include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/InputAction.hpp"
+#include "gargantuan/classes/InputBinding.hpp"
+#include "gargantuan/classes/InputContext.hpp"
+#include "gargantuan/input/InputConstruction.hpp"
+#include "gargantuan/services/InputService.hpp"
 #include "gargantuan/services/UserInputService.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <unordered_set>
+#include <vector>
 
 namespace gargantuan {
 	namespace {
-		bool IsBindableMouseButton(Enums::UserInputType InputType) {
-			return InputType == Enums::UserInputType::MouseButton1 || InputType == Enums::UserInputType::MouseButton2 ||
-				   InputType == Enums::UserInputType::MouseButton3;
+		void ValidateLegacyBinding(const std::string &Name, float Scale) {
+			ValidateInputName(Name);
+			if (!std::isfinite(Scale)) throw std::invalid_argument("[Input:ActionMap] Scale must be finite");
 		}
+	}
+	ActionMap::~ActionMap() {
+		if (TransitionConnection) TransitionConnection->Disconnect();
+	}
 
-		void RequireMutationCapability() {
-			if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
-				throw std::runtime_error("ActionMap binding mutation requires MutateDataModel");
+	std::shared_ptr<InputService> ActionMap::GetInput() {
+		if (auto Existing = RuntimeInput.lock(); Existing && !Existing->GetDestroyed()) return Existing;
+		std::shared_ptr<InputService> Service;
+		if (auto World = GetDataModel())
+			Service = std::dynamic_pointer_cast<InputService>(World->GetService("InputService"));
+		else {
+			LocalInput = std::make_shared<InputService>();
+			Service = LocalInput;
 		}
-
-		void ValidateBindingFields(std::string_view ActionName, float Scale) {
-			ValidateProtocolString(ActionName, ActionMap::MaximumActionNameBytes, "Action name");
-			if (ActionName.empty()) throw std::invalid_argument("Action name cannot be empty");
-			if (!std::isfinite(Scale)) throw std::invalid_argument("Action binding scale must be finite");
+		if (!Service) throw std::runtime_error("[Input:ActionMap] Canonical InputService is unavailable");
+		RuntimeInput = Service;
+		if (TransitionConnection) TransitionConnection->Disconnect();
+		TransitionConnection = Service->Transitioned->Connect([this](CompiledInputGraph::Transition Transition) {
+			auto Action = std::dynamic_pointer_cast<InputAction>(ObjectRegistry::Get().Lookup(Transition.Action));
+			if (!Action || Action->GetDestroyed()) return;
+			const auto Name = Action->GetName();
+			RefreshNames(Transition.Action);
+			const auto Found = NamedActions.find(Name);
+			const auto Selected = Found == NamedActions.end() ? nullptr : Found->second.lock();
+			const bool WasDown = PublishedNames.contains(Transition.Action);
+			if (Selected != Action) {
+				if (WasDown) {
+					PublishedNames.erase(Transition.Action);
+					if (!Selected || !Selected->IsDown()) ActionEnded->Fire(Name);
+				}
+				return;
+			}
+			if (Transition.Down)
+				PublishedNames[Transition.Action] = Name;
+			else
+				PublishedNames.erase(Transition.Action);
+			if (Transition.Down && !WasDown) ActionBegan->Fire(Name);
+			ActionChanged->Fire(
+				{Name, Transition.VectorChanged ? Vector2(Transition.X, Transition.Y) : Vector2(Transition.Value, 0.0f)}
+			);
+			if (!Transition.Down && WasDown) ActionEnded->Fire(Name);
+		});
+		CachedDefinitionRevision = std::numeric_limits<std::uint64_t>::max();
+		return Service;
+	}
+	void ActionMap::AttachInputService(const std::shared_ptr<UserInputService> &Physical) {
+		auto Service = GetInput();
+		Service->Reset();
+		if (!Physical) return;
+		// Seed the existing physical authority once. Marking these samples consumed
+		// records held state without inventing a fresh press for authored actions.
+		for (const auto &Input : Physical->GetKeysPressed()) {
+			if (!Input) continue;
+			(void)Service->ProcessEvent(
+				KeyEvent{.Logical = static_cast<LogicalKey>(Input->GetKeyCode()), .State = ButtonState::Pressed}, true
+			);
+		}
+		for (const auto &Input : Physical->GetMouseButtonsPressed()) {
+			if (!Input) continue;
+			PointerButton Button;
+			switch (Input->GetUserInputType()) {
+			case Enums::UserInputType::MouseButton1:
+				Button = PointerButton::Left;
+				break;
+			case Enums::UserInputType::MouseButton2:
+				Button = PointerButton::Right;
+				break;
+			case Enums::UserInputType::MouseButton3:
+				Button = PointerButton::Middle;
+				break;
+			default:
+				continue;
+			}
+			(void)Service->ProcessEvent(PointerButtonEvent{.Button = Button, .State = ButtonState::Pressed}, true);
 		}
 	}
 
-	void ActionMap::AttachInputService(const std::shared_ptr<UserInputService> &Service) {
-		InputService = Service;
-		Reset();
+	std::shared_ptr<InputContext> ActionMap::GetLegacyContext() {
+		if (auto Existing = LegacyContext.lock(); Existing && !Existing->GetDestroyed()) return Existing;
+		auto Service = GetInput();
+		auto Context = std::make_shared<InputContext>();
+		Context->SetName("LegacyActionMap");
+		Context->SetArchivable(false);
+		Context->SetConsume(false);
+		Context->SetParent(Service);
+		Service->RegisterLegacyContext(Context->GetObjectId());
+		LegacyContext = Context;
+		return Context;
 	}
 
-	int ActionMap::AddBinding(Binding Value) {
-		RequireMutationCapability();
-		if (Bindings.size() >= MaximumBindings) throw std::length_error("ActionMap binding limit reached");
-		if (!States.contains(Value.ActionName) && States.size() >= MaximumActions)
-			throw std::length_error("ActionMap action limit reached");
+	void ActionMap::RefreshNames(ObjectId CurrentTransition) {
+		if (RefreshingNames) return;
+		RefreshingNames = true;
+		struct RefreshGuard {
+			bool &Flag;
+			~RefreshGuard() {
+				Flag = false;
+			}
+		} Guard{RefreshingNames};
+		auto Service = GetInput();
+		const auto Revision = Service->GetDefinitionRevision();
+		if (CurrentTransition.IsValid() && Revision == CachedDefinitionRevision) return;
+		if (Revision != CachedDefinitionRevision) {
+			CachedDefinitionRevision = Revision;
+			NamesNeedPublication = true;
+			NamedActions.clear();
+			std::unordered_map<std::string, std::shared_ptr<InputContext>> Winners;
+			for (const auto &Weak : Service->GetCompiledActions()) {
+				auto Action = Weak.lock();
+				if (!Action || Action->GetDestroyed() || !Action->GetEnabled()) continue;
+				auto Parent = Action->GetParent();
+				auto Context = Parent ? std::dynamic_pointer_cast<InputContext>(*Parent) : nullptr;
+				if (!Context || Context->GetDestroyed() || !Context->GetEnabled()) continue;
+				const auto Name = Action->GetName();
+				auto Found = Winners.find(Name);
+				bool Replace = Found == Winners.end();
+				if (!Replace) {
+					const auto &PreviousContext = Found->second;
+					auto Previous = NamedActions[Name].lock();
+					Replace = Context->GetPriority() > PreviousContext->GetPriority() ||
+							  (Context->GetPriority() == PreviousContext->GetPriority() &&
+							   (Context->GetObjectId() < PreviousContext->GetObjectId() ||
+								(Context == PreviousContext &&
+								 (!Previous || Action->GetObjectId() < Previous->GetObjectId()))));
+				}
+				if (Replace) {
+					Winners[Name] = Context;
+					NamedActions[Name] = Action;
+				}
+			}
+		}
+		if (!NamesNeedPublication) return;
+		// Name selection is a facade projection. Commit its bounded state before
+		// callbacks. Actual graph transitions retain their own priority order.
+		std::vector<std::string> Ended;
+		for (auto Entry = PublishedNames.begin(); Entry != PublishedNames.end();) {
+			auto Found = NamedActions.find(Entry->second);
+			auto Selected = Found == NamedActions.end() ? nullptr : Found->second.lock();
+			const bool Same = Selected && !Selected->GetDestroyed() && Selected->GetObjectId() == Entry->first &&
+							  Selected->GetName() == Entry->second;
+			if (Same && (Selected->IsDown() || Entry->first == CurrentTransition)) {
+				++Entry;
+				continue;
+			}
+			Ended.push_back(Entry->second);
+			Entry = PublishedNames.erase(Entry);
+		}
+		std::vector<std::pair<std::string, Vector2>> Began;
+		if (!CurrentTransition.IsValid() && !Service->IsPublishing()) {
+			for (const auto &[Name, Weak] : NamedActions) {
+				auto Action = Weak.lock();
+				if (!Action || Action->GetDestroyed() || !Action->IsDown() ||
+					PublishedNames.contains(Action->GetObjectId()))
+					continue;
+				PublishedNames[Action->GetObjectId()] = Name;
+				Began.emplace_back(
+					Name,
+					Action->GetType() == Enums::InputActionType::Vector2 ? Action->GetVector()
+																		 : Vector2(Action->GetValue(), 0)
+				);
+			}
+			NamesNeedPublication = false;
+		}
+		std::ranges::sort(Ended);
+		std::ranges::sort(Began, {}, &std::pair<std::string, Vector2>::first);
+		for (const auto &Name : Ended)
+			ActionEnded->Fire(Name);
+		for (const auto &[Name, Value] : Began) {
+			ActionBegan->Fire(Name);
+			ActionChanged->Fire({Name, Value});
+		}
+	}
+	std::shared_ptr<InputAction> ActionMap::GetAction(const std::string &Name) {
+		RefreshNames();
+		const auto Found = NamedActions.find(Name);
+		if (Found == NamedActions.end()) return nullptr;
+		auto Action = Found->second.lock();
+		return Action && !Action->GetDestroyed() ? Action : nullptr;
+	}
+	void ActionMap::CleanBindings() {
+		std::erase_if(Bindings, [](const auto &Entry) {
+			auto Binding = Entry.second.lock();
+			return !Binding || Binding->GetDestroyed();
+		});
+		std::unordered_map<std::string, std::weak_ptr<InputAction>> Renamed;
+		for (const auto &[Name, Weak] : OwnedActions) {
+			auto Action = Weak.lock();
+			if (!Action || Action->GetDestroyed()) continue;
+			auto Found = Renamed.find(Action->GetName());
+			auto Previous = Found == Renamed.end() ? nullptr : Found->second.lock();
+			if (!Previous || Action->GetObjectId() < Previous->GetObjectId()) Renamed[Action->GetName()] = Action;
+		}
+		OwnedActions.swap(Renamed);
+	}
+
+	int ActionMap::AddBinding(const std::string &Name, const std::shared_ptr<InputBinding> &Binding, bool Pointer) {
+		RequireInputMutation();
+		AssertCanMutate();
+		if (auto Error = Binding->ValidateDefinition(); !Error.empty()) throw std::invalid_argument(Error);
+		CleanBindings();
+		if (Bindings.size() >= MaximumBindings) throw std::length_error("[Input:ActionMap] Binding limit reached");
 		if (NextBindingId <= 0 || NextBindingId == std::numeric_limits<int>::max())
-			throw std::overflow_error("ActionMap binding identity is exhausted");
-		Value.Id = NextBindingId++;
-		const auto Id = Value.Id;
-		const auto ActionName = Value.ActionName;
-		Bindings.push_back(std::move(Value));
-		States.try_emplace(ActionName);
-		RefreshAction(ActionName);
+			throw std::overflow_error("[Input:ActionMap] Binding identity is exhausted");
+		auto Found = OwnedActions.find(Name);
+		auto Action = Found != OwnedActions.end() ? Found->second.lock() : nullptr;
+		if (!Action) {
+			if (OwnedActions.size() >= MaximumActions)
+				throw std::length_error("[Input:ActionMap] Action limit reached");
+			Action = std::make_shared<InputAction>();
+			Action->SetName(Name);
+			Action->SetType(Pointer ? Enums::InputActionType::Vector2 : Enums::InputActionType::Scalar);
+			Action->SetParent(GetLegacyContext());
+			OwnedActions[Name] = Action;
+		} else if (Pointer && Action->GetType() != Enums::InputActionType::Vector2) {
+			Action->SetType(Enums::InputActionType::Vector2);
+		}
+		const auto Id = NextBindingId++;
+		Binding->SetName("Binding" + std::to_string(Id));
+		Binding->SetParent(Action);
+		Bindings.emplace(Id, Binding);
+		GetInput()->EnsureCompiled();
 		return Id;
 	}
-
-	int ActionMap::BindKey(std::string ActionName, Enums::KeyCode KeyCode, float Scale, int Priority, bool Consume) {
-		ValidateBindingFields(ActionName, Scale);
-		if (KeyCode == Enums::KeyCode::None) throw std::invalid_argument("ActionMap key binding requires a key");
-		return AddBinding({
-			.ActionName = std::move(ActionName),
-			.Kind = BindingKind::Key,
-			.KeyCode = KeyCode,
-			.ScalarScale = Scale,
-			.Priority = Priority,
-			.Consume = Consume,
-		});
+	int ActionMap::BindKey(std::string Name, Enums::KeyCode Key, float Scale, int Priority, bool Consume) {
+		ValidateLegacyBinding(Name, Scale);
+		if (Key == Enums::KeyCode::None) throw std::invalid_argument("[Input:ActionMap] Key binding requires a key");
+		auto Binding = std::make_shared<InputBinding>();
+		Binding->SetKeyCode(Key);
+		Binding->SetScale(Scale);
+		Binding->SetPriority(Priority);
+		Binding->SetConsume(Consume);
+		return AddBinding(Name, Binding, false);
 	}
-
 	int ActionMap::BindMouseButton(
-		std::string ActionName, Enums::UserInputType InputType, float Scale, int Priority, bool Consume
+		std::string Name, Enums::UserInputType InputType, float Scale, int Priority, bool Consume
 	) {
-		ValidateBindingFields(ActionName, Scale);
-		if (!IsBindableMouseButton(InputType))
-			throw std::invalid_argument("ActionMap mouse binding requires MouseButton1, MouseButton2, or MouseButton3");
-		return AddBinding({
-			.ActionName = std::move(ActionName),
-			.Kind = BindingKind::MouseButton,
-			.InputType = InputType,
-			.ScalarScale = Scale,
-			.Priority = Priority,
-			.Consume = Consume,
-		});
+		ValidateLegacyBinding(Name, Scale);
+		if (InputType != Enums::UserInputType::MouseButton1 && InputType != Enums::UserInputType::MouseButton2 &&
+			InputType != Enums::UserInputType::MouseButton3)
+			throw std::invalid_argument("[Input:ActionMap] Mouse binding requires a supported mouse button");
+		auto Binding = std::make_shared<InputBinding>();
+		Binding->SetType(Enums::InputBindingType::MouseButton);
+		Binding->SetInputType(InputType);
+		Binding->SetScale(Scale);
+		Binding->SetPriority(Priority);
+		Binding->SetConsume(Consume);
+		return AddBinding(Name, Binding, false);
+	}
+	int ActionMap::BindPointerDelta(std::string Name, Vector2 Scale, int Priority, bool Consume) {
+		ValidateLegacyBinding(Name, Scale.GetX());
+		if (!std::isfinite(Scale.GetY())) throw std::invalid_argument("[Input:ActionMap] Vector scale must be finite");
+		auto Binding = std::make_shared<InputBinding>();
+		Binding->SetType(Enums::InputBindingType::PointerDelta);
+		Binding->SetVectorScale(Scale);
+		Binding->SetPriority(Priority);
+		Binding->SetConsume(Consume);
+		return AddBinding(Name, Binding, true);
 	}
 
-	int ActionMap::BindPointerDelta(std::string ActionName, Vector2 Scale, int Priority, bool Consume) {
-		ValidateBindingFields(ActionName, Scale.GetX());
-		if (!std::isfinite(Scale.GetY())) throw std::invalid_argument("Action binding scale must be finite");
-		return AddBinding({
-			.ActionName = std::move(ActionName),
-			.Kind = BindingKind::PointerDelta,
-			.VectorScale = Scale,
-			.Priority = Priority,
-			.Consume = Consume,
-		});
-	}
-
-	bool ActionMap::Unbind(int BindingId) {
-		RequireMutationCapability();
-		auto Found = std::find_if(Bindings.begin(), Bindings.end(), [BindingId](const Binding &Value) {
-			return Value.Id == BindingId;
-		});
+	bool ActionMap::Unbind(int Id) {
+		RequireInputMutation();
+		AssertCanMutate();
+		auto Found = Bindings.find(Id);
 		if (Found == Bindings.end()) return false;
-		const auto ActionName = Found->ActionName;
+		auto Binding = Found->second.lock();
 		Bindings.erase(Found);
-		RefreshAction(ActionName);
-		if (std::ranges::none_of(Bindings, [&](const Binding &Value) { return Value.ActionName == ActionName; }))
-			States.erase(ActionName);
+		if (!Binding || Binding->GetDestroyed()) return false;
+		auto Parent = Binding->GetParent();
+		auto Action = Parent ? std::dynamic_pointer_cast<InputAction>(*Parent) : nullptr;
+		Binding->Destroy();
+		GetInput()->EnsureCompiled();
+		if (Action && Action->Children.empty()) {
+			const auto Owned = std::find_if(OwnedActions.begin(), OwnedActions.end(), [&](const auto &Entry) {
+				return Entry.second.lock() == Action;
+			});
+			if (Owned != OwnedActions.end()) {
+				OwnedActions.erase(Owned);
+				if (auto Published = PublishedNames.find(Action->GetObjectId()); Published != PublishedNames.end()) {
+					const auto PublishedName = Published->second;
+					PublishedNames.erase(Published);
+					ActionEnded->Fire(PublishedName);
+				}
+				Action->Destroy();
+				GetInput()->EnsureCompiled();
+			}
+		}
 		return true;
 	}
-
-	void ActionMap::UnbindAction(std::string ActionName) {
-		RequireMutationCapability();
-		ValidateProtocolString(ActionName, MaximumActionNameBytes, "Action name");
-		if (auto Found = States.find(ActionName); Found != States.end()) {
-			if (Found->second.Down) ActionEnded->Fire(ActionName);
-			if (Found->second.Scalar != 0.0f || Found->second.Vector != Vector2())
-				ActionChanged->Fire({ActionName, Vector2()});
+	void ActionMap::UnbindAction(std::string Name) {
+		RequireInputMutation();
+		ValidateProtocolString(Name, MaximumActionNameBytes, "Action name");
+		std::vector<int> Ids;
+		for (const auto &[Id, Weak] : Bindings) {
+			auto Binding = Weak.lock();
+			if (!Binding || Binding->GetDestroyed()) continue;
+			auto Parent = Binding->GetParent();
+			if (Parent && (*Parent)->GetName() == Name) Ids.push_back(Id);
 		}
-		std::erase_if(Bindings, [&](const Binding &Value) { return Value.ActionName == ActionName; });
-		States.erase(ActionName);
+		std::ranges::sort(Ids);
+		for (const auto Id : Ids)
+			(void)Unbind(Id);
 	}
-
-	bool ActionMap::IsDown(std::string ActionName) {
-		auto Found = States.find(ActionName);
-		return Found != States.end() && Found->second.Down;
+	bool ActionMap::IsDown(std::string Name) {
+		auto Action = GetAction(Name);
+		return Action && Action->IsDown();
 	}
-
-	float ActionMap::GetValue(std::string ActionName) {
-		auto Found = States.find(ActionName);
-		return Found == States.end() ? 0.0f : Found->second.Scalar;
+	float ActionMap::GetValue(std::string Name) {
+		auto Action = GetAction(Name);
+		return Action ? Action->GetValue() : 0.0f;
 	}
-
-	Vector2 ActionMap::GetVector(std::string ActionName) {
-		auto Found = States.find(ActionName);
-		return Found == States.end() ? Vector2() : Found->second.Vector;
+	Vector2 ActionMap::GetVector(std::string Name) {
+		auto Action = GetAction(Name);
+		return Action && Action->GetType() == Enums::InputActionType::Vector2 ? Action->GetVector() : Vector2();
 	}
-
 	int ActionMap::GetBindingCount() {
+		CleanBindings();
 		return static_cast<int>(Bindings.size());
 	}
-
-	bool ActionMap::IsBindingActive(const Binding &Value) const {
-		auto Service = InputService.lock();
-		if (!Service) return false;
-		if (Value.Kind == BindingKind::Key) return Service->IsKeyDown(Value.KeyCode);
-		if (Value.Kind == BindingKind::MouseButton) return Service->IsMouseButtonPressed(Value.InputType);
-		return false;
-	}
-
-	void ActionMap::RefreshAction(const std::string &ActionName) {
-		auto &State = States[ActionName];
-		float Scalar = 0.0f;
-		for (const auto &Value : Bindings)
-			if (Value.ActionName == ActionName && Value.Kind != BindingKind::PointerDelta && IsBindingActive(Value))
-				Scalar += Value.ScalarScale;
-		Scalar = std::clamp(Scalar, -1.0f, 1.0f);
-		const bool Down = Scalar != 0.0f;
-		if (!State.Down && Down) ActionBegan->Fire(ActionName);
-		if (State.Scalar != Scalar) ActionChanged->Fire({ActionName, Vector2(Scalar, 0.0f)});
-		if (State.Down && !Down) ActionEnded->Fire(ActionName);
-		State.Scalar = Scalar;
-		State.Down = Down;
-	}
-
 	bool ActionMap::ProcessEvent(const HostEvent &Event) {
-		if (const auto *Focus = std::get_if<FocusEvent>(&Event); Focus && !Focus->Focused) {
-			Reset();
-			return false;
-		}
-
-		std::vector<const Binding *> Matching;
-		if (const auto *Key = std::get_if<KeyEvent>(&Event); Key && Key->Logical != LogicalKey::Unknown) {
-			const auto KeyCode = static_cast<Enums::KeyCode>(Key->Logical);
-			for (const auto &Value : Bindings)
-				if (Value.Kind == BindingKind::Key && Value.KeyCode == KeyCode) Matching.push_back(&Value);
-		} else if (const auto *Gamepad = std::get_if<GamepadButtonEvent>(&Event)) {
-			auto KeyCode = InputObject::GetGamepadKeyCode(Gamepad->Button);
-			if (!KeyCode) return false;
-			for (const auto &Value : Bindings)
-				if (Value.Kind == BindingKind::Key && Value.KeyCode == *KeyCode) Matching.push_back(&Value);
-		} else if (const auto *Button = std::get_if<PointerButtonEvent>(&Event)) {
-			Enums::UserInputType InputType = Enums::UserInputType::None;
-			if (Button->Button == PointerButton::Left)
-				InputType = Enums::UserInputType::MouseButton1;
-			else if (Button->Button == PointerButton::Right)
-				InputType = Enums::UserInputType::MouseButton2;
-			else if (Button->Button == PointerButton::Middle)
-				InputType = Enums::UserInputType::MouseButton3;
-			for (const auto &Value : Bindings)
-				if (Value.Kind == BindingKind::MouseButton && Value.InputType == InputType) Matching.push_back(&Value);
-		} else if (const auto *Move = std::get_if<PointerMoveEvent>(&Event)) {
-			for (const auto &Value : Bindings)
-				if (Value.Kind == BindingKind::PointerDelta) Matching.push_back(&Value);
-			std::ranges::sort(Matching, [](const Binding *Left, const Binding *Right) {
-				return Left->Priority != Right->Priority ? Left->Priority > Right->Priority : Left->Id < Right->Id;
-			});
-			bool Consumed = false;
-			std::vector<std::string> Actions;
-			std::unordered_set<std::string> SeenActions;
-			for (const auto *Value : Matching) {
-				auto &State = States[Value->ActionName];
-				State.Vector = State.Vector +
-							   Vector2(
-								   Move->Delta.X * Value->VectorScale.GetX(), Move->Delta.Y * Value->VectorScale.GetY()
-							   );
-				if (SeenActions.insert(Value->ActionName).second) Actions.push_back(Value->ActionName);
-				Consumed = Consumed || Value->Consume;
-			}
-			for (const auto &ActionName : Actions)
-				ActionChanged->Fire({ActionName, States[ActionName].Vector});
-			return Consumed;
-		}
-
-		std::ranges::sort(Matching, [](const Binding *Left, const Binding *Right) {
-			return Left->Priority != Right->Priority ? Left->Priority > Right->Priority : Left->Id < Right->Id;
-		});
-		std::vector<std::string> Actions;
-		std::unordered_set<std::string> SeenActions;
-		bool Consumed = false;
-		for (const auto *Value : Matching) {
-			if (SeenActions.insert(Value->ActionName).second) Actions.push_back(Value->ActionName);
-			Consumed = Consumed || Value->Consume;
-		}
-		for (const auto &ActionName : Actions)
-			RefreshAction(ActionName);
-		return Consumed;
+		return GetInput()->ProcessEvent(Event);
 	}
-
 	void ActionMap::ProcessConsumedRelease(const HostEvent &Event) {
-		std::optional<Enums::KeyCode> ReleasedKey;
-		std::optional<Enums::UserInputType> ReleasedMouseButton;
-		if (const auto *Key = std::get_if<KeyEvent>(&Event);
-			Key && Key->State == ButtonState::Released && Key->Logical != LogicalKey::Unknown)
-			ReleasedKey = static_cast<Enums::KeyCode>(Key->Logical);
-		else if (const auto *Gamepad = std::get_if<GamepadButtonEvent>(&Event);
-				 Gamepad && Gamepad->State == ButtonState::Released)
-			ReleasedKey = InputObject::GetGamepadKeyCode(Gamepad->Button);
-		else if (const auto *Button = std::get_if<PointerButtonEvent>(&Event);
-				 Button && Button->State == ButtonState::Released) {
-			if (Button->Button == PointerButton::Left)
-				ReleasedMouseButton = Enums::UserInputType::MouseButton1;
-			else if (Button->Button == PointerButton::Right)
-				ReleasedMouseButton = Enums::UserInputType::MouseButton2;
-			else if (Button->Button == PointerButton::Middle)
-				ReleasedMouseButton = Enums::UserInputType::MouseButton3;
-		}
-		if (!ReleasedKey && !ReleasedMouseButton) return;
-		std::vector<std::string> Actions;
-		for (const auto &Binding : Bindings) {
-			const bool MatchesKey = ReleasedKey && Binding.Kind == BindingKind::Key && Binding.KeyCode == *ReleasedKey;
-			const bool MatchesButton = ReleasedMouseButton && Binding.Kind == BindingKind::MouseButton &&
-									   Binding.InputType == *ReleasedMouseButton;
-			if ((MatchesKey || MatchesButton) && !std::ranges::contains(Actions, Binding.ActionName))
-				Actions.push_back(Binding.ActionName);
-		}
-		std::ranges::sort(Actions);
-		for (const auto &ActionName : Actions)
-			RefreshAction(ActionName);
+		(void)GetInput()->ProcessEvent(Event, true);
 	}
-
 	void ActionMap::EndFrame() {
-		for (auto &[_, State] : States)
-			State.Vector = Vector2();
+		GetInput()->EndFrame();
 	}
-
 	void ActionMap::Reset() {
-		std::vector<std::string> ActionNames;
-		ActionNames.reserve(States.size());
-		for (const auto &[ActionName, _] : States)
-			ActionNames.push_back(ActionName);
-		std::ranges::sort(ActionNames);
-		for (const auto &ActionName : ActionNames) {
-			auto &State = States[ActionName];
-			if (State.Down) ActionEnded->Fire(ActionName);
-			if (State.Scalar != 0.0f || State.Vector != Vector2()) ActionChanged->Fire({ActionName, Vector2()});
-			State = {};
-		}
+		GetInput()->Reset();
 	}
 }

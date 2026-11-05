@@ -1,5 +1,11 @@
 # Current architecture
 
+- [Trusted residency demand Foundation 3M](TrustedResidencyDemandFoundation3M.md)
+  defines Engine-owned default-space policy, bounded resumable queries,
+  deterministic priorities, revision-safe demand and its existing 3L integration.
+  The [3M receipt](../Validation/TrustedResidencyDemand3M.md) records separate
+  correctness and scale evidence; physical/provider certification stays separate.
+
 - [Foundation3L core acceptance](../../tests/Foundation3LFinalAcceptance.md#current-core-contract--2026-10-20)
   records the2026-10-21 `POOLED_CORRECTNESS_V1` PASS on draftPR6, exact source
   and analyzer receipts, KI-006 CLOSED and core3L COMPLETE. Physical Local32,
@@ -9,6 +15,9 @@
 - [Physical agent coordination ownership and migration](PhysicalAgentCoordination.md)
   records the pinned GantriaEngine library, local Gargantuan adapter, validation
   scope and preservation of installed physical-PC tooling.
+- [Persistent input actions](InputActions.md) defines canonical schema-backed
+  contexts/actions/bindings, one indexed native evaluator, the ActionMap facade,
+  chord and cancellation semantics, local diagnostics, and qualification bounds.
 
 - [Foundation 3L security closure](ContentAvailabilitySecurityClosure3L.md)
   preserves SEC-3L-001's raw-address lifetime ABA finding and records full-ObjectId
@@ -25,7 +34,8 @@
   acceptance report and exact-source validation status.
 - [Content Availability Foundation 3L.2 validation](ContentAvailabilityFoundation3L_2Validation.md)
   records bounded-memory and content-coupled peer-scale measurements, explicit
-  gameplay/materialization blockers, and the still-closed Foundation 3M gate.
+  gameplay/materialization blockers and the historical Foundation 3M gate at
+  that checkpoint. The core closeout above supersedes that gate disposition.
 - [Content Availability Foundation 3L](ContentAvailabilityFoundation3L.md)
   defines deterministic immutable package content units, provider-neutral local
   and private Node acquisition, bounded asynchronous residency, transactional
@@ -105,6 +115,13 @@
   `AssetService`, strict stable references, content-addressed image/mesh/font
   artifacts, bounded import/cache behavior, GUI/render residency, persistence,
   Play cloning, and Studio/EditorHost commands.
+- [Asset 2B and Geometry 1A decisions](AssetCollisionGeometryDecisions.md) define
+  canonical collision ownership, persistent MeshPart policy, offline solid
+  compilation and atomic Mesh/Collision publication. The
+  [collision](AssetCollisionFoundation2B.md) and
+  [compiler](SolidGeometryFoundation1A.md) contracts provide formats, APIs and
+  bounds; the [campaign report](../Validation/AssetGeometryCampaignValidation.md)
+  records exact-source qualification and remaining limitations.
 - [Physics backend](PhysicsBackend.md) defines neutral rigid-body semantics,
   generation-safe physics identity, safe-point updates, and Box3D confinement.
 - [Soft-body Physics Foundation 2](SoftBodyPhysicsFoundation2.md) defines the

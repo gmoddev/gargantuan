@@ -56,7 +56,12 @@ namespace gargantuan {
 		[[nodiscard]] std::vector<PlayDiagnostic> DrainDiagnostics();
 		[[nodiscard]] std::vector<RenderPublicationPtr> TakeRenderPublications();
 		void RequestRenderFullResync();
+		void SetStreamingDiagnosticsEnabled(bool Enabled);
+		[[nodiscard]] StreamingDiagnostics GetStreamingDiagnostics(ResidencyDiagnosticQuery Query = {}) const;
 		[[nodiscard]] std::shared_ptr<DataModel> GetWorld() const { return RuntimeWorld; }
+		// Native inspection must use the evaluator actually owned by RuntimeEngine.
+		// Never resolve a replacement service by class/name in the mutable graph.
+		[[nodiscard]] std::shared_ptr<InputService> GetInputForInspection() const;
 		[[nodiscard]] PlaySessionId GetId() const { return Id; }
 		[[nodiscard]] PlaySessionState GetState() const { return State; }
 		[[nodiscard]] std::uint64_t GetAuthoringRevision() const { return LaunchAuthoringRevision; }

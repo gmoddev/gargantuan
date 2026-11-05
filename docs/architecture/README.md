@@ -108,6 +108,17 @@ them in scope rather than silently selecting one source.
 
 ## Current architecture routing
 
+- [Cross-foundation package spatial integration](../../devdocs/CurrentArchitecture/CrossFoundationPackageSpatialIntegration.md)
+  records the accepted producer/consumer composition being implemented and
+  qualified; its dependency ledger preserves exact geometry/streaming sources.
+
+- [Trusted residency demand Foundation 3M](../../devdocs/CurrentArchitecture/TrustedResidencyDemandFoundation3M.md)
+  documents bounded default-space policy layered over the existing 3L lifecycle;
+  qualification scope is stated separately from physical/provider certification.
+- [Trusted residency streaming readiness 3M](../../devdocs/CurrentArchitecture/TrustedResidencyStreamingReadiness3M.md)
+  documents exact shared-manifest startup, detached metadata compatibility and
+  bounded Engine/EditorHost diagnostics. KI-3M-001 remains open.
+
 The following documents describe recently implemented, source-verified slices:
 
 - [Runtime schema](../src/content/docs/developing/runtime-schema.mdx)
@@ -115,17 +126,22 @@ The following documents describe recently implemented, source-verified slices:
 - [Render extraction](../src/content/docs/developing/render-extraction.mdx)
 - [Platform and input boundary](../../devdocs/CurrentArchitecture/PlatformInputBoundary.md)
 - [Player runtime](../../devdocs/CurrentArchitecture/PlayerRuntime.md)
+- [Persistent input actions](../../devdocs/CurrentArchitecture/InputActions.md)
 - [Entitlement service](../../devdocs/CurrentArchitecture/EntitlementService.md)
 - [Backend Provider Integration Foundation 1](../../devdocs/CurrentArchitecture/BackendProviderIntegration1.md)
 - [Renderer backend boundary](../../devdocs/CurrentArchitecture/RendererBackendBoundary.md)
 - [Renderer Foundation 2 accepted architecture](../../devdocs/CurrentArchitecture/RendererFoundation2.md)
 - [Renderer Foundation 2C final backend decision](../../devdocs/CurrentArchitecture/RendererFoundation2C.md)
 - [Physics backend](../../devdocs/CurrentArchitecture/PhysicsBackend.md)
+- [Asset collision and solid compiler decisions](../../devdocs/CurrentArchitecture/AssetCollisionGeometryDecisions.md)
+- [Canonical mesh collision](../../devdocs/CurrentArchitecture/AssetCollisionFoundation2B.md)
+- [Headless solid geometry compiler](../../devdocs/CurrentArchitecture/SolidGeometryFoundation1A.md)
 - [Soft-body Physics Foundation 2](../../devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation2.md)
 - [Soft-body Physics Foundation 1](../../devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation.md)
 - [Instance attributes](../src/content/docs/developing/instance-attributes.mdx)
 - [Instance tags](../src/content/docs/developing/instance-tags.mdx)
 - [EditorHost and Studio boundary](../src/content/docs/developing/editor-host.mdx)
+- [Durable Script document bindings](../../devdocs/CurrentArchitecture/ScriptDocumentBindings.md)
 - [Runtime foundation](../../devdocs/CurrentArchitecture/FoundationRuntime.md)
 - [Mutation gateway](../../devdocs/CurrentArchitecture/MutationGateway.md)
 - [Authoritative reset-to-default](../../devdocs/CurrentArchitecture/AuthoritativePropertyResetToDefault.md)

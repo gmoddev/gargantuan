@@ -7,6 +7,14 @@ return c({
 	since = "0.3.0",
 
 	properties = {
+		CollisionMode = {
+			description = "Box collision or anchored static triangle collision from the Mesh asset. Unanchored parts use Box collision.",
+			type = t.EnumItem("MeshCollisionMode"),
+			unmodified = "Enums::MeshCollisionMode::Box",
+			serializable = true,
+			replicated = true,
+			category = "Collision",
+		},
 		Mesh = {
 			description = "Strict Mesh asset reference",
 			type = t.String,

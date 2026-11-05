@@ -18,6 +18,12 @@ related_code:
 
 # Asset Foundation 2A
 
+This document describes the 2A baseline. The later
+[Asset 2B collision contract](AssetCollisionFoundation2B.md) adds Collision kind 6,
+MeshPart CollisionMode, mesh/collision artifact v4 and shared physics residency.
+[Geometry 1A](SolidGeometryFoundation1A.md) adds the transactional `.solid` importer.
+Those extensions do not change the render/material semantics below.
+
 ## Decision and asset kinds
 
 Foundation 2A extends the single schema-backed `AssetService`; it does not add
@@ -199,7 +205,7 @@ scene ownership; it never deletes shared asset records.
 
 ## MeshPart
 
-`MeshPart` is a schema-backed `BasePart` with two authored properties:
+`MeshPart` is a schema-backed `BasePart` whose 2A asset properties are:
 
 - `Mesh : string` is empty or a strict Mesh asset reference;
 - `Material : string` is empty or a strict Material asset reference.
@@ -211,7 +217,9 @@ whole-mesh override. Per-slot instance overrides are deferred. Missing mesh or
 material content has deterministic no-draw/fallback behavior and never reads a
 source file from the Instance. MeshPart inherits transform, visibility, color,
 transparency, and current BasePart behavior. Physics deliberately remains the
-safe inherited box shape; render triangles are not injected into Box3D.
+safe inherited box shape by default. Foundation 2B's explicit CollisionMode can
+project validated static Collision assets; render triangles are never injected
+directly into Box3D.
 
 ## Renderer residency and sharing
 
@@ -237,8 +245,9 @@ Catalog format 2 adds dependencies, source grouping, logical keys, and primary
 ownership. Artifact format 2 adds Material and mesh primitive/material records.
 Load explicitly accepts catalog 1 and artifact 1 for Foundation 1 Image, Mesh,
 and Font data, synthesizing a one-record source group and empty dependencies.
-Material requires artifact 2. Writers always emit version 2 and never silently
-reinterpret an unknown version.
+Material requires artifact 2. Catalog writers emit version 2. Artifact writers
+use version 2 for this baseline, version 3 for the animation/skinning extension,
+and version 4 for explicit mesh/collision content; unknown versions are rejected.
 
 Save/reopen and project relocation preserve strict references because the
 catalog stores only project-relative provenance. Local Play clones the exact
@@ -304,5 +313,5 @@ normal mapping and metallic-roughness rendering; add explicit material sampler
 semantics if required; add async Studio import progress/cancellation; add usage
 epochs/pins and disposable residency eviction driven by measured 64 MiB pressure;
 add per-slot overrides only with a demonstrated authoring need; design a separate
-mesh-collision asset boundary; add artifact garbage collection/directory-wide
+mesh-collision asset boundary (implemented by the linked 2B contract); add artifact garbage collection/directory-wide
 save transactions; and expand glTF fuzz corpus plus repeated sanitizer runs.

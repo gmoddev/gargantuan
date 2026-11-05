@@ -1,17 +1,19 @@
 ---
 status: current
 owner: runtime
-last_verified: 2026-09-01
+last_verified: 2026-11-03
 related_code:
   - assets/classes/KinematicCharacter.luau
   - assets/classes/Player.luau
   - assets/runtime/
   - assets/services/ActionMap.luau
+  - assets/services/InputService.luau
   - assets/services/Players.luau
   - include/gargantuan/physics/
   - src/classes/Player.cpp
   - src/physics/Box3DPhysicsBackend.cpp
   - src/services/ActionMap.cpp
+  - src/services/InputService.cpp
   - src/services/Players.cpp
   - tests/PlayerRuntimeTests.cpp
 related_adrs: []
@@ -29,7 +31,8 @@ simulation/render hooks, runtime assembly, rendering, physics, and isolated
 Play/Stop. The extracted contracts are:
 
 - `UserInputService` continues to own physical device state;
-- `ActionMap` maps bounded physical bindings to semantic action state;
+- `InputService` compiles canonical input Instances into local semantic state;
+- `ActionMap` preserves the existing name-based controller API over that evaluator;
 - `Players` owns the runtime-local gameplay player lifetime;
 - `Player` owns the relationship to one replaceable runtime character;
 - `KinematicCharacter` stores public controller state instead of hiding it in
@@ -39,8 +42,9 @@ Play/Stop. The extracted contracts are:
   policy, and camera policy.
 
 ```text
-native host input -> UserInputService -> ActionMap
-                                     -> shipped/replacement Luau policy
+native host input -> UserInputService -> GuiRuntime -> InputService
+                                                       -> ActionMap facade
+                                                       -> shipped/replacement Luau policy
 Workspace geometry -> PhysicsWorld -> MoveKinematicCapsule result
 Players -> Player -> KinematicCharacter -> visible RootPart
 ```
@@ -51,30 +55,42 @@ The low-level path remains supported: a game can disable both defaults and use
 
 ## ActionMap
 
-`ActionMap` is a canonical DataModel service above `UserInputService`. It does
-not replace physical input signals or device state. Its public methods are:
+`ActionMap` is a canonical DataModel compatibility service above the physical
+`UserInputService` authority. Its Bind methods create real `InputContext`,
+`InputAction`, and `InputBinding` Instances under `InputService`; the same derived
+indexed evaluator serves direct Instance authoring and legacy controllers.
+The facade does not replace physical signals or retain a second semantic
+evaluator. See [Input action foundation](InputActions.md) for the canonical API,
+schema, persistence, context conflicts, diagnostics, and bounded compilation.
+Its compatibility methods remain:
 
 | API | Current contract |
 | --- | --- |
 | `BindKey(ActionName, KeyCode, Scale, Priority, Consume)` | Add one keyboard or normalized gamepad-button binding and return a positive runtime binding ID. |
 | `BindMouseButton(ActionName, InputType, Scale, Priority, Consume)` | Add one of the three supported mouse-button bindings. |
 | `BindPointerDelta(ActionName, Scale, Priority, Consume)` | Add scaled frame-accumulated relative pointer delta. |
-| `Unbind(BindingId)` / `UnbindAction(ActionName)` | Remove one binding or every binding for an action. |
+| `Unbind(BindingId)` / `UnbindAction(ActionName)` | Remove adapter-owned bindings by positive runtime ID or action name; authored bindings remain intact. |
 | `IsDown`, `GetValue`, `GetVector` | Read digital, scalar, or transient vector action state. |
 | `GetBindingCount()` | Observe current bounded binding usage. |
 
 `ActionBegan`, `ActionChanged`, and `ActionEnded` publish semantic transitions.
 Multiple digital bindings sum and clamp to `[-1, 1]`; multiple pointer bindings
 for the same action accumulate before one change notification. Matching
-bindings publish in descending priority and stable binding-ID order. `Consume`
-marks the host event handled after `UserInputService` has recorded physical
-state, preventing the legacy native camera route from also acting on it. It
-does not hide physical state from `UserInputService`.
+bindings publish in descending priority and stable generation-safe identity
+order. Legacy bindings retain their cofire behavior: `Consume` marks the host
+event handled after `UserInputService` records physical state, preventing the
+legacy native camera route from also acting on it without suppressing sibling
+legacy actions. Canonical consuming contexts may suppress lower contexts,
+including the legacy context. Consumption never hides physical state from
+`UserInputService`.
 
 Focus loss ends active actions and clears transient Look state. Pointer vectors
 also reset at the engine frame boundary. The native service accepts at most 128
 action names, 512 bindings, and 64 UTF-8 bytes per action name. Mutation requires
-`MutateDataModel`.
+`MutateDataModel`. These compatibility limits are distinct from the canonical
+graph's 64 contexts, 256 actions, and 2048 bindings. Definition Instances persist
+when authored in the project; device state and action values remain local and
+transient. The adapter context is runtime-owned and unarchivable.
 
 The shipped `DefaultActionMap.luau` is the player-policy location that names W,
 A, S, D, Space, and RMB. It declares `MoveForward`, `MoveBackward`,
@@ -84,8 +100,9 @@ these bindings consume the legacy native-camera route without hiding physical
 state from `UserInputService`. Binding shape, priority, and multiplicity
 leave room for later remapping. Interaction Foundation separately ships
 `DefaultInteractionRuntime.luau`, which maps keyboard E and normalized gamepad
-South / `ButtonA` to the `Interact` semantic action. It does not add a second
-input map.
+South / `ButtonA` to the `Interact` semantic action. Both modules fill only
+missing named canonical actions and clean up only bindings they created;
+developer-authored actions are preserved. They do not add a second input map.
 
 ## Players and character lifecycle
 

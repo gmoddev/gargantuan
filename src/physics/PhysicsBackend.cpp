@@ -51,6 +51,9 @@ namespace gargantuan {
 	std::optional<PhysicsBodyState> PhysicsWorld::GetBodyState(PhysicsBodyId Body) const {
 		return Backend ? Backend->GetBodyState(Body) : std::nullopt;
 	}
+	PhysicsCollisionResidency PhysicsWorld::GetCollisionResidency() const {
+		return Backend ? Backend->GetCollisionResidency() : PhysicsCollisionResidency{};
+	}
 	PhysicsKinematicMotionResult
 	PhysicsWorld::MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const {
 		return Backend ? Backend->MoveKinematicCapsule(Request)

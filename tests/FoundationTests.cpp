@@ -5133,7 +5133,7 @@ namespace {
 		const auto CreatedProjectDocument = Json::parse(CreatedProjectStream);
 		CreatedProjectStream.close();
 		Check(CreatedProjectDocument["Version"] == 4 && CreatedProjectDocument["Name"] == "Created Project" &&
-			CreatedProjectDocument["Children"].size() == 4 &&
+			CreatedProjectDocument["Children"].size() == 5 &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "Workspace" && Child["Name"] == "Workspace";
 			}) &&
@@ -5145,15 +5145,18 @@ namespace {
 			}) &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "ReplicatedStorage" && Child["Name"] == "ReplicatedStorage";
+			}) &&
+			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
+				return Child["ClassName"] == "InputService" && Child["Name"] == "InputService";
 			}),
-			"CreateProject immediately persists canonical Workspace, AssetService, Lighting, and ReplicatedStorage in project format v4");
+			"CreateProject immediately persists Workspace, AssetService, Lighting, ReplicatedStorage, and InputService in project format v4");
 		auto ExistingProjectCreate = call("CreateProject", {
 			{"Destination", CreatedRoot.string()}, {"Name", "Overwrite Attempt"}
 		}, "test-token");
 		Check(!ExistingProjectCreate["Ok"].get<bool>() && ExistingProjectCreate["Error"]["Code"] == "ExistingProject",
 			"CreateProject never overwrites an existing Gargantuan project");
 		auto CreatedSnapshot = call("GetSnapshot", Json::object(), "test-token");
-		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 5,
+		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 6,
 			"the minimum new project is immediately available through the normal authoritative snapshot path");
 		auto CreatedWorkspace = std::find_if(
 			CreatedSnapshot["Result"]["Snapshot"]["Objects"].begin(),
@@ -5319,6 +5322,41 @@ namespace {
 				Check(call("SendPlayInput", {
 					{"PlaySessionId", PlayId}, {"Type", "Focus"}, {"Focused", true}
 				}, "test-token")["Ok"].get<bool>(), "focused viewport input reaches the exact active Play session");
+				const auto SendPlayKey = [&](std::uint32_t Physical, std::uint32_t Logical, const char *State) {
+					return call("SendPlayInput", {
+						{"PlaySessionId", PlayId}, {"Type", "Key"}, {"Physical", Physical},
+						{"Logical", Logical}, {"State", State}, {"Modifiers", 1}, {"Repeat", false}
+					}, "test-token");
+				};
+				for (const auto &[Physical, Logical] : std::array{
+					std::pair{4u, 97u},    // A: ordinary ASCII logical key
+					std::pair{82u, 273u},  // Up: high physical and logical IDs
+					std::pair{225u, 304u}, // LeftShift: modifier IDs
+				}) {
+					Check(SendPlayKey(Physical, Logical, "Pressed")["Ok"].get<bool>(),
+						"Play admits a declared physical/logical key press");
+					Check(SendPlayKey(Physical, Logical, "Released")["Ok"].get<bool>(),
+						"Play admits the matching declared key release");
+				}
+				const auto WrongSessionKey = call("SendPlayInput", {
+					{"PlaySessionId", "999999"}, {"Type", "Key"}, {"Physical", 82u},
+					{"Logical", 273u}, {"State", "Pressed"}
+				}, "test-token");
+				Check(!WrongSessionKey["Ok"].get<bool>() && WrongSessionKey["Error"]["Code"] == "StalePlaySession",
+					"Play rejects key input addressed to a different session while running");
+				for (const auto Physical : {1u, 45u, 83u, 223u, 232u, 65536u + 82u, 4294967295u}) {
+					const auto Rejected = SendPlayKey(Physical, 273u, "Pressed");
+					Check(!Rejected["Ok"].get<bool>() && Rejected["Error"]["Code"] == "InvalidPlayInput",
+						"Play rejects physical-key holes, out-of-range IDs, and narrowing aliases");
+				}
+				for (const auto Logical : {0u, 33u, 65u, 128u, 255u, 297u, 299u, 323u, 2047u, 65536u + 273u, 4294967295u}) {
+					const auto Rejected = SendPlayKey(82u, Logical, "Pressed");
+					Check(!Rejected["Ok"].get<bool>() && Rejected["Error"]["Code"] == "InvalidPlayInput",
+						"Play rejects logical-key holes and narrowing aliases");
+				}
+				Check(SendPlayKey(0u, 2048u, "Pressed")["Ok"].get<bool>() &&
+					SendPlayKey(0u, 2048u, "Released")["Ok"].get<bool>(),
+					"Play admits the declared unknown physical and logical key values");
 				auto RightDown = call("SendPlayInput", {
 					{"PlaySessionId", PlayId}, {"Type", "PointerButton"},
 					{"Button", "Right"}, {"State", "Pressed"}, {"X", 10.0}, {"Y", 20.0}
@@ -5401,6 +5439,9 @@ namespace {
 				Check(StopPlay["Ok"].get<bool>() && StopPlay["Result"]["State"] == "Stopped" &&
 					call("GetProjectState", Json::object(), "test-token")["Result"] == StateBeforePlay,
 					"Stop destroys runtime state without changing authoring revision, dirty state, or history");
+				const auto StaleKey = SendPlayKey(82u, 273u, "Pressed");
+				Check(!StaleKey["Ok"].get<bool>() && StaleKey["Error"]["Code"] == "StalePlaySession",
+					"Play rejects key input after the owned session stops");
 				for (int Cycle = 0; Cycle < 10; ++Cycle) {
 					auto RepeatedStart = call("StartPlaySession", Json::object(), "test-token");
 					Check(RepeatedStart["Ok"].get<bool>(), "repeated Play starts successfully");

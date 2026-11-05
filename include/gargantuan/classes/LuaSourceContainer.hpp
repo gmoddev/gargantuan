@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/classes/generated/LuaSourceContainer.hpp"
+#include "gargantuan/filesystem/ProjectIdentity.hpp"
 
 #include <SDL3/SDL.h>
 #include <lua.h>
@@ -20,6 +21,8 @@ namespace gargantuan {
 		I_LuaSourceContainer;
 
 	  private:
+		std::string SourceId = ProjectId::New().ToString();
+		bool SourceIdLoaded = false;
 		std::string Source;
 		int SourceVersion = 1;
 		void AssignSource(std::string Value, bool Authoritative);
@@ -28,6 +31,7 @@ namespace gargantuan {
 		void ApplyReplicatedSource(std::string Value);
 
 	  public:
+		[[nodiscard]] bool WasSourceIdLoaded() const { return SourceIdLoaded; }
 		std::string ChunkName = GetFullName();
 
 		std::vector<char> Bytecode;

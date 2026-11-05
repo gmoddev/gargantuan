@@ -1,0 +1,183 @@
+---
+status: accepted
+date: 2026-11-04
+owner: runtime-assets
+related_code:
+  - include/gargantuan/assets/AssetTypes.hpp
+  - include/gargantuan/physics/PhysicsTypes.hpp
+  - include/gargantuan/geometry/SolidGeometryCompiler.hpp
+  - src/services/AssetService.cpp
+related_adrs: []
+---
+
+# Asset 2B and Geometry 1A decisions
+
+These decisions govern the isolated `feature/asset2b-geometry1a` implementation.
+The [collision contract](AssetCollisionFoundation2B.md) and
+[compiler contract](SolidGeometryFoundation1A.md) describe the concrete APIs and
+formats. Qualification and source identities belong in the campaign receipt;
+this accepted decision does not assert that unexecuted tests have passed.
+
+## Authority and representations
+
+There is one AssetService catalog and compound transaction. Authored `.solid`
+source is a versioned bounded graph, render geometry is an ordinary Mesh,
+collision geometry is a separate Collision asset, and Box3D shapes are disposable
+world-owned projections. None becomes a second project database, Instance graph,
+history, spatial index, networking authority, or residency-demand selector.
+
+`AssetKind::Collision` is appended as numeric value 6, preserving existing kinds.
+Mesh artifact v4 explicitly references its Collision dependency; older supported
+artifacts retain their existing interpretation. Stable source-group logical keys
+preserve logical asset IDs across compatible imports. Content hashes identify
+canonical bytes, while content revisions identify publication changes. Source
+paths remain project-relative provenance, never runtime file-loading authority.
+
+## Collision policy and lifetime
+
+The first representation is finite, bounded indexed static triangles. It permits
+open surfaces for collision; a solid Boolean operand separately requires a
+closed oriented manifold. Render normals, UVs, materials and triangle buffers
+are not implicitly trusted collision data.
+
+`MeshPart.CollisionMode` is `Box` by default, preserving existing behavior.
+`StaticMesh` requests the Mesh asset's canonical Collision dependency. An anchored
+part uses that mesh with the same transform and per-axis Size as rendering.
+Unanchored concave collision uses the documented Box alternative, with bounded
+diagnostics. Sizes below Box3D's 0.01 mesh-scale floor also use an explicit Box
+alternative. Other invalid or unavailable mesh replacements fail and retain the
+previous complete body state; they cannot silently substitute geometry.
+
+Main applies committed changes at the existing physics safe point. Body and
+constraint IDs remain generation-safe and unchanged by successful shape
+replacement. Native mesh data is shared by immutable asset identity/revision
+within one physics world and retained until the last consuming shape is gone.
+Native handles never enter assets, Instances, snapshots, Luau or renderer state.
+This slice covers rigid contacts and queries. The sibling XPBD deformable
+collider projection retains its existing primitive approximations.
+
+Asset admission counts canonical collision bytes and retires unreferenced old
+source-group artifacts after successful publication/deletion. Captured snapshots
+retain their own immutable bytes. Physics separately accounts active resources,
+consumers and native mesh-data bytes; unknown per-shape storage is labeled unknown.
+Aggregate native admission is bounded without adding demand selection or eviction.
+
+## Compilation and publication
+
+`CompileSolidGeometry(Graph, Cancellation, Deadline, Limits)` returns owned
+`SolidCompilation { Mesh, Collision }` candidates or a bounded diagnostic.
+It validates the complete graph before evaluation. Union/intersection evaluate
+listed operands deterministically; subtraction is ordered. Nested transforms and
+imported operands are admitted only within the documented geometric bounds.
+
+The `.solid` importer submits both candidates through the existing source-group
+transaction. The complete pair is encoded, validated and admitted before either
+revision is published. Failure preserves the previous valid pair. Published
+content remains resolvable while reimport runs; project/runtime capture serializes
+that prior complete revision as Stale rather than an unfinished Importing state.
+Initial imports with no published content cannot enter a runtime package.
+
+The kernel is the serial, minimal vendored Manifold v3.5.4 core at an immutable
+commit with archive and per-file hashes, retained Apache-2.0 license, and no
+optional downloads or cross-section dependencies. The implementation validates
+canonical output and normalizes/sorts triangles. Same-profile repeat hashes and
+measured toolchain corpus results are distinct from a universal determinism claim.
+
+The initial surface policy regenerates flat normals and planar UVs. Imported
+material groups and source-face attribution are not retained by Boolean cuts.
+Empty solid results are explicit failures that preserve the previous bake.
+Cooperative cancellation reaches kernel phase boundaries; topology/work limits
+are admission guards, not a hard allocator quota or preemptive deadline. Adversarial
+peak-memory and cancellation measurements are required qualification evidence.
+
+## Scope and staged integration
+
+The existing native authoring API imports a source file into the canonical pair:
+
+```cpp
+auto Result = Assets.ImportProjectAsset(Mount, "assets/Cut.solid", AssetKind::Mesh);
+// Result.Ok, Result.Diagnostic and Result.Records describe the one transaction.
+// Result.Record is the ordinary primary Mesh; its explicit dependency resolves:
+auto Collision = Result.Record
+    ? Assets.ResolveCollisionForMesh(Result.Record->Reference.Value)
+    : std::nullopt;
+```
+
+The source can use existing stable node IDs and ordered subtraction:
+
+```json
+{
+  "Version": 1,
+  "Root": "cut",
+  "Nodes": [
+    {"Id": "body", "Kind": "Box", "Size": [4, 4, 4]},
+    {"Id": "cutter", "Kind": "Box", "Size": [2, 6, 2]},
+    {"Id": "cut", "Kind": "Subtraction", "Inputs": ["body", "cutter"]}
+  ]
+}
+```
+
+After import, normal Luau Instance construction uses the published Mesh reference:
+
+```luau
+local Part = Instance.new("MeshPart")
+Part.Anchored = true
+Part.Mesh = MeshReference -- The primary reference returned by native authoring.
+Part.Size = Vector3.new(1, 1, 1)
+Part.CollisionMode = Enum.MeshCollisionMode.StaticMesh
+Part.Parent = workspace
+```
+
+This creates the same schema-backed MeshPart as manual construction. Source graph
+compilation is native authoring work, not a new Luau gameplay service. Existing
+`AssetService:GetAssetMetadata(Reference)` remains the bounded read-only Luau
+metadata entry point; native tools additionally read collision residency snapshots.
+
+1. Canonical collision value/codec and atomic mesh companion publication.
+2. MeshPart projection, native sharing, scale validation and safe retirement.
+3. Persistence, packaged runtime, reimport and resource accounting.
+4. Pinned offline kernel and bounded graph/candidate compiler.
+5. Boolean corpus, deterministic artifacts and transactional compiler import.
+6. Windows/Linux, malformed-input, sanitizer and performance qualification.
+7. Independent review, source-bound receipt, isolated feature PR and continuation.
+
+Foundation 3M owns trusted demand selection, hysteresis and lookahead. Foundation
+3L content admission/lifecycle and networking behavior remain unchanged. Shared
+CMake additions are recorded independently; neither campaign incorporates the
+other's unmerged branch. Production Studio, frozen Avalonia, a modeling interface,
+runtime game-facing CSG, convex decomposition and dynamic concave simulation are
+outside this slice.
+
+Canonical mesh positions are transformed by `CFrame * Size`; Size is the existing
+2A scale, not automatic normalization to a unit bounding box. Existing 3L package
+coarse bounds derived only from Size/2 need not cover arbitrary mesh positions.
+Consumers must supply conservative spatial metadata under their owning contract;
+this campaign does not silently alter package bounds, 3K regions or 3M selection.
+The concurrent 3M campaign records that pre-existing bounds limitation separately.
+
+## Bounded dense-contact correction (KI-2B-001)
+
+The correction keeps one canonical Collision asset and one shared native resource
+per identity/revision. The adapter builds global adjacency once, partitions the
+native BVH's spatial triangle order into at most 255 triangles per chunk, preserves
+each triangle's global edge flags, and projects one native shape per chunk. Each
+shape fits below Box3D's 256-candidate contact buffer; no triangles are selected
+or dropped to meet that buffer. Native geometry and chunk handles remain private.
+
+A separate per-world mesh-shape ceiling defaults to and cannot exceed 65536.
+It bounds chunk amplification without changing existing primitive admission or
+3M policy. Both old and staged replacement shapes consume that ceiling. Candidate
+creation rolls back all native shapes on failure before the previous body changes.
+Canonical bytes count once, native bytes sum all chunks, and conservative build
+admission charges the full adjacency mesh plus chunks against remaining native
+mesh-data bytes. Builder scratch is not a hard allocator quota.
+
+Ray hits are deduplicated to the nearest hit per neutral body. Exact duplicate
+mover planes are coalesced. Begin/end events aggregate native shape-pair membership
+to neutral body pairs across complete steps, preventing false events at chunk
+seams. At most 65536 native pairs and step changes are tracked; observation overflow
+latches `EventsTruncated` for the remaining world lifetime, explicitly marking
+subsequent contact-event history incomplete. It does not drop physical triangles.
+CanTouch changes stage shape replacement because the pinned backend copies event
+flags at contact creation. The missed-contact, seam, bounds, replacement and
+sharing regressions must pass before this correction is marked qualified.

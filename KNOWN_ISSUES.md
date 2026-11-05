@@ -4,6 +4,107 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-3M-001: Packaged mesh coarse bounds need conservative geometry metadata
+
+- Status: Fix implemented in integration PR16; exact-source qualification is recorded in the cross-foundation report.
+- Area: Package partition bounds / trusted spatial demand.
+- Relevant code: `src/packaging/PackageBuilder.cpp::InspectSerializedSubtree` and
+  `src/render/RenderPublisher.cpp::ExtractMeshPart`.
+
+At the pinned PR15 source, package partition inspection derives a transformed
+`abs(Size) * 0.5` box.
+MeshPart rendering uses canonical mesh positions transformed by `CFrame * Size`;
+Size is a scale and does not normalize mesh coordinates into that box. Mesh
+coordinates outside +/-0.5 can therefore extend beyond the generated package
+CoarseBounds. A focus near that extended geometry can miss the content unit in
+an indexed demand query. This is independent of collision artifact/shape semantics.
+
+The required integration contract is a conservative per-unit PackageCoarseBounds
+covering actual transformed geometry, derived from verified asset-local bounds
+when the writer has mesh metadata. Until that metadata is available, affected
+units need trusted critical demand or fully resident composition. Foundation 3M
+consumes authored bounds and cannot infer missing geometry by scanning payloads,
+changing Asset 2B collision contracts, or injecting ghost runtime projections.
+
+The isolated `ResidencySpatialMetadata` v1 native consumer can compare a supplied
+sorted package/key/digest/space/AABB proof with a validated manifest and report
+missing or underbounded units. It does not provide the geometry calculation,
+package-writer integration or qualified metadata producer. The supplied unit
+aggregate must already be transformed into manifest package-space coordinates;
+a mesh-local bound cannot replace it. At the pinned PR15 source, the issue
+remained open even when a detached compatibility fixture passed.
+
+Closure required a separately scoped package/asset metadata correction and a
+non-normalized imported/generated mesh regression; PR15's scale receipt does
+not certify this integration.
+
+The [cross-foundation candidate](devdocs/CurrentArchitecture/CrossFoundationPackageSpatialIntegration.md)
+now derives supported static unit aggregates from exact canonical Mesh and
+Collision artifacts plus inherited Box coverage, retaining unsupported whole
+subtrees in bootstrap. Build and full Validate/Load rederive and bind the proof
+to verified bytes; a consistently rehashed historical underbound is a regression
+case. Geometry-aware standalone MeshPart relevance is separately included.
+Actual Windows package/provider/physics/render/peer fixtures now exercise this
+correction, including offset imported/generated geometry and consistently
+rehashed historical underbounds. The [qualification report](devdocs/Validation/CrossFoundationQualification.md)
+and [draft PR16](https://github.com/gmoddev/gargantuan/pull/16) record exact-source
+results and closure status. This entry continues to describe the pinned PR15
+defect; earlier PR13/PR15 qualification is not promoted to the integration.
+
+## KI-2B-001: Dense mesh rigid contacts can reach Box3D's candidate cap
+
+- Status: Corrected in PR14's bounded native chunk policy; exact local evidence
+  and final-head hosted qualification are tracked in the follow-up report.
+- Area: Native rigid-contact projection for admitted static triangle meshes.
+- Relevant code: pinned Box3D `src/mesh_contact.c`,
+  `src/physics/Box3DPhysicsBackend.cpp`.
+- Evidence: [KI-2B-001 correction and qualification](devdocs/Validation/DenseMeshContactKI2B001.md).
+
+The pinned backend gathers at most 256 triangles per local rigid-contact query
+and processes that subset. Reaching the cap emits a warning once per process;
+it is not a per-asset admission rejection or a neutral truncation diagnostic.
+The prior single-shape projection could therefore omit rigid contacts. The Source13
+2048-triangle Windows stress fixture reaches the cap and produces contacts, but
+does not prove a missed contact or complete coverage. Rays and mover queries have
+separate paths and evidence. Canonical collision artifacts remain valid,
+backend-neutral data; their triangle limit is not this local query limit.
+
+The 300-decoy/one-support regression reproduces the miss on the old Windows and
+Linux runtimes, while the corrected runtime contacts the support. Each native
+shape now contains at most 255 triangles, retaining global edge adjacency.
+Per-world native shape and byte bounds, staged rollback, shared residency and
+neutral seam events are tested. The allocator alignment defect exposed by this
+path is corrected in a hash-checked private vendor build copy. This closes the
+candidate-omission mechanism within the qualified policy; it does not remove
+the independent solver, event/query bounds or dynamic-concave limitation.
+
+## KI-011: Soft-body stale-work fixture used an unproven in-flight premise
+
+- Status: Corrected with deterministic admission/pre-merge barriers; targeted
+  serial and concurrent Windows qualification passes. No production identity
+  defect established. Subsequent hosted qualification remains independently required.
+- Area: `tests/SoftBodyPhysicsTests.cpp`, destroy/reuse while work is in flight.
+- Evidence: [LUI input composition qualification](devdocs/CurrentArchitecture/LuiInputIntegration.md).
+  Follow-up: [deterministic lifecycle qualification](devdocs/Validation/ki011-20261103/README.md).
+
+The Windows MSVC 19.44 integrated 82-test run failed the stale-in-flight
+destroy/reuse assertion. One isolated repetition of the identical binary passed.
+The original fixture spins up to 1000 yields, then sleeps 2 ms without asserting
+that an in-flight step was observed before mutation. A missed premise is a
+source-backed hypothesis, not an excuse to waive the generation-safety assertion.
+The recorded failure did not capture its exact internal interleaving.
+
+The controlled reproduction now holds Step immediately after admission and proves
+that `HasInFlightStep=true` can coexist with no captured old body. Destroy/reuse
+then correctly produces zero stale results while retaining generation safety;
+the original stale-count assertion would falsely fail. The corrected lifecycle
+cases instead hold completed real solver jobs before merge, mutate the captured
+body, and retain the stale-result assertion plus empty-publication and unchanged
+replacement-state checks. Serial and two concurrent processes pass. Bounded
+barriers release and join on failure. The ordinary factory installs no hooks;
+solver arithmetic and generation/revision validation are unchanged. This
+correction does not turn the original full-suite result into a clean 82/82 run.
+
 ## KI-010: PreRun deadline interrupt can recurse during GC error construction
 
 - Status: Corrected in the PreRun authoring candidate; focused validation and

@@ -57,6 +57,15 @@ owns duplicate projection position or dirty state. The store contains no
 reference, root membership set, and signal connections, then resolves current
 semantic state at the established Main-safe relevance point.
 
+Standalone MeshPart projections additionally derive conservative geometry from
+the canonical AssetService at that same safe point. 3E retains only bounded
+derived local envelopes/revision cache and an explicit unqualified-geometry
+fallback reason; this store remains the sole projection/index owner. Vertex
+validation is cached by current asset reference/revision, never performed per
+peer, and asset changes/removal invalidate it. Character-rooted mesh descendants
+retain Character point semantics. See the
+[integration contract](CrossFoundationPackageSpatialIntegration.md).
+
 The acceleration index owns only cell membership metadata. It no longer stores
 a second copy of bounds. This gives three explicit categories:
 
