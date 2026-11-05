@@ -9,6 +9,7 @@
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <SDL3/SDL.h>
@@ -321,6 +322,12 @@ namespace {
 		NamespacePolicy.Stop(nullptr);
 
 		auto ClientWorld = std::make_shared<DataModel>();
+		auto ClientPlayers = std::dynamic_pointer_cast<Players>(ClientWorld->GetService("Players"));
+		Check(ClientPlayers != nullptr, "network client fixture has no Players service");
+		auto LocalPlayer = ClientPlayers->CreateSessionPlayer({"cross-consumer-test", "local"});
+		Check(ClientPlayers->SetTrustedLocalPlayer(LocalPlayer) &&
+			ClientPlayers->GetLocalPlayer().value_or(nullptr) == LocalPlayer,
+			"network client fixture did not establish its trusted LocalPlayer");
 		HeadlessRenderer Renderer(Vector2(32, 32));
 		Engine Client(ClientWorld, &Renderer, {}, {.Content = Package.Configuration(),
 			.Mode = RuntimeMode::NetworkClient, .EnableResidencyDemandPolicy = true});
