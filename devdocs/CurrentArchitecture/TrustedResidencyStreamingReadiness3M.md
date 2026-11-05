@@ -78,9 +78,11 @@ slice. The separately composed
 implements package production/verification using this same adapter; its new
 combined qualification is recorded separately from PR15 evidence.
 [KI-3M-001](../../KNOWN_ISSUES.md#ki-3m-001-packaged-mesh-coarse-bounds-need-conservative-geometry-metadata)
-therefore remains open. Spatial policy can use only bounds already present in
-the validated manifest; affected geometry still needs conservative authored
-bounds, trusted native demand or fully resident composition.
+remained open at the pinned PR15 source. The separately qualified PR16 package
+producer resolves that defect for its supported static geometry; unsupported
+subtrees remain in bootstrap. Spatial policy still consumes only bounds in the
+validated manifest. PR15's independent receipt does not qualify the later
+producer or the combined Input/streaming mainline source.
 
 ## Opt-in observation
 

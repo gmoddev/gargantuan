@@ -6,6 +6,7 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/InputService.hpp"
 
 #include <chrono>
 #include <sstream>
@@ -107,6 +108,13 @@ namespace gargantuan {
 		StreamingDiagnostics Result;
 		Result.Status = StreamingDiagnosticStatus::Stopped;
 		return Result;
+	}
+
+	std::shared_ptr<InputService> PlaySession::GetInputForInspection() const {
+		if (State != PlaySessionState::Running || !RuntimeEngine || !RuntimeWorld) return {};
+		const auto &Input = RuntimeEngine->Input;
+		if (!Input || Input->GetDestroyed() || Input->GetReplicationScopeId() != RuntimeWorld->GetObjectId()) return {};
+		return Input;
 	}
 
 	void PlaySession::Resize(std::uint32_t Width, std::uint32_t Height) {

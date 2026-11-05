@@ -32,10 +32,14 @@ and destroys the owned session.
 ## Protocol and lifecycle
 
 `StartPlaySession`, `StopPlaySession`, `GetPlaySessionState`,
-`PollPlayDiagnostics`, and `SendPlayInput` require the token-bound EditorHost session.
+`PollPlayDiagnostics`, `GetPlayInputSnapshot`, and `SendPlayInput` require the token-bound EditorHost session.
 Start also requires `EditorCommands` and `ReadDataModel`; input requires
 `ViewportControl`. IDs are engine-issued canonical nonzero decimal strings, and every
 session-scoped request must carry the exact active ID. A stale ID fails closed.
+Input inspection additionally requires `ReadDataModel`, the advertised
+`PlayInputInspection` capability and a running session. Its independently
+versioned [bounded owning DTO](PlayInputInspection.md) never exposes authoring IDs
+or advances authoring history.
 
 The states are `Stopped`, `Starting`, `Running`, `Stopping`, and `Failed`. Start is
 rejected when no project is open, an authoring transaction is open, or another
@@ -59,6 +63,10 @@ authoring camera mutation are intentionally unavailable during Play.
 Input is a closed `HostEvent` subset: focus, bounded key transitions, finite
 pointer movement, and semantic pointer-button transitions. Studio forwards input
 only while the runtime viewport is focused and sends focus release on blur.
+Key IDs are validated against the complete declared physical and logical key
+vocabularies before narrowing to their 16-bit storage. This admits arrows,
+modifiers, and keypad/function keys while rejecting undefined gaps and high
+integers that would alias a valid key after narrowing.
 `PointerMoveEvent.Delta` is relative motion regardless of host implementation;
 `PlaySession`, `Engine`, `UserInputService`, and gameplay never reconstruct it
 from absolute cursor positions. EditorHost returns relative-pointer commands to

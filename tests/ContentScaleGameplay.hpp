@@ -267,7 +267,8 @@ Event.OnServerEvent:Connect(function(Peer, Message, Sequence)
     end
     Event:FireClient(Peer.Slot, Peer.Generation, Message, Sequence)
 end)
-Function:SetServerHandler(function(Peer, Message) return Message end)
+)" +
+R"(Function:SetServerHandler(function(Peer, Message) return Message end)
 )");
 		ServerScript->SetParent(World);
 		auto ClientScript = std::make_shared<Script>();
@@ -536,7 +537,8 @@ local function PublishPhaseMetrics(RunningPhase)
     local P99 = RpcSamples[99] or 0
     local Maximum = RpcSamples[100] or 0
     Control:SetAttribute("ScaleRemoteMetrics", string.format("[Content:ScaleRemote] phase=%s samples=%d mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f max_us=%.0f timeouts=%d errors=%d",
-        RunningPhase, #RpcSamples, Mean, RpcSamples[50] or 0, P95, P99, Maximum, RpcTimeouts, RpcErrors))
+)" +
+R"(        RunningPhase, #RpcSamples, Mean, RpcSamples[50] or 0, P95, P99, Maximum, RpcTimeouts, RpcErrors))
     Control:SetAttribute("ScaleRemoteSamples", #RpcSamples)
     Control:SetAttribute("ScaleRemoteP95Us", P95)
     Control:SetAttribute("ScaleRemoteP99Us", P99)
@@ -748,7 +750,8 @@ RunService.PostSimulation:Connect(function()
         PhaseActionSubmissionFailuresStart = ActionSubmissionFailures
         PhaseActionRejectionsStart = ActionRejections
         PhaseActionUnexpectedEndingsStart = ActionUnexpectedEndings
-        RpcComplete = false
+)" +
+R"(        RpcComplete = false
         RpcStarted = false
         RpcSamples = {}
         RpcTrace = {}
@@ -972,7 +975,8 @@ if PhysicalFarm then
         local NowNs = math.floor(os.clock() * 1000000000)
         -- The ordinary notification owns the immutable local observation.
         -- The server's independent cessation-to-receipt20s gate remains final.
-        if not RecoveryResultSent and not RecoveryFailed and NowNs >= RecoveryDeadlineNs then
+)" +
+R"(        if not RecoveryResultSent and not RecoveryFailed and NowNs >= RecoveryDeadlineNs then
             RecoveryFailed, RecoveryFailureReason = true, "deadline"
             if RecoveryProbesStarted and not RecoveryCohortClosed then CloseRecoveryCohort("FAILED", "deadline") end
         end

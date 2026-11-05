@@ -18,6 +18,7 @@
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/UserInputService.hpp"
+#include "gargantuan/services/InputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <chrono>
@@ -42,6 +43,7 @@ namespace gargantuan {
 		  WorldRoot(std::static_pointer_cast<gargantuan::WorldRoot>(Workspace)),
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
 		  UserInputService(GetService<gargantuan::UserInputService>()), ActionMap(GetService<gargantuan::ActionMap>()),
+		  Input(GetService<gargantuan::InputService>()),
 		  Assets(GetService<gargantuan::AssetService>()),
 		  CharacterControl(GetService<gargantuan::CharacterControlService>()),
 		  Animation(
@@ -254,12 +256,7 @@ namespace gargantuan {
 
 		Result.Consumed = UserInputService->ProcessEvent(Event);
 		const bool GuiConsumed = Gui && Gui->ProcessEvent(Event);
-		if (!GuiConsumed)
-			Result.Consumed = ActionMap->ProcessEvent(Event) || Result.Consumed;
-		else {
-			ActionMap->ProcessConsumedRelease(Event);
-			Result.Consumed = true;
-		}
+		Result.Consumed = Input->ProcessEvent(Event, GuiConsumed) || GuiConsumed || Result.Consumed;
 		if (!Result.Consumed) Result.Command = Workspace->GetCurrentCamera()->ProcessEvent(Event);
 		if (auto InputCommand = UserInputService->SynchronizeMouseBehavior()) Result.Command = InputCommand;
 		if (Gui)
@@ -469,7 +466,7 @@ namespace gargantuan {
 				}
 			}
 
-			ActionMap->EndFrame();
+			Input->EndFrame();
 			UserInputService->EndFrame();
 
 			{

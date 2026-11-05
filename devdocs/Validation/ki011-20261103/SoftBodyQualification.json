@@ -1,0 +1,58 @@
+{
+  "Sources": [
+    {
+      "SHA256": "D012FBBC89DE339A2CD87E7D63C084A6A3A9AC9CDE829DB22DDEB9674F76B27E",
+      "BaseGitBlob": null,
+      "Path": "src/physics/SoftBodyTestHooks.hpp"
+    },
+    {
+      "SHA256": "5BAD00D887024EDD5E73BB8BE3516AA948827810AB32F2461B1B3142D4D7CE76",
+      "BaseGitBlob": "48480ec459f6b1edbdbcc7e5216bd56d410b45ba",
+      "Path": "src/physics/XpbdSoftBodyBackend.cpp"
+    },
+    {
+      "SHA256": "E01BD290638835E4D2E980B01B0D5CE389F4BE1A4F184225C346554EA69EFA41",
+      "BaseGitBlob": "1a3640e76ad041ac53c904c5e04a6c2dbd6a37a4",
+      "Path": "tests/SoftBodyPhysicsTests.cpp"
+    }
+  ],
+  "Fixture": "256x256 High cloth, no attachments; 128x128 High shutdown fixture; deterministic fixed data, no random seed",
+  "Binaries": [
+    {
+      "File": "gargantuan_soft_body_physics_tests.exe",
+      "SHA256": "DE8456E4899FA9B873B999B9ACF4253A45EC97FD9AB8D56EB964A700C3C98CA6"
+    },
+    {
+      "File": "gargantuan_physics_backend_tests.exe",
+      "SHA256": "7561EC15AAFDEBF0B0502BA33F47E1A22F01D36540714ECF44C803CF188DAFAF"
+    }
+  ],
+  "Result": "PASS",
+  "FinishedUtc": "2026-11-03T11:03:19.6743650Z",
+  "SerialCases": 2,
+  "ConcurrentProcesses": 2,
+  "Configuration": "MSVC 19.44 x64 Release; Ninja; GNS OFF; NodeContent OFF; PCH OFF; two compile jobs",
+  "SourceParent": "183e6d119",
+  "InitialFailure": {
+    "Source": "942c4f8d9d4849da5e82f08810d4f7fda228a1d8",
+    "FixedFixture": "256x256 High cloth, no attachments; gravity(0,-20,0); 1/60s",
+    "Timing": "Original0.55s failure; isolated0.36s pass; up to1000 yields followed by2ms sleep",
+    "RandomSeed": "None; fixed data",
+    "InternalInterleaving": "Not captured by the original failure"
+  },
+  "DemonstratedCounterexample": {
+    "InFlightObserved": true,
+    "StaleResults": 0,
+    "CapturedReplacement": true,
+    "OldStaleAssertionWouldFail": true
+  },
+  "Premise": {
+    "Phase": "BeforeMerge after real solver JobGroup::Wait",
+    "JobsDispatched": 1,
+    "ClothVertices": 65536,
+    "ClothQueuedResultBytes": 786432,
+    "ShutdownVertices": 16384,
+    "ShutdownQueuedResultBytes": 196608
+  },
+  "Limits": "Focused Windows serial and fixed-concurrency regression; no production generation/solver algorithm change, no assertion weakening, no retry-until-pass, no rewrite of original full-suite results."
+}

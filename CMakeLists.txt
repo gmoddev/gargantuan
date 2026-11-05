@@ -853,6 +853,12 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_platform_input_boundary_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_player_runtime_tests "tests/PlayerRuntimeTests.cpp")
 	target_link_libraries(gargantuan_player_runtime_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_input_action_tests "tests/InputActionTests.cpp")
+	target_link_libraries(gargantuan_input_action_tests PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_script_document_binding_tests "tests/ScriptDocumentBindingTests.cpp")
+	target_link_libraries(gargantuan_script_document_binding_tests PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_input_action_benchmark "tests/InputActionBenchmark.cpp" "tests/ActionMapBaseline.cpp")
+	target_link_libraries(gargantuan_input_action_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_interaction_foundation_tests "tests/InteractionFoundationTests.cpp")
 	target_link_libraries(gargantuan_interaction_foundation_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_interaction_foundation_benchmark "tests/InteractionFoundationBenchmark.cpp")
@@ -1320,6 +1326,9 @@ if(BUILD_TESTING)
 			gargantuan_soft_body_physics_benchmark
 			gargantuan_platform_input_boundary_tests
 			gargantuan_player_runtime_tests
+			gargantuan_input_action_tests
+			gargantuan_script_document_binding_tests
+			gargantuan_input_action_benchmark
 			gargantuan_interaction_foundation_tests
 			gargantuan_interaction_foundation_benchmark
 			gargantuan_entitlement_service_tests
@@ -1457,6 +1466,9 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_soft_body_physics_benchmark_smoke COMMAND gargantuan_soft_body_physics_benchmark --quick)
 	add_test(NAME gargantuan_platform_input_boundary COMMAND gargantuan_platform_input_boundary_tests)
 	add_test(NAME gargantuan_player_runtime COMMAND gargantuan_player_runtime_tests)
+	add_test(NAME gargantuan_input_action COMMAND gargantuan_input_action_tests)
+	add_test(NAME gargantuan_script_document_binding COMMAND gargantuan_script_document_binding_tests)
+	add_test(NAME gargantuan_input_action_benchmark_smoke COMMAND gargantuan_input_action_benchmark --quick)
 	add_test(NAME gargantuan_interaction_foundation COMMAND gargantuan_interaction_foundation_tests)
 	add_test(NAME gargantuan_interaction_foundation_benchmark_smoke
 		COMMAND gargantuan_interaction_foundation_benchmark --quick)
@@ -1532,6 +1544,8 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_soft_body_physics_benchmark_smoke PROPERTIES LABELS "physics;deformable;benchmark;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_platform_input_boundary PROPERTIES LABELS "platform;input;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_player_runtime PROPERTIES LABELS "player;runtime;headless" TIMEOUT 180)
+	set_tests_properties(gargantuan_input_action gargantuan_input_action_benchmark_smoke PROPERTIES LABELS "input;runtime;headless" TIMEOUT 180)
+	set_tests_properties(gargantuan_script_document_binding PROPERTIES LABELS "editor;persistence;headless" TIMEOUT 180)
 	set_tests_properties(gargantuan_interaction_foundation PROPERTIES
 		LABELS "interaction;player;input;gui;runtime;headless" TIMEOUT 180
 	)

@@ -11,15 +11,20 @@
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "physics/SoftBodyTestHooks.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <exception>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,6 +38,101 @@ namespace {
 		if (Condition) return;
 		std::cerr << "FAIL: " << Message << '\n';
 		++Failures;
+	}
+
+	class StepGate final {
+	  public:
+		void Pause(const gargantuan::SoftBodyStepProfile &ProfileValue = {}) {
+			std::unique_lock Lock(Mutex);
+			Profile = ProfileValue;
+			Arrived = true;
+			Changed.notify_all();
+			if (!Changed.wait_for(Lock, std::chrono::seconds(5), [this] { return Released; }))
+				throw std::runtime_error("[Physics:SoftBodyTest] Lifecycle barrier was not released");
+		}
+
+		[[nodiscard]] bool Wait() {
+			std::unique_lock Lock(Mutex);
+			return Changed.wait_for(Lock, std::chrono::seconds(5), [this] { return Arrived; });
+		}
+
+		void Release() {
+			std::scoped_lock Lock(Mutex);
+			Released = true;
+			Changed.notify_all();
+		}
+
+		[[nodiscard]] gargantuan::SoftBodyStepProfile GetProfile() {
+			std::scoped_lock Lock(Mutex);
+			return Profile;
+		}
+
+	  private:
+		std::mutex Mutex;
+		std::condition_variable Changed;
+		bool Arrived = false;
+		bool Released = false;
+		gargantuan::SoftBodyStepProfile Profile;
+	};
+
+	class HeldSoftBodyStep final {
+	  public:
+		explicit HeldSoftBodyStep(bool AtAdmission = false)
+			: World(gargantuan::detail::CreateSoftBodyBackendForTesting(MakeHooks(Gate, AtAdmission))) {}
+
+		~HeldSoftBodyStep() {
+			Gate.Release();
+			if (Worker.joinable()) Worker.join();
+		}
+
+		void Start() {
+			Worker = std::thread([this] {
+				try {
+					Result = World.Step({.DeltaTime = gargantuan::SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+				} catch (...) {
+					Failure = std::current_exception();
+				}
+			});
+		}
+
+		void Finish() {
+			Gate.Release();
+			if (Worker.joinable()) Worker.join();
+			if (Failure) std::rethrow_exception(Failure);
+		}
+
+		StepGate Gate;
+		gargantuan::SoftBodyWorld World;
+		gargantuan::SoftBodyStepResult Result;
+
+	  private:
+		static gargantuan::detail::SoftBodyStepTestHooks MakeHooks(StepGate &GateValue, bool AtAdmission) {
+			gargantuan::detail::SoftBodyStepTestHooks Hooks;
+			if (AtAdmission)
+				Hooks.StepAdmitted = [&GateValue] { GateValue.Pause(); };
+			else
+				Hooks.BeforeMerge = [&GateValue](const auto &Profile) { GateValue.Pause(Profile); };
+			return Hooks;
+		}
+
+		std::exception_ptr Failure;
+		std::thread Worker;
+	};
+
+	bool AwaitMerge(HeldSoftBodyStep &Step, std::size_t Vertices) {
+		if (!Step.Gate.Wait()) {
+			Check(false, "the real solver must reach the bounded pre-merge barrier");
+			Step.Finish();
+			return false;
+		}
+		const auto Profile = Step.Gate.GetProfile();
+		const bool Captured = Step.World.HasInFlightStep() && Profile.JobsDispatched == 1 &&
+			Profile.QueuedResultBytes == Vertices * sizeof(glm::vec3);
+		Check(Captured, "the old body snapshot and completed real solver job must be held before mutation");
+		std::cout << "[Physics:SoftBodyTest] BeforeMerge SnapshotVertices=" << Vertices
+			<< " JobsDispatched=" << Profile.JobsDispatched << " QueuedResultBytes=" << Profile.QueuedResultBytes
+			<< " WorkerWaitNs=" << Profile.WorkerWaitNanoseconds << " Captured=" << Captured << '\n';
+		return Captured;
 	}
 
 	bool Near(float Left, float Right, float Epsilon = 0.001f) {
@@ -302,98 +402,154 @@ namespace {
 			"multiple independently completed bodies merge in deterministic identity order"
 		);
 
-		SoftBodyWorld Lifecycle;
 		auto Large = ClothDefinition(256, 256);
 		Large.Attachments.clear();
 		Large.Quality = SoftBodyQuality::High;
-		const auto Old = Lifecycle.CreateBody(Large);
-		SoftBodyStepResult InFlightResult;
-		std::thread Worker([&] {
-			InFlightResult = Lifecycle.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
-		});
-		for (int Attempt = 0; Attempt < 1000 && !Lifecycle.HasInFlightStep(); ++Attempt)
-			std::this_thread::yield();
-		std::this_thread::sleep_for(std::chrono::milliseconds(2));
-		auto Dropped = Lifecycle.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		HeldSoftBodyStep Lifecycle;
+		const auto Old = Lifecycle.World.CreateBody(Large);
+		Lifecycle.Start();
+		if (!AwaitMerge(Lifecycle, 256 * 256)) return;
+		auto Dropped = Lifecycle.World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
 		Check(Dropped.Profile.BacklogDrops == 1, "a second in-flight batch is rejected instead of queued");
 		auto Disabled = Large;
 		Disabled.Enabled = false;
 		Disabled.ResolutionX = 8;
 		Disabled.ResolutionY = 8;
 		Check(
-			Lifecycle.UpdateBody(Old, Disabled).Succeeded(),
+			Lifecycle.World.UpdateBody(Old, Disabled).Succeeded(),
 			"disable and topology reconfiguration can supersede in-flight work"
 		);
-		Worker.join();
-		const auto DisabledState = Lifecycle.GetBodyState(Old);
+		const auto ExpectedDisabled = Lifecycle.World.GetBodyState(Old);
+		Lifecycle.Finish();
+		const auto DisabledState = Lifecycle.World.GetBodyState(Old);
 		Check(
 			DisabledState && DisabledState->Positions->size() == 64 && !DisabledState->Simulated &&
-				InFlightResult.Profile.StaleResults >= 1,
+				Lifecycle.Result.Profile.StaleResults >= 1 && Lifecycle.Result.States.empty() &&
+				DisabledState->VertexRevision == ExpectedDisabled->VertexRevision &&
+				*DisabledState->Positions == *ExpectedDisabled->Positions,
 			"stale in-flight work cannot overwrite a disabled, topology-reconfigured body"
 		);
 
-		SoftBodyWorld ReconfigureWorld;
-		const auto ReconfiguredBody = ReconfigureWorld.CreateBody(Large);
-		SoftBodyStepResult ReconfigureResult;
-		std::thread ReconfigureWorker([&] {
-			ReconfigureResult =
-				ReconfigureWorld.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
-		});
-		for (int Attempt = 0; Attempt < 1000 && !ReconfigureWorld.HasInFlightStep(); ++Attempt)
-			std::this_thread::yield();
-		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		HeldSoftBodyStep Reconfigure;
+		const auto ReconfiguredBody = Reconfigure.World.CreateBody(Large);
+		Reconfigure.Start();
+		if (!AwaitMerge(Reconfigure, 256 * 256)) return;
 		auto Reconfigured = Large;
 		Reconfigured.ResolutionX = 8;
 		Reconfigured.ResolutionY = 8;
 		Reconfigured.Material.Damping = 0.25f;
 		Check(
-			ReconfigureWorld.UpdateBody(ReconfiguredBody, Reconfigured).Succeeded(),
+			Reconfigure.World.UpdateBody(ReconfiguredBody, Reconfigured).Succeeded(),
 			"enabled topology and material reconfiguration can supersede in-flight work"
 		);
-		ReconfigureWorker.join();
-		const auto ReconfiguredState = ReconfigureWorld.GetBodyState(ReconfiguredBody);
+		const auto ExpectedReconfigured = Reconfigure.World.GetBodyState(ReconfiguredBody);
+		Reconfigure.Finish();
+		const auto ReconfiguredState = Reconfigure.World.GetBodyState(ReconfiguredBody);
 		Check(
 			ReconfiguredState && ReconfiguredState->Positions->size() == 64 && !ReconfiguredState->Simulated &&
-				ReconfigureResult.Profile.StaleResults >= 1,
+				Reconfigure.Result.Profile.StaleResults >= 1 && Reconfigure.Result.States.empty() &&
+				ReconfiguredState->VertexRevision == ExpectedReconfigured->VertexRevision &&
+				*ReconfiguredState->Positions == *ExpectedReconfigured->Positions,
 			"stale in-flight work cannot overwrite a newer enabled topology or material"
 		);
 
-		SoftBodyWorld DestroyWorld;
-		const auto DestroyedBody = DestroyWorld.CreateBody(Large);
-		SoftBodyStepResult DestroyResult;
-		std::thread DestroyWorker([&] {
-			DestroyResult = DestroyWorld.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
-		});
-		for (int Attempt = 0; Attempt < 1000 && !DestroyWorld.HasInFlightStep(); ++Attempt)
-			std::this_thread::yield();
-		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		HeldSoftBodyStep Destroy;
+		const auto DestroyedBody = Destroy.World.CreateBody(Large);
+		Destroy.Start();
+		if (!AwaitMerge(Destroy, 256 * 256)) return;
 		Check(
-			DestroyWorld.DestroyBody(DestroyedBody).Succeeded(),
+			Destroy.World.DestroyBody(DestroyedBody).Succeeded(),
 			"destroy while a deformable worker is in flight succeeds safely"
 		);
-		const auto Replacement = DestroyWorld.CreateBody(ClothDefinition(8, 8));
-		DestroyWorker.join();
-		const auto ReplacementState = DestroyWorld.GetBodyState(Replacement);
+		const auto Replacement = Destroy.World.CreateBody(ClothDefinition(8, 8));
+		const auto ExpectedReplacement = Destroy.World.GetBodyState(Replacement);
+		Destroy.Finish();
+		const auto ReplacementState = Destroy.World.GetBodyState(Replacement);
 		Check(
 			Replacement.Slot == DestroyedBody.Slot && Replacement.Generation != DestroyedBody.Generation &&
 				ReplacementState && ReplacementState->Positions->size() == 64 &&
-				!DestroyWorld.IsBodyValid(DestroyedBody) && DestroyResult.Profile.StaleResults >= 1,
+				!Destroy.World.IsBodyValid(DestroyedBody) && Destroy.Result.Profile.StaleResults >= 1 &&
+				Destroy.Result.States.empty() && ReplacementState->VertexRevision == ExpectedReplacement->VertexRevision &&
+				*ReplacementState->Positions == *ExpectedReplacement->Positions,
 			"stale in-flight work cannot resurrect a destroyed body or overwrite a reused slot generation"
 		);
 
-		SoftBodyWorld ShutdownWorld;
+		HeldSoftBodyStep Shutdown;
 		auto ShutdownDefinition = ClothDefinition(128, 128);
 		ShutdownDefinition.Attachments.clear();
 		ShutdownDefinition.Quality = SoftBodyQuality::High;
-		(void)ShutdownWorld.CreateBody(ShutdownDefinition);
-		std::thread ShutdownWorker([&] {
-			(void)ShutdownWorld.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
-		});
-		for (int Attempt = 0; Attempt < 1000 && !ShutdownWorld.HasInFlightStep(); ++Attempt)
+		(void)Shutdown.World.CreateBody(ShutdownDefinition);
+		Shutdown.Start();
+		if (!AwaitMerge(Shutdown, 128 * 128)) return;
+		std::jthread ShutdownWorker([&] { Shutdown.World.Shutdown(); });
+		const auto Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (Shutdown.World.IsValid() && std::chrono::steady_clock::now() < Deadline)
 			std::this_thread::yield();
-		ShutdownWorld.Shutdown();
+		Check(!Shutdown.World.IsValid(), "shutdown must start before the held completed batch can merge");
+		Shutdown.Finish();
 		ShutdownWorker.join();
-		Check(!ShutdownWorld.IsValid(), "world shutdown drains active worker jobs and rejects future work");
+		Check(
+			!Shutdown.World.IsValid() && Shutdown.Result.Profile.StaleResults >= 1 && Shutdown.Result.States.empty(),
+			"world shutdown drains active worker jobs and rejects future work"
+		);
+		std::cout << "[Physics:SoftBodyTest] BeforeMerge CompletedCases=Disable,Reconfigure,DestroyReuse,Shutdown\n";
+	}
+
+	void TestAdmissionDoesNotProveCapturedWork() {
+		using namespace gargantuan;
+		HeldSoftBodyStep Admitted(true);
+		auto Large = ClothDefinition(256, 256);
+		Large.Attachments.clear();
+		Large.Quality = SoftBodyQuality::High;
+		const auto Old = Admitted.World.CreateBody(Large);
+		Admitted.Start();
+		if (!Admitted.Gate.Wait()) {
+			Check(false, "the admitted-only premise reproduction must reach its bounded barrier");
+			Admitted.Finish();
+			return;
+		}
+		const bool InFlightObserved = Admitted.World.HasInFlightStep();
+		Check(InFlightObserved, "Step admission is observable before the old body snapshot exists");
+		Check(Admitted.World.DestroyBody(Old).Succeeded(), "admitted-only reproduction destroys the old body");
+		const auto Replacement = Admitted.World.CreateBody(ClothDefinition(8, 8));
+		Admitted.Finish();
+		const bool CapturedReplacement = Replacement.Slot == Old.Slot && Replacement.Generation != Old.Generation &&
+				!Admitted.World.IsBodyValid(Old) && Admitted.World.IsBodyValid(Replacement) &&
+				Admitted.Result.States.size() == 1 && Admitted.Result.States.front().Body == Replacement &&
+				Admitted.Result.States.front().Positions->size() == 64 && Admitted.Result.Profile.StaleResults == 0;
+		Check(
+			CapturedReplacement,
+			"an admitted-only step correctly captures the replacement: zero stale results does not imply resurrection"
+		);
+		std::cout << "[Physics:SoftBodyTest] AdmittedOnly InFlightObserved=" << InFlightObserved << " StaleResults="
+			<< Admitted.Result.Profile.StaleResults << " CapturedReplacement=" << CapturedReplacement
+			<< " OldStaleAssertionWouldFail=" << (CapturedReplacement && InFlightObserved) << '\n';
+	}
+
+	void TestPrivateHookFailureAndUnhookedEquivalence() {
+		using namespace gargantuan;
+		detail::SoftBodyStepTestHooks Throwing;
+		Throwing.StepAdmitted = [] { throw std::runtime_error("synthetic lifecycle hook failure"); };
+		SoftBodyWorld Failed(detail::CreateSoftBodyBackendForTesting(std::move(Throwing)));
+		const auto FailedBody = Failed.CreateBody(ClothDefinition());
+		bool Rejected = false;
+		try { (void)Failed.Step({}); } catch (const std::runtime_error &) { Rejected = true; }
+		Check(Rejected && !Failed.HasInFlightStep() && Failed.IsBodyValid(FailedBody),
+			"an admitted hook failure clears the in-flight flag without corrupting the body");
+
+		std::size_t Visits = 0;
+		detail::SoftBodyStepTestHooks Observed;
+		Observed.BeforeMerge = [&](const SoftBodyStepProfile &) { ++Visits; };
+		SoftBodyWorld Hooked(detail::CreateSoftBodyBackendForTesting(std::move(Observed)));
+		SoftBodyWorld Ordinary;
+		const auto HookedBody = Hooked.CreateBody(ClothDefinition());
+		const auto OrdinaryBody = Ordinary.CreateBody(ClothDefinition());
+		for (int Step = 0; Step < 3; ++Step) {
+			(void)Hooked.Step({});
+			(void)Ordinary.Step({});
+		}
+		Check(Visits == 3 && *Hooked.GetBodyState(HookedBody)->Positions == *Ordinary.GetBodyState(OrdinaryBody)->Positions,
+			"the private observation seam preserves byte-exact ordinary solver output");
 	}
 
 	void TestBroadphaseAndPrimitiveCoverage() {
@@ -861,6 +1017,8 @@ int main() {
 		TestPinnedClothAndRigidCollision();
 		TestRubberRecoveryAndQualityTier();
 		TestJobifiedDeterminismAndLifecycle();
+		TestAdmissionDoesNotProveCapturedWork();
+		TestPrivateHookFailureAndUnhookedEquivalence();
 		TestBroadphaseAndPrimitiveCoverage();
 		TestRotationAwareRubberAndVolume();
 		TestRuntimeRenderAndPersistenceLifecycle();

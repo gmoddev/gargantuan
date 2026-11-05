@@ -31,12 +31,12 @@ sorted package/key/digest/space/AABB proof with a validated manifest and report
 missing or underbounded units. It does not provide the geometry calculation,
 package-writer integration or qualified metadata producer. The supplied unit
 aggregate must already be transformed into manifest package-space coordinates;
-a mesh-local bound cannot replace it. The issue remains open even when a
-detached compatibility fixture passes.
+a mesh-local bound cannot replace it. At the pinned PR15 source, the issue
+remained open even when a detached compatibility fixture passed.
 
-Closure requires a separately scoped package/asset metadata correction and a
-non-normalized imported/generated mesh regression; 3M's current scale receipt
-does not certify this integration.
+Closure required a separately scoped package/asset metadata correction and a
+non-normalized imported/generated mesh regression; PR15's scale receipt does
+not certify this integration.
 
 The [cross-foundation candidate](devdocs/CurrentArchitecture/CrossFoundationPackageSpatialIntegration.md)
 now derives supported static unit aggregates from exact canonical Mesh and
@@ -77,6 +77,33 @@ neutral seam events are tested. The allocator alignment defect exposed by this
 path is corrected in a hash-checked private vendor build copy. This closes the
 candidate-omission mechanism within the qualified policy; it does not remove
 the independent solver, event/query bounds or dynamic-concave limitation.
+
+## KI-011: Soft-body stale-work fixture used an unproven in-flight premise
+
+- Status: Corrected with deterministic admission/pre-merge barriers; targeted
+  serial and concurrent Windows qualification passes. No production identity
+  defect established. Subsequent hosted qualification remains independently required.
+- Area: `tests/SoftBodyPhysicsTests.cpp`, destroy/reuse while work is in flight.
+- Evidence: [LUI input composition qualification](devdocs/CurrentArchitecture/LuiInputIntegration.md).
+  Follow-up: [deterministic lifecycle qualification](devdocs/Validation/ki011-20261103/README.md).
+
+The Windows MSVC 19.44 integrated 82-test run failed the stale-in-flight
+destroy/reuse assertion. One isolated repetition of the identical binary passed.
+The original fixture spins up to 1000 yields, then sleeps 2 ms without asserting
+that an in-flight step was observed before mutation. A missed premise is a
+source-backed hypothesis, not an excuse to waive the generation-safety assertion.
+The recorded failure did not capture its exact internal interleaving.
+
+The controlled reproduction now holds Step immediately after admission and proves
+that `HasInFlightStep=true` can coexist with no captured old body. Destroy/reuse
+then correctly produces zero stale results while retaining generation safety;
+the original stale-count assertion would falsely fail. The corrected lifecycle
+cases instead hold completed real solver jobs before merge, mutate the captured
+body, and retain the stale-result assertion plus empty-publication and unchanged
+replacement-state checks. Serial and two concurrent processes pass. Bounded
+barriers release and join on failure. The ordinary factory installs no hooks;
+solver arithmetic and generation/revision validation are unchanged. This
+correction does not turn the original full-suite result into a clean 82/82 run.
 
 ## KI-010: PreRun deadline interrupt can recurse during GC error construction
 

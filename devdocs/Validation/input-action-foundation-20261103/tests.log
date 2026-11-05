@@ -1,0 +1,34 @@
+Internal ctest changing into directory: C:/Sandbox/Codex/Builds/gargantuan-input/msvc1444-release
+Test project C:/Sandbox/Codex/Builds/gargantuan-input/msvc1444-release
+    Start 27: gargantuan_input_action_benchmark_smoke
+    Start 11: gargantuan_foundation
+1/7 Test #11: gargantuan_foundation .....................   Passed    1.19 sec
+    Start 25: gargantuan_player_runtime
+2/7 Test #25: gargantuan_player_runtime .................   Passed    0.37 sec
+    Start 32: gargantuan_gui_foundation
+3/7 Test #32: gargantuan_gui_foundation .................   Passed    0.24 sec
+    Start 26: gargantuan_input_action
+4/7 Test #26: gargantuan_input_action ...................   Passed    0.16 sec
+    Start 28: gargantuan_interaction_foundation
+5/7 Test #28: gargantuan_interaction_foundation .........   Passed    0.10 sec
+    Start 24: gargantuan_platform_input_boundary
+6/7 Test #24: gargantuan_platform_input_boundary ........   Passed    0.04 sec
+7/7 Test #27: gargantuan_input_action_benchmark_smoke ...   Passed    3.83 sec
+
+100% tests passed, 0 tests failed out of 7
+
+Label Time Summary:
+editorhost       =   1.19 sec*proc (1 test)
+foundation       =   1.19 sec*proc (1 test)
+gui              =   0.10 sec*proc (1 test)
+headless         =   4.45 sec*proc (4 tests)
+input            =   4.13 sec*proc (4 tests)
+interaction      =   0.10 sec*proc (1 test)
+platform         =   0.04 sec*proc (1 test)
+player           =   0.47 sec*proc (2 tests)
+protocol         =   1.19 sec*proc (1 test)
+renderer         =   1.19 sec*proc (1 test)
+runtime          =   5.69 sec*proc (6 tests)
+serialization    =   1.19 sec*proc (1 test)
+
+Total Test time (real) =   3.84 sec

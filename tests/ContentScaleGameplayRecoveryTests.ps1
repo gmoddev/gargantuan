@@ -40,10 +40,43 @@ $NextPhase = $ServerSource.IndexOf('BeginPhase(NextPhase, Tick)', $Calibrating)
 if ($Calibrating -lt 0 -or $ClockAcks -lt $Calibrating -or $NextPhase -lt $ClockAcks) {
     throw 'all peer clock completions must precede the next measured phase'
 }
-$Client = $Source.IndexOf('auto ClientScript')
-$Begin = $Source.IndexOf('R"(', $Client)
-$End = $Source.IndexOf(')"', $Begin + 3)
-if ($Client -lt 0 -or $Begin -lt 0 -or $End -lt 0) { throw 'embedded client Luau source delimiters are missing' }
+function Read-EmbeddedScript([string]$Header, [string]$Variable) {
+    $Statement = $Header.IndexOf($Variable + '->SetSource(')
+    if ($Statement -lt 0) { throw 'embedded Luau SetSource statement is missing' }
+    $Begin = $Header.IndexOf('R"(', $Statement)
+    if ($Begin -lt 0) { throw 'embedded Luau source delimiter is missing' }
+    $Body = [Text.StringBuilder]::new()
+    while ($true) {
+        $End = $Header.IndexOf(')"', $Begin + 3)
+        if ($End -lt 0) { throw 'embedded Luau source delimiter is unterminated' }
+        [void]$Body.Append($Header.Substring($Begin + 3, $End - $Begin - 3))
+        $Tail = $Header.Substring($End + 2)
+        $Next = [regex]::Match($Tail, '\A\s*\+\s*R"\(')
+        if ($Next.Success) {
+            $Begin = $End + 2 + $Next.Length - 3
+            continue
+        }
+        if ($Tail -notmatch '\A\s*\);') {
+            throw 'embedded Luau chunks require explicit raw-literal addition or SetSource termination'
+        }
+        return $Body.ToString()
+    }
+}
+# The portable native fixture splits large raw literals with explicit addition.
+# Check both representations byte-for-byte, including the original line ending.
+$ProbeBody = "first`r`nsecond"
+$Probe = 'Probe->SetSource(std::string("prefix") + R"(' + $ProbeBody + ')");'
+$ChunkedProbe = $Probe.Replace($ProbeBody, "first`r`n" + ')" +' + "`r`n" + 'R"(second')
+if ((Read-EmbeddedScript $Probe 'Probe') -cne $ProbeBody -or
+    (Read-EmbeddedScript $ChunkedProbe 'Probe') -cne $ProbeBody) {
+    throw 'single and chunked native fixture extraction must preserve exact payload bytes'
+}
+foreach ($InvalidProbe in @($ChunkedProbe.Replace(')" +', ')" *'), $Probe.Replace(')");', ')" + Unknown());'))) {
+    $Rejected = $false
+    try { [void](Read-EmbeddedScript $InvalidProbe 'Probe') } catch { $Rejected = $true }
+    if (-not $Rejected) { throw 'unsupported native fixture expressions must fail closed' }
+}
+$ClientBody = Read-EmbeddedScript $Source 'ClientScript'
 $Prelude = @'
 local Qualified, ProducerPlayerId, PhysicalFarm = true, 1, true
 local NativePrint = print
@@ -485,10 +518,7 @@ assert(RecoveryFailed and RecoveryAttempt == 20 and RecoveryRpcCalls == 0 and
     CountRecords(First, 'event=cohort_start') == 0, 'attempt cap must reject a twenty-first cohort')
 NativePrint('[Qualification:RecoveryCohortScript] first_slow=PASS deadline=PASS errors=PASS pending=PASS transition=PASS attempt_cap=PASS result=PASS')
 '@
-$Server = $Source.IndexOf('auto ServerScript')
-$ServerBegin = $Source.IndexOf('R"(', $Server)
-$ServerEnd = $Source.IndexOf(')"', $ServerBegin + 3)
-if ($Server -lt 0 -or $ServerBegin -lt 0 -or $ServerEnd -lt 0) { throw 'embedded server Luau source delimiters are missing' }
+$ServerBody = Read-EmbeddedScript $Source 'ServerScript'
 $ServerPrelude = $Prelude + @'
 
 local PhysicalFarm, ReplicateDiagnosticCounter = true, false
@@ -528,7 +558,7 @@ NativePrint('[Qualification:RecoveryNotificationScript] actual_server_once=PASS 
 $Path = Join-Path ([IO.Path]::GetTempPath()) ('gargantuan-recovery-client-' + [Guid]::NewGuid().ToString('N') + '.luau')
 $ServerPath = Join-Path ([IO.Path]::GetTempPath()) ('gargantuan-recovery-server-' + [Guid]::NewGuid().ToString('N') + '.luau')
 try {
-    [IO.File]::WriteAllText($Path, $Prelude + "`n" + $Source.Substring($Begin + 3, $End - $Begin - 3) + "`n" + $Assertions)
+    [IO.File]::WriteAllText($Path, $Prelude + "`n" + $ClientBody + "`n" + $Assertions)
     $Output = & $Interpreter run $Path 2>&1
     $Result = $LASTEXITCODE
     if ($ReproduceMissingClientTick) {
@@ -539,7 +569,7 @@ try {
     } else {
         $Output | Write-Output
         if ($Result -ne 0) { throw "embedded client recovery execution failed: $Result" }
-        [IO.File]::WriteAllText($ServerPath, $ServerPrelude + "`n" + $Source.Substring($ServerBegin + 3, $ServerEnd - $ServerBegin - 3) + "`n" + $ServerAssertions)
+        [IO.File]::WriteAllText($ServerPath, $ServerPrelude + "`n" + $ServerBody + "`n" + $ServerAssertions)
         $ServerOutput = & $Interpreter run $ServerPath 2>&1
         $ServerResult = $LASTEXITCODE
         $ServerOutput | Write-Output

@@ -1,0 +1,153 @@
+Internal ctest changing into directory: C:/Sandbox/Codex/Builds/gargantuan-input/msvc1444-release
+Test project C:/Sandbox/Codex/Builds/gargantuan-input/msvc1444-release
+      Start 45: gargantuan_replication_relevance
+      Start  6: GameSessionTests
+ 1/54 Test  #6: GameSessionTests ....................................   Passed   14.26 sec
+      Start 34: gargantuan_packaging
+ 2/54 Test #45: gargantuan_replication_relevance ....................   Passed   17.96 sec
+      Start 14: gargantuan_animation_foundation_benchmark_smoke
+ 3/54 Test #34: gargantuan_packaging ................................   Passed   11.61 sec
+      Start 13: gargantuan_animation_foundation
+ 4/54 Test #14: gargantuan_animation_foundation_benchmark_smoke .....   Passed   11.66 sec
+      Start  7: ContentScaleUnwindTests
+ 5/54 Test #13: gargantuan_animation_foundation .....................   Passed    6.12 sec
+      Start 27: gargantuan_input_action_benchmark_smoke
+ 6/54 Test  #7: ContentScaleUnwindTests .............................   Passed    4.51 sec
+      Start 37: gargantuan_first_complete_game_package_smoke
+ 7/54 Test #27: gargantuan_input_action_benchmark_smoke .............   Passed    3.98 sec
+      Start 39: gargantuan_gui_foundation_benchmark_smoke
+ 8/54 Test #37: gargantuan_first_complete_game_package_smoke ........   Passed    2.60 sec
+      Start 33: gargantuan_first_complete_game
+ 9/54 Test #39: gargantuan_gui_foundation_benchmark_smoke ...........   Passed    2.13 sec
+      Start  4: gargantuan_content_availability
+10/54 Test #33: gargantuan_first_complete_game ......................   Passed    2.14 sec
+      Start 36: gargantuan_packaging_benchmark_smoke
+11/54 Test  #4: gargantuan_content_availability .....................   Passed    1.81 sec
+      Start 11: gargantuan_foundation
+12/54 Test #36: gargantuan_packaging_benchmark_smoke ................   Passed    1.40 sec
+      Start 38: gargantuan_dedicated_server_package_smoke
+13/54 Test #11: gargantuan_foundation ...............................   Passed    1.35 sec
+      Start 12: gargantuan_asset_foundation
+14/54 Test #38: gargantuan_dedicated_server_package_smoke ...........   Passed    1.04 sec
+      Start 52: gargantuan_content_availability_benchmark_smoke
+15/54 Test #52: gargantuan_content_availability_benchmark_smoke .....   Passed    0.88 sec
+      Start 18: gargantuan_environment_lighting_benchmark_smoke
+16/54 Test #12: gargantuan_asset_foundation .........................   Passed    0.94 sec
+      Start 29: gargantuan_interaction_foundation_benchmark_smoke
+17/54 Test #29: gargantuan_interaction_foundation_benchmark_smoke ...   Passed    0.74 sec
+      Start 35: gargantuan_packaging_editor_host
+18/54 Test #18: gargantuan_environment_lighting_benchmark_smoke .....   Passed    0.81 sec
+      Start 54: gargantuan_remote_benchmark_smoke
+19/54 Test #35: gargantuan_packaging_editor_host ....................   Passed    0.55 sec
+      Start 22: gargantuan_soft_body_physics
+20/54 Test #54: gargantuan_remote_benchmark_smoke ...................   Passed    0.53 sec
+      Start 50: gargantuan_character_networking
+21/54 Test #50: gargantuan_character_networking .....................   Passed    0.21 sec
+      Start 25: gargantuan_player_runtime
+22/54 Test #22: gargantuan_soft_body_physics ........................   Passed    0.38 sec
+      Start  1: gargantuan_runtime_host_roles
+23/54 Test #25: gargantuan_player_runtime ...........................   Passed    0.38 sec
+      Start 40: gargantuan_prerun_bootstrap
+24/54 Test #40: gargantuan_prerun_bootstrap .........................   Passed    0.10 sec
+      Start 16: gargantuan_audio_foundation_benchmark_smoke
+25/54 Test  #1: gargantuan_runtime_host_roles .......................   Passed    0.37 sec
+      Start 32: gargantuan_gui_foundation
+26/54 Test #32: gargantuan_gui_foundation ...........................   Passed    0.24 sec
+      Start 53: gargantuan_replication_benchmark_smoke
+27/54 Test #16: gargantuan_audio_foundation_benchmark_smoke .........   Passed    0.31 sec
+      Start 30: gargantuan_entitlement_service
+28/54 Test #53: gargantuan_replication_benchmark_smoke ..............   Passed    0.19 sec
+      Start 47: gargantuan_spatial_region_index_benchmark_smoke
+29/54 Test #30: gargantuan_entitlement_service ......................   Passed    0.16 sec
+      Start 46: gargantuan_spatial_region_index
+30/54 Test #47: gargantuan_spatial_region_index_benchmark_smoke .....   Passed    0.15 sec
+      Start 26: gargantuan_input_action
+31/54 Test #46: gargantuan_spatial_region_index .....................   Passed    0.16 sec
+      Start 10: SerializationBenchmarkSmoke
+32/54 Test #26: gargantuan_input_action .............................   Passed    0.16 sec
+      Start 44: gargantuan_replication
+33/54 Test #10: SerializationBenchmarkSmoke .........................   Passed    0.14 sec
+      Start 21: gargantuan_physics_query_benchmark_smoke
+34/54 Test #44: gargantuan_replication ..............................   Passed    0.12 sec
+      Start 43: gargantuan_scheduler_contract
+35/54 Test #21: gargantuan_physics_query_benchmark_smoke ............   Passed    0.13 sec
+      Start 15: gargantuan_audio_foundation
+36/54 Test #43: gargantuan_scheduler_contract .......................   Passed    0.12 sec
+      Start 28: gargantuan_interaction_foundation
+37/54 Test #15: gargantuan_audio_foundation .........................   Passed    0.12 sec
+      Start 41: gargantuan_networking_contracts
+38/54 Test #41: gargantuan_networking_contracts .....................   Passed    0.09 sec
+      Start 20: gargantuan_physics_backend
+39/54 Test #28: gargantuan_interaction_foundation ...................   Passed    0.11 sec
+      Start  2: gargantuan_shader_tool_validation
+40/54 Test  #2: gargantuan_shader_tool_validation ...................   Passed    0.05 sec
+      Start  5: gargantuan_content_ownership
+41/54 Test #20: gargantuan_physics_backend ..........................   Passed    0.06 sec
+      Start 49: gargantuan_remote_luau
+42/54 Test  #5: gargantuan_content_ownership ........................   Passed    0.04 sec
+      Start 42: gargantuan_simulated_transport
+43/54 Test #49: gargantuan_remote_luau ..............................   Passed    0.04 sec
+      Start 51: gargantuan_character_networking_benchmark_smoke
+44/54 Test #42: gargantuan_simulated_transport ......................   Passed    0.04 sec
+      Start 48: gargantuan_remote
+45/54 Test #51: gargantuan_character_networking_benchmark_smoke .....   Passed    0.05 sec
+      Start 23: gargantuan_soft_body_physics_benchmark_smoke
+46/54 Test #48: gargantuan_remote ...................................   Passed    0.05 sec
+      Start  8: gargantuan_renderer_projection_headless
+47/54 Test #23: gargantuan_soft_body_physics_benchmark_smoke ........   Passed    0.04 sec
+      Start 17: gargantuan_renderer_publication
+48/54 Test  #8: gargantuan_renderer_projection_headless .............   Passed    0.04 sec
+      Start  3: gargantuan_packaged_shaders
+49/54 Test #17: gargantuan_renderer_publication .....................   Passed    0.04 sec
+      Start 31: gargantuan_entitlement_provider_benchmark_smoke
+50/54 Test  #3: gargantuan_packaged_shaders .........................   Passed    0.03 sec
+      Start 24: gargantuan_platform_input_boundary
+51/54 Test #31: gargantuan_entitlement_provider_benchmark_smoke .....   Passed    0.04 sec
+      Start 19: gargantuan_optional_telemetry
+52/54 Test #24: gargantuan_platform_input_boundary ..................   Passed    0.03 sec
+      Start  9: gargantuan_renderer_backend_headless
+53/54 Test #19: gargantuan_optional_telemetry .......................   Passed    0.03 sec
+54/54 Test  #9: gargantuan_renderer_backend_headless ................   Passed    0.03 sec
+
+100% tests passed, 0 tests failed out of 54
+
+Label Time Summary:
+assets           =  15.11 sec*proc (5 tests)
+audio            =  14.17 sec*proc (4 tests)
+benchmark        =   4.34 sec*proc (8 tests)
+build            =   0.07 sec*proc (2 tests)
+cli              =   0.37 sec*proc (1 test)
+content          =   7.25 sec*proc (4 tests)
+deformable       =   0.41 sec*proc (2 tests)
+editorhost       =   2.84 sec*proc (3 tests)
+entitlements     =   0.20 sec*proc (2 tests)
+environment      =   0.81 sec*proc (1 test)
+fail-open        =   0.03 sec*proc (1 test)
+foundation       =   1.35 sec*proc (1 test)
+game             =   4.73 sec*proc (2 tests)
+gui              =   2.25 sec*proc (2 tests)
+headless         =  27.68 sec*proc (22 tests)
+host             =   0.37 sec*proc (1 test)
+input            =   4.28 sec*proc (4 tests)
+interaction      =   5.58 sec*proc (4 tests)
+lifecycle        =   7.52 sec*proc (5 tests)
+networking       =  33.96 sec*proc (14 tests)
+packaging        =  19.92 sec*proc (8 tests)
+physics          =   2.74 sec*proc (5 tests)
+platform         =   0.03 sec*proc (1 test)
+player           =   2.63 sec*proc (3 tests)
+prerun           =   0.10 sec*proc (1 test)
+protocol         =   1.90 sec*proc (2 tests)
+query            =   0.13 sec*proc (1 test)
+relocation       =   2.60 sec*proc (1 test)
+renderer         =   3.58 sec*proc (7 tests)
+runtime          =  62.91 sec*proc (39 tests)
+sample           =   2.14 sec*proc (1 test)
+security         =  15.03 sec*proc (6 tests)
+serialization    =   2.93 sec*proc (5 tests)
+server           =   1.04 sec*proc (1 test)
+shader           =   0.07 sec*proc (2 tests)
+studio           =   2.69 sec*proc (2 tests)
+telemetry        =   0.03 sec*proc (1 test)
+
+Total Test time (real) =  45.66 sec

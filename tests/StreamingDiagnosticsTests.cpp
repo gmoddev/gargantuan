@@ -7,6 +7,7 @@
 #include "editor/StreamingDiagnosticsEncoding.hpp"
 
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -248,14 +249,24 @@ namespace {
 				{"SessionToken", Token}, {"Method", Method}, {"Params", std::move(Parameters)}}.dump()));
 		};
 		const auto Handshake = Call("Handshake", Json::object());
-		Check(Handshake["Ok"] && Handshake["Result"]["StreamingDiagnosticsVersion"] == 1, "diagnostic capability missing");
+		const auto &Capabilities = Handshake["Result"]["Capabilities"];
+		Check(Handshake["Ok"] && Handshake["Result"]["StreamingDiagnosticsVersion"] == 1 &&
+			std::find(Capabilities.begin(), Capabilities.end(), Json("StreamingDiagnostics")) != Capabilities.end() &&
+			std::find(Capabilities.begin(), Capabilities.end(), Json("PlayInputInspection")) != Capabilities.end(),
+			"combined Play inspection capabilities missing");
 		Check(Call("CreateProject", {{"Destination", Root.generic_string()}, {"Name", "Streaming Diagnostics"}})["Ok"], "project create failed");
-		const auto Revision = Call("GetProjectState", Json::object())["Result"]["AuthoritativeRevision"];
+		const auto AuthoringBeforePlay = Call("GetProjectState", Json::object())["Result"];
 		const auto Start = Call("StartPlaySession", Json::object());
 		Check(Start["Ok"], "Play start failed");
 		const auto Id = Start["Result"]["PlaySessionId"];
+		const auto InputBefore = Call("GetPlayInputSnapshot", {{"PlaySessionId", Id}});
+		Check(InputBefore["Ok"] && InputBefore["Result"]["PlaySessionId"] == Id &&
+			InputBefore["Result"]["Snapshot"]["Version"] == 1 &&
+			!InputBefore["Result"]["Snapshot"]["Scope"].is_null(),
+			"owned Play input snapshot unavailable before streaming opt-in");
 		const auto Disabled = Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}});
-		Check(Disabled["Ok"] && !Disabled["Result"]["Diagnostics"]["Enabled"], "Play collection enabled implicitly");
+		Check(Disabled["Ok"] && Disabled["Result"]["PlaySessionId"] == Id &&
+			!Disabled["Result"]["Diagnostics"]["Enabled"], "Play collection enabled implicitly");
 		const auto Enabled = Call("ConfigureStreamingDiagnostics", {{"PlaySessionId", Id}, {"Enabled", true}});
 		Check(Enabled["Ok"] && Enabled["Result"]["Diagnostics"]["Enabled"] &&
 			Enabled["Result"]["Diagnostics"]["Status"] == "NotConfigured", "Play invented a streaming provider/policy");
@@ -266,11 +277,19 @@ namespace {
 		Check(!Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}, {"RequestContent", "unit/a"}})["Ok"], "IPC demand field accepted");
 		Check(!Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}}, "bad-token")["Ok"], "wrong session token read diagnostics");
 		const auto Snapshot = Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}, {"MaximumUnits", 0}, {"MaximumTimingSamples", 0}});
-		Check(Snapshot["Ok"] && Snapshot.dump().size() < 16384, "aggregate diagnostic response not bounded");
-		Check(Call("GetProjectState", Json::object())["Result"]["AuthoritativeRevision"] == Revision,
-			"diagnostic collection mutated authoring history");
+		Check(Snapshot["Ok"] && Snapshot["Result"]["PlaySessionId"] == Id && Snapshot.dump().size() < 16384,
+			"aggregate diagnostic response not bounded or no longer owned by Play");
+		const auto InputAfter = Call("GetPlayInputSnapshot", {{"PlaySessionId", Id}});
+		Check(InputAfter["Ok"] && InputAfter["Result"]["PlaySessionId"] == Id &&
+			InputAfter["Result"]["Snapshot"]["Scope"] == InputBefore["Result"]["Snapshot"]["Scope"] &&
+			InputAfter["Result"]["Snapshot"]["Contexts"].is_array() && InputAfter.dump().size() < 16384,
+			"streaming opt-in changed the bounded owned Input snapshot");
+		Check(Call("GetProjectState", Json::object())["Result"] == AuthoringBeforePlay,
+			"combined Play inspection changed authoring revision, dirty state or history");
 		Check(Call("StopPlaySession", {{"PlaySessionId", Id}})["Ok"], "Play stop failed");
 		Check(!Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}})["Ok"], "stale Play diagnostics accepted");
+		Check(Call("GetPlayInputSnapshot", {{"PlaySessionId", Id}})["Error"]["Code"] == "StalePlaySession",
+			"stale Play input snapshot accepted");
 	}
 }
 
