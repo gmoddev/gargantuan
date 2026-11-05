@@ -347,8 +347,8 @@ namespace {
 			Runtime.Content->GetMetrics().Admissions == 0,
 			"peer received unadmitted package content");
 
-		// 3E uses the semantic root for its final focus predicate. Keep the peer
-		// at that root while the immutable mesh geometry remains near x=300.
+		// The peer is near the immutable mesh geometry, beyond the semantic
+		// root's enter radius. Accepted materialization must use geometry bounds.
 		const auto PlayerValue = Runtime.Players->GetPlayers().front();
 		auto CharacterValue = std::make_shared<KinematicCharacter>();
 		auto RootPart = std::make_shared<Part>();
@@ -356,7 +356,7 @@ namespace {
 		RootPart->SetCanCollide(false);
 		RootPart->SetParent(CharacterValue);
 		CharacterValue->SetRootPart(RootPart);
-		CharacterValue->ApplyRuntimeTransform(CFrame(0, 0, 0));
+		CharacterValue->ApplyRuntimeTransform(CFrame(300, 0, 0));
 		CharacterValue->SetParent(Space);
 		PlayerValue->SetCharacter(CharacterValue);
 		Check(Runtime.Content->RequestContent("a"), "first native demand was rejected");
