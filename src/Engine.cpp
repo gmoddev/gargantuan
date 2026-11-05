@@ -14,6 +14,7 @@
 #include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/UserInputService.hpp"
@@ -150,6 +151,10 @@ namespace gargantuan {
 		DataModelDestroyingConnection = DataModel->Destroying->Once([this](std::monostate) { Destroy(); });
 		const bool PreloadAllContent = ProviderConfiguration.Content &&
 			ProviderConfiguration.Content->Mode == ContentResidencyMode::FullyResident;
+		StreamingDiagnosticsEnabled = ProviderConfiguration.EnableStreamingDiagnostics;
+		ResidencyPolicyEnabled = ProviderConfiguration.Mode == RuntimeMode::NetworkServer &&
+			ProviderConfiguration.EnableResidencyDemandPolicy && ProviderConfiguration.Content &&
+			ProviderConfiguration.Content->Mode == ContentResidencyMode::OnDemand;
 		const auto ContentStartupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 		if (ProviderConfiguration.Content) {
 			Content = std::make_unique<ContentAvailabilityService>(
@@ -186,6 +191,15 @@ namespace gargantuan {
 		if (Destroyed) return;
 		Destroyed = true;
 		LOG_INFO(App, "Destroying engine");
+		if (ResidencyPolicy) ResidencyPolicy->Stop(Content.get());
+		ResidencyPolicy.reset();
+		// Preparation owns immutable metadata only. Join before Engine teardown;
+		// stopped work never publishes even if native code stopped Content first.
+		if (ResidencyPolicyPreparation.valid()) {
+			ResidencyPolicyPreparation.wait();
+			ResidencyPolicyPreparation = {};
+		}
+		ResidencyPolicyManifest.reset();
 		if (Content) Content->Stop();
 		if (DataModelDestroyingConnection) {
 			DataModelDestroyingConnection->Disconnect();
@@ -257,11 +271,94 @@ namespace gargantuan {
 		return Entitlements && !Entitlements->GetDestroyed() && Entitlements->ConfigureProvider(std::move(Provider));
 	}
 
+	void Engine::SetStreamingDiagnosticsEnabled(bool Enabled) {
+		if (ResidencyPolicy) ResidencyPolicy->SetDiagnosticsEnabled(Enabled);
+		StreamingDiagnosticsEnabled = Enabled;
+		if (!Enabled) LastContentStepNanoseconds = 0;
+	}
+
+	StreamingDiagnostics Engine::GetStreamingDiagnostics(ResidencyDiagnosticQuery Query) const {
+		if (Query.MaximumUnits > MaximumResidencyDiagnosticUnits ||
+			Query.MaximumTimingSamples > MaximumResidencyDiagnosticSamples || Query.StartIndex > MaximumPackageContentUnits)
+			throw std::invalid_argument("[Content:StreamingDiagnostics] query exceeds native limits");
+		StreamingDiagnostics Result;
+		Result.Enabled = StreamingDiagnosticsEnabled;
+		if (!StreamingDiagnosticsEnabled) return Result;
+		Result.SimulationTick = SimulationTick;
+		Result.ContentConfigured = Content != nullptr;
+		Result.ManifestAvailable = Content && Content->IsManifestAvailable();
+		Result.LastContentStepNanoseconds = LastContentStepNanoseconds;
+		if (Content) Result.Content = Content->GetDiagnosticCounters();
+		if (Destroyed || Result.Content.Stopped) Result.Status = StreamingDiagnosticStatus::Stopped;
+		else if (ResidencyPreparationFailed) Result.Status = StreamingDiagnosticStatus::PreparationFailed;
+		else if (ResidencyPolicy) Result.Status = StreamingDiagnosticStatus::Active;
+		else if (!ResidencyPolicyEnabled) Result.Status = StreamingDiagnosticStatus::NotConfigured;
+		else if (ResidencyPolicyPreparation.valid()) Result.Status = StreamingDiagnosticStatus::Preparing;
+		else Result.Status = StreamingDiagnosticStatus::AwaitingManifest;
+		if (ResidencyPolicy && Result.Status == StreamingDiagnosticStatus::Active) {
+			Result.Policy = ResidencyPolicy->GetDiagnostics(Query);
+			if (Content) for (auto &Unit : Result.Policy.Units) Unit.AvailabilityState = Content->GetState(Unit.Demand.Key);
+		}
+		return Result;
+	}
+
 	void Engine::Step() {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineStep);
-		if (!ProcessService->Alive) return;
+		if (Destroyed || !ProcessService->Alive) return;
 		Mutations.Drain();
-		if (Content) Content->Step();
+		if (Content) {
+			if (ResidencyPolicy && !Content->IsManifestAvailable()) {
+				ResidencyPolicy->Stop(Content.get());
+				ResidencyPolicy.reset();
+				ResidencyPolicyEnabled = false;
+			}
+			if (ResidencyPolicyEnabled && !ResidencyPolicy) {
+				try {
+					if (!ResidencyPolicyPreparation.valid() && Content->GetManifest()) {
+						ResidencyPolicyManifest = Content->GetManifestSnapshot();
+						ResidencyPolicyPreparation = std::async(std::launch::async, [Manifest = ResidencyPolicyManifest] {
+							ExecutionDomainScope Domain(ExecutionDomain::Worker);
+						return std::make_unique<ResidencyDemandPolicy>(std::move(Manifest));
+						});
+					}
+					if (ResidencyPolicyPreparation.valid() &&
+						ResidencyPolicyPreparation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+						auto PreparedPolicy = ResidencyPolicyPreparation.get();
+						const auto CurrentManifest = Content->GetManifestSnapshot();
+						if (CurrentManifest && ResidencyPolicyManifest &&
+							CurrentManifest.get() == ResidencyPolicyManifest.get() &&
+							!CurrentManifest.owner_before(ResidencyPolicyManifest) &&
+							!ResidencyPolicyManifest.owner_before(CurrentManifest))
+							ResidencyPolicy = std::move(PreparedPolicy);
+						else ResidencyPolicyEnabled = false;
+						ResidencyPolicyManifest.reset();
+						if (ResidencyPolicy && StreamingDiagnosticsEnabled) {
+							try { ResidencyPolicy->SetDiagnosticsEnabled(true); }
+							catch (const std::exception &) {
+								StreamingDiagnosticsEnabled = false;
+								LOG_WARN(App, "[Content:StreamingDiagnostics] collection unavailable");
+							}
+						}
+					}
+				} catch (const std::exception &Error) {
+					ResidencyPolicyEnabled = false;
+					ResidencyPreparationFailed = true;
+					// get() consumes a failed preparation; a launch failure has no future.
+					// Keep any still-running future for Destroy to join off this path.
+					ResidencyPolicyManifest.reset();
+					LOG_WARN(App, "[Content:ResidencyPolicy] preparation failed: %s", Error.what());
+				}
+			}
+			if (ResidencyPolicy)
+				ResidencyPolicy->Step(Content.get(), SimulationTick == std::numeric_limits<std::uint64_t>::max()
+					? SimulationTick : SimulationTick + 1);
+			if (StreamingDiagnosticsEnabled) {
+				const auto ContentStarted = std::chrono::steady_clock::now();
+				Content->Step();
+				LastContentStepNanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now() - ContentStarted).count());
+			} else Content->Step();
+		}
 
 		CurrentTick = std::chrono::steady_clock::now();
 		if (LastTick.time_since_epoch().count() == 0) LastTick = CurrentTick;

@@ -23,6 +23,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -30,9 +31,48 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+namespace gargantuan {
+	struct WorldRootTestAccess {
+		static WorldRaycastResult Raycast(WorldRoot &World) {
+			return World.ResolveRaycast({0.25f, 0.25f, 2.0f}, {0.0f, 0.0f, -4.0f});
+		}
+		static bool IsDirty(const WorldRoot &World, const BasePart &Part) {
+			return World.DirtyBodies.contains(Part.GetObjectId());
+		}
+	};
+}
+
 namespace {
+	// Observe the real SourceMount read boundary after reimport marks records
+	// Importing, without timing races or a test-only hook in production code.
+	class ObservingFilesystem final : public gargantuan::BaseFilesystem {
+		gargantuan::DiskFilesystem Backend;
+	  public:
+		std::function<void()> BeforeRead;
+		explicit ObservingFilesystem(const std::filesystem::path &Path) : BaseFilesystem(Path), Backend(Path) {}
+		gargantuan::FileMetadata Metadata(const std::filesystem::path &Path) const override { return Backend.Metadata(Path); }
+		bool Exists(const std::filesystem::path &Path) const override { return Backend.Exists(Path); }
+		std::unique_ptr<gargantuan::FileHandle> Open(const std::filesystem::path &Path,
+			const gargantuan::FileOpen &Mode = gargantuan::FileOpen::Read) override {
+			if (Mode == gargantuan::FileOpen::Read && BeforeRead) {
+				auto Observe = std::exchange(BeforeRead, {});
+				Observe();
+			}
+			return Backend.Open(Path, Mode);
+		}
+		void CreateDirectory(const std::filesystem::path &Path) override { Backend.CreateDirectory(Path); }
+		void Remove(const std::filesystem::path &Path) override { Backend.Remove(Path); }
+		std::vector<gargantuan::DirectoryEntry> GetChildren(const std::filesystem::path &Path) override {
+			return Backend.GetChildren(Path);
+		}
+		std::vector<gargantuan::DirectoryEntry> GetDescendants(const std::filesystem::path &Path) override {
+			return Backend.GetDescendants(Path);
+		}
+	};
+
 	int Failures = 0;
 
 	void Check(bool Condition, const char *Message) {
@@ -273,6 +313,8 @@ int main() {
 		"v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nf 1/1 2/2 3/3\n");
 	WriteText(Root / "assets" / "bad-index.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 4\n");
 	WriteText(Root / "assets" / "non-finite.obj", "v nan 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+	WriteText(Root / "assets" / "thin.obj", "v 0 0 0\nv 1 0 0\nv 0 0.000001 0\nf 1 2 3\n");
+	WriteText(Root / "assets" / "extreme.obj", "v 0 0 0\nv 1000001 0 0\nv 0 1 0\nf 1 2 3\n");
 	WriteText(Root / "assets" / "bad.png", "not a png");
 	WriteText(Root / "assets" / "bad.ttf", "not a font");
 	std::filesystem::copy_file(std::filesystem::path(GARGANTUAN_ASSET_TEST_FONT_PATH),
@@ -316,7 +358,7 @@ int main() {
 		LimitDocument["meshes"].push_back(nlohmann::ordered_json::object());
 	WriteText(Root / "assets" / "limit.gltf", LimitDocument.dump());
 
-	DiskFilesystem Filesystem(Root);
+	ObservingFilesystem Filesystem(Root);
 	SourceMount Mount(Filesystem);
 	auto World = std::make_shared<DataModel>();
 	World->Root = Root;
@@ -355,14 +397,216 @@ int main() {
 
 	auto MeshImport = Assets->ImportProjectAsset(Mount, "assets/triangle.obj", AssetKind::Mesh, "Triangle");
 	auto Mesh = MeshImport.Record ? Assets->ResolveMesh(MeshImport.Record->Reference.Value) : std::nullopt;
+	auto ObjCollision = MeshImport.Record ? Assets->ResolveCollisionForMesh(MeshImport.Record->Reference.Value) : std::nullopt;
 	Check(MeshImport.Ok && Mesh && Mesh->Vertices && Mesh->Vertices->size() == 3 &&
-		Mesh->Indices && Mesh->Indices->size() == 3 && Mesh->SubmeshCount == 1,
-		"OBJ import validates and normalizes bounded renderer-neutral mesh data");
+		Mesh->Indices && Mesh->Indices->size() == 3 && Mesh->SubmeshCount == 1 &&
+		MeshImport.Records.size() == 2 && ObjCollision && ObjCollision->Value.Positions->size() == 3 &&
+		ObjCollision->Value.Indices->size() == 3 && Mesh->CollisionAsset == ObjCollision->Id,
+		"OBJ import atomically publishes render mesh and separate bounded collision triangles");
+	const auto InitialCollisionStats = Assets->ReadCollisionStats();
+	WriteText(Root / "assets" / "repeated.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+	auto RepeatedMesh = Assets->ImportProjectAsset(Mount, "assets/repeated.obj", AssetKind::Mesh, "Repeated");
+	bool RepeatedReimportsOk = RepeatedMesh.Ok && RepeatedMesh.Record.has_value();
+	auto CollisionConsumer = std::make_shared<MeshPart>();
+	if (RepeatedMesh.Record) {
+		CollisionConsumer->SetMesh(RepeatedMesh.Record->Reference.Value);
+		CollisionConsumer->SetAnchored(true);
+		CollisionConsumer->SetSize({1.0f, 1.0f, 1.0f});
+		CollisionConsumer->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+		CollisionConsumer->SetParent(WorkspaceValue);
+		const auto PriorCollision = Assets->ResolveCollisionForMesh(RepeatedMesh.Record->Reference.Value);
+		const auto VerifyInFlight = [&] {
+			const auto Record = Assets->GetAsset(RepeatedMesh.Record->Reference.Value);
+			const auto Collision = Assets->ResolveCollisionForMesh(RepeatedMesh.Record->Reference.Value);
+			const auto Hit = WorldRootTestAccess::Raycast(*WorkspaceValue);
+			const auto VisualMesh = Assets->ResolveMeshResource(RepeatedMesh.Record->Reference.Value);
+			auto Reopened = std::make_shared<DataModel>();
+			auto ReopenedAssets = GetAssets(Reopened);
+			ReopenedAssets->LoadProjectAssetSnapshot(Assets->CaptureProjectAssets());
+			const auto SavedCollision = ReopenedAssets->ResolveCollisionForMesh(RepeatedMesh.Record->Reference.Value);
+			Check(Record && Record->State == AssetState::Importing && Collision && PriorCollision &&
+				Collision->Id == PriorCollision->Id && Collision->ContentRevision == PriorCollision->ContentRevision &&
+				Hit.Succeeded() && Hit.Instance == CollisionConsumer && std::abs(Hit.Distance - 2.0f) < 0.001f,
+				"in-flight reimport keeps the complete previous triangle collision queryable");
+			Check(VisualMesh && SavedCollision && PriorCollision && SavedCollision->Id == PriorCollision->Id &&
+				SavedCollision->ContentRevision == PriorCollision->ContentRevision,
+				"in-flight project capture and visual resolution retain the complete published bake");
+		};
+		Filesystem.BeforeRead = VerifyInFlight;
+		Check(Assets->ReimportProjectAsset(Mount, RepeatedMesh.Record->Reference.Value).Ok && !Filesystem.BeforeRead,
+			"successful reimport exercises the importing-state collision boundary");
+		const auto UnchangedCollision = Assets->ResolveCollisionForMesh(RepeatedMesh.Record->Reference.Value);
+		const auto UnchangedHit = WorldRootTestAccess::Raycast(*WorkspaceValue);
+		Check(UnchangedCollision && PriorCollision &&
+			UnchangedCollision->ContentRevision == PriorCollision->ContentRevision &&
+			UnchangedCollision->Value.Positions == PriorCollision->Value.Positions &&
+			UnchangedCollision->Value.Indices == PriorCollision->Value.Indices &&
+			UnchangedHit.Instance == CollisionConsumer && !WorldRootTestAccess::IsDirty(*WorkspaceValue, *CollisionConsumer),
+			"unchanged reimport retains canonical buffers and completes the existing native projection without retry");
+		WriteText(Root / "assets" / "repeated.obj", "invalid mesh");
+		Filesystem.BeforeRead = VerifyInFlight;
+		const auto Rejected = Assets->ReimportProjectAsset(Mount, RepeatedMesh.Record->Reference.Value);
+		const auto RetainedHit = WorldRootTestAccess::Raycast(*WorkspaceValue);
+		Check(!Rejected.Ok && !Filesystem.BeforeRead && RetainedHit.Instance == CollisionConsumer &&
+			std::abs(RetainedHit.Distance - 2.0f) < 0.001f,
+			"rejected reimport preserves the previous collision rather than projecting a temporary box");
+		WriteText(Root / "assets" / "repeated.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+	}
+	if (RepeatedReimportsOk) for (std::uint32_t Iteration = 0; Iteration < 8; ++Iteration) {
+		WriteText(Root / "assets" / "repeated.obj", "v 0 0 0\nv " + std::to_string(Iteration + 2) +
+			" 0 0\nv 0 1 0\nf 1 2 3\n");
+		RepeatedReimportsOk = Assets->ReimportProjectAsset(Mount, RepeatedMesh.Record->Reference.Value).Ok &&
+			RepeatedReimportsOk;
+	}
+	const auto RepeatedStats = Assets->ReadCollisionStats();
+	Check(RepeatedReimportsOk && RepeatedStats.ResidentRecords == InitialCollisionStats.ResidentRecords + 1 &&
+		RepeatedStats.RetainedArtifactBytes < InitialCollisionStats.RetainedArtifactBytes + 1024 &&
+		RepeatedStats.TotalRetainedArtifactBytes < InitialCollisionStats.TotalRetainedArtifactBytes + 2048 &&
+		RepeatedStats.PendingMeshPublications == InitialCollisionStats.PendingMeshPublications + 1 &&
+		RepeatedStats.PendingMeshRemovals == InitialCollisionStats.PendingMeshRemovals &&
+		RepeatedStats.PendingMeshBytes < InitialCollisionStats.PendingMeshBytes + 1024 &&
+		RepeatedStats.RetiredArtifacts == InitialCollisionStats.RetiredArtifacts + 7 && RepeatedStats.RetiredArtifactBytes > 0,
+		"repeated collision replacement retains only the current bounded canonical artifact");
+	if (RepeatedMesh.Record) {
+		CollisionConsumer->Destroy();
+		Check(Assets->DeleteProjectAsset(RepeatedMesh.Record->Reference.Value).Ok &&
+			Assets->ReadCollisionStats().ResidentRecords == InitialCollisionStats.ResidentRecords &&
+			Assets->ReadCollisionStats().PendingMeshPublications == InitialCollisionStats.PendingMeshPublications &&
+			Assets->ReadCollisionStats().PendingMeshRemovals == InitialCollisionStats.PendingMeshRemovals,
+			"deleting a mesh source group retires its collision record and artifact");
+	}
+	{
+		auto ProjectionWorld = std::make_shared<DataModel>();
+		auto ProjectionAssets = GetAssets(ProjectionWorld);
+		auto ProjectionWorkspace = std::dynamic_pointer_cast<Workspace>(ProjectionWorld->GetService("Workspace"));
+		WriteText(Root / "assets" / "projection.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+		const auto First = ProjectionAssets->ImportProjectAsset(Mount, "assets/projection.obj", AssetKind::Mesh);
+		RenderPublisher Publisher;
+		if (First.Record) for (int Revision = 2; Revision <= 3; ++Revision) {
+			WriteText(Root / "assets" / "projection.obj", "v 0 0 0\nv " + std::to_string(Revision) +
+				" 0 0\nv 0 1 0\nf 1 2 3\n");
+			Check(ProjectionAssets->ReimportProjectAsset(Mount, First.Record->Reference.Value).Ok,
+				"several mesh revisions can complete before the first renderer drain");
+		}
+		auto Initial = ProjectionAssets->DrainMeshChanges();
+		Check(Initial.Creates.size() == 1 && Initial.Removes.empty(),
+			"an unpublished mesh retains one final creation and no stale removals");
+		Publisher.SetAssetMeshChanges(std::move(Initial.Creates), std::move(Initial.Removes));
+		const auto FirstPublication = Publisher.Publish(*ProjectionWorkspace, RenderCameraInput{}, 320, 180);
+		Check(FirstPublication->MeshCreates.size() == 1 && FirstPublication->MeshRemoves.empty(),
+			"the latest undrained mesh revision publishes successfully to a fresh renderer");
+		if (First.Record) {
+			for (int Revision = 2; Revision <= 3; ++Revision) {
+				WriteText(Root / "assets" / "projection.obj", "v 0 0 0\nv " + std::to_string(Revision) +
+					" 0 0\nv 0 1 0\nf 1 2 3\n");
+				Check(ProjectionAssets->ReimportProjectAsset(Mount, First.Record->Reference.Value).Ok,
+					"multiple mesh revisions prepare before the next renderer drain");
+			}
+			const auto Queued = ProjectionAssets->ReadCollisionStats();
+			auto Latest = ProjectionAssets->DrainMeshChanges();
+			Check(Queued.PendingMeshPublications == 1 && Queued.PendingMeshRemovals == 1 &&
+				Latest.Creates.size() == 1 && Latest.Removes.size() == 1,
+				"mesh projection retains only the latest creation and the last delivered removal");
+			Publisher.SetAssetMeshChanges(std::move(Latest.Creates), std::move(Latest.Removes));
+			const auto Publication = Publisher.Publish(*ProjectionWorkspace, RenderCameraInput{}, 320, 180);
+			Check(Publication->MeshCreates.size() == 1 && Publication->MeshRemoves.size() == 1,
+				"coalesced mesh revisions publish without a stale intermediate resource removal");
+		}
+	}
+	AssetCancellationToken CancelledCollision;
+	CancelledCollision.Cancel();
+	auto CancelledMesh = Assets->ImportProjectAsset(Mount, "assets/triangle.obj", AssetKind::Mesh,
+		"Cancelled Mesh", CancelledCollision);
+	Check(!CancelledMesh.Ok && CancelledMesh.Records.empty() && CancelledMesh.Diagnostic.Code == "Cancelled",
+		"cancelled mesh import publishes neither mesh nor collision child");
+	{
+		// Exercise the compiler through the actual compound transaction, not only
+		// its candidate API. Runtime receives the bake without its source graph.
+		auto SolidWorld = std::make_shared<DataModel>();
+		auto SolidAssets = GetAssets(SolidWorld);
+		nlohmann::ordered_json SolidSource = {
+			{"Version", 1}, {"Root", "cut"}, {"Nodes", nlohmann::ordered_json::array({
+				{{"Id", "box"}, {"Kind", "Box"}, {"Size", {2, 2, 2}}},
+				{{"Id", "sphere"}, {"Kind", "Sphere"}, {"Radius", 0.5}},
+				{{"Id", "cut"}, {"Kind", "Subtraction"}, {"Inputs", {"box", "sphere"}}},
+			})},
+		};
+		WriteText(Root / "assets" / "cut.solid", SolidSource.dump());
+		const auto First = SolidAssets->ImportProjectAsset(Mount, "assets/cut.solid", AssetKind::Mesh, "Cut");
+		const auto FirstCollision = First.Record ? SolidAssets->ResolveCollisionForMesh(First.Record->Reference.Value) : std::nullopt;
+		Check(First.Ok && First.Record && First.Records.size() == 2 && FirstCollision,
+			"solid compilation atomically publishes an ordinary mesh and collision pair");
+		if (First.Record && FirstCollision) {
+			const auto SavedFirst = SolidAssets->CaptureProjectAssets();
+			SolidSource["Nodes"][0]["Size"][0] = 3;
+			WriteText(Root / "assets" / "cut.solid", SolidSource.dump());
+			const auto Second = SolidAssets->ReimportProjectAsset(Mount, First.Record->Reference.Value);
+			const auto SecondCollision = SolidAssets->ResolveCollisionForMesh(First.Record->Reference.Value);
+			Check(Second.Ok && Second.Record && SecondCollision && Second.Record->Id == First.Record->Id &&
+				SecondCollision->Id == FirstCollision->Id && Second.Record->ContentId != First.Record->ContentId &&
+				SecondCollision->ContentRevision > FirstCollision->ContentRevision,
+				"compatible solid recompilation retains both logical identities and advances changed revisions");
+			WriteText(Root / "assets" / "cut.solid", "{invalid source}");
+			const auto Failed = SolidAssets->ReimportProjectAsset(Mount, First.Record->Reference.Value);
+			Check(!Failed.Ok && Failed.Record && Second.Record && Failed.Record->State == AssetState::Stale &&
+				Failed.Record->ContentId == Second.Record->ContentId &&
+				SolidAssets->ResolveCollisionForMesh(First.Record->Reference.Value).has_value(),
+				"failed solid recompilation preserves the complete last-known-good bake");
+			auto RuntimeWorld = std::make_shared<DataModel>();
+			auto RuntimeAssets = GetAssets(RuntimeWorld);
+			RuntimeAssets->LoadRuntimeAssetSnapshot(SolidAssets->CaptureRuntimeAssets());
+			Check(RuntimeAssets->ResolveMesh(First.Record->Reference.Value).has_value() &&
+				RuntimeAssets->ResolveCollisionForMesh(First.Record->Reference.Value).has_value(),
+				"packaged solid runtime resolves compiled artifacts without source or Boolean evaluation");
+			auto RuntimeWorkspace = std::dynamic_pointer_cast<Workspace>(RuntimeWorld->GetService("Workspace"));
+			auto RuntimePart = std::make_shared<MeshPart>();
+			RuntimePart->SetAnchored(true);
+			RuntimePart->SetSize({1.0f, 1.0f, 1.0f});
+			RuntimePart->SetMesh(First.Record->Reference.Value);
+			RuntimePart->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+			RuntimePart->SetParent(RuntimeWorkspace);
+			const auto RuntimeHit = WorldRootTestAccess::Raycast(*RuntimeWorkspace);
+			Check(RuntimeHit.Succeeded() && RuntimeHit.Instance == RuntimePart &&
+				std::abs(RuntimeHit.Distance - 1.0f) < 0.001f,
+				"a packaged Boolean bake creates queryable triangle collision without its source graph");
+			auto OldWorld = std::make_shared<DataModel>();
+			auto OldAssets = GetAssets(OldWorld);
+			OldAssets->LoadProjectAssetSnapshot(SavedFirst);
+			const auto OldMesh = OldAssets->GetAsset(First.Record->Reference.Value);
+			const auto OldCollision = OldAssets->ResolveCollisionForMesh(First.Record->Reference.Value);
+			Check(OldMesh && OldCollision && OldMesh->ContentId == First.Record->ContentId &&
+				OldCollision->ContentRevision == FirstCollision->ContentRevision,
+				"captured old revisions remain independently reopenable after service artifact retirement");
+		}
+	}
+	{
+		auto PackageWorld = std::make_shared<DataModel>();
+		auto PackageAssets = GetAssets(PackageWorld);
+		auto PackageMesh = PackageAssets->ImportProjectAsset(Mount, "assets/triangle.obj", AssetKind::Mesh,
+			"Packaged Mesh");
+		if (PackageMesh.Ok && PackageMesh.Record) {
+			auto RuntimeSnapshot = PackageAssets->CaptureRuntimeAssets();
+			auto RuntimeWorld = std::make_shared<DataModel>();
+			auto RuntimeAssets = GetAssets(RuntimeWorld);
+			RuntimeAssets->LoadRuntimeAssetSnapshot(RuntimeSnapshot);
+			auto RuntimeCollision = RuntimeAssets->ResolveCollisionForMesh(PackageMesh.Record->Reference.Value);
+			Check(RuntimeCollision && RuntimeCollision->Id ==
+				PackageAssets->ResolveCollisionForMesh(PackageMesh.Record->Reference.Value)->Id &&
+				RuntimeCollision->ContentRevision == 1,
+				"packaged runtime resolves explicit mesh collision dependency without source grouping");
+			RuntimeAssets.reset(); RuntimeWorld->Destroy();
+		} else Check(false, "package collision fixture imports through the shared asset catalog");
+		PackageAssets.reset(); PackageWorld->Destroy();
+	}
 	auto InvalidIndex = Assets->ImportProjectAsset(Mount, "assets/bad-index.obj", AssetKind::Mesh, "Bad Index");
 	auto NonFinite = Assets->ImportProjectAsset(Mount, "assets/non-finite.obj", AssetKind::Mesh, "Non-finite");
+	auto Thin = Assets->ImportProjectAsset(Mount, "assets/thin.obj", AssetKind::Mesh, "Thin Collision");
+	auto Extreme = Assets->ImportProjectAsset(Mount, "assets/extreme.obj", AssetKind::Mesh, "Extreme Collision");
 	Check(!InvalidIndex.Ok && InvalidIndex.Diagnostic.Code == "InvalidMeshIndex" &&
-		!NonFinite.Ok && NonFinite.Diagnostic.Code == "MalformedMesh",
-		"OBJ import rejects invalid indices and non-finite attributes");
+		!NonFinite.Ok && NonFinite.Diagnostic.Code == "MalformedMesh" &&
+		!Thin.Ok && Thin.Diagnostic.Code == "MalformedCollision" && Thin.Records.empty() &&
+		!Extreme.Ok && Extreme.Diagnostic.Code == "MalformedCollision" && Extreme.Records.empty(),
+		"OBJ import atomically rejects invalid, non-finite, thin, and extreme collision geometry");
 	auto MeshChanges = Assets->DrainMeshChanges();
 	RenderPublisher Publisher;
 	Publisher.SetUiTextureChanges(
@@ -383,8 +627,8 @@ int main() {
 		"renderer restart/full resync recreates disposable image and mesh residency");
 
 	auto GltfImport = Assets->ImportProjectAsset(Mount, "assets/compound.glb", AssetKind::Mesh, "Compound GLB");
-	Check(GltfImport.Ok && GltfImport.Record && GltfImport.Records.size() == 4,
-		"one GLB transaction atomically generates one mesh, two materials, and one image");
+	Check(GltfImport.Ok && GltfImport.Record && GltfImport.Records.size() == 5,
+		"one GLB transaction atomically generates mesh, collision, materials, and image");
 	auto FindGenerated = [&](AssetKind Kind, std::string_view Name) -> std::optional<AssetRecord> {
 		for (const auto &Record : GltfImport.Records)
 			if (Record.Kind == Kind && Record.Name == Name) return Record;
@@ -399,6 +643,7 @@ int main() {
 	auto TranslucentMaterialRecord = FindGenerated(AssetKind::Material, "Translucent");
 	auto GltfImageRecord = FindGenerated(AssetKind::Image, "Surface");
 	auto GltfMesh = GltfMeshRecord ? Assets->ResolveMeshResource(GltfMeshRecord->Reference.Value) : std::nullopt;
+	auto GltfCollision = GltfMeshRecord ? Assets->ResolveCollisionForMesh(GltfMeshRecord->Reference.Value) : std::nullopt;
 	auto GltfMaterial = TexturedMaterialRecord ? Assets->ResolveMaterial(TexturedMaterialRecord->Reference.Value) : std::nullopt;
 	Check(GltfMesh && GltfMesh->Value.Vertices && GltfMesh->Value.Vertices->size() == 6 &&
 		GltfMesh->Value.Primitives && GltfMesh->Value.Primitives->size() == 2 &&
@@ -409,7 +654,9 @@ int main() {
 		GltfMaterial->Value.NormalTexture == GltfImageRecord->Id &&
 		GltfMaterial->Value.MetallicFactor == 0.25f && GltfMaterial->Value.RoughnessFactor == 0.75f &&
 		GltfMaterial->Value.AlphaMode == AssetMaterialAlphaMode::Mask && GltfMaterial->Value.DoubleSided &&
-		TexturedMaterialRecord->Dependencies.size() == 1 && GltfMeshRecord->Dependencies.size() == 2,
+		TexturedMaterialRecord->Dependencies.size() == 1 && GltfMeshRecord->Dependencies.size() == 3 &&
+		GltfCollision && GltfMesh->Value.CollisionAsset == GltfCollision->Id &&
+		GltfCollision->ContentRevision == 1 && GltfCollision->CanonicalBytes > 0,
 		"glTF metallic-roughness material semantics and deduplicated dependency edges are durable");
 	if (GltfMesh && GltfMesh->Value.Vertices) {
 		const auto &Vertex = GltfMesh->Value.Vertices->at(2);
@@ -426,6 +673,8 @@ int main() {
 		"MeshPart rejects raw mesh source paths");
 	MeshPartA->SetName("Imported Mesh A"); MeshPartB->SetName("Imported Mesh B");
 	MeshPartA->SetMesh(GltfMeshRecord->Reference.Value); MeshPartB->SetMesh(GltfMeshRecord->Reference.Value);
+	MeshPartA->SetAnchored(true);
+	MeshPartA->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
 	MeshPartA->SetParent(WorkspaceValue); MeshPartB->SetParent(WorkspaceValue);
 	auto CompoundTextures = Assets->DrainTextureChanges();
 	auto CompoundMeshes = Assets->DrainMeshChanges();
@@ -461,7 +710,8 @@ int main() {
 		++Failures;
 	}
 	Check(DuplicatedMeshPart && DuplicatedMeshPart->GetMesh() == MeshPartA->GetMesh() &&
-		DuplicatedMeshPart->GetMaterial() == MeshPartA->GetMaterial(),
+		DuplicatedMeshPart->GetMaterial() == MeshPartA->GetMaterial() &&
+		DuplicatedMeshPart->GetCollisionMode() == Enums::MeshCollisionMode::StaticMesh,
 		"MeshPart duplication preserves strict mesh and material references");
 	if (DuplicatedMeshPart) {
 		DuplicatedMeshPart->SetParent(WorkspaceValue);
@@ -490,7 +740,7 @@ int main() {
 	CompoundFixture = MakeGltfFixture(92);
 	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(CompoundFixture));
 	auto GltfReimport = Assets->ReimportProjectAsset(Mount, TexturedMaterialRecord->Reference.Value);
-	Check(GltfReimport.Ok && GltfReimport.Records.size() == 4 && std::ranges::all_of(GltfReimport.Records,
+	Check(GltfReimport.Ok && GltfReimport.Records.size() == 5 && std::ranges::all_of(GltfReimport.Records,
 		[&](const AssetRecord &Record) { return StableIds.at(Record.LogicalKey) == Record.Id; }),
 		"compound reimport through a generated child preserves every semantic AssetId");
 	auto ReimportedImage = std::ranges::find(GltfReimport.Records, GltfImageRecord->Id, &AssetRecord::Id);
@@ -518,15 +768,17 @@ int main() {
 	WriteText(Root / "assets" / "compound.glb", "corrupt reimport");
 	auto CorruptGraph = Assets->ReimportProjectAsset(Mount, GltfMeshRecord->Reference.Value);
 	Check(!CorruptGraph.Ok && CorruptGraph.Record && CorruptGraph.Record->State == AssetState::Stale &&
-		CorruptGraph.Record->ContentRevision == 2 && Assets->ResolveMeshResource(GltfMeshRecord->Reference.Value),
-		"a corrupt compound reimport retains the complete last-known-good graph");
+		CorruptGraph.Record->ContentRevision == 2 && Assets->ResolveMeshResource(GltfMeshRecord->Reference.Value) &&
+		Assets->ResolveCollisionForMesh(GltfMeshRecord->Reference.Value) &&
+		Assets->ResolveCollisionForMesh(GltfMeshRecord->Reference.Value)->Id == GltfCollision->Id,
+		"a corrupt compound reimport retains the complete last-known-good mesh and collision graph");
 	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(CompoundFixture));
 
 	auto WithOrphanFixture = MakeGltfFixture(92, true);
 	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(WithOrphanFixture));
 	auto AddedChild = Assets->ReimportProjectAsset(Mount, GltfMeshRecord->Reference.Value);
 	auto Orphan = std::ranges::find(AddedChild.Records, std::string("Orphan"), &AssetRecord::Name);
-	Check(AddedChild.Ok && AddedChild.Records.size() == 5 && Orphan != AddedChild.Records.end() &&
+	Check(AddedChild.Ok && AddedChild.Records.size() == 6 && Orphan != AddedChild.Records.end() &&
 		std::ranges::all_of(AddedChild.Records, [&](const AssetRecord &Record) {
 			const auto Existing = StableIds.find(Record.LogicalKey);
 			return Existing == StableIds.end() || Existing->second == Record.Id;
@@ -539,7 +791,7 @@ int main() {
 		"compound reimport atomically rejects removal of a generated child referenced by the scene");
 	MeshPartA->SetMaterial("");
 	auto RemovedChild = Assets->ReimportProjectAsset(Mount, GltfMeshRecord->Reference.Value);
-	Check(RemovedChild.Ok && RemovedChild.Records.size() == 4 && !Assets->GetAsset(Orphan->Reference.Value),
+	Check(RemovedChild.Ok && RemovedChild.Records.size() == 5 && !Assets->GetAsset(Orphan->Reference.Value),
 		"an unreferenced disappearing logical child is retired atomically");
 	Check(!Assets->DeleteProjectAsset(GltfMeshRecord->Reference.Value).Ok,
 		"compound deletion rejects live MeshPart references rather than leaving dangling material graphs");
@@ -644,6 +896,28 @@ int main() {
 	World->InitializeLoadedProjectRevision();
 	auto ProjectState = Project::forDestination(&Filesystem, InstanceSerialization::InstanceFormat::Json);
 	auto Snapshot = ProjectState.CaptureGame(World, World->GetAuthoritativeRevision());
+	if (GltfCollision) {
+		auto TamperedCollisionSnapshot = Snapshot.Assets;
+		const auto CollisionPath = GltfCollision->Id;
+		const auto CollisionRecord = Assets->GetAsset(AssetReference::FromAssetId(CollisionPath).Value);
+		bool Modified = false;
+		if (CollisionRecord) for (auto &Artifact : TamperedCollisionSnapshot.Artifacts)
+			if (Artifact.RelativePath.find(CollisionRecord->ContentId.ToString()) != std::string::npos && Artifact.Bytes) {
+				auto Bytes = std::make_shared<std::vector<std::uint8_t>>(*Artifact.Bytes);
+				Bytes->back() ^= 0x5a;
+				Artifact.Bytes = std::move(Bytes);
+				Modified = true;
+				break;
+			}
+		auto TamperedCollisionWorld = std::make_shared<DataModel>();
+		auto TamperedCollisionAssets = GetAssets(TamperedCollisionWorld);
+		TamperedCollisionAssets->LoadProjectAssetSnapshot(TamperedCollisionSnapshot);
+		const auto FailedCollision = TamperedCollisionAssets->GetAsset(AssetReference::FromAssetId(CollisionPath).Value);
+		Check(Modified && FailedCollision && FailedCollision->State == AssetState::Failed &&
+			!TamperedCollisionAssets->ResolveCollisionForMesh(GltfMeshRecord->Reference.Value),
+			"tampered collision artifact fails closed while mesh identity remains catalogued");
+		TamperedCollisionAssets.reset(); TamperedCollisionWorld->Destroy();
+	}
 	for (std::uint64_t Iteration = 1; Iteration <= 2; ++Iteration) {
 		PlaySession Session(
 			{Iteration}, Snapshot.Contents, InstanceSerialization::InstanceFormat::Json, Root,
@@ -657,6 +931,7 @@ int main() {
 			PlayAssets->ResolveImage(PersistentImageReference).has_value() &&
 			PlayAssets->ResolveMesh(MeshImport.Record->Reference.Value).has_value() &&
 			PlayAssets->ResolveMeshResource(GltfMeshRecord->Reference.Value).has_value() &&
+			PlayAssets->ResolveCollisionForMesh(GltfMeshRecord->Reference.Value).has_value() &&
 			PlayAssets->ResolveMaterial(TexturedMaterialRecord->Reference.Value).has_value() &&
 			PlayAssets->ResolveFont(FontImport.Record->Reference.Value).has_value(),
 			"Play clones the exact image, mesh, material, dependency, and font asset revisions");
@@ -678,12 +953,14 @@ int main() {
 	Check(ReopenedAssets && ReopenedAssets->IsAvailable(PersistentImageReference) &&
 		ReopenedAssets->ResolveMesh(MeshImport.Record->Reference.Value).has_value() &&
 		ReopenedAssets->ResolveMeshResource(GltfMeshRecord->Reference.Value).has_value() &&
+		ReopenedAssets->ResolveCollisionForMesh(GltfMeshRecord->Reference.Value).has_value() &&
 		ReopenedAssets->ResolveMaterial(TexturedMaterialRecord->Reference.Value).has_value() &&
 		ReopenedAssets->ResolveFont(FontImport.Record->Reference.Value).has_value(),
 		"saved image, mesh, material dependency graph, and font assets survive restart/reload");
 	auto ReopenedMeshPart = std::dynamic_pointer_cast<MeshPart>(ReopenedWorld->FindFirstDescendant("Imported Mesh A"));
 	Check(ReopenedMeshPart && ReopenedMeshPart->GetMesh() == GltfMeshRecord->Reference.Value &&
-		ReopenedMeshPart->GetMaterial().empty(),
+		ReopenedMeshPart->GetMaterial().empty() &&
+		ReopenedMeshPart->GetCollisionMode() == Enums::MeshCollisionMode::StaticMesh,
 		"MeshPart schema properties survive save and reopen");
 	auto ReopenedCancelled = ReopenedAssets->GetAsset(CancelledImport.Record->Reference.Value);
 	Check(ReopenedCancelled && ReopenedCancelled->State == AssetState::Failed && ReopenedCancelled->Diagnostic &&

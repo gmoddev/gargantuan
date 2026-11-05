@@ -14,6 +14,18 @@ related_adrs: []
 
 ## Supported CI configuration
 
+The opt-in local `GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION=ON` profile permits
+focused Asset 2B/Geometry 1A native tests on an existing worker without shader
+tooling. It uses the real production C++ core and test targets; it supplies no
+fake shader compiler. Shader, graphical executable, and packaged runtime targets
+fail closed in that profile. Build named asset/physics/geometry targets and run
+their selected tests only. This profile cannot replace the complete Windows or
+Linux hosted CI contracts, shader validation, or runtime package qualification.
+The option defaults to OFF, preserving the normal compiler preflight and build.
+The disabled Glaze codec prototype is not configured in this focused profile;
+enabling that prototype still brings its real toolchain requirements. Production
+builds retain their existing dependency configuration.
+
 Documentation builds on ordinary main pushes. Pages publication requires an
 explicit `Documentation` workflow dispatch on `main` with boolean `deploy=true`;
 the default dispatch builds only. Pages/OIDC write permissions belong only to
@@ -717,7 +729,19 @@ source must therefore restore successfully on a cold runner.
 ASan/UBSan are deliberately a dependent second gate rather than part of the
 Windows production configuration. Ubuntu 24.04 uses Clang 19 plus the GCC 14 C++
 runtime, `-fsanitize=address,undefined`, leak detection, immediate failure, and
-symbolized stacks. It runs registered tests serially with the SDL dummy video
+symbolized stacks. Both C and C++ compilation receive these flags in the native
+and GNS sanitizer workflows. This is necessary for the C17 compatibility tests
+and Box3D C implementation: KI-2B-001 qualification exposed an unaligned free-list
+pointer access in `block_allocator.c` that C++-only instrumentation could miss.
+Both sanitizer configurations preseed SDL's `LINKER_SUPPORTS_WL_NO_UNDEFINED`
+check to `OFF`. The pinned SDL otherwise adds `--no-undefined` to its shared
+library link; instrumented C objects require sanitizer symbols supplied by the
+final executable. [Clang's ASan guidance](https://clang.llvm.org/docs/AddressSanitizer.html#usage)
+explicitly excludes that strict shared-library link mode. The executable link
+retains the sanitizer flags, and SDL remains shared and instrumented. The first
+KI-2B-001 hosted runs at `f0e73878` demonstrated this link failure before tests;
+their logs remain failed evidence. Production Windows link policy is unchanged.
+No sanitizer category or acceptance gate is disabled. It runs registered tests serially with the SDL dummy video
 driver. The sanitizer job uploads the same configure, CTest, and JUnit evidence
 as the Windows gate on failure. UBSan is not described as an MSVC feature, and
 the workflow does not weaken the normal Windows ABI/toolchain contract to obtain

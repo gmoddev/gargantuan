@@ -29,6 +29,7 @@ namespace gargantuan {
 		constexpr std::uint32_t ArtifactVersion1 = 1;
 		constexpr std::uint32_t ArtifactVersion2 = 2;
 		constexpr std::uint32_t ArtifactVersion3 = 3;
+		constexpr std::uint32_t ArtifactVersion4 = 4;
 
 		AssetDiagnostic Error(std::string Code, std::string Message) {
 			if (Message.size() > AssetLimits::MaximumDiagnosticBytes) Message.resize(AssetLimits::MaximumDiagnosticBytes);
@@ -83,6 +84,36 @@ namespace gargantuan {
 			if (!Value) return std::nullopt;
 			const auto Result = std::bit_cast<float>(*Value);
 			return std::isfinite(Result) ? std::optional(Result) : std::nullopt;
+		}
+
+		std::optional<AssetDiagnostic> ValidateCollision(const ImportedCollision &Collision) {
+			if (!Collision.Positions || !Collision.Indices || Collision.Positions->empty() ||
+				Collision.Positions->size() > AssetLimits::MaximumCollisionPositions || Collision.Indices->empty() ||
+				Collision.Indices->size() > AssetLimits::MaximumCollisionIndices || Collision.Indices->size() % 3 != 0)
+				return Error("CollisionLimit", "Collision position or triangle count is invalid or oversized");
+			glm::vec3 Minimum = Collision.Positions->front(), Maximum = Minimum;
+			for (const auto &Position : *Collision.Positions) {
+				if (!std::isfinite(Position.x) || !std::isfinite(Position.y) || !std::isfinite(Position.z) ||
+					glm::any(glm::greaterThan(glm::abs(Position), glm::vec3(1.0e6f))))
+					return Error("MalformedCollision", "Collision position is non-finite or outside the supported range");
+				Minimum = glm::min(Minimum, Position);
+				Maximum = glm::max(Maximum, Position);
+			}
+			if (!glm::all(glm::equal(Minimum, Collision.Bounds.Minimum)) ||
+				!glm::all(glm::equal(Maximum, Collision.Bounds.Maximum)))
+				return Error("MalformedCollision", "Collision bounds disagree with its positions");
+			for (std::size_t Index = 0; Index < Collision.Indices->size(); Index += 3) {
+				const auto A = (*Collision.Indices)[Index], B = (*Collision.Indices)[Index + 1],
+					C = (*Collision.Indices)[Index + 2];
+				if (A >= Collision.Positions->size() || B >= Collision.Positions->size() ||
+					C >= Collision.Positions->size() || A == B || A == C || B == C)
+					return Error("MalformedCollision", "Collision triangle has an invalid index");
+				const auto Cross = glm::cross((*Collision.Positions)[B] - (*Collision.Positions)[A],
+					(*Collision.Positions)[C] - (*Collision.Positions)[A]);
+				if (!std::isfinite(glm::dot(Cross, Cross)) || glm::dot(Cross, Cross) < 1.0e-10f)
+					return Error("MalformedCollision", "Collision triangle is degenerate");
+			}
+			return std::nullopt;
 		}
 
 		std::vector<std::uint8_t> BeginArtifact(AssetKind Kind, std::uint32_t Version = ArtifactVersion1) {
@@ -235,6 +266,20 @@ namespace gargantuan {
 		  public:
 			AssetKind GetKind() const override { return AssetKind::Mesh; }
 			bool SupportsExtension(std::string_view Extension) const override { return Extension == ".obj"; }
+			bool IsCompound() const override { return true; }
+			std::expected<AssetImportGraphCandidate, AssetDiagnostic> ImportGraph(
+				std::span<const std::uint8_t> Source, const AssetImportContext &Context
+			) const override {
+				auto Candidate = Import(Source, Context);
+				if (!Candidate) return std::unexpected(Candidate.error());
+				auto Collision = BuildCollisionFromMesh(std::get<ImportedMesh>(Candidate->Asset));
+				if (!Collision) return std::unexpected(Collision.error());
+				AssetImportNodeCandidate MeshNode{"asset", AssetKind::Mesh, "Mesh", std::move(Candidate->Asset),
+					{}, {}, {{AssetImportBindingKind::MeshCollision, 0, "collision"}}};
+				AssetImportNodeCandidate CollisionNode{"collision", AssetKind::Collision, "Collision",
+					std::move(*Collision)};
+				return AssetImportGraphCandidate{{std::move(MeshNode), std::move(CollisionNode)}, "asset"};
+			}
 			std::expected<AssetImportCandidate, AssetDiagnostic> Import(
 				std::span<const std::uint8_t> Source,
 				const AssetImportContext &Context
@@ -522,6 +567,20 @@ namespace gargantuan {
 		};
 	}
 
+	std::expected<ImportedCollision, AssetDiagnostic> BuildCollisionFromMesh(const ImportedMesh &Mesh) {
+		if (!Mesh.Vertices || !Mesh.Indices || Mesh.Vertices->empty() || Mesh.Indices->empty() ||
+			Mesh.Vertices->size() > AssetLimits::MaximumCollisionPositions ||
+			Mesh.Indices->size() > AssetLimits::MaximumCollisionIndices)
+			return std::unexpected(Error("CollisionLimit", "Mesh geometry exceeds canonical collision limits"));
+		auto Positions = std::make_shared<std::vector<glm::vec3>>();
+		Positions->reserve(Mesh.Vertices->size());
+		for (const auto &Vertex : *Mesh.Vertices) Positions->push_back(Vertex.Position);
+		ImportedCollision Collision{std::move(Positions),
+			std::make_shared<const std::vector<std::uint32_t>>(*Mesh.Indices), Mesh.Bounds};
+		if (const auto Diagnostic = ValidateCollision(Collision)) return std::unexpected(*Diagnostic);
+		return Collision;
+	}
+
 	std::expected<std::vector<std::string>, AssetDiagnostic> IAssetImporter::DiscoverExternalResources(
 		std::span<const std::uint8_t>,
 		const AssetImportContext &
@@ -552,6 +611,7 @@ namespace gargantuan {
 		Result.push_back(std::make_unique<WaveImporter>());
 		Result.push_back(CreateGltfImporter(AssetKind::Mesh));
 		Result.push_back(CreateGltfImporter(AssetKind::Animation));
+		Result.push_back(CreateSolidImporter());
 		return Result;
 	}
 
@@ -564,11 +624,15 @@ namespace gargantuan {
 			(Kind == AssetKind::Font && !std::holds_alternative<ImportedFont>(Asset)) ||
 			(Kind == AssetKind::Material && !std::holds_alternative<ImportedMaterial>(Asset)) ||
 			(Kind == AssetKind::Audio && !std::holds_alternative<ImportedAudio>(Asset)) ||
-			(Kind == AssetKind::Animation && !std::holds_alternative<ImportedAnimation>(Asset)))
+			(Kind == AssetKind::Animation && !std::holds_alternative<ImportedAnimation>(Asset)) ||
+			(Kind == AssetKind::Collision && !std::holds_alternative<ImportedCollision>(Asset)))
 			return std::unexpected(Error("ArtifactKindMismatch", "Canonical value does not match its asset kind"));
 		const auto *MeshValue = std::get_if<ImportedMesh>(&Asset);
-		const auto Version = Kind == AssetKind::Animation || (MeshValue && MeshValue->Skeleton)
-			? ArtifactVersion3 : ArtifactVersion2;
+		if (MeshValue && MeshValue->Skeleton && MeshValue->CollisionAsset)
+			return std::unexpected(Error("UnsupportedCollision", "Skinned meshes cannot have static triangle collision"));
+		const auto Version = Kind == AssetKind::Collision || (MeshValue && MeshValue->CollisionAsset)
+			? ArtifactVersion4 : Kind == AssetKind::Animation || (MeshValue && MeshValue->Skeleton)
+				? ArtifactVersion3 : ArtifactVersion2;
 		auto Artifact = BeginArtifact(Kind, Version);
 		if (const auto *Image = std::get_if<ImportedImage>(&Asset)) {
 			if (!Image->Rgba8 || Image->Width == 0 || Image->Height == 0 ||
@@ -584,6 +648,16 @@ namespace gargantuan {
 			AppendU32(Artifact, Font->FaceCount);
 			AppendU32(Artifact, static_cast<std::uint32_t>(Font->Bytes->size()));
 			Artifact.insert(Artifact.end(), Font->Bytes->begin(), Font->Bytes->end());
+		} else if (const auto *Collision = std::get_if<ImportedCollision>(&Asset)) {
+			if (const auto Diagnostic = ValidateCollision(*Collision)) return std::unexpected(*Diagnostic);
+			AppendU32(Artifact, static_cast<std::uint32_t>(Collision->Positions->size()));
+			AppendU32(Artifact, static_cast<std::uint32_t>(Collision->Indices->size()));
+			for (const auto Component : {Collision->Bounds.Minimum.x, Collision->Bounds.Minimum.y,
+				Collision->Bounds.Minimum.z, Collision->Bounds.Maximum.x, Collision->Bounds.Maximum.y,
+				Collision->Bounds.Maximum.z}) AppendFloat(Artifact, Component);
+			for (const auto &Position : *Collision->Positions)
+				for (const auto Component : {Position.x, Position.y, Position.z}) AppendFloat(Artifact, Component);
+			for (const auto Index : *Collision->Indices) AppendU32(Artifact, Index);
 		} else if (const auto *Mesh = std::get_if<ImportedMesh>(&Asset)) {
 			if (!Mesh->Vertices || !Mesh->Indices || Mesh->Vertices->empty() || Mesh->Indices->empty() ||
 				Mesh->Vertices->size() > AssetLimits::MaximumMeshVertices ||
@@ -621,6 +695,12 @@ namespace gargantuan {
 					AppendU64(Artifact, Primitive.Material->High);
 					AppendU64(Artifact, Primitive.Material->Low);
 				}
+			}
+			if (Version == ArtifactVersion4) {
+				if (!Mesh->CollisionAsset || !Mesh->CollisionAsset->IsValid())
+					return std::unexpected(Error("InvalidDependency", "Mesh collision dependency is invalid"));
+				AppendU64(Artifact, Mesh->CollisionAsset->High);
+				AppendU64(Artifact, Mesh->CollisionAsset->Low);
 			}
 			if (Version == ArtifactVersion3) {
 				if (!Mesh->Skeleton || !Mesh->Skeleton->Joints || Mesh->Skeleton->Joints->empty() ||
@@ -810,7 +890,8 @@ namespace gargantuan {
 			return std::unexpected(Error("IntegrityFailure", "Asset artifact content hash does not match the catalog"));
 		std::size_t Offset = ArtifactMagic.size();
 		auto Version = ReadU32(Artifact, Offset);
-		if (!Version || (*Version != ArtifactVersion1 && *Version != ArtifactVersion2 && *Version != ArtifactVersion3) || Offset >= Artifact.size() ||
+		if (!Version || (*Version != ArtifactVersion1 && *Version != ArtifactVersion2 &&
+			*Version != ArtifactVersion3 && *Version != ArtifactVersion4) || Offset >= Artifact.size() ||
 			Artifact[Offset++] != static_cast<std::uint8_t>(ExpectedKind))
 			return std::unexpected(Error("UnsupportedArtifact", "Asset artifact version or kind is unsupported"));
 
@@ -911,6 +992,45 @@ namespace gargantuan {
 				std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()),
 				ExpectedContentId,
 			};
+		}
+
+		if (ExpectedKind == AssetKind::Collision) {
+			if (*Version != ArtifactVersion4)
+				return std::unexpected(Error("UnsupportedArtifact", "Collision assets require artifact version 4"));
+			auto PositionCount = ReadU32(Artifact, Offset), IndexCount = ReadU32(Artifact, Offset);
+			if (!PositionCount || !IndexCount || *PositionCount == 0 ||
+				*PositionCount > AssetLimits::MaximumCollisionPositions || *IndexCount == 0 ||
+				*IndexCount > AssetLimits::MaximumCollisionIndices || *IndexCount % 3 != 0 ||
+				Offset > Artifact.size() || Artifact.size() - Offset !=
+					6 * sizeof(float) + static_cast<std::size_t>(*PositionCount) * 3 * sizeof(float) +
+					static_cast<std::size_t>(*IndexCount) * sizeof(std::uint32_t))
+				return std::unexpected(Error("CollisionLimit", "Collision artifact length or counts are invalid"));
+			std::array<float, 6> BoundsValues{};
+			for (auto &Value : BoundsValues) {
+				auto Component = ReadFloat(Artifact, Offset);
+				if (!Component) return std::unexpected(Error("MalformedArtifact", "Collision bounds are invalid"));
+				Value = *Component;
+			}
+			auto Positions = std::make_shared<std::vector<glm::vec3>>();
+			Positions->reserve(*PositionCount);
+			for (std::uint32_t Index = 0; Index < *PositionCount; ++Index) {
+				auto X = ReadFloat(Artifact, Offset), Y = ReadFloat(Artifact, Offset), Z = ReadFloat(Artifact, Offset);
+				if (!X || !Y || !Z) return std::unexpected(Error("MalformedArtifact", "Collision position is invalid"));
+				Positions->emplace_back(*X, *Y, *Z);
+			}
+			auto Indices = std::make_shared<std::vector<std::uint32_t>>();
+			Indices->reserve(*IndexCount);
+			for (std::uint32_t Index = 0; Index < *IndexCount; ++Index) {
+				auto Value = ReadU32(Artifact, Offset);
+				if (!Value) return std::unexpected(Error("MalformedArtifact", "Collision index is truncated"));
+				Indices->push_back(*Value);
+			}
+			ImportedCollision Collision{Positions, Indices,
+				{{BoundsValues[0], BoundsValues[1], BoundsValues[2]},
+					{BoundsValues[3], BoundsValues[4], BoundsValues[5]}}};
+			if (const auto Diagnostic = ValidateCollision(Collision)) return std::unexpected(*Diagnostic);
+			return AssetImportCandidate{std::move(Collision),
+				std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()), ExpectedContentId};
 		}
 
 		if (ExpectedKind == AssetKind::Animation) {
@@ -1157,8 +1277,16 @@ namespace gargantuan {
 				Compatibility, std::shared_ptr<const std::vector<ImportedSkeletonJoint>>(std::move(Joints))});
 			SkinInfluences = std::move(Influences);
 		}
+		std::optional<AssetId> CollisionAsset;
+		if (*Version == ArtifactVersion4) {
+			auto High = ReadU64(Artifact, Offset), Low = ReadU64(Artifact, Offset);
+			if (!High || !Low || !AssetId{*High, *Low}.IsValid())
+				return std::unexpected(Error("MalformedArtifact", "Mesh collision dependency is invalid"));
+			CollisionAsset = AssetId{*High, *Low};
+		}
 		if (Offset != Artifact.size()) return std::unexpected(Error("MalformedArtifact", "Mesh artifact has trailing bytes"));
-		return AssetImportCandidate{ImportedMesh{Vertices, Indices, Bounds, *SubmeshCount, Primitives, Skeleton, SkinInfluences},
+		return AssetImportCandidate{ImportedMesh{Vertices, Indices, Bounds, *SubmeshCount, Primitives, Skeleton,
+			SkinInfluences, CollisionAsset},
 			std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()), ExpectedContentId};
 	}
 }

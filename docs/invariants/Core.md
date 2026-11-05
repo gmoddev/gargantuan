@@ -446,6 +446,51 @@ Tests should enforce them where practical.
     distinct from runtime initialization.
 101. Host separation does not alter package semantic versions, GRPL, GCHR,
     ordinary Luau authority, EditorHost trust, or generation-safe teardown.
+102. Standalone MeshPart peer relevance uses derived canonical geometry bounds
+    for both candidates and exact hysteresis; Character-rooted descendants and
+    ordinary Parts keep their owning policy. Unqualified geometry is an
+    explicit bounded conservative reason only for focused peers. Canonical
+    asset lookup for observation never creates services or changes the live
+    graph, and shared vertex validation is cached outside peer evaluation.
+
+## Trusted residency demand
+
+1. Foundation 3M owns desired/grace reasons only. ContentAvailability owns all
+   acquisition, dependency, admission, residency and eviction state. 3E relevance
+   and 3J accepted materialization remain independent downstream authorities.
+2. Default policy focus derives from committed server Character state and its
+   full Player ObjectId lifetime. Client messages and ordinary Luau cannot name
+   content keys, select providers or directly force policy acquisition.
+3. Package coarse queries have explicit cell, membership, candidate and aggregate
+   storage ceilings. An incomplete or failed query cannot masquerade as a complete
+   empty spatial result. Unloaded metadata never becomes a ghost ObjectId.
+4. Current native requirements and bounded current-valid spatial candidates
+   determine deterministic semantic/deadline/distance/cost/identity ordering.
+   Moving bounded approximations remain observable and converge after quiescence.
+5. Superseded focus work cannot publish a new request from obsolete facts.
+   Evaluation, candidate revalidation and request/release deltas have per-tick
+   bounds; equivalent demand coalesces to one policy-owned 3L request per key.
+6. Policy release retires only its accepted direct-demand contribution. Other
+   native owners, hard dependencies, pins and ordinary 3L lifecycle remain intact.
+7. Policy work is bound to one immutable manifest and service lifetime. Engine
+   joins immutable policy preparation before the content owner stops; stopped or
+   replacement lifetimes cannot accept an old policy result. Official shared
+   binding requires pointer and shared ownership equivalence. The native value
+   compatibility path verifies complete manifest contents once before binding.
+8. Detached spatial metadata inspection is evidence about compatibility only.
+   Missing, mismatched or underbounded evidence cannot create conservative
+   geometry, publish manifest bounds or close KI-3M-001 without a qualified
+   producer and package integration.
+9. Streaming diagnostics are opt-in bounded value projections. Reading them
+   cannot advance policy, acquire/release content, mutate the DataModel or expire
+   an unrelated editor transaction. Observer work is outside policy phase timing;
+   logical payload estimates do not claim complete process memory accounting.
+10. Automatic package partitioning may publish spatial units only after every
+    supported static member is covered by a finite conservative aggregate from
+    the exact captured canonical geometry. Missing, dynamic, skinned, malformed
+    or unindexable coverage retains the whole subtree in bootstrap. Full package
+    validation rederives coverage from bytes bound to the verified manifest and
+    asset catalog; file integrity alone never proves conservative geometry.
 
 ## Qualification and evidence
 

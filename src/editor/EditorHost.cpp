@@ -25,6 +25,7 @@
 #include "gargantuan/services/Workspace.hpp"
 #include "serialization/JsonCodec.hpp"
 #include "runtime/PreparedPropertyCommit.hpp"
+#include "editor/StreamingDiagnosticsEncoding.hpp"
 
 #include <algorithm>
 #include <array>
@@ -472,12 +473,25 @@ namespace gargantuan {
 			Json Dependencies = Json::array();
 			for (const auto &Dependency : Record.Dependencies) Dependencies.push_back(Dependency.ToString());
 			Json Metadata = Json::object();
+			// Report stored asset declarations; package geometry coverage is validated separately.
+			const auto EncodeLocalBounds = [](const RenderBounds &Bounds, const char *Coverage) {
+				return Json{
+					{"Space", "AssetLocal"}, {"Coverage", Coverage},
+					{"Minimum", {Bounds.Minimum.x, Bounds.Minimum.y, Bounds.Minimum.z}},
+					{"Maximum", {Bounds.Maximum.x, Bounds.Maximum.y, Bounds.Maximum.z}},
+				};
+			};
 			if (Record.Asset) std::visit([&](const auto &Asset) {
 				using T = std::decay_t<decltype(Asset)>;
 				if constexpr (std::is_same_v<T, ImportedImage>) {
 					Metadata["Width"] = Asset.Width;
 					Metadata["Height"] = Asset.Height;
 				} else if constexpr (std::is_same_v<T, ImportedMesh>) {
+					Metadata["GeometryInspectionVersion"] = 1;
+					Metadata["LocalBounds"] = EncodeLocalBounds(Asset.Bounds,
+						Asset.Skeleton || Asset.SkinInfluences ? "DeclaredBindPose" : "DeclaredMesh");
+					Metadata["CollisionAssetId"] = Asset.CollisionAsset
+						? Json(Asset.CollisionAsset->ToString()) : Json(nullptr);
 					Metadata["VertexCount"] = Asset.Vertices ? Asset.Vertices->size() : 0;
 					Metadata["IndexCount"] = Asset.Indices ? Asset.Indices->size() : 0;
 					Metadata["SubmeshCount"] = Asset.SubmeshCount;
@@ -491,6 +505,12 @@ namespace gargantuan {
 						Metadata["JointCount"] = Asset.Skeleton->Joints->size();
 						Metadata["SkeletonCompatibilityId"] = Asset.Skeleton->CompatibilityId.ToString();
 					}
+				} else if constexpr (std::is_same_v<T, ImportedCollision>) {
+					Metadata["GeometryInspectionVersion"] = 1;
+					Metadata["LocalBounds"] = EncodeLocalBounds(Asset.Bounds, "DeclaredCollision");
+					Metadata["Representation"] = "StaticTriangles";
+					Metadata["VertexCount"] = Asset.Positions ? Asset.Positions->size() : 0;
+					Metadata["IndexCount"] = Asset.Indices ? Asset.Indices->size() : 0;
 				} else if constexpr (std::is_same_v<T, ImportedAnimation>) {
 					Metadata["Duration"] = Asset.Duration;
 					Metadata["ChannelCount"] = Asset.Tracks ? Asset.Tracks->size() : 0;
@@ -917,8 +937,11 @@ namespace gargantuan {
 			if (message["SessionToken"].get<std::string>() != SessionToken)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Session token was rejected"));
 			const auto method = message["Method"].get<std::string>();
-			// Batch failures cannot commit an unrelated expired legacy group.
-			if (World && method != "SetPropertyBatch") (void)World->Transactions.ExpireOwner(*World, TransactionOwner);
+			// Batch failures and diagnostic operations cannot commit an unrelated
+			// expired legacy group. These diagnostics do not edit document state.
+			if (World && method != "SetPropertyBatch" && method != "GetStreamingDiagnostics" &&
+				method != "ConfigureStreamingDiagnostics")
+				(void)World->Transactions.ExpireOwner(*World, TransactionOwner);
 			const auto &parameters = message["Params"];
 			if (ActivePlaySession && IsAuthoringMethodWhilePlaying(method))
 				return SerializeBoundedResponse(ErrorResponse(
@@ -976,7 +999,7 @@ namespace gargantuan {
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
 					"ReadScriptSource", "WriteScriptSource", "PreRunSource", "ValidatePreRun",
 					"CustomServiceDeclarations", "ReplicatedStorage",
-					"PlaySession", "DiagnosticStream", "SendPlayInput",
+					"PlaySession", "DiagnosticStream", "SendPlayInput", "StreamingDiagnostics",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"AnimationRig", "AnimationPreview",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
@@ -1010,6 +1033,7 @@ namespace gargantuan {
 						{"Engine", "Gargantuan"},
 						{"ProtocolVersion", EditorHostProtocolVersion},
 						{"PropertyBatchVersion", EditorHostPropertyBatchVersion},
+						{"StreamingDiagnosticsVersion", 1},
 						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 2},
 						{"ViewportTransports", std::move(viewportTransports)},
@@ -1313,6 +1337,39 @@ namespace gargantuan {
 					{"PlaySessionId", Id.Value == 0 ? Json(nullptr) : Json(std::to_string(Id.Value))},
 					{"State", GetPlaySessionStateName(State)}, {"Active", ActivePlaySession != nullptr},
 				}));
+			}
+
+			if (method == "ConfigureStreamingDiagnostics" || method == "GetStreamingDiagnostics") {
+				const bool Configure = method == "ConfigureStreamingDiagnostics";
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					(Configure && !StudioSecurity.HasCapability(ScriptCapability::EditorCommands)))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Streaming diagnostics require owner read access"));
+				if (!(Configure ? HasOnlyFields(parameters, {"PlaySessionId", "Enabled"}) :
+					HasOnlyFields(parameters, {"PlaySessionId", "StartIndex", "MaximumUnits", "MaximumTimingSamples"})) ||
+					!parameters.contains("PlaySessionId"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Streaming diagnostic fields are malformed"));
+				const auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
+				if (!Id || !ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "Streaming diagnostics require the active owned Play session"));
+				if (Configure) {
+					if (!parameters.contains("Enabled") || !parameters["Enabled"].is_boolean())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Enabled must be boolean"));
+					ActivePlaySession->SetStreamingDiagnosticsEnabled(parameters["Enabled"].get<bool>());
+				}
+				const auto Size = [&](const char *Name, std::size_t Default, std::size_t Maximum) -> std::optional<std::size_t> {
+					if (!parameters.contains(Name)) return Default;
+					if (!parameters[Name].is_number_unsigned()) return std::nullopt;
+					const auto Value = parameters[Name].get<std::uint64_t>();
+					return Value <= Maximum ? std::optional<std::size_t>(static_cast<std::size_t>(Value)) : std::nullopt;
+				};
+				const auto Start = Size("StartIndex", 0, MaximumPackageContentUnits);
+				const auto Units = Size("MaximumUnits", 64, MaximumResidencyDiagnosticUnits);
+				const auto Samples = Size("MaximumTimingSamples", 32, MaximumResidencyDiagnosticSamples);
+				if (!Start || !Units || !Samples)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Streaming diagnostic query exceeds bounds"));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"PlaySessionId", std::to_string(Id->Value)},
+					{"Diagnostics", EncodeStreamingDiagnosticsSnapshot(ActivePlaySession->GetStreamingDiagnostics({*Start, *Units, *Samples}))}}));
 			}
 
 			if (method == "PollPlayDiagnostics") {

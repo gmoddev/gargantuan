@@ -4,6 +4,7 @@
 
 namespace gargantuan {
 	class AnimationRuntime;
+	G_ENUM(MeshCollisionMode, Box, StaticMesh)
 
 	class MeshPart : public BasePart {
 		I_MeshPart;

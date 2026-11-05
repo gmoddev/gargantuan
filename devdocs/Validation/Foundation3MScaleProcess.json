@@ -1,0 +1,9 @@
+{
+    "Source":  "1cacc5ac200d209ef4a2c126e98127876b4273dd",
+    "ExitCode":  0,
+    "ElapsedMilliseconds":  6484.0345000000007,
+    "CpuMilliseconds":  4859.375,
+    "ObservedPeakWorkingSetBytes":  257277952,
+    "NativeCompilersAtStart":  0,
+    "ExecutableSha256":  "F76001491CD517DED17FFD3723475EC4DD891600CE3C8BC5CBC08F612EE01655"
+}

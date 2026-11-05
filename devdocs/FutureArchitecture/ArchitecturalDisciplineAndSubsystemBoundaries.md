@@ -22,6 +22,11 @@ closed; that does not close the foundation. See the
 [roadmap evidence review](RoadmapEvidence20260912.md), and
 [delivery roadmap](Roadmap.md).
 
+That dated gate is superseded for core correctness by the accepted D03
+`POOLED_CORRECTNESS_V1` [3L closeout](../../tests/Foundation3LFinalAcceptance.md#current-core-contract--2026-10-20).
+The separately authorized first 3M implementation and its qualification scope
+are described in [the current policy contract](../CurrentArchitecture/TrustedResidencyDemandFoundation3M.md).
+
 This document records architectural improvements identified through comparative review of other engine implementations, particularly Atomic Game Engine, while preserving Gargantuan's existing semantic ownership model.
 
 It is not an instruction to reproduce another engine's architecture.
@@ -1144,6 +1149,11 @@ Eviction policy should follow measurement rather than precede it.
 ---
 
 # 8. Foundation 3M — Trusted Spatial Residency Policy
+
+Implementation and qualification of the first default-space slice are tracked
+in [the current policy contract](../CurrentArchitecture/TrustedResidencyDemandFoundation3M.md).
+The ownership rules below remain the design constraints; the current contract
+states the bounded moving-query approximation and actual production composition.
 
 ## 8.1 Purpose
 

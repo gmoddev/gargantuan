@@ -69,6 +69,7 @@ Authoritative DataModel / live Instance graph
 | Platform input or renderer backend isolation | `devdocs/CurrentArchitecture/PlatformInputBoundary.md` and `RendererBackendBoundary.md` |
 | Player input actions, LocalPlayer, character lifecycle, default controller/camera, or kinematic motion | `devdocs/CurrentArchitecture/PlayerRuntime.md`, then `PlatformInputBoundary.md` and `PhysicsBackend.md` as needed |
 | Rigid physics bodies, constraints, stepping, or touch events | `devdocs/CurrentArchitecture/PhysicsBackend.md` |
+| Imported mesh collision, collision residency, or headless solid compilation | `devdocs/CurrentArchitecture/AssetCollisionGeometryDecisions.md`, `AssetCollisionFoundation2B.md`, and `SolidGeometryFoundation1A.md` |
 | Cloth, rubber, deformable physics, soft-body jobs, broadphase, materials/attachments, or deformable tiers | `devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation2.md`, then `SoftBodyPhysicsFoundation.md`, `PhysicsBackend.md`, and `render-extraction.mdx` as needed |
 | Studio, EditorHost, snapshots, journals, viewport IPC | `editor-host.mdx` plus the relevant `devdocs/CurrentArchitecture` protocol document |
 | Luau execution or permissions | `devdocs/CurrentArchitecture/ScriptSecurity.md` |

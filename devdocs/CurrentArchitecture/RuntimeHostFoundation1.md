@@ -170,7 +170,8 @@ render, and audio implementation from core. Repository extraction should wait
 for genuinely divergent product ownership/cadence, platform integration,
 deployment orchestration, or a stable supported host ABI.
 
-Foundation 3M remains Engine policy composed by Server:
+Foundation 3M is Engine policy composed by the on-demand Server runtime
+([policy contract](TrustedResidencyDemandFoundation3M.md)):
 
 ```text
 GargantuanServer -> trusted ServerHostConfiguration

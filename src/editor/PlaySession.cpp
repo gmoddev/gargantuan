@@ -98,6 +98,17 @@ namespace gargantuan {
 		return RuntimeEngine->ProcessEvent(Event);
 	}
 
+	void PlaySession::SetStreamingDiagnosticsEnabled(bool Enabled) {
+		if (RuntimeEngine) RuntimeEngine->SetStreamingDiagnosticsEnabled(Enabled);
+	}
+
+	StreamingDiagnostics PlaySession::GetStreamingDiagnostics(ResidencyDiagnosticQuery Query) const {
+		if (RuntimeEngine) return RuntimeEngine->GetStreamingDiagnostics(Query);
+		StreamingDiagnostics Result;
+		Result.Status = StreamingDiagnosticStatus::Stopped;
+		return Result;
+	}
+
 	void PlaySession::Resize(std::uint32_t Width, std::uint32_t Height) {
 		if (State != PlaySessionState::Running || !RuntimeRenderer) return;
 		RuntimeRenderer->Resize(static_cast<int>(Width), static_cast<int>(Height));

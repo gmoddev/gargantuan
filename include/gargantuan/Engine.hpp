@@ -5,6 +5,8 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/content/ContentAvailability.hpp"
+#include "gargantuan/content/ResidencyDemandPolicy.hpp"
+#include "gargantuan/content/StreamingDiagnostics.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/gui/GuiRuntime.hpp"
@@ -29,6 +31,7 @@
 
 #include <chrono>
 #include <functional>
+#include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <lua.h>
 #include <memory>
@@ -87,6 +90,10 @@ namespace gargantuan {
 		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
 		[[nodiscard]] bool ReplaceEntitlementProvider(std::shared_ptr<IEntitlementProvider> Provider);
 		[[nodiscard]] ContentAvailabilityService *GetContentAvailability() const { return Content.get(); }
+		// Trusted native composition only; never reflected or exposed to Luau.
+		[[nodiscard]] ResidencyDemandPolicy *GetResidencyDemandPolicy() const { return ResidencyPolicy.get(); }
+		void SetStreamingDiagnosticsEnabled(bool Enabled);
+		[[nodiscard]] StreamingDiagnostics GetStreamingDiagnostics(ResidencyDiagnosticQuery Query = {}) const;
 		[[nodiscard]] CharacterRootMotionMetrics GetCharacterRootMotionMetrics() const {
 			return RootMotionMetrics;
 		}
@@ -99,6 +106,13 @@ namespace gargantuan {
 		std::chrono::steady_clock::time_point CurrentTick{};
 		std::chrono::steady_clock::time_point LastTick{};
 		bool Destroyed = false;
+		bool ResidencyPolicyEnabled = false;
+		bool StreamingDiagnosticsEnabled = false;
+		bool ResidencyPreparationFailed = false;
+		std::uint64_t LastContentStepNanoseconds = 0;
+		std::unique_ptr<ResidencyDemandPolicy> ResidencyPolicy;
+		std::future<std::unique_ptr<ResidencyDemandPolicy>> ResidencyPolicyPreparation;
+		std::shared_ptr<const PackageContentManifest> ResidencyPolicyManifest;
 		std::uint64_t SimulationTick = 0;
 		CharacterRootMotionMetrics RootMotionMetrics;
 		std::function<void()> UnbindDescendants;

@@ -56,6 +56,8 @@ namespace gargantuan {
 		[[nodiscard]] std::vector<PlayDiagnostic> DrainDiagnostics();
 		[[nodiscard]] std::vector<RenderPublicationPtr> TakeRenderPublications();
 		void RequestRenderFullResync();
+		void SetStreamingDiagnosticsEnabled(bool Enabled);
+		[[nodiscard]] StreamingDiagnostics GetStreamingDiagnostics(ResidencyDiagnosticQuery Query = {}) const;
 		[[nodiscard]] std::shared_ptr<DataModel> GetWorld() const { return RuntimeWorld; }
 		[[nodiscard]] PlaySessionId GetId() const { return Id; }
 		[[nodiscard]] PlaySessionState GetState() const { return State; }

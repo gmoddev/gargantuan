@@ -236,6 +236,8 @@ namespace gargantuan::host {
 		Program.add_argument("--content-residency")
 			.default_value(std::string("fully-resident"))
 			.help("content residency policy: fully-resident or on-demand");
+		Program.add_argument("--streaming-diagnostics").flag()
+			.help("enable bounded native streaming timing/inspection; no content-demand authority");
 		Program.add_argument("--content-node-endpoint")
 			.default_value(std::string())
 			.help("TLS ContentStreaming endpoint used only in Node mode");
@@ -602,6 +604,8 @@ namespace gargantuan::host {
 					.Content = std::move(Content),
 					.AudioEnabled = false,
 					.Mode = RuntimeMode::NetworkServer,
+					.EnableResidencyDemandPolicy = !FarmMode && ContentLifecycleKey.empty() && StopInFlightKey.empty(),
+					.EnableStreamingDiagnostics = Program.get<bool>("--streaming-diagnostics"),
 				}
 			);
 #if defined(GARGANTUAN_WITH_GNS)
