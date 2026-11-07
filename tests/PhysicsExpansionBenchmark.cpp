@@ -100,8 +100,9 @@ namespace {
 	Json RunQueries(int Iterations) {
 		auto Game = std::make_shared<DataModel>();
 		auto World = GetWorkspace(Game);
-		auto First = MakePart({5.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, true);
-		auto Second = MakePart({5.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, true);
+		// A 2-unit target begins at x=4; the half-unit cast radius hits at x=3.5.
+		auto First = MakePart({5.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f}, true);
+		auto Second = MakePart({5.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f}, true);
 		First->SetParent(World); Second->SetParent(World);
 		World->StepPhysics(0.0, std::nullopt);
 		Require(WorldRootTestAccess::Bodies(*World) == 2, "query bodies not admitted");

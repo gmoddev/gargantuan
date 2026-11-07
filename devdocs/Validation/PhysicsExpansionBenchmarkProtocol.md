@@ -9,7 +9,7 @@ observed behavior and resource retirement; a failing gate exits nonzero.
 
 | Case | Fixed workload | Behavioral gate |
 | --- | --- | --- |
-| `advanced-queries` | Two coincident anchored boxes, 128 casts and capped overlaps per sphere, capsule, and box | Stable nearest semantic hit, distance and unit normal, deterministic one-result truncation, rejection above the 256-result cap, no hits after destruction |
+| `advanced-queries` | Two coincident anchored 2×2×2 boxes centered at x=5, 128 casts and capped overlaps per sphere, capsule, and box | Stable nearest semantic hit at distance 3.5 with unit normal, deterministic one-result truncation, rejection above the 256-result cap, no hits after destruction |
 | `moving-body-ccd-off/on` | 32 one-step trials each, dynamic 0.5-unit ball at −3 moving +360 units/s against a dynamic 0.1-unit wall moving −2 units/s | Effective authored CCD flag, finite published pose, exact body retirement; all CCD-on balls stop before x=1 |
 | `hinge-slider-motors` | One authored motorized door hinge and one slider, 120 fixed 1/60-second steps | Both move within their limits, then all four bodies and two joints retire |
 
