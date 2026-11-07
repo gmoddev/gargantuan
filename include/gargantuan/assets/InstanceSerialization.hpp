@@ -3,6 +3,7 @@
 #include "gargantuan/classes/Instance.hpp"
 
 #include <format>
+#include <cstdint>
 #include <istream>
 #include <optional>
 #include <string_view>
@@ -20,6 +21,14 @@ namespace gargantuan::InstanceSerialization {
 
 		std::vector<std::string> CurrentPath{"(TOP)"};
 		std::size_t ObjectsDecoded = 0;
+		std::uint32_t FormatVersion = 0;
+		std::unordered_map<std::uint32_t, std::shared_ptr<Instance>> DocumentNodes;
+		struct PendingReference {
+			std::shared_ptr<Instance> Owner;
+			std::string Property;
+			std::optional<std::uint32_t> TargetId;
+		};
+		std::vector<PendingReference> PendingReferences;
 		bool PreserveSourceIds = true;
 		std::unordered_set<std::string> SourceIds;
 		std::unordered_map<std::shared_ptr<gargantuan::Instance>, std::vector<std::string>> PendingTags;

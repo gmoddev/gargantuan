@@ -342,12 +342,13 @@ namespace gargantuan {
 				throw std::runtime_error("manifest shape or version is invalid");
 			auto Project = ProjectId::Parse(Parsed["ProjectId"].get_ref<const std::string &>());
 			const auto PackageVersion = Parsed["PackageVersion"].get<std::uint64_t>();
-			const auto SchemaVersion = Parsed["InstanceSchemaVersion"].get<std::uint32_t>();
+			const auto SchemaVersion = Parsed["InstanceSchemaVersion"].get<std::uint64_t>();
 			const auto &WireEntries = Parsed["Entries"];
-			if (!Project || PackageVersion == 0 || SchemaVersion != PackageContentInstanceSchemaVersion ||
+			if (!Project || PackageVersion == 0 ||
+				(SchemaVersion != 4 && SchemaVersion != PackageContentInstanceSchemaVersion) ||
 				WireEntries.size() > MaximumPackageContentUnits)
 				throw std::runtime_error("manifest identity or entry count is invalid");
-			PackageContentManifest Result{{*Project, PackageVersion}, SchemaVersion, {}};
+			PackageContentManifest Result{{*Project, PackageVersion}, static_cast<std::uint32_t>(SchemaVersion), {}};
 			Result.Entries.reserve(WireEntries.size());
 			std::unordered_set<std::string> Seen;
 			std::size_t EdgeCount = 0;

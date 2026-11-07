@@ -17,7 +17,9 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "serialization/JsonCodec.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cmath>
 #include <cstring>
 #include <istream>
@@ -26,6 +28,7 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -79,8 +82,31 @@ namespace gargantuan::InstanceSerialization {
 
 		struct SerializationState {
 			std::unordered_map<std::shared_ptr<Instance>, json> InstanceMap;
+			std::unordered_map<const Instance *, std::uint32_t> NodeIds;
 			std::unordered_set<std::string> SourceIds;
 		};
+
+		void CollectDocumentNodes(const std::shared_ptr<Instance> &Root, SerializationState &State) {
+			std::vector<std::pair<std::shared_ptr<Instance>, std::size_t>> Pending{{Root, 1}};
+			while (!Pending.empty()) {
+				auto [Node, Depth] = std::move(Pending.back());
+				Pending.pop_back();
+				if (!Node || Depth > MaximumProtocolJsonDepth || State.NodeIds.size() >= MaximumPersistenceObjects)
+					throw std::length_error("Instance persistence hierarchy exceeds its depth or object limit");
+				const auto Id = static_cast<std::uint32_t>(State.NodeIds.size() + 1);
+				if (!State.NodeIds.emplace(Node.get(), Id).second)
+					throw std::invalid_argument("Instance persistence hierarchy repeats an object");
+				// Preserve the existing archive rule: a non-Archivable node is included,
+				// but its descendants are omitted from this document.
+				if (Node->GetArchivable()) {
+					if (Node->Children.size() > MaximumPersistenceObjects - State.NodeIds.size() -
+						std::min(Pending.size(), MaximumPersistenceObjects - State.NodeIds.size()))
+						throw std::length_error("Instance persistence hierarchy exceeds its object limit");
+					for (auto Child = Node->Children.rbegin(); Child != Node->Children.rend(); ++Child)
+						Pending.emplace_back(*Child, Depth + 1);
+				}
+			}
+		}
 
 		using SerializedPair = std::pair<const char *, json>;
 		std::optional<SerializedPair> TrySerializeValue(std::any unknown) {
@@ -137,6 +163,7 @@ namespace gargantuan::InstanceSerialization {
 		SerializeProperties(
 			const InstanceClassDefinition *definition,
 			std::shared_ptr<Instance> instance,
+			const SerializationState &state,
 			json &properties
 		) {
 			for (auto &[key, property] : definition->Properties) {
@@ -157,6 +184,15 @@ namespace gargantuan::InstanceSerialization {
 					}});
 					continue;
 				}
+				if (property.ReadObjectReference) {
+					auto Referenced = property.ReadObjectReference(instance.get());
+					if (!Referenced) properties[key] = json::object({{"InstanceReference", nullptr}});
+					else if (auto Found = state.NodeIds.find(Referenced.get()); Found != state.NodeIds.end())
+						properties[key] = json::object({{"InstanceReference", Found->second}});
+					else if (property.Nullable) properties[key] = json::object({{"InstanceReference", nullptr}});
+					else throw std::invalid_argument("Non-nullable persisted reference leaves the serialized document");
+					continue;
+				}
 
 				auto value = property.Read(instance.get());
 				if (auto serialized = TrySerializeValue(value); serialized.has_value()) {
@@ -167,7 +203,7 @@ namespace gargantuan::InstanceSerialization {
 			if (definition->BaseSchemaId) {
 				auto *superclass = InstanceClassRegistry::GetDefinitionBySchemaId(*definition->BaseSchemaId);
 				if (!superclass) throw std::runtime_error("Published class has no registered base SchemaId");
-				SerializeProperties(superclass, instance, properties);
+				SerializeProperties(superclass, instance, state, properties);
 			}
 		}
 
@@ -187,7 +223,7 @@ namespace gargantuan::InstanceSerialization {
 
 			auto *definition = InstanceClassRegistry::GetDefinition(instance.get());
 			auto properties = json::object();
-			SerializeProperties(definition, instance, properties);
+			SerializeProperties(definition, instance, state, properties);
 
 			json serialized;
 			serialized["Name"] = instance->GetName();
@@ -195,6 +231,7 @@ namespace gargantuan::InstanceSerialization {
 				? definition->CanonicalName : definition->ClassName;
 			serialized["ClassSchemaId"] = definition->Id.ToString();
 			serialized["ClassDefinitionVersion"] = definition->DefinitionVersion;
+			serialized["NodeId"] = state.NodeIds.at(instance.get());
 			serialized["Properties"] = properties;
 			serialized["Attributes"] = json::object();
 			for (const auto &[name, value] : instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted()))
@@ -245,8 +282,9 @@ namespace gargantuan::InstanceSerialization {
 		switch (format) {
 		case InstanceFormat::Json: {
 			Json::SerializationState state;
+			Json::CollectDocumentNodes(instance, state);
 			auto serialized = Json::SerializeInstance(instance, state);
-			serialized["Version"] = 4;
+			serialized["Version"] = 5;
 			auto Encoded = JsonCodec::Encode(serialized, "Instance persistence");
 			if (!Encoded) throw std::runtime_error(Encoded.error().Format());
 			return std::move(*Encoded);
@@ -631,8 +669,18 @@ namespace gargantuan::InstanceSerialization {
 			state.PushError("Cannot deserialize instance {} of class {}", state.FormatCurrentPath(), className);
 			return std::nullopt;
 		}
+		std::optional<std::uint32_t> DocumentId;
+		if (state.FormatVersion >= 5) {
+			if (!contents.contains("NodeId") || !contents["NodeId"].is_number_unsigned())
+				return state.ReturnError("Instance {} has no unsigned document-local NodeId", state.FormatCurrentPath());
+			DocumentId = JsonCodec::DecodeUnsigned32(contents["NodeId"]);
+			if (!DocumentId || *DocumentId == 0 || *DocumentId > MaximumPersistenceObjects ||
+				state.DocumentNodes.contains(*DocumentId))
+				return state.ReturnError("Instance {} has duplicate or out-of-range NodeId", state.FormatCurrentPath());
+		}
 
 		auto instance = InstanceClassRegistry::Construct(*definition);
+		if (DocumentId) state.DocumentNodes.emplace(*DocumentId, instance);
 		if (instance->ApplyPropertyMutation("Name", name.get<std::string>(), Enums::Permission::Engine) !=
 			MutationStatus::Success) {
 			instance->Destroy();
@@ -640,6 +688,13 @@ namespace gargantuan::InstanceSerialization {
 		}
 		for (auto &[key, property] : definition->AllProperties) {
 			if (property->CustomSchemaPropertyType) continue;
+			if (state.FormatVersion >= 5 && key != "Parent" &&
+				property->PersistencePolicy == InstanceProperty::Persistence::Saved &&
+				property->SemanticType == InstanceProperty::DataType::ObjectReference &&
+				property->ReadObjectReference && property->WriteObjectReference && !properties.contains(key)) {
+				instance->Destroy();
+				return state.ReturnError("Reference property '{}' is missing in {}", key, state.FormatCurrentPath());
+			}
 			if (key == "Parent" || !properties.contains(key) ||
 				property->PersistencePolicy != InstanceProperty::Persistence::Saved || !property->Write)
 				continue;
@@ -649,6 +704,32 @@ namespace gargantuan::InstanceSerialization {
 				state.PushError("Invalid value of property '{}' in {}", key, state.FormatCurrentPath());
 				instance->Destroy();
 				return std::nullopt;
+			}
+			if (state.FormatVersion >= 5 && property->SemanticType == InstanceProperty::DataType::ObjectReference) {
+				if (!property->ReadObjectReference || !property->WriteObjectReference ||
+					value.size() != 1 || !value.contains("InstanceReference")) {
+					instance->Destroy();
+					return state.ReturnError("Invalid reference property '{}' in {}", key, state.FormatCurrentPath());
+				}
+				std::optional<std::uint32_t> TargetId;
+				const auto &EncodedReference = value["InstanceReference"];
+				if (!EncodedReference.is_null()) {
+					if (!EncodedReference.is_number_unsigned()) {
+						instance->Destroy();
+						return state.ReturnError("Reference property '{}' has no unsigned target ID", key);
+					}
+					TargetId = JsonCodec::DecodeUnsigned32(EncodedReference);
+					if (!TargetId || *TargetId == 0 || *TargetId > MaximumPersistenceObjects) {
+						instance->Destroy();
+						return state.ReturnError("Reference property '{}' has an out-of-range target ID", key);
+					}
+				}
+				if (state.PendingReferences.size() == MaximumPersistenceObjects * 16) {
+					instance->Destroy();
+					return state.ReturnError("Instance document exceeds its reference-count limit");
+				}
+				state.PendingReferences.push_back({instance, key, TargetId});
+				continue;
 			}
 
 			auto maybeDeserialized = TryDeserializeProperty(value, state);
@@ -861,7 +942,7 @@ namespace gargantuan::InstanceSerialization {
 			if (!Parsed->is_object()) return std::unexpected("Expected a JSON object");
 			if (!Parsed->contains("Version") || !(*Parsed)["Version"].is_number_integer() ||
 				((*Parsed)["Version"] != 0 && (*Parsed)["Version"] != 1 && (*Parsed)["Version"] != 2 &&
-					(*Parsed)["Version"] != 3 && (*Parsed)["Version"] != 4))
+					(*Parsed)["Version"] != 3 && (*Parsed)["Version"] != 4 && (*Parsed)["Version"] != 5))
 				return std::unexpected("Unsupported instance format version");
 			return std::move(*Parsed);
 		}
@@ -870,6 +951,7 @@ namespace gargantuan::InstanceSerialization {
 			DeserializationState state;
 			state.PreserveSourceIds = PreserveSourceIds;
 			const auto version = Contents["Version"].get<int>();
+			state.FormatVersion = static_cast<std::uint32_t>(version);
 			std::optional<std::shared_ptr<Instance>> maybeInstance;
 			try {
 				maybeInstance = TryDeserializeInstance(
@@ -877,10 +959,35 @@ namespace gargantuan::InstanceSerialization {
 				);
 			} catch (const std::exception &Error) {
 				state.PushError("Failed to validate instance document: {}", Error.what());
+				state.PendingReferences.clear();
+				state.DocumentNodes.clear();
 				return state;
 			}
 			if (maybeInstance.has_value()) {
 				try {
+					for (const auto &Pending : state.PendingReferences) {
+						WireValue Value = std::monostate{};
+						if (Pending.TargetId) {
+							auto Found = state.DocumentNodes.find(*Pending.TargetId);
+							if (Found == state.DocumentNodes.end())
+								throw std::invalid_argument("Persisted reference target is absent from this document");
+							Value = WireObjectReference{WireObjectId::FromObjectId(Found->second->GetObjectId())};
+						}
+						if (Pending.Owner->ValidatePropertyWireMutation(
+							Pending.Property, Value, Enums::Permission::Engine,
+							ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+							throw std::invalid_argument("Persisted reference target has an invalid type or scope");
+					}
+					for (const auto &Pending : state.PendingReferences) {
+						WireValue Value = std::monostate{};
+						if (Pending.TargetId)
+							Value = WireObjectReference{WireObjectId::FromObjectId(
+								state.DocumentNodes.at(*Pending.TargetId)->GetObjectId())};
+						if (Pending.Owner->ApplyPropertyWireMutation(
+							Pending.Property, Value, Enums::Permission::Engine,
+							ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+							throw std::invalid_argument("Persisted reference mutation was rejected");
+					}
 					for (const auto &[instance, tags] : state.PendingTags) {
 						if (!ApplyPendingTags) {
 							instance->SetDetachedTagsForAdoption(tags);
@@ -895,9 +1002,11 @@ namespace gargantuan::InstanceSerialization {
 					state.Instance = maybeInstance.value();
 				} catch (const std::exception &error) {
 					maybeInstance.value()->Destroy();
-					state.PushError("Failed to rebuild tag index: {}", error.what());
+					state.PushError("Failed to resolve references or rebuild tag index: {}", error.what());
 				}
 			}
+			state.PendingReferences.clear();
+			state.DocumentNodes.clear();
 
 			return state;
 		}

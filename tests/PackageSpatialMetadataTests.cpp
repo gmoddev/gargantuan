@@ -2,6 +2,7 @@
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
@@ -178,11 +179,54 @@ namespace {
 		Dependency.Entry.Key = "zz/dependency";
 		Dependency.Entry.BlobReference = "content/dependency.instance.json";
 		Dependency.Entry.ObjectCount = 1;
-		SetPayload(Dependency, Json{{"Version", PackageContentInstanceSchemaVersion}, {"Name", "Dependency"},
+		SetPayload(Dependency, Json{{"Version", PackageContentInstanceSchemaVersion}, {"NodeId", 1}, {"Name", "Dependency"},
 			{"ClassName", "Folder"}, {"Properties", Json::object()}, {"Children", Json::array()}});
 		Changed.ContentUnits[0].Entry.Dependencies = {Dependency.Entry.Key};
 		Changed.ContentUnits.push_back(std::move(Dependency));
 		Test.CheckSnapshot(Changed, true, "valid nonspatial hard dependency lost 3L compatibility");
+	}
+
+	void CheckReferencePartition(Fixture &Test) {
+		auto Space = std::dynamic_pointer_cast<Workspace>(Test.World->GetService("Workspace"));
+		Require(static_cast<bool>(Space), "reference partition fixture has no Workspace");
+		auto Source = std::make_shared<Folder>();
+		Source->SetName("ReferenceSource");
+		Source->SetParent(Space);
+		auto SourcePart = std::make_shared<Part>();
+		SourcePart->SetName("SourcePart");
+		SourcePart->SetAnchored(true);
+		SourcePart->SetParent(Source);
+		auto Target = std::make_shared<Folder>();
+		Target->SetName("ReferenceTarget");
+		Target->SetParent(Space);
+		auto TargetPart = std::make_shared<Part>();
+		TargetPart->SetName("TargetPart");
+		TargetPart->SetAnchored(true);
+		TargetPart->SetCFrame(CFrame(20, 0, 0));
+		TargetPart->SetParent(Target);
+		auto Link = std::make_shared<WeldConstraint>();
+		Link->SetName("CrossUnitLink");
+		Link->SetPart0(SourcePart);
+		Link->SetPart1(TargetPart);
+		Link->SetParent(Source);
+		Test.World->MarkPersistenceSubtreeArchivable();
+		const auto ProjectValue = Project::fromExisting(Test.Filesystem.get());
+		const auto Revision = Test.World->GetAuthoritativeRevision();
+		const auto Payload = PackageBuilder::Capture(ProjectValue, Test.World, Revision, Revision);
+		Require(Payload.ContentUnits.size() == Test.Baseline.ContentUnits.size(),
+			"cross-unit reference changed unrelated spatial unit count");
+		const auto Bootstrap = Json::parse(Payload.ProjectJson);
+		bool RetainedSource = false;
+		bool RetainedTarget = false;
+		for (const auto &Child : Bootstrap["Children"]) {
+			if (Child.value("ClassName", "") != "Workspace") continue;
+			for (const auto &Member : Child["Children"]) {
+				RetainedSource |= Member.value("Name", "") == "ReferenceSource";
+				RetainedTarget |= Member.value("Name", "") == "ReferenceTarget";
+			}
+		}
+		Require(RetainedSource && RetainedTarget,
+			"package partition discarded source or target of an authored cross-unit reference");
 	}
 }
 
@@ -196,7 +240,8 @@ int main() {
 		Fixture Test;
 		CheckProducerDenials(Test);
 		CheckNonspatialDependency(Test);
-		std::cout << "[Package:SpatialMetadata] actual mixed geometry, exact proof and safe snapshot denials passed\n";
+		CheckReferencePartition(Test);
+		std::cout << "[Package:SpatialMetadata] mixed geometry, exact proof, reference retention and safe snapshot denials passed\n";
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Package:SpatialMetadata] " << Error.what() << '\n';

@@ -73,3 +73,5 @@ driven slider and suspended distance spring through the public authoring path.
 The physics backend tests additionally author those three mechanisms from
 ordinary Luau, step their live WorldRoot, check bounded motion, and save/reopen
 the authored references and parameters.
+Saved attachment references use the document-local v5 project persistence
+contract, so reopen resolves them to the newly loaded attachment Instances.
