@@ -657,6 +657,71 @@ namespace {
                 {"ExpectedMomentumSigns", Config.Case == "Multiple" ?
                     Json::array({ExpectedSign, -ExpectedSign}) : Json::array({ExpectedSign})}};
     }
+
+    Json EvaluateNecessaryEnergyBudget(const Json &Result, const Options &Config) {
+        if (Result.value("Status", std::string{}) == "UnsupportedGeometry")
+            return {{"Status", "UnsupportedGeometry"}, {"Qualified", nullptr}};
+        if (Config.Case == "SphereOnCloth" || Config.Case == "Repeated")
+            return {{"Status", "UnmeasuredExternalWork"}, {"Qualified", nullptr},
+                    {"Reason", Config.Case == "SphereOnCloth" ?
+                        "Gravity does positive work and its contribution is not integrated" :
+                        "Rigid teleport and velocity restart work is not integrated"}};
+
+        constexpr double SoftParticleMass = 0.1;
+        constexpr double RubberParticleCount = 64.0;
+        constexpr double AuthoredSoftSpeed = 4.0;
+        constexpr double AuthoredRigidSpeed = 5.0;
+        const double InitialSoftEnergy = Config.Case == "RubberPush" ?
+            0.5 * RubberParticleCount * SoftParticleMass * AuthoredSoftSpeed * AuthoredSoftSpeed : 0.0;
+        const int InitiallyMovingRigids = Config.Case == "Multiple" ? 2 :
+            (Config.Case == "RigidIntoCloth" ? 1 : 0);
+        const double InitialRigidEnergy = 0.5 * InitiallyMovingRigids * RigidMass *
+            AuthoredRigidSpeed * AuthoredRigidSpeed;
+        const double InitialEnergy = InitialSoftEnergy + InitialRigidEnergy;
+        const double Limit = 1.05 * InitialEnergy + 1.0e-5;
+        double MaximumObserved = 0.0;
+        int MaximumFrame = -1;
+        std::size_t ValidFrames = 0;
+        const bool Jolt = Result.value("Backend", std::string{}) == "Jolt";
+        for (const auto &Frame : Result["Frames"]) {
+            if (!Jolt && !Frame.value("SoftVelocityObservationValid", false)) continue;
+            double Energy = 0.0;
+            if (Jolt) Energy = Frame["KineticEnergy"].get<double>();
+            else {
+                Energy = Frame["SoftKineticEnergyEstimate"].get<double>();
+                for (const auto &Rigid : Frame["Rigids"]) {
+                    const double Mass = Rigid["Mass"].get<double>();
+                    const auto &Velocity = Rigid["Velocity"];
+                    const double SpeedSquared = Velocity[0].get<double>() * Velocity[0].get<double>() +
+                        Velocity[1].get<double>() * Velocity[1].get<double>() +
+                        Velocity[2].get<double>() * Velocity[2].get<double>();
+                    Energy += 0.5 * Mass * SpeedSquared;
+                }
+            }
+            if (!std::isfinite(Energy) || Energy < 0.0)
+                return {{"Status", "InvalidEnergyObservation"}, {"Qualified", false},
+                        {"InitialTranslationalKineticEnergy", InitialEnergy}, {"Limit", Limit}};
+            ++ValidFrames;
+            if (Energy > MaximumObserved) {
+                MaximumObserved = Energy;
+                MaximumFrame = Frame["Frame"].get<int>();
+            }
+        }
+        const bool Qualified = ValidFrames > 0 && MaximumObserved <= Limit;
+        return {{"Status", Qualified ? "PassedNecessaryBound" : "ExceededNecessaryBound"},
+                {"Qualified", Qualified}, {"InitialTranslationalKineticEnergy", InitialEnergy},
+                {"InitialSoftTranslationalKineticEnergy", InitialSoftEnergy},
+                {"InitialRigidTranslationalKineticEnergy", InitialRigidEnergy},
+                {"AuthoredSoftParticleCount", Config.Case == "RubberPush" ? RubberParticleCount : 0.0},
+                {"AuthoredSoftParticleMass", SoftParticleMass},
+                {"AuthoredSoftSpeed", Config.Case == "RubberPush" ? AuthoredSoftSpeed : 0.0},
+                {"AuthoredMovingRigidCount", InitiallyMovingRigids},
+                {"AuthoredRigidSpeed", InitiallyMovingRigids > 0 ? AuthoredRigidSpeed : 0.0},
+                {"MaximumObservedTranslationalKineticEnergy", MaximumObserved},
+                {"MaximumObservedFrame", MaximumFrame}, {"ValidFrames", ValidFrames},
+                {"Limit", Limit}, {"RelativeTolerance", 0.05}, {"AbsoluteTolerance", 1.0e-5},
+                {"Scope", "Necessary rejection bound only; angular and strain energy and damping work are unmeasured"}};
+    }
 }
 
 int main(int ArgumentCount, char **Arguments) {
@@ -682,9 +747,6 @@ int main(int ArgumentCount, char **Arguments) {
             Result["ContactEvidence"] = PerRigidContact;
             Result["PhysicalQualityQualified"] = PhysicalQualityPass(Result, Config.Case == "RubberPush");
             Result["ReciprocalRigidResponse"] = Comparison["AllRigidsRespond"].get<bool>();
-            Result["QualityQualified"] = Result["ContactEvidence"].get<bool>() &&
-                Result["PhysicalQualityQualified"].get<bool>() && Result["ReciprocalRigidResponse"].get<bool>() &&
-                Comparison["RigidMassMatchedToDensity"].get<bool>();
         } else {
             Result = RunXpbd(Config, true, true);
             if (Result.value("Status", std::string{}) != "UnsupportedGeometry") {
@@ -705,22 +767,37 @@ int main(int ArgumentCount, char **Arguments) {
                 Result["ContactEvidence"] = PerRigidContact;
                 Result["PhysicalQualityQualified"] = PhysicalQualityPass(Result, Config.Case == "RubberPush");
                 Result["RigidResponseObserved"] = Comparison["AllRigidsRespond"].get<bool>();
-                Result["QualityQualified"] = Result["ContactEvidence"].get<bool>() &&
-                    Result["PhysicalQualityQualified"].get<bool>() && Result["RigidResponseObserved"].get<bool>() &&
-                    Comparison["RigidMassMatchedToDensity"].get<bool>();
             } else {
                 Result["ContactEvidence"] = false;
                 Result["PhysicalQualityQualified"] = false;
                 Result["RigidResponseObserved"] = false;
-                Result["QualityQualified"] = false;
             }
         }
+        const bool ContactDeformationQualified = Result.value("ContactEvidence", false) &&
+            Result.value("PhysicalQualityQualified", false);
+        const bool ReciprocalRigidResponse = Result.value("ReciprocalRigidResponse",
+            Result.value("RigidResponseObserved", false));
+        const bool RigidMassMatched = Result.contains("ControlComparison") &&
+            Result["ControlComparison"].value("RigidMassMatchedToDensity", false);
+        const auto EnergyBudget = EvaluateNecessaryEnergyBudget(Result, Config);
+        const bool EnergyBudgetQualified = EnergyBudget.contains("Qualified") &&
+            EnergyBudget["Qualified"].is_boolean() && EnergyBudget["Qualified"].get<bool>();
+        Result["ContactDeformationQualified"] = ContactDeformationQualified;
+        Result["RigidResponseQualified"] = ReciprocalRigidResponse && RigidMassMatched;
+        Result["NecessaryEnergyBudget"] = EnergyBudget;
+        Result["QualityQualified"] = ContactDeformationQualified && ReciprocalRigidResponse &&
+            RigidMassMatched && EnergyBudgetQualified;
+        const auto BudgetStatus = EnergyBudget.value("Status", std::string{});
+        Result["PhysicalQualificationStatus"] = BudgetStatus == "UnsupportedGeometry" ?
+            "UnsupportedGeometry" : (BudgetStatus == "UnmeasuredExternalWork" ?
+                "IncompleteExternalWork" :
+                (Result["QualityQualified"].get<bool>() ? "PassedNecessaryBounds" : "FailedNecessaryBounds"));
         Result["QualityGates"] = {{"MaxEdgeStrain", 0.1}, {"MaxPinDrift", 1.0e-4},
                                   {"MaxPenetration", 0.1}, {"RubberVolumeError", 0.15},
                                   {"RubberInvertedTetrahedra", 0},
                                   {"MinimumDirectionalRigidMomentumTransfer", 0.001},
                                   {"MinimumRigidVelocityDifference", 0.01}};
-        Result["QualityQualificationScope"] = "Contact evidence, bounded deformation and reciprocal rigid response only";
+        Result["QualityQualificationScope"] = "Contact evidence, bounded deformation, reciprocal rigid response and a necessary translational kinetic energy ceiling where external positive work is absent";
         Result["MomentumConservationStatus"] = "Incomplete: damping and external momentum impulses are not integrated";
         Result["EnergyConservationStatus"] = "Incomplete: angular kinetic energy, strain potential and damping work are unmeasured";
         Result["PhysicsEquivalentTimingQualified"] = false;
