@@ -514,7 +514,7 @@ namespace {
 		SoftBodyWorld MovingReference;
 		auto MovingDefinition = ClothDefinition(16, 16);
 		const auto MovingBody = MovingPin.World.CreateBody(MovingDefinition);
-		const auto ReferenceBody = MovingReference.CreateBody(MovingDefinition);
+		const auto MovingReferenceBody = MovingReference.CreateBody(MovingDefinition);
 		for (int Step = 0; Step < 12; ++Step) {
 			(void)MovingPin.World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
 			(void)MovingReference.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
@@ -523,7 +523,7 @@ namespace {
 		MovingPin.Start();
 		if (!AwaitMerge(MovingPin, 16 * 16)) return;
 		(void)MovingReference.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
-		const auto ExpectedSolved = MovingReference.GetBodyState(ReferenceBody);
+		const auto ExpectedSolved = MovingReference.GetBodyState(MovingReferenceBody);
 		MovingDefinition.Attachments[0].Position.y += 1.0f;
 		Check(MovingPin.World.UpdateBody(MovingBody, MovingDefinition).Succeeded(),
 			"first attachment update while a solve is in flight is accepted");
@@ -540,12 +540,12 @@ namespace {
 			Distance((*Merged->Positions)[136], (*ExpectedSolved->Positions)[136]) < 0.0001f &&
 			Near((*Merged->Positions)[0].y, MovingDefinition.Attachments[0].Position.y),
 			"completed solve preserves unpinned deformation while publishing the latest pin target");
-		Check(MovingReference.UpdateBody(ReferenceBody, MovingDefinition).Succeeded(),
+		Check(MovingReference.UpdateBody(MovingReferenceBody, MovingDefinition).Succeeded(),
 			"reference applies the same pin movement after its step");
 		(void)MovingPin.World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
 		(void)MovingReference.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
 		Check(*MovingPin.World.GetBodyState(MovingBody)->Positions ==
-			*MovingReference.GetBodyState(ReferenceBody)->Positions,
+			*MovingReference.GetBodyState(MovingReferenceBody)->Positions,
 			"post-merge motion matches a reference with preserved unpinned velocities");
 
 		HeldSoftBodyStep PendingFault(false, [] { throw std::bad_alloc(); });
