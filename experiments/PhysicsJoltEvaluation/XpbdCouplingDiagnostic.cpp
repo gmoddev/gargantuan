@@ -159,8 +159,68 @@ namespace {
         return *State;
     }
 
-    void Run(const Options &Config) {
-        PhysicsEvaluation::InstallPhysicsAllocators();
+    struct QualityObservation {
+        double MaxEdgeStretch = 0.0;
+        double MaxPinDrift = 0.0;
+        double MaxParticlePenetration = 0.0;
+        bool Finite = true;
+    };
+
+    struct RunSummary {
+        int Frames = 0;
+        int SoftSubsteps = 0;
+        int FirstBudgetExceededFrame = -1;
+        double InitialKineticEnergy = 0.0;
+        double MaximumKineticEnergy = 0.0;
+        double MaxEdgeStretch = 0.0;
+        double MaxPinDrift = 0.0;
+        double MaxParticlePenetration = 0.0;
+        std::size_t TotalContactProjections = 0;
+        bool Finite = true;
+        double TotalPhysicalPhasesMs = 0.0;
+        double TotalSubstepPipelineMs = 0.0;
+    };
+
+    QualityObservation ObserveQuality(const std::vector<glm::vec3> &Positions,
+                                      const gargantuan::SoftBodyDefinition &Definition,
+                                      glm::vec3 RigidPosition) {
+        QualityObservation Result;
+        const std::size_t N = Definition.ResolutionX;
+        if (Positions.size() != N * Definition.ResolutionY)
+            throw std::runtime_error("[Physics:XpbdDiagnostic] Unexpected accepted cloth vertex count");
+        const float Rest = Definition.Size.x / static_cast<float>(N - 1);
+        const auto CheckEdge = [&](std::size_t A, std::size_t B, float Length) {
+            const double Stretch = std::abs(static_cast<double>(glm::length(Positions[B] - Positions[A]) / Length) - 1.0);
+            Result.Finite &= std::isfinite(Stretch);
+            Result.MaxEdgeStretch = std::max(Result.MaxEdgeStretch, Stretch);
+        };
+        for (std::size_t Y = 0; Y < Definition.ResolutionY; ++Y)
+            for (std::size_t X = 0; X < N; ++X) {
+                const auto Index = Y * N + X;
+                if (X + 1 < N) CheckEdge(Index, Index + 1, Rest);
+                if (Y + 1 < Definition.ResolutionY) CheckEdge(Index, Index + N, Rest);
+                if (X + 1 < N && Y + 1 < Definition.ResolutionY) {
+                    CheckEdge(Index, Index + N + 1, Rest * std::sqrt(2.0f));
+                    CheckEdge(Index + 1, Index + N, Rest * std::sqrt(2.0f));
+                }
+            }
+        for (const auto &Attachment : Definition.Attachments) {
+            const double Drift = static_cast<double>(glm::length(Positions[Attachment.Vertex] - Attachment.Position));
+            Result.Finite &= std::isfinite(Drift);
+            Result.MaxPinDrift = std::max(Result.MaxPinDrift, Drift);
+        }
+        const float ContactRadius = SphereRadius + Definition.Material.Thickness;
+        for (const auto &Position : Positions) {
+            Result.Finite &= std::isfinite(Position.x) && std::isfinite(Position.y) && std::isfinite(Position.z);
+            const double Distance = static_cast<double>(glm::length(Position - RigidPosition));
+            Result.Finite &= std::isfinite(Distance);
+            Result.MaxParticlePenetration = std::max(Result.MaxParticlePenetration,
+                std::max(0.0, static_cast<double>(ContactRadius) - Distance));
+        }
+        return Result;
+    }
+
+    RunSummary Run(const Options &Config) {
         gargantuan::PhysicsWorld Rigid({.Gravity = glm::vec3(0.0f)});
         gargantuan::SoftBodyWorldLimits Limits;
         Limits.MaximumWorkers = static_cast<std::size_t>(std::max(1, Config.Workers - 1));
@@ -216,10 +276,18 @@ namespace {
 
         int FirstBudgetExceededFrame = -1;
         double MaximumKineticEnergy = InitialKineticEnergy;
+        double MaximumEdgeStretch = 0.0;
+        double MaximumPinDrift = 0.0;
+        double MaximumParticlePenetration = 0.0;
+        double TotalPhysicalPhasesMs = 0.0;
+        double TotalSubstepPipelineMs = 0.0;
+        std::size_t TotalContactProjections = 0;
+        bool Finite = true;
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             Json SubstepRecords = Json::array();
             for (int Substep = 0; Substep < (Config.Interleaved ? Config.Substeps : 1); ++Substep) {
                 const float StepTime = Config.Interleaved ? FrameDeltaTime / Config.Substeps : FrameDeltaTime;
+                const auto PipelineStart = std::chrono::steady_clock::now();
                 const auto BeforeRigid = ReadRigid(Rigid, RigidId);
                 const auto RigidStart = std::chrono::steady_clock::now();
                 (void)Rigid.Step({.DeltaTime = StepTime,
@@ -242,7 +310,7 @@ namespace {
                     throw std::runtime_error("[Physics:XpbdDiagnostic] Soft step truncated");
                 const auto State = std::find_if(Result.States.begin(), Result.States.end(),
                     [&](const auto &Candidate) { return Candidate.Body == SoftId; });
-                if (State == Result.States.end())
+                if (State == Result.States.end() || !State->Positions)
                     throw std::runtime_error("[Physics:XpbdDiagnostic] Soft state missing");
                 const auto Dynamics = DiagnosticBackend->ReadAcceptedDynamics(SoftId, State->VertexRevision);
                 if (!Dynamics || !Dynamics->Finite)
@@ -279,15 +347,37 @@ namespace {
                     throw std::runtime_error("[Physics:XpbdDiagnostic] Feedback application failed");
                 const auto AfterFeedback = ReadRigid(Rigid, RigidId);
                 const double FeedbackMs = Milliseconds(FeedbackStart);
+                const double SubstepPipelineMs = Milliseconds(PipelineStart);
+                const double PhysicalPhasesMs = RigidMs + SoftMs + FeedbackMs;
+                // Quality is intentionally outside the solve/pipeline timing windows.
+                const auto Quality = ObserveQuality(*State->Positions, Definition, AfterFeedback.Transform.Position);
+                MaximumEdgeStretch = std::max(MaximumEdgeStretch, Quality.MaxEdgeStretch);
+                MaximumPinDrift = std::max(MaximumPinDrift, Quality.MaxPinDrift);
+                MaximumParticlePenetration = std::max(MaximumParticlePenetration, Quality.MaxParticlePenetration);
+                TotalPhysicalPhasesMs += PhysicalPhasesMs;
+                TotalSubstepPipelineMs += SubstepPipelineMs;
+                TotalContactProjections += Observed.Contacts;
                 const double SoftEnergy = Dynamics->TranslationalKineticEnergy;
                 const double TotalEnergy = RigidLinearEnergy(AfterFeedback) +
                     RigidAngularEnergy(AfterFeedback) + SoftEnergy;
+                Finite &= Quality.Finite && std::isfinite(TotalEnergy) &&
+                    std::isfinite(AfterFeedback.Transform.Position.x) &&
+                    std::isfinite(AfterFeedback.Transform.Position.y) &&
+                    std::isfinite(AfterFeedback.Transform.Position.z) &&
+                    std::isfinite(AfterFeedback.LinearVelocity.x) &&
+                    std::isfinite(AfterFeedback.LinearVelocity.y) &&
+                    std::isfinite(AfterFeedback.LinearVelocity.z) &&
+                    std::isfinite(AfterFeedback.AngularVelocity.x) &&
+                    std::isfinite(AfterFeedback.AngularVelocity.y) &&
+                    std::isfinite(AfterFeedback.AngularVelocity.z);
                 MaximumKineticEnergy = std::max(MaximumKineticEnergy, TotalEnergy);
                 if (FirstBudgetExceededFrame < 0 && TotalEnergy > 1.05 * InitialKineticEnergy + 1.0e-5)
                     FirstBudgetExceededFrame = Frame;
                 SubstepRecords.push_back({{"Substep", Substep}, {"DeltaTime", StepTime},
                                           {"RigidMs", RigidMs}, {"SoftMs", SoftMs},
                                           {"FeedbackMs", FeedbackMs},
+                                          {"PhysicalPhasesMs", PhysicalPhasesMs},
+                                          {"SubstepPipelineMs", SubstepPipelineMs},
                                           {"SoftWorkerCount", Result.Profile.WorkerCount},
                                           {"RigidBeforeStep", RigidState(BeforeRigid)},
                                           {"RigidAfterStep", RigidState(AfterRigid)},
@@ -302,6 +392,10 @@ namespace {
                                           {"SoftMomentum", Dynamics->Momentum},
                                           {"SoftMovableMass", Dynamics->MovableMass},
                                           {"SoftDiagnostic", Trace ? Json(Diagnostic(*Trace, Config.PhaseParticles)) : Json(nullptr)},
+                                          {"MaxEdgeStretch", Quality.MaxEdgeStretch},
+                                          {"MaxPinDrift", Quality.MaxPinDrift},
+                                          {"MaxParticlePenetration", Quality.MaxParticlePenetration},
+                                          {"Finite", Quality.Finite},
                                           {"TotalKineticEnergy", TotalEnergy}});
             }
             std::cout << Json({{"Record", "Frame"}, {"Frame", Frame},
@@ -309,13 +403,37 @@ namespace {
                                {"FirstBudgetExceededFrame", FirstBudgetExceededFrame},
                                {"MaximumKineticEnergy", MaximumKineticEnergy}}).dump() << '\n';
         }
+        return {Config.Frames, Config.Frames * (Config.Interleaved ? Config.Substeps : 1),
+                FirstBudgetExceededFrame, InitialKineticEnergy, MaximumKineticEnergy,
+                MaximumEdgeStretch, MaximumPinDrift, MaximumParticlePenetration,
+                TotalContactProjections, Finite, TotalPhysicalPhasesMs, TotalSubstepPipelineMs};
     }
 }
 
 int main(int ArgumentCount, char **Arguments) {
     PhysicsEvaluation::SuppressErrorDialogs();
     try {
-        Run(Parse(ArgumentCount, Arguments));
+        const auto Config = Parse(ArgumentCount, Arguments);
+        PhysicsEvaluation::InstallPhysicsAllocators();
+        const auto Before = PhysicsEvaluation::CaptureResources();
+        const auto Result = Run(Config);
+        const auto After = PhysicsEvaluation::CaptureResources();
+        Json Summary = {{"Record", "Summary"}, {"Frames", Result.Frames},
+                        {"SoftSubsteps", Result.SoftSubsteps},
+                        {"FirstBudgetExceededFrame", Result.FirstBudgetExceededFrame},
+                        {"InitialKineticEnergy", Result.InitialKineticEnergy},
+                        {"MaximumKineticEnergy", Result.MaximumKineticEnergy},
+                        {"MaxEdgeStretch", Result.MaxEdgeStretch},
+                        {"MaxPinDrift", Result.MaxPinDrift},
+                        {"MaxParticlePenetration", Result.MaxParticlePenetration},
+                        {"TotalContactProjections", Result.TotalContactProjections},
+                        {"Finite", Result.Finite},
+                        {"TotalPhysicalPhasesMs", Result.TotalPhysicalPhasesMs},
+                        {"TotalSubstepPipelineMs", Result.TotalSubstepPipelineMs},
+                        {"TimingScope", "RigidMs=Box3D Step only; SoftMs=XPBD Step only; FeedbackMs=feedback extraction, clamp/application and final rigid read; PhysicalPhasesMs=sum of these three; SubstepPipelineMs=from initial rigid read through collider snapshot, accepted dynamics, optional diagnostic read, feedback and final rigid read; quality checks and JSON serialization excluded"}};
+        Summary["FullRunResources"] = PhysicsEvaluation::ResourceDelta(Before, After);
+        Summary["ResourceScope"] = "Full Run including world setup, solve, quality observations, per-frame JSON construction/output and teardown; summary JSON is constructed after the after-snapshot; not per-solver allocation cost";
+        std::cout << Summary.dump() << '\n';
         return 0;
     } catch (const std::exception &Error) {
         std::cout << Json({{"Record", "Error"}, {"Message", Error.what()}}).dump() << '\n';
