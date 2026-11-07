@@ -32,13 +32,14 @@ pass. The separate allocation binary is for counts/retention, not timing ranks.
 | `advanced-queries` | Two coincident boxes; ray plus sphere/capsule/box casts and overlaps |
 | `filter-updates` | Alternating mutual collision-group visibility |
 | `moving-ccd-off/on` | 0.5-unit ball at −3 moving +360/s against a dynamic 0.1-unit wall at −2/s; enabled requires all trials to stop before x=1 |
-| `joint-motors` | Limited hinge door and driven slider; motion within bounds |
-| `spring-distance` | Two-unit distance spring; bounded extension |
-| `articulated-chain` | Eight ball-socket links; final joint drift |
+| `joint-motors` | Limited hinge door and driven slider with collisions disabled; motion within bounds |
+| `spring-distance` | Two-unit distance spring with collisions disabled; bounded extension |
+| `articulated-chain` | Eight ball-socket links with collisions disabled; final joint drift |
 
 The Jolt adapter intentionally does not translate contact/sensor begin/end
 events, kinematic capsule motion, production asset import, arbitrary Part shapes,
-shape/density replacement, dynamic sleep-policy edits, or all authored denial
+shape/density replacement, dynamic sleep-policy edits, connected-body collision
+exclusion, or all authored denial
 paths. `concurrent-admission` is an explicit unsupported row because the neutral
 Engine physics boundary is serialized on Main; native concurrent body insertion
 would measure a different contract. Jolt query shapes are cached by dimensions;

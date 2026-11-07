@@ -57,6 +57,12 @@ namespace {
         Result.SleepEnabled = true;
         return Result;
     }
+    PhysicsBodyDesc JointBody(glm::vec3 Position, glm::vec3 Size, bool Anchored) {
+        auto Result = Body(Position, Size, Anchored);
+        Result.CanCollide = false;
+        Result.CanTouch = false;
+        return Result;
+    }
     std::unique_ptr<IPhysicsBackend> GetBackend(const Options &Selection, glm::vec3 Gravity) {
         const PhysicsWorldConfig Config{.Gravity = Gravity};
         auto Backend = Selection.Backend == "jolt"
@@ -367,10 +373,10 @@ namespace {
         std::vector<PhysicsConstraintId> Joints;
         const bool Motor = Name == "joint-motors";
         if (Motor) {
-            Bodies.push_back(Add(*World, Body({0, 0, 0}, {1, 1, 1}, true)));
-            Bodies.push_back(Add(*World, Body({2, 0, 0}, {1, 1, 1}, false)));
-            Bodies.push_back(Add(*World, Body({10, 0, 0}, {1, 1, 1}, true)));
-            Bodies.push_back(Add(*World, Body({10, 0, 0}, {1, 1, 1}, false)));
+            Bodies.push_back(Add(*World, JointBody({0, 0, 0}, {1, 1, 1}, true)));
+            Bodies.push_back(Add(*World, JointBody({2, 0, 0}, {1, 1, 1}, false)));
+            Bodies.push_back(Add(*World, JointBody({10, 0, 0}, {1, 1, 1}, true)));
+            Bodies.push_back(Add(*World, JointBody({10, 0, 0}, {1, 1, 1}, false)));
             PhysicsConstraintDesc Hinge;
             Hinge.Kind = PhysicsConstraintKind::Hinge;
             Hinge.BodyA = Bodies[0]; Hinge.BodyB = Bodies[1];
@@ -385,8 +391,8 @@ namespace {
             Slider.EnableMotor = true; Slider.MotorSpeed = 3; Slider.MaximumMotorForce = 1000;
             Joints.push_back(World->CreateConstraint(Slider));
         } else if (Name == "spring-distance") {
-            Bodies.push_back(Add(*World, Body({0, 0, 0}, {0.5f, 0.5f, 0.5f}, true)));
-            Bodies.push_back(Add(*World, Body({0, -2, 0}, {0.5f, 0.5f, 0.5f}, false)));
+            Bodies.push_back(Add(*World, JointBody({0, 0, 0}, {0.5f, 0.5f, 0.5f}, true)));
+            Bodies.push_back(Add(*World, JointBody({0, -2, 0}, {0.5f, 0.5f, 0.5f}, false)));
             PhysicsConstraintDesc Spring;
             Spring.Kind = PhysicsConstraintKind::Distance;
             Spring.BodyA = Bodies[0]; Spring.BodyB = Bodies[1];
@@ -394,9 +400,9 @@ namespace {
             Joints.push_back(World->CreateConstraint(Spring));
             Require(World->ApplyLinearImpulse(Bodies[1], {0, -2, 0}).Succeeded(), "spring impulse failed");
         } else {
-            Bodies.push_back(Add(*World, Body({0, 5, 0}, {0.5f, 0.5f, 0.5f}, true)));
+            Bodies.push_back(Add(*World, JointBody({0, 5, 0}, {0.5f, 0.5f, 0.5f}, true)));
             for (int Index = 1; Index <= 8; ++Index) {
-                Bodies.push_back(Add(*World, Body({0, 5.0f - Index, 0}, {0.5f, 0.5f, 0.5f}, false)));
+                Bodies.push_back(Add(*World, JointBody({0, 5.0f - Index, 0}, {0.5f, 0.5f, 0.5f}, false)));
                 PhysicsConstraintDesc Joint;
                 Joint.Kind = PhysicsConstraintKind::BallSocket;
                 Joint.BodyA = Bodies[Index - 1]; Joint.BodyB = Bodies[Index];
