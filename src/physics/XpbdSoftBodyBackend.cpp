@@ -66,6 +66,14 @@ namespace gargantuan {
 			std::uint64_t VertexRevision = 1;
 		};
 
+		struct PendingSoftBodyAttachmentUpdate {
+			std::uint64_t SourceDefinitionRevision = 0;
+			std::uint64_t TargetDefinitionRevision = 0;
+			std::vector<SoftBodyAttachmentDesc> RecordAttachments;
+			std::vector<bool> Attached;
+			std::shared_ptr<std::vector<glm::vec3>> MergePositions;
+		};
+
 		struct SoftBodySlot {
 			std::uint32_t Generation = 1;
 			std::uint64_t DefinitionRevision = 1;
@@ -73,6 +81,7 @@ namespace gargantuan {
 			bool Retired = false;
 			SoftBodyDefinition Definition;
 			std::optional<SoftBodyRecord> Record;
+			std::optional<PendingSoftBodyAttachmentUpdate> PendingAttachmentUpdate;
 			SoftBodyState LastState;
 			std::size_t VertexCount = 0;
 			std::size_t ConstraintCount = 0;
@@ -181,6 +190,27 @@ namespace gargantuan {
 				   A.StretchCompliance == B.StretchCompliance && A.BendCompliance == B.BendCompliance &&
 				   A.ShapeCompliance == B.ShapeCompliance && A.VolumeCompliance == B.VolumeCompliance &&
 				   A.Friction == B.Friction && A.Thickness == B.Thickness;
+		}
+
+		void ApplyAttachmentNodes(
+			SoftBodyRecord &Record,
+			const std::vector<SoftBodyAttachmentDesc> &Attachments,
+			const std::vector<bool> &Attached
+		) {
+			for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
+				auto &Node = Record.Nodes[Index];
+				if (!Attached[Index] && Node.InverseMass == 0.0f) {
+					Node.InverseMass = 1.0f / Record.Definition.Material.ParticleMass;
+					Node.Velocity = {};
+				}
+			}
+			for (const auto &Attachment : Attachments) {
+				auto &Node = Record.Nodes[Attachment.Vertex];
+				Node.Position = Attachment.Position;
+				Node.PreviousPosition = Attachment.Position;
+				Node.Velocity = {};
+				Node.InverseMass = 0.0f;
+			}
 		}
 
 		void AddDistance(SoftBodyRecord &Record, std::uint32_t VertexA, std::uint32_t VertexB, float Compliance) {
@@ -917,11 +947,19 @@ namespace gargantuan {
 			}
 
 			PhysicsOperationResult UpdateBody(SoftBodyId Body, const SoftBodyDefinition &Definition) override {
+				try {
+					return UpdateBodyUnchecked(Body, Definition);
+				} catch (const std::bad_alloc &) {
+					return {PhysicsOperationStatus::BackendFailure, {}};
+				}
+			}
+
+			PhysicsOperationResult UpdateBodyUnchecked(SoftBodyId Body, const SoftBodyDefinition &Definition) {
 				{
 					std::scoped_lock Lock(Mutex);
 					auto *Slot = FindSlot(Body);
 					if (!Slot) return InvalidId("Soft-body ID is invalid or stale");
-					if (Slot->Record && SameDefinitionExceptAttachments(Slot->Definition, Definition)) {
+					if (SameDefinitionExceptAttachments(Slot->Definition, Definition)) {
 						if (Definition.Attachments.size() > Limits.MaximumAttachments)
 							return InvalidDescription("Soft-body attachment limit exceeded");
 						std::vector<bool> Attached(Slot->VertexCount, false);
@@ -931,26 +969,41 @@ namespace gargantuan {
 								return InvalidDescription("Soft-body attachment is invalid or duplicated");
 							Attached[Attachment.Vertex] = true;
 						}
-						auto &Record = *Slot->Record;
-						for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
-							auto &Node = Record.Nodes[Index];
-							if (!Attached[Index] && Node.InverseMass == 0.0f) {
-								Node.InverseMass = 1.0f / Definition.Material.ParticleMass;
-								Node.Velocity = {};
-							}
+						if (!Slot->LastState.Positions || Slot->LastState.Positions->size() != Slot->VertexCount)
+							return InvalidDescription("Soft-body state is unavailable for attachment update");
+						// Stage every allocation before changing a live node, definition, or revision.
+						auto SlotAttachments = Definition.Attachments;
+						auto RecordAttachments = Definition.Attachments;
+						auto PublishedPositions = std::make_shared<std::vector<glm::vec3>>(*Slot->LastState.Positions);
+						for (const auto &Attachment : Definition.Attachments)
+							(*PublishedPositions)[Attachment.Vertex] = Attachment.Position;
+						auto PublishedState = Slot->LastState;
+						PublishedState.Positions = std::move(PublishedPositions);
+						PublishedState.Simulated = false;
+						++PublishedState.VertexRevision;
+						std::optional<PendingSoftBodyAttachmentUpdate> Pending;
+						if (!Slot->Record) {
+							Pending.emplace(PendingSoftBodyAttachmentUpdate{
+								.SourceDefinitionRevision = Slot->PendingAttachmentUpdate
+									? Slot->PendingAttachmentUpdate->SourceDefinitionRevision
+									: Slot->DefinitionRevision,
+								.TargetDefinitionRevision = Slot->DefinitionRevision + 1,
+								.RecordAttachments = std::move(RecordAttachments),
+								.Attached = std::move(Attached),
+								.MergePositions = std::make_shared<std::vector<glm::vec3>>(Slot->VertexCount),
+							});
 						}
-						for (const auto &Attachment : Definition.Attachments) {
-							auto &Node = Record.Nodes[Attachment.Vertex];
-							Node.Position = Attachment.Position;
-							Node.PreviousPosition = Attachment.Position;
-							Node.Velocity = {};
-							Node.InverseMass = 0.0f;
+						if (TestHooks && TestHooks->BeforeAttachmentCommit) TestHooks->BeforeAttachmentCommit();
+						if (Slot->Record) {
+							ApplyAttachmentNodes(*Slot->Record, Definition.Attachments, Attached);
+							Slot->Record->Definition.Attachments.swap(RecordAttachments);
+							Slot->Record->VertexRevision = PublishedState.VertexRevision;
+						} else {
+							Slot->PendingAttachmentUpdate.emplace(std::move(*Pending));
 						}
-						Record.Definition.Attachments = Definition.Attachments;
-						++Record.VertexRevision;
+						Slot->Definition.Attachments.swap(SlotAttachments);
+						Slot->LastState = std::move(PublishedState);
 						++Slot->DefinitionRevision;
-						Slot->Definition.Attachments = Definition.Attachments;
-						Slot->LastState = ExtractState(Body, Record, false);
 						return {};
 					}
 				}
@@ -968,11 +1021,14 @@ namespace gargantuan {
 				Replacement->TopologyRevision = Slot->LastState.TopologyRevision +
 												(SameTopology(Slot->Definition, Definition) ? 0 : 1);
 				Replacement->VertexRevision = Slot->LastState.VertexRevision + 1;
+				auto NewDefinition = Definition;
+				auto NewState = ExtractState(Body, *Replacement, false);
 				++Slot->DefinitionRevision;
-				Slot->Definition = Definition;
+				Slot->PendingAttachmentUpdate.reset();
+				Slot->Definition = std::move(NewDefinition);
 				Slot->VertexCount = Replacement->Nodes.size();
 				Slot->ConstraintCount = Constraints;
-				Slot->LastState = ExtractState(Body, *Replacement, false);
+				Slot->LastState = std::move(NewState);
 				Slot->Record = std::move(*Replacement);
 				LiveVertices = RemainingVertices + Slot->VertexCount;
 				LiveConstraints = RemainingConstraints + Slot->ConstraintCount;
@@ -988,6 +1044,7 @@ namespace gargantuan {
 				--LiveBodies;
 				Slot->Live = false;
 				Slot->Record.reset();
+				Slot->PendingAttachmentUpdate.reset();
 				Slot->LastState = {};
 				Slot->PendingPointImpulses.clear();
 				++Slot->DefinitionRevision;
@@ -1104,6 +1161,7 @@ namespace gargantuan {
 					std::size_t BatchConstraints = 0;
 					{
 						std::scoped_lock Lock(Mutex);
+						Result.States.reserve(LiveBodies);
 						Batch->Items.reserve(std::min(LiveBodies, Limits.MaximumBodiesPerBatch));
 						for (std::uint32_t SlotIndex = 1; SlotIndex < Slots.size(); ++SlotIndex) {
 							auto &Slot = Slots[SlotIndex];
@@ -1195,21 +1253,56 @@ namespace gargantuan {
 							auto *Slot = FindSlot(Item.Body);
 							const bool Current = Slot && Slot->DefinitionRevision == Item.DefinitionRevision &&
 												 !Slot->Record;
+							const bool PendingCurrent = Slot && !Slot->Record && Slot->PendingAttachmentUpdate &&
+								Slot->PendingAttachmentUpdate->SourceDefinitionRevision == Item.DefinitionRevision &&
+								Slot->PendingAttachmentUpdate->TargetDefinitionRevision == Slot->DefinitionRevision;
+							auto RestoreInputs = [&] {
+								Slot->PendingForce += Item.Force;
+								Slot->PendingImpulse += Item.Impulse;
+								const auto Available =
+									Limits.MaximumPointImpulsesPerStep -
+									std::min(Limits.MaximumPointImpulsesPerStep, Slot->PendingPointImpulses.size());
+								const auto Count = std::min(Available, Item.PointImpulses.size());
+								Slot->PendingPointImpulses.insert(
+									Slot->PendingPointImpulses.begin(), Item.PointImpulses.begin(),
+									Item.PointImpulses.begin() + static_cast<std::ptrdiff_t>(Count)
+								);
+							};
+							if (PendingCurrent && !ShuttingDown) {
+								auto &Pending = *Slot->PendingAttachmentUpdate;
+								if (Item.Completed && !Item.Failed) {
+									auto &Positions = *Pending.MergePositions;
+									std::copy(
+										Item.State.Positions->begin(), Item.State.Positions->end(), Positions.begin()
+									);
+									for (const auto &Attachment : Pending.RecordAttachments)
+										Positions[Attachment.Vertex] = Attachment.Position;
+									ApplyAttachmentNodes(Item.Record, Pending.RecordAttachments, Pending.Attached);
+									Item.Record.Definition.Attachments.swap(Pending.RecordAttachments);
+									Item.Record.VertexRevision = Slot->LastState.VertexRevision + 1;
+									auto State = Item.State;
+									State.VertexRevision = Item.Record.VertexRevision;
+									State.Positions = Pending.MergePositions;
+									Slot->Record = std::move(Item.Record);
+									Slot->LastState = State;
+									Slot->PendingAttachmentUpdate.reset();
+									Result.States.push_back(std::move(State));
+								} else {
+									++Result.Profile.StaleResults;
+									ApplyAttachmentNodes(Item.Record, Pending.RecordAttachments, Pending.Attached);
+									Item.Record.Definition.Attachments.swap(Pending.RecordAttachments);
+									Item.Record.VertexRevision = Slot->LastState.VertexRevision;
+									Slot->Record = std::move(Item.Record);
+									Slot->PendingAttachmentUpdate.reset();
+									RestoreInputs();
+								}
+								continue;
+							}
 							if (!Current || !Item.Completed || Item.Failed || ShuttingDown) {
 								++Result.Profile.StaleResults;
 								if (Current && !ShuttingDown) {
 									Slot->Record = std::move(Item.Record);
-									Slot->PendingForce += Item.Force;
-									Slot->PendingImpulse += Item.Impulse;
-									const auto Available =
-										Limits.MaximumPointImpulsesPerStep -
-										std::min(Limits.MaximumPointImpulsesPerStep, Slot->PendingPointImpulses.size());
-									const auto Count = std::min(Available, Item.PointImpulses.size());
-									Slot->PendingPointImpulses.insert(
-										Slot->PendingPointImpulses.begin(),
-										Item.PointImpulses.begin(),
-										Item.PointImpulses.begin() + static_cast<std::ptrdiff_t>(Count)
-									);
+									RestoreInputs();
 								}
 								continue;
 							}
@@ -1244,11 +1337,21 @@ namespace gargantuan {
 					FinishStep();
 					return Result;
 				} catch (...) {
+					Jobs.Drain();
 					if (Batch) {
 						std::scoped_lock Lock(Mutex);
 						for (auto &Item : Batch->Items) {
 							auto *Slot = FindSlot(Item.Body);
-							if (!Slot || Slot->DefinitionRevision != Item.DefinitionRevision || Slot->Record) continue;
+							if (!Slot || Slot->Record) continue;
+							if (Slot->PendingAttachmentUpdate &&
+								Slot->PendingAttachmentUpdate->SourceDefinitionRevision == Item.DefinitionRevision &&
+								Slot->PendingAttachmentUpdate->TargetDefinitionRevision == Slot->DefinitionRevision) {
+								auto &Pending = *Slot->PendingAttachmentUpdate;
+								ApplyAttachmentNodes(Item.Record, Pending.RecordAttachments, Pending.Attached);
+								Item.Record.Definition.Attachments.swap(Pending.RecordAttachments);
+								Item.Record.VertexRevision = Slot->LastState.VertexRevision;
+								Slot->PendingAttachmentUpdate.reset();
+							} else if (Slot->DefinitionRevision != Item.DefinitionRevision) continue;
 							Slot->Record = std::move(Item.Record);
 							Slot->PendingForce += Item.Force;
 							Slot->PendingImpulse += Item.Impulse;
@@ -1278,6 +1381,7 @@ namespace gargantuan {
 				if (JobsStopped) return;
 				ShuttingDown = true;
 				StepCompleted.wait(Lock, [this] { return !StepActive; });
+				for (auto &Slot : Slots) Slot.PendingAttachmentUpdate.reset();
 				Jobs.Shutdown(true);
 				JobsStopped = true;
 			}

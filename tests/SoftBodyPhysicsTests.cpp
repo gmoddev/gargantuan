@@ -20,14 +20,17 @@
 #include <cmath>
 #include <condition_variable>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <glm/gtc/quaternion.hpp>
@@ -43,7 +46,10 @@ namespace {
 
 	class StepGate final {
 	  public:
+		void Arm() { Armed.store(true); }
+
 		void Pause(const gargantuan::SoftBodyStepProfile &ProfileValue = {}) {
+			if (!Armed.load()) return;
 			std::unique_lock Lock(Mutex);
 			Profile = ProfileValue;
 			Arrived = true;
@@ -69,6 +75,7 @@ namespace {
 		}
 
 	  private:
+		std::atomic<bool> Armed = false;
 		std::mutex Mutex;
 		std::condition_variable Changed;
 		bool Arrived = false;
@@ -78,8 +85,13 @@ namespace {
 
 	class HeldSoftBodyStep final {
 	  public:
-		explicit HeldSoftBodyStep(bool AtAdmission = false)
-			: World(gargantuan::detail::CreateSoftBodyBackendForTesting(MakeHooks(Gate, AtAdmission))) {}
+		explicit HeldSoftBodyStep(
+			bool AtAdmission = false,
+			std::function<void()> BeforeAttachmentCommit = {},
+			bool ThrowAfterMergeBarrier = false
+		)
+			: World(gargantuan::detail::CreateSoftBodyBackendForTesting(
+				MakeHooks(Gate, AtAdmission, std::move(BeforeAttachmentCommit), ThrowAfterMergeBarrier))) {}
 
 		~HeldSoftBodyStep() {
 			Gate.Release();
@@ -87,6 +99,7 @@ namespace {
 		}
 
 		void Start() {
+			Gate.Arm();
 			Worker = std::thread([this] {
 				try {
 					Result = World.Step({.DeltaTime = gargantuan::SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
@@ -107,12 +120,24 @@ namespace {
 		gargantuan::SoftBodyStepResult Result;
 
 	  private:
-		static gargantuan::detail::SoftBodyStepTestHooks MakeHooks(StepGate &GateValue, bool AtAdmission) {
+		static gargantuan::detail::SoftBodyStepTestHooks MakeHooks(
+			StepGate &GateValue,
+			bool AtAdmission,
+			std::function<void()> BeforeAttachmentCommit,
+			bool ThrowAfterMergeBarrier
+		) {
 			gargantuan::detail::SoftBodyStepTestHooks Hooks;
+			Hooks.BeforeAttachmentCommit = std::move(BeforeAttachmentCommit);
 			if (AtAdmission)
 				Hooks.StepAdmitted = [&GateValue] { GateValue.Pause(); };
 			else
-				Hooks.BeforeMerge = [&GateValue](const auto &Profile) { GateValue.Pause(Profile); };
+				Hooks.BeforeMerge = [&GateValue, ThrowAfterMergeBarrier](const auto &Profile) mutable {
+					GateValue.Pause(Profile);
+					if (ThrowAfterMergeBarrier) {
+						ThrowAfterMergeBarrier = false;
+						throw std::runtime_error("synthetic pre-merge failure");
+					}
+				};
 			return Hooks;
 		}
 
@@ -202,6 +227,27 @@ namespace {
 		(void)World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -196.2f, 0.0f}});
 		Check(World.DestroyBody(Body).Succeeded() && !World.GetBodyInspection(Body),
 			"destroy invalidates bounded inspection");
+	}
+
+	void TestAttachmentCommitFailureIsAtomic() {
+		using namespace gargantuan;
+		detail::SoftBodyStepTestHooks Hooks;
+		Hooks.BeforeAttachmentCommit = [] { throw std::bad_alloc(); };
+		SoftBodyWorld World(detail::CreateSoftBodyBackendForTesting(std::move(Hooks)));
+		auto Definition = ClothDefinition();
+		const auto Body = World.CreateBody(Definition);
+		(void)World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		const auto Before = World.GetBodyState(Body);
+		Definition.Attachments[0].Position.y += 3.0f;
+		const auto Failure = World.UpdateBody(Body, Definition);
+		const auto After = World.GetBodyState(Body);
+		Check(Failure.Status == PhysicsOperationStatus::BackendFailure && Before && After &&
+			Before->VertexRevision == After->VertexRevision &&
+			*Before->Positions == *After->Positions && World.GetBodyInspection(Body)->AttachmentCount == 2,
+			"failure after attachment allocation staging leaves live nodes and publication unchanged");
+		(void)World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		Check(World.GetBodyState(Body)->VertexRevision > Before->VertexRevision,
+			"a failed attachment update leaves the original body operational");
 	}
 
 	void TestMovingRigidColliderThroughWorldRoot() {
@@ -465,20 +511,112 @@ namespace {
 		);
 
 		HeldSoftBodyStep MovingPin;
+		SoftBodyWorld MovingReference;
 		auto MovingDefinition = ClothDefinition(16, 16);
 		const auto MovingBody = MovingPin.World.CreateBody(MovingDefinition);
+		const auto ReferenceBody = MovingReference.CreateBody(MovingDefinition);
+		for (int Step = 0; Step < 12; ++Step) {
+			(void)MovingPin.World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+			(void)MovingReference.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		}
+		const auto BeforeMovingStep = MovingPin.World.GetBodyState(MovingBody);
 		MovingPin.Start();
 		if (!AwaitMerge(MovingPin, 16 * 16)) return;
+		(void)MovingReference.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		const auto ExpectedSolved = MovingReference.GetBodyState(ReferenceBody);
 		MovingDefinition.Attachments[0].Position.y += 1.0f;
 		Check(MovingPin.World.UpdateBody(MovingBody, MovingDefinition).Succeeded(),
-			"attachment update during an in-flight solve installs a newer definition");
-		const auto NewerRevision = MovingPin.World.GetBodyState(MovingBody)->VertexRevision;
+			"first attachment update while a solve is in flight is accepted");
+		MovingDefinition.Attachments[0].Position.y += 1.0f;
+		Check(MovingPin.World.UpdateBody(MovingBody, MovingDefinition).Succeeded(),
+			"latest of two in-flight attachment targets is accepted");
+		const auto PendingState = MovingPin.World.GetBodyState(MovingBody);
+		Check(PendingState && BeforeMovingStep &&
+			Distance((*PendingState->Positions)[136], (*BeforeMovingStep->Positions)[136]) < 0.0001f,
+			"pending pin update preserves the last published unpinned deformation");
 		MovingPin.Finish();
-		Check(MovingPin.Result.Profile.StaleResults == 1 &&
-			MovingPin.World.GetBodyState(MovingBody)->VertexRevision == NewerRevision &&
-			Near((*MovingPin.World.GetBodyState(MovingBody)->Positions)[0].y,
-				MovingDefinition.Attachments[0].Position.y),
-			"stale worker completion cannot overwrite the new attachment target");
+		const auto Merged = MovingPin.World.GetBodyState(MovingBody);
+		Check(MovingPin.Result.Profile.StaleResults == 0 && Merged && ExpectedSolved && Merged->Simulated &&
+			Distance((*Merged->Positions)[136], (*ExpectedSolved->Positions)[136]) < 0.0001f &&
+			Near((*Merged->Positions)[0].y, MovingDefinition.Attachments[0].Position.y),
+			"completed solve preserves unpinned deformation while publishing the latest pin target");
+		Check(MovingReference.UpdateBody(ReferenceBody, MovingDefinition).Succeeded(),
+			"reference applies the same pin movement after its step");
+		(void)MovingPin.World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		(void)MovingReference.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		Check(*MovingPin.World.GetBodyState(MovingBody)->Positions ==
+			*MovingReference.GetBodyState(ReferenceBody)->Positions,
+			"post-merge motion matches a reference with preserved unpinned velocities");
+
+		HeldSoftBodyStep PendingFault(false, [] { throw std::bad_alloc(); });
+		auto PendingFaultDefinition = ClothDefinition(16, 16);
+		const auto PendingFaultBody = PendingFault.World.CreateBody(PendingFaultDefinition);
+		PendingFault.Start();
+		if (!AwaitMerge(PendingFault, 16 * 16)) return;
+		const auto BeforePendingFault = PendingFault.World.GetBodyState(PendingFaultBody);
+		PendingFaultDefinition.Attachments[0].Position.y += 1.0f;
+		const auto PendingFailure = PendingFault.World.UpdateBody(PendingFaultBody, PendingFaultDefinition);
+		const auto AfterPendingFault = PendingFault.World.GetBodyState(PendingFaultBody);
+		Check(PendingFailure.Status == PhysicsOperationStatus::BackendFailure && BeforePendingFault &&
+			AfterPendingFault && BeforePendingFault->VertexRevision == AfterPendingFault->VertexRevision &&
+			*BeforePendingFault->Positions == *AfterPendingFault->Positions,
+			"failed in-flight attachment staging leaves the previous publication unchanged");
+		PendingFault.Finish();
+		Check(PendingFault.Result.Profile.StaleResults == 0 &&
+			PendingFault.World.GetBodyState(PendingFaultBody)->Simulated,
+			"failed in-flight attachment update still accepts the original completed solve");
+
+		HeldSoftBodyStep FailedMerge(false, {}, true);
+		auto FailedMergeDefinition = ClothDefinition(16, 16);
+		const auto FailedMergeBody = FailedMerge.World.CreateBody(FailedMergeDefinition);
+		FailedMerge.Start();
+		if (!AwaitMerge(FailedMerge, 16 * 16)) return;
+		FailedMergeDefinition.Attachments[0].Position.y += 1.0f;
+		Check(FailedMerge.World.UpdateBody(FailedMergeBody, FailedMergeDefinition).Succeeded(),
+			"pending pin target is staged before a pre-merge failure");
+		bool MergeFailed = false;
+		try {
+			FailedMerge.Finish();
+		} catch (const std::runtime_error &) {
+			MergeFailed = true;
+		}
+		Check(MergeFailed && !FailedMerge.World.HasInFlightStep() &&
+			Near((*FailedMerge.World.GetBodyState(FailedMergeBody)->Positions)[0].y,
+				FailedMergeDefinition.Attachments[0].Position.y),
+			"pre-merge failure restores a current record with the pending pin target");
+		(void)FailedMerge.World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		Check(FailedMerge.World.GetBodyState(FailedMergeBody)->Simulated,
+			"restored record continues simulating after the pre-merge failure");
+
+		for (int Cancellation = 0; Cancellation < 3; ++Cancellation) {
+			HeldSoftBodyStep Held;
+			auto Definition = ClothDefinition(16, 16);
+			const auto Body = Held.World.CreateBody(Definition);
+			Held.Start();
+			if (!AwaitMerge(Held, 16 * 16)) return;
+			Definition.Attachments[0].Position.y += 1.0f;
+			Check(Held.World.UpdateBody(Body, Definition).Succeeded(),
+				"pending attachment target is staged before a superseding change");
+			if (Cancellation == 0) {
+				Definition.Enabled = false;
+				Check(Held.World.UpdateBody(Body, Definition).Succeeded(),
+					"disable supersedes a pending attachment update");
+			} else if (Cancellation == 1) {
+				Definition.ResolutionX = 8;
+				Definition.Attachments.clear();
+				Check(Held.World.UpdateBody(Body, Definition).Succeeded(),
+					"topology change supersedes a pending attachment update");
+			} else {
+				Check(Held.World.DestroyBody(Body).Succeeded(),
+					"destroy cancels a pending attachment update");
+			}
+			Held.Finish();
+			const auto State = Held.World.GetBodyState(Body);
+			Check(Held.Result.Profile.StaleResults == 1 && Held.Result.States.empty() &&
+				(Cancellation == 2 ? !State :
+					State && State->Positions->size() == (Cancellation == 1 ? 128u : 256u) && !State->Simulated),
+				"superseding lifecycle change rejects the old worker result and pending pin target");
+		}
 
 		SoftBodyWorld Multiple;
 		const auto First = Multiple.CreateBody(ClothDefinition(8, 8));
@@ -1119,6 +1257,7 @@ int main() {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestIdentityBoundsAndDeterminism();
 		TestMovingAttachmentAndBoundedInspection();
+		TestAttachmentCommitFailureIsAtomic();
 		TestMovingRigidColliderThroughWorldRoot();
 		TestPinnedClothAndRigidCollision();
 		TestRubberRecoveryAndQualityTier();

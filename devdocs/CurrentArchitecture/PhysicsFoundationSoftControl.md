@@ -27,9 +27,23 @@ inverse masses in the current record. Unpinned vertices retain their positions
 and velocities; a newly released vertex starts with zero velocity. The
 topology revision and indices remain stable, while the vertex and definition
 revisions advance. Invalid or duplicate backend attachment entries reject
-before any node is changed. Updates concurrent with an in-flight solve keep
-the existing replacement and stale-result policy; the fast path applies when
-the current record is available at the safe point.
+before any node is changed. Position storage and both definition copies are
+staged before the live-record commit, so allocation failure returns
+`BackendFailure` without publishing a partially changed body. Full definition
+replacement likewise stages its new semantic copy and extracted state before
+replacing the current record.
+
+If a worker owns the record, the update stages bounded target data on the slot
+without touching the worker record. The latest attachment target immediately
+appears in the last published state. After the worker joins, Main applies that
+target to the returned record and publishes its newly solved unpinned positions
+and velocities. Multiple attachment updates during one solve coalesce to the
+latest target. The generation and source/target definition revisions guard the
+merge. Disable, topology/material reconfiguration, destroy, slot reuse, and
+shutdown cancel the pending target and reject the old worker result. No extra
+step or worker job is queued. Failure after worker completion restores a
+record with the pending pin target for the next step. Test-only fault hooks
+verify both allocation-stage rollback and pre-merge recovery.
 
 `WorldRoot:GetDeformableInfo(Body)` returns read-only vertex, constraint, and
 active attachment counts, enabled/simulated status, and topology/vertex
