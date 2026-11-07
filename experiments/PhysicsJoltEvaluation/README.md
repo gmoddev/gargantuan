@@ -107,6 +107,32 @@ repeat state hashes, synchronization and full frame cost. Account for gravity,
 damping and anchored/prescribed-motion external work before discussing
 conservation. A raw energy difference alone is not a conservation test.
 
+### Diagnostic-driven rejection bound, before final measurements
+
+Initial small diagnostics at `c5dc4a5c5` demonstrate reciprocal response, but
+show large translational kinetic-energy amplification in some initially-resting,
+zero-gravity cloth scenes. Those historical contact/deformation passes are not
+mechanical-energy qualification. The original XPBD diagnostic used four rigid
+substeps while Jolt used one; neither their timings nor response magnitudes form
+a matched scheduling comparison.
+
+Final runs separate contact/deformation response from physical qualification.
+For closed RubberPush, RigidIntoCloth and Multiple scenes, a necessary rejection
+bound compares recorded translational kinetic energy with analytically authored
+initial kinetic energy: reject above `1.05 * InitialEnergy + 1e-5`. Fixed pins
+have no prescribed motion, initial shape is rest, and gravity is zero. Passing
+this necessary bound does not prove total conservation: angular/strain energy
+and damping work are incomplete. Gravity/restarted scenes remain incomplete for
+this test. Coupling costs remain descriptive; no physics-equivalent timing
+advantage is inferred from contact response alone.
+
+The finite remaining calibration is fixed-total-mass cloth with eight outer
+substeps: XPBD semantic High quality and Jolt64 internal iterations. Preserve
+full-frame damping and charge every substep/extraction. Default failures remain
+in the data. Coupling uses only two native collision-step configurations,1 and4;
+Jolt subdivides its combined world, whereas XPBD retains one soft step after the
+rigid step. Record that difference; no further solver expansion is planned.
+
 Any experimental XPBD-to-Box3D feedback remains private to this branch, uses
 generation-safe mapping and an explicit safe point, and is not production
 qualification. If that bounded path cannot pass, say so; current production

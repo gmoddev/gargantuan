@@ -58,6 +58,7 @@ def Main():
     SourceDiff = SourcePatch(Root)
     (Output / "GeneratedSource.patch").write_text(SourceDiff, encoding="utf-8", newline="\n")
     InputFiles = {Root / "CMakeLists.txt"}
+    InputFiles.add(Root / "tools/classgen.luau")
     for Directory in ["src", "include", "cmake", "assets/classes", "assets/services", "tools/classgen", "experiments/PhysicsJoltEvaluation"]:
         InputFiles.update(Path for Path in (Root / Directory).rglob("*")
                           if Path.is_file() and "__pycache__" not in Path.parts)
@@ -114,10 +115,19 @@ def Main():
                     Jobs.append((f"Soft-{Backend}-{Case}-T{Budget}-R{Repeat}", "Soft", [
                         "--backend", Backend, "--case", Case, "--workers", str(Budget),
                         "--frames", "150", "--warmup", "30", "--track", "FixedTotalMass"]))
+            if Arguments.mode != "diagnostic":
+                for Case in ["Cloth4K", "Cloth16K"]:
+                    for Backend in ["XPBD", "Jolt"]:
+                        Calibration = ["--backend", Backend, "--case", Case, "--workers", str(Budget),
+                            "--frames", "150", "--warmup", "30", "--track", "FixedTotalMass", "--substeps", "8"]
+                        Calibration += ["--quality", "High"] if Backend == "XPBD" else ["--iterations", "64"]
+                        Jobs.append((f"SoftCalibrated-{Backend}-{Case}-T{Budget}-R{Repeat}", "Soft", Calibration))
             for Case in ["SphereOnCloth", "RubberPush", "RigidIntoCloth", "Repeated", "Multiple"]:
-                for Backend in ["XPBD", "Jolt"]:
-                    Jobs.append((f"Coupling-{Backend}-{Case}-T{Budget}-R{Repeat}", "Coupling", [
-                        "--backend", Backend, "--case", Case, "--workers", str(Budget), "--frames", "150"]))
+                for CollisionSteps in ([1] if Arguments.mode == "diagnostic" else [1, 4]):
+                    for Backend in ["XPBD", "Jolt"]:
+                        Jobs.append((f"Coupling-{Backend}-{Case}-S{CollisionSteps}-T{Budget}-R{Repeat}", "Coupling", [
+                            "--backend", Backend, "--case", Case, "--workers", str(Budget), "--frames", "150",
+                            "--collision-steps", str(CollisionSteps)]))
     HarnessFailures = 0
     QualityFailures = 0
     for Name, Kind, Args in Jobs:
