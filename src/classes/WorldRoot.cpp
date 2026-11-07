@@ -218,15 +218,16 @@ namespace gargantuan {
 		const auto BodyA = CreatePartBody(PartA);
 		const auto BodyB = CreatePartBody(PartB);
 		if (!BodyA.IsValid() || !BodyB.IsValid()) return {};
-		const auto Joint = Physics.CreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
-		if (!Joint.IsValid()) {
+		const auto Creation = Physics.TryCreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
+		if (!Creation.Succeeded()) {
 			if (FailedConstraintUpdatesLogged.insert(Constraint->GetObjectId()).second)
-				LOG_ERROR(App, "[Physics:Constraint] Failed to create constraint for %s", Constraint->GetFullName().c_str());
+				LOG_ERROR(App, "[Physics:Constraint] Failed to create constraint for %s: %s",
+					Constraint->GetFullName().c_str(), Creation.Operation.Message.c_str());
 			return {};
 		}
 		FailedConstraintUpdatesLogged.erase(Constraint->GetObjectId());
-		ConstraintJoints[Constraint->GetObjectId()] = Joint;
-		return Joint;
+		ConstraintJoints[Constraint->GetObjectId()] = Creation.Constraint;
+		return Creation.Constraint;
 	}
 
 	void WorldRoot::TrackPart(const std::shared_ptr<BasePart> &Part) {
@@ -483,16 +484,17 @@ namespace gargantuan {
 			DirtyConstraints.insert(Object);
 			return;
 		}
-		const auto Replacement = Physics.CreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
-		if (!Replacement.IsValid()) {
+		const auto Replacement = Physics.TryCreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
+		if (!Replacement.Succeeded()) {
 			if (FailedConstraintUpdatesLogged.insert(Object).second)
-				LOG_ERROR(App, "[Physics:Constraint] Constraint update failed for %s", Constraint->GetFullName().c_str());
+				LOG_ERROR(App, "[Physics:Constraint] Constraint update failed for %s: %s",
+					Constraint->GetFullName().c_str(), Replacement.Operation.Message.c_str());
 			return;
 		}
 		FailedConstraintUpdatesLogged.erase(Object);
 		if (Existing != ConstraintJoints.end() && Physics.IsConstraintValid(Existing->second))
 			Physics.DestroyConstraint(Existing->second);
-		ConstraintJoints[Object] = Replacement;
+		ConstraintJoints[Object] = Replacement.Constraint;
 	}
 
 	void WorldRoot::ObserveCollisionAssetChanges() {

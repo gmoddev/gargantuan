@@ -239,6 +239,35 @@ namespace {
 			!World.IsConstraintValid(Socket), "body removal invalidates every attached joint type");
 	}
 
+	void TestBoundedConstraintAdmission() {
+		using namespace gargantuan;
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {}, .ConstraintLimit = 2});
+		PhysicsBodyDesc Description;
+		Description.Anchored = true;
+		const auto BodyA = World.CreateBody(Description);
+		const auto BodyB = World.CreateBody(Description);
+		const PhysicsConstraintDesc JointDesc{.BodyA = BodyA, .BodyB = BodyB};
+		const auto First = World.TryCreateConstraint(JointDesc);
+		const auto Second = World.TryCreateConstraint(JointDesc);
+		const auto Denied = World.TryCreateConstraint(JointDesc);
+		Check(First.Succeeded() && Second.Succeeded() &&
+			Denied.Operation.Status == PhysicsOperationStatus::ResourceLimit && !Denied.Constraint.IsValid() &&
+			World.IsConstraintValid(First.Constraint) && World.IsConstraintValid(Second.Constraint),
+			"bounded joint admission reports ResourceLimit without disturbing live joints");
+		Check(World.DestroyConstraint(First.Constraint).Succeeded() &&
+			!World.IsConstraintValid(First.Constraint), "freeing a joint retires its identity and capacity");
+		const auto Recovered = World.TryCreateConstraint(JointDesc);
+		Check(Recovered.Succeeded() && Recovered.Constraint != First.Constraint &&
+			World.IsConstraintValid(Second.Constraint), "capacity recovery preserves surviving and new generations");
+		Check(World.DestroyBody(BodyA).Succeeded() && !World.IsConstraintValid(Recovered.Constraint) &&
+			!World.IsConstraintValid(Second.Constraint), "body teardown releases every attached joint admission");
+		PhysicsWorld Disabled(PhysicsWorldConfig{.ConstraintLimit = 0});
+		const auto DisabledA = Disabled.CreateBody(Description);
+		const auto DisabledB = Disabled.CreateBody(Description);
+		Check(Disabled.TryCreateConstraint({.BodyA = DisabledA, .BodyB = DisabledB}).Operation.Status ==
+			PhysicsOperationStatus::ResourceLimit, "zero configured joint capacity fails closed");
+	}
+
 	void TestStaticTriangleMeshBackend() {
 		using namespace gargantuan;
 		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
@@ -971,6 +1000,125 @@ namespace {
 			"returning endpoint reconciles a new joint generation");
 	}
 
+	void TestGameplayLuauJointAssembly() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		if (!WorkspaceValue) return;
+		WorkspaceValue->SetGravity(0.0f);
+		ScriptEngine Engine(Game);
+		const std::string Source = R"(
+			local Workspace = game:GetService("Workspace")
+			local function MakePart(Name, Position, Anchored)
+				local Part = Instance.new("Part")
+				Part.Name = Name
+				Part.CFrame = CFrame.new(Position)
+				Part.CanCollide = false
+				Part.CanTouch = false
+				Part.Anchored = Anchored
+				Part.Parent = Workspace
+				return Part
+			end
+			local function MakeJoint(Name, Kind, PartA, PartB, FrameA, FrameB)
+				local AttachmentA = Instance.new("Attachment")
+				AttachmentA.Name = Name .. "A"
+				AttachmentA.CFrame = FrameA
+				AttachmentA.Parent = PartA
+				local AttachmentB = Instance.new("Attachment")
+				AttachmentB.Name = Name .. "B"
+				AttachmentB.CFrame = FrameB
+				AttachmentB.Parent = PartB
+				local Joint = Instance.new("JointConstraint")
+				Joint.Name = Name
+				Joint.JointType = Kind
+				Joint.Attachment0 = AttachmentA
+				Joint.Attachment1 = AttachmentB
+				Joint.CollideConnected = false
+				Joint.Parent = Workspace
+				return Joint
+			end
+			local Frame = MakePart("DoorFrame", Vector3.new(0, 0, 0), true)
+			local Door = MakePart("DoorBody", Vector3.new(2, 0, 0), false)
+			local Hinge = MakeJoint("DoorHinge", "Hinge", Frame, Door,
+				CFrame.new(0.5, 0, 0), CFrame.new(-1.5, 0, 0))
+			Hinge.EnableLimit = true
+			Hinge.LowerLimit = -0.4
+			Hinge.UpperLimit = 0.4
+			Hinge.EnableMotor = true
+			Hinge.MotorSpeed = 2
+			Hinge.MaximumMotorForce = 1000
+			local Rail = MakePart("Rail", Vector3.new(10, 0, 0), true)
+			local Slide = MakePart("SlideBody", Vector3.new(10, 0, 0), false)
+			local Slider = MakeJoint("DrivenSlider", "Slider", Rail, Slide,
+				CFrame.new(0, 0, 0), CFrame.new(0, 0, 0))
+			Slider.EnableLimit = true
+			Slider.LowerLimit = -1
+			Slider.UpperLimit = 1
+			Slider.EnableMotor = true
+			Slider.MotorSpeed = 3
+			Slider.MaximumMotorForce = 1000
+			local Mount = MakePart("SpringMount", Vector3.new(20, 5, 0), true)
+			local Weight = MakePart("SpringWeight", Vector3.new(20, 2, 0), false)
+			local Spring = MakeJoint("SuspendedWeight", "Distance", Mount, Weight,
+				CFrame.new(0, 0, 0), CFrame.new(0, 0, 0))
+			Spring.RestLength = 1
+			Spring.SpringFrequency = 8
+			Spring.SpringDamping = 0.8
+			assert(not pcall(function() Hinge.JointType = "Unknown" end))
+		)";
+		auto Bytecode = Luau::compile(Source);
+		const int Loaded = luau_load(Engine.L, "physics-joint-assembly", Bytecode.data(), Bytecode.size(), 0);
+		ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+		const int Status = Loaded == LUA_OK ? lua_pcall(Engine.L, 0, 0, 0) : Loaded;
+		if (Status != LUA_OK)
+			std::cerr << "LUAU ERROR: " << (lua_tostring(Engine.L, -1) ? lua_tostring(Engine.L, -1) : "unknown")
+				<< '\n';
+		Check(Status == LUA_OK, "normal gameplay Luau authors three live constraint mechanisms");
+		if (Status != LUA_OK) return;
+		auto Door = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstDescendant("DoorBody"));
+		auto Slide = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstDescendant("SlideBody"));
+		auto Weight = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstDescendant("SpringWeight"));
+		auto Hinge = std::dynamic_pointer_cast<JointConstraint>(WorkspaceValue->FindFirstDescendant("DoorHinge"));
+		auto Slider = std::dynamic_pointer_cast<JointConstraint>(WorkspaceValue->FindFirstDescendant("DrivenSlider"));
+		auto Spring = std::dynamic_pointer_cast<JointConstraint>(WorkspaceValue->FindFirstDescendant("SuspendedWeight"));
+		Check(Door && Slide && Weight && Hinge && Slider && Spring &&
+			WorldRootTestAccess::Constraint(*WorkspaceValue, *Hinge).IsValid() &&
+			WorldRootTestAccess::Constraint(*WorkspaceValue, *Slider).IsValid() &&
+			WorldRootTestAccess::Constraint(*WorkspaceValue, *Spring).IsValid(),
+			"Luau-created attachments resolve to active WorldRoot joints");
+		if (!Door || !Slide || !Weight || !Hinge || !Slider || !Spring) return;
+		for (int Index = 0; Index < 120; ++Index) WorkspaceValue->StepPhysics(1.0 / 60.0, std::nullopt);
+		const auto &DoorPose = Door->GetCFrame();
+		const auto DoorAngle = std::atan2(DoorPose.Rotation[0][1], DoorPose.Rotation[0][0]);
+		Check(std::abs(DoorAngle) > 0.05f && std::abs(DoorAngle) < 0.7f,
+			"WorldRoot hinge motor moves a door within its authored angular limit");
+		Check(Slide->GetCFrame().Position.x > 10.1f && Slide->GetCFrame().Position.x < 11.3f &&
+			std::abs(Slide->GetCFrame().Position.y) < 0.2f,
+			"WorldRoot slider motor moves a platform within its authored travel limit");
+		Check(Weight->GetCFrame().Position.y > 3.2f && Weight->GetCFrame().Position.y < 4.8f,
+			"WorldRoot spring pulls a suspended weight toward its rest length");
+
+		std::shared_ptr<Instance> Root = Game;
+		const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
+		std::istringstream Input(Encoded);
+		auto Decoded = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
+		auto LoadedHinge = Decoded.Instance ? std::dynamic_pointer_cast<JointConstraint>(
+			Decoded.Instance->FindFirstDescendant("DoorHinge")) : nullptr;
+		auto LoadedSlider = Decoded.Instance ? std::dynamic_pointer_cast<JointConstraint>(
+			Decoded.Instance->FindFirstDescendant("DrivenSlider")) : nullptr;
+		auto LoadedSpring = Decoded.Instance ? std::dynamic_pointer_cast<JointConstraint>(
+			Decoded.Instance->FindFirstDescendant("SuspendedWeight")) : nullptr;
+		Check(Decoded.Ok && LoadedHinge && LoadedSlider && LoadedSpring &&
+			LoadedHinge->GetAttachment0() && *LoadedHinge->GetAttachment0() &&
+			LoadedHinge->GetAttachment1() && *LoadedHinge->GetAttachment1() &&
+			LoadedHinge->GetEnabled() && LoadedHinge->GetJointType() == "Hinge" &&
+			LoadedHinge->GetEnableLimit() && LoadedHinge->GetEnableMotor() &&
+			Near(LoadedHinge->GetUpperLimit(), 0.4f) &&
+			LoadedSlider->GetJointType() == "Slider" && Near(LoadedSlider->GetMaximumMotorForce(), 1000.0f) &&
+			LoadedSpring->GetJointType() == "Distance" && Near(LoadedSpring->GetSpringFrequency(), 8.0f),
+			"gameplay joint frames, references, limits, motors, and springs survive save and reopen");
+	}
+
 	void TestSimulationPublicationAndImpulse() {
 		using namespace gargantuan;
 		auto Workspace = MakeWorkspace();
@@ -1600,6 +1748,7 @@ int main() {
 	TestAdvancedWorldQueries();
 	TestBackendIdentityAndLifecycle();
 	TestAdvancedConstraintBackend();
+	TestBoundedConstraintAdmission();
 	TestStaticTriangleMeshBackend();
 	TestDenseMeshContactCandidateOverflow();
 	TestDetachedWorldRootKinematicMotion();
@@ -1611,6 +1760,7 @@ int main() {
 	TestMeshPartCollisionFallback();
 	TestConstraintAndPendingDestroy();
 	TestAuthoredJointLifecycle();
+	TestGameplayLuauJointAssembly();
 	TestSimulationPublicationAndImpulse();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();

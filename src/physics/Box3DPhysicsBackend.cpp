@@ -160,6 +160,7 @@ namespace gargantuan {
 				CollisionCanonicalByteLimit = std::min(Config.CollisionCanonicalByteLimit, MaximumPhysicsCollisionCanonicalBytes);
 				CollisionNativeByteLimit = std::min(Config.CollisionNativeByteLimit, MaximumPhysicsCollisionNativeBytes);
 				CollisionMeshShapeLimit = std::min(Config.CollisionMeshShapeLimit, MaximumPhysicsCollisionMeshShapes);
+				ConstraintLimit = std::min(Config.ConstraintLimit, MaximumPhysicsConstraints);
 				if (!IsFinite(Config.Gravity)) return;
 				b3WorldDef Definition = b3DefaultWorldDef();
 				Definition.enableSleep = Config.EnableSleep;
@@ -347,11 +348,21 @@ namespace gargantuan {
 			[[nodiscard]] PhysicsConstraintId CreateConstraint(
 				const PhysicsConstraintDesc &Description
 			) override {
+				return TryCreateConstraint(Description).Constraint;
+			}
+
+			[[nodiscard]] PhysicsConstraintCreateResult TryCreateConstraint(
+				const PhysicsConstraintDesc &Description
+			) override {
 				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsConstraintCreate);
 				auto *BodyA = FindBody(Description.BodyA);
 				auto *BodyB = FindBody(Description.BodyB);
-				if (!BodyA || !BodyB || Description.BodyA == Description.BodyB ||
-					!IsValidConstraintDescription(Description)) return {};
+				if (!BodyA || !BodyB || Description.BodyA == Description.BodyB)
+					return {{}, {PhysicsOperationStatus::InvalidId, "Constraint endpoints are invalid, stale, or identical"}};
+				if (!IsValidConstraintDescription(Description))
+					return {{}, {PhysicsOperationStatus::InvalidDescription, "Constraint description is invalid"}};
+				if (ActiveConstraintCount >= ConstraintLimit)
+					return {{}, {PhysicsOperationStatus::ResourceLimit, "Physics joint limit reached"}};
 				StaticWorldDirty = true;
 				const auto Id = AllocateConstraint();
 				auto &Entry = ConstraintSlots[Id.Slot];
@@ -429,10 +440,11 @@ namespace gargantuan {
 				}
 				if (!b3Joint_IsValid(Entry.Record->Joint)) {
 					ReleaseConstraint(Id);
-					return {};
+					return {{}, {PhysicsOperationStatus::BackendFailure, "Native joint creation failed"}};
 				}
+				++ActiveConstraintCount;
 				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsConstraintCreate);
-				return Id;
+				return {Id, {}};
 			}
 
 			PhysicsOperationResult DestroyConstraint(PhysicsConstraintId Constraint) override {
@@ -443,6 +455,7 @@ namespace gargantuan {
 				StaticWorldDirty = true;
 				if (b3Joint_IsValid(Record->Joint)) b3DestroyJoint(Record->Joint, false);
 				ReleaseConstraint(Constraint);
+				--ActiveConstraintCount;
 				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsConstraintDestroy);
 				return {};
 			}
@@ -1061,6 +1074,8 @@ namespace gargantuan {
 			std::size_t CollisionCanonicalByteLimit = MaximumPhysicsCollisionCanonicalBytes;
 			std::size_t CollisionNativeByteLimit = MaximumPhysicsCollisionNativeBytes;
 			std::size_t CollisionMeshShapeLimit = MaximumPhysicsCollisionMeshShapes;
+			std::size_t ConstraintLimit = MaximumPhysicsConstraints;
+			std::size_t ActiveConstraintCount = 0;
 			mutable std::uint64_t RaycastEpoch = 0;
 			bool StaticWorldDirty = true;
 			std::vector<SlotEntry<BodyRecord>> BodySlots;

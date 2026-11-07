@@ -36,6 +36,9 @@ local Hinge = MakeJoint("DoorHinge", "Hinge", DoorFrame, Door,
 Hinge.EnableLimit = true
 Hinge.LowerLimit = -1.2
 Hinge.UpperLimit = 1.2
+Hinge.EnableMotor = true
+Hinge.MotorSpeed = 1
+Hinge.MaximumMotorForce = 1000
 
 local Rail = MakePart("Rail", Vector3.new(4, 8, 0), Vector3.new(5, 0.5, 1), true)
 local SliderBody = MakePart("SliderBody", Vector3.new(4, 8, 0), Vector3.new(1, 1, 1), false)

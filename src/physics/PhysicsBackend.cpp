@@ -36,6 +36,10 @@ namespace gargantuan {
 	PhysicsConstraintId PhysicsWorld::CreateConstraint(const PhysicsConstraintDesc &Description) {
 		return Backend ? Backend->CreateConstraint(Description) : PhysicsConstraintId{};
 	}
+	PhysicsConstraintCreateResult PhysicsWorld::TryCreateConstraint(const PhysicsConstraintDesc &Description) {
+		return Backend ? Backend->TryCreateConstraint(Description) : PhysicsConstraintCreateResult{
+			{}, {PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"}};
+	}
 	PhysicsOperationResult PhysicsWorld::DestroyConstraint(PhysicsConstraintId Constraint) {
 		return Backend ? Backend->DestroyConstraint(Constraint)
 			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};

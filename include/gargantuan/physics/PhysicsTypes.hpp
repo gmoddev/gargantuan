@@ -34,6 +34,7 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumPhysicsCollisionCanonicalBytes = 64 * 1024 * 1024;
 	inline constexpr std::size_t MaximumPhysicsCollisionNativeBytes = 64 * 1024 * 1024;
 	inline constexpr std::size_t MaximumPhysicsCollisionResourceIdBytes = 128;
+	inline constexpr std::size_t MaximumPhysicsConstraints = 4096;
 
 	struct PhysicsBodyId {
 		std::uint32_t Slot = 0;
@@ -125,6 +126,7 @@ namespace gargantuan {
 		std::size_t CollisionCanonicalByteLimit = MaximumPhysicsCollisionCanonicalBytes;
 		std::size_t CollisionNativeByteLimit = MaximumPhysicsCollisionNativeBytes;
 		std::size_t CollisionMeshShapeLimit = MaximumPhysicsCollisionMeshShapes;
+		std::size_t ConstraintLimit = MaximumPhysicsConstraints;
 	};
 
 	struct PhysicsStepConfig {
@@ -222,6 +224,7 @@ namespace gargantuan {
 		InvalidId,
 		InvalidDescription,
 		BackendFailure,
+		ResourceLimit,
 	};
 
 	struct PhysicsOperationResult {
@@ -229,6 +232,13 @@ namespace gargantuan {
 		std::string Message;
 
 		[[nodiscard]] bool Succeeded() const { return Status == PhysicsOperationStatus::Success; }
+	};
+
+	struct PhysicsConstraintCreateResult {
+		PhysicsConstraintId Constraint{};
+		PhysicsOperationResult Operation{};
+
+		[[nodiscard]] bool Succeeded() const { return Operation.Succeeded() && Constraint.IsValid(); }
 	};
 
 	struct PhysicsKinematicMotionResult {

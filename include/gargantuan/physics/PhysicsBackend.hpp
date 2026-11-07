@@ -17,6 +17,11 @@ namespace gargantuan {
 		virtual PhysicsOperationResult UpdateBody(PhysicsBodyId Body, const PhysicsBodyDesc &Description) = 0;
 		virtual PhysicsOperationResult DestroyBody(PhysicsBodyId Body) = 0;
 		[[nodiscard]] virtual PhysicsConstraintId CreateConstraint(const PhysicsConstraintDesc &Description) = 0;
+		[[nodiscard]] virtual PhysicsConstraintCreateResult TryCreateConstraint(const PhysicsConstraintDesc &Description) {
+			const auto Constraint = CreateConstraint(Description);
+			return {Constraint, Constraint.IsValid() ? PhysicsOperationResult{} :
+				PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Constraint creation failed"}};
+		}
 		virtual PhysicsOperationResult DestroyConstraint(PhysicsConstraintId Constraint) = 0;
 		virtual PhysicsOperationResult ApplyLinearImpulse(PhysicsBodyId Body, glm::vec3 Impulse) = 0;
 		virtual PhysicsOperationResult ApplyAngularImpulse(PhysicsBodyId, glm::vec3) { return {PhysicsOperationStatus::BackendFailure, "Angular impulse is unsupported"}; }
@@ -57,6 +62,7 @@ namespace gargantuan {
 		PhysicsOperationResult UpdateBody(PhysicsBodyId Body, const PhysicsBodyDesc &Description);
 		PhysicsOperationResult DestroyBody(PhysicsBodyId Body);
 		[[nodiscard]] PhysicsConstraintId CreateConstraint(const PhysicsConstraintDesc &Description);
+		[[nodiscard]] PhysicsConstraintCreateResult TryCreateConstraint(const PhysicsConstraintDesc &Description);
 		PhysicsOperationResult DestroyConstraint(PhysicsConstraintId Constraint);
 		PhysicsOperationResult ApplyLinearImpulse(PhysicsBodyId Body, glm::vec3 Impulse);
 		PhysicsOperationResult ApplyAngularImpulse(PhysicsBodyId Body, glm::vec3 Impulse);

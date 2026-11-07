@@ -55,14 +55,16 @@ The engine-facing contract is defined by `PhysicsTypes.hpp` and
 - `PhysicsShapeDesc` describes the supported Part primitives, size, and optional
   immutable collision triangle resource;
 - `PhysicsBodyDesc` describes transform, shape, anchoring, collision, touch, and density;
-- `PhysicsConstraintDesc` currently describes only a weld between neutral body IDs;
+- `PhysicsConstraintDesc` describes weld, ball socket, hinge, slider and
+  distance joints between neutral body IDs, with local frames and bounded
+  limit, motor and spring parameters;
 - `PhysicsWorldConfig` and `PhysicsStepConfig` define gravity and explicit fixed-step input;
 - `PhysicsBodyMotion` and `PhysicsContactEvent` are owned post-step results;
 - `PhysicsKinematicMotionRequest` and `PhysicsKinematicMotionResult` describe a
   bounded capsule translation, collision resolution, velocity clipping, and
   floor/contact normals; and
 - `PhysicsOperationResult` reports neutral success, invalid-ID,
-  invalid-description, or backend-failure states.
+  invalid-description, resource-limit, or backend-failure states.
 
 The rigid contract intentionally has no controller policy,
 projectile, network ownership, prediction, rollback, or deformable vocabulary.
@@ -195,12 +197,24 @@ concurrently with `IPhysicsBackend::Step`.
 
 ## Constraints
 
-`Constraint` and `WeldConstraint` expose neutral constraint descriptions only.
+`Constraint`, `WeldConstraint` and `JointConstraint` expose neutral constraint
+descriptions only. `JointConstraint` resolves direct-child attachment frames and
+supports ball sockets, limited/motorized hinges, limited/motorized sliders and
+rigid or spring distance joints. See
+[Physics constraint expansion](PhysicsFoundationConstraints.md) for exact
+authoring fields, units and failure behavior.
 `WorldRoot` resolves endpoint Parts to neutral body IDs, validates that the
 constraint and both endpoints belong to the same world, and asks `PhysicsWorld`
 to create the joint.
 
-Changes to enabled state or endpoints are queued for the pre-step safe point.
+Changes to enabled state, endpoints, attachment frames and authored joint
+parameters are queued for the pre-step safe point. Native admission is capped
+at 4,096 live joints per world by default; `PhysicsWorldConfig::ConstraintLimit`
+may lower that cap. `TryCreateConstraint` returns a structured `ResourceLimit`
+result when full, while the older ID-returning `CreateConstraint` remains a
+compatibility wrapper. Replacement creates a candidate before destroying its
+predecessor, so a full world retains the old joint until capacity becomes
+available. WorldRoot logs one bounded diagnostic for a failed authored update.
 Body shape replacement preserves the Box3D body and attached joint. Body removal
 causes the backend to invalidate attached constraint IDs; `WorldRoot` then drops
 the stale association and can reconcile a still-live constraint if its endpoints
@@ -374,8 +388,8 @@ physics implementation choice.
 
 ## Deliberately deferred
 
-This rigid boundary does not implement another rigid engine, advanced rigid
-constraints, dynamic concave collision, a native character motor, projectiles, terrain
+This rigid boundary does not implement another rigid engine, constraint
+breakage, dynamic concave collision, a native character motor, projectiles, terrain
 physics, physics networking, ownership, interpolation, prediction, or rollback.
 Deformation is implemented only through the sibling boundary documented above.
 Rendering has no dependency on either physics backend's native handles.

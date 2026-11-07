@@ -50,6 +50,16 @@ Body destruction invalidates attached IDs before body-slot reuse. Joint
 creation, replacement and removal occur on WorldRoot's Main-domain safe point;
 generated setters only mark dirty intent.
 
+Joint admission has a hard maximum of 4,096 live native joints per world.
+`PhysicsWorldConfig::ConstraintLimit` may reduce it, including to zero.
+`TryCreateConstraint` reports `ResourceLimit` without changing any live joint;
+the ID-returning `CreateConstraint` remains available to existing callers.
+The candidate-first replacement path needs a free slot. At the configured
+limit a replacement keeps the old joint, and a later authored edit can retry
+after capacity is released. Destroying a body releases all its attached joint
+capacity. The cap bounds live native storage; retired generation slots remain
+subject to the existing generation exhaustion rule.
+
 Box3D-specific work remains in `Box3DPhysicsBackend.cpp`: spherical,
 revolute, prismatic and distance definition translation, frame and parameter
 validation, native joint creation and destruction. The reflected class,
@@ -60,3 +70,6 @@ work does not begin a Jolt evaluation.
 
 The example `assets/examples/constraint-mechanics.luau` creates a hinged door,
 driven slider and suspended distance spring through the public authoring path.
+The physics backend tests additionally author those three mechanisms from
+ordinary Luau, step their live WorldRoot, check bounded motion, and save/reopen
+the authored references and parameters.
