@@ -116,11 +116,14 @@ namespace {
 		Bodies.reserve(Count);
 		for (std::size_t Index = 0; Index < Count; ++Index) {
 			const auto Position = Constrained
-				? glm::vec3{static_cast<float>(Index % 8) * 2.0f - 7.0f, 5.0f + static_cast<float>(Index / 8) * 2.0f, 0.0f}
+				? glm::vec3{0.0f, 5.0f, 0.0f}
 				: glm::vec3{static_cast<float>(Index % 8) * 1.02f - 3.5f,
 					2.0f + static_cast<float>(Index / 64) * 1.02f,
 					static_cast<float>((Index / 8) % 8) * 1.02f - 3.5f};
 			auto Body = MakePart(Position, Constrained && Index == 0);
+			// The pre-campaign Weld uses coincident local frames, not captured offsets.
+			// Keep identical noncolliding coincident endpoints on both source revisions.
+			if (Constrained) Body->SetCanCollide(false);
 			Body->SetParent(Group);
 			Bodies.push_back(std::move(Body));
 		}
@@ -165,7 +168,7 @@ namespace {
 			Require(std::abs(Bodies.front()->GetCFrame().Position.y - 5.0f) < 0.01f,
 				"anchored constraint endpoint moved");
 			const auto Offset = Bodies[1]->GetCFrame().Position - Bodies[0]->GetCFrame().Position;
-			Require(std::abs(glm::length(Offset) - 2.0f) < 0.5f,
+			Require(glm::length(Offset) < 0.05f,
 				"weld failed to retain its endpoint separation");
 			Require(WorldRootTestAccess::Constraints(*World) == Count - 1,
 				"constraint disappeared during simulation");

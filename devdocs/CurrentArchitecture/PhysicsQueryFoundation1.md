@@ -252,12 +252,10 @@ walk; filters with one root/body remain sub-microsecond to prepare.
 
 ## Extension path
 
-Foundation 2 can add `RaycastAll`, sphere/block casts, and sphere/box overlaps
-by adding small neutral request/result types beside `PhysicsRaycastRequest`.
-They should reuse `PhysicsQueryFilter`, the `WorldRoot` filter builder, neutral
-slot/generation identities, semantic owner resolution, finite coordinate and
-candidate bounds, and Main-domain safe point. Public APIs should be added only
-when implemented; there are no no-op placeholders or generic callback DSL.
+Sphere/capsule/box casts and overlaps now reuse the filter builder, neutral
+identities, semantic owner resolution and Main safe point described above.
+`RaycastAll`, rotational sweeps and soft-body intersections remain future work;
+there are no public no-op placeholders or generic callback DSL.
 
 Other priorities are a deliberate `CanQuery`/sensor participation decision,
 soft-body query semantics without rigid duplication, richer per-collider

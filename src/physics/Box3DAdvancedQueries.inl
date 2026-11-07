@@ -64,10 +64,11 @@
                         C.Result->Status=PhysicsOperationStatus::BackendFailure; return 0;
                     }
                     PhysicsRaycastHit Hit{*Owner, {float(Point.x),float(Point.y),float(Point.z)}, Box3DConversions::FromBox3(Normal), Fraction*C.Distance};
-                    if (!IsFinite(Hit.Position) || !IsFinite(Hit.Normal) || glm::length(Hit.Normal) < MinimumRaycastDistance) {
+                    const float NormalLength=glm::length(Hit.Normal);
+                    if (!IsFinite(Hit.Position) || !IsFinite(Hit.Normal) || !std::isfinite(NormalLength) || NormalLength < MinimumRaycastDistance) {
                         C.Result->Status=PhysicsOperationStatus::BackendFailure; return 0;
                     }
-                    Hit.Normal=glm::normalize(Hit.Normal);
+                    Hit.Normal/=NormalLength;
                     auto Found=std::ranges::find(C.Result->Candidates,*Owner,&PhysicsRaycastHit::Body);
                     if (Found!=C.Result->Candidates.end()) {
                         const auto Key=[](const PhysicsRaycastHit &Value) { return std::tuple(Value.Distance, Value.Position.x, Value.Position.y, Value.Position.z, Value.Normal.x, Value.Normal.y, Value.Normal.z); };
