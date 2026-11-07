@@ -6,6 +6,11 @@ date: 2026-11-07
 
 # Expanded physics comparison
 
+The later [coupling root-cause investigation](CouplingRootCauseInvestigation.md)
+preserves this checkpoint's failures and corrects its broad coupling/fairness
+inference. Read that follow-up before treating the original coupling comparison
+as a backend-selection result. Production defaults are unchanged.
+
 This isolated experiment follows the explicitly authorized integration of
 [PR18](https://github.com/gmoddev/gargantuan/pull/18). Actual merged main is
 `5b6782e35c4e24fd80bc8d5526104c615c72d84d`, tree
