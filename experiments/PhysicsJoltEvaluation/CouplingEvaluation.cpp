@@ -396,11 +396,16 @@ namespace {
                 [&](const auto &State) { return State.Body == SoftId; });
             if (Found == Result.States.end() || !Found->Positions)
                 throw std::runtime_error("[Physics:Coupling] XPBD state missing");
+            const auto AcceptedDynamics = FeedbackBackend->ReadAcceptedDynamics(
+                SoftId, Found->VertexRevision);
+            if (!AcceptedDynamics)
+                throw std::runtime_error("[Physics:Coupling] XPBD accepted dynamics unavailable or stale");
+            Finite &= AcceptedDynamics->Finite;
             const auto &Positions = *Found->Positions;
             glm::vec3 SoftCenter(0.0f);
-            glm::vec3 SoftMomentum(0.0f);
-            double SoftKineticEnergy = 0.0;
-            const bool SoftVelocityObservationValid = PriorPositions.size() == Positions.size();
+            glm::vec3 DisplacementMomentum(0.0f);
+            double DisplacementKineticEnergy = 0.0;
+            const bool DisplacementObservationValid = PriorPositions.size() == Positions.size();
             for (const auto &Position : Positions) {
                 Finite &= std::isfinite(Position.x) && std::isfinite(Position.y) && std::isfinite(Position.z);
                 SoftCenter += Position;
@@ -408,10 +413,10 @@ namespace {
             SoftCenter /= static_cast<float>(Positions.size());
             for (std::size_t Vertex = 0; Vertex < Positions.size(); ++Vertex) {
                 if (!Rubber && Vertex < Definition.ResolutionX) continue;
-                if (!SoftVelocityObservationValid) continue;
+                if (!DisplacementObservationValid) continue;
                 const auto Velocity = (Positions[Vertex] - PriorPositions[Vertex]) / DeltaTime;
-                SoftMomentum += Definition.Material.ParticleMass * Velocity;
-                SoftKineticEnergy += 0.5 * Definition.Material.ParticleMass * glm::dot(Velocity, Velocity);
+                DisplacementMomentum += Definition.Material.ParticleMass * Velocity;
+                DisplacementKineticEnergy += 0.5 * Definition.Material.ParticleMass * glm::dot(Velocity, Velocity);
             }
             double FrameStretch = 0.0;
             double FrameVolumeError = 0.0;
@@ -547,9 +552,18 @@ namespace {
                               {"FeedbackMs", FeedbackMs}, {"Rigids", std::move(RigidJson)},
                               {"Feedback", std::move(Feedback)},
                               {"SoftCenter", {SoftCenter.x, SoftCenter.y, SoftCenter.z}},
-                              {"SoftMomentumEstimate", {SoftMomentum.x, SoftMomentum.y, SoftMomentum.z}},
-                              {"SoftKineticEnergyEstimate", SoftKineticEnergy},
-                              {"SoftVelocityObservationValid", SoftVelocityObservationValid},
+                              {"SoftMomentum", AcceptedDynamics->Finite ?
+                                  Json::array({AcceptedDynamics->Momentum[0], AcceptedDynamics->Momentum[1],
+                                               AcceptedDynamics->Momentum[2]}) : Json(nullptr)},
+                              {"SoftKineticEnergy", AcceptedDynamics->Finite ?
+                                  Json(AcceptedDynamics->TranslationalKineticEnergy) : Json(nullptr)},
+                              {"SoftMovableMass", AcceptedDynamics->MovableMass},
+                              {"SoftMovableVertices", AcceptedDynamics->MovableVertices},
+                              {"AcceptedVelocityFinite", AcceptedDynamics->Finite},
+                              {"SoftDisplacementMomentumEstimate", {DisplacementMomentum.x,
+                                  DisplacementMomentum.y, DisplacementMomentum.z}},
+                              {"SoftDisplacementKineticEnergyEstimate", DisplacementKineticEnergy},
+                              {"SoftDisplacementObservationValid", DisplacementObservationValid},
                               {"MaxEdgeStretch", FrameStretch}, {"VolumeError", FrameVolumeError},
                               {"PinDrift", FramePinDrift}, {"InvertedTetrahedra", FrameInversions}});
         }
@@ -580,8 +594,8 @@ namespace {
                     (EnableFeedback ? "Soft collides with sampled Box rigid and observed reaction is applied" :
                      "Soft still collides with sampled Box rigid; observed reaction is not applied")},
                 {"PublicationOrder", "Box rigid step, XPBD soft step against sampled collider, apply observed reaction to Box velocity, then sample; the new rigid position is integrated next frame"},
-                {"MomentumScope", "Rigid linear momentum plus soft position-difference estimate from frame 1; first frame soft estimate is unavailable; damping and external boundary impulses are not integrated"},
-                {"EnergyScope", "Rigid linear plus soft position-difference translational kinetic estimate from frame 1; rigid angular kinetic energy, strain potential and damping work are unmeasured"},
+                {"MomentumScope", "Rigid linear momentum plus accepted private XPBD node velocity momentum; frame displacement estimate is diagnostic only; damping and external boundary impulses are not integrated"},
+                {"EnergyScope", "Rigid linear plus accepted private XPBD node translational kinetic energy; frame displacement estimate is diagnostic only; rigid angular kinetic energy, strain potential and damping work are unmeasured"},
                 {"ExternalWork", Rubber ? "Soft damping; collision projection and constraint work unmeasured" :
                     "Pinned edge reactions, soft damping and any controlled restart impulses; projection and constraint work unmeasured"},
                 {"Limit", "The private XPBD copy observes each collision projection and transfers its opposite particle velocity change to Box3D at the next rigid safe point. This staggered reaction is clamped and is not a solved two-body constraint or conservation proof"}};
@@ -617,6 +631,7 @@ namespace {
         std::vector<double> DirectionalTransferPerRigid(RigidCount, 0.0);
         double MaximumVelocityDifference = 0.0;
         double MaximumSoftMomentumDifference = 0.0;
+        bool SoftMomentumAvailable = true;
         bool MassMatched = true;
         for (std::size_t Frame = 0; Frame < Contact["Frames"].size(); ++Frame) {
             const auto &ContactFrame = Contact["Frames"][Frame];
@@ -640,12 +655,15 @@ namespace {
                 DirectionalTransferPerRigid[Rigid] = std::max(DirectionalTransferPerRigid[Rigid],
                     Direction * Mass * AxisDifference);
             }
-            const char *MomentumName = Contact.value("Backend", std::string{}) == "Jolt" ?
-                "SoftMomentum" : "SoftMomentumEstimate";
+            if (!ContactFrame["SoftMomentum"].is_array() ||
+                !ControlFrame["SoftMomentum"].is_array()) {
+                SoftMomentumAvailable = false;
+                continue;
+            }
             double SoftSquared = 0.0;
             for (int Component = 0; Component < 3; ++Component) {
-                const double Difference = ContactFrame[MomentumName][Component].get<double>() -
-                    ControlFrame[MomentumName][Component].get<double>();
+                const double Difference = ContactFrame["SoftMomentum"][Component].get<double>() -
+                    ControlFrame["SoftMomentum"][Component].get<double>();
                 SoftSquared += Difference * Difference;
             }
             MaximumSoftMomentumDifference = std::max(MaximumSoftMomentumDifference, std::sqrt(SoftSquared));
@@ -658,7 +676,9 @@ namespace {
                 {"VelocityDifferencePerRigid", VelocityDifferencePerRigid},
                 {"DirectionalMomentumTransferPerRigid", DirectionalTransferPerRigid},
                 {"AllRigidsRespond", AllRigidsRespond},
-                {"MaxSoftMomentumDifference", MaximumSoftMomentumDifference},
+                {"MaxSoftMomentumDifference", SoftMomentumAvailable ?
+                    Json(MaximumSoftMomentumDifference) : Json(nullptr)},
+                {"SoftMomentumAvailable", SoftMomentumAvailable},
                 {"RigidMassMatchedToDensity", MassMatched},
                 {"ExpectedMomentumAxis", Axis},
                 {"ExpectedMomentumSigns", Config.Case == "Multiple" ?
@@ -691,11 +711,13 @@ namespace {
         std::size_t ValidFrames = 0;
         const bool Jolt = Result.value("Backend", std::string{}) == "Jolt";
         for (const auto &Frame : Result["Frames"]) {
-            if (!Jolt && !Frame.value("SoftVelocityObservationValid", false)) continue;
+            if (!Jolt && !Frame.value("AcceptedVelocityFinite", false))
+                return {{"Status", "InvalidEnergyObservation"}, {"Qualified", false},
+                        {"InitialTranslationalKineticEnergy", InitialEnergy}, {"Limit", Limit}};
             double Energy = 0.0;
             if (Jolt) Energy = Frame["KineticEnergy"].get<double>();
             else {
-                Energy = Frame["SoftKineticEnergyEstimate"].get<double>();
+                Energy = Frame["SoftKineticEnergy"].get<double>();
                 for (const auto &Rigid : Frame["Rigids"]) {
                     const double Mass = Rigid["Mass"].get<double>();
                     const auto &Velocity = Rigid["Velocity"];

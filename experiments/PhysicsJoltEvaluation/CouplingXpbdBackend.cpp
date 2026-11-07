@@ -1414,6 +1414,39 @@ namespace PhysicsJoltEvaluation {
 				return std::exchange(LastFeedback, {});
 			}
 
+			[[nodiscard]] std::optional<AcceptedSoftBodyDynamics> ReadAcceptedDynamics(
+				SoftBodyId Body, std::uint64_t ExpectedVertexRevision) const override {
+				std::scoped_lock Lock(Mutex);
+				if (StepActive || ShuttingDown) return std::nullopt;
+				const auto *Slot = FindSlot(Body);
+				if (!Slot || !Slot->Record || !Slot->LastState.Simulated ||
+					Slot->LastState.VertexRevision != ExpectedVertexRevision ||
+					Slot->Record->VertexRevision != ExpectedVertexRevision)
+					return std::nullopt;
+				AcceptedSoftBodyDynamics Result;
+				for (const auto &Node : Slot->Record->Nodes) {
+					if (Node.InverseMass == 0.0f) continue;
+					if (!IsFinite(Node.InverseMass) || Node.InverseMass < 0.0f || !IsFinite(Node.Velocity)) {
+						Result.Finite = false;
+						return Result;
+					}
+					const double Mass = 1.0 / static_cast<double>(Node.InverseMass);
+					const double X = Node.Velocity.x;
+					const double Y = Node.Velocity.y;
+					const double Z = Node.Velocity.z;
+					Result.Momentum[0] += Mass * X;
+					Result.Momentum[1] += Mass * Y;
+					Result.Momentum[2] += Mass * Z;
+					Result.TranslationalKineticEnergy += 0.5 * Mass * (X * X + Y * Y + Z * Z);
+					Result.MovableMass += Mass;
+					++Result.MovableVertices;
+				}
+				Result.Finite = std::isfinite(Result.Momentum[0]) && std::isfinite(Result.Momentum[1]) &&
+					std::isfinite(Result.Momentum[2]) && std::isfinite(Result.TranslationalKineticEnergy) &&
+					std::isfinite(Result.MovableMass);
+				return Result;
+			}
+
 			void Shutdown() override {
 				std::unique_lock Lock(Mutex);
 				if (JobsStopped) return;
