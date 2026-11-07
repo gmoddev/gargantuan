@@ -435,6 +435,9 @@ namespace {
             }
         }
         for (auto Id : Joints) Require(Id.IsValid(), "joint admission failed");
+        if (Name == "articulated-chain")
+            Require(World->ApplyLinearImpulse(Bodies.back(), {2, 0, 0}).Succeeded(),
+                "articulated chain drive impulse failed");
         std::vector<double> Samples;
         const int Frames = Selection.Quick ? 20 : 120;
         for (int Index = 0; Index < Frames; ++Index)
