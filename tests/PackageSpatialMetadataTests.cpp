@@ -3,6 +3,8 @@
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
@@ -165,6 +167,40 @@ namespace {
 		SetPayload(Changed.ContentUnits[0], Document);
 		Test.CheckSnapshot(Changed, false, "non-rigid spatial basis bypassed supported transform gate");
 		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		MeshNode(Document).erase("NodeId");
+		SetPayload(Changed.ContentUnits[0], Document);
+		Test.CheckSnapshot(Changed, false, "missing v5 NodeId reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		MeshNode(Document)["NodeId"] = Document["NodeId"];
+		SetPayload(Changed.ContentUnits[0], Document);
+		Test.CheckSnapshot(Changed, false, "duplicate v5 NodeId reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		MeshNode(Document)["Properties"]["SyntheticReference"] = Json{{"InstanceReference", "wrong type"}};
+		SetPayload(Changed.ContentUnits[0], Document);
+		Test.CheckSnapshot(Changed, false, "wrong-type v5 reference reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		MeshNode(Document)["Properties"]["SyntheticReference"] = Json{{"InstanceReference", MaximumPersistenceObjects}};
+		SetPayload(Changed.ContentUnits[0], Document);
+		Test.CheckSnapshot(Changed, false, "out-of-document v5 reference reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		auto InvalidWeld = std::make_shared<WeldConstraint>();
+		InvalidWeld->SetName("InvalidTargetType");
+		std::shared_ptr<Instance> Serializable = InvalidWeld;
+		auto WeldDocument = Json::parse(InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, Serializable));
+		WeldDocument.erase("Version");
+		WeldDocument["NodeId"] = MaximumPersistenceObjects;
+		WeldDocument["Properties"]["Part0"]["InstanceReference"] = Document["NodeId"];
+		Document["Children"].push_back(std::move(WeldDocument));
+		SetPayload(Changed.ContentUnits[0], Document);
+		Changed.ContentUnits[0].Entry.ObjectCount = 4;
+		Test.CheckSnapshot(Changed, false, "wrong-class v5 reference target reached package staging");
+		Changed = Test.Baseline;
 		Require(!Changed.Assets.Artifacts.empty() && Changed.Assets.Artifacts[0].Bytes &&
 			!Changed.Assets.Artifacts[0].Bytes->empty(), "fixture artifact closure is absent");
 		auto Corrupt = std::make_shared<std::vector<std::uint8_t>>(*Changed.Assets.Artifacts[0].Bytes);
@@ -179,8 +215,12 @@ namespace {
 		Dependency.Entry.Key = "zz/dependency";
 		Dependency.Entry.BlobReference = "content/dependency.instance.json";
 		Dependency.Entry.ObjectCount = 1;
-		SetPayload(Dependency, Json{{"Version", PackageContentInstanceSchemaVersion}, {"NodeId", 1}, {"Name", "Dependency"},
-			{"ClassName", "Folder"}, {"Properties", Json::object()}, {"Children", Json::array()}});
+		auto Root = std::make_shared<Folder>();
+		Root->SetName("Dependency");
+		Root->SetArchivable(true);
+		std::shared_ptr<Instance> Serializable = Root;
+		SetPayload(Dependency, Json::parse(InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, Serializable)));
 		Changed.ContentUnits[0].Entry.Dependencies = {Dependency.Entry.Key};
 		Changed.ContentUnits.push_back(std::move(Dependency));
 		Test.CheckSnapshot(Changed, true, "valid nonspatial hard dependency lost 3L compatibility");

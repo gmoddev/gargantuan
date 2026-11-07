@@ -921,7 +921,13 @@ namespace gargantuan::InstanceSerialization {
 				child, state, requireAttributes, requireTags, requireExtensions, requireClassIdentity, requireCustomProperties
 			);
 			if (maybeChild.has_value()) {
-				maybeChild.value()->SetParent(instance);
+				try {
+					maybeChild.value()->SetParent(instance);
+				} catch (const std::exception &Error) {
+					maybeChild.value()->Destroy();
+					instance->Destroy();
+					return state.ReturnError("Failed to parent child in {}: {}", state.FormatCurrentPath(), Error.what());
+				}
 			} else {
 				state.PushError("Failed to deserialize child in {}", state.FormatCurrentPath());
 				instance->Destroy();
@@ -952,6 +958,17 @@ namespace gargantuan::InstanceSerialization {
 			state.PreserveSourceIds = PreserveSourceIds;
 			const auto version = Contents["Version"].get<int>();
 			state.FormatVersion = static_cast<std::uint32_t>(version);
+			auto Rollback = [&] {
+			// A failed child attachment can leave detached, already constructed nodes
+			// outside the root's hierarchy. Both indexes own those nodes until cleared.
+			for (const auto &[_, Node] : state.DocumentNodes)
+				if (Node && !Node->GetDestroyed()) Node->Destroy();
+			for (const auto &[Node, _] : state.PendingTags)
+				if (Node && !Node->GetDestroyed()) Node->Destroy();
+			state.PendingTags.clear();
+			state.PendingReferences.clear();
+			state.DocumentNodes.clear();
+		};
 			std::optional<std::shared_ptr<Instance>> maybeInstance;
 			try {
 				maybeInstance = TryDeserializeInstance(
@@ -959,8 +976,7 @@ namespace gargantuan::InstanceSerialization {
 				);
 			} catch (const std::exception &Error) {
 				state.PushError("Failed to validate instance document: {}", Error.what());
-				state.PendingReferences.clear();
-				state.DocumentNodes.clear();
+				Rollback();
 				return state;
 			}
 			if (maybeInstance.has_value()) {
@@ -1001,12 +1017,14 @@ namespace gargantuan::InstanceSerialization {
 					state.Ok = true;
 					state.Instance = maybeInstance.value();
 				} catch (const std::exception &error) {
-					maybeInstance.value()->Destroy();
 					state.PushError("Failed to resolve references or rebuild tag index: {}", error.what());
 				}
 			}
-			state.PendingReferences.clear();
-			state.DocumentNodes.clear();
+			if (!state.Ok) Rollback();
+			else {
+				state.PendingReferences.clear();
+				state.DocumentNodes.clear();
+			}
 
 			return state;
 		}
@@ -1039,6 +1057,49 @@ namespace gargantuan::InstanceSerialization {
 		std::span<const std::uint8_t> Bytes, std::size_t ExpectedObjects) {
 		auto Prepared = PrepareJson(std::string_view(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
 		if (!Prepared) return std::unexpected(std::move(Prepared.error()));
+		if ((*Prepared)["Version"] == 5) {
+			std::unordered_set<std::uint32_t> NodeIds;
+			std::vector<std::uint32_t> TargetIds;
+			std::vector<std::pair<const json *, std::size_t>> Pending{{&*Prepared, 1}};
+			while (!Pending.empty()) {
+				const auto [Node, Depth] = Pending.back();
+				Pending.pop_back();
+				if (!Node->is_object() || Depth > MaximumProtocolJsonDepth ||
+					NodeIds.size() == MaximumPersistenceObjects || !Node->contains("NodeId") ||
+					!(*Node)["NodeId"].is_number_unsigned())
+					return std::unexpected("Version 5 content has a malformed or oversized Instance hierarchy");
+				const auto Id = JsonCodec::DecodeUnsigned32((*Node)["NodeId"]);
+				if (!Id || *Id == 0 || *Id > MaximumPersistenceObjects || !NodeIds.insert(*Id).second)
+					return std::unexpected("Version 5 content has a duplicate or out-of-range NodeId");
+				if (!Node->contains("Properties") || !(*Node)["Properties"].is_object() ||
+					!Node->contains("Children") || !(*Node)["Children"].is_array())
+					return std::unexpected("Version 5 content has malformed Properties or Children");
+				for (const auto &[_, Property] : (*Node)["Properties"].items()) {
+					if (!Property.is_object() || !Property.contains("InstanceReference")) continue;
+					if (Property.size() != 1)
+						return std::unexpected("Version 5 content has a malformed InstanceReference property");
+					const auto &Reference = Property["InstanceReference"];
+					if (Reference.is_null()) continue;
+					if (!Reference.is_number_unsigned() || TargetIds.size() == MaximumPersistenceObjects * 16)
+						return std::unexpected("Version 5 content has a malformed or excessive InstanceReference");
+					const auto Target = JsonCodec::DecodeUnsigned32(Reference);
+					if (!Target || *Target == 0 || *Target > MaximumPersistenceObjects)
+						return std::unexpected("Version 5 content has an out-of-range InstanceReference");
+					TargetIds.push_back(*Target);
+				}
+				const auto &Children = (*Node)["Children"];
+				if (Children.size() > MaximumPersistenceObjects - NodeIds.size() -
+					std::min(Pending.size(), MaximumPersistenceObjects - NodeIds.size()))
+					return std::unexpected("Version 5 content exceeds its object-count bound");
+				for (const auto &Child : Children) Pending.emplace_back(&Child, Depth + 1);
+			}
+			for (const auto Target : TargetIds)
+				if (!NodeIds.contains(Target))
+					return std::unexpected("Version 5 InstanceReference target is absent from its document");
+			if (ExpectedObjects != 0 && NodeIds.size() != ExpectedObjects)
+				return std::unexpected("Content document differs from its declared object count");
+			return std::make_shared<const PreparedInstanceDocument>(std::move(*Prepared));
+		}
 		if (ExpectedObjects != 0) {
 			std::size_t Count = 0;
 			auto CountObjects = [&](auto &&Self, const json &Object) -> bool {

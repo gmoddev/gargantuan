@@ -48,6 +48,8 @@ fails the entire load. The reader preflights each reference through the
 existing reflected wire validation and then applies it with `Engine`
 permission and `CoreTrusted` context. No name/path matching, global source-ID
 resolution, direct field write, or new mutation authority is introduced.
+Failed parenting or reference application destroys every constructed node and
+clears pending reference and tag owners before returning failure.
 
 The existing 8 MiB JSON document, 64-deep hierarchy, 65,536 object, and
 1,024-property-per-object ceilings still apply. Pending reference records
@@ -66,3 +68,6 @@ in the bootstrap project. Other qualified static subtrees may still become
 units. This deliberately avoids cross-unit fixups and prevents a split from
 silently replacing an internal authored reference with null. Package content
 namespace, digest, admission, and runtime ObjectId rules are unchanged.
+Package snapshot admission checks every v5 unit's bounded NodeIds and reference
+targets, then materializes and destroys a detached copy to apply the same
+reflected type, scope, and saved-property validation as runtime loading.

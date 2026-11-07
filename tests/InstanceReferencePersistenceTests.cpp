@@ -1,5 +1,6 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/Attachment.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/JointConstraint.hpp"
 #include "gargantuan/classes/Part.hpp"
@@ -156,6 +157,19 @@ namespace {
 		Bad = Document;
 		ChildNamed(Bad, "ForwardWeld")["Properties"].erase("Part0");
 		Check(!Decode(Bad).Ok, "v5 missing explicit reference property rejects");
+		Bad = Document;
+		auto &InvalidChild = ChildNamed(Bad, "PartA");
+		const auto *DataModelClass = InstanceClassRegistry::GetDefinitionByName("DataModel");
+		if (!DataModelClass) throw std::runtime_error("DataModel reflection definition is absent");
+		InvalidChild["ClassName"] = "DataModel";
+		InvalidChild["ClassSchemaId"] = DataModelClass->Id.ToString();
+		InvalidChild["ClassDefinitionVersion"] = DataModelClass->DefinitionVersion;
+		InvalidChild["Children"] = Json::array();
+		auto InvalidParenting = Decode(Bad);
+		Check(!InvalidParenting.Ok && !InvalidParenting.Instance &&
+			InvalidParenting.PendingTags.empty() && InvalidParenting.DocumentNodes.empty() &&
+			InvalidParenting.PendingReferences.empty(),
+			"failed child parenting rolls back every pending materialized node and tag owner");
 		Bad = Document;
 		Bad["Version"] = 6;
 		Check(!Decode(Bad).Ok, "unsupported future persistence version rejects");

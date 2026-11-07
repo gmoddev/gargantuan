@@ -10,6 +10,7 @@
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "assets/AssetImporter.hpp"
+#include "assets/PreparedInstanceSerialization.hpp"
 #include "serialization/JsonCodec.hpp"
 
 #include <SDL3/SDL.h>
@@ -1136,16 +1137,28 @@ namespace gargantuan {
 		}
 
 		std::optional<ResidencyUnitBoundsMetadata> InspectSpatialContentUnit(std::string_view Payload,
-			const PackageContentEntry &Entry, PackageSpatialMeshResolver &Meshes) {
+			const PackageContentEntry &Entry, PackageSpatialMeshResolver &Meshes,
+			bool ValidateReflectedState = false) {
 			if (Entry.PackageSpaceKey != "default" || Payload.empty() ||
 				Payload.size() > MaximumPackageContentPayloadBytes)
 				throw std::runtime_error("Package content unit has no qualified default-space bounds");
+			const auto Bytes = std::span(reinterpret_cast<const std::uint8_t *>(Payload.data()), Payload.size());
+			const auto Prepared = InstanceSerialization::Internal::PrepareDetachedJson(Bytes, Entry.ObjectCount);
+			if (!Prepared) throw std::runtime_error("Package content unit has invalid Instance identity or references: " +
+				Prepared.error());
 			auto Parsed = JsonCodec::Parse(Payload, MaximumPackageContentPayloadBytes, "package spatial content unit");
 			if (!Parsed || !Parsed->is_object() ||
 				(Parsed->value("Version", 0u) != 4 &&
 					Parsed->value("Version", 0u) != PackageContentInstanceSchemaVersion) ||
 				Parsed->value("ClassName", "") == "DataModel")
 				throw std::runtime_error("Package spatial content unit is malformed");
+			if (ValidateReflectedState && (*Parsed)["Version"] == 5) {
+				auto Materialized = InstanceSerialization::Internal::MaterializeDetachedJson(*Prepared);
+				if (!Materialized.Ok || !Materialized.Instance)
+					throw std::runtime_error("Package content unit failed reflected Instance validation: " +
+						(Materialized.Errors.empty() ? std::string("unknown error") : Materialized.Errors.front()));
+				Materialized.Instance->Destroy();
+			}
 			const auto Inspection = InspectSerializedSubtree(*Parsed, Meshes);
 			if (Inspection.BootstrapOnly || Inspection.Objects != Entry.ObjectCount ||
 				Inspection.Bounds.has_value() != Entry.CoarseBounds.has_value() ||
@@ -1428,7 +1441,7 @@ namespace gargantuan {
 						)) != Unit.Entry.Digest)
 						throw std::runtime_error("Package content unit does not match its immutable metadata");
 					ContentManifest.Entries.push_back(Unit.Entry);
-					if (auto Spatial = InspectSpatialContentUnit(Unit.Payload, Unit.Entry, Meshes))
+					if (auto Spatial = InspectSpatialContentUnit(Unit.Payload, Unit.Entry, Meshes, true))
 						Metadata.Units.push_back(std::move(*Spatial));
 				}
 				(void)ParsePackageContentManifest(EncodePackageContentManifest(ContentManifest)).value();
