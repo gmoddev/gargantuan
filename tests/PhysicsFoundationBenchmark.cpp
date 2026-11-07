@@ -90,7 +90,7 @@ namespace {
 		return World;
 	}
 
-	std::shared_ptr<Part> MakePart(glm::vec3 Position, bool Anchored, glm::vec3 Size = {1.0f}) {
+	std::shared_ptr<Part> MakePart(glm::vec3 Position, bool Anchored, glm::vec3 Size = glm::vec3(1.0f)) {
 		auto Body = std::make_shared<Part>();
 		Body->SetAnchored(Anchored);
 		Body->SetSize(Size);
