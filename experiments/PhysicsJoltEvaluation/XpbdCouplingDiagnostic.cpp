@@ -22,6 +22,8 @@ namespace {
     constexpr float SphereRadius = 0.45f;
     constexpr float SphereDensity = 0.7f;
 
+    enum class ColliderPathMode { Sampled, Linear };
+
     struct Options {
         int Frames = 36;
         int Substeps = 1;
@@ -36,6 +38,7 @@ namespace {
         bool Dynamic = true;
         bool PhaseParticles = false;
         bool Interleaved = false;
+        ColliderPathMode ColliderPath = ColliderPathMode::Sampled;
         float StretchCompliance = 1.0e-6f;
         float BendCompliance = 1.0e-4f;
         float Damping = 0.04f;
@@ -75,6 +78,11 @@ namespace {
             else if (Name == "--dynamic") Result.Dynamic = Boolean(Value);
             else if (Name == "--phase-particles") Result.PhaseParticles = Boolean(Value);
             else if (Name == "--interleaved") Result.Interleaved = Boolean(Value);
+            else if (Name == "--collider-path") {
+                if (Value == "sampled") Result.ColliderPath = ColliderPathMode::Sampled;
+                else if (Value == "linear") Result.ColliderPath = ColliderPathMode::Linear;
+                else throw std::invalid_argument("[Physics:XpbdDiagnostic] Collider path must be sampled or linear");
+            }
             else if (Name == "--stretch-compliance") Result.StretchCompliance = std::stof(Value);
             else if (Name == "--bend-compliance") Result.BendCompliance = std::stof(Value);
             else if (Name == "--damping") Result.Damping = std::stof(Value);
@@ -89,6 +97,7 @@ namespace {
             Result.Substeps * Result.SoftSubsteps > 96 ||
             (!Result.Interleaved && Result.Substeps != 1 && Result.Substeps != 4) ||
             (!Result.Interleaved && Result.SoftSubsteps != 1) ||
+            (Result.ColliderPath == ColliderPathMode::Linear && !Result.Interleaved) ||
             Result.Iterations < 1 || Result.Iterations > 64 ||
             (Result.Workers != 1 && Result.Workers != 2 && Result.Workers != 8) ||
             !std::isfinite(Result.StretchCompliance) || Result.StretchCompliance < 0.0f ||
@@ -290,8 +299,10 @@ namespace {
 
         const int OuterSteps = Config.Interleaved ? Config.Substeps : 1;
         const int SoftStepsPerOuter = Config.Interleaved ? Config.SoftSubsteps : 1;
+        const char *ColliderPathName = Config.ColliderPath == ColliderPathMode::Linear ? "linear" : "sampled";
         std::cout << Json({{"Record", "Config"}, {"Frames", Config.Frames},
                            {"Substeps", Config.Substeps}, {"Interleaved", Config.Interleaved},
+                           {"ColliderPath", ColliderPathName},
                            {"OuterRigidStepsPerFrame", OuterSteps},
                            {"SoftStepsPerOuterRigidStep", SoftStepsPerOuter},
                            {"SoftIntegrationsPerFrame", OuterSteps * SoftStepsPerOuter},
@@ -300,7 +311,10 @@ namespace {
                            {"SoftDampingMultiplierPerStep", 1.0f - Config.Damping},
                            {"NominalSoftDampingRetentionPerFrame",
                             std::pow(1.0 - static_cast<double>(Config.Damping), OuterSteps * SoftStepsPerOuter)},
-                           {"ColliderTransformHold", "One sampled rigid transform per outer step; held fixed during inner soft steps. Feedback changes rigid velocity after each inner soft step, while rigid position advances at the next outer step."},
+                           {"ColliderTransformHold", Config.ColliderPath == ColliderPathMode::Linear ?
+                            "Sphere collider translation is sampled linearly from the outer rigid step's begin/end poses at each inner soft step. The actual rigid body advances once per outer step; feedback changes velocity after each inner soft step and position advances at the next outer step. This is a staggered approximation, not a simultaneous solve." :
+                            "One sampled rigid transform per outer step; held fixed during inner soft steps. Feedback changes rigid velocity after each inner soft step, while rigid position advances at the next outer step."},
+                           {"PenetrationReference", "Collider position sampled for each accepted soft step"},
                            {"Iterations", Config.Iterations}, {"Workers", Config.Workers},
                            {"Diagnostics", Config.Diagnostics}, {"Contact", Config.Contact},
                            {"Feedback", Config.Feedback}, {"Clamp", Config.Clamp},
@@ -330,6 +344,7 @@ namespace {
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             Json SubstepRecords = Json::array();
             gargantuan::PhysicsBodyState ColliderState;
+            glm::vec3 OuterRigidBeginPosition{};
             for (int Substep = 0; Substep < OuterSteps * SoftStepsPerOuter; ++Substep) {
                 const int OuterSubstep = Substep / SoftStepsPerOuter;
                 const int SoftSubstep = Substep % SoftStepsPerOuter;
@@ -339,6 +354,7 @@ namespace {
                 const auto BeforeRigid = ReadRigid(Rigid, RigidId);
                 double RigidMs = 0.0;
                 if (SoftSubstep == 0) {
+                    OuterRigidBeginPosition = BeforeRigid.Transform.Position;
                     const auto RigidStart = std::chrono::steady_clock::now();
                     (void)Rigid.Step({.DeltaTime = OuterTime,
                                       .SubStepCount = Config.Interleaved ? 1 : Config.Substeps});
@@ -346,6 +362,13 @@ namespace {
                     ColliderState = ReadRigid(Rigid, RigidId);
                 }
                 const auto &AfterRigid = ColliderState;
+                auto ColliderTransform = AfterRigid.Transform;
+                if (Config.ColliderPath == ColliderPathMode::Linear) {
+                    const float Fraction = static_cast<float>(SoftSubstep + 1) / SoftStepsPerOuter;
+                    ColliderTransform.Position = OuterRigidBeginPosition +
+                        Fraction * (AfterRigid.Transform.Position - OuterRigidBeginPosition);
+                }
+                const auto ColliderSamplePosition = ColliderTransform.Position;
 
                 gargantuan::SoftBodyStepConfig SoftConfig;
                 SoftConfig.DeltaTime = StepTime;
@@ -354,7 +377,7 @@ namespace {
                     gargantuan::SoftBodyExecutionMode::SynchronousReference :
                     gargantuan::SoftBodyExecutionMode::Jobified;
                 if (Config.Contact)
-                    SoftConfig.Colliders.push_back({AfterRigid.Description.Shape, AfterRigid.Transform});
+                    SoftConfig.Colliders.push_back({AfterRigid.Description.Shape, ColliderTransform});
                 const auto SoftStart = std::chrono::steady_clock::now();
                 const auto Result = Soft.Step(SoftConfig);
                 const double SoftMs = Milliseconds(SoftStart);
@@ -402,7 +425,7 @@ namespace {
                 const double SubstepPipelineMs = Milliseconds(PipelineStart);
                 const double PhysicalPhasesMs = RigidMs + SoftMs + FeedbackMs;
                 // Quality is intentionally outside the solve/pipeline timing windows.
-                const auto Quality = ObserveQuality(*State->Positions, Definition, AfterFeedback.Transform.Position);
+                const auto Quality = ObserveQuality(*State->Positions, Definition, ColliderSamplePosition);
                 MaximumEdgeStretch = std::max(MaximumEdgeStretch, Quality.MaxEdgeStretch);
                 MaximumPinDrift = std::max(MaximumPinDrift, Quality.MaxPinDrift);
                 MaximumParticlePenetration = std::max(MaximumParticlePenetration, Quality.MaxParticlePenetration);
@@ -437,6 +460,9 @@ namespace {
                 SubstepRecords.push_back({{"Substep", Substep},
                                           {"OuterSubstep", OuterSubstep},
                                           {"SoftSubstep", SoftSubstep},
+                                          {"ColliderPath", ColliderPathName},
+                                          {"OuterRigidBeginPosition", Vector(OuterRigidBeginPosition)},
+                                          {"ColliderSamplePosition", Vector(ColliderSamplePosition)},
                                           {"RigidAdvanced", SoftSubstep == 0},
                                           {"OuterDeltaTime", OuterTime},
                                           {"DeltaTime", StepTime},
