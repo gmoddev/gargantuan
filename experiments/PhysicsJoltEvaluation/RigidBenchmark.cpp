@@ -496,6 +496,7 @@ namespace {
         std::vector<double> Samples;
         const int Frames = Selection.Quick ? 20 : 120;
         float MaximumLinkDrift = 0.0f;
+        float MaximumLinkCenterDistance = 0.0f;
         float MaximumHingeAbsoluteAngle = 0.0f;
         float MinimumSliderX = std::numeric_limits<float>::infinity();
         float MaximumSliderX = -std::numeric_limits<float>::infinity();
@@ -521,10 +522,15 @@ namespace {
                 MaximumSpringLength = std::max(MaximumSpringLength, FinalSpringLength);
             } else {
                 for (std::size_t Link = 1; Link < Bodies.size(); ++Link) {
-                    const auto A = World->GetBodyState(Bodies[Link - 1])->Transform.Position;
-                    const auto B = World->GetBodyState(Bodies[Link])->Transform.Position;
-                    MaximumLinkDrift = std::max(MaximumLinkDrift,
-                        std::abs(glm::length(A - B) - 1.0f));
+                    const auto A = World->GetBodyState(Bodies[Link - 1])->Transform;
+                    const auto B = World->GetBodyState(Bodies[Link])->Transform;
+                    const auto AttachmentA = A.Position + A.Rotation * glm::vec3(0, -0.5f, 0);
+                    const auto AttachmentB = B.Position + B.Rotation * glm::vec3(0, 0.5f, 0);
+                    const auto LinkDrift = glm::length(AttachmentA - AttachmentB);
+                    Require(std::isfinite(LinkDrift), "articulated attachment drift was nonfinite");
+                    MaximumLinkDrift = std::max(MaximumLinkDrift, LinkDrift);
+                    MaximumLinkCenterDistance = std::max(MaximumLinkCenterDistance,
+                        glm::length(A.Position - B.Position));
                 }
             }
         }
@@ -540,6 +546,7 @@ namespace {
         return {{"Case", std::string(Name)}, {"Status", "measured"}, {"Bodies", Bodies.size()},
             {"Constraints", Joints.size()}, {"Step", Timings(Samples)},
             {"MaximumLinkDrift", Name == "articulated-chain" ? Json(MaximumLinkDrift) : Json(nullptr)},
+            {"MaximumLinkCenterDistance", Name == "articulated-chain" ? Json(MaximumLinkCenterDistance) : Json(nullptr)},
             {"FinalHingeAngle", Motor ? Json(FinalHingeAngle) : Json(nullptr)},
             {"MaximumHingeAbsoluteAngle", Motor ? Json(MaximumHingeAbsoluteAngle) : Json(nullptr)},
             {"FinalSliderX", Motor ? Json(FinalSliderX) : Json(nullptr)},
