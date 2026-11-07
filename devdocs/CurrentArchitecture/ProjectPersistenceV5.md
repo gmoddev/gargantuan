@@ -70,6 +70,8 @@ silently replacing an internal authored reference with null. Package content
 namespace, digest, admission, and runtime ObjectId rules are unchanged.
 Package snapshot admission checks every v5 unit's bounded NodeIds, saved
 reference fields, target class ancestry, and document scope using the frozen
-reflection schema. The package worker performs this check without constructing
-or mutating live Instances. Runtime loading still applies each reference
-through the ordinary wire mutation path.
+reflection schema captured on Main with shared ownership. Content preparation
+workers use the same pinned schema generation; a prepared document rejects
+materialization if the active generation changed. Package workers perform this
+check without constructing or mutating live Instances. Runtime loading still
+applies each reference through the ordinary wire mutation path.

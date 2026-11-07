@@ -203,6 +203,28 @@ namespace {
 		Changed.ContentUnits[0].Entry.ObjectCount = 4;
 		Test.CheckSnapshot(Changed, false, "wrong-class v5 reference target reached package staging");
 		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		WeldDocument = Json::parse(InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, Serializable));
+		WeldDocument.erase("Version");
+		WeldDocument["NodeId"] = MaximumPersistenceObjects;
+		WeldDocument["Properties"]["Part0"] = Json{{"String", "mistyped"}};
+		Document["Children"].push_back(std::move(WeldDocument));
+		SetPayload(Changed.ContentUnits[0], Document);
+		Changed.ContentUnits[0].Entry.ObjectCount = 4;
+		Test.CheckSnapshot(Changed, false, "mistyped saved reference property reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		WeldDocument = Json::parse(InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, Serializable));
+		WeldDocument.erase("Version");
+		WeldDocument["NodeId"] = MaximumPersistenceObjects;
+		WeldDocument["Properties"]["Part0"] = Json::object();
+		Document["Children"].push_back(std::move(WeldDocument));
+		SetPayload(Changed.ContentUnits[0], Document);
+		Changed.ContentUnits[0].Entry.ObjectCount = 4;
+		Test.CheckSnapshot(Changed, false, "empty saved reference property reached package staging");
+		Changed = Test.Baseline;
 		Require(!Changed.Assets.Artifacts.empty() && Changed.Assets.Artifacts[0].Bytes &&
 			!Changed.Assets.Artifacts[0].Bytes->empty(), "fixture artifact closure is absent");
 		auto Corrupt = std::make_shared<std::vector<std::uint8_t>>(*Changed.Assets.Artifacts[0].Bytes);

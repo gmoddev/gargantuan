@@ -59,9 +59,12 @@ namespace gargantuan::InstanceSerialization {
 		}
 
 		struct PreparedInstanceDocument final {
-			explicit PreparedInstanceDocument(json Value) : Contents(std::move(Value)),
+			explicit PreparedInstanceDocument(json Value,
+				std::shared_ptr<const RuntimeSchemaRegistry> Schema = {}) : Contents(std::move(Value)),
+				SchemaSnapshot(std::move(Schema)),
 				RetainedBytes(sizeof(PreparedInstanceDocument) + 2 * sizeof(void *) + JsonRetainedBytes(Contents)) {}
 			json Contents;
+			std::shared_ptr<const RuntimeSchemaRegistry> SchemaSnapshot;
 			std::size_t RetainedBytes;
 		};
 	}
@@ -1054,7 +1057,8 @@ namespace gargantuan::InstanceSerialization {
 	}
 
 	Internal::PreparedInstanceDocumentResult Internal::PrepareDetachedJson(
-		std::span<const std::uint8_t> Bytes, std::size_t ExpectedObjects) {
+		std::span<const std::uint8_t> Bytes, std::size_t ExpectedObjects,
+		std::shared_ptr<const RuntimeSchemaRegistry> SchemaSnapshot) {
 		auto Prepared = PrepareJson(std::string_view(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
 		if (!Prepared) return std::unexpected(std::move(Prepared.error()));
 		if ((*Prepared)["Version"] == 5) {
@@ -1093,13 +1097,14 @@ namespace gargantuan::InstanceSerialization {
 					return std::unexpected("Version 5 content has incomplete reflected class identity");
 				const auto ClassId = SchemaId::Parse((*Node)["ClassSchemaId"].get_ref<const std::string &>());
 				const auto ClassVersion = JsonCodec::DecodeUnsigned32((*Node)["ClassDefinitionVersion"]);
-				const auto *Class = ClassId ? InstanceClassRegistry::GetDefinitionBySchemaId(*ClassId) : nullptr;
+				const auto *Class = SchemaSnapshot && ClassId ? SchemaSnapshot->FindClassById(*ClassId) : nullptr;
 				const auto ExpectedName = Class && Class->ConstructionKind == SchemaClassConstructionKind::CustomData
 					? Class->CanonicalName : Class ? Class->ClassName : std::string{};
-				if (!Class || !ClassVersion || *ClassVersion == 0 || Class->DefinitionVersion != *ClassVersion ||
-					(*Node)["ClassName"] != ExpectedName || !InstanceClassRegistry::IsConstructible(*Class))
+				if (!ClassId || !ClassVersion || *ClassVersion == 0 ||
+					(SchemaSnapshot && (!Class || Class->DefinitionVersion != *ClassVersion ||
+						(*Node)["ClassName"] != ExpectedName || !SchemaSnapshot->IsClassConstructible(*Class))))
 					return std::unexpected("Version 5 content has incompatible reflected class identity");
-				const bool IsDataModel = GetActiveRuntimeSchemaRegistry().IsClassDerivedFrom(Class->Id, DataModelId);
+				const bool IsDataModel = Class && SchemaSnapshot->IsClassDerivedFrom(Class->Id, DataModelId);
 				if (IsDataModel && Depth != 1)
 					return std::unexpected("Version 5 content cannot parent a DataModel inside another Instance");
 				const auto Scope = IsDataModel ? *Id : ParentScope;
@@ -1110,25 +1115,30 @@ namespace gargantuan::InstanceSerialization {
 				const auto &Properties = (*Node)["Properties"];
 				if (Properties.size() > MaximumSnapshotPropertiesPerObject)
 					return std::unexpected("Version 5 content exceeds its property-count bound");
-				for (const auto &[Name, Property] : Class->AllProperties)
+				if (Class) for (const auto &[Name, Property] : Class->AllProperties)
 					if (Name != "Parent" && Property->PersistencePolicy == InstanceProperty::Persistence::Saved &&
 						Property->SemanticType == InstanceProperty::DataType::ObjectReference &&
-						Property->ReadObjectReference && Property->WriteObjectReference && !Properties.contains(Name))
-						return std::unexpected("Version 5 content omits a saved InstanceReference property");
+						Property->ReadObjectReference && Property->WriteObjectReference &&
+						(!Properties.contains(Name) || !Properties[Name].is_object() ||
+							Properties[Name].size() != 1 || !Properties[Name].contains("InstanceReference")))
+						return std::unexpected("Version 5 content omits or mistypes a saved InstanceReference property");
 				for (const auto &[PropertyName, EncodedProperty] : Properties.items()) {
 					if (!EncodedProperty.is_object() || !EncodedProperty.contains("InstanceReference")) continue;
 					if (EncodedProperty.size() != 1)
 						return std::unexpected("Version 5 content has a malformed InstanceReference property");
-					const auto FoundProperty = Class->AllProperties.find(PropertyName);
-					if (FoundProperty == Class->AllProperties.end() ||
-						FoundProperty->second->PersistencePolicy != InstanceProperty::Persistence::Saved ||
-						FoundProperty->second->SemanticType != InstanceProperty::DataType::ObjectReference ||
-						!FoundProperty->second->ObjectReferenceClassSchemaId ||
-						!FoundProperty->second->WriteObjectReference)
+					const InstanceProperty *ReflectedProperty = nullptr;
+					if (Class) {
+						const auto FoundProperty = Class->AllProperties.find(PropertyName);
+						if (FoundProperty != Class->AllProperties.end()) ReflectedProperty = FoundProperty->second;
+					}
+					if (SchemaSnapshot && (!ReflectedProperty ||
+						ReflectedProperty->PersistencePolicy != InstanceProperty::Persistence::Saved ||
+						ReflectedProperty->SemanticType != InstanceProperty::DataType::ObjectReference ||
+						!ReflectedProperty->ObjectReferenceClassSchemaId || !ReflectedProperty->WriteObjectReference))
 						return std::unexpected("Version 5 content encodes a non-reference property as InstanceReference");
 					const auto &Reference = EncodedProperty["InstanceReference"];
 					if (Reference.is_null()) {
-						if (!FoundProperty->second->Nullable)
+						if (ReflectedProperty && !ReflectedProperty->Nullable)
 							return std::unexpected("Version 5 content has a null non-nullable reference");
 						continue;
 					}
@@ -1137,7 +1147,7 @@ namespace gargantuan::InstanceSerialization {
 					const auto Target = JsonCodec::DecodeUnsigned32(Reference);
 					if (!Target || *Target == 0 || *Target > MaximumPersistenceObjects)
 						return std::unexpected("Version 5 content has an out-of-range InstanceReference");
-					References.push_back({*Id, *Target, FoundProperty->second});
+					References.push_back({*Id, *Target, ReflectedProperty});
 				}
 				const auto &Children = (*Node)["Children"];
 				if (Children.size() > MaximumPersistenceObjects - NodeIds.size() -
@@ -1149,14 +1159,14 @@ namespace gargantuan::InstanceSerialization {
 				const auto Target = NodeIds.find(Reference.Target);
 				if (Target == NodeIds.end())
 					return std::unexpected("Version 5 InstanceReference target is absent from its document");
-				if (NodeIds.at(Reference.Owner).Scope != Target->second.Scope ||
-					!GetActiveRuntimeSchemaRegistry().IsClassDerivedFrom(Target->second.Class->Id,
-						*Reference.Property->ObjectReferenceClassSchemaId))
+				if (SchemaSnapshot && (NodeIds.at(Reference.Owner).Scope != Target->second.Scope ||
+					!SchemaSnapshot->IsClassDerivedFrom(Target->second.Class->Id,
+						*Reference.Property->ObjectReferenceClassSchemaId)))
 					return std::unexpected("Version 5 InstanceReference target has an invalid scope or class");
 			}
 			if (ExpectedObjects != 0 && NodeIds.size() != ExpectedObjects)
 				return std::unexpected("Content document differs from its declared object count");
-			return std::make_shared<const PreparedInstanceDocument>(std::move(*Prepared));
+			return std::make_shared<const PreparedInstanceDocument>(std::move(*Prepared), std::move(SchemaSnapshot));
 		}
 		if (ExpectedObjects != 0) {
 			std::size_t Count = 0;
@@ -1171,7 +1181,7 @@ namespace gargantuan::InstanceSerialization {
 			if (!CountObjects(CountObjects, *Prepared) || Count != ExpectedObjects)
 				return std::unexpected("Content document differs from its declared object count");
 		}
-		return std::make_shared<const PreparedInstanceDocument>(std::move(*Prepared));
+		return std::make_shared<const PreparedInstanceDocument>(std::move(*Prepared), std::move(SchemaSnapshot));
 	}
 
 	std::size_t Internal::GetPreparedDocumentRetainedBytes(const PreparedInstanceDocumentPtr &Prepared) {
@@ -1183,6 +1193,18 @@ namespace gargantuan::InstanceSerialization {
 			DeserializationState State;
 			State.PushError("Prepared Instance document is absent");
 			return State;
+		}
+		if (Prepared->SchemaSnapshot) {
+			DeserializationState State;
+			try {
+				if (GetRuntimeSchemaLifecycle().GetActiveRegistry() != Prepared->SchemaSnapshot) {
+					State.PushError("Prepared Instance document belongs to an inactive schema generation");
+					return State;
+				}
+			} catch (const std::exception &Error) {
+				State.PushError("Prepared Instance document has no active schema generation: {}", Error.what());
+				return State;
+			}
 		}
 		return MaterializeJson(Prepared->Contents, false);
 	}

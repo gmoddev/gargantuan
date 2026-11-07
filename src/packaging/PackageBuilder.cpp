@@ -7,7 +7,9 @@
 #include "gargantuan/content/ResidencySpatialMetadata.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "assets/AssetImporter.hpp"
 #include "assets/PreparedInstanceSerialization.hpp"
@@ -1137,12 +1139,14 @@ namespace gargantuan {
 		}
 
 		std::optional<ResidencyUnitBoundsMetadata> InspectSpatialContentUnit(std::string_view Payload,
-			const PackageContentEntry &Entry, PackageSpatialMeshResolver &Meshes) {
+			const PackageContentEntry &Entry, PackageSpatialMeshResolver &Meshes,
+			std::shared_ptr<const RuntimeSchemaRegistry> SchemaSnapshot = {}) {
 			if (Entry.PackageSpaceKey != "default" || Payload.empty() ||
 				Payload.size() > MaximumPackageContentPayloadBytes)
 				throw std::runtime_error("Package content unit has no qualified default-space bounds");
 			const auto Bytes = std::span(reinterpret_cast<const std::uint8_t *>(Payload.data()), Payload.size());
-			const auto Prepared = InstanceSerialization::Internal::PrepareDetachedJson(Bytes, Entry.ObjectCount);
+			const auto Prepared = InstanceSerialization::Internal::PrepareDetachedJson(
+				Bytes, Entry.ObjectCount, std::move(SchemaSnapshot));
 			if (!Prepared) throw std::runtime_error("Package content unit has invalid Instance identity or references: " +
 				Prepared.error());
 			auto Parsed = JsonCodec::Parse(Payload, MaximumPackageContentPayloadBytes, "package spatial content unit");
@@ -1355,6 +1359,7 @@ namespace gargantuan {
 		std::uint64_t AuthoritativeRevision,
 		std::uint64_t PersistedRevision
 	) {
+		AssertAuthoritativeMutation("PackageBuilder::Capture schema snapshot");
 		if (!World || !ProjectValue.Identity.IsValid() || AuthoritativeRevision == 0 || PersistedRevision == 0)
 			throw std::invalid_argument("Package snapshot source is invalid");
 		auto Root = std::static_pointer_cast<Instance>(World);
@@ -1371,6 +1376,7 @@ namespace gargantuan {
 			.ProjectJson = std::move(ProjectJson),
 			.PreRunSource = ReadProjectPreRunSource(ProjectValue.Root),
 			.Assets = Assets->CaptureRuntimeAssets(),
+			.SchemaSnapshot = GetRuntimeSchemaLifecycle().GetActiveRegistry(),
 		};
 		if (Result.DisplayName.empty() || Result.DisplayName.size() > MaximumDisplayNameBytes)
 			throw std::runtime_error("Project display name exceeds the package bound");
@@ -1381,7 +1387,7 @@ namespace gargantuan {
 		ResidencySpatialMetadata Metadata{ResidencySpatialMetadataVersion, Manifest.Package, {}};
 		for (const auto &Unit : Result.ContentUnits) {
 			Manifest.Entries.push_back(Unit.Entry);
-			if (auto Spatial = InspectSpatialContentUnit(Unit.Payload, Unit.Entry, Meshes))
+			if (auto Spatial = InspectSpatialContentUnit(Unit.Payload, Unit.Entry, Meshes, Result.SchemaSnapshot))
 				Metadata.Units.push_back(std::move(*Spatial));
 		}
 		CheckSpatialProof(Manifest, Metadata);
@@ -1411,7 +1417,8 @@ namespace gargantuan {
 
 			RunPhase(PackagePhase::Snapshot, [&] {
 				InjectFailure(Request.FailurePoint, PackageFailurePoint::Snapshot);
-				if (!Request.Payload.Identity.IsValid() || Request.Payload.AuthoritativeRevision == 0 ||
+				if (!Request.Payload.SchemaSnapshot || !Request.Payload.Identity.IsValid() ||
+					Request.Payload.AuthoritativeRevision == 0 ||
 					Request.Payload.DisplayName.empty() ||
 					Request.Payload.DisplayName.size() > MaximumDisplayNameBytes ||
 					Request.Payload.ProjectJson.empty() ||
@@ -1433,7 +1440,8 @@ namespace gargantuan {
 						)) != Unit.Entry.Digest)
 						throw std::runtime_error("Package content unit does not match its immutable metadata");
 					ContentManifest.Entries.push_back(Unit.Entry);
-					if (auto Spatial = InspectSpatialContentUnit(Unit.Payload, Unit.Entry, Meshes))
+					if (auto Spatial = InspectSpatialContentUnit(
+						Unit.Payload, Unit.Entry, Meshes, Request.Payload.SchemaSnapshot))
 						Metadata.Units.push_back(std::move(*Spatial));
 				}
 				(void)ParsePackageContentManifest(EncodePackageContentManifest(ContentManifest)).value();
