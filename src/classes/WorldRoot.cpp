@@ -66,6 +66,7 @@ namespace gargantuan {
 			.AngularDamping = Part.GetAngularDamping(),
 			.GravityScale = Part.GetGravityScale(),
 			.SleepEnabled = Part.GetSleepEnabled(),
+			.MovingBodyCCD = !Part.GetAnchored() && !Part.GetKinematic() && Part.GetCanCollide() && Part.GetMovingBodyCCD(),
 		};
 		const auto *Mesh = dynamic_cast<const MeshPart *>(&Part);
 		if (!Mesh || Mesh->GetCollisionMode() != Enums::MeshCollisionMode::StaticMesh) return Description;
@@ -240,7 +241,8 @@ namespace gargantuan {
 		};
 		auto &Connections = PhysicsConnections[Id];
 		for (const std::string_view Name : {"CFrame", "Size", "Anchored", "Kinematic", "CanCollide", "CanTouch",
-			"CollisionGroup", "CollisionMask", "LinearDamping", "AngularDamping", "GravityScale", "SleepEnabled"})
+			"CollisionGroup", "CollisionMask", "LinearDamping", "AngularDamping", "GravityScale", "SleepEnabled",
+			"MovingBodyCCD"})
 			Connections.push_back(Part->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
 		if (Part->FindProperty("Shape"))
 			Connections.push_back(Part->GetPropertyChangedSignal("Shape")->Connect(MarkDirty));

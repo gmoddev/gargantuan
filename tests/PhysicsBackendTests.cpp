@@ -1256,6 +1256,7 @@ namespace {
 		Part->SetAngularDamping(0.5f);
 		Part->SetGravityScale(1.5f);
 		Part->SetSleepEnabled(false);
+		Part->SetMovingBodyCCD(true);
 		Part->SetParent(Workspace);
 		std::shared_ptr<Instance> Root = Game;
 		const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
@@ -1266,7 +1267,162 @@ namespace {
 		Check(Decoded.Ok && Loaded && Loaded->GetKinematic() && Loaded->GetCollisionGroup() == 7 &&
 			Loaded->GetCollisionMask() == 129 && Near(Loaded->GetLinearDamping(), 0.25f) &&
 			Near(Loaded->GetAngularDamping(), 0.5f) && Near(Loaded->GetGravityScale(), 1.5f) &&
-			!Loaded->GetSleepEnabled(), "authored rigid controls survive project serialization and reopen");
+			!Loaded->GetSleepEnabled() && Loaded->GetMovingBodyCCD(),
+			"authored rigid controls and CCD policy survive project serialization and reopen");
+	}
+
+	void TestContinuousCollisionPolicy() {
+		using namespace gargantuan;
+		PhysicsBodyDesc Projectile;
+		Projectile.Shape.Kind = PhysicsShapeKind::Ball;
+		Projectile.Shape.Size = {0.5f, 0.5f, 0.5f};
+		Projectile.Transform = CFrame(-3.0f, 0.0f, 0.0f);
+		Projectile.MovingBodyCCD = true;
+		PhysicsBodyDesc ThinWall;
+		ThinWall.Anchored = true;
+		ThinWall.Shape.Size = {0.1f, 4.0f, 4.0f};
+		ThinWall.Transform = CFrame(0.0f, 0.0f, 0.0f);
+
+		PhysicsWorld StaticWorld(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		const auto Wall = StaticWorld.CreateBody(ThinWall);
+		Check(Wall.IsValid(), "thin static obstacle is admitted");
+		for (int Attempt = 0; Attempt < 8; ++Attempt) {
+			const auto Ball = StaticWorld.CreateBody(Projectile);
+			Check(Ball.IsValid() && StaticWorld.SetLinearVelocity(Ball, {360.0f, 0.0f, 0.0f}).Succeeded(),
+				"high-speed projectile admits bounded velocity");
+			(void)StaticWorld.Step({});
+			auto State = StaticWorld.GetBodyState(Ball);
+			Check(State && State->Transform.Position.x < 0.5f,
+				"repeated high-speed ball crossing is stopped by a thin static wall");
+			Check(StaticWorld.DestroyBody(Ball).Succeeded(), "repeated projectile retires before the next pass");
+		}
+		Projectile.MovingBodyCCD = false;
+		const auto DefaultBall = StaticWorld.CreateBody(Projectile);
+		Check(DefaultBall.IsValid() && StaticWorld.SetLinearVelocity(DefaultBall, {360.0f, 0.0f, 0.0f}).Succeeded(),
+			"default body retains static CCD without the moving-body option");
+		(void)StaticWorld.Step({});
+		auto DefaultState = StaticWorld.GetBodyState(DefaultBall);
+		Check(DefaultState && DefaultState->Transform.Position.x < 0.5f,
+			"default dynamic body still receives pinned Box3D static CCD");
+
+		PhysicsWorld MovingWorld(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		ThinWall.Anchored = false;
+		const auto MovingTarget = MovingWorld.CreateBody(ThinWall);
+		Check(MovingTarget.IsValid() && MovingWorld.SetLinearVelocity(MovingTarget, {-2.0f, 0.0f, 0.0f}).Succeeded(),
+			"moving rigid obstacle is admitted");
+		Projectile.MovingBodyCCD = true;
+		const auto MovingBall = MovingWorld.CreateBody(Projectile);
+		Check(MovingBall.IsValid() && MovingWorld.SetLinearVelocity(MovingBall, {360.0f, 0.0f, 0.0f}).Succeeded(),
+			"moving-body CCD projectile is admitted");
+		(void)MovingWorld.Step({});
+		auto MovingState = MovingWorld.GetBodyState(MovingBall);
+		Check(MovingState && MovingState->Transform.Position.x < 1.0f,
+			"opt-in sweep catches a fast ball against a moving dynamic obstacle");
+		PhysicsWorld KinematicWorld(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		ThinWall.Kinematic = true;
+		const auto KinematicTarget = KinematicWorld.CreateBody(ThinWall);
+		const auto KinematicBall = KinematicWorld.CreateBody(Projectile);
+		Check(KinematicTarget.IsValid() && KinematicBall.IsValid() &&
+			KinematicWorld.SetLinearVelocity(KinematicTarget, {-2.0f, 0.0f, 0.0f}).Succeeded() &&
+			KinematicWorld.SetLinearVelocity(KinematicBall, {360.0f, 0.0f, 0.0f}).Succeeded(),
+			"moving kinematic obstacle and fast dynamic ball are admitted");
+		(void)KinematicWorld.Step({});
+		auto KinematicState = KinematicWorld.GetBodyState(KinematicBall);
+		Check(KinematicState && KinematicState->Transform.Position.x < 1.0f,
+			"opt-in sweep catches a fast ball against a moving kinematic obstacle");
+		Projectile.CanCollide = false;
+		Check(!MovingWorld.CreateBody(Projectile).IsValid(), "direct CCD sensor description rejects before native admission");
+		Projectile.CanCollide = true;
+		Projectile.Kinematic = true;
+		Check(!MovingWorld.CreateBody(Projectile).IsValid(), "direct kinematic CCD description rejects before native admission");
+		Projectile.Kinematic = false;
+		Projectile.Anchored = true;
+		Check(!MovingWorld.CreateBody(Projectile).IsValid(), "direct static CCD description rejects before native admission");
+
+		auto Positions = std::make_shared<const std::vector<glm::vec3>>(std::vector<glm::vec3>{
+			{0.0f, -2.0f, -2.0f}, {0.0f, -2.0f, 2.0f},
+			{0.0f, 2.0f, 2.0f}, {0.0f, 2.0f, -2.0f},
+		});
+		auto Indices = std::make_shared<const std::vector<std::uint32_t>>(
+			std::vector<std::uint32_t>{0, 1, 2, 0, 2, 3});
+		auto Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = "asset://ccd-wall", .ContentRevision = 1,
+			.Positions = Positions, .Indices = Indices,
+		});
+		PhysicsBodyDesc MeshWall;
+		MeshWall.Anchored = true;
+		MeshWall.Shape = {.Kind = PhysicsShapeKind::StaticTriangleMesh, .Size = {1.0f, 1.0f, 1.0f}, .Mesh = Mesh};
+		PhysicsWorld MeshWorld(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		const auto MeshBody = MeshWorld.CreateBody(MeshWall);
+		Projectile.Anchored = false;
+		const auto MeshBall = MeshWorld.CreateBody(Projectile);
+		Check(MeshBody.IsValid() && MeshBall.IsValid() &&
+			MeshWorld.SetLinearVelocity(MeshBall, {360.0f, 0.0f, 0.0f}).Succeeded(),
+			"static triangle mesh wall and fast ball are admitted");
+		(void)MeshWorld.Step({});
+		auto MeshState = MeshWorld.GetBodyState(MeshBall);
+		Check(MeshState && MeshState->Transform.Position.x < 0.5f,
+			"fast convex body uses static triangle mesh CCD target");
+	}
+
+	void TestWorldRootContinuousCollisionProjection() {
+		using namespace gargantuan;
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Wall = std::make_shared<Part>();
+		Wall->SetAnchored(true);
+		Wall->SetSize({0.1f, 4.0f, 4.0f});
+		Wall->SetParent(Workspace);
+		auto Ball = std::make_shared<Part>();
+		Ball->SetName("CCDBall");
+		Ball->SetShape(Enums::PartType::Ball);
+		Ball->SetSize({0.5f, 0.5f, 0.5f});
+		Ball->SetCFrame(CFrame(-3.0f, 0.0f, 0.0f));
+		Ball->SetMovingBodyCCD(true);
+		Ball->SetParent(Workspace);
+		const auto Id = WorldRootTestAccess::Body(*Workspace, *Ball);
+		auto State = WorldRootTestAccess::State(*Workspace, Id);
+		Check(State && State->Description.MovingBodyCCD,
+			"authored moving-body CCD reaches the neutral body without changing identity");
+		Ball->SetLinearVelocity({360.0f, 0.0f, 0.0f});
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(Ball->GetCFrame().Position.x < 0.5f, "CCD result publishes through WorldRoot CFrame motion");
+		if (auto Game = Workspace->GetDataModel()) {
+			ScriptEngine Engine(Game);
+			const auto Bytecode = Luau::compile(R"(
+				local Ball = game:GetService("Workspace").CCDBall
+				assert(Ball.MovingBodyCCD)
+				assert(Ball.Position.X < 0.5)
+			)");
+			const int Loaded = luau_load(Engine.L, "physics-ccd-observation", Bytecode.data(), Bytecode.size(), 0);
+			ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+			const int Status = Loaded == LUA_OK ? lua_pcall(Engine.L, 0, 0, 0) : Loaded;
+			if (Status != LUA_OK)
+				std::cerr << "[Physics:CCD] LUAU ERROR: " <<
+					(lua_tostring(Engine.L, -1) ? lua_tostring(Engine.L, -1) : "unknown") << '\n';
+			Check(Status == LUA_OK, "Luau observes persisted CCD policy and published projectile motion");
+		}
+		Ball->SetAnchored(true);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Id);
+		Check(State && !State->Description.MovingBodyCCD && Ball->GetMovingBodyCCD(),
+			"anchoring suppresses effective CCD while retaining authored policy");
+		Ball->SetAnchored(false);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Id);
+		Check(State && State->Description.MovingBodyCCD && WorldRootTestAccess::Body(*Workspace, *Ball) == Id,
+			"unanchoring restores CCD at a safe point without replacing body identity");
+		Ball->SetKinematic(true);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Id);
+		Check(State && !State->Description.MovingBodyCCD,
+			"kinematic transition suppresses the dynamic-only CCD request");
+		Ball->SetKinematic(false);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Id);
+		Check(State && State->Description.MovingBodyCCD,
+			"dynamic transition restores authored CCD request");
 	}
 
 	void TestTouchAndSensorUpdates() {
@@ -1765,6 +1921,8 @@ int main() {
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlPersistence();
+	TestContinuousCollisionPolicy();
+	TestWorldRootContinuousCollisionProjection();
 	TestTouchAndSensorUpdates();
 	TestStaticWorldStepReference();
 	TestSemanticRaycastContract();

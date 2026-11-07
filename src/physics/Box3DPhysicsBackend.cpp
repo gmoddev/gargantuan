@@ -97,6 +97,8 @@ namespace gargantuan {
 				Description.Shape.Size.x < 0.01f || Description.Shape.Size.y < 0.01f ||
 				Description.Shape.Size.z < 0.01f || !IsRigidRotation(Description.Transform))) return false;
 			return !(Description.Anchored && Description.Kinematic) &&
+				(!Description.MovingBodyCCD || (!Description.Anchored && !Description.Kinematic && Description.CanCollide &&
+					Description.Shape.Kind != PhysicsShapeKind::StaticTriangleMesh)) &&
 				Description.CollisionGroup <= MaximumPhysicsCollisionGroup &&
 				std::isfinite(Description.LinearDamping) && Description.LinearDamping >= 0.0f && Description.LinearDamping <= 100.0f &&
 				std::isfinite(Description.AngularDamping) && Description.AngularDamping >= 0.0f && Description.AngularDamping <= 100.0f &&
@@ -222,6 +224,7 @@ namespace gargantuan {
 				BodyDefinition.angularDamping = Description.AngularDamping;
 				BodyDefinition.gravityScale = Description.GravityScale;
 				BodyDefinition.enableSleep = Description.SleepEnabled;
+				BodyDefinition.isBullet = Description.MovingBodyCCD;
 				BodyDefinition.userData = Entry.Record.get();
 				Entry.Record->Body = b3CreateBody(World, &BodyDefinition);
 				if (!b3Body_IsValid(Entry.Record->Body)) {
@@ -301,6 +304,8 @@ namespace gargantuan {
 				if (Previous.Anchored != Description.Anchored || Previous.Kinematic != Description.Kinematic)
 					b3Body_SetType(Record->Body, Description.Anchored ? b3_staticBody :
 						Description.Kinematic ? b3_kinematicBody : b3_dynamicBody);
+				if (Previous.MovingBodyCCD != Description.MovingBodyCCD)
+					b3Body_SetBullet(Record->Body, Description.MovingBodyCCD);
 				if (Previous.CollisionGroup != Description.CollisionGroup || Previous.CollisionMask != Description.CollisionMask) {
 					const auto Filter = b3Filter{std::uint64_t{1} << Description.CollisionGroup, Description.CollisionMask, 0};
 					ForEachShape(*Record, [&](b3ShapeId Shape) { b3Shape_SetFilter(Shape, Filter, true); });

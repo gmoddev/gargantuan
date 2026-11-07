@@ -90,6 +90,9 @@ namespace gargantuan {
 		float AngularDamping = 0.0f;
 		float GravityScale = 1.0f;
 		bool SleepEnabled = true;
+		// Opt into swept collision against moving non-bullet rigid bodies.
+		// Static-body CCD remains a world policy independent of this flag.
+		bool MovingBodyCCD = false;
 	};
 
 	enum class PhysicsConstraintKind : std::uint8_t {

@@ -100,6 +100,14 @@ return c({
 			replicated = true,
 			category = "Behavior",
 		},
+		MovingBodyCCD = {
+			description = "Requests an additional swept collision check against moving non-CCD rigid bodies while this part is dynamic and solid.",
+			type = t.Bool,
+			unmodified = "false",
+			serializable = true,
+			replicated = true,
+			category = "Collision",
+		},
 		CFrame = {
 			description = "The world transform of this instance",
 			type = t.CFrame,
