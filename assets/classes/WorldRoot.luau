@@ -15,6 +15,21 @@ return c({
 	},
 
 	methods = {
+		GetDeformableInfo = {
+			description = "Returns bounded read-only counts and current simulation status for a descendant deformable body, or nil when unavailable.",
+			asLuau = true,
+			luauSignature = "(self: WorldRoot, Body: DeformableBody) -> { VertexCount: number, ConstraintCount: number, AttachmentCount: number, TopologyRevision: number, VertexRevision: number, Enabled: boolean, Simulated: boolean }?",
+		},
+		GetDeformableVertex = {
+			description = "Returns one zero-based world-space vertex position from the latest accepted state, or nil when unavailable or out of bounds.",
+			asLuau = true,
+			luauSignature = "(self: WorldRoot, Body: DeformableBody, VertexIndex: number) -> Vector3?",
+		},
+		GetSoftBodyStepInfo = {
+			description = "Returns bounded read-only counters from the last completed deformable fixed step for this world.",
+			asLuau = true,
+			luauSignature = "(self: WorldRoot) -> { SimulatedBodies: number, SimulatedVertices: number, JobsDispatched: number, ColliderQueries: number, CandidateColliders: number, FrozenBodies: number, BacklogDrops: number, StaleResults: number }?",
+		},
 		Raycast = {
 			description = "Casts a bounded rigid-physics ray whose Direction magnitude is its maximum distance.",
 			asLuau = true,

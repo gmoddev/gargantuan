@@ -168,6 +168,21 @@ namespace gargantuan {
 				   (Left.Kind == SoftBodyKind::Cloth || Left.ResolutionZ == Right.ResolutionZ);
 		}
 
+		[[nodiscard]] bool SameDefinitionExceptAttachments(
+			const SoftBodyDefinition &Left,
+			const SoftBodyDefinition &Right
+		) {
+			const auto &A = Left.Material;
+			const auto &B = Right.Material;
+			return SameTopology(Left, Right) && glm::all(glm::equal(Left.Position, Right.Position)) &&
+				   glm::all(glm::equal(Left.Size, Right.Size)) && Left.Quality == Right.Quality &&
+				   Left.CollisionMode == Right.CollisionMode && Left.Enabled == Right.Enabled &&
+				   A.ParticleMass == B.ParticleMass && A.Damping == B.Damping &&
+				   A.StretchCompliance == B.StretchCompliance && A.BendCompliance == B.BendCompliance &&
+				   A.ShapeCompliance == B.ShapeCompliance && A.VolumeCompliance == B.VolumeCompliance &&
+				   A.Friction == B.Friction && A.Thickness == B.Thickness;
+		}
+
 		void AddDistance(SoftBodyRecord &Record, std::uint32_t VertexA, std::uint32_t VertexB, float Compliance) {
 			const auto Delta = Record.Nodes[VertexB].Position - Record.Nodes[VertexA].Position;
 			Record.Distances.push_back({VertexA, VertexB, glm::length(Delta), Compliance, 0.0f});
@@ -902,6 +917,43 @@ namespace gargantuan {
 			}
 
 			PhysicsOperationResult UpdateBody(SoftBodyId Body, const SoftBodyDefinition &Definition) override {
+				{
+					std::scoped_lock Lock(Mutex);
+					auto *Slot = FindSlot(Body);
+					if (!Slot) return InvalidId("Soft-body ID is invalid or stale");
+					if (Slot->Record && SameDefinitionExceptAttachments(Slot->Definition, Definition)) {
+						if (Definition.Attachments.size() > Limits.MaximumAttachments)
+							return InvalidDescription("Soft-body attachment limit exceeded");
+						std::vector<bool> Attached(Slot->VertexCount, false);
+						for (const auto &Attachment : Definition.Attachments) {
+							if (Attachment.Vertex >= Slot->VertexCount || !IsFinite(Attachment.Position) ||
+								Attached[Attachment.Vertex])
+								return InvalidDescription("Soft-body attachment is invalid or duplicated");
+							Attached[Attachment.Vertex] = true;
+						}
+						auto &Record = *Slot->Record;
+						for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
+							auto &Node = Record.Nodes[Index];
+							if (!Attached[Index] && Node.InverseMass == 0.0f) {
+								Node.InverseMass = 1.0f / Definition.Material.ParticleMass;
+								Node.Velocity = {};
+							}
+						}
+						for (const auto &Attachment : Definition.Attachments) {
+							auto &Node = Record.Nodes[Attachment.Vertex];
+							Node.Position = Attachment.Position;
+							Node.PreviousPosition = Attachment.Position;
+							Node.Velocity = {};
+							Node.InverseMass = 0.0f;
+						}
+						Record.Definition.Attachments = Definition.Attachments;
+						++Record.VertexRevision;
+						++Slot->DefinitionRevision;
+						Slot->Definition.Attachments = Definition.Attachments;
+						Slot->LastState = ExtractState(Body, Record, false);
+						return {};
+					}
+				}
 				auto Replacement = ValidateAndBuild(Definition);
 				if (!Replacement) return InvalidDescription("Soft-body definition is invalid or exceeds a hard bound");
 				std::scoped_lock Lock(Mutex);
@@ -989,6 +1041,21 @@ namespace gargantuan {
 				return Slot ? std::optional(Slot->LastState) : std::nullopt;
 			}
 
+			[[nodiscard]] std::optional<SoftBodyInspection> GetBodyInspection(SoftBodyId Body) const override {
+				std::scoped_lock Lock(Mutex);
+				const auto *Slot = FindSlot(Body);
+				if (!Slot) return std::nullopt;
+				return SoftBodyInspection{
+					.VertexCount = Slot->VertexCount,
+					.ConstraintCount = Slot->ConstraintCount,
+					.AttachmentCount = Slot->Definition.Attachments.size(),
+					.TopologyRevision = Slot->LastState.TopologyRevision,
+					.VertexRevision = Slot->LastState.VertexRevision,
+					.Enabled = Slot->Definition.Enabled,
+					.Simulated = Slot->Definition.Enabled && Slot->LastState.Simulated,
+				};
+			}
+
 			[[nodiscard]] SoftBodyStepResult Step(const SoftBodyStepConfig &Config) override {
 				SoftBodyStepResult Result;
 				if (!IsFinite(Config.DeltaTime) || Config.DeltaTime <= 0.0f || Config.DeltaTime > 0.25f ||
@@ -1062,6 +1129,7 @@ namespace gargantuan {
 								Result.BodiesTruncated = Result.BodiesTruncated ||
 														 (Slot.Definition.Enabled && !BatchEligible);
 								++Result.Profile.FrozenBodies;
+								Slot.LastState.Simulated = false;
 								auto State = Slot.LastState;
 								State.Simulated = false;
 								Result.States.push_back(std::move(State));

@@ -697,6 +697,19 @@ namespace gargantuan {
 		return Found == DeformableStates.end() ? std::nullopt : std::optional(Found->second);
 	}
 
+	std::optional<SoftBodyInspection> WorldRoot::GetDeformableInspection(ObjectId Object) const {
+		auto Found = DeformableIds.find(Object);
+		return Found == DeformableIds.end() ? std::nullopt : Deformables.GetBodyInspection(Found->second);
+	}
+
+	std::optional<glm::vec3> WorldRoot::GetDeformableVertex(ObjectId Object, std::size_t VertexIndex) const {
+		auto Found = DeformableIds.find(Object);
+		if (Found == DeformableIds.end()) return std::nullopt;
+		auto State = Deformables.GetBodyState(Found->second);
+		if (!State || !State->Positions || VertexIndex >= State->Positions->size()) return std::nullopt;
+		return (*State->Positions)[VertexIndex];
+	}
+
 	WorldRoot::WorldRoot() : Physics(PhysicsWorldConfig{.Gravity = {0.0f, -Gravity, 0.0f}}) {
 		GravityConnection = GetPropertyChangedSignal("Gravity")->Connect([this](std::monostate) {
 			if (!ShuttingDownPhysics) GravityDirty = true;
@@ -877,6 +890,87 @@ namespace gargantuan {
 		lua_setfield(L, -2, "Normal");
 		lua_pushnumber(L, Result.Distance);
 		lua_setfield(L, -2, "Distance");
+		lua_setreadonly(L, -1, true);
+		return 1;
+	}
+
+	int WorldRoot::GetDeformableInfo(lua_State *L, Instance *InstanceValue) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Deformable inspection requires ReadDataModel");
+		auto *World = dynamic_cast<WorldRoot *>(InstanceValue);
+		auto Body = StackValue<std::shared_ptr<Instance>>::Is(L, 2)
+			? std::dynamic_pointer_cast<DeformableBody>(StackValue<std::shared_ptr<Instance>>::From(L, 2))
+			: nullptr;
+		if (!World || World->GetDestroyed() || World->IsDestroying() || !Body || Body->GetDestroyed() ||
+			Body->IsDestroying() || Body->FindFirstAncestorWhichIsA("WorldRoot").get() != World) {
+			lua_pushnil(L);
+			return 1;
+		}
+		auto Info = World->GetDeformableInspection(Body->GetObjectId());
+		if (!Info) {
+			lua_pushnil(L);
+			return 1;
+		}
+		lua_createtable(L, 0, 7);
+		auto SetCount = [L](const char *Name, std::size_t Count) {
+			lua_pushnumber(L, static_cast<lua_Number>(Count));
+			lua_setfield(L, -2, Name);
+		};
+		SetCount("VertexCount", Info->VertexCount);
+		SetCount("ConstraintCount", Info->ConstraintCount);
+		SetCount("AttachmentCount", Info->AttachmentCount);
+		SetCount("TopologyRevision", Info->TopologyRevision);
+		SetCount("VertexRevision", Info->VertexRevision);
+		lua_pushboolean(L, Info->Enabled);
+		lua_setfield(L, -2, "Enabled");
+		lua_pushboolean(L, Info->Simulated);
+		lua_setfield(L, -2, "Simulated");
+		lua_setreadonly(L, -1, true);
+		return 1;
+	}
+
+	int WorldRoot::GetDeformableVertex(lua_State *L, Instance *InstanceValue) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Deformable inspection requires ReadDataModel");
+		auto *World = dynamic_cast<WorldRoot *>(InstanceValue);
+		auto Body = StackValue<std::shared_ptr<Instance>>::Is(L, 2)
+			? std::dynamic_pointer_cast<DeformableBody>(StackValue<std::shared_ptr<Instance>>::From(L, 2))
+			: nullptr;
+		const auto Index = lua_isnumber(L, 3) ? lua_tonumber(L, 3) : -1.0;
+		if (!World || World->GetDestroyed() || World->IsDestroying() || !Body || Body->GetDestroyed() ||
+			Body->IsDestroying() || !std::isfinite(Index) || Index < 0 || Index >= MaximumSoftBodyVertices ||
+			std::trunc(Index) != Index || Body->FindFirstAncestorWhichIsA("WorldRoot").get() != World) {
+			lua_pushnil(L);
+			return 1;
+		}
+		auto Position = World->GetDeformableVertex(Body->GetObjectId(), static_cast<std::size_t>(Index));
+		if (!Position) lua_pushnil(L);
+		else StackValue<glm::vec3>::Push(L, *Position);
+		return 1;
+	}
+
+	int WorldRoot::GetSoftBodyStepInfo(lua_State *L, Instance *InstanceValue) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Deformable inspection requires ReadDataModel");
+		auto *World = dynamic_cast<WorldRoot *>(InstanceValue);
+		if (!World || World->GetDestroyed() || World->IsDestroying()) {
+			lua_pushnil(L);
+			return 1;
+		}
+		const auto &Profile = World->GetLastSoftBodyProfile();
+		lua_createtable(L, 0, 8);
+		auto SetCount = [L](const char *Name, std::size_t Count) {
+			lua_pushnumber(L, static_cast<lua_Number>(Count));
+			lua_setfield(L, -2, Name);
+		};
+		SetCount("SimulatedBodies", Profile.SimulatedBodies);
+		SetCount("SimulatedVertices", Profile.SimulatedVertices);
+		SetCount("JobsDispatched", Profile.JobsDispatched);
+		SetCount("ColliderQueries", Profile.ColliderQueries);
+		SetCount("CandidateColliders", Profile.CandidateColliders);
+		SetCount("FrozenBodies", Profile.FrozenBodies);
+		SetCount("BacklogDrops", Profile.BacklogDrops);
+		SetCount("StaleResults", Profile.StaleResults);
 		lua_setreadonly(L, -1, true);
 		return 1;
 	}

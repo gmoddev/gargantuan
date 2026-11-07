@@ -89,6 +89,8 @@ namespace gargantuan {
 		[[nodiscard]] WorldRaycastResult
 		ResolveRaycast(glm::vec3 Origin, glm::vec3 Direction, const RaycastParams &Params = {});
 		[[nodiscard]] std::optional<SoftBodyState> GetDeformableState(ObjectId Object) const;
+		[[nodiscard]] std::optional<SoftBodyInspection> GetDeformableInspection(ObjectId Object) const;
+		[[nodiscard]] std::optional<glm::vec3> GetDeformableVertex(ObjectId Object, std::size_t VertexIndex) const;
 		[[nodiscard]] const SoftBodyStepProfile &GetLastSoftBodyProfile() const { return LastSoftBodyProfile; }
 
 	  private:

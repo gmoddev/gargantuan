@@ -2,6 +2,7 @@
 #include "gargantuan/classes/Cloth.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/RubberBody.hpp"
 #include "gargantuan/classes/SoftBodyAttachment.hpp"
 #include "gargantuan/classes/SoftBodyMaterial.hpp"
@@ -157,6 +158,77 @@ namespace {
 			{X - 1, {4.0f, 12.0f, 0.0f}},
 		};
 		return Definition;
+	}
+
+	void TestMovingAttachmentAndBoundedInspection() {
+		using namespace gargantuan;
+		SoftBodyWorld World;
+		auto Definition = ClothDefinition();
+		const auto Body = World.CreateBody(Definition);
+		Check(Body.IsValid(), "moving-attachment fixture creates a cloth body");
+		for (int Step = 0; Step < 12; ++Step)
+			(void)World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -196.2f, 0.0f}});
+		auto Before = World.GetBodyState(Body);
+		Check(Before && Before->Positions && Before->Positions->size() == 64,
+			"moving-attachment fixture retains accepted cloth vertices");
+		if (!Before || !Before->Positions) return;
+		const auto Center = (*Before->Positions)[36];
+		Definition.Attachments[0].Position.y += 2.0f;
+		Check(World.UpdateBody(Body, Definition).Succeeded(), "moving an existing pin is accepted");
+		auto After = World.GetBodyState(Body);
+		Check(After && After->Positions && Distance((*After->Positions)[36], Center) < 0.0001f,
+			"moving a pin preserves the deformation of unpinned vertices");
+		Check(After && After->TopologyRevision == Before->TopologyRevision &&
+			After->VertexRevision > Before->VertexRevision &&
+			Near((*After->Positions)[0].y, Definition.Attachments[0].Position.y),
+			"pin movement changes only vertex state and keeps stable topology");
+		auto Info = World.GetBodyInspection(Body);
+		Check(Info && Info->VertexCount == 64 && Info->ConstraintCount > 0 && Info->AttachmentCount == 2 &&
+			Info->Enabled && Info->TopologyRevision == After->TopologyRevision,
+			"read-only inspection returns bounded counts and revisions");
+		auto Invalid = Definition;
+		Invalid.Attachments.push_back(Invalid.Attachments.front());
+		Check(World.UpdateBody(Body, Invalid).Status == PhysicsOperationStatus::InvalidDescription &&
+			World.GetBodyState(Body)->VertexRevision == After->VertexRevision,
+			"duplicate pin update rejects atomically");
+		Invalid = Definition;
+		Invalid.Attachments[0].Position.x = std::numeric_limits<float>::infinity();
+		Check(World.UpdateBody(Body, Invalid).Status == PhysicsOperationStatus::InvalidDescription &&
+			World.GetBodyState(Body)->VertexRevision == After->VertexRevision,
+			"non-finite pin update rejects atomically");
+		Definition.Attachments.erase(Definition.Attachments.begin());
+		Check(World.UpdateBody(Body, Definition).Succeeded() && World.GetBodyInspection(Body)->AttachmentCount == 1,
+			"removing a pin releases it without rebuilding the cloth");
+		(void)World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -196.2f, 0.0f}});
+		Check(World.DestroyBody(Body).Succeeded() && !World.GetBodyInspection(Body),
+			"destroy invalidates bounded inspection");
+	}
+
+	void TestMovingRigidColliderThroughWorldRoot() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		World->SetGravity(0.0f);
+		auto ClothBody = std::make_shared<Cloth>();
+		ClothBody->SetResolutionX(8);
+		ClothBody->SetResolutionY(8);
+		ClothBody->SetPosition({0.0f, 5.0f, 0.0f});
+		ClothBody->SetSize({2.0f, 2.0f, 0.5f});
+		ClothBody->SetParent(World);
+		auto Collider = std::make_shared<Part>();
+		Collider->SetAnchored(true);
+		Collider->SetSize({1.0f, 4.0f, 1.0f});
+		Collider->SetCFrame(CFrame(0.0f, 5.0f, 2.0f));
+		Collider->SetParent(World);
+		World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+		const auto Before = World->GetDeformableVertex(ClothBody->GetObjectId(), 27);
+		Collider->SetCFrame(CFrame(0.0f, 5.0f, 0.3f));
+		World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+		const auto After = World->GetDeformableVertex(ClothBody->GetObjectId(), 27);
+		Check(Before && After && std::isfinite(After->z) && Distance(*Before, *After) > 0.05f &&
+			World->GetLastSoftBodyProfile().CandidateColliders > 0,
+			"WorldRoot feeds a moved rigid primitive to the cloth contact step");
+		Game->Destroy();
 	}
 
 	void TestIdentityBoundsAndDeterminism() {
@@ -361,6 +433,8 @@ namespace {
 				!TierResult.States.front().Simulated,
 			"low quality freezes topology that cannot fit its hard active-vertex budget"
 		);
+		Check(TierWorld.GetBodyInspection(TierBody) && !TierWorld.GetBodyInspection(TierBody)->Simulated,
+			"read-only status reports a body frozen by the quality budget");
 	}
 
 	void TestJobifiedDeterminismAndLifecycle() {
@@ -389,6 +463,22 @@ namespace {
 			*Jobified.GetBodyState(JobifiedBody)->Positions == *Reference.GetBodyState(ReferenceBody)->Positions,
 			"jobified same-body solve is byte-equivalent to the synchronous reference"
 		);
+
+		HeldSoftBodyStep MovingPin;
+		auto MovingDefinition = ClothDefinition(16, 16);
+		const auto MovingBody = MovingPin.World.CreateBody(MovingDefinition);
+		MovingPin.Start();
+		if (!AwaitMerge(MovingPin, 16 * 16)) return;
+		MovingDefinition.Attachments[0].Position.y += 1.0f;
+		Check(MovingPin.World.UpdateBody(MovingBody, MovingDefinition).Succeeded(),
+			"attachment update during an in-flight solve installs a newer definition");
+		const auto NewerRevision = MovingPin.World.GetBodyState(MovingBody)->VertexRevision;
+		MovingPin.Finish();
+		Check(MovingPin.Result.Profile.StaleResults == 1 &&
+			MovingPin.World.GetBodyState(MovingBody)->VertexRevision == NewerRevision &&
+			Near((*MovingPin.World.GetBodyState(MovingBody)->Positions)[0].y,
+				MovingDefinition.Attachments[0].Position.y),
+			"stale worker completion cannot overwrite the new attachment target");
 
 		SoftBodyWorld Multiple;
 		const auto First = Multiple.CreateBody(ClothDefinition(8, 8));
@@ -859,6 +949,20 @@ namespace {
 		Check(
 			RuntimeState && RuntimeState->Positions->size() == 64, "WorldRoot owns post-step semantic deformation state"
 		);
+		const auto RuntimeInfo = WorkspaceValue->GetDeformableInspection(Body->GetObjectId());
+		Check(RuntimeInfo && RuntimeInfo->VertexCount == 64 && RuntimeInfo->AttachmentCount == 2 &&
+			WorkspaceValue->GetDeformableVertex(Body->GetObjectId(), 64) == std::nullopt &&
+			WorkspaceValue->GetDeformableVertex(Body->GetObjectId(), 0).has_value(),
+			"WorldRoot exposes one bounded vertex and read-only body counts");
+		for (int Step = 0; Step < 8; ++Step)
+			WorkspaceValue->StepPhysics(SoftBodyStepInterval, std::nullopt);
+		const auto BeforePinMove = WorkspaceValue->GetDeformableVertex(Body->GetObjectId(), 36);
+		LeftPin->SetPosition({-4.0f, 14.0f, 0.0f});
+		WorkspaceValue->StepPhysics(0.0, std::nullopt);
+		const auto AfterPinMove = WorkspaceValue->GetDeformableVertex(Body->GetObjectId(), 36);
+		Check(BeforePinMove && AfterPinMove && Distance(*BeforePinMove, *AfterPinMove) < 0.0001f &&
+			Near(WorkspaceValue->GetDeformableVertex(Body->GetObjectId(), 0)->y, 14.0f),
+			"reflected attachment Position update moves its target without resetting cloth motion");
 
 		RenderPublisher Publisher;
 		RenderProjection Projection;
@@ -1014,6 +1118,8 @@ int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestIdentityBoundsAndDeterminism();
+		TestMovingAttachmentAndBoundedInspection();
+		TestMovingRigidColliderThroughWorldRoot();
 		TestPinnedClothAndRigidCollision();
 		TestRubberRecoveryAndQualityTier();
 		TestJobifiedDeterminismAndLifecycle();

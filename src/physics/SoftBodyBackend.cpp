@@ -57,6 +57,9 @@ namespace gargantuan {
 	std::optional<SoftBodyState> SoftBodyWorld::GetBodyState(SoftBodyId Body) const {
 		return Backend ? Backend->GetBodyState(Body) : std::nullopt;
 	}
+	std::optional<SoftBodyInspection> SoftBodyWorld::GetBodyInspection(SoftBodyId Body) const {
+		return Backend ? Backend->GetBodyInspection(Body) : std::nullopt;
+	}
 	SoftBodyStepResult SoftBodyWorld::Step(const SoftBodyStepConfig &Config) {
 		return Backend ? Backend->Step(Config) : SoftBodyStepResult{};
 	}
