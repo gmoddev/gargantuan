@@ -881,18 +881,22 @@ namespace gargantuan {
 		PhysicsQueryFilter Filter;
 		if (auto Prepared = BuildRaycastFilter(Params, Filter); !Prepared.Succeeded())
 			return {.Status = Prepared.Status, .Message = std::move(Prepared.Message)};
-		auto Fail = [this](PhysicsOperationStatus Status, std::string Message) {
-			if (Status == PhysicsOperationStatus::BackendFailure && !RaycastFailureLogged) {
-				RaycastFailureLogged = true;
-				LOG_ERROR(App, "[Physics:Query] Raycast failed: %s", Message.c_str());
-			}
-			return WorldRaycastResult{.Status = Status, .Message = std::move(Message)};
-		};
 		auto BackendResult = Physics.Raycast({
 			.Origin = Origin,
 			.Direction = Direction,
 			.Filter = std::move(Filter),
 		});
+		return ResolveQueryHit(std::move(BackendResult));
+	}
+
+	WorldRaycastResult WorldRoot::ResolveQueryHit(PhysicsRaycastResult BackendResult) {
+		auto Fail = [this](PhysicsOperationStatus Status, std::string Message) {
+			if (Status == PhysicsOperationStatus::BackendFailure && !RaycastFailureLogged) {
+				RaycastFailureLogged = true;
+				LOG_ERROR(App, "[Physics:Query] Cast failed: %s", Message.c_str());
+			}
+			return WorldRaycastResult{.Status = Status, .Message = std::move(Message)};
+		};
 		if (!BackendResult.Succeeded()) return Fail(BackendResult.Status, std::move(BackendResult.Message));
 		if (!BackendResult.HasHit()) return {};
 		const float NearestDistance = BackendResult.Candidates.front().Distance;

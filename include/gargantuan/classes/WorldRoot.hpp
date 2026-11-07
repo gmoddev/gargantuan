@@ -88,12 +88,23 @@ namespace gargantuan {
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
 		[[nodiscard]] WorldRaycastResult
 		ResolveRaycast(glm::vec3 Origin, glm::vec3 Direction, const RaycastParams &Params = {});
+		[[nodiscard]] WorldRaycastResult ResolveShapeCast(const PhysicsQueryShape &Shape, glm::vec3 Direction, const RaycastParams &Params = {});
+		struct OverlapResult {
+			PhysicsOperationStatus Status = PhysicsOperationStatus::Success;
+			std::string Message;
+			std::vector<std::shared_ptr<BasePart>> Parts;
+			bool Truncated = false;
+			[[nodiscard]] bool Succeeded() const { return Status == PhysicsOperationStatus::Success; }
+		};
+		[[nodiscard]] OverlapResult ResolveOverlap(const PhysicsQueryShape &Shape, const RaycastParams &Params = {}, std::size_t MaxResults = MaximumPhysicsOverlapResults);
 		[[nodiscard]] std::optional<SoftBodyState> GetDeformableState(ObjectId Object) const;
 		[[nodiscard]] std::optional<SoftBodyInspection> GetDeformableInspection(ObjectId Object) const;
 		[[nodiscard]] std::optional<glm::vec3> GetDeformableVertex(ObjectId Object, std::size_t VertexIndex) const;
 		[[nodiscard]] const SoftBodyStepProfile &GetLastSoftBodyProfile() const { return LastSoftBodyProfile; }
 
 	  private:
+		[[nodiscard]] WorldRaycastResult ResolveQueryHit(PhysicsRaycastResult Result);
+		static int RunShapeQuery(lua_State *L, Instance *Value, PhysicsQueryShapeKind Kind, bool IsOverlap);
 		friend struct WorldRootTestAccess;
 		[[nodiscard]] PhysicsBodyDesc DescribePart(const BasePart &Part);
 		[[nodiscard]] SoftBodyDefinition DescribeDeformable(DeformableBody &Body) const;

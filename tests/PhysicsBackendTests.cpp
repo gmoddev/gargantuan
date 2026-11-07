@@ -1531,6 +1531,59 @@ namespace {
 	}
 }
 
+namespace {
+	void TestAdvancedWorldQueries() {
+		using namespace gargantuan;
+		auto Game=std::make_shared<DataModel>();
+		auto World=std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto First=MakeRayPart(World,"QueryFirst",{5,0,0});
+		auto Second=MakeRayPart(World,"QuerySecond",{5,0,0});
+		for (auto Kind:{PhysicsQueryShapeKind::Sphere,PhysicsQueryShapeKind::Capsule,PhysicsQueryShapeKind::Box}) {
+			PhysicsQueryShape Shape;
+			Shape.Kind=Kind;
+			Shape.Radius=.5f; Shape.Height=2; Shape.Size={1,2,1};
+			auto Hit=World->ResolveShapeCast(Shape,{10,0,0});
+			auto Expected=First->GetObjectId()<Second->GetObjectId()?First:Second;
+			Check(Hit.Succeeded() && Hit.Instance==Expected && std::abs(Hit.Distance-3.5f)<.05f && std::abs(glm::length(Hit.Normal)-1)<.001f,"sphere/capsule/box casts return semantic nearest stable hit and unit normal");
+			Shape.Transform=CFrame(glm::vec3(5,0,0));
+			auto Overlap=World->ResolveOverlap(Shape,{},1);
+			Check(Overlap.Succeeded() && Overlap.Parts.size()==1 && Overlap.Parts.front()==Expected && Overlap.Truncated,"overlap sorts semantic identities before explicit deterministic truncation");
+			RaycastParams Params;
+			Params.FilterType=Enums::RaycastFilterType::Include;
+			Params.FilterDescendantsInstances.Values={Second};
+			auto Included=World->ResolveOverlap(Shape,Params);
+			Check(Included.Succeeded() && Included.Parts.size()==1 && Included.Parts.front()==Second,"advanced query honors descendant inclusion");
+			Params.CollisionMask=0;
+			Check(World->ResolveOverlap(Shape,Params).Parts.empty(),"advanced query honors native and neutral collision masks");
+			Check(!World->ResolveOverlap(Shape,{},0).Succeeded(),"overlap rejects zero result limit");
+			Shape.Radius=-1; Shape.Size={-1,1,1};
+			Check(!World->ResolveShapeCast(Shape,{10,0,0}).Succeeded(),"invalid query shape fails before native dispatch");
+		}
+		ScriptEngine Engine(Game);
+		const auto Bytecode=Luau::compile(R"(
+			local W=game:GetService("Workspace")
+			assert(W:SphereCast(Vector3.zero,.5,Vector3.new(10,0,0)).Distance>3)
+			assert(W:CapsuleCast(CFrame.new(),.5,2,Vector3.new(10,0,0)).Instance)
+			assert(W:BoxCast(CFrame.new(),Vector3.new(1,2,1),Vector3.new(10,0,0)).Instance)
+			for _, R in { W:GetPartsInSphere(Vector3.new(5,0,0),1,nil,1), W:GetPartsInCapsule(CFrame.new(5,0,0),.5,2,nil,1), W:GetPartsInBox(CFrame.new(5,0,0),Vector3.new(2,2,2),nil,1) } do
+				assert(#R.Parts==1 and R.Truncated)
+				assert(not pcall(function() R.Truncated=false end))
+				assert(not pcall(function() R.Parts[1]=nil end))
+			end
+			assert(not pcall(function() W:GetPartsInSphere(Vector3.zero,1,nil,257) end))
+			assert(not pcall(function() W:SphereCast(Vector3.zero,-1,Vector3.new(10,0,0)) end))
+		)");
+		const int Loaded=luau_load(Engine.L,"advanced-physics-queries",Bytecode.data(),Bytecode.size(),0);
+		ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+		const int Status=Loaded==LUA_OK?lua_pcall(Engine.L,0,0,0):Loaded;
+		if (Status!=LUA_OK) std::cerr << "[Physics:Query] " << lua_tostring(Engine.L,-1) << '\n';
+		Check(Status==LUA_OK,"Luau authored advanced queries expose bounded immutable results");
+		First->Destroy(); Second->Destroy();
+		PhysicsQueryShape Shape; Shape.Transform=CFrame(glm::vec3(5,0,0));
+		Check(World->ResolveOverlap(Shape).Parts.empty(),"destroyed query owners retire at safe point");
+	}
+}
+
 int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
@@ -1544,6 +1597,7 @@ int main() {
 		return Failures == 0 ? 0 : 1;
 	}
 	TestNeutralContract();
+	TestAdvancedWorldQueries();
 	TestBackendIdentityAndLifecycle();
 	TestAdvancedConstraintBackend();
 	TestStaticTriangleMeshBackend();

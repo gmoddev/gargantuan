@@ -97,6 +97,12 @@ namespace gargantuan {
 							 .Message = "Physics backend is unavailable",
 						 };
 	}
+	PhysicsRaycastResult PhysicsWorld::ShapeCast(const PhysicsShapeCastRequest &Request) const {
+		return Backend ? Backend->ShapeCast(Request) : PhysicsRaycastResult{.Status = PhysicsOperationStatus::BackendFailure, .Message = "Physics backend unavailable"};
+	}
+	PhysicsOverlapResult PhysicsWorld::Overlap(const PhysicsOverlapRequest &Request) const {
+		return Backend ? Backend->Overlap(Request) : PhysicsOverlapResult{.Status = PhysicsOperationStatus::BackendFailure, .Message = "Physics backend unavailable"};
+	}
 	PhysicsStepResult PhysicsWorld::Step(const PhysicsStepConfig &Config) {
 		return Backend ? Backend->Step(Config) : PhysicsStepResult{};
 	}

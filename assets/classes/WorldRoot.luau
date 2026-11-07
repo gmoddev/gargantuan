@@ -15,6 +15,30 @@ return c({
 	},
 
 	methods = {
+		SphereCast = {
+			description = "Sweeps a sphere; Direction magnitude is distance. Initial overlaps are ignored.", asLuau = true,
+			luauSignature = "(self: WorldRoot, Origin: Vector3, Radius: number, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart, Position: Vector3, Normal: Vector3, Distance: number }?",
+		},
+		CapsuleCast = {
+			description = "Sweeps a capsule along Direction. Height includes both caps; the local axis is Y.", asLuau = true,
+			luauSignature = "(self: WorldRoot, Transform: CFrame, Radius: number, Height: number, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart, Position: Vector3, Normal: Vector3, Distance: number }?",
+		},
+		BoxCast = {
+			description = "Sweeps an oriented box along Direction.", asLuau = true,
+			luauSignature = "(self: WorldRoot, Transform: CFrame, Size: Vector3, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart, Position: Vector3, Normal: Vector3, Distance: number }?",
+		},
+		GetPartsInSphere = {
+			description = "Returns collidable overlapping parts in stable identity order with explicit truncation; MaxResults is 1 through 256.", asLuau = true,
+			luauSignature = "(self: WorldRoot, Origin: Vector3, Radius: number, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean }",
+		},
+		GetPartsInCapsule = {
+			description = "Returns overlaps for a local-Y capsule; Height includes both caps.", asLuau = true,
+			luauSignature = "(self: WorldRoot, Transform: CFrame, Radius: number, Height: number, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean }",
+		},
+		GetPartsInBox = {
+			description = "Returns overlaps for an oriented box, with bounded immutable results.", asLuau = true,
+			luauSignature = "(self: WorldRoot, Transform: CFrame, Size: Vector3, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean }",
+		},
 		GetDeformableInfo = {
 			description = "Returns bounded read-only counts and current simulation status for a descendant deformable body, or nil when unavailable.",
 			asLuau = true,

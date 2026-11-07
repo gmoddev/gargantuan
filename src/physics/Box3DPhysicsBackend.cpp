@@ -874,6 +874,8 @@ namespace gargantuan {
 				return Result;
 			}
 
+#include "Box3DAdvancedQueries.inl"
+
 			[[nodiscard]] PhysicsStepResult Step(const PhysicsStepConfig &Config) override {
 				PhysicsStepResult Result;
 				Result.EventsTruncated = ContactTrackingOverflow;

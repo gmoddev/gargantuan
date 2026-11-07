@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gargantuan/physics/PhysicsTypes.hpp"
+#include "gargantuan/physics/PhysicsQueryTypes.hpp"
 
 #include <memory>
 #include <optional>
@@ -32,6 +32,8 @@ namespace gargantuan {
 		[[nodiscard]] virtual PhysicsKinematicMotionResult
 		MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const = 0;
 		[[nodiscard]] virtual PhysicsRaycastResult Raycast(const PhysicsRaycastRequest &Request) const = 0;
+		[[nodiscard]] virtual PhysicsRaycastResult ShapeCast(const PhysicsShapeCastRequest &) const { return {.Status = PhysicsOperationStatus::BackendFailure, .Message = "Shape casts are unsupported"}; }
+		[[nodiscard]] virtual PhysicsOverlapResult Overlap(const PhysicsOverlapRequest &) const { return {.Status = PhysicsOperationStatus::BackendFailure, .Message = "Overlaps are unsupported"}; }
 		[[nodiscard]] virtual PhysicsStepResult Step(const PhysicsStepConfig &Config) = 0;
 	};
 
@@ -70,6 +72,8 @@ namespace gargantuan {
 		[[nodiscard]] PhysicsKinematicMotionResult
 		MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const;
 		[[nodiscard]] PhysicsRaycastResult Raycast(const PhysicsRaycastRequest &Request) const;
+		[[nodiscard]] PhysicsRaycastResult ShapeCast(const PhysicsShapeCastRequest &Request) const;
+		[[nodiscard]] PhysicsOverlapResult Overlap(const PhysicsOverlapRequest &Request) const;
 		[[nodiscard]] PhysicsStepResult Step(const PhysicsStepConfig &Config);
 
 	  private:
