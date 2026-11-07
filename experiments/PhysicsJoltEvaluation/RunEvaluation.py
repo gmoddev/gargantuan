@@ -31,11 +31,34 @@ def SourcePatch(Root):
     return subprocess.check_output(["git", "-C", str(Root), "diff", "--binary", "HEAD", "--ignore-submodules=all"], text=True)
 
 
+def VerifyVendors(Root, Proof):
+    if Proof:
+        Data = json.loads(Proof.read_text())
+        if not Data.get('AllVerified') or Data.get('Main') != '5b6782e35c4e24fd80bc8d5526104c615c72d84d':
+            raise RuntimeError('[Physics:Evaluation] Exported vendor proof rejected')
+        for Export in Data['Exports']:
+            if '__' not in Export['Archive']:
+                Name = Export['Archive'].removesuffix('.tar')
+                if Export['Commit'] not in Git(Root, 'ls-tree', 'HEAD', 'vendor/' + Name):
+                    raise RuntimeError('[Physics:Evaluation] Export proof does not match committed vendor pin')
+        return {'Mode':'VerifiedArchiveExports','Proof':str(Proof),'ProofSha256':Hash(Proof),
+                'SourceFilesFingerprint':Data['SourceFilesFingerprint']}
+    Status = Git(Root, 'submodule', 'status', '--recursive')
+    if not Status: raise RuntimeError('[Physics:Evaluation] No recursive vendor provenance')
+    for Line in Status.splitlines():
+        if Line[0] in '-+U': raise RuntimeError('[Physics:Evaluation] Vendor pin mismatch: ' + Line)
+        Relative = Line[1:].split()[1]
+        if Git(Root / Relative, 'status', '--porcelain', '--untracked-files=normal'):
+            raise RuntimeError('[Physics:Evaluation] Dirty vendor checkout: ' + Relative)
+    return {'Mode':'CleanRecursiveGitSubmodules','Status':Status}
+
+
 def Main():
     Parser = argparse.ArgumentParser()
     Parser.add_argument("--build", type=pathlib.Path, required=True)
     Parser.add_argument("--jolt", type=pathlib.Path, required=True)
     Parser.add_argument("--output", type=pathlib.Path, required=True)
+    Parser.add_argument("--vendor-proof", type=pathlib.Path)
     Parser.add_argument("--mode", choices=["diagnostic", "full", "allocations"], default="full")
     Parser.add_argument("--repeats", type=int, default=3)
     Arguments = Parser.parse_args()
@@ -50,6 +73,7 @@ def Main():
         raise RuntimeError("[Physics:Evaluation] Jolt source pin/cleanliness changed")
     Mainline = "5b6782e35c4e24fd80bc8d5526104c615c72d84d"
     subprocess.run(["git", "-C", str(Root), "merge-base", "--is-ancestor", Mainline, Source], check=True)
+    VendorProof = VerifyVendors(Root, Arguments.vendor_proof)
     Changed = Git(Root, "diff", "--name-only", "HEAD", "--ignore-submodules=all").splitlines()
     GeneratedPrefixes = ("src/classes/generated/", "src/services/generated/", "include/gargantuan/classes/generated/", "include/gargantuan/services/generated/")
     Unexpected = [Name for Name in Changed if not Name.startswith(GeneratedPrefixes)]
@@ -59,10 +83,12 @@ def Main():
     (Output / "GeneratedSource.patch").write_text(SourceDiff, encoding="utf-8", newline="\n")
     InputFiles = {Root / "CMakeLists.txt"}
     InputFiles.add(Root / "tools/classgen.luau")
-    for Directory in ["src", "include", "cmake", "assets/classes", "assets/services", "tools/classgen", "experiments/PhysicsJoltEvaluation"]:
+    for Directory in ["src", "include", "cmake", "vendor", "assets/classes", "assets/services", "tools/classgen", "experiments/PhysicsJoltEvaluation"]:
         InputFiles.update(Path for Path in (Root / Directory).rglob("*")
-                          if Path.is_file() and "__pycache__" not in Path.parts)
+                          if Path.is_file() and not Path.is_symlink() and not any(Part in Path.parts for Part in ['__pycache__','.git','Xcode']))
     Inputs = {str(Path.relative_to(Root)).replace("\\", "/"): Hash(Path) for Path in sorted(InputFiles)}
+    InputManifest = Output / 'InputSha256.json'
+    InputManifest.write_text(json.dumps(Inputs,sort_keys=True,indent=2),encoding='utf-8')
     Metadata = {"Source": Source, "Tree": Git(Root, "rev-parse", "HEAD^{tree}"),
                 "MergedMain": Mainline, "Jolt": JoltSource,
                 "SourceStatus": Git(Root, "status", "--porcelain", "--untracked-files=no"),
@@ -71,10 +97,11 @@ def Main():
                 "Processor": platform.processor(), "LogicalCpuCount": os.cpu_count(),
                 "Affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
                 "StartedUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "Mode": Arguments.mode, "InputSha256": Inputs, "Binaries": {}, "Runs": []}
+                "Mode": Arguments.mode, "InputManifest":InputManifest.name,"InputManifestSha256":Hash(InputManifest),
+                "InputFileCount":len(Inputs),"VendorProof":VendorProof,"Binaries": {}, "Runs": []}
     Metadata["FullTrackedDiffSha256"] = hashlib.sha256(SourceDiff.encode("utf-8")).hexdigest()
     Metadata["VendorGitlinks"] = Git(Root, "ls-tree", "HEAD", "vendor/")
-    Metadata["InputHashScope"] = "Production src/include/cmake, class/service definitions, classgen, root CMake and experiment files; generated tracked differences captured separately; vendor/Jolt pin and build provenance recorded separately"
+    Metadata["InputHashScope"] = "Production src/include/cmake/vendor regular files, class/service definitions, classgen, root CMake and experiment; excludes Git metadata, symlinks and unused Mac Xcode files. Generated tracked differences captured separately; vendor pin/export proof and clean Jolt provenance checked separately"
     for Name in ["/proc/cpuinfo", "/sys/fs/cgroup/cpu.max", "/sys/fs/cgroup/memory.max"]:
         Path = pathlib.Path(Name)
         if Path.is_file():
@@ -184,8 +211,9 @@ def Main():
     Metadata["ExperimentInputsUnchanged"] = all((Root / Name).is_file() and Hash(Root / Name) == Digest for Name, Digest in Inputs.items())
     Metadata["BinariesUnchanged"] = all(Hash(Executables[Kind]) == Value["Sha256"] for Kind, Value in Metadata["Binaries"].items())
     Metadata["SourceRevisionUnchanged"] = Git(Root, "rev-parse", "HEAD") == Source and SourcePatch(Root) == SourceDiff
+    Metadata["VendorProofUnchanged"] = VerifyVendors(Root, Arguments.vendor_proof) == VendorProof
     (Output / "Collection.json").write_text(json.dumps(Metadata, indent=2), encoding="utf-8")
-    if not all(Metadata[Key] for Key in ["JoltUnchanged", "ExperimentInputsUnchanged", "BinariesUnchanged", "SourceRevisionUnchanged"]): return 2
+    if not all(Metadata[Key] for Key in ["JoltUnchanged", "ExperimentInputsUnchanged", "BinariesUnchanged", "SourceRevisionUnchanged", "VendorProofUnchanged"]): return 2
     return 2 if HarnessFailures else 1 if QualityFailures else 0
 
 
