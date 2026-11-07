@@ -443,7 +443,9 @@ namespace {
                         static_cast<double>(glm::length(Positions[Attachment.Vertex] - Attachment.Position)));
             } else {
                 const int N = static_cast<int>(Definition.ResolutionX);
-                const auto At = [N](int X, int Y, int Z) { return (Z * N + Y) * N + X; };
+                const auto At = [N](int X, int Y, int Z) -> std::size_t {
+                    return (static_cast<std::size_t>(Z) * N + Y) * N + X;
+                };
                 const float Rest = Definition.Size.x / (N - 1);
                 const std::array<glm::vec3, 8> CornerRest{{
                     {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0},
