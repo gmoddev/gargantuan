@@ -1,11 +1,15 @@
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/JointConstraint.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/datatypes/RaycastParams.hpp"
 #include "gargantuan/physics/PhysicsBackend.hpp"
+#include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
@@ -19,6 +23,8 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -163,6 +169,103 @@ namespace {
 		Check(Joint.IsValid() && World.IsConstraintValid(Joint), "constraint uses neutral body identities");
 		Check(World.DestroyBody(Second).Succeeded() && !World.IsConstraintValid(Joint),
 			"body destruction invalidates attached constraints safely");
+	}
+
+	void TestAdvancedConstraintBackend() {
+		using namespace gargantuan;
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		PhysicsBodyDesc AnchorDesc;
+		AnchorDesc.Anchored = true;
+		AnchorDesc.CanCollide = false;
+		PhysicsBodyDesc MovingDesc = AnchorDesc;
+		MovingDesc.Anchored = false;
+		const auto Anchor = World.CreateBody(AnchorDesc);
+		const auto Door = World.CreateBody(MovingDesc);
+		const auto Hinge = World.CreateConstraint({
+			.Kind = PhysicsConstraintKind::Hinge, .BodyA = Anchor, .BodyB = Door,
+			.CollideConnected = false, .EnableLimit = true, .LowerLimit = -0.4f, .UpperLimit = 0.4f,
+			.EnableMotor = true, .MotorSpeed = 2.0f, .MaximumMotorForce = 1000.0f,
+		});
+		Check(Hinge.IsValid(), "hinge admits angular limits and motor torque");
+		for (int Index = 0; Index < 90; ++Index) (void)World.Step({});
+		const auto DoorState = World.GetBodyState(Door);
+		const auto DoorAngle = DoorState ? std::atan2(DoorState->Transform.Rotation[0][1],
+			DoorState->Transform.Rotation[0][0]) : 0.0f;
+		Check(DoorState && std::abs(DoorAngle) > 0.05f && std::abs(DoorAngle) < 0.7f,
+			"hinge motor rotates door and angular limits bound it");
+		Check(World.DestroyConstraint(Hinge).Succeeded() && !World.IsConstraintValid(Hinge),
+			"hinge destruction retires its generation-safe ID");
+
+		const auto Slide = World.CreateBody(MovingDesc);
+		const auto Slider = World.CreateConstraint({
+			.Kind = PhysicsConstraintKind::Slider, .BodyA = Anchor, .BodyB = Slide,
+			.CollideConnected = false, .EnableLimit = true, .LowerLimit = -1.0f, .UpperLimit = 1.0f,
+			.EnableMotor = true, .MotorSpeed = 3.0f, .MaximumMotorForce = 1000.0f,
+		});
+		Check(Slider.IsValid(), "slider admits linear limits and motor force");
+		for (int Index = 0; Index < 90; ++Index) (void)World.Step({});
+		const auto SlideState = World.GetBodyState(Slide);
+		Check(SlideState && SlideState->Transform.Position.x > 0.1f &&
+			SlideState->Transform.Position.x < 1.3f && std::abs(SlideState->Transform.Position.y) < 0.2f,
+			"slider motor moves along frame A x-axis and respects travel limit");
+
+		MovingDesc.Transform = CFrame(0.0f, -3.0f, 0.0f);
+		const auto Weight = World.CreateBody(MovingDesc);
+		const auto Spring = World.CreateConstraint({
+			.Kind = PhysicsConstraintKind::Distance, .BodyA = Anchor, .BodyB = Weight,
+			.CollideConnected = false, .RestLength = 1.0f,
+			.SpringFrequency = 8.0f, .SpringDamping = 0.8f,
+		});
+		Check(Spring.IsValid(), "distance spring admits finite rest length and tuning");
+		for (int Index = 0; Index < 120; ++Index) (void)World.Step({});
+		const auto WeightState = World.GetBodyState(Weight);
+		Check(WeightState && std::abs(WeightState->Transform.Position.y + 1.0f) < 0.8f,
+			"distance spring pulls separated assembly toward its rest length");
+
+		const auto Socket = World.CreateConstraint({
+			.Kind = PhysicsConstraintKind::BallSocket, .BodyA = Anchor, .BodyB = Weight,
+			.CollideConnected = false, .LocalFrameB = CFrame(0.0f, 1.0f, 0.0f),
+		});
+		Check(Socket.IsValid(), "ball socket accepts local attachment frames");
+		Check(!World.CreateConstraint({.Kind = PhysicsConstraintKind::Hinge, .BodyA = Anchor,
+			.BodyB = Door, .EnableMotor = true, .MaximumMotorForce = 0.0f}).IsValid(),
+			"non-driving hinge motor fails closed");
+		Check(!World.CreateConstraint({.Kind = PhysicsConstraintKind::Distance, .BodyA = Anchor,
+			.BodyB = Door, .EnableLimit = true, .LowerLimit = 2.0f, .UpperLimit = 1.0f}).IsValid(),
+			"reversed distance limits fail closed");
+		Check(!World.CreateConstraint({.Kind = static_cast<PhysicsConstraintKind>(255),
+			.BodyA = Anchor, .BodyB = Door}).IsValid(), "unsupported joint kind fails closed");
+		Check(World.DestroyBody(Weight).Succeeded() && !World.IsConstraintValid(Spring) &&
+			!World.IsConstraintValid(Socket), "body removal invalidates every attached joint type");
+	}
+
+	void TestBoundedConstraintAdmission() {
+		using namespace gargantuan;
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {}, .ConstraintLimit = 2});
+		PhysicsBodyDesc Description;
+		Description.Anchored = true;
+		const auto BodyA = World.CreateBody(Description);
+		const auto BodyB = World.CreateBody(Description);
+		const PhysicsConstraintDesc JointDesc{.BodyA = BodyA, .BodyB = BodyB};
+		const auto First = World.TryCreateConstraint(JointDesc);
+		const auto Second = World.TryCreateConstraint(JointDesc);
+		const auto Denied = World.TryCreateConstraint(JointDesc);
+		Check(First.Succeeded() && Second.Succeeded() &&
+			Denied.Operation.Status == PhysicsOperationStatus::ResourceLimit && !Denied.Constraint.IsValid() &&
+			World.IsConstraintValid(First.Constraint) && World.IsConstraintValid(Second.Constraint),
+			"bounded joint admission reports ResourceLimit without disturbing live joints");
+		Check(World.DestroyConstraint(First.Constraint).Succeeded() &&
+			!World.IsConstraintValid(First.Constraint), "freeing a joint retires its identity and capacity");
+		const auto Recovered = World.TryCreateConstraint(JointDesc);
+		Check(Recovered.Succeeded() && Recovered.Constraint != First.Constraint &&
+			World.IsConstraintValid(Second.Constraint), "capacity recovery preserves surviving and new generations");
+		Check(World.DestroyBody(BodyA).Succeeded() && !World.IsConstraintValid(Recovered.Constraint) &&
+			!World.IsConstraintValid(Second.Constraint), "body teardown releases every attached joint admission");
+		PhysicsWorld Disabled(PhysicsWorldConfig{.ConstraintLimit = 0});
+		const auto DisabledA = Disabled.CreateBody(Description);
+		const auto DisabledB = Disabled.CreateBody(Description);
+		Check(Disabled.TryCreateConstraint({.BodyA = DisabledA, .BodyB = DisabledB}).Operation.Status ==
+			PhysicsOperationStatus::ResourceLimit, "zero configured joint capacity fails closed");
 	}
 
 	void TestStaticTriangleMeshBackend() {
@@ -393,6 +496,13 @@ namespace {
 				Live.PeakBuildNativeBytes >= Live.NativeMeshBytes,
 				"one resource shares two native chunks across four live shapes");
 			Check(World.Raycast(Ray).HasHit(), "chunked mesh remains queryable");
+			PhysicsQueryShape Query;
+			Query.Transform=CFrame(glm::vec3(0,.1f,0)); Query.Radius=.5f;
+			const auto Overlap=World.Overlap({Query,{}});
+			Check(Overlap.Succeeded() && Overlap.Bodies==std::vector<PhysicsBodyId>{First,Second},"chunked mesh overlap deduplicates native chunks into two stable body owners");
+			Query.Transform=CFrame(glm::vec3(0,2,0));
+			const auto Cast=World.ShapeCast({Query,{0,-4,0},{}});
+			Check(Cast.Succeeded() && Cast.Candidates.size()==2 && Cast.Candidates.front().Distance>1,"sphere cast against chunked static meshes returns owned finite body hits");
 			Check(World.DestroyBody(First).Succeeded() && World.DestroyBody(Second).Succeeded(),
 				"both chunked mesh consumers retire");
 			const auto Retired = World.GetCollisionResidency();
@@ -825,6 +935,207 @@ namespace {
 		Check(WorldRootTestAccess::ConstraintCount(*Workspace) == 0, "body removal clears attached constraint identity");
 	}
 
+	void TestAuthoredJointLifecycle() {
+		using namespace gargantuan;
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Frame = std::make_shared<Part>();
+		auto Door = std::make_shared<Part>();
+		Frame->SetAnchored(true);
+		Door->SetAnchored(true);
+		Frame->SetParent(Workspace);
+		Door->SetParent(Workspace);
+		auto PivotA = std::make_shared<Attachment>();
+		auto PivotB = std::make_shared<Attachment>();
+		PivotA->SetParent(Frame);
+		PivotB->SetParent(Door);
+		auto Hinge = std::make_shared<JointConstraint>();
+		const auto *MotorSpeedProperty = Hinge->FindProperty("MotorSpeed");
+		Check(MotorSpeedProperty &&
+			MotorSpeedProperty->PersistencePolicy == InstanceProperty::Persistence::Saved &&
+			MotorSpeedProperty->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated,
+			"joint parameters participate in generated persistence and replication schema");
+		Hinge->SetJointType("Hinge");
+		Hinge->SetAttachment0(PivotA);
+		Hinge->SetAttachment1(PivotB);
+		Hinge->SetEnableLimit(true);
+		Hinge->SetLowerLimit(-0.5f);
+		Hinge->SetUpperLimit(0.5f);
+		Hinge->SetParent(Workspace);
+		const auto FirstJoint = WorldRootTestAccess::Constraint(*Workspace, *Hinge);
+		Check(FirstJoint.IsValid(), "WorldRoot creates reflected attachment hinge");
+
+		PivotA->SetCFrame(CFrame(0.5f, 0.0f, 0.0f));
+		Workspace->StepPhysics(0.0, std::nullopt);
+		const auto ReframedJoint = WorldRootTestAccess::Constraint(*Workspace, *Hinge);
+		Check(ReframedJoint.IsValid() && ReframedJoint != FirstJoint &&
+			!WorldRootTestAccess::IsConstraintValid(*Workspace, FirstJoint),
+			"attachment frame edit replaces joint at physics safe point");
+
+		bool RejectedType = false;
+		try { Hinge->SetJointType("Unsupported"); }
+		catch (const std::invalid_argument &) { RejectedType = true; }
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(RejectedType && Hinge->GetJointType() == "Hinge" &&
+			WorldRootTestAccess::Constraint(*Workspace, *Hinge) == ReframedJoint &&
+			WorldRootTestAccess::IsConstraintValid(*Workspace, ReframedJoint),
+			"invalid authored joint type rejects before changing the live joint");
+		Hinge->SetLowerLimit(1.0f);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::Constraint(*Workspace, *Hinge) == ReframedJoint &&
+			WorldRootTestAccess::IsConstraintValid(*Workspace, ReframedJoint),
+			"invalid limit update preserves the prior coherent joint");
+		Hinge->SetJointType("BallSocket");
+		Hinge->SetEnableLimit(false);
+		Hinge->SetLowerLimit(0.0f);
+		Hinge->SetUpperLimit(0.0f);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::Constraint(*Workspace, *Hinge).IsValid() &&
+			WorldRootTestAccess::Constraint(*Workspace, *Hinge) != ReframedJoint,
+			"corrected joint type replaces stale configuration");
+
+		const auto ActiveJoint = WorldRootTestAccess::Constraint(*Workspace, *Hinge);
+		Door->SetParent(nullptr);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(!WorldRootTestAccess::IsConstraintValid(*Workspace, ActiveJoint) &&
+			WorldRootTestAccess::ConstraintCount(*Workspace) == 0,
+			"detached endpoint invalidates joint before slot reuse");
+		Door->SetParent(Workspace);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::Constraint(*Workspace, *Hinge).IsValid(),
+			"returning endpoint reconciles a new joint generation");
+	}
+
+	void TestGameplayLuauJointAssembly() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		Game->SetArchivable(true);
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		if (!WorkspaceValue) return;
+		WorkspaceValue->SetGravity(0.0f);
+		ScriptEngine Engine(Game);
+		const std::string Source = R"(
+			local Workspace = game:GetService("Workspace")
+			local function MakePart(Name, Position, Anchored)
+				local Part = Instance.new("Part")
+				Part.Archivable = true
+				Part.Name = Name
+				Part.CFrame = CFrame.new(Position)
+				Part.CanCollide = false
+				Part.CanTouch = false
+				Part.Anchored = Anchored
+				Part.Parent = Workspace
+				return Part
+			end
+			local function MakeJoint(Name, Kind, PartA, PartB, FrameA, FrameB)
+				local AttachmentA = Instance.new("Attachment")
+				AttachmentA.Archivable = true
+				AttachmentA.Name = Name .. "A"
+				AttachmentA.CFrame = FrameA
+				AttachmentA.Parent = PartA
+				local AttachmentB = Instance.new("Attachment")
+				AttachmentB.Archivable = true
+				AttachmentB.Name = Name .. "B"
+				AttachmentB.CFrame = FrameB
+				AttachmentB.Parent = PartB
+				local Joint = Instance.new("JointConstraint")
+				Joint.Archivable = true
+				Joint.Name = Name
+				Joint.JointType = Kind
+				Joint.Parent = Workspace
+				Joint.Attachment0 = AttachmentA
+				Joint.Attachment1 = AttachmentB
+				Joint.CollideConnected = false
+				return Joint
+			end
+			local Frame = MakePart("DoorFrame", Vector3.new(0, 0, 0), true)
+			local Door = MakePart("DoorBody", Vector3.new(2, 0, 0), false)
+			local Hinge = MakeJoint("DoorHinge", "Hinge", Frame, Door,
+				CFrame.new(0.5, 0, 0), CFrame.new(-1.5, 0, 0))
+			Hinge.EnableLimit = true
+			Hinge.LowerLimit = -0.4
+			Hinge.UpperLimit = 0.4
+			Hinge.EnableMotor = true
+			Hinge.MotorSpeed = 2
+			Hinge.MaximumMotorForce = 1000
+			local Rail = MakePart("Rail", Vector3.new(10, 0, 0), true)
+			local Slide = MakePart("SlideBody", Vector3.new(10, 0, 0), false)
+			local Slider = MakeJoint("DrivenSlider", "Slider", Rail, Slide,
+				CFrame.new(0, 0, 0), CFrame.new(0, 0, 0))
+			Slider.EnableLimit = true
+			Slider.LowerLimit = -1
+			Slider.UpperLimit = 1
+			Slider.EnableMotor = true
+			Slider.MotorSpeed = 3
+			Slider.MaximumMotorForce = 1000
+			local Mount = MakePart("SpringMount", Vector3.new(20, 5, 0), true)
+			local Weight = MakePart("SpringWeight", Vector3.new(20, 2, 0), false)
+			local Spring = MakeJoint("SuspendedWeight", "Distance", Mount, Weight,
+				CFrame.new(0, 0, 0), CFrame.new(0, 0, 0))
+			Spring.RestLength = 1
+			Spring.SpringFrequency = 8
+			Spring.SpringDamping = 0.8
+			assert(not pcall(function() Hinge.JointType = "Unknown" end))
+		)";
+		auto Bytecode = Luau::compile(Source);
+		const int Loaded = luau_load(Engine.L, "physics-joint-assembly", Bytecode.data(), Bytecode.size(), 0);
+		ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+		const int Status = Loaded == LUA_OK ? lua_pcall(Engine.L, 0, 0, 0) : Loaded;
+		if (Status != LUA_OK)
+			std::cerr << "LUAU ERROR: " << (lua_tostring(Engine.L, -1) ? lua_tostring(Engine.L, -1) : "unknown")
+				<< '\n';
+		Check(Status == LUA_OK, "normal gameplay Luau authors three live constraint mechanisms");
+		if (Status != LUA_OK) return;
+		WorkspaceValue->StepPhysics(0.0, std::nullopt);
+		auto Door = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstDescendant("DoorBody"));
+		auto Slide = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstDescendant("SlideBody"));
+		auto Weight = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstDescendant("SpringWeight"));
+		auto Hinge = std::dynamic_pointer_cast<JointConstraint>(WorkspaceValue->FindFirstDescendant("DoorHinge"));
+		auto Slider = std::dynamic_pointer_cast<JointConstraint>(WorkspaceValue->FindFirstDescendant("DrivenSlider"));
+		auto Spring = std::dynamic_pointer_cast<JointConstraint>(WorkspaceValue->FindFirstDescendant("SuspendedWeight"));
+		Check(Door && Slide && Weight && Hinge && Slider && Spring &&
+			WorldRootTestAccess::Constraint(*WorkspaceValue, *Hinge).IsValid() &&
+			WorldRootTestAccess::Constraint(*WorkspaceValue, *Slider).IsValid() &&
+			WorldRootTestAccess::Constraint(*WorkspaceValue, *Spring).IsValid(),
+			"Luau-created attachments resolve to active WorldRoot joints");
+		if (!Door || !Slide || !Weight || !Hinge || !Slider || !Spring) return;
+		for (int Index = 0; Index < 120; ++Index) WorkspaceValue->StepPhysics(1.0 / 60.0, std::nullopt);
+		const auto &DoorPose = Door->GetCFrame();
+		const auto DoorAngle = std::atan2(DoorPose.Rotation[0][1], DoorPose.Rotation[0][0]);
+		Check(std::abs(DoorAngle) > 0.05f && std::abs(DoorAngle) < 0.7f,
+			"WorldRoot hinge motor moves a door within its authored angular limit");
+		Check(Slide->GetCFrame().Position.x > 10.1f && Slide->GetCFrame().Position.x < 11.3f &&
+			std::abs(Slide->GetCFrame().Position.y) < 0.2f,
+			"WorldRoot slider motor moves a platform within its authored travel limit");
+		Check(Weight->GetCFrame().Position.y > 3.2f && Weight->GetCFrame().Position.y < 4.8f,
+			"WorldRoot spring pulls a suspended weight toward its rest length");
+
+		std::shared_ptr<Instance> Root = Game;
+		const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
+		std::istringstream Input(Encoded);
+		auto Decoded = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
+		auto LoadedHinge = Decoded.Instance ? std::dynamic_pointer_cast<JointConstraint>(
+			Decoded.Instance->FindFirstDescendant("DoorHinge")) : nullptr;
+		auto LoadedSlider = Decoded.Instance ? std::dynamic_pointer_cast<JointConstraint>(
+			Decoded.Instance->FindFirstDescendant("DrivenSlider")) : nullptr;
+		auto LoadedSpring = Decoded.Instance ? std::dynamic_pointer_cast<JointConstraint>(
+			Decoded.Instance->FindFirstDescendant("SuspendedWeight")) : nullptr;
+		std::cout << "[Physics:JointPersistence] Decoded=" << Decoded.Ok << " Hinge=" << bool(LoadedHinge) << " Slider=" << bool(LoadedSlider) << " Spring=" << bool(LoadedSpring) << '\n';
+		for(const auto &Error:Decoded.Errors) std::cerr << "[Physics:JointPersistence] " << Error << '\n';
+		if(LoadedHinge && LoadedSlider && LoadedSpring)
+			std::cout << "[Physics:JointPersistence] A0=" << bool(LoadedHinge->GetAttachment0()) << " A1=" << bool(LoadedHinge->GetAttachment1()) << " Enabled=" << LoadedHinge->GetEnabled() << " Type=" << LoadedHinge->GetJointType() << " Limit=" << LoadedHinge->GetEnableLimit() << " Motor=" << LoadedHinge->GetEnableMotor() << " Upper=" << LoadedHinge->GetUpperLimit() << " SliderForce=" << LoadedSlider->GetMaximumMotorForce() << " SpringHz=" << LoadedSpring->GetSpringFrequency() << '\n';
+		Check(Decoded.Ok && LoadedHinge && LoadedSlider && LoadedSpring &&
+			LoadedHinge->GetAttachment0() && *LoadedHinge->GetAttachment0() &&
+			LoadedHinge->GetAttachment1() && *LoadedHinge->GetAttachment1() &&
+			LoadedHinge->GetEnabled() && LoadedHinge->GetJointType() == "Hinge" &&
+			LoadedHinge->GetEnableLimit() && LoadedHinge->GetEnableMotor() &&
+			Near(LoadedHinge->GetUpperLimit(), 0.4f) &&
+			LoadedSlider->GetJointType() == "Slider" && Near(LoadedSlider->GetMaximumMotorForce(), 1000.0f) &&
+			LoadedSpring->GetJointType() == "Distance" && Near(LoadedSpring->GetSpringFrequency(), 8.0f),
+			"gameplay joint frames, references, limits, motors, and springs survive save and reopen");
+	}
+
 	void TestSimulationPublicationAndImpulse() {
 		using namespace gargantuan;
 		auto Workspace = MakeWorkspace();
@@ -843,6 +1154,413 @@ namespace {
 			"physics publication does not create a transform feedback update");
 	}
 
+	void TestBodyDynamicsAndCollisionGroups() {
+		using namespace gargantuan;
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		PhysicsBodyDesc Description;
+		Description.CollisionGroup = 2;
+		Description.CollisionMask = std::uint16_t{1} << 3;
+		Description.LinearDamping = 0.0f;
+		Description.AngularDamping = 0.0f;
+		const auto Dynamic = World.CreateBody(Description);
+		Check(Dynamic.IsValid(), "dynamic body accepts bounded collision and damping description");
+		Check(World.SetLinearVelocity(Dynamic, {2.0f, 0.0f, 0.0f}).Succeeded(), "linear velocity accepts a dynamic body");
+		Check(World.SetAngularVelocity(Dynamic, {0.0f, 1.0f, 0.0f}).Succeeded(), "angular velocity accepts a dynamic body");
+		auto State = World.GetBodyState(Dynamic);
+		Check(State && Near(State->LinearVelocity.x, 2.0f) && Near(State->AngularVelocity.y, 1.0f) &&
+			State->Mass > 0.0f && State->LocalInertia.x > 0.0f,
+			"state exposes velocity, mass, and local inertia without native handles");
+		Check(World.ApplyAngularImpulse(Dynamic, {0.0f, 2.0f, 0.0f}).Succeeded(), "angular impulse is applied");
+		Check(World.GetBodyState(Dynamic)->AngularVelocity.y > 1.0f,"angular impulse changes angular velocity before an opposing point impulse");
+		Check(World.ApplyImpulseAtPosition(Dynamic, {0.0f, 0.0f, 5.0f}, {1.0f, 0.0f, 0.0f}).Succeeded(),
+			"off-center impulse is applied");
+		Check(World.ApplyForce(Dynamic, {4.0f, 0.0f, 0.0f}).Succeeded() &&
+			World.ApplyTorque(Dynamic, {0.0f, 0.0f, 2.0f}).Succeeded(),
+			"force and torque are accepted for the next solver step");
+		(void)World.Step({});
+		State = World.GetBodyState(Dynamic);
+		Check(State && State->LinearVelocity.x > 2.0f && State->LinearVelocity.z > 0.0f && State->AngularVelocity.z > 0.0f,
+			"impulses and step force change velocity");
+		Check(World.SetAwake(Dynamic, false).Succeeded() && !World.GetBodyState(Dynamic)->Awake,
+			"sleep request is observable");
+		Check(World.SetAwake(Dynamic, true).Succeeded() && World.GetBodyState(Dynamic)->Awake,
+			"wake request is observable");
+		Check(!World.ApplyForce(Dynamic, {NAN, 0.0f, 0.0f}).Succeeded(), "nonfinite force rejects without mutation");
+		Check(!World.SetLinearVelocity({Dynamic.Slot, Dynamic.Generation + 1}, {}).Succeeded(),
+			"stale body velocity mutation rejects");
+
+		PhysicsBodyDesc Target;
+		Target.Anchored = true;
+		Target.Transform = CFrame(8.0f, 0.0f, 0.0f);
+		Target.CollisionGroup = 3;
+		Target.CollisionMask = (std::uint16_t{1} << 2) | (std::uint16_t{1} << 0);
+		const auto Static = World.CreateBody(Target);
+		const auto Ray = PhysicsRaycastRequest{.Origin = {5.0f, 0.0f, 0.0f}, .Direction = {5.0f, 0.0f, 0.0f}};
+		Check(World.Raycast(Ray).HasHit(), "compatible default query sees collision group");
+		auto RejectedRay = Ray;
+		RejectedRay.Filter.CollisionMask = std::uint16_t{1} << 1;
+		Check(!World.Raycast(RejectedRay).HasHit(), "query mask excludes incompatible group");
+		Target.CollisionMask = 0;
+		Check(World.UpdateBody(Static, Target).Succeeded() && !World.Raycast(Ray).HasHit(),
+			"runtime collision mask update immediately changes queries");
+		Target.CollisionMask = std::uint16_t{1} << 0;
+		Check(World.UpdateBody(Static, Target).Succeeded() && World.Raycast(Ray).HasHit(),
+			"runtime collision mask update restores compatible queries");
+		Target.Kinematic = true;
+		Check(!World.UpdateBody(Static, Target).Succeeded(), "anchored kinematic conflict rejects atomically");
+		Target.Anchored = false;
+		Check(World.UpdateBody(Static, Target).Succeeded() && World.SetLinearVelocity(Static, {-1.0f, 0.0f, 0.0f}).Succeeded(),
+			"static body can transition to velocity-driven kinematic body");
+		Check(!World.ApplyForce(Static, {1.0f, 0.0f, 0.0f}).Succeeded(), "kinematic body rejects dynamic force");
+		Target.Kinematic = false;
+		Check(World.UpdateBody(Static, Target).Succeeded() && World.ApplyForce(Static, {1.0f, 0.0f, 0.0f}).Succeeded(),
+			"kinematic body can transition to dynamic body");
+	}
+
+	void TestWorldRootDynamicsProjection() {
+		using namespace gargantuan;
+		const auto *Schema = InstanceClassRegistry::GetDefinitionByName("BasePart");
+		Check(Schema != nullptr, "BasePart schema is published");
+		if (Schema) {
+			for (const auto *Name : {"Kinematic", "CollisionGroup", "CollisionMask", "LinearDamping",
+				"AngularDamping", "GravityScale", "SleepEnabled"}) {
+				auto Found = Schema->AllProperties.find(Name);
+				Check(Found != Schema->AllProperties.end() &&
+					Found->second->PersistencePolicy == InstanceProperty::Persistence::Saved &&
+					Found->second->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated,
+					"authored rigid controls retain generated persistence and replication metadata");
+			}
+		}
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Part = std::make_shared<gargantuan::Part>();
+		bool RejectedGroup = false;
+		try { Part->SetCollisionGroup(16); } catch (const std::exception &) { RejectedGroup = true; }
+		Check(RejectedGroup && Part->GetCollisionGroup() == 0, "out-of-range group leaves committed property unchanged");
+		Part->SetCollisionGroup(4);
+		Part->SetCollisionMask(std::uint16_t{1} << 5);
+		Part->SetGravityScale(0.5f);
+		Part->SetLinearDamping(0.0f);
+		Part->SetParent(Workspace);
+		const auto Body = WorldRootTestAccess::Body(*Workspace, *Part);
+		Check(Body.IsValid(), "WorldRoot admits authored body controls");
+		Part->SetLinearVelocity({3.0f, 0.0f, 0.0f});
+		Part->ApplyForce({4.0f, 0.0f, 0.0f});
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(Part->GetLinearVelocity().x > 3.0f && Part->GetMass() > 0.0f && Part->GetLocalInertia().x > 0.0f,
+			"WorldRoot safe point applies controls and publishes read-only mass and velocity");
+		Part->SetCollisionMask(0);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		auto State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(State && State->Description.CollisionMask == 0 && State->Description.CollisionGroup == 4 &&
+			State->Description.GravityScale == 0.5f,
+			"committed group, mask, and gravity changes reach the same backend body");
+		Part->SetParent(nullptr);
+		Check(Part->GetMass() == 0.0f, "removed Part retires published body diagnostics");
+	}
+
+	void TestBodyControlCapabilityBoundary() {
+		using namespace gargantuan;
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Part = std::make_shared<gargantuan::Part>();
+		Part->SetName("CapabilityProbe");
+		Part->SetParent(Workspace);
+		const auto Initial = Part->GetCFrame();
+		ScriptEngine Engine(Workspace->GetDataModel());
+		StackValue<std::shared_ptr<gargantuan::Part>>::Push(Engine.L, Part);
+		lua_setglobal(Engine.L, "ControlPart");
+		auto Run = [&](const char *Name, const std::string &Source, ScriptSecurityContext Context) {
+			const auto Bytecode = Luau::compile(Source);
+			const int Loaded = luau_load(Engine.L, Name, Bytecode.data(), Bytecode.size(), 0);
+			int Status = Loaded;
+			if (Loaded == LUA_OK) {
+				ScriptSecurityScope Security(Context);
+				Status = lua_pcall(Engine.L, 0, 0, 0);
+			}
+			if (Status != LUA_OK) {
+				std::cerr << "[Physics:Authority] " << Name << ": " <<
+					(lua_tostring(Engine.L, -1) ? lua_tostring(Engine.L, -1) : "unknown") << '\n';
+				lua_settop(Engine.L, 0);
+			}
+			return Status == LUA_OK;
+		};
+		const ScriptSecurityContext StudioReadOnly{
+			ScriptExecutionDomain::Studio, {ScriptCapability::ReadDataModel}};
+		Check(Run("physics-denied-writes", R"(
+			local Part = ControlPart
+			local Force = Vector3.new(3, 0, 0)
+			assert(Part:GetMass() > 0)
+			assert(not pcall(function() Part:ApplyImpulse(Force) end))
+			assert(not pcall(function() Part:ApplyAngularImpulse(Force) end))
+			assert(not pcall(function() Part:ApplyImpulseAtPosition(Force, Vector3.new(0, 0, 1)) end))
+			assert(not pcall(function() Part:ApplyForce(Force) end))
+			assert(not pcall(function() Part:ApplyTorque(Force) end))
+			assert(not pcall(function() Part:SetLinearVelocity(Force) end))
+			assert(not pcall(function() Part:SetAngularVelocity(Force) end))
+			assert(not pcall(function() Part:SetAwake(false) end))
+		)", StudioReadOnly), "read-only Studio context denies every BasePart runtime write");
+		const ScriptSecurityContext NoCaps{ScriptExecutionDomain::Core, {}};
+		Check(Run("physics-denied-reads", R"(
+			local Part = ControlPart
+			assert(not pcall(function() return Part:GetLinearVelocity() end))
+			assert(not pcall(function() return Part:GetAngularVelocity() end))
+			assert(not pcall(function() return Part:GetMass() end))
+			assert(not pcall(function() return Part:GetLocalInertia() end))
+			assert(not pcall(function() return Part:GetAwake() end))
+		)", NoCaps), "no-capability context denies every BasePart runtime read");
+		Workspace->StepPhysics(1.0f / 60.0f, std::nullopt);
+		Check(Part->GetCFrame().FuzzyEq(Initial) &&
+			Near(glm::length(Part->GetLinearVelocity()), 0.0f) &&
+			Near(glm::length(Part->GetAngularVelocity()), 0.0f) && Part->GetAwake(),
+			"denied BasePart controls do not enqueue velocity, impulses, forces, torque, or sleep");
+		Check(Run("physics-capable-controls", R"(
+			local Part = ControlPart
+			local Linear = Vector3.new(2, 0, 0)
+			Part:SetLinearVelocity(Linear)
+			Part:SetAngularVelocity(Vector3.new(0, 1, 0))
+			Part:ApplyImpulse(Vector3.new(1, 0, 0))
+			Part:ApplyAngularImpulse(Vector3.new(0, 1, 0))
+			Part:ApplyImpulseAtPosition(Vector3.new(1, 0, 0), Vector3.new(0, 0, 1))
+			Part:ApplyForce(Vector3.new(1, 0, 0))
+			Part:ApplyTorque(Vector3.new(0, 1, 0))
+			Part:SetAwake(true)
+			assert(Part:GetLinearVelocity().X == 2)
+			assert(Part:GetAngularVelocity().Y == 1)
+			assert(Part:GetMass() > 0)
+			assert(Part:GetLocalInertia().X > 0)
+			assert(Part:GetAwake())
+		)", ScriptSecurityContext::ClientRuntime()),
+			"capable gameplay Luau retains all BasePart runtime controls and observations");
+		Workspace->StepPhysics(1.0f / 60.0f, std::nullopt);
+		Check(Part->GetCFrame().Position.x > Initial.Position.x &&
+			Part->GetLinearVelocity().x > 2.0f && Part->GetAwake(),
+			"capable gameplay controls still reach the physics safe point");
+	}
+
+	void TestForceDurationAndKinematicMotion() {
+		using namespace gargantuan;
+		PhysicsWorld Backend(PhysicsWorldConfig{.Gravity={0,0,0}});
+		PhysicsBodyDesc Description;
+		Description.LinearDamping=0; Description.AngularDamping=0;
+		const auto Forced=Backend.CreateBody(Description);
+		Description.Transform=CFrame(10,0,0);
+		const auto Impulsed=Backend.CreateBody(Description);
+		Check(Backend.ApplyForce(Forced,{60,0,0}).Succeeded() && Backend.ApplyLinearImpulse(Impulsed,{1,0,0}).Succeeded(),"equal-step force and impulse fixture accepts controls");
+		(void)Backend.Step({});
+		const float ForcedSpeed=Backend.GetBodyState(Forced)->LinearVelocity.x;
+		const float ImpulseSpeed=Backend.GetBodyState(Impulsed)->LinearVelocity.x;
+		Check(ForcedSpeed>0 && std::abs(ForcedSpeed-ImpulseSpeed)<.001f,"force integrates over one fixed step while impulse applies momentum immediately");
+		(void)Backend.Step({});
+		Check(std::abs(Backend.GetBodyState(Forced)->LinearVelocity.x-ForcedSpeed)<.001f,"one force request is not replayed on later fixed steps");
+		auto World=MakeWorkspace(); World->SetGravity(196.2f);
+		auto Part=std::make_shared<gargantuan::Part>();
+		Part->SetKinematic(true); Part->SetParent(World); Part->SetLinearVelocity({6,0,0});
+		World->StepPhysics(1.0/60.0,std::nullopt);
+		Check(std::abs(Part->GetCFrame().Position.x-.1f)<.002f && std::abs(Part->GetCFrame().Position.y)<.002f,"WorldRoot publishes velocity-driven kinematic translation without gravity");
+		Part->SetAnchored(true); World->StepPhysics(0.0,std::nullopt);
+		const auto Fixed=Part->GetCFrame();
+		Part->SetLinearVelocity({100,0,0}); World->StepPhysics(1.0/60.0,std::nullopt);
+		Check(Part->GetCFrame().FuzzyEq(Fixed),"anchored safe-point transition discards pending moving-body controls");
+		Part->Destroy();
+	}
+
+	void TestBodyControlPersistence() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		Game->SetArchivable(true);
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+		if (!Workspace) return;
+		auto Part = std::make_shared<gargantuan::Part>();
+		Part->SetName("PersistedRigidControl");
+		Part->SetArchivable(true);
+		Part->SetKinematic(true);
+		Part->SetCollisionGroup(7);
+		Part->SetCollisionMask(129);
+		Part->SetLinearDamping(0.25f);
+		Part->SetAngularDamping(0.5f);
+		Part->SetGravityScale(1.5f);
+		Part->SetSleepEnabled(false);
+		Part->SetMovingBodyCCD(true);
+		Part->SetParent(Workspace);
+		std::shared_ptr<Instance> Root = Game;
+		const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
+		std::istringstream Input(Encoded);
+		auto Decoded = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
+		auto Loaded = Decoded.Instance ?
+			std::dynamic_pointer_cast<gargantuan::Part>(Decoded.Instance->FindFirstDescendant("PersistedRigidControl")) : nullptr;
+		if (!Decoded.Ok || !Loaded) {
+			std::cerr << "[Physics:Persistence] Decoded=" << Decoded.Ok << " Part=" << bool(Loaded) << '\n';
+			for(const auto &Error:Decoded.Errors) std::cerr << "[Physics:Persistence] " << Error << '\n';
+		} else {
+			std::cout << "[Physics:Persistence] Kinematic=" << Loaded->GetKinematic() << " Group=" << Loaded->GetCollisionGroup()
+				<< " Mask=" << Loaded->GetCollisionMask() << " LinearDamping=" << Loaded->GetLinearDamping()
+				<< " AngularDamping=" << Loaded->GetAngularDamping() << " GravityScale=" << Loaded->GetGravityScale()
+				<< " Sleep=" << Loaded->GetSleepEnabled() << " CCD=" << Loaded->GetMovingBodyCCD() << '\n';
+		}
+		Check(Decoded.Ok && Loaded && Loaded->GetKinematic() && Loaded->GetCollisionGroup() == 7 &&
+			Loaded->GetCollisionMask() == 129 && Near(Loaded->GetLinearDamping(), 0.25f) &&
+			Near(Loaded->GetAngularDamping(), 0.5f) && Near(Loaded->GetGravityScale(), 1.5f) &&
+			!Loaded->GetSleepEnabled() && Loaded->GetMovingBodyCCD(),
+			"authored rigid controls and CCD policy survive project serialization and reopen");
+	}
+
+	void TestContinuousCollisionPolicy() {
+		using namespace gargantuan;
+		PhysicsBodyDesc Projectile;
+		Projectile.Shape.Kind = PhysicsShapeKind::Ball;
+		Projectile.Shape.Size = {0.5f, 0.5f, 0.5f};
+		Projectile.Transform = CFrame(-3.0f, 0.0f, 0.0f);
+		Projectile.MovingBodyCCD = true;
+		PhysicsBodyDesc ThinWall;
+		ThinWall.Anchored = true;
+		ThinWall.Shape.Size = {0.1f, 4.0f, 4.0f};
+		ThinWall.Transform = CFrame(0.0f, 0.0f, 0.0f);
+
+		PhysicsWorld StaticWorld(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		const auto Wall = StaticWorld.CreateBody(ThinWall);
+		Check(Wall.IsValid(), "thin static obstacle is admitted");
+		for (int Attempt = 0; Attempt < 8; ++Attempt) {
+			const auto Ball = StaticWorld.CreateBody(Projectile);
+			Check(Ball.IsValid() && StaticWorld.SetLinearVelocity(Ball, {360.0f, 0.0f, 0.0f}).Succeeded(),
+				"high-speed projectile admits bounded velocity");
+			(void)StaticWorld.Step({});
+			auto State = StaticWorld.GetBodyState(Ball);
+			Check(State && State->Transform.Position.x < 0.5f,
+				"repeated high-speed ball crossing is stopped by a thin static wall");
+			Check(StaticWorld.DestroyBody(Ball).Succeeded(), "repeated projectile retires before the next pass");
+		}
+		Projectile.MovingBodyCCD = false;
+		const auto DefaultBall = StaticWorld.CreateBody(Projectile);
+		Check(DefaultBall.IsValid() && StaticWorld.SetLinearVelocity(DefaultBall, {360.0f, 0.0f, 0.0f}).Succeeded(),
+			"default body retains static CCD without the moving-body option");
+		(void)StaticWorld.Step({});
+		auto DefaultState = StaticWorld.GetBodyState(DefaultBall);
+		Check(DefaultState && DefaultState->Transform.Position.x < 0.5f,
+			"default dynamic body still receives pinned Box3D static CCD");
+
+		PhysicsWorld MovingWorld(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		ThinWall.Anchored = false;
+		const auto MovingTarget = MovingWorld.CreateBody(ThinWall);
+		Check(MovingTarget.IsValid() && MovingWorld.SetLinearVelocity(MovingTarget, {-2.0f, 0.0f, 0.0f}).Succeeded(),
+			"moving rigid obstacle is admitted");
+		Projectile.MovingBodyCCD = true;
+		const auto MovingBall = MovingWorld.CreateBody(Projectile);
+		Check(MovingBall.IsValid() && MovingWorld.SetLinearVelocity(MovingBall, {360.0f, 0.0f, 0.0f}).Succeeded(),
+			"moving-body CCD projectile is admitted");
+		(void)MovingWorld.Step({});
+		auto MovingState = MovingWorld.GetBodyState(MovingBall);
+		Check(MovingState && MovingState->Transform.Position.x < 1.0f,
+			"opt-in sweep catches a fast ball against a moving dynamic obstacle");
+		PhysicsWorld KinematicWorld(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		ThinWall.Kinematic = true;
+		const auto KinematicTarget = KinematicWorld.CreateBody(ThinWall);
+		const auto KinematicBall = KinematicWorld.CreateBody(Projectile);
+		Check(KinematicTarget.IsValid() && KinematicBall.IsValid() &&
+			KinematicWorld.SetLinearVelocity(KinematicTarget, {-2.0f, 0.0f, 0.0f}).Succeeded() &&
+			KinematicWorld.SetLinearVelocity(KinematicBall, {360.0f, 0.0f, 0.0f}).Succeeded(),
+			"moving kinematic obstacle and fast dynamic ball are admitted");
+		(void)KinematicWorld.Step({});
+		auto KinematicState = KinematicWorld.GetBodyState(KinematicBall);
+		Check(KinematicState && KinematicState->Transform.Position.x < 1.0f,
+			"opt-in sweep catches a fast ball against a moving kinematic obstacle");
+		Projectile.CanCollide = false;
+		Check(!MovingWorld.CreateBody(Projectile).IsValid(), "direct CCD sensor description rejects before native admission");
+		Projectile.CanCollide = true;
+		Projectile.Kinematic = true;
+		Check(!MovingWorld.CreateBody(Projectile).IsValid(), "direct kinematic CCD description rejects before native admission");
+		Projectile.Kinematic = false;
+		Projectile.Anchored = true;
+		Check(!MovingWorld.CreateBody(Projectile).IsValid(), "direct static CCD description rejects before native admission");
+
+		auto Positions = std::make_shared<const std::vector<glm::vec3>>(std::vector<glm::vec3>{
+			{0.0f, -2.0f, -2.0f}, {0.0f, -2.0f, 2.0f},
+			{0.0f, 2.0f, 2.0f}, {0.0f, 2.0f, -2.0f},
+		});
+		auto Indices = std::make_shared<const std::vector<std::uint32_t>>(
+			std::vector<std::uint32_t>{0, 1, 2, 0, 2, 3});
+		auto Mesh = std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{
+			.ResourceId = "asset://ccd-wall", .ContentRevision = 1,
+			.Positions = Positions, .Indices = Indices,
+		});
+		PhysicsBodyDesc MeshWall;
+		MeshWall.Anchored = true;
+		MeshWall.Shape = {.Kind = PhysicsShapeKind::StaticTriangleMesh, .Size = {1.0f, 1.0f, 1.0f}, .Mesh = Mesh};
+		PhysicsWorld MeshWorld(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		const auto MeshBody = MeshWorld.CreateBody(MeshWall);
+		Projectile.Anchored = false;
+		const auto MeshBall = MeshWorld.CreateBody(Projectile);
+		Check(MeshBody.IsValid() && MeshBall.IsValid() &&
+			MeshWorld.SetLinearVelocity(MeshBall, {360.0f, 0.0f, 0.0f}).Succeeded(),
+			"static triangle mesh wall and fast ball are admitted");
+		(void)MeshWorld.Step({});
+		auto MeshState = MeshWorld.GetBodyState(MeshBall);
+		Check(MeshState && MeshState->Transform.Position.x < 0.5f,
+			"fast convex body uses static triangle mesh CCD target");
+	}
+
+	void TestWorldRootContinuousCollisionProjection() {
+		using namespace gargantuan;
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Wall = std::make_shared<Part>();
+		Wall->SetAnchored(true);
+		Wall->SetSize({0.1f, 4.0f, 4.0f});
+		Wall->SetParent(Workspace);
+		auto Ball = std::make_shared<Part>();
+		Ball->SetName("CCDBall");
+		Ball->SetShape(Enums::PartType::Ball);
+		Ball->SetSize({0.5f, 0.5f, 0.5f});
+		Ball->SetCFrame(CFrame(-3.0f, 0.0f, 0.0f));
+		Ball->SetMovingBodyCCD(true);
+		Ball->SetParent(Workspace);
+		const auto Id = WorldRootTestAccess::Body(*Workspace, *Ball);
+		auto State = WorldRootTestAccess::State(*Workspace, Id);
+		Check(State && State->Description.MovingBodyCCD,
+			"authored moving-body CCD reaches the neutral body without changing identity");
+		Ball->SetLinearVelocity({360.0f, 0.0f, 0.0f});
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(Ball->GetCFrame().Position.x < 0.5f, "CCD result publishes through WorldRoot CFrame motion");
+		if (auto Game = Workspace->GetDataModel()) {
+			ScriptEngine Engine(Game);
+			const auto Bytecode = Luau::compile(R"(
+				local Ball = game:GetService("Workspace").CCDBall
+				assert(Ball.MovingBodyCCD)
+				assert(Ball.Position.X < 0.5)
+			)");
+			const int Loaded = luau_load(Engine.L, "physics-ccd-observation", Bytecode.data(), Bytecode.size(), 0);
+			ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+			const int Status = Loaded == LUA_OK ? lua_pcall(Engine.L, 0, 0, 0) : Loaded;
+			if (Status != LUA_OK)
+				std::cerr << "[Physics:CCD] LUAU ERROR: " <<
+					(lua_tostring(Engine.L, -1) ? lua_tostring(Engine.L, -1) : "unknown") << '\n';
+			Check(Status == LUA_OK, "Luau observes persisted CCD policy and published projectile motion");
+		}
+		Ball->SetAnchored(true);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Id);
+		Check(State && !State->Description.MovingBodyCCD && Ball->GetMovingBodyCCD(),
+			"anchoring suppresses effective CCD while retaining authored policy");
+		Ball->SetAnchored(false);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Id);
+		Check(State && State->Description.MovingBodyCCD && WorldRootTestAccess::Body(*Workspace, *Ball) == Id,
+			"unanchoring restores CCD at a safe point without replacing body identity");
+		Ball->SetKinematic(true);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Id);
+		Check(State && !State->Description.MovingBodyCCD,
+			"kinematic transition suppresses the dynamic-only CCD request");
+		Ball->SetKinematic(false);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Id);
+		Check(State && State->Description.MovingBodyCCD,
+			"dynamic transition restores authored CCD request");
+	}
+
 	void TestTouchAndSensorUpdates() {
 		using namespace gargantuan;
 		auto Workspace = MakeWorkspace();
@@ -852,13 +1570,23 @@ namespace {
 		Sensor->SetAnchored(true);
 		Sensor->SetCanCollide(false);
 		Sensor->SetCanTouch(true);
+		Sensor->SetCollisionGroup(2);
+		Sensor->SetCollisionMask(0);
 		Sensor->SetSize({4.0f, 4.0f, 4.0f});
 		auto Visitor = std::make_shared<Part>();
+		Visitor->SetCollisionGroup(3);
+		Visitor->SetCollisionMask(std::uint16_t{1} << 2);
 		Visitor->SetCFrame(CFrame(0.0f, 0.0f, 0.0f));
 		Sensor->SetParent(Workspace);
 		Visitor->SetParent(Workspace);
 		int Touches = 0;
 		Sensor->Touched->Connect([&](std::shared_ptr<BasePart>) { ++Touches; });
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(Touches == 0, "sensor mask rejects a disallowed group before event publication");
+		Sensor->SetCollisionMask(std::uint16_t{1} << 3);
+		Visitor->SetCFrame(CFrame(20.0f, 0.0f, 0.0f));
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Visitor->SetCFrame(CFrame(0.0f, 0.0f, 0.0f));
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
 		Check(Touches == 1, "non-colliding CanTouch body receives normalized sensor begin event");
 
@@ -1196,6 +1924,14 @@ namespace {
 		const std::string Source = R"(
 			local Workspace = game:GetService("Workspace")
 			local Params = RaycastParams.new()
+			assert(Params.CollisionGroup == 0 and Params.CollisionMask == 65535)
+			assert(not pcall(function() Params.CollisionGroup = 16 end))
+			assert(not pcall(function() Params.CollisionMask = 65536 end))
+			assert(Workspace.RayTarget:GetMass() >= 0)
+			assert(Workspace.RayTarget:GetLinearVelocity() == Vector3.zero)
+			assert(Workspace.RayTarget:GetAngularVelocity() == Vector3.zero)
+			assert(Workspace.RayTarget:GetLocalInertia().X >= 0)
+			assert(type(Workspace.RayTarget:GetAwake()) == "boolean")
 			Params.FilterType = Enum.RaycastFilterType.Exclude
 			Params.FilterDescendantsInstances = {}
 			local TooMany = {}
@@ -1235,6 +1971,91 @@ namespace {
 	}
 }
 
+namespace {
+	void TestAdvancedQueryBoundsAndRotation() {
+		using namespace gargantuan;
+		auto World=MakeWorkspace();
+		auto Target=MakeRayPart(World,"RotatedTarget",{5,0,0});
+		for(auto Kind:{PhysicsQueryShapeKind::Box,PhysicsQueryShapeKind::Capsule}) {
+			PhysicsQueryShape Query; Query.Kind=Kind; Query.Size={.2f,12,.2f}; Query.Radius=.2f; Query.Height=12;
+			Check(World->ResolveOverlap(Query).Parts.empty(),"unrotated narrow proxy misses off-axis target");
+			Query.Transform=CFrame::Angles(0,0,1.57079632679f);
+			Check(World->ResolveOverlap(Query).Parts==std::vector<std::shared_ptr<BasePart>>{Target},"oriented box/capsule proxy rotates local points into world axes");
+			Query.Transform.Position={0,-5,0};
+			Check(World->ResolveShapeCast(Query,{0,10,0}).Instance==Target,"oriented box/capsule sweeps hit off-axis target");
+		}
+		Target->Destroy();
+		std::vector<std::shared_ptr<BasePart>> Parts;
+		for(int Index=0;Index<300;++Index) Parts.push_back(MakeRayPart(World,"OverlapBound",{}));
+		auto Expected=Parts;
+		std::ranges::sort(Expected,{},[](const auto &Part){return Part->GetObjectId();}); Expected.resize(256);
+		auto Overlap=World->ResolveOverlap(PhysicsQueryShape{});
+		Check(Overlap.Succeeded() && Overlap.Truncated && Overlap.Parts==Expected,"300-owner overlap returns lowest 256 semantic identities with explicit truncation");
+		for(auto &Part:Parts) Part->Destroy();
+		PhysicsWorld Backend(PhysicsWorldConfig{});
+		PhysicsBodyDesc Description; Description.Anchored=true;
+		std::vector<PhysicsBodyId> Ids;
+		for(std::size_t Index=0;Index<=MaximumRaycastCandidates;++Index) Ids.push_back(Backend.CreateBody(Description));
+		Check(std::ranges::all_of(Ids,[](auto Id){return Id.IsValid();}),"candidate overflow fixture admits 4097 distinct body owners");
+		auto Overflow=Backend.Overlap({PhysicsQueryShape{},{}});
+		Check(!Overflow.Succeeded() && Overflow.Truncated && Overflow.Bodies.empty(),"4097-owner overlap fails closed without arbitrary partial subset");
+		PhysicsQueryShape Shape; Shape.Transform=CFrame(glm::vec3(-5,0,0));
+		auto CastOverflow=Backend.ShapeCast({Shape,{10,0,0},{}});
+		Check(!CastOverflow.Succeeded() && CastOverflow.CandidatesTruncated && CastOverflow.Candidates.empty(),"4097-owner cast fails closed at candidate cap");
+		for(auto Id:Ids) Check(Backend.DestroyBody(Id).Succeeded(),"overflow query fixture retires all native owners");
+	}
+	void TestAdvancedWorldQueries() {
+		using namespace gargantuan;
+		auto Game=std::make_shared<DataModel>();
+		auto World=std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto First=MakeRayPart(World,"QueryFirst",{5,0,0});
+		auto Second=MakeRayPart(World,"QuerySecond",{5,0,0});
+		for (auto Kind:{PhysicsQueryShapeKind::Sphere,PhysicsQueryShapeKind::Capsule,PhysicsQueryShapeKind::Box}) {
+			PhysicsQueryShape Shape;
+			Shape.Kind=Kind;
+			Shape.Radius=.5f; Shape.Height=2; Shape.Size={1,2,1};
+			auto Hit=World->ResolveShapeCast(Shape,{10,0,0});
+			auto Expected=First->GetObjectId()<Second->GetObjectId()?First:Second;
+			Check(Hit.Succeeded() && Hit.Instance==Expected && std::abs(Hit.Distance-3.5f)<.05f && std::abs(glm::length(Hit.Normal)-1)<.001f,"sphere/capsule/box casts return semantic nearest stable hit and unit normal");
+			Shape.Transform=CFrame(glm::vec3(5,0,0));
+			auto Overlap=World->ResolveOverlap(Shape,{},1);
+			Check(Overlap.Succeeded() && Overlap.Parts.size()==1 && Overlap.Parts.front()==Expected && Overlap.Truncated,"overlap sorts semantic identities before explicit deterministic truncation");
+			RaycastParams Params;
+			Params.FilterType=Enums::RaycastFilterType::Include;
+			Params.FilterDescendantsInstances.Values={Second};
+			auto Included=World->ResolveOverlap(Shape,Params);
+			Check(Included.Succeeded() && Included.Parts.size()==1 && Included.Parts.front()==Second,"advanced query honors descendant inclusion");
+			Params.CollisionMask=0;
+			Check(World->ResolveOverlap(Shape,Params).Parts.empty(),"advanced query honors native and neutral collision masks");
+			Check(!World->ResolveOverlap(Shape,{},0).Succeeded(),"overlap rejects zero result limit");
+			Shape.Radius=-1; Shape.Size={-1,1,1};
+			Check(!World->ResolveShapeCast(Shape,{10,0,0}).Succeeded(),"invalid query shape fails before native dispatch");
+		}
+		ScriptEngine Engine(Game);
+		const auto Bytecode=Luau::compile(R"(
+			local W=game:GetService("Workspace")
+			assert(W:SphereCast(Vector3.zero,.5,Vector3.new(10,0,0)).Distance>3)
+			assert(W:CapsuleCast(CFrame.new(),.5,2,Vector3.new(10,0,0)).Instance)
+			assert(W:BoxCast(CFrame.new(),Vector3.new(1,2,1),Vector3.new(10,0,0)).Instance)
+			for _, R in { W:GetPartsInSphere(Vector3.new(5,0,0),1,nil,1), W:GetPartsInCapsule(CFrame.new(5,0,0),.5,2,nil,1), W:GetPartsInBox(CFrame.new(5,0,0),Vector3.new(2,2,2),nil,1) } do
+				assert(#R.Parts==1 and R.Truncated)
+				assert(not pcall(function() R.Truncated=false end))
+				assert(not pcall(function() R.Parts[1]=nil end))
+			end
+			assert(not pcall(function() W:GetPartsInSphere(Vector3.zero,1,nil,257) end))
+			assert(not pcall(function() W:SphereCast(Vector3.zero,-1,Vector3.new(10,0,0)) end))
+		)");
+		const int Loaded=luau_load(Engine.L,"advanced-physics-queries",Bytecode.data(),Bytecode.size(),0);
+		ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+		const int Status=Loaded==LUA_OK?lua_pcall(Engine.L,0,0,0):Loaded;
+		if (Status!=LUA_OK) std::cerr << "[Physics:Query] " << lua_tostring(Engine.L,-1) << '\n';
+		Check(Status==LUA_OK,"Luau authored advanced queries expose bounded immutable results");
+		First->Destroy(); Second->Destroy();
+		PhysicsQueryShape Shape; Shape.Transform=CFrame(glm::vec3(5,0,0));
+		Check(World->ResolveOverlap(Shape).Parts.empty(),"destroyed query owners retire at safe point");
+	}
+}
+
 int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
@@ -1248,7 +2069,11 @@ int main() {
 		return Failures == 0 ? 0 : 1;
 	}
 	TestNeutralContract();
+	TestAdvancedWorldQueries();
+	TestAdvancedQueryBoundsAndRotation();
 	TestBackendIdentityAndLifecycle();
+	TestAdvancedConstraintBackend();
+	TestBoundedConstraintAdmission();
 	TestStaticTriangleMeshBackend();
 	TestDenseMeshContactCandidateOverflow();
 	TestDetachedWorldRootKinematicMotion();
@@ -1259,7 +2084,16 @@ int main() {
 	TestCommittedBodyUpdates();
 	TestMeshPartCollisionFallback();
 	TestConstraintAndPendingDestroy();
+	TestAuthoredJointLifecycle();
+	TestGameplayLuauJointAssembly();
 	TestSimulationPublicationAndImpulse();
+	TestBodyDynamicsAndCollisionGroups();
+	TestWorldRootDynamicsProjection();
+	TestBodyControlCapabilityBoundary();
+	TestForceDurationAndKinematicMotion();
+	TestBodyControlPersistence();
+	TestContinuousCollisionPolicy();
+	TestWorldRootContinuousCollisionProjection();
 	TestTouchAndSensorUpdates();
 	TestStaticWorldStepReference();
 	TestSemanticRaycastContract();

@@ -18,6 +18,7 @@
 namespace gargantuan {
 	class DataModel;
 	class Project;
+	class RuntimeSchemaRegistry;
 
 	inline constexpr std::uint32_t GamePackageFormatVersion = 2;
 	inline constexpr std::uint32_t RuntimeCompatibilityVersion = 1;
@@ -70,6 +71,8 @@ namespace gargantuan {
 		std::string ProjectJson;
 		std::optional<std::string> PreRunSource;
 		AssetRuntimeSnapshot Assets;
+		// Captured on Main; keeps the frozen reflection generation alive during worker packaging.
+		std::shared_ptr<const RuntimeSchemaRegistry> SchemaSnapshot;
 		// Native capture observation only; includes lazy canonical mesh decoding.
 		std::chrono::microseconds SpatialInspectionDuration{};
 		struct ContentUnit final {

@@ -66,10 +66,12 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, ObjectId> SoftBodyAttachmentOwners;
 		std::unordered_map<ObjectId, std::weak_ptr<Constraint>> TrackedConstraints;
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> PhysicsConnections;
+		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> JointAttachmentConnections;
 		std::unordered_set<ObjectId> DirtyBodies;
 		std::unordered_set<ObjectId> FailedMeshUpdatesLogged;
 		std::unordered_set<ObjectId> DirtyDeformables;
 		std::unordered_set<ObjectId> DirtyConstraints;
+		std::unordered_set<ObjectId> FailedConstraintUpdatesLogged;
 		SignalConnection::Pointer GravityConnection;
 		SignalConnection::Pointer DestroyingConnection;
 		SignalConnection::Pointer DescendantRemovedConnection;
@@ -86,10 +88,23 @@ namespace gargantuan {
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
 		[[nodiscard]] WorldRaycastResult
 		ResolveRaycast(glm::vec3 Origin, glm::vec3 Direction, const RaycastParams &Params = {});
+		[[nodiscard]] WorldRaycastResult ResolveShapeCast(const PhysicsQueryShape &Shape, glm::vec3 Direction, const RaycastParams &Params = {});
+		struct OverlapResult {
+			PhysicsOperationStatus Status = PhysicsOperationStatus::Success;
+			std::string Message;
+			std::vector<std::shared_ptr<BasePart>> Parts;
+			bool Truncated = false;
+			[[nodiscard]] bool Succeeded() const { return Status == PhysicsOperationStatus::Success; }
+		};
+		[[nodiscard]] OverlapResult ResolveOverlap(const PhysicsQueryShape &Shape, const RaycastParams &Params = {}, std::size_t MaxResults = MaximumPhysicsOverlapResults);
 		[[nodiscard]] std::optional<SoftBodyState> GetDeformableState(ObjectId Object) const;
+		[[nodiscard]] std::optional<SoftBodyInspection> GetDeformableInspection(ObjectId Object) const;
+		[[nodiscard]] std::optional<glm::vec3> GetDeformableVertex(ObjectId Object, std::size_t VertexIndex) const;
 		[[nodiscard]] const SoftBodyStepProfile &GetLastSoftBodyProfile() const { return LastSoftBodyProfile; }
 
 	  private:
+		[[nodiscard]] WorldRaycastResult ResolveQueryHit(PhysicsRaycastResult Result);
+		static int RunShapeQuery(lua_State *L, Instance *Value, PhysicsQueryShapeKind Kind, bool IsOverlap);
 		friend struct WorldRootTestAccess;
 		[[nodiscard]] PhysicsBodyDesc DescribePart(const BasePart &Part);
 		[[nodiscard]] SoftBodyDefinition DescribeDeformable(DeformableBody &Body) const;
@@ -101,6 +116,7 @@ namespace gargantuan {
 		void TrackSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);
 		void TrackSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);
 		void TrackConstraint(const std::shared_ptr<Constraint> &Constraint);
+		void RefreshJointAttachmentConnections(const std::shared_ptr<Constraint> &Constraint);
 		void RemovePart(const std::shared_ptr<BasePart> &Part);
 		void RemoveDeformable(const std::shared_ptr<DeformableBody> &Body);
 		void RemoveSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);

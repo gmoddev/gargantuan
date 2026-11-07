@@ -29,5 +29,7 @@ namespace gargantuan {
 
 		Enums::RaycastFilterType FilterType = Enums::RaycastFilterType::Exclude;
 		RaycastFilterRoots FilterDescendantsInstances;
+		int CollisionGroup = 0;
+		int CollisionMask = 65535;
 	)
 }

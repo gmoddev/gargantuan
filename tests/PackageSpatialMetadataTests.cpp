@@ -2,11 +2,15 @@
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/WeldConstraint.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
@@ -117,6 +121,7 @@ namespace {
 		void CheckSnapshot(const GamePayload &Payload, bool Accepted, std::string_view Message) {
 			std::vector<PackagePhase> Observed;
 			const auto Output = Root / ("Output" + std::to_string(++Sequence));
+			ExecutionDomainScope WorkerDomain(ExecutionDomain::Worker);
 			const auto Result = PackageBuilder::Build({
 				.Payload = Payload,
 				// Deliberately absent: a valid snapshot reaches Validate; an invalid
@@ -164,6 +169,62 @@ namespace {
 		SetPayload(Changed.ContentUnits[0], Document);
 		Test.CheckSnapshot(Changed, false, "non-rigid spatial basis bypassed supported transform gate");
 		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		MeshNode(Document).erase("NodeId");
+		SetPayload(Changed.ContentUnits[0], Document);
+		Test.CheckSnapshot(Changed, false, "missing v5 NodeId reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		MeshNode(Document)["NodeId"] = Document["NodeId"];
+		SetPayload(Changed.ContentUnits[0], Document);
+		Test.CheckSnapshot(Changed, false, "duplicate v5 NodeId reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		MeshNode(Document)["Properties"]["SyntheticReference"] = Json{{"InstanceReference", "wrong type"}};
+		SetPayload(Changed.ContentUnits[0], Document);
+		Test.CheckSnapshot(Changed, false, "wrong-type v5 reference reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		MeshNode(Document)["Properties"]["SyntheticReference"] = Json{{"InstanceReference", MaximumPersistenceObjects}};
+		SetPayload(Changed.ContentUnits[0], Document);
+		Test.CheckSnapshot(Changed, false, "out-of-document v5 reference reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		auto InvalidWeld = std::make_shared<WeldConstraint>();
+		InvalidWeld->SetName("InvalidTargetType");
+		std::shared_ptr<Instance> Serializable = InvalidWeld;
+		auto WeldDocument = Json::parse(InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, Serializable));
+		WeldDocument.erase("Version");
+		WeldDocument["NodeId"] = MaximumPersistenceObjects;
+		WeldDocument["Properties"]["Part0"]["InstanceReference"] = Document["NodeId"];
+		Document["Children"].push_back(std::move(WeldDocument));
+		SetPayload(Changed.ContentUnits[0], Document);
+		Changed.ContentUnits[0].Entry.ObjectCount = 4;
+		Test.CheckSnapshot(Changed, false, "wrong-class v5 reference target reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		WeldDocument = Json::parse(InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, Serializable));
+		WeldDocument.erase("Version");
+		WeldDocument["NodeId"] = MaximumPersistenceObjects;
+		WeldDocument["Properties"]["Part0"] = Json{{"String", "mistyped"}};
+		Document["Children"].push_back(std::move(WeldDocument));
+		SetPayload(Changed.ContentUnits[0], Document);
+		Changed.ContentUnits[0].Entry.ObjectCount = 4;
+		Test.CheckSnapshot(Changed, false, "mistyped saved reference property reached package staging");
+		Changed = Test.Baseline;
+		Document = Json::parse(Changed.ContentUnits[0].Payload);
+		WeldDocument = Json::parse(InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, Serializable));
+		WeldDocument.erase("Version");
+		WeldDocument["NodeId"] = MaximumPersistenceObjects;
+		WeldDocument["Properties"]["Part0"] = Json::object();
+		Document["Children"].push_back(std::move(WeldDocument));
+		SetPayload(Changed.ContentUnits[0], Document);
+		Changed.ContentUnits[0].Entry.ObjectCount = 4;
+		Test.CheckSnapshot(Changed, false, "empty saved reference property reached package staging");
+		Changed = Test.Baseline;
 		Require(!Changed.Assets.Artifacts.empty() && Changed.Assets.Artifacts[0].Bytes &&
 			!Changed.Assets.Artifacts[0].Bytes->empty(), "fixture artifact closure is absent");
 		auto Corrupt = std::make_shared<std::vector<std::uint8_t>>(*Changed.Assets.Artifacts[0].Bytes);
@@ -178,11 +239,58 @@ namespace {
 		Dependency.Entry.Key = "zz/dependency";
 		Dependency.Entry.BlobReference = "content/dependency.instance.json";
 		Dependency.Entry.ObjectCount = 1;
-		SetPayload(Dependency, Json{{"Version", PackageContentInstanceSchemaVersion}, {"Name", "Dependency"},
-			{"ClassName", "Folder"}, {"Properties", Json::object()}, {"Children", Json::array()}});
+		auto Root = std::make_shared<Folder>();
+		Root->SetName("Dependency");
+		Root->SetArchivable(true);
+		std::shared_ptr<Instance> Serializable = Root;
+		SetPayload(Dependency, Json::parse(InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, Serializable)));
 		Changed.ContentUnits[0].Entry.Dependencies = {Dependency.Entry.Key};
 		Changed.ContentUnits.push_back(std::move(Dependency));
 		Test.CheckSnapshot(Changed, true, "valid nonspatial hard dependency lost 3L compatibility");
+	}
+
+	void CheckReferencePartition(Fixture &Test) {
+		auto Space = std::dynamic_pointer_cast<Workspace>(Test.World->GetService("Workspace"));
+		Require(static_cast<bool>(Space), "reference partition fixture has no Workspace");
+		auto Source = std::make_shared<Folder>();
+		Source->SetName("ReferenceSource");
+		Source->SetParent(Space);
+		auto SourcePart = std::make_shared<Part>();
+		SourcePart->SetName("SourcePart");
+		SourcePart->SetAnchored(true);
+		SourcePart->SetParent(Source);
+		auto Target = std::make_shared<Folder>();
+		Target->SetName("ReferenceTarget");
+		Target->SetParent(Space);
+		auto TargetPart = std::make_shared<Part>();
+		TargetPart->SetName("TargetPart");
+		TargetPart->SetAnchored(true);
+		TargetPart->SetCFrame(CFrame(20, 0, 0));
+		TargetPart->SetParent(Target);
+		auto Link = std::make_shared<WeldConstraint>();
+		Link->SetName("CrossUnitLink");
+		Link->SetPart0(SourcePart);
+		Link->SetPart1(TargetPart);
+		Link->SetParent(Source);
+		Test.World->MarkPersistenceSubtreeArchivable();
+		const auto ProjectValue = Project::fromExisting(Test.Filesystem.get());
+		const auto Revision = Test.World->GetAuthoritativeRevision();
+		const auto Payload = PackageBuilder::Capture(ProjectValue, Test.World, Revision, Revision);
+		Require(Payload.ContentUnits.size() == Test.Baseline.ContentUnits.size(),
+			"cross-unit reference changed unrelated spatial unit count");
+		const auto Bootstrap = Json::parse(Payload.ProjectJson);
+		bool RetainedSource = false;
+		bool RetainedTarget = false;
+		for (const auto &Child : Bootstrap["Children"]) {
+			if (Child.value("ClassName", "") != "Workspace") continue;
+			for (const auto &Member : Child["Children"]) {
+				RetainedSource |= Member.value("Name", "") == "ReferenceSource";
+				RetainedTarget |= Member.value("Name", "") == "ReferenceTarget";
+			}
+		}
+		Require(RetainedSource && RetainedTarget,
+			"package partition discarded source or target of an authored cross-unit reference");
 	}
 }
 
@@ -196,7 +304,8 @@ int main() {
 		Fixture Test;
 		CheckProducerDenials(Test);
 		CheckNonspatialDependency(Test);
-		std::cout << "[Package:SpatialMetadata] actual mixed geometry, exact proof and safe snapshot denials passed\n";
+		CheckReferencePartition(Test);
+		std::cout << "[Package:SpatialMetadata] mixed geometry, exact proof, reference retention and safe snapshot denials passed\n";
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Package:SpatialMetadata] " << Error.what() << '\n';

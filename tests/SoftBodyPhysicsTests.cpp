@@ -2,6 +2,7 @@
 #include "gargantuan/classes/Cloth.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/RubberBody.hpp"
 #include "gargantuan/classes/SoftBodyAttachment.hpp"
 #include "gargantuan/classes/SoftBodyMaterial.hpp"
@@ -11,6 +12,8 @@
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "physics/SoftBodyTestHooks.hpp"
 
 #include <algorithm>
@@ -19,14 +22,17 @@
 #include <cmath>
 #include <condition_variable>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <glm/gtc/quaternion.hpp>
@@ -42,7 +48,10 @@ namespace {
 
 	class StepGate final {
 	  public:
+		void Arm() { Armed.store(true); }
+
 		void Pause(const gargantuan::SoftBodyStepProfile &ProfileValue = {}) {
+			if (!Armed.load()) return;
 			std::unique_lock Lock(Mutex);
 			Profile = ProfileValue;
 			Arrived = true;
@@ -68,6 +77,7 @@ namespace {
 		}
 
 	  private:
+		std::atomic<bool> Armed = false;
 		std::mutex Mutex;
 		std::condition_variable Changed;
 		bool Arrived = false;
@@ -77,8 +87,13 @@ namespace {
 
 	class HeldSoftBodyStep final {
 	  public:
-		explicit HeldSoftBodyStep(bool AtAdmission = false)
-			: World(gargantuan::detail::CreateSoftBodyBackendForTesting(MakeHooks(Gate, AtAdmission))) {}
+		explicit HeldSoftBodyStep(
+			bool AtAdmission = false,
+			std::function<void()> BeforeAttachmentCommit = {},
+			bool ThrowAfterMergeBarrier = false
+		)
+			: World(gargantuan::detail::CreateSoftBodyBackendForTesting(
+				MakeHooks(Gate, AtAdmission, std::move(BeforeAttachmentCommit), ThrowAfterMergeBarrier))) {}
 
 		~HeldSoftBodyStep() {
 			Gate.Release();
@@ -86,6 +101,7 @@ namespace {
 		}
 
 		void Start() {
+			Gate.Arm();
 			Worker = std::thread([this] {
 				try {
 					Result = World.Step({.DeltaTime = gargantuan::SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
@@ -106,12 +122,24 @@ namespace {
 		gargantuan::SoftBodyStepResult Result;
 
 	  private:
-		static gargantuan::detail::SoftBodyStepTestHooks MakeHooks(StepGate &GateValue, bool AtAdmission) {
+		static gargantuan::detail::SoftBodyStepTestHooks MakeHooks(
+			StepGate &GateValue,
+			bool AtAdmission,
+			std::function<void()> BeforeAttachmentCommit,
+			bool ThrowAfterMergeBarrier
+		) {
 			gargantuan::detail::SoftBodyStepTestHooks Hooks;
+			Hooks.BeforeAttachmentCommit = std::move(BeforeAttachmentCommit);
 			if (AtAdmission)
 				Hooks.StepAdmitted = [&GateValue] { GateValue.Pause(); };
 			else
-				Hooks.BeforeMerge = [&GateValue](const auto &Profile) { GateValue.Pause(Profile); };
+				Hooks.BeforeMerge = [&GateValue, ThrowAfterMergeBarrier](const auto &Profile) mutable {
+					GateValue.Pause(Profile);
+					if (ThrowAfterMergeBarrier) {
+						ThrowAfterMergeBarrier = false;
+						throw std::runtime_error("synthetic pre-merge failure");
+					}
+				};
 			return Hooks;
 		}
 
@@ -157,6 +185,160 @@ namespace {
 			{X - 1, {4.0f, 12.0f, 0.0f}},
 		};
 		return Definition;
+	}
+
+	void TestMovingAttachmentAndBoundedInspection() {
+		using namespace gargantuan;
+		SoftBodyWorld World;
+		auto Definition = ClothDefinition();
+		const auto Body = World.CreateBody(Definition);
+		Check(Body.IsValid(), "moving-attachment fixture creates a cloth body");
+		for (int Step = 0; Step < 12; ++Step)
+			(void)World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -196.2f, 0.0f}});
+		auto Before = World.GetBodyState(Body);
+		Check(Before && Before->Positions && Before->Positions->size() == 64,
+			"moving-attachment fixture retains accepted cloth vertices");
+		if (!Before || !Before->Positions) return;
+		const auto Center = (*Before->Positions)[36];
+		Definition.Attachments[0].Position.y += 2.0f;
+		Check(World.UpdateBody(Body, Definition).Succeeded(), "moving an existing pin is accepted");
+		auto After = World.GetBodyState(Body);
+		Check(After && After->Positions && Distance((*After->Positions)[36], Center) < 0.0001f,
+			"moving a pin preserves the deformation of unpinned vertices");
+		Check(After && After->TopologyRevision == Before->TopologyRevision &&
+			After->VertexRevision > Before->VertexRevision &&
+			Near((*After->Positions)[0].y, Definition.Attachments[0].Position.y),
+			"pin movement changes only vertex state and keeps stable topology");
+		auto Info = World.GetBodyInspection(Body);
+		Check(Info && Info->VertexCount == 64 && Info->ConstraintCount > 0 && Info->AttachmentCount == 2 &&
+			Info->Enabled && Info->TopologyRevision == After->TopologyRevision,
+			"read-only inspection returns bounded counts and revisions");
+		auto Invalid = Definition;
+		Invalid.Attachments.push_back(Invalid.Attachments.front());
+		Check(World.UpdateBody(Body, Invalid).Status == PhysicsOperationStatus::InvalidDescription &&
+			World.GetBodyState(Body)->VertexRevision == After->VertexRevision,
+			"duplicate pin update rejects atomically");
+		Invalid = Definition;
+		Invalid.Attachments[0].Position.x = std::numeric_limits<float>::infinity();
+		Check(World.UpdateBody(Body, Invalid).Status == PhysicsOperationStatus::InvalidDescription &&
+			World.GetBodyState(Body)->VertexRevision == After->VertexRevision,
+			"non-finite pin update rejects atomically");
+		Definition.Attachments.erase(Definition.Attachments.begin());
+		Check(World.UpdateBody(Body, Definition).Succeeded() && World.GetBodyInspection(Body)->AttachmentCount == 1,
+			"removing a pin releases it without rebuilding the cloth");
+		(void)World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -196.2f, 0.0f}});
+		Check(World.DestroyBody(Body).Succeeded() && !World.GetBodyInspection(Body),
+			"destroy invalidates bounded inspection");
+	}
+
+	void TestAttachmentCommitFailureIsAtomic() {
+		using namespace gargantuan;
+		detail::SoftBodyStepTestHooks Hooks;
+		Hooks.BeforeAttachmentCommit = [] { throw std::bad_alloc(); };
+		SoftBodyWorld World(detail::CreateSoftBodyBackendForTesting(std::move(Hooks)));
+		auto Definition = ClothDefinition();
+		const auto Body = World.CreateBody(Definition);
+		(void)World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		const auto Before = World.GetBodyState(Body);
+		Definition.Attachments[0].Position.y += 3.0f;
+		const auto Failure = World.UpdateBody(Body, Definition);
+		const auto After = World.GetBodyState(Body);
+		Check(Failure.Status == PhysicsOperationStatus::BackendFailure && Before && After &&
+			Before->VertexRevision == After->VertexRevision &&
+			*Before->Positions == *After->Positions && World.GetBodyInspection(Body)->AttachmentCount == 2,
+			"failure after attachment allocation staging leaves live nodes and publication unchanged");
+		(void)World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		Check(World.GetBodyState(Body)->VertexRevision > Before->VertexRevision,
+			"a failed attachment update leaves the original body operational");
+	}
+
+	void TestMovingRigidColliderThroughWorldRoot() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		World->SetGravity(0.0f);
+		auto ClothBody = std::make_shared<Cloth>();
+		ClothBody->SetResolutionX(8);
+		ClothBody->SetResolutionY(8);
+		ClothBody->SetPosition({0.0f, 5.0f, 0.0f});
+		ClothBody->SetSize({2.0f, 2.0f, 0.5f});
+		ClothBody->SetParent(World);
+		auto Collider = std::make_shared<Part>();
+		Collider->SetAnchored(true);
+		Collider->SetSize({1.0f, 4.0f, 1.0f});
+		Collider->SetCFrame(CFrame(0.0f, 5.0f, 2.0f));
+		Collider->SetParent(World);
+		World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+		const auto Before = World->GetDeformableVertex(ClothBody->GetObjectId(), 27);
+		Collider->SetCFrame(CFrame(0.0f, 5.0f, 0.3f));
+		World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+		const auto After = World->GetDeformableVertex(ClothBody->GetObjectId(), 27);
+		Check(Before && After && std::isfinite(After->z) && Distance(*Before, *After) > 0.05f &&
+			World->GetLastSoftBodyProfile().CandidateColliders > 0,
+			"WorldRoot feeds a moved rigid primitive to the cloth contact step");
+		Game->Destroy();
+	}
+
+	void TestRubberPointImpulseThroughWorldRoot() {
+		using namespace gargantuan;
+		auto Game=std::make_shared<DataModel>();
+		auto World=std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		World->SetGravity(0);
+		auto Rubber=std::make_shared<RubberBody>();
+		Rubber->SetName("GameplayRubber");
+		Rubber->SetResolutionX(4); Rubber->SetResolutionY(4); Rubber->SetResolutionZ(4);
+		Rubber->SetPosition({0,5,0}); Rubber->SetSize({2,2,2}); Rubber->SetParent(World);
+		World->StepPhysics(SoftBodyStepInterval,std::nullopt);
+		{
+			ScriptEngine Engine(Game);
+			const auto Bytecode=Luau::compile(R"(
+				local W=game:GetService("Workspace")
+				local R=W.GameplayRubber
+				local Info=W:GetDeformableInfo(R)
+				assert(Info.VertexCount==64 and Info.ConstraintCount>0 and Info.Enabled)
+				assert(not pcall(function() Info.VertexCount=0 end))
+				assert(W:GetDeformableVertex(R,0)~=nil)
+				assert(W:GetDeformableVertex(R,-1)==nil and W:GetDeformableVertex(R,65536)==nil)
+				assert(W:GetDeformableVertex(R,1.5)==nil and W:GetDeformableInfo(W)==nil)
+				local Step=W:GetSoftBodyStepInfo()
+				assert(Step.SimulatedVertices==64 and Step.SimulatedBodies==1)
+				assert(not pcall(function() Step.FrozenBodies=0 end))
+			)");
+			const int Loaded=luau_load(Engine.L,"soft-diagnostics",Bytecode.data(),Bytecode.size(),0);
+			ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+			const int Status=Loaded==LUA_OK?lua_pcall(Engine.L,0,0,0):Loaded;
+			if(Status!=LUA_OK) std::cerr << "[Physics:SoftDiagnostics] " << lua_tostring(Engine.L,-1) << '\n';
+			Check(Status==LUA_OK,"gameplay Luau reads bounded immutable deformable diagnostics");
+			const auto DeniedBytecode=Luau::compile(R"(
+				local W=game:GetService("Workspace")
+				local R=W.GameplayRubber
+				assert(not pcall(function() R:ApplyForce(Vector3.new(0,0,1)) end))
+				assert(not pcall(function() R:ApplyImpulse(Vector3.new(0,0,1)) end))
+				assert(not pcall(function() R:ApplyImpulseAtPosition(Vector3.new(0,0,1),Vector3.zero) end))
+				assert(not pcall(function() W:StepPhysics(1/60) end))
+			)");
+			const int DeniedLoaded=luau_load(Engine.L,"soft-authority",DeniedBytecode.data(),DeniedBytecode.size(),0);
+			ScriptSecurityScope ReadOnly({ScriptExecutionDomain::Studio,{ScriptCapability::ReadDataModel}});
+			const int DeniedStatus=DeniedLoaded==LUA_OK?lua_pcall(Engine.L,0,0,0):DeniedLoaded;
+			if(DeniedStatus!=LUA_OK) std::cerr << "[Physics:Authority] " << lua_tostring(Engine.L,-1) << '\n';
+			Check(DeniedStatus==LUA_OK,"read-only Luau cannot queue soft controls or advance authoritative physics");
+		}
+		const auto Before=World->GetDeformableVertex(Rubber->GetObjectId(),63);
+		Rubber->ApplyImpulseAtPosition({0,0,2},{1,6,1});
+		World->StepPhysics(SoftBodyStepInterval,std::nullopt);
+		const auto After=World->GetDeformableVertex(Rubber->GetObjectId(),63);
+		Check(Before && After && std::isfinite(After->z) && Distance(*Before,*After)>.001f,"WorldRoot rubber point impulse produces observable bounded vertex motion");
+		for(int Cycle=0;Cycle<12;++Cycle) {
+			Rubber->SetEnabled(false); World->StepPhysics(SoftBodyStepInterval,std::nullopt);
+			auto Frozen=World->GetDeformableInspection(Rubber->GetObjectId());
+			Check(Frozen && !Frozen->Enabled && !Frozen->Simulated,"disabled authored rubber remains inspectable without simulation");
+			Rubber->SetEnabled(true); World->StepPhysics(SoftBodyStepInterval,std::nullopt);
+			auto Enabled=World->GetDeformableInspection(Rubber->GetObjectId());
+			Check(Enabled && Enabled->Enabled && Enabled->VertexCount==64,"re-enabled rubber retains bounded authored topology");
+		}
+		const auto Removed=Rubber->GetObjectId(); Rubber->Destroy(); World->StepPhysics(0,std::nullopt);
+		Check(!World->GetDeformableInspection(Removed) && !World->GetDeformableVertex(Removed,63),"destroyed rubber retires inspection and vertex identity");
+		Game->Destroy();
 	}
 
 	void TestIdentityBoundsAndDeterminism() {
@@ -361,6 +543,8 @@ namespace {
 				!TierResult.States.front().Simulated,
 			"low quality freezes topology that cannot fit its hard active-vertex budget"
 		);
+		Check(TierWorld.GetBodyInspection(TierBody) && !TierWorld.GetBodyInspection(TierBody)->Simulated,
+			"read-only status reports a body frozen by the quality budget");
 	}
 
 	void TestJobifiedDeterminismAndLifecycle() {
@@ -389,6 +573,114 @@ namespace {
 			*Jobified.GetBodyState(JobifiedBody)->Positions == *Reference.GetBodyState(ReferenceBody)->Positions,
 			"jobified same-body solve is byte-equivalent to the synchronous reference"
 		);
+
+		HeldSoftBodyStep MovingPin;
+		SoftBodyWorld MovingReference;
+		auto MovingDefinition = ClothDefinition(16, 16);
+		const auto MovingBody = MovingPin.World.CreateBody(MovingDefinition);
+		const auto MovingReferenceBody = MovingReference.CreateBody(MovingDefinition);
+		for (int Step = 0; Step < 12; ++Step) {
+			(void)MovingPin.World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+			(void)MovingReference.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		}
+		const auto BeforeMovingStep = MovingPin.World.GetBodyState(MovingBody);
+		MovingPin.Start();
+		if (!AwaitMerge(MovingPin, 16 * 16)) return;
+		(void)MovingReference.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		const auto ExpectedSolved = MovingReference.GetBodyState(MovingReferenceBody);
+		MovingDefinition.Attachments[0].Position.y += 1.0f;
+		Check(MovingPin.World.UpdateBody(MovingBody, MovingDefinition).Succeeded(),
+			"first attachment update while a solve is in flight is accepted");
+		MovingDefinition.Attachments[0].Position.y += 1.0f;
+		Check(MovingPin.World.UpdateBody(MovingBody, MovingDefinition).Succeeded(),
+			"latest of two in-flight attachment targets is accepted");
+		const auto PendingState = MovingPin.World.GetBodyState(MovingBody);
+		Check(PendingState && BeforeMovingStep &&
+			Distance((*PendingState->Positions)[136], (*BeforeMovingStep->Positions)[136]) < 0.0001f,
+			"pending pin update preserves the last published unpinned deformation");
+		MovingPin.Finish();
+		const auto Merged = MovingPin.World.GetBodyState(MovingBody);
+		Check(MovingPin.Result.Profile.StaleResults == 0 && Merged && ExpectedSolved && Merged->Simulated &&
+			Distance((*Merged->Positions)[136], (*ExpectedSolved->Positions)[136]) < 0.0001f &&
+			Near((*Merged->Positions)[0].y, MovingDefinition.Attachments[0].Position.y),
+			"completed solve preserves unpinned deformation while publishing the latest pin target");
+		Check(MovingReference.UpdateBody(MovingReferenceBody, MovingDefinition).Succeeded(),
+			"reference applies the same pin movement after its step");
+		(void)MovingPin.World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		(void)MovingReference.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		Check(*MovingPin.World.GetBodyState(MovingBody)->Positions ==
+			*MovingReference.GetBodyState(MovingReferenceBody)->Positions,
+			"post-merge motion matches a reference with preserved unpinned velocities");
+
+		HeldSoftBodyStep PendingFault(false, [] { throw std::bad_alloc(); });
+		auto PendingFaultDefinition = ClothDefinition(16, 16);
+		const auto PendingFaultBody = PendingFault.World.CreateBody(PendingFaultDefinition);
+		PendingFault.Start();
+		if (!AwaitMerge(PendingFault, 16 * 16)) return;
+		const auto BeforePendingFault = PendingFault.World.GetBodyState(PendingFaultBody);
+		PendingFaultDefinition.Attachments[0].Position.y += 1.0f;
+		const auto PendingFailure = PendingFault.World.UpdateBody(PendingFaultBody, PendingFaultDefinition);
+		const auto AfterPendingFault = PendingFault.World.GetBodyState(PendingFaultBody);
+		Check(PendingFailure.Status == PhysicsOperationStatus::BackendFailure && BeforePendingFault &&
+			AfterPendingFault && BeforePendingFault->VertexRevision == AfterPendingFault->VertexRevision &&
+			*BeforePendingFault->Positions == *AfterPendingFault->Positions,
+			"failed in-flight attachment staging leaves the previous publication unchanged");
+		PendingFault.Finish();
+		Check(PendingFault.Result.Profile.StaleResults == 0 &&
+			PendingFault.World.GetBodyState(PendingFaultBody)->Simulated,
+			"failed in-flight attachment update still accepts the original completed solve");
+
+		HeldSoftBodyStep FailedMerge(false, {}, true);
+		auto FailedMergeDefinition = ClothDefinition(16, 16);
+		const auto FailedMergeBody = FailedMerge.World.CreateBody(FailedMergeDefinition);
+		FailedMerge.Start();
+		if (!AwaitMerge(FailedMerge, 16 * 16)) return;
+		FailedMergeDefinition.Attachments[0].Position.y += 1.0f;
+		Check(FailedMerge.World.UpdateBody(FailedMergeBody, FailedMergeDefinition).Succeeded(),
+			"pending pin target is staged before a pre-merge failure");
+		bool MergeFailed = false;
+		try {
+			FailedMerge.Finish();
+		} catch (const std::runtime_error &) {
+			MergeFailed = true;
+		}
+		Check(MergeFailed && !FailedMerge.World.HasInFlightStep() &&
+			Near((*FailedMerge.World.GetBodyState(FailedMergeBody)->Positions)[0].y,
+				FailedMergeDefinition.Attachments[0].Position.y),
+			"pre-merge failure restores a current record with the pending pin target");
+		(void)FailedMerge.World.Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0.0f, -20.0f, 0.0f}});
+		Check(FailedMerge.World.GetBodyState(FailedMergeBody)->Simulated,
+			"restored record continues simulating after the pre-merge failure");
+
+		for (int Cancellation = 0; Cancellation < 3; ++Cancellation) {
+			HeldSoftBodyStep Held;
+			auto Definition = ClothDefinition(16, 16);
+			const auto Body = Held.World.CreateBody(Definition);
+			Held.Start();
+			if (!AwaitMerge(Held, 16 * 16)) return;
+			Definition.Attachments[0].Position.y += 1.0f;
+			Check(Held.World.UpdateBody(Body, Definition).Succeeded(),
+				"pending attachment target is staged before a superseding change");
+			if (Cancellation == 0) {
+				Definition.Enabled = false;
+				Check(Held.World.UpdateBody(Body, Definition).Succeeded(),
+					"disable supersedes a pending attachment update");
+			} else if (Cancellation == 1) {
+				Definition.ResolutionX = 8;
+				Definition.Attachments.clear();
+				Check(Held.World.UpdateBody(Body, Definition).Succeeded(),
+					"topology change supersedes a pending attachment update");
+			} else {
+				Check(Held.World.DestroyBody(Body).Succeeded(),
+					"destroy cancels a pending attachment update");
+			}
+			Held.Finish();
+			const auto State = Held.World.GetBodyState(Body);
+			Check(Held.Result.Profile.StaleResults == 1 && Held.Result.States.empty() &&
+				(Cancellation == 2 ? !State :
+					State && State->Positions->size() == (Cancellation == 1 ? 128u : 256u) && !State->Simulated),
+				"superseding lifecycle change rejects the old worker result and pending pin target");
+		}
 
 		SoftBodyWorld Multiple;
 		const auto First = Multiple.CreateBody(ClothDefinition(8, 8));
@@ -859,6 +1151,20 @@ namespace {
 		Check(
 			RuntimeState && RuntimeState->Positions->size() == 64, "WorldRoot owns post-step semantic deformation state"
 		);
+		const auto RuntimeInfo = WorkspaceValue->GetDeformableInspection(Body->GetObjectId());
+		Check(RuntimeInfo && RuntimeInfo->VertexCount == 64 && RuntimeInfo->AttachmentCount == 2 &&
+			WorkspaceValue->GetDeformableVertex(Body->GetObjectId(), 64) == std::nullopt &&
+			WorkspaceValue->GetDeformableVertex(Body->GetObjectId(), 0).has_value(),
+			"WorldRoot exposes one bounded vertex and read-only body counts");
+		for (int Step = 0; Step < 8; ++Step)
+			WorkspaceValue->StepPhysics(SoftBodyStepInterval, std::nullopt);
+		const auto BeforePinMove = WorkspaceValue->GetDeformableVertex(Body->GetObjectId(), 36);
+		LeftPin->SetPosition({-4.0f, 14.0f, 0.0f});
+		WorkspaceValue->StepPhysics(0.0, std::nullopt);
+		const auto AfterPinMove = WorkspaceValue->GetDeformableVertex(Body->GetObjectId(), 36);
+		Check(BeforePinMove && AfterPinMove && Distance(*BeforePinMove, *AfterPinMove) < 0.0001f &&
+			Near(WorkspaceValue->GetDeformableVertex(Body->GetObjectId(), 0)->y, 14.0f),
+			"reflected attachment Position update moves its target without resetting cloth motion");
 
 		RenderPublisher Publisher;
 		RenderProjection Projection;
@@ -1014,6 +1320,10 @@ int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestIdentityBoundsAndDeterminism();
+		TestMovingAttachmentAndBoundedInspection();
+		TestAttachmentCommitFailureIsAtomic();
+		TestMovingRigidColliderThroughWorldRoot();
+		TestRubberPointImpulseThroughWorldRoot();
 		TestPinnedClothAndRigidCollision();
 		TestRubberRecoveryAndQualityTier();
 		TestJobifiedDeterminismAndLifecycle();

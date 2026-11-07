@@ -94,6 +94,16 @@ namespace gargantuan {
 		std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 	};
 
+	struct SoftBodyInspection {
+		std::size_t VertexCount = 0;
+		std::size_t ConstraintCount = 0;
+		std::size_t AttachmentCount = 0;
+		std::uint64_t TopologyRevision = 0;
+		std::uint64_t VertexRevision = 0;
+		bool Enabled = false;
+		bool Simulated = false;
+	};
+
 	struct SoftBodyWorldLimits {
 		std::size_t MaximumBodies = MaximumSoftBodies;
 		std::size_t MaximumVerticesPerBody = MaximumSoftBodyVertices;

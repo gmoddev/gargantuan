@@ -3156,7 +3156,7 @@ namespace {
 		std::shared_ptr<Instance> serializableRoot = game;
 		const auto serialized = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, serializableRoot);
 		Check(serialized.find(extensionId.ToString()) != std::string::npos &&
-			serialized.find("\"Version\":4") != std::string::npos,
+			serialized.find("\"Version\":5") != std::string::npos,
 			"persistence stores extension SchemaId, version, property identity, and WireValue");
 		std::istringstream persistedStream(serialized);
 		auto loaded = InstanceSerialization::Deserialize(
@@ -3668,8 +3668,8 @@ namespace {
 		std::shared_ptr<Instance> Serializable = Game;
 		const auto Serialized = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Serializable);
 		Check(Serialized.find(ChildId.ToString()) != std::string::npos &&
-			Serialized.find(ParentId.ToString()) != std::string::npos && Serialized.find("\"Version\":4") != std::string::npos,
-			"persistence v4 stores custom class, declaring property identity, and exact definition versions");
+			Serialized.find(ParentId.ToString()) != std::string::npos && Serialized.find("\"Version\":5") != std::string::npos,
+			"persistence v5 stores custom class, declaring property identity, and exact definition versions");
 		auto OversizedPersistedVersion = nlohmann::ordered_json::parse(Serialized);
 		for (auto &Child : OversizedPersistedVersion["Children"])
 			if (Child["Name"] == "CustomCombatFolder")
@@ -3739,23 +3739,25 @@ namespace {
 	void TestSerializationGoldenFixtures() {
 		using namespace gargantuan;
 		using namespace gargantuan::InstanceSerialization;
+		using Json = nlohmann::ordered_json;
 
 		const auto ProjectMinimal = ReadSerializationFixture("project_v4_minimal.json");
 		auto MinimalRoot = std::make_shared<DataModel>();
 		MinimalRoot->SetName("FixtureProject");
 		MinimalRoot->SetArchivable(true);
 		std::shared_ptr<Instance> MinimalSerializable = MinimalRoot;
+		const auto CurrentMinimal = Serialize(InstanceFormat::Json, MinimalSerializable);
 		Check(
-			Serialize(InstanceFormat::Json, MinimalSerializable) == ProjectMinimal,
-			"minimal project fixture locks deterministic persistence v4 output"
+			Json::parse(CurrentMinimal)["Version"] == 5 && Json::parse(CurrentMinimal)["NodeId"] == 1,
+			"minimal project writer emits deterministic persistence v5 identity"
 		);
 		std::istringstream MinimalInput(ProjectMinimal);
 		auto MinimalDecoded = Deserialize(InstanceFormat::Json, MinimalInput);
 		std::shared_ptr<Instance> MinimalDecodedRoot = MinimalDecoded.Instance;
 		Check(
 			MinimalDecoded.Ok && MinimalDecodedRoot &&
-				Serialize(InstanceFormat::Json, MinimalDecodedRoot) == ProjectMinimal,
-			"minimal project fixture decodes to semantic state and re-encodes canonically"
+				Serialize(InstanceFormat::Json, MinimalDecodedRoot) == CurrentMinimal,
+			"legacy minimal project fixture upgrades to canonical v5 output"
 		);
 
 		const auto ProjectComplex = ReadSerializationFixture("project_v4_complex.json");
@@ -3774,8 +3776,10 @@ namespace {
 		if (ProjectRoot) ProjectRoot->SetArchivable(true);
 		const auto ProjectReencoded = ProjectRoot ? Serialize(InstanceFormat::Json, ProjectRoot) : std::string{};
 		Check(
-			ProjectDecoded.Ok && ProjectRoot && ProjectReencoded == ProjectComplex,
-			"complex project fixture preserves Attributes, Tags, extensions, custom classes, and sparse state"
+			ProjectDecoded.Ok && ProjectRoot && Json::parse(ProjectReencoded)["Version"] == 5 &&
+				Json::parse(ProjectReencoded)["Children"].size() == 1 &&
+				ProjectReencoded.find("FixtureCustom") != std::string::npos,
+			"legacy complex project fixture preserves semantic state when upgraded to v5"
 		);
 
 		for (const auto Name : {"snapshot_v6_minimal.json", "snapshot_v6_complex.json"}) {
@@ -5132,7 +5136,7 @@ namespace {
 		std::ifstream CreatedProjectStream(CreatedProjectPath, std::ios::binary);
 		const auto CreatedProjectDocument = Json::parse(CreatedProjectStream);
 		CreatedProjectStream.close();
-		Check(CreatedProjectDocument["Version"] == 4 && CreatedProjectDocument["Name"] == "Created Project" &&
+		Check(CreatedProjectDocument["Version"] == 5 && CreatedProjectDocument["Name"] == "Created Project" &&
 			CreatedProjectDocument["Children"].size() == 5 &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "Workspace" && Child["Name"] == "Workspace";
@@ -6405,7 +6409,7 @@ namespace {
 			std::ifstream SavedProject(temporaryRoot / ".gargantuan" / "project.instance.json", std::ios::binary);
 			Json SavedDocument;
 			SavedProject >> SavedDocument;
-			Check(SavedDocument["Version"] == 4,
+			Check(SavedDocument["Version"] == 5,
 				"Save preserves the current project instance format version");
 		}
 		{

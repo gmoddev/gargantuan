@@ -7,8 +7,12 @@
 #include "gargantuan/content/ResidencySpatialMetadata.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "assets/AssetImporter.hpp"
+#include "assets/PreparedInstanceSerialization.hpp"
 #include "serialization/JsonCodec.hpp"
 
 #include <SDL3/SDL.h>
@@ -18,6 +22,7 @@
 #include <bit>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cmath>
 #include <cstdlib>
 #include <format>
@@ -31,6 +36,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #if defined(_WIN32)
 #include <Windows.h>
@@ -623,7 +629,7 @@ namespace gargantuan {
 								UnitText, MaximumPackageContentPayloadBytes, "package content unit"
 							);
 							if (!UnitDocument || !UnitDocument->is_object() ||
-								UnitDocument->value("Version", 0u) != PackageContentInstanceSchemaVersion ||
+								UnitDocument->value("Version", 0u) != ContentManifest->InstanceSchemaVersion ||
 								UnitDocument->value("ClassName", "") == "DataModel")
 								throw std::runtime_error("Package content unit payload is malformed");
 						}
@@ -1133,12 +1139,20 @@ namespace gargantuan {
 		}
 
 		std::optional<ResidencyUnitBoundsMetadata> InspectSpatialContentUnit(std::string_view Payload,
-			const PackageContentEntry &Entry, PackageSpatialMeshResolver &Meshes) {
+			const PackageContentEntry &Entry, PackageSpatialMeshResolver &Meshes,
+			std::shared_ptr<const RuntimeSchemaRegistry> SchemaSnapshot = {}) {
 			if (Entry.PackageSpaceKey != "default" || Payload.empty() ||
 				Payload.size() > MaximumPackageContentPayloadBytes)
 				throw std::runtime_error("Package content unit has no qualified default-space bounds");
+			const auto Bytes = std::span(reinterpret_cast<const std::uint8_t *>(Payload.data()), Payload.size());
+			const auto Prepared = InstanceSerialization::Internal::PrepareDetachedJson(
+				Bytes, Entry.ObjectCount, std::move(SchemaSnapshot));
+			if (!Prepared) throw std::runtime_error("Package content unit has invalid Instance identity or references: " +
+				Prepared.error());
 			auto Parsed = JsonCodec::Parse(Payload, MaximumPackageContentPayloadBytes, "package spatial content unit");
-			if (!Parsed || !Parsed->is_object() || Parsed->value("Version", 0u) != PackageContentInstanceSchemaVersion ||
+			if (!Parsed || !Parsed->is_object() ||
+				(Parsed->value("Version", 0u) != 4 &&
+					Parsed->value("Version", 0u) != PackageContentInstanceSchemaVersion) ||
 				Parsed->value("ClassName", "") == "DataModel")
 				throw std::runtime_error("Package spatial content unit is malformed");
 			const auto Inspection = InspectSerializedSubtree(*Parsed, Meshes);
@@ -1171,10 +1185,60 @@ namespace gargantuan {
 				}
 			if (!Workspace || !Workspace->contains("Children") || !(*Workspace)["Children"].is_array())
 				throw std::runtime_error("Package project has no serializable Workspace");
+			// A package unit is a separate v5 Instance document. Keep both ends of
+			// every authored reference in bootstrap until cross-unit fixups exist.
+			std::unordered_set<std::uint32_t> ReferencedIds;
+			auto VisitNodes = [](const Json &Root, auto &&Visit) {
+				std::vector<const Json *> Pending{&Root};
+				std::size_t Count = 0;
+				while (!Pending.empty()) {
+					const auto *Node = Pending.back();
+					Pending.pop_back();
+					if (!Node->is_object() || ++Count > MaximumPersistenceObjects)
+						throw std::runtime_error("Malformed or oversized package Instance hierarchy");
+					Visit(*Node);
+					if (!Node->contains("Children") || !(*Node)["Children"].is_array())
+						throw std::runtime_error("Malformed package Instance children");
+					if ((*Node)["Children"].size() > MaximumPersistenceObjects - Count -
+						std::min(Pending.size(), MaximumPersistenceObjects - Count))
+						throw std::runtime_error("Package Instance hierarchy exceeds object bound");
+					for (const auto &Child : (*Node)["Children"]) Pending.push_back(&Child);
+				}
+			};
+			VisitNodes(*Project, [&](const Json &Node) {
+				if (!Node.contains("Properties") || !Node["Properties"].is_object())
+					throw std::runtime_error("Malformed package Instance properties");
+				for (const auto &[_, Property] : Node["Properties"].items()) {
+					if (!Property.is_object() || !Property.contains("InstanceReference") ||
+						Property["InstanceReference"].is_null()) continue;
+					if (!Property["InstanceReference"].is_number_unsigned())
+						throw std::runtime_error("Malformed package Instance reference");
+					const auto Id = Property["InstanceReference"].get<std::uint64_t>();
+					if (Id == 0 || Id > MaximumPersistenceObjects)
+						throw std::runtime_error("Package Instance reference exceeds document bounds");
+					ReferencedIds.insert(static_cast<std::uint32_t>(Id));
+				}
+			});
 			Json Retained = Json::array();
 			std::size_t UnitNumber = 0;
 			std::size_t Memberships = 0;
 			for (auto &Child : (*Workspace)["Children"]) {
+				bool HasReferenceBoundary = false;
+				VisitNodes(Child, [&](const Json &Node) {
+					if (!Node.contains("NodeId") || !Node["NodeId"].is_number_unsigned() ||
+						Node["NodeId"].get<std::uint64_t>() == 0 ||
+						Node["NodeId"].get<std::uint64_t>() > MaximumPersistenceObjects)
+						throw std::runtime_error("Package Instance node lacks bounded v5 identity");
+					if (ReferencedIds.contains(Node["NodeId"].get<std::uint32_t>())) HasReferenceBoundary = true;
+					if (!Node.contains("Properties") || !Node["Properties"].is_object()) return;
+					for (const auto &[_, Property] : Node["Properties"].items())
+						if (Property.is_object() && Property.contains("InstanceReference") &&
+							!Property["InstanceReference"].is_null()) HasReferenceBoundary = true;
+				});
+				if (HasReferenceBoundary) {
+					Retained.push_back(std::move(Child));
+					continue;
+				}
 				const auto SpatialStarted = std::chrono::steady_clock::now();
 				auto Inspection = InspectSerializedSubtree(Child, Meshes);
 				Payload.SpatialInspectionDuration += std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1295,6 +1359,7 @@ namespace gargantuan {
 		std::uint64_t AuthoritativeRevision,
 		std::uint64_t PersistedRevision
 	) {
+		AssertAuthoritativeMutation("PackageBuilder::Capture schema snapshot");
 		if (!World || !ProjectValue.Identity.IsValid() || AuthoritativeRevision == 0 || PersistedRevision == 0)
 			throw std::invalid_argument("Package snapshot source is invalid");
 		auto Root = std::static_pointer_cast<Instance>(World);
@@ -1311,6 +1376,7 @@ namespace gargantuan {
 			.ProjectJson = std::move(ProjectJson),
 			.PreRunSource = ReadProjectPreRunSource(ProjectValue.Root),
 			.Assets = Assets->CaptureRuntimeAssets(),
+			.SchemaSnapshot = GetRuntimeSchemaLifecycle().GetActiveRegistry(),
 		};
 		if (Result.DisplayName.empty() || Result.DisplayName.size() > MaximumDisplayNameBytes)
 			throw std::runtime_error("Project display name exceeds the package bound");
@@ -1321,7 +1387,7 @@ namespace gargantuan {
 		ResidencySpatialMetadata Metadata{ResidencySpatialMetadataVersion, Manifest.Package, {}};
 		for (const auto &Unit : Result.ContentUnits) {
 			Manifest.Entries.push_back(Unit.Entry);
-			if (auto Spatial = InspectSpatialContentUnit(Unit.Payload, Unit.Entry, Meshes))
+			if (auto Spatial = InspectSpatialContentUnit(Unit.Payload, Unit.Entry, Meshes, Result.SchemaSnapshot))
 				Metadata.Units.push_back(std::move(*Spatial));
 		}
 		CheckSpatialProof(Manifest, Metadata);
@@ -1351,7 +1417,8 @@ namespace gargantuan {
 
 			RunPhase(PackagePhase::Snapshot, [&] {
 				InjectFailure(Request.FailurePoint, PackageFailurePoint::Snapshot);
-				if (!Request.Payload.Identity.IsValid() || Request.Payload.AuthoritativeRevision == 0 ||
+				if (!Request.Payload.SchemaSnapshot || !Request.Payload.Identity.IsValid() ||
+					Request.Payload.AuthoritativeRevision == 0 ||
 					Request.Payload.DisplayName.empty() ||
 					Request.Payload.DisplayName.size() > MaximumDisplayNameBytes ||
 					Request.Payload.ProjectJson.empty() ||
@@ -1373,7 +1440,8 @@ namespace gargantuan {
 						)) != Unit.Entry.Digest)
 						throw std::runtime_error("Package content unit does not match its immutable metadata");
 					ContentManifest.Entries.push_back(Unit.Entry);
-					if (auto Spatial = InspectSpatialContentUnit(Unit.Payload, Unit.Entry, Meshes))
+					if (auto Spatial = InspectSpatialContentUnit(
+						Unit.Payload, Unit.Entry, Meshes, Request.Payload.SchemaSnapshot))
 						Metadata.Units.push_back(std::move(*Spatial));
 				}
 				(void)ParsePackageContentManifest(EncodePackageContentManifest(ContentManifest)).value();
