@@ -21,7 +21,8 @@ campaign receipt; pending rows must not be promoted to qualified behavior.
 | Authority and persistence | DataModel, reflection, MutationGateway, ObjectId, schema, Luau and EditorHost | Engine-specific integration still required | Save/reopen, capabilities, journal/replication, stale-ID denial and rollback |
 
 The upstream feature column is a capability inventory from the pinned
-[Jolt v5.6.0 README](https://github.com/jrouwe/JoltPhysics/blob/e77f175595e64cb44218cc9d9d56fc365ad0e36a/README.md#features),
+[Jolt v5.6.0 README](https://github.com/jrouwe/JoltPhysics/blob/e77f175595e64cb44218cc9d9d56fc365ad0e36a/README.md#features)
+and [object-layer filter API](https://github.com/jrouwe/JoltPhysics/blob/e77f175595e64cb44218cc9d9d56fc365ad0e36a/Jolt/Physics/Collision/ObjectLayer.h),
 not proof of Gargantuan semantic parity or complete bidirectional coupling.
 The next experiment must select and record its exact dependency commit and
 verify those APIs again. Existing upstream features do not remove the need for

@@ -74,3 +74,11 @@ contact code are continuing ownership and maintenance costs to measure in a
 future comparison. A future bidirectional interaction requirement must be
 tested explicitly; the present attachment and diagnostic work does not claim
 it.
+
+Collision groups in this expansion govern rigid pairs, sensors and rigid
+queries. The existing XPBD collider snapshot has no per-deformable group or
+mask: `CollisionMode` selects rigid-primitive participation, and snapshots
+include collidable Parts without applying their rigid mask. Creators must
+not assume a rigid mask disables soft contact. Extending group semantics
+across this bridge requires explicit soft membership and qualification; there
+is no competing soft collision-group table in the current implementation.
