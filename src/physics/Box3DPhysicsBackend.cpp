@@ -93,10 +93,15 @@ namespace gargantuan {
 
 		[[nodiscard]] bool IsValidBodyDescription(const PhysicsBodyDesc &Description) {
 			if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh &&
-				(!Description.Anchored || !Description.Shape.Mesh ||
+				(!Description.Anchored || Description.Kinematic || !Description.Shape.Mesh ||
 				Description.Shape.Size.x < 0.01f || Description.Shape.Size.y < 0.01f ||
 				Description.Shape.Size.z < 0.01f || !IsRigidRotation(Description.Transform))) return false;
-			return IsFinite(Description.Transform) && IsFinite(Description.Shape.Size) &&
+			return !(Description.Anchored && Description.Kinematic) &&
+				Description.CollisionGroup <= MaximumPhysicsCollisionGroup &&
+				std::isfinite(Description.LinearDamping) && Description.LinearDamping >= 0.0f && Description.LinearDamping <= 100.0f &&
+				std::isfinite(Description.AngularDamping) && Description.AngularDamping >= 0.0f && Description.AngularDamping <= 100.0f &&
+				std::isfinite(Description.GravityScale) && Description.GravityScale >= 0.0f && Description.GravityScale <= 100.0f &&
+				IsFinite(Description.Transform) && IsFinite(Description.Shape.Size) &&
 				Description.Shape.Size.x > 0.0f && Description.Shape.Size.y > 0.0f &&
 				Description.Shape.Size.z > 0.0f && std::isfinite(Description.Density) && Description.Density >= 0.0f;
 		}
@@ -210,7 +215,12 @@ namespace gargantuan {
 				b3BodyDef BodyDefinition = b3DefaultBodyDef();
 				BodyDefinition.position = Box3DConversions::ToBox3(Description.Transform.Position);
 				BodyDefinition.rotation = Box3DConversions::ToBox3(Description.Transform.ToQuaternion());
-				BodyDefinition.type = Description.Anchored ? b3_staticBody : b3_dynamicBody;
+				BodyDefinition.type = Description.Anchored ? b3_staticBody :
+					Description.Kinematic ? b3_kinematicBody : b3_dynamicBody;
+				BodyDefinition.linearDamping = Description.LinearDamping;
+				BodyDefinition.angularDamping = Description.AngularDamping;
+				BodyDefinition.gravityScale = Description.GravityScale;
+				BodyDefinition.enableSleep = Description.SleepEnabled;
 				BodyDefinition.userData = Entry.Record.get();
 				Entry.Record->Body = b3CreateBody(World, &BodyDefinition);
 				if (!b3Body_IsValid(Entry.Record->Body)) {
@@ -284,10 +294,24 @@ namespace gargantuan {
 				}
 
 				if (Previous.Anchored != Description.Anchored) {
-					b3Body_SetType(Record->Body, Description.Anchored ? b3_staticBody : b3_dynamicBody);
 					if (Description.Anchored) --DynamicBodyCount;
 					else ++DynamicBodyCount;
 				}
+				if (Previous.Anchored != Description.Anchored || Previous.Kinematic != Description.Kinematic)
+					b3Body_SetType(Record->Body, Description.Anchored ? b3_staticBody :
+						Description.Kinematic ? b3_kinematicBody : b3_dynamicBody);
+				if (Previous.CollisionGroup != Description.CollisionGroup || Previous.CollisionMask != Description.CollisionMask) {
+					const auto Filter = b3Filter{std::uint64_t{1} << Description.CollisionGroup, Description.CollisionMask, 0};
+					ForEachShape(*Record, [&](b3ShapeId Shape) { b3Shape_SetFilter(Shape, Filter, true); });
+				}
+				if (Previous.LinearDamping != Description.LinearDamping)
+					b3Body_SetLinearDamping(Record->Body, Description.LinearDamping);
+				if (Previous.AngularDamping != Description.AngularDamping)
+					b3Body_SetAngularDamping(Record->Body, Description.AngularDamping);
+				if (Previous.GravityScale != Description.GravityScale)
+					b3Body_SetGravityScale(Record->Body, Description.GravityScale);
+				if (Previous.SleepEnabled != Description.SleepEnabled)
+					b3Body_EnableSleep(Record->Body, Description.SleepEnabled);
 				b3Body_SetTransform(
 					Record->Body,
 					Box3DConversions::ToBox3(Description.Transform.Position),
@@ -428,8 +452,81 @@ namespace gargantuan {
 				if (!Record) return InvalidBody();
 				if (!IsFinite(Impulse))
 					return {PhysicsOperationStatus::InvalidDescription, "Physics impulse is not finite"};
+				if (Record->Description.Anchored || Record->Description.Kinematic)
+					return {PhysicsOperationStatus::InvalidDescription, "Impulse requires a dynamic body"};
 				StaticWorldDirty = true;
 				b3Body_ApplyLinearImpulseToCenter(Record->Body, Box3DConversions::ToBox3(Impulse), true);
+				return {};
+			}
+
+			PhysicsOperationResult ApplyAngularImpulse(PhysicsBodyId Body, glm::vec3 Impulse) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Impulse) || Record->Description.Anchored || Record->Description.Kinematic)
+					return {PhysicsOperationStatus::InvalidDescription, "Angular impulse requires a finite value and dynamic body"};
+				StaticWorldDirty = true;
+				b3Body_ApplyAngularImpulse(Record->Body, Box3DConversions::ToBox3(Impulse), true);
+				return {};
+			}
+
+			PhysicsOperationResult ApplyImpulseAtPosition(PhysicsBodyId Body, glm::vec3 Impulse, glm::vec3 Position) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Impulse) || !IsFinite(Position) || Record->Description.Anchored || Record->Description.Kinematic)
+					return {PhysicsOperationStatus::InvalidDescription, "Point impulse requires finite values and dynamic body"};
+				StaticWorldDirty = true;
+				b3Body_ApplyLinearImpulse(Record->Body, Box3DConversions::ToBox3(Impulse),
+					b3Pos{Position.x, Position.y, Position.z}, true);
+				return {};
+			}
+
+			PhysicsOperationResult ApplyForce(PhysicsBodyId Body, glm::vec3 Force) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Force) || Record->Description.Anchored || Record->Description.Kinematic)
+					return {PhysicsOperationStatus::InvalidDescription, "Force requires a finite value and dynamic body"};
+				StaticWorldDirty = true;
+				b3Body_ApplyForceToCenter(Record->Body, Box3DConversions::ToBox3(Force), true);
+				return {};
+			}
+
+			PhysicsOperationResult ApplyTorque(PhysicsBodyId Body, glm::vec3 Torque) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Torque) || Record->Description.Anchored || Record->Description.Kinematic)
+					return {PhysicsOperationStatus::InvalidDescription, "Torque requires a finite value and dynamic body"};
+				StaticWorldDirty = true;
+				b3Body_ApplyTorque(Record->Body, Box3DConversions::ToBox3(Torque), true);
+				return {};
+			}
+
+			PhysicsOperationResult SetLinearVelocity(PhysicsBodyId Body, glm::vec3 Velocity) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Velocity) || Record->Description.Anchored)
+					return {PhysicsOperationStatus::InvalidDescription, "Velocity requires a finite value and moving body"};
+				StaticWorldDirty = true;
+				b3Body_SetLinearVelocity(Record->Body, Box3DConversions::ToBox3(Velocity));
+				return {};
+			}
+
+			PhysicsOperationResult SetAngularVelocity(PhysicsBodyId Body, glm::vec3 Velocity) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Velocity) || Record->Description.Anchored)
+					return {PhysicsOperationStatus::InvalidDescription, "Velocity requires a finite value and moving body"};
+				StaticWorldDirty = true;
+				b3Body_SetAngularVelocity(Record->Body, Box3DConversions::ToBox3(Velocity));
+				return {};
+			}
+
+			PhysicsOperationResult SetAwake(PhysicsBodyId Body, bool Awake) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (Record->Description.Anchored)
+					return {PhysicsOperationStatus::InvalidDescription, "Sleep control requires a moving body"};
+				StaticWorldDirty = true;
+				b3Body_SetAwake(Record->Body, Awake);
 				return {};
 			}
 
@@ -449,6 +546,13 @@ namespace gargantuan {
 				return PhysicsBodyState{
 					.Transform = Box3DConversions::FromBox3(b3Body_GetTransform(Record->Body)),
 					.LinearVelocity = Box3DConversions::FromBox3(b3Body_GetLinearVelocity(Record->Body)),
+					.AngularVelocity = Box3DConversions::FromBox3(b3Body_GetAngularVelocity(Record->Body)),
+					.Mass = b3Body_GetMass(Record->Body),
+					.LocalInertia = [&] {
+						const auto Inertia = b3Body_GetLocalRotationalInertia(Record->Body);
+						return glm::vec3{Inertia.cx.x, Inertia.cy.y, Inertia.cz.z};
+					}(),
+					.Awake = b3Body_IsAwake(Record->Body),
 					.Description = Record->Description,
 				};
 			}
@@ -653,7 +757,8 @@ namespace gargantuan {
 				const float Distance = glm::length(Request.Direction);
 				if (!IsFinite(Request.Origin) || !IsFinite(Request.Direction) || !std::isfinite(Distance) ||
 					Distance < MinimumRaycastDistance || Distance > MaximumRaycastDistance ||
-					Request.Filter.Bodies.size() > MaximumRaycastFilterBodies) {
+					Request.Filter.Bodies.size() > MaximumRaycastFilterBodies ||
+					Request.Filter.CollisionGroup > MaximumPhysicsCollisionGroup) {
 					Result.Status = PhysicsOperationStatus::InvalidDescription;
 					Result.Message = "Physics raycast request is invalid or exceeds a query bound";
 					return Result;
@@ -692,7 +797,9 @@ namespace gargantuan {
 					auto Owner = Context->Self->FindShapeOwner(Shape);
 					if (!Owner) return 1.0f;
 					const auto *Record = Context->Self->FindBody(*Owner);
-					if (!Record || !Record->Description.CanCollide) return 1.0f;
+					if (!Record || !Record->Description.CanCollide ||
+						!PhysicsCanCollide(Context->Filter->CollisionGroup, Context->Filter->CollisionMask,
+							Record->Description.CollisionGroup, Record->Description.CollisionMask)) return 1.0f;
 					const bool Listed = std::binary_search(
 						Context->Filter->Bodies.begin(), Context->Filter->Bodies.end(), *Owner
 					);
@@ -723,11 +830,14 @@ namespace gargantuan {
 					return 1.0f;
 				};
 
+				auto NativeFilter = b3DefaultQueryFilter();
+				NativeFilter.categoryBits = std::uint64_t{1} << Request.Filter.CollisionGroup;
+				NativeFilter.maskBits = Request.Filter.CollisionMask;
 				(void)b3World_CastRay(
 					World,
 					b3Pos{Request.Origin.x, Request.Origin.y, Request.Origin.z},
 					Box3DConversions::ToBox3(Request.Direction),
-					b3DefaultQueryFilter(),
+					NativeFilter,
 					CollectHit,
 					&Context
 				);
@@ -1129,6 +1239,9 @@ namespace gargantuan {
 			) {
 				b3ShapeDef ShapeDefinition = b3DefaultShapeDef();
 				ShapeDefinition.density = Description.Density;
+				ShapeDefinition.filter.categoryBits = std::uint64_t{1} << Description.CollisionGroup;
+				ShapeDefinition.filter.maskBits = Description.CollisionMask;
+				ShapeDefinition.filter.groupIndex = 0;
 				ShapeDefinition.isSensor = !Description.CanCollide;
 				ShapeDefinition.enableSensorEvents = Description.CanTouch;
 				ShapeDefinition.enableContactEvents = Description.CanCollide && Description.CanTouch;

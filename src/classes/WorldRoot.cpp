@@ -59,6 +59,13 @@ namespace gargantuan {
 			.CanCollide = Part.GetCanCollide(),
 			.CanTouch = Part.GetCanTouch(),
 			.Density = 0.7f,
+			.Kinematic = !Part.GetAnchored() && Part.GetKinematic(),
+			.CollisionGroup = static_cast<std::uint16_t>(Part.GetCollisionGroup()),
+			.CollisionMask = static_cast<std::uint16_t>(Part.GetCollisionMask()),
+			.LinearDamping = Part.GetLinearDamping(),
+			.AngularDamping = Part.GetAngularDamping(),
+			.GravityScale = Part.GetGravityScale(),
+			.SleepEnabled = Part.GetSleepEnabled(),
 		};
 		const auto *Mesh = dynamic_cast<const MeshPart *>(&Part);
 		if (!Mesh || Mesh->GetCollisionMode() != Enums::MeshCollisionMode::StaticMesh) return Description;
@@ -163,6 +170,7 @@ namespace gargantuan {
 		if (std::find(Parts.begin(), Parts.end(), Part) == Parts.end()) Parts.push_back(Part);
 		PartBodies[Object] = Body;
 		BodyParts[Body] = Part;
+		if (auto State = Physics.GetBodyState(Body)) Part->PublishedPhysicsState = *State;
 		return Body;
 	}
 
@@ -230,7 +238,8 @@ namespace gargantuan {
 			if (!ShuttingDownPhysics && !PublishingPhysicsState && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
 		};
 		auto &Connections = PhysicsConnections[Id];
-		for (const std::string_view Name : {"CFrame", "Size", "Anchored", "CanCollide", "CanTouch"})
+		for (const std::string_view Name : {"CFrame", "Size", "Anchored", "Kinematic", "CanCollide", "CanTouch",
+			"CollisionGroup", "CollisionMask", "LinearDamping", "AngularDamping", "GravityScale", "SleepEnabled"})
 			Connections.push_back(Part->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
 		if (Part->FindProperty("Shape"))
 			Connections.push_back(Part->GetPropertyChangedSignal("Shape")->Connect(MarkDirty));
@@ -361,6 +370,15 @@ namespace gargantuan {
 			}
 			PartBodies.erase(Found);
 		}
+		Part->PublishedPhysicsState = {};
+		Part->AccumulatedImpulse = {};
+		Part->AccumulatedAngularImpulse = {};
+		Part->AccumulatedForce = {};
+		Part->AccumulatedTorque = {};
+		Part->AccumulatedPointImpulses.clear();
+		Part->PendingLinearVelocity.reset();
+		Part->PendingAngularVelocity.reset();
+		Part->PendingAwake.reset();
 		RemoveInvalidConstraintMappings();
 		for (const auto &[Id, _] : TrackedConstraints) DirtyConstraints.insert(Id);
 	}
@@ -532,7 +550,10 @@ namespace gargantuan {
 						LOG_WARN(App, "[Physics:Mesh] Collision update failed for %s: %s", Part->GetFullName().c_str(), Result.Message.c_str());
 				} else LOG_ERROR(App, "[Physics:Backend] Body update failed for %s: %s", Part->GetFullName().c_str(), Result.Message.c_str());
 				DirtyBodies.insert(Object);
-			} else FailedMeshUpdatesLogged.erase(Object);
+			} else {
+				FailedMeshUpdatesLogged.erase(Object);
+				if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
+			}
 		}
 
 		const auto DeformableUpdates = SortedIds(DirtyDeformables);
@@ -584,12 +605,41 @@ namespace gargantuan {
 
 	void WorldRoot::ApplyPendingImpulses() {
 		for (const auto &Part : Parts) {
-			if (!Part || Part->GetDestroyed() || Part->IsDestroying() || !HasImpulse(Part->AccumulatedImpulse)) continue;
+			if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
 			auto Found = PartBodies.find(Part->GetObjectId());
 			if (Found == PartBodies.end()) continue;
-			auto Result = Physics.ApplyLinearImpulse(Found->second, Part->AccumulatedImpulse);
-			if (Result.Succeeded()) Part->AccumulatedImpulse = {};
-			else LOG_ERROR(App, "[Physics:Backend] Impulse application failed: %s", Result.Message.c_str());
+			const auto Body = Found->second;
+			if (Part->PendingLinearVelocity) {
+				(void)Physics.SetLinearVelocity(Body, *Part->PendingLinearVelocity);
+				Part->PendingLinearVelocity.reset();
+			}
+			if (Part->PendingAngularVelocity) {
+				(void)Physics.SetAngularVelocity(Body, *Part->PendingAngularVelocity);
+				Part->PendingAngularVelocity.reset();
+			}
+			if (Part->PendingAwake) {
+				(void)Physics.SetAwake(Body, *Part->PendingAwake);
+				Part->PendingAwake.reset();
+			}
+			if (HasImpulse(Part->AccumulatedImpulse)) {
+				(void)Physics.ApplyLinearImpulse(Body, Part->AccumulatedImpulse);
+				Part->AccumulatedImpulse = {};
+			}
+			if (HasImpulse(Part->AccumulatedAngularImpulse)) {
+				(void)Physics.ApplyAngularImpulse(Body, Part->AccumulatedAngularImpulse);
+				Part->AccumulatedAngularImpulse = {};
+			}
+			for (const auto &[Impulse, Position] : Part->AccumulatedPointImpulses)
+				(void)Physics.ApplyImpulseAtPosition(Body, Impulse, Position);
+			Part->AccumulatedPointImpulses.clear();
+			if (HasImpulse(Part->AccumulatedForce)) {
+				(void)Physics.ApplyForce(Body, Part->AccumulatedForce);
+				Part->AccumulatedForce = {};
+			}
+			if (HasImpulse(Part->AccumulatedTorque)) {
+				(void)Physics.ApplyTorque(Body, Part->AccumulatedTorque);
+				Part->AccumulatedTorque = {};
+			}
 		}
 	}
 
@@ -759,6 +809,11 @@ namespace gargantuan {
 
 	PhysicsOperationResult
 	WorldRoot::BuildRaycastFilter(const RaycastParams &Params, PhysicsQueryFilter &Filter) const {
+		if (Params.CollisionGroup < 0 || Params.CollisionGroup > MaximumPhysicsCollisionGroup ||
+			Params.CollisionMask < 0 || Params.CollisionMask > MaximumPhysicsCollisionMask)
+			return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collision filter is outside the 16-group bound"};
+		Filter.CollisionGroup = static_cast<std::uint16_t>(Params.CollisionGroup);
+		Filter.CollisionMask = static_cast<std::uint16_t>(Params.CollisionMask);
 		Filter.Type = Params.FilterType == Enums::RaycastFilterType::Include ? PhysicsQueryFilterType::Include
 																			 : PhysicsQueryFilterType::Exclude;
 		if (Params.FilterDescendantsInstances.Values.size() > RaycastParams::MaximumFilterRoots)
@@ -1025,6 +1080,12 @@ namespace gargantuan {
 			ApplyPendingDeformableForces();
 			auto Result = runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsRigidStep,
 				[&] { return Physics.Step({.DeltaTime = STEP_INTERVAL, .SubStepCount = SUB_STEP_COUNT}); });
+			for (const auto &Part : Parts) {
+				if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
+				auto Found = PartBodies.find(Part->GetObjectId());
+				if (Found != PartBodies.end())
+					if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
+			}
 			{
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsEvents);
 			if (Result.EventsTruncated)

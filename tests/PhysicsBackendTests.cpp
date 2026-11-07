@@ -6,8 +6,10 @@
 #include "gargantuan/classes/JointConstraint.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/datatypes/RaycastParams.hpp"
 #include "gargantuan/physics/PhysicsBackend.hpp"
+#include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
@@ -22,6 +24,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -986,6 +989,138 @@ namespace {
 			"physics publication does not create a transform feedback update");
 	}
 
+	void TestBodyDynamicsAndCollisionGroups() {
+		using namespace gargantuan;
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		PhysicsBodyDesc Description;
+		Description.CollisionGroup = 2;
+		Description.CollisionMask = std::uint16_t{1} << 3;
+		Description.LinearDamping = 0.0f;
+		Description.AngularDamping = 0.0f;
+		const auto Dynamic = World.CreateBody(Description);
+		Check(Dynamic.IsValid(), "dynamic body accepts bounded collision and damping description");
+		Check(World.SetLinearVelocity(Dynamic, {2.0f, 0.0f, 0.0f}).Succeeded(), "linear velocity accepts a dynamic body");
+		Check(World.SetAngularVelocity(Dynamic, {0.0f, 1.0f, 0.0f}).Succeeded(), "angular velocity accepts a dynamic body");
+		auto State = World.GetBodyState(Dynamic);
+		Check(State && Near(State->LinearVelocity.x, 2.0f) && Near(State->AngularVelocity.y, 1.0f) &&
+			State->Mass > 0.0f && State->LocalInertia.x > 0.0f,
+			"state exposes velocity, mass, and local inertia without native handles");
+		Check(World.ApplyAngularImpulse(Dynamic, {0.0f, 2.0f, 0.0f}).Succeeded(), "angular impulse is applied");
+		Check(World.ApplyImpulseAtPosition(Dynamic, {0.0f, 0.0f, 5.0f}, {1.0f, 0.0f, 0.0f}).Succeeded(),
+			"off-center impulse is applied");
+		Check(World.ApplyForce(Dynamic, {4.0f, 0.0f, 0.0f}).Succeeded() &&
+			World.ApplyTorque(Dynamic, {0.0f, 0.0f, 2.0f}).Succeeded(),
+			"force and torque are accepted for the next solver step");
+		(void)World.Step({});
+		State = World.GetBodyState(Dynamic);
+		Check(State && State->LinearVelocity.x > 2.0f && State->AngularVelocity.y > 1.0f,
+			"impulses and step force change velocity");
+		Check(World.SetAwake(Dynamic, false).Succeeded() && !World.GetBodyState(Dynamic)->Awake,
+			"sleep request is observable");
+		Check(World.SetAwake(Dynamic, true).Succeeded() && World.GetBodyState(Dynamic)->Awake,
+			"wake request is observable");
+		Check(!World.ApplyForce(Dynamic, {NAN, 0.0f, 0.0f}).Succeeded(), "nonfinite force rejects without mutation");
+		Check(!World.SetLinearVelocity({Dynamic.Slot, Dynamic.Generation + 1}, {}).Succeeded(),
+			"stale body velocity mutation rejects");
+
+		PhysicsBodyDesc Target;
+		Target.Anchored = true;
+		Target.Transform = CFrame(8.0f, 0.0f, 0.0f);
+		Target.CollisionGroup = 3;
+		Target.CollisionMask = (std::uint16_t{1} << 2) | (std::uint16_t{1} << 0);
+		const auto Static = World.CreateBody(Target);
+		const auto Ray = PhysicsRaycastRequest{.Origin = {5.0f, 0.0f, 0.0f}, .Direction = {5.0f, 0.0f, 0.0f}};
+		Check(World.Raycast(Ray).HasHit(), "compatible default query sees collision group");
+		auto RejectedRay = Ray;
+		RejectedRay.Filter.CollisionMask = std::uint16_t{1} << 1;
+		Check(!World.Raycast(RejectedRay).HasHit(), "query mask excludes incompatible group");
+		Target.CollisionMask = 0;
+		Check(World.UpdateBody(Static, Target).Succeeded() && !World.Raycast(Ray).HasHit(),
+			"runtime collision mask update immediately changes queries");
+		Target.CollisionMask = std::uint16_t{1} << 0;
+		Check(World.UpdateBody(Static, Target).Succeeded() && World.Raycast(Ray).HasHit(),
+			"runtime collision mask update restores compatible queries");
+		Target.Kinematic = true;
+		Check(!World.UpdateBody(Static, Target).Succeeded(), "anchored kinematic conflict rejects atomically");
+		Target.Anchored = false;
+		Check(World.UpdateBody(Static, Target).Succeeded() && World.SetLinearVelocity(Static, {-1.0f, 0.0f, 0.0f}).Succeeded(),
+			"static body can transition to velocity-driven kinematic body");
+		Check(!World.ApplyForce(Static, {1.0f, 0.0f, 0.0f}).Succeeded(), "kinematic body rejects dynamic force");
+		Target.Kinematic = false;
+		Check(World.UpdateBody(Static, Target).Succeeded() && World.ApplyForce(Static, {1.0f, 0.0f, 0.0f}).Succeeded(),
+			"kinematic body can transition to dynamic body");
+	}
+
+	void TestWorldRootDynamicsProjection() {
+		using namespace gargantuan;
+		const auto *Schema = InstanceClassRegistry::GetDefinitionByName("BasePart");
+		Check(Schema != nullptr, "BasePart schema is published");
+		if (Schema) {
+			for (const auto *Name : {"Kinematic", "CollisionGroup", "CollisionMask", "LinearDamping",
+				"AngularDamping", "GravityScale", "SleepEnabled"}) {
+				auto Found = Schema->AllProperties.find(Name);
+				Check(Found != Schema->AllProperties.end() &&
+					Found->second->PersistencePolicy == InstanceProperty::Persistence::Saved &&
+					Found->second->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated,
+					"authored rigid controls retain generated persistence and replication metadata");
+			}
+		}
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Part = std::make_shared<gargantuan::Part>();
+		bool RejectedGroup = false;
+		try { Part->SetCollisionGroup(16); } catch (const std::exception &) { RejectedGroup = true; }
+		Check(RejectedGroup && Part->GetCollisionGroup() == 0, "out-of-range group leaves committed property unchanged");
+		Part->SetCollisionGroup(4);
+		Part->SetCollisionMask(std::uint16_t{1} << 5);
+		Part->SetGravityScale(0.5f);
+		Part->SetLinearDamping(0.0f);
+		Part->SetParent(Workspace);
+		const auto Body = WorldRootTestAccess::Body(*Workspace, *Part);
+		Check(Body.IsValid(), "WorldRoot admits authored body controls");
+		Part->SetLinearVelocity({3.0f, 0.0f, 0.0f});
+		Part->ApplyForce({4.0f, 0.0f, 0.0f});
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(Part->GetLinearVelocity().x > 3.0f && Part->GetMass() > 0.0f && Part->GetLocalInertia().x > 0.0f,
+			"WorldRoot safe point applies controls and publishes read-only mass and velocity");
+		Part->SetCollisionMask(0);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		auto State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(State && State->Description.CollisionMask == 0 && State->Description.CollisionGroup == 4 &&
+			State->Description.GravityScale == 0.5f,
+			"committed group, mask, and gravity changes reach the same backend body");
+		Part->SetParent(nullptr);
+		Check(Part->GetMass() == 0.0f, "removed Part retires published body diagnostics");
+	}
+
+	void TestBodyControlPersistence() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+		if (!Workspace) return;
+		auto Part = std::make_shared<gargantuan::Part>();
+		Part->SetName("PersistedRigidControl");
+		Part->SetKinematic(true);
+		Part->SetCollisionGroup(7);
+		Part->SetCollisionMask(129);
+		Part->SetLinearDamping(0.25f);
+		Part->SetAngularDamping(0.5f);
+		Part->SetGravityScale(1.5f);
+		Part->SetSleepEnabled(false);
+		Part->SetParent(Workspace);
+		std::shared_ptr<Instance> Root = Game;
+		const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
+		std::istringstream Input(Encoded);
+		auto Decoded = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
+		auto Loaded = Decoded.Instance ?
+			std::dynamic_pointer_cast<gargantuan::Part>(Decoded.Instance->FindFirstDescendant("PersistedRigidControl")) : nullptr;
+		Check(Decoded.Ok && Loaded && Loaded->GetKinematic() && Loaded->GetCollisionGroup() == 7 &&
+			Loaded->GetCollisionMask() == 129 && Near(Loaded->GetLinearDamping(), 0.25f) &&
+			Near(Loaded->GetAngularDamping(), 0.5f) && Near(Loaded->GetGravityScale(), 1.5f) &&
+			!Loaded->GetSleepEnabled(), "authored rigid controls survive project serialization and reopen");
+	}
+
 	void TestTouchAndSensorUpdates() {
 		using namespace gargantuan;
 		auto Workspace = MakeWorkspace();
@@ -995,13 +1130,23 @@ namespace {
 		Sensor->SetAnchored(true);
 		Sensor->SetCanCollide(false);
 		Sensor->SetCanTouch(true);
+		Sensor->SetCollisionGroup(2);
+		Sensor->SetCollisionMask(0);
 		Sensor->SetSize({4.0f, 4.0f, 4.0f});
 		auto Visitor = std::make_shared<Part>();
+		Visitor->SetCollisionGroup(3);
+		Visitor->SetCollisionMask(std::uint16_t{1} << 2);
 		Visitor->SetCFrame(CFrame(0.0f, 0.0f, 0.0f));
 		Sensor->SetParent(Workspace);
 		Visitor->SetParent(Workspace);
 		int Touches = 0;
 		Sensor->Touched->Connect([&](std::shared_ptr<BasePart>) { ++Touches; });
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(Touches == 0, "sensor mask rejects a disallowed group before event publication");
+		Sensor->SetCollisionMask(std::uint16_t{1} << 3);
+		Visitor->SetCFrame(CFrame(20.0f, 0.0f, 0.0f));
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Visitor->SetCFrame(CFrame(0.0f, 0.0f, 0.0f));
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
 		Check(Touches == 1, "non-colliding CanTouch body receives normalized sensor begin event");
 
@@ -1339,6 +1484,14 @@ namespace {
 		const std::string Source = R"(
 			local Workspace = game:GetService("Workspace")
 			local Params = RaycastParams.new()
+			assert(Params.CollisionGroup == 0 and Params.CollisionMask == 65535)
+			assert(not pcall(function() Params.CollisionGroup = 16 end))
+			assert(not pcall(function() Params.CollisionMask = 65536 end))
+			assert(Workspace.RayTarget:GetMass() >= 0)
+			assert(Workspace.RayTarget:GetLinearVelocity() == Vector3.zero)
+			assert(Workspace.RayTarget:GetAngularVelocity() == Vector3.zero)
+			assert(Workspace.RayTarget:GetLocalInertia().X >= 0)
+			assert(type(Workspace.RayTarget:GetAwake()) == "boolean")
 			Params.FilterType = Enum.RaycastFilterType.Exclude
 			Params.FilterDescendantsInstances = {}
 			local TooMany = {}
@@ -1405,6 +1558,9 @@ int main() {
 	TestConstraintAndPendingDestroy();
 	TestAuthoredJointLifecycle();
 	TestSimulationPublicationAndImpulse();
+	TestBodyDynamicsAndCollisionGroups();
+	TestWorldRootDynamicsProjection();
+	TestBodyControlPersistence();
 	TestTouchAndSensorUpdates();
 	TestStaticWorldStepReference();
 	TestSemanticRaycastContract();

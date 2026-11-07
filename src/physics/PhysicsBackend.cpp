@@ -44,6 +44,34 @@ namespace gargantuan {
 		return Backend ? Backend->ApplyLinearImpulse(Body, Impulse)
 			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
 	}
+	PhysicsOperationResult PhysicsWorld::ApplyAngularImpulse(PhysicsBodyId Body, glm::vec3 Impulse) {
+		return Backend ? Backend->ApplyAngularImpulse(Body, Impulse)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::ApplyImpulseAtPosition(PhysicsBodyId Body, glm::vec3 Impulse, glm::vec3 Position) {
+		return Backend ? Backend->ApplyImpulseAtPosition(Body, Impulse, Position)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::ApplyForce(PhysicsBodyId Body, glm::vec3 Force) {
+		return Backend ? Backend->ApplyForce(Body, Force)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::ApplyTorque(PhysicsBodyId Body, glm::vec3 Torque) {
+		return Backend ? Backend->ApplyTorque(Body, Torque)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::SetLinearVelocity(PhysicsBodyId Body, glm::vec3 Velocity) {
+		return Backend ? Backend->SetLinearVelocity(Body, Velocity)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::SetAngularVelocity(PhysicsBodyId Body, glm::vec3 Velocity) {
+		return Backend ? Backend->SetAngularVelocity(Body, Velocity)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::SetAwake(PhysicsBodyId Body, bool Awake) {
+		return Backend ? Backend->SetAwake(Body, Awake)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
 	PhysicsOperationResult PhysicsWorld::SetGravity(glm::vec3 Gravity) {
 		return Backend ? Backend->SetGravity(Gravity)
 			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
