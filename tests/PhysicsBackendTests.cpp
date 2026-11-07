@@ -1,7 +1,9 @@
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/JointConstraint.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/datatypes/RaycastParams.hpp"
@@ -19,6 +21,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -163,6 +166,74 @@ namespace {
 		Check(Joint.IsValid() && World.IsConstraintValid(Joint), "constraint uses neutral body identities");
 		Check(World.DestroyBody(Second).Succeeded() && !World.IsConstraintValid(Joint),
 			"body destruction invalidates attached constraints safely");
+	}
+
+	void TestAdvancedConstraintBackend() {
+		using namespace gargantuan;
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		PhysicsBodyDesc AnchorDesc;
+		AnchorDesc.Anchored = true;
+		AnchorDesc.CanCollide = false;
+		PhysicsBodyDesc MovingDesc = AnchorDesc;
+		MovingDesc.Anchored = false;
+		const auto Anchor = World.CreateBody(AnchorDesc);
+		const auto Door = World.CreateBody(MovingDesc);
+		const auto Hinge = World.CreateConstraint({
+			.Kind = PhysicsConstraintKind::Hinge, .BodyA = Anchor, .BodyB = Door,
+			.CollideConnected = false, .EnableLimit = true, .LowerLimit = -0.4f, .UpperLimit = 0.4f,
+			.EnableMotor = true, .MotorSpeed = 2.0f, .MaximumMotorForce = 1000.0f,
+		});
+		Check(Hinge.IsValid(), "hinge admits angular limits and motor torque");
+		for (int Index = 0; Index < 90; ++Index) (void)World.Step({});
+		const auto DoorState = World.GetBodyState(Door);
+		const auto DoorAngle = DoorState ? std::atan2(DoorState->Transform.Rotation[0][1],
+			DoorState->Transform.Rotation[0][0]) : 0.0f;
+		Check(DoorState && std::abs(DoorAngle) > 0.05f && std::abs(DoorAngle) < 0.7f,
+			"hinge motor rotates door and angular limits bound it");
+		Check(World.DestroyConstraint(Hinge).Succeeded() && !World.IsConstraintValid(Hinge),
+			"hinge destruction retires its generation-safe ID");
+
+		const auto Slide = World.CreateBody(MovingDesc);
+		const auto Slider = World.CreateConstraint({
+			.Kind = PhysicsConstraintKind::Slider, .BodyA = Anchor, .BodyB = Slide,
+			.CollideConnected = false, .EnableLimit = true, .LowerLimit = -1.0f, .UpperLimit = 1.0f,
+			.EnableMotor = true, .MotorSpeed = 3.0f, .MaximumMotorForce = 1000.0f,
+		});
+		Check(Slider.IsValid(), "slider admits linear limits and motor force");
+		for (int Index = 0; Index < 90; ++Index) (void)World.Step({});
+		const auto SlideState = World.GetBodyState(Slide);
+		Check(SlideState && SlideState->Transform.Position.x > 0.1f &&
+			SlideState->Transform.Position.x < 1.3f && std::abs(SlideState->Transform.Position.y) < 0.2f,
+			"slider motor moves along frame A x-axis and respects travel limit");
+
+		MovingDesc.Transform = CFrame(0.0f, -3.0f, 0.0f);
+		const auto Weight = World.CreateBody(MovingDesc);
+		const auto Spring = World.CreateConstraint({
+			.Kind = PhysicsConstraintKind::Distance, .BodyA = Anchor, .BodyB = Weight,
+			.CollideConnected = false, .RestLength = 1.0f,
+			.SpringFrequency = 8.0f, .SpringDamping = 0.8f,
+		});
+		Check(Spring.IsValid(), "distance spring admits finite rest length and tuning");
+		for (int Index = 0; Index < 120; ++Index) (void)World.Step({});
+		const auto WeightState = World.GetBodyState(Weight);
+		Check(WeightState && std::abs(WeightState->Transform.Position.y + 1.0f) < 0.8f,
+			"distance spring pulls separated assembly toward its rest length");
+
+		const auto Socket = World.CreateConstraint({
+			.Kind = PhysicsConstraintKind::BallSocket, .BodyA = Anchor, .BodyB = Weight,
+			.CollideConnected = false, .LocalFrameB = CFrame(0.0f, 1.0f, 0.0f),
+		});
+		Check(Socket.IsValid(), "ball socket accepts local attachment frames");
+		Check(!World.CreateConstraint({.Kind = PhysicsConstraintKind::Hinge, .BodyA = Anchor,
+			.BodyB = Door, .EnableMotor = true, .MaximumMotorForce = 0.0f}).IsValid(),
+			"non-driving hinge motor fails closed");
+		Check(!World.CreateConstraint({.Kind = PhysicsConstraintKind::Distance, .BodyA = Anchor,
+			.BodyB = Door, .EnableLimit = true, .LowerLimit = 2.0f, .UpperLimit = 1.0f}).IsValid(),
+			"reversed distance limits fail closed");
+		Check(!World.CreateConstraint({.Kind = static_cast<PhysicsConstraintKind>(255),
+			.BodyA = Anchor, .BodyB = Door}).IsValid(), "unsupported joint kind fails closed");
+		Check(World.DestroyBody(Weight).Succeeded() && !World.IsConstraintValid(Spring) &&
+			!World.IsConstraintValid(Socket), "body removal invalidates every attached joint type");
 	}
 
 	void TestStaticTriangleMeshBackend() {
@@ -825,6 +896,78 @@ namespace {
 		Check(WorldRootTestAccess::ConstraintCount(*Workspace) == 0, "body removal clears attached constraint identity");
 	}
 
+	void TestAuthoredJointLifecycle() {
+		using namespace gargantuan;
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Frame = std::make_shared<Part>();
+		auto Door = std::make_shared<Part>();
+		Frame->SetAnchored(true);
+		Door->SetAnchored(true);
+		Frame->SetParent(Workspace);
+		Door->SetParent(Workspace);
+		auto PivotA = std::make_shared<Attachment>();
+		auto PivotB = std::make_shared<Attachment>();
+		PivotA->SetParent(Frame);
+		PivotB->SetParent(Door);
+		auto Hinge = std::make_shared<JointConstraint>();
+		const auto *MotorSpeedProperty = Hinge->FindProperty("MotorSpeed");
+		Check(MotorSpeedProperty &&
+			MotorSpeedProperty->PersistencePolicy == InstanceProperty::Persistence::Saved &&
+			MotorSpeedProperty->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated,
+			"joint parameters participate in generated persistence and replication schema");
+		Hinge->SetJointType("Hinge");
+		Hinge->SetAttachment0(PivotA);
+		Hinge->SetAttachment1(PivotB);
+		Hinge->SetEnableLimit(true);
+		Hinge->SetLowerLimit(-0.5f);
+		Hinge->SetUpperLimit(0.5f);
+		Hinge->SetParent(Workspace);
+		const auto FirstJoint = WorldRootTestAccess::Constraint(*Workspace, *Hinge);
+		Check(FirstJoint.IsValid(), "WorldRoot creates reflected attachment hinge");
+
+		PivotA->SetCFrame(CFrame(0.5f, 0.0f, 0.0f));
+		Workspace->StepPhysics(0.0, std::nullopt);
+		const auto ReframedJoint = WorldRootTestAccess::Constraint(*Workspace, *Hinge);
+		Check(ReframedJoint.IsValid() && ReframedJoint != FirstJoint &&
+			!WorldRootTestAccess::IsConstraintValid(*Workspace, FirstJoint),
+			"attachment frame edit replaces joint at physics safe point");
+
+		bool RejectedType = false;
+		try { Hinge->SetJointType("Unsupported"); }
+		catch (const std::invalid_argument &) { RejectedType = true; }
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(RejectedType && Hinge->GetJointType() == "Hinge" &&
+			WorldRootTestAccess::Constraint(*Workspace, *Hinge) == ReframedJoint &&
+			WorldRootTestAccess::IsConstraintValid(*Workspace, ReframedJoint),
+			"invalid authored joint type rejects before changing the live joint");
+		Hinge->SetLowerLimit(1.0f);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::Constraint(*Workspace, *Hinge) == ReframedJoint &&
+			WorldRootTestAccess::IsConstraintValid(*Workspace, ReframedJoint),
+			"invalid limit update preserves the prior coherent joint");
+		Hinge->SetJointType("BallSocket");
+		Hinge->SetEnableLimit(false);
+		Hinge->SetLowerLimit(0.0f);
+		Hinge->SetUpperLimit(0.0f);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::Constraint(*Workspace, *Hinge).IsValid() &&
+			WorldRootTestAccess::Constraint(*Workspace, *Hinge) != ReframedJoint,
+			"corrected joint type replaces stale configuration");
+
+		const auto ActiveJoint = WorldRootTestAccess::Constraint(*Workspace, *Hinge);
+		Door->SetParent(nullptr);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(!WorldRootTestAccess::IsConstraintValid(*Workspace, ActiveJoint) &&
+			WorldRootTestAccess::ConstraintCount(*Workspace) == 0,
+			"detached endpoint invalidates joint before slot reuse");
+		Door->SetParent(Workspace);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::Constraint(*Workspace, *Hinge).IsValid(),
+			"returning endpoint reconciles a new joint generation");
+	}
+
 	void TestSimulationPublicationAndImpulse() {
 		using namespace gargantuan;
 		auto Workspace = MakeWorkspace();
@@ -1249,6 +1392,7 @@ int main() {
 	}
 	TestNeutralContract();
 	TestBackendIdentityAndLifecycle();
+	TestAdvancedConstraintBackend();
 	TestStaticTriangleMeshBackend();
 	TestDenseMeshContactCandidateOverflow();
 	TestDetachedWorldRootKinematicMotion();
@@ -1259,6 +1403,7 @@ int main() {
 	TestCommittedBodyUpdates();
 	TestMeshPartCollisionFallback();
 	TestConstraintAndPendingDestroy();
+	TestAuthoredJointLifecycle();
 	TestSimulationPublicationAndImpulse();
 	TestTouchAndSensorUpdates();
 	TestStaticWorldStepReference();

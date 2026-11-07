@@ -50,6 +50,47 @@ namespace gargantuan {
 			return std::abs(glm::dot(glm::cross(Rotation[0], Rotation[1]), Rotation[2]) - 1.0f) <= Tolerance;
 		}
 
+		[[nodiscard]] bool IsValidConstraintDescription(const PhysicsConstraintDesc &Description) {
+			if (!IsRigidRotation(Description.LocalFrameA) || !IsRigidRotation(Description.LocalFrameB) ||
+				glm::length(Description.LocalFrameA.Position) > MaximumMeshCoordinate ||
+				glm::length(Description.LocalFrameB.Position) > MaximumMeshCoordinate ||
+				!std::isfinite(Description.LowerLimit) || !std::isfinite(Description.UpperLimit) ||
+				!std::isfinite(Description.MotorSpeed) || !std::isfinite(Description.MaximumMotorForce) ||
+				!std::isfinite(Description.RestLength) || !std::isfinite(Description.SpringFrequency) ||
+				!std::isfinite(Description.SpringDamping) || Description.MaximumMotorForce < 0.0f ||
+				Description.SpringFrequency < 0.0f || Description.SpringFrequency > 15.0f ||
+				Description.SpringDamping < 0.0f || Description.SpringDamping > 2.0f) return false;
+			// Box3D checks limit ordering even when the limit is disabled.
+			if (Description.LowerLimit > Description.UpperLimit) return false;
+			switch (Description.Kind) {
+			case PhysicsConstraintKind::Weld:
+			case PhysicsConstraintKind::BallSocket:
+				return !Description.EnableLimit && !Description.EnableMotor &&
+					Description.MotorSpeed == 0.0f && Description.MaximumMotorForce == 0.0f &&
+					Description.SpringFrequency == 0.0f;
+			case PhysicsConstraintKind::Hinge:
+				return Description.SpringFrequency == 0.0f &&
+					(!Description.EnableLimit || (Description.LowerLimit >= -3.1f && Description.UpperLimit <= 3.1f)) &&
+					(!Description.EnableMotor || Description.MaximumMotorForce > 0.0f);
+			case PhysicsConstraintKind::Slider:
+				return Description.SpringFrequency == 0.0f &&
+					(!Description.EnableLimit || (Description.LowerLimit >= -MaximumMeshCoordinate &&
+						Description.UpperLimit <= MaximumMeshCoordinate)) &&
+					(!Description.EnableMotor || Description.MaximumMotorForce > 0.0f);
+			case PhysicsConstraintKind::Distance:
+				return !Description.EnableMotor && Description.MotorSpeed == 0.0f &&
+					Description.MaximumMotorForce == 0.0f && Description.RestLength >= 0.001f &&
+					Description.RestLength <= MaximumMeshCoordinate &&
+					(!Description.EnableLimit || (Description.SpringFrequency > 0.0f &&
+						Description.LowerLimit >= 0.001f && Description.UpperLimit <= MaximumMeshCoordinate));
+			}
+			return false;
+		}
+
+		[[nodiscard]] b3Transform ToLocalFrame(const CFrame &Frame) {
+			return {Box3DConversions::ToBox3(Frame.Position), Box3DConversions::ToBox3(Frame.ToQuaternion())};
+		}
+
 		[[nodiscard]] bool IsValidBodyDescription(const PhysicsBodyDesc &Description) {
 			if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh &&
 				(!Description.Anchored || !Description.Shape.Mesh ||
@@ -285,7 +326,8 @@ namespace gargantuan {
 				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsConstraintCreate);
 				auto *BodyA = FindBody(Description.BodyA);
 				auto *BodyB = FindBody(Description.BodyB);
-				if (!BodyA || !BodyB || Description.BodyA == Description.BodyB) return {};
+				if (!BodyA || !BodyB || Description.BodyA == Description.BodyB ||
+					!IsValidConstraintDescription(Description)) return {};
 				StaticWorldDirty = true;
 				const auto Id = AllocateConstraint();
 				auto &Entry = ConstraintSlots[Id.Slot];
@@ -299,6 +341,65 @@ namespace gargantuan {
 					Definition.base.bodyIdB = BodyB->Body;
 					Definition.base.collideConnected = Description.CollideConnected;
 					Entry.Record->Joint = b3CreateWeldJoint(World, &Definition);
+					break;
+				}
+				case PhysicsConstraintKind::BallSocket: {
+					b3SphericalJointDef Definition = b3DefaultSphericalJointDef();
+					Definition.base.bodyIdA = BodyA->Body;
+					Definition.base.bodyIdB = BodyB->Body;
+					Definition.base.localFrameA = ToLocalFrame(Description.LocalFrameA);
+					Definition.base.localFrameB = ToLocalFrame(Description.LocalFrameB);
+					Definition.base.collideConnected = Description.CollideConnected;
+					Entry.Record->Joint = b3CreateSphericalJoint(World, &Definition);
+					break;
+				}
+				case PhysicsConstraintKind::Hinge: {
+					b3RevoluteJointDef Definition = b3DefaultRevoluteJointDef();
+					Definition.base.bodyIdA = BodyA->Body;
+					Definition.base.bodyIdB = BodyB->Body;
+					Definition.base.localFrameA = ToLocalFrame(Description.LocalFrameA);
+					Definition.base.localFrameB = ToLocalFrame(Description.LocalFrameB);
+					Definition.base.collideConnected = Description.CollideConnected;
+					Definition.enableLimit = Description.EnableLimit;
+					Definition.lowerAngle = Description.LowerLimit;
+					Definition.upperAngle = Description.UpperLimit;
+					Definition.enableMotor = Description.EnableMotor;
+					Definition.motorSpeed = Description.MotorSpeed;
+					Definition.maxMotorTorque = Description.MaximumMotorForce;
+					Entry.Record->Joint = b3CreateRevoluteJoint(World, &Definition);
+					break;
+				}
+				case PhysicsConstraintKind::Slider: {
+					b3PrismaticJointDef Definition = b3DefaultPrismaticJointDef();
+					Definition.base.bodyIdA = BodyA->Body;
+					Definition.base.bodyIdB = BodyB->Body;
+					Definition.base.localFrameA = ToLocalFrame(Description.LocalFrameA);
+					Definition.base.localFrameB = ToLocalFrame(Description.LocalFrameB);
+					Definition.base.collideConnected = Description.CollideConnected;
+					Definition.enableLimit = Description.EnableLimit;
+					Definition.lowerTranslation = Description.LowerLimit;
+					Definition.upperTranslation = Description.UpperLimit;
+					Definition.enableMotor = Description.EnableMotor;
+					Definition.motorSpeed = Description.MotorSpeed;
+					Definition.maxMotorForce = Description.MaximumMotorForce;
+					Entry.Record->Joint = b3CreatePrismaticJoint(World, &Definition);
+					break;
+				}
+				case PhysicsConstraintKind::Distance: {
+					b3DistanceJointDef Definition = b3DefaultDistanceJointDef();
+					Definition.base.bodyIdA = BodyA->Body;
+					Definition.base.bodyIdB = BodyB->Body;
+					Definition.base.localFrameA = ToLocalFrame(Description.LocalFrameA);
+					Definition.base.localFrameB = ToLocalFrame(Description.LocalFrameB);
+					Definition.base.collideConnected = Description.CollideConnected;
+					Definition.length = Description.RestLength;
+					Definition.enableSpring = Description.SpringFrequency > 0.0f;
+					Definition.hertz = Description.SpringFrequency;
+					Definition.dampingRatio = Description.SpringDamping;
+					Definition.enableLimit = Description.EnableLimit;
+					Definition.minLength = Description.LowerLimit;
+					Definition.maxLength = Description.UpperLimit;
+					Entry.Record->Joint = b3CreateDistanceJoint(World, &Definition);
 					break;
 				}
 				}

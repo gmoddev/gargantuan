@@ -77,6 +77,10 @@ namespace gargantuan {
 
 	enum class PhysicsConstraintKind : std::uint8_t {
 		Weld,
+		BallSocket,
+		Hinge,
+		Slider,
+		Distance,
 	};
 
 	struct PhysicsConstraintDesc {
@@ -84,6 +88,17 @@ namespace gargantuan {
 		PhysicsBodyId BodyA{};
 		PhysicsBodyId BodyB{};
 		bool CollideConnected = true;
+		CFrame LocalFrameA{};
+		CFrame LocalFrameB{};
+		bool EnableLimit = false;
+		float LowerLimit = 0.0f;
+		float UpperLimit = 0.0f;
+		bool EnableMotor = false;
+		float MotorSpeed = 0.0f;
+		float MaximumMotorForce = 0.0f;
+		float RestLength = 1.0f;
+		float SpringFrequency = 0.0f;
+		float SpringDamping = 0.7f;
 	};
 
 	struct PhysicsWorldConfig {

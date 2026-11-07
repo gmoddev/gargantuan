@@ -1,6 +1,8 @@
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/JointConstraint.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "gargantuan/Log.hpp"
@@ -210,9 +212,11 @@ namespace gargantuan {
 		if (!BodyA.IsValid() || !BodyB.IsValid()) return {};
 		const auto Joint = Physics.CreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
 		if (!Joint.IsValid()) {
-			LOG_ERROR(App, "[Physics:Backend] Failed to create constraint for %s", Constraint->GetFullName().c_str());
+			if (FailedConstraintUpdatesLogged.insert(Constraint->GetObjectId()).second)
+				LOG_ERROR(App, "[Physics:Constraint] Failed to create constraint for %s", Constraint->GetFullName().c_str());
 			return {};
 		}
+		FailedConstraintUpdatesLogged.erase(Constraint->GetObjectId());
 		ConstraintJoints[Constraint->GetObjectId()] = Joint;
 		return Joint;
 	}
@@ -314,6 +318,28 @@ namespace gargantuan {
 		for (const std::string_view Name : {"Part0", "Part1"})
 			if (Constraint->FindProperty(std::string(Name)))
 				Connections.push_back(Constraint->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
+		if (std::dynamic_pointer_cast<JointConstraint>(Constraint)) {
+			for (const std::string_view Name : {"JointType", "CollideConnected", "EnableLimit", "LowerLimit",
+				"UpperLimit", "EnableMotor", "MotorSpeed", "MaximumMotorForce", "RestLength",
+				"SpringFrequency", "SpringDamping"})
+				Connections.push_back(Constraint->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
+			RefreshJointAttachmentConnections(Constraint);
+		}
+	}
+
+	void WorldRoot::RefreshJointAttachmentConnections(const std::shared_ptr<Constraint> &Constraint) {
+		const auto Id = Constraint->GetObjectId();
+		auto &Connections = JointAttachmentConnections[Id];
+		for (const auto &Connection : Connections) Connection->Disconnect();
+		Connections.clear();
+		const auto MarkDirty = [this, Id](std::monostate) {
+			if (!ShuttingDownPhysics && TrackedConstraints.contains(Id)) DirtyConstraints.insert(Id);
+		};
+		for (const auto &Attachment : {Constraint->GetAttachment0(), Constraint->GetAttachment1()}) {
+			if (!Attachment || !*Attachment) continue;
+			Connections.push_back((*Attachment)->GetPropertyChangedSignal("CFrame")->Connect(MarkDirty));
+			Connections.push_back((*Attachment)->GetPropertyChangedSignal("Parent")->Connect(MarkDirty));
+		}
 	}
 
 	void WorldRoot::RemovePart(const std::shared_ptr<BasePart> &Part) {
@@ -395,7 +421,12 @@ namespace gargantuan {
 		if (!Constraint) return;
 		const auto Object = Constraint->GetObjectId();
 		DirtyConstraints.erase(Object);
+		FailedConstraintUpdatesLogged.erase(Object);
 		TrackedConstraints.erase(Object);
+		if (auto Connections = JointAttachmentConnections.find(Object); Connections != JointAttachmentConnections.end()) {
+			for (const auto &Connection : Connections->second) Connection->Disconnect();
+			JointAttachmentConnections.erase(Connections);
+		}
 		if (auto Connections = PhysicsConnections.find(Object); Connections != PhysicsConnections.end()) {
 			for (const auto &Connection : Connections->second) Connection->Disconnect();
 			PhysicsConnections.erase(Connections);
@@ -411,9 +442,11 @@ namespace gargantuan {
 
 	void WorldRoot::ReconcileConstraint(const std::shared_ptr<Constraint> &Constraint) {
 		if (!Constraint || Constraint->GetDestroyed() || Constraint->IsDestroying()) return;
+		if (std::dynamic_pointer_cast<JointConstraint>(Constraint)) RefreshJointAttachmentConnections(Constraint);
 		const auto Object = Constraint->GetObjectId();
 		auto [PartA, PartB] = Constraint->GetActiveParts();
 		const bool ShouldExist = Constraint->GetEnabled() && PartA && PartB && PartA != PartB &&
+			!PartA->GetDestroyed() && !PartB->GetDestroyed() && !PartA->IsDestroying() && !PartB->IsDestroying() &&
 			Constraint->FindFirstAncestorWhichIsA("WorldRoot").get() == this &&
 			PartA->FindFirstAncestorWhichIsA("WorldRoot").get() == this &&
 			PartB->FindFirstAncestorWhichIsA("WorldRoot").get() == this;
@@ -434,10 +467,11 @@ namespace gargantuan {
 		}
 		const auto Replacement = Physics.CreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
 		if (!Replacement.IsValid()) {
-			LOG_ERROR(App, "[Physics:Backend] Constraint update failed for %s", Constraint->GetFullName().c_str());
-			DirtyConstraints.insert(Object);
+			if (FailedConstraintUpdatesLogged.insert(Object).second)
+				LOG_ERROR(App, "[Physics:Constraint] Constraint update failed for %s", Constraint->GetFullName().c_str());
 			return;
 		}
+		FailedConstraintUpdatesLogged.erase(Object);
 		if (Existing != ConstraintJoints.end() && Physics.IsConstraintValid(Existing->second))
 			Physics.DestroyConstraint(Existing->second);
 		ConstraintJoints[Object] = Replacement;
@@ -624,10 +658,14 @@ namespace gargantuan {
 		for (auto &[_, Connections] : PhysicsConnections)
 			for (const auto &Connection : Connections) Connection->Disconnect();
 		PhysicsConnections.clear();
+		for (auto &[_, Connections] : JointAttachmentConnections)
+			for (const auto &Connection : Connections) Connection->Disconnect();
+		JointAttachmentConnections.clear();
 		DirtyBodies.clear();
 		FailedMeshUpdatesLogged.clear();
 		DirtyDeformables.clear();
 		DirtyConstraints.clear();
+		FailedConstraintUpdatesLogged.clear();
 		TrackedParts.clear();
 		CollisionAssets.reset();
 		TrackedDeformables.clear();

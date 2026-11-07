@@ -66,10 +66,12 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, ObjectId> SoftBodyAttachmentOwners;
 		std::unordered_map<ObjectId, std::weak_ptr<Constraint>> TrackedConstraints;
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> PhysicsConnections;
+		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> JointAttachmentConnections;
 		std::unordered_set<ObjectId> DirtyBodies;
 		std::unordered_set<ObjectId> FailedMeshUpdatesLogged;
 		std::unordered_set<ObjectId> DirtyDeformables;
 		std::unordered_set<ObjectId> DirtyConstraints;
+		std::unordered_set<ObjectId> FailedConstraintUpdatesLogged;
 		SignalConnection::Pointer GravityConnection;
 		SignalConnection::Pointer DestroyingConnection;
 		SignalConnection::Pointer DescendantRemovedConnection;
@@ -101,6 +103,7 @@ namespace gargantuan {
 		void TrackSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);
 		void TrackSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);
 		void TrackConstraint(const std::shared_ptr<Constraint> &Constraint);
+		void RefreshJointAttachmentConnections(const std::shared_ptr<Constraint> &Constraint);
 		void RemovePart(const std::shared_ptr<BasePart> &Part);
 		void RemoveDeformable(const std::shared_ptr<DeformableBody> &Body);
 		void RemoveSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);
