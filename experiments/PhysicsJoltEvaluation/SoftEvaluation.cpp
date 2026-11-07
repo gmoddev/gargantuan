@@ -1,0 +1,424 @@
+#include "SoftFixtures.hpp"
+#include "ExperimentSupport.hpp"
+#include "gargantuan/physics/SoftBodyBackend.hpp"
+
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <iostream>
+#include <stdexcept>
+#include <string_view>
+
+namespace {
+    using Json = nlohmann::json;
+    constexpr float DeltaTime = 1.0f / 60.0f;
+
+    struct Options {
+        std::string Backend = "Jolt";
+        std::string Case = "TinyCloth";
+        int Workers = 1;
+        int Frames = 150;
+        int Warmup = 30;
+        float Gravity = 196.2f;
+        std::string Track = "Historical";
+        int Iterations = 0;
+    };
+
+    Options Parse(int ArgumentCount, char **Arguments) {
+        Options Result;
+        for (int Index = 1; Index < ArgumentCount; Index += 2) {
+            if (Index + 1 == ArgumentCount) throw std::runtime_error("[Physics:SoftEvaluation] Missing option value");
+            const std::string_view Name = Arguments[Index];
+            const std::string Value = Arguments[Index + 1];
+            if (Name == "--backend") Result.Backend = Value;
+            else if (Name == "--case") Result.Case = Value;
+            else if (Name == "--workers") Result.Workers = std::stoi(Value);
+            else if (Name == "--frames") Result.Frames = std::stoi(Value);
+            else if (Name == "--warmup") Result.Warmup = std::stoi(Value);
+            else if (Name == "--gravity") Result.Gravity = std::stof(Value);
+            else if (Name == "--track") Result.Track = Value;
+            else if (Name == "--iterations") Result.Iterations = std::stoi(Value);
+            else throw std::runtime_error("[Physics:SoftEvaluation] Unknown option");
+        }
+        if (Result.Backend != "XPBD" && Result.Backend != "Jolt")
+            throw std::runtime_error("[Physics:SoftEvaluation] Invalid backend");
+        if (Result.Case != "TinyCloth" && Result.Case != "Cloth4K" && Result.Case != "Cloth16K" &&
+            Result.Case != "FourCloths" && Result.Case != "Rubber" && Result.Case != "MovingCollider" &&
+            Result.Case != "Attachments" && Result.Case != "PointImpulse" && Result.Case != "Lifecycle")
+            throw std::runtime_error("[Physics:SoftEvaluation] Invalid case");
+        if (Result.Workers < 1 || Result.Workers > 8 || Result.Frames < 1 || Result.Frames > 600 ||
+            Result.Warmup < 0 || Result.Warmup >= Result.Frames || !std::isfinite(Result.Gravity) ||
+            Result.Gravity < 0.0f || Result.Gravity > 196.2f ||
+            (Result.Track != "Historical" && Result.Track != "FixedTotalMass") ||
+            Result.Iterations < 0 || Result.Iterations > 64)
+            throw std::runtime_error("[Physics:SoftEvaluation] Option outside bounded range");
+        return Result;
+    }
+
+    int Resolution(const Options &Config) {
+        if (Config.Case == "TinyCloth") return 8;
+        if (Config.Case == "Cloth16K") return 128;
+        if (Config.Case == "Rubber") return 8;
+        return 64;
+    }
+
+    bool IsCloth(const Options &Config) { return Config.Case != "Rubber"; }
+    int BodyCount(const Options &Config) { return Config.Case == "FourCloths" ? 4 : 1; }
+
+    float ParticleMass(const Options &Config) {
+        if (Config.Track == "Historical" || Config.Case == "Rubber") return 0.1f;
+        const auto N = Resolution(Config);
+        return (64.0f * 64.0f - 64.0f) * 0.1f / static_cast<float>(N * N - N);
+    }
+
+    int Iterations(const Options &Config) {
+        if (Config.Iterations > 0) return Config.Iterations;
+        if (Config.Case == "Rubber") return 16;
+        return Resolution(Config) <= 64 ? 8 : 4;
+    }
+
+    struct Quality {
+        bool Finite = true;
+        double MaxEdgeStretch = 0.0;
+        double MaxPinDrift = 0.0;
+        double VolumeError = 0.0;
+        double MaxPenetration = 0.0;
+        std::size_t InvertedTetrahedra = 0;
+        double MinY = 1.0e30;
+        double MaxY = -1.0e30;
+        std::size_t VertexCount = 0;
+    };
+
+    Quality ObserveJolt(const PhysicsJoltEvaluation::JoltWorld &World, JPH::BodyID Body,
+                        const JPH::SoftBodySharedSettings &Shared, float PinOffset,
+                        bool BallCollider, float ColliderZ) {
+        JPH::BodyLockRead Lock(World.World.GetBodyLockInterface(), Body);
+        if (!Lock.Succeeded()) throw std::runtime_error("[Physics:SoftEvaluation] Jolt soft body lock failed");
+        const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
+        const auto &Vertices = Motion->GetVertices();
+        Quality Result;
+        Result.VertexCount = Vertices.size();
+        Result.MaxEdgeStretch = PhysicsJoltEvaluation::MaxEdgeStretch(Shared, *Motion);
+        const auto BodyPosition = Lock.GetBody().GetPosition();
+        double RestVolume = 0.0;
+        double CurrentVolume = 0.0;
+        for (const auto &Volume : Shared.mVolumeConstraints) {
+            const auto A = Vertices[Volume.mVertex[0]].mPosition;
+            const auto B = Vertices[Volume.mVertex[1]].mPosition;
+            const auto C = Vertices[Volume.mVertex[2]].mPosition;
+            const auto D = Vertices[Volume.mVertex[3]].mPosition;
+            RestVolume += Volume.mSixRestVolume;
+            CurrentVolume += std::abs((B - A).Cross(C - A).Dot(D - A));
+            const auto RestA = JPH::Vec3(Shared.mVertices[Volume.mVertex[0]].mPosition);
+            const auto RestB = JPH::Vec3(Shared.mVertices[Volume.mVertex[1]].mPosition);
+            const auto RestC = JPH::Vec3(Shared.mVertices[Volume.mVertex[2]].mPosition);
+            const auto RestD = JPH::Vec3(Shared.mVertices[Volume.mVertex[3]].mPosition);
+            const auto RestSigned = (RestB - RestA).Cross(RestC - RestA).Dot(RestD - RestA);
+            const auto CurrentSigned = (B - A).Cross(C - A).Dot(D - A);
+            if (RestSigned * CurrentSigned <= 0.0f) ++Result.InvertedTetrahedra;
+        }
+        if (RestVolume > 0.0) Result.VolumeError = std::abs(CurrentVolume / RestVolume - 1.0);
+        for (std::size_t Index = 0; Index < Vertices.size(); ++Index) {
+            const auto Position = Vertices[Index].mPosition;
+            Result.Finite &= std::isfinite(Position.GetX()) && std::isfinite(Position.GetY()) && std::isfinite(Position.GetZ());
+            const double WorldY = BodyPosition.GetY() + Position.GetY();
+            Result.MinY = std::min(Result.MinY, WorldY);
+            Result.MaxY = std::max(Result.MaxY, WorldY);
+            if (BallCollider) {
+                const auto WorldPosition = Position + JPH::Vec3(static_cast<float>(BodyPosition.GetX()),
+                    static_cast<float>(BodyPosition.GetY()), static_cast<float>(BodyPosition.GetZ()));
+                Result.MaxPenetration = std::max(Result.MaxPenetration,
+                    std::max(0.0, static_cast<double>(0.75f - (WorldPosition - JPH::Vec3(0.0f, 0.0f, ColliderZ)).Length())));
+            } else {
+                Result.MaxPenetration = std::max(Result.MaxPenetration, std::max(0.0, -9.45 - WorldY));
+            }
+            if (Shared.mVertices[Index].mInvMass == 0.0f) {
+                const auto Rest = JPH::Vec3(Shared.mVertices[Index].mPosition) + JPH::Vec3(0.0f, PinOffset, 0.0f);
+                Result.MaxPinDrift = std::max(Result.MaxPinDrift, static_cast<double>((Position - Rest).Length()));
+            }
+        }
+        return Result;
+    }
+
+    Quality ObserveXpbd(const gargantuan::SoftBodyState &State, const gargantuan::SoftBodyDefinition &Definition,
+                        bool BallCollider, float ColliderZ) {
+        if (!State.Positions) throw std::runtime_error("[Physics:SoftEvaluation] Missing XPBD positions");
+        const auto &Vertices = *State.Positions;
+        Quality Result;
+        Result.VertexCount = Vertices.size();
+        const int Resolution = static_cast<int>(Definition.ResolutionX);
+        const float Rest = Definition.Size.x / static_cast<float>(Resolution - 1);
+        for (std::size_t Index = 0; Index < Vertices.size(); ++Index) {
+            const auto &Position = Vertices[Index];
+            Result.Finite &= std::isfinite(Position.x) && std::isfinite(Position.y) && std::isfinite(Position.z);
+            Result.MinY = std::min(Result.MinY, static_cast<double>(Position.y));
+            Result.MaxY = std::max(Result.MaxY, static_cast<double>(Position.y));
+            if (BallCollider)
+                Result.MaxPenetration = std::max(Result.MaxPenetration,
+                    std::max(0.0, static_cast<double>(0.75f - glm::length(Position - glm::vec3(0.0f, 0.0f, ColliderZ)))));
+            else Result.MaxPenetration = std::max(Result.MaxPenetration,
+                std::max(0.0, -9.45 - static_cast<double>(Position.y)));
+        }
+        if (Definition.Kind == gargantuan::SoftBodyKind::Cloth) {
+            for (int Y = 0; Y < Resolution; ++Y) for (int X = 0; X + 1 < Resolution; ++X) {
+                const auto Length = glm::length(Vertices[Y * Resolution + X + 1] - Vertices[Y * Resolution + X]);
+                Result.MaxEdgeStretch = std::max(Result.MaxEdgeStretch, std::abs(static_cast<double>(Length / Rest) - 1.0));
+            }
+        } else {
+            const auto XCount = Definition.ResolutionX;
+            const auto YCount = Definition.ResolutionY;
+            const auto ZCount = Definition.ResolutionZ;
+            const auto At = [XCount, YCount](std::uint32_t X, std::uint32_t Y, std::uint32_t Z) {
+                return (Z * YCount + Y) * XCount + X;
+            };
+            constexpr std::array<std::array<int, 4>, 5> Tetra{{
+                {{0, 1, 2, 4}}, {{1, 3, 2, 7}}, {{1, 2, 4, 7}}, {{1, 4, 5, 7}}, {{2, 6, 4, 7}}
+            }};
+            double CurrentVolume = 0.0;
+            for (std::uint32_t Z = 0; Z + 1 < ZCount; ++Z)
+                for (std::uint32_t Y = 0; Y + 1 < YCount; ++Y)
+                    for (std::uint32_t X = 0; X + 1 < XCount; ++X) {
+                        const std::array<std::uint32_t, 8> Corner{{
+                            At(X, Y, Z), At(X + 1, Y, Z), At(X, Y + 1, Z), At(X + 1, Y + 1, Z),
+                            At(X, Y, Z + 1), At(X + 1, Y, Z + 1), At(X, Y + 1, Z + 1), At(X + 1, Y + 1, Z + 1)
+                        }};
+                        for (const auto &Indices : Tetra) {
+                            const auto A = Vertices[Corner[Indices[0]]];
+                            const auto B = Vertices[Corner[Indices[1]]];
+                            const auto C = Vertices[Corner[Indices[2]]];
+                            const auto D = Vertices[Corner[Indices[3]]];
+                            const float Signed = glm::dot(glm::cross(B - A, C - A), D - A);
+                            const float RestSigned = glm::dot(glm::cross(
+                                glm::vec3((Indices[1] & 1) ? 1.0f : 0.0f, (Indices[1] & 2) ? 1.0f : 0.0f, (Indices[1] & 4) ? 1.0f : 0.0f) -
+                                glm::vec3((Indices[0] & 1) ? 1.0f : 0.0f, (Indices[0] & 2) ? 1.0f : 0.0f, (Indices[0] & 4) ? 1.0f : 0.0f),
+                                glm::vec3((Indices[2] & 1) ? 1.0f : 0.0f, (Indices[2] & 2) ? 1.0f : 0.0f, (Indices[2] & 4) ? 1.0f : 0.0f) -
+                                glm::vec3((Indices[0] & 1) ? 1.0f : 0.0f, (Indices[0] & 2) ? 1.0f : 0.0f, (Indices[0] & 4) ? 1.0f : 0.0f)),
+                                glm::vec3((Indices[3] & 1) ? 1.0f : 0.0f, (Indices[3] & 2) ? 1.0f : 0.0f, (Indices[3] & 4) ? 1.0f : 0.0f) -
+                                glm::vec3((Indices[0] & 1) ? 1.0f : 0.0f, (Indices[0] & 2) ? 1.0f : 0.0f, (Indices[0] & 4) ? 1.0f : 0.0f));
+                            if (Signed * RestSigned <= 0.0f) ++Result.InvertedTetrahedra;
+                            CurrentVolume += std::abs(Signed) / 6.0;
+                        }
+                    }
+            Result.VolumeError = std::abs(CurrentVolume / (Definition.Size.x * Definition.Size.y * Definition.Size.z) - 1.0);
+        }
+        for (const auto &Attachment : Definition.Attachments)
+            Result.MaxPinDrift = std::max(Result.MaxPinDrift,
+                static_cast<double>(glm::length(Vertices[Attachment.Vertex] - Attachment.Position)));
+        return Result;
+    }
+
+    Json QualityJson(const Quality &Value) {
+        return {{"Finite", Value.Finite}, {"MaxEdgeStretch", Value.MaxEdgeStretch},
+                {"MaxPinDrift", Value.MaxPinDrift}, {"VolumeError", Value.VolumeError},
+                {"MaxPenetration", Value.MaxPenetration}, {"InvertedTetrahedra", Value.InvertedTetrahedra},
+                {"MinY", Value.MinY}, {"MaxY", Value.MaxY}, {"Vertices", Value.VertexCount}};
+    }
+
+    Json RunJolt(const Options &Config) {
+        PhysicsJoltEvaluation::JoltWorld World(Config.Workers - 1);
+        World.World.SetGravity(JPH::Vec3(0.0f, -Config.Gravity, 0.0f));
+        const bool Rubber = !IsCloth(Config);
+        const int Count = BodyCount(Config);
+        const int N = Resolution(Config);
+        auto Shared = Rubber ? PhysicsJoltEvaluation::Rubber(N, 2.0f / (N - 1)) :
+            PhysicsJoltEvaluation::Cloth(N, 8.0f, false, false, ParticleMass(Config));
+        if (Rubber) for (auto &Vertex : Shared->mVertices) Vertex.mInvMass = 1.0f / ParticleMass(Config);
+        std::vector<JPH::BodyID> Bodies;
+        for (int Index = 0; Index < Count; ++Index)
+            Bodies.push_back(World.AddSoft(Shared, JPH::RVec3(12.0 * Index, Rubber ? 4.0 : 0.0, 0.0),
+                                           Iterations(Config), Rubber, 2.4f));
+        JPH::BodyID Collider;
+        if (Config.Case == "MovingCollider") {
+            Collider = World.AddRigid(new JPH::SphereShape(0.7f), JPH::RVec3(0.0, 0.0, -2.0),
+                                      JPH::EMotionType::Kinematic, 1);
+        } else {
+            Collider = World.AddRigid(new JPH::BoxShape(JPH::Vec3(100.0f, 0.5f, 100.0f)),
+                                      JPH::RVec3(0.0, -10.0, 0.0), JPH::EMotionType::Static, 0);
+        }
+        Json Frames = Json::array();
+        double MaximumStretch = 0.0;
+        double MaximumPinDrift = 0.0;
+        double MaximumVolumeError = 0.0;
+        double MaximumPenetration = 0.0;
+        std::size_t InvertedTetrahedra = 0;
+        bool Finite = true;
+        const auto Start = PhysicsJoltEvaluation::Clock::now();
+        for (int Frame = 0; Frame < Config.Frames; ++Frame) {
+            if (Config.Case == "MovingCollider")
+                World.World.GetBodyInterface().SetPositionAndRotation(Collider,
+                    JPH::RVec3(0.0, 0.0, -2.0 + 0.06 * Frame), JPH::Quat::sIdentity(), JPH::EActivation::Activate);
+            if (Config.Case == "Attachments" && Frame == Config.Frames / 2) {
+                JPH::BodyLockWrite Lock(World.World.GetBodyLockInterface(), Bodies[0]);
+                if (!Lock.Succeeded()) throw std::runtime_error("[Physics:SoftEvaluation] Jolt attachment lock failed");
+                auto *Motion = static_cast<JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
+                for (int X = 0; X < N; ++X) {
+                    auto &Vertex = Motion->GetVertex(X);
+                    Vertex.mPosition += JPH::Vec3(0.0f, 1.0f, 0.0f);
+                    Vertex.mPreviousPosition = Vertex.mPosition;
+                }
+            }
+            if (Config.Case == "PointImpulse" && Frame == Config.Frames / 3) {
+                JPH::BodyLockWrite Lock(World.World.GetBodyLockInterface(), Bodies[0]);
+                if (!Lock.Succeeded()) throw std::runtime_error("[Physics:SoftEvaluation] Jolt impulse lock failed");
+                auto *Motion = static_cast<JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
+                Motion->GetVertex(N * N / 2).mVelocity += JPH::Vec3(0.0f, 0.0f, 10.0f);
+            }
+            if (Config.Case == "Lifecycle" && Frame > 0 && Frame % 20 == 0) {
+                World.Remove(Bodies[0]);
+                Bodies[0] = World.AddSoft(Shared, JPH::RVec3(0.0, Rubber ? 4.0 : 0.0, 0.0),
+                                         Iterations(Config), Rubber, 2.4f);
+            }
+            const double StepMs = World.Step();
+            Json BodyQuality = Json::array();
+            for (auto Body : Bodies) {
+                const auto QualityValue = ObserveJolt(World, Body, *Shared,
+                    Config.Case == "Attachments" && Frame >= Config.Frames / 2 ? 1.0f : 0.0f,
+                    Config.Case == "MovingCollider", -2.0f + 0.06f * Frame);
+                MaximumStretch = std::max(MaximumStretch, QualityValue.MaxEdgeStretch);
+                MaximumPinDrift = std::max(MaximumPinDrift, QualityValue.MaxPinDrift);
+                MaximumVolumeError = std::max(MaximumVolumeError, QualityValue.VolumeError);
+                MaximumPenetration = std::max(MaximumPenetration, QualityValue.MaxPenetration);
+                InvertedTetrahedra += QualityValue.InvertedTetrahedra;
+                Finite &= QualityValue.Finite;
+                BodyQuality.push_back(QualityJson(QualityValue));
+            }
+            Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs}, {"Bodies", std::move(BodyQuality)}});
+        }
+        return {{"Backend", "Jolt"}, {"Case", Config.Case}, {"Frames", std::move(Frames)},
+                {"SetupPlusRunMs", PhysicsJoltEvaluation::Milliseconds(Start)},
+                {"Finite", Finite}, {"MaxEdgeStretch", MaximumStretch},
+                {"MaxPinDrift", MaximumPinDrift}, {"MaxVolumeError", MaximumVolumeError},
+                {"MaxPenetration", MaximumPenetration}, {"InvertedTetrahedronFrames", InvertedTetrahedra},
+                {"BackgroundWorkers", Config.Workers - 1}, {"CallingThreads", 1},
+                {"SolverIterations", Iterations(Config)}, {"ParticleMass", ParticleMass(Config)},
+                {"Track", Config.Track},
+                {"SoftVerticesPerBody", Shared->mVertices.size()}, {"Bodies", Count}};
+    }
+
+    Json RunXpbd(const Options &Config) {
+        gargantuan::SoftBodyWorldLimits Limits;
+        Limits.MaximumWorkers = static_cast<std::size_t>(Config.Workers);
+        gargantuan::SoftBodyWorld World(Limits);
+        const bool Rubber = !IsCloth(Config);
+        const int Count = BodyCount(Config);
+        const int N = Resolution(Config);
+        gargantuan::SoftBodyDefinition Definition;
+        Definition.Kind = Rubber ? gargantuan::SoftBodyKind::Rubber : gargantuan::SoftBodyKind::Cloth;
+        Definition.ResolutionX = Definition.ResolutionY = static_cast<std::uint32_t>(N);
+        Definition.ResolutionZ = Rubber ? static_cast<std::uint32_t>(N) : 4;
+        Definition.Size = Rubber ? glm::vec3(2.0f) : glm::vec3(8.0f, 8.0f, 0.5f);
+        Definition.Material.ParticleMass = ParticleMass(Config);
+        Definition.Position = {0.0f, Rubber ? 4.0f : 0.0f, 0.0f};
+        for (int X = 0; X < N && !Rubber; ++X)
+            Definition.Attachments.push_back({static_cast<std::uint32_t>(X),
+                {Definition.Position.x + (static_cast<float>(X) / (N - 1) - 0.5f) * 8.0f, 4.0f, 0.0f}});
+        std::vector<gargantuan::SoftBodyId> Bodies;
+        std::vector<gargantuan::SoftBodyDefinition> Definitions;
+        for (int Index = 0; Index < Count; ++Index) {
+            auto Current = Definition;
+            Current.Position.x += 12.0f * Index;
+            for (auto &Attachment : Current.Attachments) Attachment.Position.x += 12.0f * Index;
+            const auto Body = World.CreateBody(Current);
+            if (!Body.IsValid()) throw std::runtime_error("[Physics:SoftEvaluation] XPBD admission failed");
+            Bodies.push_back(Body);
+            Definitions.push_back(std::move(Current));
+        }
+        Json Frames = Json::array();
+        double MaximumStretch = 0.0;
+        double MaximumPinDrift = 0.0;
+        double MaximumVolumeError = 0.0;
+        double MaximumPenetration = 0.0;
+        std::size_t InvertedTetrahedra = 0;
+        bool Finite = true;
+        const auto Start = PhysicsJoltEvaluation::Clock::now();
+        for (int Frame = 0; Frame < Config.Frames; ++Frame) {
+            if (Config.Case == "Attachments" && Frame == Config.Frames / 2) {
+                for (auto &Attachment : Definitions[0].Attachments) Attachment.Position.y += 1.0f;
+                if (!World.UpdateBody(Bodies[0], Definitions[0]).Succeeded())
+                    throw std::runtime_error("[Physics:SoftEvaluation] XPBD attachment update failed");
+            }
+            if (Config.Case == "PointImpulse" && Frame == Config.Frames / 3 &&
+                !World.ApplyImpulseAtPosition(Bodies[0], {0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 0.0f}).Succeeded())
+                throw std::runtime_error("[Physics:SoftEvaluation] XPBD point impulse failed");
+            if (Config.Case == "Lifecycle" && Frame > 0 && Frame % 20 == 0) {
+                const auto Old = Bodies[0];
+                if (!World.DestroyBody(Old).Succeeded() || World.IsBodyValid(Old))
+                    throw std::runtime_error("[Physics:SoftEvaluation] XPBD stale body survived destruction");
+                Bodies[0] = World.CreateBody(Definitions[0]);
+                if (!Bodies[0].IsValid()) throw std::runtime_error("[Physics:SoftEvaluation] XPBD replacement failed");
+            }
+            gargantuan::SoftBodyStepConfig Step;
+            Step.Gravity = {0.0f, -Config.Gravity, 0.0f};
+            gargantuan::SoftBodyCollider Collider;
+            if (Config.Case == "MovingCollider") {
+                Collider.Shape.Kind = gargantuan::PhysicsShapeKind::Ball;
+                Collider.Shape.Size = {1.4f, 1.4f, 1.4f};
+                Collider.Transform.Position = {0.0f, 0.0f, -2.0f + 0.06f * Frame};
+            } else {
+                Collider.Shape.Size = {200.0f, 1.0f, 200.0f};
+                Collider.Transform.Position = {0.0f, -10.0f, 0.0f};
+            }
+            Step.Colliders.push_back(Collider);
+            const auto StepStart = PhysicsJoltEvaluation::Clock::now();
+            auto Result = World.Step(Step);
+            const double StepMs = PhysicsJoltEvaluation::Milliseconds(StepStart);
+            Json BodyQuality = Json::array();
+            for (std::size_t Index = 0; Index < Bodies.size(); ++Index) {
+                const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
+                    [&](const auto &State) { return State.Body == Bodies[Index]; });
+                if (Found == Result.States.end()) throw std::runtime_error("[Physics:SoftEvaluation] XPBD state missing");
+                const auto QualityValue = ObserveXpbd(*Found, Definitions[Index],
+                    Config.Case == "MovingCollider", -2.0f + 0.06f * Frame);
+                MaximumStretch = std::max(MaximumStretch, QualityValue.MaxEdgeStretch);
+                MaximumPinDrift = std::max(MaximumPinDrift, QualityValue.MaxPinDrift);
+                MaximumVolumeError = std::max(MaximumVolumeError, QualityValue.VolumeError);
+                MaximumPenetration = std::max(MaximumPenetration, QualityValue.MaxPenetration);
+                InvertedTetrahedra += QualityValue.InvertedTetrahedra;
+                Finite &= QualityValue.Finite;
+                BodyQuality.push_back(QualityJson(QualityValue));
+            }
+            Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs}, {"Bodies", std::move(BodyQuality)},
+                              {"WorkerCount", Result.Profile.WorkerCount},
+                              {"CollisionNanoseconds", Result.Profile.CollisionNanoseconds},
+                              {"ConstraintNanoseconds", Result.Profile.ConstraintNanoseconds}});
+        }
+        World.Shutdown();
+        return {{"Backend", "XPBD"}, {"Case", Config.Case}, {"Frames", std::move(Frames)},
+                {"SetupPlusRunMs", PhysicsJoltEvaluation::Milliseconds(Start)},
+                {"Finite", Finite}, {"MaxEdgeStretch", MaximumStretch},
+                {"MaxPinDrift", MaximumPinDrift}, {"MaxVolumeError", MaximumVolumeError},
+                {"MaxPenetration", MaximumPenetration}, {"InvertedTetrahedronFrames", InvertedTetrahedra},
+                {"MaximumWorkers", Config.Workers}, {"SolverIterations", "Automatic"},
+                {"ParticleMass", ParticleMass(Config)}, {"Track", Config.Track},
+                {"Bodies", Count}};
+    }
+}
+
+int main(int ArgumentCount, char **Arguments) {
+    PhysicsEvaluation::SuppressErrorDialogs();
+    try {
+        const auto Config = Parse(ArgumentCount, Arguments);
+        PhysicsEvaluation::InstallPhysicsAllocators();
+        const auto Before = PhysicsEvaluation::CaptureResources();
+        auto Result = Config.Backend == "Jolt" ? RunJolt(Config) : RunXpbd(Config);
+        Result["Resources"] = PhysicsEvaluation::ResourceDelta(Before, PhysicsEvaluation::CaptureResources());
+        Result["DeltaTime"] = DeltaTime;
+        Result["Gravity"] = Config.Gravity;
+        Result["WarmupFrames"] = Config.Warmup;
+        Result["MeasuredFrames"] = Config.Frames - Config.Warmup;
+        Result["QualityQualified"] = Result.value("Finite", false) &&
+            Result.value("MaxEdgeStretch", 0.0) <= 0.1 &&
+            Result.value("MaxPinDrift", 0.0) <= 1.0e-4 &&
+            Result.value("MaxPenetration", 0.0) <= 0.1 &&
+            (Config.Case != "Rubber" ||
+                (Result.value("MaxVolumeError", 0.0) <= 0.15 &&
+                 Result.value("InvertedTetrahedronFrames", std::size_t{0}) == 0));
+        std::cout << Result.dump() << '\n';
+        return Result["QualityQualified"].get<bool>() ? 0 : 3;
+    } catch (const std::exception &Error) {
+        std::cout << Json{{"Status", "Failed"}, {"Error", std::string("[Physics:SoftEvaluation] ") + Error.what()}}.dump() << '\n';
+        return 2;
+    }
+}
