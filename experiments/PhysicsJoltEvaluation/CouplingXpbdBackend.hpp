@@ -9,6 +9,7 @@ namespace PhysicsJoltEvaluation {
     struct FeedbackImpulse {
         std::size_t ColliderIndex = 0;
         glm::vec3 Impulse{0.0f};
+        glm::vec3 AngularImpulseOrigin{0.0f};
         glm::vec3 Position{0.0f};
         std::size_t Contacts = 0;
     };

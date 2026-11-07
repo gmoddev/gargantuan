@@ -3,13 +3,17 @@
 #include "ExperimentSupport.hpp"
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
+#include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
+#include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
 
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -17,6 +21,10 @@ namespace {
     using PhysicsJoltEvaluation::JoltWorld;
     using Json = nlohmann::json;
     constexpr float DeltaTime = 1.0f / 60.0f;
+    constexpr float RigidRadius = 0.45f;
+    constexpr float RigidDensity = 0.7f;
+    constexpr float RigidMass = RigidDensity * (4.0f / 3.0f) * 3.14159265358979323846f *
+        RigidRadius * RigidRadius * RigidRadius;
 
     struct Options {
         std::string Backend = "Jolt";
@@ -57,8 +65,19 @@ namespace {
         double MaxStretch = 0.0;
         double VolumeError = 0.0;
         double MaxPinDrift = 0.0;
+        std::size_t InvertedTetrahedra = 0;
         bool Finite = true;
         int MovableVertices = 0;
+    };
+
+    struct ContactCounter final : JPH::SoftBodyContactListener {
+        std::atomic<std::uint64_t> VertexContacts{0};
+        void OnSoftBodyContactAdded(const JPH::Body &, const JPH::SoftBodyManifold &Manifold) override {
+            std::uint64_t Count = 0;
+            for (const auto &Vertex : Manifold.GetVertices())
+                if (Manifold.HasContact(Vertex)) ++Count;
+            VertexContacts.fetch_add(Count, std::memory_order_relaxed);
+        }
     };
 
     SoftObservation ObserveSoft(const JoltWorld &World, JPH::BodyID Id,
@@ -68,7 +87,25 @@ namespace {
         const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
         const auto &Vertices = Motion->GetVertices();
         SoftObservation Result;
-        Result.MaxStretch = PhysicsJoltEvaluation::MaxEdgeStretch(Shared, *Motion);
+        if (!Shared.mVolumeConstraints.empty()) {
+            Result.MaxStretch = PhysicsJoltEvaluation::MaxEdgeStretch(Shared, *Motion);
+        } else {
+            const int N = static_cast<int>(std::lround(std::sqrt(static_cast<double>(Vertices.size()))));
+            const float Rest = 4.0f / (N - 1);
+            const auto Check = [&](int A, int B, float Length) {
+                Result.MaxStretch = std::max(Result.MaxStretch,
+                    std::abs(static_cast<double>((Vertices[B].mPosition - Vertices[A].mPosition).Length() / Length) - 1.0));
+            };
+            for (int Y = 0; Y < N; ++Y) for (int X = 0; X < N; ++X) {
+                const int I = Y * N + X;
+                if (X + 1 < N) Check(I, I + 1, Rest);
+                if (Y + 1 < N) Check(I, I + N, Rest);
+                if (X + 1 < N && Y + 1 < N) {
+                    Check(I, I + N + 1, Rest * std::sqrt(2.0f));
+                    Check(I + 1, I + N, Rest * std::sqrt(2.0f));
+                }
+            }
+        }
         double VolumeRest = 0.0;
         double VolumeCurrent = 0.0;
         for (const auto &Volume : Shared.mVolumeConstraints) {
@@ -78,6 +115,13 @@ namespace {
             const auto D = Vertices[Volume.mVertex[3]].mPosition;
             VolumeRest += Volume.mSixRestVolume;
             VolumeCurrent += std::abs((B - A).Cross(C - A).Dot(D - A));
+            const auto RestA = JPH::Vec3(Shared.mVertices[Volume.mVertex[0]].mPosition);
+            const auto RestB = JPH::Vec3(Shared.mVertices[Volume.mVertex[1]].mPosition);
+            const auto RestC = JPH::Vec3(Shared.mVertices[Volume.mVertex[2]].mPosition);
+            const auto RestD = JPH::Vec3(Shared.mVertices[Volume.mVertex[3]].mPosition);
+            const auto SignedRest = (RestB - RestA).Cross(RestC - RestA).Dot(RestD - RestA);
+            const auto SignedCurrent = (B - A).Cross(C - A).Dot(D - A);
+            if (SignedRest * SignedCurrent <= 0.0f) ++Result.InvertedTetrahedra;
         }
         if (VolumeRest > 0.0) Result.VolumeError = std::abs(VolumeCurrent / VolumeRest - 1.0);
         for (std::size_t Index = 0; Index < Vertices.size(); ++Index) {
@@ -104,7 +148,9 @@ namespace {
     Json RunJolt(const Options &Config, bool EnableContact) {
         // One calling thread plus this many background threads is the actual Jolt budget.
         const int BackgroundWorkers = std::max(0, Config.Workers - 1);
+        ContactCounter Contacts;
         JoltWorld World(BackgroundWorkers, EnableContact);
+        World.World.SetSoftBodyContactListener(&Contacts);
         const bool Horizontal = Config.Case == "SphereOnCloth";
         const bool IsRubber = Config.Case == "RubberPush";
         const JPH::RVec3 SoftOrigin = IsRubber ? JPH::RVec3(0.0, 0.0, 0.0) : JPH::RVec3(0.0, 0.0, 0.0);
@@ -112,23 +158,23 @@ namespace {
             PhysicsJoltEvaluation::Cloth(Horizontal ? 17 : 13, Horizontal ? 4.0f : 4.0f,
                                          Horizontal, Horizontal, 0.1f, 0.0f);
         if (IsRubber) for (auto &Vertex : Shared->mVertices) Vertex.mVelocity = JPH::Float3(4.0f, 0.0f, 0.0f);
-        auto Soft = World.AddSoft(Shared, SoftOrigin, 24, IsRubber);
+        auto Soft = World.AddSoft(Shared, SoftOrigin, 24, IsRubber, 2.4f);
         World.World.SetGravity(Horizontal ? JPH::Vec3(0.0f, -9.81f, 0.0f) : JPH::Vec3::sZero());
 
         std::vector<JPH::BodyID> Rigids;
         if (IsRubber) {
-            Rigids.push_back(World.AddRigid(new JPH::BoxShape(JPH::Vec3(0.4f, 0.4f, 0.4f)),
-                                            JPH::RVec3(2.0, 0.0, 0.0), JPH::EMotionType::Dynamic, 1));
+            Rigids.push_back(World.AddRigid(new JPH::SphereShape(RigidRadius),
+                                            JPH::RVec3(2.0, 0.0, 0.0), JPH::EMotionType::Dynamic, 1, RigidMass));
         } else if (Horizontal) {
-            Rigids.push_back(World.AddRigid(new JPH::SphereShape(0.45f), JPH::RVec3(0.0, 2.0, 0.0),
-                                            JPH::EMotionType::Dynamic, 1));
+            Rigids.push_back(World.AddRigid(new JPH::SphereShape(RigidRadius), JPH::RVec3(0.0, 2.0, 0.0),
+                                            JPH::EMotionType::Dynamic, 1, RigidMass));
         } else {
-            Rigids.push_back(World.AddRigid(new JPH::SphereShape(0.45f), JPH::RVec3(0.0, 0.0, -2.0),
-                                            JPH::EMotionType::Dynamic, 1));
+            Rigids.push_back(World.AddRigid(new JPH::SphereShape(RigidRadius), JPH::RVec3(0.0, 0.0, -2.0),
+                                            JPH::EMotionType::Dynamic, 1, RigidMass));
             World.World.GetBodyInterface().SetLinearVelocity(Rigids.back(), JPH::Vec3(0.0f, 0.0f, 5.0f));
             if (Config.Case == "Multiple") {
-                Rigids.push_back(World.AddRigid(new JPH::SphereShape(0.45f), JPH::RVec3(1.0, -0.4, 2.0),
-                                                JPH::EMotionType::Dynamic, 1));
+                Rigids.push_back(World.AddRigid(new JPH::SphereShape(RigidRadius), JPH::RVec3(1.0, -0.4, 2.0),
+                                                JPH::EMotionType::Dynamic, 1, RigidMass));
                 World.World.GetBodyInterface().SetLinearVelocity(Rigids.back(), JPH::Vec3(0.0f, 0.0f, -5.0f));
             }
         }
@@ -137,7 +183,11 @@ namespace {
         double MaxStretch = 0.0;
         double MaxVolumeError = 0.0;
         double MaxPinDrift = 0.0;
+        double MaxParticlePenetration = 0.0;
+        std::size_t InvertedTetrahedronFrames = 0;
         bool Finite = true;
+        std::uint64_t TotalVertexContacts = 0;
+        int FirstContactFrame = -1;
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             if (Config.Case == "Repeated" && Frame > 0 && Frame % 45 == 0) {
                 World.World.GetBodyInterface().SetPositionAndRotation(Rigids[0], JPH::RVec3(0.0, 0.0, -2.0),
@@ -145,10 +195,14 @@ namespace {
                 World.World.GetBodyInterface().SetLinearVelocity(Rigids[0], JPH::Vec3(0.0f, 0.0f, 5.0f));
             }
             const double StepMs = World.Step(DeltaTime, 1);
+            const auto FrameContacts = Contacts.VertexContacts.exchange(0, std::memory_order_relaxed);
+            TotalVertexContacts += FrameContacts;
+            if (FrameContacts > 0 && FirstContactFrame < 0) FirstContactFrame = Frame;
             auto SoftState = ObserveSoft(World, Soft, *Shared);
             MaxStretch = std::max(MaxStretch, SoftState.MaxStretch);
             MaxVolumeError = std::max(MaxVolumeError, SoftState.VolumeError);
             MaxPinDrift = std::max(MaxPinDrift, SoftState.MaxPinDrift);
+            InvertedTetrahedronFrames += SoftState.InvertedTetrahedra;
             Finite &= SoftState.Finite;
             Json RigidStates = Json::array();
             JPH::Vec3 RigidMomentum = JPH::Vec3::sZero();
@@ -167,21 +221,52 @@ namespace {
                 RigidKineticEnergy += 0.5 * Mass * Velocity.LengthSq();
                 RigidStates.push_back({{"Position", Vector(Position)}, {"Velocity", Vector(Velocity)}, {"Mass", Mass}});
             }
-            Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs}, {"Rigids", std::move(RigidStates)},
+            double FramePenetration = 0.0;
+            {
+                JPH::BodyLockRead Lock(World.World.GetBodyLockInterface(), Soft);
+                if (!Lock.Succeeded()) throw std::runtime_error("[Physics:Coupling] Jolt penetration lock failed");
+                const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
+                const auto SoftPosition = Lock.GetBody().GetPosition();
+                for (const auto &Vertex : Motion->GetVertices()) {
+                    const auto Position = Vertex.mPosition + JPH::Vec3(static_cast<float>(SoftPosition.GetX()),
+                        static_cast<float>(SoftPosition.GetY()), static_cast<float>(SoftPosition.GetZ()));
+                    for (auto Id : Rigids) {
+                        const auto RigidPosition = World.World.GetBodyInterface().GetPosition(Id);
+                        const auto Distance = (Position - JPH::Vec3(static_cast<float>(RigidPosition.GetX()),
+                            static_cast<float>(RigidPosition.GetY()), static_cast<float>(RigidPosition.GetZ()))).Length();
+                        FramePenetration = std::max(FramePenetration,
+                            std::max(0.0, static_cast<double>(RigidRadius + 0.05f - Distance)));
+                    }
+                }
+            }
+            MaxParticlePenetration = std::max(MaxParticlePenetration, FramePenetration);
+            Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs}, {"VertexContacts", FrameContacts},
+                              {"Rigids", std::move(RigidStates)},
                               {"SoftCenter", Vector(SoftState.Center)}, {"SoftMomentum", Vector(SoftState.Momentum)},
                               {"RigidMomentum", Vector(RigidMomentum)},
                               {"TotalMomentum", Vector(RigidMomentum + SoftState.Momentum)},
                               {"KineticEnergy", RigidKineticEnergy + SoftState.KineticEnergy},
                               {"MaxEdgeStretch", SoftState.MaxStretch}, {"VolumeError", SoftState.VolumeError},
-                              {"PinDrift", SoftState.MaxPinDrift}});
+                              {"PinDrift", SoftState.MaxPinDrift},
+                              {"ParticlePenetration", FramePenetration},
+                              {"InvertedTetrahedra", SoftState.InvertedTetrahedra}});
         }
         return {{"Backend", "Jolt"}, {"Case", Config.Case}, {"ContactEnabled", EnableContact},
                 {"Frames", std::move(Frames)}, {"Finite", Finite}, {"MaxEdgeStretch", MaxStretch},
                 {"MaxVolumeError", MaxVolumeError}, {"MaxPinDrift", MaxPinDrift},
+                {"MaxParticlePenetration", MaxParticlePenetration},
+                {"InvertedTetrahedronFrames", InvertedTetrahedronFrames},
                 {"BackgroundWorkers", BackgroundWorkers}, {"CallingThreads", 1},
                 {"CollisionSteps", 1}, {"SolverIterations", 24}, {"DeltaTime", DeltaTime},
                 {"SoftVertices", Shared->mVertices.size()}, {"SoftEdges", Shared->mEdgeConstraints.size()},
                 {"SoftVolumes", Shared->mVolumeConstraints.size()}, {"AnchoredBoundary", !IsRubber},
+                {"TotalVertexContacts", TotalVertexContacts}, {"FirstContactFrame", FirstContactFrame},
+                {"RigidShape", "Ball"}, {"RigidRadius", RigidRadius}, {"RigidDensity", RigidDensity},
+                {"RequestedRigidMass", RigidMass},
+                {"MomentumConservationQualified", false},
+                {"ExternalWork", IsRubber ? "Soft damping and collision dissipation" :
+                    (Horizontal ? "Gravity, pinned membrane reactions, soft damping" :
+                     "Pinned edge reactions, soft damping, and controlled restart impulses where applicable")},
                 {"ControlledRestarts", Config.Case == "Repeated" ? (Config.Frames - 1) / 45 : 0}};
     }
 
@@ -213,7 +298,8 @@ namespace {
         auto AddSphere = [&](glm::vec3 Position, glm::vec3 Velocity) {
             gargantuan::PhysicsBodyDesc Description;
             Description.Shape.Kind = gargantuan::PhysicsShapeKind::Ball;
-            Description.Shape.Size = glm::vec3(0.9f);
+            Description.Shape.Size = glm::vec3(2.0f * RigidRadius);
+            Description.Density = RigidDensity;
             Description.Transform.Position = Position;
             Description.SleepEnabled = false;
             const auto Id = Rigid.CreateBody(Description);
@@ -229,7 +315,14 @@ namespace {
         Json Frames = Json::array();
         double MaximumPenetration = 0.0;
         double MaximumFeedbackImpulse = 0.0;
+        double MaximumStretch = 0.0;
+        double MaximumVolumeError = 0.0;
+        double MaximumPinDrift = 0.0;
+        std::size_t InvertedTetrahedronFrames = 0;
+        std::size_t TotalContactProjections = 0;
+        int FirstContactFrame = -1;
         bool Finite = true;
+        std::vector<glm::vec3> PriorPositions;
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             if (Config.Case == "Repeated" && Frame > 0 && Frame % 45 == 0) {
                 auto Description = Rigid.GetBodyState(Rigids[0]);
@@ -253,6 +346,8 @@ namespace {
             }
             const auto SoftStart = PhysicsJoltEvaluation::Clock::now();
             auto Result = Soft.Step(SoftConfig);
+            if (Result.CollidersTruncated || Result.BodiesTruncated || Result.VerticesTruncated)
+                throw std::runtime_error("[Physics:Coupling] XPBD step truncated required work");
             const auto Reactions = FeedbackBackend->TakeFeedback();
             const double SoftMs = PhysicsJoltEvaluation::Milliseconds(SoftStart);
             const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
@@ -261,11 +356,85 @@ namespace {
                 throw std::runtime_error("[Physics:Coupling] XPBD state missing");
             const auto &Positions = *Found->Positions;
             glm::vec3 SoftCenter(0.0f);
+            glm::vec3 SoftMomentum(0.0f);
+            double SoftKineticEnergy = 0.0;
             for (const auto &Position : Positions) {
                 Finite &= std::isfinite(Position.x) && std::isfinite(Position.y) && std::isfinite(Position.z);
                 SoftCenter += Position;
             }
             SoftCenter /= static_cast<float>(Positions.size());
+            for (std::size_t Vertex = 0; Vertex < Positions.size(); ++Vertex) {
+                if (!Rubber && Vertex < Definition.ResolutionX) continue;
+                if (PriorPositions.size() != Positions.size()) continue;
+                const auto Velocity = (Positions[Vertex] - PriorPositions[Vertex]) / DeltaTime;
+                SoftMomentum += Definition.Material.ParticleMass * Velocity;
+                SoftKineticEnergy += 0.5 * Definition.Material.ParticleMass * glm::dot(Velocity, Velocity);
+            }
+            double FrameStretch = 0.0;
+            double FrameVolumeError = 0.0;
+            double FramePinDrift = 0.0;
+            std::size_t FrameInversions = 0;
+            const auto CheckEdge = [&](std::size_t A, std::size_t B, float Rest) {
+                FrameStretch = std::max(FrameStretch,
+                    std::abs(static_cast<double>(glm::length(Positions[B] - Positions[A]) / Rest) - 1.0));
+            };
+            if (!Rubber) {
+                const int N = static_cast<int>(Definition.ResolutionX);
+                const float Rest = Definition.Size.x / (N - 1);
+                for (int Y = 0; Y < N; ++Y) for (int X = 0; X < N; ++X) {
+                    const int I = Y * N + X;
+                    if (X + 1 < N) CheckEdge(I, I + 1, Rest);
+                    if (Y + 1 < N) CheckEdge(I, I + N, Rest);
+                    if (X + 1 < N && Y + 1 < N) {
+                        CheckEdge(I, I + N + 1, Rest * std::sqrt(2.0f));
+                        CheckEdge(I + 1, I + N, Rest * std::sqrt(2.0f));
+                    }
+                }
+                for (const auto &Attachment : Definition.Attachments)
+                    FramePinDrift = std::max(FramePinDrift,
+                        static_cast<double>(glm::length(Positions[Attachment.Vertex] - Attachment.Position)));
+            } else {
+                const int N = static_cast<int>(Definition.ResolutionX);
+                const auto At = [N](int X, int Y, int Z) { return (Z * N + Y) * N + X; };
+                const float Rest = Definition.Size.x / (N - 1);
+                const std::array<glm::vec3, 8> CornerRest{{
+                    {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0},
+                    {0, 0, 1}, {1, 0, 1}, {0, 1, 1}, {1, 1, 1}
+                }};
+                constexpr std::array<std::array<int, 4>, 5> Tetra{{
+                    {{0, 1, 2, 4}}, {{1, 3, 2, 7}}, {{1, 2, 4, 7}},
+                    {{1, 4, 5, 7}}, {{2, 6, 4, 7}}
+                }};
+                double CurrentVolume = 0.0;
+                for (int Z = 0; Z < N; ++Z) for (int Y = 0; Y < N; ++Y) for (int X = 0; X < N; ++X) {
+                    if (X + 1 < N) CheckEdge(At(X, Y, Z), At(X + 1, Y, Z), Rest);
+                    if (Y + 1 < N) CheckEdge(At(X, Y, Z), At(X, Y + 1, Z), Rest);
+                    if (Z + 1 < N) CheckEdge(At(X, Y, Z), At(X, Y, Z + 1), Rest);
+                    if (X + 1 == N || Y + 1 == N || Z + 1 == N) continue;
+                    const std::array<std::size_t, 8> Corner{{
+                        At(X, Y, Z), At(X + 1, Y, Z), At(X, Y + 1, Z), At(X + 1, Y + 1, Z),
+                        At(X, Y, Z + 1), At(X + 1, Y, Z + 1), At(X, Y + 1, Z + 1), At(X + 1, Y + 1, Z + 1)
+                    }};
+                    for (const auto &Ids : Tetra) {
+                        const auto Signed = glm::dot(glm::cross(
+                            Positions[Corner[Ids[1]]] - Positions[Corner[Ids[0]]],
+                            Positions[Corner[Ids[2]]] - Positions[Corner[Ids[0]]]),
+                            Positions[Corner[Ids[3]]] - Positions[Corner[Ids[0]]]);
+                        const auto RestSigned = glm::dot(glm::cross(
+                            CornerRest[Ids[1]] - CornerRest[Ids[0]],
+                            CornerRest[Ids[2]] - CornerRest[Ids[0]]),
+                            CornerRest[Ids[3]] - CornerRest[Ids[0]]);
+                        if (Signed * RestSigned <= 0.0f) ++FrameInversions;
+                        CurrentVolume += std::abs(Signed) / 6.0;
+                    }
+                }
+                FrameVolumeError = std::abs(CurrentVolume /
+                    (Definition.Size.x * Definition.Size.y * Definition.Size.z) - 1.0);
+            }
+            MaximumStretch = std::max(MaximumStretch, FrameStretch);
+            MaximumVolumeError = std::max(MaximumVolumeError, FrameVolumeError);
+            MaximumPinDrift = std::max(MaximumPinDrift, FramePinDrift);
+            InvertedTetrahedronFrames += FrameInversions;
 
             const auto FeedbackStart = PhysicsJoltEvaluation::Clock::now();
             Json Feedback = Json::array();
@@ -275,28 +444,50 @@ namespace {
                 const auto &Observed = Reactions[RigidIndex];
                 if (Observed.ColliderIndex != RigidIndex)
                     throw std::runtime_error("[Physics:Coupling] XPBD collider ordinal mismatch");
-                glm::vec3 Reaction = Observed.Impulse;
-                const float Radius = 0.45f + Definition.Material.Thickness;
+                TotalContactProjections += Observed.Contacts;
+                if (Observed.Contacts > 0 && FirstContactFrame < 0) FirstContactFrame = Frame;
+                const auto RawAngular = Observed.AngularImpulseOrigin -
+                    glm::cross(State.Transform.Position, Observed.Impulse);
+                const float MaximumImpulse = State.Mass * 8.0f;
+                const float MaximumAngularImpulse = 0.4f * State.Mass * RigidRadius * RigidRadius * 8.0f;
+                float Scale = 1.0f;
+                const float LinearMagnitude = glm::length(Observed.Impulse);
+                const float AngularMagnitude = glm::length(RawAngular);
+                if (LinearMagnitude > MaximumImpulse && MaximumImpulse > 0.0f)
+                    Scale = std::min(Scale, MaximumImpulse / LinearMagnitude);
+                if (AngularMagnitude > MaximumAngularImpulse && MaximumAngularImpulse > 0.0f)
+                    Scale = std::min(Scale, MaximumAngularImpulse / AngularMagnitude);
+                const glm::vec3 Reaction = Scale * Observed.Impulse;
+                const glm::vec3 AngularReaction = Scale * RawAngular;
+                const float Radius = RigidRadius + Definition.Material.Thickness;
                 for (const auto &Position : Positions) {
                     const float Distance = glm::length(Position - State.Transform.Position);
                     MaximumPenetration = std::max(MaximumPenetration,
                         std::max(0.0, static_cast<double>(Radius - Distance)));
                 }
-                const float MaximumImpulse = State.Mass * 8.0f;
-                const float Magnitude = glm::length(Reaction);
-                if (Magnitude > MaximumImpulse && MaximumImpulse > 0.0f)
-                    Reaction *= MaximumImpulse / Magnitude;
-                if (EnableFeedback && Observed.Contacts > 0 && glm::length(Reaction) > 0.0f &&
-                    Rigid.IsBodyValid(Rigids[RigidIndex]) &&
-                    !Rigid.ApplyImpulseAtPosition(Rigids[RigidIndex], Reaction, Observed.Position).Succeeded())
-                    throw std::runtime_error("[Physics:Coupling] Box3D feedback impulse failed");
-                MaximumFeedbackImpulse = std::max(MaximumFeedbackImpulse, static_cast<double>(glm::length(Reaction)));
+                bool Applied = false;
+                if (EnableFeedback && Observed.Contacts > 0 &&
+                    (glm::length(Reaction) > 0.0f || glm::length(AngularReaction) > 0.0f)) {
+                    if (!Rigid.IsBodyValid(Rigids[RigidIndex]))
+                        throw std::runtime_error("[Physics:Coupling] Box3D feedback target stale");
+                    if (!Rigid.ApplyLinearImpulse(Rigids[RigidIndex], Reaction).Succeeded() ||
+                        !Rigid.ApplyAngularImpulse(Rigids[RigidIndex], AngularReaction).Succeeded())
+                        throw std::runtime_error("[Physics:Coupling] Box3D feedback impulse failed");
+                    Applied = true;
+                }
+                MaximumFeedbackImpulse = std::max(MaximumFeedbackImpulse, static_cast<double>(glm::length(Observed.Impulse)));
                 Feedback.push_back({{"ContactProjections", Observed.Contacts},
                                     {"ObservedReaction", {Observed.Impulse.x, Observed.Impulse.y, Observed.Impulse.z}},
-                                    {"AppliedReaction", {Reaction.x, Reaction.y, Reaction.z}},
-                                    {"Applied", EnableFeedback && Observed.Contacts > 0}});
+                                    {"ObservedAngularReactionAtCOM", {RawAngular.x, RawAngular.y, RawAngular.z}},
+                                    {"ClampScale", Scale},
+                                    {"ClampedReaction", {Reaction.x, Reaction.y, Reaction.z}},
+                                    {"ClampedAngularReaction", {AngularReaction.x, AngularReaction.y, AngularReaction.z}},
+                                    {"AppliedReaction", Applied ? Json::array({Reaction.x, Reaction.y, Reaction.z}) : Json::array({0.0f, 0.0f, 0.0f})},
+                                    {"AppliedAngularReaction", Applied ? Json::array({AngularReaction.x, AngularReaction.y, AngularReaction.z}) : Json::array({0.0f, 0.0f, 0.0f})},
+                                    {"Applied", Applied}});
             }
             const double FeedbackMs = PhysicsJoltEvaluation::Milliseconds(FeedbackStart);
+            PriorPositions.assign(Positions.begin(), Positions.end());
             Json RigidJson = Json::array();
             for (auto Id : Rigids) {
                 auto State = Rigid.GetBodyState(Id);
@@ -309,17 +500,92 @@ namespace {
             Frames.push_back({{"Frame", Frame}, {"RigidMs", RigidMs}, {"SoftMs", SoftMs},
                               {"FeedbackMs", FeedbackMs}, {"Rigids", std::move(RigidJson)},
                               {"Feedback", std::move(Feedback)},
-                              {"SoftCenter", {SoftCenter.x, SoftCenter.y, SoftCenter.z}}});
+                              {"SoftCenter", {SoftCenter.x, SoftCenter.y, SoftCenter.z}},
+                              {"SoftMomentumEstimate", {SoftMomentum.x, SoftMomentum.y, SoftMomentum.z}},
+                              {"SoftKineticEnergyEstimate", SoftKineticEnergy},
+                              {"MaxEdgeStretch", FrameStretch}, {"VolumeError", FrameVolumeError},
+                              {"PinDrift", FramePinDrift}, {"InvertedTetrahedra", FrameInversions}});
         }
         Soft.Shutdown();
         return {{"Backend", "XPBD"}, {"Case", Config.Case}, {"Status", "ExperimentalProjectionReaction"},
                 {"FeedbackEnabled", EnableFeedback}, {"Frames", std::move(Frames)},
                 {"Finite", Finite}, {"MaxPenetration", MaximumPenetration},
+                {"MaxEdgeStretch", MaximumStretch}, {"MaxVolumeError", MaximumVolumeError},
+                {"MaxPinDrift", MaximumPinDrift},
+                {"InvertedTetrahedronFrames", InvertedTetrahedronFrames},
                 {"MaxEstimatedFeedbackImpulse", MaximumFeedbackImpulse},
+                {"TotalContactProjections", TotalContactProjections}, {"FirstContactFrame", FirstContactFrame},
                 {"DeltaTime", DeltaTime}, {"RigidSubsteps", 4},
+                {"RigidShape", "Ball"}, {"RigidRadius", RigidRadius}, {"RigidDensity", RigidDensity},
                 {"MaximumSoftWorkers", Config.Workers},
                 {"MomentumConservationQualified", false},
                 {"Limit", "The private XPBD copy observes each collision projection and transfers its opposite particle velocity change to Box3D at the next rigid safe point. This staggered reaction is clamped and is not a solved two-body constraint or conservation proof"}};
+    }
+
+    bool PhysicalQualityPass(const Json &Result, bool Rubber) {
+        for (const char *Name : {"MaxEdgeStretch", "MaxVolumeError", "MaxPinDrift"})
+            if (!Result.contains(Name) || !Result[Name].is_number() ||
+                !std::isfinite(Result[Name].get<double>())) return false;
+        const char *PenetrationName = Result.value("Backend", std::string{}) == "Jolt" ?
+            "MaxParticlePenetration" : "MaxPenetration";
+        if (!Result.contains(PenetrationName) || !Result[PenetrationName].is_number() ||
+            !std::isfinite(Result[PenetrationName].get<double>()) ||
+            !Result.contains("InvertedTetrahedronFrames")) return false;
+        return Result.value("Finite", false) &&
+            Result["MaxEdgeStretch"].get<double>() <= 0.1 &&
+            Result["MaxPinDrift"].get<double>() <= 1.0e-4 &&
+            Result[PenetrationName].get<double>() <= 0.1 &&
+            (!Rubber || (Result["MaxVolumeError"].get<double>() <= 0.15 &&
+                         Result["InvertedTetrahedronFrames"].get<std::size_t>() == 0));
+    }
+
+    Json CompareRigidResponse(const Json &Contact, const Json &Control, const Options &Config) {
+        if (!Contact.contains("Frames") || !Control.contains("Frames") ||
+            Contact["Frames"].size() != Control["Frames"].size())
+            throw std::runtime_error("[Physics:Coupling] Control frame mismatch");
+        const int Axis = Config.Case == "RubberPush" ? 0 : (Config.Case == "SphereOnCloth" ? 1 : 2);
+        const double ExpectedSign = Config.Case == "RubberPush" || Config.Case == "SphereOnCloth" ? 1.0 : -1.0;
+        double MaximumVelocityDifference = 0.0;
+        double PeakDirectionalMomentumTransfer = 0.0;
+        double MaximumSoftMomentumDifference = 0.0;
+        bool MassMatched = true;
+        for (std::size_t Frame = 0; Frame < Contact["Frames"].size(); ++Frame) {
+            const auto &ContactFrame = Contact["Frames"][Frame];
+            const auto &ControlFrame = Control["Frames"][Frame];
+            if (ContactFrame["Rigids"].size() != ControlFrame["Rigids"].size())
+                throw std::runtime_error("[Physics:Coupling] Control rigid count mismatch");
+            for (std::size_t Rigid = 0; Rigid < ContactFrame["Rigids"].size(); ++Rigid) {
+                double Squared = 0.0;
+                for (int Component = 0; Component < 3; ++Component) {
+                    const double Difference = ContactFrame["Rigids"][Rigid]["Velocity"][Component].get<double>() -
+                        ControlFrame["Rigids"][Rigid]["Velocity"][Component].get<double>();
+                    Squared += Difference * Difference;
+                }
+                MaximumVelocityDifference = std::max(MaximumVelocityDifference, std::sqrt(Squared));
+                const double Mass = ContactFrame["Rigids"][Rigid]["Mass"].get<double>();
+                MassMatched &= std::abs(Mass / RigidMass - 1.0) <= 0.02;
+                if (Rigid == 0) {
+                    const double AxisDifference = ContactFrame["Rigids"][Rigid]["Velocity"][Axis].get<double>() -
+                        ControlFrame["Rigids"][Rigid]["Velocity"][Axis].get<double>();
+                    PeakDirectionalMomentumTransfer = std::max(PeakDirectionalMomentumTransfer,
+                        ExpectedSign * Mass * AxisDifference);
+                }
+            }
+            const char *MomentumName = Contact.value("Backend", std::string{}) == "Jolt" ?
+                "SoftMomentum" : "SoftMomentumEstimate";
+            double SoftSquared = 0.0;
+            for (int Component = 0; Component < 3; ++Component) {
+                const double Difference = ContactFrame[MomentumName][Component].get<double>() -
+                    ControlFrame[MomentumName][Component].get<double>();
+                SoftSquared += Difference * Difference;
+            }
+            MaximumSoftMomentumDifference = std::max(MaximumSoftMomentumDifference, std::sqrt(SoftSquared));
+        }
+        return {{"MaxRigidVelocityDifference", MaximumVelocityDifference},
+                {"PeakDirectionalRigidMomentumTransfer", PeakDirectionalMomentumTransfer},
+                {"MaxSoftMomentumDifference", MaximumSoftMomentumDifference},
+                {"RigidMassMatchedToDensity", MassMatched},
+                {"ExpectedMomentumAxis", Axis}, {"ExpectedMomentumSign", ExpectedSign}};
     }
 }
 
@@ -328,6 +594,8 @@ int main(int ArgumentCount, char **Arguments) {
     try {
         const auto Config = Parse(ArgumentCount, Arguments);
         PhysicsEvaluation::InstallPhysicsAllocators();
+        std::optional<PhysicsJoltEvaluation::JoltRuntime> Runtime;
+        if (Config.Backend == "Jolt") Runtime.emplace();
         const auto Before = PhysicsEvaluation::CaptureResources();
         Json Result;
         if (Config.Backend == "Jolt") {
@@ -335,46 +603,46 @@ int main(int ArgumentCount, char **Arguments) {
             // A separate world and identical initial state provide the contact-disabled control.
             const auto Control = RunJolt(Config, false);
             Result["ContactDisabledControl"] = Control;
-            Result["ReciprocalRigidResponse"] = false;
-            const auto &ContactFrames = Result["Frames"];
-            const auto &ControlFrames = Control["Frames"];
-            double MaximumRigidVelocityDifference = 0.0;
-            for (std::size_t Frame = 0; Frame < ContactFrames.size(); ++Frame)
-                for (std::size_t Rigid = 0; Rigid < ContactFrames[Frame]["Rigids"].size(); ++Rigid) {
-                    double Squared = 0.0;
-                    for (int Axis = 0; Axis < 3; ++Axis) {
-                        const double Delta = ContactFrames[Frame]["Rigids"][Rigid]["Velocity"][Axis].get<double>() -
-                                             ControlFrames[Frame]["Rigids"][Rigid]["Velocity"][Axis].get<double>();
-                        Squared += Delta * Delta;
-                    }
-                    MaximumRigidVelocityDifference = std::max(MaximumRigidVelocityDifference, std::sqrt(Squared));
-                }
-            Result["MaxRigidVelocityDifferenceFromNoContact"] = MaximumRigidVelocityDifference;
-            Result["ReciprocalRigidResponse"] = MaximumRigidVelocityDifference > 0.01;
-            Result["ResponseThreshold"] = 0.01;
+            const auto Comparison = CompareRigidResponse(Result, Control, Config);
+            Result["ControlComparison"] = Comparison;
+            Result["ContactEvidence"] = Result.value("TotalVertexContacts", std::uint64_t{0}) > 0 &&
+                Control.value("TotalVertexContacts", std::uint64_t{0}) == 0;
+            Result["PhysicalQualityQualified"] = PhysicalQualityPass(Result, Config.Case == "RubberPush");
+            Result["ReciprocalRigidResponse"] = Comparison["MaxRigidVelocityDifference"].get<double>() > 0.01 &&
+                Comparison["PeakDirectionalRigidMomentumTransfer"].get<double>() > 0.001;
+            Result["QualityQualified"] = Result["ContactEvidence"].get<bool>() &&
+                Result["PhysicalQualityQualified"].get<bool>() && Result["ReciprocalRigidResponse"].get<bool>() &&
+                Comparison["RigidMassMatchedToDensity"].get<bool>();
         } else {
             Result = RunXpbd(Config, true);
             if (Result.value("Status", std::string{}) != "UnsupportedGeometry") {
                 const auto Control = RunXpbd(Config, false);
                 Result["FeedbackDisabledControl"] = Control;
-                double MaximumRigidVelocityDifference = 0.0;
-                for (std::size_t Frame = 0; Frame < Result["Frames"].size(); ++Frame)
-                    for (std::size_t Rigid = 0; Rigid < Result["Frames"][Frame]["Rigids"].size(); ++Rigid) {
-                        double Squared = 0.0;
-                        for (int Axis = 0; Axis < 3; ++Axis) {
-                            const double Delta = Result["Frames"][Frame]["Rigids"][Rigid]["Velocity"][Axis].get<double>() -
-                                Control["Frames"][Frame]["Rigids"][Rigid]["Velocity"][Axis].get<double>();
-                            Squared += Delta * Delta;
-                        }
-                        MaximumRigidVelocityDifference = std::max(MaximumRigidVelocityDifference, std::sqrt(Squared));
-                    }
-                Result["MaxRigidVelocityDifferenceFromNoFeedback"] = MaximumRigidVelocityDifference;
-                Result["RigidResponseObserved"] = MaximumRigidVelocityDifference > 0.01;
+                const auto Comparison = CompareRigidResponse(Result, Control, Config);
+                Result["ControlComparison"] = Comparison;
+                Result["ContactEvidence"] = Result.value("TotalContactProjections", std::size_t{0}) > 0 &&
+                    Control.value("TotalContactProjections", std::size_t{0}) > 0;
+                Result["PhysicalQualityQualified"] = PhysicalQualityPass(Result, Config.Case == "RubberPush");
+                Result["RigidResponseObserved"] = Comparison["MaxRigidVelocityDifference"].get<double>() > 0.01 &&
+                    Comparison["PeakDirectionalRigidMomentumTransfer"].get<double>() > 0.001;
+                Result["QualityQualified"] = Result["ContactEvidence"].get<bool>() &&
+                    Result["PhysicalQualityQualified"].get<bool>() && Result["RigidResponseObserved"].get<bool>() &&
+                    Comparison["RigidMassMatchedToDensity"].get<bool>();
+            } else {
+                Result["ContactEvidence"] = false;
+                Result["PhysicalQualityQualified"] = false;
+                Result["RigidResponseObserved"] = false;
+                Result["QualityQualified"] = false;
             }
         }
+        Result["QualityGates"] = {{"MaxEdgeStrain", 0.1}, {"MaxPinDrift", 1.0e-4},
+                                  {"MaxPenetration", 0.1}, {"RubberVolumeError", 0.15},
+                                  {"RubberInvertedTetrahedra", 0},
+                                  {"MinimumDirectionalRigidMomentumTransfer", 0.001},
+                                  {"MinimumRigidVelocityDifference", 0.01}};
         Result["Resources"] = PhysicsEvaluation::ResourceDelta(Before, PhysicsEvaluation::CaptureResources());
         std::cout << Result.dump() << '\n';
-        return Result.value("ReciprocalRigidResponse", false) || Config.Backend == "XPBD" ? 0 : 3;
+        return Result.value("QualityQualified", false) ? 0 : 3;
     } catch (const std::exception &Error) {
         std::cout << Json{{"Status", "Failed"}, {"Error", std::string("[Physics:Coupling] ") + Error.what()}}.dump() << '\n';
         return 2;

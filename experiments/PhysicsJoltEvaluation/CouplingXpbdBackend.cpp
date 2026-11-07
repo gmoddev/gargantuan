@@ -778,7 +778,9 @@ namespace PhysicsJoltEvaluation {
 						(Node.PreviousPosition - PreviousPosition)) / Batch.DeltaTime;
 					if (IsFinite(VelocityChange)) {
 						auto &Feedback = Item.Feedback[ColliderIndex];
-						Feedback.Impulse -= VelocityChange / Node.InverseMass;
+						const auto Reaction = -VelocityChange / Node.InverseMass;
+						Feedback.Impulse += Reaction;
+						Feedback.AngularImpulseOrigin += glm::cross(Node.Position, Reaction);
 						Feedback.Position += Node.Position;
 						++Feedback.Contacts;
 					}
@@ -1127,6 +1129,10 @@ namespace PhysicsJoltEvaluation {
 
 			[[nodiscard]] SoftBodyStepResult Step(const SoftBodyStepConfig &Config) override {
 				SoftBodyStepResult Result;
+				{
+					std::scoped_lock Lock(Mutex);
+					LastFeedback.clear();
+				}
 				if (!IsFinite(Config.DeltaTime) || Config.DeltaTime <= 0.0f || Config.DeltaTime > 0.25f ||
 					!IsFinite(Config.Gravity))
 					return Result;
@@ -1138,7 +1144,6 @@ namespace PhysicsJoltEvaluation {
 						return Result;
 					}
 					StepActive = true;
-					LastFeedback.clear();
 				}
 				Result.Profile.WorkerCount = Jobs.GetWorkerCount();
 
@@ -1265,6 +1270,7 @@ namespace PhysicsJoltEvaluation {
 								const auto &Source = Item.Feedback[Index];
 								Target.ColliderIndex = Index;
 								Target.Impulse += Source.Impulse;
+								Target.AngularImpulseOrigin += Source.AngularImpulseOrigin;
 								Target.Position += Source.Position;
 								Target.Contacts += Source.Contacts;
 							}
@@ -1402,6 +1408,7 @@ namespace PhysicsJoltEvaluation {
 
 			[[nodiscard]] std::vector<FeedbackImpulse> TakeFeedback() override {
 				std::scoped_lock Lock(Mutex);
+				if (StepActive) return {};
 				for (auto &Feedback : LastFeedback)
 					if (Feedback.Contacts > 0) Feedback.Position /= static_cast<float>(Feedback.Contacts);
 				return std::exchange(LastFeedback, {});

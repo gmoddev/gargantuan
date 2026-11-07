@@ -28,6 +28,23 @@ namespace PhysicsJoltEvaluation {
         return std::chrono::duration<double, std::milli>(Clock::now() - Start).count();
     }
 
+    // One runtime per process. It outlives every world, native shape, and soft
+    // settings object created by these probes.
+    class JoltRuntime final {
+      public:
+        JoltRuntime() {
+            JPH::Factory::sInstance = new JPH::Factory;
+            JPH::RegisterTypes();
+        }
+        ~JoltRuntime() {
+            JPH::UnregisterTypes();
+            delete JPH::Factory::sInstance;
+            JPH::Factory::sInstance = nullptr;
+        }
+        JoltRuntime(const JoltRuntime &) = delete;
+        JoltRuntime &operator=(const JoltRuntime &) = delete;
+    };
+
     struct Layers final : JPH::BroadPhaseLayerInterface {
         JPH::uint GetNumBroadPhaseLayers() const override { return 3; }
         JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer Layer) const override {
@@ -60,8 +77,6 @@ namespace PhysicsJoltEvaluation {
         explicit JoltWorld(int WorkerCount, bool EnableSoftRigidContact = true)
             : PairsValue(EnableSoftRigidContact), BroadPhasePairsValue(EnableSoftRigidContact),
               Temp(32 * 1024 * 1024), Jobs(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, WorkerCount) {
-            JPH::Factory::sInstance = new JPH::Factory;
-            JPH::RegisterTypes();
             World.Init(8192, 0, 16384, 8192, LayersValue, BroadPhasePairsValue, PairsValue);
         }
 
@@ -71,18 +86,23 @@ namespace PhysicsJoltEvaluation {
                 Bodies.RemoveBody(Body);
                 Bodies.DestroyBody(Body);
             }
-            JPH::UnregisterTypes();
-            delete JPH::Factory::sInstance;
-            JPH::Factory::sInstance = nullptr;
         }
 
         JoltWorld(const JoltWorld &) = delete;
         JoltWorld &operator=(const JoltWorld &) = delete;
 
         JPH::BodyID AddRigid(JPH::RefConst<JPH::Shape> Shape, JPH::RVec3 Position,
-                             JPH::EMotionType MotionType, JPH::ObjectLayer Layer) {
+                             JPH::EMotionType MotionType, JPH::ObjectLayer Layer, float Mass = 0.0f) {
             JPH::BodyCreationSettings Settings(Shape, Position, JPH::Quat::sIdentity(), MotionType, Layer);
-            if (MotionType == JPH::EMotionType::Dynamic) Settings.mAllowSleeping = false;
+            if (MotionType == JPH::EMotionType::Dynamic) {
+                Settings.mAllowSleeping = false;
+                Settings.mLinearDamping = 0.0f;
+                Settings.mAngularDamping = 0.0f;
+                if (Mass > 0.0f) {
+                    Settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+                    Settings.mMassPropertiesOverride.mMass = Mass;
+                }
+            }
             auto Id = World.GetBodyInterface().CreateAndAddBody(
                 Settings, MotionType == JPH::EMotionType::Dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
             if (Id.IsInvalid()) throw std::runtime_error("[Physics:JoltSoft] Rigid body admission failed");
@@ -120,8 +140,6 @@ namespace PhysicsJoltEvaluation {
             return Milliseconds(Start);
         }
 
-        JPH::PhysicsSystem World;
-
       private:
         Layers LayersValue;
         Pairs PairsValue;
@@ -129,6 +147,10 @@ namespace PhysicsJoltEvaluation {
         JPH::TempAllocatorImpl Temp;
         JPH::JobSystemThreadPool Jobs;
         std::vector<JPH::BodyID> BodyIds;
+
+      public:
+        // Destroyed before Jobs, Temp, filters and layers.
+        JPH::PhysicsSystem World;
     };
 
     inline JPH::Ref<JPH::SoftBodySharedSettings> Cloth(int Resolution, float Size,

@@ -8,6 +8,8 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -46,7 +48,8 @@ namespace {
             throw std::runtime_error("[Physics:SoftEvaluation] Invalid backend");
         if (Result.Case != "TinyCloth" && Result.Case != "Cloth4K" && Result.Case != "Cloth16K" &&
             Result.Case != "FourCloths" && Result.Case != "Rubber" && Result.Case != "MovingCollider" &&
-            Result.Case != "Attachments" && Result.Case != "PointImpulse" && Result.Case != "Lifecycle")
+            Result.Case != "HighSpeedCollider" && Result.Case != "Attachments" &&
+            Result.Case != "PointImpulse" && Result.Case != "Lifecycle")
             throw std::runtime_error("[Physics:SoftEvaluation] Invalid case");
         if (Result.Workers < 1 || Result.Workers > 8 || Result.Frames < 1 || Result.Frames > 600 ||
             Result.Warmup < 0 || Result.Warmup >= Result.Frames || !std::isfinite(Result.Gravity) ||
@@ -66,6 +69,12 @@ namespace {
 
     bool IsCloth(const Options &Config) { return Config.Case != "Rubber"; }
     int BodyCount(const Options &Config) { return Config.Case == "FourCloths" ? 4 : 1; }
+    bool HasMovingCollider(const Options &Config) {
+        return Config.Case == "MovingCollider" || Config.Case == "HighSpeedCollider";
+    }
+    float ColliderZ(const Options &Config, int Frame) {
+        return -2.0f + (Config.Case == "HighSpeedCollider" ? 0.8f : 0.06f) * Frame;
+    }
 
     float ParticleMass(const Options &Config) {
         if (Config.Track == "Historical" || Config.Case == "Rubber") return 0.1f;
@@ -91,8 +100,28 @@ namespace {
         std::size_t VertexCount = 0;
     };
 
+    template <class PositionAt> double ClothGridStrain(int Resolution, float Size, PositionAt GetPosition) {
+        const float Unit = Size / static_cast<float>(Resolution - 1);
+        double Maximum = 0.0;
+        const auto Check = [&](int A, int B, float Rest) {
+            Maximum = std::max(Maximum,
+                std::abs(static_cast<double>(GetPosition(A, B) / Rest) - 1.0));
+        };
+        for (int Y = 0; Y < Resolution; ++Y) for (int X = 0; X < Resolution; ++X) {
+            const int I = Y * Resolution + X;
+            if (X + 1 < Resolution) Check(I, I + 1, Unit);
+            if (Y + 1 < Resolution) Check(I, I + Resolution, Unit);
+            if (X + 1 < Resolution && Y + 1 < Resolution) {
+                Check(I, I + Resolution + 1, Unit * std::sqrt(2.0f));
+                Check(I + 1, I + Resolution, Unit * std::sqrt(2.0f));
+            }
+        }
+        return Maximum;
+    }
+
     Quality ObserveJolt(const PhysicsJoltEvaluation::JoltWorld &World, JPH::BodyID Body,
-                        const JPH::SoftBodySharedSettings &Shared, float PinOffset,
+                        const JPH::SoftBodySharedSettings &Shared, int Resolution, bool Rubber,
+                        float PinOffset,
                         bool BallCollider, float ColliderZ) {
         JPH::BodyLockRead Lock(World.World.GetBodyLockInterface(), Body);
         if (!Lock.Succeeded()) throw std::runtime_error("[Physics:SoftEvaluation] Jolt soft body lock failed");
@@ -100,7 +129,10 @@ namespace {
         const auto &Vertices = Motion->GetVertices();
         Quality Result;
         Result.VertexCount = Vertices.size();
-        Result.MaxEdgeStretch = PhysicsJoltEvaluation::MaxEdgeStretch(Shared, *Motion);
+        if (Rubber) Result.MaxEdgeStretch = PhysicsJoltEvaluation::MaxEdgeStretch(Shared, *Motion);
+        else Result.MaxEdgeStretch = ClothGridStrain(Resolution, 8.0f, [&](int A, int B) {
+            return (Vertices[B].mPosition - Vertices[A].mPosition).Length();
+        });
         const auto BodyPosition = Lock.GetBody().GetPosition();
         double RestVolume = 0.0;
         double CurrentVolume = 0.0;
@@ -149,7 +181,6 @@ namespace {
         Quality Result;
         Result.VertexCount = Vertices.size();
         const int Resolution = static_cast<int>(Definition.ResolutionX);
-        const float Rest = Definition.Size.x / static_cast<float>(Resolution - 1);
         for (std::size_t Index = 0; Index < Vertices.size(); ++Index) {
             const auto &Position = Vertices[Index];
             Result.Finite &= std::isfinite(Position.x) && std::isfinite(Position.y) && std::isfinite(Position.z);
@@ -162,10 +193,9 @@ namespace {
                 std::max(0.0, -9.45 - static_cast<double>(Position.y)));
         }
         if (Definition.Kind == gargantuan::SoftBodyKind::Cloth) {
-            for (int Y = 0; Y < Resolution; ++Y) for (int X = 0; X + 1 < Resolution; ++X) {
-                const auto Length = glm::length(Vertices[Y * Resolution + X + 1] - Vertices[Y * Resolution + X]);
-                Result.MaxEdgeStretch = std::max(Result.MaxEdgeStretch, std::abs(static_cast<double>(Length / Rest) - 1.0));
-            }
+            Result.MaxEdgeStretch = ClothGridStrain(Resolution, Definition.Size.x, [&](int A, int B) {
+                return glm::length(Vertices[B] - Vertices[A]);
+            });
         } else {
             const auto XCount = Definition.ResolutionX;
             const auto YCount = Definition.ResolutionY;
@@ -173,6 +203,21 @@ namespace {
             const auto At = [XCount, YCount](std::uint32_t X, std::uint32_t Y, std::uint32_t Z) {
                 return (Z * YCount + Y) * XCount + X;
             };
+            const auto CheckRubberEdge = [&](std::uint32_t A, std::uint32_t B, float EdgeRest) {
+                const auto Length = glm::length(Vertices[B] - Vertices[A]);
+                Result.MaxEdgeStretch = std::max(Result.MaxEdgeStretch,
+                    std::abs(static_cast<double>(Length / EdgeRest) - 1.0));
+            };
+            for (std::uint32_t Z = 0; Z < ZCount; ++Z)
+                for (std::uint32_t Y = 0; Y < YCount; ++Y)
+                    for (std::uint32_t X = 0; X < XCount; ++X) {
+                        if (X + 1 < XCount) CheckRubberEdge(At(X, Y, Z), At(X + 1, Y, Z),
+                            Definition.Size.x / static_cast<float>(XCount - 1));
+                        if (Y + 1 < YCount) CheckRubberEdge(At(X, Y, Z), At(X, Y + 1, Z),
+                            Definition.Size.y / static_cast<float>(YCount - 1));
+                        if (Z + 1 < ZCount) CheckRubberEdge(At(X, Y, Z), At(X, Y, Z + 1),
+                            Definition.Size.z / static_cast<float>(ZCount - 1));
+                    }
             constexpr std::array<std::array<int, 4>, 5> Tetra{{
                 {{0, 1, 2, 4}}, {{1, 3, 2, 7}}, {{1, 2, 4, 7}}, {{1, 4, 5, 7}}, {{2, 6, 4, 7}}
             }};
@@ -230,7 +275,7 @@ namespace {
             Bodies.push_back(World.AddSoft(Shared, JPH::RVec3(12.0 * Index, Rubber ? 4.0 : 0.0, 0.0),
                                            Iterations(Config), Rubber, 2.4f));
         JPH::BodyID Collider;
-        if (Config.Case == "MovingCollider") {
+        if (HasMovingCollider(Config)) {
             Collider = World.AddRigid(new JPH::SphereShape(0.7f), JPH::RVec3(0.0, 0.0, -2.0),
                                       JPH::EMotionType::Kinematic, 1);
         } else {
@@ -243,12 +288,15 @@ namespace {
         double MaximumVolumeError = 0.0;
         double MaximumPenetration = 0.0;
         std::size_t InvertedTetrahedra = 0;
+        std::size_t DisabledFrames = 0;
+        std::size_t Replacements = 0;
+        std::size_t StaleIdRejections = 0;
         bool Finite = true;
         const auto Start = PhysicsJoltEvaluation::Clock::now();
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
-            if (Config.Case == "MovingCollider")
+            if (HasMovingCollider(Config))
                 World.World.GetBodyInterface().SetPositionAndRotation(Collider,
-                    JPH::RVec3(0.0, 0.0, -2.0 + 0.06 * Frame), JPH::Quat::sIdentity(), JPH::EActivation::Activate);
+                    JPH::RVec3(0.0, 0.0, ColliderZ(Config, Frame)), JPH::Quat::sIdentity(), JPH::EActivation::Activate);
             if (Config.Case == "Attachments" && Frame == Config.Frames / 2) {
                 JPH::BodyLockWrite Lock(World.World.GetBodyLockInterface(), Bodies[0]);
                 if (!Lock.Succeeded()) throw std::runtime_error("[Physics:SoftEvaluation] Jolt attachment lock failed");
@@ -263,19 +311,76 @@ namespace {
                 JPH::BodyLockWrite Lock(World.World.GetBodyLockInterface(), Bodies[0]);
                 if (!Lock.Succeeded()) throw std::runtime_error("[Physics:SoftEvaluation] Jolt impulse lock failed");
                 auto *Motion = static_cast<JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
-                Motion->GetVertex(N * N / 2).mVelocity += JPH::Vec3(0.0f, 0.0f, 10.0f);
+                // Match XPBD ApplyImpulseAtPosition: total impulse 10, split
+                // among the four nearest movable vertices by inverse distance.
+                std::array<std::size_t, 4> Closest{};
+                std::array<float, 4> Distances;
+                Distances.fill(std::numeric_limits<float>::infinity());
+                for (std::size_t VertexIndex = 0; VertexIndex < Motion->GetVertices().size(); ++VertexIndex) {
+                    const auto &Vertex = Motion->GetVertex(static_cast<JPH::uint>(VertexIndex));
+                    if (Vertex.mInvMass == 0.0f) continue;
+                    const float Distance = Vertex.mPosition.LengthSq();
+                    for (std::size_t Candidate = 0; Candidate < 4; ++Candidate) {
+                        if (Distance >= Distances[Candidate]) continue;
+                        for (std::size_t Shift = 3; Shift > Candidate; --Shift) {
+                            Distances[Shift] = Distances[Shift - 1];
+                            Closest[Shift] = Closest[Shift - 1];
+                        }
+                        Distances[Candidate] = Distance;
+                        Closest[Candidate] = VertexIndex;
+                        break;
+                    }
+                }
+                std::array<float, 4> Weights{};
+                float TotalWeight = 0.0f;
+                for (std::size_t Candidate = 0; Candidate < 4; ++Candidate) {
+                    if (!std::isfinite(Distances[Candidate])) continue;
+                    Weights[Candidate] = 1.0f / std::max(std::sqrt(Distances[Candidate]), 0.001f);
+                    TotalWeight += Weights[Candidate];
+                }
+                if (TotalWeight == 0.0f) throw std::runtime_error("[Physics:SoftEvaluation] No Jolt impulse vertices");
+                for (std::size_t Candidate = 0; Candidate < 4; ++Candidate)
+                    if (Weights[Candidate] > 0.0f)
+                        Motion->GetVertex(static_cast<JPH::uint>(Closest[Candidate])).mVelocity +=
+                            JPH::Vec3(0.0f, 0.0f, 10.0f * Weights[Candidate] / TotalWeight *
+                                Motion->GetVertex(static_cast<JPH::uint>(Closest[Candidate])).mInvMass);
             }
-            if (Config.Case == "Lifecycle" && Frame > 0 && Frame % 20 == 0) {
-                World.Remove(Bodies[0]);
-                Bodies[0] = World.AddSoft(Shared, JPH::RVec3(0.0, Rubber ? 4.0 : 0.0, 0.0),
-                                         Iterations(Config), Rubber, 2.4f);
+            if (Config.Case == "Lifecycle" && Frame > 0) {
+                if (Frame % 40 == 10 || Frame % 40 == 30) {
+                    const auto Old = Bodies[0];
+                    World.Remove(Old);
+                    JPH::BodyLockRead Stale(World.World.GetBodyLockInterface(), Old);
+                    if (Stale.Succeeded()) throw std::runtime_error("[Physics:SoftEvaluation] Jolt stale body resolved");
+                    ++StaleIdRejections;
+                    Bodies.clear();
+                    if (Frame % 40 == 30) ++Replacements;
+                }
+                if (Frame % 40 == 20 || Frame % 40 == 30)
+                    Bodies.push_back(World.AddSoft(Shared, JPH::RVec3(0.0, Rubber ? 4.0 : 0.0, 0.0),
+                                                   Iterations(Config), Rubber, 2.4f));
             }
-            const double StepMs = World.Step();
+            if (Bodies.empty()) ++DisabledFrames;
+            const double NativeStepMs = World.Step();
+            const auto ExtractionStart = PhysicsJoltEvaluation::Clock::now();
+            std::size_t OwnedPositionBytes = 0;
+            double OwnedPositionChecksum = 0.0;
+            for (auto Body : Bodies) {
+                JPH::BodyLockRead Lock(World.World.GetBodyLockInterface(), Body);
+                if (!Lock.Succeeded()) throw std::runtime_error("[Physics:SoftEvaluation] Jolt extraction lock failed");
+                const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
+                std::vector<JPH::Vec3> OwnedPositions;
+                OwnedPositions.reserve(Motion->GetVertices().size());
+                for (const auto &Vertex : Motion->GetVertices()) OwnedPositions.push_back(Vertex.mPosition);
+                OwnedPositionBytes += OwnedPositions.size() * sizeof(JPH::Vec3);
+                if (!OwnedPositions.empty()) OwnedPositionChecksum += OwnedPositions.back().GetY();
+            }
+            const double OwnedExtractionMs = PhysicsJoltEvaluation::Milliseconds(ExtractionStart);
+            const double StepMs = NativeStepMs + OwnedExtractionMs;
             Json BodyQuality = Json::array();
             for (auto Body : Bodies) {
-                const auto QualityValue = ObserveJolt(World, Body, *Shared,
+                const auto QualityValue = ObserveJolt(World, Body, *Shared, N, Rubber,
                     Config.Case == "Attachments" && Frame >= Config.Frames / 2 ? 1.0f : 0.0f,
-                    Config.Case == "MovingCollider", -2.0f + 0.06f * Frame);
+                    HasMovingCollider(Config), ColliderZ(Config, Frame));
                 MaximumStretch = std::max(MaximumStretch, QualityValue.MaxEdgeStretch);
                 MaximumPinDrift = std::max(MaximumPinDrift, QualityValue.MaxPinDrift);
                 MaximumVolumeError = std::max(MaximumVolumeError, QualityValue.VolumeError);
@@ -284,17 +389,29 @@ namespace {
                 Finite &= QualityValue.Finite;
                 BodyQuality.push_back(QualityJson(QualityValue));
             }
-            Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs}, {"Bodies", std::move(BodyQuality)}});
+            Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs},
+                              {"NativeStepMs", NativeStepMs}, {"OwnedExtractionMs", OwnedExtractionMs},
+                              {"OwnedPositionBytes", OwnedPositionBytes},
+                              {"OwnedPositionChecksum", OwnedPositionChecksum},
+                              {"Bodies", std::move(BodyQuality)}});
         }
         return {{"Backend", "Jolt"}, {"Case", Config.Case}, {"Frames", std::move(Frames)},
                 {"SetupPlusRunMs", PhysicsJoltEvaluation::Milliseconds(Start)},
                 {"Finite", Finite}, {"MaxEdgeStretch", MaximumStretch},
                 {"MaxPinDrift", MaximumPinDrift}, {"MaxVolumeError", MaximumVolumeError},
                 {"MaxPenetration", MaximumPenetration}, {"InvertedTetrahedronFrames", InvertedTetrahedra},
-                {"BackgroundWorkers", Config.Workers - 1}, {"CallingThreads", 1},
+                {"BackgroundWorkers", Config.Workers - 1}, {"CallerParticipatesInSolve", true},
+                {"TimingScope", "NativeStepPlusOwnedPositionCopy; quality analysis excluded"},
                 {"SolverIterations", Iterations(Config)}, {"ParticleMass", ParticleMass(Config)},
                 {"Track", Config.Track},
-                {"SoftVerticesPerBody", Shared->mVertices.size()}, {"Bodies", Count}};
+                {"SoftVerticesPerBody", Shared->mVertices.size()}, {"Bodies", Count},
+                {"TetrahedraPerCell", Rubber ? 6 : 0},
+                {"DisabledFrames", DisabledFrames}, {"Replacements", Replacements},
+                {"StaleIdRejections", StaleIdRejections},
+                {"EnableDisableSemantics", "Jolt removal and readmission; no semantic Enabled property"},
+                {"ColliderMotion", HasMovingCollider(Config) ? "DiscreteKinematicTransform" : "Static"},
+                {"ColliderSpeed", HasMovingCollider(Config) ?
+                    (Config.Case == "HighSpeedCollider" ? 48.0 : 3.6) : 0.0}};
     }
 
     Json RunXpbd(const Options &Config) {
@@ -331,6 +448,9 @@ namespace {
         double MaximumVolumeError = 0.0;
         double MaximumPenetration = 0.0;
         std::size_t InvertedTetrahedra = 0;
+        std::size_t DisabledFrames = 0;
+        std::size_t Replacements = 0;
+        std::size_t StaleIdRejections = 0;
         bool Finite = true;
         const auto Start = PhysicsJoltEvaluation::Clock::now();
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
@@ -342,20 +462,30 @@ namespace {
             if (Config.Case == "PointImpulse" && Frame == Config.Frames / 3 &&
                 !World.ApplyImpulseAtPosition(Bodies[0], {0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 0.0f}).Succeeded())
                 throw std::runtime_error("[Physics:SoftEvaluation] XPBD point impulse failed");
-            if (Config.Case == "Lifecycle" && Frame > 0 && Frame % 20 == 0) {
-                const auto Old = Bodies[0];
-                if (!World.DestroyBody(Old).Succeeded() || World.IsBodyValid(Old))
-                    throw std::runtime_error("[Physics:SoftEvaluation] XPBD stale body survived destruction");
-                Bodies[0] = World.CreateBody(Definitions[0]);
-                if (!Bodies[0].IsValid()) throw std::runtime_error("[Physics:SoftEvaluation] XPBD replacement failed");
+            if (Config.Case == "Lifecycle" && Frame > 0) {
+                if (Frame % 40 == 10 || Frame % 40 == 20) {
+                    Definitions[0].Enabled = Frame % 40 == 20;
+                    if (!World.UpdateBody(Bodies[0], Definitions[0]).Succeeded())
+                        throw std::runtime_error("[Physics:SoftEvaluation] XPBD enable update failed");
+                }
+                if (Frame % 40 == 30) {
+                    const auto Old = Bodies[0];
+                    if (!World.DestroyBody(Old).Succeeded() || World.IsBodyValid(Old))
+                        throw std::runtime_error("[Physics:SoftEvaluation] XPBD stale body survived destruction");
+                    ++StaleIdRejections;
+                    Bodies[0] = World.CreateBody(Definitions[0]);
+                    if (!Bodies[0].IsValid()) throw std::runtime_error("[Physics:SoftEvaluation] XPBD replacement failed");
+                    ++Replacements;
+                }
             }
+            if (!Definitions[0].Enabled) ++DisabledFrames;
             gargantuan::SoftBodyStepConfig Step;
             Step.Gravity = {0.0f, -Config.Gravity, 0.0f};
             gargantuan::SoftBodyCollider Collider;
-            if (Config.Case == "MovingCollider") {
+            if (HasMovingCollider(Config)) {
                 Collider.Shape.Kind = gargantuan::PhysicsShapeKind::Ball;
                 Collider.Shape.Size = {1.4f, 1.4f, 1.4f};
-                Collider.Transform.Position = {0.0f, 0.0f, -2.0f + 0.06f * Frame};
+                Collider.Transform.Position = {0.0f, 0.0f, ColliderZ(Config, Frame)};
             } else {
                 Collider.Shape.Size = {200.0f, 1.0f, 200.0f};
                 Collider.Transform.Position = {0.0f, -10.0f, 0.0f};
@@ -370,7 +500,7 @@ namespace {
                     [&](const auto &State) { return State.Body == Bodies[Index]; });
                 if (Found == Result.States.end()) throw std::runtime_error("[Physics:SoftEvaluation] XPBD state missing");
                 const auto QualityValue = ObserveXpbd(*Found, Definitions[Index],
-                    Config.Case == "MovingCollider", -2.0f + 0.06f * Frame);
+                    HasMovingCollider(Config), ColliderZ(Config, Frame));
                 MaximumStretch = std::max(MaximumStretch, QualityValue.MaxEdgeStretch);
                 MaximumPinDrift = std::max(MaximumPinDrift, QualityValue.MaxPinDrift);
                 MaximumVolumeError = std::max(MaximumVolumeError, QualityValue.VolumeError);
@@ -390,9 +520,17 @@ namespace {
                 {"Finite", Finite}, {"MaxEdgeStretch", MaximumStretch},
                 {"MaxPinDrift", MaximumPinDrift}, {"MaxVolumeError", MaximumVolumeError},
                 {"MaxPenetration", MaximumPenetration}, {"InvertedTetrahedronFrames", InvertedTetrahedra},
-                {"MaximumWorkers", Config.Workers}, {"SolverIterations", "Automatic"},
+                {"MaximumWorkers", Config.Workers}, {"CallerParticipatesInDispatchWait", true},
+                {"TimingScope", "ProductionSoftBodyWorldStep including owned positions and indices; quality analysis excluded"},
+                {"SolverIterations", "Automatic"},
                 {"ParticleMass", ParticleMass(Config)}, {"Track", Config.Track},
-                {"Bodies", Count}};
+                {"Bodies", Count}, {"TetrahedraPerCell", Rubber ? 5 : 0},
+                {"DisabledFrames", DisabledFrames}, {"Replacements", Replacements},
+                {"StaleIdRejections", StaleIdRejections},
+                {"EnableDisableSemantics", "Semantic Enabled false and true; destroy/recreate independently"},
+                {"ColliderMotion", HasMovingCollider(Config) ? "DiscreteNeutralTransformSnapshot" : "Static"},
+                {"ColliderSpeed", HasMovingCollider(Config) ?
+                    (Config.Case == "HighSpeedCollider" ? 48.0 : 3.6) : 0.0}};
     }
 }
 
@@ -401,6 +539,8 @@ int main(int ArgumentCount, char **Arguments) {
     try {
         const auto Config = Parse(ArgumentCount, Arguments);
         PhysicsEvaluation::InstallPhysicsAllocators();
+        std::optional<PhysicsJoltEvaluation::JoltRuntime> Runtime;
+        if (Config.Backend == "Jolt") Runtime.emplace();
         const auto Before = PhysicsEvaluation::CaptureResources();
         auto Result = Config.Backend == "Jolt" ? RunJolt(Config) : RunXpbd(Config);
         Result["Resources"] = PhysicsEvaluation::ResourceDelta(Before, PhysicsEvaluation::CaptureResources());
@@ -408,13 +548,25 @@ int main(int ArgumentCount, char **Arguments) {
         Result["Gravity"] = Config.Gravity;
         Result["WarmupFrames"] = Config.Warmup;
         Result["MeasuredFrames"] = Config.Frames - Config.Warmup;
-        Result["QualityQualified"] = Result.value("Finite", false) &&
-            Result.value("MaxEdgeStretch", 0.0) <= 0.1 &&
-            Result.value("MaxPinDrift", 0.0) <= 1.0e-4 &&
-            Result.value("MaxPenetration", 0.0) <= 0.1 &&
+        const bool MetricsPresent = Result.contains("Finite") && Result.contains("MaxEdgeStretch") &&
+            Result.contains("MaxPinDrift") && Result.contains("MaxPenetration") &&
+            Result.contains("MaxVolumeError") && Result.contains("InvertedTetrahedronFrames") &&
+            Result["MaxEdgeStretch"].is_number() && Result["MaxPinDrift"].is_number() &&
+            Result["MaxPenetration"].is_number() && Result["MaxVolumeError"].is_number();
+        Result["QualityQualified"] = MetricsPresent && Result["Finite"].get<bool>() &&
+            std::isfinite(Result["MaxEdgeStretch"].get<double>()) &&
+            std::isfinite(Result["MaxPinDrift"].get<double>()) &&
+            std::isfinite(Result["MaxPenetration"].get<double>()) &&
+            std::isfinite(Result["MaxVolumeError"].get<double>()) &&
+            Result["MaxEdgeStretch"].get<double>() <= 0.1 &&
+            Result["MaxPinDrift"].get<double>() <= 1.0e-4 &&
+            Result["MaxPenetration"].get<double>() <= 0.1 &&
             (Config.Case != "Rubber" ||
-                (Result.value("MaxVolumeError", 0.0) <= 0.15 &&
-                 Result.value("InvertedTetrahedronFrames", std::size_t{0}) == 0));
+                (Result["MaxVolumeError"].get<double>() <= 0.15 &&
+                 Result["InvertedTetrahedronFrames"].get<std::size_t>() == 0));
+        Result["QualityGates"] = {{"MaxEdgeStrain", 0.1}, {"MaxPinDrift", 1.0e-4},
+                                  {"MaxPenetration", 0.1}, {"RubberVolumeError", 0.15},
+                                  {"RubberInvertedTetrahedra", 0}, {"Finite", true}};
         std::cout << Result.dump() << '\n';
         return Result["QualityQualified"].get<bool>() ? 0 : 3;
     } catch (const std::exception &Error) {
