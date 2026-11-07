@@ -287,9 +287,14 @@ namespace {
                 {"RigidShape", "Ball"}, {"RigidRadius", RigidRadius}, {"RigidDensity", RigidDensity},
                 {"RequestedRigidMass", RigidMass},
                 {"MomentumConservationQualified", false},
-                {"ExternalWork", IsRubber ? "Soft damping and collision dissipation" :
-                    (Horizontal ? "Gravity, pinned membrane reactions, soft damping" :
-                     "Pinned edge reactions, soft damping, and controlled restart impulses where applicable")},
+                {"ControlSemantics", EnableContact ? "Unified soft-rigid contact enabled" :
+                    "Soft-rigid contact disabled; rigid and soft do not collide"},
+                {"PublicationOrder", "Unified Jolt update, then sample both bodies at the same completed step"},
+                {"MomentumScope", "Linear rigid plus movable soft vertex momentum; damping and external boundary impulses are not integrated"},
+                {"EnergyScope", "Rigid linear plus soft vertex translational kinetic energy; rigid angular kinetic energy, strain potential and damping work are unmeasured"},
+                {"ExternalWork", IsRubber ? "Soft damping; collision and constraint work unmeasured" :
+                    (Horizontal ? "Gravity, pinned membrane reactions, soft damping; constraint work unmeasured" :
+                     "Pinned edge reactions, soft damping and any controlled restart impulses; constraint work unmeasured")},
                 {"ControlledRestarts", Config.Case == "Repeated" ? (Config.Frames - 1) / 45 : 0}};
     }
 
@@ -388,6 +393,7 @@ namespace {
             glm::vec3 SoftCenter(0.0f);
             glm::vec3 SoftMomentum(0.0f);
             double SoftKineticEnergy = 0.0;
+            const bool SoftVelocityObservationValid = PriorPositions.size() == Positions.size();
             for (const auto &Position : Positions) {
                 Finite &= std::isfinite(Position.x) && std::isfinite(Position.y) && std::isfinite(Position.z);
                 SoftCenter += Position;
@@ -395,7 +401,7 @@ namespace {
             SoftCenter /= static_cast<float>(Positions.size());
             for (std::size_t Vertex = 0; Vertex < Positions.size(); ++Vertex) {
                 if (!Rubber && Vertex < Definition.ResolutionX) continue;
-                if (PriorPositions.size() != Positions.size()) continue;
+                if (!SoftVelocityObservationValid) continue;
                 const auto Velocity = (Positions[Vertex] - PriorPositions[Vertex]) / DeltaTime;
                 SoftMomentum += Definition.Material.ParticleMass * Velocity;
                 SoftKineticEnergy += 0.5 * Definition.Material.ParticleMass * glm::dot(Velocity, Velocity);
@@ -536,6 +542,7 @@ namespace {
                               {"SoftCenter", {SoftCenter.x, SoftCenter.y, SoftCenter.z}},
                               {"SoftMomentumEstimate", {SoftMomentum.x, SoftMomentum.y, SoftMomentum.z}},
                               {"SoftKineticEnergyEstimate", SoftKineticEnergy},
+                              {"SoftVelocityObservationValid", SoftVelocityObservationValid},
                               {"MaxEdgeStretch", FrameStretch}, {"VolumeError", FrameVolumeError},
                               {"PinDrift", FramePinDrift}, {"InvertedTetrahedra", FrameInversions}});
         }
@@ -559,6 +566,13 @@ namespace {
                 {"SoftCallerRole", Config.Workers == 1 ? "SynchronousSolve" : "DispatchAndWait"},
                 {"SoftExecutionMode", Config.Workers == 1 ? "SynchronousReference" : "Jobified"},
                 {"MomentumConservationQualified", false},
+                {"ControlSemantics", EnableFeedback ? "Soft collides with sampled Box rigid and observed reaction is applied" :
+                    "Soft still collides with sampled Box rigid; observed reaction is not applied"},
+                {"PublicationOrder", "Box rigid step, XPBD soft step against sampled collider, apply observed reaction to Box velocity, then sample; the new rigid position is integrated next frame"},
+                {"MomentumScope", "Rigid linear momentum plus soft position-difference estimate from frame 1; first frame soft estimate is unavailable; damping and external boundary impulses are not integrated"},
+                {"EnergyScope", "Rigid linear plus soft position-difference translational kinetic estimate from frame 1; rigid angular kinetic energy, strain potential and damping work are unmeasured"},
+                {"ExternalWork", Rubber ? "Soft damping; collision projection and constraint work unmeasured" :
+                    "Pinned edge reactions, soft damping and any controlled restart impulses; projection and constraint work unmeasured"},
                 {"Limit", "The private XPBD copy observes each collision projection and transfers its opposite particle velocity change to Box3D at the next rigid safe point. This staggered reaction is clamped and is not a solved two-body constraint or conservation proof"}};
     }
 
