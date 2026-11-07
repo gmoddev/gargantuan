@@ -2,6 +2,7 @@
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
+#include "gargantuan/datatypes/RaycastParams.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <concepts>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -221,6 +223,80 @@ namespace {
 			{"ResidentBytesAfter", EncodeBytes(ResidentAtEnd)}, {"AllocationCount", nullptr},
 			{"Validation", "body count returns to zero every cycle"}};
 	}
+
+	template <typename BodyType, typename QueryType>
+	concept HasCollisionGroups = requires(BodyType &Body, QueryType &Query) {
+		Body.SetCollisionGroup(0);
+		Body.SetCollisionMask(std::uint16_t{0});
+		{ Body.GetCollisionGroup() } -> std::convertible_to<int>;
+		Query.CollisionGroup = 0;
+		Query.CollisionMask = 0;
+	};
+
+	template <typename BodyType, typename QueryType>
+	Json RunGroupUpdateCase(int Iterations) {
+		if constexpr (!HasCollisionGroups<BodyType, QueryType>) {
+			return {{"Case", "group-updates"}, {"Status", "unsupported"}, {"UpdateAndFlush", nullptr},
+				{"Query", nullptr}, {"Reason", "collision group controls absent from this source"}};
+		} else {
+			auto Game = std::make_shared<DataModel>();
+			auto World = GetWorkspace(Game);
+			World->SetGravity(0.0f);
+			auto Target = std::make_shared<BodyType>();
+			Target->SetAnchored(true);
+			Target->SetSize({1.0f, 1.0f, 1.0f});
+			Target->SetCFrame(CFrame(5.0f, 0.0f, 0.0f));
+			Target->SetCollisionGroup(2);
+			Target->SetCollisionMask(std::uint16_t{1} << 1);
+			Target->SetParent(World);
+			World->StepPhysics(0.0, std::nullopt);
+			Require(WorldRootTestAccess::Bodies(*World) == 1, "group target not admitted");
+			QueryType Query;
+			Query.CollisionGroup = 1;
+			Query.CollisionMask = std::uint16_t{1} << 2;
+			std::vector<double> Update, Raycast;
+			Update.reserve(Iterations); Raycast.reserve(Iterations);
+			for (int Iteration = 0; Iteration < Iterations; ++Iteration) {
+				const int Group = Iteration % 2 == 0 ? 2 : 3;
+				const auto UpdateStart = Clock::now();
+				Target->SetCollisionGroup(Group);
+				World->StepPhysics(0.0, std::nullopt);
+				Update.push_back(Milliseconds(Clock::now() - UpdateStart));
+				Require(Target->GetCollisionGroup() == Group, "group update did not commit");
+				const auto QueryStart = Clock::now();
+				const auto Hit = World->ResolveRaycast({}, {10.0f, 0.0f, 0.0f}, Query);
+				Raycast.push_back(Milliseconds(Clock::now() - QueryStart));
+				Require(Hit.Succeeded() && Hit.HasHit() == (Group == 2),
+					"group update did not change query visibility");
+			}
+			Target->SetCollisionGroup(2);
+			Target->SetCollisionMask(0);
+			Target->SetCanCollide(false);
+			Target->SetCanTouch(true);
+			auto Visitor = std::make_shared<BodyType>();
+			Visitor->SetCollisionGroup(3);
+			Visitor->SetCollisionMask(std::uint16_t{1} << 2);
+			Visitor->SetCFrame(CFrame(5.0f, 0.0f, 0.0f));
+			Visitor->SetParent(World);
+			int Touches = 0;
+			Target->Touched->Connect([&](std::shared_ptr<BasePart>) { ++Touches; });
+			World->StepPhysics(1.0 / 60.0, std::nullopt);
+			Require(Touches == 0, "masked sensor produced a touch event");
+			Visitor->SetCFrame(CFrame(8.0f, 0.0f, 0.0f));
+			Target->SetCollisionMask(std::uint16_t{1} << 3);
+			World->StepPhysics(1.0 / 60.0, std::nullopt);
+			Visitor->SetCFrame(CFrame(5.0f, 0.0f, 0.0f));
+			World->StepPhysics(1.0 / 60.0, std::nullopt);
+			Require(Touches == 1, "enabled sensor did not publish one touch event");
+			Visitor->Destroy();
+			Target->Destroy();
+			Require(WorldRootTestAccess::Bodies(*World) == 0, "group target not retired");
+			Game->Destroy();
+			return {{"Case", "group-updates"}, {"Status", "measured"}, {"Iterations", Iterations},
+				{"UpdateAndFlush", Summarize(Update)}, {"Query", Summarize(Raycast)},
+				{"Validation", "group changes alternate query visibility; sensor mask gates touch; bodies retire"}};
+		}
+	}
 }
 
 int main(int ArgumentCount, char **Arguments) {
@@ -235,7 +311,7 @@ int main(int ArgumentCount, char **Arguments) {
 			else throw std::invalid_argument("unknown argument: " + std::string(Argument));
 		}
 		Require(CaseFilter.empty() || CaseFilter == "dense-contacts" || CaseFilter == "weld-chain" ||
-			CaseFilter == "body-churn", "unknown case filter");
+			CaseFilter == "body-churn" || CaseFilter == "group-updates", "unknown case filter");
 		std::cout << nlohmann::ordered_json{{"Type", "PhysicsFoundationBenchmark"},
 			{"FixedDeltaSeconds", 1.0 / 60.0}, {"Scope", "EngineWorldRoot"},
 			{"ResidentMemoryMetric", "process working set or RSS; includes allocator and unrelated process state"},
@@ -246,6 +322,9 @@ int main(int ArgumentCount, char **Arguments) {
 			std::cout << RunStepCase("weld-chain", Quick ? 2 : 30, Quick ? 8 : 120, true).dump() << '\n';
 		if (CaseFilter.empty() || CaseFilter == "body-churn")
 			std::cout << RunChurnCase(Quick ? 2 : 30).dump() << '\n';
+		if (CaseFilter.empty() || CaseFilter == "group-updates")
+			std::cout << RunGroupUpdateCase<gargantuan::Part, gargantuan::RaycastParams>(Quick ? 4 : 128).dump()
+				<< '\n';
 		return 0;
 	} catch (const std::exception &Failure) {
 		std::cerr << "[Physics:FoundationBenchmark] " << Failure.what() << '\n';
