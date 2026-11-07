@@ -1,4 +1,5 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include "assets/PreparedInstanceSerialization.hpp"
 #include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
@@ -7,8 +8,11 @@
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 
+#include <chrono>
 #include <cstdint>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -16,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 	using namespace gargantuan;
@@ -174,12 +179,59 @@ namespace {
 		Bad["Version"] = 6;
 		Check(!Decode(Bad).Ok, "unsupported future persistence version rejects");
 	}
+
+	void TestPreparedSchemaGeneration() {
+		auto Root = std::make_shared<Folder>();
+		Root->SetName("PreparedGeneration");
+		Root->SetArchivable(true);
+		std::shared_ptr<Instance> Serializable = Root;
+		const auto Encoded = InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, Serializable);
+		const std::vector<std::uint8_t> Bytes(Encoded.begin(), Encoded.end());
+		Root.reset();
+		Serializable.reset();
+
+		auto CapturedSchema = GetRuntimeSchemaLifecycle().GetActiveRegistry();
+		std::promise<void> WorkerReady;
+		auto Ready = WorkerReady.get_future();
+		std::promise<void> ReleaseWorker;
+		auto Released = ReleaseWorker.get_future().share();
+		auto Worker = std::async(std::launch::async,
+			[Bytes, Schema = CapturedSchema, &WorkerReady, Released] {
+				ExecutionDomainScope WorkerDomain(ExecutionDomain::Worker);
+				auto Prepared = InstanceSerialization::Internal::PrepareDetachedJson(Bytes, 1, Schema);
+				WorkerReady.set_value();
+				Released.wait();
+				return Prepared;
+			});
+		if (Ready.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+			ReleaseWorker.set_value();
+			(void)Worker.get();
+			throw std::runtime_error("worker did not prepare the pinned schema document");
+		}
+		CapturedSchema.reset();
+		try {
+			BootstrapNativeRuntimeSchema();
+		} catch (...) {
+			ReleaseWorker.set_value();
+			Worker.wait();
+			throw;
+		}
+		ReleaseWorker.set_value();
+		auto Prepared = Worker.get();
+		if (!Prepared) throw std::runtime_error("worker rejected the pinned schema document: " + Prepared.error());
+		auto Materialized = InstanceSerialization::Internal::MaterializeDetachedJson(*Prepared);
+		Check(!Materialized.Ok && !Materialized.Instance && Materialized.ObjectsDecoded == 0 &&
+			!Materialized.Errors.empty(),
+			"prepared content from an old owned schema generation rejects before Main materialization");
+	}
 }
 
 int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestDocumentLocalReferences();
+		TestPreparedSchemaGeneration();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Persistence:Reference] " << Error.what() << '\n';
 		return 1;
