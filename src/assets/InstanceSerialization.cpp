@@ -1058,44 +1058,102 @@ namespace gargantuan::InstanceSerialization {
 		auto Prepared = PrepareJson(std::string_view(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
 		if (!Prepared) return std::unexpected(std::move(Prepared.error()));
 		if ((*Prepared)["Version"] == 5) {
-			std::unordered_set<std::uint32_t> NodeIds;
-			std::vector<std::uint32_t> TargetIds;
-			std::vector<std::pair<const json *, std::size_t>> Pending{{&*Prepared, 1}};
+			struct NodeInfo {
+				const InstanceClassDefinition *Class = nullptr;
+				std::uint32_t Scope = 0;
+			};
+			struct ReferenceInfo {
+				std::uint32_t Owner = 0;
+				std::uint32_t Target = 0;
+				const InstanceProperty *Property = nullptr;
+			};
+			struct PendingNode {
+				const json *Value = nullptr;
+				std::size_t Depth = 0;
+				std::uint32_t Scope = 0;
+			};
+			const auto DataModelId = SchemaId::FromNativeName("Engine", "DataModel");
+			std::unordered_map<std::uint32_t, NodeInfo> NodeIds;
+			std::vector<ReferenceInfo> References;
+			std::vector<PendingNode> Pending{{&*Prepared, 1, 0}};
 			while (!Pending.empty()) {
-				const auto [Node, Depth] = Pending.back();
+				const auto [Node, Depth, ParentScope] = Pending.back();
 				Pending.pop_back();
 				if (!Node->is_object() || Depth > MaximumProtocolJsonDepth ||
 					NodeIds.size() == MaximumPersistenceObjects || !Node->contains("NodeId") ||
 					!(*Node)["NodeId"].is_number_unsigned())
 					return std::unexpected("Version 5 content has a malformed or oversized Instance hierarchy");
 				const auto Id = JsonCodec::DecodeUnsigned32((*Node)["NodeId"]);
-				if (!Id || *Id == 0 || *Id > MaximumPersistenceObjects || !NodeIds.insert(*Id).second)
+				if (!Id || *Id == 0 || *Id > MaximumPersistenceObjects || NodeIds.contains(*Id))
 					return std::unexpected("Version 5 content has a duplicate or out-of-range NodeId");
+				if (!Node->contains("ClassName") || !(*Node)["ClassName"].is_string() ||
+					!Node->contains("ClassSchemaId") || !(*Node)["ClassSchemaId"].is_string() ||
+					!Node->contains("ClassDefinitionVersion") ||
+					!(*Node)["ClassDefinitionVersion"].is_number_unsigned())
+					return std::unexpected("Version 5 content has incomplete reflected class identity");
+				const auto ClassId = SchemaId::Parse((*Node)["ClassSchemaId"].get_ref<const std::string &>());
+				const auto ClassVersion = JsonCodec::DecodeUnsigned32((*Node)["ClassDefinitionVersion"]);
+				const auto *Class = ClassId ? InstanceClassRegistry::GetDefinitionBySchemaId(*ClassId) : nullptr;
+				const auto ExpectedName = Class && Class->ConstructionKind == SchemaClassConstructionKind::CustomData
+					? Class->CanonicalName : Class ? Class->ClassName : std::string{};
+				if (!Class || !ClassVersion || *ClassVersion == 0 || Class->DefinitionVersion != *ClassVersion ||
+					(*Node)["ClassName"] != ExpectedName || !InstanceClassRegistry::IsConstructible(*Class))
+					return std::unexpected("Version 5 content has incompatible reflected class identity");
+				const bool IsDataModel = GetActiveRuntimeSchemaRegistry().IsClassDerivedFrom(Class->Id, DataModelId);
+				if (IsDataModel && Depth != 1)
+					return std::unexpected("Version 5 content cannot parent a DataModel inside another Instance");
+				const auto Scope = IsDataModel ? *Id : ParentScope;
+				NodeIds.emplace(*Id, NodeInfo{Class, Scope});
 				if (!Node->contains("Properties") || !(*Node)["Properties"].is_object() ||
 					!Node->contains("Children") || !(*Node)["Children"].is_array())
 					return std::unexpected("Version 5 content has malformed Properties or Children");
-				for (const auto &[_, Property] : (*Node)["Properties"].items()) {
-					if (!Property.is_object() || !Property.contains("InstanceReference")) continue;
-					if (Property.size() != 1)
+				const auto &Properties = (*Node)["Properties"];
+				if (Properties.size() > MaximumSnapshotPropertiesPerObject)
+					return std::unexpected("Version 5 content exceeds its property-count bound");
+				for (const auto &[Name, Property] : Class->AllProperties)
+					if (Name != "Parent" && Property->PersistencePolicy == InstanceProperty::Persistence::Saved &&
+						Property->SemanticType == InstanceProperty::DataType::ObjectReference &&
+						Property->ReadObjectReference && Property->WriteObjectReference && !Properties.contains(Name))
+						return std::unexpected("Version 5 content omits a saved InstanceReference property");
+				for (const auto &[PropertyName, EncodedProperty] : Properties.items()) {
+					if (!EncodedProperty.is_object() || !EncodedProperty.contains("InstanceReference")) continue;
+					if (EncodedProperty.size() != 1)
 						return std::unexpected("Version 5 content has a malformed InstanceReference property");
-					const auto &Reference = Property["InstanceReference"];
-					if (Reference.is_null()) continue;
-					if (!Reference.is_number_unsigned() || TargetIds.size() == MaximumPersistenceObjects * 16)
+					const auto FoundProperty = Class->AllProperties.find(PropertyName);
+					if (FoundProperty == Class->AllProperties.end() ||
+						FoundProperty->second->PersistencePolicy != InstanceProperty::Persistence::Saved ||
+						FoundProperty->second->SemanticType != InstanceProperty::DataType::ObjectReference ||
+						!FoundProperty->second->ObjectReferenceClassSchemaId ||
+						!FoundProperty->second->WriteObjectReference)
+						return std::unexpected("Version 5 content encodes a non-reference property as InstanceReference");
+					const auto &Reference = EncodedProperty["InstanceReference"];
+					if (Reference.is_null()) {
+						if (!FoundProperty->second->Nullable)
+							return std::unexpected("Version 5 content has a null non-nullable reference");
+						continue;
+					}
+					if (!Reference.is_number_unsigned() || References.size() == MaximumPersistenceObjects * 16)
 						return std::unexpected("Version 5 content has a malformed or excessive InstanceReference");
 					const auto Target = JsonCodec::DecodeUnsigned32(Reference);
 					if (!Target || *Target == 0 || *Target > MaximumPersistenceObjects)
 						return std::unexpected("Version 5 content has an out-of-range InstanceReference");
-					TargetIds.push_back(*Target);
+					References.push_back({*Id, *Target, FoundProperty->second});
 				}
 				const auto &Children = (*Node)["Children"];
 				if (Children.size() > MaximumPersistenceObjects - NodeIds.size() -
 					std::min(Pending.size(), MaximumPersistenceObjects - NodeIds.size()))
 					return std::unexpected("Version 5 content exceeds its object-count bound");
-				for (const auto &Child : Children) Pending.emplace_back(&Child, Depth + 1);
+				for (const auto &Child : Children) Pending.push_back({&Child, Depth + 1, Scope});
 			}
-			for (const auto Target : TargetIds)
-				if (!NodeIds.contains(Target))
+			for (const auto &Reference : References) {
+				const auto Target = NodeIds.find(Reference.Target);
+				if (Target == NodeIds.end())
 					return std::unexpected("Version 5 InstanceReference target is absent from its document");
+				if (NodeIds.at(Reference.Owner).Scope != Target->second.Scope ||
+					!GetActiveRuntimeSchemaRegistry().IsClassDerivedFrom(Target->second.Class->Id,
+						*Reference.Property->ObjectReferenceClassSchemaId))
+					return std::unexpected("Version 5 InstanceReference target has an invalid scope or class");
+			}
 			if (ExpectedObjects != 0 && NodeIds.size() != ExpectedObjects)
 				return std::unexpected("Content document differs from its declared object count");
 			return std::make_shared<const PreparedInstanceDocument>(std::move(*Prepared));

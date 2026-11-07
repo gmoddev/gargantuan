@@ -68,6 +68,8 @@ in the bootstrap project. Other qualified static subtrees may still become
 units. This deliberately avoids cross-unit fixups and prevents a split from
 silently replacing an internal authored reference with null. Package content
 namespace, digest, admission, and runtime ObjectId rules are unchanged.
-Package snapshot admission checks every v5 unit's bounded NodeIds and reference
-targets, then materializes and destroys a detached copy to apply the same
-reflected type, scope, and saved-property validation as runtime loading.
+Package snapshot admission checks every v5 unit's bounded NodeIds, saved
+reference fields, target class ancestry, and document scope using the frozen
+reflection schema. The package worker performs this check without constructing
+or mutating live Instances. Runtime loading still applies each reference
+through the ordinary wire mutation path.

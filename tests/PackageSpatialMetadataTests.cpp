@@ -10,6 +10,7 @@
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
@@ -120,6 +121,7 @@ namespace {
 		void CheckSnapshot(const GamePayload &Payload, bool Accepted, std::string_view Message) {
 			std::vector<PackagePhase> Observed;
 			const auto Output = Root / ("Output" + std::to_string(++Sequence));
+			ExecutionDomainScope WorkerDomain(ExecutionDomain::Worker);
 			const auto Result = PackageBuilder::Build({
 				.Payload = Payload,
 				// Deliberately absent: a valid snapshot reaches Validate; an invalid
