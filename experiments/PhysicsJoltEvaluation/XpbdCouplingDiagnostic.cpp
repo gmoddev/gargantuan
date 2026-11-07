@@ -25,6 +25,7 @@ namespace {
     struct Options {
         int Frames = 36;
         int Substeps = 1;
+        int SoftSubsteps = 1;
         int Iterations = 8;
         int Workers = 1;
         bool Diagnostics = true;
@@ -63,6 +64,7 @@ namespace {
             const std::string Value = Arguments[Index + 1];
             if (Name == "--frames") Result.Frames = std::stoi(Value);
             else if (Name == "--substeps") Result.Substeps = std::stoi(Value);
+            else if (Name == "--soft-substeps") Result.SoftSubsteps = std::stoi(Value);
             else if (Name == "--iterations") Result.Iterations = std::stoi(Value);
             else if (Name == "--workers") Result.Workers = std::stoi(Value);
             else if (Name == "--diagnostics") Result.Diagnostics = Boolean(Value);
@@ -83,7 +85,10 @@ namespace {
         }
         if (Result.Frames < 1 || Result.Frames > 240 ||
             Result.Substeps < 1 || Result.Substeps > 96 ||
+            Result.SoftSubsteps < 1 || Result.SoftSubsteps > 24 ||
+            Result.Substeps * Result.SoftSubsteps > 96 ||
             (!Result.Interleaved && Result.Substeps != 1 && Result.Substeps != 4) ||
+            (!Result.Interleaved && Result.SoftSubsteps != 1) ||
             Result.Iterations < 1 || Result.Iterations > 64 ||
             (Result.Workers != 1 && Result.Workers != 2 && Result.Workers != 8) ||
             !std::isfinite(Result.StretchCompliance) || Result.StretchCompliance < 0.0f ||
@@ -163,6 +168,8 @@ namespace {
         double MaxEdgeStretch = 0.0;
         double MaxPinDrift = 0.0;
         double MaxParticlePenetration = 0.0;
+        double CompliantEdgeElasticEstimate = 0.0;
+        std::size_t OmittedHardEdgeCount = 0;
         bool Finite = true;
     };
 
@@ -175,6 +182,9 @@ namespace {
         double MaxEdgeStretch = 0.0;
         double MaxPinDrift = 0.0;
         double MaxParticlePenetration = 0.0;
+        double MaximumCompliantEdgeElasticEstimate = 0.0;
+        double MaximumKineticPlusCompliantEdgeEstimate = 0.0;
+        std::size_t MaximumOmittedHardEdgeCount = 0;
         std::size_t TotalContactProjections = 0;
         bool Finite = true;
         double TotalPhysicalPhasesMs = 0.0;
@@ -188,22 +198,41 @@ namespace {
         const std::size_t N = Definition.ResolutionX;
         if (Positions.size() != N * Definition.ResolutionY)
             throw std::runtime_error("[Physics:XpbdDiagnostic] Unexpected accepted cloth vertex count");
-        const float Rest = Definition.Size.x / static_cast<float>(N - 1);
-        const auto CheckEdge = [&](std::size_t A, std::size_t B, float Length) {
-            const double Stretch = std::abs(static_cast<double>(glm::length(Positions[B] - Positions[A]) / Length) - 1.0);
-            Result.Finite &= std::isfinite(Stretch);
-            Result.MaxEdgeStretch = std::max(Result.MaxEdgeStretch, Stretch);
+        const float RestX = Definition.Size.x / static_cast<float>(N - 1);
+        const float RestY = Definition.Size.y / static_cast<float>(Definition.ResolutionY - 1);
+        const float RestDiagonal = std::sqrt(RestX * RestX + RestY * RestY);
+        const auto CheckEdge = [&](std::size_t A, std::size_t B, float Length,
+                                   float Compliance, bool Structural) {
+            const double CurrentLength = static_cast<double>(glm::length(Positions[B] - Positions[A]));
+            const double Error = CurrentLength - static_cast<double>(Length);
+            Result.Finite &= std::isfinite(CurrentLength) && std::isfinite(Error);
+            if (Structural)
+                Result.MaxEdgeStretch = std::max(Result.MaxEdgeStretch,
+                    std::abs(CurrentLength / static_cast<double>(Length) - 1.0));
+            if (Compliance > 0.0f)
+                Result.CompliantEdgeElasticEstimate += Error * Error / (2.0 * static_cast<double>(Compliance));
+            else
+                ++Result.OmittedHardEdgeCount;
         };
         for (std::size_t Y = 0; Y < Definition.ResolutionY; ++Y)
             for (std::size_t X = 0; X < N; ++X) {
                 const auto Index = Y * N + X;
-                if (X + 1 < N) CheckEdge(Index, Index + 1, Rest);
-                if (Y + 1 < Definition.ResolutionY) CheckEdge(Index, Index + N, Rest);
+                if (X + 1 < N) CheckEdge(Index, Index + 1, RestX,
+                    Definition.Material.StretchCompliance, true);
+                if (Y + 1 < Definition.ResolutionY) CheckEdge(Index, Index + N, RestY,
+                    Definition.Material.StretchCompliance, true);
                 if (X + 1 < N && Y + 1 < Definition.ResolutionY) {
-                    CheckEdge(Index, Index + N + 1, Rest * std::sqrt(2.0f));
-                    CheckEdge(Index + 1, Index + N, Rest * std::sqrt(2.0f));
+                    CheckEdge(Index, Index + N + 1, RestDiagonal,
+                        Definition.Material.StretchCompliance, true);
+                    CheckEdge(Index + 1, Index + N, RestDiagonal,
+                        Definition.Material.StretchCompliance, true);
                 }
+                if (X + 2 < N) CheckEdge(Index, Index + 2, 2.0f * RestX,
+                    Definition.Material.BendCompliance, false);
+                if (Y + 2 < Definition.ResolutionY) CheckEdge(Index, Index + 2 * N, 2.0f * RestY,
+                    Definition.Material.BendCompliance, false);
             }
+        Result.Finite &= std::isfinite(Result.CompliantEdgeElasticEstimate);
         for (const auto &Attachment : Definition.Attachments) {
             const double Drift = static_cast<double>(glm::length(Positions[Attachment.Vertex] - Attachment.Position));
             Result.Finite &= std::isfinite(Drift);
@@ -259,8 +288,19 @@ namespace {
         const auto InitialRigid = ReadRigid(Rigid, RigidId);
         const double InitialKineticEnergy = RigidLinearEnergy(InitialRigid) + RigidAngularEnergy(InitialRigid);
 
+        const int OuterSteps = Config.Interleaved ? Config.Substeps : 1;
+        const int SoftStepsPerOuter = Config.Interleaved ? Config.SoftSubsteps : 1;
         std::cout << Json({{"Record", "Config"}, {"Frames", Config.Frames},
                            {"Substeps", Config.Substeps}, {"Interleaved", Config.Interleaved},
+                           {"OuterRigidStepsPerFrame", OuterSteps},
+                           {"SoftStepsPerOuterRigidStep", SoftStepsPerOuter},
+                           {"SoftIntegrationsPerFrame", OuterSteps * SoftStepsPerOuter},
+                           {"RigidOuterDeltaTime", FrameDeltaTime / OuterSteps},
+                           {"SoftStepDeltaTime", FrameDeltaTime / (OuterSteps * SoftStepsPerOuter)},
+                           {"SoftDampingMultiplierPerStep", 1.0f - Config.Damping},
+                           {"NominalSoftDampingRetentionPerFrame",
+                            std::pow(1.0 - static_cast<double>(Config.Damping), OuterSteps * SoftStepsPerOuter)},
+                           {"ColliderTransformHold", "One sampled rigid transform per outer step; held fixed during inner soft steps. Feedback changes rigid velocity after each inner soft step, while rigid position advances at the next outer step."},
                            {"Iterations", Config.Iterations}, {"Workers", Config.Workers},
                            {"Diagnostics", Config.Diagnostics}, {"Contact", Config.Contact},
                            {"Feedback", Config.Feedback}, {"Clamp", Config.Clamp},
@@ -272,28 +312,40 @@ namespace {
                            {"RigidInitial", RigidState(InitialRigid)},
                            {"InitialKineticEnergy", InitialKineticEnergy},
                            {"PhaseParticles", Config.PhaseParticles},
-                           {"EnergyNote", "Kinetic energy only. Phase energy uses reconstructed candidate velocity after position solves. Constraint potential, pin reaction work, and damping/friction work are not integrated."}}).dump() << '\n';
+                           {"EnergyNote", "Kinetic energy and a separate approximate compliant-edge estimate. Phase energy uses reconstructed candidate velocity after position solves. Zero-compliance edges, pin/contact reactions, and damping/friction work are not integrated."},
+                           {"ElasticEstimateScope", "Sum (current edge length - rest length)^2 / (2*compliance) over positive-compliance structural, diagonal, and two-hop bend distance edges. Hard edges are omitted and counted. This is a spring analogy, not stored XPBD solver energy or a complete mechanical-energy balance."}}).dump() << '\n';
 
         int FirstBudgetExceededFrame = -1;
         double MaximumKineticEnergy = InitialKineticEnergy;
         double MaximumEdgeStretch = 0.0;
         double MaximumPinDrift = 0.0;
         double MaximumParticlePenetration = 0.0;
+        double MaximumCompliantEdgeElasticEstimate = 0.0;
+        double MaximumKineticPlusCompliantEdgeEstimate = 0.0;
+        std::size_t MaximumOmittedHardEdgeCount = 0;
         double TotalPhysicalPhasesMs = 0.0;
         double TotalSubstepPipelineMs = 0.0;
         std::size_t TotalContactProjections = 0;
         bool Finite = true;
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             Json SubstepRecords = Json::array();
-            for (int Substep = 0; Substep < (Config.Interleaved ? Config.Substeps : 1); ++Substep) {
-                const float StepTime = Config.Interleaved ? FrameDeltaTime / Config.Substeps : FrameDeltaTime;
+            gargantuan::PhysicsBodyState ColliderState;
+            for (int Substep = 0; Substep < OuterSteps * SoftStepsPerOuter; ++Substep) {
+                const int OuterSubstep = Substep / SoftStepsPerOuter;
+                const int SoftSubstep = Substep % SoftStepsPerOuter;
+                const float OuterTime = FrameDeltaTime / OuterSteps;
+                const float StepTime = OuterTime / SoftStepsPerOuter;
                 const auto PipelineStart = std::chrono::steady_clock::now();
                 const auto BeforeRigid = ReadRigid(Rigid, RigidId);
-                const auto RigidStart = std::chrono::steady_clock::now();
-                (void)Rigid.Step({.DeltaTime = StepTime,
-                                  .SubStepCount = Config.Interleaved ? 1 : Config.Substeps});
-                const double RigidMs = Milliseconds(RigidStart);
-                const auto AfterRigid = ReadRigid(Rigid, RigidId);
+                double RigidMs = 0.0;
+                if (SoftSubstep == 0) {
+                    const auto RigidStart = std::chrono::steady_clock::now();
+                    (void)Rigid.Step({.DeltaTime = OuterTime,
+                                      .SubStepCount = Config.Interleaved ? 1 : Config.Substeps});
+                    RigidMs = Milliseconds(RigidStart);
+                    ColliderState = ReadRigid(Rigid, RigidId);
+                }
+                const auto &AfterRigid = ColliderState;
 
                 gargantuan::SoftBodyStepConfig SoftConfig;
                 SoftConfig.DeltaTime = StepTime;
@@ -354,13 +406,22 @@ namespace {
                 MaximumEdgeStretch = std::max(MaximumEdgeStretch, Quality.MaxEdgeStretch);
                 MaximumPinDrift = std::max(MaximumPinDrift, Quality.MaxPinDrift);
                 MaximumParticlePenetration = std::max(MaximumParticlePenetration, Quality.MaxParticlePenetration);
+                MaximumCompliantEdgeElasticEstimate = std::max(MaximumCompliantEdgeElasticEstimate,
+                    Quality.CompliantEdgeElasticEstimate);
+                MaximumOmittedHardEdgeCount = std::max(MaximumOmittedHardEdgeCount,
+                    Quality.OmittedHardEdgeCount);
                 TotalPhysicalPhasesMs += PhysicalPhasesMs;
                 TotalSubstepPipelineMs += SubstepPipelineMs;
                 TotalContactProjections += Observed.Contacts;
                 const double SoftEnergy = Dynamics->TranslationalKineticEnergy;
                 const double TotalEnergy = RigidLinearEnergy(AfterFeedback) +
                     RigidAngularEnergy(AfterFeedback) + SoftEnergy;
+                const double KineticPlusCompliantEdgeEstimate = TotalEnergy +
+                    Quality.CompliantEdgeElasticEstimate;
+                MaximumKineticPlusCompliantEdgeEstimate = std::max(
+                    MaximumKineticPlusCompliantEdgeEstimate, KineticPlusCompliantEdgeEstimate);
                 Finite &= Quality.Finite && std::isfinite(TotalEnergy) &&
+                    std::isfinite(KineticPlusCompliantEdgeEstimate) &&
                     std::isfinite(AfterFeedback.Transform.Position.x) &&
                     std::isfinite(AfterFeedback.Transform.Position.y) &&
                     std::isfinite(AfterFeedback.Transform.Position.z) &&
@@ -373,7 +434,12 @@ namespace {
                 MaximumKineticEnergy = std::max(MaximumKineticEnergy, TotalEnergy);
                 if (FirstBudgetExceededFrame < 0 && TotalEnergy > 1.05 * InitialKineticEnergy + 1.0e-5)
                     FirstBudgetExceededFrame = Frame;
-                SubstepRecords.push_back({{"Substep", Substep}, {"DeltaTime", StepTime},
+                SubstepRecords.push_back({{"Substep", Substep},
+                                          {"OuterSubstep", OuterSubstep},
+                                          {"SoftSubstep", SoftSubstep},
+                                          {"RigidAdvanced", SoftSubstep == 0},
+                                          {"OuterDeltaTime", OuterTime},
+                                          {"DeltaTime", StepTime},
                                           {"RigidMs", RigidMs}, {"SoftMs", SoftMs},
                                           {"FeedbackMs", FeedbackMs},
                                           {"PhysicalPhasesMs", PhysicalPhasesMs},
@@ -395,6 +461,9 @@ namespace {
                                           {"MaxEdgeStretch", Quality.MaxEdgeStretch},
                                           {"MaxPinDrift", Quality.MaxPinDrift},
                                           {"MaxParticlePenetration", Quality.MaxParticlePenetration},
+                                          {"CompliantEdgeElasticEstimate", Quality.CompliantEdgeElasticEstimate},
+                                          {"OmittedHardEdgeCount", Quality.OmittedHardEdgeCount},
+                                          {"KineticPlusCompliantEdgeEstimate", KineticPlusCompliantEdgeEstimate},
                                           {"Finite", Quality.Finite},
                                           {"TotalKineticEnergy", TotalEnergy}});
             }
@@ -403,9 +472,11 @@ namespace {
                                {"FirstBudgetExceededFrame", FirstBudgetExceededFrame},
                                {"MaximumKineticEnergy", MaximumKineticEnergy}}).dump() << '\n';
         }
-        return {Config.Frames, Config.Frames * (Config.Interleaved ? Config.Substeps : 1),
+        return {Config.Frames, Config.Frames * OuterSteps * SoftStepsPerOuter,
                 FirstBudgetExceededFrame, InitialKineticEnergy, MaximumKineticEnergy,
                 MaximumEdgeStretch, MaximumPinDrift, MaximumParticlePenetration,
+                MaximumCompliantEdgeElasticEstimate, MaximumKineticPlusCompliantEdgeEstimate,
+                MaximumOmittedHardEdgeCount,
                 TotalContactProjections, Finite, TotalPhysicalPhasesMs, TotalSubstepPipelineMs};
     }
 }
@@ -426,10 +497,14 @@ int main(int ArgumentCount, char **Arguments) {
                         {"MaxEdgeStretch", Result.MaxEdgeStretch},
                         {"MaxPinDrift", Result.MaxPinDrift},
                         {"MaxParticlePenetration", Result.MaxParticlePenetration},
+                        {"MaximumCompliantEdgeElasticEstimate", Result.MaximumCompliantEdgeElasticEstimate},
+                        {"MaximumKineticPlusCompliantEdgeEstimate", Result.MaximumKineticPlusCompliantEdgeEstimate},
+                        {"MaximumOmittedHardEdgeCount", Result.MaximumOmittedHardEdgeCount},
                         {"TotalContactProjections", Result.TotalContactProjections},
                         {"Finite", Result.Finite},
                         {"TotalPhysicalPhasesMs", Result.TotalPhysicalPhasesMs},
                         {"TotalSubstepPipelineMs", Result.TotalSubstepPipelineMs},
+                        {"ElasticEstimateScope", "Sum (current edge length - rest length)^2 / (2*compliance) over positive-compliance structural, diagonal, and two-hop bend distance edges. Hard edges are omitted and counted. This is a spring analogy, not stored XPBD solver energy or a complete mechanical-energy balance."},
                         {"TimingScope", "RigidMs=Box3D Step only; SoftMs=XPBD Step only; FeedbackMs=feedback extraction, clamp/application and final rigid read; PhysicalPhasesMs=sum of these three; SubstepPipelineMs=from initial rigid read through collider snapshot, accepted dynamics, optional diagnostic read, feedback and final rigid read; quality checks and JSON serialization excluded"}};
         Summary["FullRunResources"] = PhysicsEvaluation::ResourceDelta(Before, After);
         Summary["ResourceScope"] = "Full Run including world setup, solve, quality observations, per-frame JSON construction/output and teardown; summary JSON is constructed after the after-snapshot; not per-solver allocation cost";
