@@ -610,6 +610,10 @@ namespace gargantuan {
 	void WorldRoot::ApplyPendingImpulses() {
 		for (const auto &Part : Parts) {
 			if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
+			if (!Part->PendingLinearVelocity && !Part->PendingAngularVelocity && !Part->PendingAwake &&
+				!HasImpulse(Part->AccumulatedImpulse) && !HasImpulse(Part->AccumulatedAngularImpulse) &&
+				Part->AccumulatedPointImpulses.empty() && !HasImpulse(Part->AccumulatedForce) &&
+				!HasImpulse(Part->AccumulatedTorque)) continue;
 			auto Found = PartBodies.find(Part->GetObjectId());
 			if (Found == PartBodies.end()) continue;
 			const auto Body = Found->second;
