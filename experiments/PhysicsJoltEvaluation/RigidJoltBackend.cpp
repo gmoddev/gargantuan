@@ -75,6 +75,21 @@ namespace {
     PhysicsOperationResult Unsupported(const char *Message) {
         return {PhysicsOperationStatus::BackendFailure, Message};
     }
+    class JoltRuntime final {
+    public:
+        JoltRuntime() : OwnedFactory(std::make_unique<JPH::Factory>()) {
+            JPH::Factory::sInstance = OwnedFactory.get();
+            JPH::RegisterTypes();
+        }
+        ~JoltRuntime() {
+            JPH::UnregisterTypes();
+            JPH::Factory::sInstance = nullptr;
+        }
+        JoltRuntime(const JoltRuntime &) = delete;
+        JoltRuntime &operator=(const JoltRuntime &) = delete;
+    private:
+        std::unique_ptr<JPH::Factory> OwnedFactory;
+    };
     PhysicsRaycastResult NormalizeHits(PhysicsRaycastResult Result) {
         std::map<PhysicsBodyId, PhysicsRaycastHit> Nearest;
         for (auto Hit : Result.Candidates) {
@@ -191,12 +206,8 @@ namespace {
     public:
         RigidJoltBackend(const PhysicsWorldConfig &Config, int WorkerBudget)
             : Configuration(Config), Temp(32 * 1024 * 1024) {
-            static const bool Registered = [] {
-                JPH::Factory::sInstance = new JPH::Factory;
-                JPH::RegisterTypes();
-                return true;
-            }();
-            (void)Registered;
+            static JoltRuntime Runtime;
+            (void)Runtime;
             if (!Finite(Config.Gravity) || WorkerBudget < 1 || WorkerBudget > 8) return;
             if (WorkerBudget == 1) Jobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
             else Jobs = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs,
@@ -675,9 +686,10 @@ namespace {
         }
         PhysicsWorldConfig Configuration;
         LayerTable Layers;
-        JPH::PhysicsSystem World;
         JPH::TempAllocatorImpl Temp;
         std::unique_ptr<JPH::JobSystem> Jobs;
+        // Destruct World before Jobs, Temp and Layers, whose storage it may use.
+        JPH::PhysicsSystem World;
         std::vector<BodySlot> BodySlots;
         std::vector<ConstraintSlot> ConstraintSlots;
         std::unordered_map<std::uint32_t, PhysicsBodyId> NativeMap;

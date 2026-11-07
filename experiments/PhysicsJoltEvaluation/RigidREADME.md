@@ -20,6 +20,10 @@ four collision substeps, and retain every measured sample in JSON lines.
 Run each backend, case and worker budget repeatedly on the same machine and
 Release profile. Compare timings only where both corresponding quality rows
 pass. The separate allocation binary is for counts/retention, not timing ranks.
+The Jolt provider reserves a fixed 32 MiB `TempAllocatorImpl` arena per world;
+the reserve is reported separately. Instrumented heap counters include arena
+creation and retirement but do not see internal arena suballocations. RSS
+reports resident process pages, not the full virtual reserve.
 
 | Case | Common geometry and principal gate |
 | --- | --- |
@@ -47,6 +51,9 @@ would measure a different contract. Jolt query shapes are cached by dimensions;
 the cache lasts for one experimental world. The adapter does not implement the
 production mesh residency budgets or revision accounting. The mesh case tests
 support behavior, not the imported 300-decoy regression or shared mesh lifetime.
+Jolt type registration and its Factory are process owned and retire through RAII
+after all fixture worlds. The physics world destructs before its job system,
+temporary arena and layer filters.
 
 `Status=measured` means the fixture ran. `Quality.Status=pass` means its stated
 gate passed, not that the entire physical behavior or solver settings are

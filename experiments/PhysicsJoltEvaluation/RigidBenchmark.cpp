@@ -604,6 +604,8 @@ int main(int ArgumentCount, char **Arguments) {
             {"WorkerBudgetTotal", Selection.Workers},
             {"JoltBackgroundWorkers", Selection.Backend == "jolt" ? Selection.Workers - 1 : 0},
             {"Box3DSolverWorkers", Selection.Backend == "box3d" ? Json(1) : Json(nullptr)},
+            {"JoltFixedTempAllocatorReserveBytes", Selection.Backend == "jolt" ? 32 * 1024 * 1024 : 0},
+            {"TempArenaSuballocationsMeasured", false},
             {"FixedDeltaSeconds", 1.0 / 60.0}, {"CollisionSubsteps", 4},
             {"WarmupFrames", Selection.Quick ? 2 : 30},
             {"QualityRule", "Only passing rows may be considered for performance comparison"},
@@ -617,6 +619,7 @@ int main(int ArgumentCount, char **Arguments) {
                 const auto ResourcesAfter = CaptureResources();
                 Row["Backend"] = Selection.Backend;
                 Row["WorkerBudgetTotal"] = Selection.Workers;
+                Row["JoltFixedTempAllocatorReserveBytes"] = Selection.Backend == "jolt" ? 32 * 1024 * 1024 : 0;
                 Row["TotalResources"] = ResourceDelta(ResourcesBefore, ResourcesAfter);
                 Failed |= Row["Quality"]["Status"] == "fail";
                 std::cout << Row.dump() << '\n';
