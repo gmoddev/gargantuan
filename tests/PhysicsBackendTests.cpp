@@ -1273,6 +1273,15 @@ namespace {
 		auto Decoded = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
 		auto Loaded = Decoded.Instance ?
 			std::dynamic_pointer_cast<gargantuan::Part>(Decoded.Instance->FindFirstDescendant("PersistedRigidControl")) : nullptr;
+		if (!Decoded.Ok || !Loaded) {
+			std::cerr << "[Physics:Persistence] Decoded=" << Decoded.Ok << " Part=" << bool(Loaded) << '\n';
+			for(const auto &Error:Decoded.Errors) std::cerr << "[Physics:Persistence] " << Error << '\n';
+		} else {
+			std::cout << "[Physics:Persistence] Kinematic=" << Loaded->GetKinematic() << " Group=" << Loaded->GetCollisionGroup()
+				<< " Mask=" << Loaded->GetCollisionMask() << " LinearDamping=" << Loaded->GetLinearDamping()
+				<< " AngularDamping=" << Loaded->GetAngularDamping() << " GravityScale=" << Loaded->GetGravityScale()
+				<< " Sleep=" << Loaded->GetSleepEnabled() << " CCD=" << Loaded->GetMovingBodyCCD() << '\n';
+		}
 		Check(Decoded.Ok && Loaded && Loaded->GetKinematic() && Loaded->GetCollisionGroup() == 7 &&
 			Loaded->GetCollisionMask() == 129 && Near(Loaded->GetLinearDamping(), 0.25f) &&
 			Near(Loaded->GetAngularDamping(), 0.5f) && Near(Loaded->GetGravityScale(), 1.5f) &&
