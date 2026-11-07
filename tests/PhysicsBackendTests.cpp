@@ -1260,6 +1260,33 @@ namespace {
 		Check(Part->GetMass() == 0.0f, "removed Part retires published body diagnostics");
 	}
 
+	void TestForceDurationAndKinematicMotion() {
+		using namespace gargantuan;
+		PhysicsWorld Backend(PhysicsWorldConfig{.Gravity={0,0,0}});
+		PhysicsBodyDesc Description;
+		Description.LinearDamping=0; Description.AngularDamping=0;
+		const auto Forced=Backend.CreateBody(Description);
+		Description.Transform=CFrame(10,0,0);
+		const auto Impulsed=Backend.CreateBody(Description);
+		Check(Backend.ApplyForce(Forced,{60,0,0}).Succeeded() && Backend.ApplyLinearImpulse(Impulsed,{1,0,0}).Succeeded(),"equal-step force and impulse fixture accepts controls");
+		(void)Backend.Step({});
+		const float ForcedSpeed=Backend.GetBodyState(Forced)->LinearVelocity.x;
+		const float ImpulseSpeed=Backend.GetBodyState(Impulsed)->LinearVelocity.x;
+		Check(ForcedSpeed>0 && std::abs(ForcedSpeed-ImpulseSpeed)<.001f,"force integrates over one fixed step while impulse applies momentum immediately");
+		(void)Backend.Step({});
+		Check(std::abs(Backend.GetBodyState(Forced)->LinearVelocity.x-ForcedSpeed)<.001f,"one force request is not replayed on later fixed steps");
+		auto World=MakeWorkspace(); World->SetGravity(196.2f);
+		auto Part=std::make_shared<gargantuan::Part>();
+		Part->SetKinematic(true); Part->SetParent(World); Part->SetLinearVelocity({6,0,0});
+		World->StepPhysics(1.0/60.0,std::nullopt);
+		Check(std::abs(Part->GetCFrame().Position.x-.1f)<.002f && std::abs(Part->GetCFrame().Position.y)<.002f,"WorldRoot publishes velocity-driven kinematic translation without gravity");
+		Part->SetAnchored(true); World->StepPhysics(0.0,std::nullopt);
+		const auto Fixed=Part->GetCFrame();
+		Part->SetLinearVelocity({100,0,0}); World->StepPhysics(1.0/60.0,std::nullopt);
+		Check(Part->GetCFrame().FuzzyEq(Fixed),"anchored safe-point transition discards pending moving-body controls");
+		Part->Destroy();
+	}
+
 	void TestBodyControlPersistence() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -1982,6 +2009,7 @@ int main() {
 	TestSimulationPublicationAndImpulse();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
+	TestForceDurationAndKinematicMotion();
 	TestBodyControlPersistence();
 	TestContinuousCollisionPolicy();
 	TestWorldRootContinuousCollisionProjection();
