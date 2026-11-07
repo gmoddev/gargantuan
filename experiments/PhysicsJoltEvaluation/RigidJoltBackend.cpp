@@ -85,7 +85,7 @@ namespace {
         LayerTable() { Policies.push_back({}); }
         JPH::uint GetNumBroadPhaseLayers() const override { return 2; }
         JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer Layer) const override {
-            return JPH::BroadPhaseLayer(Policies.at(Layer).Static ? 0 : 1);
+            return JPH::BroadPhaseLayer(Layer < Policies.size() && !Policies[Layer].Static ? 1 : 0);
         }
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
         const char *GetBroadPhaseLayerName(JPH::BroadPhaseLayer Layer) const override {
@@ -93,13 +93,15 @@ namespace {
         }
 #endif
         bool ShouldCollide(JPH::ObjectLayer A, JPH::ObjectLayer B) const override {
-            const auto &First = Policies.at(A);
-            const auto &Second = Policies.at(B);
+            if (A >= Policies.size() || B >= Policies.size()) return false;
+            const auto &First = Policies[A];
+            const auto &Second = Policies[B];
             return First.Participates && Second.Participates && !(First.Static && Second.Static) &&
                 PhysicsCanCollide(First.Group, First.Mask, Second.Group, Second.Mask);
         }
         bool ShouldCollide(JPH::ObjectLayer A, JPH::BroadPhaseLayer B) const override {
-            return Policies.at(A).Participates && !(Policies.at(A).Static && B.GetValue() == 0);
+            return A < Policies.size() && Policies[A].Participates &&
+                !(Policies[A].Static && B.GetValue() == 0);
         }
         JPH::ObjectLayer GetLayer(const PhysicsBodyDesc &Description) {
             const LayerPolicy Candidate{Description.CollisionGroup, Description.CollisionMask,
@@ -612,6 +614,11 @@ namespace {
             return nullptr;
         }
         JPH::ShapeRefC GetQueryShape(const PhysicsQueryShape &Query) const {
+            if (!std::isfinite(Query.Radius) || !std::isfinite(Query.Height) ||
+                !Finite(Query.Size) || Query.Radius > MaximumPhysicsQueryExtent ||
+                Query.Height > MaximumPhysicsQueryExtent ||
+                Query.Size.x > MaximumPhysicsQueryExtent || Query.Size.y > MaximumPhysicsQueryExtent ||
+                Query.Size.z > MaximumPhysicsQueryExtent) return nullptr;
             const auto Key = std::make_tuple(static_cast<int>(Query.Kind), Query.Radius,
                 Query.Height, Query.Size.x, Query.Size.y, Query.Size.z);
             const auto Found = QueryShapes.find(Key);
