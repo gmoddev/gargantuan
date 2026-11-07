@@ -30,11 +30,12 @@ pass. The separate allocation binary is for counts/retention, not timing ranks.
 | `sleep-wake` | Ball on plane; observed natural sleep then explicit wake |
 | `mesh-contact` | Shared canonical 16×16 triangle grid, falling ball and supporting ray |
 | `advanced-queries` | Two coincident boxes; ray plus sphere/capsule/box casts and overlaps |
+| `mesh-query-dedup` | 16×16 triangle mesh; ray, sphere cast and overlap must each resolve one semantic body with a finite unit normal where applicable |
 | `filter-updates` | Alternating mutual collision-group visibility |
 | `moving-ccd-off/on` | 0.5-unit ball at −3 moving +360/s against a dynamic 0.1-unit wall at −2/s; enabled requires all trials to stop before x=1 |
-| `joint-motors` | Limited hinge door and driven slider with collisions disabled; motion within bounds |
-| `spring-distance` | Two-unit distance spring with collisions disabled; bounded extension |
-| `articulated-chain` | Eight ball-socket links with collisions disabled; final joint drift |
+| `joint-motors` | Limited hinge door and driven slider with collisions disabled; every step must stay inside authored limits plus 0.05 tolerance |
+| `spring-distance` | Two-unit distance spring with collisions disabled; minimum and maximum extension recorded |
+| `articulated-chain` | Eight ball-socket links with collisions disabled; maximum transient joint drift recorded |
 
 The Jolt adapter intentionally does not translate contact/sensor begin/end
 events, kinematic capsule motion, production asset import, arbitrary Part shapes,
@@ -52,6 +53,9 @@ gate passed, not that the entire physical behavior or solver settings are
 equivalent. A failed gate invalidates timing claims for that row. Jolt returns
 empty neutral contact-event vectors in this slice, so the benchmark uses pose,
 mass, penetration, ray and joint checks instead of claiming event parity. The
+experimental Jolt query adapter validates hit geometry, selects one nearest hit
+per neutral body, and orders hits by distance and body ID. Overlap caps apply to
+deduplicated bodies, including mesh subshapes. The
 runner rejects native Jolt update failures, truncated contact history, invalid
 or duplicate copied motions, invalid contact pairs, and missing motion for a
 required first-step or CCD projectile. Such failures produce failed rows, even

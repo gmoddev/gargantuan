@@ -91,6 +91,13 @@ namespace {
         const auto &V = State->LinearVelocity;
         Require(std::isfinite(V.x) && std::isfinite(V.y) && std::isfinite(V.z), "nonfinite body velocity");
     }
+    void UnitNormal(const PhysicsRaycastHit &Hit) {
+        const auto &N = Hit.Normal;
+        const float Length = glm::length(N);
+        Require(std::isfinite(N.x) && std::isfinite(N.y) && std::isfinite(N.z) &&
+            std::isfinite(Length) && std::abs(Length - 1.0f) < 0.01f,
+            "query returned nonfinite or nonunit hit normal");
+    }
     void Step(IPhysicsBackend &World, std::vector<double> &Samples,
               std::optional<PhysicsBodyId> RequiredMotion = std::nullopt) {
         const auto Started = Clock::now();
@@ -291,6 +298,7 @@ namespace {
             const auto Ray = World->Raycast({.Origin = {0, 0, 0}, .Direction = {10, 0, 0}});
             Rays.push_back(Milliseconds(Clock::now() - Started));
             Require(Ray.Succeeded() && Ray.HasHit(), "ray missed query target");
+            for (const auto &Hit : Ray.Candidates) UnitNormal(Hit);
         }
         for (const auto Kind : {PhysicsQueryShapeKind::Sphere, PhysicsQueryShapeKind::Capsule,
                 PhysicsQueryShapeKind::Box}) {
@@ -308,6 +316,7 @@ namespace {
                 Require(CastResult.Succeeded() && CastResult.HasHit(), "shape cast missed query target");
                 const auto Nearest = std::min_element(CastResult.Candidates.begin(), CastResult.Candidates.end(),
                     [](const auto &Left, const auto &Right) { return Left.Distance < Right.Distance; });
+                for (const auto &Hit : CastResult.Candidates) UnitNormal(Hit);
                 Require(std::abs(Nearest->Distance - 3.5f) < 0.15f,
                     "shape cast hit distance differs from geometry");
                 PhysicsOverlapRequest Overlap;
@@ -331,6 +340,52 @@ namespace {
             {"Iterations", Count}, {"Raycast", Timings(Rays)}, {"Shapes", ShapeRows},
             {"Quality", {{"Status", "pass"}, {"Checks", {"ray hit", "three cast distances",
                 "three overlap orderings", "retirement"}}}}};
+    }
+    Json RunMeshQuery(const Options &Selection) {
+        auto World = GetBackend(Selection, {0, 0, 0});
+        auto Mesh = GetGridMesh(Selection.Quick ? 8 : 16);
+        auto Description = Body({0, 0, 0}, {20, 1, 20}, true, PhysicsShapeKind::StaticTriangleMesh);
+        Description.Shape.Mesh = Mesh;
+        const auto Id = Add(*World, Description);
+        const int Count = Selection.Quick ? 8 : 128;
+        std::vector<double> Rays, Casts, Overlaps;
+        for (int Index = 0; Index < Count; ++Index) {
+            auto Started = Clock::now();
+            const auto Ray = World->Raycast({.Origin = {0, 5, 0}, .Direction = {0, -10, 0}});
+            Rays.push_back(Milliseconds(Clock::now() - Started));
+            Require(Ray.Succeeded() && Ray.Candidates.size() == 1 && Ray.Candidates[0].Body == Id &&
+                std::abs(Ray.Candidates[0].Distance - 5.0f) < 0.1f,
+                "mesh ray did not deduplicate native triangle hits");
+            UnitNormal(Ray.Candidates[0]);
+            PhysicsShapeCastRequest Cast;
+            Cast.Shape.Kind = PhysicsQueryShapeKind::Sphere;
+            Cast.Shape.Transform = CFrame(0, 5, 0);
+            Cast.Shape.Radius = 0.5f;
+            Cast.Direction = {0, -10, 0};
+            Started = Clock::now();
+            const auto Hit = World->ShapeCast(Cast);
+            Casts.push_back(Milliseconds(Clock::now() - Started));
+            Require(Hit.Succeeded() && Hit.Candidates.size() == 1 && Hit.Candidates[0].Body == Id &&
+                std::abs(Hit.Candidates[0].Distance - 4.5f) < 0.2f,
+                "mesh cast did not deduplicate native triangle hits");
+            UnitNormal(Hit.Candidates[0]);
+            PhysicsOverlapRequest Overlap;
+            Overlap.Shape.Kind = PhysicsQueryShapeKind::Sphere;
+            Overlap.Shape.Transform = CFrame(0, 0.1f, 0);
+            Overlap.Shape.Radius = 0.5f;
+            Started = Clock::now();
+            const auto Result = World->Overlap(Overlap);
+            Overlaps.push_back(Milliseconds(Clock::now() - Started));
+            Require(Result.Succeeded() && Result.Bodies.size() == 1 && Result.Bodies[0] == Id &&
+                !Result.Truncated, "mesh overlap did not deduplicate native subshape hits");
+        }
+        Retire(*World, {Id});
+        return {{"Case", "mesh-query-dedup"}, {"Status", "measured"},
+            {"Triangles", Mesh->Indices->size() / 3}, {"Iterations", Count},
+            {"Raycast", Timings(Rays)}, {"SphereCast", Timings(Casts)},
+            {"SphereOverlap", Timings(Overlaps)},
+            {"Quality", {{"Status", "pass"}, {"Checks", {"one semantic body per native mesh ray/cast/overlap",
+                "finite query geometry", "no truncation", "retirement"}}}}};
     }
     Json RunFilter(const Options &Selection) {
         auto World = GetBackend(Selection, {0, 0, 0});
@@ -440,38 +495,62 @@ namespace {
                 "articulated chain drive impulse failed");
         std::vector<double> Samples;
         const int Frames = Selection.Quick ? 20 : 120;
-        for (int Index = 0; Index < Frames; ++Index)
+        float MaximumLinkDrift = 0.0f;
+        float MaximumHingeAbsoluteAngle = 0.0f;
+        float MinimumSliderX = std::numeric_limits<float>::infinity();
+        float MaximumSliderX = -std::numeric_limits<float>::infinity();
+        float MinimumSpringLength = std::numeric_limits<float>::infinity();
+        float MaximumSpringLength = 0.0f;
+        float FinalHingeAngle = 0.0f;
+        float FinalSliderX = 0.0f;
+        float FinalSpringLength = 0.0f;
+        for (int Index = 0; Index < Frames; ++Index) {
             Step(*World, Samples, Index == 0 ? std::optional<PhysicsBodyId>(Bodies[1]) : std::nullopt);
-        for (auto Id : Bodies) FiniteState(*World, Id);
-        float Drift = 0;
-        if (Name == "articulated-chain") {
-            for (std::size_t Index = 1; Index < Bodies.size(); ++Index) {
-                const auto A = World->GetBodyState(Bodies[Index - 1])->Transform.Position;
-                const auto B = World->GetBodyState(Bodies[Index])->Transform.Position;
-                Drift = std::max(Drift, std::abs(glm::length(A - B) - 1.0f));
+            for (auto Id : Bodies) FiniteState(*World, Id);
+            if (Motor) {
+                const auto Door = World->GetBodyState(Bodies[1])->Transform;
+                FinalHingeAngle = std::atan2(Door.Rotation[0][1], Door.Rotation[0][0]);
+                FinalSliderX = World->GetBodyState(Bodies[3])->Transform.Position.x;
+                MaximumHingeAbsoluteAngle = std::max(MaximumHingeAbsoluteAngle, std::abs(FinalHingeAngle));
+                MinimumSliderX = std::min(MinimumSliderX, FinalSliderX);
+                MaximumSliderX = std::max(MaximumSliderX, FinalSliderX);
+            } else if (Name == "spring-distance") {
+                FinalSpringLength = glm::length(World->GetBodyState(Bodies[1])->Transform.Position -
+                    World->GetBodyState(Bodies[0])->Transform.Position);
+                MinimumSpringLength = std::min(MinimumSpringLength, FinalSpringLength);
+                MaximumSpringLength = std::max(MaximumSpringLength, FinalSpringLength);
+            } else {
+                for (std::size_t Link = 1; Link < Bodies.size(); ++Link) {
+                    const auto A = World->GetBodyState(Bodies[Link - 1])->Transform.Position;
+                    const auto B = World->GetBodyState(Bodies[Link])->Transform.Position;
+                    MaximumLinkDrift = std::max(MaximumLinkDrift,
+                        std::abs(glm::length(A - B) - 1.0f));
+                }
             }
         }
-        const auto Door = Motor ? World->GetBodyState(Bodies[1])->Transform : CFrame();
-        const float SlideX = Motor ? World->GetBodyState(Bodies[3])->Transform.Position.x : 0;
-        const float Angle = Motor ? std::atan2(Door.Rotation[0][1], Door.Rotation[0][0]) : 0;
-        const float SpringLength = Name == "spring-distance"
-            ? glm::length(World->GetBodyState(Bodies[1])->Transform.Position -
-                World->GetBodyState(Bodies[0])->Transform.Position) : 0;
         bool Stable = true;
-        if (Motor) Stable = std::abs(Angle) > 0.05f && std::abs(Angle) < 0.7f &&
-            SlideX > 10.1f && SlideX < 11.3f;
-        else if (Name == "spring-distance") Stable = std::isfinite(SpringLength) && SpringLength > 1 && SpringLength < 3;
-        else Stable = Drift < 0.2f;
+        if (Motor) Stable = std::abs(FinalHingeAngle) > 0.05f &&
+            MaximumHingeAbsoluteAngle <= 0.45f &&
+            MinimumSliderX >= 8.95f && MaximumSliderX <= 11.05f && FinalSliderX > 10.1f;
+        else if (Name == "spring-distance") Stable = std::isfinite(FinalSpringLength) &&
+            MinimumSpringLength > 1.0f && MaximumSpringLength < 3.0f;
+        else Stable = MaximumLinkDrift < 0.2f;
         for (auto Id : Joints) Require(World->DestroyConstraint(Id).Succeeded(), "joint retirement failed");
         Retire(*World, Bodies);
         return {{"Case", std::string(Name)}, {"Status", "measured"}, {"Bodies", Bodies.size()},
             {"Constraints", Joints.size()}, {"Step", Timings(Samples)},
-            {"MaximumLinkDrift", Name == "articulated-chain" ? Json(Drift) : Json(nullptr)},
-            {"FinalHingeAngle", Motor ? Json(Angle) : Json(nullptr)},
-            {"FinalSliderX", Motor ? Json(SlideX) : Json(nullptr)},
-            {"FinalSpringLength", Name == "spring-distance" ? Json(SpringLength) : Json(nullptr)},
+            {"MaximumLinkDrift", Name == "articulated-chain" ? Json(MaximumLinkDrift) : Json(nullptr)},
+            {"FinalHingeAngle", Motor ? Json(FinalHingeAngle) : Json(nullptr)},
+            {"MaximumHingeAbsoluteAngle", Motor ? Json(MaximumHingeAbsoluteAngle) : Json(nullptr)},
+            {"FinalSliderX", Motor ? Json(FinalSliderX) : Json(nullptr)},
+            {"MinimumSliderX", Motor ? Json(MinimumSliderX) : Json(nullptr)},
+            {"MaximumSliderX", Motor ? Json(MaximumSliderX) : Json(nullptr)},
+            {"FinalSpringLength", Name == "spring-distance" ? Json(FinalSpringLength) : Json(nullptr)},
+            {"MinimumSpringLength", Name == "spring-distance" ? Json(MinimumSpringLength) : Json(nullptr)},
+            {"MaximumSpringLength", Name == "spring-distance" ? Json(MaximumSpringLength) : Json(nullptr)},
             {"Quality", {{"Status", Stable ? "pass" : "fail"},
-                {"Checks", {"finite states", "joint motion or drift", "constraint and body retirement"}}}}};
+                {"Checks", {"finite states each step", "authored limits plus 0.05 tolerance",
+                    "transient spring/link drift", "constraint and body retirement"}}}}};
     }
     Json RunOne(const Options &Selection, std::string_view Name) {
         if (Name == "static-world" || Name == "stack" || Name == "dense-contacts" || Name == "mostly-static")
@@ -480,6 +559,7 @@ namespace {
         if (Name == "sleep-wake") return RunSleep(Selection);
         if (Name == "mesh-contact") return RunMesh(Selection);
         if (Name == "advanced-queries") return RunQueries(Selection);
+        if (Name == "mesh-query-dedup") return RunMeshQuery(Selection);
         if (Name == "filter-updates") return RunFilter(Selection);
         if (Name == "moving-ccd-off") return RunCcd(Selection, false);
         if (Name == "moving-ccd-on") return RunCcd(Selection, true);
@@ -515,6 +595,7 @@ int main(int ArgumentCount, char **Arguments) {
         const auto Selection = Parse(ArgumentCount, Arguments);
         const std::vector<std::string_view> Cases = {"static-world", "stack", "dense-contacts",
             "mostly-static", "body-churn", "sleep-wake", "mesh-contact", "advanced-queries",
+            "mesh-query-dedup",
             "filter-updates", "moving-ccd-off", "moving-ccd-on", "joint-motors",
             "spring-distance", "articulated-chain", "concurrent-admission"};
         if (Selection.Case != "all" && std::ranges::find(Cases, Selection.Case) == Cases.end())

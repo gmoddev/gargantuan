@@ -27,6 +27,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -72,6 +73,34 @@ namespace {
     }
     PhysicsOperationResult Unsupported(const char *Message) {
         return {PhysicsOperationStatus::BackendFailure, Message};
+    }
+    PhysicsRaycastResult NormalizeHits(PhysicsRaycastResult Result) {
+        std::map<PhysicsBodyId, PhysicsRaycastHit> Nearest;
+        for (auto Hit : Result.Candidates) {
+            const float NormalLength = glm::length(Hit.Normal);
+            if (!Hit.Body.IsValid() || !Finite(Hit.Position) || !Finite(Hit.Normal) ||
+                !std::isfinite(Hit.Distance) || Hit.Distance < 0 ||
+                !std::isfinite(NormalLength) || NormalLength < 1.0e-6f)
+                return {.Status = PhysicsOperationStatus::BackendFailure,
+                    .Message = "Jolt query returned nonfinite or invalid hit geometry"};
+            Hit.Normal /= NormalLength;
+            const auto Existing = Nearest.find(Hit.Body);
+            const bool PreferredNormal = Existing != Nearest.end() && Hit.Distance == Existing->second.Distance &&
+                std::tie(Hit.Normal.x, Hit.Normal.y, Hit.Normal.z) <
+                    std::tie(Existing->second.Normal.x, Existing->second.Normal.y, Existing->second.Normal.z);
+            if (Existing == Nearest.end() || Hit.Distance < Existing->second.Distance || PreferredNormal)
+                Nearest[Hit.Body] = Hit;
+        }
+        if (Nearest.size() > MaximumRaycastCandidates)
+            return {.Status = PhysicsOperationStatus::BackendFailure,
+                .Message = "Jolt query unique-body candidate limit exceeded"};
+        Result.Candidates.clear();
+        Result.Candidates.reserve(Nearest.size());
+        for (const auto &[Body, Hit] : Nearest) Result.Candidates.push_back(Hit);
+        std::ranges::sort(Result.Candidates, [](const auto &A, const auto &B) {
+            return A.Distance != B.Distance ? A.Distance < B.Distance : A.Body < B.Body;
+        });
+        return Result;
     }
 
     struct LayerPolicy {
@@ -486,11 +515,8 @@ namespace {
                 const auto Normal = Lock.GetBody().GetWorldSpaceSurfaceNormal(Hit.mSubShapeID2, Point);
                 Result.Candidates.push_back({Found->second, FromRVec(Point), FromJolt(Normal),
                     glm::length(Request.Direction) * Hit.mFraction});
-                if (Result.Candidates.size() > MaximumRaycastCandidates)
-                    return {.Status = PhysicsOperationStatus::BackendFailure,
-                        .Message = "Jolt ray candidate limit exceeded"};
             }
-            return Result;
+            return NormalizeHits(std::move(Result));
         }
         PhysicsRaycastResult ShapeCast(const PhysicsShapeCastRequest &Request) const override {
             PhysicsRaycastResult Result;
@@ -511,14 +537,11 @@ namespace {
                 if (Hit.mFraction <= 0 || Hit.mFraction > 1) continue;
                 const auto Found = NativeMap.find(Hit.mBodyID2.GetIndexAndSequenceNumber());
                 if (Found == NativeMap.end()) continue;
-                const auto Axis = -Hit.mPenetrationAxis.Normalized();
+                const auto Axis = -Hit.mPenetrationAxis;
                 Result.Candidates.push_back({Found->second, FromJolt(Hit.mContactPointOn2),
                     FromJolt(Axis), glm::length(Request.Direction) * Hit.mFraction});
-                if (Result.Candidates.size() > MaximumRaycastCandidates)
-                    return {.Status = PhysicsOperationStatus::BackendFailure,
-                        .Message = "Jolt shape cast candidate limit exceeded"};
             }
-            return Result;
+            return NormalizeHits(std::move(Result));
         }
         PhysicsOverlapResult Overlap(const PhysicsOverlapRequest &Request) const override {
             PhysicsOverlapResult Result;
@@ -532,15 +555,15 @@ namespace {
                 ToJolt(Request.Shape.Transform), ToRVec(Request.Shape.Transform.Position));
             World.GetNarrowPhaseQuery().CollideShape(Shape.GetPtr(), JPH::Vec3::sReplicate(1.0f),
                 Transform, {}, JPH::RVec3::sZero(), Collector, {}, {}, Filter);
+            std::set<PhysicsBodyId> UniqueBodies;
             for (const auto &Hit : Collector.mHits) {
                 const auto Found = NativeMap.find(Hit.mBodyID2.GetIndexAndSequenceNumber());
-                if (Found != NativeMap.end()) Result.Bodies.push_back(Found->second);
-                if (Result.Bodies.size() > MaximumRaycastCandidates)
+                if (Found != NativeMap.end()) UniqueBodies.insert(Found->second);
+                if (UniqueBodies.size() > MaximumRaycastCandidates)
                     return {.Status = PhysicsOperationStatus::BackendFailure,
-                        .Message = "Jolt overlap candidate limit exceeded"};
+                        .Message = "Jolt overlap unique-body candidate limit exceeded"};
             }
-            std::ranges::sort(Result.Bodies);
-            Result.Bodies.erase(std::unique(Result.Bodies.begin(), Result.Bodies.end()), Result.Bodies.end());
+            Result.Bodies.assign(UniqueBodies.begin(), UniqueBodies.end());
             if (Result.Bodies.size() > MaximumPhysicsOverlapResults) {
                 Result.Bodies.resize(MaximumPhysicsOverlapResults);
                 Result.Truncated = true;
