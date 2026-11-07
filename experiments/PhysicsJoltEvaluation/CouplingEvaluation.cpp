@@ -32,6 +32,7 @@ namespace {
         std::string Case = "SphereOnCloth";
         int Workers = 1;
         int Frames = 120;
+        int CollisionSteps = 1;
     };
 
     Options Parse(int ArgumentCount, char **Arguments) {
@@ -44,13 +45,15 @@ namespace {
             else if (Name == "--case") Result.Case = Value;
             else if (Name == "--workers") Result.Workers = std::stoi(Value);
             else if (Name == "--frames") Result.Frames = std::stoi(Value);
+            else if (Name == "--collision-steps") Result.CollisionSteps = std::stoi(Value);
             else throw std::runtime_error("[Physics:Coupling] Unknown option");
         }
         if (Result.Backend != "Jolt" && Result.Backend != "XPBD") throw std::runtime_error("[Physics:Coupling] Invalid backend");
         if (Result.Case != "SphereOnCloth" && Result.Case != "RubberPush" && Result.Case != "RigidIntoCloth" &&
             Result.Case != "Repeated" && Result.Case != "Multiple")
             throw std::runtime_error("[Physics:Coupling] Invalid case");
-        if (Result.Workers < 1 || Result.Workers > 8 || Result.Frames < 1 || Result.Frames > 600)
+        if (Result.Workers < 1 || Result.Workers > 8 || Result.Frames < 1 || Result.Frames > 600 ||
+            (Result.CollisionSteps != 1 && Result.CollisionSteps != 4))
             throw std::runtime_error("[Physics:Coupling] Option outside bounded range");
         return Result;
     }
@@ -205,7 +208,7 @@ namespace {
                     JPH::Quat::sIdentity(), JPH::EActivation::Activate);
                 World.World.GetBodyInterface().SetLinearVelocity(Rigids[0], JPH::Vec3(0.0f, 0.0f, 5.0f));
             }
-            const double StepMs = World.Step(DeltaTime, 1);
+            const double StepMs = World.Step(DeltaTime, Config.CollisionSteps);
             const auto FrameContacts = Contacts.VertexContacts.exchange(0, std::memory_order_relaxed);
             Json FrameContactsPerRigid = Json::array();
             for (std::size_t Index = 0; Index < Rigids.size(); ++Index) {
@@ -279,7 +282,9 @@ namespace {
                 {"ActiveBackgroundWorkers", nullptr},
                 {"WorkerActivityMeasurement", "Unavailable; thread pool capacity is not per-frame active worker count"},
                 {"CallerRole", "ParticipatesInSolve"}, {"ExecutionMode", "JoltThreadPool"},
-                {"CollisionSteps", 1}, {"SolverIterations", 24}, {"DeltaTime", DeltaTime},
+                {"CollisionSteps", Config.CollisionSteps}, {"SolverIterations", 24},
+                {"DeltaTime", DeltaTime},
+                {"SchedulingScope", "Unified Jolt rigid and soft update with the requested collision steps per frame"},
                 {"SoftVertices", Shared->mVertices.size()}, {"SoftEdges", Shared->mEdgeConstraints.size()},
                 {"SoftVolumes", Shared->mVolumeConstraints.size()}, {"AnchoredBoundary", !IsRubber},
                 {"TotalVertexContacts", TotalVertexContacts}, {"FirstContactFrame", FirstContactFrame},
@@ -365,7 +370,7 @@ namespace {
                     throw std::runtime_error("[Physics:Coupling] Box3D repeated reset failed");
             }
             const auto RigidStart = PhysicsJoltEvaluation::Clock::now();
-            (void)Rigid.Step({.DeltaTime = DeltaTime, .SubStepCount = 4});
+            (void)Rigid.Step({.DeltaTime = DeltaTime, .SubStepCount = Config.CollisionSteps});
             const double RigidMs = PhysicsJoltEvaluation::Milliseconds(RigidStart);
             gargantuan::SoftBodyStepConfig SoftConfig;
             SoftConfig.Gravity = glm::vec3(0.0f);
@@ -559,7 +564,9 @@ namespace {
                 {"MaxEstimatedFeedbackImpulse", MaximumFeedbackImpulse},
                 {"TotalContactProjections", TotalContactProjections}, {"FirstContactFrame", FirstContactFrame},
                 {"TotalProjectionsPerRigid", Json::array({TotalProjectionsPerRigid[0], TotalProjectionsPerRigid[1]})},
-                {"DeltaTime", DeltaTime}, {"RigidSubsteps", 4},
+                {"DeltaTime", DeltaTime}, {"CollisionSteps", Config.CollisionSteps},
+                {"RigidSubsteps", Config.CollisionSteps}, {"SoftSubsteps", 1},
+                {"SchedulingScope", "Box rigid uses the requested substeps, then XPBD soft runs once at full frame delta time before feedback publication"},
                 {"RigidShape", "Ball"}, {"RigidRadius", RigidRadius}, {"RigidDensity", RigidDensity},
                 {"RequestedCpuBudget", Config.Workers},
                 {"AllocatedSoftBackgroundWorkers", AllocatedBackgroundWorkers},
