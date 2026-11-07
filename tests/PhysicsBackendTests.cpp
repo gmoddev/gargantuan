@@ -496,6 +496,13 @@ namespace {
 				Live.PeakBuildNativeBytes >= Live.NativeMeshBytes,
 				"one resource shares two native chunks across four live shapes");
 			Check(World.Raycast(Ray).HasHit(), "chunked mesh remains queryable");
+			PhysicsQueryShape Query;
+			Query.Transform=CFrame(glm::vec3(0,.1f,0)); Query.Radius=.5f;
+			const auto Overlap=World.Overlap({Query,{}});
+			Check(Overlap.Succeeded() && Overlap.Bodies==std::vector<PhysicsBodyId>{First,Second},"chunked mesh overlap deduplicates native chunks into two stable body owners");
+			Query.Transform=CFrame(glm::vec3(0,2,0));
+			const auto Cast=World.ShapeCast({Query,{0,-4,0},{}});
+			Check(Cast.Succeeded() && Cast.Candidates.size()==2 && Cast.Candidates.front().Distance>1,"sphere cast against chunked static meshes returns owned finite body hits");
 			Check(World.DestroyBody(First).Succeeded() && World.DestroyBody(Second).Succeeded(),
 				"both chunked mesh consumers retire");
 			const auto Retired = World.GetCollisionResidency();
@@ -1836,6 +1843,38 @@ namespace {
 }
 
 namespace {
+	void TestAdvancedQueryBoundsAndRotation() {
+		using namespace gargantuan;
+		auto World=MakeWorkspace();
+		auto Target=MakeRayPart(World,"RotatedTarget",{5,0,0});
+		for(auto Kind:{PhysicsQueryShapeKind::Box,PhysicsQueryShapeKind::Capsule}) {
+			PhysicsQueryShape Query; Query.Kind=Kind; Query.Size={.2f,12,.2f}; Query.Radius=.2f; Query.Height=12;
+			Check(World->ResolveOverlap(Query).Parts.empty(),"unrotated narrow proxy misses off-axis target");
+			Query.Transform=CFrame::Angles(0,0,1.57079632679f);
+			Check(World->ResolveOverlap(Query).Parts==std::vector<std::shared_ptr<BasePart>>{Target},"oriented box/capsule proxy rotates local points into world axes");
+			Query.Transform.Position={0,-5,0};
+			Check(World->ResolveShapeCast(Query,{0,10,0}).Instance==Target,"oriented box/capsule sweeps hit off-axis target");
+		}
+		Target->Destroy();
+		std::vector<std::shared_ptr<BasePart>> Parts;
+		for(int Index=0;Index<300;++Index) Parts.push_back(MakeRayPart(World,"OverlapBound",{}));
+		auto Expected=Parts;
+		std::ranges::sort(Expected,{},[](const auto &Part){return Part->GetObjectId();}); Expected.resize(256);
+		auto Overlap=World->ResolveOverlap(PhysicsQueryShape{});
+		Check(Overlap.Succeeded() && Overlap.Truncated && Overlap.Parts==Expected,"300-owner overlap returns lowest 256 semantic identities with explicit truncation");
+		for(auto &Part:Parts) Part->Destroy();
+		PhysicsWorld Backend(PhysicsWorldConfig{});
+		PhysicsBodyDesc Description; Description.Anchored=true;
+		std::vector<PhysicsBodyId> Ids;
+		for(std::size_t Index=0;Index<=MaximumRaycastCandidates;++Index) Ids.push_back(Backend.CreateBody(Description));
+		Check(std::ranges::all_of(Ids,[](auto Id){return Id.IsValid();}),"candidate overflow fixture admits 4097 distinct body owners");
+		auto Overflow=Backend.Overlap({PhysicsQueryShape{},{}});
+		Check(!Overflow.Succeeded() && Overflow.Truncated && Overflow.Bodies.empty(),"4097-owner overlap fails closed without arbitrary partial subset");
+		PhysicsQueryShape Shape; Shape.Transform=CFrame(glm::vec3(-5,0,0));
+		auto CastOverflow=Backend.ShapeCast({Shape,{10,0,0},{}});
+		Check(!CastOverflow.Succeeded() && CastOverflow.CandidatesTruncated && CastOverflow.Candidates.empty(),"4097-owner cast fails closed at candidate cap");
+		for(auto Id:Ids) Check(Backend.DestroyBody(Id).Succeeded(),"overflow query fixture retires all native owners");
+	}
 	void TestAdvancedWorldQueries() {
 		using namespace gargantuan;
 		auto Game=std::make_shared<DataModel>();
@@ -1902,6 +1941,7 @@ int main() {
 	}
 	TestNeutralContract();
 	TestAdvancedWorldQueries();
+	TestAdvancedQueryBoundsAndRotation();
 	TestBackendIdentityAndLifecycle();
 	TestAdvancedConstraintBackend();
 	TestBoundedConstraintAdmission();

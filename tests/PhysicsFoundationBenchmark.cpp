@@ -322,7 +322,7 @@ int main(int ArgumentCount, char **Arguments) {
 		if (CaseFilter.empty() || CaseFilter == "dense-contacts")
 			std::cout << RunStepCase("dense-contacts", Quick ? 2 : 30, Quick ? 8 : 120, false).dump() << '\n';
 		if (CaseFilter.empty() || CaseFilter == "weld-chain")
-			std::cout << RunStepCase("weld-chain", Quick ? 2 : 30, Quick ? 8 : 120, true).dump() << '\n';
+			std::cout << RunStepCase("coincident-weld-assembly", Quick ? 2 : 30, Quick ? 8 : 120, true).dump() << '\n';
 		if (CaseFilter.empty() || CaseFilter == "body-churn")
 			std::cout << RunChurnCase(Quick ? 2 : 30).dump() << '\n';
 		if (CaseFilter.empty() || CaseFilter == "group-updates")

@@ -10,7 +10,7 @@ Run `--quick` for a smoke check, then use the default frame counts for evidence.
 | Case | Workload | Required observed behavior |
 | --- | --- | --- |
 | `dense-contacts` | 128 dynamic boxes in two close layers over a floor | Finite published positions, no floor penetration, gravity response, body retirement |
-| `weld-chain` | 32 boxes connected by 31 welds with one anchored endpoint | Finite published positions, endpoint separation, joint retention, body/joint retirement |
+| `coincident-weld-assembly` (`--case=weld-chain`) | 32 noncolliding coincident boxes connected by 31 welds with one anchored endpoint | Finite published positions, endpoint separation below 0.05, joint retention, body/joint retirement |
 | `body-churn` | 30 cycles of 32 dynamic boxes, one step, and destruction | All 32 bodies admitted and retired on every cycle |
 | `group-updates` | 128 alternating group writes and safe-point flushes, each followed by a ray query | Query visibility alternates with the group; a sensor mask gates touch events; bodies retire |
 
@@ -22,6 +22,13 @@ and other process state, so they are only an attribution clue. `AllocationCount`
 is `null`: there is no isolated allocator hook for this workload. The soft-body
 benchmark separately reports worker utilization, queued bytes, solver work, and
 estimated owned storage.
+
+The inherited Weld path uses identity local frames and joins coincident centers;
+it does not capture the initial offset of separated endpoints. This workload
+therefore uses coincident noncolliding endpoints identically on both revisions.
+It is not a spaced chain or contact benchmark. Authored JointConstraint motion
+is covered separately. The `--case=weld-chain` selector is retained for existing
+campaign scripts, while output names the actual scene.
 
 Compare identical source fixtures, compiler settings, build mode, thread
 budget, machine, warmup, and measured frame counts. Preserve raw JSON and exact
