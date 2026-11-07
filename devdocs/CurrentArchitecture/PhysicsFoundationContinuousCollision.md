@@ -54,6 +54,13 @@ published `CFrame`, runtime authored-state transitions, and Luau observation.
 The supervisor's native worker build and test run are required before these
 fixtures can be reported as qualified.
 
+The pinned Box3D solver captures body movement events before its continuous
+pass. The adapter uses those events for bounded identity/order notification
+but reads each moved body's final native transform after the step. Publishing
+the event's earlier transform can show tunneling in WorldRoot despite a correct
+native CCD result. The regression checks the published Part pose, and the fix
+stays within the adapter without modifying the pinned dependency.
+
 No world-level CCD toggle, new collision authority, XPBD coupling, or backend
 replacement is introduced. Later backend comparison should include the
 Engine-owned safe-point and persistence work, deformable-to-rigid feedback
