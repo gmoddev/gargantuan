@@ -298,7 +298,7 @@ namespace {
                 {"ControlledRestarts", Config.Case == "Repeated" ? (Config.Frames - 1) / 45 : 0}};
     }
 
-    Json RunXpbd(const Options &Config, bool EnableFeedback) {
+    Json RunXpbd(const Options &Config, bool EnableFeedback, bool EnableContact) {
         if (Config.Case == "SphereOnCloth")
             return {{"Backend", "XPBD"}, {"Case", Config.Case}, {"Status", "UnsupportedGeometry"},
                     {"Reason", "Current cloth topology is a fixed vertical X/Y plane; horizontal membrane comparison needs a private topology adapter"}};
@@ -377,13 +377,15 @@ namespace {
                 auto State = Rigid.GetBodyState(Id);
                 if (!State) throw std::runtime_error("[Physics:Coupling] Box3D state missing");
                 RigidStates.push_back(*State);
-                SoftConfig.Colliders.push_back({State->Description.Shape, State->Transform});
+                if (EnableContact) SoftConfig.Colliders.push_back({State->Description.Shape, State->Transform});
             }
             const auto SoftStart = PhysicsJoltEvaluation::Clock::now();
             auto Result = Soft.Step(SoftConfig);
             if (Result.CollidersTruncated || Result.BodiesTruncated || Result.VerticesTruncated)
                 throw std::runtime_error("[Physics:Coupling] XPBD step truncated required work");
             const auto Reactions = FeedbackBackend->TakeFeedback();
+            if (EnableContact ? Reactions.size() != Rigids.size() : !Reactions.empty())
+                throw std::runtime_error("[Physics:Coupling] XPBD collider feedback count mismatch");
             const double SoftMs = PhysicsJoltEvaluation::Milliseconds(SoftStart);
             const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
                 [&](const auto &State) { return State.Body == SoftId; });
@@ -476,8 +478,8 @@ namespace {
             Json Feedback = Json::array();
             for (std::size_t RigidIndex = 0; RigidIndex < Rigids.size(); ++RigidIndex) {
                 const auto &State = RigidStates[RigidIndex];
-                if (RigidIndex >= Reactions.size()) throw std::runtime_error("[Physics:Coupling] XPBD reaction mapping missing");
-                const auto &Observed = Reactions[RigidIndex];
+                const PhysicsJoltEvaluation::FeedbackImpulse EmptyReaction{.ColliderIndex = RigidIndex};
+                const auto &Observed = EnableContact ? Reactions[RigidIndex] : EmptyReaction;
                 if (Observed.ColliderIndex != RigidIndex)
                     throw std::runtime_error("[Physics:Coupling] XPBD collider ordinal mismatch");
                 TotalContactProjections += Observed.Contacts;
@@ -548,7 +550,8 @@ namespace {
         }
         Soft.Shutdown();
         return {{"Backend", "XPBD"}, {"Case", Config.Case}, {"Status", "ExperimentalProjectionReaction"},
-                {"FeedbackEnabled", EnableFeedback}, {"Frames", std::move(Frames)},
+                {"ContactEnabled", EnableContact}, {"FeedbackEnabled", EnableFeedback},
+                {"Frames", std::move(Frames)},
                 {"Finite", Finite}, {"MaxPenetration", MaximumPenetration},
                 {"MaxEdgeStretch", MaximumStretch}, {"MaxVolumeError", MaximumVolumeError},
                 {"MaxPinDrift", MaximumPinDrift},
@@ -566,8 +569,9 @@ namespace {
                 {"SoftCallerRole", Config.Workers == 1 ? "SynchronousSolve" : "DispatchAndWait"},
                 {"SoftExecutionMode", Config.Workers == 1 ? "SynchronousReference" : "Jobified"},
                 {"MomentumConservationQualified", false},
-                {"ControlSemantics", EnableFeedback ? "Soft collides with sampled Box rigid and observed reaction is applied" :
-                    "Soft still collides with sampled Box rigid; observed reaction is not applied"},
+                {"ControlSemantics", !EnableContact ? "No soft collider snapshots; no contact projection or feedback" :
+                    (EnableFeedback ? "Soft collides with sampled Box rigid and observed reaction is applied" :
+                     "Soft still collides with sampled Box rigid; observed reaction is not applied")},
                 {"PublicationOrder", "Box rigid step, XPBD soft step against sampled collider, apply observed reaction to Box velocity, then sample; the new rigid position is integrated next frame"},
                 {"MomentumScope", "Rigid linear momentum plus soft position-difference estimate from frame 1; first frame soft estimate is unavailable; damping and external boundary impulses are not integrated"},
                 {"EnergyScope", "Rigid linear plus soft position-difference translational kinetic estimate from frame 1; rigid angular kinetic energy, strain potential and damping work are unmeasured"},
@@ -682,12 +686,17 @@ int main(int ArgumentCount, char **Arguments) {
                 Result["PhysicalQualityQualified"].get<bool>() && Result["ReciprocalRigidResponse"].get<bool>() &&
                 Comparison["RigidMassMatchedToDensity"].get<bool>();
         } else {
-            Result = RunXpbd(Config, true);
+            Result = RunXpbd(Config, true, true);
             if (Result.value("Status", std::string{}) != "UnsupportedGeometry") {
-                const auto Control = RunXpbd(Config, false);
+                const auto Control = RunXpbd(Config, false, true);
                 Result["FeedbackDisabledControl"] = Control;
                 const auto Comparison = CompareRigidResponse(Result, Control, Config);
                 Result["ControlComparison"] = Comparison;
+                if (Config.Case == "RubberPush") {
+                    const auto NoContactControl = RunXpbd(Config, false, false);
+                    Result["ContactDisabledControl"] = NoContactControl;
+                    Result["NoContactControlComparison"] = CompareRigidResponse(Result, NoContactControl, Config);
+                }
                 bool PerRigidContact = Result.contains("TotalProjectionsPerRigid") &&
                     Control.contains("TotalProjectionsPerRigid");
                 for (std::size_t Index = 0; Index < Result["Frames"][0]["Rigids"].size() && PerRigidContact; ++Index)
@@ -711,6 +720,10 @@ int main(int ArgumentCount, char **Arguments) {
                                   {"RubberInvertedTetrahedra", 0},
                                   {"MinimumDirectionalRigidMomentumTransfer", 0.001},
                                   {"MinimumRigidVelocityDifference", 0.01}};
+        Result["QualityQualificationScope"] = "Contact evidence, bounded deformation and reciprocal rigid response only";
+        Result["MomentumConservationStatus"] = "Incomplete: damping and external momentum impulses are not integrated";
+        Result["EnergyConservationStatus"] = "Incomplete: angular kinetic energy, strain potential and damping work are unmeasured";
+        Result["PhysicsEquivalentTimingQualified"] = false;
         Result["Resources"] = PhysicsEvaluation::ResourceDelta(Before, PhysicsEvaluation::CaptureResources());
         std::cout << Result.dump() << '\n';
         return Result.value("QualityQualified", false) ? 0 : 3;
