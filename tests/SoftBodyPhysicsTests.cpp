@@ -277,6 +277,33 @@ namespace {
 		Game->Destroy();
 	}
 
+	void TestRubberPointImpulseThroughWorldRoot() {
+		using namespace gargantuan;
+		auto Game=std::make_shared<DataModel>();
+		auto World=std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		World->SetGravity(0);
+		auto Rubber=std::make_shared<RubberBody>();
+		Rubber->SetResolutionX(4); Rubber->SetResolutionY(4); Rubber->SetResolutionZ(4);
+		Rubber->SetPosition({0,5,0}); Rubber->SetSize({2,2,2}); Rubber->SetParent(World);
+		World->StepPhysics(SoftBodyStepInterval,std::nullopt);
+		const auto Before=World->GetDeformableVertex(Rubber->GetObjectId(),63);
+		Rubber->ApplyImpulseAtPosition({0,0,2},{1,6,1});
+		World->StepPhysics(SoftBodyStepInterval,std::nullopt);
+		const auto After=World->GetDeformableVertex(Rubber->GetObjectId(),63);
+		Check(Before && After && std::isfinite(After->z) && Distance(*Before,*After)>.001f,"WorldRoot rubber point impulse produces observable bounded vertex motion");
+		for(int Cycle=0;Cycle<12;++Cycle) {
+			Rubber->SetEnabled(false); World->StepPhysics(SoftBodyStepInterval,std::nullopt);
+			auto Frozen=World->GetDeformableInspection(Rubber->GetObjectId());
+			Check(Frozen && !Frozen->Enabled && !Frozen->Simulated,"disabled authored rubber remains inspectable without simulation");
+			Rubber->SetEnabled(true); World->StepPhysics(SoftBodyStepInterval,std::nullopt);
+			auto Enabled=World->GetDeformableInspection(Rubber->GetObjectId());
+			Check(Enabled && Enabled->Enabled && Enabled->VertexCount==64,"re-enabled rubber retains bounded authored topology");
+		}
+		const auto Removed=Rubber->GetObjectId(); Rubber->Destroy(); World->StepPhysics(0,std::nullopt);
+		Check(!World->GetDeformableInspection(Removed) && !World->GetDeformableVertex(Removed,63),"destroyed rubber retires inspection and vertex identity");
+		Game->Destroy();
+	}
+
 	void TestIdentityBoundsAndDeterminism() {
 		using namespace gargantuan;
 		SoftBodyWorld World;
@@ -1259,6 +1286,7 @@ int main() {
 		TestMovingAttachmentAndBoundedInspection();
 		TestAttachmentCommitFailureIsAtomic();
 		TestMovingRigidColliderThroughWorldRoot();
+		TestRubberPointImpulseThroughWorldRoot();
 		TestPinnedClothAndRigidCollision();
 		TestRubberRecoveryAndQualityTier();
 		TestJobifiedDeterminismAndLifecycle();
