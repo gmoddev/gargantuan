@@ -60,6 +60,11 @@ collider queries/candidates, frozen bodies, backlog drops, and stale results.
 These are per-world step totals, not a second simulation authority or
 unbounded per-body history.
 
+Force/impulse queues and `StepPhysics` require `MutateDataModel` before any
+queue or simulation change, in addition to Main-domain ownership and liveness.
+Read-only diagnostics require `ReadDataModel`. A read-only script cannot use
+the stepping method to bypass those controls.
+
 The cross-solver boundary remains one-way. `WorldRoot` snapshots up to 4,096
 rigid primitive transforms after the Box3D step, then XPBD consumes those
 immutable snapshots. Cloth and rubber contacts do not apply forces to rigid

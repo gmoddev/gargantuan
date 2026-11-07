@@ -1083,6 +1083,9 @@ namespace gargantuan {
 		double DeltaTime,
 		std::optional<std::vector<std::shared_ptr<Instance>>> Instances
 	) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
+			throw std::runtime_error("[Physics:Authority] Stepping requires MutateDataModel");
+		AssertCanMutate();
 		(void)Instances;
 		runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsUpdate, [&] { ApplyPendingPhysicsChanges(); });
 		StepAccumulator += static_cast<float>(DeltaTime);

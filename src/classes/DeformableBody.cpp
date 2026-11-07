@@ -11,6 +11,8 @@ namespace gargantuan {
 	}
 
 	void DeformableBody::ApplyForce(glm::vec3 Force) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
+			throw std::runtime_error("[Physics:Authority] Force requires MutateDataModel");
 		AssertCanMutate();
 		const auto Candidate = AccumulatedForce + Force;
 		if (!IsFinite(Force) || !IsFinite(Candidate))
@@ -19,6 +21,8 @@ namespace gargantuan {
 	}
 
 	void DeformableBody::ApplyImpulse(glm::vec3 Impulse) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
+			throw std::runtime_error("[Physics:Authority] Impulse requires MutateDataModel");
 		AssertCanMutate();
 		const auto Candidate = AccumulatedImpulse + Impulse;
 		if (!IsFinite(Impulse) || !IsFinite(Candidate))
@@ -27,6 +31,8 @@ namespace gargantuan {
 	}
 
 	void DeformableBody::ApplyImpulseAtPosition(glm::vec3 Impulse, glm::vec3 Position) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
+			throw std::runtime_error("[Physics:Authority] Point impulse requires MutateDataModel");
 		AssertCanMutate();
 		if (!IsFinite(Impulse) || !IsFinite(Position))
 			throw std::invalid_argument("[Physics:SoftBody] ApplyImpulseAtPosition requires finite values");

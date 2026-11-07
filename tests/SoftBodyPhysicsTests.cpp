@@ -309,6 +309,19 @@ namespace {
 			const int Status=Loaded==LUA_OK?lua_pcall(Engine.L,0,0,0):Loaded;
 			if(Status!=LUA_OK) std::cerr << "[Physics:SoftDiagnostics] " << lua_tostring(Engine.L,-1) << '\n';
 			Check(Status==LUA_OK,"gameplay Luau reads bounded immutable deformable diagnostics");
+			const auto DeniedBytecode=Luau::compile(R"(
+				local W=game:GetService("Workspace")
+				local R=W.GameplayRubber
+				assert(not pcall(function() R:ApplyForce(Vector3.new(0,0,1)) end))
+				assert(not pcall(function() R:ApplyImpulse(Vector3.new(0,0,1)) end))
+				assert(not pcall(function() R:ApplyImpulseAtPosition(Vector3.new(0,0,1),Vector3.zero) end))
+				assert(not pcall(function() W:StepPhysics(1/60) end))
+			)");
+			const int DeniedLoaded=luau_load(Engine.L,"soft-authority",DeniedBytecode.data(),DeniedBytecode.size(),0);
+			ScriptSecurityScope ReadOnly({ScriptExecutionDomain::Studio,{ScriptCapability::ReadDataModel}});
+			const int DeniedStatus=DeniedLoaded==LUA_OK?lua_pcall(Engine.L,0,0,0):DeniedLoaded;
+			if(DeniedStatus!=LUA_OK) std::cerr << "[Physics:Authority] " << lua_tostring(Engine.L,-1) << '\n';
+			Check(DeniedStatus==LUA_OK,"read-only Luau cannot queue soft controls or advance authoritative physics");
 		}
 		const auto Before=World->GetDeformableVertex(Rubber->GetObjectId(),63);
 		Rubber->ApplyImpulseAtPosition({0,0,2},{1,6,1});
