@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cstdint>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -86,6 +88,11 @@ namespace {
         if (Config.Iterations > 0) return Config.Iterations;
         if (Config.Case == "Rubber") return 16;
         return Resolution(Config) <= 64 ? 8 : 4;
+    }
+
+    constexpr std::uint64_t HashSeed = 1469598103934665603ULL;
+    std::uint64_t HashCoordinate(std::uint64_t Hash, float Coordinate) {
+        return (Hash ^ std::bit_cast<std::uint32_t>(Coordinate)) * 1099511628211ULL;
     }
 
     struct Quality {
@@ -292,6 +299,7 @@ namespace {
         std::size_t Replacements = 0;
         std::size_t StaleIdRejections = 0;
         bool Finite = true;
+        std::uint64_t FinalStateHash = HashSeed;
         const auto Start = PhysicsJoltEvaluation::Clock::now();
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             if (HasMovingCollider(Config))
@@ -362,8 +370,9 @@ namespace {
             if (Bodies.empty()) ++DisabledFrames;
             const double NativeStepMs = World.Step();
             const auto ExtractionStart = PhysicsJoltEvaluation::Clock::now();
+            std::vector<std::vector<JPH::Vec3>> OwnedFramePositions;
+            OwnedFramePositions.reserve(Bodies.size());
             std::size_t OwnedPositionBytes = 0;
-            double OwnedPositionChecksum = 0.0;
             for (auto Body : Bodies) {
                 JPH::BodyLockRead Lock(World.World.GetBodyLockInterface(), Body);
                 if (!Lock.Succeeded()) throw std::runtime_error("[Physics:SoftEvaluation] Jolt extraction lock failed");
@@ -372,9 +381,17 @@ namespace {
                 OwnedPositions.reserve(Motion->GetVertices().size());
                 for (const auto &Vertex : Motion->GetVertices()) OwnedPositions.push_back(Vertex.mPosition);
                 OwnedPositionBytes += OwnedPositions.size() * sizeof(JPH::Vec3);
-                if (!OwnedPositions.empty()) OwnedPositionChecksum += OwnedPositions.back().GetY();
+                OwnedFramePositions.push_back(std::move(OwnedPositions));
             }
             const double OwnedExtractionMs = PhysicsJoltEvaluation::Milliseconds(ExtractionStart);
+            std::uint64_t FrameHash = HashSeed;
+            for (const auto &Positions : OwnedFramePositions)
+                for (const auto &Position : Positions) {
+                    FrameHash = HashCoordinate(FrameHash, Position.GetX());
+                    FrameHash = HashCoordinate(FrameHash, Position.GetY());
+                    FrameHash = HashCoordinate(FrameHash, Position.GetZ());
+                }
+            FinalStateHash = FrameHash;
             const double StepMs = NativeStepMs + OwnedExtractionMs;
             Json BodyQuality = Json::array();
             for (auto Body : Bodies) {
@@ -392,7 +409,7 @@ namespace {
             Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs},
                               {"NativeStepMs", NativeStepMs}, {"OwnedExtractionMs", OwnedExtractionMs},
                               {"OwnedPositionBytes", OwnedPositionBytes},
-                              {"OwnedPositionChecksum", OwnedPositionChecksum},
+                              {"StateHash", std::to_string(FrameHash)},
                               {"Bodies", std::move(BodyQuality)}});
         }
         return {{"Backend", "Jolt"}, {"Case", Config.Case}, {"Frames", std::move(Frames)},
@@ -404,6 +421,7 @@ namespace {
                 {"TimingScope", "NativeStepPlusOwnedPositionCopy; quality analysis excluded"},
                 {"SolverIterations", Iterations(Config)}, {"ParticleMass", ParticleMass(Config)},
                 {"Track", Config.Track},
+                {"FinalStateHash", std::to_string(FinalStateHash)},
                 {"SoftVerticesPerBody", Shared->mVertices.size()}, {"Bodies", Count},
                 {"TetrahedraPerCell", Rubber ? 6 : 0},
                 {"DisabledFrames", DisabledFrames}, {"Replacements", Replacements},
@@ -452,6 +470,7 @@ namespace {
         std::size_t Replacements = 0;
         std::size_t StaleIdRejections = 0;
         bool Finite = true;
+        std::uint64_t FinalStateHash = HashSeed;
         const auto Start = PhysicsJoltEvaluation::Clock::now();
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             if (Config.Case == "Attachments" && Frame == Config.Frames / 2) {
@@ -494,11 +513,18 @@ namespace {
             const auto StepStart = PhysicsJoltEvaluation::Clock::now();
             auto Result = World.Step(Step);
             const double StepMs = PhysicsJoltEvaluation::Milliseconds(StepStart);
+            std::uint64_t FrameHash = HashSeed;
             Json BodyQuality = Json::array();
             for (std::size_t Index = 0; Index < Bodies.size(); ++Index) {
                 const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
                     [&](const auto &State) { return State.Body == Bodies[Index]; });
-                if (Found == Result.States.end()) throw std::runtime_error("[Physics:SoftEvaluation] XPBD state missing");
+                if (Found == Result.States.end() || !Found->Positions)
+                    throw std::runtime_error("[Physics:SoftEvaluation] XPBD state missing");
+                for (const auto &Position : *Found->Positions) {
+                    FrameHash = HashCoordinate(FrameHash, Position.x);
+                    FrameHash = HashCoordinate(FrameHash, Position.y);
+                    FrameHash = HashCoordinate(FrameHash, Position.z);
+                }
                 const auto QualityValue = ObserveXpbd(*Found, Definitions[Index],
                     HasMovingCollider(Config), ColliderZ(Config, Frame));
                 MaximumStretch = std::max(MaximumStretch, QualityValue.MaxEdgeStretch);
@@ -509,7 +535,9 @@ namespace {
                 Finite &= QualityValue.Finite;
                 BodyQuality.push_back(QualityJson(QualityValue));
             }
+            FinalStateHash = FrameHash;
             Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs}, {"Bodies", std::move(BodyQuality)},
+                              {"StateHash", std::to_string(FrameHash)},
                               {"WorkerCount", Result.Profile.WorkerCount},
                               {"CollisionNanoseconds", Result.Profile.CollisionNanoseconds},
                               {"ConstraintNanoseconds", Result.Profile.ConstraintNanoseconds}});
@@ -524,6 +552,7 @@ namespace {
                 {"TimingScope", "ProductionSoftBodyWorldStep including owned positions and indices; quality analysis excluded"},
                 {"SolverIterations", "Automatic"},
                 {"ParticleMass", ParticleMass(Config)}, {"Track", Config.Track},
+                {"FinalStateHash", std::to_string(FinalStateHash)},
                 {"Bodies", Count}, {"TetrahedraPerCell", Rubber ? 5 : 0},
                 {"DisabledFrames", DisabledFrames}, {"Replacements", Replacements},
                 {"StaleIdRejections", StaleIdRejections},
