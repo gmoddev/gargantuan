@@ -470,7 +470,9 @@ namespace gargantuan {
 				if (!Record) return InvalidBody();
 				if (!IsFinite(Impulse))
 					return {PhysicsOperationStatus::InvalidDescription, "Physics impulse is not finite"};
-				if (Record->Description.Anchored || Record->Description.Kinematic)
+				// Preserve the original center-impulse contract: static bodies accept
+				// a finite impulse as a no-op and invalidate the static-step cache.
+				if (Record->Description.Kinematic)
 					return {PhysicsOperationStatus::InvalidDescription, "Impulse requires a dynamic body"};
 				StaticWorldDirty = true;
 				b3Body_ApplyLinearImpulseToCenter(Record->Body, Box3DConversions::ToBox3(Impulse), true);
@@ -933,7 +935,9 @@ namespace gargantuan {
 					const auto &Move = BodyEvents.moveEvents[Index];
 					auto *Record = static_cast<BodyRecord *>(Move.userData);
 					if (!Record || FindBody(Record->Id) != Record) continue;
-					Record->Description.Transform = Box3DConversions::FromBox3(Move.transform);
+					// The pinned backend captures move events before its continuous pass.
+					// Publish final owned body state, including any CCD correction.
+					Record->Description.Transform = Box3DConversions::FromBox3(b3Body_GetTransform(Record->Body));
 					Result.Motions.push_back({Record->Id, Record->Description.Transform});
 				}
 

@@ -52,6 +52,10 @@ an impulse or replayed for subsequent steps. Dynamic bodies accept forces and
 impulses. Dynamic and kinematic bodies accept velocity writes. Sleep control
 requires a moving body.
 
+For compatibility, the original center `ApplyImpulse` backend operation accepts
+a finite static-body request as a no-op and invalidates the static-step cache.
+New angular/point impulse and force/torque operations require dynamic bodies.
+
 `GetLinearVelocity`, `GetAngularVelocity`, `GetMass`, `GetLocalInertia`, and
 `GetAwake` read the last main-thread body state publication. Local inertia is
 the diagonal of the body-local tensor in engine units; this intentionally does

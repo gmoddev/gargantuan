@@ -22,10 +22,10 @@ local function MakeJoint(Name, Kind, PartA, PartB, FrameA, FrameB)
 	local Joint = Instance.new("JointConstraint")
 	Joint.Name = Name
 	Joint.JointType = Kind
+	Joint.Parent = Workspace
 	Joint.Attachment0 = AttachmentA
 	Joint.Attachment1 = AttachmentB
 	Joint.CollideConnected = false
-	Joint.Parent = Workspace
 	return Joint
 end
 

@@ -1038,10 +1038,10 @@ namespace {
 				local Joint = Instance.new("JointConstraint")
 				Joint.Name = Name
 				Joint.JointType = Kind
+				Joint.Parent = Workspace
 				Joint.Attachment0 = AttachmentA
 				Joint.Attachment1 = AttachmentB
 				Joint.CollideConnected = false
-				Joint.Parent = Workspace
 				return Joint
 			end
 			local Frame = MakePart("DoorFrame", Vector3.new(0, 0, 0), true)
@@ -1082,6 +1082,7 @@ namespace {
 				<< '\n';
 		Check(Status == LUA_OK, "normal gameplay Luau authors three live constraint mechanisms");
 		if (Status != LUA_OK) return;
+		WorkspaceValue->StepPhysics(0.0, std::nullopt);
 		auto Door = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstDescendant("DoorBody"));
 		auto Slide = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstDescendant("SlideBody"));
 		auto Weight = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstDescendant("SpringWeight"));
@@ -1161,6 +1162,7 @@ namespace {
 			State->Mass > 0.0f && State->LocalInertia.x > 0.0f,
 			"state exposes velocity, mass, and local inertia without native handles");
 		Check(World.ApplyAngularImpulse(Dynamic, {0.0f, 2.0f, 0.0f}).Succeeded(), "angular impulse is applied");
+		Check(World.GetBodyState(Dynamic)->AngularVelocity.y > 1.0f,"angular impulse changes angular velocity before an opposing point impulse");
 		Check(World.ApplyImpulseAtPosition(Dynamic, {0.0f, 0.0f, 5.0f}, {1.0f, 0.0f, 0.0f}).Succeeded(),
 			"off-center impulse is applied");
 		Check(World.ApplyForce(Dynamic, {4.0f, 0.0f, 0.0f}).Succeeded() &&
@@ -1168,7 +1170,7 @@ namespace {
 			"force and torque are accepted for the next solver step");
 		(void)World.Step({});
 		State = World.GetBodyState(Dynamic);
-		Check(State && State->LinearVelocity.x > 2.0f && State->AngularVelocity.y > 1.0f,
+		Check(State && State->LinearVelocity.x > 2.0f && State->LinearVelocity.z > 0.0f && State->AngularVelocity.z > 0.0f,
 			"impulses and step force change velocity");
 		Check(World.SetAwake(Dynamic, false).Succeeded() && !World.GetBodyState(Dynamic)->Awake,
 			"sleep request is observable");
