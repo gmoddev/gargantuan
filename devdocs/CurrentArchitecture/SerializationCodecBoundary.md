@@ -94,6 +94,11 @@ Higher-level formats retain their format-specific entry points:
 - `EditorHost::HandleRequest`, whose transport contract is bounded UTF-8 JSON
   text rather than a JSON-library type.
 
+Project Instance JSON now writes version 5 document-local reference IDs while
+continuing to read versions 0 through 4. Its exact identity, reference,
+failure, and package-partition rules are in
+[Project Instance persistence v5](ProjectPersistenceV5.md).
+
 The private `JsonCodec` owns JSON parsing, writing, object-ID and `WireValue`
 DOM conversion, parsed-tree limits, and nlohmann exception confinement. There is
 no universal Gargantuan JSON value type.

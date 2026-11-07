@@ -16,6 +16,15 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumKinematicCollisionPlanes = 32;
 	inline constexpr std::size_t MaximumKinematicMotionIterations = 5;
 	inline constexpr std::size_t MaximumRaycastFilterBodies = 4096;
+	inline constexpr std::uint16_t MaximumPhysicsCollisionMask = 0xffff;
+	inline constexpr std::uint16_t MaximumPhysicsCollisionGroup = 15;
+	[[nodiscard]] inline constexpr bool PhysicsCanCollide(
+		std::uint16_t GroupA, std::uint16_t MaskA, std::uint16_t GroupB, std::uint16_t MaskB
+	) {
+		return GroupA <= MaximumPhysicsCollisionGroup && GroupB <= MaximumPhysicsCollisionGroup &&
+			(MaskA & (std::uint16_t{1} << GroupB)) != 0 &&
+			(MaskB & (std::uint16_t{1} << GroupA)) != 0;
+	}
 	inline constexpr std::size_t MaximumRaycastCandidates = 4096;
 	inline constexpr float MaximumRaycastDistance = 100'000.0f;
 	inline constexpr float MinimumRaycastDistance = 0.0001f;
@@ -25,6 +34,7 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumPhysicsCollisionCanonicalBytes = 64 * 1024 * 1024;
 	inline constexpr std::size_t MaximumPhysicsCollisionNativeBytes = 64 * 1024 * 1024;
 	inline constexpr std::size_t MaximumPhysicsCollisionResourceIdBytes = 128;
+	inline constexpr std::size_t MaximumPhysicsConstraints = 4096;
 
 	struct PhysicsBodyId {
 		std::uint32_t Slot = 0;
@@ -73,10 +83,24 @@ namespace gargantuan {
 		bool CanCollide = true;
 		bool CanTouch = true;
 		float Density = 0.7f;
+		bool Kinematic = false;
+		std::uint16_t CollisionGroup = 0;
+		std::uint16_t CollisionMask = MaximumPhysicsCollisionMask;
+		float LinearDamping = 0.0f;
+		float AngularDamping = 0.0f;
+		float GravityScale = 1.0f;
+		bool SleepEnabled = true;
+		// Opt into swept collision against moving non-bullet rigid bodies.
+		// Static-body CCD remains a world policy independent of this flag.
+		bool MovingBodyCCD = false;
 	};
 
 	enum class PhysicsConstraintKind : std::uint8_t {
 		Weld,
+		BallSocket,
+		Hinge,
+		Slider,
+		Distance,
 	};
 
 	struct PhysicsConstraintDesc {
@@ -84,6 +108,17 @@ namespace gargantuan {
 		PhysicsBodyId BodyA{};
 		PhysicsBodyId BodyB{};
 		bool CollideConnected = true;
+		CFrame LocalFrameA{};
+		CFrame LocalFrameB{};
+		bool EnableLimit = false;
+		float LowerLimit = 0.0f;
+		float UpperLimit = 0.0f;
+		bool EnableMotor = false;
+		float MotorSpeed = 0.0f;
+		float MaximumMotorForce = 0.0f;
+		float RestLength = 1.0f;
+		float SpringFrequency = 0.0f;
+		float SpringDamping = 0.7f;
 	};
 
 	struct PhysicsWorldConfig {
@@ -94,6 +129,7 @@ namespace gargantuan {
 		std::size_t CollisionCanonicalByteLimit = MaximumPhysicsCollisionCanonicalBytes;
 		std::size_t CollisionNativeByteLimit = MaximumPhysicsCollisionNativeBytes;
 		std::size_t CollisionMeshShapeLimit = MaximumPhysicsCollisionMeshShapes;
+		std::size_t ConstraintLimit = MaximumPhysicsConstraints;
 	};
 
 	struct PhysicsStepConfig {
@@ -104,6 +140,10 @@ namespace gargantuan {
 	struct PhysicsBodyState {
 		CFrame Transform{};
 		glm::vec3 LinearVelocity{0.0f};
+		glm::vec3 AngularVelocity{0.0f};
+		float Mass = 0.0f;
+		glm::vec3 LocalInertia{0.0f};
+		bool Awake = false;
 		PhysicsBodyDesc Description{};
 	};
 
@@ -155,6 +195,8 @@ namespace gargantuan {
 	struct PhysicsQueryFilter {
 		PhysicsQueryFilterType Type = PhysicsQueryFilterType::Exclude;
 		std::vector<PhysicsBodyId> Bodies;
+		std::uint16_t CollisionGroup = 0;
+		std::uint16_t CollisionMask = MaximumPhysicsCollisionMask;
 	};
 
 	struct PhysicsRaycastRequest {
@@ -185,6 +227,7 @@ namespace gargantuan {
 		InvalidId,
 		InvalidDescription,
 		BackendFailure,
+		ResourceLimit,
 	};
 
 	struct PhysicsOperationResult {
@@ -192,6 +235,13 @@ namespace gargantuan {
 		std::string Message;
 
 		[[nodiscard]] bool Succeeded() const { return Status == PhysicsOperationStatus::Success; }
+	};
+
+	struct PhysicsConstraintCreateResult {
+		PhysicsConstraintId Constraint{};
+		PhysicsOperationResult Operation{};
+
+		[[nodiscard]] bool Succeeded() const { return Operation.Succeeded() && Constraint.IsValid(); }
 	};
 
 	struct PhysicsKinematicMotionResult {

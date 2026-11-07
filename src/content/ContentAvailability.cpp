@@ -5,7 +5,9 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -342,12 +344,13 @@ namespace gargantuan {
 				throw std::runtime_error("manifest shape or version is invalid");
 			auto Project = ProjectId::Parse(Parsed["ProjectId"].get_ref<const std::string &>());
 			const auto PackageVersion = Parsed["PackageVersion"].get<std::uint64_t>();
-			const auto SchemaVersion = Parsed["InstanceSchemaVersion"].get<std::uint32_t>();
+			const auto SchemaVersion = Parsed["InstanceSchemaVersion"].get<std::uint64_t>();
 			const auto &WireEntries = Parsed["Entries"];
-			if (!Project || PackageVersion == 0 || SchemaVersion != PackageContentInstanceSchemaVersion ||
+			if (!Project || PackageVersion == 0 ||
+				(SchemaVersion != 4 && SchemaVersion != PackageContentInstanceSchemaVersion) ||
 				WireEntries.size() > MaximumPackageContentUnits)
 				throw std::runtime_error("manifest identity or entry count is invalid");
-			PackageContentManifest Result{{*Project, PackageVersion}, SchemaVersion, {}};
+			PackageContentManifest Result{{*Project, PackageVersion}, static_cast<std::uint32_t>(SchemaVersion), {}};
 			Result.Entries.reserve(WireEntries.size());
 			std::unordered_set<std::string> Seen;
 			std::size_t EdgeCount = 0;
@@ -807,6 +810,7 @@ namespace gargantuan {
 		std::shared_ptr<DataModel> World;
 		std::shared_ptr<Workspace> WorkspaceValue;
 		ContentAvailabilityConfiguration Configuration;
+		std::shared_ptr<const RuntimeSchemaRegistry> SchemaSnapshot;
 		std::function<void(std::string, std::string)> Diagnostic;
 		JobSystem Jobs;
 		std::shared_ptr<std::atomic_bool> Cancelled = std::make_shared<std::atomic_bool>(false);
@@ -833,9 +837,11 @@ namespace gargantuan {
 			std::shared_ptr<DataModel> WorldValue,
 			std::shared_ptr<Workspace> WorkspaceInput,
 			ContentAvailabilityConfiguration Input,
+			std::shared_ptr<const RuntimeSchemaRegistry> CapturedSchema,
 			std::function<void(std::string, std::string)> DiagnosticInput
 		) : World(std::move(WorldValue)), WorkspaceValue(std::move(WorkspaceInput)),
-			Configuration(std::move(Input)), Diagnostic(std::move(DiagnosticInput)), Jobs(Configuration.Limits.WorkerCount) {}
+			Configuration(std::move(Input)), SchemaSnapshot(std::move(CapturedSchema)),
+			Diagnostic(std::move(DiagnosticInput)), Jobs(Configuration.Limits.WorkerCount) {}
 
 		void Report(std::string Code, std::string Message) {
 			if (Diagnostic) Diagnostic(std::move(Code), std::move(Message));
@@ -956,10 +962,12 @@ namespace gargantuan {
 			const auto ExpectedDigest = Manifest->Entries[Index].Digest;
 			const auto ExpectedObjects = Manifest->Entries[Index].ObjectCount;
 			const auto ExpectedBytes = static_cast<std::size_t>(Manifest->Entries[Index].CompressedBytes);
+			auto CapturedSchema = SchemaSnapshot;
 			ReservedCompletionBytes += ExpectedBytes;
 			auto RequestContext = Context();
 			RequestContext.Cancelled = RecordValue.RequestCancelled;
-			Jobs.Submit([this, Provider = std::move(Provider), Identity = std::move(Identity), ExpectedDigest, ExpectedBytes, ExpectedObjects, RequestContext] {
+			Jobs.Submit([this, Provider = std::move(Provider), Identity = std::move(Identity), ExpectedDigest,
+				ExpectedBytes, ExpectedObjects, RequestContext, CapturedSchema = std::move(CapturedSchema)] {
 				Completion Result;
 				Result.Kind = CompletionKind::Content;
 				Result.Generation = RequestContext.SessionGeneration;
@@ -984,7 +992,8 @@ namespace gargantuan {
 					Prepared.Bytes = Payload->Bytes;
 					Prepared.Times.VerificationFinished = AvailabilityClock::now();
 					Prepared.Times.PreparationStarted = Prepared.Times.VerificationFinished;
-					auto Document = InstanceSerialization::Internal::PrepareDetachedJson(*Payload->Bytes, ExpectedObjects);
+					auto Document = InstanceSerialization::Internal::PrepareDetachedJson(
+						*Payload->Bytes, ExpectedObjects, CapturedSchema);
 					Prepared.Times.WorkerPreparationFinished = AvailabilityClock::now();
 					FinishPreparation(Prepared, std::move(Document), RequestContext, Result);
 				}
@@ -1018,9 +1027,11 @@ namespace gargantuan {
 			auto Bytes = RecordValue.CachedPayload;
 			auto Key = Manifest->Entries[Index].Key;
 			const auto ExpectedObjects = Manifest->Entries[Index].ObjectCount;
+			auto CapturedSchema = SchemaSnapshot;
 			auto RequestContext = Context();
 			RequestContext.Cancelled = RecordValue.RequestCancelled;
-			Jobs.Submit([this, Bytes = std::move(Bytes), Key = std::move(Key), ExpectedBytes, ExpectedObjects, RequestContext] {
+			Jobs.Submit([this, Bytes = std::move(Bytes), Key = std::move(Key), ExpectedBytes,
+				ExpectedObjects, RequestContext, CapturedSchema = std::move(CapturedSchema)] {
 				Completion Result;
 				Result.Kind = CompletionKind::Content;
 				Result.Generation = RequestContext.SessionGeneration;
@@ -1035,7 +1046,8 @@ namespace gargantuan {
 				Prepared.Times.BytesReceived = Prepared.Times.ProviderStarted;
 				Prepared.Times.VerificationFinished = Prepared.Times.BytesReceived;
 				Prepared.Times.PreparationStarted = Prepared.Times.VerificationFinished;
-				auto Document = InstanceSerialization::Internal::PrepareDetachedJson(*Bytes, ExpectedObjects);
+				auto Document = InstanceSerialization::Internal::PrepareDetachedJson(
+					*Bytes, ExpectedObjects, CapturedSchema);
 				Prepared.Times.WorkerPreparationFinished = AvailabilityClock::now();
 				FinishPreparation(Prepared, std::move(Document), RequestContext, Result);
 				std::scoped_lock Lock(CompletionMutex);
@@ -1174,6 +1186,7 @@ namespace gargantuan {
 		ContentAvailabilityConfiguration Configuration,
 		std::function<void(std::string, std::string)> Diagnostic
 	) {
+		AssertAuthoritativeMutation("ContentAvailabilityService schema snapshot");
 		if (!World || !WorkspaceValue || WorkspaceValue->GetDataModel() != World || !Configuration.Provider ||
 			!Configuration.Package.Project.IsValid() || Configuration.Package.PackageVersion == 0 ||
 			!Configuration.ManifestDigest.IsValid() || Configuration.Limits.WorkerCount == 0 ||
@@ -1204,7 +1217,8 @@ namespace gargantuan {
 			Configuration.Limits.RequestTimeout > std::chrono::seconds(10))
 			throw std::invalid_argument("Content availability configuration is invalid");
 		State = std::make_unique<Impl>(
-			std::move(World), std::move(WorkspaceValue), std::move(Configuration), std::move(Diagnostic)
+			std::move(World), std::move(WorkspaceValue), std::move(Configuration),
+			GetRuntimeSchemaLifecycle().GetActiveRegistry(), std::move(Diagnostic)
 		);
 		auto Started = State->Configuration.Provider->Start(State->Context());
 		if (!Started) throw std::runtime_error("Content provider could not start: " + Started.error().Message);

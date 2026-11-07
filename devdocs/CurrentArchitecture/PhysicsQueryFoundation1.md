@@ -1,7 +1,7 @@
 ---
 status: current
 owner: physics
-last_verified: 2026-08-26
+last_verified: 2026-11-07
 related_code:
   - assets/classes/WorldRoot.luau
   - include/gargantuan/datatypes/RaycastParams.hpp
@@ -64,6 +64,45 @@ clean gameplay contract.
 
 - `FilterType: Enum.RaycastFilterType`, default `Exclude`;
 - `FilterDescendantsInstances: { Instance }`, default empty.
+- `CollisionGroup: number`, integer 0 through 15, default 0;
+- `CollisionMask: number`, integer 0 through 65535, default 65535.
+
+Group compatibility is the shared neutral `PhysicsCanCollide` mutual bit
+predicate used by bodies, sensors, rays, casts and overlaps. There is no
+second query-specific compatibility table.
+
+## Shape casts and overlaps
+
+`WorldRoot` also exposes `SphereCast(Origin, Radius, Direction, Params?)`,
+`CapsuleCast(Transform, Radius, Height, Direction, Params?)`, and
+`BoxCast(Transform, Size, Direction, Params?)`. They return the same immutable
+semantic hit shape as `Raycast`. Capsule height includes its caps and its
+axis is local Y. Casts translate a fixed orientation; they do not sweep
+rotation. Initial overlap is ignored by native shape casting; use an overlap
+query for initial penetration. These synchronous queries do not advance physics.
+
+`GetPartsInSphere(Origin, Radius, Params?, MaxResults?)`,
+`GetPartsInCapsule(Transform, Radius, Height, Params?, MaxResults?)` and
+`GetPartsInBox(Transform, Size, Params?, MaxResults?)` return an immutable
+`{ Parts: {BasePart}, Truncated: boolean }`. MaxResults defaults to 256 and
+must be an integer in 1..256. Results deduplicate chunked shapes and sort by
+live semantic ObjectId before truncation; insertion and broadphase order do
+not choose the subset. Sensors (`CanCollide=false`) are excluded consistently
+with rays. Pending edits flush at the existing WorldRoot safe point.
+
+The neutral shape request contains no native handles. Box3D uses its public
+convex proxy cast/overlap API with eight points for boxes, one for spheres,
+and two for capsules. Shapes require finite rigid transforms, positive box
+dimensions/radii no larger than 10,000 units, and capsule height at least
+twice its radius and at most 10,000. Existing ray direction/distance,
+descendant traversal and filter body limits also apply. Backend collection is
+bounded to 4,096 unique bodies; exceeding it fails closed with BackendFailure
+and no partial hit set. This differs from successful public result truncation.
+Temporary vectors grow only to the candidate cap. Both APIs require
+ReadDataModel and resolve generation-safe IDs to live same-world owners.
+
+The expansion implementation and fixtures require the campaign's native
+qualification receipts before platform behavior is considered qualified.
 
 The assignment copies and deduplicates a contiguous array of at most 128 live
 Instance roots. It stores weak references, so a params value does not keep a
@@ -213,12 +252,10 @@ walk; filters with one root/body remain sub-microsecond to prepare.
 
 ## Extension path
 
-Foundation 2 can add `RaycastAll`, sphere/block casts, and sphere/box overlaps
-by adding small neutral request/result types beside `PhysicsRaycastRequest`.
-They should reuse `PhysicsQueryFilter`, the `WorldRoot` filter builder, neutral
-slot/generation identities, semantic owner resolution, finite coordinate and
-candidate bounds, and Main-domain safe point. Public APIs should be added only
-when implemented; there are no no-op placeholders or generic callback DSL.
+Sphere/capsule/box casts and overlaps now reuse the filter builder, neutral
+identities, semantic owner resolution and Main safe point described above.
+`RaycastAll`, rotational sweeps and soft-body intersections remain future work;
+there are no public no-op placeholders or generic callback DSL.
 
 Other priorities are a deliberate `CanQuery`/sensor participation decision,
 soft-body query semantics without rigid duplication, richer per-collider

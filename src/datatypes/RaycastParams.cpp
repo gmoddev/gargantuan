@@ -91,6 +91,20 @@ namespace gargantuan {
 				 }
 			 )},
 			{"FilterDescendantsInstances", Property::fromReadWriteMember<&RaycastParams::FilterDescendantsInstances>()},
+			{"CollisionGroup",
+			 Property::fromReadWrite<int>(
+				 [](RaycastParams *Params) { return Params->CollisionGroup; },
+				 [](RaycastParams *Params, int Value) {
+					 if (Value < 0 || Value > 15) throw std::invalid_argument("[Physics:Query] CollisionGroup must be 0..15");
+					 Params->CollisionGroup = Value;
+				 })},
+			{"CollisionMask",
+			 Property::fromReadWrite<int>(
+				 [](RaycastParams *Params) { return Params->CollisionMask; },
+				 [](RaycastParams *Params, int Value) {
+					 if (Value < 0 || Value > 65535) throw std::invalid_argument("[Physics:Query] CollisionMask must be 0..65535");
+					 Params->CollisionMask = Value;
+				 })},
 		}
 	);
 }

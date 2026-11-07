@@ -50,12 +50,60 @@ namespace gargantuan {
 			return std::abs(glm::dot(glm::cross(Rotation[0], Rotation[1]), Rotation[2]) - 1.0f) <= Tolerance;
 		}
 
+		[[nodiscard]] bool IsValidConstraintDescription(const PhysicsConstraintDesc &Description) {
+			if (!IsRigidRotation(Description.LocalFrameA) || !IsRigidRotation(Description.LocalFrameB) ||
+				glm::length(Description.LocalFrameA.Position) > MaximumMeshCoordinate ||
+				glm::length(Description.LocalFrameB.Position) > MaximumMeshCoordinate ||
+				!std::isfinite(Description.LowerLimit) || !std::isfinite(Description.UpperLimit) ||
+				!std::isfinite(Description.MotorSpeed) || !std::isfinite(Description.MaximumMotorForce) ||
+				!std::isfinite(Description.RestLength) || !std::isfinite(Description.SpringFrequency) ||
+				!std::isfinite(Description.SpringDamping) || Description.MaximumMotorForce < 0.0f ||
+				Description.SpringFrequency < 0.0f || Description.SpringFrequency > 15.0f ||
+				Description.SpringDamping < 0.0f || Description.SpringDamping > 2.0f) return false;
+			// Box3D checks limit ordering even when the limit is disabled.
+			if (Description.LowerLimit > Description.UpperLimit) return false;
+			switch (Description.Kind) {
+			case PhysicsConstraintKind::Weld:
+			case PhysicsConstraintKind::BallSocket:
+				return !Description.EnableLimit && !Description.EnableMotor &&
+					Description.MotorSpeed == 0.0f && Description.MaximumMotorForce == 0.0f &&
+					Description.SpringFrequency == 0.0f;
+			case PhysicsConstraintKind::Hinge:
+				return Description.SpringFrequency == 0.0f &&
+					(!Description.EnableLimit || (Description.LowerLimit >= -3.1f && Description.UpperLimit <= 3.1f)) &&
+					(!Description.EnableMotor || Description.MaximumMotorForce > 0.0f);
+			case PhysicsConstraintKind::Slider:
+				return Description.SpringFrequency == 0.0f &&
+					(!Description.EnableLimit || (Description.LowerLimit >= -MaximumMeshCoordinate &&
+						Description.UpperLimit <= MaximumMeshCoordinate)) &&
+					(!Description.EnableMotor || Description.MaximumMotorForce > 0.0f);
+			case PhysicsConstraintKind::Distance:
+				return !Description.EnableMotor && Description.MotorSpeed == 0.0f &&
+					Description.MaximumMotorForce == 0.0f && Description.RestLength >= 0.001f &&
+					Description.RestLength <= MaximumMeshCoordinate &&
+					(!Description.EnableLimit || (Description.SpringFrequency > 0.0f &&
+						Description.LowerLimit >= 0.001f && Description.UpperLimit <= MaximumMeshCoordinate));
+			}
+			return false;
+		}
+
+		[[nodiscard]] b3Transform ToLocalFrame(const CFrame &Frame) {
+			return {Box3DConversions::ToBox3(Frame.Position), Box3DConversions::ToBox3(Frame.ToQuaternion())};
+		}
+
 		[[nodiscard]] bool IsValidBodyDescription(const PhysicsBodyDesc &Description) {
 			if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh &&
-				(!Description.Anchored || !Description.Shape.Mesh ||
+				(!Description.Anchored || Description.Kinematic || !Description.Shape.Mesh ||
 				Description.Shape.Size.x < 0.01f || Description.Shape.Size.y < 0.01f ||
 				Description.Shape.Size.z < 0.01f || !IsRigidRotation(Description.Transform))) return false;
-			return IsFinite(Description.Transform) && IsFinite(Description.Shape.Size) &&
+			return !(Description.Anchored && Description.Kinematic) &&
+				(!Description.MovingBodyCCD || (!Description.Anchored && !Description.Kinematic && Description.CanCollide &&
+					Description.Shape.Kind != PhysicsShapeKind::StaticTriangleMesh)) &&
+				Description.CollisionGroup <= MaximumPhysicsCollisionGroup &&
+				std::isfinite(Description.LinearDamping) && Description.LinearDamping >= 0.0f && Description.LinearDamping <= 100.0f &&
+				std::isfinite(Description.AngularDamping) && Description.AngularDamping >= 0.0f && Description.AngularDamping <= 100.0f &&
+				std::isfinite(Description.GravityScale) && Description.GravityScale >= 0.0f && Description.GravityScale <= 100.0f &&
+				IsFinite(Description.Transform) && IsFinite(Description.Shape.Size) &&
 				Description.Shape.Size.x > 0.0f && Description.Shape.Size.y > 0.0f &&
 				Description.Shape.Size.z > 0.0f && std::isfinite(Description.Density) && Description.Density >= 0.0f;
 		}
@@ -114,6 +162,7 @@ namespace gargantuan {
 				CollisionCanonicalByteLimit = std::min(Config.CollisionCanonicalByteLimit, MaximumPhysicsCollisionCanonicalBytes);
 				CollisionNativeByteLimit = std::min(Config.CollisionNativeByteLimit, MaximumPhysicsCollisionNativeBytes);
 				CollisionMeshShapeLimit = std::min(Config.CollisionMeshShapeLimit, MaximumPhysicsCollisionMeshShapes);
+				ConstraintLimit = std::min(Config.ConstraintLimit, MaximumPhysicsConstraints);
 				if (!IsFinite(Config.Gravity)) return;
 				b3WorldDef Definition = b3DefaultWorldDef();
 				Definition.enableSleep = Config.EnableSleep;
@@ -169,7 +218,13 @@ namespace gargantuan {
 				b3BodyDef BodyDefinition = b3DefaultBodyDef();
 				BodyDefinition.position = Box3DConversions::ToBox3(Description.Transform.Position);
 				BodyDefinition.rotation = Box3DConversions::ToBox3(Description.Transform.ToQuaternion());
-				BodyDefinition.type = Description.Anchored ? b3_staticBody : b3_dynamicBody;
+				BodyDefinition.type = Description.Anchored ? b3_staticBody :
+					Description.Kinematic ? b3_kinematicBody : b3_dynamicBody;
+				BodyDefinition.linearDamping = Description.LinearDamping;
+				BodyDefinition.angularDamping = Description.AngularDamping;
+				BodyDefinition.gravityScale = Description.GravityScale;
+				BodyDefinition.enableSleep = Description.SleepEnabled;
+				BodyDefinition.isBullet = Description.MovingBodyCCD;
 				BodyDefinition.userData = Entry.Record.get();
 				Entry.Record->Body = b3CreateBody(World, &BodyDefinition);
 				if (!b3Body_IsValid(Entry.Record->Body)) {
@@ -243,10 +298,26 @@ namespace gargantuan {
 				}
 
 				if (Previous.Anchored != Description.Anchored) {
-					b3Body_SetType(Record->Body, Description.Anchored ? b3_staticBody : b3_dynamicBody);
 					if (Description.Anchored) --DynamicBodyCount;
 					else ++DynamicBodyCount;
 				}
+				if (Previous.Anchored != Description.Anchored || Previous.Kinematic != Description.Kinematic)
+					b3Body_SetType(Record->Body, Description.Anchored ? b3_staticBody :
+						Description.Kinematic ? b3_kinematicBody : b3_dynamicBody);
+				if (Previous.MovingBodyCCD != Description.MovingBodyCCD)
+					b3Body_SetBullet(Record->Body, Description.MovingBodyCCD);
+				if (Previous.CollisionGroup != Description.CollisionGroup || Previous.CollisionMask != Description.CollisionMask) {
+					const auto Filter = b3Filter{std::uint64_t{1} << Description.CollisionGroup, Description.CollisionMask, 0};
+					ForEachShape(*Record, [&](b3ShapeId Shape) { b3Shape_SetFilter(Shape, Filter, true); });
+				}
+				if (Previous.LinearDamping != Description.LinearDamping)
+					b3Body_SetLinearDamping(Record->Body, Description.LinearDamping);
+				if (Previous.AngularDamping != Description.AngularDamping)
+					b3Body_SetAngularDamping(Record->Body, Description.AngularDamping);
+				if (Previous.GravityScale != Description.GravityScale)
+					b3Body_SetGravityScale(Record->Body, Description.GravityScale);
+				if (Previous.SleepEnabled != Description.SleepEnabled)
+					b3Body_EnableSleep(Record->Body, Description.SleepEnabled);
 				b3Body_SetTransform(
 					Record->Body,
 					Box3DConversions::ToBox3(Description.Transform.Position),
@@ -282,10 +353,21 @@ namespace gargantuan {
 			[[nodiscard]] PhysicsConstraintId CreateConstraint(
 				const PhysicsConstraintDesc &Description
 			) override {
+				return TryCreateConstraint(Description).Constraint;
+			}
+
+			[[nodiscard]] PhysicsConstraintCreateResult TryCreateConstraint(
+				const PhysicsConstraintDesc &Description
+			) override {
 				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsConstraintCreate);
 				auto *BodyA = FindBody(Description.BodyA);
 				auto *BodyB = FindBody(Description.BodyB);
-				if (!BodyA || !BodyB || Description.BodyA == Description.BodyB) return {};
+				if (!BodyA || !BodyB || Description.BodyA == Description.BodyB)
+					return {{}, {PhysicsOperationStatus::InvalidId, "Constraint endpoints are invalid, stale, or identical"}};
+				if (!IsValidConstraintDescription(Description))
+					return {{}, {PhysicsOperationStatus::InvalidDescription, "Constraint description is invalid"}};
+				if (ActiveConstraintCount >= ConstraintLimit)
+					return {{}, {PhysicsOperationStatus::ResourceLimit, "Physics joint limit reached"}};
 				StaticWorldDirty = true;
 				const auto Id = AllocateConstraint();
 				auto &Entry = ConstraintSlots[Id.Slot];
@@ -301,13 +383,73 @@ namespace gargantuan {
 					Entry.Record->Joint = b3CreateWeldJoint(World, &Definition);
 					break;
 				}
+				case PhysicsConstraintKind::BallSocket: {
+					b3SphericalJointDef Definition = b3DefaultSphericalJointDef();
+					Definition.base.bodyIdA = BodyA->Body;
+					Definition.base.bodyIdB = BodyB->Body;
+					Definition.base.localFrameA = ToLocalFrame(Description.LocalFrameA);
+					Definition.base.localFrameB = ToLocalFrame(Description.LocalFrameB);
+					Definition.base.collideConnected = Description.CollideConnected;
+					Entry.Record->Joint = b3CreateSphericalJoint(World, &Definition);
+					break;
+				}
+				case PhysicsConstraintKind::Hinge: {
+					b3RevoluteJointDef Definition = b3DefaultRevoluteJointDef();
+					Definition.base.bodyIdA = BodyA->Body;
+					Definition.base.bodyIdB = BodyB->Body;
+					Definition.base.localFrameA = ToLocalFrame(Description.LocalFrameA);
+					Definition.base.localFrameB = ToLocalFrame(Description.LocalFrameB);
+					Definition.base.collideConnected = Description.CollideConnected;
+					Definition.enableLimit = Description.EnableLimit;
+					Definition.lowerAngle = Description.LowerLimit;
+					Definition.upperAngle = Description.UpperLimit;
+					Definition.enableMotor = Description.EnableMotor;
+					Definition.motorSpeed = Description.MotorSpeed;
+					Definition.maxMotorTorque = Description.MaximumMotorForce;
+					Entry.Record->Joint = b3CreateRevoluteJoint(World, &Definition);
+					break;
+				}
+				case PhysicsConstraintKind::Slider: {
+					b3PrismaticJointDef Definition = b3DefaultPrismaticJointDef();
+					Definition.base.bodyIdA = BodyA->Body;
+					Definition.base.bodyIdB = BodyB->Body;
+					Definition.base.localFrameA = ToLocalFrame(Description.LocalFrameA);
+					Definition.base.localFrameB = ToLocalFrame(Description.LocalFrameB);
+					Definition.base.collideConnected = Description.CollideConnected;
+					Definition.enableLimit = Description.EnableLimit;
+					Definition.lowerTranslation = Description.LowerLimit;
+					Definition.upperTranslation = Description.UpperLimit;
+					Definition.enableMotor = Description.EnableMotor;
+					Definition.motorSpeed = Description.MotorSpeed;
+					Definition.maxMotorForce = Description.MaximumMotorForce;
+					Entry.Record->Joint = b3CreatePrismaticJoint(World, &Definition);
+					break;
+				}
+				case PhysicsConstraintKind::Distance: {
+					b3DistanceJointDef Definition = b3DefaultDistanceJointDef();
+					Definition.base.bodyIdA = BodyA->Body;
+					Definition.base.bodyIdB = BodyB->Body;
+					Definition.base.localFrameA = ToLocalFrame(Description.LocalFrameA);
+					Definition.base.localFrameB = ToLocalFrame(Description.LocalFrameB);
+					Definition.base.collideConnected = Description.CollideConnected;
+					Definition.length = Description.RestLength;
+					Definition.enableSpring = Description.SpringFrequency > 0.0f;
+					Definition.hertz = Description.SpringFrequency;
+					Definition.dampingRatio = Description.SpringDamping;
+					Definition.enableLimit = Description.EnableLimit;
+					Definition.minLength = Description.LowerLimit;
+					Definition.maxLength = Description.UpperLimit;
+					Entry.Record->Joint = b3CreateDistanceJoint(World, &Definition);
+					break;
+				}
 				}
 				if (!b3Joint_IsValid(Entry.Record->Joint)) {
 					ReleaseConstraint(Id);
-					return {};
+					return {{}, {PhysicsOperationStatus::BackendFailure, "Native joint creation failed"}};
 				}
+				++ActiveConstraintCount;
 				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsConstraintCreate);
-				return Id;
+				return {Id, {}};
 			}
 
 			PhysicsOperationResult DestroyConstraint(PhysicsConstraintId Constraint) override {
@@ -318,6 +460,7 @@ namespace gargantuan {
 				StaticWorldDirty = true;
 				if (b3Joint_IsValid(Record->Joint)) b3DestroyJoint(Record->Joint, false);
 				ReleaseConstraint(Constraint);
+				--ActiveConstraintCount;
 				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsConstraintDestroy);
 				return {};
 			}
@@ -327,8 +470,83 @@ namespace gargantuan {
 				if (!Record) return InvalidBody();
 				if (!IsFinite(Impulse))
 					return {PhysicsOperationStatus::InvalidDescription, "Physics impulse is not finite"};
+				// Preserve the original center-impulse contract: static bodies accept
+				// a finite impulse as a no-op and invalidate the static-step cache.
+				if (Record->Description.Kinematic)
+					return {PhysicsOperationStatus::InvalidDescription, "Impulse requires a dynamic body"};
 				StaticWorldDirty = true;
 				b3Body_ApplyLinearImpulseToCenter(Record->Body, Box3DConversions::ToBox3(Impulse), true);
+				return {};
+			}
+
+			PhysicsOperationResult ApplyAngularImpulse(PhysicsBodyId Body, glm::vec3 Impulse) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Impulse) || Record->Description.Anchored || Record->Description.Kinematic)
+					return {PhysicsOperationStatus::InvalidDescription, "Angular impulse requires a finite value and dynamic body"};
+				StaticWorldDirty = true;
+				b3Body_ApplyAngularImpulse(Record->Body, Box3DConversions::ToBox3(Impulse), true);
+				return {};
+			}
+
+			PhysicsOperationResult ApplyImpulseAtPosition(PhysicsBodyId Body, glm::vec3 Impulse, glm::vec3 Position) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Impulse) || !IsFinite(Position) || Record->Description.Anchored || Record->Description.Kinematic)
+					return {PhysicsOperationStatus::InvalidDescription, "Point impulse requires finite values and dynamic body"};
+				StaticWorldDirty = true;
+				b3Body_ApplyLinearImpulse(Record->Body, Box3DConversions::ToBox3(Impulse),
+					b3Pos{Position.x, Position.y, Position.z}, true);
+				return {};
+			}
+
+			PhysicsOperationResult ApplyForce(PhysicsBodyId Body, glm::vec3 Force) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Force) || Record->Description.Anchored || Record->Description.Kinematic)
+					return {PhysicsOperationStatus::InvalidDescription, "Force requires a finite value and dynamic body"};
+				StaticWorldDirty = true;
+				b3Body_ApplyForceToCenter(Record->Body, Box3DConversions::ToBox3(Force), true);
+				return {};
+			}
+
+			PhysicsOperationResult ApplyTorque(PhysicsBodyId Body, glm::vec3 Torque) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Torque) || Record->Description.Anchored || Record->Description.Kinematic)
+					return {PhysicsOperationStatus::InvalidDescription, "Torque requires a finite value and dynamic body"};
+				StaticWorldDirty = true;
+				b3Body_ApplyTorque(Record->Body, Box3DConversions::ToBox3(Torque), true);
+				return {};
+			}
+
+			PhysicsOperationResult SetLinearVelocity(PhysicsBodyId Body, glm::vec3 Velocity) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Velocity) || Record->Description.Anchored)
+					return {PhysicsOperationStatus::InvalidDescription, "Velocity requires a finite value and moving body"};
+				StaticWorldDirty = true;
+				b3Body_SetLinearVelocity(Record->Body, Box3DConversions::ToBox3(Velocity));
+				return {};
+			}
+
+			PhysicsOperationResult SetAngularVelocity(PhysicsBodyId Body, glm::vec3 Velocity) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (!IsFinite(Velocity) || Record->Description.Anchored)
+					return {PhysicsOperationStatus::InvalidDescription, "Velocity requires a finite value and moving body"};
+				StaticWorldDirty = true;
+				b3Body_SetAngularVelocity(Record->Body, Box3DConversions::ToBox3(Velocity));
+				return {};
+			}
+
+			PhysicsOperationResult SetAwake(PhysicsBodyId Body, bool Awake) override {
+				auto *Record = FindBody(Body);
+				if (!Record) return InvalidBody();
+				if (Record->Description.Anchored)
+					return {PhysicsOperationStatus::InvalidDescription, "Sleep control requires a moving body"};
+				StaticWorldDirty = true;
+				b3Body_SetAwake(Record->Body, Awake);
 				return {};
 			}
 
@@ -348,6 +566,13 @@ namespace gargantuan {
 				return PhysicsBodyState{
 					.Transform = Box3DConversions::FromBox3(b3Body_GetTransform(Record->Body)),
 					.LinearVelocity = Box3DConversions::FromBox3(b3Body_GetLinearVelocity(Record->Body)),
+					.AngularVelocity = Box3DConversions::FromBox3(b3Body_GetAngularVelocity(Record->Body)),
+					.Mass = b3Body_GetMass(Record->Body),
+					.LocalInertia = [&] {
+						const auto Inertia = b3Body_GetLocalRotationalInertia(Record->Body);
+						return glm::vec3{Inertia.cx.x, Inertia.cy.y, Inertia.cz.z};
+					}(),
+					.Awake = b3Body_IsAwake(Record->Body),
 					.Description = Record->Description,
 				};
 			}
@@ -552,7 +777,8 @@ namespace gargantuan {
 				const float Distance = glm::length(Request.Direction);
 				if (!IsFinite(Request.Origin) || !IsFinite(Request.Direction) || !std::isfinite(Distance) ||
 					Distance < MinimumRaycastDistance || Distance > MaximumRaycastDistance ||
-					Request.Filter.Bodies.size() > MaximumRaycastFilterBodies) {
+					Request.Filter.Bodies.size() > MaximumRaycastFilterBodies ||
+					Request.Filter.CollisionGroup > MaximumPhysicsCollisionGroup) {
 					Result.Status = PhysicsOperationStatus::InvalidDescription;
 					Result.Message = "Physics raycast request is invalid or exceeds a query bound";
 					return Result;
@@ -591,7 +817,9 @@ namespace gargantuan {
 					auto Owner = Context->Self->FindShapeOwner(Shape);
 					if (!Owner) return 1.0f;
 					const auto *Record = Context->Self->FindBody(*Owner);
-					if (!Record || !Record->Description.CanCollide) return 1.0f;
+					if (!Record || !Record->Description.CanCollide ||
+						!PhysicsCanCollide(Context->Filter->CollisionGroup, Context->Filter->CollisionMask,
+							Record->Description.CollisionGroup, Record->Description.CollisionMask)) return 1.0f;
 					const bool Listed = std::binary_search(
 						Context->Filter->Bodies.begin(), Context->Filter->Bodies.end(), *Owner
 					);
@@ -622,11 +850,14 @@ namespace gargantuan {
 					return 1.0f;
 				};
 
+				auto NativeFilter = b3DefaultQueryFilter();
+				NativeFilter.categoryBits = std::uint64_t{1} << Request.Filter.CollisionGroup;
+				NativeFilter.maskBits = Request.Filter.CollisionMask;
 				(void)b3World_CastRay(
 					World,
 					b3Pos{Request.Origin.x, Request.Origin.y, Request.Origin.z},
 					Box3DConversions::ToBox3(Request.Direction),
-					b3DefaultQueryFilter(),
+					NativeFilter,
 					CollectHit,
 					&Context
 				);
@@ -662,6 +893,8 @@ namespace gargantuan {
 				}
 				return Result;
 			}
+
+#include "Box3DAdvancedQueries.inl"
 
 			[[nodiscard]] PhysicsStepResult Step(const PhysicsStepConfig &Config) override {
 				PhysicsStepResult Result;
@@ -702,7 +935,9 @@ namespace gargantuan {
 					const auto &Move = BodyEvents.moveEvents[Index];
 					auto *Record = static_cast<BodyRecord *>(Move.userData);
 					if (!Record || FindBody(Record->Id) != Record) continue;
-					Record->Description.Transform = Box3DConversions::FromBox3(Move.transform);
+					// The pinned backend captures move events before its continuous pass.
+					// Publish final owned body state, including any CCD correction.
+					Record->Description.Transform = Box3DConversions::FromBox3(b3Body_GetTransform(Record->Body));
 					Result.Motions.push_back({Record->Id, Record->Description.Transform});
 				}
 
@@ -848,6 +1083,8 @@ namespace gargantuan {
 			std::size_t CollisionCanonicalByteLimit = MaximumPhysicsCollisionCanonicalBytes;
 			std::size_t CollisionNativeByteLimit = MaximumPhysicsCollisionNativeBytes;
 			std::size_t CollisionMeshShapeLimit = MaximumPhysicsCollisionMeshShapes;
+			std::size_t ConstraintLimit = MaximumPhysicsConstraints;
+			std::size_t ActiveConstraintCount = 0;
 			mutable std::uint64_t RaycastEpoch = 0;
 			bool StaticWorldDirty = true;
 			std::vector<SlotEntry<BodyRecord>> BodySlots;
@@ -1028,6 +1265,9 @@ namespace gargantuan {
 			) {
 				b3ShapeDef ShapeDefinition = b3DefaultShapeDef();
 				ShapeDefinition.density = Description.Density;
+				ShapeDefinition.filter.categoryBits = std::uint64_t{1} << Description.CollisionGroup;
+				ShapeDefinition.filter.maskBits = Description.CollisionMask;
+				ShapeDefinition.filter.groupIndex = 0;
 				ShapeDefinition.isSensor = !Description.CanCollide;
 				ShapeDefinition.enableSensorEvents = Description.CanTouch;
 				ShapeDefinition.enableContactEvents = Description.CanCollide && Description.CanTouch;

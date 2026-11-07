@@ -4,6 +4,19 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-PHY-001: Legacy WeldConstraint does not capture endpoint offsets
+
+- Status: Verified inherited limitation; unchanged by the physics expansion.
+- Area: `WeldConstraint::GetPhysicsConstraint` and the native Weld creation path.
+
+The legacy Weld supplies identity local frames rather than the relative authored
+endpoint frames. It consequently joins centers and does not preserve initial
+separation, despite the older class description. The campaign's equal-source
+baseline uses a noncolliding coincident weld assembly and verifies its actual
+behavior. Use `JointConstraint` with explicit Attachment frames for new authored
+mechanisms. Correcting legacy Weld requires a separate compatibility decision,
+offset-preservation fixtures and persistence/lifecycle qualification.
+
 ## KI-3M-001: Packaged mesh coarse bounds need conservative geometry metadata
 
 - Status: Fix implemented in integration PR16; exact-source qualification is recorded in the cross-foundation report.

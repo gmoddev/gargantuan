@@ -24,7 +24,7 @@ namespace gargantuan {
 	class Workspace;
 
 	inline constexpr std::uint32_t PackageContentManifestVersion = 1;
-	inline constexpr std::uint32_t PackageContentInstanceSchemaVersion = 4;
+	inline constexpr std::uint32_t PackageContentInstanceSchemaVersion = 5;
 	inline constexpr std::size_t MaximumPackageContentUnits = 65'536;
 	inline constexpr std::size_t MaximumPackageContentDependencies = 262'144;
 	inline constexpr std::size_t MaximumPackageContentDependenciesPerUnit = 64;

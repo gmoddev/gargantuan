@@ -28,6 +28,7 @@ namespace gargantuan {
 			glm::vec3 Position
 		) = 0;
 		[[nodiscard]] virtual std::optional<SoftBodyState> GetBodyState(SoftBodyId Body) const = 0;
+		[[nodiscard]] virtual std::optional<SoftBodyInspection> GetBodyInspection(SoftBodyId Body) const = 0;
 		[[nodiscard]] virtual SoftBodyStepResult Step(const SoftBodyStepConfig &Config) = 0;
 		[[nodiscard]] virtual bool HasInFlightStep() const = 0;
 		virtual void Shutdown() = 0;
@@ -56,6 +57,7 @@ namespace gargantuan {
 		PhysicsOperationResult ApplyImpulse(SoftBodyId Body, glm::vec3 Impulse);
 		PhysicsOperationResult ApplyImpulseAtPosition(SoftBodyId Body, glm::vec3 Impulse, glm::vec3 Position);
 		[[nodiscard]] std::optional<SoftBodyState> GetBodyState(SoftBodyId Body) const;
+		[[nodiscard]] std::optional<SoftBodyInspection> GetBodyInspection(SoftBodyId Body) const;
 		[[nodiscard]] SoftBodyStepResult Step(const SoftBodyStepConfig &Config);
 		[[nodiscard]] bool HasInFlightStep() const;
 		void Shutdown();

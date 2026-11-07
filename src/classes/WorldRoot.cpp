@@ -1,6 +1,8 @@
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/JointConstraint.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "gargantuan/Log.hpp"
@@ -57,6 +59,14 @@ namespace gargantuan {
 			.CanCollide = Part.GetCanCollide(),
 			.CanTouch = Part.GetCanTouch(),
 			.Density = 0.7f,
+			.Kinematic = !Part.GetAnchored() && Part.GetKinematic(),
+			.CollisionGroup = static_cast<std::uint16_t>(Part.GetCollisionGroup()),
+			.CollisionMask = static_cast<std::uint16_t>(Part.GetCollisionMask()),
+			.LinearDamping = Part.GetLinearDamping(),
+			.AngularDamping = Part.GetAngularDamping(),
+			.GravityScale = Part.GetGravityScale(),
+			.SleepEnabled = Part.GetSleepEnabled(),
+			.MovingBodyCCD = !Part.GetAnchored() && !Part.GetKinematic() && Part.GetCanCollide() && Part.GetMovingBodyCCD(),
 		};
 		const auto *Mesh = dynamic_cast<const MeshPart *>(&Part);
 		if (!Mesh || Mesh->GetCollisionMode() != Enums::MeshCollisionMode::StaticMesh) return Description;
@@ -161,6 +171,7 @@ namespace gargantuan {
 		if (std::find(Parts.begin(), Parts.end(), Part) == Parts.end()) Parts.push_back(Part);
 		PartBodies[Object] = Body;
 		BodyParts[Body] = Part;
+		if (auto State = Physics.GetBodyState(Body)) Part->PublishedPhysicsState = *State;
 		return Body;
 	}
 
@@ -208,13 +219,16 @@ namespace gargantuan {
 		const auto BodyA = CreatePartBody(PartA);
 		const auto BodyB = CreatePartBody(PartB);
 		if (!BodyA.IsValid() || !BodyB.IsValid()) return {};
-		const auto Joint = Physics.CreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
-		if (!Joint.IsValid()) {
-			LOG_ERROR(App, "[Physics:Backend] Failed to create constraint for %s", Constraint->GetFullName().c_str());
+		const auto Creation = Physics.TryCreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
+		if (!Creation.Succeeded()) {
+			if (FailedConstraintUpdatesLogged.insert(Constraint->GetObjectId()).second)
+				LOG_ERROR(App, "[Physics:Constraint] Failed to create constraint for %s: %s",
+					Constraint->GetFullName().c_str(), Creation.Operation.Message.c_str());
 			return {};
 		}
-		ConstraintJoints[Constraint->GetObjectId()] = Joint;
-		return Joint;
+		FailedConstraintUpdatesLogged.erase(Constraint->GetObjectId());
+		ConstraintJoints[Constraint->GetObjectId()] = Creation.Constraint;
+		return Creation.Constraint;
 	}
 
 	void WorldRoot::TrackPart(const std::shared_ptr<BasePart> &Part) {
@@ -226,7 +240,9 @@ namespace gargantuan {
 			if (!ShuttingDownPhysics && !PublishingPhysicsState && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
 		};
 		auto &Connections = PhysicsConnections[Id];
-		for (const std::string_view Name : {"CFrame", "Size", "Anchored", "CanCollide", "CanTouch"})
+		for (const std::string_view Name : {"CFrame", "Size", "Anchored", "Kinematic", "CanCollide", "CanTouch",
+			"CollisionGroup", "CollisionMask", "LinearDamping", "AngularDamping", "GravityScale", "SleepEnabled",
+			"MovingBodyCCD"})
 			Connections.push_back(Part->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
 		if (Part->FindProperty("Shape"))
 			Connections.push_back(Part->GetPropertyChangedSignal("Shape")->Connect(MarkDirty));
@@ -314,6 +330,28 @@ namespace gargantuan {
 		for (const std::string_view Name : {"Part0", "Part1"})
 			if (Constraint->FindProperty(std::string(Name)))
 				Connections.push_back(Constraint->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
+		if (std::dynamic_pointer_cast<JointConstraint>(Constraint)) {
+			for (const std::string_view Name : {"JointType", "CollideConnected", "EnableLimit", "LowerLimit",
+				"UpperLimit", "EnableMotor", "MotorSpeed", "MaximumMotorForce", "RestLength",
+				"SpringFrequency", "SpringDamping"})
+				Connections.push_back(Constraint->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
+			RefreshJointAttachmentConnections(Constraint);
+		}
+	}
+
+	void WorldRoot::RefreshJointAttachmentConnections(const std::shared_ptr<Constraint> &Constraint) {
+		const auto Id = Constraint->GetObjectId();
+		auto &Connections = JointAttachmentConnections[Id];
+		for (const auto &Connection : Connections) Connection->Disconnect();
+		Connections.clear();
+		const auto MarkDirty = [this, Id](std::monostate) {
+			if (!ShuttingDownPhysics && TrackedConstraints.contains(Id)) DirtyConstraints.insert(Id);
+		};
+		for (const auto &Attachment : {Constraint->GetAttachment0(), Constraint->GetAttachment1()}) {
+			if (!Attachment || !*Attachment) continue;
+			Connections.push_back((*Attachment)->GetPropertyChangedSignal("CFrame")->Connect(MarkDirty));
+			Connections.push_back((*Attachment)->GetPropertyChangedSignal("Parent")->Connect(MarkDirty));
+		}
 	}
 
 	void WorldRoot::RemovePart(const std::shared_ptr<BasePart> &Part) {
@@ -335,6 +373,15 @@ namespace gargantuan {
 			}
 			PartBodies.erase(Found);
 		}
+		Part->PublishedPhysicsState = {};
+		Part->AccumulatedImpulse = {};
+		Part->AccumulatedAngularImpulse = {};
+		Part->AccumulatedForce = {};
+		Part->AccumulatedTorque = {};
+		Part->AccumulatedPointImpulses.clear();
+		Part->PendingLinearVelocity.reset();
+		Part->PendingAngularVelocity.reset();
+		Part->PendingAwake.reset();
 		RemoveInvalidConstraintMappings();
 		for (const auto &[Id, _] : TrackedConstraints) DirtyConstraints.insert(Id);
 	}
@@ -395,7 +442,12 @@ namespace gargantuan {
 		if (!Constraint) return;
 		const auto Object = Constraint->GetObjectId();
 		DirtyConstraints.erase(Object);
+		FailedConstraintUpdatesLogged.erase(Object);
 		TrackedConstraints.erase(Object);
+		if (auto Connections = JointAttachmentConnections.find(Object); Connections != JointAttachmentConnections.end()) {
+			for (const auto &Connection : Connections->second) Connection->Disconnect();
+			JointAttachmentConnections.erase(Connections);
+		}
 		if (auto Connections = PhysicsConnections.find(Object); Connections != PhysicsConnections.end()) {
 			for (const auto &Connection : Connections->second) Connection->Disconnect();
 			PhysicsConnections.erase(Connections);
@@ -411,9 +463,11 @@ namespace gargantuan {
 
 	void WorldRoot::ReconcileConstraint(const std::shared_ptr<Constraint> &Constraint) {
 		if (!Constraint || Constraint->GetDestroyed() || Constraint->IsDestroying()) return;
+		if (std::dynamic_pointer_cast<JointConstraint>(Constraint)) RefreshJointAttachmentConnections(Constraint);
 		const auto Object = Constraint->GetObjectId();
 		auto [PartA, PartB] = Constraint->GetActiveParts();
 		const bool ShouldExist = Constraint->GetEnabled() && PartA && PartB && PartA != PartB &&
+			!PartA->GetDestroyed() && !PartB->GetDestroyed() && !PartA->IsDestroying() && !PartB->IsDestroying() &&
 			Constraint->FindFirstAncestorWhichIsA("WorldRoot").get() == this &&
 			PartA->FindFirstAncestorWhichIsA("WorldRoot").get() == this &&
 			PartB->FindFirstAncestorWhichIsA("WorldRoot").get() == this;
@@ -432,15 +486,17 @@ namespace gargantuan {
 			DirtyConstraints.insert(Object);
 			return;
 		}
-		const auto Replacement = Physics.CreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
-		if (!Replacement.IsValid()) {
-			LOG_ERROR(App, "[Physics:Backend] Constraint update failed for %s", Constraint->GetFullName().c_str());
-			DirtyConstraints.insert(Object);
+		const auto Replacement = Physics.TryCreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
+		if (!Replacement.Succeeded()) {
+			if (FailedConstraintUpdatesLogged.insert(Object).second)
+				LOG_ERROR(App, "[Physics:Constraint] Constraint update failed for %s: %s",
+					Constraint->GetFullName().c_str(), Replacement.Operation.Message.c_str());
 			return;
 		}
+		FailedConstraintUpdatesLogged.erase(Object);
 		if (Existing != ConstraintJoints.end() && Physics.IsConstraintValid(Existing->second))
 			Physics.DestroyConstraint(Existing->second);
-		ConstraintJoints[Object] = Replacement;
+		ConstraintJoints[Object] = Replacement.Constraint;
 	}
 
 	void WorldRoot::ObserveCollisionAssetChanges() {
@@ -498,7 +554,10 @@ namespace gargantuan {
 						LOG_WARN(App, "[Physics:Mesh] Collision update failed for %s: %s", Part->GetFullName().c_str(), Result.Message.c_str());
 				} else LOG_ERROR(App, "[Physics:Backend] Body update failed for %s: %s", Part->GetFullName().c_str(), Result.Message.c_str());
 				DirtyBodies.insert(Object);
-			} else FailedMeshUpdatesLogged.erase(Object);
+			} else {
+				FailedMeshUpdatesLogged.erase(Object);
+				if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
+			}
 		}
 
 		const auto DeformableUpdates = SortedIds(DirtyDeformables);
@@ -550,12 +609,45 @@ namespace gargantuan {
 
 	void WorldRoot::ApplyPendingImpulses() {
 		for (const auto &Part : Parts) {
-			if (!Part || Part->GetDestroyed() || Part->IsDestroying() || !HasImpulse(Part->AccumulatedImpulse)) continue;
+			if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
+			if (!Part->PendingLinearVelocity && !Part->PendingAngularVelocity && !Part->PendingAwake &&
+				!HasImpulse(Part->AccumulatedImpulse) && !HasImpulse(Part->AccumulatedAngularImpulse) &&
+				Part->AccumulatedPointImpulses.empty() && !HasImpulse(Part->AccumulatedForce) &&
+				!HasImpulse(Part->AccumulatedTorque)) continue;
 			auto Found = PartBodies.find(Part->GetObjectId());
 			if (Found == PartBodies.end()) continue;
-			auto Result = Physics.ApplyLinearImpulse(Found->second, Part->AccumulatedImpulse);
-			if (Result.Succeeded()) Part->AccumulatedImpulse = {};
-			else LOG_ERROR(App, "[Physics:Backend] Impulse application failed: %s", Result.Message.c_str());
+			const auto Body = Found->second;
+			if (Part->PendingLinearVelocity) {
+				(void)Physics.SetLinearVelocity(Body, *Part->PendingLinearVelocity);
+				Part->PendingLinearVelocity.reset();
+			}
+			if (Part->PendingAngularVelocity) {
+				(void)Physics.SetAngularVelocity(Body, *Part->PendingAngularVelocity);
+				Part->PendingAngularVelocity.reset();
+			}
+			if (Part->PendingAwake) {
+				(void)Physics.SetAwake(Body, *Part->PendingAwake);
+				Part->PendingAwake.reset();
+			}
+			if (HasImpulse(Part->AccumulatedImpulse)) {
+				(void)Physics.ApplyLinearImpulse(Body, Part->AccumulatedImpulse);
+				Part->AccumulatedImpulse = {};
+			}
+			if (HasImpulse(Part->AccumulatedAngularImpulse)) {
+				(void)Physics.ApplyAngularImpulse(Body, Part->AccumulatedAngularImpulse);
+				Part->AccumulatedAngularImpulse = {};
+			}
+			for (const auto &[Impulse, Position] : Part->AccumulatedPointImpulses)
+				(void)Physics.ApplyImpulseAtPosition(Body, Impulse, Position);
+			Part->AccumulatedPointImpulses.clear();
+			if (HasImpulse(Part->AccumulatedForce)) {
+				(void)Physics.ApplyForce(Body, Part->AccumulatedForce);
+				Part->AccumulatedForce = {};
+			}
+			if (HasImpulse(Part->AccumulatedTorque)) {
+				(void)Physics.ApplyTorque(Body, Part->AccumulatedTorque);
+				Part->AccumulatedTorque = {};
+			}
 		}
 	}
 
@@ -624,10 +716,14 @@ namespace gargantuan {
 		for (auto &[_, Connections] : PhysicsConnections)
 			for (const auto &Connection : Connections) Connection->Disconnect();
 		PhysicsConnections.clear();
+		for (auto &[_, Connections] : JointAttachmentConnections)
+			for (const auto &Connection : Connections) Connection->Disconnect();
+		JointAttachmentConnections.clear();
 		DirtyBodies.clear();
 		FailedMeshUpdatesLogged.clear();
 		DirtyDeformables.clear();
 		DirtyConstraints.clear();
+		FailedConstraintUpdatesLogged.clear();
 		TrackedParts.clear();
 		CollisionAssets.reset();
 		TrackedDeformables.clear();
@@ -657,6 +753,19 @@ namespace gargantuan {
 	std::optional<SoftBodyState> WorldRoot::GetDeformableState(ObjectId Object) const {
 		auto Found = DeformableStates.find(Object);
 		return Found == DeformableStates.end() ? std::nullopt : std::optional(Found->second);
+	}
+
+	std::optional<SoftBodyInspection> WorldRoot::GetDeformableInspection(ObjectId Object) const {
+		auto Found = DeformableIds.find(Object);
+		return Found == DeformableIds.end() ? std::nullopt : Deformables.GetBodyInspection(Found->second);
+	}
+
+	std::optional<glm::vec3> WorldRoot::GetDeformableVertex(ObjectId Object, std::size_t VertexIndex) const {
+		auto Found = DeformableIds.find(Object);
+		if (Found == DeformableIds.end()) return std::nullopt;
+		auto State = Deformables.GetBodyState(Found->second);
+		if (!State || !State->Positions || VertexIndex >= State->Positions->size()) return std::nullopt;
+		return (*State->Positions)[VertexIndex];
 	}
 
 	WorldRoot::WorldRoot() : Physics(PhysicsWorldConfig{.Gravity = {0.0f, -Gravity, 0.0f}}) {
@@ -708,6 +817,11 @@ namespace gargantuan {
 
 	PhysicsOperationResult
 	WorldRoot::BuildRaycastFilter(const RaycastParams &Params, PhysicsQueryFilter &Filter) const {
+		if (Params.CollisionGroup < 0 || Params.CollisionGroup > MaximumPhysicsCollisionGroup ||
+			Params.CollisionMask < 0 || Params.CollisionMask > MaximumPhysicsCollisionMask)
+			return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collision filter is outside the 16-group bound"};
+		Filter.CollisionGroup = static_cast<std::uint16_t>(Params.CollisionGroup);
+		Filter.CollisionMask = static_cast<std::uint16_t>(Params.CollisionMask);
 		Filter.Type = Params.FilterType == Enums::RaycastFilterType::Include ? PhysicsQueryFilterType::Include
 																			 : PhysicsQueryFilterType::Exclude;
 		if (Params.FilterDescendantsInstances.Values.size() > RaycastParams::MaximumFilterRoots)
@@ -775,18 +889,22 @@ namespace gargantuan {
 		PhysicsQueryFilter Filter;
 		if (auto Prepared = BuildRaycastFilter(Params, Filter); !Prepared.Succeeded())
 			return {.Status = Prepared.Status, .Message = std::move(Prepared.Message)};
-		auto Fail = [this](PhysicsOperationStatus Status, std::string Message) {
-			if (Status == PhysicsOperationStatus::BackendFailure && !RaycastFailureLogged) {
-				RaycastFailureLogged = true;
-				LOG_ERROR(App, "[Physics:Query] Raycast failed: %s", Message.c_str());
-			}
-			return WorldRaycastResult{.Status = Status, .Message = std::move(Message)};
-		};
 		auto BackendResult = Physics.Raycast({
 			.Origin = Origin,
 			.Direction = Direction,
 			.Filter = std::move(Filter),
 		});
+		return ResolveQueryHit(std::move(BackendResult));
+	}
+
+	WorldRaycastResult WorldRoot::ResolveQueryHit(PhysicsRaycastResult BackendResult) {
+		auto Fail = [this](PhysicsOperationStatus Status, std::string Message) {
+			if (Status == PhysicsOperationStatus::BackendFailure && !RaycastFailureLogged) {
+				RaycastFailureLogged = true;
+				LOG_ERROR(App, "[Physics:Query] Cast failed: %s", Message.c_str());
+			}
+			return WorldRaycastResult{.Status = Status, .Message = std::move(Message)};
+		};
 		if (!BackendResult.Succeeded()) return Fail(BackendResult.Status, std::move(BackendResult.Message));
 		if (!BackendResult.HasHit()) return {};
 		const float NearestDistance = BackendResult.Candidates.front().Distance;
@@ -843,6 +961,87 @@ namespace gargantuan {
 		return 1;
 	}
 
+	int WorldRoot::GetDeformableInfo(lua_State *L, Instance *InstanceValue) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Deformable inspection requires ReadDataModel");
+		auto *World = dynamic_cast<WorldRoot *>(InstanceValue);
+		auto Body = StackValue<std::shared_ptr<Instance>>::Is(L, 2)
+			? std::dynamic_pointer_cast<DeformableBody>(StackValue<std::shared_ptr<Instance>>::From(L, 2))
+			: nullptr;
+		if (!World || World->GetDestroyed() || World->IsDestroying() || !Body || Body->GetDestroyed() ||
+			Body->IsDestroying() || Body->FindFirstAncestorWhichIsA("WorldRoot").get() != World) {
+			lua_pushnil(L);
+			return 1;
+		}
+		auto Info = World->GetDeformableInspection(Body->GetObjectId());
+		if (!Info) {
+			lua_pushnil(L);
+			return 1;
+		}
+		lua_createtable(L, 0, 7);
+		auto SetCount = [L](const char *Name, std::size_t Count) {
+			lua_pushnumber(L, static_cast<lua_Number>(Count));
+			lua_setfield(L, -2, Name);
+		};
+		SetCount("VertexCount", Info->VertexCount);
+		SetCount("ConstraintCount", Info->ConstraintCount);
+		SetCount("AttachmentCount", Info->AttachmentCount);
+		SetCount("TopologyRevision", Info->TopologyRevision);
+		SetCount("VertexRevision", Info->VertexRevision);
+		lua_pushboolean(L, Info->Enabled);
+		lua_setfield(L, -2, "Enabled");
+		lua_pushboolean(L, Info->Simulated);
+		lua_setfield(L, -2, "Simulated");
+		lua_setreadonly(L, -1, true);
+		return 1;
+	}
+
+	int WorldRoot::GetDeformableVertex(lua_State *L, Instance *InstanceValue) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Deformable inspection requires ReadDataModel");
+		auto *World = dynamic_cast<WorldRoot *>(InstanceValue);
+		auto Body = StackValue<std::shared_ptr<Instance>>::Is(L, 2)
+			? std::dynamic_pointer_cast<DeformableBody>(StackValue<std::shared_ptr<Instance>>::From(L, 2))
+			: nullptr;
+		const auto Index = lua_isnumber(L, 3) ? lua_tonumber(L, 3) : -1.0;
+		if (!World || World->GetDestroyed() || World->IsDestroying() || !Body || Body->GetDestroyed() ||
+			Body->IsDestroying() || !std::isfinite(Index) || Index < 0 || Index >= MaximumSoftBodyVertices ||
+			std::trunc(Index) != Index || Body->FindFirstAncestorWhichIsA("WorldRoot").get() != World) {
+			lua_pushnil(L);
+			return 1;
+		}
+		auto Position = World->GetDeformableVertex(Body->GetObjectId(), static_cast<std::size_t>(Index));
+		if (!Position) lua_pushnil(L);
+		else StackValue<glm::vec3>::Push(L, *Position);
+		return 1;
+	}
+
+	int WorldRoot::GetSoftBodyStepInfo(lua_State *L, Instance *InstanceValue) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Deformable inspection requires ReadDataModel");
+		auto *World = dynamic_cast<WorldRoot *>(InstanceValue);
+		if (!World || World->GetDestroyed() || World->IsDestroying()) {
+			lua_pushnil(L);
+			return 1;
+		}
+		const auto &Profile = World->GetLastSoftBodyProfile();
+		lua_createtable(L, 0, 8);
+		auto SetCount = [L](const char *Name, std::size_t Count) {
+			lua_pushnumber(L, static_cast<lua_Number>(Count));
+			lua_setfield(L, -2, Name);
+		};
+		SetCount("SimulatedBodies", Profile.SimulatedBodies);
+		SetCount("SimulatedVertices", Profile.SimulatedVertices);
+		SetCount("JobsDispatched", Profile.JobsDispatched);
+		SetCount("ColliderQueries", Profile.ColliderQueries);
+		SetCount("CandidateColliders", Profile.CandidateColliders);
+		SetCount("FrozenBodies", Profile.FrozenBodies);
+		SetCount("BacklogDrops", Profile.BacklogDrops);
+		SetCount("StaleResults", Profile.StaleResults);
+		lua_setreadonly(L, -1, true);
+		return 1;
+	}
+
 	int WorldRoot::MoveKinematicCapsule(lua_State *L, Instance *InstanceValue) {
 		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::ReadDataModel))
 			throw std::runtime_error("Kinematic world queries require ReadDataModel");
@@ -884,6 +1083,9 @@ namespace gargantuan {
 		double DeltaTime,
 		std::optional<std::vector<std::shared_ptr<Instance>>> Instances
 	) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
+			throw std::runtime_error("[Physics:Authority] Stepping requires MutateDataModel");
+		AssertCanMutate();
 		(void)Instances;
 		runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsUpdate, [&] { ApplyPendingPhysicsChanges(); });
 		StepAccumulator += static_cast<float>(DeltaTime);
@@ -893,6 +1095,15 @@ namespace gargantuan {
 			ApplyPendingDeformableForces();
 			auto Result = runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsRigidStep,
 				[&] { return Physics.Step({.DeltaTime = STEP_INTERVAL, .SubStepCount = SUB_STEP_COUNT}); });
+			for (const auto &Part : Parts) {
+				if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
+				// Static state changes only at admission or a committed safe-point edit.
+				// Consult accepted state: a failed authored update may leave a dynamic body live.
+				if (Part->PublishedPhysicsState.Description.Anchored) continue;
+				auto Found = PartBodies.find(Part->GetObjectId());
+				if (Found != PartBodies.end())
+					if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
+			}
 			{
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsEvents);
 			if (Result.EventsTruncated)

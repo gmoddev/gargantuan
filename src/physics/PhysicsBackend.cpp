@@ -36,12 +36,44 @@ namespace gargantuan {
 	PhysicsConstraintId PhysicsWorld::CreateConstraint(const PhysicsConstraintDesc &Description) {
 		return Backend ? Backend->CreateConstraint(Description) : PhysicsConstraintId{};
 	}
+	PhysicsConstraintCreateResult PhysicsWorld::TryCreateConstraint(const PhysicsConstraintDesc &Description) {
+		return Backend ? Backend->TryCreateConstraint(Description) : PhysicsConstraintCreateResult{
+			{}, {PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"}};
+	}
 	PhysicsOperationResult PhysicsWorld::DestroyConstraint(PhysicsConstraintId Constraint) {
 		return Backend ? Backend->DestroyConstraint(Constraint)
 			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
 	}
 	PhysicsOperationResult PhysicsWorld::ApplyLinearImpulse(PhysicsBodyId Body, glm::vec3 Impulse) {
 		return Backend ? Backend->ApplyLinearImpulse(Body, Impulse)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::ApplyAngularImpulse(PhysicsBodyId Body, glm::vec3 Impulse) {
+		return Backend ? Backend->ApplyAngularImpulse(Body, Impulse)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::ApplyImpulseAtPosition(PhysicsBodyId Body, glm::vec3 Impulse, glm::vec3 Position) {
+		return Backend ? Backend->ApplyImpulseAtPosition(Body, Impulse, Position)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::ApplyForce(PhysicsBodyId Body, glm::vec3 Force) {
+		return Backend ? Backend->ApplyForce(Body, Force)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::ApplyTorque(PhysicsBodyId Body, glm::vec3 Torque) {
+		return Backend ? Backend->ApplyTorque(Body, Torque)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::SetLinearVelocity(PhysicsBodyId Body, glm::vec3 Velocity) {
+		return Backend ? Backend->SetLinearVelocity(Body, Velocity)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::SetAngularVelocity(PhysicsBodyId Body, glm::vec3 Velocity) {
+		return Backend ? Backend->SetAngularVelocity(Body, Velocity)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
+	}
+	PhysicsOperationResult PhysicsWorld::SetAwake(PhysicsBodyId Body, bool Awake) {
+		return Backend ? Backend->SetAwake(Body, Awake)
 			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
 	}
 	PhysicsOperationResult PhysicsWorld::SetGravity(glm::vec3 Gravity) {
@@ -68,6 +100,12 @@ namespace gargantuan {
 							 .Status = PhysicsOperationStatus::BackendFailure,
 							 .Message = "Physics backend is unavailable",
 						 };
+	}
+	PhysicsRaycastResult PhysicsWorld::ShapeCast(const PhysicsShapeCastRequest &Request) const {
+		return Backend ? Backend->ShapeCast(Request) : PhysicsRaycastResult{.Status = PhysicsOperationStatus::BackendFailure, .Message = "Physics backend unavailable"};
+	}
+	PhysicsOverlapResult PhysicsWorld::Overlap(const PhysicsOverlapRequest &Request) const {
+		return Backend ? Backend->Overlap(Request) : PhysicsOverlapResult{.Status = PhysicsOperationStatus::BackendFailure, .Message = "Physics backend unavailable"};
 	}
 	PhysicsStepResult PhysicsWorld::Step(const PhysicsStepConfig &Config) {
 		return Backend ? Backend->Step(Config) : PhysicsStepResult{};
