@@ -1121,6 +1121,10 @@ namespace {
 			Decoded.Instance->FindFirstDescendant("DrivenSlider")) : nullptr;
 		auto LoadedSpring = Decoded.Instance ? std::dynamic_pointer_cast<JointConstraint>(
 			Decoded.Instance->FindFirstDescendant("SuspendedWeight")) : nullptr;
+		std::cout << "[Physics:JointPersistence] Decoded=" << Decoded.Ok << " Hinge=" << bool(LoadedHinge) << " Slider=" << bool(LoadedSlider) << " Spring=" << bool(LoadedSpring) << '\n';
+		for(const auto &Error:Decoded.Errors) std::cerr << "[Physics:JointPersistence] " << Error << '\n';
+		if(LoadedHinge && LoadedSlider && LoadedSpring)
+			std::cout << "[Physics:JointPersistence] A0=" << bool(LoadedHinge->GetAttachment0()) << " A1=" << bool(LoadedHinge->GetAttachment1()) << " Enabled=" << LoadedHinge->GetEnabled() << " Type=" << LoadedHinge->GetJointType() << " Limit=" << LoadedHinge->GetEnableLimit() << " Motor=" << LoadedHinge->GetEnableMotor() << " Upper=" << LoadedHinge->GetUpperLimit() << " SliderForce=" << LoadedSlider->GetMaximumMotorForce() << " SpringHz=" << LoadedSpring->GetSpringFrequency() << '\n';
 		Check(Decoded.Ok && LoadedHinge && LoadedSlider && LoadedSpring &&
 			LoadedHinge->GetAttachment0() && *LoadedHinge->GetAttachment0() &&
 			LoadedHinge->GetAttachment1() && *LoadedHinge->GetAttachment1() &&
