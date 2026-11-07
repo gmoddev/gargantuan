@@ -8,6 +8,7 @@ struct ResourceSnapshot {
     uint64_t AllocationCalls{}, FreeCalls{}, AllocatedBytes{}, FreedBytes{};
     uint64_t LiveBytes{}, PeakBytes{}, WorkingSetBytes{}, PeakWorkingSetBytes{};
     double ProcessCpuSeconds{};
+    bool WorkingSetAvailable{}, PeakWorkingSetAvailable{}, ProcessCpuAvailable{};
 };
 
 // Fresh-process setup only, before any Jolt or Box3D allocation. Timing and

@@ -120,16 +120,19 @@ ResourceSnapshot CaptureResources() {
     if (GetProcessMemoryInfo(GetCurrentProcess(), &Memory, sizeof(Memory))) {
         Result.WorkingSetBytes = Memory.WorkingSetSize;
         Result.PeakWorkingSetBytes = Memory.PeakWorkingSetSize;
+        Result.WorkingSetAvailable = Result.PeakWorkingSetAvailable = true;
     }
     FILETIME Created{}, Exited{}, Kernel{}, User{};
     if (GetProcessTimes(GetCurrentProcess(), &Created, &Exited, &Kernel, &User)) {
         const uint64_t KernelTicks = (uint64_t(Kernel.dwHighDateTime) << 32) | Kernel.dwLowDateTime;
         const uint64_t UserTicks = (uint64_t(User.dwHighDateTime) << 32) | User.dwLowDateTime;
         Result.ProcessCpuSeconds = double(KernelTicks + UserTicks) / 10000000.0;
+        Result.ProcessCpuAvailable = true;
     }
 #else
     rusage Usage{};
     if (getrusage(RUSAGE_SELF, &Usage) == 0) {
+        Result.ProcessCpuAvailable = Result.PeakWorkingSetAvailable = true;
         Result.ProcessCpuSeconds = double(Usage.ru_utime.tv_sec + Usage.ru_stime.tv_sec)
             + double(Usage.ru_utime.tv_usec + Usage.ru_stime.tv_usec) / 1000000.0;
 #if defined(__APPLE__)
@@ -141,8 +144,11 @@ ResourceSnapshot CaptureResources() {
 #if defined(__linux__)
     if (FILE* File = std::fopen("/proc/self/statm", "r")) {
         unsigned long Pages{}, Resident{};
-        if (std::fscanf(File, "%lu %lu", &Pages, &Resident) == 2)
-            Result.WorkingSetBytes = uint64_t(Resident) * uint64_t(sysconf(_SC_PAGESIZE));
+        const long PageSize = sysconf(_SC_PAGESIZE);
+        if (PageSize > 0 && std::fscanf(File, "%lu %lu", &Pages, &Resident) == 2) {
+            Result.WorkingSetBytes = uint64_t(Resident) * uint64_t(PageSize);
+            Result.WorkingSetAvailable = true;
+        }
         std::fclose(File);
     }
 #endif
@@ -160,9 +166,11 @@ ResourceSnapshot CaptureResources() {
 
 nlohmann::json ResourceDelta(const ResourceSnapshot& Before, const ResourceSnapshot& After) {
     nlohmann::json Result = {
-        {"WorkingSetBeforeBytes", Before.WorkingSetBytes}, {"WorkingSetAfterBytes", After.WorkingSetBytes},
-        {"PeakWorkingSetProcessLifetimeBytes", After.PeakWorkingSetBytes},
-        {"ProcessCpuSeconds", After.ProcessCpuSeconds - Before.ProcessCpuSeconds},
+        {"WorkingSetBeforeBytes", Before.WorkingSetAvailable ? nlohmann::json(Before.WorkingSetBytes) : nlohmann::json(nullptr)},
+        {"WorkingSetAfterBytes", After.WorkingSetAvailable ? nlohmann::json(After.WorkingSetBytes) : nlohmann::json(nullptr)},
+        {"PeakWorkingSetProcessLifetimeBytes", After.PeakWorkingSetAvailable ? nlohmann::json(After.PeakWorkingSetBytes) : nlohmann::json(nullptr)},
+        {"ProcessCpuSeconds", Before.ProcessCpuAvailable && After.ProcessCpuAvailable
+            ? nlohmann::json(After.ProcessCpuSeconds - Before.ProcessCpuSeconds) : nlohmann::json(nullptr)},
         {"PeakScope", "Process lifetime; not a phase-local peak or heap-retirement proof"}
     };
 #if defined(PHYSICS_EVALUATION_TRACK_ALLOCATIONS)

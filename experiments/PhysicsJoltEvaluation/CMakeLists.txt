@@ -10,6 +10,12 @@ execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${PHYSICS_EVALUATION_JOLT_ROOT}"
 if(NOT PHYSICS_EVALUATION_GIT_EXIT EQUAL 0 OR NOT PHYSICS_EVALUATION_ACTUAL_JOLT STREQUAL PHYSICS_EVALUATION_JOLT_COMMIT)
     message(FATAL_ERROR "[Physics:Evaluation] Jolt checkout does not match the pinned release commit")
 endif()
+execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${PHYSICS_EVALUATION_JOLT_ROOT}" status --porcelain
+    OUTPUT_VARIABLE PHYSICS_EVALUATION_JOLT_DIRTY OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE PHYSICS_EVALUATION_JOLT_STATUS_EXIT)
+if(NOT PHYSICS_EVALUATION_JOLT_STATUS_EXIT EQUAL 0 OR PHYSICS_EVALUATION_JOLT_DIRTY)
+    message(FATAL_ERROR "[Physics:Evaluation] Jolt source checkout is not clean")
+endif()
 
 # Controlled common SSE2 profile. Jolt SIMD extensions are disabled rather
 # than silently propagating AVX2 flags to only part of the Engine comparator.
