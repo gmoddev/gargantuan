@@ -14,6 +14,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 
 namespace {
     using Json = nlohmann::json;
@@ -417,7 +418,11 @@ namespace {
                 {"Finite", Finite}, {"MaxEdgeStretch", MaximumStretch},
                 {"MaxPinDrift", MaximumPinDrift}, {"MaxVolumeError", MaximumVolumeError},
                 {"MaxPenetration", MaximumPenetration}, {"InvertedTetrahedronFrames", InvertedTetrahedra},
-                {"BackgroundWorkers", Config.Workers - 1}, {"CallerParticipatesInSolve", true},
+                {"RequestedCpuBudget", Config.Workers},
+                {"AllocatedBackgroundWorkers", Config.Workers - 1},
+                {"ActiveBackgroundWorkers", nullptr},
+                {"WorkerActivityMeasurement", "Unavailable; thread pool capacity is not per-frame active worker count"},
+                {"CallerRole", "ParticipatesInSolve"}, {"ExecutionMode", "JoltThreadPool"},
                 {"TimingScope", "NativeStepPlusOwnedPositionCopy; quality analysis excluded"},
                 {"SolverIterations", Iterations(Config)}, {"ParticleMass", ParticleMass(Config)},
                 {"Track", Config.Track},
@@ -434,7 +439,10 @@ namespace {
 
     Json RunXpbd(const Options &Config) {
         gargantuan::SoftBodyWorldLimits Limits;
-        Limits.MaximumWorkers = static_cast<std::size_t>(Config.Workers);
+        Limits.MaximumWorkers = static_cast<std::size_t>(std::max(1, Config.Workers - 1));
+        const auto Hardware = std::max(1u, std::thread::hardware_concurrency());
+        const auto AllocatedBackgroundWorkers = std::max<std::size_t>(1,
+            std::min<std::size_t>(Hardware > 1 ? Hardware - 1 : 1, Limits.MaximumWorkers));
         gargantuan::SoftBodyWorld World(Limits);
         const bool Rubber = !IsCloth(Config);
         const int Count = BodyCount(Config);
@@ -500,6 +508,9 @@ namespace {
             if (!Definitions[0].Enabled) ++DisabledFrames;
             gargantuan::SoftBodyStepConfig Step;
             Step.Gravity = {0.0f, -Config.Gravity, 0.0f};
+            Step.ExecutionMode = Config.Workers == 1 ?
+                gargantuan::SoftBodyExecutionMode::SynchronousReference :
+                gargantuan::SoftBodyExecutionMode::Jobified;
             gargantuan::SoftBodyCollider Collider;
             if (HasMovingCollider(Config)) {
                 Collider.Shape.Kind = gargantuan::PhysicsShapeKind::Ball;
@@ -539,6 +550,7 @@ namespace {
             Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs}, {"Bodies", std::move(BodyQuality)},
                               {"StateHash", std::to_string(FrameHash)},
                               {"WorkerCount", Result.Profile.WorkerCount},
+                              {"WorkerUtilization", Result.Profile.WorkerUtilization},
                               {"CollisionNanoseconds", Result.Profile.CollisionNanoseconds},
                               {"ConstraintNanoseconds", Result.Profile.ConstraintNanoseconds}});
         }
@@ -548,7 +560,13 @@ namespace {
                 {"Finite", Finite}, {"MaxEdgeStretch", MaximumStretch},
                 {"MaxPinDrift", MaximumPinDrift}, {"MaxVolumeError", MaximumVolumeError},
                 {"MaxPenetration", MaximumPenetration}, {"InvertedTetrahedronFrames", InvertedTetrahedra},
-                {"MaximumWorkers", Config.Workers}, {"CallerParticipatesInDispatchWait", true},
+                {"RequestedCpuBudget", Config.Workers},
+                {"AllocatedBackgroundWorkers", AllocatedBackgroundWorkers},
+                {"ActiveBackgroundWorkers", Config.Workers == 1 ? Json(0) : Json(nullptr)},
+                {"WorkerActivityMeasurement", Config.Workers == 1 ? "Caller solves; reserved worker idle" :
+                    "Unavailable; worker count is allocated capacity, utilization is recorded per frame"},
+                {"CallerRole", Config.Workers == 1 ? "SynchronousSolve" : "DispatchAndWait"},
+                {"ExecutionMode", Config.Workers == 1 ? "SynchronousReference" : "Jobified"},
                 {"TimingScope", "ProductionSoftBodyWorldStep including owned positions and indices; quality analysis excluded"},
                 {"SolverIterations", "Automatic"},
                 {"ParticleMass", ParticleMass(Config)}, {"Track", Config.Track},

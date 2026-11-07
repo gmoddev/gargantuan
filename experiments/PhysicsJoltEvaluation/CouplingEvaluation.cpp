@@ -16,6 +16,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 
 namespace {
     using PhysicsJoltEvaluation::JoltWorld;
@@ -273,7 +274,11 @@ namespace {
                 {"MaxVolumeError", MaxVolumeError}, {"MaxPinDrift", MaxPinDrift},
                 {"MaxParticlePenetration", MaxParticlePenetration},
                 {"InvertedTetrahedronFrames", InvertedTetrahedronFrames},
-                {"BackgroundWorkers", BackgroundWorkers}, {"CallingThreads", 1},
+                {"RequestedCpuBudget", Config.Workers},
+                {"AllocatedBackgroundWorkers", BackgroundWorkers},
+                {"ActiveBackgroundWorkers", nullptr},
+                {"WorkerActivityMeasurement", "Unavailable; thread pool capacity is not per-frame active worker count"},
+                {"CallerRole", "ParticipatesInSolve"}, {"ExecutionMode", "JoltThreadPool"},
                 {"CollisionSteps", 1}, {"SolverIterations", 24}, {"DeltaTime", DeltaTime},
                 {"SoftVertices", Shared->mVertices.size()}, {"SoftEdges", Shared->mEdgeConstraints.size()},
                 {"SoftVolumes", Shared->mVolumeConstraints.size()}, {"AnchoredBoundary", !IsRubber},
@@ -294,7 +299,10 @@ namespace {
                     {"Reason", "Current cloth topology is a fixed vertical X/Y plane; horizontal membrane comparison needs a private topology adapter"}};
         gargantuan::PhysicsWorld Rigid({.Gravity = glm::vec3(0.0f)});
         gargantuan::SoftBodyWorldLimits Limits;
-        Limits.MaximumWorkers = static_cast<std::size_t>(Config.Workers);
+        Limits.MaximumWorkers = static_cast<std::size_t>(std::max(1, Config.Workers - 1));
+        const auto Hardware = std::max(1u, std::thread::hardware_concurrency());
+        const auto AllocatedBackgroundWorkers = std::max<std::size_t>(1,
+            std::min<std::size_t>(Hardware > 1 ? Hardware - 1 : 1, Limits.MaximumWorkers));
         auto Backend = PhysicsJoltEvaluation::CreateFeedbackSoftBodyBackend(Limits);
         auto *FeedbackBackend = Backend.get();
         gargantuan::SoftBodyWorld Soft(std::move(Backend));
@@ -356,6 +364,9 @@ namespace {
             const double RigidMs = PhysicsJoltEvaluation::Milliseconds(RigidStart);
             gargantuan::SoftBodyStepConfig SoftConfig;
             SoftConfig.Gravity = glm::vec3(0.0f);
+            SoftConfig.ExecutionMode = Config.Workers == 1 ?
+                gargantuan::SoftBodyExecutionMode::SynchronousReference :
+                gargantuan::SoftBodyExecutionMode::Jobified;
             std::vector<gargantuan::PhysicsBodyState> RigidStates;
             for (auto Id : Rigids) {
                 auto State = Rigid.GetBodyState(Id);
@@ -518,6 +529,8 @@ namespace {
                                                      State->LinearVelocity.z}}, {"Mass", State->Mass}});
             }
             Frames.push_back({{"Frame", Frame}, {"RigidMs", RigidMs}, {"SoftMs", SoftMs},
+                              {"SoftWorkerCount", Result.Profile.WorkerCount},
+                              {"SoftWorkerUtilization", Result.Profile.WorkerUtilization},
                               {"FeedbackMs", FeedbackMs}, {"Rigids", std::move(RigidJson)},
                               {"Feedback", std::move(Feedback)},
                               {"SoftCenter", {SoftCenter.x, SoftCenter.y, SoftCenter.z}},
@@ -538,7 +551,13 @@ namespace {
                 {"TotalProjectionsPerRigid", Json::array({TotalProjectionsPerRigid[0], TotalProjectionsPerRigid[1]})},
                 {"DeltaTime", DeltaTime}, {"RigidSubsteps", 4},
                 {"RigidShape", "Ball"}, {"RigidRadius", RigidRadius}, {"RigidDensity", RigidDensity},
-                {"MaximumSoftWorkers", Config.Workers},
+                {"RequestedCpuBudget", Config.Workers},
+                {"AllocatedSoftBackgroundWorkers", AllocatedBackgroundWorkers},
+                {"ActiveSoftBackgroundWorkers", Config.Workers == 1 ? Json(0) : Json(nullptr)},
+                {"WorkerActivityMeasurement", Config.Workers == 1 ? "Caller solves; reserved worker idle" :
+                    "Unavailable; worker count is allocated capacity, utilization is recorded per frame"},
+                {"SoftCallerRole", Config.Workers == 1 ? "SynchronousSolve" : "DispatchAndWait"},
+                {"SoftExecutionMode", Config.Workers == 1 ? "SynchronousReference" : "Jobified"},
                 {"MomentumConservationQualified", false},
                 {"Limit", "The private XPBD copy observes each collision projection and transfers its opposite particle velocity change to Box3D at the next rigid safe point. This staggered reaction is clamped and is not a solved two-body constraint or conservation proof"}};
     }
