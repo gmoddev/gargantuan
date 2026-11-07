@@ -1260,6 +1260,86 @@ namespace {
 		Check(Part->GetMass() == 0.0f, "removed Part retires published body diagnostics");
 	}
 
+	void TestBodyControlCapabilityBoundary() {
+		using namespace gargantuan;
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Part = std::make_shared<gargantuan::Part>();
+		Part->SetName("CapabilityProbe");
+		Part->SetParent(Workspace);
+		const auto Initial = Part->GetCFrame();
+		ScriptEngine Engine(Workspace->GetDataModel());
+		StackValue<std::shared_ptr<gargantuan::Part>>::Push(Engine.L, Part);
+		lua_setglobal(Engine.L, "ControlPart");
+		auto Run = [&](const char *Name, const std::string &Source, ScriptSecurityContext Context) {
+			const auto Bytecode = Luau::compile(Source);
+			const int Loaded = luau_load(Engine.L, Name, Bytecode.data(), Bytecode.size(), 0);
+			int Status = Loaded;
+			if (Loaded == LUA_OK) {
+				ScriptSecurityScope Security(Context);
+				Status = lua_pcall(Engine.L, 0, 0, 0);
+			}
+			if (Status != LUA_OK) {
+				std::cerr << "[Physics:Authority] " << Name << ": " <<
+					(lua_tostring(Engine.L, -1) ? lua_tostring(Engine.L, -1) : "unknown") << '\n';
+				lua_settop(Engine.L, 0);
+			}
+			return Status == LUA_OK;
+		};
+		const ScriptSecurityContext StudioReadOnly{
+			ScriptExecutionDomain::Studio, {ScriptCapability::ReadDataModel}};
+		Check(Run("physics-denied-writes", R"(
+			local Part = ControlPart
+			local Force = Vector3.new(3, 0, 0)
+			assert(Part:GetMass() > 0)
+			assert(not pcall(function() Part:ApplyImpulse(Force) end))
+			assert(not pcall(function() Part:ApplyAngularImpulse(Force) end))
+			assert(not pcall(function() Part:ApplyImpulseAtPosition(Force, Vector3.new(0, 0, 1)) end))
+			assert(not pcall(function() Part:ApplyForce(Force) end))
+			assert(not pcall(function() Part:ApplyTorque(Force) end))
+			assert(not pcall(function() Part:SetLinearVelocity(Force) end))
+			assert(not pcall(function() Part:SetAngularVelocity(Force) end))
+			assert(not pcall(function() Part:SetAwake(false) end))
+		)", StudioReadOnly), "read-only Studio context denies every BasePart runtime write");
+		const ScriptSecurityContext NoCaps{ScriptExecutionDomain::Core, {}};
+		Check(Run("physics-denied-reads", R"(
+			local Part = ControlPart
+			assert(not pcall(function() return Part:GetLinearVelocity() end))
+			assert(not pcall(function() return Part:GetAngularVelocity() end))
+			assert(not pcall(function() return Part:GetMass() end))
+			assert(not pcall(function() return Part:GetLocalInertia() end))
+			assert(not pcall(function() return Part:GetAwake() end))
+		)", NoCaps), "no-capability context denies every BasePart runtime read");
+		Workspace->StepPhysics(1.0f / 60.0f, std::nullopt);
+		Check(Part->GetCFrame().FuzzyEq(Initial) &&
+			Near(glm::length(Part->GetLinearVelocity()), 0.0f) &&
+			Near(glm::length(Part->GetAngularVelocity()), 0.0f) && Part->GetAwake(),
+			"denied BasePart controls do not enqueue velocity, impulses, forces, torque, or sleep");
+		Check(Run("physics-capable-controls", R"(
+			local Part = ControlPart
+			local Linear = Vector3.new(2, 0, 0)
+			Part:SetLinearVelocity(Linear)
+			Part:SetAngularVelocity(Vector3.new(0, 1, 0))
+			Part:ApplyImpulse(Vector3.new(1, 0, 0))
+			Part:ApplyAngularImpulse(Vector3.new(0, 1, 0))
+			Part:ApplyImpulseAtPosition(Vector3.new(1, 0, 0), Vector3.new(0, 0, 1))
+			Part:ApplyForce(Vector3.new(1, 0, 0))
+			Part:ApplyTorque(Vector3.new(0, 1, 0))
+			Part:SetAwake(true)
+			assert(Part:GetLinearVelocity().X == 2)
+			assert(Part:GetAngularVelocity().Y == 1)
+			assert(Part:GetMass() > 0)
+			assert(Part:GetLocalInertia().X > 0)
+			assert(Part:GetAwake())
+		)", ScriptSecurityContext::ClientRuntime()),
+			"capable gameplay Luau retains all BasePart runtime controls and observations");
+		Workspace->StepPhysics(1.0f / 60.0f, std::nullopt);
+		Check(Part->GetCFrame().Position.x > Initial.Position.x &&
+			Part->GetLinearVelocity().x > 2.0f && Part->GetAwake(),
+			"capable gameplay controls still reach the physics safe point");
+	}
+
 	void TestForceDurationAndKinematicMotion() {
 		using namespace gargantuan;
 		PhysicsWorld Backend(PhysicsWorldConfig{.Gravity={0,0,0}});
@@ -2009,6 +2089,7 @@ int main() {
 	TestSimulationPublicationAndImpulse();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
+	TestBodyControlCapabilityBoundary();
 	TestForceDurationAndKinematicMotion();
 	TestBodyControlPersistence();
 	TestContinuousCollisionPolicy();

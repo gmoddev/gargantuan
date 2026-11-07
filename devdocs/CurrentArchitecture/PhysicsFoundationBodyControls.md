@@ -65,6 +65,12 @@ corresponding getters before the safe point. These are runtime observations,
 not durable properties or a second motion authority. Solver motion continues
 to publish `CFrame` through the existing WorldRoot path.
 
+Every runtime control method, including the original `ApplyImpulse`, requires
+`MutateDataModel` before it changes pending state. All five inspection methods
+require `ReadDataModel`. These method-level checks complement the existing
+execution-domain and object-liveness guards. Denied calls leave the pending
+physics queue unchanged.
+
 ## One collision compatibility rule
 
 There are 16 numbered groups, `0..15`. Each body belongs to one group and has
