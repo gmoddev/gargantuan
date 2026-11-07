@@ -1090,6 +1090,9 @@ namespace gargantuan {
 				[&] { return Physics.Step({.DeltaTime = STEP_INTERVAL, .SubStepCount = SUB_STEP_COUNT}); });
 			for (const auto &Part : Parts) {
 				if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
+				// Static state changes only at admission or a committed safe-point edit.
+				// Consult accepted state: a failed authored update may leave a dynamic body live.
+				if (Part->PublishedPhysicsState.Description.Anchored) continue;
 				auto Found = PartBodies.find(Part->GetObjectId());
 				if (Found != PartBodies.end())
 					if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
