@@ -46,8 +46,18 @@ def Main():
         raise RuntimeError("[Physics:Evaluation] Jolt source pin/cleanliness changed")
     Mainline = "5b6782e35c4e24fd80bc8d5526104c615c72d84d"
     subprocess.run(["git", "-C", str(Root), "merge-base", "--is-ancestor", Mainline, Source], check=True)
-    Inputs = {str(Path.relative_to(Root)).replace("\\", "/"): Hash(Path)
-              for Path in sorted((Root / "experiments/PhysicsJoltEvaluation").glob("*")) if Path.is_file()}
+    Changed = Git(Root, "diff", "--name-only", "HEAD", "--ignore-submodules=all").splitlines()
+    GeneratedPrefixes = ("src/classes/generated/", "src/services/generated/", "include/gargantuan/classes/generated/", "include/gargantuan/services/generated/")
+    Unexpected = [Name for Name in Changed if not Name.startswith(GeneratedPrefixes)]
+    if Unexpected:
+        raise RuntimeError("[Physics:Evaluation] Uncommitted non-generated source: " + repr(Unexpected))
+    SourceDiff = Git(Root, "diff", "--binary", "HEAD", "--ignore-submodules=all")
+    (Output / "GeneratedSource.patch").write_text(SourceDiff, encoding="utf-8")
+    InputFiles = {Root / "CMakeLists.txt"}
+    for Directory in ["src", "include", "cmake", "assets/classes", "assets/services", "tools/classgen", "experiments/PhysicsJoltEvaluation"]:
+        InputFiles.update(Path for Path in (Root / Directory).rglob("*")
+                          if Path.is_file() and "__pycache__" not in Path.parts)
+    Inputs = {str(Path.relative_to(Root)).replace("\\", "/"): Hash(Path) for Path in sorted(InputFiles)}
     Metadata = {"Source": Source, "Tree": Git(Root, "rev-parse", "HEAD^{tree}"),
                 "MergedMain": Mainline, "Jolt": JoltSource,
                 "SourceStatus": Git(Root, "status", "--porcelain", "--untracked-files=no"),
@@ -57,6 +67,9 @@ def Main():
                 "Affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
                 "StartedUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "Mode": Arguments.mode, "InputSha256": Inputs, "Binaries": {}, "Runs": []}
+    Metadata["FullTrackedDiffSha256"] = hashlib.sha256(SourceDiff.encode("utf-8")).hexdigest()
+    Metadata["VendorGitlinks"] = Git(Root, "ls-tree", "HEAD", "vendor/")
+    Metadata["InputHashScope"] = "Production src/include/cmake, class/service definitions, classgen, root CMake and experiment files; generated tracked differences captured separately; vendor/Jolt pin and build provenance recorded separately"
     for Name in ["/proc/cpuinfo", "/sys/fs/cgroup/cpu.max", "/sys/fs/cgroup/memory.max"]:
         Path = pathlib.Path(Name)
         if Path.is_file():
@@ -82,12 +95,16 @@ def Main():
     Jobs = []
     for Repeat in range(1, Repeats + 1):
         for Budget in Budgets:
-            for Backend in ["box3d", "jolt"]:
-                Args = [f"--backend={Backend}", "--case=all", f"--workers={Budget}"]
-                if Arguments.mode == "diagnostic": Args.append("--quick")
-                Jobs.append((f"Rigid-{Backend}-T{Budget}-R{Repeat}", "Rigid", Args))
+            RigidCases = ["all"] if Arguments.mode == "diagnostic" else ["static-world", "stack", "dense-contacts",
+                "mostly-static", "body-churn", "sleep-wake", "mesh-contact", "advanced-queries", "mesh-query-dedup",
+                "filter-updates", "moving-ccd-off", "moving-ccd-on", "joint-motors", "spring-distance", "articulated-chain", "concurrent-admission"]
+            for Case in RigidCases:
+                for Backend in ["box3d", "jolt"]:
+                    Args = [f"--backend={Backend}", f"--case={Case}", f"--workers={Budget}"]
+                    if Arguments.mode == "diagnostic": Args.append("--quick")
+                    Jobs.append((f"Rigid-{Backend}-{Case}-T{Budget}-R{Repeat}", "Rigid", Args))
             Cases = ["TinyCloth"] if Arguments.mode == "diagnostic" else [
-                "TinyCloth", "Cloth4K", "Cloth16K", "FourCloths", "Rubber", "MovingCollider", "Attachments", "PointImpulse", "Lifecycle"]
+                "TinyCloth", "Cloth4K", "Cloth16K", "FourCloths", "Rubber", "MovingCollider", "HighSpeedCollider", "Attachments", "PointImpulse", "Lifecycle"]
             for Case in Cases:
                 for Backend in ["XPBD", "Jolt"]:
                     Jobs.append((f"Soft-{Backend}-{Case}-T{Budget}-R{Repeat}", "Soft", [
@@ -152,8 +169,9 @@ def Main():
     Metadata["JoltUnchanged"] = Git(Arguments.jolt, "rev-parse", "HEAD") == JoltSource and not Git(Arguments.jolt, "status", "--porcelain")
     Metadata["ExperimentInputsUnchanged"] = all((Root / Name).is_file() and Hash(Root / Name) == Digest for Name, Digest in Inputs.items())
     Metadata["BinariesUnchanged"] = all(Hash(Executables[Kind]) == Value["Sha256"] for Kind, Value in Metadata["Binaries"].items())
+    Metadata["SourceRevisionUnchanged"] = Git(Root, "rev-parse", "HEAD") == Source and Git(Root, "diff", "--binary", "HEAD", "--ignore-submodules=all") == SourceDiff
     (Output / "Collection.json").write_text(json.dumps(Metadata, indent=2), encoding="utf-8")
-    if not all(Metadata[Key] for Key in ["JoltUnchanged", "ExperimentInputsUnchanged", "BinariesUnchanged"]): return 2
+    if not all(Metadata[Key] for Key in ["JoltUnchanged", "ExperimentInputsUnchanged", "BinariesUnchanged", "SourceRevisionUnchanged"]): return 2
     return 2 if HarnessFailures else 1 if QualityFailures else 0
 
 

@@ -83,9 +83,12 @@ or compliance numbers do not establish equal stiffness or accuracy.
   use30 warmup and120 measured fixed steps unless a named lifecycle or coupling
   scenario needs an explicit different horizon. Retain individual samples,
   process-level P50/P95/P99 and ranges; do not pool independent process runs.
-- Thread budgets1/2/8 mean total participating threads, including the caller.
-  Record actual XPBD workers, Jolt background workers and caller participation.
-  A setting that does not affect a backend is labeled, not presented as scaling.
+- Requested budgets1/2/8 include the caller. Jolt's caller participates in solve;
+  XPBD's caller dispatches/waits for body jobs. The single-thread XPBD reference
+  solves on the caller but may retain a minimum parked backend worker. Record
+  actual allocated/active workers and caller role; parked workers are not solver
+  capacity. A setting that does not affect a backend is labeled, not presented
+  as scaling. Any additional equal-solver-worker track must be named separately.
 - Separate creation/admission, mutation, simulation, query, copied extraction,
   collider synchronization and teardown. Retain process CPU, RSS/peak RSS and
   separately instrumented allocation/storage observations. Process peaks are
