@@ -29,6 +29,8 @@ namespace {
         float Gravity = 196.2f;
         std::string Track = "Historical";
         int Iterations = 0;
+        int Substeps = 1;
+        std::string Quality = "Automatic";
     };
 
     Options Parse(int ArgumentCount, char **Arguments) {
@@ -45,6 +47,8 @@ namespace {
             else if (Name == "--gravity") Result.Gravity = std::stof(Value);
             else if (Name == "--track") Result.Track = Value;
             else if (Name == "--iterations") Result.Iterations = std::stoi(Value);
+            else if (Name == "--substeps") Result.Substeps = std::stoi(Value);
+            else if (Name == "--quality") Result.Quality = Value;
             else throw std::runtime_error("[Physics:SoftEvaluation] Unknown option");
         }
         if (Result.Backend != "XPBD" && Result.Backend != "Jolt")
@@ -58,7 +62,13 @@ namespace {
             Result.Warmup < 0 || Result.Warmup >= Result.Frames || !std::isfinite(Result.Gravity) ||
             Result.Gravity < 0.0f || Result.Gravity > 196.2f ||
             (Result.Track != "Historical" && Result.Track != "FixedTotalMass") ||
-            Result.Iterations < 0 || Result.Iterations > 64)
+            Result.Iterations < 0 || Result.Iterations > 64 ||
+            (Result.Substeps != 1 && Result.Substeps != 4 && Result.Substeps != 8) ||
+            (Result.Quality != "Automatic" && Result.Quality != "High") ||
+            (Result.Backend == "Jolt" && Result.Quality != "Automatic") ||
+            ((Result.Substeps != 1 || Result.Quality != "Automatic") &&
+             Result.Case != "TinyCloth" && Result.Case != "Cloth4K" &&
+             Result.Case != "Cloth16K" && Result.Case != "FourCloths"))
             throw std::runtime_error("[Physics:SoftEvaluation] Option outside bounded range");
         return Result;
     }
@@ -89,6 +99,11 @@ namespace {
         if (Config.Iterations > 0) return Config.Iterations;
         if (Config.Case == "Rubber") return 16;
         return Resolution(Config) <= 64 ? 8 : 4;
+    }
+
+    int XpbdIterations(const Options &Config) {
+        if (Config.Quality == "High" || Resolution(Config) <= 64) return 8;
+        return 4;
     }
 
     constexpr std::uint64_t HashSeed = 1469598103934665603ULL;
@@ -369,7 +384,26 @@ namespace {
                                                    Iterations(Config), Rubber, 2.4f));
             }
             if (Bodies.empty()) ++DisabledFrames;
-            const double NativeStepMs = World.Step();
+            double NativeStepMs = 0.0;
+            Json NativeSubstepMs = Json::array();
+            Json BodyQuality = Json::array();
+            for (int Substep = 0; Substep < Config.Substeps; ++Substep) {
+                const double SubstepMs = World.Step(DeltaTime / static_cast<float>(Config.Substeps));
+                NativeStepMs += SubstepMs;
+                NativeSubstepMs.push_back(SubstepMs);
+                for (auto Body : Bodies) {
+                    const auto QualityValue = ObserveJolt(World, Body, *Shared, N, Rubber,
+                        Config.Case == "Attachments" && Frame >= Config.Frames / 2 ? 1.0f : 0.0f,
+                        HasMovingCollider(Config), ColliderZ(Config, Frame));
+                    MaximumStretch = std::max(MaximumStretch, QualityValue.MaxEdgeStretch);
+                    MaximumPinDrift = std::max(MaximumPinDrift, QualityValue.MaxPinDrift);
+                    MaximumVolumeError = std::max(MaximumVolumeError, QualityValue.VolumeError);
+                    MaximumPenetration = std::max(MaximumPenetration, QualityValue.MaxPenetration);
+                    InvertedTetrahedra += QualityValue.InvertedTetrahedra;
+                    Finite &= QualityValue.Finite;
+                    if (Substep + 1 == Config.Substeps) BodyQuality.push_back(QualityJson(QualityValue));
+                }
+            }
             const auto ExtractionStart = PhysicsJoltEvaluation::Clock::now();
             std::vector<std::vector<JPH::Vec3>> OwnedFramePositions;
             OwnedFramePositions.reserve(Bodies.size());
@@ -394,21 +428,9 @@ namespace {
                 }
             FinalStateHash = FrameHash;
             const double StepMs = NativeStepMs + OwnedExtractionMs;
-            Json BodyQuality = Json::array();
-            for (auto Body : Bodies) {
-                const auto QualityValue = ObserveJolt(World, Body, *Shared, N, Rubber,
-                    Config.Case == "Attachments" && Frame >= Config.Frames / 2 ? 1.0f : 0.0f,
-                    HasMovingCollider(Config), ColliderZ(Config, Frame));
-                MaximumStretch = std::max(MaximumStretch, QualityValue.MaxEdgeStretch);
-                MaximumPinDrift = std::max(MaximumPinDrift, QualityValue.MaxPinDrift);
-                MaximumVolumeError = std::max(MaximumVolumeError, QualityValue.VolumeError);
-                MaximumPenetration = std::max(MaximumPenetration, QualityValue.MaxPenetration);
-                InvertedTetrahedra += QualityValue.InvertedTetrahedra;
-                Finite &= QualityValue.Finite;
-                BodyQuality.push_back(QualityJson(QualityValue));
-            }
             Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs},
                               {"NativeStepMs", NativeStepMs}, {"OwnedExtractionMs", OwnedExtractionMs},
+                              {"NativeSubstepMs", std::move(NativeSubstepMs)},
                               {"OwnedPositionBytes", OwnedPositionBytes},
                               {"StateHash", std::to_string(FrameHash)},
                               {"Bodies", std::move(BodyQuality)}});
@@ -423,8 +445,12 @@ namespace {
                 {"ActiveBackgroundWorkers", nullptr},
                 {"WorkerActivityMeasurement", "Unavailable; thread pool capacity is not per-frame active worker count"},
                 {"CallerRole", "ParticipatesInSolve"}, {"ExecutionMode", "JoltThreadPool"},
-                {"TimingScope", "NativeStepPlusOwnedPositionCopy; quality analysis excluded"},
+                {"TimingScope", "Sum of native substeps plus final owned position copy; quality analysis excluded"},
                 {"SolverIterations", Iterations(Config)}, {"ParticleMass", ParticleMass(Config)},
+                {"SubstepsPerFrame", Config.Substeps},
+                {"SubstepDeltaTime", DeltaTime / static_cast<float>(Config.Substeps)},
+                {"JoltLinearDampingParameter", 2.4},
+                {"QualityObservationsPerFrame", Config.Substeps},
                 {"Track", Config.Track},
                 {"FinalStateHash", std::to_string(FinalStateHash)},
                 {"SoftVerticesPerBody", Shared->mVertices.size()}, {"Bodies", Count},
@@ -453,6 +479,12 @@ namespace {
         Definition.ResolutionZ = Rubber ? static_cast<std::uint32_t>(N) : 4;
         Definition.Size = Rubber ? glm::vec3(2.0f) : glm::vec3(8.0f, 8.0f, 0.5f);
         Definition.Material.ParticleMass = ParticleMass(Config);
+        const float OriginalDamping = Definition.Material.Damping;
+        if (Config.Substeps > 1)
+            Definition.Material.Damping = static_cast<float>(1.0 -
+                std::pow(1.0 - static_cast<double>(OriginalDamping), 1.0 / Config.Substeps));
+        Definition.Quality = Config.Quality == "High" ?
+            gargantuan::SoftBodyQuality::High : gargantuan::SoftBodyQuality::Automatic;
         Definition.Position = {0.0f, Rubber ? 4.0f : 0.0f, 0.0f};
         for (int X = 0; X < N && !Rubber; ++X)
             Definition.Attachments.push_back({static_cast<std::uint32_t>(X),
@@ -507,6 +539,7 @@ namespace {
             }
             if (!Definitions[0].Enabled) ++DisabledFrames;
             gargantuan::SoftBodyStepConfig Step;
+            Step.DeltaTime = DeltaTime / static_cast<float>(Config.Substeps);
             Step.Gravity = {0.0f, -Config.Gravity, 0.0f};
             Step.ExecutionMode = Config.Workers == 1 ?
                 gargantuan::SoftBodyExecutionMode::SynchronousReference :
@@ -521,38 +554,60 @@ namespace {
                 Collider.Transform.Position = {0.0f, -10.0f, 0.0f};
             }
             Step.Colliders.push_back(Collider);
-            const auto StepStart = PhysicsJoltEvaluation::Clock::now();
-            auto Result = World.Step(Step);
-            const double StepMs = PhysicsJoltEvaluation::Milliseconds(StepStart);
+            double StepMs = 0.0;
+            std::uint64_t CollisionNanoseconds = 0;
+            std::uint64_t ConstraintNanoseconds = 0;
+            Json SubstepMs = Json::array();
+            Json SubstepWorkerCounts = Json::array();
+            Json SubstepWorkerUtilization = Json::array();
             std::uint64_t FrameHash = HashSeed;
             Json BodyQuality = Json::array();
-            for (std::size_t Index = 0; Index < Bodies.size(); ++Index) {
-                const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
-                    [&](const auto &State) { return State.Body == Bodies[Index]; });
-                if (Found == Result.States.end() || !Found->Positions)
-                    throw std::runtime_error("[Physics:SoftEvaluation] XPBD state missing");
-                for (const auto &Position : *Found->Positions) {
-                    FrameHash = HashCoordinate(FrameHash, Position.x);
-                    FrameHash = HashCoordinate(FrameHash, Position.y);
-                    FrameHash = HashCoordinate(FrameHash, Position.z);
+            std::size_t WorkerCount = 0;
+            double WorkerUtilization = 0.0;
+            for (int Substep = 0; Substep < Config.Substeps; ++Substep) {
+                const auto StepStart = PhysicsJoltEvaluation::Clock::now();
+                auto Result = World.Step(Step);
+                const double OneStepMs = PhysicsJoltEvaluation::Milliseconds(StepStart);
+                StepMs += OneStepMs;
+                SubstepMs.push_back(OneStepMs);
+                SubstepWorkerCounts.push_back(Result.Profile.WorkerCount);
+                SubstepWorkerUtilization.push_back(Result.Profile.WorkerUtilization);
+                CollisionNanoseconds += Result.Profile.CollisionNanoseconds;
+                ConstraintNanoseconds += Result.Profile.ConstraintNanoseconds;
+                WorkerCount = Result.Profile.WorkerCount;
+                WorkerUtilization += Result.Profile.WorkerUtilization / Config.Substeps;
+                for (std::size_t Index = 0; Index < Bodies.size(); ++Index) {
+                    const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
+                        [&](const auto &State) { return State.Body == Bodies[Index]; });
+                    if (Found == Result.States.end() || !Found->Positions)
+                        throw std::runtime_error("[Physics:SoftEvaluation] XPBD state missing");
+                    if (Substep + 1 == Config.Substeps)
+                        for (const auto &Position : *Found->Positions) {
+                            FrameHash = HashCoordinate(FrameHash, Position.x);
+                            FrameHash = HashCoordinate(FrameHash, Position.y);
+                            FrameHash = HashCoordinate(FrameHash, Position.z);
+                        }
+                    const auto QualityValue = ObserveXpbd(*Found, Definitions[Index],
+                        HasMovingCollider(Config), ColliderZ(Config, Frame));
+                    MaximumStretch = std::max(MaximumStretch, QualityValue.MaxEdgeStretch);
+                    MaximumPinDrift = std::max(MaximumPinDrift, QualityValue.MaxPinDrift);
+                    MaximumVolumeError = std::max(MaximumVolumeError, QualityValue.VolumeError);
+                    MaximumPenetration = std::max(MaximumPenetration, QualityValue.MaxPenetration);
+                    InvertedTetrahedra += QualityValue.InvertedTetrahedra;
+                    Finite &= QualityValue.Finite;
+                    if (Substep + 1 == Config.Substeps) BodyQuality.push_back(QualityJson(QualityValue));
                 }
-                const auto QualityValue = ObserveXpbd(*Found, Definitions[Index],
-                    HasMovingCollider(Config), ColliderZ(Config, Frame));
-                MaximumStretch = std::max(MaximumStretch, QualityValue.MaxEdgeStretch);
-                MaximumPinDrift = std::max(MaximumPinDrift, QualityValue.MaxPinDrift);
-                MaximumVolumeError = std::max(MaximumVolumeError, QualityValue.VolumeError);
-                MaximumPenetration = std::max(MaximumPenetration, QualityValue.MaxPenetration);
-                InvertedTetrahedra += QualityValue.InvertedTetrahedra;
-                Finite &= QualityValue.Finite;
-                BodyQuality.push_back(QualityJson(QualityValue));
             }
             FinalStateHash = FrameHash;
             Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs}, {"Bodies", std::move(BodyQuality)},
                               {"StateHash", std::to_string(FrameHash)},
-                              {"WorkerCount", Result.Profile.WorkerCount},
-                              {"WorkerUtilization", Result.Profile.WorkerUtilization},
-                              {"CollisionNanoseconds", Result.Profile.CollisionNanoseconds},
-                              {"ConstraintNanoseconds", Result.Profile.ConstraintNanoseconds}});
+                              {"SubstepMs", std::move(SubstepMs)},
+                              {"SubstepWorkerCounts", std::move(SubstepWorkerCounts)},
+                              {"SubstepWorkerUtilization", std::move(SubstepWorkerUtilization)},
+                              {"WorkerCount", WorkerCount},
+                              {"WorkerUtilization", WorkerUtilization},
+                              {"CollisionNanoseconds", CollisionNanoseconds},
+                              {"ConstraintNanoseconds", ConstraintNanoseconds}});
         }
         World.Shutdown();
         return {{"Backend", "XPBD"}, {"Case", Config.Case}, {"Frames", std::move(Frames)},
@@ -567,8 +622,15 @@ namespace {
                     "Unavailable; worker count is allocated capacity, utilization is recorded per frame"},
                 {"CallerRole", Config.Workers == 1 ? "SynchronousSolve" : "DispatchAndWait"},
                 {"ExecutionMode", Config.Workers == 1 ? "SynchronousReference" : "Jobified"},
-                {"TimingScope", "ProductionSoftBodyWorldStep including owned positions and indices; quality analysis excluded"},
-                {"SolverIterations", "Automatic"},
+                {"TimingScope", "Sum of production SoftBodyWorldStep calls including each owned result; quality analysis excluded"},
+                {"SolverIterations", XpbdIterations(Config)},
+                {"XpbdQualityPolicy", Config.Quality},
+                {"SubstepsPerFrame", Config.Substeps},
+                {"SubstepDeltaTime", DeltaTime / static_cast<float>(Config.Substeps)},
+                {"XpbdDampingPerSubstep", Definition.Material.Damping},
+                {"XpbdEffectiveDampingPerFrame", 1.0 -
+                    std::pow(1.0 - static_cast<double>(Definition.Material.Damping), Config.Substeps)},
+                {"QualityObservationsPerFrame", Config.Substeps},
                 {"ParticleMass", ParticleMass(Config)}, {"Track", Config.Track},
                 {"FinalStateHash", std::to_string(FinalStateHash)},
                 {"Bodies", Count}, {"TetrahedraPerCell", Rubber ? 5 : 0},
