@@ -1,7 +1,7 @@
 ---
 status: current
 owner: physics
-last_verified: 2026-09-09
+last_verified: 2026-11-07
 related_code:
   - include/gargantuan/physics/
   - src/physics/
@@ -24,6 +24,14 @@ with deformation. See [Soft-body Physics Foundation 2](SoftBodyPhysicsFoundation
 for the current deformable job, collision, and rubber architecture, and
 [Foundation 1](SoftBodyPhysicsFoundation.md) for the original semantic,
 renderer, and persistence baseline.
+
+The expansion contracts are [body controls and groups](PhysicsFoundationBodyControls.md),
+[shape casts and overlaps](PhysicsQueryFoundation1.md),
+[authored joints](PhysicsFoundationConstraints.md),
+[bounded moving-body CCD](PhysicsFoundationContinuousCollision.md), and
+[soft attachment control and diagnostics](PhysicsFoundationSoftControl.md).
+Their tests and exact campaign qualification evidence determine platform coverage;
+API presence alone is not a qualification receipt.
 
 ```text
 BasePart / Constraint semantics
@@ -54,7 +62,8 @@ The engine-facing contract is defined by `PhysicsTypes.hpp` and
 - `PhysicsBodyId` and `PhysicsConstraintId` are slot/generation value IDs;
 - `PhysicsShapeDesc` describes the supported Part primitives, size, and optional
   immutable collision triangle resource;
-- `PhysicsBodyDesc` describes transform, shape, anchoring, collision, touch, and density;
+- `PhysicsBodyDesc` describes transform, shape, motion mode, collision group/mask,
+  damping, gravity scale, sleep, moving-body CCD, touch, and density;
 - `PhysicsConstraintDesc` describes weld, ball socket, hinge, slider and
   distance joints between neutral body IDs, with local frames and bounded
   limit, motor and spring parameters;
