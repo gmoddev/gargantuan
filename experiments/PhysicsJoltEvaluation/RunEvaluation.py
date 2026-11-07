@@ -27,6 +27,10 @@ def Git(Root, *Arguments):
     return subprocess.check_output(["git", "-C", str(Root), *Arguments], text=True).strip()
 
 
+def SourcePatch(Root):
+    return subprocess.check_output(["git", "-C", str(Root), "diff", "--binary", "HEAD", "--ignore-submodules=all"], text=True)
+
+
 def Main():
     Parser = argparse.ArgumentParser()
     Parser.add_argument("--build", type=pathlib.Path, required=True)
@@ -51,8 +55,8 @@ def Main():
     Unexpected = [Name for Name in Changed if not Name.startswith(GeneratedPrefixes)]
     if Unexpected:
         raise RuntimeError("[Physics:Evaluation] Uncommitted non-generated source: " + repr(Unexpected))
-    SourceDiff = Git(Root, "diff", "--binary", "HEAD", "--ignore-submodules=all")
-    (Output / "GeneratedSource.patch").write_text(SourceDiff, encoding="utf-8")
+    SourceDiff = SourcePatch(Root)
+    (Output / "GeneratedSource.patch").write_text(SourceDiff, encoding="utf-8", newline="\n")
     InputFiles = {Root / "CMakeLists.txt"}
     for Directory in ["src", "include", "cmake", "assets/classes", "assets/services", "tools/classgen", "experiments/PhysicsJoltEvaluation"]:
         InputFiles.update(Path for Path in (Root / Directory).rglob("*")
@@ -169,7 +173,7 @@ def Main():
     Metadata["JoltUnchanged"] = Git(Arguments.jolt, "rev-parse", "HEAD") == JoltSource and not Git(Arguments.jolt, "status", "--porcelain")
     Metadata["ExperimentInputsUnchanged"] = all((Root / Name).is_file() and Hash(Root / Name) == Digest for Name, Digest in Inputs.items())
     Metadata["BinariesUnchanged"] = all(Hash(Executables[Kind]) == Value["Sha256"] for Kind, Value in Metadata["Binaries"].items())
-    Metadata["SourceRevisionUnchanged"] = Git(Root, "rev-parse", "HEAD") == Source and Git(Root, "diff", "--binary", "HEAD", "--ignore-submodules=all") == SourceDiff
+    Metadata["SourceRevisionUnchanged"] = Git(Root, "rev-parse", "HEAD") == Source and SourcePatch(Root) == SourceDiff
     (Output / "Collection.json").write_text(json.dumps(Metadata, indent=2), encoding="utf-8")
     if not all(Metadata[Key] for Key in ["JoltUnchanged", "ExperimentInputsUnchanged", "BinariesUnchanged", "SourceRevisionUnchanged"]): return 2
     return 2 if HarnessFailures else 1 if QualityFailures else 0
