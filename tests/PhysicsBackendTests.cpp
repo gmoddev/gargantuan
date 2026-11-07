@@ -1010,6 +1010,7 @@ namespace {
 	void TestGameplayLuauJointAssembly() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
+		Game->SetArchivable(true);
 		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		if (!WorkspaceValue) return;
 		WorkspaceValue->SetGravity(0.0f);
@@ -1018,6 +1019,7 @@ namespace {
 			local Workspace = game:GetService("Workspace")
 			local function MakePart(Name, Position, Anchored)
 				local Part = Instance.new("Part")
+				Part.Archivable = true
 				Part.Name = Name
 				Part.CFrame = CFrame.new(Position)
 				Part.CanCollide = false
@@ -1028,14 +1030,17 @@ namespace {
 			end
 			local function MakeJoint(Name, Kind, PartA, PartB, FrameA, FrameB)
 				local AttachmentA = Instance.new("Attachment")
+				AttachmentA.Archivable = true
 				AttachmentA.Name = Name .. "A"
 				AttachmentA.CFrame = FrameA
 				AttachmentA.Parent = PartA
 				local AttachmentB = Instance.new("Attachment")
+				AttachmentB.Archivable = true
 				AttachmentB.Name = Name .. "B"
 				AttachmentB.CFrame = FrameB
 				AttachmentB.Parent = PartB
 				local Joint = Instance.new("JointConstraint")
+				Joint.Archivable = true
 				Joint.Name = Name
 				Joint.JointType = Kind
 				Joint.Parent = Workspace
@@ -1254,10 +1259,12 @@ namespace {
 	void TestBodyControlPersistence() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
+		Game->SetArchivable(true);
 		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
 		if (!Workspace) return;
 		auto Part = std::make_shared<gargantuan::Part>();
 		Part->SetName("PersistedRigidControl");
+		Part->SetArchivable(true);
 		Part->SetKinematic(true);
 		Part->SetCollisionGroup(7);
 		Part->SetCollisionMask(129);
