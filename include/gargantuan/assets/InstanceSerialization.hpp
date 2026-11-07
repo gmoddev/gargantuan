@@ -22,9 +22,9 @@ namespace gargantuan::InstanceSerialization {
 		std::vector<std::string> CurrentPath{"(TOP)"};
 		std::size_t ObjectsDecoded = 0;
 		std::uint32_t FormatVersion = 0;
-		std::unordered_map<std::uint32_t, std::shared_ptr<Instance>> DocumentNodes;
+		std::unordered_map<std::uint32_t, std::shared_ptr<gargantuan::Instance>> DocumentNodes;
 		struct PendingReference {
-			std::shared_ptr<Instance> Owner;
+			std::shared_ptr<gargantuan::Instance> Owner;
 			std::string Property;
 			std::optional<std::uint32_t> TargetId;
 		};
