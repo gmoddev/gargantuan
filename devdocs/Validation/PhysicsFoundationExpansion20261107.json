@@ -19,7 +19,15 @@
     "RequiredDemonstration": "A deformable must affect a dynamic rigid body; reverse-only contact is insufficient evidence of bidirectional coupling",
     "Boundary": "Do not implement Jolt or broaden this campaign into a two-way coupling redesign"
   },
-  "Qualification": "No new feature or performance gate is claimed passed at campaign initialization",
+  "DraftPR": "https://github.com/gmoddev/gargantuan/pull/18",
+  "Qualification": {
+    "Baseline": "04c6385 real core Windows Release focused build, rigid and soft tests, query/activation/soft measurements passed; equal WorldRoot fixture overlaid separately",
+    "Candidate": "Combined core compiled. Focused queries, dynamics, CCD and live mechanisms pass their assertions. Soft suite and foundation/query/activation/CCD/motor measurements passed at intermediate sources. Exact final-source rerun remains required",
+    "OpenIntegration": "Joint save/reopen exposed inherited omission of native object references; bounded document-local reference persistence implementation in progress",
+    "Hosted": "Final-source complete Windows and Ubuntu sanitizer qualification pending",
+    "Review": "Independent review found and source-verified fixes for soft update atomicity/motion preservation, CCD final-transform publication and joint fixture scope ordering; final runtime audit pending",
+    "Limits": "Focused MSVC19.44 headless profile is not the full hosted MSVC19.50/Clang19 contract. Allocation counts unavailable; process RSS and solver owned-byte estimates have separate meanings"
+  },
   "Worker": "Generation14 actual reservation acquired; private proof retained only on worker. Bounded two-job builds; checked cleanup required before release",
   "SourceControl": "Draft PR required; no merge, deployment, release or publication"
 }
