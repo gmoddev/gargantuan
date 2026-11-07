@@ -498,6 +498,7 @@ namespace PhysicsJoltEvaluation {
 		struct SoftBodySimulationBatch {
 			float DeltaTime = SoftBodyStepInterval;
 			int Iterations = 8;
+			bool Diagnostics = true;
 			glm::vec3 Gravity{0.0f};
 			SoftBodyBroadphaseMode BroadphaseMode = SoftBodyBroadphaseMode::DeterministicSweep;
 			std::vector<SoftBodyCollider> Colliders;
@@ -768,7 +769,6 @@ namespace PhysicsJoltEvaluation {
 						Node, Batch.Colliders[ColliderIndex], Record.Definition.Material.Thickness
 					);
 					if (!Normal) continue;
-					const double PenetrationDepth = static_cast<double>(glm::length(Node.Position - Position));
 					if (ApplyFriction) {
 						const auto Movement = Node.Position - Node.PreviousPosition;
 						const auto NormalMovement = glm::dot(Movement, *Normal);
@@ -788,8 +788,11 @@ namespace PhysicsJoltEvaluation {
 						Feedback.AngularImpulseOrigin += glm::cross(Node.Position, Reaction);
 						Feedback.Position += Node.Position;
 						++Feedback.Contacts;
-						Item.Diagnostic.Contacts.push_back({Iteration, NodeIndex, ColliderIndex, *Normal,
-							Position, Node.Position, Reaction, PenetrationDepth, ApplyFriction});
+						if (Batch.Diagnostics) {
+							const double PenetrationDepth = static_cast<double>(glm::length(Node.Position - Position));
+							Item.Diagnostic.Contacts.push_back({Iteration, NodeIndex, ColliderIndex, *Normal,
+								Position, Node.Position, Reaction, PenetrationDepth, ApplyFriction});
+						}
 					}
 				}
 			}
@@ -864,8 +867,11 @@ namespace PhysicsJoltEvaluation {
 				return Result;
 			};
 			Item.Feedback.resize(Batch.Colliders.size());
-			CapturePhase("before-integration", -1, false, nullptr);
-			const auto BeforeIntegration = Positions();
+			std::vector<glm::vec3> BeforeIntegration;
+			if (Batch.Diagnostics) {
+				CapturePhase("before-integration", -1, false, nullptr);
+				BeforeIntegration = Positions();
+			}
 			const auto IntegrationStart = ProfileClock::now();
 			std::size_t MovableCount = 0;
 			for (const auto &Node : Record.Nodes)
@@ -887,33 +893,35 @@ namespace PhysicsJoltEvaluation {
 				Node.Position += Node.Velocity * Batch.DeltaTime;
 			}
 			Item.Profile.IntegrationNanoseconds += Nanoseconds(ProfileClock::now() - IntegrationStart);
-			CapturePhase("after-integration", -1, false, &BeforeIntegration);
+			if (Batch.Diagnostics) CapturePhase("after-integration", -1, false, &BeforeIntegration);
 
 			for (auto &Constraint : Record.Distances)
 				Constraint.Lambda = 0.0f;
 			for (auto &Constraint : Record.Volumes)
 				Constraint.Lambda = 0.0f;
 			const auto Iterations = Batch.Iterations;
-			Item.Diagnostic.Iterations = Iterations;
+			if (Batch.Diagnostics) Item.Diagnostic.Iterations = Iterations;
 			for (int Iteration = 0; Iteration < Iterations; ++Iteration) {
-				const auto BeforeConstraints = Positions();
+				std::vector<glm::vec3> BeforeConstraints;
+				if (Batch.Diagnostics) BeforeConstraints = Positions();
 				const auto ConstraintStart = ProfileClock::now();
 				SolveDistance(Record, Batch.DeltaTime);
 				SolveVolume(Record, Batch.DeltaTime);
 				SolveShapeRecovery(Record, Batch.DeltaTime);
-				CapturePhase("after-constraints", Iteration, true, &BeforeConstraints);
+				if (Batch.Diagnostics) CapturePhase("after-constraints", Iteration, true, &BeforeConstraints);
 				Item.Profile.ConstraintNanoseconds += Nanoseconds(ProfileClock::now() - ConstraintStart);
-				const auto BeforeContact = Positions();
+				std::vector<glm::vec3> BeforeContact;
+				if (Batch.Diagnostics) BeforeContact = Positions();
 				Collide(Item, Batch, Iteration, Iteration + 1 == Iterations);
 				ApplyAttachments(Record);
-				CapturePhase("after-contact-and-attachments", Iteration, true, &BeforeContact);
+				if (Batch.Diagnostics) CapturePhase("after-contact-and-attachments", Iteration, true, &BeforeContact);
 			}
 			for (auto &Node : Record.Nodes)
 				Node.Velocity = Node.InverseMass == 0.0f ? glm::vec3{}
 														 : (Node.Position - Node.PreviousPosition) / Batch.DeltaTime;
-			CapturePhase("after-velocity-reconstruction", Iterations, false, nullptr);
+			if (Batch.Diagnostics) CapturePhase("after-velocity-reconstruction", Iterations, false, nullptr);
 			++Record.VertexRevision;
-			Item.Diagnostic.VertexRevision = Record.VertexRevision;
+			if (Batch.Diagnostics) Item.Diagnostic.VertexRevision = Record.VertexRevision;
 			const auto ExtractionStart = ProfileClock::now();
 			Item.State = ExtractState(Item.Body, Record, true);
 			Item.Profile.ExtractionNanoseconds += Nanoseconds(ProfileClock::now() - ExtractionStart);
@@ -1208,6 +1216,7 @@ namespace PhysicsJoltEvaluation {
 					Batch = std::make_shared<SoftBodySimulationBatch>();
 					Batch->DeltaTime = Config.DeltaTime;
 					Batch->Iterations = Settings.Iterations;
+					Batch->Diagnostics = Settings.Diagnostics;
 					Batch->Gravity = Config.Gravity;
 					Batch->BroadphaseMode = Config.BroadphaseMode;
 					Batch->Colliders.reserve(std::min(Config.Colliders.size(), Limits.MaximumColliders));

@@ -64,6 +64,7 @@ namespace PhysicsJoltEvaluation {
 
     struct DiagnosticSettings {
         int Iterations = 8;
+        bool Diagnostics = true;
     };
 
     // Private experiment seam. The production soft-body interface is unchanged.
