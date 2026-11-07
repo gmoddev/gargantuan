@@ -12,6 +12,8 @@
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "physics/SoftBodyTestHooks.hpp"
 
 #include <algorithm>
@@ -283,9 +285,31 @@ namespace {
 		auto World=std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		World->SetGravity(0);
 		auto Rubber=std::make_shared<RubberBody>();
+		Rubber->SetName("GameplayRubber");
 		Rubber->SetResolutionX(4); Rubber->SetResolutionY(4); Rubber->SetResolutionZ(4);
 		Rubber->SetPosition({0,5,0}); Rubber->SetSize({2,2,2}); Rubber->SetParent(World);
 		World->StepPhysics(SoftBodyStepInterval,std::nullopt);
+		{
+			ScriptEngine Engine(Game);
+			const auto Bytecode=Luau::compile(R"(
+				local W=game:GetService("Workspace")
+				local R=W.GameplayRubber
+				local Info=W:GetDeformableInfo(R)
+				assert(Info.VertexCount==64 and Info.ConstraintCount>0 and Info.Enabled)
+				assert(not pcall(function() Info.VertexCount=0 end))
+				assert(W:GetDeformableVertex(R,0)~=nil)
+				assert(W:GetDeformableVertex(R,-1)==nil and W:GetDeformableVertex(R,65536)==nil)
+				assert(W:GetDeformableVertex(R,1.5)==nil and W:GetDeformableInfo(W)==nil)
+				local Step=W:GetSoftBodyStepInfo()
+				assert(Step.SimulatedVertices==64 and Step.SimulatedBodies==1)
+				assert(not pcall(function() Step.FrozenBodies=0 end))
+			)");
+			const int Loaded=luau_load(Engine.L,"soft-diagnostics",Bytecode.data(),Bytecode.size(),0);
+			ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+			const int Status=Loaded==LUA_OK?lua_pcall(Engine.L,0,0,0):Loaded;
+			if(Status!=LUA_OK) std::cerr << "[Physics:SoftDiagnostics] " << lua_tostring(Engine.L,-1) << '\n';
+			Check(Status==LUA_OK,"gameplay Luau reads bounded immutable deformable diagnostics");
+		}
 		const auto Before=World->GetDeformableVertex(Rubber->GetObjectId(),63);
 		Rubber->ApplyImpulseAtPosition({0,0,2},{1,6,1});
 		World->StepPhysics(SoftBodyStepInterval,std::nullopt);
