@@ -53,6 +53,15 @@ def VerifyVendors(Root, Proof):
     return {'Mode':'CleanRecursiveGitSubmodules','Status':Status}
 
 
+def BindVendorInputs(Inputs, Proof):
+    Data = json.loads(Proof.read_text())
+    Prefixes = tuple('vendor/' + Export['Archive'].removesuffix('.tar') + '/'
+                     for Export in Data['Exports'] if '__' not in Export['Archive'])
+    Current = {Name:Digest for Name,Digest in Inputs.items() if Name.startswith(Prefixes)}
+    if Current != Data['Files']:
+        raise RuntimeError('[Physics:Evaluation] Current vendor path/hash set differs from pinned export proof')
+
+
 def Main():
     Parser = argparse.ArgumentParser()
     Parser.add_argument("--build", type=pathlib.Path, required=True)
@@ -87,6 +96,7 @@ def Main():
         InputFiles.update(Path for Path in (Root / Directory).rglob("*")
                           if Path.is_file() and not Path.is_symlink() and not any(Part in Path.parts for Part in ['__pycache__','.git','Xcode']))
     Inputs = {str(Path.relative_to(Root)).replace("\\", "/"): Hash(Path) for Path in sorted(InputFiles)}
+    if Arguments.vendor_proof: BindVendorInputs(Inputs, Arguments.vendor_proof)
     InputManifest = Output / 'InputSha256.json'
     InputManifest.write_text(json.dumps(Inputs,sort_keys=True,indent=2),encoding='utf-8')
     Metadata = {"Source": Source, "Tree": Git(Root, "rev-parse", "HEAD^{tree}"),
