@@ -1,0 +1,25 @@
+{
+  "State": "IN_PROGRESS",
+  "Base": "04c6385f26de9b7d96b48de06c911ecea692796c",
+  "Branch": "feature/physics-foundation-expansion-20261107",
+  "Milestones": {
+    "P1": "Body dynamics and one canonical 16-group mutual collision-mask policy",
+    "P2": "Bounded shape casts, overlaps and supported rigid CCD",
+    "P3": "Gameplay joints, limits and motors",
+    "P4": "Motion-preserving attachment updates and bounded soft diagnostics",
+    "P5": "WorldRoot, Luau, authoring, persistence and real gameplay fixtures",
+    "P6": "Before/after performance, Windows/Linux/sanitizers and independent review"
+  },
+  "Ownership": "DataModel authority, Main safe points, generation-safe neutral identities and deterministic copied publication remain unchanged",
+  "Backends": "Preserve Box3D rigid and owned XPBD soft; preserve dense mesh chunking and compatibility patches",
+  "PriorExperiment": "experiment/jolt-reassessment-20261107 remains unchanged",
+  "FutureComparison": {
+    "Criterion": "Evaluate consolidation value independently of raw performance",
+    "AccountFor": ["Cross-solver synchronization and contact exchange", "Duplicate geometry/resource lifetimes", "Solver-specific code, tests and failure modes", "Feature maintenance", "Bounded upstream patchset and rebase costs"],
+    "RequiredDemonstration": "A deformable must affect a dynamic rigid body; reverse-only contact is insufficient evidence of bidirectional coupling",
+    "Boundary": "Do not implement Jolt or broaden this campaign into a two-way coupling redesign"
+  },
+  "Qualification": "No new feature or performance gate is claimed passed at campaign initialization",
+  "Worker": "Generation14 actual reservation acquired; private proof retained only on worker. Bounded two-job builds; checked cleanup required before release",
+  "SourceControl": "Draft PR required; no merge, deployment, release or publication"
+}
