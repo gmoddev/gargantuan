@@ -72,10 +72,18 @@ namespace {
 
     struct ContactCounter final : JPH::SoftBodyContactListener {
         std::atomic<std::uint64_t> VertexContacts{0};
+        std::array<JPH::BodyID, 2> TargetIds{};
+        std::array<std::atomic<std::uint64_t>, 2> TargetContacts{};
         void OnSoftBodyContactAdded(const JPH::Body &, const JPH::SoftBodyManifold &Manifold) override {
             std::uint64_t Count = 0;
-            for (const auto &Vertex : Manifold.GetVertices())
-                if (Manifold.HasContact(Vertex)) ++Count;
+            for (const auto &Vertex : Manifold.GetVertices()) {
+                if (!Manifold.HasContact(Vertex)) continue;
+                ++Count;
+                const auto Body = Manifold.GetContactBodyID(Vertex);
+                for (std::size_t Index = 0; Index < TargetIds.size(); ++Index)
+                    if (!TargetIds[Index].IsInvalid() && Body == TargetIds[Index])
+                        TargetContacts[Index].fetch_add(1, std::memory_order_relaxed);
+            }
             VertexContacts.fetch_add(Count, std::memory_order_relaxed);
         }
     };
@@ -178,6 +186,7 @@ namespace {
                 World.World.GetBodyInterface().SetLinearVelocity(Rigids.back(), JPH::Vec3(0.0f, 0.0f, -5.0f));
             }
         }
+        for (std::size_t Index = 0; Index < Rigids.size(); ++Index) Contacts.TargetIds[Index] = Rigids[Index];
 
         Json Frames = Json::array();
         double MaxStretch = 0.0;
@@ -187,6 +196,7 @@ namespace {
         std::size_t InvertedTetrahedronFrames = 0;
         bool Finite = true;
         std::uint64_t TotalVertexContacts = 0;
+        std::array<std::uint64_t, 2> TotalContactsPerRigid{};
         int FirstContactFrame = -1;
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             if (Config.Case == "Repeated" && Frame > 0 && Frame % 45 == 0) {
@@ -196,6 +206,12 @@ namespace {
             }
             const double StepMs = World.Step(DeltaTime, 1);
             const auto FrameContacts = Contacts.VertexContacts.exchange(0, std::memory_order_relaxed);
+            Json FrameContactsPerRigid = Json::array();
+            for (std::size_t Index = 0; Index < Rigids.size(); ++Index) {
+                const auto Count = Contacts.TargetContacts[Index].exchange(0, std::memory_order_relaxed);
+                TotalContactsPerRigid[Index] += Count;
+                FrameContactsPerRigid.push_back(Count);
+            }
             TotalVertexContacts += FrameContacts;
             if (FrameContacts > 0 && FirstContactFrame < 0) FirstContactFrame = Frame;
             auto SoftState = ObserveSoft(World, Soft, *Shared);
@@ -241,6 +257,7 @@ namespace {
             }
             MaxParticlePenetration = std::max(MaxParticlePenetration, FramePenetration);
             Frames.push_back({{"Frame", Frame}, {"StepMs", StepMs}, {"VertexContacts", FrameContacts},
+                              {"ContactsPerRigid", std::move(FrameContactsPerRigid)},
                               {"Rigids", std::move(RigidStates)},
                               {"SoftCenter", Vector(SoftState.Center)}, {"SoftMomentum", Vector(SoftState.Momentum)},
                               {"RigidMomentum", Vector(RigidMomentum)},
@@ -261,6 +278,7 @@ namespace {
                 {"SoftVertices", Shared->mVertices.size()}, {"SoftEdges", Shared->mEdgeConstraints.size()},
                 {"SoftVolumes", Shared->mVolumeConstraints.size()}, {"AnchoredBoundary", !IsRubber},
                 {"TotalVertexContacts", TotalVertexContacts}, {"FirstContactFrame", FirstContactFrame},
+                {"TotalContactsPerRigid", Json::array({TotalContactsPerRigid[0], TotalContactsPerRigid[1]})},
                 {"RigidShape", "Ball"}, {"RigidRadius", RigidRadius}, {"RigidDensity", RigidDensity},
                 {"RequestedRigidMass", RigidMass},
                 {"MomentumConservationQualified", false},
@@ -320,6 +338,7 @@ namespace {
         double MaximumPinDrift = 0.0;
         std::size_t InvertedTetrahedronFrames = 0;
         std::size_t TotalContactProjections = 0;
+        std::array<std::size_t, 2> TotalProjectionsPerRigid{};
         int FirstContactFrame = -1;
         bool Finite = true;
         std::vector<glm::vec3> PriorPositions;
@@ -445,6 +464,7 @@ namespace {
                 if (Observed.ColliderIndex != RigidIndex)
                     throw std::runtime_error("[Physics:Coupling] XPBD collider ordinal mismatch");
                 TotalContactProjections += Observed.Contacts;
+                TotalProjectionsPerRigid[RigidIndex] += Observed.Contacts;
                 if (Observed.Contacts > 0 && FirstContactFrame < 0) FirstContactFrame = Frame;
                 const auto RawAngular = Observed.AngularImpulseOrigin -
                     glm::cross(State.Transform.Position, Observed.Impulse);
@@ -515,6 +535,7 @@ namespace {
                 {"InvertedTetrahedronFrames", InvertedTetrahedronFrames},
                 {"MaxEstimatedFeedbackImpulse", MaximumFeedbackImpulse},
                 {"TotalContactProjections", TotalContactProjections}, {"FirstContactFrame", FirstContactFrame},
+                {"TotalProjectionsPerRigid", Json::array({TotalProjectionsPerRigid[0], TotalProjectionsPerRigid[1]})},
                 {"DeltaTime", DeltaTime}, {"RigidSubsteps", 4},
                 {"RigidShape", "Ball"}, {"RigidRadius", RigidRadius}, {"RigidDensity", RigidDensity},
                 {"MaximumSoftWorkers", Config.Workers},
@@ -545,8 +566,12 @@ namespace {
             throw std::runtime_error("[Physics:Coupling] Control frame mismatch");
         const int Axis = Config.Case == "RubberPush" ? 0 : (Config.Case == "SphereOnCloth" ? 1 : 2);
         const double ExpectedSign = Config.Case == "RubberPush" || Config.Case == "SphereOnCloth" ? 1.0 : -1.0;
+        const auto RigidCount = Contact["Frames"][0]["Rigids"].size();
+        if (RigidCount < 1 || RigidCount > 2)
+            throw std::runtime_error("[Physics:Coupling] Invalid rigid count");
+        std::vector<double> VelocityDifferencePerRigid(RigidCount, 0.0);
+        std::vector<double> DirectionalTransferPerRigid(RigidCount, 0.0);
         double MaximumVelocityDifference = 0.0;
-        double PeakDirectionalMomentumTransfer = 0.0;
         double MaximumSoftMomentumDifference = 0.0;
         bool MassMatched = true;
         for (std::size_t Frame = 0; Frame < Contact["Frames"].size(); ++Frame) {
@@ -561,15 +586,15 @@ namespace {
                         ControlFrame["Rigids"][Rigid]["Velocity"][Component].get<double>();
                     Squared += Difference * Difference;
                 }
-                MaximumVelocityDifference = std::max(MaximumVelocityDifference, std::sqrt(Squared));
+                VelocityDifferencePerRigid[Rigid] = std::max(VelocityDifferencePerRigid[Rigid], std::sqrt(Squared));
+                MaximumVelocityDifference = std::max(MaximumVelocityDifference, VelocityDifferencePerRigid[Rigid]);
                 const double Mass = ContactFrame["Rigids"][Rigid]["Mass"].get<double>();
                 MassMatched &= std::abs(Mass / RigidMass - 1.0) <= 0.02;
-                if (Rigid == 0) {
-                    const double AxisDifference = ContactFrame["Rigids"][Rigid]["Velocity"][Axis].get<double>() -
-                        ControlFrame["Rigids"][Rigid]["Velocity"][Axis].get<double>();
-                    PeakDirectionalMomentumTransfer = std::max(PeakDirectionalMomentumTransfer,
-                        ExpectedSign * Mass * AxisDifference);
-                }
+                const double AxisDifference = ContactFrame["Rigids"][Rigid]["Velocity"][Axis].get<double>() -
+                    ControlFrame["Rigids"][Rigid]["Velocity"][Axis].get<double>();
+                const double Direction = Config.Case == "Multiple" && Rigid == 1 ? -ExpectedSign : ExpectedSign;
+                DirectionalTransferPerRigid[Rigid] = std::max(DirectionalTransferPerRigid[Rigid],
+                    Direction * Mass * AxisDifference);
             }
             const char *MomentumName = Contact.value("Backend", std::string{}) == "Jolt" ?
                 "SoftMomentum" : "SoftMomentumEstimate";
@@ -581,11 +606,19 @@ namespace {
             }
             MaximumSoftMomentumDifference = std::max(MaximumSoftMomentumDifference, std::sqrt(SoftSquared));
         }
+        const bool AllRigidsRespond = std::all_of(VelocityDifferencePerRigid.begin(), VelocityDifferencePerRigid.end(),
+            [](double Difference) { return Difference > 0.01; }) &&
+            std::all_of(DirectionalTransferPerRigid.begin(), DirectionalTransferPerRigid.end(),
+            [](double Transfer) { return Transfer > 0.001; });
         return {{"MaxRigidVelocityDifference", MaximumVelocityDifference},
-                {"PeakDirectionalRigidMomentumTransfer", PeakDirectionalMomentumTransfer},
+                {"VelocityDifferencePerRigid", VelocityDifferencePerRigid},
+                {"DirectionalMomentumTransferPerRigid", DirectionalTransferPerRigid},
+                {"AllRigidsRespond", AllRigidsRespond},
                 {"MaxSoftMomentumDifference", MaximumSoftMomentumDifference},
                 {"RigidMassMatchedToDensity", MassMatched},
-                {"ExpectedMomentumAxis", Axis}, {"ExpectedMomentumSign", ExpectedSign}};
+                {"ExpectedMomentumAxis", Axis},
+                {"ExpectedMomentumSigns", Config.Case == "Multiple" ?
+                    Json::array({ExpectedSign, -ExpectedSign}) : Json::array({ExpectedSign})}};
     }
 }
 
@@ -605,11 +638,13 @@ int main(int ArgumentCount, char **Arguments) {
             Result["ContactDisabledControl"] = Control;
             const auto Comparison = CompareRigidResponse(Result, Control, Config);
             Result["ControlComparison"] = Comparison;
-            Result["ContactEvidence"] = Result.value("TotalVertexContacts", std::uint64_t{0}) > 0 &&
-                Control.value("TotalVertexContacts", std::uint64_t{0}) == 0;
+            bool PerRigidContact = Result.contains("TotalContactsPerRigid") && Control.contains("TotalContactsPerRigid");
+            for (std::size_t Index = 0; Index < Result["Frames"][0]["Rigids"].size() && PerRigidContact; ++Index)
+                PerRigidContact = Result["TotalContactsPerRigid"][Index].get<std::uint64_t>() > 0 &&
+                    Control["TotalContactsPerRigid"][Index].get<std::uint64_t>() == 0;
+            Result["ContactEvidence"] = PerRigidContact;
             Result["PhysicalQualityQualified"] = PhysicalQualityPass(Result, Config.Case == "RubberPush");
-            Result["ReciprocalRigidResponse"] = Comparison["MaxRigidVelocityDifference"].get<double>() > 0.01 &&
-                Comparison["PeakDirectionalRigidMomentumTransfer"].get<double>() > 0.001;
+            Result["ReciprocalRigidResponse"] = Comparison["AllRigidsRespond"].get<bool>();
             Result["QualityQualified"] = Result["ContactEvidence"].get<bool>() &&
                 Result["PhysicalQualityQualified"].get<bool>() && Result["ReciprocalRigidResponse"].get<bool>() &&
                 Comparison["RigidMassMatchedToDensity"].get<bool>();
@@ -620,11 +655,14 @@ int main(int ArgumentCount, char **Arguments) {
                 Result["FeedbackDisabledControl"] = Control;
                 const auto Comparison = CompareRigidResponse(Result, Control, Config);
                 Result["ControlComparison"] = Comparison;
-                Result["ContactEvidence"] = Result.value("TotalContactProjections", std::size_t{0}) > 0 &&
-                    Control.value("TotalContactProjections", std::size_t{0}) > 0;
+                bool PerRigidContact = Result.contains("TotalProjectionsPerRigid") &&
+                    Control.contains("TotalProjectionsPerRigid");
+                for (std::size_t Index = 0; Index < Result["Frames"][0]["Rigids"].size() && PerRigidContact; ++Index)
+                    PerRigidContact = Result["TotalProjectionsPerRigid"][Index].get<std::size_t>() > 0 &&
+                        Control["TotalProjectionsPerRigid"][Index].get<std::size_t>() > 0;
+                Result["ContactEvidence"] = PerRigidContact;
                 Result["PhysicalQualityQualified"] = PhysicalQualityPass(Result, Config.Case == "RubberPush");
-                Result["RigidResponseObserved"] = Comparison["MaxRigidVelocityDifference"].get<double>() > 0.01 &&
-                    Comparison["PeakDirectionalRigidMomentumTransfer"].get<double>() > 0.001;
+                Result["RigidResponseObserved"] = Comparison["AllRigidsRespond"].get<bool>();
                 Result["QualityQualified"] = Result["ContactEvidence"].get<bool>() &&
                     Result["PhysicalQualityQualified"].get<bool>() && Result["RigidResponseObserved"].get<bool>() &&
                     Comparison["RigidMassMatchedToDensity"].get<bool>();
