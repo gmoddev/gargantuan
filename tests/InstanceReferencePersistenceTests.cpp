@@ -211,7 +211,7 @@ namespace {
 		}
 		CapturedSchema.reset();
 		try {
-			BootstrapNativeRuntimeSchema();
+			BootstrapPackagedRuntimeSchema(std::nullopt);
 		} catch (...) {
 			ReleaseWorker.set_value();
 			Worker.wait();
