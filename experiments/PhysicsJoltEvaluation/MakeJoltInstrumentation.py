@@ -17,7 +17,7 @@ def Replace(Old,New):
     assert Text.count(Old)==1,(Old,Text.count(Old))
     Text=Text.replace(Old,New)
 Declarations='''extern "C" void PhysicsCouplingDiagnosticStage(const char *, const void *, const void *);
-extern "C" void PhysicsCouplingDiagnosticReconstruction(const void *, const void *, float);
+extern "C" void PhysicsCouplingDiagnosticReconstruction(const void *, const void *, const void *, float);
 extern "C" void PhysicsCouplingDiagnosticContact(const void *, const void *, const void *, float, float,
     const void *, const void *, const void *, const void *, const void *);
 
@@ -32,7 +32,7 @@ Replace('void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVeloci
 Replace('\n\t// Calculate the new angular velocity for all rods',
         '\n\tPhysicsCouplingDiagnosticStage("AfterCollision", this, &inContext);\n\n\t// Calculate the new angular velocity for all rods')
 Replace('\t\t\tv.mVelocity = (v.mPosition - v.mPreviousPosition) / dt;',
-        '\t\t\tv.mVelocity = (v.mPosition - v.mPreviousPosition) / dt;\n\t\t\tPhysicsCouplingDiagnosticReconstruction(&v, &prev_v, dt);')
+        '\t\t\tv.mVelocity = (v.mPosition - v.mPreviousPosition) / dt;\n\t\t\tPhysicsCouplingDiagnosticReconstruction(this, &v, &prev_v, dt);')
 Replace('\t\t\t\t\t\t\t// Apply impulse to particle',
         '\t\t\t\t\t\t\tconst Vec3 DiagnosticParticle = v.mVelocity;\n\t\t\t\t\t\t\tconst Vec3 DiagnosticLinear = cs.mLinearVelocity;\n\t\t\t\t\t\t\tconst Vec3 DiagnosticAngular = cs.mAngularVelocity;\n\n\t\t\t\t\t\t\t// Apply impulse to particle')
 Replace('\t\t\t\t\t\t\t// Mark that the velocities of the body we hit need to be updated',

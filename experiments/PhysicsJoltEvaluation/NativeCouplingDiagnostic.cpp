@@ -128,10 +128,17 @@ JPH::Ref<JPH::SoftBodySharedSettings> GetCloth() {
 }
 
 Json Observe(const JPH::SoftBodyMotionProperties* M,float SubDt,bool Detailed) {
-    double K=0, CandidateK=0, Elastic=0, Movable=0, PinSpeed=0, Stretch=0;
+    double K=0, CandidateK=0, Elastic=0, Movable=0, PinSpeed=0, Stretch=0, Structural=0, PinDrift=0;
+    bool Finite=true;
     JPH::Vec3 Momentum=JPH::Vec3::sZero();
     Json Particles=Json::array();
     for(const auto& P:M->GetVertices()) {
+        Finite &= std::isfinite(P.mPosition.GetX())&&std::isfinite(P.mPosition.GetY())&&std::isfinite(P.mPosition.GetZ())
+            &&std::isfinite(P.mVelocity.GetX())&&std::isfinite(P.mVelocity.GetY())&&std::isfinite(P.mVelocity.GetZ());
+        if(P.mInvMass==0) {
+            const auto Index=&P-M->GetVertices().data();
+            PinDrift=std::max(PinDrift,double((P.mPosition-JPH::Vec3(M->GetSettings()->mVertices[Index].mPosition)).Length()));
+        }
         if(P.mInvMass>0) {
             const double Mv=1.0/double(P.mInvMass);
             K+=0.5*Mv*P.mVelocity.LengthSq(); Movable+=Mv;
@@ -146,20 +153,32 @@ Json Observe(const JPH::SoftBodyMotionProperties* M,float SubDt,bool Detailed) {
         Stretch=std::max(Stretch,std::abs(double(C/E.mRestLength)));
         if(E.mCompliance>0) Elastic+=double(C)*C/(2.0*E.mCompliance);
     }
+    const auto Edge=[&](int A,int B,float Rest) {
+        Structural=std::max(Structural,std::abs(double((M->GetVertex(B).mPosition-M->GetVertex(A).mPosition).Length()/Rest)-1.0));
+    };
+    for(int Y=0;Y<13;++Y) for(int X=0;X<13;++X) {
+        const int I=Y*13+X;
+        if(X+1<13) Edge(I,I+1,4.0f/12);
+        if(Y+1<13) Edge(I,I+13,4.0f/12);
+        if(X+1<13&&Y+1<13) { Edge(I,I+14,(4.0f/12)*std::sqrt(2.0f)); Edge(I+1,I+13,(4.0f/12)*std::sqrt(2.0f)); }
+    }
     Json R={{"SoftKE",K},{"ReconstructedCandidateKE",CandidateK},{"SoftMomentum",V(Momentum)},
         {"MovableMass",Movable},{"MaxPinSpeed",PinSpeed},{"AllEdgeStrain",Stretch},
+        {"StructuralStrain",Structural},{"MaxPinDrift",PinDrift},{"Finite",Finite},
         {"CompliantEdgeElasticEstimate",Elastic},{"ElasticScope","sum C^2/(2*compliance) for positive-compliance edges; hard constraints excluded; not solver-internal stored energy"}};
     if(Detailed) R["Particles"]=std::move(Particles);
+    if(SubDt<=0) R["ReconstructedCandidateKE"]=nullptr;
     return R;
 }
 }
 
 // Called only by the isolated diagnostic Jolt patch. Normal upstream is unmodified.
-extern "C" void PhysicsCouplingDiagnosticReconstruction(const void* Vertex,const void* Before,float DtValue) {
+extern "C" void PhysicsCouplingDiagnosticReconstruction(const void* Motion,const void* Vertex,const void* Before,float DtValue) {
     if(!TraceFile.is_open()||CurrentFrame<Config.TraceStart||CurrentFrame>Config.TraceEnd) return;
     const auto& P=*static_cast<const JPH::SoftBodyVertex*>(Vertex);
+    const auto* M=static_cast<const JPH::SoftBodyMotionProperties*>(Motion);
     const auto& B=*static_cast<const JPH::Vec3*>(Before);
-    Json R={{"Type","Reconstruction"},{"Frame",CurrentFrame},{"P",V(P.mPosition)},{"Prev",V(P.mPreviousPosition)},
+    Json R={{"Type","Reconstruction"},{"Frame",CurrentFrame},{"Vertex",&P-M->GetVertices().data()},{"P",V(P.mPosition)},{"Prev",V(P.mPreviousPosition)},
         {"BeforeVelocity",V(B)},{"AfterVelocity",V(P.mVelocity)},{"InvMass",P.mInvMass},{"IntegrationDt",DtValue},
         {"KineticChange",0.5/double(P.mInvMass)*(P.mVelocity.LengthSq()-B.LengthSq())}};
     std::lock_guard Lock(TraceMutex); TraceFile<<R.dump()<<'\n';

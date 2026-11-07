@@ -6,7 +6,7 @@
  #endif // JPH_DEBUG_RENDERER
 +
 +extern "C" void PhysicsCouplingDiagnosticStage(const char *, const void *, const void *);
-+extern "C" void PhysicsCouplingDiagnosticReconstruction(const void *, const void *, float);
++extern "C" void PhysicsCouplingDiagnosticReconstruction(const void *, const void *, const void *, float);
 +extern "C" void PhysicsCouplingDiagnosticContact(const void *, const void *, const void *, float, float,
 +    const void *, const void *, const void *, const void *, const void *);
  
@@ -40,7 +40,7 @@
  
  			// XPBD velocity update
  			v.mVelocity = (v.mPosition - v.mPreviousPosition) / dt;
-+			PhysicsCouplingDiagnosticReconstruction(&v, &prev_v, dt);
++			PhysicsCouplingDiagnosticReconstruction(this, &v, &prev_v, dt);
  
  			// Satisfy collision constraint
  			static_assert(int(BodyID::cBroadPhaseBit) < 0); // CCD contacts should be negative too (see: SoftBodyVertex::MarkCCDContact)
