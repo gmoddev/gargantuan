@@ -10,6 +10,8 @@
 #include <iostream>
 #include <memory>
 #include <numeric>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -89,10 +91,29 @@ namespace {
         const auto &V = State->LinearVelocity;
         Require(std::isfinite(V.x) && std::isfinite(V.y) && std::isfinite(V.z), "nonfinite body velocity");
     }
-    void Step(IPhysicsBackend &World, std::vector<double> &Samples) {
+    void Step(IPhysicsBackend &World, std::vector<double> &Samples,
+              std::optional<PhysicsBodyId> RequiredMotion = std::nullopt) {
         const auto Started = Clock::now();
-        (void)World.Step({.DeltaTime = 1.0f / 60.0f, .SubStepCount = 4});
+        const auto Result = World.Step({.DeltaTime = 1.0f / 60.0f, .SubStepCount = 4});
         Samples.push_back(Milliseconds(Clock::now() - Started));
+        Require(!Result.EventsTruncated, "physics step truncated contact history");
+        std::set<PhysicsBodyId> MotionIds;
+        for (const auto &Motion : Result.Motions) {
+            Require(World.IsBodyValid(Motion.Body), "step returned an invalid motion body");
+            Require(MotionIds.insert(Motion.Body).second, "step returned duplicate body motion");
+            const auto &Position = Motion.Transform.Position;
+            Require(std::isfinite(Position.x) && std::isfinite(Position.y) && std::isfinite(Position.z),
+                "step returned nonfinite motion position");
+            for (int Column = 0; Column < 3; ++Column)
+                for (int Row = 0; Row < 3; ++Row)
+                    Require(std::isfinite(Motion.Transform.Rotation[Column][Row]),
+                        "step returned nonfinite motion rotation");
+        }
+        for (const auto &Contact : Result.Contacts)
+            Require(World.IsBodyValid(Contact.BodyA) && World.IsBodyValid(Contact.BodyB) &&
+                Contact.BodyA != Contact.BodyB, "step returned an invalid contact pair");
+        if (RequiredMotion)
+            Require(MotionIds.contains(*RequiredMotion), "step omitted required moving body");
     }
     Json RunBoxScene(const Options &Selection, std::string_view Name) {
         const auto Before = CaptureResources();
@@ -127,7 +148,8 @@ namespace {
         std::vector<double> Measured;
         for (int Index = 0; Index < Warmup + Frames; ++Index) {
             std::vector<double> One;
-            Step(*World, One);
+            Step(*World, One, Index == 0 && !Dynamic.empty()
+                ? std::optional<PhysicsBodyId>(Dynamic.front()) : std::nullopt);
             if (Index >= Warmup) Measured.push_back(One.front());
         }
         float MinimumY = std::numeric_limits<float>::infinity();
@@ -242,7 +264,8 @@ namespace {
         const double MeshCreateMs = Milliseconds(Clock::now() - Started);
         const auto Ball = Add(*World, Body({0, 3, 0}, {1, 1, 1}, false, PhysicsShapeKind::Ball));
         std::vector<double> Samples;
-        for (int Index = 0; Index < (Selection.Quick ? 30 : 180); ++Index) Step(*World, Samples);
+        for (int Index = 0; Index < (Selection.Quick ? 30 : 180); ++Index)
+            Step(*World, Samples, Index == 0 ? std::optional<PhysicsBodyId>(Ball) : std::nullopt);
         const auto Final = World->GetBodyState(Ball);
         Require(Final && std::isfinite(Final->Transform.Position.y) && Final->Transform.Position.y > 0.35f,
             "dynamic ball missed mesh support");
@@ -351,7 +374,7 @@ namespace {
             Create.push_back(Milliseconds(Clock::now() - Started));
             Require(World->SetLinearVelocity(WallId, {-2, 0, 0}).Succeeded(), "CCD wall velocity rejected");
             Require(World->SetLinearVelocity(BallId, {360, 0, 0}).Succeeded(), "CCD projectile velocity rejected");
-            Step(*World, Samples);
+            Step(*World, Samples, BallId);
             const auto State = World->GetBodyState(BallId);
             Require(State && std::isfinite(State->Transform.Position.x), "nonfinite CCD result");
             if (State->Transform.Position.x < 1.0f) ++Stopped;
@@ -414,7 +437,8 @@ namespace {
         for (auto Id : Joints) Require(Id.IsValid(), "joint admission failed");
         std::vector<double> Samples;
         const int Frames = Selection.Quick ? 20 : 120;
-        for (int Index = 0; Index < Frames; ++Index) Step(*World, Samples);
+        for (int Index = 0; Index < Frames; ++Index)
+            Step(*World, Samples, Index == 0 ? std::optional<PhysicsBodyId>(Bodies[1]) : std::nullopt);
         for (auto Id : Bodies) FiniteState(*World, Id);
         float Drift = 0;
         if (Name == "articulated-chain") {

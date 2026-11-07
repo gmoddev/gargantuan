@@ -27,6 +27,8 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -547,9 +549,13 @@ namespace {
         }
         PhysicsStepResult Step(const PhysicsStepConfig &Config) override {
             PhysicsStepResult Result;
-            if (Config.DeltaTime <= 0 || Config.SubStepCount < 1 || Config.SubStepCount > 16) return Result;
-            if (World.Update(Config.DeltaTime, Config.SubStepCount, &Temp, Jobs.get()) != JPH::EPhysicsUpdateError::None)
-                return Result;
+            if (!std::isfinite(Config.DeltaTime) || Config.DeltaTime <= 0 ||
+                Config.SubStepCount < 1 || Config.SubStepCount > 16)
+                throw std::runtime_error("[Physics:JoltRigid] invalid experimental step configuration");
+            const auto Update = World.Update(Config.DeltaTime, Config.SubStepCount, &Temp, Jobs.get());
+            if (Update != JPH::EPhysicsUpdateError::None)
+                throw std::runtime_error("[Physics:JoltRigid] Jolt Update failed with code " +
+                    std::to_string(static_cast<unsigned>(Update)));
             for (std::uint32_t Index = 1; Index < BodySlots.size(); ++Index) {
                 const auto &Slot = BodySlots[Index];
                 if (!Slot.Live || Slot.Description.Anchored) continue;

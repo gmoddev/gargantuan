@@ -52,6 +52,10 @@ gate passed, not that the entire physical behavior or solver settings are
 equivalent. A failed gate invalidates timing claims for that row. Jolt returns
 empty neutral contact-event vectors in this slice, so the benchmark uses pose,
 mass, penetration, ray and joint checks instead of claiming event parity. The
+runner rejects native Jolt update failures, truncated contact history, invalid
+or duplicate copied motions, invalid contact pairs, and missing motion for a
+required first-step or CCD projectile. Such failures produce failed rows, even
+if a previously published body pose remains finite. The
 root campaign must also retain Engine WorldRoot baselines, exact source and
 build provenance, raw repeat distributions, CPU/RSS data, and separate soft and
 two-way coupling evidence before making an architecture decision.
