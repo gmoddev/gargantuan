@@ -234,7 +234,8 @@ namespace {
                 {"MaximumLinearSpeedAtEnd", MaximumLinearSpeedByFrame.back()},
                 {"MaximumAngularSpeedAtEnd", MaximumAngularSpeedByFrame.back()},
                 {"GeometricContactCandidatesAtEnd", GeometricPairsByFrame.back()},
-                {"ContactCountMeaning", "Began/Ended are neutral events; geometric candidates are AABB proximity, not solver contacts"}};
+                {"ContactCountMeaning", "Began/Ended are neutral events; geometric candidates are AABB proximity, not solver contacts"},
+                {"MotionCountMeaning", "Published neutral Motion records; Box3D emits native move events while Jolt currently emits every nonanchored body"}};
         }
         float MinimumY = std::numeric_limits<float>::infinity();
         std::vector<glm::vec3> FinalPositions;
