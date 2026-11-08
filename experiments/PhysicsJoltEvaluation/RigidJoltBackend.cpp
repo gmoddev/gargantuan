@@ -1281,12 +1281,17 @@ namespace {
         }
         void WakeBodiesInNewBounds(JPH::BodyID Native) {
             std::optional<JPH::AABox> Bounds;
+            JPH::ObjectLayer Layer = JPH::cObjectLayerInvalid;
             {
                 JPH::BodyLockRead Lock(World.GetBodyLockInterface(), Native);
-                if (Lock.Succeeded()) Bounds = Lock.GetBody().GetWorldSpaceBounds();
+                if (Lock.Succeeded()) {
+                    Bounds = Lock.GetBody().GetWorldSpaceBounds();
+                    Layer = Lock.GetBody().GetObjectLayer();
+                }
             }
-            if (Bounds)
-                World.GetBodyInterface().ActivateBodiesInAABox(*Bounds, {}, {});
+            if (Bounds && Layer != JPH::cObjectLayerInvalid)
+                World.GetBodyInterface().ActivateBodiesInAABox(*Bounds,
+                    World.GetDefaultBroadPhaseLayerFilter(Layer), World.GetDefaultLayerFilter(Layer));
         }
         using MeshKey = std::pair<std::string, std::uint64_t>;
         struct MeshResource {

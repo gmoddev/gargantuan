@@ -849,6 +849,39 @@ namespace {
                 std::numeric_limits<float>::quiet_NaN()) << '\n' << std::flush;
         Require(Moved && Began && Moved->Transform.Position.y > 0.54f,
             "new static overlap did not produce a finite separating response");
+
+        auto FilteredProvider = CreateUnifiedJoltProvider(Config);
+        BallValue.CollisionGroup = 1;
+        BallValue.CollisionMask = std::uint16_t{1} << 1;
+        const auto FilteredBallId = FilteredProvider.Rigid->CreateBody(BallValue);
+        Require(FilteredBallId.IsValid(), "filtered overlap sleeper failed admission");
+        bool FilteredSlept = false;
+        for (int Frame = 0; Frame < 90; ++Frame) {
+            (void)FilteredProvider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = 16});
+            const auto State = FilteredProvider.Rigid->GetBodyState(FilteredBallId);
+            Require(State.has_value(), "filtered overlap lost ball body");
+            if (!State->Awake) { FilteredSlept = true; break; }
+        }
+        Require(FilteredSlept, "filtered ball did not sleep before static overlap");
+        auto FilteredFloor = Box({0, -0.4f, 0}, {10, 1, 10}, true);
+        FilteredFloor.CollisionGroup = 0;
+        FilteredFloor.CollisionMask = std::uint16_t{1} << 0;
+        const auto FilteredFloorId = FilteredProvider.Rigid->CreateBody(FilteredFloor);
+        const auto FilteredState = FilteredProvider.Rigid->GetBodyState(FilteredBallId);
+        Require(FilteredFloorId.IsValid() && FilteredState && !FilteredState->Awake,
+            "noncolliding new static geometry woke a dormant body");
+        for (int Frame = 0; Frame < 4; ++Frame) {
+            const auto Step = FilteredProvider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = 16});
+            for (const auto &Event : Step.Contacts)
+                Require(Event.BodyA != FilteredBallId && Event.BodyB != FilteredBallId,
+                    "noncolliding new static geometry emitted a contact");
+        }
+        const auto FilteredFinal = FilteredProvider.Rigid->GetBodyState(FilteredBallId);
+        Require(FilteredFinal && !FilteredFinal->Awake &&
+            std::abs(FilteredFinal->Transform.Position.y - 0.5f) < 1.0e-4f,
+            "noncolliding new static geometry changed a dormant body");
     }
 #endif
 #if defined(PHYSICS_GANTRIA_SLEEP_FIX) && defined(PHYSICS_GANTRIA_ATTACHMENTS)
