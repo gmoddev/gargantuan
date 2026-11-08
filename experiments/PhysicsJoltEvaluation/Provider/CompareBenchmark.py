@@ -56,8 +56,12 @@ def Main() -> None:
     if Coupled:
         Fields += ("max_poststep_penetration", "final_min_surface_distance")
     Errors = {Field: abs(float(Jolt[Field]) - float(Xpbd[Field])) for Field in Fields}
-    BudgetMatched = int(Jolt["workers_requested"]) == int(Xpbd["workers_requested"]) == \
-        int(Xpbd["xpbd_workers_actual"])
+    JoltWorkerCap = int(Jolt["workers_requested"])
+    XpbdWorkerCap = int(Xpbd["workers_requested"])
+    XpbdWorkersActual = int(Xpbd["xpbd_workers_actual"])
+    RequestedCapsMatched = JoltWorkerCap == XpbdWorkerCap and JoltWorkerCap > 0
+    XpbdActualWithinCap = 0 < XpbdWorkersActual <= XpbdWorkerCap
+    BudgetMatched = RequestedCapsMatched and XpbdActualWithinCap
     ReceiptPairMatched = all(Jolt.get(Field) == Xpbd.get(Field) for Field in
                              ("host", "os", "build_stamp", "binary_id", "run_pair")) and \
         Jolt.get("host") not in (None, "unknown") and \
@@ -86,14 +90,17 @@ def Main() -> None:
         "quality_trace": Jolt.get("quality_trace") == "1" or
                          Xpbd.get("quality_trace") == "1",
         "quality_trace_request_matched": TraceRequestMatched,
-        "jolt_workers_requested": int(Jolt["workers_requested"]),
-        "xpbd_workers_requested": int(Xpbd["workers_requested"]),
-        "xpbd_workers_actual": int(Xpbd["xpbd_workers_actual"]),
+        "jolt_workers_requested": JoltWorkerCap,
+        "xpbd_workers_requested": XpbdWorkerCap,
+        "xpbd_workers_actual": XpbdWorkersActual,
         "xpbd_jobs_dispatched": int(Xpbd["xpbd_jobs_dispatched"]),
         "xpbd_mean_worker_utilization": float(Xpbd["xpbd_mean_worker_utilization"]),
         "jolt_constraints": int(Jolt["constraints"]),
         "xpbd_constraints": int(Xpbd["constraints"]),
         "worker_count_matched": BudgetMatched,
+        "requested_worker_caps_matched": RequestedCapsMatched,
+        "xpbd_actual_within_requested_cap": XpbdActualWithinCap,
+        "xpbd_uses_full_requested_cap": XpbdWorkersActual == XpbdWorkerCap,
         "receipt_pair_matched": ReceiptPairMatched,
         "jolt_host": Jolt.get("host"),
         "xpbd_host": Xpbd.get("host"),

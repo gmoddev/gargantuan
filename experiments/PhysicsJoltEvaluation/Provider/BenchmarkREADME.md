@@ -40,10 +40,12 @@ their agreement and `integrations = updates × collision steps × temporal
 iterations`, so an optimized solver build cannot silently inherit the legacy
 U2/C8/I12 label.
 The XPBD constructor treats the worker argument as a maximum and may use fewer
-threads when the host has fewer cores; `xpbd_workers_actual` records the
-backend's step profile count. Jolt's argument is its configured total budget
-(main thread plus native workers). Compare actual budgets before drawing any
-scaling conclusion.
+threads for a one-body scene; `xpbd_workers_actual` records the backend's step
+profile count. Jolt's argument is its configured total budget (main thread
+plus native workers). Equal requested caps establish the common CPU budget;
+XPBD's lower actual use is a measured limit of this workload, reported
+separately rather than grounds to discard its cost. Keep requested and actual
+worker counts visible when interpreting scaling.
 
 `none` isolates the soft workload. Jolt still spends time in its shared native
 world and reports that as `jolt_world_ms`; its `jolt_extract_ms` is publication
@@ -127,8 +129,11 @@ physical metrics and leaves `timing_winner` null. Supplying a reviewed JSON
 envelope with `--envelope limits.json` permits a timing winner only when every
 relevant pair difference is within its named threshold, each backend's value
 is within a reviewed `absolute_ranges` interval for every relevant metric,
-and both requested
-worker counts equal the XPBD profile's actual worker count. The envelope requires
+and both requested worker caps match while XPBD actual workers lie within
+`1..requested`. The result reports `requested_worker_caps_matched`,
+`xpbd_actual_within_requested_cap`, and `xpbd_uses_full_requested_cap`
+separately; `worker_count_matched` retains the combined valid-budget gate.
+The envelope requires
 `mean_y`, `center_y`, `max_pin_error`, `mean_edge_strain`, and
 `max_edge_strain`; rubber also requires `mean_volume_ratio`. These thresholds
 are in world units for heights and pin error, and dimensionless for strain
