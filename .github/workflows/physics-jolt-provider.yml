@@ -8,6 +8,12 @@ on:
       - 'experiments/PhysicsJoltEvaluation/CMakeLists.txt'
       - '.github/workflows/physics-jolt-provider.yml'
   workflow_dispatch:
+    inputs:
+      SolverProfile:
+        description: Exact experimental provider and Jolt profile
+        type: choice
+        options: [baseline, convergence]
+        default: baseline
 permissions:
   contents: read
 jobs:
@@ -21,6 +27,7 @@ jobs:
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
       GANTRIA_ATTACHMENT_QUALIFICATION: '1'
+      GANTRIA_PROVIDER_CONVERGENCE: ${{ inputs.SolverProfile == 'convergence' && '1' || '0' }}
       SDL_VIDEODRIVER: dummy
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
@@ -32,7 +39,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: GantriaEngine/JoltPhysics
-          ref: cd095d408a1cd231ad43fa8725d06a818fd63b13
+          ref: ${{ inputs.SolverProfile == 'convergence' && 'e167ba589787fb76f5d9718ae348d4ac1c3b19ee' || 'cd095d408a1cd231ad43fa8725d06a818fd63b13' }}
           path: .provider-jolt
           persist-credentials: false
       - name: Enable MSVC
