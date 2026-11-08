@@ -27,7 +27,9 @@ numerical analyses and the retained independent reductions. No original
 1,520-process matrix or production target was
 rerun. GCC 13.3.0 on Ubuntu 24.04 compiled the probes with at most two concurrent
 build jobs. NumPy 2.3.4 used one BLAS thread in disposable virtual environments.
-The shared Windows worker remained reserved by another campaign and was not used.
+The shared Windows worker was reserved by another campaign at admission, so
+hosted execution was used. This campaign acquired no worker lease; the final
+coordinator status was Free after the other campaign released its reservation.
 
 Evidence is preserved separately under
 `C:\Users\aiden\.codex\artifacts\jolt-s1-instability-20261108`, including raw
