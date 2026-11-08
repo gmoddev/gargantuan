@@ -220,7 +220,10 @@ int main(int ArgumentCount, char **Arguments) {
             StepConfig.Gravity = WorldConfig.Gravity;
             if (BackendName == "xpbd") StepConfig.Colliders = Colliders;
             const auto Result = Soft->Step(StepConfig);
-            if (Result.States.size() != Bodies.size() || Result.BodiesTruncated || Result.VerticesTruncated)
+            if (Result.States.size() != Bodies.size() ||
+                Result.Profile.SimulatedBodies != Bodies.size() ||
+                Result.Profile.SimulatedVertices != Bodies.size() * Bodies.front().Rest.size() ||
+                Result.BodiesTruncated || Result.VerticesTruncated || Result.CollidersTruncated)
                 throw std::runtime_error("Soft benchmark step lost a body or truncated work");
             if (BackendName == "xpbd") ActualXpbdWorkers = Result.Profile.WorkerCount;
             const auto Finish = Clock::now();
