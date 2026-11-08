@@ -58,6 +58,7 @@ namespace {
         int CollisionSteps = 1;
         int WorldUpdates = 1;
         int SoftIterations = 24;
+        int ConstraintSweeps = 1;
         int VelocityReconstruction = 0;
         float StretchCompliance = 0.0f;
         bool ObserveAccepted = true;
@@ -76,6 +77,7 @@ namespace {
             else if (Name == "--collision-steps") Result.CollisionSteps = std::stoi(Value);
             else if (Name == "--world-updates") Result.WorldUpdates = std::stoi(Value);
             else if (Name == "--soft-iterations") Result.SoftIterations = std::stoi(Value);
+            else if (Name == "--constraint-sweeps") Result.ConstraintSweeps = std::stoi(Value);
             else if (Name == "--velocity-reconstruction") Result.VelocityReconstruction =
                 PhysicsJoltEvaluation::ParseVelocityReconstruction(Value);
             else if (Name == "--stretch-compliance") Result.StretchCompliance = std::stof(Value);
@@ -96,6 +98,9 @@ namespace {
             Result.SoftIterations < 1 || Result.SoftIterations > 64 ||
             !std::isfinite(Result.StretchCompliance) || Result.StretchCompliance < 0.0f)
             throw std::runtime_error("[Physics:Coupling] Option outside bounded range");
+        PhysicsJoltEvaluation::ValidateConstraintSweeps(Result.ConstraintSweeps, Result.VelocityReconstruction);
+        if (Result.Backend != "Jolt" && Result.ConstraintSweeps != 1)
+            throw std::runtime_error("[Physics:Coupling] Constraint sweeps are only available for native Jolt");
         return Result;
     }
 
@@ -279,7 +284,8 @@ namespace {
         constexpr bool EnergyObserverEnabled = false;
 #endif
         if (IsRubber) for (auto &Vertex : Shared->mVertices) Vertex.mVelocity = JPH::Float3(4.0f, 0.0f, 0.0f);
-        auto Soft = World.AddSoft(Shared, SoftOrigin, Config.SoftIterations, IsRubber, 2.4f);
+        auto Soft = World.AddSoft(Shared, SoftOrigin, Config.SoftIterations, IsRubber, 2.4f,
+                                  Config.ConstraintSweeps);
         World.World.SetGravity(Horizontal ? JPH::Vec3(0.0f, -9.81f, 0.0f) : JPH::Vec3::sZero());
 
         std::vector<JPH::BodyID> Rigids;
@@ -717,6 +723,9 @@ namespace {
                 {"WorkerActivityMeasurement", "Unavailable; thread pool capacity is not per-frame active worker count"},
                 {"CallerRole", "ParticipatesInSolve"}, {"ExecutionMode", "JoltThreadPool"},
                 {"CollisionSteps", Config.CollisionSteps}, {"SolverIterations", Config.SoftIterations},
+                {"ConstraintSweeps", Config.ConstraintSweeps},
+                {"ConstraintProjectionsPerFrame", Config.WorldUpdates * Config.CollisionSteps *
+                    Config.SoftIterations * Config.ConstraintSweeps},
                 {"WorldUpdatesPerFrame", Config.WorldUpdates},
                 {"VelocityReconstruction", PhysicsJoltEvaluation::VelocityReconstructionName(Config.VelocityReconstruction)},
                 {"NumericalReconstructionPatch", PhysicsJoltEvaluation::NumericalReconstructionPatch},

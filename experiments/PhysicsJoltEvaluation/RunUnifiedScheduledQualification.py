@@ -23,11 +23,14 @@ Parser.add_argument('--compress-raw', action='store_true',
                     help='Losslessly gzip completed raw physics JSON after all checks')
 Parser.add_argument('--velocity-reconstruction', choices=('difference', 'delta', 'applieddelta'),
                     default='difference')
+Parser.add_argument('--constraint-sweeps', type=int, choices=(1, 2, 4, 8), default=1)
 Args = Parser.parse_args()
 if not 1 <= Args.world_updates <= 384 or not 1 <= Args.collision_steps <= 8 or not 1 <= Args.soft_iterations <= 64:
     Parser.error('schedule outside unified runner bounds')
 if not math.isfinite(Args.compliance) or Args.compliance <= 0.0:
     Parser.error('qualified compliance must be finite and positive')
+if Args.constraint_sweeps > 1 and Args.velocity_reconstruction != 'delta':
+    Parser.error('multiple constraint sweeps require delta velocity reconstruction')
 Args.output.mkdir(parents=True, exist_ok=False)
 
 Cases = ['RigidIntoCloth', 'Multiple', 'RubberPush', 'SphereOnCloth', 'Repeated']
@@ -140,12 +143,15 @@ def Run(Name, Binary, Options):
 
 
 def ProfileMatches(Result, WorldUpdates, CollisionSteps, SoftIterations, Compliance,
-                   VelocityReconstruction):
+                   VelocityReconstruction, ConstraintSweeps):
     return (Result.get('WorldUpdatesPerFrame') == WorldUpdates and
             Result.get('CollisionSteps') == CollisionSteps and
             Result.get('SolverIterations') == SoftIterations and
             abs(Result.get('SelectedStretchCompliance', float('nan')) - Compliance) <= 1e-11 and
-            Result.get('VelocityReconstruction', 'difference') == VelocityReconstruction)
+            Result.get('VelocityReconstruction', 'difference') == VelocityReconstruction and
+            Result.get('ConstraintSweeps', 1) == ConstraintSweeps and
+            Result.get('ConstraintProjectionsPerFrame') ==
+                WorldUpdates * CollisionSteps * SoftIterations * ConstraintSweeps)
 
 
 def FullObservation(Result, Frames, WorldUpdates, CollisionSteps, SoftIterations):
@@ -202,6 +208,7 @@ Base = ['--backend', 'Jolt', '--world-updates', str(Args.world_updates),
 ModeOptions = [] if Args.velocity_reconstruction == 'difference' else [
     '--velocity-reconstruction', Args.velocity_reconstruction]
 Base += ModeOptions
+Base += ['--constraint-sweeps', str(Args.constraint_sweeps)]
 
 
 def RunPair(Name, Case, Workers, Frames, Repeat=None, Extended=False):
@@ -230,7 +237,7 @@ def RunPair(Name, Case, Workers, Frames, Repeat=None, Extended=False):
             (Observed, Observed['ContactDisabledControl'])),
         'ProfileMetadataMatches': all(ProfileMatches(Source, Args.world_updates,
             Args.collision_steps, Args.soft_iterations, Args.compliance,
-            Args.velocity_reconstruction) for Source in
+            Args.velocity_reconstruction, Args.constraint_sweeps) for Source in
             (Observed, Observed['ContactDisabledControl'], Pristine,
              Pristine['ContactDisabledControl'])),
         'PristineFrameOnly': PristineRun['ExitCode'] == 0 and
@@ -247,6 +254,7 @@ def RunPair(Name, Case, Workers, Frames, Repeat=None, Extended=False):
         Checks['ExtendedPrefixMatchesQualified150'] = (
             StateHash(Observed, 150) == ReferenceHashes[Case])
     Receipt = {'Name': Name, 'Case': Case, 'Workers': Workers, 'Repeat': Repeat,
+               'ConstraintSweeps': Args.constraint_sweeps,
                'Frames': Frames, 'Options': Options,
                'ObservedRun': ObservedRun, 'PristineFrameOnlyRun': PristineRun,
                'Checks': Checks, 'FirstPhysicalParityDifference': Difference,
@@ -288,7 +296,9 @@ HardChecks = {'ExpectedHardConstraintRejection': HardRun['ExitCode'] == 3 and
                   Args.collision_steps, Args.soft_iterations) is False and
                   Hard.get('AcceptedObservationCoverage') is True,
               'VelocityReconstructionMatches': all(Source.get('VelocityReconstruction', 'difference') ==
-                  Args.velocity_reconstruction for Source in (Hard, Hard['ContactDisabledControl']))}
+                  Args.velocity_reconstruction for Source in (Hard, Hard['ContactDisabledControl'])),
+              'ConstraintSweepsMatch': all(Source.get('ConstraintSweeps', 1) == Args.constraint_sweeps
+                  for Source in (Hard, Hard['ContactDisabledControl']))}
 # FullObservation intentionally rejects the hard control because its material
 # precondition is false; callback counts are checked separately here.
 ExpectedHardCallbacks = Args.world_updates * Args.collision_steps * Args.soft_iterations
@@ -302,7 +312,8 @@ Receipts.append({'Name': 'HardConstraintReferenceReject', 'Options': HardOptions
 CoverageOptions = ['--backend', 'Jolt', '--case', 'RigidIntoCloth', '--workers', '1',
                    '--frames', '1', '--world-updates', '1', '--collision-steps', '1',
                    '--soft-iterations', '2', '--stretch-compliance', ComplianceText,
-                   '--observe-accepted', '1', *ModeOptions]
+                   '--observe-accepted', '1', *ModeOptions,
+                   '--constraint-sweeps', str(Args.constraint_sweeps)]
 Coverage, CoverageRun = Run('OmittedInternalEndpointReject', Args.pristine,
                             CoverageOptions)
 CoverageChecks = {'ExpectedCoverageRejection': CoverageRun['ExitCode'] == 3 and
@@ -313,7 +324,9 @@ CoverageChecks = {'ExpectedCoverageRejection': CoverageRun['ExitCode'] == 3 and
                   Coverage.get('AcceptedQualityQualified') is None and
                   Coverage.get('QualityQualified') is False,
                   'VelocityReconstructionMatches': all(Source.get('VelocityReconstruction', 'difference') ==
-                      Args.velocity_reconstruction for Source in (Coverage, Coverage['ContactDisabledControl']))}
+                      Args.velocity_reconstruction for Source in (Coverage, Coverage['ContactDisabledControl'])),
+                  'ConstraintSweepsMatch': all(Source.get('ConstraintSweeps', 1) == Args.constraint_sweeps
+                      for Source in (Coverage, Coverage['ContactDisabledControl']))}
 Receipts.append({'Name': 'OmittedInternalEndpointReject', 'Options': CoverageOptions,
                  'PristineRun': CoverageRun, 'Checks': CoverageChecks,
                  'QualificationPass': all(CoverageChecks.values()),
@@ -323,10 +336,12 @@ Receipts.append({'Name': 'OmittedInternalEndpointReject', 'Options': CoverageOpt
 
 Verdict = {'Type': 'UnifiedScheduledQualification',
            'VelocityReconstruction': Args.velocity_reconstruction,
+           'ConstraintSweeps': Args.constraint_sweeps,
            'RawPhysicsCompression': 'gzip-mtime0-lossless-verified' if Args.compress_raw else 'none',
            'QualifiedProfile': {'WorldUpdates': Args.world_updates,
                                 'CollisionSteps': Args.collision_steps,
                                 'SoftIterations': Args.soft_iterations,
+                                'ConstraintSweeps': Args.constraint_sweeps,
                                 'StretchCompliance': Args.compliance},
            'PairedCases': len(Cases) * 3 * 3,
            'ExtendedCases': len(ExtendedCases),

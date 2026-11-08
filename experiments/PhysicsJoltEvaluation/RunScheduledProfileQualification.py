@@ -203,19 +203,22 @@ def RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture, Mater
 
 def RunTimingCase(PristineBinary, Output, Name, Fixture, Material, Steps,
                   Iterations, Updates, Frames, Workers, ExpectedDigest, CompressRaw=False,
-                  VelocityReconstruction="difference"):
+                  VelocityReconstruction="difference", ConstraintSweeps=1):
     PathName = Output / f"{Name}.timing.jsonl"
     Common = Options(Material, Steps, Iterations, Updates, Frames, Workers, Fixture,
+                     Extra=("--constraint-sweeps", str(ConstraintSweeps)),
                      VelocityReconstruction=VelocityReconstruction)
     Wall = RunBinary(PristineBinary, Common + ["--observe-updates", "0"],
                      PathName, Output / f"{Name}.timing.stderr.txt")
     TimingConfig, FramesData, _ = ReadTiming(PathName)
     assert TimingConfig["InternalIntegrationDt"] == NativeStepTime(Updates, Steps, Iterations)
     assert TimingConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
+    assert TimingConfig.get("ConstraintSweeps", 1) == ConstraintSweeps
     Digest = FrameDigest(FramesData)
     assert Digest == ExpectedDigest, f"Frame-only timing changed physical state: {Name}"
     Times = [float(Frame["StepMs"]) for Frame in FramesData]
-    Receipt = {"Name": Name, "Raw": PathName.name, "FrameStateSha256": Digest,
+    Receipt = {"Name": Name, "ConstraintSweeps": ConstraintSweeps,
+            "Raw": PathName.name, "FrameStateSha256": Digest,
             "FrameParity": True, "WallSeconds": Wall,
             "NativeUpdateTotalMs": sum(Times), "NativeUpdateMedianFrameMs": statistics.median(Times),
             "ObservationScope": "Frame-only pristine World.Update timing; no accepted internal energy claim"}
@@ -239,6 +242,7 @@ def Main():
                         help="Losslessly gzip completed raw physics JSONL after all checks")
     Parser.add_argument("--velocity-reconstruction", choices=("difference", "delta", "applieddelta"),
                         default="difference")
+    Parser.add_argument("--constraint-sweeps", type=int, choices=(1, 2, 4, 8), default=1)
     Arguments = Parser.parse_args()
     if (Arguments.world_updates < 1 or Arguments.world_updates > 384 or
             Arguments.steps < 1 or Arguments.steps > 96 or
@@ -246,6 +250,8 @@ def Main():
             Arguments.world_updates * Arguments.steps * Arguments.iterations > 2304 or
             not math.isfinite(Arguments.compliance) or Arguments.compliance <= 0):
         Parser.error("Selected positive-compliance schedule is outside the diagnostic's bounded range")
+    if Arguments.constraint_sweeps > 1 and Arguments.velocity_reconstruction != "delta":
+        Parser.error("Multiple constraint sweeps require delta velocity reconstruction")
     Cadence = Arguments.world_updates * Arguments.steps * Arguments.iterations
     if math.isclose(Arguments.compliance, 1.0e-5, rel_tol=1.0e-9, abs_tol=0.0):
         Material = "1e-5"
@@ -255,6 +261,8 @@ def Main():
         AllowedCadences = (192, 384)
     else:
         Parser.error("This qualification has native spring calibration only for 1e-5 and 1e-6 compliance")
+    if Arguments.constraint_sweeps > 1:
+        AllowedCadences = range(1, 385)
     if Cadence not in AllowedCadences:
         Parser.error(f"Selected schedule must have one of {AllowedCadences} internal integrations per frame for a native spring calibration")
     PristineBinary = Arguments.pristine.resolve(strict=True)
@@ -270,11 +278,13 @@ def Main():
             Calibration = CalibrateSpring(SimpleNamespace(threads=1), PristineBinary,
                                           ObservedBinary, Output, CalMaterial,
                                           IntegrationsPerFrame=Cadence,
-                                          VelocityReconstruction=Arguments.velocity_reconstruction)
+                                          VelocityReconstruction=Arguments.velocity_reconstruction,
+                                          ConstraintSweeps=Arguments.constraint_sweeps)
             Calibrations[CalMaterial] = Calibration
             (Output / "Calibrations.json").write_text(json.dumps(Calibrations, indent=2, allow_nan=False), encoding="utf-8")
             print(json.dumps({"Name": Calibration["Name"], "Status": Calibration["Status"]}), flush=True)
         assert all(Calibration["VelocityReconstruction"] == Arguments.velocity_reconstruction
+                   and Calibration["ConstraintSweeps"] == Arguments.constraint_sweeps
                    for Calibration in Calibrations.values())
         for Fixture in ("C1", "C2"):
             for Workers in (1, 2, 8):
@@ -283,6 +293,7 @@ def Main():
                     Name = f"{Fixture}-T{Workers}-R{Repeat}"
                     Receipt = RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture,
                                               Material, Steps, Iterations, Updates, 600, Workers,
+                                              Extra=("--constraint-sweeps", str(Arguments.constraint_sweeps)),
                                               CompressRaw=Arguments.compress_raw,
                                               CalibrationIntegrationDt=Calibrations[Material]["InternalIntegrationDt"],
                                               VelocityReconstruction=Arguments.velocity_reconstruction)
@@ -296,7 +307,8 @@ def Main():
                 Timing = RunTimingCase(PristineBinary, Output, f"{Fixture}-T{Workers}", Fixture,
                                        Material, Steps, Iterations, Updates, 600, Workers,
                                        Group[0]["FrameStateSha256"], Arguments.compress_raw,
-                                       Arguments.velocity_reconstruction)
+                                       Arguments.velocity_reconstruction,
+                                       Arguments.constraint_sweeps)
                 TimingReceipts.append(Timing)
                 (Output / "TimingReceipts.json").write_text(json.dumps(TimingReceipts, indent=2), encoding="utf-8")
         for Fixture in ("C1", "C2"):
@@ -315,9 +327,11 @@ def Main():
         ]
         for Name, Fixture, CaseMaterial, CaseSteps, CaseIterations, CaseUpdates, Frames, Extra in Followups:
             CaseMode = "difference" if Name.startswith("Negative-") else Arguments.velocity_reconstruction
+            CaseSweeps = 1 if Name.startswith("Negative-") else Arguments.constraint_sweeps
+            CaseExtra = Extra + (("--constraint-sweeps", str(CaseSweeps)) if CaseSweeps > 1 else ())
             Receipt = RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture,
                                       CaseMaterial, CaseSteps, CaseIterations, CaseUpdates,
-                                      Frames, 1, Extra, Arguments.compress_raw,
+                                      Frames, 1, CaseExtra, Arguments.compress_raw,
                                       Calibrations[Material]["InternalIntegrationDt"]
                                       if not Name.startswith("Negative-") else None,
                                       CaseMode)
@@ -334,11 +348,16 @@ def Main():
     EnergyControlRejections = sum(bool(R["Score"]["FirstNecessaryKineticFailure"] or
                                        R["Score"]["FirstReferenceModelFailure"]) for R in Negatives)
     RequiredGate = bool(Calibrations[Material]["Calibrated"] and all(R["PhysicalPass"] for R in MainCases) and
+                        all(R["ConstraintSweeps"] == Arguments.constraint_sweeps for R in MainCases) and
+                        all(R["ConstraintSweeps"] == 1 for R in Negatives) and
                         EnergyControlRejections == 2 and
                         len(MainCases) == 24 and len(Negatives) == 2 and len(TimingReceipts) == 6)
     Summary = {"SelectedMaterialCompliance": Material, "SelectedSchedule": {
-                   "WorldUpdates": Updates, "CollisionSteps": Steps, "SoftIterations": Iterations},
+                   "WorldUpdates": Updates, "CollisionSteps": Steps,
+                   "SoftIterations": Iterations, "ConstraintSweeps": Arguments.constraint_sweeps},
                "VelocityReconstruction": Arguments.velocity_reconstruction,
+               "ConstraintSweeps": Arguments.constraint_sweeps,
+               "NegativeControlConstraintSweeps": 1,
                "NegativeControlVelocityReconstruction": "difference",
                "RawPhysicsCompression": "gzip-mtime0-lossless-verified" if Arguments.compress_raw else "none",
                "Calibrations": Calibrations, "ObservedCases": len(Receipts),

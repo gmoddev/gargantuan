@@ -268,9 +268,14 @@ def Main():
     Parser.add_argument("--observed", type=Path, required=True)
     Parser.add_argument("--output", type=Path, required=True)
     Parser.add_argument("--threads", type=int, default=1)
+    Parser.add_argument("--velocity-reconstruction", choices=("difference", "delta", "applieddelta"),
+                        default="difference")
+    Parser.add_argument("--constraint-sweeps", type=int, choices=(1, 2, 4, 8), default=1)
     Arguments = Parser.parse_args()
     if Arguments.threads < 1 or Arguments.threads > 8:
         Parser.error("--threads must be between 1 and 8")
+    if Arguments.constraint_sweeps > 1 and Arguments.velocity_reconstruction != "delta":
+        Parser.error("Multiple constraint sweeps require delta velocity reconstruction")
     PristineBinary = Arguments.pristine.resolve(strict=True)
     ObservedBinary = Arguments.observed.resolve(strict=True)
     Output = Arguments.output
@@ -279,7 +284,9 @@ def Main():
     try:
         Calibrations = {}
         for Material in ("1e-5", "1e-6"):
-            Calibration = CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material)
+            Calibration = CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
+                VelocityReconstruction=Arguments.velocity_reconstruction,
+                ConstraintSweeps=Arguments.constraint_sweeps)
             Calibrations[Material] = Calibration
             (Output / "Calibrations.json").write_text(json.dumps(Calibrations, indent=2, allow_nan=False), encoding="utf-8")
             print(json.dumps({"Name": Calibration["Name"], "Status": Calibration["Status"]}), flush=True)
@@ -288,7 +295,10 @@ def Main():
             Common = ["--frames", str(Frames), "--steps", str(Steps), "--iterations", str(Iterations),
                       "--world-updates", str(Updates), "--compliance", Material, "--bend-compliance", "1e-4",
                       "--workers", str(Arguments.threads), "--particles", "0", "--observe-updates", "1",
-                      "--count", "2" if Fixture == "C2" else "1"]
+                      "--count", "2" if Fixture == "C2" else "1",
+                      "--constraint-sweeps", str(Arguments.constraint_sweeps)]
+            if Arguments.velocity_reconstruction != "difference":
+                Common += ["--velocity-reconstruction", Arguments.velocity_reconstruction]
             if Fixture == "Free":
                 Common += ["--contact", "0", "--speed", "0", "--seed", "1"]
             PristinePath = Output / f"{Name}.pristine.jsonl"
@@ -300,6 +310,8 @@ def Main():
                                         ObservedPath, Output / f"{Name}.observed.stderr.txt")
             PristineConfig, PristineFrames, PristineMicrosteps, _ = ReadPublished(PristinePath)
             ObservedConfig, ObservedFrames, ObservedMicrosteps, _ = ReadPublished(ObservedPath)
+            assert PristineConfig["ConstraintSweeps"] == ObservedConfig["ConstraintSweeps"] == Arguments.constraint_sweeps
+            assert PristineConfig["VelocityReconstruction"] == ObservedConfig["VelocityReconstruction"] == Arguments.velocity_reconstruction
             assert PristineConfig["AllEdgesPositiveCompliance"] and ObservedConfig["AllEdgesPositiveCompliance"]
             assert PristineConfig["ZeroGravity"] and ObservedConfig["ZeroGravity"]
             assert PristineConfig["Pinned"] and ObservedConfig["Pinned"]
@@ -324,6 +336,8 @@ def Main():
             Calibrated = Calibrations[Material]["Calibrated"]
             Receipt = {"Name": Name, "Fixture": Fixture, "MaterialCompliance": Material,
                        "CollisionSteps": Steps, "SoftIterations": Iterations, "WorldUpdates": Updates,
+                       "ConstraintSweeps": Arguments.constraint_sweeps,
+                       "VelocityReconstruction": Arguments.velocity_reconstruction,
                        "Frames": Frames, "Threads": Arguments.threads,
                        "SpringCalibration": Calibrations[Material]["Name"],
                        "SpringCalibrationPass": Calibrated,
@@ -342,6 +356,8 @@ def Main():
             "CompletedCases": len(Receipts)}, indent=2), encoding="utf-8")
         raise
     Summary = {"Cases": len(Receipts), "SpringCalibrations": Calibrations, "HarnessQualified": True,
+               "ConstraintSweeps": Arguments.constraint_sweeps,
+               "VelocityReconstruction": Arguments.velocity_reconstruction,
                "PhysicallyQualified": sum(Receipt["Status"] == "PASS_BOUNDED_SCHEDULED_REFERENCE_MODEL" for Receipt in Receipts),
                "ObservedBoundRejections": sum(not Receipt["Score"]["CompleteBoundedPass"] for Receipt in Receipts),
                "UnqualifiedCalibration": sum(not Receipt["SpringCalibrationPass"] for Receipt in Receipts),
