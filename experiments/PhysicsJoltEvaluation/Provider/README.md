@@ -8,8 +8,9 @@ physics remain unchanged.
 
 `PhysicsJoltProviderQualification` exercises the adapters with observable
 physical gates: contact begin/end, shape replacement mass, a capsule stopped by
-a wall, canonical mesh ray and release, cloth deflection with rigid feedback,
-rubber pushing a rigid target, and stale rigid/soft IDs after slot reuse. It
+a wall, canonical mesh ray and release, a weld holding under impulse, cloth
+deflection with rigid feedback, rubber pushing a rigid target, and stale
+rigid/soft IDs after slot reuse. It
 uses the patched Jolt velocity reconstruction and two half-frame world updates,
 each with eight collision steps and 12 soft integrations per step, matching the
 prior qualified coupling schedule.
@@ -53,8 +54,8 @@ Current limitations before production consideration:
 - The capsule mover uses bounded shape casts and tangential clipping. Initial
   penetration correction, multiple simultaneous planes, and Box3D-equivalent
   floor/step behavior remain open.
-- Rigid joint weld and connected-body collision exclusion remain unsupported.
-  The existing experimental joint types still need authored limit/motor parity
+- Connected-body collision exclusion remains unsupported. The experimental
+  hinge/slider/distance joint types still need authored limit/motor parity
   fixtures on the shared provider.
 - Cloth, rubber, and reciprocal contact are represented by physical fixtures;
   they are not a quality-matched parity or performance claim. Self collision,

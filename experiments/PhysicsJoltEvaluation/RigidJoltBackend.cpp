@@ -23,6 +23,7 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
@@ -424,7 +425,12 @@ namespace {
                 return {{}, {PhysicsOperationStatus::ResourceLimit, "Jolt joint limit"}};
             if (!Finite(Description.LocalFrameA) || !Finite(Description.LocalFrameB) ||
                 !std::isfinite(Description.LowerLimit) || !std::isfinite(Description.UpperLimit) ||
-                Description.LowerLimit > Description.UpperLimit)
+                Description.LowerLimit > Description.UpperLimit ||
+                !std::isfinite(Description.RestLength) || Description.RestLength < 0 ||
+                !std::isfinite(Description.SpringFrequency) || Description.SpringFrequency < 0 ||
+                !std::isfinite(Description.SpringDamping) || Description.SpringDamping < 0 ||
+                !std::isfinite(Description.MotorSpeed) ||
+                !std::isfinite(Description.MaximumMotorForce) || Description.MaximumMotorForce < 0)
                 return {{}, {PhysicsOperationStatus::InvalidDescription, "Invalid Jolt joint frame or limit"}};
             const auto PointA = ToRVec(Description.LocalFrameA.Position);
             const auto PointB = ToRVec(Description.LocalFrameB.Position);
@@ -435,7 +441,16 @@ namespace {
             if (!LockA.Succeeded() || !LockB.Succeeded())
                 return {{}, {PhysicsOperationStatus::BackendFailure, "Jolt joint body lock failed"}};
             JPH::Ref<JPH::Constraint> Native;
-            if (Description.Kind == PhysicsConstraintKind::BallSocket) {
+            if (Description.Kind == PhysicsConstraintKind::Weld) {
+                JPH::FixedConstraintSettings Settings;
+                Settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+                Settings.mPoint1 = PointA; Settings.mPoint2 = PointB;
+                Settings.mAxisX1 = ToJolt(Description.LocalFrameA.Rotation[0]);
+                Settings.mAxisY1 = ToJolt(Description.LocalFrameA.Rotation[1]);
+                Settings.mAxisX2 = ToJolt(Description.LocalFrameB.Rotation[0]);
+                Settings.mAxisY2 = ToJolt(Description.LocalFrameB.Rotation[1]);
+                Native = Settings.Create(LockA.GetBody(), LockB.GetBody());
+            } else if (Description.Kind == PhysicsConstraintKind::BallSocket) {
                 JPH::PointConstraintSettings Settings;
                 Settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
                 Settings.mPoint1 = PointA;
@@ -485,7 +500,7 @@ namespace {
                     Settings.mLimitsSpringSettings = {JPH::ESpringMode::FrequencyAndDamping,
                         Description.SpringFrequency, Description.SpringDamping};
                 Native = Settings.Create(LockA.GetBody(), LockB.GetBody());
-            } else return {{}, Unsupported("Experimental Jolt weld joint is unsupported")};
+            } else return {{}, Unsupported("Jolt constraint kind is unsupported")};
             if (!Native) return {{}, Unsupported("Jolt constraint creation failed")};
             World.AddConstraint(Native.GetPtr());
             std::uint32_t Index = 1;
@@ -686,7 +701,8 @@ namespace {
             PhysicsRaycastResult Result;
             if (!Finite(Request.Direction) || !Finite(Request.Shape.Transform) ||
                 glm::length(Request.Direction) < MinimumRaycastDistance ||
-                glm::length(Request.Direction) > MaximumRaycastDistance)
+                glm::length(Request.Direction) > MaximumRaycastDistance ||
+                Request.Filter.Bodies.size() > MaximumRaycastFilterBodies)
                 return {.Status = PhysicsOperationStatus::InvalidDescription, .Message = "Invalid shape cast"};
             auto Shape = GetQueryShape(Request.Shape);
             if (!Shape) return {.Status = PhysicsOperationStatus::InvalidDescription, .Message = "Invalid query shape"};
@@ -709,7 +725,8 @@ namespace {
         }
         PhysicsOverlapResult Overlap(const PhysicsOverlapRequest &Request) const override {
             PhysicsOverlapResult Result;
-            if (!Finite(Request.Shape.Transform))
+            if (!Finite(Request.Shape.Transform) ||
+                Request.Filter.Bodies.size() > MaximumRaycastFilterBodies)
                 return {.Status = PhysicsOperationStatus::InvalidDescription, .Message = "Invalid overlap transform"};
             auto Shape = GetQueryShape(Request.Shape);
             if (!Shape) return {.Status = PhysicsOperationStatus::InvalidDescription, .Message = "Invalid overlap shape"};

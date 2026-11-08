@@ -141,6 +141,30 @@ namespace {
         Require(!Provider.Rigid->IsBodyValid(Imported), "retired mesh body is still live");
         Require(Provider.Rigid->DestroyBody(Wall).Succeeded(), "wall release failed");
     }
+    void WeldUnderImpulse() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        const auto Anchor = Provider.Rigid->CreateBody(Box({0, 0, 0}, {1, 1, 1}, true));
+        const auto Link = Provider.Rigid->CreateBody(Box({0, -2, 0}, {1, 1, 1}, false));
+        Require(Anchor.IsValid() && Link.IsValid(), "weld bodies failed admission");
+        PhysicsConstraintDesc Joint;
+        Joint.Kind = PhysicsConstraintKind::Weld;
+        Joint.BodyA = Anchor;
+        Joint.BodyB = Link;
+        Joint.LocalFrameA.Position = {0, -1, 0};
+        Joint.LocalFrameB.Position = {0, 1, 0};
+        const auto Weld = Provider.Rigid->TryCreateConstraint(Joint);
+        Require(Weld.Succeeded(), "weld joint failed admission");
+        Require(Provider.Rigid->ApplyLinearImpulse(Link, {10, 0, 0}).Succeeded(),
+            "weld impulse failed");
+        Advance(Provider, 30);
+        const auto State = Provider.Rigid->GetBodyState(Link);
+        Require(State && std::abs(State->Transform.Position.x) < 0.1f &&
+            std::abs(State->Transform.Position.y + 2.0f) < 0.1f,
+            "weld did not hold authored relative pose under impulse");
+        Require(Provider.Rigid->DestroyConstraint(Weld.Constraint).Succeeded(), "weld release failed");
+    }
     void ClothAndRubberCoupling() {
         PhysicsWorldConfig Config;
         Config.Gravity = {};
@@ -294,6 +318,7 @@ int main() {
     try {
         RigidIdentityAndEvents();
         CapsuleAndMeshResidency();
+        WeldUnderImpulse();
         ClothAndRubberCoupling();
         DataModelAdmissionAndStreaming();
         std::cout << "[Physics:JoltProvider] qualification passed\n";
