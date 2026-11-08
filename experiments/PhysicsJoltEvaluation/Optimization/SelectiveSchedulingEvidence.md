@@ -135,6 +135,48 @@ nested, instrumentation-inflated work measurements and cannot be summed
 or used as the unprofiled cost table. The 88d run predates soft-subscope
 classification and does not contain that breakdown.
 
+## Soft substage attribution
+
+The later hosted profile [42472419850](https://github.com/gmoddev/gargantuan/actions/runs/42472419850)
+uses Engine `0278671b600c4de832ff0cd6bd205a6521d007b6` and the same
+maintained Jolt `109be79fa82be0b306c56e4b4357675ed7843767`. It adds
+`JPH_EXTERNAL_PROFILE` name classification for Jolt's
+`IntegratePositions`, `ApplyEdgeConstraints`, `ApplyVolumeConstraints`,
+`ApplyCollisionConstraintsAndUpdateVelocities`, and `UpdateSoftBodyState`
+scopes. This is a separate instrumented build; it does not revise the
+unprofiled 88d cost claim or change U2/C8/I12. Both dense modes retain exact
+coupled trajectory hashes and pass the benchmark gates in this run.
+
+At one worker, inclusive profile scope milliseconds over 120 dense frames
+are:
+
+| Platform | Mode | SoftSimulate | SoftEdges | SoftIntegrate | SoftVolumes | SoftContactVelocity | Narrowphase | VelocitySolve |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Linux | global | 627.27 | 332.95 | 20.75 | 33.86 | 22.81 | 559.69 | 452.96 |
+| Linux | selective | 621.37 | 332.18 | 20.19 | 33.50 | 22.19 | 167.62 | 132.15 |
+| Windows | global | 326.94 | 251.10 | 8.81 | 6.19 | 9.64 | 292.71 | 299.15 |
+| Windows | selective | 316.79 | 246.83 | 8.03 | 5.33 | 8.79 | 77.65 | 81.77 |
+
+The named soft scopes retain the same call counts in global and selective:
+1,920 `SoftSimulate`, 23,040 `SoftIntegrate` and `SoftContactVelocity`, and
+46,080 `SoftEdges` and `SoftVolumes`. `ApplyEdgeConstraints` is the largest
+named soft substage on each platform, with nearly identical scope work across
+the two modes. The sparse profiles independently show the same pattern:
+`SoftEdges` is Linux `332.60 → 332.28 ms` and Windows
+`251.90 → 250.44 ms`; rigid narrowphase falls Linux `283.63 → 75.44 ms`
+and Windows `197.88 → 51.31 ms`. `SoftVolumes` has profiler calls even for
+this cloth, which has no volume constraints; its measured scope time is not
+evidence of substantial volume solving. The profile hook times nested scopes,
+adds per-call overhead, and records cumulative thread work, not the critical
+path. It identifies the unchanged soft edge loop as a candidate bottleneck
+after the rigid split, but cannot predict the benefit or quality of fewer
+temporal integrations or more retained-lambda constraint sweeps.
+
+The raw profiled and qualification receipts are preserved under
+`C:/Users/aiden/.codex/artifacts/jolt-optimized-foundation-20261108/Selective-Dense-Linux-0278`
+and
+`C:/Users/aiden/.codex/artifacts/jolt-optimized-foundation-20261108/Selective-Dense-Windows-0278`.
+
 The additional world costs roughly 0.38–0.43 MiB of live working set in
 the dense T1 processes and about 0.14–0.23 ms of setup in the median
 processes. These are process snapshots with live worlds, not peak-retention
