@@ -22,6 +22,9 @@ and readmission, Cloth vertex publication, and teardown through `Workspace`.
 It serializes a detached semantic Part/Cloth subtree, reopens it in a new
 `DataModel` with the test provider installed before parenting, and verifies
 fresh backend admission without persisting native identity.
+Additional `Workspace` scenes author moving cloth attachments, motor-driven
+hinge and slider joints with limits, and a high-speed CCD Part against a thin
+wall; their gates inspect published physical poses and neutral identities.
 
 The soft adapter builds neutral cloth and regular rubber lattices directly
 from `SoftBodyDefinition`. It retains neutral IDs, fixed topology indices, and
@@ -67,9 +70,10 @@ Current limitations before production consideration:
 - The capsule mover uses bounded shape casts and tangential clipping. Initial
   penetration correction, multiple simultaneous planes, and Box3D-equivalent
   floor/step behavior remain open.
-- Connected-body collision exclusion remains unsupported. The experimental
-  hinge/slider/distance joint types still need authored limit/motor parity
-  fixtures on the shared provider.
+- Connected-body collision exclusion remains unsupported. The authored hinge
+  and slider fixtures test motion and limits, but distance spring and
+  articulated-chain gameplay quality are not yet covered in this provider
+  target.
 - Cloth, rubber, and reciprocal contact are represented by physical fixtures;
   they are not a quality-matched parity or performance claim. Self collision,
   swept soft contact, and long-duration material calibration remain unqualified.

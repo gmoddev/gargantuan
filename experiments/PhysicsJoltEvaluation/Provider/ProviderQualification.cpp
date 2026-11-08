@@ -1,9 +1,12 @@
 #include "UnifiedJoltProvider.hpp"
 #include "../ExperimentSupport.hpp"
 #include "gargantuan/classes/Cloth.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/JointConstraint.hpp"
+#include "gargantuan/classes/SoftBodyAttachment.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -29,6 +32,10 @@ namespace gargantuan {
         }
         static bool IsBodyValid(const WorldRoot &World, PhysicsBodyId Id) {
             return World.Physics.IsBodyValid(Id);
+        }
+        static PhysicsConstraintId Constraint(const WorldRoot &World, const JointConstraint &Joint) {
+            const auto Found = World.ConstraintJoints.find(Joint.GetObjectId());
+            return Found == World.ConstraintJoints.end() ? PhysicsConstraintId{} : Found->second;
         }
     };
 }
@@ -396,6 +403,20 @@ namespace {
         const auto Vertex = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
         Require(Vertex && std::isfinite(Vertex->x) && std::isfinite(Vertex->y),
             "WorldRoot did not publish Jolt cloth vertex state");
+        auto Pin = std::make_shared<SoftBodyAttachment>();
+        Pin->SetVertexIndex(0);
+        Pin->SetPosition({-1, 4, 0});
+        Pin->SetParent(Fabric);
+        World->StepPhysics(0.0f, std::nullopt);
+        const auto BeforePinMove = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
+        Pin->SetPosition({-1, 5, 0});
+        World->StepPhysics(0.0f, std::nullopt);
+        const auto AfterPinMove = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
+        const auto PinnedVertex = World->GetDeformableVertex(Fabric->GetObjectId(), 0);
+        Require(BeforePinMove && AfterPinMove && PinnedVertex &&
+            glm::length(*BeforePinMove - *AfterPinMove) < 0.01f &&
+            std::abs(PinnedVertex->y - 5.0f) < 0.01f,
+            "authored moving attachment reset cloth deformation or missed pin position");
         Fabric->Destroy();
         World->StepPhysics(0.0f, std::nullopt);
         Require(!World->GetDeformableVertex(Fabric->GetObjectId(), 40),
@@ -438,6 +459,86 @@ namespace {
             "reopened semantic fixture failed Jolt readmission");
         ReopenedGame->Destroy();
     }
+    void DataModelMotorsAndCcd() {
+        auto Game = std::make_shared<DataModel>();
+        auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        WorldRootTestAccess::Inject(*World, CreateUnifiedJoltProvider(Config));
+        World->SetGravity(0.0f);
+        const auto PartAt = [&](glm::vec3 Position, bool Anchored) {
+            auto Result = std::make_shared<Part>();
+            Result->SetAnchored(Anchored);
+            Result->SetCanCollide(false);
+            Result->SetCFrame(CFrame(Position.x, Position.y, Position.z));
+            Result->SetParent(World);
+            return Result;
+        };
+        const auto MakeAttachment = [](const std::shared_ptr<Part> &Parent, glm::vec3 Local) {
+            auto Result = std::make_shared<Attachment>();
+            Result->SetCFrame(CFrame(Local.x, Local.y, Local.z));
+            Result->SetParent(Parent);
+            return Result;
+        };
+        auto Frame = PartAt({0, 0, 0}, true);
+        auto Door = PartAt({2, 0, 0}, false);
+        auto PivotA = MakeAttachment(Frame, {0.5f, 0, 0});
+        auto PivotB = MakeAttachment(Door, {-1.5f, 0, 0});
+        auto Hinge = std::make_shared<JointConstraint>();
+        Hinge->SetJointType("Hinge");
+        Hinge->SetAttachment0(PivotA);
+        Hinge->SetAttachment1(PivotB);
+        Hinge->SetEnableLimit(true);
+        Hinge->SetLowerLimit(-0.4f);
+        Hinge->SetUpperLimit(0.4f);
+        Hinge->SetEnableMotor(true);
+        Hinge->SetMotorSpeed(2.0f);
+        Hinge->SetMaximumMotorForce(1000.0f);
+        Hinge->SetParent(World);
+        auto Rail = PartAt({10, 0, 0}, true);
+        auto Slide = PartAt({10, 0, 0}, false);
+        auto TrackA = MakeAttachment(Rail, {0, 0, 0});
+        auto TrackB = MakeAttachment(Slide, {0, 0, 0});
+        auto Slider = std::make_shared<JointConstraint>();
+        Slider->SetJointType("Slider");
+        Slider->SetAttachment0(TrackA);
+        Slider->SetAttachment1(TrackB);
+        Slider->SetEnableLimit(true);
+        Slider->SetLowerLimit(-1.0f);
+        Slider->SetUpperLimit(1.0f);
+        Slider->SetEnableMotor(true);
+        Slider->SetMotorSpeed(3.0f);
+        Slider->SetMaximumMotorForce(1000.0f);
+        Slider->SetParent(World);
+        World->StepPhysics(0.0f, std::nullopt);
+        Require(WorldRootTestAccess::Constraint(*World, *Hinge).IsValid() &&
+            WorldRootTestAccess::Constraint(*World, *Slider).IsValid(),
+            "authored hinge and slider failed Jolt admission");
+        for (int FrameIndex = 0; FrameIndex < 90; ++FrameIndex)
+            World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+        const auto Angle = std::atan2(Door->GetCFrame().Rotation[0][1],
+            Door->GetCFrame().Rotation[0][0]);
+        Require(std::abs(Angle) > 0.05f && std::abs(Angle) < 0.7f &&
+            Slide->GetCFrame().Position.x > 10.1f &&
+            Slide->GetCFrame().Position.x < 11.3f,
+            "authored motors did not move within hinge/slider limits");
+        auto Wall = std::make_shared<Part>();
+        Wall->SetAnchored(true);
+        Wall->SetSize({0.1f, 4, 4});
+        Wall->SetCFrame(CFrame(30, 0, 0));
+        Wall->SetParent(World);
+        auto Bullet = std::make_shared<Part>();
+        Bullet->SetShape(Enums::PartType::Ball);
+        Bullet->SetSize({0.5f, 0.5f, 0.5f});
+        Bullet->SetCFrame(CFrame(27, 0, 0));
+        Bullet->SetMovingBodyCCD(true);
+        Bullet->SetParent(World);
+        Bullet->SetLinearVelocity({360, 0, 0});
+        World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+        Require(Bullet->GetCFrame().Position.x < 30.5f,
+            "authored high-speed CCD projectile tunneled through thin wall");
+        Game->Destroy();
+    }
 }
 
 int main() {
@@ -459,6 +560,8 @@ int main() {
         ClothAndRubberCoupling();
         std::cout << "[Physics:JoltProvider] DataModel lifecycle\n" << std::flush;
         DataModelAdmissionAndStreaming();
+        std::cout << "[Physics:JoltProvider] DataModel motors/CCD\n" << std::flush;
+        DataModelMotorsAndCcd();
         std::cout << "[Physics:JoltProvider] qualification passed\n";
         return 0;
     } catch (const std::exception &Error) {
