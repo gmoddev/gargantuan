@@ -14,7 +14,7 @@ import sys
 import time
 
 from RunPerformanceQualification import (
-    COUPLINGS, SCENES, HashFile, PlanMatrix, RemainingTimeout, RunProcess,
+    COUPLINGS, JOLT_PROFILE_FIELDS, SCENES, HashFile, PlanMatrix, RemainingTimeout, RunProcess,
     WriteJson,
 )
 
@@ -45,6 +45,20 @@ def ParseRaw(PathName, Backend, Scene, Coupling, Frames, Workers):
                 int(Row.get('frames', -1)) != Frames or \
                 int(Row.get('workers_requested', -1)) != Workers:
             raise ValueError('Engine scene, backend, or worker identity changed')
+    JoltProfile = {Field: int(Summary[Field]) for Field in JOLT_PROFILE_FIELDS}
+    if any(int(Header[Field]) != Value for Field, Value in JoltProfile.items()):
+        raise ValueError('Compiled Jolt profile changed between Engine header and summary')
+    if Backend == 'jolt':
+        if any(Value <= 0 for Field, Value in JoltProfile.items()
+               if Field != 'jolt_full_update_sleep_clock') or \
+                JoltProfile['jolt_full_update_sleep_clock'] not in (0, 1) or \
+                JoltProfile['jolt_soft_integrations_per_frame'] != \
+                JoltProfile['jolt_world_updates'] * \
+                JoltProfile['jolt_collision_steps_per_update'] * \
+                JoltProfile['jolt_soft_iterations_per_collision_step']:
+            raise ValueError('Invalid compiled Engine Jolt solver profile')
+    elif any(JoltProfile.values()):
+        raise ValueError('Engine XPBD row reports a Jolt solver profile')
     for Index, Line in enumerate(FrameLines):
         if not Line.startswith(Prefix + f'frame={Index} '):
             raise ValueError('Engine frame chronology changed')
@@ -62,7 +76,7 @@ def ParseRaw(PathName, Backend, Scene, Coupling, Frames, Workers):
     if Coupling == 'static-sphere' and \
             float(Summary['initial_min_surface_distance']) <= 0:
         raise ValueError('Engine coupled scene began in penetration')
-    return {'Header': Header, 'Summary': Summary,
+    return {'Header': Header, 'Summary': Summary, 'JoltSolverProfile': JoltProfile,
             'PhysicalGateScope': 'Per-frame finite, revision, frozen, and drop checks in native executable'}
 
 
@@ -192,6 +206,7 @@ def Main(Arguments=None):
             break
         Pair = {**Item, 'JoltReceipt': PairRuns['jolt']['Name'],
                 'XpbdReceipt': PairRuns['xpbd']['Name'],
+                'JoltSolverProfile': PairRuns['jolt']['Parsed']['JoltSolverProfile'],
                 'JoltMeanStepMs': JoltMs, 'XpbdMeanStepMs': XpbdMs,
                 'XpbdOverJoltStepCost': XpbdMs / JoltMs,
                 'QualityAbsoluteErrors': {Field: abs(float(Jolt[Field]) - float(Xpbd[Field]))

@@ -12,6 +12,32 @@ import RunEnginePerformanceQualification as Runner
 
 
 class EnginePerformanceTests(unittest.TestCase):
+    def test_compiled_solver_profile_is_consistent_and_recorded(self):
+        with TemporaryDirectory() as Directory:
+            Raw = Path(Directory) / 'raw.txt'
+            Profile = dict(zip(Runner.JOLT_PROFILE_FIELDS, (2, 8, 6, 2, 96, 1)))
+            Identity = {'backend': 'jolt', 'scene': 'cloth4k', 'coupling': 'none',
+                        'frames': 1, 'workers_requested': 1}
+            Summary = {**Identity, **Profile, 'vertices': 4096, 'constraints': 8000,
+                       'observed_contact_band': 0}
+            Summary.update({Field: 0 for Field in Runner.QUALITY_FIELDS + Runner.TIME_FIELDS})
+            Summary['mean_physics_step_wall_ms'] = 1
+
+            def WriteRaw(HeaderProfile):
+                Header = {**Identity, **HeaderProfile}
+                Format = lambda Row: ' '.join(f'{Key}={Value}' for Key, Value in Row.items())
+                Raw.write_text('[Physics:EngineBenchmark] ' + Format(Header) + '\n'
+                               '[Physics:EngineBenchmark] frame=0 physics_step_wall_ms=1\n'
+                               '[Physics:EngineBenchmark] summary ' + Format(Summary) + '\n',
+                               encoding='utf-8')
+
+            WriteRaw(Profile)
+            Parsed = Runner.ParseRaw(Raw, 'jolt', 'cloth4k', 'none', 1, 1)
+            self.assertEqual(Parsed['JoltSolverProfile'], Profile)
+            WriteRaw({**Profile, 'jolt_soft_integrations_per_frame': 192})
+            with self.assertRaisesRegex(ValueError, 'changed between Engine header'):
+                Runner.ParseRaw(Raw, 'jolt', 'cloth4k', 'none', 1, 1)
+
     def test_expired_total_deadline_keeps_failed_summary_without_launch(self):
         with TemporaryDirectory() as Directory, \
              patch.object(Runner, 'RemainingTimeout', return_value=-1), \
