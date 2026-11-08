@@ -1,20 +1,26 @@
 # Bounded soft-body provider benchmark
 
-`PhysicsJoltProviderBenchmark` takes five required positional arguments and
-one optional receipt identifier:
+`PhysicsJoltProviderBenchmark` takes five required positional arguments, an
+optional receipt identifier, and an optional warmup count after that identifier:
 
 ```
-PhysicsJoltProviderBenchmark jolt|xpbd cloth4k|cloth16k|cloth4x4k|rubber4k|rubber16k none|static-sphere frames workers [shared-run-pair]
+PhysicsJoltProviderBenchmark jolt|xpbd cloth4k|cloth16k|cloth4x4k|rubber4k|rubber16k none|static-sphere frames workers [shared-run-pair [warmup-frames]]
 ```
 
-Frames must be 1–30 and requested workers 1–8. The scenes contain 64×64 or
+Measured frames must be 1–30, warmup frames 0–30, and requested workers 1–8.
+Omitting the optional arguments preserves the old cold, unpaired invocation;
+the seven-argument form with `shared-run-pair` also remains valid and cold.
+The scenes contain 64×64 or
 128×128 cloth, four 64×64 cloth bodies, 16³ rubber, or 25³ rubber. They use
 the same `SoftBodyDefinition`, particle mass, compliance, gravity, fixed top-row
 cloth attachments, and central uniform impulse in both backends. The impulse
 is `movable vertex count × particle mass × 2`, corresponding to a nominal
 2 m/s lateral velocity before damping and constraint response. Each measured
-frame is 1/60 second. Setup and body admission are outside timed frames.
-The first measured frame is cold after admission. Per-frame output is printed
+frame is 1/60 second. Setup and body admission are outside timed frames and
+reported as `startup_admission_ms`. Warmup advances the same scene, applies
+the same complete-body, revision, and no-frozen-work checks, and excludes its
+step times from measured mean, median, and p95. With zero warmup, the first
+measured frame is cold after admission. Per-frame output is printed
 outside its own timer but can perturb following frames. Treat a single run as
 a bounded cold provider-call sample; alternate and repeat runs on one host
 before making a steady-state claim. Pass the same nondefault `shared-run-pair`
@@ -40,7 +46,8 @@ separation and maximum poststep penetration across frames. Compare coupled
 and isolated cost separately for each backend. This scene does not compare
 reciprocal dynamic rigid feedback.
 
-The executable prints per-frame `jolt_world_ms`, `jolt_extract_ms`,
+The executable prints warmup frames as `warmup_frame=N` and measured frames as
+`frame=N`, with per-frame `jolt_world_ms`, `jolt_extract_ms`,
 `xpbd_step_ms`, and `total_ms`, followed
 by mean, median, and p95 total time. Its final state metrics are mean and
 center vertex height, maximum attachment error, mean and maximum axial-neighbor
@@ -51,10 +58,21 @@ physical measurements before making any performance ranking. The benchmark
 deliberately prints no winner. This is a provider-call microbenchmark: it
 excludes `WorldRoot`'s collider snapshot, Part event/publication work, render
 dirty bookkeeping, and outer Engine frame work.
+
+After the final quality inspection, the benchmark explicitly destroys every
+soft body and every authored Jolt static collider, then releases the soft
+provider before the shared rigid provider. A `lifecycle` JSON line reports
+provider setup/admission time, teardown time, and resource deltas from before
+admission to live admission, after the run, and after provider retirement.
+Working set snapshots show live process residency; process-lifetime peaks are
+not phase peaks or leak proof. Allocation counters exist only in the separate
+instrumented allocation target. Its `timing_instrumented=1` marks all frame
+times invalid for performance comparison.
 Admission checks exact vertex and attachment counts and requires a nonempty
-constraint graph. Every measured frame must report all bodies and vertices
-simulated, no frozen, stale, dropped, or truncated work, and advancing vertex
-revisions with stable identities and topology.
+constraint graph. Every warmup and measured frame must report all bodies and
+vertices simulated, no frozen, stale, dropped, or truncated work, finite
+published positions, and advancing vertex revisions with stable identities
+and topology. The finite-position scan is outside the per-frame timer.
 `CompareBenchmark.py jolt.log xpbd.log` emits absolute differences for those
 physical metrics and leaves `timing_winner` null. Supplying a reviewed JSON
 envelope with `--envelope limits.json` permits a timing winner only when every
@@ -86,6 +104,28 @@ fingerprint, and explicit run-pair identifier match. Pool capacity and dispatche
 XPBD submits one job per body, so one-body scenes cannot occupy its whole pool.
 That limited parallelism is an actual backend scaling property under the same
 CPU budget, not a reason to erase a measured timing difference.
+
+`RunPerformanceQualification.py` executes fresh-process Jolt/XPBD pairs for
+both cold and ten-frame-warm tails. Defaults are five scenes, both coupling
+choices, worker budgets 1/2/8, 30 measured frames, and three repeats. It
+alternates backend order across pairs and retains byte-exact stdout/stderr,
+SHA-256 hashes, command lines, elapsed time, exit status, source and binary
+identities, the CMake cache, and incremental receipts before parsing or
+comparison. A failed or timed-out process remains in the output directory and
+ends the matrix with an error. Use `--scenes`, `--couplings`, `--workers`,
+`--tails`, and `--repetitions` for a smaller bounded matrix. For example:
+
+```
+python RunPerformanceQualification.py --binary PhysicsJoltProviderBenchmark --cmake-cache CMakeCache.txt --engine-source ENGINE_COMMIT --jolt-source JOLT_COMMIT --output ProviderEvidence --scenes cloth4k --couplings none --workers 1
+```
+
+The runner invokes `CompareBenchmark.py` for each matched pair and preserves
+its raw comparison output. Without `--envelope` every pair remains unranked.
+With an envelope, the comparator can rank only when its material, topology,
+coupling, worker, and physical requirements pass. Cold and warm tails are
+reported separately; no ratio is pooled across scenes or treated as an Engine
+frame result. `PhysicsJoltEngineBenchmark` uses the same scene and coupling
+arguments but has a separate timing scope and does not take a run-pair argument.
 
 The native damping coefficient is calibrated for the qualified two half-frame
 updates, eight collision steps per half, and 12 Jolt soft integrations per

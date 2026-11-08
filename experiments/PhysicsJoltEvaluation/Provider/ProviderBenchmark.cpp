@@ -227,8 +227,8 @@ int main(int ArgumentCount, char **Arguments) {
     PhysicsEvaluation::SuppressErrorDialogs();
     PhysicsEvaluation::InstallPhysicsAllocators();
     try {
-        if (ArgumentCount != 6 && ArgumentCount != 7)
-            throw std::invalid_argument("Usage: ProviderBenchmark jolt|xpbd scene none|static-sphere frames[1..30] workers[1..8] [shared-run-pair]");
+        if (ArgumentCount < 6 || ArgumentCount > 8)
+            throw std::invalid_argument("Usage: ProviderBenchmark jolt|xpbd scene none|static-sphere frames[1..30] workers[1..8] [shared-run-pair [warmup-frames[0..30]]]");
         const std::string BackendName = Arguments[1];
         if (BackendName != "jolt" && BackendName != "xpbd")
             throw std::invalid_argument("Backend must be jolt or xpbd");
@@ -251,10 +251,20 @@ int main(int ArgumentCount, char **Arguments) {
 #endif
         const auto BuildStamp = ReceiptToken(std::string(__DATE__) + "_" + __TIME__);
         const auto BinaryId = BinaryFingerprint(Arguments[0]);
-        const auto RunPair = ArgumentCount == 7 ? ReceiptToken(Arguments[6]) : "unpaired";
+        const auto RunPair = ArgumentCount >= 7 ? ReceiptToken(Arguments[6]) : "unpaired";
         if (RunPair.size() > 64 || RunPair.empty())
             throw std::invalid_argument("Run-pair identifier must be 1..64 characters");
+        const int WarmupFrames = ArgumentCount == 8 ? std::stoi(Arguments[7]) : 0;
+        if (WarmupFrames < 0 || WarmupFrames > 30)
+            throw std::invalid_argument("Warmup frames must be between 0 and 30");
+#if defined(PHYSICS_EVALUATION_TRACK_ALLOCATIONS)
+        constexpr bool TimingInstrumented = true;
+#else
+        constexpr bool TimingInstrumented = false;
+#endif
 
+        const auto BeforeAdmission = PhysicsEvaluation::CaptureResources();
+        const auto AdmissionStart = Clock::now();
         SoftBodyWorldLimits Limits;
         Limits.MaximumWorkers = Workers;
         std::unique_ptr<ISoftBodyBackend> Xpbd;
@@ -288,6 +298,7 @@ int main(int ArgumentCount, char **Arguments) {
                 State->TopologyRevision, State->VertexRevision});
         }
         std::vector<SoftBodyCollider> Colliders;
+        std::vector<PhysicsBodyId> StaticBodies;
         double InitialMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
         if (Coupling == "static-sphere") {
             for (std::uint32_t Index = 0; Index < SceneValue.Count; ++Index) {
@@ -305,8 +316,10 @@ int main(int ArgumentCount, char **Arguments) {
                     Description.Shape = Collider.Shape;
                     Description.Transform = Collider.Transform;
                     Description.Anchored = true;
-                    if (!Jolt.Rigid->CreateBody(Description).IsValid())
+                    const auto StaticBody = Jolt.Rigid->CreateBody(Description);
+                    if (!StaticBody.IsValid())
                         throw std::runtime_error("Static rigid collider admission failed");
+                    StaticBodies.push_back(StaticBody);
                 }
             }
             if (InitialMinimumSurfaceDistance <= 0.0)
@@ -319,6 +332,8 @@ int main(int ArgumentCount, char **Arguments) {
             if (!Soft->ApplyImpulse(Record.Id, Impulse).Succeeded())
                 throw std::runtime_error("Uniform impulse admission failed");
         }
+        const double StartupAdmissionMs = Milliseconds(Clock::now() - AdmissionStart);
+        const auto AfterAdmission = PhysicsEvaluation::CaptureResources();
         std::vector<double> TotalTimes;
         std::vector<double> WorldTimes;
         std::vector<double> TailTimes;
@@ -334,8 +349,12 @@ int main(int ArgumentCount, char **Arguments) {
             << " host=" << Host << " os=" << OperatingSystem
             << " build_stamp=" << BuildStamp << " binary_id=" << BinaryId
             << " run_pair=" << RunPair
+            << " warmup_frames=" << WarmupFrames
+            << " timing_instrumented=" << int(TimingInstrumented)
             << " vertices=" << Bodies.size() * Bodies.front().Rest.size() << '\n' << std::flush;
-        for (int Frame = 0; Frame < Frames; ++Frame) {
+        for (int SequenceFrame = 0; SequenceFrame < WarmupFrames + Frames; ++SequenceFrame) {
+            const bool Measured = SequenceFrame >= WarmupFrames;
+            const int Frame = SequenceFrame - WarmupFrames;
             const auto Start = Clock::now();
             if (BackendName == "jolt")
                 (void)Jolt.Rigid->Step({.DeltaTime = SoftBodyStepInterval, .SubStepCount = 16});
@@ -367,22 +386,31 @@ int main(int ArgumentCount, char **Arguments) {
             if (BackendName == "xpbd") {
                 ActualXpbdWorkers = Result.Profile.WorkerCount;
                 XpbdJobsDispatched = Result.Profile.JobsDispatched;
-                XpbdUtilizations.push_back(Result.Profile.WorkerUtilization);
+                if (Measured) XpbdUtilizations.push_back(Result.Profile.WorkerUtilization);
             }
             const auto Finish = Clock::now();
+            for (const auto &State : Result.States)
+                for (const auto &Position : *State.Positions)
+                    if (!std::isfinite(Position.x) || !std::isfinite(Position.y) ||
+                        !std::isfinite(Position.z))
+                        throw std::runtime_error("Nonfinite soft position during warmup or measured frame");
             const double WorldTime = Milliseconds(AfterRigid - Start);
             const double TailTime = Milliseconds(Finish - AfterRigid);
-            WorldTimes.push_back(WorldTime);
-            TailTimes.push_back(TailTime);
-            TotalTimes.push_back(WorldTime + TailTime);
-            std::cout << "[Physics:ProviderBenchmark] frame=" << Frame
+            if (Measured) {
+                WorldTimes.push_back(WorldTime);
+                TailTimes.push_back(TailTime);
+                TotalTimes.push_back(WorldTime + TailTime);
+            }
+            std::cout << "[Physics:ProviderBenchmark] "
+                << (Measured ? "frame=" : "warmup_frame=")
+                << (Measured ? Frame : SequenceFrame)
                 << " jolt_world_ms=" << WorldTime
                 << " jolt_extract_ms=" << (BackendName == "jolt" ? TailTime : 0.0)
                 << " xpbd_step_ms=" << (BackendName == "xpbd" ? TailTime : 0.0)
                 << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
                 << " xpbd_worker_utilization=" <<
                     (BackendName == "xpbd" ? XpbdUtilizations.back() : 0.0)
-                << " total_ms=" << TotalTimes.back() << '\n' << std::flush;
+                << " total_ms=" << (WorldTime + TailTime) << '\n' << std::flush;
             if (Coupling == "static-sphere") {
                 FinalMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
                 for (std::size_t Index = 0; Index < Bodies.size(); ++Index) {
@@ -406,12 +434,16 @@ int main(int ArgumentCount, char **Arguments) {
         const double Median = 0.5 * (Sorted[(Sorted.size() - 1) / 2] +
             Sorted[Sorted.size() / 2]);
         const auto QualityValue = Inspect(Bodies, *Soft);
+        const auto AfterRun = PhysicsEvaluation::CaptureResources();
         std::cout << "[Physics:ProviderBenchmark] summary backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
-            << " frames=" << Frames << " workers_requested=" << Workers
+            << " frames=" << Frames << " warmup_frames=" << WarmupFrames
+            << " workers_requested=" << Workers
             << " host=" << Host << " os=" << OperatingSystem
             << " build_stamp=" << BuildStamp << " binary_id=" << BinaryId
             << " run_pair=" << RunPair
+            << " timing_instrumented=" << int(TimingInstrumented)
+            << " startup_admission_ms=" << StartupAdmissionMs
             << " constraints=" << Constraints
             << " xpbd_workers_actual=" << ActualXpbdWorkers
             << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
@@ -446,6 +478,34 @@ int main(int ArgumentCount, char **Arguments) {
             << " observed_contact_band=" <<
                 (Coupling == "static-sphere" && MinimumPoststepSurfaceDistance <= 0.15 ? 1 : 0)
             << " edge_count=" << QualityValue.EdgeCount << '\n' << std::flush;
+
+        const auto TeardownStart = Clock::now();
+        for (const auto &Record : Bodies)
+            if (!Soft->DestroyBody(Record.Id).Succeeded())
+                throw std::runtime_error("Soft body retirement failed");
+        for (const auto Body : StaticBodies)
+            if (!Jolt.Rigid->DestroyBody(Body).Succeeded())
+                throw std::runtime_error("Static rigid collider retirement failed");
+        std::vector<BodyRecord>().swap(Bodies);
+        std::vector<SoftBodyCollider>().swap(Colliders);
+        std::vector<PhysicsBodyId>().swap(StaticBodies);
+        Xpbd.reset();
+        Jolt.Soft.reset();
+        Jolt.Rigid.reset();
+        const double TeardownMs = Milliseconds(Clock::now() - TeardownStart);
+        const auto AfterRetire = PhysicsEvaluation::CaptureResources();
+        const nlohmann::json Lifecycle = {
+            {"StartupAdmissionMs", StartupAdmissionMs}, {"TeardownMs", TeardownMs},
+            {"WarmupFrames", WarmupFrames}, {"MeasuredFrames", Frames},
+            {"TimingInstrumented", TimingInstrumented},
+            {"AdmissionResources", PhysicsEvaluation::ResourceDelta(BeforeAdmission, AfterAdmission)},
+            {"RunResources", PhysicsEvaluation::ResourceDelta(AfterAdmission, AfterRun)},
+            {"RetireResources", PhysicsEvaluation::ResourceDelta(AfterRun, AfterRetire)},
+            {"WholeProcessResources", PhysicsEvaluation::ResourceDelta(BeforeAdmission, AfterRetire)},
+            {"PostRetireWorkingSetBytes", AfterRetire.WorkingSetAvailable
+                ? nlohmann::json(AfterRetire.WorkingSetBytes) : nlohmann::json(nullptr)}
+        };
+        std::cout << "[Physics:ProviderBenchmark] lifecycle " << Lifecycle.dump() << '\n' << std::flush;
         return 0;
     } catch (const std::exception &Error) {
         std::cerr << "[Physics:ProviderBenchmark] " << Error.what() << '\n';
