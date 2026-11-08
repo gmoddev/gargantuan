@@ -733,8 +733,13 @@ namespace {
         for (int Frame = 0; Frame < 4; ++Frame)
             Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
                 .SubStepCount = 16}));
+        const auto AfterFloorMove = Provider.Rigid->GetBodyState(BallId);
+        Require(AfterFloorMove && std::isfinite(AfterFloorMove->Transform.Position.y),
+            "static floor edit lost finite ball state");
         std::cout << "[Physics:JoltProvider] dormant_static_edit ended="
-            << Ended << '\n' << std::flush;
+            << Ended << " ball_awake=" << AfterFloorMove->Awake
+            << " ball_y=" << AfterFloorMove->Transform.Position.y
+            << '\n' << std::flush;
         Require(Ended == 1,
             "moving static floor left a stale sleeping contact or duplicate end");
     }
