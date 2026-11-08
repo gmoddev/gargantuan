@@ -12,6 +12,47 @@ import RunCadenceScreen as Screen
 
 
 class CadenceScreenTests(unittest.TestCase):
+    def test_convergence_pairs_temporal_calibration_with_sweeps(self):
+        Calibrated = []
+        Observed = []
+
+        def Calibrate(*Args, **Options):
+            Count = Options['IntegrationsPerFrame']
+            Sweeps = Options['ConstraintSweeps']
+            Calibrated.append((Count, Sweeps))
+            return {'Calibrated': (Count, Sweeps) != (32, 4),
+                    'ConstraintSweeps': Sweeps,
+                    'InternalIntegrationDt': Screen.NativeStepTime(Count, 1, 1)}
+
+        def Observe(*Args):
+            Observed.append(Args)
+            return {'Name': Args[3], 'PhysicalPass': True, 'Score': {}}
+
+        with TemporaryDirectory() as Directory, \
+             patch.object(Screen, 'CalibrateSpring', side_effect=Calibrate), \
+             patch.object(Screen, 'RunObservedCase', side_effect=Observe), \
+             redirect_stdout(io.StringIO()):
+            Output = Path(Directory) / 'screen'
+            Screen.Main(['--pure', 'pure', '--observed', 'observed',
+                         '--output', str(Output), '--screen', 'convergence'])
+            Receipts = json.loads((Output / 'Receipts.json').read_text())
+            Calibrations = json.loads((Output / 'Calibrations.json').read_text())
+            self.assertEqual(Calibrated, [(Count, Sweeps)
+                for Count in (16, 32, 64, 96) for Sweeps in (2, 4, 8)])
+            self.assertEqual(len(Calibrations), 12)
+            self.assertEqual(len(Receipts), 24)
+            self.assertEqual(sum(Item['CandidatePass'] for Item in Receipts), 22)
+            self.assertTrue(all(Item['PhysicalPass'] for Item in Receipts))
+            for Args in Observed:
+                Steps, Iterations, Updates, Extra, ExpectedDt = (
+                    Args[6], Args[7], Args[8], Args[11], Args[13])
+                Sweeps = int(Extra[Extra.index('--constraint-sweeps') + 1])
+                self.assertIn(Sweeps, (2, 4, 8))
+                self.assertEqual((Steps, Updates), (8, 2))
+                self.assertEqual(ExpectedDt,
+                                 Screen.NativeStepTime(Updates, Steps, Iterations))
+                self.assertEqual(Args[14], 'delta')
+
     def test_soft_budget_keeps_all_physical_failures(self):
         Calls = []
 
