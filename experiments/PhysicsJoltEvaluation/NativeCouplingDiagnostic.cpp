@@ -34,11 +34,12 @@ constexpr float Mass = 0.7f * (4.0f / 3.0f) * 3.14159265358979323846f * Radius *
 constexpr float Inertia = 0.4f * Mass * Radius * Radius;
 struct Options {
     int Frames = 150, Steps = 1, Iterations = 24, Workers = 1, Count = 1;
-    int TraceStart = 16, TraceEnd = 24;
+    int TraceStart = 16, TraceEnd = 24, ProjectionPasses = 1;
     bool Contact = true, Pinned = true, Dynamic = true, Particles = true;
     float Compliance = 0.0f, BendCompliance = 1.0e-4f, Damping = 2.4f, Friction = 0.2f;
-    float Restitution = 0.0f, Seed = 0.0f, SphereZ = -2.0f, Speed = 5.0f;
-    std::string Trace;
+    float Restitution = 0.0f, Seed = 0.0f, SeedX = 0.0f, SeedY = 0.0f, SphereZ = -2.0f, Speed = 5.0f;
+    bool RefreshSpherePlane = false;
+    std::string Trace, ExportGraph, VelocityFile, DisplacementFile;
 };
 Options Config;
 std::ofstream TraceFile;
@@ -67,6 +68,13 @@ Options Parse(int Count, char** Args) {
         else if(K=="--friction") O.Friction=std::stof(S);
         else if(K=="--restitution") O.Restitution=std::stof(S);
         else if(K=="--seed") O.Seed=std::stof(S);
+        else if(K=="--seed-x") O.SeedX=std::stof(S);
+        else if(K=="--seed-y") O.SeedY=std::stof(S);
+        else if(K=="--export-graph") O.ExportGraph=S;
+        else if(K=="--velocity-file") O.VelocityFile=S;
+        else if(K=="--displacement-file") O.DisplacementFile=S;
+        else if(K=="--projection-passes") O.ProjectionPasses=std::stoi(S);
+        else if(K=="--refresh-sphere-plane") O.RefreshSpherePlane=std::stoi(S)!=0;
         else if(K=="--sphere-z") O.SphereZ=std::stof(S);
         else if(K=="--speed") O.Speed=std::stof(S);
         else if(K=="--trace") O.Trace=S;
@@ -74,8 +82,12 @@ Options Parse(int Count, char** Args) {
         else if(K=="--trace-end") O.TraceEnd=std::stoi(S);
         else throw std::runtime_error("[Physics:Coupling] Unknown option "+K);
     }
-    if(O.Frames<1||O.Frames>300||O.Steps<1||O.Steps>8||O.Iterations<1||O.Iterations>64||O.Workers<1||O.Workers>8||O.Count<1||O.Count>2||O.Compliance<0||O.BendCompliance<0||O.Damping<0||O.Friction<0||O.Restitution<0)
+    if(O.Frames<1||O.Frames>300||O.Steps<1||O.Steps>8||O.Iterations<1||O.Iterations>64||O.Workers<1||O.Workers>8||O.Count<1||O.Count>2||O.ProjectionPasses<1||O.ProjectionPasses>8||O.Compliance<0||O.BendCompliance<0||O.Damping<0||O.Friction<0||O.Restitution<0)
         throw std::runtime_error("[Physics:Coupling] Option outside bounded range");
+#ifndef PHYSICS_S1_DIAGNOSTIC
+    if(O.ProjectionPasses!=1||O.RefreshSpherePlane)
+        throw std::runtime_error("[Physics:Coupling] Counterfactual requires isolated S1 diagnostic Jolt");
+#endif
     return O;
 }
 
@@ -108,7 +120,7 @@ JPH::Ref<JPH::SoftBodySharedSettings> GetCloth() {
         JPH::SoftBodySharedSettings::Vertex P;
         P.mPosition=JPH::Float3((float(X)/(N-1)-0.5f)*4.0f,-(float(Y)/(N-1)-0.5f)*4.0f,0);
         P.mInvMass=Config.Pinned&&Y==0?0.0f:10.0f;
-        if(X==N/2&&Y==N/2) P.mVelocity=JPH::Float3(0,0,Config.Seed);
+        if(X==N/2&&Y==N/2) P.mVelocity=JPH::Float3(Config.SeedX,Config.SeedY,Config.Seed);
         S->mVertices.push_back(P);
     }
     for(int Y=0;Y<N;++Y) for(int X=0;X<N;++X) {
@@ -124,7 +136,33 @@ JPH::Ref<JPH::SoftBodySharedSettings> GetCloth() {
         if(X+2<N) S->mEdgeConstraints.emplace_back(I,I+2,Config.BendCompliance);
         if(Y+2<N) S->mEdgeConstraints.emplace_back(I,I+2*N,Config.BendCompliance);
     }
-    S->CalculateEdgeLengths(); S->Optimize(); return S;
+    S->CalculateEdgeLengths();
+    const auto Load=[&](const std::string& Path,bool Velocity) {
+        if(Path.empty()) return;
+        std::ifstream Input(Path); Json Values;
+        if(!Input || !(Input>>Values) || !Values.is_array() || Values.size()!=S->mVertices.size())
+            throw std::runtime_error("[Physics:Coupling] Invalid perturbation file");
+        for(size_t I=0;I<Values.size();++I) {
+            if(!Values[I].is_array()||Values[I].size()!=3) throw std::runtime_error("[Physics:Coupling] Invalid perturbation vector");
+            JPH::Vec3 Value(Values[I][0].get<float>(),Values[I][1].get<float>(),Values[I][2].get<float>());
+            if(!std::isfinite(Value.GetX())||!std::isfinite(Value.GetY())||!std::isfinite(Value.GetZ())) throw std::runtime_error("[Physics:Coupling] Nonfinite perturbation");
+            if(S->mVertices[I].mInvMass==0 && Value.LengthSq()!=0) throw std::runtime_error("[Physics:Coupling] Perturbation moves pin");
+            if(Velocity) Value.StoreFloat3(&S->mVertices[I].mVelocity);
+            else (JPH::Vec3(S->mVertices[I].mPosition)+Value).StoreFloat3(&S->mVertices[I].mPosition);
+        }
+    };
+    S->Optimize();
+    // A perturbation changes state while preserving the unperturbed edge order.
+    Load(Config.VelocityFile,true); Load(Config.DisplacementFile,false);
+    if(!Config.ExportGraph.empty()) {
+        Json Graph={{"Positions",Json::array()},{"InverseMasses",Json::array()},{"Edges",Json::array()},
+            {"Order","Native optimized projection order; rest lengths calculated before perturbations"}};
+        for(const auto& P:S->mVertices) { Graph["Positions"].push_back(V(JPH::Vec3(P.mPosition))); Graph["InverseMasses"].push_back(P.mInvMass); }
+        for(const auto& E:S->mEdgeConstraints) Graph["Edges"].push_back({{"I",E.mVertex[0]},{"J",E.mVertex[1]},{"RestLength",E.mRestLength},{"Compliance",E.mCompliance}});
+        std::ofstream Output(Config.ExportGraph);
+        if(!Output || !(Output<<Graph.dump(2)<<'\n')) throw std::runtime_error("[Physics:Coupling] Graph export failed");
+    }
+    return S;
 }
 
 Json Observe(const JPH::SoftBodyMotionProperties* M,float SubDt,bool Detailed) {
@@ -173,6 +211,21 @@ Json Observe(const JPH::SoftBodyMotionProperties* M,float SubDt,bool Detailed) {
 }
 
 // Called only by the isolated diagnostic Jolt patch. Normal upstream is unmodified.
+extern "C" int PhysicsS1DiagnosticProjectionPasses() { return Config.ProjectionPasses; }
+extern "C" bool PhysicsS1DiagnosticRefreshSpherePlane() { return Config.RefreshSpherePlane; }
+extern "C" void PhysicsS1DiagnosticProjection(const char* Phase,const void* Motion,const void* Vertex,const void* Center,const void* Normal,float Depth) {
+    if(!TraceFile.is_open()||CurrentFrame<Config.TraceStart||CurrentFrame>Config.TraceEnd) return;
+    const auto* M=static_cast<const JPH::SoftBodyMotionProperties*>(Motion);
+    const auto& P=*static_cast<const JPH::SoftBodyVertex*>(Vertex);
+    const auto& C=*static_cast<const JPH::Vec3*>(Center);
+    Json R=Observe(M,0,false);
+    R["Type"]="ContactProjection"; R["Phase"]=Phase; R["Frame"]=CurrentFrame;
+    R["Vertex"]=&P-M->GetVertices().data(); R["P"]=V(P.mPosition); R["RigidFrozenCenter"]=V(C);
+    R["Normal"]=V(*static_cast<const JPH::Vec3*>(Normal)); R["PlaneDepth"]=Depth;
+    R["TrueFrozenSphereGap"]=(P.mPosition-C).Length()-(Radius+0.05f);
+    R["CollisionShapeIndex"]=P.mCollidingShapeIndex;
+    std::lock_guard Lock(TraceMutex); TraceFile<<R.dump()<<'\n';
+}
 extern "C" void PhysicsCouplingDiagnosticReconstruction(const void* Motion,const void* Vertex,const void* Before,float DtValue) {
     if(!TraceFile.is_open()||CurrentFrame<Config.TraceStart||CurrentFrame>Config.TraceEnd) return;
     const auto& P=*static_cast<const JPH::SoftBodyVertex*>(Vertex);
@@ -246,6 +299,8 @@ int main(int ArgCount,char** Args) {
                 {"Compliance",Config.Compliance},{"BendCompliance",Config.BendCompliance},{"Damping",Config.Damping},
                 {"Friction",Config.Friction},{"Restitution",Config.Restitution},{"Pinned",Config.Pinned},{"Contact",Config.Contact},
                 {"Dynamic",Config.Dynamic},{"Seed",Config.Seed},{"RigidMass",Mass},{"SphereInertia",Inertia},
+                {"SeedX",Config.SeedX},{"SeedY",Config.SeedY},{"ProjectionPasses",Config.ProjectionPasses},
+                {"RefreshSpherePlane",Config.RefreshSpherePlane},{"VelocityFile",Config.VelocityFile},{"DisplacementFile",Config.DisplacementFile},
                 {"RigidCount",Config.Count},{"InternalIntegrationDt",Dt/(Config.Steps*Config.Iterations)},
                 {"DiagnosticTrace",Config.Trace},{"ZeroGravity",true}}).dump()<<'\n';
             double Maximum=0;

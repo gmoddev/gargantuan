@@ -1,0 +1,112 @@
+--- a/Jolt/Physics/SoftBody/SoftBodyMotionProperties.cpp
++++ b/Jolt/Physics/SoftBody/SoftBodyMotionProperties.cpp
+@@ -16,6 +16,15 @@
+ #ifdef JPH_DEBUG_RENDERER
+ 	#include <Jolt/Renderer/DebugRenderer.h>
+ #endif // JPH_DEBUG_RENDERER
++
++extern "C" void PhysicsCouplingDiagnosticStage(const char *, const void *, const void *);
++extern "C" void PhysicsCouplingDiagnosticReconstruction(const void *, const void *, const void *, float);
++extern "C" void PhysicsCouplingDiagnosticContact(const void *, const void *, const void *, float, float,
++    const void *, const void *, const void *, const void *, const void *);
++
++extern "C" int PhysicsS1DiagnosticProjectionPasses();
++extern "C" bool PhysicsS1DiagnosticRefreshSpherePlane();
++extern "C" void PhysicsS1DiagnosticProjection(const char *, const void *, const void *, const void *, const void *, float);
+ 
+ JPH_NAMESPACE_BEGIN
+ 
+@@ -324,6 +333,7 @@
+ 
+ void SoftBodyMotionProperties::IntegratePositions(const SoftBodyUpdateContext &inContext)
+ {
++	PhysicsCouplingDiagnosticStage("BeforeIntegration", this, &inContext);
+ 	JPH_PROFILE_FUNCTION();
+ 
+ 	float dt = inContext.mSubStepDeltaTime;
+@@ -362,6 +372,7 @@
+ 		r.mPreviousRotationInternal = rotation; // Overwrites mAngularVelocity
+ 		r.mRotation = (rotation + delta_rotation).Normalized();
+ 	}
++	PhysicsCouplingDiagnosticStage("AfterIntegration", this, &inContext);
+ }
+ 
+ void SoftBodyMotionProperties::ApplyDihedralBendConstraints(const SoftBodyUpdateContext &inContext, uint inStartIndex, uint inEndIndex)
+@@ -699,6 +710,9 @@
+ 
+ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext)
+ {
++	for (int DiagnosticPass = 1; DiagnosticPass < PhysicsS1DiagnosticProjectionPasses(); ++DiagnosticPass)
++        ApplyEdgeConstraints(inContext, 0, uint(mSettings->mEdgeConstraints.size()));
++    PhysicsCouplingDiagnosticStage("BeforeCollision", this, &inContext);
+ 	JPH_PROFILE_FUNCTION();
+ 
+ 	float dt = inContext.mSubStepDeltaTime;
+@@ -712,12 +726,25 @@
+ 
+ 			// XPBD velocity update
+ 			v.mVelocity = (v.mPosition - v.mPreviousPosition) / dt;
++			PhysicsCouplingDiagnosticReconstruction(this, &v, &prev_v, dt);
+ 
+ 			// Satisfy collision constraint
+ 			static_assert(int(BodyID::cBroadPhaseBit) < 0); // CCD contacts should be negative too (see: SoftBodyVertex::MarkCCDContact)
+ 			if (v.mCollidingShapeIndex >= 0)
+ 			{
+-				// Check if there is a collision
++				// Counterfactual for this sphere-only probe: refresh tangent geometry at
++                // the SAME frozen rigid center. This does not advance rigid pose.
++                if (PhysicsS1DiagnosticRefreshSpherePlane())
++                {
++                    Vec3 DiagnosticCenter = mCollidingShapes[v.mCollidingShapeIndex].mCenterOfMassTransform.GetTranslation();
++                    Vec3 DiagnosticDelta = v.mPosition - DiagnosticCenter;
++                    if (DiagnosticDelta.LengthSq() > 1.0e-12f)
++                    {
++                        Vec3 DiagnosticNormal = DiagnosticDelta.Normalized();
++                        v.mCollisionPlane = Plane::sFromPointAndNormal(DiagnosticCenter + 0.45f * DiagnosticNormal, DiagnosticNormal);
++                    }
++                }
++                // Check if there is a collision
+ 				float projected_distance = -v.mCollisionPlane.SignedDistance(v.mPosition) + vertex_radius;
+ 				if (projected_distance > 0.0f)
+ 				{
+@@ -730,7 +757,10 @@
+ 					// Note that we already calculated the velocity, so this does not affect the velocity (next iteration starts by setting previous position to current position)
+ 					CollidingShape &cs = mCollidingShapes[v.mCollidingShapeIndex];
+ 					Vec3 contact_normal = v.mCollisionPlane.GetNormal();
+-					v.mPosition += contact_normal * projected_distance;
++					Vec3 DiagnosticCenter = cs.mCenterOfMassTransform.GetTranslation();
++                    PhysicsS1DiagnosticProjection("Before", this, &v, &DiagnosticCenter, &contact_normal, projected_distance);
++                    v.mPosition += contact_normal * projected_distance;
++                    PhysicsS1DiagnosticProjection("After", this, &v, &DiagnosticCenter, &contact_normal, projected_distance);
+ 
+ 					// Apply friction as described in Detailed Rigid Body Simulation with Extended Position Based Dynamics - Matthias Muller et al.
+ 					// See section 3.6:
+@@ -784,12 +814,19 @@
+ 							// Calculate impulse
+ 							Vec3 p = dv / w1_plus_w2;
+ 
++							const Vec3 DiagnosticParticle = v.mVelocity;
++							const Vec3 DiagnosticLinear = cs.mLinearVelocity;
++							const Vec3 DiagnosticAngular = cs.mAngularVelocity;
++
+ 							// Apply impulse to particle
+ 							v.mVelocity -= p * vertex_inv_mass;
+ 
+ 							// Apply impulse to rigid body
+ 							cs.mLinearVelocity += p * cs.mInvMass;
+ 							cs.mAngularVelocity += cs.mInvInertia * r2.Cross(p);
++
++							PhysicsCouplingDiagnosticContact(&v, &p, &contact_normal, projected_distance, cs.mInvMass,
++								&DiagnosticParticle, &DiagnosticLinear, &DiagnosticAngular, &cs.mLinearVelocity, &cs.mAngularVelocity);
+ 
+ 							// Mark that the velocities of the body we hit need to be updated
+ 							cs.mUpdateVelocities = true;
+@@ -817,6 +854,8 @@
+ 				}
+ 			}
+ 		}
++
++	PhysicsCouplingDiagnosticStage("AfterCollision", this, &inContext);
+ 
+ 	// Calculate the new angular velocity for all rods
+ 	float two_div_dt = 2.0f / dt;

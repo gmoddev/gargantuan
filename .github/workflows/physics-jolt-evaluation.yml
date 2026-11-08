@@ -7,6 +7,11 @@ on:
       - '.github/workflows/physics-jolt-evaluation.yml'
       - 'CMakeLists.txt'
   workflow_dispatch:
+    inputs:
+      s1_diagnostic_only:
+        description: Isolated S1 and projection instability investigation; no qualification or full comparison
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,6 +23,7 @@ concurrency:
 
 jobs:
   linux-release-comparison:
+    if: github.event_name != 'workflow_dispatch' || !inputs.s1_diagnostic_only
     name: Ubuntu Release / experimental quality and timing
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -116,3 +122,69 @@ jobs:
             build-evaluation/CMakeCache.txt
             build-evaluation/compile_commands.json
             build-evaluation/CMakeFiles/CMakeConfigureLog.yaml
+
+  s1-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.s1_diagnostic_only
+    name: Isolated native S1 causal probes / no production qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      OPENBLAS_NUM_THREADS: 1
+      OMP_NUM_THREADS: 1
+      MKL_NUM_THREADS: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Fetch only the two header dependencies
+        run: git submodule update --init --depth 1 vendor/json vendor/box3d
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: jrouwe/JoltPhysics
+          ref: e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          path: .evaluation-jolt
+          persist-credentials: false
+      - name: Preserve exact inputs and prepare isolated diagnostic worktree
+        run: |
+          mkdir s1-evidence
+          git rev-parse HEAD > s1-evidence/ExecutedSource.txt
+          git rev-parse 'HEAD^{tree}' > s1-evidence/ExecutedTree.txt
+          git submodule status > s1-evidence/Submodules.txt
+          c++ --version > s1-evidence/Compiler.txt
+          lscpu > s1-evidence/Cpu.txt
+          python3 experiments/PhysicsJoltEvaluation/MakeJoltInstrumentation.py .evaluation-jolt s1-evidence/GeneratedS1.patch --s1
+          cmp s1-evidence/GeneratedS1.patch experiments/PhysicsJoltEvaluation/JoltS1Instrumentation.patch
+          git -C .evaluation-jolt worktree add --detach ../.s1-jolt e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          git -C .s1-jolt apply "$GITHUB_WORKSPACE/s1-evidence/GeneratedS1.patch"
+          git -C .s1-jolt diff --binary > s1-evidence/AppliedJolt.patch
+      - name: Build pristine native control and isolated diagnostic
+        run: |
+          set -euo pipefail
+          for Kind in clean instrumented; do
+            Root=.evaluation-jolt; Clean=ON
+            if [ "$Kind" = instrumented ]; then Root=.s1-jolt; Clean=OFF; fi
+            cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B "build-s1-$Kind" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN="$Clean" \
+              -DDIAGNOSTIC_JOLT_ROOT="$GITHUB_WORKSPACE/$Root" -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" \
+              2>&1 | tee "s1-evidence/Configure-$Kind.log"
+            cmake --build "build-s1-$Kind" --target PhysicsJoltNativeCouplingInstrumented --parallel 2 \
+              2>&1 | tee "s1-evidence/Build-$Kind.log"
+            cp "build-s1-$Kind/CMakeCache.txt" "s1-evidence/CMakeCache-$Kind.txt"
+            cp "build-s1-$Kind/compile_commands.json" "s1-evidence/CompileCommands-$Kind.json"
+          done
+      - name: Run bounded S1 and free-cloth controls
+        run: |
+          python3 experiments/PhysicsJoltEvaluation/RunS1Investigation.py \
+            --clean build-s1-clean/PhysicsJoltNativeCouplingInstrumented \
+            --instrumented build-s1-instrumented/PhysicsJoltNativeCouplingInstrumented --output s1-evidence/Runs
+      - name: Retain causal evidence and native binaries
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-s1-instability-evidence
+          if-no-files-found: error
+          path: |
+            s1-evidence/
+            build-s1-clean/PhysicsJoltNativeCouplingInstrumented
+            build-s1-instrumented/PhysicsJoltNativeCouplingInstrumented
