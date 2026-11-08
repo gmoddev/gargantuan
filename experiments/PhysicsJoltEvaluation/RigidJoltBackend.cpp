@@ -21,6 +21,7 @@
 #include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Geometry/AABox.h>
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseQuery.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
@@ -1289,9 +1290,18 @@ namespace {
                     Layer = Lock.GetBody().GetObjectLayer();
                 }
             }
-            if (Bounds && Layer != JPH::cObjectLayerInvalid)
-                World.GetBodyInterface().ActivateBodiesInAABox(*Bounds,
-                    World.GetDefaultBroadPhaseLayerFilter(Layer), World.GetDefaultLayerFilter(Layer));
+            if (!Bounds || Layer == JPH::cObjectLayerInvalid) return;
+            JPH::AllHitCollisionCollector<JPH::CollideShapeBodyCollector> Candidates;
+            World.GetBroadPhaseQuery().CollideAABox(*Bounds, Candidates,
+                World.GetDefaultBroadPhaseLayerFilter(Layer), World.GetDefaultLayerFilter(Layer));
+            std::vector<JPH::BodyID> Dormant;
+            for (const auto Candidate : Candidates.mHits) {
+                JPH::BodyLockRead Lock(World.GetBodyLockInterface(), Candidate);
+                if (Lock.Succeeded() && !Lock.GetBody().IsStatic() && !Lock.GetBody().IsActive())
+                    Dormant.push_back(Candidate);
+            }
+            if (!Dormant.empty())
+                World.GetBodyInterface().ActivateBodies(Dormant.data(), static_cast<int>(Dormant.size()));
         }
         using MeshKey = std::pair<std::string, std::uint64_t>;
         struct MeshResource {
