@@ -172,6 +172,25 @@ namespace {
         else if (Description.Shape.Kind == PhysicsShapeKind::CornerWedge) Volume *= 0.25f;
         return std::max(0.001f, Description.Density * Volume);
     }
+    bool ValidMassProperties(const PhysicsBodyDesc &Description,
+                             const JPH::ShapeRefC &Shape) {
+        if (Description.Anchored || Description.Kinematic) return true;
+        auto Mass = Shape->GetMassProperties();
+        if (!(Mass.mMass > 0) || !std::isfinite(Mass.mMass)) return false;
+        const float TargetMass = BodyMass(Description);
+        if (!(TargetMass > 0) || !std::isfinite(TargetMass)) return false;
+        Mass.ScaleToMass(TargetMass);
+        if (!(Mass.mMass > 0) || !std::isfinite(Mass.mMass)) return false;
+        for (unsigned Index = 0; Index < 3; ++Index) {
+            const auto Column = Mass.mInertia.GetColumn3(Index);
+            if (!std::isfinite(Column.GetX()) || !std::isfinite(Column.GetY()) ||
+                !std::isfinite(Column.GetZ()) || !std::isfinite(Column.LengthSq()))
+                return false;
+        }
+        return Mass.mInertia.GetColumn3(0).GetX() > 0 &&
+            Mass.mInertia.GetColumn3(1).GetY() > 0 &&
+            Mass.mInertia.GetColumn3(2).GetZ() > 0;
+    }
     bool SameMesh(const std::shared_ptr<const PhysicsTriangleMesh> &A,
                   const std::shared_ptr<const PhysicsTriangleMesh> &B) {
         if (A == B) return true;
@@ -528,6 +547,7 @@ namespace {
             if (Layer == JPH::cObjectLayerInvalid) return {};
             auto Shape = MakeShape(Description.Shape);
             if (!Shape) return {};
+            if (!ValidMassProperties(Description, Shape)) return {};
             if (!CheckMeshAdmission(Description, Shape, nullptr).Succeeded()) return {};
             const auto Native = AddNativeBody(Description, Layer, Shape);
             if (Native.IsInvalid()) return {};
@@ -563,6 +583,9 @@ namespace {
                 const auto Admission = CheckMeshAdmission(Description, NewShape, Slot);
                 if (!Admission.Succeeded()) return Admission;
             }
+            if (!ValidMassProperties(Description, ShapeChanged ? NewShape : Slot->Shape))
+                return {PhysicsOperationStatus::InvalidDescription,
+                    "Jolt body mass or inertia exceeds native range"};
             const auto Layer = Layers.GetLayer(Description);
             if (Layer == JPH::cObjectLayerInvalid) return {PhysicsOperationStatus::ResourceLimit, "Jolt layer limit"};
             auto &Interface = World.GetBodyInterface();
@@ -1246,6 +1269,12 @@ namespace {
                 Value.CollisionGroup > MaximumPhysicsCollisionGroup ||
                 (Value.Anchored && Value.Kinematic) ||
                 (Value.MovingBodyCCD && (Value.Anchored || Value.Kinematic || !Value.CanCollide))) return false;
+            const auto HalfSize = Value.Shape.Size * 0.5f;
+            if (Value.Shape.Kind != PhysicsShapeKind::StaticTriangleMesh &&
+                (HalfSize.x <= 0 || HalfSize.y <= 0 || HalfSize.z <= 0)) return false;
+            if (Value.Shape.Kind == PhysicsShapeKind::Cylinder &&
+                std::min(Value.Shape.Size.x * 0.5f, Value.Shape.Size.z * 0.25f) <= 0)
+                return false;
             if (!Value.Anchored && !Value.Kinematic && !std::isfinite(BodyMass(Value))) return false;
             if (Value.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh)
                 return Value.Anchored && Value.Shape.Mesh && Value.Shape.Mesh->Positions &&
@@ -1375,6 +1404,9 @@ namespace {
         const auto FiniteNonnegative = [](float Value) { return std::isfinite(Value) && Value >= 0.0f; };
         if (!Finite(Definition.Position) || !Finite(Definition.Size) ||
             Definition.Size.x <= 0 || Definition.Size.y <= 0 || Definition.Size.z <= 0 ||
+            Definition.Size.x > MaximumPhysicsQueryExtent ||
+            Definition.Size.y > MaximumPhysicsQueryExtent ||
+            Definition.Size.z > MaximumPhysicsQueryExtent ||
             !std::isfinite(Material.ParticleMass) || Material.ParticleMass <= 0 ||
             !FiniteNonnegative(Material.Damping) || Material.Damping > 1.0f ||
             !FiniteNonnegative(Material.StretchCompliance) ||
@@ -1394,6 +1426,17 @@ namespace {
         const auto VertexLimit = std::min(Limits.MaximumVerticesPerBody, MaximumSoftBodyVertices);
         if (Z == 0 || (Definition.Kind == SoftBodyKind::Rubber && Z < 2) ||
             X > VertexLimit / Y || X * Y > VertexLimit / Z) return std::nullopt;
+        const double InverseMassDouble = 1.0 / double(Material.ParticleMass);
+        const double MaximumSize = std::max({double(Definition.Size.x),
+            double(Definition.Size.y), double(Definition.Size.z)});
+        const double MaximumMassMoment = double(Material.ParticleMass) *
+            double(X * Y * Z) * (1.0 + MaximumSize * MaximumSize);
+        if (!std::isfinite(InverseMassDouble) || InverseMassDouble <= 0 ||
+            InverseMassDouble > double(std::numeric_limits<float>::max()) ||
+            !std::isfinite(MaximumMassMoment) ||
+            MaximumMassMoment > double(std::numeric_limits<float>::max()) / 16.0)
+            return std::nullopt;
+        const float InverseMass = static_cast<float>(InverseMassDouble);
         SoftConstruction Result{new JPH::SoftBodySharedSettings,
             std::make_shared<std::vector<std::uint32_t>>()};
         const auto Index = [X, Y](std::uint32_t I, std::uint32_t J, std::uint32_t K = 0) {
@@ -1409,11 +1452,16 @@ namespace {
                         ? glm::vec3(U * Definition.Size.x, -V * Definition.Size.y, 0.0f)
                         : glm::vec3(U * Definition.Size.x, V * Definition.Size.y, W * Definition.Size.z);
                     Result.Shared->mVertices.emplace_back(JPH::Float3(Position.x, Position.y, Position.z),
-                        JPH::Float3(0, 0, 0), 1.0f / Material.ParticleMass);
+                        JPH::Float3(0, 0, 0), InverseMass);
                 }
         std::set<std::uint32_t> Pinned;
         for (const auto &Attachment : Definition.Attachments) {
+            const glm::dvec3 Local = glm::dvec3(Attachment.Position) -
+                glm::dvec3(Definition.Position);
             if (Attachment.Vertex >= X * Y * Z || !Finite(Attachment.Position) ||
+                std::abs(Local.x) > MaximumPhysicsQueryExtent ||
+                std::abs(Local.y) > MaximumPhysicsQueryExtent ||
+                std::abs(Local.z) > MaximumPhysicsQueryExtent ||
                 !Pinned.insert(Attachment.Vertex).second) return std::nullopt;
         }
         const auto Edge = [&](std::uint32_t A, std::uint32_t B, float Compliance) {
@@ -1471,8 +1519,20 @@ namespace {
         const auto ConstraintCount = Result.Shared->mEdgeConstraints.size() +
             Result.Shared->mVolumeConstraints.size();
         if (ConstraintCount > Limits.MaximumConstraints) return std::nullopt;
+        for (const auto &EdgeValue : Result.Shared->mEdgeConstraints) {
+            const auto Difference = JPH::Vec3(Result.Shared->mVertices[EdgeValue.mVertex[1]].mPosition) -
+                JPH::Vec3(Result.Shared->mVertices[EdgeValue.mVertex[0]].mPosition);
+            const float LengthSquared = Difference.LengthSq();
+            if (!(LengthSquared > 0) || !std::isfinite(LengthSquared)) return std::nullopt;
+        }
         Result.Shared->CalculateEdgeLengths();
         Result.Shared->CalculateVolumeConstraintVolumes();
+        for (const auto &EdgeValue : Result.Shared->mEdgeConstraints)
+            if (!(EdgeValue.mRestLength > 0) || !std::isfinite(EdgeValue.mRestLength))
+                return std::nullopt;
+        for (const auto &VolumeValue : Result.Shared->mVolumeConstraints)
+            if (!(VolumeValue.mSixRestVolume > 0) ||
+                !std::isfinite(VolumeValue.mSixRestVolume)) return std::nullopt;
         for (const auto &Attachment : Definition.Attachments) {
             const auto Local = Attachment.Position - Definition.Position;
             Result.Shared->mVertices[Attachment.Vertex].mPosition = JPH::Float3(Local.x, Local.y, Local.z);

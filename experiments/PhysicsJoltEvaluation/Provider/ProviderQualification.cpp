@@ -535,6 +535,48 @@ namespace {
             [](const auto &Position) { return Position.z > 0.005f; });
         Require(Moved >= 3, "point impulse did not reach four nearest movable nodes");
     }
+    void DerivedNativeRangeAdmission() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        auto TinyBall = Ball({0, 0, 0});
+        TinyBall.Shape.Size = {std::numeric_limits<float>::denorm_min(), 1, 1};
+        Require(!Provider.Rigid->CreateBody(TinyBall).IsValid(),
+            "subnormal positive Ball dimension reached native zero-radius assertion");
+        auto HugeInertia = Box({0, 0, 0}, {10'000, 10'000, 10'000}, false);
+        HugeInertia.Density = 1.0e26f;
+        Require(!Provider.Rigid->CreateBody(HugeInertia).IsValid(),
+            "finite rigid mass with overflowing inertia passed admission");
+        const auto Existing = Provider.Rigid->CreateBody(Box({0, 1, 0}, {1, 1, 1}, false));
+        Require(Existing.IsValid(), "rigid range update setup failed admission");
+        const auto Before = Provider.Rigid->GetBodyState(Existing);
+        Require(Before && !Provider.Rigid->UpdateBody(Existing, HugeInertia).Succeeded(),
+            "overflowing inertia update was admitted");
+        const auto After = Provider.Rigid->GetBodyState(Existing);
+        Require(After && glm::all(glm::equal(After->Description.Shape.Size,
+            Before->Description.Shape.Size)) &&
+            std::abs(After->Mass - Before->Mass) < 0.001f,
+            "rejected inertia update changed native body state");
+        SoftBodyDefinition Soft;
+        Soft.ResolutionX = Soft.ResolutionY = 3;
+        Soft.Material.ParticleMass = std::numeric_limits<float>::denorm_min();
+        Require(!Provider.Soft->CreateBody(Soft).IsValid(),
+            "finite subnormal particle mass produced native infinite inverse mass");
+        Soft.Material.ParticleMass = 0.1f;
+        Soft.Position = {-3.0e38f, 0, 0};
+        Soft.Attachments = {{0, {3.0e38f, 0, 0}}};
+        Require(!Provider.Soft->CreateBody(Soft).IsValid(),
+            "finite attachment coordinates overflowed native local position");
+        Soft.Position = {};
+        Soft.Attachments.clear();
+        Soft.Kind = SoftBodyKind::Rubber;
+        Soft.ResolutionZ = 3;
+        Soft.Size = {1.0e20f, 1.0e20f, 1.0e20f};
+        Require(!Provider.Soft->CreateBody(Soft).IsValid(),
+            "finite rubber extent overflowed native rest volume");
+        Require(Provider.Rigid->DestroyBody(Existing).Succeeded(),
+            "rigid range update setup body failed retirement");
+    }
     void UnifiedProviderReplacementOrder() {
         auto Bundle = CreateUnifiedJoltProvider({});
         SoftBodyDefinition Tiny;
@@ -1055,6 +1097,8 @@ int main() {
         NeutralSoftDampingRetention();
         std::cout << "[Physics:JoltProvider] point impulse\n" << std::flush;
         NeutralPointImpulseDistribution();
+        std::cout << "[Physics:JoltProvider] derived native range admission\n" << std::flush;
+        DerivedNativeRangeAdmission();
         std::cout << "[Physics:JoltProvider] provider replacement order\n" << std::flush;
         UnifiedProviderReplacementOrder();
         std::cout << "[Physics:JoltProvider] DataModel lifecycle\n" << std::flush;
