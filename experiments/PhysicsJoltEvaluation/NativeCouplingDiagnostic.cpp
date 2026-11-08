@@ -34,14 +34,16 @@ constexpr float Mass = 0.7f * (4.0f / 3.0f) * 3.14159265358979323846f * Radius *
 constexpr float Inertia = 0.4f * Mass * Radius * Radius;
 struct Options {
     int Frames = 150, Steps = 1, Iterations = 24, Workers = 1, Count = 1;
-    int TraceStart = 16, TraceEnd = 24, ProjectionPasses = 1, ContactThrough = 300;
+    int TraceStart = 16, TraceEnd = 24, ProjectionPasses = 1, ContactThrough = 3600;
+    int WorldUpdates = 1;
+    bool ObserveUpdates = false;
     bool Contact = true, Pinned = true, Dynamic = true, Particles = true;
     float Compliance = 0.0f, BendCompliance = 1.0e-4f, Damping = 2.4f, Friction = 0.2f;
     float Restitution = 0.0f, Seed = 0.0f, SeedX = 0.0f, SeedY = 0.0f, SphereZ = -2.0f, Speed = 5.0f;
     bool RefreshSpherePlane = false;
     float ContactProjectionScale = 1.0f;
     int ProjectionFrame = -1, ProjectionIteration = -1, ProjectionVertex = -1;
-    std::string Trace, ExportGraph, VelocityFile, DisplacementFile;
+    std::string Trace, ExportGraph, VelocityFile, DisplacementFile, Fixture = "Cloth";
 };
 Options Config;
 std::ofstream TraceFile;
@@ -56,6 +58,9 @@ Options Parse(int Count, char** Args) {
         if (I+1 == Count) throw std::runtime_error("[Physics:Coupling] Missing option");
         const std::string K=Args[I], S=Args[I+1];
         if(K=="--frames") O.Frames=std::stoi(S);
+        else if(K=="--world-updates") O.WorldUpdates=std::stoi(S);
+        else if(K=="--fixture") O.Fixture=S;
+        else if(K=="--observe-updates") O.ObserveUpdates=std::stoi(S)!=0;
         else if(K=="--steps") O.Steps=std::stoi(S);
         else if(K=="--iterations") O.Iterations=std::stoi(S);
         else if(K=="--workers") O.Workers=std::stoi(S);
@@ -89,10 +94,12 @@ Options Parse(int Count, char** Args) {
         else if(K=="--trace-end") O.TraceEnd=std::stoi(S);
         else throw std::runtime_error("[Physics:Coupling] Unknown option "+K);
     }
-    if(O.Frames<1||O.Frames>300||O.Steps<1||O.Steps>8||O.Iterations<1||O.Iterations>64||O.Workers<1||O.Workers>8||O.Count<1||O.Count>2||O.ProjectionPasses<1||O.ProjectionPasses>8||O.ContactThrough< -1||O.ContactThrough>300||!std::isfinite(O.ContactProjectionScale)||O.ContactProjectionScale<0||O.ContactProjectionScale>1||O.Compliance<0||O.BendCompliance<0||O.Damping<0||O.Friction<0||O.Restitution<0)
+    if(O.Frames<1||O.Frames>3600||O.Steps<1||O.Steps>96||O.WorldUpdates<1||O.WorldUpdates>96||O.Steps*O.WorldUpdates*O.Iterations>2304||O.Iterations<1||O.Iterations>64||O.Workers<1||O.Workers>8||O.Count<1||O.Count>2||O.ProjectionPasses<1||O.ProjectionPasses>8||O.ContactThrough< -1||O.ContactThrough>3600||!std::isfinite(O.ContactProjectionScale)||O.ContactProjectionScale<0||O.ContactProjectionScale>1||O.Compliance<0||O.BendCompliance<0||O.Damping<0||O.Friction<0||O.Restitution<0)
         throw std::runtime_error("[Physics:Coupling] Option outside bounded range");
     if(O.ProjectionFrame< -1||O.ProjectionFrame>299||O.ProjectionIteration< -1||O.ProjectionIteration>64||O.ProjectionVertex< -1||O.ProjectionVertex>168)
         throw std::runtime_error("[Physics:Coupling] Projection selector outside bounded range");
+    if((O.Fixture!="Cloth"&&O.Fixture!="Spring")||(O.Fixture=="Spring"&&(O.Compliance<=0||O.Contact||O.Speed!=0)))
+        throw std::runtime_error("[Physics:Coupling] Spring calibration requires positive compliance, no contact, zero rigid speed");
 #ifndef PHYSICS_S1_DIAGNOSTIC
     if(O.ProjectionPasses!=1||O.RefreshSpherePlane||O.ContactProjectionScale!=1)
         throw std::runtime_error("[Physics:Coupling] Counterfactual requires isolated S1 diagnostic Jolt");
@@ -124,6 +131,16 @@ struct Contacts final: JPH::SoftBodyContactListener {
 };
 JPH::Ref<JPH::SoftBodySharedSettings> GetCloth() {
     JPH::Ref<JPH::SoftBodySharedSettings> S = new JPH::SoftBodySharedSettings;
+    if(Config.Fixture=="Spring") {
+        JPH::SoftBodySharedSettings::Vertex Pin,Moving;
+        Pin.mPosition=JPH::Float3(0,0,0); Pin.mInvMass=0;
+        Moving.mPosition=JPH::Float3(1.1f,0,0); Moving.mInvMass=10;
+        Moving.mVelocity=JPH::Float3(Config.SeedX,0,0);
+        S->mVertices.push_back(Pin); S->mVertices.push_back(Moving);
+        S->mEdgeConstraints.emplace_back(0,1,Config.Compliance);
+        S->mEdgeConstraints.back().mRestLength=1.0f;
+        S->Optimize(); return S;
+    }
     constexpr int N=13;
     for(int Y=0;Y<N;++Y) for(int X=0;X<N;++X) {
         JPH::SoftBodySharedSettings::Vertex P;
@@ -203,7 +220,7 @@ Json Observe(const JPH::SoftBodyMotionProperties* M,float SubDt,bool Detailed) {
     const auto Edge=[&](int A,int B,float Rest) {
         Structural=std::max(Structural,std::abs(double((M->GetVertex(B).mPosition-M->GetVertex(A).mPosition).Length()/Rest)-1.0));
     };
-    for(int Y=0;Y<13;++Y) for(int X=0;X<13;++X) {
+    for(int Y=0;M->GetVertices().size()==169&&Y<13;++Y) for(int X=0;X<13;++X) {
         const int I=Y*13+X;
         if(X+1<13) Edge(I,I+1,4.0f/12);
         if(Y+1<13) Edge(I,I+13,4.0f/12);
@@ -312,22 +329,7 @@ int main(int ArgCount,char** Args) {
                 if(Config.Dynamic) Bodies.SetLinearVelocity(Id,JPH::Vec3(0,0,I?-Config.Speed:Config.Speed));
                 Rigids.push_back(Id);
             }
-            std::cout<<Json({{"Type","Config"},{"Backend","IndependentNativeJolt"},{"Jolt","e77f175595e64cb44218cc9d9d56fc365ad0e36a"},
-                {"Frames",Config.Frames},{"Steps",Config.Steps},{"Iterations",Config.Iterations},{"Workers",Config.Workers},
-                {"Compliance",Config.Compliance},{"BendCompliance",Config.BendCompliance},{"Damping",Config.Damping},
-                {"Friction",Config.Friction},{"Restitution",Config.Restitution},{"Pinned",Config.Pinned},{"Contact",Config.Contact},
-                {"Dynamic",Config.Dynamic},{"Seed",Config.Seed},{"RigidMass",Mass},{"SphereInertia",Inertia},
-                {"SeedX",Config.SeedX},{"SeedY",Config.SeedY},{"ProjectionPasses",Config.ProjectionPasses},
-                {"RefreshSpherePlane",Config.RefreshSpherePlane},{"VelocityFile",Config.VelocityFile},{"DisplacementFile",Config.DisplacementFile},
-                {"ContactProjectionScale",Config.ContactProjectionScale},{"ContactThrough",Config.ContactThrough},
-                {"ProjectionFrame",Config.ProjectionFrame},{"ProjectionIteration",Config.ProjectionIteration},{"ProjectionVertex",Config.ProjectionVertex},
-                {"RigidCount",Config.Count},{"InternalIntegrationDt",Dt/(Config.Steps*Config.Iterations)},
-                {"DiagnosticTrace",Config.Trace},{"ZeroGravity",true}}).dump()<<'\n';
-            double Maximum=0;
-            for(CurrentFrame=0;CurrentFrame<Config.Frames;++CurrentFrame) {
-                const auto Start=Clock::now();
-                if(World.Update(Dt,Config.Steps,&Temp,&Jobs)!=JPH::EPhysicsUpdateError::None) throw std::runtime_error("[Physics:Coupling] Update failed");
-                const double StepMs=Ms(Start);
+            const auto GetObservation=[&]() {
                 JPH::BodyLockRead Lock(World.GetBodyLockInterface(),Cloth);
                 const auto* M=static_cast<const JPH::SoftBodyMotionProperties*>(Lock.GetBody().GetMotionProperties());
                 Json Row=Observe(M,0,Config.Particles); double RigidK=0,AngularK=0,Penetration=0;
@@ -342,14 +344,47 @@ int main(int ArgCount,char** Args) {
                         Penetration=std::max(Penetration,std::max(0.0,double(Radius+0.05f-(Position-R.GetPosition()).Length())));
                     }
                 }
-                Row["Type"]="Frame"; Row["Frame"]=CurrentFrame; Row["StepMs"]=StepMs; Row["Contacts"]=Contact.Count.exchange(0);
                 Row["RigidKE"]=RigidK; Row["RigidAngularKE"]=AngularK; Row["KineticEnergy"]=double(Row["SoftKE"])+RigidK+AngularK;
                 Row["Rigids"]=std::move(States); Row["ParticlePenetration"]=Penetration;
+                return Row;
+            };
+            const auto Initial=GetObservation();
+            const bool PositiveCompliance=std::all_of(Shared->mEdgeConstraints.begin(),Shared->mEdgeConstraints.end(),[](const auto& E){return E.mCompliance>0;});
+            std::cout<<Json({{"Type","Config"},{"Backend","IndependentNativeJolt"},{"Jolt","e77f175595e64cb44218cc9d9d56fc365ad0e36a"},
+                {"Frames",Config.Frames},{"Steps",Config.Steps},{"Iterations",Config.Iterations},{"Workers",Config.Workers},
+                {"Compliance",Config.Compliance},{"BendCompliance",Config.BendCompliance},{"Damping",Config.Damping},
+                {"Friction",Config.Friction},{"Restitution",Config.Restitution},{"Pinned",Config.Pinned},{"Contact",Config.Contact},
+                {"Dynamic",Config.Dynamic},{"Seed",Config.Seed},{"RigidMass",Mass},{"SphereInertia",Inertia},
+                {"SeedX",Config.SeedX},{"SeedY",Config.SeedY},{"ProjectionPasses",Config.ProjectionPasses},
+                {"RefreshSpherePlane",Config.RefreshSpherePlane},{"VelocityFile",Config.VelocityFile},{"DisplacementFile",Config.DisplacementFile},
+                {"ContactProjectionScale",Config.ContactProjectionScale},{"ContactThrough",Config.ContactThrough},
+                {"ProjectionFrame",Config.ProjectionFrame},{"ProjectionIteration",Config.ProjectionIteration},{"ProjectionVertex",Config.ProjectionVertex},
+                {"RigidCount",Config.Count},{"InternalIntegrationDt",((Dt/Config.WorldUpdates)/Config.Steps)/Config.Iterations},
+                {"WorldUpdatesPerFrame",Config.WorldUpdates},{"ObserveUpdates",Config.ObserveUpdates},{"Speed",Config.Speed},
+                {"InitialKineticEnergy",Initial["KineticEnergy"]},{"InitialCompliantEdgeElasticEstimate",Initial["CompliantEdgeElasticEstimate"]},
+                {"AllEdgesPositiveCompliance",PositiveCompliance},
+                {"Fixture",Config.Fixture},
+                {"DiagnosticTrace",Config.Trace},{"ZeroGravity",true}}).dump()<<'\n';
+            double Maximum=0,MaximumAccepted=0;
+            for(CurrentFrame=0;CurrentFrame<Config.Frames;++CurrentFrame) {
+                double StepMs=0;
+                for(int Update=0;Update<Config.WorldUpdates;++Update) {
+                    const auto Start=Clock::now();
+                    if(World.Update(Dt/Config.WorldUpdates,Config.Steps,&Temp,&Jobs)!=JPH::EPhysicsUpdateError::None) throw std::runtime_error("[Physics:Coupling] Update failed");
+                    StepMs+=Ms(Start);
+                    if(Config.ObserveUpdates) {
+                        auto Micro=GetObservation(); Micro["Type"]="Microstep"; Micro["Frame"]=CurrentFrame; Micro["Microstep"]=Update;
+                        Micro["ContactCountSoFar"]=Contact.Count.load();
+                        MaximumAccepted=std::max(MaximumAccepted,double(Micro["KineticEnergy"])); std::cout<<Micro.dump()<<'\n';
+                    }
+                }
+                auto Row=GetObservation();
+                Row["Type"]="Frame"; Row["Frame"]=CurrentFrame; Row["StepMs"]=StepMs; Row["Contacts"]=Contact.Count.exchange(0);
                 Maximum=std::max(Maximum,double(Row["KineticEnergy"])); std::cout<<Row.dump()<<'\n';
             }
             for(auto Id:Rigids) { Bodies.RemoveBody(Id); Bodies.DestroyBody(Id); }
             Bodies.RemoveBody(Cloth); Bodies.DestroyBody(Cloth);
-            Final={{"MaximumKineticEnergy",Maximum},{"Type","Summary"}};
+            Final={{"MaximumKineticEnergy",Maximum},{"MaximumAcceptedUpdateKineticEnergy",MaximumAccepted},{"Type","Summary"}};
         }
         JPH::UnregisterTypes(); delete JPH::Factory::sInstance; JPH::Factory::sInstance=nullptr;
         Final["Resources"]=PhysicsEvaluation::ResourceDelta(Before,PhysicsEvaluation::CaptureResources());

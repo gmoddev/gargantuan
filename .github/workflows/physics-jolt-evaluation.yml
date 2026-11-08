@@ -20,6 +20,10 @@ on:
         description: Standalone nonlinear projection replay and small reproducer only; no Jolt build
         type: boolean
         default: false
+      solver_resolution_only:
+        description: Pristine same-soft-budget coupling schedules and converged constraint tests only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,7 +35,7 @@ concurrency:
 
 jobs:
   linux-release-comparison:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only)
     name: Ubuntu Release / experimental quality and timing
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -309,3 +313,81 @@ jobs:
           name: jolt-projection-causality-evidence
           if-no-files-found: error
           path: projection-evidence/
+
+  pristine-schedule-resolution:
+    if: github.event_name == 'workflow_dispatch' && inputs.solver_resolution_only
+    name: Pristine Jolt reciprocal microstep resolution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - run: git submodule update --init --depth 1 vendor/json vendor/box3d
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: jrouwe/JoltPhysics
+          ref: e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          path: .evaluation-jolt
+          persist-credentials: false
+      - name: Build only pristine native Jolt probe
+        run: |
+          set -euo pipefail
+          mkdir resolution-evidence
+          git rev-parse HEAD > resolution-evidence/ExecutedSource.txt
+          c++ --version > resolution-evidence/Compiler.txt
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-resolution -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON \
+            -DDIAGNOSTIC_JOLT_ROOT="$GITHUB_WORKSPACE/.evaluation-jolt" -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" \
+            2>&1 | tee resolution-evidence/Configure.log
+          cmake --build build-resolution --target PhysicsJoltNativeCouplingInstrumented --parallel 2 \
+            2>&1 | tee resolution-evidence/Build.log
+      - name: Execute the next causal tests and fail-closed energy calibration
+        run: |
+          python3 experiments/PhysicsJoltEvaluation/RunSolverResolution.py \
+            --native build-resolution/PhysicsJoltNativeCouplingInstrumented --output resolution-evidence/Runs
+      - name: Preserve all candidate successes and failures
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-pristine-resolution-evidence
+          if-no-files-found: error
+          path: |
+            resolution-evidence/
+            build-resolution/PhysicsJoltNativeCouplingInstrumented
+            build-resolution/CMakeCache.txt
+            build-resolution/compile_commands.json
+
+  converged-constraint-resolution:
+    if: github.event_name == 'workflow_dispatch' && inputs.solver_resolution_only
+    name: Converged hard and compliant constraint controls
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - run: git submodule update --init --depth 1 vendor/json
+      - name: Build one standalone converged replay
+        run: |
+          set -euo pipefail
+          mkdir convergence-evidence
+          git rev-parse HEAD > convergence-evidence/ExecutedSource.txt
+          c++ -std=c++23 -O2 -ffp-contract=off -fno-fast-math -Ivendor/json/include \
+            experiments/PhysicsJoltEvaluation/ConvergedProjectionReplay.cpp -o convergence-evidence/ConvergedProjectionReplay \
+            2>&1 | tee convergence-evidence/Build.log
+      - name: Test multiplier-retaining convergence at the same integration timestep
+        run: |
+          python3 experiments/PhysicsJoltEvaluation/RunConvergedProjection.py \
+            --exe convergence-evidence/ConvergedProjectionReplay \
+            --graph experiments/PhysicsJoltEvaluation/CausalFixtures/NativeOptimizedClothGraph.json \
+            --output convergence-evidence/Runs
+      - name: Preserve residual, energy and failed-convergence evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-converged-resolution-evidence
+          if-no-files-found: error
+          path: convergence-evidence/
