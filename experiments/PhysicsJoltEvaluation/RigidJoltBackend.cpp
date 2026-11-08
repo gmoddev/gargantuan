@@ -1720,13 +1720,11 @@ namespace {
         ~JoltSoftBackend() override { Shutdown(); }
         bool IsValid() const override { return !Stopped && Owner.IsValid(); }
         bool IsBodyValid(SoftBodyId Id) const override { return Find(Id) != nullptr; }
-#ifdef PHYSICS_GANTRIA_ATTACHMENTS
         RigidJoltBackend &SharedWorld() const { return Owner; }
         JPH::BodyID NativeBody(SoftBodyId Id) const {
             const auto *Slot = Find(Id);
             return Slot ? Slot->Native : JPH::BodyID();
         }
-#endif
         SoftBodyId CreateBody(const SoftBodyDefinition &Definition) override {
             if (!IsValid() || LiveBodies >= Limits.MaximumBodies) return {};
             auto Construction = BuildSoft(Definition, Limits);
