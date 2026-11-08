@@ -260,6 +260,32 @@ namespace {
         });
         Require(Began, "joint release did not restore connected collision event");
     }
+    void DistanceSpringEquilibrium() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        Config.EnableSleep = false;
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        const auto Anchor = Provider.Rigid->CreateBody(Box({0, 0, 0}, {0.5f, 0.5f, 0.5f}, true));
+        const auto Bob = Provider.Rigid->CreateBody(Box({3, 0, 0}, {0.5f, 0.5f, 0.5f}, false));
+        Require(Anchor.IsValid() && Bob.IsValid(), "distance spring bodies failed admission");
+        PhysicsConstraintDesc Joint;
+        Joint.Kind = PhysicsConstraintKind::Distance;
+        Joint.BodyA = Anchor;
+        Joint.BodyB = Bob;
+        Joint.RestLength = 1.5f;
+        Joint.SpringFrequency = 8.0f;
+        Joint.SpringDamping = 0.8f;
+        const auto Spring = Provider.Rigid->TryCreateConstraint(Joint);
+        Require(Spring.Succeeded(), "distance spring failed Jolt admission");
+        Advance(Provider, 120);
+        const auto State = Provider.Rigid->GetBodyState(Bob);
+        Require(State && State->Transform.Position.x > 1.35f &&
+            State->Transform.Position.x < 1.65f &&
+            std::abs(State->LinearVelocity.x) < 0.1f,
+            "distance spring failed to settle at authored rest length");
+        Require(Provider.Rigid->DestroyConstraint(Spring.Constraint).Succeeded(),
+            "distance spring release failed");
+    }
     void ForceAcrossHalfUpdates() {
         PhysicsWorldConfig Config;
         Config.Gravity = {};
@@ -587,6 +613,8 @@ int main() {
         WeldUnderImpulse();
         std::cout << "[Physics:JoltProvider] connected collision\n" << std::flush;
         ConnectedCollisionPolicy();
+        std::cout << "[Physics:JoltProvider] distance spring\n" << std::flush;
+        DistanceSpringEquilibrium();
         std::cout << "[Physics:JoltProvider] force\n" << std::flush;
         ForceAcrossHalfUpdates();
         std::cout << "[Physics:JoltProvider] transient contacts\n" << std::flush;
