@@ -435,7 +435,14 @@ namespace {
         Require(Sphere.IsValid(), "cloth projectile admission failed");
         Require(Provider.Rigid->SetLinearVelocity(Sphere, {0, 0, 12}).Succeeded(),
             "cloth projectile velocity failed");
+        Require(SetJoltSoftRigidContactCapture(*Provider.Rigid, true),
+            "cloth contact capture setup failed");
         Advance(Provider, 45);
+        const auto ContactVertices = GetJoltSoftRigidContactVertexCount(
+            *Provider.Rigid, *Provider.Soft, Fabric, Sphere);
+        Require(ContactVertices > 0, "cloth projectile had no native soft-rigid vertex contact");
+        Require(SetJoltSoftRigidContactCapture(*Provider.Rigid, false),
+            "cloth contact capture teardown failed");
         const auto State = Provider.Soft->GetBodyState(Fabric);
         const auto Rigid = Provider.Rigid->GetBodyState(Sphere);
         Require(State && State->Positions && Rigid, "cloth coupling state missing");
@@ -454,6 +461,8 @@ namespace {
         Require(Provider.Soft->ApplyForce(Fabric, {100, 0, 0}).Succeeded(),
             "pending force before cloth retirement failed");
         Require(Provider.Soft->DestroyBody(Fabric).Succeeded(), "cloth release failed");
+        Require(GetJoltSoftRigidContactVertexCount(*Provider.Rigid, *Provider.Soft,
+            Fabric, Sphere) == 0, "retired cloth identity retained native contact history");
         const auto Reused = Provider.Soft->CreateBody(Cloth);
         Require(Reused.IsValid() && Reused != Fabric && !Provider.Soft->IsBodyValid(Fabric),
             "stale cloth identity resolved after reuse");
