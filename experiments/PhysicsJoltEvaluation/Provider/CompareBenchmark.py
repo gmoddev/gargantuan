@@ -45,9 +45,11 @@ def Main() -> None:
     Xpbd = ReadSummary(Arguments.xpbd_log)
     if Jolt.get("backend") != "jolt" or Xpbd.get("backend") != "xpbd":
         raise ValueError("Log arguments must be Jolt then XPBD")
-    for Field in ("scene", "coupling", "frames"):
+    for Field in ("scene", "coupling", "frames", "warmup_frames"):
         if Jolt.get(Field) != Xpbd.get(Field):
             raise ValueError(f"Mismatched {Field}: {Jolt.get(Field)} vs {Xpbd.get(Field)}")
+    if Jolt.get("warmup_frames") is None:
+        raise ValueError("Both logs need an explicit warmup frame count")
     Rubber = Jolt["scene"].startswith("rubber")
     Coupled = Jolt["coupling"] == "static-sphere"
     Fields = COMMON_FIELDS + (RUBBER_FIELDS if Rubber else ())
@@ -60,11 +62,16 @@ def Main() -> None:
                              ("host", "os", "build_stamp", "binary_id", "run_pair")) and \
         Jolt.get("host") not in (None, "unknown") and \
         Jolt.get("binary_id") not in (None, "unknown") and \
-        Jolt.get("run_pair") not in (None, "unpaired")
+        Jolt.get("run_pair") not in (None, "unpaired") and \
+        Jolt.get("timing_instrumented") == "0" and \
+        Xpbd.get("timing_instrumented") == "0"
     Result: dict[str, object] = {
         "scene": Jolt["scene"],
         "coupling": Jolt["coupling"],
         "frames": int(Jolt["frames"]),
+        "warmup_frames": int(Jolt["warmup_frames"]),
+        "timing_instrumented": (Jolt.get("timing_instrumented") != "0" or
+                                Xpbd.get("timing_instrumented") != "0"),
         "jolt_workers_requested": int(Jolt["workers_requested"]),
         "xpbd_workers_requested": int(Xpbd["workers_requested"]),
         "xpbd_workers_actual": int(Xpbd["xpbd_workers_actual"]),
