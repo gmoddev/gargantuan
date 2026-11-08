@@ -651,6 +651,12 @@ namespace {
                 : Description.Kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic;
             const bool MotionChanged = Description.Anchored != Slot->Description.Anchored ||
                 Description.Kinematic != Slot->Description.Kinematic;
+            const bool ContactGeometryChanged = ShapeChanged || MotionChanged ||
+                !SameTransform(Description.Transform, Slot->Description.Transform) ||
+                Description.CollisionGroup != Slot->Description.CollisionGroup ||
+                Description.CollisionMask != Slot->Description.CollisionMask ||
+                Description.CanCollide != Slot->Description.CanCollide ||
+                Description.CanTouch != Slot->Description.CanTouch;
             const bool MeshTransition =
                 (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) !=
                 (Slot->Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh);
@@ -671,6 +677,7 @@ namespace {
                 Interface.RemoveBody(Slot->Native);
                 Interface.DestroyBody(Slot->Native);
                 NativeMap.erase(OldNative);
+                ContactInvalidatedBodies.erase(OldNative);
                 Contacts.ForgetBody(OldNative);
                 SoftContacts.ForgetBody(Slot->Native);
                 for (auto It = PreviousContacts.begin(); It != PreviousContacts.end();) {
@@ -684,6 +691,8 @@ namespace {
                 AdmitMesh(*Slot);
                 return {};
             }
+            if (ContactGeometryChanged)
+                ContactInvalidatedBodies.insert(Slot->Native.GetIndexAndSequenceNumber());
             if (ShapeChanged)
                 Interface.SetShape(Slot->Native, NewShape.GetPtr(), true, JPH::EActivation::Activate);
             if (MotionChanged)
@@ -749,6 +758,7 @@ namespace {
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
             NativeMap.erase(Slot->Native.GetIndexAndSequenceNumber());
+            ContactInvalidatedBodies.erase(Slot->Native.GetIndexAndSequenceNumber());
             Contacts.ForgetBody(Slot->Native.GetIndexAndSequenceNumber());
             SoftContacts.ForgetBody(Slot->Native);
             ReleaseMesh(*Slot);
@@ -854,6 +864,8 @@ namespace {
             World.AddConstraint(Native.GetPtr());
             if (!Description.CollideConnected) {
                 Contacts.SuppressPair(A->Native, B->Native);
+                ContactInvalidatedBodies.insert(A->Native.GetIndexAndSequenceNumber());
+                ContactInvalidatedBodies.insert(B->Native.GetIndexAndSequenceNumber());
                 auto &Interface = World.GetBodyInterface();
                 Interface.InvalidateContactCache(A->Native);
                 Interface.InvalidateContactCache(B->Native);
@@ -877,6 +889,8 @@ namespace {
                 const auto *B = Find(Slot->Description.BodyB);
                 if (A && B) {
                     Contacts.RestorePair(A->Native, B->Native);
+                    ContactInvalidatedBodies.insert(A->Native.GetIndexAndSequenceNumber());
+                    ContactInvalidatedBodies.insert(B->Native.GetIndexAndSequenceNumber());
                     auto &Interface = World.GetBodyInterface();
                     Interface.InvalidateContactCache(A->Native);
                     Interface.InvalidateContactCache(B->Native);
@@ -1165,7 +1179,20 @@ namespace {
                 Result.Contacts.push_back({First, Second, Phase});
             };
             const auto CollectContacts = [&] {
-                const auto Current = Contacts.CurrentPairs();
+                auto Current = Contacts.CurrentPairs();
+                // Jolt retires the native manifold when an island sleeps even
+                // though its physical contact remains. Retain that neutral pair
+                // until an endpoint wakes or an authored geometry edit changes it.
+                const auto &Interface = World.GetBodyInterface();
+                for (const auto &Pair : PreviousContacts) {
+                    if (Current.contains(Pair) ||
+                        !NativeMap.contains(Pair.first) || !NativeMap.contains(Pair.second) ||
+                        ContactInvalidatedBodies.contains(Pair.first) ||
+                        ContactInvalidatedBodies.contains(Pair.second)) continue;
+                    if (!Interface.IsActive(JPH::BodyID(Pair.first)) &&
+                        !Interface.IsActive(JPH::BodyID(Pair.second)))
+                        Current.insert(Pair);
+                }
                 for (const auto &Pair : Current)
                     if (!PreviousContacts.contains(Pair)) Emit(Pair, PhysicsContactPhase::Began);
                 for (const auto &Pair : PreviousContacts)
@@ -1185,6 +1212,7 @@ namespace {
                 Slot.PendingForce = {};
                 Slot.PendingTorque = {};
             }
+            ContactInvalidatedBodies.clear();
             ++StepSequence;
             for (std::uint32_t Index = 1; Index < BodySlots.size(); ++Index) {
                 const auto &Slot = BodySlots[Index];
@@ -1450,6 +1478,7 @@ namespace {
         std::map<MeshKey, MeshResource> MeshResources;
         PhysicsCollisionResidency Residency;
         std::set<std::pair<std::uint32_t, std::uint32_t>> PreviousContacts;
+        std::set<std::uint32_t> ContactInvalidatedBodies;
         mutable std::map<std::tuple<int, float, float, float, float, float>, JPH::ShapeRefC> QueryShapes;
         std::size_t ActiveConstraints = 0;
         std::uint64_t StepSequence = 0;

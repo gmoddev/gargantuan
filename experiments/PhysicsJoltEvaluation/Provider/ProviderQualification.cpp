@@ -647,6 +647,13 @@ namespace {
                 if (!State->Awake) { FirstSleep = Frame; break; }
             }
             Require(FirstSleep >= 0, "full-update sleep clock did not retire resting body");
+            for (int Hold = 0; Hold < 5; ++Hold) {
+                ObservePair(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                    .SubStepCount = CollisionSteps}));
+                const auto State = Provider.Rigid->GetBodyState(BallId);
+                Require(State && !State->Awake && State->Transform.Position.y > 0.35f,
+                    "resting floor ball did not remain asleep and supported");
+            }
             std::cout << "[Physics:JoltProvider] sleep_contact collision_steps="
                 << CollisionSteps << " unified=" << Unified
                 << " began=" << Began << " ended_before_wake=" << Ended
