@@ -717,6 +717,12 @@ namespace {
         Load->SetCanCollide(false);
         Load->SetCanTouch(false);
         Load->SetParent(World);
+        auto Control = std::make_shared<Part>();
+        Control->SetSize({1, 1, 1});
+        Control->SetCFrame(CFrame(5, 3, 0));
+        Control->SetCanCollide(false);
+        Control->SetCanTouch(false);
+        Control->SetParent(World);
         auto Fabric = std::make_shared<Cloth>();
         Fabric->SetPosition({0, 3, 0});
         Fabric->SetSize({2, 2, 0.2f});
@@ -732,7 +738,8 @@ namespace {
         World->StepPhysics(0.0f, std::nullopt);
         const auto SoftId = WorldRootTestAccess::SoftBody(*World, *Fabric);
         const auto RigidId = WorldRootTestAccess::Body(*World, *Load);
-        Require(SoftId.IsValid() && RigidId.IsValid(),
+        Require(SoftId.IsValid() && RigidId.IsValid() &&
+            WorldRootTestAccess::Body(*World, *Control).IsValid(),
             "authored dynamic attachment endpoints failed WorldRoot admission");
         Require(!ConnectJoltRigidSoftAttachment(*Rigid, *Soft, SoftId, 0,
             RigidId, {-1, 0, 0}).Succeeded(),
@@ -745,8 +752,19 @@ namespace {
             "duplicate dynamic attachment was admitted");
         const auto InitialVertex = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
         Load->SetLinearVelocity({4, 0, 0});
-        for (int Frame = 0; Frame < 30; ++Frame)
+        Control->SetLinearVelocity({4, 0, 0});
+        float PeakVertexDeflection = 0;
+        float PeakImpulse = 0;
+        for (int Frame = 0; Frame < 30; ++Frame) {
             World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+            const auto Vertex = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
+            if (InitialVertex && Vertex)
+                PeakVertexDeflection = std::max(PeakVertexDeflection,
+                    glm::length(*Vertex - *InitialVertex));
+            const auto Link = GetJoltRigidSoftAttachmentState(*Rigid, SoftId, RigidId);
+            if (Link) PeakImpulse = std::max(PeakImpulse,
+                glm::length(Link->LastImpulseOnSoft));
+        }
         const auto FinalVertex = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
         const auto LinkState = GetJoltRigidSoftAttachmentState(*Rigid, SoftId, RigidId);
         std::cout << "[Physics:JoltProvider] dynamic attachment metrics initial_x="
@@ -754,6 +772,10 @@ namespace {
             << " final_x=" << (FinalVertex ? FinalVertex->x : std::numeric_limits<float>::quiet_NaN())
             << " rigid_x=" << Load->GetCFrame().Position.x
             << " rigid_velocity_x=" << Load->GetLinearVelocity().x
+            << " control_x=" << Control->GetCFrame().Position.x
+            << " control_velocity_x=" << Control->GetLinearVelocity().x
+            << " peak_vertex_deflection=" << PeakVertexDeflection
+            << " peak_impulse=" << PeakImpulse
             << " active=" << (LinkState && LinkState->Active)
             << " applied_steps=" << (LinkState ? LinkState->AppliedSteps : 0)
             << " last_impulse_x=" << (LinkState ? LinkState->LastImpulseOnSoft.x : 0)
@@ -762,9 +784,13 @@ namespace {
                 std::numeric_limits<float>::quiet_NaN())
             << '\n' << std::flush;
         Require(InitialVertex && FinalVertex && LinkState && LinkState->Active &&
-            LinkState->AppliedSteps > 0 && FinalVertex->x > InitialVertex->x + 0.02f &&
-            Load->GetLinearVelocity().x < 4.0f,
-            "authored dynamic Part motion did not transfer reciprocal impulse to Cloth");
+            LinkState->AppliedSteps > 0 && PeakImpulse > 0.000001f &&
+            PeakVertexDeflection > 0.0f &&
+            Control->GetCFrame().Position.x > 6.5f &&
+            Load->GetCFrame().Position.x < 1.5f &&
+            Load->GetLinearVelocity().x < 1.0f &&
+            std::abs(Load->GetCFrame().Position.x - 1.0f - FinalVertex->x) < 0.05f,
+            "authored linked Part did not resist motion relative to the unlinked control");
         Fabric->Destroy();
         World->StepPhysics(0.0f, std::nullopt);
         Require(!GetJoltRigidSoftAttachmentState(*Rigid, SoftId, RigidId) &&
