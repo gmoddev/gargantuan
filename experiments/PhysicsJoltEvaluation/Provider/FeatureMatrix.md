@@ -3,20 +3,25 @@
 This provider is injected only by the isolated Physics Jolt evaluation targets.
 The production Box3D/XPBD factories and WorldRoot default remain unchanged.
 The shared Jolt world is owned by the rigid adapter; the soft adapter extracts
-state from that same world after the qualified two half-frame updates with
-eight collision steps and 12 soft integrations per step. The table describes
+state from that same world after two half-frame updates with eight collision
+steps per update. The baseline profile uses 12 soft integrations and one
+constraint sweep per collision step. The opt-in convergence candidate uses
+five integrations and two sweeps; it is awaiting Engine provider qualification.
+The table describes
 what the neutral Engine interfaces and current fixtures actually exercise.
 
 | Behavior | Current evidence | Limit |
 | --- | --- | --- |
 | Rigid identity, shape replacement, mass, contact begin/end, sensors | `RigidIdentityAndEvents` physically checks state, masses, events, and retired generation | No broad game workload characterization yet |
 | Capsule mover and canonical static mesh | `CapsuleAndMeshResidency` checks collision, ray hits, resource sharing/charges, atomic transition rejection and release; `DataModelMixedGameplay` imports an actual OBJ through AssetService, queries the authored MeshPart, and releases its residency | Mesh workload here is a small bounded floor, not large scene streaming |
-| Weld, connected collision policy, distance spring, articulated chain, authored hinge/slider motors, moving-body CCD | Dedicated provider fixtures and `DataModelMotorsAndCcd`; the baseline 13 groups passed on the Windows Engine worker at `93d2139b5` | Bounds and solver response are fixture specific |
+| Weld, connected collision policy, distance spring, articulated chain, authored hinge/slider motors, moving-body CCD | Dedicated provider fixtures and `DataModelMotorsAndCcd`; all 17 baseline groups passed on the Windows Engine worker at `795f35641` | Bounds and solver response are fixture specific |
 | Rigid force cadence | `ForceAcrossHalfUpdates` compares a no-contact force/mass trajectory after both native half-frame updates | Other force/contact combinations need workload measurement |
 | Cloth/rubber and rigid primitives | `ClothAndRubberCoupling` and authored lifecycle/streaming fixtures cover admission, deformation publication, pins, and selected collision response; `DataModelMixedGameplay` measures 0.086 m peak cloth deflection, striker reversal, and a rubber-driven target moving 0.59 m | These are bounded contacts with 9×9 cloth and 5³ rubber, not 4K/16K contact quality |
 | Save/reopen and semantic identities | `DataModelAdmissionAndStreaming` saves a Part/Cloth subtree, reopens, readmits, streams out/in, and rejects stale IDs | Save format intentionally excludes native IDs |
 | Dynamic rigid-soft attachment | Optional `PHYSICS_EVALUATION_GANTRIA_ATTACHMENTS` composes the separate native helper behind neutral IDs; the Windows worker observed 480 applied native steps, 0.162 peak impulse, linked rigid remaining near x=1 while an unlinked control reached x=7, then auto-detach and generation churn | Macro-off build has no dynamic attachment bridge; Linux/ASAN and broader attachment geometry remain to be qualified |
 | Soft damping and point impulse | `NeutralSoftDampingRetention` checks free-velocity frame retention; `NeutralPointImpulseDistribution` checks four-nearest-node distribution | Forced trajectories and rubber shape matching are not numerically identical to XPBD |
+| Native soft-rigid contact evidence | A private opt-in Jolt manifold listener records actual contacting vertices by neutral-ID pair; the projectile fixture now requires a positive count | New assertion awaits hosted provider runtime proof; AABB overlap alone is excluded |
+| Rigid sleep clock | The isolated Jolt branch `f3838f12` has an opt-in full-update sleep interval and passed native Windows/Linux/sanitizer CI | Engine provider sleep fixture and cost comparison are pending; legacy provider still uses Jolt's default sleep clock |
 | Large soft workloads | `ProviderBenchmark` has 4K/16K cloth and rubber plus four 4K cloth bodies; `EngineBenchmark` times authored `WorldRoot::StepPhysics` | A performance winner requires matched binary/host/budget, measured quality and reviewed absolute ranges; coupled and rubber winners remain withheld |
 
 `DataModelMixedGameplay` passed once in the hosted Windows Engine worker using
