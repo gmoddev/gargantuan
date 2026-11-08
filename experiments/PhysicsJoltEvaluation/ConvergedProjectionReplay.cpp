@@ -81,7 +81,7 @@ Options Parse(int Count, char **Arguments) {
         (Result.Precision != "float" && Result.Precision != "double" && Result.Precision != "longdouble") ||
         (Result.RestMode != "captured" && Result.RestMode != "recomputed") ||
         (Result.VelocityReconstruction != "difference" && Result.VelocityReconstruction != "delta" &&
-         Result.VelocityReconstruction != "applieddelta") ||
+         Result.VelocityReconstruction != "applieddelta" && Result.VelocityReconstruction != "quantizedbase") ||
         (Result.Steps != 1 && Result.Steps != 4) || Result.Frames < 1 || Result.Frames > 3600 ||
         Result.IntegrationsPerFrame < 0 || Result.IntegrationsPerFrame > 768 ||
         Result.StageLimit < 0 || Result.StageLimit > 96 || Result.SeedIndex < 0 ||
@@ -297,7 +297,7 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
     }
     if (Config.VelocityReconstructionSpecified) {
         ConfigRow["VelocityReconstruction"] = Config.VelocityReconstruction;
-        ConfigRow["VelocityReconstructionScope"] = "difference reconstructs from stored position difference; delta accumulates requested edge displacement in solver precision; applieddelta accumulates stored edge displacement in solver precision. The alternatives start from damped velocity and exclude integration prediction rounding.";
+        ConfigRow["VelocityReconstructionScope"] = "difference reconstructs from stored position difference; delta accumulates requested edge displacement in solver precision; applieddelta accumulates stored edge displacement in solver precision. Both start from damped velocity. quantizedbase uses applieddelta corrections but starts from the stored after-integration position difference, isolating prediction quantization from regrouping.";
     }
     std::cout << ConfigRow.dump() << '\n';
     double MaximumKinetic = Initial.Kinetic;
@@ -308,10 +308,10 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
     int MaximumSweepsUsed = 0;
     int MinimumSweepsUsed = Config.ProjectionIterations;
     const bool AlternateVelocity = Config.VelocityReconstruction != "difference";
-    std::vector<Vector3<T>> DampedVelocities;
+    std::vector<Vector3<T>> BaseVelocities;
     std::vector<Vector3<T>> CorrectionSum;
     if (AlternateVelocity) {
-        DampedVelocities.resize(Vertices.size());
+        BaseVelocities.resize(Vertices.size());
         CorrectionSum.resize(Vertices.size());
     }
     double MaximumVelocityReconstructionDifference = 0.0;
@@ -336,12 +336,17 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
                     Item.Velocity.Y *= Damping;
                     Item.Velocity.Z *= Damping;
                 }
-                if (AlternateVelocity) DampedVelocities[VertexIndex] = Item.Velocity;
+                if (AlternateVelocity) BaseVelocities[VertexIndex] = Item.Velocity;
                 const auto OldPosition = Item.Position;
                 Item.Previous = OldPosition;
                 Item.Position.X = OldPosition.X + Item.Velocity.X * StepTime;
                 Item.Position.Y = OldPosition.Y + Item.Velocity.Y * StepTime;
                 Item.Position.Z = OldPosition.Z + Item.Velocity.Z * StepTime;
+                if (Config.VelocityReconstruction == "quantizedbase")
+                    BaseVelocities[VertexIndex] = {
+                        (Item.Position.X - OldPosition.X) / StepTime,
+                        (Item.Position.Y - OldPosition.Y) / StepTime,
+                        (Item.Position.Z - OldPosition.Z) / StepTime};
             }
             EmitStage(Config, Frame, Microstep, "AfterIntegration", Vertices, Edges,
                       StepTime, true);
@@ -449,12 +454,12 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
                         (Item.Position.Y - Item.Previous.Y) / StepTime,
                         (Item.Position.Z - Item.Previous.Z) / StepTime};
                     if (AlternateVelocity) {
-                        const auto &DampedVelocity = DampedVelocities[VertexIndex];
+                        const auto &BaseVelocity = BaseVelocities[VertexIndex];
                         const auto &Sum = CorrectionSum[VertexIndex];
                         Item.Velocity = {
-                            DampedVelocity.X + Sum.X / StepTime,
-                            DampedVelocity.Y + Sum.Y / StepTime,
-                            DampedVelocity.Z + Sum.Z / StepTime};
+                            BaseVelocity.X + Sum.X / StepTime,
+                            BaseVelocity.Y + Sum.Y / StepTime,
+                            BaseVelocity.Z + Sum.Z / StepTime};
                         const double Dx = static_cast<double>(Item.Velocity.X) - static_cast<double>(DifferenceVelocity.X);
                         const double Dy = static_cast<double>(Item.Velocity.Y) - static_cast<double>(DifferenceVelocity.Y);
                         const double Dz = static_cast<double>(Item.Velocity.Z) - static_cast<double>(DifferenceVelocity.Z);

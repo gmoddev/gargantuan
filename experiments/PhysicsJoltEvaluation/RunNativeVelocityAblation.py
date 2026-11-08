@@ -104,7 +104,14 @@ def CommonOptions(Fixture, Frames, Updates, Steps, Iterations, Material, Threads
     return Options
 
 
-def CaseDefinitions():
+def CaseDefinitions(ControlsOnly=False):
+    if ControlsOnly:
+        for Updates in (1, 2):
+            yield {"Name": f"ControlFree-Difference-W{Updates}C8I24-1800",
+                   "Mode": "difference", "Fixture": "Free", "Frames": 1800,
+                   "Updates": Updates, "Steps": 8, "Iterations": 24,
+                   "Material": "1e-6", "CleanParity": True}
+        return
     for Fixture in ("C1", "C2", "Free"):
         yield {"Name": f"Control-{Fixture}-W1C8I24", "Mode": "difference",
                "Fixture": Fixture, "Frames": 150, "Updates": 1, "Steps": 8,
@@ -229,6 +236,8 @@ def Main():
     Parser.add_argument("--pristine", type=Path, required=True)
     Parser.add_argument("--output", type=Path, required=True)
     Parser.add_argument("--threads", type=int, default=1)
+    Parser.add_argument("--controls-only", action="store_true",
+                        help="Run two 1800-frame original-mode free-cloth identity controls only")
     Arguments = Parser.parse_args()
     if not 1 <= Arguments.threads <= 8:
         Parser.error("[Physics:VelocityAblation] --threads outside 1..8")
@@ -238,7 +247,7 @@ def Main():
     Output = Arguments.output
     Output.mkdir(parents=True, exist_ok=False)
     Receipts = []
-    for Definition in CaseDefinitions():
+    for Definition in CaseDefinitions(Arguments.controls_only):
         Receipt = RunCase(Definition, Patched, Unobserved, Pristine, Output, Arguments.threads)
         Receipts.append(Receipt)
         (Output / "Receipts.json").write_text(json.dumps(Receipts, indent=2, allow_nan=False) + "\n",
@@ -250,6 +259,7 @@ def Main():
                             Receipt["NativeSpringCalibration"]["Pass"]}), flush=True)
     (Output / "Summary.json").write_text(json.dumps({
         "Cases": len(Receipts), "AllHarnessChecksPassed": True,
+        "ControlsOnly": Arguments.controls_only,
         "PureUnobservedLibraryUsed": Unobserved is not None,
         "PhysicalPasses": sum(R["Score"]["CompleteBoundedPass"] for R in Receipts),
         "SpringCalibrationsPassing": sum(R["NativeSpringCalibration"]["Pass"]

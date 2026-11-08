@@ -104,6 +104,8 @@ def Main():
     Parser.add_argument("--output", dest="Output", type=Path, required=True)
     Parser.add_argument("--frames", dest="Frames", type=int, default=1800)
     Parser.add_argument("--timeout", dest="Timeout", type=int, default=1800)
+    Parser.add_argument("--quantized-controls-only", dest="QuantizedControlsOnly",
+                        action="store_true", help="Run only c1e-6 N192/N384 quantized-base controls")
     Args = Parser.parse_args()
     if not 1 <= Args.Frames <= 3600 or not 1 <= Args.Timeout <= 3600:
         Parser.error("[Physics:FloatReconstruction] Frames or timeout outside bounded range")
@@ -115,12 +117,18 @@ def Main():
     if len(Graph.get("Positions", [])) != 169 or len(Graph.get("Edges", [])) != 886:
         Parser.error("[Physics:FloatReconstruction] Expected exported 169-vertex, 886-edge cloth graph")
     Prepared = {}
-    for Material, Label in ((1.0e-6, "M1e-6"), (1.0e-5, "M1e-5")):
+    Materials = ((1.0e-6, "M1e-6"),) if Args.QuantizedControlsOnly else (
+        (1.0e-6, "M1e-6"), (1.0e-5, "M1e-5"))
+    for Material, Label in Materials:
         PathName = Output / f"{Label}.graph.json"
         Prepared[Label] = {"Path": PathName, **PrepareGraph(Graph, Material, PathName)}
-    Cases = [(f"M1e-6-N{Integrations}-{Mode}", "M1e-6", Integrations, Mode)
-             for Integrations in (192, 384) for Mode in Modes]
-    Cases += [(f"M1e-5-N96-{Mode}", "M1e-5", 96, Mode) for Mode in Modes]
+    if Args.QuantizedControlsOnly:
+        Cases = [(f"M1e-6-N{Integrations}-quantizedbase", "M1e-6", Integrations,
+                  "quantizedbase") for Integrations in (192, 384)]
+    else:
+        Cases = [(f"M1e-6-N{Integrations}-{Mode}", "M1e-6", Integrations, Mode)
+                 for Integrations in (192, 384) for Mode in Modes]
+        Cases += [(f"M1e-5-N96-{Mode}", "M1e-5", 96, Mode) for Mode in Modes]
     Receipts = []
     for Name, Material, Integrations, Mode in Cases:
         Receipt = RunCase(Executable, Prepared[Material]["Path"], Output, Name,

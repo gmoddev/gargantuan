@@ -743,9 +743,40 @@ jobs:
           $Expected = switch ($env:SOURCE_RUN) {
             '42443610842' { 'fbcf62c7ce49baef9ba1ef2212c05878d908de8a' }
             '42444068279' { '29a6473f598cfd801bb49ff021edd0cfcedce3ce' }
+            '42447487882' { '7c9e9d25371d382edeb4951d90b6a63f9cc413e3' }
             default { throw 'Unrecognized immutable compiled source' }
           }
           if ($Source.head_sha -ne $Expected -or $Source.status -ne 'completed') { throw 'Wrong compiled dependency source' }
+          'SELECTED_WORLD_UPDATES=1' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          'SELECTED_SOFT_ITERATIONS=24' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          'SELECTED_VELOCITY_MODE=difference' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($env:SOURCE_RUN -eq '42447487882') {
+            if ($Source.conclusion -ne 'success') { throw 'Native numerical ablation is not complete' }
+            'SELECTED_WORLD_UPDATES=2' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            'SELECTED_SOFT_ITERATIONS=12' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            'SELECTED_VELOCITY_MODE=delta' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            'NUMERICAL_QUALIFICATION=1' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            gh run download 42444068279 --repo gmoddev/gargantuan --name 'jolt-schedule-energy-${{ matrix.os }}' --dir original-reference
+            if ($LASTEXITCODE -ne 0) { throw 'Original unmodified control binary unavailable' }
+            if ($IsWindows) {
+              'NUMERICAL_BUILD=1' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              exit 0
+            }
+            gh run download $env:SOURCE_RUN --repo gmoddev/gargantuan --name jolt-native-velocity-ablation --dir prior-energy
+            if ($LASTEXITCODE -ne 0) { throw 'Numerical binary artifact unavailable' }
+            foreach ($Kind in @('clean', 'observed')) {
+              $InputKind = if ($Kind -eq 'clean') { 'unobserved' } else { 'observed' }
+              New-Item -ItemType Directory -Force "build-energy-$Kind" | Out-Null
+              foreach ($Target in @('PhysicsJoltScheduledCouplingDiagnostic', 'PhysicsJoltUnifiedCouplingQualification')) {
+                Copy-Item -LiteralPath "prior-energy/build-numerical-$InputKind/$Target" -Destination "build-energy-$Kind/$Target"
+                Get-FileHash -LiteralPath "build-energy-$Kind/$Target" | ConvertTo-Json > "schedule-energy/ImportedBinary-$Kind-$Target.json"
+              }
+              Copy-Item -LiteralPath "prior-energy/numerical-evidence/Applied-$InputKind.patch" -Destination "schedule-energy/ExecutedNumerical-$Kind.patch"
+            }
+            chmod +x build-energy-clean/PhysicsJolt* build-energy-observed/PhysicsJolt* original-reference/build-energy-clean/PhysicsJoltScheduledCouplingDiagnostic
+            'REUSE_BINARIES=1' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            exit 0
+          }
           gh run download $env:SOURCE_RUN --repo gmoddev/gargantuan --name 'jolt-schedule-energy-${{ matrix.os }}' --dir prior-energy
           if ($LASTEXITCODE -ne 0) { throw 'Compiled dependency artifact unavailable' }
           if ($env:SOURCE_RUN -eq '42444068279') {
@@ -787,7 +818,7 @@ jobs:
             cp "build-energy-$Kind/compile_commands.json" "schedule-energy/CompileCommands-$Kind.json"
           done
       - name: Compile pristine and observer Windows targets
-        if: runner.os == 'Windows' && env.REUSE_BINARIES != '1'
+        if: runner.os == 'Windows' && env.REUSE_BINARIES != '1' && env.NUMERICAL_BUILD != '1'
         shell: cmd
         run: |
           call "%VSDEVCMD%" -arch=x64 -host_arch=x64
@@ -801,6 +832,41 @@ jobs:
           if errorlevel 1 (type schedule-energy\Configure-observed.log & exit /b 1)
           cmake --build build-energy-observed --target PhysicsJoltScheduledCouplingDiagnostic PhysicsJoltUnifiedCouplingQualification --parallel 2 > schedule-energy\Build-observed.log 2>&1
           if errorlevel 1 (type schedule-energy\Build-observed.log & exit /b 1)
+      - name: Independently build corrected numerical libraries on Windows
+        if: runner.os == 'Windows' && env.NUMERICAL_BUILD == '1'
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          cl /Bv > schedule-energy\Compiler.txt 2>&1
+          python experiments/PhysicsJoltEvaluation/MakeDeltaVelocityInstrumentation.py .evaluation-jolt schedule-energy/DeltaVelocity.patch
+          if errorlevel 1 exit /b 1
+          git -C .evaluation-jolt worktree add --detach ../.numerical-clean e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          git -C .numerical-clean apply "%CD%/schedule-energy/DeltaVelocity.patch"
+          if errorlevel 1 exit /b 1
+          git -C .evaluation-jolt worktree add --detach ../.numerical-observed e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          git -C .numerical-observed apply "%CD%/schedule-energy/DeltaVelocity.patch"
+          if errorlevel 1 exit /b 1
+          git -C .numerical-observed apply "%CD%/schedule-energy/EnergyObservation.patch"
+          if errorlevel 1 exit /b 1
+          git -C .numerical-clean diff --binary > schedule-energy/ExecutedNumerical-clean.patch
+          git -C .numerical-observed diff --binary > schedule-energy/ExecutedNumerical-observed.patch
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-energy-clean -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_DELTA_VELOCITY=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_JOLT_ROOT="%CD%\.numerical-clean" -DEVALUATION_SOURCE_ROOT="%CD%" > schedule-energy\Configure-clean.log 2>&1
+          if errorlevel 1 (type schedule-energy\Configure-clean.log & exit /b 1)
+          cmake --build build-energy-clean --target PhysicsJoltScheduledCouplingDiagnostic PhysicsJoltUnifiedCouplingQualification --parallel 2 > schedule-energy\Build-clean.log 2>&1
+          if errorlevel 1 (type schedule-energy\Build-clean.log & exit /b 1)
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-energy-observed -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_DELTA_VELOCITY=ON -DDIAGNOSTIC_ENERGY_OBSERVER=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_JOLT_ROOT="%CD%\.numerical-observed" -DEVALUATION_SOURCE_ROOT="%CD%" > schedule-energy\Configure-observed.log 2>&1
+          if errorlevel 1 (type schedule-energy\Configure-observed.log & exit /b 1)
+          cmake --build build-energy-observed --target PhysicsJoltScheduledCouplingDiagnostic PhysicsJoltUnifiedCouplingQualification --parallel 2 > schedule-energy\Build-observed.log 2>&1
+          if errorlevel 1 (type schedule-energy\Build-observed.log & exit /b 1)
+      - name: Require long original-mode identity with the unmodified upstream binary
+        if: env.NUMERICAL_QUALIFICATION == '1'
+        run: >-
+          python experiments/PhysicsJoltEvaluation/RunNativeVelocityAblation.py
+          --patched build-energy-observed/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
+          --unobserved build-energy-clean/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
+          --pristine original-reference/build-energy-clean/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
+          --controls-only --output schedule-energy/OriginalModeControls
       - name: Measure every inner state and verify observer parity
         if: inputs.schedule_energy_only
         run: >-
@@ -817,20 +883,16 @@ jobs:
           --output schedule-energy/Unified
       - name: Independently qualify every unified fixture, repeat and worker budget
         if: inputs.unified_qualification_only
-        run: >-
-          python experiments/PhysicsJoltEvaluation/RunUnifiedScheduledQualification.py
-          --pristine build-energy-clean/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
-          --observed build-energy-observed/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
-          --world-updates 1 --collision-steps 8 --soft-iterations 24 --compliance 1e-6
-          --output schedule-energy/UnifiedQualified
+        shell: pwsh
+        run: |
+          python experiments/PhysicsJoltEvaluation/RunUnifiedScheduledQualification.py --pristine build-energy-clean/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }} --observed build-energy-observed/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }} --world-updates $env:SELECTED_WORLD_UPDATES --collision-steps 8 --soft-iterations $env:SELECTED_SOFT_ITERATIONS --velocity-reconstruction $env:SELECTED_VELOCITY_MODE --compliance 1e-6 --compress-raw --output schedule-energy/UnifiedQualified
+          if ($LASTEXITCODE -ne 0) { throw 'Unified qualification failed' }
       - name: Qualify native contact, free motion, perturbations and longer horizons
         if: inputs.unified_qualification_only
-        run: >-
-          python experiments/PhysicsJoltEvaluation/RunScheduledProfileQualification.py
-          --pristine build-energy-clean/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
-          --observed build-energy-observed/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
-          --world-updates 1 --steps 8 --iterations 24 --compliance 1e-6
-          --output schedule-energy/NativeQualified
+        shell: pwsh
+        run: |
+          python experiments/PhysicsJoltEvaluation/RunScheduledProfileQualification.py --pristine build-energy-clean/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }} --observed build-energy-observed/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }} --world-updates $env:SELECTED_WORLD_UPDATES --steps 8 --iterations $env:SELECTED_SOFT_ITERATIONS --velocity-reconstruction $env:SELECTED_VELOCITY_MODE --compliance 1e-6 --compress-raw --output schedule-energy/NativeQualified
+          if ($LASTEXITCODE -ne 0) { throw 'Native qualification failed' }
       - name: Preserve energy evidence and compiled dependency caches
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
@@ -1115,6 +1177,31 @@ jobs:
         with:
           name: jolt-float-reconstruction-ablation
           path: reconstruction-evidence/
+
+  numerical-prediction-control:
+    if: github.event_name == 'workflow_dispatch' && inputs.schedule_followup_only && inputs.unified_qualification_only && inputs.schedule_source_run == '42447487882'
+    name: Isolate quantized integration displacement from projection summation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - run: git submodule update --init --depth 1 vendor/json
+      - name: Build and execute only the two missing base-displacement controls
+        run: |
+          set -euo pipefail
+          mkdir prediction-evidence
+          git rev-parse HEAD > prediction-evidence/ExecutedSource.txt
+          c++ -std=c++23 -O2 -ffp-contract=off -fno-fast-math -Ivendor/json/include experiments/PhysicsJoltEvaluation/ConvergedProjectionReplay.cpp -o prediction-evidence/Replay
+          python3 experiments/PhysicsJoltEvaluation/RunFloatReconstruction.py --exe prediction-evidence/Replay --graph experiments/PhysicsJoltEvaluation/CausalFixtures/NativeOptimizedClothGraph.json --quantized-controls-only --output prediction-evidence/Runs
+      - name: Preserve controls independently of their physical outcome
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-quantized-prediction-control
+          path: prediction-evidence/
 
   engine-architecture-comparison:
     if: github.event_name == 'workflow_dispatch' && inputs.unified_qualification_only && !inputs.schedule_followup_only

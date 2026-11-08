@@ -177,6 +177,7 @@ def RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture, Mater
         ContactEvidence = bool(ObservedConfig["Contact"] and Contacts > 0 and Response["Responded"])
     Receipt = {"Name": Name, "Fixture": Fixture, "MaterialCompliance": Material,
             "VelocityReconstruction": VelocityReconstruction,
+            "ExpectedReconstruction": VelocityReconstruction,
             "Frames": Frames, "Workers": Workers, "CollisionSteps": Steps,
             "SoftIterations": Iterations, "WorldUpdates": Updates, "ExtraOptions": list(Extra),
             "PristineRaw": PristinePath.name, "ObservedRaw": ObservedPath.name,
@@ -310,12 +311,13 @@ def Main():
             ("Negative-FreeU96", "Free", "1e-6", 1, 1, 96, 150, ()),
         ]
         for Name, Fixture, CaseMaterial, CaseSteps, CaseIterations, CaseUpdates, Frames, Extra in Followups:
+            CaseMode = "difference" if Name.startswith("Negative-") else Arguments.velocity_reconstruction
             Receipt = RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture,
                                       CaseMaterial, CaseSteps, CaseIterations, CaseUpdates,
                                       Frames, 1, Extra, Arguments.compress_raw,
                                       Calibrations[Material]["InternalIntegrationDt"]
                                       if not Name.startswith("Negative-") else None,
-                                      Arguments.velocity_reconstruction)
+                                      CaseMode)
             Receipts.append(Receipt)
             (Output / "Receipts.json").write_text(json.dumps(Receipts, indent=2, allow_nan=False), encoding="utf-8")
             print(json.dumps({"Name": Name, "PhysicalPass": Receipt["PhysicalPass"],
@@ -334,6 +336,7 @@ def Main():
     Summary = {"SelectedMaterialCompliance": Material, "SelectedSchedule": {
                    "WorldUpdates": Updates, "CollisionSteps": Steps, "SoftIterations": Iterations},
                "VelocityReconstruction": Arguments.velocity_reconstruction,
+               "NegativeControlVelocityReconstruction": "difference",
                "RawPhysicsCompression": "gzip-mtime0-lossless-verified" if Arguments.compress_raw else "none",
                "Calibrations": Calibrations, "ObservedCases": len(Receipts),
                "TimingCases": len(TimingReceipts), "RequiredGateQualified": RequiredGate,
