@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <sstream>
 #include <vector>
@@ -233,6 +234,34 @@ namespace {
         const float Expected = 7.0f / Mass / 60.0f;
         Require(State && std::abs(State->LinearVelocity.x - Expected) < 0.02f,
             "two half-update schedule lost or duplicated neutral rigid force");
+        Provider.Soft.reset();
+        const auto AfterSoftRetirement = Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+            .SubStepCount = 4});
+        Require(!AfterSoftRetirement.Motions.empty() && Provider.Rigid->IsBodyValid(Body),
+            "rigid world retained a dangling soft pre-step callback after soft retirement");
+    }
+    void TransientSensorAcrossHalfUpdates() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        auto SensorDescription = Box({0, 0, 0}, {1, 1, 1}, true);
+        SensorDescription.CanCollide = false;
+        SensorDescription.CanTouch = true;
+        const auto Sensor = Provider.Rigid->CreateBody(SensorDescription);
+        const auto Visitor = Provider.Rigid->CreateBody(Ball({-1, 0, 0}, 0.1f));
+        Require(Sensor.IsValid() && Visitor.IsValid(), "transient sensor fixture admission failed");
+        Require(Provider.Rigid->SetLinearVelocity(Visitor, {120, 0, 0}).Succeeded(),
+            "transient sensor velocity failed");
+        const auto Frame = Advance(Provider);
+        bool Began = false, Ended = false;
+        for (const auto &Event : Frame.Contacts) {
+            if (!((Event.BodyA == Sensor && Event.BodyB == Visitor) ||
+                  (Event.BodyA == Visitor && Event.BodyB == Sensor))) continue;
+            Began |= Event.Phase == PhysicsContactPhase::Began;
+            Ended |= Event.Phase == PhysicsContactPhase::Ended;
+        }
+        Require(Began && Ended,
+            "transient half-frame sensor contact did not begin and end in one neutral step");
     }
     void ClothAndRubberCoupling() {
         PhysicsWorldConfig Config;
@@ -252,6 +281,20 @@ namespace {
             "unqualified exact-hard cloth was admitted");
         const auto Fabric = Provider.Soft->CreateBody(Cloth);
         Require(Fabric.IsValid(), "cloth admission failed");
+        const auto BeforeOverflow = Provider.Soft->GetBodyState(Fabric);
+        Require(Provider.Soft->ApplyImpulseAtPosition(Fabric,
+            {std::numeric_limits<float>::max(), 0, 0}, {0, 0, 0}).Status ==
+                PhysicsOperationStatus::InvalidDescription,
+            "overflowing point impulse was accepted");
+        const auto AfterOverflow = Provider.Soft->GetBodyState(Fabric);
+        Require(BeforeOverflow && AfterOverflow &&
+            *BeforeOverflow->Positions == *AfterOverflow->Positions,
+            "rejected point impulse mutated cloth positions");
+        Advance(Provider);
+        const auto AfterOverflowStep = Provider.Soft->GetBodyState(Fabric);
+        Require(AfterOverflowStep &&
+            std::abs((*AfterOverflowStep->Positions)[40].x) < 0.01f,
+            "rejected point impulse altered the next physical step");
         const auto Sphere = Provider.Rigid->CreateBody(Ball({0, 0, -1.2f}));
         Require(Sphere.IsValid(), "cloth projectile admission failed");
         Require(Provider.Rigid->SetLinearVelocity(Sphere, {0, 0, 12}).Succeeded(),
@@ -272,10 +315,24 @@ namespace {
         Require(Pinned && Pinned->VertexRevision > PreviousRevision &&
             std::abs((*Pinned->Positions)[4].z - 0.25f) < 0.01f,
             "moving attachment did not publish its new position");
+        Require(Provider.Soft->ApplyForce(Fabric, {100, 0, 0}).Succeeded(),
+            "pending force before cloth retirement failed");
         Require(Provider.Soft->DestroyBody(Fabric).Succeeded(), "cloth release failed");
         const auto Reused = Provider.Soft->CreateBody(Cloth);
         Require(Reused.IsValid() && Reused != Fabric && !Provider.Soft->IsBodyValid(Fabric),
             "stale cloth identity resolved after reuse");
+        const auto BeforeUnstepped = Provider.Soft->GetBodyInspection(Reused);
+        const auto ExtractedWithoutAdvance = Provider.Soft->Step({.DeltaTime = SoftBodyStepInterval,
+            .Gravity = {0, 0, 0}});
+        Require(BeforeUnstepped && !BeforeUnstepped->Simulated &&
+            ExtractedWithoutAdvance.States.size() == 1 &&
+            !ExtractedWithoutAdvance.States.front().Simulated &&
+            Provider.Soft->GetBodyInspection(Reused)->VertexRevision == BeforeUnstepped->VertexRevision,
+            "new cloth falsely reported a prior rigid advance as its own simulation");
+        Advance(Provider);
+        const auto ReusedState = Provider.Soft->GetBodyState(Reused);
+        Require(ReusedState && std::abs((*ReusedState->Positions)[40].x) < 0.05f,
+            "reused soft slot inherited the retired body's pending force");
         Require(Provider.Soft->DestroyBody(Reused).Succeeded(), "reused cloth release failed");
         Require(Provider.Rigid->DestroyBody(Sphere).Succeeded(), "cloth projectile release failed");
 
@@ -396,6 +453,8 @@ int main() {
         WeldUnderImpulse();
         std::cout << "[Physics:JoltProvider] force\n" << std::flush;
         ForceAcrossHalfUpdates();
+        std::cout << "[Physics:JoltProvider] transient contacts\n" << std::flush;
+        TransientSensorAcrossHalfUpdates();
         std::cout << "[Physics:JoltProvider] cloth/rubber coupling\n" << std::flush;
         ClothAndRubberCoupling();
         std::cout << "[Physics:JoltProvider] DataModel lifecycle\n" << std::flush;

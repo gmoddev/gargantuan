@@ -1600,23 +1600,35 @@ namespace {
             auto *Motion = static_cast<JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
             auto &Vertices = Motion->GetVertices();
             std::size_t Count = 0, Nearest = 0;
-            float BestDistance = std::numeric_limits<float>::infinity();
+            double BestDistance = std::numeric_limits<double>::infinity();
+            const auto Origin = Lock.GetBody().GetPosition();
             for (std::size_t Index = 0; Index < Vertices.size(); ++Index) {
                 if (Vertices[Index].mInvMass <= 0) continue;
                 ++Count;
                 if (Point) {
-                    const float Distance = glm::length(*Point -
-                        (FromRVec(Lock.GetBody().GetPosition()) + FromJolt(Vertices[Index].mPosition)));
+                    const auto Position = Vertices[Index].mPosition;
+                    const double X = double(Point->x) - (Origin.GetX() + Position.GetX());
+                    const double Y = double(Point->y) - (Origin.GetY() + Position.GetY());
+                    const double Z = double(Point->z) - (Origin.GetZ() + Position.GetZ());
+                    const double Distance = X * X + Y * Y + Z * Z;
                     if (Distance < BestDistance) { BestDistance = Distance; Nearest = Index; }
                 }
             }
             if (Count == 0) return {};
+            std::vector<std::pair<std::size_t, glm::vec3>> Pending;
+            Pending.reserve(Point ? 1 : Count);
             for (std::size_t Index = 0; Index < Vertices.size(); ++Index) {
                 auto &Vertex = Vertices[Index];
                 if (Vertex.mInvMass <= 0 || (Point && Index != Nearest)) continue;
                 const float Share = Point ? 1.0f : 1.0f / float(Count);
-                Vertex.mVelocity += ToJolt(Impulse * (Vertex.mInvMass * Share));
+                const auto Velocity = FromJolt(Vertex.mVelocity) +
+                    Impulse * (Vertex.mInvMass * Share);
+                if (!Finite(Velocity))
+                    return {PhysicsOperationStatus::InvalidDescription, "Soft impulse exceeds finite velocity range"};
+                Pending.emplace_back(Index, Velocity);
             }
+            for (const auto &[Index, Velocity] : Pending)
+                Vertices[Index].mVelocity = ToJolt(Velocity);
             return {};
         }
         RigidJoltBackend &Owner;

@@ -10,7 +10,8 @@ physics remain unchanged.
 physical gates: contact begin/end, shape replacement mass, a capsule stopped by
 a wall, canonical mesh ray and release, a weld holding under impulse, cloth
 deflection with rigid feedback, rubber pushing a rigid target, and stale
-rigid/soft IDs after slot reuse. It
+rigid/soft IDs after slot reuse. A sensor traversed between the two Jolt
+half-updates must publish both begin and end in the same neutral step. It
 uses the patched Jolt velocity reconstruction and two half-frame world updates,
 each with eight collision steps and 12 soft integrations per step, matching the
 prior qualified coupling schedule.
@@ -51,6 +52,8 @@ Current limitations before production consideration:
   velocities before the Jolt world advances. Rigid forces and torques are
   reissued once per half-frame `Update`, because Jolt clears them at the end
   of each `Update`; a no-contact F/m fixture checks the resulting momentum.
+  Direct soft impulses reject any result that would make a vertex velocity
+  nonfinite before mutating any vertex.
 - Canonical mesh residency is charged by resource ID, revision, and immutable
   buffer identity. Shared consumers charge canonical bytes once and each native
   shape by Jolt's reported size. The adapter enforces configured resource,
