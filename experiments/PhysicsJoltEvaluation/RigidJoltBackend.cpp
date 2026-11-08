@@ -118,6 +118,14 @@ namespace {
         }
         return false;
     }
+    float SoftDampingRate(float Damping, float DeltaTime) {
+        constexpr double Integrations = 2.0 * 8.0 * 12.0;
+        if (Damping == 0.0f) return 0.0f;
+        if (Damping == 1.0f)
+            return static_cast<float>(Integrations / double(DeltaTime));
+        return static_cast<float>(-std::expm1(std::log1p(-double(Damping)) /
+            Integrations) * Integrations / double(DeltaTime));
+    }
     bool SameTransform(const CFrame &A, const CFrame &B) {
         if (A.Position.x != B.Position.x || A.Position.y != B.Position.y ||
             A.Position.z != B.Position.z) return false;
@@ -1251,10 +1259,12 @@ namespace {
         if (!Finite(Definition.Position) || !Finite(Definition.Size) ||
             Definition.Size.x <= 0 || Definition.Size.y <= 0 || Definition.Size.z <= 0 ||
             !std::isfinite(Material.ParticleMass) || Material.ParticleMass <= 0 ||
-            !FiniteNonnegative(Material.Damping) || !FiniteNonnegative(Material.StretchCompliance) ||
+            !FiniteNonnegative(Material.Damping) || Material.Damping > 1.0f ||
+            !FiniteNonnegative(Material.StretchCompliance) ||
             !FiniteNonnegative(Material.BendCompliance) || !FiniteNonnegative(Material.ShapeCompliance) ||
             !FiniteNonnegative(Material.VolumeCompliance) || !FiniteNonnegative(Material.Friction) ||
-            !FiniteNonnegative(Material.Thickness) || Definition.ResolutionX < 2 ||
+            !FiniteNonnegative(Material.Thickness) || Material.Friction > 1.0f ||
+            Material.Thickness > 10.0f || Definition.ResolutionX < 2 ||
             Definition.ResolutionY < 2 || Definition.Attachments.size() > Limits.MaximumAttachments)
             return std::nullopt;
         if (Material.StretchCompliance <= 0 ||
@@ -1384,7 +1394,8 @@ namespace {
             Settings.mAllowSleeping = false;
             Settings.mUpdatePosition = false;
             Settings.mFacesDoubleSided = true;
-            Settings.mLinearDamping = Definition.Material.Damping;
+            Settings.mLinearDamping = SoftDampingRate(Definition.Material.Damping,
+                SoftBodyStepInterval);
             Settings.mFriction = Definition.Material.Friction;
             Settings.mVertexRadius = Definition.Material.Thickness;
             const auto Native = Owner.World.GetBodyInterface().CreateAndAddSoftBody(Settings,
@@ -1460,7 +1471,8 @@ namespace {
             Settings.mAllowSleeping = false;
             Settings.mUpdatePosition = false;
             Settings.mFacesDoubleSided = true;
-            Settings.mLinearDamping = Definition.Material.Damping;
+            Settings.mLinearDamping = SoftDampingRate(Definition.Material.Damping,
+                SoftBodyStepInterval);
             Settings.mFriction = Definition.Material.Friction;
             Settings.mVertexRadius = Definition.Material.Thickness;
             const auto Native = Owner.World.GetBodyInterface().CreateAndAddSoftBody(Settings,
@@ -1512,24 +1524,34 @@ namespace {
         bool FlushForces(float DeltaTime) {
             struct StagedForce {
                 Slot *Target = nullptr;
+                float BeforeDamping = 0;
+                float AfterDamping = 0;
                 std::vector<glm::vec3> Before;
                 std::vector<glm::vec3> After;
             };
             std::vector<StagedForce> Pending;
             for (std::uint32_t Index = 1; Index < Slots.size(); ++Index) {
                 auto &Slot = Slots[Index];
-                if (!Slot.Live || !Slot.Definition.Enabled || Slot.PendingForce == glm::vec3(0.0f)) continue;
+                if (!Slot.Live || !Slot.Definition.Enabled) continue;
                 const auto VelocityImpulse = Slot.PendingForce * DeltaTime;
                 if (!Finite(VelocityImpulse)) return false;
                 JPH::BodyLockRead Lock(Owner.World.GetBodyLockInterface(), Slot.Native);
                 if (!Lock.Succeeded()) return false;
                 const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(
                     Lock.GetBody().GetMotionProperties());
+                const auto Rate = SoftDampingRate(Slot.Definition.Material.Damping, DeltaTime);
+                if (!std::isfinite(Rate) || Rate < 0) return false;
                 const auto &Vertices = Motion->GetVertices();
                 std::size_t Movable = 0;
                 for (const auto &Vertex : Vertices) if (Vertex.mInvMass > 0) ++Movable;
                 StagedForce Stage;
                 Stage.Target = &Slot;
+                Stage.BeforeDamping = Motion->GetLinearDamping();
+                Stage.AfterDamping = Rate;
+                if (Slot.PendingForce == glm::vec3(0.0f)) {
+                    Pending.push_back(std::move(Stage));
+                    continue;
+                }
                 Stage.Before.reserve(Vertices.size());
                 Stage.After.reserve(Vertices.size());
                 for (const auto &Vertex : Vertices) {
@@ -1550,8 +1572,9 @@ namespace {
                 auto *Motion = static_cast<JPH::SoftBodyMotionProperties *>(
                     Lock.GetBody().GetMotionProperties());
                 auto &Vertices = Motion->GetVertices();
-                if (Vertices.size() != Stage.After.size()) break;
-                for (std::size_t Index = 0; Index < Vertices.size(); ++Index)
+                if (!Stage.After.empty() && Vertices.size() != Stage.After.size()) break;
+                Motion->SetLinearDamping(Stage.AfterDamping);
+                for (std::size_t Index = 0; Index < Stage.After.size(); ++Index)
                     Vertices[Index].mVelocity = ToJolt(Stage.After[Index]);
             }
             if (Applied != Pending.size()) {
@@ -1559,9 +1582,11 @@ namespace {
                     auto &Stage = Pending[Prior];
                     JPH::BodyLockWrite Lock(Owner.World.GetBodyLockInterface(), Stage.Target->Native);
                     if (!Lock.Succeeded()) return false;
-                    auto &Vertices = static_cast<JPH::SoftBodyMotionProperties *>(
-                        Lock.GetBody().GetMotionProperties())->GetVertices();
-                    for (std::size_t Index = 0; Index < Vertices.size(); ++Index)
+                    auto *Motion = static_cast<JPH::SoftBodyMotionProperties *>(
+                        Lock.GetBody().GetMotionProperties());
+                    Motion->SetLinearDamping(Stage.BeforeDamping);
+                    auto &Vertices = Motion->GetVertices();
+                    for (std::size_t Index = 0; Index < Stage.Before.size(); ++Index)
                         Vertices[Index].mVelocity = ToJolt(Stage.Before[Index]);
                 }
                 return false;

@@ -458,6 +458,36 @@ namespace {
         Require(TargetState && TargetState->Transform.Position.x > 1.15f,
             "rubber did not push the rigid target");
     }
+    void NeutralSoftDampingRetention() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        SoftBodyDefinition Rubber;
+        Rubber.Kind = SoftBodyKind::Rubber;
+        Rubber.Size = {1, 1, 1};
+        Rubber.ResolutionX = Rubber.ResolutionY = Rubber.ResolutionZ = 2;
+        Rubber.Material.Damping = 0.04f;
+        const auto Body = Provider.Soft->CreateBody(Rubber);
+        Require(Body.IsValid(), "free rubber damping fixture failed admission");
+        const auto MeanX = [](const SoftBodyState &State) {
+            float Sum = 0;
+            for (const auto &Position : *State.Positions) Sum += Position.x;
+            return Sum / float(State.Positions->size());
+        };
+        const auto Initial = Provider.Soft->GetBodyState(Body);
+        Require(Initial && Provider.Soft->ApplyImpulse(Body, {8, 0, 0}).Succeeded(),
+            "free rubber damping impulse failed");
+        Advance(Provider);
+        const auto First = Provider.Soft->GetBodyState(Body);
+        Advance(Provider);
+        const auto Second = Provider.Soft->GetBodyState(Body);
+        Require(First && Second, "free rubber damping states missing");
+        const float FirstDisplacement = MeanX(*First) - MeanX(*Initial);
+        const float SecondDisplacement = MeanX(*Second) - MeanX(*First);
+        Require(FirstDisplacement > 0.05f &&
+            std::abs(SecondDisplacement / FirstDisplacement - 0.96f) < 0.03f,
+            "native damping failed neutral per-frame velocity retention");
+    }
     void DataModelAdmissionAndStreaming() {
         auto Game = std::make_shared<DataModel>();
         auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
@@ -666,6 +696,8 @@ int main() {
         TransientSensorAcrossHalfUpdates();
         std::cout << "[Physics:JoltProvider] cloth/rubber coupling\n" << std::flush;
         ClothAndRubberCoupling();
+        std::cout << "[Physics:JoltProvider] soft damping\n" << std::flush;
+        NeutralSoftDampingRetention();
         std::cout << "[Physics:JoltProvider] DataModel lifecycle\n" << std::flush;
         DataModelAdmissionAndStreaming();
         std::cout << "[Physics:JoltProvider] DataModel motors/CCD\n" << std::flush;
