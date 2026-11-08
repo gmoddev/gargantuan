@@ -237,6 +237,7 @@ namespace {
         const int BackgroundWorkers = std::max(0, Config.Workers - 1);
         ContactCounter Contacts;
         JoltWorld World(BackgroundWorkers, EnableContact);
+        PhysicsJoltEvaluation::ApplyFullUpdateSleepClock(World.World);
         World.World.SetSoftBodyContactListener(&Contacts);
         const bool Horizontal = Config.Case == "SphereOnCloth";
         const bool IsRubber = Config.Case == "RubberPush";
@@ -671,6 +672,7 @@ namespace {
             FullInternalObservationCoverage = false;
 #endif
         return {{"Backend", "Jolt"}, {"Case", Config.Case}, {"ContactEnabled", EnableContact},
+                {"FullUpdateSleepClock", PhysicsJoltEvaluation::FullUpdateSleepClockEnabled(World.World)},
                 {"Frames", std::move(Frames)}, {"Finite", Finite}, {"MaxEdgeStretch", MaxStretch},
                 {"MaxVolumeError", MaxVolumeError}, {"MaxPinDrift", MaxPinDrift},
                 {"MaxParticlePenetration", MaxParticlePenetration},

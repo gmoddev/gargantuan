@@ -198,7 +198,8 @@ def NativeStepTime(Updates, Steps, Iterations):
 
 
 def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
-                    IntegrationsPerFrame=None, VelocityReconstruction="difference", ConstraintSweeps=1):
+                    IntegrationsPerFrame=None, VelocityReconstruction="difference", ConstraintSweeps=1,
+                    FullUpdateSleepClock=False):
     Updates = IntegrationsPerFrame if IntegrationsPerFrame is not None else (96 if Material == "1e-5" else 192)
     if not isinstance(Updates, int) or not 1 <= Updates <= 384:
         raise ValueError("[Physics:ScheduledEnergy] Spring calibration cadence outside 1..384")
@@ -228,6 +229,8 @@ def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
     assert PristineConfig["Steps"] == ObservedConfig["Steps"] == 1
     assert PristineConfig["Iterations"] == ObservedConfig["Iterations"] == 1
     assert PristineConfig["ConstraintSweeps"] == ObservedConfig["ConstraintSweeps"] == ConstraintSweeps
+    assert PristineConfig.get("FullUpdateSleepClock") is FullUpdateSleepClock
+    assert ObservedConfig.get("FullUpdateSleepClock") is FullUpdateSleepClock
     assert PristineConfig["InternalIntegrationDt"] == ObservedConfig["InternalIntegrationDt"] == ExpectedDt
     assert PristineConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
     assert ObservedConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
@@ -252,6 +255,7 @@ def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
                       Score["CompleteBoundedPass"])
     return {"Name": Name, "MaterialCompliance": Material, "WorldUpdates": Updates,
             "InternalIntegrationDt": ExpectedDt, "ConstraintSweeps": ConstraintSweeps,
+            "FullUpdateSleepClock": FullUpdateSleepClock,
             "VelocityReconstruction": VelocityReconstruction,
             "PristineSeconds": PristineSeconds, "ObservedSeconds": ObservedSeconds,
             "PristineRaw": PristinePath.name, "ObservedRaw": ObservedPath.name,
@@ -271,6 +275,7 @@ def Main():
     Parser.add_argument("--velocity-reconstruction", choices=("difference", "delta", "applieddelta"),
                         default="difference")
     Parser.add_argument("--constraint-sweeps", type=int, choices=(1, 2, 4, 8), default=1)
+    Parser.add_argument("--full-update-sleep-clock", action="store_true")
     Arguments = Parser.parse_args()
     if Arguments.threads < 1 or Arguments.threads > 8:
         Parser.error("--threads must be between 1 and 8")
@@ -286,7 +291,8 @@ def Main():
         for Material in ("1e-5", "1e-6"):
             Calibration = CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
                 VelocityReconstruction=Arguments.velocity_reconstruction,
-                ConstraintSweeps=Arguments.constraint_sweeps)
+                ConstraintSweeps=Arguments.constraint_sweeps,
+                FullUpdateSleepClock=Arguments.full_update_sleep_clock)
             Calibrations[Material] = Calibration
             (Output / "Calibrations.json").write_text(json.dumps(Calibrations, indent=2, allow_nan=False), encoding="utf-8")
             print(json.dumps({"Name": Calibration["Name"], "Status": Calibration["Status"]}), flush=True)
@@ -311,6 +317,8 @@ def Main():
             PristineConfig, PristineFrames, PristineMicrosteps, _ = ReadPublished(PristinePath)
             ObservedConfig, ObservedFrames, ObservedMicrosteps, _ = ReadPublished(ObservedPath)
             assert PristineConfig["ConstraintSweeps"] == ObservedConfig["ConstraintSweeps"] == Arguments.constraint_sweeps
+            assert PristineConfig.get("FullUpdateSleepClock") is Arguments.full_update_sleep_clock
+            assert ObservedConfig.get("FullUpdateSleepClock") is Arguments.full_update_sleep_clock
             assert PristineConfig["VelocityReconstruction"] == ObservedConfig["VelocityReconstruction"] == Arguments.velocity_reconstruction
             assert PristineConfig["AllEdgesPositiveCompliance"] and ObservedConfig["AllEdgesPositiveCompliance"]
             assert PristineConfig["ZeroGravity"] and ObservedConfig["ZeroGravity"]
@@ -337,6 +345,7 @@ def Main():
             Receipt = {"Name": Name, "Fixture": Fixture, "MaterialCompliance": Material,
                        "CollisionSteps": Steps, "SoftIterations": Iterations, "WorldUpdates": Updates,
                        "ConstraintSweeps": Arguments.constraint_sweeps,
+                       "FullUpdateSleepClock": Arguments.full_update_sleep_clock,
                        "VelocityReconstruction": Arguments.velocity_reconstruction,
                        "Frames": Frames, "Threads": Arguments.threads,
                        "SpringCalibration": Calibrations[Material]["Name"],
@@ -357,6 +366,7 @@ def Main():
         raise
     Summary = {"Cases": len(Receipts), "SpringCalibrations": Calibrations, "HarnessQualified": True,
                "ConstraintSweeps": Arguments.constraint_sweeps,
+               "FullUpdateSleepClock": Arguments.full_update_sleep_clock,
                "VelocityReconstruction": Arguments.velocity_reconstruction,
                "PhysicallyQualified": sum(Receipt["Status"] == "PASS_BOUNDED_SCHEDULED_REFERENCE_MODEL" for Receipt in Receipts),
                "ObservedBoundRejections": sum(not Receipt["Score"]["CompleteBoundedPass"] for Receipt in Receipts),

@@ -11,6 +11,28 @@ inline constexpr bool NumericalReconstructionPatch = true;
 #else
 inline constexpr bool NumericalReconstructionPatch = false;
 #endif
+#ifdef PHYSICS_GANTRIA_SLEEP_FIX
+inline constexpr bool FullUpdateSleepClock = true;
+#else
+inline constexpr bool FullUpdateSleepClock = false;
+#endif
+template<class WorldType> void ApplyFullUpdateSleepClock(WorldType &World) {
+#ifdef PHYSICS_GANTRIA_SLEEP_FIX
+    auto Settings = World.GetPhysicsSettings();
+    Settings.mUseFullUpdateDeltaForSleep = true;
+    World.SetPhysicsSettings(Settings);
+#else
+    (void)World;
+#endif
+}
+template<class WorldType> bool FullUpdateSleepClockEnabled(const WorldType &World) {
+#ifdef PHYSICS_GANTRIA_SLEEP_FIX
+    return World.GetPhysicsSettings().mUseFullUpdateDeltaForSleep;
+#else
+    (void)World;
+    return false;
+#endif
+}
 inline int ParseVelocityReconstruction(std::string_view Value) {
     if (Value == "difference") return 0;
     if (Value == "delta") return 1;

@@ -352,6 +352,7 @@ int main(int ArgCount,char** Args) {
             JPH::TempAllocatorImpl Temp(32*1024*1024);
             JPH::JobSystemThreadPool Jobs(JPH::cMaxPhysicsJobs,JPH::cMaxPhysicsBarriers,Config.Workers-1);
             JPH::PhysicsSystem World; World.Init(8192,0,16384,8192,Layer,Broad,Pair);
+            PhysicsJoltEvaluation::ApplyFullUpdateSleepClock(World);
             World.SetGravity(JPH::Vec3::sZero()); World.SetSoftBodyContactListener(&Contact);
             auto Shared=GetCloth();
             PhysicsJoltEvaluation::ValidateVelocityConstraints(*Shared, Config.VelocityReconstruction);
@@ -463,6 +464,7 @@ int main(int ArgCount,char** Args) {
             const bool PositiveCompliance=std::all_of(Shared->mEdgeConstraints.begin(),Shared->mEdgeConstraints.end(),[](const auto& E){return E.mCompliance>0;});
             std::cout<<Json({{"Type","Config"},{"Backend","IndependentNativeJolt"},{"Jolt","e77f175595e64cb44218cc9d9d56fc365ad0e36a"},
                 {"Frames",Config.Frames},{"Steps",Config.Steps},{"Iterations",Config.Iterations},{"ConstraintSweeps",Config.ConstraintSweeps},{"Workers",Config.Workers},
+                {"FullUpdateSleepClock",PhysicsJoltEvaluation::FullUpdateSleepClockEnabled(World)},
                 {"Compliance",Config.Compliance},{"BendCompliance",Config.BendCompliance},{"Damping",Config.Damping},
                 {"Friction",Config.Friction},{"Restitution",Config.Restitution},{"Pinned",Config.Pinned},{"Contact",Config.Contact},
                 {"Dynamic",Config.Dynamic},{"Seed",Config.Seed},{"RigidMass",Mass},{"SphereInertia",Inertia},

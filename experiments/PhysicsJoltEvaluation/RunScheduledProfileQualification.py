@@ -139,7 +139,8 @@ def RigidResponse(Frames, Fixture, InitialSpeed):
 
 def RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture, Material,
                     Steps, Iterations, Updates, Frames, Workers, Extra=(), CompressRaw=False,
-                    CalibrationIntegrationDt=None, VelocityReconstruction="difference"):
+                    CalibrationIntegrationDt=None, VelocityReconstruction="difference",
+                    FullUpdateSleepClock=False):
     Common = Options(Material, Steps, Iterations, Updates, Frames, Workers, Fixture, Extra,
                      VelocityReconstruction)
     PristinePath = Output / f"{Name}.pristine.jsonl"
@@ -154,6 +155,8 @@ def RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture, Mater
     ObservedConfig, ObservedFrames, ObservedMicrosteps, _ = ReadPublished(ObservedPath)
     RequestedSweeps = int(Extra[list(Extra).index("--constraint-sweeps") + 1]) if "--constraint-sweeps" in Extra else 1
     assert PristineConfig.get("ConstraintSweeps", 1) == ObservedConfig.get("ConstraintSweeps", 1) == RequestedSweeps
+    assert PristineConfig.get("FullUpdateSleepClock") is FullUpdateSleepClock
+    assert ObservedConfig.get("FullUpdateSleepClock") is FullUpdateSleepClock
     ExpectedDt = NativeStepTime(Updates, Steps, Iterations)
     assert PristineConfig["InternalIntegrationDt"] == ObservedConfig["InternalIntegrationDt"] == ExpectedDt
     assert PristineConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
@@ -182,6 +185,7 @@ def RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture, Mater
             "ExpectedReconstruction": VelocityReconstruction,
             "Frames": Frames, "Workers": Workers, "CollisionSteps": Steps,
             "SoftIterations": Iterations, "ConstraintSweeps": RequestedSweeps,
+            "FullUpdateSleepClock": FullUpdateSleepClock,
             "WorldUpdates": Updates, "ExtraOptions": list(Extra),
             "PristineRaw": PristinePath.name, "ObservedRaw": ObservedPath.name,
             "SolverRaw": SolverPath.name, "FrameStateSha256": FrameDigest(ObservedFrames),
@@ -203,7 +207,8 @@ def RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture, Mater
 
 def RunTimingCase(PristineBinary, Output, Name, Fixture, Material, Steps,
                   Iterations, Updates, Frames, Workers, ExpectedDigest, CompressRaw=False,
-                  VelocityReconstruction="difference", ConstraintSweeps=1):
+                  VelocityReconstruction="difference", ConstraintSweeps=1,
+                  FullUpdateSleepClock=False):
     PathName = Output / f"{Name}.timing.jsonl"
     Common = Options(Material, Steps, Iterations, Updates, Frames, Workers, Fixture,
                      Extra=("--constraint-sweeps", str(ConstraintSweeps)),
@@ -214,10 +219,12 @@ def RunTimingCase(PristineBinary, Output, Name, Fixture, Material, Steps,
     assert TimingConfig["InternalIntegrationDt"] == NativeStepTime(Updates, Steps, Iterations)
     assert TimingConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
     assert TimingConfig.get("ConstraintSweeps", 1) == ConstraintSweeps
+    assert TimingConfig.get("FullUpdateSleepClock") is FullUpdateSleepClock
     Digest = FrameDigest(FramesData)
     assert Digest == ExpectedDigest, f"Frame-only timing changed physical state: {Name}"
     Times = [float(Frame["StepMs"]) for Frame in FramesData]
     Receipt = {"Name": Name, "ConstraintSweeps": ConstraintSweeps,
+            "FullUpdateSleepClock": FullUpdateSleepClock,
             "Raw": PathName.name, "FrameStateSha256": Digest,
             "FrameParity": True, "WallSeconds": Wall,
             "NativeUpdateTotalMs": sum(Times), "NativeUpdateMedianFrameMs": statistics.median(Times),
@@ -243,6 +250,7 @@ def Main():
     Parser.add_argument("--velocity-reconstruction", choices=("difference", "delta", "applieddelta"),
                         default="difference")
     Parser.add_argument("--constraint-sweeps", type=int, choices=(1, 2, 4, 8), default=1)
+    Parser.add_argument("--full-update-sleep-clock", action="store_true")
     Arguments = Parser.parse_args()
     if (Arguments.world_updates < 1 or Arguments.world_updates > 384 or
             Arguments.steps < 1 or Arguments.steps > 96 or
@@ -279,12 +287,14 @@ def Main():
                                           ObservedBinary, Output, CalMaterial,
                                           IntegrationsPerFrame=Cadence,
                                           VelocityReconstruction=Arguments.velocity_reconstruction,
-                                          ConstraintSweeps=Arguments.constraint_sweeps)
+                                          ConstraintSweeps=Arguments.constraint_sweeps,
+                                          FullUpdateSleepClock=Arguments.full_update_sleep_clock)
             Calibrations[CalMaterial] = Calibration
             (Output / "Calibrations.json").write_text(json.dumps(Calibrations, indent=2, allow_nan=False), encoding="utf-8")
             print(json.dumps({"Name": Calibration["Name"], "Status": Calibration["Status"]}), flush=True)
         assert all(Calibration["VelocityReconstruction"] == Arguments.velocity_reconstruction
                    and Calibration["ConstraintSweeps"] == Arguments.constraint_sweeps
+                   and Calibration["FullUpdateSleepClock"] is Arguments.full_update_sleep_clock
                    for Calibration in Calibrations.values())
         for Fixture in ("C1", "C2"):
             for Workers in (1, 2, 8):
@@ -296,7 +306,8 @@ def Main():
                                               Extra=("--constraint-sweeps", str(Arguments.constraint_sweeps)),
                                               CompressRaw=Arguments.compress_raw,
                                               CalibrationIntegrationDt=Calibrations[Material]["InternalIntegrationDt"],
-                                              VelocityReconstruction=Arguments.velocity_reconstruction)
+                                              VelocityReconstruction=Arguments.velocity_reconstruction,
+                                              FullUpdateSleepClock=Arguments.full_update_sleep_clock)
                     Receipts.append(Receipt)
                     Group.append(Receipt)
                     (Output / "Receipts.json").write_text(json.dumps(Receipts, indent=2, allow_nan=False), encoding="utf-8")
@@ -308,7 +319,8 @@ def Main():
                                        Material, Steps, Iterations, Updates, 600, Workers,
                                        Group[0]["FrameStateSha256"], Arguments.compress_raw,
                                        Arguments.velocity_reconstruction,
-                                       Arguments.constraint_sweeps)
+                                       Arguments.constraint_sweeps,
+                                       Arguments.full_update_sleep_clock)
                 TimingReceipts.append(Timing)
                 (Output / "TimingReceipts.json").write_text(json.dumps(TimingReceipts, indent=2), encoding="utf-8")
         for Fixture in ("C1", "C2"):
@@ -334,7 +346,7 @@ def Main():
                                       Frames, 1, CaseExtra, Arguments.compress_raw,
                                       Calibrations[Material]["InternalIntegrationDt"]
                                       if not Name.startswith("Negative-") else None,
-                                      CaseMode)
+                                      CaseMode, Arguments.full_update_sleep_clock)
             Receipts.append(Receipt)
             (Output / "Receipts.json").write_text(json.dumps(Receipts, indent=2, allow_nan=False), encoding="utf-8")
             print(json.dumps({"Name": Name, "PhysicalPass": Receipt["PhysicalPass"],
@@ -348,6 +360,8 @@ def Main():
     EnergyControlRejections = sum(bool(R["Score"]["FirstNecessaryKineticFailure"] or
                                        R["Score"]["FirstReferenceModelFailure"]) for R in Negatives)
     RequiredGate = bool(Calibrations[Material]["Calibrated"] and all(R["PhysicalPass"] for R in MainCases) and
+                        all(R["FullUpdateSleepClock"] is Arguments.full_update_sleep_clock for R in Receipts) and
+                        all(R["FullUpdateSleepClock"] is Arguments.full_update_sleep_clock for R in TimingReceipts) and
                         all(R["ConstraintSweeps"] == Arguments.constraint_sweeps for R in MainCases) and
                         all(R["ConstraintSweeps"] == 1 for R in Negatives) and
                         EnergyControlRejections == 2 and
@@ -357,6 +371,7 @@ def Main():
                    "SoftIterations": Iterations, "ConstraintSweeps": Arguments.constraint_sweeps},
                "VelocityReconstruction": Arguments.velocity_reconstruction,
                "ConstraintSweeps": Arguments.constraint_sweeps,
+               "FullUpdateSleepClock": Arguments.full_update_sleep_clock,
                "NegativeControlConstraintSweeps": 1,
                "NegativeControlVelocityReconstruction": "difference",
                "RawPhysicsCompression": "gzip-mtime0-lossless-verified" if Arguments.compress_raw else "none",
