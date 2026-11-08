@@ -39,7 +39,7 @@ def Main() -> None:
     Parser.add_argument("jolt_log", type=Path)
     Parser.add_argument("xpbd_log", type=Path)
     Parser.add_argument("--envelope", type=Path,
-                        help="JSON object of maximum absolute errors for every relevant quality field")
+                        help="JSON maximum pair errors and absolute physical ranges for each quality field")
     Arguments = Parser.parse_args()
     Jolt = ReadSummary(Arguments.jolt_log)
     Xpbd = ReadSummary(Arguments.xpbd_log)
@@ -96,6 +96,19 @@ def Main() -> None:
             if Field not in Envelope or not isinstance(Envelope[Field], (float, int)) or \
                     not math.isfinite(Envelope[Field]) or Envelope[Field] < 0:
                 raise ValueError(f"Envelope needs a finite nonnegative {Field} threshold")
+        AbsoluteRanges = Envelope.get("absolute_ranges")
+        if not isinstance(AbsoluteRanges, dict):
+            raise ValueError("Envelope needs absolute_ranges for every quality field")
+        for Field in Fields:
+            Range = AbsoluteRanges.get(Field)
+            if not isinstance(Range, list) or len(Range) != 2 or \
+                    any(not isinstance(Value, (int, float)) or
+                        not math.isfinite(Value) for Value in Range) or Range[0] > Range[1]:
+                raise ValueError(f"Envelope needs a finite [minimum, maximum] absolute range for {Field}")
+        AbsoluteQualityPassed = all(
+            AbsoluteRanges[Field][0] <= float(Summary[Field]) <= AbsoluteRanges[Field][1]
+            for Field in Fields for Summary in (Jolt, Xpbd)
+        )
         ContactBandReached = not Coupled or (
             int(Jolt["observed_contact_band"]) == 1 and
             int(Xpbd["observed_contact_band"]) == 1 and
@@ -112,8 +125,11 @@ def Main() -> None:
             float(Xpbd["max_poststep_penetration"]) <= Envelope["maximum_allowed_penetration"]
         )
         Comparable = all(Errors[Field] <= Envelope[Field] for Field in Fields) and \
-            ContactBandReached and PenetrationBounded
+            AbsoluteQualityPassed and ContactBandReached and PenetrationBounded
         Result["quality_envelope"] = {Field: Envelope[Field] for Field in Fields}
+        Result["absolute_quality_ranges"] = {
+            Field: AbsoluteRanges[Field] for Field in Fields}
+        Result["absolute_quality_passed"] = AbsoluteQualityPassed
         Result["contact_band_reached"] = ContactBandReached
         Result["penetration_bounded"] = PenetrationBounded
         Result["quality_comparable"] = Comparable

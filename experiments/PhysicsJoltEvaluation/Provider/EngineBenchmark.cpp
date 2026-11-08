@@ -29,6 +29,11 @@ namespace gargantuan {
             World.Physics = PhysicsWorld(std::move(Provider.Rigid));
             World.Deformables = SoftBodyWorld(std::move(Provider.Soft));
         }
+        static void SetXpbdWorkerLimit(WorldRoot &World, int Workers) {
+            SoftBodyWorldLimits Limits;
+            Limits.MaximumWorkers = Workers;
+            World.Deformables = SoftBodyWorld(Limits);
+        }
         static std::optional<SoftBodyState> State(const WorldRoot &World, ObjectId Object) {
             const auto Found = World.DeformableStates.find(Object);
             return Found == World.DeformableStates.end() ? std::nullopt :
@@ -79,7 +84,7 @@ int main(int ArgumentCount, char **Arguments) {
     PhysicsEvaluation::InstallPhysicsAllocators();
     try {
         if (ArgumentCount != 6)
-            throw std::invalid_argument("Usage: EngineBenchmark jolt|xpbd scene none|static-sphere frames[1..30] jolt-workers[1..8]");
+            throw std::invalid_argument("Usage: EngineBenchmark jolt|xpbd scene none|static-sphere frames[1..30] workers[1..8]");
         const std::string Backend = Arguments[1];
         if (Backend != "jolt" && Backend != "xpbd")
             throw std::invalid_argument("Backend must be jolt or xpbd");
@@ -88,9 +93,9 @@ int main(int ArgumentCount, char **Arguments) {
         if (Coupling != "none" && Coupling != "static-sphere")
             throw std::invalid_argument("Coupling must be none or static-sphere");
         const int Frames = std::stoi(Arguments[4]);
-        const int JoltWorkers = std::stoi(Arguments[5]);
-        if (Frames < 1 || Frames > 30 || JoltWorkers < 1 || JoltWorkers > 8)
-            throw std::invalid_argument("Frame or Jolt worker budget out of bounds");
+        const int WorkerBudget = std::stoi(Arguments[5]);
+        if (Frames < 1 || Frames > 30 || WorkerBudget < 1 || WorkerBudget > 8)
+            throw std::invalid_argument("Frame or worker budget out of bounds");
 
         gargantuan::BootstrapNativeRuntimeSchema();
         auto Game = std::make_shared<DataModel>();
@@ -100,8 +105,8 @@ int main(int ArgumentCount, char **Arguments) {
             PhysicsWorldConfig Config;
             Config.Gravity = {0, -9.81f, 0};
             WorldRootTestAccess::Inject(*World,
-                PhysicsEvaluation::CreateUnifiedJoltProvider(Config, {}, JoltWorkers));
-        }
+                PhysicsEvaluation::CreateUnifiedJoltProvider(Config, {}, WorkerBudget));
+        } else WorldRootTestAccess::SetXpbdWorkerLimit(*World, WorkerBudget);
         World->SetGravity(9.81f);
         std::vector<BodyRecord> Bodies;
         std::vector<glm::vec3> SphereCenters;
@@ -185,7 +190,7 @@ int main(int ArgumentCount, char **Arguments) {
         std::size_t XpbdWorkersActual = 0, XpbdJobsDispatched = 0;
         std::cout << "[Physics:EngineBenchmark] backend=" << Backend
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
-            << " frames=" << Frames << " jolt_workers_requested=" << JoltWorkers
+            << " frames=" << Frames << " workers_requested=" << WorkerBudget
             << " vertices=" << Vertices << " constraints=" << Constraints << '\n' << std::flush;
         for (int Frame = 0; Frame < Frames; ++Frame) {
             const auto Start = Clock::now();
@@ -229,7 +234,7 @@ int main(int ArgumentCount, char **Arguments) {
         const auto Median = 0.5 * (Sorted[(Sorted.size() - 1) / 2] + Sorted[Sorted.size() / 2]);
         std::cout << "[Physics:EngineBenchmark] summary backend=" << Backend
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
-            << " frames=" << Frames << " jolt_workers_requested=" << JoltWorkers
+            << " frames=" << Frames << " workers_requested=" << WorkerBudget
             << " xpbd_workers_actual=" << XpbdWorkersActual
             << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
             << " vertices=" << Vertices << " constraints=" << Constraints

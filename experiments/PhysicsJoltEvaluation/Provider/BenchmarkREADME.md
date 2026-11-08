@@ -58,7 +58,9 @@ revisions with stable identities and topology.
 `CompareBenchmark.py jolt.log xpbd.log` emits absolute differences for those
 physical metrics and leaves `timing_winner` null. Supplying a reviewed JSON
 envelope with `--envelope limits.json` permits a timing winner only when every
-relevant absolute error is within its named threshold and both requested
+relevant pair difference is within its named threshold, each backend's value
+is within a reviewed `absolute_ranges` interval for every relevant metric,
+and both requested
 worker counts equal the XPBD profile's actual worker count. The envelope requires
 `mean_y`, `center_y`, `max_pin_error`, `mean_edge_strain`, and
 `max_edge_strain`; rubber also requires `mean_volume_ratio`. These thresholds
@@ -74,6 +76,11 @@ proxies; they do not prove a solver contact was generated. The helper withholds
 a coupled timing winner until contact callbacks or a separate trajectory
 control establish actual response. The comparison rejects mismatched scenes,
 coupling choices, or frame counts.
+For example, an envelope must include `"absolute_ranges": {"max_pin_error":
+[0, 0.05], ...}` with a finite two-sided range for every reported quality
+field. The ranges are scene-specific physical acceptance limits chosen before
+examining the paired timing result. Pair differences alone cannot establish
+that either material stayed within a usable shape envelope.
 It also withholds a timing winner unless host, OS, build stamp, executable
 fingerprint, and explicit run-pair identifier match. Pool capacity and dispatched jobs are both reported:
 XPBD submits one job per body, so one-body scenes cannot occupy its whole pool.
@@ -113,6 +120,7 @@ includes pending-input application, rigid step, motion/event publication,
 `BuildSoftBodyColliders()` on both backends, soft step, and deformable state
 publication. It excludes game loop scheduling, rendering, networking, and
 setup/admission. `physics_step_wall_ms` is therefore a physics-call cost, not
-whole Engine frame time. The worker argument configures Jolt only; XPBD uses
-the production default pool and reports its actual worker/job counts. Use
-those fields when comparing costs.
+whole Engine frame time. The worker argument caps both backends through the
+existing test friend seam before admission; XPBD is still created by the
+production factory and reports its actual worker/job counts. Use the actual
+counts when comparing costs.
