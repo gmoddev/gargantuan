@@ -409,7 +409,7 @@ int main(int ArgumentCount, char **Arguments) {
                 << " xpbd_step_ms=" << (BackendName == "xpbd" ? TailTime : 0.0)
                 << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
                 << " xpbd_worker_utilization=" <<
-                    (BackendName == "xpbd" ? XpbdUtilizations.back() : 0.0)
+                    (BackendName == "xpbd" ? Result.Profile.WorkerUtilization : 0.0)
                 << " total_ms=" << (WorldTime + TailTime) << '\n' << std::flush;
             if (Coupling == "static-sphere") {
                 FinalMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
