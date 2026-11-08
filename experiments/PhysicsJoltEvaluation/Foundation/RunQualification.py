@@ -16,9 +16,12 @@ Evidence = Engine / 'foundation-evidence'
 Evidence.mkdir(exist_ok=True)
 Convergence = os.environ.get('GANTRIA_CONVERGENCE_SCREEN') == '1'
 ConvergenceQualification = Convergence and os.environ.get('GANTRIA_CONVERGENCE_KIND') == 'qualify'
+SleepQualification = os.environ.get('GANTRIA_SLEEP_QUALIFICATION') == '1'
+assert not SleepQualification or ConvergenceQualification
 ConvergenceIterations = int(os.environ.get('GANTRIA_CONVERGENCE_ITERATIONS', '6'))
 assert ConvergenceIterations in (5, 6)
-Expected = ('25658bcf45f21bb2674d47952638c31c7d0b1467' if Convergence else
+Expected = ('f3838f1222c35a494736e9b3d1852461db51523d' if SleepQualification else
+            '25658bcf45f21bb2674d47952638c31c7d0b1467' if Convergence else
             '109be79fa82be0b306c56e4b4357675ed7843767')
 Receipts = []
 
@@ -41,6 +44,7 @@ Source = {'Engine': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=En
           'Jolt': Actual, 'Upstream': 'e77f175595e64cb44218cc9d9d56fc365ad0e36a',
           'Platform': platform.platform(), 'LibraryProfile': 'SSE2 deterministic, two compiler jobs',
           'RetainedLambdaConvergence': Convergence,
+          'FullUpdateSleepClock': SleepQualification,
           'CandidateSoftIterations': ConvergenceIterations if ConvergenceQualification else None}
 (Evidence / 'Source.json').write_text(json.dumps(Source, indent=2), encoding='utf-8')
 Run('ObserverWorktree', ['git', '-C', Jolt, 'worktree', 'add', '--detach', ObservedJolt, Actual])
@@ -59,6 +63,8 @@ for Mode, SourcePath in [('Pure', Jolt), ('Observed', ObservedJolt)]:
                '-DGANTRIA_OBSERVER=' + ('ON' if Mode == 'Observed' else 'OFF')]
     if Convergence:
         Options += ['-DGANTRIA_CONVERGENCE=ON']
+    if SleepQualification:
+        Options += ['-DGANTRIA_SLEEP_FIX=ON']
     if platform.system() != 'Windows':
         Options += ['-DCMAKE_CXX_COMPILER=clang++-19',
                     '-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14']
@@ -72,19 +78,21 @@ Suffix = '.exe' if os.name == 'nt' else ''
 Native = 'PhysicsJoltScheduledCouplingDiagnostic' + Suffix
 Unified = 'PhysicsJoltUnifiedCouplingQualification' + Suffix
 if ConvergenceQualification:
-    Run('ConvergenceRefinement', [sys.executable, Evaluation / 'Optimization/RunCadenceScreen.py',
-        '--pure', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
-        '--output', Evidence / 'ConvergenceRefinement', '--screen', 'convergence-refine'])
+    SleepOptions = ['--full-update-sleep-clock'] if SleepQualification else []
+    if not SleepQualification:
+        Run('ConvergenceRefinement', [sys.executable, Evaluation / 'Optimization/RunCadenceScreen.py',
+            '--pure', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
+            '--output', Evidence / 'ConvergenceRefinement', '--screen', 'convergence-refine'])
     Run('NativeConvergenceQualification', [sys.executable, Evaluation / 'RunScheduledProfileQualification.py',
         '--pristine', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
         '--output', Evidence / 'Native', '--world-updates', '2', '--steps', '8',
         '--iterations', str(ConvergenceIterations), '--compliance', '1e-6', '--velocity-reconstruction', 'delta',
-        '--constraint-sweeps', '2', '--compress-raw'])
+        '--constraint-sweeps', '2', '--compress-raw', *SleepOptions])
     Run('UnifiedConvergenceQualification', [sys.executable, Evaluation / 'RunUnifiedScheduledQualification.py',
         '--pristine', Builds['Pure'] / Unified, '--observed', Builds['Observed'] / Unified,
         '--output', Evidence / 'Unified', '--world-updates', '2', '--collision-steps', '8',
         '--soft-iterations', str(ConvergenceIterations), '--compliance', '1e-6', '--velocity-reconstruction', 'delta',
-        '--constraint-sweeps', '2', '--compress-raw'])
+        '--constraint-sweeps', '2', '--compress-raw', *SleepOptions])
 elif Convergence or os.environ.get('GANTRIA_CADENCE_SCREEN') == '1':
     Run('CadenceScreen', [sys.executable, Evaluation / 'Optimization/RunCadenceScreen.py',
         '--pure', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
