@@ -15,6 +15,7 @@ ObservedJolt = Engine / '.foundation-jolt-observed'
 Evidence = Engine / 'foundation-evidence'
 Evidence.mkdir(exist_ok=True)
 Convergence = os.environ.get('GANTRIA_CONVERGENCE_SCREEN') == '1'
+ConvergenceQualification = Convergence and os.environ.get('GANTRIA_CONVERGENCE_KIND') == 'qualify'
 Expected = ('25658bcf45f21bb2674d47952638c31c7d0b1467' if Convergence else
             '109be79fa82be0b306c56e4b4357675ed7843767')
 Receipts = []
@@ -67,7 +68,21 @@ for Mode, SourcePath in [('Pure', Jolt), ('Observed', ObservedJolt)]:
 Suffix = '.exe' if os.name == 'nt' else ''
 Native = 'PhysicsJoltScheduledCouplingDiagnostic' + Suffix
 Unified = 'PhysicsJoltUnifiedCouplingQualification' + Suffix
-if Convergence or os.environ.get('GANTRIA_CADENCE_SCREEN') == '1':
+if ConvergenceQualification:
+    Run('ConvergenceRefinement', [sys.executable, Evaluation / 'Optimization/RunCadenceScreen.py',
+        '--pure', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
+        '--output', Evidence / 'ConvergenceRefinement', '--screen', 'convergence-refine'])
+    Run('NativeConvergenceQualification', [sys.executable, Evaluation / 'RunScheduledProfileQualification.py',
+        '--pristine', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
+        '--output', Evidence / 'Native', '--world-updates', '2', '--steps', '8',
+        '--iterations', '6', '--compliance', '1e-6', '--velocity-reconstruction', 'delta',
+        '--constraint-sweeps', '2', '--compress-raw'])
+    Run('UnifiedConvergenceQualification', [sys.executable, Evaluation / 'RunUnifiedScheduledQualification.py',
+        '--pristine', Builds['Pure'] / Unified, '--observed', Builds['Observed'] / Unified,
+        '--output', Evidence / 'Unified', '--world-updates', '2', '--collision-steps', '8',
+        '--soft-iterations', '6', '--compliance', '1e-6', '--velocity-reconstruction', 'delta',
+        '--constraint-sweeps', '2', '--compress-raw'])
+elif Convergence or os.environ.get('GANTRIA_CADENCE_SCREEN') == '1':
     Run('CadenceScreen', [sys.executable, Evaluation / 'Optimization/RunCadenceScreen.py',
         '--pure', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
         '--output', Evidence / 'CadenceScreen',

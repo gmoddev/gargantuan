@@ -21,6 +21,17 @@ def WriteJson(PathName, Value):
 
 
 def GetCases(Screen):
+    if Screen == 'convergence-refine':
+        return [
+            (f'{Prefix}-W2-C8-I{Iterations}-Q{Sweeps}', Fixture, 2, 8,
+             Iterations, Frames, Extra + ('--constraint-sweeps', str(Sweeps)),
+             Sweeps)
+            for Iterations, Sweeps in ((1, 1), (6, 1), (3, 4), (5, 2))
+            for Prefix, Fixture, Frames, Extra in (
+                ('Free', 'Free', 150, ()),
+                ('Speed10', 'C2', 80, ('--speed', '10')),
+            )
+        ]
     if Screen == 'cadence':
         return [
             ('Free-W1-C4-I48', 'Free', 1, 4, 48, 1800, (), 1),
@@ -55,7 +66,7 @@ def Failure(Phase, Name):
 
 
 def CalibrationKey(Screen, Count, Sweeps):
-    return f'{Count}-Q{Sweeps}' if Screen == 'convergence' else str(Count)
+    return f'{Count}-Q{Sweeps}' if Screen.startswith('convergence') else str(Count)
 
 
 def Main(Arguments=None):
@@ -64,7 +75,7 @@ def Main(Arguments=None):
     Parser.add_argument('--observed', dest='Observed', type=Path, required=True)
     Parser.add_argument('--output', dest='Output', type=Path, required=True)
     Parser.add_argument('--screen', dest='Screen',
-                        choices=('cadence', 'soft-budget', 'convergence'),
+                        choices=('cadence', 'soft-budget', 'convergence', 'convergence-refine'),
                         default='cadence')
     Args = Parser.parse_args(Arguments)
     Args.Output.mkdir(parents=True, exist_ok=False)
