@@ -29,6 +29,8 @@ namespace {
         SoftBodyId Id;
         SoftBodyDefinition Definition;
         std::vector<glm::vec3> Rest;
+        std::uint64_t TopologyRevision = 0;
+        std::uint64_t LastVertexRevision = 0;
     };
     struct Quality {
         double MeanY = 0;
@@ -37,7 +39,11 @@ namespace {
         double MeanEdgeStrain = 0;
         double MaximumEdgeStrain = 0;
         double MeanVolumeRatio = 0;
+        double MeanTetraVolumeRatio = 0;
+        double MaximumTetraVolumeError = 0;
+        double MeanDiagonalStrain = 0;
         std::size_t EdgeCount = 0;
+        std::size_t DiagonalCount = 0;
     };
     Scene GetScene(const std::string &Name) {
         if (Name == "cloth4k") return {Name, false, 64, 1};
@@ -83,6 +89,7 @@ namespace {
                     ISoftBodyBackend &Backend) {
         Quality Result;
         double SumY = 0, SumCenterY = 0, SumEdgeStrain = 0, SumVolumeRatio = 0;
+        double SumTetraRatio = 0, SumDiagonalStrain = 0;
         std::size_t Vertices = 0, RubberBodies = 0;
         for (const auto &Record : Bodies) {
             const auto State = Backend.GetBodyState(Record.Id);
@@ -125,6 +132,53 @@ namespace {
                     }
             if (Definition.Kind == SoftBodyKind::Rubber) {
                 SumVolumeRatio += BoundsVolume(Positions) / BoundsVolume(Record.Rest);
+                double RestTetraVolume = 0, CurrentTetraVolume = 0;
+                const auto TetraVolume = [](const std::vector<glm::vec3> &Vertices,
+                                            std::size_t A, std::size_t B,
+                                            std::size_t C, std::size_t D) {
+                    const glm::dvec3 First = glm::dvec3(Vertices[B] - Vertices[A]);
+                    const glm::dvec3 Second = glm::dvec3(Vertices[C] - Vertices[A]);
+                    const glm::dvec3 Third = glm::dvec3(Vertices[D] - Vertices[A]);
+                    return std::abs(glm::dot(First, glm::cross(Second, Third))) / 6.0;
+                };
+                const auto Tetra = [&](std::size_t A, std::size_t B,
+                                       std::size_t C, std::size_t D) {
+                    const double RestVolume = TetraVolume(Record.Rest, A, B, C, D);
+                    const double CurrentVolume = TetraVolume(Positions, A, B, C, D);
+                    RestTetraVolume += RestVolume;
+                    CurrentTetraVolume += CurrentVolume;
+                    Result.MaximumTetraVolumeError = std::max(
+                        Result.MaximumTetraVolumeError,
+                        std::abs(CurrentVolume / RestVolume - 1.0));
+                };
+                const auto Diagonal = [&](std::size_t A, std::size_t B) {
+                    const double RestLength = glm::length(Record.Rest[B] - Record.Rest[A]);
+                    const double CurrentLength = glm::length(Positions[B] - Positions[A]);
+                    SumDiagonalStrain += std::abs(CurrentLength / RestLength - 1.0);
+                    ++Result.DiagonalCount;
+                };
+                for (std::uint32_t Z = 0; Z + 1 < ZCount; ++Z)
+                    for (std::uint32_t Y = 0; Y + 1 < Definition.ResolutionY; ++Y)
+                        for (std::uint32_t X = 0; X + 1 < Definition.ResolutionX; ++X) {
+                            const auto A = VertexIndex(Definition, X, Y, Z);
+                            const auto B = VertexIndex(Definition, X + 1, Y, Z);
+                            const auto C = VertexIndex(Definition, X, Y + 1, Z);
+                            const auto D = VertexIndex(Definition, X + 1, Y + 1, Z);
+                            const auto E = VertexIndex(Definition, X, Y, Z + 1);
+                            const auto F = VertexIndex(Definition, X + 1, Y, Z + 1);
+                            const auto G = VertexIndex(Definition, X, Y + 1, Z + 1);
+                            const auto H = VertexIndex(Definition, X + 1, Y + 1, Z + 1);
+                            Tetra(A, B, C, E);
+                            Tetra(B, D, C, H);
+                            Tetra(B, C, E, H);
+                            Tetra(B, E, F, H);
+                            Tetra(C, G, E, H);
+                            Diagonal(A, H);
+                            Diagonal(B, G);
+                            Diagonal(C, F);
+                            Diagonal(D, E);
+                        }
+                SumTetraRatio += CurrentTetraVolume / RestTetraVolume;
                 ++RubberBodies;
             }
         }
@@ -132,6 +186,9 @@ namespace {
         Result.CenterY = SumCenterY / Bodies.size();
         Result.MeanEdgeStrain = SumEdgeStrain / Result.EdgeCount;
         Result.MeanVolumeRatio = RubberBodies ? SumVolumeRatio / RubberBodies : 0;
+        Result.MeanTetraVolumeRatio = RubberBodies ? SumTetraRatio / RubberBodies : 0;
+        Result.MeanDiagonalStrain = Result.DiagonalCount ?
+            SumDiagonalStrain / Result.DiagonalCount : 0;
         return Result;
     }
     double Milliseconds(Clock::duration Duration) {
@@ -168,22 +225,32 @@ int main(int ArgumentCount, char **Arguments) {
         auto *Soft = BackendName == "xpbd" ? Xpbd.get() : Jolt.Soft.get();
         if (!Soft || !Soft->IsValid()) throw std::runtime_error("Soft provider creation failed");
         std::vector<BodyRecord> Bodies;
+        std::size_t Constraints = 0;
         for (std::uint32_t Index = 0; Index < SceneValue.Count; ++Index) {
             auto Definition = MakeDefinition(SceneValue, Index);
             const auto Id = Soft->CreateBody(Definition);
             if (!Id.IsValid()) throw std::runtime_error("Soft scene admission failed");
             const auto State = Soft->GetBodyState(Id);
             if (!State || !State->Positions) throw std::runtime_error("Initial soft state missing");
-            Bodies.push_back({Id, std::move(Definition), *State->Positions});
+            const auto Inspection = Soft->GetBodyInspection(Id);
+            if (!Inspection) throw std::runtime_error("Initial soft inspection missing");
+            Constraints += Inspection->ConstraintCount;
+            Bodies.push_back({Id, std::move(Definition), *State->Positions,
+                State->TopologyRevision, State->VertexRevision});
         }
         std::vector<SoftBodyCollider> Colliders;
+        double InitialMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
         if (Coupling == "static-sphere") {
             for (std::uint32_t Index = 0; Index < SceneValue.Count; ++Index) {
                 SoftBodyCollider Collider;
                 Collider.Shape.Kind = PhysicsShapeKind::Ball;
                 Collider.Shape.Size = {2, 2, 2};
-                Collider.Transform.Position = {20.0f * Index, 0, 0};
+                Collider.Transform.Position = {20.0f * Index +
+                    (SceneValue.Rubber ? 2.2f : 5.2f), 3.0f, 0};
                 Colliders.push_back(Collider);
+                for (const auto &Position : Bodies[Index].Rest)
+                    InitialMinimumSurfaceDistance = std::min(InitialMinimumSurfaceDistance,
+                        double(glm::length(Position - Collider.Transform.Position)) - 1.0);
                 if (BackendName == "jolt") {
                     PhysicsBodyDesc Description;
                     Description.Shape = Collider.Shape;
@@ -193,6 +260,8 @@ int main(int ArgumentCount, char **Arguments) {
                         throw std::runtime_error("Static rigid collider admission failed");
                 }
             }
+            if (InitialMinimumSurfaceDistance <= 0.0)
+                throw std::runtime_error("Coupled scene begins in collider penetration");
         }
         for (const auto &Record : Bodies) {
             const auto Count = Record.Rest.size() - Record.Definition.Attachments.size();
@@ -202,9 +271,13 @@ int main(int ArgumentCount, char **Arguments) {
                 throw std::runtime_error("Uniform impulse admission failed");
         }
         std::vector<double> TotalTimes;
-        std::vector<double> RigidTimes;
-        std::vector<double> SoftTimes;
+        std::vector<double> WorldTimes;
+        std::vector<double> TailTimes;
+        std::vector<double> XpbdUtilizations;
         std::size_t ActualXpbdWorkers = 0;
+        std::size_t XpbdJobsDispatched = 0;
+        double MinimumPoststepSurfaceDistance = std::numeric_limits<double>::infinity();
+        double FinalMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
         TotalTimes.reserve(Frames);
         std::cout << "[Physics:ProviderBenchmark] backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
@@ -223,18 +296,55 @@ int main(int ArgumentCount, char **Arguments) {
             if (Result.States.size() != Bodies.size() ||
                 Result.Profile.SimulatedBodies != Bodies.size() ||
                 Result.Profile.SimulatedVertices != Bodies.size() * Bodies.front().Rest.size() ||
-                Result.BodiesTruncated || Result.VerticesTruncated || Result.CollidersTruncated)
+                Result.Profile.FrozenBodies || Result.Profile.BacklogDrops ||
+                Result.Profile.StaleResults || Result.BodiesTruncated ||
+                Result.VerticesTruncated || Result.CollidersTruncated ||
+                std::any_of(Result.States.begin(), Result.States.end(),
+                    [](const auto &State) { return !State.Simulated; }))
                 throw std::runtime_error("Soft benchmark step lost a body or truncated work");
-            if (BackendName == "xpbd") ActualXpbdWorkers = Result.Profile.WorkerCount;
+            for (auto &Record : Bodies) {
+                const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
+                    [&](const auto &State) { return State.Body == Record.Id; });
+                if (Found == Result.States.end() || !Found->Positions ||
+                    Found->Positions->size() != Record.Rest.size() ||
+                    Found->TopologyRevision != Record.TopologyRevision ||
+                    Found->VertexRevision <= Record.LastVertexRevision)
+                    throw std::runtime_error("Soft benchmark published stale identity or revision");
+                Record.LastVertexRevision = Found->VertexRevision;
+            }
+            if (BackendName == "xpbd") {
+                ActualXpbdWorkers = Result.Profile.WorkerCount;
+                XpbdJobsDispatched = Result.Profile.JobsDispatched;
+                XpbdUtilizations.push_back(Result.Profile.WorkerUtilization);
+            }
             const auto Finish = Clock::now();
-            const double RigidTime = Milliseconds(AfterRigid - Start);
-            const double SoftTime = Milliseconds(Finish - AfterRigid);
-            RigidTimes.push_back(RigidTime);
-            SoftTimes.push_back(SoftTime);
-            TotalTimes.push_back(RigidTime + SoftTime);
+            const double WorldTime = Milliseconds(AfterRigid - Start);
+            const double TailTime = Milliseconds(Finish - AfterRigid);
+            WorldTimes.push_back(WorldTime);
+            TailTimes.push_back(TailTime);
+            TotalTimes.push_back(WorldTime + TailTime);
             std::cout << "[Physics:ProviderBenchmark] frame=" << Frame
-                << " rigid_ms=" << RigidTime << " soft_ms=" << SoftTime
+                << " jolt_world_ms=" << WorldTime
+                << " jolt_extract_ms=" << (BackendName == "jolt" ? TailTime : 0.0)
+                << " xpbd_step_ms=" << (BackendName == "xpbd" ? TailTime : 0.0)
+                << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
+                << " xpbd_worker_utilization=" <<
+                    (BackendName == "xpbd" ? XpbdUtilizations.back() : 0.0)
                 << " total_ms=" << TotalTimes.back() << '\n' << std::flush;
+            if (Coupling == "static-sphere") {
+                FinalMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
+                for (std::size_t Index = 0; Index < Bodies.size(); ++Index) {
+                    const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
+                        [&](const auto &State) { return State.Body == Bodies[Index].Id; });
+                    if (Found == Result.States.end() || !Found->Positions)
+                        throw std::runtime_error("Coupled soft state missing after step");
+                    for (const auto &Position : *Found->Positions)
+                        FinalMinimumSurfaceDistance = std::min(FinalMinimumSurfaceDistance,
+                            double(glm::length(Position - Colliders[Index].Transform.Position)) - 1.0);
+                }
+                MinimumPoststepSurfaceDistance = std::min(MinimumPoststepSurfaceDistance,
+                    FinalMinimumSurfaceDistance);
+            }
         }
         auto Sorted = TotalTimes;
         std::sort(Sorted.begin(), Sorted.end());
@@ -247,18 +357,39 @@ int main(int ArgumentCount, char **Arguments) {
         std::cout << "[Physics:ProviderBenchmark] summary backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
             << " frames=" << Frames << " workers_requested=" << Workers
+            << " constraints=" << Constraints
             << " xpbd_workers_actual=" << ActualXpbdWorkers
+            << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
+            << " xpbd_mean_worker_utilization=" <<
+                (BackendName == "xpbd" ? Mean(XpbdUtilizations) : 0.0)
             << " mean_total_ms=" << Mean(TotalTimes)
             << " median_total_ms=" << Median
             << " p95_total_ms=" << Sorted[std::size_t(std::ceil(0.95 * Sorted.size())) - 1]
-            << " mean_rigid_ms=" << Mean(RigidTimes)
-            << " mean_soft_ms=" << Mean(SoftTimes)
+            << " mean_jolt_world_ms=" << Mean(WorldTimes)
+            << " mean_jolt_extract_ms=" <<
+                (BackendName == "jolt" ? Mean(TailTimes) : 0.0)
+            << " mean_xpbd_step_ms=" <<
+                (BackendName == "xpbd" ? Mean(TailTimes) : 0.0)
             << " mean_y=" << QualityValue.MeanY
             << " center_y=" << QualityValue.CenterY
             << " max_pin_error=" << QualityValue.MaximumPinError
             << " mean_edge_strain=" << QualityValue.MeanEdgeStrain
             << " max_edge_strain=" << QualityValue.MaximumEdgeStrain
             << " mean_volume_ratio=" << QualityValue.MeanVolumeRatio
+            << " mean_tetra_volume_ratio=" << QualityValue.MeanTetraVolumeRatio
+            << " max_tetra_volume_error=" << QualityValue.MaximumTetraVolumeError
+            << " mean_diagonal_strain=" << QualityValue.MeanDiagonalStrain
+            << " initial_min_surface_distance=" <<
+                (Coupling == "static-sphere" ? InitialMinimumSurfaceDistance : 0.0)
+            << " minimum_poststep_surface_distance=" <<
+                (Coupling == "static-sphere" ? MinimumPoststepSurfaceDistance : 0.0)
+            << " final_min_surface_distance=" <<
+                (Coupling == "static-sphere" ? FinalMinimumSurfaceDistance : 0.0)
+            << " max_poststep_penetration=" <<
+                (Coupling == "static-sphere" ?
+                    std::max(0.0, -MinimumPoststepSurfaceDistance) : 0.0)
+            << " observed_contact_band=" <<
+                (Coupling == "static-sphere" && MinimumPoststepSurfaceDistance <= 0.15 ? 1 : 0)
             << " edge_count=" << QualityValue.EdgeCount << '\n' << std::flush;
         return 0;
     } catch (const std::exception &Error) {

@@ -6,13 +6,18 @@ import math
 from pathlib import Path
 
 
-QUALITY_FIELDS = (
+COMMON_FIELDS = (
     "mean_y",
     "center_y",
     "max_pin_error",
     "mean_edge_strain",
     "max_edge_strain",
+)
+RUBBER_FIELDS = (
     "mean_volume_ratio",
+    "mean_tetra_volume_ratio",
+    "max_tetra_volume_error",
+    "mean_diagonal_strain",
 )
 
 
@@ -23,7 +28,7 @@ def ReadSummary(PathValue: Path) -> dict[str, str]:
     if len(Matches) != 1:
         raise ValueError(f"{PathValue}: expected exactly one complete summary")
     Summary = dict(Token.split("=", 1) for Token in Matches[0].split())
-    for Field in QUALITY_FIELDS + ("mean_total_ms",):
+    for Field in COMMON_FIELDS + RUBBER_FIELDS + ("mean_total_ms",):
         if Field not in Summary or not math.isfinite(float(Summary[Field])):
             raise ValueError(f"{PathValue}: missing or nonfinite {Field}")
     return Summary
@@ -43,7 +48,11 @@ def Main() -> None:
     for Field in ("scene", "coupling", "frames"):
         if Jolt.get(Field) != Xpbd.get(Field):
             raise ValueError(f"Mismatched {Field}: {Jolt.get(Field)} vs {Xpbd.get(Field)}")
-    Fields = QUALITY_FIELDS if Jolt["scene"].startswith("rubber") else QUALITY_FIELDS[:-1]
+    Rubber = Jolt["scene"].startswith("rubber")
+    Coupled = Jolt["coupling"] == "static-sphere"
+    Fields = COMMON_FIELDS + (RUBBER_FIELDS if Rubber else ())
+    if Coupled:
+        Fields += ("max_poststep_penetration", "final_min_surface_distance")
     Errors = {Field: abs(float(Jolt[Field]) - float(Xpbd[Field])) for Field in Fields}
     BudgetMatched = int(Jolt["workers_requested"]) == int(Xpbd["workers_requested"]) == \
         int(Xpbd["xpbd_workers_actual"])
@@ -54,7 +63,12 @@ def Main() -> None:
         "jolt_workers_requested": int(Jolt["workers_requested"]),
         "xpbd_workers_requested": int(Xpbd["workers_requested"]),
         "xpbd_workers_actual": int(Xpbd["xpbd_workers_actual"]),
+        "xpbd_jobs_dispatched": int(Xpbd["xpbd_jobs_dispatched"]),
+        "xpbd_mean_worker_utilization": float(Xpbd["xpbd_mean_worker_utilization"]),
+        "jolt_constraints": int(Jolt["constraints"]),
+        "xpbd_constraints": int(Xpbd["constraints"]),
         "worker_count_matched": BudgetMatched,
+        "material_topology_comparable": not Rubber and Jolt["constraints"] == Xpbd["constraints"],
         "jolt_mean_total_ms": float(Jolt["mean_total_ms"]),
         "xpbd_mean_total_ms": float(Xpbd["mean_total_ms"]),
         "quality_absolute_errors": Errors,
@@ -69,10 +83,28 @@ def Main() -> None:
             if Field not in Envelope or not isinstance(Envelope[Field], (float, int)) or \
                     not math.isfinite(Envelope[Field]) or Envelope[Field] < 0:
                 raise ValueError(f"Envelope needs a finite nonnegative {Field} threshold")
-        Comparable = all(Errors[Field] <= Envelope[Field] for Field in Fields)
+        ContactBandReached = not Coupled or (
+            int(Jolt["observed_contact_band"]) == 1 and
+            int(Xpbd["observed_contact_band"]) == 1 and
+            float(Jolt["initial_min_surface_distance"]) > 0 and
+            float(Xpbd["initial_min_surface_distance"]) > 0
+        )
+        if Coupled and ("maximum_allowed_penetration" not in Envelope or
+                        not isinstance(Envelope["maximum_allowed_penetration"], (int, float)) or
+                        not math.isfinite(Envelope["maximum_allowed_penetration"]) or
+                        Envelope["maximum_allowed_penetration"] < 0):
+            raise ValueError("Coupled envelope needs finite nonnegative maximum_allowed_penetration")
+        PenetrationBounded = not Coupled or (
+            float(Jolt["max_poststep_penetration"]) <= Envelope["maximum_allowed_penetration"] and
+            float(Xpbd["max_poststep_penetration"]) <= Envelope["maximum_allowed_penetration"]
+        )
+        Comparable = all(Errors[Field] <= Envelope[Field] for Field in Fields) and \
+            ContactBandReached and PenetrationBounded
         Result["quality_envelope"] = {Field: Envelope[Field] for Field in Fields}
+        Result["contact_band_reached"] = ContactBandReached
+        Result["penetration_bounded"] = PenetrationBounded
         Result["quality_comparable"] = Comparable
-        if Comparable and BudgetMatched:
+        if Comparable and BudgetMatched and Result["material_topology_comparable"] and not Coupled:
             JoltTime = float(Jolt["mean_total_ms"])
             XpbdTime = float(Xpbd["mean_total_ms"])
             Result["timing_winner"] = "jolt" if JoltTime < XpbdTime else \
