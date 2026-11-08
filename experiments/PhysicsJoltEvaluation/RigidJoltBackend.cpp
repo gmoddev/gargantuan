@@ -1,4 +1,5 @@
 #include "RigidJoltBackend.hpp"
+#include "Provider/UnifiedJoltProvider.hpp"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>
@@ -14,6 +15,7 @@
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
@@ -22,12 +24,15 @@
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -170,6 +175,7 @@ namespace {
     struct BodySlot {
         std::uint32_t Generation = 1;
         bool Live = false;
+        bool Retired = false;
         JPH::BodyID Native;
         PhysicsBodyDesc Description;
         JPH::ShapeRefC Shape;
@@ -177,8 +183,38 @@ namespace {
     struct ConstraintSlot {
         std::uint32_t Generation = 1;
         bool Live = false;
+        bool Retired = false;
         PhysicsConstraintDesc Description;
         JPH::Ref<JPH::Constraint> Native;
+    };
+
+    class ContactCapture final : public JPH::ContactListener {
+    public:
+        void BeginStep() {
+            std::scoped_lock Lock(Mutex);
+            Observed.clear();
+        }
+        void OnContactAdded(const JPH::Body &A, const JPH::Body &B,
+                            const JPH::ContactManifold &, JPH::ContactSettings &) override {
+            Record(A, B);
+        }
+        void OnContactPersisted(const JPH::Body &A, const JPH::Body &B,
+                                const JPH::ContactManifold &, JPH::ContactSettings &) override {
+            Record(A, B);
+        }
+        std::set<std::pair<std::uint32_t, std::uint32_t>> TakeObserved() {
+            std::scoped_lock Lock(Mutex);
+            return std::move(Observed);
+        }
+    private:
+        void Record(const JPH::Body &A, const JPH::Body &B) {
+            const auto First = A.GetID().GetIndexAndSequenceNumber();
+            const auto Second = B.GetID().GetIndexAndSequenceNumber();
+            std::scoped_lock Lock(Mutex);
+            Observed.emplace(std::min(First, Second), std::max(First, Second));
+        }
+        std::mutex Mutex;
+        std::set<std::pair<std::uint32_t, std::uint32_t>> Observed;
     };
 
     class QueryBodyFilter final : public JPH::BodyFilter {
@@ -204,6 +240,7 @@ namespace {
 
     class RigidJoltBackend final : public IPhysicsBackend {
     public:
+        friend class JoltSoftBackend;
         RigidJoltBackend(const PhysicsWorldConfig &Config, int WorkerBudget)
             : Configuration(Config), Temp(32 * 1024 * 1024) {
             static JoltRuntime Runtime;
@@ -214,6 +251,7 @@ namespace {
                 JPH::cMaxPhysicsBarriers, WorkerBudget - 1);
             World.Init(65536, 0, 65536, 65536, Layers, Layers, Layers);
             World.SetGravity(ToJolt(Config.Gravity));
+            World.SetContactListener(&Contacts);
             BodySlots.emplace_back();
             ConstraintSlots.emplace_back();
             Valid = true;
@@ -260,7 +298,7 @@ namespace {
                 Motion == JPH::EMotionType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
             if (Native.IsInvalid()) return {};
             std::uint32_t Index = 1;
-            for (; Index < BodySlots.size() && BodySlots[Index].Live; ++Index) {}
+            for (; Index < BodySlots.size() && (BodySlots[Index].Live || BodySlots[Index].Retired); ++Index) {}
             if (Index == BodySlots.size()) BodySlots.emplace_back();
             auto &Slot = BodySlots[Index];
             Slot.Live = true;
@@ -276,17 +314,21 @@ namespace {
             auto *Slot = Find(Id);
             if (!Slot) return InvalidBody();
             if (!ValidBody(Description)) return {PhysicsOperationStatus::InvalidDescription, "Invalid Jolt body description"};
-            if (Description.Shape.Kind != Slot->Description.Shape.Kind ||
+            const bool ShapeChanged = Description.Shape.Kind != Slot->Description.Shape.Kind ||
                 Description.Shape.Size.x != Slot->Description.Shape.Size.x ||
                 Description.Shape.Size.y != Slot->Description.Shape.Size.y ||
                 Description.Shape.Size.z != Slot->Description.Shape.Size.z ||
-                Description.Shape.Mesh != Slot->Description.Shape.Mesh ||
-                Description.Density != Slot->Description.Density ||
-                Description.SleepEnabled != Slot->Description.SleepEnabled)
-                return Unsupported("Experimental Jolt shape, density, and sleep replacement are unsupported");
+                Description.Shape.Mesh != Slot->Description.Shape.Mesh;
+            JPH::ShapeRefC NewShape;
+            if (ShapeChanged) {
+                NewShape = MakeShape(Description.Shape);
+                if (!NewShape) return {PhysicsOperationStatus::InvalidDescription, "Invalid replacement shape"};
+            }
             const auto Layer = Layers.GetLayer(Description);
             if (Layer == JPH::cObjectLayerInvalid) return {PhysicsOperationStatus::ResourceLimit, "Jolt layer limit"};
             auto &Interface = World.GetBodyInterface();
+            if (ShapeChanged)
+                Interface.SetShape(Slot->Native, NewShape.GetPtr(), true, JPH::EActivation::Activate);
             const auto Motion = Description.Anchored ? JPH::EMotionType::Static
                 : Description.Kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic;
             if (Description.Anchored != Slot->Description.Anchored ||
@@ -309,6 +351,32 @@ namespace {
                     Description.MovingBodyCCD ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete);
             if (Motion != JPH::EMotionType::Static && Description.GravityScale != Slot->Description.GravityScale)
                 Interface.SetGravityFactor(Slot->Native, Description.GravityScale);
+            if (Description.Density != Slot->Description.Density || ShapeChanged ||
+                Description.LinearDamping != Slot->Description.LinearDamping ||
+                Description.AngularDamping != Slot->Description.AngularDamping ||
+                Description.SleepEnabled != Slot->Description.SleepEnabled) {
+                JPH::BodyLockWrite Lock(World.GetBodyLockInterface(), Slot->Native);
+                if (!Lock.Succeeded()) return {PhysicsOperationStatus::BackendFailure, "Jolt update body lock failed"};
+                auto &Body = Lock.GetBody();
+                if (Motion != JPH::EMotionType::Static)
+                    Body.SetAllowSleeping(Configuration.EnableSleep && Description.SleepEnabled);
+                if (auto *Properties = Body.GetMotionProperties()) {
+                    Properties->SetLinearDamping(Description.LinearDamping);
+                    Properties->SetAngularDamping(Description.AngularDamping);
+                    if (Motion == JPH::EMotionType::Dynamic &&
+                        (Description.Density != Slot->Description.Density || ShapeChanged)) {
+                        auto Mass = Body.GetShape()->GetMassProperties();
+                        const auto Size = Description.Shape.Size;
+                        const float Volume = Description.Shape.Kind == PhysicsShapeKind::Ball
+                            ? (4.0f / 3.0f) * 3.14159265358979323846f *
+                                std::pow(std::min({Size.x, Size.y, Size.z}) * 0.5f, 3)
+                            : Size.x * Size.y * Size.z;
+                        Mass.ScaleToMass(std::max(0.001f, Description.Density * Volume));
+                        Properties->SetMassProperties(JPH::EAllowedDOFs::All, Mass);
+                    }
+                }
+            }
+            if (ShapeChanged) Slot->Shape = NewShape;
             Slot->Description = Description;
             return {};
         }
@@ -325,9 +393,15 @@ namespace {
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
             NativeMap.erase(Slot->Native.GetIndexAndSequenceNumber());
+            for (auto It = PreviousContacts.begin(); It != PreviousContacts.end();) {
+                if (It->first == Slot->Native.GetIndexAndSequenceNumber() ||
+                    It->second == Slot->Native.GetIndexAndSequenceNumber()) It = PreviousContacts.erase(It);
+                else ++It;
+            }
             Slot->Shape = nullptr;
             Slot->Live = false;
-            ++Slot->Generation;
+            if (Slot->Generation == std::numeric_limits<std::uint32_t>::max()) Slot->Retired = true;
+            else ++Slot->Generation;
             return {};
         }
 
@@ -408,7 +482,8 @@ namespace {
             if (!Native) return {{}, Unsupported("Jolt constraint creation failed")};
             World.AddConstraint(Native.GetPtr());
             std::uint32_t Index = 1;
-            for (; Index < ConstraintSlots.size() && ConstraintSlots[Index].Live; ++Index) {}
+            for (; Index < ConstraintSlots.size() &&
+                (ConstraintSlots[Index].Live || ConstraintSlots[Index].Retired); ++Index) {}
             if (Index == ConstraintSlots.size()) ConstraintSlots.emplace_back();
             auto &Slot = ConstraintSlots[Index];
             Slot.Live = true; Slot.Native = Native; Slot.Description = Description;
@@ -421,7 +496,8 @@ namespace {
             World.RemoveConstraint(Slot->Native.GetPtr());
             Slot->Native = nullptr;
             Slot->Live = false;
-            ++Slot->Generation;
+            if (Slot->Generation == std::numeric_limits<std::uint32_t>::max()) Slot->Retired = true;
+            else ++Slot->Generation;
             --ActiveConstraints;
             return {};
         }
@@ -435,12 +511,38 @@ namespace {
             World.GetBodyInterface().AddImpulse(Slot->Native, ToJolt(Impulse));
             return {};
         }
+        PhysicsOperationResult ApplyAngularImpulse(PhysicsBodyId Id, glm::vec3 Impulse) override {
+            auto *Slot = Find(Id);
+            if (!Slot) return InvalidBody();
+            if (!Finite(Impulse) || Slot->Description.Kinematic)
+                return {PhysicsOperationStatus::InvalidDescription, "Angular impulse requires a finite dynamic body"};
+            if (!Slot->Description.Anchored) World.GetBodyInterface().AddAngularImpulse(Slot->Native, ToJolt(Impulse));
+            return {};
+        }
+        PhysicsOperationResult ApplyImpulseAtPosition(PhysicsBodyId Id, glm::vec3 Impulse,
+                                                     glm::vec3 Position) override {
+            auto *Slot = Find(Id);
+            if (!Slot) return InvalidBody();
+            if (!Finite(Impulse) || !Finite(Position) || Slot->Description.Kinematic)
+                return {PhysicsOperationStatus::InvalidDescription, "Point impulse requires a finite dynamic body"};
+            if (!Slot->Description.Anchored)
+                World.GetBodyInterface().AddImpulse(Slot->Native, ToJolt(Impulse), ToRVec(Position));
+            return {};
+        }
         PhysicsOperationResult ApplyForce(PhysicsBodyId Id, glm::vec3 Force) override {
             auto *Slot = Find(Id);
             if (!Slot) return InvalidBody();
             if (!Finite(Force) || Slot->Description.Anchored || Slot->Description.Kinematic)
                 return {PhysicsOperationStatus::InvalidDescription, "Force requires finite dynamic body"};
             World.GetBodyInterface().AddForce(Slot->Native, ToJolt(Force));
+            return {};
+        }
+        PhysicsOperationResult ApplyTorque(PhysicsBodyId Id, glm::vec3 Torque) override {
+            auto *Slot = Find(Id);
+            if (!Slot) return InvalidBody();
+            if (!Finite(Torque) || Slot->Description.Anchored || Slot->Description.Kinematic)
+                return {PhysicsOperationStatus::InvalidDescription, "Torque requires a finite dynamic body"};
+            World.GetBodyInterface().AddTorque(Slot->Native, ToJolt(Torque));
             return {};
         }
         PhysicsOperationResult SetLinearVelocity(PhysicsBodyId Id, glm::vec3 Velocity) override {
@@ -500,9 +602,52 @@ namespace {
             }
             return State;
         }
-        PhysicsKinematicMotionResult MoveKinematicCapsule(const PhysicsKinematicMotionRequest &) const override {
-            return {.Status = PhysicsOperationStatus::BackendFailure,
-                .Message = "Experimental Jolt kinematic capsule mover is unsupported"};
+        PhysicsKinematicMotionResult MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const override {
+            PhysicsKinematicMotionResult Result{.Position = Request.Position, .Velocity = Request.Velocity};
+            if (!Finite(Request.Position) || !Finite(Request.Translation) || !Finite(Request.Velocity) ||
+                !std::isfinite(Request.Radius) || !std::isfinite(Request.Height) ||
+                Request.Radius <= 0 || Request.Height < 2.0f * Request.Radius ||
+                Request.Radius > MaximumPhysicsQueryExtent || Request.Height > MaximumPhysicsQueryExtent)
+                return {.Status = PhysicsOperationStatus::InvalidDescription,
+                    .Message = "Invalid Jolt kinematic capsule request"};
+            const auto Cast = [&](glm::vec3 Position, glm::vec3 Direction) {
+                PhysicsShapeCastRequest Query;
+                Query.Shape.Kind = PhysicsQueryShapeKind::Capsule;
+                Query.Shape.Radius = Request.Radius;
+                Query.Shape.Height = Request.Height;
+                Query.Shape.Transform.Position = Position;
+                Query.Direction = Direction;
+                return ShapeCast(Query);
+            };
+            glm::vec3 Remaining = Request.Translation;
+            for (int Iteration = 0; Iteration < 5 && glm::length(Remaining) > 1.0e-4f; ++Iteration) {
+                const auto Hits = Cast(Result.Position, Remaining);
+                if (!Hits.Succeeded()) {
+                    Result.Status = Hits.Status;
+                    Result.Message = Hits.Message;
+                    return Result;
+                }
+                if (Hits.Candidates.empty()) { Result.Position += Remaining; break; }
+                const auto &Hit = Hits.Candidates.front();
+                const float Distance = glm::length(Remaining);
+                const float Fraction = std::clamp((Hit.Distance - 0.001f) / Distance, 0.0f, 1.0f);
+                Result.Position += Remaining * Fraction;
+                const auto Normal = Hit.Normal;
+                Result.Collided = true;
+                Result.ContactNormal = Normal;
+                if (Normal.y > Result.FloorNormal.y) Result.FloorNormal = Normal;
+                Remaining *= 1.0f - Fraction;
+                Remaining -= Normal * std::min(0.0f, glm::dot(Remaining, Normal));
+                Result.Velocity -= Normal * std::min(0.0f, glm::dot(Result.Velocity, Normal));
+                if (Fraction <= 0 && glm::length(Remaining) >= Distance - 1.0e-5f) break;
+            }
+            Result.AppliedTranslation = Result.Position - Request.Position;
+            const auto Floor = Cast(Result.Position, {0.0f, -0.05f, 0.0f});
+            if (Floor.Succeeded() && !Floor.Candidates.empty() &&
+                Floor.Candidates.front().Normal.y > Result.FloorNormal.y)
+                Result.FloorNormal = Floor.Candidates.front().Normal;
+            Result.HasFloor = Result.FloorNormal.y > 0.0f;
+            return Result;
         }
         PhysicsRaycastResult Raycast(const PhysicsRaycastRequest &Request) const override {
             PhysicsRaycastResult Result;
@@ -587,10 +732,12 @@ namespace {
             if (!std::isfinite(Config.DeltaTime) || Config.DeltaTime <= 0 ||
                 Config.SubStepCount < 1 || Config.SubStepCount > 16)
                 throw std::runtime_error("[Physics:JoltRigid] invalid experimental step configuration");
+            Contacts.BeginStep();
             const auto Update = World.Update(Config.DeltaTime, Config.SubStepCount, &Temp, Jobs.get());
             if (Update != JPH::EPhysicsUpdateError::None)
                 throw std::runtime_error("[Physics:JoltRigid] Jolt Update failed with code " +
                     std::to_string(static_cast<unsigned>(Update)));
+            ++StepSequence;
             for (std::uint32_t Index = 1; Index < BodySlots.size(); ++Index) {
                 const auto &Slot = BodySlots[Index];
                 if (!Slot.Live || Slot.Description.Anchored) continue;
@@ -598,6 +745,28 @@ namespace {
                 World.GetBodyInterface().GetPositionAndRotation(Slot.Native, Position, Rotation);
                 Result.Motions.push_back({{Index, Slot.Generation}, FromJolt(Position, Rotation)});
             }
+            const auto CurrentContacts = Contacts.TakeObserved();
+            const auto Emit = [&](const auto &Pair, PhysicsContactPhase Phase) {
+                const auto A = NativeMap.find(Pair.first);
+                const auto B = NativeMap.find(Pair.second);
+                if (A == NativeMap.end() || B == NativeMap.end()) return;
+                if (Result.Contacts.size() == MaximumPhysicsEventsPerStep) {
+                    Result.EventsTruncated = true;
+                    return;
+                }
+                auto First = A->second;
+                auto Second = B->second;
+                if (Second < First) std::swap(First, Second);
+                Result.Contacts.push_back({First, Second, Phase});
+            };
+            for (const auto &Pair : CurrentContacts)
+                if (!PreviousContacts.contains(Pair)) Emit(Pair, PhysicsContactPhase::Began);
+            for (const auto &Pair : PreviousContacts)
+                if (!CurrentContacts.contains(Pair)) Emit(Pair, PhysicsContactPhase::Ended);
+            PreviousContacts = CurrentContacts;
+            std::ranges::sort(Result.Contacts, [](const auto &A, const auto &B) {
+                return std::tie(A.BodyA, A.BodyB, A.Phase) < std::tie(B.BodyA, B.BodyB, B.Phase);
+            });
             return Result;
         }
 
@@ -686,6 +855,7 @@ namespace {
         }
         PhysicsWorldConfig Configuration;
         LayerTable Layers;
+        ContactCapture Contacts;
         JPH::TempAllocatorImpl Temp;
         std::unique_ptr<JPH::JobSystem> Jobs;
         // Destruct World before Jobs, Temp and Layers, whose storage it may use.
@@ -693,14 +863,395 @@ namespace {
         std::vector<BodySlot> BodySlots;
         std::vector<ConstraintSlot> ConstraintSlots;
         std::unordered_map<std::uint32_t, PhysicsBodyId> NativeMap;
+        std::set<std::pair<std::uint32_t, std::uint32_t>> PreviousContacts;
         mutable std::map<std::tuple<int, float, float, float, float, float>, JPH::ShapeRefC> QueryShapes;
         std::size_t ActiveConstraints = 0;
+        std::uint64_t StepSequence = 0;
         bool Valid = false;
+    };
+
+    struct SoftConstruction {
+        JPH::Ref<JPH::SoftBodySharedSettings> Shared;
+        std::shared_ptr<std::vector<std::uint32_t>> Indices;
+    };
+
+    std::optional<SoftConstruction> BuildSoft(const SoftBodyDefinition &Definition,
+                                               const SoftBodyWorldLimits &Limits) {
+        const auto &Material = Definition.Material;
+        const auto FiniteNonnegative = [](float Value) { return std::isfinite(Value) && Value >= 0.0f; };
+        if (!Finite(Definition.Position) || !Finite(Definition.Size) ||
+            Definition.Size.x <= 0 || Definition.Size.y <= 0 || Definition.Size.z <= 0 ||
+            !std::isfinite(Material.ParticleMass) || Material.ParticleMass <= 0 ||
+            !FiniteNonnegative(Material.Damping) || !FiniteNonnegative(Material.StretchCompliance) ||
+            !FiniteNonnegative(Material.BendCompliance) || !FiniteNonnegative(Material.ShapeCompliance) ||
+            !FiniteNonnegative(Material.VolumeCompliance) || !FiniteNonnegative(Material.Friction) ||
+            !FiniteNonnegative(Material.Thickness) || Definition.ResolutionX < 2 ||
+            Definition.ResolutionY < 2 || Definition.Attachments.size() > Limits.MaximumAttachments)
+            return std::nullopt;
+        const std::uint64_t X = Definition.ResolutionX, Y = Definition.ResolutionY;
+        const std::uint64_t Z = Definition.Kind == SoftBodyKind::Cloth ? 1 : Definition.ResolutionZ;
+        const auto VertexLimit = std::min(Limits.MaximumVerticesPerBody, MaximumSoftBodyVertices);
+        if (Z == 0 || (Definition.Kind == SoftBodyKind::Rubber && Z < 2) ||
+            X > VertexLimit / Y || X * Y > VertexLimit / Z) return std::nullopt;
+        SoftConstruction Result{new JPH::SoftBodySharedSettings,
+            std::make_shared<std::vector<std::uint32_t>>()};
+        const auto Index = [X, Y](std::uint32_t I, std::uint32_t J, std::uint32_t K = 0) {
+            return static_cast<std::uint32_t>((K * Y + J) * X + I);
+        };
+        for (std::uint32_t K = 0; K < Z; ++K)
+            for (std::uint32_t J = 0; J < Y; ++J)
+                for (std::uint32_t I = 0; I < X; ++I) {
+                    const float U = float(I) / float(X - 1) - 0.5f;
+                    const float V = float(J) / float(Y - 1) - 0.5f;
+                    const float W = Z > 1 ? float(K) / float(Z - 1) - 0.5f : 0.0f;
+                    const glm::vec3 Position = Definition.Kind == SoftBodyKind::Cloth
+                        ? glm::vec3(U * Definition.Size.x, -V * Definition.Size.y, 0.0f)
+                        : glm::vec3(U * Definition.Size.x, V * Definition.Size.y, W * Definition.Size.z);
+                    Result.Shared->mVertices.emplace_back(JPH::Float3(Position.x, Position.y, Position.z),
+                        JPH::Float3(0, 0, 0), 1.0f / Material.ParticleMass);
+                }
+        std::set<std::uint32_t> Pinned;
+        for (const auto &Attachment : Definition.Attachments) {
+            if (Attachment.Vertex >= X * Y * Z || !Finite(Attachment.Position) ||
+                !Pinned.insert(Attachment.Vertex).second) return std::nullopt;
+            const auto Local = Attachment.Position - Definition.Position;
+            Result.Shared->mVertices[Attachment.Vertex].mPosition = JPH::Float3(Local.x, Local.y, Local.z);
+            Result.Shared->mVertices[Attachment.Vertex].mInvMass = 0.0f;
+        }
+        const auto Edge = [&](std::uint32_t A, std::uint32_t B, float Compliance) {
+            Result.Shared->mEdgeConstraints.emplace_back(A, B, Compliance);
+        };
+        const auto Face = [&](std::uint32_t A, std::uint32_t B, std::uint32_t C) {
+            Result.Shared->mFaces.emplace_back(A, B, C);
+            Result.Indices->insert(Result.Indices->end(), {A, B, C});
+        };
+        if (Definition.Kind == SoftBodyKind::Cloth) {
+            for (std::uint32_t J = 0; J < Y; ++J) for (std::uint32_t I = 0; I < X; ++I) {
+                const auto A = Index(I, J);
+                if (I + 1 < X) Edge(A, Index(I + 1, J), Material.StretchCompliance);
+                if (J + 1 < Y) Edge(A, Index(I, J + 1), Material.StretchCompliance);
+                if (I + 1 < X && J + 1 < Y) {
+                    Edge(A, Index(I + 1, J + 1), Material.StretchCompliance);
+                    Edge(Index(I + 1, J), Index(I, J + 1), Material.StretchCompliance);
+                    Face(A, Index(I, J + 1), Index(I + 1, J + 1));
+                    Face(A, Index(I + 1, J + 1), Index(I + 1, J));
+                }
+                if (I + 2 < X) Edge(A, Index(I + 2, J), Material.BendCompliance);
+                if (J + 2 < Y) Edge(A, Index(I, J + 2), Material.BendCompliance);
+            }
+        } else {
+            for (std::uint32_t K = 0; K < Z; ++K) for (std::uint32_t J = 0; J < Y; ++J)
+                for (std::uint32_t I = 0; I < X; ++I) {
+                    const auto A = Index(I, J, K);
+                    if (I + 1 < X) Edge(A, Index(I + 1, J, K), Material.StretchCompliance);
+                    if (J + 1 < Y) Edge(A, Index(I, J + 1, K), Material.StretchCompliance);
+                    if (K + 1 < Z) Edge(A, Index(I, J, K + 1), Material.StretchCompliance);
+                }
+            for (std::uint32_t K = 0; K + 1 < Z; ++K) for (std::uint32_t J = 0; J + 1 < Y; ++J)
+                for (std::uint32_t I = 0; I + 1 < X; ++I) {
+                    const auto A = Index(I, J, K), B = Index(I + 1, J, K);
+                    const auto C = Index(I, J + 1, K), D = Index(I + 1, J + 1, K);
+                    const auto E = Index(I, J, K + 1), F = Index(I + 1, J, K + 1);
+                    const auto G = Index(I, J + 1, K + 1), H = Index(I + 1, J + 1, K + 1);
+                    Result.Shared->mVolumeConstraints.emplace_back(A, B, C, E, Material.VolumeCompliance);
+                    Result.Shared->mVolumeConstraints.emplace_back(B, D, C, H, Material.VolumeCompliance);
+                    Result.Shared->mVolumeConstraints.emplace_back(B, C, E, H, Material.VolumeCompliance);
+                    Result.Shared->mVolumeConstraints.emplace_back(B, E, F, H, Material.VolumeCompliance);
+                    Result.Shared->mVolumeConstraints.emplace_back(C, G, E, H, Material.VolumeCompliance);
+                    if (K == 0) { Face(A, B, D); Face(A, D, C); }
+                    if (K + 2 == Z) { Face(E, G, H); Face(E, H, F); }
+                    if (J == 0) { Face(A, E, F); Face(A, F, B); }
+                    if (J + 2 == Y) { Face(C, D, H); Face(C, H, G); }
+                    if (I == 0) { Face(A, C, G); Face(A, G, E); }
+                    if (I + 2 == X) { Face(B, F, H); Face(B, H, D); }
+                }
+        }
+        const auto ConstraintCount = Result.Shared->mEdgeConstraints.size() +
+            Result.Shared->mVolumeConstraints.size();
+        if (ConstraintCount > Limits.MaximumConstraints) return std::nullopt;
+        Result.Shared->CalculateEdgeLengths();
+        Result.Shared->CalculateVolumeConstraintVolumes();
+        Result.Shared->Optimize();
+        return Result;
+    }
+
+    class JoltSoftBackend final : public ISoftBodyBackend {
+    public:
+        JoltSoftBackend(RigidJoltBackend &Owner, SoftBodyWorldLimits Limits)
+            : Owner(Owner), Limits(Limits) { Slots.emplace_back(); }
+        ~JoltSoftBackend() override { Shutdown(); }
+        bool IsValid() const override { return !Stopped && Owner.IsValid(); }
+        bool IsBodyValid(SoftBodyId Id) const override { return Find(Id) != nullptr; }
+        SoftBodyId CreateBody(const SoftBodyDefinition &Definition) override {
+            if (!IsValid() || LiveBodies >= Limits.MaximumBodies) return {};
+            auto Construction = BuildSoft(Definition, Limits);
+            if (!Construction || LiveVertices + Construction->Shared->mVertices.size() > Limits.MaximumWorldVertices)
+                return {};
+            const auto Layer = SoftLayer(Definition);
+            if (Layer == JPH::cObjectLayerInvalid) return {};
+            JPH::SoftBodyCreationSettings Settings(Construction->Shared,
+                ToRVec(Definition.Position), JPH::Quat::sIdentity(), Layer);
+            Settings.mNumIterations = 12;
+            Settings.mVelocityReconstruction = JPH::ESoftBodyVelocityReconstruction::ConstraintDelta;
+            Settings.mAllowSleeping = false;
+            Settings.mUpdatePosition = false;
+            Settings.mFacesDoubleSided = true;
+            Settings.mLinearDamping = Definition.Material.Damping;
+            Settings.mFriction = Definition.Material.Friction;
+            Settings.mVertexRadius = Definition.Material.Thickness;
+            const auto Native = Owner.World.GetBodyInterface().CreateAndAddSoftBody(Settings,
+                Definition.Enabled ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+            if (Native.IsInvalid()) return {};
+            std::uint32_t Index = 1;
+            for (; Index < Slots.size() && (Slots[Index].Live || Slots[Index].Retired); ++Index) {}
+            if (Index == Slots.size()) Slots.emplace_back();
+            auto &Slot = Slots[Index];
+            Slot.Live = true;
+            Slot.Native = Native;
+            Slot.Definition = Definition;
+            Slot.Shared = std::move(Construction->Shared);
+            Slot.Indices = std::move(Construction->Indices);
+            Slot.TopologyRevision = std::max<std::uint64_t>(1, Slot.TopologyRevision + 1);
+            Slot.VertexRevision = std::max<std::uint64_t>(1, Slot.VertexRevision + 1);
+            ++LiveBodies;
+            LiveVertices += Slot.Shared->mVertices.size();
+            return {Index, Slot.Generation};
+        }
+        PhysicsOperationResult UpdateBody(SoftBodyId Id, const SoftBodyDefinition &Definition) override {
+            auto *Slot = Find(Id);
+            if (!Slot) return InvalidBody();
+            if (SameExceptAttachments(Slot->Definition, Definition)) {
+                std::set<std::uint32_t> Attached;
+                if (Definition.Attachments.size() > Limits.MaximumAttachments)
+                    return {PhysicsOperationStatus::InvalidDescription, "Jolt soft attachment limit"};
+                for (const auto &Attachment : Definition.Attachments)
+                    if (Attachment.Vertex >= Slot->Shared->mVertices.size() ||
+                        !Finite(Attachment.Position) || !Attached.insert(Attachment.Vertex).second)
+                        return {PhysicsOperationStatus::InvalidDescription, "Invalid Jolt soft attachment"};
+                JPH::BodyLockWrite Lock(Owner.World.GetBodyLockInterface(), Slot->Native);
+                if (!Lock.Succeeded())
+                    return {PhysicsOperationStatus::BackendFailure, "Jolt soft attachment lock failed"};
+                auto *Motion = static_cast<JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
+                auto &Vertices = Motion->GetVertices();
+                for (auto &Vertex : Vertices) Vertex.mInvMass = 1.0f / Definition.Material.ParticleMass;
+                const auto Origin = FromRVec(Lock.GetBody().GetPosition());
+                for (const auto &Attachment : Definition.Attachments) {
+                    auto &Vertex = Vertices[Attachment.Vertex];
+                    Vertex.mPosition = ToJolt(Attachment.Position - Origin);
+                    Vertex.mVelocity = JPH::Vec3::sZero();
+                    Vertex.mInvMass = 0.0f;
+                }
+                Slot->Definition.Attachments = Definition.Attachments;
+                ++Slot->VertexRevision;
+                return {};
+            }
+            auto Replacement = BuildSoft(Definition, Limits);
+            if (!Replacement || LiveVertices - Slot->Shared->mVertices.size() +
+                Replacement->Shared->mVertices.size() > Limits.MaximumWorldVertices)
+                return {PhysicsOperationStatus::InvalidDescription, "Invalid or oversized Jolt soft definition"};
+            const auto Layer = SoftLayer(Definition);
+            if (Layer == JPH::cObjectLayerInvalid)
+                return {PhysicsOperationStatus::ResourceLimit, "Jolt soft layer limit"};
+            JPH::SoftBodyCreationSettings Settings(Replacement->Shared,
+                ToRVec(Definition.Position), JPH::Quat::sIdentity(), Layer);
+            Settings.mNumIterations = 12;
+            Settings.mVelocityReconstruction = JPH::ESoftBodyVelocityReconstruction::ConstraintDelta;
+            Settings.mAllowSleeping = false;
+            Settings.mUpdatePosition = false;
+            Settings.mFacesDoubleSided = true;
+            Settings.mLinearDamping = Definition.Material.Damping;
+            Settings.mFriction = Definition.Material.Friction;
+            Settings.mVertexRadius = Definition.Material.Thickness;
+            const auto Native = Owner.World.GetBodyInterface().CreateAndAddSoftBody(Settings,
+                Definition.Enabled ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+            if (Native.IsInvalid()) return {PhysicsOperationStatus::BackendFailure, "Jolt soft replacement failed"};
+            auto &Interface = Owner.World.GetBodyInterface();
+            Interface.RemoveBody(Slot->Native);
+            Interface.DestroyBody(Slot->Native);
+            LiveVertices = LiveVertices - Slot->Shared->mVertices.size() + Replacement->Shared->mVertices.size();
+            Slot->Native = Native;
+            Slot->Definition = Definition;
+            Slot->Shared = std::move(Replacement->Shared);
+            Slot->Indices = std::move(Replacement->Indices);
+            ++Slot->TopologyRevision;
+            ++Slot->VertexRevision;
+            return {};
+        }
+        PhysicsOperationResult DestroyBody(SoftBodyId Id) override {
+            auto *Slot = Find(Id);
+            if (!Slot) return InvalidBody();
+            auto &Interface = Owner.World.GetBodyInterface();
+            Interface.RemoveBody(Slot->Native);
+            Interface.DestroyBody(Slot->Native);
+            LiveVertices -= Slot->Shared->mVertices.size();
+            --LiveBodies;
+            Slot->Live = false;
+            Slot->Shared = nullptr;
+            Slot->Indices.reset();
+            if (Slot->Generation == std::numeric_limits<std::uint32_t>::max()) Slot->Retired = true;
+            else ++Slot->Generation;
+            return {};
+        }
+        PhysicsOperationResult ApplyForce(SoftBodyId Id, glm::vec3 Force) override {
+            if (!Finite(Force)) return {PhysicsOperationStatus::InvalidDescription, "Nonfinite soft force"};
+            return AddVelocity(Id, Force * SoftBodyStepInterval, std::nullopt);
+        }
+        PhysicsOperationResult ApplyImpulse(SoftBodyId Id, glm::vec3 Impulse) override {
+            if (!Finite(Impulse)) return {PhysicsOperationStatus::InvalidDescription, "Nonfinite soft impulse"};
+            return AddVelocity(Id, Impulse, std::nullopt);
+        }
+        PhysicsOperationResult ApplyImpulseAtPosition(SoftBodyId Id, glm::vec3 Impulse,
+                                                     glm::vec3 Position) override {
+            if (!Finite(Impulse) || !Finite(Position))
+                return {PhysicsOperationStatus::InvalidDescription, "Nonfinite soft point impulse"};
+            return AddVelocity(Id, Impulse, Position);
+        }
+        std::optional<SoftBodyState> GetBodyState(SoftBodyId Id) const override {
+            const auto *Slot = Find(Id);
+            if (!Slot) return std::nullopt;
+            return Extract(Id, *Slot, false);
+        }
+        std::optional<SoftBodyInspection> GetBodyInspection(SoftBodyId Id) const override {
+            const auto *Slot = Find(Id);
+            if (!Slot) return std::nullopt;
+            return SoftBodyInspection{Slot->Shared->mVertices.size(),
+                Slot->Shared->mEdgeConstraints.size() + Slot->Shared->mVolumeConstraints.size(),
+                Slot->Definition.Attachments.size(), Slot->TopologyRevision, Slot->VertexRevision,
+                Slot->Definition.Enabled, Slot->Definition.Enabled && Owner.StepSequence > 0};
+        }
+        SoftBodyStepResult Step(const SoftBodyStepConfig &Config) override {
+            SoftBodyStepResult Result;
+            if (!IsValid() || !std::isfinite(Config.DeltaTime) || Config.DeltaTime <= 0 ||
+                !Finite(Config.Gravity)) return Result;
+            // WorldRoot calls rigid Step first. The shared Jolt world has already
+            // advanced soft and rigid contacts together; this only publishes states.
+            for (std::uint32_t Index = 1; Index < Slots.size(); ++Index) {
+                auto &Slot = Slots[Index];
+                if (!Slot.Live) continue;
+                const bool Simulated = Slot.Definition.Enabled && Owner.StepSequence > Slot.ExtractedSequence;
+                if (Simulated) ++Slot.VertexRevision;
+                auto State = Extract({Index, Slot.Generation}, Slot, Simulated);
+                if (State) Result.States.push_back(std::move(*State));
+                Slot.ExtractedSequence = Owner.StepSequence;
+                if (Simulated) {
+                    ++Result.Profile.SimulatedBodies;
+                    Result.Profile.SimulatedVertices += Slot.Shared->mVertices.size();
+                }
+            }
+            return Result;
+        }
+        bool HasInFlightStep() const override { return false; }
+        void Shutdown() override {
+            if (Stopped) return;
+            for (std::uint32_t Index = 1; Index < Slots.size(); ++Index)
+                if (Slots[Index].Live) (void)DestroyBody({Index, Slots[Index].Generation});
+            Stopped = true;
+        }
+        const SoftBodyWorldLimits &GetLimits() const override { return Limits; }
+    private:
+        static bool SameExceptAttachments(const SoftBodyDefinition &A, const SoftBodyDefinition &B) {
+            const auto SameVector = [](glm::vec3 X, glm::vec3 Y) {
+                return X.x == Y.x && X.y == Y.y && X.z == Y.z;
+            };
+            const auto &M = A.Material, &N = B.Material;
+            return A.Kind == B.Kind && SameVector(A.Position, B.Position) &&
+                SameVector(A.Size, B.Size) && A.ResolutionX == B.ResolutionX &&
+                A.ResolutionY == B.ResolutionY && A.ResolutionZ == B.ResolutionZ &&
+                A.Quality == B.Quality && A.CollisionMode == B.CollisionMode && A.Enabled == B.Enabled &&
+                M.ParticleMass == N.ParticleMass && M.Damping == N.Damping &&
+                M.StretchCompliance == N.StretchCompliance && M.BendCompliance == N.BendCompliance &&
+                M.ShapeCompliance == N.ShapeCompliance && M.VolumeCompliance == N.VolumeCompliance &&
+                M.Friction == N.Friction && M.Thickness == N.Thickness;
+        }
+        struct Slot {
+            std::uint32_t Generation = 1;
+            bool Live = false;
+            bool Retired = false;
+            JPH::BodyID Native;
+            SoftBodyDefinition Definition;
+            JPH::Ref<JPH::SoftBodySharedSettings> Shared;
+            std::shared_ptr<std::vector<std::uint32_t>> Indices;
+            std::uint64_t TopologyRevision = 0;
+            std::uint64_t VertexRevision = 0;
+            std::uint64_t ExtractedSequence = 0;
+        };
+        Slot *Find(SoftBodyId Id) {
+            return Id.IsValid() && Id.Slot < Slots.size() && Slots[Id.Slot].Live &&
+                Slots[Id.Slot].Generation == Id.Generation ? &Slots[Id.Slot] : nullptr;
+        }
+        const Slot *Find(SoftBodyId Id) const {
+            return Id.IsValid() && Id.Slot < Slots.size() && Slots[Id.Slot].Live &&
+                Slots[Id.Slot].Generation == Id.Generation ? &Slots[Id.Slot] : nullptr;
+        }
+        JPH::ObjectLayer SoftLayer(const SoftBodyDefinition &Definition) {
+            PhysicsBodyDesc Description;
+            Description.CanCollide = Definition.CollisionMode == SoftBodyCollisionMode::RigidPrimitives &&
+                Definition.Enabled;
+            Description.CanTouch = false;
+            return Owner.Layers.GetLayer(Description);
+        }
+        std::optional<SoftBodyState> Extract(SoftBodyId Id, const Slot &Record, bool Simulated) const {
+            JPH::BodyLockRead Lock(Owner.World.GetBodyLockInterface(), Record.Native);
+            if (!Lock.Succeeded()) return std::nullopt;
+            const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(
+                Lock.GetBody().GetMotionProperties());
+            if (!Motion) return std::nullopt;
+            const auto Origin = FromRVec(Lock.GetBody().GetPosition());
+            auto Positions = std::make_shared<std::vector<glm::vec3>>();
+            Positions->reserve(Motion->GetVertices().size());
+            for (const auto &Vertex : Motion->GetVertices())
+                Positions->push_back(Origin + FromJolt(Vertex.mPosition));
+            return SoftBodyState{Id, Record.TopologyRevision, Record.VertexRevision,
+                Simulated, std::move(Positions), Record.Indices};
+        }
+        PhysicsOperationResult AddVelocity(SoftBodyId Id, glm::vec3 Impulse,
+                                           std::optional<glm::vec3> Point) {
+            auto *Slot = Find(Id);
+            if (!Slot) return InvalidBody();
+            JPH::BodyLockWrite Lock(Owner.World.GetBodyLockInterface(), Slot->Native);
+            if (!Lock.Succeeded()) return {PhysicsOperationStatus::BackendFailure, "Jolt soft body lock failed"};
+            auto *Motion = static_cast<JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
+            auto &Vertices = Motion->GetVertices();
+            std::size_t Count = 0, Nearest = 0;
+            float BestDistance = std::numeric_limits<float>::infinity();
+            for (std::size_t Index = 0; Index < Vertices.size(); ++Index) {
+                if (Vertices[Index].mInvMass <= 0) continue;
+                ++Count;
+                if (Point) {
+                    const float Distance = glm::length(*Point -
+                        (FromRVec(Lock.GetBody().GetPosition()) + FromJolt(Vertices[Index].mPosition)));
+                    if (Distance < BestDistance) { BestDistance = Distance; Nearest = Index; }
+                }
+            }
+            if (Count == 0) return {};
+            for (std::size_t Index = 0; Index < Vertices.size(); ++Index) {
+                auto &Vertex = Vertices[Index];
+                if (Vertex.mInvMass <= 0 || (Point && Index != Nearest)) continue;
+                const float Share = Point ? 1.0f : 1.0f / float(Count);
+                Vertex.mVelocity += ToJolt(Impulse * (Vertex.mInvMass * Share));
+            }
+            return {};
+        }
+        RigidJoltBackend &Owner;
+        SoftBodyWorldLimits Limits;
+        std::vector<Slot> Slots;
+        std::size_t LiveBodies = 0;
+        std::size_t LiveVertices = 0;
+        bool Stopped = false;
     };
 }
 
 std::unique_ptr<gargantuan::IPhysicsBackend> CreateRigidJoltBackend(
     const gargantuan::PhysicsWorldConfig &Config, int WorkerBudget) {
     return std::make_unique<RigidJoltBackend>(Config, WorkerBudget);
+}
+
+UnifiedJoltProvider CreateUnifiedJoltProvider(const gargantuan::PhysicsWorldConfig &Config,
+                                               gargantuan::SoftBodyWorldLimits Limits,
+                                               int WorkerBudget) {
+    auto Rigid = std::make_unique<RigidJoltBackend>(Config, WorkerBudget);
+    if (!Rigid->IsValid()) return {};
+    auto Soft = std::make_unique<JoltSoftBackend>(*Rigid, Limits);
+    return {std::move(Rigid), std::move(Soft)};
 }
 }
