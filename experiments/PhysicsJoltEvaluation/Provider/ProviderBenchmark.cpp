@@ -275,6 +275,14 @@ int main(int ArgumentCount, char **Arguments) {
             if (!State || !State->Positions) throw std::runtime_error("Initial soft state missing");
             const auto Inspection = Soft->GetBodyInspection(Id);
             if (!Inspection) throw std::runtime_error("Initial soft inspection missing");
+            const std::size_t ExpectedVertices = SceneValue.Rubber ?
+                std::size_t(SceneValue.Resolution) * SceneValue.Resolution * SceneValue.Resolution :
+                std::size_t(SceneValue.Resolution) * SceneValue.Resolution;
+            if (State->Positions->size() != ExpectedVertices ||
+                Inspection->VertexCount != ExpectedVertices ||
+                Inspection->AttachmentCount != Definition.Attachments.size() ||
+                Inspection->ConstraintCount == 0)
+                throw std::runtime_error("Soft scene topology or attachment admission mismatch");
             Constraints += Inspection->ConstraintCount;
             Bodies.push_back({Id, std::move(Definition), *State->Positions,
                 State->TopologyRevision, State->VertexRevision});

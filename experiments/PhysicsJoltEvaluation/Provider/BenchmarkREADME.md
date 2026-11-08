@@ -51,6 +51,10 @@ physical measurements before making any performance ranking. The benchmark
 deliberately prints no winner. This is a provider-call microbenchmark: it
 excludes `WorldRoot`'s collider snapshot, Part event/publication work, render
 dirty bookkeeping, and outer Engine frame work.
+Admission checks exact vertex and attachment counts and requires a nonempty
+constraint graph. Every measured frame must report all bodies and vertices
+simulated, no frozen, stale, dropped, or truncated work, and advancing vertex
+revisions with stable identities and topology.
 `CompareBenchmark.py jolt.log xpbd.log` emits absolute differences for those
 physical metrics and leaves `timing_winner` null. Supplying a reviewed JSON
 envelope with `--envelope limits.json` permits a timing winner only when every
