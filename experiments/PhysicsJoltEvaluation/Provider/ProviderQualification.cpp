@@ -67,6 +67,8 @@ namespace gargantuan {
 namespace {
     using namespace gargantuan;
     using PhysicsEvaluation::CreateUnifiedJoltProvider;
+    using PhysicsEvaluation::GetJoltSoftRigidContactVertexCount;
+    using PhysicsEvaluation::SetJoltSoftRigidContactCapture;
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
     using PhysicsEvaluation::ConnectJoltRigidSoftAttachment;
     using PhysicsEvaluation::GetJoltRigidSoftAttachmentState;
