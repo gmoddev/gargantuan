@@ -4,6 +4,7 @@
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
+#include <Jolt/Core/Memory.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
@@ -32,6 +33,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -96,13 +98,31 @@ namespace {
         else if (Description.Shape.Kind == PhysicsShapeKind::CornerWedge) Volume *= 0.25f;
         return std::max(0.001f, Description.Density * Volume);
     }
+    bool SameMesh(const std::shared_ptr<const PhysicsTriangleMesh> &A,
+                  const std::shared_ptr<const PhysicsTriangleMesh> &B) {
+        if (A == B) return true;
+        return A && B && A->ResourceId == B->ResourceId &&
+            A->ContentRevision == B->ContentRevision &&
+            A->Positions == B->Positions && A->Indices == B->Indices;
+    }
     class JoltRuntime final {
     public:
-        JoltRuntime() : OwnedFactory(std::make_unique<JPH::Factory>()) {
+        JoltRuntime() {
+#ifndef JPH_DISABLE_CUSTOM_ALLOCATOR
+            if (!JPH::Allocate && !JPH::Reallocate && !JPH::Free &&
+                !JPH::AlignedAllocate && !JPH::AlignedFree)
+                JPH::RegisterDefaultAllocator();
+            if (!JPH::Allocate || !JPH::Reallocate || !JPH::Free ||
+                !JPH::AlignedAllocate || !JPH::AlignedFree)
+                throw std::runtime_error("[Physics:JoltProvider] incomplete Jolt allocator registration");
+#endif
+            if (JPH::Factory::sInstance) return;
+            OwnedFactory = std::make_unique<JPH::Factory>();
             JPH::Factory::sInstance = OwnedFactory.get();
             JPH::RegisterTypes();
         }
         ~JoltRuntime() {
+            if (!OwnedFactory) return;
             JPH::UnregisterTypes();
             JPH::Factory::sInstance = nullptr;
         }
@@ -145,6 +165,7 @@ namespace {
         std::uint16_t Mask = MaximumPhysicsCollisionMask;
         bool Static = false;
         bool Participates = true;
+        bool Soft = false;
     };
     class LayerTable final : public JPH::BroadPhaseLayerInterface,
                              public JPH::ObjectLayerPairFilter,
@@ -165,19 +186,21 @@ namespace {
             const auto &First = Policies[A];
             const auto &Second = Policies[B];
             return First.Participates && Second.Participates && !(First.Static && Second.Static) &&
+                !(First.Soft && Second.Soft) &&
                 PhysicsCanCollide(First.Group, First.Mask, Second.Group, Second.Mask);
         }
         bool ShouldCollide(JPH::ObjectLayer A, JPH::BroadPhaseLayer B) const override {
             return A < Policies.size() && Policies[A].Participates &&
                 !(Policies[A].Static && B.GetValue() == 0);
         }
-        JPH::ObjectLayer GetLayer(const PhysicsBodyDesc &Description) {
+        JPH::ObjectLayer GetLayer(const PhysicsBodyDesc &Description, bool Soft = false) {
             const LayerPolicy Candidate{Description.CollisionGroup, Description.CollisionMask,
-                Description.Anchored, Description.CanCollide || Description.CanTouch};
+                Description.Anchored, Description.CanCollide || Description.CanTouch, Soft};
             for (std::size_t Index = 0; Index < Policies.size(); ++Index) {
                 const auto &Existing = Policies[Index];
                 if (Existing.Group == Candidate.Group && Existing.Mask == Candidate.Mask &&
-                    Existing.Static == Candidate.Static && Existing.Participates == Candidate.Participates)
+                    Existing.Static == Candidate.Static && Existing.Participates == Candidate.Participates &&
+                    Existing.Soft == Candidate.Soft)
                     return static_cast<JPH::ObjectLayer>(Index);
             }
             if (Policies.size() >= JPH::cObjectLayerInvalid) return JPH::cObjectLayerInvalid;
@@ -195,6 +218,9 @@ namespace {
         JPH::BodyID Native;
         PhysicsBodyDesc Description;
         JPH::ShapeRefC Shape;
+        std::size_t NativeMeshBytes = 0;
+        glm::vec3 PendingForce{0.0f};
+        glm::vec3 PendingTorque{0.0f};
     };
     struct ConstraintSlot {
         std::uint32_t Generation = 1;
@@ -206,31 +232,45 @@ namespace {
 
     class ContactCapture final : public JPH::ContactListener {
     public:
-        void BeginStep() {
-            std::scoped_lock Lock(Mutex);
-            Observed.clear();
-        }
         void OnContactAdded(const JPH::Body &A, const JPH::Body &B,
-                            const JPH::ContactManifold &, JPH::ContactSettings &) override {
-            Record(A, B);
+                            const JPH::ContactManifold &Manifold, JPH::ContactSettings &) override {
+            Record(A, B, Manifold);
         }
         void OnContactPersisted(const JPH::Body &A, const JPH::Body &B,
-                                const JPH::ContactManifold &, JPH::ContactSettings &) override {
-            Record(A, B);
+                                const JPH::ContactManifold &Manifold, JPH::ContactSettings &) override {
+            Record(A, B, Manifold);
         }
-        std::set<std::pair<std::uint32_t, std::uint32_t>> TakeObserved() {
+        void OnContactRemoved(const JPH::SubShapeIDPair &Pair) override {
             std::scoped_lock Lock(Mutex);
-            return std::move(Observed);
+            ActiveSubShapes.erase(Pair);
+        }
+        void ForgetBody(std::uint32_t Native) {
+            std::scoped_lock Lock(Mutex);
+            for (auto It = ActiveSubShapes.begin(); It != ActiveSubShapes.end();) {
+                if (It->GetBody1ID().GetIndexAndSequenceNumber() == Native ||
+                    It->GetBody2ID().GetIndexAndSequenceNumber() == Native)
+                    It = ActiveSubShapes.erase(It);
+                else ++It;
+            }
+        }
+        std::set<std::pair<std::uint32_t, std::uint32_t>> CurrentPairs() const {
+            std::scoped_lock Lock(Mutex);
+            std::set<std::pair<std::uint32_t, std::uint32_t>> Result;
+            for (const auto &Pair : ActiveSubShapes) {
+                const auto First = Pair.GetBody1ID().GetIndexAndSequenceNumber();
+                const auto Second = Pair.GetBody2ID().GetIndexAndSequenceNumber();
+                Result.emplace(std::min(First, Second), std::max(First, Second));
+            }
+            return Result;
         }
     private:
-        void Record(const JPH::Body &A, const JPH::Body &B) {
-            const auto First = A.GetID().GetIndexAndSequenceNumber();
-            const auto Second = B.GetID().GetIndexAndSequenceNumber();
+        void Record(const JPH::Body &A, const JPH::Body &B, const JPH::ContactManifold &Manifold) {
             std::scoped_lock Lock(Mutex);
-            Observed.emplace(std::min(First, Second), std::max(First, Second));
+            ActiveSubShapes.emplace(A.GetID(), Manifold.mSubShapeID1,
+                B.GetID(), Manifold.mSubShapeID2);
         }
-        std::mutex Mutex;
-        std::set<std::pair<std::uint32_t, std::uint32_t>> Observed;
+        mutable std::mutex Mutex;
+        std::set<JPH::SubShapeIDPair> ActiveSubShapes;
     };
 
     class QueryBodyFilter final : public JPH::BodyFilter {
@@ -270,6 +310,12 @@ namespace {
             World.SetContactListener(&Contacts);
             BodySlots.emplace_back();
             ConstraintSlots.emplace_back();
+            Residency.ResourceLimit = Config.CollisionResourceLimit;
+            Residency.ConsumerLimit = Config.CollisionConsumerLimit;
+            Residency.CanonicalByteLimit = Config.CollisionCanonicalByteLimit;
+            Residency.NativeByteLimit = Config.CollisionNativeByteLimit;
+            Residency.MeshShapeLimit = Config.CollisionMeshShapeLimit;
+            Residency.NativeShapeBytesKnown = true;
             Valid = true;
         }
         ~RigidJoltBackend() override {
@@ -280,6 +326,9 @@ namespace {
                 if (BodySlots[Index].Live) (void)DestroyBody({Index, BodySlots[Index].Generation});
         }
         bool IsValid() const override { return Valid; }
+        void SetBeforeUnifiedStep(std::function<bool(float)> Callback) {
+            BeforeUnifiedStep = std::move(Callback);
+        }
         bool IsBodyValid(PhysicsBodyId Id) const override { return Find(Id) != nullptr; }
         bool IsConstraintValid(PhysicsConstraintId Id) const override { return Find(Id) != nullptr; }
 
@@ -289,25 +338,8 @@ namespace {
             if (Layer == JPH::cObjectLayerInvalid) return {};
             auto Shape = MakeShape(Description.Shape);
             if (!Shape) return {};
-            const auto Motion = Description.Anchored ? JPH::EMotionType::Static
-                : Description.Kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic;
-            JPH::BodyCreationSettings Settings(Shape.GetPtr(), ToRVec(Description.Transform.Position),
-                ToJolt(Description.Transform), Motion, Layer);
-            Settings.mAllowDynamicOrKinematic =
-                Description.Shape.Kind != PhysicsShapeKind::StaticTriangleMesh;
-            Settings.mIsSensor = !Description.CanCollide && Description.CanTouch;
-            Settings.mMotionQuality = Description.MovingBodyCCD ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
-            Settings.mAllowSleeping = Configuration.EnableSleep && Description.SleepEnabled;
-            Settings.mLinearDamping = Description.LinearDamping;
-            Settings.mAngularDamping = Description.AngularDamping;
-            Settings.mGravityFactor = Description.GravityScale;
-            if (Motion == JPH::EMotionType::Dynamic) {
-                Settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
-                Settings.mMassPropertiesOverride = Shape->GetMassProperties();
-                Settings.mMassPropertiesOverride.ScaleToMass(BodyMass(Description));
-            }
-            const auto Native = World.GetBodyInterface().CreateAndAddBody(Settings,
-                Motion == JPH::EMotionType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+            if (!CheckMeshAdmission(Description, Shape, nullptr).Succeeded()) return {};
+            const auto Native = AddNativeBody(Description, Layer, Shape);
             if (Native.IsInvalid()) return {};
             std::uint32_t Index = 1;
             for (; Index < BodySlots.size() && (BodySlots[Index].Live || BodySlots[Index].Retired); ++Index) {}
@@ -317,6 +349,9 @@ namespace {
             Slot.Native = Native;
             Slot.Shape = Shape;
             Slot.Description = Description;
+            Slot.PendingForce = {};
+            Slot.PendingTorque = {};
+            AdmitMesh(Slot);
             PhysicsBodyId Id{Index, Slot.Generation};
             NativeMap.emplace(Native.GetIndexAndSequenceNumber(), Id);
             return Id;
@@ -330,21 +365,51 @@ namespace {
                 Description.Shape.Size.x != Slot->Description.Shape.Size.x ||
                 Description.Shape.Size.y != Slot->Description.Shape.Size.y ||
                 Description.Shape.Size.z != Slot->Description.Shape.Size.z ||
-                Description.Shape.Mesh != Slot->Description.Shape.Mesh;
+                !SameMesh(Description.Shape.Mesh, Slot->Description.Shape.Mesh);
             JPH::ShapeRefC NewShape;
             if (ShapeChanged) {
                 NewShape = MakeShape(Description.Shape);
                 if (!NewShape) return {PhysicsOperationStatus::InvalidDescription, "Invalid replacement shape"};
+                const auto Admission = CheckMeshAdmission(Description, NewShape, Slot);
+                if (!Admission.Succeeded()) return Admission;
             }
             const auto Layer = Layers.GetLayer(Description);
             if (Layer == JPH::cObjectLayerInvalid) return {PhysicsOperationStatus::ResourceLimit, "Jolt layer limit"};
             auto &Interface = World.GetBodyInterface();
-            if (ShapeChanged)
-                Interface.SetShape(Slot->Native, NewShape.GetPtr(), true, JPH::EActivation::Activate);
             const auto Motion = Description.Anchored ? JPH::EMotionType::Static
                 : Description.Kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic;
             const bool MotionChanged = Description.Anchored != Slot->Description.Anchored ||
                 Description.Kinematic != Slot->Description.Kinematic;
+            const bool MeshTransition =
+                (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) !=
+                (Slot->Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh);
+            if (MeshTransition) {
+                for (const auto &Constraint : ConstraintSlots)
+                    if (Constraint.Live && (Constraint.Description.BodyA == Id ||
+                        Constraint.Description.BodyB == Id))
+                        return Unsupported("Jolt mesh transition with attached constraint is unsupported");
+                const auto Replacement = AddNativeBody(Description, Layer, NewShape);
+                if (Replacement.IsInvalid())
+                    return {PhysicsOperationStatus::BackendFailure, "Jolt mesh transition body admission failed"};
+                NativeMap.emplace(Replacement.GetIndexAndSequenceNumber(), Id);
+                const auto OldNative = Slot->Native.GetIndexAndSequenceNumber();
+                Interface.RemoveBody(Slot->Native);
+                Interface.DestroyBody(Slot->Native);
+                NativeMap.erase(OldNative);
+                Contacts.ForgetBody(OldNative);
+                for (auto It = PreviousContacts.begin(); It != PreviousContacts.end();) {
+                    if (It->first == OldNative || It->second == OldNative) It = PreviousContacts.erase(It);
+                    else ++It;
+                }
+                Slot->Native = Replacement;
+                ReleaseMesh(*Slot);
+                Slot->Shape = NewShape;
+                Slot->Description = Description;
+                AdmitMesh(*Slot);
+                return {};
+            }
+            if (ShapeChanged)
+                Interface.SetShape(Slot->Native, NewShape.GetPtr(), true, JPH::EActivation::Activate);
             if (MotionChanged)
                 Interface.SetMotionType(Slot->Native, Motion, JPH::EActivation::Activate);
             if (!SameTransform(Description.Transform, Slot->Description.Transform))
@@ -384,8 +449,12 @@ namespace {
                     }
                 }
             }
-            if (ShapeChanged) Slot->Shape = NewShape;
+            if (ShapeChanged) {
+                ReleaseMesh(*Slot);
+                Slot->Shape = NewShape;
+            }
             Slot->Description = Description;
+            if (ShapeChanged) AdmitMesh(*Slot);
             return {};
         }
 
@@ -401,12 +470,16 @@ namespace {
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
             NativeMap.erase(Slot->Native.GetIndexAndSequenceNumber());
+            Contacts.ForgetBody(Slot->Native.GetIndexAndSequenceNumber());
+            ReleaseMesh(*Slot);
             for (auto It = PreviousContacts.begin(); It != PreviousContacts.end();) {
                 if (It->first == Slot->Native.GetIndexAndSequenceNumber() ||
                     It->second == Slot->Native.GetIndexAndSequenceNumber()) It = PreviousContacts.erase(It);
                 else ++It;
             }
             Slot->Shape = nullptr;
+            Slot->PendingForce = {};
+            Slot->PendingTorque = {};
             Slot->Live = false;
             if (Slot->Generation == std::numeric_limits<std::uint32_t>::max()) Slot->Retired = true;
             else ++Slot->Generation;
@@ -556,7 +629,10 @@ namespace {
             if (!Slot) return InvalidBody();
             if (!Finite(Force) || Slot->Description.Anchored || Slot->Description.Kinematic)
                 return {PhysicsOperationStatus::InvalidDescription, "Force requires finite dynamic body"};
-            World.GetBodyInterface().AddForce(Slot->Native, ToJolt(Force));
+            const auto Combined = Slot->PendingForce + Force;
+            if (!Finite(Combined))
+                return {PhysicsOperationStatus::InvalidDescription, "Rigid force accumulation overflow"};
+            Slot->PendingForce = Combined;
             return {};
         }
         PhysicsOperationResult ApplyTorque(PhysicsBodyId Id, glm::vec3 Torque) override {
@@ -564,7 +640,10 @@ namespace {
             if (!Slot) return InvalidBody();
             if (!Finite(Torque) || Slot->Description.Anchored || Slot->Description.Kinematic)
                 return {PhysicsOperationStatus::InvalidDescription, "Torque requires a finite dynamic body"};
-            World.GetBodyInterface().AddTorque(Slot->Native, ToJolt(Torque));
+            const auto Combined = Slot->PendingTorque + Torque;
+            if (!Finite(Combined))
+                return {PhysicsOperationStatus::InvalidDescription, "Rigid torque accumulation overflow"};
+            Slot->PendingTorque = Combined;
             return {};
         }
         PhysicsOperationResult SetLinearVelocity(PhysicsBodyId Id, glm::vec3 Velocity) override {
@@ -624,6 +703,7 @@ namespace {
             }
             return State;
         }
+        PhysicsCollisionResidency GetCollisionResidency() const override { return Residency; }
         PhysicsKinematicMotionResult MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const override {
             PhysicsKinematicMotionResult Result{.Position = Request.Position, .Velocity = Request.Velocity};
             if (!Finite(Request.Position) || !Finite(Request.Translation) || !Finite(Request.Velocity) ||
@@ -756,26 +836,25 @@ namespace {
             if (!std::isfinite(Config.DeltaTime) || Config.DeltaTime <= 0 ||
                 Config.SubStepCount < 1 || Config.SubStepCount > 16)
                 throw std::runtime_error("[Physics:JoltRigid] invalid experimental step configuration");
-            Contacts.BeginStep();
+            for (const auto &Slot : BodySlots)
+                if (Slot.Live && (!Finite(Slot.PendingForce) ||
+                                  !Finite(Slot.PendingTorque)))
+                    throw std::runtime_error("[Physics:JoltRigid] pending force or torque exceeds native range");
+            if (UnifiedMode && BeforeUnifiedStep && !BeforeUnifiedStep(Config.DeltaTime))
+                throw std::runtime_error("[Physics:JoltProvider] pending soft force application failed");
             const auto UpdateWorld = [&](float DeltaTime, int CollisionSteps) {
+                for (auto &Slot : BodySlots) {
+                    if (!Slot.Live || Slot.Description.Anchored || Slot.Description.Kinematic) continue;
+                    if (Slot.PendingForce != glm::vec3(0.0f))
+                        World.GetBodyInterface().AddForce(Slot.Native, ToJolt(Slot.PendingForce));
+                    if (Slot.PendingTorque != glm::vec3(0.0f))
+                        World.GetBodyInterface().AddTorque(Slot.Native, ToJolt(Slot.PendingTorque));
+                }
                 const auto Update = World.Update(DeltaTime, CollisionSteps, &Temp, Jobs.get());
                 if (Update != JPH::EPhysicsUpdateError::None)
                     throw std::runtime_error("[Physics:JoltRigid] Jolt Update failed with code " +
                         std::to_string(static_cast<unsigned>(Update)));
             };
-            if (UnifiedMode) {
-                UpdateWorld(Config.DeltaTime * 0.5f, 8);
-                UpdateWorld(Config.DeltaTime * 0.5f, 8);
-            } else UpdateWorld(Config.DeltaTime, Config.SubStepCount);
-            ++StepSequence;
-            for (std::uint32_t Index = 1; Index < BodySlots.size(); ++Index) {
-                const auto &Slot = BodySlots[Index];
-                if (!Slot.Live || Slot.Description.Anchored) continue;
-                JPH::RVec3 Position; JPH::Quat Rotation;
-                World.GetBodyInterface().GetPositionAndRotation(Slot.Native, Position, Rotation);
-                Result.Motions.push_back({{Index, Slot.Generation}, FromJolt(Position, Rotation)});
-            }
-            const auto CurrentContacts = Contacts.TakeObserved();
             const auto Emit = [&](const auto &Pair, PhysicsContactPhase Phase) {
                 const auto A = NativeMap.find(Pair.first);
                 const auto B = NativeMap.find(Pair.second);
@@ -789,11 +868,35 @@ namespace {
                 if (Second < First) std::swap(First, Second);
                 Result.Contacts.push_back({First, Second, Phase});
             };
-            for (const auto &Pair : CurrentContacts)
-                if (!PreviousContacts.contains(Pair)) Emit(Pair, PhysicsContactPhase::Began);
-            for (const auto &Pair : PreviousContacts)
-                if (!CurrentContacts.contains(Pair)) Emit(Pair, PhysicsContactPhase::Ended);
-            PreviousContacts = CurrentContacts;
+            const auto CollectContacts = [&] {
+                const auto Current = Contacts.CurrentPairs();
+                for (const auto &Pair : Current)
+                    if (!PreviousContacts.contains(Pair)) Emit(Pair, PhysicsContactPhase::Began);
+                for (const auto &Pair : PreviousContacts)
+                    if (!Current.contains(Pair)) Emit(Pair, PhysicsContactPhase::Ended);
+                PreviousContacts = Current;
+            };
+            if (UnifiedMode) {
+                UpdateWorld(Config.DeltaTime * 0.5f, 8);
+                CollectContacts();
+                UpdateWorld(Config.DeltaTime * 0.5f, 8);
+                CollectContacts();
+            } else {
+                UpdateWorld(Config.DeltaTime, Config.SubStepCount);
+                CollectContacts();
+            }
+            for (auto &Slot : BodySlots) {
+                Slot.PendingForce = {};
+                Slot.PendingTorque = {};
+            }
+            ++StepSequence;
+            for (std::uint32_t Index = 1; Index < BodySlots.size(); ++Index) {
+                const auto &Slot = BodySlots[Index];
+                if (!Slot.Live || Slot.Description.Anchored) continue;
+                JPH::RVec3 Position; JPH::Quat Rotation;
+                World.GetBodyInterface().GetPositionAndRotation(Slot.Native, Position, Rotation);
+                Result.Motions.push_back({{Index, Slot.Generation}, FromJolt(Position, Rotation)});
+            }
             std::ranges::sort(Result.Contacts, [](const auto &A, const auto &B) {
                 return std::tie(A.BodyA, A.BodyB, A.Phase) < std::tie(B.BodyA, B.BodyB, B.Phase);
             });
@@ -801,6 +904,122 @@ namespace {
         }
 
     private:
+        using MeshKey = std::pair<std::string, std::uint64_t>;
+        struct MeshResource {
+            const void *Positions = nullptr;
+            const void *Indices = nullptr;
+            std::size_t CanonicalBytes = 0;
+            std::size_t Consumers = 0;
+        };
+        static MeshKey KeyOf(const PhysicsTriangleMesh &Mesh) {
+            return {Mesh.ResourceId, Mesh.ContentRevision};
+        }
+        static std::size_t CanonicalBytesOf(const PhysicsTriangleMesh &Mesh) {
+            return Mesh.Positions->size() * sizeof(glm::vec3) +
+                Mesh.Indices->size() * sizeof(std::uint32_t);
+        }
+        PhysicsOperationResult CheckMeshAdmission(const PhysicsBodyDesc &Description,
+                                                   const JPH::ShapeRefC &Shape,
+                                                   const BodySlot *Old) {
+            if (Description.Shape.Kind != PhysicsShapeKind::StaticTriangleMesh) return {};
+            const auto &Mesh = *Description.Shape.Mesh;
+            const auto Key = KeyOf(Mesh);
+            const auto Found = MeshResources.find(Key);
+            const auto OldMesh = Old && Old->Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh;
+            const auto OldKey = OldMesh ? KeyOf(*Old->Description.Shape.Mesh) : MeshKey{};
+            const bool OldResourceRetires = OldMesh && OldKey != Key &&
+                MeshResources.at(OldKey).Consumers == 1;
+            const bool NewResource = Found == MeshResources.end();
+            const auto NativeBytes = Shape->GetStats().mSizeBytes;
+            Residency.PeakBuildNativeBytes = std::max(Residency.PeakBuildNativeBytes,
+                Residency.NativeMeshBytes + NativeBytes);
+            const auto CanonicalBytes = CanonicalBytesOf(Mesh);
+            const auto ResourceCount = MeshResources.size() + std::size_t(NewResource) -
+                std::size_t(OldResourceRetires);
+            const auto CanonicalCharge = Residency.CanonicalBytes +
+                (NewResource ? CanonicalBytes : 0) -
+                (OldResourceRetires ? MeshResources.at(OldKey).CanonicalBytes : 0);
+            const auto NativeCharge = Residency.NativeMeshBytes + NativeBytes -
+                (OldMesh ? Old->NativeMeshBytes : 0);
+            const auto ConsumerCount = Residency.ActiveConsumers + 1 - std::size_t(OldMesh);
+            std::string Failure;
+            if (Found != MeshResources.end() &&
+                (Found->second.Positions != Mesh.Positions.get() ||
+                 Found->second.Indices != Mesh.Indices.get()))
+                Failure = "Jolt mesh resource revision has conflicting canonical buffers";
+            else if (ResourceCount > Configuration.CollisionResourceLimit ||
+                ConsumerCount > Configuration.CollisionConsumerLimit ||
+                ConsumerCount > Configuration.CollisionMeshShapeLimit ||
+                CanonicalCharge > Configuration.CollisionCanonicalByteLimit ||
+                NativeCharge > Configuration.CollisionNativeByteLimit)
+                Failure = "Jolt canonical mesh residency limit exceeded";
+            if (Failure.empty()) return {};
+            ++Residency.FailedAdmissions;
+            Residency.LastAdmissionFailure = Failure;
+            return {PhysicsOperationStatus::ResourceLimit, Failure};
+        }
+        void AdmitMesh(BodySlot &Slot) {
+            if (Slot.Description.Shape.Kind != PhysicsShapeKind::StaticTriangleMesh) return;
+            const auto &Mesh = *Slot.Description.Shape.Mesh;
+            const auto Key = KeyOf(Mesh);
+            auto [It, Inserted] = MeshResources.try_emplace(Key);
+            if (Inserted) {
+                It->second.Positions = Mesh.Positions.get();
+                It->second.Indices = Mesh.Indices.get();
+                It->second.CanonicalBytes = CanonicalBytesOf(Mesh);
+                Residency.CanonicalBytes += It->second.CanonicalBytes;
+                ++Residency.CreatedResources;
+                ++Residency.ActiveResources;
+            }
+            ++It->second.Consumers;
+            Slot.NativeMeshBytes = Slot.Shape->GetStats().mSizeBytes;
+            Residency.NativeMeshBytes += Slot.NativeMeshBytes;
+            Residency.PeakBuildNativeBytes = std::max(Residency.PeakBuildNativeBytes,
+                Residency.NativeMeshBytes);
+            ++Residency.ActiveConsumers;
+            ++Residency.CreatedConsumers;
+            ++Residency.ActiveMeshShapes;
+            ++Residency.CreatedMeshShapes;
+        }
+        void ReleaseMesh(BodySlot &Slot) {
+            if (Slot.Description.Shape.Kind != PhysicsShapeKind::StaticTriangleMesh) return;
+            auto It = MeshResources.find(KeyOf(*Slot.Description.Shape.Mesh));
+            if (It == MeshResources.end()) return;
+            Residency.NativeMeshBytes -= Slot.NativeMeshBytes;
+            Slot.NativeMeshBytes = 0;
+            --Residency.ActiveConsumers;
+            ++Residency.RetiredConsumers;
+            --Residency.ActiveMeshShapes;
+            ++Residency.RetiredMeshShapes;
+            if (--It->second.Consumers == 0) {
+                Residency.CanonicalBytes -= It->second.CanonicalBytes;
+                --Residency.ActiveResources;
+                ++Residency.RetiredResources;
+                MeshResources.erase(It);
+            }
+        }
+        JPH::BodyID AddNativeBody(const PhysicsBodyDesc &Description, JPH::ObjectLayer Layer,
+                                  const JPH::ShapeRefC &Shape) {
+            const auto Motion = Description.Anchored ? JPH::EMotionType::Static
+                : Description.Kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic;
+            JPH::BodyCreationSettings Settings(Shape.GetPtr(), ToRVec(Description.Transform.Position),
+                ToJolt(Description.Transform), Motion, Layer);
+            Settings.mAllowDynamicOrKinematic =
+                Description.Shape.Kind != PhysicsShapeKind::StaticTriangleMesh;
+            Settings.mIsSensor = !Description.CanCollide && Description.CanTouch;
+            Settings.mMotionQuality = Description.MovingBodyCCD ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
+            Settings.mAllowSleeping = Configuration.EnableSleep && Description.SleepEnabled;
+            Settings.mLinearDamping = Description.LinearDamping;
+            Settings.mAngularDamping = Description.AngularDamping;
+            Settings.mGravityFactor = Description.GravityScale;
+            if (Motion == JPH::EMotionType::Dynamic) {
+                Settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
+                Settings.mMassPropertiesOverride = Shape->GetMassProperties();
+                Settings.mMassPropertiesOverride.ScaleToMass(BodyMass(Description));
+            }
+            return World.GetBodyInterface().CreateAndAddBody(Settings,
+                Motion == JPH::EMotionType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+        }
         bool ValidBody(const PhysicsBodyDesc &Value) const {
             if (!Finite(Value.Transform) || !Finite(Value.Shape.Size) ||
                 Value.Shape.Size.x <= 0 || Value.Shape.Size.y <= 0 || Value.Shape.Size.z <= 0 ||
@@ -816,7 +1035,9 @@ namespace {
                 (Value.MovingBodyCCD && (Value.Anchored || Value.Kinematic || !Value.CanCollide))) return false;
             if (!Value.Anchored && !Value.Kinematic && !std::isfinite(BodyMass(Value))) return false;
             if (Value.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh)
-                return Value.Anchored && Value.Shape.Mesh && Value.Shape.Mesh->Positions && Value.Shape.Mesh->Indices;
+                return Value.Anchored && Value.Shape.Mesh && Value.Shape.Mesh->Positions &&
+                    Value.Shape.Mesh->Indices && !Value.Shape.Mesh->ResourceId.empty() &&
+                    Value.Shape.Mesh->ResourceId.size() <= MaximumPhysicsCollisionResourceIdBytes;
             return Value.Shape.Kind == PhysicsShapeKind::Box || Value.Shape.Kind == PhysicsShapeKind::Ball ||
                 Value.Shape.Kind == PhysicsShapeKind::Cylinder || Value.Shape.Kind == PhysicsShapeKind::Wedge ||
                 Value.Shape.Kind == PhysicsShapeKind::CornerWedge;
@@ -916,12 +1137,15 @@ namespace {
         std::vector<BodySlot> BodySlots;
         std::vector<ConstraintSlot> ConstraintSlots;
         std::unordered_map<std::uint32_t, PhysicsBodyId> NativeMap;
+        std::map<MeshKey, MeshResource> MeshResources;
+        PhysicsCollisionResidency Residency;
         std::set<std::pair<std::uint32_t, std::uint32_t>> PreviousContacts;
         mutable std::map<std::tuple<int, float, float, float, float, float>, JPH::ShapeRefC> QueryShapes;
         std::size_t ActiveConstraints = 0;
         std::uint64_t StepSequence = 0;
         bool Valid = false;
         bool UnifiedMode = false;
+        std::function<bool(float)> BeforeUnifiedStep;
     };
 
     struct SoftConstruction {
@@ -973,9 +1197,6 @@ namespace {
         for (const auto &Attachment : Definition.Attachments) {
             if (Attachment.Vertex >= X * Y * Z || !Finite(Attachment.Position) ||
                 !Pinned.insert(Attachment.Vertex).second) return std::nullopt;
-            const auto Local = Attachment.Position - Definition.Position;
-            Result.Shared->mVertices[Attachment.Vertex].mPosition = JPH::Float3(Local.x, Local.y, Local.z);
-            Result.Shared->mVertices[Attachment.Vertex].mInvMass = 0.0f;
         }
         const auto Edge = [&](std::uint32_t A, std::uint32_t B, float Compliance) {
             Result.Shared->mEdgeConstraints.emplace_back(A, B, Compliance);
@@ -1034,6 +1255,11 @@ namespace {
         if (ConstraintCount > Limits.MaximumConstraints) return std::nullopt;
         Result.Shared->CalculateEdgeLengths();
         Result.Shared->CalculateVolumeConstraintVolumes();
+        for (const auto &Attachment : Definition.Attachments) {
+            const auto Local = Attachment.Position - Definition.Position;
+            Result.Shared->mVertices[Attachment.Vertex].mPosition = JPH::Float3(Local.x, Local.y, Local.z);
+            Result.Shared->mVertices[Attachment.Vertex].mInvMass = 0.0f;
+        }
         Result.Shared->Optimize();
         return Result;
     }
@@ -1061,7 +1287,9 @@ namespace {
             JPH::SoftBodyCreationSettings Settings(Construction->Shared,
                 ToRVec(Definition.Position), JPH::Quat::sIdentity(), Layer);
             Settings.mNumIterations = 12;
+#ifdef PHYSICS_GANTRIA_JOLT
             Settings.mVelocityReconstruction = JPH::ESoftBodyVelocityReconstruction::ConstraintDelta;
+#endif
             Settings.mAllowSleeping = false;
             Settings.mUpdatePosition = false;
             Settings.mFacesDoubleSided = true;
@@ -1080,9 +1308,12 @@ namespace {
             Slot.Definition = Definition;
             Slot.Shared = std::move(Construction->Shared);
             Slot.Indices = std::move(Construction->Indices);
+            Slot.PendingForce = {};
             Slot.ConstraintCount = NewConstraints;
             Slot.TopologyRevision = std::max<std::uint64_t>(1, Slot.TopologyRevision + 1);
             Slot.VertexRevision = std::max<std::uint64_t>(1, Slot.VertexRevision + 1);
+            Slot.ExtractedSequence = Owner.StepSequence;
+            Slot.EverSimulated = false;
             ++LiveBodies;
             LiveVertices += NewVertices;
             LiveConstraints += NewConstraints;
@@ -1112,6 +1343,7 @@ namespace {
                     Vertex.mVelocity = JPH::Vec3::sZero();
                     Vertex.mInvMass = 0.0f;
                 }
+                Motion->CalculateMassAndInertia();
                 Slot->Definition.Attachments = Definition.Attachments;
                 ++Slot->VertexRevision;
                 return {};
@@ -1131,7 +1363,9 @@ namespace {
             JPH::SoftBodyCreationSettings Settings(Replacement->Shared,
                 ToRVec(Definition.Position), JPH::Quat::sIdentity(), Layer);
             Settings.mNumIterations = 12;
+#ifdef PHYSICS_GANTRIA_JOLT
             Settings.mVelocityReconstruction = JPH::ESoftBodyVelocityReconstruction::ConstraintDelta;
+#endif
             Settings.mAllowSleeping = false;
             Settings.mUpdatePosition = false;
             Settings.mFacesDoubleSided = true;
@@ -1153,6 +1387,8 @@ namespace {
             Slot->ConstraintCount = NewConstraints;
             ++Slot->TopologyRevision;
             ++Slot->VertexRevision;
+            Slot->ExtractedSequence = Owner.StepSequence;
+            Slot->EverSimulated = false;
             return {};
         }
         PhysicsOperationResult DestroyBody(SoftBodyId Id) override {
@@ -1167,13 +1403,80 @@ namespace {
             Slot->Live = false;
             Slot->Shared = nullptr;
             Slot->Indices.reset();
+            Slot->PendingForce = {};
             if (Slot->Generation == std::numeric_limits<std::uint32_t>::max()) Slot->Retired = true;
             else ++Slot->Generation;
             return {};
         }
         PhysicsOperationResult ApplyForce(SoftBodyId Id, glm::vec3 Force) override {
             if (!Finite(Force)) return {PhysicsOperationStatus::InvalidDescription, "Nonfinite soft force"};
-            return AddVelocity(Id, Force * SoftBodyStepInterval, std::nullopt);
+            auto *Slot = Find(Id);
+            if (!Slot) return InvalidBody();
+            const auto Combined = Slot->PendingForce + Force;
+            if (!Finite(Combined))
+                return {PhysicsOperationStatus::InvalidDescription, "Soft force accumulation overflow"};
+            Slot->PendingForce = Combined;
+            return {};
+        }
+        bool FlushForces(float DeltaTime) {
+            struct StagedForce {
+                Slot *Target = nullptr;
+                std::vector<glm::vec3> Before;
+                std::vector<glm::vec3> After;
+            };
+            std::vector<StagedForce> Pending;
+            for (std::uint32_t Index = 1; Index < Slots.size(); ++Index) {
+                auto &Slot = Slots[Index];
+                if (!Slot.Live || !Slot.Definition.Enabled || Slot.PendingForce == glm::vec3(0.0f)) continue;
+                const auto VelocityImpulse = Slot.PendingForce * DeltaTime;
+                if (!Finite(VelocityImpulse)) return false;
+                JPH::BodyLockRead Lock(Owner.World.GetBodyLockInterface(), Slot.Native);
+                if (!Lock.Succeeded()) return false;
+                const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(
+                    Lock.GetBody().GetMotionProperties());
+                const auto &Vertices = Motion->GetVertices();
+                std::size_t Movable = 0;
+                for (const auto &Vertex : Vertices) if (Vertex.mInvMass > 0) ++Movable;
+                StagedForce Stage;
+                Stage.Target = &Slot;
+                Stage.Before.reserve(Vertices.size());
+                Stage.After.reserve(Vertices.size());
+                for (const auto &Vertex : Vertices) {
+                    const auto Before = FromJolt(Vertex.mVelocity);
+                    const auto After = Vertex.mInvMass > 0 && Movable > 0
+                        ? Before + VelocityImpulse * (Vertex.mInvMass / float(Movable)) : Before;
+                    if (!Finite(Before) || !Finite(After)) return false;
+                    Stage.Before.push_back(Before);
+                    Stage.After.push_back(After);
+                }
+                Pending.push_back(std::move(Stage));
+            }
+            std::size_t Applied = 0;
+            for (; Applied < Pending.size(); ++Applied) {
+                auto &Stage = Pending[Applied];
+                JPH::BodyLockWrite Lock(Owner.World.GetBodyLockInterface(), Stage.Target->Native);
+                if (!Lock.Succeeded()) break;
+                auto *Motion = static_cast<JPH::SoftBodyMotionProperties *>(
+                    Lock.GetBody().GetMotionProperties());
+                auto &Vertices = Motion->GetVertices();
+                if (Vertices.size() != Stage.After.size()) break;
+                for (std::size_t Index = 0; Index < Vertices.size(); ++Index)
+                    Vertices[Index].mVelocity = ToJolt(Stage.After[Index]);
+            }
+            if (Applied != Pending.size()) {
+                for (std::size_t Prior = 0; Prior < Applied; ++Prior) {
+                    auto &Stage = Pending[Prior];
+                    JPH::BodyLockWrite Lock(Owner.World.GetBodyLockInterface(), Stage.Target->Native);
+                    if (!Lock.Succeeded()) return false;
+                    auto &Vertices = static_cast<JPH::SoftBodyMotionProperties *>(
+                        Lock.GetBody().GetMotionProperties())->GetVertices();
+                    for (std::size_t Index = 0; Index < Vertices.size(); ++Index)
+                        Vertices[Index].mVelocity = ToJolt(Stage.Before[Index]);
+                }
+                return false;
+            }
+            for (auto &Stage : Pending) Stage.Target->PendingForce = {};
+            return true;
         }
         PhysicsOperationResult ApplyImpulse(SoftBodyId Id, glm::vec3 Impulse) override {
             if (!Finite(Impulse)) return {PhysicsOperationStatus::InvalidDescription, "Nonfinite soft impulse"};
@@ -1196,7 +1499,7 @@ namespace {
             return SoftBodyInspection{Slot->Shared->mVertices.size(),
                 Slot->Shared->mEdgeConstraints.size() + Slot->Shared->mVolumeConstraints.size(),
                 Slot->Definition.Attachments.size(), Slot->TopologyRevision, Slot->VertexRevision,
-                Slot->Definition.Enabled, Slot->Definition.Enabled && Owner.StepSequence > 0};
+                Slot->Definition.Enabled, Slot->Definition.Enabled && Slot->EverSimulated};
         }
         SoftBodyStepResult Step(const SoftBodyStepConfig &Config) override {
             SoftBodyStepResult Result;
@@ -1209,6 +1512,7 @@ namespace {
                 if (!Slot.Live) continue;
                 const bool Simulated = Slot.Definition.Enabled && Owner.StepSequence > Slot.ExtractedSequence;
                 if (Simulated) ++Slot.VertexRevision;
+                if (Simulated) Slot.EverSimulated = true;
                 auto State = Extract({Index, Slot.Generation}, Slot, Simulated);
                 if (State) Result.States.push_back(std::move(*State));
                 Slot.ExtractedSequence = Owner.StepSequence;
@@ -1222,6 +1526,7 @@ namespace {
         bool HasInFlightStep() const override { return false; }
         void Shutdown() override {
             if (Stopped) return;
+            Owner.SetBeforeUnifiedStep({});
             for (std::uint32_t Index = 1; Index < Slots.size(); ++Index)
                 if (Slots[Index].Live) (void)DestroyBody({Index, Slots[Index].Generation});
             Stopped = true;
@@ -1253,7 +1558,9 @@ namespace {
             std::uint64_t TopologyRevision = 0;
             std::uint64_t VertexRevision = 0;
             std::uint64_t ExtractedSequence = 0;
+            bool EverSimulated = false;
             std::size_t ConstraintCount = 0;
+            glm::vec3 PendingForce{0.0f};
         };
         Slot *Find(SoftBodyId Id) {
             return Id.IsValid() && Id.Slot < Slots.size() && Slots[Id.Slot].Live &&
@@ -1268,7 +1575,7 @@ namespace {
             Description.CanCollide = Definition.CollisionMode == SoftBodyCollisionMode::RigidPrimitives &&
                 Definition.Enabled;
             Description.CanTouch = false;
-            return Owner.Layers.GetLayer(Description);
+            return Owner.Layers.GetLayer(Description, true);
         }
         std::optional<SoftBodyState> Extract(SoftBodyId Id, const Slot &Record, bool Simulated) const {
             JPH::BodyLockRead Lock(Owner.World.GetBodyLockInterface(), Record.Native);
@@ -1330,9 +1637,20 @@ std::unique_ptr<gargantuan::IPhysicsBackend> CreateRigidJoltBackend(
 UnifiedJoltProvider CreateUnifiedJoltProvider(const gargantuan::PhysicsWorldConfig &Config,
                                                gargantuan::SoftBodyWorldLimits Limits,
                                                int WorkerBudget) {
+#ifndef PHYSICS_GANTRIA_JOLT
+    (void)Config;
+    (void)Limits;
+    (void)WorkerBudget;
+    return {};
+#else
     auto Rigid = std::make_unique<RigidJoltBackend>(Config, WorkerBudget, true);
     if (!Rigid->IsValid()) return {};
     auto Soft = std::make_unique<JoltSoftBackend>(*Rigid, Limits);
+    auto *SoftPointer = Soft.get();
+    Rigid->SetBeforeUnifiedStep([SoftPointer](float DeltaTime) {
+        return SoftPointer->FlushForces(DeltaTime);
+    });
     return {std::move(Rigid), std::move(Soft)};
+#endif
 }
 }

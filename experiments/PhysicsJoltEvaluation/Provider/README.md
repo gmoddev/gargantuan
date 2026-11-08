@@ -43,14 +43,24 @@ work because native Jolt already owns the colliders.
 
 Current limitations before production consideration:
 
-- Soft collision mode `RigidPrimitives` currently admits native soft/soft
-  collision too. Its quality and cost are not yet qualified against the
-  neutral XPBD contract, which has no soft/soft contact.
-- Soft body force is applied as a fixed 1/60-second velocity change at call
-  time; the neutral XPBD backend accumulates force until its next step.
-- The provider does not yet implement full canonical mesh residency accounting,
-  byte budgets, or shared asset resource retirement metrics. It retains mesh
-  buffers for each live body and releases them on body destruction.
+- Jolt 5.6 does not solve soft/soft contacts: its soft collision collector
+  accepts rigid bodies only. The provider filters soft/soft layer pairs before
+  narrow phase. Soft/soft behavior remains unavailable.
+- Soft forces accumulate until the next combined rigid step. They are staged
+  against the actual step duration, validated, then applied to native vertex
+  velocities before the Jolt world advances. Rigid forces and torques are
+  reissued once per half-frame `Update`, because Jolt clears them at the end
+  of each `Update`; a no-contact F/m fixture checks the resulting momentum.
+- Canonical mesh residency is charged by resource ID, revision, and immutable
+  buffer identity. Shared consumers charge canonical bytes once and each native
+  shape by Jolt's reported size. The adapter enforces configured resource,
+  consumer, canonical-byte, native-byte, and native-shape limits and retires
+  charges on final release. It does not yet cache one native shape across
+  consumers of equal scale; each consumer owns a Jolt shape allocation.
+  Static-mesh-to-primitive transitions replace the native Jolt body while
+  preserving the neutral `PhysicsBodyId`. A transition with a live attached
+  constraint rejects before mutation until constraint recreation can be made
+  transactional.
 - The capsule mover uses bounded shape casts and tangential clipping. Initial
   penetration correction, multiple simultaneous planes, and Box3D-equivalent
   floor/step behavior remain open.

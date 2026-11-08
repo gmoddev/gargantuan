@@ -1,10 +1,12 @@
 #include "UnifiedJoltProvider.hpp"
+#include "../ExperimentSupport.hpp"
 #include "gargantuan/classes/Cloth.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 
 #include <algorithm>
@@ -133,12 +135,64 @@ namespace {
         Description.Shape.Mesh = Mesh;
         const auto Imported = Provider.Rigid->CreateBody(Description);
         Require(Imported.IsValid(), "canonical mesh admission failed");
+        const auto FirstResidency = Provider.Rigid->GetCollisionResidency();
+        Require(FirstResidency.ActiveResources == 1 && FirstResidency.ActiveConsumers == 1 &&
+            FirstResidency.CanonicalBytes > 0 && FirstResidency.NativeMeshBytes > 0 &&
+            FirstResidency.NativeShapeBytesKnown, "mesh residency did not charge canonical and native bytes");
+        auto DuplicateDescription = Description;
+        DuplicateDescription.Transform.Position.x = 5;
+        DuplicateDescription.Shape.Mesh = std::make_shared<PhysicsTriangleMesh>(*Mesh);
+        const auto Duplicate = Provider.Rigid->CreateBody(DuplicateDescription);
+        Require(Duplicate.IsValid(), "shared canonical mesh consumer admission failed");
+        const auto SharedResidency = Provider.Rigid->GetCollisionResidency();
+        Require(SharedResidency.ActiveResources == 1 && SharedResidency.ActiveConsumers == 2 &&
+            SharedResidency.CanonicalBytes == FirstResidency.CanonicalBytes,
+            "shared canonical mesh charged duplicate resource bytes");
+        DuplicateDescription.Transform.Position.x = 6;
+        DuplicateDescription.Shape.Mesh = std::make_shared<PhysicsTriangleMesh>(*Mesh);
+        Require(Provider.Rigid->UpdateBody(Duplicate, DuplicateDescription).Succeeded() &&
+            Provider.Rigid->GetCollisionResidency().CreatedMeshShapes == 2,
+            "equivalent mesh wrapper rebuilt native shape during transform update");
         const auto Hit = Provider.Rigid->Raycast({.Origin = {0, 2, 0}, .Direction = {0, -5, 0}});
         Require(Hit.Succeeded() && std::any_of(Hit.Candidates.begin(), Hit.Candidates.end(),
             [&](const auto &Candidate) { return Candidate.Body == Imported; }),
             "canonical mesh did not serve a ray");
+        auto DynamicFallback = Box({0, 1, 0}, {1, 1, 1}, false);
+        const auto Constrained = Provider.Rigid->CreateBody(Box({0, 3, 0}, {1, 1, 1}, false));
+        PhysicsConstraintDesc MeshJoint;
+        MeshJoint.Kind = PhysicsConstraintKind::Weld;
+        MeshJoint.BodyA = Imported;
+        MeshJoint.BodyB = Constrained;
+        const auto Attached = Provider.Rigid->TryCreateConstraint(MeshJoint);
+        Require(Constrained.IsValid() && Attached.Succeeded(), "mesh constraint admission failed");
+        const auto BeforeDenied = Provider.Rigid->GetCollisionResidency();
+        Require(!Provider.Rigid->UpdateBody(Imported, DynamicFallback).Succeeded() &&
+            Provider.Rigid->GetBodyState(Imported)->Description.Shape.Kind ==
+                PhysicsShapeKind::StaticTriangleMesh &&
+            Provider.Rigid->GetCollisionResidency().ActiveConsumers == BeforeDenied.ActiveConsumers,
+            "constrained mesh transition did not reject atomically");
+        const auto StillMesh = Provider.Rigid->Raycast({.Origin = {0, 2, 0}, .Direction = {0, -5, 0}});
+        Require(StillMesh.Succeeded() && std::any_of(StillMesh.Candidates.begin(), StillMesh.Candidates.end(),
+            [&](const auto &Candidate) { return Candidate.Body == Imported; }),
+            "rejected constrained transition changed the native mesh shape");
+        Require(Provider.Rigid->DestroyConstraint(Attached.Constraint).Succeeded() &&
+            Provider.Rigid->DestroyBody(Constrained).Succeeded(),
+            "mesh constraint release failed");
+        Require(Provider.Rigid->UpdateBody(Imported, DynamicFallback).Succeeded() &&
+            Provider.Rigid->IsBodyValid(Imported) &&
+            Provider.Rigid->GetBodyState(Imported)->Mass > 0,
+            "static mesh to dynamic fallback lost neutral identity");
+        Require(Provider.Rigid->UpdateBody(Imported, Description).Succeeded(),
+            "dynamic fallback to canonical mesh failed");
         Require(Provider.Rigid->DestroyBody(Imported).Succeeded(), "mesh release failed");
         Require(!Provider.Rigid->IsBodyValid(Imported), "retired mesh body is still live");
+        Require(Provider.Rigid->GetCollisionResidency().ActiveResources == 1 &&
+            Provider.Rigid->GetCollisionResidency().ActiveConsumers == 1,
+            "releasing one mesh consumer retired shared resource early");
+        Require(Provider.Rigid->DestroyBody(Duplicate).Succeeded() &&
+            Provider.Rigid->GetCollisionResidency().ActiveResources == 0 &&
+            Provider.Rigid->GetCollisionResidency().NativeMeshBytes == 0,
+            "final mesh consumer failed to retire canonical and native bytes");
         Require(Provider.Rigid->DestroyBody(Wall).Succeeded(), "wall release failed");
     }
     void WeldUnderImpulse() {
@@ -164,6 +218,21 @@ namespace {
             std::abs(State->Transform.Position.y + 2.0f) < 0.1f,
             "weld did not hold authored relative pose under impulse");
         Require(Provider.Rigid->DestroyConstraint(Weld.Constraint).Succeeded(), "weld release failed");
+    }
+    void ForceAcrossHalfUpdates() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        const auto Body = Provider.Rigid->CreateBody(Box({0, 0, 0}, {1, 1, 1}, false));
+        Require(Body.IsValid(), "force fixture body admission failed");
+        const auto Mass = Provider.Rigid->GetBodyState(Body)->Mass;
+        Require(Provider.Rigid->ApplyForce(Body, {7, 0, 0}).Succeeded(),
+            "neutral rigid force admission failed");
+        Advance(Provider);
+        const auto State = Provider.Rigid->GetBodyState(Body);
+        const float Expected = 7.0f / Mass / 60.0f;
+        Require(State && std::abs(State->LinearVelocity.x - Expected) < 0.02f,
+            "two half-update schedule lost or duplicated neutral rigid force");
     }
     void ClothAndRubberCoupling() {
         PhysicsWorldConfig Config;
@@ -315,11 +384,21 @@ namespace {
 }
 
 int main() {
+    PhysicsEvaluation::SuppressErrorDialogs();
+    PhysicsEvaluation::InstallPhysicsAllocators();
     try {
+        gargantuan::BootstrapNativeRuntimeSchema();
+        std::cout << "[Physics:JoltProvider] rigid identity/events\n" << std::flush;
         RigidIdentityAndEvents();
+        std::cout << "[Physics:JoltProvider] capsule/mesh residency\n" << std::flush;
         CapsuleAndMeshResidency();
+        std::cout << "[Physics:JoltProvider] weld\n" << std::flush;
         WeldUnderImpulse();
+        std::cout << "[Physics:JoltProvider] force\n" << std::flush;
+        ForceAcrossHalfUpdates();
+        std::cout << "[Physics:JoltProvider] cloth/rubber coupling\n" << std::flush;
         ClothAndRubberCoupling();
+        std::cout << "[Physics:JoltProvider] DataModel lifecycle\n" << std::flush;
         DataModelAdmissionAndStreaming();
         std::cout << "[Physics:JoltProvider] qualification passed\n";
         return 0;
