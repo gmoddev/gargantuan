@@ -48,7 +48,10 @@ step and Jolt applies it to current native velocities. Only the common
 uniform-impulse operator is used in this benchmark.
 
 Cloth stretch and bend edges share neutral topology and compliance values,
-but the solvers and correction order differ. Rubber shape uses Jolt cell
+but the solvers and correction order differ. XPBD `Quality=Automatic` selects
+eight iterations for 4K bodies and four for 16K bodies; Jolt uses the fixed
+qualified 12 integrations per collision step (192 per neutral frame). Rubber
+shape uses Jolt cell
 diagonals as an approximation of XPBD shape matching. A timing advantage is
 not evidence of equivalent material quality when sag, strain, attachment, or
 volume measurements disagree. The observed error envelope and any accepted
