@@ -32,6 +32,10 @@ on:
         description: Broader pristine unified Jolt fixtures with accepted-state and measured-work gates
         type: boolean
         default: false
+      unified_qualification_only:
+        description: Final unified fixture qualification and bounded Engine/XPBD architecture comparison
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,7 +47,7 @@ concurrency:
 
 jobs:
   linux-release-comparison:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only && !inputs.unified_screen_only)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only && !inputs.unified_screen_only && !inputs.unified_qualification_only)
     name: Ubuntu Release / experimental quality and timing
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -554,7 +558,7 @@ jobs:
             build-unified/JoltBuild/libJolt.a
 
   hard-compatibility-proof:
-    if: github.event_name == 'workflow_dispatch' && inputs.unified_screen_only
+    if: github.event_name == 'workflow_dispatch' && (inputs.unified_screen_only || inputs.unified_qualification_only)
     name: Exact hard-constraint kinematic compatibility
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -594,3 +598,157 @@ jobs:
           name: jolt-hard-compatibility-evidence
           if-no-files-found: error
           path: compatibility-evidence/
+
+  unified-final-qualification:
+    if: github.event_name == 'workflow_dispatch' && inputs.unified_qualification_only
+    name: All unified fixtures / quality and cost / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            suffix: ''
+          - os: windows-2025-vs2026
+            suffix: '.exe'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - run: git submodule update --init --depth 1 vendor/json vendor/box3d
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: jrouwe/JoltPhysics
+          ref: e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          path: .evaluation-jolt
+          persist-credentials: false
+      - name: Locate Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $Installation) { throw 'MSVC toolchain unavailable' }
+          "VSDEVCMD=$(Join-Path $Installation 'Common7\Tools\VsDevCmd.bat')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Compile pristine unified runner on Linux
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir unified-qualified
+          git rev-parse HEAD > unified-qualified/ExecutedSource.txt
+          c++ --version > unified-qualified/Compiler.txt
+          lscpu > unified-qualified/Cpu.txt
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-unified-qualified -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON -DDIAGNOSTIC_JOLT_ROOT="$GITHUB_WORKSPACE/.evaluation-jolt" -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" 2>&1 | tee unified-qualified/Configure.log
+          cmake --build build-unified-qualified --target PhysicsJoltUnifiedCouplingQualification --parallel 2 2>&1 | tee unified-qualified/Build.log
+      - name: Compile pristine unified runner on Windows
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          mkdir unified-qualified
+          git rev-parse HEAD > unified-qualified\ExecutedSource.txt
+          cl /Bv > unified-qualified\Compiler.txt 2>&1
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-unified-qualified -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_JOLT_ROOT="%CD%\.evaluation-jolt" -DEVALUATION_SOURCE_ROOT="%CD%" > unified-qualified\Configure.log 2>&1
+          if errorlevel 1 (type unified-qualified\Configure.log & exit /b 1)
+          cmake --build build-unified-qualified --target PhysicsJoltUnifiedCouplingQualification --parallel 2 > unified-qualified\Build.log 2>&1
+          if errorlevel 1 (type unified-qualified\Build.log & exit /b 1)
+      - name: Qualify all five fixtures and paired frame-only timing
+        run: >-
+          python experiments/PhysicsJoltEvaluation/RunUnifiedQualification.py
+          --exe build-unified-qualified/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
+          --output unified-qualified/Runs
+      - name: Preserve unified qualification and every rejected control
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-unified-qualified-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            unified-qualified/
+            build-unified-qualified/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
+            build-unified-qualified/CMakeCache.txt
+            build-unified-qualified/compile_commands.json
+
+  engine-architecture-comparison:
+    if: github.event_name == 'workflow_dispatch' && inputs.unified_qualification_only
+    name: Engine rigid regression and matched corrected coupling / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025-vs2026]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: jrouwe/JoltPhysics
+          ref: e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          path: .evaluation-jolt
+          persist-credentials: false
+      - name: Prepare Linux toolchain
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 clang-format g++-14 cmake ninja-build libfreetype-dev libx11-dev libxcursor-dev libxext-dev libxfixes-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Generate reflection and preserve exact executed source
+        run: lute tools/classgen
+      - name: Locate Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $Installation) { throw 'MSVC toolchain unavailable' }
+          "VSDEVCMD=$(Join-Path $Installation 'Common7\Tools\VsDevCmd.bat')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build selected Engine comparison targets on Linux
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir engine-comparison
+          clang++-19 --version > engine-comparison/Compiler.txt
+          lscpu > engine-comparison/Cpu.txt
+          cmake -S . -B build-engine-comparison -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 -DCMAKE_C_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DGARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF -DBUILD_TESTING=OFF -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF -DGARGANTUAN_BUILD_PHYSICS_JOLT_EVALUATION=ON -DPHYSICS_EVALUATION_JOLT_ROOT="$GITHUB_WORKSPACE/.evaluation-jolt" 2>&1 | tee engine-comparison/Configure.log
+          cmake --build build-engine-comparison --target PhysicsJoltUnifiedRigidEvaluation PhysicsJoltXpbdCouplingDiagnostic PhysicsJoltNativeCouplingDiagnostic --parallel 2 2>&1 | tee engine-comparison/Build.log
+      - name: Build selected Engine comparison targets on Windows
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          mkdir engine-comparison
+          cl /Bv > engine-comparison\Compiler.txt 2>&1
+          cmake -S . -B build-engine-comparison -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DGARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF -DBUILD_TESTING=OFF -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF -DGARGANTUAN_BUILD_PHYSICS_JOLT_EVALUATION=ON -DPHYSICS_EVALUATION_JOLT_ROOT="%CD%\.evaluation-jolt" > engine-comparison\Configure.log 2>&1
+          if errorlevel 1 (type engine-comparison\Configure.log & exit /b 1)
+          cmake --build build-engine-comparison --target PhysicsJoltUnifiedRigidEvaluation PhysicsJoltXpbdCouplingDiagnostic PhysicsJoltNativeCouplingDiagnostic --parallel 2 > engine-comparison\Build.log 2>&1
+          if errorlevel 1 (type engine-comparison\Build.log & exit /b 1)
+      - name: Run bounded regressions and matched corrected-coupling comparison
+        run: >-
+          python experiments/PhysicsJoltEvaluation/RunEngineComparison.py
+          --build build-engine-comparison --jolt .evaluation-jolt --output engine-comparison/Runs
+      - name: Preserve selected Engine comparison outputs and dependency metadata
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-engine-comparison-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            engine-comparison/
+            build-engine-comparison/CMakeCache.txt
+            build-engine-comparison/compile_commands.json
+            build-engine-comparison/experiments/PhysicsJoltEvaluation/PhysicsJoltUnifiedRigidEvaluation*
+            build-engine-comparison/experiments/PhysicsJoltEvaluation/PhysicsJoltXpbdCouplingDiagnostic*
+            build-engine-comparison/experiments/PhysicsJoltEvaluation/PhysicsJoltNativeCouplingDiagnostic*

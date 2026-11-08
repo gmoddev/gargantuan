@@ -70,6 +70,7 @@ endfunction()
 
 foreach(PHYSICS_EVALUATION_SUFFIX "" Allocations)
     PhysicsEvaluationTarget(PhysicsJoltRigidEvaluation${PHYSICS_EVALUATION_SUFFIX} RigidBenchmark.cpp RigidJoltBackend.cpp)
+    PhysicsEvaluationTarget(PhysicsJoltUnifiedRigidEvaluation${PHYSICS_EVALUATION_SUFFIX} UnifiedRigidBenchmark.cpp RigidJoltBackend.cpp)
     PhysicsEvaluationTarget(PhysicsJoltSoftEvaluation${PHYSICS_EVALUATION_SUFFIX} SoftEvaluation.cpp)
     PhysicsEvaluationTarget(PhysicsJoltCouplingEvaluation${PHYSICS_EVALUATION_SUFFIX} CouplingEvaluation.cpp CouplingXpbdBackend.cpp)
     PhysicsEvaluationTarget(PhysicsJoltUnifiedCouplingQualification${PHYSICS_EVALUATION_SUFFIX} UnifiedCouplingEvaluation.cpp CouplingXpbdBackend.cpp)

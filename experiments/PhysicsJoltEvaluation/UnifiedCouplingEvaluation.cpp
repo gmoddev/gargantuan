@@ -41,6 +41,7 @@ namespace {
         int WorldUpdates = 1;
         int SoftIterations = 24;
         float StretchCompliance = 0.0f;
+        bool ObserveAccepted = true;
     };
 
     Options Parse(int ArgumentCount, char **Arguments) {
@@ -57,6 +58,11 @@ namespace {
             else if (Name == "--world-updates") Result.WorldUpdates = std::stoi(Value);
             else if (Name == "--soft-iterations") Result.SoftIterations = std::stoi(Value);
             else if (Name == "--stretch-compliance") Result.StretchCompliance = std::stof(Value);
+            else if (Name == "--observe-accepted") {
+                if (Value != "0" && Value != "1")
+                    throw std::runtime_error("[Physics:Coupling] Invalid observe-accepted option");
+                Result.ObserveAccepted = Value == "1";
+            }
             else throw std::runtime_error("[Physics:Coupling] Unknown option");
         }
         if (Result.Backend != "Jolt" && Result.Backend != "XPBD") throw std::runtime_error("[Physics:Coupling] Invalid backend");
@@ -112,7 +118,8 @@ namespace {
 
     SoftObservation ObserveSoft(const JoltWorld &World, JPH::BodyID Id,
                                 const JPH::SoftBodySharedSettings &Shared,
-                                JPH::Vec3 Gravity, JPH::RVec3 InitialOrigin) {
+                                JPH::Vec3 Gravity, JPH::RVec3 InitialOrigin,
+                                JPH::Vec3 GravityReferenceOrigin) {
         JPH::BodyLockRead Lock(World.World.GetBodyLockInterface(), Id);
         if (!Lock.Succeeded()) throw std::runtime_error("[Physics:Coupling] Soft body lock failed");
         const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
@@ -185,7 +192,7 @@ namespace {
                 Result.GravitationalPotentialChange -= static_cast<double>(Mass) *
                     static_cast<double>(Gravity.Dot(Position + CurrentOrigin - Rest - RestOrigin));
                 Result.GravitationalPotentialAbsolute -= static_cast<double>(Mass) *
-                    static_cast<double>(Gravity.Dot(Position + CurrentOrigin));
+                    static_cast<double>(Gravity.Dot(Position + CurrentOrigin - GravityReferenceOrigin));
                 ++Result.MovableVertices;
             } else {
                 const auto Rest = JPH::Vec3(Shared.mVertices[Index].mPosition);
@@ -216,6 +223,30 @@ namespace {
                     Edge.mCompliance = Config.StretchCompliance;
                     ++ChangedStretchEdges;
                 }
+        std::size_t ActiveEdgeConstraints = 0;
+        std::size_t ActiveVolumeConstraints = 0;
+        std::size_t NonpositiveActiveConstraints = 0;
+        for (const auto &Edge : Shared->mEdgeConstraints)
+            if (Shared->mVertices[Edge.mVertex[0]].mInvMass > 0.0f ||
+                Shared->mVertices[Edge.mVertex[1]].mInvMass > 0.0f) {
+                ++ActiveEdgeConstraints;
+                if (!(Edge.mCompliance > 0.0f)) ++NonpositiveActiveConstraints;
+            }
+        for (const auto &Volume : Shared->mVolumeConstraints) {
+            bool Active = false;
+            for (const auto Vertex : Volume.mVertex)
+                Active |= Shared->mVertices[Vertex].mInvMass > 0.0f;
+            if (Active) {
+                ++ActiveVolumeConstraints;
+                if (!(Volume.mCompliance > 0.0f)) ++NonpositiveActiveConstraints;
+            }
+        const bool UnsupportedConstraintKinds = !Shared->mDihedralBendConstraints.empty() ||
+            !Shared->mSkinnedConstraints.empty() || !Shared->mLRAConstraints.empty() ||
+            !Shared->mRodStretchShearConstraints.empty() || !Shared->mRodBendTwistConstraints.empty();
+        const bool ReferenceModelPreconditions = !UnsupportedConstraintKinds &&
+            NonpositiveActiveConstraints == 0;
+        const bool FullInternalObservationCoverage = Config.ObserveAccepted &&
+            Config.CollisionSteps == 1 && Config.SoftIterations == 1;
         if (IsRubber) for (auto &Vertex : Shared->mVertices) Vertex.mVelocity = JPH::Float3(4.0f, 0.0f, 0.0f);
         auto Soft = World.AddSoft(Shared, SoftOrigin, Config.SoftIterations, IsRubber, 2.4f);
         World.World.SetGravity(Horizontal ? JPH::Vec3(0.0f, -9.81f, 0.0f) : JPH::Vec3::sZero());
@@ -257,10 +288,17 @@ namespace {
         std::vector<JPH::RVec3> InitialRigidPositions;
         for (auto Id : Rigids) InitialRigidPositions.push_back(World.World.GetBodyInterface().GetPosition(Id));
         const auto Gravity = World.World.GetGravity();
+        JPH::Vec3 GravityReferenceOrigin = JPH::Vec3::sZero();
+        for (const auto &Vertex : Shared->mVertices)
+            GravityReferenceOrigin += JPH::Vec3(Vertex.mPosition);
+        GravityReferenceOrigin /= static_cast<float>(Shared->mVertices.size());
+        GravityReferenceOrigin += JPH::Vec3(static_cast<float>(SoftOrigin.GetX()),
+            static_cast<float>(SoftOrigin.GetY()), static_cast<float>(SoftOrigin.GetZ()));
         const auto CaptureState = [&](int Frame, int Update, double StepMs,
                                       std::uint64_t UpdateContacts,
                                       const Json &UpdateContactsPerRigid) -> Json {
-            const auto SoftState = ObserveSoft(World, Soft, *Shared, Gravity, SoftOrigin);
+            const auto SoftState = ObserveSoft(World, Soft, *Shared, Gravity, SoftOrigin,
+                GravityReferenceOrigin);
             bool StateFinite = SoftState.Finite;
             Json RigidStates = Json::array();
             JPH::Vec3 RigidMomentum = JPH::Vec3::sZero();
@@ -297,7 +335,7 @@ namespace {
                 const JPH::Vec3 WorldPosition(static_cast<float>(Position.GetX()),
                     static_cast<float>(Position.GetY()), static_cast<float>(Position.GetZ()));
                 const double GravitationalAbsolute = -static_cast<double>(Mass) *
-                    static_cast<double>(Gravity.Dot(WorldPosition));
+                    static_cast<double>(Gravity.Dot(WorldPosition - GravityReferenceOrigin));
                 RigidGravitationalAbsolute += GravitationalAbsolute;
                 RigidStates.push_back({{"Position", Vector(Position)}, {"Velocity", Vector(Velocity)},
                     {"AngularVelocity", Vector(AngularVelocity)}, {"Mass", Mass},
@@ -398,6 +436,7 @@ namespace {
             }
             const auto FrameStart = std::chrono::steady_clock::now();
             Json AcceptedUpdates = Json::array();
+            Json FinalState;
             std::uint64_t FrameContacts = 0;
             std::array<std::uint64_t, 2> FrameContactCounts{};
             double FrameStepMs = 0.0;
@@ -415,6 +454,7 @@ namespace {
                     TotalContactsPerRigid[Index] += Count;
                     UpdateContactsPerRigid.push_back(Count);
                 }
+                if (!Config.ObserveAccepted && Update + 1 != Config.WorldUpdates) continue;
                 auto State = CaptureState(Frame, Update, StepMs, UpdateContacts, UpdateContactsPerRigid);
                 Finite &= State["Finite"].get<bool>();
                 MaxAcceptedStretch = std::max(MaxAcceptedStretch, State["MaxEdgeStretch"].get<double>());
@@ -457,10 +497,11 @@ namespace {
                 }
                 MaxAbsoluteReferenceMechanicalEnergy = std::max(
                     MaxAbsoluteReferenceMechanicalEnergy, AbsoluteReference);
-                AcceptedUpdates.push_back(std::move(State));
+                if (Config.ObserveAccepted) AcceptedUpdates.push_back(State);
+                FinalState = std::move(State);
             }
             if (FrameContacts > 0 && FirstContactFrame < 0) FirstContactFrame = Frame;
-            Json FrameState = AcceptedUpdates.back();
+            Json FrameState = std::move(FinalState);
             FrameState.erase("WorldUpdate");
             FrameState["StepMs"] = FrameStepMs;
             FrameState["VertexContacts"] = FrameContacts;
@@ -474,7 +515,7 @@ namespace {
             MaxParticlePenetration = std::max(MaxParticlePenetration,
                 FrameState["ParticlePenetration"].get<double>());
             InvertedTetrahedronFrames += FrameState["InvertedTetrahedra"].get<std::size_t>();
-            FrameState["AcceptedUpdates"] = std::move(AcceptedUpdates);
+            if (Config.ObserveAccepted) FrameState["AcceptedUpdates"] = std::move(AcceptedUpdates);
             FrameState["FrameWallMs"] = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - FrameStart).count();
             Frames.push_back(std::move(FrameState));
@@ -494,6 +535,7 @@ namespace {
                 {"InitialCompliantVolumeElasticEstimate", InitialVolumeU},
                 {"InitialReferenceMechanicalEnergy", InitialReferenceMechanicalEnergy},
                 {"InitialAbsoluteGravitationalPotential", InitialAbsoluteGravitationalPotential},
+                {"GravityReferenceOrigin", Vector(GravityReferenceOrigin)},
                 {"InitialAbsoluteReferenceMechanicalEnergy", InitialAbsoluteReferenceMechanicalEnergy},
                 {"MaxAngularInclusiveKineticEnergy", MaxAngularInclusiveK},
                 {"MaxAngularInclusiveKineticEnergyFrame", MaxAngularInclusiveKFrame},
@@ -509,7 +551,16 @@ namespace {
                 {"MaximumReferenceModelExcess", MaximumReferenceModelExcess},
                 {"FirstReferenceModelFailureFrame", FirstReferenceModelFailureFrame},
                 {"FirstReferenceModelFailureUpdate", FirstReferenceModelFailureUpdate},
-                {"ReferenceModelGateQualified", Finite && FirstReferenceModelFailureFrame < 0},
+                {"ReferenceModelGateQualified", FullInternalObservationCoverage ?
+                    Json(ReferenceModelPreconditions && Finite && FirstReferenceModelFailureFrame < 0) :
+                    Json(nullptr)},
+                {"ReferenceModelPreconditionsQualified", ReferenceModelPreconditions},
+                {"ActiveEdgeConstraints", ActiveEdgeConstraints},
+                {"ActiveVolumeConstraints", ActiveVolumeConstraints},
+                {"NonpositiveActiveConstraints", NonpositiveActiveConstraints},
+                {"UnsupportedConstraintKinds", UnsupportedConstraintKinds},
+                {"WorldUpdateObservationCoverage", Config.ObserveAccepted},
+                {"AcceptedObservationCoverage", FullInternalObservationCoverage},
                 {"RequestedCpuBudget", Config.Workers},
                 {"AllocatedBackgroundWorkers", BackgroundWorkers},
                 {"ActiveBackgroundWorkers", nullptr},
@@ -523,8 +574,12 @@ namespace {
                 {"SelectedStretchCompliance", Config.StretchCompliance},
                 {"ChangedHardStretchEdgeCount", ChangedStretchEdges},
                 {"DeltaTime", DeltaTime},
-                {"SchedulingScope", "World.Step(dt/world-updates, collision-steps) repeated; every accepted update sampled after completion"},
-                {"TimingScope", "StepMs sums solver World.Step durations; FrameWallMs also includes accepted-update observation and JSON construction, but excludes controlled restart setup"},
+                {"SchedulingScope", Config.ObserveAccepted ?
+                    "World.Step(dt/world-updates, collision-steps) repeated; every accepted update sampled after completion" :
+                    "World.Step(dt/world-updates, collision-steps) repeated; only final frame state sampled"},
+                {"TimingScope", Config.ObserveAccepted ?
+                    "StepMs sums solver World.Step durations; FrameWallMs also includes accepted-update observation and JSON construction, but excludes controlled restart setup" :
+                    "StepMs sums solver World.Step durations; FrameWallMs includes one final state observation and JSON construction per frame, but excludes controlled restart setup"},
                 {"SoftVertices", Shared->mVertices.size()}, {"SoftEdges", Shared->mEdgeConstraints.size()},
                 {"SoftVolumes", Shared->mVolumeConstraints.size()}, {"AnchoredBoundary", !IsRubber},
                 {"TotalVertexContacts", TotalVertexContacts}, {"FirstContactFrame", FirstContactFrame},
@@ -537,10 +592,8 @@ namespace {
                 {"PublicationOrder", "Unified Jolt update, then sample both bodies at the same completed step"},
                 {"MomentumScope", "Linear rigid plus movable soft vertex momentum; damping and external boundary impulses are not integrated"},
                 {"EnergyScope", "KineticEnergy retains original rigid linear plus movable soft translational scope; AngularInclusiveKineticEnergy adds measured rigid rotational energy"},
-                {"ReferenceMechanicalEnergyScope", "Angular-inclusive kinetic plus positive-compliance edge C^2/(2c), positive-compliance six-volume C^2/(2c), and gravitational potential. ReferenceMechanicalEnergy uses potential change from initial state; AbsoluteReferenceMechanicalEnergy uses world-coordinate potential. Restart teleport/velocity work is measured separately. The gate is a bounded reference-model check, not complete Jolt solver-internal conservation"},
-                {"ExternalWork", IsRubber ? "Soft damping; collision and constraint work unmeasured" :
-                    (Horizontal ? "Gravity, pinned membrane reactions, soft damping; constraint work unmeasured" :
-                     "Pinned edge reactions, soft damping and any controlled restart impulses; constraint work unmeasured")},
+                {"ReferenceMechanicalEnergyScope", "Angular-inclusive kinetic plus positive-compliance edge C^2/(2c), positive-compliance six-volume C^2/(2c), and gravitational potential. ReferenceMechanicalEnergy uses potential change from initial state; AbsoluteReferenceMechanicalEnergy uses gravitational potential relative to the recorded initial mean soft-vertex world position. Restart teleport/velocity work is measured separately. The complete gate requires positive compliance on all active constraints and collision-steps=1, soft-iterations=1 with every world update observed; it is a bounded reference-model check, not complete Jolt solver-internal conservation"},
+                {"ExternalWork", "Rigid and soft gravity potential and controlled rigid teleport/velocity restart work are measured. Soft damping and collision/constraint solver-internal work are not individually balanced; fixed pin work is zero"},
                 {"ControlledRestarts", Config.Case == "Repeated" ? (Config.Frames - 1) / 45 : 0}};
     }
 
@@ -553,10 +606,10 @@ namespace {
 #else
     Json RunXpbd(const Options &Config, bool EnableFeedback, bool EnableContact) {
         if (Config.WorldUpdates != 1 || Config.SoftIterations != 24 ||
-            Config.StretchCompliance != 0.0f)
+            Config.StretchCompliance != 0.0f || !Config.ObserveAccepted)
             return {{"Backend", "XPBD"}, {"Case", Config.Case},
                     {"Status", "UnsupportedExperimentalProfile"},
-                    {"Reason", "The historical XPBD path does not implement the unified Jolt world-update, soft-iteration, or stretch-compliance profile"}};
+                    {"Reason", "The historical XPBD path does not implement the unified Jolt world-update, soft-iteration, stretch-compliance, or frame-only observation profile"}};
         if (Config.Case == "SphereOnCloth")
             return {{"Backend", "XPBD"}, {"Case", Config.Case}, {"Status", "UnsupportedGeometry"},
                     {"Reason", "Current cloth topology is a fixed vertical X/Y plane; horizontal membrane comparison needs a private topology adapter"}};
@@ -1102,36 +1155,52 @@ int main(int ArgumentCount, char **Arguments) {
         Result["QualityQualified"] = ContactDeformationQualified && ReciprocalRigidResponse &&
             RigidMassMatched && EnergyBudgetQualified;
         if (Config.Backend == "Jolt") {
-            const bool AcceptedPhysicalQuality = Result.value("Finite", false) &&
+            const bool FullInternalObservationCoverage = Result.value("AcceptedObservationCoverage", false);
+            const bool AcceptedPhysicalQuality = FullInternalObservationCoverage && Result.value("Finite", false) &&
                 Result["MaxAcceptedEdgeStretch"].get<double>() <= 0.1 &&
                 Result["MaxAcceptedPinDrift"].get<double>() <= 1.0e-4 &&
                 Result["MaxAcceptedParticlePenetration"].get<double>() <= 0.1 &&
                 (Config.Case != "RubberPush" ||
                     (Result["MaxAcceptedVolumeError"].get<double>() <= 0.15 &&
                      Result["InvertedTetrahedronAcceptedUpdates"].get<std::size_t>() == 0));
-            const auto AcceptedBudget = EvaluateAcceptedEnergyBudget(Result, Config);
+            const auto AcceptedBudget = FullInternalObservationCoverage ?
+                EvaluateAcceptedEnergyBudget(Result, Config) :
+                Json{{"Status", Config.ObserveAccepted ? "UnqualifiedInternalIntegrationCoverage" :
+                    "UnqualifiedFrameOnlyObservation"}, {"Qualified", nullptr}};
             const bool AcceptedBudgetQualified = AcceptedBudget.contains("Qualified") &&
                 AcceptedBudget["Qualified"].is_boolean() &&
                 AcceptedBudget["Qualified"].get<bool>();
-            const bool ReferenceModelQualified = Result.value("ReferenceModelGateQualified", false);
+            const bool ReferenceModelQualified = Result["ReferenceModelGateQualified"].is_boolean() &&
+                Result["ReferenceModelGateQualified"].get<bool>();
             const bool ClosedCase = Config.Case != "SphereOnCloth" && Config.Case != "Repeated";
-            Result["AcceptedPhysicalQualityQualified"] = AcceptedPhysicalQuality;
+            Result["AcceptedPhysicalQualityQualified"] = FullInternalObservationCoverage ?
+                Json(AcceptedPhysicalQuality) : Json(nullptr);
             Result["AcceptedNecessaryEnergyBudget"] = AcceptedBudget;
-            Result["AcceptedQualityQualified"] = AcceptedPhysicalQuality &&
+            Result["AcceptedQualityQualified"] = FullInternalObservationCoverage ? Json(AcceptedPhysicalQuality &&
                 Result.value("ContactEvidence", false) && ReciprocalRigidResponse &&
                 RigidMassMatched && ReferenceModelQualified &&
-                (!ClosedCase || AcceptedBudgetQualified);
-            Result["AcceptedQualityScope"] = "Every completed World.Step boundary: contact, geometry, mass, measured angular-inclusive K, and bounded reference-model energy with gravity potential and signed measured restart work. Closed cases also require the angular-inclusive kinetic ceiling; passing is not a complete conservation proof";
+                (!ClosedCase || AcceptedBudgetQualified)) : Json(nullptr);
+            Result["AcceptedQualityScope"] = FullInternalObservationCoverage ?
+                "Every internal integration endpoint is observed because collision-steps=1 and soft-iterations=1: contact, geometry, mass, measured angular-inclusive K, and bounded reference-model energy with gravity potential and signed measured restart work. All active constraints must have positive compliance. Closed cases also require the angular-inclusive kinetic ceiling; passing is not a complete conservation proof" :
+                (Config.ObserveAccepted ?
+                    "Every completed World.Step endpoint is observed, but internal collision steps or soft iterations are not individually observed; complete accepted-update qualification is unmeasured" :
+                    "Frame-only timing observation; intermediate world updates and internal integrations are unmeasured");
             Result["PublishedFrameQualityQualified"] = Result["QualityQualified"];
-            Result["QualityQualified"] = Result["AcceptedQualityQualified"];
+            Result["QualityQualified"] = FullInternalObservationCoverage ?
+                Result["AcceptedQualityQualified"] : Json(false);
         } else {
             Result["AcceptedQualityQualified"] = nullptr;
             Result["AcceptedQualityScope"] = "Historical XPBD path has no accepted unified-world-update sampling";
         }
         const auto BudgetStatus = EnergyBudget.value("Status", std::string{});
         Result["PhysicalQualificationStatus"] = Config.Backend == "Jolt" ?
-            (Result["QualityQualified"].get<bool>() ? "PassedAcceptedReferenceModelBounds" :
-                "FailedAcceptedReferenceModelBounds") :
+            (!Config.ObserveAccepted ? "UnqualifiedFrameOnlyObservation" :
+                (!Result.value("AcceptedObservationCoverage", false) ?
+                    "UnqualifiedInternalIntegrationCoverage" :
+                    (!Result.value("ReferenceModelPreconditionsQualified", false) ?
+                        "UnqualifiedReferenceModelPrecondition" :
+                        (Result["QualityQualified"].get<bool>() ? "PassedAcceptedReferenceModelBounds" :
+                            "FailedAcceptedReferenceModelBounds")))) :
             (BudgetStatus == "UnsupportedGeometry" ||
              BudgetStatus == "UnsupportedExperimentalProfile" || BudgetStatus == "UnsupportedBackend" ?
                 BudgetStatus : (BudgetStatus == "UnmeasuredExternalWork" ?
@@ -1143,21 +1212,27 @@ int main(int ArgumentCount, char **Arguments) {
                                   {"MinimumDirectionalRigidMomentumTransfer", 0.001},
                                   {"MinimumRigidVelocityDifference", 0.01}};
         Result["QualityQualificationScope"] = Config.Backend == "Jolt" ?
-            "Experimental accepted-update contact, deformation, reciprocal rigid response, angular-inclusive closed-case kinetic ceiling, and gravity/restart-adjusted reference-model bound" :
+            (Result.value("AcceptedObservationCoverage", false) ?
+                "Experimental complete internal integration endpoint contact, deformation, reciprocal rigid response, angular-inclusive closed-case kinetic ceiling, and gravity/restart-adjusted reference-model bound with positive-compliance active constraints" :
+                "Incomplete internal integration endpoint observation; complete accepted-update physical qualification is unmeasured") :
             "Historical XPBD contact evidence, bounded deformation, reciprocal rigid response and necessary translational kinetic ceiling where external positive work is absent";
         Result["MomentumConservationStatus"] = "Incomplete: damping and external momentum impulses are not integrated";
         Result["EnergyConservationStatus"] = Config.Backend == "Jolt" ?
-            "Bounded reference-model gate measured at every accepted update; not a complete Jolt solver-internal energy balance" :
+            (Result.value("AcceptedObservationCoverage", false) ?
+                "Bounded reference-model gate measured at every internal integration endpoint when its preconditions hold; not a complete Jolt solver-internal energy balance" :
+                "Internal integration endpoint energy incompletely observed; full reference-model gate unqualified") :
             "Incomplete: angular kinetic energy, strain potential and damping work are unmeasured";
         Result["PhysicsEquivalentTimingQualified"] = false;
         Result["ExperimentalProfile"] = {{"WorldUpdatesPerFrame", Config.WorldUpdates},
             {"CollisionStepsPerUpdate", Config.CollisionSteps},
             {"SoftIterationsPerCollisionStep", Config.SoftIterations},
             {"SelectedStretchCompliance", Config.StretchCompliance},
+            {"ObserveAcceptedUpdates", Config.ObserveAccepted},
             {"HistoricalDefaults", Config.WorldUpdates == 1 && Config.SoftIterations == 24 &&
                 Config.StretchCompliance == 0.0f}};
         Result["Resources"] = PhysicsEvaluation::ResourceDelta(Before, PhysicsEvaluation::CaptureResources());
         std::cout << Result.dump() << '\n';
+        if (Config.Backend == "Jolt" && !Config.ObserveAccepted) return 0;
         return Result.value("QualityQualified", false) &&
             (Config.Backend != "Jolt" || Result.value("AcceptedQualityQualified", false)) ? 0 : 3;
     } catch (const std::exception &Error) {

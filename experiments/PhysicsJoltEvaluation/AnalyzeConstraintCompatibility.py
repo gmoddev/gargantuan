@@ -156,13 +156,13 @@ def Analyze(PathValue: Path, SeedIndex: int, SeedSpeed: float) -> dict:
 
 def Main() -> int:
     Parser = argparse.ArgumentParser(description=__doc__)
-    Parser.add_argument("--graph", required=True, type=Path)
-    Parser.add_argument("--single-diagonal", type=Path)
-    Parser.add_argument("--no-diagonals", type=Path)
-    Parser.add_argument("--compliant-graph", type=Path)
-    Parser.add_argument("--seed-index", type=int, default=84)
-    Parser.add_argument("--seed-z", type=float, default=1.0)
-    Parser.add_argument("--output", type=Path)
+    Parser.add_argument("--graph", dest="Graph", required=True, type=Path)
+    Parser.add_argument("--single-diagonal", dest="SingleDiagonal", type=Path)
+    Parser.add_argument("--no-diagonals", dest="NoDiagonals", type=Path)
+    Parser.add_argument("--compliant-graph", dest="CompliantGraph", type=Path)
+    Parser.add_argument("--seed-index", dest="SeedIndex", type=int, default=84)
+    Parser.add_argument("--seed-z", dest="SeedZ", type=float, default=1.0)
+    Parser.add_argument("--output", dest="Output", type=Path)
     Args = Parser.parse_args()
     if Args.SeedIndex < 0 or not math.isfinite(Args.SeedZ) or abs(Args.SeedZ) > 100:
         Parser.error("[Physics:Compatibility] Seed outside bounded range")

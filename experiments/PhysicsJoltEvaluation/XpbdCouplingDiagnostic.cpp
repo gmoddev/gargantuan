@@ -198,6 +198,8 @@ namespace {
         bool Finite = true;
         double TotalPhysicalPhasesMs = 0.0;
         double TotalSubstepPipelineMs = 0.0;
+        double TotalObservationReadMs = 0.0;
+        double TotalCouplingPipelineWithoutObservationsMs = 0.0;
     };
 
     QualityObservation ObserveQuality(const std::vector<glm::vec3> &Positions,
@@ -339,6 +341,7 @@ namespace {
         std::size_t MaximumOmittedHardEdgeCount = 0;
         double TotalPhysicalPhasesMs = 0.0;
         double TotalSubstepPipelineMs = 0.0;
+        double TotalObservationReadMs = 0.0;
         std::size_t TotalContactProjections = 0;
         bool Finite = true;
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
@@ -381,6 +384,7 @@ namespace {
                 const auto SoftStart = std::chrono::steady_clock::now();
                 const auto Result = Soft.Step(SoftConfig);
                 const double SoftMs = Milliseconds(SoftStart);
+                const auto ObservationReadStart = std::chrono::steady_clock::now();
                 if (Result.CollidersTruncated || Result.BodiesTruncated || Result.VerticesTruncated)
                     throw std::runtime_error("[Physics:XpbdDiagnostic] Soft step truncated");
                 const auto State = std::find_if(Result.States.begin(), Result.States.end(),
@@ -395,6 +399,7 @@ namespace {
                     std::optional<PhysicsJoltEvaluation::DiagnosticStep>{};
                 if (Config.Diagnostics && (!Trace || Trace->Phases.empty()))
                     throw std::runtime_error("[Physics:XpbdDiagnostic] Diagnostic trace missing");
+                const double ObservationReadMs = Milliseconds(ObservationReadStart);
                 const auto FeedbackStart = std::chrono::steady_clock::now();
                 const auto Reactions = DiagnosticBackend->TakeFeedback();
                 if (Reactions.size() != (Config.Contact ? 1u : 0u))
@@ -423,6 +428,8 @@ namespace {
                 const auto AfterFeedback = ReadRigid(Rigid, RigidId);
                 const double FeedbackMs = Milliseconds(FeedbackStart);
                 const double SubstepPipelineMs = Milliseconds(PipelineStart);
+                const double CouplingPipelineWithoutObservationsMs =
+                    SubstepPipelineMs - ObservationReadMs;
                 const double PhysicalPhasesMs = RigidMs + SoftMs + FeedbackMs;
                 // Quality is intentionally outside the solve/pipeline timing windows.
                 const auto Quality = ObserveQuality(*State->Positions, Definition, ColliderSamplePosition);
@@ -435,6 +442,7 @@ namespace {
                     Quality.OmittedHardEdgeCount);
                 TotalPhysicalPhasesMs += PhysicalPhasesMs;
                 TotalSubstepPipelineMs += SubstepPipelineMs;
+                TotalObservationReadMs += ObservationReadMs;
                 TotalContactProjections += Observed.Contacts;
                 const double SoftEnergy = Dynamics->TranslationalKineticEnergy;
                 const double TotalEnergy = RigidLinearEnergy(AfterFeedback) +
@@ -470,6 +478,9 @@ namespace {
                                           {"FeedbackMs", FeedbackMs},
                                           {"PhysicalPhasesMs", PhysicalPhasesMs},
                                           {"SubstepPipelineMs", SubstepPipelineMs},
+                                          {"ObservationReadMs", ObservationReadMs},
+                                          {"CouplingPipelineWithoutObservationsMs",
+                                           CouplingPipelineWithoutObservationsMs},
                                           {"SoftWorkerCount", Result.Profile.WorkerCount},
                                           {"RigidBeforeStep", RigidState(BeforeRigid)},
                                           {"RigidAfterStep", RigidState(AfterRigid)},
@@ -503,7 +514,8 @@ namespace {
                 MaximumEdgeStretch, MaximumPinDrift, MaximumParticlePenetration,
                 MaximumCompliantEdgeElasticEstimate, MaximumKineticPlusCompliantEdgeEstimate,
                 MaximumOmittedHardEdgeCount,
-                TotalContactProjections, Finite, TotalPhysicalPhasesMs, TotalSubstepPipelineMs};
+                TotalContactProjections, Finite, TotalPhysicalPhasesMs, TotalSubstepPipelineMs,
+                TotalObservationReadMs, TotalSubstepPipelineMs - TotalObservationReadMs};
     }
 }
 
@@ -530,8 +542,11 @@ int main(int ArgumentCount, char **Arguments) {
                         {"Finite", Result.Finite},
                         {"TotalPhysicalPhasesMs", Result.TotalPhysicalPhasesMs},
                         {"TotalSubstepPipelineMs", Result.TotalSubstepPipelineMs},
+                        {"TotalObservationReadMs", Result.TotalObservationReadMs},
+                        {"TotalCouplingPipelineWithoutObservationsMs",
+                         Result.TotalCouplingPipelineWithoutObservationsMs},
                         {"ElasticEstimateScope", "Sum (current edge length - rest length)^2 / (2*compliance) over positive-compliance structural, diagonal, and two-hop bend distance edges. Hard edges are omitted and counted. This is a spring analogy, not stored XPBD solver energy or a complete mechanical-energy balance."},
-                        {"TimingScope", "RigidMs=Box3D Step only; SoftMs=XPBD Step only; FeedbackMs=feedback extraction, clamp/application and final rigid read; PhysicalPhasesMs=sum of these three; SubstepPipelineMs=from initial rigid read through collider snapshot, accepted dynamics, optional diagnostic read, feedback and final rigid read; quality checks and JSON serialization excluded"}};
+                        {"TimingScope", "RigidMs=Box3D Step only; SoftMs=XPBD Step only; FeedbackMs=feedback extraction, clamp/application and final rigid read; PhysicalPhasesMs=sum of these three; ObservationReadMs=post-soft-step result validation, state lookup, accepted dynamics read and optional diagnostic trace read/validation; SubstepPipelineMs=from initial rigid read through collider snapshot, observation reads, feedback and final rigid read; CouplingPipelineWithoutObservationsMs=SubstepPipelineMs minus ObservationReadMs; quality checks and JSON serialization excluded"}};
         Summary["FullRunResources"] = PhysicsEvaluation::ResourceDelta(Before, After);
         Summary["ResourceScope"] = "Full Run including world setup, solve, quality observations, per-frame JSON construction/output and teardown; summary JSON is constructed after the after-snapshot; not per-solver allocation cost";
         std::cout << Summary.dump() << '\n';
