@@ -749,6 +749,18 @@ namespace {
             World->StepPhysics(SoftBodyStepInterval, std::nullopt);
         const auto FinalVertex = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
         const auto LinkState = GetJoltRigidSoftAttachmentState(*Rigid, SoftId, RigidId);
+        std::cout << "[Physics:JoltProvider] dynamic attachment metrics initial_x="
+            << (InitialVertex ? InitialVertex->x : std::numeric_limits<float>::quiet_NaN())
+            << " final_x=" << (FinalVertex ? FinalVertex->x : std::numeric_limits<float>::quiet_NaN())
+            << " rigid_x=" << Load->GetCFrame().Position.x
+            << " rigid_velocity_x=" << Load->GetLinearVelocity().x
+            << " active=" << (LinkState && LinkState->Active)
+            << " applied_steps=" << (LinkState ? LinkState->AppliedSteps : 0)
+            << " last_impulse_x=" << (LinkState ? LinkState->LastImpulseOnSoft.x : 0)
+            << " endpoint_gap_x=" << (FinalVertex ?
+                Load->GetCFrame().Position.x - 1.0f - FinalVertex->x :
+                std::numeric_limits<float>::quiet_NaN())
+            << '\n' << std::flush;
         Require(InitialVertex && FinalVertex && LinkState && LinkState->Active &&
             LinkState->AppliedSteps > 0 && FinalVertex->x > InitialVertex->x + 0.02f &&
             Load->GetLinearVelocity().x < 4.0f,
