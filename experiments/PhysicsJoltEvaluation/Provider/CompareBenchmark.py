@@ -45,6 +45,8 @@ def Main() -> None:
             raise ValueError(f"Mismatched {Field}: {Jolt.get(Field)} vs {Xpbd.get(Field)}")
     Fields = QUALITY_FIELDS if Jolt["scene"].startswith("rubber") else QUALITY_FIELDS[:-1]
     Errors = {Field: abs(float(Jolt[Field]) - float(Xpbd[Field])) for Field in Fields}
+    BudgetMatched = int(Jolt["workers_requested"]) == int(Xpbd["workers_requested"]) == \
+        int(Xpbd["xpbd_workers_actual"])
     Result: dict[str, object] = {
         "scene": Jolt["scene"],
         "coupling": Jolt["coupling"],
@@ -52,6 +54,7 @@ def Main() -> None:
         "jolt_workers_requested": int(Jolt["workers_requested"]),
         "xpbd_workers_requested": int(Xpbd["workers_requested"]),
         "xpbd_workers_actual": int(Xpbd["xpbd_workers_actual"]),
+        "worker_count_matched": BudgetMatched,
         "jolt_mean_total_ms": float(Jolt["mean_total_ms"]),
         "xpbd_mean_total_ms": float(Xpbd["mean_total_ms"]),
         "quality_absolute_errors": Errors,
@@ -69,7 +72,7 @@ def Main() -> None:
         Comparable = all(Errors[Field] <= Envelope[Field] for Field in Fields)
         Result["quality_envelope"] = {Field: Envelope[Field] for Field in Fields}
         Result["quality_comparable"] = Comparable
-        if Comparable:
+        if Comparable and BudgetMatched:
             JoltTime = float(Jolt["mean_total_ms"])
             XpbdTime = float(Xpbd["mean_total_ms"])
             Result["timing_winner"] = "jolt" if JoltTime < XpbdTime else \

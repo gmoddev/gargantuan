@@ -36,7 +36,8 @@ performance ranking. The benchmark deliberately prints no winner.
 `CompareBenchmark.py jolt.log xpbd.log` emits absolute differences for those
 physical metrics and leaves `timing_winner` null. Supplying a reviewed JSON
 envelope with `--envelope limits.json` permits a timing winner only when every
-relevant absolute error is within its named threshold. The envelope requires
+relevant absolute error is within its named threshold and both requested
+worker counts equal the XPBD profile's actual worker count. The envelope requires
 `mean_y`, `center_y`, `max_pin_error`, `mean_edge_strain`, and
 `max_edge_strain`; rubber also requires `mean_volume_ratio`. These thresholds
 are in world units for heights and pin error, and dimensionless for strain
