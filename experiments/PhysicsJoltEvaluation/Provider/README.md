@@ -53,3 +53,6 @@ Current limitations before production consideration:
 - Cloth, rubber, and reciprocal contact are represented by physical fixtures;
   they are not a quality-matched parity or performance claim. Self collision,
   swept soft contact, and long-duration material calibration remain unqualified.
+  Jolt's native regular-lattice rubber uses edge and tetrahedral-volume
+  constraints, but the Engine's `ShapeCompliance` material setting has no
+  equivalent shape-matching path in this adapter yet.

@@ -292,6 +292,8 @@ namespace {
                 : Description.Kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic;
             JPH::BodyCreationSettings Settings(Shape.GetPtr(), ToRVec(Description.Transform.Position),
                 ToJolt(Description.Transform), Motion, Layer);
+            Settings.mAllowDynamicOrKinematic =
+                Description.Shape.Kind != PhysicsShapeKind::StaticTriangleMesh;
             Settings.mIsSensor = !Description.CanCollide && Description.CanTouch;
             Settings.mMotionQuality = Description.MovingBodyCCD ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
             Settings.mAllowSleeping = Configuration.EnableSleep && Description.SleepEnabled;
@@ -340,8 +342,9 @@ namespace {
                 Interface.SetShape(Slot->Native, NewShape.GetPtr(), true, JPH::EActivation::Activate);
             const auto Motion = Description.Anchored ? JPH::EMotionType::Static
                 : Description.Kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic;
-            if (Description.Anchored != Slot->Description.Anchored ||
-                Description.Kinematic != Slot->Description.Kinematic)
+            const bool MotionChanged = Description.Anchored != Slot->Description.Anchored ||
+                Description.Kinematic != Slot->Description.Kinematic;
+            if (MotionChanged)
                 Interface.SetMotionType(Slot->Native, Motion, JPH::EActivation::Activate);
             if (!SameTransform(Description.Transform, Slot->Description.Transform))
                 Interface.SetPositionAndRotation(Slot->Native, ToRVec(Description.Transform.Position),
@@ -360,7 +363,7 @@ namespace {
                     Description.MovingBodyCCD ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete);
             if (Motion != JPH::EMotionType::Static && Description.GravityScale != Slot->Description.GravityScale)
                 Interface.SetGravityFactor(Slot->Native, Description.GravityScale);
-            if (Description.Density != Slot->Description.Density || ShapeChanged ||
+            if (Description.Density != Slot->Description.Density || ShapeChanged || MotionChanged ||
                 Description.LinearDamping != Slot->Description.LinearDamping ||
                 Description.AngularDamping != Slot->Description.AngularDamping ||
                 Description.SleepEnabled != Slot->Description.SleepEnabled) {
@@ -373,7 +376,7 @@ namespace {
                     Properties->SetLinearDamping(Description.LinearDamping);
                     Properties->SetAngularDamping(Description.AngularDamping);
                     if (Motion == JPH::EMotionType::Dynamic &&
-                        (Description.Density != Slot->Description.Density || ShapeChanged)) {
+                        (Description.Density != Slot->Description.Density || ShapeChanged || MotionChanged)) {
                         auto Mass = Body.GetShape()->GetMassProperties();
                         Mass.ScaleToMass(BodyMass(Description));
                         Properties->SetMassProperties(JPH::EAllowedDOFs::All, Mass);
@@ -813,6 +816,8 @@ namespace {
                     {H.x, -H.y, H.z}, {-H.x, -H.y, H.z},
                     {H.x, H.y, -H.z}, {-H.x, H.y, -H.z},
                 };
+                if (Description.Kind == PhysicsShapeKind::CornerWedge)
+                    Points[4] = {-H.x, H.y, -H.z};
                 auto Result = JPH::ConvexHullShapeSettings(Points,
                     Description.Kind == PhysicsShapeKind::Wedge ? 6 : 5, 0.0f).Create();
                 return Result.HasError() ? nullptr : Result.Get();
