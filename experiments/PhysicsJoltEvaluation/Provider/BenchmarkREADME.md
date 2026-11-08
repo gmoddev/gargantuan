@@ -1,9 +1,10 @@
 # Bounded soft-body provider benchmark
 
-`PhysicsJoltProviderBenchmark` takes five positional arguments:
+`PhysicsJoltProviderBenchmark` takes five required positional arguments and
+one optional receipt identifier:
 
 ```
-PhysicsJoltProviderBenchmark jolt|xpbd cloth4k|cloth16k|cloth4x4k|rubber4k|rubber16k none|static-sphere frames workers
+PhysicsJoltProviderBenchmark jolt|xpbd cloth4k|cloth16k|cloth4x4k|rubber4k|rubber16k none|static-sphere frames workers [shared-run-pair]
 ```
 
 Frames must be 1–30 and requested workers 1–8. The scenes contain 64×64 or
@@ -13,6 +14,13 @@ cloth attachments, and central uniform impulse in both backends. The impulse
 is `movable vertex count × particle mass × 2`, corresponding to a nominal
 2 m/s lateral velocity before damping and constraint response. Each measured
 frame is 1/60 second. Setup and body admission are outside timed frames.
+The first measured frame is cold after admission. Per-frame output is printed
+outside its own timer but can perturb following frames. Treat a single run as
+a bounded cold provider-call sample; alternate and repeat runs on one host
+before making a steady-state claim. Pass the same nondefault `shared-run-pair`
+identifier to both backend runs to make a comparison eligible for ranking.
+Host, OS, and source translation-unit build stamp are printed in the receipt;
+the external runner should also preserve the actual binary hash.
 The XPBD constructor treats the worker argument as a maximum and may use fewer
 threads when the host has fewer cores; `xpbd_workers_actual` records the
 backend's step profile count. Jolt's argument is its configured total budget
@@ -30,7 +38,8 @@ separation and maximum poststep penetration across frames. Compare coupled
 and isolated cost separately for each backend. This scene does not compare
 reciprocal dynamic rigid feedback.
 
-The executable prints per-frame `rigid_ms`, `soft_ms`, and `total_ms`, followed
+The executable prints per-frame `jolt_world_ms`, `jolt_extract_ms`,
+`xpbd_step_ms`, and `total_ms`, followed
 by mean, median, and p95 total time. Its final state metrics are mean and
 center vertex height, maximum attachment error, mean and maximum axial-neighbor
 strain, rubber axis-aligned bounding-box and tetrahedral volume ratios, maximum
@@ -59,6 +68,11 @@ proxies; they do not prove a solver contact was generated. The helper withholds
 a coupled timing winner until contact callbacks or a separate trajectory
 control establish actual response. The comparison rejects mismatched scenes,
 coupling choices, or frame counts.
+It also withholds a timing winner unless host, OS, build stamp, and explicit
+run-pair identifier match. Pool capacity and dispatched jobs are both reported:
+XPBD submits one job per body, so one-body scenes cannot occupy its whole pool.
+That limited parallelism is an actual backend scaling property under the same
+CPU budget, not a reason to erase a measured timing difference.
 
 The native damping coefficient is calibrated for the qualified two half-frame
 updates, eight collision steps per half, and 12 Jolt soft integrations per

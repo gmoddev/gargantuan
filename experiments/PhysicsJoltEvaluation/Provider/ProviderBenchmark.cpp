@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -194,14 +195,22 @@ namespace {
     double Milliseconds(Clock::duration Duration) {
         return std::chrono::duration<double, std::milli>(Duration).count();
     }
+    std::string ReceiptToken(std::string Value) {
+        for (char &Character : Value)
+            if (!((Character >= 'a' && Character <= 'z') ||
+                  (Character >= 'A' && Character <= 'Z') ||
+                  (Character >= '0' && Character <= '9') || Character == '-' ||
+                  Character == '_')) Character = '_';
+        return Value;
+    }
 }
 
 int main(int ArgumentCount, char **Arguments) {
     PhysicsEvaluation::SuppressErrorDialogs();
     PhysicsEvaluation::InstallPhysicsAllocators();
     try {
-        if (ArgumentCount != 6)
-            throw std::invalid_argument("Usage: ProviderBenchmark jolt|xpbd scene none|static-sphere frames[1..30] workers[1..8]");
+        if (ArgumentCount != 6 && ArgumentCount != 7)
+            throw std::invalid_argument("Usage: ProviderBenchmark jolt|xpbd scene none|static-sphere frames[1..30] workers[1..8] [shared-run-pair]");
         const std::string BackendName = Arguments[1];
         if (BackendName != "jolt" && BackendName != "xpbd")
             throw std::invalid_argument("Backend must be jolt or xpbd");
@@ -213,6 +222,19 @@ int main(int ArgumentCount, char **Arguments) {
         const int Workers = std::stoi(Arguments[5]);
         if (Frames < 1 || Frames > 30 || Workers < 1 || Workers > 8)
             throw std::invalid_argument("Frame or worker budget out of bounds");
+        const char *HostEnvironment = std::getenv("COMPUTERNAME");
+        if (!HostEnvironment || !*HostEnvironment) HostEnvironment = std::getenv("HOSTNAME");
+        const auto Host = ReceiptToken(HostEnvironment && *HostEnvironment ?
+            HostEnvironment : "unknown");
+#ifdef _WIN32
+        constexpr const char *OperatingSystem = "windows";
+#else
+        constexpr const char *OperatingSystem = "linux";
+#endif
+        const auto BuildStamp = ReceiptToken(std::string(__DATE__) + "_" + __TIME__);
+        const auto RunPair = ArgumentCount == 7 ? ReceiptToken(Arguments[6]) : "unpaired";
+        if (RunPair.size() > 64 || RunPair.empty())
+            throw std::invalid_argument("Run-pair identifier must be 1..64 characters");
 
         SoftBodyWorldLimits Limits;
         Limits.MaximumWorkers = Workers;
@@ -282,6 +304,8 @@ int main(int ArgumentCount, char **Arguments) {
         std::cout << "[Physics:ProviderBenchmark] backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
             << " frames=" << Frames << " workers_requested=" << Workers
+            << " host=" << Host << " os=" << OperatingSystem
+            << " build_stamp=" << BuildStamp << " run_pair=" << RunPair
             << " vertices=" << Bodies.size() * Bodies.front().Rest.size() << '\n' << std::flush;
         for (int Frame = 0; Frame < Frames; ++Frame) {
             const auto Start = Clock::now();
@@ -357,6 +381,8 @@ int main(int ArgumentCount, char **Arguments) {
         std::cout << "[Physics:ProviderBenchmark] summary backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
             << " frames=" << Frames << " workers_requested=" << Workers
+            << " host=" << Host << " os=" << OperatingSystem
+            << " build_stamp=" << BuildStamp << " run_pair=" << RunPair
             << " constraints=" << Constraints
             << " xpbd_workers_actual=" << ActualXpbdWorkers
             << " xpbd_jobs_dispatched=" << XpbdJobsDispatched

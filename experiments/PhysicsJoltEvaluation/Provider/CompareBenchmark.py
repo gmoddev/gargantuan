@@ -56,6 +56,10 @@ def Main() -> None:
     Errors = {Field: abs(float(Jolt[Field]) - float(Xpbd[Field])) for Field in Fields}
     BudgetMatched = int(Jolt["workers_requested"]) == int(Xpbd["workers_requested"]) == \
         int(Xpbd["xpbd_workers_actual"])
+    ReceiptPairMatched = all(Jolt.get(Field) == Xpbd.get(Field) for Field in
+                             ("host", "os", "build_stamp", "run_pair")) and \
+        Jolt.get("host") not in (None, "unknown") and \
+        Jolt.get("run_pair") not in (None, "unpaired")
     Result: dict[str, object] = {
         "scene": Jolt["scene"],
         "coupling": Jolt["coupling"],
@@ -68,6 +72,12 @@ def Main() -> None:
         "jolt_constraints": int(Jolt["constraints"]),
         "xpbd_constraints": int(Xpbd["constraints"]),
         "worker_count_matched": BudgetMatched,
+        "receipt_pair_matched": ReceiptPairMatched,
+        "jolt_host": Jolt.get("host"),
+        "xpbd_host": Xpbd.get("host"),
+        "jolt_build_stamp": Jolt.get("build_stamp"),
+        "xpbd_build_stamp": Xpbd.get("build_stamp"),
+        "run_pair": Jolt.get("run_pair"),
         "material_topology_comparable": not Rubber and Jolt["constraints"] == Xpbd["constraints"],
         "jolt_mean_total_ms": float(Jolt["mean_total_ms"]),
         "xpbd_mean_total_ms": float(Xpbd["mean_total_ms"]),
@@ -104,7 +114,8 @@ def Main() -> None:
         Result["contact_band_reached"] = ContactBandReached
         Result["penetration_bounded"] = PenetrationBounded
         Result["quality_comparable"] = Comparable
-        if Comparable and BudgetMatched and Result["material_topology_comparable"] and not Coupled:
+        if Comparable and BudgetMatched and ReceiptPairMatched and \
+                Result["material_topology_comparable"] and not Coupled:
             JoltTime = float(Jolt["mean_total_ms"])
             XpbdTime = float(Xpbd["mean_total_ms"])
             Result["timing_winner"] = "jolt" if JoltTime < XpbdTime else \
