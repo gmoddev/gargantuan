@@ -14,7 +14,9 @@ Jolt = Engine / '.foundation-jolt'
 ObservedJolt = Engine / '.foundation-jolt-observed'
 Evidence = Engine / 'foundation-evidence'
 Evidence.mkdir(exist_ok=True)
-Expected = '109be79fa82be0b306c56e4b4357675ed7843767'
+Convergence = os.environ.get('GANTRIA_CONVERGENCE_SCREEN') == '1'
+Expected = ('25658bcf45f21bb2674d47952638c31c7d0b1467' if Convergence else
+            '109be79fa82be0b306c56e4b4357675ed7843767')
 Receipts = []
 
 def Run(Name, Command):
@@ -34,7 +36,8 @@ Actual = subprocess.check_output(['git', '-C', str(Jolt), 'rev-parse', 'HEAD'], 
 assert Actual == Expected, (Actual, Expected)
 Source = {'Engine': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=Engine, text=True).strip(),
           'Jolt': Actual, 'Upstream': 'e77f175595e64cb44218cc9d9d56fc365ad0e36a',
-          'Platform': platform.platform(), 'LibraryProfile': 'SSE2 deterministic, two compiler jobs'}
+          'Platform': platform.platform(), 'LibraryProfile': 'SSE2 deterministic, two compiler jobs',
+          'RetainedLambdaConvergence': Convergence}
 (Evidence / 'Source.json').write_text(json.dumps(Source, indent=2), encoding='utf-8')
 Run('ObserverWorktree', ['git', '-C', Jolt, 'worktree', 'add', '--detach', ObservedJolt, Actual])
 Patch = Evidence / 'EnergyObservation.patch'
@@ -50,6 +53,8 @@ for Mode, SourcePath in [('Pure', Jolt), ('Observed', ObservedJolt)]:
                '-DCMAKE_BUILD_TYPE=Release', '-DGANTRIA_JOLT_ROOT=' + str(SourcePath),
                '-DGANTRIA_JOLT_COMMIT=' + Actual, '-DGANTRIA_NUMERICS=ON',
                '-DGANTRIA_OBSERVER=' + ('ON' if Mode == 'Observed' else 'OFF')]
+    if Convergence:
+        Options += ['-DGANTRIA_CONVERGENCE=ON']
     if platform.system() != 'Windows':
         Options += ['-DCMAKE_CXX_COMPILER=clang++-19',
                     '-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14']
@@ -62,11 +67,12 @@ for Mode, SourcePath in [('Pure', Jolt), ('Observed', ObservedJolt)]:
 Suffix = '.exe' if os.name == 'nt' else ''
 Native = 'PhysicsJoltScheduledCouplingDiagnostic' + Suffix
 Unified = 'PhysicsJoltUnifiedCouplingQualification' + Suffix
-if os.environ.get('GANTRIA_CADENCE_SCREEN') == '1':
+if Convergence or os.environ.get('GANTRIA_CADENCE_SCREEN') == '1':
     Run('CadenceScreen', [sys.executable, Evaluation / 'Optimization/RunCadenceScreen.py',
         '--pure', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
         '--output', Evidence / 'CadenceScreen',
-        '--screen', os.environ.get('GANTRIA_CADENCE_KIND', 'soft-budget')])
+        '--screen', 'convergence' if Convergence else
+        os.environ.get('GANTRIA_CADENCE_KIND', 'soft-budget')])
 else:
     Run('NativeQualification', [sys.executable, Evaluation / 'RunScheduledProfileQualification.py',
         '--pristine', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
