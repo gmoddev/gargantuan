@@ -2,7 +2,9 @@
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/Memory.h>
+#ifndef PHYSICS_UNIFIED_NATIVE_ONLY
 #include <box3d/base.h>
+#endif
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
@@ -66,7 +68,9 @@ void* ReallocateTracked(void* Pointer, size_t OldBytes, size_t NewBytes) {
     }
     return Replacement;
 }
+#ifndef PHYSICS_UNIFIED_NATIVE_ONLY
 void* AllocateBox(int32_t Bytes, int32_t Alignment) { return AllocateTracked(size_t(Bytes), size_t(Alignment)); }
+#endif
 void* AllocateJolt(size_t Bytes) { return AllocateTracked(Bytes); }
 #endif
 }
@@ -103,7 +107,9 @@ void InstallPhysicsAllocators() {
     JPH::Free = FreeTracked;
     JPH::AlignedAllocate = AllocateTracked;
     JPH::AlignedFree = FreeTracked;
+#ifndef PHYSICS_UNIFIED_NATIVE_ONLY
     b3SetAllocator(AllocateBox, FreeTracked);
+#endif
 #endif
 }
 
@@ -181,7 +187,11 @@ nlohmann::json ResourceDelta(const ResourceSnapshot& Before, const ResourceSnaps
     Result["FreedBytes"] = After.FreedBytes - Before.FreedBytes;
     Result["LiveBytesDelta"] = int64_t(After.LiveBytes) - int64_t(Before.LiveBytes);
     Result["TrackedPeakProcessLifetimeBytes"] = After.PeakBytes;
+#ifdef PHYSICS_UNIFIED_NATIVE_ONLY
+    Result["AllocationScope"] = "Requested bytes: process C++ new plus Jolt hooks, including harness work inside the captured main-run phase; excludes Box3D hooks, other malloc, allocator metadata, OS and library storage. Separate instrumented pass; do not rank its timings.";
+#else
     Result["AllocationScope"] = "Requested bytes: process C++ new plus Box3D/Jolt hooks, including harness work inside the phase; excludes other malloc, allocator metadata, OS and library storage. Separate instrumented pass; do not rank its timings.";
+#endif
 #else
     Result["AllocationInstrumentation"] = false;
     Result["AllocationCalls"] = nullptr;
