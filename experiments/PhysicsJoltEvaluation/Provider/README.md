@@ -25,6 +25,15 @@ fresh backend admission without persisting native identity.
 Additional `Workspace` scenes author moving cloth attachments, motor-driven
 hinge and slider joints with limits, and a high-speed CCD Part against a thin
 wall; their gates inspect published physical poses and neutral identities.
+When built against the separate opt-in Jolt rigid/soft attachment branch with
+`PHYSICS_GANTRIA_ATTACHMENTS`, this experiment also exposes a private bridge
+from neutral soft/rigid IDs to one dynamic Jolt attachment. It does not add an
+Engine property or save a native attachment. The DataModel fixture connects an
+authored Cloth vertex to a dynamic Part after both are admitted by `WorldRoot`,
+checks reciprocal motion, rejects a pinned vertex and a duplicate link, and
+checks automatic detachment on Cloth destruction and stale-ID rejection after
+native body churn. The helper allows only one live attachment per endpoint;
+rigid motion/mesh transitions while linked reject before native mutation.
 
 The soft adapter builds neutral cloth and regular rubber lattices directly
 from `SoftBodyDefinition`. It retains neutral IDs, fixed topology indices, and

@@ -31,6 +31,10 @@ namespace gargantuan {
             const auto Found = World.PartBodies.find(Part.GetObjectId());
             return Found == World.PartBodies.end() ? PhysicsBodyId{} : Found->second;
         }
+        static SoftBodyId SoftBody(const WorldRoot &World, const DeformableBody &Body) {
+            const auto Found = World.DeformableIds.find(Body.GetObjectId());
+            return Found == World.DeformableIds.end() ? SoftBodyId{} : Found->second;
+        }
         static bool IsBodyValid(const WorldRoot &World, PhysicsBodyId Id) {
             return World.Physics.IsBodyValid(Id);
         }
@@ -44,6 +48,10 @@ namespace gargantuan {
 namespace {
     using namespace gargantuan;
     using PhysicsEvaluation::CreateUnifiedJoltProvider;
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+    using PhysicsEvaluation::ConnectJoltRigidSoftAttachment;
+    using PhysicsEvaluation::GetJoltRigidSoftAttachmentState;
+#endif
 
     void Require(bool Condition, const char *Message) {
         if (!Condition) throw std::runtime_error(Message);
@@ -692,6 +700,78 @@ namespace {
             "authored high-speed CCD projectile tunneled through thin wall");
         Game->Destroy();
     }
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+    void DataModelDynamicSoftRigidAttachment() {
+        auto Game = std::make_shared<DataModel>();
+        auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        auto *Rigid = Provider.Rigid.get();
+        auto *Soft = Provider.Soft.get();
+        WorldRootTestAccess::Inject(*World, std::move(Provider));
+        World->SetGravity(0.0f);
+        auto Load = std::make_shared<Part>();
+        Load->SetSize({1, 1, 1});
+        Load->SetCFrame(CFrame(1, 3, 0));
+        Load->SetCanCollide(false);
+        Load->SetCanTouch(false);
+        Load->SetParent(World);
+        auto Fabric = std::make_shared<Cloth>();
+        Fabric->SetPosition({0, 3, 0});
+        Fabric->SetSize({2, 2, 0.2f});
+        Fabric->SetResolutionX(9);
+        Fabric->SetResolutionY(9);
+        for (std::uint32_t Vertex = 0; Vertex < 9; ++Vertex) {
+            auto Pin = std::make_shared<SoftBodyAttachment>();
+            Pin->SetVertexIndex(Vertex);
+            Pin->SetPosition({-1.0f + 0.25f * Vertex, 4, 0});
+            Pin->SetParent(Fabric);
+        }
+        Fabric->SetParent(World);
+        World->StepPhysics(0.0f, std::nullopt);
+        const auto SoftId = WorldRootTestAccess::SoftBody(*World, *Fabric);
+        const auto RigidId = WorldRootTestAccess::Body(*World, *Load);
+        Require(SoftId.IsValid() && RigidId.IsValid(),
+            "authored dynamic attachment endpoints failed WorldRoot admission");
+        Require(!ConnectJoltRigidSoftAttachment(*Rigid, *Soft, SoftId, 0,
+            RigidId, {-1, 0, 0}).Succeeded(),
+            "pinned authored vertex was admitted to native dynamic attachment");
+        Require(ConnectJoltRigidSoftAttachment(*Rigid, *Soft, SoftId, 40,
+            RigidId, {-1, 0, 0}).Succeeded(),
+            "authored Cloth/Part dynamic attachment failed native admission");
+        Require(!ConnectJoltRigidSoftAttachment(*Rigid, *Soft, SoftId, 40,
+            RigidId, {-1, 0, 0}).Succeeded(),
+            "duplicate dynamic attachment was admitted");
+        const auto InitialVertex = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
+        Load->SetLinearVelocity({4, 0, 0});
+        for (int Frame = 0; Frame < 30; ++Frame)
+            World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+        const auto FinalVertex = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
+        const auto LinkState = GetJoltRigidSoftAttachmentState(*Rigid, SoftId, RigidId);
+        Require(InitialVertex && FinalVertex && LinkState && LinkState->Active &&
+            LinkState->AppliedSteps > 0 && FinalVertex->x > InitialVertex->x + 0.02f &&
+            Load->GetLinearVelocity().x < 4.0f,
+            "authored dynamic Part motion did not transfer reciprocal impulse to Cloth");
+        Fabric->Destroy();
+        World->StepPhysics(0.0f, std::nullopt);
+        Require(!GetJoltRigidSoftAttachmentState(*Rigid, SoftId, RigidId) &&
+            !Soft->IsBodyValid(SoftId),
+            "destroyed authored Cloth retained native dynamic attachment");
+        SoftBodyDefinition Tiny;
+        Tiny.ResolutionX = Tiny.ResolutionY = 3;
+        for (int Index = 0; Index < 260; ++Index) {
+            const auto Reused = Soft->CreateBody(Tiny);
+            Require(Reused.IsValid() && Soft->DestroyBody(Reused).Succeeded(),
+                "native-generation churn failed");
+        }
+        Require(!ConnectJoltRigidSoftAttachment(*Rigid, *Soft, SoftId, 40,
+            RigidId, {-1, 0, 0}).Succeeded(),
+            "retired neutral soft generation reconnected after native sequence churn");
+        World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+        Game->Destroy();
+    }
+#endif
 }
 
 int main() {
@@ -725,6 +805,10 @@ int main() {
         DataModelAdmissionAndStreaming();
         std::cout << "[Physics:JoltProvider] DataModel motors/CCD\n" << std::flush;
         DataModelMotorsAndCcd();
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+        std::cout << "[Physics:JoltProvider] DataModel dynamic attachment\n" << std::flush;
+        DataModelDynamicSoftRigidAttachment();
+#endif
         std::cout << "[Physics:JoltProvider] qualification passed\n";
         return 0;
     } catch (const std::exception &Error) {
