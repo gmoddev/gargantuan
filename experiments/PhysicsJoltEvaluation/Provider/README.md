@@ -17,6 +17,9 @@ The fixture also uses `WorldRootTestAccess`, the existing friend seam in Engine
 tests, to inject the provider into a fresh `DataModel` before admitting Parts or
 Cloth. It verifies authored Part admission, motion publication, stream release
 and readmission, Cloth vertex publication, and teardown through `Workspace`.
+It serializes a detached semantic Part/Cloth subtree, reopens it in a new
+`DataModel` with the test provider installed before parenting, and verifies
+fresh backend admission without persisting native identity.
 
 The soft adapter builds neutral cloth and regular rubber lattices directly
 from `SoftBodyDefinition`. It retains neutral IDs, fixed topology indices, and

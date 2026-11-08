@@ -1,14 +1,17 @@
 #include "UnifiedJoltProvider.hpp"
 #include "gargantuan/classes/Cloth.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <sstream>
 #include <vector>
 
 namespace gargantuan {
@@ -237,6 +240,42 @@ namespace {
         Require(!World->GetDeformableVertex(Fabric->GetObjectId(), 40),
             "destroyed Cloth retained Jolt published vertices");
         Game->Destroy();
+
+        auto SavedRoot = std::make_shared<Folder>();
+        SavedRoot->SetName("SavedRoot");
+        auto SavedPart = std::make_shared<Part>();
+        SavedPart->SetName("SavedPart");
+        SavedPart->SetSize({1, 1, 1});
+        SavedPart->SetParent(SavedRoot);
+        auto SavedCloth = std::make_shared<Cloth>();
+        SavedCloth->SetName("SavedCloth");
+        SavedCloth->SetResolutionX(9);
+        SavedCloth->SetResolutionY(9);
+        SavedCloth->SetParent(SavedRoot);
+        SavedRoot->MarkPersistenceSubtreeArchivable();
+        std::shared_ptr<Instance> Root = SavedRoot;
+        const auto Snapshot = InstanceSerialization::Serialize(
+            InstanceSerialization::InstanceFormat::Json, Root);
+        Require(Snapshot.find("SoftBodyId") == std::string::npos &&
+            Snapshot.find("PhysicsBodyId") == std::string::npos,
+            "snapshot leaked Jolt runtime identity");
+        std::istringstream Input(Snapshot);
+        auto Loaded = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
+        Require(Loaded.Ok && Loaded.Instance, "semantic fixture failed to reopen");
+        auto ReopenedGame = std::make_shared<DataModel>();
+        auto ReopenedWorld = std::dynamic_pointer_cast<Workspace>(ReopenedGame->GetService("Workspace"));
+        WorldRootTestAccess::Inject(*ReopenedWorld, CreateUnifiedJoltProvider(Config));
+        ReopenedWorld->SetGravity(0.0f);
+        Loaded.Instance->SetParent(ReopenedWorld);
+        auto ReopenedPart = std::dynamic_pointer_cast<Part>(
+            Loaded.Instance->FindFirstChild("SavedPart", false));
+        auto ReopenedCloth = std::dynamic_pointer_cast<Cloth>(
+            Loaded.Instance->FindFirstChild("SavedCloth", false));
+        ReopenedWorld->StepPhysics(SoftBodyStepInterval, std::nullopt);
+        Require(ReopenedPart && WorldRootTestAccess::Body(*ReopenedWorld, *ReopenedPart).IsValid() &&
+            ReopenedCloth && ReopenedWorld->GetDeformableVertex(ReopenedCloth->GetObjectId(), 40),
+            "reopened semantic fixture failed Jolt readmission");
+        ReopenedGame->Destroy();
     }
 }
 
