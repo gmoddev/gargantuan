@@ -72,6 +72,7 @@ else:
     Options += ['-DCMAKE_C_COMPILER=clang-19', '-DCMAKE_CXX_COMPILER=clang++-19',
                 '-DCMAKE_C_FLAGS=' + Flags, '-DCMAKE_CXX_FLAGS=' + Flags,
                 '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined',
+                '-DCPP_RTTI_ENABLED=ON',
                 '-DLINKER_SUPPORTS_WL_NO_UNDEFINED=OFF']
 Run('Configure', Options)
 Run('Build', ['cmake', '--build', Build, '--parallel', '2', '--target', 'PhysicsJoltProviderQualification'])
