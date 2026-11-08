@@ -1,5 +1,8 @@
 # Bounded soft-body provider benchmark
 
+See [FeatureMatrix.md](FeatureMatrix.md) for qualified Engine and provider
+behavior; benchmark observations here do not expand that support scope.
+
 `PhysicsJoltProviderBenchmark` takes five required positional arguments, an
 optional receipt identifier, and an optional warmup count after that identifier:
 
