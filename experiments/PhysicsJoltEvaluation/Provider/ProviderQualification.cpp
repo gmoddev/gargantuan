@@ -748,8 +748,9 @@ namespace {
         for (int Frame = 0; Frame < 4; ++Frame)
             Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
                 .SubStepCount = 16}));
-        Require(Began == 1 && Ended == 0 &&
-            Provider.Rigid->GetBodyState(BallId)->Transform.Position.y > 0.35f,
+        const auto OnMesh = Provider.Rigid->GetBodyState(BallId);
+        Require(OnMesh && Began == 1 && Ended == 0 &&
+            OnMesh->Transform.Position.y > 0.49f,
             "touching box-to-mesh handoff emitted a false contact edge or lost support");
         bool Reslept = false;
         for (int Frame = 0; Frame < 180; ++Frame) {
@@ -760,7 +761,9 @@ namespace {
                 break;
             }
         }
-        Require(Reslept && Began == 1 && Ended == 0,
+        const auto ResleptState = Provider.Rigid->GetBodyState(BallId);
+        Require(ResleptState && Reslept && Began == 1 && Ended == 0 &&
+            ResleptState->Transform.Position.y > 0.48f,
             "mesh handoff did not preserve a stable sleeping contact");
         for (int Hold = 0; Hold < 5; ++Hold) {
             Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
