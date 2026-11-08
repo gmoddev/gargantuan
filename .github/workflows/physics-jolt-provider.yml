@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 60
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
+      GANTRIA_ATTACHMENT_QUALIFICATION: '1'
       SDL_VIDEODRIVER: dummy
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
@@ -31,7 +32,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: GantriaEngine/JoltPhysics
-          ref: 109be79fa82be0b306c56e4b4357675ed7843767
+          ref: cd095d408a1cd231ad43fa8725d06a818fd63b13
           path: .provider-jolt
           persist-credentials: false
       - name: Enable MSVC
