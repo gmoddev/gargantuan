@@ -279,13 +279,20 @@ namespace {
 
     class ContactCapture final : public JPH::ContactListener {
     public:
+        JPH::ValidateResult OnContactValidate(const JPH::Body &A, const JPH::Body &B,
+                                               JPH::RVec3Arg, const JPH::CollideShapeResult &) override {
+            std::scoped_lock Lock(Mutex);
+            return Suppressed.contains(PairOf(A.GetID(), B.GetID()))
+                ? JPH::ValidateResult::RejectAllContactsForThisBodyPair
+                : JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+        }
         void OnContactAdded(const JPH::Body &A, const JPH::Body &B,
-                            const JPH::ContactManifold &Manifold, JPH::ContactSettings &) override {
-            Record(A, B, Manifold);
+                            const JPH::ContactManifold &Manifold, JPH::ContactSettings &Settings) override {
+            Record(A, B, Manifold, Settings);
         }
         void OnContactPersisted(const JPH::Body &A, const JPH::Body &B,
-                                const JPH::ContactManifold &Manifold, JPH::ContactSettings &) override {
-            Record(A, B, Manifold);
+                                const JPH::ContactManifold &Manifold, JPH::ContactSettings &Settings) override {
+            Record(A, B, Manifold, Settings);
         }
         void OnContactRemoved(const JPH::SubShapeIDPair &Pair) override {
             std::scoped_lock Lock(Mutex);
@@ -299,6 +306,27 @@ namespace {
                     It = ActiveSubShapes.erase(It);
                 else ++It;
             }
+            for (auto It = Suppressed.begin(); It != Suppressed.end();) {
+                if (It->first.first == Native || It->first.second == Native)
+                    It = Suppressed.erase(It);
+                else ++It;
+            }
+        }
+        void SuppressPair(JPH::BodyID A, JPH::BodyID B) {
+            std::scoped_lock Lock(Mutex);
+            const auto Pair = PairOf(A, B);
+            ++Suppressed[Pair];
+            for (auto It = ActiveSubShapes.begin(); It != ActiveSubShapes.end();) {
+                if (PairOf(It->GetBody1ID(), It->GetBody2ID()) == Pair)
+                    It = ActiveSubShapes.erase(It);
+                else ++It;
+            }
+        }
+        void RestorePair(JPH::BodyID A, JPH::BodyID B) {
+            std::scoped_lock Lock(Mutex);
+            const auto Pair = PairOf(A, B);
+            const auto It = Suppressed.find(Pair);
+            if (It != Suppressed.end() && --It->second == 0) Suppressed.erase(It);
         }
         std::set<std::pair<std::uint32_t, std::uint32_t>> CurrentPairs() const {
             std::scoped_lock Lock(Mutex);
@@ -311,13 +339,25 @@ namespace {
             return Result;
         }
     private:
-        void Record(const JPH::Body &A, const JPH::Body &B, const JPH::ContactManifold &Manifold) {
+        static std::pair<std::uint32_t, std::uint32_t> PairOf(JPH::BodyID A, JPH::BodyID B) {
+            const auto First = A.GetIndexAndSequenceNumber();
+            const auto Second = B.GetIndexAndSequenceNumber();
+            return {std::min(First, Second), std::max(First, Second)};
+        }
+        void Record(const JPH::Body &A, const JPH::Body &B,
+                    const JPH::ContactManifold &Manifold, JPH::ContactSettings &Settings) {
             std::scoped_lock Lock(Mutex);
+            if (Suppressed.contains(PairOf(A.GetID(), B.GetID()))) {
+                Settings.mIsSensor = true;
+                return;
+            }
+            Settings.mIsSensor = A.IsSensor() || B.IsSensor();
             ActiveSubShapes.emplace(A.GetID(), Manifold.mSubShapeID1,
                 B.GetID(), Manifold.mSubShapeID2);
         }
         mutable std::mutex Mutex;
         std::set<JPH::SubShapeIDPair> ActiveSubShapes;
+        std::map<std::pair<std::uint32_t, std::uint32_t>, std::size_t> Suppressed;
     };
 
     class QueryBodyFilter final : public JPH::BodyFilter {
@@ -621,6 +661,7 @@ namespace {
             } else return {{}, Unsupported("Jolt constraint kind is unsupported")};
             if (!Native) return {{}, Unsupported("Jolt constraint creation failed")};
             World.AddConstraint(Native.GetPtr());
+            if (!Description.CollideConnected) Contacts.SuppressPair(A->Native, B->Native);
             std::uint32_t Index = 1;
             for (; Index < ConstraintSlots.size() &&
                 (ConstraintSlots[Index].Live || ConstraintSlots[Index].Retired); ++Index) {}
@@ -633,6 +674,11 @@ namespace {
         PhysicsOperationResult DestroyConstraint(PhysicsConstraintId Id) override {
             auto *Slot = Find(Id);
             if (!Slot) return {PhysicsOperationStatus::InvalidId, "Invalid Jolt joint ID"};
+            if (!Slot->Description.CollideConnected) {
+                const auto *A = Find(Slot->Description.BodyA);
+                const auto *B = Find(Slot->Description.BodyB);
+                if (A && B) Contacts.RestorePair(A->Native, B->Native);
+            }
             World.RemoveConstraint(Slot->Native.GetPtr());
             Slot->Native = nullptr;
             Slot->Live = false;

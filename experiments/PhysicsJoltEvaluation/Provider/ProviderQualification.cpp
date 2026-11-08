@@ -232,6 +232,34 @@ namespace {
             "weld did not hold authored relative pose under impulse");
         Require(Provider.Rigid->DestroyConstraint(Weld.Constraint).Succeeded(), "weld release failed");
     }
+    void ConnectedCollisionPolicy() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        Config.EnableSleep = false;
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        auto SensorDescription = Box({0, 0, 0}, {2, 2, 2}, true);
+        SensorDescription.CanCollide = false;
+        SensorDescription.CanTouch = true;
+        const auto Sensor = Provider.Rigid->CreateBody(SensorDescription);
+        const auto Moving = Provider.Rigid->CreateBody(Box({0, 0, 0}, {1, 1, 1}, false));
+        Require(Sensor.IsValid() && Moving.IsValid(), "connected collision bodies failed admission");
+        PhysicsConstraintDesc Joint;
+        Joint.Kind = PhysicsConstraintKind::Weld;
+        Joint.BodyA = Sensor;
+        Joint.BodyB = Moving;
+        Joint.CollideConnected = false;
+        const auto Weld = Provider.Rigid->TryCreateConstraint(Joint);
+        Require(Weld.Succeeded(), "connected collision weld failed admission");
+        const auto Suppressed = Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval, .SubStepCount = 4});
+        Require(Suppressed.Contacts.empty(), "joint with CollideConnected=false emitted sensor contact");
+        Require(Provider.Rigid->DestroyConstraint(Weld.Constraint).Succeeded(),
+            "connected collision weld release failed");
+        const auto Restored = Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval, .SubStepCount = 4});
+        const auto Began = std::ranges::any_of(Restored.Contacts, [](const auto &Contact) {
+            return Contact.Phase == PhysicsContactPhase::Began;
+        });
+        Require(Began, "joint release did not restore connected collision event");
+    }
     void ForceAcrossHalfUpdates() {
         PhysicsWorldConfig Config;
         Config.Gravity = {};
@@ -557,6 +585,8 @@ int main() {
         CapsuleAndMeshResidency();
         std::cout << "[Physics:JoltProvider] weld\n" << std::flush;
         WeldUnderImpulse();
+        std::cout << "[Physics:JoltProvider] connected collision\n" << std::flush;
+        ConnectedCollisionPolicy();
         std::cout << "[Physics:JoltProvider] force\n" << std::flush;
         ForceAcrossHalfUpdates();
         std::cout << "[Physics:JoltProvider] transient contacts\n" << std::flush;
