@@ -1,4 +1,4 @@
-"""Separate native Jolt allocation census for the qualified C8/I24 profile.
+"""Separate native Jolt allocation census for a selected experimental profile.
 
 The instrumented pass includes harness allocation work and is never a timing
 ranking. Its captured resource endpoint precedes result output and teardown.
@@ -43,14 +43,15 @@ def Run(Binary, Output, Name, Options):
                     "Stderr": StderrPath.name, "RawSha256": HashFile(StdoutPath)}
 
 
-def ProfileMatches(Result):
+def ProfileMatches(Result, Profile):
     return (Result.get("Backend") == "Jolt" and
-            Result.get("WorldUpdatesPerFrame") == 1 and
-            Result.get("CollisionSteps") == 8 and
-            Result.get("SolverIterations") == 24 and
+            Result.get("WorldUpdatesPerFrame") == Profile["WorldUpdatesPerFrame"] and
+            Result.get("CollisionSteps") == Profile["CollisionSteps"] and
+            Result.get("SolverIterations") == Profile["SoftIterations"] and
             math.isclose(float(Result.get("SelectedStretchCompliance", float("nan"))),
-                         1.0e-6, rel_tol=1.0e-6, abs_tol=0.0) and
-            len(Result.get("Frames", [])) == 150 and
+                         Profile["StretchCompliance"], rel_tol=1.0e-6, abs_tol=0.0) and
+            Result.get("VelocityReconstruction", "difference") == Profile["VelocityReconstruction"] and
+            len(Result.get("Frames", [])) == Profile["Frames"] and
             Result.get("EnergyObserverEnabled") is False and
             Result.get("AcceptedObservationCoverage") is False)
 
@@ -74,17 +75,39 @@ def Main():
     Parser.add_argument("--allocations", type=Path, required=True)
     Parser.add_argument("--pristine", type=Path, required=True)
     Parser.add_argument("--output", type=Path, required=True)
+    Parser.add_argument("--world-updates", type=int, default=1)
+    Parser.add_argument("--collision-steps", type=int, default=8)
+    Parser.add_argument("--soft-iterations", type=int, default=24)
+    Parser.add_argument("--velocity-reconstruction",
+                        choices=("difference", "delta", "applieddelta"), default="difference")
+    Parser.add_argument("--compliance", type=float, default=1.0e-6)
     Arguments = Parser.parse_args()
+    if (not 1 <= Arguments.world_updates <= 384 or
+            not 1 <= Arguments.collision_steps <= 8 or
+            not 1 <= Arguments.soft_iterations <= 64 or
+            Arguments.world_updates * Arguments.collision_steps * Arguments.soft_iterations > 2304 or
+            not math.isfinite(Arguments.compliance) or Arguments.compliance <= 0.0):
+        Parser.error("[Physics:UnifiedAllocation] Selected profile outside bounded native diagnostic range")
     Allocations = Arguments.allocations.resolve(strict=True)
     Pristine = Arguments.pristine.resolve(strict=True)
     Output = Arguments.output
     Output.mkdir(parents=True, exist_ok=False)
+    SelectedProfile = {"WorldUpdatesPerFrame": Arguments.world_updates,
+                       "CollisionSteps": Arguments.collision_steps,
+                       "SoftIterations": Arguments.soft_iterations,
+                       "StretchCompliance": Arguments.compliance,
+                       "VelocityReconstruction": Arguments.velocity_reconstruction,
+                       "Frames": 150, "Workers": 1, "ObserveAccepted": False}
+    ModeOptions = [] if Arguments.velocity_reconstruction == "difference" else [
+        "--velocity-reconstruction", Arguments.velocity_reconstruction]
     Receipts = []
     for Case in Cases:
         Options = ["--backend", "Jolt", "--case", Case, "--workers", "1",
-                   "--frames", "150", "--world-updates", "1", "--collision-steps", "8",
-                   "--soft-iterations", "24", "--stretch-compliance", "1e-6",
-                   "--observe-accepted", "0"]
+                   "--frames", "150", "--world-updates", str(Arguments.world_updates),
+                   "--collision-steps", str(Arguments.collision_steps),
+                   "--soft-iterations", str(Arguments.soft_iterations),
+                   "--stretch-compliance", format(Arguments.compliance, ".12g"),
+                   "--observe-accepted", "0", *ModeOptions]
         Counted, CountedRun = Run(Allocations, Output, f"{Case}-Allocations", Options)
         Plain, PlainRun = Run(Pristine, Output, f"{Case}-Pristine", Options)
         CountedFrames = PhysicalFrames(Counted)
@@ -92,14 +115,15 @@ def Main():
         CountedControl = Counted.get("ContactDisabledControl", {})
         PlainControl = Plain.get("ContactDisabledControl", {})
         Checks = {
-            "ProfileMetadata": all(ProfileMatches(Result) for Result in
+            "ProfileMetadata": all(ProfileMatches(Result, SelectedProfile) for Result in
                                    (Counted, Plain, CountedControl, PlainControl)),
             "InstrumentedAllocationHooks": ValidResources(Counted.get("Resources"), True),
             "PristineUninstrumented": ValidResources(Plain.get("Resources"), False),
             "ExactFrameParity": CountedFrames == PlainFrames,
             "ExactContactDisabledFrameParity": PhysicalFrames(CountedControl) == PhysicalFrames(PlainControl),
         }
-        Receipt = {"Case": Case, "Options": Options, "AllocationsRun": CountedRun,
+        Receipt = {"Case": Case, "SelectedProfile": SelectedProfile, "Options": Options,
+                   "AllocationsRun": CountedRun,
                    "PristineRun": PlainRun, "Checks": Checks,
                    "AllocationResources": Counted.get("Resources"),
                    "CapturedLiveBytesDeltaBeforeOutputAndTeardown":
@@ -110,10 +134,8 @@ def Main():
         (Output / "Receipts.json").write_text(json.dumps(Receipts, indent=2, allow_nan=False), encoding="utf-8")
         print(json.dumps({"Case": Case, "Pass": Receipt["QualificationPass"],
                           "AllocatedBytes": Receipt["AllocationResources"].get("AllocatedBytes")}), flush=True)
-    Verdict = {"Type": "UnifiedNativeAllocationPass", "Profile":
-               {"WorldUpdatesPerFrame": 1, "CollisionSteps": 8,
-                "SoftIterations": 24, "StretchCompliance": 1.0e-6,
-                "Frames": 150, "Workers": 1, "ObserveAccepted": False},
+    Verdict = {"Type": "UnifiedNativeAllocationPass", "Profile": SelectedProfile,
+               "SelectedProfile": SelectedProfile,
                "Cases": len(Receipts), "AllRequiredChecksPass": all(Item["QualificationPass"] for Item in Receipts),
                "AllocationBinarySha256": HashFile(Allocations),
                "PristineBinarySha256": HashFile(Pristine),
