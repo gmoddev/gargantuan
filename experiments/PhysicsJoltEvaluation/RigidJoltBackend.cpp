@@ -11,6 +11,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
@@ -30,6 +31,9 @@
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+#include <Jolt/Physics/SoftBody/SoftBodyRigidAttachment.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -389,6 +393,14 @@ namespace {
         const std::vector<BodySlot> &BodySlots;
         const PhysicsQueryFilter &Request;
     };
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+    struct RigidSoftAttachmentRecord {
+        SoftBodyId Soft;
+        PhysicsBodyId Rigid;
+        std::uint32_t Vertex = 0;
+        std::unique_ptr<JPH::SoftBodyRigidAttachment> Native;
+    };
+#endif
 
     class RigidJoltBackend final : public IPhysicsBackend {
     public:
@@ -430,6 +442,69 @@ namespace {
         void SetBeforeUnifiedStep(std::function<bool(float)> Callback) {
             BeforeUnifiedStep = std::move(Callback);
         }
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+        PhysicsOperationResult ConnectAttachment(SoftBodyId SoftId, JPH::BodyID SoftNative,
+                                                 std::uint32_t Vertex, PhysicsBodyId RigidId,
+                                                 glm::vec3 RigidLocalPoint) {
+            auto *RigidSlot = Find(RigidId);
+            if (!RigidSlot || SoftNative.IsInvalid())
+                return {PhysicsOperationStatus::InvalidId, "Invalid Jolt attachment endpoint"};
+            if (!Finite(RigidLocalPoint))
+                return {PhysicsOperationStatus::InvalidDescription, "Nonfinite Jolt attachment point"};
+            if (std::ranges::any_of(Attachments, [&](const auto &Record) {
+                return Record.Soft == SoftId || Record.Rigid == RigidId;
+            })) return Unsupported("Jolt attachment endpoint already has a live connection");
+            auto Native = std::make_unique<JPH::SoftBodyRigidAttachment>();
+            JPH::SoftBodyRigidAttachment::Settings Settings;
+            if (!Native->Connect(World, SoftNative, Vertex, RigidSlot->Native,
+                ToJolt(RigidLocalPoint), Settings))
+                return Unsupported("Jolt dynamic attachment rejected native endpoint or settings");
+            Attachments.push_back({SoftId, RigidId, Vertex, std::move(Native)});
+            return {};
+        }
+        PhysicsOperationResult DisconnectAttachment(SoftBodyId SoftId, PhysicsBodyId RigidId) {
+            const auto It = std::find_if(Attachments.begin(), Attachments.end(),
+                [&](const auto &Record) { return Record.Soft == SoftId && Record.Rigid == RigidId; });
+            if (It == Attachments.end())
+                return {PhysicsOperationStatus::InvalidId, "Invalid Jolt attachment identity"};
+            It->Native->Disconnect();
+            Attachments.erase(It);
+            return {};
+        }
+        std::optional<JoltRigidSoftAttachmentState> AttachmentState(
+            SoftBodyId SoftId, PhysicsBodyId RigidId) const {
+            const auto It = std::find_if(Attachments.begin(), Attachments.end(),
+                [&](const auto &Record) { return Record.Soft == SoftId && Record.Rigid == RigidId; });
+            if (It == Attachments.end()) return std::nullopt;
+            return JoltRigidSoftAttachmentState{
+                It->Native->GetStatus() == JPH::SoftBodyRigidAttachment::EStatus::Active,
+                It->Native->GetAppliedStepCount(),
+                FromJolt(It->Native->GetLastImpulseOnSoftBody())};
+        }
+        void DisconnectAttachmentsForRigid(PhysicsBodyId Id) {
+            std::erase_if(Attachments, [&](auto &Record) {
+                if (Record.Rigid != Id) return false;
+                Record.Native->Disconnect();
+                return true;
+            });
+        }
+        void DisconnectAttachmentsForSoft(SoftBodyId Id) {
+            std::erase_if(Attachments, [&](auto &Record) {
+                if (Record.Soft != Id) return false;
+                Record.Native->Disconnect();
+                return true;
+            });
+        }
+        bool HasAttachmentOnRigid(PhysicsBodyId Id) const {
+            return std::ranges::any_of(Attachments,
+                [&](const auto &Record) { return Record.Rigid == Id; });
+        }
+        bool IsAttachedSoftVertex(SoftBodyId Id, std::uint32_t Vertex) const {
+            return std::ranges::any_of(Attachments, [&](const auto &Record) {
+                return Record.Soft == Id && Record.Vertex == Vertex;
+            });
+        }
+#endif
         bool IsBodyValid(PhysicsBodyId Id) const override { return Find(Id) != nullptr; }
         bool IsConstraintValid(PhysicsConstraintId Id) const override { return Find(Id) != nullptr; }
 
@@ -484,6 +559,10 @@ namespace {
             const bool MeshTransition =
                 (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) !=
                 (Slot->Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh);
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+            if ((MotionChanged || MeshTransition) && HasAttachmentOnRigid(Id))
+                return Unsupported("Jolt attached rigid motion or mesh transition is unsupported");
+#endif
             if (MeshTransition) {
                 for (const auto &Constraint : ConstraintSlots)
                     if (Constraint.Live && (Constraint.Description.BodyA == Id ||
@@ -562,6 +641,9 @@ namespace {
         PhysicsOperationResult DestroyBody(PhysicsBodyId Id) override {
             auto *Slot = Find(Id);
             if (!Slot) return InvalidBody();
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+            DisconnectAttachmentsForRigid(Id);
+#endif
             for (std::uint32_t Index = 1; Index < ConstraintSlots.size(); ++Index) {
                 const auto &Constraint = ConstraintSlots[Index];
                 if (Constraint.Live && (Constraint.Description.BodyA == Id || Constraint.Description.BodyB == Id))
@@ -603,9 +685,11 @@ namespace {
             const auto PointB = ToRVec(Description.LocalFrameB.Position);
             const auto AxisA = ToJolt(Description.LocalFrameA.Rotation[Description.Kind == PhysicsConstraintKind::Slider ? 0 : 2]);
             const auto AxisB = ToJolt(Description.LocalFrameB.Rotation[Description.Kind == PhysicsConstraintKind::Slider ? 0 : 2]);
-            JPH::BodyLockWrite LockA(World.GetBodyLockInterface(), A->Native);
-            JPH::BodyLockWrite LockB(World.GetBodyLockInterface(), B->Native);
-            if (!LockA.Succeeded() || !LockB.Succeeded())
+            const JPH::BodyID NativeIds[2]{A->Native, B->Native};
+            JPH::BodyLockMultiWrite Lock(World.GetBodyLockInterface(), NativeIds, 2);
+            auto *BodyA = Lock.GetBody(0);
+            auto *BodyB = Lock.GetBody(1);
+            if (!BodyA || !BodyB)
                 return {{}, {PhysicsOperationStatus::BackendFailure, "Jolt joint body lock failed"}};
             JPH::Ref<JPH::Constraint> Native;
             if (Description.Kind == PhysicsConstraintKind::Weld) {
@@ -616,13 +700,13 @@ namespace {
                 Settings.mAxisY1 = ToJolt(Description.LocalFrameA.Rotation[1]);
                 Settings.mAxisX2 = ToJolt(Description.LocalFrameB.Rotation[0]);
                 Settings.mAxisY2 = ToJolt(Description.LocalFrameB.Rotation[1]);
-                Native = Settings.Create(LockA.GetBody(), LockB.GetBody());
+                Native = Settings.Create(*BodyA, *BodyB);
             } else if (Description.Kind == PhysicsConstraintKind::BallSocket) {
                 JPH::PointConstraintSettings Settings;
                 Settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
                 Settings.mPoint1 = PointA;
                 Settings.mPoint2 = PointB;
-                Native = Settings.Create(LockA.GetBody(), LockB.GetBody());
+                Native = Settings.Create(*BodyA, *BodyB);
             } else if (Description.Kind == PhysicsConstraintKind::Hinge) {
                 JPH::HingeConstraintSettings Settings;
                 Settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
@@ -635,7 +719,7 @@ namespace {
                     Settings.mLimitsMax = Description.UpperLimit;
                 }
                 if (Description.EnableMotor) Settings.mMotorSettings.SetTorqueLimit(Description.MaximumMotorForce);
-                auto *Joint = static_cast<JPH::HingeConstraint *>(Settings.Create(LockA.GetBody(), LockB.GetBody()));
+                auto *Joint = static_cast<JPH::HingeConstraint *>(Settings.Create(*BodyA, *BodyB));
                 if (Description.EnableMotor) {
                     Joint->SetMotorState(JPH::EMotorState::Velocity);
                     Joint->SetTargetAngularVelocity(Description.MotorSpeed);
@@ -651,7 +735,7 @@ namespace {
                     Settings.mLimitsMax = Description.UpperLimit;
                 }
                 if (Description.EnableMotor) Settings.mMotorSettings.SetForceLimit(Description.MaximumMotorForce);
-                auto *Joint = static_cast<JPH::SliderConstraint *>(Settings.Create(LockA.GetBody(), LockB.GetBody()));
+                auto *Joint = static_cast<JPH::SliderConstraint *>(Settings.Create(*BodyA, *BodyB));
                 if (Description.EnableMotor) {
                     Joint->SetMotorState(JPH::EMotorState::Velocity);
                     Joint->SetTargetVelocity(Description.MotorSpeed);
@@ -666,8 +750,9 @@ namespace {
                 if (Description.SpringFrequency > 0)
                     Settings.mLimitsSpringSettings = {JPH::ESpringMode::FrequencyAndDamping,
                         Description.SpringFrequency, Description.SpringDamping};
-                Native = Settings.Create(LockA.GetBody(), LockB.GetBody());
+                Native = Settings.Create(*BodyA, *BodyB);
             } else return {{}, Unsupported("Jolt constraint kind is unsupported")};
+            Lock.ReleaseLocks();
             if (!Native) return {{}, Unsupported("Jolt constraint creation failed")};
             World.AddConstraint(Native.GetPtr());
             if (!Description.CollideConnected) {
@@ -1248,6 +1333,9 @@ namespace {
         std::unique_ptr<JPH::JobSystem> Jobs;
         // Destruct World before Jobs, Temp and Layers, whose storage it may use.
         JPH::PhysicsSystem World;
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+        std::vector<RigidSoftAttachmentRecord> Attachments;
+#endif
         std::vector<BodySlot> BodySlots;
         std::vector<ConstraintSlot> ConstraintSlots;
         std::unordered_map<std::uint32_t, PhysicsBodyId> NativeMap;
@@ -1387,6 +1475,13 @@ namespace {
         ~JoltSoftBackend() override { Shutdown(); }
         bool IsValid() const override { return !Stopped && Owner.IsValid(); }
         bool IsBodyValid(SoftBodyId Id) const override { return Find(Id) != nullptr; }
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+        RigidJoltBackend &SharedWorld() const { return Owner; }
+        JPH::BodyID NativeBody(SoftBodyId Id) const {
+            const auto *Slot = Find(Id);
+            return Slot ? Slot->Native : JPH::BodyID();
+        }
+#endif
         SoftBodyId CreateBody(const SoftBodyDefinition &Definition) override {
             if (!IsValid() || LiveBodies >= Limits.MaximumBodies) return {};
             auto Construction = BuildSoft(Definition, Limits);
@@ -1447,6 +1542,11 @@ namespace {
                     if (Attachment.Vertex >= Slot->Shared->mVertices.size() ||
                         !Finite(Attachment.Position) || !Attached.insert(Attachment.Vertex).second)
                         return {PhysicsOperationStatus::InvalidDescription, "Invalid Jolt soft attachment"};
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+                for (const auto &Attachment : Definition.Attachments)
+                    if (Owner.IsAttachedSoftVertex(Id, Attachment.Vertex))
+                        return Unsupported("Jolt dynamic attachment vertex cannot become a fixed pin");
+#endif
                 JPH::BodyLockWrite Lock(Owner.World.GetBodyLockInterface(), Slot->Native);
                 if (!Lock.Succeeded())
                     return {PhysicsOperationStatus::BackendFailure, "Jolt soft attachment lock failed"};
@@ -1494,6 +1594,9 @@ namespace {
                 Definition.Enabled ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
             if (Native.IsInvalid()) return {PhysicsOperationStatus::BackendFailure, "Jolt soft replacement failed"};
             auto &Interface = Owner.World.GetBodyInterface();
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+            Owner.DisconnectAttachmentsForSoft(Id);
+#endif
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
             LiveVertices = LiveVertices - Slot->Shared->mVertices.size() + Replacement->Shared->mVertices.size();
@@ -1512,6 +1615,9 @@ namespace {
         PhysicsOperationResult DestroyBody(SoftBodyId Id) override {
             auto *Slot = Find(Id);
             if (!Slot) return InvalidBody();
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+            Owner.DisconnectAttachmentsForSoft(Id);
+#endif
             auto &Interface = Owner.World.GetBodyInterface();
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
@@ -1826,4 +1932,33 @@ UnifiedJoltProvider CreateUnifiedJoltProvider(const gargantuan::PhysicsWorldConf
     return {std::move(Rigid), std::move(Soft)};
 #endif
 }
+#ifdef PHYSICS_GANTRIA_ATTACHMENTS
+gargantuan::PhysicsOperationResult ConnectJoltRigidSoftAttachment(
+    gargantuan::IPhysicsBackend &Rigid, gargantuan::ISoftBodyBackend &Soft,
+    gargantuan::SoftBodyId SoftId, std::uint32_t Vertex,
+    gargantuan::PhysicsBodyId RigidId, glm::vec3 RigidLocalPoint) {
+    auto *RigidValue = dynamic_cast<RigidJoltBackend *>(&Rigid);
+    auto *SoftValue = dynamic_cast<JoltSoftBackend *>(&Soft);
+    if (!RigidValue || !SoftValue || &SoftValue->SharedWorld() != RigidValue)
+        return {gargantuan::PhysicsOperationStatus::BackendFailure,
+            "Jolt attachment endpoints do not share one provider world"};
+    return RigidValue->ConnectAttachment(SoftId, SoftValue->NativeBody(SoftId),
+        Vertex, RigidId, RigidLocalPoint);
+}
+gargantuan::PhysicsOperationResult DisconnectJoltRigidSoftAttachment(
+    gargantuan::IPhysicsBackend &Rigid, gargantuan::SoftBodyId SoftId,
+    gargantuan::PhysicsBodyId RigidId) {
+    auto *RigidValue = dynamic_cast<RigidJoltBackend *>(&Rigid);
+    if (!RigidValue)
+        return {gargantuan::PhysicsOperationStatus::BackendFailure,
+            "Rigid endpoint is not the Jolt provider"};
+    return RigidValue->DisconnectAttachment(SoftId, RigidId);
+}
+std::optional<JoltRigidSoftAttachmentState> GetJoltRigidSoftAttachmentState(
+    const gargantuan::IPhysicsBackend &Rigid, gargantuan::SoftBodyId SoftId,
+    gargantuan::PhysicsBodyId RigidId) {
+    const auto *RigidValue = dynamic_cast<const RigidJoltBackend *>(&Rigid);
+    return RigidValue ? RigidValue->AttachmentState(SoftId, RigidId) : std::nullopt;
+}
+#endif
 }
