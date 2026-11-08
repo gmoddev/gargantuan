@@ -63,7 +63,11 @@ def RunBinary(Binary, Options, StdoutPath, StderrPath):
 
 def FirstFailure(Frame, Update, Ordinal, Value, Limit):
     return {"Frame": Frame, "WorldUpdate": Update, "SolverOrdinal": Ordinal,
-            "Value": Value, "Limit": Limit}
+            "Value": Value if math.isfinite(Value) else None, "Limit": Limit}
+
+
+def Measured(Value):
+    return float(Value) if Value is not None else float("nan")
 
 
 def ScoreSolver(PathName, Config, Accepted):
@@ -80,6 +84,7 @@ def ScoreSolver(PathName, Config, Accepted):
     MaximumK = MaximumModel = MaximumPenetration = MaximumStrain = MaximumPinDrift = 0.0
     MaximumScalarClosure = MaximumEndpointKDifference = MaximumEndpointUDifference = 0.0
     MaximumPendingMagnitude = 0.0
+    NonfiniteSolverStates = 0
     FirstKinetic = FirstModel = FirstGeometry = None
     LastStates = {}
     Count = 0
@@ -96,30 +101,33 @@ def ScoreSolver(PathName, Config, Accepted):
             assert Row["InternalIteration"] == Ordinal % Iterations + 1
             assert math.isclose(float(Row["InternalIntegrationDt"]), float(Config["InternalIntegrationDt"]),
                                 rel_tol=1.0e-6, abs_tol=1.0e-12)
-            SoftK = float(Row["SoftKE"])
-            BaselineLinear = float(Row["RigidBaselineLinearKE"])
-            BaselineAngular = float(Row["RigidBaselineAngularKE"])
-            Pending = float(Row["PendingRigidKineticDelta"])
-            K = float(Row["KineticEnergy"])
-            U = float(Row["CompliantEdgeElasticEstimate"])
-            Model = float(Row["KPlusEdgeModelEnergy"])
-            Penetration = float(Row["ParticlePenetration"])
-            Strain = float(Row["AllEdgeStrain"])
-            PinDrift = float(Row["MaxPinDrift"])
+            SoftK = Measured(Row["SoftKE"])
+            BaselineLinear = Measured(Row["RigidBaselineLinearKE"])
+            BaselineAngular = Measured(Row["RigidBaselineAngularKE"])
+            Pending = Measured(Row["PendingRigidKineticDelta"])
+            K = Measured(Row["KineticEnergy"])
+            U = Measured(Row["CompliantEdgeElasticEstimate"])
+            Model = Measured(Row["KPlusEdgeModelEnergy"])
+            Penetration = Measured(Row["ParticlePenetration"])
+            Strain = Measured(Row["AllEdgeStrain"])
+            PinDrift = Measured(Row["MaxPinDrift"])
             Terms = (SoftK, BaselineLinear, BaselineAngular, Pending, K, U, Model,
                      Penetration, Strain, PinDrift)
             Finite = bool(Row["Finite"]) and all(math.isfinite(Value) for Value in Terms)
-            ScalarClosure = abs(K - (SoftK + BaselineLinear + BaselineAngular + Pending))
-            ModelClosure = abs(Model - (K + U))
-            MaximumScalarClosure = max(MaximumScalarClosure, ScalarClosure, ModelClosure)
-            assert ScalarClosure <= 1.0e-10 * max(1.0, abs(K)), "Native scalar K closure failed"
-            assert ModelClosure <= 1.0e-10 * max(1.0, abs(Model)), "Native scalar K+U closure failed"
-            MaximumK = max(MaximumK, K)
-            MaximumModel = max(MaximumModel, Model)
-            MaximumPenetration = max(MaximumPenetration, Penetration)
-            MaximumStrain = max(MaximumStrain, Strain)
-            MaximumPinDrift = max(MaximumPinDrift, PinDrift)
-            MaximumPendingMagnitude = max(MaximumPendingMagnitude, abs(Pending))
+            if Finite:
+                ScalarClosure = abs(K - (SoftK + BaselineLinear + BaselineAngular + Pending))
+                ModelClosure = abs(Model - (K + U))
+                MaximumScalarClosure = max(MaximumScalarClosure, ScalarClosure, ModelClosure)
+                assert ScalarClosure <= 1.0e-10 * max(1.0, abs(K)), "Native scalar K closure failed"
+                assert ModelClosure <= 1.0e-10 * max(1.0, abs(Model)), "Native scalar K+U closure failed"
+            else:
+                NonfiniteSolverStates += 1
+            if math.isfinite(K): MaximumK = max(MaximumK, K)
+            if math.isfinite(Model): MaximumModel = max(MaximumModel, Model)
+            if math.isfinite(Penetration): MaximumPenetration = max(MaximumPenetration, Penetration)
+            if math.isfinite(Strain): MaximumStrain = max(MaximumStrain, Strain)
+            if math.isfinite(PinDrift): MaximumPinDrift = max(MaximumPinDrift, PinDrift)
+            if math.isfinite(Pending): MaximumPendingMagnitude = max(MaximumPendingMagnitude, abs(Pending))
             if FirstKinetic is None and (not Finite or K < 0 or K > KineticCeiling):
                 FirstKinetic = FirstFailure(Frame, Update, Ordinal, K, KineticCeiling)
             if FirstModel is None and (not Finite or U < 0 or Model > ModelCeiling):
@@ -128,7 +136,9 @@ def ScoreSolver(PathName, Config, Accepted):
                                           (Config["Fixture"] != "Spring" and
                                            (Penetration > 0.1 or Strain > 0.1))):
                 FirstGeometry = {"Frame": Frame, "WorldUpdate": Update, "SolverOrdinal": Ordinal,
-                                 "PenetrationM": Penetration, "AllEdgeStrain": Strain, "PinDriftM": PinDrift}
+                                 "PenetrationM": Penetration if math.isfinite(Penetration) else None,
+                                 "AllEdgeStrain": Strain if math.isfinite(Strain) else None,
+                                 "PinDriftM": PinDrift if math.isfinite(PinDrift) else None}
             if Ordinal + 1 == PerUpdate:
                 LastStates[(Frame, Update)] = (K, U, Model, Penetration, Strain, PinDrift)
             Count += 1
@@ -136,11 +146,12 @@ def ScoreSolver(PathName, Config, Accepted):
     assert len(LastStates) == Frames * Updates
     for Key, (K, U, Model, Penetration, Strain, PinDrift) in LastStates.items():
         Boundary = Accepted[Key]
-        BoundaryK = float(Boundary["KineticEnergy"])
-        BoundaryU = float(Boundary["CompliantEdgeElasticEstimate"])
-        MaximumEndpointKDifference = max(MaximumEndpointKDifference, abs(K - BoundaryK))
-        MaximumEndpointUDifference = max(MaximumEndpointUDifference, abs(U - BoundaryU))
-        if Steps == 1 and Iterations == 1:
+        BoundaryK = Measured(Boundary["KineticEnergy"])
+        BoundaryU = Measured(Boundary["CompliantEdgeElasticEstimate"])
+        if all(math.isfinite(Value) for Value in (K, U, BoundaryK, BoundaryU)):
+            MaximumEndpointKDifference = max(MaximumEndpointKDifference, abs(K - BoundaryK))
+            MaximumEndpointUDifference = max(MaximumEndpointUDifference, abs(U - BoundaryU))
+        if Steps == 1 and Iterations == 1 and all(math.isfinite(Value) for Value in (K, U, BoundaryK, BoundaryU)):
             # The hook sees rigid velocities before float32 impulse writeback.
             # A 64-ulp-relative envelope covers that conversion only; it is
             # several orders below the unchanged 5% physical energy ceiling.
@@ -151,6 +162,7 @@ def ScoreSolver(PathName, Config, Accepted):
             assert Strain == float(Boundary["AllEdgeStrain"]), f"Edge strain mismatch at {Key}"
             assert PinDrift == float(Boundary["MaxPinDrift"]), f"Pin drift mismatch at {Key}"
     return {"ObservedSolverMicrosteps": Count, "ExpectedSolverMicrosteps": Expected,
+            "NonfiniteSolverStates": NonfiniteSolverStates,
             "InitialKineticEnergyJ": InitialK, "InitialEdgeModelEnergyJ": InitialU,
             "NecessaryKineticCeilingJ": KineticCeiling, "ReferenceModelCeilingJ": ModelCeiling,
             "MaximumSolverKineticEnergyJ": MaximumK, "MaximumSolverKPlusEdgeModelJ": MaximumModel,

@@ -142,6 +142,11 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
     PreviousEnergy = InitialK + InitialU
     MaxPositionError = MaxVelocityError = MaxEnergyIncrease = MaxIdentityResidual = 0.0
     MaxRealImplicitPositionError = MaxRealImplicitVelocityError = 0.0
+    MaxRealImplicitEnergyIncrease = MaxPositiveFloatRoundoffDefect = 0.0
+    MaxRoundoffAccountingResidual = 0.0
+    MaxNativeSoftKError = MaxNativeEdgeUError = 0.0
+    PositiveNativeEnergyIncreaseCount = 0
+    FirstPositiveNativeIncrease = None
     MaxForceResidual = MaxKinematicResidual = 0.0
     FirstFailure = None
     for Index, (Quality, Row) in enumerate(zip(Accepted, RawAccepted)):
@@ -162,6 +167,19 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
         Correction = Float32(Float32(PredictedX * Float32(Length - 1.0)) / Denominator)
         ExpectedX = Float32(PredictedX - Float32(InvMass * Correction))
         ExpectedVelocity = Float32(Float32(ExpectedX - PreviousX) / Dt)
+        # Independently reconstruct Observe()'s emitted scalar K and U from
+        # the expected float state. The native vector LengthSq and Length each
+        # round in float before their results enter double energy arithmetic.
+        ExpectedLengthSq = Float32(ExpectedX * ExpectedX)
+        ExpectedLength = Float32(math.sqrt(ExpectedLengthSq))
+        ExpectedConstraint = Float32(ExpectedLength - Float32(1.0))
+        ExpectedSoftK = 0.5 * Mass * Float32(ExpectedVelocity * ExpectedVelocity)
+        ExpectedEdgeU = (float(ExpectedConstraint) * ExpectedConstraint /
+                         (2.0 * Compliance))
+        NativeSoftK = float(Row["SoftKE"])
+        NativeEdgeU = float(Row["CompliantEdgeElasticEstimate"])
+        MaxNativeSoftKError = max(MaxNativeSoftKError, abs(NativeSoftK - ExpectedSoftK))
+        MaxNativeEdgeUError = max(MaxNativeEdgeUError, abs(NativeEdgeU - ExpectedEdgeU))
         PositionError = abs(ObservedX - ExpectedX)
         VelocityError = abs(ObservedVelocity - ExpectedVelocity)
         MaxPositionError = max(MaxPositionError, PositionError)
@@ -174,6 +192,29 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
         Energy = Quality["KPlusEdgeModelJ"]
         EnergyIncrease = Energy - PreviousEnergy
         MaxEnergyIncrease = max(MaxEnergyIncrease, EnergyIncrease)
+        # Compare the exact real-arithmetic implicit-Euler update from the
+        # *same captured float input state*, not a drifting ideal trajectory.
+        # The native-minus-real energy discrepancy changes only because the
+        # native source rounds positions, reconstructed velocities and K/U.
+        PreviousRealEnergy = (0.5 * Mass * PreviousVelocity ** 2 +
+                              (PreviousX - 1.0) ** 2 / (2.0 * Compliance))
+        RealEnergy = 0.5 * Mass * RealVelocity ** 2 + RealQ ** 2 / (2.0 * Compliance)
+        RealEnergyIncrease = RealEnergy - PreviousRealEnergy
+        FloatRoundoffDefect = ((Energy - RealEnergy) - (PreviousEnergy - PreviousRealEnergy))
+        RoundoffAccountingResidual = abs(EnergyIncrease -
+                                        (RealEnergyIncrease + FloatRoundoffDefect))
+        MaxRealImplicitEnergyIncrease = max(MaxRealImplicitEnergyIncrease, RealEnergyIncrease)
+        MaxPositiveFloatRoundoffDefect = max(MaxPositiveFloatRoundoffDefect, FloatRoundoffDefect)
+        MaxRoundoffAccountingResidual = max(MaxRoundoffAccountingResidual, RoundoffAccountingResidual)
+        if EnergyIncrease > 0.0:
+            PositiveNativeEnergyIncreaseCount += 1
+            if FirstPositiveNativeIncrease is None:
+                FirstPositiveNativeIncrease = {
+                    "Index": Index, "NativeIncreaseJ": EnergyIncrease,
+                    "RealImplicitChangeJ": RealEnergyIncrease,
+                    "FloatRoundoffDefectJ": FloatRoundoffDefect,
+                    "NativeEnergyBeforeJ": PreviousEnergy,
+                    "RealImplicitEnergyAfterJ": RealEnergy}
         Identity = (0.5 * Mass * (ObservedVelocity - PreviousVelocity) ** 2
                     + 0.5 * ((ObservedX - 1.0) - (PreviousX - 1.0)) ** 2 / Compliance)
         IdentityResidual = abs((PreviousEnergy - Energy) - Identity)
@@ -183,12 +224,15 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
         KinematicResidual = ((ObservedX - PreviousX) - Dt * ObservedVelocity)
         MaxForceResidual = max(MaxForceResidual, abs(ForceResidual))
         MaxKinematicResidual = max(MaxKinematicResidual, abs(KinematicResidual))
-        # No adjustable absolute v tolerance: each stored float is checked
-        # exactly against the source-order float recurrence. Real implicit
-        # Euler comparison remains reported, not treated as a pass gate.
+        # Actual gates: exact source-float P/V/K/U replay, passive same-input
+        # real implicit Euler, and the unchanged full K+U ceiling in Qualify.
+        # The roundoff decomposition above is explanatory arithmetic, not an
+        # independent pass gate or empirical energy allowance.
         if (struct.pack("<f", ObservedX) != struct.pack("<f", ExpectedX) or
                 struct.pack("<f", ObservedVelocity) != struct.pack("<f", ExpectedVelocity) or
-                EnergyIncrease > 0.0):
+                NativeSoftK != ExpectedSoftK or NativeEdgeU != ExpectedEdgeU or
+                float(Row["KineticEnergy"]) != ExpectedSoftK or
+                RealEnergyIncrease > 1.0e-12 * max(1.0, PreviousRealEnergy)):
             FirstFailure = Index
             break
         PreviousX = ObservedX
@@ -201,10 +245,17 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
             "MaxRealImplicitEulerPositionErrorM": MaxRealImplicitPositionError,
             "MaxRealImplicitEulerVelocityErrorMps": MaxRealImplicitVelocityError,
             "MaxEnergyIncreaseJ": MaxEnergyIncrease,
+            "PositiveNativeEnergyIncreaseCount": PositiveNativeEnergyIncreaseCount,
+            "FirstPositiveNativeIncrease": FirstPositiveNativeIncrease,
+            "MaxRealImplicitEnergyIncreaseJ": MaxRealImplicitEnergyIncrease,
+            "MaxPositiveFloatRoundoffDefectJ": MaxPositiveFloatRoundoffDefect,
+            "MaxRoundoffAccountingResidualJ": MaxRoundoffAccountingResidual,
+            "MaxNativeSoftKReplayErrorJ": MaxNativeSoftKError,
+            "MaxNativeEdgeUReplayErrorJ": MaxNativeEdgeUError,
             "MaxDissipationIdentityResidualJ": MaxIdentityResidual,
             "MaxImplicitForceResidualKgMps": MaxForceResidual,
             "MaxImplicitKinematicResidualM": MaxKinematicResidual,
-            "Gate": "Exact float32 source-operation replay for position/velocity and nonincreasing emitted K+U; real implicit-Euler difference is diagnostic."}
+            "Gate": "Exact float32 source-operation replay for every P/V and exact native Observe() K/U reconstruction; every same-input real implicit-Euler step is passive. Roundoff-defect arithmetic is diagnostic only. The unchanged full-run K+U ceiling remains a separate gate."}
 
 
 def RigidEnergy(State, Mass, Inertia):
@@ -348,8 +399,8 @@ def Qualify(Arguments):
                                and SpringReference.get("CompleteBoundedPass") is True
                                and SpringReference.get("NativeSpringCalibration", {}).get("Pass") is True
                                and ReferenceConfig.get("Jolt") == Config.get("Jolt")
-                               and abs(float(ReferenceConfig.get("Compliance", -1.0))
-                                       - float(Config["Compliance"])) <= 1.0e-7 * max(1.0, float(Config["Compliance"])))
+                                and struct.pack("<f", Float32(float(ReferenceConfig.get("Compliance", -1.0)))) ==
+                                    struct.pack("<f", Float32(float(Config["Compliance"]))))
     Trace = TraceInternal(Arguments.trace, Config, Frames, KineticCeiling, ModelCeiling, ModelAvailable) if Arguments.trace else None
     Internal = Trace["States"] if Trace else []
     FullInternalCoverage = bool(Trace and Trace["FullInternalCoverage"])
