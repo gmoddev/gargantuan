@@ -132,6 +132,12 @@ python RunPerformanceQualification.py --binary PhysicsJoltProviderBenchmark --cm
 
 The runner invokes `CompareBenchmark.py` for each matched pair and preserves
 its raw comparison output. Without `--envelope` every pair remains unranked.
+Both performance runners impose a total 900-second wall-clock deadline by
+default, independently of the per-process timeout. Set
+`--total-timeout-seconds` within 60–7200 for a bounded shard. Before each
+native or comparator launch, the runner passes the smaller remaining deadline
+and per-process timeout to `subprocess.run`; an expired deadline stops launches,
+records `QualificationPass=false`, and retains an incremental failed summary.
 With an envelope, the comparator can rank only when its material, topology,
 coupling, worker, and physical requirements pass. Cold and warm tails are
 reported separately; no ratio is pooled across scenes or treated as an Engine

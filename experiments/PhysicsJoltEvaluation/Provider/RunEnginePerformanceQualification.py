@@ -11,9 +11,11 @@ from pathlib import Path
 import platform
 import shutil
 import sys
+import time
 
 from RunPerformanceQualification import (
-    COUPLINGS, SCENES, HashFile, PlanMatrix, RunProcess, WriteJson,
+    COUPLINGS, SCENES, HashFile, PlanMatrix, RemainingTimeout, RunProcess,
+    WriteJson,
 )
 
 
@@ -64,6 +66,19 @@ def ParseRaw(PathName, Backend, Scene, Coupling, Frames, Workers):
             'PhysicalGateScope': 'Per-frame finite, revision, frozen, and drop checks in native executable'}
 
 
+def WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started, TotalTimeout):
+    Complete = not Errors and len(Pairs) == len(Plan)
+    WriteJson(Output / 'Summary.json', {
+        'PlannedPairs': len(Plan), 'CompletedPairs': len(Pairs),
+        'CompletedProcesses': len(Receipts), 'HarnessErrors': Errors,
+        'TotalTimeoutSeconds': TotalTimeout,
+        'ElapsedSeconds': time.monotonic() - Started,
+        'QualificationPass': Complete,
+        'Status': 'FAILED' if Errors else 'COMPLETE' if Complete else 'RUNNING',
+        'TimingWinner': None,
+        'Scope': 'Cold Engine WorldRoot physics-call pairs; quality differences retained; no winner'})
+
+
 def Main(Arguments=None):
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument('--binary', type=Path, required=True)
@@ -78,10 +93,12 @@ def Main(Arguments=None):
     Parser.add_argument('--frames', type=int, default=30)
     Parser.add_argument('--repetitions', type=int, default=3)
     Parser.add_argument('--timeout-seconds', type=int, default=900)
+    Parser.add_argument('--total-timeout-seconds', type=int, default=900)
     Options = Parser.parse_args(Arguments)
     if not 1 <= Options.frames <= 30 or \
             not 1 <= Options.repetitions <= 4 or \
             not 30 <= Options.timeout_seconds <= 3600 or \
+            not 60 <= Options.total_timeout_seconds <= 7200 or \
             any(Worker < 1 or Worker > 8 for Worker in Options.workers) or \
             len(set(Options.workers)) != len(Options.workers) or \
             len(set(Options.scenes)) != len(Options.scenes) or \
@@ -91,6 +108,8 @@ def Main(Arguments=None):
     Cache = Options.cmake_cache.resolve(strict=True)
     Output = Options.output
     Output.mkdir(parents=True, exist_ok=False)
+    Started = time.monotonic()
+    Deadline = Started + Options.total_timeout_seconds
     shutil.copyfile(Cache, Output / 'CMakeCache.txt')
     Metadata = {'Binary': str(Binary), 'BinarySha256': HashFile(Binary),
                 'CMakeCacheSha256': HashFile(Output / 'CMakeCache.txt'),
@@ -98,6 +117,7 @@ def Main(Arguments=None):
                 'JoltSource': Options.jolt_source,
                 'Host': platform.node(), 'Platform': platform.platform(),
                 'Python': sys.version, 'Frames': Options.frames,
+                'TotalTimeoutSeconds': Options.total_timeout_seconds,
                 'TimingScope': 'Cold WorldRoot::StepPhysics; Engine setup and teardown separate',
                 'QualityScope': 'Physical fields reported; no cross-material winner'}
     WriteJson(Output / 'Metadata.json', Metadata)
@@ -108,13 +128,22 @@ def Main(Arguments=None):
     Pairs = []
     Errors = []
     Stop = False
+    WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                  Options.total_timeout_seconds)
     for Item in Plan:
         PairRuns = {}
         for Backend in Item['Order']:
             Name = f"{len(Receipts):04d}-{Item['Pair']}-{Backend}"
             Command = [str(Binary), Backend, Item['Scene'], Item['Coupling'],
                        str(Options.frames), str(Item['Workers'])]
-            Result = RunProcess(Command, Options.timeout_seconds)
+            Timeout = RemainingTimeout(Deadline, Options.timeout_seconds)
+            if Timeout <= 0:
+                Errors.append({'Name': Name, 'Reason': 'Total deadline elapsed before native launch'})
+                WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                              Options.total_timeout_seconds)
+                Stop = True
+                break
+            Result = RunProcess(Command, Timeout)
             StdoutPath = Output / f'{Name}.stdout.txt'
             StderrPath = Output / f'{Name}.stderr.txt'
             StdoutPath.write_bytes(Result.pop('Stdout'))
@@ -130,6 +159,8 @@ def Main(Arguments=None):
             WriteJson(Output / 'Receipts.json', Receipts)
             if Receipt['ExitCode'] != 0 or Receipt['TimedOut']:
                 Errors.append({'Name': Name, 'Reason': 'Process failed or timed out'})
+                WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                              Options.total_timeout_seconds)
                 Stop = True
                 break
             try:
@@ -141,8 +172,12 @@ def Main(Arguments=None):
                 Errors.append({'Name': Name, 'Reason': str(Error)})
                 Stop = True
                 WriteJson(Output / 'Receipts.json', Receipts)
+                WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                              Options.total_timeout_seconds)
                 break
             WriteJson(Output / 'Receipts.json', Receipts)
+            WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                          Options.total_timeout_seconds)
             PairRuns[Backend] = Receipt
         if Stop:
             break
@@ -152,6 +187,8 @@ def Main(Arguments=None):
         XpbdMs = float(Xpbd['mean_physics_step_wall_ms'])
         if JoltMs <= 0 or XpbdMs <= 0:
             Errors.append({'Name': Item['Pair'], 'Reason': 'Nonpositive Engine mean step time'})
+            WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                          Options.total_timeout_seconds)
             break
         Pair = {**Item, 'JoltReceipt': PairRuns['jolt']['Name'],
                 'XpbdReceipt': PairRuns['xpbd']['Name'],
@@ -166,15 +203,21 @@ def Main(Arguments=None):
                 'Scope': 'Engine physics-call cost; no matched material/contact envelope'}
         Pairs.append(Pair)
         WriteJson(Output / 'Pairs.json', Pairs)
+        if time.monotonic() >= Deadline:
+            Errors.append({'Name': Item['Pair'],
+                           'Reason': 'Total deadline elapsed during pair processing'})
+        WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                      Options.total_timeout_seconds)
+        if Errors:
+            break
         print(json.dumps({'Pair': Item['Pair'], 'Scene': Item['Scene'],
                           'Coupling': Item['Coupling'], 'Workers': Item['Workers'],
                           'JoltMeanStepMs': JoltMs, 'XpbdMeanStepMs': XpbdMs,
                           'TimingWinner': None}), flush=True)
-    WriteJson(Output / 'Summary.json', {
-        'PlannedPairs': len(Plan), 'CompletedPairs': len(Pairs),
-        'CompletedProcesses': len(Receipts), 'HarnessErrors': Errors,
-        'TimingWinner': None,
-        'Scope': 'Cold Engine WorldRoot physics-call pairs; quality differences retained; no winner'})
+    if not Errors and time.monotonic() >= Deadline:
+        Errors.append({'Name': 'matrix', 'Reason': 'Total deadline elapsed before completion'})
+    WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                  Options.total_timeout_seconds)
     if Errors:
         raise SystemExit(2)
 

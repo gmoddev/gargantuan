@@ -136,6 +136,27 @@ def RunProcess(Command, TimeoutSeconds):
                 'ElapsedSeconds': time.monotonic() - Start}
 
 
+def RemainingTimeout(Deadline, PerProcessTimeout):
+    return min(float(PerProcessTimeout), Deadline - time.monotonic())
+
+
+def WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                  TotalTimeout, EnvelopeProvided):
+    Complete = not Errors and len(Pairs) == len(Plan)
+    WriteJson(Output / 'Summary.json', {
+        'PlannedPairs': len(Plan), 'CompletedPairs': len(Pairs),
+        'CompletedProcesses': len(Receipts), 'HarnessErrors': Errors,
+        'QualityEnvelopeProvided': EnvelopeProvided,
+        'TimingWinners': [Pair['Comparison']['timing_winner']
+                          for Pair in Pairs if 'Comparison' in Pair],
+        'UnrankedWithoutEnvelope': not EnvelopeProvided,
+        'TotalTimeoutSeconds': TotalTimeout,
+        'ElapsedSeconds': time.monotonic() - Started,
+        'QualificationPass': Complete,
+        'Status': 'FAILED' if Errors else 'COMPLETE' if Complete else 'RUNNING',
+        'Scope': 'Per-pair cost only; no cross-scene or Engine frame winner'})
+
+
 def Main(Arguments=None):
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument('--binary', type=Path, required=True)
@@ -153,11 +174,13 @@ def Main(Arguments=None):
     Parser.add_argument('--warmup', type=int, default=10)
     Parser.add_argument('--repetitions', type=int, default=3)
     Parser.add_argument('--timeout-seconds', type=int, default=900)
+    Parser.add_argument('--total-timeout-seconds', type=int, default=900)
     Options = Parser.parse_args(Arguments)
     if not 1 <= Options.frames <= 30 or not 0 <= Options.warmup <= 30 or \
             ('warm' in Options.tails and Options.warmup == 0) or \
             not 1 <= Options.repetitions <= 4 or \
             not 30 <= Options.timeout_seconds <= 3600 or \
+            not 60 <= Options.total_timeout_seconds <= 7200 or \
             not Options.workers or any(Worker < 1 or Worker > 8
                                        for Worker in Options.workers) or \
             len(set(Options.workers)) != len(Options.workers) or \
@@ -170,6 +193,8 @@ def Main(Arguments=None):
     Envelope = Options.envelope.resolve(strict=True) if Options.envelope else None
     Output = Options.output
     Output.mkdir(parents=True, exist_ok=False)
+    Started = time.monotonic()
+    Deadline = Started + Options.total_timeout_seconds
     shutil.copyfile(Cache, Output / 'CMakeCache.txt')
     if Envelope:
         shutil.copyfile(Envelope, Output / 'QualityEnvelope.json')
@@ -180,6 +205,7 @@ def Main(Arguments=None):
         'Host': platform.node(), 'Platform': platform.platform(),
         'Python': sys.version, 'Frames': Options.frames,
         'WarmupFrames': Options.warmup, 'Repetitions': Options.repetitions,
+        'TotalTimeoutSeconds': Options.total_timeout_seconds,
         'EnvelopeSha256': HashFile(Output / 'QualityEnvelope.json') if Envelope else None,
         'TimingScope': 'Separate cold and post-warmup provider calls; allocation builds rejected',
     }
@@ -191,6 +217,8 @@ def Main(Arguments=None):
     Pairs = []
     Errors = []
     Stop = False
+    WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                  Options.total_timeout_seconds, Envelope is not None)
     for Item in Plan:
         PairRuns = {}
         Warmup = 0 if Item['Tail'] == 'cold' else Options.warmup
@@ -199,7 +227,14 @@ def Main(Arguments=None):
             Command = [str(Binary), Backend, Item['Scene'], Item['Coupling'],
                        str(Options.frames), str(Item['Workers']), Item['Pair'],
                        str(Warmup)]
-            Result = RunProcess(Command, Options.timeout_seconds)
+            Timeout = RemainingTimeout(Deadline, Options.timeout_seconds)
+            if Timeout <= 0:
+                Errors.append({'Name': Name, 'Reason': 'Total deadline elapsed before native launch'})
+                WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                              Options.total_timeout_seconds, Envelope is not None)
+                Stop = True
+                break
+            Result = RunProcess(Command, Timeout)
             StdoutPath = Output / f'{Name}.stdout.txt'
             StderrPath = Output / f'{Name}.stderr.txt'
             StdoutPath.write_bytes(Result.pop('Stdout'))
@@ -216,6 +251,8 @@ def Main(Arguments=None):
             WriteJson(Output / 'Receipts.json', Receipts)
             if Receipt['ExitCode'] != 0 or Receipt['TimedOut']:
                 Errors.append({'Name': Name, 'Reason': 'Process failed or timed out'})
+                WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                              Options.total_timeout_seconds, Envelope is not None)
                 Stop = True
                 break
             try:
@@ -228,8 +265,12 @@ def Main(Arguments=None):
                 Errors.append({'Name': Name, 'Reason': str(Error)})
                 Stop = True
                 WriteJson(Output / 'Receipts.json', Receipts)
+                WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                              Options.total_timeout_seconds, Envelope is not None)
                 break
             WriteJson(Output / 'Receipts.json', Receipts)
+            WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                          Options.total_timeout_seconds, Envelope is not None)
             PairRuns[Backend] = Receipt
         if Stop:
             break
@@ -239,7 +280,14 @@ def Main(Arguments=None):
                              str(Output / PairRuns['xpbd']['Stdout'])]
         if Envelope:
             ComparisonCommand += ['--envelope', str(Output / 'QualityEnvelope.json')]
-        Compared = RunProcess(ComparisonCommand, Options.timeout_seconds)
+        Timeout = RemainingTimeout(Deadline, Options.timeout_seconds)
+        if Timeout <= 0:
+            Errors.append({'Name': Item['Pair'],
+                           'Reason': 'Total deadline elapsed before comparator launch'})
+            WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                          Options.total_timeout_seconds, Envelope is not None)
+            break
+        Compared = RunProcess(ComparisonCommand, Timeout)
         CompareStdout = Output / f"{Item['Pair']}.compare.stdout.json"
         CompareStderr = Output / f"{Item['Pair']}.compare.stderr.txt"
         CompareStdout.write_bytes(Compared.pop('Stdout'))
@@ -257,6 +305,8 @@ def Main(Arguments=None):
         WriteJson(Output / 'Pairs.json', Pairs)
         if Pair['ExitCode'] != 0 or Pair['TimedOut']:
             Errors.append({'Name': Item['Pair'], 'Reason': 'Comparator failed or timed out'})
+            WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                          Options.total_timeout_seconds, Envelope is not None)
             break
         try:
             Pair['Comparison'] = json.loads(CompareStdout.read_text(encoding='utf-8'))
@@ -269,22 +319,27 @@ def Main(Arguments=None):
             Pair['ParseError'] = str(Error)
             Errors.append({'Name': Item['Pair'], 'Reason': str(Error)})
             WriteJson(Output / 'Pairs.json', Pairs)
+            WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                          Options.total_timeout_seconds, Envelope is not None)
             break
         WriteJson(Output / 'Pairs.json', Pairs)
+        if time.monotonic() >= Deadline:
+            Errors.append({'Name': Item['Pair'],
+                           'Reason': 'Total deadline elapsed during pair processing'})
+        WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                      Options.total_timeout_seconds, Envelope is not None)
+        if Errors:
+            break
         print(json.dumps({'Pair': Item['Pair'], 'Scene': Item['Scene'],
                           'Coupling': Item['Coupling'], 'Workers': Item['Workers'],
                           'Tail': Item['Tail'], 'JoltMs': Pair['JoltMeanTotalMs'],
                           'XpbdMs': Pair['XpbdMeanTotalMs'],
                           'TimingWinner': Pair['Comparison']['timing_winner']}),
               flush=True)
-    Summary = {'PlannedPairs': len(Plan), 'CompletedPairs': len(Pairs),
-               'CompletedProcesses': len(Receipts), 'HarnessErrors': Errors,
-               'QualityEnvelopeProvided': Envelope is not None,
-               'TimingWinners': [Pair['Comparison']['timing_winner']
-                                 for Pair in Pairs if 'Comparison' in Pair],
-               'UnrankedWithoutEnvelope': Envelope is None,
-               'Scope': 'Per-pair cost only; no cross-scene or Engine frame winner'}
-    WriteJson(Output / 'Summary.json', Summary)
+    if not Errors and time.monotonic() >= Deadline:
+        Errors.append({'Name': 'matrix', 'Reason': 'Total deadline elapsed before completion'})
+    WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
+                  Options.total_timeout_seconds, Envelope is not None)
     if Errors:
         raise SystemExit(2)
 

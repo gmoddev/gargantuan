@@ -12,6 +12,32 @@ import RunEnginePerformanceQualification as Runner
 
 
 class EnginePerformanceTests(unittest.TestCase):
+    def test_expired_total_deadline_keeps_failed_summary_without_launch(self):
+        with TemporaryDirectory() as Directory, \
+             patch.object(Runner, 'RemainingTimeout', return_value=-1), \
+             patch.object(Runner, 'RunProcess') as Run:
+            Base = Path(Directory)
+            Binary = Base / 'engine-benchmark'
+            Binary.write_bytes(b'binary')
+            Cache = Base / 'CMakeCache.txt'
+            Cache.write_bytes(b'cache')
+            Output = Base / 'evidence'
+            with self.assertRaises(SystemExit) as Exit:
+                Runner.Main(['--binary', str(Binary), '--cmake-cache', str(Cache),
+                             '--engine-source', 'engine-sha', '--jolt-source',
+                             'jolt-sha', '--output', str(Output),
+                             '--scenes', 'cloth4k', '--couplings', 'none',
+                             '--workers', '1', '--frames', '1',
+                             '--repetitions', '1',
+                             '--total-timeout-seconds', '60'])
+            self.assertEqual(Exit.exception.code, 2)
+            Run.assert_not_called()
+            Summary = json.loads((Output / 'Summary.json').read_text())
+            self.assertEqual(Summary['Status'], 'FAILED')
+            self.assertFalse(Summary['QualificationPass'])
+            self.assertEqual(Summary['CompletedProcesses'], 0)
+            self.assertIn('Total deadline', Summary['HarnessErrors'][0]['Reason'])
+
     def test_default_cold_matrix_balances_order(self):
         Plan = Runner.PlanMatrix(Runner.SCENES, Runner.COUPLINGS,
                                  (1, 2, 8), 3, ('cold',))

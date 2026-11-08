@@ -13,6 +13,32 @@ import RunPerformanceQualification as Runner
 
 
 class PerformanceQualificationTests(unittest.TestCase):
+    def test_expired_total_deadline_stops_before_native_launch(self):
+        with TemporaryDirectory() as Directory, \
+             patch.object(Runner, 'RemainingTimeout', return_value=-1), \
+             patch.object(Runner, 'RunProcess') as Run:
+            Base = Path(Directory)
+            Binary = Base / 'benchmark'
+            Binary.write_bytes(b'binary')
+            Cache = Base / 'CMakeCache.txt'
+            Cache.write_bytes(b'cache')
+            Output = Base / 'evidence'
+            with self.assertRaises(SystemExit) as Exit:
+                Runner.Main(['--binary', str(Binary), '--cmake-cache', str(Cache),
+                             '--engine-source', 'engine-sha', '--jolt-source',
+                             'jolt-sha', '--output', str(Output),
+                             '--scenes', 'cloth4k', '--couplings', 'none',
+                             '--workers', '1', '--tails', 'cold',
+                             '--frames', '1', '--repetitions', '1',
+                             '--total-timeout-seconds', '60'])
+            self.assertEqual(Exit.exception.code, 2)
+            Run.assert_not_called()
+            Summary = json.loads((Output / 'Summary.json').read_text())
+            self.assertEqual(Summary['Status'], 'FAILED')
+            self.assertFalse(Summary['QualificationPass'])
+            self.assertEqual(Summary['CompletedProcesses'], 0)
+            self.assertIn('Total deadline', Summary['HarnessErrors'][0]['Reason'])
+
     def test_compiled_jolt_schedule_must_match_header_and_product(self):
         Profile = dict(zip(Runner.JOLT_PROFILE_FIELDS, (2, 8, 6, 2, 96)))
         Header = {'backend': 'jolt', 'run_pair': 'p0000',
