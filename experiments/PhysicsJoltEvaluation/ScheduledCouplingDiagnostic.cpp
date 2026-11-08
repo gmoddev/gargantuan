@@ -35,7 +35,7 @@ constexpr float Radius = 0.45f;
 constexpr float Mass = 0.7f * (4.0f / 3.0f) * 3.14159265358979323846f * Radius * Radius * Radius;
 constexpr float Inertia = 0.4f * Mass * Radius * Radius;
 struct Options {
-    int Frames = 150, Steps = 1, Iterations = 24, Workers = 1, Count = 1;
+    int Frames = 150, Steps = 1, Iterations = 24, ConstraintSweeps = 1, Workers = 1, Count = 1;
     int TraceStart = 16, TraceEnd = 24, ProjectionPasses = 1, ContactThrough = 3600;
     int WorldUpdates = 1;
     int VelocityReconstruction = 0;
@@ -75,6 +75,7 @@ Options Parse(int Count, char** Args) {
         else if(K=="--observe-updates") O.ObserveUpdates=std::stoi(S)!=0;
         else if(K=="--steps") O.Steps=std::stoi(S);
         else if(K=="--iterations") O.Iterations=std::stoi(S);
+        else if(K=="--constraint-sweeps") O.ConstraintSweeps=std::stoi(S);
         else if(K=="--workers") O.Workers=std::stoi(S);
         else if(K=="--count") O.Count=std::stoi(S);
         else if(K=="--contact") O.Contact=std::stoi(S)!=0;
@@ -109,6 +110,14 @@ Options Parse(int Count, char** Args) {
     }
     if(O.Frames<1||O.Frames>3600||O.Steps<1||O.Steps>96||O.WorldUpdates<1||O.WorldUpdates>384||O.Steps*O.WorldUpdates*O.Iterations>2304||O.Iterations<1||O.Iterations>64||O.Workers<1||O.Workers>8||O.Count<1||O.Count>2||O.ProjectionPasses<1||O.ProjectionPasses>8||O.ContactThrough< -1||O.ContactThrough>3600||!std::isfinite(O.ContactProjectionScale)||O.ContactProjectionScale<0||O.ContactProjectionScale>1||O.Compliance<0||O.BendCompliance<0||O.Damping<0||O.Friction<0||O.Restitution<0)
         throw std::runtime_error("[Physics:Coupling] Option outside bounded range");
+    if(O.ConstraintSweeps!=1&&O.ConstraintSweeps!=2&&O.ConstraintSweeps!=4&&O.ConstraintSweeps!=8)
+        throw std::runtime_error("[Physics:Coupling] Constraint sweeps must be 1, 2, 4, or 8");
+    if(O.ConstraintSweeps>1&&O.VelocityReconstruction!=1)
+        throw std::runtime_error("[Physics:Coupling] Multiple constraint sweeps require delta velocity reconstruction");
+#ifndef PHYSICS_GANTRIA_CONVERGENCE
+    if(O.ConstraintSweeps>1)
+        throw std::runtime_error("[Physics:Coupling] Multiple constraint sweeps require the isolated convergence build");
+#endif
 #ifndef PHYSICS_ENERGY_OBSERVER
     if(!O.SolverObservations.empty())
         throw std::runtime_error("[Physics:Coupling] Solver observations require the isolated energy observer build");
@@ -349,6 +358,9 @@ int main(int ArgCount,char** Args) {
             JPH::SoftBodyCreationSettings Soft(Shared,JPH::RVec3::sZero(),JPH::Quat::sIdentity(),2);
             PhysicsJoltEvaluation::ApplyVelocityReconstruction(Soft);
             Soft.mNumIterations=Config.Iterations; Soft.mUpdatePosition=false; Soft.mAllowSleeping=false;
+#ifdef PHYSICS_GANTRIA_CONVERGENCE
+            Soft.mNumConstraintIterations=Config.ConstraintSweeps;
+#endif
             Soft.mLinearDamping=Config.Damping; Soft.mVertexRadius=0.05f; Soft.mFacesDoubleSided=true;
             Soft.mFriction=Config.Friction; Soft.mRestitution=Config.Restitution;
             auto& Bodies=World.GetBodyInterface();
@@ -450,7 +462,7 @@ int main(int ArgCount,char** Args) {
             const auto Initial=GetObservation();
             const bool PositiveCompliance=std::all_of(Shared->mEdgeConstraints.begin(),Shared->mEdgeConstraints.end(),[](const auto& E){return E.mCompliance>0;});
             std::cout<<Json({{"Type","Config"},{"Backend","IndependentNativeJolt"},{"Jolt","e77f175595e64cb44218cc9d9d56fc365ad0e36a"},
-                {"Frames",Config.Frames},{"Steps",Config.Steps},{"Iterations",Config.Iterations},{"Workers",Config.Workers},
+                {"Frames",Config.Frames},{"Steps",Config.Steps},{"Iterations",Config.Iterations},{"ConstraintSweeps",Config.ConstraintSweeps},{"Workers",Config.Workers},
                 {"Compliance",Config.Compliance},{"BendCompliance",Config.BendCompliance},{"Damping",Config.Damping},
                 {"Friction",Config.Friction},{"Restitution",Config.Restitution},{"Pinned",Config.Pinned},{"Contact",Config.Contact},
                 {"Dynamic",Config.Dynamic},{"Seed",Config.Seed},{"RigidMass",Mass},{"SphereInertia",Inertia},

@@ -198,17 +198,20 @@ def NativeStepTime(Updates, Steps, Iterations):
 
 
 def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
-                    IntegrationsPerFrame=None, VelocityReconstruction="difference"):
+                    IntegrationsPerFrame=None, VelocityReconstruction="difference", ConstraintSweeps=1):
     Updates = IntegrationsPerFrame if IntegrationsPerFrame is not None else (96 if Material == "1e-5" else 192)
     if not isinstance(Updates, int) or not 1 <= Updates <= 384:
         raise ValueError("[Physics:ScheduledEnergy] Spring calibration cadence outside 1..384")
     if VelocityReconstruction not in ("difference", "delta", "applieddelta"):
         raise ValueError("[Physics:ScheduledEnergy] Unknown spring calibration velocity reconstruction")
-    Name = f"Spring-M{Material}-W{Updates}"
+    if ConstraintSweeps not in (1, 2, 4, 8) or (ConstraintSweeps > 1 and VelocityReconstruction != "delta"):
+        raise ValueError("[Physics:ScheduledEnergy] Multiple constraint sweeps require delta mode and Q=2,4,8")
+    Name = f"Spring-M{Material}-W{Updates}-Q{ConstraintSweeps}"
     Common = ["--fixture", "Spring", "--frames", "8", "--steps", "1", "--iterations", "1",
               "--world-updates", str(Updates), "--compliance", Material, "--damping", "0",
               "--contact", "0", "--speed", "0", "--workers", str(Arguments.threads),
-              "--particles", "1", "--observe-updates", "1"]
+              "--particles", "1", "--observe-updates", "1",
+              "--constraint-sweeps", str(ConstraintSweeps)]
     if VelocityReconstruction != "difference":
         Common += ["--velocity-reconstruction", VelocityReconstruction]
     PristinePath = Output / f"{Name}.pristine.jsonl"
@@ -224,6 +227,7 @@ def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
     assert PristineConfig["WorldUpdatesPerFrame"] == ObservedConfig["WorldUpdatesPerFrame"] == Updates
     assert PristineConfig["Steps"] == ObservedConfig["Steps"] == 1
     assert PristineConfig["Iterations"] == ObservedConfig["Iterations"] == 1
+    assert PristineConfig["ConstraintSweeps"] == ObservedConfig["ConstraintSweeps"] == ConstraintSweeps
     assert PristineConfig["InternalIntegrationDt"] == ObservedConfig["InternalIntegrationDt"] == ExpectedDt
     assert PristineConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
     assert ObservedConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
@@ -242,10 +246,12 @@ def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
     Calibrated = bool(Quality["CompleteBoundedPass"] and
                       Quality["NativeSpringCalibration"] and Quality["NativeSpringCalibration"]["Pass"] and
                       Quality["NativeSpringCalibration"].get("VelocityReconstruction", "difference") == VelocityReconstruction and
+                      Quality["NativeSpringCalibration"].get("ConstraintSweeps") == ConstraintSweeps and
                       Quality["ConfigSummary"].get("VelocityReconstruction", "difference") == VelocityReconstruction and
+                      Quality["ConfigSummary"].get("ConstraintSweeps") == ConstraintSweeps and
                       Score["CompleteBoundedPass"])
     return {"Name": Name, "MaterialCompliance": Material, "WorldUpdates": Updates,
-            "InternalIntegrationDt": ExpectedDt,
+            "InternalIntegrationDt": ExpectedDt, "ConstraintSweeps": ConstraintSweeps,
             "VelocityReconstruction": VelocityReconstruction,
             "PristineSeconds": PristineSeconds, "ObservedSeconds": ObservedSeconds,
             "PristineRaw": PristinePath.name, "ObservedRaw": ObservedPath.name,

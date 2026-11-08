@@ -152,6 +152,8 @@ def RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture, Mater
                              ObservedPath, Output / f"{Name}.observed.stderr.txt")
     PristineConfig, PristineFrames, PristineMicrosteps, _ = ReadPublished(PristinePath)
     ObservedConfig, ObservedFrames, ObservedMicrosteps, _ = ReadPublished(ObservedPath)
+    RequestedSweeps = int(Extra[list(Extra).index("--constraint-sweeps") + 1]) if "--constraint-sweeps" in Extra else 1
+    assert PristineConfig.get("ConstraintSweeps", 1) == ObservedConfig.get("ConstraintSweeps", 1) == RequestedSweeps
     ExpectedDt = NativeStepTime(Updates, Steps, Iterations)
     assert PristineConfig["InternalIntegrationDt"] == ObservedConfig["InternalIntegrationDt"] == ExpectedDt
     assert PristineConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
@@ -179,7 +181,8 @@ def RunObservedCase(PristineBinary, ObservedBinary, Output, Name, Fixture, Mater
             "VelocityReconstruction": VelocityReconstruction,
             "ExpectedReconstruction": VelocityReconstruction,
             "Frames": Frames, "Workers": Workers, "CollisionSteps": Steps,
-            "SoftIterations": Iterations, "WorldUpdates": Updates, "ExtraOptions": list(Extra),
+            "SoftIterations": Iterations, "ConstraintSweeps": RequestedSweeps,
+            "WorldUpdates": Updates, "ExtraOptions": list(Extra),
             "PristineRaw": PristinePath.name, "ObservedRaw": ObservedPath.name,
             "SolverRaw": SolverPath.name, "FrameStateSha256": FrameDigest(ObservedFrames),
             "PristineWallSeconds": PristineWall, "ObservedWallSeconds": ObservedWall,

@@ -141,6 +141,10 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
     if Config.get("Contact") or float(Config.get("Speed", 0.0)) != 0.0 or float(Config.get("Damping", 0.0)) != 0.0:
         return {"Status": "EXTERNAL_INPUT_OR_DAMPING", "Pass": False}
     Mode = VelocityMode(Config)
+    ConstraintSweeps = int(Config.get("ConstraintSweeps", 1))
+    if ConstraintSweeps not in (1, 2, 4, 8) or (ConstraintSweeps > 1 and Mode != "delta"):
+        return {"Status": "UNSUPPORTED_CONSTRAINT_SWEEP_CALIBRATION", "Pass": False,
+                "ConstraintSweeps": ConstraintSweeps, "VelocityReconstruction": Mode}
     Compliance = Float32(float(Config["Compliance"]))
     Dt = Float32(float(Config["InternalIntegrationDt"]))
     InvMass = 10.0
@@ -164,23 +168,36 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
             break
         ObservedX = float(Moving["P"][0])
         ObservedVelocity = float(Moving["V"][0])
-        # Source: IntegratePositions x*=float(x+float(v*dt)); then one
-        # ApplyEdgeConstraints pass with float length/denominator/vector
-        # operations. The selected reconstruction formula follows the native
-        # Config field. The 1D sphere-free fixture has a pinned x=0 endpoint
-        # and rest length 1.
+        # Source: integrate once, project Q times with a retained XPBD
+        # multiplier, then reconstruct velocity once from the accumulated
+        # intended corrections. The aligned edge has a pinned x=0 endpoint.
         PredictedX = Float32(PreviousX + Float32(PreviousVelocity * Dt))
-        Length = Float32(math.sqrt(Float32(PredictedX * PredictedX)))
         InvDtSq = Float32(1.0 / Float32(Dt * Dt))
-        Denominator = Float32(Length * Float32(InvMass + Float32(Compliance * InvDtSq)))
-        Correction = Float32(Float32(PredictedX * Float32(Length - 1.0)) / Denominator)
-        ExpectedX = Float32(PredictedX - Float32(InvMass * Correction))
+        Alpha = Float32(Compliance * InvDtSq)
+        ExpectedX = PredictedX
+        Lambda = 0.0
+        AccumulatedDelta = 0.0
+        for Sweep in range(ConstraintSweeps):
+            Length = Float32(math.sqrt(Float32(ExpectedX * ExpectedX)))
+            Constraint = Float32(Length - Float32(1.0))
+            if Sweep == 0:
+                Denominator = Float32(Length * Float32(InvMass + Alpha))
+                Correction = Float32(Float32(ExpectedX * Constraint) / Denominator)
+                if ConstraintSweeps > 1:
+                    Lambda = Float32(-Constraint / Float32(InvMass + Alpha))
+            else:
+                DeltaLambda = Float32(-Float32(Constraint + Float32(Alpha * Lambda)) /
+                                      Float32(InvMass + Alpha))
+                Lambda = Float32(Lambda + DeltaLambda)
+                Correction = Float32(ExpectedX * Float32(-DeltaLambda / Length))
+            RequestedDelta = Float32(-Float32(InvMass * Correction))
+            ExpectedX = Float32(ExpectedX - Float32(InvMass * Correction))
+            AccumulatedDelta = Float32(AccumulatedDelta + RequestedDelta)
         if Mode == "difference":
             ExpectedVelocity = Float32(Float32(ExpectedX - PreviousX) / Dt)
         else:
-            RequestedDelta = Float32(-Float32(InvMass * Correction))
             AppliedDelta = Float32(ExpectedX - PredictedX)
-            Delta = RequestedDelta if Mode == "delta" else AppliedDelta
+            Delta = AccumulatedDelta if Mode == "delta" else AppliedDelta
             ExpectedVelocity = Float32(PreviousVelocity + Float32(Delta / Dt))
         # Independently reconstruct Observe()'s emitted scalar K and U from
         # the expected float state. The native vector LengthSq and Length each
@@ -255,6 +272,7 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
         PreviousEnergy = Energy
     return {"Status": "PASS_NATIVE_ONE_EDGE_FLOAT_SOURCE_REPLAY" if FirstFailure is None else "FAIL_NATIVE_ONE_EDGE_FLOAT_SOURCE_REPLAY",
             "VelocityReconstruction": Mode,
+            "ConstraintSweeps": ConstraintSweeps,
             "Pass": FirstFailure is None, "CheckedMicrosteps": len(Accepted) if FirstFailure is None else FirstFailure + 1,
             "FirstFailureIndex": FirstFailure, "MaxFloatReplayPositionErrorM": MaxPositionError,
             "MaxFloatReplayVelocityErrorMps": MaxVelocityError,
@@ -271,7 +289,7 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
             "MaxDissipationIdentityResidualJ": MaxIdentityResidual,
             "MaxImplicitForceResidualKgMps": MaxForceResidual,
             "MaxImplicitKinematicResidualM": MaxKinematicResidual,
-            "Gate": "Exact float32 source-operation replay for every P/V under the recorded velocity reconstruction mode and exact native Observe() K/U reconstruction; every same-input real implicit-Euler step is passive. Roundoff-defect arithmetic is diagnostic only. The unchanged full-run K+U ceiling remains a separate gate."}
+            "Gate": "Exact float32 source-operation replay for every P/V with the recorded retained-lambda sweep count and velocity reconstruction mode, plus exact native Observe() K/U reconstruction; every same-input real implicit-Euler step is passive. Roundoff-defect arithmetic is diagnostic only. The unchanged full-run K+U ceiling remains a separate gate."}
 
 
 def RigidEnergy(State, Mass, Inertia):
@@ -417,6 +435,7 @@ def Qualify(Arguments):
                                and SpringReference.get("NativeSpringCalibration", {}).get("Pass") is True
                                and ReferenceConfig.get("Jolt") == Config.get("Jolt")
                                and VelocityMode(ReferenceConfig) == Mode
+                               and int(ReferenceConfig.get("ConstraintSweeps", 1)) == int(Config.get("ConstraintSweeps", 1))
                                 and struct.pack("<f", Float32(float(ReferenceConfig.get("Compliance", -1.0)))) ==
                                     struct.pack("<f", Float32(float(Config["Compliance"]))))
     Trace = TraceInternal(Arguments.trace, Config, Frames, KineticCeiling, ModelCeiling, ModelAvailable) if Arguments.trace else None
@@ -474,7 +493,7 @@ def Qualify(Arguments):
         "SpringCalibrationReference": str(Arguments.spring_calibration.resolve()) if Arguments.spring_calibration else None,
         "SpringCalibrationReferencePass": SpringReferencePass,
         "Fixture": Fixture,
-        "ConfigSummary": {**{Key: Config.get(Key) for Key in ("Backend", "Jolt", "Fixture", "Compliance", "BendCompliance", "Steps", "Iterations", "WorldUpdatesPerFrame")},
+        "ConfigSummary": {**{Key: Config.get(Key) for Key in ("Backend", "Jolt", "Fixture", "Compliance", "BendCompliance", "Steps", "Iterations", "WorldUpdatesPerFrame", "ConstraintSweeps")},
                           "VelocityReconstruction": Mode},
         "InitialKineticEnergyJ": InitialK, "InitialEdgeModelEnergyJ": InitialU,
         "NecessaryKineticCeilingJ": KineticCeiling, "EdgeModelCeilingJ": ModelCeiling,
