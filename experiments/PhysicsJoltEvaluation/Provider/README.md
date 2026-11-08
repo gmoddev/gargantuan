@@ -10,8 +10,13 @@ physics remain unchanged.
 physical gates: contact begin/end, shape replacement mass, a capsule stopped by
 a wall, canonical mesh ray and release, cloth deflection with rigid feedback,
 rubber pushing a rigid target, and stale rigid/soft IDs after slot reuse. It
-uses the patched Jolt velocity reconstruction and 16 collision steps with 12
-soft integrations per step, matching the prior qualified coupling resolution.
+uses the patched Jolt velocity reconstruction and two half-frame world updates,
+each with eight collision steps and 12 soft integrations per step, matching the
+prior qualified coupling schedule.
+The fixture also uses `WorldRootTestAccess`, the existing friend seam in Engine
+tests, to inject the provider into a fresh `DataModel` before admitting Parts or
+Cloth. It verifies authored Part admission, motion publication, stream release
+and readmission, Cloth vertex publication, and teardown through `Workspace`.
 
 The soft adapter builds neutral cloth and regular rubber lattices directly
 from `SoftBodyDefinition`. It retains neutral IDs, fixed topology indices, and
@@ -21,6 +26,13 @@ increment topology and vertex revisions. Each rigid step advances both body
 kinds in the same Jolt world; the following soft step publishes those already
 advanced states. No parallel Instance authority or backend handle crosses the
 Engine boundary.
+The unified factory fixes the experimental world at two Jolt half-frame updates
+with eight collision steps each, even when `WorldRoot` supplies its production
+four substeps. The plain rigid factory still honors its requested substep count.
+`WorldRoot` applies pending forces, gravity, and attachment edits before rigid
+`Step`; those inputs reach the native combined solve. The later soft `Step`
+extracts that same accepted state. Its collider snapshot is currently redundant
+work because native Jolt already owns the colliders.
 
 Current limitations before production consideration:
 

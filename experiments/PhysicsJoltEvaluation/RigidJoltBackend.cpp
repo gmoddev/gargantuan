@@ -18,6 +18,8 @@
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
@@ -79,6 +81,19 @@ namespace {
     }
     PhysicsOperationResult Unsupported(const char *Message) {
         return {PhysicsOperationStatus::BackendFailure, Message};
+    }
+    float BodyMass(const PhysicsBodyDesc &Description) {
+        const auto Size = Description.Shape.Size;
+        float Volume = Size.x * Size.y * Size.z;
+        if (Description.Shape.Kind == PhysicsShapeKind::Ball) {
+            const float Radius = std::min({Size.x, Size.y, Size.z}) * 0.5f;
+            Volume = (4.0f / 3.0f) * 3.14159265358979323846f * Radius * Radius * Radius;
+        } else if (Description.Shape.Kind == PhysicsShapeKind::Cylinder) {
+            const float Radius = std::min(Size.x * 0.5f, Size.z * 0.25f);
+            Volume = 3.14159265358979323846f * Radius * Radius * Size.y;
+        } else if (Description.Shape.Kind == PhysicsShapeKind::Wedge) Volume *= 0.5f;
+        else if (Description.Shape.Kind == PhysicsShapeKind::CornerWedge) Volume *= 0.25f;
+        return std::max(0.001f, Description.Density * Volume);
     }
     class JoltRuntime final {
     public:
@@ -241,8 +256,8 @@ namespace {
     class RigidJoltBackend final : public IPhysicsBackend {
     public:
         friend class JoltSoftBackend;
-        RigidJoltBackend(const PhysicsWorldConfig &Config, int WorkerBudget)
-            : Configuration(Config), Temp(32 * 1024 * 1024) {
+        RigidJoltBackend(const PhysicsWorldConfig &Config, int WorkerBudget, bool Unified = false)
+            : Configuration(Config), Temp(32 * 1024 * 1024), UnifiedMode(Unified) {
             static JoltRuntime Runtime;
             (void)Runtime;
             if (!Finite(Config.Gravity) || WorkerBudget < 1 || WorkerBudget > 8) return;
@@ -284,15 +299,9 @@ namespace {
             Settings.mAngularDamping = Description.AngularDamping;
             Settings.mGravityFactor = Description.GravityScale;
             if (Motion == JPH::EMotionType::Dynamic) {
-                const auto Size = Description.Shape.Size;
-                const float Volume = Description.Shape.Kind == PhysicsShapeKind::Ball
-                    ? (4.0f / 3.0f) * 3.14159265358979323846f *
-                        std::pow(std::min({Size.x, Size.y, Size.z}) * 0.5f, 3)
-                    : Size.x * Size.y * Size.z;
-                const float Mass = std::max(0.001f, Description.Density * Volume);
                 Settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
                 Settings.mMassPropertiesOverride = Shape->GetMassProperties();
-                Settings.mMassPropertiesOverride.ScaleToMass(Mass);
+                Settings.mMassPropertiesOverride.ScaleToMass(BodyMass(Description));
             }
             const auto Native = World.GetBodyInterface().CreateAndAddBody(Settings,
                 Motion == JPH::EMotionType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
@@ -366,12 +375,7 @@ namespace {
                     if (Motion == JPH::EMotionType::Dynamic &&
                         (Description.Density != Slot->Description.Density || ShapeChanged)) {
                         auto Mass = Body.GetShape()->GetMassProperties();
-                        const auto Size = Description.Shape.Size;
-                        const float Volume = Description.Shape.Kind == PhysicsShapeKind::Ball
-                            ? (4.0f / 3.0f) * 3.14159265358979323846f *
-                                std::pow(std::min({Size.x, Size.y, Size.z}) * 0.5f, 3)
-                            : Size.x * Size.y * Size.z;
-                        Mass.ScaleToMass(std::max(0.001f, Description.Density * Volume));
+                        Mass.ScaleToMass(BodyMass(Description));
                         Properties->SetMassProperties(JPH::EAllowedDOFs::All, Mass);
                     }
                 }
@@ -733,10 +737,16 @@ namespace {
                 Config.SubStepCount < 1 || Config.SubStepCount > 16)
                 throw std::runtime_error("[Physics:JoltRigid] invalid experimental step configuration");
             Contacts.BeginStep();
-            const auto Update = World.Update(Config.DeltaTime, Config.SubStepCount, &Temp, Jobs.get());
-            if (Update != JPH::EPhysicsUpdateError::None)
-                throw std::runtime_error("[Physics:JoltRigid] Jolt Update failed with code " +
-                    std::to_string(static_cast<unsigned>(Update)));
+            const auto UpdateWorld = [&](float DeltaTime, int CollisionSteps) {
+                const auto Update = World.Update(DeltaTime, CollisionSteps, &Temp, Jobs.get());
+                if (Update != JPH::EPhysicsUpdateError::None)
+                    throw std::runtime_error("[Physics:JoltRigid] Jolt Update failed with code " +
+                        std::to_string(static_cast<unsigned>(Update)));
+            };
+            if (UnifiedMode) {
+                UpdateWorld(Config.DeltaTime * 0.5f, 8);
+                UpdateWorld(Config.DeltaTime * 0.5f, 8);
+            } else UpdateWorld(Config.DeltaTime, Config.SubStepCount);
             ++StepSequence;
             for (std::uint32_t Index = 1; Index < BodySlots.size(); ++Index) {
                 const auto &Slot = BodySlots[Index];
@@ -783,13 +793,30 @@ namespace {
                 (Value.MovingBodyCCD && (Value.Anchored || Value.Kinematic || !Value.CanCollide))) return false;
             if (Value.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh)
                 return Value.Anchored && Value.Shape.Mesh && Value.Shape.Mesh->Positions && Value.Shape.Mesh->Indices;
-            return Value.Shape.Kind == PhysicsShapeKind::Box || Value.Shape.Kind == PhysicsShapeKind::Ball;
+            return Value.Shape.Kind == PhysicsShapeKind::Box || Value.Shape.Kind == PhysicsShapeKind::Ball ||
+                Value.Shape.Kind == PhysicsShapeKind::Cylinder || Value.Shape.Kind == PhysicsShapeKind::Wedge ||
+                Value.Shape.Kind == PhysicsShapeKind::CornerWedge;
         }
         JPH::ShapeRefC MakeShape(const PhysicsShapeDesc &Description) const {
             if (Description.Kind == PhysicsShapeKind::Box)
                 return new JPH::BoxShape(ToJolt(Description.Size * 0.5f), 0.0f);
             if (Description.Kind == PhysicsShapeKind::Ball)
                 return new JPH::SphereShape(std::min({Description.Size.x, Description.Size.y, Description.Size.z}) * 0.5f);
+            if (Description.Kind == PhysicsShapeKind::Cylinder)
+                return new JPH::CylinderShape(Description.Size.y * 0.5f,
+                    std::min(Description.Size.x * 0.5f, Description.Size.z * 0.25f), 0.0f);
+            if (Description.Kind == PhysicsShapeKind::Wedge ||
+                Description.Kind == PhysicsShapeKind::CornerWedge) {
+                const auto H = Description.Size * 0.5f;
+                JPH::Vec3 Points[6] = {
+                    {-H.x, -H.y, -H.z}, {H.x, -H.y, -H.z},
+                    {H.x, -H.y, H.z}, {-H.x, -H.y, H.z},
+                    {H.x, H.y, -H.z}, {-H.x, H.y, -H.z},
+                };
+                auto Result = JPH::ConvexHullShapeSettings(Points,
+                    Description.Kind == PhysicsShapeKind::Wedge ? 6 : 5, 0.0f).Create();
+                return Result.HasError() ? nullptr : Result.Get();
+            }
             if (Description.Kind != PhysicsShapeKind::StaticTriangleMesh || !Description.Mesh ||
                 !Description.Mesh->Positions || !Description.Mesh->Indices) return nullptr;
             const auto &Positions = *Description.Mesh->Positions;
@@ -868,6 +895,7 @@ namespace {
         std::size_t ActiveConstraints = 0;
         std::uint64_t StepSequence = 0;
         bool Valid = false;
+        bool UnifiedMode = false;
     };
 
     struct SoftConstruction {
@@ -1249,7 +1277,7 @@ std::unique_ptr<gargantuan::IPhysicsBackend> CreateRigidJoltBackend(
 UnifiedJoltProvider CreateUnifiedJoltProvider(const gargantuan::PhysicsWorldConfig &Config,
                                                gargantuan::SoftBodyWorldLimits Limits,
                                                int WorkerBudget) {
-    auto Rigid = std::make_unique<RigidJoltBackend>(Config, WorkerBudget);
+    auto Rigid = std::make_unique<RigidJoltBackend>(Config, WorkerBudget, true);
     if (!Rigid->IsValid()) return {};
     auto Soft = std::make_unique<JoltSoftBackend>(*Rigid, Limits);
     return {std::move(Rigid), std::move(Soft)};

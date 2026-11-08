@@ -1,10 +1,31 @@
 #include "UnifiedJoltProvider.hpp"
+#include "gargantuan/classes/Cloth.hpp"
+#include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+
+namespace gargantuan {
+    struct WorldRootTestAccess {
+        static void Inject(WorldRoot &World, PhysicsEvaluation::UnifiedJoltProvider Provider) {
+            World.Physics = PhysicsWorld(std::move(Provider.Rigid));
+            World.Deformables = SoftBodyWorld(std::move(Provider.Soft));
+        }
+        static PhysicsBodyId Body(const WorldRoot &World, const BasePart &Part) {
+            const auto Found = World.PartBodies.find(Part.GetObjectId());
+            return Found == World.PartBodies.end() ? PhysicsBodyId{} : Found->second;
+        }
+        static bool IsBodyValid(const WorldRoot &World, PhysicsBodyId Id) {
+            return World.Physics.IsBodyValid(Id);
+        }
+    };
+}
 
 namespace {
     using namespace gargantuan;
@@ -164,6 +185,59 @@ namespace {
         Require(TargetState && TargetState->Transform.Position.x > 1.15f,
             "rubber did not push the rigid target");
     }
+    void DataModelAdmissionAndStreaming() {
+        auto Game = std::make_shared<DataModel>();
+        auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+        Require(bool(World), "DataModel Workspace missing");
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        WorldRootTestAccess::Inject(*World, CreateUnifiedJoltProvider(Config));
+        World->SetGravity(0.0f);
+        auto Wall = std::make_shared<Part>();
+        Wall->SetName("JoltWall");
+        Wall->SetAnchored(true);
+        Wall->SetSize({1, 4, 4});
+        Wall->SetCFrame(CFrame(2, 0, 0));
+        Wall->SetParent(World);
+        auto Mover = std::make_shared<Part>();
+        Mover->SetName("JoltMover");
+        Mover->SetSize({0.6f, 0.6f, 0.6f});
+        Mover->SetCFrame(CFrame(0, 0, 0));
+        Mover->SetParent(World);
+        const auto FirstId = WorldRootTestAccess::Body(*World, *Mover);
+        Require(FirstId.IsValid(), "WorldRoot did not admit Part to Jolt");
+        Mover->SetLinearVelocity({10, 0, 0});
+        for (int Step = 0; Step < 15; ++Step)
+            World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+        Require(Mover->GetCFrame().Position.x < 1.25f,
+            "WorldRoot Part publication crossed a Jolt wall");
+        Mover->SetParent(nullptr);
+        World->StepPhysics(0.0f, std::nullopt);
+        Require(!WorldRootTestAccess::IsBodyValid(*World, FirstId),
+            "streamed-out Part retained its native Jolt body");
+        Mover->SetCFrame(CFrame(0, 0, 0));
+        Mover->SetParent(World);
+        const auto SecondId = WorldRootTestAccess::Body(*World, *Mover);
+        Require(SecondId.IsValid() && SecondId != FirstId,
+            "streamed-in Part resolved stale Jolt identity");
+
+        auto Fabric = std::make_shared<Cloth>();
+        Fabric->SetName("JoltFabric");
+        Fabric->SetPosition({0, 3, 0});
+        Fabric->SetSize({2, 2, 0.2f});
+        Fabric->SetResolutionX(9);
+        Fabric->SetResolutionY(9);
+        Fabric->SetParent(World);
+        World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+        const auto Vertex = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
+        Require(Vertex && std::isfinite(Vertex->x) && std::isfinite(Vertex->y),
+            "WorldRoot did not publish Jolt cloth vertex state");
+        Fabric->Destroy();
+        World->StepPhysics(0.0f, std::nullopt);
+        Require(!World->GetDeformableVertex(Fabric->GetObjectId(), 40),
+            "destroyed Cloth retained Jolt published vertices");
+        Game->Destroy();
+    }
 }
 
 int main() {
@@ -171,6 +245,7 @@ int main() {
         RigidIdentityAndEvents();
         CapsuleAndMeshResidency();
         ClothAndRubberCoupling();
+        DataModelAdmissionAndStreaming();
         std::cout << "[Physics:JoltProvider] qualification passed\n";
         return 0;
     } catch (const std::exception &Error) {
