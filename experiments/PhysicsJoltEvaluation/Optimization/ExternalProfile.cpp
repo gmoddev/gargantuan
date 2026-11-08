@@ -88,3 +88,12 @@ void DumpExternalProfile() {
     std::cout << "},\"Note\":\"Nested work time, not wall time or a critical path\"}\n";
 #endif
 }
+
+void ResetExternalProfile() {
+#if defined(JPH_EXTERNAL_PROFILE)
+    for (auto &Bucket : Counters) {
+        Bucket.Nanoseconds.store(0, std::memory_order_relaxed);
+        Bucket.Count.store(0, std::memory_order_relaxed);
+    }
+#endif
+}

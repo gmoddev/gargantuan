@@ -18,9 +18,10 @@ rigid world once per frame with four collision steps. The same 12 soft
 integrations per collision step yield 192 soft integrations per frame in both
 modes. This preserves the qualified *schedule*, not by itself the complete
 qualified contact fixture or energy proof. The test reports a rolling hash
-of coupled rigid pose/velocity and every soft vertex position/velocity at
-every frame endpoint, final isolated rigid penetration and speed, and step,
-guard, and setup timings. Qualification should require coupled trajectory
+of coupled rigid position, rotation, linear/angular velocity, soft world
+transform, and every soft vertex local position/velocity at every frame
+endpoint, isolated rigid penetration and speed across all frames, and step,
+guard, and setup timings, plus per-frame update P50/P95. Qualification should require coupled trajectory
 identity or diagnose any difference, plus physical quality gates for the
 isolated scene. Its different rigid cadence legitimately changes isolated
 trajectories. The existing internal-observation qualification remains the
@@ -28,6 +29,10 @@ authority for the corrected numerical solver's contact and energy gates.
 `--mode refusal` checks the admission rules without a Jolt world;
 `refusal-near`, `refusal-crossing`, and `refusal-joint` construct or request
 unsafe scenes and must return `RefusedBeforeUpdate=true` before any step.
+The benchmark accepts `--velocity-reconstruction difference|delta`. A
+maintained Jolt build defaults to `delta`; a stock build defaults to and
+accepts only `difference`. The existing constraint-family admission helper
+is applied before creating the soft body.
 
 Jolt source anchors at v5.6.0 `e77f175595e64cb44218cc9d9d56fc365ad0e36a`:
 
@@ -72,7 +77,24 @@ baseline first.
 Use fresh processes and identical hardware, compiler flags, scene body count,
 worker budget and frame count for global/selective comparisons. Compare
 `TotalUpdateMs + GuardMs`, and report `SceneSetupMs` separately. Sample per
-frame tails in a follow-up runner; this initial target reports sums only.
+frame tails through `UpdateP50Ms`, `UpdateP95Ms`, and `GuardP95Ms`.
+Working-set snapshots are taken before Jolt initialization and with live
+worlds after the run; the peak is process-lifetime, not a teardown leak check.
+The benchmark inspects every isolated rigid pose, velocity and pair separation
+after every frame, and emits finite, speed, penetration and pass flags. The
+coupled finite and maximum edge-stretch screen uses the existing 0.1 stretch
+ceiling as a necessary frame-endpoint bound; it does not cover internal
+integrations, pin drift, contact penetration or energy on its own. A
+soft-contact callback must occur so the timing scene actually exercises
+coupling. The callback count is event evidence, not an impulse or contact
+projection count. The
+`RunSelectiveQualification.py` runner starts fresh stock and patched processes
+at worker budgets 1/2/8, with four default repeats and counterbalanced
+global/selective and stock/patched launch order. It rejects any benchmark quality
+failure, any global/selective coupled trajectory hash mismatch, and any
+repeat or cross-worker coupled hash drift before reporting paired costs.
+Stock difference and maintained delta are separate physical configurations;
+the runner makes no cross-backend equivalence or full internal energy claim.
 At `N` isolated active rigids, the expected cost is roughly
 
 `T_selective = T_coupled(U2/C8) + T_isolated(U1/C4) + T_guard`
