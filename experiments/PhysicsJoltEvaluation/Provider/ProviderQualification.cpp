@@ -32,8 +32,8 @@
 namespace gargantuan {
     struct WorldRootTestAccess {
         static void Inject(WorldRoot &World, PhysicsEvaluation::UnifiedJoltProvider Provider) {
-            World.Physics = PhysicsWorld(std::move(Provider.Rigid));
             World.Deformables = SoftBodyWorld(std::move(Provider.Soft));
+            World.Physics = PhysicsWorld(std::move(Provider.Rigid));
         }
         static PhysicsBodyId Body(const WorldRoot &World, const BasePart &Part) {
             const auto Found = World.PartBodies.find(Part.GetObjectId());
@@ -535,6 +535,29 @@ namespace {
             [](const auto &Position) { return Position.z > 0.005f; });
         Require(Moved >= 3, "point impulse did not reach four nearest movable nodes");
     }
+    void UnifiedProviderReplacementOrder() {
+        auto Bundle = CreateUnifiedJoltProvider({});
+        SoftBodyDefinition Tiny;
+        Tiny.ResolutionX = Tiny.ResolutionY = 3;
+        Require(Bundle.Soft->CreateBody(Tiny).IsValid(),
+            "bundle assignment setup soft body failed admission");
+        Bundle = CreateUnifiedJoltProvider({});
+        Require(Bundle.Rigid && Bundle.Soft && Bundle.Rigid->IsValid() && Bundle.Soft->IsValid(),
+            "bundle assignment failed to preserve ordered provider ownership");
+        auto Game = std::make_shared<DataModel>();
+        auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+        Require(bool(World), "replacement Workspace missing");
+        Require(Bundle.Soft->CreateBody(Tiny).IsValid(),
+            "first provider soft body failed admission");
+        WorldRootTestAccess::Inject(*World, std::move(Bundle));
+        WorldRootTestAccess::Inject(*World, CreateUnifiedJoltProvider({}));
+        World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+        auto PartValue = std::make_shared<Part>();
+        PartValue->SetParent(World);
+        Require(WorldRootTestAccess::Body(*World, *PartValue).IsValid(),
+            "replacement provider did not admit authored Part");
+        Game->Destroy();
+    }
     void DataModelAdmissionAndStreaming() {
         auto Game = std::make_shared<DataModel>();
         auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
@@ -993,6 +1016,23 @@ int main() {
     PhysicsEvaluation::InstallPhysicsAllocators();
     try {
         gargantuan::BootstrapNativeRuntimeSchema();
+        const auto SolverProfile = PhysicsEvaluation::GetJoltSoftSolverProfile();
+        std::cout << "[Physics:JoltProvider] solver profile iterations="
+            << SolverProfile.SoftIterationsPerCollisionStep
+            << " constraint_sweeps=" << SolverProfile.ConstraintSweepsPerIteration
+            << " integrations_per_frame=" << SolverProfile.SoftIntegrationsPerFrame
+            << '\n' << std::flush;
+#ifdef PHYSICS_GANTRIA_CONVERGENCE
+        Require(SolverProfile.SoftIterationsPerCollisionStep == 6 &&
+            SolverProfile.ConstraintSweepsPerIteration == 2 &&
+            SolverProfile.SoftIntegrationsPerFrame == 96,
+            "provider convergence profile macro and compiled library disagree");
+#else
+        Require(SolverProfile.SoftIterationsPerCollisionStep == 12 &&
+            SolverProfile.ConstraintSweepsPerIteration == 1 &&
+            SolverProfile.SoftIntegrationsPerFrame == 192,
+            "provider legacy profile macro and compiled library disagree");
+#endif
         std::cout << "[Physics:JoltProvider] rigid identity/events\n" << std::flush;
         RigidIdentityAndEvents();
         std::cout << "[Physics:JoltProvider] capsule/mesh residency\n" << std::flush;
@@ -1015,6 +1055,8 @@ int main() {
         NeutralSoftDampingRetention();
         std::cout << "[Physics:JoltProvider] point impulse\n" << std::flush;
         NeutralPointImpulseDistribution();
+        std::cout << "[Physics:JoltProvider] provider replacement order\n" << std::flush;
+        UnifiedProviderReplacementOrder();
         std::cout << "[Physics:JoltProvider] DataModel lifecycle\n" << std::flush;
         DataModelAdmissionAndStreaming();
         std::cout << "[Physics:JoltProvider] DataModel motors/CCD\n" << std::flush;

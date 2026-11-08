@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace PhysicsEvaluation {
     // Test-only composition. Soft must retire before Rigid because both use the
@@ -13,11 +14,41 @@ namespace PhysicsEvaluation {
     struct UnifiedJoltProvider {
         std::unique_ptr<gargantuan::IPhysicsBackend> Rigid;
         std::unique_ptr<gargantuan::ISoftBodyBackend> Soft;
+
+        UnifiedJoltProvider() = default;
+        UnifiedJoltProvider(std::unique_ptr<gargantuan::IPhysicsBackend> RigidValue,
+                            std::unique_ptr<gargantuan::ISoftBodyBackend> SoftValue)
+            : Rigid(std::move(RigidValue)), Soft(std::move(SoftValue)) {}
+        UnifiedJoltProvider(const UnifiedJoltProvider &) = delete;
+        UnifiedJoltProvider &operator=(const UnifiedJoltProvider &) = delete;
+        UnifiedJoltProvider(UnifiedJoltProvider &&) noexcept = default;
+        UnifiedJoltProvider &operator=(UnifiedJoltProvider &&Other) noexcept {
+            if (this != &Other) {
+                Soft.reset();
+                Rigid.reset();
+                Rigid = std::move(Other.Rigid);
+                Soft = std::move(Other.Soft);
+            }
+            return *this;
+        }
+        // Destruction is Soft then Rigid by reverse member order. Directly
+        // resetting Rigid while Soft is live violates this private contract.
     };
 
     [[nodiscard]] UnifiedJoltProvider CreateUnifiedJoltProvider(
         const gargantuan::PhysicsWorldConfig &Config,
         gargantuan::SoftBodyWorldLimits Limits = {}, int WorkerBudget = 1);
+
+    // Private experiment metadata; the implementation returns the profile
+    // compiled into the provider, so callers cannot mislabel a stock build.
+    struct JoltSoftSolverProfile {
+        std::uint32_t WorldUpdates = 2;
+        std::uint32_t CollisionStepsPerUpdate = 8;
+        std::uint32_t SoftIterationsPerCollisionStep = 12;
+        std::uint32_t ConstraintSweepsPerIteration = 1;
+        std::uint32_t SoftIntegrationsPerFrame = 192;
+    };
+    [[nodiscard]] JoltSoftSolverProfile GetJoltSoftSolverProfile();
 
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
     // Experimental neutral-ID bridge. A live connection belongs to the rigid

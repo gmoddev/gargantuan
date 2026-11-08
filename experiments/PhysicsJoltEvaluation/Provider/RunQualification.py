@@ -12,11 +12,18 @@ Jolt = Engine / '.provider-jolt'
 Evidence = Engine / 'provider-evidence'
 Evidence.mkdir(exist_ok=True)
 Build = Engine / 'build-provider'
-AttachmentMode = os.environ.get('GANTRIA_ATTACHMENT_QUALIFICATION', '0')
+AttachmentMode = os.environ.get('GANTRIA_ATTACHMENT_QUALIFICATION', '1')
 if AttachmentMode not in ('0', '1'):
     raise ValueError('GANTRIA_ATTACHMENT_QUALIFICATION must be 0 or 1')
 AttachmentQualification = AttachmentMode == '1'
-Pin = ('cd095d408a1cd231ad43fa8725d06a818fd63b13' if AttachmentQualification else
+ConvergenceMode = os.environ.get('GANTRIA_PROVIDER_CONVERGENCE', '0')
+if ConvergenceMode not in ('0', '1'):
+    raise ValueError('GANTRIA_PROVIDER_CONVERGENCE must be 0 or 1')
+ConvergenceQualification = ConvergenceMode == '1'
+if ConvergenceQualification and not AttachmentQualification:
+    raise ValueError('The combined convergence candidate requires attachments enabled')
+Pin = ('e167ba589787fb76f5d9718ae348d4ac1c3b19ee' if ConvergenceQualification else
+       'cd095d408a1cd231ad43fa8725d06a818fd63b13' if AttachmentQualification else
        '109be79fa82be0b306c56e4b4357675ed7843767')
 Receipts = []
 
@@ -47,7 +54,7 @@ Actual = subprocess.check_output(['git', '-C', str(Jolt), 'rev-parse', 'HEAD'], 
 assert Actual == Pin
 Source = {'Engine': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=Engine, text=True).strip(),
           'Jolt': Actual, 'Platform': platform.platform(), 'Sanitizers': platform.system() != 'Windows',
-          'Attachments': AttachmentQualification}
+          'Attachments': AttachmentQualification, 'Convergence': ConvergenceQualification}
 (Evidence / 'Source.json').write_text(json.dumps(Source, indent=2), encoding='utf-8')
 Run('ClassGeneration', ['lute', 'tools/classgen'])
 Options = ['cmake', '-S', Engine, '-B', Build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
@@ -56,6 +63,7 @@ Options = ['cmake', '-S', Engine, '-B', Build, '-G', 'Ninja', '-DCMAKE_BUILD_TYP
            '-DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF',
            '-DGARGANTUAN_BUILD_PHYSICS_JOLT_EVALUATION=ON', '-DPHYSICS_EVALUATION_GANTRIA_NUMERICS=ON',
            '-DPHYSICS_EVALUATION_GANTRIA_ATTACHMENTS=' + ('ON' if AttachmentQualification else 'OFF'),
+           '-DPHYSICS_EVALUATION_GANTRIA_CONVERGENCE=' + ('ON' if ConvergenceQualification else 'OFF'),
            '-DPHYSICS_EVALUATION_JOLT_ROOT=' + str(Jolt), '-DPHYSICS_EVALUATION_JOLT_COMMIT=' + Actual]
 if platform.system() == 'Windows':
     Options += ['-DCMAKE_C_COMPILER=cl.exe', '-DCMAKE_CXX_COMPILER=cl.exe']

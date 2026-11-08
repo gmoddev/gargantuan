@@ -26,8 +26,8 @@
 namespace gargantuan {
     struct WorldRootTestAccess {
         static void Inject(WorldRoot &World, PhysicsEvaluation::UnifiedJoltProvider Provider) {
-            World.Physics = PhysicsWorld(std::move(Provider.Rigid));
             World.Deformables = SoftBodyWorld(std::move(Provider.Soft));
+            World.Physics = PhysicsWorld(std::move(Provider.Rigid));
         }
         static void SetXpbdWorkerLimit(WorldRoot &World, int Workers) {
             SoftBodyWorldLimits Limits;
@@ -118,6 +118,7 @@ int main(int ArgumentCount, char **Arguments) {
         const int WorkerBudget = std::stoi(Arguments[5]);
         if (Frames < 1 || Frames > 30 || WorkerBudget < 1 || WorkerBudget > 8)
             throw std::invalid_argument("Frame or worker budget out of bounds");
+        const auto SolverProfile = PhysicsEvaluation::GetJoltSoftSolverProfile();
 
         const auto SetupStart = Clock::now();
         gargantuan::BootstrapNativeRuntimeSchema();
@@ -219,6 +220,15 @@ int main(int ArgumentCount, char **Arguments) {
         std::cout << "[Physics:EngineBenchmark] backend=" << Backend
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
             << " frames=" << Frames << " workers_requested=" << WorkerBudget
+            << " jolt_world_updates=" << (Backend == "jolt" ? SolverProfile.WorldUpdates : 0)
+            << " jolt_collision_steps_per_update=" << (Backend == "jolt" ?
+                SolverProfile.CollisionStepsPerUpdate : 0)
+            << " jolt_soft_iterations_per_collision_step=" << (Backend == "jolt" ?
+                SolverProfile.SoftIterationsPerCollisionStep : 0)
+            << " jolt_constraint_sweeps_per_iteration=" << (Backend == "jolt" ?
+                SolverProfile.ConstraintSweepsPerIteration : 0)
+            << " jolt_soft_integrations_per_frame=" << (Backend == "jolt" ?
+                SolverProfile.SoftIntegrationsPerFrame : 0)
             << " vertices=" << Vertices << " constraints=" << Constraints << '\n' << std::flush;
         for (int Frame = 0; Frame < Frames; ++Frame) {
             const auto Start = Clock::now();
@@ -328,6 +338,15 @@ int main(int ArgumentCount, char **Arguments) {
         std::cout << "[Physics:EngineBenchmark] summary backend=" << Backend
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
             << " frames=" << Frames << " workers_requested=" << WorkerBudget
+            << " jolt_world_updates=" << (Backend == "jolt" ? SolverProfile.WorldUpdates : 0)
+            << " jolt_collision_steps_per_update=" << (Backend == "jolt" ?
+                SolverProfile.CollisionStepsPerUpdate : 0)
+            << " jolt_soft_iterations_per_collision_step=" << (Backend == "jolt" ?
+                SolverProfile.SoftIterationsPerCollisionStep : 0)
+            << " jolt_constraint_sweeps_per_iteration=" << (Backend == "jolt" ?
+                SolverProfile.ConstraintSweepsPerIteration : 0)
+            << " jolt_soft_integrations_per_frame=" << (Backend == "jolt" ?
+                SolverProfile.SoftIntegrationsPerFrame : 0)
             << " xpbd_workers_actual=" << XpbdWorkersActual
             << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
             << " vertices=" << Vertices << " constraints=" << Constraints

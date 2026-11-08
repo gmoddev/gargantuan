@@ -1,6 +1,10 @@
 #include "RigidJoltBackend.hpp"
 #include "Provider/UnifiedJoltProvider.hpp"
 
+#if defined(PHYSICS_GANTRIA_CONVERGENCE) && !defined(PHYSICS_GANTRIA_JOLT)
+#error "The repeated-sweep provider profile requires the corrected Gantria Jolt solver"
+#endif
+
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
@@ -123,8 +127,18 @@ namespace {
         }
         return false;
     }
+#ifdef PHYSICS_GANTRIA_CONVERGENCE
+    constexpr std::uint32_t SoftIterationsPerCollisionStep = 6;
+    constexpr std::uint32_t ConstraintSweepsPerIteration = 2;
+#else
+    constexpr std::uint32_t SoftIterationsPerCollisionStep = 12;
+    constexpr std::uint32_t ConstraintSweepsPerIteration = 1;
+#endif
+    constexpr std::uint32_t SoftIntegrationsPerFrame =
+        2 * 8 * SoftIterationsPerCollisionStep;
+
     float SoftDampingRate(float Damping, float DeltaTime) {
-        constexpr double Integrations = 2.0 * 8.0 * 12.0;
+        constexpr double Integrations = double(SoftIntegrationsPerFrame);
         if (Damping == 0.0f) return 0.0f;
         if (Damping == 1.0f)
             return static_cast<float>(Integrations / double(DeltaTime));
@@ -1497,9 +1511,13 @@ namespace {
             if (Layer == JPH::cObjectLayerInvalid) return {};
             JPH::SoftBodyCreationSettings Settings(Construction->Shared,
                 ToRVec(Definition.Position), JPH::Quat::sIdentity(), Layer);
-            Settings.mNumIterations = 12;
+            Settings.mNumIterations = SoftIterationsPerCollisionStep;
 #ifdef PHYSICS_GANTRIA_JOLT
             Settings.mVelocityReconstruction = JPH::ESoftBodyVelocityReconstruction::ConstraintDelta;
+#endif
+#ifdef PHYSICS_GANTRIA_CONVERGENCE
+            Settings.mNumConstraintIterations = ConstraintSweepsPerIteration;
+            if (!Settings.IsConstraintConvergenceSupported()) return {};
 #endif
             Settings.mAllowSleeping = false;
             Settings.mUpdatePosition = false;
@@ -1579,9 +1597,15 @@ namespace {
                 return {PhysicsOperationStatus::ResourceLimit, "Jolt soft layer limit"};
             JPH::SoftBodyCreationSettings Settings(Replacement->Shared,
                 ToRVec(Definition.Position), JPH::Quat::sIdentity(), Layer);
-            Settings.mNumIterations = 12;
+            Settings.mNumIterations = SoftIterationsPerCollisionStep;
 #ifdef PHYSICS_GANTRIA_JOLT
             Settings.mVelocityReconstruction = JPH::ESoftBodyVelocityReconstruction::ConstraintDelta;
+#endif
+#ifdef PHYSICS_GANTRIA_CONVERGENCE
+            Settings.mNumConstraintIterations = ConstraintSweepsPerIteration;
+            if (!Settings.IsConstraintConvergenceSupported())
+                return {PhysicsOperationStatus::InvalidDescription,
+                    "Jolt repeated-sweep profile does not support this constraint graph"};
 #endif
             Settings.mAllowSleeping = false;
             Settings.mUpdatePosition = false;
@@ -1931,6 +1955,12 @@ UnifiedJoltProvider CreateUnifiedJoltProvider(const gargantuan::PhysicsWorldConf
     });
     return {std::move(Rigid), std::move(Soft)};
 #endif
+}
+JoltSoftSolverProfile GetJoltSoftSolverProfile() {
+    return {.WorldUpdates = 2, .CollisionStepsPerUpdate = 8,
+        .SoftIterationsPerCollisionStep = SoftIterationsPerCollisionStep,
+        .ConstraintSweepsPerIteration = ConstraintSweepsPerIteration,
+        .SoftIntegrationsPerFrame = SoftIntegrationsPerFrame};
 }
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
 gargantuan::PhysicsOperationResult ConnectJoltRigidSoftAttachment(
