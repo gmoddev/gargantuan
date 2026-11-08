@@ -87,7 +87,7 @@ namespace {
             Result.Case != "Repeated" && Result.Case != "Multiple")
             throw std::runtime_error("[Physics:Coupling] Invalid case");
         if (Result.Workers < 1 || Result.Workers > 8 || Result.Frames < 1 || Result.Frames > 600 ||
-            (Result.CollisionSteps != 1 && Result.CollisionSteps != 4) ||
+            Result.CollisionSteps < 1 || Result.CollisionSteps > 8 ||
             Result.WorldUpdates < 1 || Result.WorldUpdates > 384 ||
             Result.SoftIterations < 1 || Result.SoftIterations > 64 ||
             !std::isfinite(Result.StretchCompliance) || Result.StretchCompliance < 0.0f)
@@ -736,7 +736,7 @@ namespace {
                 {"PublicationOrder", "Unified Jolt update, then sample both bodies at the same completed step"},
                 {"MomentumScope", "Linear rigid plus movable soft vertex momentum; damping and external boundary impulses are not integrated"},
                 {"EnergyScope", "KineticEnergy retains original rigid linear plus movable soft translational scope; AngularInclusiveKineticEnergy adds measured rigid rotational energy"},
-                {"ReferenceMechanicalEnergyScope", "Angular-inclusive kinetic plus positive-compliance edge C^2/(2c), positive-compliance six-volume C^2/(2c), and gravitational potential. ReferenceMechanicalEnergy uses potential change from initial state; AbsoluteReferenceMechanicalEnergy uses gravitational potential relative to the recorded initial mean soft-vertex world position. Restart teleport/velocity work is measured separately. The complete gate requires positive compliance on all active constraints and collision-steps=1, soft-iterations=1 with every world update observed; it is a bounded reference-model check, not complete Jolt solver-internal conservation"},
+                {"ReferenceMechanicalEnergyScope", "Angular-inclusive kinetic plus positive-compliance edge C^2/(2c), positive-compliance six-volume C^2/(2c), and gravitational potential. ReferenceMechanicalEnergy uses potential change from initial state; AbsoluteReferenceMechanicalEnergy uses gravitational potential relative to the recorded initial mean soft-vertex world position. Restart teleport/velocity work is measured separately. The complete gate requires positive compliance on all active constraints and every internal integration observed, either through the read-only observer or collision-steps=1 and soft-iterations=1; it is a bounded reference-model check, not complete Jolt solver-internal conservation"},
                 {"ExternalWork", "Rigid and soft gravity potential and controlled rigid teleport/velocity restart work are measured. Soft damping and collision/constraint solver-internal work are not individually balanced; fixed pin work is zero"},
                 {"ControlledRestarts", Config.Case == "Repeated" ? (Config.Frames - 1) / 45 : 0}};
     }
@@ -1325,7 +1325,7 @@ int main(int ArgumentCount, char **Arguments) {
                 RigidMassMatched && ReferenceModelQualified &&
                 (!ClosedCase || AcceptedBudgetQualified)) : Json(nullptr);
             Result["AcceptedQualityScope"] = FullInternalObservationCoverage ?
-                "Every internal integration endpoint is observed because collision-steps=1 and soft-iterations=1: contact, geometry, mass, measured angular-inclusive K, and bounded reference-model energy with gravity potential and signed measured restart work. All active constraints must have positive compliance. Closed cases also require the angular-inclusive kinetic ceiling; passing is not a complete conservation proof" :
+                "Every internal integration endpoint is observed: contact geometry, mass, measured angular-inclusive K, and bounded reference-model energy with gravity potential and signed measured restart work. All active constraints must have positive compliance. Closed cases also require the angular-inclusive kinetic ceiling; passing is not a complete conservation proof" :
                 (Config.ObserveAccepted ?
                     "Every completed World.Step endpoint is observed, but internal collision steps or soft iterations are not individually observed; complete accepted-update qualification is unmeasured" :
                     "Frame-only timing observation; intermediate world updates and internal integrations are unmeasured");

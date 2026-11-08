@@ -115,6 +115,23 @@ def ProfileMatches(Result, WorldUpdates, CollisionSteps, SoftIterations, Complia
                 float(Compliance)) <= 1e-11)
 
 
+def CallbackOrderExact(Result, WorldUpdates, CollisionSteps, SoftIterations):
+    PerUpdate = CollisionSteps * SoftIterations
+    for FrameNumber, Frame in enumerate(Result['Frames']):
+        for Index, State in enumerate(Frame.get('AcceptedUpdates', [])):
+            Update = Index // PerUpdate
+            Inner = Index % PerUpdate
+            Iteration = Inner % SoftIterations
+            if (State.get('Frame') != FrameNumber or
+                State.get('WorldUpdate') != Update or
+                State.get('InternalOrdinalPerWorldUpdate') != Inner or
+                State.get('CollisionStepOrdinal') != Inner // SoftIterations or
+                State.get('SoftIterationOrdinal') != Iteration or
+                State.get('ContextNextIteration') != Iteration + 1):
+                return False
+    return True
+
+
 for Profile, WorldUpdates, CollisionSteps, SoftIterations, Compliance in Profiles:
     for Case in Cases:
         Name = f'{Case}-{Profile}'
@@ -147,6 +164,9 @@ for Profile, WorldUpdates, CollisionSteps, SoftIterations, Compliance in Profile
                 len(Frame.get('AcceptedUpdates', [])) == PerFrame
                 for Source in (Observed, Observed['ContactDisabledControl'])
                 for Frame in Source['Frames']),
+            'InternalCallbackOrderExact': all(CallbackOrderExact(Source,
+                WorldUpdates, CollisionSteps, SoftIterations) for Source in
+                (Observed, Observed['ContactDisabledControl'])),
             'AcceptedObservationCoverage': Observed.get('AcceptedObservationCoverage') is True and
                 Observed['ContactDisabledControl'].get('AcceptedObservationCoverage') is True,
             'PristineFrameOnlyCoverage': Pristine.get('AcceptedObservationCoverage') is False and

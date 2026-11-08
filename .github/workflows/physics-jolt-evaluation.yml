@@ -40,6 +40,14 @@ on:
         description: Internal energy, pristine parity and production-stiffness schedule tests
         type: boolean
         default: false
+      schedule_followup_only:
+        description: Reuse exact compiled Jolt dependencies and retry broader schedule fixtures
+        type: boolean
+        default: false
+      schedule_source_run:
+        description: Immutable compiled dependency run for schedule followup
+        type: string
+        default: '42443610842'
 
 permissions:
   contents: read
@@ -51,7 +59,7 @@ concurrency:
 
 jobs:
   linux-release-comparison:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only && !inputs.unified_screen_only && !inputs.unified_qualification_only && !inputs.schedule_energy_only)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only && !inputs.unified_screen_only && !inputs.unified_qualification_only && !inputs.schedule_energy_only && !inputs.schedule_followup_only)
     name: Ubuntu Release / experimental quality and timing
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -678,7 +686,7 @@ jobs:
             build-unified-qualified/compile_commands.json
 
   schedule-internal-energy:
-    if: github.event_name == 'workflow_dispatch' && inputs.schedule_energy_only
+    if: github.event_name == 'workflow_dispatch' && (inputs.schedule_energy_only || inputs.schedule_followup_only)
     name: Internal solver energy and pristine parity / ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -722,6 +730,27 @@ jobs:
           $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or -not $Installation) { throw 'MSVC toolchain unavailable' }
           "VSDEVCMD=$(Join-Path $Installation 'Common7\Tools\VsDevCmd.bat')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Reuse exact compiled dependencies without rebuilding Jolt
+        if: inputs.schedule_followup_only
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.schedule_source_run }}
+        run: |
+          gh api "repos/gmoddev/gargantuan/actions/runs/$env:SOURCE_RUN" > schedule-energy/DependencySourceRun.json
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency run metadata unavailable' }
+          $Source = Get-Content schedule-energy/DependencySourceRun.json -Raw | ConvertFrom-Json
+          if ($Source.head_sha -ne 'fbcf62c7ce49baef9ba1ef2212c05878d908de8a' -or $Source.status -ne 'completed') { throw 'Wrong compiled dependency source' }
+          gh run download $env:SOURCE_RUN --repo gmoddev/gargantuan --name 'jolt-schedule-energy-${{ matrix.os }}' --dir prior-energy
+          if ($LASTEXITCODE -ne 0) { throw 'Compiled dependency artifact unavailable' }
+          $Extension = if ($IsWindows) { 'lib' } else { 'a' }
+          foreach ($Kind in @('clean', 'observed')) {
+            $Library = @(Get-ChildItem "prior-energy/build-energy-$Kind/JoltBuild/*.$Extension")
+            if ($Library.Count -ne 1) { throw 'Ambiguous compiled Jolt dependency' }
+            $Variable = if ($Kind -eq 'clean') { 'JOLT_CLEAN_LIB' } else { 'JOLT_OBSERVED_LIB' }
+            "$Variable=$($Library[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            Get-FileHash -LiteralPath $Library[0].FullName | ConvertTo-Json > "schedule-energy/ImportedJolt-$Kind.json"
+          }
       - name: Compile pristine and observer Linux targets
         if: runner.os != 'Windows'
         shell: bash
@@ -731,8 +760,10 @@ jobs:
           lscpu > schedule-energy/Cpu.txt
           for Kind in clean observed; do
             Root=.evaluation-jolt; Clean=ON; Observer=OFF
+            Library="${JOLT_CLEAN_LIB:-}"
             if [ "$Kind" = observed ]; then Root=.energy-jolt; Clean=OFF; Observer=ON; fi
-            cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B "build-energy-$Kind" -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN="$Clean" -DDIAGNOSTIC_ENERGY_OBSERVER="$Observer" -DDIAGNOSTIC_JOLT_ROOT="$GITHUB_WORKSPACE/$Root" -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" 2>&1 | tee "schedule-energy/Configure-$Kind.log"
+            if [ "$Kind" = observed ]; then Library="${JOLT_OBSERVED_LIB:-}"; fi
+            cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B "build-energy-$Kind" -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN="$Clean" -DDIAGNOSTIC_ENERGY_OBSERVER="$Observer" -DDIAGNOSTIC_PREBUILT_JOLT="$Library" -DDIAGNOSTIC_JOLT_ROOT="$GITHUB_WORKSPACE/$Root" -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" 2>&1 | tee "schedule-energy/Configure-$Kind.log"
             cmake --build "build-energy-$Kind" --target PhysicsJoltScheduledCouplingDiagnostic PhysicsJoltUnifiedCouplingQualification --parallel 2 2>&1 | tee "schedule-energy/Build-$Kind.log"
             cp "build-energy-$Kind/CMakeCache.txt" "schedule-energy/CMakeCache-$Kind.txt"
             cp "build-energy-$Kind/compile_commands.json" "schedule-energy/CompileCommands-$Kind.json"
@@ -744,15 +775,16 @@ jobs:
           call "%VSDEVCMD%" -arch=x64 -host_arch=x64
           if errorlevel 1 exit /b %errorlevel%
           cl /Bv > schedule-energy\Compiler.txt 2>&1
-          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-energy-clean -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_JOLT_ROOT="%CD%\.evaluation-jolt" -DEVALUATION_SOURCE_ROOT="%CD%" > schedule-energy\Configure-clean.log 2>&1
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-energy-clean -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_PREBUILT_JOLT="%JOLT_CLEAN_LIB%" -DDIAGNOSTIC_JOLT_ROOT="%CD%\.evaluation-jolt" -DEVALUATION_SOURCE_ROOT="%CD%" > schedule-energy\Configure-clean.log 2>&1
           if errorlevel 1 (type schedule-energy\Configure-clean.log & exit /b 1)
           cmake --build build-energy-clean --target PhysicsJoltScheduledCouplingDiagnostic PhysicsJoltUnifiedCouplingQualification --parallel 2 > schedule-energy\Build-clean.log 2>&1
           if errorlevel 1 (type schedule-energy\Build-clean.log & exit /b 1)
-          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-energy-observed -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=OFF -DDIAGNOSTIC_ENERGY_OBSERVER=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_JOLT_ROOT="%CD%\.energy-jolt" -DEVALUATION_SOURCE_ROOT="%CD%" > schedule-energy\Configure-observed.log 2>&1
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-energy-observed -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=OFF -DDIAGNOSTIC_ENERGY_OBSERVER=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_PREBUILT_JOLT="%JOLT_OBSERVED_LIB%" -DDIAGNOSTIC_JOLT_ROOT="%CD%\.energy-jolt" -DEVALUATION_SOURCE_ROOT="%CD%" > schedule-energy\Configure-observed.log 2>&1
           if errorlevel 1 (type schedule-energy\Configure-observed.log & exit /b 1)
           cmake --build build-energy-observed --target PhysicsJoltScheduledCouplingDiagnostic PhysicsJoltUnifiedCouplingQualification --parallel 2 > schedule-energy\Build-observed.log 2>&1
           if errorlevel 1 (type schedule-energy\Build-observed.log & exit /b 1)
       - name: Measure every inner state and verify observer parity
+        if: inputs.schedule_energy_only
         run: >-
           python experiments/PhysicsJoltEvaluation/RunScheduledEnergyQualification.py
           --pristine build-energy-clean/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
