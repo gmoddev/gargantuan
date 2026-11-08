@@ -1392,8 +1392,12 @@ namespace {
             if (Query.Kind == PhysicsQueryShapeKind::Sphere && std::isfinite(Query.Radius) && Query.Radius > 0)
                 return new JPH::SphereShape(Query.Radius);
             if (Query.Kind == PhysicsQueryShapeKind::Box && Finite(Query.Size) &&
-                Query.Size.x > 0 && Query.Size.y > 0 && Query.Size.z > 0)
-                return new JPH::BoxShape(ToJolt(Query.Size * 0.5f), 0.0f);
+                Query.Size.x > 0 && Query.Size.y > 0 && Query.Size.z > 0) {
+                const auto HalfExtent = Query.Size * 0.5f;
+                if (!Finite(HalfExtent) || HalfExtent.x <= 0 ||
+                    HalfExtent.y <= 0 || HalfExtent.z <= 0) return nullptr;
+                return new JPH::BoxShape(ToJolt(HalfExtent), 0.0f);
+            }
             if (Query.Kind == PhysicsQueryShapeKind::Capsule && std::isfinite(Query.Radius) &&
                 std::isfinite(Query.Height) && Query.Radius > 0 && Query.Height >= 2 * Query.Radius)
                 return JPH::CapsuleShapeSettings(0.5f * Query.Height - Query.Radius, Query.Radius).Create().Get();

@@ -563,6 +563,24 @@ namespace {
             "finite rigid mass with overflowing inertia passed admission");
         const auto Existing = Provider.Rigid->CreateBody(Box({0, 1, 0}, {1, 1, 1}, false));
         Require(Existing.IsValid(), "rigid range update setup failed admission");
+        PhysicsOverlapRequest TinyOverlap;
+        TinyOverlap.Shape.Kind = PhysicsQueryShapeKind::Box;
+        TinyOverlap.Shape.Size = {std::numeric_limits<float>::denorm_min(), 1, 1};
+        TinyOverlap.Shape.Transform.Position = {0, 1, 0};
+        Require(Provider.Rigid->Overlap(TinyOverlap).Status ==
+            PhysicsOperationStatus::InvalidDescription,
+            "subnormal Box overlap underflowed native half extent");
+        PhysicsShapeCastRequest TinyCast;
+        TinyCast.Shape = TinyOverlap.Shape;
+        TinyCast.Direction = {1, 0, 0};
+        Require(Provider.Rigid->ShapeCast(TinyCast).Status ==
+            PhysicsOperationStatus::InvalidDescription,
+            "subnormal Box cast underflowed native half extent");
+        TinyOverlap.Shape.Size = {1, 1, 1};
+        const auto ValidOverlap = Provider.Rigid->Overlap(TinyOverlap);
+        Require(ValidOverlap.Succeeded() && std::ranges::find(
+            ValidOverlap.Bodies, Existing) != ValidOverlap.Bodies.end(),
+            "rejected query poisoned a valid native overlap");
         const auto Before = Provider.Rigid->GetBodyState(Existing);
         Require(Before && !Provider.Rigid->UpdateBody(Existing, HugeInertia).Succeeded(),
             "overflowing inertia update was admitted");
@@ -609,9 +627,19 @@ namespace {
             Require(FloorId.IsValid() && BallId.IsValid(),
                 "sleep cadence endpoints failed admission");
             int FirstSleep = -1;
+            bool Began = false;
+            int Ended = 0;
+            const auto ObservePair = [&](const PhysicsStepResult &FrameResult) {
+                for (const auto &Event : FrameResult.Contacts) {
+                    if (!((Event.BodyA == FloorId && Event.BodyB == BallId) ||
+                        (Event.BodyA == BallId && Event.BodyB == FloorId))) continue;
+                    Began |= Event.Phase == PhysicsContactPhase::Began;
+                    Ended += Event.Phase == PhysicsContactPhase::Ended;
+                }
+            };
             for (int Frame = 0; Frame < 180; ++Frame) {
-                (void)Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
-                    .SubStepCount = CollisionSteps});
+                ObservePair(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                    .SubStepCount = CollisionSteps}));
                 const auto State = Provider.Rigid->GetBodyState(BallId);
                 Require(State && std::isfinite(State->Transform.Position.y) &&
                     State->Transform.Position.y > 0.35f,
@@ -619,13 +647,25 @@ namespace {
                 if (!State->Awake) { FirstSleep = Frame; break; }
             }
             Require(FirstSleep >= 0, "full-update sleep clock did not retire resting body");
+            std::cout << "[Physics:JoltProvider] sleep_contact collision_steps="
+                << CollisionSteps << " unified=" << Unified
+                << " began=" << Began << " ended_before_wake=" << Ended
+                << '\n' << std::flush;
+            Require(Began && Ended == 0,
+                "resting floor contact ended when its rigid body fell asleep");
             Require(Provider.Rigid->SetAwake(BallId, true).Succeeded() &&
                 Provider.Rigid->GetBodyState(BallId)->Awake,
                 "sleep cadence explicit rewake failed");
-            (void)Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
-                .SubStepCount = CollisionSteps});
-            Require(Provider.Rigid->GetBodyState(BallId)->Awake,
+            Require(Provider.Rigid->SetLinearVelocity(BallId, {0, 8, 0}).Succeeded(),
+                "sleep contact release velocity failed");
+            for (int Frame = 0; Frame < 12; ++Frame)
+                ObservePair(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                    .SubStepCount = CollisionSteps}));
+            const auto Released = Provider.Rigid->GetBodyState(BallId);
+            Require(Released && Released->Awake && Released->Transform.Position.y > 1.0f,
                 "rewoken body immediately returned to sleep");
+            Require(Ended == 1,
+                "departed floor contact did not end exactly once after wake");
             std::cout << "[Physics:JoltProvider] sleep cadence collision_steps="
                 << CollisionSteps << " unified=" << Unified
                 << " first_sleep_frame=" << FirstSleep << '\n' << std::flush;
