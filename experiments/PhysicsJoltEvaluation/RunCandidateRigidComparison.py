@@ -140,11 +140,30 @@ def Definitions():
 
 
 def PhysicalRow(Row):
+    """Hash a quality/configuration summary, never timings or a full trajectory.
+
+    Query timings can be nested inside shape rows. Older receipts excluded only
+    step timings, so their PhysicalRowSha256 also varied with query wall time.
+    Preserve those receipts and recompute this v2 summary from their raw rows.
+    """
     TimingAndResources = {'Step', 'InitMs', 'TeardownMs', 'ResourcesInit',
                           'ResourcesRun', 'ResourcesRetire', 'Resources',
                           'TotalResources'}
-    return {Key: Value for Key, Value in Row.items()
-            if Key not in TimingAndResources}
+    TimingFields = {'P50Ms', 'P95Ms', 'P99Ms', 'MaximumMs', 'RawMs'}
+
+    def IsTiming(Value):
+        return isinstance(Value, dict) and TimingFields.issubset(Value)
+
+    def Strip(Value):
+        if isinstance(Value, list):
+            return [Strip(Item) for Item in Value]
+        if isinstance(Value, dict):
+            return {Key: Strip(Item) for Key, Item in Value.items()
+                    if Key not in TimingAndResources and not Key.endswith('Ms')
+                    and not IsTiming(Item)}
+        return Value
+
+    return Strip(Row)
 
 
 def RunCase(Definition, Executable, Output, Environment, TimeoutSeconds):
@@ -298,6 +317,8 @@ def Main():
                 'RuntimeDirs': [str(Item) for Item in RuntimeDirs],
                 'LibrarySearchVariable': LibraryVariable,
                 'ScriptSha256': ScriptHash,
+                'PhysicalSummaryHashVersion': 2,
+                'PhysicalSummaryHashScope': 'Quality/configuration summary excluding recursive timing metrics and resources; not a full trajectory hash',
                 'Platform': platform.platform(), 'Python': sys.version,
                 'StartedUtc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 'PerProcessTimeoutSeconds': Arguments.timeout_seconds,
