@@ -32,6 +32,7 @@
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -1715,8 +1716,10 @@ namespace {
             if (!Lock.Succeeded()) return {PhysicsOperationStatus::BackendFailure, "Jolt soft body lock failed"};
             auto *Motion = static_cast<JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
             auto &Vertices = Motion->GetVertices();
-            std::size_t Count = 0, Nearest = 0;
-            double BestDistance = std::numeric_limits<double>::infinity();
+            std::size_t Count = 0;
+            std::array<std::size_t, 4> Closest{};
+            std::array<double, 4> Distances;
+            Distances.fill(std::numeric_limits<double>::infinity());
             const auto Origin = Lock.GetBody().GetPosition();
             for (std::size_t Index = 0; Index < Vertices.size(); ++Index) {
                 if (Vertices[Index].mInvMass <= 0) continue;
@@ -1727,16 +1730,44 @@ namespace {
                     const double Y = double(Point->y) - (Origin.GetY() + Position.GetY());
                     const double Z = double(Point->z) - (Origin.GetZ() + Position.GetZ());
                     const double Distance = X * X + Y * Y + Z * Z;
-                    if (Distance < BestDistance) { BestDistance = Distance; Nearest = Index; }
+                    for (std::size_t Candidate = 0; Candidate < Closest.size(); ++Candidate) {
+                        if (Distance >= Distances[Candidate]) continue;
+                        for (std::size_t Shift = Closest.size() - 1; Shift > Candidate; --Shift) {
+                            Distances[Shift] = Distances[Shift - 1];
+                            Closest[Shift] = Closest[Shift - 1];
+                        }
+                        Distances[Candidate] = Distance;
+                        Closest[Candidate] = Index;
+                        break;
+                    }
                 }
             }
             if (Count == 0) return {};
+            std::array<double, 4> Weights{};
+            double TotalWeight = 0;
+            if (Point) {
+                for (std::size_t Index = 0; Index < Closest.size(); ++Index) {
+                    if (!std::isfinite(Distances[Index])) continue;
+                    Weights[Index] = 1.0 / std::max(std::sqrt(Distances[Index]), 0.001);
+                    TotalWeight += Weights[Index];
+                }
+                if (!std::isfinite(TotalWeight) || TotalWeight <= 0)
+                    return {PhysicsOperationStatus::InvalidDescription,
+                        "Soft point impulse has invalid finite weights"};
+            }
             std::vector<std::pair<std::size_t, glm::vec3>> Pending;
-            Pending.reserve(Point ? 1 : Count);
+            Pending.reserve(Point ? std::min<std::size_t>(4, Count) : Count);
             for (std::size_t Index = 0; Index < Vertices.size(); ++Index) {
                 auto &Vertex = Vertices[Index];
-                if (Vertex.mInvMass <= 0 || (Point && Index != Nearest)) continue;
-                const float Share = Point ? 1.0f : 1.0f / float(Count);
+                if (Vertex.mInvMass <= 0) continue;
+                float Share = 1.0f / float(Count);
+                if (Point) {
+                    const auto Found = std::find(Closest.begin(), Closest.end(), Index);
+                    if (Found == Closest.end()) continue;
+                    const auto Position = std::size_t(Found - Closest.begin());
+                    if (Weights[Position] == 0) continue;
+                    Share = float(Weights[Position] / TotalWeight);
+                }
                 const auto Velocity = FromJolt(Vertex.mVelocity) +
                     Impulse * (Vertex.mInvMass * Share);
                 if (!Finite(Velocity))

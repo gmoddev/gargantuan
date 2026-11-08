@@ -485,8 +485,29 @@ namespace {
         const float FirstDisplacement = MeanX(*First) - MeanX(*Initial);
         const float SecondDisplacement = MeanX(*Second) - MeanX(*First);
         Require(FirstDisplacement > 0.05f &&
-            std::abs(SecondDisplacement / FirstDisplacement - 0.96f) < 0.03f,
+            std::abs(SecondDisplacement / FirstDisplacement - 0.96f) < 0.01f,
             "native damping failed neutral per-frame velocity retention");
+    }
+    void NeutralPointImpulseDistribution() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        SoftBodyDefinition Cloth;
+        Cloth.Size = {2, 2, 0.1f};
+        Cloth.ResolutionX = Cloth.ResolutionY = 3;
+        Cloth.Material.StretchCompliance = 1.0f;
+        Cloth.Material.BendCompliance = 1.0f;
+        Cloth.Material.Damping = 0;
+        const auto Body = Provider.Soft->CreateBody(Cloth);
+        Require(Body.IsValid(), "point impulse cloth failed admission");
+        Require(Provider.Soft->ApplyImpulseAtPosition(Body, {0, 0, 1}, {0.5f, 0, 0}).Succeeded(),
+            "point impulse cloth rejected bounded input");
+        Advance(Provider);
+        const auto State = Provider.Soft->GetBodyState(Body);
+        Require(State && State->Positions, "point impulse cloth state missing");
+        const auto Moved = std::count_if(State->Positions->begin(), State->Positions->end(),
+            [](const auto &Position) { return Position.z > 0.005f; });
+        Require(Moved >= 3, "point impulse did not reach four nearest movable nodes");
     }
     void DataModelAdmissionAndStreaming() {
         auto Game = std::make_shared<DataModel>();
@@ -698,6 +719,8 @@ int main() {
         ClothAndRubberCoupling();
         std::cout << "[Physics:JoltProvider] soft damping\n" << std::flush;
         NeutralSoftDampingRetention();
+        std::cout << "[Physics:JoltProvider] point impulse\n" << std::flush;
+        NeutralPointImpulseDistribution();
         std::cout << "[Physics:JoltProvider] DataModel lifecycle\n" << std::flush;
         DataModelAdmissionAndStreaming();
         std::cout << "[Physics:JoltProvider] DataModel motors/CCD\n" << std::flush;

@@ -204,6 +204,7 @@ int main(int ArgumentCount, char **Arguments) {
         std::vector<double> TotalTimes;
         std::vector<double> RigidTimes;
         std::vector<double> SoftTimes;
+        std::size_t ActualXpbdWorkers = 0;
         TotalTimes.reserve(Frames);
         std::cout << "[Physics:ProviderBenchmark] backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
@@ -221,6 +222,7 @@ int main(int ArgumentCount, char **Arguments) {
             const auto Result = Soft->Step(StepConfig);
             if (Result.States.size() != Bodies.size() || Result.BodiesTruncated || Result.VerticesTruncated)
                 throw std::runtime_error("Soft benchmark step lost a body or truncated work");
+            if (BackendName == "xpbd") ActualXpbdWorkers = Result.Profile.WorkerCount;
             const auto Finish = Clock::now();
             const double RigidTime = Milliseconds(AfterRigid - Start);
             const double SoftTime = Milliseconds(Finish - AfterRigid);
@@ -240,6 +242,7 @@ int main(int ArgumentCount, char **Arguments) {
         std::cout << "[Physics:ProviderBenchmark] summary backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
             << " frames=" << Frames << " workers_requested=" << Workers
+            << " xpbd_workers_actual=" << ActualXpbdWorkers
             << " mean_total_ms=" << Mean(TotalTimes)
             << " median_total_ms=" << Sorted[Sorted.size() / 2]
             << " p95_total_ms=" << Sorted[std::size_t(std::ceil(0.95 * Sorted.size())) - 1]

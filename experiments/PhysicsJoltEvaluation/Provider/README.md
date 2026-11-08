@@ -56,7 +56,8 @@ Current limitations before production consideration:
   reissued once per half-frame `Update`, because Jolt clears them at the end
   of each `Update`; a no-contact F/m fixture checks the resulting momentum.
   Direct soft impulses reject any result that would make a vertex velocity
-  nonfinite before mutating any vertex.
+  nonfinite before mutating any vertex. Point impulses use the neutral
+  four-nearest movable-node inverse-distance distribution.
 - Canonical mesh residency is charged by resource ID, revision, and immutable
   buffer identity. Shared consumers charge canonical bytes once and each native
   shape by Jolt's reported size. The adapter enforces configured resource,

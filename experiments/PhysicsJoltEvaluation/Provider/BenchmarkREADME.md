@@ -13,6 +13,11 @@ cloth attachments, and central uniform impulse in both backends. The impulse
 is `movable vertex count × particle mass × 2`, corresponding to a nominal
 2 m/s lateral velocity before damping and constraint response. Each measured
 frame is 1/60 second. Setup and body admission are outside timed frames.
+The XPBD constructor treats the worker argument as a maximum and may use fewer
+threads when the host has fewer cores; `xpbd_workers_actual` records the
+backend's step profile count. Jolt's argument is its configured total budget
+(main thread plus native workers). Compare actual budgets before drawing any
+scaling conclusion.
 
 `none` isolates the soft workload. Jolt still spends time in its shared native
 world and reports that as `rigid_ms`; its `soft_ms` is extraction after the
@@ -37,10 +42,10 @@ frame. Jolt applies `max(0, 1 - rate × dt/192)` 192 times; the provider sets
 This matches free-velocity retention at the frame boundary. XPBD applies
 gravity and authored force before one damping multiplication; Jolt interleaves
 acceleration and damping across its native integrations, so forced trajectories
-can still differ. XPBD also distributes point impulses to four nearest
-movable nodes by inverse distance; this provider currently gives a point
-impulse to the nearest node. Only the common uniform-impulse operator is used
-in this benchmark.
+can still differ. Both adapters distribute point impulses to four nearest
+movable nodes by inverse distance, though XPBD queues the operation until its
+step and Jolt applies it to current native velocities. Only the common
+uniform-impulse operator is used in this benchmark.
 
 Cloth stretch and bend edges share neutral topology and compliance values,
 but the solvers and correction order differ. Rubber shape uses Jolt cell
