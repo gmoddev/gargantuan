@@ -46,12 +46,12 @@ class Recorder:
         Temporary.replace(Target)
 
     def Run(self, Backend: str, Executable: Path, Mode: str, Workers: int,
-            Frames: int, IsolatedBodies: int, Reconstruction: str,
+            Frames: int, IsolatedBodies: int, Reconstruction: str, Layout: str,
             Repeat: int) -> dict:
         Command = [str(Executable), "--mode", Mode, "--workers", str(Workers),
                    "--frames", str(Frames), "--isolated-bodies", str(IsolatedBodies),
-                   "--velocity-reconstruction", Reconstruction]
-        Label = f"{len(self.Calls):04d}-{Backend}-{Mode}-T{Workers}-R{Repeat}"
+                   "--velocity-reconstruction", Reconstruction, "--layout", Layout]
+        Label = f"{len(self.Calls):04d}-{Layout}-{Backend}-{Mode}-T{Workers}-R{Repeat}"
         Start = time.monotonic()
         StartedUnixSeconds = time.time()
         TimedOut = False
@@ -87,7 +87,7 @@ class Recorder:
                 Parsed = json.loads(Lines[0])
             except (json.JSONDecodeError, ValueError) as Error:
                 ParseError = str(Error)
-        Receipt = {"Label": Label, "Backend": Backend, "Mode": Mode,
+        Receipt = {"Label": Label, "Backend": Backend, "Mode": Mode, "Layout": Layout,
                    "Workers": Workers, "Repeat": Repeat, "Command": Command,
                    "BinarySha256": self.BinaryHashes[Backend],
                    "StartedUnixSeconds": StartedUnixSeconds,
@@ -120,11 +120,14 @@ def QualityRow(Receipt: dict) -> dict | None:
     if Row.get("BenchmarkQualityPass") is not True or \
        Row.get("IsolatedFiniteEveryFrame") is not True or \
        Row.get("CoupledFiniteEveryFrame") is not True or \
+       Row.get("InitialQualityPass") is not True or \
+       Row.get("DenseContactPass") is not True or \
+       Row.get("Layout") != Receipt["Layout"] or \
        Row.get("RequiresFullInternalCouplingQualification") is not True:
         raise RuntimeError(f"[Physics:Selective] Inconsistent quality row: {Receipt['Label']}")
     for Key in ("TotalUpdateMs", "GuardMs", "QualityMs", "SceneSetupMs",
                 "MaxIsolatedSpeedAcrossFrames", "MaxIsolatedPenetrationAcrossFrames",
-                "MaxEdgeStretchAcrossFrames"):
+                "MaxFloorPenetrationAcrossFrames", "MaxEdgeStretchAcrossFrames"):
         if not math.isfinite(Row[Key]):
             raise RuntimeError(f"[Physics:Selective] Nonfinite {Key}: {Receipt['Label']}")
     return Row
@@ -137,6 +140,7 @@ def Main(Arguments: list[str] | None = None) -> None:
     Parser.add_argument("--frames", dest="Frames", type=int, default=120)
     Parser.add_argument("--isolated-bodies", dest="IsolatedBodies", type=int, default=128)
     Parser.add_argument("--repeats", dest="Repeats", type=int, default=4)
+    Parser.add_argument("--layout", dest="Layout", choices=("sparse", "dense"), default="sparse")
     Parser.add_argument("--output-dir", dest="OutputDir", required=True, type=Path)
     Options = Parser.parse_args(Arguments)
     if not 1 <= Options.Frames <= 600 or not 1 <= Options.IsolatedBodies <= 512 or \
@@ -154,7 +158,7 @@ def Main(Arguments: list[str] | None = None) -> None:
     for Backend, Executable, Reconstruction in Backends:
         for Mode in ("refusal-near", "refusal-crossing", "refusal-joint"):
             Receipt = RecorderValue.Run(Backend, Executable, Mode, 1, 120, 8,
-                                        Reconstruction, -1)
+                                        Reconstruction, Options.Layout, -1)
             RequireRefusal(Receipt)
             Refusals.append(Receipt["Label"])
 
@@ -166,7 +170,8 @@ def Main(Arguments: list[str] | None = None) -> None:
             ModeOrder = ("global", "selective") if Repeat % 2 == 0 else ("selective", "global")
             for Backend, Executable, Reconstruction in BackendOrder:
                 Receipts = {Mode: RecorderValue.Run(Backend, Executable, Mode, Workers,
-                            Options.Frames, Options.IsolatedBodies, Reconstruction, Repeat)
+                            Options.Frames, Options.IsolatedBodies, Reconstruction,
+                            Options.Layout, Repeat)
                             for Mode in ModeOrder}
                 Global = QualityRow(Receipts["global"])
                 Selective = QualityRow(Receipts["selective"])
@@ -217,6 +222,7 @@ def Main(Arguments: list[str] | None = None) -> None:
                     Row["BenchmarkQualityMatched"] = False
 
     Output = {"BenchmarkQualityPassByBackend": BackendQualified,
+              "Layout": Options.Layout,
               "CoupledHashInvariantByBackend": BackendQualified,
               "FullInternalCouplingQualificationRequired": True,
               "StockPatchedPhysicalEquivalenceClaimed": False,

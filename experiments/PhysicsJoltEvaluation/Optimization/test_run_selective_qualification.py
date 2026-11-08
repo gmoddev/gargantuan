@@ -38,9 +38,12 @@ class RunnerTests(unittest.TestCase):
                     Row = {"RefusedBeforeUpdate": True}
                     return subprocess.CompletedProcess(Command, 0, json.dumps(Row) + "\n", "")
                 Backend = "Stock" if Command[0] == str(Stock) else "Patched"
+                Layout = Command[Command.index("--layout") + 1]
                 Fail = Backend == "Stock" and Mode == "global" and Workers == 1 and not FailedOnce
                 FailedOnce |= Fail
                 Row = {"BenchmarkQualityPass": not Fail,
+                       "Layout": Layout, "InitialQualityPass": True,
+                       "DenseContactPass": True, "RigidContactFrames": 1,
                        "IsolatedFiniteEveryFrame": not Fail,
                        "CoupledFiniteEveryFrame": True,
                        "RequiresFullInternalCouplingQualification": True,
@@ -49,6 +52,7 @@ class RunnerTests(unittest.TestCase):
                        "GuardMs": 0.1, "QualityMs": 0.2, "SceneSetupMs": 1.0,
                        "MaxIsolatedSpeedAcrossFrames": 1.0,
                        "MaxIsolatedPenetrationAcrossFrames": 0.01,
+                       "MaxFloorPenetrationAcrossFrames": 0.0,
                        "MaxEdgeStretchAcrossFrames": 0.02}
                 return subprocess.CompletedProcess(Command, 3 if Fail else 0,
                                                    json.dumps(Row) + "\n", "physical fail" if Fail else "")
@@ -57,7 +61,8 @@ class RunnerTests(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     Runner.Main(["--stock", str(Stock), "--patched", str(Patched),
                                  "--frames", "1", "--isolated-bodies", "1",
-                                 "--repeats", "2", "--output-dir", str(Output)])
+                                 "--repeats", "2", "--layout", "dense",
+                                 "--output-dir", str(Output)])
 
             Receipts = json.loads((Output / "Receipts.json").read_text(encoding="utf-8"))
             Summary = json.loads((Output / "Summary.json").read_text(encoding="utf-8"))
@@ -76,6 +81,7 @@ class RunnerTests(unittest.TestCase):
             self.assertGreaterEqual(Failed[0]["ElapsedSeconds"], 0.0)
             self.assertFalse(Summary["BenchmarkQualityPassByBackend"]["Stock"])
             self.assertTrue(Summary["BenchmarkQualityPassByBackend"]["Patched"])
+            self.assertEqual(Summary["Layout"], "dense")
             self.assertIsNone(next(Row for Row in Summary["Summary"] if Row["Backend"] == "Stock")
                               ["MedianPairedSpeedup"])
             self.assertGreater(next(Row for Row in Summary["Summary"] if Row["Backend"] == "Patched")
@@ -88,7 +94,7 @@ class RunnerTests(unittest.TestCase):
             with mock.patch.object(Runner.subprocess, "run", return_value=
                                    subprocess.CompletedProcess(["fake"], 9, "broken\n", "crash\n")):
                 Receipt = RecorderValue.Run("Stock", Path("fake"), "global", 1, 1, 1,
-                                            "difference", 0)
+                                            "difference", "sparse", 0)
             with self.assertRaises(RuntimeError):
                 Runner.QualityRow(Receipt)
             self.assertEqual((Output / Receipt["Stdout"]).read_text(encoding="utf-8"), "broken\n")

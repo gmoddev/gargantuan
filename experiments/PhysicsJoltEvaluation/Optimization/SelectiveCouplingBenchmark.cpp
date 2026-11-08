@@ -3,6 +3,7 @@
 #include "../ExperimentalVelocityReconstruction.hpp"
 
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
 
 #include <array>
@@ -28,12 +29,13 @@ namespace {
 constexpr JPH::ObjectLayer CoupledRigidLayer = 1;
 constexpr JPH::ObjectLayer SoftLayer = 2;
 constexpr JPH::ObjectLayer IsolatedRigidLayer = 3;
+constexpr JPH::ObjectLayer IsolatedStaticLayer = 4;
 constexpr float FrameDelta = 1.0f / 60.0f;
 
 enum class Partition { Coupled, Isolated };
 
 struct Layers final : JPH::BroadPhaseLayerInterface {
-    JPH::uint GetNumBroadPhaseLayers() const override { return 4; }
+    JPH::uint GetNumBroadPhaseLayers() const override { return 5; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer Layer) const override {
         return JPH::BroadPhaseLayer(static_cast<JPH::uint8>(Layer));
     }
@@ -46,8 +48,9 @@ struct Pairs final : JPH::ObjectLayerPairFilter {
     const bool Separate;
     explicit Pairs(bool InSeparate = true) : Separate(InSeparate) {}
     bool ShouldCollide(JPH::ObjectLayer A, JPH::ObjectLayer B) const override {
-        if (Separate && ((A == IsolatedRigidLayer && (B == CoupledRigidLayer || B == SoftLayer)) ||
-                         (B == IsolatedRigidLayer && (A == CoupledRigidLayer || A == SoftLayer))))
+        const bool AIsolated = A == IsolatedRigidLayer || A == IsolatedStaticLayer;
+        const bool BIsolated = B == IsolatedRigidLayer || B == IsolatedStaticLayer;
+        if (Separate && AIsolated != BIsolated)
             return false;
         return true;
     }
@@ -76,21 +79,45 @@ struct Contacts final : JPH::SoftBodyContactListener {
     }
 };
 
+struct RigidContacts final : JPH::ContactListener {
+    std::atomic<unsigned long long> Added{0};
+    std::atomic<unsigned long long> Persisted{0};
+
+    static bool IsIsolated(JPH::ObjectLayer Layer) {
+        return Layer == IsolatedRigidLayer || Layer == IsolatedStaticLayer;
+    }
+
+    void OnContactAdded(const JPH::Body &A, const JPH::Body &B,
+                        const JPH::ContactManifold &, JPH::ContactSettings &) override {
+        if (IsIsolated(A.GetObjectLayer()) && IsIsolated(B.GetObjectLayer()))
+            Added.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void OnContactPersisted(const JPH::Body &A, const JPH::Body &B,
+                            const JPH::ContactManifold &, JPH::ContactSettings &) override {
+        if (IsIsolated(A.GetObjectLayer()) && IsIsolated(B.GetObjectLayer()))
+            Persisted.fetch_add(1, std::memory_order_relaxed);
+    }
+};
+
 struct World final {
     Layers LayerMap;
     Pairs PairFilter;
     BroadPairs BroadFilter;
     ExecutionResources &Resources;
+    bool Dense;
     Contacts ContactCount;
+    RigidContacts RigidContactCount;
     JPH::PhysicsSystem Physics;
     std::vector<JPH::BodyID> Bodies;
     std::vector<JPH::Ref<JPH::TwoBodyConstraint>> Joints;
 
-    World(ExecutionResources &InResources, bool Separate) : PairFilter(Separate),
-        BroadFilter(PairFilter), Resources(InResources) {
+    World(ExecutionResources &InResources, bool Separate, bool InDense) : PairFilter(Separate),
+        BroadFilter(PairFilter), Resources(InResources), Dense(InDense) {
         Physics.Init(8192, 0, 16384, 8192, LayerMap, BroadFilter, PairFilter);
-        Physics.SetGravity(JPH::Vec3::sZero());
+        Physics.SetGravity(Dense ? JPH::Vec3(0.0f, -9.81f, 0.0f) : JPH::Vec3::sZero());
         Physics.SetSoftBodyContactListener(&ContactCount);
+        Physics.SetContactListener(&RigidContactCount);
     }
 
     ~World() {
@@ -109,6 +136,7 @@ struct World final {
         Settings.mAllowSleeping = false;
         Settings.mLinearDamping = 0.0f;
         Settings.mAngularDamping = 0.0f;
+        Settings.mGravityFactor = Dense && Layer == IsolatedRigidLayer ? 1.0f : 0.0f;
         Settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         Settings.mMassPropertiesOverride.mMass =
             0.7f * (4.0f / 3.0f) * 3.14159265358979323846f * Radius * Radius * Radius;
@@ -119,12 +147,23 @@ struct World final {
         return Id;
     }
 
+    void AddFloor() {
+        JPH::BodyCreationSettings Settings(new JPH::BoxShape(JPH::Vec3(10.0f, 0.5f, 10.0f)),
+            JPH::RVec3(83.2, -0.5, 0.0), JPH::Quat::sIdentity(),
+            JPH::EMotionType::Static, IsolatedStaticLayer);
+        const JPH::BodyID Id = Physics.GetBodyInterface().CreateAndAddBody(
+            Settings, JPH::EActivation::DontActivate);
+        if (Id.IsInvalid()) throw std::runtime_error("[Physics:Selective] Floor admission failed");
+        Bodies.push_back(Id);
+    }
+
     JPH::BodyID AddSoft(const JPH::Ref<JPH::SoftBodySharedSettings> &Shared) {
         JPH::SoftBodyCreationSettings Settings(Shared, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), SoftLayer);
         Settings.mNumIterations = 12;
         PhysicsJoltEvaluation::ApplyVelocityReconstruction(Settings);
         Settings.mAllowSleeping = false;
         Settings.mLinearDamping = 2.4f;
+        Settings.mGravityFactor = 0.0f;
         Settings.mVertexRadius = 0.05f;
         Settings.mFacesDoubleSided = true;
         JPH::BodyID Id = Physics.GetBodyInterface().CreateAndAddSoftBody(Settings, JPH::EActivation::Activate);
@@ -135,8 +174,11 @@ struct World final {
 
     void Join(JPH::BodyID A, JPH::BodyID B, JPH::RVec3 PointA, JPH::RVec3 PointB) {
         const auto &Interface = Physics.GetBodyInterface();
-        const bool AIsolated = Interface.GetObjectLayer(A) == IsolatedRigidLayer;
-        const bool BIsolated = Interface.GetObjectLayer(B) == IsolatedRigidLayer;
+        const auto IsIsolated = [](JPH::ObjectLayer Layer) {
+            return Layer == IsolatedRigidLayer || Layer == IsolatedStaticLayer;
+        };
+        const bool AIsolated = IsIsolated(Interface.GetObjectLayer(A));
+        const bool BIsolated = IsIsolated(Interface.GetObjectLayer(B));
         if (AIsolated != BIsolated)
             throw std::runtime_error("[Physics:Selective] Cross-partition joint refused before step");
         JPH::DistanceConstraintSettings Settings;
@@ -185,6 +227,7 @@ void RequireSpatialMargin(double Gap, double ClosingSpeed, double Horizon) {
 
 struct Options final {
     std::string_view Mode = "global";
+    std::string_view Layout = "sparse";
     int Frames = 120;
     int Workers = 1;
     int IsolatedBodies = 32;
@@ -210,6 +253,7 @@ Options Parse(int Count, char **Arguments) {
         const std::string_view Key = Arguments[Index];
         const std::string_view Value = Arguments[Index + 1];
         if (Key == "--mode") Result.Mode = Value;
+        else if (Key == "--layout") Result.Layout = Value;
         else if (Key == "--frames") Result.Frames = ParseInteger(Value);
         else if (Key == "--workers") Result.Workers = ParseInteger(Value);
         else if (Key == "--isolated-bodies") Result.IsolatedBodies = ParseInteger(Value);
@@ -218,7 +262,8 @@ Options Parse(int Count, char **Arguments) {
         else throw std::runtime_error("[Physics:Selective] Unknown option");
     }
     if (Result.Frames < 1 || Result.Frames > 600 || Result.Workers < 1 || Result.Workers > 8 ||
-        Result.IsolatedBodies < 1 || Result.IsolatedBodies > 512)
+        Result.IsolatedBodies < 1 || Result.IsolatedBodies > 512 ||
+        (Result.Layout != "sparse" && Result.Layout != "dense"))
         throw std::runtime_error("[Physics:Selective] Option out of bounds");
     return Result;
 }
@@ -254,6 +299,7 @@ void RefusalChecks() {
 
 struct Scene final {
     ExecutionResources Resources;
+    bool Dense;
     std::unique_ptr<World> Coupled;
     std::unique_ptr<World> Isolated;
     JPH::BodyID Soft;
@@ -261,9 +307,9 @@ struct Scene final {
     std::vector<JPH::BodyID> IsolatedRigids;
     JPH::Ref<JPH::SoftBodySharedSettings> Shared;
 
-    Scene(const Options &Config, bool Selective) : Resources(Config.Workers) {
-        Coupled = std::make_unique<World>(Resources, true);
-        if (Selective) Isolated = std::make_unique<World>(Resources, true);
+    Scene(const Options &Config, bool Selective) : Resources(Config.Workers), Dense(Config.Layout == "dense") {
+        Coupled = std::make_unique<World>(Resources, true, Dense);
+        if (Selective) Isolated = std::make_unique<World>(Resources, true, Dense);
         Shared = PhysicsJoltEvaluation::Cloth(13, 4.0f, false, false);
         PhysicsJoltEvaluation::ValidateVelocityConstraints(*Shared, Config.VelocityReconstruction);
         Soft = Coupled->AddSoft(Shared);
@@ -280,9 +326,12 @@ struct Scene final {
             const int Column = Index % 8;
             const int Row = Index / 8;
             IsolatedRigids.push_back(IsolatedWorld.AddSphere(
-                JPH::RVec3(OriginX + Column * 0.91, Row * 0.91, 0.0), IsolatedRigidLayer,
-                JPH::Vec3(TravelSpeed + ((Column & 1) ? -0.3f : 0.3f), 0.0f, 0.0f)));
+                JPH::RVec3(OriginX + Column * 0.91, Dense ? 0.55 + Row * 0.91 : Row * 0.91, 0.0),
+                IsolatedRigidLayer,
+                JPH::Vec3(TravelSpeed + (Dense ? 0.0f : ((Column & 1) ? -0.3f : 0.3f)),
+                    0.0f, 0.0f)));
         }
+        if (Dense) IsolatedWorld.AddFloor();
     }
 };
 
@@ -374,6 +423,7 @@ struct PhysicalSummary final {
     bool FiniteEveryFrame = true;
     double MaxSpeed = 0.0;
     double MaxPenetration = 0.0;
+    double MaxFloorPenetration = 0.0;
 };
 
 void InspectIsolated(const Scene &Worlds, PhysicalSummary &Summary) {
@@ -391,6 +441,9 @@ void InspectIsolated(const Scene &Worlds, PhysicalSummary &Summary) {
             std::isfinite(static_cast<double>(Velocity.GetZ()));
         const double Speed = static_cast<double>(Velocity.Length());
         if (std::isfinite(Speed)) Summary.MaxSpeed = std::max(Summary.MaxSpeed, Speed);
+        if (Worlds.Dense && std::isfinite(static_cast<double>(Position.GetY())))
+            Summary.MaxFloorPenetration = std::max(Summary.MaxFloorPenetration,
+                std::max(0.0, 0.45 - static_cast<double>(Position.GetY())));
         Positions.push_back(Position);
     }
     for (size_t A = 0; A < Positions.size(); ++A)
@@ -474,12 +527,21 @@ int main(int Count, char **Arguments) {
             throw std::runtime_error("[Physics:Selective] Unsafe scene accepted");
         }
         const double SceneSetupMs = PhysicsJoltEvaluation::Milliseconds(SceneStart);
+        const auto InitialQualityStart = PhysicsJoltEvaluation::Clock::now();
+        PhysicalSummary InitialQuality;
+        InspectIsolated(Worlds, InitialQuality);
+        const double InitialQualityMs = PhysicsJoltEvaluation::Milliseconds(InitialQualityStart);
+        const bool InitialQualityPass = InitialQuality.FiniteEveryFrame &&
+            InitialQuality.MaxPenetration <= 0.25 && InitialQuality.MaxFloorPenetration <= 0.25;
+        if (!InitialQualityPass)
+            throw std::runtime_error("[Physics:Selective] Initial rigid geometry exceeds quality gate");
         ResetExternalProfile();
         double CoupledMs = 0.0;
         double IsolatedMs = 0.0;
         double GuardMs = 0.0;
         double QualityMs = 0.0;
         PhysicalSummary IsolatedQuality;
+        int RigidContactFrames = 0;
         bool CoupledFiniteEveryFrame = true;
         double MaxEdgeStretchAcrossFrames = 0.0;
         std::vector<double> FrameUpdateMs;
@@ -487,6 +549,7 @@ int main(int Count, char **Arguments) {
         FrameUpdateMs.reserve(Config.Frames);
         FrameGuardMs.reserve(Config.Frames);
         std::uint64_t CoupledTrajectoryHash = 1469598103934665603ULL;
+        const World &IsolatedWorld = Selective ? *Worlds.Isolated : *Worlds.Coupled;
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             const auto GuardStart = PhysicsJoltEvaluation::Clock::now();
             CheckSpatialMargin(Worlds, (Config.Frames - Frame) * FrameDelta);
@@ -494,6 +557,9 @@ int main(int Count, char **Arguments) {
             GuardMs += ThisGuardMs;
             FrameGuardMs.push_back(ThisGuardMs);
             double ThisUpdateMs = 0.0;
+            const auto RigidContactsBefore =
+                IsolatedWorld.RigidContactCount.Added.load(std::memory_order_relaxed) +
+                IsolatedWorld.RigidContactCount.Persisted.load(std::memory_order_relaxed);
             for (int Update = 0; Update < 2; ++Update)
             {
                 const double ThisStepMs = Worlds.Coupled->Step(FrameDelta / 2.0f, 8);
@@ -505,6 +571,10 @@ int main(int Count, char **Arguments) {
                 IsolatedMs += ThisStepMs;
                 ThisUpdateMs += ThisStepMs;
             }
+            const auto RigidContactsAfter =
+                IsolatedWorld.RigidContactCount.Added.load(std::memory_order_relaxed) +
+                IsolatedWorld.RigidContactCount.Persisted.load(std::memory_order_relaxed);
+            if (RigidContactsAfter > RigidContactsBefore) ++RigidContactFrames;
             const auto QualityStart = PhysicsJoltEvaluation::Clock::now();
             FrameUpdateMs.push_back(ThisUpdateMs);
             CaptureCoupledState(Worlds, CoupledTrajectoryHash,
@@ -523,18 +593,24 @@ int main(int Count, char **Arguments) {
         for (const auto &Vertex : Vertices)
             SoftPositionChecksum += Vertex.mPosition.GetX() + 3.0 * Vertex.mPosition.GetY() + 7.0 * Vertex.mPosition.GetZ();
         const bool IsolatedQualityPass = IsolatedQuality.FiniteEveryFrame &&
-            IsolatedQuality.MaxSpeed <= 100.0 && IsolatedQuality.MaxPenetration <= 0.25;
+            IsolatedQuality.MaxSpeed <= 100.0 && IsolatedQuality.MaxPenetration <= 0.25 &&
+            IsolatedQuality.MaxFloorPenetration <= 0.25;
+        const bool DenseContactPass = !Worlds.Dense ||
+            RigidContactFrames >= std::max(1, Config.Frames / 4);
         const auto SoftContactCallbacks = Worlds.Coupled->ContactCount.Added.load(std::memory_order_relaxed);
         const bool CoupledStretchPass = CoupledFiniteEveryFrame && MaxEdgeStretchAcrossFrames <= 0.1;
         const bool CoupledContactObserved = SoftContactCallbacks > 0;
-        const bool BenchmarkQualityPass = IsolatedQualityPass && CoupledStretchPass && CoupledContactObserved;
+        const bool BenchmarkQualityPass = IsolatedQualityPass && CoupledStretchPass &&
+            CoupledContactObserved && DenseContactPass;
         const auto ResourcesAfter = PhysicsEvaluation::CaptureResources();
         std::cout << std::setprecision(17) << "{\"Mode\":\"" << Config.Mode << "\",\"Frames\":"
             << Config.Frames << ",\"Workers\":" << Config.Workers
             << ",\"IsolatedBodies\":" << Config.IsolatedBodies
+            << ",\"Layout\":\"" << Config.Layout << '"'
             << ",\"VelocityReconstruction\":\""
             << PhysicsJoltEvaluation::VelocityReconstructionName(Config.VelocityReconstruction) << '"'
             << ",\"SceneSetupMs\":" << SceneSetupMs
+            << ",\"InitialQualityMs\":" << InitialQualityMs
             << ",\"GuardMs\":" << GuardMs
             << ",\"QualityMs\":" << QualityMs
             << ",\"CoupledWorldMs\":" << CoupledMs
@@ -547,6 +623,16 @@ int main(int Count, char **Arguments) {
             << ",\"IsolatedRigidX\":" << SafeNumber(X(IsolatedBodies.GetPosition(Worlds.IsolatedRigids[0])))
             << ",\"MaxIsolatedSpeedAcrossFrames\":" << IsolatedQuality.MaxSpeed
             << ",\"MaxIsolatedPenetrationAcrossFrames\":" << IsolatedQuality.MaxPenetration
+            << ",\"MaxFloorPenetrationAcrossFrames\":" << IsolatedQuality.MaxFloorPenetration
+            << ",\"RigidContactFrames\":" << RigidContactFrames
+            << ",\"DenseContactPass\":" << (DenseContactPass ? "true" : "false")
+            << ",\"IsolatedRigidContactAdded\":"
+            << IsolatedWorld.RigidContactCount.Added.load(std::memory_order_relaxed)
+            << ",\"IsolatedRigidContactPersisted\":"
+            << IsolatedWorld.RigidContactCount.Persisted.load(std::memory_order_relaxed)
+            << ",\"InitialPairPenetration\":" << InitialQuality.MaxPenetration
+            << ",\"InitialFloorPenetration\":" << InitialQuality.MaxFloorPenetration
+            << ",\"InitialQualityPass\":" << (InitialQualityPass ? "true" : "false")
             << ",\"IsolatedFiniteEveryFrame\":" << (IsolatedQuality.FiniteEveryFrame ? "true" : "false")
             << ",\"IsolatedQualityPass\":" << (IsolatedQualityPass ? "true" : "false")
             << ",\"CoupledFiniteEveryFrame\":" << (CoupledFiniteEveryFrame ? "true" : "false")

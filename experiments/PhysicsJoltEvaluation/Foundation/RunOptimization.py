@@ -49,10 +49,11 @@ for Mode in ['Stock', 'Patched', 'Profile']:
     Run('Build' + Mode, ['cmake', '--build', Build, '--parallel', '2', '--target', 'PhysicsJoltSelectiveCouplingBenchmark'])
     Binaries[Mode] = Build / ('PhysicsJoltSelectiveCouplingBenchmark' + ('.exe' if platform.system() == 'Windows' else ''))
     (Evidence / (Mode + 'CMakeCache.txt')).write_bytes((Build / 'CMakeCache.txt').read_bytes())
-for Mode in ['global', 'selective']:
-    Run('Profile-' + Mode, [Binaries['Profile'], '--mode', Mode, '--frames', '120',
-                           '--workers', '1', '--isolated-bodies', '128', '--velocity-reconstruction', 'delta'])
-Run('Qualification', [sys.executable, Evaluation / 'Optimization/RunSelectiveQualification.py',
-                      '--stock', Binaries['Stock'], '--patched', Binaries['Patched'],
-                      '--frames', '120', '--isolated-bodies', '128', '--repeats', '4',
-                      '--output-dir', Evidence / 'Qualification'])
+for Layout in ['sparse', 'dense']:
+    for Mode in ['global', 'selective']:
+        Run('Profile-' + Layout + '-' + Mode, [Binaries['Profile'], '--mode', Mode, '--layout', Layout,
+            '--frames', '120', '--workers', '1', '--isolated-bodies', '128', '--velocity-reconstruction', 'delta'])
+    Run('Qualification-' + Layout, [sys.executable, Evaluation / 'Optimization/RunSelectiveQualification.py',
+        '--stock', Binaries['Stock'], '--patched', Binaries['Patched'], '--layout', Layout,
+        '--frames', '120', '--isolated-bodies', '128', '--repeats', '4',
+        '--output-dir', Evidence / ('Qualification-' + Layout)])

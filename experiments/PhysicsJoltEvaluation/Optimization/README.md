@@ -4,7 +4,8 @@
 cadence using Jolt's existing `PhysicsSystem::Update` and `JobSystem` interfaces.
 It is not a general dynamic island scheduler. The optimized class has an
 authored collision partition: isolated rigid layer 3 cannot collide with
-coupled rigid layer 1 or soft layer 2. Both global and selective modes use
+coupled rigid layer 1 or soft layer 2; isolated static layer 4 is subject to
+the same exclusion. Both global and selective modes use
 exactly the same pair filter. The scheduler refuses cross-partition joints,
 soft influence, or any pair eligible for contact; near and moving-toward
 spatial controls also refuse before the first update. All rigid bodies linked
@@ -33,6 +34,18 @@ The benchmark accepts `--velocity-reconstruction difference|delta`. A
 maintained Jolt build defaults to `delta`; a stock build defaults to and
 accepts only `difference`. The existing constraint-family admission helper
 is applied before creating the soft body.
+`--layout sparse` retains the first 128-active-body screen. `--layout dense`
+adds one isolated static floor and a gravity-driven rigid stack. Both worlds
+use the same gravity vector in dense mode; the coupled soft and rigid bodies
+set gravity factor zero, preserving their original free/coupled fixture.
+The floor is created once, within its owning partition. The initial sphere
+spacing is 0.91 m for 0.45 m radii and the lowest row begins 0.10 m above the
+floor, so the authored scene does not begin with a large overlap. Per-frame
+pair and floor penetration must each stay at or below 0.25 m, with an
+initial-state gate before stepping. A rigid contact listener confirms
+isolated pair/floor contact in at least a quarter of dense frames; its
+callbacks are counted separately from the soft contact listener. Sparse and dense runs are separate
+quality/cost comparisons; do not pool their timings.
 
 Jolt source anchors at v5.6.0 `e77f175595e64cb44218cc9d9d56fc365ad0e36a`:
 
