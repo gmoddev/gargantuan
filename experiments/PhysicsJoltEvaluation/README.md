@@ -11,6 +11,11 @@ preserves this checkpoint's failures and corrects its broad coupling/fairness
 inference. Read that follow-up before treating the original coupling comparison
 as a backend-selection result. Production defaults are unchanged.
 
+The subsequent [S1 and nonlinear instability investigation](S1InstabilityInvestigation.md)
+adds internal kinetic failures, matched-work cadence controls, calibrated
+high-precision replay and per-edge numerical-work evidence. Unified Jolt
+qualification remains deferred; diagnostic ablations are not production fixes.
+
 This isolated experiment follows the explicitly authorized integration of
 [PR18](https://github.com/gmoddev/gargantuan/pull/18). Actual merged main is
 `5b6782e35c4e24fd80bc8d5526104c615c72d84d`, tree
