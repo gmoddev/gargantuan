@@ -34,9 +34,17 @@ add_executable(PhysicsJoltNativeCouplingInstrumented
 target_include_directories(PhysicsJoltNativeCouplingInstrumented PRIVATE
     "${EVALUATION_SOURCE_ROOT}/vendor/json/include" "${EVALUATION_SOURCE_ROOT}/vendor/box3d/include")
 target_link_libraries(PhysicsJoltNativeCouplingInstrumented PRIVATE Jolt)
+add_executable(PhysicsJoltUnifiedCouplingQualification
+    "${EVALUATION_SOURCE_ROOT}/experiments/PhysicsJoltEvaluation/UnifiedCouplingEvaluation.cpp"
+    "${EVALUATION_SOURCE_ROOT}/experiments/PhysicsJoltEvaluation/ExperimentSupport.cpp")
+target_include_directories(PhysicsJoltUnifiedCouplingQualification PRIVATE
+    "${EVALUATION_SOURCE_ROOT}/vendor/json/include" "${EVALUATION_SOURCE_ROOT}/vendor/box3d/include")
+target_compile_definitions(PhysicsJoltUnifiedCouplingQualification PRIVATE PHYSICS_UNIFIED_NATIVE_ONLY=1)
+target_link_libraries(PhysicsJoltUnifiedCouplingQualification PRIVATE Jolt)
 if(NOT DIAGNOSTIC_EXPECT_CLEAN)
     target_compile_definitions(PhysicsJoltNativeCouplingInstrumented PRIVATE PHYSICS_S1_DIAGNOSTIC=1)
 endif()
 if(WIN32)
     target_link_libraries(PhysicsJoltNativeCouplingInstrumented PRIVATE psapi)
+    target_link_libraries(PhysicsJoltUnifiedCouplingQualification PRIVATE psapi)
 endif()

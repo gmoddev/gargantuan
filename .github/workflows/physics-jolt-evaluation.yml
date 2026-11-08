@@ -28,6 +28,10 @@ on:
         description: Independently qualify the measured U48 material profile on Linux and Windows
         type: boolean
         default: false
+      unified_screen_only:
+        description: Broader pristine unified Jolt fixtures with accepted-state and measured-work gates
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,7 +43,7 @@ concurrency:
 
 jobs:
   linux-release-comparison:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only && !inputs.unified_screen_only)
     name: Ubuntu Release / experimental quality and timing
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -503,3 +507,90 @@ jobs:
           name: jolt-fixed-state-convergence-evidence
           if-no-files-found: error
           path: fixed-state-evidence/
+
+  unified-quality-screen:
+    if: github.event_name == 'workflow_dispatch' && inputs.unified_screen_only
+    name: Pristine unified Jolt broader accepted-state quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - run: git submodule update --init --depth 1 vendor/json vendor/box3d
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: jrouwe/JoltPhysics
+          ref: e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          path: .evaluation-jolt
+          persist-credentials: false
+      - name: Build standalone broader unified fixture runner
+        run: |
+          set -euo pipefail
+          mkdir unified-evidence
+          git rev-parse HEAD > unified-evidence/ExecutedSource.txt
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-unified -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON \
+            -DDIAGNOSTIC_JOLT_ROOT="$GITHUB_WORKSPACE/.evaluation-jolt" -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" \
+            2>&1 | tee unified-evidence/Configure.log
+          cmake --build build-unified --target PhysicsJoltUnifiedCouplingQualification --parallel 2 \
+            2>&1 | tee unified-evidence/Build.log
+      - name: Evaluate all five coupling fixtures at justified candidate cadences
+        run: |
+          python3 experiments/PhysicsJoltEvaluation/RunUnifiedScreen.py \
+            --exe build-unified/PhysicsJoltUnifiedCouplingQualification --output unified-evidence/Runs
+      - name: Preserve full quality screen and compiled dependency cache
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-unified-screen-evidence
+          if-no-files-found: error
+          path: |
+            unified-evidence/
+            build-unified/PhysicsJoltUnifiedCouplingQualification
+            build-unified/CMakeCache.txt
+            build-unified/compile_commands.json
+            build-unified/JoltBuild/libJolt.a
+
+  hard-compatibility-proof:
+    if: github.event_name == 'workflow_dispatch' && inputs.unified_screen_only
+    name: Exact hard-constraint kinematic compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      OPENBLAS_NUM_THREADS: 1
+      MKL_NUM_THREADS: 1
+      OMP_NUM_THREADS: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Test hard compatibility and frozen initial prediction
+        run: |
+          set -euo pipefail
+          mkdir compatibility-evidence
+          git rev-parse HEAD > compatibility-evidence/ExecutedSource.txt
+          python3 -m venv .compatibility-numeric
+          .compatibility-numeric/bin/pip install --only-binary=:all: numpy==2.3.4 > compatibility-evidence/NumericInstall.txt
+          python3 - <<'PY'
+          import json,pathlib,struct
+          G=json.loads(pathlib.Path('experiments/PhysicsJoltEvaluation/CausalFixtures/NativeOptimizedClothGraph.json').read_text())
+          for Name,Keep in [('SingleDiagonal',lambda E:abs(E['I']-E['J'])!=12),('NoDiagonals',lambda E:abs(E['I']-E['J']) not in (12,14))]:
+              pathlib.Path('compatibility-evidence',Name+'.json').write_text(json.dumps({**G,'Edges':[E for E in G['Edges'] if Keep(E)]}))
+          C=struct.unpack('f',struct.pack('f',1e-5))[0]
+          pathlib.Path('compatibility-evidence/Compliant.json').write_text(json.dumps({**G,'Edges':[{**E,'Compliance':C if E['Compliance']==0 else E['Compliance']} for E in G['Edges']]}))
+          PY
+          .compatibility-numeric/bin/python experiments/PhysicsJoltEvaluation/AnalyzeConstraintCompatibility.py \
+            --graph experiments/PhysicsJoltEvaluation/CausalFixtures/NativeOptimizedClothGraph.json \
+            --single-diagonal compatibility-evidence/SingleDiagonal.json \
+            --no-diagonals compatibility-evidence/NoDiagonals.json \
+            --compliant-graph compatibility-evidence/Compliant.json --output compatibility-evidence/Compatibility.json
+      - name: Preserve exact compatibility witness
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-hard-compatibility-evidence
+          if-no-files-found: error
+          path: compatibility-evidence/
