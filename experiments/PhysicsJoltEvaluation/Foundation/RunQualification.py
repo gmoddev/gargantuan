@@ -20,7 +20,7 @@ SleepQualification = os.environ.get('GANTRIA_SLEEP_QUALIFICATION') == '1'
 assert not SleepQualification or ConvergenceQualification
 ConvergenceIterations = int(os.environ.get('GANTRIA_CONVERGENCE_ITERATIONS', '6'))
 assert ConvergenceIterations in (5, 6)
-Expected = ('f3838f1222c35a494736e9b3d1852461db51523d' if SleepQualification else
+Expected = ('d8c46588b23700d24ebdaeada0ff460d34b1f830' if SleepQualification else
             '25658bcf45f21bb2674d47952638c31c7d0b1467' if Convergence else
             '109be79fa82be0b306c56e4b4357675ed7843767')
 Receipts = []

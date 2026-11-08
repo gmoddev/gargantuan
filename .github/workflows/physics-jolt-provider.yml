@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: GantriaEngine/JoltPhysics
-          ref: ${{ inputs.SolverProfile == 'sleep-clock' && 'f3838f1222c35a494736e9b3d1852461db51523d' || inputs.SolverProfile == 'convergence' && 'e167ba589787fb76f5d9718ae348d4ac1c3b19ee' || 'cd095d408a1cd231ad43fa8725d06a818fd63b13' }}
+          ref: ${{ inputs.SolverProfile == 'sleep-clock' && 'd8c46588b23700d24ebdaeada0ff460d34b1f830' || inputs.SolverProfile == 'convergence' && 'e167ba589787fb76f5d9718ae348d4ac1c3b19ee' || 'cd095d408a1cd231ad43fa8725d06a818fd63b13' }}
           path: .provider-jolt
           persist-credentials: false
       - name: Enable MSVC
