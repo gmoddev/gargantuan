@@ -638,29 +638,40 @@ namespace {
 #endif
 #if defined(PHYSICS_GANTRIA_SLEEP_FIX) && defined(PHYSICS_GANTRIA_ATTACHMENTS)
     void SleepingRigidSoftAttachment() {
+        auto Game = std::make_shared<DataModel>();
+        auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
         PhysicsWorldConfig Config;
         Config.Gravity = {};
         auto Provider = CreateUnifiedJoltProvider(Config);
-        SoftBodyDefinition Cloth;
-        Cloth.Kind = SoftBodyKind::Cloth;
-        Cloth.Size = {2, 2, 0.2f};
-        Cloth.ResolutionX = Cloth.ResolutionY = 3;
-        Cloth.Material.StretchCompliance = 1.0e-6f;
-        Cloth.Material.Damping = 0.0f;
-        const auto Fabric = Provider.Soft->CreateBody(Cloth);
-        auto Load = Box({1, 0, 0}, {1, 1, 1}, false);
-        Load.CanCollide = false;
-        Load.CanTouch = false;
-        Load.SleepEnabled = true;
-        const auto Rigid = Provider.Rigid->CreateBody(Load);
-        Require(Fabric.IsValid() && Rigid.IsValid(),
+        auto *Rigid = Provider.Rigid.get();
+        auto *Soft = Provider.Soft.get();
+        WorldRootTestAccess::Inject(*World, std::move(Provider));
+        World->SetGravity(0.0f);
+        auto Fabric = std::make_shared<Cloth>();
+        Fabric->SetPosition({0, 0, 0});
+        Fabric->SetSize({2, 2, 0.2f});
+        Fabric->SetResolutionX(3);
+        Fabric->SetResolutionY(3);
+        Fabric->SetParent(World);
+        auto Load = std::make_shared<Part>();
+        Load->SetSize({1, 1, 1});
+        Load->SetCFrame(CFrame(1, 0, 0));
+        Load->SetCanCollide(false);
+        Load->SetCanTouch(false);
+        Load->SetSleepEnabled(true);
+        Load->SetParent(World);
+        World->StepPhysics(0.0f, std::nullopt);
+        const auto FabricId = WorldRootTestAccess::SoftBody(*World, *Fabric);
+        const auto RigidId = WorldRootTestAccess::Body(*World, *Load);
+        Require(FabricId.IsValid() && RigidId.IsValid(),
             "sleeping attachment endpoints failed admission");
-        Require(ConnectJoltRigidSoftAttachment(*Provider.Rigid, *Provider.Soft,
-            Fabric, 4, Rigid, {-1, 0, 0}).Succeeded(),
+        Require(ConnectJoltRigidSoftAttachment(*Rigid, *Soft,
+            FabricId, 4, RigidId, {-1, 0, 0}).Succeeded(),
             "sleeping cloth/rigid attachment failed admission");
-        Advance(Provider, 48);
-        const auto Settled = Provider.Rigid->GetBodyState(Rigid);
-        const auto Link = GetJoltRigidSoftAttachmentState(*Provider.Rigid, Fabric, Rigid);
+        for (int Frame = 0; Frame < 48; ++Frame)
+            World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+        const auto Settled = Rigid->GetBodyState(RigidId);
+        const auto Link = GetJoltRigidSoftAttachmentState(*Rigid, FabricId, RigidId);
         std::cout << "[Physics:JoltProvider] attached_sleep awake="
             << (Settled ? Settled->Awake : true)
             << " applied_steps=" << (Link ? Link->AppliedSteps : 0)
@@ -669,14 +680,14 @@ namespace {
         Require(Settled && !Settled->Awake && Link && Link->Active &&
             Link->AppliedSteps > 0,
             "idle soft attachment kept its rigid endpoint awake");
-        Require(Provider.Soft->ApplyImpulseAtPosition(Fabric,
+        Require(Soft->ApplyImpulseAtPosition(FabricId,
             {16, 0, 0}, {0, 0, 0}).Succeeded(),
             "soft impulse for sleeping attachment failed");
         bool Reawakened = false;
         float PeakRigidVelocityX = 0;
         for (int Frame = 0; Frame < 3; ++Frame) {
-            Advance(Provider);
-            const auto State = Provider.Rigid->GetBodyState(Rigid);
+            World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+            const auto State = Rigid->GetBodyState(RigidId);
             Require(State.has_value(), "sleeping attachment lost its rigid endpoint");
             Reawakened |= State->Awake;
             PeakRigidVelocityX = std::max(PeakRigidVelocityX, State->LinearVelocity.x);
@@ -685,6 +696,7 @@ namespace {
             << " peak_rigid_vx=" << PeakRigidVelocityX << '\n' << std::flush;
         Require(Reawakened && PeakRigidVelocityX > 0.000001f,
             "soft motion did not reawaken and move attached rigid body");
+        Game->Destroy();
     }
 #endif
     void UnifiedProviderReplacementOrder() {
