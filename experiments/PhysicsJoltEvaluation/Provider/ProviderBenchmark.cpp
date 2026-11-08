@@ -241,13 +241,15 @@ int main(int ArgumentCount, char **Arguments) {
         const auto Mean = [](const std::vector<double> &Values) {
             return std::accumulate(Values.begin(), Values.end(), 0.0) / Values.size();
         };
+        const double Median = 0.5 * (Sorted[(Sorted.size() - 1) / 2] +
+            Sorted[Sorted.size() / 2]);
         const auto QualityValue = Inspect(Bodies, *Soft);
         std::cout << "[Physics:ProviderBenchmark] summary backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
             << " frames=" << Frames << " workers_requested=" << Workers
             << " xpbd_workers_actual=" << ActualXpbdWorkers
             << " mean_total_ms=" << Mean(TotalTimes)
-            << " median_total_ms=" << Sorted[Sorted.size() / 2]
+            << " median_total_ms=" << Median
             << " p95_total_ms=" << Sorted[std::size_t(std::ceil(0.95 * Sorted.size())) - 1]
             << " mean_rigid_ms=" << Mean(RigidTimes)
             << " mean_soft_ms=" << Mean(SoftTimes)
