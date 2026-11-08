@@ -12,6 +12,10 @@ on:
         description: Isolated S1 and projection instability investigation; no qualification or full comparison
         type: boolean
         default: false
+      s1_followup_only:
+        description: Follow up run 42434395381 with contact-position and precision controls only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,7 +27,7 @@ concurrency:
 
 jobs:
   linux-release-comparison:
-    if: github.event_name != 'workflow_dispatch' || !inputs.s1_diagnostic_only
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only)
     name: Ubuntu Release / experimental quality and timing
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -124,7 +128,7 @@ jobs:
             build-evaluation/CMakeFiles/CMakeConfigureLog.yaml
 
   s1-diagnostic:
-    if: github.event_name == 'workflow_dispatch' && inputs.s1_diagnostic_only
+    if: github.event_name == 'workflow_dispatch' && inputs.s1_diagnostic_only && !inputs.s1_followup_only
     name: Isolated native S1 causal probes / no production qualification
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -194,3 +198,66 @@ jobs:
             s1-evidence/
             build-s1-clean/PhysicsJoltNativeCouplingInstrumented
             build-s1-instrumented/PhysicsJoltNativeCouplingInstrumented
+
+  s1-followup:
+    if: github.event_name == 'workflow_dispatch' && inputs.s1_followup_only && !inputs.s1_diagnostic_only
+    name: Contact-position and precision causality / no qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      OPENBLAS_NUM_THREADS: 1
+      OMP_NUM_THREADS: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - run: git submodule update --init --depth 1 vendor/json vendor/box3d
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: jrouwe/JoltPhysics
+          ref: e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          path: .evaluation-jolt
+          persist-credentials: false
+      - name: Retain prior immutable evidence and prepare new diagnostic source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir followup-evidence
+          gh api repos/gmoddev/gargantuan/actions/runs/42434395381 > followup-evidence/BaselineRun.json
+          python3 -c "import json; R=json.load(open('followup-evidence/BaselineRun.json')); assert R['head_sha']=='7615e55024a924388717a3af2a187812f86dc6d8' and R['conclusion']=='success'"
+          gh run download 42434395381 --repo gmoddev/gargantuan --name jolt-s1-instability-evidence --dir baseline
+          git rev-parse HEAD > followup-evidence/ExecutedSource.txt
+          c++ --version > followup-evidence/Compiler.txt
+          python3 experiments/PhysicsJoltEvaluation/MakeJoltInstrumentation.py .evaluation-jolt followup-evidence/Generated.patch --s1
+          cmp followup-evidence/Generated.patch experiments/PhysicsJoltEvaluation/JoltS1Instrumentation.patch
+          git -C .evaluation-jolt apply "$GITHUB_WORKSPACE/followup-evidence/Generated.patch"
+      - name: Build only the changed native diagnostic and standalone precision replay
+        run: |
+          set -euo pipefail
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-followup -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_JOLT_ROOT="$GITHUB_WORKSPACE/.evaluation-jolt" \
+            -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" 2>&1 | tee followup-evidence/Configure.log
+          cmake --build build-followup --target PhysicsJoltNativeCouplingInstrumented --parallel 2 2>&1 | tee followup-evidence/Build.log
+          c++ -std=c++23 -O2 -ffp-contract=off -fno-fast-math -Ivendor/json/include \
+            experiments/PhysicsJoltEvaluation/ProjectionPrecisionReplay.cpp -o build-followup/ProjectionPrecisionReplay \
+            2>&1 | tee followup-evidence/ReplayBuild.log
+          cp build-followup/CMakeCache.txt followup-evidence/
+          cp build-followup/compile_commands.json followup-evidence/
+      - name: Run only new causal controls with original thresholds
+        run: |
+          python3 experiments/PhysicsJoltEvaluation/RunS1Followup.py \
+            --instrumented build-followup/PhysicsJoltNativeCouplingInstrumented \
+            --replay build-followup/ProjectionPrecisionReplay \
+            --baseline baseline/s1-evidence/Runs --output followup-evidence/Runs
+      - name: Preserve new results independently of the baseline
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-s1-followup-evidence
+          if-no-files-found: error
+          path: |
+            followup-evidence/
+            build-followup/PhysicsJoltNativeCouplingInstrumented
+            build-followup/ProjectionPrecisionReplay

@@ -41,6 +41,7 @@ Replace('\t\t\t\t\t\t\t// Mark that the velocities of the body we hit need to be
 if Arguments.s1:
     Replace(Declarations,Declarations+'''extern "C" int PhysicsS1DiagnosticProjectionPasses();
 extern "C" bool PhysicsS1DiagnosticRefreshSpherePlane();
+extern "C" float PhysicsS1DiagnosticContactProjectionScale(const void *, const void *, const void *);
 extern "C" void PhysicsS1DiagnosticProjection(const char *, const void *, const void *, const void *, const void *, float);
 
 ''')
@@ -67,7 +68,7 @@ extern "C" void PhysicsS1DiagnosticProjection(const char *, const void *, const 
     Replace('\t\t\t\t\tv.mPosition += contact_normal * projected_distance;',
         '''\t\t\t\t\tVec3 DiagnosticCenter = cs.mCenterOfMassTransform.GetTranslation();
                     PhysicsS1DiagnosticProjection("Before", this, &v, &DiagnosticCenter, &contact_normal, projected_distance);
-                    v.mPosition += contact_normal * projected_distance;
+                    v.mPosition += contact_normal * (projected_distance * PhysicsS1DiagnosticContactProjectionScale(this, &inContext, &v));
                     PhysicsS1DiagnosticProjection("After", this, &v, &DiagnosticCenter, &contact_normal, projected_distance);''')
 Arguments.Output.write_text(''.join(difflib.unified_diff(Original.splitlines(True),Text.splitlines(True),fromfile='a/'+Name,tofile='b/'+Name)),encoding='utf-8',newline='\n')
 print('Generated S1 diagnostic patch:' if Arguments.s1 else 'Generated observational patch:',Arguments.Output)

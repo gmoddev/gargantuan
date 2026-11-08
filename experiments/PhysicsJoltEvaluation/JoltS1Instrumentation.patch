@@ -1,6 +1,6 @@
 --- a/Jolt/Physics/SoftBody/SoftBodyMotionProperties.cpp
 +++ b/Jolt/Physics/SoftBody/SoftBodyMotionProperties.cpp
-@@ -16,6 +16,15 @@
+@@ -16,6 +16,16 @@
  #ifdef JPH_DEBUG_RENDERER
  	#include <Jolt/Renderer/DebugRenderer.h>
  #endif // JPH_DEBUG_RENDERER
@@ -12,11 +12,12 @@
 +
 +extern "C" int PhysicsS1DiagnosticProjectionPasses();
 +extern "C" bool PhysicsS1DiagnosticRefreshSpherePlane();
++extern "C" float PhysicsS1DiagnosticContactProjectionScale(const void *, const void *, const void *);
 +extern "C" void PhysicsS1DiagnosticProjection(const char *, const void *, const void *, const void *, const void *, float);
  
  JPH_NAMESPACE_BEGIN
  
-@@ -324,6 +333,7 @@
+@@ -324,6 +334,7 @@
  
  void SoftBodyMotionProperties::IntegratePositions(const SoftBodyUpdateContext &inContext)
  {
@@ -24,7 +25,7 @@
  	JPH_PROFILE_FUNCTION();
  
  	float dt = inContext.mSubStepDeltaTime;
-@@ -362,6 +372,7 @@
+@@ -362,6 +373,7 @@
  		r.mPreviousRotationInternal = rotation; // Overwrites mAngularVelocity
  		r.mRotation = (rotation + delta_rotation).Normalized();
  	}
@@ -32,7 +33,7 @@
  }
  
  void SoftBodyMotionProperties::ApplyDihedralBendConstraints(const SoftBodyUpdateContext &inContext, uint inStartIndex, uint inEndIndex)
-@@ -699,6 +710,9 @@
+@@ -699,6 +711,9 @@
  
  void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext)
  {
@@ -42,7 +43,7 @@
  	JPH_PROFILE_FUNCTION();
  
  	float dt = inContext.mSubStepDeltaTime;
-@@ -712,12 +726,25 @@
+@@ -712,12 +727,25 @@
  
  			// XPBD velocity update
  			v.mVelocity = (v.mPosition - v.mPreviousPosition) / dt;
@@ -69,19 +70,19 @@
  				float projected_distance = -v.mCollisionPlane.SignedDistance(v.mPosition) + vertex_radius;
  				if (projected_distance > 0.0f)
  				{
-@@ -730,7 +757,10 @@
+@@ -730,7 +758,10 @@
  					// Note that we already calculated the velocity, so this does not affect the velocity (next iteration starts by setting previous position to current position)
  					CollidingShape &cs = mCollidingShapes[v.mCollidingShapeIndex];
  					Vec3 contact_normal = v.mCollisionPlane.GetNormal();
 -					v.mPosition += contact_normal * projected_distance;
 +					Vec3 DiagnosticCenter = cs.mCenterOfMassTransform.GetTranslation();
 +                    PhysicsS1DiagnosticProjection("Before", this, &v, &DiagnosticCenter, &contact_normal, projected_distance);
-+                    v.mPosition += contact_normal * projected_distance;
++                    v.mPosition += contact_normal * (projected_distance * PhysicsS1DiagnosticContactProjectionScale(this, &inContext, &v));
 +                    PhysicsS1DiagnosticProjection("After", this, &v, &DiagnosticCenter, &contact_normal, projected_distance);
  
  					// Apply friction as described in Detailed Rigid Body Simulation with Extended Position Based Dynamics - Matthias Muller et al.
  					// See section 3.6:
-@@ -784,12 +814,19 @@
+@@ -784,12 +815,19 @@
  							// Calculate impulse
  							Vec3 p = dv / w1_plus_w2;
  
@@ -101,7 +102,7 @@
  
  							// Mark that the velocities of the body we hit need to be updated
  							cs.mUpdateVelocities = true;
-@@ -817,6 +854,8 @@
+@@ -817,6 +855,8 @@
  				}
  			}
  		}

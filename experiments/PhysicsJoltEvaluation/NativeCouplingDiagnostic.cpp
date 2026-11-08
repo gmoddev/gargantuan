@@ -34,11 +34,13 @@ constexpr float Mass = 0.7f * (4.0f / 3.0f) * 3.14159265358979323846f * Radius *
 constexpr float Inertia = 0.4f * Mass * Radius * Radius;
 struct Options {
     int Frames = 150, Steps = 1, Iterations = 24, Workers = 1, Count = 1;
-    int TraceStart = 16, TraceEnd = 24, ProjectionPasses = 1;
+    int TraceStart = 16, TraceEnd = 24, ProjectionPasses = 1, ContactThrough = 300;
     bool Contact = true, Pinned = true, Dynamic = true, Particles = true;
     float Compliance = 0.0f, BendCompliance = 1.0e-4f, Damping = 2.4f, Friction = 0.2f;
     float Restitution = 0.0f, Seed = 0.0f, SeedX = 0.0f, SeedY = 0.0f, SphereZ = -2.0f, Speed = 5.0f;
     bool RefreshSpherePlane = false;
+    float ContactProjectionScale = 1.0f;
+    int ProjectionFrame = -1, ProjectionIteration = -1, ProjectionVertex = -1;
     std::string Trace, ExportGraph, VelocityFile, DisplacementFile;
 };
 Options Config;
@@ -75,6 +77,11 @@ Options Parse(int Count, char** Args) {
         else if(K=="--displacement-file") O.DisplacementFile=S;
         else if(K=="--projection-passes") O.ProjectionPasses=std::stoi(S);
         else if(K=="--refresh-sphere-plane") O.RefreshSpherePlane=std::stoi(S)!=0;
+        else if(K=="--contact-projection-scale") O.ContactProjectionScale=std::stof(S);
+        else if(K=="--contact-through") O.ContactThrough=std::stoi(S);
+        else if(K=="--projection-frame") O.ProjectionFrame=std::stoi(S);
+        else if(K=="--projection-iteration") O.ProjectionIteration=std::stoi(S);
+        else if(K=="--projection-vertex") O.ProjectionVertex=std::stoi(S);
         else if(K=="--sphere-z") O.SphereZ=std::stof(S);
         else if(K=="--speed") O.Speed=std::stof(S);
         else if(K=="--trace") O.Trace=S;
@@ -82,10 +89,12 @@ Options Parse(int Count, char** Args) {
         else if(K=="--trace-end") O.TraceEnd=std::stoi(S);
         else throw std::runtime_error("[Physics:Coupling] Unknown option "+K);
     }
-    if(O.Frames<1||O.Frames>300||O.Steps<1||O.Steps>8||O.Iterations<1||O.Iterations>64||O.Workers<1||O.Workers>8||O.Count<1||O.Count>2||O.ProjectionPasses<1||O.ProjectionPasses>8||O.Compliance<0||O.BendCompliance<0||O.Damping<0||O.Friction<0||O.Restitution<0)
+    if(O.Frames<1||O.Frames>300||O.Steps<1||O.Steps>8||O.Iterations<1||O.Iterations>64||O.Workers<1||O.Workers>8||O.Count<1||O.Count>2||O.ProjectionPasses<1||O.ProjectionPasses>8||O.ContactThrough< -1||O.ContactThrough>300||!std::isfinite(O.ContactProjectionScale)||O.ContactProjectionScale<0||O.ContactProjectionScale>1||O.Compliance<0||O.BendCompliance<0||O.Damping<0||O.Friction<0||O.Restitution<0)
         throw std::runtime_error("[Physics:Coupling] Option outside bounded range");
+    if(O.ProjectionFrame< -1||O.ProjectionFrame>299||O.ProjectionIteration< -1||O.ProjectionIteration>64||O.ProjectionVertex< -1||O.ProjectionVertex>168)
+        throw std::runtime_error("[Physics:Coupling] Projection selector outside bounded range");
 #ifndef PHYSICS_S1_DIAGNOSTIC
-    if(O.ProjectionPasses!=1||O.RefreshSpherePlane)
+    if(O.ProjectionPasses!=1||O.RefreshSpherePlane||O.ContactProjectionScale!=1)
         throw std::runtime_error("[Physics:Coupling] Counterfactual requires isolated S1 diagnostic Jolt");
 #endif
     return O;
@@ -100,7 +109,7 @@ struct Layers final: JPH::BroadPhaseLayerInterface {
 };
 struct Pairs final: JPH::ObjectLayerPairFilter {
     bool ShouldCollide(JPH::ObjectLayer A,JPH::ObjectLayer B) const override {
-        if(!Config.Contact&&((A==1&&B==2)||(A==2&&B==1))) return false;
+        if((!Config.Contact||CurrentFrame>Config.ContactThrough)&&((A==1&&B==2)||(A==2&&B==1))) return false;
         return A!=0||B!=0;
     }
 };
@@ -213,6 +222,15 @@ Json Observe(const JPH::SoftBodyMotionProperties* M,float SubDt,bool Detailed) {
 // Called only by the isolated diagnostic Jolt patch. Normal upstream is unmodified.
 extern "C" int PhysicsS1DiagnosticProjectionPasses() { return Config.ProjectionPasses; }
 extern "C" bool PhysicsS1DiagnosticRefreshSpherePlane() { return Config.RefreshSpherePlane; }
+extern "C" float PhysicsS1DiagnosticContactProjectionScale(const void* Motion,const void* Context,const void* Vertex) {
+    const auto* M=static_cast<const JPH::SoftBodyMotionProperties*>(Motion);
+    const auto* C=static_cast<const JPH::SoftBodyUpdateContext*>(Context);
+    const auto* P=static_cast<const JPH::SoftBodyVertex*>(Vertex);
+    if((Config.ProjectionFrame>=0&&CurrentFrame!=Config.ProjectionFrame)
+        ||(Config.ProjectionIteration>=0&&int(C->mNextIteration.load())!=Config.ProjectionIteration)
+        ||(Config.ProjectionVertex>=0&&P-M->GetVertices().data()!=Config.ProjectionVertex)) return 1.0f;
+    return Config.ContactProjectionScale;
+}
 extern "C" void PhysicsS1DiagnosticProjection(const char* Phase,const void* Motion,const void* Vertex,const void* Center,const void* Normal,float Depth) {
     if(!TraceFile.is_open()||CurrentFrame<Config.TraceStart||CurrentFrame>Config.TraceEnd) return;
     const auto* M=static_cast<const JPH::SoftBodyMotionProperties*>(Motion);
@@ -301,6 +319,8 @@ int main(int ArgCount,char** Args) {
                 {"Dynamic",Config.Dynamic},{"Seed",Config.Seed},{"RigidMass",Mass},{"SphereInertia",Inertia},
                 {"SeedX",Config.SeedX},{"SeedY",Config.SeedY},{"ProjectionPasses",Config.ProjectionPasses},
                 {"RefreshSpherePlane",Config.RefreshSpherePlane},{"VelocityFile",Config.VelocityFile},{"DisplacementFile",Config.DisplacementFile},
+                {"ContactProjectionScale",Config.ContactProjectionScale},{"ContactThrough",Config.ContactThrough},
+                {"ProjectionFrame",Config.ProjectionFrame},{"ProjectionIteration",Config.ProjectionIteration},{"ProjectionVertex",Config.ProjectionVertex},
                 {"RigidCount",Config.Count},{"InternalIntegrationDt",Dt/(Config.Steps*Config.Iterations)},
                 {"DiagnosticTrace",Config.Trace},{"ZeroGravity",true}}).dump()<<'\n';
             double Maximum=0;
