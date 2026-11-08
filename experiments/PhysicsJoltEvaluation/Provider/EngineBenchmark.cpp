@@ -320,6 +320,11 @@ int main(int ArgumentCount, char **Arguments) {
         if (!WorldRootTestAccess::Retired(*World))
             throw std::runtime_error("WorldRoot semantic teardown retained physics identities");
         const double TeardownMs = Milliseconds(Clock::now() - TeardownStart);
+        const auto ReleaseStart = Clock::now();
+        Bodies.clear();
+        World.reset();
+        Game.reset();
+        const double OwnerReleaseMs = Milliseconds(Clock::now() - ReleaseStart);
         std::cout << "[Physics:EngineBenchmark] summary backend=" << Backend
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
             << " frames=" << Frames << " workers_requested=" << WorkerBudget
@@ -327,6 +332,7 @@ int main(int ArgumentCount, char **Arguments) {
             << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
             << " vertices=" << Vertices << " constraints=" << Constraints
             << " setup_ms=" << SetupMs << " semantic_destroy_ms=" << TeardownMs
+            << " owner_release_ms=" << OwnerReleaseMs
             << " mean_physics_step_wall_ms=" << Mean
             << " median_physics_step_wall_ms=" << Median
             << " p95_physics_step_wall_ms=" <<
