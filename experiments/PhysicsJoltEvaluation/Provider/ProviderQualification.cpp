@@ -440,6 +440,8 @@ namespace {
         Advance(Provider, 45);
         const auto ContactVertices = GetJoltSoftRigidContactVertexCount(
             *Provider.Rigid, *Provider.Soft, Fabric, Sphere);
+        std::cout << "[Physics:JoltProvider] cloth_native_contact_vertices="
+            << ContactVertices << '\n' << std::flush;
         Require(ContactVertices > 0, "cloth projectile had no native soft-rigid vertex contact");
         Require(SetJoltSoftRigidContactCapture(*Provider.Rigid, false),
             "cloth contact capture teardown failed");
