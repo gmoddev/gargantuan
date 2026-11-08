@@ -57,7 +57,7 @@ class Recorder:
         TimedOut = False
         ProcessError = None
         try:
-            Result = subprocess.run(Command, capture_output=True, text=True,
+            Result = subprocess.run(Command, capture_output=True, text=False,
                                     timeout=120, check=False)
             ExitCode = Result.returncode
             Stdout = Result.stdout
@@ -65,19 +65,21 @@ class Recorder:
         except subprocess.TimeoutExpired as Error:
             TimedOut = True
             ExitCode = None
-            Stdout = Decode(Error.stdout)
-            Stderr = Decode(Error.stderr)
+            Stdout = Error.stdout or b""
+            Stderr = Error.stderr or b""
         except OSError as Error:
             ExitCode = None
             Stdout = ""
             Stderr = str(Error)
             ProcessError = type(Error).__name__
         ElapsedSeconds = time.monotonic() - Start
+        StdoutBytes = Stdout if isinstance(Stdout, bytes) else Stdout.encode("utf-8")
+        StderrBytes = Stderr if isinstance(Stderr, bytes) else Stderr.encode("utf-8")
         StdoutName = f"{Label}.stdout.txt"
         StderrName = f"{Label}.stderr.txt"
-        (self.OutputDir / StdoutName).write_text(Stdout, encoding="utf-8")
-        (self.OutputDir / StderrName).write_text(Stderr, encoding="utf-8")
-        Lines = Stdout.splitlines()
+        (self.OutputDir / StdoutName).write_bytes(StdoutBytes)
+        (self.OutputDir / StderrName).write_bytes(StderrBytes)
+        Lines = Decode(StdoutBytes).splitlines()
         Parsed = None
         ParseError = None
         if Lines:
@@ -92,6 +94,8 @@ class Recorder:
                    "ElapsedSeconds": ElapsedSeconds, "ExitCode": ExitCode,
                    "TimedOut": TimedOut, "ProcessError": ProcessError,
                    "Stdout": StdoutName, "Stderr": StderrName,
+                   "StdoutSha256": hashlib.sha256(StdoutBytes).hexdigest(),
+                   "StderrSha256": hashlib.sha256(StderrBytes).hexdigest(),
                    "Parsed": Parsed, "ParseError": ParseError}
         self.Calls.append(Receipt)
         self.Save()

@@ -1,6 +1,7 @@
 """Focused controller tests; no native benchmark process is launched."""
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -66,6 +67,10 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("physical fail", (Output / Failed[0]["Stderr"]).read_text(encoding="utf-8"))
             self.assertIn('"BenchmarkQualityPass": false',
                           (Output / Failed[0]["Stdout"]).read_text(encoding="utf-8"))
+            self.assertEqual(Failed[0]["StdoutSha256"], hashlib.sha256(
+                (Output / Failed[0]["Stdout"]).read_bytes()).hexdigest())
+            self.assertEqual(Failed[0]["StderrSha256"], hashlib.sha256(
+                (Output / Failed[0]["Stderr"]).read_bytes()).hexdigest())
             self.assertEqual(Failed[0]["Command"][0], str(Stock))
             self.assertEqual(len(Failed[0]["BinarySha256"]), 64)
             self.assertGreaterEqual(Failed[0]["ElapsedSeconds"], 0.0)
