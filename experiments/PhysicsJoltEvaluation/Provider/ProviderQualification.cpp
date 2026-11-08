@@ -737,6 +737,7 @@ namespace {
         auto MeshTransition = Floor;
         MeshTransition.Shape.Kind = PhysicsShapeKind::StaticTriangleMesh;
         MeshTransition.Shape.Mesh = Mesh;
+        MeshTransition.Transform.Position = {0, 0, 0};
         const auto BeforeTransitionResidency = Provider.Rigid->GetCollisionResidency();
         Require(Provider.Rigid->UpdateBody(FloorId, MeshTransition).Succeeded() &&
             Provider.Rigid->GetBodyState(FloorId)->Description.Shape.Kind ==
