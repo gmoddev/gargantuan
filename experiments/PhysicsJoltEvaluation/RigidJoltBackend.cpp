@@ -921,6 +921,11 @@ namespace {
             !FiniteNonnegative(Material.Thickness) || Definition.ResolutionX < 2 ||
             Definition.ResolutionY < 2 || Definition.Attachments.size() > Limits.MaximumAttachments)
             return std::nullopt;
+        if (Material.StretchCompliance <= 0 ||
+            (Definition.Kind == SoftBodyKind::Cloth && Material.BendCompliance <= 0) ||
+            (Definition.Kind == SoftBodyKind::Rubber &&
+                (Material.ShapeCompliance <= 0 || Material.VolumeCompliance <= 0)))
+            return std::nullopt;
         const std::uint64_t X = Definition.ResolutionX, Y = Definition.ResolutionY;
         const std::uint64_t Z = Definition.Kind == SoftBodyKind::Cloth ? 1 : Definition.ResolutionZ;
         const auto VertexLimit = std::min(Limits.MaximumVerticesPerBody, MaximumSoftBodyVertices);
@@ -991,6 +996,10 @@ namespace {
                     Result.Shared->mVolumeConstraints.emplace_back(B, C, E, H, Material.VolumeCompliance);
                     Result.Shared->mVolumeConstraints.emplace_back(B, E, F, H, Material.VolumeCompliance);
                     Result.Shared->mVolumeConstraints.emplace_back(C, G, E, H, Material.VolumeCompliance);
+                    Edge(A, H, Material.ShapeCompliance);
+                    Edge(B, G, Material.ShapeCompliance);
+                    Edge(C, F, Material.ShapeCompliance);
+                    Edge(D, E, Material.ShapeCompliance);
                     if (K == 0) { Face(A, B, D); Face(A, D, C); }
                     if (K + 2 == Z) { Face(E, G, H); Face(E, H, F); }
                     if (J == 0) { Face(A, E, F); Face(A, F, B); }

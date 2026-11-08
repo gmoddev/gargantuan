@@ -146,6 +146,10 @@ namespace {
         Cloth.Material.StretchCompliance = 1.0e-6f;
         for (std::uint32_t X = 0; X < 9; ++X)
             Cloth.Attachments.push_back({X, {-2.0f + 0.5f * float(X), 2, 0}});
+        auto HardCloth = Cloth;
+        HardCloth.Material.StretchCompliance = 0.0f;
+        Require(!Provider.Soft->CreateBody(HardCloth).IsValid(),
+            "unqualified exact-hard cloth was admitted");
         const auto Fabric = Provider.Soft->CreateBody(Cloth);
         Require(Fabric.IsValid(), "cloth admission failed");
         const auto Sphere = Provider.Rigid->CreateBody(Ball({0, 0, -1.2f}));

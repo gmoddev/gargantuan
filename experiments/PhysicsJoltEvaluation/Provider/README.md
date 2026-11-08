@@ -29,6 +29,9 @@ increment topology and vertex revisions. Each rigid step advances both body
 kinds in the same Jolt world; the following soft step publishes those already
 advanced states. No parallel Instance authority or backend handle crosses the
 Engine boundary.
+Exact-hard stretch constraints and exact-hard cloth bend or rubber shape/volume
+constraints are rejected at admission because the corrected numerical profile
+has not qualified those constraint graphs.
 The unified factory fixes the experimental world at two Jolt half-frame updates
 with eight collision steps each, even when `WorldRoot` supplies its production
 four substeps. The plain rigid factory still honors its requested substep count.
@@ -56,6 +59,7 @@ Current limitations before production consideration:
 - Cloth, rubber, and reciprocal contact are represented by physical fixtures;
   they are not a quality-matched parity or performance claim. Self collision,
   swept soft contact, and long-duration material calibration remain unqualified.
-  Jolt's native regular-lattice rubber uses edge and tetrahedral-volume
-  constraints, but the Engine's `ShapeCompliance` material setting has no
-  equivalent shape-matching path in this adapter yet.
+  Jolt's native regular-lattice rubber uses edge, cell-diagonal, and
+  tetrahedral-volume constraints. `ShapeCompliance` controls cell-diagonal
+  compliance here; that is an approximation of Engine XPBD shape matching,
+  not a calibrated equivalent.
