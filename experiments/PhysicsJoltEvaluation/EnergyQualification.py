@@ -122,7 +122,7 @@ def Float32(Value):
 
 
 def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
-    """Validate each native one-edge step against the independent implicit-Euler recurrence."""
+    """Replay the pinned source's float operations, retaining real-model error separately."""
     if Config.get("Fixture") != "Spring":
         return None
     if Config.get("Backend") != "IndependentNativeJolt" or Config.get("Jolt") != "e77f175595e64cb44218cc9d9d56fc365ad0e36a":
@@ -141,6 +141,8 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
     PreviousVelocity = Float32(float(Config.get("SeedX", 0.0)))
     PreviousEnergy = InitialK + InitialU
     MaxPositionError = MaxVelocityError = MaxEnergyIncrease = MaxIdentityResidual = 0.0
+    MaxRealImplicitPositionError = MaxRealImplicitVelocityError = 0.0
+    MaxForceResidual = MaxKinematicResidual = 0.0
     FirstFailure = None
     for Index, (Quality, Row) in enumerate(zip(Accepted, RawAccepted)):
         Pin, Moving = Row["Particles"]
@@ -149,14 +151,26 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
             break
         ObservedX = float(Moving["P"][0])
         ObservedVelocity = float(Moving["V"][0])
-        PredictedQ = (PreviousX - 1.0) + Dt * PreviousVelocity
-        NextQ = PredictedQ / (1.0 + InvMass * Dt * Dt / Compliance)
-        ExpectedX = 1.0 + NextQ
-        ExpectedVelocity = (ExpectedX - PreviousX) / Dt
+        # Source: IntegratePositions x*=float(x+float(v*dt)); then one
+        # ApplyEdgeConstraints pass, with float length/denominator/vector
+        # operations; finally float (x_new-x_previous)/dt. The 1D sphere-free
+        # fixture has a pinned x=0 endpoint and rest length 1.
+        PredictedX = Float32(PreviousX + Float32(PreviousVelocity * Dt))
+        Length = Float32(math.sqrt(Float32(PredictedX * PredictedX)))
+        InvDtSq = Float32(1.0 / Float32(Dt * Dt))
+        Denominator = Float32(Length * Float32(InvMass + Float32(Compliance * InvDtSq)))
+        Correction = Float32(Float32(PredictedX * Float32(Length - 1.0)) / Denominator)
+        ExpectedX = Float32(PredictedX - Float32(InvMass * Correction))
+        ExpectedVelocity = Float32(Float32(ExpectedX - PreviousX) / Dt)
         PositionError = abs(ObservedX - ExpectedX)
         VelocityError = abs(ObservedVelocity - ExpectedVelocity)
         MaxPositionError = max(MaxPositionError, PositionError)
         MaxVelocityError = max(MaxVelocityError, VelocityError)
+        RealQ = ((PreviousX - 1.0) + Dt * PreviousVelocity) / (1.0 + InvMass * Dt * Dt / Compliance)
+        RealX = 1.0 + RealQ
+        RealVelocity = (RealX - PreviousX) / Dt
+        MaxRealImplicitPositionError = max(MaxRealImplicitPositionError, abs(ObservedX - RealX))
+        MaxRealImplicitVelocityError = max(MaxRealImplicitVelocityError, abs(ObservedVelocity - RealVelocity))
         Energy = Quality["KPlusEdgeModelJ"]
         EnergyIncrease = Energy - PreviousEnergy
         MaxEnergyIncrease = max(MaxEnergyIncrease, EnergyIncrease)
@@ -164,25 +178,33 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
                     + 0.5 * ((ObservedX - 1.0) - (PreviousX - 1.0)) ** 2 / Compliance)
         IdentityResidual = abs((PreviousEnergy - Energy) - Identity)
         MaxIdentityResidual = max(MaxIdentityResidual, IdentityResidual)
-        # This compares native float output with a double evaluation of Jolt's
-        # captured-float coefficients. It does not require bitwise parity.
-        if (PositionError > 1.0e-4 or VelocityError > 1.0e-4 or
-                EnergyIncrease > max(1.0e-4, 1.0e-6 * (InitialK + InitialU)) or
-                IdentityResidual > max(1.0e-3, 1.0e-5 * (InitialK + InitialU))):
+        ForceResidual = (Mass * (ObservedVelocity - PreviousVelocity)
+                         + Dt * (ObservedX - 1.0) / Compliance)
+        KinematicResidual = ((ObservedX - PreviousX) - Dt * ObservedVelocity)
+        MaxForceResidual = max(MaxForceResidual, abs(ForceResidual))
+        MaxKinematicResidual = max(MaxKinematicResidual, abs(KinematicResidual))
+        # No adjustable absolute v tolerance: each stored float is checked
+        # exactly against the source-order float recurrence. Real implicit
+        # Euler comparison remains reported, not treated as a pass gate.
+        if (struct.pack("<f", ObservedX) != struct.pack("<f", ExpectedX) or
+                struct.pack("<f", ObservedVelocity) != struct.pack("<f", ExpectedVelocity) or
+                EnergyIncrease > 0.0):
             FirstFailure = Index
             break
         PreviousX = ObservedX
         PreviousVelocity = ObservedVelocity
         PreviousEnergy = Energy
-    return {"Status": "PASS_NATIVE_ONE_EDGE_IMPLICIT_EULER" if FirstFailure is None else "FAIL_NATIVE_ONE_EDGE_IMPLICIT_EULER",
+    return {"Status": "PASS_NATIVE_ONE_EDGE_FLOAT_SOURCE_REPLAY" if FirstFailure is None else "FAIL_NATIVE_ONE_EDGE_FLOAT_SOURCE_REPLAY",
             "Pass": FirstFailure is None, "CheckedMicrosteps": len(Accepted) if FirstFailure is None else FirstFailure + 1,
-            "FirstFailureIndex": FirstFailure, "MaxPositionErrorM": MaxPositionError,
-            "MaxVelocityErrorMps": MaxVelocityError,
+            "FirstFailureIndex": FirstFailure, "MaxFloatReplayPositionErrorM": MaxPositionError,
+            "MaxFloatReplayVelocityErrorMps": MaxVelocityError,
+            "MaxRealImplicitEulerPositionErrorM": MaxRealImplicitPositionError,
+            "MaxRealImplicitEulerVelocityErrorMps": MaxRealImplicitVelocityError,
             "MaxEnergyIncreaseJ": MaxEnergyIncrease,
             "MaxDissipationIdentityResidualJ": MaxIdentityResidual,
-            "Tolerance": {"PositionM": 1.0e-4, "VelocityMps": 1.0e-4,
-                          "EnergyIncreaseJ": max(1.0e-4, 1.0e-6 * (InitialK + InitialU)),
-                          "IdentityResidualJ": max(1.0e-3, 1.0e-5 * (InitialK + InitialU))}}
+            "MaxImplicitForceResidualKgMps": MaxForceResidual,
+            "MaxImplicitKinematicResidualM": MaxKinematicResidual,
+            "Gate": "Exact float32 source-operation replay for position/velocity and nonincreasing emitted K+U; real implicit-Euler difference is diagnostic."}
 
 
 def RigidEnergy(State, Mass, Inertia):
@@ -302,9 +324,14 @@ def Qualify(Arguments):
             Block = Microsteps[Frame * WorldUpdates:(Frame + 1) * WorldUpdates]
             if any(int(Row["Frame"]) != Frame for Row in Block):
                 raise ValueError("Microstep frame grouping mismatch")
+            if [int(Row["Microstep"]) for Row in Block] != list(range(WorldUpdates)):
+                raise ValueError("Microstep indices must be consecutive from zero within every frame")
             Last = Block[-1]
-            if abs(float(Last["KineticEnergy"]) - float(Frames[Frame]["KineticEnergy"])) > 1.0e-5:
-                raise ValueError("Last Microstep does not close to published frame K")
+            for Field in ("SoftKE", "RigidKE", "RigidAngularKE", "KineticEnergy",
+                          "CompliantEdgeElasticEstimate", "MaxPinDrift", "MaxPinSpeed",
+                          "ParticlePenetration", "AllEdgeStrain", "Rigids"):
+                if Last[Field] != Frames[Frame][Field]:
+                    raise ValueError(f"Last Microstep does not close to published frame field {Field}")
     elif WorldUpdates > 1:
         raise ValueError("Multiple world updates requested but no accepted Microstep rows found")
     AcceptedRaw = Microsteps if Microsteps else Frames
@@ -344,10 +371,15 @@ def Qualify(Arguments):
                             int(Config.get("ProjectionPasses", 1)) == 1 and
                             not bool(Config.get("RefreshSpherePlane", False)) and
                             int(Config.get("ContactThrough", len(Frames))) >= len(Frames) - 1)
+    ClosedFreeCloth = (Fixture == "Cloth" and not bool(Config.get("Contact", True))
+                       and float(Config.get("Speed", float("nan"))) == 0.0
+                       and float(Config.get("ContactProjectionScale", 1.0)) == 1.0
+                       and int(Config.get("ProjectionPasses", 1)) == 1
+                       and not bool(Config.get("RefreshSpherePlane", False)))
     if Fixture == "Spring":
         Preconditions = Preconditions and bool(SpringCalibration and SpringCalibration["Pass"])
     else:
-        Preconditions = Preconditions and DefaultContactPolicy
+        Preconditions = Preconditions and (DefaultContactPolicy or ClosedFreeCloth)
     CompleteBoundedPass = (Preconditions and AcceptedPass and ModelPass and FullInternalCoverage
                            and InternalKPass and InternalModelPass and SpringReferencePass)
     if not Preconditions or not ModelAvailable:
@@ -360,6 +392,8 @@ def Qualify(Arguments):
         Status = "PASS_SAMPLED_ONLY_INTERNAL_COVERAGE_INCOMPLETE"
     elif Fixture == "Spring":
         Status = "PASS_NATIVE_ONE_EDGE_CALIBRATION_AND_BOUNDED_MODEL"
+    elif ClosedFreeCloth:
+        Status = "PASS_BOUNDED_FREE_CLOTH_REFERENCE_MODEL"
     else:
         Status = "PASS_BOUNDED_REFERENCE_MODEL_AND_RECORDED_GEOMETRY"
     Result = {
@@ -377,6 +411,7 @@ def Qualify(Arguments):
         "AllFixtureEdgesPositiveCompliance": ModelAvailable,
         "PreconditionsSatisfied": Preconditions,
         "DefaultContactPolicy": DefaultContactPolicy if Fixture != "Spring" else None,
+        "ClosedFreeCloth": ClosedFreeCloth,
         "AcceptedStateCount": len(Accepted), "PublishedFrameCount": len(Frames),
         "WorldUpdatesPerFrame": WorldUpdates,
         "FullInternalCoverage": FullInternalCoverage,

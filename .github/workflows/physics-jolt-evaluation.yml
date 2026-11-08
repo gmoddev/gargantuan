@@ -24,6 +24,10 @@ on:
         description: Pristine same-soft-budget coupling schedules and converged constraint tests only
         type: boolean
         default: false
+      solver_qualification_only:
+        description: Independently qualify the measured U48 material profile on Linux and Windows
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -35,7 +39,7 @@ concurrency:
 
 jobs:
   linux-release-comparison:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only)
     name: Ubuntu Release / experimental quality and timing
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -391,3 +395,111 @@ jobs:
           name: jolt-converged-resolution-evidence
           if-no-files-found: error
           path: convergence-evidence/
+
+  independent-profile-qualification:
+    if: github.event_name == 'workflow_dispatch' && inputs.solver_qualification_only
+    name: U48 quality, repeats and worker budgets / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            suffix: ''
+          - os: windows-2025-vs2026
+            suffix: '.exe'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - run: git submodule update --init --depth 1 vendor/json vendor/box3d
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: jrouwe/JoltPhysics
+          ref: e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          path: .evaluation-jolt
+          persist-credentials: false
+      - name: Locate Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $Installation) { throw 'MSVC toolchain unavailable' }
+          "VSDEVCMD=$(Join-Path $Installation 'Common7\Tools\VsDevCmd.bat')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build pristine native Linux qualification
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir native-qualification
+          git rev-parse HEAD > native-qualification/ExecutedSource.txt
+          c++ --version > native-qualification/Compiler.txt
+          lscpu > native-qualification/Cpu.txt
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-native-qualified -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON \
+            -DDIAGNOSTIC_JOLT_ROOT="$GITHUB_WORKSPACE/.evaluation-jolt" -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" \
+            2>&1 | tee native-qualification/Configure.log
+          cmake --build build-native-qualified --target PhysicsJoltNativeCouplingInstrumented --parallel 2 \
+            2>&1 | tee native-qualification/Build.log
+      - name: Build pristine native Windows qualification
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          mkdir native-qualification
+          git rev-parse HEAD > native-qualification\ExecutedSource.txt
+          cl /Bv > native-qualification\Compiler.txt 2>&1
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-native-qualified -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_JOLT_ROOT="%CD%\.evaluation-jolt" -DEVALUATION_SOURCE_ROOT="%CD%" > native-qualification\Configure.log 2>&1
+          if errorlevel 1 (type native-qualification\Configure.log & exit /b 1)
+          cmake --build build-native-qualified --target PhysicsJoltNativeCouplingInstrumented --parallel 2 > native-qualification\Build.log 2>&1
+          if errorlevel 1 (type native-qualification\Build.log & exit /b 1)
+      - name: Run every accepted-state bound, independent repeat and timing parity
+        run: >-
+          python experiments/PhysicsJoltEvaluation/RunPristineQualification.py
+          --native build-native-qualified/PhysicsJoltNativeCouplingInstrumented${{ matrix.suffix }}
+          --output native-qualification/Runs
+      - name: Preserve native qualification and rejected controls
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-profile-qualification-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            native-qualification/
+            build-native-qualified/PhysicsJoltNativeCouplingInstrumented${{ matrix.suffix }}
+            build-native-qualified/CMakeCache.txt
+            build-native-qualified/compile_commands.json
+
+  fixed-state-convergence:
+    if: github.event_name == 'workflow_dispatch' && inputs.solver_qualification_only
+    name: Fixed predicted-state convergence discriminator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - run: git submodule update --init --depth 1 vendor/json
+      - name: Build and apply sweeps to the same captured state
+        run: |
+          set -euo pipefail
+          mkdir fixed-state-evidence
+          git rev-parse HEAD > fixed-state-evidence/ExecutedSource.txt
+          c++ -std=c++23 -O2 -ffp-contract=off -fno-fast-math -Ivendor/json/include experiments/PhysicsJoltEvaluation/ConvergedProjectionReplay.cpp -o fixed-state-evidence/Replay
+          c++ -std=c++23 -O2 -ffp-contract=off -fno-fast-math -Ivendor/json/include experiments/PhysicsJoltEvaluation/ProbeProjectionConvergence.cpp -o fixed-state-evidence/Probe
+          fixed-state-evidence/Replay --graph experiments/PhysicsJoltEvaluation/CausalFixtures/NativeOptimizedClothGraph.json --precision float --rest captured --steps 4 --frames 1 --stage-limit 58 --particles 1 --projection-iterations 1 > fixed-state-evidence/Stages.jsonl
+          for Precision in float double; do
+            fixed-state-evidence/Probe --graph experiments/PhysicsJoltEvaluation/CausalFixtures/NativeOptimizedClothGraph.json --stages fixed-state-evidence/Stages.jsonl --precision "$Precision" --rest captured --microstep 57 --sweeps 16384 > "fixed-state-evidence/$Precision.jsonl"
+          done
+      - name: Preserve fixed-state convergence evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-fixed-state-convergence-evidence
+          if-no-files-found: error
+          path: fixed-state-evidence/
