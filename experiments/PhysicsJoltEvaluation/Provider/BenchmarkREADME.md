@@ -198,6 +198,18 @@ for each frame plus peak and final values in the pair receipt. Use a small
 trace matrix, such as one 16K cloth scene, one worker, 30 measured frames,
 10 warmup frames, and one repeat. Trace runs remain timing-instrumented and
 unranked; run fresh pairs without the flag for timing after reviewing curves.
+
+The copied [16K cloth fairness review](BenchmarkFairnessReview.md) covers the
+Windows no-collider experimental XPBD 32-substep reference over 40 frames
+(0.667 seconds), with Engine `96b353467` for the quality trace,
+Engine `1b7e2147` for three fresh timing pairs per worker cap, and Jolt
+`d8c46588` for both. Raw pointwise trace differences peak at 0.003911 m RMS
+and 0.010911 m maximum. Uninstrumented median per-run mean provider-call cost
+is 182.876/264.236 ms (Jolt/XPBD reference) at cap 1 and
+67.2247/264.051 ms at cap 8. All reference calibrations pass, raw receipt
+hashes match, and every timing pair remains unranked. These figures do not
+describe production-default XPBD quality or a global solver optimum.
+
 Request `--couplings none driven-sphere` to run the driven response control;
 the runner refuses driven-only matrices.
 
