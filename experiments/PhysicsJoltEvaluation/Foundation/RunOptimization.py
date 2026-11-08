@@ -55,4 +55,4 @@ for Mode in ['global', 'selective']:
 Run('Qualification', [sys.executable, Evaluation / 'Optimization/RunSelectiveQualification.py',
                       '--stock', Binaries['Stock'], '--patched', Binaries['Patched'],
                       '--frames', '120', '--isolated-bodies', '128', '--repeats', '4',
-                      '--output', Evidence / 'Qualification.json'])
+                      '--output-dir', Evidence / 'Qualification'])

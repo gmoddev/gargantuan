@@ -3,7 +3,13 @@ on:
   push:
     branches: [experiment/jolt-optimized-foundation-20261108]
     paths:
-      - 'experiments/PhysicsJoltEvaluation/**'
+      - 'experiments/PhysicsJoltEvaluation/Foundation/RunQualification.py'
+      - 'experiments/PhysicsJoltEvaluation/Foundation/CMakeLists.txt'
+      - 'experiments/PhysicsJoltEvaluation/ExperimentalVelocityReconstruction.hpp'
+      - 'experiments/PhysicsJoltEvaluation/SoftFixtures.hpp'
+      - 'experiments/PhysicsJoltEvaluation/ScheduledCouplingDiagnostic.cpp'
+      - 'experiments/PhysicsJoltEvaluation/UnifiedCouplingEvaluation.cpp'
+      - 'experiments/PhysicsJoltEvaluation/MakeEnergyObservation.py'
       - '.github/workflows/physics-jolt-foundation.yml'
   workflow_dispatch:
 permissions:

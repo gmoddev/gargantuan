@@ -93,6 +93,11 @@ at worker budgets 1/2/8, with four default repeats and counterbalanced
 global/selective and stock/patched launch order. It rejects any benchmark quality
 failure, any global/selective coupled trajectory hash mismatch, and any
 repeat or cross-worker coupled hash drift before reporting paired costs.
+Pass `--output-dir` to retain every process's command, binary hash, elapsed
+time, exit code, stdout and stderr, with `Receipts.json` updated after each
+attempt. A stock physical failure remains recorded and unranked while the
+maintained solver continues. `Summary.json` contains a speedup only for a
+backend whose benchmark physical and hash gates pass for every worker/repeat.
 Stock difference and maintained delta are separate physical configurations;
 the runner makes no cross-backend equivalence or full internal energy claim.
 At `N` isolated active rigids, the expected cost is roughly
