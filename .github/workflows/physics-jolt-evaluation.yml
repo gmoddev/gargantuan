@@ -36,6 +36,10 @@ on:
         description: Final unified fixture qualification and bounded Engine/XPBD architecture comparison
         type: boolean
         default: false
+      schedule_energy_only:
+        description: Internal energy, pristine parity and production-stiffness schedule tests
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,7 +51,7 @@ concurrency:
 
 jobs:
   linux-release-comparison:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only && !inputs.unified_screen_only && !inputs.unified_qualification_only)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only && !inputs.unified_screen_only && !inputs.unified_qualification_only && !inputs.schedule_energy_only)
     name: Ubuntu Release / experimental quality and timing
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -672,6 +676,112 @@ jobs:
             build-unified-qualified/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
             build-unified-qualified/CMakeCache.txt
             build-unified-qualified/compile_commands.json
+
+  schedule-internal-energy:
+    if: github.event_name == 'workflow_dispatch' && inputs.schedule_energy_only
+    name: Internal solver energy and pristine parity / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            suffix: ''
+          - os: windows-2025-vs2026
+            suffix: '.exe'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - run: git submodule update --init --depth 1 vendor/json vendor/box3d
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: jrouwe/JoltPhysics
+          ref: e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          path: .evaluation-jolt
+          persist-credentials: false
+      - name: Preserve inputs and generate the isolated observational patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir schedule-energy
+          git rev-parse HEAD > schedule-energy/ExecutedSource.txt
+          git rev-parse 'HEAD^{tree}' > schedule-energy/ExecutedTree.txt
+          git submodule status > schedule-energy/Submodules.txt
+          python experiments/PhysicsJoltEvaluation/MakeEnergyObservation.py .evaluation-jolt schedule-energy/EnergyObservation.patch
+          git -C .evaluation-jolt worktree add --detach ../.energy-jolt e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          git -C .energy-jolt apply "$GITHUB_WORKSPACE/schedule-energy/EnergyObservation.patch"
+          git -C .energy-jolt diff --binary > schedule-energy/AppliedJolt.patch
+      - name: Locate Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $Installation) { throw 'MSVC toolchain unavailable' }
+          "VSDEVCMD=$(Join-Path $Installation 'Common7\Tools\VsDevCmd.bat')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Compile pristine and observer Linux targets
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ --version > schedule-energy/Compiler.txt
+          lscpu > schedule-energy/Cpu.txt
+          for Kind in clean observed; do
+            Root=.evaluation-jolt; Clean=ON; Observer=OFF
+            if [ "$Kind" = observed ]; then Root=.energy-jolt; Clean=OFF; Observer=ON; fi
+            cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B "build-energy-$Kind" -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN="$Clean" -DDIAGNOSTIC_ENERGY_OBSERVER="$Observer" -DDIAGNOSTIC_JOLT_ROOT="$GITHUB_WORKSPACE/$Root" -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" 2>&1 | tee "schedule-energy/Configure-$Kind.log"
+            cmake --build "build-energy-$Kind" --target PhysicsJoltScheduledCouplingDiagnostic PhysicsJoltUnifiedCouplingQualification --parallel 2 2>&1 | tee "schedule-energy/Build-$Kind.log"
+            cp "build-energy-$Kind/CMakeCache.txt" "schedule-energy/CMakeCache-$Kind.txt"
+            cp "build-energy-$Kind/compile_commands.json" "schedule-energy/CompileCommands-$Kind.json"
+          done
+      - name: Compile pristine and observer Windows targets
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          cl /Bv > schedule-energy\Compiler.txt 2>&1
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-energy-clean -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_JOLT_ROOT="%CD%\.evaluation-jolt" -DEVALUATION_SOURCE_ROOT="%CD%" > schedule-energy\Configure-clean.log 2>&1
+          if errorlevel 1 (type schedule-energy\Configure-clean.log & exit /b 1)
+          cmake --build build-energy-clean --target PhysicsJoltScheduledCouplingDiagnostic PhysicsJoltUnifiedCouplingQualification --parallel 2 > schedule-energy\Build-clean.log 2>&1
+          if errorlevel 1 (type schedule-energy\Build-clean.log & exit /b 1)
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-energy-observed -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=OFF -DDIAGNOSTIC_ENERGY_OBSERVER=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_JOLT_ROOT="%CD%\.energy-jolt" -DEVALUATION_SOURCE_ROOT="%CD%" > schedule-energy\Configure-observed.log 2>&1
+          if errorlevel 1 (type schedule-energy\Configure-observed.log & exit /b 1)
+          cmake --build build-energy-observed --target PhysicsJoltScheduledCouplingDiagnostic PhysicsJoltUnifiedCouplingQualification --parallel 2 > schedule-energy\Build-observed.log 2>&1
+          if errorlevel 1 (type schedule-energy\Build-observed.log & exit /b 1)
+      - name: Measure every inner state and verify observer parity
+        run: >-
+          python experiments/PhysicsJoltEvaluation/RunScheduledEnergyQualification.py
+          --pristine build-energy-clean/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
+          --observed build-energy-observed/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
+          --output schedule-energy/Runs
+      - name: Screen all unified fixtures at the same material and solver cadences
+        run: >-
+          python experiments/PhysicsJoltEvaluation/RunUnifiedScheduleScreen.py
+          --pristine build-energy-clean/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
+          --observed build-energy-observed/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
+          --output schedule-energy/Unified
+      - name: Preserve energy evidence and compiled dependency caches
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-schedule-energy-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            schedule-energy/
+            build-energy-clean/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
+            build-energy-clean/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
+            build-energy-observed/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
+            build-energy-observed/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
+            build-energy-clean/JoltBuild/*.a
+            build-energy-clean/JoltBuild/*.lib
+            build-energy-observed/JoltBuild/*.a
+            build-energy-observed/JoltBuild/*.lib
+            build-energy-clean/compile_commands.json
+            build-energy-observed/compile_commands.json
 
   engine-architecture-comparison:
     if: github.event_name == 'workflow_dispatch' && inputs.unified_qualification_only

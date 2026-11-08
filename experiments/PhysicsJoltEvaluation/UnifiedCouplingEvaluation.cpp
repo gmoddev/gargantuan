@@ -9,6 +9,11 @@
 #endif
 #include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
 #include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
+#ifdef PHYSICS_ENERGY_OBSERVER
+#include <Jolt/Physics/SoftBody/SoftBodyUpdateContext.h>
+#include <functional>
+#include <mutex>
+#endif
 
 #include <nlohmann/json.hpp>
 
@@ -16,12 +21,24 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+
+#ifdef PHYSICS_ENERGY_OBSERVER
+namespace {
+    std::function<void(const void *, const void *, double)> PhysicsJoltEnergyCallback;
+}
+extern "C" void PhysicsJoltEnergyState(const void *Motion, const void *Context,
+                                         double PendingRigidKineticDelta) {
+    if (PhysicsJoltEnergyCallback)
+        PhysicsJoltEnergyCallback(Motion, Context, PendingRigidKineticDelta);
+}
+#endif
 
 namespace {
     using PhysicsJoltEvaluation::JoltWorld;
@@ -71,7 +88,7 @@ namespace {
             throw std::runtime_error("[Physics:Coupling] Invalid case");
         if (Result.Workers < 1 || Result.Workers > 8 || Result.Frames < 1 || Result.Frames > 600 ||
             (Result.CollisionSteps != 1 && Result.CollisionSteps != 4) ||
-            Result.WorldUpdates < 1 || Result.WorldUpdates > 96 ||
+            Result.WorldUpdates < 1 || Result.WorldUpdates > 384 ||
             Result.SoftIterations < 1 || Result.SoftIterations > 64 ||
             !std::isfinite(Result.StretchCompliance) || Result.StretchCompliance < 0.0f)
             throw std::runtime_error("[Physics:Coupling] Option outside bounded range");
@@ -119,8 +136,9 @@ namespace {
     SoftObservation ObserveSoft(const JoltWorld &World, JPH::BodyID Id,
                                 const JPH::SoftBodySharedSettings &Shared,
                                 JPH::Vec3 Gravity, JPH::RVec3 InitialOrigin,
-                                JPH::Vec3 GravityReferenceOrigin) {
-        JPH::BodyLockRead Lock(World.World.GetBodyLockInterface(), Id);
+                                JPH::Vec3 GravityReferenceOrigin,
+                                const JPH::BodyLockInterface &LockInterface) {
+        JPH::BodyLockRead Lock(LockInterface, Id);
         if (!Lock.Succeeded()) throw std::runtime_error("[Physics:Coupling] Soft body lock failed");
         const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(Lock.GetBody().GetMotionProperties());
         const auto &Vertices = Motion->GetVertices();
@@ -240,13 +258,20 @@ namespace {
                 ++ActiveVolumeConstraints;
                 if (!(Volume.mCompliance > 0.0f)) ++NonpositiveActiveConstraints;
             }
+        }
         const bool UnsupportedConstraintKinds = !Shared->mDihedralBendConstraints.empty() ||
             !Shared->mSkinnedConstraints.empty() || !Shared->mLRAConstraints.empty() ||
             !Shared->mRodStretchShearConstraints.empty() || !Shared->mRodBendTwistConstraints.empty();
         const bool ReferenceModelPreconditions = !UnsupportedConstraintKinds &&
             NonpositiveActiveConstraints == 0;
+#ifdef PHYSICS_ENERGY_OBSERVER
+        bool FullInternalObservationCoverage = Config.ObserveAccepted;
+        constexpr bool EnergyObserverEnabled = true;
+#else
         const bool FullInternalObservationCoverage = Config.ObserveAccepted &&
             Config.CollisionSteps == 1 && Config.SoftIterations == 1;
+        constexpr bool EnergyObserverEnabled = false;
+#endif
         if (IsRubber) for (auto &Vertex : Shared->mVertices) Vertex.mVelocity = JPH::Float3(4.0f, 0.0f, 0.0f);
         auto Soft = World.AddSoft(Shared, SoftOrigin, Config.SoftIterations, IsRubber, 2.4f);
         World.World.SetGravity(Horizontal ? JPH::Vec3(0.0f, -9.81f, 0.0f) : JPH::Vec3::sZero());
@@ -296,9 +321,16 @@ namespace {
             static_cast<float>(SoftOrigin.GetY()), static_cast<float>(SoftOrigin.GetZ()));
         const auto CaptureState = [&](int Frame, int Update, double StepMs,
                                       std::uint64_t UpdateContacts,
-                                      const Json &UpdateContactsPerRigid) -> Json {
+                                      const Json &UpdateContactsPerRigid,
+                                      bool NoLock = false,
+                                      double PendingRigidKineticDelta = 0.0) -> Json {
+            const JPH::BodyLockInterface &LockInterface = NoLock ?
+                static_cast<const JPH::BodyLockInterface &>(World.World.GetBodyLockInterfaceNoLock()) :
+                static_cast<const JPH::BodyLockInterface &>(World.World.GetBodyLockInterface());
+            const JPH::BodyInterface &BodyInterface = NoLock ?
+                World.World.GetBodyInterfaceNoLock() : World.World.GetBodyInterface();
             const auto SoftState = ObserveSoft(World, Soft, *Shared, Gravity, SoftOrigin,
-                GravityReferenceOrigin);
+                GravityReferenceOrigin, LockInterface);
             bool StateFinite = SoftState.Finite;
             Json RigidStates = Json::array();
             JPH::Vec3 RigidMomentum = JPH::Vec3::sZero();
@@ -307,7 +339,7 @@ namespace {
             double RigidGravitationalChange = 0.0;
             double RigidGravitationalAbsolute = 0.0;
             for (std::size_t Index = 0; Index < Rigids.size(); ++Index) {
-                JPH::BodyLockRead Lock(World.World.GetBodyLockInterface(), Rigids[Index]);
+                JPH::BodyLockRead Lock(LockInterface, Rigids[Index]);
                 if (!Lock.Succeeded()) throw std::runtime_error("[Physics:Coupling] Rigid body lock failed");
                 const auto &Body = Lock.GetBody();
                 const auto Velocity = Body.GetLinearVelocity();
@@ -345,7 +377,7 @@ namespace {
             }
             double Penetration = 0.0;
             {
-                JPH::BodyLockRead Lock(World.World.GetBodyLockInterface(), Soft);
+                JPH::BodyLockRead Lock(LockInterface, Soft);
                 if (!Lock.Succeeded()) throw std::runtime_error("[Physics:Coupling] Jolt penetration lock failed");
                 const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(
                     Lock.GetBody().GetMotionProperties());
@@ -354,7 +386,7 @@ namespace {
                     const auto Position = Vertex.mPosition + JPH::Vec3(static_cast<float>(SoftPosition.GetX()),
                         static_cast<float>(SoftPosition.GetY()), static_cast<float>(SoftPosition.GetZ()));
                     for (auto Id : Rigids) {
-                        const auto RigidPosition = World.World.GetBodyInterface().GetPosition(Id);
+                        const auto RigidPosition = BodyInterface.GetPosition(Id);
                         const auto Distance = (Position - JPH::Vec3(static_cast<float>(RigidPosition.GetX()),
                             static_cast<float>(RigidPosition.GetY()), static_cast<float>(RigidPosition.GetZ()))).Length();
                         Penetration = std::max(Penetration,
@@ -362,7 +394,8 @@ namespace {
                     }
                 }
             }
-            const double AngularInclusiveK = RigidLinearK + RigidAngularK + SoftState.KineticEnergy;
+            const double AngularInclusiveK = RigidLinearK + RigidAngularK +
+                PendingRigidKineticDelta + SoftState.KineticEnergy;
             const double EdgeU = SoftState.CompliantEdgeElasticEstimate;
             const double VolumeU = SoftState.CompliantVolumeElasticEstimate;
             const double GravityPotential = SoftState.GravitationalPotentialChange + RigidGravitationalChange;
@@ -380,6 +413,7 @@ namespace {
                     {"KineticEnergy", RigidLinearK + SoftState.KineticEnergy},
                     {"SoftKineticEnergy", SoftState.KineticEnergy},
                     {"RigidAngularKineticEnergy", RigidAngularK},
+                    {"PendingRigidKineticDelta", PendingRigidKineticDelta},
                     {"AngularInclusiveKineticEnergy", AngularInclusiveK},
                     {"CompliantEdgeElasticEstimate", EdgeU},
                     {"CompliantVolumeElasticEstimate", VolumeU},
@@ -415,6 +449,11 @@ namespace {
         int MaxAngularInclusiveKUpdate = -1;
         int MaxReferenceMechanicalEnergyFrame = -1;
         int MaxReferenceMechanicalEnergyUpdate = -1;
+        std::size_t ObservedInternalIntegrations = 0;
+        const std::size_t ExpectedInternalIntegrations = static_cast<std::size_t>(Config.Frames) *
+            static_cast<std::size_t>(Config.WorldUpdates) *
+            static_cast<std::size_t>(Config.CollisionSteps) *
+            static_cast<std::size_t>(Config.SoftIterations);
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             if (Config.Case == "Repeated" && Frame > 0 && Frame % 45 == 0) {
                 const auto BeforeRestart = CaptureState(Frame, -1, 0.0, 0, Json::array());
@@ -437,12 +476,99 @@ namespace {
             const auto FrameStart = std::chrono::steady_clock::now();
             Json AcceptedUpdates = Json::array();
             Json FinalState;
+            int FrameInternalCallbacks = 0;
             std::uint64_t FrameContacts = 0;
             std::array<std::uint64_t, 2> FrameContactCounts{};
             double FrameStepMs = 0.0;
             for (int Update = 0; Update < Config.WorldUpdates; ++Update) {
-                const double StepMs = World.Step(DeltaTime / static_cast<float>(Config.WorldUpdates),
-                    Config.CollisionSteps);
+                double StepMs = 0.0;
+#ifdef PHYSICS_ENERGY_OBSERVER
+                std::exception_ptr CallbackError;
+                std::mutex CallbackMutex;
+                int InternalOrdinal = 0;
+                if (Config.ObserveAccepted) PhysicsJoltEnergyCallback = [&](const void *Motion,
+                    const void *Context, double PendingRigidKineticDelta) {
+                    std::lock_guard Guard(CallbackMutex);
+                    try {
+                        JPH::BodyLockRead SoftLock(World.World.GetBodyLockInterfaceNoLock(), Soft);
+                        if (!SoftLock.Succeeded() || Motion != SoftLock.GetBody().GetMotionProperties())
+                            throw std::runtime_error("[Physics:Coupling] Energy observer soft body mismatch");
+                        const auto *UpdateContext = static_cast<const JPH::SoftBodyUpdateContext *>(Context);
+                        auto State = CaptureState(Frame, Update, 0.0, 0, Json::array(), true,
+                            PendingRigidKineticDelta);
+                        State["VertexContacts"] = nullptr;
+                        State["ContactsPerRigid"] = nullptr;
+                        State["InternalOrdinalPerWorldUpdate"] = InternalOrdinal;
+                        State["CollisionStepOrdinal"] = InternalOrdinal / Config.SoftIterations;
+                        State["SoftIterationOrdinal"] = InternalOrdinal % Config.SoftIterations;
+                        State["ContextNextIteration"] = UpdateContext->mNextIteration.load();
+                        ++InternalOrdinal;
+                        ++FrameInternalCallbacks;
+                        ++ObservedInternalIntegrations;
+                        Finite &= State["Finite"].get<bool>();
+                        MaxAcceptedStretch = std::max(MaxAcceptedStretch,
+                            State["MaxEdgeStretch"].get<double>());
+                        MaxAcceptedVolumeError = std::max(MaxAcceptedVolumeError,
+                            State["VolumeError"].get<double>());
+                        MaxAcceptedPinDrift = std::max(MaxAcceptedPinDrift,
+                            State["PinDrift"].get<double>());
+                        MaxAcceptedPenetration = std::max(MaxAcceptedPenetration,
+                            State["ParticlePenetration"].get<double>());
+                        InvertedTetrahedronAcceptedUpdates +=
+                            State["InvertedTetrahedra"].get<std::size_t>();
+                        const double K = State["AngularInclusiveKineticEnergy"].get<double>();
+                        const double Reference = State["ReferenceMechanicalEnergy"].get<double>();
+                        const double AbsoluteReference =
+                            State["AbsoluteReferenceMechanicalEnergy"].get<double>();
+                        const double Budget = InitialAbsoluteReferenceMechanicalEnergy + SignedExternalWork;
+                        const double Tolerance = 0.05 *
+                            (InitialAbsoluteReferenceMechanicalEnergy + PositiveExternalWork) + 1.0e-5;
+                        const double Excess = AbsoluteReference - (Budget + Tolerance);
+                        State["SignedExternalWorkToDate"] = SignedExternalWork;
+                        State["PositiveExternalWorkToDate"] = PositiveExternalWork;
+                        State["NegativeExternalWorkToDate"] = NegativeExternalWork;
+                        State["ReferenceModelBudget"] = Budget;
+                        State["ReferenceModelTolerance"] = Tolerance;
+                        State["ReferenceModelExcess"] = Excess;
+                        if (!std::isfinite(Excess) || Excess > 0.0) {
+                            if (FirstReferenceModelFailureFrame < 0) {
+                                FirstReferenceModelFailureFrame = Frame;
+                                FirstReferenceModelFailureUpdate = Update;
+                            }
+                        }
+                        MaximumReferenceModelExcess = std::max(MaximumReferenceModelExcess, Excess);
+                        if (K > MaxAngularInclusiveK) {
+                            MaxAngularInclusiveK = K;
+                            MaxAngularInclusiveKFrame = Frame;
+                            MaxAngularInclusiveKUpdate = Update;
+                        }
+                        if (Reference > MaxReferenceMechanicalEnergy) {
+                            MaxReferenceMechanicalEnergy = Reference;
+                            MaxReferenceMechanicalEnergyFrame = Frame;
+                            MaxReferenceMechanicalEnergyUpdate = Update;
+                        }
+                        MaxAbsoluteReferenceMechanicalEnergy = std::max(
+                            MaxAbsoluteReferenceMechanicalEnergy, AbsoluteReference);
+                        AcceptedUpdates.push_back(std::move(State));
+                    } catch (...) {
+                        if (!CallbackError) CallbackError = std::current_exception();
+                    }
+                };
+                try {
+#endif
+                    StepMs = World.Step(DeltaTime / static_cast<float>(Config.WorldUpdates),
+                        Config.CollisionSteps);
+#ifdef PHYSICS_ENERGY_OBSERVER
+                } catch (...) {
+                    PhysicsJoltEnergyCallback = {};
+                    throw;
+                }
+                PhysicsJoltEnergyCallback = {};
+                if (CallbackError) std::rethrow_exception(CallbackError);
+                if (Config.ObserveAccepted && InternalOrdinal !=
+                    Config.CollisionSteps * Config.SoftIterations)
+                    FullInternalObservationCoverage = false;
+#endif
                 FrameStepMs += StepMs;
                 const auto UpdateContacts = Contacts.VertexContacts.exchange(0, std::memory_order_relaxed);
                 FrameContacts += UpdateContacts;
@@ -497,7 +623,9 @@ namespace {
                 }
                 MaxAbsoluteReferenceMechanicalEnergy = std::max(
                     MaxAbsoluteReferenceMechanicalEnergy, AbsoluteReference);
+#ifndef PHYSICS_ENERGY_OBSERVER
                 if (Config.ObserveAccepted) AcceptedUpdates.push_back(State);
+#endif
                 FinalState = std::move(State);
             }
             if (FrameContacts > 0 && FirstContactFrame < 0) FirstContactFrame = Frame;
@@ -516,10 +644,20 @@ namespace {
                 FrameState["ParticlePenetration"].get<double>());
             InvertedTetrahedronFrames += FrameState["InvertedTetrahedra"].get<std::size_t>();
             if (Config.ObserveAccepted) FrameState["AcceptedUpdates"] = std::move(AcceptedUpdates);
+            FrameState["ObservedInternalCallbacks"] = FrameInternalCallbacks;
+            FrameState["ExpectedInternalCallbacks"] = Config.WorldUpdates *
+                Config.CollisionSteps * Config.SoftIterations;
             FrameState["FrameWallMs"] = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - FrameStart).count();
             Frames.push_back(std::move(FrameState));
         }
+#ifndef PHYSICS_ENERGY_OBSERVER
+        if (FullInternalObservationCoverage)
+            ObservedInternalIntegrations = ExpectedInternalIntegrations;
+#else
+        if (ObservedInternalIntegrations != ExpectedInternalIntegrations && Config.ObserveAccepted)
+            FullInternalObservationCoverage = false;
+#endif
         return {{"Backend", "Jolt"}, {"Case", Config.Case}, {"ContactEnabled", EnableContact},
                 {"Frames", std::move(Frames)}, {"Finite", Finite}, {"MaxEdgeStretch", MaxStretch},
                 {"MaxVolumeError", MaxVolumeError}, {"MaxPinDrift", MaxPinDrift},
@@ -561,6 +699,12 @@ namespace {
                 {"UnsupportedConstraintKinds", UnsupportedConstraintKinds},
                 {"WorldUpdateObservationCoverage", Config.ObserveAccepted},
                 {"AcceptedObservationCoverage", FullInternalObservationCoverage},
+                {"EnergyObserverEnabled", EnergyObserverEnabled},
+                {"EnergyObserverPoint", EnergyObserverEnabled ?
+                    "After each soft collision velocity update, before cached rigid velocity writeback and rod velocity update; current fixtures contain no rods, and pending rigid kinetic delta corrects the scalar energy" :
+                    "Completed PhysicsSystem::Update world boundary"},
+                {"ObservedInternalIntegrations", ObservedInternalIntegrations},
+                {"ExpectedInternalIntegrations", ExpectedInternalIntegrations},
                 {"RequestedCpuBudget", Config.Workers},
                 {"AllocatedBackgroundWorkers", BackgroundWorkers},
                 {"ActiveBackgroundWorkers", nullptr},
