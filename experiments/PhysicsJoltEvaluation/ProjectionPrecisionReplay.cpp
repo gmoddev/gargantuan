@@ -20,11 +20,15 @@ using Json = nlohmann::json;
 
 struct Options {
     std::string GraphPath;
+    std::string EdgeTracePath;
     std::string Precision = "float";
     std::string RestMode = "captured";
     int Steps = 1;
     int Frames = 150;
     int StageLimit = 9;
+    int SeedIndex = 84;
+    int EdgeStart = 0;
+    int EdgeEnd = 8;
     double SeedX = 0.0;
     double SeedY = 0.0;
     double SeedZ = 1.0;
@@ -40,11 +44,15 @@ Options Parse(int Count, char **Arguments) {
             return Arguments[++Index];
         };
         if (Name == "--graph") Result.GraphPath = Value();
+        else if (Name == "--edge-trace") Result.EdgeTracePath = Value();
+        else if (Name == "--edge-start") Result.EdgeStart = std::stoi(Value());
+        else if (Name == "--edge-end") Result.EdgeEnd = std::stoi(Value());
         else if (Name == "--precision") Result.Precision = Value();
         else if (Name == "--rest") Result.RestMode = Value();
         else if (Name == "--steps") Result.Steps = std::stoi(Value());
         else if (Name == "--frames") Result.Frames = std::stoi(Value());
         else if (Name == "--stage-limit") Result.StageLimit = std::stoi(Value());
+        else if (Name == "--seed-index") Result.SeedIndex = std::stoi(Value());
         else if (Name == "--seed-x") Result.SeedX = std::stod(Value());
         else if (Name == "--seed-y") Result.SeedY = std::stod(Value());
         else if (Name == "--seed-z") Result.SeedZ = std::stod(Value());
@@ -66,7 +74,10 @@ Options Parse(int Count, char **Arguments) {
         (Result.Precision != "float" && Result.Precision != "double" && Result.Precision != "longdouble") ||
         (Result.RestMode != "captured" && Result.RestMode != "recomputed") ||
         (Result.Steps != 1 && Result.Steps != 4) || Result.Frames < 1 || Result.Frames > 240 ||
-        Result.StageLimit < 0 || Result.StageLimit > 96 ||
+        Result.StageLimit < 0 || Result.StageLimit > 96 || Result.SeedIndex < 0 ||
+        Result.EdgeStart < 0 || Result.EdgeEnd < Result.EdgeStart ||
+        Result.EdgeEnd >= Result.Frames * Result.Steps * 24 ||
+        Result.EdgeEnd - Result.EdgeStart > 255 ||
         !std::isfinite(Result.SeedX) || !std::isfinite(Result.SeedY) || !std::isfinite(Result.SeedZ) ||
         std::abs(Result.SeedX) > 100.0 || std::abs(Result.SeedY) > 100.0 ||
         std::abs(Result.SeedZ) > 100.0)
@@ -95,6 +106,42 @@ template <class T> T Length(const Vector3<T> &Delta) {
 
 template <class T> Vector3<T> Difference(const Vector3<T> &A, const Vector3<T> &B) {
     return {A.X - B.X, A.Y - B.Y, A.Z - B.Z};
+}
+
+template <class T> Vector3<T> CandidateVelocity(const Vertex<T> &Item, T StepTime) {
+    return {(Item.Position.X - Item.Previous.X) / StepTime,
+            (Item.Position.Y - Item.Previous.Y) / StepTime,
+            (Item.Position.Z - Item.Previous.Z) / StepTime};
+}
+
+template <class T> double PairKinetic(const Vertex<T> &A, const Vertex<T> &B,
+                                      const Vector3<T> &VelocityA,
+                                      const Vector3<T> &VelocityB) {
+    const auto VertexEnergy = [](const Vertex<T> &Item, const Vector3<T> &Velocity) {
+        if (Item.InverseMass <= T(0)) return 0.0;
+        const double Mass = 1.0 / static_cast<double>(Item.InverseMass);
+        const double X = static_cast<double>(Velocity.X);
+        const double Y = static_cast<double>(Velocity.Y);
+        const double Z = static_cast<double>(Velocity.Z);
+        return 0.5 * Mass * ((X * X + Y * Y) + Z * Z);
+    };
+    return VertexEnergy(A, VelocityA) + VertexEnergy(B, VelocityB);
+}
+
+template <class T> void AccumulateEnergyChange(const Vertex<T> &Item,
+                                                const Vector3<T> &Before,
+                                                const Vector3<T> &After,
+                                                double &Cross, double &Quadratic) {
+    if (Item.InverseMass <= T(0)) return;
+    const double Mass = 1.0 / static_cast<double>(Item.InverseMass);
+    const double X = static_cast<double>(Before.X);
+    const double Y = static_cast<double>(Before.Y);
+    const double Z = static_cast<double>(Before.Z);
+    const double Dx = static_cast<double>(After.X) - X;
+    const double Dy = static_cast<double>(After.Y) - Y;
+    const double Dz = static_cast<double>(After.Z) - Z;
+    Cross += Mass * ((X * Dx + Y * Dy) + Z * Dz);
+    Quadratic += 0.5 * Mass * ((Dx * Dx + Dy * Dy) + Dz * Dz);
 }
 
 template <class T> Json Vector(const Vector3<T> &Value) {
@@ -213,9 +260,10 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
             throw std::invalid_argument("[Physics:PrecisionReplay] Nonfinite position or inverse mass");
         Vertices.push_back({Position, Position, {}, Position, InverseMass});
     }
-    if (Vertices.size() <= 84 || Vertices[84].InverseMass <= T(0))
-        throw std::invalid_argument("[Physics:PrecisionReplay] Movable center vertex 84 is required");
-    Vertices[84].Velocity = {static_cast<T>(Config.SeedX), static_cast<T>(Config.SeedY),
+    if (static_cast<std::size_t>(Config.SeedIndex) >= Vertices.size() ||
+        Vertices[Config.SeedIndex].InverseMass <= T(0))
+        throw std::invalid_argument("[Physics:PrecisionReplay] Movable seed vertex is required");
+    Vertices[Config.SeedIndex].Velocity = {static_cast<T>(Config.SeedX), static_cast<T>(Config.SeedY),
                              static_cast<T>(Config.SeedZ)};
     std::vector<Edge<T>> Edges;
     Edges.reserve(GraphEdges.size());
@@ -249,7 +297,7 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
                        {"InternalIntegrationDt", static_cast<double>(InnerTimeNative)},
                        {"DampingRateCapturedFloat", static_cast<double>(2.4f)},
                        {"DampingMultiplier", static_cast<double>(Damping)},
-                       {"SeedCenterIndex", 84},
+                       {"SeedCenterIndex", Config.SeedIndex},
                        {"SeedVelocity", Json::array({Config.SeedX, Config.SeedY, Config.SeedZ})},
                        {"InitialVelocityKineticEnergy", Initial.Kinetic},
                        {"EdgeCount", Edges.size()}, {"VertexCount", Vertices.size()},
@@ -257,8 +305,16 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
                        {"ModelLimit", "Contact-free, zero-gravity, no native SIMD/job side effects. Float parity requires hosted native frame and particle comparison."}}).dump() << '\n';
     double MaximumKinetic = Initial.Kinetic;
     int FirstNonfiniteFrame = -1;
+    std::ofstream EdgeTrace;
+    if (!Config.EdgeTracePath.empty()) {
+        EdgeTrace.open(Config.EdgeTracePath);
+        if (!EdgeTrace) throw std::runtime_error("[Physics:PrecisionReplay] Cannot open edge trace");
+    }
     for (int Frame = 0; Frame < Config.Frames; ++Frame) {
         for (int Microstep = 0; Microstep < 24 * Config.Steps; ++Microstep) {
+            const int FlatMicrostep = Frame * 24 * Config.Steps + Microstep;
+            const bool TraceMicrostep = EdgeTrace.is_open() &&
+                FlatMicrostep >= Config.EdgeStart && FlatMicrostep <= Config.EdgeEnd;
             EmitStage(Config, Frame, Microstep, "BeforeIntegration", Vertices, Edges,
                       StepTime, false);
             for (auto &Item : Vertices) {
@@ -275,7 +331,8 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
             }
             EmitStage(Config, Frame, Microstep, "AfterIntegration", Vertices, Edges,
                       StepTime, true);
-            for (const auto &Constraint : Edges) {
+            for (std::size_t EdgeIndex = 0; EdgeIndex < Edges.size(); ++EdgeIndex) {
+                const auto &Constraint = Edges[EdgeIndex];
                 auto &V0 = Vertices[Constraint.I];
                 auto &V1 = Vertices[Constraint.J];
                 const auto X0 = V0.Position;
@@ -286,17 +343,77 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
                 const T CurrentLength = std::sqrt((Dx * Dx + Dy * Dy) + Dz * Dz);
                 const T Denominator = CurrentLength *
                     ((V0.InverseMass + V1.InverseMass) + Constraint.Compliance * InverseTimeSquared);
-                if (Denominator < static_cast<T>(1.0e-12f)) continue;
+                Vector3<T> BeforeVelocity0{}, BeforeVelocity1{};
+                double BeforePairKinetic = 0.0;
+                double PreviousResidual = 0.0;
+                double RelativeNormalCandidateVelocity = 0.0;
+                if (TraceMicrostep) {
+                    BeforeVelocity0 = CandidateVelocity(V0, StepTime);
+                    BeforeVelocity1 = CandidateVelocity(V1, StepTime);
+                    BeforePairKinetic = PairKinetic(V0, V1, BeforeVelocity0, BeforeVelocity1);
+                    PreviousResidual = static_cast<double>(
+                        Length(Difference(V1.Previous, V0.Previous)) - Constraint.RestLength);
+                    if (CurrentLength > T(0)) {
+                        const double InverseLength = 1.0 / static_cast<double>(CurrentLength);
+                        RelativeNormalCandidateVelocity =
+                            ((static_cast<double>(BeforeVelocity1.X - BeforeVelocity0.X) * static_cast<double>(Dx) +
+                              static_cast<double>(BeforeVelocity1.Y - BeforeVelocity0.Y) * static_cast<double>(Dy)) +
+                             static_cast<double>(BeforeVelocity1.Z - BeforeVelocity0.Z) * static_cast<double>(Dz)) *
+                            InverseLength;
+                    }
+                }
+                const bool Applied = !(Denominator < static_cast<T>(1.0e-12f));
+                if (!Applied && !TraceMicrostep) continue;
                 const T Residual = CurrentLength - Constraint.RestLength;
-                const T Cx = (Dx * Residual) / Denominator;
-                const T Cy = (Dy * Residual) / Denominator;
-                const T Cz = (Dz * Residual) / Denominator;
-                V0.Position.X = X0.X + V0.InverseMass * Cx;
-                V0.Position.Y = X0.Y + V0.InverseMass * Cy;
-                V0.Position.Z = X0.Z + V0.InverseMass * Cz;
-                V1.Position.X = X1.X - V1.InverseMass * Cx;
-                V1.Position.Y = X1.Y - V1.InverseMass * Cy;
-                V1.Position.Z = X1.Z - V1.InverseMass * Cz;
+                T Cx{}, Cy{}, Cz{};
+                if (Applied) {
+                    Cx = (Dx * Residual) / Denominator;
+                    Cy = (Dy * Residual) / Denominator;
+                    Cz = (Dz * Residual) / Denominator;
+                    V0.Position.X = X0.X + V0.InverseMass * Cx;
+                    V0.Position.Y = X0.Y + V0.InverseMass * Cy;
+                    V0.Position.Z = X0.Z + V0.InverseMass * Cz;
+                    V1.Position.X = X1.X - V1.InverseMass * Cx;
+                    V1.Position.Y = X1.Y - V1.InverseMass * Cy;
+                    V1.Position.Z = X1.Z - V1.InverseMass * Cz;
+                }
+                if (TraceMicrostep) {
+                    const auto AfterVelocity0 = CandidateVelocity(V0, StepTime);
+                    const auto AfterVelocity1 = CandidateVelocity(V1, StepTime);
+                    const double AfterPairKinetic = PairKinetic(
+                        V0, V1, AfterVelocity0, AfterVelocity1);
+                    double Cross = 0.0, Quadratic = 0.0;
+                    AccumulateEnergyChange(V0, BeforeVelocity0, AfterVelocity0, Cross, Quadratic);
+                    AccumulateEnergyChange(V1, BeforeVelocity1, AfterVelocity1, Cross, Quadratic);
+                    const double DeltaKinetic = AfterPairKinetic - BeforePairKinetic;
+                    const double LengthDouble = static_cast<double>(CurrentLength);
+                    const double RestDouble = static_cast<double>(Constraint.RestLength);
+                    EdgeTrace << Json({{"Type", "Edge"}, {"Frame", Frame},
+                                      {"Microstep", Microstep},
+                                      {"FlatGlobalMicrostep", FlatMicrostep},
+                                      {"StepTime", static_cast<double>(StepTime)},
+                                      {"EdgeIndex", EdgeIndex},
+                                      {"I", Constraint.I}, {"J", Constraint.J},
+                                      {"Applied", Applied},
+                                      {"Compliance", static_cast<double>(Constraint.Compliance)},
+                                      {"CurrentLength", LengthDouble},
+                                      {"RestLength", RestDouble},
+                                      {"CurrentC", static_cast<double>(Residual)},
+                                      {"PreviousC", PreviousResidual},
+                                      {"Compression", Residual < T(0)},
+                                      {"Stretch", Residual > T(0)},
+                                      {"RelativeNormalCandidateVelocityBefore",
+                                       RelativeNormalCandidateVelocity},
+                                      {"LocalTangentialGainHard", Constraint.Compliance == T(0) &&
+                                          CurrentLength > T(0) ? Json(RestDouble / LengthDouble) : Json(nullptr)},
+                                      {"Correction", Vector(Vector3<T>{Cx, Cy, Cz})},
+                                      {"PairCandidateKEBefore", BeforePairKinetic},
+                                      {"PairCandidateKEAfter", AfterPairKinetic},
+                                      {"PairCandidateDeltaK", DeltaKinetic},
+                                      {"DeltaKCross", Cross},
+                                      {"DeltaKQuadratic", Quadratic},
+                                      {"DeltaKClosure", DeltaKinetic - Cross - Quadratic}}).dump() << '\n';
+                }
             }
             EmitStage(Config, Frame, Microstep, "AfterProjection", Vertices, Edges,
                       StepTime, true);
@@ -314,8 +431,8 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
         Json Row = Metrics(State);
         Row["Type"] = "Frame";
         Row["Frame"] = Frame;
-        Row["CenterPosition"] = Vector(Vertices[84].Position);
-        Row["CenterVelocity"] = Vector(Vertices[84].Velocity);
+        Row["CenterPosition"] = Vector(Vertices[Config.SeedIndex].Position);
+        Row["CenterVelocity"] = Vector(Vertices[Config.SeedIndex].Velocity);
         if (Config.Particles) Row["Particles"] = Particles(Vertices);
         std::cout << Row.dump() << '\n';
         if (!State.Finite) {

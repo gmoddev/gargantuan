@@ -16,6 +16,10 @@ on:
         description: Follow up run 42434395381 with contact-position and precision controls only
         type: boolean
         default: false
+      projection_causal_only:
+        description: Standalone nonlinear projection replay and small reproducer only; no Jolt build
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -27,7 +31,7 @@ concurrency:
 
 jobs:
   linux-release-comparison:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only)
     name: Ubuntu Release / experimental quality and timing
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -261,3 +265,47 @@ jobs:
             followup-evidence/
             build-followup/PhysicsJoltNativeCouplingInstrumented
             build-followup/ProjectionPrecisionReplay
+
+  projection-causality:
+    if: github.event_name == 'workflow_dispatch' && inputs.projection_causal_only && !inputs.s1_diagnostic_only && !inputs.s1_followup_only
+    name: Standalone nonlinear geometry and edge-work analysis / no qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPENBLAS_NUM_THREADS: 1
+      OMP_NUM_THREADS: 1
+      MKL_NUM_THREADS: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - run: git submodule update --init --depth 1 vendor/json
+      - name: Build one standalone replay source
+        run: |
+          set -euo pipefail
+          mkdir projection-evidence
+          git rev-parse HEAD > projection-evidence/ExecutedSource.txt
+          c++ --version > projection-evidence/Compiler.txt
+          c++ -std=c++23 -O2 -ffp-contract=off -fno-fast-math -Ivendor/json/include \
+            experiments/PhysicsJoltEvaluation/ProjectionPrecisionReplay.cpp -o projection-evidence/ProjectionPrecisionReplay \
+            2>&1 | tee projection-evidence/Build.log
+      - name: Run bounded geometric controls and ordered-edge work trace
+        run: |
+          python3 experiments/PhysicsJoltEvaluation/RunProjectionCausality.py \
+            --replay projection-evidence/ProjectionPrecisionReplay --output projection-evidence/Runs
+      - name: Analyze the nonlinear Jacobian at preserved native states
+        run: |
+          python3 -m venv .projection-numeric
+          .projection-numeric/bin/pip install --only-binary=:all: numpy==2.3.4 > projection-evidence/NumericInstall.txt
+          .projection-numeric/bin/python experiments/PhysicsJoltEvaluation/AnalyzeDeformedProjection.py \
+            --graph experiments/PhysicsJoltEvaluation/CausalFixtures/NativeOptimizedClothGraph.json \
+            --snapshots experiments/PhysicsJoltEvaluation/CausalFixtures/NativeNonlinearSnapshots.json \
+            --output projection-evidence/DeformedProjection.json
+      - name: Preserve standalone evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: jolt-projection-causality-evidence
+          if-no-files-found: error
+          path: projection-evidence/
