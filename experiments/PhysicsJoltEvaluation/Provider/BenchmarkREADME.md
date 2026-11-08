@@ -19,8 +19,10 @@ outside its own timer but can perturb following frames. Treat a single run as
 a bounded cold provider-call sample; alternate and repeat runs on one host
 before making a steady-state claim. Pass the same nondefault `shared-run-pair`
 identifier to both backend runs to make a comparison eligible for ranking.
-Host, OS, and source translation-unit build stamp are printed in the receipt;
-the external runner should also preserve the actual binary hash.
+Host, OS, source translation-unit build stamp, and a checksum of the running
+benchmark executable are printed in the receipt. The checksum is a comparison
+fingerprint, not an authentication hash; preserve the actual binary hash in
+the external runner's evidence as well.
 The XPBD constructor treats the worker argument as a maximum and may use fewer
 threads when the host has fewer cores; `xpbd_workers_actual` records the
 backend's step profile count. Jolt's argument is its configured total budget
@@ -68,8 +70,8 @@ proxies; they do not prove a solver contact was generated. The helper withholds
 a coupled timing winner until contact callbacks or a separate trajectory
 control establish actual response. The comparison rejects mismatched scenes,
 coupling choices, or frame counts.
-It also withholds a timing winner unless host, OS, build stamp, and explicit
-run-pair identifier match. Pool capacity and dispatched jobs are both reported:
+It also withholds a timing winner unless host, OS, build stamp, executable
+fingerprint, and explicit run-pair identifier match. Pool capacity and dispatched jobs are both reported:
 XPBD submits one job per body, so one-body scenes cannot occupy its whole pool.
 That limited parallelism is an actual backend scaling property under the same
 CPU budget, not a reason to erase a measured timing difference.

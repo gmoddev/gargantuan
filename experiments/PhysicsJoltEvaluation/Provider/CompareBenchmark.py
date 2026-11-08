@@ -57,8 +57,9 @@ def Main() -> None:
     BudgetMatched = int(Jolt["workers_requested"]) == int(Xpbd["workers_requested"]) == \
         int(Xpbd["xpbd_workers_actual"])
     ReceiptPairMatched = all(Jolt.get(Field) == Xpbd.get(Field) for Field in
-                             ("host", "os", "build_stamp", "run_pair")) and \
+                             ("host", "os", "build_stamp", "binary_id", "run_pair")) and \
         Jolt.get("host") not in (None, "unknown") and \
+        Jolt.get("binary_id") not in (None, "unknown") and \
         Jolt.get("run_pair") not in (None, "unpaired")
     Result: dict[str, object] = {
         "scene": Jolt["scene"],
@@ -77,6 +78,8 @@ def Main() -> None:
         "xpbd_host": Xpbd.get("host"),
         "jolt_build_stamp": Jolt.get("build_stamp"),
         "xpbd_build_stamp": Xpbd.get("build_stamp"),
+        "jolt_binary_id": Jolt.get("binary_id"),
+        "xpbd_binary_id": Xpbd.get("binary_id"),
         "run_pair": Jolt.get("run_pair"),
         "material_topology_comparable": not Rubber and Jolt["constraints"] == Xpbd["constraints"],
         "jolt_mean_total_ms": float(Jolt["mean_total_ms"]),

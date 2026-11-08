@@ -7,12 +7,15 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <vector>
 
 namespace {
@@ -203,6 +206,21 @@ namespace {
                   Character == '_')) Character = '_';
         return Value;
     }
+    std::string BinaryFingerprint(const char *Path) {
+        std::ifstream Stream(Path, std::ios::binary);
+        if (!Stream) return "unknown";
+        std::uint64_t Hash = 14695981039346656037ull;
+        char Buffer[8192];
+        while (Stream.read(Buffer, sizeof(Buffer)) || Stream.gcount() > 0)
+            for (std::streamsize Index = 0; Index < Stream.gcount(); ++Index) {
+                Hash ^= static_cast<unsigned char>(Buffer[Index]);
+                Hash *= 1099511628211ull;
+            }
+        if (!Stream.eof()) return "unknown";
+        std::ostringstream Result;
+        Result << std::hex << std::setfill('0') << std::setw(16) << Hash;
+        return Result.str();
+    }
 }
 
 int main(int ArgumentCount, char **Arguments) {
@@ -232,6 +250,7 @@ int main(int ArgumentCount, char **Arguments) {
         constexpr const char *OperatingSystem = "linux";
 #endif
         const auto BuildStamp = ReceiptToken(std::string(__DATE__) + "_" + __TIME__);
+        const auto BinaryId = BinaryFingerprint(Arguments[0]);
         const auto RunPair = ArgumentCount == 7 ? ReceiptToken(Arguments[6]) : "unpaired";
         if (RunPair.size() > 64 || RunPair.empty())
             throw std::invalid_argument("Run-pair identifier must be 1..64 characters");
@@ -305,7 +324,8 @@ int main(int ArgumentCount, char **Arguments) {
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
             << " frames=" << Frames << " workers_requested=" << Workers
             << " host=" << Host << " os=" << OperatingSystem
-            << " build_stamp=" << BuildStamp << " run_pair=" << RunPair
+            << " build_stamp=" << BuildStamp << " binary_id=" << BinaryId
+            << " run_pair=" << RunPair
             << " vertices=" << Bodies.size() * Bodies.front().Rest.size() << '\n' << std::flush;
         for (int Frame = 0; Frame < Frames; ++Frame) {
             const auto Start = Clock::now();
@@ -382,7 +402,8 @@ int main(int ArgumentCount, char **Arguments) {
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
             << " frames=" << Frames << " workers_requested=" << Workers
             << " host=" << Host << " os=" << OperatingSystem
-            << " build_stamp=" << BuildStamp << " run_pair=" << RunPair
+            << " build_stamp=" << BuildStamp << " binary_id=" << BinaryId
+            << " run_pair=" << RunPair
             << " constraints=" << Constraints
             << " xpbd_workers_actual=" << ActualXpbdWorkers
             << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
