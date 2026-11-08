@@ -684,6 +684,60 @@ namespace {
         Require(*Maximum - *Minimum <= 45,
             "full-update sleep onset varied materially across collision-step schedules");
     }
+    void SleepingContactStaticEdit() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {0, -10, 0};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        auto Floor = Box({0, -0.5f, 0}, {10, 1, 10}, true);
+        const auto FloorId = Provider.Rigid->CreateBody(Floor);
+        PhysicsBodyDesc BallValue;
+        BallValue.Shape.Kind = PhysicsShapeKind::Ball;
+        BallValue.Shape.Size = {1, 1, 1};
+        BallValue.Transform.Position = {0, 2, 0};
+        const auto BallId = Provider.Rigid->CreateBody(BallValue);
+        Require(FloorId.IsValid() && BallId.IsValid(),
+            "dormant contact edit endpoints failed admission");
+        bool Began = false;
+        int Ended = 0;
+        const auto Observe = [&](const PhysicsStepResult &FrameResult) {
+            for (const auto &Event : FrameResult.Contacts) {
+                if (!((Event.BodyA == FloorId && Event.BodyB == BallId) ||
+                    (Event.BodyA == BallId && Event.BodyB == FloorId))) continue;
+                Began |= Event.Phase == PhysicsContactPhase::Began;
+                Ended += Event.Phase == PhysicsContactPhase::Ended;
+            }
+        };
+        bool Slept = false;
+        for (int Frame = 0; Frame < 180; ++Frame) {
+            Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = 16}));
+            const auto State = Provider.Rigid->GetBodyState(BallId);
+            Require(State.has_value(), "dormant contact edit lost ball body");
+            if (!State->Awake) {
+                Slept = true;
+                break;
+            }
+        }
+        Require(Began && Slept && Ended == 0,
+            "dormant contact edit setup did not retain floor contact");
+        for (int Hold = 0; Hold < 5; ++Hold) {
+            Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = 16}));
+            const auto State = Provider.Rigid->GetBodyState(BallId);
+            Require(State && !State->Awake && Ended == 0,
+                "dormant contact edit lost its sleeping contact before floor movement");
+        }
+        Floor.Transform.Position = {0, -10, 0};
+        Require(Provider.Rigid->UpdateBody(FloorId, Floor).Succeeded(),
+            "moving dormant contact floor failed");
+        for (int Frame = 0; Frame < 4; ++Frame)
+            Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = 16}));
+        std::cout << "[Physics:JoltProvider] dormant_static_edit ended="
+            << Ended << '\n' << std::flush;
+        Require(Ended == 1,
+            "moving static floor left a stale sleeping contact or duplicate end");
+    }
 #endif
 #if defined(PHYSICS_GANTRIA_SLEEP_FIX) && defined(PHYSICS_GANTRIA_ATTACHMENTS)
     void SleepingRigidSoftAttachment() {
@@ -1281,6 +1335,8 @@ int main() {
 #ifdef PHYSICS_GANTRIA_SLEEP_FIX
         std::cout << "[Physics:JoltProvider] full-update sleep cadence\n" << std::flush;
         FullUpdateSleepCadence();
+        std::cout << "[Physics:JoltProvider] dormant static contact edit\n" << std::flush;
+        SleepingContactStaticEdit();
 #endif
 #if defined(PHYSICS_GANTRIA_SLEEP_FIX) && defined(PHYSICS_GANTRIA_ATTACHMENTS)
         std::cout << "[Physics:JoltProvider] attached rigid sleep/re-wake\n" << std::flush;
