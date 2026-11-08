@@ -8,7 +8,7 @@ followed by optional receipt identifier, warmup count, and XPBD reference
 substep count:
 
 ```
-PhysicsJoltProviderBenchmark jolt|xpbd cloth4k|cloth16k|cloth4x4k|rubber4k|rubber16k none|static-sphere frames workers [shared-run-pair [warmup-frames [xpbd-substeps]]]
+PhysicsJoltProviderBenchmark jolt|xpbd cloth4k|cloth16k|cloth4x4k|rubber4k|rubber16k none|static-sphere|driven-sphere frames workers [shared-run-pair [warmup-frames [xpbd-substeps]]]
 ```
 
 Measured frames must be 1–30, warmup frames 0–30, and requested workers 1–8.
@@ -55,6 +55,21 @@ ahead of the common +X impulse; the benchmark records minimum surface
 separation and maximum poststep penetration across frames. Compare coupled
 and isolated cost separately for each backend. This scene does not compare
 reciprocal dynamic rigid feedback.
+
+`driven-sphere` is a separate experiment with the same positive initial gap.
+Its authored sphere center moves 1.2 m left over 0.66 seconds, sampled at
+each Jolt frame boundary or XPBD reference substep boundary. Jolt updates an
+anchored native body and enables a private soft contact listener only for this
+scene; the receipt requires at least one actual contacting vertex. That
+listener makes the Jolt driven row timing-instrumented. XPBD receives matching
+moving collider snapshots but has no native contact callback in this harness.
+The runner therefore requires a matching `none` control for each backend,
+scene, worker budget, cold/warm tail, and repeat, then finds the first frame
+where their full soft-position trajectory hashes differ. The control plus
+positive contact band supports a bounded response observation, not reciprocal
+dynamic-rigid feedback. `static-sphere` remains its distinct, unmodified
+scene and its prior non-contact observations remain labeled as such. No driven
+row receives a timing winner.
 
 The ninth positional argument selects an **experimental XPBD reference** with
 4, 8, 16, or 32 complete `Soft->Step` calls per neutral frame. One means the
@@ -163,6 +178,8 @@ arguments but has a separate timing scope and does not take a run-pair argument.
 `--xpbd-substeps` selects the reference mode in the external runner and is
 recorded on both sides of every pair. The comparator withholds a timing winner
 for all reference rows, even if an envelope is supplied.
+Request `--couplings none driven-sphere` to run the driven response control;
+the runner refuses driven-only matrices.
 
 The native damping coefficient is calibrated for the qualified two half-frame
 updates, eight collision steps per half, and 12 Jolt soft integrations per

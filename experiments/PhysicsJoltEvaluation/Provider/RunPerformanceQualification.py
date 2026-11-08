@@ -21,6 +21,7 @@ from CompareBenchmark import ReadSummary
 
 SCENES = ('cloth4k', 'cloth16k', 'cloth4x4k', 'rubber4k', 'rubber16k')
 COUPLINGS = ('none', 'static-sphere')
+PROVIDER_COUPLINGS = ('none', 'static-sphere', 'driven-sphere')
 TAILS = ('cold', 'warm')
 JOLT_PROFILE_FIELDS = ('jolt_world_updates', 'jolt_collision_steps_per_update',
                        'jolt_soft_iterations_per_collision_step',
@@ -78,9 +79,13 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair, RequestedXpbdSubsteps=1):
                     if Line.startswith(Prefix + 'reference_calibration ')]
     Measured = [Line for Line in Lines if Line.startswith(Prefix + 'frame=')]
     Warm = [Line for Line in Lines if Line.startswith(Prefix + 'warmup_frame=')]
+    StateLines = [Line[len(Prefix):] for Line in Lines
+                  if Line.startswith(Prefix + 'state_frame=')]
     if (len(Heads), len(Summaries), len(Lifecycles), len(Measured), len(Warm)) != \
             (1, 1, 1, Frames, Warmup):
         raise ValueError('Incomplete provider header, lifecycle, or frame coverage')
+    if len(StateLines) != Frames + Warmup:
+        raise ValueError('Incomplete soft trajectory hash coverage')
     Header = dict(Token.split('=', 1) for Token in Heads[0].split())
     Summary = ReadSummary(PathName)
     Lifecycle = json.loads(Lifecycles[0])
@@ -90,17 +95,44 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair, RequestedXpbdSubsteps=1):
     for Index, Line in enumerate(Warm):
         if not Line.startswith(Prefix + f'warmup_frame={Index} '):
             raise ValueError('Warmup frame chronology changed')
+    FrameHashes = []
+    for Index, Line in enumerate(StateLines):
+        Fields = dict(Token.split('=', 1) for Token in Line.split())
+        if int(Fields['state_frame']) != Index:
+            raise ValueError('Soft state frame chronology changed')
+        FrameHashes.append(int(Fields['soft_trajectory_hash']))
+    if FrameHashes[-1] != int(Summary['soft_trajectory_hash']):
+        raise ValueError('Final soft trajectory hash mismatch')
     for Row in (Header, Summary):
         if Row.get('backend') != Backend or Row.get('run_pair') != Pair or \
                 int(Row.get('warmup_frames', -1)) != Warmup:
             raise ValueError('Provider identity or warmup mismatch')
-        if int(Row.get('timing_instrumented', -1)) != 0:
+        ContactInstrumented = int(Row.get('contact_capture_instrumented', -1))
+        ExpectedContactInstrumented = int(Backend == 'jolt' and
+                                          Summary['coupling'] == 'driven-sphere')
+        if ContactInstrumented != ExpectedContactInstrumented:
+            raise ValueError('Contact instrumentation scope mismatch')
+        if int(Row.get('timing_instrumented', -1)) != ExpectedContactInstrumented:
             raise ValueError('Allocation-instrumented timing is invalid')
+        for Field in ('drive_duration_seconds', 'drive_distance_m'):
+            if Row[Field] != Summary[Field]:
+                raise ValueError('Driven trajectory metadata changed')
+    if Summary['coupling'] == 'driven-sphere':
+        if float(Summary['drive_duration_seconds']) <= 0 or \
+                float(Summary['drive_distance_m']) <= 0:
+            raise ValueError('Driven trajectory missing')
+        if Backend == 'jolt' and int(Summary['jolt_soft_contact_vertices']) <= 0:
+            raise ValueError('Driven Jolt sphere has no actual soft-rigid contact')
+    elif float(Summary['drive_duration_seconds']) != 0 or \
+            float(Summary['drive_distance_m']) != 0:
+        raise ValueError('Stationary scene reports a driven trajectory')
     JoltProfile = {Field: int(Summary[Field]) for Field in JOLT_PROFILE_FIELDS}
     if any(int(Header[Field]) != Value for Field, Value in JoltProfile.items()):
         raise ValueError('Compiled Jolt profile changed between header and summary')
     if Backend == 'jolt':
-        if any(Value <= 0 for Value in JoltProfile.values()) or \
+        if any(Value <= 0 for Field, Value in JoltProfile.items()
+               if Field != 'jolt_full_update_sleep_clock') or \
+                JoltProfile['jolt_full_update_sleep_clock'] not in (0, 1) or \
                 JoltProfile['jolt_soft_integrations_per_frame'] != \
                 JoltProfile['jolt_world_updates'] * \
                 JoltProfile['jolt_collision_steps_per_update'] * \
@@ -133,8 +165,11 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair, RequestedXpbdSubsteps=1):
     if int(Summary['frames']) != Frames or \
             Lifecycle.get('MeasuredFrames') != Frames or \
             Lifecycle.get('WarmupFrames') != Warmup or \
-            Lifecycle.get('TimingInstrumented') is not False:
+            Lifecycle.get('TimingInstrumented') != bool(
+                Backend == 'jolt' and Summary['coupling'] == 'driven-sphere'):
         raise ValueError('Lifecycle frame scope or instrumentation mismatch')
+    if Lifecycle.get('WholeProcessResources', {}).get('AllocationInstrumentation') is True:
+        raise ValueError('Allocation-instrumented timing is invalid')
     for Field in ('StartupAdmissionMs', 'TeardownMs'):
         if not math.isfinite(float(Lifecycle[Field])) or float(Lifecycle[Field]) < 0:
             raise ValueError(f'Invalid lifecycle {Field}')
@@ -145,7 +180,8 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair, RequestedXpbdSubsteps=1):
         raise ValueError('XPBD reference retention calibration failed')
     return {'Header': Header, 'Summary': Summary, 'Lifecycle': Lifecycle,
             'CompiledJoltProfile': JoltProfile,
-            'XpbdReferenceCalibration': Calibration}
+            'XpbdReferenceCalibration': Calibration,
+            'SoftTrajectoryHashes': FrameHashes}
 
 
 def RunProcess(Command, TimeoutSeconds):
@@ -175,8 +211,12 @@ def RemainingTimeout(Deadline, PerProcessTimeout):
 
 
 def WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
-                  TotalTimeout, EnvelopeProvided):
-    Complete = not Errors and len(Pairs) == len(Plan)
+                  TotalTimeout, EnvelopeProvided, ResponseControls=()):
+    ExpectedResponseControls = 2 * sum(Item['Coupling'] == 'driven-sphere'
+                                       for Item in Plan)
+    Complete = not Errors and len(Pairs) == len(Plan) and \
+        len(ResponseControls) == ExpectedResponseControls and \
+        all(Item['ResponseObserved'] for Item in ResponseControls)
     WriteJson(Output / 'Summary.json', {
         'PlannedPairs': len(Plan), 'CompletedPairs': len(Pairs),
         'CompletedProcesses': len(Receipts), 'HarnessErrors': Errors,
@@ -184,11 +224,38 @@ def WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
         'TimingWinners': [Pair['Comparison']['timing_winner']
                           for Pair in Pairs if 'Comparison' in Pair],
         'UnrankedWithoutEnvelope': not EnvelopeProvided,
+        'DrivenResponseControls': list(ResponseControls),
         'TotalTimeoutSeconds': TotalTimeout,
         'ElapsedSeconds': time.monotonic() - Started,
         'QualificationPass': Complete,
         'Status': 'FAILED' if Errors else 'COMPLETE' if Complete else 'RUNNING',
         'Scope': 'Per-pair cost only; no cross-scene or Engine frame winner'})
+
+
+def CompareDrivenControls(Receipts):
+    Controls = {(Receipt['Scene'], Receipt['Workers'], Receipt['Tail'],
+                 Receipt['Repeat'], Receipt['Backend']):
+                Receipt['Parsed']['SoftTrajectoryHashes']
+                for Receipt in Receipts if Receipt['Coupling'] == 'none' and
+                'Parsed' in Receipt}
+    Results = []
+    for Receipt in Receipts:
+        if Receipt['Coupling'] != 'driven-sphere' or 'Parsed' not in Receipt:
+            continue
+        Key = (Receipt['Scene'], Receipt['Workers'], Receipt['Tail'],
+               Receipt['Repeat'], Receipt['Backend'])
+        Baseline = Controls.get(Key)
+        Driven = Receipt['Parsed']['SoftTrajectoryHashes']
+        FirstDifferent = next((Index for Index, (A, B) in
+                               enumerate(zip(Baseline or (), Driven)) if A != B), None)
+        Passed = Baseline is not None and len(Baseline) == len(Driven) and \
+            FirstDifferent is not None
+        Results.append({'DrivenReceipt': Receipt['Name'],
+                        'Backend': Receipt['Backend'],
+                        'FreeControlKey': Key,
+                        'FirstDifferentFrame': FirstDifferent,
+                        'ResponseObserved': Passed})
+    return Results
 
 
 def Main(Arguments=None):
@@ -200,7 +267,7 @@ def Main(Arguments=None):
     Parser.add_argument('--output', type=Path, required=True)
     Parser.add_argument('--envelope', type=Path)
     Parser.add_argument('--scenes', nargs='+', choices=SCENES, default=SCENES)
-    Parser.add_argument('--couplings', nargs='+', choices=COUPLINGS,
+    Parser.add_argument('--couplings', nargs='+', choices=PROVIDER_COUPLINGS,
                         default=COUPLINGS)
     Parser.add_argument('--workers', nargs='+', type=int, default=(1, 2, 8))
     Parser.add_argument('--tails', nargs='+', choices=TAILS, default=TAILS)
@@ -222,7 +289,8 @@ def Main(Arguments=None):
             len(set(Options.workers)) != len(Options.workers) or \
             len(set(Options.scenes)) != len(Options.scenes) or \
             len(set(Options.couplings)) != len(Options.couplings) or \
-            len(set(Options.tails)) != len(Options.tails):
+            len(set(Options.tails)) != len(Options.tails) or \
+            ('driven-sphere' in Options.couplings and 'none' not in Options.couplings):
         Parser.error('Frame, warmup, repeat, timeout, or matrix budget invalid')
     Binary = Options.binary.resolve(strict=True)
     Cache = Options.cmake_cache.resolve(strict=True)
@@ -376,10 +444,19 @@ def Main(Arguments=None):
                           'XpbdMs': Pair['XpbdMeanTotalMs'],
                           'TimingWinner': Pair['Comparison']['timing_winner']}),
               flush=True)
+    ResponseControls = []
+    if not Errors and 'driven-sphere' in Options.couplings:
+        ResponseControls = CompareDrivenControls(Receipts)
+        for Control in ResponseControls:
+            if not Control['ResponseObserved']:
+                Errors.append({'Name': Control['DrivenReceipt'],
+                               'Reason': 'Driven sphere lacks matched free-trajectory response'})
+        WriteJson(Output / 'DrivenResponseControls.json', ResponseControls)
     if not Errors and time.monotonic() >= Deadline:
         Errors.append({'Name': 'matrix', 'Reason': 'Total deadline elapsed before completion'})
     WriteProgress(Output, Plan, Receipts, Pairs, Errors, Started,
-                  Options.total_timeout_seconds, Envelope is not None)
+                  Options.total_timeout_seconds, Envelope is not None,
+                  ResponseControls)
     if Errors:
         raise SystemExit(2)
 

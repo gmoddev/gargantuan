@@ -13,6 +13,21 @@ import RunPerformanceQualification as Runner
 
 
 class PerformanceQualificationTests(unittest.TestCase):
+    def test_driven_response_requires_matched_free_trajectory_difference(self):
+        Base = {'Scene': 'cloth4k', 'Workers': 1, 'Tail': 'cold',
+                'Repeat': 0, 'Backend': 'xpbd'}
+        Receipts = [
+            {**Base, 'Name': 'free', 'Coupling': 'none',
+             'Parsed': {'SoftTrajectoryHashes': [10, 20, 30]}},
+            {**Base, 'Name': 'driven', 'Coupling': 'driven-sphere',
+             'Parsed': {'SoftTrajectoryHashes': [10, 20, 31]}},
+        ]
+        Result = Runner.CompareDrivenControls(Receipts)
+        self.assertTrue(Result[0]['ResponseObserved'])
+        self.assertEqual(Result[0]['FirstDifferentFrame'], 2)
+        Receipts[1]['Parsed']['SoftTrajectoryHashes'] = [10, 20, 30]
+        self.assertFalse(Runner.CompareDrivenControls(Receipts)[0]['ResponseObserved'])
+
     def test_expired_total_deadline_stops_before_native_launch(self):
         with TemporaryDirectory() as Directory, \
              patch.object(Runner, 'RemainingTimeout', return_value=-1), \
@@ -40,9 +55,11 @@ class PerformanceQualificationTests(unittest.TestCase):
             self.assertIn('Total deadline', Summary['HarnessErrors'][0]['Reason'])
 
     def test_compiled_jolt_schedule_must_match_header_and_product(self):
-        Profile = dict(zip(Runner.JOLT_PROFILE_FIELDS, (2, 8, 6, 2, 96, 1)))
-        Header = {'backend': 'jolt', 'run_pair': 'p0000',
+        Profile = dict(zip(Runner.JOLT_PROFILE_FIELDS, (2, 8, 6, 2, 96, 0)))
+        Header = {'backend': 'jolt', 'coupling': 'none', 'run_pair': 'p0000',
                   'warmup_frames': 0, 'timing_instrumented': 0,
+                  'contact_capture_instrumented': 0,
+                  'drive_duration_seconds': 0, 'drive_distance_m': 0,
                   'xpbd_substeps_requested': 1, 'xpbd_substeps_actual': 0,
                   'xpbd_reference': 0, 'xpbd_quality_mode': 'not-applicable',
                   'xpbd_damping_mode': 'not-applicable',
@@ -52,7 +69,9 @@ class PerformanceQualificationTests(unittest.TestCase):
                    'mean_edge_strain': 0, 'max_edge_strain': 0,
                    'mean_volume_ratio': 0, 'mean_tetra_volume_ratio': 0,
                    'max_tetra_volume_error': 0, 'mean_diagonal_strain': 0,
-                   'xpbd_measured_substeps': 0}
+                   'xpbd_measured_substeps': 0,
+                   'jolt_soft_contact_vertices': 0,
+                   'soft_trajectory_hash': 123}
         Lifecycle = {'MeasuredFrames': 1, 'WarmupFrames': 0,
                      'TimingInstrumented': False, 'StartupAdmissionMs': 1,
                      'TeardownMs': 1}
@@ -66,6 +85,7 @@ class PerformanceQualificationTests(unittest.TestCase):
                 Output.write_text('\n'.join((
                     '[Physics:ProviderBenchmark] ' + Line(Header),
                     '[Physics:ProviderBenchmark] frame=0 total_ms=1',
+                    '[Physics:ProviderBenchmark] state_frame=0 soft_trajectory_hash=123',
                     '[Physics:ProviderBenchmark] summary ' + Line(Summary),
                     '[Physics:ProviderBenchmark] lifecycle ' + json.dumps(Lifecycle),
                 )) + '\n')
@@ -75,6 +95,21 @@ class PerformanceQualificationTests(unittest.TestCase):
             Summary['jolt_soft_integrations_per_frame'] = 192
             Write()
             with self.assertRaisesRegex(ValueError, 'header and summary'):
+                Runner.ParseRaw(Output, 'jolt', 1, 0, 'p0000')
+            Summary['jolt_soft_integrations_per_frame'] = 96
+            for Row in (Header, Summary):
+                Row['coupling'] = 'driven-sphere'
+                Row['timing_instrumented'] = 1
+                Row['contact_capture_instrumented'] = 1
+                Row['drive_duration_seconds'] = 0.66
+                Row['drive_distance_m'] = 1.2
+            Summary['jolt_soft_contact_vertices'] = 3
+            Lifecycle['TimingInstrumented'] = True
+            Write()
+            Runner.ParseRaw(Output, 'jolt', 1, 0, 'p0000')
+            Summary['jolt_soft_contact_vertices'] = 0
+            Write()
+            with self.assertRaisesRegex(ValueError, 'no actual soft-rigid contact'):
                 Runner.ParseRaw(Output, 'jolt', 1, 0, 'p0000')
 
     def test_backend_order_is_counterbalanced_across_matrix(self):

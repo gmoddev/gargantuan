@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <cstdint>
 #include <fstream>
@@ -198,6 +199,14 @@ namespace {
     double Milliseconds(Clock::duration Duration) {
         return std::chrono::duration<double, std::milli>(Duration).count();
     }
+    void HashPosition(std::uint64_t &Hash, const glm::vec3 &Position) {
+        for (const float Value : {Position.x, Position.y, Position.z}) {
+            std::uint32_t Bits = 0;
+            std::memcpy(&Bits, &Value, sizeof(Bits));
+            Hash ^= Bits;
+            Hash *= 1099511628211ull;
+        }
+    }
     nlohmann::json CalibrateXpbdRetention(int Substeps, float SubstepDamping,
                                           float FrameDamping) {
         SoftBodyWorldLimits Limits;
@@ -295,8 +304,13 @@ int main(int ArgumentCount, char **Arguments) {
             throw std::invalid_argument("Backend must be jolt or xpbd");
         const auto SceneValue = GetScene(Arguments[2]);
         const std::string Coupling = Arguments[3];
-        if (Coupling != "none" && Coupling != "static-sphere")
-            throw std::invalid_argument("Coupling must be none or static-sphere");
+        if (Coupling != "none" && Coupling != "static-sphere" &&
+            Coupling != "driven-sphere")
+            throw std::invalid_argument("Coupling must be none, static-sphere, or driven-sphere");
+        const bool DrivenSphere = Coupling == "driven-sphere";
+        const bool ContactCaptureInstrumented = DrivenSphere && BackendName == "jolt";
+        constexpr float DriveDurationSeconds = 0.66f;
+        constexpr float DriveDistanceMeters = 1.2f;
         const int Frames = std::stoi(Arguments[4]);
         const int Workers = std::stoi(Arguments[5]);
         if (Frames < 1 || Frames > 30 || Workers < 1 || Workers > 8)
@@ -336,10 +350,12 @@ int main(int ArgumentCount, char **Arguments) {
         const auto JoltProfile = PhysicsEvaluation::GetJoltSoftSolverProfile();
         const bool UsesJoltProfile = BackendName == "jolt";
 #if defined(PHYSICS_EVALUATION_TRACK_ALLOCATIONS)
-        constexpr bool TimingInstrumented = true;
+        constexpr bool AllocationTimingInstrumented = true;
 #else
-        constexpr bool TimingInstrumented = false;
+        constexpr bool AllocationTimingInstrumented = false;
 #endif
+        const bool TimingInstrumented = AllocationTimingInstrumented ||
+            ContactCaptureInstrumented;
 
         const auto BeforeAdmission = PhysicsEvaluation::CaptureResources();
         const auto AdmissionStart = Clock::now();
@@ -380,9 +396,11 @@ int main(int ArgumentCount, char **Arguments) {
                 State->TopologyRevision, State->VertexRevision});
         }
         std::vector<SoftBodyCollider> Colliders;
+        std::vector<glm::vec3> InitialColliderCenters;
         std::vector<PhysicsBodyId> StaticBodies;
+        std::vector<PhysicsBodyDesc> StaticDescriptions;
         double InitialMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
-        if (Coupling == "static-sphere") {
+        if (Coupling != "none") {
             for (std::uint32_t Index = 0; Index < SceneValue.Count; ++Index) {
                 SoftBodyCollider Collider;
                 Collider.Shape.Kind = PhysicsShapeKind::Ball;
@@ -390,6 +408,7 @@ int main(int ArgumentCount, char **Arguments) {
                 Collider.Transform.Position = {20.0f * Index +
                     (SceneValue.Rubber ? 2.2f : 5.2f), 3.0f, 0};
                 Colliders.push_back(Collider);
+                InitialColliderCenters.push_back(Collider.Transform.Position);
                 for (const auto &Position : Bodies[Index].Rest)
                     InitialMinimumSurfaceDistance = std::min(InitialMinimumSurfaceDistance,
                         double(glm::length(Position - Collider.Transform.Position)) - 1.0);
@@ -402,11 +421,15 @@ int main(int ArgumentCount, char **Arguments) {
                     if (!StaticBody.IsValid())
                         throw std::runtime_error("Static rigid collider admission failed");
                     StaticBodies.push_back(StaticBody);
+                    StaticDescriptions.push_back(Description);
                 }
             }
             if (InitialMinimumSurfaceDistance <= 0.0)
                 throw std::runtime_error("Coupled scene begins in collider penetration");
         }
+        if (ContactCaptureInstrumented &&
+            !PhysicsEvaluation::SetJoltSoftRigidContactCapture(*Jolt.Rigid, true))
+            throw std::runtime_error("Jolt soft-rigid contact capture failed admission");
         for (const auto &Record : Bodies) {
             const auto Count = Record.Rest.size() - Record.Definition.Attachments.size();
             const auto Impulse = glm::vec3(float(Count) *
@@ -426,6 +449,7 @@ int main(int ArgumentCount, char **Arguments) {
         std::size_t MeasuredXpbdSubsteps = 0;
         double MinimumPoststepSurfaceDistance = std::numeric_limits<double>::infinity();
         double FinalMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
+        std::uint64_t SoftTrajectoryHash = 14695981039346656037ull;
         TotalTimes.reserve(Frames);
         std::cout << "[Physics:ProviderBenchmark] backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
@@ -435,6 +459,9 @@ int main(int ArgumentCount, char **Arguments) {
             << " run_pair=" << RunPair
             << " warmup_frames=" << WarmupFrames
             << " timing_instrumented=" << int(TimingInstrumented)
+            << " contact_capture_instrumented=" << int(ContactCaptureInstrumented)
+            << " drive_duration_seconds=" << (DrivenSphere ? DriveDurationSeconds : 0.0f)
+            << " drive_distance_m=" << (DrivenSphere ? DriveDistanceMeters : 0.0f)
             << " xpbd_substeps_requested=" << RequestedXpbdSubsteps
             << " xpbd_substeps_actual=" << ActualXpbdSubsteps
             << " xpbd_reference=" << int(XpbdReference)
@@ -456,7 +483,20 @@ int main(int ArgumentCount, char **Arguments) {
         for (int SequenceFrame = 0; SequenceFrame < WarmupFrames + Frames; ++SequenceFrame) {
             const bool Measured = SequenceFrame >= WarmupFrames;
             const int Frame = SequenceFrame - WarmupFrames;
+            const auto DriveOffset = [&](float TimeSeconds) {
+                return DriveDistanceMeters * std::min(TimeSeconds / DriveDurationSeconds, 1.0f);
+            };
             const auto Start = Clock::now();
+            if (DrivenSphere && BackendName == "jolt") {
+                const float TimeSeconds = float(SequenceFrame + 1) * SoftBodyStepInterval;
+                for (std::size_t Index = 0; Index < StaticBodies.size(); ++Index) {
+                    StaticDescriptions[Index].Transform.Position = InitialColliderCenters[Index] -
+                        glm::vec3(DriveOffset(TimeSeconds), 0, 0);
+                    if (!Jolt.Rigid->UpdateBody(StaticBodies[Index], StaticDescriptions[Index]).Succeeded())
+                        throw std::runtime_error("Driven Jolt sphere update failed");
+                    Colliders[Index].Transform.Position = StaticDescriptions[Index].Transform.Position;
+                }
+            }
             if (BackendName == "jolt")
                 (void)Jolt.Rigid->Step({.DeltaTime = SoftBodyStepInterval, .SubStepCount = 16});
             const auto AfterRigid = Clock::now();
@@ -469,6 +509,15 @@ int main(int ArgumentCount, char **Arguments) {
             std::size_t FrameXpbdJobs = 0;
             double FrameXpbdUtilization = 0.0;
             for (int Substep = 0; Substep < SoftStepsThisFrame; ++Substep) {
+                if (DrivenSphere && BackendName == "xpbd") {
+                    const float TimeSeconds =
+                        (float(SequenceFrame) + float(Substep + 1) / SoftStepsThisFrame) *
+                        SoftBodyStepInterval;
+                    for (std::size_t Index = 0; Index < Colliders.size(); ++Index)
+                        Colliders[Index].Transform.Position = InitialColliderCenters[Index] -
+                            glm::vec3(DriveOffset(TimeSeconds), 0, 0);
+                    StepConfig.Colliders = Colliders;
+                }
                 Result = Soft->Step(StepConfig);
                 if (Result.States.size() != Bodies.size() ||
                     Result.Profile.SimulatedBodies != Bodies.size() ||
@@ -524,7 +573,15 @@ int main(int ArgumentCount, char **Arguments) {
                 << " xpbd_worker_utilization=" <<
                     (BackendName == "xpbd" ? FrameXpbdUtilization / SoftStepsThisFrame : 0.0)
                 << " total_ms=" << (WorldTime + TailTime) << '\n' << std::flush;
-            if (Coupling == "static-sphere") {
+            for (const auto &Record : Bodies) {
+                const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
+                    [&](const auto &State) { return State.Body == Record.Id; });
+                for (const auto &Position : *Found->Positions)
+                    HashPosition(SoftTrajectoryHash, Position);
+            }
+            std::cout << "[Physics:ProviderBenchmark] state_frame=" << SequenceFrame
+                << " soft_trajectory_hash=" << SoftTrajectoryHash << '\n' << std::flush;
+            if (Coupling != "none") {
                 FinalMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
                 for (std::size_t Index = 0; Index < Bodies.size(); ++Index) {
                     const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
@@ -547,6 +604,11 @@ int main(int ArgumentCount, char **Arguments) {
         const double Median = 0.5 * (Sorted[(Sorted.size() - 1) / 2] +
             Sorted[Sorted.size() / 2]);
         const auto QualityValue = Inspect(Bodies, *Soft);
+        std::uint64_t JoltSoftContactVertices = 0;
+        if (ContactCaptureInstrumented)
+            for (std::size_t Index = 0; Index < StaticBodies.size(); ++Index)
+                JoltSoftContactVertices += PhysicsEvaluation::GetJoltSoftRigidContactVertexCount(
+                    *Jolt.Rigid, *Jolt.Soft, Bodies[Index].Id, StaticBodies[Index]);
         const auto AfterRun = PhysicsEvaluation::CaptureResources();
         std::cout << "[Physics:ProviderBenchmark] summary backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
@@ -556,6 +618,11 @@ int main(int ArgumentCount, char **Arguments) {
             << " build_stamp=" << BuildStamp << " binary_id=" << BinaryId
             << " run_pair=" << RunPair
             << " timing_instrumented=" << int(TimingInstrumented)
+            << " contact_capture_instrumented=" << int(ContactCaptureInstrumented)
+            << " drive_duration_seconds=" << (DrivenSphere ? DriveDurationSeconds : 0.0f)
+            << " drive_distance_m=" << (DrivenSphere ? DriveDistanceMeters : 0.0f)
+            << " jolt_soft_contact_vertices=" << JoltSoftContactVertices
+            << " soft_trajectory_hash=" << SoftTrajectoryHash
             << " startup_admission_ms=" << StartupAdmissionMs
             << " xpbd_substeps_requested=" << RequestedXpbdSubsteps
             << " xpbd_substeps_actual=" << ActualXpbdSubsteps
@@ -599,16 +666,16 @@ int main(int ArgumentCount, char **Arguments) {
             << " max_tetra_volume_error=" << QualityValue.MaximumTetraVolumeError
             << " mean_diagonal_strain=" << QualityValue.MeanDiagonalStrain
             << " initial_min_surface_distance=" <<
-                (Coupling == "static-sphere" ? InitialMinimumSurfaceDistance : 0.0)
+                (Coupling != "none" ? InitialMinimumSurfaceDistance : 0.0)
             << " minimum_poststep_surface_distance=" <<
-                (Coupling == "static-sphere" ? MinimumPoststepSurfaceDistance : 0.0)
+                (Coupling != "none" ? MinimumPoststepSurfaceDistance : 0.0)
             << " final_min_surface_distance=" <<
-                (Coupling == "static-sphere" ? FinalMinimumSurfaceDistance : 0.0)
+                (Coupling != "none" ? FinalMinimumSurfaceDistance : 0.0)
             << " max_poststep_penetration=" <<
-                (Coupling == "static-sphere" ?
+                (Coupling != "none" ?
                     std::max(0.0, -MinimumPoststepSurfaceDistance) : 0.0)
             << " observed_contact_band=" <<
-                (Coupling == "static-sphere" && MinimumPoststepSurfaceDistance <= 0.15 ? 1 : 0)
+                (Coupling != "none" && MinimumPoststepSurfaceDistance <= 0.15 ? 1 : 0)
             << " edge_count=" << QualityValue.EdgeCount << '\n' << std::flush;
 
         const auto TeardownStart = Clock::now();
@@ -646,6 +713,8 @@ int main(int ArgumentCount, char **Arguments) {
             if (!Calibration["Pass"].get<bool>())
                 throw std::runtime_error("XPBD reference frame-retention calibration failed");
         }
+        if (ContactCaptureInstrumented && JoltSoftContactVertices == 0)
+            throw std::runtime_error("Driven Jolt sphere produced no actual soft contact");
         return 0;
     } catch (const std::exception &Error) {
         std::cerr << "[Physics:ProviderBenchmark] " << Error.what() << '\n';

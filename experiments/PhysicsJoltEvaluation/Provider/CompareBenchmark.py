@@ -51,7 +51,7 @@ def Main() -> None:
     if Jolt.get("warmup_frames") is None:
         raise ValueError("Both logs need an explicit warmup frame count")
     Rubber = Jolt["scene"].startswith("rubber")
-    Coupled = Jolt["coupling"] == "static-sphere"
+    Coupled = Jolt["coupling"] in ("static-sphere", "driven-sphere")
     Fields = COMMON_FIELDS + (RUBBER_FIELDS if Rubber else ())
     if Coupled:
         Fields += ("max_poststep_penetration", "final_min_surface_distance")
@@ -73,6 +73,7 @@ def Main() -> None:
     Result: dict[str, object] = {
         "scene": Jolt["scene"],
         "coupling": Jolt["coupling"],
+        "driven_contact_instrumented": Jolt["coupling"] == "driven-sphere",
         "frames": int(Jolt["frames"]),
         "warmup_frames": int(Jolt["warmup_frames"]),
         "timing_instrumented": (Jolt.get("timing_instrumented") != "0" or
