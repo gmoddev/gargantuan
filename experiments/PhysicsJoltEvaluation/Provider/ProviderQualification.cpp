@@ -636,6 +636,57 @@ namespace {
             "full-update sleep onset varied materially across collision-step schedules");
     }
 #endif
+#if defined(PHYSICS_GANTRIA_SLEEP_FIX) && defined(PHYSICS_GANTRIA_ATTACHMENTS)
+    void SleepingRigidSoftAttachment() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        SoftBodyDefinition Cloth;
+        Cloth.Kind = SoftBodyKind::Cloth;
+        Cloth.Size = {2, 2, 0.2f};
+        Cloth.ResolutionX = Cloth.ResolutionY = 3;
+        Cloth.Material.StretchCompliance = 1.0e-6f;
+        Cloth.Material.Damping = 0.0f;
+        const auto Fabric = Provider.Soft->CreateBody(Cloth);
+        auto Load = Box({1, 0, 0}, {1, 1, 1}, false);
+        Load.CanCollide = false;
+        Load.CanTouch = false;
+        Load.SleepEnabled = true;
+        const auto Rigid = Provider.Rigid->CreateBody(Load);
+        Require(Fabric.IsValid() && Rigid.IsValid(),
+            "sleeping attachment endpoints failed admission");
+        Require(ConnectJoltRigidSoftAttachment(*Provider.Rigid, *Provider.Soft,
+            Fabric, 4, Rigid, {-1, 0, 0}).Succeeded(),
+            "sleeping cloth/rigid attachment failed admission");
+        Advance(Provider, 48);
+        const auto Settled = Provider.Rigid->GetBodyState(Rigid);
+        const auto Link = GetJoltRigidSoftAttachmentState(*Provider.Rigid, Fabric, Rigid);
+        std::cout << "[Physics:JoltProvider] attached_sleep awake="
+            << (Settled ? Settled->Awake : true)
+            << " applied_steps=" << (Link ? Link->AppliedSteps : 0)
+            << " last_impulse_x=" << (Link ? Link->LastImpulseOnSoft.x : 0)
+            << '\n' << std::flush;
+        Require(Settled && !Settled->Awake && Link && Link->Active &&
+            Link->AppliedSteps > 0,
+            "idle soft attachment kept its rigid endpoint awake");
+        Require(Provider.Soft->ApplyImpulseAtPosition(Fabric,
+            {16, 0, 0}, {0, 0, 0}).Succeeded(),
+            "soft impulse for sleeping attachment failed");
+        bool Reawakened = false;
+        float PeakRigidVelocityX = 0;
+        for (int Frame = 0; Frame < 3; ++Frame) {
+            Advance(Provider);
+            const auto State = Provider.Rigid->GetBodyState(Rigid);
+            Require(State.has_value(), "sleeping attachment lost its rigid endpoint");
+            Reawakened |= State->Awake;
+            PeakRigidVelocityX = std::max(PeakRigidVelocityX, State->LinearVelocity.x);
+        }
+        std::cout << "[Physics:JoltProvider] attached_rewake awake=" << Reawakened
+            << " peak_rigid_vx=" << PeakRigidVelocityX << '\n' << std::flush;
+        Require(Reawakened && PeakRigidVelocityX > 0.000001f,
+            "soft motion did not reawaken and move attached rigid body");
+    }
+#endif
     void UnifiedProviderReplacementOrder() {
         auto Bundle = CreateUnifiedJoltProvider({});
         SoftBodyDefinition Tiny;
@@ -1169,6 +1220,10 @@ int main() {
 #ifdef PHYSICS_GANTRIA_SLEEP_FIX
         std::cout << "[Physics:JoltProvider] full-update sleep cadence\n" << std::flush;
         FullUpdateSleepCadence();
+#endif
+#if defined(PHYSICS_GANTRIA_SLEEP_FIX) && defined(PHYSICS_GANTRIA_ATTACHMENTS)
+        std::cout << "[Physics:JoltProvider] attached rigid sleep/re-wake\n" << std::flush;
+        SleepingRigidSoftAttachment();
 #endif
         std::cout << "[Physics:JoltProvider] provider replacement order\n" << std::flush;
         UnifiedProviderReplacementOrder();

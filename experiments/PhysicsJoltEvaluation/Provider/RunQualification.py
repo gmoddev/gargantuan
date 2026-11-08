@@ -30,7 +30,7 @@ if SleepQualification and not AttachmentQualification:
     raise ValueError('The sleep-clock candidate requires attachments enabled')
 if SleepQualification and not ConvergenceQualification:
     raise ValueError('The hosted sleep-clock profile requires convergence enabled')
-Pin = ('f3838f1222c35a494736e9b3d1852461db51523d' if SleepQualification else
+Pin = ('d8c46588b23700d24ebdaeada0ff460d34b1f830' if SleepQualification else
        'e167ba589787fb76f5d9718ae348d4ac1c3b19ee' if ConvergenceQualification else
        'cd095d408a1cd231ad43fa8725d06a818fd63b13' if AttachmentQualification else
        '109be79fa82be0b306c56e4b4357675ed7843767')
