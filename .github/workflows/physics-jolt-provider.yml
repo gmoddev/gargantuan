@@ -3,7 +3,11 @@ on:
   push:
     branches: [experiment/jolt-optimized-foundation-20261108]
     paths:
-      - 'experiments/PhysicsJoltEvaluation/Provider/**'
+      # This job builds the provider fixture. Benchmark-only sources and prose
+      # have their independent bounded worker verification and do not change it.
+      - 'experiments/PhysicsJoltEvaluation/Provider/ProviderQualification.cpp'
+      - 'experiments/PhysicsJoltEvaluation/Provider/UnifiedJoltProvider.hpp'
+      - 'experiments/PhysicsJoltEvaluation/Provider/RunQualification.py'
       - 'experiments/PhysicsJoltEvaluation/RigidJoltBackend.cpp'
       - 'experiments/PhysicsJoltEvaluation/CMakeLists.txt'
       - '.github/workflows/physics-jolt-provider.yml'
