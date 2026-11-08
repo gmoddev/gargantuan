@@ -787,6 +787,9 @@ namespace {
         bool ValidBody(const PhysicsBodyDesc &Value) const {
             if (!Finite(Value.Transform) || !Finite(Value.Shape.Size) ||
                 Value.Shape.Size.x <= 0 || Value.Shape.Size.y <= 0 || Value.Shape.Size.z <= 0 ||
+                Value.Shape.Size.x > MaximumPhysicsQueryExtent ||
+                Value.Shape.Size.y > MaximumPhysicsQueryExtent ||
+                Value.Shape.Size.z > MaximumPhysicsQueryExtent ||
                 !std::isfinite(Value.Density) || Value.Density < 0 ||
                 !std::isfinite(Value.GravityScale) || Value.GravityScale < 0 ||
                 !std::isfinite(Value.LinearDamping) || Value.LinearDamping < 0 ||
@@ -794,6 +797,7 @@ namespace {
                 Value.CollisionGroup > MaximumPhysicsCollisionGroup ||
                 (Value.Anchored && Value.Kinematic) ||
                 (Value.MovingBodyCCD && (Value.Anchored || Value.Kinematic || !Value.CanCollide))) return false;
+            if (!Value.Anchored && !Value.Kinematic && !std::isfinite(BodyMass(Value))) return false;
             if (Value.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh)
                 return Value.Anchored && Value.Shape.Mesh && Value.Shape.Mesh->Positions && Value.Shape.Mesh->Indices;
             return Value.Shape.Kind == PhysicsShapeKind::Box || Value.Shape.Kind == PhysicsShapeKind::Ball ||
@@ -866,7 +870,7 @@ namespace {
             const auto Found = QueryShapes.find(Key);
             if (Found != QueryShapes.end()) return Found->second;
             auto Shape = MakeQueryShape(Query);
-            if (Shape) QueryShapes.emplace(Key, Shape);
+            if (Shape && QueryShapes.size() < 256) QueryShapes.emplace(Key, Shape);
             return Shape;
         }
         BodySlot *Find(PhysicsBodyId Id) {
@@ -1027,7 +1031,13 @@ namespace {
         SoftBodyId CreateBody(const SoftBodyDefinition &Definition) override {
             if (!IsValid() || LiveBodies >= Limits.MaximumBodies) return {};
             auto Construction = BuildSoft(Definition, Limits);
-            if (!Construction || LiveVertices + Construction->Shared->mVertices.size() > Limits.MaximumWorldVertices)
+            if (!Construction) return {};
+            const auto NewVertices = Construction->Shared->mVertices.size();
+            const auto NewConstraints = Construction->Shared->mEdgeConstraints.size() +
+                Construction->Shared->mVolumeConstraints.size();
+            if (NewVertices > Limits.MaximumWorldVertices - LiveVertices ||
+                NewConstraints > Limits.MaximumConstraints - LiveConstraints ||
+                NewVertices > Limits.MaximumQueuedResultBytes / sizeof(glm::vec3))
                 return {};
             const auto Layer = SoftLayer(Definition);
             if (Layer == JPH::cObjectLayerInvalid) return {};
@@ -1053,10 +1063,12 @@ namespace {
             Slot.Definition = Definition;
             Slot.Shared = std::move(Construction->Shared);
             Slot.Indices = std::move(Construction->Indices);
+            Slot.ConstraintCount = NewConstraints;
             Slot.TopologyRevision = std::max<std::uint64_t>(1, Slot.TopologyRevision + 1);
             Slot.VertexRevision = std::max<std::uint64_t>(1, Slot.VertexRevision + 1);
             ++LiveBodies;
-            LiveVertices += Slot.Shared->mVertices.size();
+            LiveVertices += NewVertices;
+            LiveConstraints += NewConstraints;
             return {Index, Slot.Generation};
         }
         PhysicsOperationResult UpdateBody(SoftBodyId Id, const SoftBodyDefinition &Definition) override {
@@ -1088,8 +1100,13 @@ namespace {
                 return {};
             }
             auto Replacement = BuildSoft(Definition, Limits);
-            if (!Replacement || LiveVertices - Slot->Shared->mVertices.size() +
-                Replacement->Shared->mVertices.size() > Limits.MaximumWorldVertices)
+            if (!Replacement) return {PhysicsOperationStatus::InvalidDescription, "Invalid Jolt soft definition"};
+            const auto NewVertices = Replacement->Shared->mVertices.size();
+            const auto NewConstraints = Replacement->Shared->mEdgeConstraints.size() +
+                Replacement->Shared->mVolumeConstraints.size();
+            if (NewVertices > Limits.MaximumWorldVertices - (LiveVertices - Slot->Shared->mVertices.size()) ||
+                NewConstraints > Limits.MaximumConstraints - (LiveConstraints - Slot->ConstraintCount) ||
+                NewVertices > Limits.MaximumQueuedResultBytes / sizeof(glm::vec3))
                 return {PhysicsOperationStatus::InvalidDescription, "Invalid or oversized Jolt soft definition"};
             const auto Layer = SoftLayer(Definition);
             if (Layer == JPH::cObjectLayerInvalid)
@@ -1111,10 +1128,12 @@ namespace {
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
             LiveVertices = LiveVertices - Slot->Shared->mVertices.size() + Replacement->Shared->mVertices.size();
+            LiveConstraints = LiveConstraints - Slot->ConstraintCount + NewConstraints;
             Slot->Native = Native;
             Slot->Definition = Definition;
             Slot->Shared = std::move(Replacement->Shared);
             Slot->Indices = std::move(Replacement->Indices);
+            Slot->ConstraintCount = NewConstraints;
             ++Slot->TopologyRevision;
             ++Slot->VertexRevision;
             return {};
@@ -1126,6 +1145,7 @@ namespace {
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
             LiveVertices -= Slot->Shared->mVertices.size();
+            LiveConstraints -= Slot->ConstraintCount;
             --LiveBodies;
             Slot->Live = false;
             Slot->Shared = nullptr;
@@ -1216,6 +1236,7 @@ namespace {
             std::uint64_t TopologyRevision = 0;
             std::uint64_t VertexRevision = 0;
             std::uint64_t ExtractedSequence = 0;
+            std::size_t ConstraintCount = 0;
         };
         Slot *Find(SoftBodyId Id) {
             return Id.IsValid() && Id.Slot < Slots.size() && Slots[Id.Slot].Live &&
@@ -1279,6 +1300,7 @@ namespace {
         std::vector<Slot> Slots;
         std::size_t LiveBodies = 0;
         std::size_t LiveVertices = 0;
+        std::size_t LiveConstraints = 0;
         bool Stopped = false;
     };
 }

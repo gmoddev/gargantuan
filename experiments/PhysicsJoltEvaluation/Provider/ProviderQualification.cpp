@@ -84,6 +84,13 @@ namespace {
         auto State = Provider.Rigid->GetBodyState(Moving);
         Require(State && std::abs(State->Mass - 0.7f * (4.0f / 3.0f) *
             3.14159265358979323846f * 0.008f) < 0.01f, "replacement mass is wrong");
+        Replacement.Anchored = true;
+        Require(Provider.Rigid->UpdateBody(Moving, Replacement).Succeeded(),
+            "dynamic to static transition failed");
+        Replacement.Anchored = false;
+        Require(Provider.Rigid->UpdateBody(Moving, Replacement).Succeeded() &&
+            Provider.Rigid->GetBodyState(Moving)->Mass > 0,
+            "static to dynamic transition lost motion properties");
         Require(Provider.Rigid->DestroyBody(Moving).Succeeded(), "rigid retirement failed");
         const auto Reused = Provider.Rigid->CreateBody(Ball({0, 4, 0}));
         Require(Reused.IsValid() && Reused != Moving && !Provider.Rigid->IsBodyValid(Moving),
