@@ -121,6 +121,13 @@ def Float32(Value):
     return struct.unpack("<f", struct.pack("<f", Value))[0]
 
 
+def VelocityMode(Config):
+    Mode = Config.get("VelocityReconstruction", "difference")
+    if Mode not in ("difference", "delta", "applieddelta"):
+        raise ValueError(f"Unknown velocity reconstruction mode: {Mode!r}")
+    return Mode
+
+
 def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
     """Replay the pinned source's float operations, retaining real-model error separately."""
     if Config.get("Fixture") != "Spring":
@@ -133,6 +140,7 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
         return {"Status": "NOT_SINGLE_EDGE_MICROSTEP_SCHEDULE", "Pass": False}
     if Config.get("Contact") or float(Config.get("Speed", 0.0)) != 0.0 or float(Config.get("Damping", 0.0)) != 0.0:
         return {"Status": "EXTERNAL_INPUT_OR_DAMPING", "Pass": False}
+    Mode = VelocityMode(Config)
     Compliance = Float32(float(Config["Compliance"]))
     Dt = Float32(float(Config["InternalIntegrationDt"]))
     InvMass = 10.0
@@ -157,16 +165,23 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
         ObservedX = float(Moving["P"][0])
         ObservedVelocity = float(Moving["V"][0])
         # Source: IntegratePositions x*=float(x+float(v*dt)); then one
-        # ApplyEdgeConstraints pass, with float length/denominator/vector
-        # operations; finally float (x_new-x_previous)/dt. The 1D sphere-free
-        # fixture has a pinned x=0 endpoint and rest length 1.
+        # ApplyEdgeConstraints pass with float length/denominator/vector
+        # operations. The selected reconstruction formula follows the native
+        # Config field. The 1D sphere-free fixture has a pinned x=0 endpoint
+        # and rest length 1.
         PredictedX = Float32(PreviousX + Float32(PreviousVelocity * Dt))
         Length = Float32(math.sqrt(Float32(PredictedX * PredictedX)))
         InvDtSq = Float32(1.0 / Float32(Dt * Dt))
         Denominator = Float32(Length * Float32(InvMass + Float32(Compliance * InvDtSq)))
         Correction = Float32(Float32(PredictedX * Float32(Length - 1.0)) / Denominator)
         ExpectedX = Float32(PredictedX - Float32(InvMass * Correction))
-        ExpectedVelocity = Float32(Float32(ExpectedX - PreviousX) / Dt)
+        if Mode == "difference":
+            ExpectedVelocity = Float32(Float32(ExpectedX - PreviousX) / Dt)
+        else:
+            RequestedDelta = Float32(-Float32(InvMass * Correction))
+            AppliedDelta = Float32(ExpectedX - PredictedX)
+            Delta = RequestedDelta if Mode == "delta" else AppliedDelta
+            ExpectedVelocity = Float32(PreviousVelocity + Float32(Delta / Dt))
         # Independently reconstruct Observe()'s emitted scalar K and U from
         # the expected float state. The native vector LengthSq and Length each
         # round in float before their results enter double energy arithmetic.
@@ -239,6 +254,7 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
         PreviousVelocity = ObservedVelocity
         PreviousEnergy = Energy
     return {"Status": "PASS_NATIVE_ONE_EDGE_FLOAT_SOURCE_REPLAY" if FirstFailure is None else "FAIL_NATIVE_ONE_EDGE_FLOAT_SOURCE_REPLAY",
+            "VelocityReconstruction": Mode,
             "Pass": FirstFailure is None, "CheckedMicrosteps": len(Accepted) if FirstFailure is None else FirstFailure + 1,
             "FirstFailureIndex": FirstFailure, "MaxFloatReplayPositionErrorM": MaxPositionError,
             "MaxFloatReplayVelocityErrorMps": MaxVelocityError,
@@ -255,7 +271,7 @@ def ValidateSpring(Config, Accepted, RawAccepted, InitialK, InitialU):
             "MaxDissipationIdentityResidualJ": MaxIdentityResidual,
             "MaxImplicitForceResidualKgMps": MaxForceResidual,
             "MaxImplicitKinematicResidualM": MaxKinematicResidual,
-            "Gate": "Exact float32 source-operation replay for every P/V and exact native Observe() K/U reconstruction; every same-input real implicit-Euler step is passive. Roundoff-defect arithmetic is diagnostic only. The unchanged full-run K+U ceiling remains a separate gate."}
+            "Gate": "Exact float32 source-operation replay for every P/V under the recorded velocity reconstruction mode and exact native Observe() K/U reconstruction; every same-input real implicit-Euler step is passive. Roundoff-defect arithmetic is diagnostic only. The unchanged full-run K+U ceiling remains a separate gate."}
 
 
 def RigidEnergy(State, Mass, Inertia):
@@ -360,6 +376,7 @@ def FirstFailure(Rows, Key):
 
 def Qualify(Arguments):
     Config, Frames, Microsteps = ReadRun(Arguments.input)
+    Mode = VelocityMode(Config)
     InitialK, InitialU = InitialValues(Config, Arguments)
     Fixture = Config.get("Fixture", "Cloth")
     ModelCeiling = 1.05 * (InitialK + InitialU) + 1.0e-5
@@ -399,6 +416,7 @@ def Qualify(Arguments):
                                and SpringReference.get("CompleteBoundedPass") is True
                                and SpringReference.get("NativeSpringCalibration", {}).get("Pass") is True
                                and ReferenceConfig.get("Jolt") == Config.get("Jolt")
+                               and VelocityMode(ReferenceConfig) == Mode
                                 and struct.pack("<f", Float32(float(ReferenceConfig.get("Compliance", -1.0)))) ==
                                     struct.pack("<f", Float32(float(Config["Compliance"]))))
     Trace = TraceInternal(Arguments.trace, Config, Frames, KineticCeiling, ModelCeiling, ModelAvailable) if Arguments.trace else None
@@ -456,7 +474,8 @@ def Qualify(Arguments):
         "SpringCalibrationReference": str(Arguments.spring_calibration.resolve()) if Arguments.spring_calibration else None,
         "SpringCalibrationReferencePass": SpringReferencePass,
         "Fixture": Fixture,
-        "ConfigSummary": {Key: Config.get(Key) for Key in ("Backend", "Jolt", "Fixture", "Compliance", "BendCompliance", "Steps", "Iterations", "WorldUpdatesPerFrame")},
+        "ConfigSummary": {**{Key: Config.get(Key) for Key in ("Backend", "Jolt", "Fixture", "Compliance", "BendCompliance", "Steps", "Iterations", "WorldUpdatesPerFrame")},
+                          "VelocityReconstruction": Mode},
         "InitialKineticEnergyJ": InitialK, "InitialEdgeModelEnergyJ": InitialU,
         "NecessaryKineticCeilingJ": KineticCeiling, "EdgeModelCeilingJ": ModelCeiling,
         "AllFixtureEdgesPositiveCompliance": ModelAvailable,

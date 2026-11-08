@@ -1,6 +1,7 @@
 """Qualify one observed Jolt schedule and pair its timing with pristine Jolt."""
 
 import argparse
+import gzip
 import hashlib
 import json
 import math
@@ -18,6 +19,10 @@ Parser.add_argument('--collision-steps', type=int, required=True)
 Parser.add_argument('--soft-iterations', type=int, required=True)
 Parser.add_argument('--compliance', type=float, required=True)
 Parser.add_argument('--output', type=Path, required=True)
+Parser.add_argument('--compress-raw', action='store_true',
+                    help='Losslessly gzip completed raw physics JSON after all checks')
+Parser.add_argument('--velocity-reconstruction', choices=('difference', 'delta', 'applieddelta'),
+                    default='difference')
 Args = Parser.parse_args()
 if not 1 <= Args.world_updates <= 384 or not 1 <= Args.collision_steps <= 8 or not 1 <= Args.soft_iterations <= 64:
     Parser.error('schedule outside unified runner bounds')
@@ -39,6 +44,44 @@ def HashFile(PathName):
         for Chunk in iter(lambda: Stream.read(1024 * 1024), b''):
             Digest.update(Chunk)
     return Digest.hexdigest()
+
+
+def ArchiveRaw(PathName, ExpectedSha256):
+    Original = PathName.resolve(strict=True)
+    if Original.parent != Args.output.resolve(strict=True):
+        raise ValueError(f'Raw physics file is outside output directory: {Original}')
+    Archive = Original.with_name(Original.name + '.gz')
+    Temporary = Archive.with_name(Archive.name + '.tmp')
+    if Archive.exists() or Temporary.exists():
+        raise FileExistsError(Archive)
+    Digest = hashlib.sha256()
+    OriginalBytes = 0
+    with Original.open('rb') as Source, Temporary.open('xb') as Destination:
+        with gzip.GzipFile(filename='', mode='wb', fileobj=Destination,
+                           mtime=0, compresslevel=1) as Compressor:
+            for Chunk in iter(lambda: Source.read(1024 * 1024), b''):
+                Digest.update(Chunk)
+                OriginalBytes += len(Chunk)
+                Compressor.write(Chunk)
+    OriginalSha256 = Digest.hexdigest()
+    if OriginalSha256 != ExpectedSha256:
+        raise ValueError(f'Raw physics hash changed before compression: {Original.name}')
+    Verify = hashlib.sha256()
+    VerifiedBytes = 0
+    with gzip.open(Temporary, 'rb') as Source:
+        for Chunk in iter(lambda: Source.read(1024 * 1024), b''):
+            Verify.update(Chunk)
+            VerifiedBytes += len(Chunk)
+    if Verify.hexdigest() != OriginalSha256 or VerifiedBytes != OriginalBytes:
+        raise ValueError(f'Compressed raw physics failed lossless verification: {Original.name}')
+    ArchiveSha256 = HashFile(Temporary)
+    ArchiveBytes = Temporary.stat().st_size
+    Temporary.rename(Archive)
+    Original.unlink()
+    return {'OriginalPath': Original.name, 'OriginalSha256': OriginalSha256,
+            'OriginalBytes': OriginalBytes, 'ArchivePath': Archive.name,
+            'ArchiveSha256': ArchiveSha256, 'ArchiveBytes': ArchiveBytes,
+            'Codec': 'gzip', 'GzipMtime': 0, 'LosslessRoundTripVerified': True}
 
 
 def PhysicalFrames(Result, Control=False, Limit=None):
@@ -87,6 +130,7 @@ def Run(Name, Binary, Options):
         raise RuntimeError(f'{Name}: executable returned {Process.returncode}; see {Error}')
     Result = json.loads(Output.read_text(encoding='utf-8'))
     Receipt = {'ExitCode': Process.returncode, 'Seconds': time.monotonic() - Started,
+               'Raw': Output.name,
                'OutputSha256': HashFile(Output), 'StderrSha256': HashFile(Error),
                'FrameStateSha256': StateHash(Result),
                'MeanStepMs': statistics.mean(Frame['StepMs'] for Frame in Result['Frames']),
@@ -95,11 +139,13 @@ def Run(Name, Binary, Options):
     return Result, Receipt
 
 
-def ProfileMatches(Result, WorldUpdates, CollisionSteps, SoftIterations, Compliance):
+def ProfileMatches(Result, WorldUpdates, CollisionSteps, SoftIterations, Compliance,
+                   VelocityReconstruction):
     return (Result.get('WorldUpdatesPerFrame') == WorldUpdates and
             Result.get('CollisionSteps') == CollisionSteps and
             Result.get('SolverIterations') == SoftIterations and
-            abs(Result.get('SelectedStretchCompliance', float('nan')) - Compliance) <= 1e-11)
+            abs(Result.get('SelectedStretchCompliance', float('nan')) - Compliance) <= 1e-11 and
+            Result.get('VelocityReconstruction', 'difference') == VelocityReconstruction)
 
 
 def FullObservation(Result, Frames, WorldUpdates, CollisionSteps, SoftIterations):
@@ -153,6 +199,9 @@ ComplianceText = format(Args.compliance, '.12g')
 Base = ['--backend', 'Jolt', '--world-updates', str(Args.world_updates),
         '--collision-steps', str(Args.collision_steps), '--soft-iterations',
         str(Args.soft_iterations), '--stretch-compliance', ComplianceText]
+ModeOptions = [] if Args.velocity_reconstruction == 'difference' else [
+    '--velocity-reconstruction', Args.velocity_reconstruction]
+Base += ModeOptions
 
 
 def RunPair(Name, Case, Workers, Frames, Repeat=None, Extended=False):
@@ -180,7 +229,8 @@ def RunPair(Name, Case, Workers, Frames, Repeat=None, Extended=False):
             Args.collision_steps, Args.soft_iterations) for Source in
             (Observed, Observed['ContactDisabledControl'])),
         'ProfileMetadataMatches': all(ProfileMatches(Source, Args.world_updates,
-            Args.collision_steps, Args.soft_iterations, Args.compliance) for Source in
+            Args.collision_steps, Args.soft_iterations, Args.compliance,
+            Args.velocity_reconstruction) for Source in
             (Observed, Observed['ContactDisabledControl'], Pristine,
              Pristine['ContactDisabledControl'])),
         'PristineFrameOnly': PristineRun['ExitCode'] == 0 and
@@ -203,6 +253,13 @@ def RunPair(Name, Case, Workers, Frames, Repeat=None, Extended=False):
                'Quality': QualitySummary(Observed),
                'ContactDisabledQuality': QualitySummary(Observed['ContactDisabledControl'])}
     Receipt['QualificationPass'] = all(Checks.values())
+    if Args.compress_raw:
+        ObservedArchive = ArchiveRaw(Args.output / ObservedRun['Raw'], ObservedRun['OutputSha256'])
+        PristineArchive = ArchiveRaw(Args.output / PristineRun['Raw'], PristineRun['OutputSha256'])
+        ObservedRun['RawArchive'] = ObservedArchive
+        PristineRun['RawArchive'] = PristineArchive
+        ObservedRun['Raw'] = ObservedArchive['ArchivePath']
+        PristineRun['Raw'] = PristineArchive['ArchivePath']
     Receipts.append(Receipt)
     (Args.output / 'Receipts.json').write_text(json.dumps(Receipts, indent=2),
                                                encoding='utf-8')
@@ -229,7 +286,9 @@ HardChecks = {'ExpectedHardConstraintRejection': HardRun['ExitCode'] == 3 and
               Hard.get('ReferenceModelGateQualified') is False,
               'CompleteObserverCoverage': FullObservation(Hard, 1, Args.world_updates,
                   Args.collision_steps, Args.soft_iterations) is False and
-                  Hard.get('AcceptedObservationCoverage') is True}
+                  Hard.get('AcceptedObservationCoverage') is True,
+              'VelocityReconstructionMatches': all(Source.get('VelocityReconstruction', 'difference') ==
+                  Args.velocity_reconstruction for Source in (Hard, Hard['ContactDisabledControl']))}
 # FullObservation intentionally rejects the hard control because its material
 # precondition is false; callback counts are checked separately here.
 ExpectedHardCallbacks = Args.world_updates * Args.collision_steps * Args.soft_iterations
@@ -243,7 +302,7 @@ Receipts.append({'Name': 'HardConstraintReferenceReject', 'Options': HardOptions
 CoverageOptions = ['--backend', 'Jolt', '--case', 'RigidIntoCloth', '--workers', '1',
                    '--frames', '1', '--world-updates', '1', '--collision-steps', '1',
                    '--soft-iterations', '2', '--stretch-compliance', ComplianceText,
-                   '--observe-accepted', '1']
+                   '--observe-accepted', '1', *ModeOptions]
 Coverage, CoverageRun = Run('OmittedInternalEndpointReject', Args.pristine,
                             CoverageOptions)
 CoverageChecks = {'ExpectedCoverageRejection': CoverageRun['ExitCode'] == 3 and
@@ -252,7 +311,9 @@ CoverageChecks = {'ExpectedCoverageRejection': CoverageRun['ExitCode'] == 3 and
                   Coverage.get('WorldUpdateObservationCoverage') is True and
                   Coverage.get('ReferenceModelGateQualified') is None and
                   Coverage.get('AcceptedQualityQualified') is None and
-                  Coverage.get('QualityQualified') is False}
+                  Coverage.get('QualityQualified') is False,
+                  'VelocityReconstructionMatches': all(Source.get('VelocityReconstruction', 'difference') ==
+                      Args.velocity_reconstruction for Source in (Coverage, Coverage['ContactDisabledControl']))}
 Receipts.append({'Name': 'OmittedInternalEndpointReject', 'Options': CoverageOptions,
                  'PristineRun': CoverageRun, 'Checks': CoverageChecks,
                  'QualificationPass': all(CoverageChecks.values()),
@@ -261,6 +322,8 @@ Receipts.append({'Name': 'OmittedInternalEndpointReject', 'Options': CoverageOpt
                                            encoding='utf-8')
 
 Verdict = {'Type': 'UnifiedScheduledQualification',
+           'VelocityReconstruction': Args.velocity_reconstruction,
+           'RawPhysicsCompression': 'gzip-mtime0-lossless-verified' if Args.compress_raw else 'none',
            'QualifiedProfile': {'WorldUpdates': Args.world_updates,
                                 'CollisionSteps': Args.collision_steps,
                                 'SoftIterations': Args.soft_iterations,

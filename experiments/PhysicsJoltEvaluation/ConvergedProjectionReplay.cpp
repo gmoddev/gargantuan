@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -22,6 +23,8 @@ struct Options {
     std::string GraphPath;
     std::string Precision = "float";
     std::string RestMode = "captured";
+    std::string VelocityReconstruction = "difference";
+    bool VelocityReconstructionSpecified = false;
     int Steps = 1;
     int Frames = 150;
     int IntegrationsPerFrame = 0;
@@ -46,6 +49,10 @@ Options Parse(int Count, char **Arguments) {
         if (Name == "--graph") Result.GraphPath = Value();
         else if (Name == "--precision") Result.Precision = Value();
         else if (Name == "--rest") Result.RestMode = Value();
+        else if (Name == "--velocity-reconstruction") {
+            Result.VelocityReconstruction = Value();
+            Result.VelocityReconstructionSpecified = true;
+        }
         else if (Name == "--steps") Result.Steps = std::stoi(Value());
         else if (Name == "--frames") Result.Frames = std::stoi(Value());
         else if (Name == "--integrations-per-frame") Result.IntegrationsPerFrame = std::stoi(Value());
@@ -73,6 +80,8 @@ Options Parse(int Count, char **Arguments) {
     if (Result.GraphPath.empty() ||
         (Result.Precision != "float" && Result.Precision != "double" && Result.Precision != "longdouble") ||
         (Result.RestMode != "captured" && Result.RestMode != "recomputed") ||
+        (Result.VelocityReconstruction != "difference" && Result.VelocityReconstruction != "delta" &&
+         Result.VelocityReconstruction != "applieddelta") ||
         (Result.Steps != 1 && Result.Steps != 4) || Result.Frames < 1 || Result.Frames > 3600 ||
         Result.IntegrationsPerFrame < 0 || Result.IntegrationsPerFrame > 768 ||
         Result.StageLimit < 0 || Result.StageLimit > 96 || Result.SeedIndex < 0 ||
@@ -286,6 +295,10 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
         ConfigRow["IntegrationSchedule"] = "Direct float frame duration divided by integrations per frame; one projection solve per integration.";
         ConfigRow["SoftIntegrationsPerOuter"] = nullptr;
     }
+    if (Config.VelocityReconstructionSpecified) {
+        ConfigRow["VelocityReconstruction"] = Config.VelocityReconstruction;
+        ConfigRow["VelocityReconstructionScope"] = "difference reconstructs from stored position difference; delta accumulates requested edge displacement in solver precision; applieddelta accumulates stored edge displacement in solver precision. The alternatives start from damped velocity and exclude integration prediction rounding.";
+    }
     std::cout << ConfigRow.dump() << '\n';
     double MaximumKinetic = Initial.Kinetic;
     int FirstNonfiniteFrame = -1;
@@ -294,21 +307,36 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
     double MaximumAbsLambda = 0.0;
     int MaximumSweepsUsed = 0;
     int MinimumSweepsUsed = Config.ProjectionIterations;
+    const bool AlternateVelocity = Config.VelocityReconstruction != "difference";
+    std::vector<Vector3<T>> DampedVelocities;
+    std::vector<Vector3<T>> CorrectionSum;
+    if (AlternateVelocity) {
+        DampedVelocities.resize(Vertices.size());
+        CorrectionSum.resize(Vertices.size());
+    }
+    double MaximumVelocityReconstructionDifference = 0.0;
     for (int Frame = 0; Frame < Config.Frames; ++Frame) {
         double FrameMaximumEquilibriumResidual = 0.0;
         double FrameMaximumRawConstraintViolation = 0.0;
         double FrameMaximumAbsLambda = 0.0;
         int FrameMaximumSweepsUsed = 0;
         int FrameMinimumSweepsUsed = Config.ProjectionIterations;
+        double FrameVelocityReconstructionDifferenceSquared = 0.0;
+        double FrameMaximumVelocityReconstructionDifference = 0.0;
+        std::uint64_t FrameVelocityReconstructionSamples = 0;
         for (int Microstep = 0; Microstep < IntegrationsPerFrame; ++Microstep) {
+            if (AlternateVelocity)
+                std::fill(CorrectionSum.begin(), CorrectionSum.end(), Vector3<T>{});
             EmitStage(Config, Frame, Microstep, "BeforeIntegration", Vertices, Edges,
                       StepTime, false);
-            for (auto &Item : Vertices) {
+            for (std::size_t VertexIndex = 0; VertexIndex < Vertices.size(); ++VertexIndex) {
+                auto &Item = Vertices[VertexIndex];
                 if (Item.InverseMass > T(0)) {
                     Item.Velocity.X *= Damping;
                     Item.Velocity.Y *= Damping;
                     Item.Velocity.Z *= Damping;
                 }
+                if (AlternateVelocity) DampedVelocities[VertexIndex] = Item.Velocity;
                 const auto OldPosition = Item.Position;
                 Item.Previous = OldPosition;
                 Item.Position.X = OldPosition.X + Item.Velocity.X * StepTime;
@@ -361,6 +389,25 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
                     V1.Position.X = X1.X - V1.InverseMass * Cx;
                     V1.Position.Y = X1.Y - V1.InverseMass * Cy;
                     V1.Position.Z = X1.Z - V1.InverseMass * Cz;
+                    if (AlternateVelocity) {
+                        auto &Sum0 = CorrectionSum[Constraint.I];
+                        auto &Sum1 = CorrectionSum[Constraint.J];
+                        if (Config.VelocityReconstruction == "delta") {
+                            Sum0.X += V0.InverseMass * Cx;
+                            Sum0.Y += V0.InverseMass * Cy;
+                            Sum0.Z += V0.InverseMass * Cz;
+                            Sum1.X -= V1.InverseMass * Cx;
+                            Sum1.Y -= V1.InverseMass * Cy;
+                            Sum1.Z -= V1.InverseMass * Cz;
+                        } else {
+                            Sum0.X += V0.Position.X - X0.X;
+                            Sum0.Y += V0.Position.Y - X0.Y;
+                            Sum0.Z += V0.Position.Z - X0.Z;
+                            Sum1.X += V1.Position.X - X1.X;
+                            Sum1.Y += V1.Position.Y - X1.Y;
+                            Sum1.Z += V1.Position.Z - X1.Z;
+                        }
+                    }
                 }
                 SweepsUsed = Iteration + 1;
                 if (Config.Tolerance > 0.0 || SweepsUsed == Config.ProjectionIterations) {
@@ -394,12 +441,33 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
             FrameMinimumSweepsUsed = std::min(FrameMinimumSweepsUsed, SweepsUsed);
             EmitStage(Config, Frame, Microstep, "AfterProjection", Vertices, Edges,
                       StepTime, true);
-            for (auto &Item : Vertices)
+            for (std::size_t VertexIndex = 0; VertexIndex < Vertices.size(); ++VertexIndex) {
+                auto &Item = Vertices[VertexIndex];
                 if (Item.InverseMass > T(0)) {
-                    Item.Velocity.X = (Item.Position.X - Item.Previous.X) / StepTime;
-                    Item.Velocity.Y = (Item.Position.Y - Item.Previous.Y) / StepTime;
-                    Item.Velocity.Z = (Item.Position.Z - Item.Previous.Z) / StepTime;
+                    const Vector3<T> DifferenceVelocity{
+                        (Item.Position.X - Item.Previous.X) / StepTime,
+                        (Item.Position.Y - Item.Previous.Y) / StepTime,
+                        (Item.Position.Z - Item.Previous.Z) / StepTime};
+                    if (AlternateVelocity) {
+                        const auto &DampedVelocity = DampedVelocities[VertexIndex];
+                        const auto &Sum = CorrectionSum[VertexIndex];
+                        Item.Velocity = {
+                            DampedVelocity.X + Sum.X / StepTime,
+                            DampedVelocity.Y + Sum.Y / StepTime,
+                            DampedVelocity.Z + Sum.Z / StepTime};
+                        const double Dx = static_cast<double>(Item.Velocity.X) - static_cast<double>(DifferenceVelocity.X);
+                        const double Dy = static_cast<double>(Item.Velocity.Y) - static_cast<double>(DifferenceVelocity.Y);
+                        const double Dz = static_cast<double>(Item.Velocity.Z) - static_cast<double>(DifferenceVelocity.Z);
+                        const double MagnitudeSquared = Dx * Dx + Dy * Dy + Dz * Dz;
+                        FrameVelocityReconstructionDifferenceSquared += MagnitudeSquared;
+                        FrameMaximumVelocityReconstructionDifference = std::max(
+                            FrameMaximumVelocityReconstructionDifference, std::sqrt(MagnitudeSquared));
+                        ++FrameVelocityReconstructionSamples;
+                    } else {
+                        Item.Velocity = DifferenceVelocity;
+                    }
                 }
+            }
             EmitStage(Config, Frame, Microstep, "AfterReconstruction", Vertices, Edges,
                       StepTime, false);
         }
@@ -415,6 +483,14 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
         Row["MaxAbsLambda"] = FrameMaximumAbsLambda;
         Row["MinProjectionSweepsUsed"] = FrameMinimumSweepsUsed;
         Row["MaxProjectionSweepsUsed"] = FrameMaximumSweepsUsed;
+        if (AlternateVelocity) {
+            Row["VelocityReconstructionDifferenceRmsMps"] = std::sqrt(
+                FrameVelocityReconstructionDifferenceSquared /
+                static_cast<double>(std::max<std::uint64_t>(FrameVelocityReconstructionSamples, 1)));
+            Row["VelocityReconstructionDifferenceMaxMps"] = FrameMaximumVelocityReconstructionDifference;
+            MaximumVelocityReconstructionDifference = std::max(
+                MaximumVelocityReconstructionDifference, FrameMaximumVelocityReconstructionDifference);
+        }
         MaximumEquilibriumResidual = std::max(MaximumEquilibriumResidual, FrameMaximumEquilibriumResidual);
         MaximumRawConstraintViolation = std::max(MaximumRawConstraintViolation, FrameMaximumRawConstraintViolation);
         MaximumAbsLambda = std::max(MaximumAbsLambda, FrameMaximumAbsLambda);
@@ -427,14 +503,17 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
             break;
         }
     }
-    std::cout << Json({{"Type", "Summary"}, {"MaximumKineticEnergy", MaximumKinetic},
+    Json SummaryRow = {{"Type", "Summary"}, {"MaximumKineticEnergy", MaximumKinetic},
                        {"FirstNonfiniteFrame", FirstNonfiniteFrame},
                        {"MaxNormalizedEquilibriumResidual", MaximumEquilibriumResidual},
                        {"MaxNormalizedRawConstraintViolation", MaximumRawConstraintViolation},
                        {"MaxAbsLambda", MaximumAbsLambda},
                        {"MinProjectionSweepsUsed", MinimumSweepsUsed},
                        {"MaxProjectionSweepsUsed", MaximumSweepsUsed},
-                       {"InitialVelocityKineticEnergy", Initial.Kinetic}}).dump() << '\n';
+                       {"InitialVelocityKineticEnergy", Initial.Kinetic}};
+    if (AlternateVelocity)
+        SummaryRow["MaximumVelocityReconstructionDifferenceMps"] = MaximumVelocityReconstructionDifference;
+    std::cout << SummaryRow.dump() << '\n';
 }
 } // namespace
 

@@ -294,6 +294,8 @@ for Profile, Steps, Iterations in Profiles:
                        for Row in Ledger),
                    'MaxAbsVelocityClosure': max(abs(Row['ContactVelocityClosure'])
                        for Row in Ledger),
+                   'MaxAbsOperationClosure': max(abs(Row['OperationClosure'])
+                       for Row in Ledger),
                    'MaxEdgeCandidateKPlusU': max(Row['EdgeCandidateKPlusUDelta']
                        for Row in Ledger),
                    'MaxProjectionU': max(Row['ProjectionU'] for Row in Ledger),

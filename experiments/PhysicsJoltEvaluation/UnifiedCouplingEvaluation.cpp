@@ -3,6 +3,7 @@
 #include "CouplingXpbdBackend.hpp"
 #endif
 #include "ExperimentSupport.hpp"
+#include "ExperimentalVelocityReconstruction.hpp"
 #ifndef PHYSICS_UNIFIED_NATIVE_ONLY
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
@@ -57,6 +58,7 @@ namespace {
         int CollisionSteps = 1;
         int WorldUpdates = 1;
         int SoftIterations = 24;
+        int VelocityReconstruction = 0;
         float StretchCompliance = 0.0f;
         bool ObserveAccepted = true;
     };
@@ -74,6 +76,8 @@ namespace {
             else if (Name == "--collision-steps") Result.CollisionSteps = std::stoi(Value);
             else if (Name == "--world-updates") Result.WorldUpdates = std::stoi(Value);
             else if (Name == "--soft-iterations") Result.SoftIterations = std::stoi(Value);
+            else if (Name == "--velocity-reconstruction") Result.VelocityReconstruction =
+                PhysicsJoltEvaluation::ParseVelocityReconstruction(Value);
             else if (Name == "--stretch-compliance") Result.StretchCompliance = std::stof(Value);
             else if (Name == "--observe-accepted") {
                 if (Value != "0" && Value != "1")
@@ -223,6 +227,7 @@ namespace {
     }
 
     Json RunJolt(const Options &Config, bool EnableContact) {
+        PhysicsJoltEvaluation::ConfigureVelocityReconstruction(Config.VelocityReconstruction);
         // One calling thread plus this many background threads is the actual Jolt budget.
         const int BackgroundWorkers = std::max(0, Config.Workers - 1);
         ContactCounter Contacts;
@@ -262,6 +267,7 @@ namespace {
         const bool UnsupportedConstraintKinds = !Shared->mDihedralBendConstraints.empty() ||
             !Shared->mSkinnedConstraints.empty() || !Shared->mLRAConstraints.empty() ||
             !Shared->mRodStretchShearConstraints.empty() || !Shared->mRodBendTwistConstraints.empty();
+        PhysicsJoltEvaluation::ValidateVelocityConstraints(*Shared, Config.VelocityReconstruction);
         const bool ReferenceModelPreconditions = !UnsupportedConstraintKinds &&
             NonpositiveActiveConstraints == 0;
 #ifdef PHYSICS_ENERGY_OBSERVER
@@ -712,6 +718,8 @@ namespace {
                 {"CallerRole", "ParticipatesInSolve"}, {"ExecutionMode", "JoltThreadPool"},
                 {"CollisionSteps", Config.CollisionSteps}, {"SolverIterations", Config.SoftIterations},
                 {"WorldUpdatesPerFrame", Config.WorldUpdates},
+                {"VelocityReconstruction", PhysicsJoltEvaluation::VelocityReconstructionName(Config.VelocityReconstruction)},
+                {"NumericalReconstructionPatch", PhysicsJoltEvaluation::NumericalReconstructionPatch},
                 {"SoftIntegrationsPerFrame", Config.WorldUpdates * Config.CollisionSteps * Config.SoftIterations},
                 {"SoftIntegrationDt", DeltaTime /
                     static_cast<float>(Config.WorldUpdates * Config.CollisionSteps * Config.SoftIterations)},

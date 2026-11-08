@@ -10,6 +10,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import time
@@ -187,13 +188,29 @@ def Profiles():
                 yield Label, Fixture, Material, Steps, Iterations, Updates, (36 if Negative else 150)
 
 
-def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material):
-    Updates = 96 if Material == "1e-5" else 192
+def Float32(Value):
+    return struct.unpack("<f", struct.pack("<f", Value))[0]
+
+
+def NativeStepTime(Updates, Steps, Iterations):
+    Dt = Float32(1.0 / 60.0)
+    return Float32(Float32(Float32(Dt / Updates) / Steps) / Iterations)
+
+
+def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
+                    IntegrationsPerFrame=None, VelocityReconstruction="difference"):
+    Updates = IntegrationsPerFrame if IntegrationsPerFrame is not None else (96 if Material == "1e-5" else 192)
+    if not isinstance(Updates, int) or not 1 <= Updates <= 384:
+        raise ValueError("[Physics:ScheduledEnergy] Spring calibration cadence outside 1..384")
+    if VelocityReconstruction not in ("difference", "delta", "applieddelta"):
+        raise ValueError("[Physics:ScheduledEnergy] Unknown spring calibration velocity reconstruction")
     Name = f"Spring-M{Material}-W{Updates}"
     Common = ["--fixture", "Spring", "--frames", "8", "--steps", "1", "--iterations", "1",
               "--world-updates", str(Updates), "--compliance", Material, "--damping", "0",
               "--contact", "0", "--speed", "0", "--workers", str(Arguments.threads),
               "--particles", "1", "--observe-updates", "1"]
+    if VelocityReconstruction != "difference":
+        Common += ["--velocity-reconstruction", VelocityReconstruction]
     PristinePath = Output / f"{Name}.pristine.jsonl"
     ObservedPath = Output / f"{Name}.observed.jsonl"
     SolverPath = Output / f"{Name}.solver.jsonl"
@@ -203,6 +220,13 @@ def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material)
                                 ObservedPath, Output / f"{Name}.observed.stderr.txt")
     PristineConfig, PristineFrames, PristineMicrosteps, _ = ReadPublished(PristinePath)
     ObservedConfig, ObservedFrames, ObservedMicrosteps, _ = ReadPublished(ObservedPath)
+    ExpectedDt = NativeStepTime(Updates, 1, 1)
+    assert PristineConfig["WorldUpdatesPerFrame"] == ObservedConfig["WorldUpdatesPerFrame"] == Updates
+    assert PristineConfig["Steps"] == ObservedConfig["Steps"] == 1
+    assert PristineConfig["Iterations"] == ObservedConfig["Iterations"] == 1
+    assert PristineConfig["InternalIntegrationDt"] == ObservedConfig["InternalIntegrationDt"] == ExpectedDt
+    assert PristineConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
+    assert ObservedConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
     assert PristineConfig["InitialKineticEnergy"] == ObservedConfig["InitialKineticEnergy"]
     assert PristineConfig["InitialCompliantEdgeElasticEstimate"] == ObservedConfig["InitialCompliantEdgeElasticEstimate"]
     assert PristineConfig["AllEdgesPositiveCompliance"] and ObservedConfig["AllEdgesPositiveCompliance"]
@@ -217,8 +241,12 @@ def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material)
     Quality = json.loads(QualityPath.read_text(encoding="utf-8"))
     Calibrated = bool(Quality["CompleteBoundedPass"] and
                       Quality["NativeSpringCalibration"] and Quality["NativeSpringCalibration"]["Pass"] and
+                      Quality["NativeSpringCalibration"].get("VelocityReconstruction", "difference") == VelocityReconstruction and
+                      Quality["ConfigSummary"].get("VelocityReconstruction", "difference") == VelocityReconstruction and
                       Score["CompleteBoundedPass"])
     return {"Name": Name, "MaterialCompliance": Material, "WorldUpdates": Updates,
+            "InternalIntegrationDt": ExpectedDt,
+            "VelocityReconstruction": VelocityReconstruction,
             "PristineSeconds": PristineSeconds, "ObservedSeconds": ObservedSeconds,
             "PristineRaw": PristinePath.name, "ObservedRaw": ObservedPath.name,
             "SolverRaw": SolverPath.name, "QualityFile": QualityPath.name,

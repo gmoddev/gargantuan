@@ -13,6 +13,7 @@
 #include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
 #include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
 #include "ExperimentSupport.hpp"
+#include "ExperimentalVelocityReconstruction.hpp"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <atomic>
@@ -37,6 +38,7 @@ struct Options {
     int Frames = 150, Steps = 1, Iterations = 24, Workers = 1, Count = 1;
     int TraceStart = 16, TraceEnd = 24, ProjectionPasses = 1, ContactThrough = 3600;
     int WorldUpdates = 1;
+    int VelocityReconstruction = 0;
     bool ObserveUpdates = false;
     bool Contact = true, Pinned = true, Dynamic = true, Particles = true;
     float Compliance = 0.0f, BendCompliance = 1.0e-4f, Damping = 2.4f, Friction = 0.2f;
@@ -68,6 +70,7 @@ Options Parse(int Count, char** Args) {
         const std::string K=Args[I], S=Args[I+1];
         if(K=="--frames") O.Frames=std::stoi(S);
         else if(K=="--world-updates") O.WorldUpdates=std::stoi(S);
+        else if(K=="--velocity-reconstruction") O.VelocityReconstruction=PhysicsJoltEvaluation::ParseVelocityReconstruction(S);
         else if(K=="--fixture") O.Fixture=S;
         else if(K=="--observe-updates") O.ObserveUpdates=std::stoi(S)!=0;
         else if(K=="--steps") O.Steps=std::stoi(S);
@@ -323,6 +326,7 @@ int main(int ArgCount,char** Args) {
     PhysicsEvaluation::SuppressErrorDialogs();
     try {
         Config=Parse(ArgCount,Args);
+        PhysicsJoltEvaluation::ConfigureVelocityReconstruction(Config.VelocityReconstruction);
         PhysicsEvaluation::InstallPhysicsAllocators();
         if(!Config.Trace.empty()) { TraceFile.open(Config.Trace); if(!TraceFile) throw std::runtime_error("[Physics:Coupling] Trace open failed"); }
 #ifdef PHYSICS_ENERGY_OBSERVER
@@ -341,6 +345,7 @@ int main(int ArgCount,char** Args) {
             JPH::PhysicsSystem World; World.Init(8192,0,16384,8192,Layer,Broad,Pair);
             World.SetGravity(JPH::Vec3::sZero()); World.SetSoftBodyContactListener(&Contact);
             auto Shared=GetCloth();
+            PhysicsJoltEvaluation::ValidateVelocityConstraints(*Shared, Config.VelocityReconstruction);
             JPH::SoftBodyCreationSettings Soft(Shared,JPH::RVec3::sZero(),JPH::Quat::sIdentity(),2);
             Soft.mNumIterations=Config.Iterations; Soft.mUpdatePosition=false; Soft.mAllowSleeping=false;
             Soft.mLinearDamping=Config.Damping; Soft.mVertexRadius=0.05f; Soft.mFacesDoubleSided=true;
@@ -454,6 +459,8 @@ int main(int ArgCount,char** Args) {
                 {"ProjectionFrame",Config.ProjectionFrame},{"ProjectionIteration",Config.ProjectionIteration},{"ProjectionVertex",Config.ProjectionVertex},
                 {"RigidCount",Config.Count},{"InternalIntegrationDt",((Dt/Config.WorldUpdates)/Config.Steps)/Config.Iterations},
                 {"WorldUpdatesPerFrame",Config.WorldUpdates},{"ObserveUpdates",Config.ObserveUpdates},{"Speed",Config.Speed},
+                {"VelocityReconstruction",PhysicsJoltEvaluation::VelocityReconstructionName(Config.VelocityReconstruction)},
+                {"NumericalReconstructionPatch",PhysicsJoltEvaluation::NumericalReconstructionPatch},
                 {"InitialKineticEnergy",Initial["KineticEnergy"]},{"InitialCompliantEdgeElasticEstimate",Initial["CompliantEdgeElasticEstimate"]},
                 {"AllEdgesPositiveCompliance",PositiveCompliance},
                 {"Fixture",Config.Fixture},{"SolverObservations",Config.SolverObservations},
