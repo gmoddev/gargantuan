@@ -163,4 +163,13 @@ setup/admission. `physics_step_wall_ms` is therefore a physics-call cost, not
 whole Engine frame time. The worker argument caps both backends through the
 existing test friend seam before admission; XPBD is still created by the
 production factory and reports its actual worker/job counts. Use the actual
-counts when comparing costs.
+counts when comparing costs. The Engine summary separately reports `setup_ms`
+and `semantic_destroy_ms`; teardown calls `Game::Destroy()` and checks that
+the `WorldRoot` identity maps are empty. After each timed physics call and
+before the next frame, the harness checks finite vertices and axial edges,
+stable body identity/revisions, and no frozen or dropped work. It reports
+`mean_y`, `center_y`, `max_pin_error`, `peak_pin_error`,
+`mean_edge_strain`, `max_edge_strain`, `peak_edge_strain`, and rubber
+`mean_volume_ratio` (axis-aligned bounding-box volume). Those checks are
+outside the step timer but can affect the next frame's cache state; compare
+fresh, counterbalanced processes under the same harness.
