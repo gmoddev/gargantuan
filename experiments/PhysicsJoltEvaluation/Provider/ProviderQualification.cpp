@@ -810,6 +810,46 @@ namespace {
         Require(AfterFloorMove->Awake && AfterFloorMove->Transform.Position.y < 0.49f,
             "moving static floor left its former contact asleep in unsupported space");
     }
+    void NewStaticOverlapWakesSleeper() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        PhysicsBodyDesc BallValue;
+        BallValue.Shape.Kind = PhysicsShapeKind::Ball;
+        BallValue.Shape.Size = {1, 1, 1};
+        BallValue.Transform.Position = {0, 0.5f, 0};
+        const auto BallId = Provider.Rigid->CreateBody(BallValue);
+        Require(BallId.IsValid(), "new static overlap sleeper failed admission");
+        bool Slept = false;
+        for (int Frame = 0; Frame < 90; ++Frame) {
+            (void)Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = 16});
+            const auto State = Provider.Rigid->GetBodyState(BallId);
+            Require(State.has_value(), "new static overlap lost ball body");
+            if (!State->Awake) { Slept = true; break; }
+        }
+        Require(Slept, "unsupported ball did not sleep before static overlap");
+        const auto FloorId = Provider.Rigid->CreateBody(
+            Box({0, -0.4f, 0}, {10, 1, 10}, true));
+        const auto Awakened = Provider.Rigid->GetBodyState(BallId);
+        Require(FloorId.IsValid() && Awakened && Awakened->Awake,
+            "new static overlap did not activate a sleeping rigid body");
+        bool Began = false;
+        for (int Frame = 0; Frame < 4; ++Frame) {
+            const auto Step = Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = 16});
+            for (const auto &Event : Step.Contacts)
+                if (((Event.BodyA == FloorId && Event.BodyB == BallId) ||
+                     (Event.BodyA == BallId && Event.BodyB == FloorId)) &&
+                    Event.Phase == PhysicsContactPhase::Began) Began = true;
+        }
+        const auto Moved = Provider.Rigid->GetBodyState(BallId);
+        std::cout << "[Physics:JoltProvider] new_static_overlap began=" << Began
+            << " ball_y=" << (Moved ? Moved->Transform.Position.y :
+                std::numeric_limits<float>::quiet_NaN()) << '\n' << std::flush;
+        Require(Moved && Began && Moved->Transform.Position.y > 0.54f,
+            "new static overlap did not produce a finite separating response");
+    }
 #endif
 #if defined(PHYSICS_GANTRIA_SLEEP_FIX) && defined(PHYSICS_GANTRIA_ATTACHMENTS)
     void SleepingRigidSoftAttachment() {
@@ -1409,6 +1449,8 @@ int main() {
         FullUpdateSleepCadence();
         std::cout << "[Physics:JoltProvider] dormant static contact edit\n" << std::flush;
         SleepingContactStaticEdit();
+        std::cout << "[Physics:JoltProvider] new static overlap wake\n" << std::flush;
+        NewStaticOverlapWakesSleeper();
 #endif
 #if defined(PHYSICS_GANTRIA_SLEEP_FIX) && defined(PHYSICS_GANTRIA_ATTACHMENTS)
         std::cout << "[Physics:JoltProvider] attached rigid sleep/re-wake\n" << std::flush;

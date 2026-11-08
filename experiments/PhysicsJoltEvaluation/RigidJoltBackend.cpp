@@ -20,6 +20,7 @@
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Geometry/AABox.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
@@ -52,6 +53,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -622,6 +624,8 @@ namespace {
             AdmitMesh(Slot);
             PhysicsBodyId Id{Index, Slot.Generation};
             NativeMap.emplace(Native.GetIndexAndSequenceNumber(), Id);
+            if (Description.Anchored && (Description.CanCollide || Description.CanTouch))
+                WakeBodiesInNewBounds(Native);
             return Id;
         }
 
@@ -690,6 +694,8 @@ namespace {
                 Slot->Shape = NewShape;
                 Slot->Description = Description;
                 AdmitMesh(*Slot);
+                if (Description.Anchored && (Description.CanCollide || Description.CanTouch))
+                    WakeBodiesInNewBounds(Replacement);
                 return {};
             }
             if (ContactGeometryChanged) {
@@ -743,6 +749,9 @@ namespace {
             }
             Slot->Description = Description;
             if (ShapeChanged) AdmitMesh(*Slot);
+            if (ContactGeometryChanged && Description.Anchored &&
+                (Description.CanCollide || Description.CanTouch))
+                WakeBodiesInNewBounds(Slot->Native);
             return {};
         }
 
@@ -1269,6 +1278,15 @@ namespace {
                 if (Slot && !Slot->Description.Anchored && !Slot->Description.Kinematic)
                     Interface.ActivateBody(Slot->Native);
             }
+        }
+        void WakeBodiesInNewBounds(JPH::BodyID Native) {
+            std::optional<JPH::AABox> Bounds;
+            {
+                JPH::BodyLockRead Lock(World.GetBodyLockInterface(), Native);
+                if (Lock.Succeeded()) Bounds = Lock.GetBody().GetWorldSpaceBounds();
+            }
+            if (Bounds)
+                World.GetBodyInterface().ActivateBodiesInAABox(*Bounds, {}, {});
         }
         using MeshKey = std::pair<std::string, std::uint64_t>;
         struct MeshResource {
