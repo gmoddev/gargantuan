@@ -71,6 +71,53 @@ namespace {
                 if (!std::isfinite(Value.Rotation[Column][Row])) return false;
         return true;
     }
+    bool RigidFrame(const CFrame &Value) {
+        if (!Finite(Value) || glm::length(Value.Position) > 100'000.0f) return false;
+        constexpr float Tolerance = 1.0e-5f;
+        for (int Axis = 0; Axis < 3; ++Axis) {
+            if (std::abs(glm::dot(Value.Rotation[Axis], Value.Rotation[Axis]) - 1.0f) > Tolerance)
+                return false;
+            for (int Other = Axis + 1; Other < 3; ++Other)
+                if (std::abs(glm::dot(Value.Rotation[Axis], Value.Rotation[Other])) > Tolerance)
+                    return false;
+        }
+        return std::abs(glm::dot(glm::cross(Value.Rotation[0], Value.Rotation[1]),
+            Value.Rotation[2]) - 1.0f) <= Tolerance;
+    }
+    bool ValidConstraint(const PhysicsConstraintDesc &Description) {
+        if (!RigidFrame(Description.LocalFrameA) || !RigidFrame(Description.LocalFrameB) ||
+            !std::isfinite(Description.LowerLimit) || !std::isfinite(Description.UpperLimit) ||
+            !std::isfinite(Description.MotorSpeed) || !std::isfinite(Description.MaximumMotorForce) ||
+            !std::isfinite(Description.RestLength) || !std::isfinite(Description.SpringFrequency) ||
+            !std::isfinite(Description.SpringDamping) || Description.MaximumMotorForce < 0 ||
+            Description.SpringFrequency < 0 || Description.SpringFrequency > 15 ||
+            Description.SpringDamping < 0 || Description.SpringDamping > 2 ||
+            Description.LowerLimit > Description.UpperLimit) return false;
+        switch (Description.Kind) {
+        case PhysicsConstraintKind::Weld:
+        case PhysicsConstraintKind::BallSocket:
+            return !Description.EnableLimit && !Description.EnableMotor &&
+                Description.MotorSpeed == 0 && Description.MaximumMotorForce == 0 &&
+                Description.SpringFrequency == 0;
+        case PhysicsConstraintKind::Hinge:
+            return Description.SpringFrequency == 0 &&
+                (!Description.EnableLimit ||
+                    (Description.LowerLimit >= -3.1f && Description.UpperLimit <= 3.1f)) &&
+                (!Description.EnableMotor || Description.MaximumMotorForce > 0);
+        case PhysicsConstraintKind::Slider:
+            return Description.SpringFrequency == 0 &&
+                (!Description.EnableLimit ||
+                    (Description.LowerLimit >= -100'000.0f && Description.UpperLimit <= 100'000.0f)) &&
+                (!Description.EnableMotor || Description.MaximumMotorForce > 0);
+        case PhysicsConstraintKind::Distance:
+            return !Description.EnableMotor && Description.MotorSpeed == 0 &&
+                Description.MaximumMotorForce == 0 && Description.RestLength >= 0.001f &&
+                Description.RestLength <= 100'000.0f &&
+                (!Description.EnableLimit || (Description.SpringFrequency > 0 &&
+                    Description.LowerLimit >= 0.001f && Description.UpperLimit <= 100'000.0f));
+        }
+        return false;
+    }
     bool SameTransform(const CFrame &A, const CFrame &B) {
         if (A.Position.x != B.Position.x || A.Position.y != B.Position.y ||
             A.Position.z != B.Position.z) return false;
@@ -310,11 +357,16 @@ namespace {
             World.SetContactListener(&Contacts);
             BodySlots.emplace_back();
             ConstraintSlots.emplace_back();
-            Residency.ResourceLimit = Config.CollisionResourceLimit;
-            Residency.ConsumerLimit = Config.CollisionConsumerLimit;
-            Residency.CanonicalByteLimit = Config.CollisionCanonicalByteLimit;
-            Residency.NativeByteLimit = Config.CollisionNativeByteLimit;
-            Residency.MeshShapeLimit = Config.CollisionMeshShapeLimit;
+            Residency.ResourceLimit = std::min(Config.CollisionResourceLimit,
+                MaximumPhysicsCollisionResources);
+            Residency.ConsumerLimit = std::min(Config.CollisionConsumerLimit,
+                MaximumPhysicsCollisionConsumers);
+            Residency.CanonicalByteLimit = std::min(Config.CollisionCanonicalByteLimit,
+                MaximumPhysicsCollisionCanonicalBytes);
+            Residency.NativeByteLimit = std::min(Config.CollisionNativeByteLimit,
+                MaximumPhysicsCollisionNativeBytes);
+            Residency.MeshShapeLimit = std::min(Config.CollisionMeshShapeLimit,
+                MaximumPhysicsCollisionMeshShapes);
             Residency.NativeShapeBytesKnown = true;
             Valid = true;
         }
@@ -496,14 +548,7 @@ namespace {
                 return {{}, {PhysicsOperationStatus::InvalidId, "Invalid Jolt joint endpoints"}};
             if (ActiveConstraints >= std::min(Configuration.ConstraintLimit, MaximumPhysicsConstraints))
                 return {{}, {PhysicsOperationStatus::ResourceLimit, "Jolt joint limit"}};
-            if (!Finite(Description.LocalFrameA) || !Finite(Description.LocalFrameB) ||
-                !std::isfinite(Description.LowerLimit) || !std::isfinite(Description.UpperLimit) ||
-                Description.LowerLimit > Description.UpperLimit ||
-                !std::isfinite(Description.RestLength) || Description.RestLength < 0 ||
-                !std::isfinite(Description.SpringFrequency) || Description.SpringFrequency < 0 ||
-                !std::isfinite(Description.SpringDamping) || Description.SpringDamping < 0 ||
-                !std::isfinite(Description.MotorSpeed) ||
-                !std::isfinite(Description.MaximumMotorForce) || Description.MaximumMotorForce < 0)
+            if (!ValidConstraint(Description))
                 return {{}, {PhysicsOperationStatus::InvalidDescription, "Invalid Jolt joint frame or limit"}};
             const auto PointA = ToRVec(Description.LocalFrameA.Position);
             const auto PointB = ToRVec(Description.LocalFrameB.Position);
@@ -947,11 +992,11 @@ namespace {
                 (Found->second.Positions != Mesh.Positions.get() ||
                  Found->second.Indices != Mesh.Indices.get()))
                 Failure = "Jolt mesh resource revision has conflicting canonical buffers";
-            else if (ResourceCount > Configuration.CollisionResourceLimit ||
-                ConsumerCount > Configuration.CollisionConsumerLimit ||
-                ConsumerCount > Configuration.CollisionMeshShapeLimit ||
-                CanonicalCharge > Configuration.CollisionCanonicalByteLimit ||
-                NativeCharge > Configuration.CollisionNativeByteLimit)
+            else if (ResourceCount > Residency.ResourceLimit ||
+                ConsumerCount > Residency.ConsumerLimit ||
+                ConsumerCount > Residency.MeshShapeLimit ||
+                CanonicalCharge > Residency.CanonicalByteLimit ||
+                NativeCharge > Residency.NativeByteLimit)
                 Failure = "Jolt canonical mesh residency limit exceeded";
             if (Failure.empty()) return {};
             ++Residency.FailedAdmissions;

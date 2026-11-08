@@ -216,6 +216,11 @@ namespace {
         Joint.BodyB = Link;
         Joint.LocalFrameA.Position = {0, -1, 0};
         Joint.LocalFrameB.Position = {0, 1, 0};
+        auto InvalidMotor = Joint;
+        InvalidMotor.Kind = PhysicsConstraintKind::Hinge;
+        InvalidMotor.EnableMotor = true;
+        Require(!Provider.Rigid->TryCreateConstraint(InvalidMotor).Succeeded(),
+            "zero-force hinge motor was admitted");
         const auto Weld = Provider.Rigid->TryCreateConstraint(Joint);
         Require(Weld.Succeeded(), "weld joint failed admission");
         Require(Provider.Rigid->ApplyLinearImpulse(Link, {10, 0, 0}).Succeeded(),
