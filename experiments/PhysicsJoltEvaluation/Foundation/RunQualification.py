@@ -62,14 +62,20 @@ for Mode, SourcePath in [('Pure', Jolt), ('Observed', ObservedJolt)]:
 Suffix = '.exe' if os.name == 'nt' else ''
 Native = 'PhysicsJoltScheduledCouplingDiagnostic' + Suffix
 Unified = 'PhysicsJoltUnifiedCouplingQualification' + Suffix
-Run('NativeQualification', [sys.executable, Evaluation / 'RunScheduledProfileQualification.py',
-    '--pristine', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
-    '--output', Evidence / 'Native', '--world-updates', '2', '--steps', '8',
-    '--iterations', '12', '--compliance', '1e-6', '--velocity-reconstruction', 'delta', '--compress-raw'])
-Run('UnifiedQualification', [sys.executable, Evaluation / 'RunUnifiedScheduledQualification.py',
-    '--pristine', Builds['Pure'] / Unified, '--observed', Builds['Observed'] / Unified,
-    '--output', Evidence / 'Unified', '--world-updates', '2', '--collision-steps', '8',
-    '--soft-iterations', '12', '--compliance', '1e-6', '--velocity-reconstruction', 'delta', '--compress-raw'])
+if os.environ.get('GANTRIA_CADENCE_SCREEN') == '1':
+    Run('CadenceScreen', [sys.executable, Evaluation / 'Optimization/RunCadenceScreen.py',
+        '--pure', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
+        '--output', Evidence / 'CadenceScreen',
+        '--screen', os.environ.get('GANTRIA_CADENCE_KIND', 'soft-budget')])
+else:
+    Run('NativeQualification', [sys.executable, Evaluation / 'RunScheduledProfileQualification.py',
+        '--pristine', Builds['Pure'] / Native, '--observed', Builds['Observed'] / Native,
+        '--output', Evidence / 'Native', '--world-updates', '2', '--steps', '8',
+        '--iterations', '12', '--compliance', '1e-6', '--velocity-reconstruction', 'delta', '--compress-raw'])
+    Run('UnifiedQualification', [sys.executable, Evaluation / 'RunUnifiedScheduledQualification.py',
+        '--pristine', Builds['Pure'] / Unified, '--observed', Builds['Observed'] / Unified,
+        '--output', Evidence / 'Unified', '--world-updates', '2', '--collision-steps', '8',
+        '--soft-iterations', '12', '--compliance', '1e-6', '--velocity-reconstruction', 'delta', '--compress-raw'])
 Identities = []
 for Mode, Build in Builds.items():
     for Path in [Build / Native, Build / Unified, Build / 'JoltBuild/Jolt.lib', Build / 'JoltBuild/libJolt.a']:

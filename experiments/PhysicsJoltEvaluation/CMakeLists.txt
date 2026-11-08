@@ -91,3 +91,5 @@ PhysicsEvaluationTarget(PhysicsJoltProviderBenchmark
     Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
 PhysicsEvaluationTarget(PhysicsJoltProviderBenchmarkAllocations
     Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltEngineBenchmark
+    Provider/EngineBenchmark.cpp RigidJoltBackend.cpp)
