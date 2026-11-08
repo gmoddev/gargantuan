@@ -37,6 +37,8 @@
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
+#include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
 #include <Jolt/Physics/SoftBody/SoftBodyRigidAttachment.h>
@@ -131,7 +133,7 @@ namespace {
         return false;
     }
 #ifdef PHYSICS_GANTRIA_CONVERGENCE
-    constexpr std::uint32_t SoftIterationsPerCollisionStep = 6;
+    constexpr std::uint32_t SoftIterationsPerCollisionStep = 5;
     constexpr std::uint32_t ConstraintSweepsPerIteration = 2;
 #else
     constexpr std::uint32_t SoftIterationsPerCollisionStep = 12;
@@ -409,6 +411,40 @@ namespace {
         std::map<std::pair<std::uint32_t, std::uint32_t>, std::size_t> Suppressed;
     };
 
+    class SoftContactCapture final : public JPH::SoftBodyContactListener {
+    public:
+        void OnSoftBodyContactAdded(const JPH::Body &Soft,
+                                    const JPH::SoftBodyManifold &Manifold) override {
+            std::scoped_lock Lock(Mutex);
+            for (const auto &Vertex : Manifold.GetVertices()) {
+                if (!Manifold.HasContact(Vertex)) continue;
+                const auto Other = Manifold.GetContactBodyID(Vertex);
+                if (Other.IsInvalid()) continue;
+                auto &Count = ContactedVertices[{Soft.GetID().GetIndexAndSequenceNumber(),
+                    Other.GetIndexAndSequenceNumber()}];
+                if (Count != std::numeric_limits<std::uint64_t>::max()) ++Count;
+            }
+        }
+        std::uint64_t VertexCount(JPH::BodyID Soft, JPH::BodyID Rigid) const {
+            std::scoped_lock Lock(Mutex);
+            const auto Found = ContactedVertices.find({Soft.GetIndexAndSequenceNumber(),
+                Rigid.GetIndexAndSequenceNumber()});
+            return Found == ContactedVertices.end() ? 0 : Found->second;
+        }
+        void ForgetBody(JPH::BodyID Body) {
+            std::scoped_lock Lock(Mutex);
+            const auto Native = Body.GetIndexAndSequenceNumber();
+            for (auto It = ContactedVertices.begin(); It != ContactedVertices.end();) {
+                if (It->first.first == Native || It->first.second == Native)
+                    It = ContactedVertices.erase(It);
+                else ++It;
+            }
+        }
+    private:
+        mutable std::mutex Mutex;
+        std::map<std::pair<std::uint32_t, std::uint32_t>, std::uint64_t> ContactedVertices;
+    };
+
     class QueryBodyFilter final : public JPH::BodyFilter {
     public:
         QueryBodyFilter(const std::unordered_map<std::uint32_t, PhysicsBodyId> &Map,
@@ -457,6 +493,7 @@ namespace {
 #endif
             World.SetGravity(ToJolt(Config.Gravity));
             World.SetContactListener(&Contacts);
+            World.SetSoftBodyContactListener(&SoftContacts);
             BodySlots.emplace_back();
             ConstraintSlots.emplace_back();
             Residency.ResourceLimit = std::min(Config.CollisionResourceLimit,
@@ -482,6 +519,11 @@ namespace {
         bool IsValid() const override { return Valid; }
         void SetBeforeUnifiedStep(std::function<bool(float)> Callback) {
             BeforeUnifiedStep = std::move(Callback);
+        }
+        std::uint64_t SoftRigidContactVertices(JPH::BodyID Soft, PhysicsBodyId Rigid) const {
+            const auto *RigidSlot = Find(Rigid);
+            return RigidSlot && !Soft.IsInvalid()
+                ? SoftContacts.VertexCount(Soft, RigidSlot->Native) : 0;
         }
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
         PhysicsOperationResult ConnectAttachment(SoftBodyId SoftId, JPH::BodyID SoftNative,
@@ -622,6 +664,7 @@ namespace {
                 Interface.DestroyBody(Slot->Native);
                 NativeMap.erase(OldNative);
                 Contacts.ForgetBody(OldNative);
+                SoftContacts.ForgetBody(Slot->Native);
                 for (auto It = PreviousContacts.begin(); It != PreviousContacts.end();) {
                     if (It->first == OldNative || It->second == OldNative) It = PreviousContacts.erase(It);
                     else ++It;
@@ -699,6 +742,7 @@ namespace {
             Interface.DestroyBody(Slot->Native);
             NativeMap.erase(Slot->Native.GetIndexAndSequenceNumber());
             Contacts.ForgetBody(Slot->Native.GetIndexAndSequenceNumber());
+            SoftContacts.ForgetBody(Slot->Native);
             ReleaseMesh(*Slot);
             for (auto It = PreviousContacts.begin(); It != PreviousContacts.end();) {
                 if (It->first == Slot->Native.GetIndexAndSequenceNumber() ||
@@ -1380,6 +1424,7 @@ namespace {
         PhysicsWorldConfig Configuration;
         LayerTable Layers;
         ContactCapture Contacts;
+        SoftContactCapture SoftContacts;
         JPH::TempAllocatorImpl Temp;
         std::unique_ptr<JPH::JobSystem> Jobs;
         // Destruct World before Jobs, Temp and Layers, whose storage it may use.
@@ -1691,6 +1736,7 @@ namespace {
 #endif
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
+            Owner.SoftContacts.ForgetBody(Slot->Native);
             LiveVertices = LiveVertices - Slot->Shared->mVertices.size() + Replacement->Shared->mVertices.size();
             LiveConstraints = LiveConstraints - Slot->ConstraintCount + NewConstraints;
             Slot->Native = Native;
@@ -1713,6 +1759,7 @@ namespace {
             auto &Interface = Owner.World.GetBodyInterface();
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
+            Owner.SoftContacts.ForgetBody(Slot->Native);
             LiveVertices -= Slot->Shared->mVertices.size();
             LiveConstraints -= Slot->ConstraintCount;
             --LiveBodies;
@@ -2034,6 +2081,14 @@ JoltSoftSolverProfile GetJoltSoftSolverProfile() {
 #else
         .FullUpdateSleepClock = false};
 #endif
+}
+std::uint64_t GetJoltSoftRigidContactVertexCount(
+    const gargantuan::IPhysicsBackend &Rigid, const gargantuan::ISoftBodyBackend &Soft,
+    gargantuan::SoftBodyId SoftId, gargantuan::PhysicsBodyId RigidId) {
+    const auto *RigidValue = dynamic_cast<const RigidJoltBackend *>(&Rigid);
+    const auto *SoftValue = dynamic_cast<const JoltSoftBackend *>(&Soft);
+    if (!RigidValue || !SoftValue || &SoftValue->SharedWorld() != RigidValue) return 0;
+    return RigidValue->SoftRigidContactVertices(SoftValue->NativeBody(SoftId), RigidId);
 }
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
 gargantuan::PhysicsOperationResult ConnectJoltRigidSoftAttachment(

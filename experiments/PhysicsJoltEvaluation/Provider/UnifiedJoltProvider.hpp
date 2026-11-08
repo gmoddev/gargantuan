@@ -51,6 +51,13 @@ namespace PhysicsEvaluation {
     };
     [[nodiscard]] JoltSoftSolverProfile GetJoltSoftSolverProfile();
 
+    // Cumulative vertex contacts reported by Jolt's soft-rigid manifold for
+    // this live neutral-ID pair. Used only to qualify experimental coupling.
+    [[nodiscard]] std::uint64_t GetJoltSoftRigidContactVertexCount(
+        const gargantuan::IPhysicsBackend &Rigid,
+        const gargantuan::ISoftBodyBackend &Soft,
+        gargantuan::SoftBodyId SoftId, gargantuan::PhysicsBodyId RigidId);
+
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
     // Experimental neutral-ID bridge. A live connection belongs to the rigid
     // provider and is detached before either native endpoint is retired.

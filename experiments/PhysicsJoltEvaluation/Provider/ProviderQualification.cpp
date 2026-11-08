@@ -1121,9 +1121,9 @@ int main() {
             "legacy sleep clock macro and compiled library disagree");
 #endif
 #ifdef PHYSICS_GANTRIA_CONVERGENCE
-        Require(SolverProfile.SoftIterationsPerCollisionStep == 6 &&
+        Require(SolverProfile.SoftIterationsPerCollisionStep == 5 &&
             SolverProfile.ConstraintSweepsPerIteration == 2 &&
-            SolverProfile.SoftIntegrationsPerFrame == 96,
+            SolverProfile.SoftIntegrationsPerFrame == 80,
             "provider convergence profile macro and compiled library disagree");
 #else
         Require(SolverProfile.SoftIterationsPerCollisionStep == 12 &&
