@@ -70,10 +70,13 @@ Current limitations before production consideration:
 - The capsule mover uses bounded shape casts and tangential clipping. Initial
   penetration correction, multiple simultaneous planes, and Box3D-equivalent
   floor/step behavior remain open.
-- Connected-body collision exclusion remains unsupported. The authored hinge
-  and slider fixtures test motion and limits, but distance spring and
-  articulated-chain gameplay quality are not yet covered in this provider
-  target.
+- Connected-body collision exclusion uses the native contact listener for
+  joint pairs with `CollideConnected=false`; the provider fixture checks
+  suppression while a weld is live and contact restoration after removal.
+  The authored hinge and slider fixture tests motion and limits. Separate
+  fixtures exercise distance-spring settling and a four-link articulated
+  chain under gravity and impulse. These short scenes do not establish
+  long-duration gameplay quality.
 - Cloth, rubber, and reciprocal contact are represented by physical fixtures;
   they are not a quality-matched parity or performance claim. Self collision,
   swept soft contact, and long-duration material calibration remain unqualified.
