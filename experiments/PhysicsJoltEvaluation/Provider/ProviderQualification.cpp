@@ -294,8 +294,9 @@ namespace {
         auto Provider = CreateUnifiedJoltProvider(Config);
         std::array<PhysicsBodyId, 4> Links;
         for (std::size_t Index = 0; Index < Links.size(); ++Index) {
-            Links[Index] = Provider.Rigid->CreateBody(Box({0, -2.0f * Index, 0},
-                {1, 2, 1}, Index == 0));
+            auto Description = Box({0, -2.0f * Index, 0}, {1, 2, 1}, Index == 0);
+            if (Index != 0) Description.GravityScale = 1.0f;
+            Links[Index] = Provider.Rigid->CreateBody(Description);
             Require(Links[Index].IsValid(), "articulated link failed admission");
         }
         for (std::size_t Index = 1; Index < Links.size(); ++Index) {
