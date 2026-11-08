@@ -5,16 +5,24 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/RubberBody.hpp"
 #include "gargantuan/classes/JointConstraint.hpp"
 #include "gargantuan/classes/SoftBodyAttachment.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/services/AssetService.hpp"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -41,6 +49,16 @@ namespace gargantuan {
         static PhysicsConstraintId Constraint(const WorldRoot &World, const JointConstraint &Joint) {
             const auto Found = World.ConstraintJoints.find(Joint.GetObjectId());
             return Found == World.ConstraintJoints.end() ? PhysicsConstraintId{} : Found->second;
+        }
+        static PhysicsCollisionResidency Collision(const WorldRoot &World) {
+            return World.Physics.GetCollisionResidency();
+        }
+        static WorldRaycastResult Raycast(WorldRoot &World, glm::vec3 Origin, glm::vec3 Direction) {
+            return World.ResolveRaycast(Origin, Direction);
+        }
+        static PhysicsKinematicMotionResult Move(WorldRoot &World,
+                                                  const PhysicsKinematicMotionRequest &Request) {
+            return World.ResolveKinematicMotion(Request);
         }
     };
 }
@@ -700,6 +718,164 @@ namespace {
             "authored high-speed CCD projectile tunneled through thin wall");
         Game->Destroy();
     }
+    void DataModelMixedGameplay() {
+        const auto ProjectRoot = std::filesystem::temp_directory_path() /
+            ("gargantuan-jolt-gameplay-" + std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count()));
+        struct TemporaryProject {
+            std::filesystem::path Root;
+            ~TemporaryProject() {
+                if (Root.parent_path() != std::filesystem::temp_directory_path()) return;
+                std::error_code Error;
+                std::filesystem::remove_all(Root, Error);
+            }
+        } Cleanup{ProjectRoot};
+        const auto AssetPath = ProjectRoot / "assets" / "floor.obj";
+        std::filesystem::create_directories(AssetPath.parent_path());
+        {
+            std::ofstream Output(AssetPath, std::ios::binary | std::ios::trunc);
+            Output << "v -4 0 -4\nv 4 0 -4\nv -4 0 4\nv 4 0 4\n"
+                "f 1 3 2\nf 2 3 4\n";
+            Require(bool(Output), "bounded gameplay OBJ write failed");
+        }
+        DiskFilesystem Filesystem(ProjectRoot);
+        SourceMount Mount(Filesystem);
+        auto Game = std::make_shared<DataModel>();
+        Game->Root = ProjectRoot;
+        Game->Filesystem = &Filesystem;
+        auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+        auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+        Require(bool(World) && bool(Assets), "gameplay Workspace or AssetService missing");
+        WorldRootTestAccess::Inject(*World, CreateUnifiedJoltProvider({}));
+        World->SetGravity(9.81f);
+        const auto Imported = Assets->ImportProjectAsset(Mount, "assets/floor.obj",
+            AssetKind::Mesh, "Gameplay floor");
+        Require(Imported.Ok && Imported.Record && Imported.Records.size() == 2 &&
+            Assets->ResolveCollisionForMesh(Imported.Record->Reference.Value).has_value(),
+            "real gameplay mesh import did not publish collision artifact");
+        auto Floor = std::make_shared<MeshPart>();
+        Floor->SetName("ImportedFloor");
+        Floor->SetAnchored(true);
+        Floor->SetCanCollide(true);
+        Floor->SetCanTouch(true);
+        Floor->SetSize({1, 1, 1});
+        Floor->SetMesh(Imported.Record->Reference.Value);
+        Floor->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+        Floor->SetParent(World);
+        World->StepPhysics(0.0f, std::nullopt);
+        const auto FloorId = WorldRootTestAccess::Body(*World, *Floor);
+        const auto Ray = WorldRootTestAccess::Raycast(*World, {0, 4, 0}, {0, -8, 0});
+        Require(FloorId.IsValid() && WorldRootTestAccess::Collision(*World).ActiveResources == 1 &&
+            Ray.Succeeded() && Ray.Instance == Floor && std::abs(Ray.Position.y) < 0.05f &&
+            Ray.Normal.y > 0.9f,
+            "authored imported mesh did not admit or answer floor query");
+        int FloorContacts = 0;
+        auto Touch = Floor->Touched->Connect([&](std::shared_ptr<BasePart> Other) {
+            if (Other && Other != Floor) ++FloorContacts;
+        });
+        const auto MakeProbe = [&](const char *Name, Enums::PartType Shape,
+                                   glm::vec3 Position) {
+            auto Body = std::make_shared<Part>();
+            Body->SetName(Name);
+            Body->SetShape(Shape);
+            Body->SetSize({1, 1, 1});
+            Body->SetCFrame(CFrame(Position.x, Position.y, Position.z));
+            Body->SetParent(World);
+            return Body;
+        };
+        auto Sphere = MakeProbe("GameplaySphere", Enums::PartType::Ball, {-2, 2.5f, 0});
+        auto Lower = MakeProbe("StackLower", Enums::PartType::Block, {1, 2.5f, 0});
+        auto Upper = MakeProbe("StackUpper", Enums::PartType::Block, {1, 4, 0});
+        Require(WorldRootTestAccess::Body(*World, *Sphere).IsValid() &&
+            WorldRootTestAccess::Body(*World, *Lower).IsValid() &&
+            WorldRootTestAccess::Body(*World, *Upper).IsValid(),
+            "authored gameplay probes failed admission");
+        float LowestLowerY = std::numeric_limits<float>::max();
+        for (int Frame = 0; Frame < 120; ++Frame) {
+            World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+            LowestLowerY = std::min(LowestLowerY, Lower->GetCFrame().Position.y);
+        }
+        const auto SphereY = Sphere->GetCFrame().Position.y;
+        const auto LowerY = Lower->GetCFrame().Position.y;
+        const auto UpperY = Upper->GetCFrame().Position.y;
+        std::cout << "[Physics:JoltProvider] mixed stack contacts=" << FloorContacts
+            << " sphere_y=" << SphereY << " lower_y=" << LowerY
+            << " upper_y=" << UpperY << " lowest_lower_y=" << LowestLowerY
+            << '\n' << std::flush;
+        Require(FloorContacts >= 2 && std::isfinite(SphereY) &&
+            SphereY > 0.25f && SphereY < 1.2f &&
+            LowestLowerY > 0.1f && LowerY > 0.25f && LowerY < 1.2f &&
+            UpperY > LowerY + 0.45f && UpperY < 2.5f,
+            "authored sphere or box stack missed imported floor or penetrated deeply");
+        auto Wall = std::make_shared<Part>();
+        Wall->SetAnchored(true);
+        Wall->SetSize({0.5f, 3, 2});
+        Wall->SetCFrame(CFrame(2, 1, 3));
+        Wall->SetParent(World);
+        const auto Motion = WorldRootTestAccess::Move(*World, {.Position = {0, 1, 3},
+            .Radius = 0.35f, .Height = 1.8f, .Translation = {4, 0, 0}, .Velocity = {4, 0, 0}});
+        Require(Motion.Succeeded() && Motion.Collided && Motion.Position.x > 0.5f &&
+            Motion.Position.x < 1.8f,
+            "WorldRoot character capsule crossed authored Part wall");
+        Touch->Disconnect();
+        Sphere->Destroy(); Lower->Destroy(); Upper->Destroy(); Floor->Destroy();
+        World->StepPhysics(0.0f, std::nullopt);
+        Require(WorldRootTestAccess::Collision(*World).ActiveResources == 0,
+            "authored imported mesh retained native residency after teardown");
+        World->SetGravity(0.0f);
+        auto Fabric = std::make_shared<Cloth>();
+        Fabric->SetPosition({10, 3, 0});
+        Fabric->SetSize({2, 2, 0.2f});
+        Fabric->SetResolutionX(9);
+        Fabric->SetResolutionY(9);
+        for (std::uint32_t Vertex = 0; Vertex < 9; ++Vertex) {
+            auto Pin = std::make_shared<SoftBodyAttachment>();
+            Pin->SetVertexIndex(Vertex);
+            Pin->SetPosition({9.0f + Vertex * 0.25f, 4, 0});
+            Pin->SetParent(Fabric);
+        }
+        Fabric->SetParent(World);
+        auto Striker = MakeProbe("ClothStriker", Enums::PartType::Ball, {10, 3, -2});
+        Striker->SetGravityScale(0.0f);
+        Striker->SetLinearVelocity({0, 0, 8});
+        World->StepPhysics(0.0f, std::nullopt);
+        const auto ClothBefore = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
+        float PeakClothDeflection = 0;
+        for (int Frame = 0; Frame < 35; ++Frame) {
+            World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+            const auto Vertex = World->GetDeformableVertex(Fabric->GetObjectId(), 40);
+            if (ClothBefore && Vertex)
+                PeakClothDeflection = std::max(PeakClothDeflection,
+                    std::abs(Vertex->z - ClothBefore->z));
+        }
+        std::cout << "[Physics:JoltProvider] mixed cloth peak_deflection="
+            << PeakClothDeflection << " striker_vz=" << Striker->GetLinearVelocity().z
+            << '\n' << std::flush;
+        Require(ClothBefore && PeakClothDeflection > 0.005f &&
+            Striker->GetLinearVelocity().z < 7.9f,
+            "authored dynamic Part strike did not deform cloth with reciprocal response");
+        Striker->Destroy(); Fabric->Destroy();
+        auto Rubber = std::make_shared<RubberBody>();
+        Rubber->SetPosition({18, 3, 0});
+        Rubber->SetSize({2, 2, 2});
+        Rubber->SetResolutionX(5); Rubber->SetResolutionY(5); Rubber->SetResolutionZ(5);
+        Rubber->SetParent(World);
+        auto Target = MakeProbe("RubberPushTarget", Enums::PartType::Block, {20, 3, 0});
+        Target->SetGravityScale(0.0f);
+        World->StepPhysics(0.0f, std::nullopt);
+        Require(WorldRootTestAccess::SoftBody(*World, *Rubber).IsValid() &&
+            WorldRootTestAccess::Body(*World, *Target).IsValid(),
+            "authored rubber push endpoints failed admission");
+        Rubber->ApplyImpulse({25, 0, 0});
+        for (int Frame = 0; Frame < 60; ++Frame)
+            World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+        std::cout << "[Physics:JoltProvider] mixed rubber target_x="
+            << Target->GetCFrame().Position.x << " target_vx="
+            << Target->GetLinearVelocity().x << '\n' << std::flush;
+        Require(Target->GetCFrame().Position.x > 20.03f,
+            "authored rubber impact did not push dynamic Part");
+        Game->Destroy();
+    }
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
     void DataModelDynamicSoftRigidAttachment() {
         auto Game = std::make_shared<DataModel>();
@@ -843,6 +1019,8 @@ int main() {
         DataModelAdmissionAndStreaming();
         std::cout << "[Physics:JoltProvider] DataModel motors/CCD\n" << std::flush;
         DataModelMotorsAndCcd();
+        std::cout << "[Physics:JoltProvider] DataModel mixed gameplay\n" << std::flush;
+        DataModelMixedGameplay();
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
         std::cout << "[Physics:JoltProvider] DataModel dynamic attachment\n" << std::flush;
         DataModelDynamicSoftRigidAttachment();
