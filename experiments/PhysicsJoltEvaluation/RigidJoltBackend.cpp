@@ -670,7 +670,14 @@ namespace {
             } else return {{}, Unsupported("Jolt constraint kind is unsupported")};
             if (!Native) return {{}, Unsupported("Jolt constraint creation failed")};
             World.AddConstraint(Native.GetPtr());
-            if (!Description.CollideConnected) Contacts.SuppressPair(A->Native, B->Native);
+            if (!Description.CollideConnected) {
+                Contacts.SuppressPair(A->Native, B->Native);
+                auto &Interface = World.GetBodyInterface();
+                Interface.InvalidateContactCache(A->Native);
+                Interface.InvalidateContactCache(B->Native);
+                if (!A->Description.Anchored) Interface.ActivateBody(A->Native);
+                if (!B->Description.Anchored) Interface.ActivateBody(B->Native);
+            }
             std::uint32_t Index = 1;
             for (; Index < ConstraintSlots.size() &&
                 (ConstraintSlots[Index].Live || ConstraintSlots[Index].Retired); ++Index) {}
@@ -686,7 +693,14 @@ namespace {
             if (!Slot->Description.CollideConnected) {
                 const auto *A = Find(Slot->Description.BodyA);
                 const auto *B = Find(Slot->Description.BodyB);
-                if (A && B) Contacts.RestorePair(A->Native, B->Native);
+                if (A && B) {
+                    Contacts.RestorePair(A->Native, B->Native);
+                    auto &Interface = World.GetBodyInterface();
+                    Interface.InvalidateContactCache(A->Native);
+                    Interface.InvalidateContactCache(B->Native);
+                    if (!A->Description.Anchored) Interface.ActivateBody(A->Native);
+                    if (!B->Description.Anchored) Interface.ActivateBody(B->Native);
+                }
             }
             World.RemoveConstraint(Slot->Native.GetPtr());
             Slot->Native = nullptr;
