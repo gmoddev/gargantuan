@@ -18,7 +18,8 @@ class CompareReferenceBenchmarkTests(unittest.TestCase):
                   'warmup_frames': '10', 'workers_requested': '1',
                   'host': 'host', 'os': 'windows', 'build_stamp': 'stamp',
                   'binary_id': 'binary', 'run_pair': 'p0000',
-                  'timing_instrumented': '0', 'constraints': '100',
+                  'timing_instrumented': '0', 'quality_trace': '0',
+                  'constraints': '100',
                   'xpbd_substeps_requested': '8',
                   'mean_y': '1', 'center_y': '1', 'max_pin_error': '0',
                   'mean_edge_strain': '0.01', 'max_edge_strain': '0.02'}
@@ -45,6 +46,40 @@ class CompareReferenceBenchmarkTests(unittest.TestCase):
             self.assertTrue(Result['quality_comparable'])
             self.assertTrue(Result['xpbd_reference'])
             self.assertTrue(Result['xpbd_reference_request_matched'])
+            self.assertTrue(Result['quality_trace_request_matched'])
+            self.assertIsNone(Result['timing_winner'])
+
+    def test_quality_trace_stays_unranked_with_passing_envelope(self):
+        Common = {'scene': 'cloth4k', 'coupling': 'none', 'frames': '1',
+                  'warmup_frames': '0', 'workers_requested': '1',
+                  'host': 'host', 'os': 'windows', 'build_stamp': 'stamp',
+                  'binary_id': 'binary', 'run_pair': 'p0000',
+                  'timing_instrumented': '1', 'quality_trace': '1',
+                  'constraints': '100', 'xpbd_substeps_requested': '1',
+                  'xpbd_reference': '0', 'mean_y': '1', 'center_y': '1',
+                  'max_pin_error': '0', 'mean_edge_strain': '0.01',
+                  'max_edge_strain': '0.02'}
+        Jolt = {**Common, 'backend': 'jolt', 'xpbd_substeps_actual': '0',
+                'mean_total_ms': '10'}
+        Xpbd = {**Common, 'backend': 'xpbd', 'xpbd_substeps_actual': '1',
+                'xpbd_workers_actual': '1', 'xpbd_jobs_dispatched': '1',
+                'xpbd_mean_worker_utilization': '0.5', 'mean_total_ms': '2'}
+        Envelope = {Field: 1 for Field in Comparator.COMMON_FIELDS}
+        Envelope['absolute_ranges'] = {Field: [0, 2]
+                                       for Field in Comparator.COMMON_FIELDS}
+        with TemporaryDirectory() as Directory:
+            EnvelopePath = Path(Directory) / 'envelope.json'
+            EnvelopePath.write_text(json.dumps(Envelope))
+            Output = io.StringIO()
+            with patch.object(Comparator, 'ReadSummary', side_effect=(Jolt, Xpbd)), \
+                 patch.object(sys, 'argv', ['CompareBenchmark.py', 'jolt', 'xpbd',
+                                           '--envelope', str(EnvelopePath)]), \
+                 redirect_stdout(Output):
+                Comparator.Main()
+            Result = json.loads(Output.getvalue())
+            self.assertTrue(Result['quality_comparable'])
+            self.assertTrue(Result['quality_trace'])
+            self.assertTrue(Result['quality_trace_request_matched'])
             self.assertIsNone(Result['timing_winner'])
 
 

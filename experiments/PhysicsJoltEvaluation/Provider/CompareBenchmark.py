@@ -70,6 +70,8 @@ def Main() -> None:
     XpbdReference = Xpbd.get("xpbd_reference") == "1"
     ReferenceRequestMatched = ReferenceKnown and \
         Jolt.get("xpbd_substeps_requested") == Xpbd.get("xpbd_substeps_requested")
+    TraceRequestMatched = Jolt.get("quality_trace") == Xpbd.get("quality_trace") and \
+        Jolt.get("quality_trace") in ("0", "1")
     Result: dict[str, object] = {
         "scene": Jolt["scene"],
         "coupling": Jolt["coupling"],
@@ -81,6 +83,9 @@ def Main() -> None:
         "xpbd_reference": XpbdReference,
         "xpbd_substeps_actual": int(Xpbd.get("xpbd_substeps_actual", "0")),
         "xpbd_reference_request_matched": ReferenceRequestMatched,
+        "quality_trace": Jolt.get("quality_trace") == "1" or
+                         Xpbd.get("quality_trace") == "1",
+        "quality_trace_request_matched": TraceRequestMatched,
         "jolt_workers_requested": int(Jolt["workers_requested"]),
         "xpbd_workers_requested": int(Xpbd["workers_requested"]),
         "xpbd_workers_actual": int(Xpbd["xpbd_workers_actual"]),
@@ -149,7 +154,7 @@ def Main() -> None:
         Result["contact_band_reached"] = ContactBandReached
         Result["penetration_bounded"] = PenetrationBounded
         Result["quality_comparable"] = Comparable
-        if Comparable and BudgetMatched and ReceiptPairMatched and \
+        if Comparable and BudgetMatched and ReceiptPairMatched and TraceRequestMatched and \
                 ReferenceRequestMatched and not XpbdReference and \
                 Result["material_topology_comparable"] and not Coupled:
             JoltTime = float(Jolt["mean_total_ms"])

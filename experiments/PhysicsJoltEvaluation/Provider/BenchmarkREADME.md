@@ -4,11 +4,11 @@ See [FeatureMatrix.md](FeatureMatrix.md) for qualified Engine and provider
 behavior; benchmark observations here do not expand that support scope.
 
 `PhysicsJoltProviderBenchmark` takes five required positional arguments,
-followed by optional receipt identifier, warmup count, and XPBD reference
-substep count:
+followed by optional receipt identifier, warmup count, XPBD reference
+substep count, and quality trace path:
 
 ```
-PhysicsJoltProviderBenchmark jolt|xpbd cloth4k|cloth16k|cloth4x4k|rubber4k|rubber16k none|static-sphere|driven-sphere frames workers [shared-run-pair [warmup-frames [xpbd-substeps]]]
+PhysicsJoltProviderBenchmark jolt|xpbd cloth4k|cloth16k|cloth4x4k|rubber4k|rubber16k none|static-sphere|driven-sphere frames workers [shared-run-pair [warmup-frames [xpbd-substeps [quality-trace-path]]]]
 ```
 
 Measured frames must be 1–30, warmup frames 0–30, and requested workers 1–8.
@@ -86,6 +86,14 @@ damping mode, and actual substep count; Jolt records zero actual XPBD substeps.
 The control tests free-velocity retention, not gravity, collision, or material
 equivalence. Reference timing is never a production XPBD timing rank or a
 claim of equal native solver budget.
+
+The optional tenth argument writes a quality-only binary position trace after
+each frame timer. It records every warmup and measured frame in body and vertex
+order as little-endian float32 XYZ, after a 32-byte header: magic `PJTRACE1`,
+version 1, body count, vertices per body, total frame count, warmup frame
+count, and float32 frame interval. Both header and summary label
+`quality_trace=1` and `timing_instrumented=1`; traced time is not rankable.
+The trace compares the same indexed topology without asserting equal materials.
 
 The executable prints warmup frames as `warmup_frame=N` and measured frames as
 `frame=N`, with per-frame `jolt_world_ms`, `jolt_extract_ms`,
@@ -178,6 +186,13 @@ arguments but has a separate timing scope and does not take a run-pair argument.
 `--xpbd-substeps` selects the reference mode in the external runner and is
 recorded on both sides of every pair. The comparator withholds a timing winner
 for all reference rows, even if an envelope is supplied.
+`--quality-trace` writes and hashes a separate raw trace for each process,
+including partial files from failed attempts. The runner checks exact byte
+coverage and header identity, then reports RMS and maximum point displacement
+for each frame plus peak and final values in the pair receipt. Use a small
+trace matrix, such as one 16K cloth scene, one worker, 30 measured frames,
+10 warmup frames, and one repeat. Trace runs remain timing-instrumented and
+unranked; run fresh pairs without the flag for timing after reviewing curves.
 Request `--couplings none driven-sphere` to run the driven response control;
 the runner refuses driven-only matrices.
 

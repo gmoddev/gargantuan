@@ -12,6 +12,7 @@ import math
 from pathlib import Path
 import platform
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -66,7 +67,8 @@ def PlanMatrix(Scenes, Couplings, Workers, Repetitions, Tails):
     return Plan
 
 
-def ParseRaw(PathName, Backend, Frames, Warmup, Pair, RequestedXpbdSubsteps=1):
+def ParseRaw(PathName, Backend, Frames, Warmup, Pair, RequestedXpbdSubsteps=1,
+             QualityTrace=False):
     Lines = PathName.read_text(encoding='utf-8').splitlines()
     Prefix = '[Physics:ProviderBenchmark] '
     Heads = [Line[len(Prefix):] for Line in Lines
@@ -112,7 +114,10 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair, RequestedXpbdSubsteps=1):
                                           Summary['coupling'] == 'driven-sphere')
         if ContactInstrumented != ExpectedContactInstrumented:
             raise ValueError('Contact instrumentation scope mismatch')
-        if int(Row.get('timing_instrumented', -1)) != ExpectedContactInstrumented:
+        if int(Row.get('quality_trace', -1)) != int(QualityTrace):
+            raise ValueError('Quality trace scope mismatch')
+        if int(Row.get('timing_instrumented', -1)) != int(
+                ExpectedContactInstrumented or QualityTrace):
             raise ValueError('Allocation-instrumented timing is invalid')
         for Field in ('drive_duration_seconds', 'drive_distance_m'):
             if Row[Field] != Summary[Field]:
@@ -166,7 +171,8 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair, RequestedXpbdSubsteps=1):
             Lifecycle.get('MeasuredFrames') != Frames or \
             Lifecycle.get('WarmupFrames') != Warmup or \
             Lifecycle.get('TimingInstrumented') != bool(
-                Backend == 'jolt' and Summary['coupling'] == 'driven-sphere'):
+                QualityTrace or (Backend == 'jolt' and
+                                 Summary['coupling'] == 'driven-sphere')):
         raise ValueError('Lifecycle frame scope or instrumentation mismatch')
     if Lifecycle.get('WholeProcessResources', {}).get('AllocationInstrumentation') is True:
         raise ValueError('Allocation-instrumented timing is invalid')
@@ -258,6 +264,53 @@ def CompareDrivenControls(Receipts):
     return Results
 
 
+TRACE_HEADER = struct.Struct('<8sIIIIIf')
+TRACE_VERTEX = struct.Struct('<fff')
+TRACE_SCENES = {'cloth4k': (1, 4096), 'cloth16k': (1, 16384),
+                'cloth4x4k': (4, 4096), 'rubber4k': (1, 4096),
+                'rubber16k': (1, 15625)}
+
+
+def CompareQualityTraces(JoltPath, XpbdPath, Scene, Frames, Warmup):
+    BodyCount, VerticesPerBody = TRACE_SCENES[Scene]
+    ExpectedHeader = (b'PJTRACE1', 1, BodyCount, VerticesPerBody,
+                      Frames + Warmup, Warmup)
+    FrameBytes = BodyCount * VerticesPerBody * TRACE_VERTEX.size
+    ExpectedBytes = TRACE_HEADER.size + (Frames + Warmup) * FrameBytes
+    if JoltPath.stat().st_size != ExpectedBytes or XpbdPath.stat().st_size != ExpectedBytes:
+        raise ValueError('Quality trace byte count does not match scene and frame coverage')
+    Results = []
+    with JoltPath.open('rb') as Jolt, XpbdPath.open('rb') as Xpbd:
+        Headers = [TRACE_HEADER.unpack(Stream.read(TRACE_HEADER.size))
+                   for Stream in (Jolt, Xpbd)]
+        if any(Header[:6] != ExpectedHeader or
+               not math.isfinite(Header[6]) or
+               abs(Header[6] - 1 / 60) > 1e-7 for Header in Headers):
+            raise ValueError('Quality trace header disagrees with scene or frame interval')
+        for Frame in range(Frames + Warmup):
+            JoltPositions = struct.iter_unpack('<fff', Jolt.read(FrameBytes))
+            XpbdPositions = struct.iter_unpack('<fff', Xpbd.read(FrameBytes))
+            SumSquared = 0.0
+            Maximum = 0.0
+            for A, B in zip(JoltPositions, XpbdPositions):
+                if not all(math.isfinite(Value) for Value in (*A, *B)):
+                    raise ValueError('Quality trace has nonfinite position')
+                Squared = sum((Left - Right) ** 2 for Left, Right in zip(A, B))
+                SumSquared += Squared
+                Maximum = max(Maximum, math.sqrt(Squared))
+            Results.append({'Frame': Frame, 'Measured': Frame >= Warmup,
+                            'RmsDisplacementM': math.sqrt(SumSquared /
+                                                          (BodyCount * VerticesPerBody)),
+                            'MaxDisplacementM': Maximum})
+    return {'Version': 1, 'BodyCount': BodyCount,
+            'VerticesPerBody': VerticesPerBody, 'TotalFrames': Frames + Warmup,
+            'FrameIntervalSeconds': Headers[0][6], 'Frames': Results,
+            'PeakRmsDisplacementM': max(Row['RmsDisplacementM'] for Row in Results),
+            'PeakMaxDisplacementM': max(Row['MaxDisplacementM'] for Row in Results),
+            'FinalRmsDisplacementM': Results[-1]['RmsDisplacementM'],
+            'FinalMaxDisplacementM': Results[-1]['MaxDisplacementM']}
+
+
 def Main(Arguments=None):
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument('--binary', type=Path, required=True)
@@ -275,6 +328,7 @@ def Main(Arguments=None):
     Parser.add_argument('--warmup', type=int, default=10)
     Parser.add_argument('--xpbd-substeps', type=int, choices=(1, 4, 8, 16, 32),
                         default=1)
+    Parser.add_argument('--quality-trace', action='store_true')
     Parser.add_argument('--repetitions', type=int, default=3)
     Parser.add_argument('--timeout-seconds', type=int, default=900)
     Parser.add_argument('--total-timeout-seconds', type=int, default=900)
@@ -310,6 +364,7 @@ def Main(Arguments=None):
         'Python': sys.version, 'Frames': Options.frames,
         'WarmupFrames': Options.warmup, 'Repetitions': Options.repetitions,
         'RequestedXpbdSubsteps': Options.xpbd_substeps,
+        'QualityTrace': Options.quality_trace,
         'TotalTimeoutSeconds': Options.total_timeout_seconds,
         'EnvelopeSha256': HashFile(Output / 'QualityEnvelope.json') if Envelope else None,
         'TimingScope': 'Separate cold and post-warmup provider calls; allocation builds rejected',
@@ -332,6 +387,9 @@ def Main(Arguments=None):
             Command = [str(Binary), Backend, Item['Scene'], Item['Coupling'],
                        str(Options.frames), str(Item['Workers']), Item['Pair'],
                        str(Warmup), str(Options.xpbd_substeps)]
+            TracePath = Output / f'{Name}.positions.f32le'
+            if Options.quality_trace:
+                Command.append(str(TracePath))
             Timeout = RemainingTimeout(Deadline, Options.timeout_seconds)
             if Timeout <= 0:
                 Errors.append({'Name': Name, 'Reason': 'Total deadline elapsed before native launch'})
@@ -349,6 +407,9 @@ def Main(Arguments=None):
                        'Workers': Item['Workers'], 'Tail': Item['Tail'],
                        'Repeat': Item['Repeat'], 'WarmupFrames': Warmup,
                        'RequestedXpbdSubsteps': Options.xpbd_substeps,
+                       'QualityTrace': TracePath.name if Options.quality_trace else None,
+                       'QualityTraceSha256': HashFile(TracePath) if TracePath.exists() else None,
+                       'QualityTraceBytes': TracePath.stat().st_size if TracePath.exists() else None,
                        'Command': Command, 'BinarySha256': Metadata['BinarySha256'],
                        'Stdout': StdoutPath.name, 'StdoutSha256': HashFile(StdoutPath),
                        'Stderr': StderrPath.name, 'StderrSha256': HashFile(StderrPath),
@@ -364,7 +425,10 @@ def Main(Arguments=None):
             try:
                 Receipt['Parsed'] = ParseRaw(StdoutPath, Backend, Options.frames,
                                              Warmup, Item['Pair'],
-                                             Options.xpbd_substeps)
+                                             Options.xpbd_substeps,
+                                             Options.quality_trace)
+                if Options.quality_trace and not TracePath.exists():
+                    raise ValueError('Successful traced process omitted quality trace')
                 if int(Receipt['Parsed']['Summary']['workers_requested']) != Item['Workers']:
                     raise ValueError('Requested worker count changed')
             except Exception as Error:
@@ -401,6 +465,7 @@ def Main(Arguments=None):
         CompareStderr.write_bytes(Compared.pop('Stderr'))
         Pair = {**Item, 'WarmupFrames': Warmup,
                 'RequestedXpbdSubsteps': Options.xpbd_substeps,
+                'QualityTrace': Options.quality_trace,
                 'JoltReceipt': PairRuns['jolt']['Name'],
                 'XpbdReceipt': PairRuns['xpbd']['Name'],
                 'ComparisonCommand': ComparisonCommand,
@@ -418,6 +483,11 @@ def Main(Arguments=None):
             break
         try:
             Pair['Comparison'] = json.loads(CompareStdout.read_text(encoding='utf-8'))
+            if Options.quality_trace:
+                Pair['QualityTraceComparison'] = CompareQualityTraces(
+                    Output / PairRuns['jolt']['QualityTrace'],
+                    Output / PairRuns['xpbd']['QualityTrace'],
+                    Item['Scene'], Options.frames, Warmup)
             Pair['JoltMeanTotalMs'] = float(PairRuns['jolt']['Parsed']['Summary']['mean_total_ms'])
             Pair['XpbdMeanTotalMs'] = float(PairRuns['xpbd']['Parsed']['Summary']['mean_total_ms'])
             Pair['XpbdOverJolt'] = Pair['XpbdMeanTotalMs'] / Pair['JoltMeanTotalMs']

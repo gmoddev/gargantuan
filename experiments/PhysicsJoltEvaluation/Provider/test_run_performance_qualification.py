@@ -4,6 +4,7 @@ from contextlib import redirect_stdout
 import hashlib
 import io
 import json
+import struct
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -58,6 +59,7 @@ class PerformanceQualificationTests(unittest.TestCase):
         Profile = dict(zip(Runner.JOLT_PROFILE_FIELDS, (2, 8, 6, 2, 96, 0)))
         Header = {'backend': 'jolt', 'coupling': 'none', 'run_pair': 'p0000',
                   'warmup_frames': 0, 'timing_instrumented': 0,
+                  'quality_trace': 0,
                   'contact_capture_instrumented': 0,
                   'drive_duration_seconds': 0, 'drive_distance_m': 0,
                   'xpbd_substeps_requested': 1, 'xpbd_substeps_actual': 0,
@@ -92,6 +94,18 @@ class PerformanceQualificationTests(unittest.TestCase):
             Write()
             Parsed = Runner.ParseRaw(Output, 'jolt', 1, 0, 'p0000')
             self.assertEqual(Parsed['CompiledJoltProfile'], Profile)
+            for Row in (Header, Summary):
+                Row['quality_trace'] = 1
+                Row['timing_instrumented'] = 1
+            Lifecycle['TimingInstrumented'] = True
+            Write()
+            Runner.ParseRaw(Output, 'jolt', 1, 0, 'p0000', QualityTrace=True)
+            with self.assertRaisesRegex(ValueError, 'Quality trace scope'):
+                Runner.ParseRaw(Output, 'jolt', 1, 0, 'p0000')
+            for Row in (Header, Summary):
+                Row['quality_trace'] = 0
+                Row['timing_instrumented'] = 0
+            Lifecycle['TimingInstrumented'] = False
             Summary['jolt_soft_integrations_per_frame'] = 192
             Write()
             with self.assertRaisesRegex(ValueError, 'header and summary'):
@@ -111,6 +125,23 @@ class PerformanceQualificationTests(unittest.TestCase):
             Write()
             with self.assertRaisesRegex(ValueError, 'no actual soft-rigid contact'):
                 Runner.ParseRaw(Output, 'jolt', 1, 0, 'p0000')
+
+    def test_quality_trace_compares_all_vertices_and_refuses_truncated_file(self):
+        with TemporaryDirectory() as Directory:
+            Jolt = Path(Directory) / 'jolt.f32le'
+            Xpbd = Path(Directory) / 'xpbd.f32le'
+            Header = Runner.TRACE_HEADER.pack(b'PJTRACE1', 1, 1, 4096, 2, 1, 1 / 60)
+            Frame = struct.pack('<fff', 0, 0, 0) * 4096
+            Changed = struct.pack('<fff', 3, 4, 0) + Frame[12:]
+            Jolt.write_bytes(Header + Frame + Frame)
+            Xpbd.write_bytes(Header + Frame + Changed)
+            Compared = Runner.CompareQualityTraces(Jolt, Xpbd, 'cloth4k', 1, 1)
+            self.assertEqual(Compared['Frames'][0]['MaxDisplacementM'], 0)
+            self.assertEqual(Compared['Frames'][1]['MaxDisplacementM'], 5)
+            self.assertAlmostEqual(Compared['Frames'][1]['RmsDisplacementM'], 5 / 64)
+            Xpbd.write_bytes(Xpbd.read_bytes()[:-4])
+            with self.assertRaisesRegex(ValueError, 'byte count'):
+                Runner.CompareQualityTraces(Jolt, Xpbd, 'cloth4k', 1, 1)
 
     def test_backend_order_is_counterbalanced_across_matrix(self):
         Plan = Runner.PlanMatrix(('cloth4k', 'cloth16k'), ('none',), (1,), 3,
@@ -162,6 +193,38 @@ class PerformanceQualificationTests(unittest.TestCase):
             self.assertEqual(Summary['CompletedProcesses'], 1)
             self.assertEqual(Summary['CompletedPairs'], 0)
             self.assertEqual(len(Summary['HarnessErrors']), 1)
+
+    def test_failed_traced_attempt_keeps_partial_trace_hash(self):
+        Partial = b'PJTRACE1\x01\x00partial'
+
+        def FailProcess(Command, TimeoutSeconds):
+            self.assertEqual(len(Command), 10)
+            Path(Command[-1]).write_bytes(Partial)
+            return {'Stdout': b'', 'Stderr': b'failure', 'ExitCode': 1,
+                    'TimedOut': False, 'StartedUtc': '2026-11-08T00:00:00Z',
+                    'ElapsedSeconds': 0.1}
+
+        with TemporaryDirectory() as Directory, \
+             patch.object(Runner, 'RunProcess', side_effect=FailProcess):
+            Base = Path(Directory)
+            Binary = Base / 'benchmark'
+            Binary.write_bytes(b'binary')
+            Cache = Base / 'CMakeCache.txt'
+            Cache.write_bytes(b'cache')
+            Output = Base / 'evidence'
+            with self.assertRaises(SystemExit):
+                Runner.Main(['--binary', str(Binary), '--cmake-cache', str(Cache),
+                             '--engine-source', 'engine-sha', '--jolt-source',
+                             'jolt-sha', '--output', str(Output),
+                             '--scenes', 'cloth4k', '--couplings', 'none',
+                             '--workers', '1', '--tails', 'cold',
+                             '--frames', '1', '--repetitions', '1',
+                             '--quality-trace'])
+            Receipt = json.loads((Output / 'Receipts.json').read_text())[0]
+            self.assertEqual((Output / Receipt['QualityTrace']).read_bytes(), Partial)
+            self.assertEqual(Receipt['QualityTraceSha256'],
+                             hashlib.sha256(Partial).hexdigest())
+            self.assertEqual(Receipt['QualityTraceBytes'], len(Partial))
 
 
 if __name__ == '__main__':

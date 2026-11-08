@@ -207,6 +207,15 @@ namespace {
             Hash *= 1099511628211ull;
         }
     }
+    void WriteTraceU32(std::ostream &Stream, std::uint32_t Value) {
+        for (int Byte = 0; Byte < 4; ++Byte)
+            Stream.put(char((Value >> (8 * Byte)) & 0xff));
+    }
+    void WriteTraceFloat(std::ostream &Stream, float Value) {
+        std::uint32_t Bits = 0;
+        std::memcpy(&Bits, &Value, sizeof(Bits));
+        WriteTraceU32(Stream, Bits);
+    }
     nlohmann::json CalibrateXpbdRetention(int Substeps, float SubstepDamping,
                                           float FrameDamping) {
         SoftBodyWorldLimits Limits;
@@ -297,8 +306,8 @@ int main(int ArgumentCount, char **Arguments) {
     PhysicsEvaluation::SuppressErrorDialogs();
     PhysicsEvaluation::InstallPhysicsAllocators();
     try {
-        if (ArgumentCount < 6 || ArgumentCount > 9)
-            throw std::invalid_argument("Usage: ProviderBenchmark jolt|xpbd scene none|static-sphere frames[1..30] workers[1..8] [shared-run-pair [warmup-frames[0..30] [xpbd-substeps]]]");
+        if (ArgumentCount < 6 || ArgumentCount > 10)
+            throw std::invalid_argument("Usage: ProviderBenchmark jolt|xpbd scene none|static-sphere|driven-sphere frames[1..30] workers[1..8] [shared-run-pair [warmup-frames[0..30] [xpbd-substeps [quality-trace-path]]]]");
         const std::string BackendName = Arguments[1];
         if (BackendName != "jolt" && BackendName != "xpbd")
             throw std::invalid_argument("Backend must be jolt or xpbd");
@@ -332,7 +341,8 @@ int main(int ArgumentCount, char **Arguments) {
         const int WarmupFrames = ArgumentCount >= 8 ? std::stoi(Arguments[7]) : 0;
         if (WarmupFrames < 0 || WarmupFrames > 30)
             throw std::invalid_argument("Warmup frames must be between 0 and 30");
-        const int RequestedXpbdSubsteps = ArgumentCount == 9 ? std::stoi(Arguments[8]) : 1;
+        const int RequestedXpbdSubsteps = ArgumentCount >= 9 ? std::stoi(Arguments[8]) : 1;
+        const bool QualityTrace = ArgumentCount == 10;
         if (RequestedXpbdSubsteps != 1 && RequestedXpbdSubsteps != 4 &&
             RequestedXpbdSubsteps != 8 && RequestedXpbdSubsteps != 16 &&
             RequestedXpbdSubsteps != 32)
@@ -355,7 +365,7 @@ int main(int ArgumentCount, char **Arguments) {
         constexpr bool AllocationTimingInstrumented = false;
 #endif
         const bool TimingInstrumented = AllocationTimingInstrumented ||
-            ContactCaptureInstrumented;
+            ContactCaptureInstrumented || QualityTrace;
 
         const auto BeforeAdmission = PhysicsEvaluation::CaptureResources();
         const auto AdmissionStart = Clock::now();
@@ -450,6 +460,19 @@ int main(int ArgumentCount, char **Arguments) {
         double MinimumPoststepSurfaceDistance = std::numeric_limits<double>::infinity();
         double FinalMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
         std::uint64_t SoftTrajectoryHash = 14695981039346656037ull;
+        std::ofstream Trace;
+        if (QualityTrace) {
+            Trace.open(Arguments[9], std::ios::binary | std::ios::trunc);
+            if (!Trace) throw std::runtime_error("Quality trace file admission failed");
+            Trace.write("PJTRACE1", 8);
+            WriteTraceU32(Trace, 1);
+            WriteTraceU32(Trace, std::uint32_t(Bodies.size()));
+            WriteTraceU32(Trace, std::uint32_t(Bodies.front().Rest.size()));
+            WriteTraceU32(Trace, std::uint32_t(WarmupFrames + Frames));
+            WriteTraceU32(Trace, std::uint32_t(WarmupFrames));
+            WriteTraceFloat(Trace, SoftBodyStepInterval);
+            if (!Trace) throw std::runtime_error("Quality trace header write failed");
+        }
         TotalTimes.reserve(Frames);
         std::cout << "[Physics:ProviderBenchmark] backend=" << BackendName
             << " scene=" << SceneValue.Name << " coupling=" << Coupling
@@ -459,6 +482,7 @@ int main(int ArgumentCount, char **Arguments) {
             << " run_pair=" << RunPair
             << " warmup_frames=" << WarmupFrames
             << " timing_instrumented=" << int(TimingInstrumented)
+            << " quality_trace=" << int(QualityTrace)
             << " contact_capture_instrumented=" << int(ContactCaptureInstrumented)
             << " drive_duration_seconds=" << (DrivenSphere ? DriveDurationSeconds : 0.0f)
             << " drive_distance_m=" << (DrivenSphere ? DriveDistanceMeters : 0.0f)
@@ -577,8 +601,17 @@ int main(int ArgumentCount, char **Arguments) {
                 const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
                     [&](const auto &State) { return State.Body == Record.Id; });
                 for (const auto &Position : *Found->Positions)
+                {
                     HashPosition(SoftTrajectoryHash, Position);
+                    if (QualityTrace) {
+                        WriteTraceFloat(Trace, Position.x);
+                        WriteTraceFloat(Trace, Position.y);
+                        WriteTraceFloat(Trace, Position.z);
+                    }
+                }
             }
+            if (QualityTrace && !Trace)
+                throw std::runtime_error("Quality trace frame write failed");
             std::cout << "[Physics:ProviderBenchmark] state_frame=" << SequenceFrame
                 << " soft_trajectory_hash=" << SoftTrajectoryHash << '\n' << std::flush;
             if (Coupling != "none") {
@@ -618,6 +651,7 @@ int main(int ArgumentCount, char **Arguments) {
             << " build_stamp=" << BuildStamp << " binary_id=" << BinaryId
             << " run_pair=" << RunPair
             << " timing_instrumented=" << int(TimingInstrumented)
+            << " quality_trace=" << int(QualityTrace)
             << " contact_capture_instrumented=" << int(ContactCaptureInstrumented)
             << " drive_duration_seconds=" << (DrivenSphere ? DriveDurationSeconds : 0.0f)
             << " drive_distance_m=" << (DrivenSphere ? DriveDistanceMeters : 0.0f)
@@ -705,6 +739,10 @@ int main(int ArgumentCount, char **Arguments) {
                 ? nlohmann::json(AfterRetire.WorkingSetBytes) : nlohmann::json(nullptr)}
         };
         std::cout << "[Physics:ProviderBenchmark] lifecycle " << Lifecycle.dump() << '\n' << std::flush;
+        if (QualityTrace) {
+            Trace.close();
+            if (!Trace) throw std::runtime_error("Quality trace close failed");
+        }
         if (XpbdReference) {
             const auto Calibration = CalibrateXpbdRetention(
                 ActualXpbdSubsteps, SubstepDamping, FrameDamping);
