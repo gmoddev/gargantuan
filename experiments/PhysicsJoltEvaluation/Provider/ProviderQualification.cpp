@@ -13,6 +13,7 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -285,6 +286,47 @@ namespace {
             "distance spring failed to settle at authored rest length");
         Require(Provider.Rigid->DestroyConstraint(Spring.Constraint).Succeeded(),
             "distance spring release failed");
+    }
+    void ArticulatedChainUnderImpulse() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {0, -9.81f, 0};
+        Config.EnableSleep = false;
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        std::array<PhysicsBodyId, 4> Links;
+        for (std::size_t Index = 0; Index < Links.size(); ++Index) {
+            Links[Index] = Provider.Rigid->CreateBody(Box({0, -2.0f * Index, 0},
+                {1, 2, 1}, Index == 0));
+            Require(Links[Index].IsValid(), "articulated link failed admission");
+        }
+        for (std::size_t Index = 1; Index < Links.size(); ++Index) {
+            PhysicsConstraintDesc Joint;
+            Joint.Kind = PhysicsConstraintKind::BallSocket;
+            Joint.BodyA = Links[Index - 1];
+            Joint.BodyB = Links[Index];
+            Joint.LocalFrameA.Position = {0, -1, 0};
+            Joint.LocalFrameB.Position = {0, 1, 0};
+            Joint.CollideConnected = false;
+            Require(Provider.Rigid->TryCreateConstraint(Joint).Succeeded(),
+                "articulated ball socket failed admission");
+        }
+        Require(Provider.Rigid->ApplyLinearImpulse(Links.back(), {12, 0, 0}).Succeeded(),
+            "articulated end-link impulse failed");
+        float MaximumSwing = 0;
+        for (int Frame = 0; Frame < 180; ++Frame) {
+            Advance(Provider);
+            const auto End = Provider.Rigid->GetBodyState(Links.back());
+            Require(End && std::isfinite(End->Transform.Position.x),
+                "articulated chain produced nonfinite motion");
+            MaximumSwing = std::max(MaximumSwing, std::abs(End->Transform.Position.x));
+        }
+        Require(MaximumSwing > 0.1f, "articulated chain did not respond to end-link impulse");
+        for (std::size_t Index = 1; Index < Links.size(); ++Index) {
+            const auto A = Provider.Rigid->GetBodyState(Links[Index - 1]);
+            const auto B = Provider.Rigid->GetBodyState(Links[Index]);
+            Require(A && B && glm::length((A->Transform * glm::vec3(0, -1, 0)) -
+                (B->Transform * glm::vec3(0, 1, 0))) < 0.15f,
+                "articulated chain lost a live joint pivot under gravity and impulse");
+        }
     }
     void ForceAcrossHalfUpdates() {
         PhysicsWorldConfig Config;
@@ -615,6 +657,8 @@ int main() {
         ConnectedCollisionPolicy();
         std::cout << "[Physics:JoltProvider] distance spring\n" << std::flush;
         DistanceSpringEquilibrium();
+        std::cout << "[Physics:JoltProvider] articulated chain\n" << std::flush;
+        ArticulatedChainUnderImpulse();
         std::cout << "[Physics:JoltProvider] force\n" << std::flush;
         ForceAcrossHalfUpdates();
         std::cout << "[Physics:JoltProvider] transient contacts\n" << std::flush;
