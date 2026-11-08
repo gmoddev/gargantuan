@@ -6,6 +6,12 @@ date: 2026-11-07
 
 # Expanded physics comparison
 
+The completed [S1 resolution and bounded unified decision](SolverResolutionAndUnifiedDecision.md)
+supersedes the deferred investigation conclusions below. It records the
+qualified finite-compliance numerical correction, independent Linux/Windows
+proof, actual cadence cost, and recommendation to retain production Box3D + XPBD.
+The older sections preserve the pre-measurement protocol and its original scope.
+
 The later [coupling root-cause investigation](CouplingRootCauseInvestigation.md)
 preserves this checkpoint's failures and corrects its broad coupling/fairness
 inference. Read that follow-up before treating the original coupling comparison
@@ -13,8 +19,9 @@ as a backend-selection result. Production defaults are unchanged.
 
 The subsequent [S1 and nonlinear instability investigation](S1InstabilityInvestigation.md)
 adds internal kinetic failures, matched-work cadence controls, calibrated
-high-precision replay and per-edge numerical-work evidence. Unified Jolt
-qualification remains deferred; diagnostic ablations are not production fixes.
+high-precision replay and per-edge numerical-work evidence. Its deferral was a
+historical checkpoint; the completed resolution above contains the subsequent
+qualification. Experimental corrections are not production changes.
 
 This isolated experiment follows the explicitly authorized integration of
 [PR18](https://github.com/gmoddev/gargantuan/pull/18). Actual merged main is

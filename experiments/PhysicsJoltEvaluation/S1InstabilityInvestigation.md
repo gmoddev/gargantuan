@@ -1,5 +1,10 @@
 # S1 contact failures and nonlinear cloth instability
 
+> Historical e9 checkpoint. The subsequent [completed resolution and unified
+> evaluation](SolverResolutionAndUnifiedDecision.md) closes the tested failure
+> mechanisms and records independent corrected-profile qualification. The
+> findings and deferral below describe this earlier immutable checkpoint.
+
 Experimental investigation, 2026-11-08 UTC. Derived from the preserved
 `3e54402ecc46580dbc8f6f93d4354ee4207997bb` continuation of draft PR19.
 Jolt remains pinned to `e77f175595e64cb44218cc9d9d56fc365ad0e36a`.

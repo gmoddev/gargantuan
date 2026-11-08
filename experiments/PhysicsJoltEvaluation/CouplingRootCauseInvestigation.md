@@ -6,6 +6,10 @@ date: 2026-11-07
 
 # Coupling root-cause investigation
 
+> Historical 3e checkpoint. Read the [completed S1 resolution and unified
+> evaluation](SolverResolutionAndUnifiedDecision.md) for the subsequent
+> source-level closure, qualified correction and architecture decision.
+
 This follow-up starts at PR19 checkpoint
 `926219fb2b387ef262db3aab154b7a8185d5176c`, with unmodified Jolt v5.6.0
 `e77f175595e64cb44218cc9d9d56fc365ad0e36a`. It changes only isolated experiment

@@ -1,0 +1,111 @@
+--- a/Jolt/Physics/SoftBody/SoftBodyVertex.h
++++ b/Jolt/Physics/SoftBody/SoftBodyVertex.h
+@@ -34,6 +34,9 @@
+ 	Vec3			mPreviousPosition;					///< Internal use only. Position at the previous time step
+ 	Vec3			mPosition;							///< Position, relative to the center of mass of the soft body
+ 	Vec3			mVelocity;							///< Velocity, relative to the center of mass of the soft body
++	// Isolated numerical ablation: initialized on every internal integration.
++	Vec3			DiagnosticDampedVelocity = Vec3::sZero();
++	Vec3			DiagnosticProjectionDelta = Vec3::sZero();
+ 	Plane			mCollisionPlane;					///< Internal use only. Nearest collision plane, relative to the center of mass of the soft body
+ 	int				mCollidingShapeIndex;				///< Internal use only. Index in the colliding shapes list of the body we may collide with
+ 	bool			mHasContact;						///< True if the vertex has collided with anything in the last update
+--- a/Jolt/Physics/SoftBody/SoftBodyMotionProperties.cpp
++++ b/Jolt/Physics/SoftBody/SoftBodyMotionProperties.cpp
+@@ -16,6 +16,8 @@
+ #ifdef JPH_DEBUG_RENDERER
+ 	#include <Jolt/Renderer/DebugRenderer.h>
+ #endif // JPH_DEBUG_RENDERER
++
++extern "C" int PhysicsJoltVelocityMode(); // 0: pinned, 1: intended, 2: applied
+ 
+ JPH_NAMESPACE_BEGIN
+ 
+@@ -343,7 +345,12 @@
+ 			v.mVelocity *= linear_damping;
+ 		}
+ 
+-		// Integrate
++		// Integrate. Preserve the pinned position assignment in every mode.
++		if (PhysicsJoltVelocityMode() != 0)
++		{
++			v.DiagnosticDampedVelocity = v.mVelocity;
++			v.DiagnosticProjectionDelta = Vec3::sZero();
++		}
+ 		Vec3 position = v.mPosition;
+ 		v.mPreviousPosition = position;
+ 		v.mPosition = position + v.mVelocity * dt;
+@@ -458,6 +465,7 @@
+ void SoftBodyMotionProperties::ApplyVolumeConstraints(const SoftBodyUpdateContext &inContext, uint inStartIndex, uint inEndIndex)
+ {
+ 	JPH_PROFILE_FUNCTION();
++	const int DiagnosticMode = PhysicsJoltVelocityMode();
+ 
+ 	float inv_dt_sq = 1.0f / Square(inContext.mSubStepDeltaTime);
+ 
+@@ -503,6 +511,20 @@
+ 		v2.mPosition = x2 - minus_lambda * w2 * d2c;
+ 		v3.mPosition = x3 - minus_lambda * w3 * d3c;
+ 		v4.mPosition = x4 - minus_lambda * w4 * d4c;
++		if (DiagnosticMode == 1)
++		{
++			v1.DiagnosticProjectionDelta += -minus_lambda * w1 * d1c;
++			v2.DiagnosticProjectionDelta += -minus_lambda * w2 * d2c;
++			v3.DiagnosticProjectionDelta += -minus_lambda * w3 * d3c;
++			v4.DiagnosticProjectionDelta += -minus_lambda * w4 * d4c;
++		}
++		else if (DiagnosticMode == 2)
++		{
++			v1.DiagnosticProjectionDelta += v1.mPosition - x1;
++			v2.DiagnosticProjectionDelta += v2.mPosition - x2;
++			v3.DiagnosticProjectionDelta += v3.mPosition - x3;
++			v4.DiagnosticProjectionDelta += v4.mPosition - x4;
++		}
+ 	}
+ }
+ 
+@@ -573,6 +595,7 @@
+ void SoftBodyMotionProperties::ApplyEdgeConstraints(const SoftBodyUpdateContext &inContext, uint inStartIndex, uint inEndIndex)
+ {
+ 	JPH_PROFILE_FUNCTION();
++	const int DiagnosticMode = PhysicsJoltVelocityMode();
+ 
+ 	float inv_dt_sq = 1.0f / Square(inContext.mSubStepDeltaTime);
+ 
+@@ -597,6 +620,16 @@
+ 		Vec3 correction = delta * (length - e->mRestLength) / denom;
+ 		v0.mPosition = x0 + v0.mInvMass * correction;
+ 		v1.mPosition = x1 - v1.mInvMass * correction;
++		if (DiagnosticMode == 1)
++		{
++			v0.DiagnosticProjectionDelta += v0.mInvMass * correction;
++			v1.DiagnosticProjectionDelta -= v1.mInvMass * correction;
++		}
++		else if (DiagnosticMode == 2)
++		{
++			v0.DiagnosticProjectionDelta += v0.mPosition - x0;
++			v1.DiagnosticProjectionDelta += v1.mPosition - x1;
++		}
+ 	}
+ }
+ 
+@@ -700,6 +733,7 @@
+ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext)
+ {
+ 	JPH_PROFILE_FUNCTION();
++	const int DiagnosticMode = PhysicsJoltVelocityMode();
+ 
+ 	float dt = inContext.mSubStepDeltaTime;
+ 	float restitution_threshold = -2.0f * inContext.mGravity.Length() * dt;
+@@ -711,7 +745,10 @@
+ 			Vec3 prev_v = v.mVelocity;
+ 
+ 			// XPBD velocity update
+-			v.mVelocity = (v.mPosition - v.mPreviousPosition) / dt;
++			if (DiagnosticMode == 0)
++				v.mVelocity = (v.mPosition - v.mPreviousPosition) / dt;
++			else
++				v.mVelocity = v.DiagnosticDampedVelocity + v.DiagnosticProjectionDelta / dt;
+ 
+ 			// Satisfy collision constraint
+ 			static_assert(int(BodyID::cBroadPhaseBit) < 0); // CCD contacts should be negative too (see: SoftBodyVertex::MarkCCDContact)
