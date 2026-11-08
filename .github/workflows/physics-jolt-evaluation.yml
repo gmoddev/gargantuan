@@ -570,7 +570,7 @@ jobs:
             build-unified/JoltBuild/libJolt.a
 
   hard-compatibility-proof:
-    if: github.event_name == 'workflow_dispatch' && (inputs.unified_screen_only || inputs.unified_qualification_only)
+    if: github.event_name == 'workflow_dispatch' && (inputs.unified_screen_only || inputs.unified_qualification_only) && !inputs.schedule_followup_only
     name: Exact hard-constraint kinematic compatibility
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -612,7 +612,7 @@ jobs:
           path: compatibility-evidence/
 
   unified-final-qualification:
-    if: github.event_name == 'workflow_dispatch' && inputs.unified_qualification_only
+    if: github.event_name == 'workflow_dispatch' && inputs.unified_qualification_only && !inputs.schedule_followup_only
     name: All unified fixtures / quality and cost / ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -740,9 +740,27 @@ jobs:
           gh api "repos/gmoddev/gargantuan/actions/runs/$env:SOURCE_RUN" > schedule-energy/DependencySourceRun.json
           if ($LASTEXITCODE -ne 0) { throw 'Dependency run metadata unavailable' }
           $Source = Get-Content schedule-energy/DependencySourceRun.json -Raw | ConvertFrom-Json
-          if ($Source.head_sha -ne 'fbcf62c7ce49baef9ba1ef2212c05878d908de8a' -or $Source.status -ne 'completed') { throw 'Wrong compiled dependency source' }
+          $Expected = switch ($env:SOURCE_RUN) {
+            '42443610842' { 'fbcf62c7ce49baef9ba1ef2212c05878d908de8a' }
+            '42444068279' { '29a6473f598cfd801bb49ff021edd0cfcedce3ce' }
+            default { throw 'Unrecognized immutable compiled source' }
+          }
+          if ($Source.head_sha -ne $Expected -or $Source.status -ne 'completed') { throw 'Wrong compiled dependency source' }
           gh run download $env:SOURCE_RUN --repo gmoddev/gargantuan --name 'jolt-schedule-energy-${{ matrix.os }}' --dir prior-energy
           if ($LASTEXITCODE -ne 0) { throw 'Compiled dependency artifact unavailable' }
+          if ($env:SOURCE_RUN -eq '42444068279') {
+            foreach ($Kind in @('clean', 'observed')) {
+              New-Item -ItemType Directory -Force "build-energy-$Kind" | Out-Null
+              foreach ($Target in @('PhysicsJoltScheduledCouplingDiagnostic', 'PhysicsJoltUnifiedCouplingQualification')) {
+                $Name = "$Target${{ matrix.suffix }}"
+                Copy-Item -LiteralPath "prior-energy/build-energy-$Kind/$Name" -Destination "build-energy-$Kind/$Name"
+                Get-FileHash -LiteralPath "build-energy-$Kind/$Name" | ConvertTo-Json > "schedule-energy/ImportedBinary-$Kind-$Target.json"
+              }
+            }
+            if (-not $IsWindows) { chmod +x build-energy-clean/PhysicsJolt* build-energy-observed/PhysicsJolt* }
+            'REUSE_BINARIES=1' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            exit 0
+          }
           $Extension = if ($IsWindows) { 'lib' } else { 'a' }
           foreach ($Kind in @('clean', 'observed')) {
             $Library = @(Get-ChildItem "prior-energy/build-energy-$Kind/JoltBuild/*.$Extension")
@@ -752,7 +770,7 @@ jobs:
             Get-FileHash -LiteralPath $Library[0].FullName | ConvertTo-Json > "schedule-energy/ImportedJolt-$Kind.json"
           }
       - name: Compile pristine and observer Linux targets
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && env.REUSE_BINARIES != '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -769,7 +787,7 @@ jobs:
             cp "build-energy-$Kind/compile_commands.json" "schedule-energy/CompileCommands-$Kind.json"
           done
       - name: Compile pristine and observer Windows targets
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.REUSE_BINARIES != '1'
         shell: cmd
         run: |
           call "%VSDEVCMD%" -arch=x64 -host_arch=x64
@@ -791,11 +809,28 @@ jobs:
           --observed build-energy-observed/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
           --output schedule-energy/Runs
       - name: Screen all unified fixtures at the same material and solver cadences
+        if: '!inputs.unified_qualification_only'
         run: >-
           python experiments/PhysicsJoltEvaluation/RunUnifiedScheduleScreen.py
           --pristine build-energy-clean/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
           --observed build-energy-observed/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
           --output schedule-energy/Unified
+      - name: Independently qualify every unified fixture, repeat and worker budget
+        if: inputs.unified_qualification_only
+        run: >-
+          python experiments/PhysicsJoltEvaluation/RunUnifiedScheduledQualification.py
+          --pristine build-energy-clean/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
+          --observed build-energy-observed/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
+          --world-updates 1 --collision-steps 8 --soft-iterations 24 --compliance 1e-6
+          --output schedule-energy/UnifiedQualified
+      - name: Qualify native contact, free motion, perturbations and longer horizons
+        if: inputs.unified_qualification_only
+        run: >-
+          python experiments/PhysicsJoltEvaluation/RunScheduledProfileQualification.py
+          --pristine build-energy-clean/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
+          --observed build-energy-observed/PhysicsJoltScheduledCouplingDiagnostic${{ matrix.suffix }}
+          --world-updates 1 --steps 8 --iterations 24 --compliance 1e-6
+          --output schedule-energy/NativeQualified
       - name: Preserve energy evidence and compiled dependency caches
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
@@ -816,7 +851,7 @@ jobs:
             build-energy-observed/compile_commands.json
 
   engine-architecture-comparison:
-    if: github.event_name == 'workflow_dispatch' && inputs.unified_qualification_only
+    if: github.event_name == 'workflow_dispatch' && inputs.unified_qualification_only && !inputs.schedule_followup_only
     name: Engine rigid regression and matched corrected coupling / ${{ matrix.os }}
     strategy:
       fail-fast: false

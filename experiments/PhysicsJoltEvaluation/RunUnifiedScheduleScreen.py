@@ -10,7 +10,7 @@ import time
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument('--observed', '--instrumented', dest='Observed', type=Path, required=True)
-Parser.add_argument('--pristine', type=Path, required=True)
+Parser.add_argument('--pristine', dest='Pristine', type=Path, required=True)
 Parser.add_argument('--output', type=Path, required=True)
 Parser.add_argument('--frames', type=int, default=150)
 Args = Parser.parse_args()
