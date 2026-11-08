@@ -17,10 +17,12 @@ def Main() -> None:
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument("Jolt", type=Path)
     Parser.add_argument("Output", type=Path)
+    Parser.add_argument("--expected-commit", default=PINNED_JOLT,
+                        help="Explicit source identity for a clean maintained fork; original pin by default")
     Args = Parser.parse_args()
     Revision = subprocess.check_output(
         ["git", "-C", str(Args.Jolt), "rev-parse", "HEAD"], text=True).strip()
-    if Revision != PINNED_JOLT:
+    if Revision != Args.expected_commit:
         Parser.error("[Physics:EnergyObserver] Jolt revision differs from pinned source")
     Status = subprocess.check_output(
         ["git", "-C", str(Args.Jolt), "status", "--porcelain"], text=True).strip()

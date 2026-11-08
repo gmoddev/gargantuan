@@ -347,6 +347,7 @@ int main(int ArgCount,char** Args) {
             auto Shared=GetCloth();
             PhysicsJoltEvaluation::ValidateVelocityConstraints(*Shared, Config.VelocityReconstruction);
             JPH::SoftBodyCreationSettings Soft(Shared,JPH::RVec3::sZero(),JPH::Quat::sIdentity(),2);
+            PhysicsJoltEvaluation::ApplyVelocityReconstruction(Soft);
             Soft.mNumIterations=Config.Iterations; Soft.mUpdatePosition=false; Soft.mAllowSleeping=false;
             Soft.mLinearDamping=Config.Damping; Soft.mVertexRadius=0.05f; Soft.mFacesDoubleSided=true;
             Soft.mFriction=Config.Friction; Soft.mRestitution=Config.Restitution;

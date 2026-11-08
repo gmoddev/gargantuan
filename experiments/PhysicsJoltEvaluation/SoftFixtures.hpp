@@ -12,6 +12,7 @@
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include "ExperimentalVelocityReconstruction.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -113,6 +114,7 @@ namespace PhysicsJoltEvaluation {
         JPH::BodyID AddSoft(const JPH::Ref<JPH::SoftBodySharedSettings> &Shared, JPH::RVec3 Position,
                             int Iterations = 16, bool UpdatePosition = false, float LinearDamping = 0.05f) {
             JPH::SoftBodyCreationSettings Settings(Shared, Position, JPH::Quat::sIdentity(), 2);
+            ApplyVelocityReconstruction(Settings);
             Settings.mNumIterations = static_cast<JPH::uint32>(Iterations);
             Settings.mUpdatePosition = UpdatePosition;
             Settings.mAllowSleeping = false;

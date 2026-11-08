@@ -1,5 +1,5 @@
 set(PHYSICS_EVALUATION_JOLT_ROOT "" CACHE PATH "Verified Jolt v5.6.0 checkout")
-set(PHYSICS_EVALUATION_JOLT_COMMIT "e77f175595e64cb44218cc9d9d56fc365ad0e36a")
+set(PHYSICS_EVALUATION_JOLT_COMMIT "e77f175595e64cb44218cc9d9d56fc365ad0e36a" CACHE STRING "Exact independently qualified Jolt source commit")
 if(NOT EXISTS "${PHYSICS_EVALUATION_JOLT_ROOT}/Jolt/Jolt.h")
     message(FATAL_ERROR "[Physics:Evaluation] Supply PHYSICS_EVALUATION_JOLT_ROOT at the pinned checkout")
 endif()
@@ -78,3 +78,8 @@ endforeach()
 
 PhysicsEvaluationTarget(PhysicsJoltXpbdCouplingDiagnostic XpbdCouplingDiagnostic.cpp XpbdDiagnosticBackend.cpp)
 PhysicsEvaluationTarget(PhysicsJoltXpbdCouplingDiagnosticAllocations XpbdCouplingDiagnostic.cpp XpbdDiagnosticBackend.cpp)
+
+# Production factories and defaults stay in gargantuan_core. Only this isolated
+# executable explicitly constructs the shared-world experimental provider.
+PhysicsEvaluationTarget(PhysicsJoltProviderQualification
+    Provider/ProviderQualification.cpp RigidJoltBackend.cpp)
