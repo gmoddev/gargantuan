@@ -1247,8 +1247,25 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends clang-19 g++-14 cmake ninja-build libx11-dev libxcursor-dev libxext-dev libxfixes-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev
+      - name: Reuse the successfully built SDL runtime from the prior harness attempt
+        if: inputs.schedule_source_run == '42449341524'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/gmoddev/gargantuan/actions/runs/42449341524 > rigid-cadence-evidence/RuntimeCacheSource.json
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime cache source unavailable' }
+          $Source = Get-Content rigid-cadence-evidence/RuntimeCacheSource.json -Raw | ConvertFrom-Json
+          if ($Source.head_sha -ne '23f2b3fb7bb6e8a327e9935f4e948396629386d1' -or $Source.status -ne 'completed') { throw 'Runtime cache source mismatch' }
+          gh run download 42449341524 --repo gmoddev/gargantuan --name 'jolt-rigid-candidate-cadence-${{ matrix.os }}' --dir cached-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Compiled SDL runtime unavailable' }
+          $Pin = (Get-Content cached-runtime/rigid-cadence-evidence/RuntimeSource.txt -Raw).Trim()
+          if ($Pin -ne 'f87239e71e42da91ca317a12eefb82cfbf3393eb') { throw 'Wrong compiled SDL runtime pin' }
+          Copy-Item -LiteralPath cached-runtime/build-sdl-runtime -Destination build-sdl-runtime -Recurse
+          'REUSE_RUNTIME=1' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if (-not $IsWindows) { chmod +x frozen-engine/build-engine-comparison/experiments/PhysicsJoltEvaluation/PhysicsJoltUnifiedRigidEvaluation }
       - name: Build only the pinned Linux SDL shared runtime
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && env.REUSE_RUNTIME != '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -1256,7 +1273,7 @@ jobs:
           cmake --build build-sdl-runtime --target SDL3-shared --parallel 2 2>&1 | tee rigid-cadence-evidence/RuntimeBuild.log
           chmod +x frozen-engine/build-engine-comparison/experiments/PhysicsJoltEvaluation/PhysicsJoltUnifiedRigidEvaluation
       - name: Build only the pinned Windows SDL shared runtime
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.REUSE_RUNTIME != '1'
         shell: pwsh
         run: |
           $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'

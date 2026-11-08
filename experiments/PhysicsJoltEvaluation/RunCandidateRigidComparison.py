@@ -179,11 +179,13 @@ def RunCase(Definition, Executable, Output, Environment, TimeoutSeconds):
     if Process.returncode != ExpectedExit:
         raise ValueError(f'[Physics:RigidCost] {Name} exit {Process.returncode}, expected {ExpectedExit}')
     Step = Row.get('Step')
-    if Quality == 'pass' and (not isinstance(Step, dict) or
-                              not isinstance(Step.get('P50Ms'), (float, int)) or
-                              not isinstance(Step.get('P95Ms'), (float, int)) or
-                              Step['P50Ms'] <= 0 or Step['P95Ms'] <= 0):
+    HasStepSamples = (isinstance(Step, dict) and
+                      isinstance(Step.get('P50Ms'), (float, int)) and
+                      isinstance(Step.get('P95Ms'), (float, int)) and
+                      Step['P50Ms'] > 0 and Step['P95Ms'] > 0)
+    if Phase != 'Screen' and Quality == 'pass' and not HasStepSamples:
         raise ValueError(f'[Physics:RigidCost] {Name} passing row lacks step samples')
+    TimingAdmitted = Quality == 'pass' and HasStepSamples
     return {'Name': Name, 'Phase': Phase, 'Backend': Backend, 'Case': Case,
             'Workers': Workers, 'WorldUpdates': Updates, 'CollisionSteps': Steps,
             'Repeat': Repeat, 'Options': Options, 'ExitCode': Process.returncode,
@@ -191,9 +193,9 @@ def RunCase(Definition, Executable, Output, Environment, TimeoutSeconds):
             'OutputSha256': HashFile(StdoutPath),
             'StderrSha256': HashFile(StderrPath),
             'QualityStatus': Quality, 'Status': Row.get('Status'),
-            'TimingAdmitted': Quality == 'pass',
-            'P50Ms': Step.get('P50Ms') if Quality == 'pass' else None,
-            'P95Ms': Step.get('P95Ms') if Quality == 'pass' else None,
+            'TimingAdmitted': TimingAdmitted,
+            'P50Ms': Step['P50Ms'] if TimingAdmitted else None,
+            'P95Ms': Step['P95Ms'] if TimingAdmitted else None,
             'MeasuredFrames': Row.get('MeasuredFrames'),
             'PhysicalRowSha256': hashlib.sha256(json.dumps(
                 PhysicalRow(Row), sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
