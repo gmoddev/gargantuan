@@ -52,7 +52,10 @@ namespace PhysicsEvaluation {
     [[nodiscard]] JoltSoftSolverProfile GetJoltSoftSolverProfile();
 
     // Cumulative vertex contacts reported by Jolt's soft-rigid manifold for
-    // this live neutral-ID pair. Used only to qualify experimental coupling.
+    // this live neutral-ID pair. Enable capture before Step in private fixtures;
+    // default provider timing keeps the native listener unset.
+    [[nodiscard]] bool SetJoltSoftRigidContactCapture(
+        gargantuan::IPhysicsBackend &Rigid, bool Enabled);
     [[nodiscard]] std::uint64_t GetJoltSoftRigidContactVertexCount(
         const gargantuan::IPhysicsBackend &Rigid,
         const gargantuan::ISoftBodyBackend &Soft,

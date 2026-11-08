@@ -431,6 +431,10 @@ namespace {
                 Rigid.GetIndexAndSequenceNumber()});
             return Found == ContactedVertices.end() ? 0 : Found->second;
         }
+        void Clear() {
+            std::scoped_lock Lock(Mutex);
+            ContactedVertices.clear();
+        }
         void ForgetBody(JPH::BodyID Body) {
             std::scoped_lock Lock(Mutex);
             const auto Native = Body.GetIndexAndSequenceNumber();
@@ -493,7 +497,6 @@ namespace {
 #endif
             World.SetGravity(ToJolt(Config.Gravity));
             World.SetContactListener(&Contacts);
-            World.SetSoftBodyContactListener(&SoftContacts);
             BodySlots.emplace_back();
             ConstraintSlots.emplace_back();
             Residency.ResourceLimit = std::min(Config.CollisionResourceLimit,
@@ -519,6 +522,11 @@ namespace {
         bool IsValid() const override { return Valid; }
         void SetBeforeUnifiedStep(std::function<bool(float)> Callback) {
             BeforeUnifiedStep = std::move(Callback);
+        }
+        void SetSoftContactCapture(bool Enabled) {
+            // Private fixture setup only: caller must not change listeners during Step.
+            if (Enabled) SoftContacts.Clear();
+            World.SetSoftBodyContactListener(Enabled ? &SoftContacts : nullptr);
         }
         std::uint64_t SoftRigidContactVertices(JPH::BodyID Soft, PhysicsBodyId Rigid) const {
             const auto *RigidSlot = Find(Rigid);
@@ -2089,6 +2097,12 @@ std::uint64_t GetJoltSoftRigidContactVertexCount(
     const auto *SoftValue = dynamic_cast<const JoltSoftBackend *>(&Soft);
     if (!RigidValue || !SoftValue || &SoftValue->SharedWorld() != RigidValue) return 0;
     return RigidValue->SoftRigidContactVertices(SoftValue->NativeBody(SoftId), RigidId);
+}
+bool SetJoltSoftRigidContactCapture(gargantuan::IPhysicsBackend &Rigid, bool Enabled) {
+    auto *RigidValue = dynamic_cast<RigidJoltBackend *>(&Rigid);
+    if (!RigidValue) return false;
+    RigidValue->SetSoftContactCapture(Enabled);
+    return true;
 }
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
 gargantuan::PhysicsOperationResult ConnectJoltRigidSoftAttachment(
