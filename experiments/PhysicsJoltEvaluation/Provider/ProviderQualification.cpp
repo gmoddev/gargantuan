@@ -1,4 +1,5 @@
 #include "UnifiedJoltProvider.hpp"
+#include "../RigidJoltBackend.hpp"
 #include "../ExperimentSupport.hpp"
 #include "gargantuan/classes/Cloth.hpp"
 #include "gargantuan/classes/Attachment.hpp"
@@ -577,6 +578,53 @@ namespace {
         Require(Provider.Rigid->DestroyBody(Existing).Succeeded(),
             "rigid range update setup body failed retirement");
     }
+#ifdef PHYSICS_GANTRIA_SLEEP_FIX
+    void FullUpdateSleepCadence() {
+        const auto TimeToSleep = [](int CollisionSteps, bool Unified) {
+            PhysicsWorldConfig Config;
+            Config.Gravity = {0, -10, 0};
+            auto Provider = Unified ? CreateUnifiedJoltProvider(Config) :
+                PhysicsEvaluation::UnifiedJoltProvider{
+                    PhysicsEvaluation::CreateRigidJoltBackend(Config, 1), {}};
+            auto Floor = Box({0, -0.5f, 0}, {10, 1, 10}, true);
+            const auto FloorId = Provider.Rigid->CreateBody(Floor);
+            PhysicsBodyDesc BallValue;
+            BallValue.Shape.Kind = PhysicsShapeKind::Ball;
+            BallValue.Shape.Size = {1, 1, 1};
+            BallValue.Transform.Position = {0, 2, 0};
+            const auto BallId = Provider.Rigid->CreateBody(BallValue);
+            Require(FloorId.IsValid() && BallId.IsValid(),
+                "sleep cadence endpoints failed admission");
+            int FirstSleep = -1;
+            for (int Frame = 0; Frame < 180; ++Frame) {
+                (void)Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                    .SubStepCount = CollisionSteps});
+                const auto State = Provider.Rigid->GetBodyState(BallId);
+                Require(State && std::isfinite(State->Transform.Position.y) &&
+                    State->Transform.Position.y > 0.35f,
+                    "sleep cadence ball lost finite floor support");
+                if (!State->Awake) { FirstSleep = Frame; break; }
+            }
+            Require(FirstSleep >= 0, "full-update sleep clock did not retire resting body");
+            Require(Provider.Rigid->SetAwake(BallId, true).Succeeded() &&
+                Provider.Rigid->GetBodyState(BallId)->Awake,
+                "sleep cadence explicit rewake failed");
+            (void)Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = CollisionSteps});
+            Require(Provider.Rigid->GetBodyState(BallId)->Awake,
+                "rewoken body immediately returned to sleep");
+            std::cout << "[Physics:JoltProvider] sleep cadence collision_steps="
+                << CollisionSteps << " unified=" << Unified
+                << " first_sleep_frame=" << FirstSleep << '\n' << std::flush;
+            return FirstSleep;
+        };
+        const std::array<int, 4> SleepFrames{TimeToSleep(1, false),
+            TimeToSleep(4, false), TimeToSleep(8, false), TimeToSleep(8, true)};
+        const auto [Minimum, Maximum] = std::minmax_element(SleepFrames.begin(), SleepFrames.end());
+        Require(*Maximum - *Minimum <= 45,
+            "full-update sleep onset varied materially across collision-step schedules");
+    }
+#endif
     void UnifiedProviderReplacementOrder() {
         auto Bundle = CreateUnifiedJoltProvider({});
         SoftBodyDefinition Tiny;
@@ -1063,7 +1111,15 @@ int main() {
             << SolverProfile.SoftIterationsPerCollisionStep
             << " constraint_sweeps=" << SolverProfile.ConstraintSweepsPerIteration
             << " integrations_per_frame=" << SolverProfile.SoftIntegrationsPerFrame
+            << " full_update_sleep_clock=" << SolverProfile.FullUpdateSleepClock
             << '\n' << std::flush;
+#ifdef PHYSICS_GANTRIA_SLEEP_FIX
+        Require(SolverProfile.FullUpdateSleepClock,
+            "full-update sleep clock macro and compiled library disagree");
+#else
+        Require(!SolverProfile.FullUpdateSleepClock,
+            "legacy sleep clock macro and compiled library disagree");
+#endif
 #ifdef PHYSICS_GANTRIA_CONVERGENCE
         Require(SolverProfile.SoftIterationsPerCollisionStep == 6 &&
             SolverProfile.ConstraintSweepsPerIteration == 2 &&
@@ -1099,6 +1155,10 @@ int main() {
         NeutralPointImpulseDistribution();
         std::cout << "[Physics:JoltProvider] derived native range admission\n" << std::flush;
         DerivedNativeRangeAdmission();
+#ifdef PHYSICS_GANTRIA_SLEEP_FIX
+        std::cout << "[Physics:JoltProvider] full-update sleep cadence\n" << std::flush;
+        FullUpdateSleepCadence();
+#endif
         std::cout << "[Physics:JoltProvider] provider replacement order\n" << std::flush;
         UnifiedProviderReplacementOrder();
         std::cout << "[Physics:JoltProvider] DataModel lifecycle\n" << std::flush;

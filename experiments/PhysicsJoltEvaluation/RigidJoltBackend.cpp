@@ -4,6 +4,9 @@
 #if defined(PHYSICS_GANTRIA_CONVERGENCE) && !defined(PHYSICS_GANTRIA_JOLT)
 #error "The repeated-sweep provider profile requires the corrected Gantria Jolt solver"
 #endif
+#if defined(PHYSICS_GANTRIA_SLEEP_FIX) && !defined(PHYSICS_GANTRIA_JOLT)
+#error "The full-update sleep clock requires the maintained Gantria Jolt source"
+#endif
 
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>
@@ -447,6 +450,11 @@ namespace {
             else Jobs = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs,
                 JPH::cMaxPhysicsBarriers, WorkerBudget - 1);
             World.Init(65536, 0, 65536, 65536, Layers, Layers, Layers);
+#ifdef PHYSICS_GANTRIA_SLEEP_FIX
+            auto PhysicsSettings = World.GetPhysicsSettings();
+            PhysicsSettings.mUseFullUpdateDeltaForSleep = true;
+            World.SetPhysicsSettings(PhysicsSettings);
+#endif
             World.SetGravity(ToJolt(Config.Gravity));
             World.SetContactListener(&Contacts);
             BodySlots.emplace_back();
@@ -2020,7 +2028,12 @@ JoltSoftSolverProfile GetJoltSoftSolverProfile() {
     return {.WorldUpdates = 2, .CollisionStepsPerUpdate = 8,
         .SoftIterationsPerCollisionStep = SoftIterationsPerCollisionStep,
         .ConstraintSweepsPerIteration = ConstraintSweepsPerIteration,
-        .SoftIntegrationsPerFrame = SoftIntegrationsPerFrame};
+        .SoftIntegrationsPerFrame = SoftIntegrationsPerFrame,
+#ifdef PHYSICS_GANTRIA_SLEEP_FIX
+        .FullUpdateSleepClock = true};
+#else
+        .FullUpdateSleepClock = false};
+#endif
 }
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
 gargantuan::PhysicsOperationResult ConnectJoltRigidSoftAttachment(

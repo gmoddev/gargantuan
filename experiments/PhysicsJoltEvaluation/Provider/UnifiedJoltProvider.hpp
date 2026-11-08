@@ -47,6 +47,7 @@ namespace PhysicsEvaluation {
         std::uint32_t SoftIterationsPerCollisionStep = 12;
         std::uint32_t ConstraintSweepsPerIteration = 1;
         std::uint32_t SoftIntegrationsPerFrame = 192;
+        bool FullUpdateSleepClock = false;
     };
     [[nodiscard]] JoltSoftSolverProfile GetJoltSoftSolverProfile();
 
