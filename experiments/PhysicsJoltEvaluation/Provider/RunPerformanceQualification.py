@@ -25,7 +25,11 @@ TAILS = ('cold', 'warm')
 JOLT_PROFILE_FIELDS = ('jolt_world_updates', 'jolt_collision_steps_per_update',
                        'jolt_soft_iterations_per_collision_step',
                        'jolt_constraint_sweeps_per_iteration',
-                       'jolt_soft_integrations_per_frame')
+                       'jolt_soft_integrations_per_frame',
+                       'jolt_full_update_sleep_clock')
+XPBD_REFERENCE_FIELDS = ('xpbd_substeps_requested', 'xpbd_substeps_actual',
+                         'xpbd_reference', 'xpbd_quality_mode',
+                         'xpbd_damping_mode', 'xpbd_substep_damping')
 
 
 def HashFile(PathName):
@@ -61,7 +65,7 @@ def PlanMatrix(Scenes, Couplings, Workers, Repetitions, Tails):
     return Plan
 
 
-def ParseRaw(PathName, Backend, Frames, Warmup, Pair):
+def ParseRaw(PathName, Backend, Frames, Warmup, Pair, RequestedXpbdSubsteps=1):
     Lines = PathName.read_text(encoding='utf-8').splitlines()
     Prefix = '[Physics:ProviderBenchmark] '
     Heads = [Line[len(Prefix):] for Line in Lines
@@ -70,6 +74,8 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair):
                  if Line.startswith(Prefix + 'summary ')]
     Lifecycles = [Line[len(Prefix + 'lifecycle '):] for Line in Lines
                   if Line.startswith(Prefix + 'lifecycle ')]
+    Calibrations = [Line[len(Prefix + 'reference_calibration '):] for Line in Lines
+                    if Line.startswith(Prefix + 'reference_calibration ')]
     Measured = [Line for Line in Lines if Line.startswith(Prefix + 'frame=')]
     Warm = [Line for Line in Lines if Line.startswith(Prefix + 'warmup_frame=')]
     if (len(Heads), len(Summaries), len(Lifecycles), len(Measured), len(Warm)) != \
@@ -102,6 +108,28 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair):
             raise ValueError('Invalid compiled Jolt solver profile')
     elif any(JoltProfile.values()):
         raise ValueError('XPBD row incorrectly reports a Jolt solver profile')
+    if any(Header[Field] != Summary[Field] for Field in XPBD_REFERENCE_FIELDS):
+        raise ValueError('XPBD reference configuration changed between header and summary')
+    if int(Summary['xpbd_substeps_requested']) != RequestedXpbdSubsteps:
+        raise ValueError('Requested XPBD reference substeps changed')
+    if Backend == 'xpbd':
+        Reference = RequestedXpbdSubsteps > 1
+        if int(Summary['xpbd_substeps_actual']) != RequestedXpbdSubsteps or \
+                int(Summary['xpbd_reference']) != int(Reference) or \
+                Summary['xpbd_quality_mode'] != (
+                    'high-reference' if Reference else 'automatic-production') or \
+                Summary['xpbd_damping_mode'] != (
+                    'per-substep-frame-retention' if Reference else 'per-frame-production'):
+            raise ValueError('XPBD reference mode misidentified')
+        if int(Summary['xpbd_measured_substeps']) != Frames * RequestedXpbdSubsteps:
+            raise ValueError('XPBD measured substep coverage incomplete')
+        if len(Calibrations) != int(Reference):
+            raise ValueError('XPBD reference calibration coverage mismatch')
+    elif int(Summary['xpbd_substeps_actual']) != 0 or \
+            int(Summary['xpbd_reference']) != 0:
+        raise ValueError('Jolt row incorrectly reports XPBD reference work')
+    elif Calibrations:
+        raise ValueError('Jolt row unexpectedly reports XPBD calibration')
     if int(Summary['frames']) != Frames or \
             Lifecycle.get('MeasuredFrames') != Frames or \
             Lifecycle.get('WarmupFrames') != Warmup or \
@@ -110,8 +138,14 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair):
     for Field in ('StartupAdmissionMs', 'TeardownMs'):
         if not math.isfinite(float(Lifecycle[Field])) or float(Lifecycle[Field]) < 0:
             raise ValueError(f'Invalid lifecycle {Field}')
+    Calibration = json.loads(Calibrations[0]) if Calibrations else None
+    if Calibration and (Calibration.get('Pass') is not True or
+                        Calibration.get('Substeps') != RequestedXpbdSubsteps or
+                        not math.isfinite(float(Calibration['ObservedFrameRetention']))):
+        raise ValueError('XPBD reference retention calibration failed')
     return {'Header': Header, 'Summary': Summary, 'Lifecycle': Lifecycle,
-            'CompiledJoltProfile': JoltProfile}
+            'CompiledJoltProfile': JoltProfile,
+            'XpbdReferenceCalibration': Calibration}
 
 
 def RunProcess(Command, TimeoutSeconds):
@@ -172,6 +206,8 @@ def Main(Arguments=None):
     Parser.add_argument('--tails', nargs='+', choices=TAILS, default=TAILS)
     Parser.add_argument('--frames', type=int, default=30)
     Parser.add_argument('--warmup', type=int, default=10)
+    Parser.add_argument('--xpbd-substeps', type=int, choices=(1, 4, 8, 16, 32),
+                        default=1)
     Parser.add_argument('--repetitions', type=int, default=3)
     Parser.add_argument('--timeout-seconds', type=int, default=900)
     Parser.add_argument('--total-timeout-seconds', type=int, default=900)
@@ -205,6 +241,7 @@ def Main(Arguments=None):
         'Host': platform.node(), 'Platform': platform.platform(),
         'Python': sys.version, 'Frames': Options.frames,
         'WarmupFrames': Options.warmup, 'Repetitions': Options.repetitions,
+        'RequestedXpbdSubsteps': Options.xpbd_substeps,
         'TotalTimeoutSeconds': Options.total_timeout_seconds,
         'EnvelopeSha256': HashFile(Output / 'QualityEnvelope.json') if Envelope else None,
         'TimingScope': 'Separate cold and post-warmup provider calls; allocation builds rejected',
@@ -226,7 +263,7 @@ def Main(Arguments=None):
             Name = f"{len(Receipts):04d}-{Item['Pair']}-{Backend}-{Item['Tail']}"
             Command = [str(Binary), Backend, Item['Scene'], Item['Coupling'],
                        str(Options.frames), str(Item['Workers']), Item['Pair'],
-                       str(Warmup)]
+                       str(Warmup), str(Options.xpbd_substeps)]
             Timeout = RemainingTimeout(Deadline, Options.timeout_seconds)
             if Timeout <= 0:
                 Errors.append({'Name': Name, 'Reason': 'Total deadline elapsed before native launch'})
@@ -243,6 +280,7 @@ def Main(Arguments=None):
                        'Scene': Item['Scene'], 'Coupling': Item['Coupling'],
                        'Workers': Item['Workers'], 'Tail': Item['Tail'],
                        'Repeat': Item['Repeat'], 'WarmupFrames': Warmup,
+                       'RequestedXpbdSubsteps': Options.xpbd_substeps,
                        'Command': Command, 'BinarySha256': Metadata['BinarySha256'],
                        'Stdout': StdoutPath.name, 'StdoutSha256': HashFile(StdoutPath),
                        'Stderr': StderrPath.name, 'StderrSha256': HashFile(StderrPath),
@@ -257,7 +295,8 @@ def Main(Arguments=None):
                 break
             try:
                 Receipt['Parsed'] = ParseRaw(StdoutPath, Backend, Options.frames,
-                                             Warmup, Item['Pair'])
+                                             Warmup, Item['Pair'],
+                                             Options.xpbd_substeps)
                 if int(Receipt['Parsed']['Summary']['workers_requested']) != Item['Workers']:
                     raise ValueError('Requested worker count changed')
             except Exception as Error:
@@ -293,6 +332,7 @@ def Main(Arguments=None):
         CompareStdout.write_bytes(Compared.pop('Stdout'))
         CompareStderr.write_bytes(Compared.pop('Stderr'))
         Pair = {**Item, 'WarmupFrames': Warmup,
+                'RequestedXpbdSubsteps': Options.xpbd_substeps,
                 'JoltReceipt': PairRuns['jolt']['Name'],
                 'XpbdReceipt': PairRuns['xpbd']['Name'],
                 'ComparisonCommand': ComparisonCommand,

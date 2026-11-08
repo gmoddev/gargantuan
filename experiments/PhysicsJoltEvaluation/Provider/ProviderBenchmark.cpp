@@ -198,6 +198,67 @@ namespace {
     double Milliseconds(Clock::duration Duration) {
         return std::chrono::duration<double, std::milli>(Duration).count();
     }
+    nlohmann::json CalibrateXpbdRetention(int Substeps, float SubstepDamping,
+                                          float FrameDamping) {
+        SoftBodyWorldLimits Limits;
+        Limits.MaximumWorkers = 1;
+        auto Backend = CreateSoftBodyBackend(Limits);
+        if (!Backend || !Backend->IsValid())
+            throw std::runtime_error("XPBD reference calibration backend failed admission");
+        auto Definition = MakeDefinition({"free-reference-control", false, 8, 1}, 0);
+        Definition.Attachments.clear();
+        Definition.Quality = SoftBodyQuality::High;
+        Definition.Material.Damping = SubstepDamping;
+        const auto Body = Backend->CreateBody(Definition);
+        if (!Body.IsValid()) throw std::runtime_error("XPBD free calibration body failed admission");
+        const auto CenterX = [&]() {
+            const auto State = Backend->GetBodyState(Body);
+            if (!State || !State->Positions || State->Positions->size() != 64)
+                throw std::runtime_error("XPBD free calibration state missing");
+            double Sum = 0.0;
+            for (const auto &Position : *State->Positions) {
+                if (!std::isfinite(Position.x))
+                    throw std::runtime_error("XPBD free calibration position nonfinite");
+                Sum += Position.x;
+            }
+            return Sum / State->Positions->size();
+        };
+        const double InitialX = CenterX();
+        const float TotalMass = 64.0f * Definition.Material.ParticleMass;
+        if (!Backend->ApplyImpulse(Body, {TotalMass, 0, 0}).Succeeded())
+            throw std::runtime_error("XPBD free calibration impulse failed");
+        SoftBodyStepConfig Config;
+        Config.DeltaTime = SoftBodyStepInterval / float(Substeps);
+        Config.Gravity = {0, 0, 0};
+        double FrameX[2]{};
+        for (int Frame = 0; Frame < 2; ++Frame) {
+            for (int Step = 0; Step < Substeps; ++Step) {
+                const auto Result = Backend->Step(Config);
+                if (Result.Profile.SimulatedBodies != 1 ||
+                    Result.Profile.SimulatedVertices != 64 ||
+                    Result.Profile.FrozenBodies || Result.Profile.BacklogDrops ||
+                    Result.Profile.StaleResults || Result.BodiesTruncated ||
+                    Result.VerticesTruncated || Result.CollidersTruncated)
+                    throw std::runtime_error("XPBD free calibration dropped work");
+            }
+            FrameX[Frame] = CenterX();
+        }
+        const double FirstDisplacement = FrameX[0] - InitialX;
+        const double SecondDisplacement = FrameX[1] - FrameX[0];
+        const double ObservedRetention = SecondDisplacement / FirstDisplacement;
+        const double ExpectedRetention = 1.0 - double(FrameDamping);
+        const bool Pass = FirstDisplacement > 0.0 &&
+            std::isfinite(ObservedRetention) &&
+            std::abs(ObservedRetention - ExpectedRetention) <= 0.002;
+        if (!Backend->DestroyBody(Body).Succeeded())
+            throw std::runtime_error("XPBD free calibration body retirement failed");
+        Backend.reset();
+        return { {"Pass", Pass}, {"Substeps", Substeps},
+            {"SubstepDamping", SubstepDamping},
+            {"ExpectedFrameRetention", ExpectedRetention},
+            {"ObservedFrameRetention", ObservedRetention},
+            {"Tolerance", 0.002}, {"Scope", "Unpinned free cloth; zero gravity; one impulse; two frame displacements"} };
+    }
     std::string ReceiptToken(std::string Value) {
         for (char &Character : Value)
             if (!((Character >= 'a' && Character <= 'z') ||
@@ -227,8 +288,8 @@ int main(int ArgumentCount, char **Arguments) {
     PhysicsEvaluation::SuppressErrorDialogs();
     PhysicsEvaluation::InstallPhysicsAllocators();
     try {
-        if (ArgumentCount < 6 || ArgumentCount > 8)
-            throw std::invalid_argument("Usage: ProviderBenchmark jolt|xpbd scene none|static-sphere frames[1..30] workers[1..8] [shared-run-pair [warmup-frames[0..30]]]");
+        if (ArgumentCount < 6 || ArgumentCount > 9)
+            throw std::invalid_argument("Usage: ProviderBenchmark jolt|xpbd scene none|static-sphere frames[1..30] workers[1..8] [shared-run-pair [warmup-frames[0..30] [xpbd-substeps]]]");
         const std::string BackendName = Arguments[1];
         if (BackendName != "jolt" && BackendName != "xpbd")
             throw std::invalid_argument("Backend must be jolt or xpbd");
@@ -254,9 +315,24 @@ int main(int ArgumentCount, char **Arguments) {
         const auto RunPair = ArgumentCount >= 7 ? ReceiptToken(Arguments[6]) : "unpaired";
         if (RunPair.size() > 64 || RunPair.empty())
             throw std::invalid_argument("Run-pair identifier must be 1..64 characters");
-        const int WarmupFrames = ArgumentCount == 8 ? std::stoi(Arguments[7]) : 0;
+        const int WarmupFrames = ArgumentCount >= 8 ? std::stoi(Arguments[7]) : 0;
         if (WarmupFrames < 0 || WarmupFrames > 30)
             throw std::invalid_argument("Warmup frames must be between 0 and 30");
+        const int RequestedXpbdSubsteps = ArgumentCount == 9 ? std::stoi(Arguments[8]) : 1;
+        if (RequestedXpbdSubsteps != 1 && RequestedXpbdSubsteps != 4 &&
+            RequestedXpbdSubsteps != 8 && RequestedXpbdSubsteps != 16 &&
+            RequestedXpbdSubsteps != 32)
+            throw std::invalid_argument("XPBD reference substeps must be 1, 4, 8, 16, or 32");
+        const bool XpbdReference = BackendName == "xpbd" && RequestedXpbdSubsteps > 1;
+        const int ActualXpbdSubsteps = BackendName == "xpbd" ? RequestedXpbdSubsteps : 0;
+        const float FrameDamping = SoftBodyMaterialDesc{}.Damping;
+        const float SubstepDamping = XpbdReference ?
+            float(1.0 - std::pow(1.0 - double(FrameDamping),
+                1.0 / double(RequestedXpbdSubsteps))) : FrameDamping;
+        const char *XpbdQualityMode = BackendName != "xpbd" ? "not-applicable" :
+            XpbdReference ? "high-reference" : "automatic-production";
+        const char *XpbdDampingMode = BackendName != "xpbd" ? "not-applicable" :
+            XpbdReference ? "per-substep-frame-retention" : "per-frame-production";
         const auto JoltProfile = PhysicsEvaluation::GetJoltSoftSolverProfile();
         const bool UsesJoltProfile = BackendName == "jolt";
 #if defined(PHYSICS_EVALUATION_TRACK_ALLOCATIONS)
@@ -281,6 +357,10 @@ int main(int ArgumentCount, char **Arguments) {
         std::size_t Constraints = 0;
         for (std::uint32_t Index = 0; Index < SceneValue.Count; ++Index) {
             auto Definition = MakeDefinition(SceneValue, Index);
+            if (XpbdReference) {
+                Definition.Quality = SoftBodyQuality::High;
+                Definition.Material.Damping = SubstepDamping;
+            }
             const auto Id = Soft->CreateBody(Definition);
             if (!Id.IsValid()) throw std::runtime_error("Soft scene admission failed");
             const auto State = Soft->GetBodyState(Id);
@@ -342,6 +422,8 @@ int main(int ArgumentCount, char **Arguments) {
         std::vector<double> XpbdUtilizations;
         std::size_t ActualXpbdWorkers = 0;
         std::size_t XpbdJobsDispatched = 0;
+        std::size_t XpbdJobsDispatchedTotal = 0;
+        std::size_t MeasuredXpbdSubsteps = 0;
         double MinimumPoststepSurfaceDistance = std::numeric_limits<double>::infinity();
         double FinalMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
         TotalTimes.reserve(Frames);
@@ -353,6 +435,12 @@ int main(int ArgumentCount, char **Arguments) {
             << " run_pair=" << RunPair
             << " warmup_frames=" << WarmupFrames
             << " timing_instrumented=" << int(TimingInstrumented)
+            << " xpbd_substeps_requested=" << RequestedXpbdSubsteps
+            << " xpbd_substeps_actual=" << ActualXpbdSubsteps
+            << " xpbd_reference=" << int(XpbdReference)
+            << " xpbd_quality_mode=" << XpbdQualityMode
+            << " xpbd_damping_mode=" << XpbdDampingMode
+            << " xpbd_substep_damping=" << (BackendName == "xpbd" ? SubstepDamping : 0.0f)
             << " jolt_world_updates=" << (UsesJoltProfile ? JoltProfile.WorldUpdates : 0)
             << " jolt_collision_steps_per_update=" <<
                 (UsesJoltProfile ? JoltProfile.CollisionStepsPerUpdate : 0)
@@ -362,6 +450,8 @@ int main(int ArgumentCount, char **Arguments) {
                 (UsesJoltProfile ? JoltProfile.ConstraintSweepsPerIteration : 0)
             << " jolt_soft_integrations_per_frame=" <<
                 (UsesJoltProfile ? JoltProfile.SoftIntegrationsPerFrame : 0)
+            << " jolt_full_update_sleep_clock=" <<
+                int(UsesJoltProfile && JoltProfile.FullUpdateSleepClock)
             << " vertices=" << Bodies.size() * Bodies.front().Rest.size() << '\n' << std::flush;
         for (int SequenceFrame = 0; SequenceFrame < WarmupFrames + Frames; ++SequenceFrame) {
             const bool Measured = SequenceFrame >= WarmupFrames;
@@ -371,40 +461,52 @@ int main(int ArgumentCount, char **Arguments) {
                 (void)Jolt.Rigid->Step({.DeltaTime = SoftBodyStepInterval, .SubStepCount = 16});
             const auto AfterRigid = Clock::now();
             SoftBodyStepConfig StepConfig;
-            StepConfig.DeltaTime = SoftBodyStepInterval;
+            const int SoftStepsThisFrame = BackendName == "xpbd" ? ActualXpbdSubsteps : 1;
+            StepConfig.DeltaTime = SoftBodyStepInterval / float(SoftStepsThisFrame);
             StepConfig.Gravity = WorldConfig.Gravity;
             if (BackendName == "xpbd") StepConfig.Colliders = Colliders;
-            const auto Result = Soft->Step(StepConfig);
-            if (Result.States.size() != Bodies.size() ||
-                Result.Profile.SimulatedBodies != Bodies.size() ||
-                Result.Profile.SimulatedVertices != Bodies.size() * Bodies.front().Rest.size() ||
-                Result.Profile.FrozenBodies || Result.Profile.BacklogDrops ||
-                Result.Profile.StaleResults || Result.BodiesTruncated ||
-                Result.VerticesTruncated || Result.CollidersTruncated ||
-                std::any_of(Result.States.begin(), Result.States.end(),
-                    [](const auto &State) { return !State.Simulated; }))
-                throw std::runtime_error("Soft benchmark step lost a body or truncated work");
-            for (auto &Record : Bodies) {
-                const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
-                    [&](const auto &State) { return State.Body == Record.Id; });
-                if (Found == Result.States.end() || !Found->Positions ||
-                    Found->Positions->size() != Record.Rest.size() ||
-                    Found->TopologyRevision != Record.TopologyRevision ||
-                    Found->VertexRevision <= Record.LastVertexRevision)
-                    throw std::runtime_error("Soft benchmark published stale identity or revision");
-                Record.LastVertexRevision = Found->VertexRevision;
+            SoftBodyStepResult Result;
+            std::size_t FrameXpbdJobs = 0;
+            double FrameXpbdUtilization = 0.0;
+            for (int Substep = 0; Substep < SoftStepsThisFrame; ++Substep) {
+                Result = Soft->Step(StepConfig);
+                if (Result.States.size() != Bodies.size() ||
+                    Result.Profile.SimulatedBodies != Bodies.size() ||
+                    Result.Profile.SimulatedVertices != Bodies.size() * Bodies.front().Rest.size() ||
+                    Result.Profile.FrozenBodies || Result.Profile.BacklogDrops ||
+                    Result.Profile.StaleResults || Result.BodiesTruncated ||
+                    Result.VerticesTruncated || Result.CollidersTruncated ||
+                    std::any_of(Result.States.begin(), Result.States.end(),
+                        [](const auto &State) { return !State.Simulated; }))
+                    throw std::runtime_error("Soft benchmark substep lost a body or truncated work");
+                for (auto &Record : Bodies) {
+                    const auto Found = std::find_if(Result.States.begin(), Result.States.end(),
+                        [&](const auto &State) { return State.Body == Record.Id; });
+                    if (Found == Result.States.end() || !Found->Positions ||
+                        Found->Positions->size() != Record.Rest.size() ||
+                        Found->TopologyRevision != Record.TopologyRevision ||
+                        Found->VertexRevision <= Record.LastVertexRevision)
+                        throw std::runtime_error("Soft benchmark published stale identity or revision");
+                    Record.LastVertexRevision = Found->VertexRevision;
+                }
+                for (const auto &State : Result.States)
+                    for (const auto &Position : *State.Positions)
+                        if (!std::isfinite(Position.x) || !std::isfinite(Position.y) ||
+                            !std::isfinite(Position.z))
+                            throw std::runtime_error("Nonfinite soft position during warmup or measured substep");
+                if (BackendName == "xpbd") {
+                    ActualXpbdWorkers = Result.Profile.WorkerCount;
+                    FrameXpbdJobs += Result.Profile.JobsDispatched;
+                    FrameXpbdUtilization += Result.Profile.WorkerUtilization;
+                    if (Measured) {
+                        XpbdUtilizations.push_back(Result.Profile.WorkerUtilization);
+                        ++MeasuredXpbdSubsteps;
+                    }
+                }
             }
-            if (BackendName == "xpbd") {
-                ActualXpbdWorkers = Result.Profile.WorkerCount;
-                XpbdJobsDispatched = Result.Profile.JobsDispatched;
-                if (Measured) XpbdUtilizations.push_back(Result.Profile.WorkerUtilization);
-            }
+            XpbdJobsDispatched = FrameXpbdJobs;
+            if (Measured) XpbdJobsDispatchedTotal += FrameXpbdJobs;
             const auto Finish = Clock::now();
-            for (const auto &State : Result.States)
-                for (const auto &Position : *State.Positions)
-                    if (!std::isfinite(Position.x) || !std::isfinite(Position.y) ||
-                        !std::isfinite(Position.z))
-                        throw std::runtime_error("Nonfinite soft position during warmup or measured frame");
             const double WorldTime = Milliseconds(AfterRigid - Start);
             const double TailTime = Milliseconds(Finish - AfterRigid);
             if (Measured) {
@@ -420,7 +522,7 @@ int main(int ArgumentCount, char **Arguments) {
                 << " xpbd_step_ms=" << (BackendName == "xpbd" ? TailTime : 0.0)
                 << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
                 << " xpbd_worker_utilization=" <<
-                    (BackendName == "xpbd" ? Result.Profile.WorkerUtilization : 0.0)
+                    (BackendName == "xpbd" ? FrameXpbdUtilization / SoftStepsThisFrame : 0.0)
                 << " total_ms=" << (WorldTime + TailTime) << '\n' << std::flush;
             if (Coupling == "static-sphere") {
                 FinalMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
@@ -455,6 +557,12 @@ int main(int ArgumentCount, char **Arguments) {
             << " run_pair=" << RunPair
             << " timing_instrumented=" << int(TimingInstrumented)
             << " startup_admission_ms=" << StartupAdmissionMs
+            << " xpbd_substeps_requested=" << RequestedXpbdSubsteps
+            << " xpbd_substeps_actual=" << ActualXpbdSubsteps
+            << " xpbd_reference=" << int(XpbdReference)
+            << " xpbd_quality_mode=" << XpbdQualityMode
+            << " xpbd_damping_mode=" << XpbdDampingMode
+            << " xpbd_substep_damping=" << (BackendName == "xpbd" ? SubstepDamping : 0.0f)
             << " jolt_world_updates=" << (UsesJoltProfile ? JoltProfile.WorldUpdates : 0)
             << " jolt_collision_steps_per_update=" <<
                 (UsesJoltProfile ? JoltProfile.CollisionStepsPerUpdate : 0)
@@ -464,9 +572,13 @@ int main(int ArgumentCount, char **Arguments) {
                 (UsesJoltProfile ? JoltProfile.ConstraintSweepsPerIteration : 0)
             << " jolt_soft_integrations_per_frame=" <<
                 (UsesJoltProfile ? JoltProfile.SoftIntegrationsPerFrame : 0)
+            << " jolt_full_update_sleep_clock=" <<
+                int(UsesJoltProfile && JoltProfile.FullUpdateSleepClock)
             << " constraints=" << Constraints
             << " xpbd_workers_actual=" << ActualXpbdWorkers
             << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
+            << " xpbd_jobs_dispatched_total=" << XpbdJobsDispatchedTotal
+            << " xpbd_measured_substeps=" << MeasuredXpbdSubsteps
             << " xpbd_mean_worker_utilization=" <<
                 (BackendName == "xpbd" ? Mean(XpbdUtilizations) : 0.0)
             << " mean_total_ms=" << Mean(TotalTimes)
@@ -526,6 +638,14 @@ int main(int ArgumentCount, char **Arguments) {
                 ? nlohmann::json(AfterRetire.WorkingSetBytes) : nlohmann::json(nullptr)}
         };
         std::cout << "[Physics:ProviderBenchmark] lifecycle " << Lifecycle.dump() << '\n' << std::flush;
+        if (XpbdReference) {
+            const auto Calibration = CalibrateXpbdRetention(
+                ActualXpbdSubsteps, SubstepDamping, FrameDamping);
+            std::cout << "[Physics:ProviderBenchmark] reference_calibration "
+                << Calibration.dump() << '\n' << std::flush;
+            if (!Calibration["Pass"].get<bool>())
+                throw std::runtime_error("XPBD reference frame-retention calibration failed");
+        }
         return 0;
     } catch (const std::exception &Error) {
         std::cerr << "[Physics:ProviderBenchmark] " << Error.what() << '\n';

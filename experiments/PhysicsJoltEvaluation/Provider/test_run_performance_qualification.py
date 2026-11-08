@@ -40,14 +40,19 @@ class PerformanceQualificationTests(unittest.TestCase):
             self.assertIn('Total deadline', Summary['HarnessErrors'][0]['Reason'])
 
     def test_compiled_jolt_schedule_must_match_header_and_product(self):
-        Profile = dict(zip(Runner.JOLT_PROFILE_FIELDS, (2, 8, 6, 2, 96)))
+        Profile = dict(zip(Runner.JOLT_PROFILE_FIELDS, (2, 8, 6, 2, 96, 1)))
         Header = {'backend': 'jolt', 'run_pair': 'p0000',
-                  'warmup_frames': 0, 'timing_instrumented': 0, **Profile}
+                  'warmup_frames': 0, 'timing_instrumented': 0,
+                  'xpbd_substeps_requested': 1, 'xpbd_substeps_actual': 0,
+                  'xpbd_reference': 0, 'xpbd_quality_mode': 'not-applicable',
+                  'xpbd_damping_mode': 'not-applicable',
+                  'xpbd_substep_damping': 0, **Profile}
         Summary = {**Header, 'frames': 1, 'mean_total_ms': 1,
                    'mean_y': 0, 'center_y': 0, 'max_pin_error': 0,
                    'mean_edge_strain': 0, 'max_edge_strain': 0,
                    'mean_volume_ratio': 0, 'mean_tetra_volume_ratio': 0,
-                   'max_tetra_volume_error': 0, 'mean_diagonal_strain': 0}
+                   'max_tetra_volume_error': 0, 'mean_diagonal_strain': 0,
+                   'xpbd_measured_substeps': 0}
         Lifecycle = {'MeasuredFrames': 1, 'WarmupFrames': 0,
                      'TimingInstrumented': False, 'StartupAdmissionMs': 1,
                      'TeardownMs': 1}
@@ -86,7 +91,7 @@ class PerformanceQualificationTests(unittest.TestCase):
         RawErr = b'[Physics:ProviderBenchmark] native failure\n'
 
         def FailProcess(Command, TimeoutSeconds):
-            self.assertEqual(Command[-1], '0')
+            self.assertEqual(Command[-2:], ['0', '1'])
             self.assertEqual(TimeoutSeconds, 30)
             return {'Stdout': RawOut, 'Stderr': RawErr, 'ExitCode': 7,
                     'TimedOut': False, 'StartedUtc': '2026-11-08T00:00:00Z',

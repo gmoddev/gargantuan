@@ -65,6 +65,11 @@ def Main() -> None:
         Jolt.get("run_pair") not in (None, "unpaired") and \
         Jolt.get("timing_instrumented") == "0" and \
         Xpbd.get("timing_instrumented") == "0"
+    ReferenceKnown = Jolt.get("xpbd_reference") == "0" and \
+        Xpbd.get("xpbd_reference") in ("0", "1")
+    XpbdReference = Xpbd.get("xpbd_reference") == "1"
+    ReferenceRequestMatched = ReferenceKnown and \
+        Jolt.get("xpbd_substeps_requested") == Xpbd.get("xpbd_substeps_requested")
     Result: dict[str, object] = {
         "scene": Jolt["scene"],
         "coupling": Jolt["coupling"],
@@ -72,6 +77,9 @@ def Main() -> None:
         "warmup_frames": int(Jolt["warmup_frames"]),
         "timing_instrumented": (Jolt.get("timing_instrumented") != "0" or
                                 Xpbd.get("timing_instrumented") != "0"),
+        "xpbd_reference": XpbdReference,
+        "xpbd_substeps_actual": int(Xpbd.get("xpbd_substeps_actual", "0")),
+        "xpbd_reference_request_matched": ReferenceRequestMatched,
         "jolt_workers_requested": int(Jolt["workers_requested"]),
         "xpbd_workers_requested": int(Xpbd["workers_requested"]),
         "xpbd_workers_actual": int(Xpbd["xpbd_workers_actual"]),
@@ -141,6 +149,7 @@ def Main() -> None:
         Result["penetration_bounded"] = PenetrationBounded
         Result["quality_comparable"] = Comparable
         if Comparable and BudgetMatched and ReceiptPairMatched and \
+                ReferenceRequestMatched and not XpbdReference and \
                 Result["material_topology_comparable"] and not Coupled:
             JoltTime = float(Jolt["mean_total_ms"])
             XpbdTime = float(Xpbd["mean_total_ms"])

@@ -3,11 +3,12 @@
 See [FeatureMatrix.md](FeatureMatrix.md) for qualified Engine and provider
 behavior; benchmark observations here do not expand that support scope.
 
-`PhysicsJoltProviderBenchmark` takes five required positional arguments, an
-optional receipt identifier, and an optional warmup count after that identifier:
+`PhysicsJoltProviderBenchmark` takes five required positional arguments,
+followed by optional receipt identifier, warmup count, and XPBD reference
+substep count:
 
 ```
-PhysicsJoltProviderBenchmark jolt|xpbd cloth4k|cloth16k|cloth4x4k|rubber4k|rubber16k none|static-sphere frames workers [shared-run-pair [warmup-frames]]
+PhysicsJoltProviderBenchmark jolt|xpbd cloth4k|cloth16k|cloth4x4k|rubber4k|rubber16k none|static-sphere frames workers [shared-run-pair [warmup-frames [xpbd-substeps]]]
 ```
 
 Measured frames must be 1–30, warmup frames 0–30, and requested workers 1–8.
@@ -55,6 +56,22 @@ separation and maximum poststep penetration across frames. Compare coupled
 and isolated cost separately for each backend. This scene does not compare
 reciprocal dynamic rigid feedback.
 
+The ninth positional argument selects an **experimental XPBD reference** with
+4, 8, 16, or 32 complete `Soft->Step` calls per neutral frame. One means the
+unchanged production `Quality=Automatic` step. Reference mode sets
+`Quality=High` and maps the default 0.04 frame damping to
+`1 - (1 - 0.04)^(1 / substeps)` on each substep; the initial impulse is applied
+only once. Every substep is checked for complete, finite, nonfrozen work and
+advancing body revisions. The measured frame timer contains all substep calls
+and those validation checks. A separate unpinned, zero-gravity, free-cloth
+control runs after benchmark teardown and requires the ratio of its second to
+first frame displacements to match 0.96 within 0.002. The receipt prints the
+control result, total measured XPBD substeps, dispatched jobs, quality mode,
+damping mode, and actual substep count; Jolt records zero actual XPBD substeps.
+The control tests free-velocity retention, not gravity, collision, or material
+equivalence. Reference timing is never a production XPBD timing rank or a
+claim of equal native solver budget.
+
 The executable prints warmup frames as `warmup_frame=N` and measured frames as
 `frame=N`, with per-frame `jolt_world_ms`, `jolt_extract_ms`,
 `xpbd_step_ms`, and `total_ms`, followed
@@ -81,7 +98,7 @@ Admission checks exact vertex and attachment counts and requires a nonempty
 constraint graph. Every warmup and measured frame must report all bodies and
 vertices simulated, no frozen, stale, dropped, or truncated work, finite
 published positions, and advancing vertex revisions with stable identities
-and topology. The finite-position scan is outside the per-frame timer.
+and topology. Reference substep validation is included in its frame timer.
 `CompareBenchmark.py jolt.log xpbd.log` emits absolute differences for those
 physical metrics and leaves `timing_winner` null. Supplying a reviewed JSON
 envelope with `--envelope limits.json` permits a timing winner only when every
@@ -143,6 +160,9 @@ coupling, worker, and physical requirements pass. Cold and warm tails are
 reported separately; no ratio is pooled across scenes or treated as an Engine
 frame result. `PhysicsJoltEngineBenchmark` uses the same scene and coupling
 arguments but has a separate timing scope and does not take a run-pair argument.
+`--xpbd-substeps` selects the reference mode in the external runner and is
+recorded on both sides of every pair. The comparator withholds a timing winner
+for all reference rows, even if an envelope is supplied.
 
 The native damping coefficient is calibrated for the qualified two half-frame
 updates, eight collision steps per half, and 12 Jolt soft integrations per
