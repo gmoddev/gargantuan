@@ -103,7 +103,9 @@ field. The ranges are scene-specific physical acceptance limits chosen before
 examining the paired timing result. Pair differences alone cannot establish
 that either material stayed within a usable shape envelope.
 It also withholds a timing winner unless host, OS, build stamp, executable
-fingerprint, and explicit run-pair identifier match. Pool capacity and dispatched jobs are both reported:
+fingerprint, explicit run-pair identifier, and warmup frame count match, and
+both logs report uninstrumented timing. Pool capacity and dispatched jobs are
+both reported:
 XPBD submits one job per body, so one-body scenes cannot occupy its whole pool.
 That limited parallelism is an actual backend scaling property under the same
 CPU budget, not a reason to erase a measured timing difference.
@@ -178,3 +180,14 @@ stable body identity/revisions, and no frozen or dropped work. It reports
 `mean_volume_ratio` (axis-aligned bounding-box volume). Those checks are
 outside the step timer but can affect the next frame's cache state; compare
 fresh, counterbalanced processes under the same harness.
+
+`RunEnginePerformanceQualification.py` runs the Engine benchmark in fresh
+six-argument processes with cold, 30-frame Jolt/XPBD pairs. Defaults cover the
+five scenes, both coupling choices, worker budgets 1/2/8, and three repeats,
+with backend order balanced across the matrix. It keeps byte-exact raw logs,
+hashes, source and CMake identities, and incremental failure receipts. The
+pair file reports each backend's `WorldRoot::StepPhysics` mean, their cost
+ratio, and absolute quality-field differences. It always leaves
+`TimingWinner` null because these scenes have no reviewed Engine material and
+contact equivalence envelope. Its times are Engine physics-call costs and are
+never pooled with the provider-call results.
