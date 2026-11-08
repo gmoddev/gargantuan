@@ -634,6 +634,9 @@ namespace {
                 Description.Shape.Size.y != Slot->Description.Shape.Size.y ||
                 Description.Shape.Size.z != Slot->Description.Shape.Size.z ||
                 !SameMesh(Description.Shape.Mesh, Slot->Description.Shape.Mesh);
+            const bool MeshTransition =
+                (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) !=
+                (Slot->Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh);
             JPH::ShapeRefC NewShape;
             if (ShapeChanged) {
                 NewShape = MakeShape(Description.Shape);
@@ -657,9 +660,6 @@ namespace {
                 Description.CollisionMask != Slot->Description.CollisionMask ||
                 Description.CanCollide != Slot->Description.CanCollide ||
                 Description.CanTouch != Slot->Description.CanTouch;
-            const bool MeshTransition =
-                (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh) !=
-                (Slot->Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh);
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
             if ((MotionChanged || MeshTransition) && HasAttachmentOnRigid(Id))
                 return Unsupported("Jolt attached rigid motion or mesh transition is unsupported");
@@ -672,12 +672,13 @@ namespace {
                 const auto Replacement = AddNativeBody(Description, Layer, NewShape);
                 if (Replacement.IsInvalid())
                     return {PhysicsOperationStatus::BackendFailure, "Jolt mesh transition body admission failed"};
+                WakeContactNeighbors(Slot->Native);
                 NativeMap.emplace(Replacement.GetIndexAndSequenceNumber(), Id);
                 const auto OldNative = Slot->Native.GetIndexAndSequenceNumber();
                 Interface.RemoveBody(Slot->Native);
                 Interface.DestroyBody(Slot->Native);
                 NativeMap.erase(OldNative);
-                ContactInvalidatedBodies.erase(OldNative);
+                ForgetContactInvalidations(OldNative);
                 Contacts.ForgetBody(OldNative);
                 SoftContacts.ForgetBody(Slot->Native);
                 for (auto It = PreviousContacts.begin(); It != PreviousContacts.end();) {
@@ -691,8 +692,10 @@ namespace {
                 AdmitMesh(*Slot);
                 return {};
             }
-            if (ContactGeometryChanged)
+            if (ContactGeometryChanged) {
                 ContactInvalidatedBodies.insert(Slot->Native.GetIndexAndSequenceNumber());
+                WakeContactNeighbors(Slot->Native);
+            }
             if (ShapeChanged)
                 Interface.SetShape(Slot->Native, NewShape.GetPtr(), true, JPH::EActivation::Activate);
             if (MotionChanged)
@@ -746,6 +749,7 @@ namespace {
         PhysicsOperationResult DestroyBody(PhysicsBodyId Id) override {
             auto *Slot = Find(Id);
             if (!Slot) return InvalidBody();
+            WakeContactNeighbors(Slot->Native);
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
             DisconnectAttachmentsForRigid(Id);
 #endif
@@ -758,13 +762,17 @@ namespace {
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
             NativeMap.erase(Slot->Native.GetIndexAndSequenceNumber());
-            ContactInvalidatedBodies.erase(Slot->Native.GetIndexAndSequenceNumber());
+            ForgetContactInvalidations(Slot->Native.GetIndexAndSequenceNumber());
             Contacts.ForgetBody(Slot->Native.GetIndexAndSequenceNumber());
             SoftContacts.ForgetBody(Slot->Native);
             ReleaseMesh(*Slot);
             for (auto It = PreviousContacts.begin(); It != PreviousContacts.end();) {
                 if (It->first == Slot->Native.GetIndexAndSequenceNumber() ||
                     It->second == Slot->Native.GetIndexAndSequenceNumber()) It = PreviousContacts.erase(It);
+                else ++It;
+            }
+            for (auto It = PreviousNeutralContacts.begin(); It != PreviousNeutralContacts.end();) {
+                if (It->first == Id || It->second == Id) It = PreviousNeutralContacts.erase(It);
                 else ++It;
             }
             Slot->Shape = nullptr;
@@ -864,8 +872,7 @@ namespace {
             World.AddConstraint(Native.GetPtr());
             if (!Description.CollideConnected) {
                 Contacts.SuppressPair(A->Native, B->Native);
-                ContactInvalidatedBodies.insert(A->Native.GetIndexAndSequenceNumber());
-                ContactInvalidatedBodies.insert(B->Native.GetIndexAndSequenceNumber());
+                ContactInvalidatedPairs.insert(ContactPairOf(A->Native, B->Native));
                 auto &Interface = World.GetBodyInterface();
                 Interface.InvalidateContactCache(A->Native);
                 Interface.InvalidateContactCache(B->Native);
@@ -889,8 +896,7 @@ namespace {
                 const auto *B = Find(Slot->Description.BodyB);
                 if (A && B) {
                     Contacts.RestorePair(A->Native, B->Native);
-                    ContactInvalidatedBodies.insert(A->Native.GetIndexAndSequenceNumber());
-                    ContactInvalidatedBodies.insert(B->Native.GetIndexAndSequenceNumber());
+                    ContactInvalidatedPairs.insert(ContactPairOf(A->Native, B->Native));
                     auto &Interface = World.GetBodyInterface();
                     Interface.InvalidateContactCache(A->Native);
                     Interface.InvalidateContactCache(B->Native);
@@ -1166,17 +1172,11 @@ namespace {
                         std::to_string(static_cast<unsigned>(Update)));
             };
             const auto Emit = [&](const auto &Pair, PhysicsContactPhase Phase) {
-                const auto A = NativeMap.find(Pair.first);
-                const auto B = NativeMap.find(Pair.second);
-                if (A == NativeMap.end() || B == NativeMap.end()) return;
                 if (Result.Contacts.size() == MaximumPhysicsEventsPerStep) {
                     Result.EventsTruncated = true;
                     return;
                 }
-                auto First = A->second;
-                auto Second = B->second;
-                if (Second < First) std::swap(First, Second);
-                Result.Contacts.push_back({First, Second, Phase});
+                Result.Contacts.push_back({Pair.first, Pair.second, Phase});
             };
             const auto CollectContacts = [&] {
                 auto Current = Contacts.CurrentPairs();
@@ -1188,16 +1188,29 @@ namespace {
                     if (Current.contains(Pair) ||
                         !NativeMap.contains(Pair.first) || !NativeMap.contains(Pair.second) ||
                         ContactInvalidatedBodies.contains(Pair.first) ||
-                        ContactInvalidatedBodies.contains(Pair.second)) continue;
+                        ContactInvalidatedBodies.contains(Pair.second) ||
+                        ContactInvalidatedPairs.contains(Pair)) continue;
                     if (!Interface.IsActive(JPH::BodyID(Pair.first)) &&
                         !Interface.IsActive(JPH::BodyID(Pair.second)))
                         Current.insert(Pair);
                 }
-                for (const auto &Pair : Current)
-                    if (!PreviousContacts.contains(Pair)) Emit(Pair, PhysicsContactPhase::Began);
-                for (const auto &Pair : PreviousContacts)
-                    if (!Current.contains(Pair)) Emit(Pair, PhysicsContactPhase::Ended);
+                std::set<std::pair<PhysicsBodyId, PhysicsBodyId>> CurrentNeutral;
+                for (const auto &Pair : Current) {
+                    const auto A = NativeMap.find(Pair.first);
+                    const auto B = NativeMap.find(Pair.second);
+                    if (A == NativeMap.end() || B == NativeMap.end() || A->second == B->second)
+                        continue;
+                    CurrentNeutral.emplace(std::min(A->second, B->second),
+                        std::max(A->second, B->second));
+                }
+                for (const auto &Pair : CurrentNeutral)
+                    if (!PreviousNeutralContacts.contains(Pair))
+                        Emit(Pair, PhysicsContactPhase::Began);
+                for (const auto &Pair : PreviousNeutralContacts)
+                    if (!CurrentNeutral.contains(Pair))
+                        Emit(Pair, PhysicsContactPhase::Ended);
                 PreviousContacts = Current;
+                PreviousNeutralContacts = std::move(CurrentNeutral);
             };
             if (UnifiedMode) {
                 UpdateWorld(Config.DeltaTime * 0.5f, 8);
@@ -1213,6 +1226,7 @@ namespace {
                 Slot.PendingTorque = {};
             }
             ContactInvalidatedBodies.clear();
+            ContactInvalidatedPairs.clear();
             ++StepSequence;
             for (std::uint32_t Index = 1; Index < BodySlots.size(); ++Index) {
                 const auto &Slot = BodySlots[Index];
@@ -1228,6 +1242,34 @@ namespace {
         }
 
     private:
+        static std::pair<std::uint32_t, std::uint32_t> ContactPairOf(
+            JPH::BodyID A, JPH::BodyID B) {
+            const auto First = A.GetIndexAndSequenceNumber();
+            const auto Second = B.GetIndexAndSequenceNumber();
+            return {std::min(First, Second), std::max(First, Second)};
+        }
+        void ForgetContactInvalidations(std::uint32_t Native) {
+            ContactInvalidatedBodies.erase(Native);
+            for (auto It = ContactInvalidatedPairs.begin();
+                 It != ContactInvalidatedPairs.end();) {
+                if (It->first == Native || It->second == Native)
+                    It = ContactInvalidatedPairs.erase(It);
+                else ++It;
+            }
+        }
+        void WakeContactNeighbors(JPH::BodyID Native) {
+            const auto Packed = Native.GetIndexAndSequenceNumber();
+            auto &Interface = World.GetBodyInterface();
+            for (const auto &Pair : PreviousContacts) {
+                if (Pair.first != Packed && Pair.second != Packed) continue;
+                const auto Neighbor = Pair.first == Packed ? Pair.second : Pair.first;
+                const auto Found = NativeMap.find(Neighbor);
+                if (Found == NativeMap.end()) continue;
+                const auto *Slot = Find(Found->second);
+                if (Slot && !Slot->Description.Anchored && !Slot->Description.Kinematic)
+                    Interface.ActivateBody(Slot->Native);
+            }
+        }
         using MeshKey = std::pair<std::string, std::uint64_t>;
         struct MeshResource {
             const void *Positions = nullptr;
@@ -1478,7 +1520,9 @@ namespace {
         std::map<MeshKey, MeshResource> MeshResources;
         PhysicsCollisionResidency Residency;
         std::set<std::pair<std::uint32_t, std::uint32_t>> PreviousContacts;
+        std::set<std::pair<PhysicsBodyId, PhysicsBodyId>> PreviousNeutralContacts;
         std::set<std::uint32_t> ContactInvalidatedBodies;
+        std::set<std::pair<std::uint32_t, std::uint32_t>> ContactInvalidatedPairs;
         mutable std::map<std::tuple<int, float, float, float, float, float>, JPH::ShapeRefC> QueryShapes;
         std::size_t ActiveConstraints = 0;
         std::uint64_t StepSequence = 0;

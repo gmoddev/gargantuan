@@ -697,13 +697,13 @@ namespace {
         const auto BallId = Provider.Rigid->CreateBody(BallValue);
         Require(FloorId.IsValid() && BallId.IsValid(),
             "dormant contact edit endpoints failed admission");
-        bool Began = false;
+        int Began = 0;
         int Ended = 0;
         const auto Observe = [&](const PhysicsStepResult &FrameResult) {
             for (const auto &Event : FrameResult.Contacts) {
                 if (!((Event.BodyA == FloorId && Event.BodyB == BallId) ||
                     (Event.BodyA == BallId && Event.BodyB == FloorId))) continue;
-                Began |= Event.Phase == PhysicsContactPhase::Began;
+                Began += Event.Phase == PhysicsContactPhase::Began;
                 Ended += Event.Phase == PhysicsContactPhase::Ended;
             }
         };
@@ -718,7 +718,7 @@ namespace {
                 break;
             }
         }
-        Require(Began && Slept && Ended == 0,
+        Require(Began == 1 && Slept && Ended == 0,
             "dormant contact edit setup did not retain floor contact");
         for (int Hold = 0; Hold < 5; ++Hold) {
             Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
@@ -727,8 +727,68 @@ namespace {
             Require(State && !State->Awake && Ended == 0,
                 "dormant contact edit lost its sleeping contact before floor movement");
         }
-        Floor.Transform.Position = {0, -10, 0};
-        Require(Provider.Rigid->UpdateBody(FloorId, Floor).Succeeded(),
+        auto Mesh = std::make_shared<PhysicsTriangleMesh>();
+        Mesh->ResourceId = "dormant-floor-transition";
+        Mesh->ContentRevision = 1;
+        Mesh->Positions = std::make_shared<const std::vector<glm::vec3>>(
+            std::vector<glm::vec3>{{-5, 0, -5}, {5, 0, -5}, {5, 0, 5}, {-5, 0, 5}});
+        Mesh->Indices = std::make_shared<const std::vector<std::uint32_t>>(
+            std::vector<std::uint32_t>{0, 2, 1, 0, 3, 2});
+        auto MeshTransition = Floor;
+        MeshTransition.Shape.Kind = PhysicsShapeKind::StaticTriangleMesh;
+        MeshTransition.Shape.Mesh = Mesh;
+        const auto BeforeTransitionResidency = Provider.Rigid->GetCollisionResidency();
+        Require(Provider.Rigid->UpdateBody(FloorId, MeshTransition).Succeeded() &&
+            Provider.Rigid->GetBodyState(FloorId)->Description.Shape.Kind ==
+                PhysicsShapeKind::StaticTriangleMesh &&
+            Provider.Rigid->GetCollisionResidency().ActiveConsumers ==
+                BeforeTransitionResidency.ActiveConsumers + 1,
+            "live box-to-mesh transition lost neutral identity or resource charge");
+        for (int Frame = 0; Frame < 4; ++Frame)
+            Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = 16}));
+        Require(Began == 1 && Ended == 0 &&
+            Provider.Rigid->GetBodyState(BallId)->Transform.Position.y > 0.35f,
+            "touching box-to-mesh handoff emitted a false contact edge or lost support");
+        bool Reslept = false;
+        for (int Frame = 0; Frame < 180; ++Frame) {
+            Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = 16}));
+            if (!Provider.Rigid->GetBodyState(BallId)->Awake) {
+                Reslept = true;
+                break;
+            }
+        }
+        Require(Reslept && Began == 1 && Ended == 0,
+            "mesh handoff did not preserve a stable sleeping contact");
+        for (int Hold = 0; Hold < 5; ++Hold) {
+            Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+                .SubStepCount = 16}));
+            Require(!Provider.Rigid->GetBodyState(BallId)->Awake && Ended == 0,
+                "mesh floor contact did not remain dormant before relocation");
+        }
+        const auto Other = Provider.Rigid->CreateBody(Box({5, 2, 0}, {1, 1, 1}, false));
+        Require(Other.IsValid(), "unrelated connected-collision endpoint failed admission");
+        PhysicsConstraintDesc Joint;
+        Joint.Kind = PhysicsConstraintKind::Distance;
+        Joint.BodyA = FloorId;
+        Joint.BodyB = Other;
+        Joint.RestLength = 6.0f;
+        Joint.CollideConnected = false;
+        const auto Connected = Provider.Rigid->TryCreateConstraint(Joint);
+        Require(Connected.Succeeded(), "unrelated connected-collision policy failed admission");
+        Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+            .SubStepCount = 16}));
+        Require(Began == 1 && Ended == 0 && !Provider.Rigid->GetBodyState(BallId)->Awake,
+            "suppressing another pair ended a dormant floor contact");
+        Require(Provider.Rigid->DestroyConstraint(Connected.Constraint).Succeeded(),
+            "unrelated connected-collision policy failed retirement");
+        Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+            .SubStepCount = 16}));
+        Require(Began == 1 && Ended == 0 && !Provider.Rigid->GetBodyState(BallId)->Awake,
+            "restoring another pair ended a dormant floor contact");
+        MeshTransition.Transform.Position = {0, -10, 0};
+        Require(Provider.Rigid->UpdateBody(FloorId, MeshTransition).Succeeded(),
             "moving dormant contact floor failed");
         for (int Frame = 0; Frame < 4; ++Frame)
             Observe(Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
@@ -740,8 +800,10 @@ namespace {
             << Ended << " ball_awake=" << AfterFloorMove->Awake
             << " ball_y=" << AfterFloorMove->Transform.Position.y
             << '\n' << std::flush;
-        Require(Ended == 1,
+        Require(Began == 1 && Ended == 1,
             "moving static floor left a stale sleeping contact or duplicate end");
+        Require(AfterFloorMove->Awake && AfterFloorMove->Transform.Position.y < 0.49f,
+            "moving static floor left its former contact asleep in unsupported space");
     }
 #endif
 #if defined(PHYSICS_GANTRIA_SLEEP_FIX) && defined(PHYSICS_GANTRIA_ATTACHMENTS)
