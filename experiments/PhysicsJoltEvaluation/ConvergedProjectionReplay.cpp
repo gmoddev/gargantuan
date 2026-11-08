@@ -24,6 +24,7 @@ struct Options {
     std::string RestMode = "captured";
     int Steps = 1;
     int Frames = 150;
+    int IntegrationsPerFrame = 0;
     int StageLimit = 9;
     int SeedIndex = 84;
     int ProjectionIterations = 1;
@@ -47,6 +48,7 @@ Options Parse(int Count, char **Arguments) {
         else if (Name == "--rest") Result.RestMode = Value();
         else if (Name == "--steps") Result.Steps = std::stoi(Value());
         else if (Name == "--frames") Result.Frames = std::stoi(Value());
+        else if (Name == "--integrations-per-frame") Result.IntegrationsPerFrame = std::stoi(Value());
         else if (Name == "--stage-limit") Result.StageLimit = std::stoi(Value());
         else if (Name == "--seed-index") Result.SeedIndex = std::stoi(Value());
         else if (Name == "--projection-iterations") Result.ProjectionIterations = std::stoi(Value());
@@ -71,7 +73,8 @@ Options Parse(int Count, char **Arguments) {
     if (Result.GraphPath.empty() ||
         (Result.Precision != "float" && Result.Precision != "double" && Result.Precision != "longdouble") ||
         (Result.RestMode != "captured" && Result.RestMode != "recomputed") ||
-        (Result.Steps != 1 && Result.Steps != 4) || Result.Frames < 1 || Result.Frames > 240 ||
+        (Result.Steps != 1 && Result.Steps != 4) || Result.Frames < 1 || Result.Frames > 3600 ||
+        Result.IntegrationsPerFrame < 0 || Result.IntegrationsPerFrame > 768 ||
         Result.StageLimit < 0 || Result.StageLimit > 96 || Result.SeedIndex < 0 ||
         Result.ProjectionIterations < 1 || Result.ProjectionIterations > 256 ||
         !std::isfinite(Result.Tolerance) || Result.Tolerance < 0.0 || Result.Tolerance > 1.0 ||
@@ -250,13 +253,19 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
     // the solver arithmetic below uses double or long double.
     const float FrameTimeNative = 1.0f / 60.0f;
     const float OuterTimeNative = FrameTimeNative / static_cast<float>(Config.Steps);
-    const float InnerTimeNative = OuterTimeNative / 24.0f;
+    // The explicit cadence models one native World.Update per integration:
+    // the frame duration is divided directly in float by that update count.
+    // The default preserves the historical outer/24 division exactly.
+    const float InnerTimeNative = Config.IntegrationsPerFrame > 0 ?
+        FrameTimeNative / static_cast<float>(Config.IntegrationsPerFrame) : OuterTimeNative / 24.0f;
+    const int IntegrationsPerFrame = Config.IntegrationsPerFrame > 0 ?
+        Config.IntegrationsPerFrame : 24 * Config.Steps;
     const T StepTime = static_cast<T>(InnerTimeNative);
     const T DampingRate = static_cast<T>(2.4f);
     const T Damping = std::max(T(0), T(1) - DampingRate * StepTime);
     const T InverseTimeSquared = T(1) / (StepTime * StepTime);
     const auto Initial = Observe(Vertices, Edges, StepTime, false);
-    std::cout << Json({{"Type", "Config"}, {"Precision", Config.Precision},
+    Json ConfigRow = {{"Type", "Config"}, {"Precision", Config.Precision},
                        {"RestMode", Config.RestMode}, {"Steps", Config.Steps},
                        {"Frames", Config.Frames}, {"SoftIntegrationsPerOuter", 24},
                        {"InternalIntegrationDt", static_cast<double>(InnerTimeNative)},
@@ -271,7 +280,13 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
                        {"MaximumCapturedVsRecomputedRestLengthDifference", MaximumCapturedRestDifference},
                        {"EdgeCount", Edges.size()}, {"VertexCount", Vertices.size()},
                        {"ArithmeticScope", "float: captured float graph, native float h/damping, ordered scalar edge formula; double/longdouble: same captured float inputs and h, but solver arithmetic at selected precision. Recomputed rest derives from graph positions at selected precision."},
-                       {"ModelLimit", "Contact-free, zero-gravity, no native SIMD/job side effects. Float parity requires hosted native frame and particle comparison."}}).dump() << '\n';
+                       {"ModelLimit", "Contact-free, zero-gravity, no native SIMD/job side effects. Float parity requires hosted native frame and particle comparison."}};
+    if (Config.IntegrationsPerFrame > 0) {
+        ConfigRow["IntegrationsPerFrame"] = IntegrationsPerFrame;
+        ConfigRow["IntegrationSchedule"] = "Direct float frame duration divided by integrations per frame; one projection solve per integration.";
+        ConfigRow["SoftIntegrationsPerOuter"] = nullptr;
+    }
+    std::cout << ConfigRow.dump() << '\n';
     double MaximumKinetic = Initial.Kinetic;
     int FirstNonfiniteFrame = -1;
     double MaximumEquilibriumResidual = 0.0;
@@ -285,7 +300,7 @@ template <class T> void Replay(const Options &Config, const Json &Graph) {
         double FrameMaximumAbsLambda = 0.0;
         int FrameMaximumSweepsUsed = 0;
         int FrameMinimumSweepsUsed = Config.ProjectionIterations;
-        for (int Microstep = 0; Microstep < 24 * Config.Steps; ++Microstep) {
+        for (int Microstep = 0; Microstep < IntegrationsPerFrame; ++Microstep) {
             EmitStage(Config, Frame, Microstep, "BeforeIntegration", Vertices, Edges,
                       StepTime, false);
             for (auto &Item : Vertices) {
