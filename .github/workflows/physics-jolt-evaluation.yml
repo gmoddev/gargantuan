@@ -941,9 +941,51 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.schedule_source_run }}
         run: |
           New-Item -ItemType Directory allocation-evidence | Out-Null
           git rev-parse HEAD > allocation-evidence/ExecutedSource.txt
+          if ($env:SOURCE_RUN -eq '42448487967') {
+            gh api repos/gmoddev/gargantuan/actions/runs/42448487967 > allocation-evidence/QualificationSource.json
+            if ($LASTEXITCODE -ne 0) { throw 'Qualification metadata unavailable' }
+            $Qualification = Get-Content allocation-evidence/QualificationSource.json -Raw | ConvertFrom-Json
+            if ($Qualification.head_sha -ne '187325921ddb93672217aac99496b05ea8f5dfa0' -or $Qualification.conclusion -ne 'success') { throw 'Corrected profile is not independently qualified' }
+            if ($IsWindows) {
+              gh run download 42448487967 --repo gmoddev/gargantuan --name 'jolt-schedule-energy-windows-2025-vs2026' --dir numerical-source
+              $LibraryRoot = 'numerical-source/build-energy-clean/JoltBuild'
+              $Reference = 'numerical-source/build-energy-clean/PhysicsJoltUnifiedCouplingQualification.exe'
+              $FrozenPatch = 'numerical-source/schedule-energy/ExecutedNumerical-clean.patch'
+            } else {
+              gh api repos/gmoddev/gargantuan/actions/runs/42447487882 > allocation-evidence/CompiledLibrarySource.json
+              if ($LASTEXITCODE -ne 0) { throw 'Compiled library metadata unavailable' }
+              $LibrarySource = Get-Content allocation-evidence/CompiledLibrarySource.json -Raw | ConvertFrom-Json
+              if ($LibrarySource.head_sha -ne '7c9e9d25371d382edeb4951d90b6a63f9cc413e3' -or $LibrarySource.conclusion -ne 'success') { throw 'Numerical library source mismatch' }
+              gh run download 42447487882 --repo gmoddev/gargantuan --name jolt-native-velocity-ablation --dir numerical-source
+              $LibraryRoot = 'numerical-source/build-numerical-unobserved/JoltBuild'
+              $Reference = 'numerical-source/build-numerical-unobserved/PhysicsJoltUnifiedCouplingQualification'
+              $FrozenPatch = 'numerical-source/numerical-evidence/Applied-unobserved.patch'
+            }
+            if ($LASTEXITCODE -ne 0) { throw 'Corrected library artifact unavailable' }
+            python experiments/PhysicsJoltEvaluation/MakeDeltaVelocityInstrumentation.py .evaluation-jolt allocation-evidence/DeltaVelocity.patch
+            if ($LASTEXITCODE -ne 0) { throw 'Numerical patch generation failed' }
+            git -C .evaluation-jolt worktree add --detach ../.allocation-numerical e77f175595e64cb44218cc9d9d56fc365ad0e36a
+            git -C .allocation-numerical apply "$env:GITHUB_WORKSPACE/allocation-evidence/DeltaVelocity.patch"
+            if ($LASTEXITCODE -ne 0) { throw 'Numerical source preparation failed' }
+            git -C .allocation-numerical diff --binary > allocation-evidence/ExecutedNumerical.patch
+            if ((Get-Content $FrozenPatch -Raw).Replace("`r`n", "`n") -ne (Get-Content allocation-evidence/ExecutedNumerical.patch -Raw).Replace("`r`n", "`n")) { throw 'Cached library and current numerical headers differ' }
+            $Extension = if ($IsWindows) { 'lib' } else { 'a' }
+            $Library = @(Get-ChildItem "$LibraryRoot/*.$Extension")
+            if ($Library.Count -ne 1) { throw 'Corrected library is ambiguous' }
+            $Hash = Get-FileHash -LiteralPath $Library[0].FullName
+            $Hash | ConvertTo-Json > allocation-evidence/ImportedJolt.json
+            "JOLT_CLEAN_LIB=$($Library[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "JOLT_CLEAN_SHA=$($Hash.Hash.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "ALLOCATION_JOLT_ROOT=$env:GITHUB_WORKSPACE/.allocation-numerical" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "ALLOCATION_REFERENCE=$((Resolve-Path $Reference).Path)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            'NUMERICAL_ALLOCATION=1' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            if (-not $IsWindows) { chmod +x $Reference }
+            exit 0
+          }
           $Expected = @{'42443610842'='fbcf62c7ce49baef9ba1ef2212c05878d908de8a'; '42444068279'='29a6473f598cfd801bb49ff021edd0cfcedce3ce'}
           foreach ($Run in @('42443610842', '42444068279')) {
             gh api "repos/gmoddev/gargantuan/actions/runs/$Run" > "allocation-evidence/Source-$Run.json"
@@ -964,7 +1006,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-allocations -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON -DDIAGNOSTIC_PREBUILT_JOLT="$JOLT_CLEAN_LIB" -DDIAGNOSTIC_JOLT_ROOT="$GITHUB_WORKSPACE/.evaluation-jolt" -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" 2>&1 | tee allocation-evidence/Configure.log
+          Clean=ON; Delta=OFF; Root="$GITHUB_WORKSPACE/.evaluation-jolt"
+          if [ "${NUMERICAL_ALLOCATION:-}" = 1 ]; then Clean=OFF; Delta=ON; Root="$ALLOCATION_JOLT_ROOT"; fi
+          cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-allocations -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN="$Clean" -DDIAGNOSTIC_DELTA_VELOCITY="$Delta" -DDIAGNOSTIC_PREBUILT_JOLT="$JOLT_CLEAN_LIB" -DDIAGNOSTIC_PREBUILT_JOLT_SHA256="${JOLT_CLEAN_SHA:-}" -DDIAGNOSTIC_JOLT_ROOT="$Root" -DEVALUATION_SOURCE_ROOT="$GITHUB_WORKSPACE" 2>&1 | tee allocation-evidence/Configure.log
           cmake --build build-allocations --target PhysicsJoltUnifiedCouplingAllocations --parallel 2 2>&1 | tee allocation-evidence/Build.log
       - name: Build only the Windows allocation entrypoint against cached Jolt
         if: runner.os == 'Windows'
@@ -974,14 +1018,20 @@ jobs:
           $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or -not $Installation) { throw 'MSVC toolchain unavailable' }
           $VsDev = Join-Path $Installation 'Common7\Tools\VsDevCmd.bat'
-          cmd /c "call `"$VsDev`" -arch=x64 -host_arch=x64 && cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-allocations -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=ON -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_PREBUILT_JOLT=`"$env:JOLT_CLEAN_LIB`" -DDIAGNOSTIC_JOLT_ROOT=`"$env:GITHUB_WORKSPACE\.evaluation-jolt`" -DEVALUATION_SOURCE_ROOT=`"$env:GITHUB_WORKSPACE`" && cmake --build build-allocations --target PhysicsJoltUnifiedCouplingAllocations --parallel 2" *> allocation-evidence/Build.log
+          $Clean = if ($env:NUMERICAL_ALLOCATION -eq '1') { 'OFF' } else { 'ON' }
+          $Delta = if ($env:NUMERICAL_ALLOCATION -eq '1') { 'ON' } else { 'OFF' }
+          $Root = if ($env:NUMERICAL_ALLOCATION -eq '1') { $env:ALLOCATION_JOLT_ROOT } else { "$env:GITHUB_WORKSPACE\.evaluation-jolt" }
+          cmd /c "call `"$VsDev`" -arch=x64 -host_arch=x64 && cmake -S experiments/PhysicsJoltEvaluation/DiagnosticJolt -B build-allocations -G Ninja -DCMAKE_BUILD_TYPE=Release -DDIAGNOSTIC_EXPECT_CLEAN=$Clean -DDIAGNOSTIC_DELTA_VELOCITY=$Delta -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_C_COMPILER=cl.exe -DDIAGNOSTIC_PREBUILT_JOLT=`"$env:JOLT_CLEAN_LIB`" -DDIAGNOSTIC_PREBUILT_JOLT_SHA256=$env:JOLT_CLEAN_SHA -DDIAGNOSTIC_JOLT_ROOT=`"$Root`" -DEVALUATION_SOURCE_ROOT=`"$env:GITHUB_WORKSPACE`" && cmake --build build-allocations --target PhysicsJoltUnifiedCouplingAllocations --parallel 2" *> allocation-evidence/Build.log
           if ($LASTEXITCODE -ne 0) { Get-Content allocation-evidence/Build.log; throw 'Configure or build failed' }
       - name: Measure allocations separately and verify pristine physical parity
-        run: >-
-          python experiments/PhysicsJoltEvaluation/RunUnifiedAllocationPass.py
-          --allocations build-allocations/PhysicsJoltUnifiedCouplingAllocations${{ matrix.suffix }}
-          --pristine source-42444068279/build-energy-clean/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}
-          --output allocation-evidence/Runs
+        shell: pwsh
+        run: |
+          $Reference = if ($env:NUMERICAL_ALLOCATION -eq '1') { $env:ALLOCATION_REFERENCE } else { 'source-42444068279/build-energy-clean/PhysicsJoltUnifiedCouplingQualification${{ matrix.suffix }}' }
+          $Updates = if ($env:NUMERICAL_ALLOCATION -eq '1') { 2 } else { 1 }
+          $Iterations = if ($env:NUMERICAL_ALLOCATION -eq '1') { 12 } else { 24 }
+          $Mode = if ($env:NUMERICAL_ALLOCATION -eq '1') { 'delta' } else { 'difference' }
+          python experiments/PhysicsJoltEvaluation/RunUnifiedAllocationPass.py --allocations build-allocations/PhysicsJoltUnifiedCouplingAllocations${{ matrix.suffix }} --pristine $Reference --world-updates $Updates --collision-steps 8 --soft-iterations $Iterations --velocity-reconstruction $Mode --compliance 1e-6 --output allocation-evidence/Runs
+          if ($LASTEXITCODE -ne 0) { throw 'Allocation/parity qualification failed' }
       - name: Preserve allocation results and rejected controls
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
