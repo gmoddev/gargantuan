@@ -178,6 +178,12 @@ jobs:
           python3 experiments/PhysicsJoltEvaluation/RunS1Investigation.py \
             --clean build-s1-clean/PhysicsJoltNativeCouplingInstrumented \
             --instrumented build-s1-instrumented/PhysicsJoltNativeCouplingInstrumented --output s1-evidence/Runs
+      - name: Predict and excite projection modes in native Jolt
+        run: |
+          python3 -m venv .s1-numeric
+          .s1-numeric/bin/pip install --only-binary=:all: numpy==2.3.4 > s1-evidence/NumericInstall.txt
+          .s1-numeric/bin/python experiments/PhysicsJoltEvaluation/RunProjectionFollowup.py \
+            --instrumented build-s1-instrumented/PhysicsJoltNativeCouplingInstrumented --runs s1-evidence/Runs
       - name: Retain causal evidence and native binaries
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
