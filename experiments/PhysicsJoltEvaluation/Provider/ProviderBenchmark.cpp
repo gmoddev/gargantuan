@@ -257,6 +257,8 @@ int main(int ArgumentCount, char **Arguments) {
         const int WarmupFrames = ArgumentCount == 8 ? std::stoi(Arguments[7]) : 0;
         if (WarmupFrames < 0 || WarmupFrames > 30)
             throw std::invalid_argument("Warmup frames must be between 0 and 30");
+        const auto JoltProfile = PhysicsEvaluation::GetJoltSoftSolverProfile();
+        const bool UsesJoltProfile = BackendName == "jolt";
 #if defined(PHYSICS_EVALUATION_TRACK_ALLOCATIONS)
         constexpr bool TimingInstrumented = true;
 #else
@@ -351,6 +353,15 @@ int main(int ArgumentCount, char **Arguments) {
             << " run_pair=" << RunPair
             << " warmup_frames=" << WarmupFrames
             << " timing_instrumented=" << int(TimingInstrumented)
+            << " jolt_world_updates=" << (UsesJoltProfile ? JoltProfile.WorldUpdates : 0)
+            << " jolt_collision_steps_per_update=" <<
+                (UsesJoltProfile ? JoltProfile.CollisionStepsPerUpdate : 0)
+            << " jolt_soft_iterations_per_collision_step=" <<
+                (UsesJoltProfile ? JoltProfile.SoftIterationsPerCollisionStep : 0)
+            << " jolt_constraint_sweeps_per_iteration=" <<
+                (UsesJoltProfile ? JoltProfile.ConstraintSweepsPerIteration : 0)
+            << " jolt_soft_integrations_per_frame=" <<
+                (UsesJoltProfile ? JoltProfile.SoftIntegrationsPerFrame : 0)
             << " vertices=" << Bodies.size() * Bodies.front().Rest.size() << '\n' << std::flush;
         for (int SequenceFrame = 0; SequenceFrame < WarmupFrames + Frames; ++SequenceFrame) {
             const bool Measured = SequenceFrame >= WarmupFrames;
@@ -444,6 +455,15 @@ int main(int ArgumentCount, char **Arguments) {
             << " run_pair=" << RunPair
             << " timing_instrumented=" << int(TimingInstrumented)
             << " startup_admission_ms=" << StartupAdmissionMs
+            << " jolt_world_updates=" << (UsesJoltProfile ? JoltProfile.WorldUpdates : 0)
+            << " jolt_collision_steps_per_update=" <<
+                (UsesJoltProfile ? JoltProfile.CollisionStepsPerUpdate : 0)
+            << " jolt_soft_iterations_per_collision_step=" <<
+                (UsesJoltProfile ? JoltProfile.SoftIterationsPerCollisionStep : 0)
+            << " jolt_constraint_sweeps_per_iteration=" <<
+                (UsesJoltProfile ? JoltProfile.ConstraintSweepsPerIteration : 0)
+            << " jolt_soft_integrations_per_frame=" <<
+                (UsesJoltProfile ? JoltProfile.SoftIntegrationsPerFrame : 0)
             << " constraints=" << Constraints
             << " xpbd_workers_actual=" << ActualXpbdWorkers
             << " xpbd_jobs_dispatched=" << XpbdJobsDispatched

@@ -22,6 +22,10 @@ from CompareBenchmark import ReadSummary
 SCENES = ('cloth4k', 'cloth16k', 'cloth4x4k', 'rubber4k', 'rubber16k')
 COUPLINGS = ('none', 'static-sphere')
 TAILS = ('cold', 'warm')
+JOLT_PROFILE_FIELDS = ('jolt_world_updates', 'jolt_collision_steps_per_update',
+                       'jolt_soft_iterations_per_collision_step',
+                       'jolt_constraint_sweeps_per_iteration',
+                       'jolt_soft_integrations_per_frame')
 
 
 def HashFile(PathName):
@@ -86,6 +90,18 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair):
             raise ValueError('Provider identity or warmup mismatch')
         if int(Row.get('timing_instrumented', -1)) != 0:
             raise ValueError('Allocation-instrumented timing is invalid')
+    JoltProfile = {Field: int(Summary[Field]) for Field in JOLT_PROFILE_FIELDS}
+    if any(int(Header[Field]) != Value for Field, Value in JoltProfile.items()):
+        raise ValueError('Compiled Jolt profile changed between header and summary')
+    if Backend == 'jolt':
+        if any(Value <= 0 for Value in JoltProfile.values()) or \
+                JoltProfile['jolt_soft_integrations_per_frame'] != \
+                JoltProfile['jolt_world_updates'] * \
+                JoltProfile['jolt_collision_steps_per_update'] * \
+                JoltProfile['jolt_soft_iterations_per_collision_step']:
+            raise ValueError('Invalid compiled Jolt solver profile')
+    elif any(JoltProfile.values()):
+        raise ValueError('XPBD row incorrectly reports a Jolt solver profile')
     if int(Summary['frames']) != Frames or \
             Lifecycle.get('MeasuredFrames') != Frames or \
             Lifecycle.get('WarmupFrames') != Warmup or \
@@ -94,7 +110,8 @@ def ParseRaw(PathName, Backend, Frames, Warmup, Pair):
     for Field in ('StartupAdmissionMs', 'TeardownMs'):
         if not math.isfinite(float(Lifecycle[Field])) or float(Lifecycle[Field]) < 0:
             raise ValueError(f'Invalid lifecycle {Field}')
-    return {'Header': Header, 'Summary': Summary, 'Lifecycle': Lifecycle}
+    return {'Header': Header, 'Summary': Summary, 'Lifecycle': Lifecycle,
+            'CompiledJoltProfile': JoltProfile}
 
 
 def RunProcess(Command, TimeoutSeconds):

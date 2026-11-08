@@ -13,6 +13,39 @@ import RunPerformanceQualification as Runner
 
 
 class PerformanceQualificationTests(unittest.TestCase):
+    def test_compiled_jolt_schedule_must_match_header_and_product(self):
+        Profile = dict(zip(Runner.JOLT_PROFILE_FIELDS, (2, 8, 6, 2, 96)))
+        Header = {'backend': 'jolt', 'run_pair': 'p0000',
+                  'warmup_frames': 0, 'timing_instrumented': 0, **Profile}
+        Summary = {**Header, 'frames': 1, 'mean_total_ms': 1,
+                   'mean_y': 0, 'center_y': 0, 'max_pin_error': 0,
+                   'mean_edge_strain': 0, 'max_edge_strain': 0,
+                   'mean_volume_ratio': 0, 'mean_tetra_volume_ratio': 0,
+                   'max_tetra_volume_error': 0, 'mean_diagonal_strain': 0}
+        Lifecycle = {'MeasuredFrames': 1, 'WarmupFrames': 0,
+                     'TimingInstrumented': False, 'StartupAdmissionMs': 1,
+                     'TeardownMs': 1}
+
+        def Line(Values):
+            return ' '.join(f'{Key}={Value}' for Key, Value in Values.items())
+
+        with TemporaryDirectory() as Directory:
+            Output = Path(Directory) / 'raw.txt'
+            def Write():
+                Output.write_text('\n'.join((
+                    '[Physics:ProviderBenchmark] ' + Line(Header),
+                    '[Physics:ProviderBenchmark] frame=0 total_ms=1',
+                    '[Physics:ProviderBenchmark] summary ' + Line(Summary),
+                    '[Physics:ProviderBenchmark] lifecycle ' + json.dumps(Lifecycle),
+                )) + '\n')
+            Write()
+            Parsed = Runner.ParseRaw(Output, 'jolt', 1, 0, 'p0000')
+            self.assertEqual(Parsed['CompiledJoltProfile'], Profile)
+            Summary['jolt_soft_integrations_per_frame'] = 192
+            Write()
+            with self.assertRaisesRegex(ValueError, 'header and summary'):
+                Runner.ParseRaw(Output, 'jolt', 1, 0, 'p0000')
+
     def test_backend_order_is_counterbalanced_across_matrix(self):
         Plan = Runner.PlanMatrix(('cloth4k', 'cloth16k'), ('none',), (1,), 3,
                                  ('cold', 'warm'))

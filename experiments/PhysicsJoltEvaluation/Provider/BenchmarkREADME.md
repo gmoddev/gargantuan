@@ -32,6 +32,12 @@ Host, OS, source translation-unit build stamp, and a checksum of the running
 benchmark executable are printed in the receipt. The checksum is a comparison
 fingerprint, not an authentication hash; preserve the actual binary hash in
 the external runner's evidence as well.
+Jolt rows also print the compiled world-update, collision-step, soft temporal
+iteration, constraint-sweep, and soft-integration counts in both header and
+summary; XPBD rows report zero for those Jolt-only fields. The runner checks
+their agreement and `integrations = updates × collision steps × temporal
+iterations`, so an optimized solver build cannot silently inherit the legacy
+U2/C8/I12 label.
 The XPBD constructor treats the worker argument as a maximum and may use fewer
 threads when the host has fewer cores; `xpbd_workers_actual` records the
 backend's step profile count. Jolt's argument is its configured total budget
