@@ -87,3 +87,7 @@ PhysicsEvaluationTarget(PhysicsJoltXpbdCouplingDiagnosticAllocations XpbdCouplin
 # executable explicitly constructs the shared-world experimental provider.
 PhysicsEvaluationTarget(PhysicsJoltProviderQualification
     Provider/ProviderQualification.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltProviderBenchmark
+    Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltProviderBenchmarkAllocations
+    Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)

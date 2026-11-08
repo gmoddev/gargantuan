@@ -46,7 +46,8 @@ else:
     Flags = '--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -fsanitize=address,undefined -fno-omit-frame-pointer'
     Options += ['-DCMAKE_C_COMPILER=clang-19', '-DCMAKE_CXX_COMPILER=clang++-19',
                 '-DCMAKE_C_FLAGS=' + Flags, '-DCMAKE_CXX_FLAGS=' + Flags,
-                '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined']
+                '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined',
+                '-DLINKER_SUPPORTS_WL_NO_UNDEFINED=OFF']
 Run('Configure', Options)
 Run('Build', ['cmake', '--build', Build, '--parallel', '2', '--target', 'PhysicsJoltProviderQualification'])
 Binary = Build / 'experiments/PhysicsJoltEvaluation' / (

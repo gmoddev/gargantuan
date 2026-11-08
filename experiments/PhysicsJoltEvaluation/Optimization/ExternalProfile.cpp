@@ -15,13 +15,15 @@ namespace {
     enum class Stage : unsigned char {
         Broadphase, Narrowphase, Gravity, IslandBuild, VelocitySolve,
         RigidIntegrate, Ccd, PositionSolve, SoftPrepare, SoftCollide,
-        SoftSimulate, SoftFinalize, BuildJobs, Barrier, Other, Count
+        SoftSimulate, SoftFinalize, SoftIntegrate, SoftEdges, SoftVolumes,
+        SoftContactVelocity, SoftState, BuildJobs, Barrier, Other, Count
     };
 
     constexpr std::array<const char *, static_cast<size_t>(Stage::Count)> StageNames = {
         "Broadphase", "Narrowphase", "Gravity", "IslandBuild", "VelocitySolve",
         "RigidIntegrate", "Ccd", "PositionSolve", "SoftPrepare", "SoftCollide",
-        "SoftSimulate", "SoftFinalize", "BuildJobs", "Barrier", "Other"
+        "SoftSimulate", "SoftFinalize", "SoftIntegrate", "SoftEdges", "SoftVolumes",
+        "SoftContactVelocity", "SoftState", "BuildJobs", "Barrier", "Other"
     };
 
     struct Counter final {
@@ -46,6 +48,11 @@ namespace {
         if (Has(Name, "SoftBodyCollide")) return Stage::SoftCollide;
         if (Has(Name, "SoftBodySimulate")) return Stage::SoftSimulate;
         if (Has(Name, "SoftBodyFinalize")) return Stage::SoftFinalize;
+        if (Has(Name, "IntegratePositions")) return Stage::SoftIntegrate;
+        if (Has(Name, "ApplyEdgeConstraints")) return Stage::SoftEdges;
+        if (Has(Name, "ApplyVolumeConstraints")) return Stage::SoftVolumes;
+        if (Has(Name, "ApplyCollisionConstraintsAndUpdateVelocities")) return Stage::SoftContactVelocity;
+        if (Has(Name, "UpdateSoftBodyState")) return Stage::SoftState;
         if (Has(Name, "Build Jobs")) return Stage::BuildJobs;
         if (Has(Name, "barrier") || Has(Name, "Barrier")) return Stage::Barrier;
         return Stage::Other;
