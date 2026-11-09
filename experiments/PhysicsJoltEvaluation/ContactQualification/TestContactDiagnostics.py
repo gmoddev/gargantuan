@@ -108,6 +108,17 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(Result['PhysicalResidualStatus'], 'INCOMPLETE')
         self.assertEqual(Result['StaticPoseWorkIncompleteFrames'], [1])
 
+    def test_momentum_residual_is_reported_without_invented_gate(self):
+        Record = Accounting()
+        Record['MomentumEndKgMPerS'] = [1.0, 0.0, 0.0]
+        Record['MomentumResidualNs'] = [1.0, 0.0, 0.0]
+        Stages = {'ContactProjectionVelocityDerivedMomentumDeltaNs':
+                  [0.0, 0.0, 0.0], 'ContactProjectionCorrections': 0}
+        Reduced = VerifyAccounting(Record, Stages, 0,
+                                   {'DeltaTimeSeconds': 0.01,
+                                    'Authored': {'XpbdSubsteps': 32}})
+        self.assertEqual(Reduced['NormalizedMomentumResidual'], 1.0)
+
 
 if __name__ == '__main__':
     unittest.main()
