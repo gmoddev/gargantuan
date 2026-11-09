@@ -208,6 +208,15 @@ namespace gargantuan {
 			for (const auto &Node : Record.Nodes) Energy += NodeKineticEnergy(Node);
 			return Energy;
 		}
+		[[nodiscard]] glm::dvec3 NodeMomentum(const SoftBodyNode &Node) {
+			return Node.InverseMass > 0.0f ?
+				glm::dvec3(Node.Velocity) / double(Node.InverseMass) : glm::dvec3(0.0);
+		}
+		[[nodiscard]] glm::dvec3 StoredMomentum(const SoftBodyRecord &Record) {
+			glm::dvec3 Momentum(0.0);
+			for (const auto &Node : Record.Nodes) Momentum += NodeMomentum(Node);
+			return Momentum;
+		}
 		[[nodiscard]] double PositionKineticEnergy(const SoftBodyRecord &Record, float DeltaTime) {
 			double Energy = 0.0;
 			for (const auto &Node : Record.Nodes) if (Node.InverseMass > 0.0f) {
@@ -697,7 +706,7 @@ namespace gargantuan {
 			return Result;
 		}
 
-		void SolveDistance(SoftBodyRecord &Record, float DeltaTime) {
+		void SolveDistance(SoftBodyRecord &Record, float DeltaTime, bool RecordAccounting) {
 			for (auto &Constraint : Record.Distances) {
 				auto &NodeA = Record.Nodes[Constraint.VertexA];
 				auto &NodeB = Record.Nodes[Constraint.VertexB];
@@ -711,8 +720,19 @@ namespace gargantuan {
 										 (Weight + Alpha);
 				Constraint.Lambda += DeltaLambda;
 				const auto Correction = (Delta / Length) * DeltaLambda;
+				const glm::vec3 BeforeA = NodeA.Position, BeforeB = NodeB.Position;
 				NodeA.Position -= NodeA.InverseMass * Correction;
 				NodeB.Position += NodeB.InverseMass * Correction;
+				if (RecordAccounting) {
+					if (NodeA.InverseMass == 0.0f && NodeB.InverseMass > 0.0f)
+						Record.ContactProjection.PinConstraintImpulseOnClothNs +=
+							glm::dvec3(NodeB.Position - BeforeB) /
+							(double(NodeB.InverseMass) * double(DeltaTime));
+					else if (NodeB.InverseMass == 0.0f && NodeA.InverseMass > 0.0f)
+						Record.ContactProjection.PinConstraintImpulseOnClothNs +=
+							glm::dvec3(NodeA.Position - BeforeA) /
+							(double(NodeA.InverseMass) * double(DeltaTime));
+				}
 			}
 		}
 
@@ -1152,6 +1172,8 @@ namespace gargantuan {
 				PhysicsEvaluation::ExperimentalXpbdAccountingEnabled.load(std::memory_order_acquire);
 			if (RecordAccounting)
 				Record.ContactProjection.KineticStartJ = StoredKineticEnergy(Record);
+			if (RecordAccounting)
+				Record.ContactProjection.MomentumStartKgMPerS = StoredMomentum(Record);
 			static const unsigned long StageStride = [] {
 				const char *Text = std::getenv("GANTRIA_XPBD_STAGE_STRIDE");
 				if (!Text) return 0ul;
@@ -1215,23 +1237,36 @@ namespace gargantuan {
 				Node.PreviousPosition = Node.Position;
 				if (Node.InverseMass == 0.0f || MovableCount == 0) continue;
 				const double BeforeForceJ = RecordAccounting ? NodeKineticEnergy(Node) : 0.0;
+				const glm::dvec3 BeforeForceMomentum = RecordAccounting ? NodeMomentum(Node) : glm::dvec3(0.0);
 				Node.Velocity += Batch.Gravity * Batch.DeltaTime;
 				Node.Velocity += Item.Force / TotalMass * Batch.DeltaTime;
 				const double BeforeImpulseJ = RecordAccounting ? NodeKineticEnergy(Node) : 0.0;
+				const glm::dvec3 BeforeImpulseMomentum = RecordAccounting ? NodeMomentum(Node) : glm::dvec3(0.0);
 				Node.Velocity += Item.Impulse / TotalMass;
 				if (RecordAccounting) {
+					Record.ContactProjection.GravityForceImpulseNs +=
+						BeforeImpulseMomentum - BeforeForceMomentum;
+					Record.ContactProjection.UniformImpulseNs +=
+						NodeMomentum(Node) - BeforeImpulseMomentum;
 					Record.ContactProjection.GravityForceKineticDeltaJ += BeforeImpulseJ - BeforeForceJ;
 					Record.ContactProjection.UniformImpulseKineticDeltaJ +=
 						NodeKineticEnergy(Node) - BeforeImpulseJ;
 				}
 			}
 			const double BeforePointImpulsesJ = RecordAccounting ? StoredKineticEnergy(Record) : 0.0;
+			const glm::dvec3 BeforePointImpulseMomentum = RecordAccounting ?
+				StoredMomentum(Record) : glm::dvec3(0.0);
 			for (const auto &PointImpulse : Item.PointImpulses)
 				ApplyPointImpulse(Record, PointImpulse);
 			const double BeforeDampingJ = RecordAccounting ? StoredKineticEnergy(Record) : 0.0;
 			if (RecordAccounting)
 				Record.ContactProjection.PointImpulseKineticDeltaJ =
 					BeforeDampingJ - BeforePointImpulsesJ;
+			if (RecordAccounting)
+				Record.ContactProjection.PointImpulseNs =
+					StoredMomentum(Record) - BeforePointImpulseMomentum;
+			const glm::dvec3 BeforeDampingMomentum = RecordAccounting ?
+				StoredMomentum(Record) : glm::dvec3(0.0);
 			if (RecordAccounting)
 				Record.ContactProjection.AppliedDynamicsKineticDeltaJ =
 					BeforeDampingJ - Record.ContactProjection.KineticStartJ;
@@ -1243,6 +1278,9 @@ namespace gargantuan {
 			if (RecordAccounting)
 				Record.ContactProjection.DampingKineticDeltaJ =
 					StoredKineticEnergy(Record) - BeforeDampingJ;
+			if (RecordAccounting)
+				Record.ContactProjection.DampingImpulseNs =
+					StoredMomentum(Record) - BeforeDampingMomentum;
 			Item.Profile.IntegrationNanoseconds += Nanoseconds(ProfileClock::now() - IntegrationStart);
 
 			for (auto &Constraint : Record.Distances)
@@ -1279,7 +1317,7 @@ namespace gargantuan {
 				const auto ConstraintStart = ProfileClock::now();
 				const double BeforeStructureJ = RecordAccounting ?
 					PositionKineticEnergy(Record, Batch.DeltaTime) : 0.0;
-				SolveDistance(Record, Batch.DeltaTime);
+				SolveDistance(Record, Batch.DeltaTime, RecordAccounting);
 				SolveVolume(Record, Batch.DeltaTime);
 				SolveShapeRecovery(Record, Batch.DeltaTime);
 				if (RecordAccounting)
@@ -1309,11 +1347,17 @@ namespace gargantuan {
 														 : (Node.Position - Node.PreviousPosition) / Batch.DeltaTime;
 			if (RecordAccounting) {
 				Record.ContactProjection.KineticEndJ = StoredKineticEnergy(Record);
+				Record.ContactProjection.MomentumEndKgMPerS = StoredMomentum(Record);
 				const auto &Accounting = Record.ContactProjection;
 				Record.ContactProjection.LedgerResidualJ = Accounting.KineticEndJ - Accounting.KineticStartJ -
 					Accounting.AppliedDynamicsKineticDeltaJ - Accounting.DampingKineticDeltaJ -
 					Accounting.StructuralProjectionKineticDeltaJ - Accounting.PinProjectionKineticDeltaJ -
 					Accounting.ContactKineticDeltaJ;
+				Record.ContactProjection.MomentumResidualNs = Accounting.MomentumEndKgMPerS -
+					Accounting.MomentumStartKgMPerS - Accounting.GravityForceImpulseNs -
+					Accounting.UniformImpulseNs - Accounting.PointImpulseNs -
+					Accounting.DampingImpulseNs - Accounting.PinConstraintImpulseOnClothNs -
+					Accounting.NormalImpulseOnClothNs - Accounting.FrictionImpulseOnClothNs;
 			}
 			GetExperimentalVelocityTrace().Capture(Item.Body, Record.Nodes);
 			++Record.VertexRevision;

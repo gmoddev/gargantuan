@@ -71,3 +71,12 @@ that energy to unmeasured contact or actuator work.
 measured kinetic change; this bookkeeping identity is not external-work
 closure or a substitute for a physical energy gate. Static pose movement and
 unmeasured structural stored energy remain explicit limits.
+
+For cloth, the same source phases report momentum start/end, gravity/force,
+uniform and point impulse, damping, pinned-edge constraint impulse on cloth,
+normal contact and friction impulses. `MomentumResidualNs` is the signed
+remainder after these independently captured terms. A fixed pin's target
+does no work, although the internal edge solve transmits a reaction impulse;
+moving pin targets are outside this fixture producer. This momentum closure
+is stronger than the contact action/reaction identity, which is defined by
+negating the cloth constraint impulse and does not observe a dynamic rigid.

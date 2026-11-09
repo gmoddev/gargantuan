@@ -340,6 +340,15 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 FrameContact.FrictionImpulseOnClothNs += Projection->FrictionImpulseOnClothNs;
                 FrameContact.PrescribedColliderReactionImpulseNs +=
                     Projection->PrescribedColliderReactionImpulseNs;
+                if (Sub == 0) FrameContact.MomentumStartKgMPerS = Projection->MomentumStartKgMPerS;
+                FrameContact.MomentumEndKgMPerS = Projection->MomentumEndKgMPerS;
+                FrameContact.GravityForceImpulseNs += Projection->GravityForceImpulseNs;
+                FrameContact.UniformImpulseNs += Projection->UniformImpulseNs;
+                FrameContact.PointImpulseNs += Projection->PointImpulseNs;
+                FrameContact.DampingImpulseNs += Projection->DampingImpulseNs;
+                FrameContact.PinConstraintImpulseOnClothNs +=
+                    Projection->PinConstraintImpulseOnClothNs;
+                FrameContact.MomentumResidualNs += Projection->MomentumResidualNs;
                 FrameContact.ContactKineticDeltaJ += Projection->ContactKineticDeltaJ;
                 FrameContact.PrescribedSurfaceWorkJ += Projection->PrescribedSurfaceWorkJ;
                 FrameContact.Corrections += Projection->Corrections;
@@ -387,6 +396,15 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 {"FrictionImpulseOnClothNs", DTriplet(FrameContact.FrictionImpulseOnClothNs)},
                 {"PrescribedColliderReactionImpulseNs",
                     DTriplet(FrameContact.PrescribedColliderReactionImpulseNs)},
+                {"MomentumStartKgMPerS", DTriplet(FrameContact.MomentumStartKgMPerS)},
+                {"MomentumEndKgMPerS", DTriplet(FrameContact.MomentumEndKgMPerS)},
+                {"GravityForceImpulseNs", DTriplet(FrameContact.GravityForceImpulseNs)},
+                {"UniformImpulseNs", DTriplet(FrameContact.UniformImpulseNs)},
+                {"PointImpulseNs", DTriplet(FrameContact.PointImpulseNs)},
+                {"DampingImpulseNs", DTriplet(FrameContact.DampingImpulseNs)},
+                {"PinConstraintImpulseOnClothNs",
+                    DTriplet(FrameContact.PinConstraintImpulseOnClothNs)},
+                {"MomentumResidualNs", DTriplet(FrameContact.MomentumResidualNs)},
                 {"ContactKineticDeltaJ", FrameContact.ContactKineticDeltaJ},
                 {"PrescribedSurfaceWorkJ", FrameContact.PrescribedSurfaceWorkJ},
                 {"ContactEnergyResidualJ", FrameContact.ContactKineticDeltaJ -

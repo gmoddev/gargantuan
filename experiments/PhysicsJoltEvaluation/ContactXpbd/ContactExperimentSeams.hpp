@@ -14,6 +14,14 @@ namespace PhysicsEvaluation {
         glm::dvec3 NormalImpulseOnClothNs{0.0};
         glm::dvec3 FrictionImpulseOnClothNs{0.0};
         glm::dvec3 PrescribedColliderReactionImpulseNs{0.0};
+        glm::dvec3 MomentumStartKgMPerS{0.0};
+        glm::dvec3 MomentumEndKgMPerS{0.0};
+        glm::dvec3 GravityForceImpulseNs{0.0};
+        glm::dvec3 UniformImpulseNs{0.0};
+        glm::dvec3 PointImpulseNs{0.0};
+        glm::dvec3 DampingImpulseNs{0.0};
+        glm::dvec3 PinConstraintImpulseOnClothNs{0.0};
+        glm::dvec3 MomentumResidualNs{0.0};
         double ContactKineticDeltaJ = 0.0;
         double PrescribedSurfaceWorkJ = 0.0;
         double KineticStartJ = 0.0;
