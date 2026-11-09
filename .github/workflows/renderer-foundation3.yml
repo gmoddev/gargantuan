@@ -61,14 +61,62 @@ jobs:
           xvfb-run -a vulkaninfo --summary > renderer-evidence/device.txt
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_editor_viewport_smoke) \
             2>&1 | tee renderer-evidence/pixels.log
-          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests) \
-            2>&1 | tee renderer-evidence/depth.log
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_benchmark \
             --incremental --backend=sdl --scenario=material-check --capture=../renderer-evidence/sdl-material) \
             2>&1 | tee renderer-evidence/material-check.csv
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_benchmark \
             --incremental --backend=sdl --scenario=material-extensions --width=640 --height=360 \
             --capture=../renderer-evidence/sdl-extensions) 2>&1 | tee renderer-evidence/material-extensions.csv
+      - name: Observe candidate depth coverage
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          mkdir -p renderer-evidence
+          export VK_DRIVER_FILES="$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)"
+          test -n "$VK_DRIVER_FILES"
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
+            --observe --output=../renderer-evidence/depth-candidate) 2>&1 | tee renderer-evidence/depth.log
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: ${{ !cancelled() }}
+        with:
+          ref: 5b6782e35c4e24fd80bc8d5526104c615c72d84d
+          clean: false
+          persist-credentials: false
+          submodules: recursive
+      - name: Compare software Vulkan depth with mainline control
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > renderer-evidence/depth-baseline-source.txt
+          lute tools/classgen
+          cmake --build build-renderer --parallel 3 --target gargantuan_renderer_depth_tests
+          export VK_DRIVER_FILES="$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)"
+          test -n "$VK_DRIVER_FILES"
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
+            --observe --output=../renderer-evidence/depth-baseline) 2>&1 | tee renderer-evidence/depth-baseline.log
+          python3 - <<'PY' | tee renderer-evidence/depth-comparison.txt
+          import re
+          from pathlib import Path
+
+          Pattern = re.compile(r'\[Render:Depth\] (\d+-\d+-\d+) missing=(\d+) expected=(\d+)')
+          def Read(Name):
+              Log = Path('renderer-evidence', Name).read_text()
+              return {Case: (int(Missing), int(Expected)) for Case, Missing, Expected in Pattern.findall(Log)}
+
+          Baseline, Candidate = Read('depth-baseline.log'), Read('depth.log')
+          if len(Baseline) != 36 or Baseline.keys() != Candidate.keys():
+              raise SystemExit('Depth coverage did not record the same 36 cases')
+          Regressions = []
+          for Case, (Missing, Expected) in Candidate.items():
+              BaseMissing, BaseExpected = Baseline[Case]
+              if Missing or BaseMissing or Expected != BaseExpected:
+                  print(f'{Case}: baseline {BaseMissing}/{BaseExpected}, candidate {Missing}/{Expected}')
+              if Missing > BaseMissing or Expected != BaseExpected:
+                  Regressions.append(Case)
+          if Regressions:
+              raise SystemExit('Depth coverage regressed in ' + ', '.join(Regressions))
+          print('Candidate matches or improves mainline coverage in all 36 cases')
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
