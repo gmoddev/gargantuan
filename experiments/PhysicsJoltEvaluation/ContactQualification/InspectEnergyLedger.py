@@ -13,6 +13,10 @@ def Near(A, B):
     return abs(A - B) <= 1e-7 * max(1.0, abs(A), abs(B))
 
 
+def NearPublished(A, B):
+    return abs(A - B) <= 1e-5 * max(1.0, abs(A), abs(B))
+
+
 def FiniteNumber(Value):
     return type(Value) in (int, float) and math.isfinite(Value)
 
@@ -22,7 +26,11 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
         raise ValueError('Missing XPBD accounting stage')
     Vectors = {}
     for Name in ('NormalImpulseOnClothNs', 'FrictionImpulseOnClothNs',
-                 'PrescribedColliderReactionImpulseNs'):
+                 'PrescribedColliderReactionImpulseNs',
+                 'MomentumStartKgMPerS', 'MomentumEndKgMPerS',
+                 'GravityForceImpulseNs', 'UniformImpulseNs', 'PointImpulseNs',
+                 'DampingImpulseNs', 'PinConstraintImpulseOnClothNs',
+                 'MomentumResidualNs'):
         Value = Accounting.get(Name)
         if not isinstance(Value, list) or len(Value) != 3 or \
                 not all(FiniteNumber(Component) for Component in Value):
@@ -42,6 +50,8 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
     for Name in ('ContactKineticDeltaJ', 'PrescribedSurfaceWorkJ',
                  'ContactEnergyResidualJ', 'KineticStartJ', 'KineticEndJ',
                  'AppliedDynamicsKineticDeltaJ', 'DampingKineticDeltaJ',
+                 'GravityForceKineticDeltaJ', 'UniformImpulseKineticDeltaJ',
+                 'PointImpulseKineticDeltaJ',
                  'StructuralProjectionKineticDeltaJ', 'PinProjectionKineticDeltaJ',
                  'LedgerResidualJ', 'SubstepSeconds'):
         Value = Accounting.get(Name)
@@ -52,6 +62,8 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
                 Fixture['DeltaTimeSeconds'] / Fixture['Authored']['XpbdSubsteps']) or \
             Accounting.get('PrescribedSurfaceVelocitySource') != \
                 'center(end)-center(start) per substep' or \
+            Accounting.get('Method') != \
+                'source-contact-projection-and-previous-position-deltas' or \
             type(Accounting.get('StaticPoseWorkComplete')) is not bool or \
             type(Accounting.get('Corrections')) is not int or \
             Accounting['Corrections'] < 0 or \
@@ -62,10 +74,26 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
         Scalars['AppliedDynamicsKineticDeltaJ'] - Scalars['DampingKineticDeltaJ'] - \
         Scalars['StructuralProjectionKineticDeltaJ'] - Scalars['PinProjectionKineticDeltaJ'] - \
         Scalars['ContactKineticDeltaJ']
+    SplitDynamics = Scalars['GravityForceKineticDeltaJ'] + \
+        Scalars['UniformImpulseKineticDeltaJ'] + Scalars['PointImpulseKineticDeltaJ']
     if not Near(ContactResidual, Scalars['ContactEnergyResidualJ']) or \
-            not Near(LedgerResidual, Scalars['LedgerResidualJ']):
+            not Near(LedgerResidual, Scalars['LedgerResidualJ']) or \
+            not Near(SplitDynamics, Scalars['AppliedDynamicsKineticDeltaJ']):
         raise ValueError(f'XPBD kinetic stage ledger identity fails at frame {Frame}')
-    return {**Scalars, 'StaticPoseWorkComplete': Accounting['StaticPoseWorkComplete']}
+    Components = ('GravityForceImpulseNs', 'UniformImpulseNs', 'PointImpulseNs',
+                  'DampingImpulseNs', 'PinConstraintImpulseOnClothNs',
+                  'NormalImpulseOnClothNs', 'FrictionImpulseOnClothNs')
+    ImpulseScale = max(1.0, sum(Norm(Vectors[Name]) for Name in Components))
+    for Axis in range(3):
+        Recomputed = Vectors['MomentumEndKgMPerS'][Axis] - \
+            Vectors['MomentumStartKgMPerS'][Axis] - \
+            sum(Vectors[Name][Axis] for Name in Components)
+        if not Near(Recomputed, Vectors['MomentumResidualNs'][Axis]):
+            raise ValueError(f'XPBD momentum stage ledger identity fails at frame {Frame}')
+    return {**Scalars, **Vectors,
+            'NormalizedMomentumResidual': Norm(Vectors['MomentumResidualNs']) /
+                ImpulseScale,
+            'StaticPoseWorkComplete': Accounting['StaticPoseWorkComplete']}
 
 
 def Inspect(CaseDirectory):
@@ -90,9 +118,13 @@ def Inspect(CaseDirectory):
             (Norm(Sub(Positions[Edge['A']], Positions[Edge['B']])) -
              Edge['RestLengthM']) ** 2 / (2 * Compliance[Edge['Kind']])
             for Edge in Edges)
+        Momentum = [sum(Mass * Velocity[Axis]
+                        for Mass, Velocity in zip(Masses, Velocities))
+                    for Axis in range(3)]
         return {'KineticJ': Kinetic, 'GravityPotentialJ': GravityPotential,
                 'DistanceCompliancePotentialJ': DistancePotential,
-                'TotalJ': Kinetic + GravityPotential + DistancePotential}
+                'TotalJ': Kinetic + GravityPotential + DistancePotential,
+                'MomentumKgMPerS': Momentum}
     Initial = Energy(Fixture['RestPositions'], Fixture['InitialVelocities'])
     Series = []
     AccountingRows = []
@@ -134,6 +166,15 @@ def Inspect(CaseDirectory):
             if Index > 0 and not Near(Series[Index - 1]['KineticJ'],
                                       Accounting['KineticStartJ']):
                 raise ValueError(f'XPBD stage kinetic start does not follow published frame {Index - 1}')
+            if not all(NearPublished(Row['MomentumKgMPerS'][Axis],
+                                     Accounting['MomentumEndKgMPerS'][Axis])
+                       for Axis in range(3)):
+                raise ValueError(f'Published momentum differs from source ledger at frame {Index}')
+            if Index > 0 and not all(
+                    NearPublished(Series[Index - 1]['MomentumKgMPerS'][Axis],
+                                  Accounting['MomentumStartKgMPerS'][Axis])
+                    for Axis in range(3)):
+                raise ValueError(f'XPBD stage momentum start does not follow published frame {Index - 1}')
             if not Accounting['StaticPoseWorkComplete']:
                 StaticPoseIncompleteFrames.append(Index)
             if Index > 0 and Accounting['StaticPoseWorkComplete']:
@@ -153,6 +194,9 @@ def Inspect(CaseDirectory):
             'MaximumSingleFrameIncreaseJ': max(Row['ChangeFromPreviousJ']
                                                 for Row in Series),
             'AccountingIdentityStatus': 'VERIFIED' if AccountingSeen else 'INCOMPLETE',
+            'MaximumNormalizedMomentumResidual':
+                max((Row['NormalizedMomentumResidual'] for Row in AccountingRows),
+                    default=None),
             'StaticPoseWorkIncompleteFrames': StaticPoseIncompleteFrames,
             'PhysicalResidualStatus': 'DIAGNOSTIC_UNGATED' if AccountingSeen and
                 not StaticPoseIncompleteFrames else 'INCOMPLETE',

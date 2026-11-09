@@ -75,6 +75,22 @@ projection work, despite zero nominal static-body velocity. An omitted term mean
 `Stages` may contain sparse or full pre/post structural/contact snapshots for
 the exact offending edge; stage samples do not replace the full frame arrays.
 
+The private XPBD producer may add `External.XpbdContactAccounting`. It records
+source-measured cloth normal and friction velocity-derived impulse components,
+prescribed collider reaction (defined as their negative, **not** observed
+dynamic rigid momentum), contact kinetic change, prescribed kinematic center
+work sampled per substep, and an explicit `StaticPoseWorkComplete` flag. Its
+kinetic stage ledger splits applied gravity/force, uniform impulse, point
+impulse, damping, structural projection, contact projection and pin projection.
+Its momentum stage ledger records start/end cloth momentum, those source
+impulses and pinned-edge reaction. The independent inspector rechecks all
+identities and reports momentum residual scaled by total impulse magnitude.
+These identities establish instrumentation consistency only. The later-frame
+physical energy diagnostic uses published K + gravity potential + distance
+compliance potential and subtracts prescribed kinematic work and measured
+damping change. It has no pass threshold in V1. Frame 0 needs separate
+authored impulse accounting; changing a static pose leaves work incomplete.
+
 `Source.json` records exact Engine and native hashes, solver variant, OS,
 compiler/configuration, worker cap, seed policy, case manifest SHA-256, compressed
 trace SHA-256, and `Receipt.json` SHA-256. The validator reports missing provenance

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from Inspect3DSelfIntersection import TrianglesIntersect
-from InspectEnergyLedger import Inspect as InspectEnergy
+from InspectEnergyLedger import Inspect as InspectEnergy, VerifyAccounting
 from TestValidateContactTrace import Fixture, Frames
 
 
@@ -16,14 +16,26 @@ def Accounting():
         'NormalImpulseOnClothNs': [0.0, 0.0, 0.0],
         'FrictionImpulseOnClothNs': [0.0, 0.0, 0.0],
         'PrescribedColliderReactionImpulseNs': [0.0, 0.0, 0.0],
+        'MomentumStartKgMPerS': [0.0, 0.0, 0.0],
+        'MomentumEndKgMPerS': [0.0, 0.0, 0.0],
+        'GravityForceImpulseNs': [0.0, 0.0, 0.0],
+        'UniformImpulseNs': [0.0, 0.0, 0.0],
+        'PointImpulseNs': [0.0, 0.0, 0.0],
+        'DampingImpulseNs': [0.0, 0.0, 0.0],
+        'PinConstraintImpulseOnClothNs': [0.0, 0.0, 0.0],
+        'MomentumResidualNs': [0.0, 0.0, 0.0],
         'ContactKineticDeltaJ': 0.0, 'PrescribedSurfaceWorkJ': 0.0,
         'ContactEnergyResidualJ': 0.0, 'KineticStartJ': 0.0,
         'KineticEndJ': 0.0, 'AppliedDynamicsKineticDeltaJ': 0.0,
+        'GravityForceKineticDeltaJ': 0.0,
+        'UniformImpulseKineticDeltaJ': 0.0,
+        'PointImpulseKineticDeltaJ': 0.0,
         'DampingKineticDeltaJ': 0.0,
         'StructuralProjectionKineticDeltaJ': 0.0,
         'PinProjectionKineticDeltaJ': 0.0, 'LedgerResidualJ': 0.0,
         'SubstepSeconds': 0.01 / 32,
         'PrescribedSurfaceVelocitySource': 'center(end)-center(start) per substep',
+        'Method': 'source-contact-projection-and-previous-position-deltas',
         'Corrections': 0, 'StaticPoseWorkComplete': True}
 
 
@@ -68,6 +80,26 @@ class DiagnosticTests(unittest.TestCase):
             Records[0]['External']['XpbdContactAccounting']['NormalImpulseOnClothNs'][0] = 1
         with self.assertRaisesRegex(ValueError, 'impulse split'):
             EnergyCase(Break)
+
+    def test_single_contact_kinetic_and_surface_work_identity(self):
+        # m=1 kg, delta-v=1 m/s, surface speed=.5 m/s:
+        # J=1 Ns, delta-K=.5 J, J dot v_surface=.5 J.
+        Record = Accounting()
+        Record.update(NormalImpulseOnClothNs=[1.0, 0.0, 0.0],
+                      PrescribedColliderReactionImpulseNs=[-1.0, 0.0, 0.0],
+                      MomentumEndKgMPerS=[1.0, 0.0, 0.0],
+                      ContactKineticDeltaJ=0.5, PrescribedSurfaceWorkJ=0.5,
+                      KineticEndJ=0.5, Corrections=1)
+        Stages = {'ContactProjectionVelocityDerivedMomentumDeltaNs':
+                  [1.0, 0.0, 0.0], 'ContactProjectionCorrections': 1}
+        self.assertEqual(VerifyAccounting(Record, Stages, 0,
+                         {'DeltaTimeSeconds': 0.01,
+                          'Authored': {'XpbdSubsteps': 32}})['ContactEnergyResidualJ'], 0.0)
+        Broken = dict(Record, ContactEnergyResidualJ=0.1)
+        with self.assertRaisesRegex(ValueError, 'stage ledger'):
+            VerifyAccounting(Broken, Stages, 0,
+                             {'DeltaTimeSeconds': 0.01,
+                              'Authored': {'XpbdSubsteps': 32}})
 
     def test_static_pose_change_disables_physical_closure(self):
         def Mark(Records):
