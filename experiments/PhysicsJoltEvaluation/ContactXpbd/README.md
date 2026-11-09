@@ -72,6 +72,15 @@ measured kinetic change; this bookkeeping identity is not external-work
 closure or a substitute for a physical energy gate. Static pose movement and
 unmeasured structural stored energy remain explicit limits.
 
+For separate timing captures, set `CaptureTrace:false` in the case and
+`GANTRIA_CONTACT_ACCOUNTING=0`. The producer then skips fixture/JSON/velocity
+capture and all full-node kinetic/momentum ledger scans while preserving the
+physics calls, state identity/revision/finite checks, and a cumulative float32
+position hash computed outside the physics clock. It prints P50/P95/P99 frame
+physics time, XPBD worker utilization/jobs, process CPU and resource deltas.
+These timing runs do not constitute quality evidence; keep the corresponding
+full trace with accounting enabled for the physical gate.
+
 For cloth, the same source phases report momentum start/end, gravity/force,
 uniform and point impulse, damping, pinned-edge constraint impulse on cloth,
 normal contact and friction impulses. `MomentumResidualNs` is the signed

@@ -196,6 +196,7 @@ namespace gargantuan {
 			std::uint64_t TopologyRevision = 1;
 			std::uint64_t VertexRevision = 1;
 			PhysicsEvaluation::XpbdContactProjection ContactProjection;
+			bool CaptureAccounting = false;
 		};
 
 		[[nodiscard]] double NodeKineticEnergy(const SoftBodyNode &Node) {
@@ -230,7 +231,7 @@ namespace gargantuan {
 		void RecordContactProjection(SoftBodyRecord &Record, const SoftBodyNode &Node,
 			glm::vec3 BeforePosition, glm::vec3 BeforePrevious,
 			glm::vec3 ContactNormal, glm::vec3 SurfaceDelta, float DeltaTime) {
-			if (Node.InverseMass <= 0.0f) return;
+			if (!Record.CaptureAccounting || Node.InverseMass <= 0.0f) return;
 			const double Mass = 1.0 / double(Node.InverseMass);
 			const glm::dvec3 PositionImpulse = Mass * glm::dvec3(Node.Position - BeforePosition) /
 				double(DeltaTime);
@@ -1170,6 +1171,7 @@ namespace gargantuan {
 			Record.ContactProjection = {};
 			const bool RecordAccounting =
 				PhysicsEvaluation::ExperimentalXpbdAccountingEnabled.load(std::memory_order_acquire);
+			Record.CaptureAccounting = RecordAccounting;
 			if (RecordAccounting)
 				Record.ContactProjection.KineticStartJ = StoredKineticEnergy(Record);
 			if (RecordAccounting)

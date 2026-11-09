@@ -9,6 +9,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -20,6 +22,14 @@ namespace {
 using namespace gargantuan;
 using Json = nlohmann::json;
 constexpr float DeltaTime = 1.0f / 60.0f;
+void HashPosition(std::uint64_t &Hash, glm::vec3 Position) {
+    for (float Value : {Position.x, Position.y, Position.z}) {
+        std::uint32_t Bits = 0;
+        std::memcpy(&Bits, &Value, sizeof(Bits));
+        Hash ^= Bits;
+        Hash *= 1099511628211ull;
+    }
+}
 
 glm::vec3 Vec(const Json &Value) {
     if (!Value.is_array() || Value.size() != 3) throw std::invalid_argument("Expected xyz triple");
@@ -133,6 +143,14 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     const Json Config = Json::parse(Input);
     const std::string BackendName = Config.at("Backend").get<std::string>();
     Require(BackendName == "jolt" || BackendName == "xpbd", "Backend must be jolt or xpbd");
+    const bool CaptureTrace = Config.value("CaptureTrace", true);
+    const char *AccountingEnvironment = std::getenv("GANTRIA_CONTACT_ACCOUNTING");
+    Require(!AccountingEnvironment ||
+        (std::strcmp(AccountingEnvironment, "0") == 0 ||
+         std::strcmp(AccountingEnvironment, "1") == 0),
+        "GANTRIA_CONTACT_ACCOUNTING must be 0 or 1");
+    const bool CaptureAccounting = BackendName == "xpbd" && CaptureTrace &&
+        (!AccountingEnvironment || std::strcmp(AccountingEnvironment, "1") == 0);
     const int N = Config.at("Resolution").get<int>();
     const int Frames = Config.at("Frames").get<int>();
     const int Substeps = Config.value("XpbdSubsteps", 32);
@@ -154,7 +172,8 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         RotationValue[2].get<float>(), RotationValue[3].get<float>());
     PhysicsEvaluation::SetExperimentalXpbdClothRotation(Rotation);
     PhysicsEvaluation::SetExperimentalJoltClothRotation(Rotation);
-    PhysicsEvaluation::SetExperimentalXpbdAccountingEnabled(BackendName == "xpbd");
+    PhysicsEvaluation::SetExperimentalXpbdAccountingEnabled(
+        BackendName == "xpbd" && CaptureAccounting);
     const bool RotateAuthoredInputs = Config.value("RotateAuthoredInputs", false);
     if (RotateAuthoredInputs) {
         Gravity = Rotation * Gravity;
@@ -233,6 +252,7 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         Spheres.push_back(Sphere);
     }
 
+    const auto BeforeAdmission = PhysicsEvaluation::CaptureResources();
     SoftBodyWorldLimits Limits;
     Limits.MaximumWorkers = Workers;
     PhysicsWorldConfig WorldConfig;
@@ -245,7 +265,7 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     Require(Soft && Soft->IsValid(), "Soft provider creation failed");
     const SoftBodyId Cloth = Soft->CreateBody(Definition);
     Require(Cloth.IsValid(), "Cloth admission failed");
-    const auto Initial = Soft->GetBodyState(Cloth);
+    auto Initial = Soft->GetBodyState(Cloth);
     Require(Initial && Initial->Positions && Initial->Indices &&
         Initial->Positions->size() == std::size_t(N * N), "Initial cloth topology missing");
     const std::uint64_t TopologyRevision = Initial->TopologyRevision;
@@ -268,17 +288,28 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 "Dynamic sphere initial velocity rejected");
     }
     std::filesystem::create_directories(Output);
-    { std::ofstream File(Output / "ContactFixtureV1.json");
-      Require(bool(File), "Fixture output failed");
-      File << MakeFixture(Config, Definition, *Initial, Spheres, Gravity,
-          InitialVelocity, AuthoredDamping, Frames).dump(1); }
+    if (CaptureTrace) {
+        std::ofstream File(Output / "ContactFixtureV1.json");
+        Require(bool(File), "Fixture output failed");
+        File << MakeFixture(Config, Definition, *Initial, Spheres, Gravity,
+            InitialVelocity, AuthoredDamping, Frames).dump(1);
+        Require(bool(File), "Fixture write failed");
+    }
+    Initial.reset();
     const auto Movable = std::size_t(N * N) - Definition.Attachments.size();
     Require(Soft->ApplyImpulse(Cloth, float(Movable) *
         Definition.Material.ParticleMass * InitialVelocity).Succeeded(), "Initial impulse rejected");
-    std::ofstream Trace(Output / "ContactTraceV1.jsonl");
-    Require(bool(Trace), "Trace output failed");
+    std::ofstream Trace;
+    if (CaptureTrace) {
+        Trace.open(Output / "ContactTraceV1.jsonl");
+        Require(bool(Trace), "Trace output failed");
+    }
     std::vector<double> PhysicsMs;
     PhysicsMs.reserve(Frames);
+    std::uint64_t StateHash = 14695981039346656037ull;
+    double XpbdWorkerUtilizationSum = 0.0;
+    std::uint64_t XpbdSubstepCount = 0, XpbdJobsDispatched = 0;
+    std::size_t XpbdWorkersActual = 0;
     for (int Frame = 0; Frame < Frames; ++Frame) {
         const auto PhysicsStart = std::chrono::steady_clock::now();
         const float EndTime = float(Frame + 1) * DeltaTime;
@@ -298,6 +329,7 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         }
         const int Steps = BackendName == "xpbd" ? Substeps : 1;
         PhysicsEvaluation::XpbdContactProjection FrameContact;
+        SoftBodyState FrameState;
         bool StaticPoseWorkComplete = true;
         for (int Sub = 0; Sub < Steps; ++Sub) {
             SoftBodyStepConfig Step;
@@ -328,11 +360,20 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 Result.Profile.SimulatedVertices == std::size_t(N * N) &&
                 Result.Profile.FrozenBodies == 0 &&
                 Result.States.front().Body == Cloth && Result.States.front().Simulated &&
+                Result.States.front().Positions &&
+                Result.States.front().Positions->size() == std::size_t(N * N) &&
                 Result.States.front().TopologyRevision == TopologyRevision &&
                 Result.States.front().VertexRevision > VertexRevision,
                 "Soft step lost work");
             VertexRevision = Result.States.front().VertexRevision;
+            FrameState = Result.States.front();
             if (BackendName == "xpbd") {
+                XpbdWorkerUtilizationSum += Result.Profile.WorkerUtilization;
+                XpbdJobsDispatched += Result.Profile.JobsDispatched;
+                XpbdWorkersActual = std::max(XpbdWorkersActual, Result.Profile.WorkerCount);
+                ++XpbdSubstepCount;
+            }
+            if (BackendName == "xpbd" && CaptureAccounting) {
                 const auto Projection = PhysicsEvaluation::GetExperimentalXpbdContactProjection(*Soft, Cloth);
                 Require(Projection.has_value(), "XPBD projection diagnostic missing");
                 FrameContact.VelocityDerivedMomentumDeltaNs += Projection->VelocityDerivedMomentumDeltaNs;
@@ -365,25 +406,23 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 FrameContact.LedgerResidualJ += Projection->LedgerResidualJ;
             }
         }
-        const auto State = Soft->GetBodyState(Cloth);
-        Require(State && State->Positions && State->Positions->size() == std::size_t(N * N),
-            "Poststep cloth state missing");
-        // Jolt GetBodyState is a read-only snapshot and deliberately reports
-        // Simulated=false; the immediately preceding Step result is the event
-        // that certifies this frame was simulated.
-        Require(State->TopologyRevision == TopologyRevision &&
-            State->VertexRevision == VertexRevision, "Stale or inactive cloth state");
+        PhysicsMs.push_back(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - PhysicsStart).count());
+        for (const auto &Position : *FrameState.Positions) {
+            Require(std::isfinite(Position.x) && std::isfinite(Position.y) &&
+                std::isfinite(Position.z), "Nonfinite poststep position");
+            HashPosition(StateHash, Position);
+        }
+        if (!CaptureTrace) continue;
         const auto Velocities = BackendName == "xpbd" ?
             PhysicsEvaluation::GetExperimentalXpbdVelocities(*Soft, Cloth) :
             PhysicsEvaluation::GetJoltSoftBodyVelocities(*Jolt.Rigid, *Soft, Cloth);
-        Require(Velocities && Velocities->size() == State->Positions->size(),
+        Require(Velocities && Velocities->size() == FrameState.Positions->size(),
             "Poststep physical velocities missing");
-        PhysicsMs.push_back(std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - PhysicsStart).count());
         Json Record = {{"Frame", Frame}, {"TimeSeconds", EndTime},
             {"Positions", Json::array()}, {"Velocities", Json::array()},
             {"ColliderStates", Json::array()}};
-        if (BackendName == "xpbd") {
+        if (BackendName == "xpbd" && CaptureAccounting) {
             const auto DTriplet = [](glm::dvec3 Value) {
                 return Json::array({Value.x, Value.y, Value.z});
             };
@@ -428,8 +467,8 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 {"Scope", "one-way prescribed sphere; no dynamic rigid momentum claim"}}}};
         }
         for (std::size_t Index = 0; Index < Velocities->size(); ++Index) {
-            for (float Value : {(*State->Positions)[Index].x, (*State->Positions)[Index].y,
-                                (*State->Positions)[Index].z}) {
+            for (float Value : {(*FrameState.Positions)[Index].x, (*FrameState.Positions)[Index].y,
+                                (*FrameState.Positions)[Index].z}) {
                 Require(std::isfinite(Value), "Nonfinite poststep position");
                 Record["Positions"].push_back(Value);
             }
@@ -463,15 +502,38 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         Trace << Record.dump() << '\n';
         Require(bool(Trace), "Trace write failed");
     }
+    if (CaptureTrace) {
+        Trace.close();
+        Require(!Trace.fail(), "Trace close failed");
+    }
+    const auto AfterRun = PhysicsEvaluation::CaptureResources();
+    Xpbd.reset();
+    Jolt.Soft.reset();
+    Jolt.Rigid.reset();
+    const auto AfterRetire = PhysicsEvaluation::CaptureResources();
     std::cout << "[Physics:ContactQualification] case=" << Config.at("CaseId")
         << " backend=" << BackendName << " frames=" << Frames << " vertices=" << N*N
-        << " result=TRACE_WRITTEN impulse_work=INCOMPLETE\n";
+        << " result=" << (CaptureTrace ? "TRACE_WRITTEN" : "TIMING_ONLY")
+        << " accounting=" << int(CaptureAccounting)
+        << " state_hash=" << StateHash << '\n';
     std::sort(PhysicsMs.begin(), PhysicsMs.end());
     const auto Percentile = [&](double Fraction) { return PhysicsMs[std::size_t(
         std::ceil(Fraction * PhysicsMs.size()) - 1)]; };
-    std::cout << "[Physics:ContactQualification] diagnostic_physics_ms_p50=" << Percentile(0.50)
+    std::cout << "[Physics:ContactQualification] "
+        << (CaptureTrace ? "diagnostic" : "clean") << "_physics_ms_p50=" << Percentile(0.50)
         << " p95=" << Percentile(0.95) << " p99=" << Percentile(0.99)
-        << " excludes_json=1 quality_capture_not_ranked=1\n";
+        << " excludes_json_and_hash=1 quality_capture_not_ranked=" << int(CaptureTrace)
+        << " xpbd_workers_actual=" << XpbdWorkersActual
+        << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
+        << " xpbd_worker_utilization_mean=" <<
+            (XpbdSubstepCount ? XpbdWorkerUtilizationSum / double(XpbdSubstepCount) : 0.0)
+        << '\n';
+    std::cout << "[Physics:ContactQualification] resources " << Json({
+        {"AdmissionAndRun", PhysicsEvaluation::ResourceDelta(BeforeAdmission, AfterRun)},
+        {"Retirement", PhysicsEvaluation::ResourceDelta(AfterRun, AfterRetire)},
+        {"WholeProcess", PhysicsEvaluation::ResourceDelta(BeforeAdmission, AfterRetire)},
+        {"StateHash", StateHash}, {"Accounting", CaptureAccounting},
+        {"CaptureTrace", CaptureTrace}}).dump() << '\n';
     return 0;
 }
 } // namespace
