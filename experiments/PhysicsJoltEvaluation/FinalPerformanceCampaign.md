@@ -128,7 +128,7 @@ A is the unchanged production Box3D/XPBD path. Its default 16K cloth costs about
 Jolt material response. It is not a quality-matched winner. The earlier explicit
 XPBD High32 reference remains a separate experimental reference: a direct
 comparison of its preserved trace to final C stays inside the same 5 mm RMS/
-15 mm maximum envelope (4.35/12.10 mm). Its old approximately 268.8 ms timing is
+15 mm maximum envelope (4.35/12.10 mm). Its old approximately 268 ms timing is
 historical, not a fresh counterbalanced C comparison. Equal requested caps also
 do not imply equal CPU use: the one-body reference uses roughly one XPBD worker.
 
