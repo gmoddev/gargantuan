@@ -51,14 +51,20 @@ namespace {
 		Publication->FullResync = Base == InvalidRenderPublicationId;
 		Publication->Frame.ViewportWidth = Width;
 		Publication->Frame.ViewportHeight = Height;
+		auto &Camera = Publication->Frame.Camera;
+		Camera.VerticalFieldOfView = 45.0f;
+		Camera.ProjectionMatrix = glm::perspectiveRH_ZO(glm::radians(Camera.VerticalFieldOfView),
+			static_cast<float>(Width) / Height, Camera.NearPlane, Camera.FarPlane);
+		Camera.ViewProjectionMatrix = Camera.ProjectionMatrix;
 		Publication->Frame.Environment.SunDirection = {0.0f, 0.0f, 1.0f};
+		Publication->Frame.Environment.EnvironmentColor = glm::vec3(0.0f);
 		return Publication;
 	}
 
-	gargantuan::RenderItem MakeItem(gargantuan::ObjectId Object, float X = 0.0f) {
+	gargantuan::RenderItem MakeItem(gargantuan::ObjectId Object, float X = 0.0f, float Y = 0.0f) {
 		gargantuan::RenderItem Item;
 		Item.Object = Object;
-		Item.ModelMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(X, 0.0f, -4.0f));
+		Item.ModelMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(X, Y, -4.0f));
 		Item.InverseModelMatrix = glm::inverse(Item.ModelMatrix);
 		Item.CastShadow = false;
 		return Item;
@@ -160,7 +166,7 @@ namespace {
 		auto Initial = MakePublication(1, 0);
 		Initial->MeshCreates.push_back({Mesh, 1, 1, Vertices, Indices, Bounds});
 		Initial->TextureCreates.push_back({Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm, Red});
-		Initial->Creates.push_back({.Item = MakeItem(Object), .Mesh = Mesh, .Material = Material});
+		Initial->Creates.push_back({.Item = MakeItem(Object, 0.0f, 0.5f), .Mesh = Mesh, .Material = Material});
 
 		FilamentRenderer Renderer(Vector2(128.0f, 128.0f), true, false);
 		const auto Before = Renderer.Capture(Initial);
@@ -177,8 +183,29 @@ namespace {
 		Check(Metrics.Changes.Updated == 0 && Metrics.NativeTextureUploadBytes == 8 &&
 			Metrics.NativeVertexUploadBytes == 0 && Metrics.FullResyncs == 1,
 			"a texel update touches both color-space views without rebuilding the mesh or entity");
+		const auto Channel = [](const std::vector<std::uint8_t> &Image, std::size_t Y, std::size_t Component) {
+			return Image.at((Y * 128u + 64u) * 4u + Component);
+		};
+		Check(Channel(Before, 104, 0) > Channel(After, 104, 0) && Channel(Before, 23, 0) == Channel(After, 23, 0),
+			"capture rows start at the bottom-left of the rendered image");
 
-		auto VertexUpdate = MakePublication(3, 2);
+		auto InvalidView = MakePublication(3, 2);
+		InvalidView->Frame.Camera.ViewMatrix[0] = glm::vec4(0.0f);
+		CheckThrows<std::invalid_argument>([&] { Renderer.Draw(InvalidView); }, "a non-rigid view fails before mutation");
+		auto ViewMotion = MakePublication(3, 2);
+		auto &MovedCamera = ViewMotion->Frame.Camera;
+		MovedCamera.ViewMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f));
+		MovedCamera.ViewProjectionMatrix = MovedCamera.ProjectionMatrix * MovedCamera.ViewMatrix;
+		Check(Channel(Renderer.Capture(ViewMotion), 104, 2) < Channel(After, 104, 2),
+			"camera motion follows the canonical view matrix");
+		auto OffCenter = MakePublication(4, 3);
+		auto &OffCenterCamera = OffCenter->Frame.Camera;
+		OffCenterCamera.ProjectionMatrix[2][0] = 1.5f;
+		OffCenterCamera.ViewProjectionMatrix = OffCenterCamera.ProjectionMatrix;
+		Check(Channel(Renderer.Capture(OffCenter), 104, 2) < Channel(After, 104, 2),
+			"the canonical projection matrix controls the visible frustum");
+
+		auto VertexUpdate = MakePublication(5, 4);
 		auto Moved = Vertices->front();
 		Moved.Position.x -= 0.25f;
 		VertexUpdate->MeshVertexUpdates.push_back({Mesh, 2, 0,
@@ -190,7 +217,7 @@ namespace {
 			Metrics.NativeTextureUploadBytes == 0 && Metrics.RenderableObjects == 1,
 			"stable mesh identity applies its vertex range without replacing the renderable");
 
-		auto Remove = MakePublication(4, 3);
+		auto Remove = MakePublication(6, 5);
 		Remove->Removes.push_back({Object});
 		Remove->MeshRemoves.push_back({Mesh});
 		Remove->TextureRemoves.push_back({Texture});

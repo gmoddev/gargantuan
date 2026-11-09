@@ -699,12 +699,13 @@ namespace gargantuan {
 
 		void UpdateCameraAndLight(const RenderFrameState &Frame) {
 			const auto &CameraValue = Frame.Camera;
-			const auto Aspect = static_cast<double>(Frame.ViewportWidth) / static_cast<double>(Frame.ViewportHeight);
-			Camera->setProjection(static_cast<double>(CameraValue.VerticalFieldOfView), Aspect,
-				static_cast<double>(CameraValue.NearPlane), static_cast<double>(CameraValue.FarPlane),
-				filament::Camera::Fov::VERTICAL);
-			Camera->lookAt(ToFilament(CameraValue.Position), ToFilament(CameraValue.Position + CameraValue.LookDirection),
-				ToFilament(CameraValue.UpDirection));
+			filament::math::mat4 ProjectionMatrix{ToFilament(CameraValue.ProjectionMatrix)};
+			// Gargantuan publishes ZO clip depth. Filament accepts OpenGL NDC here and
+			// applies its own reversed depth conversion before rendering.
+			for (std::size_t Column = 0; Column < 4; ++Column)
+				ProjectionMatrix[Column][2] = 2.0 * ProjectionMatrix[Column][2] - ProjectionMatrix[Column][3];
+			Camera->setCustomProjection(ProjectionMatrix, CameraValue.NearPlane, CameraValue.FarPlane);
+			Camera->setModelMatrix(inverse(filament::math::mat4{ToFilament(CameraValue.ViewMatrix)}));
 
 			const auto &Environment = Frame.Environment;
 			auto &Lights = Engine->getLightManager();
@@ -740,6 +741,16 @@ namespace gargantuan {
 				throw std::invalid_argument("Filament requires a full publication to reconstruct residency");
 			if (CapturePixels && !Headless)
 				throw std::invalid_argument("Filament qualification readback requires a headless target");
+			const auto &ViewMatrix = Publication.Frame.Camera.ViewMatrix;
+			const glm::dmat3 CameraBasis{ViewMatrix};
+			const auto GramMatrix = glm::transpose(CameraBasis) * CameraBasis;
+			const glm::dmat3 Identity(1.0);
+			for (glm::length_t Column = 0; Column < 3; ++Column)
+				if (ViewMatrix[Column][3] != 0.0f || !(glm::length(GramMatrix[Column] - Identity[Column]) < 1e-3))
+					throw std::invalid_argument("Filament requires a rigid camera view matrix");
+			if (ViewMatrix[3][3] != 1.0f || !(glm::determinant(CameraBasis) > 0.0) ||
+				glm::determinant(glm::dmat4(Publication.Frame.Camera.ProjectionMatrix)) == 0.0)
+				throw std::invalid_argument("Filament requires a right-handed view and invertible camera projection");
 			if (Publication.Frame.Environment.Sky || Publication.Frame.Environment.Fog.Enabled ||
 				!Publication.GetUi().Batches.empty())
 				throw std::invalid_argument("Filament qualification does not support Sky, fog or GUI frames");
@@ -842,6 +853,13 @@ namespace gargantuan {
 			if (Pixels) {
 				if (!Engine->flushAndWait(5'000'000'000ull) || !Readback->Complete)
 					throw std::runtime_error("Filament did not complete the qualification readback");
+				// Filament's Vulkan driver copies top-first native image rows.
+				const auto RowBytes = static_cast<std::size_t>(Width) * 4u;
+				for (std::uint32_t Row = 0; Row < Height / 2; ++Row) {
+					auto Top = Readback->Pixels.begin() + Row * RowBytes;
+					auto Bottom = Readback->Pixels.begin() + (Height - 1 - Row) * RowBytes;
+					std::swap_ranges(Top, Top + RowBytes, Bottom);
+				}
 				*Pixels = std::move(Readback->Pixels);
 			}
 			const auto History = Renderer->getFrameInfoHistory(1);
@@ -933,8 +951,8 @@ namespace gargantuan {
 		if (!Publication) throw std::invalid_argument("FilamentRenderer requires an immutable RenderPublication");
 		if (!Implementation) throw std::logic_error("FilamentRenderer is destroyed");
 		auto &State = *Implementation;
-		State.ValidatePublication(*Publication, Pixels != nullptr);
 		const auto ProjectionStart = Clock::now();
+		State.ValidatePublication(*Publication, Pixels != nullptr);
 		RenderProjectionChanges Changes;
 		const auto Invalidate = [&] {
 			State.RequiresFullResync = true;
