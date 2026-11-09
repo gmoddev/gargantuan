@@ -42,6 +42,19 @@ working set is a different measure. The R1 full-run post-retirement net is
 absence of leaks. The baseline raw JSONL receipts are preserved under
 `Baseline-Profile-20261109T053701` in the campaign artifact set.
 
+The isolated contiguous-graph candidate was profiled separately from the
+provider cache. Its three fresh 16K first-body admissions took 42.67, 42.81,
+and 44.93 ms; their `Optimize` phases took 40.30, 40.38, and 42.53 ms.
+Tracked `Optimize` allocation calls fell from 163,642 to 822 (99.5% fewer),
+and requested bytes fell from 10.20 to 6.27 MB (decimal). The four-body
+first admissions took 42.70, 42.63, and 43.02 ms across fresh runs. These
+are instrumented diagnostics, not ordinary timing ranks. The graph still
+costs about 40 ms, so the change does not make cold 16K admission inexpensive.
+The candidate raw JSONL receipts are preserved under
+`CSR-Profile-20261109T054420`; its one-body post-retirement tracked net is
+the same 6,942 bytes as baseline. Uninstrumented results and behavior parity
+remain a separate gate.
+
 ## Candidate ownership and bounds
 
 The native candidate changes only the temporary graphs used by Jolt
