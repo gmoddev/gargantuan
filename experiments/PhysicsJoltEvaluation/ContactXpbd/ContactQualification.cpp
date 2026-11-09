@@ -63,7 +63,7 @@ void AddEdge(Json &Edges, const std::vector<glm::vec3> &Rest, unsigned A, unsign
 
 Json MakeFixture(const Json &Config, const SoftBodyDefinition &Definition,
                  const SoftBodyState &Initial, const std::vector<SphereCase> &Spheres,
-                 glm::vec3 Gravity, float InitialSpeed, float AuthoredDamping, int Frames) {
+                 glm::vec3 Gravity, glm::vec3 InitialVelocity, float AuthoredDamping, int Frames) {
     const auto &Rest = *Initial.Positions;
     Json Fixture = {{"Schema", "Gargantuan.ContactFixture.V1"},
         {"CaseId", Config.at("CaseId")}, {"Frames", Frames},
@@ -81,7 +81,7 @@ Json MakeFixture(const Json &Config, const SoftBodyDefinition &Definition,
     }
     for (std::size_t Index = 0; Index < Rest.size(); ++Index) {
         Fixture["RestPositions"].push_back(Triplet(Rest[Index]));
-        Fixture["InitialVelocities"].push_back(Triplet(Pinned[Index] ? glm::vec3(0.0f) : glm::vec3(InitialSpeed, 0, 0)));
+        Fixture["InitialVelocities"].push_back(Triplet(Pinned[Index] ? glm::vec3(0.0f) : InitialVelocity));
         Fixture["VertexMassKg"].push_back(Pinned[Index] ? 0.0f : Definition.Material.ParticleMass);
     }
     const auto &Indices = *Initial.Indices;
@@ -105,9 +105,9 @@ Json MakeFixture(const Json &Config, const SoftBodyDefinition &Definition,
             {"RadiusM", Sphere.Radius},
             {"MassKg", Sphere.Motion == "dynamic" ? Json(Sphere.Mass) : Json(nullptr)},
             {"Motion", Sphere.Motion},
-            {"Trajectory", {{"Kind", Sphere.TrajectoryKind}, {"Start", Triplet(Sphere.Start)},
-                {"Velocity", Triplet(Sphere.Velocity)}, {"DurationSeconds", Sphere.Duration},
-                {"FrequencyHz", Sphere.Frequency}}}});
+            {"Trajectory", {{"Kind", Sphere.Motion == "dynamic" ? "free_dynamic" : Sphere.TrajectoryKind},
+                {"Start", Triplet(Sphere.Start)}, {"Velocity", Triplet(Sphere.Velocity)},
+                {"DurationSeconds", Sphere.Duration}, {"FrequencyHz", Sphere.Frequency}}}});
     Fixture["Authored"] = {{"SizeM", Triplet(Definition.Size)},
         {"RotationWxyz", Config.value("RotationWxyz", Json::array({1,0,0,0}))},
         {"Material", {{"ParticleMassKg", Definition.Material.ParticleMass},
@@ -117,7 +117,7 @@ Json MakeFixture(const Json &Config, const SoftBodyDefinition &Definition,
             {"AppliedStepDamping", Definition.Material.Damping},
             {"Friction", Definition.Material.Friction}}},
         {"XpbdSubsteps", Config.value("XpbdSubsteps", 32)},
-        {"InitialSpeedXMPerS", InitialSpeed},
+        {"InitialVelocityMPerS", Triplet(InitialVelocity)},
         {"StaticPoseProjectionWork", "INCOMPLETE"}};
     return Fixture;
 }
@@ -140,8 +140,9 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     const glm::vec3 Gravity = Vec(Config.value("GravityMPerS2", Json::array({0,-9.81,0})));
     const glm::vec3 Origin = Vec(Config.value("OriginM", Json::array({0,3,0})));
     const glm::vec3 Size = Vec(Config.value("SizeM", Json::array({8,8,0.5})));
-    const float InitialSpeed = Config.value("InitialSpeedXMPerS", 2.0f);
-    Require(Size.x > 0 && Size.y > 0 && Size.z > 0 && std::isfinite(InitialSpeed), "Invalid cloth size or speed");
+    const glm::vec3 InitialVelocity = Vec(Config.value("InitialVelocityMPerS",
+        Json::array({Config.value("InitialSpeedXMPerS", 2.0f), 0.0f, 0.0f})));
+    Require(Size.x > 0 && Size.y > 0 && Size.z > 0, "Invalid cloth size");
     const Json RotationValue = Config.value("RotationWxyz", Json::array({1,0,0,0}));
     Require(RotationValue.is_array() && RotationValue.size() == 4, "RotationWxyz needs four numbers");
     const glm::quat Rotation(RotationValue[0].get<float>(), RotationValue[1].get<float>(),
@@ -169,9 +170,12 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     const Json Pins = Config.value("Pins", Json("top"));
     std::vector<unsigned> PinIndices;
     if (Pins == "top") for (int X = 0; X < N; ++X) PinIndices.push_back(unsigned(X));
-    else if (Pins == "corners") PinIndices = {0u, unsigned(N - 1)};
+    else if (Pins == "corners") PinIndices = {0u, unsigned(N - 1),
+        unsigned(N * (N - 1)), unsigned(N * N - 1)};
+    else if (Pins == "left") for (int Y = 0; Y < N; ++Y) PinIndices.push_back(unsigned(Y * N));
+    else if (Pins == "free") {}
     else if (Pins.is_array()) for (const auto &Pin : Pins) PinIndices.push_back(Pin.get<unsigned>());
-    else Require(false, "Pins must be top, corners, or index array");
+    else Require(false, "Pins must be top, left, corners, free, or index array");
     std::sort(PinIndices.begin(), PinIndices.end());
     Require(PinIndices.size() <= 256 &&
         std::adjacent_find(PinIndices.begin(), PinIndices.end()) == PinIndices.end(), "Invalid pin count or duplicate");
@@ -197,7 +201,7 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         Sphere.Velocity = Vec(Trajectory.value("VelocityMPerS", Json::array({0,0,0})));
         Sphere.Duration = Trajectory.value("DurationSeconds", 0.66f);
         Sphere.Frequency = Trajectory.value("FrequencyHz", 1.0f);
-        Require(!Sphere.Id.empty() && Sphere.Radius > 0 && Sphere.Mass > 0 &&
+        Require(!Sphere.Id.empty() && Sphere.Radius > 0 && Sphere.Mass >= 0.001f &&
             Sphere.Duration > 0 && Sphere.Frequency > 0 &&
             (Sphere.Motion == "static" || Sphere.Motion == "kinematic" || Sphere.Motion == "dynamic") &&
             (Sphere.TrajectoryKind == "hold" || Sphere.TrajectoryKind == "linear" ||
@@ -231,6 +235,7 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         Sphere.Description.Transform.Position = Sphere.Start;
         Sphere.Description.Anchored = Sphere.Motion == "static";
         Sphere.Description.Kinematic = Sphere.Motion == "kinematic";
+        Sphere.Description.SleepEnabled = false;
         if (Sphere.Motion == "dynamic")
             Sphere.Description.Density = Sphere.Mass /
                 ((4.0f / 3.0f) * 3.14159265358979323846f *
@@ -245,10 +250,10 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     { std::ofstream File(Output / "ContactFixtureV1.json");
       Require(bool(File), "Fixture output failed");
       File << MakeFixture(Config, Definition, *Initial, Spheres, Gravity,
-          InitialSpeed, AuthoredDamping, Frames).dump(1); }
+          InitialVelocity, AuthoredDamping, Frames).dump(1); }
     const auto Movable = std::size_t(N * N) - Definition.Attachments.size();
-    Require(Soft->ApplyImpulse(Cloth, glm::vec3(float(Movable) *
-        Definition.Material.ParticleMass * InitialSpeed, 0, 0)).Succeeded(), "Initial impulse rejected");
+    Require(Soft->ApplyImpulse(Cloth, float(Movable) *
+        Definition.Material.ParticleMass * InitialVelocity).Succeeded(), "Initial impulse rejected");
     std::ofstream Trace(Output / "ContactTraceV1.jsonl");
     Require(bool(Trace), "Trace output failed");
     std::vector<double> PhysicsMs;
