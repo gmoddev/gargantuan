@@ -221,6 +221,12 @@ class DiagnosticTests(unittest.TestCase):
             VerifyAccounting(Broken, Stages, 0,
                              {'DeltaTimeSeconds': 0.01,
                               'Authored': {'XpbdSubsteps': 32}})
+        Broken = dict(Record)
+        del Broken['IntegrationPositionRoundingKineticDeltaJ']
+        with self.assertRaisesRegex(ValueError, 'ideal velocity reconstruction metadata'):
+            VerifyAccounting(Broken, Stages, 0,
+                             {'DeltaTimeSeconds': 0.01,
+                              'Authored': {'XpbdSubsteps': 32}})
 
 
 if __name__ == '__main__':

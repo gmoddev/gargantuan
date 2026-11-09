@@ -88,7 +88,8 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
     IdealEnabled = Accounting['IdealVelocityReconstructionEnabled'] if HasIdealFields else False
     Mode = Accounting.get('VelocityPrecisionMode', '1' if IdealEnabled else '0')
     ShadowEnabled = Accounting.get('DoubleShadowEnabled', False)
-    if Mode not in ('0', '1', '2') or type(ShadowEnabled) is not bool or \
+    if Mode not in ('0', '1', '2') or (Mode in ('1', '2') and not HasIdealFields) or \
+            type(ShadowEnabled) is not bool or \
             IdealEnabled != (Mode == '1') or ShadowEnabled != (Mode == '2') or \
             ('VelocityPrecisionMode' in Accounting) != ('DoubleShadowEnabled' in Accounting):
         raise ValueError(f'Invalid XPBD velocity precision mode at frame {Frame}')
