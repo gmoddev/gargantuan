@@ -59,8 +59,11 @@ queue before measuring. It reports fixture construction, renderer startup,
 first completed frame and steady frame P50/P95/P99/max. Completion mode includes
 the SDL fence or Filament flush-and-wait per frame. Queued mode reports host
 submission and queue pressure, followed by a separately timed final drain.
-Neither metric is pure GPU execution time. Backend phase clocks describe
-implementation-local work. SDL apply covers mesh, texture and UI preparation.
+`--synchronize=bounded-2` drains each pair on both backends and retains native
+frame admission. The second frame's interval includes that wait. The reported
+wait mean includes both frames in each pair. An odd final frame drains at the
+end. These metrics describe host and completion behavior. Backend phase clocks
+describe implementation-local work. SDL apply covers mesh, texture and UI preparation.
 Filament apply includes changed native objects and related resources. Keep
 those phase scopes distinct when interpreting the numbers.
 
@@ -86,6 +89,8 @@ $env:SDL_GPU_DRIVER = 'vulkan'
 <build>/gargantuan_renderer_benchmark.exe --incremental --backend=filament-headless --scenario=material-extensions --capture=<other-new-prefix>
 <build>/gargantuan_renderer_benchmark.exe --incremental --backend=sdl --scenario=all --count=10000 --frames=300 --warmup=30 --synchronize=on
 <build>/gargantuan_renderer_benchmark.exe --incremental --backend=filament-headless --scenario=all --count=10000 --frames=300 --warmup=30 --synchronize=on
+<build>/gargantuan_renderer_benchmark.exe --incremental --backend=sdl --scenario=all --count=10000 --frames=300 --warmup=30 --synchronize=bounded-2
+<build>/gargantuan_renderer_benchmark.exe --incremental --backend=filament-headless --scenario=all --count=10000 --frames=300 --warmup=30 --synchronize=bounded-2
 ```
 
 Use fresh process invocations for counterbalanced order, the same driver API,
@@ -97,9 +102,9 @@ architecture decision also weighs integration gaps, maintenance and deployment.
 
 ## Decision criteria
 
-Use only rows that complete material capture, submit every measured frame and
-hold the expected scene size. The 16.67 ms frame interval from Foundation 2C is
-the reference for tail cost. Compare completion P95 and P99 at the same size
+Qualify each backend's material capture before using timing rows. A row must
+submit every measured frame and hold the expected scene size. The 16.67 ms
+frame interval from Foundation 2C is the reference for tail cost. Compare completion P95 and P99 at the same size
 and resolution, then compare queued submission together with the final drain.
 Treat results close to the run-to-run variation as equivalent. The shadow-off
 rows leave each backend's normal pass setup in place. SDL still clears its
