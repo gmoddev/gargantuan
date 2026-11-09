@@ -49,7 +49,7 @@ namespace gargantuan {
 		// This translation unit is an isolated copy of the production XPBD solver.
 		// The ordinary factory and src/physics/XpbdSoftBodyBackend.cpp stay unchanged.
 		enum class ExperimentalContactOrder {
-			Existing, ContactThenStructure, ContactStructureContact, CoupledNormal
+			Existing, ContactThenStructure, ContactStructureContact, CoupledNormal, TriangleSurface
 		};
 		[[nodiscard]] ExperimentalContactOrder GetExperimentalContactOrder() {
 			static const auto Order = [] {
@@ -58,6 +58,7 @@ namespace gargantuan {
 				if (std::string_view(Value) == "B") return ExperimentalContactOrder::ContactThenStructure;
 				if (std::string_view(Value) == "C") return ExperimentalContactOrder::ContactStructureContact;
 				if (std::string_view(Value) == "D") return ExperimentalContactOrder::CoupledNormal;
+				if (std::string_view(Value) == "E") return ExperimentalContactOrder::TriangleSurface;
 				throw std::invalid_argument("[Physics:XpbdContactProbe] unsupported contact order");
 			}();
 			return Order;
@@ -903,6 +904,83 @@ namespace gargantuan {
 			Item.Profile.CollisionNanoseconds += Nanoseconds(ProfileClock::now() - CollisionStart);
 		}
 
+		[[nodiscard]] glm::vec3 ClosestTriangleWeights(glm::vec3 Point,
+			glm::vec3 A, glm::vec3 B, glm::vec3 C) {
+			const glm::vec3 AB = B - A, AC = C - A, AP = Point - A;
+			const float D1 = glm::dot(AB, AP), D2 = glm::dot(AC, AP);
+			if (D1 <= 0 && D2 <= 0) return {1,0,0};
+			const glm::vec3 BP = Point - B;
+			const float D3 = glm::dot(AB, BP), D4 = glm::dot(AC, BP);
+			if (D3 >= 0 && D4 <= D3) return {0,1,0};
+			const float VC = D1 * D4 - D3 * D2;
+			if (VC <= 0 && D1 >= 0 && D3 <= 0) {
+				const float V = D1 / (D1 - D3);
+				return {1 - V,V,0};
+			}
+			const glm::vec3 CP = Point - C;
+			const float D5 = glm::dot(AB, CP), D6 = glm::dot(AC, CP);
+			if (D6 >= 0 && D5 <= D6) return {0,0,1};
+			const float VB = D5 * D2 - D1 * D6;
+			if (VB <= 0 && D2 >= 0 && D6 <= 0) {
+				const float W = D2 / (D2 - D6);
+				return {1 - W,0,W};
+			}
+			const float VA = D3 * D6 - D5 * D4;
+			if (VA <= 0 && D4 >= D3 && D5 >= D6) {
+				const float W = (D4 - D3) / ((D4 - D3) + (D5 - D6));
+				return {0,1 - W,W};
+			}
+			const float Denominator = VA + VB + VC;
+			if (std::abs(Denominator) <= 1e-12f) return {1,0,0};
+			const float V = VB / Denominator, W = VC / Denominator;
+			return {1 - V - W,V,W};
+		}
+
+		// Private E geometry probe. A face can enter a sphere while all three
+		// vertices remain outside; the ordinary vertex-only solver cannot see it.
+		void CollideFaces(SoftBodyWorkItem &Item, const SoftBodySimulationBatch &Batch) {
+			auto &Record = Item.Record;
+			if (Record.Definition.CollisionMode == SoftBodyCollisionMode::None ||
+				!Record.Indices || Batch.Colliders.empty()) return;
+			const auto Start = ProfileClock::now();
+			const auto &Indices = *Record.Indices;
+			for (const auto &Collider : Batch.Colliders) {
+				if (Collider.Shape.Kind != PhysicsShapeKind::Ball) continue;
+				const float Radius = std::min({Collider.Shape.Size.x, Collider.Shape.Size.y,
+					Collider.Shape.Size.z}) * 0.5f + Record.Definition.Material.Thickness;
+				const glm::vec3 Center = Collider.Transform.Position;
+				for (std::size_t Face = 0; Face + 2 < Indices.size(); Face += 3) {
+					auto &A = Record.Nodes[Indices[Face]];
+					auto &B = Record.Nodes[Indices[Face + 1]];
+					auto &C = Record.Nodes[Indices[Face + 2]];
+					const glm::vec3 Weights = ClosestTriangleWeights(Center,
+						A.Position, B.Position, C.Position);
+					const glm::vec3 Closest = Weights.x * A.Position +
+						Weights.y * B.Position + Weights.z * C.Position;
+					const glm::vec3 Delta = Closest - Center;
+					const float Distance = glm::length(Delta);
+					if (Distance >= Radius) continue;
+					glm::vec3 Normal;
+					if (Distance > 1e-7f) Normal = Delta / Distance;
+					else {
+						const glm::vec3 FaceNormal = glm::cross(B.Position - A.Position,
+							C.Position - A.Position);
+						const float FaceLength = glm::length(FaceNormal);
+						Normal = FaceLength > 1e-7f ? FaceNormal / FaceLength : glm::vec3(0,0,1);
+					}
+					const float Weight = A.InverseMass * Weights.x * Weights.x +
+						B.InverseMass * Weights.y * Weights.y +
+						C.InverseMass * Weights.z * Weights.z;
+					if (Weight <= 1e-9f) continue;
+					const glm::vec3 Correction = ((Radius - Distance) / Weight) * Normal;
+					A.Position += A.InverseMass * Weights.x * Correction;
+					B.Position += B.InverseMass * Weights.y * Correction;
+					C.Position += C.InverseMass * Weights.z * Correction;
+				}
+			}
+			Item.Profile.CollisionNanoseconds += Nanoseconds(ProfileClock::now() - Start);
+		}
+
 		void ApplyPointImpulse(SoftBodyRecord &Record, const SoftBodyPointImpulse &PointImpulse) {
 			std::array<std::size_t, 4> Closest{};
 			std::array<float, 4> Distances;
@@ -1026,7 +1104,9 @@ namespace gargantuan {
 				ContactNormalLambdas.resize(Record.Nodes.size() * Batch.Colliders.size(), 0.0f);
 			LogStage(-1, "BeforeSolve");
 			for (int Iteration = 0; Iteration < Iterations; ++Iteration) {
-				if (ContactOrder != ExperimentalContactOrder::Existing) {
+				if (ContactOrder == ExperimentalContactOrder::ContactThenStructure ||
+					ContactOrder == ExperimentalContactOrder::ContactStructureContact ||
+					ContactOrder == ExperimentalContactOrder::CoupledNormal) {
 					Collide(Item, Batch,
 						ContactOrder == ExperimentalContactOrder::ContactThenStructure &&
 						Iteration + 1 == Iterations,
@@ -1042,6 +1122,8 @@ namespace gargantuan {
 				if (ContactOrder != ExperimentalContactOrder::ContactThenStructure) {
 					Collide(Item, Batch, Iteration + 1 == Iterations,
 						ContactOrder == ExperimentalContactOrder::CoupledNormal ? &ContactNormalLambdas : nullptr);
+					if (ContactOrder == ExperimentalContactOrder::TriangleSurface)
+						CollideFaces(Item, Batch);
 					LogStage(Iteration, "AfterPostContact");
 				}
 				ApplyAttachments(Record);
