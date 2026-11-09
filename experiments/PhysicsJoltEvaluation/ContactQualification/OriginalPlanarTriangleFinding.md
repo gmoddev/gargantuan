@@ -50,3 +50,25 @@ The full per-frame machine-readable result is retained at
 `2dda2765e26c3af9785ee4dabdf76326c09f34b80d394008de8ffe7ef22177bf`).
 The sealed diagnosis root was read only; all new evidence is in the new
 correction artifact root.
+
+## Follow-up solver screen, same 40-frame geometry
+
+The same independent scan ran on the five 128² `Screen-20261109T101317`
+traces. The baseline A1 trace is byte-identical to the sealed original. All
+five stay exactly planar. The C alternatives prevent in-plane face inversion
+over these 40 frames, but they still exceed the 10% axial gate:
+
+| Variant | First axial failure frame | Peak axial strain | First inverted face | Minimum signed face area ratio |
+| --- | ---: | ---: | ---: | ---: |
+| Jolt A1 | 6 | 68.03% | 32 | -1.25969 |
+| Jolt C1 | 11 | 38.04% | none | 0.65290 |
+| Jolt C4 | 11 | 38.32% | none | 0.68302 |
+| Jolt E1 | 6 | 68.03% | 32 | -1.25980 |
+| XPBD A1 | 11 | 42.66% | none | 0.65746 |
+
+Each C and XPBD frame has a simple outer boundary and positive oriented
+faces, so the same planar nonoverlap argument applies throughout. This is a
+40-frame geometry observation, not acceptance of C1/C4: penetration, work,
+impulse consistency, settling, and the authored strain gate remain separate.
+The per-frame screen scans are adjacent `.planar.json` files in the new
+`Screen-20261109T101317` artifact directory.
