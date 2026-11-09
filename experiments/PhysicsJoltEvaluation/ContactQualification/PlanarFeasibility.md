@@ -48,7 +48,7 @@ clearance bound. It reports maximum numerical half-plane violation
 `4.44×10⁻¹⁶ m`, minimum signed area ratio `0.9999999999999895`, zero pin
 drift, and zero minimum clearance slack at the final tangent. The exact
 certificate is retained at
-`C:/Users/aiden/.codex/artifacts/jolt-contact-diagnosis-20261109/PlanarFeasibilityCertificate.json`.
+`C:/Users/aiden/.codex/artifacts/jolt-cloth-contact-correction-20261109/PlanarFeasibilityCertificate.json`.
 
 This disproves geometric incompatibility under **the original axial-edge
 10% strain gate** combined with pin, nonpenetration, and planar noninversion.
