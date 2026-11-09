@@ -1,16 +1,5 @@
 name: Experimental shared Jolt Engine provider
 on:
-  push:
-    branches: [experiment/jolt-optimized-foundation-20261108]
-    paths:
-      # This job builds the provider fixture. Benchmark-only sources and prose
-      # have their independent bounded worker verification and do not change it.
-      - 'experiments/PhysicsJoltEvaluation/Provider/ProviderQualification.cpp'
-      - 'experiments/PhysicsJoltEvaluation/Provider/UnifiedJoltProvider.hpp'
-      - 'experiments/PhysicsJoltEvaluation/Provider/RunQualification.py'
-      - 'experiments/PhysicsJoltEvaluation/RigidJoltBackend.cpp'
-      - 'experiments/PhysicsJoltEvaluation/CMakeLists.txt'
-      - '.github/workflows/physics-jolt-provider.yml'
   workflow_dispatch:
     inputs:
       SolverProfile:
@@ -18,6 +7,15 @@ on:
         type: choice
         options: [baseline, convergence, sleep-clock]
         default: baseline
+      JoltCommit:
+        description: Optional exact 40-character GantriaEngine/JoltPhysics final candidate; omit for the historical provider profile
+        type: string
+        required: false
+      GroupBatch:
+        description: Large-cloth grouping batch when JoltCommit is supplied
+        type: choice
+        options: ['256', '512', '1024']
+        default: '256'
 permissions:
   contents: read
 jobs:
@@ -27,7 +25,7 @@ jobs:
       matrix:
         os: [windows-2025-vs2026, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
       GANTRIA_ATTACHMENT_QUALIFICATION: '1'
@@ -44,7 +42,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: GantriaEngine/JoltPhysics
-          ref: ${{ inputs.SolverProfile == 'sleep-clock' && 'd8c46588b23700d24ebdaeada0ff460d34b1f830' || inputs.SolverProfile == 'convergence' && 'e167ba589787fb76f5d9718ae348d4ac1c3b19ee' || 'cd095d408a1cd231ad43fa8725d06a818fd63b13' }}
+          ref: ${{ inputs.JoltCommit || inputs.SolverProfile == 'sleep-clock' && 'd8c46588b23700d24ebdaeada0ff460d34b1f830' || inputs.SolverProfile == 'convergence' && 'e167ba589787fb76f5d9718ae348d4ac1c3b19ee' || 'cd095d408a1cd231ad43fa8725d06a818fd63b13' }}
           path: .provider-jolt
           persist-credentials: false
       - name: Enable MSVC
@@ -63,7 +61,16 @@ jobs:
         with:
           version: 1.2.0
           cache: true
-      - name: Build and qualify Engine-integrated provider
+      - name: Build and qualify historical Engine-integrated provider
+        if: inputs.JoltCommit == ''
+        run: python experiments/PhysicsJoltEvaluation/Provider/RunQualification.py
+      - name: Build and qualify final Engine provider, cache and cadence
+        if: inputs.JoltCommit != ''
+        env:
+          GANTRIA_FINAL_JOLT_COMMIT: ${{ inputs.JoltCommit }}
+          GANTRIA_PROVIDER_CONVERGENCE: '1'
+          GANTRIA_PROVIDER_SLEEP_FIX: '1'
+          GANTRIA_PROVIDER_GROUP_BATCH: ${{ inputs.GroupBatch }}
         run: python experiments/PhysicsJoltEvaluation/Provider/RunQualification.py
       - name: Retain successes and failures
         if: always()
