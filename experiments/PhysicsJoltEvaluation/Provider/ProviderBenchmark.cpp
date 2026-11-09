@@ -51,6 +51,7 @@ namespace {
         std::size_t DiagonalCount = 0;
     };
     Scene GetScene(const std::string &Name) {
+        if (Name == "cloth1k") return {Name, false, 32, 1};
         if (Name == "cloth4k") return {Name, false, 64, 1};
         if (Name == "cloth16k") return {Name, false, 128, 1};
         if (Name == "cloth4x4k") return {Name, false, 64, 4};

@@ -4,6 +4,7 @@ option(PHYSICS_EVALUATION_GANTRIA_NUMERICS "Compile explicit maintained Jolt API
 option(PHYSICS_EVALUATION_GANTRIA_ATTACHMENTS "Compile isolated reciprocal attachment helper integration" OFF)
 option(PHYSICS_EVALUATION_GANTRIA_CONVERGENCE "Compile candidate 80-integration retained-lambda provider" OFF)
 option(PHYSICS_EVALUATION_GANTRIA_SLEEP_FIX "Compile opt-in elapsed-time sleep clock integration" OFF)
+option(PHYSICS_EVALUATION_NATIVE_PROFILE "Instrument native Jolt scopes for diagnostic runs only" OFF)
 if(PHYSICS_EVALUATION_GANTRIA_ATTACHMENTS AND NOT PHYSICS_EVALUATION_GANTRIA_NUMERICS)
     message(FATAL_ERROR "[Physics:Evaluation] Attachment qualification requires maintained numerics")
 endif()
@@ -60,6 +61,12 @@ foreach(PHYSICS_EVALUATION_FEATURE TARGET_UNIT_TESTS TARGET_HELLO_WORLD TARGET_P
     set(${PHYSICS_EVALUATION_FEATURE} OFF CACHE BOOL "" FORCE)
 endforeach()
 set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)
+if(PHYSICS_EVALUATION_NATIVE_PROFILE)
+    set(PROFILER_IN_DEBUG_AND_RELEASE ON CACHE BOOL "" FORCE)
+    set(JPH_USE_EXTERNAL_PROFILE ON CACHE BOOL "" FORCE)
+else()
+    set(JPH_USE_EXTERNAL_PROFILE OFF CACHE BOOL "" FORCE)
+endif()
 if(CMAKE_MSVC_RUNTIME_LIBRARY AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL")
     set(USE_STATIC_MSVC_RUNTIME_LIBRARY ON CACHE BOOL "" FORCE)
 else()
@@ -71,6 +78,9 @@ function(PhysicsEvaluationTarget Target)
     add_executable(${Target} ${ARGN} ExperimentSupport.cpp)
     target_link_libraries(${Target} PRIVATE gargantuan_core Jolt nlohmann_json)
     target_compile_features(${Target} PRIVATE cxx_std_23)
+    if(PHYSICS_EVALUATION_NATIVE_PROFILE)
+        target_sources(${Target} PRIVATE Optimization/ExternalProfile.cpp)
+    endif()
     if(PHYSICS_EVALUATION_GANTRIA_NUMERICS)
         target_compile_definitions(${Target} PRIVATE PHYSICS_GANTRIA_JOLT=1)
     endif()
@@ -114,3 +124,11 @@ PhysicsEvaluationTarget(PhysicsJoltProviderBenchmarkAllocations
     Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
 PhysicsEvaluationTarget(PhysicsJoltEngineBenchmark
     Provider/EngineBenchmark.cpp RigidJoltBackend.cpp)
+
+# Diagnostic targets keep scope/allocation instrumentation outside timing rankings.
+PhysicsEvaluationTarget(PhysicsJoltAdmissionBenchmark
+    Provider/AdmissionBenchmark.cpp RigidJoltBackend.cpp)
+target_compile_definitions(PhysicsJoltAdmissionBenchmark PRIVATE
+    PHYSICS_EVALUATION_ADMISSION_PROFILE=1 PHYSICS_EVALUATION_TRACK_ALLOCATIONS=1)
+PhysicsEvaluationTarget(PhysicsJoltProviderProfile
+    Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp FinalOptimization/ProfileExit.cpp)
