@@ -2,6 +2,7 @@
 #include "gargantuan/render/SDLRenderer.hpp"
 
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -147,6 +148,39 @@ namespace {
 		const auto Blue = Composition.RgbPixels[Center + 2];
 		if (Red < 95 || Red > 110 || Blue < 45 || Blue > 58)
 			throw std::runtime_error("[Renderer:Material] Blended surfaces did not composite back to front");
+
+		const auto ShadowProbe = [&](RenderPublicationId Id, bool AddCaster, std::uint8_t Alpha) {
+			RenderMaterialState Receiver;
+			Receiver.DoubleSided = true;
+			auto Scene = MaterialScene(Id, Receiver);
+			auto &Light = Scene->Frame.Environment;
+			Light.SunDirection = glm::normalize(glm::vec3(0.5f, 0.0f, 1.0f));
+			Light.SunIntensity = 1.0f;
+			Light.AmbientColor = glm::vec3(0.0f);
+			if (AddCaster) {
+				auto Caster = Scene->Creates.front();
+				Caster.Item.Object = {91, 1};
+				Caster.Item.CastShadow = true;
+				Caster.Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(0.5f, 0, 1)) *
+					glm::scale(glm::mat4(1), glm::vec3(0.18f));
+				Caster.Item.InverseModelMatrix = glm::inverse(Caster.Item.ModelMatrix);
+				Caster.Material.BaseColorTexture = Texture;
+				Caster.Material.OpacityMode = RenderOpacityMode::Masked;
+				Scene->Creates.push_back(Caster);
+				Scene->TextureCreates.push_back({
+					Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm,
+					std::make_shared<const std::vector<std::uint8_t>>(
+						std::initializer_list<std::uint8_t>{255, 255, 255, Alpha}),
+				});
+			}
+			return Renderer.Capture(Scene).RgbPixels[Center];
+		};
+		const auto Unshadowed = ShadowProbe(16, false, 0);
+		const auto SolidShadow = ShadowProbe(17, true, 255);
+		const auto CutoutShadow = ShadowProbe(18, true, 0);
+		if (Unshadowed < 150 || int(Unshadowed) - int(SolidShadow) < 80 ||
+			std::abs(int(Unshadowed) - int(CutoutShadow)) > 2)
+			throw std::runtime_error("[Renderer:Shadow] A masked shadow did not follow the sampled alpha");
 	}
 
 	void CheckWorldSubmission() {
@@ -220,7 +254,7 @@ int main() {
 
 		CheckMaterials(Renderer);
 		Renderer.Resize(32, 48);
-		Frame = Renderer.Capture(MakePublication(32, 48, 16));
+		Frame = Renderer.Capture(MakePublication(32, 48, 19));
 		assert(Frame.Width == 32 && Frame.Height == 48);
 		assert(Frame.RgbPixels.size() == static_cast<std::size_t>(32 * 48 * 3));
 	}

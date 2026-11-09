@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <format>
 #include <memory>
 #include <string>
@@ -155,19 +154,16 @@ namespace gargantuan {
 			if (DoubleSidedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, DoubleSidedPipeline);
 			if (BlendedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, BlendedPipeline);
 			if (BlendedDoubleSidedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, BlendedDoubleSidedPipeline);
-			if (WhiteTexture) SDL_ReleaseGPUTexture(Gpu, WhiteTexture);
-			if (WhiteTransferBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, WhiteTransferBuffer);
 			if (MaterialSampler) SDL_ReleaseGPUSampler(Gpu, MaterialSampler);
 			DoubleSidedPipeline = nullptr;
 			BlendedPipeline = nullptr;
 			BlendedDoubleSidedPipeline = nullptr;
-			WhiteTexture = nullptr;
-			WhiteTransferBuffer = nullptr;
 			MaterialSampler = nullptr;
 			SDLRenderPass::Destroy(Gpu);
 		}
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
+			(void)gpu;
 			SDL_GPUColorTargetInfo colorTarget = {
 				.texture = context.SwapchainTexture,
 				.load_op = SDL_GPU_LOADOP_LOAD,
@@ -188,11 +184,11 @@ namespace gargantuan {
 				.sampler = context.ShadowSampler,
 			};
 
-			EnsureWhiteTexture(gpu, context.Metrics);
+			auto *White = context.TextureResources->GetWhiteTexture();
 			auto *Pass = SDL_BeginGPURenderPass(context.Commands, &colorTarget, 1, &depthTarget);
 			if (!Pass) throw std::runtime_error("[Renderer:Material] Could not begin the world render pass");
 			try {
-				DrawWorld(Pass, context, shadowBinding);
+				DrawWorld(Pass, context, shadowBinding, White);
 			} catch (...) {
 				TransparentDraws.clear();
 				SDL_EndGPURenderPass(Pass);
@@ -202,7 +198,8 @@ namespace gargantuan {
 		}
 
 	  private:
-		void DrawWorld(SDL_GPURenderPass *Pass, SDLFrameContext &Context, SDL_GPUTextureSamplerBinding ShadowBinding) {
+		void DrawWorld(SDL_GPURenderPass *Pass, SDLFrameContext &Context, SDL_GPUTextureSamplerBinding ShadowBinding,
+			SDL_GPUTexture *White) {
 			const auto &Frame = Context.Projection.GetFrame();
 			const auto &Environment = Frame.Environment;
 			const WorldUniforms Uniforms{
@@ -227,8 +224,7 @@ namespace gargantuan {
 			TransparentDraws.clear();
 
 			auto ResolveTexture = [&](const std::optional<RenderTextureIdentity> &Identity) {
-				if (!Identity) return WhiteTexture;
-				return Context.TextureResources ? Context.TextureResources->Find(*Identity) : nullptr;
+				return Identity ? Context.TextureResources->Find(*Identity) : White;
 			};
 			auto DrawPrimitive = [&](const WorldDraw &Draw, std::uint32_t FirstIndex, std::uint32_t IndexCount,
 				const RenderMaterialState &Material) {
@@ -350,53 +346,10 @@ namespace gargantuan {
 			TransparentDraws.clear();
 		}
 
-		void EnsureWhiteTexture(SDL_GPUDevice *Gpu, SDLRendererMetrics *Metrics) {
-			if (WhiteTexture) return;
-			SDL_GPUTextureCreateInfo TextureInfo{
-				.type = SDL_GPU_TEXTURETYPE_2D,
-				.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-				.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER,
-				.width = 1,
-				.height = 1,
-				.layer_count_or_depth = 1,
-				.num_levels = 1,
-			};
-			WhiteTexture = SDL_CreateGPUTexture(Gpu, &TextureInfo);
-			SDL_GPUTransferBufferCreateInfo TransferInfo{.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, .size = 4};
-			WhiteTransferBuffer = SDL_CreateGPUTransferBuffer(Gpu, &TransferInfo);
-			if (!WhiteTexture || !WhiteTransferBuffer)
-				throw std::runtime_error(std::format("Failed to create the material white texture: {}", SDL_GetError()));
-			auto *Mapped = static_cast<std::uint8_t *>(SDL_MapGPUTransferBuffer(Gpu, WhiteTransferBuffer, false));
-			if (!Mapped) throw std::runtime_error(std::format("Failed to map the material white texture: {}", SDL_GetError()));
-			std::memset(Mapped, 0xff, 4);
-			SDL_UnmapGPUTransferBuffer(Gpu, WhiteTransferBuffer);
-			auto *Commands = SDL_AcquireGPUCommandBuffer(Gpu);
-			if (!Commands) throw std::runtime_error(std::format("Failed to acquire material texture commands: {}", SDL_GetError()));
-			auto *CopyPass = SDL_BeginGPUCopyPass(Commands);
-			if (!CopyPass) {
-				SDL_CancelGPUCommandBuffer(Commands);
-				throw std::runtime_error(std::format("Failed to begin material texture upload: {}", SDL_GetError()));
-			}
-			SDL_GPUTextureTransferInfo Source{.transfer_buffer = WhiteTransferBuffer, .pixels_per_row = 1, .rows_per_layer = 1};
-			SDL_GPUTextureRegion Destination{.texture = WhiteTexture, .w = 1, .h = 1, .d = 1};
-			SDL_UploadToGPUTexture(CopyPass, &Source, &Destination, false);
-			SDL_EndGPUCopyPass(CopyPass);
-			if (!SDL_SubmitGPUCommandBuffer(Commands))
-				throw std::runtime_error(std::format("Failed to upload the material white texture: {}", SDL_GetError()));
-			if (Metrics) {
-				++Metrics->TextureCreations;
-				++Metrics->TransferBufferCreations;
-				++Metrics->UploadOperations;
-				Metrics->UploadedBytes += 4;
-			}
-		}
-
 		SDL_GPUGraphicsPipeline *DoubleSidedPipeline = nullptr;
 		SDL_GPUGraphicsPipeline *BlendedPipeline = nullptr;
 		SDL_GPUGraphicsPipeline *BlendedDoubleSidedPipeline = nullptr;
 		std::vector<WorldDraw> TransparentDraws;
-		SDL_GPUTexture *WhiteTexture = nullptr;
-		SDL_GPUTransferBuffer *WhiteTransferBuffer = nullptr;
 		SDL_GPUSampler *MaterialSampler = nullptr;
 		bool EncodeSrgbOutput = true;
 	};

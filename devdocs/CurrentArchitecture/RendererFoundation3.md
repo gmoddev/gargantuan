@@ -32,4 +32,6 @@ The SDL camera pass uses the same clip-space matrices as the shader. It tests co
 
 Opaque and masked draws write depth. Blended draws test depth and composite back to front using object center depth, with stable ObjectId ties. Transparent scratch storage is bounded by the projected object count. Intersecting transparent surfaces and scene-wide linear-light compositing remain separate work.
 
-The existing viewport smoke executable checks linear-light color filtering and tangent-space normal response through an offscreen frame capture. Publication and asset checks exercise the same neutral material values. Software Vulkan validates rendering behavior and supplies functional comparison evidence. Hardware rankings require the same physical GPU and matched workloads.
+Shadow submission honors each primitive's sidedness and evaluates the same alpha factor, base color image and cutoff used by the camera pass. Casters without a mask share a device-local white fallback with the camera pass through the existing texture cache. Blended casters retain solid shadows when explicitly enabled.
+
+The existing viewport smoke executable checks linear-light color filtering, tangent-space normal response, packed metallic data, blend order, camera culling and directional cutout shadows through offscreen rendering. Publication and asset checks exercise the same neutral material values. Software Vulkan validates rendering behavior and supplies functional comparison evidence. Hardware rankings require the same physical GPU and matched workloads.

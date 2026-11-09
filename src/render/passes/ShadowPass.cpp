@@ -6,6 +6,7 @@
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
+#include "render/sdl/SDLTextureCache.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
@@ -14,6 +15,7 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <memory>
+#include <stdexcept>
 
 namespace gargantuan {
 
@@ -28,19 +30,48 @@ namespace gargantuan {
 
 		ShadowPass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat, SDLRendererMetrics *Metrics) {
 			(void)swapchainFormat;
-			Shader.VertexFilepath = GetSDLShaderPath("shadow.vert");
-			Shader.VertexUniformBufferCount = 1;
-			Shader.VertexStorageBufferCount = 1;
-			Shader.FragmentFilepath = GetSDLShaderPath("shadow.frag");
-			Shader.Init(gpu, Metrics);
-			Pipeline = SDLPipelineBuilder()
-						   .SetVertexShader(Shader.VertexShader)
-						   .SetFragmentShader(Shader.FragmentShader)
-						   .SetColorEnabled(false)
-						   .SetDepthEnabled(true)
-						   .SetDepthFormat(SDL_GPU_TEXTUREFORMAT_D32_FLOAT)
-						   .Build(gpu, Metrics);
-		};
+			try {
+				Shader.VertexFilepath = GetSDLShaderPath("shadow.vert");
+				Shader.VertexStorageBufferCount = 1;
+				Shader.FragmentFilepath = GetSDLShaderPath("shadow.frag");
+				Shader.FragmentUniformBufferCount = 1;
+				Shader.FragmentSamplerCount = 1;
+				Shader.Init(gpu, Metrics);
+				auto Builder = SDLPipelineBuilder()
+					.SetVertexShader(Shader.VertexShader)
+					.SetFragmentShader(Shader.FragmentShader)
+					.SetColorEnabled(false)
+					.SetDepthEnabled(true)
+					.SetDepthFormat(SDL_GPU_TEXTUREFORMAT_D32_FLOAT);
+				Pipeline = Builder.Build(gpu, Metrics);
+				auto Info = Builder.BuildInfo();
+				Info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+				DoubleSided = SDL_CreateGPUGraphicsPipeline(gpu, &Info);
+				if (!DoubleSided) throw std::runtime_error("[Renderer:Shadow] Could not create the double-sided pipeline");
+				if (Metrics) ++Metrics->PipelineCreations;
+				const SDL_GPUSamplerCreateInfo Sampler{
+					.min_filter = SDL_GPU_FILTER_LINEAR,
+					.mag_filter = SDL_GPU_FILTER_LINEAR,
+					.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
+					.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
+					.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
+					.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
+				};
+				MaterialSampler = SDL_CreateGPUSampler(gpu, &Sampler);
+				if (!MaterialSampler) throw std::runtime_error("[Renderer:Shadow] Could not create the shadow material sampler");
+			} catch (...) {
+				Destroy(gpu);
+				throw;
+			}
+		}
+
+		void Destroy(SDL_GPUDevice *Gpu) override {
+			if (DoubleSided) SDL_ReleaseGPUGraphicsPipeline(Gpu, DoubleSided);
+			if (MaterialSampler) SDL_ReleaseGPUSampler(Gpu, MaterialSampler);
+			DoubleSided = nullptr;
+			MaterialSampler = nullptr;
+			SDLRenderPass::Destroy(Gpu);
+		}
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
 			(void)gpu;
@@ -64,11 +95,27 @@ namespace gargantuan {
 				.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
 			};
 
+			auto *White = Environment.SunIntensity > 0.0f ? context.TextureResources->GetWhiteTexture() : nullptr;
 			SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(context.Commands, nullptr, 0, &depthTarget);
+			if (!pass) throw std::runtime_error("[Renderer:Shadow] Could not begin the shadow render pass");
 			if (Environment.SunIntensity <= 0.0f) return pass;
-			SDL_BindGPUGraphicsPipeline(pass, Pipeline);
-			if (context.Metrics) ++context.Metrics->PipelineSwitches;
+			try {
+				DrawCasters(pass, context, shadowMatrix, White);
+			} catch (...) {
+				SDL_EndGPURenderPass(pass);
+				throw;
+			}
+			return pass;
+		}
 
+	  private:
+		void DrawCasters(SDL_GPURenderPass *Pass, SDLFrameContext &context, const glm::mat4 &ShadowMatrix,
+			SDL_GPUTexture *White) {
+			SDL_GPUGraphicsPipeline *BoundPipeline = nullptr;
+			const SDLGpuMesh *BoundMesh = nullptr;
+			SDL_GPUBuffer *BoundPalette = nullptr;
+			SDL_GPUTexture *BoundTexture = nullptr;
+			glm::vec4 BoundAlpha(-1.0f);
 			for (const auto &[Object, Projected] : context.Projection.GetObjects()) {
 				(void)Object;
 				if (!Projected.Visible) continue;
@@ -90,26 +137,63 @@ namespace gargantuan {
 					continue;
 				}
 
-				Uniforms uniforms{.ShadowMatrix = shadowMatrix, .PartMatrix = item.ModelMatrix};
+				Uniforms uniforms{.ShadowMatrix = ShadowMatrix, .PartMatrix = item.ModelMatrix};
 				SDL_PushGPUVertexUniformData(context.Commands, 0, &uniforms, sizeof(Uniforms));
 
-				SDL_GPUBufferBinding vertexBinding{.buffer = mesh->VertexBuffer, .offset = 0};
-				SDL_BindGPUVertexBuffers(pass, 0, &vertexBinding, 1);
-
-				SDL_GPUBufferBinding indexBinding{.buffer = mesh->IndexBuffer, .offset = 0};
-				SDL_BindGPUIndexBuffer(pass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
 				const auto Palette = context.SkinPalettes.Find(
 					item.Object, context.Projection.GetAnimationPose(item.Object));
 				auto *PaletteBuffer = Palette.Buffer;
-				SDL_BindGPUVertexStorageBuffers(pass, 0, &PaletteBuffer, 1);
 				context.ShadowPoseRevisions.insert_or_assign(item.Object, Palette.PoseRevision);
 
-				SDL_DrawGPUIndexedPrimitives(pass, mesh->IndexCount, 1, 0, 0, 0);
-				if (context.Metrics) ++context.Metrics->DrawCalls;
+				auto DrawPrimitive = [&](std::uint32_t First, std::uint32_t Count, const RenderMaterialState &Material) {
+					const bool AlphaMask = Material.OpacityMode == RenderOpacityMode::Masked;
+					if (AlphaMask && Material.BaseColorFactor.a < Material.AlphaCutoff) return;
+					const bool TexturedMask = AlphaMask && Material.BaseColorTexture.has_value();
+					auto *Selected = Material.DoubleSided ? DoubleSided : Pipeline;
+					if (Selected != BoundPipeline) {
+						SDL_BindGPUGraphicsPipeline(Pass, Selected);
+						BoundPipeline = Selected;
+						BoundMesh = nullptr;
+						BoundPalette = nullptr;
+						BoundTexture = nullptr;
+						if (context.Metrics) ++context.Metrics->PipelineSwitches;
+					}
+					if (mesh != BoundMesh) {
+						const SDL_GPUBufferBinding VertexBinding{.buffer = mesh->VertexBuffer, .offset = 0};
+						const SDL_GPUBufferBinding IndexBinding{.buffer = mesh->IndexBuffer, .offset = 0};
+						SDL_BindGPUVertexBuffers(Pass, 0, &VertexBinding, 1);
+						SDL_BindGPUIndexBuffer(Pass, &IndexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+						BoundMesh = mesh;
+					}
+					if (PaletteBuffer != BoundPalette) {
+						SDL_BindGPUVertexStorageBuffers(Pass, 0, &PaletteBuffer, 1);
+						BoundPalette = PaletteBuffer;
+					}
+					auto *Texture = TexturedMask ? context.TextureResources->Find(*Material.BaseColorTexture) : White;
+					if (!Texture) throw std::logic_error("[Renderer:Shadow] A mask image has no SDL residency");
+					if (Texture != BoundTexture) {
+						const SDL_GPUTextureSamplerBinding Binding{Texture, MaterialSampler};
+						SDL_BindGPUFragmentSamplers(Pass, 0, &Binding, 1);
+						BoundTexture = Texture;
+					}
+					const auto AlphaFactorCutoff = TexturedMask
+						? glm::vec4(Material.BaseColorFactor.a, Material.AlphaCutoff, 1, 0) : glm::vec4(0);
+					if (AlphaFactorCutoff != BoundAlpha) {
+						SDL_PushGPUFragmentUniformData(context.Commands, 0, &AlphaFactorCutoff, sizeof(AlphaFactorCutoff));
+						BoundAlpha = AlphaFactorCutoff;
+					}
+					SDL_DrawGPUIndexedPrimitives(Pass, Count, 1, First, 0, 0);
+					if (context.Metrics) ++context.Metrics->DrawCalls;
+				};
+				if (Projected.Primitives) {
+					for (const auto &Primitive : *Projected.Primitives)
+						DrawPrimitive(Primitive.FirstIndex, Primitive.IndexCount, Primitive.Material);
+				} else DrawPrimitive(0, mesh->IndexCount, Projected.Material);
 			}
+		}
 
-			return pass;
-		};
+		SDL_GPUGraphicsPipeline *DoubleSided = nullptr;
+		SDL_GPUSampler *MaterialSampler = nullptr;
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateShadowPass(
