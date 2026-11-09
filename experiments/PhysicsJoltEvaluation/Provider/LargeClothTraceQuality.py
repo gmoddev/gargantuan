@@ -4,7 +4,28 @@ import math
 import struct
 
 
-def InspectLargeClothTrace(Path, Summary, Workers, GroupBatch):
+def ReadStateFrameHashes(LogText, Summary, PhysicalFrames):
+    Prefix = '[Physics:ProviderBenchmark] state_frame='
+    Hashes = []
+    for Line in LogText.splitlines():
+        if not Line.startswith(Prefix):
+            continue
+        Fields = Line[len(Prefix):].split()
+        if len(Fields) != 2 or not Fields[0].isdecimal() or \
+                Fields[1].split('=', 1)[0] != 'soft_trajectory_hash' or \
+                not Fields[1].split('=', 1)[-1].isdecimal():
+            raise ValueError('Large-cloth state-frame hash line is malformed')
+        Index = int(Fields[0])
+        Hash = int(Fields[1].split('=', 1)[1])
+        if Index != len(Hashes) or Hash > 0xffffffffffffffff:
+            raise ValueError('Large-cloth state-frame hashes are out of order or range')
+        Hashes.append(Hash)
+    if len(Hashes) != PhysicalFrames or Summary.get('soft_trajectory_hash') != str(Hashes[-1]):
+        raise ValueError('Large-cloth state-frame hashes or final summary are incomplete')
+    return Hashes
+
+
+def InspectLargeClothTrace(Path, Summary, LogText, Workers, GroupBatch):
     MeasuredFrames = 30
     WarmupFrames = 10
     PhysicalFrames = WarmupFrames + MeasuredFrames
@@ -24,6 +45,8 @@ def InspectLargeClothTrace(Path, Summary, Workers, GroupBatch):
         'jolt_large_cloth_group_batch': GroupBatch}
     if any(Summary.get(Key) != Value for Key, Value in Expected.items()):
         raise ValueError('Large-cloth summary does not match final source profile')
+    StateHashes = ReadStateFrameHashes(LogText, Summary, PhysicalFrames)
+    ComputedHash = 14695981039346656037
     RestEdge = 8.0 / (Resolution - 1)
     PeakStrain = 0.0
     PeakPinError = 0.0
@@ -35,7 +58,12 @@ def InspectLargeClothTrace(Path, Summary, Workers, GroupBatch):
                 not math.isfinite(Prefix[6]) or abs(Prefix[6] - 1.0 / 60.0) > 1e-7:
             raise ValueError('Large-cloth trace header disagrees with fixture')
         for Frame in range(PhysicalFrames):
-            Positions = list(struct.iter_unpack('<fff', Stream.read(FrameBytes)))
+            Raw = Stream.read(FrameBytes)
+            for (Bits,) in struct.iter_unpack('<I', Raw):
+                ComputedHash = ((ComputedHash ^ Bits) * 1099511628211) & 0xffffffffffffffff
+            if ComputedHash != StateHashes[Frame]:
+                raise ValueError('Large-cloth trace disagrees with state-frame hash')
+            Positions = list(struct.iter_unpack('<fff', Raw))
             if len(Positions) != Resolution * Resolution or \
                     any(not all(math.isfinite(Value) for Value in Position)
                         for Position in Positions):
@@ -57,6 +85,9 @@ def InspectLargeClothTrace(Path, Summary, Workers, GroupBatch):
     return {'Workers': Workers, 'Frames': MeasuredFrames,
         'WarmupFrames': WarmupFrames, 'PhysicalFrames': PhysicalFrames,
         'FinalFrameIndex': PhysicalFrames - 1, 'PeakPinErrorM': PeakPinError,
+        'VerifiedStateFrameHashes': len(StateHashes),
+        'HashLogPass': True,
+        'FinalSoftTrajectoryHash': ComputedHash,
         'PeakEdgeStrain': PeakStrain, 'FinalEdgeStrain': FinalStrain,
         'MaximumPinErrorM': 1e-4, 'MaximumPeakEdgeStrain': 0.05,
         'MaximumFinalEdgeStrain': 0.02,

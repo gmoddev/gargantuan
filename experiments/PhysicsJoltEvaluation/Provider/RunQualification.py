@@ -129,8 +129,9 @@ if FinalCommit is not None:
         Trace = Evidence / (Name + '.trace')
         Run(Name, [BinaryDirectory / ('PhysicsJoltProviderBenchmark' + Suffix),
             'jolt', 'cloth16k', 'none', '30', str(Workers), Name, '10', '1', Trace], 600)
-        Quality = InspectLargeClothTrace(Trace, ReadSummary(Evidence / (Name + '.stdout')),
-                                        Workers, GroupBatch)
+        Log = Evidence / (Name + '.stdout')
+        Quality = InspectLargeClothTrace(Trace, ReadSummary(Log),
+                                        Log.read_text(encoding='utf-8'), Workers, GroupBatch)
         Quality['Source'] = Source
         (Evidence / f'{Name}-Quality.json').write_text(
             json.dumps(Quality, indent=2), encoding='utf-8')
