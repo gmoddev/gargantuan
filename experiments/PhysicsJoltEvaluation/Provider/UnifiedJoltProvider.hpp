@@ -61,6 +61,12 @@ namespace PhysicsEvaluation {
     };
     struct JoltAdmissionProfile {
         std::uint64_t CacheHits = 0;
+        bool GroupStatsAvailable = false;
+        std::uint64_t UpdateGroups = 0;
+        std::uint64_t NonParallelEdges = 0;
+        std::uint64_t NonParallelVolumes = 0;
+        std::uint64_t ParallelEdges = 0;
+        std::uint64_t ParallelVolumes = 0;
         JoltAdmissionPhase Topology;
         JoltAdmissionPhase Precompute;
         JoltAdmissionPhase Optimize;

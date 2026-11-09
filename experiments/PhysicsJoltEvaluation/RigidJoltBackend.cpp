@@ -2183,12 +2183,31 @@ namespace {
                 Shared->mFaces.size() <= 50'000 && Construction.Indices->size() <= 150'000 &&
                 Definition.Attachments.size() <= 256;
         }
+#if defined(PHYSICS_EVALUATION_ADMISSION_PROFILE) && defined(PHYSICS_GANTRIA_GROUPING)
+        static void RecordGroupStats(const SoftConstruction &Construction) {
+            const auto *Shared = Construction.Shared.GetPtr();
+            AdmissionProfile.GroupStatsAvailable = true;
+            AdmissionProfile.UpdateGroups = Shared->GetNumUpdateGroups();
+            AdmissionProfile.NonParallelEdges = Shared->GetNumNonParallelEdgeConstraints();
+            AdmissionProfile.NonParallelVolumes = Shared->GetNumNonParallelVolumeConstraints();
+            AdmissionProfile.ParallelEdges = Shared->mEdgeConstraints.size() -
+                AdmissionProfile.NonParallelEdges;
+            AdmissionProfile.ParallelVolumes = Shared->mVolumeConstraints.size() -
+                AdmissionProfile.NonParallelVolumes;
+        }
+#endif
         std::optional<PreparedConstruction> PrepareConstruction(const SoftBodyDefinition &Definition) {
             if (Cached && SameCachedDefinition(Cached->Definition, Definition)) {
+#if defined(PHYSICS_EVALUATION_ADMISSION_PROFILE) && defined(PHYSICS_GANTRIA_GROUPING)
+                RecordGroupStats(Cached->Construction);
+#endif
                 return PreparedConstruction{Cached->Construction, true, nullptr};
             }
             auto Built = BuildSoft(Definition, Limits);
             if (!Built) return std::nullopt;
+#if defined(PHYSICS_EVALUATION_ADMISSION_PROFILE) && defined(PHYSICS_GANTRIA_GROUPING)
+            RecordGroupStats(*Built);
+#endif
             PreparedConstruction Prepared{std::move(*Built), false, nullptr};
             if (CacheEligible(Definition, Prepared.Construction))
                 Prepared.Candidate = std::make_unique<CachedConstruction>(

@@ -45,7 +45,16 @@ namespace {
     }
 
     nlohmann::json Profile(const PhysicsEvaluation::JoltAdmissionProfile &Value) {
-        return {{"CacheHits", Value.CacheHits}, {"Topology", Phase(Value.Topology)},
+        const auto Known = [&](std::uint64_t Count) -> nlohmann::json {
+            return Value.GroupStatsAvailable ? nlohmann::json(Count) : nlohmann::json(nullptr);
+        };
+        return {{"CacheHits", Value.CacheHits},
+            {"UpdateGroups", Known(Value.UpdateGroups)},
+            {"NonParallelEdges", Known(Value.NonParallelEdges)},
+            {"NonParallelVolumes", Known(Value.NonParallelVolumes)},
+            {"ParallelEdges", Known(Value.ParallelEdges)},
+            {"ParallelVolumes", Known(Value.ParallelVolumes)},
+            {"Topology", Phase(Value.Topology)},
             {"Precompute", Phase(Value.Precompute)},
             {"Optimize", Phase(Value.Optimize)},
             {"NativeCreate", Phase(Value.NativeCreate)},
