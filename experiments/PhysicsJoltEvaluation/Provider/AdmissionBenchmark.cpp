@@ -120,11 +120,13 @@ int main(int ArgumentCount, char **Arguments) {
                 Sample.Admission = PhysicsEvaluation::GetJoltAdmissionProfile();
                 if (!Id.IsValid()) throw std::runtime_error("Body admission failed");
                 const auto ExtractStart = Clock::now();
-                const auto State = Soft->GetBodyState(Id);
-                Sample.ExtractMs = Milliseconds(Clock::now() - ExtractStart);
+                {
+                    const auto State = Soft->GetBodyState(Id);
+                    Sample.ExtractMs = Milliseconds(Clock::now() - ExtractStart);
+                    if (!State || !State->Positions || State->Positions->size() != Resolution * Resolution)
+                        throw std::runtime_error("Initial state mismatch");
+                }
                 Sample.AfterExtract = PhysicsEvaluation::CaptureResources();
-                if (!State || !State->Positions || State->Positions->size() != Resolution * Resolution)
-                    throw std::runtime_error("Initial state mismatch");
                 Ids.push_back(Id);
                 Samples.push_back(Sample);
             }
