@@ -3,6 +3,7 @@
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -84,6 +85,19 @@ namespace PhysicsEvaluation {
     void ResetJoltWorldAdmissionProfile();
     [[nodiscard]] JoltWorldAdmissionProfile GetJoltWorldAdmissionProfile();
 #endif
+    // Last completed unified Step. The fast rigid cadence applies only while
+    // no enabled soft body or live rigid-soft attachment can exchange impulses.
+    struct JoltStepSchedule {
+        std::uint32_t WorldUpdates = 0;
+        std::uint32_t CollisionStepsPerUpdate = 0;
+        std::size_t EnabledSoftBodies = 0;
+    };
+    [[nodiscard]] std::optional<JoltStepSchedule> GetJoltStepSchedule(
+        const gargantuan::IPhysicsBackend &Rigid);
+    // Matched private benchmark control. Production experimental provider
+    // construction leaves the fast schedule enabled.
+    [[nodiscard]] bool SetJoltRigidFastScheduleEnabled(
+        gargantuan::IPhysicsBackend &Rigid, bool Enabled);
 
     // Cumulative vertex contacts reported by Jolt's soft-rigid manifold for
     // this live neutral-ID pair. Enable capture before Step in private fixtures;

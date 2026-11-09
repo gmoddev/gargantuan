@@ -1,5 +1,23 @@
 # Selective coupling scheduling experiment
 
+## Single-world zero-soft cadence
+
+The experimental unified provider has a bounded dynamic fast path within its
+single authoritative Jolt world. At each rigid `Step`, it uses U1/C4 if no
+enabled soft body, sensor, or live rigid-soft attachment can require the
+coupled U2/C8 cadence. An enabled soft admission or reenable switches to
+U2/C8 before its first physical step; successful disable or retirement can
+restore U1/C4 on the next step. Failed soft updates leave membership
+unchanged. All rigid bodies, constraints, contacts, IDs, and moving colliders
+stay in the same native world at every cadence. The sensor guard preserves
+the half-frame neutral begin/end observation of transient sensor contacts.
+The private `SchedulingQualification` checks membership transitions and the
+sensor refusal; `SchedulingBenchmark` compares U1/C4 with a same-binary
+forced-U2/C8 control for a gravity-loaded 128-rigid contact scene. This fast
+path makes no claim that active soft bodies can be partitioned or advanced
+at a lower cadence.
+
+
 `SelectiveCouplingBenchmark.cpp` is a bounded implementation of split world
 cadence using Jolt's existing `PhysicsSystem::Update` and `JobSystem` interfaces.
 It is not a general dynamic island scheduler. The optimized class has an
