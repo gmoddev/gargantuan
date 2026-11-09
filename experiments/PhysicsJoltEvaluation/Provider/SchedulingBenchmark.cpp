@@ -125,8 +125,10 @@ int main(int Count, char **Arguments) {
                 }
         }
         std::ranges::sort(FrameMs);
-        const auto P95 = FrameMs[std::min(FrameMs.size() - 1,
-            std::size_t(std::ceil(0.95 * FrameMs.size())) - 1)];
+        const auto Percentile = [&](double Fraction) {
+            return FrameMs[std::min(FrameMs.size() - 1,
+                std::size_t(std::ceil(Fraction * FrameMs.size())) - 1)];
+        };
         const bool QualityPass = FiniteEveryFrame &&
             NativeContactPairFrames >= std::size_t(std::max(1, Config.Frames / 4)) &&
             MaximumFloorPenetration <= 0.25 && MaximumPairPenetration <= 0.25;
@@ -134,7 +136,10 @@ int main(int Count, char **Arguments) {
             << (Config.Fast ? "fast" : "full") << "\",\"Frames\":" << Config.Frames
             << ",\"Workers\":" << Config.Workers
             << ",\"TotalUpdateMs\":" << TotalUpdateMs
-            << ",\"UpdateP95Ms\":" << P95
+            << ",\"UpdateP50Ms\":" << Percentile(0.50)
+            << ",\"UpdateP95Ms\":" << Percentile(0.95)
+            << ",\"UpdateP99Ms\":" << Percentile(0.99)
+            << ",\"UpdateMaxMs\":" << FrameMs.back()
             << ",\"NativeContactPairFrames\":" << NativeContactPairFrames
             << ",\"NativeContactPairsAcrossFrames\":" << NativeContactPairsAcrossFrames
             << ",\"MaximumFloorPenetration\":" << MaximumFloorPenetration

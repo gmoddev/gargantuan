@@ -31,6 +31,8 @@ lambda sweeps (80 soft integrations per frame); the stock path remains
 U2/C8/I12 (192). This fast
 path makes no claim that active soft bodies can be partitioned or advanced
 at a lower cadence.
+The bounded zero-soft smoke measurements and their eligibility limits are
+recorded in [SingleWorldSchedulingEvidence.md](SingleWorldSchedulingEvidence.md).
 
 
 `SelectiveCouplingBenchmark.cpp` is a bounded implementation of split world
