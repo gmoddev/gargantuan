@@ -45,7 +45,7 @@ namespace {
     }
 
     nlohmann::json Profile(const PhysicsEvaluation::JoltAdmissionProfile &Value) {
-        return {{"Topology", Phase(Value.Topology)},
+        return {{"CacheHits", Value.CacheHits}, {"Topology", Phase(Value.Topology)},
             {"Precompute", Phase(Value.Precompute)},
             {"Optimize", Phase(Value.Optimize)},
             {"NativeCreate", Phase(Value.NativeCreate)},

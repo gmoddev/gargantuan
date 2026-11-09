@@ -60,6 +60,7 @@ namespace PhysicsEvaluation {
         std::uint64_t AllocatedBytes = 0;
     };
     struct JoltAdmissionProfile {
+        std::uint64_t CacheHits = 0;
         JoltAdmissionPhase Topology;
         JoltAdmissionPhase Precompute;
         JoltAdmissionPhase Optimize;

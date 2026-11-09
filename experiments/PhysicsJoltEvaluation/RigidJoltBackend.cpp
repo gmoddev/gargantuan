@@ -52,6 +52,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -1811,18 +1812,19 @@ namespace {
         }
         SoftBodyId CreateBody(const SoftBodyDefinition &Definition) override {
             if (!IsValid() || LiveBodies >= Limits.MaximumBodies) return {};
-            auto Construction = BuildSoft(Definition, Limits);
-            if (!Construction) return {};
-            const auto NewVertices = Construction->Shared->mVertices.size();
-            const auto NewConstraints = Construction->Shared->mEdgeConstraints.size() +
-                Construction->Shared->mVolumeConstraints.size();
+            auto Prepared = PrepareConstruction(Definition);
+            if (!Prepared) return {};
+            auto &Construction = Prepared->Construction;
+            const auto NewVertices = Construction.Shared->mVertices.size();
+            const auto NewConstraints = Construction.Shared->mEdgeConstraints.size() +
+                Construction.Shared->mVolumeConstraints.size();
             if (NewVertices > Limits.MaximumWorldVertices - LiveVertices ||
                 NewConstraints > Limits.MaximumConstraints - LiveConstraints ||
                 NewVertices > Limits.MaximumQueuedResultBytes / sizeof(glm::vec3))
                 return {};
             const auto Layer = SoftLayer(Definition);
             if (Layer == JPH::cObjectLayerInvalid) return {};
-            JPH::SoftBodyCreationSettings Settings(Construction->Shared,
+            JPH::SoftBodyCreationSettings Settings(Construction.Shared,
                 ToRVec(Definition.Position), JPH::Quat::sIdentity(), Layer);
             Settings.mNumIterations = SoftIterationsPerCollisionStep;
 #ifdef PHYSICS_GANTRIA_JOLT
@@ -1862,8 +1864,8 @@ namespace {
             Slot.Live = true;
             Slot.Native = Native;
             Slot.Definition = Definition;
-            Slot.Shared = std::move(Construction->Shared);
-            Slot.Indices = std::move(Construction->Indices);
+            Slot.Shared = std::move(Construction.Shared);
+            Slot.Indices = std::move(Construction.Indices);
             Slot.PendingForce = {};
             Slot.ConstraintCount = NewConstraints;
             Slot.TopologyRevision = std::max<std::uint64_t>(1, Slot.TopologyRevision + 1);
@@ -1873,6 +1875,7 @@ namespace {
             ++LiveBodies;
             LiveVertices += NewVertices;
             LiveConstraints += NewConstraints;
+            if (!Prepared->CacheHit) Cached = std::move(Prepared->Candidate);
             CreatedId = {Index, Slot.Generation};
 #ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
             }
@@ -1913,11 +1916,12 @@ namespace {
                 ++Slot->VertexRevision;
                 return {};
             }
-            auto Replacement = BuildSoft(Definition, Limits);
-            if (!Replacement) return {PhysicsOperationStatus::InvalidDescription, "Invalid Jolt soft definition"};
-            const auto NewVertices = Replacement->Shared->mVertices.size();
-            const auto NewConstraints = Replacement->Shared->mEdgeConstraints.size() +
-                Replacement->Shared->mVolumeConstraints.size();
+            auto Prepared = PrepareConstruction(Definition);
+            if (!Prepared) return {PhysicsOperationStatus::InvalidDescription, "Invalid Jolt soft definition"};
+            auto &Replacement = Prepared->Construction;
+            const auto NewVertices = Replacement.Shared->mVertices.size();
+            const auto NewConstraints = Replacement.Shared->mEdgeConstraints.size() +
+                Replacement.Shared->mVolumeConstraints.size();
             if (NewVertices > Limits.MaximumWorldVertices - (LiveVertices - Slot->Shared->mVertices.size()) ||
                 NewConstraints > Limits.MaximumConstraints - (LiveConstraints - Slot->ConstraintCount) ||
                 NewVertices > Limits.MaximumQueuedResultBytes / sizeof(glm::vec3))
@@ -1925,7 +1929,7 @@ namespace {
             const auto Layer = SoftLayer(Definition);
             if (Layer == JPH::cObjectLayerInvalid)
                 return {PhysicsOperationStatus::ResourceLimit, "Jolt soft layer limit"};
-            JPH::SoftBodyCreationSettings Settings(Replacement->Shared,
+            JPH::SoftBodyCreationSettings Settings(Replacement.Shared,
                 ToRVec(Definition.Position), JPH::Quat::sIdentity(), Layer);
             Settings.mNumIterations = SoftIterationsPerCollisionStep;
 #ifdef PHYSICS_GANTRIA_JOLT
@@ -1954,17 +1958,18 @@ namespace {
             Interface.RemoveBody(Slot->Native);
             Interface.DestroyBody(Slot->Native);
             Owner.SoftContacts.ForgetBody(Slot->Native);
-            LiveVertices = LiveVertices - Slot->Shared->mVertices.size() + Replacement->Shared->mVertices.size();
+            LiveVertices = LiveVertices - Slot->Shared->mVertices.size() + Replacement.Shared->mVertices.size();
             LiveConstraints = LiveConstraints - Slot->ConstraintCount + NewConstraints;
             Slot->Native = Native;
             Slot->Definition = Definition;
-            Slot->Shared = std::move(Replacement->Shared);
-            Slot->Indices = std::move(Replacement->Indices);
+            Slot->Shared = std::move(Replacement.Shared);
+            Slot->Indices = std::move(Replacement.Indices);
             Slot->ConstraintCount = NewConstraints;
             ++Slot->TopologyRevision;
             ++Slot->VertexRevision;
             Slot->ExtractedSequence = Owner.StepSequence;
             Slot->EverSimulated = false;
+            if (!Prepared->CacheHit) Cached = std::move(Prepared->Candidate);
             return {};
         }
         PhysicsOperationResult DestroyBody(SoftBodyId Id) override {
@@ -2122,10 +2127,71 @@ namespace {
             Owner.SetBeforeUnifiedStep({});
             for (std::uint32_t Index = 1; Index < Slots.size(); ++Index)
                 if (Slots[Index].Live) (void)DestroyBody({Index, Slots[Index].Generation});
+            Cached.reset();
             Stopped = true;
         }
         const SoftBodyWorldLimits &GetLimits() const override { return Limits; }
     private:
+        struct CachedConstruction {
+            SoftBodyDefinition Definition;
+            SoftConstruction Construction;
+        };
+        struct PreparedConstruction {
+            SoftConstruction Construction;
+            bool CacheHit = false;
+            std::unique_ptr<CachedConstruction> Candidate;
+        };
+        static bool SameCachedDefinition(const SoftBodyDefinition &A,
+                                         const SoftBodyDefinition &B) {
+            const auto SameFloat = [](float X, float Y) {
+                return std::bit_cast<std::uint32_t>(X) == std::bit_cast<std::uint32_t>(Y);
+            };
+            const auto SameVector = [&](glm::vec3 X, glm::vec3 Y) {
+                return SameFloat(X.x, Y.x) && SameFloat(X.y, Y.y) && SameFloat(X.z, Y.z);
+            };
+            const auto &M = A.Material, &N = B.Material;
+            if (A.Kind != B.Kind || !SameVector(A.Position, B.Position) ||
+                !SameVector(A.Size, B.Size) || A.ResolutionX != B.ResolutionX ||
+                A.ResolutionY != B.ResolutionY || A.ResolutionZ != B.ResolutionZ ||
+                A.Quality != B.Quality || A.CollisionMode != B.CollisionMode ||
+                A.Enabled != B.Enabled || !SameFloat(M.ParticleMass, N.ParticleMass) ||
+                !SameFloat(M.Damping, N.Damping) ||
+                !SameFloat(M.StretchCompliance, N.StretchCompliance) ||
+                !SameFloat(M.BendCompliance, N.BendCompliance) ||
+                !SameFloat(M.ShapeCompliance, N.ShapeCompliance) ||
+                !SameFloat(M.VolumeCompliance, N.VolumeCompliance) ||
+                !SameFloat(M.Friction, N.Friction) ||
+                !SameFloat(M.Thickness, N.Thickness) ||
+                A.Attachments.size() != B.Attachments.size()) return false;
+            for (std::size_t Index = 0; Index < A.Attachments.size(); ++Index)
+                if (A.Attachments[Index].Vertex != B.Attachments[Index].Vertex ||
+                    !SameVector(A.Attachments[Index].Position, B.Attachments[Index].Position))
+                    return false;
+            return true;
+        }
+        static bool CacheEligible(const SoftBodyDefinition &Definition,
+                                  const SoftConstruction &Construction) {
+            const auto *Shared = Construction.Shared.GetPtr();
+            return Shared->mVertices.size() <= 16'384 &&
+                Shared->mEdgeConstraints.size() + Shared->mVolumeConstraints.size() <= 100'000 &&
+                Shared->mFaces.size() <= 50'000 && Construction.Indices->size() <= 150'000 &&
+                Definition.Attachments.size() <= 256;
+        }
+        std::optional<PreparedConstruction> PrepareConstruction(const SoftBodyDefinition &Definition) {
+            if (Cached && SameCachedDefinition(Cached->Definition, Definition)) {
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+                ++AdmissionProfile.CacheHits;
+#endif
+                return PreparedConstruction{Cached->Construction, true, nullptr};
+            }
+            auto Built = BuildSoft(Definition, Limits);
+            if (!Built) return std::nullopt;
+            PreparedConstruction Prepared{std::move(*Built), false, nullptr};
+            if (CacheEligible(Definition, Prepared.Construction))
+                Prepared.Candidate = std::make_unique<CachedConstruction>(
+                    CachedConstruction{Definition, Prepared.Construction});
+            return Prepared;
+        }
         static bool SameExceptAttachments(const SoftBodyDefinition &A, const SoftBodyDefinition &B) {
             const auto SameVector = [](glm::vec3 X, glm::vec3 Y) {
                 return X.x == Y.x && X.y == Y.y && X.z == Y.z;
@@ -2260,6 +2326,9 @@ namespace {
         std::size_t LiveBodies = 0;
         std::size_t LiveVertices = 0;
         std::size_t LiveConstraints = 0;
+        // A single successfully admitted, exact-definition topology survives the
+        // last body until replacement or Shutdown. It never owns native body state.
+        std::unique_ptr<CachedConstruction> Cached;
         bool Stopped = false;
     };
 }
