@@ -78,7 +78,7 @@ jobs:
             commit = $env:GITHUB_SHA
           } | ConvertTo-Json | Set-Content -LiteralPath 'filament-evidence/sdk.json'
 
-      - uses: paradoxum-games/setup-rokit@c6a974916e3a0146019b899cd0342556f773908
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
         with:
           version: 1.2.0
           cache: true
