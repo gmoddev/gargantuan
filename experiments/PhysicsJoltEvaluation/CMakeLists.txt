@@ -157,6 +157,9 @@ PhysicsEvaluationTarget(PhysicsJoltProviderLongRun
     Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
 target_compile_definitions(PhysicsJoltProviderLongRun PRIVATE PHYSICS_EVALUATION_LONG_RUN=1)
 if(PHYSICS_EVALUATION_NATIVE_PROFILE)
+    target_sources(PhysicsJoltProviderLongRun PRIVATE FinalOptimization/ProfileExit.cpp)
+endif()
+if(PHYSICS_EVALUATION_NATIVE_PROFILE)
     PhysicsEvaluationTarget(PhysicsJoltProviderProfile
         Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp FinalOptimization/ProfileExit.cpp)
 endif()
