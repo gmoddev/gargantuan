@@ -75,7 +75,7 @@ def Main():
     Summary = []
     for Variant in Args.variants:
         Backend, Mode = Variant.split(':')
-        assert Backend in ('jolt','xpbd') and Mode in ('A','B','C','D0','E','G','F1G','F4G','F1','F4')
+        assert Backend in ('jolt','xpbd') and Mode in ('A','AG','B','C','D0','E','G','F1G','F4G','F1','F4')
         for Definition in Selected:
             Name = Backend + '-' + Mode + '-' + Definition['CaseId']
             Directory = Args.output / Name
