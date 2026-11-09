@@ -950,6 +950,27 @@ namespace gargantuan {
 		[[nodiscard]] glm::vec3 ClosestTriangleWeights(glm::vec3 Point,
 			glm::vec3 A, glm::vec3 B, glm::vec3 C) {
 			const glm::vec3 AB = B - A, AC = C - A, AP = Point - A;
+			const float AreaSquared = glm::dot(glm::cross(AB, AC), glm::cross(AB, AC));
+			if (AreaSquared <= 1e-12f) {
+				// Severe contact can collapse a face. Use its longest surviving
+				// segment rather than a zero-area barycentric division.
+				const glm::vec3 BC = C - B;
+				const float AB2 = glm::dot(AB, AB), AC2 = glm::dot(AC, AC);
+				const float BC2 = glm::dot(BC, BC);
+				if (AB2 >= AC2 && AB2 >= BC2 && AB2 > 1e-12f) {
+					const float T = std::clamp(glm::dot(AP, AB) / AB2, 0.0f, 1.0f);
+					return {1 - T,T,0};
+				}
+				if (AC2 >= BC2 && AC2 > 1e-12f) {
+					const float T = std::clamp(glm::dot(AP, AC) / AC2, 0.0f, 1.0f);
+					return {1 - T,0,T};
+				}
+				if (BC2 > 1e-12f) {
+					const float T = std::clamp(glm::dot(Point - B, BC) / BC2, 0.0f, 1.0f);
+					return {0,1 - T,T};
+				}
+				return {1,0,0};
+			}
 			const float D1 = glm::dot(AB, AP), D2 = glm::dot(AC, AP);
 			if (D1 <= 0 && D2 <= 0) return {1,0,0};
 			const glm::vec3 BP = Point - B;
@@ -1006,10 +1027,14 @@ namespace gargantuan {
 					glm::vec3 Normal;
 					if (Distance > 1e-7f) Normal = Delta / Distance;
 					else {
-						const glm::vec3 FaceNormal = glm::cross(B.Position - A.Position,
+						glm::vec3 FaceNormal = glm::cross(B.Position - A.Position,
 							C.Position - A.Position);
 						const float FaceLength = glm::length(FaceNormal);
-						Normal = FaceLength > 1e-7f ? FaceNormal / FaceLength : glm::vec3(0,0,1);
+						if (FaceLength <= 1e-7f)
+							FaceNormal = glm::cross(B.RestOffset - A.RestOffset,
+								C.RestOffset - A.RestOffset);
+						const float FallbackLength = glm::length(FaceNormal);
+						Normal = FallbackLength > 1e-7f ? FaceNormal / FallbackLength : glm::vec3(0,0,1);
 					}
 					const float Weight = A.InverseMass * Weights.x * Weights.x +
 						B.InverseMass * Weights.y * Weights.y +
