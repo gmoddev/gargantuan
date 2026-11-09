@@ -63,6 +63,10 @@ does not use a frame-averaged velocity. The contact kinetic delta and
 `ContactEnergyResidualJ` remain signed observations, not an automatically
 dissipative or energy-conserving verdict. Separate integration, damping,
 structural, and pin stage kinetic changes expose their contributions.
+The integration change is split at the actual velocity writes into
+gravity/force, uniform impulse, and point impulse kinetic deltas. Frame 0
+therefore reports the queued authored launch impulse instead of attributing
+that energy to unmeasured contact or actuator work.
 `LedgerResidualJ` checks whether those recorded stage changes sum to the
 measured kinetic change; this bookkeeping identity is not external-work
 closure or a substitute for a physical energy gate. Static pose movement and

@@ -346,6 +346,9 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 if (Sub == 0) FrameContact.KineticStartJ = Projection->KineticStartJ;
                 FrameContact.KineticEndJ = Projection->KineticEndJ;
                 FrameContact.AppliedDynamicsKineticDeltaJ += Projection->AppliedDynamicsKineticDeltaJ;
+                FrameContact.GravityForceKineticDeltaJ += Projection->GravityForceKineticDeltaJ;
+                FrameContact.UniformImpulseKineticDeltaJ += Projection->UniformImpulseKineticDeltaJ;
+                FrameContact.PointImpulseKineticDeltaJ += Projection->PointImpulseKineticDeltaJ;
                 FrameContact.DampingKineticDeltaJ += Projection->DampingKineticDeltaJ;
                 FrameContact.StructuralProjectionKineticDeltaJ +=
                     Projection->StructuralProjectionKineticDeltaJ;
@@ -391,6 +394,9 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 {"KineticStartJ", FrameContact.KineticStartJ},
                 {"KineticEndJ", FrameContact.KineticEndJ},
                 {"AppliedDynamicsKineticDeltaJ", FrameContact.AppliedDynamicsKineticDeltaJ},
+                {"GravityForceKineticDeltaJ", FrameContact.GravityForceKineticDeltaJ},
+                {"UniformImpulseKineticDeltaJ", FrameContact.UniformImpulseKineticDeltaJ},
+                {"PointImpulseKineticDeltaJ", FrameContact.PointImpulseKineticDeltaJ},
                 {"DampingKineticDeltaJ", FrameContact.DampingKineticDeltaJ},
                 {"StructuralProjectionKineticDeltaJ",
                     FrameContact.StructuralProjectionKineticDeltaJ},

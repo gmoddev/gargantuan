@@ -198,12 +198,14 @@ namespace gargantuan {
 			PhysicsEvaluation::XpbdContactProjection ContactProjection;
 		};
 
+		[[nodiscard]] double NodeKineticEnergy(const SoftBodyNode &Node) {
+			if (Node.InverseMass <= 0.0f) return 0.0;
+			const glm::dvec3 Velocity(Node.Velocity);
+			return 0.5 * glm::dot(Velocity, Velocity) / double(Node.InverseMass);
+		}
 		[[nodiscard]] double StoredKineticEnergy(const SoftBodyRecord &Record) {
 			double Energy = 0.0;
-			for (const auto &Node : Record.Nodes) if (Node.InverseMass > 0.0f) {
-				const glm::dvec3 Velocity(Node.Velocity);
-				Energy += 0.5 * glm::dot(Velocity, Velocity) / double(Node.InverseMass);
-			}
+			for (const auto &Node : Record.Nodes) Energy += NodeKineticEnergy(Node);
 			return Energy;
 		}
 		[[nodiscard]] double PositionKineticEnergy(const SoftBodyRecord &Record, float DeltaTime) {
@@ -1212,13 +1214,24 @@ namespace gargantuan {
 			for (auto &Node : Record.Nodes) {
 				Node.PreviousPosition = Node.Position;
 				if (Node.InverseMass == 0.0f || MovableCount == 0) continue;
+				const double BeforeForceJ = RecordAccounting ? NodeKineticEnergy(Node) : 0.0;
 				Node.Velocity += Batch.Gravity * Batch.DeltaTime;
 				Node.Velocity += Item.Force / TotalMass * Batch.DeltaTime;
+				const double BeforeImpulseJ = RecordAccounting ? NodeKineticEnergy(Node) : 0.0;
 				Node.Velocity += Item.Impulse / TotalMass;
+				if (RecordAccounting) {
+					Record.ContactProjection.GravityForceKineticDeltaJ += BeforeImpulseJ - BeforeForceJ;
+					Record.ContactProjection.UniformImpulseKineticDeltaJ +=
+						NodeKineticEnergy(Node) - BeforeImpulseJ;
+				}
 			}
+			const double BeforePointImpulsesJ = RecordAccounting ? StoredKineticEnergy(Record) : 0.0;
 			for (const auto &PointImpulse : Item.PointImpulses)
 				ApplyPointImpulse(Record, PointImpulse);
 			const double BeforeDampingJ = RecordAccounting ? StoredKineticEnergy(Record) : 0.0;
+			if (RecordAccounting)
+				Record.ContactProjection.PointImpulseKineticDeltaJ =
+					BeforeDampingJ - BeforePointImpulsesJ;
 			if (RecordAccounting)
 				Record.ContactProjection.AppliedDynamicsKineticDeltaJ =
 					BeforeDampingJ - Record.ContactProjection.KineticStartJ;

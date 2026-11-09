@@ -19,6 +19,9 @@ namespace PhysicsEvaluation {
         double KineticStartJ = 0.0;
         double KineticEndJ = 0.0;
         double AppliedDynamicsKineticDeltaJ = 0.0;
+        double GravityForceKineticDeltaJ = 0.0;
+        double UniformImpulseKineticDeltaJ = 0.0;
+        double PointImpulseKineticDeltaJ = 0.0;
         double DampingKineticDeltaJ = 0.0;
         double StructuralProjectionKineticDeltaJ = 0.0;
         double PinProjectionKineticDeltaJ = 0.0;
