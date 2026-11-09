@@ -18,7 +18,9 @@ mutation begins, a provider-local uncertainty latch keeps U2/C8 for its
 remaining lifetime. Successful edits clear only their own temporary guard;
 they do not clear an earlier uncertain state. This closes the cadence guard
 under partial failure without claiming to repair the adapter's broader
-mutation atomicity.
+mutation atomicity. The rigid body slot and native-ID map node are prepared
+before native admission or mesh replacement to keep their allocation out of
+the post-admission publication path.
 The private `SchedulingQualification` checks membership transitions and the
 touch refusal; `SchedulingBenchmark` compares U1/C4 with a same-binary
 forced-U2/C8 control for a gravity-loaded 128-rigid contact scene whose

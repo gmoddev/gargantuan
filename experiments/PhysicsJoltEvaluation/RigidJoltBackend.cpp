@@ -679,13 +679,18 @@ namespace {
             if (!Shape) return {};
             if (!ValidMassProperties(Description, Shape)) return {};
             if (!CheckMeshAdmission(Description, Shape, nullptr).Succeeded()) return {};
+            std::uint32_t Index = 1;
+            for (; Index < BodySlots.size() && (BodySlots[Index].Live || BodySlots[Index].Retired); ++Index) {}
+            if (Index == BodySlots.size()) BodySlots.emplace_back();
+            PhysicsBodyId Id{Index, BodySlots[Index].Generation};
+            NativeMap.reserve(NativeMap.size() + 1);
+            std::unordered_map<std::uint32_t, PhysicsBodyId> StagedMap;
+            StagedMap.emplace(0, Id);
+            auto NativeNode = StagedMap.extract(0);
             const bool PriorTouchGuardUncertain = TouchGuardUncertain;
             if (Description.CanTouch) TouchGuardUncertain = true;
             const auto Native = AddNativeBody(Description, Layer, Shape);
             if (Native.IsInvalid()) return {};
-            std::uint32_t Index = 1;
-            for (; Index < BodySlots.size() && (BodySlots[Index].Live || BodySlots[Index].Retired); ++Index) {}
-            if (Index == BodySlots.size()) BodySlots.emplace_back();
             auto &Slot = BodySlots[Index];
             Slot.Live = true;
             Slot.Native = Native;
@@ -695,8 +700,8 @@ namespace {
             Slot.PendingTorque = {};
             if (Description.CanTouch) ++TouchBodies;
             AdmitMesh(Slot);
-            PhysicsBodyId Id{Index, Slot.Generation};
-            NativeMap.emplace(Native.GetIndexAndSequenceNumber(), Id);
+            NativeNode.key() = Native.GetIndexAndSequenceNumber();
+            NativeMap.insert(std::move(NativeNode));
             if (Description.Anchored && (Description.CanCollide || Description.CanTouch))
                 WakeBodiesInNewBounds(Native);
             if (Description.CanTouch) TouchGuardUncertain = PriorTouchGuardUncertain;
@@ -749,12 +754,17 @@ namespace {
                     if (Constraint.Live && (Constraint.Description.BodyA == Id ||
                         Constraint.Description.BodyB == Id))
                         return Unsupported("Jolt mesh transition with attached constraint is unsupported");
+                NativeMap.reserve(NativeMap.size() + 1);
+                std::unordered_map<std::uint32_t, PhysicsBodyId> StagedMap;
+                StagedMap.emplace(0, Id);
+                auto NativeNode = StagedMap.extract(0);
                 if (IntroducesTouch) TouchGuardUncertain = true;
                 const auto Replacement = AddNativeBody(Description, Layer, NewShape);
                 if (Replacement.IsInvalid())
                     return {PhysicsOperationStatus::BackendFailure, "Jolt mesh transition body admission failed"};
                 WakeContactNeighbors(Slot->Native);
-                NativeMap.emplace(Replacement.GetIndexAndSequenceNumber(), Id);
+                NativeNode.key() = Replacement.GetIndexAndSequenceNumber();
+                NativeMap.insert(std::move(NativeNode));
                 const auto OldNative = Slot->Native.GetIndexAndSequenceNumber();
                 Interface.RemoveBody(Slot->Native);
                 Interface.DestroyBody(Slot->Native);
