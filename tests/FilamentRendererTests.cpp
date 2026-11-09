@@ -14,6 +14,13 @@
 #include <memory>
 #include <stdexcept>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 	int Failures = 0;
 
@@ -106,10 +113,16 @@ namespace {
 			"hidden entries remain in the neutral projection without a native renderable");
 		auto Remove = MakePublication(6, 5, 96, 80);
 		Remove->Removes.push_back({Next});
+		Remove->UiChanged = true;
+		Remove->SharedUi = std::make_shared<const RenderUiFrame>(RenderUiFrame{96, 80});
+		std::weak_ptr<const RenderUiFrame> Payload = Remove->SharedUi;
 		Renderer.Draw(Remove);
+		Remove.reset();
 		Check(Renderer.GetLastMetrics().ProjectedObjects == 0, "removal retires the matching hidden projection");
+		Check(!Payload.expired(), "the live projection retains its immutable frame payload");
 
 		Renderer.Destroy();
+		Check(Payload.expired(), "explicit shutdown releases the neutral projection payload");
 		Renderer.Destroy();
 		Check(Renderer.GetViewportSize() == std::pair{0u, 0u}, "shutdown is deterministic and idempotent");
 		CheckThrows<std::logic_error>([&] { Renderer.Draw(MakePublication(7, 6)); },
@@ -206,6 +219,9 @@ namespace {
 }
 
 int main() {
+#ifdef _WIN32
+	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#endif
 	TestInvalidConstructionCleanup();
 	TestProjectionLifetime();
 	TestNativeResourceDeltas();

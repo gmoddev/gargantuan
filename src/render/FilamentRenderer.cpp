@@ -348,6 +348,7 @@ namespace gargantuan {
 		std::unordered_map<RenderTextureIdentity, TextureResource, RenderTextureIdentityHash> Textures;
 		std::unordered_map<MaterialKey, MaterialRecord, MaterialKeyHash> Materials;
 		std::unordered_map<ObjectId, Entry> Entries;
+		RenderProjection Projection;
 		std::shared_ptr<UploadBudget> Uploads = std::make_shared<UploadBudget>();
 		FilamentFrameMetrics LastMetrics;
 		std::uint64_t SubmittedFrames = 0;
@@ -678,7 +679,7 @@ namespace gargantuan {
 			for (const auto &Primitive : Existing.Primitives) ReleaseMaterial(Primitive.Material);
 		}
 
-		void ClearProjection() {
+		void ClearNativeResources() {
 			for (auto &[Object, Existing] : Entries) {
 				(void)Object;
 				RemoveEntry(Existing);
@@ -761,8 +762,8 @@ namespace gargantuan {
 			for (const auto &Object : Publication.Updates) CheckGeometry(Object);
 		}
 
-		void ApplyNativeResources(const RenderPublication &Publication, const RenderProjection &Projection) {
-			if (Publication.FullResync) ClearProjection();
+		void ApplyNativeResources(const RenderPublication &Publication) {
+			if (Publication.FullResync) ClearNativeResources();
 			for (const auto &Remove : Publication.Removes) {
 				if (const auto Existing = Entries.find(Remove.Object); Existing != Entries.end()) {
 					RemoveEntry(Existing->second);
@@ -872,7 +873,7 @@ namespace gargantuan {
 
 		void Destroy() {
 			if (Engine) Engine->flushAndWait();
-			ClearProjection();
+			ClearNativeResources();
 			if (Engine && View) Engine->destroy(View);
 			View = nullptr;
 			if (Scene && LightEntity) Scene->remove(LightEntity);
@@ -937,11 +938,11 @@ namespace gargantuan {
 		RenderProjectionChanges Changes;
 		const auto Invalidate = [&] {
 			State.RequiresFullResync = true;
-			State.ClearProjection();
-			Projection.Clear();
+			State.ClearNativeResources();
+			State.Projection.Clear();
 		};
 		try {
-			Changes = Projection.Apply(*Publication);
+			Changes = State.Projection.Apply(*Publication);
 		} catch (const std::invalid_argument &) {
 			throw; // Validation rejects before mutating the last usable projection.
 		} catch (...) {
@@ -953,7 +954,7 @@ namespace gargantuan {
 		State.LastMetrics.ProjectionScanMilliseconds = Milliseconds(Clock::now() - ProjectionStart);
 		const auto ApplyStart = Clock::now();
 		try {
-			State.ApplyNativeResources(*Publication, Projection);
+			State.ApplyNativeResources(*Publication);
 			State.RequiresFullResync = false;
 			if (Publication->FullResync) ++State.FullResyncs;
 			State.LastMetrics.ChangedObjectApplyMilliseconds = Milliseconds(Clock::now() - ApplyStart);
@@ -962,7 +963,7 @@ namespace gargantuan {
 			Invalidate();
 			throw;
 		}
-		State.LastMetrics.ProjectedObjects = Projection.GetSize();
+		State.LastMetrics.ProjectedObjects = State.Projection.GetSize();
 		State.LastMetrics.RenderableObjects = State.Entries.size();
 		State.LastMetrics.ResidentMeshes = State.Meshes.size();
 		State.LastMetrics.ResidentTextures = State.Textures.size();

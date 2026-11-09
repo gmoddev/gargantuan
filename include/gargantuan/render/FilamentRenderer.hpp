@@ -62,6 +62,5 @@ namespace gargantuan {
 		void DrawPublication(RenderPublicationPtr Publication, std::vector<std::uint8_t> *Pixels);
 		struct Impl;
 		std::unique_ptr<Impl> Implementation;
-		RenderProjection Projection;
 	};
 } // namespace gargantuan
