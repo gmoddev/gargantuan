@@ -1,0 +1,65 @@
+name: Renderer Foundation 3 qualification
+on:
+  push:
+    branches: [foundation/renderer-3]
+    paths:
+      - '.github/workflows/renderer-foundation3.yml'
+      - 'assets/shaders/**'
+      - 'include/gargantuan/render/**'
+      - 'src/render/**'
+      - 'src/assets/**'
+      - 'src/services/AssetService.cpp'
+      - 'tests/EditorViewportSmoke.cpp'
+      - 'tests/RendererBenchmark.cpp'
+      - 'tests/AssetFoundationTests.cpp'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  software-vulkan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Install Clang and software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 g++-14 ninja-build glslc spirv-tools \
+            libfreetype-dev libx11-dev libxcursor-dev libxext-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev \
+            xvfb xauth mesa-vulkan-drivers vulkan-tools
+      - name: Build renderer and material checks
+        run: |
+          lute tools/classgen
+          cmake -S . -B build-renderer -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
+            -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+            -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF \
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF
+          cmake --build build-renderer --parallel 3 --target gargantuan_editor_viewport_smoke \
+            gargantuan_renderer_publication_tests gargantuan_asset_foundation_tests
+      - name: Verify material publication and pixels
+        run: |
+          set -euo pipefail
+          mkdir -p renderer-evidence
+          git rev-parse HEAD > renderer-evidence/source.txt
+          SDL_VIDEODRIVER=dummy ctest --test-dir build-renderer --output-on-failure \
+            -R '^gargantuan_(renderer_publication|asset_foundation)$' | tee renderer-evidence/ctest.log
+          for shader in build-renderer/shaders/*.spv; do spirv-val "$shader"; done
+          export VK_DRIVER_FILES="$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)"
+          test -n "$VK_DRIVER_FILES"
+          xvfb-run -a vulkaninfo --summary > renderer-evidence/device.txt
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_editor_viewport_smoke) \
+            2>&1 | tee renderer-evidence/pixels.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: renderer3-linux
+          path: renderer-evidence/
+          if-no-files-found: warn

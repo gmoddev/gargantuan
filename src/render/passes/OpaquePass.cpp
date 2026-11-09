@@ -60,6 +60,7 @@ namespace gargantuan {
 			glm::mat4 NormalMatrix;
 			glm::vec4 Color;
 			glm::vec4 MaterialValues;
+			glm::vec4 MaterialFlags;
 		};
 
 		OpaquePass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat, SDLRendererMetrics *Metrics) {
@@ -69,7 +70,9 @@ namespace gargantuan {
 				Shader.VertexStorageBufferCount = 1;
 				Shader.FragmentFilepath = GetSDLShaderPath("opaque.frag");
 				Shader.FragmentUniformBufferCount = 1;
-				Shader.FragmentSamplerCount = 2;
+				Shader.FragmentSamplerCount = 3;
+				EncodeSrgbOutput = swapchainFormat != SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB &&
+					swapchainFormat != SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB;
 				Shader.Init(gpu, Metrics);
 				auto Builder = SDLPipelineBuilder()
 					.SetVertexShader(Shader.VertexShader)
@@ -196,10 +199,14 @@ namespace gargantuan {
 					if (context.Metrics) ++context.Metrics->PipelineSwitches;
 					auto *BaseColorTexture = Material.BaseColorTexture && context.TextureResources ?
 						context.TextureResources->Find(*Material.BaseColorTexture) : WhiteTexture;
-					if (!BaseColorTexture) throw std::logic_error("Material references a texture without SDL residency");
-					const std::array<SDL_GPUTextureSamplerBinding, 2> TextureBindings{{
+					auto *NormalTexture = Material.NormalTexture && context.TextureResources ?
+						context.TextureResources->Find(*Material.NormalTexture) : WhiteTexture;
+					if (!BaseColorTexture || !NormalTexture)
+						throw std::logic_error("[Renderer:Material] A material texture has no SDL residency");
+					const std::array<SDL_GPUTextureSamplerBinding, 3> TextureBindings{{
 						shadowBinding,
 						{.texture = BaseColorTexture, .sampler = MaterialSampler},
+						{.texture = NormalTexture, .sampler = MaterialSampler},
 					}};
 					SDL_BindGPUFragmentSamplers(pass, 0, TextureBindings.data(), TextureBindings.size());
 					PartUniforms Uniforms{
@@ -208,6 +215,9 @@ namespace gargantuan {
 						.Color = Material.BaseColorFactor,
 						.MaterialValues = {Material.AlphaCutoff, static_cast<float>(Material.OpacityMode),
 							Material.Metallic, Material.Roughness},
+						.MaterialFlags = {Material.ShadingModel == RenderShadingModel::MetallicRoughness ? 1.0f : 0.0f,
+							Material.BaseColorTexture ? 1.0f : 0.0f, Material.NormalTexture ? 1.0f : 0.0f,
+							EncodeSrgbOutput ? 1.0f : 0.0f},
 					};
 					SDL_PushGPUVertexUniformData(context.Commands, 1, &Uniforms, sizeof(PartUniforms));
 					SDL_DrawGPUIndexedPrimitives(pass, IndexCount, 1, FirstIndex, 0, 0);
@@ -268,6 +278,7 @@ namespace gargantuan {
 		SDL_GPUTexture *WhiteTexture = nullptr;
 		SDL_GPUTransferBuffer *WhiteTransferBuffer = nullptr;
 		SDL_GPUSampler *MaterialSampler = nullptr;
+		bool EncodeSrgbOutput = true;
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateOpaquePass(

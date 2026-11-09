@@ -35,7 +35,9 @@ namespace gargantuan {
 		bool IsValid(const RenderMaterialState &Material) {
 			const bool OpacityModeValid = Material.OpacityMode == RenderOpacityMode::Opaque ||
 				Material.OpacityMode == RenderOpacityMode::Masked || Material.OpacityMode == RenderOpacityMode::Transparent;
-			return Material.Revision != 0 && IsFinite(Material.BaseColorFactor) &&
+			const bool ShadingModelValid = Material.ShadingModel == RenderShadingModel::Legacy ||
+				Material.ShadingModel == RenderShadingModel::MetallicRoughness;
+			return ShadingModelValid && Material.Revision != 0 && IsFinite(Material.BaseColorFactor) &&
 				(!Material.BaseColorTexture || Material.BaseColorTexture->IsValid()) &&
 				(!Material.NormalTexture || Material.NormalTexture->IsValid()) &&
 				std::isfinite(Material.Metallic) && Material.Metallic >= 0.0f && Material.Metallic <= 1.0f &&

@@ -1268,6 +1268,7 @@ namespace gargantuan {
 		Render.Roughness = Material->RoughnessFactor;
 		Render.AlphaCutoff = Material->AlphaCutoff;
 		Render.DoubleSided = Material->DoubleSided;
+		if (Record->first != DefaultMaterialReference) Render.ShadingModel = RenderShadingModel::MetallicRoughness;
 		switch (Material->AlphaMode) {
 			case AssetMaterialAlphaMode::Opaque: Render.OpacityMode = RenderOpacityMode::Opaque; break;
 			case AssetMaterialAlphaMode::Mask: Render.OpacityMode = RenderOpacityMode::Masked; break;

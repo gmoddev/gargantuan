@@ -2,7 +2,10 @@
 
 #include <cassert>
 #include <cstddef>
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -42,6 +45,75 @@ namespace {
 
 	std::size_t CenterPixel(std::uint32_t Width, std::uint32_t Height) {
 		return (static_cast<std::size_t>(Height / 2) * Width + Width / 2) * 3;
+	}
+
+	std::shared_ptr<RenderPublication> MaterialScene(RenderPublicationId Id, RenderMaterialState Material) {
+		auto Publication = MakePublication(64, 64, Id);
+		auto &Camera = Publication->Frame.Camera;
+		Camera.Position = {0.0f, 0.0f, 3.0f};
+		Camera.ViewMatrix = glm::lookAtRH(Camera.Position, glm::vec3(0.0f), glm::vec3(0, 1, 0));
+		Camera.ProjectionMatrix = glm::perspectiveRH_ZO(glm::radians(45.0f), 1.0f, 0.1f, 10.0f);
+		Camera.ViewProjectionMatrix = Camera.ProjectionMatrix * Camera.ViewMatrix;
+		Publication->Frame.Environment.EnvironmentColor = glm::vec3(0.0f);
+		Publication->Frame.Environment.SunDirection = {0.0f, 0.0f, 1.0f};
+		Publication->Frame.Environment.SunIntensity = 0.0f;
+		Publication->Frame.Environment.AmbientColor = glm::vec3(1.0f);
+		Publication->EnvironmentChanged = true;
+		const RenderMeshIdentity Mesh{100, 1};
+		auto Vertices = std::make_shared<const std::vector<RenderVertex>>(std::initializer_list<RenderVertex>{
+			{{-1, -1, 0}, {0, 0, 1}, {1, 0, 0, 1}, {0.5f, 0.5f}},
+			{{1, -1, 0}, {0, 0, 1}, {1, 0, 0, 1}, {0.5f, 0.5f}},
+			{{1, 1, 0}, {0, 0, 1}, {1, 0, 0, 1}, {0.5f, 0.5f}},
+			{{-1, 1, 0}, {0, 0, 1}, {1, 0, 0, 1}, {0.5f, 0.5f}},
+		});
+		auto Indices = std::make_shared<const std::vector<std::uint32_t>>(
+			std::initializer_list<std::uint32_t>{0, 1, 2, 0, 2, 3});
+		Publication->MeshCreates.push_back({
+			.Mesh = Mesh, .TopologyRevision = 1, .VertexRevision = 1,
+			.Vertices = Vertices, .Indices = Indices, .Bounds = {{-1, -1, 0}, {1, 1, 0}},
+		});
+		RenderItem Item;
+		Item.Object = {90, 1};
+		Item.CastShadow = false;
+		Publication->Creates.push_back({.Item = Item, .Mesh = Mesh, .Material = Material});
+		return Publication;
+	}
+
+	void CheckMaterials(EditorViewportRenderer &Renderer) {
+		const RenderTextureIdentity Texture{200, 1};
+		RenderMaterialState Material;
+		Material.ShadingModel = RenderShadingModel::MetallicRoughness;
+		Material.DoubleSided = true;
+		Material.BaseColorTexture = Texture;
+		auto Filter = MaterialScene(10, Material);
+		Filter->TextureCreates.push_back({
+			Texture, 1, 2, 1, RenderTextureFormat::Rgba8Unorm,
+			std::make_shared<const std::vector<std::uint8_t>>(
+				std::initializer_list<std::uint8_t>{0, 0, 0, 255, 255, 255, 255, 255}),
+		});
+		const auto Filtered = Renderer.Capture(Filter);
+		const auto Center = CenterPixel(64, 64);
+		const auto Channel = Filtered.RgbPixels[Center];
+		// The midpoint of black and white is 0.5 linear, approximately 206
+		// after the world tone curve and sRGB transfer.
+		if (Channel < 203 || Channel > 209)
+			throw std::runtime_error("[Renderer:Material] Base color filtered outside the linear-light pixel bound");
+
+		Material.BaseColorTexture.reset();
+		Material.NormalTexture = Texture;
+		const auto LitNormal = [&](RenderPublicationId Id, std::uint8_t X, std::uint8_t Z) {
+			auto Scene = MaterialScene(Id, Material);
+			Scene->Frame.Environment.AmbientColor = glm::vec3(0.0f);
+			Scene->Frame.Environment.SunIntensity = 1.0f;
+			Scene->TextureCreates.push_back({
+				Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm, SolidPixels(X, 128, Z),
+			});
+			return Renderer.Capture(Scene).RgbPixels[Center];
+		};
+		const auto Flat = LitNormal(11, 128, 255);
+		const auto Tilted = LitNormal(12, 255, 128);
+		if (int(Flat) < int(Tilted) + 32)
+			throw std::runtime_error("[Renderer:Material] Tangent-space normal did not redirect the direct light");
 	}
 }
 
@@ -94,8 +166,9 @@ int main() {
 		for (std::size_t Channel = 0; Channel < 3; ++Channel)
 			assert(LowExposureFrame.RgbPixels[Center + Channel] == HighExposureFrame.RgbPixels[Center + Channel]);
 
+		CheckMaterials(Renderer);
 		Renderer.Resize(32, 48);
-		Frame = Renderer.Capture(MakePublication(32, 48, 6));
+		Frame = Renderer.Capture(MakePublication(32, 48, 13));
 		assert(Frame.Width == 32 && Frame.Height == 48);
 		assert(Frame.RgbPixels.size() == static_cast<std::size_t>(32 * 48 * 3));
 	}
