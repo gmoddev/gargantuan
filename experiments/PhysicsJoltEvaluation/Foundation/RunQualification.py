@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -23,6 +24,13 @@ assert ConvergenceIterations in (5, 6)
 Expected = ('d8c46588b23700d24ebdaeada0ff460d34b1f830' if SleepQualification else
             '25658bcf45f21bb2674d47952638c31c7d0b1467' if Convergence else
             '109be79fa82be0b306c56e4b4357675ed7843767')
+FinalCommit = os.environ.get('GANTRIA_FINAL_JOLT_COMMIT')
+if FinalCommit is not None:
+    if not re.fullmatch(r'[0-9a-f]{40}', FinalCommit):
+        raise ValueError('GANTRIA_FINAL_JOLT_COMMIT must be an exact lowercase SHA-1')
+    if not (ConvergenceQualification and SleepQualification):
+        raise ValueError('Final Jolt qualification requires convergence and sleep-clock gates')
+    Expected = FinalCommit
 Receipts = []
 
 def Run(Name, Command):
@@ -45,6 +53,7 @@ Source = {'Engine': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=En
           'Platform': platform.platform(), 'LibraryProfile': 'SSE2 deterministic, two compiler jobs',
           'RetainedLambdaConvergence': Convergence,
           'FullUpdateSleepClock': SleepQualification,
+          'FinalCandidate': FinalCommit is not None,
           'CandidateSoftIterations': ConvergenceIterations if ConvergenceQualification else None}
 (Evidence / 'Source.json').write_text(json.dumps(Source, indent=2), encoding='utf-8')
 Run('ObserverWorktree', ['git', '-C', Jolt, 'worktree', 'add', '--detach', ObservedJolt, Actual])

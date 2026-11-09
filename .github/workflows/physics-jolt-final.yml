@@ -1,0 +1,88 @@
+name: Experimental final Jolt physical qualification
+on:
+  workflow_dispatch:
+    inputs:
+      JoltCommit:
+        description: Exact 40-character GantriaEngine/JoltPhysics commit to qualify
+        type: string
+        required: true
+      GroupBatch:
+        description: Large-cloth grouping batch for the Engine provider
+        type: choice
+        options: ['256', '512', '1024']
+        default: '256'
+permissions:
+  contents: read
+jobs:
+  final:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025-vs2026]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      GANTRIA_FINAL_JOLT_COMMIT: ${{ inputs.JoltCommit }}
+      GANTRIA_CONVERGENCE_SCREEN: '1'
+      GANTRIA_CONVERGENCE_KIND: qualify
+      GANTRIA_CONVERGENCE_ITERATIONS: '5'
+      GANTRIA_SLEEP_QUALIFICATION: '1'
+      GANTRIA_ATTACHMENT_QUALIFICATION: '1'
+      GANTRIA_PROVIDER_CONVERGENCE: '1'
+      GANTRIA_PROVIDER_SLEEP_FIX: '1'
+      GANTRIA_PROVIDER_GROUP_BATCH: ${{ inputs.GroupBatch }}
+      SDL_VIDEODRIVER: dummy
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: GantriaEngine/JoltPhysics
+          ref: ${{ inputs.JoltCommit }}
+          path: .foundation-jolt
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: GantriaEngine/JoltPhysics
+          ref: ${{ inputs.JoltCommit }}
+          path: .provider-jolt
+          persist-credentials: false
+      - name: Enable MSVC
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Installation = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          & "$Installation\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" >> $env:GITHUB_ENV }
+      - name: Install Linux compiler and native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 clang-format g++-14 ninja-build libclang-rt-19-dev libfreetype-dev libx11-dev libxcursor-dev libxext-dev libxfixes-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Qualify native and unified physical behavior
+        run: python experiments/PhysicsJoltEvaluation/Foundation/RunQualification.py
+      - name: Qualify Engine provider, cache and cadence
+        run: python experiments/PhysicsJoltEvaluation/Provider/RunQualification.py
+      - name: Preserve native and unified evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: jolt-final-foundation-${{ matrix.os }}
+          path: foundation-evidence/
+          if-no-files-found: error
+      - name: Preserve provider and negative-control evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: jolt-final-provider-${{ matrix.os }}
+          path: provider-evidence/
+          if-no-files-found: error
