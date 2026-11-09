@@ -523,6 +523,9 @@ namespace {
 		std::optional<std::uint64_t> DrawCalls;
 		std::optional<std::uint64_t> ResourceCreations;
 		std::optional<std::uint64_t> UploadedBytes;
+		std::optional<std::uint64_t> CameraCulledObjects;
+		std::optional<std::uint64_t> WorldGeometryBindings;
+		std::optional<std::uint64_t> WorldMaterialBindings;
 	};
 
 	template <typename Metrics>
@@ -532,10 +535,17 @@ namespace {
 		return std::nullopt;
 	}
 
-	IncrementalCounters ReadCounters(const gargantuan::SDLRendererMetrics &Metrics) {
-		return {Metrics.FramesSubmitted, 0, Metrics.FullResyncs, Metrics.DrawCalls,
+	template <typename MetricsType>
+	IncrementalCounters ReadSdlCounters(const MetricsType &Metrics) {
+		IncrementalCounters Result{Metrics.FramesSubmitted, 0, Metrics.FullResyncs, Metrics.DrawCalls,
 			Metrics.VertexBufferCreations + Metrics.IndexBufferCreations + Metrics.TransferBufferCreations +
 			Metrics.TextureCreations + Metrics.BufferReallocations, Metrics.UploadedBytes};
+		if constexpr (requires { Metrics.CameraCulledObjects; Metrics.WorldGeometryBindings; Metrics.WorldMaterialBindings; }) {
+			Result.CameraCulledObjects = Metrics.CameraCulledObjects;
+			Result.WorldGeometryBindings = Metrics.WorldGeometryBindings;
+			Result.WorldMaterialBindings = Metrics.WorldMaterialBindings;
+		}
+		return Result;
 	}
 
 	// Keep the historical adapter buildable. Missing counters make its rows
@@ -589,7 +599,7 @@ namespace {
 #endif
 		};
 		const auto Counters = [&]() -> IncrementalCounters {
-			if (Sdl) return ReadCounters(Sdl->GetMetrics());
+			if (Sdl) return ReadSdlCounters(Sdl->GetMetrics());
 #if defined(GARGANTUAN_WITH_FILAMENT)
 			if (Filament) return ReadCounters(Filament->GetLastMetrics());
 #endif
@@ -660,6 +670,10 @@ namespace {
 		const auto Submitted = CounterDelta(Baseline.Submitted, Final.Submitted);
 		const auto Skipped = CounterDelta(Baseline.Skipped, Final.Skipped);
 		const auto Resyncs = CounterDelta(Baseline.Resyncs, Final.Resyncs);
+		const auto ExpectedCameraCull = Scenario.Name == "culled" ? Settings.Frames * (Scenario.Count / 2) : 0;
+		const auto ObservedCameraCull = CounterDelta(Baseline.CameraCulledObjects, Final.CameraCulledObjects);
+		const bool CullMeasured = ObservedCameraCull != "NA";
+		const bool CullGate = !CullMeasured || ObservedCameraCull == std::to_string(ExpectedCameraCull);
 		const bool Graphical = Backend && Backend->GetCapabilities().Graphical;
 		const bool Comparable = Graphical && Submitted == std::to_string(Settings.Frames) &&
 			Skipped == "0" && Resyncs == "0";
@@ -690,10 +704,15 @@ namespace {
 			<< CounterDelta(Baseline.ResourceCreations, Final.ResourceCreations) << ','
 			<< (NativeFrameUploadBytes ? std::to_string(*NativeFrameUploadBytes) :
 				CounterDelta(Baseline.UploadedBytes, Final.UploadedBytes)) << ','
+			<< ExpectedCameraCull << ',' << ObservedCameraCull << ','
+			<< CounterDelta(Baseline.WorldGeometryBindings, Final.WorldGeometryBindings) << ','
+			<< CounterDelta(Baseline.WorldMaterialBindings, Final.WorldMaterialBindings) << ','
+			<< (CullMeasured ? (CullGate ? "PASS" : "FAIL") : "NA") << ','
 			<< (Graphical ? (Comparable ? "PASS" : "FAIL") : "NA") << ",NA,"
 			<< (Settings.ShadowsEnabled ? "on" : "off") << '\n';
 		if (Graphical && !Comparable)
 			throw std::runtime_error("incremental frame admission gate failed or counters are unavailable");
+		if (!CullGate) throw std::runtime_error("measured world camera culls differ from fixture expectation");
 	}
 
 	gargantuan::RenderPublication MakeMaterialCheck(const Options &Settings) {
@@ -846,6 +865,8 @@ int main(int ArgumentCount, char **Arguments) {
 				"CompletionWaitMeanMs,FinalDrainMs,"
 				"LogicalObjectUpdates,LogicalTextureBytes,ProjectedObjects,SubmittedFrames,SkippedFrames,"
 				"MeasuredFullResyncs,ReportedDrawCalls,ReportedResourceCreations,ReportedUploadBytes,"
+				"ExpectedCameraCulledObjects,ReportedCameraCulledObjects,ReportedWorldGeometryBindings,"
+				"ReportedWorldMaterialBindings,CameraCullGate,"
 				"FrameAdmissionGate,GpuTimestampMs,Shadows\n";
 			for (const auto &Scenario : BuildCases(BenchmarkOptions)) RunIncrementalCase(BenchmarkOptions, Scenario);
 			return 0;

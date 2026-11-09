@@ -46,7 +46,10 @@ those phase scopes distinct when interpreting the numbers.
 The frame admission gate requires exactly one submitted frame per measured
 publication, zero skips and zero full resyncs during measurement. A counter
 absent from a backend is `NA`. SDL reports recorded draw commands and resource
-operations. Filament native upload bytes describe its own packed resource
+operations. When available, SDL also reports main camera culls and world geometry
+and material bindings. The camera gate checks the known number of behind-camera
+objects on `culled` and zero camera rejections on the other grid rows. Filament
+native upload bytes describe its own packed resource
 representation, so the neutral requested texture bytes are also reported.
 Real post-cull draws, device-owned memory and publication-attributed GPU
 timestamps require backend evidence before they can be compared. Fixture time
