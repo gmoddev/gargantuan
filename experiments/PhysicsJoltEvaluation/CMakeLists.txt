@@ -131,6 +131,8 @@ PhysicsEvaluationTarget(PhysicsJoltAdmissionBenchmark
     Provider/AdmissionBenchmark.cpp RigidJoltBackend.cpp)
 target_compile_definitions(PhysicsJoltAdmissionBenchmark PRIVATE
     PHYSICS_EVALUATION_ADMISSION_PROFILE=1 PHYSICS_EVALUATION_TRACK_ALLOCATIONS=1)
+PhysicsEvaluationTarget(PhysicsJoltAdmissionTimingBenchmark
+    Provider/AdmissionBenchmark.cpp RigidJoltBackend.cpp)
 if(PHYSICS_EVALUATION_NATIVE_PROFILE)
     PhysicsEvaluationTarget(PhysicsJoltProviderProfile
         Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp FinalOptimization/ProfileExit.cpp)
