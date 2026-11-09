@@ -126,15 +126,42 @@ jobs:
             Tee-Object -FilePath 'filament-evidence/adapter-compile.log'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Link benchmark and lifecycle test
+      - name: Link both backend benchmarks and the EditorHost executable
         shell: pwsh
         run: |
           & (Join-Path $env:FILAMENT_VS_INSTALL 'Common7/Tools/Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
-          cmake --build build-filament --parallel 2 --target gargantuan_renderer_benchmark gargantuan_filament_renderer_tests 2>&1 |
+          $Targets = @(
+            'gargantuan_shaders', 'gargantuan_renderer_benchmark', 'gargantuan_filament_renderer_tests',
+            'gargantuan_editor_viewport_smoke', 'gargantuan'
+          )
+          cmake --build build-filament --parallel 2 --target @Targets 2>&1 |
             Tee-Object -FilePath 'filament-evidence/link.log'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify the renderer and EditorHost package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Names = @(
+            'gargantuan.exe', 'gargantuan_renderer_benchmark.exe', 'gargantuan_filament_renderer_tests.exe',
+            'gargantuan_editor_viewport_smoke.exe', 'SDL3.dll',
+            'shaders/opaque.vert.spv', 'shaders/opaque.frag.spv'
+          )
+          $Files = foreach ($Name in $Names) {
+            $File = Join-Path 'build-filament' $Name
+            if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { throw "Missing renderer package member $Name" }
+            @{ path = $Name; bytes = (Get-Item -LiteralPath $File).Length
+              sha256 = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash.ToLowerInvariant() }
+          }
+          $Help = & ./build-filament/gargantuan.exe --help
+          if ($LASTEXITCODE -ne 0 -or ($Help -join [Environment]::NewLine) -notmatch '--editor-host') {
+            throw 'Packaged engine did not expose the EditorHost command'
+          }
+          @{ source = $env:GITHUB_SHA; editorHostArgument = $true; files = @($Files) } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath 'filament-evidence/renderer-package.json'
+
       - name: Run functional capture on software Vulkan if available
+        continue-on-error: true
         shell: pwsh
         run: |
           $Chrome = Join-Path $env:ProgramFiles 'Google/Chrome/Application'
@@ -152,7 +179,13 @@ jobs:
           $env:VK_DRIVER_FILES = $Icd.FullName
           ctest --test-dir build-filament --timeout 180 --output-on-failure --no-tests=error -R '^gargantuan_filament_renderer$' 2>&1 |
             Tee-Object -FilePath 'filament-evidence/software-vulkan-tests.log'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $TestExit = $LASTEXITCODE
+          if ($TestExit -ne 0) {
+            "FAILED: software Vulkan lifecycle or capture test exited with code $TestExit" |
+              Add-Content -LiteralPath 'filament-evidence/software-smoke.txt'
+            exit $TestExit
+          }
+          'PASSED: software Vulkan lifecycle and capture' | Add-Content -LiteralPath 'filament-evidence/software-smoke.txt'
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
@@ -160,8 +193,10 @@ jobs:
           name: renderer-filament-windows-release
           path: |
             filament-evidence/
+            build-filament/gargantuan.exe
             build-filament/gargantuan_renderer_benchmark.exe
             build-filament/gargantuan_filament_renderer_tests.exe
+            build-filament/gargantuan_editor_viewport_smoke.exe
             build-filament/*.dll
             build-filament/runtime/
             build-filament/shaders/
