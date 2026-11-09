@@ -24,12 +24,12 @@ All vectors use world-space metres and `[x,y,z]` order. The JSON object has:
 | `InitialVelocities` | One finite xyz triple per vertex, before frame 0. |
 | `VertexMassKg` | One finite nonnegative mass per vertex; pinned vertices may have zero mass. |
 | `Triangles` | Oriented triples of distinct vertex indices. Winding is shared by Jolt and XPBD fixtures. |
-| `StructuralEdges` | Objects `{A,B,RestLengthM,Kind}`; `Kind` is `axial`, `shear`, or `bend`. `StiffnessNPerM` may be supplied for a clearly labeled spring-energy surrogate. |
+| `StructuralEdges` | Objects `{A,B,RestLengthM,Kind}`; `Kind` is `axial`, `shear`, or `bend`. Positive `StiffnessNPerM` may be supplied for a clearly labeled spring-energy surrogate. |
 | `Pins` | Objects `{Vertex,Target}` for fixed world-space targets. |
 | `ThicknessM` | Nonnegative collision shell added to the geometric sphere radius for independent surface clearance. |
 | `GravityMPerS2` | Finite xyz gravity vector. |
-| `Colliders` | Objects `{Id,Kind,RadiusM,MassKg,Motion,Trajectory}`. V1 supports sphere; `Motion` is `static`, `kinematic`, or `dynamic`. `MassKg` is null for infinite-mass motion. `Trajectory` records authored input, including its interpolation rule; actual state is in each frame. |
-| `Gates` | Prespecified `MaximumAxialStrain`, `MaximumPinErrorM`, and `MaximumSpherePenetrationM`, plus any separately justified area, energy, or impulse limits. A failed legacy limit is retained, not silently adjusted. |
+| `Colliders` | Objects `{Id,Kind,RadiusM,MassKg,Motion,Trajectory}`. V1 supports sphere; `Motion` is `static`, `kinematic`, or `dynamic`. `MassKg` is null for infinite-mass motion. Optional positive scalar `InertiaKgM2` is the isotropic sphere inertia for kinetic accounting. `Trajectory` records authored input, including its interpolation rule; actual state is in each frame. |
+| `Gates` | Prespecified `MaximumAxialStrain`, `MaximumPinErrorM`, and `MaximumSpherePenetrationM`; optional `MinimumContactCount`, `MaximumContactCount`, and `MaximumContactImpulsePairResidualNs` must be declared before results. A failed legacy limit is retained, not silently adjusted. |
 
 The original 128×128 planar test is one fixture, not a replacement for 9×9,
 17×17, and 32×32 discriminating cases. Cases cover exact Z=0, signed
@@ -65,16 +65,19 @@ Optional `Contacts` contains one record per resolved interaction, including
 `Normal`, `ImpulseOnClothNs`, `ImpulseOnRigidNs`, and the phase/substep time.
 The two impulse vectors are signed world-space impulses on their named bodies.
 Projection displacement is recorded separately as `ProjectionDeltaM`, never
-substituted for a physical impulse. `External` records force/actuator work,
-gravity and pin reactions, and any static-pose teleport projection work with
-an explicit measurement method. An omitted work term means energy closure is
+substituted for a physical impulse. `External` per-frame signed work fields are
+`ActuatorWorkJ`, `StaticPoseProjectionWorkJ`, `PinWorkJ`, `OtherWorkJ`, and
+nonnegative `DissipationJ`, each with a measurement method in the producer's
+source notes. Gravity is represented by potential `-m g·x`, not double-counted
+as external work. A static-pose teleport must account for its numerical
+projection work, despite zero nominal static-body velocity. An omitted term means energy closure is
 `INCOMPLETE`, including for a static pose jump whose nominal velocity is zero.
 `Stages` may contain sparse or full pre/post structural/contact snapshots for
 the exact offending edge; stage samples do not replace the full frame arrays.
 
 `Source.json` records exact Engine and native hashes, solver variant, OS,
-compiler/configuration, worker cap, seed policy, case manifest SHA-256, trace
-SHA-256, and process receipt hashes. The validator reports missing provenance
+compiler/configuration, worker cap, seed policy, case manifest SHA-256, compressed
+trace SHA-256, and `Receipt.json` SHA-256. The validator reports missing provenance
 as `INCOMPLETE`; it never infers it from a directory name.
 
 ## Independent checks and limits
@@ -92,7 +95,8 @@ Jolt internal stored energy. External-work and contact-impulse balance are
 checked only when complete signed terms and phase timing are present.
 
 V1 bounds each case to 16,384 vertices, 600 frames, 32,512 triangles,
-100,000 structural edges, 256 pins, and 8 spheres. A trace line is at most
+100,000 structural edges, 256 pins, 8 spheres, and 5 million triangle-sphere
+checks. A trace line is at most
 8 MiB decompressed. Malformed, nonfinite, oversized, missing, out-of-order,
 or out-of-directory content fails closed. Geometry may pass while energy,
 impulse, or self-intersection remain `INCOMPLETE`; the overall result cannot
