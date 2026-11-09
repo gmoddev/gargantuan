@@ -113,7 +113,7 @@ namespace {
 			if (Argument == "--help") {
 				std::cout <<
 					"Usage: gargantuan_renderer_benchmark [--backend=projection|headless|sdl|filament|filament-headless] "
-					"[--scenario=all|static|dynamic|mostly-static|mixed|culled|material-check] [--count=N] "
+					"[--scenario=all|static|dynamic|mostly-static|mixed|culled|material-check|material-extensions] [--count=N] "
 					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--shadows=on|off] "
 					"[--incremental] [--synchronize=on|off] [--capture=path-prefix]\n";
 				std::exit(0);
@@ -147,7 +147,9 @@ namespace {
 		if (ParsedOptions.Backend == "filament" || ParsedOptions.Backend == "filament-headless")
 			throw std::invalid_argument("this benchmark was built without GARGANTUAN_FILAMENT_ROOT");
 #endif
-		const bool IncrementalOnly = ParsedOptions.Scenario == "culled" || ParsedOptions.Scenario == "material-check";
+		const bool MaterialCapture = ParsedOptions.Scenario == "material-check" ||
+			ParsedOptions.Scenario == "material-extensions";
+		const bool IncrementalOnly = ParsedOptions.Scenario == "culled" || MaterialCapture;
 		if (ParsedOptions.Scenario != "all" && ParsedOptions.Scenario != "static" && ParsedOptions.Scenario != "dynamic" &&
 			ParsedOptions.Scenario != "mostly-static" && ParsedOptions.Scenario != "mixed" && !IncrementalOnly)
 			throw std::invalid_argument("unknown renderer benchmark scenario");
@@ -157,11 +159,11 @@ namespace {
 			ParsedOptions.WarmupFrames > 1'800 || ParsedOptions.Width < 64 || ParsedOptions.Height < 64 ||
 			ParsedOptions.Width > 4'096 || ParsedOptions.Height > 4'096))
 			throw std::invalid_argument("incremental benchmark dimensions or workload exceed bounds");
-		if (ParsedOptions.Scenario == "material-check" && (!ParsedOptions.CapturePrefix ||
+		if (MaterialCapture && (!ParsedOptions.CapturePrefix ||
 			(ParsedOptions.Backend != "sdl" && ParsedOptions.Backend != "filament-headless")))
-			throw std::invalid_argument("material-check requires --capture and an offscreen graphical backend");
-		if (ParsedOptions.CapturePrefix && ParsedOptions.Scenario != "material-check")
-			throw std::invalid_argument("capture requires --scenario=material-check");
+			throw std::invalid_argument("material captures require --capture and an offscreen graphical backend");
+		if (ParsedOptions.CapturePrefix && !MaterialCapture)
+			throw std::invalid_argument("capture requires --scenario=material-check or --scenario=material-extensions");
 		if (ParsedOptions.Incremental && ParsedOptions.Backend == "filament")
 			throw std::invalid_argument("incremental qualification requires --backend=filament-headless for Filament");
 		return ParsedOptions;
@@ -716,11 +718,25 @@ namespace {
 		if (!CullGate) throw std::runtime_error("measured world camera culls differ from fixture expectation");
 	}
 
+	gargantuan::RenderFrameState MakeMaterialFrame(const Options &Settings) {
+		const auto Aspect = static_cast<float>(Settings.Width) / Settings.Height;
+		return MakeFrame(Settings, 4.5f / std::min(1.0f, Aspect));
+	}
+
+	void AppendMaterialQuad(std::vector<gargantuan::RenderVertex> &Vertices, float Left, float Right) {
+		const glm::vec3 Normal{0.0f, 0.0f, 1.0f};
+		const glm::vec4 Tangent{1.0f, 0.0f, 0.0f, 1.0f};
+		Vertices.insert(Vertices.end(), {
+			{{Left, -0.7f, 0.0f}, Normal, Tangent, {0.0f, 1.0f}},
+			{{Right, -0.7f, 0.0f}, Normal, Tangent, {1.0f, 1.0f}},
+			{{Right, 0.7f, 0.0f}, Normal, Tangent, {1.0f, 0.0f}},
+			{{Left, 0.7f, 0.0f}, Normal, Tangent, {0.0f, 0.0f}},
+		});
+	}
+
 	gargantuan::RenderPublication MakeMaterialCheck(const Options &Settings) {
 		using namespace gargantuan;
-		const auto Aspect = static_cast<float>(Settings.Width) / Settings.Height;
-		const auto Distance = 4.5f / std::min(1.0f, Aspect);
-		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(Settings, Distance)};
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeMaterialFrame(Settings)};
 		AddTexturePair(Initial);
 		constexpr RenderTextureIdentity NormalTexture{3, 1};
 		auto Normal = std::make_shared<std::vector<std::uint8_t>>(TextureSide * TextureSide * 4);
@@ -733,18 +749,8 @@ namespace {
 		Initial.TextureCreates.push_back({NormalTexture, 1, TextureSide, TextureSide,
 			RenderTextureFormat::Rgba8Unorm, Normal});
 		auto Vertices = std::make_shared<std::vector<RenderVertex>>();
-		const auto AddQuad = [&](float Left, float Right) {
-			const glm::vec3 FaceNormal{0.0f, 0.0f, 1.0f};
-			const glm::vec4 Tangent{1.0f, 0.0f, 0.0f, 1.0f};
-			Vertices->insert(Vertices->end(), {
-				{{Left, -0.7f, 0.0f}, FaceNormal, Tangent, {0.0f, 1.0f}},
-				{{Right, -0.7f, 0.0f}, FaceNormal, Tangent, {1.0f, 1.0f}},
-				{{Right, 0.7f, 0.0f}, FaceNormal, Tangent, {1.0f, 0.0f}},
-				{{Left, 0.7f, 0.0f}, FaceNormal, Tangent, {0.0f, 0.0f}},
-			});
-		};
-		AddQuad(-1.6f, -0.12f);
-		AddQuad(0.12f, 1.6f);
+		AppendMaterialQuad(*Vertices, -1.6f, -0.12f);
+		AppendMaterialQuad(*Vertices, 0.12f, 1.6f);
 		const auto Indices = std::make_shared<const std::vector<std::uint32_t>>(
 			std::initializer_list<std::uint32_t>{0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7});
 		Initial.MeshCreates.push_back({CommonMesh, 1, 1, Vertices, Indices,
@@ -766,11 +772,8 @@ namespace {
 			if (Rgba.size() != static_cast<std::size_t>(Width) * Height * 4)
 				throw std::runtime_error("Filament readback byte count does not match the viewport");
 			std::vector<std::uint8_t> Rgb(static_cast<std::size_t>(Width) * Height * 3);
-			for (std::uint32_t Y = 0; Y < Height; ++Y) for (std::uint32_t X = 0; X < Width; ++X) {
-				const auto Source = (static_cast<std::size_t>(Height - 1 - Y) * Width + X) * 4;
-				const auto Target = (static_cast<std::size_t>(Y) * Width + X) * 3;
-				std::copy_n(Rgba.begin() + Source, 3, Rgb.begin() + Target);
-			}
+			for (std::size_t Pixel = 0; Pixel < static_cast<std::size_t>(Width) * Height; ++Pixel)
+				std::copy_n(Rgba.begin() + Pixel * 4, 3, Rgb.begin() + Pixel * 3);
 			return Rgb;
 		} else {
 			throw std::runtime_error("this Filament adapter does not expose image capture");
@@ -780,11 +783,68 @@ namespace {
 
 	void WriteImage(const std::filesystem::path &Path, const Options &Settings,
 		const std::vector<std::uint8_t> &Rgb) {
+		if (Rgb.size() != static_cast<std::size_t>(Settings.Width) * Settings.Height * 3)
+			throw std::runtime_error("material check readback byte count does not match the viewport");
 		if (std::filesystem::exists(Path)) throw std::runtime_error("capture output already exists: " + Path.string());
 		std::ofstream Image(Path, std::ios::binary);
 		Image << "P6\n" << Settings.Width << ' ' << Settings.Height << "\n255\n";
 		Image.write(reinterpret_cast<const char *>(Rgb.data()), static_cast<std::streamsize>(Rgb.size()));
 		if (!Image) throw std::runtime_error("failed to write material evidence: " + Path.string());
+	}
+
+	struct MaterialCaptures {
+		std::vector<std::uint8_t> First;
+		std::vector<std::uint8_t> Second;
+		double LifecycleMilliseconds = 0.0;
+	};
+
+	MaterialCaptures CaptureMaterialPair(const Options &Settings, const gargantuan::RenderPublicationPtr &Initial,
+		const gargantuan::RenderPublicationPtr &Updated) {
+		using namespace gargantuan;
+		MaterialCaptures Captures;
+		auto InitialPath = *Settings.CapturePrefix;
+		InitialPath += "-initial.ppm";
+		auto UpdatedPath = *Settings.CapturePrefix;
+		UpdatedPath += "-updated.ppm";
+		double InitialWriteMilliseconds = 0.0;
+		const auto SaveInitial = [&] {
+			const auto WriteStart = Clock::now();
+			WriteImage(InitialPath, Settings, Captures.First);
+			InitialWriteMilliseconds = Milliseconds(Clock::now() - WriteStart);
+		};
+		const auto CaptureStart = Clock::now();
+		if (Settings.Backend == "sdl") {
+			const VideoGuard Video;
+			EditorViewportRenderer Renderer(Settings.Width, Settings.Height);
+			Captures.First = Renderer.Capture(Initial).RgbPixels;
+			SaveInitial();
+			Captures.Second = Renderer.Capture(Updated).RgbPixels;
+		}
+#if defined(GARGANTUAN_WITH_FILAMENT)
+		else {
+			FilamentRenderer Renderer(Vector2(static_cast<float>(Settings.Width), static_cast<float>(Settings.Height)), true);
+			Captures.First = CaptureFilamentRgb(Renderer, Initial);
+			SaveInitial();
+			Captures.Second = CaptureFilamentRgb(Renderer, Updated);
+		}
+#endif
+		Captures.LifecycleMilliseconds = Milliseconds(Clock::now() - CaptureStart) - InitialWriteMilliseconds;
+		WriteImage(UpdatedPath, Settings, Captures.Second);
+		return Captures;
+	}
+
+	std::array<int, 3> ProbeMaterialPixel(const std::vector<std::uint8_t> &Rgb,
+		const gargantuan::RenderFrameState &Frame, float WorldX, float WorldY = 0.0f) {
+		const auto Clip = Frame.Camera.ViewProjectionMatrix * glm::vec4(WorldX, WorldY, 0.0f, 1.0f);
+		const auto X = static_cast<int>((Clip.x / Clip.w * 0.5f + 0.5f) * Frame.ViewportWidth);
+		const auto Y = static_cast<int>((0.5f - Clip.y / Clip.w * 0.5f) * Frame.ViewportHeight);
+		std::array<int, 3> Result{};
+		for (int Dy = -1; Dy <= 1; ++Dy) for (int Dx = -1; Dx <= 1; ++Dx) {
+			const auto Offset = (static_cast<std::size_t>(Y + Dy) * Frame.ViewportWidth + X + Dx) * 3;
+			for (std::size_t Channel = 0; Channel < Result.size(); ++Channel) Result[Channel] += Rgb.at(Offset + Channel);
+		}
+		for (auto &Channel : Result) Channel /= 9;
+		return Result;
 	}
 
 	void RunMaterialCheck(const Options &Settings) {
@@ -794,48 +854,12 @@ namespace {
 		Change.TextureUpdates.push_back({FirstTexture, 2, 0, 0, TextureSide / 2, TextureSide,
 			MakePixels(TextureSide / 2, TextureSide, {24, 24, 224, 255})});
 		const auto Updated = std::make_shared<const RenderPublication>(std::move(Change));
-		std::vector<std::uint8_t> First, Second;
-		const auto CaptureStart = Clock::now();
-		if (Settings.Backend == "sdl") {
-			const VideoGuard Video;
-			EditorViewportRenderer Renderer(Settings.Width, Settings.Height);
-			First = Renderer.Capture(Initial).RgbPixels;
-			Second = Renderer.Capture(Updated).RgbPixels;
-		}
-#if defined(GARGANTUAN_WITH_FILAMENT)
-		else {
-			FilamentRenderer Renderer(Vector2(static_cast<float>(Settings.Width), static_cast<float>(Settings.Height)), true);
-			First = CaptureFilamentRgb(Renderer, Initial);
-			Second = CaptureFilamentRgb(Renderer, Updated);
-		}
-#endif
-		const auto CaptureMilliseconds = Milliseconds(Clock::now() - CaptureStart);
-		const auto ExpectedBytes = static_cast<std::size_t>(Settings.Width) * Settings.Height * 3;
-		if (First.size() != ExpectedBytes || Second.size() != ExpectedBytes)
-			throw std::runtime_error("material check readback byte count does not match the viewport");
-		auto InitialPath = *Settings.CapturePrefix;
-		InitialPath += "-initial.ppm";
-		auto UpdatedPath = *Settings.CapturePrefix;
-		UpdatedPath += "-updated.ppm";
-		WriteImage(InitialPath, Settings, First);
-		WriteImage(UpdatedPath, Settings, Second);
-		const auto Probe = [&](const std::vector<std::uint8_t> &Rgb, float WorldX) {
-			const auto Clip = Initial->Frame.Camera.ViewProjectionMatrix * glm::vec4(WorldX, 0.0f, 0.0f, 1.0f);
-			const auto X = static_cast<int>((Clip.x / Clip.w * 0.5f + 0.5f) * Settings.Width);
-			const auto Y = static_cast<int>(Settings.Height / 2);
-			std::array<int, 3> Result{};
-			for (int Dy = -1; Dy <= 1; ++Dy) for (int Dx = -1; Dx <= 1; ++Dx) {
-				const auto Offset = (static_cast<std::size_t>(Y + Dy) * Settings.Width + X + Dx) * 3;
-				for (std::size_t Channel = 0; Channel < Result.size(); ++Channel) Result[Channel] += Rgb.at(Offset + Channel);
-			}
-			for (auto &Channel : Result) Channel /= 9;
-			return Result;
-		};
-		const auto InitialRed = Probe(First, -1.22f);
-		const auto UpdatedBlue = Probe(Second, -1.22f);
-		const auto UntouchedRed = Probe(Second, -0.48f);
-		const auto NormalLit = Probe(Second, 0.46f);
-		const auto NormalTilted = Probe(Second, 1.22f);
+		const auto Captures = CaptureMaterialPair(Settings, Initial, Updated);
+		const auto InitialRed = ProbeMaterialPixel(Captures.First, Initial->Frame, -1.22f);
+		const auto UpdatedBlue = ProbeMaterialPixel(Captures.Second, Initial->Frame, -1.22f);
+		const auto UntouchedRed = ProbeMaterialPixel(Captures.Second, Initial->Frame, -0.48f);
+		const auto NormalLit = ProbeMaterialPixel(Captures.Second, Initial->Frame, 0.46f);
+		const auto NormalTilted = ProbeMaterialPixel(Captures.Second, Initial->Frame, 1.22f);
 		const auto Dominates = [](const auto &Rgb, std::size_t Channel) {
 			return Rgb[Channel] > Rgb[(Channel + 1) % 3] + 8 && Rgb[Channel] > Rgb[(Channel + 2) % 3] + 8;
 		};
@@ -843,11 +867,90 @@ namespace {
 			Dominates(UntouchedRed, 0) && Dominates(NormalLit, 1);
 		const bool NormalPass = NormalLit[1] > NormalTilted[1] + 8;
 		std::cout << "Backend,TwoCaptureLifecycleMs,InitialRedR,UpdatedBlueB,UntouchedRedR,NormalLitG,NormalTiltedG,"
-			"ColorAndPartialUpdateGate,NormalGate\n" << Settings.Backend << ',' << CaptureMilliseconds << ','
+			"ColorAndPartialUpdateGate,NormalGate\n" << Settings.Backend << ',' << Captures.LifecycleMilliseconds << ','
 			<< InitialRed[0] << ',' << UpdatedBlue[2] << ',' << UntouchedRed[0] << ',' << NormalLit[1] << ','
 			<< NormalTilted[1] << ',' << (ColorPass ? "PASS" : "FAIL") << ',' << (NormalPass ? "PASS" : "FAIL") << '\n';
 		if (!ColorPass || !NormalPass)
 			throw std::runtime_error("material check failed a readback probe; both evidence images were retained");
+	}
+
+	void RunMaterialExtensions(const Options &Settings) {
+		using namespace gargantuan;
+		constexpr RenderTextureIdentity RoughnessMap{1, 1}, MetallicMap{2, 1}, AlphaMap{3, 1};
+		constexpr std::uint32_t AlphaWidth = 8;
+		const auto MakeMask = [](bool LeftOpaque) {
+			auto Pixels = std::make_shared<std::vector<std::uint8_t>>(AlphaWidth * 4, 255);
+			for (std::size_t X = 0; X < AlphaWidth; ++X)
+				(*Pixels)[X * 4 + 3] = (X < AlphaWidth / 2) == LeftOpaque ? 255 : 153;
+			return Pixels;
+		};
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeMaterialFrame(Settings)};
+		Initial.TextureCreates = {
+			{RoughnessMap, 1, 1, 1, RenderTextureFormat::Rgba8Unorm, MakePixels(1, 1, {64, 255, 255, 192})},
+			{MetallicMap, 1, 1, 1, RenderTextureFormat::Rgba8Unorm, MakePixels(1, 1, {64, 255, 0, 192})},
+			{AlphaMap, 1, AlphaWidth, 1, RenderTextureFormat::Rgba8Unorm, MakeMask(true)},
+		};
+		const RenderMaterialState Metallic{
+			.BaseColorFactor = {0.35f, 0.35f, 0.35f, 1.0f}, .Metallic = 1.0f, .DoubleSided = true,
+			.ShadingModel = RenderShadingModel::MetallicRoughness, .MetallicRoughnessTexture = MetallicMap,
+		};
+		const RenderMaterialState Roughness{
+			.BaseColorFactor = {0.05f, 0.05f, 0.05f, 1.0f}, .Metallic = 0.0f, .DoubleSided = true,
+			.ShadingModel = RenderShadingModel::MetallicRoughness, .MetallicRoughnessTexture = RoughnessMap,
+		};
+		const RenderMaterialState Mask{
+			.BaseColorFactor = {0.80f, 0.05f, 0.05f, 0.75f}, .BaseColorTexture = AlphaMap,
+			.OpacityMode = RenderOpacityMode::Masked, .AlphaCutoff = 0.5f, .DoubleSided = true,
+			.ShadingModel = RenderShadingModel::MetallicRoughness,
+		};
+		auto Vertices = std::make_shared<std::vector<RenderVertex>>();
+		AppendMaterialQuad(*Vertices, -1.6f, -0.6f);
+		AppendMaterialQuad(*Vertices, -0.49f, 0.35f);
+		AppendMaterialQuad(*Vertices, 0.46f, 1.6f);
+		const auto Indices = std::make_shared<const std::vector<std::uint32_t>>(
+			std::initializer_list<std::uint32_t>{0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11});
+		Initial.MeshCreates.push_back({CommonMesh, 1, 1, Vertices, Indices,
+			{{-1.6f, -0.7f, 0.0f}, {1.6f, 0.7f, 0.0f}}});
+		Initial.Creates.push_back({.Item = {.Object = {1, 1}, .CastShadow = false}, .Mesh = CommonMesh,
+			.Primitives = std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(
+				std::initializer_list<RenderPrimitiveMaterialState>{{0, 6, Metallic}, {6, 6, Roughness}, {12, 6, Mask}})});
+
+		RenderPublication Updated{.Id = 2, .BaseId = 1, .Frame = Initial.Frame};
+		Updated.TextureUpdates = {
+			{RoughnessMap, 2, 0, 0, 1, 1, MakePixels(1, 1, {64, 96, 255, 192})},
+			{MetallicMap, 2, 0, 0, 1, 1, MakePixels(1, 1, {64, 255, 255, 192})},
+			{AlphaMap, 2, 0, 0, AlphaWidth, 1, MakeMask(false)},
+		};
+		const auto Frame = Initial.Frame;
+		const auto Captures = CaptureMaterialPair(Settings, std::make_shared<const RenderPublication>(std::move(Initial)),
+			std::make_shared<const RenderPublication>(std::move(Updated)));
+		const auto InitialRoughness = ProbeMaterialPixel(Captures.First, Frame, 0.0f)[1];
+		const auto UpdatedRoughness = ProbeMaterialPixel(Captures.Second, Frame, 0.0f)[1];
+		const auto InitialMetallic = ProbeMaterialPixel(Captures.First, Frame, -1.1f)[1];
+		const auto UpdatedMetallic = ProbeMaterialPixel(Captures.Second, Frame, -1.1f)[1];
+		const auto MaskContrast = [&](const auto &Image, float WorldX) {
+			const auto Pixel = ProbeMaterialPixel(Image, Frame, WorldX);
+			const auto Background = ProbeMaterialPixel(Image, Frame, WorldX, 1.1f);
+			return std::max({std::abs(Pixel[0] - Background[0]), std::abs(Pixel[1] - Background[1]),
+				std::abs(Pixel[2] - Background[2])});
+		};
+		const auto InitialMaskLeft = MaskContrast(Captures.First, 0.73f);
+		const auto InitialMaskRight = MaskContrast(Captures.First, 1.33f);
+		const auto UpdatedMaskLeft = MaskContrast(Captures.Second, 0.73f);
+		const auto UpdatedMaskRight = MaskContrast(Captures.Second, 1.33f);
+		const bool RoughnessPass = UpdatedRoughness > InitialRoughness + 8;
+		const bool MetallicPass = InitialMetallic > UpdatedMetallic + 8;
+		const bool MaskPass = InitialMaskLeft > 24 && InitialMaskRight <= 4 &&
+			UpdatedMaskLeft <= 4 && UpdatedMaskRight > 24;
+		std::cout << "Backend,InitialRoughnessG,UpdatedRoughnessG,InitialMetallicG,UpdatedMetallicG,"
+			"InitialMaskLeftContrast,InitialMaskRightContrast,UpdatedMaskLeftContrast,UpdatedMaskRightContrast,"
+			"PackedRoughnessGate,PackedMetallicGate,MaskGate\n" << Settings.Backend << ','
+			<< InitialRoughness << ',' << UpdatedRoughness << ',' << InitialMetallic << ',' << UpdatedMetallic << ','
+			<< InitialMaskLeft << ',' << InitialMaskRight << ',' << UpdatedMaskLeft << ',' << UpdatedMaskRight << ','
+			<< (RoughnessPass ? "PASS" : "FAIL") << ',' << (MetallicPass ? "PASS" : "FAIL") << ','
+			<< (MaskPass ? "PASS" : "FAIL") << '\n';
+		if (!RoughnessPass || !MetallicPass || !MaskPass)
+			throw std::runtime_error("material extensions failed a readback probe; both evidence images were retained");
 	}
 }
 
@@ -861,6 +964,10 @@ int main(int ArgumentCount, char **Arguments) {
 		if (BenchmarkOptions.Incremental) {
 			if (BenchmarkOptions.Scenario == "material-check") {
 				RunMaterialCheck(BenchmarkOptions);
+				return 0;
+			}
+			if (BenchmarkOptions.Scenario == "material-extensions") {
+				RunMaterialExtensions(BenchmarkOptions);
 				return 0;
 			}
 			std::cout << "Scenario,Objects,Backend,Driver,Synchronization,Width,Height,Frames,Warmup,FixtureSetupMs,"

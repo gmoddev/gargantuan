@@ -22,6 +22,7 @@ remain separate workloads.
 | `culled` | Same Block mesh with every second object behind the camera |
 | `mixed` | Two opaque textured material ranges per Block, a 1% transform cohort, and one alternating 8×8 patch and 64×64 full texture update |
 | `material-check` | Separate two-range chart with colored albedo, a texture patch that must preserve the untouched half, and flat versus tilted normal map samples under the same directional light |
+| `material-extensions` | Separate three-range chart for independent packed metallic and roughness updates and the product of texture alpha and material alpha at a mask cutoff |
 
 All five timed scenarios publish opaque metallic-roughness materials. The four
 untextured rows use the same linear gray dielectric with roughness 1.0. Every
@@ -39,6 +40,19 @@ exposure and lighting implementations. Retain the CSV row, images, command,
 exit status and executable identity before ranking a backend. The opaque
 qualification scope leaves alpha, full lighting, GUI, particles, imported skinning,
 dynamic topology, device recovery and packaged deployment as separate axes.
+
+The extension chart changes one channel per packed map. Lowering G from 255
+to 96 makes a dark dielectric's highlight brighter with the light and view
+aligned. Raising B from 0 to 255 reduces the off-axis panel's diffuse response
+at maximum roughness. Each comparison requires a difference of more than eight
+green levels in its own backend's output. The mask reverses two texture
+patches with alpha 1.0 and 0.6. With factor alpha 0.75 and cutoff 0.5, the first
+patch draws and the other matches the local background. Each backend writes
+the initial PPM before the second readback and emits both images before testing
+the probes. A failure retains the available PPMs and any printed pixel values.
+The chart requires packed-map support and top-first RGBA readback from the
+Foundation 3 Filament adapter. The test does not establish shadow or blend
+parity, or match RGB values across the renderers.
 
 Each timed row starts with a completed initial publication and drains the warmup
 queue before measuring. It reports fixture construction, renderer startup,
@@ -68,6 +82,8 @@ cmake --build <build> --config Release --target gargantuan_renderer_benchmark ga
 $env:SDL_GPU_DRIVER = 'vulkan'
 <build>/gargantuan_renderer_benchmark.exe --incremental --backend=sdl --scenario=material-check --capture=<new-prefix>
 <build>/gargantuan_renderer_benchmark.exe --incremental --backend=filament-headless --scenario=material-check --capture=<other-new-prefix>
+<build>/gargantuan_renderer_benchmark.exe --incremental --backend=sdl --scenario=material-extensions --capture=<new-prefix>
+<build>/gargantuan_renderer_benchmark.exe --incremental --backend=filament-headless --scenario=material-extensions --capture=<other-new-prefix>
 <build>/gargantuan_renderer_benchmark.exe --incremental --backend=sdl --scenario=all --count=10000 --frames=300 --warmup=30 --synchronize=on
 <build>/gargantuan_renderer_benchmark.exe --incremental --backend=filament-headless --scenario=all --count=10000 --frames=300 --warmup=30 --synchronize=on
 ```
