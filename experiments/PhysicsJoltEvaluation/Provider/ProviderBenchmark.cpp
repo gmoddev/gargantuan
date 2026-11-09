@@ -446,6 +446,10 @@ int main(int ArgumentCount, char **Arguments) {
                     Description.Shape = Collider.Shape;
                     Description.Transform = Collider.Transform;
                     Description.Anchored = true;
+                    if (std::getenv("GANTRIA_PROBE_KINEMATIC")) {
+                        Description.Anchored = false;
+                        Description.Kinematic = true;
+                    }
                     const auto StaticBody = Jolt.Rigid->CreateBody(Description);
                     if (!StaticBody.IsValid())
                         throw std::runtime_error("Static rigid collider admission failed");

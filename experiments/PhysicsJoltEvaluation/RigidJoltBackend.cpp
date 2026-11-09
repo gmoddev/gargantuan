@@ -798,7 +798,11 @@ namespace {
                 Interface.SetShape(Slot->Native, NewShape.GetPtr(), true, JPH::EActivation::Activate);
             if (MotionChanged)
                 Interface.SetMotionType(Slot->Native, Motion, JPH::EActivation::Activate);
-            if (!SameTransform(Description.Transform, Slot->Description.Transform))
+            if (!SameTransform(Description.Transform, Slot->Description.Transform) &&
+                Description.Kinematic && std::getenv("GANTRIA_PROBE_MOVE"))
+                Interface.MoveKinematic(Slot->Native, ToRVec(Description.Transform.Position),
+                    ToJolt(Description.Transform), SoftBodyStepInterval / PhysicsEvaluation::ContactProbeParts());
+            else if (!SameTransform(Description.Transform, Slot->Description.Transform))
                 Interface.SetPositionAndRotation(Slot->Native, ToRVec(Description.Transform.Position),
                     ToJolt(Description.Transform), JPH::EActivation::Activate);
             if (Description.CollisionGroup != Slot->Description.CollisionGroup ||
