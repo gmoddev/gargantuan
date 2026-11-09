@@ -156,6 +156,17 @@ PhysicsEvaluationTarget(PhysicsJoltSchedulingBenchmark
 PhysicsEvaluationTarget(PhysicsJoltProviderLongRun
     Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
 target_compile_definitions(PhysicsJoltProviderLongRun PRIVATE PHYSICS_EVALUATION_LONG_RUN=1)
+
+# Private contact-order investigation. The copied XPBD translation unit has
+# target-local factory renames, so the production backend and default factory
+# retain their original implementation in gargantuan_core.
+PhysicsEvaluationTarget(PhysicsJoltXpbdContactProbe
+    Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp
+    ContactXpbd/ExperimentalXpbdSoftBodyBackend.cpp)
+target_compile_definitions(PhysicsJoltXpbdContactProbe PRIVATE
+    PHYSICS_EVALUATION_LONG_RUN=1
+    CreateSoftBodyBackend=CreateExperimentalXpbdSoftBodyBackend
+    CreateSoftBodyBackendForTesting=CreateExperimentalXpbdSoftBodyBackendForTesting)
 if(PHYSICS_EVALUATION_NATIVE_PROFILE)
     target_sources(PhysicsJoltProviderLongRun PRIVATE FinalOptimization/ProfileExit.cpp)
 endif()
