@@ -15,7 +15,7 @@ byte-identical to the preserved final-C driven trace, and frozen B failed too.
 ## Discriminating evidence
 
 21 diagnostic configurations cover 960 physical frames. Every float32 position
-stream was independently rehashed against its sequential native FNV log and
+stream was independently rehashed against its sequential provider FNV log and
 receipt digests. An additional clean profiling baseline repeats the original
 40 frames exactly. The original failed fixture, thresholds and qualified public
 checkpoints remain unchanged; altered fixtures are not qualification replacements.
@@ -25,7 +25,7 @@ checkpoints remain unchanged; altered fixtures are not qualification replacement
 | Original Jolt | 44.44% | 68.03% | Exactly zero | Fail |
 | Remove launch impulse | 42.50% | 68.48% | Exactly zero | Fail |
 | Eight pose updates, same 80 integrations/frame | 38.27% | 52.79% | Exactly zero | Fail |
-| True velocity-driven kinematic sphere | 39.75% | 52.18% | Exactly zero | Fail |
+| Native `MoveKinematic` sphere | 39.75% | 52.18% | Exactly zero | Fail |
 | Eight constraint sweeps instead of two | 47.69% | 69.71% | Exactly zero | Fail |
 | 100× lower stretch compliance | 126.35% | 96.40% | Exactly zero | Fail |
 | Sphere center shifted 10 micrometres in Z | 6.35% | 3.14% | Up to 0.410 m | Pass axial metric only |
@@ -160,6 +160,10 @@ nor the qualified fork/PR checkpoint was changed. Worker source/configuration
 was restored, its three qualification targets passed, and lease46 was released.
 
 ## Reproduction and evidence
+
+The probes ran on the trusted Windows/MSVC worker at requested cap8, with native
+profiling enabled. This investigation does not claim a new cross-platform
+qualification of modified contact behavior.
 
 Private Engine probe branch: `experiment/jolt-contact-diagnosis-20261109`,
 runtime probe source `6934444bfbf77e7219957f0ae893c8ed3b538d45`.
