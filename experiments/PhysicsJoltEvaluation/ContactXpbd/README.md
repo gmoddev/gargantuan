@@ -39,7 +39,9 @@ XPBD's public collider snapshots support one-way static/pose-kinematic cases;
 the producer rejects reciprocal dynamic and native kinematic move requests.
 An omitted `KinematicUpdate` means native `move` for Jolt and one-way `pose`
 for XPBD. G receives an ordered per-substep sphere-center displacement from
-the producer; A–E ignore it. Only pure sphere translation is modeled, with no
+the producer and rejects a missing/mismatched list; A–E ignore it. The XPBD
+trace labels collider velocity as a prescribed frame pose difference, not a
+native measured rigid velocity. Only pure sphere translation is modeled, with no
 angular collider velocity or actuator-work accounting.
 
 The producer writes `ContactFixtureV1.json` and uncompressed full-frame

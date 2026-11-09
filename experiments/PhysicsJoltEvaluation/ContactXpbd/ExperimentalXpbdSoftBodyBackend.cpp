@@ -1178,6 +1178,8 @@ namespace gargantuan {
 			if (ContactOrder == ExperimentalContactOrder::KinematicRelative) {
 				std::scoped_lock Lock(PhysicsEvaluation::ExperimentalXpbdColliderMotionMutex);
 				ColliderDeltas = PhysicsEvaluation::ExperimentalXpbdColliderDeltas;
+				if (ColliderDeltas.size() != Batch.Colliders.size())
+					throw std::invalid_argument("[Physics:XpbdContactProbe] G requires one prescribed delta per collider");
 			}
 			std::vector<float> ContactNormalLambdas;
 			if (ContactOrder == ExperimentalContactOrder::CoupledNormal)

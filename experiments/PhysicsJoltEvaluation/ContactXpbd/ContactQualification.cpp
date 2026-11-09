@@ -387,7 +387,10 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
             Record["ColliderStates"].push_back({{"Id", Sphere.Id}, {"Center", Triplet(Center)},
                 {"OrientationWxyz", QuatValues(Orientation)},
                 {"LinearVelocity", Triplet(LinearVelocity)},
-                {"AngularVelocity", Triplet(AngularVelocity)}});
+                {"AngularVelocity", Triplet(AngularVelocity)},
+                {"VelocityMethod", BackendName == "jolt" ? "native-state" :
+                    Sphere.Motion == "kinematic" ? "prescribed-frame-pose-difference" :
+                    "static-pose-snapshot"}});
         }
         Trace << Record.dump() << '\n';
         Require(bool(Trace), "Trace write failed");
