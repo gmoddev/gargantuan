@@ -204,6 +204,45 @@ namespace {
 		if (Metrics.CameraCulledObjects != 1 || Metrics.WorldGeometryBindings != 1 || Metrics.WorldMaterialBindings != 1)
 			throw std::runtime_error("[Renderer:Material] Camera culling or shared submission bindings differ from the fixture");
 	}
+
+	void CheckOpaqueBatches(EditorViewportRenderer &Capture) {
+		const RenderTextureIdentity Texture{200, 1};
+		const RenderMaterialState Red{.BaseColorFactor = {1.0f, 0.0f, 0.0f, 1.0f}, .DoubleSided = true};
+		const RenderMaterialState Green{.BaseColorFactor = {0.0f, 1.0f, 0.0f, 1.0f}, .DoubleSided = true};
+		const RenderMaterialState Blue{.BaseColorTexture = Texture, .DoubleSided = true};
+		auto Scene = MaterialScene(20, Red);
+		Scene->TextureCreates.push_back({
+			Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm, SolidPixels(0, 0, 255),
+		});
+		const auto Ranges = [&](const RenderMaterialState &First) {
+			return std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(
+				std::initializer_list<RenderPrimitiveMaterialState>{{0, 3, First}, {3, 3, Blue}});
+		};
+		Scene->Creates.front().Primitives = Ranges(Red);
+		auto Coplanar = Scene->Creates.front();
+		Coplanar.Item.Object = {91, 1};
+		Coplanar.Primitives = Ranges(Green);
+		Scene->Creates.push_back(std::move(Coplanar));
+
+		SDLRenderer Renderer(Vector2(64, 64), {
+			.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+		});
+		Renderer.Draw(Scene);
+		const auto Metrics = Renderer.GetMetrics();
+		if (Metrics.WorldGeometryBindings != 1 || Metrics.WorldMaterialBindings != 2)
+			throw std::runtime_error("[Renderer:Material] Matching opaque range layouts did not reuse sampler bindings");
+
+		const auto Initial = Capture.Capture(Scene);
+		auto Reversed = std::make_shared<RenderPublication>(*Scene);
+		Reversed->Id = 21;
+		std::swap(Reversed->Creates[0], Reversed->Creates[1]);
+		const auto Updated = Capture.Capture(Reversed);
+		const auto Right = CenterPixel(64, 64) + 8 * 3;
+		const auto Left = CenterPixel(64, 64) - 8 * 3;
+		if (Initial.RgbPixels != Updated.RgbPixels || Updated.RgbPixels[Right] < 150 ||
+			Updated.RgbPixels[Right + 1] > 5 || Updated.RgbPixels[Left + 2] < 150)
+			throw std::runtime_error("[Renderer:Material] Opaque batching did not preserve ranges and stable coplanar ties");
+	}
 }
 
 int main() {
@@ -256,8 +295,9 @@ int main() {
 			assert(LowExposureFrame.RgbPixels[Center + Channel] == HighExposureFrame.RgbPixels[Center + Channel]);
 
 		CheckMaterials(Renderer);
+		CheckOpaqueBatches(Renderer);
 		Renderer.Resize(32, 48);
-		Frame = Renderer.Capture(MakePublication(32, 48, 19));
+		Frame = Renderer.Capture(MakePublication(32, 48, 22));
 		assert(Frame.Width == 32 && Frame.Height == 48);
 		assert(Frame.RgbPixels.size() == static_cast<std::size_t>(32 * 48 * 3));
 	}

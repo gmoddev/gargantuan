@@ -16,12 +16,21 @@
 #include <format>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace gargantuan {
 	namespace {
 		using ClipPlanes = std::array<glm::vec4, 6>;
 		constexpr RenderBounds PrimitiveBounds{glm::vec3(-0.5f), glm::vec3(0.5f)};
+		constexpr std::size_t MAX_OPAQUE_BATCH_OBJECTS = 512;
+		constexpr std::size_t MAX_OPAQUE_BATCH_RANGES = 8;
+
+		auto BindingLayout(const RenderPrimitiveMaterialState &Primitive) {
+			const auto &Material = Primitive.Material;
+			return std::tie(Material.OpacityMode, Material.DoubleSided, Material.BaseColorTexture,
+				Material.NormalTexture, Material.MetallicRoughnessTexture);
+		}
 
 		ClipPlanes GetClipPlanes(const RenderCameraSnapshot &Camera) {
 			const auto Rows = glm::transpose(Camera.ProjectionMatrix * Camera.ViewMatrix);
@@ -190,6 +199,7 @@ namespace gargantuan {
 			try {
 				DrawWorld(Pass, context, shadowBinding, White);
 			} catch (...) {
+				OpaqueBatch.clear();
 				TransparentDraws.clear();
 				SDL_EndGPURenderPass(Pass);
 				throw;
@@ -301,6 +311,45 @@ namespace gargantuan {
 						Visit(Primitive.FirstIndex, Primitive.IndexCount, Primitive.Material);
 				} else Visit(0, Draw.Mesh->IndexCount, Draw.Object->Material);
 			};
+			const auto FlushOpaque = [&] {
+				if (OpaqueBatch.empty()) return;
+				std::ranges::sort(OpaqueBatch, {}, [](const WorldDraw &Draw) { return Draw.Object->Item.Object; });
+				// Keep the canonical range order within each object. Within a range,
+				// ObjectId is the tie break for coplanar surfaces in this batch.
+				for (std::size_t Range = 0; Range < OpaqueBatch.front().Object->Primitives->size(); ++Range) {
+					for (const auto &Draw : OpaqueBatch) {
+						const auto &Primitive = (*Draw.Object->Primitives)[Range];
+						DrawPrimitive(Draw, Primitive.FirstIndex, Primitive.IndexCount, Primitive.Material);
+					}
+				}
+				OpaqueBatch.clear();
+			};
+			const auto TryBatchOpaque = [&](const WorldDraw &Draw) {
+				const auto &Ranges = Draw.Object->Primitives;
+				if (!Draw.Object->Mesh || Draw.Pose || !Ranges || Ranges->size() < 2 ||
+					Ranges->size() > MAX_OPAQUE_BATCH_RANGES) return false;
+				if (!OpaqueBatch.empty()) {
+					const auto &First = OpaqueBatch.front();
+					const auto &FirstRanges = First.Object->Primitives;
+					if (First.Mesh == Draw.Mesh && (FirstRanges == Ranges ||
+						std::ranges::equal(*FirstRanges, *Ranges, {}, BindingLayout, BindingLayout))) {
+						if (OpaqueBatch.size() == MAX_OPAQUE_BATCH_OBJECTS) FlushOpaque();
+						OpaqueBatch.push_back(Draw);
+						return true;
+					}
+					FlushOpaque();
+				}
+				const auto FirstBinding = BindingLayout(Ranges->front());
+				bool ChangesBinding = false;
+				for (const auto &Primitive : *Ranges) {
+					if (Primitive.Material.OpacityMode != RenderOpacityMode::Opaque) return false;
+					ChangesBinding |= BindingLayout(Primitive) != FirstBinding;
+				}
+				if (!ChangesBinding) return false;
+				OpaqueBatch.reserve(MAX_OPAQUE_BATCH_OBJECTS);
+				OpaqueBatch.push_back(Draw);
+				return true;
+			};
 
 			for (const auto &[Object, Projected] : Context.Projection.GetObjects()) {
 				if (!Projected.Visible) continue;
@@ -321,6 +370,8 @@ namespace gargantuan {
 				}
 
 				WorldDraw Draw{&Projected, Mesh, Pose, 0.0f};
+				if (TryBatchOpaque(Draw)) continue;
+				FlushOpaque();
 				bool HasTransparent = false;
 				ForPrimitives(Draw, [&](std::uint32_t First, std::uint32_t Count, const RenderMaterialState &Material) {
 					if (Material.OpacityMode == RenderOpacityMode::Transparent) HasTransparent = true;
@@ -333,6 +384,7 @@ namespace gargantuan {
 					TransparentDraws.push_back(Draw);
 				}
 			}
+			FlushOpaque();
 
 			std::ranges::sort(TransparentDraws, [](const WorldDraw &Left, const WorldDraw &Right) {
 				if (Left.Depth != Right.Depth) return Left.Depth > Right.Depth;
@@ -349,6 +401,7 @@ namespace gargantuan {
 		SDL_GPUGraphicsPipeline *DoubleSidedPipeline = nullptr;
 		SDL_GPUGraphicsPipeline *BlendedPipeline = nullptr;
 		SDL_GPUGraphicsPipeline *BlendedDoubleSidedPipeline = nullptr;
+		std::vector<WorldDraw> OpaqueBatch;
 		std::vector<WorldDraw> TransparentDraws;
 		SDL_GPUSampler *MaterialSampler = nullptr;
 		bool EncodeSrgbOutput = true;
