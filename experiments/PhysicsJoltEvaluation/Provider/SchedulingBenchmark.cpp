@@ -120,8 +120,8 @@ int main(int Count, char **Arguments) {
         std::ranges::sort(FrameMs);
         const auto P95 = FrameMs[std::min(FrameMs.size() - 1,
             std::size_t(std::ceil(0.95 * FrameMs.size())) - 1)];
-        const bool QualityPass = FiniteEveryFrame && MaximumFloorPenetration <= 0.25 &&
-            MaximumPairPenetration <= 0.25;
+        const bool QualityPass = FiniteEveryFrame && ContactEvents > 0 &&
+            MaximumFloorPenetration <= 0.25 && MaximumPairPenetration <= 0.25;
         std::cout << std::setprecision(17) << "{\"Mode\":\""
             << (Config.Fast ? "fast" : "full") << "\",\"Frames\":" << Config.Frames
             << ",\"Workers\":" << Config.Workers
