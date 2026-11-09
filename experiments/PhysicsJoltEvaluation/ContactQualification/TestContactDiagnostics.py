@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from Inspect3DSelfIntersection import TrianglesIntersect
-from InspectEnergyLedger import Inspect as InspectEnergy, VerifyAccounting
+from InspectEnergyLedger import Inspect as InspectEnergy, RawMomentumClosurePass, VerifyAccounting
 from TestValidateContactTrace import Fixture, Frames
 
 
@@ -61,6 +61,11 @@ def EnergyCase(Change=None):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_prespecified_direct_raw_momentum_gate(self):
+        self.assertTrue(RawMomentumClosurePass(9e-6))
+        self.assertFalse(RawMomentumClosurePass(1.1e-5))
+        self.assertFalse(RawMomentumClosurePass(None))
+
     def test_disjoint_triangle_crossing_and_separation(self):
         A = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
         Crossing = [(.25, .25, -1), (.25, .25, 1), (.75, .25, 0)]
@@ -192,6 +197,28 @@ class DiagnosticTests(unittest.TestCase):
         Record['PinConstraintNumericalImpulseNs'] = [float('nan'), 0.0, 0.0]
         with self.assertRaisesRegex(ValueError, 'pin constraint numerical impulse'):
             VerifyAccounting(Record, Stages, 0,
+                             {'DeltaTimeSeconds': 0.01,
+                              'Authored': {'XpbdSubsteps': 32}})
+
+    def test_double_shadow_raw_momentum_does_not_subtract_legacy_roundoff(self):
+        Record = Accounting()
+        Record['IdealVelocityReconstructionEnabled'] = False
+        Record['DoubleShadowEnabled'] = True
+        Record['VelocityPrecisionMode'] = '2'
+        Record['IntegrationPositionRoundingKineticDeltaJ'] = 0.25
+        Record['IdealVelocityReconstructionKineticDeltaJ'] = -0.25
+        Record['UnpinnedStructuralNumericalImpulseNs'] = [1.0, 0.0, 0.0]
+        Stages = {'ContactProjectionVelocityDerivedMomentumDeltaNs':
+                  [0.0, 0.0, 0.0], 'ContactProjectionCorrections': 0}
+        Reduced = VerifyAccounting(Record, Stages, 0,
+                                   {'DeltaTimeSeconds': 0.01,
+                                    'Authored': {'XpbdSubsteps': 32}})
+        self.assertEqual(Reduced['VelocityPrecisionMode'], '2')
+        self.assertEqual(Reduced['NormalizedRawMomentumResidual'], 0.0)
+        self.assertEqual(Reduced['NormalizedUnpinnedStructuralNumericalImpulse'], 1.0)
+        Broken = dict(Record, DoubleShadowEnabled=False)
+        with self.assertRaisesRegex(ValueError, 'velocity precision mode'):
+            VerifyAccounting(Broken, Stages, 0,
                              {'DeltaTimeSeconds': 0.01,
                               'Authored': {'XpbdSubsteps': 32}})
 

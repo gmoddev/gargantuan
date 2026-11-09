@@ -9,6 +9,9 @@ from pathlib import Path
 from ValidateContactTrace import Dot, Norm, Sub
 
 
+DirectRawMomentumLimit = 1e-5
+
+
 def Near(A, B):
     return abs(A - B) <= 1e-7 * max(1.0, abs(A), abs(B))
 
@@ -19,6 +22,11 @@ def NearPublished(A, B):
 
 def FiniteNumber(Value):
     return type(Value) in (int, float) and math.isfinite(Value)
+
+
+def RawMomentumClosurePass(MaximumNormalizedRawResidual):
+    return MaximumNormalizedRawResidual is not None and \
+        MaximumNormalizedRawResidual <= DirectRawMomentumLimit
 
 
 def VerifyAccounting(Accounting, Stages, Frame, Fixture):
@@ -78,6 +86,12 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
                            not FiniteNumber(Accounting['IdealVelocityReconstructionKineticDeltaJ'])):
         raise ValueError(f'Invalid ideal velocity reconstruction metadata at frame {Frame}')
     IdealEnabled = Accounting['IdealVelocityReconstructionEnabled'] if HasIdealFields else False
+    Mode = Accounting.get('VelocityPrecisionMode', '1' if IdealEnabled else '0')
+    ShadowEnabled = Accounting.get('DoubleShadowEnabled', False)
+    if Mode not in ('0', '1', '2') or type(ShadowEnabled) is not bool or \
+            IdealEnabled != (Mode == '1') or ShadowEnabled != (Mode == '2') or \
+            ('VelocityPrecisionMode' in Accounting) != ('DoubleShadowEnabled' in Accounting):
+        raise ValueError(f'Invalid XPBD velocity precision mode at frame {Frame}')
     Scalars['IntegrationPositionRoundingKineticDeltaJ'] = (
         Accounting['IntegrationPositionRoundingKineticDeltaJ'] if HasIdealFields else 0.0)
     Scalars['IdealVelocityReconstructionKineticDeltaJ'] = (
@@ -115,11 +129,13 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
                    sum(Vectors[Name][Axis] for Name in Components)
                    for Axis in range(3)]
     for Axis in range(3):
-        Recomputed = RawResidual[Axis] - (0.0 if IdealEnabled else Unpinned[Axis])
+        Recomputed = RawResidual[Axis] - (0.0 if Mode in ('1', '2') else Unpinned[Axis])
         if not Near(Recomputed, Vectors['MomentumResidualNs'][Axis]):
             raise ValueError(f'XPBD momentum stage ledger identity fails at frame {Frame}')
     return {**Scalars, **Vectors,
             'IdealVelocityReconstructionEnabled': IdealEnabled,
+            'DoubleShadowEnabled': ShadowEnabled,
+            'VelocityPrecisionMode': Mode,
             'NormalizedMomentumResidual': Norm(Vectors['MomentumResidualNs']) /
                 ImpulseScale,
             'NormalizedRawMomentumResidual': Norm(RawResidual) / ImpulseScale,
@@ -163,7 +179,7 @@ def Inspect(CaseDirectory):
     Series = []
     AccountingRows = []
     AccountingSeen = None
-    IdealSeen = None
+    ModeSeen = None
     with gzip.open(CaseDirectory / 'ContactTraceV1.jsonl.gz', 'rt', encoding='utf-8') as Stream:
         for Frame, Line in enumerate(Stream):
             Row = json.loads(Line)
@@ -185,10 +201,10 @@ def Inspect(CaseDirectory):
                 raise ValueError('XPBD accounting appears in only part of the trace')
             if AccountingSeen:
                 Reduced = VerifyAccounting(Accounting, Row.get('Stages'), Frame, Fixture)
-                if IdealSeen is None:
-                    IdealSeen = Reduced['IdealVelocityReconstructionEnabled']
-                elif Reduced['IdealVelocityReconstructionEnabled'] != IdealSeen:
-                    raise ValueError('Ideal velocity flag changes within one trace')
+                if ModeSeen is None:
+                    ModeSeen = Reduced['VelocityPrecisionMode']
+                elif Reduced['VelocityPrecisionMode'] != ModeSeen:
+                    raise ValueError('Velocity precision mode changes within one trace')
                 AccountingRows.append(Reduced)
     if len(Series) != Fixture['Frames']:
         raise ValueError('Energy trace frame count mismatch')
@@ -225,6 +241,8 @@ def Inspect(CaseDirectory):
                     'UnclosedPhysicalResidualJ': Row['ChangeFromPreviousJ'] -
                         Accounting['PrescribedSurfaceWorkJ'] -
                         Accounting['DampingKineticDeltaJ']})
+    MaximumRawResidual = max((Row['NormalizedRawMomentumResidual']
+                              for Row in AccountingRows), default=None)
     return {'Status': 'MEASURED_COMPONENTS_WITH_STAGE_LEDGER' if AccountingSeen else
             'MEASURED_COMPONENTS_UNCLOSED',
             'Initial': Initial, 'Final': Series[-1],
@@ -236,16 +254,18 @@ def Inspect(CaseDirectory):
             'MaximumNormalizedMomentumResidual':
                 max((Row['NormalizedMomentumResidual'] for Row in AccountingRows),
                     default=None),
-            'MaximumNormalizedRawMomentumResidual':
-                max((Row['NormalizedRawMomentumResidual'] for Row in AccountingRows),
-                    default=None),
+            'MaximumNormalizedRawMomentumResidual': MaximumRawResidual,
+            'DirectRawMomentumClosureLimit': DirectRawMomentumLimit,
+            'DirectRawMomentumClosurePass': RawMomentumClosurePass(MaximumRawResidual),
             'MaximumNormalizedUnpinnedStructuralNumericalImpulse':
                 max((Row['NormalizedUnpinnedStructuralNumericalImpulse']
                      for Row in AccountingRows), default=None),
             'MaximumNormalizedPinConstraintNumericalImpulse':
                 max((Row['NormalizedPinConstraintNumericalImpulse']
                      for Row in AccountingRows), default=None),
-            'IdealVelocityReconstructionEnabled': IdealSeen,
+            'IdealVelocityReconstructionEnabled': ModeSeen == '1',
+            'DoubleShadowEnabled': ModeSeen == '2',
+            'VelocityPrecisionMode': ModeSeen,
             'MaximumAbsoluteIntegrationPositionRoundingKineticDeltaJ':
                 max((abs(Row['IntegrationPositionRoundingKineticDeltaJ'])
                      for Row in AccountingRows), default=None),

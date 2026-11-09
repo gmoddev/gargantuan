@@ -91,6 +91,17 @@ compliance potential and subtracts prescribed kinematic work and measured
 damping change. It has no pass threshold in V1. Frame 0 needs separate
 authored impulse accounting; changing a static pose leaves work incomplete.
 
+The private precision experiment may add `VelocityPrecisionMode` as string
+`"0"`, `"1"`, or `"2"`, with matching `IdealVelocityReconstructionEnabled`
+and `DoubleShadowEnabled` booleans. Mode 1 and mode 2 also report finite
+`IntegrationPositionRoundingKineticDeltaJ` and
+`IdealVelocityReconstructionKineticDeltaJ`; these close a stage bookkeeping
+gap and are not physical work. `UnpinnedStructuralNumericalImpulseNs` remains
+the would-be float-store error, but the independent inspector computes raw
+mode-1 and mode-2 cloth momentum directly from published `ΣmV` and named
+impulses without subtracting it. `PinConstraintNumericalImpulseNs` is an
+optional separately reported actual-minus-ideal pinned-edge store gap.
+
 `Source.json` records exact Engine and native hashes, solver variant, OS,
 compiler/configuration, worker cap, seed policy, case manifest SHA-256, compressed
 trace SHA-256, and `Receipt.json` SHA-256. The validator reports missing provenance
