@@ -57,6 +57,7 @@ def Main():
     Parser.add_argument('--cases', nargs='*')
     Parser.add_argument('--manifest', type=Path)
     Parser.add_argument('--workers', type=int, choices=(1,8), default=1)
+    Parser.add_argument('--face-cull', type=int, choices=(0,1), default=0)
     Args = Parser.parse_args()
     assert not Args.output.exists(), 'Evidence directories are immutable once created'
     Args.output.mkdir(parents=True)
@@ -68,7 +69,7 @@ def Main():
         Definitions = Cases()
     Selected = [Case for Case in Definitions if Args.cases is None or Case['CaseId'] in Args.cases]
     assert Selected and (Args.cases is None or {Case['CaseId'] for Case in Selected} == set(Args.cases))
-    Manifest = {'Definitions': Selected, 'Variants': Args.variants, 'Workers': Args.workers,
+    Manifest = {'Definitions': Selected, 'Variants': Args.variants, 'Workers': Args.workers,'FaceCull':Args.face_cull,
                 'Scope': 'Mechanism and physical geometry screen; absent impulse/work/self-contact evidence remains INCOMPLETE',
                 'LegacyAxialGate': .1, 'AdditionalTriangleShellPenetrationGateM': .001}
     ManifestPath = Args.output / 'Manifest.json'
@@ -94,6 +95,7 @@ def Main():
             Environment.update({'GANTRIA_CONTACT_ORDER':Mode[0], 'GANTRIA_XPBD_CONTACT_ORDER':Mode[0],
                 'GANTRIA_CONTACT_PASSES':'4' if '4' in Mode else '1',
                 'GANTRIA_CONTACT_KINEMATIC_RELATIVE':'1' if Mode.endswith('G') else '0',
+                'GANTRIA_CONTACT_FACE_AABB_CULL':str(Args.face_cull),
                 'GANTRIA_XPBD_IDEAL_VELOCITY':'1' if Backend=='xpbd' and Mode.endswith('H') else '0',
                 'GANTRIA_XPBD_CONTACT_NORMAL_COMPLIANCE':'0', 'SDL_VIDEODRIVER':'dummy'})
             Command = [str(Args.binary.resolve()), str(ConfigPath.resolve()), str(Directory.resolve())]
