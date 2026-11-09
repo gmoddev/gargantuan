@@ -54,4 +54,8 @@ The machine certificate is
 `C:/Users/aiden/.codex/artifacts/jolt-cloth-contact-correction-20261109/PlanarEnergyComparison.json`
 (SHA-256
 `7ffc98217566f41f40e9037b3fc0e7d43725248a0af08bd277115b19af92a6f7`).
+The independent frame-6 transverse certificate is
+`C:/Users/aiden/.codex/artifacts/jolt-cloth-contact-correction-20261109/TransverseModeFrame6.json`
+(SHA-256
+`435fe0182051feff3502ca5e23183d09c2e54af7850cec2de5fbca2596aaae2ca`).
 The sealed prior artifact root was read only.
