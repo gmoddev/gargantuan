@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -57,7 +58,7 @@ def Main():
     Parser.add_argument('--cases', nargs='*')
     Parser.add_argument('--manifest', type=Path)
     Parser.add_argument('--workers', type=int, choices=(1,8), default=1)
-    Parser.add_argument('--face-cull', type=int, choices=(0,1), default=0)
+    Parser.add_argument('--face-cull', type=int, choices=(0,1,2), default=0)
     Args = Parser.parse_args()
     assert not Args.output.exists(), 'Evidence directories are immutable once created'
     Args.output.mkdir(parents=True)
@@ -90,6 +91,14 @@ def Main():
             Config = {**Definition, 'CaseId': Name, 'Backend': Backend, 'Workers': Args.workers}
             ConfigPath = Directory / 'Case.json'
             ConfigPath.write_text(json.dumps(Config, indent=2), encoding='utf-8')
+            RequiredBytes=128*1024*1024+Config['Frames']*Config['Resolution']**2*256
+            if shutil.disk_usage(Args.output).free < RequiredBytes:
+                Summary.append({'CaseId':Name,'Status':'RESOURCE_DEFERRED','RequiredFreeBytes':RequiredBytes,
+                    'FreeBytes':shutil.disk_usage(Args.output).free,
+                    'Reason':'Reserve space for full raw trace and verified lossless compression before starting physics'})
+                (Args.output/'Summary.json').write_text(json.dumps(Summary,indent=2),encoding='utf-8')
+                print('[Physics:ContactCorpus]',Name,'RESOURCE_DEFERRED; offload completed evidence before resuming',flush=True)
+                return 75
             Environment = {Key: Value for Key, Value in os.environ.items() if not Key.startswith(
                 ('GANTRIA_PROBE_', 'GANTRIA_CONTACT_', 'GANTRIA_XPBD_CONTACT_', 'GANTRIA_XPBD_STAGE_', 'GANTRIA_XPBD_VELOCITY_'))}
             Environment.update({'GANTRIA_CONTACT_ORDER':Mode[0], 'GANTRIA_XPBD_CONTACT_ORDER':Mode[0],

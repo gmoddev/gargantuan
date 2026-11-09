@@ -1,10 +1,11 @@
-name: Experimental cloth contact screen
+name: Experimental cloth contact qualification
 on:
   push:
     branches: [experiment/jolt-cloth-contact-correction-20261109]
     paths:
       - '.github/workflows/physics-cloth-contact.yml'
       - 'experiments/PhysicsJoltEvaluation/ContactQualification/RunScreen.py'
+      - 'experiments/PhysicsJoltEvaluation/ContactQualification/RunHosted.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -15,7 +16,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2025-vs2026]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
       SDL_VIDEODRIVER: dummy
@@ -29,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: GantriaEngine/JoltPhysics
-          ref: 6ce0135b5be5a1e2e62a5b94cba3cece70b161d1
+          ref: 46c3dfeeee5629562ca134a627a157f8c76faf99
           path: .provider-jolt
           persist-credentials: false
       - name: Enable MSVC
@@ -49,7 +50,7 @@ jobs:
           version: 1.2.0
           cache: true
       - name: Compare frozen and experimental contact orders
-        run: python experiments/PhysicsJoltEvaluation/ContactQualification/RunScreen.py
+        run: python experiments/PhysicsJoltEvaluation/ContactQualification/RunHosted.py
       - name: Preserve successful and failed evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
