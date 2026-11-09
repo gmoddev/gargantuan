@@ -63,6 +63,20 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
         if not FiniteNumber(Value):
             raise ValueError(f'Invalid XPBD accounting scalar {Name}')
         Scalars[Name] = Value
+    IdealFields = ('IdealVelocityReconstructionEnabled',
+                   'IntegrationPositionRoundingKineticDeltaJ',
+                   'IdealVelocityReconstructionKineticDeltaJ')
+    HasIdealFields = any(Name in Accounting for Name in IdealFields)
+    if HasIdealFields and (not all(Name in Accounting for Name in IdealFields) or
+                           type(Accounting['IdealVelocityReconstructionEnabled']) is not bool or
+                           not FiniteNumber(Accounting['IntegrationPositionRoundingKineticDeltaJ']) or
+                           not FiniteNumber(Accounting['IdealVelocityReconstructionKineticDeltaJ'])):
+        raise ValueError(f'Invalid ideal velocity reconstruction metadata at frame {Frame}')
+    IdealEnabled = Accounting['IdealVelocityReconstructionEnabled'] if HasIdealFields else False
+    Scalars['IntegrationPositionRoundingKineticDeltaJ'] = (
+        Accounting['IntegrationPositionRoundingKineticDeltaJ'] if HasIdealFields else 0.0)
+    Scalars['IdealVelocityReconstructionKineticDeltaJ'] = (
+        Accounting['IdealVelocityReconstructionKineticDeltaJ'] if HasIdealFields else 0.0)
     if not Near(Scalars['SubstepSeconds'],
                 Fixture['DeltaTimeSeconds'] / Fixture['Authored']['XpbdSubsteps']) or \
             Accounting.get('PrescribedSurfaceVelocitySource') != \
@@ -78,7 +92,9 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
     LedgerResidual = Scalars['KineticEndJ'] - Scalars['KineticStartJ'] - \
         Scalars['AppliedDynamicsKineticDeltaJ'] - Scalars['DampingKineticDeltaJ'] - \
         Scalars['StructuralProjectionKineticDeltaJ'] - Scalars['PinProjectionKineticDeltaJ'] - \
-        Scalars['ContactKineticDeltaJ']
+        Scalars['ContactKineticDeltaJ'] - \
+        Scalars['IntegrationPositionRoundingKineticDeltaJ'] - \
+        Scalars['IdealVelocityReconstructionKineticDeltaJ']
     SplitDynamics = Scalars['GravityForceKineticDeltaJ'] + \
         Scalars['UniformImpulseKineticDeltaJ'] + Scalars['PointImpulseKineticDeltaJ']
     if not Near(ContactResidual, Scalars['ContactEnergyResidualJ']) or \
@@ -89,15 +105,16 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
                   'DampingImpulseNs', 'PinConstraintImpulseOnClothNs',
                   'NormalImpulseOnClothNs', 'FrictionImpulseOnClothNs')
     ImpulseScale = max(1.0, sum(Norm(Vectors[Name]) for Name in Components))
+    RawResidual = [Vectors['MomentumEndKgMPerS'][Axis] -
+                   Vectors['MomentumStartKgMPerS'][Axis] -
+                   sum(Vectors[Name][Axis] for Name in Components)
+                   for Axis in range(3)]
     for Axis in range(3):
-        Recomputed = Vectors['MomentumEndKgMPerS'][Axis] - \
-            Vectors['MomentumStartKgMPerS'][Axis] - \
-            sum(Vectors[Name][Axis] for Name in Components) - Unpinned[Axis]
+        Recomputed = RawResidual[Axis] - (0.0 if IdealEnabled else Unpinned[Axis])
         if not Near(Recomputed, Vectors['MomentumResidualNs'][Axis]):
             raise ValueError(f'XPBD momentum stage ledger identity fails at frame {Frame}')
-    RawResidual = [Vectors['MomentumResidualNs'][Axis] + Unpinned[Axis]
-                   for Axis in range(3)]
     return {**Scalars, **Vectors,
+            'IdealVelocityReconstructionEnabled': IdealEnabled,
             'NormalizedMomentumResidual': Norm(Vectors['MomentumResidualNs']) /
                 ImpulseScale,
             'NormalizedRawMomentumResidual': Norm(RawResidual) / ImpulseScale,
@@ -139,6 +156,7 @@ def Inspect(CaseDirectory):
     Series = []
     AccountingRows = []
     AccountingSeen = None
+    IdealSeen = None
     with gzip.open(CaseDirectory / 'ContactTraceV1.jsonl.gz', 'rt', encoding='utf-8') as Stream:
         for Frame, Line in enumerate(Stream):
             Row = json.loads(Line)
@@ -159,8 +177,12 @@ def Inspect(CaseDirectory):
             if (Accounting is not None) != AccountingSeen:
                 raise ValueError('XPBD accounting appears in only part of the trace')
             if AccountingSeen:
-                AccountingRows.append(VerifyAccounting(Accounting, Row.get('Stages'),
-                                                       Frame, Fixture))
+                Reduced = VerifyAccounting(Accounting, Row.get('Stages'), Frame, Fixture)
+                if IdealSeen is None:
+                    IdealSeen = Reduced['IdealVelocityReconstructionEnabled']
+                elif Reduced['IdealVelocityReconstructionEnabled'] != IdealSeen:
+                    raise ValueError('Ideal velocity flag changes within one trace')
+                AccountingRows.append(Reduced)
     if len(Series) != Fixture['Frames']:
         raise ValueError('Energy trace frame count mismatch')
     Previous = Initial['TotalJ']
@@ -212,6 +234,13 @@ def Inspect(CaseDirectory):
                     default=None),
             'MaximumNormalizedUnpinnedStructuralNumericalImpulse':
                 max((Row['NormalizedUnpinnedStructuralNumericalImpulse']
+                     for Row in AccountingRows), default=None),
+            'IdealVelocityReconstructionEnabled': IdealSeen,
+            'MaximumAbsoluteIntegrationPositionRoundingKineticDeltaJ':
+                max((abs(Row['IntegrationPositionRoundingKineticDeltaJ'])
+                     for Row in AccountingRows), default=None),
+            'MaximumAbsoluteIdealVelocityReconstructionKineticDeltaJ':
+                max((abs(Row['IdealVelocityReconstructionKineticDeltaJ'])
                      for Row in AccountingRows), default=None),
             'StaticPoseWorkIncompleteFrames': StaticPoseIncompleteFrames,
             'PhysicalResidualStatus': 'DIAGNOSTIC_UNGATED' if AccountingSeen and

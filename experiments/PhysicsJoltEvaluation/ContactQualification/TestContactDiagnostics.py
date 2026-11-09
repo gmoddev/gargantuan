@@ -132,6 +132,50 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(Reduced['NormalizedRawMomentumResidual'], 1.0)
         self.assertEqual(Reduced['NormalizedUnpinnedStructuralNumericalImpulse'], 1.0)
 
+    def test_ideal_velocity_uses_published_raw_momentum_not_would_be_roundoff(self):
+        Record = Accounting()
+        Record['IdealVelocityReconstructionEnabled'] = True
+        Record['IntegrationPositionRoundingKineticDeltaJ'] = 0.25
+        Record['IdealVelocityReconstructionKineticDeltaJ'] = -0.25
+        Record['UnpinnedStructuralNumericalImpulseNs'] = [1.0, 0.0, 0.0]
+        Stages = {'ContactProjectionVelocityDerivedMomentumDeltaNs':
+                  [0.0, 0.0, 0.0], 'ContactProjectionCorrections': 0}
+        Reduced = VerifyAccounting(Record, Stages, 0,
+                                   {'DeltaTimeSeconds': 0.01,
+                                    'Authored': {'XpbdSubsteps': 32}})
+        self.assertTrue(Reduced['IdealVelocityReconstructionEnabled'])
+        self.assertEqual(Reduced['NormalizedRawMomentumResidual'], 0.0)
+        self.assertEqual(Reduced['NormalizedUnpinnedStructuralNumericalImpulse'], 1.0)
+        Record['MomentumEndKgMPerS'] = [0.5, 0.0, 0.0]
+        Record['MomentumResidualNs'] = [0.5, 0.0, 0.0]
+        Reduced = VerifyAccounting(Record, Stages, 0,
+                                   {'DeltaTimeSeconds': 0.01,
+                                    'Authored': {'XpbdSubsteps': 32}})
+        self.assertEqual(Reduced['NormalizedRawMomentumResidual'], 0.5)
+        self.assertEqual(Reduced['NormalizedMomentumResidual'], 0.5)
+
+    def test_ideal_velocity_kinetic_gaps_and_metadata_fail_closed(self):
+        Record = Accounting()
+        Record['IdealVelocityReconstructionEnabled'] = True
+        Record['IntegrationPositionRoundingKineticDeltaJ'] = 0.25
+        Record['IdealVelocityReconstructionKineticDeltaJ'] = -0.25
+        Stages = {'ContactProjectionVelocityDerivedMomentumDeltaNs':
+                  [0.0, 0.0, 0.0], 'ContactProjectionCorrections': 0}
+        VerifyAccounting(Record, Stages, 0,
+                         {'DeltaTimeSeconds': 0.01,
+                          'Authored': {'XpbdSubsteps': 32}})
+        Broken = dict(Record, IdealVelocityReconstructionKineticDeltaJ=-0.2)
+        with self.assertRaisesRegex(ValueError, 'kinetic stage ledger'):
+            VerifyAccounting(Broken, Stages, 0,
+                             {'DeltaTimeSeconds': 0.01,
+                              'Authored': {'XpbdSubsteps': 32}})
+        Broken = dict(Record)
+        del Broken['IntegrationPositionRoundingKineticDeltaJ']
+        with self.assertRaisesRegex(ValueError, 'ideal velocity reconstruction metadata'):
+            VerifyAccounting(Broken, Stages, 0,
+                             {'DeltaTimeSeconds': 0.01,
+                              'Authored': {'XpbdSubsteps': 32}})
+
 
 if __name__ == '__main__':
     unittest.main()
