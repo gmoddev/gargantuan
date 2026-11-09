@@ -120,8 +120,11 @@ live bytes in C versus 63,554,134 in B; with eight workers the pair was
 63,696,186 versus 63,696,146. The 32 MiB temporary arena, runtime setup,
 job setup, and world initialization had no material changed allocation
 counts. World retirement freed the cached topology: final tracked net was
-7,110 bytes in C versus 5,998 in the matching frozen-B world-profile run.
-These net bytes include process/global allocations and are not a leak proof.
+7,110 bytes in C versus 5,998 in the frozen-B world-profile run. The C
+profile performed three admissions and B performed one, so these whole-run
+nets are accounting context, not a like-for-like leak comparison. They also
+include process/global allocations. The phase-level world-retirement frees
+the cache-held topology.
 Instrumented first-body `Optimize` cost was 17.23 ms and 835 allocations;
 its timing is diagnostic only.
 
