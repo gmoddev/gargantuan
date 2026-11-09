@@ -51,6 +51,7 @@ int main() {
         Config.Gravity = {0, -9.81f, 0};
         SoftBodyWorldLimits Limits;
         Limits.MaximumWorkers = 1;
+        Limits.MaximumBodies = 1;
         auto Provider = PhysicsEvaluation::CreateUnifiedJoltProvider(Config, Limits, 1);
         Require(Provider.Soft && Provider.Soft->IsValid(), "Unified provider unavailable");
         auto Definition = Cloth(64);
@@ -61,8 +62,17 @@ int main() {
             "First topology missing");
         const auto FirstInspection = Provider.Soft->GetBodyInspection(First);
         Require(FirstInspection && FirstInspection->ConstraintCount > 0, "First constraints missing");
+        PhysicsEvaluation::ResetJoltAdmissionProfile();
+        Require(!Provider.Soft->CreateBody(Definition).IsValid(),
+            "Live body limit admitted a second body");
+        Require(PhysicsEvaluation::GetJoltAdmissionProfile().CacheHits == 0,
+            "Rejected body reported successful reuse");
         Require(Provider.Soft->DestroyBody(First).Succeeded(), "First retirement failed");
         Require(!Provider.Soft->IsBodyValid(First), "Retired ID remained valid");
+
+        auto Invalid = Definition;
+        Invalid.Size.x = -1.0f;
+        Require(!Provider.Soft->CreateBody(Invalid).IsValid(), "Invalid shape admitted");
 
         const auto Warm = Create(*Provider.Soft, Definition, 1);
         const auto WarmState = Provider.Soft->GetBodyState(Warm);
