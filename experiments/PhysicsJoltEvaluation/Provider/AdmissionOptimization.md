@@ -57,15 +57,16 @@ remain a separate gate.
 
 ## Candidate ownership and bounds
 
-The native candidate changes only the temporary graphs used by Jolt
+The native candidate changes the temporary graphs used by Jolt
 `SoftBodySharedSettings::Optimize` and `CalculateClosestKinematic`. It counts
 per-vertex incident constraints and stores neighbors in contiguous arrays.
-Traversal order, first-seen duplicate coalescing, duplicate weights, remap
-construction, and update-group logic remain in the same sequence. The temporary
-storage has one slot per incident constraint endpoint, including duplicates;
-for dense graphs with many duplicate endpoints this may use more peak temporary
-bytes than the original per-vertex vectors. Native unit tests and before/after
-trajectory or optimized-graph fingerprints must establish behavioral parity.
+Its grouping frontier accumulates scores when each vertex joins the current
+group, avoiding a full rescan of the group for every candidate. It retains
+the original first-seen frontier order, duplicate connection weights,
+distance tie break, remap construction, and update-group sequence. The
+temporary storage has one slot per incident constraint endpoint, including
+duplicates; for dense graphs with many duplicate endpoints this may use more
+peak temporary bytes than the original per-vertex vectors.
 
 The provider candidate has one backend-local retained topology entry. It reuses
 an optimized `SoftBodySharedSettings` and immutable index vector only when the
@@ -98,3 +99,47 @@ unpinned vertices, rod connectivity, and independent mutable bodies sharing
 one settings object. Uninstrumented provider timing, native unit tests in all
 qualified configurations, trajectory parity, and lifecycle resource receipts
 remain required before accepting the candidate.
+
+## Provisional combined default-batch results
+
+The first combined smoke (`C256-Smoke-20261109T064632`) is a provisional
+candidate. Three fresh uninstrumented processes gave a 16K cloth median cold
+admission of 19.24 ms, compared with 55.07 ms for frozen B; same-world
+recreation medians were 0.328 ms and 56.11 ms. The 4K cold medians were
+3.237 ms and 12.63 ms, with warm medians 0.099 ms and 12.23 ms. Four
+independent bodies in different world positions took 19.31 ms cold and
+18.85 ms on a second pass, compared with frozen-B 55.88 ms and 54.57 ms.
+The strict cache key deliberately misses translated bodies.
+
+The instrumented 16K first body made 1,052 tracked allocation calls versus
+163,857 in frozen B. Subsequent cache-hit admissions made 5 each. Its first
+body added 5,320,691 tracked live bytes; after that body retired, 3,096,923
+bytes remained live in the provider cache. Frozen B retained only 2,256
+bytes at the same point. With one worker, world setup held 63,554,174 tracked
+live bytes in C versus 63,554,134 in B; with eight workers the pair was
+63,696,186 versus 63,696,146. The 32 MiB temporary arena, runtime setup,
+job setup, and world initialization had no material changed allocation
+counts. World retirement freed the cached topology: final tracked net was
+7,110 bytes in C versus 5,998 in the matching frozen-B world-profile run.
+These net bytes include process/global allocations and are not a leak proof.
+Instrumented first-body `Optimize` cost was 17.23 ms and 835 allocations;
+its timing is diagnostic only.
+
+`AdmissionTraceCompare.py` streams the binary quality traces and verifies
+the cumulative hash printed for every frame against decoded float bits. All
+eight 40-frame C256 smoke traces (cloth 1K, 4K, 16K, rubber 4K at one and
+eight workers) exactly matched the corresponding first 40 frozen-B long
+frames, including every vertex position; all finite, pin, and axial strain
+gates passed. The independent frozen-B long traces also passed hash integrity
+over 600 cloth or 300 rubber frames. The comparison reports are preserved
+under `AdmissionReduction/C256-*.json` and `AdmissionReduction/*_selfcheck.json`.
+Later native or Engine changes require a new final trace comparison.
+
+An opt-in 512-vertex constraint batch trial is deliberately a changed graph
+and has a separate quality gate. Its 40-frame cloth16K W1 and W8 comparisons
+(`Group512-20261109T064817`) both passed: peak RMS displacement was
+0.0002593 m, peak vertex displacement 0.0006591 m, maximum pin error
+0.000000237 m, peak axial strain 0.041161, and candidate final axial strain
+0.017013. The hash differs from B at frame zero as expected. This is a
+quality result, not a timing recommendation; the experiment must also pass
+long-horizon and comparative performance review.

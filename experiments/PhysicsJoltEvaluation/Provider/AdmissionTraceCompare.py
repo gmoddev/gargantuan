@@ -187,13 +187,14 @@ def Compare(Args: argparse.Namespace) -> dict:
     Limits = Thresholds(Protocol, Args.Scope)
     Baseline, Candidate = Trace(Args.Baseline), Trace(Args.Candidate)
     try:
-        ShapeB = (Baseline.Bodies, Baseline.Vertices, Baseline.Frames, Baseline.Warmup, Baseline.DeltaTime)
-        ShapeC = (Candidate.Bodies, Candidate.Vertices, Candidate.Frames, Candidate.Warmup, Candidate.DeltaTime)
-        if ShapeB != ShapeC:
-            raise ValueError(f"Trace header mismatch: {ShapeB} != {ShapeC}")
-        if Args.Scope == "forty" and Baseline.Frames - Baseline.Warmup != 40:
+        ShapeB = (Baseline.Bodies, Baseline.Vertices, Baseline.Warmup, Baseline.DeltaTime)
+        ShapeC = (Candidate.Bodies, Candidate.Vertices, Candidate.Warmup, Candidate.DeltaTime)
+        if ShapeB != ShapeC or (Baseline.Frames != Candidate.Frames and
+            (not Args.BaselinePrefix or Baseline.Frames < Candidate.Frames)):
+            raise ValueError(f"Trace header mismatch: {ShapeB}, frames={Baseline.Frames} != {ShapeC}, frames={Candidate.Frames}")
+        if Args.Scope == "forty" and Candidate.Frames - Candidate.Warmup != 40:
             raise ValueError("Forty-frame scope requires 40 measured frames")
-        if Args.Scope == "long" and Baseline.Frames - Baseline.Warmup != (300 if Args.Scene == "rubber4k" else 600):
+        if Args.Scope == "long" and Candidate.Frames - Candidate.Warmup != (300 if Args.Scene == "rubber4k" else 600):
             raise ValueError("Long scope frame count does not match protocol")
         Logs = (LogHashes(Args.BaselineLog, Baseline.Frames),
                 LogHashes(Args.CandidateLog, Candidate.Frames))
@@ -204,7 +205,7 @@ def Compare(Args: argparse.Namespace) -> dict:
         FirstLogMismatch = None
         PeakRms = PeakMax = PeakPinB = PeakPinC = PeakStrainB = PeakStrainC = 0.0
         AllFinite = True
-        for Frame in range(Baseline.Frames):
+        for Frame in range(Candidate.Frames):
             RawB, ValuesB = Baseline.Frame()
             RawC, ValuesC = Candidate.Frame()
             Hashes[0] = FrameHash(Hashes[0], RawB)
@@ -252,7 +253,8 @@ def Compare(Args: argparse.Namespace) -> dict:
         return {"Schema": "PhysicsJoltTraceComparison1", "Baseline": str(Args.Baseline),
                 "Candidate": str(Args.Candidate), "Scene": Args.Scene, "Scope": Args.Scope,
                 "Header": {"Bodies": Baseline.Bodies, "VerticesPerBody": Baseline.Vertices,
-                           "Frames": Baseline.Frames, "Warmup": Baseline.Warmup,
+                           "Frames": Candidate.Frames, "BaselineRecordedFrames": Baseline.Frames,
+                           "Warmup": Baseline.Warmup,
                            "DeltaTime": Baseline.DeltaTime},
                 "Thresholds": Limits, "Checks": Checks, "Pass": all(Checks.values()),
                 "FirstHashMismatchFrame": FirstHashMismatch,
@@ -276,6 +278,8 @@ def Main() -> int:
     Parser.add_argument("--scope", dest="Scope", choices=("forty", "long"), required=True)
     Parser.add_argument("--quality", dest="Quality", type=Path, required=True)
     Parser.add_argument("--expect-exact", dest="ExpectExact", action="store_true")
+    Parser.add_argument("--baseline-prefix", dest="BaselinePrefix", action="store_true",
+                        help="Compare only candidate-length prefix of a longer baseline trace")
     Parser.add_argument("--output", dest="Output", type=Path, required=True)
     Args = Parser.parse_args()
     try:
