@@ -87,14 +87,15 @@ namespace gargantuan {
 			}();
 			return Order;
 		}
-		[[nodiscard]] bool GetIdealVelocityReconstructionEnabled() {
-			static const bool Enabled = [] {
+		[[nodiscard]] int GetVelocityPrecisionMode() {
+			static const int Mode = [] {
 				const char *Value = std::getenv("GANTRIA_XPBD_IDEAL_VELOCITY");
-				if (!Value || std::string_view(Value) == "0") return false;
-				if (std::string_view(Value) == "1") return true;
+				if (!Value || std::string_view(Value) == "0") return 0;
+				if (std::string_view(Value) == "1") return 1;
+				if (std::string_view(Value) == "2") return 2;
 				throw std::invalid_argument("[Physics:XpbdContactProbe] invalid ideal velocity flag");
 			}();
-			return Enabled;
+			return Mode;
 		}
 		[[nodiscard]] float GetCoupledNormalCompliance(float StretchCompliance) {
 			const char *Value = std::getenv("GANTRIA_XPBD_CONTACT_NORMAL_COMPLIANCE");
@@ -188,6 +189,8 @@ namespace gargantuan {
 			float RestLength = 0.0f;
 			float Compliance = 0.0f;
 			float Lambda = 0.0f;
+			double ShadowRestLength = 0.0;
+			double ShadowLambda = 0.0;
 		};
 
 		struct SoftBodyVolumeConstraint {
@@ -202,6 +205,13 @@ namespace gargantuan {
 			glm::dvec3 StructuralFloatBias{0.0};
 		};
 
+		struct DoubleShadowNode {
+			glm::dvec3 Position{0.0};
+			glm::dvec3 PreviousPosition{0.0};
+			glm::vec3 PublishedPosition{0.0f};
+			glm::vec3 PublishedPreviousPosition{0.0f};
+		};
+
 		struct SoftBodyRecord {
 			SoftBodyDefinition Definition;
 			std::vector<SoftBodyNode> Nodes;
@@ -213,7 +223,9 @@ namespace gargantuan {
 			PhysicsEvaluation::XpbdContactProjection ContactProjection;
 			bool CaptureAccounting = false;
 			bool ReconstructIdealVelocity = false;
+			bool UseDoubleShadow = false;
 			std::vector<IdealVelocitySnapshot> IdealVelocitySnapshots;
+			std::vector<DoubleShadowNode> DoubleShadowNodes;
 		};
 
 		[[nodiscard]] double NodeKineticEnergy(const SoftBodyNode &Node) {
@@ -250,9 +262,14 @@ namespace gargantuan {
 			glm::vec3 ContactNormal, glm::vec3 SurfaceDelta, float DeltaTime) {
 			if (!Record.CaptureAccounting || Node.InverseMass <= 0.0f) return;
 			const double Mass = 1.0 / double(Node.InverseMass);
-			const glm::dvec3 PositionImpulse = Mass * glm::dvec3(Node.Position - BeforePosition) /
-				double(DeltaTime);
-			const glm::dvec3 VelocityResponseImpulse = -Mass * glm::dvec3(Node.PreviousPosition - BeforePrevious) /
+			const glm::dvec3 PositionChange = Record.UseDoubleShadow ?
+				glm::dvec3(Node.Position) - glm::dvec3(BeforePosition) :
+				glm::dvec3(Node.Position - BeforePosition);
+			const glm::dvec3 PreviousChange = Record.UseDoubleShadow ?
+				glm::dvec3(Node.PreviousPosition) - glm::dvec3(BeforePrevious) :
+				glm::dvec3(Node.PreviousPosition - BeforePrevious);
+			const glm::dvec3 PositionImpulse = Mass * PositionChange / double(DeltaTime);
+			const glm::dvec3 VelocityResponseImpulse = -Mass * PreviousChange /
 				double(DeltaTime);
 			const glm::dvec3 Direction(ContactNormal);
 			const glm::dvec3 NormalResponseImpulse = glm::dot(VelocityResponseImpulse, Direction) * Direction;
@@ -724,7 +741,83 @@ namespace gargantuan {
 			return Result;
 		}
 
+		void InitializeDoubleShadow(SoftBodyRecord &Record) {
+			if (!Record.DoubleShadowNodes.empty()) {
+				if (Record.DoubleShadowNodes.size() != Record.Nodes.size())
+					throw std::runtime_error(
+						"[Physics:XpbdContactProbe] double-shadow node count changed");
+				return;
+			}
+			Record.DoubleShadowNodes.resize(Record.Nodes.size());
+			for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
+				const auto &Node = Record.Nodes[Index];
+				auto &Shadow = Record.DoubleShadowNodes[Index];
+				Shadow.Position = glm::dvec3(Node.Position);
+				Shadow.PreviousPosition = Shadow.Position;
+				Shadow.PublishedPosition = Node.Position;
+				Shadow.PublishedPreviousPosition = Node.PreviousPosition;
+			}
+			for (auto &Constraint : Record.Distances) {
+				Constraint.ShadowRestLength = glm::length(
+					Record.DoubleShadowNodes[Constraint.VertexB].Position -
+					Record.DoubleShadowNodes[Constraint.VertexA].Position);
+				Constraint.ShadowLambda = 0.0;
+			}
+		}
+
+		void SyncDoubleShadowFromContact(SoftBodyRecord &Record) {
+			if (!Record.UseDoubleShadow) return;
+			for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
+				const auto &Node = Record.Nodes[Index];
+				auto &Shadow = Record.DoubleShadowNodes[Index];
+				Shadow.Position += glm::dvec3(Node.Position) -
+					glm::dvec3(Shadow.PublishedPosition);
+				Shadow.PreviousPosition += glm::dvec3(Node.PreviousPosition) -
+					glm::dvec3(Shadow.PublishedPreviousPosition);
+				Shadow.PublishedPosition = Node.Position;
+				Shadow.PublishedPreviousPosition = Node.PreviousPosition;
+			}
+		}
+
 		void SolveDistance(SoftBodyRecord &Record, float DeltaTime, bool RecordAccounting) {
+			if (Record.UseDoubleShadow) {
+				const double StepSeconds = double(DeltaTime);
+				for (auto &Constraint : Record.Distances) {
+					auto &A = Record.DoubleShadowNodes[Constraint.VertexA];
+					auto &B = Record.DoubleShadowNodes[Constraint.VertexB];
+					const glm::dvec3 Delta = B.Position - A.Position;
+					const double Length = glm::length(Delta);
+					if (Length <= 1e-7) continue;
+					const double InverseMassA = double(Record.Nodes[Constraint.VertexA].InverseMass);
+					const double InverseMassB = double(Record.Nodes[Constraint.VertexB].InverseMass);
+					const double Alpha = double(Constraint.Compliance) / (StepSeconds * StepSeconds);
+					if (InverseMassA + InverseMassB + Alpha <= 1e-9) continue;
+					const double DeltaLambda = (-(Length - Constraint.ShadowRestLength) -
+						Alpha * Constraint.ShadowLambda) / (InverseMassA + InverseMassB + Alpha);
+					Constraint.ShadowLambda += DeltaLambda;
+					const glm::dvec3 Correction = (Delta / Length) * DeltaLambda;
+					A.Position -= InverseMassA * Correction;
+					B.Position += InverseMassB * Correction;
+					if (RecordAccounting) {
+						if (InverseMassA == 0.0 && InverseMassB > 0.0)
+							Record.ContactProjection.PinConstraintImpulseOnClothNs +=
+								Correction / StepSeconds;
+						else if (InverseMassB == 0.0 && InverseMassA > 0.0)
+							Record.ContactProjection.PinConstraintImpulseOnClothNs -=
+								Correction / StepSeconds;
+					}
+				}
+				for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
+					auto &Node = Record.Nodes[Index];
+					auto &Shadow = Record.DoubleShadowNodes[Index];
+					Node.Position = glm::vec3(Shadow.Position);
+					if (!IsFinite(Node.Position))
+						throw std::runtime_error(
+							"[Physics:XpbdContactProbe] nonfinite double-shadow position");
+					Shadow.PublishedPosition = Node.Position;
+				}
+				return;
+			}
 			for (auto &Constraint : Record.Distances) {
 				auto &NodeA = Record.Nodes[Constraint.VertexA];
 				auto &NodeB = Record.Nodes[Constraint.VertexB];
@@ -1211,11 +1304,18 @@ namespace gargantuan {
 			const bool RecordAccounting =
 				PhysicsEvaluation::ExperimentalXpbdAccountingEnabled.load(std::memory_order_acquire);
 			Record.CaptureAccounting = RecordAccounting;
-			const bool ReconstructIdealVelocity = GetIdealVelocityReconstructionEnabled();
-			if (ReconstructIdealVelocity && Record.Definition.Kind != SoftBodyKind::Cloth)
+			const int VelocityPrecisionMode = GetVelocityPrecisionMode();
+			const bool ReconstructIdealVelocity = VelocityPrecisionMode == 1;
+			const bool UseDoubleShadow = VelocityPrecisionMode == 2;
+			if (VelocityPrecisionMode != 0 && Record.Definition.Kind != SoftBodyKind::Cloth)
 				throw std::invalid_argument(
-					"[Physics:XpbdContactProbe] ideal velocity mode requires cloth");
+					"[Physics:XpbdContactProbe] precision mode requires cloth");
 			Record.ReconstructIdealVelocity = ReconstructIdealVelocity;
+			Record.UseDoubleShadow = UseDoubleShadow;
+			if (UseDoubleShadow) {
+				InitializeDoubleShadow(Record);
+				SyncDoubleShadowFromContact(Record);
+			}
 			if (RecordAccounting)
 				Record.ContactProjection.KineticStartJ = StoredKineticEnergy(Record);
 			if (RecordAccounting)
@@ -1279,8 +1379,14 @@ namespace gargantuan {
 				if (Node.InverseMass > 0.0f) ++MovableCount;
 			const auto TotalMass = static_cast<float>(MovableCount) * Record.Definition.Material.ParticleMass;
 			const auto Damping = std::clamp(1.0f - Record.Definition.Material.Damping, 0.0f, 1.0f);
-			for (auto &Node : Record.Nodes) {
+			for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
+				auto &Node = Record.Nodes[Index];
 				Node.PreviousPosition = Node.Position;
+				if (UseDoubleShadow) {
+					auto &Shadow = Record.DoubleShadowNodes[Index];
+					Shadow.PreviousPosition = Shadow.Position;
+					Shadow.PublishedPreviousPosition = Node.PreviousPosition;
+				}
 				if (Node.InverseMass == 0.0f || MovableCount == 0) continue;
 				const double BeforeForceJ = RecordAccounting ? NodeKineticEnergy(Node) : 0.0;
 				const glm::dvec3 BeforeForceMomentum = RecordAccounting ? NodeMomentum(Node) : glm::dvec3(0.0);
@@ -1316,10 +1422,21 @@ namespace gargantuan {
 			if (RecordAccounting)
 				Record.ContactProjection.AppliedDynamicsKineticDeltaJ =
 					BeforeDampingJ - Record.ContactProjection.KineticStartJ;
-			for (auto &Node : Record.Nodes) {
+			for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
+				auto &Node = Record.Nodes[Index];
 				if (Node.InverseMass == 0.0f) continue;
 				Node.Velocity *= Damping;
-				Node.Position += Node.Velocity * Batch.DeltaTime;
+				if (UseDoubleShadow) {
+					auto &Shadow = Record.DoubleShadowNodes[Index];
+					Shadow.Position += glm::dvec3(Node.Velocity) * double(Batch.DeltaTime);
+					Node.Position = glm::vec3(Shadow.Position);
+					if (!IsFinite(Node.Position))
+						throw std::runtime_error(
+							"[Physics:XpbdContactProbe] nonfinite integrated shadow position");
+					Shadow.PublishedPosition = Node.Position;
+				} else {
+					Node.Position += Node.Velocity * Batch.DeltaTime;
+				}
 			}
 			if (RecordAccounting)
 				Record.ContactProjection.DampingKineticDeltaJ =
@@ -1336,14 +1453,17 @@ namespace gargantuan {
 					Snapshot.InitialPreviousPosition = Node.PreviousPosition;
 					Snapshot.StructuralFloatBias = glm::dvec3(0.0);
 				}
-				if (RecordAccounting)
-					Record.ContactProjection.IntegrationPositionRoundingKineticDeltaJ =
-						PositionKineticEnergy(Record, Batch.DeltaTime) - StoredKineticEnergy(Record);
 			}
+			if (RecordAccounting && (ReconstructIdealVelocity || UseDoubleShadow))
+				Record.ContactProjection.IntegrationPositionRoundingKineticDeltaJ =
+					PositionKineticEnergy(Record, Batch.DeltaTime) - StoredKineticEnergy(Record);
 			Item.Profile.IntegrationNanoseconds += Nanoseconds(ProfileClock::now() - IntegrationStart);
 
 			for (auto &Constraint : Record.Distances)
 				Constraint.Lambda = 0.0f;
+			if (UseDoubleShadow)
+				for (auto &Constraint : Record.Distances)
+					Constraint.ShadowLambda = 0.0;
 			for (auto &Constraint : Record.Volumes)
 				Constraint.Lambda = 0.0f;
 			const auto Iterations = IterationCount(Record);
@@ -1371,6 +1491,7 @@ namespace gargantuan {
 						Iteration + 1 == Iterations,
 						ContactOrder == ExperimentalContactOrder::CoupledNormal ? &ContactNormalLambdas : nullptr,
 						SourceDeltas);
+					if (UseDoubleShadow) SyncDoubleShadowFromContact(Record);
 					LogStage(Iteration, "AfterPreContact");
 				}
 				const auto ConstraintStart = ProfileClock::now();
@@ -1391,22 +1512,32 @@ namespace gargantuan {
 						ContactOrder == ExperimentalContactOrder::KinematicRelative);
 					if (ContactOrder == ExperimentalContactOrder::TriangleSurface)
 						CollideFaces(Item, Batch, SourceDeltas);
+					if (UseDoubleShadow) SyncDoubleShadowFromContact(Record);
 					LogStage(Iteration, "AfterPostContact");
 				}
 				const double BeforePinsJ = RecordAccounting ?
 					PositionKineticEnergy(Record, Batch.DeltaTime) : 0.0;
 				ApplyAttachments(Record);
+				if (UseDoubleShadow) SyncDoubleShadowFromContact(Record);
 				if (RecordAccounting)
 					Record.ContactProjection.PinProjectionKineticDeltaJ +=
 						PositionKineticEnergy(Record, Batch.DeltaTime) - BeforePinsJ;
 			}
 			LogStage(Iterations, "AfterSolve");
-			const double BeforeReconstructionJ = RecordAccounting && ReconstructIdealVelocity ?
+			const double BeforeReconstructionJ = RecordAccounting &&
+				(ReconstructIdealVelocity || UseDoubleShadow) ?
 				PositionKineticEnergy(Record, Batch.DeltaTime) : 0.0;
 			for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
 				auto &Node = Record.Nodes[Index];
 				if (Node.InverseMass == 0.0f) {
 					Node.Velocity = glm::vec3{};
+				} else if (UseDoubleShadow) {
+					const auto &Shadow = Record.DoubleShadowNodes[Index];
+					Node.Velocity = glm::vec3((Shadow.Position - Shadow.PreviousPosition) /
+						double(Batch.DeltaTime));
+					if (!IsFinite(Node.Velocity))
+						throw std::runtime_error(
+							"[Physics:XpbdContactProbe] nonfinite double-shadow velocity");
 				} else if (ReconstructIdealVelocity) {
 					const auto &Snapshot = Record.IdealVelocitySnapshots[Index];
 					const glm::dvec3 OtherAndIdealDisplacement =
@@ -1424,7 +1555,7 @@ namespace gargantuan {
 				}
 			}
 			if (RecordAccounting) {
-				if (ReconstructIdealVelocity)
+				if (ReconstructIdealVelocity || UseDoubleShadow)
 					Record.ContactProjection.IdealVelocityReconstructionKineticDeltaJ =
 						StoredKineticEnergy(Record) - BeforeReconstructionJ;
 				Record.ContactProjection.KineticEndJ = StoredKineticEnergy(Record);
@@ -1440,7 +1571,7 @@ namespace gargantuan {
 					Accounting.MomentumStartKgMPerS - Accounting.GravityForceImpulseNs -
 					Accounting.UniformImpulseNs - Accounting.PointImpulseNs -
 					Accounting.DampingImpulseNs - Accounting.PinConstraintImpulseOnClothNs -
-						(ReconstructIdealVelocity ? glm::dvec3(0.0) :
+						((ReconstructIdealVelocity || UseDoubleShadow) ? glm::dvec3(0.0) :
 							Accounting.UnpinnedStructuralNumericalImpulseNs) -
 					Accounting.NormalImpulseOnClothNs - Accounting.FrictionImpulseOnClothNs;
 			}

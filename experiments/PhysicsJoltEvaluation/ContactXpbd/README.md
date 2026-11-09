@@ -126,3 +126,18 @@ introduced by reconstruction. Neither term is external work or physical
 dissipation. The 9×9 no-contact uniform-launch control in `Controls/` checks
 that this mode does not manufacture contact impulses; static and prescribed
 moving controls at 16/32/64 substeps test momentum leakage and convergence.
+
+`GANTRIA_XPBD_IDEAL_VELOCITY=2` is a separate private double-shadow cloth
+experiment. It retains each node's position and previous position in double
+precision across substeps and solves distance constraints with double rest
+lengths and multipliers initialized from the admitted float rest geometry.
+The existing float node positions are published at each iteration boundary for
+the unchanged vertex/face contact selection and friction policy. Actual float
+contact and previous-position edits are then added back to the shadow state;
+final velocity comes from its double displacement. This avoids feeding
+quantized float world positions back into a stiff distance solve when there is
+no contact. It does not add collision features, rigid reciprocity, elastic
+energy accounting, or a physical quality pass. The shadow and ideal-velocity
+buffers are retained per live cloth body under the ordinary vertex limit.
+The trace identifies mode `2` with `DoubleShadowEnabled` and
+`VelocityPrecisionMode`; source receipts must pin that environment variable.

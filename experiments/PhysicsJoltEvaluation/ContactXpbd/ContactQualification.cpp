@@ -144,6 +144,13 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     const Json Config = Json::parse(Input);
     const std::string BackendName = Config.at("Backend").get<std::string>();
     Require(BackendName == "jolt" || BackendName == "xpbd", "Backend must be jolt or xpbd");
+    const char *VelocityModeEnvironment = std::getenv("GANTRIA_XPBD_IDEAL_VELOCITY");
+    const std::string VelocityPrecisionMode = VelocityModeEnvironment ?
+        VelocityModeEnvironment : "0";
+    Require(VelocityPrecisionMode == "0" || VelocityPrecisionMode == "1" ||
+        VelocityPrecisionMode == "2", "GANTRIA_XPBD_IDEAL_VELOCITY must be 0, 1, or 2");
+    Require(BackendName == "xpbd" || VelocityPrecisionMode == "0",
+        "XPBD precision mode cannot be selected for Jolt");
     const bool CaptureTrace = Config.value("CaptureTrace", true);
     const char *AccountingEnvironment = std::getenv("GANTRIA_CONTACT_ACCOUNTING");
     Require(!AccountingEnvironment ||
@@ -476,8 +483,9 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 {"IdealVelocityReconstructionKineticDeltaJ",
                     FrameContact.IdealVelocityReconstructionKineticDeltaJ},
                 {"IdealVelocityReconstructionEnabled",
-                    BackendName == "xpbd" && std::getenv("GANTRIA_XPBD_IDEAL_VELOCITY") &&
-                    std::string_view(std::getenv("GANTRIA_XPBD_IDEAL_VELOCITY")) == "1"},
+                    VelocityPrecisionMode == "1"},
+                {"DoubleShadowEnabled", VelocityPrecisionMode == "2"},
+                {"VelocityPrecisionMode", VelocityPrecisionMode},
                 {"LedgerResidualJ", FrameContact.LedgerResidualJ},
                 {"SubstepSeconds", DeltaTime / float(Substeps)},
                 {"PrescribedSurfaceVelocitySource", "center(end)-center(start) per substep"},
