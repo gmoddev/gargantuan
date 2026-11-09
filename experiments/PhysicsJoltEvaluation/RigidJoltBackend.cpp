@@ -1,5 +1,9 @@
 #include "RigidJoltBackend.hpp"
 #include "Provider/UnifiedJoltProvider.hpp"
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+#include "ExperimentSupport.hpp"
+#include <chrono>
+#endif
 
 #if defined(PHYSICS_GANTRIA_CONVERGENCE) && !defined(PHYSICS_GANTRIA_JOLT)
 #error "The repeated-sweep provider profile requires the corrected Gantria Jolt solver"
@@ -65,6 +69,27 @@
 namespace PhysicsEvaluation {
 namespace {
     using namespace gargantuan;
+
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+    using AdmissionClock = std::chrono::steady_clock;
+    thread_local JoltAdmissionProfile AdmissionProfile;
+    class AdmissionMeasure {
+    public:
+        explicit AdmissionMeasure(JoltAdmissionPhase &Phase)
+            : Target(Phase), Start(AdmissionClock::now()), Before(CaptureResources()) {}
+        ~AdmissionMeasure() {
+            const auto After = CaptureResources();
+            Target.Milliseconds += std::chrono::duration<double, std::milli>(
+                AdmissionClock::now() - Start).count();
+            Target.AllocationCalls += After.AllocationCalls - Before.AllocationCalls;
+            Target.AllocatedBytes += After.AllocatedBytes - Before.AllocatedBytes;
+        }
+    private:
+        JoltAdmissionPhase &Target;
+        AdmissionClock::time_point Start;
+        ResourceSnapshot Before;
+    };
+#endif
 
     JPH::Vec3 ToJolt(glm::vec3 Value) { return {Value.x, Value.y, Value.z}; }
     JPH::RVec3 ToRVec(glm::vec3 Value) { return {Value.x, Value.y, Value.z}; }
@@ -1608,7 +1633,12 @@ namespace {
             MaximumMassMoment > double(std::numeric_limits<float>::max()) / 16.0)
             return std::nullopt;
         const float InverseMass = static_cast<float>(InverseMassDouble);
-        SoftConstruction Result{new JPH::SoftBodySharedSettings,
+        SoftConstruction Result;
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+        {
+            AdmissionMeasure Measure(AdmissionProfile.Topology);
+#endif
+        Result = {new JPH::SoftBodySharedSettings,
             std::make_shared<std::vector<std::uint32_t>>()};
         const auto Index = [X, Y](std::uint32_t I, std::uint32_t J, std::uint32_t K = 0) {
             return static_cast<std::uint32_t>((K * Y + J) * X + I);
@@ -1687,6 +1717,11 @@ namespace {
                     if (I + 2 == X) { Face(B, F, H); Face(B, H, D); }
                 }
         }
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+        }
+        {
+            AdmissionMeasure Measure(AdmissionProfile.Precompute);
+#endif
         const auto ConstraintCount = Result.Shared->mEdgeConstraints.size() +
             Result.Shared->mVolumeConstraints.size();
         if (ConstraintCount > Limits.MaximumConstraints) return std::nullopt;
@@ -1709,7 +1744,15 @@ namespace {
             Result.Shared->mVertices[Attachment.Vertex].mPosition = JPH::Float3(Local.x, Local.y, Local.z);
             Result.Shared->mVertices[Attachment.Vertex].mInvMass = 0.0f;
         }
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+        }
+        {
+            AdmissionMeasure Measure(AdmissionProfile.Optimize);
+#endif
         Result.Shared->Optimize();
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+        }
+#endif
         return Result;
     }
 
@@ -1755,9 +1798,21 @@ namespace {
                 SoftBodyStepInterval);
             Settings.mFriction = Definition.Material.Friction;
             Settings.mVertexRadius = Definition.Material.Thickness;
-            const auto Native = Owner.World.GetBodyInterface().CreateAndAddSoftBody(Settings,
+            JPH::BodyID Native;
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            {
+                AdmissionMeasure Measure(AdmissionProfile.NativeCreate);
+#endif
+            Native = Owner.World.GetBodyInterface().CreateAndAddSoftBody(Settings,
                 Definition.Enabled ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            }
+#endif
             if (Native.IsInvalid()) return {};
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            {
+                AdmissionMeasure Measure(AdmissionProfile.SlotCommit);
+#endif
             std::uint32_t Index = 1;
             for (; Index < Slots.size() && (Slots[Index].Live || Slots[Index].Retired); ++Index) {}
             if (Index == Slots.size()) Slots.emplace_back();
@@ -1776,6 +1831,9 @@ namespace {
             ++LiveBodies;
             LiveVertices += NewVertices;
             LiveConstraints += NewConstraints;
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            }
+#endif
             return {Index, Slot.Generation};
         }
         PhysicsOperationResult UpdateBody(SoftBodyId Id, const SoftBodyDefinition &Definition) override {
@@ -2162,6 +2220,11 @@ namespace {
         bool Stopped = false;
     };
 }
+// The admission executable resets this before each isolated body construction.
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+void ResetJoltAdmissionProfile() { AdmissionProfile = {}; }
+JoltAdmissionProfile GetJoltAdmissionProfile() { return AdmissionProfile; }
+#endif
 
 std::unique_ptr<gargantuan::IPhysicsBackend> CreateRigidJoltBackend(
     const gargantuan::PhysicsWorldConfig &Config, int WorkerBudget) {

@@ -51,6 +51,25 @@ namespace PhysicsEvaluation {
     };
     [[nodiscard]] JoltSoftSolverProfile GetJoltSoftSolverProfile();
 
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+    // Private, thread-local measurements for the dedicated admission executable.
+    // The normal timing and allocation targets compile without these probes.
+    struct JoltAdmissionPhase {
+        double Milliseconds = 0;
+        std::uint64_t AllocationCalls = 0;
+        std::uint64_t AllocatedBytes = 0;
+    };
+    struct JoltAdmissionProfile {
+        JoltAdmissionPhase Topology;
+        JoltAdmissionPhase Precompute;
+        JoltAdmissionPhase Optimize;
+        JoltAdmissionPhase NativeCreate;
+        JoltAdmissionPhase SlotCommit;
+    };
+    void ResetJoltAdmissionProfile();
+    [[nodiscard]] JoltAdmissionProfile GetJoltAdmissionProfile();
+#endif
+
     // Cumulative vertex contacts reported by Jolt's soft-rigid manifold for
     // this live neutral-ID pair. Enable capture before Step in private fixtures;
     // default provider timing keeps the native listener unset.
