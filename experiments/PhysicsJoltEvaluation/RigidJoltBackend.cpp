@@ -1876,6 +1876,9 @@ namespace {
             LiveVertices += NewVertices;
             LiveConstraints += NewConstraints;
             if (!Prepared->CacheHit) Cached = std::move(Prepared->Candidate);
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            else ++AdmissionProfile.CacheHits;
+#endif
             CreatedId = {Index, Slot.Generation};
 #ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
             }
@@ -1970,6 +1973,9 @@ namespace {
             Slot->ExtractedSequence = Owner.StepSequence;
             Slot->EverSimulated = false;
             if (!Prepared->CacheHit) Cached = std::move(Prepared->Candidate);
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            else ++AdmissionProfile.CacheHits;
+#endif
             return {};
         }
         PhysicsOperationResult DestroyBody(SoftBodyId Id) override {
@@ -2179,9 +2185,6 @@ namespace {
         }
         std::optional<PreparedConstruction> PrepareConstruction(const SoftBodyDefinition &Definition) {
             if (Cached && SameCachedDefinition(Cached->Definition, Definition)) {
-#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
-                ++AdmissionProfile.CacheHits;
-#endif
                 return PreparedConstruction{Cached->Construction, true, nullptr};
             }
             auto Built = BuildSoft(Definition, Limits);
