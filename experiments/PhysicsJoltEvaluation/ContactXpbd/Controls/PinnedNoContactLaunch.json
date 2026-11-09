@@ -1,0 +1,18 @@
+{
+  "CaseId": "xpbd-ideal-velocity-pinned-no-contact-launch",
+  "Backend": "xpbd",
+  "Resolution": 9,
+  "Frames": 12,
+  "Workers": 1,
+  "XpbdSubsteps": 32,
+  "Pins": "top",
+  "GravityMPerS2": [0, 0, 0],
+  "InitialVelocityMPerS": [2, 0, 0],
+  "Material": {"Damping": 0, "Friction": 0},
+  "Spheres": [],
+  "Gates": {
+    "MaximumAxialStrain": 0.1,
+    "MaximumPinErrorM": 0.0001,
+    "MaximumSpherePenetrationM": 0.001
+  }
+}
