@@ -783,10 +783,17 @@ namespace gargantuan {
 			for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
 				const auto &Node = Record.Nodes[Index];
 				auto &Shadow = Record.DoubleShadowNodes[Index];
-				Shadow.Position += glm::dvec3(Node.Position) -
-					glm::dvec3(Shadow.PublishedPosition);
-				Shadow.PreviousPosition += glm::dvec3(Node.PreviousPosition) -
-					glm::dvec3(Shadow.PublishedPreviousPosition);
+				if (Node.InverseMass == 0.0f) {
+					// Attachment targets are absolute world positions, including live
+					// updates; do not carry a hidden sub-ULP offset across a teleport.
+					Shadow.Position = glm::dvec3(Node.Position);
+					Shadow.PreviousPosition = glm::dvec3(Node.PreviousPosition);
+				} else {
+					Shadow.Position += glm::dvec3(Node.Position) -
+						glm::dvec3(Shadow.PublishedPosition);
+					Shadow.PreviousPosition += glm::dvec3(Node.PreviousPosition) -
+						glm::dvec3(Shadow.PublishedPreviousPosition);
+				}
 				Shadow.PublishedPosition = Node.Position;
 				Shadow.PublishedPreviousPosition = Node.PreviousPosition;
 			}
