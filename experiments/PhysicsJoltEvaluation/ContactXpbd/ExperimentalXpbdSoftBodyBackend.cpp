@@ -9,9 +9,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -880,6 +882,59 @@ namespace gargantuan {
 		void SolveWorkItem(SoftBodyWorkItem &Item, const SoftBodySimulationBatch &Batch) {
 			const auto WorkerStart = ProfileClock::now();
 			auto &Record = Item.Record;
+			static const unsigned long StageStride = [] {
+				const char *Text = std::getenv("GANTRIA_XPBD_STAGE_STRIDE");
+				if (!Text) return 0ul;
+				char *End = nullptr;
+				const auto Parsed = std::strtoul(Text, &End, 10);
+				if (!End || *End || Parsed < 1 || Parsed > 600)
+					throw std::invalid_argument("[Physics:XpbdContactProbe] invalid stage stride");
+				return Parsed;
+			}();
+			static std::atomic<std::uint64_t> StageSteps{0};
+			const std::uint64_t StageStep = StageStride ? StageSteps.fetch_add(1) : 0;
+			const bool StageSample = StageStride && (StageStep + 1) % StageStride == 0;
+			const auto LogStage = [&](int Iteration, const char *Phase) {
+				if (!StageSample) return;
+				if (Item.Body.Slot != 1 || Record.Definition.Kind != SoftBodyKind::Cloth)
+					throw std::runtime_error("[Physics:XpbdContactProbe] stage trace needs one cloth body");
+				const auto XCount = Record.Definition.ResolutionX;
+				const auto YCount = Record.Definition.ResolutionY;
+				float MaxTension = 0.0f, MaxCompression = 0.0f;
+				float MaxPenetration = 0.0f, MaxAbsZ = 0.0f;
+				for (std::uint32_t Y = 0; Y < YCount; ++Y)
+					for (std::uint32_t X = 0; X < XCount; ++X) {
+						const auto Index = std::size_t(Y) * XCount + X;
+						const auto &Node = Record.Nodes[Index];
+						MaxAbsZ = std::max(MaxAbsZ, std::abs(Node.Position.z));
+						const auto Edge = [&](std::size_t Next) {
+							const float Rest = glm::length(Record.Nodes[Next].RestOffset - Node.RestOffset);
+							if (Rest <= 0) return;
+							const float Strain = glm::length(Record.Nodes[Next].Position - Node.Position) / Rest - 1.0f;
+							MaxTension = std::max(MaxTension, Strain);
+							MaxCompression = std::min(MaxCompression, Strain);
+						};
+						if (X + 1 < XCount) Edge(Index + 1);
+						if (Y + 1 < YCount) Edge(Index + XCount);
+						for (const auto &Collider : Batch.Colliders) {
+							if (Collider.Shape.Kind != PhysicsShapeKind::Ball) continue;
+							const float Radius = std::min({Collider.Shape.Size.x, Collider.Shape.Size.y,
+								Collider.Shape.Size.z}) * 0.5f + Record.Definition.Material.Thickness;
+							MaxPenetration = std::max(MaxPenetration,
+								Radius - glm::length(Node.Position - Collider.Transform.Position));
+						}
+					}
+				float ReferenceEdgeStrain = 0.0f;
+				if (XCount == 128 && YCount == 128) {
+					const auto A = std::size_t(50) * XCount + 126, B = A + 1;
+					const float Rest = glm::length(Record.Nodes[B].RestOffset - Record.Nodes[A].RestOffset);
+					ReferenceEdgeStrain = glm::length(Record.Nodes[B].Position - Record.Nodes[A].Position) / Rest - 1.0f;
+				}
+				std::fprintf(stdout,
+					"[Physics:XpbdContactStage] substep=%llu iteration=%d phase=%s tension=%.9g compression=%.9g penetration_m=%.9g max_abs_z_m=%.9g edge_126_50=%.9g\n",
+					static_cast<unsigned long long>(StageStep), Iteration, Phase, MaxTension,
+					MaxCompression, MaxPenetration, MaxAbsZ, ReferenceEdgeStrain);
+			};
 			const auto IntegrationStart = ProfileClock::now();
 			std::size_t MovableCount = 0;
 			for (const auto &Node : Record.Nodes)
@@ -908,20 +963,27 @@ namespace gargantuan {
 				Constraint.Lambda = 0.0f;
 			const auto Iterations = IterationCount(Record);
 			const auto ContactOrder = GetExperimentalContactOrder();
+			LogStage(-1, "BeforeSolve");
 			for (int Iteration = 0; Iteration < Iterations; ++Iteration) {
-				if (ContactOrder != ExperimentalContactOrder::Existing)
+				if (ContactOrder != ExperimentalContactOrder::Existing) {
 					Collide(Item, Batch,
 						ContactOrder == ExperimentalContactOrder::ContactThenStructure &&
 						Iteration + 1 == Iterations);
+					LogStage(Iteration, "AfterPreContact");
+				}
 				const auto ConstraintStart = ProfileClock::now();
 				SolveDistance(Record, Batch.DeltaTime);
 				SolveVolume(Record, Batch.DeltaTime);
 				SolveShapeRecovery(Record, Batch.DeltaTime);
 				Item.Profile.ConstraintNanoseconds += Nanoseconds(ProfileClock::now() - ConstraintStart);
-				if (ContactOrder != ExperimentalContactOrder::ContactThenStructure)
+				LogStage(Iteration, "AfterStructure");
+				if (ContactOrder != ExperimentalContactOrder::ContactThenStructure) {
 					Collide(Item, Batch, Iteration + 1 == Iterations);
+					LogStage(Iteration, "AfterPostContact");
+				}
 				ApplyAttachments(Record);
 			}
+			LogStage(Iterations, "AfterSolve");
 			for (auto &Node : Record.Nodes)
 				Node.Velocity = Node.InverseMass == 0.0f ? glm::vec3{}
 														 : (Node.Position - Node.PreviousPosition) / Batch.DeltaTime;
