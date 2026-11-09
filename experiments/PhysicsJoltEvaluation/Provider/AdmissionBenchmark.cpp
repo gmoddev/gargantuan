@@ -9,13 +9,14 @@
 #include <string>
 #include <vector>
 
-#ifndef PHYSICS_EVALUATION_ADMISSION_PROFILE
-#error "AdmissionBenchmark requires PHYSICS_EVALUATION_ADMISSION_PROFILE"
-#endif
-
 namespace {
     using namespace gargantuan;
     using Clock = std::chrono::steady_clock;
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+    constexpr bool Instrumented = true;
+#else
+    constexpr bool Instrumented = false;
+#endif
 
     double Milliseconds(Clock::duration Duration) {
         return std::chrono::duration<double, std::milli>(Duration).count();
@@ -36,6 +37,7 @@ namespace {
         return Definition;
     }
 
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
     nlohmann::json Phase(const PhysicsEvaluation::JoltAdmissionPhase &Value) {
         return {{"Milliseconds", Value.Milliseconds},
             {"AllocationCalls", Value.AllocationCalls},
@@ -54,6 +56,7 @@ namespace {
         return {{"TempArena", Phase(Value.TempArena)}, {"Runtime", Phase(Value.Runtime)},
             {"Jobs", Phase(Value.Jobs)}, {"WorldInit", Phase(Value.WorldInit)}};
     }
+#endif
 
     struct BodySample {
         std::uint32_t Repeat = 0;
@@ -65,7 +68,9 @@ namespace {
         PhysicsEvaluation::ResourceSnapshot AfterCreate;
         PhysicsEvaluation::ResourceSnapshot AfterExtract;
         PhysicsEvaluation::ResourceSnapshot AfterRetire;
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
         PhysicsEvaluation::JoltAdmissionProfile Admission;
+#endif
     };
 }
 
@@ -99,7 +104,9 @@ int main(int ArgumentCount, char **Arguments) {
         SoftBodyWorldLimits Limits;
         Limits.MaximumWorkers = Workers;
         const auto BeforeWorld = PhysicsEvaluation::CaptureResources();
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
         PhysicsEvaluation::ResetJoltWorldAdmissionProfile();
+#endif
         const auto WorldStart = Clock::now();
         PhysicsEvaluation::UnifiedJoltProvider Jolt;
         std::unique_ptr<ISoftBodyBackend> Xpbd;
@@ -109,7 +116,9 @@ int main(int ArgumentCount, char **Arguments) {
         if (!Soft || !Soft->IsValid()) throw std::runtime_error("World creation failed");
         const double WorldMs = Milliseconds(Clock::now() - WorldStart);
         const auto AfterWorld = PhysicsEvaluation::CaptureResources();
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
         const auto WorldAdmission = PhysicsEvaluation::GetJoltWorldAdmissionProfile();
+#endif
 
         std::vector<BodySample> Samples;
         Samples.reserve(std::size_t(BodyCount) * Repeats);
@@ -121,12 +130,16 @@ int main(int ArgumentCount, char **Arguments) {
                 Sample.Repeat = Repeat;
                 Sample.Body = Index;
                 Sample.BeforeCreate = PhysicsEvaluation::CaptureResources();
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
                 PhysicsEvaluation::ResetJoltAdmissionProfile();
+#endif
                 const auto CreateStart = Clock::now();
                 const auto Id = Soft->CreateBody(Definitions[Index]);
                 Sample.CreateMs = Milliseconds(Clock::now() - CreateStart);
                 Sample.AfterCreate = PhysicsEvaluation::CaptureResources();
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
                 Sample.Admission = PhysicsEvaluation::GetJoltAdmissionProfile();
+#endif
                 if (!Id.IsValid()) throw std::runtime_error("Body admission failed");
                 const auto ExtractStart = Clock::now();
                 {
@@ -157,25 +170,31 @@ int main(int ArgumentCount, char **Arguments) {
         const auto AfterWorldRetire = PhysicsEvaluation::CaptureResources();
 
         nlohmann::json Rows = nlohmann::json::array();
-        for (const auto &Sample : Samples)
-            Rows.push_back({{"Repeat", Sample.Repeat}, {"Body", Sample.Body},
+        for (const auto &Sample : Samples) {
+            nlohmann::json Row = {{"Repeat", Sample.Repeat}, {"Body", Sample.Body},
                 {"CreateMs", Sample.CreateMs}, {"ExtractMs", Sample.ExtractMs},
                 {"RetireMs", Sample.RetireMs},
                 {"CreateResources", PhysicsEvaluation::ResourceDelta(Sample.BeforeCreate, Sample.AfterCreate)},
                 {"ExtractResources", PhysicsEvaluation::ResourceDelta(Sample.AfterCreate, Sample.AfterExtract)},
-                {"RetireResources", PhysicsEvaluation::ResourceDelta(Sample.AfterExtract, Sample.AfterRetire)},
-                {"Admission", Profile(Sample.Admission)}});
-        const nlohmann::json Result = {
+                {"RetireResources", PhysicsEvaluation::ResourceDelta(Sample.AfterExtract, Sample.AfterRetire)}};
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            Row["Admission"] = Profile(Sample.Admission);
+#endif
+            Rows.push_back(std::move(Row));
+        }
+        nlohmann::json Result = {
             {"Schema", "PhysicsJoltAdmissionProfile1"}, {"Backend", Backend}, {"Scene", Scene},
             {"Bodies", BodyCount}, {"Repeats", Repeats}, {"Workers", Workers},
-            {"Instrumented", true},
+            {"Instrumented", Instrumented},
             {"WorldMs", WorldMs}, {"WorldResources", PhysicsEvaluation::ResourceDelta(BeforeWorld, AfterWorld)},
-            {"WorldAdmission", WorldProfile(WorldAdmission)},
             {"WorldRetireMs", WorldRetireMs},
             {"WorldRetireResources", PhysicsEvaluation::ResourceDelta(BeforeWorldRetire, AfterWorldRetire)},
             {"WholeResources", PhysicsEvaluation::ResourceDelta(BeforeWorld, AfterWorldRetire)},
             {"Samples", Rows}
         };
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+        Result["WorldAdmission"] = WorldProfile(WorldAdmission);
+#endif
         std::cout << "[Physics:Admission] " << Result.dump() << '\n';
         return 0;
     } catch (const std::exception &Error) {
