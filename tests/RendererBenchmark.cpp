@@ -5,6 +5,8 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/editor/EditorViewport.hpp"
+#include "gargantuan/render/PrimitiveMeshes.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -18,11 +20,15 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -34,6 +40,9 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
 
 namespace {
 	using Clock = std::chrono::steady_clock;
@@ -47,6 +56,9 @@ namespace {
 		std::uint32_t Width = 1280;
 		std::uint32_t Height = 720;
 		bool ShadowsEnabled = false;
+		bool Incremental = false;
+		bool Synchronize = true;
+		std::optional<std::filesystem::path> CapturePrefix;
 	};
 
 	struct ScenarioCase {
@@ -75,12 +87,13 @@ namespace {
 		return Samples[std::min(Index, Samples.size() - 1)];
 	}
 
-	std::size_t ParseSize(std::string_view Value, std::string_view Name) {
-		std::size_t ParsedCharacters = 0;
-		const auto Parsed = std::stoull(std::string(Value), &ParsedCharacters);
-		if (ParsedCharacters != Value.size() || Parsed == 0)
+	template <typename Integer = std::size_t>
+	Integer ParseSize(std::string_view Value, std::string_view Name) {
+		Integer Parsed = 0;
+		const auto [End, Error] = std::from_chars(Value.data(), Value.data() + Value.size(), Parsed);
+		if (Error != std::errc{} || End != Value.data() + Value.size() || Parsed == 0)
 			throw std::invalid_argument(std::string(Name) + " must be a positive integer");
-		return static_cast<std::size_t>(Parsed);
+		return Parsed;
 	}
 
 	Options ParseOptions(int ArgumentCount, char **Arguments) {
@@ -93,16 +106,26 @@ namespace {
 			if (Argument == "--help") {
 				std::cout <<
 					"Usage: gargantuan_renderer_benchmark [--backend=projection|headless|sdl|filament|filament-headless] "
-					"[--scenario=all|static|dynamic|mostly-static|mixed] [--count=N] "
-					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--shadows=on|off]\n";
+					"[--scenario=all|static|dynamic|mostly-static|mixed|culled|material-check] [--count=N] "
+					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--shadows=on|off] "
+					"[--incremental] [--synchronize=on|off] [--capture=path-prefix]\n";
 				std::exit(0);
 			} else if (auto ParsedValue = Value("--backend=")) ParsedOptions.Backend = *ParsedValue;
 			else if (auto ParsedValue = Value("--scenario=")) ParsedOptions.Scenario = *ParsedValue;
 			else if (auto ParsedValue = Value("--count=")) ParsedOptions.Count = ParseSize(*ParsedValue, "count");
 			else if (auto ParsedValue = Value("--frames=")) ParsedOptions.Frames = ParseSize(*ParsedValue, "frames");
 			else if (auto ParsedValue = Value("--warmup=")) ParsedOptions.WarmupFrames = ParseSize(*ParsedValue, "warmup");
-			else if (auto ParsedValue = Value("--width=")) ParsedOptions.Width = static_cast<std::uint32_t>(ParseSize(*ParsedValue, "width"));
-			else if (auto ParsedValue = Value("--height=")) ParsedOptions.Height = static_cast<std::uint32_t>(ParseSize(*ParsedValue, "height"));
+			else if (auto ParsedValue = Value("--width=")) ParsedOptions.Width = ParseSize<std::uint32_t>(*ParsedValue, "width");
+			else if (auto ParsedValue = Value("--height=")) ParsedOptions.Height = ParseSize<std::uint32_t>(*ParsedValue, "height");
+			else if (Argument == "--incremental") ParsedOptions.Incremental = true;
+			else if (auto ParsedValue = Value("--capture=")) {
+				if (ParsedValue->empty()) throw std::invalid_argument("capture prefix must not be empty");
+				ParsedOptions.CapturePrefix = std::filesystem::path(*ParsedValue);
+			} else if (auto ParsedValue = Value("--synchronize=")) {
+				if (*ParsedValue == "on") ParsedOptions.Synchronize = true;
+				else if (*ParsedValue == "off") ParsedOptions.Synchronize = false;
+				else throw std::invalid_argument("synchronize must be on or off");
+			}
 			else if (auto ParsedValue = Value("--shadows=")) {
 				if (*ParsedValue == "on") ParsedOptions.ShadowsEnabled = true;
 				else if (*ParsedValue == "off") ParsedOptions.ShadowsEnabled = false;
@@ -117,9 +140,23 @@ namespace {
 		if (ParsedOptions.Backend == "filament" || ParsedOptions.Backend == "filament-headless")
 			throw std::invalid_argument("this benchmark was built without GARGANTUAN_FILAMENT_ROOT");
 #endif
+		const bool IncrementalOnly = ParsedOptions.Scenario == "culled" || ParsedOptions.Scenario == "material-check";
 		if (ParsedOptions.Scenario != "all" && ParsedOptions.Scenario != "static" && ParsedOptions.Scenario != "dynamic" &&
-			ParsedOptions.Scenario != "mostly-static" && ParsedOptions.Scenario != "mixed")
+			ParsedOptions.Scenario != "mostly-static" && ParsedOptions.Scenario != "mixed" && !IncrementalOnly)
 			throw std::invalid_argument("unknown renderer benchmark scenario");
+		if (!ParsedOptions.Incremental && (IncrementalOnly || ParsedOptions.CapturePrefix || !ParsedOptions.Synchronize))
+			throw std::invalid_argument("this scenario or option requires --incremental");
+		if (ParsedOptions.Incremental && (ParsedOptions.Count.value_or(1) > 50'000 || ParsedOptions.Frames > 1'800 ||
+			ParsedOptions.WarmupFrames > 1'800 || ParsedOptions.Width < 64 || ParsedOptions.Height < 64 ||
+			ParsedOptions.Width > 4'096 || ParsedOptions.Height > 4'096))
+			throw std::invalid_argument("incremental benchmark dimensions or workload exceed bounds");
+		if (ParsedOptions.Scenario == "material-check" && (!ParsedOptions.CapturePrefix ||
+			(ParsedOptions.Backend != "sdl" && ParsedOptions.Backend != "filament-headless")))
+			throw std::invalid_argument("material-check requires --capture and an offscreen graphical backend");
+		if (ParsedOptions.CapturePrefix && ParsedOptions.Scenario != "material-check")
+			throw std::invalid_argument("capture requires --scenario=material-check");
+		if (ParsedOptions.Incremental && ParsedOptions.Backend == "filament")
+			throw std::invalid_argument("incremental qualification requires --backend=filament-headless for Filament");
 		return ParsedOptions;
 	}
 
@@ -137,6 +174,7 @@ namespace {
 		Add("dynamic", {1000, 10000, 50000});
 		Add("mostly-static", {50000});
 		Add("mixed", {50000});
+		if (BenchmarkOptions.Incremental) Add("culled", {50000});
 		return Cases;
 	}
 
@@ -346,12 +384,472 @@ namespace {
 			SDL_QuitSubSystem(SDL_INIT_VIDEO);
 		BenchmarkFixture.Game->Destroy();
 	}
+
+	// These fixtures exercise the renderer boundary directly. The legacy benchmark
+	// above and Foundation 2 CPU benchmark still measure engine-side extraction.
+	constexpr gargantuan::RenderMeshIdentity CommonMesh{1, 1};
+	constexpr gargantuan::RenderTextureIdentity FirstTexture{1, 1};
+	constexpr gargantuan::RenderTextureIdentity SecondTexture{2, 1};
+	constexpr std::uint32_t TextureSide = 64;
+
+	struct VideoGuard {
+		VideoGuard() {
+			if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+				throw std::runtime_error(std::string("SDL video initialization failed: ") + SDL_GetError());
+		}
+		~VideoGuard() { SDL_QuitSubSystem(SDL_INIT_VIDEO); }
+	};
+
+	gargantuan::RenderFrameState MakeFrame(const Options &Settings, float Distance) {
+		gargantuan::RenderFrameState Frame{.ViewportWidth = Settings.Width, .ViewportHeight = Settings.Height};
+		auto &Camera = Frame.Camera;
+		Camera.Position = {0.0f, 0.0f, Distance};
+		Camera.VerticalFieldOfView = 45.0f;
+		Camera.ViewMatrix = glm::lookAt(Camera.Position, glm::vec3(0.0f), Camera.UpDirection);
+		Camera.ProjectionMatrix = glm::perspectiveRH_ZO(glm::radians(Camera.VerticalFieldOfView),
+			static_cast<float>(Settings.Width) / Settings.Height, Camera.NearPlane, Camera.FarPlane);
+		Camera.ViewProjectionMatrix = Camera.ProjectionMatrix * Camera.ViewMatrix;
+		Frame.Environment.SunDirection = {0.0f, 0.0f, 1.0f};
+		Frame.Environment.SunIntensity = 2.0f;
+		Frame.Environment.AmbientColor = {0.04f, 0.04f, 0.04f};
+		Frame.Environment.EnvironmentColor = {0.01f, 0.01f, 0.01f};
+		return Frame;
+	}
+
+	std::shared_ptr<const std::vector<std::uint8_t>> MakePixels(
+		std::uint32_t Width, std::uint32_t Height, const std::array<std::uint8_t, 4> &Color
+	) {
+		auto Pixels = std::make_shared<std::vector<std::uint8_t>>(static_cast<std::size_t>(Width) * Height * 4);
+		for (std::size_t Offset = 0; Offset < Pixels->size(); Offset += 4)
+			std::copy(Color.begin(), Color.end(), Pixels->begin() + Offset);
+		return Pixels;
+	}
+
+	// This benchmark also builds at the Foundation 2C baseline, which predates
+	// the explicit material shading selector.
+	template <typename Material>
+	void SelectMetallicRoughness(Material &Value) {
+		if constexpr (requires { Value.ShadingModel; })
+			Value.ShadingModel = decltype(Value.ShadingModel)::MetallicRoughness;
+	}
+
+	void AddTexturePair(gargantuan::RenderPublication &Publication) {
+		using namespace gargantuan;
+		Publication.TextureCreates.push_back({FirstTexture, 1, TextureSide, TextureSide,
+			RenderTextureFormat::Rgba8Unorm, MakePixels(TextureSide, TextureSide, {224, 24, 24, 255})});
+		Publication.TextureCreates.push_back({SecondTexture, 1, TextureSide, TextureSide,
+			RenderTextureFormat::Rgba8Unorm, MakePixels(TextureSide, TextureSide, {24, 224, 24, 255})});
+	}
+
+	std::shared_ptr<const std::vector<gargantuan::RenderPrimitiveMaterialState>> MakeMaterialPair(
+		std::uint32_t FirstCount, std::uint32_t TotalCount
+	) {
+		using namespace gargantuan;
+		RenderMaterialState First{.BaseColorTexture = FirstTexture, .Roughness = 0.7f, .DoubleSided = true};
+		RenderMaterialState Second{.BaseColorTexture = SecondTexture, .Metallic = 0.12f, .Roughness = 0.4f,
+			.DoubleSided = true};
+		SelectMetallicRoughness(First);
+		SelectMetallicRoughness(Second);
+		return std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(
+			std::initializer_list<RenderPrimitiveMaterialState>{{0, FirstCount, First},
+				{FirstCount, TotalCount - FirstCount, Second}});
+	}
+
+	gargantuan::RenderPublication MakeGridInitial(const Options &Settings, const ScenarioCase &Scenario) {
+		using namespace gargantuan;
+		const auto Side = static_cast<std::size_t>(std::ceil(std::sqrt(static_cast<double>(Scenario.Count))));
+		const auto Span = 2.0f * static_cast<float>(Side);
+		const auto Aspect = static_cast<float>(Settings.Width) / Settings.Height;
+		const auto Distance = std::max(4.0f, Span * 1.5f / std::min(1.0f, Aspect));
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(Settings, Distance)};
+		const auto Block = PrimitiveMeshes::Block();
+		auto Vertices = std::make_shared<std::vector<RenderVertex>>();
+		Vertices->reserve(Block.Vertices.size());
+		for (const auto &Vertex : Block.Vertices)
+			Vertices->push_back({Vertex.Position, Vertex.Normal, Vertex.Tangent, Vertex.UV});
+		Initial.MeshCreates.push_back({CommonMesh, 1, 1, Vertices,
+			std::make_shared<const std::vector<std::uint32_t>>(Block.Indices),
+			{{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}}});
+		std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> Materials;
+		if (Scenario.Name == "mixed") {
+			AddTexturePair(Initial);
+			Materials = MakeMaterialPair(6, static_cast<std::uint32_t>(Block.Indices.size()));
+		}
+		Initial.Creates.reserve(Scenario.Count);
+		for (std::size_t Index = 0; Index < Scenario.Count; ++Index) {
+			const bool BehindCamera = Scenario.Name == "culled" && Index % 2 != 0;
+			const glm::vec3 Position{2.0f * static_cast<float>(Index % Side) - (Span - 2.0f) * 0.5f,
+				2.0f * static_cast<float>(Index / Side) - (Span - 2.0f) * 0.5f,
+				BehindCamera ? Distance + 5.0f : 0.0f};
+			RenderItem Item{.Object = {static_cast<std::uint32_t>(Index + 1), 1},
+				.ModelMatrix = glm::translate(glm::mat4(1.0f), Position),
+				.InverseModelMatrix = glm::translate(glm::mat4(1.0f), -Position),
+				.CastShadow = Settings.ShadowsEnabled};
+			Initial.Creates.push_back({.Item = Item, .Mesh = CommonMesh, .Primitives = Materials});
+		}
+		return Initial;
+	}
+
+	gargantuan::RenderPublication MakeGridDelta(
+		const gargantuan::RenderPublication &Initial, const ScenarioCase &Scenario, std::size_t Frame
+	) {
+		using namespace gargantuan;
+		RenderPublication Delta{.Id = Frame + 2, .BaseId = Frame + 1, .Frame = Initial.Frame};
+		const bool MostlyStatic = Scenario.Name == "mostly-static" || Scenario.Name == "mixed";
+		const auto Count = Scenario.Name == "dynamic" ? Scenario.Count :
+			MostlyStatic ? std::max<std::size_t>(1, Scenario.Count / 100) : 0;
+		Delta.Updates.reserve(Count);
+		for (std::size_t Index = 0; Index < Count; ++Index) {
+			const auto &InitialObject = Initial.Creates[(Index + (MostlyStatic ? Frame * Count : 0)) % Scenario.Count];
+			auto Item = InitialObject.Item;
+			Item.ModelMatrix[3].z = 0.05f * static_cast<float>(Frame % 7 + 1);
+			Item.InverseModelMatrix[3].z = -Item.ModelMatrix[3].z;
+			Delta.Updates.push_back({.Object = Item.Object, .Domains = RenderUpdateDomain::Transform,
+				.Item = Item, .Mesh = InitialObject.Mesh, .Material = InitialObject.Material,
+				.Primitives = InitialObject.Primitives});
+		}
+		if (Scenario.Name == "mixed") {
+			const auto Side = Frame % 2 == 0 ? 8u : TextureSide;
+			Delta.TextureUpdates.push_back({FirstTexture, Frame + 2, 0, 0, Side, Side,
+				MakePixels(Side, Side, {224, static_cast<std::uint8_t>(24 + Frame % 64), 24, 255})});
+		}
+		return Delta;
+	}
+
+	struct IncrementalCounters {
+		std::optional<std::uint64_t> Submitted;
+		std::optional<std::uint64_t> Skipped;
+		std::optional<std::uint64_t> Resyncs;
+		std::optional<std::uint64_t> DrawCalls;
+		std::optional<std::uint64_t> ResourceCreations;
+		std::optional<std::uint64_t> UploadedBytes;
+	};
+
+	template <typename Metrics>
+	std::optional<std::uint64_t> GetNativeFrameUploadBytes(const Metrics &Value) {
+		if constexpr (requires { Value.NativeVertexUploadBytes; Value.NativeTextureUploadBytes; })
+			return Value.NativeVertexUploadBytes + Value.NativeTextureUploadBytes;
+		return std::nullopt;
+	}
+
+	IncrementalCounters ReadCounters(const gargantuan::SDLRendererMetrics &Metrics) {
+		return {Metrics.FramesSubmitted, 0, Metrics.FullResyncs, Metrics.DrawCalls,
+			Metrics.VertexBufferCreations + Metrics.IndexBufferCreations + Metrics.TransferBufferCreations +
+			Metrics.TextureCreations + Metrics.BufferReallocations, Metrics.UploadedBytes};
+	}
+
+	// Keep the historical adapter buildable. Missing counters make its rows
+	// ineligible for a comparison, even when it appears to render something.
+	template <typename Metrics>
+	IncrementalCounters ReadCounters(const Metrics &Value) {
+		if constexpr (requires { Value.SubmittedFrames; Value.SkippedFrames; Value.FullResyncs; })
+			return {.Submitted = Value.SubmittedFrames, .Skipped = Value.SkippedFrames, .Resyncs = Value.FullResyncs};
+		return {};
+	}
+
+	std::string CounterDelta(std::optional<std::uint64_t> Start, std::optional<std::uint64_t> End) {
+		if (!Start || !End) return "NA";
+		if (*End < *Start) throw std::logic_error("benchmark counter decreased during measurement");
+		return std::to_string(*End - *Start);
+	}
+
+	void RunIncrementalCase(const Options &Settings, const ScenarioCase &Scenario) {
+		using namespace gargantuan;
+		const auto StartSetup = Clock::now();
+		const auto Initial = std::make_shared<const RenderPublication>(MakeGridInitial(Settings, Scenario));
+		const auto SetupMs = Milliseconds(Clock::now() - StartSetup);
+		const Vector2 Viewport(static_cast<float>(Settings.Width), static_cast<float>(Settings.Height));
+		std::optional<VideoGuard> Video;
+		std::unique_ptr<BaseRenderer> Backend;
+		SDLRenderer *Sdl = nullptr;
+#if defined(GARGANTUAN_WITH_FILAMENT)
+		FilamentRenderer *Filament = nullptr;
+#endif
+		RenderProjection Projection;
+		const auto StartStartup = Clock::now();
+		if (Settings.Backend == "sdl") {
+			Video.emplace();
+			auto Renderer = std::make_unique<SDLRenderer>(Viewport,
+				SDLRendererOptions{.Offscreen = true, .WaitForGpuCompletion = Settings.Synchronize, .DebugDevice = false});
+			Sdl = Renderer.get();
+			Backend = std::move(Renderer);
+		} else if (Settings.Backend == "headless") Backend = std::make_unique<HeadlessRenderer>(Viewport);
+#if defined(GARGANTUAN_WITH_FILAMENT)
+		else if (Settings.Backend == "filament-headless") {
+			auto Renderer = std::make_unique<FilamentRenderer>(Viewport, true, Settings.ShadowsEnabled);
+			Filament = Renderer.get();
+			Backend = std::move(Renderer);
+		}
+#endif
+		const auto StartupMs = Milliseconds(Clock::now() - StartStartup);
+		const auto Drain = [&] {
+			if (Sdl) Sdl->WaitForIdle();
+#if defined(GARGANTUAN_WITH_FILAMENT)
+			if (Filament) Filament->FlushAndWait();
+#endif
+		};
+		const auto Counters = [&]() -> IncrementalCounters {
+			if (Sdl) return ReadCounters(Sdl->GetMetrics());
+#if defined(GARGANTUAN_WITH_FILAMENT)
+			if (Filament) return ReadCounters(Filament->GetLastMetrics());
+#endif
+			return {};
+		};
+		const auto Draw = [&](const RenderPublicationPtr &Publication) {
+			if (Backend) Backend->Draw(Publication);
+			else static_cast<void>(Projection.Apply(*Publication));
+		};
+		const auto StartFirstFrame = Clock::now();
+		Draw(Initial);
+		Drain();
+		const auto FirstFrameMs = Milliseconds(Clock::now() - StartFirstFrame);
+		if (const auto InitialCounters = Counters(); InitialCounters.Submitted && *InitialCounters.Submitted != 1)
+			throw std::runtime_error("initial publication did not submit one frame");
+		for (std::size_t Frame = 0; Frame < Settings.WarmupFrames; ++Frame) {
+			Draw(std::make_shared<const RenderPublication>(MakeGridDelta(*Initial, Scenario, Frame)));
+			if (Settings.Synchronize && !Sdl) Drain();
+		}
+		Drain();
+		const auto Baseline = Counters();
+		std::vector<double> FixtureTimes, FrameTimes, ProjectionTimes, ApplyTimes, SubmitTimes, WaitTimes;
+		FixtureTimes.reserve(Settings.Frames);
+		FrameTimes.reserve(Settings.Frames);
+		std::uint64_t LogicalUpdates = 0;
+		std::uint64_t LogicalTextureBytes = 0;
+		std::optional<std::uint64_t> NativeFrameUploadBytes;
+		for (std::size_t Frame = 0; Frame < Settings.Frames; ++Frame) {
+			const auto StartFixture = Clock::now();
+			const auto Delta = std::make_shared<const RenderPublication>(
+				MakeGridDelta(*Initial, Scenario, Settings.WarmupFrames + Frame));
+			FixtureTimes.push_back(Milliseconds(Clock::now() - StartFixture));
+			LogicalUpdates += Delta->Updates.size();
+			for (const auto &Update : Delta->TextureUpdates) LogicalTextureBytes += Update.Pixels->size();
+			const auto StartFrame = Clock::now();
+			Draw(Delta);
+			const auto EndDraw = Clock::now();
+			if (Settings.Synchronize && !Sdl) Drain();
+			const auto EndFrame = Clock::now();
+			FrameTimes.push_back(Milliseconds(EndFrame - StartFrame));
+			if (Sdl) {
+				const auto Metrics = Sdl->GetMetrics();
+				ProjectionTimes.push_back(static_cast<double>(Metrics.LastProjectionNanoseconds) / 1'000'000.0);
+				ApplyTimes.push_back(static_cast<double>(Metrics.LastMeshTransferNanoseconds +
+					Metrics.LastTextureTransferNanoseconds + Metrics.LastUiPreparationNanoseconds) / 1'000'000.0);
+				SubmitTimes.push_back(static_cast<double>(Metrics.LastSubmissionNanoseconds) / 1'000'000.0);
+				if (Settings.Synchronize)
+					WaitTimes.push_back(static_cast<double>(Metrics.LastGpuCompletionWaitNanoseconds) / 1'000'000.0);
+			}
+#if defined(GARGANTUAN_WITH_FILAMENT)
+			if (Filament) {
+				const auto Metrics = Filament->GetLastMetrics();
+				ProjectionTimes.push_back(Metrics.ProjectionScanMilliseconds);
+				ApplyTimes.push_back(Metrics.ChangedObjectApplyMilliseconds);
+				SubmitTimes.push_back(Metrics.RendererSubmissionMilliseconds);
+				if (const auto Bytes = GetNativeFrameUploadBytes(Metrics))
+					NativeFrameUploadBytes = NativeFrameUploadBytes.value_or(0) + *Bytes;
+				if (Settings.Synchronize) WaitTimes.push_back(Milliseconds(EndFrame - EndDraw));
+			}
+#else
+			(void)EndDraw;
+#endif
+		}
+		const auto StartDrain = Clock::now();
+		Drain();
+		const auto DrainMs = Milliseconds(Clock::now() - StartDrain);
+		const auto Final = Counters();
+		const auto Submitted = CounterDelta(Baseline.Submitted, Final.Submitted);
+		const auto Skipped = CounterDelta(Baseline.Skipped, Final.Skipped);
+		const auto Resyncs = CounterDelta(Baseline.Resyncs, Final.Resyncs);
+		const bool Graphical = Backend && Backend->GetCapabilities().Graphical;
+		const bool Comparable = Graphical && Submitted == std::to_string(Settings.Frames) &&
+			Skipped == "0" && Resyncs == "0";
+		std::string Driver = Sdl ? Sdl->GetDriverName() : "NA";
+		std::string Projected = !Backend ? std::to_string(Projection.GetSize()) : "NA";
+#if defined(GARGANTUAN_WITH_FILAMENT)
+		if (Filament) {
+			Driver = Filament->GetBackendName();
+			Projected = std::to_string(Filament->GetLastMetrics().ProjectedObjects);
+		}
+#endif
+		const auto MeanOrNa = [](const std::vector<double> &Values) {
+			if (Values.empty()) return std::string("NA");
+			std::ostringstream Output;
+			Output << std::fixed << std::setprecision(4) << Mean(Values);
+			return Output.str();
+		};
+		std::cout << std::fixed << std::setprecision(4) << Scenario.Name << ',' << Scenario.Count << ','
+			<< Settings.Backend << ',' << Driver << ',' << (Settings.Synchronize ? "completion" : "queued") << ','
+			<< Settings.Width << ',' << Settings.Height << ',' << Settings.Frames << ',' << Settings.WarmupFrames << ','
+			<< SetupMs << ',' << StartupMs << ',' << FirstFrameMs << ',' << Mean(FixtureTimes) << ','
+			<< Mean(FrameTimes) << ',' << Percentile(FrameTimes, 0.50) << ',' << Percentile(FrameTimes, 0.95) << ','
+			<< Percentile(FrameTimes, 0.99) << ',' << *std::ranges::max_element(FrameTimes) << ','
+			<< MeanOrNa(ProjectionTimes) << ',' << MeanOrNa(ApplyTimes) << ',' << MeanOrNa(SubmitTimes) << ','
+			<< MeanOrNa(WaitTimes) << ',' << DrainMs << ','
+			<< LogicalUpdates << ',' << LogicalTextureBytes << ',' << Projected << ',' << Submitted << ','
+			<< Skipped << ',' << Resyncs << ',' << CounterDelta(Baseline.DrawCalls, Final.DrawCalls) << ','
+			<< CounterDelta(Baseline.ResourceCreations, Final.ResourceCreations) << ','
+			<< (NativeFrameUploadBytes ? std::to_string(*NativeFrameUploadBytes) :
+				CounterDelta(Baseline.UploadedBytes, Final.UploadedBytes)) << ','
+			<< (Graphical ? (Comparable ? "PASS" : "FAIL") : "NA") << ",NA,"
+			<< (Settings.ShadowsEnabled ? "on" : "off") << '\n';
+		if (Graphical && !Comparable)
+			throw std::runtime_error("incremental frame admission gate failed or counters are unavailable");
+	}
+
+	gargantuan::RenderPublication MakeMaterialCheck(const Options &Settings) {
+		using namespace gargantuan;
+		const auto Aspect = static_cast<float>(Settings.Width) / Settings.Height;
+		const auto Distance = 4.5f / std::min(1.0f, Aspect);
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(Settings, Distance)};
+		AddTexturePair(Initial);
+		constexpr RenderTextureIdentity NormalTexture{3, 1};
+		auto Normal = std::make_shared<std::vector<std::uint8_t>>(TextureSide * TextureSide * 4);
+		for (std::uint32_t Y = 0; Y < TextureSide; ++Y) for (std::uint32_t X = 0; X < TextureSide; ++X) {
+			const std::array<std::uint8_t, 4> Pixel = X < TextureSide / 2
+				? std::array<std::uint8_t, 4>{128, 128, 255, 255}
+				: std::array<std::uint8_t, 4>{253, 128, 145, 255};
+			std::copy(Pixel.begin(), Pixel.end(), Normal->begin() + (Y * TextureSide + X) * 4);
+		}
+		Initial.TextureCreates.push_back({NormalTexture, 1, TextureSide, TextureSide,
+			RenderTextureFormat::Rgba8Unorm, Normal});
+		auto Vertices = std::make_shared<std::vector<RenderVertex>>();
+		const auto AddQuad = [&](float Left, float Right) {
+			const glm::vec3 FaceNormal{0.0f, 0.0f, 1.0f};
+			const glm::vec4 Tangent{1.0f, 0.0f, 0.0f, 1.0f};
+			Vertices->insert(Vertices->end(), {
+				{{Left, -0.7f, 0.0f}, FaceNormal, Tangent, {0.0f, 1.0f}},
+				{{Right, -0.7f, 0.0f}, FaceNormal, Tangent, {1.0f, 1.0f}},
+				{{Right, 0.7f, 0.0f}, FaceNormal, Tangent, {1.0f, 0.0f}},
+				{{Left, 0.7f, 0.0f}, FaceNormal, Tangent, {0.0f, 0.0f}},
+			});
+		};
+		AddQuad(-1.6f, -0.12f);
+		AddQuad(0.12f, 1.6f);
+		const auto Indices = std::make_shared<const std::vector<std::uint32_t>>(
+			std::initializer_list<std::uint32_t>{0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7});
+		Initial.MeshCreates.push_back({CommonMesh, 1, 1, Vertices, Indices,
+			{{-1.6f, -0.7f, 0.0f}, {1.6f, 0.7f, 0.0f}}});
+		auto Materials = std::make_shared<std::vector<RenderPrimitiveMaterialState>>(*MakeMaterialPair(6, 12));
+		(*Materials)[1].Material.NormalTexture = NormalTexture;
+		Initial.Creates.push_back({.Item = {.Object = {1, 1}, .CastShadow = false}, .Mesh = CommonMesh,
+			.Primitives = Materials});
+		return Initial;
+	}
+
+#if defined(GARGANTUAN_WITH_FILAMENT)
+	template <typename Renderer>
+	std::vector<std::uint8_t> CaptureFilamentRgb(Renderer &Backend, gargantuan::RenderPublicationPtr Publication) {
+		if constexpr (requires { Backend.Capture(Publication); }) {
+			const auto Width = Publication->Frame.ViewportWidth;
+			const auto Height = Publication->Frame.ViewportHeight;
+			const auto Rgba = Backend.Capture(std::move(Publication));
+			if (Rgba.size() != static_cast<std::size_t>(Width) * Height * 4)
+				throw std::runtime_error("Filament readback byte count does not match the viewport");
+			std::vector<std::uint8_t> Rgb(static_cast<std::size_t>(Width) * Height * 3);
+			for (std::uint32_t Y = 0; Y < Height; ++Y) for (std::uint32_t X = 0; X < Width; ++X) {
+				const auto Source = (static_cast<std::size_t>(Height - 1 - Y) * Width + X) * 4;
+				const auto Target = (static_cast<std::size_t>(Y) * Width + X) * 3;
+				std::copy_n(Rgba.begin() + Source, 3, Rgb.begin() + Target);
+			}
+			return Rgb;
+		} else {
+			throw std::runtime_error("this Filament adapter does not expose image capture");
+		}
+	}
+#endif
+
+	void WriteImage(const std::filesystem::path &Path, const Options &Settings,
+		const std::vector<std::uint8_t> &Rgb) {
+		if (std::filesystem::exists(Path)) throw std::runtime_error("capture output already exists: " + Path.string());
+		std::ofstream Image(Path, std::ios::binary);
+		Image << "P6\n" << Settings.Width << ' ' << Settings.Height << "\n255\n";
+		Image.write(reinterpret_cast<const char *>(Rgb.data()), static_cast<std::streamsize>(Rgb.size()));
+		if (!Image) throw std::runtime_error("failed to write material evidence: " + Path.string());
+	}
+
+	void RunMaterialCheck(const Options &Settings) {
+		using namespace gargantuan;
+		const auto Initial = std::make_shared<const RenderPublication>(MakeMaterialCheck(Settings));
+		RenderPublication Change{.Id = 2, .BaseId = 1, .Frame = Initial->Frame};
+		Change.TextureUpdates.push_back({FirstTexture, 2, 0, 0, TextureSide / 2, TextureSide,
+			MakePixels(TextureSide / 2, TextureSide, {24, 24, 224, 255})});
+		const auto Updated = std::make_shared<const RenderPublication>(std::move(Change));
+		std::vector<std::uint8_t> First, Second;
+		const auto CaptureStart = Clock::now();
+		if (Settings.Backend == "sdl") {
+			const VideoGuard Video;
+			EditorViewportRenderer Renderer(Settings.Width, Settings.Height);
+			First = Renderer.Capture(Initial).RgbPixels;
+			Second = Renderer.Capture(Updated).RgbPixels;
+		}
+#if defined(GARGANTUAN_WITH_FILAMENT)
+		else {
+			FilamentRenderer Renderer(Vector2(static_cast<float>(Settings.Width), static_cast<float>(Settings.Height)), true);
+			First = CaptureFilamentRgb(Renderer, Initial);
+			Second = CaptureFilamentRgb(Renderer, Updated);
+		}
+#endif
+		const auto CaptureMilliseconds = Milliseconds(Clock::now() - CaptureStart);
+		const auto ExpectedBytes = static_cast<std::size_t>(Settings.Width) * Settings.Height * 3;
+		if (First.size() != ExpectedBytes || Second.size() != ExpectedBytes)
+			throw std::runtime_error("material check readback byte count does not match the viewport");
+		auto InitialPath = *Settings.CapturePrefix;
+		InitialPath += "-initial.ppm";
+		auto UpdatedPath = *Settings.CapturePrefix;
+		UpdatedPath += "-updated.ppm";
+		WriteImage(InitialPath, Settings, First);
+		WriteImage(UpdatedPath, Settings, Second);
+		const auto Probe = [&](const std::vector<std::uint8_t> &Rgb, float WorldX) {
+			const auto Clip = Initial->Frame.Camera.ViewProjectionMatrix * glm::vec4(WorldX, 0.0f, 0.0f, 1.0f);
+			const auto X = static_cast<int>((Clip.x / Clip.w * 0.5f + 0.5f) * Settings.Width);
+			const auto Y = static_cast<int>(Settings.Height / 2);
+			std::array<int, 3> Result{};
+			for (int Dy = -1; Dy <= 1; ++Dy) for (int Dx = -1; Dx <= 1; ++Dx) {
+				const auto Offset = (static_cast<std::size_t>(Y + Dy) * Settings.Width + X + Dx) * 3;
+				for (std::size_t Channel = 0; Channel < Result.size(); ++Channel) Result[Channel] += Rgb.at(Offset + Channel);
+			}
+			for (auto &Channel : Result) Channel /= 9;
+			return Result;
+		};
+		const auto InitialRed = Probe(First, -1.22f);
+		const auto UpdatedBlue = Probe(Second, -1.22f);
+		const auto UntouchedRed = Probe(Second, -0.48f);
+		const auto NormalLit = Probe(Second, 0.46f);
+		const auto NormalTilted = Probe(Second, 1.22f);
+		const auto Dominates = [](const auto &Rgb, std::size_t Channel) {
+			return Rgb[Channel] > Rgb[(Channel + 1) % 3] + 8 && Rgb[Channel] > Rgb[(Channel + 2) % 3] + 8;
+		};
+		const bool ColorPass = Dominates(InitialRed, 0) && Dominates(UpdatedBlue, 2) &&
+			Dominates(UntouchedRed, 0) && Dominates(NormalLit, 1);
+		const bool NormalPass = NormalLit[1] > NormalTilted[1] + 8;
+		std::cout << "Backend,TwoCaptureLifecycleMs,InitialRedR,UpdatedBlueB,UntouchedRedR,NormalLitG,NormalTiltedG,"
+			"ColorAndPartialUpdateGate,NormalGate\n" << Settings.Backend << ',' << CaptureMilliseconds << ','
+			<< InitialRed[0] << ',' << UpdatedBlue[2] << ',' << UntouchedRed[0] << ',' << NormalLit[1] << ','
+			<< NormalTilted[1] << ',' << (ColorPass ? "PASS" : "FAIL") << ',' << (NormalPass ? "PASS" : "FAIL") << '\n';
+		if (!ColorPass || !NormalPass)
+			throw std::runtime_error("material check failed a readback probe; both evidence images were retained");
+	}
 }
 
 int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		const auto BenchmarkOptions = ParseOptions(ArgumentCount, Arguments);
+		if (BenchmarkOptions.Incremental) {
+			if (BenchmarkOptions.Scenario == "material-check") {
+				RunMaterialCheck(BenchmarkOptions);
+				return 0;
+			}
+			std::cout << "Scenario,Objects,Backend,Driver,Synchronization,Width,Height,Frames,Warmup,FixtureSetupMs,"
+				"BackendStartupMs,FirstCompletedFrameMs,FixtureDeltaMeanMs,FrameMeanMs,FrameP50Ms,FrameP95Ms,"
+				"FrameP99Ms,FrameMaxMs,ProjectionPhaseMeanMs,BackendApplyPhaseMeanMs,SubmissionPhaseMeanMs,"
+				"CompletionWaitMeanMs,FinalDrainMs,"
+				"LogicalObjectUpdates,LogicalTextureBytes,ProjectedObjects,SubmittedFrames,SkippedFrames,"
+				"MeasuredFullResyncs,ReportedDrawCalls,ReportedResourceCreations,ReportedUploadBytes,"
+				"FrameAdmissionGate,GpuTimestampMs,Shadows\n";
+			for (const auto &Scenario : BuildCases(BenchmarkOptions)) RunIncrementalCase(BenchmarkOptions, Scenario);
+			return 0;
+		}
 		std::cout << "Scenario,Objects,Backend,Frames,SetupMs,BackendStartupMs,ResizeRoundTripMs,"
 			"FirstExtractionMs,ExtractionMeanMs,ExtractionP95Ms,FirstSubmissionMs,SubmissionMeanMs,"
 			"SubmissionP95Ms,NominalDrawCalls,PublishedObjects,InitialProjectionCreated,ProjectionCreated,"
