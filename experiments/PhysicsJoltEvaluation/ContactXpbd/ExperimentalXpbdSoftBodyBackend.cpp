@@ -13,6 +13,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -57,6 +58,58 @@ namespace gargantuan {
 			glm::vec3 RestOffset{0.0f};
 			float InverseMass = 1.0f;
 		};
+
+		// The opt-in sidecar records the final substep's actual node velocities.
+		// It has no role in production, solver ordering, or normal benchmark runs.
+		class ExperimentalVelocityTrace {
+		  public:
+			ExperimentalVelocityTrace() {
+				const char *Path = std::getenv("GANTRIA_XPBD_VELOCITY_TRACE");
+				if (!Path) return;
+				const char *StrideText = std::getenv("GANTRIA_XPBD_VELOCITY_STRIDE");
+				if (!*Path || !StrideText)
+					throw std::invalid_argument("[Physics:XpbdContactProbe] velocity trace needs path and stride");
+				char *End = nullptr;
+				const unsigned long Parsed = std::strtoul(StrideText, &End, 10);
+				if (!End || *End || Parsed < 1 || Parsed > 600)
+					throw std::invalid_argument("[Physics:XpbdContactProbe] invalid velocity trace stride");
+				Stride = static_cast<std::size_t>(Parsed);
+				Out.open(Path, std::ios::binary | std::ios::trunc);
+				if (!Out) throw std::runtime_error("[Physics:XpbdContactProbe] velocity trace open failed");
+				Enabled = true;
+			}
+			void Capture(SoftBodyId Id, const std::vector<SoftBodyNode> &Nodes) {
+				if (!Enabled) return;
+				std::scoped_lock Lock(Mutex);
+				if (Id.Slot != 1 || (VertexCount && VertexCount != Nodes.size()))
+					throw std::runtime_error("[Physics:XpbdContactProbe] velocity trace needs one fixed-topology body");
+				VertexCount = Nodes.size();
+				++StepCount;
+				if (StepCount % Stride != 0) return;
+				std::vector<float> Values;
+				Values.reserve(Nodes.size() * 3);
+				for (const auto &Node : Nodes) {
+					Values.push_back(Node.Velocity.x);
+					Values.push_back(Node.Velocity.y);
+					Values.push_back(Node.Velocity.z);
+				}
+				Out.write(reinterpret_cast<const char *>(Values.data()),
+					static_cast<std::streamsize>(Values.size() * sizeof(float)));
+				Out.flush();
+				if (!Out) throw std::runtime_error("[Physics:XpbdContactProbe] velocity trace write failed");
+			}
+		  private:
+			std::mutex Mutex;
+			std::ofstream Out;
+			std::size_t Stride = 0;
+			std::size_t StepCount = 0;
+			std::size_t VertexCount = 0;
+			bool Enabled = false;
+		};
+		ExperimentalVelocityTrace &GetExperimentalVelocityTrace() {
+			static ExperimentalVelocityTrace Trace;
+			return Trace;
+		}
 
 		struct SoftBodyDistanceConstraint {
 			std::uint32_t VertexA = 0;
@@ -870,6 +923,7 @@ namespace gargantuan {
 			for (auto &Node : Record.Nodes)
 				Node.Velocity = Node.InverseMass == 0.0f ? glm::vec3{}
 														 : (Node.Position - Node.PreviousPosition) / Batch.DeltaTime;
+			GetExperimentalVelocityTrace().Capture(Item.Body, Record.Nodes);
 			++Record.VertexRevision;
 			const auto ExtractionStart = ProfileClock::now();
 			Item.State = ExtractState(Item.Body, Record, true);
