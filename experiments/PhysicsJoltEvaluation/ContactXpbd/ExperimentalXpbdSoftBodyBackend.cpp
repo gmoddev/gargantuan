@@ -33,6 +33,16 @@
 
 namespace PhysicsEvaluation {
     glm::quat ExperimentalXpbdClothRotation{1.0f, 0.0f, 0.0f, 0.0f};
+    std::mutex ExperimentalXpbdColliderMotionMutex;
+    std::vector<glm::vec3> ExperimentalXpbdColliderDeltas;
+    void SetExperimentalXpbdColliderDeltas(std::vector<glm::vec3> Deltas) {
+        if (Deltas.size() > 8) throw std::invalid_argument("Too many experimental collider deltas");
+        for (const auto &Delta : Deltas)
+            if (!std::isfinite(Delta.x) || !std::isfinite(Delta.y) || !std::isfinite(Delta.z))
+                throw std::invalid_argument("Nonfinite experimental collider delta");
+        std::scoped_lock Lock(ExperimentalXpbdColliderMotionMutex);
+        ExperimentalXpbdColliderDeltas = std::move(Deltas);
+    }
     void SetExperimentalXpbdClothRotation(glm::quat Rotation) {
         if (!std::isfinite(Rotation.w) || !std::isfinite(Rotation.x) ||
             !std::isfinite(Rotation.y) || !std::isfinite(Rotation.z) ||
@@ -49,7 +59,8 @@ namespace gargantuan {
 		// This translation unit is an isolated copy of the production XPBD solver.
 		// The ordinary factory and src/physics/XpbdSoftBodyBackend.cpp stay unchanged.
 		enum class ExperimentalContactOrder {
-			Existing, ContactThenStructure, ContactStructureContact, CoupledNormal, TriangleSurface
+			Existing, ContactThenStructure, ContactStructureContact, CoupledNormal, TriangleSurface,
+			KinematicRelative
 		};
 		[[nodiscard]] ExperimentalContactOrder GetExperimentalContactOrder() {
 			static const auto Order = [] {
@@ -59,6 +70,7 @@ namespace gargantuan {
 				if (std::string_view(Value) == "C") return ExperimentalContactOrder::ContactStructureContact;
 				if (std::string_view(Value) == "D") return ExperimentalContactOrder::CoupledNormal;
 				if (std::string_view(Value) == "E") return ExperimentalContactOrder::TriangleSurface;
+				if (std::string_view(Value) == "G") return ExperimentalContactOrder::KinematicRelative;
 				throw std::invalid_argument("[Physics:XpbdContactProbe] unsupported contact order");
 			}();
 			return Order;
@@ -855,7 +867,8 @@ namespace gargantuan {
 		}
 
 		void Collide(SoftBodyWorkItem &Item, const SoftBodySimulationBatch &Batch, bool ApplyFriction,
-			std::vector<float> *NormalLambdas = nullptr) {
+			std::vector<float> *NormalLambdas = nullptr,
+			const std::vector<glm::vec3> *ColliderDeltas = nullptr) {
 			auto &Record = Item.Record;
 			if (Record.Definition.CollisionMode == SoftBodyCollisionMode::None || Batch.Colliders.empty()) return;
 			const auto QueryStart = ProfileClock::now();
@@ -897,12 +910,16 @@ namespace gargantuan {
 					}
 					if (!Normal) continue;
 					if (ApplyFriction) {
-						const auto Movement = Node.Position - Node.PreviousPosition;
+						const glm::vec3 ColliderDelta = ColliderDeltas &&
+							ColliderIndex < ColliderDeltas->size() &&
+							Collider.Shape.Kind == PhysicsShapeKind::Ball ?
+							(*ColliderDeltas)[ColliderIndex] : glm::vec3(0.0f);
+						const auto Movement = Node.Position - Node.PreviousPosition - ColliderDelta;
 						const auto NormalMovement = glm::dot(Movement, *Normal);
 						const auto TangentialMovement = Movement - NormalMovement * *Normal;
 						const auto RetainedMovement = std::max(NormalMovement, 0.0f) * *Normal +
 							TangentialMovement * (1.0f - Record.Definition.Material.Friction);
-						Node.PreviousPosition = Node.Position - RetainedMovement;
+						Node.PreviousPosition = Node.Position - RetainedMovement - ColliderDelta;
 					}
 					const glm::vec3 DeltaVelocityNumerator =
 						(Node.Position - BeforePosition) - (Node.PreviousPosition - BeforePrevious);
@@ -1117,6 +1134,11 @@ namespace gargantuan {
 				Constraint.Lambda = 0.0f;
 			const auto Iterations = IterationCount(Record);
 			const auto ContactOrder = GetExperimentalContactOrder();
+			std::vector<glm::vec3> ColliderDeltas;
+			if (ContactOrder == ExperimentalContactOrder::KinematicRelative) {
+				std::scoped_lock Lock(PhysicsEvaluation::ExperimentalXpbdColliderMotionMutex);
+				ColliderDeltas = PhysicsEvaluation::ExperimentalXpbdColliderDeltas;
+			}
 			std::vector<float> ContactNormalLambdas;
 			if (ContactOrder == ExperimentalContactOrder::CoupledNormal)
 				ContactNormalLambdas.resize(Record.Nodes.size() * Batch.Colliders.size(), 0.0f);
@@ -1139,7 +1161,8 @@ namespace gargantuan {
 				LogStage(Iteration, "AfterStructure");
 				if (ContactOrder != ExperimentalContactOrder::ContactThenStructure) {
 					Collide(Item, Batch, Iteration + 1 == Iterations,
-						ContactOrder == ExperimentalContactOrder::CoupledNormal ? &ContactNormalLambdas : nullptr);
+						ContactOrder == ExperimentalContactOrder::CoupledNormal ? &ContactNormalLambdas : nullptr,
+						ContactOrder == ExperimentalContactOrder::KinematicRelative ? &ColliderDeltas : nullptr);
 					if (ContactOrder == ExperimentalContactOrder::TriangleSurface)
 						CollideFaces(Item, Batch);
 					LogStage(Iteration, "AfterPostContact");

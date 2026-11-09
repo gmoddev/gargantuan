@@ -14,6 +14,9 @@ namespace PhysicsEvaluation {
         std::uint64_t Corrections = 0;
     };
     void SetExperimentalXpbdClothRotation(glm::quat Rotation);
+    // One-way prescribed translating sphere motion for private G only. Call
+    // before Step; the joined Step snapshots this ordered list once per body.
+    void SetExperimentalXpbdColliderDeltas(std::vector<glm::vec3> Deltas);
     [[nodiscard]] std::optional<std::vector<glm::vec3>> GetExperimentalXpbdVelocities(
         const gargantuan::ISoftBodyBackend &Soft, gargantuan::SoftBodyId Body);
     [[nodiscard]] std::optional<XpbdContactProjection> GetExperimentalXpbdContactProjection(

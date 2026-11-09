@@ -203,7 +203,8 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         SphereCase Sphere;
         Sphere.Id = Item.at("Id").get<std::string>();
         Sphere.Motion = Item.value("Motion", std::string("static"));
-        Sphere.KinematicUpdate = Item.value("KinematicUpdate", std::string("move"));
+        Sphere.KinematicUpdate = Item.value("KinematicUpdate",
+            BackendName == "xpbd" ? std::string("pose") : std::string("move"));
         Sphere.Radius = Item.value("RadiusM", 1.0f);
         Sphere.Mass = Item.value("MassKg", 1.0f);
         Sphere.Start = Vec(Item.at("CenterM"));
@@ -301,13 +302,20 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
             SoftBodyStepConfig Step;
             Step.DeltaTime = DeltaTime / float(Steps);
             Step.Gravity = Gravity;
+            std::vector<glm::vec3> ColliderDeltas;
             if (BackendName == "xpbd") for (const auto &Sphere : Spheres) {
                 SoftBodyCollider Collider;
                 Collider.Shape.Kind = PhysicsShapeKind::Ball;
                 Collider.Shape.Size = glm::vec3(2.0f * Sphere.Radius);
-                Collider.Transform.Position = Sphere.Target((float(Frame) + float(Sub + 1) / Steps) * DeltaTime);
+                const float StartTime = (float(Frame) + float(Sub) / Steps) * DeltaTime;
+                const float EndSubstepTime = (float(Frame) + float(Sub + 1) / Steps) * DeltaTime;
+                Collider.Transform.Position = Sphere.Target(EndSubstepTime);
                 Step.Colliders.push_back(Collider);
+                ColliderDeltas.push_back(Sphere.Motion == "kinematic" ?
+                    Sphere.Target(EndSubstepTime) - Sphere.Target(StartTime) : glm::vec3(0.0f));
             }
+            if (BackendName == "xpbd")
+                PhysicsEvaluation::SetExperimentalXpbdColliderDeltas(std::move(ColliderDeltas));
             const auto Result = Soft->Step(Step);
             Require(!Result.BodiesTruncated && !Result.VerticesTruncated &&
                 !Result.CollidersTruncated && Result.Profile.BacklogDrops == 0 &&
