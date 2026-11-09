@@ -119,6 +119,19 @@ class DiagnosticTests(unittest.TestCase):
                                     'Authored': {'XpbdSubsteps': 32}})
         self.assertEqual(Reduced['NormalizedMomentumResidual'], 1.0)
 
+    def test_free_edge_roundoff_preserves_raw_leakage_metric(self):
+        Record = Accounting()
+        Record['MomentumEndKgMPerS'] = [1.0, 0.0, 0.0]
+        Record['UnpinnedStructuralNumericalImpulseNs'] = [1.0, 0.0, 0.0]
+        Stages = {'ContactProjectionVelocityDerivedMomentumDeltaNs':
+                  [0.0, 0.0, 0.0], 'ContactProjectionCorrections': 0}
+        Reduced = VerifyAccounting(Record, Stages, 0,
+                                   {'DeltaTimeSeconds': 0.01,
+                                    'Authored': {'XpbdSubsteps': 32}})
+        self.assertEqual(Reduced['NormalizedMomentumResidual'], 0.0)
+        self.assertEqual(Reduced['NormalizedRawMomentumResidual'], 1.0)
+        self.assertEqual(Reduced['NormalizedUnpinnedStructuralNumericalImpulse'], 1.0)
+
 
 if __name__ == '__main__':
     unittest.main()

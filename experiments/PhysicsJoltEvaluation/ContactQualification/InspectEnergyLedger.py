@@ -36,6 +36,11 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
                 not all(FiniteNumber(Component) for Component in Value):
             raise ValueError(f'Invalid XPBD accounting vector {Name}')
         Vectors[Name] = Value
+    Unpinned = Accounting.get('UnpinnedStructuralNumericalImpulseNs', [0.0, 0.0, 0.0])
+    if not isinstance(Unpinned, list) or len(Unpinned) != 3 or \
+            not all(FiniteNumber(Component) for Component in Unpinned):
+        raise ValueError('Invalid unpinned structural numerical impulse')
+    Vectors['UnpinnedStructuralNumericalImpulseNs'] = Unpinned
     StageMomentum = Stages.get('ContactProjectionVelocityDerivedMomentumDeltaNs')
     if not isinstance(StageMomentum, list) or len(StageMomentum) != 3 or \
             not all(FiniteNumber(Component) for Component in StageMomentum):
@@ -87,12 +92,17 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
     for Axis in range(3):
         Recomputed = Vectors['MomentumEndKgMPerS'][Axis] - \
             Vectors['MomentumStartKgMPerS'][Axis] - \
-            sum(Vectors[Name][Axis] for Name in Components)
+            sum(Vectors[Name][Axis] for Name in Components) - Unpinned[Axis]
         if not Near(Recomputed, Vectors['MomentumResidualNs'][Axis]):
             raise ValueError(f'XPBD momentum stage ledger identity fails at frame {Frame}')
+    RawResidual = [Vectors['MomentumResidualNs'][Axis] + Unpinned[Axis]
+                   for Axis in range(3)]
     return {**Scalars, **Vectors,
             'NormalizedMomentumResidual': Norm(Vectors['MomentumResidualNs']) /
                 ImpulseScale,
+            'NormalizedRawMomentumResidual': Norm(RawResidual) / ImpulseScale,
+            'NormalizedUnpinnedStructuralNumericalImpulse':
+                Norm(Unpinned) / ImpulseScale,
             'StaticPoseWorkComplete': Accounting['StaticPoseWorkComplete']}
 
 
@@ -197,6 +207,12 @@ def Inspect(CaseDirectory):
             'MaximumNormalizedMomentumResidual':
                 max((Row['NormalizedMomentumResidual'] for Row in AccountingRows),
                     default=None),
+            'MaximumNormalizedRawMomentumResidual':
+                max((Row['NormalizedRawMomentumResidual'] for Row in AccountingRows),
+                    default=None),
+            'MaximumNormalizedUnpinnedStructuralNumericalImpulse':
+                max((Row['NormalizedUnpinnedStructuralNumericalImpulse']
+                     for Row in AccountingRows), default=None),
             'StaticPoseWorkIncompleteFrames': StaticPoseIncompleteFrames,
             'PhysicalResidualStatus': 'DIAGNOSTIC_UNGATED' if AccountingSeen and
                 not StaticPoseIncompleteFrames else 'INCOMPLETE',
