@@ -105,14 +105,28 @@ namespace {
         PhysicsWorldConfig Config;
         Config.Gravity = {};
         auto Provider = CreateUnifiedJoltProvider(Config);
-        auto Sensor = Ball({0, 0, 0});
+        PhysicsBodyDesc Sensor;
         Sensor.Anchored = true;
+        Sensor.Shape.Size = {1, 1, 1};
         Sensor.CanCollide = false;
         Sensor.CanTouch = true;
         const auto SensorId = Provider.Rigid->CreateBody(Sensor);
-        const auto Visitor = Provider.Rigid->CreateBody(Ball({-1, 0, 0}));
+        auto VisitorDescription = Ball({-1, 0, 0});
+        VisitorDescription.Shape.Size = glm::vec3(0.2f);
+        const auto Visitor = Provider.Rigid->CreateBody(VisitorDescription);
         Require(SensorId.IsValid() && Visitor.IsValid(), "sensor fixture admission failed");
-        Step(Provider, 2, 0);
+        Require(Provider.Rigid->SetLinearVelocity(Visitor, {120, 0, 0}).Succeeded(),
+            "sensor visitor velocity failed");
+        const auto Transient = Step(Provider, 2, 0);
+        bool Began = false;
+        bool Ended = false;
+        for (const auto &Contact : Transient.Contacts) {
+            if (!((Contact.BodyA == SensorId && Contact.BodyB == Visitor) ||
+                  (Contact.BodyA == Visitor && Contact.BodyB == SensorId))) continue;
+            Began |= Contact.Phase == PhysicsContactPhase::Began;
+            Ended |= Contact.Phase == PhysicsContactPhase::Ended;
+        }
+        Require(Began && Ended, "transient sensor contact lost across half-updates");
         Sensor.CanCollide = true;
         Require(Provider.Rigid->UpdateBody(SensorId, Sensor).Succeeded(),
             "sensor to solid update failed");
