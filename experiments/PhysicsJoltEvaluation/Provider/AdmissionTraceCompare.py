@@ -33,15 +33,26 @@ def Limit(Text: str, Pattern: str) -> float:
     return float(Match.group(1))
 
 
-def Thresholds(Protocol: dict, Scope: str) -> dict[str, float]:
+def Thresholds(Protocol: dict, Scope: str, Coupling: str,
+               CoupledProtocol: dict | None) -> dict[str, float]:
     Trial = Protocol["GroupingTrial"]
     Text = Trial["FortyFrameGate"] if Scope == "forty" else Trial["LongHorizonGate"]
     Result = {"PinMeters": Limit(Text, r"pin<=([0-9.]+)m"),
               "RmsMeters": Limit(Text, r"RMS<=([0-9.]+)m"),
               "MaxMeters": Limit(Text, r"max(?: vertex displacement)?<=([0-9.]+)m")}
     if Scope == "forty":
-        Result["PeakAxialStrain"] = Limit(Text, r"peak axial strain<=([0-9.]+)")
-        Result["FinalAxialStrain"] = Limit(Text, r"final<=([0-9.]+)")
+        if Coupling == "none":
+            Result["PeakAxialStrain"] = Limit(Text, r"peak axial strain<=([0-9.]+)")
+            Result["FinalAxialStrain"] = Limit(Text, r"final<=([0-9.]+)")
+        else:
+            if CoupledProtocol is None or not CoupledProtocol["PrespecifiedBeforeCoupledCandidateCapture"]:
+                raise ValueError("Coupled comparison needs prespecified CoupledProtocol.json")
+            Gates = CoupledProtocol["Gates"]
+            Result = {"PinMeters": float(Gates["MaximumPinErrorM"]),
+                      "RmsMeters": float(Gates["MaximumBtoCRmsM"]),
+                      "MaxMeters": float(Gates["MaximumBtoCVertexM"]),
+                      "PeakAxialStrain": float(Gates["MaximumAxialStrain"]),
+                      "PrimitivePenetrationMeters": float(Gates["MaximumMeasuredContactPenetrationM"])}
     return Result
 
 
@@ -89,14 +100,30 @@ def FrameHash(Hash: int, Raw: bytes) -> int:
     return Hash
 
 
-def LogHashes(PathValue: Path | None, Frames: int) -> list[int] | None:
+def LogHashes(PathValue: Path | None, Frames: int, Prefix: bool = False) -> list[int] | None:
     if PathValue is None:
         return None
     Matches = [(int(Frame), int(Hash)) for Frame, Hash in
                STATE_HASH.findall(PathValue.read_text(encoding="utf-8", errors="replace"))]
-    if len(Matches) != Frames or [Frame for Frame, _ in Matches] != list(range(Frames)):
+    if (len(Matches) < Frames if Prefix else len(Matches) != Frames) or [Frame for Frame, _ in Matches[:Frames]] != list(range(Frames)):
         raise ValueError(f"Missing or nonsequential state-frame hashes: {PathValue}")
-    return [Hash for _, Hash in Matches]
+    return [Hash for _, Hash in Matches[:Frames]]
+
+
+def ContactSummary(PathValue: Path) -> dict[str, float]:
+    Lines = [Line for Line in PathValue.read_text(encoding="utf-8", errors="replace").splitlines()
+             if Line.startswith("[Physics:ProviderBenchmark] summary ")]
+    if len(Lines) != 1:
+        raise ValueError(f"Expected one provider summary in {PathValue}")
+    Pairs = dict(Token.split("=", 1) for Token in Lines[0].split()
+                 if "=" in Token)
+    Fields = ("initial_min_surface_distance", "observed_contact_band",
+              "max_poststep_penetration", "final_min_surface_distance",
+              "jolt_soft_contact_vertices")
+    Result = {Field: float(Pairs[Field]) for Field in Fields}
+    if not all(map(math.isfinite, Result.values())):
+        raise ValueError(f"Nonfinite coupled summary in {PathValue}")
+    return Result
 
 
 def RestTetrahedra(Resolution: int) -> list[tuple[int, int, int, int, float]]:
@@ -184,7 +211,9 @@ def Geometry(Values: array, Bodies: int, Vertices: int, Scene: str,
 
 def Compare(Args: argparse.Namespace) -> dict:
     Protocol = json.loads(Args.Quality.read_text(encoding="utf-8"))
-    Limits = Thresholds(Protocol, Args.Scope)
+    CoupledProtocol = (json.loads(Args.CoupledQuality.read_text(encoding="utf-8"))
+                       if Args.CoupledQuality is not None else None)
+    Limits = Thresholds(Protocol, Args.Scope, Args.Coupling, CoupledProtocol)
     Baseline, Candidate = Trace(Args.Baseline), Trace(Args.Candidate)
     try:
         ShapeB = (Baseline.Bodies, Baseline.Vertices, Baseline.Warmup, Baseline.DeltaTime)
@@ -196,6 +225,8 @@ def Compare(Args: argparse.Namespace) -> dict:
             raise ValueError("Forty-frame scope requires 40 measured frames")
         if Args.Scope == "long" and Candidate.Frames - Candidate.Warmup != (300 if Args.Scene == "rubber4k" else 600):
             raise ValueError("Long scope frame count does not match protocol")
+        if Args.Coupling != "none" and (Args.Scope != "forty" or Args.Scene != "cloth16k"):
+            raise ValueError("Coupled comparison is scoped to 40-frame cloth16k")
         Logs = (LogHashes(Args.BaselineLog, Baseline.Frames),
                 LogHashes(Args.CandidateLog, Candidate.Frames))
         Tetrahedra = RestTetrahedra(SCENES[Args.Scene][1]) if SCENES[Args.Scene][0] else []
@@ -245,13 +276,39 @@ def Compare(Args: argparse.Namespace) -> dict:
                   "Maximum": PeakMax <= Limits["MaxMeters"]}
         if Args.Scope == "forty":
             Checks["PeakAxialStrain"] = max(PeakStrainB, PeakStrainC) <= Limits["PeakAxialStrain"]
-            Checks["FinalAxialStrain"] = max(
-                Last["Baseline"]["MaximumAxialStrain"],
-                Last["Candidate"]["MaximumAxialStrain"]) <= Limits["FinalAxialStrain"]
+            if Args.Coupling == "none":
+                Checks["FinalAxialStrain"] = max(
+                    Last["Baseline"]["MaximumAxialStrain"],
+                    Last["Candidate"]["MaximumAxialStrain"]) <= Limits["FinalAxialStrain"]
+        Contact = None
+        if Args.Coupling != "none":
+            Contact = {"Baseline": ContactSummary(Args.BaselineLog),
+                       "Candidate": ContactSummary(Args.CandidateLog)}
+            Checks["PositiveInitialGap"] = all(
+                Side["initial_min_surface_distance"] > 0 for Side in Contact.values())
+            Checks["PrimitivePenetration"] = all(
+                Side["max_poststep_penetration"] <= Limits["PrimitivePenetrationMeters"]
+                for Side in Contact.values())
+            if Args.Coupling == "driven-sphere":
+                Checks["NativeContactVertices"] = all(
+                    Side["jolt_soft_contact_vertices"] >= 1 for Side in Contact.values())
+                if Args.BaselineNoneLog is None or Args.CandidateNoneLog is None:
+                    raise ValueError("Driven response needs matched none-control logs")
+                NoneHashes = (LogHashes(Args.BaselineNoneLog, Candidate.Frames, Prefix=True),
+                              LogHashes(Args.CandidateNoneLog, Candidate.Frames, Prefix=True))
+                Checks["BaselineResponseDivergence"] = any(
+                    Logs[0][Frame] != NoneHashes[0][Frame]
+                    for Frame in range(Candidate.Frames))
+                Checks["CandidateResponseDivergence"] = any(
+                    Logs[1][Frame] != NoneHashes[1][Frame]
+                    for Frame in range(Candidate.Frames))
         if Args.ExpectExact:
             Checks["ExactHashes"] = FirstHashMismatch is None
         return {"Schema": "PhysicsJoltTraceComparison1", "Baseline": str(Args.Baseline),
                 "Candidate": str(Args.Candidate), "Scene": Args.Scene, "Scope": Args.Scope,
+                "Coupling": Args.Coupling, "Contact": Contact,
+                "QualityProtocol": str(Args.Quality),
+                "CoupledProtocol": str(Args.CoupledQuality) if Args.CoupledQuality else None,
                 "Header": {"Bodies": Baseline.Bodies, "VerticesPerBody": Baseline.Vertices,
                            "Frames": Candidate.Frames, "BaselineRecordedFrames": Baseline.Frames,
                            "Warmup": Baseline.Warmup,
@@ -276,7 +333,12 @@ def Main() -> int:
     Parser.add_argument("--candidate-log", dest="CandidateLog", type=Path, required=True)
     Parser.add_argument("--scene", dest="Scene", choices=SCENES, required=True)
     Parser.add_argument("--scope", dest="Scope", choices=("forty", "long"), required=True)
+    Parser.add_argument("--coupling", dest="Coupling",
+                        choices=("none", "static-sphere", "driven-sphere"), default="none")
     Parser.add_argument("--quality", dest="Quality", type=Path, required=True)
+    Parser.add_argument("--coupled-quality", dest="CoupledQuality", type=Path)
+    Parser.add_argument("--baseline-none-log", dest="BaselineNoneLog", type=Path)
+    Parser.add_argument("--candidate-none-log", dest="CandidateNoneLog", type=Path)
     Parser.add_argument("--expect-exact", dest="ExpectExact", action="store_true")
     Parser.add_argument("--baseline-prefix", dest="BaselinePrefix", action="store_true",
                         help="Compare only candidate-length prefix of a longer baseline trace")
