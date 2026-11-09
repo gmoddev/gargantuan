@@ -188,6 +188,30 @@ namespace {
             "solid touch disable failed");
         Step(Provider, 1, 0);
     }
+    void FailedTouchUpdateFailsClosed() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        auto Description = Ball({0, 0, 0});
+        Description.CanTouch = false;
+        const auto Body = Provider.Rigid->CreateBody(Description);
+        Require(Body.IsValid(), "failure injection rigid admission failed");
+        Step(Provider, 1, 0);
+        Require(PhysicsEvaluation::FailNextJoltTouchUpdateAfterNativeMutation(*Provider.Rigid),
+            "failure injection unavailable");
+        Description.CanTouch = true;
+        Require(Provider.Rigid->UpdateBody(Body, Description).Status ==
+            PhysicsOperationStatus::BackendFailure,
+            "injected touch mutation did not fail");
+        Step(Provider, 2, 0);
+        Require(Provider.Rigid->UpdateBody(Body, Description).Succeeded(),
+            "touch retry failed");
+        Step(Provider, 2, 0);
+        Description.CanTouch = false;
+        Require(Provider.Rigid->UpdateBody(Body, Description).Succeeded(),
+            "touch disable after partial failure failed");
+        Step(Provider, 2, 0);
+    }
 }
 
 int main() {
@@ -197,6 +221,7 @@ int main() {
         MembershipAndRigidContact();
         SensorGuardsTransientContact();
         SolidTouchGuardsFastCrossing();
+        FailedTouchUpdateFailsClosed();
         std::cout << "[Physics:JoltScheduling] qualification passed\n";
         return 0;
     } catch (const std::exception &Error) {

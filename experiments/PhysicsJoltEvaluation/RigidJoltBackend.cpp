@@ -592,6 +592,9 @@ namespace {
         }
         void SetRigidFastScheduleEnabled(bool Enabled) { RigidFastScheduleEnabled = Enabled; }
         std::size_t NativeRigidContactPairCount() const { return Contacts.CurrentPairs().size(); }
+        void FailNextTouchUpdateAfterNativeMutation() {
+            FailTouchUpdateAfterNativeMutationOnce = true;
+        }
         void SetSoftContactCapture(bool Enabled) {
             // Private fixture setup only: caller must not change listeners during Step.
             if (Enabled) SoftContacts.Clear();
@@ -676,6 +679,8 @@ namespace {
             if (!Shape) return {};
             if (!ValidMassProperties(Description, Shape)) return {};
             if (!CheckMeshAdmission(Description, Shape, nullptr).Succeeded()) return {};
+            const bool PriorTouchGuardUncertain = TouchGuardUncertain;
+            if (Description.CanTouch) TouchGuardUncertain = true;
             const auto Native = AddNativeBody(Description, Layer, Shape);
             if (Native.IsInvalid()) return {};
             std::uint32_t Index = 1;
@@ -694,6 +699,7 @@ namespace {
             NativeMap.emplace(Native.GetIndexAndSequenceNumber(), Id);
             if (Description.Anchored && (Description.CanCollide || Description.CanTouch))
                 WakeBodiesInNewBounds(Native);
+            if (Description.CanTouch) TouchGuardUncertain = PriorTouchGuardUncertain;
             return Id;
         }
 
@@ -721,6 +727,8 @@ namespace {
                     "Jolt body mass or inertia exceeds native range"};
             const auto Layer = Layers.GetLayer(Description);
             if (Layer == JPH::cObjectLayerInvalid) return {PhysicsOperationStatus::ResourceLimit, "Jolt layer limit"};
+            const bool IntroducesTouch = Description.CanTouch && !Slot->Description.CanTouch;
+            const bool PriorTouchGuardUncertain = TouchGuardUncertain;
             auto &Interface = World.GetBodyInterface();
             const auto Motion = Description.Anchored ? JPH::EMotionType::Static
                 : Description.Kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic;
@@ -741,6 +749,7 @@ namespace {
                     if (Constraint.Live && (Constraint.Description.BodyA == Id ||
                         Constraint.Description.BodyB == Id))
                         return Unsupported("Jolt mesh transition with attached constraint is unsupported");
+                if (IntroducesTouch) TouchGuardUncertain = true;
                 const auto Replacement = AddNativeBody(Description, Layer, NewShape);
                 if (Replacement.IsInvalid())
                     return {PhysicsOperationStatus::BackendFailure, "Jolt mesh transition body admission failed"};
@@ -766,8 +775,10 @@ namespace {
                 AdmitMesh(*Slot);
                 if (Description.Anchored && (Description.CanCollide || Description.CanTouch))
                     WakeBodiesInNewBounds(Replacement);
+                if (IntroducesTouch) TouchGuardUncertain = PriorTouchGuardUncertain;
                 return {};
             }
+            if (IntroducesTouch) TouchGuardUncertain = true;
             if (ContactGeometryChanged) {
                 ContactInvalidatedBodies.insert(Slot->Native.GetIndexAndSequenceNumber());
                 WakeContactNeighbors(Slot->Native);
@@ -788,6 +799,11 @@ namespace {
             if (Description.CanCollide != Slot->Description.CanCollide ||
                 Description.CanTouch != Slot->Description.CanTouch)
                 Interface.SetIsSensor(Slot->Native, !Description.CanCollide && Description.CanTouch);
+            if (IntroducesTouch && FailTouchUpdateAfterNativeMutationOnce) {
+                FailTouchUpdateAfterNativeMutationOnce = false;
+                return {PhysicsOperationStatus::BackendFailure,
+                    "Injected Jolt touch update failure after native mutation"};
+            }
             if (Description.MovingBodyCCD != Slot->Description.MovingBodyCCD)
                 Interface.SetMotionQuality(Slot->Native,
                     Description.MovingBodyCCD ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete);
@@ -824,6 +840,7 @@ namespace {
             if (ContactGeometryChanged && Description.Anchored &&
                 (Description.CanCollide || Description.CanTouch))
                 WakeBodiesInNewBounds(Slot->Native);
+            if (IntroducesTouch) TouchGuardUncertain = PriorTouchGuardUncertain;
             return {};
         }
 
@@ -1295,7 +1312,8 @@ namespace {
                 PreviousNeutralContacts = std::move(CurrentNeutral);
             };
             if (UnifiedMode) {
-                bool Coupled = !RigidFastScheduleEnabled || EnabledSoftBodies != 0 || TouchBodies != 0;
+                bool Coupled = !RigidFastScheduleEnabled || EnabledSoftBodies != 0 ||
+                    TouchBodies != 0 || TouchGuardUncertain;
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
                 Coupled |= !Attachments.empty();
 #endif
@@ -1654,6 +1672,8 @@ namespace {
         bool Valid = false;
         bool UnifiedMode = false;
         bool RigidFastScheduleEnabled = true;
+        bool TouchGuardUncertain = false;
+        bool FailTouchUpdateAfterNativeMutationOnce = false;
         std::function<bool(float)> BeforeUnifiedStep;
         std::optional<JoltStepSchedule> LastStepSchedule;
     };
@@ -2448,6 +2468,12 @@ std::optional<std::size_t> GetJoltNativeRigidContactPairCount(
     const gargantuan::IPhysicsBackend &Rigid) {
     const auto *Jolt = dynamic_cast<const RigidJoltBackend *>(&Rigid);
     return Jolt ? std::optional<std::size_t>(Jolt->NativeRigidContactPairCount()) : std::nullopt;
+}
+bool FailNextJoltTouchUpdateAfterNativeMutation(gargantuan::IPhysicsBackend &Rigid) {
+    auto *Jolt = dynamic_cast<RigidJoltBackend *>(&Rigid);
+    if (!Jolt) return false;
+    Jolt->FailNextTouchUpdateAfterNativeMutation();
+    return true;
 }
 std::uint64_t GetJoltSoftRigidContactVertexCount(
     const gargantuan::IPhysicsBackend &Rigid, const gargantuan::ISoftBodyBackend &Soft,

@@ -102,6 +102,10 @@ namespace PhysicsEvaluation {
     // Native active manifold pairs, independent of neutral CanTouch signals.
     [[nodiscard]] std::optional<std::size_t> GetJoltNativeRigidContactPairCount(
         const gargantuan::IPhysicsBackend &Rigid);
+    // Private failure injection; the native edit is deliberately left partial
+    // so qualification can prove the cadence guard fails closed.
+    [[nodiscard]] bool FailNextJoltTouchUpdateAfterNativeMutation(
+        gargantuan::IPhysicsBackend &Rigid);
 
     // Cumulative vertex contacts reported by Jolt's soft-rigid manifold for
     // this live neutral-ID pair. Enable capture before Step in private fixtures;

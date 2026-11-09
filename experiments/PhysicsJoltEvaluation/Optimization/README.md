@@ -13,6 +13,12 @@ unchanged. All rigid bodies, constraints, contacts, IDs, and moving colliders
 stay in the same native world at every cadence. The touch guard preserves
 the half-frame neutral begin/end observation of transient touch contacts,
 including sensors and solid pairs.
+If a native rigid admission or no-touch-to-touch edit fails after native
+mutation begins, a provider-local uncertainty latch keeps U2/C8 for its
+remaining lifetime. Successful edits clear only their own temporary guard;
+they do not clear an earlier uncertain state. This closes the cadence guard
+under partial failure without claiming to repair the adapter's broader
+mutation atomicity.
 The private `SchedulingQualification` checks membership transitions and the
 touch refusal; `SchedulingBenchmark` compares U1/C4 with a same-binary
 forced-U2/C8 control for a gravity-loaded 128-rigid contact scene whose
