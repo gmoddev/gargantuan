@@ -435,6 +435,7 @@ int main(int ArgumentCount, char **Arguments) {
                 Collider.Shape.Size = {2, 2, 2};
                 Collider.Transform.Position = {20.0f * Index +
                     (SceneValue.Rubber ? 2.2f : 5.2f), 3.0f, 0};
+                Collider.Transform.Position.z = PhysicsEvaluation::ContactProbeFloat("GANTRIA_PROBE_SPHERE_Z", 0.0f);
                 Colliders.push_back(Collider);
                 InitialColliderCenters.push_back(Collider.Transform.Position);
                 for (const auto &Position : Bodies[Index].Rest)
@@ -461,7 +462,7 @@ int main(int ArgumentCount, char **Arguments) {
         for (const auto &Record : Bodies) {
             const auto Count = Record.Rest.size() - Record.Definition.Attachments.size();
             const auto Impulse = glm::vec3(float(Count) *
-                Record.Definition.Material.ParticleMass * 2.0f, 0, 0);
+                Record.Definition.Material.ParticleMass * 2.0f * PhysicsEvaluation::ContactProbeFloat("GANTRIA_PROBE_IMPULSE", 1.0f), 0, 0);
             if (!Soft->ApplyImpulse(Record.Id, Impulse).Succeeded())
                 throw std::runtime_error("Uniform impulse admission failed");
         }
