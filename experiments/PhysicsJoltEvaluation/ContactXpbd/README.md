@@ -95,3 +95,30 @@ constraint. Its mathematical value is zero, but independent float rounding can
 make it nonzero in the reconstructed velocity. This term remains reported as
 numerical momentum leakage even if subtracting it closes the source ledger;
 it is never relabeled as a physical external impulse.
+
+`GANTRIA_XPBD_IDEAL_VELOCITY=1` enables a separate private cloth-only
+velocity reconstruction experiment on top of whichever A/E/G contact mode is
+selected. The original modes remain unchanged when the flag is absent or `0`.
+After integration, it snapshots the integrated position, previous position,
+and velocity. Each distance solve records the difference between its ideal
+mass-weighted equal-and-opposite position correction and the two actual
+rounded float position writes in a per-node double accumulator. Final velocity
+starts from the integrated velocity and adds the net later position and
+previous-position changes, plus this numerical bias, divided by the substep
+duration. Thus existing vertex/face collision and friction edits still affect
+velocity; only free-free structural float-store leakage is removed. The
+snapshot buffer is retained per live cloth body, bounded by its node count,
+and reused across substeps. Rubber volume and shape recovery are deliberately
+outside this experiment.
+
+The opt-in trace reports both the **would-be**
+`UnpinnedStructuralNumericalImpulseNs` from rounded position writes and the
+new raw `MomentumResidualNs` after reconstruction; it no longer subtracts
+that would-be leak as an external impulse. Two kinetic terms make the stage
+bookkeeping explicit: `IntegrationPositionRoundingKineticDeltaJ` is the gap
+between integrated velocity and position-derived velocity immediately after
+integration, and `IdealVelocityReconstructionKineticDeltaJ` is the final gap
+introduced by reconstruction. Neither term is external work or physical
+dissipation. The 9×9 no-contact uniform-launch control in `Controls/` checks
+that this mode does not manufacture contact impulses; static and prescribed
+moving controls at 16/32/64 substeps test momentum leakage and convergence.

@@ -32,8 +32,10 @@ namespace PhysicsEvaluation {
         double UniformImpulseKineticDeltaJ = 0.0;
         double PointImpulseKineticDeltaJ = 0.0;
         double DampingKineticDeltaJ = 0.0;
+        double IntegrationPositionRoundingKineticDeltaJ = 0.0;
         double StructuralProjectionKineticDeltaJ = 0.0;
         double PinProjectionKineticDeltaJ = 0.0;
+        double IdealVelocityReconstructionKineticDeltaJ = 0.0;
         double LedgerResidualJ = 0.0;
         std::uint64_t Corrections = 0;
     };

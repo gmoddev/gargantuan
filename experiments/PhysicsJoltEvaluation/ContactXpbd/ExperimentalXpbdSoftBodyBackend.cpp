@@ -87,6 +87,15 @@ namespace gargantuan {
 			}();
 			return Order;
 		}
+		[[nodiscard]] bool GetIdealVelocityReconstructionEnabled() {
+			static const bool Enabled = [] {
+				const char *Value = std::getenv("GANTRIA_XPBD_IDEAL_VELOCITY");
+				if (!Value || std::string_view(Value) == "0") return false;
+				if (std::string_view(Value) == "1") return true;
+				throw std::invalid_argument("[Physics:XpbdContactProbe] invalid ideal velocity flag");
+			}();
+			return Enabled;
+		}
 		[[nodiscard]] float GetCoupledNormalCompliance(float StretchCompliance) {
 			const char *Value = std::getenv("GANTRIA_XPBD_CONTACT_NORMAL_COMPLIANCE");
 			if (!Value) return 0.1f * StretchCompliance;
@@ -187,6 +196,12 @@ namespace gargantuan {
 			float Lambda = 0.0f;
 		};
 
+		struct IdealVelocitySnapshot {
+			glm::vec3 IntegratedPosition{0.0f};
+			glm::vec3 InitialPreviousPosition{0.0f};
+			glm::dvec3 StructuralFloatBias{0.0};
+		};
+
 		struct SoftBodyRecord {
 			SoftBodyDefinition Definition;
 			std::vector<SoftBodyNode> Nodes;
@@ -197,6 +212,8 @@ namespace gargantuan {
 			std::uint64_t VertexRevision = 1;
 			PhysicsEvaluation::XpbdContactProjection ContactProjection;
 			bool CaptureAccounting = false;
+			bool ReconstructIdealVelocity = false;
+			std::vector<IdealVelocitySnapshot> IdealVelocitySnapshots;
 		};
 
 		[[nodiscard]] double NodeKineticEnergy(const SoftBodyNode &Node) {
@@ -724,6 +741,15 @@ namespace gargantuan {
 				const glm::vec3 BeforeA = NodeA.Position, BeforeB = NodeB.Position;
 				NodeA.Position -= NodeA.InverseMass * Correction;
 				NodeB.Position += NodeB.InverseMass * Correction;
+				if (Record.ReconstructIdealVelocity) {
+					const glm::dvec3 IdealCorrection(Correction);
+					Record.IdealVelocitySnapshots[Constraint.VertexA].StructuralFloatBias +=
+						-double(NodeA.InverseMass) * IdealCorrection -
+						(glm::dvec3(NodeA.Position) - glm::dvec3(BeforeA));
+					Record.IdealVelocitySnapshots[Constraint.VertexB].StructuralFloatBias +=
+						double(NodeB.InverseMass) * IdealCorrection -
+						(glm::dvec3(NodeB.Position) - glm::dvec3(BeforeB));
+				}
 				if (RecordAccounting) {
 					if (NodeA.InverseMass == 0.0f && NodeB.InverseMass > 0.0f)
 						Record.ContactProjection.PinConstraintImpulseOnClothNs +=
@@ -1178,6 +1204,11 @@ namespace gargantuan {
 			const bool RecordAccounting =
 				PhysicsEvaluation::ExperimentalXpbdAccountingEnabled.load(std::memory_order_acquire);
 			Record.CaptureAccounting = RecordAccounting;
+			const bool ReconstructIdealVelocity = GetIdealVelocityReconstructionEnabled();
+			if (ReconstructIdealVelocity && Record.Definition.Kind != SoftBodyKind::Cloth)
+				throw std::invalid_argument(
+					"[Physics:XpbdContactProbe] ideal velocity mode requires cloth");
+			Record.ReconstructIdealVelocity = ReconstructIdealVelocity;
 			if (RecordAccounting)
 				Record.ContactProjection.KineticStartJ = StoredKineticEnergy(Record);
 			if (RecordAccounting)
@@ -1289,6 +1320,19 @@ namespace gargantuan {
 			if (RecordAccounting)
 				Record.ContactProjection.DampingImpulseNs =
 					StoredMomentum(Record) - BeforeDampingMomentum;
+			if (ReconstructIdealVelocity) {
+				Record.IdealVelocitySnapshots.resize(Record.Nodes.size());
+				for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
+					const auto &Node = Record.Nodes[Index];
+					auto &Snapshot = Record.IdealVelocitySnapshots[Index];
+					Snapshot.IntegratedPosition = Node.Position;
+					Snapshot.InitialPreviousPosition = Node.PreviousPosition;
+					Snapshot.StructuralFloatBias = glm::dvec3(0.0);
+				}
+				if (RecordAccounting)
+					Record.ContactProjection.IntegrationPositionRoundingKineticDeltaJ =
+						PositionKineticEnergy(Record, Batch.DeltaTime) - StoredKineticEnergy(Record);
+			}
 			Item.Profile.IntegrationNanoseconds += Nanoseconds(ProfileClock::now() - IntegrationStart);
 
 			for (auto &Constraint : Record.Distances)
@@ -1350,22 +1394,47 @@ namespace gargantuan {
 						PositionKineticEnergy(Record, Batch.DeltaTime) - BeforePinsJ;
 			}
 			LogStage(Iterations, "AfterSolve");
-			for (auto &Node : Record.Nodes)
-				Node.Velocity = Node.InverseMass == 0.0f ? glm::vec3{}
-														 : (Node.Position - Node.PreviousPosition) / Batch.DeltaTime;
+			const double BeforeReconstructionJ = RecordAccounting && ReconstructIdealVelocity ?
+				PositionKineticEnergy(Record, Batch.DeltaTime) : 0.0;
+			for (std::size_t Index = 0; Index < Record.Nodes.size(); ++Index) {
+				auto &Node = Record.Nodes[Index];
+				if (Node.InverseMass == 0.0f) {
+					Node.Velocity = glm::vec3{};
+				} else if (ReconstructIdealVelocity) {
+					const auto &Snapshot = Record.IdealVelocitySnapshots[Index];
+					const glm::dvec3 OtherAndIdealDisplacement =
+						glm::dvec3(Node.Position) - glm::dvec3(Snapshot.IntegratedPosition) -
+						(glm::dvec3(Node.PreviousPosition) -
+							glm::dvec3(Snapshot.InitialPreviousPosition)) +
+						Snapshot.StructuralFloatBias;
+					Node.Velocity = glm::vec3(glm::dvec3(Node.Velocity) +
+						OtherAndIdealDisplacement / double(Batch.DeltaTime));
+					if (!IsFinite(Node.Velocity))
+						throw std::runtime_error(
+							"[Physics:XpbdContactProbe] nonfinite ideal reconstructed velocity");
+				} else {
+					Node.Velocity = (Node.Position - Node.PreviousPosition) / Batch.DeltaTime;
+				}
+			}
 			if (RecordAccounting) {
+				if (ReconstructIdealVelocity)
+					Record.ContactProjection.IdealVelocityReconstructionKineticDeltaJ =
+						StoredKineticEnergy(Record) - BeforeReconstructionJ;
 				Record.ContactProjection.KineticEndJ = StoredKineticEnergy(Record);
 				Record.ContactProjection.MomentumEndKgMPerS = StoredMomentum(Record);
 				const auto &Accounting = Record.ContactProjection;
 				Record.ContactProjection.LedgerResidualJ = Accounting.KineticEndJ - Accounting.KineticStartJ -
 					Accounting.AppliedDynamicsKineticDeltaJ - Accounting.DampingKineticDeltaJ -
 					Accounting.StructuralProjectionKineticDeltaJ - Accounting.PinProjectionKineticDeltaJ -
-					Accounting.ContactKineticDeltaJ;
+					Accounting.ContactKineticDeltaJ -
+					Accounting.IntegrationPositionRoundingKineticDeltaJ -
+					Accounting.IdealVelocityReconstructionKineticDeltaJ;
 				Record.ContactProjection.MomentumResidualNs = Accounting.MomentumEndKgMPerS -
 					Accounting.MomentumStartKgMPerS - Accounting.GravityForceImpulseNs -
 					Accounting.UniformImpulseNs - Accounting.PointImpulseNs -
 					Accounting.DampingImpulseNs - Accounting.PinConstraintImpulseOnClothNs -
-						Accounting.UnpinnedStructuralNumericalImpulseNs -
+						(ReconstructIdealVelocity ? glm::dvec3(0.0) :
+							Accounting.UnpinnedStructuralNumericalImpulseNs) -
 					Accounting.NormalImpulseOnClothNs - Accounting.FrictionImpulseOnClothNs;
 			}
 			GetExperimentalVelocityTrace().Capture(Item.Body, Record.Nodes);

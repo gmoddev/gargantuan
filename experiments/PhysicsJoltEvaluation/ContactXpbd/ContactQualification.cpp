@@ -16,6 +16,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -402,9 +403,13 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 FrameContact.UniformImpulseKineticDeltaJ += Projection->UniformImpulseKineticDeltaJ;
                 FrameContact.PointImpulseKineticDeltaJ += Projection->PointImpulseKineticDeltaJ;
                 FrameContact.DampingKineticDeltaJ += Projection->DampingKineticDeltaJ;
+                FrameContact.IntegrationPositionRoundingKineticDeltaJ +=
+                    Projection->IntegrationPositionRoundingKineticDeltaJ;
                 FrameContact.StructuralProjectionKineticDeltaJ +=
                     Projection->StructuralProjectionKineticDeltaJ;
                 FrameContact.PinProjectionKineticDeltaJ += Projection->PinProjectionKineticDeltaJ;
+                FrameContact.IdealVelocityReconstructionKineticDeltaJ +=
+                    Projection->IdealVelocityReconstructionKineticDeltaJ;
                 FrameContact.LedgerResidualJ += Projection->LedgerResidualJ;
             }
         }
@@ -459,9 +464,16 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 {"UniformImpulseKineticDeltaJ", FrameContact.UniformImpulseKineticDeltaJ},
                 {"PointImpulseKineticDeltaJ", FrameContact.PointImpulseKineticDeltaJ},
                 {"DampingKineticDeltaJ", FrameContact.DampingKineticDeltaJ},
+                {"IntegrationPositionRoundingKineticDeltaJ",
+                    FrameContact.IntegrationPositionRoundingKineticDeltaJ},
                 {"StructuralProjectionKineticDeltaJ",
                     FrameContact.StructuralProjectionKineticDeltaJ},
                 {"PinProjectionKineticDeltaJ", FrameContact.PinProjectionKineticDeltaJ},
+                {"IdealVelocityReconstructionKineticDeltaJ",
+                    FrameContact.IdealVelocityReconstructionKineticDeltaJ},
+                {"IdealVelocityReconstructionEnabled",
+                    BackendName == "xpbd" && std::getenv("GANTRIA_XPBD_IDEAL_VELOCITY") &&
+                    std::string_view(std::getenv("GANTRIA_XPBD_IDEAL_VELOCITY")) == "1"},
                 {"LedgerResidualJ", FrameContact.LedgerResidualJ},
                 {"SubstepSeconds", DeltaTime / float(Substeps)},
                 {"PrescribedSurfaceVelocitySource", "center(end)-center(start) per substep"},
