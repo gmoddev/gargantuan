@@ -189,8 +189,6 @@ namespace gargantuan {
 			float RestLength = 0.0f;
 			float Compliance = 0.0f;
 			float Lambda = 0.0f;
-			double ShadowRestLength = 0.0;
-			double ShadowLambda = 0.0;
 		};
 
 		struct SoftBodyVolumeConstraint {
@@ -211,6 +209,10 @@ namespace gargantuan {
 			glm::vec3 PublishedPosition{0.0f};
 			glm::vec3 PublishedPreviousPosition{0.0f};
 		};
+		struct DoubleShadowDistance {
+			double RestLength = 0.0;
+			double Lambda = 0.0;
+		};
 
 		struct SoftBodyRecord {
 			SoftBodyDefinition Definition;
@@ -226,6 +228,7 @@ namespace gargantuan {
 			bool UseDoubleShadow = false;
 			std::vector<IdealVelocitySnapshot> IdealVelocitySnapshots;
 			std::vector<DoubleShadowNode> DoubleShadowNodes;
+			std::vector<DoubleShadowDistance> DoubleShadowDistances;
 		};
 
 		[[nodiscard]] double NodeKineticEnergy(const SoftBodyNode &Node) {
@@ -743,7 +746,8 @@ namespace gargantuan {
 
 		void InitializeDoubleShadow(SoftBodyRecord &Record) {
 			if (!Record.DoubleShadowNodes.empty()) {
-				if (Record.DoubleShadowNodes.size() != Record.Nodes.size())
+				if (Record.DoubleShadowNodes.size() != Record.Nodes.size() ||
+					Record.DoubleShadowDistances.size() != Record.Distances.size())
 					throw std::runtime_error(
 						"[Physics:XpbdContactProbe] double-shadow node count changed");
 				return;
@@ -757,11 +761,14 @@ namespace gargantuan {
 				Shadow.PublishedPosition = Node.Position;
 				Shadow.PublishedPreviousPosition = Node.PreviousPosition;
 			}
-			for (auto &Constraint : Record.Distances) {
-				Constraint.ShadowRestLength = glm::length(
+			Record.DoubleShadowDistances.resize(Record.Distances.size());
+			for (std::size_t Index = 0; Index < Record.Distances.size(); ++Index) {
+				const auto &Constraint = Record.Distances[Index];
+				auto &ShadowDistance = Record.DoubleShadowDistances[Index];
+				ShadowDistance.RestLength = glm::length(
 					Record.DoubleShadowNodes[Constraint.VertexB].Position -
 					Record.DoubleShadowNodes[Constraint.VertexA].Position);
-				Constraint.ShadowLambda = 0.0;
+				ShadowDistance.Lambda = 0.0;
 			}
 		}
 
@@ -782,7 +789,9 @@ namespace gargantuan {
 		void SolveDistance(SoftBodyRecord &Record, float DeltaTime, bool RecordAccounting) {
 			if (Record.UseDoubleShadow) {
 				const double StepSeconds = double(DeltaTime);
-				for (auto &Constraint : Record.Distances) {
+				for (std::size_t Index = 0; Index < Record.Distances.size(); ++Index) {
+					const auto &Constraint = Record.Distances[Index];
+					auto &ShadowDistance = Record.DoubleShadowDistances[Index];
 					auto &A = Record.DoubleShadowNodes[Constraint.VertexA];
 					auto &B = Record.DoubleShadowNodes[Constraint.VertexB];
 					const glm::dvec3 Delta = B.Position - A.Position;
@@ -792,9 +801,9 @@ namespace gargantuan {
 					const double InverseMassB = double(Record.Nodes[Constraint.VertexB].InverseMass);
 					const double Alpha = double(Constraint.Compliance) / (StepSeconds * StepSeconds);
 					if (InverseMassA + InverseMassB + Alpha <= 1e-9) continue;
-					const double DeltaLambda = (-(Length - Constraint.ShadowRestLength) -
-						Alpha * Constraint.ShadowLambda) / (InverseMassA + InverseMassB + Alpha);
-					Constraint.ShadowLambda += DeltaLambda;
+					const double DeltaLambda = (-(Length - ShadowDistance.RestLength) -
+						Alpha * ShadowDistance.Lambda) / (InverseMassA + InverseMassB + Alpha);
+					ShadowDistance.Lambda += DeltaLambda;
 					const glm::dvec3 Correction = (Delta / Length) * DeltaLambda;
 					A.Position -= InverseMassA * Correction;
 					B.Position += InverseMassB * Correction;
@@ -1462,8 +1471,8 @@ namespace gargantuan {
 			for (auto &Constraint : Record.Distances)
 				Constraint.Lambda = 0.0f;
 			if (UseDoubleShadow)
-				for (auto &Constraint : Record.Distances)
-					Constraint.ShadowLambda = 0.0;
+				for (auto &ShadowDistance : Record.DoubleShadowDistances)
+					ShadowDistance.Lambda = 0.0;
 			for (auto &Constraint : Record.Volumes)
 				Constraint.Lambda = 0.0f;
 			const auto Iterations = IterationCount(Record);
