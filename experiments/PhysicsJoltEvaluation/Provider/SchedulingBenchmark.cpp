@@ -79,6 +79,7 @@ int main(int Count, char **Arguments) {
         }
         double TotalUpdateMs = 0;
         double MaximumFloorPenetration = 0;
+        double MaximumPairPenetration = 0;
         bool FiniteEveryFrame = true;
         std::size_t ContactEvents = 0;
         std::vector<double> FrameMs;
@@ -95,6 +96,8 @@ int main(int Count, char **Arguments) {
             if (!Schedule || Schedule->WorldUpdates != (Config.Fast ? 1u : 2u) ||
                 Schedule->EnabledSoftBodies != 0)
                 throw std::runtime_error("benchmark schedule mismatch");
+            std::vector<glm::vec3> Positions;
+            Positions.reserve(Bodies.size());
             for (const auto Body : Bodies) {
                 const auto State = Provider.Rigid->GetBodyState(Body);
                 if (!State) throw std::runtime_error("rigid state missing");
@@ -104,12 +107,21 @@ int main(int Count, char **Arguments) {
                     std::isfinite(State->LinearVelocity.y) && std::isfinite(State->LinearVelocity.z);
                 MaximumFloorPenetration = std::max(MaximumFloorPenetration,
                     std::max(0.0, 0.45 - double(Position.y)));
+                Positions.push_back(Position);
             }
+            for (std::size_t A = 0; A < Positions.size(); ++A)
+                for (std::size_t B = A + 1; B < Positions.size(); ++B) {
+                    const auto Distance = double(glm::length(Positions[A] - Positions[B]));
+                    if (!std::isfinite(Distance)) FiniteEveryFrame = false;
+                    else MaximumPairPenetration = std::max(MaximumPairPenetration,
+                        std::max(0.0, 0.9 - Distance));
+                }
         }
         std::ranges::sort(FrameMs);
         const auto P95 = FrameMs[std::min(FrameMs.size() - 1,
             std::size_t(std::ceil(0.95 * FrameMs.size())) - 1)];
-        const bool QualityPass = FiniteEveryFrame && MaximumFloorPenetration <= 0.25;
+        const bool QualityPass = FiniteEveryFrame && MaximumFloorPenetration <= 0.25 &&
+            MaximumPairPenetration <= 0.25;
         std::cout << std::setprecision(17) << "{\"Mode\":\""
             << (Config.Fast ? "fast" : "full") << "\",\"Frames\":" << Config.Frames
             << ",\"Workers\":" << Config.Workers
@@ -117,6 +129,7 @@ int main(int Count, char **Arguments) {
             << ",\"UpdateP95Ms\":" << P95
             << ",\"ContactEvents\":" << ContactEvents
             << ",\"MaximumFloorPenetration\":" << MaximumFloorPenetration
+            << ",\"MaximumPairPenetration\":" << MaximumPairPenetration
             << ",\"FiniteEveryFrame\":" << (FiniteEveryFrame ? "true" : "false")
             << ",\"QualityPass\":" << (QualityPass ? "true" : "false") << "}\n";
         return QualityPass ? 0 : 3;
