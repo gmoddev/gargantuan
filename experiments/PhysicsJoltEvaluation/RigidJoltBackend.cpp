@@ -1809,6 +1809,7 @@ namespace {
             }
 #endif
             if (Native.IsInvalid()) return {};
+            SoftBodyId CreatedId;
 #ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
             {
                 AdmissionMeasure Measure(AdmissionProfile.SlotCommit);
@@ -1831,10 +1832,11 @@ namespace {
             ++LiveBodies;
             LiveVertices += NewVertices;
             LiveConstraints += NewConstraints;
+            CreatedId = {Index, Slot.Generation};
 #ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
             }
 #endif
-            return {Index, Slot.Generation};
+            return CreatedId;
         }
         PhysicsOperationResult UpdateBody(SoftBodyId Id, const SoftBodyDefinition &Definition) override {
             auto *Slot = Find(Id);
