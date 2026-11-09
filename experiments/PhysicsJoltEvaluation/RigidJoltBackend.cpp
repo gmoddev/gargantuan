@@ -606,6 +606,21 @@ namespace {
             return RigidSlot && !Soft.IsInvalid()
                 ? SoftContacts.VertexCount(Soft, RigidSlot->Native) : 0;
         }
+#ifdef PHYSICS_EVALUATION_CONTACT_VELOCITIES
+        std::optional<std::vector<glm::vec3>> SoftVelocities(JPH::BodyID Soft) const {
+            if (Soft.IsInvalid()) return std::nullopt;
+            JPH::BodyLockRead Lock(World.GetBodyLockInterface(), Soft);
+            if (!Lock.Succeeded() || !Lock.GetBody().IsSoftBody()) return std::nullopt;
+            const auto *Motion = static_cast<const JPH::SoftBodyMotionProperties *>(
+                Lock.GetBody().GetMotionProperties());
+            if (!Motion) return std::nullopt;
+            std::vector<glm::vec3> Result;
+            Result.reserve(Motion->GetVertices().size());
+            for (const auto &Vertex : Motion->GetVertices())
+                Result.push_back(FromJolt(Vertex.mVelocity));
+            return Result;
+        }
+#endif
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
         PhysicsOperationResult ConnectAttachment(SoftBodyId SoftId, JPH::BodyID SoftNative,
                                                  std::uint32_t Vertex, PhysicsBodyId RigidId,
@@ -2517,6 +2532,17 @@ std::uint64_t GetJoltSoftRigidContactVertexCount(
     if (!RigidValue || !SoftValue || &SoftValue->SharedWorld() != RigidValue) return 0;
     return RigidValue->SoftRigidContactVertices(SoftValue->NativeBody(SoftId), RigidId);
 }
+#ifdef PHYSICS_EVALUATION_CONTACT_VELOCITIES
+std::optional<std::vector<glm::vec3>> GetJoltSoftBodyVelocities(
+    const gargantuan::IPhysicsBackend &Rigid, const gargantuan::ISoftBodyBackend &Soft,
+    gargantuan::SoftBodyId SoftId) {
+    const auto *RigidValue = dynamic_cast<const RigidJoltBackend *>(&Rigid);
+    const auto *SoftValue = dynamic_cast<const JoltSoftBackend *>(&Soft);
+    if (!RigidValue || !SoftValue || &SoftValue->SharedWorld() != RigidValue)
+        return std::nullopt;
+    return RigidValue->SoftVelocities(SoftValue->NativeBody(SoftId));
+}
+#endif
 bool SetJoltSoftRigidContactCapture(gargantuan::IPhysicsBackend &Rigid, bool Enabled) {
     auto *RigidValue = dynamic_cast<RigidJoltBackend *>(&Rigid);
     if (!RigidValue) return false;

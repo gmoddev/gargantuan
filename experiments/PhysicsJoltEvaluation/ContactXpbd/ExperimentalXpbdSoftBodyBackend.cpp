@@ -64,9 +64,11 @@ namespace gargantuan {
 		class ExperimentalVelocityTrace {
 		  public:
 			ExperimentalVelocityTrace() {
-				const char *Path = std::getenv("GANTRIA_XPBD_VELOCITY_TRACE");
+				const char *Path = std::getenv("GANTRIA_CONTACT_VELOCITY_TRACE");
+				if (!Path) Path = std::getenv("GANTRIA_XPBD_VELOCITY_TRACE");
 				if (!Path) return;
-				const char *StrideText = std::getenv("GANTRIA_XPBD_VELOCITY_STRIDE");
+				const char *StrideText = std::getenv("GANTRIA_CONTACT_VELOCITY_STRIDE");
+				if (!StrideText) StrideText = std::getenv("GANTRIA_XPBD_VELOCITY_STRIDE");
 				if (!*Path || !StrideText)
 					throw std::invalid_argument("[Physics:XpbdContactProbe] velocity trace needs path and stride");
 				char *End = nullptr;

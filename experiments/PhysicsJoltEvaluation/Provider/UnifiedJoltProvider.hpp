@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace PhysicsEvaluation {
     // Test-only composition. Soft must retire before Rigid because both use the
@@ -117,6 +118,14 @@ namespace PhysicsEvaluation {
         const gargantuan::IPhysicsBackend &Rigid,
         const gargantuan::ISoftBodyBackend &Soft,
         gargantuan::SoftBodyId SoftId, gargantuan::PhysicsBodyId RigidId);
+
+#ifdef PHYSICS_EVALUATION_CONTACT_VELOCITIES
+    // Private trace seam: returns owned native velocities after a joined step.
+    [[nodiscard]] std::optional<std::vector<glm::vec3>> GetJoltSoftBodyVelocities(
+        const gargantuan::IPhysicsBackend &Rigid,
+        const gargantuan::ISoftBodyBackend &Soft,
+        gargantuan::SoftBodyId SoftId);
+#endif
 
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
     // Experimental neutral-ID bridge. A live connection belongs to the rigid

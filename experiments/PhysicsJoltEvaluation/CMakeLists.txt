@@ -165,6 +165,7 @@ PhysicsEvaluationTarget(PhysicsJoltXpbdContactProbe
     ContactXpbd/ExperimentalXpbdSoftBodyBackend.cpp)
 target_compile_definitions(PhysicsJoltXpbdContactProbe PRIVATE
     PHYSICS_EVALUATION_LONG_RUN=1
+    PHYSICS_EVALUATION_CONTACT_VELOCITIES=1
     CreateSoftBodyBackend=CreateExperimentalXpbdSoftBodyBackend
     CreateSoftBodyBackendForTesting=CreateExperimentalXpbdSoftBodyBackendForTesting)
 if(PHYSICS_EVALUATION_NATIVE_PROFILE)

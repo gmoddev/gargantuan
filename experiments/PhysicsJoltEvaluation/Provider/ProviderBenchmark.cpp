@@ -484,6 +484,17 @@ int main(int ArgumentCount, char **Arguments) {
         double FinalMinimumSurfaceDistance = std::numeric_limits<double>::infinity();
         std::uint64_t SoftTrajectoryHash = 14695981039346656037ull;
         std::ofstream Trace;
+#ifdef PHYSICS_EVALUATION_CONTACT_VELOCITIES
+        std::ofstream JoltVelocityTrace;
+        if (const char *VelocityPath = std::getenv("GANTRIA_CONTACT_VELOCITY_TRACE");
+            VelocityPath && BackendName == "jolt") {
+            if (!QualityTrace || !*VelocityPath)
+                throw std::invalid_argument("[Physics:ContactProbe] velocity output needs quality trace and path");
+            JoltVelocityTrace.open(VelocityPath, std::ios::binary | std::ios::trunc);
+            if (!JoltVelocityTrace)
+                throw std::runtime_error("[Physics:ContactProbe] Jolt velocity trace open failed");
+        }
+#endif
         if (QualityTrace) {
             Trace.open(Arguments[9], std::ios::binary | std::ios::trunc);
             if (!Trace) throw std::runtime_error("Quality trace file admission failed");
@@ -636,6 +647,22 @@ int main(int ArgumentCount, char **Arguments) {
                         WriteTraceFloat(Trace, Position.z);
                     }
                 }
+#ifdef PHYSICS_EVALUATION_CONTACT_VELOCITIES
+                if (JoltVelocityTrace.is_open()) {
+                    const auto Velocities = PhysicsEvaluation::GetJoltSoftBodyVelocities(
+                        *Jolt.Rigid, *Jolt.Soft, Record.Id);
+                    if (!Velocities || Velocities->size() != Record.Rest.size())
+                        throw std::runtime_error("[Physics:ContactProbe] Jolt velocity state missing");
+                    for (const auto &Velocity : *Velocities) {
+                        if (!std::isfinite(Velocity.x) || !std::isfinite(Velocity.y) ||
+                            !std::isfinite(Velocity.z))
+                            throw std::runtime_error("[Physics:ContactProbe] nonfinite Jolt velocity");
+                        WriteTraceFloat(JoltVelocityTrace, Velocity.x);
+                        WriteTraceFloat(JoltVelocityTrace, Velocity.y);
+                        WriteTraceFloat(JoltVelocityTrace, Velocity.z);
+                    }
+                }
+#endif
             }
             if (QualityTrace && !Trace)
                 throw std::runtime_error("Quality trace frame write failed");
@@ -656,6 +683,13 @@ int main(int ArgumentCount, char **Arguments) {
                     FinalMinimumSurfaceDistance);
             }
         }
+#ifdef PHYSICS_EVALUATION_CONTACT_VELOCITIES
+        if (JoltVelocityTrace.is_open()) {
+            JoltVelocityTrace.close();
+            if (!JoltVelocityTrace)
+                throw std::runtime_error("[Physics:ContactProbe] Jolt velocity trace close failed");
+        }
+#endif
         auto Sorted = TotalTimes;
         std::sort(Sorted.begin(), Sorted.end());
         const auto Mean = [](const std::vector<double> &Values) {
