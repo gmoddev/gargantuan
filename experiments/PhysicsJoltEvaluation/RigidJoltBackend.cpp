@@ -978,6 +978,8 @@ namespace {
             } else return {{}, Unsupported("Jolt constraint kind is unsupported")};
             Lock.ReleaseLocks();
             if (!Native) return {{}, Unsupported("Jolt constraint creation failed")};
+            const bool PriorJointGuardUncertain = JointGuardUncertain;
+            JointGuardUncertain = true;
             World.AddConstraint(Native.GetPtr());
             if (!Description.CollideConnected) {
                 Contacts.SuppressPair(A->Native, B->Native);
@@ -995,6 +997,7 @@ namespace {
             auto &Slot = ConstraintSlots[Index];
             Slot.Live = true; Slot.Native = Native; Slot.Description = Description;
             ++ActiveConstraints;
+            JointGuardUncertain = PriorJointGuardUncertain;
             return {{Index, Slot.Generation}, {}};
         }
         PhysicsOperationResult DestroyConstraint(PhysicsConstraintId Id) override {
@@ -1323,7 +1326,8 @@ namespace {
             };
             if (UnifiedMode) {
                 bool Coupled = !RigidFastScheduleEnabled || EnabledSoftBodies != 0 ||
-                    TouchBodies != 0 || TouchGuardUncertain;
+                    TouchBodies != 0 || TouchGuardUncertain || ActiveConstraints != 0 ||
+                    JointGuardUncertain;
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
                 Coupled |= !Attachments.empty();
 #endif
@@ -1676,6 +1680,8 @@ namespace {
         std::set<std::pair<std::uint32_t, std::uint32_t>> ContactInvalidatedPairs;
         mutable std::map<std::tuple<int, float, float, float, float, float>, JPH::ShapeRefC> QueryShapes;
         std::size_t ActiveConstraints = 0;
+        // A failed admission after native mutation must leave the cadence conservative.
+        bool JointGuardUncertain = false;
         std::size_t TouchBodies = 0;
         std::size_t EnabledSoftBodies = 0;
         std::uint64_t StepSequence = 0;

@@ -212,6 +212,50 @@ namespace {
             "touch disable after partial failure failed");
         Step(Provider, 2, 0);
     }
+    void JointMembershipGuardsCadence() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        Config.EnableSleep = false;
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        auto FirstDescription = Ball({0, 0, 0});
+        auto SecondDescription = Ball({0, 3, 0});
+        FirstDescription.CanTouch = false;
+        SecondDescription.CanTouch = false;
+        const auto First = Provider.Rigid->CreateBody(FirstDescription);
+        const auto Second = Provider.Rigid->CreateBody(SecondDescription);
+        Require(First.IsValid() && Second.IsValid(), "joint guard rigid admission failed");
+        Step(Provider, 1, 0);
+
+        PhysicsConstraintDesc Joint;
+        Joint.Kind = PhysicsConstraintKind::Distance;
+        Joint.BodyA = First;
+        Joint.BodyB = Second;
+        Joint.RestLength = 3.0f;
+        auto Invalid = Joint;
+        Invalid.BodyB = {};
+        Require(!Provider.Rigid->TryCreateConstraint(Invalid).Succeeded(),
+            "invalid joint endpoint accepted");
+        Step(Provider, 1, 0);
+        const auto FirstJoint = Provider.Rigid->TryCreateConstraint(Joint);
+        Require(FirstJoint.Succeeded(), "joint guard admission failed");
+        Step(Provider, 2, 0);
+        Require(Provider.Rigid->DestroyConstraint(FirstJoint.Constraint).Succeeded(),
+            "joint guard retirement failed");
+        Step(Provider, 1, 0);
+        Require(!Provider.Rigid->DestroyConstraint(FirstJoint.Constraint).Succeeded(),
+            "stale joint identity retired a replacement");
+        Step(Provider, 1, 0);
+
+        const auto SecondJoint = Provider.Rigid->TryCreateConstraint(Joint);
+        Require(SecondJoint.Succeeded(), "replacement joint admission failed");
+        Step(Provider, 2, 0);
+        Require(Provider.Rigid->DestroyBody(First).Succeeded(),
+            "joint endpoint retirement failed");
+        Step(Provider, 1, 0);
+        Require(!Provider.Rigid->DestroyConstraint(SecondJoint.Constraint).Succeeded(),
+            "retired endpoint left a live joint identity");
+        Step(Provider, 1, 0);
+    }
 }
 
 int main() {
@@ -222,6 +266,7 @@ int main() {
         SensorGuardsTransientContact();
         SolidTouchGuardsFastCrossing();
         FailedTouchUpdateFailsClosed();
+        JointMembershipGuardsCadence();
         std::cout << "[Physics:JoltScheduling] qualification passed\n";
         return 0;
     } catch (const std::exception &Error) {
