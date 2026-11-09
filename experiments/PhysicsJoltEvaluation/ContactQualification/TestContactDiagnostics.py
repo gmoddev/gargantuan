@@ -176,6 +176,25 @@ class DiagnosticTests(unittest.TestCase):
                              {'DeltaTimeSeconds': 0.01,
                               'Authored': {'XpbdSubsteps': 32}})
 
+    def test_pin_position_store_gap_is_reported_separately(self):
+        Record = Accounting()
+        Record['IdealVelocityReconstructionEnabled'] = True
+        Record['IntegrationPositionRoundingKineticDeltaJ'] = 0.0
+        Record['IdealVelocityReconstructionKineticDeltaJ'] = 0.0
+        Record['PinConstraintNumericalImpulseNs'] = [0.25, 0.0, 0.0]
+        Stages = {'ContactProjectionVelocityDerivedMomentumDeltaNs':
+                  [0.0, 0.0, 0.0], 'ContactProjectionCorrections': 0}
+        Reduced = VerifyAccounting(Record, Stages, 0,
+                                   {'DeltaTimeSeconds': 0.01,
+                                    'Authored': {'XpbdSubsteps': 32}})
+        self.assertEqual(Reduced['NormalizedPinConstraintNumericalImpulse'], 0.25)
+        self.assertEqual(Reduced['NormalizedRawMomentumResidual'], 0.0)
+        Record['PinConstraintNumericalImpulseNs'] = [float('nan'), 0.0, 0.0]
+        with self.assertRaisesRegex(ValueError, 'pin constraint numerical impulse'):
+            VerifyAccounting(Record, Stages, 0,
+                             {'DeltaTimeSeconds': 0.01,
+                              'Authored': {'XpbdSubsteps': 32}})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -41,6 +41,11 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
             not all(FiniteNumber(Component) for Component in Unpinned):
         raise ValueError('Invalid unpinned structural numerical impulse')
     Vectors['UnpinnedStructuralNumericalImpulseNs'] = Unpinned
+    PinNumerical = Accounting.get('PinConstraintNumericalImpulseNs', [0.0, 0.0, 0.0])
+    if not isinstance(PinNumerical, list) or len(PinNumerical) != 3 or \
+            not all(FiniteNumber(Component) for Component in PinNumerical):
+        raise ValueError('Invalid pin constraint numerical impulse')
+    Vectors['PinConstraintNumericalImpulseNs'] = PinNumerical
     StageMomentum = Stages.get('ContactProjectionVelocityDerivedMomentumDeltaNs')
     if not isinstance(StageMomentum, list) or len(StageMomentum) != 3 or \
             not all(FiniteNumber(Component) for Component in StageMomentum):
@@ -120,6 +125,8 @@ def VerifyAccounting(Accounting, Stages, Frame, Fixture):
             'NormalizedRawMomentumResidual': Norm(RawResidual) / ImpulseScale,
             'NormalizedUnpinnedStructuralNumericalImpulse':
                 Norm(Unpinned) / ImpulseScale,
+            'NormalizedPinConstraintNumericalImpulse':
+                Norm(PinNumerical) / ImpulseScale,
             'StaticPoseWorkComplete': Accounting['StaticPoseWorkComplete']}
 
 
@@ -234,6 +241,9 @@ def Inspect(CaseDirectory):
                     default=None),
             'MaximumNormalizedUnpinnedStructuralNumericalImpulse':
                 max((Row['NormalizedUnpinnedStructuralNumericalImpulse']
+                     for Row in AccountingRows), default=None),
+            'MaximumNormalizedPinConstraintNumericalImpulse':
+                max((Row['NormalizedPinConstraintNumericalImpulse']
                      for Row in AccountingRows), default=None),
             'IdealVelocityReconstructionEnabled': IdealSeen,
             'MaximumAbsoluteIntegrationPositionRoundingKineticDeltaJ':
