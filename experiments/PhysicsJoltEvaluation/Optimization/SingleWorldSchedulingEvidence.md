@@ -13,7 +13,8 @@ The final unprofiled 1024-group cohort used Engine
 `7e59df5fd7f3e23504f2e696e2b095bf706b26b4`. The same 128-sphere,
 gravity-loaded executable ran fast U1/C4 and forced full U2/C8 for 240 frames,
 three fresh processes per mode at each worker cap. Its bodies all had
-`CanTouch=false`; it contained no enabled soft body or joint. The cohort
+`CanTouch=false`; its world disabled sleep and contained no enabled soft body
+or joint. The cohort
 predates the live-joint fast-cadence guard, but has zero live joints, so that
 guard does not change its selected schedule. Postguard qualification is a
 separate source gate and was pending when this reduction was written.
@@ -40,6 +41,9 @@ Both met the 0.25 m gate. Different cadence changes trajectory and contact
 penetration, so these receipts make no contact-event or trajectory-equivalence
 claim. The raw cohort and validated `SchedulingReduction.json` are at
 `C:/Users/aiden/.codex/artifacts/jolt-final-performance-20261109/C-Schedule-20261109T070737`.
+Fast cadence is now limited to worlds with sleep disabled; sleep-enabled
+worlds retain U2/C8 so native sleep and wake timing stays on the qualified
+schedule. This guard preserves the measured cohort's eligibility.
 
 ## Earlier C256 smoke
 
@@ -48,7 +52,8 @@ The local C256 smoke cohort used Engine
 `8ba1408477826f3a86f54e59b4c17518a0ef147f`, the unprofiled MSVC
 Release build, and the 256-vertex large-cloth grouping setting. This is a
 pre-final source checkpoint. The 128-sphere gravity-loaded fixture has no
-enabled soft body, touch-enabled rigid body, or live joint; physical native contact remains
+enabled soft body, touch-enabled rigid body, or live joint, and disabled world
+sleep; physical native contact remains
 enabled. `fast` advances the same Jolt world at U1/C4, while `full` forces
 U2/C8 in the same benchmark executable. Each process ran 240 frames.
 
@@ -73,8 +78,9 @@ was 0.000292/0.000410 m. Both schedules met the unchanged 0.25 m physical
 gate. Their rigid trajectories and penetration differ because cadence differs;
 the result does not establish contact-event or trajectory identity. The
 eligibility guard keeps touch-enabled bodies, all enabled soft bodies, and any
-live joint at the qualified U2/C8 cadence, so this speedup applies only to
-explicitly non-touch rigid content with no enabled soft load or live joint.
+live joint or sleep-enabled world at the qualified U2/C8 cadence, so this
+speedup applies only to explicitly non-touch rigid content with no enabled
+soft load, live joint, or world sleep.
 
 These smoke receipts contain aggregate update time and per-process frame P95,
 but no raw frame times. P50, P99 and maximum frame latency cannot be recovered

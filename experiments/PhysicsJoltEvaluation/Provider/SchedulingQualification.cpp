@@ -111,6 +111,7 @@ namespace {
     void SensorGuardsTransientContact() {
         PhysicsWorldConfig Config;
         Config.Gravity = {};
+        Config.EnableSleep = false;
         auto Provider = CreateUnifiedJoltProvider(Config);
         PhysicsBodyDesc Sensor;
         Sensor.Anchored = true;
@@ -164,6 +165,7 @@ namespace {
     void SolidTouchGuardsFastCrossing() {
         PhysicsWorldConfig Config;
         Config.Gravity = {};
+        Config.EnableSleep = false;
         auto Provider = CreateUnifiedJoltProvider(Config);
         PhysicsBodyDesc Wall;
         Wall.Anchored = true;
@@ -191,6 +193,7 @@ namespace {
     void FailedTouchUpdateFailsClosed() {
         PhysicsWorldConfig Config;
         Config.Gravity = {};
+        Config.EnableSleep = false;
         auto Provider = CreateUnifiedJoltProvider(Config);
         auto Description = Ball({0, 0, 0});
         Description.CanTouch = false;
@@ -256,6 +259,30 @@ namespace {
             "retired endpoint left a live joint identity");
         Step(Provider, 1, 0);
     }
+    void SleepEnabledWorldRetainsWakeCadence() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        Config.EnableSleep = true;
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        auto Description = Ball({0, 0, 0});
+        Description.CanTouch = false;
+        Description.SleepEnabled = true;
+        const auto Body = Provider.Rigid->CreateBody(Description);
+        Require(Body.IsValid(), "sleep guard rigid admission failed");
+        for (int Frame = 0; Frame < 90; ++Frame) Step(Provider, 2, 0);
+        const auto Resting = Provider.Rigid->GetBodyState(Body);
+        Require(Resting && !Resting->Awake,
+            "sleep-enabled no-touch body did not retire on high cadence");
+        Require(Provider.Rigid->SetAwake(Body, true).Succeeded(),
+            "sleeping body did not accept explicit wake");
+        Require(Provider.Rigid->ApplyLinearImpulse(Body, {2, 0, 0}).Succeeded(),
+            "woken body did not accept native impulse");
+        Step(Provider, 2, 0);
+        const auto Woken = Provider.Rigid->GetBodyState(Body);
+        Require(Woken && Woken->Awake && Woken->LinearVelocity.x > 0 &&
+            Woken->Transform.Position.x > Resting->Transform.Position.x,
+            "sleep-enabled body did not move after native wake and impulse");
+    }
 }
 
 int main() {
@@ -267,6 +294,7 @@ int main() {
         SolidTouchGuardsFastCrossing();
         FailedTouchUpdateFailsClosed();
         JointMembershipGuardsCadence();
+        SleepEnabledWorldRetainsWakeCadence();
         std::cout << "[Physics:JoltScheduling] qualification passed\n";
         return 0;
     } catch (const std::exception &Error) {

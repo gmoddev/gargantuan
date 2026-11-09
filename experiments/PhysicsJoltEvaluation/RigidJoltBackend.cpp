@@ -1325,7 +1325,8 @@ namespace {
                 PreviousNeutralContacts = std::move(CurrentNeutral);
             };
             if (UnifiedMode) {
-                bool Coupled = !RigidFastScheduleEnabled || EnabledSoftBodies != 0 ||
+                bool Coupled = !RigidFastScheduleEnabled || Configuration.EnableSleep ||
+                    EnabledSoftBodies != 0 ||
                     TouchBodies != 0 || TouchGuardUncertain || ActiveConstraints != 0 ||
                     JointGuardUncertain;
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
