@@ -6,6 +6,11 @@ date: 2026-11-07
 
 # Expanded physics comparison
 
+The completed [final performance campaign](FinalPerformanceCampaign.md) records
+the November 9 optimized checkpoint, before/after measurements, bounded quality
+domain and final Windows/Linux/sanitizer evidence. Production defaults remain
+Box3D + XPBD; the historical investigations below remain intact.
+
 The completed [S1 resolution and bounded unified decision](SolverResolutionAndUnifiedDecision.md)
 supersedes the deferred investigation conclusions below. It records the
 qualified finite-compliance numerical correction, independent Linux/Windows
