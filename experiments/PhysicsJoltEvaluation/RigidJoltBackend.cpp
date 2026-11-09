@@ -1,4 +1,5 @@
 #include "RigidJoltBackend.hpp"
+#include "ContactProbe.hpp"
 #include "Provider/UnifiedJoltProvider.hpp"
 #ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
 #include "ExperimentSupport.hpp"
@@ -1333,9 +1334,9 @@ namespace {
                 Coupled |= !Attachments.empty();
 #endif
                 if (Coupled) {
-                    UpdateWorld(Config.DeltaTime * 0.5f, 8);
+                    UpdateWorld(Config.DeltaTime * 0.5f, 8 / PhysicsEvaluation::ContactProbeParts());
                     CollectContacts();
-                    UpdateWorld(Config.DeltaTime * 0.5f, 8);
+                    UpdateWorld(Config.DeltaTime * 0.5f, 8 / PhysicsEvaluation::ContactProbeParts());
                     CollectContacts();
                 } else {
                     UpdateWorld(Config.DeltaTime, std::max(4, Config.SubStepCount));
@@ -1906,7 +1907,7 @@ namespace {
             Settings.mVelocityReconstruction = JPH::ESoftBodyVelocityReconstruction::ConstraintDelta;
 #endif
 #ifdef PHYSICS_GANTRIA_CONVERGENCE
-            Settings.mNumConstraintIterations = ConstraintSweepsPerIteration;
+            Settings.mNumConstraintIterations = PhysicsEvaluation::ContactProbeSweeps(ConstraintSweepsPerIteration);
             if (!Settings.IsConstraintConvergenceSupported()) return {};
 #endif
             Settings.mAllowSleeping = false;
@@ -2014,7 +2015,7 @@ namespace {
             Settings.mVelocityReconstruction = JPH::ESoftBodyVelocityReconstruction::ConstraintDelta;
 #endif
 #ifdef PHYSICS_GANTRIA_CONVERGENCE
-            Settings.mNumConstraintIterations = ConstraintSweepsPerIteration;
+            Settings.mNumConstraintIterations = PhysicsEvaluation::ContactProbeSweeps(ConstraintSweepsPerIteration);
             if (!Settings.IsConstraintConvergenceSupported())
                 return {PhysicsOperationStatus::InvalidDescription,
                     "Jolt repeated-sweep profile does not support this constraint graph"};
@@ -2467,10 +2468,10 @@ UnifiedJoltProvider CreateUnifiedJoltProvider(const gargantuan::PhysicsWorldConf
 #endif
 }
 JoltSoftSolverProfile GetJoltSoftSolverProfile() {
-    return {.WorldUpdates = 2, .CollisionStepsPerUpdate = 8,
+    return {.WorldUpdates = 2, .CollisionStepsPerUpdate = 8u / unsigned(PhysicsEvaluation::ContactProbeParts()),
         .SoftIterationsPerCollisionStep = SoftIterationsPerCollisionStep,
-        .ConstraintSweepsPerIteration = ConstraintSweepsPerIteration,
-        .SoftIntegrationsPerFrame = SoftIntegrationsPerFrame,
+        .ConstraintSweepsPerIteration = PhysicsEvaluation::ContactProbeSweeps(ConstraintSweepsPerIteration),
+        .SoftIntegrationsPerFrame = SoftIntegrationsPerFrame / unsigned(PhysicsEvaluation::ContactProbeParts()),
 #ifdef PHYSICS_GANTRIA_SLEEP_FIX
         .FullUpdateSleepClock = true,
 #else

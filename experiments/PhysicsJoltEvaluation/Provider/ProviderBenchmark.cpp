@@ -1,5 +1,6 @@
 #include "UnifiedJoltProvider.hpp"
 #include "../ExperimentSupport.hpp"
+#include "../ContactProbe.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 
 #include <algorithm>
@@ -66,6 +67,9 @@ namespace {
         Definition.Size = SceneValue.Rubber ? glm::vec3(2.0f) : glm::vec3(8.0f, 8.0f, 0.5f);
         Definition.ResolutionX = SceneValue.Resolution;
         Definition.ResolutionY = SceneValue.Resolution;
+        Definition.Material.StretchCompliance *= PhysicsEvaluation::ContactProbeFloat("GANTRIA_PROBE_COMPLIANCE", 1.0f);
+        Definition.Material.Friction = PhysicsEvaluation::ContactProbeFloat("GANTRIA_PROBE_FRICTION", Definition.Material.Friction);
+        Definition.Material.Thickness = PhysicsEvaluation::ContactProbeFloat("GANTRIA_PROBE_THICKNESS", Definition.Material.Thickness);
         if (SceneValue.Rubber) Definition.ResolutionZ = SceneValue.Resolution;
         else {
             for (std::uint32_t X = 0; X < SceneValue.Resolution; ++X) {
@@ -319,7 +323,7 @@ int main(int ArgumentCount, char **Arguments) {
             throw std::invalid_argument("Coupling must be none, static-sphere, or driven-sphere");
         const bool DrivenSphere = Coupling == "driven-sphere";
         const bool ContactCaptureInstrumented = DrivenSphere && BackendName == "jolt";
-        constexpr float DriveDurationSeconds = 0.66f;
+        const float DriveDurationSeconds = PhysicsEvaluation::ContactProbeFloat("GANTRIA_PROBE_DURATION", 0.66f);
         constexpr float DriveDistanceMeters = 1.2f;
         const int Frames = std::stoi(Arguments[4]);
         const int Workers = std::stoi(Arguments[5]);
@@ -526,8 +530,10 @@ int main(int ArgumentCount, char **Arguments) {
                 return DriveDistanceMeters * std::min(TimeSeconds / DriveDurationSeconds, 1.0f);
             };
             const auto Start = Clock::now();
-            if (DrivenSphere && BackendName == "jolt") {
-                const float TimeSeconds = float(SequenceFrame + 1) * SoftBodyStepInterval;
+            const int ProbeParts = PhysicsEvaluation::ContactProbeParts();
+            for (int ProbePart = 1; BackendName == "jolt" && ProbePart <= ProbeParts; ++ProbePart) {
+            if (DrivenSphere) {
+                const float TimeSeconds = (float(SequenceFrame) + float(ProbePart) / ProbeParts) * SoftBodyStepInterval;
                 for (std::size_t Index = 0; Index < StaticBodies.size(); ++Index) {
                     StaticDescriptions[Index].Transform.Position = InitialColliderCenters[Index] -
                         glm::vec3(DriveOffset(TimeSeconds), 0, 0);
@@ -537,7 +543,8 @@ int main(int ArgumentCount, char **Arguments) {
                 }
             }
             if (BackendName == "jolt")
-                (void)Jolt.Rigid->Step({.DeltaTime = SoftBodyStepInterval, .SubStepCount = 16});
+                (void)Jolt.Rigid->Step({.DeltaTime = SoftBodyStepInterval / ProbeParts, .SubStepCount = 16});
+            }
             const auto AfterRigid = Clock::now();
             SoftBodyStepConfig StepConfig;
             const int SoftStepsThisFrame = BackendName == "xpbd" ? ActualXpbdSubsteps : 1;
