@@ -50,6 +50,11 @@ namespace {
             {"SlotCommit", Phase(Value.SlotCommit)}};
     }
 
+    nlohmann::json WorldProfile(const PhysicsEvaluation::JoltWorldAdmissionProfile &Value) {
+        return {{"TempArena", Phase(Value.TempArena)}, {"Runtime", Phase(Value.Runtime)},
+            {"Jobs", Phase(Value.Jobs)}, {"WorldInit", Phase(Value.WorldInit)}};
+    }
+
     struct BodySample {
         std::uint32_t Repeat = 0;
         std::uint32_t Body = 0;
@@ -92,6 +97,7 @@ int main(int ArgumentCount, char **Arguments) {
         SoftBodyWorldLimits Limits;
         Limits.MaximumWorkers = 1;
         const auto BeforeWorld = PhysicsEvaluation::CaptureResources();
+        PhysicsEvaluation::ResetJoltWorldAdmissionProfile();
         const auto WorldStart = Clock::now();
         PhysicsEvaluation::UnifiedJoltProvider Jolt;
         std::unique_ptr<ISoftBodyBackend> Xpbd;
@@ -101,6 +107,7 @@ int main(int ArgumentCount, char **Arguments) {
         if (!Soft || !Soft->IsValid()) throw std::runtime_error("World creation failed");
         const double WorldMs = Milliseconds(Clock::now() - WorldStart);
         const auto AfterWorld = PhysicsEvaluation::CaptureResources();
+        const auto WorldAdmission = PhysicsEvaluation::GetJoltWorldAdmissionProfile();
 
         std::vector<BodySample> Samples;
         Samples.reserve(std::size_t(BodyCount) * Repeats);
@@ -160,6 +167,7 @@ int main(int ArgumentCount, char **Arguments) {
             {"Schema", "PhysicsJoltAdmissionProfile1"}, {"Backend", Backend}, {"Scene", Scene},
             {"Bodies", BodyCount}, {"Repeats", Repeats}, {"Instrumented", true},
             {"WorldMs", WorldMs}, {"WorldResources", PhysicsEvaluation::ResourceDelta(BeforeWorld, AfterWorld)},
+            {"WorldAdmission", WorldProfile(WorldAdmission)},
             {"WorldRetireMs", WorldRetireMs},
             {"WorldRetireResources", PhysicsEvaluation::ResourceDelta(BeforeWorldRetire, AfterWorldRetire)},
             {"WholeResources", PhysicsEvaluation::ResourceDelta(BeforeWorld, AfterWorldRetire)},

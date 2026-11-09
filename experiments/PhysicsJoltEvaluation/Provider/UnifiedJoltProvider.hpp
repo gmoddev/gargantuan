@@ -68,6 +68,14 @@ namespace PhysicsEvaluation {
     };
     void ResetJoltAdmissionProfile();
     [[nodiscard]] JoltAdmissionProfile GetJoltAdmissionProfile();
+    struct JoltWorldAdmissionProfile {
+        JoltAdmissionPhase TempArena;
+        JoltAdmissionPhase Runtime;
+        JoltAdmissionPhase Jobs;
+        JoltAdmissionPhase WorldInit;
+    };
+    void ResetJoltWorldAdmissionProfile();
+    [[nodiscard]] JoltWorldAdmissionProfile GetJoltWorldAdmissionProfile();
 #endif
 
     // Cumulative vertex contacts reported by Jolt's soft-rigid manifold for

@@ -73,21 +73,33 @@ namespace {
 #ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
     using AdmissionClock = std::chrono::steady_clock;
     thread_local JoltAdmissionProfile AdmissionProfile;
+    thread_local JoltWorldAdmissionProfile WorldAdmissionProfile;
+    void CompleteAdmissionPhase(JoltAdmissionPhase &Target, AdmissionClock::time_point Start,
+                                const ResourceSnapshot &Before) {
+        const auto After = CaptureResources();
+        Target.Milliseconds += std::chrono::duration<double, std::milli>(
+            AdmissionClock::now() - Start).count();
+        Target.AllocationCalls += After.AllocationCalls - Before.AllocationCalls;
+        Target.AllocatedBytes += After.AllocatedBytes - Before.AllocatedBytes;
+    }
     class AdmissionMeasure {
     public:
         explicit AdmissionMeasure(JoltAdmissionPhase &Phase)
             : Target(Phase), Start(AdmissionClock::now()), Before(CaptureResources()) {}
-        ~AdmissionMeasure() {
-            const auto After = CaptureResources();
-            Target.Milliseconds += std::chrono::duration<double, std::milli>(
-                AdmissionClock::now() - Start).count();
-            Target.AllocationCalls += After.AllocationCalls - Before.AllocationCalls;
-            Target.AllocatedBytes += After.AllocatedBytes - Before.AllocatedBytes;
-        }
+        ~AdmissionMeasure() { CompleteAdmissionPhase(Target, Start, Before); }
     private:
         JoltAdmissionPhase &Target;
         AdmissionClock::time_point Start;
         ResourceSnapshot Before;
+    };
+    struct AdmissionStart {
+        AdmissionClock::time_point Start = AdmissionClock::now();
+        ResourceSnapshot Before = CaptureResources();
+    };
+    struct AdmissionStop {
+        AdmissionStop(const AdmissionStart &Start, JoltAdmissionPhase &Target) {
+            CompleteAdmissionPhase(Target, Start.Start, Start.Before);
+        }
     };
 #endif
 
@@ -510,14 +522,37 @@ namespace {
     public:
         friend class JoltSoftBackend;
         RigidJoltBackend(const PhysicsWorldConfig &Config, int WorkerBudget, bool Unified = false)
-            : Configuration(Config), Temp(32 * 1024 * 1024), UnifiedMode(Unified) {
+            : Configuration(Config), Temp(32 * 1024 * 1024),
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+              TempStop(TempStart, WorldAdmissionProfile.TempArena),
+#endif
+              UnifiedMode(Unified) {
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            {
+                AdmissionMeasure Measure(WorldAdmissionProfile.Runtime);
+#endif
             static JoltRuntime Runtime;
             (void)Runtime;
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            }
+#endif
             if (!Finite(Config.Gravity) || WorkerBudget < 1 || WorkerBudget > 8) return;
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            {
+                AdmissionMeasure Measure(WorldAdmissionProfile.Jobs);
+#endif
             if (WorkerBudget == 1) Jobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
             else Jobs = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs,
                 JPH::cMaxPhysicsBarriers, WorkerBudget - 1);
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            }
+            {
+                AdmissionMeasure Measure(WorldAdmissionProfile.WorldInit);
+#endif
             World.Init(65536, 0, 65536, 65536, Layers, Layers, Layers);
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+            }
+#endif
 #ifdef PHYSICS_GANTRIA_SLEEP_FIX
             auto PhysicsSettings = World.GetPhysicsSettings();
             PhysicsSettings.mUseFullUpdateDeltaForSleep = true;
@@ -1565,7 +1600,13 @@ namespace {
         LayerTable Layers;
         ContactCapture Contacts;
         SoftContactCapture SoftContacts;
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+        AdmissionStart TempStart;
+#endif
         JPH::TempAllocatorImpl Temp;
+#ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
+        AdmissionStop TempStop;
+#endif
         std::unique_ptr<JPH::JobSystem> Jobs;
         // Destruct World before Jobs, Temp and Layers, whose storage it may use.
         JPH::PhysicsSystem World;
@@ -2226,6 +2267,8 @@ namespace {
 #ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
 void ResetJoltAdmissionProfile() { AdmissionProfile = {}; }
 JoltAdmissionProfile GetJoltAdmissionProfile() { return AdmissionProfile; }
+void ResetJoltWorldAdmissionProfile() { WorldAdmissionProfile = {}; }
+JoltWorldAdmissionProfile GetJoltWorldAdmissionProfile() { return WorldAdmissionProfile; }
 #endif
 
 std::unique_ptr<gargantuan::IPhysicsBackend> CreateRigidJoltBackend(
