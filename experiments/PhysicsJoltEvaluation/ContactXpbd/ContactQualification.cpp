@@ -390,6 +390,8 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 FrameContact.DampingImpulseNs += Projection->DampingImpulseNs;
                 FrameContact.PinConstraintImpulseOnClothNs +=
                     Projection->PinConstraintImpulseOnClothNs;
+                FrameContact.PinConstraintNumericalImpulseNs +=
+                    Projection->PinConstraintNumericalImpulseNs;
                 FrameContact.UnpinnedStructuralNumericalImpulseNs +=
                     Projection->UnpinnedStructuralNumericalImpulseNs;
                 FrameContact.MomentumResidualNs += Projection->MomentumResidualNs;
@@ -450,6 +452,8 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 {"DampingImpulseNs", DTriplet(FrameContact.DampingImpulseNs)},
                 {"PinConstraintImpulseOnClothNs",
                     DTriplet(FrameContact.PinConstraintImpulseOnClothNs)},
+                {"PinConstraintNumericalImpulseNs",
+                    DTriplet(FrameContact.PinConstraintNumericalImpulseNs)},
                 {"UnpinnedStructuralNumericalImpulseNs",
                     DTriplet(FrameContact.UnpinnedStructuralNumericalImpulseNs)},
                 {"MomentumResidualNs", DTriplet(FrameContact.MomentumResidualNs)},

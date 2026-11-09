@@ -751,14 +751,21 @@ namespace gargantuan {
 						(glm::dvec3(NodeB.Position) - glm::dvec3(BeforeB));
 				}
 				if (RecordAccounting) {
-					if (NodeA.InverseMass == 0.0f && NodeB.InverseMass > 0.0f)
-						Record.ContactProjection.PinConstraintImpulseOnClothNs +=
-							glm::dvec3(NodeB.Position - BeforeB) /
+					if (NodeA.InverseMass == 0.0f && NodeB.InverseMass > 0.0f) {
+						const glm::dvec3 Actual = glm::dvec3(NodeB.Position - BeforeB) /
 							(double(NodeB.InverseMass) * double(DeltaTime));
-					else if (NodeB.InverseMass == 0.0f && NodeA.InverseMass > 0.0f)
+						const glm::dvec3 Ideal = glm::dvec3(Correction) / double(DeltaTime);
+						Record.ContactProjection.PinConstraintNumericalImpulseNs += Actual - Ideal;
 						Record.ContactProjection.PinConstraintImpulseOnClothNs +=
-							glm::dvec3(NodeA.Position - BeforeA) /
+							Record.ReconstructIdealVelocity ? Ideal : Actual;
+					} else if (NodeB.InverseMass == 0.0f && NodeA.InverseMass > 0.0f) {
+						const glm::dvec3 Actual = glm::dvec3(NodeA.Position - BeforeA) /
 							(double(NodeA.InverseMass) * double(DeltaTime));
+						const glm::dvec3 Ideal = -glm::dvec3(Correction) / double(DeltaTime);
+						Record.ContactProjection.PinConstraintNumericalImpulseNs += Actual - Ideal;
+						Record.ContactProjection.PinConstraintImpulseOnClothNs +=
+							Record.ReconstructIdealVelocity ? Ideal : Actual;
+					}
 					else if (NodeA.InverseMass > 0.0f && NodeB.InverseMass > 0.0f)
 						Record.ContactProjection.UnpinnedStructuralNumericalImpulseNs +=
 							glm::dvec3(NodeA.Position - BeforeA) /

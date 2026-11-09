@@ -21,6 +21,7 @@ namespace PhysicsEvaluation {
         glm::dvec3 PointImpulseNs{0.0};
         glm::dvec3 DampingImpulseNs{0.0};
         glm::dvec3 PinConstraintImpulseOnClothNs{0.0};
+        glm::dvec3 PinConstraintNumericalImpulseNs{0.0};
         glm::dvec3 UnpinnedStructuralNumericalImpulseNs{0.0};
         glm::dvec3 MomentumResidualNs{0.0};
         double ContactKineticDeltaJ = 0.0;

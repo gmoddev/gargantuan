@@ -106,7 +106,7 @@ rounded float position writes in a per-node double accumulator. Final velocity
 starts from the integrated velocity and adds the net later position and
 previous-position changes, plus this numerical bias, divided by the substep
 duration. Thus existing vertex/face collision and friction edits still affect
-velocity; only free-free structural float-store leakage is removed. The
+velocity; only structural float-store leakage is removed. The
 snapshot buffer is retained per live cloth body, bounded by its node count,
 and reused across substeps. Rubber volume and shape recovery are deliberately
 outside this experiment.
@@ -114,7 +114,11 @@ outside this experiment.
 The opt-in trace reports both the **would-be**
 `UnpinnedStructuralNumericalImpulseNs` from rounded position writes and the
 new raw `MomentumResidualNs` after reconstruction; it no longer subtracts
-that would-be leak as an external impulse. Two kinetic terms make the stage
+that would-be leak as an external impulse. Pinned-to-free edges report their
+actual-minus-ideal position-store impulse gap separately as
+`PinConstraintNumericalImpulseNs`; H's pin reaction ledger uses the ideal
+mass-weighted correction that its velocity reconstruction applies, while
+A–G retain their original actual-position reaction. Two kinetic terms make the stage
 bookkeeping explicit: `IntegrationPositionRoundingKineticDeltaJ` is the gap
 between integrated velocity and position-derived velocity immediately after
 integration, and `IdealVelocityReconstructionKineticDeltaJ` is the final gap
