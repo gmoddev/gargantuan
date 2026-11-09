@@ -16,14 +16,14 @@ namespace {
         Broadphase, Narrowphase, Gravity, IslandBuild, VelocitySolve,
         RigidIntegrate, Ccd, PositionSolve, SoftPrepare, SoftCollide,
         SoftSimulate, SoftFinalize, SoftIntegrate, SoftEdges, SoftVolumes,
-        SoftContactVelocity, SoftState, SoftFinishIteration, BuildJobs, Barrier, Other, Count
+        SoftContactVelocity, SoftState, SoftFinishIteration, ClearLambdas, BuildJobs, Barrier, Other, Count
     };
 
     constexpr std::array<const char *, static_cast<size_t>(Stage::Count)> StageNames = {
         "Broadphase", "Narrowphase", "Gravity", "IslandBuild", "VelocitySolve",
         "RigidIntegrate", "Ccd", "PositionSolve", "SoftPrepare", "SoftCollide",
         "SoftSimulate", "SoftFinalize", "SoftIntegrate", "SoftEdges", "SoftVolumes",
-        "SoftContactVelocity", "SoftState", "SoftFinishIteration", "BuildJobs", "Barrier", "Other"
+        "SoftContactVelocity", "SoftState", "SoftFinishIteration", "ClearLambdas", "BuildJobs", "Barrier", "Other"
     };
 
     struct Counter final {
@@ -54,6 +54,7 @@ namespace {
         if (Has(Name, "ApplyCollisionConstraintsAndUpdateVelocities")) return Stage::SoftContactVelocity;
         if (Has(Name, "UpdateSoftBodyState")) return Stage::SoftState;
         if (Has(Name, "FinishIteration")) return Stage::SoftFinishIteration;
+        if (Has(Name, "ClearLambdas")) return Stage::ClearLambdas;
         if (Has(Name, "Build Jobs")) return Stage::BuildJobs;
         if (Has(Name, "barrier") || Has(Name, "Barrier")) return Stage::Barrier;
         return Stage::Other;
