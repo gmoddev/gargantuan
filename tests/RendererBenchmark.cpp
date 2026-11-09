@@ -54,6 +54,8 @@
 namespace {
 	using Clock = std::chrono::steady_clock;
 
+	enum class FrameSynchronization { Completion, Queued, BoundedPair };
+
 	struct Options {
 		std::string Backend = "projection";
 		std::string Scenario = "all";
@@ -64,7 +66,7 @@ namespace {
 		std::uint32_t Height = 720;
 		bool ShadowsEnabled = false;
 		bool Incremental = false;
-		bool Synchronize = true;
+		FrameSynchronization Synchronization = FrameSynchronization::Completion;
 		std::optional<std::filesystem::path> CapturePrefix;
 	};
 
@@ -115,7 +117,7 @@ namespace {
 					"Usage: gargantuan_renderer_benchmark [--backend=projection|headless|sdl|filament|filament-headless] "
 					"[--scenario=all|static|dynamic|mostly-static|mixed|culled|material-check|material-extensions] [--count=N] "
 					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--shadows=on|off] "
-					"[--incremental] [--synchronize=on|off] [--capture=path-prefix]\n";
+					"[--incremental] [--synchronize=on|off|bounded-2] [--capture=path-prefix]\n";
 				std::exit(0);
 			} else if (auto ParsedValue = Value("--backend=")) ParsedOptions.Backend = *ParsedValue;
 			else if (auto ParsedValue = Value("--scenario=")) ParsedOptions.Scenario = *ParsedValue;
@@ -129,9 +131,10 @@ namespace {
 				if (ParsedValue->empty()) throw std::invalid_argument("capture prefix must not be empty");
 				ParsedOptions.CapturePrefix = std::filesystem::path(*ParsedValue);
 			} else if (auto ParsedValue = Value("--synchronize=")) {
-				if (*ParsedValue == "on") ParsedOptions.Synchronize = true;
-				else if (*ParsedValue == "off") ParsedOptions.Synchronize = false;
-				else throw std::invalid_argument("synchronize must be on or off");
+				if (*ParsedValue == "on") ParsedOptions.Synchronization = FrameSynchronization::Completion;
+				else if (*ParsedValue == "off") ParsedOptions.Synchronization = FrameSynchronization::Queued;
+				else if (*ParsedValue == "bounded-2") ParsedOptions.Synchronization = FrameSynchronization::BoundedPair;
+				else throw std::invalid_argument("synchronize must be on, off or bounded-2");
 			}
 			else if (auto ParsedValue = Value("--shadows=")) {
 				if (*ParsedValue == "on") ParsedOptions.ShadowsEnabled = true;
@@ -153,8 +156,12 @@ namespace {
 		if (ParsedOptions.Scenario != "all" && ParsedOptions.Scenario != "static" && ParsedOptions.Scenario != "dynamic" &&
 			ParsedOptions.Scenario != "mostly-static" && ParsedOptions.Scenario != "mixed" && !IncrementalOnly)
 			throw std::invalid_argument("unknown renderer benchmark scenario");
-		if (!ParsedOptions.Incremental && (IncrementalOnly || ParsedOptions.CapturePrefix || !ParsedOptions.Synchronize))
+		if (!ParsedOptions.Incremental && (IncrementalOnly || ParsedOptions.CapturePrefix ||
+			ParsedOptions.Synchronization != FrameSynchronization::Completion))
 			throw std::invalid_argument("this scenario or option requires --incremental");
+		if (ParsedOptions.Synchronization == FrameSynchronization::BoundedPair && (MaterialCapture ||
+			(ParsedOptions.Backend != "sdl" && ParsedOptions.Backend != "filament-headless")))
+			throw std::invalid_argument("bounded-2 synchronization requires an offscreen graphical timing workload");
 		if (ParsedOptions.Incremental && (ParsedOptions.Count.value_or(1) > 50'000 || ParsedOptions.Frames > 1'800 ||
 			ParsedOptions.WarmupFrames > 1'800 || ParsedOptions.Width < 64 || ParsedOptions.Height < 64 ||
 			ParsedOptions.Width > 4'096 || ParsedOptions.Height > 4'096))
@@ -568,6 +575,8 @@ namespace {
 
 	void RunIncrementalCase(const Options &Settings, const ScenarioCase &Scenario) {
 		using namespace gargantuan;
+		const bool CompleteEachFrame = Settings.Synchronization == FrameSynchronization::Completion;
+		const bool CompletePairs = Settings.Synchronization == FrameSynchronization::BoundedPair;
 		const auto StartSetup = Clock::now();
 		const auto Initial = std::make_shared<const RenderPublication>(MakeGridInitial(Settings, Scenario));
 		const auto SetupMs = Milliseconds(Clock::now() - StartSetup);
@@ -583,7 +592,7 @@ namespace {
 		if (Settings.Backend == "sdl") {
 			Video.emplace();
 			auto Renderer = std::make_unique<SDLRenderer>(Viewport,
-				SDLRendererOptions{.Offscreen = true, .WaitForGpuCompletion = Settings.Synchronize, .DebugDevice = false});
+				SDLRendererOptions{.Offscreen = true, .WaitForGpuCompletion = CompleteEachFrame, .DebugDevice = false});
 			Sdl = Renderer.get();
 			Backend = std::move(Renderer);
 		} else if (Settings.Backend == "headless") Backend = std::make_unique<HeadlessRenderer>(Viewport);
@@ -600,6 +609,11 @@ namespace {
 #if defined(GARGANTUAN_WITH_FILAMENT)
 			if (Filament) Filament->FlushAndWait();
 #endif
+		};
+		// Apply the same queue bound to both backends without overriding Filament's
+		// native frame admission. Its frame skipper looks two submissions back.
+		const auto ShouldDrain = [&](std::size_t CompletedFrames) {
+			return (CompleteEachFrame && !Sdl) || (CompletePairs && CompletedFrames % 2 == 0);
 		};
 		const auto Counters = [&]() -> IncrementalCounters {
 			if (Sdl) return ReadSdlCounters(Sdl->GetMetrics());
@@ -620,7 +634,7 @@ namespace {
 			throw std::runtime_error("initial publication did not submit one frame");
 		for (std::size_t Frame = 0; Frame < Settings.WarmupFrames; ++Frame) {
 			Draw(std::make_shared<const RenderPublication>(MakeGridDelta(*Initial, Scenario, Frame)));
-			if (Settings.Synchronize && !Sdl) Drain();
+			if (ShouldDrain(Frame + 1)) Drain();
 		}
 		Drain();
 		const auto Baseline = Counters();
@@ -640,16 +654,18 @@ namespace {
 			const auto StartFrame = Clock::now();
 			Draw(Delta);
 			const auto EndDraw = Clock::now();
-			if (Settings.Synchronize && !Sdl) Drain();
+			const bool DrainFrame = ShouldDrain(Frame + 1);
+			if (DrainFrame) Drain();
 			const auto EndFrame = Clock::now();
 			FrameTimes.push_back(Milliseconds(EndFrame - StartFrame));
+			if (CompletePairs) WaitTimes.push_back(DrainFrame ? Milliseconds(EndFrame - EndDraw) : 0.0);
 			if (Sdl) {
 				const auto Metrics = Sdl->GetMetrics();
 				ProjectionTimes.push_back(static_cast<double>(Metrics.LastProjectionNanoseconds) / 1'000'000.0);
 				ApplyTimes.push_back(static_cast<double>(Metrics.LastMeshTransferNanoseconds +
 					Metrics.LastTextureTransferNanoseconds + Metrics.LastUiPreparationNanoseconds) / 1'000'000.0);
 				SubmitTimes.push_back(static_cast<double>(Metrics.LastSubmissionNanoseconds) / 1'000'000.0);
-				if (Settings.Synchronize)
+				if (CompleteEachFrame)
 					WaitTimes.push_back(static_cast<double>(Metrics.LastGpuCompletionWaitNanoseconds) / 1'000'000.0);
 			}
 #if defined(GARGANTUAN_WITH_FILAMENT)
@@ -660,10 +676,8 @@ namespace {
 				SubmitTimes.push_back(Metrics.RendererSubmissionMilliseconds);
 				if (const auto Bytes = GetNativeFrameUploadBytes(Metrics))
 					NativeFrameUploadBytes = NativeFrameUploadBytes.value_or(0) + *Bytes;
-				if (Settings.Synchronize) WaitTimes.push_back(Milliseconds(EndFrame - EndDraw));
+				if (CompleteEachFrame) WaitTimes.push_back(Milliseconds(EndFrame - EndDraw));
 			}
-#else
-			(void)EndDraw;
 #endif
 		}
 		const auto StartDrain = Clock::now();
@@ -694,8 +708,9 @@ namespace {
 			Output << std::fixed << std::setprecision(4) << Mean(Values);
 			return Output.str();
 		};
+		const auto Synchronization = CompleteEachFrame ? "completion" : CompletePairs ? "bounded-2" : "queued";
 		std::cout << std::fixed << std::setprecision(4) << Scenario.Name << ',' << Scenario.Count << ','
-			<< Settings.Backend << ',' << Driver << ',' << (Settings.Synchronize ? "completion" : "queued") << ','
+			<< Settings.Backend << ',' << Driver << ',' << Synchronization << ','
 			<< Settings.Width << ',' << Settings.Height << ',' << Settings.Frames << ',' << Settings.WarmupFrames << ','
 			<< SetupMs << ',' << StartupMs << ',' << FirstFrameMs << ',' << Mean(FixtureTimes) << ','
 			<< Mean(FrameTimes) << ',' << Percentile(FrameTimes, 0.50) << ',' << Percentile(FrameTimes, 0.95) << ','
