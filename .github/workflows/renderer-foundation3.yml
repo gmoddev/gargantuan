@@ -66,6 +66,9 @@ jobs:
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_benchmark \
             --incremental --backend=sdl --scenario=material-check --capture=../renderer-evidence/sdl-material) \
             2>&1 | tee renderer-evidence/material-check.csv
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_benchmark \
+            --incremental --backend=sdl --scenario=material-extensions --width=640 --height=360 \
+            --capture=../renderer-evidence/sdl-extensions) 2>&1 | tee renderer-evidence/material-extensions.csv
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
