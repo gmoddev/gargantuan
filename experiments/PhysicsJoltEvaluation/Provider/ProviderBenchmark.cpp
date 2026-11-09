@@ -323,7 +323,14 @@ int main(int ArgumentCount, char **Arguments) {
         constexpr float DriveDistanceMeters = 1.2f;
         const int Frames = std::stoi(Arguments[4]);
         const int Workers = std::stoi(Arguments[5]);
-        if (Frames < 1 || Frames > 30 || Workers < 1 || Workers > 8)
+#ifdef PHYSICS_EVALUATION_LONG_RUN
+        constexpr int MaximumFrames = 600;
+        constexpr bool LongHorizonQualification = true;
+#else
+        constexpr int MaximumFrames = 30;
+        constexpr bool LongHorizonQualification = false;
+#endif
+        if (Frames < 1 || Frames > MaximumFrames || Workers < 1 || Workers > 8)
             throw std::invalid_argument("Frame or worker budget out of bounds");
         const char *HostEnvironment = std::getenv("COMPUTERNAME");
         if (!HostEnvironment || !*HostEnvironment) HostEnvironment = std::getenv("HOSTNAME");
@@ -371,6 +378,7 @@ int main(int ArgumentCount, char **Arguments) {
         constexpr bool NativeTimingInstrumented = false;
 #endif
         const bool TimingInstrumented = AllocationTimingInstrumented || NativeTimingInstrumented ||
+            LongHorizonQualification ||
             ContactCaptureInstrumented || QualityTrace;
 
         const auto BeforeAdmission = PhysicsEvaluation::CaptureResources();

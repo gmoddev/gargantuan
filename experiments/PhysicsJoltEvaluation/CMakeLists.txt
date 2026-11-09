@@ -133,6 +133,9 @@ target_compile_definitions(PhysicsJoltAdmissionBenchmark PRIVATE
     PHYSICS_EVALUATION_ADMISSION_PROFILE=1 PHYSICS_EVALUATION_TRACK_ALLOCATIONS=1)
 PhysicsEvaluationTarget(PhysicsJoltAdmissionTimingBenchmark
     Provider/AdmissionBenchmark.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltProviderLongRun
+    Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
+target_compile_definitions(PhysicsJoltProviderLongRun PRIVATE PHYSICS_EVALUATION_LONG_RUN=1)
 if(PHYSICS_EVALUATION_NATIVE_PROFILE)
     PhysicsEvaluationTarget(PhysicsJoltProviderProfile
         Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp FinalOptimization/ProfileExit.cpp)
