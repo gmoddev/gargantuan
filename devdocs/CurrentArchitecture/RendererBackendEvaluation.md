@@ -18,6 +18,48 @@ related_adrs: []
 
 # Renderer backend evaluation
 
+## Foundation 3 experimental adapter
+
+The opt-in Filament renderer consumes the same immutable `RenderPublication`
+as SDL GPU. The neutral projection validates the publication identity, base,
+resource references, and complete values before native commands. Filament
+keeps its own generation-safe entities, buffers, textures, and shared material
+instances. Ordinary frames visit the published operations and the users of
+meshes whose bounds changed. A native apply failure discards the disposable
+scene and requires a complete resync.
+
+The experiment supports imported triangle meshes with material ranges,
+visibility and transform edits, stable vertex ranges, and RGBA8 texture
+rectangles. It uses a dedicated sRGB view for color sampling and a linear view
+for normals and packed glTF factors. Both views receive the same pixel
+lifecycle, so their physical upload bytes are recorded separately from logical
+publication bytes. The adapter caps outstanding upload payloads at 256 MiB
+and owns them until Filament's completion callback. Projection resources are
+released after their native users. A headless capture drains the render target
+and returns bottom-left RGBA8 pixels for image validation outside timed runs.
+
+The three native material packages cover opaque, masked, and transparent
+blend modes with double-sided rendering. They project the engine's
+metallic-roughness factors, normal map, and linear packed green/blue channels
+into Filament's lit model. Legacy materials use native lit dielectric defaults.
+Directional and diffuse ambient light are present. Filament's BRDF, ambient
+scale, exposure, and transparent ordering are backend-specific, so image
+coverage and material response are qualified separately from photometric parity.
+Sky, fog, GUI batches, GPU skin palettes, and a CornerWedge without canonical
+mesh data are rejected at the adapter boundary. CPU fallback meshes enter the
+same native resource path. SDL placeholder shapes for balls and cylinders
+cannot be compared against Filament's generated round geometry.
+
+The SDK remains opt-in and is pinned to the official Windows v1.71.5 Release
+archive, upstream revision `b0f2090cccf3c11f524ed8053746aba3de6be199`.
+The archive SHA-256 is
+`9bc1f145f26a628d1f61f5e0627263de0ec937b565e46927f011c280e6cfc53f`.
+The hosted workflow compiles the matching `matc` output, links both renderer
+executables, and records any SwiftShader run as functional evidence.
+The benchmark separates validated publication work, native application,
+submitted or skipped frames, and fence completion. Timings from a software
+Vulkan implementation establish no hardware ranking.
+
 > **Superseded by Foundation 2C (2026-08-22):** equivalent deformable, GUI,
 > texture, and mixed workloads on the incremental publication path resolve the
 > backend checkpoint as **Decision A — keep SDL GPU**. See
