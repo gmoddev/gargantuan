@@ -35,6 +35,10 @@ namespace PhysicsEvaluation {
     glm::quat ExperimentalXpbdClothRotation{1.0f, 0.0f, 0.0f, 0.0f};
     std::mutex ExperimentalXpbdColliderMotionMutex;
     std::vector<glm::vec3> ExperimentalXpbdColliderDeltas;
+    std::atomic<bool> ExperimentalXpbdAccountingEnabled{false};
+    void SetExperimentalXpbdAccountingEnabled(bool Enabled) {
+        ExperimentalXpbdAccountingEnabled.store(Enabled, std::memory_order_release);
+    }
     void SetExperimentalXpbdColliderDeltas(std::vector<glm::vec3> Deltas) {
         if (Deltas.size() > 8) throw std::invalid_argument("Too many experimental collider deltas");
         for (const auto &Delta : Deltas)
@@ -193,6 +197,53 @@ namespace gargantuan {
 			std::uint64_t VertexRevision = 1;
 			PhysicsEvaluation::XpbdContactProjection ContactProjection;
 		};
+
+		[[nodiscard]] double StoredKineticEnergy(const SoftBodyRecord &Record) {
+			double Energy = 0.0;
+			for (const auto &Node : Record.Nodes) if (Node.InverseMass > 0.0f) {
+				const glm::dvec3 Velocity(Node.Velocity);
+				Energy += 0.5 * glm::dot(Velocity, Velocity) / double(Node.InverseMass);
+			}
+			return Energy;
+		}
+		[[nodiscard]] double PositionKineticEnergy(const SoftBodyRecord &Record, float DeltaTime) {
+			double Energy = 0.0;
+			for (const auto &Node : Record.Nodes) if (Node.InverseMass > 0.0f) {
+				const glm::dvec3 Velocity =
+					glm::dvec3(Node.Position - Node.PreviousPosition) / double(DeltaTime);
+				Energy += 0.5 * glm::dot(Velocity, Velocity) / double(Node.InverseMass);
+			}
+			return Energy;
+		}
+
+		void RecordContactProjection(SoftBodyRecord &Record, const SoftBodyNode &Node,
+			glm::vec3 BeforePosition, glm::vec3 BeforePrevious,
+			glm::vec3 ContactNormal, glm::vec3 SurfaceDelta, float DeltaTime) {
+			if (Node.InverseMass <= 0.0f) return;
+			const double Mass = 1.0 / double(Node.InverseMass);
+			const glm::dvec3 PositionImpulse = Mass * glm::dvec3(Node.Position - BeforePosition) /
+				double(DeltaTime);
+			const glm::dvec3 VelocityResponseImpulse = -Mass * glm::dvec3(Node.PreviousPosition - BeforePrevious) /
+				double(DeltaTime);
+			const glm::dvec3 Direction(ContactNormal);
+			const glm::dvec3 NormalResponseImpulse = glm::dot(VelocityResponseImpulse, Direction) * Direction;
+			const glm::dvec3 NormalImpulse = PositionImpulse + NormalResponseImpulse;
+			const glm::dvec3 FrictionImpulse = VelocityResponseImpulse - NormalResponseImpulse;
+			const glm::dvec3 TotalImpulse = PositionImpulse + VelocityResponseImpulse;
+			const glm::dvec3 BeforeVelocity =
+				glm::dvec3(BeforePosition - BeforePrevious) / double(DeltaTime);
+			const glm::dvec3 AfterVelocity =
+				glm::dvec3(Node.Position - Node.PreviousPosition) / double(DeltaTime);
+			Record.ContactProjection.NormalImpulseOnClothNs += NormalImpulse;
+			Record.ContactProjection.FrictionImpulseOnClothNs += FrictionImpulse;
+			Record.ContactProjection.VelocityDerivedMomentumDeltaNs += TotalImpulse;
+			Record.ContactProjection.PrescribedColliderReactionImpulseNs -= TotalImpulse;
+			Record.ContactProjection.ContactKineticDeltaJ += 0.5 * Mass *
+				(glm::dot(AfterVelocity, AfterVelocity) - glm::dot(BeforeVelocity, BeforeVelocity));
+			Record.ContactProjection.PrescribedSurfaceWorkJ +=
+				glm::dot(TotalImpulse, glm::dvec3(SurfaceDelta) / double(DeltaTime));
+			++Record.ContactProjection.Corrections;
+		}
 
 		struct PendingSoftBodyAttachmentUpdate {
 			std::uint64_t SourceDefinitionRevision = 0;
@@ -876,7 +927,8 @@ namespace gargantuan {
 
 		void Collide(SoftBodyWorkItem &Item, const SoftBodySimulationBatch &Batch, bool ApplyFriction,
 			std::vector<float> *NormalLambdas = nullptr,
-			const std::vector<glm::vec3> *ColliderDeltas = nullptr) {
+			const std::vector<glm::vec3> *ColliderDeltas = nullptr,
+			bool RelativeKinematic = false) {
 			auto &Record = Item.Record;
 			if (Record.Definition.CollisionMode == SoftBodyCollisionMode::None || Batch.Colliders.empty()) return;
 			const auto QueryStart = ProfileClock::now();
@@ -894,8 +946,12 @@ namespace gargantuan {
 				for (const auto ColliderIndex : Candidates) {
 					const glm::vec3 BeforePosition = Node.Position;
 					const glm::vec3 BeforePrevious = Node.PreviousPosition;
-					std::optional<glm::vec3> Normal;
 					const auto &Collider = Batch.Colliders[ColliderIndex];
+					const glm::vec3 ColliderDelta = ColliderDeltas &&
+						ColliderIndex < ColliderDeltas->size() &&
+						Collider.Shape.Kind == PhysicsShapeKind::Ball ?
+						(*ColliderDeltas)[ColliderIndex] : glm::vec3(0.0f);
+					std::optional<glm::vec3> Normal;
 					if (NormalLambdas && Collider.Shape.Kind == PhysicsShapeKind::Ball) {
 						const glm::vec3 Delta = Node.Position - Collider.Transform.Position;
 						const float Distance = glm::length(Delta);
@@ -918,12 +974,8 @@ namespace gargantuan {
 					}
 					if (!Normal) continue;
 					if (ApplyFriction) {
-						const glm::vec3 ColliderDelta = ColliderDeltas &&
-							ColliderIndex < ColliderDeltas->size() &&
-							Collider.Shape.Kind == PhysicsShapeKind::Ball ?
-							(*ColliderDeltas)[ColliderIndex] : glm::vec3(0.0f);
 						glm::vec3 RetainedMovement;
-						if (ColliderDeltas)
+						if (RelativeKinematic)
 							RetainedMovement = PhysicsEvaluation::ResolveExperimentalXpbdRelativeMovement(
 								Node.Position - Node.PreviousPosition, ColliderDelta, *Normal,
 								Record.Definition.Material.Friction);
@@ -936,12 +988,8 @@ namespace gargantuan {
 						}
 						Node.PreviousPosition = Node.Position - RetainedMovement;
 					}
-					const glm::vec3 DeltaVelocityNumerator =
-						(Node.Position - BeforePosition) - (Node.PreviousPosition - BeforePrevious);
-					Record.ContactProjection.VelocityDerivedMomentumDeltaNs +=
-						glm::dvec3(DeltaVelocityNumerator) /
-						(double(Node.InverseMass) * double(Batch.DeltaTime));
-					++Record.ContactProjection.Corrections;
+					RecordContactProjection(Record, Node, BeforePosition, BeforePrevious,
+						*Normal, ColliderDelta, Batch.DeltaTime);
 				}
 			}
 			Item.Profile.CollisionNanoseconds += Nanoseconds(ProfileClock::now() - CollisionStart);
@@ -1002,14 +1050,18 @@ namespace gargantuan {
 
 		// Private E geometry probe. A face can enter a sphere while all three
 		// vertices remain outside; the ordinary vertex-only solver cannot see it.
-		void CollideFaces(SoftBodyWorkItem &Item, const SoftBodySimulationBatch &Batch) {
+		void CollideFaces(SoftBodyWorkItem &Item, const SoftBodySimulationBatch &Batch,
+			const std::vector<glm::vec3> *ColliderDeltas) {
 			auto &Record = Item.Record;
 			if (Record.Definition.CollisionMode == SoftBodyCollisionMode::None ||
 				!Record.Indices || Batch.Colliders.empty()) return;
 			const auto Start = ProfileClock::now();
 			const auto &Indices = *Record.Indices;
-			for (const auto &Collider : Batch.Colliders) {
+			for (std::size_t ColliderIndex = 0; ColliderIndex < Batch.Colliders.size(); ++ColliderIndex) {
+				const auto &Collider = Batch.Colliders[ColliderIndex];
 				if (Collider.Shape.Kind != PhysicsShapeKind::Ball) continue;
+				const glm::vec3 SurfaceDelta = ColliderDeltas && ColliderIndex < ColliderDeltas->size() ?
+					(*ColliderDeltas)[ColliderIndex] : glm::vec3(0.0f);
 				const float Radius = std::min({Collider.Shape.Size.x, Collider.Shape.Size.y,
 					Collider.Shape.Size.z}) * 0.5f + Record.Definition.Material.Thickness;
 				const glm::vec3 Center = Collider.Transform.Position;
@@ -1041,15 +1093,16 @@ namespace gargantuan {
 						C.InverseMass * Weights.z * Weights.z;
 					if (Weight <= 1e-9f) continue;
 					const glm::vec3 Correction = ((Radius - Distance) / Weight) * Normal;
+					const glm::vec3 BeforeA = A.Position, BeforeB = B.Position, BeforeC = C.Position;
 					A.Position += A.InverseMass * Weights.x * Correction;
 					B.Position += B.InverseMass * Weights.y * Correction;
 					C.Position += C.InverseMass * Weights.z * Correction;
-					Record.ContactProjection.VelocityDerivedMomentumDeltaNs +=
-						glm::dvec3(((A.InverseMass > 0 ? Weights.x : 0.0f) +
-							(B.InverseMass > 0 ? Weights.y : 0.0f) +
-							(C.InverseMass > 0 ? Weights.z : 0.0f)) * Correction) /
-						double(Batch.DeltaTime);
-					++Record.ContactProjection.Corrections;
+					RecordContactProjection(Record, A, BeforeA, A.PreviousPosition,
+						Normal, SurfaceDelta, Batch.DeltaTime);
+					RecordContactProjection(Record, B, BeforeB, B.PreviousPosition,
+						Normal, SurfaceDelta, Batch.DeltaTime);
+					RecordContactProjection(Record, C, BeforeC, C.PreviousPosition,
+						Normal, SurfaceDelta, Batch.DeltaTime);
 				}
 			}
 			Item.Profile.CollisionNanoseconds += Nanoseconds(ProfileClock::now() - Start);
@@ -1093,6 +1146,10 @@ namespace gargantuan {
 			const auto WorkerStart = ProfileClock::now();
 			auto &Record = Item.Record;
 			Record.ContactProjection = {};
+			const bool RecordAccounting =
+				PhysicsEvaluation::ExperimentalXpbdAccountingEnabled.load(std::memory_order_acquire);
+			if (RecordAccounting)
+				Record.ContactProjection.KineticStartJ = StoredKineticEnergy(Record);
 			static const unsigned long StageStride = [] {
 				const char *Text = std::getenv("GANTRIA_XPBD_STAGE_STRIDE");
 				if (!Text) return 0ul;
@@ -1161,11 +1218,18 @@ namespace gargantuan {
 			}
 			for (const auto &PointImpulse : Item.PointImpulses)
 				ApplyPointImpulse(Record, PointImpulse);
+			const double BeforeDampingJ = RecordAccounting ? StoredKineticEnergy(Record) : 0.0;
+			if (RecordAccounting)
+				Record.ContactProjection.AppliedDynamicsKineticDeltaJ =
+					BeforeDampingJ - Record.ContactProjection.KineticStartJ;
 			for (auto &Node : Record.Nodes) {
 				if (Node.InverseMass == 0.0f) continue;
 				Node.Velocity *= Damping;
 				Node.Position += Node.Velocity * Batch.DeltaTime;
 			}
+			if (RecordAccounting)
+				Record.ContactProjection.DampingKineticDeltaJ =
+					StoredKineticEnergy(Record) - BeforeDampingJ;
 			Item.Profile.IntegrationNanoseconds += Nanoseconds(ProfileClock::now() - IntegrationStart);
 
 			for (auto &Constraint : Record.Distances)
@@ -1175,12 +1239,15 @@ namespace gargantuan {
 			const auto Iterations = IterationCount(Record);
 			const auto ContactOrder = GetExperimentalContactOrder();
 			std::vector<glm::vec3> ColliderDeltas;
-			if (ContactOrder == ExperimentalContactOrder::KinematicRelative) {
+			{
 				std::scoped_lock Lock(PhysicsEvaluation::ExperimentalXpbdColliderMotionMutex);
 				ColliderDeltas = PhysicsEvaluation::ExperimentalXpbdColliderDeltas;
-				if (ColliderDeltas.size() != Batch.Colliders.size())
-					throw std::invalid_argument("[Physics:XpbdContactProbe] G requires one prescribed delta per collider");
 			}
+			if (ContactOrder == ExperimentalContactOrder::KinematicRelative &&
+				ColliderDeltas.size() != Batch.Colliders.size())
+				throw std::invalid_argument("[Physics:XpbdContactProbe] G requires one prescribed delta per collider");
+			const auto *SourceDeltas = ColliderDeltas.size() == Batch.Colliders.size() ?
+				&ColliderDeltas : nullptr;
 			std::vector<float> ContactNormalLambdas;
 			if (ContactOrder == ExperimentalContactOrder::CoupledNormal)
 				ContactNormalLambdas.resize(Record.Nodes.size() * Batch.Colliders.size(), 0.0f);
@@ -1192,29 +1259,49 @@ namespace gargantuan {
 					Collide(Item, Batch,
 						ContactOrder == ExperimentalContactOrder::ContactThenStructure &&
 						Iteration + 1 == Iterations,
-						ContactOrder == ExperimentalContactOrder::CoupledNormal ? &ContactNormalLambdas : nullptr);
+						ContactOrder == ExperimentalContactOrder::CoupledNormal ? &ContactNormalLambdas : nullptr,
+						SourceDeltas);
 					LogStage(Iteration, "AfterPreContact");
 				}
 				const auto ConstraintStart = ProfileClock::now();
+				const double BeforeStructureJ = RecordAccounting ?
+					PositionKineticEnergy(Record, Batch.DeltaTime) : 0.0;
 				SolveDistance(Record, Batch.DeltaTime);
 				SolveVolume(Record, Batch.DeltaTime);
 				SolveShapeRecovery(Record, Batch.DeltaTime);
+				if (RecordAccounting)
+					Record.ContactProjection.StructuralProjectionKineticDeltaJ +=
+						PositionKineticEnergy(Record, Batch.DeltaTime) - BeforeStructureJ;
 				Item.Profile.ConstraintNanoseconds += Nanoseconds(ProfileClock::now() - ConstraintStart);
 				LogStage(Iteration, "AfterStructure");
 				if (ContactOrder != ExperimentalContactOrder::ContactThenStructure) {
 					Collide(Item, Batch, Iteration + 1 == Iterations,
 						ContactOrder == ExperimentalContactOrder::CoupledNormal ? &ContactNormalLambdas : nullptr,
-						ContactOrder == ExperimentalContactOrder::KinematicRelative ? &ColliderDeltas : nullptr);
+						SourceDeltas,
+						ContactOrder == ExperimentalContactOrder::KinematicRelative);
 					if (ContactOrder == ExperimentalContactOrder::TriangleSurface)
-						CollideFaces(Item, Batch);
+						CollideFaces(Item, Batch, SourceDeltas);
 					LogStage(Iteration, "AfterPostContact");
 				}
+				const double BeforePinsJ = RecordAccounting ?
+					PositionKineticEnergy(Record, Batch.DeltaTime) : 0.0;
 				ApplyAttachments(Record);
+				if (RecordAccounting)
+					Record.ContactProjection.PinProjectionKineticDeltaJ +=
+						PositionKineticEnergy(Record, Batch.DeltaTime) - BeforePinsJ;
 			}
 			LogStage(Iterations, "AfterSolve");
 			for (auto &Node : Record.Nodes)
 				Node.Velocity = Node.InverseMass == 0.0f ? glm::vec3{}
 														 : (Node.Position - Node.PreviousPosition) / Batch.DeltaTime;
+			if (RecordAccounting) {
+				Record.ContactProjection.KineticEndJ = StoredKineticEnergy(Record);
+				const auto &Accounting = Record.ContactProjection;
+				Record.ContactProjection.LedgerResidualJ = Accounting.KineticEndJ - Accounting.KineticStartJ -
+					Accounting.AppliedDynamicsKineticDeltaJ - Accounting.DampingKineticDeltaJ -
+					Accounting.StructuralProjectionKineticDeltaJ - Accounting.PinProjectionKineticDeltaJ -
+					Accounting.ContactKineticDeltaJ;
+			}
 			GetExperimentalVelocityTrace().Capture(Item.Body, Record.Nodes);
 			++Record.VertexRevision;
 			const auto ExtractionStart = ProfileClock::now();

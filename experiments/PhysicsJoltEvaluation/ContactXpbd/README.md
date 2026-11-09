@@ -52,3 +52,18 @@ signed momentum change **derived from exact XPBD contact projection and friction
 edits to reconstructed velocity**; it is a solver diagnostic, not a measured
 rigid reaction impulse or complete external-work balance. Static pose movement
 can perform unmeasured projection work even when native static velocity is zero.
+
+With source accounting enabled by this target, `External.XpbdContactAccounting`
+separates normal projection and friction impulses from exact changes to node
+position and previous position at each contact phase. Its prescribed collider
+reaction is the equal-opposite **constraint reaction**, not an observed rigid
+momentum change. `PrescribedSurfaceWorkJ` sums each contact impulse dotted with
+the known sphere-center displacement divided by that substep's duration; it
+does not use a frame-averaged velocity. The contact kinetic delta and
+`ContactEnergyResidualJ` remain signed observations, not an automatically
+dissipative or energy-conserving verdict. Separate integration, damping,
+structural, and pin stage kinetic changes expose their contributions.
+`LedgerResidualJ` checks whether those recorded stage changes sum to the
+measured kinetic change; this bookkeeping identity is not external-work
+closure or a substitute for a physical energy gate. Static pose movement and
+unmeasured structural stored energy remain explicit limits.

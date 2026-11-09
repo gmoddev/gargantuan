@@ -154,6 +154,7 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         RotationValue[2].get<float>(), RotationValue[3].get<float>());
     PhysicsEvaluation::SetExperimentalXpbdClothRotation(Rotation);
     PhysicsEvaluation::SetExperimentalJoltClothRotation(Rotation);
+    PhysicsEvaluation::SetExperimentalXpbdAccountingEnabled(BackendName == "xpbd");
     const bool RotateAuthoredInputs = Config.value("RotateAuthoredInputs", false);
     if (RotateAuthoredInputs) {
         Gravity = Rotation * Gravity;
@@ -296,8 +297,8 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
             (void)Jolt.Rigid->Step({.DeltaTime = DeltaTime, .SubStepCount = 16});
         }
         const int Steps = BackendName == "xpbd" ? Substeps : 1;
-        glm::dvec3 FrameProjectionMomentum(0.0);
-        std::uint64_t FrameProjectionCorrections = 0;
+        PhysicsEvaluation::XpbdContactProjection FrameContact;
+        bool StaticPoseWorkComplete = true;
         for (int Sub = 0; Sub < Steps; ++Sub) {
             SoftBodyStepConfig Step;
             Step.DeltaTime = DeltaTime / float(Steps);
@@ -311,6 +312,9 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 const float EndSubstepTime = (float(Frame) + float(Sub + 1) / Steps) * DeltaTime;
                 Collider.Transform.Position = Sphere.Target(EndSubstepTime);
                 Step.Colliders.push_back(Collider);
+                if (Sphere.Motion == "static" &&
+                    Sphere.Target(StartTime) != Sphere.Target(EndSubstepTime))
+                    StaticPoseWorkComplete = false;
                 ColliderDeltas.push_back(Sphere.Motion == "kinematic" ?
                     Sphere.Target(EndSubstepTime) - Sphere.Target(StartTime) : glm::vec3(0.0f));
             }
@@ -331,8 +335,22 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
             if (BackendName == "xpbd") {
                 const auto Projection = PhysicsEvaluation::GetExperimentalXpbdContactProjection(*Soft, Cloth);
                 Require(Projection.has_value(), "XPBD projection diagnostic missing");
-                FrameProjectionMomentum += Projection->VelocityDerivedMomentumDeltaNs;
-                FrameProjectionCorrections += Projection->Corrections;
+                FrameContact.VelocityDerivedMomentumDeltaNs += Projection->VelocityDerivedMomentumDeltaNs;
+                FrameContact.NormalImpulseOnClothNs += Projection->NormalImpulseOnClothNs;
+                FrameContact.FrictionImpulseOnClothNs += Projection->FrictionImpulseOnClothNs;
+                FrameContact.PrescribedColliderReactionImpulseNs +=
+                    Projection->PrescribedColliderReactionImpulseNs;
+                FrameContact.ContactKineticDeltaJ += Projection->ContactKineticDeltaJ;
+                FrameContact.PrescribedSurfaceWorkJ += Projection->PrescribedSurfaceWorkJ;
+                FrameContact.Corrections += Projection->Corrections;
+                if (Sub == 0) FrameContact.KineticStartJ = Projection->KineticStartJ;
+                FrameContact.KineticEndJ = Projection->KineticEndJ;
+                FrameContact.AppliedDynamicsKineticDeltaJ += Projection->AppliedDynamicsKineticDeltaJ;
+                FrameContact.DampingKineticDeltaJ += Projection->DampingKineticDeltaJ;
+                FrameContact.StructuralProjectionKineticDeltaJ +=
+                    Projection->StructuralProjectionKineticDeltaJ;
+                FrameContact.PinProjectionKineticDeltaJ += Projection->PinProjectionKineticDeltaJ;
+                FrameContact.LedgerResidualJ += Projection->LedgerResidualJ;
             }
         }
         const auto State = Soft->GetBodyState(Cloth);
@@ -353,12 +371,38 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         Json Record = {{"Frame", Frame}, {"TimeSeconds", EndTime},
             {"Positions", Json::array()}, {"Velocities", Json::array()},
             {"ColliderStates", Json::array()}};
-        if (BackendName == "xpbd")
+        if (BackendName == "xpbd") {
+            const auto DTriplet = [](glm::dvec3 Value) {
+                return Json::array({Value.x, Value.y, Value.z});
+            };
             Record["Stages"] = {{"ContactProjectionVelocityDerivedMomentumDeltaNs",
-                Json::array({FrameProjectionMomentum.x, FrameProjectionMomentum.y,
-                    FrameProjectionMomentum.z})},
-                {"ContactProjectionCorrections", FrameProjectionCorrections},
-                {"Interpretation", "solver projection contribution; reciprocal impulse/work unavailable"}};
+                DTriplet(FrameContact.VelocityDerivedMomentumDeltaNs)},
+                {"ContactProjectionCorrections", FrameContact.Corrections},
+                {"Interpretation", "exact solver projection contribution to reconstructed velocity"}};
+            Record["External"] = {{"XpbdContactAccounting", {
+                {"NormalImpulseOnClothNs", DTriplet(FrameContact.NormalImpulseOnClothNs)},
+                {"FrictionImpulseOnClothNs", DTriplet(FrameContact.FrictionImpulseOnClothNs)},
+                {"PrescribedColliderReactionImpulseNs",
+                    DTriplet(FrameContact.PrescribedColliderReactionImpulseNs)},
+                {"ContactKineticDeltaJ", FrameContact.ContactKineticDeltaJ},
+                {"PrescribedSurfaceWorkJ", FrameContact.PrescribedSurfaceWorkJ},
+                {"ContactEnergyResidualJ", FrameContact.ContactKineticDeltaJ -
+                    FrameContact.PrescribedSurfaceWorkJ},
+                {"KineticStartJ", FrameContact.KineticStartJ},
+                {"KineticEndJ", FrameContact.KineticEndJ},
+                {"AppliedDynamicsKineticDeltaJ", FrameContact.AppliedDynamicsKineticDeltaJ},
+                {"DampingKineticDeltaJ", FrameContact.DampingKineticDeltaJ},
+                {"StructuralProjectionKineticDeltaJ",
+                    FrameContact.StructuralProjectionKineticDeltaJ},
+                {"PinProjectionKineticDeltaJ", FrameContact.PinProjectionKineticDeltaJ},
+                {"LedgerResidualJ", FrameContact.LedgerResidualJ},
+                {"SubstepSeconds", DeltaTime / float(Substeps)},
+                {"PrescribedSurfaceVelocitySource", "center(end)-center(start) per substep"},
+                {"Corrections", FrameContact.Corrections},
+                {"StaticPoseWorkComplete", StaticPoseWorkComplete},
+                {"Method", "source-contact-projection-and-previous-position-deltas"},
+                {"Scope", "one-way prescribed sphere; no dynamic rigid momentum claim"}}}};
+        }
         for (std::size_t Index = 0; Index < Velocities->size(); ++Index) {
             for (float Value : {(*State->Positions)[Index].x, (*State->Positions)[Index].y,
                                 (*State->Positions)[Index].z}) {
