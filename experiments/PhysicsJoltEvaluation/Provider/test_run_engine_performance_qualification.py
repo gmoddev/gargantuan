@@ -67,9 +67,10 @@ class EnginePerformanceTests(unittest.TestCase):
     def test_default_cold_matrix_balances_order(self):
         Plan = Runner.PlanMatrix(Runner.SCENES, Runner.COUPLINGS,
                                  (1, 2, 8), 3, ('cold',))
-        self.assertEqual(len(Plan), 90)
-        self.assertEqual(sum(Item['Order'] == ('jolt', 'xpbd') for Item in Plan), 45)
-        self.assertEqual(sum(Item['Order'] == ('xpbd', 'jolt') for Item in Plan), 45)
+        self.assertEqual(len(Plan), 108)
+        self.assertIn('cloth1k', {Row['Scene'] for Row in Plan})
+        self.assertEqual(sum(Item['Order'] == ('jolt', 'xpbd') for Item in Plan), 54)
+        self.assertEqual(sum(Item['Order'] == ('xpbd', 'jolt') for Item in Plan), 54)
         self.assertEqual({Item['Workers'] for Item in Plan}, {1, 2, 8})
 
     def test_failed_engine_run_retains_receipt_without_winner(self):

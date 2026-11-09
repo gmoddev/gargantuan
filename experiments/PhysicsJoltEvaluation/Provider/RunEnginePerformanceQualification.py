@@ -15,7 +15,7 @@ import time
 
 from RunPerformanceQualification import (
     COUPLINGS, JOLT_PROFILE_FIELDS, SCENES, HashFile, PlanMatrix, RemainingTimeout, RunProcess,
-    WriteJson,
+    WriteJson, ValidateTimingCache,
 )
 
 
@@ -120,6 +120,7 @@ def Main(Arguments=None):
         Parser.error('Invalid frame, worker, repeat, or timeout budget')
     Binary = Options.binary.resolve(strict=True)
     Cache = Options.cmake_cache.resolve(strict=True)
+    ValidateTimingCache(Cache)
     Output = Options.output
     Output.mkdir(parents=True, exist_ok=False)
     Started = time.monotonic()

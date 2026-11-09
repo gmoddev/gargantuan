@@ -20,7 +20,7 @@ import time
 from CompareBenchmark import ReadSummary
 
 
-SCENES = ('cloth4k', 'cloth16k', 'cloth4x4k', 'rubber4k', 'rubber16k')
+SCENES = ('cloth1k', 'cloth4k', 'cloth16k', 'cloth4x4k', 'rubber4k', 'rubber16k')
 COUPLINGS = ('none', 'static-sphere')
 PROVIDER_COUPLINGS = ('none', 'static-sphere', 'driven-sphere')
 TAILS = ('cold', 'warm')
@@ -40,6 +40,16 @@ def HashFile(PathName):
         for Chunk in iter(lambda: Source.read(1024 * 1024), b''):
             Digest.update(Chunk)
     return Digest.hexdigest()
+
+
+def ValidateTimingCache(PathName):
+    """Reject diagnostic native builds even if an old row mislabeled itself."""
+    Values = dict(Line.split('=', 1) for Line in PathName.read_text(
+        encoding='utf-8', errors='replace').splitlines() if '=' in Line)
+    for Name in ('PHYSICS_EVALUATION_NATIVE_PROFILE', 'JPH_USE_EXTERNAL_PROFILE',
+                 'PROFILER_IN_DEBUG_AND_RELEASE', 'PROFILER_IN_DISTRIBUTION'):
+        if Values.get(Name + ':BOOL', '').upper() in ('ON', 'TRUE', '1', 'YES'):
+            raise ValueError('Native profiler instrumentation is invalid for timing ranking')
 
 
 def WriteJson(PathName, Value):
@@ -348,6 +358,7 @@ def Main(Arguments=None):
         Parser.error('Frame, warmup, repeat, timeout, or matrix budget invalid')
     Binary = Options.binary.resolve(strict=True)
     Cache = Options.cmake_cache.resolve(strict=True)
+    ValidateTimingCache(Cache)
     Envelope = Options.envelope.resolve(strict=True) if Options.envelope else None
     Output = Options.output
     Output.mkdir(parents=True, exist_ok=False)

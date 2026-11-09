@@ -14,6 +14,17 @@ import RunPerformanceQualification as Runner
 
 
 class PerformanceQualificationTests(unittest.TestCase):
+    def test_native_profile_cache_cannot_enter_timing_ranking(self):
+        with TemporaryDirectory() as Directory:
+            Cache = Path(Directory) / 'CMakeCache.txt'
+            Cache.write_text('PHYSICS_EVALUATION_NATIVE_PROFILE:BOOL=OFF\n')
+            Runner.ValidateTimingCache(Cache)
+            for Name in ('PHYSICS_EVALUATION_NATIVE_PROFILE', 'JPH_USE_EXTERNAL_PROFILE',
+                         'PROFILER_IN_DEBUG_AND_RELEASE', 'PROFILER_IN_DISTRIBUTION'):
+                Cache.write_text(Name + ':BOOL=ON\n')
+                with self.assertRaisesRegex(ValueError, 'Native profiler'):
+                    Runner.ValidateTimingCache(Cache)
+
     def test_driven_response_requires_matched_free_trajectory_difference(self):
         Base = {'Scene': 'cloth4k', 'Workers': 1, 'Tail': 'cold',
                 'Repeat': 0, 'Backend': 'xpbd'}

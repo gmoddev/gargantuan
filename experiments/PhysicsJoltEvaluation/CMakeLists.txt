@@ -80,6 +80,7 @@ function(PhysicsEvaluationTarget Target)
     target_compile_features(${Target} PRIVATE cxx_std_23)
     if(PHYSICS_EVALUATION_NATIVE_PROFILE)
         target_sources(${Target} PRIVATE Optimization/ExternalProfile.cpp)
+        target_compile_definitions(${Target} PRIVATE PHYSICS_EVALUATION_NATIVE_PROFILE=1)
     endif()
     if(PHYSICS_EVALUATION_GANTRIA_NUMERICS)
         target_compile_definitions(${Target} PRIVATE PHYSICS_GANTRIA_JOLT=1)
@@ -130,5 +131,7 @@ PhysicsEvaluationTarget(PhysicsJoltAdmissionBenchmark
     Provider/AdmissionBenchmark.cpp RigidJoltBackend.cpp)
 target_compile_definitions(PhysicsJoltAdmissionBenchmark PRIVATE
     PHYSICS_EVALUATION_ADMISSION_PROFILE=1 PHYSICS_EVALUATION_TRACK_ALLOCATIONS=1)
-PhysicsEvaluationTarget(PhysicsJoltProviderProfile
-    Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp FinalOptimization/ProfileExit.cpp)
+if(PHYSICS_EVALUATION_NATIVE_PROFILE)
+    PhysicsEvaluationTarget(PhysicsJoltProviderProfile
+        Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp FinalOptimization/ProfileExit.cpp)
+endif()

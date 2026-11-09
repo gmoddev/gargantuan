@@ -72,6 +72,7 @@ namespace {
         double MeanVolumeRatio = 0;
     };
     Scene GetScene(const std::string &Name) {
+        if (Name == "cloth1k") return {Name, false, 32, 1};
         if (Name == "cloth4k") return {Name, false, 64, 1};
         if (Name == "cloth16k") return {Name, false, 128, 1};
         if (Name == "cloth4x4k") return {Name, false, 64, 4};
@@ -360,6 +361,9 @@ int main(int ArgumentCount, char **Arguments) {
             << " median_physics_step_wall_ms=" << Median
             << " p95_physics_step_wall_ms=" <<
                 Sorted[std::size_t(std::ceil(0.95 * Sorted.size())) - 1]
+            << " p99_physics_step_wall_ms=" <<
+                Sorted[std::size_t(std::ceil(0.99 * Sorted.size())) - 1]
+            << " max_physics_step_wall_ms=" << Sorted.back()
             << " initial_min_surface_distance=" <<
                 (Coupling == "static-sphere" ? InitialMinimumSurfaceDistance : 0.0)
             << " minimum_poststep_surface_distance=" <<

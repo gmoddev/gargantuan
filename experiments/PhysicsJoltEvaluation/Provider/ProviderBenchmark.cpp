@@ -365,7 +365,12 @@ int main(int ArgumentCount, char **Arguments) {
 #else
         constexpr bool AllocationTimingInstrumented = false;
 #endif
-        const bool TimingInstrumented = AllocationTimingInstrumented ||
+#ifdef PHYSICS_EVALUATION_NATIVE_PROFILE
+        constexpr bool NativeTimingInstrumented = true;
+#else
+        constexpr bool NativeTimingInstrumented = false;
+#endif
+        const bool TimingInstrumented = AllocationTimingInstrumented || NativeTimingInstrumented ||
             ContactCaptureInstrumented || QualityTrace;
 
         const auto BeforeAdmission = PhysicsEvaluation::CaptureResources();
@@ -686,6 +691,8 @@ int main(int ArgumentCount, char **Arguments) {
             << " mean_total_ms=" << Mean(TotalTimes)
             << " median_total_ms=" << Median
             << " p95_total_ms=" << Sorted[std::size_t(std::ceil(0.95 * Sorted.size())) - 1]
+            << " p99_total_ms=" << Sorted[std::size_t(std::ceil(0.99 * Sorted.size())) - 1]
+            << " max_total_ms=" << Sorted.back()
             << " mean_jolt_world_ms=" << Mean(WorldTimes)
             << " mean_jolt_extract_ms=" <<
                 (BackendName == "jolt" ? Mean(TailTimes) : 0.0)
