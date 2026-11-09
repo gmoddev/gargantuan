@@ -1,0 +1,44 @@
+name: Experimental repeated contact input probe
+on:
+  push:
+    branches: [experiment/jolt-cloth-contact-correction-20261109]
+    paths:
+      - '.github/workflows/physics-repeat-source-probe.yml'
+      - 'experiments/PhysicsJoltEvaluation/ContactQualification/SampleRepeatMotion.cpp'
+permissions:
+  contents: read
+jobs:
+  sample:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025-vs2026]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Sample Windows scalar inputs
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Installation = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          & "$Installation\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          cl.exe /nologo /std:c++20 /O2 /EHsc experiments/PhysicsJoltEvaluation/ContactQualification/SampleRepeatMotion.cpp /Fe:repeat-motion.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./repeat-motion.exe | Set-Content repeat-motion.csv
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Sample Linux scalar inputs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 libclang-rt-19-dev
+          clang++-19 -std=c++20 -O3 -fsanitize=address,undefined experiments/PhysicsJoltEvaluation/ContactQualification/SampleRepeatMotion.cpp -o repeat-motion
+          ./repeat-motion > repeat-motion.csv
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: repeat-motion-${{ matrix.os }}
+          path: repeat-motion.csv
+          if-no-files-found: error
