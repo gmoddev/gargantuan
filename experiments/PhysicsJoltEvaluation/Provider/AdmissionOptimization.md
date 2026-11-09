@@ -146,3 +146,70 @@ and has a separate quality gate. Its 40-frame cloth16K W1 and W8 comparisons
 0.017013. The hash differs from B at frame zero as expected. This is a
 quality result, not a timing recommendation; the experiment must also pass
 long-horizon and comparative performance review.
+
+## Final combined candidate admission
+
+The final measured C source is Engine
+`f4ffd911baab53ebee82a3d3d62e040568d17d7e` and native Jolt
+`7e59df5fd7f3e23504f2e696e2b095bf706b26b4`. It adds lazy temporary
+graph construction and uses the opt-in 1024 constraint batch only for 16K
+cloth; smaller scenes retain the original 256 batch. These figures come from
+`C-Admission-20261109T070737`, compared with the frozen uninstrumented
+`B-Admission-20261109T060849` on the same worker. Each timing cell below is
+the median of three fresh process runs for the first admission, or six
+same-world repeats for the second and third admissions. Each pair has the
+same authored scene and body count.
+
+| Scene and admission | Frozen B | Final C | B/C ratio |
+| --- | ---: | ---: | ---: |
+| 16K cloth first body | 55.072 ms | 16.985 ms | 3.24× |
+| 16K cloth same-world recreation | 56.115 ms | 0.271 ms | 206.9× |
+| 4K cloth first body | 12.630 ms | 3.339 ms | 3.78× |
+| 4K cloth same-world recreation | 12.231 ms | 0.107 ms | 114.2× |
+| Four differently positioned bodies, first pass | 55.879 ms | 16.585 ms | 3.37× |
+| Four differently positioned bodies, next pass | 54.574 ms | 16.462 ms | 3.32× |
+
+The four-body case has no topology-cache reuse across differently translated
+definitions. The strict key avoids falsely identifying world-space pin and
+float-rounded rest geometry as identical. The cache benefit therefore
+applies to exact-definition recreation, while the native graph changes also
+reduce cold and independent admissions. XPBD remains the separate functional
+comparison in the frozen baseline; the final Jolt timings do not establish
+feature or material equivalence with XPBD.
+
+In separate instrumented world-profile receipts, the final 16K first body
+made 507 tracked allocation calls versus 163,857 in frozen B. Its native
+`Optimize` phase made 290 calls and requested 6,370,856 bytes versus B's
+163,642 calls and 10,199,596 bytes. The first C `Optimize` diagnostic time
+was 16.27/17.12 ms at one/eight workers, versus B's 50.01/48.56 ms. These
+instrumented intervals are attribution only; the table above uses the
+uninstrumented timing executable. C's grouping has 17 update groups, 3,810
+serial edges, and 93,216 parallel edges at 1024, versus the earlier
+default-256 candidate's 65 groups, 8,834 serial edges, and 88,192 parallel
+edges. B's group counts were not exposed through its frozen native API.
+
+| Tracked phase bytes | B W1 | C W1 | B W8 | C W8 |
+| --- | ---: | ---: | ---: | ---: |
+| World setup live delta | 63,554,134 | 63,554,174 | 63,696,146 | 63,696,186 |
+| First body live delta | 5,318,515 | 5,318,003 | 5,318,515 | 5,318,003 |
+| Remaining after first body retirement | 2,256 | 3,094,235 | 2,256 | 3,094,235 |
+| World retirement freed bytes | 63,550,864 | 66,642,883 | 63,692,876 | 66,784,895 |
+
+The approximately 3.09 MB C residue after body retirement is the deliberate
+one-entry optimized-topology cache. World retirement releases it. World setup
+still makes 43/53 tracked calls at one/eight workers in both B and C; the
+32 MiB temporary arena and other fixed world reservations are unchanged.
+The C profile performs three admissions while the B world-profile control
+performs one, so whole-run residuals and working-set deltas are not
+like-for-like leak measures. Process working set includes allocator and OS
+residency and is distinct from tracked live requested bytes.
+
+The final C no-collider long traces pass the frozen protocol: cloth1K and
+cloth4K are bitwise identical to B over 600 frames, and rubber4K is
+identical over 300 frames. The 16K opt-in grouping changes graph order, but
+all 600 frames remain within the fixed B-to-C envelope (peak RMS
+0.000646364 m, peak vertex displacement 0.001817667 m); every recorded
+hash reverified against the binary trace. The 16K driven-sphere stress
+scene fails the previously declared 10% absolute strain bound in both B
+and C; see `LargeClothContactStress.md`. It remains outside the accepted
+quality domain despite the admission speed and close B-to-C trajectory.
