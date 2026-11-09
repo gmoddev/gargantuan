@@ -2,7 +2,7 @@ name: Experimental Filament qualification
 
 on:
   push:
-    branches: [foundation/renderer-3]
+    branches: [experiment/renderer3-opaque-buckets]
     paths:
       - '.github/workflows/renderer-filament-qualification.yml'
       - 'assets/filament/**'
