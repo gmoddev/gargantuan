@@ -276,6 +276,8 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
             (void)Jolt.Rigid->Step({.DeltaTime = DeltaTime, .SubStepCount = 16});
         }
         const int Steps = BackendName == "xpbd" ? Substeps : 1;
+        glm::dvec3 FrameProjectionMomentum(0.0);
+        std::uint64_t FrameProjectionCorrections = 0;
         for (int Sub = 0; Sub < Steps; ++Sub) {
             SoftBodyStepConfig Step;
             Step.DeltaTime = DeltaTime / float(Steps);
@@ -299,6 +301,12 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 Result.States.front().VertexRevision > VertexRevision,
                 "Soft step lost work");
             VertexRevision = Result.States.front().VertexRevision;
+            if (BackendName == "xpbd") {
+                const auto Projection = PhysicsEvaluation::GetExperimentalXpbdContactProjection(*Soft, Cloth);
+                Require(Projection.has_value(), "XPBD projection diagnostic missing");
+                FrameProjectionMomentum += Projection->VelocityDerivedMomentumDeltaNs;
+                FrameProjectionCorrections += Projection->Corrections;
+            }
         }
         const auto State = Soft->GetBodyState(Cloth);
         Require(State && State->Positions && State->Positions->size() == std::size_t(N * N),
@@ -315,6 +323,12 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         Json Record = {{"Frame", Frame}, {"TimeSeconds", EndTime},
             {"Positions", Json::array()}, {"Velocities", Json::array()},
             {"ColliderStates", Json::array()}};
+        if (BackendName == "xpbd")
+            Record["Stages"] = {{"ContactProjectionVelocityDerivedMomentumDeltaNs",
+                Json::array({FrameProjectionMomentum.x, FrameProjectionMomentum.y,
+                    FrameProjectionMomentum.z})},
+                {"ContactProjectionCorrections", FrameProjectionCorrections},
+                {"Interpretation", "solver projection contribution; reciprocal impulse/work unavailable"}};
         for (std::size_t Index = 0; Index < Velocities->size(); ++Index) {
             for (float Value : {(*State->Positions)[Index].x, (*State->Positions)[Index].y,
                                 (*State->Positions)[Index].z}) {

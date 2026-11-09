@@ -171,6 +171,7 @@ namespace gargantuan {
 			std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 			std::uint64_t TopologyRevision = 1;
 			std::uint64_t VertexRevision = 1;
+			PhysicsEvaluation::XpbdContactProjection ContactProjection;
 		};
 
 		struct PendingSoftBodyAttachmentUpdate {
@@ -870,6 +871,8 @@ namespace gargantuan {
 				auto &Node = Record.Nodes[NodeIndex];
 				if (Node.InverseMass == 0.0f) continue;
 				for (const auto ColliderIndex : Candidates) {
+					const glm::vec3 BeforePosition = Node.Position;
+					const glm::vec3 BeforePrevious = Node.PreviousPosition;
 					std::optional<glm::vec3> Normal;
 					const auto &Collider = Batch.Colliders[ColliderIndex];
 					if (NormalLambdas && Collider.Shape.Kind == PhysicsShapeKind::Ball) {
@@ -892,13 +895,21 @@ namespace gargantuan {
 					} else {
 						Normal = CollideNode(Node, Collider, Record.Definition.Material.Thickness);
 					}
-					if (!Normal || !ApplyFriction) continue;
-					const auto Movement = Node.Position - Node.PreviousPosition;
-					const auto NormalMovement = glm::dot(Movement, *Normal);
-					const auto TangentialMovement = Movement - NormalMovement * *Normal;
-					const auto RetainedMovement = std::max(NormalMovement, 0.0f) * *Normal +
-												  TangentialMovement * (1.0f - Record.Definition.Material.Friction);
-					Node.PreviousPosition = Node.Position - RetainedMovement;
+					if (!Normal) continue;
+					if (ApplyFriction) {
+						const auto Movement = Node.Position - Node.PreviousPosition;
+						const auto NormalMovement = glm::dot(Movement, *Normal);
+						const auto TangentialMovement = Movement - NormalMovement * *Normal;
+						const auto RetainedMovement = std::max(NormalMovement, 0.0f) * *Normal +
+							TangentialMovement * (1.0f - Record.Definition.Material.Friction);
+						Node.PreviousPosition = Node.Position - RetainedMovement;
+					}
+					const glm::vec3 DeltaVelocityNumerator =
+						(Node.Position - BeforePosition) - (Node.PreviousPosition - BeforePrevious);
+					Record.ContactProjection.VelocityDerivedMomentumDeltaNs +=
+						glm::dvec3(DeltaVelocityNumerator) /
+						(double(Node.InverseMass) * double(Batch.DeltaTime));
+					++Record.ContactProjection.Corrections;
 				}
 			}
 			Item.Profile.CollisionNanoseconds += Nanoseconds(ProfileClock::now() - CollisionStart);
@@ -976,6 +987,12 @@ namespace gargantuan {
 					A.Position += A.InverseMass * Weights.x * Correction;
 					B.Position += B.InverseMass * Weights.y * Correction;
 					C.Position += C.InverseMass * Weights.z * Correction;
+					Record.ContactProjection.VelocityDerivedMomentumDeltaNs +=
+						glm::dvec3(((A.InverseMass > 0 ? Weights.x : 0.0f) +
+							(B.InverseMass > 0 ? Weights.y : 0.0f) +
+							(C.InverseMass > 0 ? Weights.z : 0.0f)) * Correction) /
+						double(Batch.DeltaTime);
+					++Record.ContactProjection.Corrections;
 				}
 			}
 			Item.Profile.CollisionNanoseconds += Nanoseconds(ProfileClock::now() - Start);
@@ -1018,6 +1035,7 @@ namespace gargantuan {
 		void SolveWorkItem(SoftBodyWorkItem &Item, const SoftBodySimulationBatch &Batch) {
 			const auto WorkerStart = ProfileClock::now();
 			auto &Record = Item.Record;
+			Record.ContactProjection = {};
 			static const unsigned long StageStride = [] {
 				const char *Text = std::getenv("GANTRIA_XPBD_STAGE_STRIDE");
 				if (!Text) return 0ul;
@@ -1392,6 +1410,13 @@ namespace gargantuan {
 				for (const auto &Node : Slot->Record->Nodes) Result.push_back(Node.Velocity);
 				return Result;
 			}
+			[[nodiscard]] std::optional<PhysicsEvaluation::XpbdContactProjection>
+			GetExperimentalContactProjection(SoftBodyId Body) const {
+				std::scoped_lock Lock(Mutex);
+				const auto *Slot = FindSlot(Body);
+				return Slot && Slot->Record ?
+					std::optional(Slot->Record->ContactProjection) : std::nullopt;
+			}
 
 			[[nodiscard]] std::optional<SoftBodyInspection> GetBodyInspection(SoftBodyId Body) const override {
 				std::scoped_lock Lock(Mutex);
@@ -1757,6 +1782,11 @@ namespace PhysicsEvaluation {
         const gargantuan::ISoftBodyBackend &Soft, gargantuan::SoftBodyId Body) {
         const auto *Experimental = dynamic_cast<const gargantuan::XpbdSoftBodyBackend *>(&Soft);
         return Experimental ? Experimental->GetExperimentalVelocities(Body) : std::nullopt;
+    }
+    std::optional<XpbdContactProjection> GetExperimentalXpbdContactProjection(
+        const gargantuan::ISoftBodyBackend &Soft, gargantuan::SoftBodyId Body) {
+        const auto *Experimental = dynamic_cast<const gargantuan::XpbdSoftBodyBackend *>(&Soft);
+        return Experimental ? Experimental->GetExperimentalContactProjection(Body) : std::nullopt;
     }
 }
 
