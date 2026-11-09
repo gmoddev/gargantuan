@@ -1,9 +1,12 @@
 """Reduce staged contact precision and face-response comparisons without rerunning physics."""
 
 import argparse
+import gzip
 import hashlib
+from itertools import zip_longest
 import json
 from pathlib import Path
+import struct
 
 
 def ReadJson(PathValue):
@@ -14,6 +17,24 @@ def VerifySha(PathValue, Expected):
     Actual = hashlib.sha256(PathValue.read_bytes()).hexdigest()
     if Actual != Expected:
         raise ValueError(f"SHA mismatch: {PathValue}: {Actual} != {Expected}")
+
+
+def VerifyFrameHashes(Case):
+    Expected = ReadJson(Case / "FrameHashes.json")
+    with gzip.open(Case / "ContactTraceV1.jsonl.gz", "rt", encoding="utf-8") as Stream:
+        Count = 0
+        for Count, (Line, Reference) in enumerate(zip_longest(Stream, Expected), 1):
+            if Line is None or Reference is None:
+                raise ValueError(f"Frame count mismatch: {Case.name}")
+            Row = json.loads(Line)
+            if Row["Frame"] != Count - 1 or Reference["Frame"] != Count - 1:
+                raise ValueError(f"Frame order mismatch: {Case.name}")
+            for Name in ("Positions", "Velocities"):
+                Values = Row[Name]
+                Bits = struct.pack("<" + str(len(Values)) + "f", *Values)
+                if hashlib.sha256(Bits).hexdigest() != Reference[Name + "Float32Sha256"]:
+                    raise ValueError(f"{Name} frame hash mismatch: {Case.name}/{Count - 1}")
+    return Count
 
 
 def ReviewPrecision(Root):
@@ -82,8 +103,9 @@ def ReviewSurface(BroadRoot, SurfaceRoot):
         Rows.append({"Fixture": Suffix, "Variants": Variants})
     NoContact = [BroadRoot / "jolt-A-no-contact", SurfaceRoot / "jolt-H-no-contact",
                  SurfaceRoot / "jolt-IG-no-contact"]
+    FrameCounts = [VerifyFrameHashes(Case) for Case in NoContact]
     Hashes = [ReadJson(Case / "FrameHashes.json") for Case in NoContact]
-    if len(Hashes[0]) != 60 or Hashes[0] != Hashes[1] or Hashes[0] != Hashes[2]:
+    if FrameCounts != [60, 60, 60] or Hashes[0] != Hashes[1] or Hashes[0] != Hashes[2]:
         raise ValueError("No-contact position/velocity frame hashes differ")
     return {"Rows": Rows, "NoContactExactPositionAndVelocityFrames": 60}
 
