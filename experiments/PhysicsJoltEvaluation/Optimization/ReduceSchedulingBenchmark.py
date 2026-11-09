@@ -53,7 +53,9 @@ def Reduce(Directory: Path, Frames: int):
     CacheBytes = (Directory / 'CMakeCache.txt').read_bytes()
     Source = json.loads(SourceBytes)
     GroupBatch = Source.get('LargeClothGroupBatch')
-    if Source.get('Profile') is not False or GroupBatch not in (256, 512, 1024) or \
+    ProfileFields = [Source[Key] for Key in ('Profile', 'NativeProfile') if Key in Source]
+    if not ProfileFields or any(Value is not False for Value in ProfileFields) or \
+            GroupBatch not in (256, 512, 1024) or \
             not Source.get('Engine') or not Source.get('Jolt'):
         raise ValueError('Source is not an unprofiled bounded-group candidate')
     Cache = dict(Line.split('=', 1) for Line in CacheBytes.decode('utf-8').splitlines()
