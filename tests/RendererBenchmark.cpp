@@ -44,6 +44,13 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 	using Clock = std::chrono::steady_clock;
 
@@ -845,6 +852,9 @@ namespace {
 }
 
 int main(int ArgumentCount, char **Arguments) {
+#ifdef _WIN32
+	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#endif
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		const auto BenchmarkOptions = ParseOptions(ArgumentCount, Arguments);
