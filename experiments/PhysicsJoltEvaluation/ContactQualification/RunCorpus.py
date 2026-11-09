@@ -55,11 +55,17 @@ def Main():
     Parser.add_argument('--output', type=Path, required=True)
     Parser.add_argument('--variants', nargs='+', default=['jolt:A', 'jolt:F4G', 'xpbd:A', 'xpbd:D0', 'xpbd:E'])
     Parser.add_argument('--cases', nargs='*')
+    Parser.add_argument('--manifest', type=Path)
     Parser.add_argument('--workers', type=int, choices=(1,8), default=1)
     Args = Parser.parse_args()
     assert not Args.output.exists(), 'Evidence directories are immutable once created'
     Args.output.mkdir(parents=True)
-    Definitions = Cases()
+    if Args.manifest:
+        assert Args.manifest.stat().st_size < 4 * 1024 * 1024
+        Definitions = json.loads(Args.manifest.read_text(encoding='utf-8'))
+        assert isinstance(Definitions, list) and 1 <= len(Definitions) <= 256
+    else:
+        Definitions = Cases()
     Selected = [Case for Case in Definitions if Args.cases is None or Case['CaseId'] in Args.cases]
     assert Selected and (Args.cases is None or {Case['CaseId'] for Case in Selected} == set(Args.cases))
     Manifest = {'Definitions': Selected, 'Variants': Args.variants, 'Workers': Args.workers,
@@ -75,7 +81,7 @@ def Main():
     Summary = []
     for Variant in Args.variants:
         Backend, Mode = Variant.split(':')
-        assert Backend in ('jolt','xpbd') and Mode in ('A','AG','B','C','D0','E','G','F1G','F4G','F1','F4')
+        assert Backend in ('jolt','xpbd') and Mode in ('A','AG','B','C','D0','E','G','H','I','IG','F1G','F4G','F1','F4')
         for Definition in Selected:
             Name = Backend + '-' + Mode + '-' + Definition['CaseId']
             Directory = Args.output / Name
