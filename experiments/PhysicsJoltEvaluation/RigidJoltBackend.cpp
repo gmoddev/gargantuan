@@ -1848,6 +1848,13 @@ namespace {
         {
             AdmissionMeasure Measure(AdmissionProfile.Optimize);
 #endif
+#ifdef PHYSICS_GANTRIA_GROUPING
+        if (Definition.Kind == SoftBodyKind::Cloth && Result.Shared->mVertices.size() >= 16384) {
+            JPH::SoftBodySharedSettings::OptimizationResults Remap;
+            if (!Result.Shared->Optimize(Remap, PHYSICS_GANTRIA_LARGE_CLOTH_GROUP_BATCH))
+                return std::nullopt;
+        } else
+#endif
         Result.Shared->Optimize();
 #ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
         }
@@ -2458,9 +2465,14 @@ JoltSoftSolverProfile GetJoltSoftSolverProfile() {
         .ConstraintSweepsPerIteration = ConstraintSweepsPerIteration,
         .SoftIntegrationsPerFrame = SoftIntegrationsPerFrame,
 #ifdef PHYSICS_GANTRIA_SLEEP_FIX
-        .FullUpdateSleepClock = true};
+        .FullUpdateSleepClock = true,
 #else
-        .FullUpdateSleepClock = false};
+        .FullUpdateSleepClock = false,
+#endif
+#ifdef PHYSICS_GANTRIA_GROUPING
+        .LargeClothGroupBatch = PHYSICS_GANTRIA_LARGE_CLOTH_GROUP_BATCH};
+#else
+        .LargeClothGroupBatch = 256};
 #endif
 }
 std::optional<JoltStepSchedule> GetJoltStepSchedule(

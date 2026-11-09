@@ -232,6 +232,7 @@ int main(int ArgumentCount, char **Arguments) {
                 SolverProfile.SoftIntegrationsPerFrame : 0)
             << " jolt_full_update_sleep_clock=" << (Backend == "jolt" &&
                 SolverProfile.FullUpdateSleepClock ? 1 : 0)
+            << " jolt_large_cloth_group_batch=" << (Backend == "jolt" ? SolverProfile.LargeClothGroupBatch : 0)
             << " vertices=" << Vertices << " constraints=" << Constraints << '\n' << std::flush;
         for (int Frame = 0; Frame < Frames; ++Frame) {
             const auto Start = Clock::now();
@@ -352,6 +353,7 @@ int main(int ArgumentCount, char **Arguments) {
                 SolverProfile.SoftIntegrationsPerFrame : 0)
             << " jolt_full_update_sleep_clock=" << (Backend == "jolt" &&
                 SolverProfile.FullUpdateSleepClock ? 1 : 0)
+            << " jolt_large_cloth_group_batch=" << (Backend == "jolt" ? SolverProfile.LargeClothGroupBatch : 0)
             << " xpbd_workers_actual=" << XpbdWorkersActual
             << " xpbd_jobs_dispatched=" << XpbdJobsDispatched
             << " vertices=" << Vertices << " constraints=" << Constraints

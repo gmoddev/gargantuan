@@ -517,6 +517,7 @@ int main(int ArgumentCount, char **Arguments) {
                 (UsesJoltProfile ? JoltProfile.SoftIntegrationsPerFrame : 0)
             << " jolt_full_update_sleep_clock=" <<
                 int(UsesJoltProfile && JoltProfile.FullUpdateSleepClock)
+            << " jolt_large_cloth_group_batch=" << (UsesJoltProfile ? JoltProfile.LargeClothGroupBatch : 0)
             << " vertices=" << Bodies.size() * Bodies.front().Rest.size() << '\n' << std::flush;
         for (int SequenceFrame = 0; SequenceFrame < WarmupFrames + Frames; ++SequenceFrame) {
             const bool Measured = SequenceFrame >= WarmupFrames;
@@ -689,6 +690,7 @@ int main(int ArgumentCount, char **Arguments) {
                 (UsesJoltProfile ? JoltProfile.SoftIntegrationsPerFrame : 0)
             << " jolt_full_update_sleep_clock=" <<
                 int(UsesJoltProfile && JoltProfile.FullUpdateSleepClock)
+            << " jolt_large_cloth_group_batch=" << (UsesJoltProfile ? JoltProfile.LargeClothGroupBatch : 0)
             << " constraints=" << Constraints
             << " xpbd_workers_actual=" << ActualXpbdWorkers
             << " xpbd_jobs_dispatched=" << XpbdJobsDispatched

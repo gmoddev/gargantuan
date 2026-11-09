@@ -5,6 +5,15 @@ option(PHYSICS_EVALUATION_GANTRIA_ATTACHMENTS "Compile isolated reciprocal attac
 option(PHYSICS_EVALUATION_GANTRIA_CONVERGENCE "Compile candidate 80-integration retained-lambda provider" OFF)
 option(PHYSICS_EVALUATION_GANTRIA_SLEEP_FIX "Compile opt-in elapsed-time sleep clock integration" OFF)
 option(PHYSICS_EVALUATION_NATIVE_PROFILE "Instrument native Jolt scopes for diagnostic runs only" OFF)
+option(PHYSICS_EVALUATION_GANTRIA_GROUPING "Use optional maintained Jolt grouping API" OFF)
+set(PHYSICS_EVALUATION_LARGE_CLOTH_GROUP_BATCH "256" CACHE STRING "Experimental >=16K cloth vertex grouping size")
+set_property(CACHE PHYSICS_EVALUATION_LARGE_CLOTH_GROUP_BATCH PROPERTY STRINGS 128 256 512 1024)
+if(NOT PHYSICS_EVALUATION_LARGE_CLOTH_GROUP_BATCH MATCHES "^(128|256|512|1024)$")
+    message(FATAL_ERROR "[Physics:Evaluation] Unsupported grouping size")
+endif()
+if(NOT PHYSICS_EVALUATION_GANTRIA_GROUPING AND NOT PHYSICS_EVALUATION_LARGE_CLOTH_GROUP_BATCH STREQUAL "256")
+    message(FATAL_ERROR "[Physics:Evaluation] Nondefault grouping requires maintained grouping API")
+endif()
 if(PHYSICS_EVALUATION_GANTRIA_ATTACHMENTS AND NOT PHYSICS_EVALUATION_GANTRIA_NUMERICS)
     message(FATAL_ERROR "[Physics:Evaluation] Attachment qualification requires maintained numerics")
 endif()
@@ -94,6 +103,10 @@ function(PhysicsEvaluationTarget Target)
     if(PHYSICS_EVALUATION_GANTRIA_SLEEP_FIX)
         target_compile_definitions(${Target} PRIVATE PHYSICS_GANTRIA_SLEEP_FIX=1)
     endif()
+    if(PHYSICS_EVALUATION_GANTRIA_GROUPING)
+        target_compile_definitions(${Target} PRIVATE PHYSICS_GANTRIA_GROUPING=1
+            PHYSICS_GANTRIA_LARGE_CLOTH_GROUP_BATCH=${PHYSICS_EVALUATION_LARGE_CLOTH_GROUP_BATCH})
+    endif()
     if(WIN32)
         target_link_libraries(${Target} PRIVATE psapi)
         add_custom_command(TARGET ${Target} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -133,6 +146,13 @@ target_compile_definitions(PhysicsJoltAdmissionBenchmark PRIVATE
     PHYSICS_EVALUATION_ADMISSION_PROFILE=1 PHYSICS_EVALUATION_TRACK_ALLOCATIONS=1)
 PhysicsEvaluationTarget(PhysicsJoltAdmissionTimingBenchmark
     Provider/AdmissionBenchmark.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltAdmissionCacheQualification
+    Provider/AdmissionCacheQualification.cpp RigidJoltBackend.cpp)
+target_compile_definitions(PhysicsJoltAdmissionCacheQualification PRIVATE PHYSICS_EVALUATION_ADMISSION_PROFILE=1)
+PhysicsEvaluationTarget(PhysicsJoltSchedulingQualification
+    Provider/SchedulingQualification.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltSchedulingBenchmark
+    Provider/SchedulingBenchmark.cpp RigidJoltBackend.cpp)
 PhysicsEvaluationTarget(PhysicsJoltProviderLongRun
     Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
 target_compile_definitions(PhysicsJoltProviderLongRun PRIVATE PHYSICS_EVALUATION_LONG_RUN=1)

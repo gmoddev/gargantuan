@@ -49,6 +49,7 @@ namespace PhysicsEvaluation {
         std::uint32_t ConstraintSweepsPerIteration = 1;
         std::uint32_t SoftIntegrationsPerFrame = 192;
         bool FullUpdateSleepClock = false;
+        std::uint32_t LargeClothGroupBatch = 256;
     };
     [[nodiscard]] JoltSoftSolverProfile GetJoltSoftSolverProfile();
 
