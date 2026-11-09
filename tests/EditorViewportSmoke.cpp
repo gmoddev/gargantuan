@@ -1,4 +1,5 @@
 #include "gargantuan/editor/EditorViewport.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 
 #include <cassert>
 #include <cstddef>
@@ -114,6 +115,57 @@ namespace {
 		const auto Tilted = LitNormal(12, 255, 128);
 		if (int(Flat) < int(Tilted) + 32)
 			throw std::runtime_error("[Renderer:Material] Tangent-space normal did not redirect the direct light");
+
+		Material.NormalTexture.reset();
+		Material.Metallic = 1.0f;
+		Material.MetallicRoughnessTexture = Texture;
+		const auto PackedMaterial = [&](RenderPublicationId Id, std::uint8_t Blue) {
+			auto Scene = MaterialScene(Id, Material);
+			Scene->TextureCreates.push_back({
+				Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm, SolidPixels(255, 180, Blue),
+			});
+			return Renderer.Capture(Scene).RgbPixels[Center];
+		};
+		const auto Dielectric = PackedMaterial(13, 0);
+		const auto Metal = PackedMaterial(14, 255);
+		if (Dielectric < 200 || Metal > 3)
+			throw std::runtime_error("[Renderer:Material] Packed metallic blue channel did not gate diffuse ambient");
+
+		Material = {};
+		Material.DoubleSided = true;
+		Material.OpacityMode = RenderOpacityMode::Transparent;
+		Material.BaseColorFactor = {1.0f, 0.0f, 0.0f, 0.5f};
+		auto Blended = MaterialScene(15, Material);
+		auto Far = Blended->Creates.front();
+		Far.Item.Object = {91, 1};
+		Far.Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(0, 0, -1));
+		Far.Item.InverseModelMatrix = glm::translate(glm::mat4(1), glm::vec3(0, 0, 1));
+		Far.Material.BaseColorFactor = {0.0f, 0.0f, 1.0f, 0.5f};
+		Blended->Creates.push_back(Far);
+		const auto Composition = Renderer.Capture(Blended);
+		const auto Red = Composition.RgbPixels[Center];
+		const auto Blue = Composition.RgbPixels[Center + 2];
+		if (Red < 95 || Red > 110 || Blue < 45 || Blue > 58)
+			throw std::runtime_error("[Renderer:Material] Blended surfaces did not composite back to front");
+	}
+
+	void CheckWorldSubmission() {
+		SDLRenderer Renderer(Vector2(64, 64), {
+			.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+		});
+		auto Scene = MaterialScene(1, {});
+		auto Outside = Scene->Creates.front();
+		Outside.Item.Object = {91, 1};
+		Outside.Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(32, 0, 0));
+		Outside.Item.InverseModelMatrix = glm::translate(glm::mat4(1), glm::vec3(-32, 0, 0));
+		Scene->Creates.push_back(Outside);
+		auto Inside = Scene->Creates.front();
+		Inside.Item.Object = {92, 1};
+		Scene->Creates.push_back(Inside);
+		Renderer.Draw(Scene);
+		const auto Metrics = Renderer.GetMetrics();
+		if (Metrics.CameraCulledObjects != 1 || Metrics.WorldGeometryBindings != 1 || Metrics.WorldMaterialBindings != 1)
+			throw std::runtime_error("[Renderer:Material] Camera culling or shared submission bindings differ from the fixture");
 	}
 }
 
@@ -168,7 +220,7 @@ int main() {
 
 		CheckMaterials(Renderer);
 		Renderer.Resize(32, 48);
-		Frame = Renderer.Capture(MakePublication(32, 48, 13));
+		Frame = Renderer.Capture(MakePublication(32, 48, 16));
 		assert(Frame.Width == 32 && Frame.Height == 48);
 		assert(Frame.RgbPixels.size() == static_cast<std::size_t>(32 * 48 * 3));
 	}
@@ -177,5 +229,6 @@ int main() {
 	auto RestartedFrame = Restarted.Capture(MakePublication(32, 48, 50));
 	assert(RestartedFrame.Width == 32 && RestartedFrame.Height == 48);
 	assert(RestartedFrame.RgbPixels.size() == static_cast<std::size_t>(32 * 48 * 3));
+	CheckWorldSubmission();
 	return 0;
 }

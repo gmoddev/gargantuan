@@ -36,6 +36,7 @@ namespace gargantuan {
 		MaterialNormalTexture,
 		AnimationSkeletonMesh,
 		MeshCollision,
+		MaterialMetallicRoughnessTexture,
 	};
 
 	struct AssetImportBinding {

@@ -201,7 +201,8 @@ namespace {
 		Root["materials"] = nlohmann::ordered_json::array({
 			{{"name", "Textured"},
 			 {"pbrMetallicRoughness", {{"baseColorFactor", {0.8, 0.7, 0.6, 1.0}},
-				 {"baseColorTexture", {{"index", 0}}}, {"metallicFactor", 0.25}, {"roughnessFactor", 0.75}}},
+				 {"baseColorTexture", {{"index", 0}}}, {"metallicRoughnessTexture", {{"index", 0}}},
+				 {"metallicFactor", 0.25}, {"roughnessFactor", 0.75}}},
 			 {"normalTexture", {{"index", 0}, {"scale", 1.0}}},
 			 {"alphaMode", "MASK"}, {"alphaCutoff", 0.4}, {"doubleSided", true}},
 			{{"name", "Translucent"},
@@ -652,6 +653,7 @@ int main() {
 		"glTF conversion preserves canonical vertices, UVs, tangents, winding, and primitive material slots");
 	Check(GltfMaterial && GltfMaterial->Value.BaseColorTexture == GltfImageRecord->Id &&
 		GltfMaterial->Value.NormalTexture == GltfImageRecord->Id &&
+		GltfMaterial->Value.MetallicRoughnessTexture == GltfImageRecord->Id &&
 		GltfMaterial->Value.MetallicFactor == 0.25f && GltfMaterial->Value.RoughnessFactor == 0.75f &&
 		GltfMaterial->Value.AlphaMode == AssetMaterialAlphaMode::Mask && GltfMaterial->Value.DoubleSided &&
 		TexturedMaterialRecord->Dependencies.size() == 1 && GltfMeshRecord->Dependencies.size() == 3 &&
@@ -689,7 +691,9 @@ int main() {
 			MeshCreates.push_back(&Create);
 	Check(MeshCreates.size() == 2 && MeshCreates[0]->Mesh == MeshCreates[1]->Mesh &&
 		MeshCreates[0]->Primitives && MeshCreates[0]->Primitives->size() == 2 &&
-		MeshCreates[0]->Primitives->at(0).Material.BaseColorTexture.has_value(),
+		MeshCreates[0]->Primitives->at(0).Material.BaseColorTexture.has_value() &&
+		MeshCreates[0]->Primitives->at(0).Material.MetallicRoughnessTexture ==
+			MeshCreates[0]->Primitives->at(0).Material.BaseColorTexture,
 		"two MeshParts share one mesh residency while publishing per-primitive material and texture state");
 	RenderProjection CompoundProjection;
 	Check(CompoundProjection.Apply(*CompoundPublication).Created >= 2,

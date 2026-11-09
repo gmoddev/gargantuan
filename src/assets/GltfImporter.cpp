@@ -934,7 +934,9 @@ namespace gargantuan {
 
 			const auto ImageCount = Root.contains("images") ? Root["images"].size() : 0;
 			std::vector<std::vector<std::string>> ImageUses(ImageCount);
-			auto AddTextureUse = [&](const Json &TextureInfo, std::string Use) -> std::expected<void, AssetDiagnostic> {
+			std::vector<std::vector<std::string>> MetallicRoughnessUses(ImageCount);
+			auto AddTextureUse = [&](const Json &TextureInfo, std::string Use,
+				std::vector<std::vector<std::string>> &Uses) -> std::expected<void, AssetDiagnostic> {
 				if (!TextureInfo.is_object() || !TextureInfo.contains("index") ||
 					(TextureInfo.contains("texCoord") && TextureInfo["texCoord"] != 0) ||
 					(TextureInfo.contains("extensions") && !TextureInfo["extensions"].empty()))
@@ -945,7 +947,7 @@ namespace gargantuan {
 				auto ImageIndex = TextureImageIndex(Root, *TextureIndex);
 				if (!ImageIndex || *ImageIndex >= ImageCount)
 					return std::unexpected(Error("InvalidTexture", "glTF texture source image is invalid"));
-				ImageUses[*ImageIndex].push_back(std::move(Use));
+				Uses[*ImageIndex].push_back(std::move(Use));
 				return {};
 			};
 			for (std::size_t Index = 0; Index < MaterialCount; ++Index) {
@@ -956,12 +958,17 @@ namespace gargantuan {
 				if (Material.contains("pbrMetallicRoughness") && Material["pbrMetallicRoughness"].is_object()) {
 					const auto &Pbr = Material["pbrMetallicRoughness"];
 					if (Pbr.contains("baseColorTexture")) {
-						auto Result = AddTextureUse(Pbr["baseColorTexture"], MaterialKeys[Index] + "/base-color");
+						auto Result = AddTextureUse(Pbr["baseColorTexture"], MaterialKeys[Index] + "/base-color", ImageUses);
+						if (!Result) return std::unexpected(Result.error());
+					}
+					if (Pbr.contains("metallicRoughnessTexture")) {
+						auto Result = AddTextureUse(Pbr["metallicRoughnessTexture"], MaterialKeys[Index] + "/metallic-roughness",
+							MetallicRoughnessUses);
 						if (!Result) return std::unexpected(Result.error());
 					}
 				}
 				if (Material.contains("normalTexture")) {
-					auto Result = AddTextureUse(Material["normalTexture"], MaterialKeys[Index] + "/normal");
+					auto Result = AddTextureUse(Material["normalTexture"], MaterialKeys[Index] + "/normal", ImageUses);
 					if (!Result) return std::unexpected(Result.error());
 				}
 			}
@@ -976,8 +983,10 @@ namespace gargantuan {
 				if (Image.contains("uri") && Image["uri"].is_string() && !Image["uri"].get_ref<const std::string &>().starts_with("data:"))
 					Identity = "uri/" + Image["uri"].get<std::string>();
 				else {
-					std::ranges::sort(ImageUses[Index]);
-					Identity = ImageUses[Index].empty() ? std::string("embedded/") + std::to_string(Index) : ImageUses[Index].front();
+					// Adding the new slot preserves embedded image keys with an established color or normal use.
+					auto &Uses = ImageUses[Index].empty() ? MetallicRoughnessUses[Index] : ImageUses[Index];
+					std::ranges::sort(Uses);
+					Identity = Uses.empty() ? std::string("embedded/") + std::to_string(Index) : Uses.front();
 				}
 				auto Base = KeyHash("image/", Identity);
 				const auto Rank = DuplicateImageKeys[Base]++;
@@ -1046,9 +1055,9 @@ namespace gargantuan {
 				if (!Roughness) return std::unexpected(Roughness.error());
 				Material.MetallicFactor = *Metallic;
 				Material.RoughnessFactor = *Roughness;
-				if (Pbr.contains("metallicRoughnessTexture") || SourceMaterial.contains("occlusionTexture") ||
+				if (SourceMaterial.contains("occlusionTexture") ||
 					SourceMaterial.contains("emissiveTexture") || SourceMaterial.contains("emissiveFactor"))
-					return std::unexpected(Error("UnsupportedMaterialFeature", "Metallic-roughness textures, occlusion, and emissive inputs are not represented in Foundation 2A"));
+					return std::unexpected(Error("UnsupportedMaterialFeature", "Occlusion and emissive inputs are outside the supported material subset"));
 				auto BindTexture = [&](const Json &Info, AssetImportBindingKind Kind) -> std::expected<void, AssetDiagnostic> {
 					auto TextureIndex = Unsigned(Info["index"]);
 					auto ImageIndex = TextureIndex ? TextureImageIndex(Root, *TextureIndex) : std::nullopt;
@@ -1070,6 +1079,10 @@ namespace gargantuan {
 							return std::unexpected(Error("UnsupportedMaterialFeature", "Scaled normal textures are not represented in Foundation 2A"));
 					}
 					auto Bound = BindTexture(SourceMaterial["normalTexture"], AssetImportBindingKind::MaterialNormalTexture);
+					if (!Bound) return std::unexpected(Bound.error());
+				}
+				if (Pbr.contains("metallicRoughnessTexture")) {
+					auto Bound = BindTexture(Pbr["metallicRoughnessTexture"], AssetImportBindingKind::MaterialMetallicRoughnessTexture);
 					if (!Bound) return std::unexpected(Bound.error());
 				}
 				if (SourceMaterial.contains("alphaMode") && !SourceMaterial["alphaMode"].is_string())
@@ -1246,7 +1259,8 @@ namespace gargantuan {
 						const auto &SourceMaterial = Root["materials"][*MaterialIndex];
 						const auto &Pbr = SourceMaterial.contains("pbrMetallicRoughness") ?
 							SourceMaterial["pbrMetallicRoughness"] : Json::object();
-						RequiresTextureCoordinates = Pbr.contains("baseColorTexture") || SourceMaterial.contains("normalTexture");
+						RequiresTextureCoordinates = Pbr.contains("baseColorTexture") ||
+							Pbr.contains("metallicRoughnessTexture") || SourceMaterial.contains("normalTexture");
 						RequiresTangentSpace = SourceMaterial.contains("normalTexture");
 					}
 					if (RequiresTextureCoordinates && !TextureCoordinates)

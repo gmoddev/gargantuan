@@ -94,6 +94,7 @@ namespace gargantuan {
 		float AlphaCutoff = 0.5f;
 		bool DoubleSided = false;
 		RenderShadingModel ShadingModel = RenderShadingModel::Legacy;
+		std::optional<RenderTextureIdentity> MetallicRoughnessTexture;
 	};
 
 	struct RenderPrimitiveMaterialState {

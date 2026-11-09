@@ -132,6 +132,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Renderer backend boundary](../../devdocs/CurrentArchitecture/RendererBackendBoundary.md)
 - [Renderer Foundation 2 accepted architecture](../../devdocs/CurrentArchitecture/RendererFoundation2.md)
 - [Renderer Foundation 2C final backend decision](../../devdocs/CurrentArchitecture/RendererFoundation2C.md)
+- [Renderer Foundation 3 experiment and qualification](../../devdocs/CurrentArchitecture/RendererFoundation3.md)
 - [Physics backend](../../devdocs/CurrentArchitecture/PhysicsBackend.md)
 - [Asset collision and solid compiler decisions](../../devdocs/CurrentArchitecture/AssetCollisionGeometryDecisions.md)
 - [Canonical mesh collision](../../devdocs/CurrentArchitecture/AssetCollisionFoundation2B.md)

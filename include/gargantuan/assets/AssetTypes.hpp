@@ -168,6 +168,7 @@ namespace gargantuan {
 		AssetMaterialAlphaMode AlphaMode = AssetMaterialAlphaMode::Opaque;
 		float AlphaCutoff = 0.5f;
 		bool DoubleSided = false;
+		std::optional<AssetId> MetallicRoughnessTexture;
 	};
 
 	struct ImportedAudio {

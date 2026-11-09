@@ -40,6 +40,8 @@ namespace gargantuan {
 			return ShadingModelValid && Material.Revision != 0 && IsFinite(Material.BaseColorFactor) &&
 				(!Material.BaseColorTexture || Material.BaseColorTexture->IsValid()) &&
 				(!Material.NormalTexture || Material.NormalTexture->IsValid()) &&
+				(!Material.MetallicRoughnessTexture || (Material.MetallicRoughnessTexture->IsValid() &&
+					Material.ShadingModel == RenderShadingModel::MetallicRoughness)) &&
 				std::isfinite(Material.Metallic) && Material.Metallic >= 0.0f && Material.Metallic <= 1.0f &&
 				std::isfinite(Material.Roughness) && Material.Roughness >= 0.0f && Material.Roughness <= 1.0f &&
 				OpacityModeValid && std::isfinite(Material.AlphaCutoff) && Material.AlphaCutoff >= 0.0f &&
@@ -248,7 +250,8 @@ namespace gargantuan {
 					throw std::invalid_argument("Render publication Sky references an unavailable or incoherent texture");
 		const auto MaterialTexturesExist = [&](const RenderMaterialState &Material) {
 			return (!Material.BaseColorTexture || TextureExistsAfterPublication(*Material.BaseColorTexture)) &&
-				(!Material.NormalTexture || TextureExistsAfterPublication(*Material.NormalTexture));
+				(!Material.NormalTexture || TextureExistsAfterPublication(*Material.NormalTexture)) &&
+				(!Material.MetallicRoughnessTexture || TextureExistsAfterPublication(*Material.MetallicRoughnessTexture));
 		};
 		const auto ObjectTexturesExist = [&](const auto &Object) {
 			if (!MaterialTexturesExist(Object.Material)) return false;
@@ -589,6 +592,11 @@ namespace gargantuan {
 	const RenderAnimationPoseUpdate *RenderProjection::GetAnimationPose(ObjectId Object) const {
 		const auto Existing = AnimationPoses.find(Object);
 		return Existing == AnimationPoses.end() ? nullptr : &Existing->second;
+	}
+
+	const RenderBounds *RenderProjection::GetMeshBounds(RenderMeshIdentity Mesh) const {
+		const auto Existing = Meshes.find(Mesh);
+		return Existing == Meshes.end() ? nullptr : &Existing->second.Bounds;
 	}
 
 	bool RenderProjection::BuildAnimationVisibilityFeedback(

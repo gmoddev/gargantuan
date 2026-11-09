@@ -640,6 +640,8 @@ namespace gargantuan {
 					Metadata["RoughnessFactor"] = Asset.RoughnessFactor;
 					Metadata["NormalTexture"] = Asset.NormalTexture ?
 						Json(Asset.NormalTexture->ToString()) : Json(nullptr);
+					Metadata["MetallicRoughnessTexture"] = Asset.MetallicRoughnessTexture ?
+						Json(Asset.MetallicRoughnessTexture->ToString()) : Json(nullptr);
 					Metadata["AlphaMode"] = Asset.AlphaMode == AssetMaterialAlphaMode::Opaque ? "Opaque" :
 						Asset.AlphaMode == AssetMaterialAlphaMode::Mask ? "Mask" : "Blend";
 					Metadata["AlphaCutoff"] = Asset.AlphaCutoff;

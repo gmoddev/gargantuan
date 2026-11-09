@@ -25,6 +25,7 @@ layout(set = 3, binding = 0) uniform WorldUniforms {
 layout(set = 2, binding = 0) uniform sampler2DShadow ShadowMap;
 layout(set = 2, binding = 1) uniform sampler2D BaseColorTexture;
 layout(set = 2, binding = 2) uniform sampler2D NormalTexture;
+layout(set = 2, binding = 3) uniform sampler2D MetallicRoughnessTexture;
 
 float SHADOW_SPREAD = 2.0;
 vec2 SHADOW_TEXEL_SIZE = vec2(1.0 / 2048.0);
@@ -131,7 +132,7 @@ void main() {
         baseColor *= Physical ? SampleLinearBaseColor(FragmentUV) : texture(BaseColorTexture, FragmentUV);
     }
     if (FragmentMaterialValues.y == 1.0 && baseColor.a < FragmentMaterialValues.x) discard;
-    if (FragmentMaterialValues.y == 0.0) baseColor.a = 1.0;
+    if (FragmentMaterialValues.y != 2.0) baseColor.a = 1.0;
     vec3 GeometricNormal = SafeDirection(FragmentNormal, vec3(0.0, 1.0, 0.0));
     vec3 Light = SafeDirection(world.SunDirectionIntensity.xyz, vec3(0.0, 1.0, 0.0));
     float NormalDotLight = max(dot(GeometricNormal, Light), 0.0);
@@ -141,9 +142,15 @@ void main() {
         vec3 Normal = MaterialNormal(GeometricNormal);
         vec3 View = SafeDirection(world.CameraPositionFogEnd.xyz - WorldPosition.xyz, Normal);
         float Metallic = FragmentMaterialValues.z;
+        float Roughness = FragmentMaterialValues.w;
+        if (FragmentMaterialFlags.x > 1.5) {
+            vec2 RoughnessMetallic = texture(MetallicRoughnessTexture, FragmentUV).gb;
+            Metallic *= RoughnessMetallic.y;
+            Roughness *= RoughnessMetallic.x;
+        }
         vec3 Base = clamp(baseColor.rgb, 0.0, 1.0);
         color = Base * (1.0 - Metallic) * world.AmbientExposure.rgb;
-        color += Sun * EvaluateDirect(Base, Normal, Light, View, Metallic, FragmentMaterialValues.w);
+        color += Sun * EvaluateDirect(Base, Normal, Light, View, Metallic, Roughness);
     } else {
         color = baseColor.rgb * (world.AmbientExposure.rgb + Sun * NormalDotLight);
     }
