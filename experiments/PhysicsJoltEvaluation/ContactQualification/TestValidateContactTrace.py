@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from ValidateContactTrace import Inspect, TriangleDistanceSquared
+from ValidateContactTrace import BoundaryCrossings, Inspect, TriangleDistanceSquared
 
 
 def Fixture():
@@ -65,6 +65,7 @@ class ContactTraceTests(unittest.TestCase):
         self.assertEqual(Result['VelocityStatus'], 'COMPLETE')
         self.assertEqual(Result['ContactImpulseStatus'], 'INCOMPLETE')
         self.assertEqual(Result['FullPhysicalQualification'], 'INCOMPLETE')
+        self.assertEqual(Result['SelfIntersectionStatus'], 'CERTIFIED_ABSENT_PLANAR')
 
     def test_face_penetration_fails_prespecified_gate(self):
         Result = InspectCase(Fixture(), Frames(Center=[0.25, 0.25, 0.15]))
@@ -93,6 +94,28 @@ class ContactTraceTests(unittest.TestCase):
         self.assertTrue(Result['GeometryGatePass'])
         self.assertEqual(Result['VelocityStatus'], 'INCOMPLETE')
         self.assertIsNone(Result['FinalClothKineticEnergyJ'])
+
+    def test_rotated_planar_mesh_is_certified_in_its_rest_plane(self):
+        Case = Fixture()
+        Case['RestPositions'] = [[X, 0.0, Y] for X, Y, _ in Case['RestPositions']]
+        Case['Pins'][0]['Target'] = Case['RestPositions'][0]
+        Result = InspectCase(Case, Frames(Positions=Case['RestPositions']))
+        self.assertEqual(Result['SelfIntersectionStatus'], 'CERTIFIED_ABSENT_PLANAR')
+        self.assertEqual(Result['MaximumOutOfRestPlaneM'], 0.0)
+
+    def test_crossed_boundary_is_detected(self):
+        Bow = [(0.0, 0.0, 0.0), (1.0, 1.0, 0.0),
+               (0.0, 1.0, 0.0), (1.0, 0.0, 0.0)]
+        Crossings, _ = BoundaryCrossings(Bow, [0, 1, 2, 3],
+                                          Bow[0], (1.0, 0.0, 0.0),
+                                          (0.0, 1.0, 0.0), 100)
+        self.assertEqual(Crossings, 1)
+
+    def test_inconsistent_winding_cannot_claim_planar_injectivity(self):
+        Case = Fixture()
+        Case['Triangles'][1] = [1, 2, 3]
+        with self.assertRaisesRegex(ValueError, 'manifold disk'):
+            InspectCase(Case, Frames())
 
     def test_duplicate_frame_fails_closed(self):
         Records = Frames()

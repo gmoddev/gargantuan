@@ -85,18 +85,21 @@ as `INCOMPLETE`; it never infers it from a directory name.
 The validator computes axial and all-edge strain from rest lengths, pin drift,
 finite full 3D position/velocity, sphere distance to every triangle (including
 edge and corner closest points), triangle area ratio, projected orientation
-relative to the rest normal, and trajectory stability. A negative projected
-area is a planar inversion only while the trace remains in the rest plane;
-in 3D it can be a valid fold and is reported without automatic failure. Full
-self-intersection requires separate triangle-triangle evidence, not a claim
-from projected winding alone. Kinetic energy uses measured masses and actual
+relative to the rest normal, and trajectory stability. The rest plane may have
+any orientation. When the complete trace stays in that plane and the mesh is
+a single triangulated disk, strictly positive face areas plus a simple outer
+boundary certify absence of face-interior self-overlap by the planar degree
+argument. The validator checks all nonadjacent boundary segment pairs with a
+bounded sweep. Any planar inversion, collapse or boundary crossing fails the
+geometry gate. In 3D, a negative projected area can be a valid fold; full
+triangle-triangle self-intersection remains `INCOMPLETE`. Kinetic energy uses measured masses and actual
 velocities. Optional edge spring energy is labeled a surrogate, not XPBD or
 Jolt internal stored energy. External-work and contact-impulse balance are
 checked only when complete signed terms and phase timing are present.
 
 V1 bounds each case to 16,384 vertices, 600 frames, 32,512 triangles,
 100,000 structural edges, 256 pins, 8 spheres, and 5 million triangle-sphere
-checks. A trace line is at most
+checks. Planar boundary testing is capped at 2 million candidate pairs. A trace line is at most
 8 MiB decompressed. Malformed, nonfinite, oversized, missing, out-of-order,
 or out-of-directory content fails closed. Geometry may pass while energy,
 impulse, or self-intersection remain `INCOMPLETE`; the overall result cannot

@@ -18,6 +18,7 @@ MaximumPins = 256
 MaximumColliders = 8
 MaximumTriangleSphereChecks = 5_000_000
 MaximumLineBytes = 8 * 1024 * 1024
+MaximumBoundaryPairChecks = 2_000_000
 
 
 def FiniteVector(Value, Size=3):
@@ -84,6 +85,110 @@ def TriangleDistanceSquared(Point, A, B, C):
         return SegmentDistanceSquared(Point, B, C)
     PlaneDistance = Dot(AP, Normal)
     return PlaneDistance * PlaneDistance / Dot(Normal, Normal)
+
+
+def DiskBoundary(Triangles, VertexCount):
+    EdgeUses = {}
+    Used = set()
+    for Triangle in Triangles:
+        Used.update(Triangle)
+        for A, B in ((Triangle[0], Triangle[1]), (Triangle[1], Triangle[2]),
+                     (Triangle[2], Triangle[0])):
+            Key = tuple(sorted((A, B)))
+            EdgeUses.setdefault(Key, []).append((A, B))
+    if len(Used) != VertexCount or any(len(Uses) > 2 or
+            (len(Uses) == 2 and Uses[0] != Uses[1][::-1])
+            for Uses in EdgeUses.values()) or \
+            VertexCount - len(EdgeUses) + len(Triangles) != 1:
+        raise ValueError('Triangle topology is not a single manifold disk')
+    VertexNeighbors = [[] for _ in range(VertexCount)]
+    for A, B in EdgeUses:
+        VertexNeighbors[A].append(B)
+        VertexNeighbors[B].append(A)
+    Connected = {0}
+    Stack = [0]
+    while Stack:
+        for Neighbor in VertexNeighbors[Stack.pop()]:
+            if Neighbor not in Connected:
+                Connected.add(Neighbor)
+                Stack.append(Neighbor)
+    if len(Connected) != VertexCount:
+        raise ValueError('Triangle topology has disconnected components')
+    BoundaryEdges = [Edge for Edge, Uses in EdgeUses.items() if len(Uses) == 1]
+    Neighbors = {}
+    for A, B in BoundaryEdges:
+        Neighbors.setdefault(A, []).append(B)
+        Neighbors.setdefault(B, []).append(A)
+    if not BoundaryEdges or any(len(Values) != 2 for Values in Neighbors.values()):
+        raise ValueError('Triangle disk boundary is missing or nonmanifold')
+    Start = min(Neighbors)
+    Ordered = [Start]
+    Previous = None
+    Current = Start
+    while True:
+        Next = next(Value for Value in Neighbors[Current] if Value != Previous)
+        if Next == Start:
+            break
+        if Next in Ordered or len(Ordered) >= len(Neighbors):
+            raise ValueError('Triangle boundary has a repeated vertex')
+        Ordered.append(Next)
+        Previous, Current = Current, Next
+    if len(Ordered) != len(Neighbors):
+        raise ValueError('Triangle boundary has multiple loops')
+    return Ordered
+
+
+def RestPlane(Rest, Triangles):
+    A, B, C = (Rest[Index] for Index in Triangles[0])
+    U = Sub(B, A)
+    Length = Norm(U)
+    if Length <= 1e-12:
+        raise ValueError('Rest triangle is degenerate')
+    U = tuple(Value / Length for Value in U)
+    N = Cross(U, Sub(C, A))
+    Length = Norm(N)
+    if Length <= 1e-12:
+        raise ValueError('Rest triangle is degenerate')
+    N = tuple(Value / Length for Value in N)
+    V = Cross(N, U)
+    if max(abs(Dot(Sub(Point, A), N)) for Point in Rest) > 1e-5:
+        return None
+    return A, U, V, N
+
+
+def BoundaryCrossings(Positions, Boundary, Origin, U, V, RemainingChecks):
+    Projected = [(Dot(Sub(Positions[Index], Origin), U),
+                  Dot(Sub(Positions[Index], Origin), V)) for Index in Boundary]
+    Segments = []
+    for Index, A in enumerate(Projected):
+        B = Projected[(Index + 1) % len(Projected)]
+        if A == B:
+            return 1, 0
+        Segments.append((Index, A, B, min(A[0], B[0]), max(A[0], B[0]),
+                         min(A[1], B[1]), max(A[1], B[1])))
+    Segments.sort(key=lambda Value: Value[3])
+    Active = []
+    Checks = 0
+    Crossings = 0
+    Length = len(Boundary)
+    for Current in Segments:
+        Active = [Other for Other in Active if Other[4] >= Current[3]]
+        for Other in Active:
+            I, J = Current[0], Other[0]
+            if abs(I - J) == 1 or {I, J} == {0, Length - 1} or \
+                    Other[6] < Current[5] or Current[6] < Other[5]:
+                continue
+            Checks += 1
+            if Checks > RemainingChecks:
+                raise ValueError('Planar boundary intersection budget exceeded')
+            A, B, C, D = Current[1], Current[2], Other[1], Other[2]
+            Turn = lambda P, Q, R: (Q[0] - P[0]) * (R[1] - P[1]) - \
+                (Q[1] - P[1]) * (R[0] - P[0])
+            if Turn(A, B, C) * Turn(A, B, D) <= 0 and \
+                    Turn(C, D, A) * Turn(C, D, B) <= 0:
+                Crossings += 1
+        Active.append(Current)
+    return Crossings, Checks
 
 
 def ReadVectors(Row, Name, Count, Directory):
@@ -225,6 +330,8 @@ def Inspect(Directory):
         raise ValueError('Compressed contact trace is missing or oversized')
     Rest = Fixture['RestPositions']
     Count = len(Rest)
+    Boundary = DiskBoundary(Fixture['Triangles'], Count)
+    Plane = RestPlane(Rest, Fixture['Triangles'])
     Colliders = {Collider['Id']: Collider for Collider in Fixture['Colliders']}
     RestNormals = []
     RestAreas = []
@@ -261,6 +368,8 @@ def Inspect(Directory):
     MaxSpeed = 0.0
     ContactCount = 0
     MaxOutOfPlane = 0.0
+    PlanarBoundaryCrossings = 0
+    BoundaryPairChecks = 0
     ExternalWorkTotals = {Key: 0.0 for Key in
         ('ActuatorWorkJ', 'StaticPoseProjectionWorkJ', 'PinWorkJ',
          'OtherWorkJ', 'DissipationJ')}
@@ -281,9 +390,17 @@ def Inspect(Directory):
             Velocities = ReadVectors(Row, 'Velocities', Count, Directory)
             if Positions is None:
                 raise ValueError('Full contact positions are required')
-            MaxOutOfPlane = max(MaxOutOfPlane, max(
-                abs(Position[2] - Rest[Index][2])
-                for Index, Position in enumerate(Positions)))
+            if Plane is not None:
+                Origin, U, V, PlaneNormal = Plane
+                FramePlaneDeviation = max(abs(Dot(Sub(Position, Origin), PlaneNormal))
+                                          for Position in Positions)
+                MaxOutOfPlane = max(MaxOutOfPlane, FramePlaneDeviation)
+                if FramePlaneDeviation <= 1e-5:
+                    Crossings, Checks = BoundaryCrossings(
+                        Positions, Boundary, Origin, U, V,
+                        MaximumBoundaryPairChecks - BoundaryPairChecks)
+                    PlanarBoundaryCrossings += Crossings
+                    BoundaryPairChecks += Checks
             if Velocities is None:
                 AllVelocities = False
             States = Row.get('ColliderStates')
@@ -427,12 +544,13 @@ def Inspect(Directory):
                                          for Key in RequiredSource):
             ProvenanceStatus = 'COMPLETE'
     Gates = Fixture['Gates']
-    RestIsPlanar = max(abs(Vertex[2] - Rest[0][2]) for Vertex in Rest) <= 1e-7
-    TraceRemainsPlanar = RestIsPlanar and MaxOutOfPlane <= 1e-7
+    RestIsPlanar = Plane is not None
+    TraceRemainsPlanar = RestIsPlanar and MaxOutOfPlane <= 1e-5
     GeometryPass = MaxAxial <= Gates['MaximumAxialStrain'] and \
         MaxPin <= Gates['MaximumPinErrorM'] and \
         MaxPenetration <= Gates['MaximumSpherePenetrationM'] and MinAreaRatio > 0 and \
-        (not TraceRemainsPlanar or OrientationFlips == 0) and \
+        (not TraceRemainsPlanar or
+         (OrientationFlips == 0 and PlanarBoundaryCrossings == 0)) and \
         ('MaximumContactCount' not in Gates or ContactCount <= Gates['MaximumContactCount']) and \
         ('MinimumContactCount' not in Gates or ContactCount >= Gates['MinimumContactCount']) and \
         ('MaximumContactImpulsePairResidualNs' not in Gates or
@@ -449,8 +567,10 @@ def Inspect(Directory):
         'MaximumPinErrorM': MaxPin, 'MaximumSpherePenetrationM': MaxPenetration,
         'MinimumTriangleAreaRatio': MinAreaRatio,
         'ProjectedOrientationFlipInstances': OrientationFlips,
-        'MaximumOutOfRestXYPlaneM': MaxOutOfPlane if RestIsPlanar else None,
+        'MaximumOutOfRestPlaneM': MaxOutOfPlane if RestIsPlanar else None,
         'PlanarInversionPass': OrientationFlips == 0 if TraceRemainsPlanar else None,
+        'PlanarBoundaryCrossingPairs': PlanarBoundaryCrossings if TraceRemainsPlanar else None,
+        'PlanarBoundaryPairChecks': BoundaryPairChecks if TraceRemainsPlanar else None,
         'MaximumClothKineticEnergyJ': MaxKinetic if AllVelocities else None,
         'FinalClothKineticEnergyJ': LastKinetic if AllVelocities else None,
         'InitialClothKineticEnergyJ': InitialKinetic,
@@ -475,7 +595,11 @@ def Inspect(Directory):
         'ExternalWorkStatus': 'RECORDED_UNCLOSED' if AllExternalWork else 'INCOMPLETE',
         'ExternalWorkTotalsJ': ExternalWorkTotals if AllExternalWork else None,
         'ElasticEnergyStatus': 'SURROGATE_ONLY' if AllStiffness else 'INCOMPLETE',
-        'SelfIntersectionStatus': 'INCOMPLETE',
+        'SelfIntersectionStatus':
+            ('PLANAR_OVERLAP_OR_DEGENERACY' if
+             TraceRemainsPlanar and (OrientationFlips or PlanarBoundaryCrossings or
+                                     MinAreaRatio <= 0) else
+             'CERTIFIED_ABSENT_PLANAR' if TraceRemainsPlanar else 'INCOMPLETE'),
         'ProvenanceStatus': ProvenanceStatus,
         'FullPhysicalQualification': 'INCOMPLETE'}
     return Result
