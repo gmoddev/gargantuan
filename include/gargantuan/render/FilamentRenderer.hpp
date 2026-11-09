@@ -44,7 +44,7 @@ namespace gargantuan {
 
 		using BaseRenderer::Draw;
 		void Draw(RenderPublicationPtr Publication) override;
-		// Qualification capture from a headless frame. Rows begin at the bottom left.
+		// Qualification capture from a headless frame. Rows begin at the top left.
 		[[nodiscard]] std::vector<std::uint8_t> Capture(RenderPublicationPtr Publication);
 		void Resize(int WidthValue, int HeightValue) override;
 		void Destroy() override;

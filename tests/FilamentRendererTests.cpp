@@ -186,8 +186,11 @@ namespace {
 		const auto Channel = [](const std::vector<std::uint8_t> &Image, std::size_t Y, std::size_t Component) {
 			return Image.at((Y * 128u + 64u) * 4u + Component);
 		};
-		Check(Channel(Before, 104, 0) > Channel(After, 104, 0) && Channel(Before, 23, 0) == Channel(After, 23, 0),
-			"capture rows start at the bottom-left of the rendered image");
+		constexpr std::size_t UpperRow = 23;
+		constexpr std::size_t LowerRow = 104;
+		Check(Channel(Before, UpperRow, 0) > Channel(After, UpperRow, 0) &&
+			Channel(Before, LowerRow, 0) == Channel(After, LowerRow, 0),
+			"capture rows start at the top-left of the rendered image");
 
 		auto InvalidView = MakePublication(3, 2);
 		InvalidView->Frame.Camera.ViewMatrix[0] = glm::vec4(0.0f);
@@ -196,13 +199,13 @@ namespace {
 		auto &MovedCamera = ViewMotion->Frame.Camera;
 		MovedCamera.ViewMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f));
 		MovedCamera.ViewProjectionMatrix = MovedCamera.ProjectionMatrix * MovedCamera.ViewMatrix;
-		Check(Channel(Renderer.Capture(ViewMotion), 104, 2) < Channel(After, 104, 2),
+		Check(Channel(Renderer.Capture(ViewMotion), UpperRow, 2) < Channel(After, UpperRow, 2),
 			"camera motion follows the canonical view matrix");
 		auto OffCenter = MakePublication(4, 3);
 		auto &OffCenterCamera = OffCenter->Frame.Camera;
 		OffCenterCamera.ProjectionMatrix[2][0] = 1.5f;
 		OffCenterCamera.ViewProjectionMatrix = OffCenterCamera.ProjectionMatrix;
-		Check(Channel(Renderer.Capture(OffCenter), 104, 2) < Channel(After, 104, 2),
+		Check(Channel(Renderer.Capture(OffCenter), UpperRow, 2) < Channel(After, UpperRow, 2),
 			"the canonical projection matrix controls the visible frustum");
 
 		auto VertexUpdate = MakePublication(5, 4);

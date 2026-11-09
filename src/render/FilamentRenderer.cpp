@@ -853,13 +853,7 @@ namespace gargantuan {
 			if (Pixels) {
 				if (!Engine->flushAndWait(5'000'000'000ull) || !Readback->Complete)
 					throw std::runtime_error("Filament did not complete the qualification readback");
-				// Filament's Vulkan driver copies top-first native image rows.
-				const auto RowBytes = static_cast<std::size_t>(Width) * 4u;
-				for (std::uint32_t Row = 0; Row < Height / 2; ++Row) {
-					auto Top = Readback->Pixels.begin() + Row * RowBytes;
-					auto Bottom = Readback->Pixels.begin() + (Height - 1 - Row) * RowBytes;
-					std::swap_ranges(Top, Top + RowBytes, Bottom);
-				}
+			// The Vulkan driver supplies native top-first image rows.
 				*Pixels = std::move(Readback->Pixels);
 			}
 			const auto History = Renderer->getFrameInfoHistory(1);

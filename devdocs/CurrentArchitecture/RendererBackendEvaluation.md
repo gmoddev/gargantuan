@@ -36,7 +36,10 @@ lifecycle, so their physical upload bytes are recorded separately from logical
 publication bytes. The adapter caps outstanding upload payloads at 256 MiB
 and owns them until Filament's completion callback. Projection resources are
 released after their native users. A headless capture drains the render target
-and returns bottom-left RGBA8 pixels for image validation outside timed runs.
+and returns top-left RGBA8 pixels for image validation outside timed runs.
+The published rigid view matrix determines the native camera transform. The
+adapter remaps published zero-to-one clip depth to Filament's OpenGL-style
+custom projection input while retaining the published frustum.
 
 The three native material packages cover opaque, masked, and transparent
 blend modes with double-sided rendering. They project the engine's
