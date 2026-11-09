@@ -16,14 +16,14 @@ namespace {
         Broadphase, Narrowphase, Gravity, IslandBuild, VelocitySolve,
         RigidIntegrate, Ccd, PositionSolve, SoftPrepare, SoftCollide,
         SoftSimulate, SoftFinalize, SoftIntegrate, SoftEdges, SoftVolumes,
-        SoftContactVelocity, SoftState, SoftFinishIteration, ClearLambdas, BuildJobs, Barrier, Other, Count
+        SoftContactVelocity, SoftFaceContact, SoftState, SoftFinishIteration, ClearLambdas, BuildJobs, Barrier, Other, Count
     };
 
     constexpr std::array<const char *, static_cast<size_t>(Stage::Count)> StageNames = {
         "Broadphase", "Narrowphase", "Gravity", "IslandBuild", "VelocitySolve",
         "RigidIntegrate", "Ccd", "PositionSolve", "SoftPrepare", "SoftCollide",
         "SoftSimulate", "SoftFinalize", "SoftIntegrate", "SoftEdges", "SoftVolumes",
-        "SoftContactVelocity", "SoftState", "SoftFinishIteration", "ClearLambdas", "BuildJobs", "Barrier", "Other"
+        "SoftContactVelocity", "SoftFaceContact", "SoftState", "SoftFinishIteration", "ClearLambdas", "BuildJobs", "Barrier", "Other"
     };
 
     struct Counter final {
@@ -52,6 +52,7 @@ namespace {
         if (Has(Name, "ApplyEdgeConstraints")) return Stage::SoftEdges;
         if (Has(Name, "ApplyVolumeConstraints")) return Stage::SoftVolumes;
         if (Has(Name, "ApplyCollisionConstraintsAndUpdateVelocities")) return Stage::SoftContactVelocity;
+        if (Has(Name, "ProjectSphereFacePositions")) return Stage::SoftFaceContact;
         if (Has(Name, "UpdateSoftBodyState")) return Stage::SoftState;
         if (Has(Name, "FinishIteration")) return Stage::SoftFinishIteration;
         if (Has(Name, "ClearLambdas")) return Stage::ClearLambdas;

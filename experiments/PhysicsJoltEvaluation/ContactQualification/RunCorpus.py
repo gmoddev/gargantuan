@@ -81,7 +81,7 @@ def Main():
     Summary = []
     for Variant in Args.variants:
         Backend, Mode = Variant.split(':')
-        assert Backend in ('jolt','xpbd') and Mode in ('A','AG','B','C','D0','E','G','H','I','IG','F1G','F4G','F1','F4')
+        assert Backend in ('jolt','xpbd') and Mode in ('A','AH','AG','B','C','D0','E','EH','G','GH','H','I','IG','F1G','F4G','F1','F4')
         for Definition in Selected:
             Name = Backend + '-' + Mode + '-' + Definition['CaseId']
             Directory = Args.output / Name
@@ -94,6 +94,7 @@ def Main():
             Environment.update({'GANTRIA_CONTACT_ORDER':Mode[0], 'GANTRIA_XPBD_CONTACT_ORDER':Mode[0],
                 'GANTRIA_CONTACT_PASSES':'4' if '4' in Mode else '1',
                 'GANTRIA_CONTACT_KINEMATIC_RELATIVE':'1' if Mode.endswith('G') else '0',
+                'GANTRIA_XPBD_IDEAL_VELOCITY':'1' if Backend=='xpbd' and Mode.endswith('H') else '0',
                 'GANTRIA_XPBD_CONTACT_NORMAL_COMPLIANCE':'0', 'SDL_VIDEODRIVER':'dummy'})
             Command = [str(Args.binary.resolve()), str(ConfigPath.resolve()), str(Directory.resolve())]
             Started = time.monotonic()
