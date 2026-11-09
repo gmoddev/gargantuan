@@ -1,6 +1,7 @@
 #include "UnifiedJoltProvider.hpp"
 #include "../ExperimentSupport.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -40,6 +41,82 @@ namespace {
         Require(PhysicsEvaluation::GetJoltAdmissionProfile().CacheHits == ExpectedHits,
             "Unexpected topology cache hit/miss");
         return Id;
+    }
+
+    void Advance(PhysicsEvaluation::UnifiedJoltProvider &Provider,
+                 std::size_t ExpectedBodies) {
+        const auto RigidResult = Provider.Rigid->Step({.DeltaTime = 1.0f / 60.0f,
+            .SubStepCount = 16});
+        Require(!RigidResult.EventsTruncated, "Unified rigid step truncated events");
+        const auto Result = Provider.Soft->Step({.DeltaTime = 1.0f / 60.0f,
+            .Gravity = {0, 0, 0}});
+        Require(!Result.BodiesTruncated && !Result.VerticesTruncated &&
+            !Result.CollidersTruncated &&
+            Result.States.size() == ExpectedBodies &&
+            Result.Profile.SimulatedBodies == ExpectedBodies &&
+            Result.Profile.FrozenBodies == 0 && Result.Profile.BacklogDrops == 0 &&
+            Result.Profile.StaleResults == 0, "Unified soft step lost work");
+    }
+
+    void ConcurrentSharedSettings() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {0, 0, 0};
+        SoftBodyWorldLimits Limits;
+        Limits.MaximumWorkers = 1;
+        Limits.MaximumBodies = 2;
+        auto Shared = PhysicsEvaluation::CreateUnifiedJoltProvider(Config, Limits, 1);
+        auto Control = PhysicsEvaluation::CreateUnifiedJoltProvider(Config, Limits, 1);
+        Require(Shared.Soft && Control.Soft && Shared.Soft->IsValid() &&
+            Control.Soft->IsValid(), "Concurrent control worlds unavailable");
+        auto Definition = Cloth(32);
+        Definition.CollisionMode = SoftBodyCollisionMode::None;
+        const auto A = Create(*Shared.Soft, Definition, 0);
+        const auto B = Create(*Shared.Soft, Definition, 1);
+        const auto Reference = Create(*Control.Soft, Definition, 0);
+        const auto InitialA = Shared.Soft->GetBodyState(A);
+        const auto InitialB = Shared.Soft->GetBodyState(B);
+        Require(InitialA && InitialB && InitialA->Indices == InitialB->Indices &&
+            InitialA->Positions && InitialB->Positions &&
+            *InitialA->Positions == *InitialB->Positions,
+            "Concurrent bodies did not share immutable topology and initial geometry");
+        Require(Shared.Soft->ApplyImpulse(A, {190.0f, 0, 0}).Succeeded(),
+            "Concurrent impulse failed");
+        for (int Frame = 0; Frame < 2; ++Frame) {
+            Advance(Shared, 2);
+            Advance(Control, 1);
+            const auto StateA = Shared.Soft->GetBodyState(A);
+            const auto StateB = Shared.Soft->GetBodyState(B);
+            const auto StateReference = Control.Soft->GetBodyState(Reference);
+            Require(StateA && StateB && StateReference && StateA->Positions &&
+                StateB->Positions && StateReference->Positions &&
+                *StateB->Positions == *StateReference->Positions &&
+                *StateA->Positions != *StateB->Positions,
+                "Shared settings coupled independent mutable motion");
+        }
+        Require(Shared.Soft->DestroyBody(A).Succeeded(), "Concurrent A retirement failed");
+        auto Changed = Definition;
+        Changed.Position.x += 20.0f;
+        for (auto &Attachment : Changed.Attachments) Attachment.Position.x += 20.0f;
+        const auto C = Create(*Shared.Soft, Changed, 0);
+        const auto BBefore = Shared.Soft->GetBodyState(B);
+        Require(BBefore && BBefore->Indices == InitialB->Indices,
+            "Live body lost shared topology on cache eviction");
+        for (int Frame = 0; Frame < 2; ++Frame) {
+            Advance(Shared, 2);
+            Advance(Control, 1);
+            const auto StateB = Shared.Soft->GetBodyState(B);
+            const auto StateReference = Control.Soft->GetBodyState(Reference);
+            Require(StateB && StateReference && StateB->Positions &&
+                StateReference->Positions &&
+                StateB->Indices == InitialB->Indices &&
+                StateB->TopologyRevision == InitialB->TopologyRevision &&
+                *StateB->Positions == *StateReference->Positions,
+                "Live body changed after cache eviction");
+        }
+        Require(Shared.Soft->DestroyBody(C).Succeeded() &&
+            Shared.Soft->DestroyBody(B).Succeeded() &&
+            Control.Soft->DestroyBody(Reference).Succeeded(),
+            "Concurrent retirement failed");
     }
 }
 
@@ -108,7 +185,8 @@ int main() {
 
         Provider.Soft.reset();
         Provider.Rigid.reset();
-        std::cout << "[Physics:AdmissionCache] PASS exact-key hits, invalidation, cap and retirement\n";
+        ConcurrentSharedSettings();
+        std::cout << "[Physics:AdmissionCache] PASS exact-key hits, independent live motion, eviction, cap and retirement\n";
         return 0;
     } catch (const std::exception &Error) {
         std::cerr << "[Physics:AdmissionCache] " << Error.what() << '\n';
