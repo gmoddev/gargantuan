@@ -213,3 +213,43 @@ hash reverified against the binary trace. The 16K driven-sphere stress
 scene fails the previously declared 10% absolute strain bound in both B
 and C; see `LargeClothContactStress.md`. It remains outside the accepted
 quality domain despite the admission speed and close B-to-C trajectory.
+
+## Independent final guard review
+
+An independent source pass at Engine
+`3c864c58d4554f03e6a587d71d6bda3fffe06f1b` and native
+`7e59df5fd7f3e23504f2e696e2b095bf706b26b4` found no new cache,
+resource-cap, or scheduling-guard defect. The exact cache key includes every
+field consumed by soft construction and native settings, including world
+position and ordered absolute pins. Both hit and miss paths enforce current
+live-body, vertex, constraint, queued-result, and native layer limits.
+The cache owns one immutable settings/indices entry and no native motion
+state; a live body's references survive eviction, and `Shutdown` releases
+the entry after body retirement. Creation and replacement stage the
+Definition copy, cache candidate, and body slot before native admission;
+the new post-admission cache/slot commits use moves and counter updates.
+
+The final rigid fast schedule is confined to a sleep-disabled world with
+zero enabled soft bodies, touch-enabled rigid bodies, active constraints,
+live attachments, and uncertainty latches. Failed touch or joint mutations
+leave those latches conservative. This new schedule does not modify the
+qualified coupled path. The production `src` and `include` trees have no
+diff from the frozen Engine baseline; all changes remain experimental.
+
+`Final-Guards-20261109T072412` contains three successful fresh runs each
+of provider, scheduling, and concurrent cache qualifications. The added
+cache fixture proves two live bodies share indices but retain independent
+mutable motion: an impulse on A leaves B bitwise equal to an independent
+control; retiring A and evicting the cache with a translated C leaves B's
+topology and motion intact. A post-guard cloth16K 40-frame W8 trace exactly
+matches the first 40 frames of `C-Long-20261109T070355` at every hash and
+vertex, with both logs independently rehashed. The saved result is
+`AdmissionReduction/FinalGuards-cloth16k-W8.json`.
+
+This review does not claim general exception atomicity for older rigid
+mesh and joint operations. Existing rigid `AdmitMesh` can allocate a map
+node after native body admission, and existing joint creation can grow its
+neutral slot vector after `World.AddConstraint`. The new uncertainty guards
+preserve conservative cadence if such an operation throws, but those older
+operations can still require separate rollback work for full allocation
+failure atomicity. They were not introduced by this performance candidate.
