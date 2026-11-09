@@ -317,6 +317,9 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     std::uint64_t StateHash = 14695981039346656037ull;
     double XpbdWorkerUtilizationSum = 0.0;
     std::uint64_t XpbdSubstepCount = 0, XpbdJobsDispatched = 0;
+    std::uint64_t XpbdIntegrationNanoseconds = 0, XpbdConstraintNanoseconds = 0;
+    std::uint64_t XpbdBroadphaseQueryNanoseconds = 0, XpbdCollisionNanoseconds = 0;
+    std::uint64_t XpbdExtractionNanoseconds = 0;
     std::size_t XpbdWorkersActual = 0;
     for (int Frame = 0; Frame < Frames; ++Frame) {
         const auto PhysicsStart = std::chrono::steady_clock::now();
@@ -379,6 +382,11 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
                 XpbdWorkerUtilizationSum += Result.Profile.WorkerUtilization;
                 XpbdJobsDispatched += Result.Profile.JobsDispatched;
                 XpbdWorkersActual = std::max(XpbdWorkersActual, Result.Profile.WorkerCount);
+                XpbdIntegrationNanoseconds += Result.Profile.IntegrationNanoseconds;
+                XpbdConstraintNanoseconds += Result.Profile.ConstraintNanoseconds;
+                XpbdBroadphaseQueryNanoseconds += Result.Profile.BroadphaseQueryNanoseconds;
+                XpbdCollisionNanoseconds += Result.Profile.CollisionNanoseconds;
+                XpbdExtractionNanoseconds += Result.Profile.ExtractionNanoseconds;
                 ++XpbdSubstepCount;
             }
             if (BackendName == "xpbd" && CaptureAccounting) {
@@ -556,6 +564,30 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         << " xpbd_worker_utilization_mean=" <<
             (XpbdSubstepCount ? XpbdWorkerUtilizationSum / double(XpbdSubstepCount) : 0.0)
         << '\n';
+    if (BackendName == "xpbd") {
+        const auto Milliseconds = [](std::uint64_t Nanoseconds) {
+            return double(Nanoseconds) / 1'000'000.0;
+        };
+        const auto PerFrame = [&](std::uint64_t Nanoseconds) {
+            return Milliseconds(Nanoseconds) / double(Frames);
+        };
+        std::cout << "[Physics:ContactQualification] xpbd_phase_profile " << Json({
+            {"Scope", "existing Result.Profile counters accumulated over all substeps; diagnostic stages may overlap and do not partition wall time"},
+            {"Frames", Frames}, {"SubstepsPerFrame", Substeps},
+            {"StepCalls", XpbdSubstepCount}, {"WorkerCap", Workers},
+            {"WorkersActualMaximum", XpbdWorkersActual},
+            {"IntegrationMsTotal", Milliseconds(XpbdIntegrationNanoseconds)},
+            {"IntegrationMsPerFrame", PerFrame(XpbdIntegrationNanoseconds)},
+            {"ConstraintMsTotal", Milliseconds(XpbdConstraintNanoseconds)},
+            {"ConstraintMsPerFrame", PerFrame(XpbdConstraintNanoseconds)},
+            {"BroadphaseQueryMsTotal", Milliseconds(XpbdBroadphaseQueryNanoseconds)},
+            {"BroadphaseQueryMsPerFrame", PerFrame(XpbdBroadphaseQueryNanoseconds)},
+            {"CollisionMsTotal", Milliseconds(XpbdCollisionNanoseconds)},
+            {"CollisionMsPerFrame", PerFrame(XpbdCollisionNanoseconds)},
+            {"ExtractionMsTotal", Milliseconds(XpbdExtractionNanoseconds)},
+            {"ExtractionMsPerFrame", PerFrame(XpbdExtractionNanoseconds)}
+        }).dump() << '\n';
+    }
     std::cout << "[Physics:ContactQualification] resources " << Json({
         {"AdmissionAndRun", PhysicsEvaluation::ResourceDelta(BeforeAdmission, AfterRun)},
         {"Retirement", PhysicsEvaluation::ResourceDelta(AfterRun, AfterRetire)},
