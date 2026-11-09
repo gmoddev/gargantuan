@@ -1849,6 +1849,10 @@ namespace {
                 return {};
             const auto Layer = SoftLayer(Definition);
             if (Layer == JPH::cObjectLayerInvalid) return {};
+            auto PreparedDefinition = Definition;
+            std::uint32_t Index = 1;
+            for (; Index < Slots.size() && (Slots[Index].Live || Slots[Index].Retired); ++Index) {}
+            if (Index == Slots.size()) Slots.emplace_back();
             JPH::SoftBodyCreationSettings Settings(Construction.Shared,
                 ToRVec(Definition.Position), JPH::Quat::sIdentity(), Layer);
             Settings.mNumIterations = SoftIterationsPerCollisionStep;
@@ -1882,13 +1886,10 @@ namespace {
             {
                 AdmissionMeasure Measure(AdmissionProfile.SlotCommit);
 #endif
-            std::uint32_t Index = 1;
-            for (; Index < Slots.size() && (Slots[Index].Live || Slots[Index].Retired); ++Index) {}
-            if (Index == Slots.size()) Slots.emplace_back();
             auto &Slot = Slots[Index];
             Slot.Live = true;
             Slot.Native = Native;
-            Slot.Definition = Definition;
+            Slot.Definition = std::move(PreparedDefinition);
             Slot.Shared = std::move(Construction.Shared);
             Slot.Indices = std::move(Construction.Indices);
             Slot.PendingForce = {};
@@ -1922,6 +1923,7 @@ namespace {
                     if (Attachment.Vertex >= Slot->Shared->mVertices.size() ||
                         !Finite(Attachment.Position) || !Attached.insert(Attachment.Vertex).second)
                         return {PhysicsOperationStatus::InvalidDescription, "Invalid Jolt soft attachment"};
+                auto PreparedAttachments = Definition.Attachments;
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
                 for (const auto &Attachment : Definition.Attachments)
                     if (Owner.IsAttachedSoftVertex(Id, Attachment.Vertex))
@@ -1941,7 +1943,7 @@ namespace {
                     Vertex.mInvMass = 0.0f;
                 }
                 Motion->CalculateMassAndInertia();
-                Slot->Definition.Attachments = Definition.Attachments;
+                Slot->Definition.Attachments = std::move(PreparedAttachments);
                 ++Slot->VertexRevision;
                 return {};
             }
@@ -1958,6 +1960,7 @@ namespace {
             const auto Layer = SoftLayer(Definition);
             if (Layer == JPH::cObjectLayerInvalid)
                 return {PhysicsOperationStatus::ResourceLimit, "Jolt soft layer limit"};
+            auto PreparedDefinition = Definition;
             JPH::SoftBodyCreationSettings Settings(Replacement.Shared,
                 ToRVec(Definition.Position), JPH::Quat::sIdentity(), Layer);
             Settings.mNumIterations = SoftIterationsPerCollisionStep;
@@ -1994,7 +1997,7 @@ namespace {
                 if (Definition.Enabled) ++Owner.EnabledSoftBodies;
                 else --Owner.EnabledSoftBodies;
             }
-            Slot->Definition = Definition;
+            Slot->Definition = std::move(PreparedDefinition);
             Slot->Shared = std::move(Replacement.Shared);
             Slot->Indices = std::move(Replacement.Indices);
             Slot->ConstraintCount = NewConstraints;
