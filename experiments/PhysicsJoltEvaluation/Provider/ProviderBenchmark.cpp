@@ -2,6 +2,9 @@
 #include "../ExperimentSupport.hpp"
 #include "../ContactProbe.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
+#ifdef PHYSICS_EVALUATION_CONTACT_VELOCITIES
+#include "../ContactXpbd/ContactExperimentSeams.hpp"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -808,6 +811,9 @@ int main(int ArgumentCount, char **Arguments) {
             if (!Trace) throw std::runtime_error("Quality trace close failed");
         }
         if (XpbdReference) {
+#ifdef PHYSICS_EVALUATION_CONTACT_VELOCITIES
+            PhysicsEvaluation::FinishExperimentalXpbdTrace();
+#endif
             const auto Calibration = CalibrateXpbdRetention(
                 ActualXpbdSubsteps, SubstepDamping, FrameDamping);
             std::cout << "[Physics:ProviderBenchmark] reference_calibration "

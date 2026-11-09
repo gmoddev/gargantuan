@@ -1,6 +1,9 @@
 #include "RigidJoltBackend.hpp"
 #include "ContactProbe.hpp"
 #include "Provider/UnifiedJoltProvider.hpp"
+#ifdef PHYSICS_EVALUATION_CONTACT_QUALIFICATION
+#include "ContactXpbd/ContactExperimentSeams.hpp"
+#endif
 #ifdef PHYSICS_EVALUATION_ADMISSION_PROFILE
 #include "ExperimentSupport.hpp"
 #include <chrono>
@@ -69,6 +72,16 @@
 #include <vector>
 
 namespace PhysicsEvaluation {
+#ifdef PHYSICS_EVALUATION_CONTACT_QUALIFICATION
+glm::quat ExperimentalJoltClothRotation{1.0f, 0.0f, 0.0f, 0.0f};
+void SetExperimentalJoltClothRotation(glm::quat Rotation) {
+    if (!std::isfinite(Rotation.w) || !std::isfinite(Rotation.x) ||
+        !std::isfinite(Rotation.y) || !std::isfinite(Rotation.z) ||
+        std::abs(glm::length(Rotation) - 1.0f) > 0.0001f)
+        throw std::invalid_argument("Experimental cloth rotation must be a finite unit quaternion");
+    ExperimentalJoltClothRotation = Rotation;
+}
+#endif
 namespace {
     using namespace gargantuan;
 
@@ -617,8 +630,20 @@ namespace {
             std::vector<glm::vec3> Result;
             Result.reserve(Motion->GetVertices().size());
             for (const auto &Vertex : Motion->GetVertices())
-                Result.push_back(FromJolt(Vertex.mVelocity));
+                Result.push_back(FromJolt(Lock.GetBody().GetCenterOfMassTransform().Multiply3x3(
+                    Vertex.mVelocity)));
             return Result;
+        }
+#endif
+#ifdef PHYSICS_EVALUATION_CONTACT_QUALIFICATION
+        bool MoveKinematicForContact(PhysicsBodyId Id, glm::vec3 Center, float DeltaTime) {
+            auto *Slot = Find(Id);
+            if (!Slot || !Slot->Description.Kinematic || !Finite(Center) ||
+                !std::isfinite(DeltaTime) || DeltaTime <= 0.0f) return false;
+            World.GetBodyInterface().MoveKinematic(Slot->Native, ToRVec(Center),
+                JPH::Quat::sIdentity(), DeltaTime);
+            Slot->Description.Transform.Position = Center;
+            return true;
         }
 #endif
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
@@ -1776,7 +1801,11 @@ namespace {
                     const float V = float(J) / float(Y - 1) - 0.5f;
                     const float W = Z > 1 ? float(K) / float(Z - 1) - 0.5f : 0.0f;
                     const glm::vec3 Position = Definition.Kind == SoftBodyKind::Cloth
+#ifdef PHYSICS_EVALUATION_CONTACT_QUALIFICATION
+                        ? ExperimentalJoltClothRotation * glm::vec3(U * Definition.Size.x, -V * Definition.Size.y, 0.0f)
+#else
                         ? glm::vec3(U * Definition.Size.x, -V * Definition.Size.y, 0.0f)
+#endif
                         : glm::vec3(U * Definition.Size.x, V * Definition.Size.y, W * Definition.Size.z);
                     Result.Shared->mVertices.emplace_back(JPH::Float3(Position.x, Position.y, Position.z),
                         JPH::Float3(0, 0, 0), InverseMass);
@@ -2541,6 +2570,13 @@ std::optional<std::vector<glm::vec3>> GetJoltSoftBodyVelocities(
     if (!RigidValue || !SoftValue || &SoftValue->SharedWorld() != RigidValue)
         return std::nullopt;
     return RigidValue->SoftVelocities(SoftValue->NativeBody(SoftId));
+}
+#endif
+#ifdef PHYSICS_EVALUATION_CONTACT_QUALIFICATION
+bool MoveExperimentalJoltKinematic(gargantuan::IPhysicsBackend &Rigid,
+    gargantuan::PhysicsBodyId Body, glm::vec3 Center, float DeltaTime) {
+    auto *Value = dynamic_cast<RigidJoltBackend *>(&Rigid);
+    return Value && Value->MoveKinematicForContact(Body, Center, DeltaTime);
 }
 #endif
 bool SetJoltSoftRigidContactCapture(gargantuan::IPhysicsBackend &Rigid, bool Enabled) {

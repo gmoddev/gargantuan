@@ -6,6 +6,7 @@
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
 #include "physics/SoftBodyTestHooks.hpp"
+#include "ContactExperimentSeams.hpp"
 
 #include <algorithm>
 #include <array>
@@ -29,6 +30,17 @@
 #include <glm/geometric.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/matrix.hpp>
+
+namespace PhysicsEvaluation {
+    glm::quat ExperimentalXpbdClothRotation{1.0f, 0.0f, 0.0f, 0.0f};
+    void SetExperimentalXpbdClothRotation(glm::quat Rotation) {
+        if (!std::isfinite(Rotation.w) || !std::isfinite(Rotation.x) ||
+            !std::isfinite(Rotation.y) || !std::isfinite(Rotation.z) ||
+            std::abs(glm::length(Rotation) - 1.0f) > 0.0001f)
+            throw std::invalid_argument("Experimental cloth rotation must be a finite unit quaternion");
+        ExperimentalXpbdClothRotation = Rotation;
+    }
+}
 
 namespace gargantuan {
 	namespace {
@@ -101,6 +113,15 @@ namespace gargantuan {
 					static_cast<std::streamsize>(Values.size() * sizeof(float)));
 				Out.flush();
 				if (!Out) throw std::runtime_error("[Physics:XpbdContactProbe] velocity trace write failed");
+			}
+			void Finish() {
+				std::scoped_lock Lock(Mutex);
+				if (!Enabled) return;
+				Out.flush();
+				if (!Out) throw std::runtime_error("[Physics:XpbdContactProbe] velocity trace flush failed");
+				Out.close();
+				if (Out.fail()) throw std::runtime_error("[Physics:XpbdContactProbe] velocity trace close failed");
+				Enabled = false;
 			}
 		  private:
 			std::mutex Mutex;
@@ -318,9 +339,10 @@ namespace gargantuan {
 						(0.5f - V) * Record.Definition.Size.y,
 						0.0f,
 					};
-					const auto Position = Record.Definition.Position + Offset;
+					const auto RotatedOffset = PhysicsEvaluation::ExperimentalXpbdClothRotation * Offset;
+					const auto Position = Record.Definition.Position + RotatedOffset;
 					Record.Nodes.push_back(
-						{Position, Position, {}, Offset, 1.0f / Record.Definition.Material.ParticleMass}
+						{Position, Position, {}, RotatedOffset, 1.0f / Record.Definition.Material.ParticleMass}
 					);
 				}
 			}
@@ -1238,6 +1260,16 @@ namespace gargantuan {
 				return Slot ? std::optional(Slot->LastState) : std::nullopt;
 			}
 
+			[[nodiscard]] std::optional<std::vector<glm::vec3>> GetExperimentalVelocities(SoftBodyId Body) const {
+				std::scoped_lock Lock(Mutex);
+				const auto *Slot = FindSlot(Body);
+				if (!Slot || !Slot->Record) return std::nullopt;
+				std::vector<glm::vec3> Result;
+				Result.reserve(Slot->Record->Nodes.size());
+				for (const auto &Node : Slot->Record->Nodes) Result.push_back(Node.Velocity);
+				return Result;
+			}
+
 			[[nodiscard]] std::optional<SoftBodyInspection> GetBodyInspection(SoftBodyId Body) const override {
 				std::scoped_lock Lock(Mutex);
 				const auto *Slot = FindSlot(Body);
@@ -1594,5 +1626,14 @@ namespace gargantuan {
 			Limits, std::make_unique<const SoftBodyStepTestHooks>(std::move(Hooks))
 		);
 	}
+}
+
+namespace PhysicsEvaluation {
+    void FinishExperimentalXpbdTrace() { gargantuan::GetExperimentalVelocityTrace().Finish(); }
+    std::optional<std::vector<glm::vec3>> GetExperimentalXpbdVelocities(
+        const gargantuan::ISoftBodyBackend &Soft, gargantuan::SoftBodyId Body) {
+        const auto *Experimental = dynamic_cast<const gargantuan::XpbdSoftBodyBackend *>(&Soft);
+        return Experimental ? Experimental->GetExperimentalVelocities(Body) : std::nullopt;
+    }
 }
 
