@@ -1,0 +1,25 @@
+{
+  "CaseId": "xpbd-accounting-static-control",
+  "Backend": "xpbd",
+  "Resolution": 9,
+  "Frames": 12,
+  "Workers": 1,
+  "XpbdSubsteps": 32,
+  "Pins": "free",
+  "GravityMPerS2": [0, 0, 0],
+  "InitialVelocityMPerS": [2, 0, 0],
+  "Material": {"Damping": 0, "Friction": 0},
+  "Spheres": [{
+    "Id": "sphere-0",
+    "Motion": "static",
+    "CenterM": [5.2, 3, 0.01],
+    "RadiusM": 1,
+    "MassKg": 1,
+    "Trajectory": {"Kind": "hold"}
+  }],
+  "Gates": {
+    "MaximumAxialStrain": 0.1,
+    "MaximumPinErrorM": 0.0001,
+    "MaximumSpherePenetrationM": 0.001
+  }
+}
