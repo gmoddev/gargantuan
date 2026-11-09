@@ -412,6 +412,7 @@ namespace {
 		Frame.Environment.SunDirection = {0.0f, 0.0f, 1.0f};
 		Frame.Environment.SunIntensity = 2.0f;
 		Frame.Environment.AmbientColor = {0.04f, 0.04f, 0.04f};
+		Frame.Environment.ExposureMultiplier = 1.0f;
 		Frame.Environment.EnvironmentColor = {0.01f, 0.01f, 0.01f};
 		return Frame;
 	}
@@ -423,14 +424,6 @@ namespace {
 		for (std::size_t Offset = 0; Offset < Pixels->size(); Offset += 4)
 			std::copy(Color.begin(), Color.end(), Pixels->begin() + Offset);
 		return Pixels;
-	}
-
-	// This benchmark also builds at the Foundation 2C baseline, which predates
-	// the explicit material shading selector.
-	template <typename Material>
-	void SelectMetallicRoughness(Material &Value) {
-		if constexpr (requires { Value.ShadingModel; })
-			Value.ShadingModel = decltype(Value.ShadingModel)::MetallicRoughness;
 	}
 
 	void AddTexturePair(gargantuan::RenderPublication &Publication) {
@@ -445,11 +438,10 @@ namespace {
 		std::uint32_t FirstCount, std::uint32_t TotalCount
 	) {
 		using namespace gargantuan;
-		RenderMaterialState First{.BaseColorTexture = FirstTexture, .Roughness = 0.7f, .DoubleSided = true};
-		RenderMaterialState Second{.BaseColorTexture = SecondTexture, .Metallic = 0.12f, .Roughness = 0.4f,
-			.DoubleSided = true};
-		SelectMetallicRoughness(First);
-		SelectMetallicRoughness(Second);
+		const RenderMaterialState First{.BaseColorTexture = FirstTexture, .Roughness = 0.7f, .DoubleSided = true,
+			.ShadingModel = RenderShadingModel::MetallicRoughness};
+		const RenderMaterialState Second{.BaseColorTexture = SecondTexture, .Metallic = 0.12f, .Roughness = 0.4f,
+			.DoubleSided = true, .ShadingModel = RenderShadingModel::MetallicRoughness};
 		return std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(
 			std::initializer_list<RenderPrimitiveMaterialState>{{0, FirstCount, First},
 				{FirstCount, TotalCount - FirstCount, Second}});
@@ -475,6 +467,8 @@ namespace {
 			AddTexturePair(Initial);
 			Materials = MakeMaterialPair(6, static_cast<std::uint32_t>(Block.Indices.size()));
 		}
+		const RenderMaterialState Material{.BaseColorFactor = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f),
+			.ShadingModel = RenderShadingModel::MetallicRoughness};
 		Initial.Creates.reserve(Scenario.Count);
 		for (std::size_t Index = 0; Index < Scenario.Count; ++Index) {
 			const bool BehindCamera = Scenario.Name == "culled" && Index % 2 != 0;
@@ -485,7 +479,7 @@ namespace {
 				.ModelMatrix = glm::translate(glm::mat4(1.0f), Position),
 				.InverseModelMatrix = glm::translate(glm::mat4(1.0f), -Position),
 				.CastShadow = Settings.ShadowsEnabled};
-			Initial.Creates.push_back({.Item = Item, .Mesh = CommonMesh, .Primitives = Materials});
+			Initial.Creates.push_back({.Item = Item, .Mesh = CommonMesh, .Material = Material, .Primitives = Materials});
 		}
 		return Initial;
 	}

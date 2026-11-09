@@ -23,6 +23,13 @@ remain separate workloads.
 | `mixed` | Two opaque textured material ranges per Block, a 1% transform cohort, and one alternating 8×8 patch and 64×64 full texture update |
 | `material-check` | Separate two-range chart with colored albedo, a texture patch that must preserve the untouched half, and flat versus tilted normal map samples under the same directional light |
 
+All five timed scenarios publish opaque metallic-roughness materials. The four
+untextured rows use the same linear gray dielectric with roughness 1.0. Every
+row and the material chart use an authored exposure multiplier of 1.0 and the
+same directional and ambient light inputs for both backends. Native light
+calibration, BRDFs and output transforms still differ. Interpret the timings
+as costs for the same authored workload rather than equal-image-quality costs.
+
 The chart emits two top-left RGB PPM images even if its readback probes fail.
 The color gate requires red, blue, preserved red and green at known world
 positions. The normal gate requires brighter green under the flat normal than
