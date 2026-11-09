@@ -1,16 +1,15 @@
 """Build and exercise the real Engine through the isolated shared Jolt provider."""
 import json
-import math
 import os
 import pathlib
 import platform
 import re
 import subprocess
-import struct
 import sys
 import time
 
 from CompareBenchmark import ReadSummary
+from LargeClothTraceQuality import InspectLargeClothTrace
 
 Engine = pathlib.Path(__file__).resolve().parents[3]
 Jolt = Engine / '.provider-jolt'
@@ -75,62 +74,6 @@ def Run(Name, Command, Timeout=1800):
         raise TimeoutError(f'[Physics:Provider] {Name} exceeded {Timeout} seconds; direct process terminated')
     Process.check_returncode()
 
-def CheckLargeClothTrace(Path, Log, Workers):
-    Frames = 30
-    Resolution = 128
-    Header = struct.Struct('<8sIIIIIf')
-    Vertex = struct.Struct('<fff')
-    FrameBytes = Resolution * Resolution * Vertex.size
-    if Path.stat().st_size != Header.size + Frames * FrameBytes:
-        raise ValueError('Large-cloth trace byte count is incomplete')
-    Summary = ReadSummary(Log)
-    Expected = {'backend': 'jolt', 'scene': 'cloth16k', 'coupling': 'none',
-        'frames': str(Frames), 'workers_requested': str(Workers),
-        'jolt_world_updates': '2', 'jolt_collision_steps_per_update': '8',
-        'jolt_soft_iterations_per_collision_step': '5',
-        'jolt_constraint_sweeps_per_iteration': '2',
-        'jolt_soft_integrations_per_frame': '80', 'jolt_full_update_sleep_clock': '1',
-        'jolt_large_cloth_group_batch': GroupBatch}
-    if any(Summary.get(Key) != Value for Key, Value in Expected.items()):
-        raise ValueError('Large-cloth summary does not match final source profile')
-    RestEdge = 8.0 / (Resolution - 1)
-    PeakStrain = 0.0
-    PeakPinError = 0.0
-    FinalStrain = 0.0
-    with Path.open('rb') as Stream:
-        Prefix = Header.unpack(Stream.read(Header.size))
-        if Prefix[:6] != (b'PJTRACE1', 1, 1, Resolution * Resolution, Frames, 0) or \
-                not math.isfinite(Prefix[6]) or abs(Prefix[6] - 1.0 / 60.0) > 1e-7:
-            raise ValueError('Large-cloth trace header disagrees with fixture')
-        for Frame in range(Frames):
-            Positions = list(struct.iter_unpack('<fff', Stream.read(FrameBytes)))
-            if len(Positions) != Resolution * Resolution or \
-                    any(not all(math.isfinite(Value) for Value in Position)
-                        for Position in Positions):
-                raise ValueError('Large-cloth frame missing or nonfinite')
-            FrameStrain = 0.0
-            for Y in range(Resolution):
-                for X in range(Resolution):
-                    Index = Y * Resolution + X
-                    Position = Positions[Index]
-                    if Y == 0:
-                        Pin = (-4.0 + 8.0 * X / (Resolution - 1), 7.0, 0.0)
-                        PeakPinError = max(PeakPinError, math.dist(Position, Pin))
-                    for Neighbor in ((Index + 1,) if X + 1 < Resolution else ()) + \
-                            ((Index + Resolution,) if Y + 1 < Resolution else ()):
-                        Strain = abs(math.dist(Position, Positions[Neighbor]) / RestEdge - 1.0)
-                        FrameStrain = max(FrameStrain, Strain)
-            PeakStrain = max(PeakStrain, FrameStrain)
-            FinalStrain = FrameStrain
-    Result = {'Workers': Workers, 'Frames': Frames, 'PeakPinErrorM': PeakPinError,
-        'PeakEdgeStrain': PeakStrain, 'FinalEdgeStrain': FinalStrain,
-        'MaximumPinErrorM': 1e-4, 'MaximumPeakEdgeStrain': 0.05,
-        'MaximumFinalEdgeStrain': 0.02, 'Source': Source}
-    (Evidence / f'LargeCloth-W{Workers}-Quality.json').write_text(
-        json.dumps(Result, indent=2), encoding='utf-8')
-    if PeakPinError > 1e-4 or PeakStrain > 0.05 or FinalStrain > 0.02:
-        raise ValueError('Large-cloth grouping exceeded fixed physical envelope')
-
 Actual = subprocess.check_output(['git', '-C', str(Jolt), 'rev-parse', 'HEAD'], text=True).strip()
 assert Actual == Pin
 Source = {'Engine': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=Engine, text=True).strip(),
@@ -185,8 +128,14 @@ if FinalCommit is not None:
         Name = f'LargeCloth-W{Workers}'
         Trace = Evidence / (Name + '.trace')
         Run(Name, [BinaryDirectory / ('PhysicsJoltProviderBenchmark' + Suffix),
-            'jolt', 'cloth16k', 'none', '30', str(Workers), Name, '0', '1', Trace], 600)
-        CheckLargeClothTrace(Trace, Evidence / (Name + '.stdout'), Workers)
+            'jolt', 'cloth16k', 'none', '30', str(Workers), Name, '10', '1', Trace], 600)
+        Quality = InspectLargeClothTrace(Trace, ReadSummary(Evidence / (Name + '.stdout')),
+                                        Workers, GroupBatch)
+        Quality['Source'] = Source
+        (Evidence / f'{Name}-Quality.json').write_text(
+            json.dumps(Quality, indent=2), encoding='utf-8')
+        if not Quality['QualityPass']:
+            raise ValueError('Large-cloth grouping exceeded fixed physical envelope')
 (Evidence / 'CMakeCache.txt').write_bytes((Build / 'CMakeCache.txt').read_bytes())
 (Evidence / 'Verdict.json').write_text(json.dumps({'RequiredFixturesPass': True,
     'Repeats': 3, 'AdditionalFinalTargets': Targets[1:],
