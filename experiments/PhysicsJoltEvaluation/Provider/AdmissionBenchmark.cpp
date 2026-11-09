@@ -73,8 +73,8 @@ int main(int ArgumentCount, char **Arguments) {
     PhysicsEvaluation::SuppressErrorDialogs();
     PhysicsEvaluation::InstallPhysicsAllocators();
     try {
-        if (ArgumentCount != 5)
-            throw std::invalid_argument("Usage: AdmissionBenchmark jolt|xpbd cloth4k|cloth16k bodies[1..4] repeats[1..5]");
+        if (ArgumentCount != 5 && ArgumentCount != 6)
+            throw std::invalid_argument("Usage: AdmissionBenchmark jolt|xpbd cloth4k|cloth16k bodies[1..4] repeats[1..5] [workers[1..8]]");
         const std::string Backend = Arguments[1];
         const std::string Scene = Arguments[2];
         if (Backend != "jolt" && Backend != "xpbd")
@@ -83,8 +83,10 @@ int main(int ArgumentCount, char **Arguments) {
             throw std::invalid_argument("Unknown scene");
         const auto BodyCount = std::stoi(Arguments[3]);
         const auto Repeats = std::stoi(Arguments[4]);
-        if (BodyCount < 1 || BodyCount > 4 || Repeats < 1 || Repeats > 5)
-            throw std::invalid_argument("Body or repeat count out of bounds");
+        const auto Workers = ArgumentCount == 6 ? std::stoi(Arguments[5]) : 1;
+        if (BodyCount < 1 || BodyCount > 4 || Repeats < 1 || Repeats > 5 ||
+            Workers < 1 || Workers > 8)
+            throw std::invalid_argument("Body, repeat or worker count out of bounds");
 
         const auto Resolution = Scene == "cloth4k" ? 64u : 128u;
         std::vector<SoftBodyDefinition> Definitions;
@@ -95,13 +97,13 @@ int main(int ArgumentCount, char **Arguments) {
         PhysicsWorldConfig Config;
         Config.Gravity = {0, -9.81f, 0};
         SoftBodyWorldLimits Limits;
-        Limits.MaximumWorkers = 1;
+        Limits.MaximumWorkers = Workers;
         const auto BeforeWorld = PhysicsEvaluation::CaptureResources();
         PhysicsEvaluation::ResetJoltWorldAdmissionProfile();
         const auto WorldStart = Clock::now();
         PhysicsEvaluation::UnifiedJoltProvider Jolt;
         std::unique_ptr<ISoftBodyBackend> Xpbd;
-        if (Backend == "jolt") Jolt = PhysicsEvaluation::CreateUnifiedJoltProvider(Config, Limits, 1);
+        if (Backend == "jolt") Jolt = PhysicsEvaluation::CreateUnifiedJoltProvider(Config, Limits, Workers);
         else Xpbd = CreateSoftBodyBackend(Limits);
         auto *Soft = Backend == "jolt" ? Jolt.Soft.get() : Xpbd.get();
         if (!Soft || !Soft->IsValid()) throw std::runtime_error("World creation failed");
@@ -165,7 +167,8 @@ int main(int ArgumentCount, char **Arguments) {
                 {"Admission", Profile(Sample.Admission)}});
         const nlohmann::json Result = {
             {"Schema", "PhysicsJoltAdmissionProfile1"}, {"Backend", Backend}, {"Scene", Scene},
-            {"Bodies", BodyCount}, {"Repeats", Repeats}, {"Instrumented", true},
+            {"Bodies", BodyCount}, {"Repeats", Repeats}, {"Workers", Workers},
+            {"Instrumented", true},
             {"WorldMs", WorldMs}, {"WorldResources", PhysicsEvaluation::ResourceDelta(BeforeWorld, AfterWorld)},
             {"WorldAdmission", WorldProfile(WorldAdmission)},
             {"WorldRetireMs", WorldRetireMs},
