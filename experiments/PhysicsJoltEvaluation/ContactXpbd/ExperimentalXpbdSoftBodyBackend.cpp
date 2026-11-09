@@ -765,9 +765,15 @@ namespace gargantuan {
 			for (std::size_t Index = 0; Index < Record.Distances.size(); ++Index) {
 				const auto &Constraint = Record.Distances[Index];
 				auto &ShadowDistance = Record.DoubleShadowDistances[Index];
+				// BuildCloth creates rest lengths before attachment targets move nodes.
+				// Rebuild those original float world positions, then take their
+				// distance in double so an offset pin cannot redefine the rest mesh.
+				const glm::vec3 RestA = Record.Definition.Position +
+					Record.Nodes[Constraint.VertexA].RestOffset;
+				const glm::vec3 RestB = Record.Definition.Position +
+					Record.Nodes[Constraint.VertexB].RestOffset;
 				ShadowDistance.RestLength = glm::length(
-					Record.DoubleShadowNodes[Constraint.VertexB].Position -
-					Record.DoubleShadowNodes[Constraint.VertexA].Position);
+					glm::dvec3(RestB) - glm::dvec3(RestA));
 				ShadowDistance.Lambda = 0.0;
 			}
 		}
