@@ -78,3 +78,19 @@ Repeat at the intended scene sizes and with `--synchronize=off` for queue
 behavior. Collect Studio viewport readback and presentation separately. The
 comparison establishes performance for the shared opaque workload. The
 architecture decision also weighs integration gaps, maintenance and deployment.
+
+## Decision criteria
+
+Use only rows that complete material capture, submit every measured frame and
+hold the expected scene size. The 16.67 ms frame interval from Foundation 2C is
+the reference for tail cost. Compare completion P95 and P99 at the same size
+and resolution, then compare queued submission together with the final drain.
+Treat results close to the run-to-run variation as equivalent. The shadow-off
+rows leave each backend's normal pass setup in place. SDL still clears its
+directional depth target while Filament disables its native shadowing feature.
+
+Keep the production renderer choice separate from the decision about where
+to invest in the broader shading stack. Any production backend change also
+needs the existing application surface, including GUI, Sky and fog, Studio
+viewport integration, deformable and skinned geometry, recovery, and packaged
+deployment. Record unsupported surfaces alongside the measured costs.

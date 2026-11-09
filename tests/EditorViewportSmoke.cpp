@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <format>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <memory>
@@ -180,7 +181,9 @@ namespace {
 		const auto CutoutShadow = ShadowProbe(18, true, 0);
 		if (Unshadowed < 150 || int(Unshadowed) - int(SolidShadow) < 80 ||
 			std::abs(int(Unshadowed) - int(CutoutShadow)) > 2)
-			throw std::runtime_error("[Renderer:Shadow] A masked shadow did not follow the sampled alpha");
+			throw std::runtime_error(std::format(
+				"[Renderer:Shadow] A masked shadow did not follow the sampled alpha (lit {}, solid {}, cutout {})",
+				Unshadowed, SolidShadow, CutoutShadow));
 	}
 
 	void CheckWorldSubmission() {

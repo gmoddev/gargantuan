@@ -41,16 +41,18 @@ jobs:
             -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
             -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
             -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF \
-            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON
           cmake --build build-renderer --parallel 3 --target gargantuan_editor_viewport_smoke \
-            gargantuan_renderer_publication_tests gargantuan_asset_foundation_tests gargantuan_renderer_benchmark
+            gargantuan_renderer_publication_tests gargantuan_asset_foundation_tests gargantuan_renderer_benchmark \
+            gargantuan_renderer_depth_tests gargantuan_environment_lighting_benchmark
       - name: Verify material publication and pixels
         run: |
           set -euo pipefail
           mkdir -p renderer-evidence
           git rev-parse HEAD > renderer-evidence/source.txt
           SDL_VIDEODRIVER=dummy ctest --test-dir build-renderer --output-on-failure \
-            -R '^gargantuan_(renderer_publication|asset_foundation)$' | tee renderer-evidence/ctest.log
+            -R '^gargantuan_(renderer_publication|asset_foundation|environment_lighting_benchmark_smoke)$' \
+            | tee renderer-evidence/ctest.log
           build-renderer/gargantuan_renderer_benchmark --incremental --backend=projection \
             --scenario=all --count=10 --frames=3 --warmup=2 | tee renderer-evidence/projection.csv
           for shader in build-renderer/shaders/*.spv; do spirv-val "$shader"; done
@@ -59,6 +61,8 @@ jobs:
           xvfb-run -a vulkaninfo --summary > renderer-evidence/device.txt
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_editor_viewport_smoke) \
             2>&1 | tee renderer-evidence/pixels.log
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests) \
+            2>&1 | tee renderer-evidence/depth.log
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_benchmark \
             --incremental --backend=sdl --scenario=material-check --capture=../renderer-evidence/sdl-material) \
             2>&1 | tee renderer-evidence/material-check.csv
