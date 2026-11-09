@@ -68,7 +68,7 @@ Suffix = '.exe' if platform.system() == 'Windows' else ''
 BinaryDirectory = Build / 'experiments/PhysicsJoltEvaluation'
 Run('ProviderRegression', [BinaryDirectory / ('PhysicsJoltProviderQualification' + Suffix)], Timeout=180)
 Cases = [('jolt', 'A', 1, 0), ('jolt', 'B', 1, 0), ('jolt', 'C', 1, 0),
-         ('jolt', 'C', 4, 0), ('jolt', 'D', 4, 0),
+         ('jolt', 'C', 4, 0), ('jolt', 'D', 4, 0), ('jolt', 'E', 1, 0),
          ('xpbd', 'A', 1, 0), ('xpbd', 'B', 1, 0), ('xpbd', 'C', 1, 0)]
 for Backend, Mode, Passes, Offset in Cases:
     Name = f'{Backend}-{Mode}{Passes}-Plane'
@@ -77,9 +77,11 @@ for Backend, Mode, Passes, Offset in Cases:
                                           'GANTRIA_XPBD_CONTACT_ORDER', 'GANTRIA_XPBD_VELOCITY_'))}
     Environment.update({'GANTRIA_CONTACT_ORDER': Mode, 'GANTRIA_CONTACT_PASSES': str(Passes),
                         'GANTRIA_XPBD_CONTACT_ORDER': Mode,
-                        'GANTRIA_XPBD_VELOCITY_TRACE': str(Evidence / (Name + '.velocity.f32le')),
-                        'GANTRIA_XPBD_VELOCITY_STRIDE': '32'})
-    Target = 'PhysicsJoltProviderLongRun' if Backend == 'jolt' else 'PhysicsJoltXpbdContactProbe'
+                        'GANTRIA_CONTACT_VELOCITY_TRACE': str(Evidence / (Name + '.velocity.f32le')),
+                        'GANTRIA_CONTACT_VELOCITY_STRIDE': '32',
+                        'GANTRIA_CONTACT_STAGES': '1',
+                        'GANTRIA_XPBD_STAGE_STRIDE': '32'})
+    Target = 'PhysicsJoltXpbdContactProbe'
     Run(Name, [BinaryDirectory / (Target + Suffix), Backend, 'cloth16k', 'driven-sphere', '40', '8',
                Name, '0', '32' if Backend == 'xpbd' else '1', Evidence / (Name + '.trace')],
         Environment, Timeout=300)
