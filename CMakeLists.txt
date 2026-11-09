@@ -594,23 +594,33 @@ target_include_directories(gargantuan_core PUBLIC
 
 if(GARGANTUAN_WITH_FILAMENT)
 	set(FILAMENT_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/filament")
-	set(FILAMENT_GENERATED_MATERIAL "${FILAMENT_GENERATED_DIR}/GargantuanBenchmarkMaterial.h")
 	file(MAKE_DIRECTORY "${FILAMENT_GENERATED_DIR}")
-	add_custom_command(
-		OUTPUT "${FILAMENT_GENERATED_MATERIAL}"
-		COMMAND "${GARGANTUAN_FILAMENT_ROOT}/bin/matc.exe"
-			--platform desktop
-			--api opengl
-			--api vulkan
-			--variant-filter=dynamicLighting,shadowReceiver,skinning,vsm,fog,ssr,stereo
-			--output-format header
-			--output "${FILAMENT_GENERATED_MATERIAL}"
-			"${CMAKE_CURRENT_SOURCE_DIR}/assets/filament/benchmark.mat"
-		MAIN_DEPENDENCY "${CMAKE_CURRENT_SOURCE_DIR}/assets/filament/benchmark.mat"
-		COMMENT "Compiling the experimental Filament benchmark material"
-		VERBATIM
-	)
-	target_sources(gargantuan_core PRIVATE "${FILAMENT_GENERATED_MATERIAL}")
+	function(gargantuan_filament_material FILAMENT_MATERIAL_NAME FILAMENT_BLEND_MODE)
+		set(FILAMENT_PREMULTIPLY "")
+		if(FILAMENT_BLEND_MODE STREQUAL "transparent")
+			set(FILAMENT_PREMULTIPLY "material.baseColor.rgb *= material.baseColor.a;")
+		endif()
+		set(MaterialInput "${FILAMENT_GENERATED_DIR}/${FILAMENT_MATERIAL_NAME}.mat")
+		set(MaterialHeader "${FILAMENT_GENERATED_DIR}/${FILAMENT_MATERIAL_NAME}.h")
+		configure_file("${CMAKE_CURRENT_SOURCE_DIR}/assets/filament/benchmark.mat.in" "${MaterialInput}" @ONLY)
+		add_custom_command(
+			OUTPUT "${MaterialHeader}"
+			COMMAND "${GARGANTUAN_FILAMENT_ROOT}/bin/matc.exe"
+				--platform desktop
+				--api vulkan
+				--variant-filter=dynamicLighting,skinning,vsm,fog,ssr,stereo
+				--output-format header
+				--output "${MaterialHeader}"
+				"${MaterialInput}"
+			DEPENDS "${MaterialInput}" "${GARGANTUAN_FILAMENT_ROOT}/bin/matc.exe"
+			COMMENT "Compiling the experimental Filament ${FILAMENT_BLEND_MODE} material"
+			VERBATIM
+		)
+		target_sources(gargantuan_core PRIVATE "${MaterialHeader}")
+	endfunction()
+	gargantuan_filament_material(GargantuanBenchmarkMaterial opaque)
+	gargantuan_filament_material(GargantuanMaskedMaterial masked)
+	gargantuan_filament_material(GargantuanTransparentMaterial transparent)
 	target_include_directories(gargantuan_core SYSTEM PRIVATE
 		"${GARGANTUAN_FILAMENT_ROOT}/include"
 		"${FILAMENT_GENERATED_DIR}"

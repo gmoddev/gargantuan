@@ -23,6 +23,14 @@ namespace gargantuan {
 		std::optional<double> GpuFrameMilliseconds;
 		RenderProjectionChanges Changes;
 		std::size_t ProjectedObjects = 0;
+		std::size_t RenderableObjects = 0;
+		std::size_t ResidentMeshes = 0;
+		std::size_t ResidentTextures = 0;
+		std::size_t NativeVertexUploadBytes = 0;
+		std::size_t NativeTextureUploadBytes = 0;
+		std::uint64_t SubmittedFrames = 0;
+		std::uint64_t SkippedFrames = 0;
+		std::uint64_t FullResyncs = 0;
 	};
 
 	class FilamentRenderer final : public BaseRenderer {
@@ -36,6 +44,8 @@ namespace gargantuan {
 
 		using BaseRenderer::Draw;
 		void Draw(RenderPublicationPtr Publication) override;
+		// Qualification capture from a headless frame. Rows begin at the bottom left.
+		[[nodiscard]] std::vector<std::uint8_t> Capture(RenderPublicationPtr Publication);
 		void Resize(int WidthValue, int HeightValue) override;
 		void Destroy() override;
 		[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const override;
@@ -49,6 +59,7 @@ namespace gargantuan {
 		void FlushAndWait();
 
 	  private:
+		void DrawPublication(RenderPublicationPtr Publication, std::vector<std::uint8_t> *Pixels);
 		struct Impl;
 		std::unique_ptr<Impl> Implementation;
 		RenderProjection Projection;
