@@ -34,6 +34,7 @@ Json QuatValues(glm::quat Value) { return Json::array({Value.w, Value.x, Value.y
 struct SphereCase {
     std::string Id;
     std::string Motion;
+    std::string KinematicUpdate;
     std::string TrajectoryKind;
     glm::vec3 Start{0.0f};
     glm::vec3 Velocity{0.0f};
@@ -108,6 +109,9 @@ Json MakeFixture(const Json &Config, const SoftBodyDefinition &Definition,
             {"Trajectory", {{"Kind", Sphere.Motion == "dynamic" ? "free_dynamic" : Sphere.TrajectoryKind},
                 {"Start", Triplet(Sphere.Start)}, {"Velocity", Triplet(Sphere.Velocity)},
                 {"DurationSeconds", Sphere.Duration}, {"FrequencyHz", Sphere.Frequency}}}});
+    for (std::size_t Index = 0; Index < Spheres.size(); ++Index)
+        if (Spheres[Index].Motion == "kinematic")
+            Fixture["Colliders"][Index]["Trajectory"]["KinematicUpdate"] = Spheres[Index].KinematicUpdate;
     Fixture["Authored"] = {{"SizeM", Triplet(Definition.Size)},
         {"RotationWxyz", Config.value("RotationWxyz", Json::array({1,0,0,0}))},
         {"Material", {{"ParticleMassKg", Definition.Material.ParticleMass},
@@ -118,6 +122,7 @@ Json MakeFixture(const Json &Config, const SoftBodyDefinition &Definition,
             {"Friction", Definition.Material.Friction}}},
         {"XpbdSubsteps", Config.value("XpbdSubsteps", 32)},
         {"InitialVelocityMPerS", Triplet(InitialVelocity)},
+        {"RotateAuthoredInputs", Config.value("RotateAuthoredInputs", false)},
         {"StaticPoseProjectionWork", "INCOMPLETE"}};
     return Fixture;
 }
@@ -137,10 +142,10 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         "Contact case exceeds bounded size");
     Require(Config.at("CaseId").is_string() && !Config.at("CaseId").get<std::string>().empty(),
         "Missing CaseId");
-    const glm::vec3 Gravity = Vec(Config.value("GravityMPerS2", Json::array({0,-9.81,0})));
+    glm::vec3 Gravity = Vec(Config.value("GravityMPerS2", Json::array({0,-9.81,0})));
     const glm::vec3 Origin = Vec(Config.value("OriginM", Json::array({0,3,0})));
     const glm::vec3 Size = Vec(Config.value("SizeM", Json::array({8,8,0.5})));
-    const glm::vec3 InitialVelocity = Vec(Config.value("InitialVelocityMPerS",
+    glm::vec3 InitialVelocity = Vec(Config.value("InitialVelocityMPerS",
         Json::array({Config.value("InitialSpeedXMPerS", 2.0f), 0.0f, 0.0f})));
     Require(Size.x > 0 && Size.y > 0 && Size.z > 0, "Invalid cloth size");
     const Json RotationValue = Config.value("RotationWxyz", Json::array({1,0,0,0}));
@@ -149,6 +154,11 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         RotationValue[2].get<float>(), RotationValue[3].get<float>());
     PhysicsEvaluation::SetExperimentalXpbdClothRotation(Rotation);
     PhysicsEvaluation::SetExperimentalJoltClothRotation(Rotation);
+    const bool RotateAuthoredInputs = Config.value("RotateAuthoredInputs", false);
+    if (RotateAuthoredInputs) {
+        Gravity = Rotation * Gravity;
+        InitialVelocity = Rotation * InitialVelocity;
+    }
 
     SoftBodyDefinition Definition;
     Definition.Kind = SoftBodyKind::Cloth;
@@ -193,6 +203,7 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         SphereCase Sphere;
         Sphere.Id = Item.at("Id").get<std::string>();
         Sphere.Motion = Item.value("Motion", std::string("static"));
+        Sphere.KinematicUpdate = Item.value("KinematicUpdate", std::string("move"));
         Sphere.Radius = Item.value("RadiusM", 1.0f);
         Sphere.Mass = Item.value("MassKg", 1.0f);
         Sphere.Start = Vec(Item.at("CenterM"));
@@ -201,14 +212,22 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         Sphere.Velocity = Vec(Trajectory.value("VelocityMPerS", Json::array({0,0,0})));
         Sphere.Duration = Trajectory.value("DurationSeconds", 0.66f);
         Sphere.Frequency = Trajectory.value("FrequencyHz", 1.0f);
+        if (RotateAuthoredInputs) {
+            Sphere.Start = Origin + Rotation * (Sphere.Start - Origin);
+            Sphere.Velocity = Rotation * Sphere.Velocity;
+        }
         Require(!Sphere.Id.empty() && Sphere.Radius > 0 && Sphere.Mass >= 0.001f &&
             Sphere.Duration > 0 && Sphere.Frequency > 0 &&
             (Sphere.Motion == "static" || Sphere.Motion == "kinematic" || Sphere.Motion == "dynamic") &&
+            (Sphere.KinematicUpdate == "move" || Sphere.KinematicUpdate == "pose") &&
             (Sphere.TrajectoryKind == "hold" || Sphere.TrajectoryKind == "linear" ||
              Sphere.TrajectoryKind == "linear_clamped" || Sphere.TrajectoryKind == "sine"),
             "Invalid sphere case");
         Require(BackendName == "jolt" || Sphere.Motion != "dynamic",
             "XPBD public collider snapshots cannot provide reciprocal dynamic coupling");
+        Require(BackendName == "jolt" || Sphere.Motion != "kinematic" ||
+            Sphere.KinematicUpdate == "pose",
+            "XPBD collider snapshots cannot provide native MoveKinematic semantics");
         Spheres.push_back(Sphere);
     }
 
@@ -264,7 +283,7 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         if (BackendName == "jolt") {
             for (auto &Sphere : Spheres) if (Sphere.Motion != "dynamic") {
                 const glm::vec3 Center = Sphere.Target(EndTime);
-                if (Sphere.Motion == "kinematic")
+                if (Sphere.Motion == "kinematic" && Sphere.KinematicUpdate == "move")
                     Require(PhysicsEvaluation::MoveExperimentalJoltKinematic(*Jolt.Rigid,
                         Sphere.RigidId, Center, DeltaTime), "Native kinematic move failed");
                 else {

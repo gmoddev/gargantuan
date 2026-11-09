@@ -887,10 +887,10 @@ namespace gargantuan {
 								(Radius - Distance - NormalAlpha * Lambda) / (Node.InverseMass + NormalAlpha));
 							const float DeltaLambda = NewLambda - Lambda;
 							Lambda = NewLambda;
-							if (DeltaLambda != 0.0f) {
+							if (DeltaLambda != 0.0f)
 								Node.Position += Node.InverseMass * DeltaLambda * Direction;
+							if (DeltaLambda != 0.0f || Lambda > 0.0f)
 								Normal = Direction;
-							}
 						}
 					} else {
 						Normal = CollideNode(Node, Collider, Record.Definition.Material.Thickness);
