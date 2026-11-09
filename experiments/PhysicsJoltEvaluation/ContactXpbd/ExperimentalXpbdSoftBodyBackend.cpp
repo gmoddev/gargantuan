@@ -48,16 +48,28 @@ namespace gargantuan {
 
 		// This translation unit is an isolated copy of the production XPBD solver.
 		// The ordinary factory and src/physics/XpbdSoftBodyBackend.cpp stay unchanged.
-		enum class ExperimentalContactOrder { Existing, ContactThenStructure, ContactStructureContact };
+		enum class ExperimentalContactOrder {
+			Existing, ContactThenStructure, ContactStructureContact, CoupledNormal
+		};
 		[[nodiscard]] ExperimentalContactOrder GetExperimentalContactOrder() {
 			static const auto Order = [] {
 				const char *Value = std::getenv("GANTRIA_XPBD_CONTACT_ORDER");
 				if (!Value || std::string_view(Value) == "A") return ExperimentalContactOrder::Existing;
 				if (std::string_view(Value) == "B") return ExperimentalContactOrder::ContactThenStructure;
 				if (std::string_view(Value) == "C") return ExperimentalContactOrder::ContactStructureContact;
+				if (std::string_view(Value) == "D") return ExperimentalContactOrder::CoupledNormal;
 				throw std::invalid_argument("[Physics:XpbdContactProbe] unsupported contact order");
 			}();
 			return Order;
+		}
+		[[nodiscard]] float GetCoupledNormalCompliance(float StretchCompliance) {
+			const char *Value = std::getenv("GANTRIA_XPBD_CONTACT_NORMAL_COMPLIANCE");
+			if (!Value) return 0.1f * StretchCompliance;
+			char *End = nullptr;
+			const float Parsed = std::strtof(Value, &End);
+			if (!End || *End || !std::isfinite(Parsed) || Parsed < 0.0f || Parsed > 1.0f)
+				throw std::invalid_argument("[Physics:XpbdContactProbe] invalid contact normal compliance");
+			return Parsed;
 		}
 
 		struct SoftBodyAabb {
@@ -840,7 +852,8 @@ namespace gargantuan {
 			return Collider.Transform.Rotation * *LocalNormal;
 		}
 
-		void Collide(SoftBodyWorkItem &Item, const SoftBodySimulationBatch &Batch, bool ApplyFriction) {
+		void Collide(SoftBodyWorkItem &Item, const SoftBodySimulationBatch &Batch, bool ApplyFriction,
+			std::vector<float> *NormalLambdas = nullptr) {
 			auto &Record = Item.Record;
 			if (Record.Definition.CollisionMode == SoftBodyCollisionMode::None || Batch.Colliders.empty()) return;
 			const auto QueryStart = ProfileClock::now();
@@ -849,12 +862,35 @@ namespace gargantuan {
 			++Item.Profile.ColliderQueries;
 			Item.Profile.CandidateColliders += Candidates.size();
 			const auto CollisionStart = ProfileClock::now();
-			for (auto &Node : Record.Nodes) {
+			const float NormalAlpha = NormalLambdas ?
+				GetCoupledNormalCompliance(Record.Definition.Material.StretchCompliance) /
+					(Batch.DeltaTime * Batch.DeltaTime) : 0.0f;
+			for (std::size_t NodeIndex = 0; NodeIndex < Record.Nodes.size(); ++NodeIndex) {
+				auto &Node = Record.Nodes[NodeIndex];
 				if (Node.InverseMass == 0.0f) continue;
 				for (const auto ColliderIndex : Candidates) {
-					const auto Normal = CollideNode(
-						Node, Batch.Colliders[ColliderIndex], Record.Definition.Material.Thickness
-					);
+					std::optional<glm::vec3> Normal;
+					const auto &Collider = Batch.Colliders[ColliderIndex];
+					if (NormalLambdas && Collider.Shape.Kind == PhysicsShapeKind::Ball) {
+						const glm::vec3 Delta = Node.Position - Collider.Transform.Position;
+						const float Distance = glm::length(Delta);
+						const float Radius = std::min({Collider.Shape.Size.x, Collider.Shape.Size.y,
+							Collider.Shape.Size.z}) * 0.5f + Record.Definition.Material.Thickness;
+						float &Lambda = (*NormalLambdas)[NodeIndex * Batch.Colliders.size() + ColliderIndex];
+						if (Distance < Radius || Lambda > 0.0f) {
+							const glm::vec3 Direction = Distance > 1e-7f ? Delta / Distance : glm::vec3(0,1,0);
+							const float NewLambda = std::max(0.0f, Lambda +
+								(Radius - Distance - NormalAlpha * Lambda) / (Node.InverseMass + NormalAlpha));
+							const float DeltaLambda = NewLambda - Lambda;
+							Lambda = NewLambda;
+							if (DeltaLambda != 0.0f) {
+								Node.Position += Node.InverseMass * DeltaLambda * Direction;
+								Normal = Direction;
+							}
+						}
+					} else {
+						Normal = CollideNode(Node, Collider, Record.Definition.Material.Thickness);
+					}
 					if (!Normal || !ApplyFriction) continue;
 					const auto Movement = Node.Position - Node.PreviousPosition;
 					const auto NormalMovement = glm::dot(Movement, *Normal);
@@ -985,12 +1021,16 @@ namespace gargantuan {
 				Constraint.Lambda = 0.0f;
 			const auto Iterations = IterationCount(Record);
 			const auto ContactOrder = GetExperimentalContactOrder();
+			std::vector<float> ContactNormalLambdas;
+			if (ContactOrder == ExperimentalContactOrder::CoupledNormal)
+				ContactNormalLambdas.resize(Record.Nodes.size() * Batch.Colliders.size(), 0.0f);
 			LogStage(-1, "BeforeSolve");
 			for (int Iteration = 0; Iteration < Iterations; ++Iteration) {
 				if (ContactOrder != ExperimentalContactOrder::Existing) {
 					Collide(Item, Batch,
 						ContactOrder == ExperimentalContactOrder::ContactThenStructure &&
-						Iteration + 1 == Iterations);
+						Iteration + 1 == Iterations,
+						ContactOrder == ExperimentalContactOrder::CoupledNormal ? &ContactNormalLambdas : nullptr);
 					LogStage(Iteration, "AfterPreContact");
 				}
 				const auto ConstraintStart = ProfileClock::now();
@@ -1000,7 +1040,8 @@ namespace gargantuan {
 				Item.Profile.ConstraintNanoseconds += Nanoseconds(ProfileClock::now() - ConstraintStart);
 				LogStage(Iteration, "AfterStructure");
 				if (ContactOrder != ExperimentalContactOrder::ContactThenStructure) {
-					Collide(Item, Batch, Iteration + 1 == Iterations);
+					Collide(Item, Batch, Iteration + 1 == Iterations,
+						ContactOrder == ExperimentalContactOrder::CoupledNormal ? &ContactNormalLambdas : nullptr);
 					LogStage(Iteration, "AfterPostContact");
 				}
 				ApplyAttachments(Record);

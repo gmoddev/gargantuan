@@ -1,10 +1,12 @@
 #include "ContactExperimentSeams.hpp"
+#include "../ExperimentSupport.hpp"
 #include "../Provider/UnifiedJoltProvider.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 
 #include <nlohmann/json.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -61,7 +63,7 @@ void AddEdge(Json &Edges, const std::vector<glm::vec3> &Rest, unsigned A, unsign
 
 Json MakeFixture(const Json &Config, const SoftBodyDefinition &Definition,
                  const SoftBodyState &Initial, const std::vector<SphereCase> &Spheres,
-                 glm::vec3 Gravity, float InitialSpeed, int Frames) {
+                 glm::vec3 Gravity, float InitialSpeed, float AuthoredDamping, int Frames) {
     const auto &Rest = *Initial.Positions;
     Json Fixture = {{"Schema", "Gargantuan.ContactFixture.V1"},
         {"CaseId", Config.at("CaseId")}, {"Frames", Frames},
@@ -111,9 +113,12 @@ Json MakeFixture(const Json &Config, const SoftBodyDefinition &Definition,
         {"Material", {{"ParticleMassKg", Definition.Material.ParticleMass},
             {"StretchCompliance", Definition.Material.StretchCompliance},
             {"BendCompliance", Definition.Material.BendCompliance},
-            {"Damping", Definition.Material.Damping}, {"Friction", Definition.Material.Friction}}},
+            {"AuthoredFrameDamping", AuthoredDamping},
+            {"AppliedStepDamping", Definition.Material.Damping},
+            {"Friction", Definition.Material.Friction}}},
         {"XpbdSubsteps", Config.value("XpbdSubsteps", 32)},
-        {"InitialSpeedXMPerS", InitialSpeed}};
+        {"InitialSpeedXMPerS", InitialSpeed},
+        {"StaticPoseProjectionWork", "INCOMPLETE"}};
     return Fixture;
 }
 
@@ -126,8 +131,10 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     const int N = Config.at("Resolution").get<int>();
     const int Frames = Config.at("Frames").get<int>();
     const int Substeps = Config.value("XpbdSubsteps", 32);
+    const int Workers = Config.value("Workers", 1);
     Require((N == 9 || N == 17 || N == 32 || N == 128) && Frames > 0 && Frames <= 600 &&
-        Substeps > 0 && Substeps <= 64, "Contact case exceeds bounded size");
+        Substeps > 0 && Substeps <= 64 && Workers >= 1 && Workers <= 8,
+        "Contact case exceeds bounded size");
     Require(Config.at("CaseId").is_string() && !Config.at("CaseId").get<std::string>().empty(),
         "Missing CaseId");
     const glm::vec3 Gravity = Vec(Config.value("GravityMPerS2", Json::array({0,-9.81,0})));
@@ -202,13 +209,13 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     }
 
     SoftBodyWorldLimits Limits;
-    Limits.MaximumWorkers = 1;
+    Limits.MaximumWorkers = Workers;
     PhysicsWorldConfig WorldConfig;
     WorldConfig.Gravity = Gravity;
     std::unique_ptr<ISoftBodyBackend> Xpbd;
     PhysicsEvaluation::UnifiedJoltProvider Jolt;
     if (BackendName == "xpbd") Xpbd = CreateSoftBodyBackend(Limits);
-    else Jolt = PhysicsEvaluation::CreateUnifiedJoltProvider(WorldConfig, Limits, 1);
+    else Jolt = PhysicsEvaluation::CreateUnifiedJoltProvider(WorldConfig, Limits, Workers);
     ISoftBodyBackend *Soft = BackendName == "xpbd" ? Xpbd.get() : Jolt.Soft.get();
     Require(Soft && Soft->IsValid(), "Soft provider creation failed");
     const SoftBodyId Cloth = Soft->CreateBody(Definition);
@@ -216,6 +223,8 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     const auto Initial = Soft->GetBodyState(Cloth);
     Require(Initial && Initial->Positions && Initial->Indices &&
         Initial->Positions->size() == std::size_t(N * N), "Initial cloth topology missing");
+    const std::uint64_t TopologyRevision = Initial->TopologyRevision;
+    std::uint64_t VertexRevision = Initial->VertexRevision;
     for (auto &Sphere : Spheres) if (BackendName == "jolt") {
         Sphere.Description.Shape.Kind = PhysicsShapeKind::Ball;
         Sphere.Description.Shape.Size = glm::vec3(2.0f * Sphere.Radius);
@@ -235,13 +244,17 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     std::filesystem::create_directories(Output);
     { std::ofstream File(Output / "ContactFixtureV1.json");
       Require(bool(File), "Fixture output failed");
-      File << MakeFixture(Config, Definition, *Initial, Spheres, Gravity, InitialSpeed, Frames).dump(1); }
+      File << MakeFixture(Config, Definition, *Initial, Spheres, Gravity,
+          InitialSpeed, AuthoredDamping, Frames).dump(1); }
     const auto Movable = std::size_t(N * N) - Definition.Attachments.size();
     Require(Soft->ApplyImpulse(Cloth, glm::vec3(float(Movable) *
         Definition.Material.ParticleMass * InitialSpeed, 0, 0)).Succeeded(), "Initial impulse rejected");
     std::ofstream Trace(Output / "ContactTraceV1.jsonl");
     Require(bool(Trace), "Trace output failed");
+    std::vector<double> PhysicsMs;
+    PhysicsMs.reserve(Frames);
     for (int Frame = 0; Frame < Frames; ++Frame) {
+        const auto PhysicsStart = std::chrono::steady_clock::now();
         const float EndTime = float(Frame + 1) * DeltaTime;
         if (BackendName == "jolt") {
             for (auto &Sphere : Spheres) if (Sphere.Motion != "dynamic") {
@@ -272,16 +285,28 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
             const auto Result = Soft->Step(Step);
             Require(!Result.BodiesTruncated && !Result.VerticesTruncated &&
                 !Result.CollidersTruncated && Result.Profile.BacklogDrops == 0 &&
-                Result.Profile.StaleResults == 0, "Soft step lost work");
+                Result.Profile.StaleResults == 0 && Result.States.size() == 1 &&
+                Result.Profile.SimulatedBodies == 1 &&
+                Result.Profile.SimulatedVertices == std::size_t(N * N) &&
+                Result.Profile.FrozenBodies == 0 &&
+                Result.States.front().Body == Cloth && Result.States.front().Simulated &&
+                Result.States.front().TopologyRevision == TopologyRevision &&
+                Result.States.front().VertexRevision > VertexRevision,
+                "Soft step lost work");
+            VertexRevision = Result.States.front().VertexRevision;
         }
         const auto State = Soft->GetBodyState(Cloth);
         Require(State && State->Positions && State->Positions->size() == std::size_t(N * N),
             "Poststep cloth state missing");
+        Require(State->Simulated && State->TopologyRevision == TopologyRevision &&
+            State->VertexRevision == VertexRevision, "Stale or inactive cloth state");
         const auto Velocities = BackendName == "xpbd" ?
             PhysicsEvaluation::GetExperimentalXpbdVelocities(*Soft, Cloth) :
             PhysicsEvaluation::GetJoltSoftBodyVelocities(*Jolt.Rigid, *Soft, Cloth);
         Require(Velocities && Velocities->size() == State->Positions->size(),
             "Poststep physical velocities missing");
+        PhysicsMs.push_back(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - PhysicsStart).count());
         Json Record = {{"Frame", Frame}, {"TimeSeconds", EndTime},
             {"Positions", Json::array()}, {"Velocities", Json::array()},
             {"ColliderStates", Json::array()}};
@@ -321,11 +346,19 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
     std::cout << "[Physics:ContactQualification] case=" << Config.at("CaseId")
         << " backend=" << BackendName << " frames=" << Frames << " vertices=" << N*N
         << " result=TRACE_WRITTEN impulse_work=INCOMPLETE\n";
+    std::sort(PhysicsMs.begin(), PhysicsMs.end());
+    const auto Percentile = [&](double Fraction) { return PhysicsMs[std::size_t(
+        std::ceil(Fraction * PhysicsMs.size()) - 1)]; };
+    std::cout << "[Physics:ContactQualification] diagnostic_physics_ms_p50=" << Percentile(0.50)
+        << " p95=" << Percentile(0.95) << " p99=" << Percentile(0.99)
+        << " excludes_json=1 quality_capture_not_ranked=1\n";
     return 0;
 }
 } // namespace
 
 int main(int Count, char **Arguments) {
+    PhysicsEvaluation::SuppressErrorDialogs();
+    PhysicsEvaluation::InstallPhysicsAllocators();
     try {
         if (Count != 3) throw std::invalid_argument("Usage: PhysicsJoltContactQualification Case.json OutputDirectory");
         return Run(Arguments[1], Arguments[2]);
