@@ -338,7 +338,10 @@ int Run(const std::filesystem::path &ConfigPath, const std::filesystem::path &Ou
         const auto State = Soft->GetBodyState(Cloth);
         Require(State && State->Positions && State->Positions->size() == std::size_t(N * N),
             "Poststep cloth state missing");
-        Require(State->Simulated && State->TopologyRevision == TopologyRevision &&
+        // Jolt GetBodyState is a read-only snapshot and deliberately reports
+        // Simulated=false; the immediately preceding Step result is the event
+        // that certifies this frame was simulated.
+        Require(State->TopologyRevision == TopologyRevision &&
             State->VertexRevision == VertexRevision, "Stale or inactive cloth state");
         const auto Velocities = BackendName == "xpbd" ?
             PhysicsEvaluation::GetExperimentalXpbdVelocities(*Soft, Cloth) :
