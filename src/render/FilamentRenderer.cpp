@@ -40,7 +40,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -225,6 +224,7 @@ namespace gargantuan {
 			std::array<std::uint32_t, 7> Factors{};
 			std::optional<RenderTextureIdentity> BaseColor;
 			std::optional<RenderTextureIdentity> Normal;
+			std::optional<RenderTextureIdentity> MetallicRoughness;
 			RenderOpacityMode Opacity = RenderOpacityMode::Opaque;
 			bool DoubleSided = false;
 			friend bool operator==(const MaterialKey &, const MaterialKey &) = default;
@@ -239,6 +239,7 @@ namespace gargantuan {
 				for (const auto Value : Key.Factors) Append(Value);
 				Append(Key.BaseColor ? RenderTextureIdentityHash{}(*Key.BaseColor) : 0u);
 				Append(Key.Normal ? RenderTextureIdentityHash{}(*Key.Normal) : 0u);
+				Append(Key.MetallicRoughness ? RenderTextureIdentityHash{}(*Key.MetallicRoughness) : 0u);
 				Append(static_cast<std::size_t>(Key.Opacity));
 				Append(Key.DoubleSided);
 				return Result;
@@ -247,15 +248,19 @@ namespace gargantuan {
 
 		MaterialKey MakeMaterialKey(const RenderMaterialState &Material) {
 			const auto &Color = Material.BaseColorFactor;
+			const bool PhysicallyBased = Material.ShadingModel == RenderShadingModel::MetallicRoughness;
 			return {{
 				std::bit_cast<std::uint32_t>(Color.r),
 				std::bit_cast<std::uint32_t>(Color.g),
 				std::bit_cast<std::uint32_t>(Color.b),
 				std::bit_cast<std::uint32_t>(Color.a),
-				std::bit_cast<std::uint32_t>(Material.Metallic),
-				std::bit_cast<std::uint32_t>(Material.Roughness),
+				std::bit_cast<std::uint32_t>(PhysicallyBased ? Material.Metallic : 0.0f),
+				std::bit_cast<std::uint32_t>(PhysicallyBased ? Material.Roughness : 1.0f),
 				std::bit_cast<std::uint32_t>(Material.AlphaCutoff),
-			}, Material.BaseColorTexture, Material.NormalTexture, Material.OpacityMode, Material.DoubleSided};
+			}, Material.BaseColorTexture,
+				PhysicallyBased ? Material.NormalTexture : std::nullopt,
+				PhysicallyBased ? Material.MetallicRoughnessTexture : std::nullopt,
+				Material.OpacityMode, Material.DoubleSided};
 		}
 
 		std::uint32_t CheckedViewportDimension(float Value) {
@@ -556,13 +561,17 @@ namespace gargantuan {
 			if (!Instance) throw std::runtime_error("Filament could not create a material instance");
 			try {
 				const auto *Color = Value.BaseColorTexture ? Textures.at(*Value.BaseColorTexture).Color : WhiteTexture.Color;
-				const auto *Normal = Value.NormalTexture ? Textures.at(*Value.NormalTexture).Linear : WhiteTexture.Linear;
+				const auto *Normal = Key.Normal ? Textures.at(*Key.Normal).Linear : WhiteTexture.Linear;
+				const auto *Packed = Key.MetallicRoughness ? Textures.at(*Key.MetallicRoughness).Linear : WhiteTexture.Linear;
+				const bool PhysicallyBased = Value.ShadingModel == RenderShadingModel::MetallicRoughness;
 				Instance->setParameter("baseColorFactor", ToFilament(Value.BaseColorFactor));
-				Instance->setParameter("metallicFactor", Value.Metallic);
-				Instance->setParameter("roughnessFactor", Value.Roughness);
+				Instance->setParameter("metallicFactor", PhysicallyBased ? Value.Metallic : 0.0f);
+				Instance->setParameter("roughnessFactor", PhysicallyBased ? Value.Roughness : 1.0f);
 				Instance->setParameter("baseColorMap", Color, Sampler);
 				Instance->setParameter("normalMap", Normal, Sampler);
-				Instance->setParameter("hasNormalMap", Value.NormalTexture.has_value());
+				Instance->setParameter("metallicRoughnessMap", Packed, Sampler);
+				Instance->setParameter("hasNormalMap", Key.Normal.has_value());
+				Instance->setParameter("hasMetallicRoughnessMap", Key.MetallicRoughness.has_value());
 				Instance->setDoubleSided(Value.DoubleSided);
 				Instance->setCullingMode(Value.DoubleSided ? filament::MaterialInstance::CullingMode::NONE
 					: filament::MaterialInstance::CullingMode::BACK);

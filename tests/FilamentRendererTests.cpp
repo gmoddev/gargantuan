@@ -139,6 +139,9 @@ namespace {
 		const RenderBounds Bounds{{-1.0f, -1.0f, 0.0f}, {1.0f, 1.0f, 0.0f}};
 		RenderMaterialState Material;
 		Material.BaseColorTexture = Texture;
+		Material.MetallicRoughnessTexture = Texture;
+		Material.ShadingModel = RenderShadingModel::MetallicRoughness;
+		Material.Metallic = 0.2f;
 		Material.Roughness = 0.35f;
 		Material.DoubleSided = true;
 		auto Initial = MakePublication(1, 0);

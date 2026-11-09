@@ -13,8 +13,10 @@ material {
         { type : float, name : metallicFactor },
         { type : float, name : roughnessFactor },
         { type : bool, name : hasNormalMap },
+        { type : bool, name : hasMetallicRoughnessMap },
         { type : sampler2d, name : baseColorMap },
-        { type : sampler2d, name : normalMap }
+        { type : sampler2d, name : normalMap },
+        { type : sampler2d, name : metallicRoughnessMap }
     ],
     culling : back,
     colorWrite : true,
@@ -30,7 +32,9 @@ fragment {
         prepareMaterial(material);
         material.baseColor = materialParams.baseColorFactor * texture(materialParams_baseColorMap, getUV0());
         @FILAMENT_PREMULTIPLY@
-        material.roughness = materialParams.roughnessFactor;
-        material.metallic = materialParams.metallicFactor;
+        vec2 packedFactors = materialParams.hasMetallicRoughnessMap
+            ? texture(materialParams_metallicRoughnessMap, getUV0()).gb : vec2(1.0);
+        material.roughness = materialParams.roughnessFactor * packedFactors.x;
+        material.metallic = materialParams.metallicFactor * packedFactors.y;
     }
 }
