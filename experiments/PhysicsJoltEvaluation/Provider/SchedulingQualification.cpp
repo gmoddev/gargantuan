@@ -24,11 +24,14 @@ namespace {
         return Description;
     }
     PhysicsStepResult Step(PhysicsEvaluation::UnifiedJoltProvider &Provider,
-                           std::uint32_t Updates, std::size_t SoftBodies) {
-        auto Result = Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval, .SubStepCount = 16});
+                           std::uint32_t Updates, std::size_t SoftBodies,
+                           int RequestedCollisionSteps = 4) {
+        auto Result = Provider.Rigid->Step({.DeltaTime = SoftBodyStepInterval,
+            .SubStepCount = RequestedCollisionSteps});
         const auto Schedule = GetJoltStepSchedule(*Provider.Rigid);
         Require(Schedule && Schedule->WorldUpdates == Updates &&
-            Schedule->CollisionStepsPerUpdate == (Updates == 1 ? 4u : 8u) &&
+            Schedule->CollisionStepsPerUpdate ==
+                (Updates == 1 ? std::uint32_t(std::max(4, RequestedCollisionSteps)) : 8u) &&
             Schedule->EnabledSoftBodies == SoftBodies, "wrong native step schedule");
         (void)Provider.Soft->Step({.DeltaTime = SoftBodyStepInterval, .Gravity = {0, 0, 0}});
         return Result;
@@ -53,20 +56,24 @@ namespace {
 
         auto Floor = Ball({0, -0.8f, 0});
         Floor.Anchored = true;
+        Floor.CanTouch = false;
         const auto FloorId = Provider.Rigid->CreateBody(Floor);
-        const auto Moving = Provider.Rigid->CreateBody(Ball({0, 0, 0}));
+        auto MovingDescription = Ball({0, 0, 0});
+        MovingDescription.CanTouch = false;
+        const auto Moving = Provider.Rigid->CreateBody(MovingDescription);
         Require(FloorId.IsValid() && Moving.IsValid(), "rigid admission failed");
-        auto First = Step(Provider, 1, 0);
-        Require(std::ranges::any_of(First.Contacts, [](const auto &Contact) {
-            return Contact.Phase == PhysicsContactPhase::Began;
-        }), "fast rigid step lost contact begin");
+        Step(Provider, 1, 0);
+        const auto FirstPairs = PhysicsEvaluation::GetJoltNativeRigidContactPairCount(*Provider.Rigid);
+        Require(FirstPairs && *FirstPairs > 0,
+            "fast rigid step lost native physical contact");
+        Step(Provider, 1, 0, 12);
         Floor.Transform.Position.y = -10.0f;
         Require(Provider.Rigid->UpdateBody(FloorId, Floor).Succeeded(),
             "moving rigid floor failed");
-        const auto Separated = Step(Provider, 1, 0);
-        Require(std::ranges::any_of(Separated.Contacts, [](const auto &Contact) {
-            return Contact.Phase == PhysicsContactPhase::Ended;
-        }), "fast rigid step retained moved collider contact");
+        Step(Provider, 1, 0);
+        const auto SeparatedPairs = PhysicsEvaluation::GetJoltNativeRigidContactPairCount(*Provider.Rigid);
+        Require(SeparatedPairs && *SeparatedPairs == 0,
+            "fast rigid step retained moved collider contact");
 
         auto Disabled = Cloth(false);
         const auto Fabric = Provider.Soft->CreateBody(Disabled);
@@ -127,17 +134,59 @@ namespace {
             Ended |= Contact.Phase == PhysicsContactPhase::Ended;
         }
         Require(Began && Ended, "transient sensor contact lost across half-updates");
+        auto Invalid = Sensor;
+        Invalid.Shape.Size.x = 0;
+        Require(!Provider.Rigid->UpdateBody(SensorId, Invalid).Succeeded(),
+            "invalid sensor replacement accepted");
+        Step(Provider, 2, 0);
         Sensor.CanCollide = true;
         Require(Provider.Rigid->UpdateBody(SensorId, Sensor).Succeeded(),
             "sensor to solid update failed");
+        Step(Provider, 2, 0);
+        Sensor.CanTouch = false;
+        VisitorDescription.CanTouch = false;
+        Require(Provider.Rigid->UpdateBody(SensorId, Sensor).Succeeded() &&
+            Provider.Rigid->UpdateBody(Visitor, VisitorDescription).Succeeded(),
+            "touch disable failed");
         Step(Provider, 1, 0);
         Sensor.CanCollide = false;
+        Sensor.CanTouch = true;
         Require(Provider.Rigid->UpdateBody(SensorId, Sensor).Succeeded(),
             "solid to sensor update failed");
         Step(Provider, 2, 0);
         Require(Provider.Rigid->DestroyBody(SensorId).Succeeded(), "sensor retirement failed");
         Step(Provider, 1, 0);
+        Require(!Provider.Rigid->UpdateBody(SensorId, Sensor).Succeeded(),
+            "stale sensor identity updated a retired slot");
+        Step(Provider, 1, 0);
         Require(Provider.Rigid->DestroyBody(Visitor).Succeeded(), "visitor retirement failed");
+    }
+    void SolidTouchGuardsFastCrossing() {
+        PhysicsWorldConfig Config;
+        Config.Gravity = {};
+        auto Provider = CreateUnifiedJoltProvider(Config);
+        PhysicsBodyDesc Wall;
+        Wall.Anchored = true;
+        Wall.Shape.Size = {1, 1, 1};
+        const auto WallId = Provider.Rigid->CreateBody(Wall);
+        auto VisitorDescription = Ball({-1, 0, 0});
+        VisitorDescription.Shape.Size = glm::vec3(0.2f);
+        const auto Visitor = Provider.Rigid->CreateBody(VisitorDescription);
+        Require(WallId.IsValid() && Visitor.IsValid(), "solid touch fixture admission failed");
+        Require(Provider.Rigid->SetLinearVelocity(Visitor, {120, 0, 0}).Succeeded(),
+            "solid touch velocity failed");
+        const auto ContactStep = Step(Provider, 2, 0);
+        Require(std::ranges::any_of(ContactStep.Contacts, [&](const auto &Contact) {
+            return Contact.Phase == PhysicsContactPhase::Began &&
+                ((Contact.BodyA == WallId && Contact.BodyB == Visitor) ||
+                 (Contact.BodyA == Visitor && Contact.BodyB == WallId));
+        }), "solid crossing lost neutral touch begin");
+        Wall.CanTouch = false;
+        VisitorDescription.CanTouch = false;
+        Require(Provider.Rigid->UpdateBody(WallId, Wall).Succeeded() &&
+            Provider.Rigid->UpdateBody(Visitor, VisitorDescription).Succeeded(),
+            "solid touch disable failed");
+        Step(Provider, 1, 0);
     }
 }
 
@@ -147,6 +196,7 @@ int main() {
     try {
         MembershipAndRigidContact();
         SensorGuardsTransientContact();
+        SolidTouchGuardsFastCrossing();
         std::cout << "[Physics:JoltScheduling] qualification passed\n";
         return 0;
     } catch (const std::exception &Error) {

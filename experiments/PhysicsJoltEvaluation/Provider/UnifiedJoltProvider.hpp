@@ -86,7 +86,8 @@ namespace PhysicsEvaluation {
     [[nodiscard]] JoltWorldAdmissionProfile GetJoltWorldAdmissionProfile();
 #endif
     // Last completed unified Step. The fast rigid cadence applies only while
-    // no enabled soft body or live rigid-soft attachment can exchange impulses.
+    // no enabled soft body or live rigid-soft attachment can exchange impulses,
+    // and no touch-enabled rigid can require a half-frame neutral event.
     struct JoltStepSchedule {
         std::uint32_t WorldUpdates = 0;
         std::uint32_t CollisionStepsPerUpdate = 0;
@@ -98,6 +99,9 @@ namespace PhysicsEvaluation {
     // construction leaves the fast schedule enabled.
     [[nodiscard]] bool SetJoltRigidFastScheduleEnabled(
         gargantuan::IPhysicsBackend &Rigid, bool Enabled);
+    // Native active manifold pairs, independent of neutral CanTouch signals.
+    [[nodiscard]] std::optional<std::size_t> GetJoltNativeRigidContactPairCount(
+        const gargantuan::IPhysicsBackend &Rigid);
 
     // Cumulative vertex contacts reported by Jolt's soft-rigid manifold for
     // this live neutral-ID pair. Enable capture before Step in private fixtures;

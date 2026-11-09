@@ -591,6 +591,7 @@ namespace {
             return UnifiedMode ? LastStepSchedule : std::nullopt;
         }
         void SetRigidFastScheduleEnabled(bool Enabled) { RigidFastScheduleEnabled = Enabled; }
+        std::size_t NativeRigidContactPairCount() const { return Contacts.CurrentPairs().size(); }
         void SetSoftContactCapture(bool Enabled) {
             // Private fixture setup only: caller must not change listeners during Step.
             if (Enabled) SoftContacts.Clear();
@@ -687,7 +688,7 @@ namespace {
             Slot.Description = Description;
             Slot.PendingForce = {};
             Slot.PendingTorque = {};
-            if (!Description.CanCollide && Description.CanTouch) ++SensorBodies;
+            if (Description.CanTouch) ++TouchBodies;
             AdmitMesh(Slot);
             PhysicsBodyId Id{Index, Slot.Generation};
             NativeMap.emplace(Native.GetIndexAndSequenceNumber(), Id);
@@ -759,8 +760,8 @@ namespace {
                 Slot->Native = Replacement;
                 ReleaseMesh(*Slot);
                 Slot->Shape = NewShape;
-                if (!Slot->Description.CanCollide && Slot->Description.CanTouch) --SensorBodies;
-                if (!Description.CanCollide && Description.CanTouch) ++SensorBodies;
+                if (Slot->Description.CanTouch) --TouchBodies;
+                if (Description.CanTouch) ++TouchBodies;
                 Slot->Description = Description;
                 AdmitMesh(*Slot);
                 if (Description.Anchored && (Description.CanCollide || Description.CanTouch))
@@ -816,8 +817,8 @@ namespace {
                 ReleaseMesh(*Slot);
                 Slot->Shape = NewShape;
             }
-            if (!Slot->Description.CanCollide && Slot->Description.CanTouch) --SensorBodies;
-            if (!Description.CanCollide && Description.CanTouch) ++SensorBodies;
+            if (Slot->Description.CanTouch) --TouchBodies;
+            if (Description.CanTouch) ++TouchBodies;
             Slot->Description = Description;
             if (ShapeChanged) AdmitMesh(*Slot);
             if (ContactGeometryChanged && Description.Anchored &&
@@ -858,7 +859,7 @@ namespace {
             Slot->Shape = nullptr;
             Slot->PendingForce = {};
             Slot->PendingTorque = {};
-            if (!Slot->Description.CanCollide && Slot->Description.CanTouch) --SensorBodies;
+            if (Slot->Description.CanTouch) --TouchBodies;
             Slot->Live = false;
             if (Slot->Generation == std::numeric_limits<std::uint32_t>::max()) Slot->Retired = true;
             else ++Slot->Generation;
@@ -1294,7 +1295,7 @@ namespace {
                 PreviousNeutralContacts = std::move(CurrentNeutral);
             };
             if (UnifiedMode) {
-                bool Coupled = !RigidFastScheduleEnabled || EnabledSoftBodies != 0 || SensorBodies != 0;
+                bool Coupled = !RigidFastScheduleEnabled || EnabledSoftBodies != 0 || TouchBodies != 0;
 #ifdef PHYSICS_GANTRIA_ATTACHMENTS
                 Coupled |= !Attachments.empty();
 #endif
@@ -1304,11 +1305,12 @@ namespace {
                     UpdateWorld(Config.DeltaTime * 0.5f, 8);
                     CollectContacts();
                 } else {
-                    UpdateWorld(Config.DeltaTime, 4);
+                    UpdateWorld(Config.DeltaTime, std::max(4, Config.SubStepCount));
                     CollectContacts();
                 }
                 LastStepSchedule = JoltStepSchedule{
-                    Coupled ? 2u : 1u, Coupled ? 8u : 4u, EnabledSoftBodies};
+                    Coupled ? 2u : 1u, Coupled ? 8u : std::uint32_t(std::max(4, Config.SubStepCount)),
+                    EnabledSoftBodies};
             } else {
                 UpdateWorld(Config.DeltaTime, Config.SubStepCount);
                 CollectContacts();
@@ -1646,7 +1648,7 @@ namespace {
         std::set<std::pair<std::uint32_t, std::uint32_t>> ContactInvalidatedPairs;
         mutable std::map<std::tuple<int, float, float, float, float, float>, JPH::ShapeRefC> QueryShapes;
         std::size_t ActiveConstraints = 0;
-        std::size_t SensorBodies = 0;
+        std::size_t TouchBodies = 0;
         std::size_t EnabledSoftBodies = 0;
         std::uint64_t StepSequence = 0;
         bool Valid = false;
@@ -2441,6 +2443,11 @@ bool SetJoltRigidFastScheduleEnabled(gargantuan::IPhysicsBackend &Rigid, bool En
     if (!Jolt) return false;
     Jolt->SetRigidFastScheduleEnabled(Enabled);
     return true;
+}
+std::optional<std::size_t> GetJoltNativeRigidContactPairCount(
+    const gargantuan::IPhysicsBackend &Rigid) {
+    const auto *Jolt = dynamic_cast<const RigidJoltBackend *>(&Rigid);
+    return Jolt ? std::optional<std::size_t>(Jolt->NativeRigidContactPairCount()) : std::nullopt;
 }
 std::uint64_t GetJoltSoftRigidContactVertexCount(
     const gargantuan::IPhysicsBackend &Rigid, const gargantuan::ISoftBodyBackend &Soft,

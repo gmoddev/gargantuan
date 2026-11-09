@@ -3,17 +3,24 @@
 ## Single-world zero-soft cadence
 
 The experimental unified provider has a bounded dynamic fast path within its
-single authoritative Jolt world. At each rigid `Step`, it uses U1/C4 if no
-enabled soft body, sensor, or live rigid-soft attachment can require the
-coupled U2/C8 cadence. An enabled soft admission or reenable switches to
+single authoritative Jolt world. At each rigid `Step`, it uses one update
+with at least four requested collision steps only if no enabled soft body,
+touch-enabled rigid, or live rigid-soft attachment can require the coupled
+U2/C8 cadence. An enabled soft admission or reenable switches to
 U2/C8 before its first physical step; successful disable or retirement can
-restore U1/C4 on the next step. Failed soft updates leave membership
+restore the rigid cadence on the next step. Failed soft updates leave membership
 unchanged. All rigid bodies, constraints, contacts, IDs, and moving colliders
-stay in the same native world at every cadence. The sensor guard preserves
-the half-frame neutral begin/end observation of transient sensor contacts.
+stay in the same native world at every cadence. The touch guard preserves
+the half-frame neutral begin/end observation of transient touch contacts,
+including sensors and solid pairs.
 The private `SchedulingQualification` checks membership transitions and the
-sensor refusal; `SchedulingBenchmark` compares U1/C4 with a same-binary
-forced-U2/C8 control for a gravity-loaded 128-rigid contact scene. This fast
+touch refusal; `SchedulingBenchmark` compares U1/C4 with a same-binary
+forced-U2/C8 control for a gravity-loaded 128-rigid contact scene whose
+rigid bodies have `CanTouch=false`. The benchmark requires native physical
+contact pairs and bounded penetration without relying on neutral events.
+The selected maintained-Jolt soft profile remains U2/C8/I5 with two retained-
+lambda sweeps (80 soft integrations per frame); the stock path remains
+U2/C8/I12 (192). This fast
 path makes no claim that active soft bodies can be partitioned or advanced
 at a lower cadence.
 

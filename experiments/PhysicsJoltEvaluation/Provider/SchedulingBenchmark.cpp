@@ -44,6 +44,7 @@ namespace {
         Description.Shape.Size = glm::vec3(0.9f);
         Description.Transform.Position = Position;
         Description.SleepEnabled = false;
+        Description.CanTouch = false;
         return Description;
     }
     double Milliseconds(Clock::time_point Start) {
@@ -65,6 +66,7 @@ int main(int Count, char **Arguments) {
             throw std::runtime_error("provider setup failed");
         PhysicsBodyDesc Floor;
         Floor.Anchored = true;
+        Floor.CanTouch = false;
         Floor.Shape.Size = {64, 1, 64};
         Floor.Transform.Position = {0, -0.5f, 0};
         if (!Provider.Rigid->CreateBody(Floor).IsValid())
@@ -81,17 +83,22 @@ int main(int Count, char **Arguments) {
         double MaximumFloorPenetration = 0;
         double MaximumPairPenetration = 0;
         bool FiniteEveryFrame = true;
-        std::size_t ContactEvents = 0;
+        std::size_t NativeContactPairFrames = 0;
+        std::size_t NativeContactPairsAcrossFrames = 0;
         std::vector<double> FrameMs;
         FrameMs.reserve(Config.Frames);
         for (int Frame = 0; Frame < Config.Frames; ++Frame) {
             const auto Start = Clock::now();
-            const auto Result = Provider.Rigid->Step({
-                .DeltaTime = SoftBodyStepInterval, .SubStepCount = 16});
+            (void)Provider.Rigid->Step({
+                .DeltaTime = SoftBodyStepInterval, .SubStepCount = 4});
             const double UpdateMs = Milliseconds(Start);
             TotalUpdateMs += UpdateMs;
             FrameMs.push_back(UpdateMs);
-            ContactEvents += Result.Contacts.size();
+            const auto NativePairs = PhysicsEvaluation::GetJoltNativeRigidContactPairCount(
+                *Provider.Rigid);
+            if (!NativePairs) throw std::runtime_error("native contact capture unavailable");
+            NativeContactPairFrames += *NativePairs > 0;
+            NativeContactPairsAcrossFrames += *NativePairs;
             const auto Schedule = PhysicsEvaluation::GetJoltStepSchedule(*Provider.Rigid);
             if (!Schedule || Schedule->WorldUpdates != (Config.Fast ? 1u : 2u) ||
                 Schedule->EnabledSoftBodies != 0)
@@ -120,14 +127,16 @@ int main(int Count, char **Arguments) {
         std::ranges::sort(FrameMs);
         const auto P95 = FrameMs[std::min(FrameMs.size() - 1,
             std::size_t(std::ceil(0.95 * FrameMs.size())) - 1)];
-        const bool QualityPass = FiniteEveryFrame && ContactEvents > 0 &&
+        const bool QualityPass = FiniteEveryFrame &&
+            NativeContactPairFrames >= std::size_t(std::max(1, Config.Frames / 4)) &&
             MaximumFloorPenetration <= 0.25 && MaximumPairPenetration <= 0.25;
         std::cout << std::setprecision(17) << "{\"Mode\":\""
             << (Config.Fast ? "fast" : "full") << "\",\"Frames\":" << Config.Frames
             << ",\"Workers\":" << Config.Workers
             << ",\"TotalUpdateMs\":" << TotalUpdateMs
             << ",\"UpdateP95Ms\":" << P95
-            << ",\"ContactEvents\":" << ContactEvents
+            << ",\"NativeContactPairFrames\":" << NativeContactPairFrames
+            << ",\"NativeContactPairsAcrossFrames\":" << NativeContactPairsAcrossFrames
             << ",\"MaximumFloorPenetration\":" << MaximumFloorPenetration
             << ",\"MaximumPairPenetration\":" << MaximumPairPenetration
             << ",\"FiniteEveryFrame\":" << (FiniteEveryFrame ? "true" : "false")
