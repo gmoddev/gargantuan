@@ -7,8 +7,9 @@ date: 2026-11-09
 # Why the driven 16K cloth fails
 
 The dominant trigger is our perfectly coplanar fixture. Jolt's contact projection
-then creates a large local edge residual. Our moving-static-body semantics make
-the result worse, but are not the sole cause. This is not evidence that the final
+then creates a large local edge residual. The moving-static-body path contributes
+to severity; its kinematic control also changes motion interpolation, so it does
+not isolate moving-surface velocity alone. This is not evidence that the final
 performance optimizations introduced the failure: the instrumented baseline is
 byte-identical to the preserved final-C driven trace, and frozen B failed too.
 
