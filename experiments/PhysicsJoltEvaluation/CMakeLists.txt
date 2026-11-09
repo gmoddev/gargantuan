@@ -171,14 +171,20 @@ target_compile_definitions(PhysicsJoltXpbdContactProbe PRIVATE
 
 # Configured, solver-independent cloth contact fixtures. Every private seam is
 # compiled only into this executable; production physics sources stay untouched.
-PhysicsEvaluationTarget(PhysicsJoltContactQualification
-    ContactXpbd/ContactQualification.cpp RigidJoltBackend.cpp
-    ContactXpbd/ExperimentalXpbdSoftBodyBackend.cpp)
-target_compile_definitions(PhysicsJoltContactQualification PRIVATE
-    PHYSICS_EVALUATION_CONTACT_QUALIFICATION=1
-    PHYSICS_EVALUATION_CONTACT_VELOCITIES=1
-    CreateSoftBodyBackend=CreateExperimentalXpbdSoftBodyBackend
-    CreateSoftBodyBackendForTesting=CreateExperimentalXpbdSoftBodyBackendForTesting)
+foreach(PHYSICS_CONTACT_SUFFIX "" Allocations)
+    PhysicsEvaluationTarget(PhysicsJoltContactQualification${PHYSICS_CONTACT_SUFFIX}
+        ContactXpbd/ContactQualification.cpp RigidJoltBackend.cpp
+        ContactXpbd/ExperimentalXpbdSoftBodyBackend.cpp)
+    target_compile_definitions(PhysicsJoltContactQualification${PHYSICS_CONTACT_SUFFIX} PRIVATE
+        PHYSICS_EVALUATION_CONTACT_QUALIFICATION=1
+        PHYSICS_EVALUATION_CONTACT_VELOCITIES=1
+        CreateSoftBodyBackend=CreateExperimentalXpbdSoftBodyBackend
+        CreateSoftBodyBackendForTesting=CreateExperimentalXpbdSoftBodyBackendForTesting)
+    if(PHYSICS_EVALUATION_NATIVE_PROFILE)
+        target_sources(PhysicsJoltContactQualification${PHYSICS_CONTACT_SUFFIX} PRIVATE
+            FinalOptimization/ProfileExit.cpp)
+    endif()
+endforeach()
 if(PHYSICS_EVALUATION_NATIVE_PROFILE)
     target_sources(PhysicsJoltProviderLongRun PRIVATE FinalOptimization/ProfileExit.cpp)
 endif()
