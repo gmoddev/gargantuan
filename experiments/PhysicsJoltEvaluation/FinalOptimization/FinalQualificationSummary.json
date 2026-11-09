@@ -1,0 +1,223 @@
+{
+  "NativeRuntime": "7e59df5fd7f3e23504f2e696e2b095bf706b26b4",
+  "PublishedNativeCheckpoint": "0fbdedcc4ccc43a7384c91709b87e4a6c4b3a1a5",
+  "FinalQualifiedEngine": "ea229c56929ad3b009667cd3a4af5071d6dca7a0",
+  "Platforms": {
+    "Windows": {
+      "NativePositives": 24,
+      "NativeRejectedControls": 2,
+      "UnifiedPairs": 45,
+      "UnifiedExtended": 3,
+      "UnifiedRejectedControls": 2,
+      "ProviderRepeats": 3,
+      "CacheRepeats": 3,
+      "ScheduleRepeats": 3,
+      "Source": {
+        "Engine": "ea229c56929ad3b009667cd3a4af5071d6dca7a0",
+        "Jolt": "7e59df5fd7f3e23504f2e696e2b095bf706b26b4",
+        "Platform": "Windows-2025Server-10.0.26100-SP0",
+        "Sanitizers": false,
+        "Attachments": true,
+        "Convergence": true,
+        "FullUpdateSleepClock": true,
+        "FinalCandidate": true,
+        "GroupBatch": 1024
+      },
+      "LargeClothChecks": [
+        {
+          "Workers": 1,
+          "Quality": {
+            "Workers": 1,
+            "Frames": 30,
+            "WarmupFrames": 10,
+            "PhysicalFrames": 40,
+            "FinalFrameIndex": 39,
+            "PeakPinErrorM": 2.3654126746208703e-07,
+            "VerifiedStateFrameHashes": 40,
+            "HashLogPass": true,
+            "FinalSoftTrajectoryHash": 12069508638256050222,
+            "PeakEdgeStrain": 0.04139610861025855,
+            "FinalEdgeStrain": 0.017081507404800522,
+            "MaximumPinErrorM": 0.0001,
+            "MaximumPeakEdgeStrain": 0.05,
+            "MaximumFinalEdgeStrain": 0.02,
+            "QualityPass": true,
+            "Source": {
+              "Engine": "ea229c56929ad3b009667cd3a4af5071d6dca7a0",
+              "Jolt": "7e59df5fd7f3e23504f2e696e2b095bf706b26b4",
+              "Platform": "Windows-2025Server-10.0.26100-SP0",
+              "Sanitizers": false,
+              "Attachments": true,
+              "Convergence": true,
+              "FullUpdateSleepClock": true,
+              "FinalCandidate": true,
+              "GroupBatch": 1024
+            }
+          },
+          "TraceSha256": "7ecea70b984742ef0aae91c67e7c52e55e440ac111f307cb0c057aa22189346a"
+        },
+        {
+          "Workers": 8,
+          "Quality": {
+            "Workers": 8,
+            "Frames": 30,
+            "WarmupFrames": 10,
+            "PhysicalFrames": 40,
+            "FinalFrameIndex": 39,
+            "PeakPinErrorM": 2.3654126746208703e-07,
+            "VerifiedStateFrameHashes": 40,
+            "HashLogPass": true,
+            "FinalSoftTrajectoryHash": 12069508638256050222,
+            "PeakEdgeStrain": 0.04139610861025855,
+            "FinalEdgeStrain": 0.017081507404800522,
+            "MaximumPinErrorM": 0.0001,
+            "MaximumPeakEdgeStrain": 0.05,
+            "MaximumFinalEdgeStrain": 0.02,
+            "QualityPass": true,
+            "Source": {
+              "Engine": "ea229c56929ad3b009667cd3a4af5071d6dca7a0",
+              "Jolt": "7e59df5fd7f3e23504f2e696e2b095bf706b26b4",
+              "Platform": "Windows-2025Server-10.0.26100-SP0",
+              "Sanitizers": false,
+              "Attachments": true,
+              "Convergence": true,
+              "FullUpdateSleepClock": true,
+              "FinalCandidate": true,
+              "GroupBatch": 1024
+            }
+          },
+          "TraceSha256": "7ecea70b984742ef0aae91c67e7c52e55e440ac111f307cb0c057aa22189346a"
+        }
+      ]
+    },
+    "Linux": {
+      "NativePositives": 24,
+      "NativeRejectedControls": 2,
+      "UnifiedPairs": 45,
+      "UnifiedExtended": 3,
+      "UnifiedRejectedControls": 2,
+      "ProviderRepeats": 3,
+      "CacheRepeats": 3,
+      "ScheduleRepeats": 3,
+      "Source": {
+        "Engine": "ea229c56929ad3b009667cd3a4af5071d6dca7a0",
+        "Jolt": "7e59df5fd7f3e23504f2e696e2b095bf706b26b4",
+        "Platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "Sanitizers": true,
+        "Attachments": true,
+        "Convergence": true,
+        "FullUpdateSleepClock": true,
+        "FinalCandidate": true,
+        "GroupBatch": 1024
+      },
+      "LargeClothChecks": [
+        {
+          "Workers": 1,
+          "Quality": {
+            "Workers": 1,
+            "Frames": 30,
+            "WarmupFrames": 10,
+            "PhysicalFrames": 40,
+            "FinalFrameIndex": 39,
+            "PeakPinErrorM": 2.3654126746208703e-07,
+            "VerifiedStateFrameHashes": 40,
+            "HashLogPass": true,
+            "FinalSoftTrajectoryHash": 12069508638256050222,
+            "PeakEdgeStrain": 0.04139610861025855,
+            "FinalEdgeStrain": 0.017081507404800522,
+            "MaximumPinErrorM": 0.0001,
+            "MaximumPeakEdgeStrain": 0.05,
+            "MaximumFinalEdgeStrain": 0.02,
+            "QualityPass": true,
+            "Source": {
+              "Engine": "ea229c56929ad3b009667cd3a4af5071d6dca7a0",
+              "Jolt": "7e59df5fd7f3e23504f2e696e2b095bf706b26b4",
+              "Platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+              "Sanitizers": true,
+              "Attachments": true,
+              "Convergence": true,
+              "FullUpdateSleepClock": true,
+              "FinalCandidate": true,
+              "GroupBatch": 1024
+            }
+          },
+          "TraceSha256": "7ecea70b984742ef0aae91c67e7c52e55e440ac111f307cb0c057aa22189346a"
+        },
+        {
+          "Workers": 8,
+          "Quality": {
+            "Workers": 8,
+            "Frames": 30,
+            "WarmupFrames": 10,
+            "PhysicalFrames": 40,
+            "FinalFrameIndex": 39,
+            "PeakPinErrorM": 2.3654126746208703e-07,
+            "VerifiedStateFrameHashes": 40,
+            "HashLogPass": true,
+            "FinalSoftTrajectoryHash": 12069508638256050222,
+            "PeakEdgeStrain": 0.04139610861025855,
+            "FinalEdgeStrain": 0.017081507404800522,
+            "MaximumPinErrorM": 0.0001,
+            "MaximumPeakEdgeStrain": 0.05,
+            "MaximumFinalEdgeStrain": 0.02,
+            "QualityPass": true,
+            "Source": {
+              "Engine": "ea229c56929ad3b009667cd3a4af5071d6dca7a0",
+              "Jolt": "7e59df5fd7f3e23504f2e696e2b095bf706b26b4",
+              "Platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+              "Sanitizers": true,
+              "Attachments": true,
+              "Convergence": true,
+              "FullUpdateSleepClock": true,
+              "FinalCandidate": true,
+              "GroupBatch": 1024
+            }
+          },
+          "TraceSha256": "7ecea70b984742ef0aae91c67e7c52e55e440ac111f307cb0c057aa22189346a"
+        }
+      ]
+    }
+  },
+  "NativeUnits": {
+    "Windows": {
+      "Source": {
+        "Source": "0fbdedcc4ccc43a7384c91709b87e4a6c4b3a1a5",
+        "UpstreamBase": "e77f175595e64cb44218cc9d9d56fc365ad0e36a",
+        "Platform": "Windows-2025Server-10.0.26100-SP0",
+        "Mode": "Release",
+        "Utc": "2026-11-09T08:20:31.600322+00:00"
+      },
+      "AllCommandsPass": true
+    },
+    "Linux": {
+      "Source": {
+        "Source": "0fbdedcc4ccc43a7384c91709b87e4a6c4b3a1a5",
+        "UpstreamBase": "e77f175595e64cb44218cc9d9d56fc365ad0e36a",
+        "Platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "Mode": "Release",
+        "Utc": "2026-11-09T08:20:19.857846+00:00"
+      },
+      "AllCommandsPass": true
+    },
+    "Sanitizers": {
+      "Source": {
+        "Source": "0fbdedcc4ccc43a7384c91709b87e4a6c4b3a1a5",
+        "UpstreamBase": "e77f175595e64cb44218cc9d9d56fc365ad0e36a",
+        "Platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "Mode": "Sanitizers",
+        "Utc": "2026-11-09T08:20:20.037899+00:00"
+      },
+      "AllCommandsPass": true
+    }
+  },
+  "AllFourCrossPlatformWorkerTracesByteIdentical": true,
+  "CrossPlatformTraceSha256": "7ecea70b984742ef0aae91c67e7c52e55e440ac111f307cb0c057aa22189346a",
+  "PublishedRuntimeTestBuildTreesEqualQualifiedNative": true,
+  "Worker": {
+    "Generation": 44,
+    "ReleasedUtc": "2026-11-09T07:38:07.648845+00:00",
+    "IdleAtRelease": true,
+    "PrivateTokenDeleted": true
+  },
+  "AllRequiredChecksPass": true
+}

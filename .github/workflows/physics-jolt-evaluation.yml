@@ -59,7 +59,12 @@ concurrency:
 
 jobs:
   linux-release-comparison:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only && !inputs.unified_screen_only && !inputs.unified_qualification_only && !inputs.schedule_energy_only && !inputs.schedule_followup_only)
+    # This maintained-fork branch has exact-source foundation, convergence,
+    # selective scheduling and Engine-provider gates in separate workflows.
+    # The historical stock-Jolt matrix remains available by manual dispatch.
+    if: >-
+      (github.event_name != 'pull_request' || github.head_ref != 'experiment/jolt-optimized-foundation-20261108') &&
+      (github.event_name != 'workflow_dispatch' || (!inputs.s1_diagnostic_only && !inputs.s1_followup_only && !inputs.projection_causal_only && !inputs.solver_resolution_only && !inputs.solver_qualification_only && !inputs.unified_screen_only && !inputs.unified_qualification_only && !inputs.schedule_energy_only && !inputs.schedule_followup_only))
     name: Ubuntu Release / experimental quality and timing
     runs-on: ubuntu-24.04
     timeout-minutes: 90

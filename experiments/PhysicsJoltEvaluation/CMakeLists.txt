@@ -1,5 +1,28 @@
 set(PHYSICS_EVALUATION_JOLT_ROOT "" CACHE PATH "Verified Jolt v5.6.0 checkout")
-set(PHYSICS_EVALUATION_JOLT_COMMIT "e77f175595e64cb44218cc9d9d56fc365ad0e36a")
+set(PHYSICS_EVALUATION_JOLT_COMMIT "e77f175595e64cb44218cc9d9d56fc365ad0e36a" CACHE STRING "Exact independently qualified Jolt source commit")
+option(PHYSICS_EVALUATION_GANTRIA_NUMERICS "Compile explicit maintained Jolt API integration" OFF)
+option(PHYSICS_EVALUATION_GANTRIA_ATTACHMENTS "Compile isolated reciprocal attachment helper integration" OFF)
+option(PHYSICS_EVALUATION_GANTRIA_CONVERGENCE "Compile candidate 80-integration retained-lambda provider" OFF)
+option(PHYSICS_EVALUATION_GANTRIA_SLEEP_FIX "Compile opt-in elapsed-time sleep clock integration" OFF)
+option(PHYSICS_EVALUATION_NATIVE_PROFILE "Instrument native Jolt scopes for diagnostic runs only" OFF)
+option(PHYSICS_EVALUATION_GANTRIA_GROUPING "Use optional maintained Jolt grouping API" OFF)
+set(PHYSICS_EVALUATION_LARGE_CLOTH_GROUP_BATCH "256" CACHE STRING "Experimental >=16K cloth vertex grouping size")
+set_property(CACHE PHYSICS_EVALUATION_LARGE_CLOTH_GROUP_BATCH PROPERTY STRINGS 128 256 512 1024)
+if(NOT PHYSICS_EVALUATION_LARGE_CLOTH_GROUP_BATCH MATCHES "^(128|256|512|1024)$")
+    message(FATAL_ERROR "[Physics:Evaluation] Unsupported grouping size")
+endif()
+if(NOT PHYSICS_EVALUATION_GANTRIA_GROUPING AND NOT PHYSICS_EVALUATION_LARGE_CLOTH_GROUP_BATCH STREQUAL "256")
+    message(FATAL_ERROR "[Physics:Evaluation] Nondefault grouping requires maintained grouping API")
+endif()
+if(PHYSICS_EVALUATION_GANTRIA_ATTACHMENTS AND NOT PHYSICS_EVALUATION_GANTRIA_NUMERICS)
+    message(FATAL_ERROR "[Physics:Evaluation] Attachment qualification requires maintained numerics")
+endif()
+if(PHYSICS_EVALUATION_GANTRIA_CONVERGENCE AND NOT PHYSICS_EVALUATION_GANTRIA_NUMERICS)
+    message(FATAL_ERROR "[Physics:Evaluation] Convergence qualification requires maintained numerics")
+endif()
+if(PHYSICS_EVALUATION_GANTRIA_SLEEP_FIX AND NOT PHYSICS_EVALUATION_GANTRIA_NUMERICS)
+    message(FATAL_ERROR "[Physics:Evaluation] Sleep clock qualification requires maintained numerics")
+endif()
 if(NOT EXISTS "${PHYSICS_EVALUATION_JOLT_ROOT}/Jolt/Jolt.h")
     message(FATAL_ERROR "[Physics:Evaluation] Supply PHYSICS_EVALUATION_JOLT_ROOT at the pinned checkout")
 endif()
@@ -47,6 +70,12 @@ foreach(PHYSICS_EVALUATION_FEATURE TARGET_UNIT_TESTS TARGET_HELLO_WORLD TARGET_P
     set(${PHYSICS_EVALUATION_FEATURE} OFF CACHE BOOL "" FORCE)
 endforeach()
 set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)
+if(PHYSICS_EVALUATION_NATIVE_PROFILE)
+    set(PROFILER_IN_DEBUG_AND_RELEASE ON CACHE BOOL "" FORCE)
+    set(JPH_USE_EXTERNAL_PROFILE ON CACHE BOOL "" FORCE)
+else()
+    set(JPH_USE_EXTERNAL_PROFILE OFF CACHE BOOL "" FORCE)
+endif()
 if(CMAKE_MSVC_RUNTIME_LIBRARY AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL")
     set(USE_STATIC_MSVC_RUNTIME_LIBRARY ON CACHE BOOL "" FORCE)
 else()
@@ -58,6 +87,26 @@ function(PhysicsEvaluationTarget Target)
     add_executable(${Target} ${ARGN} ExperimentSupport.cpp)
     target_link_libraries(${Target} PRIVATE gargantuan_core Jolt nlohmann_json)
     target_compile_features(${Target} PRIVATE cxx_std_23)
+    if(PHYSICS_EVALUATION_NATIVE_PROFILE)
+        target_sources(${Target} PRIVATE Optimization/ExternalProfile.cpp)
+        target_compile_definitions(${Target} PRIVATE PHYSICS_EVALUATION_NATIVE_PROFILE=1)
+    endif()
+    if(PHYSICS_EVALUATION_GANTRIA_NUMERICS)
+        target_compile_definitions(${Target} PRIVATE PHYSICS_GANTRIA_JOLT=1)
+    endif()
+    if(PHYSICS_EVALUATION_GANTRIA_ATTACHMENTS)
+        target_compile_definitions(${Target} PRIVATE PHYSICS_GANTRIA_ATTACHMENTS=1)
+    endif()
+    if(PHYSICS_EVALUATION_GANTRIA_CONVERGENCE)
+        target_compile_definitions(${Target} PRIVATE PHYSICS_GANTRIA_CONVERGENCE=1)
+    endif()
+    if(PHYSICS_EVALUATION_GANTRIA_SLEEP_FIX)
+        target_compile_definitions(${Target} PRIVATE PHYSICS_GANTRIA_SLEEP_FIX=1)
+    endif()
+    if(PHYSICS_EVALUATION_GANTRIA_GROUPING)
+        target_compile_definitions(${Target} PRIVATE PHYSICS_GANTRIA_GROUPING=1
+            PHYSICS_GANTRIA_LARGE_CLOTH_GROUP_BATCH=${PHYSICS_EVALUATION_LARGE_CLOTH_GROUP_BATCH})
+    endif()
     if(WIN32)
         target_link_libraries(${Target} PRIVATE psapi)
         add_custom_command(TARGET ${Target} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -78,3 +127,36 @@ endforeach()
 
 PhysicsEvaluationTarget(PhysicsJoltXpbdCouplingDiagnostic XpbdCouplingDiagnostic.cpp XpbdDiagnosticBackend.cpp)
 PhysicsEvaluationTarget(PhysicsJoltXpbdCouplingDiagnosticAllocations XpbdCouplingDiagnostic.cpp XpbdDiagnosticBackend.cpp)
+
+# Production factories and defaults stay in gargantuan_core. Only this isolated
+# executable explicitly constructs the shared-world experimental provider.
+PhysicsEvaluationTarget(PhysicsJoltProviderQualification
+    Provider/ProviderQualification.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltProviderBenchmark
+    Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltProviderBenchmarkAllocations
+    Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltEngineBenchmark
+    Provider/EngineBenchmark.cpp RigidJoltBackend.cpp)
+
+# Diagnostic targets keep scope/allocation instrumentation outside timing rankings.
+PhysicsEvaluationTarget(PhysicsJoltAdmissionBenchmark
+    Provider/AdmissionBenchmark.cpp RigidJoltBackend.cpp)
+target_compile_definitions(PhysicsJoltAdmissionBenchmark PRIVATE
+    PHYSICS_EVALUATION_ADMISSION_PROFILE=1 PHYSICS_EVALUATION_TRACK_ALLOCATIONS=1)
+PhysicsEvaluationTarget(PhysicsJoltAdmissionTimingBenchmark
+    Provider/AdmissionBenchmark.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltAdmissionCacheQualification
+    Provider/AdmissionCacheQualification.cpp RigidJoltBackend.cpp)
+target_compile_definitions(PhysicsJoltAdmissionCacheQualification PRIVATE PHYSICS_EVALUATION_ADMISSION_PROFILE=1)
+PhysicsEvaluationTarget(PhysicsJoltSchedulingQualification
+    Provider/SchedulingQualification.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltSchedulingBenchmark
+    Provider/SchedulingBenchmark.cpp RigidJoltBackend.cpp)
+PhysicsEvaluationTarget(PhysicsJoltProviderLongRun
+    Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp)
+target_compile_definitions(PhysicsJoltProviderLongRun PRIVATE PHYSICS_EVALUATION_LONG_RUN=1)
+if(PHYSICS_EVALUATION_NATIVE_PROFILE)
+    PhysicsEvaluationTarget(PhysicsJoltProviderProfile
+        Provider/ProviderBenchmark.cpp RigidJoltBackend.cpp FinalOptimization/ProfileExit.cpp)
+endif()

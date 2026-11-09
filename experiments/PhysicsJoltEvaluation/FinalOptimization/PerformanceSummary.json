@@ -1,0 +1,119 @@
+{
+  "Schema": "FinalPerformanceReduction1",
+  "Inputs": [
+    "B-Provider-20261109T060849",
+    "B-Engine-20261109T060849",
+    "C-Provider-20261109T070737",
+    "C-Engine-20261109T070737",
+    "Group512-20261109T064817",
+    "Group1024-20261109T065100",
+    "Lazy-Trial-20261109T065618",
+    "Lazy-Rubber-Confirmation-20261109T070737",
+    "Final-Guards-20261109T072412"
+  ],
+  "ProcessRows": 448,
+  "AggregateRows": 212,
+  "PairedRows": 224,
+  "ComparisonRows": 106,
+  "WorkerScalingRows": 192,
+  "NativeEngineRows": 96,
+  "GroupStatsRows": 4,
+  "InputQuality": {
+    "B-Provider-20261109T060849": {
+      "QualificationPass": true,
+      "QualityEnvelopeProvided": false,
+      "TimingWinner": null
+    },
+    "B-Engine-20261109T060849": {
+      "QualificationPass": true,
+      "QualityEnvelopeProvided": null,
+      "TimingWinner": null
+    },
+    "C-Provider-20261109T070737": {
+      "QualificationPass": true,
+      "QualityEnvelopeProvided": false,
+      "TimingWinner": null
+    },
+    "C-Engine-20261109T070737": {
+      "QualificationPass": true,
+      "QualityEnvelopeProvided": null,
+      "TimingWinner": null
+    },
+    "Group512-20261109T064817": {
+      "QualificationPass": null,
+      "QualityEnvelopeProvided": null,
+      "TimingWinner": null
+    },
+    "Group1024-20261109T065100": {
+      "QualificationPass": null,
+      "QualityEnvelopeProvided": null,
+      "TimingWinner": null
+    },
+    "Lazy-Trial-20261109T065618": {
+      "QualificationPass": null,
+      "QualityEnvelopeProvided": null,
+      "TimingWinner": null
+    },
+    "Lazy-Rubber-Confirmation-20261109T070737": {
+      "QualificationPass": null,
+      "QualityEnvelopeProvided": null,
+      "TimingWinner": null
+    },
+    "Final-Guards-20261109T072412": {
+      "QualificationPass": null,
+      "QualityEnvelopeProvided": null,
+      "TimingWinner": null
+    }
+  },
+  "SourceMetadata": {
+    "Group512-20261109T064817": {
+      "Profile": false,
+      "Engine": "935bccf1bc82055abcc3bc00780b576029bf560d",
+      "OnlyLargeCloth": true,
+      "Jolt": "8ba1408477826f3a86f54e59b4c17518a0ef147f",
+      "LargeClothGroupBatch": 512
+    },
+    "Group1024-20261109T065100": {
+      "Profile": false,
+      "Engine": "935bccf1bc82055abcc3bc00780b576029bf560d",
+      "OnlyLargeCloth": true,
+      "Jolt": "8ba1408477826f3a86f54e59b4c17518a0ef147f",
+      "LargeClothGroupBatch": 1024
+    },
+    "Lazy-Trial-20261109T065618": {
+      "Control": "d84beb112e10c2ded2240c3fbce85979bb9ac801",
+      "Engine": "f4ffd911baab53ebee82a3d3d62e040568d17d7e",
+      "Candidate": "7e59df5fd7f3e23504f2e696e2b095bf706b26b4",
+      "Profile": false,
+      "LargeClothGroupBatch": 256
+    },
+    "Lazy-Rubber-Confirmation-20261109T070737": {
+      "NativeProfile": false,
+      "Engine": "f4ffd911baab53ebee82a3d3d62e040568d17d7e",
+      "Jolt": "7e59df5fd7f3e23504f2e696e2b095bf706b26b4",
+      "LargeClothGroupBatch": 1024
+    },
+    "Final-Guards-20261109T072412": {
+      "NativeProfile": false,
+      "Engine": "3c864c58d4554f03e6a587d71d6bda3fffe06f1b",
+      "Purpose": "Concurrent cache motion, joint/sleep safety guards, postguard physics/performance confirmation",
+      "Jolt": "7e59df5fd7f3e23504f2e696e2b095bf706b26b4",
+      "LargeClothGroupBatch": 1024
+    }
+  },
+  "TimingValidation": "Provider marker/header/summary/lifecycle false; Engine CMake external and native profiling OFF",
+  "NativeProfile": {
+    "jolt_world_updates": 2,
+    "jolt_collision_steps_per_update": 8,
+    "jolt_soft_iterations_per_collision_step": 5,
+    "jolt_constraint_sweeps_per_iteration": 2,
+    "jolt_soft_integrations_per_frame": 80,
+    "jolt_full_update_sleep_clock": 1
+  },
+  "QualityWinnerClaim": null,
+  "QualityLimit": "No cross-backend or overall B/C winner without the predeclared physical envelope; paired deltas are timing diagnostics",
+  "PairingBoundary": "Matrix B/C rows align scene/cap/tail/repeat across separate A/B and A/C cohorts; only Group and Final-Guards B/C rows are direct same-folder counterbalanced comparisons",
+  "WorkingSetLimit": "Peak working set is process-lifetime, not a teardown leak or phase-local peak",
+  "CpuLimit": "Run CPU spans admission-end through run-end, including warmup and quality/logging; do not divide by measured-frame total. Whole-process CPU divided by receipt wall is only a conservative approximate average occupied-core count, not worker utilization"
+}
+

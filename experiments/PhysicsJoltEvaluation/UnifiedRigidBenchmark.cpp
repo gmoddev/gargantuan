@@ -32,9 +32,15 @@ namespace {
         bool Quick = false;
         int WorldUpdates = 1;
         int CollisionSteps = 4;
+        bool DiagnoseSleep = false;
     };
     int SelectedWorldUpdates = 1;
     int SelectedCollisionSteps = 4;
+    struct StepDiagnostics {
+        std::size_t MotionCount = 0;
+        std::size_t ContactBegan = 0;
+        std::size_t ContactEnded = 0;
+    };
 
     void Require(bool Condition, std::string_view Message) {
         if (!Condition) throw std::runtime_error("[Physics:JoltRigid] " + std::string(Message));
@@ -103,7 +109,8 @@ namespace {
             "query returned nonfinite or nonunit hit normal");
     }
     void Step(IPhysicsBackend &World, std::vector<double> &Samples,
-              std::optional<PhysicsBodyId> RequiredMotion = std::nullopt) {
+              std::optional<PhysicsBodyId> RequiredMotion = std::nullopt,
+              StepDiagnostics *Diagnostics = nullptr) {
         double TotalStepMs = 0.0;
         for (int Update = 0; Update < SelectedWorldUpdates; ++Update) {
             const auto Started = Clock::now();
@@ -111,6 +118,13 @@ namespace {
                 .SubStepCount = SelectedCollisionSteps});
             TotalStepMs += Milliseconds(Clock::now() - Started);
             Require(!Result.EventsTruncated, "physics step truncated contact history");
+            if (Diagnostics) {
+                Diagnostics->MotionCount += Result.Motions.size();
+                for (const auto &Contact : Result.Contacts) {
+                    if (Contact.Phase == PhysicsContactPhase::Began) ++Diagnostics->ContactBegan;
+                    else ++Diagnostics->ContactEnded;
+                }
+            }
             std::set<PhysicsBodyId> MotionIds;
             for (const auto &Motion : Result.Motions) {
                 Require(World.IsBodyValid(Motion.Body), "step returned an invalid motion body");
@@ -162,11 +176,66 @@ namespace {
         const int Warmup = Selection.Quick ? 2 : 30;
         const int Frames = Selection.Quick ? 8 : 120;
         std::vector<double> Measured;
+        std::vector<std::size_t> AwakeByFrame, MotionByFrame, ContactBeganByFrame,
+            ContactEndedByFrame, GeometricPairsByFrame;
+        std::vector<double> MaximumLinearSpeedByFrame, MaximumAngularSpeedByFrame;
         for (int Index = 0; Index < Warmup + Frames; ++Index) {
             std::vector<double> One;
+            StepDiagnostics Diagnostics;
             Step(*World, One, Index == 0 && !Dynamic.empty()
-                ? std::optional<PhysicsBodyId>(Dynamic.front()) : std::nullopt);
+                ? std::optional<PhysicsBodyId>(Dynamic.front()) : std::nullopt,
+                Selection.DiagnoseSleep ? &Diagnostics : nullptr);
             if (Index >= Warmup) Measured.push_back(One.front());
+            if (Selection.DiagnoseSleep) {
+                std::size_t Awake = 0, GeometricPairs = 0;
+                double MaximumLinearSpeed = 0, MaximumAngularSpeed = 0;
+                std::vector<glm::vec3> Positions;
+                Positions.reserve(Dynamic.size());
+                for (const auto Id : Dynamic) {
+                    const auto State = World->GetBodyState(Id);
+                    Require(State.has_value(), "sleep diagnostic body state missing");
+                    Awake += State->Awake;
+                    MaximumLinearSpeed = std::max(MaximumLinearSpeed,
+                        double(glm::length(State->LinearVelocity)));
+                    MaximumAngularSpeed = std::max(MaximumAngularSpeed,
+                        double(glm::length(State->AngularVelocity)));
+                    Positions.push_back(State->Transform.Position);
+                    if (State->Transform.Position.y <= 0.55f) ++GeometricPairs;
+                }
+                for (std::size_t First = 0; First < Positions.size(); ++First)
+                    for (std::size_t Second = First + 1; Second < Positions.size(); ++Second) {
+                        const auto Delta = glm::abs(Positions[First] - Positions[Second]);
+                        if (Delta.x <= 1.05f && Delta.y <= 1.05f && Delta.z <= 1.05f)
+                            ++GeometricPairs;
+                    }
+                AwakeByFrame.push_back(Awake);
+                MotionByFrame.push_back(Diagnostics.MotionCount);
+                ContactBeganByFrame.push_back(Diagnostics.ContactBegan);
+                ContactEndedByFrame.push_back(Diagnostics.ContactEnded);
+                GeometricPairsByFrame.push_back(GeometricPairs);
+                MaximumLinearSpeedByFrame.push_back(MaximumLinearSpeed);
+                MaximumAngularSpeedByFrame.push_back(MaximumAngularSpeed);
+            }
+        }
+        Json SleepDiagnostics = nullptr;
+        if (Selection.DiagnoseSleep) {
+            const double MeanAwake = std::accumulate(AwakeByFrame.begin() + Warmup,
+                AwakeByFrame.end(), 0.0) / Frames;
+            SleepDiagnostics = {{"AwakeByFrame", AwakeByFrame},
+                {"MotionRecordsByFrame", MotionByFrame},
+                {"ContactBeganByFrame", ContactBeganByFrame},
+                {"ContactEndedByFrame", ContactEndedByFrame},
+                {"GeometricContactCandidatesByFrame", GeometricPairsByFrame},
+                {"MaximumLinearSpeedByFrame", MaximumLinearSpeedByFrame},
+                {"MaximumAngularSpeedByFrame", MaximumAngularSpeedByFrame},
+                {"AwakeAtWarmupEnd", AwakeByFrame[Warmup - 1]},
+                {"AwakeAtEnd", AwakeByFrame.back()},
+                {"MeanAwakeMeasured", MeanAwake},
+                {"MaximumLinearSpeedAtEnd", MaximumLinearSpeedByFrame.back()},
+                {"MaximumAngularSpeedAtEnd", MaximumAngularSpeedByFrame.back()},
+                {"GeometricContactCandidatesAtEnd", GeometricPairsByFrame.back()},
+                {"ContactCountMeaning", "Began/Ended are neutral events; geometric candidates are AABB proximity, not solver contacts"},
+                {"MotionCountMeaning", "Published neutral Motion records; Box3D emits native move events while Jolt currently emits every nonanchored body"}};
         }
         float MinimumY = std::numeric_limits<float>::infinity();
         std::vector<glm::vec3> FinalPositions;
@@ -208,6 +277,7 @@ namespace {
             {"InitMs", InitMs}, {"Step", Timings(Measured)}, {"Raycast", Timings(Query)},
             {"TeardownMs", TeardownMs}, {"MinimumDynamicCenterY", Dynamic.empty() ? Json(nullptr) : Json(MinimumY)},
             {"MaximumPairPenetration", MaximumPairPenetration},
+            {"SleepDiagnostics", SleepDiagnostics},
             {"Quality", {{"Status", "pass"}, {"Checks", {"finite states", "mass parity",
                 "floor separation", "pair penetration", "ray hits", "identity retirement"}}}},
             {"ResourcesInit", ResourceDelta(Before, AfterInit)},
@@ -590,6 +660,7 @@ namespace {
         for (int Index = 1; Index < Count; ++Index) {
             const std::string_view Value(Arguments[Index]);
             if (Value == "--quick") Result.Quick = true;
+            else if (Value == "--diagnose-sleep") Result.DiagnoseSleep = true;
             else if (Value.starts_with("--backend=")) Result.Backend = Value.substr(10);
             else if (Value.starts_with("--case=")) Result.Case = Value.substr(7);
             else if (Value.starts_with("--workers=")) Result.Workers = std::stoi(std::string(Value.substr(10)));
@@ -636,6 +707,10 @@ int main(int ArgumentCount, char **Arguments) {
             {"WorldUpdatesPerFrame", Selection.WorldUpdates},
             {"TotalCollisionStepsPerFrame", Selection.WorldUpdates * Selection.CollisionSteps},
             {"WorldUpdateDeltaSeconds", (1.0f / 60.0f) / Selection.WorldUpdates},
+            {"SleepDiagnosticsEnabled", Selection.DiagnoseSleep},
+            {"DiagnosticScope", Selection.DiagnoseSleep ?
+                "Read-only body states and geometric proximity are sampled after World.Step timing; readback can perturb later cache state" :
+                "No per-frame sleep-state readback"},
             {"TimingScope", "Each frame sample sums World.Step call durations over all world updates; step-result validation is outside the sample"},
             {"WarmupFrames", Selection.Quick ? 2 : 30},
             {"QualityRule", "Only passing rows may be considered for performance comparison"},

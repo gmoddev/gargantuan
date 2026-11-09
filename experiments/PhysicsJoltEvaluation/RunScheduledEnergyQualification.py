@@ -198,17 +198,21 @@ def NativeStepTime(Updates, Steps, Iterations):
 
 
 def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
-                    IntegrationsPerFrame=None, VelocityReconstruction="difference"):
+                    IntegrationsPerFrame=None, VelocityReconstruction="difference", ConstraintSweeps=1,
+                    FullUpdateSleepClock=False):
     Updates = IntegrationsPerFrame if IntegrationsPerFrame is not None else (96 if Material == "1e-5" else 192)
     if not isinstance(Updates, int) or not 1 <= Updates <= 384:
         raise ValueError("[Physics:ScheduledEnergy] Spring calibration cadence outside 1..384")
     if VelocityReconstruction not in ("difference", "delta", "applieddelta"):
         raise ValueError("[Physics:ScheduledEnergy] Unknown spring calibration velocity reconstruction")
-    Name = f"Spring-M{Material}-W{Updates}"
+    if ConstraintSweeps not in (1, 2, 4, 8) or (ConstraintSweeps > 1 and VelocityReconstruction != "delta"):
+        raise ValueError("[Physics:ScheduledEnergy] Multiple constraint sweeps require delta mode and Q=2,4,8")
+    Name = f"Spring-M{Material}-W{Updates}-Q{ConstraintSweeps}"
     Common = ["--fixture", "Spring", "--frames", "8", "--steps", "1", "--iterations", "1",
               "--world-updates", str(Updates), "--compliance", Material, "--damping", "0",
               "--contact", "0", "--speed", "0", "--workers", str(Arguments.threads),
-              "--particles", "1", "--observe-updates", "1"]
+              "--particles", "1", "--observe-updates", "1",
+              "--constraint-sweeps", str(ConstraintSweeps)]
     if VelocityReconstruction != "difference":
         Common += ["--velocity-reconstruction", VelocityReconstruction]
     PristinePath = Output / f"{Name}.pristine.jsonl"
@@ -224,6 +228,9 @@ def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
     assert PristineConfig["WorldUpdatesPerFrame"] == ObservedConfig["WorldUpdatesPerFrame"] == Updates
     assert PristineConfig["Steps"] == ObservedConfig["Steps"] == 1
     assert PristineConfig["Iterations"] == ObservedConfig["Iterations"] == 1
+    assert PristineConfig["ConstraintSweeps"] == ObservedConfig["ConstraintSweeps"] == ConstraintSweeps
+    assert PristineConfig.get("FullUpdateSleepClock") is FullUpdateSleepClock
+    assert ObservedConfig.get("FullUpdateSleepClock") is FullUpdateSleepClock
     assert PristineConfig["InternalIntegrationDt"] == ObservedConfig["InternalIntegrationDt"] == ExpectedDt
     assert PristineConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
     assert ObservedConfig.get("VelocityReconstruction", "difference") == VelocityReconstruction
@@ -242,10 +249,13 @@ def CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
     Calibrated = bool(Quality["CompleteBoundedPass"] and
                       Quality["NativeSpringCalibration"] and Quality["NativeSpringCalibration"]["Pass"] and
                       Quality["NativeSpringCalibration"].get("VelocityReconstruction", "difference") == VelocityReconstruction and
+                      Quality["NativeSpringCalibration"].get("ConstraintSweeps") == ConstraintSweeps and
                       Quality["ConfigSummary"].get("VelocityReconstruction", "difference") == VelocityReconstruction and
+                      Quality["ConfigSummary"].get("ConstraintSweeps") == ConstraintSweeps and
                       Score["CompleteBoundedPass"])
     return {"Name": Name, "MaterialCompliance": Material, "WorldUpdates": Updates,
-            "InternalIntegrationDt": ExpectedDt,
+            "InternalIntegrationDt": ExpectedDt, "ConstraintSweeps": ConstraintSweeps,
+            "FullUpdateSleepClock": FullUpdateSleepClock,
             "VelocityReconstruction": VelocityReconstruction,
             "PristineSeconds": PristineSeconds, "ObservedSeconds": ObservedSeconds,
             "PristineRaw": PristinePath.name, "ObservedRaw": ObservedPath.name,
@@ -262,9 +272,15 @@ def Main():
     Parser.add_argument("--observed", type=Path, required=True)
     Parser.add_argument("--output", type=Path, required=True)
     Parser.add_argument("--threads", type=int, default=1)
+    Parser.add_argument("--velocity-reconstruction", choices=("difference", "delta", "applieddelta"),
+                        default="difference")
+    Parser.add_argument("--constraint-sweeps", type=int, choices=(1, 2, 4, 8), default=1)
+    Parser.add_argument("--full-update-sleep-clock", action="store_true")
     Arguments = Parser.parse_args()
     if Arguments.threads < 1 or Arguments.threads > 8:
         Parser.error("--threads must be between 1 and 8")
+    if Arguments.constraint_sweeps > 1 and Arguments.velocity_reconstruction != "delta":
+        Parser.error("Multiple constraint sweeps require delta velocity reconstruction")
     PristineBinary = Arguments.pristine.resolve(strict=True)
     ObservedBinary = Arguments.observed.resolve(strict=True)
     Output = Arguments.output
@@ -273,7 +289,10 @@ def Main():
     try:
         Calibrations = {}
         for Material in ("1e-5", "1e-6"):
-            Calibration = CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material)
+            Calibration = CalibrateSpring(Arguments, PristineBinary, ObservedBinary, Output, Material,
+                VelocityReconstruction=Arguments.velocity_reconstruction,
+                ConstraintSweeps=Arguments.constraint_sweeps,
+                FullUpdateSleepClock=Arguments.full_update_sleep_clock)
             Calibrations[Material] = Calibration
             (Output / "Calibrations.json").write_text(json.dumps(Calibrations, indent=2, allow_nan=False), encoding="utf-8")
             print(json.dumps({"Name": Calibration["Name"], "Status": Calibration["Status"]}), flush=True)
@@ -282,7 +301,10 @@ def Main():
             Common = ["--frames", str(Frames), "--steps", str(Steps), "--iterations", str(Iterations),
                       "--world-updates", str(Updates), "--compliance", Material, "--bend-compliance", "1e-4",
                       "--workers", str(Arguments.threads), "--particles", "0", "--observe-updates", "1",
-                      "--count", "2" if Fixture == "C2" else "1"]
+                      "--count", "2" if Fixture == "C2" else "1",
+                      "--constraint-sweeps", str(Arguments.constraint_sweeps)]
+            if Arguments.velocity_reconstruction != "difference":
+                Common += ["--velocity-reconstruction", Arguments.velocity_reconstruction]
             if Fixture == "Free":
                 Common += ["--contact", "0", "--speed", "0", "--seed", "1"]
             PristinePath = Output / f"{Name}.pristine.jsonl"
@@ -294,6 +316,10 @@ def Main():
                                         ObservedPath, Output / f"{Name}.observed.stderr.txt")
             PristineConfig, PristineFrames, PristineMicrosteps, _ = ReadPublished(PristinePath)
             ObservedConfig, ObservedFrames, ObservedMicrosteps, _ = ReadPublished(ObservedPath)
+            assert PristineConfig["ConstraintSweeps"] == ObservedConfig["ConstraintSweeps"] == Arguments.constraint_sweeps
+            assert PristineConfig.get("FullUpdateSleepClock") is Arguments.full_update_sleep_clock
+            assert ObservedConfig.get("FullUpdateSleepClock") is Arguments.full_update_sleep_clock
+            assert PristineConfig["VelocityReconstruction"] == ObservedConfig["VelocityReconstruction"] == Arguments.velocity_reconstruction
             assert PristineConfig["AllEdgesPositiveCompliance"] and ObservedConfig["AllEdgesPositiveCompliance"]
             assert PristineConfig["ZeroGravity"] and ObservedConfig["ZeroGravity"]
             assert PristineConfig["Pinned"] and ObservedConfig["Pinned"]
@@ -318,6 +344,9 @@ def Main():
             Calibrated = Calibrations[Material]["Calibrated"]
             Receipt = {"Name": Name, "Fixture": Fixture, "MaterialCompliance": Material,
                        "CollisionSteps": Steps, "SoftIterations": Iterations, "WorldUpdates": Updates,
+                       "ConstraintSweeps": Arguments.constraint_sweeps,
+                       "FullUpdateSleepClock": Arguments.full_update_sleep_clock,
+                       "VelocityReconstruction": Arguments.velocity_reconstruction,
                        "Frames": Frames, "Threads": Arguments.threads,
                        "SpringCalibration": Calibrations[Material]["Name"],
                        "SpringCalibrationPass": Calibrated,
@@ -336,6 +365,9 @@ def Main():
             "CompletedCases": len(Receipts)}, indent=2), encoding="utf-8")
         raise
     Summary = {"Cases": len(Receipts), "SpringCalibrations": Calibrations, "HarnessQualified": True,
+               "ConstraintSweeps": Arguments.constraint_sweeps,
+               "FullUpdateSleepClock": Arguments.full_update_sleep_clock,
+               "VelocityReconstruction": Arguments.velocity_reconstruction,
                "PhysicallyQualified": sum(Receipt["Status"] == "PASS_BOUNDED_SCHEDULED_REFERENCE_MODEL" for Receipt in Receipts),
                "ObservedBoundRejections": sum(not Receipt["Score"]["CompleteBoundedPass"] for Receipt in Receipts),
                "UnqualifiedCalibration": sum(not Receipt["SpringCalibrationPass"] for Receipt in Receipts),

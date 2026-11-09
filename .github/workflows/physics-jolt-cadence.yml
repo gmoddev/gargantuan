@@ -1,0 +1,54 @@
+name: Candidate Jolt soft budget screens
+on:
+  push:
+    branches: [experiment/jolt-optimized-foundation-20261108]
+    paths:
+      - '.github/workflows/physics-jolt-cadence.yml'
+      - 'experiments/PhysicsJoltEvaluation/Optimization/RunCadenceScreen.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  screen:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025-vs2026]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      GANTRIA_CADENCE_SCREEN: '1'
+      GANTRIA_CADENCE_KIND: soft-budget
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: git submodule update --init --depth 1 vendor/json vendor/box3d
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: GantriaEngine/JoltPhysics
+          ref: 109be79fa82be0b306c56e4b4357675ed7843767
+          path: .foundation-jolt
+          persist-credentials: false
+      - name: Enable MSVC
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Installation = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          & "$Installation\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" >> $env:GITHUB_ENV }
+      - name: Install Linux compiler
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 g++-14 ninja-build
+      - name: Measure candidate budgets with unchanged physical gates
+        run: python experiments/PhysicsJoltEvaluation/Foundation/RunQualification.py
+      - name: Preserve accepted and rejected candidates
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: jolt-soft-budget-${{ matrix.os }}
+          path: foundation-evidence/
+          if-no-files-found: error
