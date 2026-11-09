@@ -17,6 +17,9 @@ namespace PhysicsEvaluation {
     // One-way prescribed translating sphere motion for private G only. Call
     // before Step; the joined Step snapshots this ordered list once per body.
     void SetExperimentalXpbdColliderDeltas(std::vector<glm::vec3> Deltas);
+    [[nodiscard]] glm::vec3 ResolveExperimentalXpbdRelativeMovement(
+        glm::vec3 ClothMovement, glm::vec3 SurfaceMovement,
+        glm::vec3 ContactNormal, float Friction);
     [[nodiscard]] std::optional<std::vector<glm::vec3>> GetExperimentalXpbdVelocities(
         const gargantuan::ISoftBodyBackend &Soft, gargantuan::SoftBodyId Body);
     [[nodiscard]] std::optional<XpbdContactProjection> GetExperimentalXpbdContactProjection(

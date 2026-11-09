@@ -43,6 +43,14 @@ namespace PhysicsEvaluation {
         std::scoped_lock Lock(ExperimentalXpbdColliderMotionMutex);
         ExperimentalXpbdColliderDeltas = std::move(Deltas);
     }
+    glm::vec3 ResolveExperimentalXpbdRelativeMovement(glm::vec3 ClothMovement,
+        glm::vec3 SurfaceMovement, glm::vec3 ContactNormal, float Friction) {
+        const glm::vec3 Relative = ClothMovement - SurfaceMovement;
+        const float NormalMovement = glm::dot(Relative, ContactNormal);
+        const glm::vec3 Tangential = Relative - NormalMovement * ContactNormal;
+        return SurfaceMovement + std::max(NormalMovement, 0.0f) * ContactNormal +
+            Tangential * (1.0f - Friction);
+    }
     void SetExperimentalXpbdClothRotation(glm::quat Rotation) {
         if (!std::isfinite(Rotation.w) || !std::isfinite(Rotation.x) ||
             !std::isfinite(Rotation.y) || !std::isfinite(Rotation.z) ||
@@ -914,12 +922,19 @@ namespace gargantuan {
 							ColliderIndex < ColliderDeltas->size() &&
 							Collider.Shape.Kind == PhysicsShapeKind::Ball ?
 							(*ColliderDeltas)[ColliderIndex] : glm::vec3(0.0f);
-						const auto Movement = Node.Position - Node.PreviousPosition - ColliderDelta;
-						const auto NormalMovement = glm::dot(Movement, *Normal);
-						const auto TangentialMovement = Movement - NormalMovement * *Normal;
-						const auto RetainedMovement = std::max(NormalMovement, 0.0f) * *Normal +
-							TangentialMovement * (1.0f - Record.Definition.Material.Friction);
-						Node.PreviousPosition = Node.Position - RetainedMovement - ColliderDelta;
+						glm::vec3 RetainedMovement;
+						if (ColliderDeltas)
+							RetainedMovement = PhysicsEvaluation::ResolveExperimentalXpbdRelativeMovement(
+								Node.Position - Node.PreviousPosition, ColliderDelta, *Normal,
+								Record.Definition.Material.Friction);
+						else {
+							const auto Movement = Node.Position - Node.PreviousPosition;
+							const auto NormalMovement = glm::dot(Movement, *Normal);
+							const auto TangentialMovement = Movement - NormalMovement * *Normal;
+							RetainedMovement = std::max(NormalMovement, 0.0f) * *Normal +
+								TangentialMovement * (1.0f - Record.Definition.Material.Friction);
+						}
+						Node.PreviousPosition = Node.Position - RetainedMovement;
 					}
 					const glm::vec3 DeltaVelocityNumerator =
 						(Node.Position - BeforePosition) - (Node.PreviousPosition - BeforePrevious);

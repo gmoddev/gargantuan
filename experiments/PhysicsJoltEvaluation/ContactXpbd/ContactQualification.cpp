@@ -406,6 +406,21 @@ int main(int Count, char **Arguments) {
     PhysicsEvaluation::SuppressErrorDialogs();
     PhysicsEvaluation::InstallPhysicsAllocators();
     try {
+        if (Count == 2 && std::string(Arguments[1]) == "--self-test") {
+            const glm::vec3 Normal(1,0,0);
+            const auto Resolve = [&](glm::vec3 Cloth, glm::vec3 Surface, float Friction) {
+                return PhysicsEvaluation::ResolveExperimentalXpbdRelativeMovement(
+                    Cloth, Surface, Normal, Friction);
+            };
+            Require(glm::length(Resolve({0.2f,0,0}, {0.1f,0,0}, 0.5f) -
+                glm::vec3(0.2f,0,0)) < 1e-6f, "Separating relative normal velocity was removed");
+            Require(glm::length(Resolve({0,0,0}, {0.1f,0,0}, 0.5f) -
+                glm::vec3(0.1f,0,0)) < 1e-6f, "Approaching relative normal velocity survived");
+            Require(glm::length(Resolve({0,0.2f,0}, {0,0.1f,0}, 0.5f) -
+                glm::vec3(0,0.15f,0)) < 1e-6f, "Tangential relative friction is incorrect");
+            std::cout << "[Physics:ContactQualification] relative_response_self_test=PASS\n";
+            return 0;
+        }
         if (Count != 3) throw std::invalid_argument("Usage: PhysicsJoltContactQualification Case.json OutputDirectory");
         return Run(Arguments[1], Arguments[2]);
     } catch (const std::exception &Error) {
