@@ -733,6 +733,12 @@ namespace gargantuan {
 						Record.ContactProjection.PinConstraintImpulseOnClothNs +=
 							glm::dvec3(NodeA.Position - BeforeA) /
 							(double(NodeA.InverseMass) * double(DeltaTime));
+					else if (NodeA.InverseMass > 0.0f && NodeB.InverseMass > 0.0f)
+						Record.ContactProjection.UnpinnedStructuralNumericalImpulseNs +=
+							glm::dvec3(NodeA.Position - BeforeA) /
+								(double(NodeA.InverseMass) * double(DeltaTime)) +
+							glm::dvec3(NodeB.Position - BeforeB) /
+								(double(NodeB.InverseMass) * double(DeltaTime));
 				}
 			}
 		}
@@ -1359,6 +1365,7 @@ namespace gargantuan {
 					Accounting.MomentumStartKgMPerS - Accounting.GravityForceImpulseNs -
 					Accounting.UniformImpulseNs - Accounting.PointImpulseNs -
 					Accounting.DampingImpulseNs - Accounting.PinConstraintImpulseOnClothNs -
+						Accounting.UnpinnedStructuralNumericalImpulseNs -
 					Accounting.NormalImpulseOnClothNs - Accounting.FrictionImpulseOnClothNs;
 			}
 			GetExperimentalVelocityTrace().Capture(Item.Body, Record.Nodes);

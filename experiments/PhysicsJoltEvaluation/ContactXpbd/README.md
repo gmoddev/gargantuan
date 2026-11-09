@@ -89,3 +89,9 @@ does no work, although the internal edge solve transmits a reaction impulse;
 moving pin targets are outside this fixture producer. This momentum closure
 is stronger than the contact action/reaction identity, which is defined by
 negating the cloth constraint impulse and does not observe a dynamic rigid.
+`UnpinnedStructuralNumericalImpulseNs` separately records the actual
+mass-weighted sum of both float position updates for each free-free distance
+constraint. Its mathematical value is zero, but independent float rounding can
+make it nonzero in the reconstructed velocity. This term remains reported as
+numerical momentum leakage even if subtracting it closes the source ledger;
+it is never relabeled as a physical external impulse.
