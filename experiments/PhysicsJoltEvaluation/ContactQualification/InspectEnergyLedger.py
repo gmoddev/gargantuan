@@ -1,0 +1,181 @@
+"""Compute measured kinetic, gravity and distance-compliance energy histories."""
+
+import argparse
+import gzip
+import json
+import math
+from pathlib import Path
+
+from ValidateContactTrace import Dot, Norm, Sub
+
+
+def Near(A, B):
+    return abs(A - B) <= 1e-7 * max(1.0, abs(A), abs(B))
+
+
+def FiniteNumber(Value):
+    return type(Value) in (int, float) and math.isfinite(Value)
+
+
+def VerifyAccounting(Accounting, Stages, Frame, Fixture):
+    if not isinstance(Accounting, dict) or not isinstance(Stages, dict):
+        raise ValueError('Missing XPBD accounting stage')
+    Vectors = {}
+    for Name in ('NormalImpulseOnClothNs', 'FrictionImpulseOnClothNs',
+                 'PrescribedColliderReactionImpulseNs'):
+        Value = Accounting.get(Name)
+        if not isinstance(Value, list) or len(Value) != 3 or \
+                not all(FiniteNumber(Component) for Component in Value):
+            raise ValueError(f'Invalid XPBD accounting vector {Name}')
+        Vectors[Name] = Value
+    StageMomentum = Stages.get('ContactProjectionVelocityDerivedMomentumDeltaNs')
+    if not isinstance(StageMomentum, list) or len(StageMomentum) != 3 or \
+            not all(FiniteNumber(Component) for Component in StageMomentum):
+        raise ValueError('Invalid XPBD contact stage momentum')
+    for Axis in range(3):
+        Total = Vectors['NormalImpulseOnClothNs'][Axis] + \
+            Vectors['FrictionImpulseOnClothNs'][Axis]
+        if not Near(Total, StageMomentum[Axis]) or \
+                not Near(Total + Vectors['PrescribedColliderReactionImpulseNs'][Axis], 0.0):
+            raise ValueError(f'XPBD impulse split identity fails at frame {Frame}')
+    Scalars = {}
+    for Name in ('ContactKineticDeltaJ', 'PrescribedSurfaceWorkJ',
+                 'ContactEnergyResidualJ', 'KineticStartJ', 'KineticEndJ',
+                 'AppliedDynamicsKineticDeltaJ', 'DampingKineticDeltaJ',
+                 'StructuralProjectionKineticDeltaJ', 'PinProjectionKineticDeltaJ',
+                 'LedgerResidualJ', 'SubstepSeconds'):
+        Value = Accounting.get(Name)
+        if not FiniteNumber(Value):
+            raise ValueError(f'Invalid XPBD accounting scalar {Name}')
+        Scalars[Name] = Value
+    if not Near(Scalars['SubstepSeconds'],
+                Fixture['DeltaTimeSeconds'] / Fixture['Authored']['XpbdSubsteps']) or \
+            Accounting.get('PrescribedSurfaceVelocitySource') != \
+                'center(end)-center(start) per substep' or \
+            type(Accounting.get('StaticPoseWorkComplete')) is not bool or \
+            type(Accounting.get('Corrections')) is not int or \
+            Accounting['Corrections'] < 0 or \
+            Accounting['Corrections'] != Stages.get('ContactProjectionCorrections'):
+        raise ValueError(f'XPBD accounting metadata fails at frame {Frame}')
+    ContactResidual = Scalars['ContactKineticDeltaJ'] - Scalars['PrescribedSurfaceWorkJ']
+    LedgerResidual = Scalars['KineticEndJ'] - Scalars['KineticStartJ'] - \
+        Scalars['AppliedDynamicsKineticDeltaJ'] - Scalars['DampingKineticDeltaJ'] - \
+        Scalars['StructuralProjectionKineticDeltaJ'] - Scalars['PinProjectionKineticDeltaJ'] - \
+        Scalars['ContactKineticDeltaJ']
+    if not Near(ContactResidual, Scalars['ContactEnergyResidualJ']) or \
+            not Near(LedgerResidual, Scalars['LedgerResidualJ']):
+        raise ValueError(f'XPBD kinetic stage ledger identity fails at frame {Frame}')
+    return {**Scalars, 'StaticPoseWorkComplete': Accounting['StaticPoseWorkComplete']}
+
+
+def Inspect(CaseDirectory):
+    Fixture = json.loads((CaseDirectory / 'ContactFixtureV1.json').read_text(encoding='utf-8'))
+    Material = Fixture['Authored']['Material']
+    Compliance = {'axial': Material['StretchCompliance'],
+                  'shear': Material['StretchCompliance'],
+                  'bend': Material['BendCompliance']}
+    if any(not isinstance(Value, (int, float)) or not math.isfinite(Value) or Value <= 0
+           for Value in Compliance.values()):
+        return {'Status': 'INCOMPLETE_COMPLIANCE'}
+    Edges = Fixture['StructuralEdges']
+    Masses = Fixture['VertexMassKg']
+    Gravity = Fixture['GravityMPerS2']
+    Count = len(Masses)
+    def Energy(Positions, Velocities):
+        Kinetic = sum(0.5 * Mass * Dot(Velocity, Velocity)
+                      for Mass, Velocity in zip(Masses, Velocities))
+        GravityPotential = -sum(Mass * Dot(Gravity, Position)
+                                for Mass, Position in zip(Masses, Positions))
+        DistancePotential = sum(
+            (Norm(Sub(Positions[Edge['A']], Positions[Edge['B']])) -
+             Edge['RestLengthM']) ** 2 / (2 * Compliance[Edge['Kind']])
+            for Edge in Edges)
+        return {'KineticJ': Kinetic, 'GravityPotentialJ': GravityPotential,
+                'DistanceCompliancePotentialJ': DistancePotential,
+                'TotalJ': Kinetic + GravityPotential + DistancePotential}
+    Initial = Energy(Fixture['RestPositions'], Fixture['InitialVelocities'])
+    Series = []
+    AccountingRows = []
+    AccountingSeen = None
+    with gzip.open(CaseDirectory / 'ContactTraceV1.jsonl.gz', 'rt', encoding='utf-8') as Stream:
+        for Frame, Line in enumerate(Stream):
+            Row = json.loads(Line)
+            if Row['Frame'] != Frame or len(Row['Positions']) != 3 * Count or \
+                    len(Row['Velocities']) != 3 * Count:
+                raise ValueError('Energy trace frame identity or array shape mismatch')
+            Positions = [Row['Positions'][Index:Index + 3]
+                         for Index in range(0, 3 * Count, 3)]
+            Velocities = [Row['Velocities'][Index:Index + 3]
+                          for Index in range(0, 3 * Count, 3)]
+            if not all(math.isfinite(Value) for Vector in Positions + Velocities
+                       for Value in Vector):
+                raise ValueError('Energy trace contains nonfinite state')
+            Series.append({'Frame': Frame, **Energy(Positions, Velocities)})
+            Accounting = Row.get('External', {}).get('XpbdContactAccounting')
+            if AccountingSeen is None:
+                AccountingSeen = Accounting is not None
+            if (Accounting is not None) != AccountingSeen:
+                raise ValueError('XPBD accounting appears in only part of the trace')
+            if AccountingSeen:
+                AccountingRows.append(VerifyAccounting(Accounting, Row.get('Stages'),
+                                                       Frame, Fixture))
+    if len(Series) != Fixture['Frames']:
+        raise ValueError('Energy trace frame count mismatch')
+    Previous = Initial['TotalJ']
+    for Row in Series:
+        Row['ChangeFromPreviousJ'] = Row['TotalJ'] - Previous
+        Previous = Row['TotalJ']
+    PhysicalResiduals = []
+    StaticPoseIncompleteFrames = []
+    if AccountingSeen:
+        for Index, (Row, Accounting) in enumerate(zip(Series, AccountingRows)):
+            if not Near(Row['KineticJ'], Accounting['KineticEndJ']):
+                raise ValueError(f'Published kinetic differs from source ledger at frame {Index}')
+            if Index > 0 and not Near(Series[Index - 1]['KineticJ'],
+                                      Accounting['KineticStartJ']):
+                raise ValueError(f'XPBD stage kinetic start does not follow published frame {Index - 1}')
+            if not Accounting['StaticPoseWorkComplete']:
+                StaticPoseIncompleteFrames.append(Index)
+            if Index > 0 and Accounting['StaticPoseWorkComplete']:
+                PhysicalResiduals.append({
+                    'Frame': Index,
+                    'DeltaTotalJ': Row['ChangeFromPreviousJ'],
+                    'PrescribedSurfaceWorkJ': Accounting['PrescribedSurfaceWorkJ'],
+                    'MeasuredDampingLossJ': -Accounting['DampingKineticDeltaJ'],
+                    'UnclosedPhysicalResidualJ': Row['ChangeFromPreviousJ'] -
+                        Accounting['PrescribedSurfaceWorkJ'] -
+                        Accounting['DampingKineticDeltaJ']})
+    return {'Status': 'MEASURED_COMPONENTS_WITH_STAGE_LEDGER' if AccountingSeen else
+            'MEASURED_COMPONENTS_UNCLOSED',
+            'Initial': Initial, 'Final': Series[-1],
+            'PeakTotalAboveInitialJ': max(Row['TotalJ'] - Initial['TotalJ']
+                                           for Row in Series),
+            'MaximumSingleFrameIncreaseJ': max(Row['ChangeFromPreviousJ']
+                                                for Row in Series),
+            'AccountingIdentityStatus': 'VERIFIED' if AccountingSeen else 'INCOMPLETE',
+            'StaticPoseWorkIncompleteFrames': StaticPoseIncompleteFrames,
+            'PhysicalResidualStatus': 'DIAGNOSTIC_UNGATED' if AccountingSeen and
+                not StaticPoseIncompleteFrames else 'INCOMPLETE',
+            'MaximumAbsoluteUnclosedPhysicalResidualJ':
+                max((abs(Row['UnclosedPhysicalResidualJ']) for Row in PhysicalResiduals),
+                    default=None),
+            'PhysicalResidualsAfterInitialImpulse': PhysicalResiduals,
+            'Series': Series,
+            'Scope': 'Kinetic from published velocities, gravity and authored distance C²/(2 compliance). Stage identities are bookkeeping, not physical conservation. Frame 0 excludes an unseparated initial impulse. Unclosed physical residual uses measured damping and prescribed kinematic center work for later frames; static pose changes and reciprocal rigid momentum remain incomplete.'}
+
+
+def Main():
+    Parser = argparse.ArgumentParser(description=__doc__)
+    Parser.add_argument('CaseDirectory', type=Path)
+    Parser.add_argument('--output', type=Path)
+    Args = Parser.parse_args()
+    Result = Inspect(Args.CaseDirectory)
+    Text = json.dumps(Result, indent=2, sort_keys=True) + '\n'
+    if Args.output:
+        Args.output.write_text(Text, encoding='utf-8')
+    else:
+        print(Text, end='')
+
+
+if __name__ == '__main__':
+    Main()

@@ -1,0 +1,81 @@
+"""Analytic controls for bounded contact intersection and accounting checks."""
+
+import gzip
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from Inspect3DSelfIntersection import TrianglesIntersect
+from InspectEnergyLedger import Inspect as InspectEnergy
+from TestValidateContactTrace import Fixture, Frames
+
+
+def Accounting():
+    return {
+        'NormalImpulseOnClothNs': [0.0, 0.0, 0.0],
+        'FrictionImpulseOnClothNs': [0.0, 0.0, 0.0],
+        'PrescribedColliderReactionImpulseNs': [0.0, 0.0, 0.0],
+        'ContactKineticDeltaJ': 0.0, 'PrescribedSurfaceWorkJ': 0.0,
+        'ContactEnergyResidualJ': 0.0, 'KineticStartJ': 0.0,
+        'KineticEndJ': 0.0, 'AppliedDynamicsKineticDeltaJ': 0.0,
+        'DampingKineticDeltaJ': 0.0,
+        'StructuralProjectionKineticDeltaJ': 0.0,
+        'PinProjectionKineticDeltaJ': 0.0, 'LedgerResidualJ': 0.0,
+        'SubstepSeconds': 0.01 / 32,
+        'PrescribedSurfaceVelocitySource': 'center(end)-center(start) per substep',
+        'Corrections': 0, 'StaticPoseWorkComplete': True}
+
+
+def EnergyCase(Change=None):
+    Case = Fixture()
+    Case['Authored'] = {'Material': {'StretchCompliance': 1e-6,
+                                    'BendCompliance': 1e-4},
+                        'XpbdSubsteps': 32}
+    Records = Frames()
+    for Record in Records:
+        Record['Stages'] = {'ContactProjectionVelocityDerivedMomentumDeltaNs':
+                            [0.0, 0.0, 0.0], 'ContactProjectionCorrections': 0}
+        Record['External'] = {'XpbdContactAccounting': Accounting()}
+    if Change:
+        Change(Records)
+    with tempfile.TemporaryDirectory() as Temporary:
+        Directory = Path(Temporary)
+        (Directory / 'ContactFixtureV1.json').write_text(json.dumps(Case), encoding='utf-8')
+        with gzip.open(Directory / 'ContactTraceV1.jsonl.gz', 'wt', encoding='utf-8') as Stream:
+            for Record in Records:
+                Stream.write(json.dumps(Record) + '\n')
+        return InspectEnergy(Directory)
+
+
+class DiagnosticTests(unittest.TestCase):
+    def test_disjoint_triangle_crossing_and_separation(self):
+        A = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        Crossing = [(.25, .25, -1), (.25, .25, 1), (.75, .25, 0)]
+        Separate = [(2, 2, 0), (3, 2, 0), (2, 3, 0)]
+        CoplanarOverlap = [(.1, .1, 0), (.4, .1, 0), (.1, .4, 0)]
+        self.assertTrue(TrianglesIntersect(A, Crossing))
+        self.assertFalse(TrianglesIntersect(A, Separate))
+        self.assertTrue(TrianglesIntersect(A, CoplanarOverlap))
+
+    def test_zero_stage_ledger_has_zero_physical_residual(self):
+        Result = EnergyCase()
+        self.assertEqual(Result['AccountingIdentityStatus'], 'VERIFIED')
+        self.assertEqual(Result['MaximumAbsoluteUnclosedPhysicalResidualJ'], 0.0)
+
+    def test_broken_impulse_split_fails_closed(self):
+        def Break(Records):
+            Records[0]['External']['XpbdContactAccounting']['NormalImpulseOnClothNs'][0] = 1
+        with self.assertRaisesRegex(ValueError, 'impulse split'):
+            EnergyCase(Break)
+
+    def test_static_pose_change_disables_physical_closure(self):
+        def Mark(Records):
+            Records[1]['External']['XpbdContactAccounting']['StaticPoseWorkComplete'] = False
+        Result = EnergyCase(Mark)
+        self.assertEqual(Result['PhysicalResidualStatus'], 'INCOMPLETE')
+        self.assertEqual(Result['StaticPoseWorkIncompleteFrames'], [1])
+
+
+if __name__ == '__main__':
+    unittest.main()
