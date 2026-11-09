@@ -1,0 +1,168 @@
+name: Experimental Filament qualification
+
+on:
+  push:
+    branches: [foundation/renderer-3]
+    paths:
+      - '.github/workflows/renderer-filament-qualification.yml'
+      - 'assets/filament/**'
+      - 'include/gargantuan/render/**'
+      - 'src/render/**'
+      - 'tests/FilamentRendererTests.cpp'
+      - 'tests/RendererBenchmark.cpp'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-release:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    env:
+      FILAMENT_TAG: v1.71.5
+      FILAMENT_WINDOWS_BYTES: '768447764'
+      FILAMENT_WINDOWS_SHA256: '9bc1f145f26a628d1f61f5e0627263de0ec937b565e46927f011c280e6cfc53f'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Verify and stage the pinned Windows Filament SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Stage = Join-Path $env:RUNNER_TEMP 'gargantuan-filament'
+          $Archive = Join-Path $Stage 'sdk.tgz'
+          $SdkOutput = Join-Path $Stage 'sdk'
+          New-Item -ItemType Directory -Force -Path $Stage, $SdkOutput, 'filament-evidence' | Out-Null
+          $Url = "https://github.com/google/filament/releases/download/$($env:FILAMENT_TAG)/filament-$($env:FILAMENT_TAG)-windows.tgz"
+          curl.exe --fail --location --retry 3 --output $Archive $Url
+          if ($LASTEXITCODE -ne 0) { throw 'Filament download failed' }
+          $Digest = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($Digest -cne $env:FILAMENT_WINDOWS_SHA256 -or
+              (Get-Item -LiteralPath $Archive).Length -ne [int64]$env:FILAMENT_WINDOWS_BYTES) {
+            throw 'Filament release archive does not match the pinned bytes'
+          }
+          $Entries = @(tar.exe -tf $Archive)
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect Filament archive' }
+          $EngineHeaders = @($Entries | Where-Object { $_ -match '(^|/)include/filament/Engine\.h$' })
+          if ($EngineHeaders.Count -ne 1) { throw 'Expected exactly one Filament SDK include root' }
+          $Prefix = $EngineHeaders[0].Substring(0, $EngineHeaders[0].Length - 'include/filament/Engine.h'.Length)
+          $Libraries = @('filament', 'backend', 'filaflat', 'filabridge', 'utils', 'zstd', 'bluegl', 'bluevk', 'smol-v')
+          $Selected = @($Entries | Where-Object { $_.StartsWith($Prefix + 'include/') -or
+            $_ -ceq ($Prefix + 'bin/matc.exe') -or
+            ($_ -match '\.dll$' -and $_.StartsWith($Prefix + 'bin/')) })
+          foreach ($Name in $Libraries) {
+            $Member = $Prefix + "lib/x86_64/md/$Name.lib"
+            if ($Entries -cnotcontains $Member) { throw "Filament SDK is missing $Member" }
+            $Selected += $Member
+          }
+          $List = Join-Path $Stage 'selected.txt'
+          $Selected | Set-Content -LiteralPath $List -Encoding ascii
+          tar.exe -xf $Archive -C $SdkOutput -T $List
+          if ($LASTEXITCODE -ne 0) { throw 'Could not extract the Release SDK subset' }
+          $SdkRoot = if ($Prefix) { Join-Path $SdkOutput $Prefix } else { $SdkOutput }
+          $SdkRoot = (Resolve-Path -LiteralPath $SdkRoot).Path
+          "FILAMENT_SDK_ROOT=$SdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $MatcVersion = & (Join-Path $SdkRoot 'bin/matc.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'Filament material compiler could not report its version' }
+          @{
+            tag = $env:FILAMENT_TAG
+            url = $Url
+            bytes = [int64]$env:FILAMENT_WINDOWS_BYTES
+            sha256 = $Digest
+            compiler = $MatcVersion
+            commit = $env:GITHUB_SHA
+          } | ConvertTo-Json | Set-Content -LiteralPath 'filament-evidence/sdk.json'
+
+      - uses: paradoxum-games/setup-rokit@c6a974916e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+
+      - name: Prepare native build tools
+        shell: pwsh
+        run: |
+          $VsWhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $Installation) { throw 'Visual Studio x64 toolchain is unavailable' }
+          "FILAMENT_VS_INSTALL=$Installation" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if (-not (Get-Command clang-format.exe -ErrorAction SilentlyContinue)) {
+            $Formatter = Get-ChildItem -LiteralPath (Join-Path $Installation 'VC/Tools/Llvm') -Filter clang-format.exe -Recurse |
+              Select-Object -First 1
+            if (-not $Formatter) { throw 'clang-format is required by class generation' }
+            $env:Path = "$($Formatter.DirectoryName);$env:Path"
+          }
+          lute tools/classgen
+          if ($LASTEXITCODE -ne 0) { throw 'Class generation failed' }
+          $Compiler = Get-Command glslc.exe -ErrorAction SilentlyContinue
+          if (-not $Compiler) {
+            choco install vulkan-sdk --version=1.4.350 --yes --no-progress
+            if ($LASTEXITCODE -notin @(0, 1641, 3010)) { throw 'Vulkan SDK installation failed' }
+            $Compiler = Get-ChildItem -LiteralPath 'C:/VulkanSDK' -Filter glslc.exe -Recurse |
+              Where-Object { $_.DirectoryName -match '[\\/]Bin$' } |
+              Sort-Object FullName -Descending | Select-Object -First 1
+          }
+          if (-not $Compiler) { throw 'Could not locate glslc' }
+          $CompilerPath = if ($Compiler -is [System.IO.FileInfo]) { $Compiler.FullName } else { $Compiler.Source }
+          "FILAMENT_GLSLC=$CompilerPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Compile the Filament materials and adapter
+        shell: pwsh
+        run: |
+          & (Join-Path $env:FILAMENT_VS_INSTALL 'Common7/Tools/Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          $Options = @(
+            '-S', '.', '-B', 'build-filament', '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release', '-DBUILD_TESTING=ON',
+            '-DGARGANTUAN_TRACY=OFF', '-DGARGANTUAN_WITH_GNS=OFF', '-DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON',
+            '-DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF',
+            "-DGARGANTUAN_GLSLC_EXECUTABLE=$env:FILAMENT_GLSLC", "-DGARGANTUAN_FILAMENT_ROOT=$env:FILAMENT_SDK_ROOT"
+          )
+          cmake @Options 2>&1 | Tee-Object -FilePath 'filament-evidence/configure.log'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-filament --parallel 2 --target 'CMakeFiles/gargantuan_core.dir/src/render/FilamentRenderer.cpp.obj' 2>&1 |
+            Tee-Object -FilePath 'filament-evidence/adapter-compile.log'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Link benchmark and lifecycle test
+        shell: pwsh
+        run: |
+          & (Join-Path $env:FILAMENT_VS_INSTALL 'Common7/Tools/Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          cmake --build build-filament --parallel 2 --target gargantuan_renderer_benchmark gargantuan_filament_renderer_tests 2>&1 |
+            Tee-Object -FilePath 'filament-evidence/link.log'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run functional capture on software Vulkan if available
+        shell: pwsh
+        run: |
+          $Chrome = Join-Path $env:ProgramFiles 'Google/Chrome/Application'
+          $Icd = if (Test-Path -LiteralPath $Chrome) {
+            Get-ChildItem -LiteralPath $Chrome -Filter vk_swiftshader_icd.json -Recurse |
+              Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName 'vk_swiftshader.dll') -PathType Leaf } |
+              Select-Object -First 1
+          }
+          if (-not $Icd) {
+            'NOT RUN: no local SwiftShader Vulkan ICD. Linked binaries are available for hardware execution.' |
+              Set-Content -LiteralPath 'filament-evidence/software-smoke.txt'
+            exit 0
+          }
+          "Software Vulkan ICD: $($Icd.FullName)" | Set-Content -LiteralPath 'filament-evidence/software-smoke.txt'
+          $env:VK_DRIVER_FILES = $Icd.FullName
+          ctest --test-dir build-filament --timeout 180 --output-on-failure --no-tests=error -R '^gargantuan_filament_renderer$' 2>&1 |
+            Tee-Object -FilePath 'filament-evidence/software-vulkan-tests.log'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: renderer-filament-windows-release
+          path: |
+            filament-evidence/
+            build-filament/gargantuan_renderer_benchmark.exe
+            build-filament/gargantuan_filament_renderer_tests.exe
+            build-filament/*.dll
+            build-filament/runtime/
+            build-filament/shaders/
+          if-no-files-found: warn
