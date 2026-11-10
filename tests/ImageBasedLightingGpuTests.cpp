@@ -13,6 +13,7 @@
 #include <glm/gtc/packing.hpp>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -111,6 +112,47 @@ namespace {
 		return {glm::unpackHalf1x16(Pixel[0]), glm::unpackHalf1x16(Pixel[1]), glm::unpackHalf1x16(Pixel[2])};
 	}
 
+	void CheckLargestSource(SDL_GPUDevice *Gpu, CacheFixture &Fixture, SDLImageBasedLighting &Lighting) {
+		constexpr std::uint32_t Dimension = 1024;
+		constexpr RenderTextureIdentity Image{400, 1};
+		auto Pixels = std::make_shared<std::vector<std::uint8_t>>(Dimension * Dimension * 4);
+		for (std::uint32_t Y = 0; Y < Dimension; ++Y) {
+			for (std::uint32_t X = 0; X < Dimension; ++X) {
+				const auto Offset = (Y * Dimension + X) * 4;
+				(*Pixels)[Offset] = (X ^ Y) & 1u ? 255 : 0;
+				(*Pixels)[Offset + 3] = 255;
+			}
+		}
+		RenderPublication Publication{.FullResync = true};
+		Publication.TextureCreates.push_back({Image, 1, Dimension, Dimension, RenderTextureFormat::Rgba8Unorm, Pixels});
+		RenderSkyState Sky{.FaceDimension = Dimension};
+		Sky.Faces.fill({Image, 1});
+		Fixture.Cache.ApplyPublication(Publication);
+		Require(SDL_WaitForGPUIdle(Gpu), SDL_GetError());
+		const auto Start = std::chrono::steady_clock::now();
+		const auto Prepared = Lighting.Prepare(Sky, Fixture.Cache, &Fixture.Metrics);
+		Require(Prepared.Enabled && SDL_WaitForGPUIdle(Gpu), "largest supported Sky prepares and drains");
+		const auto Wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - Start).count();
+		const auto Cpu = static_cast<double>(Fixture.Metrics.IblLastPrepareNanoseconds) / 1'000'000.0;
+		const auto Mirror = ReadTexel(Gpu, Prepared.Reflections.texture, 4, 0, 32, 32);
+		const auto Diffuse = ReadTexel(Gpu, Prepared.Irradiance.texture, 5, 0, 8, 8);
+		Require(std::abs(Mirror.r - 0.5f) < 0.005f && std::abs(Diffuse.r - 0.5f) < 0.005f,
+			"maximum-resolution black/white checkerboard preserves half linear energy after downsampling");
+		constexpr int WarmFrames = 4096;
+		const auto WarmStart = std::chrono::steady_clock::now();
+		const auto Builds = Fixture.Metrics.IblBuilds;
+		const auto CacheHits = Fixture.Metrics.IblCacheHits;
+		for (int Frame = 0; Frame < WarmFrames; ++Frame) {
+			const auto Warm = Lighting.Prepare(Sky, Fixture.Cache, &Fixture.Metrics);
+			Require(Warm.Reflections.texture == Prepared.Reflections.texture, "warm Sky preserves its reflection texture");
+		}
+		const auto Warm = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - WarmStart).count() / WarmFrames;
+		Require(Fixture.Metrics.IblBuilds == Builds && Fixture.Metrics.IblCacheHits == CacheHits + WarmFrames,
+			"warm cache never resubmits environment preprocessing");
+		std::cout << "[Render:IBLGpu] 1024px preprocess CPU ms=" << Cpu << " completion wall ms=" << Wall
+			<< " warm cache CPU ns/frame=" << Warm << " mirror red=" << Mirror.r << " diffuse red=" << Diffuse.r << '\n';
+	}
+
 	void CheckGpuResources() {
 		const std::unique_ptr<SDL_GPUDevice, decltype(&SDL_DestroyGPUDevice)> Gpu(
 			SDL_CreateGPUDevice(SHADER_FORMATS, false, nullptr), SDL_DestroyGPUDevice);
@@ -165,6 +207,7 @@ namespace {
 		const auto AfterRestart = Recreated.Prepare(ReusedIds, Fixture.Cache, &Fixture.Metrics);
 		Require(AfterRestart.Enabled && Fixture.Metrics.IblBuilds == 4, "renderer-owned IBL resources can be recreated from residency");
 		CheckSharp(AfterRestart, 2);
+		CheckLargestSource(Gpu.get(), Fixture, Recreated);
 		std::cout << "[Render:IBLGpu] " << SDL_GetGPUDeviceDriver(Gpu.get()) << " rough red=" << Rough.r
 			<< " diffuse red=" << Positive.r << '/' << Negative.r << " BRDF=" << Brdf.r + Brdf.g << '\n';
 	}
