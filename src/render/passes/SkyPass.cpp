@@ -25,7 +25,8 @@ namespace gargantuan {
 			glm::vec4 SceneFlags;
 		};
 
-		SkyPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics) {
+		SkyPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics)
+			: ImageBasedLighting(Gpu) {
 			try {
 				Shader.VertexFilepath = GetSDLShaderPath("sky.vert");
 				Shader.VertexUniformBufferCount = 1;
@@ -61,6 +62,7 @@ namespace gargantuan {
 		}
 
 		void Destroy(SDL_GPUDevice *Gpu) override {
+			ImageBasedLighting.Destroy();
 			if (FallbackTexture) SDL_ReleaseGPUTexture(Gpu, FallbackTexture);
 			if (FallbackTransferBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, FallbackTransferBuffer);
 			if (Sampler) SDL_ReleaseGPUSampler(Gpu, Sampler);
@@ -74,6 +76,8 @@ namespace gargantuan {
 			EnsureFallbackTexture(Gpu, Context.Metrics);
 			const auto &Frame = Context.Projection.GetFrame();
 			const auto &Environment = Frame.Environment;
+			if (!Context.TextureResources) throw std::logic_error("Sky rendering requires the SDL texture cache");
+			Context.EnvironmentLighting = ImageBasedLighting.Prepare(Environment.Sky, *Context.TextureResources, Context.Metrics);
 			SDL_GPUColorTargetInfo ColorTarget{
 				.texture = Context.GetSceneColorTexture(),
 				.clear_color =
@@ -165,6 +169,7 @@ namespace gargantuan {
 			}
 		}
 
+		SDLImageBasedLighting ImageBasedLighting;
 		SDL_GPUTexture *FallbackTexture = nullptr;
 		SDL_GPUTransferBuffer *FallbackTransferBuffer = nullptr;
 		SDL_GPUSampler *Sampler = nullptr;
