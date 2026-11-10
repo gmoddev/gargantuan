@@ -118,7 +118,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $Targets = @('gargantuan', 'gargantuan_shaders', 'gargantuan_editor_viewport_smoke',
             'gargantuan_renderer_benchmark', 'gargantuan_renderer_depth_tests', 'gargantuan_renderer_foundation2_gpu_benchmark',
-            'gargantuan_ibl_gpu_tests')
+            'gargantuan_ibl_gpu_tests', 'gargantuan_foundation_tests')
           cmake --build build-renderer --parallel 3 --target @Targets 2>&1 | Tee-Object -FilePath renderer-evidence/build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $Names = @('gargantuan.exe', 'gargantuan_editor_viewport_smoke.exe', 'gargantuan_renderer_benchmark.exe',
@@ -138,6 +138,11 @@ jobs:
           @{ source = $env:GITHUB_SHA; directory = 'build-renderer'; editorHostArgument = $true
             rawSamples = $true; supportsHdr = $true; referenceCaptures = $true; files = @($Members) } |
             ConvertTo-Json -Depth 5 | Set-Content -LiteralPath renderer-evidence/renderer-package.json
+          $env:SDL_VIDEODRIVER = 'dummy'
+          $env:SDL_AUDIODRIVER = 'dummy'
+          ctest --test-dir build-renderer --output-on-failure -R '^gargantuan_foundation$' 2>&1 |
+            Tee-Object -FilePath renderer-evidence/ctest.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
