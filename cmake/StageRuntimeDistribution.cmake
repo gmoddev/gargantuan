@@ -142,6 +142,10 @@ endforeach()
 foreach(GARGANTUAN_SHADER
 	gui.frag.spv
 	gui.vert.spv
+	ibl_brdf.frag.spv
+	ibl_convolve.frag.spv
+	ibl_fullscreen.vert.spv
+	ibl_source.frag.spv
 	opaque.frag.spv
 	opaque.vert.spv
 	scene-resolve.frag.spv

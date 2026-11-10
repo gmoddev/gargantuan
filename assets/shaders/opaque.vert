@@ -19,6 +19,7 @@ layout(set = 1, binding = 0) uniform WorldUniforms {
     vec4 SunColorFogEnabled;
     vec4 FogColorStart;
     vec4 CameraPositionFogEnd;
+    vec4 EnvironmentLighting;
 } world;
 
 layout(set = 1, binding = 1) uniform PartUniforms {
@@ -27,6 +28,8 @@ layout(set = 1, binding = 1) uniform PartUniforms {
     vec4 Color;
     vec4 MaterialValues;
     vec4 MaterialFlags;
+    vec4 EmissiveOcclusion;
+    vec4 MaterialControls;
 } part;
 
 layout(location = 0) out vec3 FragmentNormal;
@@ -37,6 +40,8 @@ layout(location = 4) out vec2 FragmentUV;
 layout(location = 5) out vec4 FragmentMaterialValues;
 layout(location = 6) out vec4 FragmentTangent;
 layout(location = 7) flat out vec4 FragmentMaterialFlags;
+layout(location = 8) flat out vec4 FragmentEmissiveOcclusion;
+layout(location = 9) flat out vec4 FragmentMaterialControls;
 
 void main() {
 	SkinnedVertex Vertex = ApplySkinning(
@@ -56,4 +61,6 @@ void main() {
     float Orientation = determinant(Model) < 0.0 ? -1.0 : 1.0;
     FragmentTangent = vec4(Model * Vertex.Tangent.xyz, Orientation * Vertex.Tangent.w);
     FragmentMaterialFlags = part.MaterialFlags;
+    FragmentEmissiveOcclusion = part.EmissiveOcclusion;
+    FragmentMaterialControls = part.MaterialControls;
 }

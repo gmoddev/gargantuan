@@ -10,6 +10,8 @@ layout(location = 4) in vec2 FragmentUV;
 layout(location = 5) in vec4 FragmentMaterialValues;
 layout(location = 6) in vec4 FragmentTangent;
 layout(location = 7) flat in vec4 FragmentMaterialFlags;
+layout(location = 8) flat in vec4 FragmentEmissiveOcclusion;
+layout(location = 9) flat in vec4 FragmentMaterialControls;
 
 layout(location = 0) out vec4 OutputColor;
 
@@ -22,12 +24,18 @@ layout(set = 3, binding = 0) uniform WorldUniforms {
     vec4 SunColorFogEnabled;
     vec4 FogColorStart;
     vec4 CameraPositionFogEnd;
+    vec4 EnvironmentLighting;
 } world;
 
 layout(set = 2, binding = 0) uniform sampler2DShadow ShadowMap;
 layout(set = 2, binding = 1) uniform sampler2D BaseColorTexture;
 layout(set = 2, binding = 2) uniform sampler2D NormalTexture;
 layout(set = 2, binding = 3) uniform sampler2D MetallicRoughnessTexture;
+layout(set = 2, binding = 4) uniform sampler2D EmissiveTexture;
+layout(set = 2, binding = 5) uniform sampler2D OcclusionTexture;
+layout(set = 2, binding = 6) uniform samplerCube EnvironmentIrradiance;
+layout(set = 2, binding = 7) uniform samplerCube EnvironmentReflections;
+layout(set = 2, binding = 8) uniform sampler2D EnvironmentBrdf;
 
 float SHADOW_SPREAD = 2.0;
 vec2 SHADOW_TEXEL_SIZE = vec2(1.0 / 2048.0);
@@ -40,22 +48,22 @@ vec2 POISSON_DISK[4] = vec2[](
 
 const float Pi = 3.141592653589793;
 
-vec4 ReadColorTexel(ivec2 Pixel, ivec2 Dimensions) {
-    vec4 Texel = texelFetch(BaseColorTexture, (Pixel + Dimensions) % Dimensions, 0);
+vec4 ReadColorTexel(sampler2D Map, ivec2 Pixel, ivec2 Dimensions) {
+    vec4 Texel = texelFetch(Map, (Pixel + Dimensions) % Dimensions, 0);
     return vec4(SrgbToLinear(Texel.rgb), Texel.a);
 }
 
-vec4 SampleLinearBaseColor(vec2 UV) {
+vec4 SampleLinearColor(sampler2D Map, vec2 UV) {
     // One image can serve both color and data slots under the same residency.
     // Decode color texels before filtering and leave alpha in its linear range.
-    ivec2 Dimensions = textureSize(BaseColorTexture, 0);
-    if (all(equal(Dimensions, ivec2(1)))) return ReadColorTexel(ivec2(0), Dimensions);
+    ivec2 Dimensions = textureSize(Map, 0);
+    if (all(equal(Dimensions, ivec2(1)))) return ReadColorTexel(Map, ivec2(0), Dimensions);
     vec2 Pixel = fract(UV) * vec2(Dimensions) - 0.5;
     ivec2 Lower = ivec2(floor(Pixel));
     vec2 Weight = fract(Pixel);
     return mix(
-        mix(ReadColorTexel(Lower, Dimensions), ReadColorTexel(Lower + ivec2(1, 0), Dimensions), Weight.x),
-        mix(ReadColorTexel(Lower + ivec2(0, 1), Dimensions), ReadColorTexel(Lower + 1, Dimensions), Weight.x),
+        mix(ReadColorTexel(Map, Lower, Dimensions), ReadColorTexel(Map, Lower + ivec2(1, 0), Dimensions), Weight.x),
+        mix(ReadColorTexel(Map, Lower + ivec2(0, 1), Dimensions), ReadColorTexel(Map, Lower + 1, Dimensions), Weight.x),
         Weight.y);
 }
 
@@ -71,10 +79,25 @@ vec3 MaterialNormal(vec3 Normal) {
             Tangent = normalize(Tangent);
             vec3 Bitangent = cross(Normal, Tangent) * (FragmentTangent.w < 0.0 ? -1.0 : 1.0);
             vec3 Sampled = texture(NormalTexture, FragmentUV).xyz * 2.0 - 1.0;
+            Sampled.xy *= FragmentMaterialControls.x;
             Normal = SafeDirection(mat3(Tangent, Bitangent, Normal) * Sampled, Normal);
         }
     }
     return gl_FrontFacing ? Normal : -Normal;
+}
+
+vec3 EvaluateEnvironment(vec3 Base, vec3 Normal, vec3 View, float Metallic, float Roughness) {
+    vec3 Ambient = Base * (1.0 - Metallic) * world.AmbientExposure.rgb;
+    if (world.EnvironmentLighting.x < 0.5) return Ambient;
+    float NoV = clamp(dot(Normal, View), 0.0, 1.0);
+    vec3 F0 = mix(vec3(0.04), Base, Metallic);
+    vec3 GrazingFresnel = max(vec3(1.0 - Roughness), F0);
+    vec3 Fresnel = F0 + (GrazingFresnel - F0) * pow(1.0 - NoV, 5.0);
+    vec3 Diffuse = texture(EnvironmentIrradiance, Normal).rgb * Base * (1.0 - Fresnel) * (1.0 - Metallic);
+    vec3 Radiance = textureLod(EnvironmentReflections, reflect(-View, Normal),
+        Roughness * world.EnvironmentLighting.y).rgb;
+    vec2 Brdf = texture(EnvironmentBrdf, vec2(NoV, Roughness)).rg;
+    return Ambient + Diffuse + Radiance * (F0 * Brdf.x + Brdf.y);
 }
 
 vec3 EvaluateDirect(vec3 Base, vec3 Normal, vec3 Light, vec3 View, float Metallic, float Roughness) {
@@ -121,7 +144,7 @@ void main() {
     bool Physical = FragmentMaterialFlags.x > 0.5;
     vec4 baseColor = FragmentColor;
     if (FragmentMaterialFlags.y > 0.5) {
-        baseColor *= Physical ? SampleLinearBaseColor(FragmentUV) : texture(BaseColorTexture, FragmentUV);
+        baseColor *= Physical ? SampleLinearColor(BaseColorTexture, FragmentUV) : texture(BaseColorTexture, FragmentUV);
     }
     if (FragmentMaterialValues.y == 1.0 && baseColor.a < FragmentMaterialValues.x) discard;
     if (FragmentMaterialValues.y != 2.0) baseColor.a = 1.0;
@@ -141,8 +164,12 @@ void main() {
             Roughness *= RoughnessMetallic.x;
         }
         vec3 Base = clamp(baseColor.rgb, 0.0, 1.0);
-        color = Base * (1.0 - Metallic) * world.AmbientExposure.rgb;
+        float Occlusion = mix(1.0, texture(OcclusionTexture, FragmentUV).r, FragmentEmissiveOcclusion.w);
+        color = EvaluateEnvironment(Base, Normal, View, Metallic, Roughness) * Occlusion;
         color += Sun * EvaluateDirect(Base, Normal, Light, View, Metallic, Roughness);
+        vec3 Emissive = FragmentEmissiveOcclusion.rgb;
+        if (FragmentMaterialControls.y > 0.5) Emissive *= SampleLinearColor(EmissiveTexture, FragmentUV).rgb;
+        color += Emissive;
     } else {
         color = baseColor.rgb * (world.AmbientExposure.rgb + Sun * NormalDotLight);
     }
