@@ -3,6 +3,7 @@
 #include "gargantuan/render/SDLRenderer.hpp"
 
 #include "gargantuan/Log.hpp"
+#include "render/sdl/SDLDirectionalShadowCache.hpp"
 #include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
@@ -83,6 +84,7 @@ namespace gargantuan {
 		std::uint64_t VisibilityGeneration = 0;
 		RenderPublicationId VisibilityPublication = InvalidRenderPublicationId;
 		bool VisibilityComplete = false;
+		SDLDirectionalShadowCache ShadowCache;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		SDLRendererMetrics Metrics;
 		std::uint32_t RemainingPaletteUploadFailures = 0;
@@ -253,6 +255,7 @@ namespace gargantuan {
 					++State->Metrics.StalePoseDrops;
 			}
 			const auto ProjectionStart = Clock::now();
+			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
 			const auto Changes = State->Projection.Apply(*Publication);
 			State->Metrics.EnvironmentApplications += Changes.EnvironmentsUpdated;
 			State->Metrics.LastProjectionNanoseconds = Nanoseconds(Clock::now() - ProjectionStart);
@@ -276,6 +279,7 @@ namespace gargantuan {
 			State->MeshResources->Destroy();
 			State->TextureResources->Destroy();
 			State->SkinPalettes->Destroy();
+			State->ShadowCache.Invalidate();
 			State->ShadowPoseRevisions.clear();
 			State->VisibilityComplete = false;
 			State->VisibleAnimationObjects.clear();
@@ -305,7 +309,7 @@ namespace gargantuan {
 			if (Pose.Mode == RenderAnimationSkinningMode::CpuFallback) ++State->Metrics.CpuFallbackRigs;
 		}
 		SDLFrameContext Frame(
-			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowPoseRevisions);
+			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
 		Frame.Commands = Commands;
 		Frame.HdrSceneTexture = State->HdrSceneTexture;
 		Frame.DepthTexture = State->DepthTexture;
@@ -339,7 +343,8 @@ namespace gargantuan {
 			return;
 		}
 		try {
-			for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
+			for (auto &Pass : State->RenderPasses)
+				if (auto *Recorded = Pass->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
 		} catch (...) {
 			if (State->Options.Offscreen) SDL_CancelGPUCommandBuffer(Frame.Commands);
 			else SDL_SubmitGPUCommandBuffer(Frame.Commands);
@@ -363,6 +368,7 @@ namespace gargantuan {
 			State->Metrics.LastSubmissionNanoseconds = Nanoseconds(Clock::now() - SubmissionStart);
 		}
 		State->Metrics.CpuSubmissionNanoseconds += State->Metrics.LastSubmissionNanoseconds;
+		if (State->ShadowCache.OnFrameSubmitted()) ++State->Metrics.ShadowMapBuilds;
 		++State->Metrics.FramesSubmitted;
 		if (Publication->FullResync) ++State->Metrics.FullResyncs;
 	}

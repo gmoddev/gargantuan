@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace gargantuan {
+	class SDLDirectionalShadowCache;
 	class SDLMeshCache;
 	class SDLSkinPaletteCache;
 	class SDLTextureCache;
@@ -24,9 +25,10 @@ namespace gargantuan {
 			const RenderProjection &RenderState,
 			SDLMeshCache &MeshResourcesValue,
 			SDLSkinPaletteCache &SkinPalettesValue,
+			SDLDirectionalShadowCache &ShadowCacheValue,
 			std::unordered_map<ObjectId, std::uint64_t> &ShadowPoseRevisionsValue
 		) : Projection(RenderState), MeshResources(MeshResourcesValue), SkinPalettes(SkinPalettesValue),
-			ShadowPoseRevisions(ShadowPoseRevisionsValue) {}
+			ShadowCache(ShadowCacheValue), ShadowPoseRevisions(ShadowPoseRevisionsValue) {}
 
 		const RenderProjection &Projection;
 		SDLMeshCache &MeshResources;
@@ -42,6 +44,7 @@ namespace gargantuan {
 		SDL_GPUTexture *ShadowMapTexture = nullptr;
 		SDL_GPUSampler *ShadowSampler = nullptr;
 		glm::mat4 ShadowMatrix{1.0f};
+		SDLDirectionalShadowCache &ShadowCache;
 		std::unordered_map<ObjectId, std::uint64_t> &ShadowPoseRevisions;
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;

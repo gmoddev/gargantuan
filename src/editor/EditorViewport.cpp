@@ -5,6 +5,7 @@
 
 #include "gargantuan/editor/EditorViewport.hpp"
 
+#include "render/sdl/SDLDirectionalShadowCache.hpp"
 #include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
@@ -119,6 +120,7 @@ namespace gargantuan {
 		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
+		SDLDirectionalShadowCache ShadowCache;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		std::vector<std::uint8_t> BgraPixels;
 
@@ -258,10 +260,16 @@ namespace gargantuan {
 		if (!State || !State->Gpu) throw std::logic_error("Viewport renderer is not initialized");
 		if (!Publication) throw std::invalid_argument("Viewport requires an immutable RenderPublication");
 		if (State->Projection.GetLastPublicationId() == Publication->Id) return;
-		(void)State->Projection.Apply(*Publication);
-		State->MeshResources->ApplyPublication(*Publication);
-		State->TextureResources->ApplyPublication(*Publication);
-		State->SkinPalettes->ApplyPublication(*Publication);
+		try {
+			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
+			(void)State->Projection.Apply(*Publication);
+			State->MeshResources->ApplyPublication(*Publication);
+			State->TextureResources->ApplyPublication(*Publication);
+			State->SkinPalettes->ApplyPublication(*Publication);
+		} catch (...) {
+			State->ShadowCache.Invalidate();
+			throw;
+		}
 		if (Publication->FullResync) State->ShadowPoseRevisions.clear();
 		for (const auto &Remove : Publication->Removes)
 			State->ShadowPoseRevisions.erase(Remove.Object);
@@ -277,7 +285,7 @@ namespace gargantuan {
 		auto *Commands = SDL_AcquireGPUCommandBuffer(State->Gpu);
 		if (!Commands) throw std::runtime_error(std::format("Failed to acquire viewport command buffer: {}", SDL_GetError()));
 		SDLFrameContext Frame(
-			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowPoseRevisions);
+			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
 		Frame.Commands = Commands;
 		Frame.SwapchainTexture = State->ColorTexture;
 		Frame.HdrSceneTexture = State->HdrSceneTexture;
@@ -289,7 +297,8 @@ namespace gargantuan {
 		Frame.Width = State->Width;
 		Frame.Height = State->Height;
 		try {
-			for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
+			for (auto &Pass : State->RenderPasses)
+				if (auto *Recorded = Pass->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
 		} catch (...) {
 			SDL_CancelGPUCommandBuffer(Commands);
 			throw;
@@ -314,6 +323,7 @@ namespace gargantuan {
 			throw std::runtime_error(std::format("Failed to wait for viewport frame: {}", SDL_GetError()));
 		}
 		const auto ReadbackComplete = std::chrono::steady_clock::now();
+		(void)State->ShadowCache.OnFrameSubmitted();
 		auto *Rgba = static_cast<const std::uint8_t *>(SDL_MapGPUTransferBuffer(State->Gpu, State->DownloadBuffer, false));
 		if (!Rgba) {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);

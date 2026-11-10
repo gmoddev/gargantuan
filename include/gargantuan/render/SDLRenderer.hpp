@@ -94,6 +94,10 @@ namespace gargantuan {
 		std::uint64_t MaterialViewBytes = 0;
 		std::uint64_t MaterialSourceBytes = 0;
 		std::uint64_t MaterialViewFallbacks = 0;
+		std::uint64_t ShadowMapBuilds = 0;
+		std::uint64_t ShadowCacheHits = 0;
+		std::uint64_t ShadowMapPasses = 0;
+		std::uint64_t ShadowCasterDraws = 0;
 	};
 
 	class SDLRenderer final : public BaseRenderer {
