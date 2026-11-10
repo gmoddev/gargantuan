@@ -83,6 +83,9 @@ namespace gargantuan {
 				!IsUnitColor(Environment.Fog.Color) || !std::isfinite(Environment.Fog.Start) ||
 				!std::isfinite(Environment.Fog.End) || Environment.Fog.Start < 0.0f ||
 				Environment.Fog.End < Environment.Fog.Start || Environment.Fog.End > 100000.0f ||
+				!std::isfinite(Environment.EnvironmentRotation) || std::abs(Environment.EnvironmentRotation) > 180.0f ||
+				!std::isfinite(Environment.IblIntensity) || Environment.IblIntensity < 0.0f || Environment.IblIntensity > 8.0f ||
+				(Environment.ToneMapping != RenderToneMapping::Filmic && Environment.ToneMapping != RenderToneMapping::Reinhard) ||
 				std::abs(glm::length(Environment.SunDirection) - 1.0f) > 1e-4f) return false;
 			if (!Environment.Sky) return true;
 			if (Environment.Sky->FaceDimension == 0 || Environment.Sky->FaceDimension > 1024) return false;

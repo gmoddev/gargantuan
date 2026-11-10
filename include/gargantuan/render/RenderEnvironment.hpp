@@ -60,6 +60,7 @@ namespace gargantuan {
 	inline constexpr float MaximumLocalLightCoordinate = 1.0e6f;
 
 	enum class RenderLocalLightKind : std::uint8_t { Point, Spot };
+	enum class RenderToneMapping : std::uint8_t { Filmic, Reinhard };
 
 	struct RenderLocalLightState {
 		ObjectId Object;
@@ -85,5 +86,8 @@ namespace gargantuan {
 		RenderFogState Fog;
 		std::optional<RenderSkyState> Sky;
 		std::shared_ptr<const std::vector<RenderLocalLightState>> LocalLights;
+		float EnvironmentRotation = 0.0f;
+		float IblIntensity = 1.0f;
+		RenderToneMapping ToneMapping = RenderToneMapping::Filmic;
 	};
 }

@@ -92,6 +92,16 @@ An unchanged vector is shared across publications. RenderProjection validates
 new payloads, including size, order, uniqueness and numeric bounds. The
 directional sun and Sky remain independent of local light membership.
 
+Renderer Foundation 4 also adds three saved and replicated fields to the
+existing Lighting service. `EnvironmentRotation` is yaw in degrees around
+world +Y, defaults to 0 and is limited to `[-180,180]`. It orients the
+visible Sky and its environment-light sampling together. `IblIntensity`
+scales diffuse and specular image-based lighting in linear space, defaults to
+1 and accepts `[0,8]`. `ToneMapping` uses the schema enum
+`ToneMappingMode` with default `Filmic` and alternative `Reinhard`.
+It selects the world color transform after exposure and before GUI.
+All three values are published through the same environment dirty domain.
+
 ## Sun and exposure semantics
 
 World coordinates use `+Y` up. `SunDirection` points from the world toward the

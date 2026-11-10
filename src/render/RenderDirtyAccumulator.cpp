@@ -59,6 +59,8 @@ namespace gargantuan {
 		if (Property->PropertyName == "Ambient" || Property->PropertyName == "SunColor" ||
 			Property->PropertyName == "Brightness" || Property->PropertyName == "ClockTime" ||
 			Property->PropertyName == "ExposureCompensation" || Property->PropertyName == "EnvironmentColor" ||
+			Property->PropertyName == "EnvironmentRotation" || Property->PropertyName == "IblIntensity" ||
+			Property->PropertyName == "ToneMapping" ||
 			Property->PropertyName == "FogEnabled" || Property->PropertyName == "FogColor" ||
 			Property->PropertyName == "FogStart" || Property->PropertyName == "FogEnd" ||
 			Property->PropertyName == "Enabled" || Property->PropertyName.starts_with("Skybox") ||

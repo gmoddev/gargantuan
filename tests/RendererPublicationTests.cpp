@@ -640,6 +640,8 @@ namespace {
 		const Color3 DefaultAmbient = LightingValue->GetAmbient();
 		Check(
 			LightingValue->GetClockTime() == 12.0f && LightingValue->GetBrightness() == 1.0f &&
+				LightingValue->GetEnvironmentRotation() == 0.0f && LightingValue->GetIblIntensity() == 1.0f &&
+				LightingValue->GetToneMapping() == Enums::ToneMappingMode::Filmic &&
 				DefaultAmbient.R == 0.2f && DefaultAmbient.G == 0.2f && DefaultAmbient.B == 0.2f,
 			"Lighting defaults are deterministic"
 		);
@@ -656,6 +658,12 @@ namespace {
 		CheckThrows<std::invalid_argument>(
 			[&] { LightingValue->SetFogStart(1001.0f); }, "FogStart rejects an inverted fog interval"
 		);
+		CheckThrows<std::invalid_argument>([&] { LightingValue->SetEnvironmentRotation(181.0f); },
+			"environment yaw rejects out-of-range values");
+		CheckThrows<std::invalid_argument>([&] { LightingValue->SetIblIntensity(-0.1f); },
+			"image-based light intensity rejects negative values");
+		CheckThrows<std::invalid_argument>([&] { LightingValue->SetToneMapping(static_cast<Enums::ToneMappingMode>(2)); },
+			"unregistered tone-mapping mode cannot commit");
 
 		const auto Sunrise = ComputeEnvironmentSunState(6.0f, 2.0f, Color3(1.0f, 0.5f, 0.25f));
 		const auto Noon = ComputeEnvironmentSunState(12.0f, 2.0f, Color3(1.0f, 0.5f, 0.25f));
@@ -707,6 +715,9 @@ namespace {
 			LightingValue->SetClockTime(static_cast<float>(Index % 24));
 		LightingValue->SetAmbient(Color3(0.1f, 0.15f, 0.2f));
 		LightingValue->SetExposureCompensation(1.0f);
+		LightingValue->SetEnvironmentRotation(-90.0f);
+		LightingValue->SetIblIntensity(0.25f);
+		LightingValue->SetToneMapping(Enums::ToneMappingMode::Reinhard);
 		LightingValue->SetFogEnabled(true);
 		LightingValue->SetFogStart(10.0f);
 		LightingValue->SetFogEnd(100.0f);
@@ -714,10 +725,18 @@ namespace {
 		Check(
 			Animated->EnvironmentChanged && Animated->Creates.empty() && Animated->Updates.empty() &&
 				Animated->Removes.empty() && Animated->Frame.Environment.ExposureMultiplier == 2.0f &&
-				Animated->Frame.Environment.Fog.Enabled,
+				Animated->Frame.Environment.Fog.Enabled && Animated->Frame.Environment.EnvironmentRotation == -90.0f &&
+				Animated->Frame.Environment.IblIntensity == 0.25f &&
+				Animated->Frame.Environment.ToneMapping == RenderToneMapping::Reinhard,
 			"many environment edits coalesce into one environment-only final-state publication"
 		);
 		(void)Projection.Apply(*Animated);
+		auto InvalidEnvironment = *Animated;
+		InvalidEnvironment.BaseId = Animated->Id;
+		++InvalidEnvironment.Id;
+		InvalidEnvironment.Frame.Environment.IblIntensity = 9.0f;
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(InvalidEnvironment); },
+			"projection rejects an invalid IBL multiplier in a neutral environment payload");
 		auto Static = Publisher.Publish(*World, Camera, 640, 360);
 		Check(
 			!Static->EnvironmentChanged && Static->Creates.empty() && Static->Updates.empty(),

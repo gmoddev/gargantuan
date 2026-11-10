@@ -66,7 +66,8 @@ namespace gargantuan {
 				!Equal(Left.EnvironmentColor, Right.EnvironmentColor) || Left.Fog.Enabled != Right.Fog.Enabled ||
 				!Equal(Left.Fog.Color, Right.Fog.Color) || Left.Fog.Start != Right.Fog.Start ||
 				Left.Fog.End != Right.Fog.End || Left.Sky.has_value() != Right.Sky.has_value() ||
-				Left.LocalLights != Right.LocalLights)
+				Left.LocalLights != Right.LocalLights || Left.EnvironmentRotation != Right.EnvironmentRotation ||
+				Left.IblIntensity != Right.IblIntensity || Left.ToneMapping != Right.ToneMapping)
 				return false;
 			if (!Left.Sky) return true;
 			if (Left.Sky->FaceDimension != Right.Sky->FaceDimension) return false;
@@ -504,6 +505,10 @@ namespace gargantuan {
 		Result.SunIntensity = Sun.Intensity;
 		Result.ExposureMultiplier = ComputeEnvironmentExposure(LightingValue->GetExposureCompensation());
 		Result.EnvironmentColor = static_cast<glm::vec3>(LightingValue->GetEnvironmentColor());
+		Result.EnvironmentRotation = LightingValue->GetEnvironmentRotation();
+		Result.IblIntensity = LightingValue->GetIblIntensity();
+		Result.ToneMapping = LightingValue->GetToneMapping() == Enums::ToneMappingMode::Reinhard ?
+			RenderToneMapping::Reinhard : RenderToneMapping::Filmic;
 		Result.Fog = {
 			.Enabled = LightingValue->GetFogEnabled(),
 			.Color = static_cast<glm::vec3>(LightingValue->GetFogColor()),
