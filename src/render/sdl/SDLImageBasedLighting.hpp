@@ -46,6 +46,7 @@ namespace gargantuan {
 
 		void EnsureFallback(SDLRendererMetrics *Metrics);
 		bool EnsurePipelines(SDLRendererMetrics *Metrics);
+		bool CanBuildSky();
 		void BuildSky(const SkyKey &Key, SDLTextureCache &Textures, SDLRendererMetrics *Metrics);
 		void ReleaseSky(SDLRendererMetrics *Metrics);
 		void Release(SDL_GPUTexture *&Texture, SDLRendererMetrics *Metrics);
@@ -56,6 +57,7 @@ namespace gargantuan {
 		SDL_GPUTexture *Irradiance = nullptr;
 		SDL_GPUTexture *Reflections = nullptr;
 		SDL_GPUTexture *BrdfLut = nullptr;
+		SDL_GPUFence *PreparationFence = nullptr;
 		std::array<SDLFileShader, 3> Shaders;
 		std::array<SDL_GPUGraphicsPipeline *, 3> Pipelines{};
 		std::optional<SkyKey> ActiveKey;

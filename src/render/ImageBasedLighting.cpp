@@ -99,6 +99,7 @@ namespace gargantuan {
 		ReleaseSky(nullptr);
 		Release(BrdfLut, nullptr);
 		Release(FallbackCube, nullptr);
+		if (PreparationFence) SDL_ReleaseGPUFence(Gpu, std::exchange(PreparationFence, nullptr));
 		if (Sampler) SDL_ReleaseGPUSampler(Gpu, std::exchange(Sampler, nullptr));
 		for (std::size_t Index = 0; Index < Pipelines.size(); ++Index) {
 			if (Pipelines[Index]) SDL_ReleaseGPUGraphicsPipeline(Gpu, std::exchange(Pipelines[Index], nullptr));
@@ -180,6 +181,13 @@ namespace gargantuan {
 		return true;
 	}
 
+	bool SDLImageBasedLighting::CanBuildSky() {
+		if (!PreparationFence) return true;
+		if (!SDL_QueryGPUFence(Gpu, PreparationFence)) return false;
+		SDL_ReleaseGPUFence(Gpu, std::exchange(PreparationFence, nullptr));
+		return true;
+	}
+
 	void SDLImageBasedLighting::BuildSky(const SkyKey &Key, SDLTextureCache &Textures, SDLRendererMetrics *Metrics) {
 		const auto SourceSize = std::min(std::bit_ceil(Key.Dimension), MAX_SOURCE_SIZE);
 		const auto SourceLevels = std::bit_width(SourceSize);
@@ -218,7 +226,9 @@ namespace gargantuan {
 				const glm::vec4 BrdfDimensions(static_cast<float>(BRDF_SIZE), 0.0f, 0.0f, 0.0f);
 				DrawTarget(Commands, NextBrdf, 0, 0, BRDF_SIZE, Pipelines[2], nullptr, &BrdfDimensions, sizeof(BrdfDimensions));
 			}
-			Submit(Commands);
+			PreparationFence = SDL_SubmitGPUCommandBufferAndAcquireFence(std::exchange(Commands, nullptr));
+			if (!PreparationFence)
+				throw std::runtime_error(std::format("Could not submit IBL preparation: {}", SDL_GetError()));
 		} catch (...) {
 			if (Commands) SDL_CancelGPUCommandBuffer(Commands);
 			Release(SourceCube, Metrics);
@@ -244,6 +254,7 @@ namespace gargantuan {
 	) {
 		if (Metrics) Metrics->IblLastPrepareNanoseconds = 0;
 		EnsureFallback(Metrics);
+		bool Ready = false;
 		if (!Sky) {
 			ReleaseSky(Metrics);
 			RejectedKey.reset();
@@ -253,7 +264,7 @@ namespace gargantuan {
 				Key.Faces[Face] = {Sky->Faces[Face].Texture, Sky->Faces[Face].ContentRevision};
 			if (ActiveKey == Key) {
 				if (Metrics) ++Metrics->IblCacheHits;
-			} else if (RejectedKey != Key && !PreprocessingUnavailable) {
+			} else if (RejectedKey != Key && !PreprocessingUnavailable && CanBuildSky()) {
 				const auto Start = std::chrono::steady_clock::now();
 				try {
 					if (EnsurePipelines(Metrics)) {
@@ -268,8 +279,10 @@ namespace gargantuan {
 				if (Metrics) Metrics->IblLastPrepareNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
 					std::chrono::steady_clock::now() - Start).count();
 			}
+			// When a newer Sky arrives during preparation, keep the previous
+			// resource alive but never light the new Sky with stale radiance.
+			Ready = ActiveKey == Key;
 		}
-		const bool Ready = ActiveKey.has_value();
 		return {
 			.Irradiance = {Ready ? Irradiance : FallbackCube, Sampler},
 			.Reflections = {Ready ? Reflections : FallbackCube, Sampler},
