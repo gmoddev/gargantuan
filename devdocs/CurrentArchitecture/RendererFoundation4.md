@@ -136,3 +136,9 @@ finite range cutoff. Spotlights multiply this by the inner-to-outer cone
 response. Local illumination adds to the existing directional and ambient
 terms before fog and the HDR resolve. The directional depth target
 continues to serve sun shadows.
+
+Directional depth is reused across publications that leave its casters,
+sampled alpha content, geometry and sun direction unchanged. The shared
+SDL runtime and viewport cache commits only after the recorded depth work
+is submitted. The tested coverage remains the existing world-origin
+directional volume. [Directional shadow reuse](DirectionalShadowReuse.md)

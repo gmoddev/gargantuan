@@ -9,7 +9,6 @@
 
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <format>
 #include <memory>
 #include <stdexcept>
@@ -63,20 +62,25 @@ namespace gargantuan {
 
 		void Destroy(SDL_GPUDevice *Gpu) override {
 			ImageBasedLighting.Destroy();
-			if (FallbackTexture) SDL_ReleaseGPUTexture(Gpu, FallbackTexture);
-			if (FallbackTransferBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, FallbackTransferBuffer);
 			if (Sampler) SDL_ReleaseGPUSampler(Gpu, Sampler);
-			FallbackTexture = nullptr;
-			FallbackTransferBuffer = nullptr;
 			Sampler = nullptr;
 			SDLRenderPass::Destroy(Gpu);
 		}
 
-		SDL_GPURenderPass *Draw(SDL_GPUDevice *Gpu, SDLFrameContext &Context) override {
-			EnsureFallbackTexture(Gpu, Context.Metrics);
+		SDL_GPURenderPass *Draw(SDL_GPUDevice *, SDLFrameContext &Context) override {
 			const auto &Frame = Context.Projection.GetFrame();
 			const auto &Environment = Frame.Environment;
 			if (!Context.TextureResources) throw std::logic_error("Sky rendering requires the SDL texture cache");
+			std::array<SDL_GPUTextureSamplerBinding, 6> Bindings;
+			if (Environment.Sky) {
+				for (std::size_t Index = 0; Index < Bindings.size(); ++Index) {
+					auto *Texture = Context.TextureResources->Find(Environment.Sky->Faces[Index].Texture);
+					if (!Texture) throw std::logic_error("[Renderer:Sky] Face texture has no SDL residency");
+					Bindings[Index] = {Texture, Sampler};
+				}
+			} else {
+				Bindings.fill({Context.TextureResources->GetWhiteTexture(), Sampler});
+			}
 			Context.EnvironmentLighting = ImageBasedLighting.Prepare(Environment.Sky, *Context.TextureResources, Context.Metrics);
 			SDL_GPUColorTargetInfo ColorTarget{
 				.texture = Context.GetSceneColorTexture(),
@@ -93,18 +97,6 @@ namespace gargantuan {
 			SDL_BindGPUGraphicsPipeline(Pass, Pipeline);
 			if (Context.Metrics) ++Context.Metrics->PipelineSwitches;
 
-			std::array<SDL_GPUTextureSamplerBinding, 6> Bindings;
-			for (auto &Binding : Bindings)
-				Binding = {.texture = FallbackTexture, .sampler = Sampler};
-			if (Environment.Sky) {
-				for (std::size_t Index = 0; Index < Bindings.size(); ++Index) {
-					auto *Texture = Context.TextureResources
-										? Context.TextureResources->Find(Environment.Sky->Faces[Index].Texture)
-										: nullptr;
-					if (!Texture) throw std::logic_error("Sky face references a texture without SDL residency");
-					Bindings[Index].texture = Texture;
-				}
-			}
 			SDL_BindGPUFragmentSamplers(Pass, 0, Bindings.data(), Bindings.size());
 			const auto TanHalfFov = std::tan(glm::radians(Frame.Camera.VerticalFieldOfView) * 0.5f);
 			const auto Aspect = static_cast<float>(Frame.ViewportWidth) / static_cast<float>(Frame.ViewportHeight);
@@ -129,52 +121,7 @@ namespace gargantuan {
 		}
 
 	  private:
-		void EnsureFallbackTexture(SDL_GPUDevice *Gpu, SDLRendererMetrics *Metrics) {
-			if (FallbackTexture) return;
-			SDL_GPUTextureCreateInfo TextureInfo{
-				.type = SDL_GPU_TEXTURETYPE_2D,
-				.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-				.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER,
-				.width = 1,
-				.height = 1,
-				.layer_count_or_depth = 1,
-				.num_levels = 1,
-			};
-			FallbackTexture = SDL_CreateGPUTexture(Gpu, &TextureInfo);
-			SDL_GPUTransferBufferCreateInfo TransferInfo{.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, .size = 4};
-			FallbackTransferBuffer = SDL_CreateGPUTransferBuffer(Gpu, &TransferInfo);
-			if (!FallbackTexture || !FallbackTransferBuffer)
-				throw std::runtime_error(std::format("Failed to create Sky fallback texture: {}", SDL_GetError()));
-			auto *Mapped = static_cast<std::uint8_t *>(SDL_MapGPUTransferBuffer(Gpu, FallbackTransferBuffer, false));
-			if (!Mapped)
-				throw std::runtime_error(std::format("Failed to map Sky fallback texture: {}", SDL_GetError()));
-			std::memset(Mapped, 0xff, 4);
-			SDL_UnmapGPUTransferBuffer(Gpu, FallbackTransferBuffer);
-			auto *Commands = SDL_AcquireGPUCommandBuffer(Gpu);
-			auto *CopyPass = Commands ? SDL_BeginGPUCopyPass(Commands) : nullptr;
-			if (!CopyPass) {
-				if (Commands) SDL_CancelGPUCommandBuffer(Commands);
-				throw std::runtime_error(std::format("Failed to begin Sky fallback upload: {}", SDL_GetError()));
-			}
-			SDL_GPUTextureTransferInfo Source{
-				.transfer_buffer = FallbackTransferBuffer, .pixels_per_row = 1, .rows_per_layer = 1
-			};
-			SDL_GPUTextureRegion Destination{.texture = FallbackTexture, .w = 1, .h = 1, .d = 1};
-			SDL_UploadToGPUTexture(CopyPass, &Source, &Destination, false);
-			SDL_EndGPUCopyPass(CopyPass);
-			if (!SDL_SubmitGPUCommandBuffer(Commands))
-				throw std::runtime_error(std::format("Failed to upload Sky fallback texture: {}", SDL_GetError()));
-			if (Metrics) {
-				++Metrics->TextureCreations;
-				++Metrics->TransferBufferCreations;
-				++Metrics->UploadOperations;
-				Metrics->UploadedBytes += 4;
-			}
-		}
-
 		SDLImageBasedLighting ImageBasedLighting;
-		SDL_GPUTexture *FallbackTexture = nullptr;
-		SDL_GPUTransferBuffer *FallbackTransferBuffer = nullptr;
 		SDL_GPUSampler *Sampler = nullptr;
 	};
 

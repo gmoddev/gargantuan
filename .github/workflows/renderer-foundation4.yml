@@ -44,9 +44,9 @@ jobs:
           cmake --build build-renderer --parallel 3 --target gargantuan_editor_viewport_smoke \
             gargantuan_renderer_publication_tests gargantuan_asset_foundation_tests gargantuan_renderer_benchmark \
             gargantuan_renderer_depth_tests gargantuan_ibl_reference_tests gargantuan_ibl_gpu_tests \
-            gargantuan_renderer_material_mip_tests
+            gargantuan_renderer_material_mip_tests gargantuan_directional_shadow_cache_tests
           SDL_VIDEODRIVER=dummy ctest --test-dir build-renderer --output-on-failure \
-            -R '^gargantuan_(renderer_publication|asset_foundation|packaged_shaders|ibl_reference|renderer_material_mips)$' \
+            -R '^gargantuan_(renderer_publication|asset_foundation|packaged_shaders|ibl_reference|renderer_material_mips|directional_shadow_cache)$' \
             | tee renderer-evidence/ctest.log
           for shader in build-renderer/shaders/*.spv; do spirv-val "$shader"; done
           export VK_DRIVER_FILES="$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)"
@@ -128,7 +128,12 @@ jobs:
             $Item = Get-Item -LiteralPath $File
             @{ path = $Name; bytes = $Item.Length; sha256 = (Get-FileHash -LiteralPath $File).Hash.ToLowerInvariant() }
           }
-          @{ source = $env:GITHUB_SHA; directory = 'build-renderer'; files = @($Members) } |
+          $Help = & ./build-renderer/gargantuan.exe --help
+          if ($LASTEXITCODE -ne 0 -or ($Help -join [Environment]::NewLine) -notmatch '--editor-host') {
+            throw 'Packaged engine did not expose EditorHost'
+          }
+          @{ source = $env:GITHUB_SHA; directory = 'build-renderer'; editorHostArgument = $true
+            rawSamples = $true; supportsHdr = $true; files = @($Members) } |
             ConvertTo-Json -Depth 5 | Set-Content -LiteralPath renderer-evidence/renderer-package.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
@@ -145,3 +150,43 @@ jobs:
             build-renderer/*.dll
             build-renderer/runtime/
             build-renderer/shaders/
+
+  linux-sanitizers:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[renderer4-sanitizers]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Verify renderer publication and resources with sanitizers
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 clang-format g++-14 ninja-build glslc \
+            libfreetype-dev libx11-dev libxcursor-dev libxext-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev
+          lute tools/classgen
+          mkdir -p renderer-evidence
+          git rev-parse HEAD > renderer-evidence/source.txt
+          Instrument='-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer'
+          cmake -S . -B build-sanitized -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
+            "-DCMAKE_C_FLAGS=$Instrument" "-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 $Instrument" \
+            -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF \
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF
+          cmake --build build-sanitized --parallel 3 --target gargantuan_renderer_publication_tests \
+            gargantuan_asset_foundation_tests gargantuan_ibl_reference_tests gargantuan_renderer_material_mip_tests \
+            gargantuan_directional_shadow_cache_tests
+          SDL_VIDEODRIVER=dummy ctest --test-dir build-sanitized --output-on-failure \
+            -R '^gargantuan_(renderer_publication|asset_foundation|ibl_reference|renderer_material_mips|directional_shadow_cache)$' \
+            | tee renderer-evidence/sanitizers.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: renderer4-sanitizers
+          path: renderer-evidence/
