@@ -79,6 +79,13 @@ namespace gargantuan {
 		std::uint64_t IblCacheHits = 0;
 		std::uint64_t IblPreprocessPasses = 0;
 		std::uint64_t IblLastPrepareNanoseconds = 0;
+		std::uint64_t OpaqueGroupingCandidates = 0;
+		std::uint64_t OpaqueGroupedObjects = 0;
+		std::uint64_t OpaqueGroupingUnprovenBounds = 0;
+		std::uint64_t OpaqueGroupingConflictBarriers = 0;
+		std::uint64_t OpaqueGroupingBudgetBarriers = 0;
+		std::uint64_t OpaqueGroupingPairTests = 0;
+		std::uint64_t OpaqueGroupingDepthProofs = 0;
 	};
 
 	class SDLRenderer final : public BaseRenderer {

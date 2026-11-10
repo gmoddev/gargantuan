@@ -15,14 +15,152 @@
 #include <array>
 #include <cmath>
 #include <format>
+#include <limits>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace gargantuan {
 	namespace {
 		using ClipPlanes = std::array<glm::vec4, 6>;
 		constexpr RenderBounds PrimitiveBounds{glm::vec3(-0.5f), glm::vec3(0.5f)};
+		constexpr std::size_t MAX_OPAQUE_BATCH_OBJECTS = 512;
+		constexpr std::size_t MAX_OPAQUE_BATCH_RANGES = 8;
+		constexpr unsigned COVERAGE_GRID_SIZE = 128;
+		constexpr unsigned MAX_CELLS_PER_OBJECT = 16;
+		constexpr unsigned MAX_PAIR_TESTS_PER_OBJECT = 96;
+		constexpr double MAX_TRANSFORM_MAGNITUDE = 1e6;
+		constexpr double CLIP_ROUNDOFF = 64.0 * std::numeric_limits<float>::epsilon();
+		constexpr double DEPTH_PADDING = 1.0 / 4096.0;
+
+		auto BindingLayout(const RenderPrimitiveMaterialState &Primitive) {
+			const auto &Material = Primitive.Material;
+			return std::tie(Material.OpacityMode, Material.DoubleSided, Material.BaseColorTexture,
+				Material.NormalTexture, Material.MetallicRoughnessTexture);
+		}
+
+		glm::dmat4 Absolute(const glm::dmat4 &Matrix) {
+			return {glm::abs(Matrix[0]), glm::abs(Matrix[1]), glm::abs(Matrix[2]), glm::abs(Matrix[3])};
+		}
+
+		bool BoundedMatrix(const glm::dmat4 &Matrix) {
+			const glm::dvec4 Limit(MAX_TRANSFORM_MAGNITUDE);
+			return glm::all(glm::lessThanEqual(glm::abs(Matrix[0]), Limit)) &&
+				glm::all(glm::lessThanEqual(glm::abs(Matrix[1]), Limit)) &&
+				glm::all(glm::lessThanEqual(glm::abs(Matrix[2]), Limit)) &&
+				glm::all(glm::lessThanEqual(glm::abs(Matrix[3]), Limit));
+		}
+
+		struct OpaqueCoverage {
+			glm::dvec3 Minimum;
+			glm::dvec3 Maximum;
+			unsigned Left, Right, Bottom, Top;
+			[[nodiscard]] unsigned CellCount() const { return (Right - Left + 1) * (Top - Bottom + 1); }
+		};
+
+		struct CoverageProjector {
+			glm::dmat4 ViewProjection;
+			glm::dmat4 Magnitude;
+			glm::dvec2 ScreenPadding;
+
+			[[nodiscard]] std::optional<OpaqueCoverage> Project(const glm::mat4 &Model, const RenderBounds &Bounds) const {
+				const glm::dmat4 Local(Model);
+				const glm::dvec3 Minimum(Bounds.Minimum), Maximum(Bounds.Maximum);
+				const auto LocalMagnitude = glm::max(glm::abs(Minimum), glm::abs(Maximum));
+				if (!BoundedMatrix(Local) || !glm::all(glm::lessThanEqual(LocalMagnitude,
+					glm::dvec3(MAX_TRANSFORM_MAGNITUDE)))) return std::nullopt;
+				const auto ToClip = ViewProjection * Local;
+				const auto Extent = (Maximum - Minimum) * 0.5;
+				const auto Center = ToClip * glm::dvec4((Maximum + Minimum) * 0.5, 1.0);
+				// Bound float matrix/dot association and contraction using absolute products,
+				// so cancellations do not shrink the error allowance.
+				const auto Error = Magnitude * (Absolute(Local) * glm::dvec4(LocalMagnitude, 1.0)) * CLIP_ROUNDOFF;
+				const auto MinimumW = Center.w - std::abs(ToClip[0].w) * Extent.x -
+					std::abs(ToClip[1].w) * Extent.y - std::abs(ToClip[2].w) * Extent.z - Error.w - 1e-12;
+				if (MinimumW <= 1e-6) return std::nullopt;
+				const auto Ndc = glm::dvec3(Center) / Center.w;
+				// Bound (clip.xyz - Ndc * clip.w) / clip.w. Subtracting the
+				// center ratio before finding extrema retains z/w correlation.
+				const auto Offset = [&](const glm::dvec4 &Column) { return glm::abs(glm::dvec3(Column) - Ndc * Column.w); };
+				const auto Radius = (Offset(ToClip[0]) * Extent.x + Offset(ToClip[1]) * Extent.y +
+					Offset(ToClip[2]) * Extent.z + glm::dvec3(Error) + glm::abs(Ndc) * Error.w +
+					glm::dvec3(1e-12)) / MinimumW + glm::dvec3(ScreenPadding, 0.0);
+				auto Low = Ndc - Radius;
+				auto High = Ndc + Radius;
+				// Preserve the original order for any clipping or out-of-range depth.
+				if (!glm::all(glm::greaterThan(Low, glm::dvec3(-1.0, -1.0, 0.0))) ||
+					!glm::all(glm::lessThan(High, glm::dvec3(1.0)))) return std::nullopt;
+				Low.z -= DEPTH_PADDING;
+				High.z += DEPTH_PADDING;
+				const auto Cell = [](double Axis) {
+					return std::min(static_cast<unsigned>((Axis + 1.0) * (COVERAGE_GRID_SIZE * 0.5)), COVERAGE_GRID_SIZE - 1);
+				};
+				return OpaqueCoverage{Low, High, Cell(Low.x), Cell(High.x), Cell(Low.y), Cell(High.y)};
+			}
+		};
+
+		class OpaqueCoverageGrid {
+		  public:
+			enum class Admission { Safe, Conflict, Budget };
+
+			[[nodiscard]] Admission Check(const OpaqueCoverage &Candidate, SDLRendererMetrics *Metrics) const {
+				unsigned PairTests = 0;
+				unsigned DepthProofs = 0;
+				const auto Finish = [&](Admission Value) {
+					if (Metrics) {
+						Metrics->OpaqueGroupingPairTests += PairTests;
+						Metrics->OpaqueGroupingDepthProofs += DepthProofs;
+					}
+					return Value;
+				};
+				for (unsigned Y = Candidate.Bottom; Y <= Candidate.Top; ++Y) {
+					for (unsigned X = Candidate.Left; X <= Candidate.Right; ++X) {
+						for (auto Link = Heads[Y * COVERAGE_GRID_SIZE + X]; Link; Link = Links[Link - 1].Previous) {
+							if (PairTests == MAX_PAIR_TESTS_PER_OBJECT) return Finish(Admission::Budget);
+							++PairTests;
+							const auto &Other = Coverage[Links[Link - 1].Object];
+							if (Candidate.Maximum.x < Other.Minimum.x || Other.Maximum.x < Candidate.Minimum.x ||
+								Candidate.Maximum.y < Other.Minimum.y || Other.Maximum.y < Candidate.Minimum.y) continue;
+							if (Candidate.Maximum.z < Other.Minimum.z || Other.Maximum.z < Candidate.Minimum.z) {
+								++DepthProofs;
+								continue;
+							}
+							return Finish(Admission::Conflict);
+						}
+					}
+				}
+				return Finish(Admission::Safe);
+			}
+
+			void Add(const OpaqueCoverage &Candidate, std::uint16_t Object) {
+				Coverage[Object] = Candidate;
+				for (unsigned Y = Candidate.Bottom; Y <= Candidate.Top; ++Y) {
+					for (unsigned X = Candidate.Left; X <= Candidate.Right; ++X) {
+						const auto Cell = static_cast<std::uint16_t>(Y * COVERAGE_GRID_SIZE + X);
+						if (!Heads[Cell]) Touched[TouchedCount++] = Cell;
+						Links[LinkCount] = {Object, Heads[Cell]};
+						Heads[Cell] = ++LinkCount;
+					}
+				}
+			}
+
+			void Clear() noexcept {
+				while (TouchedCount) Heads[Touched[--TouchedCount]] = 0;
+				LinkCount = 0;
+			}
+
+		  private:
+			struct Link { std::uint16_t Object, Previous; };
+			static constexpr auto Capacity = MAX_OPAQUE_BATCH_OBJECTS * MAX_CELLS_PER_OBJECT;
+			static_assert(Capacity < std::numeric_limits<std::uint16_t>::max());
+			std::array<OpaqueCoverage, MAX_OPAQUE_BATCH_OBJECTS> Coverage;
+			std::array<std::uint16_t, COVERAGE_GRID_SIZE * COVERAGE_GRID_SIZE> Heads{};
+			std::array<std::uint16_t, Capacity> Touched;
+			std::array<Link, Capacity> Links;
+			std::uint16_t LinkCount = 0;
+			std::uint16_t TouchedCount = 0;
+		};
 
 		ClipPlanes GetClipPlanes(const RenderCameraSnapshot &Camera) {
 			const auto Rows = glm::transpose(Camera.ProjectionMatrix * Camera.ViewMatrix);
@@ -145,6 +283,8 @@ namespace gargantuan {
 				MaterialSampler = SDL_CreateGPUSampler(gpu, &SamplerInfo);
 				if (!Pipeline || !DoubleSidedPipeline || !BlendedPipeline || !BlendedDoubleSidedPipeline || !MaterialSampler)
 					throw std::runtime_error(std::format("Failed to create material rendering resources: {}", SDL_GetError()));
+				const auto *Driver = SDL_GetGPUDeviceDriver(gpu);
+				GroupingSupported = Driver && std::string_view(Driver) == "vulkan";
 			} catch (...) {
 				Destroy(gpu);
 				throw;
@@ -191,6 +331,8 @@ namespace gargantuan {
 			try {
 				DrawWorld(Pass, context, shadowBinding, White);
 			} catch (...) {
+				OpaqueBatch.clear();
+				CoverageGrid.Clear();
 				TransparentDraws.clear();
 				SDL_EndGPURenderPass(Pass);
 				throw;
@@ -302,6 +444,77 @@ namespace gargantuan {
 						Visit(Primitive.FirstIndex, Primitive.IndexCount, Primitive.Material);
 				} else Visit(0, Draw.Mesh->IndexCount, Draw.Object->Material);
 			};
+			std::optional<CoverageProjector> Projector;
+			if (GroupingSupported && Context.Width && Context.Height) {
+				const glm::dmat4 Projection(Frame.Camera.ProjectionMatrix), View(Frame.Camera.ViewMatrix);
+				if (BoundedMatrix(Projection) && BoundedMatrix(View)) {
+					Projector = CoverageProjector{Projection * View, Absolute(Projection) * Absolute(View),
+						{0.25 / Context.Width, 0.25 / Context.Height}};
+				}
+			}
+			const auto FlushOpaque = [&] {
+				if (OpaqueBatch.empty()) return;
+				if (Context.Metrics && OpaqueBatch.size() > 1)
+					Context.Metrics->OpaqueGroupedObjects += OpaqueBatch.size();
+				// A batch only contains pairwise independent objects. Keep the
+				// original primitive order inside each object and its admission order
+				// within each range, so an exact tie never gains a new priority.
+				for (std::size_t Range = 0; Range < OpaqueBatch.front().Object->Primitives->size(); ++Range) {
+					for (const auto &Draw : OpaqueBatch) {
+						const auto &Primitive = (*Draw.Object->Primitives)[Range];
+						DrawPrimitive(Draw, Primitive.FirstIndex, Primitive.IndexCount, Primitive.Material);
+					}
+				}
+				OpaqueBatch.clear();
+				CoverageGrid.Clear();
+			};
+			const auto TryBatchOpaque = [&](const WorldDraw &Draw) {
+				const auto &Ranges = Draw.Object->Primitives;
+				if (!GroupingSupported || !Draw.Object->Mesh || Draw.Pose || !Ranges || Ranges->size() < 2 ||
+					Ranges->size() > MAX_OPAQUE_BATCH_RANGES) return false;
+				const auto MatchesPending = [&] {
+					if (OpaqueBatch.empty() || OpaqueBatch.front().Mesh != Draw.Mesh) return false;
+					const auto &Pending = OpaqueBatch.front().Object->Primitives;
+					return Pending == Ranges || std::ranges::equal(*Pending, *Ranges, {}, BindingLayout, BindingLayout);
+				};
+				if (!MatchesPending()) {
+					FlushOpaque();
+					const auto FirstBinding = BindingLayout(Ranges->front());
+					bool ChangesBinding = false;
+					for (const auto &Primitive : *Ranges) {
+						if (Primitive.Material.OpacityMode != RenderOpacityMode::Opaque) return false;
+						ChangesBinding |= BindingLayout(Primitive) != FirstBinding;
+					}
+					if (!ChangesBinding) return false;
+				}
+				if (Context.Metrics) ++Context.Metrics->OpaqueGroupingCandidates;
+				const auto &Bounds = Draw.Mesh->ImmutablePositionBounds;
+				const auto Candidate = Projector && Bounds ? Projector->Project(Draw.Object->Item.ModelMatrix, *Bounds)
+					: std::nullopt;
+				if (!Candidate) {
+					if (Context.Metrics) ++Context.Metrics->OpaqueGroupingUnprovenBounds;
+					return false;
+				}
+				if (Candidate->CellCount() > MAX_CELLS_PER_OBJECT) {
+					if (Context.Metrics) ++Context.Metrics->OpaqueGroupingBudgetBarriers;
+					return false;
+				}
+				if (OpaqueBatch.size() == MAX_OPAQUE_BATCH_OBJECTS) FlushOpaque();
+				if (!OpaqueBatch.empty()) {
+					const auto Admission = CoverageGrid.Check(*Candidate, Context.Metrics);
+					if (Admission != OpaqueCoverageGrid::Admission::Safe) {
+						if (Context.Metrics) {
+							if (Admission == OpaqueCoverageGrid::Admission::Conflict) ++Context.Metrics->OpaqueGroupingConflictBarriers;
+							else ++Context.Metrics->OpaqueGroupingBudgetBarriers;
+						}
+						FlushOpaque();
+					}
+				}
+				OpaqueBatch.reserve(MAX_OPAQUE_BATCH_OBJECTS);
+				CoverageGrid.Add(*Candidate, static_cast<std::uint16_t>(OpaqueBatch.size()));
+				OpaqueBatch.push_back(Draw);
+				return true;
+			};
 
 			for (const auto &[Object, Projected] : Context.Projection.GetObjects()) {
 				if (!Projected.Visible) continue;
@@ -322,6 +535,8 @@ namespace gargantuan {
 				}
 
 				WorldDraw Draw{&Projected, Mesh, Pose, 0.0f};
+				if (TryBatchOpaque(Draw)) continue;
+				FlushOpaque();
 				bool HasTransparent = false;
 				ForPrimitives(Draw, [&](std::uint32_t First, std::uint32_t Count, const RenderMaterialState &Material) {
 					if (Material.OpacityMode == RenderOpacityMode::Transparent) HasTransparent = true;
@@ -334,6 +549,7 @@ namespace gargantuan {
 					TransparentDraws.push_back(Draw);
 				}
 			}
+			FlushOpaque();
 
 			std::ranges::sort(TransparentDraws, [](const WorldDraw &Left, const WorldDraw &Right) {
 				if (Left.Depth != Right.Depth) return Left.Depth > Right.Depth;
@@ -350,9 +566,12 @@ namespace gargantuan {
 		SDL_GPUGraphicsPipeline *DoubleSidedPipeline = nullptr;
 		SDL_GPUGraphicsPipeline *BlendedPipeline = nullptr;
 		SDL_GPUGraphicsPipeline *BlendedDoubleSidedPipeline = nullptr;
+		std::vector<WorldDraw> OpaqueBatch;
+		OpaqueCoverageGrid CoverageGrid;
 		std::vector<WorldDraw> TransparentDraws;
 		SDL_GPUSampler *MaterialSampler = nullptr;
 		float OutputMode = 1.0f;
+		bool GroupingSupported = false;
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateOpaquePass(

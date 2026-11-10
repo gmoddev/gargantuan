@@ -31,6 +31,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -68,6 +69,7 @@ namespace {
 		bool Incremental = false;
 		FrameSynchronization Synchronization = FrameSynchronization::Completion;
 		std::optional<std::filesystem::path> CapturePrefix;
+		std::optional<std::filesystem::path> SamplesPath;
 	};
 
 	struct ScenarioCase {
@@ -117,7 +119,7 @@ namespace {
 					"Usage: gargantuan_renderer_benchmark [--backend=projection|headless|sdl|filament|filament-headless] "
 					"[--scenario=all|static|dynamic|mostly-static|mixed|culled|material-check|material-extensions] [--count=N] "
 					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--shadows=on|off] "
-					"[--incremental] [--synchronize=on|off|bounded-2] [--capture=path-prefix]\n";
+					"[--incremental] [--synchronize=on|off|bounded-2] [--capture=path-prefix] [--samples=csv-path]\n";
 				std::exit(0);
 			} else if (auto ParsedValue = Value("--backend=")) ParsedOptions.Backend = *ParsedValue;
 			else if (auto ParsedValue = Value("--scenario=")) ParsedOptions.Scenario = *ParsedValue;
@@ -130,6 +132,9 @@ namespace {
 			else if (auto ParsedValue = Value("--capture=")) {
 				if (ParsedValue->empty()) throw std::invalid_argument("capture prefix must not be empty");
 				ParsedOptions.CapturePrefix = std::filesystem::path(*ParsedValue);
+			} else if (auto ParsedValue = Value("--samples=")) {
+				if (ParsedValue->empty()) throw std::invalid_argument("sample CSV path must not be empty");
+				ParsedOptions.SamplesPath = std::filesystem::path(*ParsedValue);
 			} else if (auto ParsedValue = Value("--synchronize=")) {
 				if (*ParsedValue == "on") ParsedOptions.Synchronization = FrameSynchronization::Completion;
 				else if (*ParsedValue == "off") ParsedOptions.Synchronization = FrameSynchronization::Queued;
@@ -153,6 +158,8 @@ namespace {
 		const bool MaterialCapture = ParsedOptions.Scenario == "material-check" ||
 			ParsedOptions.Scenario == "material-extensions";
 		const bool IncrementalOnly = ParsedOptions.Scenario == "culled" || MaterialCapture;
+		if (ParsedOptions.SamplesPath && (!ParsedOptions.Incremental || MaterialCapture))
+			throw std::invalid_argument("sample CSV requires an incremental timed scenario");
 		if (ParsedOptions.Scenario != "all" && ParsedOptions.Scenario != "static" && ParsedOptions.Scenario != "dynamic" &&
 			ParsedOptions.Scenario != "mostly-static" && ParsedOptions.Scenario != "mixed" && !IncrementalOnly)
 			throw std::invalid_argument("unknown renderer benchmark scenario");
@@ -536,6 +543,7 @@ namespace {
 		std::optional<std::uint64_t> CameraCulledObjects;
 		std::optional<std::uint64_t> WorldGeometryBindings;
 		std::optional<std::uint64_t> WorldMaterialBindings;
+		std::array<std::optional<std::uint64_t>, 7> OpaqueGrouping;
 	};
 
 	template <typename Metrics>
@@ -555,6 +563,9 @@ namespace {
 			Result.WorldGeometryBindings = Metrics.WorldGeometryBindings;
 			Result.WorldMaterialBindings = Metrics.WorldMaterialBindings;
 		}
+		Result.OpaqueGrouping = {Metrics.OpaqueGroupingCandidates, Metrics.OpaqueGroupedObjects,
+			Metrics.OpaqueGroupingUnprovenBounds, Metrics.OpaqueGroupingConflictBarriers, Metrics.OpaqueGroupingBudgetBarriers,
+			Metrics.OpaqueGroupingPairTests, Metrics.OpaqueGroupingDepthProofs};
 		return Result;
 	}
 
@@ -573,7 +584,7 @@ namespace {
 		return std::to_string(*End - *Start);
 	}
 
-	void RunIncrementalCase(const Options &Settings, const ScenarioCase &Scenario) {
+	void RunIncrementalCase(const Options &Settings, const ScenarioCase &Scenario, std::ostream *Samples) {
 		using namespace gargantuan;
 		const bool CompleteEachFrame = Settings.Synchronization == FrameSynchronization::Completion;
 		const bool CompletePairs = Settings.Synchronization == FrameSynchronization::BoundedPair;
@@ -727,7 +738,25 @@ namespace {
 			<< CounterDelta(Baseline.WorldMaterialBindings, Final.WorldMaterialBindings) << ','
 			<< (CullMeasured ? (CullGate ? "PASS" : "FAIL") : "NA") << ','
 			<< (Graphical ? (Comparable ? "PASS" : "FAIL") : "NA") << ",NA,"
-			<< (Settings.ShadowsEnabled ? "on" : "off") << '\n';
+			<< (Settings.ShadowsEnabled ? "on" : "off");
+		for (std::size_t Index = 0; Index < Final.OpaqueGrouping.size(); ++Index)
+			std::cout << ',' << CounterDelta(Baseline.OpaqueGrouping[Index], Final.OpaqueGrouping[Index]);
+		std::cout << '\n';
+		if (Samples) {
+			for (std::size_t Frame = 0; Frame < FrameTimes.size(); ++Frame) {
+				*Samples << Scenario.Name << ',' << Scenario.Count << ',' << Settings.Backend << ',' << Driver << ','
+					<< Synchronization << ',' << Settings.Width << ',' << Settings.Height << ',' << Frame << ','
+					<< Settings.WarmupFrames + Frame + 2 << ',' << FixtureTimes[Frame] << ',' << FrameTimes[Frame];
+				for (const auto *Phase : {&ProjectionTimes, &ApplyTimes, &SubmitTimes, &WaitTimes}) {
+					*Samples << ',';
+					if (Frame < Phase->size()) *Samples << (*Phase)[Frame];
+					else *Samples << "NA";
+				}
+				*Samples << '\n';
+			}
+			Samples->flush();
+			if (!*Samples) throw std::runtime_error("could not write benchmark samples");
+		}
 		if (Graphical && !Comparable)
 			throw std::runtime_error("incremental frame admission gate failed or counters are unavailable");
 		if (!CullGate) throw std::runtime_error("measured world camera culls differ from fixture expectation");
@@ -993,8 +1022,20 @@ int main(int ArgumentCount, char **Arguments) {
 				"MeasuredFullResyncs,ReportedDrawCalls,ReportedResourceCreations,ReportedUploadBytes,"
 				"ExpectedCameraCulledObjects,ReportedCameraCulledObjects,ReportedWorldGeometryBindings,"
 				"ReportedWorldMaterialBindings,CameraCullGate,"
-				"FrameAdmissionGate,GpuTimestampMs,Shadows\n";
-			for (const auto &Scenario : BuildCases(BenchmarkOptions)) RunIncrementalCase(BenchmarkOptions, Scenario);
+				"FrameAdmissionGate,GpuTimestampMs,Shadows,OpaqueGroupingCandidates,OpaqueGroupedObjects,"
+				"OpaqueGroupingUnprovenBounds,OpaqueGroupingConflictBarriers,OpaqueGroupingBudgetBarriers,"
+				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs\n";
+			std::ofstream Samples;
+			if (BenchmarkOptions.SamplesPath) {
+				if (std::filesystem::exists(*BenchmarkOptions.SamplesPath))
+					throw std::runtime_error("sample CSV already exists: " + BenchmarkOptions.SamplesPath->string());
+				Samples.open(*BenchmarkOptions.SamplesPath);
+				if (!Samples) throw std::runtime_error("could not open benchmark sample CSV");
+				Samples << "Scenario,Objects,Backend,Driver,Synchronization,Width,Height,Frame,PublicationId,FixtureMs,"
+					"FrameMs,ProjectionMs,ApplyMs,SubmitMs,WaitMs\n" << std::setprecision(std::numeric_limits<double>::max_digits10);
+			}
+			for (const auto &Scenario : BuildCases(BenchmarkOptions))
+				RunIncrementalCase(BenchmarkOptions, Scenario, Samples.is_open() ? &Samples : nullptr);
 			return 0;
 		}
 		std::cout << "Scenario,Objects,Backend,Frames,SetupMs,BackendStartupMs,ResizeRoundTripMs,"
