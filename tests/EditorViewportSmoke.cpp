@@ -164,7 +164,7 @@ namespace {
 		if (!CompositionValid)
 			throw std::runtime_error("[Renderer:Material] Blended surfaces did not composite back to front");
 
-		const auto ShadowProbe = [&](RenderPublicationId Id, bool AddCaster, std::uint8_t Alpha) {
+		const auto ShadowScene = [&](RenderPublicationId Id, bool AddCaster) {
 			RenderMaterialState Receiver;
 			Receiver.DoubleSided = true;
 			auto Scene = MaterialScene(Id, Receiver);
@@ -184,20 +184,66 @@ namespace {
 				Scene->Creates.push_back(Caster);
 				Scene->TextureCreates.push_back({
 					Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm,
-					std::make_shared<const std::vector<std::uint8_t>>(
-						std::initializer_list<std::uint8_t>{255, 255, 255, Alpha}),
+					SolidPixels(255, 255, 255),
 				});
 			}
-			return Renderer.Capture(Scene).RgbPixels[Center];
+			return Scene;
 		};
-		const auto Unshadowed = ShadowProbe(16, false, 0);
-		const auto SolidShadow = ShadowProbe(17, true, 255);
-		const auto CutoutShadow = ShadowProbe(18, true, 0);
+		const auto Unshadowed = Renderer.Capture(ShadowScene(16, false)).RgbPixels[Center];
+		const auto SolidScene = ShadowScene(17, true);
+		const auto SolidImage = Renderer.Capture(SolidScene).RgbPixels;
+		const auto SolidShadow = SolidImage[Center];
+		const auto ShadowDelta = [&](RenderPublicationId Id, RenderPublicationId Base) {
+			auto Delta = std::make_shared<RenderPublication>();
+			Delta->Id = Id;
+			Delta->BaseId = Base;
+			Delta->Frame = SolidScene->Frame;
+			return Delta;
+		};
+		if (Renderer.Capture(ShadowDelta(18, 17)).RgbPixels != SolidImage)
+			throw std::runtime_error("[Renderer:Shadow] A cached static map changed exact viewport pixels");
+		auto Cutout = ShadowDelta(19, 18);
+		Cutout->TextureUpdates.push_back({Texture, 2, 0, 0, 1, 1,
+			std::make_shared<const std::vector<std::uint8_t>>(std::initializer_list<std::uint8_t>{255, 255, 255, 0})});
+		const auto CutoutShadow = Renderer.Capture(Cutout).RgbPixels[Center];
 		if (Unshadowed < 150 || int(Unshadowed) - int(SolidShadow) < 80 ||
 			std::abs(int(Unshadowed) - int(CutoutShadow)) > 2)
 			throw std::runtime_error(std::format(
 				"[Renderer:Shadow] A masked shadow did not follow the sampled alpha (lit {}, solid {}, cutout {})",
 				Unshadowed, SolidShadow, CutoutShadow));
+		auto Restore = ShadowDelta(20, 19);
+		Restore->TextureUpdates.push_back({Texture, 3, 0, 0, 1, 1, SolidPixels(255, 255, 255)});
+		if (Renderer.Capture(Restore).RgbPixels != SolidImage)
+			throw std::runtime_error("[Renderer:Shadow] Restoring only mask pixels did not restore the exact image");
+
+		auto CameraMove = ShadowDelta(21, 20);
+		auto &MovedCamera = CameraMove->Frame.Camera;
+		MovedCamera.Position.x += 0.06f;
+		MovedCamera.ViewMatrix = glm::lookAtRH(MovedCamera.Position,
+			MovedCamera.Position + MovedCamera.LookDirection, MovedCamera.UpDirection);
+		MovedCamera.ViewProjectionMatrix = MovedCamera.ProjectionMatrix * MovedCamera.ViewMatrix;
+		const auto CachedCameraImage = Renderer.Capture(CameraMove).RgbPixels;
+		auto Reconstruct = ShadowScene(22, true);
+		Reconstruct->Frame = CameraMove->Frame;
+		if (Renderer.Capture(Reconstruct).RgbPixels != CachedCameraImage)
+			throw std::runtime_error("[Renderer:Shadow] Camera motion differs between cached and reconstructed depth");
+		bool Rejected = false;
+		try { (void)Renderer.Capture(ShadowDelta(23, 21)); }
+		catch (const std::invalid_argument &) { Rejected = true; }
+		auto Retry = ShadowDelta(23, 22);
+		Retry->Frame = CameraMove->Frame;
+		if (!Rejected || Renderer.Capture(Retry).RgbPixels != CachedCameraImage)
+			throw std::runtime_error("[Renderer:Shadow] Stale publication or retry changed the committed shadow image");
+
+		auto MoveCaster = ShadowDelta(24, 23);
+		MoveCaster->Frame = CameraMove->Frame;
+		auto Caster = Reconstruct->Creates.back();
+		Caster.Item.ModelMatrix[3].x += 6.0f;
+		Caster.Item.InverseModelMatrix = glm::inverse(Caster.Item.ModelMatrix);
+		MoveCaster->Updates.push_back({Caster.Item.Object, RenderUpdateDomain::Transform, Caster.Item,
+			Caster.Mesh, Caster.Material, Caster.Visible, Caster.Primitives});
+		if (Renderer.Capture(MoveCaster).RgbPixels[Center] < 150)
+			throw std::runtime_error("[Renderer:Shadow] A moved caster left stale depth on the receiver");
 	}
 
 	void CheckWorldSubmission() {
@@ -205,6 +251,8 @@ namespace {
 			.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
 		});
 		auto Scene = MaterialScene(1, {});
+		Scene->Frame.Environment.SunIntensity = 1.0f;
+		Scene->Creates.front().Item.CastShadow = true;
 		auto Outside = Scene->Creates.front();
 		Outside.Item.Object = {91, 1};
 		Outside.Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(32, 0, 0));
@@ -220,6 +268,16 @@ namespace {
 		if ((Metrics.HdrSceneBytes != 0) != (Metrics.SceneResolveDraws == 1) ||
 			(Metrics.HdrSceneBytes && Metrics.HdrSceneBytes != 64 * 64 * 8))
 			throw std::runtime_error("[Renderer:HDR] Resolve and target memory metrics do not agree");
+		auto Static = std::make_shared<RenderPublication>();
+		Static->Id = 2;
+		Static->BaseId = 1;
+		Static->Frame = Scene->Frame;
+		Renderer.Draw(Static);
+		const auto Warm = Renderer.GetMetrics();
+		if (Metrics.ShadowMapBuilds != 1 || Metrics.ShadowMapPasses != 1 || Metrics.ShadowCasterDraws == 0 ||
+			Warm.ShadowCacheHits != 1 || Warm.ShadowMapBuilds != Metrics.ShadowMapBuilds ||
+			Warm.ShadowMapPasses != Metrics.ShadowMapPasses || Warm.ShadowCasterDraws != Metrics.ShadowCasterDraws)
+			throw std::runtime_error("[Renderer:Shadow] Static runtime frame did not skip the entire shadow pass");
 	}
 
 	void CheckHdrExposure(EditorViewportRenderer &Renderer) {

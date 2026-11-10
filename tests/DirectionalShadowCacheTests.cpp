@@ -73,6 +73,9 @@ namespace {
 		Delta.Frame.Environment.SunDirection = {1.0f, 0.0f, 0.0f};
 		CheckUpdate(Delta, false, "sun direction changes the shadow projection");
 		Delta.Frame.Environment = Environment;
+		Delta.Frame.Environment.SunIntensity = 0.0f;
+		CheckUpdate(Delta, false, "sun-off transition replaces lit depth");
+		Delta.Frame.Environment = Environment;
 
 		Delta.Updates = {UpdateObject(Projection, NONCASTER)};
 		Delta.Updates[0].Item.ModelMatrix[3].x += 1.0f;
@@ -112,6 +115,10 @@ namespace {
 		Cache.FinishRecording(Environment, nullptr, Matrix, false);
 		Require(!Cache.OnFrameSubmitted() && !Cache.Restore(Environment, nullptr, Restored),
 			"missing caster resources leave submitted depth ineligible for reuse");
+		Cache.BeginRecording();
+		Cache.FinishRecording(Environment, nullptr, Matrix, true);
+		Cache.BeginRecording();
+		Require(!Cache.OnFrameSubmitted(), "a superseding recording discards the prior unsubmitted depth candidate");
 		Cache.BeginRecording();
 		for (std::uint32_t Slot = 1; Slot <= 32'769; ++Slot) Cache.DependOnMesh({Slot, 1});
 		Cache.FinishRecording(Environment, nullptr, Matrix, true);
