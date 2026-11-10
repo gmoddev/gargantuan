@@ -68,16 +68,11 @@ namespace gargantuan {
 						return Pose.Mode == RenderAnimationSkinningMode::CpuFallback && Pose.PosedMesh == Create.Mesh;
 					});
 				auto Mesh = std::make_unique<SDLGpuMesh>(Create, Metrics);
-				try {
-					Mesh->Upload(Gpu, CopyPass);
-					if (Metrics && CpuSkinned) ++Metrics->CpuSkinnedVertexUploads;
-					const auto [Position, Inserted] = DynamicMeshes.emplace(Create.Mesh, std::move(Mesh));
-					(void)Position;
-					if (!Inserted) throw std::logic_error("Mesh publication attempted duplicate SDL residency");
-				} catch (...) {
-					if (Mesh) Mesh->Destroy(Gpu);
-					throw;
-				}
+				const auto [Position, Inserted] = DynamicMeshes.try_emplace(Create.Mesh);
+				if (!Inserted) throw std::logic_error("Mesh publication attempted duplicate SDL residency");
+				Position->second = std::move(Mesh);
+				Position->second->Upload(Gpu, CopyPass);
+				if (Metrics && CpuSkinned) ++Metrics->CpuSkinnedVertexUploads;
 			}
 			for (const auto &Update : Publication.MeshVertexUpdates) {
 				DynamicMeshes.at(Update.Mesh)->UploadVertices(Gpu, CopyPass, Update.FirstVertex, *Update.Vertices);
@@ -109,16 +104,25 @@ namespace gargantuan {
 			throw std::runtime_error(std::format("Failed to begin mesh upload: {}", SDL_GetError()));
 		}
 
-		for (auto &[geometry, mesh] : CreatePrimitiveMeshes()) {
-			auto gpuMesh = std::make_unique<SDLGpuMesh>(std::move(mesh), Metrics);
-			gpuMesh->Upload(Gpu, copyPass);
-			Meshes.emplace(geometry, std::move(gpuMesh));
-		}
-
-		SDL_EndGPUCopyPass(copyPass);
-		if (!SDL_SubmitGPUCommandBuffer(cmd)) {
+		bool SubmitAttempted = false;
+		try {
+			for (auto &[Geometry, MeshData] : CreatePrimitiveMeshes()) {
+				auto Mesh = std::make_unique<SDLGpuMesh>(std::move(MeshData), Metrics);
+				const auto [Position, Inserted] = Meshes.try_emplace(Geometry);
+				if (!Inserted) throw std::logic_error("Primitive mesh attempted duplicate SDL residency");
+				Position->second = std::move(Mesh);
+				Position->second->Upload(Gpu, copyPass);
+			}
+			SDL_EndGPUCopyPass(copyPass);
+			copyPass = nullptr;
+			SubmitAttempted = true;
+			if (!SDL_SubmitGPUCommandBuffer(cmd))
+				throw std::runtime_error(std::format("Failed to submit mesh upload: {}", SDL_GetError()));
+		} catch (...) {
+			if (copyPass) SDL_EndGPUCopyPass(copyPass);
+			if (!SubmitAttempted) SDL_CancelGPUCommandBuffer(cmd);
 			Destroy();
-			throw std::runtime_error(std::format("Failed to submit mesh upload: {}", SDL_GetError()));
+			throw;
 		}
 		Uploaded = true;
 	}
