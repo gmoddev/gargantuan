@@ -13,6 +13,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "../src/assets/AssetImporter.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -249,12 +250,65 @@ namespace {
 	std::shared_ptr<gargantuan::AssetService> GetAssets(const std::shared_ptr<gargantuan::DataModel> &World) {
 		return std::dynamic_pointer_cast<gargantuan::AssetService>(World->GetService("AssetService"));
 	}
+
+	void CheckMaterialArtifactVersions() {
+		using namespace gargantuan;
+		ImportedMaterial Material;
+		const AssetId Image{1, 2};
+		std::vector<std::uint8_t> Expected{'G', 'A', 'R', 'G', 'A', 'S', '0', '1'};
+		AppendU32(Expected, 2);
+		Expected.push_back(static_cast<std::uint8_t>(AssetKind::Material));
+		for (std::size_t Index = 0; Index < 6; ++Index) AppendFloat(Expected, 1.0f);
+		Expected.insert(Expected.end(), {0, 0, 0}); // Color reference, normal reference, opaque mode.
+		AppendFloat(Expected, 0.5f);
+		Expected.push_back(0); // Single sided.
+		const auto V2 = EncodeAssetArtifact(Material, AssetKind::Material);
+		const auto V2Decoded = DecodeAssetArtifact(Expected, AssetKind::Material, AssetContentId::Hash(Expected));
+		Check(V2 && **V2 == Expected && V2Decoded &&
+			!std::get<ImportedMaterial>(V2Decoded->Asset).HasAdvancedInputs(),
+			"legacy v2 material bytes and defaults remain unchanged");
+
+		Material.MetallicRoughnessTexture = Image;
+		Expected[8] = 5;
+		Expected.insert(Expected.end(), {1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0});
+		const auto V5 = EncodeAssetArtifact(Material, AssetKind::Material);
+		const auto V5Decoded = DecodeAssetArtifact(Expected, AssetKind::Material, AssetContentId::Hash(Expected));
+		Check(V5 && **V5 == Expected && V5Decoded &&
+			std::get<ImportedMaterial>(V5Decoded->Asset).MetallicRoughnessTexture == Image &&
+			!std::get<ImportedMaterial>(V5Decoded->Asset).HasAdvancedInputs(),
+			"legacy v5 packed-material bytes and defaults remain unchanged");
+
+		Material.MetallicRoughnessTexture.reset();
+		Material.EmissiveFactor = {.25f, .5f, 1.0f};
+		Material.EmissiveTexture = Image;
+		Material.OcclusionTexture = Image;
+		Material.OcclusionStrength = .25f;
+		const auto OcclusionSlot = static_cast<std::size_t>(RenderMaterialTextureSlot::Occlusion);
+		Material.TextureSamplers[OcclusionSlot].WrapV = RenderTextureWrap::MirroredRepeat;
+		const auto V6 = EncodeAssetArtifact(Material, AssetKind::Material);
+		Check(V6 && (*V6)->at(8) == 6, "advanced material without a packed texture uses artifact v6");
+		if (!V6) return;
+		const auto V6Decoded = DecodeAssetArtifact(**V6, AssetKind::Material, AssetContentId::Hash(**V6));
+		bool Stable = false;
+		if (V6Decoded) {
+			const auto Reencoded = EncodeAssetArtifact(V6Decoded->Asset, AssetKind::Material);
+			Stable = Reencoded && **Reencoded == **V6;
+		}
+		Check(Stable, "v6 material decode and re-encode are byte stable");
+		auto InvalidSampler = **V6;
+		InvalidSampler.back() = 255;
+		Check(!DecodeAssetArtifact(InvalidSampler, AssetKind::Material, AssetContentId::Hash(InvalidSampler)),
+			"v6 material rejects invalid sampler enum even with a valid artifact hash");
+		Material.OcclusionStrength = 1.25f;
+		Check(!EncodeAssetArtifact(Material, AssetKind::Material), "v6 material rejects out-of-range occlusion strength");
+	}
 }
 
 int main() {
 	using namespace gargantuan;
 	struct SdlProcessCleanup final { ~SdlProcessCleanup() { SDL_Quit(); } } SdlCleanup;
 	BootstrapNativeRuntimeSchema();
+	CheckMaterialArtifactVersions();
 
 	auto NewProjectWorld = std::make_shared<DataModel>();
 	(void)NewProjectWorld->GetService("Workspace");
@@ -829,6 +883,74 @@ int main() {
 		!RemoteGltf.Ok && RemoteGltf.Diagnostic.Code == "ExternalUriRejected",
 		"malformed containers and traversal, absolute, and remote glTF URIs fail with structured diagnostics");
 
+	auto AdvancedFixture = MakeGltfFixture(92);
+	AdvancedFixture.Document["samplers"] =
+		nlohmann::ordered_json::array({{{"minFilter", 9986}, {"magFilter", 9729}, {"wrapS", 33648}, {"wrapT", 33071}}});
+	AdvancedFixture.Document["textures"].push_back({{"source", 0}, {"sampler", 0}});
+	auto &AdvancedSource = AdvancedFixture.Document["materials"][0];
+	AdvancedSource["normalTexture"] = {{"index", 1}, {"scale", -0.5}};
+	AdvancedSource["emissiveFactor"] = {0.125, 0.25, 0.5};
+	AdvancedSource["emissiveTexture"] = {{"index", 0}};
+	AdvancedSource["occlusionTexture"] = {{"index", 1}, {"strength", 0.375}};
+	const RenderSamplerState ExplicitSampler{RenderTextureMinFilter::NearestMipmapLinear, RenderTextureMagFilter::Linear,
+		RenderTextureWrap::MirroredRepeat, RenderTextureWrap::ClampToEdge};
+	const auto NormalSlot = static_cast<std::size_t>(RenderMaterialTextureSlot::Normal);
+	const auto OcclusionSlot = static_cast<std::size_t>(RenderMaterialTextureSlot::Occlusion);
+	const auto ImageBeforeAdvanced = Assets->ResolveImage(GltfImageRecord->Reference.Value);
+	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(AdvancedFixture));
+	const auto AdvancedImport = Assets->ReimportProjectAsset(Mount, GltfMeshRecord->Reference.Value);
+	const auto AdvancedMaterial = Assets->ResolveMaterial(TexturedMaterialRecord->Reference.Value);
+	const auto ImageAfterAdvanced = Assets->ResolveImage(GltfImageRecord->Reference.Value);
+	Check(AdvancedImport.Ok && AdvancedImport.Records.size() == 5 && AdvancedMaterial && ImageBeforeAdvanced &&
+		ImageAfterAdvanced && ImageAfterAdvanced->Texture == ImageBeforeAdvanced->Texture &&
+		ImageAfterAdvanced->ContentRevision == ImageBeforeAdvanced->ContentRevision &&
+		std::ranges::all_of(AdvancedImport.Records, [&](const AssetRecord &Record) {
+			return StableIds.at(Record.LogicalKey) == Record.Id;
+		}) && AdvancedMaterial->Value.EmissiveTexture == GltfImageRecord->Id &&
+		AdvancedMaterial->Value.OcclusionTexture == GltfImageRecord->Id &&
+		AdvancedMaterial->Value.EmissiveFactor == glm::vec3(0.125f, 0.25f, 0.5f) &&
+		AdvancedMaterial->Value.OcclusionStrength == 0.375f && AdvancedMaterial->Value.NormalScale == -0.5f &&
+		AdvancedMaterial->Value.TextureSamplers[NormalSlot] == ExplicitSampler &&
+		AdvancedMaterial->Value.TextureSamplers[OcclusionSlot] == ExplicitSampler &&
+		AdvancedMaterial->Value.TextureSamplers[0] == RenderSamplerState{} &&
+		Assets->GetAsset(TexturedMaterialRecord->Reference.Value)->Dependencies == std::vector{GltfImageRecord->Id},
+		"advanced glTF roles and samplers preserve deduplicated image IDs, residency, revision, and dependencies");
+
+	CompoundPublisher.RequestFullResync();
+	auto AdvancedPublication = CompoundPublisher.Publish(*WorkspaceValue, RenderCameraInput{}, 320, 180);
+	Check(std::ranges::any_of(AdvancedPublication->Creates, [&](const auto &Create) {
+		if (Create.Item.Object != MeshPartA->GetObjectId() || !Create.Primitives || !ImageAfterAdvanced) return false;
+		const auto &Material = Create.Primitives->front().Material;
+		return Material.EmissiveTexture == ImageAfterAdvanced->Texture && Material.OcclusionTexture == ImageAfterAdvanced->Texture &&
+			Material.EmissiveFactor == glm::vec3(.125f, .25f, .5f) && Material.OcclusionStrength == .375f &&
+			Material.NormalScale == -.5f && Material.TextureSamplers[OcclusionSlot] == ExplicitSampler;
+	}), "full RenderPublication carries advanced material state without separate image residency");
+	(void)CompoundProjection.Apply(*AdvancedPublication);
+
+	auto InvalidAdvanced = AdvancedFixture;
+	InvalidAdvanced.Document["samplers"][0]["magFilter"] = 9987;
+	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(InvalidAdvanced));
+	const auto InvalidAdvancedReimport = Assets->ReimportProjectAsset(Mount, GltfMeshRecord->Reference.Value);
+	const auto StaleAdvanced = Assets->GetAsset(TexturedMaterialRecord->Reference.Value);
+	Check(!InvalidAdvancedReimport.Ok && InvalidAdvancedReimport.Diagnostic.Code == "InvalidSampler" &&
+		StaleAdvanced && StaleAdvanced->State == AssetState::Stale && AdvancedMaterial &&
+		StaleAdvanced->ContentRevision == AdvancedMaterial->ContentRevision,
+		"bad sampler reimport preserves last-known-good advanced material");
+	InvalidAdvanced = AdvancedFixture;
+	InvalidAdvanced.Document["materials"][0]["occlusionTexture"]["index"] = 99;
+	WriteBytes(Root / "assets" / "invalid-occlusion.glb", MakeGlb(InvalidAdvanced));
+	const auto BeforeInvalidOcclusion = Assets->GetCatalog(false).size();
+	const auto InvalidOcclusion = Assets->ImportProjectAsset(Mount, "assets/invalid-occlusion.glb", AssetKind::Mesh);
+	Check(!InvalidOcclusion.Ok && InvalidOcclusion.Diagnostic.Code == "InvalidTexture" &&
+		Assets->GetCatalog(false).size() == BeforeInvalidOcclusion,
+		"bad occlusion reference creates no partial source group");
+	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(AdvancedFixture));
+	const auto RetriedAdvanced = Assets->ReimportProjectAsset(Mount, GltfMeshRecord->Reference.Value);
+	const auto RetriedMaterial = Assets->ResolveMaterial(TexturedMaterialRecord->Reference.Value);
+	Check(RetriedAdvanced.Ok && AdvancedMaterial && RetriedMaterial &&
+		RetriedMaterial->ContentRevision == AdvancedMaterial->ContentRevision,
+		"identical v6 reimport restores availability without changing content revision");
+
 	auto FontImport = Assets->ImportProjectAsset(Mount, "assets/font.ttf", AssetKind::Font, "Project Font");
 	auto Font = FontImport.Record ? Assets->ResolveFont(FontImport.Record->Reference.Value) : std::nullopt;
 	Check(FontImport.Ok && Font && Font->Bytes && !Font->Bytes->empty() && Font->FaceCount > 0,
@@ -954,6 +1076,11 @@ int main() {
 	auto ReopenedProject = Project::fromExisting(&ReopenFilesystem);
 	auto ReopenedWorld = ReopenedProject.DeserializeGame();
 	auto ReopenedAssets = GetAssets(ReopenedWorld);
+	const auto ReopenedMaterial = ReopenedAssets->ResolveMaterial(TexturedMaterialRecord->Reference.Value);
+	Check(ReopenedMaterial && ReopenedMaterial->Value.EmissiveTexture == GltfImageRecord->Id &&
+		ReopenedMaterial->Value.OcclusionTexture == GltfImageRecord->Id && ReopenedMaterial->Value.NormalScale == -.5f &&
+		ReopenedMaterial->Value.TextureSamplers[OcclusionSlot] == ExplicitSampler,
+		"advanced material artifact and dependency graph survive fresh project reopen");
 	Check(ReopenedAssets && ReopenedAssets->IsAvailable(PersistentImageReference) &&
 		ReopenedAssets->ResolveMesh(MeshImport.Record->Reference.Value).has_value() &&
 		ReopenedAssets->ResolveMeshResource(GltfMeshRecord->Reference.Value).has_value() &&
@@ -1021,7 +1148,8 @@ int main() {
 	};
 	auto Handshake = Call("Handshake");
 	Check(Handshake["Ok"] && std::ranges::contains(Handshake["Result"]["Capabilities"], "AssetCatalog") &&
-		std::ranges::contains(Handshake["Result"]["Capabilities"], "StrictAssetReferences"),
+		std::ranges::contains(Handshake["Result"]["Capabilities"], "StrictAssetReferences") &&
+		std::ranges::contains(Handshake["Result"]["Capabilities"], "AdvancedMaterialMetadata"),
 		"EditorHost advertises the Asset Foundation command contract");
 	auto Opened = Call("OpenProject", {{"Root", Root.generic_string()}});
 	Check(Opened["Ok"], "EditorHost opens a persisted asset project");
@@ -1033,6 +1161,25 @@ int main() {
 			return Record["Kind"] == "Material" && Record.contains("SourceGroupId") &&
 				Record.contains("LogicalKey") && Record.contains("Dependencies");
 		}), "EditorHost exposes bounded v2 grouping, dependency, and material metadata without raw resources");
+	const auto AdvancedCatalog = Call("GetAssetCatalog", {{"IncludeAdvancedMaterials", true}});
+	const auto AdvancedOff = Call("GetAssetCatalog", {{"IncludeAdvancedMaterials", false}});
+	const auto BadAdvancedRequest = Call("GetAssetCatalog", {{"IncludeAdvancedMaterials", 1}});
+	Check(AdvancedCatalog["Ok"] && AdvancedCatalog["Result"]["CatalogVersion"] == 2 &&
+		AdvancedOff["Ok"] && AdvancedOff["Result"]["Assets"] == Catalog["Result"]["Assets"] &&
+		!BadAdvancedRequest["Ok"] && BadAdvancedRequest["Error"]["Code"] == "MalformedRequest" &&
+		std::ranges::none_of(Catalog["Result"]["Assets"], [](const auto &Record) {
+			return Record["Metadata"].contains("AdvancedMaterial");
+		}) && std::ranges::any_of(AdvancedCatalog["Result"]["Assets"], [&](const auto &Record) {
+			if (Record["Reference"] != TexturedMaterialRecord->Reference.Value ||
+				!Record["Metadata"].contains("AdvancedMaterial")) return false;
+			const auto &Metadata = Record["Metadata"]["AdvancedMaterial"];
+			return Metadata["EmissiveFactor"] == nlohmann::json::array({.125, .25, .5}) &&
+				Metadata["EmissiveTexture"] == GltfImageRecord->Id.ToString() &&
+				Metadata["OcclusionTexture"] == GltfImageRecord->Id.ToString() &&
+				Metadata["OcclusionStrength"] == .375 && Metadata["NormalScale"] == -.5 &&
+				Metadata["TextureSamplers"]["Occlusion"]["MinFilter"] == "NearestMipmapLinear" &&
+				Metadata["TextureSamplers"]["Occlusion"]["WrapU"] == "MirroredRepeat";
+		}), "advanced metadata is bounded opt-in and leaves legacy v2 catalog responses unchanged");
 	auto Revision = Catalog["Result"]["ProjectState"]["AuthoritativeRevision"].get<std::uint64_t>();
 	auto HostImport = Call("ImportAsset", {
 		{"Source", "assets/editor.bmp"}, {"Kind", "Image"}, {"Name", "Editor Image"}, {"ExpectedRevision", Revision},

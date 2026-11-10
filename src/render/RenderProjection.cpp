@@ -32,6 +32,10 @@ namespace gargantuan {
 			return Item.Object.IsValid() && IsFinite(Item.ModelMatrix) && IsFinite(Item.InverseModelMatrix) &&
 				IsFinite(Item.Color);
 		}
+		bool IsUnitColor(const glm::vec3 &Value) {
+			return IsFinite(Value) && Value.x >= 0.0f && Value.x <= 1.0f && Value.y >= 0.0f &&
+				Value.y <= 1.0f && Value.z >= 0.0f && Value.z <= 1.0f;
+		}
 		bool IsValid(const RenderMaterialState &Material) {
 			const bool OpacityModeValid = Material.OpacityMode == RenderOpacityMode::Opaque ||
 				Material.OpacityMode == RenderOpacityMode::Masked || Material.OpacityMode == RenderOpacityMode::Transparent;
@@ -42,6 +46,12 @@ namespace gargantuan {
 				(!Material.NormalTexture || Material.NormalTexture->IsValid()) &&
 				(!Material.MetallicRoughnessTexture || (Material.MetallicRoughnessTexture->IsValid() &&
 					Material.ShadingModel == RenderShadingModel::MetallicRoughness)) &&
+				(!Material.EmissiveTexture || Material.EmissiveTexture->IsValid()) &&
+				(!Material.OcclusionTexture || Material.OcclusionTexture->IsValid()) &&
+				IsUnitColor(Material.EmissiveFactor) && std::isfinite(Material.OcclusionStrength) &&
+				Material.OcclusionStrength >= 0.0f && Material.OcclusionStrength <= 1.0f &&
+				std::isfinite(Material.NormalScale) && std::abs(Material.NormalScale) <= MaximumRenderNormalScale &&
+				std::ranges::all_of(Material.TextureSamplers, &RenderSamplerState::IsValid) &&
 				std::isfinite(Material.Metallic) && Material.Metallic >= 0.0f && Material.Metallic <= 1.0f &&
 				std::isfinite(Material.Roughness) && Material.Roughness >= 0.0f && Material.Roughness <= 1.0f &&
 				OpacityModeValid && std::isfinite(Material.AlphaCutoff) && Material.AlphaCutoff >= 0.0f &&
@@ -63,10 +73,6 @@ namespace gargantuan {
 		bool IsValid(const RenderVertex &Vertex) {
 			return IsFinite(Vertex.Position) && IsFinite(Vertex.Normal) && IsFinite(Vertex.Tangent) &&
 				IsFinite(Vertex.TextureCoordinate);
-		}
-		bool IsUnitColor(const glm::vec3 &Value) {
-			return IsFinite(Value) && Value.x >= 0.0f && Value.x <= 1.0f && Value.y >= 0.0f &&
-				Value.y <= 1.0f && Value.z >= 0.0f && Value.z <= 1.0f;
 		}
 		bool IsValid(const RenderEnvironmentState &Environment) {
 			if (!IsUnitColor(Environment.AmbientColor) || !IsFinite(Environment.SunDirection) ||
@@ -251,7 +257,9 @@ namespace gargantuan {
 		const auto MaterialTexturesExist = [&](const RenderMaterialState &Material) {
 			return (!Material.BaseColorTexture || TextureExistsAfterPublication(*Material.BaseColorTexture)) &&
 				(!Material.NormalTexture || TextureExistsAfterPublication(*Material.NormalTexture)) &&
-				(!Material.MetallicRoughnessTexture || TextureExistsAfterPublication(*Material.MetallicRoughnessTexture));
+				(!Material.MetallicRoughnessTexture || TextureExistsAfterPublication(*Material.MetallicRoughnessTexture)) &&
+				(!Material.EmissiveTexture || TextureExistsAfterPublication(*Material.EmissiveTexture)) &&
+				(!Material.OcclusionTexture || TextureExistsAfterPublication(*Material.OcclusionTexture));
 		};
 		const auto ObjectTexturesExist = [&](const auto &Object) {
 			if (!MaterialTexturesExist(Object.Material)) return false;

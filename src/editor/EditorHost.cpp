@@ -578,7 +578,7 @@ namespace gargantuan {
 			};
 		}
 
-		Json EncodeAssetRecord(const AssetRecord &Record) {
+		Json EncodeAssetRecord(const AssetRecord &Record, bool IncludeAdvancedMaterials = false) {
 			Json Diagnostic = nullptr;
 			if (Record.Diagnostic)
 				Diagnostic = {{"Code", Record.Diagnostic->Code}, {"Message", Record.Diagnostic->Message}};
@@ -646,6 +646,31 @@ namespace gargantuan {
 						Asset.AlphaMode == AssetMaterialAlphaMode::Mask ? "Mask" : "Blend";
 					Metadata["AlphaCutoff"] = Asset.AlphaCutoff;
 					Metadata["DoubleSided"] = Asset.DoubleSided;
+					if (IncludeAdvancedMaterials && Asset.HasAdvancedInputs()) {
+						constexpr std::array Slots{"BaseColor", "Normal", "MetallicRoughness", "Emissive", "Occlusion"};
+						constexpr std::array MinFilters{"Default", "Nearest", "Linear", "NearestMipmapNearest",
+							"LinearMipmapNearest", "NearestMipmapLinear", "LinearMipmapLinear"};
+						constexpr std::array MagFilters{"Default", "Nearest", "Linear"};
+						constexpr std::array WrapModes{"Repeat", "MirroredRepeat", "ClampToEdge"};
+						Json Samplers = Json::object();
+						for (std::size_t Index = 0; Index < Slots.size(); ++Index) {
+							const auto &Sampler = Asset.TextureSamplers[Index];
+							if (Sampler == RenderSamplerState{}) continue;
+							Samplers[Slots[Index]] = {
+								{"MinFilter", MinFilters[static_cast<std::size_t>(Sampler.MinFilter)]},
+								{"MagFilter", MagFilters[static_cast<std::size_t>(Sampler.MagFilter)]},
+								{"WrapU", WrapModes[static_cast<std::size_t>(Sampler.WrapU)]},
+								{"WrapV", WrapModes[static_cast<std::size_t>(Sampler.WrapV)]},
+							};
+						}
+						Metadata["AdvancedMaterial"] = {
+							{"EmissiveFactor", {Asset.EmissiveFactor.x, Asset.EmissiveFactor.y, Asset.EmissiveFactor.z}},
+							{"EmissiveTexture", Asset.EmissiveTexture ? Json(Asset.EmissiveTexture->ToString()) : Json(nullptr)},
+							{"OcclusionTexture", Asset.OcclusionTexture ? Json(Asset.OcclusionTexture->ToString()) : Json(nullptr)},
+							{"OcclusionStrength", Asset.OcclusionStrength}, {"NormalScale", Asset.NormalScale},
+							{"TextureSamplers", std::move(Samplers)},
+						};
+					}
 				}
 			}, *Record.Asset);
 			return {
@@ -1115,6 +1140,7 @@ namespace gargantuan {
 					"CustomServiceDeclarations", "ReplicatedStorage",
 					"PlaySession", "DiagnosticStream", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
+					"AdvancedMaterialMetadata",
 					"AnimationRig", "AnimationPreview",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
@@ -2112,10 +2138,11 @@ namespace gargantuan {
 			}
 
 			if (method == "GetAssetCatalog") {
-				if (!HasOnlyFields(parameters, {"IncludeBuiltIns"}) ||
-					(parameters.contains("IncludeBuiltIns") && !parameters["IncludeBuiltIns"].is_boolean()))
+				if (!HasOnlyFields(parameters, {"IncludeBuiltIns", "IncludeAdvancedMaterials"}) ||
+					(parameters.contains("IncludeBuiltIns") && !parameters["IncludeBuiltIns"].is_boolean()) ||
+					(parameters.contains("IncludeAdvancedMaterials") && !parameters["IncludeAdvancedMaterials"].is_boolean()))
 					return SerializeBoundedResponse(ErrorResponse(
-						requestId, "MalformedRequest", "GetAssetCatalog accepts only optional IncludeBuiltIns"
+						requestId, "MalformedRequest", "GetAssetCatalog accepts optional IncludeBuiltIns and IncludeAdvancedMaterials booleans"
 					));
 				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(
@@ -2127,8 +2154,9 @@ namespace gargantuan {
 				if (!Assets)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "AssetServiceFailure", "AssetService is unavailable"));
 				Json Records = Json::array();
+				const bool IncludeAdvancedMaterials = parameters.value("IncludeAdvancedMaterials", false);
 				for (const auto &Record : Assets->GetCatalog(parameters.value("IncludeBuiltIns", true)))
-					Records.push_back(EncodeAssetRecord(Record));
+					Records.push_back(EncodeAssetRecord(Record, IncludeAdvancedMaterials));
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"CatalogVersion", 2}, {"Assets", std::move(Records)},
 					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
