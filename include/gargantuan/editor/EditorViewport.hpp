@@ -66,6 +66,8 @@ namespace gargantuan {
 		[[nodiscard]] std::optional<EditorViewportPick> Pick(float X, float Y) const;
 
 	  private:
+		friend struct EditorViewportRendererTestAccess;
+		void InjectPaletteUploadFailureForTesting();
 		struct Backend;
 		std::unique_ptr<Backend> State;
 	};

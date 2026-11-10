@@ -80,6 +80,12 @@ implementation uses manual exposure so authoring, replay, and per-frame
 comparison have one defined output. The GPU smoke compares saturated and
 low-exposure samples against double-precision display values and tests linear
 alpha composition, GUI isolation, resize, recreation, and direct SDR fallback.
+The viewport retains its last accepted publication when neutral validation
+rejects an incoming delta. If a required GPU upload fails after acceptance, it
+discards the projection and native mesh, texture, palette and shadow state.
+Only a full publication can restore rendering and picking after that failure.
+The offscreen smoke test injects a palette upload failure and verifies both
+delta rejection and exact readback after resynchronization.
 
 ## Environment lighting and materials
 

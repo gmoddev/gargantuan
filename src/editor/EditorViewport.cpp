@@ -121,8 +121,20 @@ namespace gargantuan {
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
 		SDLDirectionalShadowCache ShadowCache;
+		bool RequiresFullResync = false;
+		std::uint32_t RemainingPaletteUploadFailures = 0;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		std::vector<std::uint8_t> BgraPixels;
+
+		void InvalidatePublication() {
+			RequiresFullResync = true;
+			MeshResources->Destroy();
+			TextureResources->Destroy();
+			SkinPalettes->Destroy();
+			ShadowCache.Invalidate();
+			ShadowPoseRevisions.clear();
+			Projection.Clear();
+		}
 
 		void Destroy() {
 			if (Gpu) SDL_WaitForGPUIdle(Gpu);
@@ -207,7 +219,7 @@ namespace gargantuan {
 		State->HdrSceneEnabled = EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
 		State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu);
 		State->TextureResources = std::make_unique<SDLTextureCache>(State->Gpu);
-		State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(State->Gpu);
+		State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(State->Gpu, nullptr, &State->RemainingPaletteUploadFailures);
 
 		SDL_GPUTextureCreateInfo ShadowInfo{
 			.type = SDL_GPU_TEXTURETYPE_2D, .format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT,
@@ -259,17 +271,27 @@ namespace gargantuan {
 	void EditorViewportRenderer::ApplyPublication(RenderPublicationPtr Publication) {
 		if (!State || !State->Gpu) throw std::logic_error("Viewport renderer is not initialized");
 		if (!Publication) throw std::invalid_argument("Viewport requires an immutable RenderPublication");
-		if (State->Projection.GetLastPublicationId() == Publication->Id) return;
+		if (State->RequiresFullResync && !Publication->FullResync)
+			throw std::logic_error("Viewport renderer requires a full RenderPublication after resource recovery");
+		if (Publication->Id != InvalidRenderPublicationId && State->Projection.GetLastPublicationId() == Publication->Id) return;
+		bool ApplyingNativeResources = false;
 		try {
 			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
 			(void)State->Projection.Apply(*Publication);
+			ApplyingNativeResources = true;
 			State->MeshResources->ApplyPublication(*Publication);
+			State->MeshResources->UploadToGpu();
 			State->TextureResources->ApplyPublication(*Publication);
 			State->SkinPalettes->ApplyPublication(*Publication);
+		} catch (const std::invalid_argument &) {
+			// Neutral validation rejects before changing the last accepted projection.
+			if (ApplyingNativeResources) State->InvalidatePublication();
+			throw;
 		} catch (...) {
-			State->ShadowCache.Invalidate();
+			State->InvalidatePublication();
 			throw;
 		}
+		State->RequiresFullResync = false;
 		if (Publication->FullResync) State->ShadowPoseRevisions.clear();
 		for (const auto &Remove : Publication->Removes)
 			State->ShadowPoseRevisions.erase(Remove.Object);
@@ -281,7 +303,6 @@ namespace gargantuan {
 		const auto &FrameState = State->Projection.GetFrame();
 		if (FrameState.ViewportWidth != State->Width || FrameState.ViewportHeight != State->Height)
 			throw std::invalid_argument("RenderPublication dimensions do not match the viewport target");
-		State->MeshResources->UploadToGpu();
 		auto *Commands = SDL_AcquireGPUCommandBuffer(State->Gpu);
 		if (!Commands) throw std::runtime_error(std::format("Failed to acquire viewport command buffer: {}", SDL_GetError()));
 		SDLFrameContext Frame(
@@ -363,7 +384,11 @@ namespace gargantuan {
 	}
 
 	std::optional<EditorViewportPick> EditorViewportRenderer::Pick(float X, float Y) const {
-		if (!State) return std::nullopt;
+		if (!State || State->RequiresFullResync) return std::nullopt;
 		return PickEditorViewport(State->Projection, X, Y);
+	}
+
+	void EditorViewportRenderer::InjectPaletteUploadFailureForTesting() {
+		State->RemainingPaletteUploadFailures = 1;
 	}
 }

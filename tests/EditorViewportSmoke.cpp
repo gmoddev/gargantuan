@@ -16,6 +16,14 @@
 
 using namespace gargantuan;
 
+namespace gargantuan {
+	struct EditorViewportRendererTestAccess {
+		static void InjectPaletteUploadFailure(EditorViewportRenderer &Renderer) {
+			Renderer.InjectPaletteUploadFailureForTesting();
+		}
+	};
+}
+
 namespace {
 	std::shared_ptr<RenderPublication>
 	MakePublication(std::uint32_t Width, std::uint32_t Height, RenderPublicationId Id) {
@@ -280,6 +288,69 @@ namespace {
 			throw std::runtime_error("[Renderer:Shadow] Static runtime frame did not skip the entire shadow pass");
 	}
 
+	void CheckPublicationRecovery() {
+		EditorViewportRenderer Renderer(64, 64);
+		RenderMaterialState Material;
+		Material.DoubleSided = true;
+		Material.BaseColorFactor = {1.0f, 0.0f, 0.0f, 1.0f};
+		const auto Initial = MaterialScene(40, Material);
+		auto &Mesh = Initial->MeshCreates.front();
+		Mesh.Skeleton.Bytes[0] = 1;
+		Mesh.SkeletonJointCount = 1;
+		Mesh.SkinInfluences = std::make_shared<const std::vector<RenderSkinInfluence>>(
+			Mesh.Vertices->size(), RenderSkinInfluence{{0, 0, 0, 0}, {1.0f, 0.0f, 0.0f, 0.0f}});
+		const auto InitialPixels = Renderer.Capture(Initial).RgbPixels;
+		if (!Renderer.Pick(32, 32) || InitialPixels[CenterPixel(64, 64)] < 150)
+			throw std::runtime_error("[Renderer:Viewport] Recovery fixture did not begin with visible geometry");
+
+		auto Stale = std::make_shared<RenderPublication>();
+		Stale->Id = 41;
+		Stale->BaseId = 39;
+		Stale->Frame = Initial->Frame;
+		bool RejectedStale = false;
+		try { Renderer.ApplyPublication(Stale); }
+		catch (const std::invalid_argument &) { RejectedStale = true; }
+		if (!RejectedStale || Renderer.Capture(Initial).RgbPixels != InitialPixels)
+			throw std::runtime_error("[Renderer:Viewport] Malformed delta disturbed the last valid frame");
+
+		auto Delta = std::make_shared<RenderPublication>(*Stale);
+		Delta->BaseId = Initial->Id;
+		Delta->AnimationPoseUpdates.push_back({
+			.Object = Initial->Creates.front().Item.Object, .SourceMesh = Mesh.Mesh, .PoseRevision = 1,
+			.Palette = {Mesh.Skeleton, std::make_shared<const std::vector<RenderSkinPaletteEntry>>(1)},
+		});
+		EditorViewportRendererTestAccess::InjectPaletteUploadFailure(Renderer);
+		bool ObservedFailure = false;
+		try { Renderer.ApplyPublication(Delta); }
+		catch (const std::runtime_error &Error) {
+			ObservedFailure = std::string_view(Error.what()).find("injected palette upload failure") != std::string_view::npos;
+		}
+		if (!ObservedFailure || Renderer.Pick(32, 32))
+			throw std::runtime_error("[Renderer:Viewport] Failed palette publication left live projection state");
+
+		auto Next = std::make_shared<RenderPublication>();
+		Next->Id = 42;
+		Next->BaseId = Delta->Id;
+		Next->Frame = Initial->Frame;
+		for (const auto &Publication : {Delta, Next}) {
+			bool RequestedResync = false;
+			try { Renderer.ApplyPublication(Publication); }
+			catch (const std::logic_error &Error) {
+				RequestedResync = std::string_view(Error.what()).find("requires a full RenderPublication") != std::string_view::npos;
+			}
+			if (!RequestedResync) throw std::runtime_error("[Renderer:Viewport] Native failure admitted a delta before resync");
+		}
+		auto Recovery = std::make_shared<RenderPublication>(*Initial);
+		Recovery->Id = 43;
+		Recovery->AnimationPoseUpdates = Delta->AnimationPoseUpdates;
+		if (Renderer.Capture(Recovery).RgbPixels != InitialPixels || !Renderer.Pick(32, 32))
+			throw std::runtime_error("[Renderer:Viewport] Full resync did not restore projection and native residency");
+		Next->Id = 44;
+		Next->BaseId = Recovery->Id;
+		if (Renderer.Capture(Next).RgbPixels != InitialPixels)
+			throw std::runtime_error("[Renderer:Viewport] Valid delta did not resume after full resync");
+	}
+
 	void CheckHdrExposure(EditorViewportRenderer &Renderer) {
 		const auto Center = CenterPixel(64, 64);
 		RenderPublicationId Id = 100;
@@ -491,6 +562,7 @@ int main(int ArgumentCount, char **Arguments) {
 	assert(RestartedFrame.Width == 32 && RestartedFrame.Height == 48);
 	assert(RestartedFrame.RgbPixels.size() == static_cast<std::size_t>(32 * 48 * 3));
 	CheckWorldSubmission();
+	CheckPublicationRecovery();
 	CheckLocalLightBudget();
 	EditorViewportRenderer Fallback(64, 64, false);
 	if (Fallback.UsesHdrScene()) throw std::runtime_error("[Renderer:HDR] Direct SDR fallback did not activate");
