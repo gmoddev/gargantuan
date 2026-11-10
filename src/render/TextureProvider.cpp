@@ -136,11 +136,20 @@ namespace gargantuan {
 			const auto Found = Textures.find(*Texture);
 			if (Found != Textures.end()) QueueMaterialViews(Found->second, View);
 		};
-		Queue(Material.BaseColorTexture, Material.ShadingModel == RenderShadingModel::MetallicRoughness ? SRGB_VIEW : LINEAR_VIEW);
+		const auto QueueData = [&](const auto &Texture, RenderMaterialTextureSlot Slot) {
+			const auto Filter = Material.TextureSamplers[static_cast<std::size_t>(Slot)].MinFilter;
+			if (Filter != RenderTextureMinFilter::Nearest && Filter != RenderTextureMinFilter::Linear)
+				Queue(Texture, LINEAR_VIEW);
+		};
+		if (Material.ShadingModel != RenderShadingModel::MetallicRoughness) {
+			if (Material.OpacityMode != RenderOpacityMode::Masked) QueueData(Material.BaseColorTexture, RenderMaterialTextureSlot::BaseColor);
+			return;
+		}
+		Queue(Material.BaseColorTexture, SRGB_VIEW);
 		Queue(Material.EmissiveTexture, SRGB_VIEW);
-		Queue(Material.NormalTexture, LINEAR_VIEW);
-		Queue(Material.MetallicRoughnessTexture, LINEAR_VIEW);
-		Queue(Material.OcclusionTexture, LINEAR_VIEW);
+		QueueData(Material.NormalTexture, RenderMaterialTextureSlot::Normal);
+		QueueData(Material.MetallicRoughnessTexture, RenderMaterialTextureSlot::MetallicRoughness);
+		QueueData(Material.OcclusionTexture, RenderMaterialTextureSlot::Occlusion);
 	}
 
 	void SDLTextureCache::UploadMaterialView(Entry &Value, unsigned Index, SDL_GPUCopyPass *CopyPass) {
@@ -386,7 +395,7 @@ namespace gargantuan {
 				auto &Value = Textures.at(Update.Texture);
 				Upload(Value, CopyPass, Update.X, Update.Y, Update.Width, Update.Height, *Update.Pixels, false);
 				Value.Revision = Update.Revision;
-				if (Value.GetSource() || Value.RequestedViews) UpdateSource(Value, Update);
+				UpdateSource(Value, Update);
 				QueueMaterialViews(Value, Value.RequestedViews);
 			}
 			const auto QueueObject = [&](const auto &Object) {
