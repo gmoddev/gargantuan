@@ -75,6 +75,10 @@ namespace gargantuan {
 		std::uint64_t WorldMaterialBindings = 0;
 		std::uint64_t HdrSceneBytes = 0;
 		std::uint64_t SceneResolveDraws = 0;
+		std::uint64_t IblBuilds = 0;
+		std::uint64_t IblCacheHits = 0;
+		std::uint64_t IblPreprocessPasses = 0;
+		std::uint64_t IblLastPrepareNanoseconds = 0;
 	};
 
 	class SDLRenderer final : public BaseRenderer {

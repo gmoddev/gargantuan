@@ -71,6 +71,7 @@ namespace gargantuan {
 			DestroyEntry(Value);
 		}
 		Textures.clear();
+		++ResidencyGeneration;
 	}
 
 	SDL_GPUTexture *SDLTextureCache::GetWhiteTexture() {

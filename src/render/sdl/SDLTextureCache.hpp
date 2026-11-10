@@ -22,6 +22,7 @@ namespace gargantuan {
 		void Destroy();
 		[[nodiscard]] SDL_GPUTexture *Find(RenderTextureIdentity Texture) const;
 		[[nodiscard]] SDL_GPUTexture *GetWhiteTexture();
+		[[nodiscard]] std::uint64_t GetResidencyGeneration() const { return ResidencyGeneration; }
 
 	  private:
 		struct Entry {
@@ -49,6 +50,7 @@ namespace gargantuan {
 		SDL_GPUDevice *Gpu = nullptr;
 		SDLRendererMetrics *Metrics = nullptr;
 		std::unordered_map<RenderTextureIdentity, Entry, RenderTextureIdentityHash> Textures;
+		std::uint64_t ResidencyGeneration = 0;
 		Entry White;
 	};
 }
