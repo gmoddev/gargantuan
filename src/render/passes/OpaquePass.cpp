@@ -372,6 +372,8 @@ namespace gargantuan {
 			SDL_GPUBuffer *BoundPalette = nullptr;
 			std::array<SDL_GPUTexture *, 5> BoundTextures{};
 			std::array<SDL_GPUSampler *, 5> BoundSamplers{};
+			const RenderMaterialState *ResolvedMaterial = nullptr;
+			std::array<bool, 5> ResolvedNativeSrgb{};
 			auto *DefaultSampler = Context.MaterialSamplers->Get(Gpu, {}, false);
 			TransparentDraws.clear();
 
@@ -399,6 +401,7 @@ namespace gargantuan {
 					BoundPalette = nullptr;
 					BoundTextures = {};
 					BoundSamplers = {};
+					ResolvedMaterial = nullptr;
 					if (Context.Metrics) ++Context.Metrics->PipelineSwitches;
 				}
 				if (Draw.Mesh != BoundMesh) {
@@ -425,38 +428,43 @@ namespace gargantuan {
 					}
 					BoundObject = Draw.Object;
 				}
-				const std::array References{
-					Material.BaseColorTexture, Material.NormalTexture, Material.MetallicRoughnessTexture,
-					Material.EmissiveTexture, Material.OcclusionTexture,
-				};
-				std::array<SDL_GPUTexture *, 5> Textures{White, White, White, White, White};
-				std::array<SDL_GPUSampler *, 5> Samplers{
-					DefaultSampler, DefaultSampler, DefaultSampler, DefaultSampler, DefaultSampler,
-				};
-				std::array<bool, 5> NativeSrgb{};
-				const bool Physical = Material.ShadingModel == RenderShadingModel::MetallicRoughness;
-				for (std::size_t Slot = 0; Slot < References.size(); ++Slot) {
-					if (!References[Slot]) continue;
-					const bool Srgb = Physical && (Slot == 0 || Slot == 3);
-					const auto View = Context.TextureResources->FindMaterialTexture(*References[Slot], Srgb);
-					const bool Mask = Slot == 0 && Material.OpacityMode == RenderOpacityMode::Masked;
-					Textures[Slot] = View.Texture;
-					NativeSrgb[Slot] = View.NativeSrgb;
-					Samplers[Slot] = Context.MaterialSamplers->Get(Gpu, Material.TextureSamplers[Slot],
-						View.HasMipmaps && !Mask);
-				}
-				if (std::ranges::find(Textures, nullptr) != Textures.end())
-					throw std::logic_error("[Renderer:Material] A material texture has no SDL residency");
-				if (Textures != BoundTextures || Samplers != BoundSamplers) {
-					const std::array<SDL_GPUTextureSamplerBinding, 9> Bindings{{
-						ShadowBinding, {Textures[0], Samplers[0]}, {Textures[1], Samplers[1]}, {Textures[2], Samplers[2]},
-						{Textures[3], Samplers[3]}, {Textures[4], Samplers[4]}, Context.EnvironmentLighting.Irradiance,
-						Context.EnvironmentLighting.Reflections, Context.EnvironmentLighting.BrdfLut,
-					}};
-					SDL_BindGPUFragmentSamplers(Pass, 0, Bindings.data(), Bindings.size());
-					BoundTextures = Textures;
-					BoundSamplers = Samplers;
-					if (Context.Metrics) ++Context.Metrics->WorldMaterialBindings;
+				// Grouped ranges often share the same immutable material. Its native
+				// views and sampler state stay fixed for the duration of this pass.
+				if (&Material != ResolvedMaterial) {
+					const std::array References{
+						Material.BaseColorTexture, Material.NormalTexture, Material.MetallicRoughnessTexture,
+						Material.EmissiveTexture, Material.OcclusionTexture,
+					};
+					std::array<SDL_GPUTexture *, 5> Textures{White, White, White, White, White};
+					std::array<SDL_GPUSampler *, 5> Samplers{
+						DefaultSampler, DefaultSampler, DefaultSampler, DefaultSampler, DefaultSampler,
+					};
+					ResolvedNativeSrgb = {};
+					const bool Physical = Material.ShadingModel == RenderShadingModel::MetallicRoughness;
+					for (std::size_t Slot = 0; Slot < References.size(); ++Slot) {
+						if (!References[Slot]) continue;
+						const bool Srgb = Physical && (Slot == 0 || Slot == 3);
+						const auto View = Context.TextureResources->FindMaterialTexture(*References[Slot], Srgb);
+						const bool Mask = Slot == 0 && Material.OpacityMode == RenderOpacityMode::Masked;
+						Textures[Slot] = View.Texture;
+						ResolvedNativeSrgb[Slot] = View.NativeSrgb;
+						Samplers[Slot] = Context.MaterialSamplers->Get(Gpu, Material.TextureSamplers[Slot],
+							View.HasMipmaps && !Mask);
+					}
+					if (std::ranges::find(Textures, nullptr) != Textures.end())
+						throw std::logic_error("[Renderer:Material] A material texture has no SDL residency");
+					if (Textures != BoundTextures || Samplers != BoundSamplers) {
+						const std::array<SDL_GPUTextureSamplerBinding, 9> Bindings{{
+							ShadowBinding, {Textures[0], Samplers[0]}, {Textures[1], Samplers[1]}, {Textures[2], Samplers[2]},
+							{Textures[3], Samplers[3]}, {Textures[4], Samplers[4]}, Context.EnvironmentLighting.Irradiance,
+							Context.EnvironmentLighting.Reflections, Context.EnvironmentLighting.BrdfLut,
+						}};
+						SDL_BindGPUFragmentSamplers(Pass, 0, Bindings.data(), Bindings.size());
+						BoundTextures = Textures;
+						BoundSamplers = Samplers;
+						if (Context.Metrics) ++Context.Metrics->WorldMaterialBindings;
+					}
+					ResolvedMaterial = &Material;
 				}
 				const float Shading = Material.MetallicRoughnessTexture ? 2.0f :
 					Material.ShadingModel == RenderShadingModel::MetallicRoughness ? 1.0f : 0.0f;
@@ -470,7 +478,7 @@ namespace gargantuan {
 						Material.NormalTexture ? 1.0f : 0.0f, OutputMode},
 					.EmissiveOcclusion = glm::vec4(Material.EmissiveFactor, Material.OcclusionTexture ? Material.OcclusionStrength : 0.0f),
 					.MaterialControls = {Material.NormalScale, Material.EmissiveTexture ? 1.0f : 0.0f,
-						NativeSrgb[0] ? 1.0f : 0.0f, NativeSrgb[3] ? 1.0f : 0.0f},
+						ResolvedNativeSrgb[0] ? 1.0f : 0.0f, ResolvedNativeSrgb[3] ? 1.0f : 0.0f},
 					.ColorSamplerModes = {WrapMode(Material.TextureSamplers[0]), WrapMode(Material.TextureSamplers[3]),
 						FilterMode(Material.TextureSamplers[0]), FilterMode(Material.TextureSamplers[3])},
 				};
