@@ -136,7 +136,7 @@ jobs:
             throw 'Packaged engine did not expose EditorHost'
           }
           @{ source = $env:GITHUB_SHA; directory = 'build-renderer'; editorHostArgument = $true
-            rawSamples = $true; supportsHdr = $true; files = @($Members) } |
+            rawSamples = $true; supportsHdr = $true; referenceCaptures = $true; files = @($Members) } |
             ConvertTo-Json -Depth 5 | Set-Content -LiteralPath renderer-evidence/renderer-package.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
@@ -171,7 +171,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends clang-19 clang-format g++-14 ninja-build glslc \
+          sudo apt-get install --yes --no-install-recommends clang-19 libclang-rt-19-dev clang-format g++-14 ninja-build glslc \
             libfreetype-dev libx11-dev libxcursor-dev libxext-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev
           lute tools/classgen
           mkdir -p renderer-evidence
@@ -180,6 +180,8 @@ jobs:
           cmake -S . -B build-sanitized -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
             "-DCMAKE_C_FLAGS=$Instrument" "-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 $Instrument" \
+            '-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O1 -gline-tables-only -DNDEBUG' \
+            '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O1 -gline-tables-only -DNDEBUG' \
             -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF \
             -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF
           cmake --build build-sanitized --parallel 3 --target gargantuan_renderer_publication_tests \

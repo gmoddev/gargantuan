@@ -264,8 +264,9 @@ namespace gargantuan {
 		const auto PreviousHeight = State->Height;
 		State->Width = Width;
 		State->Height = Height;
-		try { State->RecreateTargets(); State->Projection.Clear(); }
+		try { State->RecreateTargets(); }
 		catch (...) { State->Width = PreviousWidth; State->Height = PreviousHeight; throw; }
+		State->Projection.Clear();
 	}
 
 	void EditorViewportRenderer::ApplyPublication(RenderPublicationPtr Publication) {
@@ -280,7 +281,6 @@ namespace gargantuan {
 			(void)State->Projection.Apply(*Publication);
 			ApplyingNativeResources = true;
 			State->MeshResources->ApplyPublication(*Publication);
-			State->MeshResources->UploadToGpu();
 			State->TextureResources->ApplyPublication(*Publication);
 			State->SkinPalettes->ApplyPublication(*Publication);
 		} catch (const std::invalid_argument &) {
@@ -303,6 +303,12 @@ namespace gargantuan {
 		const auto &FrameState = State->Projection.GetFrame();
 		if (FrameState.ViewportWidth != State->Width || FrameState.ViewportHeight != State->Height)
 			throw std::invalid_argument("RenderPublication dimensions do not match the viewport target");
+		try {
+			State->MeshResources->UploadToGpu();
+		} catch (...) {
+			State->InvalidatePublication();
+			throw;
+		}
 		auto *Commands = SDL_AcquireGPUCommandBuffer(State->Gpu);
 		if (!Commands) throw std::runtime_error(std::format("Failed to acquire viewport command buffer: {}", SDL_GetError()));
 		SDLFrameContext Frame(

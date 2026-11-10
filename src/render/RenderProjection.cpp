@@ -604,18 +604,18 @@ namespace gargantuan {
 		Frame.Camera = Snapshot.Camera;
 		Frame.Environment = Snapshot.Environment;
 		++Changes.EnvironmentsUpdated;
-		Ui = std::make_shared<const RenderUiFrame>();
+		Ui.reset();
 		return Changes;
 	}
 
-	void RenderProjection::Clear() {
+	void RenderProjection::Clear() noexcept {
 		Entries.clear();
 		Meshes.clear();
 		Textures.clear();
 		AnimationPoses.clear();
 		LastPublicationId = InvalidRenderPublicationId;
 		Frame = {};
-		Ui = std::make_shared<const RenderUiFrame>();
+		Ui.reset();
 	}
 
 	const RenderItem *RenderProjection::GetItem(ObjectId Object) const {
