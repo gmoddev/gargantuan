@@ -485,7 +485,8 @@ namespace gargantuan {
 				} else Visit(0, Draw.Mesh->IndexCount, Draw.Object->Material);
 			};
 			std::optional<CoverageProjector> Projector;
-			if (GroupingSupported && Context.Width && Context.Height) {
+			const bool GroupingEnabled = GroupingSupported && Context.EnableOpaqueGrouping;
+			if (GroupingEnabled && Context.Width && Context.Height) {
 				const glm::dmat4 Projection(Frame.Camera.ProjectionMatrix), View(Frame.Camera.ViewMatrix);
 				if (BoundedMatrix(Projection) && BoundedMatrix(View)) {
 					Projector = CoverageProjector{Projection * View, Absolute(Projection) * Absolute(View),
@@ -510,7 +511,7 @@ namespace gargantuan {
 			};
 			const auto TryBatchOpaque = [&](const WorldDraw &Draw) {
 				const auto &Ranges = Draw.Object->Primitives;
-				if (!GroupingSupported || !Draw.Object->Mesh || Draw.Pose || !Ranges || Ranges->size() < 2 ||
+				if (!GroupingEnabled || !Draw.Object->Mesh || Draw.Pose || !Ranges || Ranges->size() < 2 ||
 					Ranges->size() > MAX_OPAQUE_BATCH_RANGES) return false;
 				const auto MatchesPending = [&] {
 					if (OpaqueBatch.empty() || OpaqueBatch.front().Mesh != Draw.Mesh) return false;

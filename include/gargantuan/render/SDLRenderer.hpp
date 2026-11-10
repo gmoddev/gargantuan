@@ -20,6 +20,7 @@ namespace gargantuan {
 		std::uint32_t InjectShaderCreationFailures = 0;
 		std::uint32_t InjectPipelineCreationFailures = 0;
 		bool EnableHdrScene = true;
+		bool EnableOpaqueGrouping = true;
 	};
 
 	struct SDLRendererMetrics {

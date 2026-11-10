@@ -15,7 +15,8 @@ its own submission order.
 
 The Vulkan fast path considers runs of visible, rigid objects using the same
 resident mesh and an equivalent ordered layout of two to eight opaque ranges.
-A layout compares sidedness and all three generation-safe texture bindings.
+A layout compares sidedness, shading model, and the five generation-safe
+material texture bindings with their sampler states.
 The material's other values remain per draw. Single-range objects, masks,
 transparent-containing objects and animation poses retain ordinary submission.
 The existing state cache still handles adjacent compatible draws on every path.
@@ -78,5 +79,7 @@ target resolution and authored workload against the Foundation 3 checkpoint
 with `--sdl-hdr=off`. Use `--sdl-hdr=on` for a separate HDR cost row. The timed
 summary reports the requested and active HDR state, live HDR bytes and measured
 resolve draws. The same switch controls the SDL material capture paths.
+For a same-binary control use `--sdl-opaque-grouping=off` with the identical
+timed fixture. Alternate enabled and disabled order across repeated runs.
 CPU submission and completion tails measure different boundaries. Physical
 GPU and software runs remain separate evidence.

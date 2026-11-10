@@ -71,6 +71,7 @@ namespace {
 		std::optional<std::filesystem::path> CapturePrefix;
 		std::optional<std::filesystem::path> SamplesPath;
 		std::optional<bool> SdlHdr;
+		bool SdlOpaqueGrouping = true;
 		std::optional<std::size_t> Lights;
 		bool StaticLights = false;
 	};
@@ -123,7 +124,7 @@ namespace {
 					"[--scenario=all|static|dynamic|mostly-static|mixed|culled|material-check|material-extensions] [--count=N] "
 					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--shadows=on|off] "
 					"[--incremental] [--synchronize=on|off|bounded-2] [--capture=path-prefix] [--samples=csv-path] "
-					"[--sdl-hdr=on|off] [--scenario=local-lights --lights=N [--static-lights]]\n";
+					"[--sdl-hdr=on|off] [--sdl-opaque-grouping=off] [--scenario=local-lights --lights=N [--static-lights]]\n";
 				std::exit(0);
 			} else if (auto ParsedValue = Value("--backend=")) ParsedOptions.Backend = *ParsedValue;
 			else if (auto ParsedValue = Value("--scenario=")) ParsedOptions.Scenario = *ParsedValue;
@@ -135,6 +136,7 @@ namespace {
 			else if (auto ParsedValue = Value("--lights=")) ParsedOptions.Lights = ParseSize(*ParsedValue, "lights");
 			else if (Argument == "--static-lights") ParsedOptions.StaticLights = true;
 			else if (Argument == "--incremental") ParsedOptions.Incremental = true;
+			else if (Argument == "--sdl-opaque-grouping=off") ParsedOptions.SdlOpaqueGrouping = false;
 			else if (auto ParsedValue = Value("--capture=")) {
 				if (ParsedValue->empty()) throw std::invalid_argument("capture prefix must not be empty");
 				ParsedOptions.CapturePrefix = std::filesystem::path(*ParsedValue);
@@ -170,6 +172,9 @@ namespace {
 		const bool MaterialCapture = ParsedOptions.Scenario == "material-check" ||
 			ParsedOptions.Scenario == "material-extensions";
 		const bool LocalLighting = ParsedOptions.Scenario == "local-lights";
+		if (!ParsedOptions.SdlOpaqueGrouping &&
+			(!ParsedOptions.Incremental || ParsedOptions.Backend != "sdl" || MaterialCapture))
+			throw std::invalid_argument("--sdl-opaque-grouping requires an incremental SDL timing workload");
 		const bool IncrementalOnly = ParsedOptions.Scenario == "culled" || MaterialCapture || LocalLighting;
 		if ((ParsedOptions.Lights || ParsedOptions.StaticLights) && !LocalLighting)
 			throw std::invalid_argument("light count and movement require --scenario=local-lights");
@@ -660,6 +665,7 @@ namespace {
 			auto Renderer = std::make_unique<SDLRenderer>(Viewport, SDLRendererOptions{
 				.Offscreen = true, .WaitForGpuCompletion = CompleteEachFrame, .DebugDevice = false,
 				.EnableHdrScene = Settings.SdlHdr.value_or(true),
+				.EnableOpaqueGrouping = Settings.SdlOpaqueGrouping,
 			});
 			Sdl = Renderer.get();
 			Backend = std::move(Renderer);
@@ -817,6 +823,7 @@ namespace {
 		} else std::cout << ",NA,NA,NA,NA,NA,NA,NA,NA";
 		for (std::size_t Index = 0; Index < Final.DirectionalShadow.size(); ++Index)
 			std::cout << ',' << CounterDelta(Baseline.DirectionalShadow[Index], Final.DirectionalShadow[Index]);
+		std::cout << ',' << (Sdl ? (Settings.SdlOpaqueGrouping ? "on" : "off") : "NA");
 		std::cout << '\n';
 		if (Samples) {
 			for (std::size_t Frame = 0; Frame < FrameTimes.size(); ++Frame) {
@@ -1103,7 +1110,7 @@ int main(int ArgumentCount, char **Arguments) {
 				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs,SdlHdrRequested,SdlHdrActive,SdlHdrSceneBytes,SdlSceneResolveDraws,"
 				"AuthoredLocalLights,LocalLightMovement,LocalLightGridMeanMs,LocalLightUploadBytes,VisibleLocalLights,"
 				"OverBudgetLightTiles,DroppedLightTileIndices,MaterialViewBytes,MaterialSourceBytes,MaterialViewFallbacks,"
-				"IblBuilds,IblPreprocessPasses,ShadowMapBuilds,ShadowCacheHits,ShadowMapPasses,ShadowCasterDraws\n";
+				"IblBuilds,IblPreprocessPasses,ShadowMapBuilds,ShadowCacheHits,ShadowMapPasses,ShadowCasterDraws,SdlOpaqueGrouping\n";
 			std::ofstream Samples;
 			if (BenchmarkOptions.SamplesPath) {
 				if (std::filesystem::exists(*BenchmarkOptions.SamplesPath))

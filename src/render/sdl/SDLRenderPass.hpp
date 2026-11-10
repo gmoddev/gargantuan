@@ -21,6 +21,7 @@ namespace gargantuan {
 	struct SDLRendererMetrics;
 
 	struct SDLFrameContext {
+		bool EnableOpaqueGrouping = true;
 		SDLFrameContext(
 			const RenderProjection &RenderState,
 			SDLMeshCache &MeshResourcesValue,

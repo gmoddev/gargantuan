@@ -310,6 +310,7 @@ namespace gargantuan {
 		}
 		SDLFrameContext Frame(
 			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
+		Frame.EnableOpaqueGrouping = State->Options.EnableOpaqueGrouping;
 		Frame.Commands = Commands;
 		Frame.HdrSceneTexture = State->HdrSceneTexture;
 		Frame.DepthTexture = State->DepthTexture;
