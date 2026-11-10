@@ -41,7 +41,8 @@ namespace gargantuan {
 				.mipmap_mode = BlendLevels ? SDL_GPU_SAMPLERMIPMAPMODE_LINEAR : SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
 				.address_mode_u = Address(State.WrapU), .address_mode_v = Address(State.WrapV),
 				.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
-				.max_lod = EnableMipmaps ? 16.0f : 0.0f,
+				// Keep minification active while nearest mip selection stays at level zero.
+				.max_lod = EnableMipmaps ? 16.0f : 0.25f,
 			};
 			Sampler = SDL_CreateGPUSampler(Gpu, &Info);
 			if (!Sampler) throw std::runtime_error("[Renderer:Material] Could not create a bounded material sampler");

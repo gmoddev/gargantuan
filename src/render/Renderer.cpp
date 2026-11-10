@@ -332,7 +332,9 @@ namespace gargantuan {
 			Frame.Height != static_cast<std::uint32_t>(State->Height) ||
 			Frame.Width != State->Projection.GetFrame().ViewportWidth ||
 			Frame.Height != State->Projection.GetFrame().ViewportHeight) {
-			SDL_CancelGPUCommandBuffer(Frame.Commands);
+			if (State->Options.Offscreen) SDL_CancelGPUCommandBuffer(Frame.Commands);
+			else if (!SDL_SubmitGPUCommandBuffer(Frame.Commands))
+				LOG_ERROR(App, "[Render:SDL] Failed to retire the resized swapchain image: %s", SDL_GetError());
 			LOG_TRACE(App, "[Render:SDL] RenderPublication viewport does not match the acquired target");
 			return;
 		}

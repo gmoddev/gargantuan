@@ -38,7 +38,7 @@ namespace gargantuan {
 
 		auto BindingLayout(const RenderPrimitiveMaterialState &Primitive) {
 			const auto &Material = Primitive.Material;
-			return std::tie(Material.OpacityMode, Material.DoubleSided, Material.BaseColorTexture,
+			return std::tie(Material.OpacityMode, Material.DoubleSided, Material.ShadingModel, Material.BaseColorTexture,
 				Material.NormalTexture, Material.MetallicRoughnessTexture, Material.EmissiveTexture,
 				Material.OcclusionTexture, Material.TextureSamplers);
 		}

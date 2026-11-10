@@ -224,8 +224,9 @@ namespace {
 
 	void CheckHdrExposure(EditorViewportRenderer &Renderer) {
 		const auto Center = CenterPixel(64, 64);
+		RenderPublicationId Id = 100;
 		for (const bool Reinhard : {false, true}) for (const auto Exposure : {1.0f / 256.0f, 0.125f, 1.0f, 256.0f}) {
-			auto Scene = MaterialScene(25, {});
+			auto Scene = MaterialScene(Id++, {});
 			auto &Light = Scene->Frame.Environment;
 			Light.AmbientColor = glm::vec3(0.0f);
 			Light.SunIntensity = 8.0f;
@@ -289,7 +290,7 @@ namespace {
 			Material.ShadingModel = RenderShadingModel::MetallicRoughness;
 			Material.BaseColorTexture = Image;
 			Material.TextureSamplers[0].MinFilter = Min;
-			Material.TextureSamplers[0].MagFilter = RenderTextureMagFilter::Nearest;
+			Material.TextureSamplers[0].MagFilter = RenderTextureMagFilter::Linear;
 			auto Scene = MaterialScene(Id, Material);
 			auto Vertices = std::make_shared<std::vector<RenderVertex>>(*Scene->MeshCreates.front().Vertices);
 			const std::array Coordinates{glm::vec2(0, 0), glm::vec2(16, 0), glm::vec2(16, 16), glm::vec2(0, 16)};

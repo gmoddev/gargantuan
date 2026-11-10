@@ -110,8 +110,9 @@ namespace gargantuan {
 	void SDLLocalLightGrid::Prepare(const RenderFrameState &Frame, SDLRendererMetrics *Metrics) {
 		const auto Start = std::chrono::steady_clock::now();
 		const auto &Source = Frame.Environment.LocalLights;
-		const auto ClipMatrix = Frame.Camera.ProjectionMatrix * Frame.Camera.ViewMatrix;
 		const bool HasLights = Source && !Source->empty();
+		const auto ClipMatrix = HasLights
+			? glm::dmat4(Frame.Camera.ProjectionMatrix) * glm::dmat4(Frame.Camera.ViewMatrix) : glm::dmat4(1.0);
 		if (Valid && Source == LastLights && (!HasLights || (LastClip == ClipMatrix && LastCamera == Frame.Camera.Position &&
 			Width == Frame.ViewportWidth && Height == Frame.ViewportHeight))) {
 			if (Metrics) Metrics->LastLocalLightGridNanoseconds = 0;
@@ -126,13 +127,12 @@ namespace gargantuan {
 		std::vector<VisibleLight> Visible;
 		if (HasLights) {
 			Visible.reserve(Source->size());
-			const glm::dmat4 Clip = glm::dmat4(Frame.Camera.ProjectionMatrix) * glm::dmat4(Frame.Camera.ViewMatrix);
-			const auto MatrixRows = glm::transpose(Clip);
+			const auto MatrixRows = glm::transpose(ClipMatrix);
 			const std::array Planes{MatrixRows[3] + MatrixRows[0], MatrixRows[3] - MatrixRows[0],
 				MatrixRows[3] + MatrixRows[1], MatrixRows[3] - MatrixRows[1], MatrixRows[2], MatrixRows[3] - MatrixRows[2]};
 			for (const auto &Light : *Source) {
 				if (Light.Intensity <= 0.0f) continue;
-				const auto Rect = GetTileRect(Light, Clip, Planes, Width, Height, TilePixels, Columns, Rows);
+				const auto Rect = GetTileRect(Light, ClipMatrix, Planes, Width, Height, TilePixels, Columns, Rows);
 				if (!Rect) continue;
 				const auto Near = std::max(1.0, glm::length(glm::dvec3(Light.Position) -
 					glm::dvec3(Frame.Camera.Position)) - Light.Range);

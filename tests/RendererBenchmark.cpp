@@ -71,6 +71,8 @@ namespace {
 		std::optional<std::filesystem::path> CapturePrefix;
 		std::optional<std::filesystem::path> SamplesPath;
 		std::optional<bool> SdlHdr;
+		std::optional<std::size_t> Lights;
+		bool StaticLights = false;
 	};
 
 	struct ScenarioCase {
@@ -121,7 +123,7 @@ namespace {
 					"[--scenario=all|static|dynamic|mostly-static|mixed|culled|material-check|material-extensions] [--count=N] "
 					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--shadows=on|off] "
 					"[--incremental] [--synchronize=on|off|bounded-2] [--capture=path-prefix] [--samples=csv-path] "
-					"[--sdl-hdr=on|off]\n";
+					"[--sdl-hdr=on|off] [--scenario=local-lights --lights=N [--static-lights]]\n";
 				std::exit(0);
 			} else if (auto ParsedValue = Value("--backend=")) ParsedOptions.Backend = *ParsedValue;
 			else if (auto ParsedValue = Value("--scenario=")) ParsedOptions.Scenario = *ParsedValue;
@@ -130,6 +132,8 @@ namespace {
 			else if (auto ParsedValue = Value("--warmup=")) ParsedOptions.WarmupFrames = ParseSize(*ParsedValue, "warmup");
 			else if (auto ParsedValue = Value("--width=")) ParsedOptions.Width = ParseSize<std::uint32_t>(*ParsedValue, "width");
 			else if (auto ParsedValue = Value("--height=")) ParsedOptions.Height = ParseSize<std::uint32_t>(*ParsedValue, "height");
+			else if (auto ParsedValue = Value("--lights=")) ParsedOptions.Lights = ParseSize(*ParsedValue, "lights");
+			else if (Argument == "--static-lights") ParsedOptions.StaticLights = true;
 			else if (Argument == "--incremental") ParsedOptions.Incremental = true;
 			else if (auto ParsedValue = Value("--capture=")) {
 				if (ParsedValue->empty()) throw std::invalid_argument("capture prefix must not be empty");
@@ -165,7 +169,13 @@ namespace {
 #endif
 		const bool MaterialCapture = ParsedOptions.Scenario == "material-check" ||
 			ParsedOptions.Scenario == "material-extensions";
-		const bool IncrementalOnly = ParsedOptions.Scenario == "culled" || MaterialCapture;
+		const bool LocalLighting = ParsedOptions.Scenario == "local-lights";
+		const bool IncrementalOnly = ParsedOptions.Scenario == "culled" || MaterialCapture || LocalLighting;
+		if ((ParsedOptions.Lights || ParsedOptions.StaticLights) && !LocalLighting)
+			throw std::invalid_argument("light count and movement require --scenario=local-lights");
+		if (LocalLighting && (ParsedOptions.Backend != "sdl" ||
+			ParsedOptions.Lights.value_or(100) > gargantuan::MaximumRenderLocalLights))
+			throw std::invalid_argument("local-lights requires SDL and at most 512 authored lights");
 		if (ParsedOptions.SamplesPath && (!ParsedOptions.Incremental || MaterialCapture))
 			throw std::invalid_argument("sample CSV requires an incremental timed scenario");
 		if (ParsedOptions.Scenario != "all" && ParsedOptions.Scenario != "static" && ParsedOptions.Scenario != "dynamic" &&
@@ -206,6 +216,7 @@ namespace {
 		Add("mostly-static", {50000});
 		Add("mixed", {50000});
 		if (BenchmarkOptions.Incremental) Add("culled", {50000});
+		if (BenchmarkOptions.Scenario == "local-lights") Add("local-lights", {1000});
 		return Cases;
 	}
 
@@ -486,6 +497,25 @@ namespace {
 		const auto Aspect = static_cast<float>(Settings.Width) / Settings.Height;
 		const auto Distance = std::max(4.0f, Span * 1.5f / std::min(1.0f, Aspect));
 		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(Settings, Distance)};
+		if (Scenario.Name == "local-lights") {
+			const auto Count = Settings.Lights.value_or(100);
+			auto Lights = std::make_shared<std::vector<RenderLocalLightState>>();
+			Lights->reserve(Count);
+			const auto Grid = static_cast<std::uint32_t>(std::ceil(std::sqrt(static_cast<double>(Count))));
+			for (std::uint32_t Index = 0; Index < Count; ++Index) {
+				const float X = ((Index % Grid + 0.5f) / Grid - 0.5f) * Span;
+				const float Y = ((Index / Grid + 0.5f) / Grid - 0.5f) * Span;
+				const bool Outside = Index % 8 == 7;
+				const bool Spot = Index % 2 == 0;
+				Lights->push_back({.Object = {static_cast<std::uint32_t>(Scenario.Count) + Index + 1, 1},
+					.Kind = Spot ? RenderLocalLightKind::Spot : RenderLocalLightKind::Point,
+					.Position = {X + (Outside ? Span * 5.0f : 0.0f), Y, 3.5f}, .Color = {1.0f, 0.7f, 0.4f},
+					.Intensity = 16.0f, .Range = std::clamp(Span / 6.0f, 4.0f, 32.0f),
+					.InnerConeCosine = Spot ? 0.9f : 1.0f, .OuterConeCosine = Spot ? 0.7f : 1.0f});
+			}
+			Initial.Frame.Environment.LocalLights = Lights;
+			Initial.EnvironmentChanged = true;
+		}
 		const auto Block = PrimitiveMeshes::Block();
 		auto Vertices = std::make_shared<std::vector<RenderVertex>>();
 		Vertices->reserve(Block.Vertices.size());
@@ -517,10 +547,17 @@ namespace {
 	}
 
 	gargantuan::RenderPublication MakeGridDelta(
-		const gargantuan::RenderPublication &Initial, const ScenarioCase &Scenario, std::size_t Frame
+		const gargantuan::RenderPublication &Initial, const ScenarioCase &Scenario, const Options &Settings,
+		std::size_t Frame
 	) {
 		using namespace gargantuan;
 		RenderPublication Delta{.Id = Frame + 2, .BaseId = Frame + 1, .Frame = Initial.Frame};
+		if (Scenario.Name == "local-lights" && !Settings.StaticLights) {
+			auto Lights = std::make_shared<std::vector<RenderLocalLightState>>(*Initial.Frame.Environment.LocalLights);
+			for (auto &Light : *Lights) Light.Position.x += static_cast<float>(Frame % 16) * 0.125f;
+			Delta.Frame.Environment.LocalLights = Lights;
+			Delta.EnvironmentChanged = true;
+		}
 		const bool MostlyStatic = Scenario.Name == "mostly-static" || Scenario.Name == "mixed";
 		const auto Count = Scenario.Name == "dynamic" ? Scenario.Count :
 			MostlyStatic ? std::max<std::size_t>(1, Scenario.Count / 100) : 0;
@@ -555,6 +592,7 @@ namespace {
 		std::array<std::optional<std::uint64_t>, 7> OpaqueGrouping;
 		std::optional<std::uint64_t> HdrSceneBytes;
 		std::optional<std::uint64_t> SceneResolveDraws;
+		std::optional<std::uint64_t> LightUploadBytes;
 	};
 
 	template <typename Metrics>
@@ -579,6 +617,7 @@ namespace {
 			Metrics.OpaqueGroupingPairTests, Metrics.OpaqueGroupingDepthProofs};
 		Result.HdrSceneBytes = Metrics.HdrSceneBytes;
 		Result.SceneResolveDraws = Metrics.SceneResolveDraws;
+		Result.LightUploadBytes = Metrics.LocalLightUploadBytes;
 		return Result;
 	}
 
@@ -659,7 +698,7 @@ namespace {
 		if (const auto InitialCounters = Counters(); InitialCounters.Submitted && *InitialCounters.Submitted != 1)
 			throw std::runtime_error("initial publication did not submit one frame");
 		for (std::size_t Frame = 0; Frame < Settings.WarmupFrames; ++Frame) {
-			Draw(std::make_shared<const RenderPublication>(MakeGridDelta(*Initial, Scenario, Frame)));
+			Draw(std::make_shared<const RenderPublication>(MakeGridDelta(*Initial, Scenario, Settings, Frame)));
 			if (ShouldDrain(Frame + 1)) Drain();
 		}
 		Drain();
@@ -670,10 +709,11 @@ namespace {
 		std::uint64_t LogicalUpdates = 0;
 		std::uint64_t LogicalTextureBytes = 0;
 		std::optional<std::uint64_t> NativeFrameUploadBytes;
+		std::vector<double> LightGridTimes;
 		for (std::size_t Frame = 0; Frame < Settings.Frames; ++Frame) {
 			const auto StartFixture = Clock::now();
 			const auto Delta = std::make_shared<const RenderPublication>(
-				MakeGridDelta(*Initial, Scenario, Settings.WarmupFrames + Frame));
+				MakeGridDelta(*Initial, Scenario, Settings, Settings.WarmupFrames + Frame));
 			FixtureTimes.push_back(Milliseconds(Clock::now() - StartFixture));
 			LogicalUpdates += Delta->Updates.size();
 			for (const auto &Update : Delta->TextureUpdates) LogicalTextureBytes += Update.Pixels->size();
@@ -687,6 +727,7 @@ namespace {
 			if (CompletePairs) WaitTimes.push_back(DrainFrame ? Milliseconds(EndFrame - EndDraw) : 0.0);
 			if (Sdl) {
 				const auto Metrics = Sdl->GetMetrics();
+				LightGridTimes.push_back(static_cast<double>(Metrics.LastLocalLightGridNanoseconds) / 1'000'000.0);
 				ProjectionTimes.push_back(static_cast<double>(Metrics.LastProjectionNanoseconds) / 1'000'000.0);
 				ApplyTimes.push_back(static_cast<double>(Metrics.LastMeshTransferNanoseconds +
 					Metrics.LastTextureTransferNanoseconds + Metrics.LastUiPreparationNanoseconds) / 1'000'000.0);
@@ -760,13 +801,24 @@ namespace {
 			std::cout << ',' << CounterDelta(Baseline.OpaqueGrouping[Index], Final.OpaqueGrouping[Index]);
 		std::cout << ',' << HdrRequested << ',' << HdrActive << ','
 			<< (Final.HdrSceneBytes ? std::to_string(*Final.HdrSceneBytes) : "NA") << ','
-			<< CounterDelta(Baseline.SceneResolveDraws, Final.SceneResolveDraws) << '\n';
+			<< CounterDelta(Baseline.SceneResolveDraws, Final.SceneResolveDraws) << ','
+			<< (Initial->Frame.Environment.LocalLights ? Initial->Frame.Environment.LocalLights->size() : 0) << ','
+			<< (Scenario.Name == "local-lights" ? (Settings.StaticLights ? "static" : "moving") : "NA") << ','
+			<< MeanOrNa(LightGridTimes) << ',' << CounterDelta(Baseline.LightUploadBytes, Final.LightUploadBytes);
+		if (Sdl) {
+			const auto Metrics = Sdl->GetMetrics();
+			std::cout << ',' << Metrics.VisibleLocalLights << ',' << Metrics.OverBudgetLightTiles << ','
+				<< Metrics.DroppedLightTileIndices << ',' << Metrics.MaterialViewBytes << ','
+				<< Metrics.MaterialSourceBytes << ',' << Metrics.MaterialViewFallbacks << ','
+				<< Metrics.IblBuilds << ',' << Metrics.IblPreprocessPasses;
+		} else std::cout << ",NA,NA,NA,NA,NA,NA,NA,NA";
+		std::cout << '\n';
 		if (Samples) {
 			for (std::size_t Frame = 0; Frame < FrameTimes.size(); ++Frame) {
 				*Samples << Scenario.Name << ',' << Scenario.Count << ',' << Settings.Backend << ',' << Driver << ','
 					<< Synchronization << ',' << HdrActive << ',' << Settings.Width << ',' << Settings.Height << ',' << Frame << ','
 					<< Settings.WarmupFrames + Frame + 2 << ',' << FixtureTimes[Frame] << ',' << FrameTimes[Frame];
-				for (const auto *Phase : {&ProjectionTimes, &ApplyTimes, &SubmitTimes, &WaitTimes}) {
+				for (const auto *Phase : {&ProjectionTimes, &ApplyTimes, &SubmitTimes, &WaitTimes, &LightGridTimes}) {
 					*Samples << ',';
 					if (Frame < Phase->size()) *Samples << (*Phase)[Frame];
 					else *Samples << "NA";
@@ -1043,7 +1095,10 @@ int main(int ArgumentCount, char **Arguments) {
 				"ReportedWorldMaterialBindings,CameraCullGate,"
 				"FrameAdmissionGate,GpuTimestampMs,Shadows,OpaqueGroupingCandidates,OpaqueGroupedObjects,"
 				"OpaqueGroupingUnprovenBounds,OpaqueGroupingConflictBarriers,OpaqueGroupingBudgetBarriers,"
-				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs,SdlHdrRequested,SdlHdrActive,SdlHdrSceneBytes,SdlSceneResolveDraws\n";
+				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs,SdlHdrRequested,SdlHdrActive,SdlHdrSceneBytes,SdlSceneResolveDraws,"
+				"AuthoredLocalLights,LocalLightMovement,LocalLightGridMeanMs,LocalLightUploadBytes,VisibleLocalLights,"
+				"OverBudgetLightTiles,DroppedLightTileIndices,MaterialViewBytes,MaterialSourceBytes,MaterialViewFallbacks,"
+				"IblBuilds,IblPreprocessPasses\n";
 			std::ofstream Samples;
 			if (BenchmarkOptions.SamplesPath) {
 				if (std::filesystem::exists(*BenchmarkOptions.SamplesPath))
@@ -1051,7 +1106,8 @@ int main(int ArgumentCount, char **Arguments) {
 				Samples.open(*BenchmarkOptions.SamplesPath);
 				if (!Samples) throw std::runtime_error("could not open benchmark sample CSV");
 				Samples << "Scenario,Objects,Backend,Driver,Synchronization,SdlHdrActive,Width,Height,Frame,PublicationId,FixtureMs,"
-					"FrameMs,ProjectionMs,ApplyMs,SubmitMs,WaitMs\n" << std::setprecision(std::numeric_limits<double>::max_digits10);
+					"FrameMs,ProjectionMs,ApplyMs,SubmitMs,WaitMs,LocalLightGridMs\n"
+					<< std::setprecision(std::numeric_limits<double>::max_digits10);
 			}
 			for (const auto &Scenario : BuildCases(BenchmarkOptions))
 				RunIncrementalCase(BenchmarkOptions, Scenario, Samples.is_open() ? &Samples : nullptr);

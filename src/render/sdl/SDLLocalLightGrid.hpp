@@ -44,7 +44,7 @@ namespace gargantuan {
 		std::vector<GpuLight> PackedLights;
 		std::vector<std::uint32_t> TileWords;
 		std::shared_ptr<const std::vector<RenderLocalLightState>> LastLights;
-		glm::mat4 LastClip{1.0f};
+		glm::dmat4 LastClip{1.0};
 		glm::vec3 LastCamera{0.0f};
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
