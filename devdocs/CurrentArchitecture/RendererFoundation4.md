@@ -152,3 +152,30 @@ sampled alpha content, geometry and sun direction unchanged. The shared
 SDL runtime and viewport cache commits only after the recorded depth work
 is submitted. The tested coverage remains the existing world-origin
 directional volume. [Directional shadow reuse](DirectionalShadowReuse.md)
+
+## Resource accounting
+
+At 1280 × 720 the HDR scene level adds 7,372,800 logical bytes (about
+7.03 MiB) and one fullscreen resolve per submitted frame. At 3840 × 2160
+it adds 66,355,200 bytes (about 63.28 MiB). The existing D32 scene depth,
+presentation target and EditorViewport download staging have separate
+lifetimes. The directional depth map has 16 MiB of logical texels. The IBL
+output uses about 300 KiB and prepares through a source cube capped at
+1 MiB. Local lights use at most 32 KiB of packed records and 400 KiB of
+tile words before native capacity rounding. Their transfer and draw buffers
+retain capacity across publications. These counts exclude driver alignment,
+cycling backings, and pending GPU retirement. Treat them as allocation
+inputs and diagnostics rather than committed VRAM measurements.
+
+Mip views allocate only on material demand. Their per-texture bound and
+separate source and view budgets contain renderer-owned residency growth.
+Mutable images rebuild affected material view chains from their existing
+published source and preserve the base image when a derived view cannot be
+created. The current implementation rebuilds the complete derived chain on
+a changed revision. Staging buffers retire after submission. Block
+compression, alpha-coverage mips and persistent
+offline prefiltering need separate asset and device qualification.
+
+The [qualification record](../Validation/RendererFoundation4Qualification.md)
+keeps raw timings, exact shader identities, and physical and software
+rendering results distinct.

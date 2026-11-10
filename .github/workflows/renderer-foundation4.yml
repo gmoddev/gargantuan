@@ -187,6 +187,8 @@ jobs:
             "-DCMAKE_C_FLAGS=$Instrument" "-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 $Instrument" \
             '-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O1 -gline-tables-only -DNDEBUG' \
             '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O1 -gline-tables-only -DNDEBUG' \
+            '-DCMAKE_EXE_LINKER_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -fsanitize=address,undefined' \
+            -DLINKER_SUPPORTS_WL_NO_UNDEFINED=OFF \
             -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF \
             -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF
           cmake --build build-sanitized --parallel 3 --target gargantuan_renderer_publication_tests \

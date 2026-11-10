@@ -29,6 +29,9 @@ from physical measurements.
 | Integrated GPU IBL `4a712aa3d443461631ba64f8f2a7db0dd8bb8614`, RX 7900 XT | 1024px input retained the expected linear energy. The world chart reported red 231 for smooth metal, 89 for rough metal and 172 for dielectric. The cache hit test, depth controls and both material charts passed. `AMD-4a-integrated-ibl-ordering` |
 | Studio `1e3c182c8663b6a33af3be4121e0a7949f5abed6` | Passed all 43 suites and Main on the pinned native LUI runtime. The earlier Engine `39fb0087b` pair passed advanced catalog opt-in, dependency closure, stable identity with source reimport and fresh reopen using real responses. `StudioLui1e3c182` and `StudioPaired-42811055231-Material2` |
 | Engine `4a712aa3d` with Studio `1e3c182` | Real paired commands created a MeshPart, PointLight and attached SpotLight, rejected an inverted cone without changing revision, edited the environment and reopened persisted state. Hidden 96 × 72 EditorHost capture measured center RGB `(124,136,0)` with the green point light and `(124,0,0)` without. Re-enabling restored the first frame byte for byte. `StudioPaired-42812724820` |
+| Studio spotlight and reference scenes | The attached spotlight changed center RGB from `(124,136,228)` to `(124,136,0)` when turned away. Restoring its aim reproduced the original pixels. Foundation 3 and 4 captured identical project and camera inputs for the FirstCompleteGame course, beacon close-up and an enclosed course derivative. The HDR candidate is brighter indoors under global Sky IBL, which has no spatial occlusion. `StudioPaired-42812724820-Lights` and `StudioMatchedReference-4a712aa3d-Final` |
+| Engine `0b8ad43c8dfc0ddda46c21c560f195e21d699791`, RX 7900 XT | Viewport HDR, exposure, GUI isolation, mip, local light and shadow smoke passed. Opaque ordering, IBL readback and both material charts passed separately. `AMD-0b-full-gates` |
+| Engine `8a6b90188` and `c32b47823`, Linux software Vulkan | Six headless CTest suites and all GPU gates passed in both Release builds. These include native viewport failure injection and recovery, opaque comparison images, integrated IBL, and both material charts. `Linux-42815115768` and `Linux-42816328777` |
 
 Preserved superseded runs `42810240640`, `42811055231` and `42812724820`
 failed the same HDR pixel fixture after passing their CPU suites. The test
@@ -36,7 +39,35 @@ reused a publication ID across exposure values, so the second capture
 returned the previously accepted state. Candidate `a2d0a5e9f` gives each
 exposure its own publication. Run `42814023742` also recorded an independent
 sanitizer setup failure before CMake compiled project code. The runner lacked
-the `libclang-rt-19-dev` runtime. A later source checkpoint installs it.
+the `libclang-rt-19-dev` runtime. After installing it, the next sanitizer
+run reached the SDL shared library link and failed on sanitizer symbols
+because SDL enabled `--no-undefined`. The renderer workflow now uses the
+same executable linker and SDL setting as the repository's native
+sanitizer lane.
+
+The Play viewport control on Engine `0b8ad43c8` reproduced five rejected
+publications at 30 Hz, three at 60 Hz, and a failed legacy Play capture.
+The mailbox nevertheless delivered later frames after resync. Therefore
+frame delivery alone would pass a defective capture sequence. The corrected
+path applies every queued publication before readback. The negative control
+and input hashes are under `StudioPlayBeforeFix-0b`.
+
+The first short SDR comparison on AMD used two runs of each source in
+F3/F4/F4/F3 order. At 1K objects, 2,000 material bindings per frame fell to
+four, but the F4 mixed workload paid 0.58 ms in mean resource application
+versus 0.03 ms at the control. At 10K, the binds fell from 20,000 to 40 per
+frame and resource application retained the same extra cost. The 30-frame
+receipts are `AMD-4a-short-sdr-timing`. This measured a resource regression
+even with HDR disabled and did not attribute fence wait to GPU execution.
+
+An independent native probe repeated full and partial updates of 64²
+textures and read back every base image and derived mip on AMD. The
+existing path spent about 0.255 ms P50 creating and mapping one transient
+transfer, versus 0.010 ms computing its mip chain. A separate CPU heap
+scratch produced identical pixels over 90 frames and added no clear
+speedup. An initial retained transfer experiment produced a stale raw
+partial update and remains outside the candidate. Receipts and both
+experimental patches are in `material-transfer-probe`.
 
 ## Reproduction
 
