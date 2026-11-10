@@ -5,6 +5,7 @@
 #include "gargantuan/Log.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSceneColor.hpp"
 #include "render/sdl/SDLSceneDepth.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
@@ -66,6 +67,8 @@ namespace gargantuan {
 		SDLRendererOptions Options;
 		bool WindowClaimed = false;
 		SDL_GPUTexture *ColorTexture = nullptr;
+		SDL_GPUTexture *HdrSceneTexture = nullptr;
+		bool HdrSceneEnabled = false;
 		SDL_GPUTexture *DepthTexture = nullptr;
 		SDL_GPUTexture *ShadowMapTexture = nullptr;
 		SDL_GPUSampler *ShadowSampler = nullptr;
@@ -86,12 +89,13 @@ namespace gargantuan {
 		bool RequiresFullResync = false;
 	};
 
-	const std::vector<SDLRenderPassConstructor> &GetSDLRenderPassConstructors() {
-		static const std::vector<SDLRenderPassConstructor> Constructors{
-			CreateShadowPass,
-			CreateSkyPass,
-			CreateOpaquePass,
-			CreateGuiPass,
+	const std::vector<SDLRenderPassDefinition> &GetSDLRenderPassConstructors() {
+		static const std::vector<SDLRenderPassDefinition> Constructors{
+			{CreateShadowPass, SDLPassTarget::Scene},
+			{CreateSkyPass, SDLPassTarget::Scene},
+			{CreateOpaquePass, SDLPassTarget::Scene},
+			{CreateSceneResolvePass, SDLPassTarget::Resolve},
+			{CreateGuiPass, SDLPassTarget::Output},
 		};
 		return Constructors;
 	}
@@ -122,6 +126,7 @@ namespace gargantuan {
 				State->WindowClaimed = true;
 				State->SwapchainFormat = SDL_GetGPUSwapchainTextureFormat(State->Gpu, State->Window);
 			} else State->SwapchainFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+			State->HdrSceneEnabled = Options.EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
 			State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu, &State->Metrics);
 			State->TextureResources = std::make_unique<SDLTextureCache>(State->Gpu, &State->Metrics);
 			State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(
@@ -157,12 +162,15 @@ namespace gargantuan {
 				throw std::runtime_error(std::format("Failed to query renderer window size: {}", SDL_GetError()));
 			Resize(InitialWidth, InitialHeight);
 
-			for (const auto &Constructor : GetSDLRenderPassConstructors()) {
+			for (const auto &Definition : GetSDLRenderPassConstructors()) {
+				if (Definition.Target == SDLPassTarget::Resolve && !State->HdrSceneEnabled) continue;
 				if (State->RemainingShaderCreationFailures > 0) {
 					--State->RemainingShaderCreationFailures;
 					throw std::runtime_error("[Render:Shader] injected shader creation failure");
 				}
-				auto Pass = Constructor(State->Gpu, State->SwapchainFormat, &State->Metrics);
+				const auto Format = State->HdrSceneEnabled && Definition.Target == SDLPassTarget::Scene
+					? SDLHdrSceneFormat : State->SwapchainFormat;
+				auto Pass = Definition.Construct(State->Gpu, Format, &State->Metrics);
 				if (!Pass) throw std::runtime_error("Failed to construct renderer pass");
 				if (State->RemainingPipelineCreationFailures > 0) {
 					--State->RemainingPipelineCreationFailures;
@@ -199,10 +207,13 @@ namespace gargantuan {
 		for (auto &Pass : State->RenderPasses) if (Pass) Pass->Destroy(State->Gpu);
 		State->RenderPasses.clear();
 		if (State->ColorTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->ColorTexture);
+		if (State->HdrSceneTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->HdrSceneTexture);
 		if (State->DepthTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->DepthTexture);
 		if (State->ShadowMapTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->ShadowMapTexture);
 		if (State->ShadowSampler && State->Gpu) SDL_ReleaseGPUSampler(State->Gpu, State->ShadowSampler);
 		State->ColorTexture = nullptr;
+		State->HdrSceneTexture = nullptr;
+		State->Metrics.HdrSceneBytes = 0;
 		State->DepthTexture = nullptr;
 		State->ShadowMapTexture = nullptr;
 		State->ShadowSampler = nullptr;
@@ -293,6 +304,7 @@ namespace gargantuan {
 		SDLFrameContext Frame(
 			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowPoseRevisions);
 		Frame.Commands = Commands;
+		Frame.HdrSceneTexture = State->HdrSceneTexture;
 		Frame.DepthTexture = State->DepthTexture;
 		Frame.ShadowMapTexture = State->ShadowMapTexture;
 		Frame.ShadowSampler = State->ShadowSampler;
@@ -312,7 +324,9 @@ namespace gargantuan {
 			SDL_CancelGPUCommandBuffer(Frame.Commands);
 			return;
 		}
-		if (Frame.Width != State->Projection.GetFrame().ViewportWidth ||
+		if (Frame.Width != static_cast<std::uint32_t>(State->Width) ||
+			Frame.Height != static_cast<std::uint32_t>(State->Height) ||
+			Frame.Width != State->Projection.GetFrame().ViewportWidth ||
 			Frame.Height != State->Projection.GetFrame().ViewportHeight) {
 			SDL_CancelGPUCommandBuffer(Frame.Commands);
 			LOG_TRACE(App, "[Render:SDL] RenderPublication viewport does not match the acquired target");
@@ -371,9 +385,23 @@ namespace gargantuan {
 			if (ReplacementColor) SDL_ReleaseGPUTexture(State->Gpu, ReplacementColor);
 			throw std::runtime_error(std::format("Failed to create renderer depth target: {}", SDL_GetError()));
 		}
+		SDL_GPUTexture *ReplacementHdr = nullptr;
+		if (State->HdrSceneEnabled) {
+			ReplacementHdr = CreateSDLHdrScene(State->Gpu, static_cast<std::uint32_t>(WidthValue),
+				static_cast<std::uint32_t>(HeightValue));
+			if (!ReplacementHdr) {
+				SDL_ReleaseGPUTexture(State->Gpu, ReplacementDepth);
+				if (ReplacementColor) SDL_ReleaseGPUTexture(State->Gpu, ReplacementColor);
+				throw std::runtime_error(std::format("[Renderer:HDR] Could not allocate scene color: {}", SDL_GetError()));
+			}
+		}
 		if (State->ColorTexture) SDL_ReleaseGPUTexture(State->Gpu, State->ColorTexture);
+		if (State->HdrSceneTexture) SDL_ReleaseGPUTexture(State->Gpu, State->HdrSceneTexture);
 		if (State->DepthTexture) SDL_ReleaseGPUTexture(State->Gpu, State->DepthTexture);
 		State->ColorTexture = ReplacementColor;
+		State->HdrSceneTexture = ReplacementHdr;
+		State->Metrics.HdrSceneBytes = ReplacementHdr ?
+			static_cast<std::uint64_t>(WidthValue) * static_cast<std::uint64_t>(HeightValue) * 8u : 0;
 		State->DepthTexture = ReplacementDepth;
 		State->Width = WidthValue;
 		State->Height = HeightValue;

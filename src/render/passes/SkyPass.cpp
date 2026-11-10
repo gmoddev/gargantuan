@@ -22,6 +22,7 @@ namespace gargantuan {
 			glm::vec4 UpTan;
 			glm::vec4 LookExposure;
 			glm::vec4 EnvironmentColorHasSky;
+			glm::vec4 SceneFlags;
 		};
 
 		SkyPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics) {
@@ -32,12 +33,10 @@ namespace gargantuan {
 				Shader.FragmentUniformBufferCount = 1;
 				Shader.FragmentSamplerCount = 6;
 				Shader.Init(Gpu, Metrics);
-				auto PipelineInfo = SDLPipelineBuilder()
-										.SetVertexShader(Shader.VertexShader)
-										.SetFragmentShader(Shader.FragmentShader)
-										.SetColorEnabled(true)
-										.SetColorFormat(SwapchainFormat)
-										.BuildInfo();
+				SDLPipelineBuilder Builder;
+				Builder.SetVertexShader(Shader.VertexShader).SetFragmentShader(Shader.FragmentShader)
+					.SetColorEnabled(true).SetColorFormat(SwapchainFormat);
+				auto PipelineInfo = Builder.BuildInfo();
 				PipelineInfo.vertex_input_state = {};
 				PipelineInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
 				Pipeline = SDL_CreateGPUGraphicsPipeline(Gpu, &PipelineInfo);
@@ -76,7 +75,7 @@ namespace gargantuan {
 			const auto &Frame = Context.Projection.GetFrame();
 			const auto &Environment = Frame.Environment;
 			SDL_GPUColorTargetInfo ColorTarget{
-				.texture = Context.SwapchainTexture,
+				.texture = Context.GetSceneColorTexture(),
 				.clear_color =
 					{Environment.EnvironmentColor.r,
 					 Environment.EnvironmentColor.g,
@@ -110,6 +109,7 @@ namespace gargantuan {
 				.UpTan = glm::vec4(Frame.Camera.UpDirection, TanHalfFov),
 				.LookExposure = glm::vec4(Frame.Camera.LookDirection, Environment.ExposureMultiplier),
 				.EnvironmentColorHasSky = glm::vec4(Environment.EnvironmentColor, Environment.Sky ? 1.0f : 0.0f),
+				.SceneFlags = glm::vec4(Context.HdrSceneTexture ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f),
 			};
 			SDL_PushGPUVertexUniformData(Context.Commands, 0, &SkyUniforms, sizeof(SkyUniforms));
 			SDL_PushGPUFragmentUniformData(Context.Commands, 0, &SkyUniforms, sizeof(SkyUniforms));

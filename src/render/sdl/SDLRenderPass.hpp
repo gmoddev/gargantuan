@@ -33,6 +33,7 @@ namespace gargantuan {
 		SDLRendererMetrics *Metrics = nullptr;
 		SDL_GPUCommandBuffer *Commands = nullptr;
 		SDL_GPUTexture *SwapchainTexture = nullptr;
+		SDL_GPUTexture *HdrSceneTexture = nullptr;
 		SDL_GPUTexture *DepthTexture = nullptr;
 		SDL_GPUTexture *ShadowMapTexture = nullptr;
 		SDL_GPUSampler *ShadowSampler = nullptr;
@@ -40,6 +41,10 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, std::uint64_t> &ShadowPoseRevisions;
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
+
+		[[nodiscard]] SDL_GPUTexture *GetSceneColorTexture() const {
+			return HdrSceneTexture ? HdrSceneTexture : SwapchainTexture;
+		}
 	};
 
 	class SDLRenderPass {
@@ -62,7 +67,14 @@ namespace gargantuan {
 		SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics);
 	std::unique_ptr<SDLRenderPass> CreateGuiPass(
 		SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics);
+	std::unique_ptr<SDLRenderPass> CreateSceneResolvePass(
+		SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics);
 	using SDLRenderPassConstructor =
 		std::function<std::unique_ptr<SDLRenderPass>(SDL_GPUDevice *, SDL_GPUTextureFormat, SDLRendererMetrics *)>;
-	[[nodiscard]] const std::vector<SDLRenderPassConstructor> &GetSDLRenderPassConstructors();
+	enum class SDLPassTarget { Scene, Output, Resolve };
+	struct SDLRenderPassDefinition {
+		SDLRenderPassConstructor Construct;
+		SDLPassTarget Target;
+	};
+	[[nodiscard]] const std::vector<SDLRenderPassDefinition> &GetSDLRenderPassConstructors();
 }

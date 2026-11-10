@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "scene-color.glsl"
 
 layout(location = 0) in vec3 FragmentNormal;
 layout(location = 1) in vec4 FragmentColor;
@@ -37,16 +39,6 @@ vec2 POISSON_DISK[4] = vec2[](
     );
 
 const float Pi = 3.141592653589793;
-
-vec3 SrgbToLinear(vec3 Encoded) {
-    return mix(pow((Encoded + 0.055) / 1.055, vec3(2.4)), Encoded / 12.92,
-        lessThanEqual(Encoded, vec3(0.04045)));
-}
-
-vec3 LinearToSrgb(vec3 Linear) {
-    return mix(1.055 * pow(Linear, vec3(1.0 / 2.4)) - 0.055, Linear * 12.92,
-        lessThanEqual(Linear, vec3(0.0031308)));
-}
 
 vec4 ReadColorTexel(ivec2 Pixel, ivec2 Dimensions) {
     vec4 Texel = texelFetch(BaseColorTexture, (Pixel + Dimensions) % Dimensions, 0);
@@ -160,8 +152,11 @@ void main() {
         float fogFactor = clamp((distanceToCamera - world.FogColorStart.w) / fogRange, 0.0, 1.0);
         color = mix(color, world.FogColorStart.rgb, fogFactor);
     }
-    color *= world.AmbientExposure.w;
-    color = clamp((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
+    if (FragmentMaterialFlags.w > 1.5) {
+        OutputColor = vec4(FiniteSceneColor(color), baseColor.a);
+        return;
+    }
+    color = ToneMapScene(color, world.AmbientExposure.w);
     if (Physical && FragmentMaterialFlags.w > 0.5) color = LinearToSrgb(color);
     OutputColor = vec4(color, baseColor.a);
 }

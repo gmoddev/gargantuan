@@ -19,6 +19,7 @@ namespace gargantuan {
 		std::uint32_t InjectPaletteUploadFailures = 0;
 		std::uint32_t InjectShaderCreationFailures = 0;
 		std::uint32_t InjectPipelineCreationFailures = 0;
+		bool EnableHdrScene = true;
 	};
 
 	struct SDLRendererMetrics {
@@ -72,6 +73,8 @@ namespace gargantuan {
 		std::uint64_t CameraCulledObjects = 0;
 		std::uint64_t WorldGeometryBindings = 0;
 		std::uint64_t WorldMaterialBindings = 0;
+		std::uint64_t HdrSceneBytes = 0;
+		std::uint64_t SceneResolveDraws = 0;
 	};
 
 	class SDLRenderer final : public BaseRenderer {

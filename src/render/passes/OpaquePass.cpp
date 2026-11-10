@@ -5,6 +5,7 @@
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSceneColor.hpp"
 #include "render/sdl/SDLSceneDepth.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
@@ -109,8 +110,8 @@ namespace gargantuan {
 				Shader.FragmentFilepath = GetSDLShaderPath("opaque.frag");
 				Shader.FragmentUniformBufferCount = 1;
 				Shader.FragmentSamplerCount = 4;
-				EncodeSrgbOutput = swapchainFormat != SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB &&
-					swapchainFormat != SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB;
+				OutputMode = swapchainFormat == SDLHdrSceneFormat ? 2.0f :
+					SDLTargetEncodesSrgb(swapchainFormat) ? 0.0f : 1.0f;
 				Shader.Init(gpu, Metrics);
 				auto Builder = SDLPipelineBuilder()
 					.SetVertexShader(Shader.VertexShader)
@@ -165,7 +166,7 @@ namespace gargantuan {
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
 			(void)gpu;
 			SDL_GPUColorTargetInfo colorTarget = {
-				.texture = context.SwapchainTexture,
+				.texture = context.GetSceneColorTexture(),
 				.load_op = SDL_GPU_LOADOP_LOAD,
 				.store_op = SDL_GPU_STOREOP_STORE,
 			};
@@ -289,7 +290,7 @@ namespace gargantuan {
 					.MaterialValues = {Material.AlphaCutoff, static_cast<float>(Material.OpacityMode),
 						Material.Metallic, Material.Roughness},
 					.MaterialFlags = {Shading, Material.BaseColorTexture ? 1.0f : 0.0f,
-						Material.NormalTexture ? 1.0f : 0.0f, EncodeSrgbOutput ? 1.0f : 0.0f},
+						Material.NormalTexture ? 1.0f : 0.0f, OutputMode},
 				};
 				SDL_PushGPUVertexUniformData(Context.Commands, 1, &Part, sizeof(PartUniforms));
 				SDL_DrawGPUIndexedPrimitives(Pass, IndexCount, 1, FirstIndex, 0, 0);
@@ -351,7 +352,7 @@ namespace gargantuan {
 		SDL_GPUGraphicsPipeline *BlendedDoubleSidedPipeline = nullptr;
 		std::vector<WorldDraw> TransparentDraws;
 		SDL_GPUSampler *MaterialSampler = nullptr;
-		bool EncodeSrgbOutput = true;
+		float OutputMode = 1.0f;
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateOpaquePass(

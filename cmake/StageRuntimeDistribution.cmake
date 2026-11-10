@@ -144,6 +144,8 @@ foreach(GARGANTUAN_SHADER
 	gui.vert.spv
 	opaque.frag.spv
 	opaque.vert.spv
+	scene-resolve.frag.spv
+	scene-resolve.vert.spv
 	shadow.frag.spv
 	shadow.vert.spv
 	sky.frag.spv

@@ -2,6 +2,7 @@
 #include "gargantuan/render/SDLRenderer.hpp"
 
 #include <cassert>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <format>
@@ -9,6 +10,7 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -48,6 +50,14 @@ namespace {
 
 	std::size_t CenterPixel(std::uint32_t Width, std::uint32_t Height) {
 		return (static_cast<std::size_t>(Height / 2) * Width + Width / 2) * 3;
+	}
+
+	int DisplayByte(double Linear, double Exposure) {
+		const auto Value = Linear * Exposure;
+		const auto Mapped = std::clamp((Value * (2.51 * Value + 0.03)) /
+			(Value * (2.43 * Value + 0.59) + 0.14), 0.0, 1.0);
+		const auto Encoded = Mapped <= 0.0031308 ? Mapped * 12.92 : 1.055 * std::pow(Mapped, 1.0 / 2.4) - 0.055;
+		return static_cast<int>(std::lround(Encoded * 255.0));
 	}
 
 	std::shared_ptr<RenderPublication> MaterialScene(RenderPublicationId Id, RenderMaterialState Material) {
@@ -147,7 +157,11 @@ namespace {
 		const auto Composition = Renderer.Capture(Blended);
 		const auto Red = Composition.RgbPixels[Center];
 		const auto Blue = Composition.RgbPixels[Center + 2];
-		if (Red < 95 || Red > 110 || Blue < 45 || Blue > 58)
+		const bool CompositionValid = Renderer.UsesHdrScene()
+			? std::abs(int(Red) - DisplayByte(0.5, 1.0)) <= 2 &&
+				std::abs(int(Blue) - DisplayByte(0.25, 1.0)) <= 2
+			: Red >= 95 && Red <= 110 && Blue >= 45 && Blue <= 58;
+		if (!CompositionValid)
 			throw std::runtime_error("[Renderer:Material] Blended surfaces did not composite back to front");
 
 		const auto ShadowProbe = [&](RenderPublicationId Id, bool AddCaster, std::uint8_t Alpha) {
@@ -203,12 +217,34 @@ namespace {
 		const auto Metrics = Renderer.GetMetrics();
 		if (Metrics.CameraCulledObjects != 1 || Metrics.WorldGeometryBindings != 1 || Metrics.WorldMaterialBindings != 1)
 			throw std::runtime_error("[Renderer:Material] Camera culling or shared submission bindings differ from the fixture");
+		if ((Metrics.HdrSceneBytes != 0) != (Metrics.SceneResolveDraws == 1) ||
+			(Metrics.HdrSceneBytes && Metrics.HdrSceneBytes != 64 * 64 * 8))
+			throw std::runtime_error("[Renderer:HDR] Resolve and target memory metrics do not agree");
+	}
+
+	void CheckHdrExposure(EditorViewportRenderer &Renderer) {
+		const auto Center = CenterPixel(64, 64);
+		for (const auto Exposure : {1.0f / 256.0f, 0.125f, 1.0f, 256.0f}) {
+			auto Scene = MaterialScene(25, {});
+			auto &Light = Scene->Frame.Environment;
+			Light.AmbientColor = glm::vec3(0.0f);
+			Light.SunIntensity = 8.0f;
+			Light.ExposureMultiplier = Exposure;
+			Scene->Creates.front().Material.DoubleSided = true;
+			const auto Frame = Renderer.Capture(Scene);
+			const auto Expected = DisplayByte(8.0, Exposure);
+			if (std::abs(int(Frame.RgbPixels.at(Center)) - Expected) > 2)
+				throw std::runtime_error(std::format("[Renderer:HDR] Exposure {} yielded {}, expected {}",
+					Exposure, Frame.RgbPixels.at(Center), Expected));
+		}
 	}
 }
 
-int main() {
+int main(int ArgumentCount, char **Arguments) {
+	const bool RequireHdr = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--require-hdr";
 	{
 		EditorViewportRenderer Renderer(64, 64);
+		if (RequireHdr && !Renderer.UsesHdrScene()) throw std::runtime_error("[Renderer:HDR] RGBA16F scene required");
 		auto RedFallback = MakePublication(64, 64, 1);
 		RedFallback->Frame.Environment.EnvironmentColor = {1.0f, 0.0f, 0.0f};
 		auto Frame = Renderer.Capture(RedFallback);
@@ -253,9 +289,11 @@ int main() {
 		HighExposureUi->Ui = FullscreenUi(64, 64);
 		const auto HighExposureFrame = Renderer.Capture(HighExposureUi);
 		for (std::size_t Channel = 0; Channel < 3; ++Channel)
-			assert(LowExposureFrame.RgbPixels[Center + Channel] == HighExposureFrame.RgbPixels[Center + Channel]);
+			if (LowExposureFrame.RgbPixels[Center + Channel] != HighExposureFrame.RgbPixels[Center + Channel])
+				throw std::runtime_error("[Renderer:HDR] World exposure affected the GUI");
 
 		CheckMaterials(Renderer);
+		if (Renderer.UsesHdrScene()) CheckHdrExposure(Renderer);
 		Renderer.Resize(32, 48);
 		Frame = Renderer.Capture(MakePublication(32, 48, 19));
 		assert(Frame.Width == 32 && Frame.Height == 48);
@@ -267,5 +305,8 @@ int main() {
 	assert(RestartedFrame.Width == 32 && RestartedFrame.Height == 48);
 	assert(RestartedFrame.RgbPixels.size() == static_cast<std::size_t>(32 * 48 * 3));
 	CheckWorldSubmission();
+	EditorViewportRenderer Fallback(64, 64, false);
+	if (Fallback.UsesHdrScene()) throw std::runtime_error("[Renderer:HDR] Direct SDR fallback did not activate");
+	CheckMaterials(Fallback);
 	return 0;
 }
