@@ -22,7 +22,7 @@ namespace gargantuan {
 		void DependOnMesh(RenderMeshIdentity Mesh);
 		void DependOnMask(RenderTextureIdentity Texture);
 		void FinishRecording(const RenderEnvironmentState &Environment, const SDL_GPUTexture *Target,
-			const glm::mat4 &Matrix, bool AllCastersResident);
+			const glm::mat4 &Matrix, bool AllCastersResident, bool HasCasters);
 		[[nodiscard]] bool OnFrameSubmitted();
 		void Invalidate();
 
@@ -32,6 +32,7 @@ namespace gargantuan {
 			glm::vec3 SunDirection;
 			glm::mat4 Matrix;
 			bool SunEnabled;
+			bool HasCasters;
 		};
 		std::optional<CachedMap> Committed;
 		std::optional<CachedMap> Recorded;

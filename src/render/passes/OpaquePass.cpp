@@ -357,7 +357,8 @@ namespace gargantuan {
 				.FogColorStart = glm::vec4(Environment.Fog.Color, Environment.Fog.Start),
 				.CameraPositionFogEnd = glm::vec4(Frame.Camera.Position, Environment.Fog.End),
 				.EnvironmentLighting = glm::vec4(Context.EnvironmentLighting.Enabled ? 1.0f : 0.0f,
-					Context.EnvironmentLighting.ReflectionMaxLod, Environment.IblIntensity, 0.0f),
+					Context.EnvironmentLighting.ReflectionMaxLod, Environment.IblIntensity,
+					Context.ShadowPoseRevisions.empty() ? 0.0f : 1.0f),
 				.EnvironmentRotationTone = glm::vec4(std::sin(EnvironmentAngle), std::cos(EnvironmentAngle),
 					Environment.ToneMapping == RenderToneMapping::Reinhard ? 1.0f : 0.0f, 0.0f),
 				.LocalLighting = LocalLights.GetUniforms(),
@@ -373,6 +374,7 @@ namespace gargantuan {
 			std::array<SDL_GPUTexture *, 5> BoundTextures{};
 			std::array<SDL_GPUSampler *, 5> BoundSamplers{};
 			const RenderMaterialState *ResolvedMaterial = nullptr;
+			bool ResolvedTextured = false;
 			std::array<bool, 5> ResolvedNativeSrgb{};
 			auto *DefaultSampler = Context.MaterialSamplers->Get(Gpu, {}, false);
 			TransparentDraws.clear();
@@ -430,7 +432,9 @@ namespace gargantuan {
 				}
 				// Grouped ranges often share the same immutable material. Its native
 				// views and sampler state stay fixed for the duration of this pass.
-				if (&Material != ResolvedMaterial) {
+				if (!ResolvedMaterial || (&Material != ResolvedMaterial && (ResolvedTextured ||
+					Material.BaseColorTexture || Material.NormalTexture || Material.MetallicRoughnessTexture ||
+					Material.EmissiveTexture || Material.OcclusionTexture))) {
 					const std::array References{
 						Material.BaseColorTexture, Material.NormalTexture, Material.MetallicRoughnessTexture,
 						Material.EmissiveTexture, Material.OcclusionTexture,
@@ -440,9 +444,11 @@ namespace gargantuan {
 						DefaultSampler, DefaultSampler, DefaultSampler, DefaultSampler, DefaultSampler,
 					};
 					ResolvedNativeSrgb = {};
+					ResolvedTextured = false;
 					const bool Physical = Material.ShadingModel == RenderShadingModel::MetallicRoughness;
 					for (std::size_t Slot = 0; Slot < References.size(); ++Slot) {
 						if (!References[Slot]) continue;
+						ResolvedTextured = true;
 						const bool Srgb = Physical && (Slot == 0 || Slot == 3);
 						const auto View = Context.TextureResources->FindMaterialTexture(*References[Slot], Srgb);
 						const bool Mask = Slot == 0 && Material.OpacityMode == RenderOpacityMode::Masked;

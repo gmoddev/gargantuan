@@ -49,7 +49,7 @@ namespace {
 			Cache.BeginRecording();
 			Cache.DependOnMesh(CASTER_MESH);
 			Cache.DependOnMask(MASK);
-			Cache.FinishRecording(Environment, nullptr, Matrix, true);
+			Cache.FinishRecording(Environment, nullptr, Matrix, true, true);
 			Require(!Cache.Restore(Environment, nullptr, Restored), "recording cannot publish depth before successful submit");
 			Require(Cache.OnFrameSubmitted(), "complete submitted map becomes reusable");
 		};
@@ -112,17 +112,31 @@ namespace {
 		CheckUpdate(Delta, false, "full resync cannot inherit the old shadow depth");
 
 		Cache.BeginRecording();
-		Cache.FinishRecording(Environment, nullptr, Matrix, false);
+		Cache.FinishRecording(Environment, nullptr, Matrix, false, true);
 		Require(!Cache.OnFrameSubmitted() && !Cache.Restore(Environment, nullptr, Restored),
 			"missing caster resources leave submitted depth ineligible for reuse");
 		Cache.BeginRecording();
-		Cache.FinishRecording(Environment, nullptr, Matrix, true);
+		Cache.FinishRecording(Environment, nullptr, Matrix, true, false);
 		Cache.BeginRecording();
 		Require(!Cache.OnFrameSubmitted(), "a superseding recording discards the prior unsubmitted depth candidate");
 		Cache.BeginRecording();
 		for (std::uint32_t Slot = 1; Slot <= 32'769; ++Slot) Cache.DependOnMesh({Slot, 1});
-		Cache.FinishRecording(Environment, nullptr, Matrix, true);
+		Cache.FinishRecording(Environment, nullptr, Matrix, true, true);
 		Require(!Cache.OnFrameSubmitted(), "dependency overflow falls back to fresh shadow work");
+
+		auto WithoutCasters = Scene;
+		WithoutCasters.Creates.erase(WithoutCasters.Creates.begin());
+		(void)Projection.Apply(WithoutCasters);
+		Cache.BeginRecording();
+		Cache.FinishRecording(Environment, nullptr, Matrix, true, false);
+		Require(Cache.OnFrameSubmitted(), "empty depth commits after submission");
+		Delta.FullResync = false;
+		Delta.Updates = {UpdateObject(Projection, NONCASTER)};
+		Cache.ApplyPublication(Projection, Delta);
+		Require(Cache.Restore(Environment, nullptr, Restored), "empty depth is reused for noncaster edits");
+		Delta.Updates.front().Item.CastShadow = true;
+		Cache.ApplyPublication(Projection, Delta);
+		Require(!Cache.Restore(Environment, nullptr, Restored), "a newly eligible caster invalidates empty depth");
 	}
 }
 

@@ -422,8 +422,10 @@ namespace gargantuan {
 					for (const auto &Primitive : *Object.Primitives) QueueMaterial(Primitive.Material);
 				} else QueueMaterial(Object.Material);
 			};
-			for (const auto &Object : Publication.Creates) QueueObject(Object);
-			for (const auto &Object : Publication.Updates) QueueObject(Object);
+			if (!Textures.empty()) {
+				for (const auto &Object : Publication.Creates) QueueObject(Object);
+				for (const auto &Object : Publication.Updates) QueueObject(Object);
+			}
 			if (!PendingMaterialEntries.empty() && BeginCopy()) {
 				bool UsedReusableTransfer = false;
 				for (auto *Value : PendingMaterialEntries) {

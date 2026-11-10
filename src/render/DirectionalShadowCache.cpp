@@ -62,6 +62,12 @@ namespace gargantuan {
 			return;
 		}
 		if (!Committed || !Committed->SunEnabled) return;
+		if (!Committed->HasCasters) {
+			const auto BecomesCaster = [](const auto &Object) { return IsCaster(Object); };
+			if (std::ranges::any_of(Publication.Creates, BecomesCaster) ||
+				std::ranges::any_of(Publication.Updates, BecomesCaster)) Invalidate();
+			return;
+		}
 		const auto &Objects = Before.GetObjects();
 		const auto Find = [&](ObjectId Object) -> const RenderProjectedObject * {
 			const auto Found = Objects.find(Object);
@@ -110,10 +116,11 @@ namespace gargantuan {
 	}
 
 	void SDLDirectionalShadowCache::FinishRecording(
-		const RenderEnvironmentState &Environment, const SDL_GPUTexture *Target, const glm::mat4 &Matrix, bool AllCastersResident
+		const RenderEnvironmentState &Environment, const SDL_GPUTexture *Target, const glm::mat4 &Matrix,
+		bool AllCastersResident, bool HasCasters
 	) {
 		if (AllCastersResident && !DependenciesOverflow)
-			Recorded = CachedMap{Target, Environment.SunDirection, Matrix, Environment.SunIntensity > 0.0f};
+			Recorded = CachedMap{Target, Environment.SunDirection, Matrix, Environment.SunIntensity > 0.0f, HasCasters};
 	}
 
 	bool SDLDirectionalShadowCache::OnFrameSubmitted() {

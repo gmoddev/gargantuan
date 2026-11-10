@@ -27,6 +27,9 @@ Changes to RGB material channels and noncaster transforms preserve depth.
 Full resync requires a fresh map. The active sun vector and transitions between
 lit and sun-off states determine the directional projection. Exposure, sun color,
 and positive sun-intensity adjustments preserve the depth map.
+An empty committed map checks incoming objects for a newly eligible caster
+without looking up every prior object. World shading skips depth sampling
+when the shadow pass records no casters.
 
 The dependency sets admit at most 32,768 mesh identities and 32,768 mask
 identities. Overflow or missing caster residency leads to fresh shadow work.

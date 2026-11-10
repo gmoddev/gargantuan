@@ -96,7 +96,8 @@ namespace gargantuan {
 			if (context.Metrics) ++context.Metrics->ShadowMapPasses;
 			try {
 				const bool AllResident = Environment.SunIntensity <= 0.0f || DrawCasters(gpu, pass, context, shadowMatrix, White);
-				context.ShadowCache.FinishRecording(Environment, context.ShadowMapTexture, shadowMatrix, AllResident);
+				context.ShadowCache.FinishRecording(Environment, context.ShadowMapTexture, shadowMatrix, AllResident,
+					!context.ShadowPoseRevisions.empty());
 			} catch (...) {
 				SDL_EndGPURenderPass(pass);
 				throw;

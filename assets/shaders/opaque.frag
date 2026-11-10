@@ -193,7 +193,7 @@ vec3 EvaluateLocalLights(vec3 Base, vec3 Normal, vec3 View, float Metallic, floa
 }
 
 float EvaluateShadow(float NormalDotLight) {
-    if (world.SunDirectionIntensity.w <= 0.0) return 1.0;
+    if (world.SunDirectionIntensity.w <= 0.0 || world.EnvironmentLighting.w < 0.5) return 1.0;
     vec3 shadowCoordinate = ShadowPosition.xyz / ShadowPosition.w;
     float bias = max(0.003 * (1.0 - NormalDotLight), 0.0005);
     float currentDepth = shadowCoordinate.z - bias;
