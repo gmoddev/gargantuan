@@ -32,6 +32,8 @@ from physical measurements.
 | Studio spotlight and reference scenes | The attached spotlight changed center RGB from `(124,136,228)` to `(124,136,0)` when turned away. Restoring its aim reproduced the original pixels. Foundation 3 and 4 captured identical project and camera inputs for the FirstCompleteGame course, beacon close-up and an enclosed course derivative. The HDR candidate is brighter indoors under global Sky IBL, which has no spatial occlusion. `StudioPaired-42812724820-Lights` and `StudioMatchedReference-4a712aa3d-Final` |
 | Engine `0b8ad43c8dfc0ddda46c21c560f195e21d699791`, RX 7900 XT | Viewport HDR, exposure, GUI isolation, mip, local light and shadow smoke passed. Opaque ordering, IBL readback and both material charts passed separately. `AMD-0b-full-gates` |
 | Engine `8a6b90188` and `c32b47823`, Linux software Vulkan | Six headless CTest suites and all GPU gates passed in both Release builds. These include native viewport failure injection and recovery, opaque comparison images, integrated IBL, and both material charts. `Linux-42815115768` and `Linux-42816328777` |
+| Engine `8a6b90188`, physical AMD and NVIDIA | Both passed the integrated HDR viewport, directional depth reuse, recovery, opaque order, IBL and material chart gates. For 1024px Sky input, preprocessing completion took 1.59 ms on AMD and 2.92 ms on NVIDIA, including submission and synchronization. Both GPUs reported material chart red 231, 89 and 172. `AMD-8a-full-gates` and `8a6b90188066-sdl-gates-20261110T124345Z` |
+| Engine `c32b47823` and Studio `1e3c182` | Windows native Foundation CTest passed, including the two-delta Play regression. Native mailbox Play at 30 and 60 Hz and legacy Play capture passed with zero presentation failures. Edit pixels and authored project state were restored. Point, spot and live same-identity emissive reimport each reproduced the original frame byte for byte after restoration. `StudioPlay-42816328777`, `StudioPaired-42816328777` and `StudioMatchedReference-c32b47823` |
 
 Preserved superseded runs `42810240640`, `42811055231` and `42812724820`
 failed the same HDR pixel fixture after passing their CPU suites. The test
@@ -80,6 +82,53 @@ single command submission and retained 32 KiB for this workload. A split
 base/derived submission also matched pixels and cost more. These are
 isolated cache timings on physical AMD, with both hypotheses and raw
 dispositions preserved in `material-transfer-probe`.
+
+## Physical scaling checkpoint
+
+The GTX 1650 SUPER ran 28 rows each for frozen baseline `32dce5218`
+and candidate `8a6b90188`. Each row has 180 raw frame samples. The
+analysis verified publication sequence, camera cull and frame admission
+gates, identical logical input counts and summary percentiles.
+`Scaling-32d-vs-8a.md` contains all rows. These selected results precede
+the retained-transfer and dynamic-path fixes.
+
+| Workload and presentation | Foundation 3 P95 | Foundation 4 P95 | World material binds/frame |
+| --- | ---: | ---: | ---: |
+| 1K mixed, SDR completion | 1.08 ms | 1.14 ms | 2,000 to 4 |
+| 10K mixed, SDR completion | 7.81 ms | 6.54 ms | 20,000 to 40 |
+| 25K mixed, SDR completion | 25.83 ms | 15.56 ms | 50,000 to 98 |
+| 50K mixed, SDR completion | 53.96 ms | 41.88 ms | 100,000 to 196 |
+| 50K mixed, Foundation 4 HDR | 54.20 ms | 40.17 ms | 100,000 to 196 |
+| 50K dynamic, Foundation 4 HDR | 35.19 ms | 46.73 ms | 1 to 1 |
+
+The baseline rows use direct SDR. Foundation 4 HDR includes the extra
+target and resolve. Its SDR comparison still includes the newer material
+shader and mip sampling. The large mixed improvement comes with the
+same world draw count and a large decrease in bindings. The dynamic
+regression is in part CPU work. Neutral projection and shadow classification
+together rose from 11.08 to 16.71 ms mean at 50K, resource application
+from 0.002 to 0.813 ms and submission from 13.46 to 15.81 ms.
+
+The dynamic correction reuses sorted object validation scratch and keeps
+validated entry addresses through apply. It validates duplicate IDs and
+resource dependencies before mutation, including arbitrary publication
+order. A focused MSVC Release 50K neutral apply probe moved from about
+11.9 to 7.3 ms before full SDL qualification. The baseline probe was about
+9.7 ms. Foundation 4's expanded material value is 216 bytes versus 120
+in Foundation 3. The correction avoids per-update allocations and a second
+hash lookup without changing publication shape. The renderer also skips
+material demand scans with empty texture residency and skips previous
+object lookups when a committed shadow map contains no casters.
+
+The local-light matrix at 1K geometry reported 0.028 ms mean grid work
+for one moving light and 0.150 ms for 500. The latter admitted 438 lights
+and used about 120 KB of light uploads per measured frame. The equivalent
+static views issued no light uploads after warmup. Frame P50 was 0.698 ms
+moving and 0.563 ms static at 500 lights. The static 1K shadow case
+reused all 180 measured depth maps and reduced P95 from 0.756 to 0.502 ms.
+The moving caster cases rebuilt every measured map. These measurements are
+in `8a6b90188066-sdl-lights-20261110T124629Z` and the two
+`sdl-shadow-timing` receipts.
 
 ## Reproduction
 
