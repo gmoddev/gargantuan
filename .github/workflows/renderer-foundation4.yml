@@ -118,12 +118,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $Targets = @('gargantuan', 'gargantuan_shaders', 'gargantuan_editor_viewport_smoke',
             'gargantuan_renderer_benchmark', 'gargantuan_renderer_depth_tests', 'gargantuan_renderer_foundation2_gpu_benchmark',
-            'gargantuan_ibl_gpu_tests', 'gargantuan_foundation_tests')
+            'gargantuan_ibl_gpu_tests', 'gargantuan_foundation_tests', 'gargantuan_renderer_foundation2_benchmark')
           cmake --build build-renderer --parallel 3 --target @Targets 2>&1 | Tee-Object -FilePath renderer-evidence/build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $Names = @('gargantuan.exe', 'gargantuan_editor_viewport_smoke.exe', 'gargantuan_renderer_benchmark.exe',
             'gargantuan_renderer_depth_tests.exe', 'gargantuan_renderer_foundation2_gpu_benchmark.exe',
-            'gargantuan_ibl_gpu_tests.exe', 'SDL3.dll')
+            'gargantuan_ibl_gpu_tests.exe', 'gargantuan_renderer_foundation2_benchmark.exe', 'SDL3.dll')
           $ShaderFiles = Get-ChildItem -LiteralPath build-renderer/shaders -File -Filter '*.spv'
           $Names += $ShaderFiles | ForEach-Object { "shaders/$($_.Name)" }
           $Members = foreach ($Name in $Names) {
@@ -154,6 +154,7 @@ jobs:
             build-renderer/gargantuan_renderer_benchmark.exe
             build-renderer/gargantuan_renderer_depth_tests.exe
             build-renderer/gargantuan_renderer_foundation2_gpu_benchmark.exe
+            build-renderer/gargantuan_renderer_foundation2_benchmark.exe
             build-renderer/gargantuan_ibl_gpu_tests.exe
             build-renderer/*.dll
             build-renderer/runtime/

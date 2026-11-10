@@ -5,6 +5,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <bit>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -152,7 +153,32 @@ namespace gargantuan {
 		QueueData(Material.OcclusionTexture, RenderMaterialTextureSlot::Occlusion);
 	}
 
-	void SDLTextureCache::UploadMaterialView(Entry &Value, unsigned Index, SDL_GPUCopyPass *CopyPass) {
+	SDL_GPUTransferBuffer *SDLTextureCache::GetMaterialTransfer(std::uint32_t Bytes, bool Reuse) {
+		if (Reuse && MaterialUploadCapacity >= Bytes) return MaterialUploadBuffer;
+		const auto Capacity = Reuse ? std::bit_ceil(Bytes) : Bytes;
+		const SDL_GPUTransferBufferCreateInfo Info{
+			.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, .size = Capacity,
+		};
+		auto *Transfer = SDL_CreateGPUTransferBuffer(Gpu, &Info);
+		if (!Transfer) return nullptr;
+		if (Metrics) ++Metrics->TransferBufferCreations;
+		if (Reuse) {
+			if (MaterialUploadBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, MaterialUploadBuffer);
+			MaterialUploadBuffer = Transfer;
+			MaterialUploadCapacity = Capacity;
+		} else {
+			try {
+				MaterialStaging.push_back(Transfer);
+			} catch (const std::bad_alloc &) {
+				SDL_ReleaseGPUTransferBuffer(Gpu, Transfer);
+				return nullptr;
+			}
+		}
+		return Transfer;
+	}
+
+	void SDLTextureCache::UploadMaterialView(Entry &Value, unsigned Index, SDL_GPUCopyPass *CopyPass,
+		bool &UsedReusableTransfer) {
 		auto &View = Value.Views[Index];
 		const auto Fallback = [&] {
 			DestroyView(View);
@@ -186,34 +212,23 @@ namespace gargantuan {
 			MaterialViewBytes += View.Bytes;
 			if (Metrics) ++Metrics->TextureCreations;
 		}
-		const SDL_GPUTransferBufferCreateInfo TransferInfo{
-			.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, .size = Layout->Bytes,
-		};
-		auto *Transfer = SDL_CreateGPUTransferBuffer(Gpu, &TransferInfo);
+		// Limit retained cycling backings to one refresh per publication. First
+		// admission and bulk updates release their temporary staging after submission.
+		const bool Reuse = Refresh && !UsedReusableTransfer;
+		auto *Transfer = GetMaterialTransfer(Layout->Bytes, Reuse);
 		if (!Transfer) {
 			Fallback();
 			return;
 		}
-		if (Metrics) ++Metrics->TransferBufferCreations;
-		try {
-			MaterialStaging.push_back(Transfer);
-		} catch (const std::bad_alloc &) {
-			SDL_ReleaseGPUTransferBuffer(Gpu, Transfer);
-			Fallback();
-			return;
-		}
-		auto *Mapped = static_cast<std::uint8_t *>(SDL_MapGPUTransferBuffer(Gpu, Transfer, false));
+		UsedReusableTransfer |= Reuse;
+		auto *Mapped = static_cast<std::uint8_t *>(SDL_MapGPUTransferBuffer(Gpu, Transfer, Reuse));
 		if (!Mapped) {
-			MaterialStaging.pop_back();
-			SDL_ReleaseGPUTransferBuffer(Gpu, Transfer);
 			Fallback();
 			return;
 		}
 		const bool Built = BuildMaterialMipPixels({Mapped, Layout->Bytes}, *Value.GetSource(), *Layout, Srgb);
 		SDL_UnmapGPUTransferBuffer(Gpu, Transfer);
 		if (!Built) {
-			MaterialStaging.pop_back();
-			SDL_ReleaseGPUTransferBuffer(Gpu, Transfer);
 			Fallback();
 			return;
 		}
@@ -255,6 +270,9 @@ namespace gargantuan {
 		if (!Gpu) return;
 		DestroyResident();
 		DestroyEntry(White);
+		if (MaterialUploadBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, MaterialUploadBuffer);
+		MaterialUploadBuffer = nullptr;
+		MaterialUploadCapacity = 0;
 	}
 
 	void SDLTextureCache::DestroyResident() {
@@ -407,9 +425,11 @@ namespace gargantuan {
 			for (const auto &Object : Publication.Creates) QueueObject(Object);
 			for (const auto &Object : Publication.Updates) QueueObject(Object);
 			if (!PendingMaterialEntries.empty() && BeginCopy()) {
+				bool UsedReusableTransfer = false;
 				for (auto *Value : PendingMaterialEntries) {
 					for (unsigned Index = 0; Index < Value->Views.size(); ++Index) {
-						if (Value->PendingViews & (1u << Index)) UploadMaterialView(*Value, Index, CopyPass);
+						if (Value->PendingViews & (1u << Index))
+							UploadMaterialView(*Value, Index, CopyPass, UsedReusableTransfer);
 					}
 				}
 			}

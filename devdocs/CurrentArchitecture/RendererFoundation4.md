@@ -172,8 +172,11 @@ separate source and view budgets contain renderer-owned residency growth.
 Mutable images rebuild affected material view chains from their existing
 published source and preserve the base image when a derived view cannot be
 created. The current implementation rebuilds the complete derived chain on
-a changed revision. Staging buffers retire after submission. Block
-compression, alpha-coverage mips and persistent
+a changed revision. The first refreshed view in a publication can reuse a
+transfer buffer capped at 8 MiB. Other views use transient staging so a
+bulk publication cannot retain a large batch of cycling backings. First
+admissions also retire their staging after submission. Block compression,
+alpha-coverage mips and persistent
 offline prefiltering need separate asset and device qualification.
 
 The [qualification record](../Validation/RendererFoundation4Qualification.md)

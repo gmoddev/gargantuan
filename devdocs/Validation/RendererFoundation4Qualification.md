@@ -62,12 +62,24 @@ even with HDR disabled and did not attribute fence wait to GPU execution.
 
 An independent native probe repeated full and partial updates of 64²
 textures and read back every base image and derived mip on AMD. The
-existing path spent about 0.255 ms P50 creating and mapping one transient
-transfer, versus 0.010 ms computing its mip chain. A separate CPU heap
-scratch produced identical pixels over 90 frames and added no clear
-speedup. An initial retained transfer experiment produced a stale raw
-partial update and remains outside the candidate. Receipts and both
-experimental patches are in `material-transfer-probe`.
+existing path spent about 0.255 ms P50 creating one transient transfer,
+under 0.001 ms mapping it and about 0.010 ms computing its mip chain. A
+separate CPU heap scratch produced identical pixels over 90 frames and
+added no clear speedup. The initial retained transfer probe observed stale
+host readback after a fence. A second readback corrected both the new
+download and the previously mapped bytes without changing the source
+texture. The strengthened probe waited for device idle and took an
+immutable CPU copy before comparison. That control and the retained
+transfer candidate produced the same full 90-frame digest
+`ca0591098d5c3c98`, with zero fallback.
+
+The retained transfer cut cache apply P50 for the 64² full and partial
+updates from 0.308 and 0.305 ms to 0.037 and 0.035 ms. Two-texture batch
+apply P50 went from 0.541 to 0.311 ms. The selected path kept the existing
+single command submission and retained 32 KiB for this workload. A split
+base/derived submission also matched pixels and cost more. These are
+isolated cache timings on physical AMD, with both hypotheses and raw
+dispositions preserved in `material-transfer-probe`.
 
 ## Reproduction
 

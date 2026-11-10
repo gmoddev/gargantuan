@@ -819,8 +819,9 @@ namespace {
 			std::cout << ',' << Metrics.VisibleLocalLights << ',' << Metrics.OverBudgetLightTiles << ','
 				<< Metrics.DroppedLightTileIndices << ',' << Metrics.MaterialViewBytes << ','
 				<< Metrics.MaterialSourceBytes << ',' << Metrics.MaterialViewFallbacks << ','
+				<< Metrics.MaterialUploadStagingBytes << ','
 				<< Metrics.IblBuilds << ',' << Metrics.IblPreprocessPasses;
-		} else std::cout << ",NA,NA,NA,NA,NA,NA,NA,NA";
+		} else std::cout << ",NA,NA,NA,NA,NA,NA,NA,NA,NA";
 		for (std::size_t Index = 0; Index < Final.DirectionalShadow.size(); ++Index)
 			std::cout << ',' << CounterDelta(Baseline.DirectionalShadow[Index], Final.DirectionalShadow[Index]);
 		std::cout << ',' << (Sdl ? (Settings.SdlOpaqueGrouping ? "on" : "off") : "NA");
@@ -1109,7 +1110,7 @@ int main(int ArgumentCount, char **Arguments) {
 				"OpaqueGroupingUnprovenBounds,OpaqueGroupingConflictBarriers,OpaqueGroupingBudgetBarriers,"
 				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs,SdlHdrRequested,SdlHdrActive,SdlHdrSceneBytes,SdlSceneResolveDraws,"
 				"AuthoredLocalLights,LocalLightMovement,LocalLightGridMeanMs,LocalLightUploadBytes,VisibleLocalLights,"
-				"OverBudgetLightTiles,DroppedLightTileIndices,MaterialViewBytes,MaterialSourceBytes,MaterialViewFallbacks,"
+				"OverBudgetLightTiles,DroppedLightTileIndices,MaterialViewBytes,MaterialSourceBytes,MaterialViewFallbacks,MaterialUploadStagingBytes,"
 				"IblBuilds,IblPreprocessPasses,ShadowMapBuilds,ShadowCacheHits,ShadowMapPasses,ShadowCasterDraws,SdlOpaqueGrouping\n";
 			std::ofstream Samples;
 			if (BenchmarkOptions.SamplesPath) {

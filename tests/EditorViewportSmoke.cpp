@@ -413,7 +413,7 @@ namespace {
 			const std::uint8_t Value = ((X + Y) % 2) ? 255 : 0;
 			for (unsigned Channel = 0; Channel < 3; ++Channel) (*Pixels)[At + Channel] = Value;
 		}
-		const auto Capture = [&](RenderPublicationId Id, RenderTextureMinFilter Min) {
+		const auto MakeChecker = [&](RenderPublicationId Id, RenderTextureMinFilter Min) {
 			RenderMaterialState Material;
 			Material.DoubleSided = true;
 			Material.ShadingModel = RenderShadingModel::MetallicRoughness;
@@ -427,10 +427,25 @@ namespace {
 				(*Vertices)[Index].TextureCoordinate = Coordinates[Index];
 			Scene->MeshCreates.front().Vertices = Vertices;
 			Scene->TextureCreates.push_back({Image, 1, Dimension, Dimension, RenderTextureFormat::Rgba8Unorm, Pixels});
-			return Renderer.Capture(Scene).RgbPixels.at(CenterPixel(64, 64));
+			return Scene;
 		};
-		const auto Mipped = Capture(35, RenderTextureMinFilter::LinearMipmapLinear);
-		const auto Nearest = Capture(36, RenderTextureMinFilter::Nearest);
+		const auto Center = CenterPixel(64, 64);
+		const auto MipScene = MakeChecker(35, RenderTextureMinFilter::LinearMipmapLinear);
+		const auto Mipped = Renderer.Capture(MipScene).RgbPixels.at(Center);
+		for (std::uint64_t Revision = 2; Revision <= 3; ++Revision) {
+			const auto Value = static_cast<std::uint8_t>(Revision == 2 ? 0 : 255);
+			auto Solid = std::make_shared<std::vector<std::uint8_t>>(Dimension * Dimension * 4, Value);
+			for (std::size_t Alpha = 3; Alpha < Solid->size(); Alpha += 4) (*Solid)[Alpha] = 255;
+			auto Update = std::make_shared<RenderPublication>();
+			Update->Id = MipScene->Id + Revision - 1;
+			Update->BaseId = Update->Id - 1;
+			Update->Frame = MipScene->Frame;
+			Update->TextureUpdates.push_back({Image, Revision, 0, 0, Dimension, Dimension, std::move(Solid)});
+			const auto Pixel = Renderer.Capture(Update).RgbPixels.at(Center);
+			if (std::abs(int(Pixel) - DisplayByte(Value / 255.0, 1.0)) > 3)
+				throw std::runtime_error("[Renderer:Material] Warm mip refresh sampled an obsolete texture revision");
+		}
+		const auto Nearest = Renderer.Capture(MakeChecker(38, RenderTextureMinFilter::Nearest)).RgbPixels.at(Center);
 		if (std::abs(int(Mipped) - DisplayByte(0.5, 1.0)) > 3 || std::abs(int(Mipped) - int(Nearest)) < 15)
 			throw std::runtime_error(std::format("[Renderer:Material] Minified sRGB checker differs from the linear mip reference ({} vs {})",
 				Mipped, Nearest));

@@ -35,6 +35,7 @@ namespace gargantuan {
 		[[nodiscard]] std::uint64_t GetMaterialViewBytes() const { return MaterialViewBytes; }
 		[[nodiscard]] std::uint64_t GetMaterialSourceBytes() const { return MaterialSourceBytes; }
 		[[nodiscard]] std::uint64_t GetMaterialViewFallbacks() const { return MaterialViewFallbacks; }
+		[[nodiscard]] std::uint32_t GetMaterialUploadStagingBytes() const { return MaterialUploadCapacity; }
 
 	  private:
 		struct MaterialView {
@@ -67,7 +68,8 @@ namespace gargantuan {
 		void UpdateSource(Entry &Value, const RenderTextureUpdate &Update);
 		void QueueMaterialViews(Entry &Value, std::uint8_t Requested);
 		void QueueMaterial(const RenderMaterialState &Material);
-		void UploadMaterialView(Entry &Value, unsigned Index, SDL_GPUCopyPass *CopyPass);
+		[[nodiscard]] SDL_GPUTransferBuffer *GetMaterialTransfer(std::uint32_t Bytes, bool Reuse);
+		void UploadMaterialView(Entry &Value, unsigned Index, SDL_GPUCopyPass *CopyPass, bool &UsedReusableTransfer);
 		void DestroyEntry(Entry &Value);
 		void DestroyResident();
 		void Upload(
@@ -90,6 +92,8 @@ namespace gargantuan {
 		std::uint64_t MaterialViewFallbacks = 0;
 		std::vector<Entry *> PendingMaterialEntries;
 		std::vector<SDL_GPUTransferBuffer *> MaterialStaging;
+		SDL_GPUTransferBuffer *MaterialUploadBuffer = nullptr;
+		std::uint32_t MaterialUploadCapacity = 0;
 		Entry White;
 	};
 }
