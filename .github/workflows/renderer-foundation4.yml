@@ -1,0 +1,94 @@
+name: Renderer Foundation 3 raw baseline
+
+on:
+  push:
+    branches: [experiment/renderer4-f3-raw-baseline]
+    paths-ignore:
+      - 'devdocs/**'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-release:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Build physical GPU and EditorHost executables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $VsWhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $Install = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          & (Join-Path $Install 'Common7/Tools/Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          if (-not (Get-Command clang-format.exe -ErrorAction SilentlyContinue)) {
+            $Formatter = Get-ChildItem -LiteralPath (Join-Path $Install 'VC/Tools/Llvm') -Filter clang-format.exe -File -Recurse |
+              Select-Object -First 1
+            if (-not $Formatter) { throw 'Could not find clang-format' }
+            $env:Path = "$($Formatter.DirectoryName);$env:Path"
+          }
+          lute tools/classgen
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $Compiler = Get-Command glslc.exe -ErrorAction SilentlyContinue
+          if (-not $Compiler) {
+            choco install vulkan-sdk --version=1.4.350 --yes --no-progress
+            if ($LASTEXITCODE -notin @(0, 1641, 3010)) { throw 'Vulkan SDK installation failed' }
+            $Compiler = Get-ChildItem -LiteralPath 'C:/VulkanSDK' -Filter glslc.exe -File -Recurse |
+              Where-Object { $_.DirectoryName -match '[\\/]Bin$' } | Select-Object -First 1
+          }
+          if (-not $Compiler) { throw 'Could not find glslc' }
+          $Glslc = if ($Compiler -is [System.IO.FileInfo]) { $Compiler.FullName } else { $Compiler.Source }
+          New-Item -ItemType Directory -Force 'renderer-evidence' | Out-Null
+          $Options = @('-S', '.', '-B', 'build-renderer', '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
+            '-DBUILD_TESTING=ON', '-DGARGANTUAN_TRACY=OFF', '-DGARGANTUAN_WITH_GNS=OFF',
+            '-DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON', '-DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF',
+            "-DGARGANTUAN_GLSLC_EXECUTABLE=$Glslc")
+          cmake @Options 2>&1 | Tee-Object -FilePath renderer-evidence/configure.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $Targets = @('gargantuan', 'gargantuan_shaders', 'gargantuan_editor_viewport_smoke',
+            'gargantuan_renderer_benchmark', 'gargantuan_renderer_depth_tests', 'gargantuan_renderer_foundation2_gpu_benchmark',
+            'gargantuan_renderer_foundation2_benchmark')
+          cmake --build build-renderer --parallel 3 --target @Targets 2>&1 | Tee-Object -FilePath renderer-evidence/build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $Names = @('gargantuan.exe', 'gargantuan_editor_viewport_smoke.exe', 'gargantuan_renderer_benchmark.exe',
+            'gargantuan_renderer_depth_tests.exe', 'gargantuan_renderer_foundation2_gpu_benchmark.exe',
+            'gargantuan_renderer_foundation2_benchmark.exe', 'SDL3.dll')
+          $ShaderFiles = Get-ChildItem -LiteralPath build-renderer/shaders -File -Filter '*.spv'
+          $Names += $ShaderFiles | ForEach-Object { "shaders/$($_.Name)" }
+          $Members = foreach ($Name in $Names) {
+            $File = Join-Path build-renderer $Name
+            $Item = Get-Item -LiteralPath $File
+            @{ path = $Name; bytes = $Item.Length; sha256 = (Get-FileHash -LiteralPath $File).Hash.ToLowerInvariant() }
+          }
+          $Help = & ./build-renderer/gargantuan.exe --help
+          if ($LASTEXITCODE -ne 0 -or ($Help -join [Environment]::NewLine) -notmatch '--editor-host') {
+            throw 'Packaged engine did not expose EditorHost'
+          }
+          @{ source = $env:GITHUB_SHA; directory = 'build-renderer'; editorHostArgument = $true
+            rawSamples = $true; supportsHdr = $false; files = @($Members) } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath renderer-evidence/renderer-package.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: renderer4-baseline-windows
+          path: |
+            renderer-evidence/
+            build-renderer/gargantuan.exe
+            build-renderer/gargantuan_editor_viewport_smoke.exe
+            build-renderer/gargantuan_renderer_benchmark.exe
+            build-renderer/gargantuan_renderer_depth_tests.exe
+            build-renderer/gargantuan_renderer_foundation2_gpu_benchmark.exe
+            build-renderer/gargantuan_renderer_foundation2_benchmark.exe
+            build-renderer/*.dll
+            build-renderer/runtime/
+            build-renderer/shaders/
