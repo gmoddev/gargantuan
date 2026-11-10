@@ -1,3 +1,9 @@
+---
+status: qualification-method
+authority: non-normative
+owner: rendering
+---
+
 # Renderer Foundation 4 qualification
 
 ## Provenance
@@ -18,6 +24,80 @@ worker results preserve that manifest, command lines, status, stdout,
 stderr, adapter details and lease receipts. The hosted Linux package
 keeps the software ICD device, SPIR-V validation and test output separate
 from physical measurements.
+
+## Exact integrated qualification
+
+Engine `adf0acda14e6ce5e57657bf01254f1e840c99868` and Studio
+`1e3c182c8663b6a33af3be4121e0a7949f5abed6` are the qualified source pair.
+The Windows Engine binary SHA-256 is
+`420c5a1674f6f95628f79fc9ea436597afaa36d297ef219e94083495052ff2d3`.
+The Windows opaque fragment SPIR-V SHA-256 is
+`086e40199e6fe8c29731603d6b0b65e356dbc4460c32fcf41eac8deb9ec1d001`.
+The complete binary and shader closure is in the Windows manifest, with a
+separate SPIR-V validation and hash receipt in the Linux artifact.
+[Exact cross-platform build and artifacts](https://github.com/gmoddev/gargantuan/actions/runs/42819931612)
+
+| Lane | Exact result |
+| --- | --- |
+| Windows native Foundation CTest | Passed, including EditorHost protocol, Play publication ordering and authoritative project semantics. `Windows-42819931612/renderer-evidence/ctest.log` |
+| Linux Release | Six suites passed. SPIR-V validation, Vulkan HDR and recovery, depth order pixels, IBL and material charts passed using llvmpipe. `Linux-42819931612` |
+| Linux ASan and UBSan | Five instrumented CPU suites passed, covering publication, asset validation, mip filtering, IBL reference and shadow classification. `Sanitizers-42819931612` |
+| Windows physical Vulkan | GTX 1650 SUPER and RX 7900 XT both passed the HDR viewport, recovery, shadows, local lights, mip refresh, opaque ordering, IBL and material chart gates. `adf0acda14e6-sdl-gates-20261110T132221Z` and `AMD-adf-full-gates` |
+| Paired Studio | Native LUI authoring and real Engine protocol, persistent reimport, point/spot response and same-identity live emissive updates passed. Native mailbox 30/60 Hz and legacy Play capture preserved project bytes and restored Edit pixels. `StudioPaired-42819931612` and `StudioPlay-42819931612` |
+| Matched authored scenes | Captured the original FirstCompleteGame course, beacon close-up and fully enclosed derivative with matched project bytes and cameras. `StudioMatchedReference-adf0acda` |
+
+### Final performance disposition
+
+The final Windows package repeated all 28 physical scaling rows at 1280 ×
+720 on the GTX 1650 SUPER. Every admission and culling gate passed. The
+retained CSVs contain 5,040 measured frames from each source, including
+the HDR run and matched SDR mixed controls. `Scaling-32d-vs-adf.md` checks
+raw publication order and percentiles against the retained summaries.
+
+| Workload | Foundation 3 P95 | Exact Foundation 4 P95 | Material binds/frame |
+| --- | ---: | ---: | ---: |
+| 1K mixed, SDR | 1.08 ms | 0.85 ms | 2,000 to 4 |
+| 10K mixed, SDR | 7.81 ms | 5.63 ms | 20,000 to 40 |
+| 25K mixed, SDR | 25.83 ms | 13.98 ms | 50,000 to 98 |
+| 50K mixed, SDR | 53.96 ms | 32.19 ms | 100,000 to 196 |
+| 50K mixed, candidate HDR | 54.20 ms | 34.91 ms | 100,000 to 196 |
+| 50K fully dynamic, candidate HDR | 35.19 ms | 34.21 ms | 1 to 1 |
+| 50K static, candidate HDR | 15.18 ms | 15.73 ms | 1 to 1 |
+| 50K culled, candidate HDR | 8.58 ms | 10.83 ms | 1 to 1 |
+
+At 50K fully dynamic the previous candidate spent 16.71 ms mean in
+projection and shadow classification and 0.813 ms in backend apply. The
+correction reduced these to 8.10 and 0.003 ms. Its P95 improved from 46.73
+to 34.21 ms while retaining HDR. The residual culled case submitted the
+same number of world draws and passed exact cull counts. Its mean CPU
+submission was 8.77 ms versus 6.74 ms for Foundation 3. This is a measured
+cost of the current ungrouped path at that density. The SDR/HDR controls
+and physical gates are tied to their source receipts and keep visual
+quality and frame timing claims separate.
+
+An SDR-only F3/F4/F4/F3 culling comparison confirmed the CPU difference
+at 50K. Foundation 4 mean submission was 8.01–8.24 ms versus 6.80–7.52 ms.
+Completed-frame P95 overlapped across the two repetitions. All runs
+reported exactly 25K culled objects per frame. The 25K workload was faster
+in both candidate repetitions. The `sdl-cull-control` receipts preserve
+both repetitions, including the slower Foundation 3 tail.
+
+With HDR and shader source fixed inside the final binary, enabled grouping
+at 25K measured 12.19–13.23 ms P95 versus 27.02–34.28 ms disabled. At 50K
+the ranges were 28.99–29.17 and 58.83–64.49 ms. These four-run controls
+are in `adf0acda14e6-sdl-grouping-20261110T132407Z`.
+
+The final 500-moving-light row admitted 438 lights and averaged 0.144 ms
+preparing tiles. The static row performed zero measured tile uploads.
+The 1K static shadow row recorded zero additional passes and 180 cache
+hits, with 0.454 ms P95 versus 0.756 ms in the baseline. The final
+mixed-scene and moving-light soak runs submitted 1,800 frames each with
+zero skipped frames and zero measured resource creations. The exact
+reference run produced 36 PPMs and its GPU/CPU skinning differential
+returned zero channel difference. The `adf0acda14e6-*` receipts contain
+raw samples, captures and explicit worker retirements. The coordinator
+released generation 100 and reported the worker free after the final
+control at 13:26 UTC.
 
 ## Observed controls
 
@@ -83,6 +163,24 @@ base/derived submission also matched pixels and cost more. These are
 isolated cache timings on physical AMD, with both hypotheses and raw
 dispositions preserved in `material-transfer-probe`.
 
+The exact candidate retained correct raw and mip colors at three queued
+revisions on AMD. All 24 opportunities to overlap successive revisions
+observed the previous raster consumer still pending. The 36 frames produced
+144 correct raster samples and zero fallbacks. The same adapter's sampler
+probe compared 1 × 1, 8 × 1, 12 × 1 and 16 × 1 striped footprints. Both
+samplers read white/black 255/0 at 1 × 1. At 12 × 1 the automatic sampler
+read 255/20 and authored trilinear read 128/128. The negative controls and
+hashes are in `material-transfer-probe/QueueDepth-adf0acda` and
+`material-transfer-probe/Anisotropy-adf0acda`.
+
+The repeated short AMD SDR comparison at `1ccf4040` brought 1K mixed median
+frame time to 0.523–0.528 ms versus 0.523–0.530 ms for Foundation 3. The
+first Foundation 4 run was 1.226–1.239 ms. Mean resource application at 1K
+fell from about 0.58 ms to 0.049 ms and measured resource creations fell
+from one per frame to zero. The paired 10K candidate medians were
+3.69–3.88 ms versus 4.03–4.13 ms for Foundation 3.
+`AMD-1cc-short-sdr-timing` retains both candidates and source manifests.
+
 ## Physical scaling checkpoint
 
 The GTX 1650 SUPER ran 28 rows each for frozen baseline `32dce5218`
@@ -113,12 +211,24 @@ The dynamic correction reuses sorted object validation scratch and keeps
 validated entry addresses through apply. It validates duplicate IDs and
 resource dependencies before mutation, including arbitrary publication
 order. A focused MSVC Release 50K neutral apply probe moved from about
-11.9 to 7.3 ms before full SDL qualification. The baseline probe was about
-9.7 ms. Foundation 4's expanded material value is 216 bytes versus 120
+12.11 to 7.39 ms mean over three rotating-order rounds before full SDL
+qualification. The Foundation 3 control averaged 9.81 ms. Foundation 4's
+expanded material value is 216 bytes versus 120
 in Foundation 3. The correction avoids per-update allocations and a second
 hash lookup without changing publication shape. The renderer also skips
 material demand scans with empty texture residency and skips previous
-object lookups when a committed shadow map contains no casters.
+object lookups when a committed shadow map contains no casters. The neutral
+probe source and samples are in `be5cb058556c-neutral-projection`.
+
+The same-binary `c32b47823` SDR grouping test ran enabled, disabled,
+disabled, enabled at each size. At 25K the enabled runs measured 15.34 and
+16.87 ms P95 versus 27.80 and 31.43 ms with grouping disabled. At 50K
+the corresponding ranges were 37.74–39.01 and 62.25–63.96 ms. All objects
+in that separated grid were admitted to safe batches. HDR on/off controls
+on the same binary showed little difference relative to the large 50K
+dynamic regression. The projection and submission costs remained with
+HDR disabled. `c32b47823c9a-sdl-grouping-20261110T125451Z` and
+`c32b47823c9a-sdl-hdr-control-20261110T125651Z` retain every sample.
 
 The local-light matrix at 1K geometry reported 0.028 ms mean grid work
 for one moving light and 0.150 ms for 500. The latter admitted 438 lights
@@ -129,6 +239,18 @@ reused all 180 measured depth maps and reduced P95 from 0.756 to 0.502 ms.
 The moving caster cases rebuilt every measured map. These measurements are
 in `8a6b90188066-sdl-lights-20261110T124629Z` and the two
 `sdl-shadow-timing` receipts.
+
+The Foundation 2 physical GPU reference suite produced 18 timed rows and
+36 matched captures per build, including deformable updates, topology,
+GUI, environment, multi-rig GPU skinning and shadow cases. The skinning
+differential rendered eight poses with one, two and four influences and
+measured zero channel difference against CPU fallback on both builds.
+The all-size authoritative CPU fixture exceeded its bounded budget at 30
+and three frames. The smaller existing authoritative projection fixture
+passed for 1K and 10K static, mostly static and dynamic objects, and keeps
+world extraction separate from renderer projection. The unsuccessful
+receipts and replacement runs share the `sdl-reference` and
+`publication-cpu` evidence prefixes.
 
 ## Reproduction
 
@@ -184,3 +306,31 @@ See [Renderer Foundation 4](../CurrentArchitecture/RendererFoundation4.md),
 [environment lighting](../CurrentArchitecture/EnvironmentLightingFoundation4.md)
 and [directional depth reuse](../CurrentArchitecture/DirectionalShadowReuse.md)
 for resource bounds and design decisions.
+
+## Architecture decision and roadmap
+
+Continue SDL GPU investment with the existing immutable publication and
+renderer-owned native resources. The selected opaque policy allows reorder
+only when conservative Vulkan bounds exclude a visible depth tie. Global
+range sorting can change the winner on coplanar geometry. A depth prepass
+would repeat geometry work and an `EQUAL` color pass would still need a
+separate winner policy. The existing submission order remains the fallback
+for ambiguous geometry, transparency and other driver precision contracts.
+
+The first lighting tier uses RGBA16F scene color, deterministic manual
+exposure, two tone maps and SDR presentation. Its environment source is the
+canonical six-face Sky. The renderer derives its IBL output on device and
+uses the CPU integral as an independent numerical reference. IBL is global
+and the directional shadow volume is fixed. Room-scale occlusion, local
+shadows, high-dynamic-range image import, alpha-coverage mips and wider GPU
+backend qualification are separate work.
+
+Prioritize coverage and authoring controls before broader post-processing.
+The first scalability work should use the measured non-grouped draw and
+high-churn asset costs to select instancing, compact light lists and asset
+format improvements. For larger environments, compare cascade stability,
+caster costs and receiver bias in the existing directional path. For HDR
+environment input, extend the canonical image asset and device residency
+contracts so Sky keeps one authored authority. Temporal exposure and post
+effects can build on the same scene resolve after stable GPU timing and
+visual controls are available.
