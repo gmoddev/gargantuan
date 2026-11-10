@@ -1,4 +1,5 @@
 #include "render/sdl/SDLTextureCache.hpp"
+#include "render/sdl/SDLMaterialMips.hpp"
 
 #include "gargantuan/render/SDLRenderer.hpp"
 
@@ -7,9 +8,18 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <new>
 #include <stdexcept>
+#include <utility>
 
 namespace gargantuan {
+	namespace {
+		constexpr std::uint64_t MATERIAL_VIEW_BUDGET = 128ull * 1024 * 1024;
+		constexpr std::uint64_t MATERIAL_SOURCE_BUDGET = 128ull * 1024 * 1024;
+		constexpr std::uint32_t MATERIAL_CHAIN_LIMIT = 8u * 1024 * 1024;
+		constexpr std::uint8_t LINEAR_VIEW = 1u;
+		constexpr std::uint8_t SRGB_VIEW = 2u;
+	}
 	SDLTextureCache::Entry SDLTextureCache::CreateEntry(
 		std::uint32_t Width, std::uint32_t Height, std::uint64_t Revision
 	) {
@@ -47,7 +57,180 @@ namespace gargantuan {
 		return Value;
 	}
 
+	void SDLTextureCache::DestroyView(MaterialView &View) {
+		if (View.Texture) {
+			SDL_ReleaseGPUTexture(Gpu, View.Texture);
+			MaterialViewBytes -= View.Bytes;
+			if (Metrics) ++Metrics->TextureReleases;
+		}
+		View = {};
+	}
+
+	void SDLTextureCache::ForgetSource(Entry &Value) {
+		if (const auto *Source = Value.GetSource()) MaterialSourceBytes -= Source->size();
+		Value.Source.reset();
+		Value.PatchedSource.reset();
+	}
+
+	void SDLTextureCache::RetainSource(Entry &Value, const std::shared_ptr<const std::vector<std::uint8_t>> &Pixels) {
+		if (Pixels->size() > MATERIAL_CHAIN_LIMIT || Pixels->size() > MATERIAL_SOURCE_BUDGET - MaterialSourceBytes)
+			return;
+		Value.Source = Pixels;
+		MaterialSourceBytes += Pixels->size();
+	}
+
+	void SDLTextureCache::UpdateSource(Entry &Value, const RenderTextureUpdate &Update) {
+		if (Update.X == 0 && Update.Y == 0 && Update.Width == Value.Width && Update.Height == Value.Height) {
+			ForgetSource(Value);
+			RetainSource(Value, Update.Pixels);
+			return;
+		}
+		if (!Value.GetSource()) return;
+		if (!Value.PatchedSource) {
+			try {
+				Value.PatchedSource = std::make_unique<std::vector<std::uint8_t>>(*Value.Source);
+			} catch (const std::bad_alloc &) {
+				ForgetSource(Value);
+				return;
+			}
+			Value.Source.reset();
+		}
+		const auto PatchStride = static_cast<std::size_t>(Update.Width) * 4;
+		for (std::size_t Y = 0; Y < Update.Height; ++Y) {
+			const auto Offset = ((Update.Y + Y) * Value.Width + Update.X) * 4;
+			std::memcpy(Value.PatchedSource->data() + Offset, Update.Pixels->data() + Y * PatchStride, PatchStride);
+		}
+	}
+
+	void SDLTextureCache::QueueMaterialViews(Entry &Value, std::uint8_t Requested) {
+		Value.RequestedViews |= Requested;
+		for (unsigned Index = 0; Index < Value.Views.size(); ++Index) {
+			const auto Flag = static_cast<std::uint8_t>(1u << Index);
+			if (!(Requested & Flag) || (Value.PendingViews & Flag)) continue;
+			auto &View = Value.Views[Index];
+			if (View.AttemptedRevision == Value.Revision || (Index == 0 && Value.Width == 1 && Value.Height == 1)) continue;
+			const auto Fallback = [&] {
+				DestroyView(View);
+				View.AttemptedRevision = Value.Revision;
+				++MaterialViewFallbacks;
+			};
+			if (!Value.GetSource()) {
+				Fallback();
+				continue;
+			}
+			if (!Value.PendingViews) {
+				try {
+					PendingMaterialEntries.push_back(&Value);
+				} catch (const std::bad_alloc &) {
+					Fallback();
+					continue;
+				}
+			}
+			Value.PendingViews |= Flag;
+		}
+	}
+
+	void SDLTextureCache::QueueMaterial(const RenderMaterialState &Material) {
+		const auto Queue = [&](const auto &Texture, std::uint8_t View) {
+			if (!Texture) return;
+			const auto Found = Textures.find(*Texture);
+			if (Found != Textures.end()) QueueMaterialViews(Found->second, View);
+		};
+		Queue(Material.BaseColorTexture, Material.ShadingModel == RenderShadingModel::MetallicRoughness ? SRGB_VIEW : LINEAR_VIEW);
+		Queue(Material.EmissiveTexture, SRGB_VIEW);
+		Queue(Material.NormalTexture, LINEAR_VIEW);
+		Queue(Material.MetallicRoughnessTexture, LINEAR_VIEW);
+		Queue(Material.OcclusionTexture, LINEAR_VIEW);
+	}
+
+	void SDLTextureCache::UploadMaterialView(Entry &Value, unsigned Index, SDL_GPUCopyPass *CopyPass) {
+		auto &View = Value.Views[Index];
+		const auto Fallback = [&] {
+			DestroyView(View);
+			View.AttemptedRevision = Value.Revision;
+			++MaterialViewFallbacks;
+		};
+		const auto Layout = GetMaterialMipLayout(Value.Width, Value.Height, MATERIAL_CHAIN_LIMIT);
+		if (!Layout || Layout->Bytes > MATERIAL_VIEW_BUDGET - (MaterialViewBytes - View.Bytes)) {
+			Fallback();
+			return;
+		}
+		const bool Srgb = Index != 0;
+		const bool Refresh = View.Texture != nullptr;
+		if (!Refresh) {
+			const auto Format = Srgb ? SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB : SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+			if (!SDL_GPUTextureSupportsFormat(Gpu, Format, SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
+				Fallback();
+				return;
+			}
+			const SDL_GPUTextureCreateInfo Info{
+				.type = SDL_GPU_TEXTURETYPE_2D, .format = Format, .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER,
+				.width = Value.Width, .height = Value.Height, .layer_count_or_depth = 1, .num_levels = Layout->Count,
+			};
+			View.Texture = SDL_CreateGPUTexture(Gpu, &Info);
+			if (!View.Texture) {
+				Fallback();
+				return;
+			}
+			View.Bytes = Layout->Bytes;
+			View.Levels = Layout->Count;
+			MaterialViewBytes += View.Bytes;
+			if (Metrics) ++Metrics->TextureCreations;
+		}
+		const SDL_GPUTransferBufferCreateInfo TransferInfo{
+			.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, .size = Layout->Bytes,
+		};
+		auto *Transfer = SDL_CreateGPUTransferBuffer(Gpu, &TransferInfo);
+		if (!Transfer) {
+			Fallback();
+			return;
+		}
+		if (Metrics) ++Metrics->TransferBufferCreations;
+		try {
+			MaterialStaging.push_back(Transfer);
+		} catch (const std::bad_alloc &) {
+			SDL_ReleaseGPUTransferBuffer(Gpu, Transfer);
+			Fallback();
+			return;
+		}
+		auto *Mapped = static_cast<std::uint8_t *>(SDL_MapGPUTransferBuffer(Gpu, Transfer, false));
+		if (!Mapped) {
+			MaterialStaging.pop_back();
+			SDL_ReleaseGPUTransferBuffer(Gpu, Transfer);
+			Fallback();
+			return;
+		}
+		const bool Built = BuildMaterialMipPixels({Mapped, Layout->Bytes}, *Value.GetSource(), *Layout, Srgb);
+		SDL_UnmapGPUTransferBuffer(Gpu, Transfer);
+		if (!Built) {
+			MaterialStaging.pop_back();
+			SDL_ReleaseGPUTransferBuffer(Gpu, Transfer);
+			Fallback();
+			return;
+		}
+		for (std::uint32_t Level = 0; Level < Layout->Count; ++Level) {
+			const auto &Mip = Layout->Levels[Level];
+			const SDL_GPUTextureTransferInfo Source{.transfer_buffer = Transfer, .offset = Mip.Offset,
+				.pixels_per_row = Mip.Width, .rows_per_layer = Mip.Height};
+			const SDL_GPUTextureRegion Destination{.texture = View.Texture, .mip_level = Level,
+				.w = Mip.Width, .h = Mip.Height, .d = 1};
+			// Cycle once for a complete replacement. Later levels populate that same backing.
+			SDL_UploadToGPUTexture(CopyPass, &Source, &Destination, Refresh && Level == 0);
+		}
+		View.AttemptedRevision = Value.Revision;
+		if (Metrics) {
+			Metrics->UploadOperations += Layout->Count;
+			Metrics->UploadedBytes += Layout->Bytes;
+			if (Refresh) {
+				++Metrics->TextureUpdates;
+				++Metrics->BufferCycleRequests;
+			}
+		}
+	}
+
 	void SDLTextureCache::DestroyEntry(Entry &Value) {
+		for (auto &View : Value.Views) DestroyView(View);
+		ForgetSource(Value);
 		if (Value.Texture) {
 			SDL_ReleaseGPUTexture(Gpu, Value.Texture);
 			Value.Texture = nullptr;
@@ -99,7 +282,7 @@ namespace gargantuan {
 			DestroyEntry(Value);
 			throw std::runtime_error(std::format("Failed to submit white texture upload: {}", SDL_GetError()));
 		}
-		White = Value;
+		White = std::move(Value);
 		return White.Texture;
 	}
 
@@ -154,25 +337,46 @@ namespace gargantuan {
 			DestroyEntry(Found->second);
 			Textures.erase(Found);
 		}
-		if (Publication.TextureCreates.empty() && Publication.TextureUpdates.empty()) return;
-
-		auto *Commands = SDL_AcquireGPUCommandBuffer(Gpu);
-		if (!Commands) throw std::runtime_error(std::format("Failed to acquire texture upload commands: {}", SDL_GetError()));
-		auto *CopyPass = SDL_BeginGPUCopyPass(Commands);
-		if (!CopyPass) {
+		const bool BaseUpload = !Publication.TextureCreates.empty() || !Publication.TextureUpdates.empty();
+		SDL_GPUCommandBuffer *Commands = nullptr;
+		SDL_GPUCopyPass *CopyPass = nullptr;
+		const auto BeginCopy = [&] {
+			if (CopyPass) return true;
+			Commands = SDL_AcquireGPUCommandBuffer(Gpu);
+			if (!Commands) return false;
+			CopyPass = SDL_BeginGPUCopyPass(Commands);
+			if (CopyPass) return true;
 			SDL_CancelGPUCommandBuffer(Commands);
-			throw std::runtime_error(std::format("Failed to begin texture upload: {}", SDL_GetError()));
-		}
-		bool CopyPassOpen = true;
-		bool SubmitAttempted = false;
+			Commands = nullptr;
+			return false;
+		};
+		const auto ReleaseStaging = [&] {
+			for (auto *Transfer : MaterialStaging) SDL_ReleaseGPUTransferBuffer(Gpu, Transfer);
+			MaterialStaging.clear();
+		};
+		const auto FinishPending = [&](bool Failed) {
+			for (auto *Value : PendingMaterialEntries) {
+				if (Failed) for (unsigned Index = 0; Index < Value->Views.size(); ++Index) {
+					if (!(Value->PendingViews & (1u << Index))) continue;
+					auto &View = Value->Views[Index];
+					if (View.Texture || View.AttemptedRevision != Value->Revision) ++MaterialViewFallbacks;
+					DestroyView(View);
+					View.AttemptedRevision = Value->Revision;
+				}
+				Value->PendingViews = 0;
+			}
+			PendingMaterialEntries.clear();
+		};
 		try {
+			if (BaseUpload && !BeginCopy())
+				throw std::runtime_error(std::format("Failed to begin texture upload: {}", SDL_GetError()));
 			for (const auto &Create : Publication.TextureCreates) {
 				auto Value = CreateEntry(Create.Width, Create.Height, Create.Revision);
 				try {
 					Upload(Value, CopyPass, 0, 0, Create.Width, Create.Height, *Create.Pixels, true);
-					const auto [Position, Inserted] = Textures.emplace(Create.Texture, Value);
-					(void)Position;
+					const auto [Position, Inserted] = Textures.try_emplace(Create.Texture, std::move(Value));
 					if (!Inserted) throw std::logic_error("Texture publication attempted duplicate SDL residency");
+					RetainSource(Position->second, Create.Pixels);
 				} catch (...) {
 					DestroyEntry(Value);
 					throw;
@@ -182,15 +386,40 @@ namespace gargantuan {
 				auto &Value = Textures.at(Update.Texture);
 				Upload(Value, CopyPass, Update.X, Update.Y, Update.Width, Update.Height, *Update.Pixels, false);
 				Value.Revision = Update.Revision;
+				if (Value.GetSource() || Value.RequestedViews) UpdateSource(Value, Update);
+				QueueMaterialViews(Value, Value.RequestedViews);
 			}
-			SDL_EndGPUCopyPass(CopyPass);
-			CopyPassOpen = false;
-			SubmitAttempted = true;
-			if (!SDL_SubmitGPUCommandBuffer(Commands))
-				throw std::runtime_error(std::format("Failed to submit texture upload: {}", SDL_GetError()));
+			const auto QueueObject = [&](const auto &Object) {
+				if (!Object.Visible) return;
+				if (Object.Primitives) {
+					for (const auto &Primitive : *Object.Primitives) QueueMaterial(Primitive.Material);
+				} else QueueMaterial(Object.Material);
+			};
+			for (const auto &Object : Publication.Creates) QueueObject(Object);
+			for (const auto &Object : Publication.Updates) QueueObject(Object);
+			if (!PendingMaterialEntries.empty() && BeginCopy()) {
+				for (auto *Value : PendingMaterialEntries) {
+					for (unsigned Index = 0; Index < Value->Views.size(); ++Index) {
+						if (Value->PendingViews & (1u << Index)) UploadMaterialView(*Value, Index, CopyPass);
+					}
+				}
+			}
+			bool OptionalFailure = !CopyPass && !PendingMaterialEntries.empty();
+			if (CopyPass) {
+				SDL_EndGPUCopyPass(CopyPass);
+				CopyPass = nullptr;
+				const bool Submitted = SDL_SubmitGPUCommandBuffer(std::exchange(Commands, nullptr));
+				if (!Submitted && BaseUpload)
+					throw std::runtime_error(std::format("Failed to submit texture upload: {}", SDL_GetError()));
+				OptionalFailure = !Submitted;
+			}
+			FinishPending(OptionalFailure);
+			ReleaseStaging();
 		} catch (...) {
-			if (CopyPassOpen) SDL_EndGPUCopyPass(CopyPass);
-			if (!SubmitAttempted) SDL_CancelGPUCommandBuffer(Commands);
+			if (CopyPass) SDL_EndGPUCopyPass(CopyPass);
+			if (Commands) SDL_CancelGPUCommandBuffer(Commands);
+			PendingMaterialEntries.clear();
+			ReleaseStaging();
 			DestroyResident();
 			throw;
 		}
@@ -199,5 +428,14 @@ namespace gargantuan {
 	SDL_GPUTexture *SDLTextureCache::Find(RenderTextureIdentity Texture) const {
 		const auto Found = Textures.find(Texture);
 		return Found == Textures.end() ? nullptr : Found->second.Texture;
+	}
+
+	SDLMaterialTextureBinding SDLTextureCache::FindMaterialTexture(RenderTextureIdentity Texture, bool Srgb) const {
+		const auto Found = Textures.find(Texture);
+		if (Found == Textures.end()) return {};
+		const auto &Value = Found->second;
+		const auto &View = Value.Views[Srgb ? 1 : 0];
+		if (!View.Texture || View.AttemptedRevision != Value.Revision) return {Value.Texture, false, false};
+		return {View.Texture, Srgb, View.Levels > 1};
 	}
 }
