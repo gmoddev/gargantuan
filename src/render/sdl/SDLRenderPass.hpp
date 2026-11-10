@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/render/RenderProjection.hpp"
+#include "render/sdl/SDLImageBasedLighting.hpp"
 #include "render/sdl/SDLShader.hpp"
 
 #include <SDL3/SDL_gpu.h>
@@ -30,6 +31,7 @@ namespace gargantuan {
 		SDLMeshCache &MeshResources;
 		SDLSkinPaletteCache &SkinPalettes;
 		SDLTextureCache *TextureResources = nullptr;
+		SDLImageBasedLightingBindings EnvironmentLighting;
 		SDLRendererMetrics *Metrics = nullptr;
 		SDL_GPUCommandBuffer *Commands = nullptr;
 		SDL_GPUTexture *SwapchainTexture = nullptr;
