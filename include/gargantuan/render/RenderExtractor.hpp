@@ -13,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <glm/glm.hpp>
 
@@ -145,6 +146,7 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, RenderAnimationPoseState> CommittedAnimationPoses;
 		std::vector<ObjectId> PendingAnimationObjects;
 		RenderEnvironmentState PublishedEnvironment;
+		std::unordered_set<ObjectId> LocalLightOwners;
 		std::optional<PublishedSky> LastKnownGoodSky;
 		bool HasPublishedEnvironment = false;
 		std::shared_ptr<const RenderUiFrame> PendingUi;

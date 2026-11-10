@@ -7,9 +7,11 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/DeformableBody.hpp"
+#include "gargantuan/classes/LocalLight.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Sky.hpp"
+#include "gargantuan/classes/SpotLight.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/environment/EnvironmentSemantics.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
@@ -63,7 +65,8 @@ namespace gargantuan {
 				Left.ExposureMultiplier != Right.ExposureMultiplier ||
 				!Equal(Left.EnvironmentColor, Right.EnvironmentColor) || Left.Fog.Enabled != Right.Fog.Enabled ||
 				!Equal(Left.Fog.Color, Right.Fog.Color) || Left.Fog.Start != Right.Fog.Start ||
-				Left.Fog.End != Right.Fog.End || Left.Sky.has_value() != Right.Sky.has_value())
+				Left.Fog.End != Right.Fog.End || Left.Sky.has_value() != Right.Sky.has_value() ||
+				Left.LocalLights != Right.LocalLights)
 				return false;
 			if (!Left.Sky) return true;
 			if (Left.Sky->FaceDimension != Right.Sky->FaceDimension) return false;
@@ -356,6 +359,9 @@ namespace gargantuan {
 
 		std::size_t EstimatePublicationBytes(const RenderPublication &Publication) {
 			std::size_t Result = sizeof(RenderPublication);
+			if (Publication.EnvironmentChanged && Publication.Frame.Environment.LocalLights)
+				Result = AddBounded(Result, MultiplyBounded(Publication.Frame.Environment.LocalLights->size(),
+					sizeof(RenderLocalLightState)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Creates.size(), sizeof(RenderObjectCreate)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Updates.size(), sizeof(RenderObjectUpdate)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Removes.size(), sizeof(RenderObjectRemove)));
@@ -422,6 +428,66 @@ namespace gargantuan {
 		const WorldRoot &World, std::vector<RenderExtractionDiagnostic> &Diagnostics
 	) {
 		RenderEnvironmentState Result;
+		LocalLightOwners.clear();
+		std::vector<RenderLocalLightState> Lights;
+		const auto &Members = World.GetLocalLights();
+		Lights.reserve(std::min(Members.size(), MaximumRenderLocalLights));
+		bool InvalidLightReported = false;
+		std::size_t Considered = 0;
+		for (const auto &[Id, WeakLight] : Members) {
+			const auto Light = WeakLight.lock();
+			if (!Light || Light->GetDestroyed() || Light->IsDestroying() || !Light->GetLightEnabled() ||
+				Light->GetLightIntensity() == 0.0f) continue;
+			std::shared_ptr<BasePart> Owner;
+			auto Parent = Light->GetParent();
+			while (Parent && !dynamic_cast<const WorldRoot *>(Parent->get())) {
+				if (!Owner) Owner = std::dynamic_pointer_cast<BasePart>(*Parent);
+				Parent = (*Parent)->GetParent();
+			}
+			if (!Parent || Parent->get() != &World) continue;
+			if (Considered == MaximumRenderLocalLights) {
+				Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, Id,
+					"[Environment:LocalLight] World exceeds the 512 light publication limit"});
+				break;
+			}
+			++Considered;
+			auto Frame = Light->GetLightCFrame();
+			if (Owner) {
+				LocalLightOwners.insert(Owner->GetObjectId());
+				Frame = Owner->GetRenderCFrame() * Frame;
+			}
+			const auto Forward = Frame.GetLookVector();
+			const auto ForwardLength = glm::length(Forward);
+			if (!IsFinite(Frame.Position) || glm::any(glm::greaterThan(glm::abs(Frame.Position),
+					glm::vec3(MaximumLocalLightCoordinate))) || !std::isfinite(ForwardLength) || ForwardLength < 1.0e-6f) {
+				if (!InvalidLightReported) {
+					Diagnostics.push_back({RenderExtractionIssue::InvalidEnvironment, Id,
+						"[Environment:LocalLight] Skipping a light with an invalid world transform"});
+					InvalidLightReported = true;
+				}
+				continue;
+			}
+			RenderLocalLightState State{
+				.Object = Id,
+				.Position = Frame.Position,
+				.Direction = Forward / ForwardLength,
+				.Color = static_cast<glm::vec3>(Light->GetLightColor()),
+				.Intensity = Light->GetLightIntensity(),
+				.Range = Light->GetLightRange(),
+			};
+			if (const auto *Spot = dynamic_cast<const SpotLight *>(Light.get())) {
+				const auto Angles = Spot->GetLightConeAngles();
+				State.Kind = RenderLocalLightKind::Spot;
+				State.InnerConeCosine = std::cos(glm::radians(Angles.GetX()));
+				State.OuterConeCosine = std::cos(glm::radians(Angles.GetY()));
+			}
+			Lights.push_back(State);
+		}
+		if (!Lights.empty()) {
+			if (PublishedEnvironment.LocalLights && *PublishedEnvironment.LocalLights == Lights)
+				Result.LocalLights = PublishedEnvironment.LocalLights;
+			else Result.LocalLights = std::make_shared<const std::vector<RenderLocalLightState>>(std::move(Lights));
+		}
 		auto DataModelValue = World.GetDataModel();
 		if (!DataModelValue) return Result;
 
@@ -924,8 +990,10 @@ namespace gargantuan {
 		Result->BaseId = LastPublicationId;
 		const bool EnvironmentDirty = !HasPublishedEnvironment || !PendingTextureCreates.empty() ||
 									  !PendingTextureUpdates.empty() || !PendingTextureRemoves.empty() ||
-									  std::ranges::any_of(DirtyBatch.Records, [](const RenderDirtyRecord &Record) {
-										  return HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Environment);
+								  std::ranges::any_of(DirtyBatch.Records, [&](const RenderDirtyRecord &Record) {
+									  return HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Environment) ||
+										  (HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Transform) &&
+											  LocalLightOwners.contains(Record.Object));
 									  });
 		auto Environment = PublishedEnvironment;
 		if (EnvironmentDirty) {

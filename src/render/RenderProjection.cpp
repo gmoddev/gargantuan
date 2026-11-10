@@ -102,6 +102,25 @@ namespace gargantuan {
 				IsFinite(Camera.ViewProjectionMatrix);
 		}
 
+		bool AreValidLocalLights(const std::vector<RenderLocalLightState> &Lights) {
+			if (Lights.size() > MaximumRenderLocalLights) return false;
+			ObjectId Previous;
+			for (const auto &Light : Lights) {
+				const bool ValidCone = Light.Kind == RenderLocalLightKind::Point ?
+					Light.InnerConeCosine == 1.0f && Light.OuterConeCosine == 1.0f :
+					Light.Kind == RenderLocalLightKind::Spot && Light.OuterConeCosine > 0.0f &&
+						Light.InnerConeCosine >= Light.OuterConeCosine && Light.InnerConeCosine <= 1.0f;
+				if (!Light.Object.IsValid() || Light.Object <= Previous || !ValidCone || !IsFinite(Light.Position) ||
+					glm::any(glm::greaterThan(glm::abs(Light.Position), glm::vec3(MaximumLocalLightCoordinate))) ||
+					!IsFinite(Light.Direction) || std::abs(glm::length(Light.Direction) - 1.0f) > 1.0e-4f ||
+					!IsUnitColor(Light.Color) || !std::isfinite(Light.Intensity) || Light.Intensity < 0.0f ||
+					Light.Intensity > MaximumLocalLightIntensity || !std::isfinite(Light.Range) ||
+					Light.Range < MinimumLocalLightRange || Light.Range > MaximumLocalLightRange) return false;
+				Previous = Light.Object;
+			}
+			return true;
+		}
+
 		bool HasExactRgba8Bytes(
 			std::uint32_t Width,
 			std::uint32_t Height,
@@ -133,6 +152,10 @@ namespace gargantuan {
 			throw std::invalid_argument("A full RenderPublication may contain only complete create state");
 		if (!IsValid(Publication.Frame))
 			throw std::invalid_argument("Render publication frame state is invalid");
+		const auto &LocalLights = Publication.Frame.Environment.LocalLights;
+		if (LocalLights && (Publication.FullResync || LocalLights != Frame.Environment.LocalLights) &&
+			!AreValidLocalLights(*LocalLights))
+			throw std::invalid_argument("Render publication local light list is invalid");
 		const auto &PublishedUi = Publication.GetUi();
 		const bool HasUiUpdate = Publication.FullResync || Publication.UiChanged || Publication.SharedUi ||
 			PublishedUi.ViewportWidth != 0 || PublishedUi.ViewportHeight != 0 || !PublishedUi.Batches.empty();

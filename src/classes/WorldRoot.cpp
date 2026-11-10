@@ -3,6 +3,7 @@
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/JointConstraint.hpp"
 #include "gargantuan/classes/Attachment.hpp"
+#include "gargantuan/classes/LocalLight.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "gargantuan/Log.hpp"
@@ -790,6 +791,8 @@ namespace gargantuan {
 			} else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance)) {
 				TrackConstraint(Constraint);
 				(void)CreateConstraintJoint(Constraint);
+			} else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance)) {
+				LocalLights.insert_or_assign(Light->GetObjectId(), Light);
 			}
 		});
 
@@ -803,6 +806,8 @@ namespace gargantuan {
 				RemoveSoftBodyMaterial(Material);
 			else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance))
 				RemoveConstraint(Constraint);
+			else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance))
+				LocalLights.erase(Light->GetObjectId());
 		});
 	}
 

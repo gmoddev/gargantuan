@@ -5,12 +5,16 @@
 
 #pragma once
 
+#include "gargantuan/runtime/ObjectId.hpp"
+
 #include <array>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -49,6 +53,28 @@ namespace gargantuan {
 		float End = 1000.0f;
 	};
 
+	inline constexpr std::size_t MaximumRenderLocalLights = 512;
+	inline constexpr float MaximumLocalLightIntensity = 4096.0f;
+	inline constexpr float MinimumLocalLightRange = 0.01f;
+	inline constexpr float MaximumLocalLightRange = 1024.0f;
+	inline constexpr float MaximumLocalLightCoordinate = 1.0e6f;
+
+	enum class RenderLocalLightKind : std::uint8_t { Point, Spot };
+
+	struct RenderLocalLightState {
+		ObjectId Object;
+		RenderLocalLightKind Kind = RenderLocalLightKind::Point;
+		glm::vec3 Position{0.0f};
+		glm::vec3 Direction{0.0f, 0.0f, -1.0f};
+		glm::vec3 Color{1.0f};
+		float Intensity = 16.0f;
+		float Range = 16.0f;
+		float InnerConeCosine = 1.0f;
+		float OuterConeCosine = 1.0f;
+
+		bool operator==(const RenderLocalLightState &) const = default;
+	};
+
 	struct RenderEnvironmentState {
 		glm::vec3 AmbientColor{0.2f};
 		glm::vec3 SunDirection{0.0f, 1.0f, 0.0f};
@@ -58,5 +84,6 @@ namespace gargantuan {
 		glm::vec3 EnvironmentColor{0.08f, 0.12f, 0.2f};
 		RenderFogState Fog;
 		std::optional<RenderSkyState> Sky;
+		std::shared_ptr<const std::vector<RenderLocalLightState>> LocalLights;
 	};
 }
