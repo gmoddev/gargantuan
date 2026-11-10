@@ -86,6 +86,14 @@ namespace gargantuan {
 		std::uint64_t OpaqueGroupingBudgetBarriers = 0;
 		std::uint64_t OpaqueGroupingPairTests = 0;
 		std::uint64_t OpaqueGroupingDepthProofs = 0;
+		std::uint64_t VisibleLocalLights = 0;
+		std::uint64_t OverBudgetLightTiles = 0;
+		std::uint64_t DroppedLightTileIndices = 0;
+		std::uint64_t LocalLightUploadBytes = 0;
+		std::uint64_t LastLocalLightGridNanoseconds = 0;
+		std::uint64_t MaterialViewBytes = 0;
+		std::uint64_t MaterialSourceBytes = 0;
+		std::uint64_t MaterialViewFallbacks = 0;
 	};
 
 	class SDLRenderer final : public BaseRenderer {

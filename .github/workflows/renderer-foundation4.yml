@@ -43,9 +43,11 @@ jobs:
             -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON
           cmake --build build-renderer --parallel 3 --target gargantuan_editor_viewport_smoke \
             gargantuan_renderer_publication_tests gargantuan_asset_foundation_tests gargantuan_renderer_benchmark \
-            gargantuan_renderer_depth_tests gargantuan_ibl_reference_tests
+            gargantuan_renderer_depth_tests gargantuan_ibl_reference_tests gargantuan_ibl_gpu_tests \
+            gargantuan_renderer_material_mip_tests
           SDL_VIDEODRIVER=dummy ctest --test-dir build-renderer --output-on-failure \
-            -R '^gargantuan_(renderer_publication|asset_foundation|packaged_shaders|ibl_reference)$' | tee renderer-evidence/ctest.log
+            -R '^gargantuan_(renderer_publication|asset_foundation|packaged_shaders|ibl_reference|renderer_material_mips)$' \
+            | tee renderer-evidence/ctest.log
           for shader in build-renderer/shaders/*.spv; do spirv-val "$shader"; done
           export VK_DRIVER_FILES="$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)"
           test -n "$VK_DRIVER_FILES"
@@ -54,6 +56,8 @@ jobs:
             2>&1 | tee renderer-evidence/viewport.log
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
             --opaque-ordering --output=../renderer-evidence/opaque-ordering) 2>&1 | tee renderer-evidence/opaque-ordering.log
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_ibl_gpu_tests) \
+            2>&1 | tee renderer-evidence/ibl.log
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_benchmark \
             --incremental --backend=sdl --scenario=material-check --width=640 --height=360 \
             --capture=../renderer-evidence/material) 2>&1 | tee renderer-evidence/material-check.csv
@@ -110,11 +114,13 @@ jobs:
           cmake @Options 2>&1 | Tee-Object -FilePath renderer-evidence/configure.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $Targets = @('gargantuan', 'gargantuan_shaders', 'gargantuan_editor_viewport_smoke',
-            'gargantuan_renderer_benchmark', 'gargantuan_renderer_depth_tests', 'gargantuan_renderer_foundation2_gpu_benchmark')
+            'gargantuan_renderer_benchmark', 'gargantuan_renderer_depth_tests', 'gargantuan_renderer_foundation2_gpu_benchmark',
+            'gargantuan_ibl_gpu_tests')
           cmake --build build-renderer --parallel 3 --target @Targets 2>&1 | Tee-Object -FilePath renderer-evidence/build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $Names = @('gargantuan.exe', 'gargantuan_editor_viewport_smoke.exe', 'gargantuan_renderer_benchmark.exe',
-            'gargantuan_renderer_depth_tests.exe', 'gargantuan_renderer_foundation2_gpu_benchmark.exe', 'SDL3.dll')
+            'gargantuan_renderer_depth_tests.exe', 'gargantuan_renderer_foundation2_gpu_benchmark.exe',
+            'gargantuan_ibl_gpu_tests.exe', 'SDL3.dll')
           $ShaderFiles = Get-ChildItem -LiteralPath build-renderer/shaders -File -Filter '*.spv'
           $Names += $ShaderFiles | ForEach-Object { "shaders/$($_.Name)" }
           $Members = foreach ($Name in $Names) {
@@ -135,6 +141,7 @@ jobs:
             build-renderer/gargantuan_renderer_benchmark.exe
             build-renderer/gargantuan_renderer_depth_tests.exe
             build-renderer/gargantuan_renderer_foundation2_gpu_benchmark.exe
+            build-renderer/gargantuan_ibl_gpu_tests.exe
             build-renderer/*.dll
             build-renderer/runtime/
             build-renderer/shaders/

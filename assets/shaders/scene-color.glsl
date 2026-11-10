@@ -15,10 +15,16 @@ vec3 FiniteSceneColor(vec3 Linear) {
     return clamp(mix(Linear, vec3(0.0), isnan(Linear)), 0.0, 65504.0);
 }
 
-vec3 ToneMapScene(vec3 Linear, float Exposure) {
+vec3 ToneMapScene(vec3 Linear, float Exposure, bool Reinhard) {
     vec3 Color = FiniteSceneColor(Linear) * Exposure;
+    if (Reinhard) return Color / (Color + 1.0);
     return clamp((Color * (2.51 * Color + 0.03)) /
         (Color * (2.43 * Color + 0.59) + 0.14), 0.0, 1.0);
+}
+
+vec3 EnvironmentSampleDirection(vec3 WorldDirection, vec2 SinCos) {
+    return vec3(WorldDirection.x * SinCos.y - WorldDirection.z * SinCos.x, WorldDirection.y,
+        WorldDirection.x * SinCos.x + WorldDirection.z * SinCos.y);
 }
 
 #endif

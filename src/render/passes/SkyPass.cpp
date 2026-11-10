@@ -108,12 +108,15 @@ namespace gargantuan {
 			SDL_BindGPUFragmentSamplers(Pass, 0, Bindings.data(), Bindings.size());
 			const auto TanHalfFov = std::tan(glm::radians(Frame.Camera.VerticalFieldOfView) * 0.5f);
 			const auto Aspect = static_cast<float>(Frame.ViewportWidth) / static_cast<float>(Frame.ViewportHeight);
+			const auto EnvironmentAngle = glm::radians(Environment.EnvironmentRotation);
 			Uniforms SkyUniforms{
 				.RightTanAspect = glm::vec4(Frame.Camera.RightDirection, TanHalfFov * Aspect),
 				.UpTan = glm::vec4(Frame.Camera.UpDirection, TanHalfFov),
 				.LookExposure = glm::vec4(Frame.Camera.LookDirection, Environment.ExposureMultiplier),
 				.EnvironmentColorHasSky = glm::vec4(Environment.EnvironmentColor, Environment.Sky ? 1.0f : 0.0f),
-				.SceneFlags = glm::vec4(Context.HdrSceneTexture ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f),
+				.SceneFlags = glm::vec4(Context.HdrSceneTexture ? 1.0f : 0.0f,
+					std::sin(EnvironmentAngle), std::cos(EnvironmentAngle),
+					Environment.ToneMapping == RenderToneMapping::Reinhard ? 1.0f : 0.0f),
 			};
 			SDL_PushGPUVertexUniformData(Context.Commands, 0, &SkyUniforms, sizeof(SkyUniforms));
 			SDL_PushGPUFragmentUniformData(Context.Commands, 0, &SkyUniforms, sizeof(SkyUniforms));

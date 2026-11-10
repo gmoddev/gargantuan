@@ -66,7 +66,7 @@ vec3 sampleSky(vec3 direction) {
 
 void main() {
     vec3 color = sky.EnvironmentColorHasSky.w > 0.5
-        ? sampleSky(normalize(ViewRay)) : sky.EnvironmentColorHasSky.rgb;
-    if (sky.SceneFlags.x < 0.5) color = ToneMapScene(color, sky.LookExposure.w);
+        ? sampleSky(EnvironmentSampleDirection(normalize(ViewRay), sky.SceneFlags.yz)) : sky.EnvironmentColorHasSky.rgb;
+    if (sky.SceneFlags.x < 0.5) color = ToneMapScene(color, sky.LookExposure.w, sky.SceneFlags.w > 0.5);
     OutputColor = vec4(color, 1.0);
 }

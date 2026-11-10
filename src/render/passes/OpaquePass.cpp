@@ -2,6 +2,8 @@
 
 #include "gargantuan/Log.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
+#include "render/sdl/SDLMaterialSamplers.hpp"
+#include "render/sdl/SDLLocalLightGrid.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
@@ -37,7 +39,8 @@ namespace gargantuan {
 		auto BindingLayout(const RenderPrimitiveMaterialState &Primitive) {
 			const auto &Material = Primitive.Material;
 			return std::tie(Material.OpacityMode, Material.DoubleSided, Material.BaseColorTexture,
-				Material.NormalTexture, Material.MetallicRoughnessTexture);
+				Material.NormalTexture, Material.MetallicRoughnessTexture, Material.EmissiveTexture,
+				Material.OcclusionTexture, Material.TextureSamplers);
 		}
 
 		glm::dmat4 Absolute(const glm::dmat4 &Matrix) {
@@ -224,6 +227,8 @@ namespace gargantuan {
 			glm::vec4 FogColorStart;
 			glm::vec4 CameraPositionFogEnd;
 			glm::vec4 EnvironmentLighting;
+			glm::vec4 EnvironmentRotationTone;
+			glm::vec4 LocalLighting;
 		};
 
 		struct alignas(16) PartUniforms {
@@ -234,6 +239,7 @@ namespace gargantuan {
 			glm::vec4 MaterialFlags;
 			glm::vec4 EmissiveOcclusion;
 			glm::vec4 MaterialControls;
+			glm::vec4 ColorSamplerModes;
 		};
 
 		struct WorldDraw {
@@ -243,7 +249,8 @@ namespace gargantuan {
 			float Depth;
 		};
 
-		OpaquePass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat, SDLRendererMetrics *Metrics) {
+		OpaquePass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat, SDLRendererMetrics *Metrics)
+			: LocalLights(gpu) {
 			try {
 				Shader.VertexFilepath = GetSDLShaderPath("opaque.vert");
 				Shader.VertexUniformBufferCount = 2;
@@ -251,6 +258,7 @@ namespace gargantuan {
 				Shader.FragmentFilepath = GetSDLShaderPath("opaque.frag");
 				Shader.FragmentUniformBufferCount = 1;
 				Shader.FragmentSamplerCount = 9;
+				Shader.FragmentStorageBufferCount = 2;
 				OutputMode = swapchainFormat == SDLHdrSceneFormat ? 2.0f :
 					SDLTargetEncodesSrgb(swapchainFormat) ? 0.0f : 1.0f;
 				Shader.Init(gpu, Metrics);
@@ -275,16 +283,7 @@ namespace gargantuan {
 				BlendedInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
 				BlendedDoubleSidedPipeline = SDL_CreateGPUGraphicsPipeline(gpu, &BlendedInfo);
 				if (BlendedDoubleSidedPipeline && Metrics) ++Metrics->PipelineCreations;
-				SDL_GPUSamplerCreateInfo SamplerInfo{
-					.min_filter = SDL_GPU_FILTER_LINEAR,
-					.mag_filter = SDL_GPU_FILTER_LINEAR,
-					.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
-					.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-					.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-					.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-				};
-				MaterialSampler = SDL_CreateGPUSampler(gpu, &SamplerInfo);
-				if (!Pipeline || !DoubleSidedPipeline || !BlendedPipeline || !BlendedDoubleSidedPipeline || !MaterialSampler)
+				if (!Pipeline || !DoubleSidedPipeline || !BlendedPipeline || !BlendedDoubleSidedPipeline)
 					throw std::runtime_error(std::format("Failed to create material rendering resources: {}", SDL_GetError()));
 				const auto *Driver = SDL_GetGPUDeviceDriver(gpu);
 				GroupingSupported = Driver && std::string_view(Driver) == "vulkan";
@@ -295,19 +294,17 @@ namespace gargantuan {
 		};
 
 		void Destroy(SDL_GPUDevice *Gpu) override {
+			LocalLights.Destroy();
 			if (DoubleSidedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, DoubleSidedPipeline);
 			if (BlendedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, BlendedPipeline);
 			if (BlendedDoubleSidedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, BlendedDoubleSidedPipeline);
-			if (MaterialSampler) SDL_ReleaseGPUSampler(Gpu, MaterialSampler);
 			DoubleSidedPipeline = nullptr;
 			BlendedPipeline = nullptr;
 			BlendedDoubleSidedPipeline = nullptr;
-			MaterialSampler = nullptr;
 			SDLRenderPass::Destroy(Gpu);
 		}
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
-			(void)gpu;
 			SDL_GPUColorTargetInfo colorTarget = {
 				.texture = context.GetSceneColorTexture(),
 				.load_op = SDL_GPU_LOADOP_LOAD,
@@ -329,10 +326,11 @@ namespace gargantuan {
 			};
 
 			auto *White = context.TextureResources->GetWhiteTexture();
+			LocalLights.Prepare(context.Projection.GetFrame(), context.Metrics);
 			auto *Pass = SDL_BeginGPURenderPass(context.Commands, &colorTarget, 1, &depthTarget);
 			if (!Pass) throw std::runtime_error("[Renderer:Material] Could not begin the world render pass");
 			try {
-				DrawWorld(Pass, context, shadowBinding, White);
+				DrawWorld(gpu, Pass, context, shadowBinding, White);
 			} catch (...) {
 				OpaqueBatch.clear();
 				CoverageGrid.Clear();
@@ -344,10 +342,11 @@ namespace gargantuan {
 		}
 
 	  private:
-		void DrawWorld(SDL_GPURenderPass *Pass, SDLFrameContext &Context, SDL_GPUTextureSamplerBinding ShadowBinding,
+		void DrawWorld(SDL_GPUDevice *Gpu, SDL_GPURenderPass *Pass, SDLFrameContext &Context, SDL_GPUTextureSamplerBinding ShadowBinding,
 			SDL_GPUTexture *White) {
 			const auto &Frame = Context.Projection.GetFrame();
 			const auto &Environment = Frame.Environment;
+			const auto EnvironmentAngle = glm::radians(Environment.EnvironmentRotation);
 			const WorldUniforms Uniforms{
 				.ViewMatrix = Frame.Camera.ViewMatrix,
 				.ProjectionMatrix = Frame.Camera.ProjectionMatrix,
@@ -358,7 +357,10 @@ namespace gargantuan {
 				.FogColorStart = glm::vec4(Environment.Fog.Color, Environment.Fog.Start),
 				.CameraPositionFogEnd = glm::vec4(Frame.Camera.Position, Environment.Fog.End),
 				.EnvironmentLighting = glm::vec4(Context.EnvironmentLighting.Enabled ? 1.0f : 0.0f,
-					Context.EnvironmentLighting.ReflectionMaxLod, 0.0f, 0.0f),
+					Context.EnvironmentLighting.ReflectionMaxLod, Environment.IblIntensity, 0.0f),
+				.EnvironmentRotationTone = glm::vec4(std::sin(EnvironmentAngle), std::cos(EnvironmentAngle),
+					Environment.ToneMapping == RenderToneMapping::Reinhard ? 1.0f : 0.0f, 0.0f),
+				.LocalLighting = LocalLights.GetUniforms(),
 			};
 			SDL_PushGPUVertexUniformData(Context.Commands, 0, &Uniforms, sizeof(Uniforms));
 			SDL_PushGPUFragmentUniformData(Context.Commands, 0, &Uniforms, sizeof(Uniforms));
@@ -369,10 +371,16 @@ namespace gargantuan {
 			const RenderProjectedObject *BoundObject = nullptr;
 			SDL_GPUBuffer *BoundPalette = nullptr;
 			std::array<SDL_GPUTexture *, 5> BoundTextures{};
+			std::array<SDL_GPUSampler *, 5> BoundSamplers{};
+			auto *DefaultSampler = Context.MaterialSamplers->Get(Gpu, {}, false);
 			TransparentDraws.clear();
 
-			auto ResolveTexture = [&](const std::optional<RenderTextureIdentity> &Identity) {
-				return Identity ? Context.TextureResources->Find(*Identity) : White;
+			const auto WrapMode = [](const RenderSamplerState &State) {
+				return static_cast<float>(static_cast<unsigned>(State.WrapU) + 3u * static_cast<unsigned>(State.WrapV));
+			};
+			const auto FilterMode = [](const RenderSamplerState &State) {
+				return static_cast<float>(SDLMaterialSamplers::UsesNearestMinFilter(State.MinFilter) +
+					2u * (State.MagFilter == RenderTextureMagFilter::Nearest));
 			};
 			auto DrawPrimitive = [&](const WorldDraw &Draw, std::uint32_t FirstIndex, std::uint32_t IndexCount,
 				const RenderMaterialState &Material) {
@@ -383,11 +391,14 @@ namespace gargantuan {
 					: (Material.DoubleSided ? DoubleSidedPipeline : Pipeline);
 				if (MaterialPipeline != BoundPipeline) {
 					SDL_BindGPUGraphicsPipeline(Pass, MaterialPipeline);
+					const auto LightBuffers = LocalLights.GetBuffers();
+					SDL_BindGPUFragmentStorageBuffers(Pass, 0, LightBuffers.data(), LightBuffers.size());
 					BoundPipeline = MaterialPipeline;
 					BoundMesh = nullptr;
 					BoundObject = nullptr;
 					BoundPalette = nullptr;
 					BoundTextures = {};
+					BoundSamplers = {};
 					if (Context.Metrics) ++Context.Metrics->PipelineSwitches;
 				}
 				if (Draw.Mesh != BoundMesh) {
@@ -414,21 +425,37 @@ namespace gargantuan {
 					}
 					BoundObject = Draw.Object;
 				}
-				const std::array Textures{
-					ResolveTexture(Material.BaseColorTexture), ResolveTexture(Material.NormalTexture),
-					ResolveTexture(Material.MetallicRoughnessTexture),
-					ResolveTexture(Material.EmissiveTexture), ResolveTexture(Material.OcclusionTexture),
+				const std::array References{
+					Material.BaseColorTexture, Material.NormalTexture, Material.MetallicRoughnessTexture,
+					Material.EmissiveTexture, Material.OcclusionTexture,
 				};
+				std::array<SDL_GPUTexture *, 5> Textures{White, White, White, White, White};
+				std::array<SDL_GPUSampler *, 5> Samplers{
+					DefaultSampler, DefaultSampler, DefaultSampler, DefaultSampler, DefaultSampler,
+				};
+				std::array<bool, 5> NativeSrgb{};
+				const bool Physical = Material.ShadingModel == RenderShadingModel::MetallicRoughness;
+				for (std::size_t Slot = 0; Slot < References.size(); ++Slot) {
+					if (!References[Slot]) continue;
+					const bool Srgb = Physical && (Slot == 0 || Slot == 3);
+					const auto View = Context.TextureResources->FindMaterialTexture(*References[Slot], Srgb);
+					const bool Mask = Slot == 0 && Material.OpacityMode == RenderOpacityMode::Masked;
+					Textures[Slot] = View.Texture;
+					NativeSrgb[Slot] = View.NativeSrgb;
+					Samplers[Slot] = Context.MaterialSamplers->Get(Gpu, Material.TextureSamplers[Slot],
+						View.HasMipmaps && !Mask);
+				}
 				if (std::ranges::find(Textures, nullptr) != Textures.end())
 					throw std::logic_error("[Renderer:Material] A material texture has no SDL residency");
-				if (Textures != BoundTextures) {
+				if (Textures != BoundTextures || Samplers != BoundSamplers) {
 					const std::array<SDL_GPUTextureSamplerBinding, 9> Bindings{{
-						ShadowBinding, {Textures[0], MaterialSampler}, {Textures[1], MaterialSampler}, {Textures[2], MaterialSampler},
-						{Textures[3], MaterialSampler}, {Textures[4], MaterialSampler}, Context.EnvironmentLighting.Irradiance,
+						ShadowBinding, {Textures[0], Samplers[0]}, {Textures[1], Samplers[1]}, {Textures[2], Samplers[2]},
+						{Textures[3], Samplers[3]}, {Textures[4], Samplers[4]}, Context.EnvironmentLighting.Irradiance,
 						Context.EnvironmentLighting.Reflections, Context.EnvironmentLighting.BrdfLut,
 					}};
 					SDL_BindGPUFragmentSamplers(Pass, 0, Bindings.data(), Bindings.size());
 					BoundTextures = Textures;
+					BoundSamplers = Samplers;
 					if (Context.Metrics) ++Context.Metrics->WorldMaterialBindings;
 				}
 				const float Shading = Material.MetallicRoughnessTexture ? 2.0f :
@@ -442,7 +469,10 @@ namespace gargantuan {
 					.MaterialFlags = {Shading, Material.BaseColorTexture ? 1.0f : 0.0f,
 						Material.NormalTexture ? 1.0f : 0.0f, OutputMode},
 					.EmissiveOcclusion = glm::vec4(Material.EmissiveFactor, Material.OcclusionTexture ? Material.OcclusionStrength : 0.0f),
-					.MaterialControls = {Material.NormalScale, Material.EmissiveTexture ? 1.0f : 0.0f, 0.0f, 0.0f},
+					.MaterialControls = {Material.NormalScale, Material.EmissiveTexture ? 1.0f : 0.0f,
+						NativeSrgb[0] ? 1.0f : 0.0f, NativeSrgb[3] ? 1.0f : 0.0f},
+					.ColorSamplerModes = {WrapMode(Material.TextureSamplers[0]), WrapMode(Material.TextureSamplers[3]),
+						FilterMode(Material.TextureSamplers[0]), FilterMode(Material.TextureSamplers[3])},
 				};
 				SDL_PushGPUVertexUniformData(Context.Commands, 1, &Part, sizeof(PartUniforms));
 				SDL_DrawGPUIndexedPrimitives(Pass, IndexCount, 1, FirstIndex, 0, 0);
@@ -579,9 +609,9 @@ namespace gargantuan {
 		std::vector<WorldDraw> OpaqueBatch;
 		OpaqueCoverageGrid CoverageGrid;
 		std::vector<WorldDraw> TransparentDraws;
-		SDL_GPUSampler *MaterialSampler = nullptr;
 		float OutputMode = 1.0f;
 		bool GroupingSupported = false;
+		SDLLocalLightGrid LocalLights;
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateOpaquePass(

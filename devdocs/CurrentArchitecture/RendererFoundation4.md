@@ -73,9 +73,66 @@ path at identical exposure.
 [Filmic curve reference](https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/)
 
 Manual exposure is deterministic and uses the existing schema and Lighting
-publication. Automatic exposure would require a bounded luminance reduction
+publication. Filmic is the default and Reinhard is the selectable reference.
+Automatic exposure would require a bounded luminance reduction
 and a renderer-owned adaptation state reset on view transitions. The first
 implementation uses manual exposure so authoring, replay, and per-frame
 comparison have one defined output. The GPU smoke compares saturated and
 low-exposure samples against double-precision display values and tests linear
 alpha composition, GUI isolation, resize, recreation, and direct SDR fallback.
+
+## Environment lighting and materials
+
+Sky remains the single authored environment source. Its existing six images
+feed bounded SDL preprocessing for diffuse irradiance, a GGX specular
+prefilter and a split-sum BRDF lookup. A shared world-space rotation applies
+to background and material lookups. Changing rotation or `IblIntensity`
+does not rebuild the prefilter. Authored Ambient is an independent additive
+term and remains available when environment preprocessing is unavailable.
+[IBL resources and bounds](EnvironmentLightingFoundation4.md)
+
+Emissive color uses linear factors and sRGB texture sampling. Occlusion
+attenuates indirect lighting only. The normal scale multiplies decoded
+tangent-space X and Y before normalization. The new canonical material
+artifact adds the authored values and sampler state. Older encodings keep
+their byte layout, and the existing asset identities still own all image
+dependencies. Existing EditorHost clients keep the previous catalog shape.
+
+SDL texture entries can lazily own a native sRGB view for color slots and
+a linear mip view for data slots. CPU box filtering uses linear RGB for
+sRGB images and linear scalar or vector components for data and alpha.
+Normals normalize when sampled, so coarse levels represent an average
+direction before reconstruction. Material sampler state selects nearest or
+linear minification and magnification, mip filtering, and repeat, mirror,
+or clamp per axis. The fixed cache bounds native sampler permutations at
+108. Alpha mask camera and shadow samples use level zero to preserve the
+authored cutoff. Texture updates preserve the base image and replace
+affected mip content in the same publication-driven residency path.
+Optional view and retained source budgets are each 128 MiB. At a capability
+or memory limit the source image remains usable at level zero, including
+linear-light fallback sampling of encoded color. GUI and Sky retain the
+existing base-image path. [SDL texture upload contract](https://wiki.libsdl.org/SDL3/SDL_UploadToGPUTexture)
+
+## Point and spot lighting
+
+Schema-backed PointLight and SpotLight are ordinary scene Instances. The
+WorldRoot membership and RenderPublisher project up to 512 active records
+sorted by generation-safe ObjectId. A BasePart owner contributes its render
+transform without its scale. The GPU pass consumes only the immutable
+environment list. No GPU resource or live Instance crosses that boundary.
+
+The SDL renderer conservatively projects finite light volumes to screen
+tiles at least 32 pixels wide, with at most 64 tiles per axis. It admits
+up to 24 light indices per tile, ordered by a bounded contribution
+heuristic and ObjectId. Clip-plane rejection and conservative projected
+bounds avoid per-object scans of every light. A light crossing the eye
+plane covers the viewport conservatively. Static cameras and unchanged
+light publications reuse their lists. Diagnostics count frustum-admitted
+lights, saturated tiles, dropped memberships, and upload bytes.
+
+Intensity is a candela-like relative scale. The fragment shader uses
+inverse-square falloff with a 0.1-world-unit near clamp and a smooth
+finite range cutoff. Spotlights multiply this by the inner-to-outer cone
+response. Local illumination adds to the existing directional and ambient
+terms before fog and the HDR resolve. The directional depth target
+continues to serve sun shadows.

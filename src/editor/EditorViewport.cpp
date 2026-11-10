@@ -5,6 +5,7 @@
 
 #include "gargantuan/editor/EditorViewport.hpp"
 
+#include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
 #include "render/sdl/SDLSceneColor.hpp"
@@ -115,6 +116,7 @@ namespace gargantuan {
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
 		std::unique_ptr<SDLMeshCache> MeshResources;
 		std::unique_ptr<SDLTextureCache> TextureResources;
+		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
@@ -127,6 +129,7 @@ namespace gargantuan {
 			if (SkinPalettes) { SkinPalettes->Destroy(); SkinPalettes.reset(); }
 			for (auto &Pass : RenderPasses) if (Pass) Pass->Destroy(Gpu);
 			RenderPasses.clear();
+			if (Gpu) MaterialSamplers.Destroy(Gpu);
 			if (DownloadBuffer && Gpu) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
 			if (ColorTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, ColorTexture);
 			if (HdrSceneTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, HdrSceneTexture);
@@ -282,9 +285,15 @@ namespace gargantuan {
 		Frame.ShadowMapTexture = State->ShadowMapTexture;
 		Frame.ShadowSampler = State->ShadowSampler;
 		Frame.TextureResources = State->TextureResources.get();
+		Frame.MaterialSamplers = &State->MaterialSamplers;
 		Frame.Width = State->Width;
 		Frame.Height = State->Height;
-		for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
+		try {
+			for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
+		} catch (...) {
+			SDL_CancelGPUCommandBuffer(Commands);
+			throw;
+		}
 		const auto RenderSubmitted = std::chrono::steady_clock::now();
 
 		auto *CopyPass = SDL_BeginGPUCopyPass(Commands);

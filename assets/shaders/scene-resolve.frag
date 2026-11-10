@@ -10,7 +10,7 @@ layout(location = 0) out vec4 OutputColor;
 
 void main() {
     vec3 Linear = texelFetch(SceneColor, ivec2(gl_FragCoord.xy), 0).rgb;
-    vec3 Display = ToneMapScene(Linear, ExposureAndEncoding.x);
+    vec3 Display = ToneMapScene(Linear, ExposureAndEncoding.x, ExposureAndEncoding.z > 0.5);
     if (ExposureAndEncoding.y > 0.5) Display = LinearToSrgb(Display);
     OutputColor = vec4(Display, 1.0);
 }

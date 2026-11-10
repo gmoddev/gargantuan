@@ -20,6 +20,8 @@ layout(set = 1, binding = 0) uniform WorldUniforms {
     vec4 FogColorStart;
     vec4 CameraPositionFogEnd;
     vec4 EnvironmentLighting;
+    vec4 EnvironmentRotationTone;
+    vec4 LocalLighting;
 } world;
 
 layout(set = 1, binding = 1) uniform PartUniforms {
@@ -30,6 +32,7 @@ layout(set = 1, binding = 1) uniform PartUniforms {
     vec4 MaterialFlags;
     vec4 EmissiveOcclusion;
     vec4 MaterialControls;
+    vec4 ColorSamplerModes;
 } part;
 
 layout(location = 0) out vec3 FragmentNormal;
@@ -42,6 +45,7 @@ layout(location = 6) out vec4 FragmentTangent;
 layout(location = 7) flat out vec4 FragmentMaterialFlags;
 layout(location = 8) flat out vec4 FragmentEmissiveOcclusion;
 layout(location = 9) flat out vec4 FragmentMaterialControls;
+layout(location = 10) flat out vec4 FragmentColorSamplerModes;
 
 void main() {
 	SkinnedVertex Vertex = ApplySkinning(
@@ -63,4 +67,5 @@ void main() {
     FragmentMaterialFlags = part.MaterialFlags;
     FragmentEmissiveOcclusion = part.EmissiveOcclusion;
     FragmentMaterialControls = part.MaterialControls;
+    FragmentColorSamplerModes = part.ColorSamplerModes;
 }

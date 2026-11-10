@@ -52,9 +52,9 @@ namespace {
 		return (static_cast<std::size_t>(Height / 2) * Width + Width / 2) * 3;
 	}
 
-	int DisplayByte(double Linear, double Exposure) {
+	int DisplayByte(double Linear, double Exposure, bool Reinhard = false) {
 		const auto Value = Linear * Exposure;
-		const auto Mapped = std::clamp((Value * (2.51 * Value + 0.03)) /
+		const auto Mapped = Reinhard ? Value / (Value + 1.0) : std::clamp((Value * (2.51 * Value + 0.03)) /
 			(Value * (2.43 * Value + 0.59) + 0.14), 0.0, 1.0);
 		const auto Encoded = Mapped <= 0.0031308 ? Mapped * 12.92 : 1.055 * std::pow(Mapped, 1.0 / 2.4) - 0.055;
 		return static_cast<int>(std::lround(Encoded * 255.0));
@@ -224,19 +224,133 @@ namespace {
 
 	void CheckHdrExposure(EditorViewportRenderer &Renderer) {
 		const auto Center = CenterPixel(64, 64);
-		for (const auto Exposure : {1.0f / 256.0f, 0.125f, 1.0f, 256.0f}) {
+		for (const bool Reinhard : {false, true}) for (const auto Exposure : {1.0f / 256.0f, 0.125f, 1.0f, 256.0f}) {
 			auto Scene = MaterialScene(25, {});
 			auto &Light = Scene->Frame.Environment;
 			Light.AmbientColor = glm::vec3(0.0f);
 			Light.SunIntensity = 8.0f;
 			Light.ExposureMultiplier = Exposure;
+			Light.ToneMapping = Reinhard ? RenderToneMapping::Reinhard : RenderToneMapping::Filmic;
 			Scene->Creates.front().Material.DoubleSided = true;
 			const auto Frame = Renderer.Capture(Scene);
-			const auto Expected = DisplayByte(8.0, Exposure);
+			const auto Expected = DisplayByte(8.0, Exposure, Reinhard);
 			if (std::abs(int(Frame.RgbPixels.at(Center)) - Expected) > 2)
 				throw std::runtime_error(std::format("[Renderer:HDR] Exposure {} yielded {}, expected {}",
 					Exposure, Frame.RgbPixels.at(Center), Expected));
 		}
+	}
+
+	void CheckAdvancedMaterials(EditorViewportRenderer &Renderer) {
+		const RenderTextureIdentity Image{404, 1};
+		RenderMaterialState Material;
+		Material.DoubleSided = true;
+		Material.ShadingModel = RenderShadingModel::MetallicRoughness;
+		Material.EmissiveFactor = {0.5f, 0.5f, 0.5f};
+		Material.EmissiveTexture = Image;
+		auto Emissive = MaterialScene(30, Material);
+		Emissive->Frame.Environment.AmbientColor = glm::vec3(0.0f);
+		Emissive->TextureCreates.push_back({Image, 1, 1, 1, RenderTextureFormat::Rgba8Unorm, SolidPixels(255, 0, 0)});
+		const auto Center = CenterPixel(64, 64);
+		const auto Emission = Renderer.Capture(Emissive).RgbPixels;
+		if (std::abs(int(Emission.at(Center)) - DisplayByte(0.5, 1.0)) > 2 || Emission.at(Center + 1) > 2)
+			throw std::runtime_error("[Renderer:Material] Textured emissive radiance failed the no-light probe");
+
+		Material.EmissiveFactor = glm::vec3(0.0f);
+		Material.EmissiveTexture.reset();
+		Material.OcclusionTexture = Image;
+		const auto AmbientProbe = [&](RenderPublicationId Id, float OcclusionStrength, bool DirectOnly) {
+			Material.OcclusionStrength = OcclusionStrength;
+			auto Scene = MaterialScene(Id, Material);
+			if (DirectOnly) {
+				Scene->Frame.Environment.AmbientColor = glm::vec3(0.0f);
+				Scene->Frame.Environment.SunIntensity = 1.0f;
+			}
+			Scene->TextureCreates.push_back({Image, 1, 1, 1, RenderTextureFormat::Rgba8Unorm, SolidPixels(0, 255, 255)});
+			return Renderer.Capture(Scene).RgbPixels.at(Center);
+		};
+		const auto Ambient = AmbientProbe(31, 0.0f, false);
+		const auto Occluded = AmbientProbe(32, 1.0f, false);
+		if (Ambient < 200 || Occluded > 2 || AmbientProbe(33, 0.0f, true) != AmbientProbe(34, 1.0f, true))
+			throw std::runtime_error("[Renderer:Material] Occlusion must attenuate indirect light only");
+	}
+
+	void CheckMipSampling(EditorViewportRenderer &Renderer) {
+		const RenderTextureIdentity Image{404, 1};
+		constexpr std::uint32_t Dimension = 256;
+		auto Pixels = std::make_shared<std::vector<std::uint8_t>>(Dimension * Dimension * 4, 255);
+		for (std::uint32_t Y = 0; Y < Dimension; ++Y) for (std::uint32_t X = 0; X < Dimension; ++X) {
+			const auto At = (Y * Dimension + X) * 4;
+			const std::uint8_t Value = ((X + Y) % 2) ? 255 : 0;
+			for (unsigned Channel = 0; Channel < 3; ++Channel) (*Pixels)[At + Channel] = Value;
+		}
+		const auto Capture = [&](RenderPublicationId Id, RenderTextureMinFilter Min) {
+			RenderMaterialState Material;
+			Material.DoubleSided = true;
+			Material.ShadingModel = RenderShadingModel::MetallicRoughness;
+			Material.BaseColorTexture = Image;
+			Material.TextureSamplers[0].MinFilter = Min;
+			Material.TextureSamplers[0].MagFilter = RenderTextureMagFilter::Nearest;
+			auto Scene = MaterialScene(Id, Material);
+			auto Vertices = std::make_shared<std::vector<RenderVertex>>(*Scene->MeshCreates.front().Vertices);
+			const std::array Coordinates{glm::vec2(0, 0), glm::vec2(16, 0), glm::vec2(16, 16), glm::vec2(0, 16)};
+			for (std::size_t Index = 0; Index < Coordinates.size(); ++Index)
+				(*Vertices)[Index].TextureCoordinate = Coordinates[Index];
+			Scene->MeshCreates.front().Vertices = Vertices;
+			Scene->TextureCreates.push_back({Image, 1, Dimension, Dimension, RenderTextureFormat::Rgba8Unorm, Pixels});
+			return Renderer.Capture(Scene).RgbPixels.at(CenterPixel(64, 64));
+		};
+		const auto Mipped = Capture(35, RenderTextureMinFilter::LinearMipmapLinear);
+		const auto Nearest = Capture(36, RenderTextureMinFilter::Nearest);
+		if (std::abs(int(Mipped) - DisplayByte(0.5, 1.0)) > 3 || std::abs(int(Mipped) - int(Nearest)) < 15)
+			throw std::runtime_error(std::format("[Renderer:Material] Minified sRGB checker differs from the linear mip reference ({} vs {})",
+				Mipped, Nearest));
+	}
+
+	void CheckLocalLights(EditorViewportRenderer &Renderer) {
+		const auto Center = CenterPixel(64, 64);
+		RenderMaterialState Material;
+		Material.DoubleSided = true;
+		Material.ShadingModel = RenderShadingModel::MetallicRoughness;
+		const auto Capture = [&](RenderPublicationId Id, RenderLocalLightKind Kind, const glm::vec3 &Direction) {
+			auto Scene = MaterialScene(Id, Material);
+			auto &Environment = Scene->Frame.Environment;
+			Environment.AmbientColor = glm::vec3(0.0f);
+			Environment.LocalLights = std::make_shared<const std::vector<RenderLocalLightState>>(
+				std::initializer_list<RenderLocalLightState>{{.Object = {1, 1}, .Kind = Kind, .Position = {0, 0, 1.5f},
+					.Direction = Direction, .Color = {0, 0, 1}, .Intensity = 8.0f, .Range = 6.0f,
+					.InnerConeCosine = Kind == RenderLocalLightKind::Point ? 1.0f : 0.95f,
+					.OuterConeCosine = Kind == RenderLocalLightKind::Point ? 1.0f : 0.8f}});
+			return Renderer.Capture(Scene).RgbPixels.at(Center + 2);
+		};
+		const auto Point = Capture(40, RenderLocalLightKind::Point, {0, 0, -1});
+		const auto OnCone = Capture(41, RenderLocalLightKind::Spot, {0, 0, -1});
+		const auto OffCone = Capture(42, RenderLocalLightKind::Spot, {1, 0, 0});
+		if (Point < 100 || std::abs(int(Point) - int(OnCone)) > 2 || OffCone > 2)
+			throw std::runtime_error(std::format("[Renderer:LocalLights] Point/cone response failed ({} {} {})", Point, OnCone, OffCone));
+	}
+
+	void CheckLocalLightBudget() {
+		SDLRenderer Renderer(Vector2(64, 64), {
+			.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+		});
+		auto Scene = MaterialScene(1, {});
+		auto Lights = std::make_shared<std::vector<RenderLocalLightState>>();
+		for (std::uint32_t Index = 1; Index <= 500; ++Index)
+			Lights->push_back({.Object = {Index, 1}, .Position = {0, 0, 1.0f}, .Range = 4.0f});
+		Lights->push_back({.Object = {501, 1}, .Position = {50, 0, 0}, .Range = 1.0f});
+		Scene->Frame.Environment.LocalLights = Lights;
+		Renderer.Draw(Scene);
+		const auto Metrics = Renderer.GetMetrics();
+		if (Metrics.VisibleLocalLights != 500 || Metrics.OverBudgetLightTiles != 4 ||
+			Metrics.DroppedLightTileIndices != 4 * (500 - 24) || Metrics.LocalLightUploadBytes == 0)
+			throw std::runtime_error("[Renderer:LocalLights] The tiled light budget did not bound overlap");
+		auto Unchanged = std::make_shared<RenderPublication>();
+		Unchanged->Id = 2;
+		Unchanged->BaseId = 1;
+		Unchanged->Frame = Scene->Frame;
+		Renderer.Draw(Unchanged);
+		if (Renderer.GetMetrics().LocalLightUploadBytes != Metrics.LocalLightUploadBytes)
+			throw std::runtime_error("[Renderer:LocalLights] An unchanged view rebuilt its tile lists");
 	}
 }
 
@@ -276,7 +390,17 @@ int main(int ArgumentCount, char **Arguments) {
 		}
 		SixFaceSky->Frame.Environment.Sky = Sky;
 		Frame = Renderer.Capture(SixFaceSky);
-		assert(Frame.RgbPixels[Center + 2] > Frame.RgbPixels[Center] + 100);
+		if (Frame.RgbPixels[Center + 2] <= Frame.RgbPixels[Center] + 100)
+			throw std::runtime_error("[Renderer:HDR] Sky face orientation differs from the reference");
+		auto RotatedSky = std::make_shared<RenderPublication>();
+		RotatedSky->Id = 70;
+		RotatedSky->BaseId = SixFaceSky->Id;
+		RotatedSky->Frame = SixFaceSky->Frame;
+		RotatedSky->Frame.Environment.EnvironmentRotation = 90.0f;
+		RotatedSky->EnvironmentChanged = true;
+		Frame = Renderer.Capture(RotatedSky);
+		if (Frame.RgbPixels[Center] <= Frame.RgbPixels[Center + 2] + 100)
+			throw std::runtime_error("[Renderer:HDR] Authored Sky rotation did not change the sampled face");
 
 		auto LowExposureUi = MakePublication(64, 64, 4);
 		LowExposureUi->Frame.Environment.ExposureMultiplier = 1.0f / 256.0f;
@@ -294,6 +418,9 @@ int main(int ArgumentCount, char **Arguments) {
 
 		CheckMaterials(Renderer);
 		if (Renderer.UsesHdrScene()) CheckHdrExposure(Renderer);
+		CheckAdvancedMaterials(Renderer);
+		CheckMipSampling(Renderer);
+		CheckLocalLights(Renderer);
 		Renderer.Resize(32, 48);
 		Frame = Renderer.Capture(MakePublication(32, 48, 19));
 		assert(Frame.Width == 32 && Frame.Height == 48);
@@ -305,6 +432,7 @@ int main(int ArgumentCount, char **Arguments) {
 	assert(RestartedFrame.Width == 32 && RestartedFrame.Height == 48);
 	assert(RestartedFrame.RgbPixels.size() == static_cast<std::size_t>(32 * 48 * 3));
 	CheckWorldSubmission();
+	CheckLocalLightBudget();
 	EditorViewportRenderer Fallback(64, 64, false);
 	if (Fallback.UsesHdrScene()) throw std::runtime_error("[Renderer:HDR] Direct SDR fallback did not activate");
 	CheckMaterials(Fallback);

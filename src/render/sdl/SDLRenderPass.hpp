@@ -16,6 +16,7 @@ namespace gargantuan {
 	class SDLMeshCache;
 	class SDLSkinPaletteCache;
 	class SDLTextureCache;
+	class SDLMaterialSamplers;
 	struct SDLRendererMetrics;
 
 	struct SDLFrameContext {
@@ -31,6 +32,7 @@ namespace gargantuan {
 		SDLMeshCache &MeshResources;
 		SDLSkinPaletteCache &SkinPalettes;
 		SDLTextureCache *TextureResources = nullptr;
+		SDLMaterialSamplers *MaterialSamplers = nullptr;
 		SDLImageBasedLightingBindings EnvironmentLighting;
 		SDLRendererMetrics *Metrics = nullptr;
 		SDL_GPUCommandBuffer *Commands = nullptr;

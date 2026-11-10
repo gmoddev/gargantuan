@@ -2,6 +2,7 @@
 
 #include "gargantuan/Log.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
+#include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
@@ -49,16 +50,6 @@ namespace gargantuan {
 				DoubleSided = SDL_CreateGPUGraphicsPipeline(gpu, &Info);
 				if (!DoubleSided) throw std::runtime_error("[Renderer:Shadow] Could not create the double-sided pipeline");
 				if (Metrics) ++Metrics->PipelineCreations;
-				const SDL_GPUSamplerCreateInfo Sampler{
-					.min_filter = SDL_GPU_FILTER_LINEAR,
-					.mag_filter = SDL_GPU_FILTER_LINEAR,
-					.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
-					.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-					.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-					.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-				};
-				MaterialSampler = SDL_CreateGPUSampler(gpu, &Sampler);
-				if (!MaterialSampler) throw std::runtime_error("[Renderer:Shadow] Could not create the shadow material sampler");
 			} catch (...) {
 				Destroy(gpu);
 				throw;
@@ -67,14 +58,11 @@ namespace gargantuan {
 
 		void Destroy(SDL_GPUDevice *Gpu) override {
 			if (DoubleSided) SDL_ReleaseGPUGraphicsPipeline(Gpu, DoubleSided);
-			if (MaterialSampler) SDL_ReleaseGPUSampler(Gpu, MaterialSampler);
 			DoubleSided = nullptr;
-			MaterialSampler = nullptr;
 			SDLRenderPass::Destroy(Gpu);
 		}
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
-			(void)gpu;
 			const auto &Environment = context.Projection.GetFrame().Environment;
 			glm::mat4 shadowProjection = glm::ortho<float>(-30.0f, 30.0f, -30.0f, 30.0f, -50.0f, 150.0f);
 			const auto SunDirection = glm::normalize(Environment.SunDirection);
@@ -100,7 +88,7 @@ namespace gargantuan {
 			if (!pass) throw std::runtime_error("[Renderer:Shadow] Could not begin the shadow render pass");
 			if (Environment.SunIntensity <= 0.0f) return pass;
 			try {
-				DrawCasters(pass, context, shadowMatrix, White);
+				DrawCasters(gpu, pass, context, shadowMatrix, White);
 			} catch (...) {
 				SDL_EndGPURenderPass(pass);
 				throw;
@@ -109,12 +97,14 @@ namespace gargantuan {
 		}
 
 	  private:
-		void DrawCasters(SDL_GPURenderPass *Pass, SDLFrameContext &context, const glm::mat4 &ShadowMatrix,
+		void DrawCasters(SDL_GPUDevice *Gpu, SDL_GPURenderPass *Pass, SDLFrameContext &context, const glm::mat4 &ShadowMatrix,
 			SDL_GPUTexture *White) {
 			SDL_GPUGraphicsPipeline *BoundPipeline = nullptr;
 			const SDLGpuMesh *BoundMesh = nullptr;
 			SDL_GPUBuffer *BoundPalette = nullptr;
 			SDL_GPUTexture *BoundTexture = nullptr;
+			SDL_GPUSampler *BoundSampler = nullptr;
+			auto *DefaultSampler = context.MaterialSamplers->Get(Gpu, {}, false);
 			glm::vec4 BoundAlpha(-1.0f);
 			for (const auto &[Object, Projected] : context.Projection.GetObjects()) {
 				(void)Object;
@@ -171,10 +161,13 @@ namespace gargantuan {
 					}
 					auto *Texture = TexturedMask ? context.TextureResources->Find(*Material.BaseColorTexture) : White;
 					if (!Texture) throw std::logic_error("[Renderer:Shadow] A mask image has no SDL residency");
-					if (Texture != BoundTexture) {
-						const SDL_GPUTextureSamplerBinding Binding{Texture, MaterialSampler};
+					auto *Sampler = TexturedMask ? context.MaterialSamplers->Get(Gpu, Material.TextureSamplers[0], false)
+						: DefaultSampler;
+					if (Texture != BoundTexture || Sampler != BoundSampler) {
+						const SDL_GPUTextureSamplerBinding Binding{Texture, Sampler};
 						SDL_BindGPUFragmentSamplers(Pass, 0, &Binding, 1);
 						BoundTexture = Texture;
+						BoundSampler = Sampler;
 					}
 					const auto AlphaFactorCutoff = TexturedMask
 						? glm::vec4(Material.BaseColorFactor.a, Material.AlphaCutoff, 1, 0) : glm::vec4(0);
@@ -193,7 +186,6 @@ namespace gargantuan {
 		}
 
 		SDL_GPUGraphicsPipeline *DoubleSided = nullptr;
-		SDL_GPUSampler *MaterialSampler = nullptr;
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateShadowPass(

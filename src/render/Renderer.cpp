@@ -3,6 +3,7 @@
 #include "gargantuan/render/SDLRenderer.hpp"
 
 #include "gargantuan/Log.hpp"
+#include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
 #include "render/sdl/SDLSceneColor.hpp"
@@ -75,6 +76,7 @@ namespace gargantuan {
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
 		std::unique_ptr<SDLMeshCache> MeshResources;
 		std::unique_ptr<SDLTextureCache> TextureResources;
+		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
 		std::vector<ObjectId> VisibleAnimationObjects;
@@ -206,6 +208,7 @@ namespace gargantuan {
 		}
 		for (auto &Pass : State->RenderPasses) if (Pass) Pass->Destroy(State->Gpu);
 		State->RenderPasses.clear();
+		if (State->Gpu) State->MaterialSamplers.Destroy(State->Gpu);
 		if (State->ColorTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->ColorTexture);
 		if (State->HdrSceneTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->HdrSceneTexture);
 		if (State->DepthTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->DepthTexture);
@@ -309,6 +312,7 @@ namespace gargantuan {
 		Frame.ShadowMapTexture = State->ShadowMapTexture;
 		Frame.ShadowSampler = State->ShadowSampler;
 		Frame.TextureResources = State->TextureResources.get();
+		Frame.MaterialSamplers = &State->MaterialSamplers;
 		Frame.Metrics = &State->Metrics;
 		if (State->Options.Offscreen) {
 			Frame.SwapchainTexture = State->ColorTexture;
@@ -332,7 +336,13 @@ namespace gargantuan {
 			LOG_TRACE(App, "[Render:SDL] RenderPublication viewport does not match the acquired target");
 			return;
 		}
-		for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
+		try {
+			for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
+		} catch (...) {
+			if (State->Options.Offscreen) SDL_CancelGPUCommandBuffer(Frame.Commands);
+			else SDL_SubmitGPUCommandBuffer(Frame.Commands);
+			throw;
+		}
 		if (State->Options.WaitForGpuCompletion) {
 			auto *Fence = SDL_SubmitGPUCommandBufferAndAcquireFence(Frame.Commands);
 			State->Metrics.LastSubmissionNanoseconds = Nanoseconds(Clock::now() - SubmissionStart);
@@ -414,7 +424,14 @@ namespace gargantuan {
 	}
 
 	SDLRendererMetrics SDLRenderer::GetMetrics() const {
-		return State ? State->Metrics : SDLRendererMetrics{};
+		if (!State) return {};
+		auto Metrics = State->Metrics;
+		if (State->TextureResources) {
+			Metrics.MaterialViewBytes = State->TextureResources->GetMaterialViewBytes();
+			Metrics.MaterialSourceBytes = State->TextureResources->GetMaterialSourceBytes();
+			Metrics.MaterialViewFallbacks = State->TextureResources->GetMaterialViewFallbacks();
+		}
+		return Metrics;
 	}
 
 	RenderAnimationVisibilityFeedback SDLRenderer::GetAnimationVisibilityFeedback() const {
