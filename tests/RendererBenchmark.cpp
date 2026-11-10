@@ -593,6 +593,7 @@ namespace {
 		std::optional<std::uint64_t> HdrSceneBytes;
 		std::optional<std::uint64_t> SceneResolveDraws;
 		std::optional<std::uint64_t> LightUploadBytes;
+		std::array<std::optional<std::uint64_t>, 4> DirectionalShadow;
 	};
 
 	template <typename Metrics>
@@ -618,6 +619,8 @@ namespace {
 		Result.HdrSceneBytes = Metrics.HdrSceneBytes;
 		Result.SceneResolveDraws = Metrics.SceneResolveDraws;
 		Result.LightUploadBytes = Metrics.LocalLightUploadBytes;
+		Result.DirectionalShadow = {Metrics.ShadowMapBuilds, Metrics.ShadowCacheHits,
+			Metrics.ShadowMapPasses, Metrics.ShadowCasterDraws};
 		return Result;
 	}
 
@@ -812,6 +815,8 @@ namespace {
 				<< Metrics.MaterialSourceBytes << ',' << Metrics.MaterialViewFallbacks << ','
 				<< Metrics.IblBuilds << ',' << Metrics.IblPreprocessPasses;
 		} else std::cout << ",NA,NA,NA,NA,NA,NA,NA,NA";
+		for (std::size_t Index = 0; Index < Final.DirectionalShadow.size(); ++Index)
+			std::cout << ',' << CounterDelta(Baseline.DirectionalShadow[Index], Final.DirectionalShadow[Index]);
 		std::cout << '\n';
 		if (Samples) {
 			for (std::size_t Frame = 0; Frame < FrameTimes.size(); ++Frame) {
@@ -1098,7 +1103,7 @@ int main(int ArgumentCount, char **Arguments) {
 				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs,SdlHdrRequested,SdlHdrActive,SdlHdrSceneBytes,SdlSceneResolveDraws,"
 				"AuthoredLocalLights,LocalLightMovement,LocalLightGridMeanMs,LocalLightUploadBytes,VisibleLocalLights,"
 				"OverBudgetLightTiles,DroppedLightTileIndices,MaterialViewBytes,MaterialSourceBytes,MaterialViewFallbacks,"
-				"IblBuilds,IblPreprocessPasses\n";
+				"IblBuilds,IblPreprocessPasses,ShadowMapBuilds,ShadowCacheHits,ShadowMapPasses,ShadowCasterDraws\n";
 			std::ofstream Samples;
 			if (BenchmarkOptions.SamplesPath) {
 				if (std::filesystem::exists(*BenchmarkOptions.SamplesPath))

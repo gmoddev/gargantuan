@@ -49,21 +49,24 @@ jobs:
             -R '^gargantuan_(renderer_publication|asset_foundation|packaged_shaders|ibl_reference|renderer_material_mips|directional_shadow_cache)$' \
             | tee renderer-evidence/ctest.log
           for shader in build-renderer/shaders/*.spv; do spirv-val "$shader"; done
+          (cd build-renderer && sha256sum shaders/*.spv) > renderer-evidence/shaders.sha256
           export VK_DRIVER_FILES="$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)"
           test -n "$VK_DRIVER_FILES"
           xvfb-run -a vulkaninfo --summary > renderer-evidence/device.txt
+          failed=0
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_editor_viewport_smoke --require-hdr) \
-            2>&1 | tee renderer-evidence/viewport.log
+            2>&1 | tee renderer-evidence/viewport.log || failed=1
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
-            --opaque-ordering --output=../renderer-evidence/opaque-ordering) 2>&1 | tee renderer-evidence/opaque-ordering.log
+            --opaque-ordering --output=../renderer-evidence/opaque-ordering) 2>&1 | tee renderer-evidence/opaque-ordering.log || failed=1
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_ibl_gpu_tests) \
-            2>&1 | tee renderer-evidence/ibl.log
+            2>&1 | tee renderer-evidence/ibl.log || failed=1
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_benchmark \
             --incremental --backend=sdl --scenario=material-check --width=640 --height=360 \
-            --capture=../renderer-evidence/material) 2>&1 | tee renderer-evidence/material-check.csv
+            --capture=../renderer-evidence/material) 2>&1 | tee renderer-evidence/material-check.csv || failed=1
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_benchmark \
             --incremental --backend=sdl --scenario=material-extensions --width=640 --height=360 \
-            --capture=../renderer-evidence/extensions) 2>&1 | tee renderer-evidence/material-extensions.csv
+            --capture=../renderer-evidence/extensions) 2>&1 | tee renderer-evidence/material-extensions.csv || failed=1
+          exit "$failed"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
