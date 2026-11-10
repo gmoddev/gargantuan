@@ -41,24 +41,59 @@ namespace gargantuan {
 		if (!Layout.Count || Output.size() != Layout.Bytes ||
 			Source.size() != static_cast<std::uint64_t>(Base.Width) * Base.Height * 4u) return false;
 		std::ranges::copy(Source, Output.begin());
-		static const auto SrgbToLinear = [] {
-			std::array<double, 256> Values;
-			for (std::size_t Index = 0; Index < Values.size(); ++Index) {
-				const double Value = static_cast<double>(Index) / 255.0;
-				Values[Index] = Value <= 0.04045 ? Value / 12.92 : std::pow((Value + 0.055) / 1.055, 2.4);
+		static const auto Color = [] {
+			struct Tables {
+				std::array<double, 256> Decode;
+				std::array<double, 255> Cutoffs;
+				std::array<std::uint8_t, 4097> EncodeFloor;
+			} Values;
+			const auto Decode = [](double Value) {
+				return Value <= 0.04045 ? Value / 12.92 : std::pow((Value + 0.055) / 1.055, 2.4);
+			};
+			for (std::size_t Byte = 0; Byte < Values.Decode.size(); ++Byte)
+				Values.Decode[Byte] = Decode(static_cast<double>(Byte) / 255.0);
+			for (std::size_t Byte = 0; Byte < Values.Cutoffs.size(); ++Byte)
+				Values.Cutoffs[Byte] = Decode((static_cast<double>(Byte) + 0.5) / 255.0);
+			std::size_t Byte = 0;
+			for (std::size_t Bin = 0; Bin < Values.EncodeFloor.size(); ++Bin) {
+				while (Byte < Values.Cutoffs.size() && static_cast<double>(Bin) / 4096.0 >= Values.Cutoffs[Byte]) ++Byte;
+				Values.EncodeFloor[Bin] = static_cast<std::uint8_t>(Byte);
 			}
 			return Values;
 		}();
+		const auto EncodeColor = [&](double Value) {
+			const auto Bin = static_cast<std::size_t>(std::clamp(Value, 0.0, 1.0) * 4096.0);
+			auto Byte = Color.EncodeFloor[Bin];
+			// Each bin is narrower than the closest pair of rounding cutoffs.
+			if (Byte < Color.Cutoffs.size() && Value >= Color.Cutoffs[Byte]) ++Byte;
+			return Byte;
+		};
 		const auto Encode = [&](double Value, unsigned Channel) {
-			if (Srgb && Channel < 3) {
-				Value = Value <= 0.0031308 ? Value * 12.92 : 1.055 * std::pow(Value, 1.0 / 2.4) - 0.055;
-				Value *= 255.0;
-			}
+			if (Srgb && Channel < 3) return EncodeColor(Value);
 			return static_cast<std::uint8_t>(std::clamp(std::lround(Value), 0L, 255L));
 		};
 		for (std::uint32_t Level = 1; Level < Layout.Count; ++Level) {
 			const auto Previous = Layout.Levels[Level - 1];
 			const auto Next = Layout.Levels[Level];
+			if (Previous.Width == Next.Width * 2 && Previous.Height == Next.Height * 2) {
+				const auto RowStride = static_cast<std::size_t>(Previous.Width) * 4;
+				for (std::size_t Y = 0; Y < Next.Height; ++Y) {
+					for (std::size_t X = 0; X < Next.Width; ++X) {
+						const auto Pixel = Previous.Offset + Y * RowStride * 2 + X * 8;
+						const auto Destination = Next.Offset + (Y * Next.Width + X) * 4;
+						for (unsigned Channel = 0; Channel < 4; ++Channel) {
+							const auto A = Output[Pixel + Channel];
+							const auto B = Output[Pixel + Channel + 4];
+							const auto C = Output[Pixel + Channel + RowStride];
+							const auto D = Output[Pixel + Channel + RowStride + 4];
+							Output[Destination + Channel] = Srgb && Channel < 3 ? EncodeColor(
+								(Color.Decode[A] + Color.Decode[B] + Color.Decode[C] + Color.Decode[D]) * 0.25) :
+								static_cast<std::uint8_t>((A + B + C + D + 2) / 4);
+						}
+					}
+				}
+				continue;
+			}
 			const double Weight = static_cast<double>(Previous.Width) * Previous.Height;
 			// Integrate the full source footprint even when an odd dimension shrinks.
 			// Integer overlap weights represent the fractional source texel coverage.
@@ -76,7 +111,7 @@ namespace gargantuan {
 							const auto Pixel = Previous.Offset + (SrcY * Previous.Width + SrcX) * 4;
 							for (unsigned Channel = 0; Channel < Sum.size(); ++Channel) {
 								const auto Byte = Output[Pixel + Channel];
-								Sum[Channel] += (Srgb && Channel < 3 ? SrgbToLinear[Byte] : Byte) *
+								Sum[Channel] += (Srgb && Channel < 3 ? Color.Decode[Byte] : Byte) *
 									static_cast<double>(WeightX * WeightY);
 							}
 						}
