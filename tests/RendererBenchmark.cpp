@@ -70,6 +70,7 @@ namespace {
 		FrameSynchronization Synchronization = FrameSynchronization::Completion;
 		std::optional<std::filesystem::path> CapturePrefix;
 		std::optional<std::filesystem::path> SamplesPath;
+		std::optional<bool> SdlHdr;
 	};
 
 	struct ScenarioCase {
@@ -119,7 +120,8 @@ namespace {
 					"Usage: gargantuan_renderer_benchmark [--backend=projection|headless|sdl|filament|filament-headless] "
 					"[--scenario=all|static|dynamic|mostly-static|mixed|culled|material-check|material-extensions] [--count=N] "
 					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--shadows=on|off] "
-					"[--incremental] [--synchronize=on|off|bounded-2] [--capture=path-prefix] [--samples=csv-path]\n";
+					"[--incremental] [--synchronize=on|off|bounded-2] [--capture=path-prefix] [--samples=csv-path] "
+					"[--sdl-hdr=on|off]\n";
 				std::exit(0);
 			} else if (auto ParsedValue = Value("--backend=")) ParsedOptions.Backend = *ParsedValue;
 			else if (auto ParsedValue = Value("--scenario=")) ParsedOptions.Scenario = *ParsedValue;
@@ -135,6 +137,10 @@ namespace {
 			} else if (auto ParsedValue = Value("--samples=")) {
 				if (ParsedValue->empty()) throw std::invalid_argument("sample CSV path must not be empty");
 				ParsedOptions.SamplesPath = std::filesystem::path(*ParsedValue);
+			} else if (auto ParsedValue = Value("--sdl-hdr=")) {
+				if (*ParsedValue == "on") ParsedOptions.SdlHdr = true;
+				else if (*ParsedValue == "off") ParsedOptions.SdlHdr = false;
+				else throw std::invalid_argument("SDL HDR must be on or off");
 			} else if (auto ParsedValue = Value("--synchronize=")) {
 				if (*ParsedValue == "on") ParsedOptions.Synchronization = FrameSynchronization::Completion;
 				else if (*ParsedValue == "off") ParsedOptions.Synchronization = FrameSynchronization::Queued;
@@ -151,6 +157,8 @@ namespace {
 		if (ParsedOptions.Backend != "projection" && ParsedOptions.Backend != "headless" && ParsedOptions.Backend != "sdl" &&
 			ParsedOptions.Backend != "filament" && ParsedOptions.Backend != "filament-headless")
 			throw std::invalid_argument("unknown benchmark backend");
+		if (ParsedOptions.SdlHdr && ParsedOptions.Backend != "sdl")
+			throw std::invalid_argument("--sdl-hdr requires --backend=sdl");
 #if !defined(GARGANTUAN_WITH_FILAMENT)
 		if (ParsedOptions.Backend == "filament" || ParsedOptions.Backend == "filament-headless")
 			throw std::invalid_argument("this benchmark was built without GARGANTUAN_FILAMENT_ROOT");
@@ -269,7 +277,8 @@ namespace {
 				throw std::runtime_error(std::string("SDL video initialization failed: ") + SDL_GetError());
 		}
 		if (BenchmarkOptions.Backend == "sdl") {
-			Renderer = std::make_unique<SDLRenderer>(RequestedViewport);
+			Renderer = std::make_unique<SDLRenderer>(RequestedViewport,
+				SDLRendererOptions{.EnableHdrScene = BenchmarkOptions.SdlHdr.value_or(true)});
 		} else if (BenchmarkOptions.Backend == "headless") {
 			Renderer = std::make_unique<HeadlessRenderer>(RequestedViewport);
 		}
@@ -544,6 +553,8 @@ namespace {
 		std::optional<std::uint64_t> WorldGeometryBindings;
 		std::optional<std::uint64_t> WorldMaterialBindings;
 		std::array<std::optional<std::uint64_t>, 7> OpaqueGrouping;
+		std::optional<std::uint64_t> HdrSceneBytes;
+		std::optional<std::uint64_t> SceneResolveDraws;
 	};
 
 	template <typename Metrics>
@@ -566,6 +577,8 @@ namespace {
 		Result.OpaqueGrouping = {Metrics.OpaqueGroupingCandidates, Metrics.OpaqueGroupedObjects,
 			Metrics.OpaqueGroupingUnprovenBounds, Metrics.OpaqueGroupingConflictBarriers, Metrics.OpaqueGroupingBudgetBarriers,
 			Metrics.OpaqueGroupingPairTests, Metrics.OpaqueGroupingDepthProofs};
+		Result.HdrSceneBytes = Metrics.HdrSceneBytes;
+		Result.SceneResolveDraws = Metrics.SceneResolveDraws;
 		return Result;
 	}
 
@@ -602,8 +615,10 @@ namespace {
 		const auto StartStartup = Clock::now();
 		if (Settings.Backend == "sdl") {
 			Video.emplace();
-			auto Renderer = std::make_unique<SDLRenderer>(Viewport,
-				SDLRendererOptions{.Offscreen = true, .WaitForGpuCompletion = CompleteEachFrame, .DebugDevice = false});
+			auto Renderer = std::make_unique<SDLRenderer>(Viewport, SDLRendererOptions{
+				.Offscreen = true, .WaitForGpuCompletion = CompleteEachFrame, .DebugDevice = false,
+				.EnableHdrScene = Settings.SdlHdr.value_or(true),
+			});
 			Sdl = Renderer.get();
 			Backend = std::move(Renderer);
 		} else if (Settings.Backend == "headless") Backend = std::make_unique<HeadlessRenderer>(Viewport);
@@ -720,6 +735,8 @@ namespace {
 			return Output.str();
 		};
 		const auto Synchronization = CompleteEachFrame ? "completion" : CompletePairs ? "bounded-2" : "queued";
+		const auto HdrRequested = Sdl ? (Settings.SdlHdr.value_or(true) ? "on" : "off") : "NA";
+		const auto HdrActive = Final.HdrSceneBytes ? (*Final.HdrSceneBytes ? "on" : "off") : "NA";
 		std::cout << std::fixed << std::setprecision(4) << Scenario.Name << ',' << Scenario.Count << ','
 			<< Settings.Backend << ',' << Driver << ',' << Synchronization << ','
 			<< Settings.Width << ',' << Settings.Height << ',' << Settings.Frames << ',' << Settings.WarmupFrames << ','
@@ -741,11 +758,13 @@ namespace {
 			<< (Settings.ShadowsEnabled ? "on" : "off");
 		for (std::size_t Index = 0; Index < Final.OpaqueGrouping.size(); ++Index)
 			std::cout << ',' << CounterDelta(Baseline.OpaqueGrouping[Index], Final.OpaqueGrouping[Index]);
-		std::cout << '\n';
+		std::cout << ',' << HdrRequested << ',' << HdrActive << ','
+			<< (Final.HdrSceneBytes ? std::to_string(*Final.HdrSceneBytes) : "NA") << ','
+			<< CounterDelta(Baseline.SceneResolveDraws, Final.SceneResolveDraws) << '\n';
 		if (Samples) {
 			for (std::size_t Frame = 0; Frame < FrameTimes.size(); ++Frame) {
 				*Samples << Scenario.Name << ',' << Scenario.Count << ',' << Settings.Backend << ',' << Driver << ','
-					<< Synchronization << ',' << Settings.Width << ',' << Settings.Height << ',' << Frame << ','
+					<< Synchronization << ',' << HdrActive << ',' << Settings.Width << ',' << Settings.Height << ',' << Frame << ','
 					<< Settings.WarmupFrames + Frame + 2 << ',' << FixtureTimes[Frame] << ',' << FrameTimes[Frame];
 				for (const auto *Phase : {&ProjectionTimes, &ApplyTimes, &SubmitTimes, &WaitTimes}) {
 					*Samples << ',';
@@ -859,7 +878,7 @@ namespace {
 		const auto CaptureStart = Clock::now();
 		if (Settings.Backend == "sdl") {
 			const VideoGuard Video;
-			EditorViewportRenderer Renderer(Settings.Width, Settings.Height);
+			EditorViewportRenderer Renderer(Settings.Width, Settings.Height, Settings.SdlHdr.value_or(true));
 			Captures.First = Renderer.Capture(Initial).RgbPixels;
 			SaveInitial();
 			Captures.Second = Renderer.Capture(Updated).RgbPixels;
@@ -1024,14 +1043,14 @@ int main(int ArgumentCount, char **Arguments) {
 				"ReportedWorldMaterialBindings,CameraCullGate,"
 				"FrameAdmissionGate,GpuTimestampMs,Shadows,OpaqueGroupingCandidates,OpaqueGroupedObjects,"
 				"OpaqueGroupingUnprovenBounds,OpaqueGroupingConflictBarriers,OpaqueGroupingBudgetBarriers,"
-				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs\n";
+				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs,SdlHdrRequested,SdlHdrActive,SdlHdrSceneBytes,SdlSceneResolveDraws\n";
 			std::ofstream Samples;
 			if (BenchmarkOptions.SamplesPath) {
 				if (std::filesystem::exists(*BenchmarkOptions.SamplesPath))
 					throw std::runtime_error("sample CSV already exists: " + BenchmarkOptions.SamplesPath->string());
 				Samples.open(*BenchmarkOptions.SamplesPath);
 				if (!Samples) throw std::runtime_error("could not open benchmark sample CSV");
-				Samples << "Scenario,Objects,Backend,Driver,Synchronization,Width,Height,Frame,PublicationId,FixtureMs,"
+				Samples << "Scenario,Objects,Backend,Driver,Synchronization,SdlHdrActive,Width,Height,Frame,PublicationId,FixtureMs,"
 					"FrameMs,ProjectionMs,ApplyMs,SubmitMs,WaitMs\n" << std::setprecision(std::numeric_limits<double>::max_digits10);
 			}
 			for (const auto &Scenario : BuildCases(BenchmarkOptions))

@@ -74,6 +74,9 @@ conflict and budget barriers, pair tests and depth proofs. Compare grouped
 objects against candidates. Pair tests and depth proofs count cell visits and
 can include the same pair twice. The raw CSV holds full-precision per-frame
 host timings written outside the measured section. Compare the same driver,
-target resolution and authored workload against the Foundation 3 checkpoint.
+target resolution and authored workload against the Foundation 3 checkpoint
+with `--sdl-hdr=off`. Use `--sdl-hdr=on` for a separate HDR cost row. The timed
+summary reports the requested and active HDR state, live HDR bytes and measured
+resolve draws. The same switch controls the SDL material capture paths.
 CPU submission and completion tails measure different boundaries. Physical
 GPU and software runs remain separate evidence.
