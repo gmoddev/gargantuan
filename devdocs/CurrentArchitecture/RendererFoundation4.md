@@ -110,10 +110,14 @@ sRGB images and linear scalar or vector components for data and alpha.
 Normals normalize when sampled, so coarse levels represent an average
 direction before reconstruction. Material sampler state selects nearest or
 linear minification and magnification, mip filtering, and repeat, mirror,
-or clamp per axis. The fixed cache bounds native sampler permutations at
-108. Alpha mask camera and shadow samples use level zero to preserve the
+or clamp per axis. Automatic minification and magnification use up to 4×
+anisotropy on resident mip chains. Explicit filters retain their authored
+mode. Native sampler creation can fall back to ordinary trilinear filtering.
+The fixed cache bounds native sampler permutations at 117.
+Alpha mask camera and shadow samples use level zero to preserve the
 authored cutoff. Texture updates preserve the base image and replace
 affected mip content in the same publication-driven residency path.
+[SDL GPU sampler parameters](https://wiki.libsdl.org/SDL3/SDL_GPUSamplerCreateInfo)
 Optional view and retained source budgets are each 128 MiB. At a capability
 or memory limit the source image remains usable at level zero, including
 linear-light fallback sampling of encoded color. GUI and Sky retain the
