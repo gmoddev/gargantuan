@@ -89,8 +89,9 @@ namespace gargantuan {
 		};
 		std::unordered_map<RenderTextureIdentity, TextureEntry, RenderTextureIdentityHash> Textures;
 		std::unordered_map<ObjectId, RenderAnimationPoseUpdate> AnimationPoses;
-		// Validation scratch is retained so a steady pose-only publication does not
-		// allocate merely to detect duplicate pose operations.
+		// Retain validation scratch across publications to avoid per-operation allocation.
+		std::vector<ObjectId> TouchedObjectScratch;
+		std::vector<RenderProjectedObject *> UpdatedEntryScratch;
 		std::vector<ObjectId> TouchedPoseScratch;
 		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
 		RenderFrameState Frame;

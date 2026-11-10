@@ -163,16 +163,19 @@ namespace gargantuan {
 		const bool HasUiUpdate = Publication.FullResync || Publication.UiChanged || Publication.SharedUi ||
 			PublishedUi.ViewportWidth != 0 || PublishedUi.ViewportHeight != 0 || !PublishedUi.Batches.empty();
 
-		std::unordered_set<ObjectId> TouchedObjects;
-		TouchedObjects.reserve(Publication.Creates.size() + Publication.Updates.size() + Publication.Removes.size());
-		for (const auto &Remove : Publication.Removes)
-			if (!Remove.Object.IsValid() || !TouchedObjects.insert(Remove.Object).second)
-				throw std::invalid_argument("Render publication contains an invalid or duplicate object operation");
-		for (const auto &Create : Publication.Creates)
+		TouchedObjectScratch.clear();
+		TouchedObjectScratch.reserve(Publication.Creates.size() + Publication.Updates.size() + Publication.Removes.size());
+		for (const auto &Remove : Publication.Removes) {
+			if (!Remove.Object.IsValid())
+				throw std::invalid_argument("Render publication contains an invalid object removal");
+			TouchedObjectScratch.push_back(Remove.Object);
+		}
+		for (const auto &Create : Publication.Creates) {
 			if (!IsValid(Create.Item) || !IsValid(Create.Material) || !AreValid(Create.Primitives) ||
-				(Create.Mesh && !Create.Mesh->IsValid()) ||
-				!TouchedObjects.insert(Create.Item.Object).second)
-				throw std::invalid_argument("Render publication contains an invalid or duplicate object operation");
+				(Create.Mesh && !Create.Mesh->IsValid()))
+				throw std::invalid_argument("Render publication contains an invalid object creation");
+			TouchedObjectScratch.push_back(Create.Item.Object);
+		}
 		for (const auto &Update : Publication.Updates) {
 			constexpr auto ValidUpdateDomains = static_cast<std::uint32_t>(RenderUpdateDomain::Transform) |
 				static_cast<std::uint32_t>(RenderUpdateDomain::Material) |
@@ -185,10 +188,13 @@ namespace gargantuan {
 			if (!Update.Object.IsValid() || Update.Item.Object != Update.Object || !IsValid(Update.Item) ||
 				!IsValid(Update.Material) || !AreValid(Update.Primitives) || (Update.Mesh && !Update.Mesh->IsValid()) ||
 				Update.Domains == RenderUpdateDomain::None ||
-				(static_cast<std::uint32_t>(Update.Domains) & ~ValidUpdateDomains) != 0 ||
-				!TouchedObjects.insert(Update.Object).second)
-				throw std::invalid_argument("Render publication contains an invalid or duplicate object update");
+				(static_cast<std::uint32_t>(Update.Domains) & ~ValidUpdateDomains) != 0)
+				throw std::invalid_argument("Render publication contains an invalid object update");
+			TouchedObjectScratch.push_back(Update.Object);
 		}
+		if (!std::ranges::is_sorted(TouchedObjectScratch)) std::ranges::sort(TouchedObjectScratch);
+		if (std::ranges::adjacent_find(TouchedObjectScratch) != TouchedObjectScratch.end())
+			throw std::invalid_argument("Render publication contains duplicate object operations");
 
 		std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> TouchedMeshes;
 		TouchedMeshes.reserve(Publication.MeshCreates.size() + Publication.MeshVertexUpdates.size() + Publication.MeshRemoves.size());
@@ -299,7 +305,7 @@ namespace gargantuan {
 			throw std::invalid_argument("Render publication material references a texture without residency");
 		if (!Publication.FullResync && !Publication.TextureRemoves.empty()) {
 			for (const auto &[Object, Existing] : Entries) {
-				if (TouchedObjects.contains(Object)) continue;
+				if (std::ranges::binary_search(TouchedObjectScratch, Object)) continue;
 				if (!MaterialTexturesExist(Existing.Material) ||
 					(Existing.Primitives && !std::ranges::all_of(*Existing.Primitives, [&](const auto &Primitive) {
 						return MaterialTexturesExist(Primitive.Material);
@@ -433,7 +439,7 @@ namespace gargantuan {
 
 		if (!Publication.FullResync && !Publication.MeshRemoves.empty()) {
 			for (const auto &[Object, Existing] : Entries) {
-				if (!Existing.Mesh || TouchedObjects.contains(Object)) continue;
+				if (!Existing.Mesh || std::ranges::binary_search(TouchedObjectScratch, Object)) continue;
 				if (!MeshExistsAfterPublication(*Existing.Mesh))
 					throw std::invalid_argument("Render publication removes a mesh that remains referenced");
 			}
@@ -446,13 +452,19 @@ namespace gargantuan {
 			}
 		}
 
+		UpdatedEntryScratch.clear();
 		if (!Publication.FullResync) {
 			for (const auto &Remove : Publication.Removes) if (!Entries.contains(Remove.Object))
 				throw std::invalid_argument("Render publication rejects a stale object removal");
 			for (const auto &Create : Publication.Creates) if (Entries.contains(Create.Item.Object))
 				throw std::invalid_argument("Render publication rejects a duplicate object creation");
-			for (const auto &Update : Publication.Updates) if (!Entries.contains(Update.Object))
-				throw std::invalid_argument("Render publication rejects a stale object update");
+			UpdatedEntryScratch.reserve(Publication.Updates.size());
+			for (const auto &Update : Publication.Updates) {
+				const auto Existing = Entries.find(Update.Object);
+				if (Existing == Entries.end())
+					throw std::invalid_argument("Render publication rejects a stale object update");
+				UpdatedEntryScratch.push_back(&Existing->second);
+			}
 			for (const auto &Remove : Publication.MeshRemoves) if (!Meshes.contains(Remove.Mesh))
 				throw std::invalid_argument("Render publication rejects a stale mesh removal");
 			for (const auto &Create : Publication.MeshCreates) if (Meshes.contains(Create.Mesh))
@@ -498,13 +510,15 @@ namespace gargantuan {
 			});
 			++Changes.Created;
 		}
-		for (const auto &Update : Publication.Updates) {
-			auto &EntryValue = Entries.at(Update.Object);
-			EntryValue = RenderProjectedObject{
+		// The validated entries are disjoint from removals, and rehash preserves their addresses.
+		for (std::size_t Index = 0; Index < Publication.Updates.size(); ++Index) {
+			const auto &Update = Publication.Updates[Index];
+			*UpdatedEntryScratch[Index] = RenderProjectedObject{
 				Update.Item, Update.Mesh, Update.Material, Update.Visible, Update.Primitives
 			};
 			++Changes.Updated;
 		}
+		UpdatedEntryScratch.clear();
 		Meshes.reserve(Meshes.size() + Publication.MeshCreates.size());
 		for (const auto &Create : Publication.MeshCreates) {
 			Meshes.emplace(Create.Mesh, MeshEntry{Create.TopologyRevision, Create.VertexRevision,
@@ -609,6 +623,7 @@ namespace gargantuan {
 	}
 
 	void RenderProjection::Clear() noexcept {
+		UpdatedEntryScratch.clear();
 		Entries.clear();
 		Meshes.clear();
 		Textures.clear();

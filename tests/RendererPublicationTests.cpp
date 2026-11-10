@@ -119,6 +119,28 @@ namespace {
 		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Duplicate); }, "duplicate updates are rejected atomically");
 		Check(Projection.GetItem({10, 1})->ModelMatrix[3].x == 4.0f, "rejected updates do not mutate the projection");
 
+		RenderPublication Mixed{.Id = 3, .BaseId = 2, .Frame = MakeFrame()};
+		Mixed.Updates = {
+			{{11, 2}, RenderUpdateDomain::Transform, MakeItem({11, 2}, 6.0f)},
+			{{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1}, 8.0f)},
+		};
+		auto Conflicting = Mixed;
+		Conflicting.Removes = {{{10, 1}}};
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Conflicting); },
+			"an object cannot be removed and updated in the same publication");
+		auto StaleUpdate = Mixed;
+		StaleUpdate.Updates[1] = {{11, 1}, RenderUpdateDomain::Transform, MakeItem({11, 1}, 8.0f)};
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(StaleUpdate); },
+			"an update to a removed generation rejects the entire publication");
+		Check(Projection.GetLastPublicationId() == 2 && Projection.GetItem({11, 2})->ModelMatrix[3].x == 0.0f,
+			"the valid prefix of a rejected publication does not mutate the projection");
+		for (std::uint32_t Index = 20; Index < 100; ++Index) Mixed.Creates.push_back({MakeItem({Index, 1})});
+		Changes = Projection.Apply(Mixed);
+		Check(Changes.Created == 80 && Changes.Updated == 2 &&
+			Projection.GetItem({10, 1})->ModelMatrix[3].x == 8.0f &&
+			Projection.GetItem({11, 2})->ModelMatrix[3].x == 6.0f,
+			"unsorted updates apply to the correct identities when new entries grow the projection");
+
 		RenderProjection Restarted;
 		auto Restart = Initial;
 		Restart.Id = 50;
