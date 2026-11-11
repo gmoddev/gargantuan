@@ -203,3 +203,4 @@ jobs:
         with:
           name: runtime6-hosted-windows-cpu-comparison
           path: ${{ runner.temp }}/runtime6-evidence/
+          include-hidden-files: true
