@@ -97,6 +97,19 @@ def Freeze(SourceRoot, BuildRoot, OutputRoot, ExpectedSource):
         "files": {P.relative_to(SourceRoot).as_posix(): Hash(P) for P in ShaderSources},
     })
     Shaders = {P.name: CopyHashed(P, OutputRoot / "shaders" / P.name) for P in CompiledShaders}
+    GlslcMatch = re.search(r"(?m)^GARGANTUAN_GLSLC_EXECUTABLE:[^=]+=(.+)$", Cache)
+    if not GlslcMatch:
+        raise RuntimeError("CMake cache lacks the shader compiler path")
+    Glslc = Path(GlslcMatch.group(1).strip())
+    if not Glslc.is_file() or Glslc.name.lower() != "glslc.exe":
+        raise RuntimeError(f"configured glslc executable is unavailable: {Glslc}")
+    GlslcVersion = Run(str(Glslc), "--version").strip()
+    if not GlslcVersion:
+        raise RuntimeError("configured glslc did not report a version")
+    WriteJson(OutputRoot / "shader-provenance.json", {
+        "donorSource": Source, "glslcSha256": Hash(Glslc),
+        "glslcVersion": GlslcVersion, "outputs": Shaders,
+    })
 
     Dlls = sorted(BuildRoot.glob("*.dll"))
     if not Dlls or not any(P.name.lower() == "sdl3.dll" for P in Dlls):
@@ -117,6 +130,7 @@ def Freeze(SourceRoot, BuildRoot, OutputRoot, ExpectedSource):
         "gnsManifestSha256": Hash(Receipts / "gns-vcpkg.json"),
         "submodulesSha256": Hash(Receipts / "submodules.txt"),
         "shaderInputsSha256": Hash(Receipts / "shader-inputs.sha256.json"),
+        "shaderProvenanceSha256": Hash(OutputRoot / "shader-provenance.json"),
         "compilerIdentitySha256": Hash(Receipts / "compiler-identity.json"),
         "dependenciesSha256": Hash(Receipts / "dependencies.json"),
     })
