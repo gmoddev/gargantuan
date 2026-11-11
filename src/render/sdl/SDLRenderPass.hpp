@@ -29,6 +29,7 @@ namespace gargantuan {
 		bool ProfileDetailed = false;
 		bool UseCompactTraversal = false;
 		bool EnableInstancing = false;
+		bool EnableSceneEnvelope = false;
 		SDLFrameContext(
 			const RenderProjection &RenderState,
 			SDLMeshCache &MeshResourcesValue,

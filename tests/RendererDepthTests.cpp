@@ -337,6 +337,61 @@ void CheckInstancingOrdering(const std::filesystem::path &Output) {
 	if (Restarted.Capture(Restart).RgbPixels != RestartReference.Capture(Restart).RgbPixels)
 		throw std::runtime_error("Instancing changed visible pixels after renderer recreation");
 }
+
+void CheckSceneEnvelopePixels(const std::filesystem::path &Output) {
+	EditorViewportRenderer Candidate(ORDER_WIDTH, ORDER_HEIGHT, true, false, true);
+	EditorViewportRenderer Reference(ORDER_WIDTH, ORDER_HEIGHT);
+	SDLRenderer MetricsRenderer({ORDER_WIDTH, ORDER_HEIGHT}, {
+		.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+		.EnableSceneEnvelope = true});
+	const auto CaptureEqual = [&](std::string_view Name, const RenderPublication &Value) {
+		const auto Publication = std::make_shared<const RenderPublication>(Value);
+		const auto Actual = Candidate.Capture(Publication);
+		const auto Expected = Reference.Capture(Publication);
+		MetricsRenderer.Draw(Publication);
+		if (!Output.empty()) {
+			WriteFrame(Output / (std::string(Name) + "-envelope.ppm"), Actual);
+			WriteFrame(Output / (std::string(Name) + "-linear.ppm"), Expected);
+		}
+		if (Actual.RgbPixels != Expected.RgbPixels)
+			throw std::runtime_error(std::format("Scene envelope changed visible pixels for {}", Name));
+	};
+	const glm::mat4 Identity(1.0f);
+	const auto Translate = [&](float X, float Z) {
+		return glm::translate(Identity, glm::vec3(X, 0, Z));
+	};
+	RenderPublicationId Id = 1;
+	auto Initial = MakeInstanceScene(Id++, Translate(1'000'000.0f, 0), Translate(1'000'002.0f, 0));
+	CaptureEqual("all-offscreen-initial", Initial);
+	for (int Index = 0; Index < 3; ++Index) {
+		RenderPublication Quiet{.Id = Id, .BaseId = Id - 1, .Frame = Initial.Frame};
+		++Id;
+		CaptureEqual("all-offscreen-quiet-" + std::to_string(Index), Quiet);
+	}
+	const auto Rejected = MetricsRenderer.GetMetrics();
+	if (Rejected.EnvelopeRejections == 0 || Rejected.EnvelopeRebuilds == 0 ||
+		Rejected.CameraCulledObjects < 2 * Rejected.EnvelopeRejections)
+		throw std::runtime_error("Scene envelope did not reject the static offscreen camera scene");
+	RenderPublication Move{.Id = Id, .BaseId = Id - 1, .Frame = Initial.Frame};
+	++Id;
+	const auto &Object = Initial.Creates[0];
+	Move.Updates.push_back({.Object = Object.Item.Object, .Domains = RenderUpdateDomain::Transform,
+		.Item = Object.Item, .Mesh = Object.Mesh, .Material = Object.Material,
+		.Primitives = Object.Primitives});
+	Move.Updates[0].Item.ModelMatrix = Translate(0, 0);
+	Move.Updates[0].Item.InverseModelMatrix = glm::inverse(Move.Updates[0].Item.ModelMatrix);
+	CaptureEqual("move-into-view", Move);
+	RenderPublication Near{.Id = Id, .BaseId = Id - 1, .Frame = Initial.Frame};
+	++Id;
+	Near.Updates = Move.Updates;
+	Near.Updates[0].Item.ModelMatrix = Translate(0, 2.9f);
+	Near.Updates[0].Item.InverseModelMatrix = glm::inverse(Near.Updates[0].Item.ModelMatrix);
+	CaptureEqual("near-plane", Near);
+	auto Resync = MakeInstanceScene(Id, Translate(1'000'000.0f, 0), Translate(1'000'002.0f, 0));
+	CaptureEqual("full-resync", Resync);
+	std::cout << "[Render:SceneEnvelope] rejections=" << Rejected.EnvelopeRejections
+		<< " rebuilds=" << Rejected.EnvelopeRebuilds << " culled=" << Rejected.CameraCulledObjects << '\n';
+}
 }
 
 int main(int Argc, char **Argv) {
@@ -344,7 +399,8 @@ int main(int Argc, char **Argv) {
 	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
 #endif
 	try {
-		bool Observe = false, Extended = false, OpaqueOrdering = false, InstancingOrdering = false;
+		bool Observe = false, Extended = false, OpaqueOrdering = false, InstancingOrdering = false,
+			SceneEnvelopePixels = false;
 		float Near = .1f, Far = 100000;
 		std::string Projection = "production";
 		std::filesystem::path Output;
@@ -354,6 +410,7 @@ int main(int Argc, char **Argv) {
 			else if (Argument == "--extended") Extended = true;
 			else if (Argument == "--opaque-ordering") OpaqueOrdering = true;
 			else if (Argument == "--instancing-ordering") InstancingOrdering = true;
+			else if (Argument == "--scene-envelope-pixels") SceneEnvelopePixels = true;
 			else if (Argument.starts_with("--near=")) Near = std::stof(Argument.substr(7));
 			else if (Argument.starts_with("--far=")) Far = std::stof(Argument.substr(6));
 			else if (Argument.starts_with("--projection=")) Projection = Argument.substr(13);
@@ -367,6 +424,10 @@ int main(int Argc, char **Argv) {
 		}
 		if (InstancingOrdering) {
 			CheckInstancingOrdering(Output);
+			return 0;
+		}
+		if (SceneEnvelopePixels) {
+			CheckSceneEnvelopePixels(Output);
 			return 0;
 		}
 		BootstrapNativeRuntimeSchema();

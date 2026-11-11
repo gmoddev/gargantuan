@@ -191,6 +191,22 @@ namespace gargantuan {
 			}
 			return false;
 		}
+
+		bool OutsideSceneEnvelope(const ClipPlanes &Planes, const RenderSceneEnvelope &Envelope) {
+			for (const auto &FloatPlane : Planes) {
+				for (int Axis = 0; Axis < 4; ++Axis)
+					if (!std::isfinite(FloatPlane[Axis]) || std::abs(FloatPlane[Axis]) > 1e7f) return false;
+				const glm::dvec4 Plane(FloatPlane);
+				glm::dvec3 Support;
+				for (int Axis = 0; Axis < 3; ++Axis)
+					Support[Axis] = Plane[Axis] >= 0.0 ? Envelope.Maximum[Axis] : Envelope.Minimum[Axis];
+				const double Distance = glm::dot(glm::dvec3(Plane), Support) + Plane.w;
+				const auto AbsoluteExtent = glm::max(glm::abs(Envelope.Minimum), glm::abs(Envelope.Maximum));
+				const double Margin = 1e-4 * (1.0 + glm::dot(glm::abs(glm::dvec3(Plane)), AbsoluteExtent) + std::abs(Plane.w));
+				if (std::isfinite(Distance) && std::isfinite(Margin) && Distance < -Margin) return true;
+			}
+			return false;
+		}
 	}
 
 	static const glm::mat4 SHADOW_BIAS_MATRIX{
@@ -317,6 +333,21 @@ namespace gargantuan {
 		void OnFrameAborted() override { VisibleInstances.OnFrameAborted(); }
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
+			RejectSceneEnvelope = false;
+			if (context.EnableSceneEnvelope) {
+				const auto Result = context.Projection.GetSceneEnvelope();
+				if (context.Metrics && Result.Rebuilt) {
+					context.Metrics->EnvelopeBuildNanoseconds += Result.BuildNanoseconds;
+					++context.Metrics->EnvelopeRebuilds;
+				}
+				if (Result.Envelope && OutsideSceneEnvelope(GetClipPlanes(context.Projection.GetFrame().Camera), *Result.Envelope)) {
+					RejectSceneEnvelope = true;
+					if (context.Metrics) {
+						++context.Metrics->EnvelopeRejections;
+						context.Metrics->CameraCulledObjects += Result.Envelope->VisibleObjects;
+					}
+				}
+			}
 			SDL_GPUColorTargetInfo colorTarget = {
 				.texture = context.GetSceneColorTexture(),
 				.load_op = SDL_GPU_LOADOP_LOAD,
@@ -339,7 +370,7 @@ namespace gargantuan {
 
 			auto *White = context.TextureResources->GetWhiteTexture();
 			LocalLights.Prepare(context.Projection.GetFrame(), context.Metrics, context.SpotShadowAtlas);
-			if (context.EnableInstancing && context.InstanceResources &&
+			if (!RejectSceneEnvelope && context.EnableInstancing && context.InstanceResources &&
 				context.InstanceResources->GetBuffer() && EnsureInstancedPipeline(gpu, context.Metrics)) {
 				try {
 					const auto InstanceStart = std::chrono::steady_clock::now();
@@ -845,7 +876,9 @@ namespace gargantuan {
 					TransparentDraws.push_back(Draw);
 				}
 			};
-			if (Context.UseCompactTraversal) {
+			if (RejectSceneEnvelope) {
+				// No accepted camera draw can be present; preserve the ordinary traversal for all other frames.
+			} else if (Context.UseCompactTraversal) {
 				std::size_t Position = 0;
 				for (const auto &Record : Context.Projection.GetCompactTraversal())
 					VisitObject(Position++, Record.Object, *Record.Projected, Record.Pose, Record.MeshBounds, true);
@@ -879,6 +912,7 @@ namespace gargantuan {
 		SDL_GPUGraphicsPipeline *InstancedDoubleSidedPipeline = nullptr;
 		bool InstancedPipelineFailed = false;
 		bool InstancingDisabled = false;
+		bool RejectSceneEnvelope = false;
 		std::vector<std::int32_t> InstanceActions;
 		std::vector<InstanceBatch> InstanceBatches;
 		OpaqueCoverageGrid InstanceCoverageGrid;

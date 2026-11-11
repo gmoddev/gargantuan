@@ -123,6 +123,7 @@ namespace gargantuan {
 		std::unique_ptr<SDLMeshCache> MeshResources;
 		std::unique_ptr<SDLInstanceGpuCache> InstanceResources;
 		bool EnableInstancing = false;
+		bool EnableSceneEnvelope = false;
 		std::unique_ptr<SDLTextureCache> TextureResources;
 		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
@@ -217,7 +218,7 @@ namespace gargantuan {
 	};
 
 	EditorViewportRenderer::EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height,
-		bool EnableHdrScene, bool EnableInstancing)
+		bool EnableHdrScene, bool EnableInstancing, bool EnableSceneEnvelope)
 		: State(std::make_unique<Backend>()) {
 		State->Width = Width;
 		State->Height = Height;
@@ -233,6 +234,7 @@ namespace gargantuan {
 		}
 		State->HdrSceneEnabled = EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
 		State->EnableInstancing = EnableInstancing;
+		State->EnableSceneEnvelope = EnableSceneEnvelope;
 		if (EnableInstancing) {
 			const auto SceneFormat = State->HdrSceneEnabled ? SDLHdrSceneFormat : ColorFormat;
 			const float OutputMode = SceneFormat == SDLHdrSceneFormat ? 2.0f :
@@ -349,6 +351,7 @@ namespace gargantuan {
 		Frame.InstanceResources = State->InstanceResources.get();
 		Frame.EnableInstancing = State->EnableInstancing && State->InstanceResources &&
 			State->InstanceResources->GetRecords().IsAvailable();
+		Frame.EnableSceneEnvelope = State->EnableSceneEnvelope;
 		Frame.MaterialSamplers = &State->MaterialSamplers;
 		Frame.Width = State->Width;
 		Frame.Height = State->Height;

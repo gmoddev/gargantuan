@@ -53,6 +53,18 @@ namespace gargantuan {
 		std::size_t UiIndices = 0;
 	};
 
+	struct RenderSceneEnvelope {
+		glm::dvec3 Minimum{0.0};
+		glm::dvec3 Maximum{0.0};
+		std::size_t VisibleObjects = 0;
+	};
+
+	struct RenderSceneEnvelopeResult {
+		const RenderSceneEnvelope *Envelope = nullptr;
+		std::uint64_t BuildNanoseconds = 0;
+		bool Rebuilt = false;
+	};
+
 	class RenderProjection final {
 	  public:
 		[[nodiscard]] RenderProjectionChanges Apply(const RenderSnapshot &Snapshot);
@@ -79,6 +91,7 @@ namespace gargantuan {
 		[[nodiscard]] const std::unordered_map<ObjectId, RenderProjectedObject> &GetObjects() const { return Entries; }
 		// Mirrors GetObjects() iteration exactly until a structural publication changes it.
 		[[nodiscard]] const std::vector<RenderProjectedTraversal> &GetCompactTraversal() const;
+		[[nodiscard]] RenderSceneEnvelopeResult GetSceneEnvelope() const;
 		[[nodiscard]] RenderSnapshotPtr BuildCompatibilitySnapshot() const;
 
 	  private:
@@ -108,6 +121,9 @@ namespace gargantuan {
 		std::vector<ObjectId> TouchedPoseScratch;
 		mutable std::vector<RenderProjectedTraversal> CompactTraversal;
 		mutable bool CompactTraversalValid = false;
+		mutable std::optional<RenderSceneEnvelope> SceneEnvelope;
+		mutable bool SceneEnvelopeValid = false;
+		std::uint8_t SceneEnvelopeQuietFrames = 0;
 		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
 		RenderFrameState Frame;
 		std::shared_ptr<const RenderUiFrame> Ui;

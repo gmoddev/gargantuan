@@ -84,6 +84,50 @@ namespace {
 		Game->Destroy();
 	}
 
+	void TestSceneEnvelopeLifecycle() {
+		using namespace gargantuan;
+		RenderProjection Projection;
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(),
+			.Creates = {{MakeItem({1, 1}, -10.0f)}, {MakeItem({2, 1}, 10.0f)}}};
+		(void)Projection.Apply(Initial);
+		Check(!Projection.GetSceneEnvelope().Envelope, "scene envelope waits for quiet publications");
+		RenderPublication Quiet{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
+		(void)Projection.Apply(Quiet);
+		Check(!Projection.GetSceneEnvelope().Envelope, "one quiet publication does not trigger a build");
+		Quiet.Id = 3; Quiet.BaseId = 2;
+		(void)Projection.Apply(Quiet);
+		const auto Built = Projection.GetSceneEnvelope();
+		Check(Built.Rebuilt && Built.Envelope && Built.Envelope->VisibleObjects == 2,
+			"static scene builds one complete envelope");
+		Check(Built.Envelope && Built.Envelope->Minimum.x < -10.5 && Built.Envelope->Maximum.x > 10.5,
+			"envelope covers transformed primitive corners");
+		Check(!Projection.GetSceneEnvelope().Rebuilt, "unchanged camera reuses the envelope");
+		RenderPublication Dynamic{.Id = 4, .BaseId = 3, .Frame = MakeFrame(),
+			.Updates = {{{1, 1}, RenderUpdateDomain::Transform, MakeItem({1, 1}, 100.0f)}}};
+		(void)Projection.Apply(Dynamic);
+		Check(!Projection.GetSceneEnvelope().Envelope, "transform update invalidates the envelope without rebuilding");
+		Quiet.Id = 5; Quiet.BaseId = 4; (void)Projection.Apply(Quiet);
+		Quiet.Id = 6; Quiet.BaseId = 5; (void)Projection.Apply(Quiet);
+		const auto Moved = Projection.GetSceneEnvelope();
+		Check(Moved.Envelope && Moved.Envelope->Maximum.x > 100.5,
+			"rebuild contains the latest object transform");
+		RenderPublication Hidden{.Id = 7, .BaseId = 6, .Frame = MakeFrame(),
+			.Updates = {{{1, 1}, RenderUpdateDomain::Visibility, MakeItem({1, 1}, 100.0f),
+				{}, {}, false}}};
+		(void)Projection.Apply(Hidden);
+		Check(!Projection.GetSceneEnvelope().Envelope, "visibility update invalidates the envelope");
+		Quiet.Id = 8; Quiet.BaseId = 7; (void)Projection.Apply(Quiet);
+		Quiet.Id = 9; Quiet.BaseId = 8; (void)Projection.Apply(Quiet);
+		const auto Visible = Projection.GetSceneEnvelope();
+		Check(Visible.Envelope && Visible.Envelope->VisibleObjects == 1 && Visible.Envelope->Maximum.x < 11.0,
+			"hidden objects are absent from the envelope and cull count");
+		RenderPublication Removed{.Id = 10, .BaseId = 9, .Frame = MakeFrame(), .Removes = {{{1, 1}}}};
+		(void)Projection.Apply(Removed);
+		Check(!Projection.GetSceneEnvelope().Envelope, "removal invalidates the envelope");
+		Projection.Clear();
+		Check(!Projection.GetSceneEnvelope().Envelope, "restart clears the cached envelope");
+	}
+
 	void TestProjectionOrderingAndIdentity() {
 		using namespace gargantuan;
 		RenderProjection Projection;
@@ -1213,6 +1257,7 @@ int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestCameraDepthConvention();
+		TestSceneEnvelopeLifecycle();
 		TestProjectionOrderingAndIdentity();
 		TestCompactTraversalOrderAndLifecycle();
 		TestDeformableAndGuiContracts();

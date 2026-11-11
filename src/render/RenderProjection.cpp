@@ -545,11 +545,20 @@ namespace gargantuan {
 			!Publication.Removes.empty() || !Publication.MeshCreates.empty() || !Publication.MeshRemoves.empty() ||
 			!Publication.AnimationPoseRemoves.empty() || std::ranges::any_of(Publication.AnimationPoseUpdates,
 				[&](const RenderAnimationPoseUpdate &Update) { return !AnimationPoses.contains(Update.Object); }));
+		const bool InvalidateSceneEnvelope = Publication.FullResync || !Publication.Creates.empty() ||
+			!Publication.Updates.empty() || !Publication.Removes.empty() || !Publication.MeshCreates.empty() ||
+			!Publication.MeshVertexUpdates.empty() || !Publication.MeshRemoves.empty() ||
+			!Publication.AnimationPoseUpdates.empty() || !Publication.AnimationPoseRemoves.empty();
 		RenderProjectionChanges Changes;
 		const auto MutationStart = std::chrono::steady_clock::now();
 		Changes.ValidationNanoseconds = static_cast<std::uint64_t>(
 			std::chrono::duration_cast<std::chrono::nanoseconds>(MutationStart - ValidationStart).count());
 		if (InvalidateCompactTraversal) CompactTraversalValid = false;
+		if (InvalidateSceneEnvelope) {
+			SceneEnvelope.reset();
+			SceneEnvelopeValid = false;
+			SceneEnvelopeQuietFrames = 0;
+		} else if (SceneEnvelopeQuietFrames < 2) ++SceneEnvelopeQuietFrames;
 		if (Publication.FullResync) {
 			Changes.Removed = Entries.size();
 			Changes.MeshesRemoved = Meshes.size();
@@ -654,6 +663,9 @@ namespace gargantuan {
 
 		RenderProjectionChanges Changes;
 		CompactTraversalValid = false;
+		SceneEnvelope.reset();
+		SceneEnvelopeValid = false;
+		SceneEnvelopeQuietFrames = 0;
 		Entries.reserve(Snapshot.Items.size());
 		for (const auto &Item : Snapshot.Items) {
 			auto Existing = Entries.find(Item.Object);
@@ -692,6 +704,9 @@ namespace gargantuan {
 		UpdatedEntryScratch.clear();
 		CompactTraversal.clear();
 		CompactTraversalValid = false;
+		SceneEnvelope.reset();
+		SceneEnvelopeValid = false;
+		SceneEnvelopeQuietFrames = 0;
 		Entries.clear();
 		Meshes.clear();
 		Textures.clear();
@@ -704,6 +719,61 @@ namespace gargantuan {
 	const RenderItem *RenderProjection::GetItem(ObjectId Object) const {
 		const auto Existing = Entries.find(Object);
 		return Existing == Entries.end() ? nullptr : &Existing->second.Item;
+	}
+
+	RenderSceneEnvelopeResult RenderProjection::GetSceneEnvelope() const {
+		if (SceneEnvelopeValid) return {SceneEnvelope ? &*SceneEnvelope : nullptr};
+		if (SceneEnvelopeQuietFrames < 2) return {};
+		const auto Start = std::chrono::steady_clock::now();
+		SceneEnvelopeValid = true;
+		RenderSceneEnvelope Candidate;
+		Candidate.Minimum = glm::dvec3(std::numeric_limits<double>::infinity());
+		Candidate.Maximum = glm::dvec3(-std::numeric_limits<double>::infinity());
+		constexpr RenderBounds PrimitiveBounds{glm::vec3(-0.5f), glm::vec3(0.5f)};
+		bool Bounded = true;
+		for (const auto &[Object, Projected] : Entries) {
+			if (!Projected.Visible) continue;
+			if (AnimationPoses.contains(Object)) { Bounded = false; break; }
+			const RenderBounds *Bounds = &PrimitiveBounds;
+			if (Projected.Mesh) {
+				const auto Mesh = Meshes.find(*Projected.Mesh);
+				if (Mesh == Meshes.end() || Mesh->second.SkinInfluences) { Bounded = false; break; }
+				Bounds = &Mesh->second.Bounds;
+			}
+			const auto &Model = Projected.Item.ModelMatrix;
+			for (int Column = 0; Column < 4; ++Column)
+				for (int Axis = 0; Axis < 4; ++Axis)
+					if (std::abs(Model[Column][Axis]) > 1e7f) Bounded = false;
+			for (int Axis = 0; Axis < 3; ++Axis)
+				if (std::abs(Bounds->Minimum[Axis]) > 1e7f || std::abs(Bounds->Maximum[Axis]) > 1e7f)
+					Bounded = false;
+			if (!Bounded) break;
+			if (Model[0].w != 0.0f || Model[1].w != 0.0f || Model[2].w != 0.0f || Model[3].w != 1.0f) {
+				Bounded = false; break;
+			}
+			for (int Corner = 0; Corner < 8; ++Corner) {
+				const glm::dvec4 Local{
+					(Corner & 1) ? Bounds->Maximum.x : Bounds->Minimum.x,
+					(Corner & 2) ? Bounds->Maximum.y : Bounds->Minimum.y,
+					(Corner & 4) ? Bounds->Maximum.z : Bounds->Minimum.z, 1.0};
+				const glm::dvec3 World = glm::dvec3(glm::dmat4(Model) * Local);
+				for (int Axis = 0; Axis < 3; ++Axis) {
+					if (!std::isfinite(World[Axis])) { Bounded = false; break; }
+					// Covers the float matrix/corner operations in the ordinary culler.
+					const double Padding = 1e-4 * (1.0 + std::abs(World[Axis]));
+					Candidate.Minimum[Axis] = std::min(Candidate.Minimum[Axis], World[Axis] - Padding);
+					Candidate.Maximum[Axis] = std::max(Candidate.Maximum[Axis], World[Axis] + Padding);
+				}
+				if (!Bounded) break;
+			}
+			if (!Bounded) break;
+			++Candidate.VisibleObjects;
+		}
+		if (Bounded && Candidate.VisibleObjects) SceneEnvelope = Candidate;
+		else SceneEnvelope.reset();
+		return {SceneEnvelope ? &*SceneEnvelope : nullptr,
+			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now() - Start).count()), true};
 	}
 
 	const std::vector<RenderProjectedTraversal> &RenderProjection::GetCompactTraversal() const {

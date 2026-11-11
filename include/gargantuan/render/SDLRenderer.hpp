@@ -24,6 +24,7 @@ namespace gargantuan {
 		bool ProfileDetailed = false;
 		bool UseCompactTraversal = false;
 		bool EnableInstancing = false;
+		bool EnableSceneEnvelope = false;
 	};
 
 	struct SDLRendererMetrics {
@@ -104,6 +105,9 @@ namespace gargantuan {
 		std::uint64_t CameraMeshLookups = 0;
 		std::uint64_t WorldPrimitiveDraws = 0;
 		std::uint64_t CameraCulledObjects = 0;
+		std::uint64_t EnvelopeRejections = 0;
+		std::uint64_t EnvelopeBuildNanoseconds = 0;
+		std::uint64_t EnvelopeRebuilds = 0;
 		std::uint64_t WorldGeometryBindings = 0;
 		std::uint64_t WorldMaterialBindings = 0;
 		std::uint64_t InstancedDrawCalls = 0;
