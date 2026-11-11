@@ -58,7 +58,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "dirty_epoch", "luau", "luau_diag", "attribution", "compact_large", "readback_large", "cframe_allocation"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "dirty_epoch", "luau", "luau_diag", "attribution", "compact_large", "readback_large", "readback_recheck", "cframe_allocation"), default="core")
 Parser.add_argument("--comparison-directory", default="comparison")
 Parser.add_argument("--verify-only", action="store_true")
 Args = Parser.parse_args()
@@ -66,7 +66,7 @@ Root = Args.evidence.resolve()
 if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", Args.comparison_directory) or \
         Args.comparison_directory in ("baseline", "candidate"):
     raise RuntimeError("[Runtime6:Compare] Comparison directory must be a fresh simple basename")
-ManifestSuite = {"attribution": "core", "compact_large": "compact", "readback_large": "readback", "cframe_allocation": "cframe"}.get(Args.suite, Args.suite)
+ManifestSuite = {"attribution": "core", "compact_large": "compact", "readback_large": "readback", "readback_recheck": "readback", "cframe_allocation": "cframe"}.get(Args.suite, Args.suite)
 Sources = {}
 for Arm in ("baseline", "candidate"):
     Directory = Root / Arm
@@ -254,6 +254,18 @@ if Args.suite == "attribution":
                 ["12", f"--count={Count}", "--density-matrix", "--group-width=256",
                  "--split-construction", "--diagnostic-marks", "--profile",
                  f"--samples={Samples}"])
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
+
+if Args.suite == "readback_recheck":
+    for Repetition in range(4):
+        for Static, Density, Lifecycle in ((9872, "0", 0), (9872, "0.01", 0),
+                                           (49872, "0.01", 1), (49872, "0", 0)):
+            for Arm in ("baseline", "candidate", "candidate", "baseline"):
+                Run(Arm, f"readback-recheck-{Repetition}-{Static + 128}-{Density}-{Lifecycle}",
+                    "gargantuan_runtime6_physics_sync_benchmark",
+                    ["--static-count", str(Static), "--dynamic-count", "128", "--frames", "30",
+                     "--warmup", "4", "--control-density", Density,
+                     "--lifecycle-per-frame", str(Lifecycle), "--publication"])
     raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite in ("compact_large", "readback_large"):
