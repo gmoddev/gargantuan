@@ -261,6 +261,7 @@ int main(int ArgCount, char **Args) {
 			std::vector<gargantuan::ObjectId> Objects;
 			Objects.reserve(Batch.Records.size());
 			for (const auto &Record : Batch.Records) Objects.push_back(Record.Object);
+			if (RandomOrder) std::shuffle(Objects.begin(), Objects.end(), Random);
 			std::vector<std::optional<gargantuan::RenderItem>> Expected;
 			std::vector<std::optional<gargantuan::RenderItem>> SoAOutput;
 			std::vector<std::optional<gargantuan::RenderItem>> SnapshotOutput;
