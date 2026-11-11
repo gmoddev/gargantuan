@@ -40,6 +40,10 @@ namespace gargantuan {
 		static std::size_t BodyCount(const WorldRoot &World) { return World.PartBodies.size(); }
 		static std::size_t PartCount(const WorldRoot &World) { return World.Parts.size(); }
 		static std::size_t PartMembershipCount(const WorldRoot &World) { return World.PartPositions.size(); }
+		static std::optional<std::size_t> PartPosition(const WorldRoot &World, const BasePart &Part) {
+			auto Found = World.PartPositions.find(Part.GetObjectId());
+			return Found == World.PartPositions.end() ? std::nullopt : std::optional(Found->second);
+		}
 		static std::size_t DynamicBodyCount(const WorldRoot &World) { return World.DynamicBodies.size(); }
 		static std::size_t PendingBodyControlCount(const WorldRoot &World) { return World.PendingBodyControls.size(); }
 		static const std::vector<std::shared_ptr<BasePart>> &OrderedParts(const WorldRoot &World) { return World.Parts; }
@@ -875,6 +879,8 @@ namespace {
 		Second->SetParent(Workspace);
 		Check(WorldRootTestAccess::PartCount(*Workspace) == 2 &&
 			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2 &&
+			WorldRootTestAccess::PartPosition(*Workspace, *First) == 0 &&
+			WorldRootTestAccess::PartPosition(*Workspace, *Second) == 1 &&
 			WorldRootTestAccess::OrderedParts(*Workspace) == std::vector<std::shared_ptr<BasePart>>{First, Second},
 			"successful admissions preserve unique ordered Part traversal");
 		First->SetSize({2.0f, 2.0f, 2.0f});
@@ -885,11 +891,13 @@ namespace {
 		First->SetParent(nullptr);
 		Check(WorldRootTestAccess::PartCount(*Workspace) == 1 &&
 			WorldRootTestAccess::PartMembershipCount(*Workspace) == 1 &&
+			WorldRootTestAccess::PartPosition(*Workspace, *Second) == 0 &&
 			WorldRootTestAccess::OrderedParts(*Workspace).front() == Second,
 			"removal retires ordered and indexed Part membership");
 		First->SetParent(Workspace);
 		Check(WorldRootTestAccess::PartCount(*Workspace) == 2 &&
 			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2 &&
+			WorldRootTestAccess::PartPosition(*Workspace, *First) == 1 &&
 			WorldRootTestAccess::OrderedParts(*Workspace) == std::vector<std::shared_ptr<BasePart>>{Second, First},
 			"readmission appends once in established traversal order");
 		Second->Destroy();
