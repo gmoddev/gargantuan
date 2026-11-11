@@ -70,6 +70,36 @@ namespace {
 			Left.Color == Right.Color && Left.CastShadow == Right.CastShadow;
 	}
 
+	bool EqualMaterial(const RenderMaterialState &Left, const RenderMaterialState &Right) {
+		return Left.Revision == Right.Revision && Left.BaseColorFactor == Right.BaseColorFactor &&
+			Left.BaseColorTexture == Right.BaseColorTexture && Left.NormalTexture == Right.NormalTexture &&
+			Left.Metallic == Right.Metallic && Left.Roughness == Right.Roughness &&
+			Left.OpacityMode == Right.OpacityMode && Left.AlphaCutoff == Right.AlphaCutoff &&
+			Left.DoubleSided == Right.DoubleSided && Left.ShadingModel == Right.ShadingModel &&
+			Left.MetallicRoughnessTexture == Right.MetallicRoughnessTexture &&
+			Left.EmissiveFactor == Right.EmissiveFactor &&
+			Left.EmissiveTexture == Right.EmissiveTexture &&
+			Left.OcclusionTexture == Right.OcclusionTexture &&
+			Left.OcclusionStrength == Right.OcclusionStrength &&
+			Left.NormalScale == Right.NormalScale && Left.TextureSamplers == Right.TextureSamplers;
+	}
+
+	bool EqualProjected(const RenderProjectedObject &Left, const RenderProjectedObject &Right) {
+		if (!EqualItem(Left.Item, Right.Item) || Left.Mesh != Right.Mesh ||
+			!EqualMaterial(Left.Material, Right.Material) || Left.Visible != Right.Visible ||
+			static_cast<bool>(Left.Primitives) != static_cast<bool>(Right.Primitives))
+			return false;
+		if (!Left.Primitives) return true;
+		if (Left.Primitives->size() != Right.Primitives->size()) return false;
+		for (std::size_t Index = 0; Index < Left.Primitives->size(); ++Index) {
+			const auto &A = Left.Primitives->at(Index);
+			const auto &B = Right.Primitives->at(Index);
+			if (A.FirstIndex != B.FirstIndex || A.IndexCount != B.IndexCount ||
+				!EqualMaterial(A.Material, B.Material)) return false;
+		}
+		return true;
+	}
+
 	void Print(
 		std::string_view Mode, std::string_view Phase, std::size_t Frame, std::size_t Count,
 		std::size_t Changed, double SourceMs, double ProduceMs, double ApplyMs,
@@ -83,37 +113,46 @@ namespace {
 			<< ',' << Publication.FullResync << '\n' << std::flush;
 	}
 
-	void VerifyFullState(
+	RenderPublicationPtr VerifyFullState(
 		RenderPublisher &Publisher, RenderProjection &Projection, const Workspace &World,
 		const std::vector<ObjectId> &LiveIds
 	) {
-		std::unordered_map<ObjectId, RenderItem> Previous;
+		Require(Projection.GetObjects().size() == LiveIds.size(),
+			"retained projection contains an extra or missing object before resync");
+		const auto RetainedMeshCount = Projection.GetMeshCount();
+		const auto RetainedTextureCount = Projection.GetTextureCount();
+		std::unordered_map<ObjectId, RenderProjectedObject> Previous;
 		Previous.reserve(LiveIds.size());
 		for (const auto Object : LiveIds) {
 			const auto Found = Projection.GetObjects().find(Object);
 			Require(Found != Projection.GetObjects().end(), "projected live identity is absent");
-			Previous.emplace(Object, Found->second.Item);
+			Previous.emplace(Object, Found->second);
 		}
 		Publisher.RequestFullResync();
 		const auto Complete = Publisher.Publish(World, RenderCameraInput{}, 640, 360);
 		Require(Complete->FullResync, "explicit full resync was not published");
-		std::unordered_map<ObjectId, RenderItem> Reconstructed;
+		std::unordered_map<ObjectId, RenderProjectedObject> Reconstructed;
 		Reconstructed.reserve(LiveIds.size());
 		for (const auto &Create : Complete->Creates)
-			Reconstructed.emplace(Create.Item.Object, Create.Item);
+			Reconstructed.emplace(Create.Item.Object, RenderProjectedObject{
+				Create.Item, Create.Mesh, Create.Material, Create.Visible, Create.Primitives});
 		Require(Reconstructed.size() == LiveIds.size(), "full resync object count differs from live identities");
 		for (const auto &[Object, Item] : Previous) {
 			const auto Found = Reconstructed.find(Object);
-			Require(Found != Reconstructed.end() && EqualItem(Item, Found->second),
-				"incremental RenderItem differs from authoritative full resync");
+			Require(Found != Reconstructed.end() && EqualProjected(Item, Found->second),
+				"incremental object state differs from authoritative full resync");
 		}
 		RenderProjection Fresh;
 		(void)Fresh.Apply(*Complete);
 		Require(Fresh.GetObjects().size() == LiveIds.size(), "fresh projection rejects complete reconstruction");
+		Require(Fresh.GetMeshCount() == RetainedMeshCount &&
+			Fresh.GetTextureCount() == RetainedTextureCount,
+			"retained resource counts differ from complete reconstruction");
 		for (const auto Object : LiveIds)
-			Require(EqualItem(Projection.GetObjects().at(Object).Item, Fresh.GetObjects().at(Object).Item),
+			Require(EqualProjected(Projection.GetObjects().at(Object), Fresh.GetObjects().at(Object)),
 				"fresh projection differs from retained incremental projection");
 		(void)Projection.Apply(*Complete);
+		return Complete;
 	}
 
 	void WriteMesh(const std::filesystem::path &Path, float X) {
@@ -196,13 +235,29 @@ namespace {
 			Print("mesh", "steady", Frame, Config.Count, Config.Changed,
 				SourceMs, 0.0, 0.0, PublishMs, ProjectionMs, *Publication);
 		}
-		VerifyFullState(Publisher, Projection, *World, LiveIds);
+		(void)VerifyFullState(Publisher, Projection, *World, LiveIds);
 
+		const auto BeforeMesh = Assets->ResolveMeshResource(Reference);
+		Require(BeforeMesh && BeforeMesh->Value.Vertices && BeforeMesh->Value.Vertices->size() >= 2,
+			"pre-reimport canonical mesh is unavailable");
 		WriteMesh(Temporary.Path / "assets" / "shared.obj", 2.0f);
 		const auto ReimportStart = Clock::now();
 		const auto Reimported = Assets->ReimportProjectAsset(Mount, Reference);
 		const auto ReimportMs = Milliseconds(Clock::now() - ReimportStart);
 		Require(Reimported.Ok, "canonical mesh reimport failed");
+		const auto AfterMesh = Assets->ResolveMeshResource(Reference);
+		bool VertexContentChanged = AfterMesh && AfterMesh->Value.Vertices &&
+			AfterMesh->Value.Vertices->size() != BeforeMesh->Value.Vertices->size();
+		if (AfterMesh && AfterMesh->Value.Vertices &&
+			AfterMesh->Value.Vertices->size() == BeforeMesh->Value.Vertices->size()) {
+			for (std::size_t Index = 0; Index < AfterMesh->Value.Vertices->size(); ++Index)
+				if (AfterMesh->Value.Vertices->at(Index).Position !=
+					BeforeMesh->Value.Vertices->at(Index).Position) VertexContentChanged = true;
+		}
+		Require(AfterMesh && AfterMesh->Value.Vertices && AfterMesh->Value.Indices &&
+			AfterMesh->ContentRevision > BeforeMesh->ContentRevision &&
+			AfterMesh->Mesh != BeforeMesh->Mesh && VertexContentChanged,
+			"canonical mesh reimport did not advance exact resource content and generation");
 		MeshChanges = Assets->DrainMeshChanges();
 		Require(MeshChanges.Creates.size() == 1 && MeshChanges.Removes.size() == 1,
 			"mesh reimport did not replace exactly one canonical resource");
@@ -213,12 +268,36 @@ namespace {
 		Require(!ReimportPublication->FullResync && ReimportPublication->Updates.size() == Config.Count &&
 			ReimportPublication->MeshCreates.size() == 1 && ReimportPublication->MeshRemoves.size() == 1,
 			"asset revision did not invalidate every exact MeshPart dependent");
+		const auto &CreatedMesh = ReimportPublication->MeshCreates.front();
+		Require(ReimportPublication->MeshRemoves.front().Mesh == BeforeMesh->Mesh &&
+			CreatedMesh.Mesh == AfterMesh->Mesh &&
+			CreatedMesh.TopologyRevision == AfterMesh->ContentRevision &&
+			CreatedMesh.VertexRevision == AfterMesh->ContentRevision &&
+			CreatedMesh.Vertices == AfterMesh->Value.Vertices &&
+			CreatedMesh.Indices == AfterMesh->Value.Indices &&
+			CreatedMesh.Bounds.Minimum == AfterMesh->Value.Bounds.Minimum &&
+			CreatedMesh.Bounds.Maximum == AfterMesh->Value.Bounds.Maximum,
+			"mesh revision publication differs from exact canonical resource backing");
+		for (const auto &Update : ReimportPublication->Updates)
+			Require(Update.Mesh == AfterMesh->Mesh,
+				"asset revision left a MeshPart bound to stale resource identity");
 		const auto ProjectionStart = Clock::now();
 		(void)Projection.Apply(*ReimportPublication);
 		const auto ProjectionMs = Milliseconds(Clock::now() - ProjectionStart);
+		const auto *ProjectedBounds = Projection.GetMeshBounds(AfterMesh->Mesh);
+		Require(Projection.GetMeshCount() == 1 && ProjectedBounds &&
+			ProjectedBounds->Minimum == AfterMesh->Value.Bounds.Minimum &&
+			ProjectedBounds->Maximum == AfterMesh->Value.Bounds.Maximum,
+			"projection retained stale mesh geometry bounds after reimport");
 		Print("mesh", "asset_revision", Config.Frames, Config.Count, Config.Count,
 			ReimportMs, 0.0, 0.0, PublishMs, ProjectionMs, *ReimportPublication);
-		VerifyFullState(Publisher, Projection, *World, LiveIds);
+		const auto CompleteAfterReimport = VerifyFullState(Publisher, Projection, *World, LiveIds);
+		Require(CompleteAfterReimport->MeshCreates.size() == 1 &&
+			CompleteAfterReimport->MeshCreates.front().Mesh == AfterMesh->Mesh &&
+			CompleteAfterReimport->MeshCreates.front().TopologyRevision == AfterMesh->ContentRevision &&
+			CompleteAfterReimport->MeshCreates.front().Vertices == AfterMesh->Value.Vertices &&
+			CompleteAfterReimport->MeshCreates.front().Indices == AfterMesh->Value.Indices,
+			"full resync did not reproduce current canonical mesh revision and payload");
 		auto Nested = std::make_shared<Folder>();
 		Nested->SetParent(World);
 		auto StageStart = Clock::now();
@@ -262,7 +341,7 @@ namespace {
 		StageProjectionMs = Milliseconds(Clock::now() - StageStart);
 		Print("mesh", "return_world", Config.Frames + 3, Config.Count, 1,
 			StageSourceMs, 0.0, 0.0, StagePublishMs, StageProjectionMs, *RestoredPublication);
-		VerifyFullState(Publisher, Projection, *World, LiveIds);
+		(void)VerifyFullState(Publisher, Projection, *World, LiveIds);
 		Game->Destroy();
 	}
 
@@ -346,7 +425,7 @@ namespace {
 			Print("replica", "steady", Frame, Config.Count, Config.Changed,
 				SourceMs, ProduceMs, ApplyMs, PublishMs, ProjectionMs, *Publication);
 		}
-		VerifyFullState(Publisher, Projection, *ReplicaWorld, LiveIds);
+		(void)VerifyFullState(Publisher, Projection, *ReplicaWorld, LiveIds);
 		const auto OldSource = Parts.front()->GetObjectId();
 		const auto OldLocal = LiveIds.front();
 		const auto LifecycleStart = Clock::now();
@@ -385,7 +464,7 @@ namespace {
 		Print("replica", "lifecycle", Config.Frames, Config.Count, 2,
 			LifecycleSourceMs, LifecycleProduceMs, LifecycleApplyMs,
 			LifecyclePublishMs, LifecycleProjectionMs, *LifecyclePublication);
-		VerifyFullState(Publisher, Projection, *ReplicaWorld, LiveIds);
+		(void)VerifyFullState(Publisher, Projection, *ReplicaWorld, LiveIds);
 		Replica.Reset();
 		Server->Destroy();
 	}
