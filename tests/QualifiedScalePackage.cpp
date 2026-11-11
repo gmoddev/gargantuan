@@ -1,6 +1,9 @@
 #include "ContentScaleGameplay.hpp"
 
+#include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
