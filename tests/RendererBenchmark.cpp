@@ -16,6 +16,9 @@
 #endif
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#if defined(GARGANTUAN_BENCHMARK_ALLOCATION_PROBE)
+#include "BenchmarkAllocationProbe.hpp"
+#endif
 
 #include <SDL3/SDL.h>
 
@@ -794,6 +797,12 @@ namespace {
 		auto DetailedPrevious = DetailedBaseline;
 		auto InstancePrevious = DetailedBaseline;
 		std::vector<double> FixtureTimes, FrameTimes, ProjectionTimes, ApplyTimes, SubmitTimes, WaitTimes;
+#if defined(GARGANTUAN_BENCHMARK_ALLOCATION_PROBE)
+		std::vector<BenchmarkAllocationProbe::Counts> FixtureAllocations, DrawAllocations;
+		BenchmarkAllocationProbe::Counts FixtureAllocationTotals, DrawAllocationTotals;
+		FixtureAllocations.reserve(Settings.Frames);
+		DrawAllocations.reserve(Settings.Frames);
+#endif
 		std::array<std::vector<double>, DetailedPhaseNames.size()> DetailedTimes;
 		std::array<std::vector<std::uint64_t>, DetailedCounterNames.size()> DetailedCounts;
 		std::array<std::vector<std::uint64_t>, InstanceCounterNames.size()> InstanceCounts;
@@ -810,13 +819,37 @@ namespace {
 		std::vector<double> LightGridTimes;
 		for (std::size_t Frame = 0; Frame < Settings.Frames; ++Frame) {
 			const auto StartFixture = Clock::now();
+#if defined(GARGANTUAN_BENCHMARK_ALLOCATION_PROBE)
+			BenchmarkAllocationProbe::Counts FixtureAllocation;
+			std::shared_ptr<const RenderPublication> Delta;
+			{
+				BenchmarkAllocationProbe::Scope AllocationScope(FixtureAllocation);
+				Delta = std::make_shared<const RenderPublication>(
+					MakeGridDelta(*Initial, Scenario, Settings, Settings.WarmupFrames + Frame));
+			}
+			FixtureAllocations.push_back(FixtureAllocation);
+			FixtureAllocationTotals.Calls += FixtureAllocation.Calls;
+			FixtureAllocationTotals.Bytes += FixtureAllocation.Bytes;
+#else
 			const auto Delta = std::make_shared<const RenderPublication>(
 				MakeGridDelta(*Initial, Scenario, Settings, Settings.WarmupFrames + Frame));
+#endif
 			FixtureTimes.push_back(Milliseconds(Clock::now() - StartFixture));
 			LogicalUpdates += Delta->Updates.size();
 			for (const auto &Update : Delta->TextureUpdates) LogicalTextureBytes += Update.Pixels->size();
 			const auto StartFrame = Clock::now();
+#if defined(GARGANTUAN_BENCHMARK_ALLOCATION_PROBE)
+			BenchmarkAllocationProbe::Counts DrawAllocation;
+			{
+				BenchmarkAllocationProbe::Scope AllocationScope(DrawAllocation);
+				Draw(Delta);
+			}
+			DrawAllocations.push_back(DrawAllocation);
+			DrawAllocationTotals.Calls += DrawAllocation.Calls;
+			DrawAllocationTotals.Bytes += DrawAllocation.Bytes;
+#else
 			Draw(Delta);
+#endif
 			const auto EndDraw = Clock::now();
 			const bool DrainFrame = ShouldDrain(Frame + 1);
 			if (DrainFrame) Drain();
@@ -1008,6 +1041,10 @@ namespace {
 		if (ContiguousCounts[0].empty()) std::cout << ",NA,NA";
 		else std::cout << ',' << std::accumulate(ContiguousCounts[0].begin(), ContiguousCounts[0].end(), std::uint64_t{})
 			<< ',' << ContiguousCounts[1].back();
+#if defined(GARGANTUAN_BENCHMARK_ALLOCATION_PROBE)
+		std::cout << ',' << FixtureAllocationTotals.Calls << ',' << FixtureAllocationTotals.Bytes
+			<< ',' << DrawAllocationTotals.Calls << ',' << DrawAllocationTotals.Bytes;
+#endif
 		std::cout << '\n';
 		if (Samples) {
 			for (std::size_t Frame = 0; Frame < FrameTimes.size(); ++Frame) {
@@ -1056,6 +1093,10 @@ namespace {
 					if (Frame < Counts.size()) *Samples << Counts[Frame];
 					else *Samples << "NA";
 				}
+#if defined(GARGANTUAN_BENCHMARK_ALLOCATION_PROBE)
+				*Samples << ',' << FixtureAllocations[Frame].Calls << ',' << FixtureAllocations[Frame].Bytes
+					<< ',' << DrawAllocations[Frame].Calls << ',' << DrawAllocations[Frame].Bytes;
+#endif
 				*Samples << '\n';
 			}
 			Samples->flush();
@@ -1338,6 +1379,9 @@ int main(int ArgumentCount, char **Arguments) {
 			for (const auto Name : InstancePhaseNames) std::cout << ',' << Name << "MeanMs";
 			std::cout << ",EnvelopeRejections,EnvelopeBuildNs,EnvelopeRebuilds";
 			std::cout << ",ContiguousInstancedDrawCalls,MaximumInstancedBatchSize";
+#if defined(GARGANTUAN_BENCHMARK_ALLOCATION_PROBE)
+			std::cout << ",FixtureNewCalls,FixtureNewBytes,DrawNewCalls,DrawNewBytes";
+#endif
 			std::cout << '\n';
 			std::ofstream Samples;
 			if (BenchmarkOptions.SamplesPath) {
@@ -1352,6 +1396,9 @@ int main(int ArgumentCount, char **Arguments) {
 				for (const auto Name : InstanceCounterNames) Samples << ',' << Name;
 				for (const auto Name : InstancePhaseNames) Samples << ',' << Name << "Ms";
 				Samples << ",CulledPercent,SdlCompactTraversal,SdlInstancing,SdlSceneEnvelope,CameraAway,SdlInstancingOrder,EnvelopeRejections,EnvelopeBuildNs,EnvelopeRebuilds,ContiguousInstancedDrawCalls,MaximumInstancedBatchSize";
+#if defined(GARGANTUAN_BENCHMARK_ALLOCATION_PROBE)
+			Samples << ",FixtureNewCalls,FixtureNewBytes,DrawNewCalls,DrawNewBytes";
+#endif
 				Samples << '\n' << std::setprecision(std::numeric_limits<double>::max_digits10);
 			}
 			for (const auto &Scenario : BuildCases(BenchmarkOptions))

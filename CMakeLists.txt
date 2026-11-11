@@ -1297,6 +1297,19 @@ if(BUILD_TESTING)
 	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 		add_executable(gargantuan_renderer_benchmark "tests/RendererBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_benchmark PRIVATE gargantuan_core)
+		option(GARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE "Build opt-in renderer C++ allocation attribution executable" OFF)
+		if(GARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE)
+			add_executable(gargantuan_renderer_allocation_benchmark
+				"tests/RendererBenchmark.cpp" "tests/BenchmarkAllocationProbe.cpp")
+			target_compile_definitions(gargantuan_renderer_allocation_benchmark PRIVATE
+				GARGANTUAN_BENCHMARK_ALLOCATION_PROBE=1)
+			target_link_libraries(gargantuan_renderer_allocation_benchmark PRIVATE gargantuan_core)
+			add_executable(gargantuan_renderer_allocation_probe_tests
+				"tests/BenchmarkAllocationProbe.cpp" "tests/BenchmarkAllocationProbeTests.cpp")
+			target_compile_features(gargantuan_renderer_allocation_probe_tests PRIVATE cxx_std_17)
+			add_test(NAME gargantuan_renderer_allocation_probe
+				COMMAND gargantuan_renderer_allocation_probe_tests)
+		endif()
 		add_executable(gargantuan_renderer_foundation2_benchmark "tests/RendererFoundation2Benchmark.cpp")
 		target_link_libraries(gargantuan_renderer_foundation2_benchmark PRIVATE gargantuan_core)
 		add_executable(gargantuan_renderer_foundation2_gpu_benchmark "tests/RendererFoundation2GpuBenchmark.cpp")
