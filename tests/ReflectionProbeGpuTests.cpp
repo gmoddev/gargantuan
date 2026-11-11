@@ -215,6 +215,7 @@ namespace {
 		Require(std::max({EmptyCenter[0], EmptyCenter[1], EmptyCenter[2]}) <= 8,
 			"[Render:ProbeGpu] Unlit baseline unexpectedly contains local radiance");
 		const auto Left = Suite.Run("red-room", {Red, Blue}, -2);
+		const auto BuildsAfterAdmission = Suite.Metrics().ProbePreprocessBuilds;
 		const auto Right = Suite.Run("blue-room", {Red, Blue}, 2);
 		const auto RedCenter = Pixel(Left, Width / 2, Height / 2);
 		const auto BlueCenter = Pixel(Right, Width / 2, Height / 2);
@@ -234,12 +235,17 @@ namespace {
 		const auto PriorityColor = Pixel(Priority, Width / 2, Height / 2);
 		Require(PriorityColor[0] > PriorityColor[2] + 25,
 			"[Render:ProbeGpu] Highest-priority overlapping probe did not dominate");
+		Require(Suite.Metrics().ProbePreprocessBuilds == BuildsAfterAdmission,
+			"[Render:ProbeGpu] Camera movement, blend, or priority needlessly rebuilt a probe source");
 		Suite.RedRevision = 2;
 		PriorityRed.Source = Source(RedImage, 1, 2);
+		const auto BuildsBeforeReimport = Suite.Metrics().ProbePreprocessBuilds;
 		const auto Reimported = Suite.Run("source-face-reimport", {PriorityRed}, 0, false, false, {}, true);
 		const auto ReimportedColor = Pixel(Reimported, Width / 2, Height / 2);
 		Require(ReimportedColor[1] > ReimportedColor[0] + 35,
 			"[Render:ProbeGpu] Same-identity source reimport left stale probe radiance");
+		Require(Suite.Metrics().ProbePreprocessBuilds == BuildsBeforeReimport + 1,
+			"[Render:ProbeGpu] Source-face reimport did not rebuild exactly one probe source");
 		const auto Resynced = Suite.Run("source-resync", {PriorityRed}, 0, true);
 		Require(Resynced.RgbPixels == Reimported.RgbPixels,
 			"[Render:ProbeGpu] Full resync changed the settled reimported probe frame");
