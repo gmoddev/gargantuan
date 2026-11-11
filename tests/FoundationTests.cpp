@@ -6935,6 +6935,60 @@ namespace {
 		Game->Destroy();
 	}
 
+	void TestScriptSelfCleanupDuringResume() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(Game);
+			lua_pushcfunction(Engine.L, [](lua_State *L) {
+				lua_gc(L, LUA_GCCOLLECT, 0);
+				return 0;
+			}, "ForceFullGc");
+			lua_setglobal(Engine.L, "ForceFullGc");
+
+			auto Run = [&](std::string_view Name, std::string_view Source) {
+				auto Value = std::make_shared<Script>();
+				Value->SetName(std::string(Name));
+				Value->SetSource(std::string(Source));
+				Value->SetParent(Game);
+				const auto IncomingTop = lua_gettop(Engine.L);
+				Engine.RunBootstrapScript(Value);
+				Check(lua_gettop(Engine.L) == IncomingTop,
+					"self-cleaning Script preserves the main Luau stack");
+				Check(Value->Thread == nullptr && Value->ThreadReference == LUA_NOREF,
+					"self-cleaning Script releases its coroutine only after resume");
+				return Value;
+			};
+
+			auto Disabled = Run("SelfDisable", R"(
+				script.Enabled = false
+				ForceFullGc()
+				error("after-disable")
+			)");
+			Check(Disabled->Status == ScriptStatus::Disabled && !Disabled->GetEnabled() &&
+				Disabled->ErrorMessage.find("after-disable") != std::string::npos,
+				"self-disable retains Disabled state and captures an error after forced GC");
+
+			auto Restart = Run("SelfRestart", R"(
+				script.Enabled = false
+				script.Enabled = true
+				ForceFullGc()
+			)");
+			Check(Restart->Status == ScriptStatus::Idle && Restart->GetEnabled(),
+				"self-disable followed by enable preserves the requested Idle restart");
+
+			auto Destroyed = Run("SelfDestroy", R"(
+				script:Destroy()
+				ForceFullGc()
+				error("after-destroy")
+			)");
+			Check(Destroyed->GetDestroyed() && Destroyed->Status == ScriptStatus::Disabled &&
+				Destroyed->ErrorMessage.find("after-destroy") != std::string::npos,
+				"self-destroy retains destroyed state and captures an error after forced GC");
+		}
+		Game->Destroy();
+	}
+
 	void TestLuauEmbeddingCompatibility() {
 		using namespace gargantuan;
 		static_assert(LUA_VECTOR_DOUBLE == 0);
@@ -7571,6 +7625,7 @@ int main() {
 	TestEditorHostPropertyBatch();
 	TestLuauExceptionBoundary();
 	TestScriptCoroutineRegistryRoot();
+	TestScriptSelfCleanupDuringResume();
 	TestLuauEmbeddingCompatibility();
 	TestPlayDiagnosticBounds();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
