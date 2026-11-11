@@ -6,7 +6,7 @@
 param(
     [Parameter(Mandatory = $true)][string] $BaselineSource,
     [Parameter(Mandatory = $true)][string] $CandidateSource,
-    [Parameter(Mandatory = $true)][ValidateSet('core', 'cframe', 'compact', 'realistic', 'gameplay', 'signals', 'signals_compare', 'dirty_compare', 'dirty_drain', 'luau')][string] $Suite,
+    [Parameter(Mandatory = $true)][ValidateSet('core', 'cframe', 'compact', 'readback', 'realistic', 'gameplay', 'signals', 'signals_compare', 'dirty_compare', 'dirty_drain', 'luau')][string] $Suite,
     [Parameter(Mandatory = $true)][string] $ShaderCompiler,
     [Parameter(Mandatory = $true)][string] $EvidenceRoot
 )
@@ -128,6 +128,9 @@ try {
         if ($Suite -eq 'compact' -and $Arm -eq 'candidate') {
             $Targets += 'gargantuan_runtime6_physics_sync_fault_tests'
         }
+        if ($Suite -eq 'readback' -and $Arm -eq 'candidate') {
+            $Targets += 'gargantuan_runtime6_readback_fault_tests'
+        }
         if ($Suite -eq 'gameplay') { $Targets += 'gargantuan_game_session_benchmark' }
         if ($Suite -eq 'luau') { $Targets += 'gargantuan_runtime6_luau_mutation_benchmark' }
         if ($Suite -in @('signals', 'signals_compare', 'dirty_compare', 'dirty_drain')) { $Targets += 'gargantuan_runtime6_physics_listener_probe' }
@@ -148,6 +151,7 @@ try {
         if ($Suite -eq 'realistic') { $Tests += @('gargantuan_runtime6_realistic_publication_probe_smoke',
             'gargantuan_runtime6_realistic_publication_probe_quiet_smoke') }
         if ($Suite -eq 'compact' -and $Arm -eq 'candidate') { $Tests += 'gargantuan_runtime6_physics_sync_fault' }
+        if ($Suite -eq 'readback' -and $Arm -eq 'candidate') { $Tests += 'gargantuan_runtime6_readback_fault' }
         if ($Suite -in @('dirty_compare', 'dirty_drain') -and $Arm -eq 'candidate') { $Tests += 'gargantuan_runtime6_dirty_binding_fault' }
         if ($Suite -eq 'dirty_drain') { $Tests += @('gargantuan_runtime6_physics_listener_native_drain',
             'gargantuan_runtime6_physics_listener_native_drain_unprofiled') }

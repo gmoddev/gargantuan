@@ -58,7 +58,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "luau", "attribution", "compact_large", "cframe_allocation"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "luau", "attribution", "compact_large", "cframe_allocation"), default="core")
 Parser.add_argument("--comparison-directory", default="comparison")
 Parser.add_argument("--verify-only", action="store_true")
 Args = Parser.parse_args()
@@ -299,7 +299,7 @@ if Args.suite == "cframe_allocation":
                  "--split-construction", "--diagnostic-marks", f"--samples={Samples}"])
     raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
-if Args.suite == "compact":
+if Args.suite in ("compact", "readback"):
     for Static, Dynamic in ((900, 100), (0, 1000)):
         for Density in ("0", "0.01", "1"):
             for Lifecycle in (0, 1, 16):
