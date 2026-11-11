@@ -1,6 +1,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
@@ -69,6 +70,7 @@ void operator delete[](void *Value, const std::nothrow_t &) noexcept { Free(Valu
 int main() {
 	using namespace gargantuan;
 	try {
+		BootstrapNativeRuntimeSchema();
 		auto Game = std::make_shared<DataModel>();
 		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		if (!World) throw std::runtime_error("Workspace unavailable");
