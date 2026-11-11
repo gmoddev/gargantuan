@@ -1,6 +1,7 @@
 #include "BenchmarkAllocationProbe.hpp"
 
 #include <cstddef>
+#include <iostream>
 #include <new>
 
 namespace {
@@ -11,16 +12,19 @@ int main() {
 	BenchmarkAllocationProbe::Counts Counts;
 	{
 		BenchmarkAllocationProbe::Scope Scope(Counts);
-		auto *Scalar = new int(7);
-		auto *Array = new int[7]{};
-		auto *Wide = new Aligned{};
-		auto *NoThrow = new (std::nothrow) int(9);
+		// Explicit allocation-function calls cannot be elided as unused
+		// new-expressions by an optimized qualification build.
+		auto *Scalar = ::operator new(sizeof(int));
+		auto *Array = ::operator new[](7 * sizeof(int));
+		auto *Wide = ::operator new(sizeof(Aligned), std::align_val_t(alignof(Aligned)));
+		auto *NoThrow = ::operator new(sizeof(int), std::nothrow);
 		if (!Scalar || !Array || !Wide || !NoThrow) return 1;
-		delete Scalar;
-		delete[] Array;
-		delete Wide;
-		delete NoThrow;
+		::operator delete(Scalar);
+		::operator delete[](Array);
+		::operator delete(Wide, std::align_val_t(alignof(Aligned)));
+		::operator delete(NoThrow);
 	}
+	std::cout << "[Render:AllocationProbe] calls=" << Counts.Calls << " bytes=" << Counts.Bytes << '\n';
 	return Counts.Calls == 4 &&
 		Counts.Bytes == 2 * sizeof(int) + 7 * sizeof(int) + sizeof(Aligned) ? 0 : 2;
 }
