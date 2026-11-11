@@ -17,6 +17,7 @@
 #include <iostream>
 #include <memory>
 #include <set>
+#include <string>
 #include <string_view>
 #include <variant>
 #include <vector>
@@ -106,6 +107,45 @@ int main() {
 
 	auto Game = std::make_shared<DataModel>();
 	ScriptEngine Engine(Game);
+	auto CheckLifecycleMethods = [&](ScriptSecurityContext Context, bool Allowed,
+		const char *ClearMessage, const char *DestroyMessage) {
+		auto Parent = std::make_shared<Folder>();
+		auto Child = std::make_shared<Folder>();
+		Child->SetParent(Parent);
+		PushGlobal(Engine.L, "LifecycleParent", Parent);
+		{
+			ScriptSecurityScope Scope(std::move(Context));
+			const int ClearStatus = Run(Engine,
+				"return pcall(function() LifecycleParent:ClearAllChildren() end)", 2);
+			const bool ClearAllowed = ClearStatus == LUA_OK && lua_toboolean(Engine.L, -2);
+			const auto *ClearError = ClearStatus == LUA_OK ? lua_tostring(Engine.L, -1) : nullptr;
+			Check(ClearAllowed == Allowed && Child->GetDestroyed() == Allowed &&
+				(Allowed || (ClearError && std::string_view(ClearError).find("cannot invoke method") != std::string_view::npos)),
+				ClearMessage);
+			lua_settop(Engine.L, 0);
+			const int DestroyStatus = Run(Engine,
+				"return pcall(function() LifecycleParent:Destroy() end)", 2);
+			const bool DestroyAllowed = DestroyStatus == LUA_OK && lua_toboolean(Engine.L, -2);
+			const auto *DestroyError = DestroyStatus == LUA_OK ? lua_tostring(Engine.L, -1) : nullptr;
+			Check(DestroyAllowed == Allowed && Parent->GetDestroyed() == Allowed &&
+				(Allowed || (DestroyError && std::string_view(DestroyError).find("cannot invoke method") != std::string_view::npos)),
+				DestroyMessage);
+			lua_settop(Engine.L, 0);
+		}
+		if (!Parent->GetDestroyed()) Parent->Destroy();
+	};
+	CheckLifecycleMethods(
+		{ScriptExecutionDomain::Server, {ScriptCapability::NetworkSend, ScriptCapability::NetworkReceive}},
+		false, "network-only server handler cannot clear children", "network-only server handler cannot destroy Instance"
+	);
+	CheckLifecycleMethods(
+		{ScriptExecutionDomain::Client, {ScriptCapability::NetworkSend, ScriptCapability::NetworkReceive}},
+		false, "network-only client handler cannot clear children", "network-only client handler cannot destroy Instance"
+	);
+	CheckLifecycleMethods(ScriptSecurityContext::ServerRuntime(), true,
+		"ordinary server runtime can clear children", "ordinary server runtime can destroy Instance");
+	CheckLifecycleMethods(ScriptSecurityContext::ClientRuntime(), true,
+		"ordinary client runtime can clear detached children", "ordinary client runtime can destroy detached Instance");
 	lua_pushcfunction(Engine.L, HasMutateDataModel, "HasMutateDataModel");
 	lua_setglobal(Engine.L, "HasMutateDataModel");
 	RecordingScheduler Scheduler;
@@ -498,14 +538,12 @@ int main() {
 		{
 			ScriptSecurityScope Scope(ScriptSecurityContext::ServerRuntime());
 			Check(Run(*ManagedRuntime,
-				"ReentryFunction:SetServerHandler(function(Peer) game:Destroy(); return 7 end)") == LUA_OK,
-				"reentrant RemoteFunction installs an ordinary server handler");
+				"ReentryFunction:SetServerHandler(function(Peer) "
+				"local Ok = pcall(function() game:Destroy() end); "
+				"return Ok and 'unexpected_allow' or 'denied' end)") == LUA_OK,
+				"restricted RemoteFunction installs a server handler");
 		}
 		std::weak_ptr<ScriptEngine> RuntimeWeak = ManagedRuntime;
-		auto Destroying = ReentryGame->Destroying->Connect([&](std::monostate) {
-			ManagedRuntime->ShutdownRuntime();
-			ManagedRuntime.reset();
-		});
 		RemoteMessage ReentryRequest{
 			.Kind = RemoteMessageKind::Request,
 			.Remote = ReentryFunction->GetObjectId(),
@@ -513,10 +551,19 @@ int main() {
 			.Deadline = 1s,
 		};
 		Check(Server.HandleTransportEvent(Incoming(Connection, ReentryRequest)) && Server.Pump() == 1,
-			"network pump resumes a handler that destroys its runtime");
-		Check(ReentryGame->GetDestroyed() && !ManagedRuntime && RuntimeWeak.expired(),
-			"remote handler keeps the VM alive through game destruction and retires it on return");
-		Destroying->Disconnect();
+			"network pump resumes a restricted server handler");
+		bool DeniedResponse = false;
+		if (!ServerScheduler.Messages.empty()) {
+			const auto Reply = DecodeRemoteMessage(ServerScheduler.Messages.back().Payload());
+			DeniedResponse = Reply && Reply->Kind == RemoteMessageKind::Response && Reply->Arguments.size() == 1 &&
+				std::holds_alternative<std::string>(Reply->Arguments.front()) &&
+				std::get<std::string>(Reply->Arguments.front()) == "denied";
+		}
+		Check(DeniedResponse &&
+			!ReentryGame->GetDestroyed() && ManagedRuntime && !RuntimeWeak.expired(),
+			"network-only handler cannot destroy game and leaves its runtime alive");
+		ManagedRuntime.reset();
+		Check(RuntimeWeak.expired(), "server handler VM closes after ordinary owner release");
 	}
 	{
 		RecordingScheduler OutboundScheduler;

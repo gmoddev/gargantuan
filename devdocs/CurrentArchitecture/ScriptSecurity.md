@@ -47,6 +47,12 @@ context, including when a worker command is later drained on Main. Studio
 mutation remains an EditorHost command applied by the gateway; Studio never
 receives an authoritative `Instance` pointer.
 
+Generated native method metadata can require a script capability. Luau method
+dispatch enforces it for inherited methods as well as methods declared on the
+concrete class. `Instance:Destroy()` and `Instance:ClearAllChildren()` require
+`MutateDataModel`; network-only inbound handler contexts cannot invoke either.
+Ordinary Server and Client runtime profiles already grant that capability.
+
 Dedicated script Source reads require EditorCommands plus ReadDataModel;
 Source writes require EditorCommands plus MutateDataModel and pass through the
 MutationGateway with project scope, stable identity, UTF-8/size validation, and
@@ -80,6 +86,9 @@ Active Lua calls keep the native VM alive through their return/error boundary;
 this lifetime pin grants no capability and does not replace their captured
 security context. A stopped runtime cannot begin another queued callback just
 because its physical VM is still temporarily alive.
+Current native call sites enter `Script::Step` through `ScriptEngine`, which
+registers the Script for VM cleanup first. An external native host calling
+`Script::Step` directly must keep the Script and VM alive through that call.
 
 The current context is thread-local and defaults to trusted Core for backwards
 compatibility with engine-owned call paths. New untrusted script entry points

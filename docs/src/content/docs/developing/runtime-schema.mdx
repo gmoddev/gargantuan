@@ -15,7 +15,12 @@ startup randomness, hierarchy, registration order, or registry generation.
 The wire form is 32 lowercase hexadecimal characters and zero is invalid.
 
 Classes retain inheritance and reflected property/method metadata. A custom
-enum contains namespace, name, canonical name, nonzero definition version,
+class inherits native method capability requirements through that metadata.
+Generated native methods may require a script capability: the inherited
+`Instance:Destroy()` and `Instance:ClearAllChildren()` methods require
+`MutateDataModel` at Luau dispatch, including on derived classes.
+
+An enum contains namespace, name, canonical name, nonzero definition version,
 `Game` provenance, and unique ordered name/numeric-value items. Enum values
 carry `{EnumSchemaId, DefinitionVersion, ItemValue}`; an integer or display
 name alone is never authoritative identity. An extension has its own stable ID

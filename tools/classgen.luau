@@ -223,7 +223,10 @@ const function assembleMethods(state: GenerationState)
 				:push(key)
 				:push(", .Signature = ")
 				:push(string.format("%q", method.luauSignature or "(...unknown) -> (...unknown)"))
-				:push("}")
+			if method.requiredCapability then
+				state.definitionMethods:push(", .RequiredCapability = ScriptCapability::"):push(method.requiredCapability)
+			end
+			state.definitionMethods:push("}")
 		else
 			state.publicBody:push(method.returns and method.returns.cType or "void"):push(" "):push(key):push("(")
 			if method.params then
@@ -237,7 +240,11 @@ const function assembleMethods(state: GenerationState)
 			end
 			state.publicBody:push(");"):newline()
 
-			state.definitionMethods:push("Method::fromMember<&"):push(state.class.name):push("::"):push(key):push(">()")
+			state.definitionMethods:push("Method::fromMember<&"):push(state.class.name):push("::"):push(key):push(">(")
+			if method.requiredCapability then
+				state.definitionMethods:push("ScriptCapability::"):push(method.requiredCapability)
+			end
+			state.definitionMethods:push(")")
 		end
 
 		state.definitionMethods:push("},"):newline()
