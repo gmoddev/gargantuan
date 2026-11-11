@@ -192,9 +192,68 @@ namespace gargantuan {
 		for (auto &WeakConnection : SignalConnections)
 			if (auto Connection = WeakConnection.lock()) Connection->Disconnect();
 		SignalConnections.clear();
-		for (auto &WeakScript : ManagedScripts)
+		for (auto &[Id, WeakScript] : ManagedScripts)
 			if (auto ScriptValue = WeakScript.lock()) ScriptValue->Cleanup();
 		ManagedScripts.clear();
+		ManagedScriptIds.clear();
+		DetachedManagedScripts.clear();
+		ManagedScriptPruneCursor = ManagedScripts.end();
+	}
+
+	void ScriptEngine::PruneExpiredManagedScripts() {
+		constexpr std::size_t PruneBudget = 8;
+		const auto Count = std::min(PruneBudget, ManagedScripts.size());
+		for (std::size_t Index = 0; Index < Count; ++Index) {
+			if (ManagedScriptPruneCursor == ManagedScripts.end()) ManagedScriptPruneCursor = ManagedScripts.begin();
+			auto Current = ManagedScriptPruneCursor++;
+			if (!Current->second.expired()) continue;
+			if (Current->first.IsValid()) ManagedScriptIds.erase(Current->first);
+			else DetachedManagedScripts.erase(Current->second);
+			ManagedScripts.erase(Current);
+		}
+		if (ManagedScripts.empty()) ManagedScriptPruneCursor = ManagedScripts.end();
+	}
+
+	void ScriptEngine::TrackManagedScript(const std::shared_ptr<Script> &ScriptValue) {
+		ObjectId Id;
+		{
+			// GetObjectId would publish identity and an ObjectCreated record for a
+			// detached bootstrap Script. Read only an identity already published.
+			std::scoped_lock Lock(ScriptValue->IdentityMutex);
+			Id = ScriptValue->Id;
+		}
+		const std::weak_ptr<Script> WeakScript = ScriptValue;
+		if (auto Detached = DetachedManagedScripts.find(WeakScript); Detached != DetachedManagedScripts.end()) {
+			if (Id.IsValid()) {
+				if (ManagedScriptIds.emplace(Id, Detached->second).second) {
+					Detached->second->first = Id;
+					DetachedManagedScripts.erase(Detached);
+				}
+			}
+			PruneExpiredManagedScripts();
+			return;
+		}
+		if (Id.IsValid() && ManagedScriptIds.contains(Id)) {
+			PruneExpiredManagedScripts();
+			return;
+		}
+
+		auto Added = ManagedScripts.emplace(ManagedScripts.end(), Id, WeakScript);
+		bool Indexed = false;
+		try {
+			if (Id.IsValid()) Indexed = ManagedScriptIds.emplace(Id, Added).second;
+			else Indexed = DetachedManagedScripts.emplace(WeakScript, Added).second;
+		} catch (...) {
+			ManagedScripts.erase(Added);
+			throw;
+		}
+		if (!Indexed) {
+			ManagedScripts.erase(Added);
+			PruneExpiredManagedScripts();
+			return;
+		}
+		if (ManagedScriptPruneCursor == ManagedScripts.end()) ManagedScriptPruneCursor = Added;
+		PruneExpiredManagedScripts();
 	}
 
 	void ScriptEngine::TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection) {
@@ -267,6 +326,7 @@ namespace gargantuan {
 		if (Stopping) return;
 		Threads.Step();
 		if (Stopping) return;
+		PruneExpiredManagedScripts();
 
 		// Script callbacks may add or remove queue entries, including the running
 		// Script. Snapshot owners for this pass and admit new entries next Step.
@@ -278,7 +338,7 @@ namespace gargantuan {
 				ScriptQueue.erase(script);
 				continue;
 			}
-			ManagedScripts.emplace_back(script);
+			TrackManagedScript(script);
 			auto status = script->Step(L);
 			if (Stopping) return;
 
@@ -318,7 +378,7 @@ namespace gargantuan {
 		if (Stopping) return;
 		if (!ScriptValue || ScriptValue->GetDestroyed() || ScriptValue->IsDestroying() || !CanRunScript(*ScriptValue))
 			return;
-		ManagedScripts.emplace_back(ScriptValue);
+		TrackManagedScript(ScriptValue);
 		const auto Status = ScriptValue->Step(L);
 		if (Stopping) return;
 		if (Status == ScriptStatus::Error) {

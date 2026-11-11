@@ -6936,6 +6936,75 @@ namespace {
 		Game->Destroy();
 	}
 
+	void TestManagedScriptRetention() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(Game);
+			auto Detached = std::make_shared<Script>();
+			Engine.RunBootstrapScript(Detached);
+			Check(!Detached->Id.IsValid() && Engine.ManagedScripts.size() == 1,
+				"tracking a detached bootstrap Script does not publish ObjectId or duplicate ownership");
+			Detached->SetParent(Game);
+			Detached->SetEnabled(false);
+			Detached->SetEnabled(true);
+			Engine.RunBootstrapScript(Detached);
+			Check(Engine.ManagedScripts.size() == 1,
+				"adoption migrates detached Script tracking without another retained weak owner");
+			Detached->Destroy();
+			Detached.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+
+			auto Reused = std::make_shared<Script>();
+			Reused->SetSource("return 1");
+			Reused->SetParent(Game);
+			for (int Index = 0; Index < 1000; ++Index) {
+				if (Index != 0) {
+					Reused->SetEnabled(false);
+					Reused->SetEnabled(true);
+				}
+				Engine.RunBootstrapScript(Reused);
+			}
+			Check(Reused->Status == ScriptStatus::Finished && Engine.ManagedScripts.size() == 1,
+				"one Script restarted a thousand times has one tracked cleanup entry");
+			Reused->Destroy();
+			Reused.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+
+			std::weak_ptr<Script> FirstTransient;
+			for (int Index = 0; Index < 512; ++Index) {
+				auto Transient = std::make_shared<Script>();
+				Transient->SetSource("return 1");
+				Transient->SetParent(Game);
+				if (Index == 0) FirstTransient = Transient;
+				Engine.RunBootstrapScript(Transient);
+				Transient->Destroy();
+				Transient.reset();
+				if (Index % 16 == 15) lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			}
+			Check(FirstTransient.expired() && Engine.ManagedScripts.size() <= 32,
+				"incremental pruning bounds expired Script weak owners during transient churn");
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			for (int Index = 0; Index < 8; ++Index) Engine.Step();
+			Check(Engine.ManagedScripts.empty(),
+				"idle VM steps prune expired Script owners without new registrations");
+
+			auto Survivor = std::make_shared<Script>();
+			Survivor->SetSource("return 1");
+			Survivor->SetParent(Game);
+			for (int Index = 0; Index < 32; ++Index) {
+				if (Index != 0) {
+					Survivor->SetEnabled(false);
+					Survivor->SetEnabled(true);
+				}
+				Engine.RunBootstrapScript(Survivor);
+			}
+			Check(Engine.ManagedScripts.size() == 1 && Engine.ManagedScripts.front().second.lock() == Survivor,
+				"incremental pruning removes expired owners and retains the live Script once");
+		}
+		Game->Destroy();
+	}
+
 	void TestScriptSelfCleanupDuringResume() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -7847,6 +7916,7 @@ int main() {
 	TestEditorHostPropertyBatch();
 	TestLuauExceptionBoundary();
 	TestScriptCoroutineRegistryRoot();
+	TestManagedScriptRetention();
 	TestScriptSelfCleanupDuringResume();
 	TestScriptQueueReentrantMutation();
 	TestServerScriptDestroysEngineDataModel();

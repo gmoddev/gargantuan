@@ -79,6 +79,11 @@ The Script activation queue snapshots its members at the start of each
 `ScriptEngine::Step`. A newly queued Script starts no earlier than the next
 step. A Script removed before its turn is skipped unless it has been requeued
 before that turn; destroying it prevents requeueing.
+The engine retains one weak cleanup entry per Script across restarts and
+removes expired entries incrementally during registration and ordinary steps.
+Shutdown cleans the remaining live Scripts in first-registration order before
+closing the VM. Tracking a detached bootstrap Script does not publish its
+ObjectId or add a journal record.
 
 Engine destruction stops new Script activation, scheduled/deferred task
 admission and tracked Lua handlers before destroying services or descendants.

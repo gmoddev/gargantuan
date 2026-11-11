@@ -7,13 +7,16 @@
 
 #include <Luau/Compiler.h>
 #include <functional>
+#include <list>
 #include <lua.h>
 #include <luacode.h>
 #include <lualib.h>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace gargantuan {
 	class Script;
@@ -61,7 +64,7 @@ namespace gargantuan {
 		ThreadEngine Threads;
 		lua_CompileOptions CompileOptions;
 		std::unordered_set<std::shared_ptr<Script>> ScriptQueue;
-		std::vector<std::weak_ptr<Script>> ManagedScripts;
+		std::list<std::pair<ObjectId, std::weak_ptr<Script>>> ManagedScripts;
 
 		std::shared_ptr<gargantuan::DataModel> DataModel;
 		std::shared_ptr<Instance> RequireCurrentInstance = nullptr;
@@ -85,6 +88,13 @@ namespace gargantuan {
 		static void DumpStack(lua_State *L);
 
 	  private:
+		using ManagedScriptIterator = decltype(ManagedScripts)::iterator;
+		std::unordered_map<ObjectId, ManagedScriptIterator> ManagedScriptIds;
+		std::map<std::weak_ptr<Script>, ManagedScriptIterator, std::owner_less<std::weak_ptr<Script>>>
+			DetachedManagedScripts;
+		ManagedScriptIterator ManagedScriptPruneCursor = ManagedScripts.end();
+		void TrackManagedScript(const std::shared_ptr<Script> &ScriptValue);
+		void PruneExpiredManagedScripts();
 		bool Stopping = false;
 	};
 }
