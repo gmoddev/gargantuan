@@ -44,6 +44,16 @@ namespace gargantuan {
 		static bool FullPartScanNeeded(const WorldRoot &World) { return World.FullPartScanNeeded; }
 		static void ForceFullPartScan(WorldRoot &World) { World.FullPartScanNeeded = true; }
 		static std::size_t DynamicReadbackCount(const WorldRoot &World) { return World.DynamicReadback.size(); }
+		static std::size_t AcceptedDynamicBodyCount(const WorldRoot &World) { return World.AcceptedDynamicBodyCount; }
+		static bool IndexedDynamicReadbackActive(const WorldRoot &World) { return World.IndexedDynamicReadbackActive; }
+		static void UseSmallReadbackPolicy(WorldRoot &World) {
+			World.ReadbackPolicy = {.ActivatePartCount = 1, .RetirePartCount = 1,
+				.ActivateDynamicDivisor = 1, .RetireDynamicDivisor = 1};
+		}
+		static void UsePartBoundaryReadbackPolicy(WorldRoot &World) {
+			World.ReadbackPolicy = {.ActivatePartCount = 4, .RetirePartCount = 2,
+				.ActivateDynamicDivisor = 1, .RetireDynamicDivisor = 1};
+		}
 		static bool HasDynamicReadback(const WorldRoot &World, ObjectId Object) {
 			return World.DynamicReadbackPositions.contains(Object);
 		}
@@ -51,6 +61,8 @@ namespace gargantuan {
 		static void ForceFullDynamicReadback(WorldRoot &World) { World.FullDynamicReadbackNeeded = true; }
 		static void SimulateMissedDynamicStateRead(WorldRoot &World, BasePart &Part) {
 			Part.PublishedPhysicsState.Description.Anchored = true;
+			World.AcceptedDynamicBodyCountKnown = false;
+			World.AcceptedDynamicBodyCount = 0;
 			World.FullDynamicReadbackNeeded = true;
 		}
 		static void InvalidateDynamicReadbackBody(WorldRoot &World, ObjectId Object) {
@@ -1416,6 +1428,7 @@ namespace {
 		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
 		if (!Workspace) return;
 		Workspace->SetGravity(0.0f);
+		WorldRootTestAccess::UseSmallReadbackPolicy(*Workspace);
 		auto Static = std::make_shared<Part>();
 		Static->SetAnchored(true);
 		Static->SetCanCollide(false);
@@ -1425,6 +1438,7 @@ namespace {
 		Moving->SetCanCollide(false);
 		Moving->SetCanTouch(false);
 		Moving->SetParent(Workspace);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
 		const auto Object = Moving->GetObjectId();
 		Check(WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 1 &&
 			WorldRootTestAccess::HasDynamicReadback(*Workspace, Object),
@@ -1486,6 +1500,7 @@ namespace {
 			auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
 			if (!Workspace) return Result;
 			Workspace->SetGravity(0.0f);
+			WorldRootTestAccess::UseSmallReadbackPolicy(*Workspace);
 			auto First = std::make_shared<Part>();
 			auto Second = std::make_shared<Part>();
 			First->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
@@ -1540,6 +1555,7 @@ namespace {
 		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
 		if (!Workspace) return;
 		Workspace->SetGravity(0.0f);
+		WorldRootTestAccess::UseSmallReadbackPolicy(*Workspace);
 		auto Moving = std::make_shared<Part>();
 		Moving->SetCanCollide(false);
 		Moving->SetParent(Workspace);
@@ -1549,6 +1565,7 @@ namespace {
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
 		const auto State = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Moving));
 		Check(State && !State->Description.Anchored &&
+			WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 1 &&
 			WorldRootTestAccess::HasDynamicReadback(*Workspace, Moving->GetObjectId()) &&
 			!WorldRootTestAccess::FullDynamicReadbackNeeded(*Workspace),
 			"unavailable state fallback restores accepted dynamic mode and rebuilt view");
@@ -1559,13 +1576,14 @@ namespace {
 		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
 		if (!Workspace) return;
 		Workspace->SetGravity(9.8f);
+		WorldRootTestAccess::UseSmallReadbackPolicy(*Workspace);
 		auto Moving = std::make_shared<Part>();
 		Moving->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
 		Moving->SetCanCollide(false);
 		Moving->SetCanTouch(false);
 		Moving->SetParent(Workspace);
 		Moving->SetAwake(true);
-		Workspace->StepPhysics(0.0, std::nullopt);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
 		const auto Object = Moving->GetObjectId();
 		Check(WorldRootTestAccess::HasDynamicReadback(*Workspace, Object),
 			"dynamic body is indexed before mismatch injection");
@@ -1578,6 +1596,95 @@ namespace {
 			WorldRootTestAccess::HasDynamicReadback(*Workspace, Object) &&
 			!WorldRootTestAccess::FullDynamicReadbackNeeded(*Workspace),
 			"detected readback mismatch refreshes script-visible state and index in the same fixed step");
+	}
+
+	void TestSelectiveReadbackDefaultDensityTransitions() {
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		std::vector<std::shared_ptr<Part>> Parts;
+		Parts.reserve(8192);
+		for (std::size_t Index = 0; Index < 8192; ++Index) {
+			auto PartValue = std::make_shared<Part>();
+			PartValue->SetAnchored(Index >= 1025);
+			PartValue->SetCanCollide(false);
+			PartValue->SetCanTouch(false);
+			PartValue->SetParent(Workspace);
+			Parts.push_back(std::move(PartValue));
+		}
+		Check(WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 1025 &&
+			!WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) &&
+			WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 0,
+			"default selective policy retains no index before the fixed-step activation point");
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(!WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) &&
+			WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 0,
+			"8192-Part world above one-eighth dynamic activation density uses ordered readback");
+		Parts[0]->SetAnchored(true);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 1024 &&
+			WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) &&
+			WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 1024,
+			"accepted anchor transition activates indexed readback at the default density boundary");
+		Parts[0]->SetAnchored(false);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 1025 &&
+			WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) &&
+			WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 1025,
+			"hysteresis retains the index above activation density");
+		for (std::size_t Index = 1025; Index < 2049; ++Index) Parts[Index]->SetAnchored(false);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 2049 &&
+			!WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) &&
+			WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 0,
+			"more than one-quarter accepted dynamic bodies retires the derived view");
+		Parts[0]->SetAnchored(true);
+		for (std::size_t Index = 1025; Index < 2049; ++Index) Parts[Index]->SetAnchored(true);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 1024 &&
+			WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) &&
+			WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 1024,
+			"accepted anchor changes reactivate a complete view at the default entry threshold");
+		Parts[2049]->Destroy();
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::PartCount(*Workspace) == 8191 &&
+			WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 1024 &&
+			WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace),
+			"one removal below the activation Part threshold does not flap the active view");
+	}
+
+	void TestSelectiveReadbackPartRetirement() {
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		WorldRootTestAccess::UsePartBoundaryReadbackPolicy(*Workspace);
+		std::vector<std::shared_ptr<Part>> Parts;
+		for (int Index = 0; Index < 4; ++Index) {
+			auto PartValue = std::make_shared<Part>();
+			PartValue->SetAnchored(Index != 0);
+			PartValue->SetCanCollide(false);
+			PartValue->SetParent(Workspace);
+			Parts.push_back(std::move(PartValue));
+		}
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) &&
+			WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 1,
+			"indexed view activates at the test Part entry boundary");
+		Parts[3]->Destroy();
+		Parts[2]->Destroy();
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::PartCount(*Workspace) == 2 &&
+			WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace),
+			"indexed view remains active at its lower Part boundary");
+		Parts[1]->Destroy();
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::PartCount(*Workspace) == 1 &&
+			!WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) &&
+			WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 0 &&
+			WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 1,
+			"lower Part threshold frees derived storage and retains accepted count");
 	}
 
 	void TestBodyDynamicsAndCollisionGroups() {
@@ -2521,6 +2628,8 @@ int main() {
 	TestDynamicReadbackFallbackParity();
 	TestDynamicReadbackRestoresAcceptedMode();
 	TestDynamicReadbackRepairsDetectedMismatchSameStep();
+	TestSelectiveReadbackDefaultDensityTransitions();
+	TestSelectiveReadbackPartRetirement();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();
