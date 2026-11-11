@@ -78,6 +78,20 @@ int main() try {
 	Atlas.Prepare(Frame, nullptr);
 	for (const auto &Entry : Atlas.GetAssignments())
 		Require(Entry.Dirty, "device recreation invalidates every selected map");
+	const auto CanceledLayer = Atlas.GetAssignments().front().Layer;
+	Atlas.BeginRecording(CanceledLayer);
+	Atlas.RecordPose(CanceledLayer, {100, 1}, 7);
+	Atlas.FinishRecording(CanceledLayer, true, true);
+	Atlas.ApplyPublication(RenderProjection{}, RenderPublication{});
+	Atlas.Invalidate(); // A later render pass canceled this command buffer.
+	Require(Atlas.OnFrameSubmitted() == 0,
+		"a successful empty frame cannot commit a canceled spotlight candidate");
+	CachedPoses.clear();
+	Atlas.MergeCommittedPoses(CanceledLayer, CachedPoses);
+	Require(CachedPoses.empty(), "canceled spotlight depth cannot restore a skin receipt");
+	Atlas.Prepare(Frame, nullptr);
+	Require(Atlas.GetAssignments().front().Dirty,
+		"resumed spotlight must rebuild after a canceled recording");
 	const auto IncompleteLayer = Atlas.GetAssignments().front().Layer;
 	Atlas.BeginRecording(IncompleteLayer);
 	Atlas.FinishRecording(IncompleteLayer, false, true);

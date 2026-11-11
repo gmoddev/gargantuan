@@ -61,12 +61,31 @@ namespace gargantuan {
 		}
 
 		void Destroy(SDL_GPUDevice *Gpu) override {
+			RecordedCache = nullptr;
+			RecordedAtlas = nullptr;
 			if (DoubleSided) SDL_ReleaseGPUGraphicsPipeline(Gpu, DoubleSided);
 			DoubleSided = nullptr;
 			SDLRenderPass::Destroy(Gpu);
 		}
 
+		void OnFrameAborted() override {
+			// A recorded depth target is not a reusable map until its command
+			// buffer submits. This also clears candidates from an aborted frame
+			// followed by a configured-empty shadow frame with no depth pass.
+			if (RecordedCache) RecordedCache->Invalidate();
+			if (RecordedAtlas) RecordedAtlas->Invalidate();
+			RecordedCache = nullptr;
+			RecordedAtlas = nullptr;
+		}
+
+		void OnFrameSubmitted() override {
+			RecordedCache = nullptr;
+			RecordedAtlas = nullptr;
+		}
+
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
+			RecordedCache = &context.ShadowCache;
+			RecordedAtlas = context.SpotShadowAtlas;
 			context.ShadowPoseRevisions.clear();
 			context.LegacyHasCasters = false;
 			if (context.CascadedShadows) {
@@ -327,6 +346,8 @@ namespace gargantuan {
 		}
 
 		SDL_GPUGraphicsPipeline *DoubleSided = nullptr;
+		SDLDirectionalShadowCache *RecordedCache = nullptr;
+		SDLSpotShadowAtlas *RecordedAtlas = nullptr;
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateShadowPass(

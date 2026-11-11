@@ -314,6 +314,21 @@ namespace {
 		Cache.Invalidate();
 		Cache.MergeCommittedPoses(1, FramePoses);
 		Require(FramePoses.empty(), "invalidated depth cannot restore a pose revision");
+		Cache.BeginCascadeRecording(0);
+		Cache.RecordPose(0, CASTER, 10);
+		Cache.FinishCascadeRecording(0, Environment, nullptr, Matrix, true, true);
+		Cache.ApplyPublication(RenderProjection{}, RenderPublication{});
+		Cache.Invalidate(); // The command buffer containing this depth layer was canceled.
+		Require(!Cache.OnFrameSubmitted(),
+			"a successful empty frame cannot commit a canceled cascade candidate");
+		Cache.MergeCommittedPoses(0, FramePoses);
+		Require(FramePoses.empty(), "canceled depth cannot leak its old skin receipt");
+		Cache.BeginCascadeRecording(0);
+		Cache.RecordPose(0, CASTER, 11);
+		Cache.FinishCascadeRecording(0, Environment, nullptr, Matrix, true, true);
+		Require(Cache.OnFrameSubmitted(), "resumed cascade records fresh depth after an abort");
+		Cache.MergeCommittedPoses(0, FramePoses);
+		Require(FramePoses.at(CASTER) == 11, "resumed cascade restores only the newly submitted pose");
 	}
 }
 
