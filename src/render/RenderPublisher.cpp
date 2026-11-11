@@ -143,7 +143,7 @@ namespace gargantuan {
 
 		std::optional<RenderItem> ExtractItem(
 			const std::shared_ptr<Part> &PartValue, ObjectId ExpectedObject,
-			RenderExtractionDiagnostic &Diagnostic
+			RenderExtractionDiagnostic &Diagnostic, const RenderItem *Previous
 		) {
 			const auto Object = PartValue ? PartValue->GetObjectId() : ObjectId{};
 			if (!PartValue || PartValue->GetDestroyed() || PartValue->IsDestroying()) {
@@ -175,7 +175,8 @@ namespace gargantuan {
 			}
 			const auto Model = glm::translate(glm::mat4(1.0f), Frame.Position) * glm::mat4(Frame.Rotation) *
 				glm::scale(glm::mat4(1.0f), Size);
-			const auto Inverse = glm::inverse(Model);
+			const auto Inverse = Previous && Previous->ModelMatrix == Model
+				? Previous->InverseModelMatrix : glm::inverse(Model);
 			if (!IsFinite(Model) || !IsFinite(Inverse)) {
 				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object, "Skipped a primitive with a non-invertible transform"};
 				return std::nullopt;
@@ -201,7 +202,8 @@ namespace gargantuan {
 			const WorldRoot &World,
 			const std::shared_ptr<MeshPart> &PartValue,
 			RenderExtractionDiagnostic &Diagnostic,
-			std::optional<ObjectId> ValidatedObject = std::nullopt
+			std::optional<ObjectId> ValidatedObject = std::nullopt,
+			const RenderItem *Previous = nullptr
 		) {
 			const auto Object = PartValue ? PartValue->GetObjectId() : ObjectId{};
 			if (!PartValue || PartValue->GetDestroyed() || PartValue->IsDestroying()) {
@@ -229,7 +231,8 @@ namespace gargantuan {
 			}
 			const auto Model = glm::translate(glm::mat4(1.0f), Frame.Position) * glm::mat4(Frame.Rotation) *
 				glm::scale(glm::mat4(1.0f), Size);
-			const auto Inverse = glm::inverse(Model);
+			const auto Inverse = Previous && Previous->ModelMatrix == Model
+				? Previous->InverseModelMatrix : glm::inverse(Model);
 			if (!IsFinite(Model) || !IsFinite(Inverse)) {
 				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object, "Skipped a MeshPart with a non-invertible transform"};
 				return std::nullopt;
@@ -1185,7 +1188,8 @@ namespace gargantuan {
 				const bool ShouldRender = !MeshPartValue->GetDestroyed() && !MeshPartValue->IsDestroying() &&
 					IsInWorld(*MeshPartValue, World);
 				RenderExtractionDiagnostic Diagnostic;
-				auto Extracted = ShouldRender ? ExtractMeshPart(World, MeshPartValue, Diagnostic, Object) : std::nullopt;
+				auto Extracted = ShouldRender ? ExtractMeshPart(World, MeshPartValue, Diagnostic, Object,
+				Previous == PublishedItems.end() ? nullptr : &Previous->second) : std::nullopt;
 				if (ProfilingEnabled)
 					LastProfile.FinalStateExtractionNanoseconds +=
 						ProfileNanoseconds(ProfileClock::now() - ExtractionStart);
@@ -1234,7 +1238,8 @@ namespace gargantuan {
 				continue;
 			}
 			RenderExtractionDiagnostic Diagnostic;
-			auto Item = ExtractItem(PartValue, Object, Diagnostic);
+			auto Item = ExtractItem(PartValue, Object, Diagnostic,
+				Previous == PublishedItems.end() ? nullptr : &Previous->second);
 			if (ProfilingEnabled)
 				LastProfile.FinalStateExtractionNanoseconds +=
 					ProfileNanoseconds(ProfileClock::now() - ExtractionStart);

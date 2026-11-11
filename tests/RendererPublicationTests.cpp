@@ -618,6 +618,29 @@ namespace {
 		Game->Destroy();
 	}
 
+	void TestDirtyDomainsDoNotMaskFinalState() {
+		using namespace gargantuan;
+		ChangeJournal::Get().Clear();
+		RenderDirtyAccumulator::Get().Clear();
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetParent(World);
+		RenderDirtyAccumulator ManualDirty;
+		RenderPublisher Publisher(&ManualDirty);
+		const auto Initial = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Initial->Creates.size() == 1, "manual dirty fixture starts from one published Part");
+		PartValue->SetCFrame(CFrame(glm::vec3(13.0f, 2.0f, -4.0f)));
+		ManualDirty.Mark(World->GetReplicationScopeId(), PartValue->GetObjectId(), RenderUpdateDomain::Material);
+		const auto Changed = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Initial->Creates.size() == 1 && Changed->Updates.size() == 1 &&
+			Changed->Updates.front().Item.ModelMatrix[3].x == 13.0f &&
+			Changed->Updates.front().Item.InverseModelMatrix[3].x !=
+				Initial->Creates.front().Item.InverseModelMatrix[3].x,
+			"material-only dirty hint cannot conceal a changed final transform or inverse");
+		Game->Destroy();
+	}
+
 	void TestDirtyAccumulatorBoundsAndConsumers() {
 		using namespace gargantuan;
 		RenderDirtyLimits Limits;
@@ -1537,6 +1560,7 @@ int main() {
 		TestAnimationPaletteContracts();
 		TestIncrementalPublisher();
 		TestIncrementalWorldMembership();
+		TestDirtyDomainsDoNotMaskFinalState();
 		TestDirtyAccumulatorBoundsAndConsumers();
 		TestSingleObjectBatchDirtyParity();
 		TestEnvironmentLightingFoundation();
