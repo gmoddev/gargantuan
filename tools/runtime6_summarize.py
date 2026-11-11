@@ -52,9 +52,15 @@ SCHEMAS = {
         "sample": False,
     },
     "gargantuan_runtime6_extraction_alternatives": {
-        "facets": ("count", "changed", "lifecycle", "order"),
+        "facets": ("count", "changed", "lifecycle", "order", "signal_profile_enabled"),
+        "requiredFacets": ("count", "changed", "lifecycle", "order"),
         "stages": ("setter_ms", "capture_ms", "direct_ms", "soa_sync_ms",
-                   "soa_consume_ms", "snapshot_sync_ms", "snapshot_consume_ms", "verify_ms"),
+                   "soa_consume_ms", "snapshot_sync_ms", "snapshot_consume_ms", "verify_ms",
+                   "signal_calls", "signal_deferred_calls", "signal_connection_visits",
+                   "signal_native_callbacks", "signal_script_callbacks", "signal_total_ns",
+                   "signal_snapshot_ns", "signal_callback_ns", "signal_cleanup_ns"),
+        "requiredStages": ("setter_ms", "capture_ms", "direct_ms", "soa_sync_ms",
+                           "soa_consume_ms", "snapshot_sync_ms", "snapshot_consume_ms", "verify_ms"),
         "derived": {"SoaTotalMs": ("soa_sync_ms", "soa_consume_ms"),
                     "SnapshotTotalMs": ("snapshot_sync_ms", "snapshot_consume_ms"),
                     "DirectEndToEndMs": ("setter_ms", "capture_ms", "direct_ms"),
@@ -112,8 +118,8 @@ def ReadRows(Text, Binary):
     Rows = []
     for Line in Lines:
         Fields = next(csv.reader([Line]))
-        if (Fields and all(Field in Fields for Field in Schema["facets"])
-                and all(Field in Fields for Field in Schema["stages"])):
+        if (Fields and all(Field in Fields for Field in Schema.get("requiredFacets", Schema["facets"]))
+                and all(Field in Fields for Field in Schema.get("requiredStages", Schema["stages"]))):
             Headers = Fields
         elif Headers and len(Fields) == len(Headers):
             Row = dict(zip(Headers, Fields))
