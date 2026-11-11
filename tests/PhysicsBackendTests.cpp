@@ -1687,6 +1687,40 @@ namespace {
 			"lower Part threshold frees derived storage and retains accepted count");
 	}
 
+	void TestSelectiveReadbackFailedAuthoredAnchor() {
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		WorldRootTestAccess::UseSmallReadbackPolicy(*Workspace);
+		auto PartValue = std::make_shared<MeshPart>();
+		PartValue->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+		PartValue->SetAnchored(false);
+		PartValue->SetParent(Workspace);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		const auto Body = WorldRootTestAccess::Body(*Workspace, *PartValue);
+		Check(Body.IsValid() && WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 1 &&
+			WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) &&
+			WorldRootTestAccess::HasDynamicReadback(*Workspace, PartValue->GetObjectId()),
+			"unanchored StaticMesh request initially admits a dynamic Box body");
+		PartValue->SetAnchored(true);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		const auto FailedState = WorldRootTestAccess::State(*Workspace, Body);
+		Check(PartValue->GetAnchored() && FailedState && !FailedState->Description.Anchored &&
+			WorldRootTestAccess::Body(*Workspace, *PartValue) == Body &&
+			WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 1 &&
+			WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) &&
+			WorldRootTestAccess::HasDynamicReadback(*Workspace, PartValue->GetObjectId()),
+			"failed authored anchor update preserves accepted dynamic count and indexed body");
+		PartValue->SetCollisionMode(Enums::MeshCollisionMode::Box);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		const auto AcceptedState = WorldRootTestAccess::State(*Workspace, Body);
+		Check(AcceptedState && AcceptedState->Description.Anchored &&
+			WorldRootTestAccess::AcceptedDynamicBodyCount(*Workspace) == 0 &&
+			!WorldRootTestAccess::HasDynamicReadback(*Workspace, PartValue->GetObjectId()),
+			"later accepted anchor update retires the dynamic index and count");
+	}
+
 	void TestBodyDynamicsAndCollisionGroups() {
 		using namespace gargantuan;
 		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
@@ -2630,6 +2664,7 @@ int main() {
 	TestDynamicReadbackRepairsDetectedMismatchSameStep();
 	TestSelectiveReadbackDefaultDensityTransitions();
 	TestSelectiveReadbackPartRetirement();
+	TestSelectiveReadbackFailedAuthoredAnchor();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();
