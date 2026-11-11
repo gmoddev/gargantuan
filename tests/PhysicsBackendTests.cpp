@@ -11,6 +11,7 @@
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -1231,14 +1232,67 @@ namespace {
 				Destroyed = true;
 				DestroyedDuringPublication->Destroy();
 			});
+		const auto DestroyCursor = ChangeJournal::Get().CreateCursor(Workspace->GetReplicationScopeId());
+		const auto DestroyedObject = DestroyedDuringPublication->GetObjectId();
 		DestroyedDuringPublication->ApplyImpulse({10.0f, 0.0f, 0.0f});
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		std::size_t DestroyedPropertySequence = 0, DestroyedObjectSequence = 0;
+		for (const auto &Record : ChangeJournal::Get().Read(DestroyCursor).Records) {
+			if (Record.Object != DestroyedObject) continue;
+			if (const auto *Property = std::get_if<PropertyUpdatedChange>(&Record.Payload);
+				Property && Property->PropertyName == "Destroyed")
+				DestroyedPropertySequence = Record.Sequence;
+			if (std::holds_alternative<ObjectDestroyedChange>(Record.Payload))
+				DestroyedObjectSequence = Record.Sequence;
+		}
 		Check(Destroyed && !WorldRootTestAccess::Body(*Workspace, *DestroyedDuringPublication).IsValid() &&
 			WorldRootTestAccess::PartCount(*Workspace) == 2 &&
-			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2,
+			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2 &&
+			!ObjectRegistry::Get().Lookup(DestroyedObject) && DestroyedPropertySequence != 0 &&
+			DestroyedObjectSequence > DestroyedPropertySequence,
 			"destruction in physics publication retires body and indexed membership");
 		Workspace->StepPhysics(0.0, std::nullopt);
 		DestroyConnection->Disconnect();
+	}
+
+	void TestPhysicsPublicationThrowKeepsAuthoredHistory() {
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Moving = std::make_shared<Part>();
+		auto Other = std::make_shared<Part>();
+		Moving->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
+		Moving->SetParent(Workspace);
+		Other->SetAnchored(true);
+		Other->SetParent(Workspace);
+		const auto Cursor = ChangeJournal::Get().CreateCursor(Workspace->GetReplicationScopeId());
+		auto Connection = Moving->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+			Other->SetSize({4.0f, 4.0f, 4.0f});
+			throw std::runtime_error("physics observer fixture");
+		});
+		Moving->ApplyImpulse({10.0f, 0.0f, 0.0f});
+		bool Threw = false;
+		try {
+			Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		} catch (const std::runtime_error &Error) {
+			Threw = std::string(Error.what()) == "physics observer fixture";
+		}
+		Connection->Disconnect();
+		std::size_t MotionSequence = 0, SizeSequence = 0;
+		for (const auto &Record : ChangeJournal::Get().Read(Cursor).Records) {
+			const auto *Property = std::get_if<PropertyUpdatedChange>(&Record.Payload);
+			if (!Property) continue;
+			if (Record.Object == Moving->GetObjectId() && Property->PropertyName == "CFrame")
+				MotionSequence = Record.Sequence;
+			if (Record.Object == Other->GetObjectId() && Property->PropertyName == "Size")
+				SizeSequence = Record.Sequence;
+		}
+		Check(Threw && MotionSequence != 0 && SizeSequence > MotionSequence,
+			"throwing physics observer preserves committed CFrame then nested Size journal order");
+		Workspace->StepPhysics(0.0, std::nullopt);
+		const auto OtherState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Other));
+		Check(OtherState && Near(OtherState->Description.Shape.Size.x, 4.0f),
+			"throwing physics observer retains nested authored backend update for the next safe point");
 	}
 
 	void TestBodyDynamicsAndCollisionGroups() {
@@ -2176,6 +2230,7 @@ int main() {
 	TestGameplayLuauJointAssembly();
 	TestSimulationPublicationAndImpulse();
 	TestPhysicsPublicationNestedMutation();
+	TestPhysicsPublicationThrowKeepsAuthoredHistory();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();
