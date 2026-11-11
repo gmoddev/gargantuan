@@ -15,7 +15,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback_selective", "realistic"), default="core")
 Args = Parser.parse_args()
 Root = Args.evidence.resolve()
 Sources = {}
@@ -60,6 +60,22 @@ def Run(Arm, Label, Binary, Options, Timeout=600):
     (Output / "receipts.json").write_text(json.dumps(Receipts, indent=2))
     print(json.dumps(Receipt), flush=True)
 
+
+if Args.suite == "readback_selective":
+    Cases = [(Static, Dynamic, Density, Lifecycle)
+             for Static, Dynamic in ((0, 1000), (900, 100), (9872, 128), (49872, 128))
+             for Density in ("0", "0.01", "1") for Lifecycle in (0, 1, 16)]
+    Cases += [(8063, 128, "1", 1), (8064, 128, "1", 1),
+              (7168, 1024, "1", 16), (7167, 1025, "1", 16),
+              (0, 8192, "1", 16)]
+    for Static, Dynamic, Density, Lifecycle in Cases:
+        for Arm in ("baseline", "candidate", "candidate", "baseline"):
+            Run(Arm, f"readback-selective-{Static}-{Dynamic}-{Density}-{Lifecycle}",
+                "gargantuan_runtime6_physics_sync_benchmark",
+                ["--static-count", str(Static), "--dynamic-count", str(Dynamic),
+                 "--frames", "30", "--warmup", "4", "--control-density", Density,
+                 "--lifecycle-per-frame", str(Lifecycle), "--publication"])
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite == "realistic":
     for Count, Changed in ((128, 0), (128, 16), (128, 128), (512, 64)):

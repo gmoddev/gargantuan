@@ -14,7 +14,7 @@ on:
       suite:
         description: Bounded comparison workload
         type: choice
-        options: [core, cframe, compact, realistic]
+        options: [core, cframe, compact, readback_selective, realistic]
         default: core
 
 permissions:
@@ -81,6 +81,9 @@ jobs:
             if [ "$COMPARISON_SUITE" = compact ] && [ "$arm" = candidate ]; then
               extra_targets+=(gargantuan_runtime6_physics_sync_fault_tests)
             fi
+            if [ "$COMPARISON_SUITE" = readback_selective ] && [ "$arm" = candidate ]; then
+              extra_targets+=(gargantuan_runtime6_readback_fault_tests)
+            fi
             cmake --build build-runtime6 --parallel 3 --target \
               gargantuan_runtime_foundation6_benchmark gargantuan_runtime6_extraction_alternatives \
               gargantuan_runtime6_physics_sync_benchmark gargantuan_runtime6_allocation_benchmark \
@@ -94,6 +97,9 @@ jobs:
             fi
             if [ "$COMPARISON_SUITE" = compact ] && [ "$arm" = candidate ]; then
               focused_tests+='|runtime6_physics_sync_fault'
+            fi
+            if [ "$COMPARISON_SUITE" = readback_selective ] && [ "$arm" = candidate ]; then
+              focused_tests+='|runtime6_readback_fault'
             fi
             SDL_VIDEODRIVER=dummy ctest --test-dir build-runtime6 --output-on-failure \
               -R "^gargantuan_(${focused_tests})$" \
