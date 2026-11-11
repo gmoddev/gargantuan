@@ -146,6 +146,12 @@ Ordinary batch commits append under that lock and roll back any appended tail
 if allocation fails. They evict the oldest retained records only after the
 whole batch has appended, so failed batches do not consume sequence numbers
 or partially evict history.
+The prepared-property qualification executable also sweeps ordinary batch
+allocation failures while a stream is full. Its test allocator records whether
+a failure happened after a record was appended, then verifies exact retained
+handle identity, sequence and eviction counters through rollback and a
+successful ordered retry. Renderer dirtiness may conservatively request a full
+resync after failure; this journal guarantee does not imply dirty state rollback.
 
 Records remain an in-process prototype. Retention is bounded per scope and cursor reads
 detect eviction with `ResnapshotRequired`; the current default capacity is 16,384.
