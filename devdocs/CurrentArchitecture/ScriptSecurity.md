@@ -70,9 +70,9 @@ checks `ProcessControl` for exit and stdout operations; ordinary player/runtime
 profiles do not receive it.
 
 The Script activation queue snapshots its members at the start of each
-`ScriptEngine::Step`. A Script parented during another Script's callback is
-eligible on the next step. Removing or destroying a queued Script during a
-callback prevents its execution in the current snapshot.
+`ScriptEngine::Step`. A newly queued Script starts no earlier than the next
+step. A Script removed before its turn is skipped unless it has been requeued
+before that turn; destroying it prevents requeueing.
 
 The current context is thread-local and defaults to trusted Core for backwards
 compatibility with engine-owned call paths. New untrusted script entry points
