@@ -291,9 +291,9 @@ namespace gargantuan {
 				glm::lookAt(glm::vec3(0), Direction, Up);
 		}
 		[[nodiscard]] static bool IsVisible(const RenderFrameState &Frame, const RenderLocalLightState &Light) {
-			// Match the world shader's Projection * (View * position) association.
-			// Re-evaluating a precombined float VP plane at a large world coordinate
-			// can cancel differently and reject a light whose center is on screen.
+			// Conservatively admit a source near a precision-sensitive clip edge.
+			// Direct frames can exceed the published light-coordinate bound, where
+			// float transform associations can lose different low bits.
 			const glm::vec4 ViewCenter = Frame.Camera.ViewMatrix * glm::vec4(Light.Position, 1.0f);
 			const glm::vec4 Clip = Frame.Camera.ProjectionMatrix * ViewCenter;
 			if (!std::isfinite(Clip.x) || !std::isfinite(Clip.y) ||

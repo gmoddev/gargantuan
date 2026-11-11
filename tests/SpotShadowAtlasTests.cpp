@@ -189,9 +189,9 @@ int main() try {
 	const auto AfterNegativePole = LightPlaneX({-0.000001f, -1, 0});
 	Require(glm::dot(BeforeNegativePole, AfterNegativePole) > 0.999f,
 		"spotlight light plane jumped at the negative Y pole");
-	// A captured float32 camera at a large coordinate. The precombined VP
-	// right plane excludes this 0.101-radius source, while the staged shader
-	// transform puts its center on the visible side of the right clip plane.
+	// Internal direct-frame adversary: this light lies beyond the neutral
+	// MaximumLocalLightCoordinate (1e6). Its VP matches P * V bit for bit, but
+	// it cannot be published. This checks conservative adapter behavior.
 	RenderFrameState LargeFrame;
 	LargeFrame.Camera.Position = {8970941.0f, 8221246.5f, 9602025.0f};
 	LargeFrame.Camera.ProjectionMatrix = glm::mat4(
@@ -210,6 +210,11 @@ int main() try {
 	RenderLocalLightState EdgeLight = (*Lights)[0];
 	EdgeLight.Position = {8970932.0f, 8221241.0f, 9602022.0f};
 	EdgeLight.Range = 0.101f;
+	Require(glm::any(glm::greaterThan(glm::abs(EdgeLight.Position),
+		glm::vec3(MaximumLocalLightCoordinate))) &&
+		LargeFrame.Camera.ViewProjectionMatrix ==
+			LargeFrame.Camera.ProjectionMatrix * LargeFrame.Camera.ViewMatrix,
+		"direct-frame adversary unexpectedly became an in-range or noncanonical fixture");
 	LargeFrame.Environment.LocalLights = std::make_shared<const std::vector<RenderLocalLightState>>(
 		std::initializer_list<RenderLocalLightState>{EdgeLight});
 	const glm::vec4 Staged = LargeFrame.Camera.ProjectionMatrix *
@@ -220,11 +225,11 @@ int main() try {
 		glm::dvec3(EdgeLight.Position)) + RightPlane.w;
 	const double SphereRadius = glm::length(glm::dvec3(RightPlane)) * EdgeLight.Range;
 	Require(Staged.w - Staged.x > 0.5f && AggregatedDistance < -SphereRadius - 0.25,
-		"large-coordinate fixture did not discriminate staged and aggregated frustum tests");
+		"out-of-range direct-frame fixture did not separate its clip calculations");
 	SDLSpotShadowAtlas EdgeAtlas;
 	EdgeAtlas.Prepare(LargeFrame, nullptr);
 	Require(EdgeAtlas.GetAssignments().size() == 1,
-		"large-coordinate visible spotlight was rejected by aggregated float VP cancellation");
+		"out-of-range direct-frame spotlight lost conservative atlas admission");
 	std::cout << "[Render:SpotShadowAtlas] Budget, stable assignment and lifetime passed\n";
 	return 0;
 } catch (const std::exception &Error) {
