@@ -778,16 +778,18 @@ namespace gargantuan {
 
 	const std::vector<RenderProjectedTraversal> &RenderProjection::GetCompactTraversal() const {
 		if (CompactTraversalValid) return CompactTraversal;
-		std::vector<RenderProjectedTraversal> Rebuilt;
-		Rebuilt.reserve(Entries.size());
+		// Apply invalidates positional order after the legacy map reserve. Reuse
+		// this bounded storage while rebuilding in the map's current order;
+		// no traversal reference remains live across a publication.
+		CompactTraversal.clear();
+		CompactTraversal.reserve(Entries.size());
 		for (const auto &[Object, Projected] : Entries) {
 			const auto Pose = AnimationPoses.find(Object);
 			const auto Mesh = Projected.Mesh ? Meshes.find(*Projected.Mesh) : Meshes.end();
-			Rebuilt.push_back({Object, &Projected,
+			CompactTraversal.push_back({Object, &Projected,
 				Pose == AnimationPoses.end() ? nullptr : &Pose->second,
 				Mesh == Meshes.end() ? nullptr : &Mesh->second.Bounds});
 		}
-		CompactTraversal.swap(Rebuilt);
 		CompactTraversalValid = true;
 		return CompactTraversal;
 	}

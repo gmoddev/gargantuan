@@ -231,9 +231,9 @@ namespace {
 		Move.Updates.push_back({{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1}, 4.0f)});
 		(void)Projection.Apply(Move);
 		Check(Projection.GetObjects().bucket_count() == LegacyOrder.bucket_count() &&
-			Projection.GetCompactTraversal().data() != StableData &&
+			Projection.GetCompactTraversal().data() == StableData &&
 			Projection.GetItem({10, 1})->ModelMatrix[3].x == 4.0f,
-			"in-place transform updates follow legacy reserve and refresh positional traversal");
+			"in-place transform updates follow legacy reserve and reuse traversal storage");
 		{
 			auto Actual = Projection.GetObjects().begin();
 			for (auto Expected = LegacyOrder.begin(); Expected != LegacyOrder.end(); ++Expected, ++Actual)
