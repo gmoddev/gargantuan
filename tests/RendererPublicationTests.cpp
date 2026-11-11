@@ -630,6 +630,8 @@ namespace {
 		RenderPublisher Publisher(&ManualDirty);
 		const auto Initial = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
 		Check(Initial->Creates.size() == 1, "manual dirty fixture starts from one published Part");
+		RenderProjection Projection;
+		(void)Projection.Apply(*Initial);
 		PartValue->SetCFrame(CFrame(glm::vec3(13.0f, 2.0f, -4.0f)));
 		ManualDirty.Mark(World->GetReplicationScopeId(), PartValue->GetObjectId(), RenderUpdateDomain::Material);
 		const auto Changed = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
@@ -638,6 +640,11 @@ namespace {
 			Changed->Updates.front().Item.InverseModelMatrix[3].x !=
 				Initial->Creates.front().Item.InverseModelMatrix[3].x,
 			"material-only dirty hint cannot conceal a changed final transform or inverse");
+		(void)Projection.Apply(*Changed);
+		const auto Projected = Projection.GetObjects().find(PartValue->GetObjectId());
+		Check(Projected != Projection.GetObjects().end() &&
+			Projected->second.Item.ModelMatrix[3].x == 13.0f,
+			"projection applies the complete final transform despite a material-only hint");
 		Game->Destroy();
 	}
 
