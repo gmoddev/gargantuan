@@ -114,6 +114,8 @@ namespace {
 		);
 		auto Initial = Publisher.Publish(*World, Camera, 1280, 720);
 		(void)Projection.Apply(*Initial);
+		if (Initial->Creates.size() != Count || Projection.GetObjects().size() != Count)
+			throw std::runtime_error("[Render:Foundation2Benchmark] Rigid fixture publication/object count mismatch");
 		auto &Dirty = RenderDirtyAccumulator::Get();
 		auto &Journal = ChangeJournal::Get();
 		Dirty.ResetProfile();
@@ -155,6 +157,9 @@ namespace {
 			const auto ApplyStart = Clock::now();
 			const auto Changes = Projection.Apply(*Publication);
 			Application.push_back(Milliseconds(Clock::now() - ApplyStart));
+			if (Publication->FullResync || Changes.Created != 0 || Changes.Removed != 0 ||
+				Changes.Updated != ChangedPerFrame || Projection.GetObjects().size() != Count)
+				throw std::runtime_error("[Render:Foundation2Benchmark] Rigid fixture delta count mismatch");
 			Creates += Changes.Created;
 			Updates += Changes.Updated;
 			Removes += Changes.Removed;
