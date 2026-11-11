@@ -16,9 +16,9 @@ This continuation starts at Foundation 4 `94f920485564798742bc22a061cbc3a415034f
 The qualified implementation remains `adf0acda14e6ce5e57657bf01254f1e840c99868`.
 The first Foundation 5 attribution build is `29b695b52609977323d590ca03b8426fdc5891b4`.
 Local evidence is under `renderer-foundation5-20261111`; prior Foundation 4
-packages and unsuccessful experiments remain immutable. Native probe rendering,
-layered shadows and their physical qualification are subsequent implementation
-slices. The contracts below describe schema, publication and reference math.
+packages and unsuccessful experiments remain immutable. Native probe rendering
+and layered shadows are implemented experimental paths. Their physical GPU
+qualification remains separate from source/syntax and numerical checks.
 
 ## Probe authority and publication
 
@@ -80,6 +80,32 @@ the final qualification record must provide exact source identities and fixtures
 for a later authoring integration.
 
 ## Reference verification
+
+The SDL Sky pass owns the local prefilters and two cube arrays (12 resident
+sources, 16px diffuse and 64px seven-level reflection). Arrays use about 3.14 MiB
+of logical texels. Each resident prefilter currently owns about 300 KiB plus
+its pipelines/LUT; sharing the device-wide BRDF and pipelines is a later resource
+optimization. At most one local prefilter remains in flight, with at most one
+new local source prepared per frame. A global Sky build has priority. Completed
+prefilters copy into stable array layers before world shading, and only submitted
+copies become reusable. A changed residency generation, source identity or
+revision requires preparation. Pose, priority, intensity and camera changes do
+not alter a source key. Array allocation failures retry after 120 preparation
+frames; unsupported format capability remains disabled until recreation.
+
+Residency chooses the nearest influence volumes first, then priority and stable
+identity. Priority resolves overlapping shading influence, so distant high
+priorities cannot displace a nearby room. The shader evaluates at most 12
+resident volumes and samples at most two sources. Source disappearance clears
+the corresponding record immediately; losing all authored probes releases both
+large arrays. In-flight prefilter retirement retains at most one pending source
+until its fence completes. Global and probe-only lighting use the same BRDF
+integration rather than substituting a white lookup in the absence of Sky.
+
+These probes currently consume authored/imported six-face Image assets. Automatic
+scene capture, authored bake scheduling and geometry-dependent recapture are not
+yet implemented. Array capability/failure fallback beyond the two physical
+qualification adapters still requires a portable shader path and dedicated gates.
 
 `gargantuan_reflection_probe_tests` checks rotated boxes, capture offsets,
 parallel rays, large coordinates, priority, empty fallback and unit energy under

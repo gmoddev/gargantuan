@@ -11,6 +11,7 @@
 #include "render/sdl/SDLSceneDepth.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
+#include "render/sdl/SDLWorldUniforms.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -218,19 +219,7 @@ namespace gargantuan {
 	  public:
 		static constexpr std::string_view LABEL = "Opaque";
 
-		struct alignas(16) WorldUniforms {
-			glm::mat4 ViewMatrix;
-			glm::mat4 ProjectionMatrix;
-			glm::mat4 ShadowBiasMatrix;
-			glm::vec4 SunDirectionIntensity;
-			glm::vec4 AmbientExposure;
-			glm::vec4 SunColorFogEnabled;
-			glm::vec4 FogColorStart;
-			glm::vec4 CameraPositionFogEnd;
-			glm::vec4 EnvironmentLighting;
-			glm::vec4 EnvironmentRotationTone;
-			glm::vec4 LocalLighting;
-		};
+		using WorldUniforms = SDLWorldUniforms;
 
 		struct alignas(16) PartUniforms {
 			glm::mat4 ModelMatrix;
@@ -258,8 +247,8 @@ namespace gargantuan {
 				Shader.VertexStorageBufferCount = 1;
 				Shader.FragmentFilepath = GetSDLShaderPath("opaque.frag");
 				Shader.FragmentUniformBufferCount = 1;
-				Shader.FragmentSamplerCount = 9;
-				Shader.FragmentStorageBufferCount = 2;
+				Shader.FragmentSamplerCount = 13;
+				Shader.FragmentStorageBufferCount = 3;
 				OutputMode = swapchainFormat == SDLHdrSceneFormat ? 2.0f :
 					SDLTargetEncodesSrgb(swapchainFormat) ? 0.0f : 1.0f;
 				Shader.Init(gpu, Metrics);
@@ -327,7 +316,7 @@ namespace gargantuan {
 			};
 
 			auto *White = context.TextureResources->GetWhiteTexture();
-			LocalLights.Prepare(context.Projection.GetFrame(), context.Metrics);
+			LocalLights.Prepare(context.Projection.GetFrame(), context.Metrics, context.SpotShadowAtlas);
 			auto *Pass = SDL_BeginGPURenderPass(context.Commands, &colorTarget, 1, &depthTarget);
 			if (!Pass) throw std::runtime_error("[Renderer:Material] Could not begin the world render pass");
 			try {
@@ -354,7 +343,7 @@ namespace gargantuan {
 			const auto &Frame = Context.Projection.GetFrame();
 			const auto &Environment = Frame.Environment;
 			const auto EnvironmentAngle = glm::radians(Environment.EnvironmentRotation);
-			const WorldUniforms Uniforms{
+			WorldUniforms Uniforms{
 				.ViewMatrix = Frame.Camera.ViewMatrix,
 				.ProjectionMatrix = Frame.Camera.ProjectionMatrix,
 				.ShadowBiasMatrix = SHADOW_BIAS_MATRIX * Context.ShadowMatrix,
@@ -365,11 +354,13 @@ namespace gargantuan {
 				.CameraPositionFogEnd = glm::vec4(Frame.Camera.Position, Environment.Fog.End),
 				.EnvironmentLighting = glm::vec4(Context.EnvironmentLighting.Enabled ? 1.0f : 0.0f,
 					Context.EnvironmentLighting.ReflectionMaxLod, Environment.IblIntensity,
-					Context.ShadowPoseRevisions.empty() ? 0.0f : 1.0f),
+					(Context.CascadedShadows ? Context.CascadeHasCasters : !Context.ShadowPoseRevisions.empty()) ? 1.0f : 0.0f),
 				.EnvironmentRotationTone = glm::vec4(std::sin(EnvironmentAngle), std::cos(EnvironmentAngle),
 					Environment.ToneMapping == RenderToneMapping::Reinhard ? 1.0f : 0.0f, 0.0f),
 				.LocalLighting = LocalLights.GetUniforms(),
 			};
+			PopulateSDLWorldShadows(Uniforms, Context);
+			Uniforms.ProbeLighting = {static_cast<float>(Context.ReflectionProbes.Count), 6.0f, 0, 0};
 			SDL_PushGPUVertexUniformData(Context.Commands, 0, &Uniforms, sizeof(Uniforms));
 			SDL_PushGPUFragmentUniformData(Context.Commands, 0, &Uniforms, sizeof(Uniforms));
 
@@ -404,7 +395,8 @@ namespace gargantuan {
 				if (MaterialPipeline != BoundPipeline) {
 					SDL_BindGPUGraphicsPipeline(Pass, MaterialPipeline);
 					const auto LightBuffers = LocalLights.GetBuffers();
-					SDL_BindGPUFragmentStorageBuffers(Pass, 0, LightBuffers.data(), LightBuffers.size());
+					const std::array<SDL_GPUBuffer *, 3> FragmentBuffers{LightBuffers[0], LightBuffers[1], Context.ReflectionProbes.Records};
+					SDL_BindGPUFragmentStorageBuffers(Pass, 0, FragmentBuffers.data(), FragmentBuffers.size());
 					BoundPipeline = MaterialPipeline;
 					BoundMesh = nullptr;
 					BoundObject = nullptr;
@@ -468,10 +460,12 @@ namespace gargantuan {
 					if (std::ranges::find(Textures, nullptr) != Textures.end())
 						throw std::logic_error("[Renderer:Material] A material texture has no SDL residency");
 					if (Textures != BoundTextures || Samplers != BoundSamplers) {
-						const std::array<SDL_GPUTextureSamplerBinding, 9> Bindings{{
+						const std::array<SDL_GPUTextureSamplerBinding, 13> Bindings{{
 							ShadowBinding, {Textures[0], Samplers[0]}, {Textures[1], Samplers[1]}, {Textures[2], Samplers[2]},
 							{Textures[3], Samplers[3]}, {Textures[4], Samplers[4]}, Context.EnvironmentLighting.Irradiance,
 							Context.EnvironmentLighting.Reflections, Context.EnvironmentLighting.BrdfLut,
+							{Context.CascadeShadowTexture, Context.ShadowSampler}, {Context.LocalShadowTexture, Context.ShadowSampler},
+							Context.ReflectionProbes.Irradiance, Context.ReflectionProbes.Reflections,
 						}};
 						SDL_BindGPUFragmentSamplers(Pass, 0, Bindings.data(), Bindings.size());
 						BoundTextures = Textures;

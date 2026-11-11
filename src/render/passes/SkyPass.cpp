@@ -27,7 +27,7 @@ namespace gargantuan {
 		};
 
 		SkyPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics)
-			: ImageBasedLighting(Gpu) {
+			: ImageBasedLighting(Gpu), ReflectionProbes(Gpu) {
 			try {
 				Shader.VertexFilepath = GetSDLShaderPath("sky.vert");
 				Shader.VertexUniformBufferCount = 1;
@@ -63,6 +63,7 @@ namespace gargantuan {
 		}
 
 		void Destroy(SDL_GPUDevice *Gpu) override {
+			ReflectionProbes.Destroy();
 			ImageBasedLighting.Destroy();
 			if (Sampler) SDL_ReleaseGPUSampler(Gpu, Sampler);
 			Sampler = nullptr;
@@ -83,7 +84,12 @@ namespace gargantuan {
 			} else {
 				Bindings.fill({Context.TextureResources->GetWhiteTexture(), Sampler});
 			}
+			const auto Before = Context.Metrics ? Context.Metrics->IblBuilds : 0;
 			Context.EnvironmentLighting = ImageBasedLighting.Prepare(Environment.Sky, *Context.TextureResources, Context.Metrics);
+			const bool GlobalBuilt = Context.Metrics && Context.Metrics->IblBuilds != Before;
+			Context.ReflectionProbes = ReflectionProbes.Prepare(Context, !GlobalBuilt && ImageBasedLighting.PollPreparation());
+			if (Context.ReflectionProbes.BrdfLut.texture)
+				Context.EnvironmentLighting.BrdfLut = Context.ReflectionProbes.BrdfLut;
 			SDL_GPUColorTargetInfo ColorTarget{
 				.texture = Context.GetSceneColorTexture(),
 				.clear_color =
@@ -130,7 +136,10 @@ namespace gargantuan {
 
 	  private:
 		SDLImageBasedLighting ImageBasedLighting;
+		SDLReflectionProbes ReflectionProbes;
 		SDL_GPUSampler *Sampler = nullptr;
+	  public:
+		void OnFrameSubmitted() override { ReflectionProbes.OnFrameSubmitted(); }
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateSkyPass(

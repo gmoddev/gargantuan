@@ -9,6 +9,8 @@
 #include "render/sdl/SDLRenderPass.hpp"
 #include "render/sdl/SDLSceneColor.hpp"
 #include "render/sdl/SDLSceneDepth.hpp"
+#include "render/sdl/SDLShadowResources.hpp"
+#include "render/sdl/SDLSpotShadowAtlas.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
 
@@ -85,6 +87,8 @@ namespace gargantuan {
 		RenderPublicationId VisibilityPublication = InvalidRenderPublicationId;
 		bool VisibilityComplete = false;
 		SDLDirectionalShadowCache ShadowCache;
+		SDLShadowResources ShadowResources;
+		SDLSpotShadowAtlas SpotShadowAtlas;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		SDLRendererMetrics Metrics;
 		std::uint32_t RemainingPaletteUploadFailures = 0;
@@ -210,6 +214,7 @@ namespace gargantuan {
 		}
 		for (auto &Pass : State->RenderPasses) if (Pass) Pass->Destroy(State->Gpu);
 		State->RenderPasses.clear();
+		if (State->Gpu) State->ShadowResources.Destroy(State->Gpu);
 		if (State->Gpu) State->MaterialSamplers.Destroy(State->Gpu);
 		if (State->ColorTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->ColorTexture);
 		if (State->HdrSceneTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->HdrSceneTexture);
@@ -274,6 +279,7 @@ namespace gargantuan {
 			}
 			const auto ProjectionStart = Clock::now();
 			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
+			State->SpotShadowAtlas.ApplyPublication(State->Projection, *Publication);
 			State->Metrics.LastShadowClassificationNanoseconds = Nanoseconds(Clock::now() - ProjectionStart);
 			const auto Changes = State->Projection.Apply(*Publication);
 			State->Metrics.LastProjectionValidationNanoseconds = Changes.ValidationNanoseconds;
@@ -304,6 +310,7 @@ namespace gargantuan {
 			State->TextureResources->Destroy();
 			State->SkinPalettes->Destroy();
 			State->ShadowCache.Invalidate();
+			State->SpotShadowAtlas.Invalidate();
 			State->ShadowPoseRevisions.clear();
 			State->VisibilityComplete = false;
 			State->VisibleAnimationObjects.clear();
@@ -370,6 +377,7 @@ namespace gargantuan {
 			return;
 		}
 		try {
+			State->ShadowResources.PrepareFrame(State->Gpu, Frame, State->SpotShadowAtlas);
 			const auto &Definitions = GetSDLRenderPassConstructors();
 			for (std::size_t Index = 0; Index < State->RenderPasses.size(); ++Index) {
 				const auto PassStart = Clock::now();
@@ -411,6 +419,9 @@ namespace gargantuan {
 		}
 		State->Metrics.CpuSubmissionNanoseconds += State->Metrics.LastSubmissionNanoseconds;
 		if (State->ShadowCache.OnFrameSubmitted()) ++State->Metrics.ShadowMapBuilds;
+		State->ShadowResources.OnFrameSubmitted();
+		for (auto &Pass : State->RenderPasses) Pass->OnFrameSubmitted();
+		(void)State->SpotShadowAtlas.OnFrameSubmitted();
 		++State->Metrics.FramesSubmitted;
 		if (Publication->FullResync) ++State->Metrics.FullResyncs;
 	}
@@ -481,6 +492,8 @@ namespace gargantuan {
 			Metrics.MaterialSourceBytes = State->TextureResources->GetMaterialSourceBytes();
 			Metrics.MaterialViewFallbacks = State->TextureResources->GetMaterialViewFallbacks();
 			Metrics.MaterialUploadStagingBytes = State->TextureResources->GetMaterialUploadStagingBytes();
+			Metrics.MaterialViewEvictions = State->TextureResources->GetMaterialViewEvictions();
+			Metrics.DeferredMaterialViewUploads = State->TextureResources->GetDeferredMaterialViewUploads();
 		}
 		return Metrics;
 	}

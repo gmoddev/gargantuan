@@ -4,6 +4,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/editor/EditorViewport.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 
 #include "render/sdl/SDLDirectionalShadowCache.hpp"
 #include "render/sdl/SDLMaterialSamplers.hpp"
@@ -11,6 +12,8 @@
 #include "render/sdl/SDLRenderPass.hpp"
 #include "render/sdl/SDLSceneColor.hpp"
 #include "render/sdl/SDLSceneDepth.hpp"
+#include "render/sdl/SDLShadowResources.hpp"
+#include "render/sdl/SDLSpotShadowAtlas.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
 
@@ -121,6 +124,9 @@ namespace gargantuan {
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
 		SDLDirectionalShadowCache ShadowCache;
+		SDLShadowResources ShadowResources;
+		SDLSpotShadowAtlas SpotShadowAtlas;
+		SDLRendererMetrics Metrics;
 		bool RequiresFullResync = false;
 		std::uint32_t RemainingPaletteUploadFailures = 0;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
@@ -132,6 +138,7 @@ namespace gargantuan {
 			TextureResources->Destroy();
 			SkinPalettes->Destroy();
 			ShadowCache.Invalidate();
+			SpotShadowAtlas.Invalidate();
 			ShadowPoseRevisions.clear();
 			Projection.Clear();
 		}
@@ -143,6 +150,7 @@ namespace gargantuan {
 			if (SkinPalettes) { SkinPalettes->Destroy(); SkinPalettes.reset(); }
 			for (auto &Pass : RenderPasses) if (Pass) Pass->Destroy(Gpu);
 			RenderPasses.clear();
+			if (Gpu) ShadowResources.Destroy(Gpu);
 			if (Gpu) MaterialSamplers.Destroy(Gpu);
 			if (DownloadBuffer && Gpu) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
 			if (ColorTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, ColorTexture);
@@ -278,6 +286,7 @@ namespace gargantuan {
 		bool ApplyingNativeResources = false;
 		try {
 			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
+			State->SpotShadowAtlas.ApplyPublication(State->Projection, *Publication);
 			(void)State->Projection.Apply(*Publication);
 			ApplyingNativeResources = true;
 			State->MeshResources->ApplyPublication(*Publication);
@@ -314,6 +323,7 @@ namespace gargantuan {
 		SDLFrameContext Frame(
 			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
 		Frame.Commands = Commands;
+		Frame.Metrics = &State->Metrics;
 		Frame.SwapchainTexture = State->ColorTexture;
 		Frame.HdrSceneTexture = State->HdrSceneTexture;
 		Frame.DepthTexture = State->DepthTexture;
@@ -324,6 +334,7 @@ namespace gargantuan {
 		Frame.Width = State->Width;
 		Frame.Height = State->Height;
 		try {
+			State->ShadowResources.PrepareFrame(State->Gpu, Frame, State->SpotShadowAtlas);
 			for (auto &Pass : State->RenderPasses)
 				if (auto *Recorded = Pass->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
 		} catch (...) {
@@ -351,6 +362,9 @@ namespace gargantuan {
 		}
 		const auto ReadbackComplete = std::chrono::steady_clock::now();
 		(void)State->ShadowCache.OnFrameSubmitted();
+		State->ShadowResources.OnFrameSubmitted();
+		for (auto &Pass : State->RenderPasses) Pass->OnFrameSubmitted();
+		(void)State->SpotShadowAtlas.OnFrameSubmitted();
 		auto *Rgba = static_cast<const std::uint8_t *>(SDL_MapGPUTransferBuffer(State->Gpu, State->DownloadBuffer, false));
 		if (!Rgba) {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);

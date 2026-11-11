@@ -12,6 +12,8 @@
 #include <cstdint>
 
 namespace gargantuan {
+	struct SDLFrameContext;
+	class SDLSpotShadowAtlas;
 	// Each spotlight owns one complete depth layer. This avoids partial-layer
 	// clears, fragmentation, and stale neighbors when only one light updates.
 	inline constexpr std::uint32_t MaximumShadowedSpotlights = 8;
@@ -19,6 +21,8 @@ namespace gargantuan {
 
 	class SDLShadowResources final {
 	  public:
+		void PrepareFrame(SDL_GPUDevice *Gpu, SDLFrameContext &Frame, SDLSpotShadowAtlas &Atlas);
+		void OnFrameSubmitted() { FallbackNeedsInitialization = false; }
 		[[nodiscard]] bool EnsureDirectional(SDL_GPUDevice *Gpu, std::uint32_t Resolution) {
 			if (Directional && DirectionalResolution == Resolution) return true;
 			if (Resolution < 256 || Resolution > 4096) return false;
@@ -63,8 +67,11 @@ namespace gargantuan {
 		void Destroy(SDL_GPUDevice *Gpu) {
 			if (Directional) SDL_ReleaseGPUTexture(Gpu, Directional);
 			if (Local) SDL_ReleaseGPUTexture(Gpu, Local);
+			if (Fallback) SDL_ReleaseGPUTexture(Gpu, Fallback);
 			Directional = nullptr;
 			Local = nullptr;
+			Fallback = nullptr;
+			FallbackNeedsInitialization = true;
 			DirectionalResolution = 0;
 		}
 
@@ -80,6 +87,8 @@ namespace gargantuan {
 	  private:
 		SDL_GPUTexture *Directional = nullptr;
 		SDL_GPUTexture *Local = nullptr;
+		SDL_GPUTexture *Fallback = nullptr;
+		bool FallbackNeedsInitialization = true;
 		std::uint32_t DirectionalResolution = 0;
 	};
 }

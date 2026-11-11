@@ -127,6 +127,14 @@ namespace gargantuan {
 		std::uint64_t ShadowCacheHits = 0;
 		std::uint64_t ShadowMapPasses = 0;
 		std::uint64_t ShadowCasterDraws = 0;
+		std::uint64_t ResidentReflectionProbes = 0;
+		std::uint64_t ProbeArrayBytes = 0;
+		std::uint64_t ProbeUploadBytes = 0;
+		std::uint64_t ProbeUpdates = 0;
+		std::uint64_t ProbePreprocessBuilds = 0;
+		std::uint64_t LastProbePreparationNanoseconds = 0;
+		std::uint64_t MaterialViewEvictions = 0;
+		std::uint64_t DeferredMaterialViewUploads = 0;
 	};
 
 	class SDLRenderer final : public BaseRenderer {

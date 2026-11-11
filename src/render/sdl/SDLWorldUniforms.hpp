@@ -36,11 +36,13 @@ namespace gargantuan {
 		glm::vec4 SpotShadowControls;
 		std::array<glm::mat4, MaximumShadowedSpotlights> SpotShadowMatrices;
 		std::array<glm::vec4, MaximumShadowedSpotlights> SpotShadowOrigins;
+		glm::vec4 ProbeLighting;
 	};
 	static_assert(offsetof(SDLWorldUniforms, ShadowControls) == 320);
 	static_assert(offsetof(SDLWorldUniforms, CascadeShadowMatrices) == 336);
 	static_assert(offsetof(SDLWorldUniforms, SpotShadowControls) == 784);
-	static_assert(sizeof(SDLWorldUniforms) == 1440);
+	static_assert(offsetof(SDLWorldUniforms, ProbeLighting) == 1440);
+	static_assert(sizeof(SDLWorldUniforms) == 1456);
 
 	inline const glm::mat4 SDLShadowBiasMatrix{
 		0.5f, 0.0f, 0.0f, 0.0f,
@@ -50,6 +52,12 @@ namespace gargantuan {
 	};
 
 	inline void PopulateSDLWorldShadows(SDLWorldUniforms &World, const SDLFrameContext &Context) {
+		World.CascadeShadowMatrices.fill(glm::mat4(1));
+		World.CascadeShadowOrigins.fill(glm::vec4(0));
+		World.CascadeShadowSplits.fill(glm::vec4(0));
+		World.CascadeShadowMetrics.fill(glm::vec4(0));
+		World.SpotShadowMatrices.fill(glm::mat4(1));
+		World.SpotShadowOrigins.fill(glm::vec4(0));
 		const auto &Settings = Context.Projection.GetFrame().Environment.DirectionalShadows;
 		World.ShadowControls = {};
 		if (Context.CascadedShadows && Context.CascadeShadowTexture && Context.CascadePlan.Count > 0) {

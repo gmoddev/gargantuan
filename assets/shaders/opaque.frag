@@ -116,20 +116,10 @@ vec3 MaterialNormal(vec3 Normal) {
     return gl_FrontFacing ? Normal : -Normal;
 }
 
+#include "probe-lighting.glsl"
+
 vec3 EvaluateEnvironment(vec3 Base, vec3 Normal, vec3 View, float Metallic, float Roughness) {
-    vec3 Ambient = Base * (1.0 - Metallic) * world.AmbientExposure.rgb;
-    if (world.EnvironmentLighting.x < 0.5 || world.EnvironmentLighting.z <= 0.0) return Ambient;
-    float NoV = clamp(dot(Normal, View), 0.0, 1.0);
-    vec3 F0 = mix(vec3(0.04), Base, Metallic);
-    vec3 GrazingFresnel = max(vec3(1.0 - Roughness), F0);
-    vec3 Fresnel = F0 + (GrazingFresnel - F0) * pow(1.0 - NoV, 5.0);
-    vec3 Diffuse = texture(EnvironmentIrradiance, EnvironmentSampleDirection(Normal, world.EnvironmentRotationTone.xy)).rgb *
-        Base * (1.0 - Fresnel) * (1.0 - Metallic);
-    vec3 ReflectionRay = EnvironmentSampleDirection(reflect(-View, Normal), world.EnvironmentRotationTone.xy);
-    vec3 Radiance = textureLod(EnvironmentReflections, ReflectionRay,
-        Roughness * world.EnvironmentLighting.y).rgb;
-    vec2 Brdf = texture(EnvironmentBrdf, vec2(NoV, Roughness)).rg;
-    return Ambient + world.EnvironmentLighting.z * (Diffuse + Radiance * (F0 * Brdf.x + Brdf.y));
+    return EvaluateSpatialEnvironment(Base, Normal, View, Metallic, Roughness);
 }
 
 vec3 EvaluateDirect(vec3 Base, vec3 Normal, vec3 Light, vec3 View, float Metallic, float Roughness) {

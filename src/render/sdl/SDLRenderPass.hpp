@@ -2,6 +2,8 @@
 
 #include "gargantuan/render/RenderProjection.hpp"
 #include "render/sdl/SDLImageBasedLighting.hpp"
+#include "render/sdl/SDLDirectionalCascadePlan.hpp"
+#include "render/sdl/SDLReflectionProbes.hpp"
 #include "render/sdl/SDLShader.hpp"
 
 #include <SDL3/SDL_gpu.h>
@@ -18,6 +20,7 @@ namespace gargantuan {
 	class SDLSkinPaletteCache;
 	class SDLTextureCache;
 	class SDLMaterialSamplers;
+	class SDLSpotShadowAtlas;
 	struct SDLRendererMetrics;
 
 	struct SDLFrameContext {
@@ -38,12 +41,19 @@ namespace gargantuan {
 		SDLTextureCache *TextureResources = nullptr;
 		SDLMaterialSamplers *MaterialSamplers = nullptr;
 		SDLImageBasedLightingBindings EnvironmentLighting;
+		SDLReflectionProbeBindings ReflectionProbes;
 		SDLRendererMetrics *Metrics = nullptr;
 		SDL_GPUCommandBuffer *Commands = nullptr;
 		SDL_GPUTexture *SwapchainTexture = nullptr;
 		SDL_GPUTexture *HdrSceneTexture = nullptr;
 		SDL_GPUTexture *DepthTexture = nullptr;
 		SDL_GPUTexture *ShadowMapTexture = nullptr;
+		bool CascadedShadows = false;
+		bool CascadeHasCasters = false;
+		SDL_GPUTexture *CascadeShadowTexture = nullptr;
+		SDLDirectionalCascadePlan CascadePlan;
+		SDL_GPUTexture *LocalShadowTexture = nullptr;
+		SDLSpotShadowAtlas *SpotShadowAtlas = nullptr;
 		SDL_GPUSampler *ShadowSampler = nullptr;
 		glm::mat4 ShadowMatrix{1.0f};
 		SDLDirectionalShadowCache &ShadowCache;
@@ -65,6 +75,7 @@ namespace gargantuan {
 		virtual ~SDLRenderPass() = default;
 		virtual SDL_GPURenderPass *Draw(SDL_GPUDevice *Gpu, SDLFrameContext &Context) = 0;
 		virtual void Resize(SDL_GPUDevice *, std::uint32_t, std::uint32_t) {}
+		virtual void OnFrameSubmitted() {}
 		virtual void Destroy(SDL_GPUDevice *Gpu);
 	};
 

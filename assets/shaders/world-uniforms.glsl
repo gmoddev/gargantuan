@@ -23,5 +23,6 @@ layout(set = WORLD_UNIFORM_SET, binding = 0) uniform WorldUniforms {
     vec4 SpotShadowControls;
     mat4 SpotShadowMatrices[8];
     vec4 SpotShadowOrigins[8];
+    vec4 ProbeLighting;
 } world;
 #endif
