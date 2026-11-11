@@ -452,11 +452,13 @@ namespace gargantuan {
 		void PrepareInstanceBatches(SDLFrameContext &Context) {
 			using Clock = std::chrono::steady_clock;
 			const auto TraversalStart = Clock::now();
-			const auto &Ordered = Context.Projection.GetCompactTraversal();
+			// The ordinary camera pass walks GetObjects() in its current map order.
+			// Only request the derived vector when that pass will also use it.
+			const auto *Ordered = Context.UseCompactTraversal ? &Context.Projection.GetCompactTraversal() : nullptr;
 			const auto CandidateStart = Clock::now();
 			if (Context.Metrics) Context.Metrics->LastInstanceTraversalNanoseconds =
 				std::chrono::duration_cast<std::chrono::nanoseconds>(CandidateStart - TraversalStart).count();
-			InstanceActions.assign(Ordered.size(), -1);
+			InstanceActions.assign(Context.Projection.GetObjects().size(), -1);
 			InstanceBatches.clear();
 			InstanceCoverageGrid.Clear();
 			VisibleInstances.BeginFrame();
@@ -493,37 +495,37 @@ namespace gargantuan {
 				Pending.clear();
 				InstanceCoverageGrid.Clear();
 			};
-			for (std::size_t Position = 0; Position < Ordered.size(); ++Position) {
-				const auto &Record = Ordered[Position];
-				const auto &Projected = *Record.Projected;
-				if (!Projected.Visible) { Flush(); continue; }
+			const auto VisitCandidate = [&](std::size_t Position, ObjectId Object,
+				const RenderProjectedObject &Projected, const RenderAnimationPoseUpdate *Pose,
+				const RenderBounds *MeshBounds) {
+				if (!Projected.Visible) { Flush(); return; }
 				const auto &Item = Projected.Item;
-				const auto *Bounds = Projected.Mesh ? Record.MeshBounds : &PrimitiveBounds;
-				if (Bounds && (!Record.Pose || Record.Pose->Mode != RenderAnimationSkinningMode::GpuPalette) &&
+				const auto *Bounds = Projected.Mesh ? MeshBounds : &PrimitiveBounds;
+				if (Bounds && (!Pose || Pose->Mode != RenderAnimationSkinningMode::GpuPalette) &&
 					OutsideView(Planes, Item.ModelMatrix, *Bounds)) {
 					InstanceActions[Position] = CulledInstanceAction;
-					continue;
+					return;
 				}
 				const auto *Mesh = Projected.Mesh
 					? Context.MeshResources.Find(*Projected.Mesh) : Context.MeshResources.Find(Item.Geometry);
-				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer || Record.Pose ||
+				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer || Pose ||
 					(Item.CastShadow && !ContiguousOrder) || !Mesh->ImmutablePositionBounds ||
 					(!ContiguousOrder && !Projector) ||
-					(Projected.Primitives && Projected.Primitives->size() != 1)) { Flush(); continue; }
+					(Projected.Primitives && Projected.Primitives->size() != 1)) { Flush(); return; }
 				// Pose-bearing objects are excluded above. Static casters use the
 				// already-recorded shadow pass and have no GPU-skinned pose receipt.
 				const auto &Material = Projected.Primitives ? Projected.Primitives->front().Material : Projected.Material;
 				if (Material.OpacityMode != RenderOpacityMode::Opaque || Material.BaseColorTexture ||
 					Material.NormalTexture || Material.MetallicRoughnessTexture || Material.EmissiveTexture ||
-					Material.OcclusionTexture) { Flush(); continue; }
-				const auto Slot = Context.InstanceResources->Find(Record.Object);
-				if (!Slot) { Flush(); continue; }
+					Material.OcclusionTexture) { Flush(); return; }
+				const auto Slot = Context.InstanceResources->Find(Object);
+				if (!Slot) { Flush(); return; }
 				const auto First = Projected.Primitives ? Projected.Primitives->front().FirstIndex : 0;
 				const auto Count = Projected.Primitives ? Projected.Primitives->front().IndexCount : Mesh->IndexCount;
 				std::optional<OpaqueCoverage> Coverage;
 				if (!ContiguousOrder) {
 					Coverage = Projector->Project(Item.ModelMatrix, *Mesh->ImmutablePositionBounds);
-					if (!Coverage || Coverage->CellCount() > MAX_CELLS_PER_OBJECT) { Flush(); continue; }
+					if (!Coverage || Coverage->CellCount() > MAX_CELLS_PER_OBJECT) { Flush(); return; }
 				}
 				if (!Pending.empty() && (Mesh != PendingMesh || First != PendingFirst || Count != PendingCount ||
 					Material.DoubleSided != PendingDoubleSided || Material.ShadingModel != PendingShading)) Flush();
@@ -540,6 +542,20 @@ namespace gargantuan {
 				}
 				if (!ContiguousOrder) InstanceCoverageGrid.Add(*Coverage, static_cast<std::uint16_t>(Pending.size()));
 				Pending.emplace_back(Position, *Slot);
+			};
+			if (Ordered) {
+				for (std::size_t Position = 0; Position < Ordered->size(); ++Position) {
+					const auto &Record = (*Ordered)[Position];
+					VisitCandidate(Position, Record.Object, *Record.Projected, Record.Pose, Record.MeshBounds);
+				}
+			} else {
+				std::size_t Position = 0;
+				for (const auto &[Object, Projected] : Context.Projection.GetObjects()) {
+					const auto *Pose = Context.Projection.GetAnimationPose(Object);
+					const auto *MeshBounds = Projected.Mesh
+						? Context.Projection.GetMeshBounds(*Projected.Mesh) : nullptr;
+					VisitCandidate(Position++, Object, Projected, Pose, MeshBounds);
+				}
 			}
 			Flush();
 			const auto UploadStart = Clock::now();
