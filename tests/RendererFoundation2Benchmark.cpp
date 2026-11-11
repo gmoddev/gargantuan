@@ -20,8 +20,11 @@
 #include <iostream>
 #include <memory>
 #include <numeric>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -79,13 +82,23 @@ namespace {
 		std::size_t WritesPerObject,
 		std::size_t Frames,
 		bool ProfileEnabled,
-		std::uint32_t GroupWidth
+		std::uint32_t GroupWidth,
+		bool RendererOnly
 	) {
 		using namespace gargantuan;
 		ChangeJournal::Get().Clear();
 		RenderDirtyAccumulator::Get().Clear();
 		auto Game = std::make_shared<DataModel>();
 		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		// This benchmark variant measures renderer publication without constructing
+		// native rigid bodies during scene setup. Keep the existing backend alive
+		// locally; WorldRoot::CreatePartBody declines while Physics is moved from.
+		std::optional<PhysicsWorld> RetainedPhysics;
+		if (RendererOnly) {
+			RetainedPhysics.emplace(std::move(World->Physics));
+			if (World->Physics.IsValid() || !RetainedPhysics->IsValid())
+				throw std::runtime_error("renderer-only fixture did not detach its physics backend");
+		}
 		std::vector<std::shared_ptr<Part>> Parts;
 		Parts.reserve(Count);
 		std::vector<std::shared_ptr<Folder>> Groups;
@@ -340,12 +353,13 @@ int main(int ArgumentCount, char **Arguments) {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		const std::size_t Frames = ArgumentCount > 1 ? std::stoull(Arguments[1]) : 30;
 		if (Frames == 0 || Frames > 120) throw std::invalid_argument("frame count must be in [1,120]");
-		bool ProfileEnabled = false, RigidOnly = false;
+		bool ProfileEnabled = false, RigidOnly = false, RendererOnly = false;
 		std::uint32_t GroupWidth = 0;
 		for (int Index = 2; Index < ArgumentCount; ++Index) {
 			const std::string_view Option(Arguments[Index]);
 			if (Option == "--profile") ProfileEnabled = true;
 			else if (Option == "--rigid-only") RigidOnly = true;
+			else if (Option == "--renderer-only") RendererOnly = true;
 			else if (Option.starts_with("--group-width=")) {
 				if (GroupWidth != 0) throw std::invalid_argument("group width may appear only once");
 				const auto Text = Option.substr(sizeof("--group-width=") - 1);
@@ -356,10 +370,10 @@ int main(int ArgumentCount, char **Arguments) {
 			} else throw std::invalid_argument("unknown semantic benchmark option");
 		}
 		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n" << std::flush;
-		for (const auto Count : {1000u, 10000u, 50000u}) RunRigid("static", Count, 0, 1, Frames, ProfileEnabled, GroupWidth);
-		RunRigid("mostly-static", 50000, 500, 1, Frames, ProfileEnabled, GroupWidth);
-		RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled, GroupWidth);
-		RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled, GroupWidth);
+		for (const auto Count : {1000u, 10000u, 50000u}) RunRigid("static", Count, 0, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly);
+		RunRigid("mostly-static", 50000, 500, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly);
+		RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly);
+		RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled, GroupWidth, RendererOnly);
 		if (!RigidOnly) {
 			for (const auto Count : {4096u, 16384u, 65536u}) RunDeformable(Count, Frames);
 			RunGui(10000, Frames);
