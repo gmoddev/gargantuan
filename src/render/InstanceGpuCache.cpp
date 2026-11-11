@@ -171,7 +171,9 @@ namespace gargantuan {
 
 	void SDLVisibleInstanceBuffer::OnFrameSubmitted() {
 		if (PendingUpload) {
-			SubmittedSlots = Slots;
+			// Submission is already committed. Swap the exact uploaded sequence
+			// without allocating or throwing in the post-submit callback.
+			SubmittedSlots.swap(Slots);
 			Valid = true;
 		}
 		PendingUpload = false;
