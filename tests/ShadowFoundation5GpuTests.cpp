@@ -83,7 +83,8 @@ namespace {
 		const auto Metrics = Renderer.GetMetrics();
 		EvidenceReceipt << "draw," << CurrentCase << ',' << ++EvidenceSerial << ',' << Publication->Id
 			<< ",,0,0,0,0," << Metrics.ShadowMapPasses << ',' << Metrics.ShadowCasterDraws
-			<< ",cache_hits=" << Metrics.ShadowCacheHits << '\n' << std::flush;
+			<< ",cache_hits=" << Metrics.ShadowCacheHits << ";pose_checks=" << Metrics.ShadowPoseChecks
+			<< ";pose_mismatches=" << Metrics.MainShadowPoseMismatches << '\n' << std::flush;
 	}
 
 	void Require(bool Condition, const char *Message) {
@@ -190,6 +191,29 @@ namespace {
 		Value->BaseId = Base;
 		Value->Frame = Frame;
 		return Value;
+	}
+
+	void AddGpuSkinnedCaster(RenderPublication &Publication) {
+		auto &Mesh = Publication.MeshCreates.back();
+		Mesh.Skeleton.Bytes[0] = 1;
+		Mesh.SkeletonJointCount = 1;
+		Mesh.SkinInfluences = std::make_shared<const std::vector<RenderSkinInfluence>>(
+			Mesh.Vertices->size(), RenderSkinInfluence{{0, 0, 0, 0}, {1, 0, 0, 0}});
+		RenderSkinPaletteEntry Entry;
+		Publication.AnimationPoseUpdates.push_back({
+			.Object = CasterObject, .SourceMesh = CasterMesh, .PoseRevision = 1,
+			.Palette = {Mesh.Skeleton,
+				std::make_shared<const std::vector<RenderSkinPaletteEntry>>(
+					std::initializer_list<RenderSkinPaletteEntry>{Entry})},
+		});
+	}
+
+	void SetNearPlane(RenderPublication &Publication, float NearPlane) {
+		auto &Camera = Publication.Frame.Camera;
+		Camera.NearPlane = NearPlane;
+		Camera.ProjectionMatrix = glm::perspectiveRH_ZO(glm::radians(Camera.VerticalFieldOfView),
+			1.0f, Camera.NearPlane, Camera.FarPlane);
+		Camera.ViewProjectionMatrix = Camera.ProjectionMatrix * Camera.ViewMatrix;
 	}
 
 	int RedCenter(const std::vector<std::uint8_t> &Pixels) {
@@ -335,6 +359,52 @@ namespace {
 			"large-coordinate spotlight altered receiver shadowing");
 		Require(Capture(Renderer, Delta(6, 5, Distant->Frame)).RgbPixels == DistantShadow,
 			"large-coordinate spotlight map changed exact warm pixels");
+	}
+
+	void CheckCachedSkinPoseReceipts() {
+		CurrentCase = "cached-skin-pose";
+		for (const bool Spot : {false, true}) {
+			SDLRenderer Renderer(Vector2(Size, Size), {
+				.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+			});
+			auto Initial = Scene(1, true, !Spot, Spot);
+			AddGpuSkinnedCaster(*Initial);
+			Draw(Renderer, Initial);
+			const auto Cold = Renderer.GetMetrics();
+			Require(Cold.ShadowPoseChecks > 0 && Cold.MainShadowPoseMismatches == 0,
+				"first directional or local map did not compare a submitted skin pose");
+			Draw(Renderer, Delta(2, 1, Initial->Frame));
+			const auto Warm = Renderer.GetMetrics();
+			Require(Warm.ShadowMapPasses == Cold.ShadowMapPasses &&
+				Warm.ShadowPoseChecks > Cold.ShadowPoseChecks && Warm.MainShadowPoseMismatches == 0,
+				"cached directional or local map lost its exact skin pose receipt");
+		}
+	}
+
+	void CheckEmptyDirectionalCoverage() {
+		CurrentCase = "empty-directional-coverage";
+		SDLRenderer Renderer(Vector2(Size, Size), {
+			.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+		});
+		auto Initial = Scene(1, true);
+		Initial->Frame.Environment.DirectionalShadows.Distance = 1.0f;
+		SetNearPlane(*Initial, 2.0f);
+		AddGpuSkinnedCaster(*Initial);
+		Draw(Renderer, Initial);
+		const auto Empty = Renderer.GetMetrics();
+		Require(Empty.ShadowMapPasses == 0 && Empty.ShadowPoseChecks == 0 &&
+			Empty.MainShadowPoseMismatches == 0,
+			"shadow distance below camera near plane recorded legacy directional depth");
+		auto Local = Scene(1, true, true, true);
+		Local->Frame.Environment.SunIntensity = 1.0f;
+		Local->Frame.Environment.DirectionalShadows.Distance = 1.0f;
+		SetNearPlane(*Local, 2.0f);
+		SDLRenderer LocalRenderer(Vector2(Size, Size), {
+			.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+		});
+		Draw(LocalRenderer, Local);
+		Require(LocalRenderer.GetMetrics().ShadowMapPasses == 1,
+			"empty directional coverage suppressed a valid local spotlight depth pass");
 	}
 
 	void CheckIncomingDynamicCasters() {
@@ -523,6 +593,8 @@ int main(int ArgumentCount, char **Arguments) try {
 	CheckMaskAndDeformable();
 	CheckCascadePasses();
 	CheckSpotPixels();
+	CheckCachedSkinPoseReceipts();
+	CheckEmptyDirectionalCoverage();
 	CheckIncomingDynamicCasters();
 	CheckAtlasPasses();
 	CheckAtlasEvictionPixels();

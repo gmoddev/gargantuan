@@ -7,6 +7,7 @@
 
 #include "gargantuan/render/RenderProjection.hpp"
 #include "render/sdl/SDLDirectionalCascadePlan.hpp"
+#include "render/sdl/SDLShadowPoseLedger.hpp"
 
 #include <SDL3/SDL_gpu.h>
 
@@ -35,6 +36,8 @@ namespace gargantuan {
 		void DependOnMesh(std::uint32_t Index, RenderMeshIdentity Mesh);
 		void DependOnMask(std::uint32_t Index, RenderTextureIdentity Texture);
 		void DependOnObject(std::uint32_t Index, ObjectId Object);
+		void RecordPose(std::uint32_t Index, ObjectId Object, std::uint64_t Revision);
+		void MergeCommittedPoses(std::uint32_t Index, SDLShadowPoseRevisions &Destination) const;
 		void FinishCascadeRecording(std::uint32_t Index, const RenderEnvironmentState &Environment,
 			const SDL_GPUTexture *Target, const glm::mat4 &Matrix, bool AllCastersResident, bool HasCasters,
 			glm::vec3 Origin = glm::vec3(0.0f));
@@ -54,6 +57,8 @@ namespace gargantuan {
 			std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> Meshes;
 			std::unordered_set<RenderTextureIdentity, RenderTextureIdentityHash> Masks;
 			std::unordered_set<ObjectId> Objects;
+			SDLShadowPoseRevisions CommittedPoses;
+			SDLShadowPoseRevisions RecordingPoses;
 			bool DependenciesOverflow = false;
 			bool CascadeMode = false;
 		};

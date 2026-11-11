@@ -44,7 +44,8 @@ int main() try {
 		Require(Entry.Dirty && !Entry.Sampleable && Entry.Layer < MaximumShadowedSpotlights,
 			"first admission requires a bounded layer render");
 		Atlas.BeginRecording(Entry.Layer);
-		Atlas.FinishRecording(Entry.Layer, true, false);
+		if (Entry.Light == ObjectId{1, 1}) Atlas.RecordPose(Entry.Layer, {100, 1}, 5);
+		Atlas.FinishRecording(Entry.Layer, true, Entry.Light == ObjectId{1, 1});
 	}
 	for (const auto &Entry : Atlas.GetAssignments())
 		Require(Entry.Sampleable, "a complete first-frame map is sampleable after its depth pass");
@@ -53,6 +54,10 @@ int main() try {
 	for (const auto &Entry : Atlas.GetAssignments())
 		Require(!Entry.Dirty && Entry.Sampleable, "unchanged lights reuse their depth layers");
 	const auto RetainedLayer = Atlas.GetAssignments()[0].Layer;
+	SDLShadowPoseRevisions CachedPoses;
+	Atlas.MergeCommittedPoses(RetainedLayer, CachedPoses);
+	Require(CachedPoses.size() == 1 && CachedPoses.at(ObjectId{100, 1}) == 5,
+		"warm spotlight restores the exact submitted GPU skin pose revision");
 	auto ChangedLights = std::make_shared<std::vector<RenderLocalLightState>>(*Lights);
 	(*ChangedLights)[0].Intensity = 1.5f;
 	(*ChangedLights)[0].Color = {0.8f, 0.7f, 0.6f};
@@ -65,6 +70,9 @@ int main() try {
 	Frame.Environment.LocalLights = DirectedLights;
 	Atlas.Prepare(Frame, nullptr);
 	Require(Atlas.GetAssignments()[0].Dirty, "light direction invalidates its own map");
+	CachedPoses.clear();
+	Atlas.MergeCommittedPoses(RetainedLayer, CachedPoses);
+	Require(CachedPoses.empty(), "invalid spotlight depth cannot restore stale poses");
 	Require(Atlas.OnFrameSubmitted() == 0, "unsubmitted depth never commits");
 	Atlas.Invalidate();
 	Atlas.Prepare(Frame, nullptr);

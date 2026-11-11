@@ -265,6 +265,45 @@ namespace {
 		Require(!Cache.RestoreCascade(1, Environment, nullptr, Far, Restored),
 			"new deformable bounds can enter an empty cascade");
 	}
+
+	void TestCommittedPoseLedger() {
+		SDLDirectionalShadowCache Cache;
+		RenderEnvironmentState Environment;
+		const glm::mat4 Matrix(1.0f);
+		SDLShadowPoseRevisions FramePoses;
+		Cache.BeginCascadeRecording(0);
+		Cache.RecordPose(0, CASTER, 7);
+		Cache.FinishCascadeRecording(0, Environment, nullptr, Matrix, true, true);
+		Require(FramePoses.empty(), "unsubmitted cascade pose must not enter the committed ledger");
+		Require(Cache.OnFrameSubmitted(), "submitted pose-bearing cascade commits");
+		Cache.MergeCommittedPoses(0, FramePoses);
+		Require(FramePoses.size() == 1 && FramePoses.at(CASTER) == 7,
+			"warm cascade restores its exact GPU skin pose revision");
+		Cache.BeginCascadeRecording(1);
+		Cache.RecordPose(1, CASTER, 7);
+		Cache.FinishCascadeRecording(1, Environment, nullptr, Matrix, true, true);
+		Require(Cache.OnFrameSubmitted(), "second submitted cascade commits independently");
+		Cache.MergeCommittedPoses(1, FramePoses);
+		Require(FramePoses.size() == 1, "same pose across cascades merges once");
+		Cache.BeginCascadeRecording(1);
+		Cache.RecordPose(1, CASTER, 8);
+		Cache.FinishCascadeRecording(1, Environment, nullptr, Matrix, true, true);
+		Require(Cache.OnFrameSubmitted(), "changed cascade pose commits its own revision");
+		bool Rejected = false;
+		try { Cache.MergeCommittedPoses(1, FramePoses); }
+		catch (const std::logic_error &) { Rejected = true; }
+		Require(Rejected, "inconsistent per-layer pose revisions cannot be hidden by union order");
+		Cache.BeginCascadeRecording(0);
+		Cache.RecordPose(0, CASTER, 9);
+		Cache.FinishCascadeRecording(0, Environment, nullptr, Matrix, false, true);
+		Require(!Cache.OnFrameSubmitted(), "incomplete caster residency does not commit a pose ledger");
+		FramePoses.clear();
+		Cache.MergeCommittedPoses(0, FramePoses);
+		Require(FramePoses.empty(), "incomplete cascade cannot restore stale poses");
+		Cache.Invalidate();
+		Cache.MergeCommittedPoses(1, FramePoses);
+		Require(FramePoses.empty(), "invalidated depth cannot restore a pose revision");
+	}
 }
 
 int main() try {
@@ -272,6 +311,7 @@ int main() try {
 	TestCascadePlan();
 	TestCascadeIndependence();
 	TestUnboundedCasterMotion();
+	TestCommittedPoseLedger();
 	std::cout << "[Render:ShadowCache] Publication relevance, submission and dependency bounds passed\n";
 	return 0;
 } catch (const std::exception &Error) {

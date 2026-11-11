@@ -112,7 +112,10 @@ namespace gargantuan {
 			};
 			if (!Slot.Committed->HasCasters) {
 				if (UnboundedCasterChange || std::ranges::any_of(Publication.Creates, Relevant) ||
-					std::ranges::any_of(Publication.Updates, Relevant)) Slot.Committed.reset();
+					std::ranges::any_of(Publication.Updates, Relevant)) {
+					Slot.Committed.reset();
+					Slot.CommittedPoses.clear();
+				}
 				continue;
 			}
 			const bool Changed = UnboundedCasterChange || std::ranges::any_of(Publication.Creates, Relevant) ||
@@ -127,7 +130,10 @@ namespace gargantuan {
 					[&](const auto &Update) { return Slot.Masks.contains(Update.Texture); }) ||
 				std::ranges::any_of(Publication.TextureRemoves,
 					[&](const auto &Remove) { return Slot.Masks.contains(Remove.Texture); });
-			if (Changed) Slot.Committed.reset();
+			if (Changed) {
+				Slot.Committed.reset();
+				Slot.CommittedPoses.clear();
+			}
 		}
 	}
 
@@ -173,6 +179,8 @@ namespace gargantuan {
 		Slot.Meshes.clear();
 		Slot.Masks.clear();
 		Slot.Objects.clear();
+		Slot.CommittedPoses.clear();
+		Slot.RecordingPoses.clear();
 		Slot.DependenciesOverflow = false;
 		Slot.CascadeMode = true;
 	}
@@ -190,6 +198,20 @@ namespace gargantuan {
 	void SDLDirectionalShadowCache::DependOnObject(std::uint32_t Index, ObjectId Object) {
 		if (Index < MaximumDirectionalCascades)
 			TrackDependency(Slots[Index].Objects, Object, Slots[Index].DependenciesOverflow);
+	}
+	void SDLDirectionalShadowCache::RecordPose(std::uint32_t Index, ObjectId Object, std::uint64_t Revision) {
+		if (Index >= MaximumDirectionalCascades || Revision == 0) return;
+		auto &Slot = Slots[Index];
+		if (Slot.RecordingPoses.size() >= MAX_DEPENDENCIES_PER_KIND && !Slot.RecordingPoses.contains(Object)) {
+			Slot.DependenciesOverflow = true;
+			return;
+		}
+		MergeSDLShadowPoseRevision(Slot.RecordingPoses, Object, Revision);
+	}
+	void SDLDirectionalShadowCache::MergeCommittedPoses(std::uint32_t Index,
+		SDLShadowPoseRevisions &Destination) const {
+		if (Index < MaximumDirectionalCascades && Slots[Index].Committed)
+			MergeSDLShadowPoseRevisions(Destination, Slots[Index].CommittedPoses);
 	}
 
 	void SDLDirectionalShadowCache::FinishRecording(
@@ -212,9 +234,12 @@ namespace gargantuan {
 	bool SDLDirectionalShadowCache::OnFrameSubmitted() {
 		bool Built = false;
 		for (auto &Slot : Slots) {
-			if (!Slot.Recorded) continue;
-			Slot.Committed = std::exchange(Slot.Recorded, std::nullopt);
-			Built = true;
+			if (Slot.Recorded) {
+				Slot.Committed = std::exchange(Slot.Recorded, std::nullopt);
+				Slot.CommittedPoses = std::move(Slot.RecordingPoses);
+				Built = true;
+			}
+			Slot.RecordingPoses.clear();
 		}
 		return Built;
 	}
@@ -223,6 +248,8 @@ namespace gargantuan {
 		for (auto &Slot : Slots) {
 			Slot.Committed.reset();
 			Slot.Recorded.reset();
+			Slot.CommittedPoses.clear();
+			Slot.RecordingPoses.clear();
 		}
 	}
 }

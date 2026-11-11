@@ -7,6 +7,7 @@
 
 #include "gargantuan/render/RenderProjection.hpp"
 #include "render/sdl/SDLShadowCasterCoverage.hpp"
+#include "render/sdl/SDLShadowPoseLedger.hpp"
 #include "render/sdl/SDLShadowResources.hpp"
 
 #include <SDL3/SDL_gpu.h>
@@ -17,6 +18,7 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <optional>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace gargantuan {
@@ -99,8 +101,10 @@ namespace gargantuan {
 					std::ranges::any_of(Publication.TextureUpdates,
 						[&](const auto &Update) { return Slot.Masks.contains(Update.Texture); }) ||
 					std::ranges::any_of(Publication.TextureRemoves,
-						[&](const auto &Remove) { return Slot.Masks.contains(Remove.Texture); }))
+						[&](const auto &Remove) { return Slot.Masks.contains(Remove.Texture); })) {
 					Slot.Committed = false;
+					Slot.CommittedPoses.clear();
+				}
 			}
 		}
 
@@ -163,7 +167,10 @@ namespace gargantuan {
 					Slot.LastLight->Direction != Candidate.Light->Direction ||
 					Slot.LastLight->Range != Candidate.Light->Range ||
 					Slot.LastLight->OuterConeCosine != Candidate.Light->OuterConeCosine;
-				if (GeometryChanged || Slot.Target != Target || Slot.Matrix != Matrix) Slot.Committed = false;
+				if (GeometryChanged || Slot.Target != Target || Slot.Matrix != Matrix) {
+					Slot.Committed = false;
+					Slot.CommittedPoses.clear();
+				}
 				Slot.Light = Candidate.Light->Object;
 				Slot.LastLight = *Candidate.Light;
 				Slot.Target = Target;
@@ -188,6 +195,7 @@ namespace gargantuan {
 			if (Layer >= MaximumShadowedSpotlights) return;
 			auto &Slot = Slots[Layer];
 			Slot.Recorded = false;
+			Slot.RecordingPoses.clear();
 			Slot.Meshes.clear();
 			Slot.Masks.clear();
 			Slot.Overflow = false;
@@ -197,6 +205,19 @@ namespace gargantuan {
 		}
 		void DependOnMask(std::uint32_t Layer, RenderTextureIdentity Texture) {
 			if (Layer < MaximumShadowedSpotlights) Track(Slots[Layer].Masks, Texture, Slots[Layer].Overflow);
+		}
+		void RecordPose(std::uint32_t Layer, ObjectId Object, std::uint64_t Revision) {
+			if (Layer >= MaximumShadowedSpotlights || Revision == 0) return;
+			auto &Slot = Slots[Layer];
+			if (Slot.RecordingPoses.size() >= 32'768 && !Slot.RecordingPoses.contains(Object)) {
+				Slot.Overflow = true;
+				return;
+			}
+			MergeSDLShadowPoseRevision(Slot.RecordingPoses, Object, Revision);
+		}
+		void MergeCommittedPoses(std::uint32_t Layer, SDLShadowPoseRevisions &Destination) const {
+			if (Layer < MaximumShadowedSpotlights && Slots[Layer].Committed)
+				MergeSDLShadowPoseRevisions(Destination, Slots[Layer].CommittedPoses);
 		}
 		void FinishRecording(std::uint32_t Layer, bool AllResident, bool HasCasters) {
 			if (Layer >= MaximumShadowedSpotlights) return;
@@ -214,14 +235,18 @@ namespace gargantuan {
 			for (auto &Slot : Slots) if (Slot.Recorded) {
 				Slot.Committed = true;
 				Slot.Recorded = false;
+				Slot.CommittedPoses = std::move(Slot.RecordingPoses);
 				++Built;
 			}
+			for (auto &Slot : Slots) Slot.RecordingPoses.clear();
 			return Built;
 		}
 		void Invalidate() {
 			for (auto &Slot : Slots) {
 				Slot.Committed = false;
 				Slot.Recorded = false;
+				Slot.CommittedPoses.clear();
+				Slot.RecordingPoses.clear();
 			}
 		}
 
@@ -233,6 +258,8 @@ namespace gargantuan {
 			glm::mat4 Matrix{1.0f};
 			std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> Meshes;
 			std::unordered_set<RenderTextureIdentity, RenderTextureIdentityHash> Masks;
+			SDLShadowPoseRevisions CommittedPoses;
+			SDLShadowPoseRevisions RecordingPoses;
 			bool Committed = false;
 			bool Recorded = false;
 			bool HasCasters = false;

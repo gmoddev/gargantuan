@@ -67,20 +67,23 @@ namespace gargantuan {
 		}
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
-			if (context.CascadedShadows && context.CascadeShadowTexture &&
-				context.CascadePlan.Count > 0 && context.CascadePlan.Count <= MaximumDirectionalCascades) {
-				DrawCascades(gpu, context);
+			context.ShadowPoseRevisions.clear();
+			if (context.CascadedShadows) {
+				if (context.CascadePlan.Count > MaximumDirectionalCascades ||
+					(context.CascadePlan.Count > 0 && !context.CascadeShadowTexture))
+					throw std::logic_error("[Renderer:Shadow] Cascaded shadow resources are incoherent");
+				if (context.CascadePlan.Count > 0) DrawCascades(gpu, context);
 				DrawSpotlights(gpu, context);
 				return nullptr;
 			}
 			const auto &Environment = context.Projection.GetFrame().Environment;
 			if (context.ShadowCache.Restore(Environment, context.ShadowMapTexture, context.ShadowMatrix)) {
+				context.ShadowCache.MergeCommittedPoses(0, context.ShadowPoseRevisions);
 				if (context.Metrics) ++context.Metrics->ShadowCacheHits;
 				DrawSpotlights(gpu, context);
 				return nullptr;
 			}
 			context.ShadowCache.BeginRecording();
-			context.ShadowPoseRevisions.clear();
 			glm::mat4 shadowProjection = glm::ortho<float>(-30.0f, 30.0f, -30.0f, 30.0f, -50.0f, 150.0f);
 			const auto SunDirection = glm::normalize(Environment.SunDirection);
 			const auto Up = std::abs(glm::dot(SunDirection, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.99f
@@ -109,7 +112,7 @@ namespace gargantuan {
 				const bool AllResident = Environment.SunIntensity <= 0.0f ||
 					DrawCasters(gpu, pass, context, shadowMatrix, White, std::nullopt, HasCasters);
 				context.ShadowCache.FinishRecording(Environment, context.ShadowMapTexture, shadowMatrix, AllResident,
-					!context.ShadowPoseRevisions.empty());
+					HasCasters);
 			} catch (...) {
 				SDL_EndGPURenderPass(pass);
 				throw;
@@ -127,13 +130,13 @@ namespace gargantuan {
 			const auto &Environment = Context.Projection.GetFrame().Environment;
 			Context.CascadeHasCasters = false;
 			Context.ShadowMatrix = Context.CascadePlan.Cascades[0].Matrix;
-			Context.ShadowPoseRevisions.clear();
 			auto *White = Environment.SunIntensity > 0.0f ? Context.TextureResources->GetWhiteTexture() : nullptr;
 			for (std::uint32_t Index = 0; Index < Context.CascadePlan.Count; ++Index) {
 				const auto &Cascade = Context.CascadePlan.Cascades[Index];
 				glm::mat4 Restored;
 				if (Context.ShadowCache.RestoreCascade(Index, Environment, Context.CascadeShadowTexture,
 					Cascade.Matrix, Restored, Cascade.Origin)) {
+					Context.ShadowCache.MergeCommittedPoses(Index, Context.ShadowPoseRevisions);
 					Context.CascadeHasCasters |= Context.ShadowCache.HasCascadeCasters(Index);
 					if (Context.Metrics) ++Context.Metrics->ShadowCacheHits;
 					continue;
@@ -173,7 +176,10 @@ namespace gargantuan {
 			Atlas.Prepare(Context.Projection.GetFrame(), Context.LocalShadowTexture);
 			auto *White = Context.TextureResources->GetWhiteTexture();
 			for (const auto &Assignment : Atlas.GetAssignments()) {
-				if (!Assignment.Dirty) continue;
+				if (!Assignment.Dirty) {
+					Atlas.MergeCommittedPoses(Assignment.Layer, Context.ShadowPoseRevisions);
+					continue;
+				}
 				Atlas.BeginRecording(Assignment.Layer);
 				SDL_GPUDepthStencilTargetInfo Target{
 					.texture = Context.LocalShadowTexture,
@@ -250,7 +256,6 @@ namespace gargantuan {
 				const auto Palette = context.SkinPalettes.Find(
 					item.Object, context.Projection.GetAnimationPose(item.Object));
 				auto *PaletteBuffer = Palette.Buffer;
-				context.ShadowPoseRevisions.insert_or_assign(item.Object, Palette.PoseRevision);
 
 				auto DrawPrimitive = [&](std::uint32_t First, std::uint32_t Count, const RenderMaterialState &Material) {
 					const bool AlphaMask = Material.OpacityMode == RenderOpacityMode::Masked;
@@ -299,6 +304,12 @@ namespace gargantuan {
 					}
 					SDL_DrawGPUIndexedPrimitives(Pass, Count, 1, First, 0, 0);
 					HasCasters = true;
+					if (Palette.GpuSkinned) {
+						MergeSDLShadowPoseRevision(context.ShadowPoseRevisions, item.Object, Palette.PoseRevision);
+						if (CascadeIndex) context.ShadowCache.RecordPose(*CascadeIndex, item.Object, Palette.PoseRevision);
+						else if (SpotLayer) context.SpotShadowAtlas->RecordPose(*SpotLayer, item.Object, Palette.PoseRevision);
+						else context.ShadowCache.RecordPose(0, item.Object, Palette.PoseRevision);
+					}
 					if (context.Metrics) {
 						++context.Metrics->DrawCalls;
 						++context.Metrics->ShadowCasterDraws;
