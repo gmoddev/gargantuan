@@ -150,6 +150,7 @@ foreach(GARGANTUAN_SHADER
 	opaque.vert.spv
 	scene-resolve.frag.spv
 	scene-resolve.vert.spv
+	shadow-opaque.frag.spv
 	shadow.frag.spv
 	shadow.vert.spv
 	sky.frag.spv

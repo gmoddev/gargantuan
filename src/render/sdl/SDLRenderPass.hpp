@@ -31,6 +31,8 @@ namespace gargantuan {
 		bool EnableInstancing = false;
 		bool EnableSceneEnvelope = false;
 		bool UseContiguousInstancing = false;
+		bool UseSolidShadowDepthExperiment = false;
+		bool SolidShadowDepthActive = false;
 		SDLFrameContext(
 			const RenderProjection &RenderState,
 			SDLMeshCache &MeshResourcesValue,

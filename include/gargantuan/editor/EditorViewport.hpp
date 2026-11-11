@@ -70,6 +70,7 @@ namespace gargantuan {
 
 	  private:
 		friend struct EditorViewportRendererTestAccess;
+		void SetSolidShadowDepthExperimentForTesting(bool Enabled);
 		void InjectPaletteUploadFailureForTesting();
 		void InjectPostShadowFailureForTesting();
 		void InjectPostSkyFailureForTesting();

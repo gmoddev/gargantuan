@@ -70,6 +70,7 @@ namespace gargantuan {
 		SDL_GPUDevice *Gpu = nullptr;
 		SDL_GPUTextureFormat SwapchainFormat = SDL_GPU_TEXTUREFORMAT_INVALID;
 		SDLRendererOptions Options;
+		bool UseSolidShadowDepthExperiment = false;
 		bool WindowClaimed = false;
 		SDL_GPUTexture *ColorTexture = nullptr;
 		SDL_GPUTexture *HdrSceneTexture = nullptr;
@@ -373,6 +374,7 @@ namespace gargantuan {
 			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
 		Frame.EnableOpaqueGrouping = State->Options.EnableOpaqueGrouping;
 		Frame.ProfileDetailed = State->Options.ProfileDetailed;
+		Frame.UseSolidShadowDepthExperiment = State->UseSolidShadowDepthExperiment;
 		Frame.UseCompactTraversal = State->Options.UseCompactTraversal;
 		Frame.EnableInstancing = State->Options.EnableInstancing && State->InstanceResources &&
 			State->InstanceResources->GetRecords().IsAvailable();
@@ -559,6 +561,10 @@ namespace gargantuan {
 			Metrics.MaterialSourceRehydrates = State->TextureResources->GetMaterialSourceRehydrates();
 		}
 		return Metrics;
+	}
+
+	void SDLRenderer::SetSolidShadowDepthExperimentForTesting(bool Enabled) {
+		if (State) State->UseSolidShadowDepthExperiment = Enabled;
 	}
 
 	RenderAnimationVisibilityFeedback SDLRenderer::GetAnimationVisibilityFeedback() const {

@@ -159,6 +159,7 @@ namespace gargantuan {
 		std::uint64_t ShadowCacheHits = 0;
 		std::uint64_t ShadowMapPasses = 0;
 		std::uint64_t ShadowCasterDraws = 0;
+		std::uint64_t SolidShadowCasterDraws = 0;
 		std::uint64_t ResidentReflectionProbes = 0;
 		std::uint64_t ProbeArrayBytes = 0;
 		std::uint64_t ProbeUploadBytes = 0;
@@ -189,6 +190,8 @@ namespace gargantuan {
 		[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const override;
 
 	  private:
+		friend struct SDLRendererTestAccess;
+		void SetSolidShadowDepthExperimentForTesting(bool Enabled);
 		struct Backend;
 		std::unique_ptr<Backend> State;
 	};

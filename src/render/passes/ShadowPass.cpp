@@ -63,6 +63,11 @@ namespace gargantuan {
 		void Destroy(SDL_GPUDevice *Gpu) override {
 			RecordedCache = nullptr;
 			RecordedAtlas = nullptr;
+			if (SolidDoubleSided) SDL_ReleaseGPUGraphicsPipeline(Gpu, SolidDoubleSided);
+			SolidDoubleSided = nullptr;
+			if (SolidPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, SolidPipeline);
+			SolidPipeline = nullptr;
+			SolidShader.Destroy(Gpu);
 			if (DoubleSided) SDL_ReleaseGPUGraphicsPipeline(Gpu, DoubleSided);
 			DoubleSided = nullptr;
 			SDLRenderPass::Destroy(Gpu);
@@ -84,6 +89,8 @@ namespace gargantuan {
 		}
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
+			context.SolidShadowDepthActive = context.UseSolidShadowDepthExperiment &&
+				EnsureSolidPipelines(gpu, context.Metrics);
 			RecordedCache = &context.ShadowCache;
 			RecordedAtlas = context.SpotShadowAtlas;
 			context.ShadowPoseRevisions.clear();
@@ -148,6 +155,42 @@ namespace gargantuan {
 		}
 
 	  private:
+		bool EnsureSolidPipelines(SDL_GPUDevice *Gpu, SDLRendererMetrics *Metrics) {
+			if (SolidPipeline && SolidDoubleSided) return true;
+			if (SolidPipelineFailed) return false;
+			try {
+				SolidShader.VertexFilepath = GetSDLShaderPath("shadow.vert");
+				SolidShader.VertexStorageBufferCount = 1;
+				SolidShader.FragmentFilepath = GetSDLShaderPath("shadow-opaque.frag");
+				SolidShader.Init(Gpu, Metrics);
+				auto Builder = SDLPipelineBuilder()
+					.SetVertexShader(SolidShader.VertexShader)
+					.SetFragmentShader(SolidShader.FragmentShader)
+					.SetColorEnabled(false)
+					.SetDepthEnabled(true)
+					.SetDepthFormat(SDL_GPU_TEXTUREFORMAT_D32_FLOAT);
+				SolidPipeline = Builder.Build(Gpu, Metrics);
+				if (!SolidPipeline)
+					throw std::runtime_error("[Renderer:Shadow] Could not create experimental solid depth pipeline");
+				auto Info = Builder.BuildInfo();
+				Info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+				SolidDoubleSided = SDL_CreateGPUGraphicsPipeline(Gpu, &Info);
+				if (!SolidDoubleSided)
+					throw std::runtime_error("[Renderer:Shadow] Could not create experimental solid double-sided depth pipeline");
+				if (Metrics) ++Metrics->PipelineCreations;
+				return true;
+			} catch (const std::exception &Error) {
+				LOG_WARN(App, "[Renderer:Shadow] Disabled experimental solid depth: %s", Error.what());
+				if (SolidDoubleSided) SDL_ReleaseGPUGraphicsPipeline(Gpu, SolidDoubleSided);
+				SolidDoubleSided = nullptr;
+				if (SolidPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, SolidPipeline);
+				SolidPipeline = nullptr;
+				SolidShader.Destroy(Gpu);
+				SolidPipelineFailed = true;
+				return false;
+			}
+		}
+
 		void DrawCascades(SDL_GPUDevice *Gpu, SDLFrameContext &Context) {
 			const auto &Environment = Context.Projection.GetFrame().Environment;
 			Context.CascadeHasCasters = false;
@@ -283,18 +326,22 @@ namespace gargantuan {
 					const bool AlphaMask = Material.OpacityMode == RenderOpacityMode::Masked;
 					if (AlphaMask && Material.BaseColorFactor.a < Material.AlphaCutoff) return;
 					const bool TexturedMask = AlphaMask && Material.BaseColorTexture.has_value();
+					const bool SolidDepth = context.SolidShadowDepthActive && !AlphaMask;
 					if (TexturedMask) {
 						if (CascadeIndex) context.ShadowCache.DependOnMask(*CascadeIndex, *Material.BaseColorTexture);
 						else if (SpotLayer) context.SpotShadowAtlas->DependOnMask(*SpotLayer, *Material.BaseColorTexture);
 						else context.ShadowCache.DependOnMask(*Material.BaseColorTexture);
 					}
-					auto *Selected = Material.DoubleSided ? DoubleSided : Pipeline;
+					auto *Selected = SolidDepth
+						? (Material.DoubleSided ? SolidDoubleSided : SolidPipeline)
+						: (Material.DoubleSided ? DoubleSided : Pipeline);
 					if (Selected != BoundPipeline) {
 						SDL_BindGPUGraphicsPipeline(Pass, Selected);
 						BoundPipeline = Selected;
 						BoundMesh = nullptr;
 						BoundPalette = nullptr;
 						BoundTexture = nullptr;
+						BoundAlpha = glm::vec4(-1.0f);
 						if (context.Metrics) ++context.Metrics->PipelineSwitches;
 					}
 					if (mesh != BoundMesh) {
@@ -308,21 +355,23 @@ namespace gargantuan {
 						SDL_BindGPUVertexStorageBuffers(Pass, 0, &PaletteBuffer, 1);
 						BoundPalette = PaletteBuffer;
 					}
-					auto *Texture = TexturedMask ? context.TextureResources->Find(*Material.BaseColorTexture) : White;
-					if (!Texture) throw std::logic_error("[Renderer:Shadow] A mask image has no SDL residency");
-					auto *Sampler = TexturedMask ? context.MaterialSamplers->Get(Gpu, Material.TextureSamplers[0], false)
-						: DefaultSampler;
-					if (Texture != BoundTexture || Sampler != BoundSampler) {
-						const SDL_GPUTextureSamplerBinding Binding{Texture, Sampler};
-						SDL_BindGPUFragmentSamplers(Pass, 0, &Binding, 1);
-						BoundTexture = Texture;
-						BoundSampler = Sampler;
-					}
-					const auto AlphaFactorCutoff = TexturedMask
-						? glm::vec4(Material.BaseColorFactor.a, Material.AlphaCutoff, 1, 0) : glm::vec4(0);
-					if (AlphaFactorCutoff != BoundAlpha) {
-						SDL_PushGPUFragmentUniformData(context.Commands, 0, &AlphaFactorCutoff, sizeof(AlphaFactorCutoff));
-						BoundAlpha = AlphaFactorCutoff;
+					if (!SolidDepth) {
+						auto *Texture = TexturedMask ? context.TextureResources->Find(*Material.BaseColorTexture) : White;
+						if (!Texture) throw std::logic_error("[Renderer:Shadow] A mask image has no SDL residency");
+						auto *Sampler = TexturedMask ? context.MaterialSamplers->Get(Gpu, Material.TextureSamplers[0], false)
+							: DefaultSampler;
+						if (Texture != BoundTexture || Sampler != BoundSampler) {
+							const SDL_GPUTextureSamplerBinding Binding{Texture, Sampler};
+							SDL_BindGPUFragmentSamplers(Pass, 0, &Binding, 1);
+							BoundTexture = Texture;
+							BoundSampler = Sampler;
+						}
+						const auto AlphaFactorCutoff = TexturedMask
+							? glm::vec4(Material.BaseColorFactor.a, Material.AlphaCutoff, 1, 0) : glm::vec4(0);
+						if (AlphaFactorCutoff != BoundAlpha) {
+							SDL_PushGPUFragmentUniformData(context.Commands, 0, &AlphaFactorCutoff, sizeof(AlphaFactorCutoff));
+							BoundAlpha = AlphaFactorCutoff;
+						}
 					}
 					SDL_DrawGPUIndexedPrimitives(Pass, Count, 1, First, 0, 0);
 					HasCasters = true;
@@ -335,6 +384,7 @@ namespace gargantuan {
 					if (context.Metrics) {
 						++context.Metrics->DrawCalls;
 						++context.Metrics->ShadowCasterDraws;
+						if (SolidDepth) ++context.Metrics->SolidShadowCasterDraws;
 					}
 				};
 				if (Projected.Primitives) {
@@ -346,6 +396,10 @@ namespace gargantuan {
 		}
 
 		SDL_GPUGraphicsPipeline *DoubleSided = nullptr;
+		SDLFileShader SolidShader;
+		SDL_GPUGraphicsPipeline *SolidPipeline = nullptr;
+		SDL_GPUGraphicsPipeline *SolidDoubleSided = nullptr;
+		bool SolidPipelineFailed = false;
 		SDLDirectionalShadowCache *RecordedCache = nullptr;
 		SDLSpotShadowAtlas *RecordedAtlas = nullptr;
 	};

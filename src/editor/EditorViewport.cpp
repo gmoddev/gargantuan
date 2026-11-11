@@ -125,6 +125,7 @@ namespace gargantuan {
 		bool EnableInstancing = false;
 		bool EnableSceneEnvelope = false;
 		bool UseContiguousInstancing = false;
+		bool UseSolidShadowDepthExperiment = false;
 		std::unique_ptr<SDLTextureCache> TextureResources;
 		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
@@ -345,6 +346,7 @@ namespace gargantuan {
 		SDLFrameContext Frame(
 			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
 		Frame.Commands = Commands;
+		Frame.UseSolidShadowDepthExperiment = State->UseSolidShadowDepthExperiment;
 		Frame.Metrics = &State->Metrics;
 		Frame.SwapchainTexture = State->ColorTexture;
 		Frame.HdrSceneTexture = State->HdrSceneTexture;
@@ -474,6 +476,9 @@ namespace gargantuan {
 	}
 	void EditorViewportRenderer::InjectPostSkyFailureForTesting() {
 		State->PostSkyFailure = true;
+	}
+	void EditorViewportRenderer::SetSolidShadowDepthExperimentForTesting(bool Enabled) {
+		if (State) State->UseSolidShadowDepthExperiment = Enabled;
 	}
 	SDLRendererMetrics EditorViewportRenderer::GetMetricsForTesting() const {
 		return State ? State->Metrics : SDLRendererMetrics{};

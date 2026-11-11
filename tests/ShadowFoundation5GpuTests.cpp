@@ -30,7 +30,15 @@
 #include <glm/ext/matrix_transform.hpp>
 
 namespace gargantuan {
+	struct SDLRendererTestAccess {
+		static void SetSolidShadowDepthExperiment(SDLRenderer &Renderer, bool Enabled) {
+			Renderer.SetSolidShadowDepthExperimentForTesting(Enabled);
+		}
+	};
 	struct EditorViewportRendererTestAccess {
+		static void SetSolidShadowDepthExperiment(EditorViewportRenderer &Renderer, bool Enabled) {
+			Renderer.SetSolidShadowDepthExperimentForTesting(Enabled);
+		}
 		static void InjectPostShadowFailure(EditorViewportRenderer &Renderer) {
 			Renderer.InjectPostShadowFailureForTesting();
 		}
@@ -241,7 +249,8 @@ namespace {
 		Camera.ViewProjectionMatrix = Camera.ProjectionMatrix * Camera.ViewMatrix;
 	}
 
-	std::shared_ptr<RenderPublication> PointCostScene(std::uint32_t Layers, std::uint32_t CasterCount) {
+	std::shared_ptr<RenderPublication> PointCostScene(std::uint32_t Layers, std::uint32_t CasterCount,
+		bool OpaqueMaterial) {
 		auto Publication = Scene(1, true, true, true);
 		Publication->Frame.Environment.DirectionalShadows.Distance = 1.0f;
 		SetNearPlane(*Publication, 2.0f); // Configured-empty cascades keep directional work out of this comparison.
@@ -262,6 +271,10 @@ namespace {
 		auto &Caster = Publication->Creates.back();
 		Caster.Item.ModelMatrix = glm::mat4(1);
 		Caster.Item.InverseModelMatrix = glm::mat4(1);
+		if (OpaqueMaterial) {
+			Caster.Material.OpacityMode = RenderOpacityMode::Opaque;
+			Caster.Material.BaseColorTexture.reset();
+		}
 		const auto BaseCaster = Caster;
 		// Each overlapping cube is a separate published object with the same
 		// mesh/material. This deliberately exercises the maximal per-face caster
@@ -300,7 +313,8 @@ namespace {
 		std::uint64_t WallNs = 0;
 	};
 
-	void CheckPointCostGate(const std::filesystem::path &Directory, std::uint32_t CasterCount) {
+	void CheckPointCostGate(const std::filesystem::path &Directory, std::uint32_t CasterCount,
+		bool SolidDepthExperiment, bool OpaqueMaterial) {
 		constexpr std::uint32_t WarmupFrames = 4;
 		constexpr std::uint32_t MeasuredFrames = 24;
 		struct Workload {
@@ -309,27 +323,31 @@ namespace {
 			std::unique_ptr<SDLRenderer> Renderer;
 			std::vector<PointCostSample> Samples;
 		};
-		std::array<Workload, 3> Workloads{{{1, PointCostScene(1, CasterCount)},
-			{6, PointCostScene(6, CasterCount)}, {8, PointCostScene(8, CasterCount)}}};
+		std::array<Workload, 3> Workloads{{{1, PointCostScene(1, CasterCount, OpaqueMaterial)},
+			{6, PointCostScene(6, CasterCount, OpaqueMaterial)},
+			{8, PointCostScene(8, CasterCount, OpaqueMaterial)}}};
 		const SDLRendererOptions Options{.Offscreen = true, .WaitForGpuCompletion = true,
 			.DebugDevice = false, .EnableHdrScene = false};
 		std::ofstream Manifest(Directory / "point-shadow-cost-manifest.txt", std::ios::trunc);
 		if (!Manifest) throw std::runtime_error("could not open point-shadow cost manifest");
 		Manifest << "one/six/eight production spotlight depth layers, 1024x1024 D32, "
 			"36-index cube, four warmups, 24 measured frames, one transform update per frame\n"
+			<< "caster_material=" << (OpaqueMaterial ? "opaque" : "masked") << '\n'
+			<< "solid_depth_experiment=" << (SolidDepthExperiment ? "on" : "off") << '\n'
 			<< "caster_count=" << CasterCount << "; all casters overlap at the light origin and share one mesh/material; "
 			"this is a synthetic maximal face-overlap workload, not a typical scene\n"
 			<< std::flush;
 		for (auto &Workload : Workloads) {
 			Workload.Renderer = std::make_unique<SDLRenderer>(Vector2(Size, Size), Options);
+			SDLRendererTestAccess::SetSolidShadowDepthExperiment(*Workload.Renderer, SolidDepthExperiment);
 			Workload.Renderer->Draw(Workload.Initial);
 			Manifest << Workload.Layers << " layers: " << Workload.Renderer->GetDriverName()
 				<< "\n" << std::flush;
 		}
 		std::ofstream Csv(Directory / "point-shadow-cost.csv", std::ios::trunc);
 		if (!Csv) throw std::runtime_error("could not open point-shadow cost receipt");
-		Csv << "mode,iteration,publication_id,layers,caster_count,expected_depth_draws,"
-			"shadow_passes,shadow_caster_draws,shadow_cache_hits,"
+		Csv << "mode,iteration,publication_id,layers,caster_count,caster_material,solid_depth_experiment,expected_depth_draws,"
+			"shadow_passes,shadow_caster_draws,solid_shadow_caster_draws,shadow_cache_hits,"
 			"upload_operations,uploaded_bytes,"
 			"local_light_upload_bytes,shadow_record_cpu_ns,cpu_submission_ns,fence_wait_ns,wall_ns\n" << std::flush;
 		for (std::uint32_t Iteration = 0; Iteration < WarmupFrames + MeasuredFrames; ++Iteration) {
@@ -353,15 +371,19 @@ namespace {
 				const auto After = Workload.Renderer->GetMetrics();
 				const auto Passes = After.ShadowMapPasses - Before.ShadowMapPasses;
 				const auto Draws = After.ShadowCasterDraws - Before.ShadowCasterDraws;
+				const auto SolidDraws = After.SolidShadowCasterDraws - Before.SolidShadowCasterDraws;
 				const auto ExpectedDraws = static_cast<std::uint64_t>(Workload.Layers) * CasterCount;
 				Require(After.FramesSubmitted == Before.FramesSubmitted + 1 &&
-					Passes == Workload.Layers && Draws == ExpectedDraws,
+					Passes == Workload.Layers && Draws == ExpectedDraws &&
+					SolidDraws == (SolidDepthExperiment && OpaqueMaterial ? ExpectedDraws : 0),
 					"spotlight and cube-face workloads must draw every overlapping cube in every active layer");
 				const auto Mode = Workload.Layers == 1 ? "one-spot" :
 					Workload.Layers == 6 ? "six-face-equivalent" : "eight-spot-atlas";
 				const auto Phase = Iteration < WarmupFrames ? "warmup" : "measured";
 				Csv << Mode << '-' << Phase << ',' << Iteration << ',' << PublicationId << ','
-					<< Workload.Layers << ',' << CasterCount << ',' << ExpectedDraws << ',' << Passes << ',' << Draws << ','
+					<< Workload.Layers << ',' << CasterCount << ',' << (OpaqueMaterial ? "opaque" : "masked")
+					<< ',' << (SolidDepthExperiment ? "on" : "off")
+					<< ',' << ExpectedDraws << ',' << Passes << ',' << Draws << ',' << SolidDraws << ','
 					<< After.ShadowCacheHits - Before.ShadowCacheHits << ','
 					<< After.UploadOperations - Before.UploadOperations << ','
 					<< After.UploadedBytes - Before.UploadedBytes << ','
@@ -383,7 +405,10 @@ namespace {
 		std::ofstream Summary(Directory / "point-shadow-cost-summary.txt", std::ios::trunc);
 		if (!Summary) throw std::runtime_error("could not open point-shadow cost summary");
 		Summary << "D32 1024x1024 per layer, " << CasterCount
-			<< " submitted 36-index double-sided cube draws per layer.\n"
+			<< " submitted " << (OpaqueMaterial ? "opaque" : "masked")
+			<< " 36-index double-sided cube draws per layer.\n"
+			<< "caster_material=" << (OpaqueMaterial ? "opaque" : "masked") << '\n'
+			<< "solid_depth_experiment=" << (SolidDepthExperiment ? "on" : "off") << '\n'
 			"Six orthogonal 90-degree spot cones approximate cube faces; no production point-shadow path is used.\n"
 			"All cube casters overlap the light origin: synthetic maximal per-face geometry workload, not a typical scene.\n"
 			"All workloads allocate the production eight-layer atlas (32 MiB logical); active layers touch 4, 24 or 32 MiB.\n"
@@ -404,6 +429,62 @@ namespace {
 
 	int RedCenter(const EditorViewportFrame &Frame) {
 		return RedCenter(Frame.RgbPixels);
+	}
+
+	void CheckSolidDepthPixelParity() {
+		struct Case {
+			const char *Name;
+			RenderOpacityMode Opacity;
+			bool Cutout = false;
+			bool Mirrored = false;
+			bool Spot = false;
+		};
+		const std::array Cases{
+			Case{"opaque-directional", RenderOpacityMode::Opaque},
+			Case{"transparent-solid-directional", RenderOpacityMode::Transparent},
+			Case{"masked-solid-directional", RenderOpacityMode::Masked},
+			Case{"masked-cutout-directional", RenderOpacityMode::Masked, true},
+			Case{"mirrored-opaque-spot", RenderOpacityMode::Opaque, false, true, true},
+		};
+		int MaskedSolidCenter = -1;
+		int MaskedCutoutCenter = -1;
+		for (const auto &Test : Cases) {
+			auto Publication = Scene(1, true, true, Test.Spot);
+			auto &Caster = Publication->Creates.back();
+			Caster.Material.OpacityMode = Test.Opacity;
+			if (Test.Opacity != RenderOpacityMode::Masked) Caster.Material.BaseColorTexture.reset();
+			if (Test.Cutout) Publication->TextureCreates.back().Pixels =
+				std::make_shared<const std::vector<std::uint8_t>>(
+					std::initializer_list<std::uint8_t>{255, 255, 255, 0});
+			if (Test.Mirrored) {
+				Caster.Item.ModelMatrix *= glm::scale(glm::mat4(1), glm::vec3(-1, 1, 1));
+				Caster.Item.InverseModelMatrix = glm::inverse(Caster.Item.ModelMatrix);
+			}
+			EditorViewportRenderer Old(Size, Size);
+			EditorViewportRenderer Solid(Size, Size);
+			EditorViewportRendererTestAccess::SetSolidShadowDepthExperiment(Solid, true);
+			CurrentCase = std::string("solid-depth-off-") + Test.Name;
+			const auto OldPixels = Capture(Old, Publication);
+			CurrentCase = std::string("solid-depth-on-") + Test.Name;
+			const auto SolidPixels = Capture(Solid, Publication);
+			Require(OldPixels.RgbPixels == SolidPixels.RgbPixels,
+				"experimental solid shadow depth changed exact receiver pixels");
+			const auto OldMetrics = EditorViewportRendererTestAccess::GetMetrics(Old);
+			const auto SolidMetrics = EditorViewportRendererTestAccess::GetMetrics(Solid);
+			Require(OldMetrics.SolidShadowCasterDraws == 0 &&
+				OldMetrics.ShadowCasterDraws == SolidMetrics.ShadowCasterDraws,
+				"solid shadow depth changed caster classification or the default path");
+			Require(SolidMetrics.SolidShadowCasterDraws ==
+				(Test.Opacity == RenderOpacityMode::Masked ? 0 : SolidMetrics.ShadowCasterDraws),
+				"experimental solid shadow pipeline was not selected for its expected casters");
+			Require(SolidMetrics.ShadowCasterDraws > 0,
+				"solid depth pixel control did not record a caster");
+			if (std::string_view(Test.Name) == "masked-solid-directional")
+				MaskedSolidCenter = RedCenter(SolidPixels);
+			if (Test.Cutout) MaskedCutoutCenter = RedCenter(SolidPixels);
+		}
+		Require(MaskedCutoutCenter > MaskedSolidCenter + 25,
+			"masked cutout control did not expose the receiver");
 	}
 
 	void CheckDirectionalPixels() {
@@ -989,35 +1070,57 @@ int main(int ArgumentCount, char **Arguments) try {
 	const SDLVideoReference Video;
 	PointCostMode = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--point-cost";
 	std::uint32_t PointCostCasters = 1;
+	bool SolidDepthExperiment = false;
+	bool OpaquePointCostMaterial = false;
 	if (PointCostMode) {
-		if (ArgumentCount < 3 || ArgumentCount > 4)
-			throw std::invalid_argument("--point-cost requires an evidence directory and optional --casters=N");
-		if (ArgumentCount == 4) {
+		if (ArgumentCount < 3 || ArgumentCount > 6)
+			throw std::invalid_argument("--point-cost requires an evidence directory and optional --casters=N, --material=opaque|masked, --solid-depth=on|off");
+		bool SeenCasters = false;
+		bool SeenSolidDepth = false;
+		bool SeenMaterial = false;
+		for (int Index = 3; Index < ArgumentCount; ++Index) {
 			constexpr std::string_view Prefix = "--casters=";
-			const std::string_view Option(Arguments[3]);
-			if (!Option.starts_with(Prefix))
-				throw std::invalid_argument("point cost option must be --casters=N");
-			const auto Digits = Option.substr(Prefix.size());
-			const auto [End, Error] = std::from_chars(Digits.data(), Digits.data() + Digits.size(), PointCostCasters);
-			if (Error != std::errc{} || End != Digits.data() + Digits.size() ||
-				PointCostCasters < 1 || PointCostCasters > 1024)
-				throw std::invalid_argument("--casters must be an integer in [1,1024]");
+			constexpr std::string_view SolidPrefix = "--solid-depth=";
+			constexpr std::string_view MaterialPrefix = "--material=";
+			const std::string_view Option(Arguments[Index]);
+			if (Option.starts_with(Prefix) && !SeenCasters) {
+				SeenCasters = true;
+				const auto Digits = Option.substr(Prefix.size());
+				const auto [End, Error] = std::from_chars(Digits.data(), Digits.data() + Digits.size(), PointCostCasters);
+				if (Error != std::errc{} || End != Digits.data() + Digits.size() ||
+					PointCostCasters < 1 || PointCostCasters > 1024)
+					throw std::invalid_argument("--casters must be an integer in [1,1024]");
+			} else if (Option.starts_with(SolidPrefix) && !SeenSolidDepth) {
+				SeenSolidDepth = true;
+				const auto Value = Option.substr(SolidPrefix.size());
+				if (Value != "on" && Value != "off")
+					throw std::invalid_argument("--solid-depth must be on or off");
+				SolidDepthExperiment = Value == "on";
+			} else if (Option.starts_with(MaterialPrefix) && !SeenMaterial) {
+				SeenMaterial = true;
+				const auto Value = Option.substr(MaterialPrefix.size());
+				if (Value != "opaque" && Value != "masked")
+					throw std::invalid_argument("--material must be opaque or masked");
+				OpaquePointCostMaterial = Value == "opaque";
+			} else throw std::invalid_argument("unknown or duplicate point cost option");
 		}
 	}
 	EvidenceDirectory = PointCostMode ? std::filesystem::path(Arguments[2]) :
 		ArgumentCount > 1 ? std::filesystem::path(Arguments[1]) :
 		std::filesystem::path("renderer-shadow-evidence");
 	std::filesystem::create_directories(EvidenceDirectory);
+	EvidenceReceipt.open(EvidenceDirectory / "shadow-receipt.csv", std::ios::trunc);
+	if (!EvidenceReceipt) throw std::runtime_error("could not open shadow evidence receipt");
+	EvidenceReceipt << "kind,case,iteration,publication_id,image,width,height,center_red,rgb_fingerprint,shadow_passes,shadow_caster_draws,outcome\n" << std::flush;
+	CheckSolidDepthPixelParity();
 	if (PointCostMode) {
-		CheckPointCostGate(EvidenceDirectory, PointCostCasters);
+		CurrentCase = "point-cost";
+		CheckPointCostGate(EvidenceDirectory, PointCostCasters, SolidDepthExperiment, OpaquePointCostMaterial);
 		std::ofstream(EvidenceDirectory / "point-shadow-cost-status.txt", std::ios::trunc)
 			<< "passed\n";
 		std::cout << "[Render:ShadowGpu] Point-equivalent cost receipt passed\n";
 		return 0;
 	}
-	EvidenceReceipt.open(EvidenceDirectory / "shadow-receipt.csv", std::ios::trunc);
-	if (!EvidenceReceipt) throw std::runtime_error("could not open shadow evidence receipt");
-	EvidenceReceipt << "kind,case,iteration,publication_id,image,width,height,center_red,rgb_fingerprint,shadow_passes,shadow_caster_draws,outcome\n" << std::flush;
 	CheckDirectionalPixels();
 	for (const std::uint32_t Resolution : {512u, 1024u, 2048u})
 		CheckOutdoorResolutionCase(Resolution);
