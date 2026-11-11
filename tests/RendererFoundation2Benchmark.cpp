@@ -38,6 +38,7 @@ namespace {
 	struct RuntimeExperimentOptions {
 		bool DensityMatrix = false;
 		bool SplitConstruction = false;
+		bool ProfileCFrame = false;
 		std::string_view Property = "transform";
 	};
 	RuntimeExperimentOptions RuntimeOptions;
@@ -199,6 +200,8 @@ namespace {
 		std::vector<double> PublisherReconciliation;
 		std::vector<std::uint64_t> JournalRecords;
 		JournalRecords.reserve(Frames);
+		std::vector<CFrameMutationProfile> CFrameProfiles;
+		CFrameProfiles.reserve(Frames);
 		for (auto *Values : {&Accumulation, &Generation, &Application, &DirtyCapture, &DirtyExpansion,
 			&FinalStateExtraction, &PublicationConstruction, &PublisherReconciliation}) Values->reserve(Frames);
 #ifdef GARGANTUAN_RUNTIME6_ALLOCATION_PROBE
@@ -212,6 +215,10 @@ namespace {
 			++GlobalFrame;
 			const auto JournalBefore = Journal.CreateCursor(Game->GetObjectId()).NextSequence;
 			const auto AccumulationStart = Clock::now();
+			if (RuntimeOptions.ProfileCFrame) {
+				Instance::ResetCFrameMutationProfile();
+				Instance::SetCFrameMutationProfilingEnabled(true);
+			}
 			for (std::size_t Index = 0; Index < ChangedPerFrame; ++Index) {
 				const auto ObjectIndex = (Index + Frame * ChangedPerFrame) % Count;
 				for (std::size_t Write = 0; Write < WritesPerObject; ++Write) {
@@ -225,7 +232,14 @@ namespace {
 							static_cast<float>(Write) * 0.0000001f);
 				}
 			}
+			if (RuntimeOptions.ProfileCFrame) Instance::SetCFrameMutationProfilingEnabled(false);
 			Accumulation.push_back(Milliseconds(Clock::now() - AccumulationStart));
+			const auto CFrameProfile = RuntimeOptions.ProfileCFrame
+				? Instance::GetCFrameMutationProfile() : CFrameMutationProfile{};
+			if (RuntimeOptions.ProfileCFrame && CFrameProfile.CommittedWrites !=
+				(RuntimeOptions.Property == "material" ? 0 : ChangedPerFrame * WritesPerObject))
+				throw std::runtime_error("[Runtime:Benchmark] CFrame profile write count mismatch");
+			CFrameProfiles.push_back(CFrameProfile);
 			const auto CommittedRecords = Journal.CreateCursor(Game->GetObjectId()).NextSequence - JournalBefore;
 			const auto ExpectedRecords = ChangedPerFrame * WritesPerObject *
 				(RuntimeOptions.Property == "mixed" ? 2 : 1);
@@ -276,6 +290,26 @@ namespace {
 				Mean(Accumulation) - Breakdown.JournalMeanMs - Breakdown.ClassificationMeanMs - Breakdown.AccumulatorMeanMs
 			);
 		}
+		if (RuntimeOptions.ProfileCFrame) {
+			CFrameMutationProfile Total;
+			for (const auto &FrameProfile : CFrameProfiles) {
+				Total.CommittedWrites += FrameProfile.CommittedWrites;
+				Total.ValidationNanoseconds += FrameProfile.ValidationNanoseconds;
+				Total.MetadataLookupNanoseconds += FrameProfile.MetadataLookupNanoseconds;
+				Total.EncodingNanoseconds += FrameProfile.EncodingNanoseconds;
+				Total.JournalNanoseconds += FrameProfile.JournalNanoseconds;
+				Total.RevisionNanoseconds += FrameProfile.RevisionNanoseconds;
+				Total.SignalNanoseconds += FrameProfile.SignalNanoseconds;
+			}
+			// These are raw nested stages, not an additive partition of accumulation.
+			std::cerr << "[Runtime:Benchmark] scenario=" << PhaseName << " cframe_writes=" << Total.CommittedWrites
+				<< " cframe_validation_ns=" << Total.ValidationNanoseconds
+				<< " cframe_metadata_lookup_ns=" << Total.MetadataLookupNanoseconds
+				<< " cframe_encoding_ns=" << Total.EncodingNanoseconds
+				<< " cframe_journal_ns=" << Total.JournalNanoseconds
+				<< " cframe_revision_ns=" << Total.RevisionNanoseconds
+				<< " cframe_signal_ns=" << Total.SignalNanoseconds << '\n';
+		}
 		Print(PhaseName, Count, Frames, Accumulation, Generation, Application, Creates, Updates, Removes, UploadBytes, Count,
 			FullResyncs, Breakdown);
 		if (Samples) {
@@ -290,10 +324,18 @@ namespace {
 					<< Stage(FinalStateExtraction, Frame) << ',' << Stage(PublicationConstruction, Frame) << ','
 					<< Stage(PublisherReconciliation, Frame) << ",NA,NA,NA," << JournalRecords[Frame];
 #ifdef GARGANTUAN_RUNTIME6_ALLOCATION_PROBE
-				*Samples << ',' << FrameAllocations[Frame].Calls << ',' << FrameAllocations[Frame].Bytes << '\n';
+				*Samples << ',' << FrameAllocations[Frame].Calls << ',' << FrameAllocations[Frame].Bytes;
 #else
-				*Samples << ",NA,NA\n";
+				*Samples << ",NA,NA";
 #endif
+				if (RuntimeOptions.ProfileCFrame) {
+					const auto &Profile = CFrameProfiles[Frame];
+					*Samples << ',' << Profile.CommittedWrites << ',' << Profile.ValidationNanoseconds
+						<< ',' << Profile.MetadataLookupNanoseconds << ',' << Profile.EncodingNanoseconds
+						<< ',' << Profile.JournalNanoseconds << ',' << Profile.RevisionNanoseconds
+						<< ',' << Profile.SignalNanoseconds;
+				} else *Samples << ",NA,NA,NA,NA,NA,NA,NA";
+				*Samples << ',' << RuntimeOptions.ProfileCFrame << '\n';
 			}
 			Samples->flush();
 			if (!*Samples) throw std::runtime_error("[Render:Foundation2Benchmark] Could not write frame samples");
@@ -486,6 +528,7 @@ int main(int ArgumentCount, char **Arguments) {
 			else if (Option == "--diagnostic-marks") DiagnosticMarks = true;
 			else if (Option == "--density-matrix") RuntimeOptions.DensityMatrix = true;
 			else if (Option == "--split-construction") RuntimeOptions.SplitConstruction = true;
+			else if (Option == "--profile-cframe") RuntimeOptions.ProfileCFrame = true;
 			else if (Option.starts_with("--count=")) SelectedCount = ParseBound(Option.substr(8), 1, 65536);
 			else if (Option.starts_with("--changes=")) SelectedChanges = ParseBound(Option.substr(10), 0, 65536);
 			else if (Option.starts_with("--writes=")) SelectedWrites = ParseBound(Option.substr(9), 1, 16);
@@ -529,6 +572,7 @@ int main(int ArgumentCount, char **Arguments) {
 		if (SelectedCount) RigidOnly = true;
 		if (DiagnosticMarks) std::cerr << "[Runtime:Benchmark] property=" << RuntimeOptions.Property
 			<< " split_construction=" << RuntimeOptions.SplitConstruction
+			<< " profile_cframe=" << RuntimeOptions.ProfileCFrame
 			<< " density_matrix=" << RuntimeOptions.DensityMatrix << '\n';
 		std::ofstream SamplesFile;
 		if (!SamplesPath.empty()) {
@@ -536,7 +580,7 @@ int main(int ArgumentCount, char **Arguments) {
 				throw std::invalid_argument("samples file must not already exist");
 			SamplesFile.open(SamplesPath, std::ios::out | std::ios::trunc);
 			if (!SamplesFile) throw std::runtime_error("could not open samples file");
-			SamplesFile << "Scenario,Elements,Frame,GroupWidth,RendererOnly,ProfileEnabled,ExpectedUpdates,WritesPerObject,DirtyAccumulationMs,PublicationGenerationMs,ProjectionApplyMs,DirtyCaptureMs,DirtyExpansionMs,FinalStateExtractionMs,PublicationConstructionMs,PublisherReconciliationMs,JournalMs,ClassificationMs,AccumulatorMs,JournalRecords,FrameCppNewCalls,FrameCppNewBytes\n" << std::flush;
+			SamplesFile << "Scenario,Elements,Frame,GroupWidth,RendererOnly,ProfileEnabled,ExpectedUpdates,WritesPerObject,DirtyAccumulationMs,PublicationGenerationMs,ProjectionApplyMs,DirtyCaptureMs,DirtyExpansionMs,FinalStateExtractionMs,PublicationConstructionMs,PublisherReconciliationMs,JournalMs,ClassificationMs,AccumulatorMs,JournalRecords,FrameCppNewCalls,FrameCppNewBytes,CFrameCommittedWrites,CFrameValidationNs,CFrameMetadataLookupNs,CFrameEncodingNs,CFrameJournalNs,CFrameRevisionNs,CFrameSignalNs,CFrameProfileEnabled\n" << std::flush;
 		}
 		std::ofstream *Samples = SamplesPath.empty() ? nullptr : &SamplesFile;
 		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n" << std::flush;

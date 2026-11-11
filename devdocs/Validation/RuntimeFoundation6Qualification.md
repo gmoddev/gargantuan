@@ -42,6 +42,16 @@ not a performance candidate. A separate allocation binary counts calling-thread
 C++ new requests; C allocations, driver allocations and other threads are outside
 that metric. Full process memory is a separate observation.
 
+The optional `--profile-cframe` switch turns on per-thread stage clocks only
+around measured live CFrame setters. It emits raw per-frame nanoseconds and
+committed-write counts in the sample CSV, plus phase totals on stderr. It is
+separate from `--profile`; run normal comparison measurements with this switch
+off. The validation, metadata lookup, wire encoding, journal, revision, and
+signal fields are inclusive and may nest with journal/dirty or reentrant work;
+their sum is not a setter total. Each frame checks that the profile counted
+exactly the expected CFrame writes. The material-only mode is a zero-CFrame
+control.
+
 ## Competing experiments
 
 | Workstream | Candidate / gate | Present state |
