@@ -127,14 +127,47 @@ namespace {
 		return Bytes;
 	}
 
-	std::vector<std::uint8_t> MakeHdr(std::uint32_t Width, std::uint32_t Height,
-		std::array<std::uint8_t, 4> Rgbe) {
+	std::vector<std::uint8_t> MakeHdrHeader(std::uint32_t Width, std::uint32_t Height) {
 		const auto Header = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " + std::to_string(Height) +
 			" +X " + std::to_string(Width) + "\n";
-		std::vector<std::uint8_t> Bytes(Header.begin(), Header.end());
+		return {Header.begin(), Header.end()};
+	}
+
+	std::vector<std::uint8_t> MakeHdr(std::uint32_t Width, std::uint32_t Height,
+		std::array<std::uint8_t, 4> Rgbe) {
+		auto Bytes = MakeHdrHeader(Width, Height);
 		for (std::uint32_t Y = 0; Y < Height; ++Y) for (std::uint32_t X = 0; X < Width; ++X)
 			Bytes.insert(Bytes.end(), Rgbe.begin(), Rgbe.end());
 		return Bytes;
+	}
+
+	std::vector<std::uint8_t> MakeHdrRle(bool Literal) {
+		auto Bytes = MakeHdrHeader(8, 8);
+		constexpr std::array<std::uint8_t, 4> Rgbe{128, 64, 32, 137};
+		for (std::uint32_t Y = 0; Y < 8; ++Y) {
+			Bytes.insert(Bytes.end(), {2, 2, 0, 8});
+			for (const auto Channel : Rgbe) {
+				Bytes.push_back(Literal ? 8 : 136);
+				for (unsigned Pixel = 0; Pixel < (Literal ? 8u : 1u); ++Pixel) Bytes.push_back(Channel);
+			}
+		}
+		return Bytes;
+	}
+
+	void CheckHdrTruncations(std::string_view Name, const std::vector<std::uint8_t> &Bytes,
+		std::size_t HeaderBytes, const gargantuan::IAssetImporter &Importer) {
+		const gargantuan::AssetImportContext Context{
+			.RequestedKind = gargantuan::AssetKind::Image, .SourceExtension = ".hdr",
+			.Deadline = std::chrono::steady_clock::now() + std::chrono::minutes(5),
+		};
+		Check(Importer.ImportGraph(Bytes, Context).has_value(), "complete HDR corruption fixture decodes");
+		for (std::size_t Prefix = HeaderBytes; Prefix < Bytes.size(); ++Prefix) {
+			const auto Result = Importer.ImportGraph({Bytes.data(), Prefix}, Context);
+			if (Result) {
+				std::cerr << "[Assets:HDR] Accepted truncated " << Name << " prefix=" << Prefix << '/' << Bytes.size() << '\n';
+				++Failures;
+			}
+		}
 	}
 
 	std::vector<std::uint8_t> MakeHdrGradient() {
@@ -474,6 +507,19 @@ int main() {
 		"stable logical identity remains distinct from deterministic content identity");
 	const auto PersistentImageReference = DuplicateContent.Record->Reference.Value;
 	auto PngImport = Assets->ImportProjectAsset(Mount, "assets/representative.png", AssetKind::Image, "Representative PNG");
+	const auto HdrImporters = CreateFoundationAssetImporters();
+	const auto HdrDecoder = std::ranges::find_if(HdrImporters, [](const auto &Importer) {
+		return Importer->GetKind() == AssetKind::Image && Importer->SupportsExtension(".hdr");
+	});
+	Check(HdrDecoder != HdrImporters.end(), "Radiance HDR importer is registered");
+	if (HdrDecoder != HdrImporters.end()) {
+		CheckHdrTruncations("flat-2x2", MakeHdr(2, 2, {128, 64, 32, 137}),
+			MakeHdrHeader(2, 2).size(), **HdrDecoder);
+		CheckHdrTruncations("flat-after-wide-header", MakeHdr(8, 8, {128, 64, 32, 137}),
+			MakeHdrHeader(8, 8).size(), **HdrDecoder);
+		CheckHdrTruncations("rle-run", MakeHdrRle(false), MakeHdrHeader(8, 8).size(), **HdrDecoder);
+		CheckHdrTruncations("rle-literal", MakeHdrRle(true), MakeHdrHeader(8, 8).size(), **HdrDecoder);
+	}
 	WriteBytes(Root / "assets" / "uniform.hdr", MakeHdr(4, 2, {128, 64, 32, 137}));
 	auto HdrImport = Assets->ImportProjectAsset(Mount, "assets/uniform.hdr", AssetKind::Image, "HDR Panorama");
 	Check(HdrImport.Ok && HdrImport.Records.size() == 6 && HdrImport.Record &&
