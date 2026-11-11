@@ -7115,6 +7115,12 @@ namespace {
 
 	void TestServerScriptDestroysEngineDataModel() {
 		using namespace gargantuan;
+		const auto StartHostFrame = [](Engine &Runtime, const std::shared_ptr<Script> &ScriptValue) {
+			Runtime.ProcessService->Alive = true;
+			Check(Runtime.ProcessService->Alive && Runtime.Script &&
+				Runtime.Script->ScriptQueue.contains(ScriptValue),
+				"host frame starts with ProcessService alive and server Script admitted");
+		};
 		for (const bool DirectScriptStep : {false, true}) {
 			auto Game = std::make_shared<DataModel>();
 			auto ScriptValue = std::make_shared<Script>();
@@ -7124,7 +7130,10 @@ namespace {
 			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
 			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
 			if (DirectScriptStep) Runtime.Script->Step();
-			else Runtime.Step();
+			else {
+				StartHostFrame(Runtime, ScriptValue);
+				Runtime.Step();
+			}
 			Check(Game->GetDestroyed() && ScriptValue->GetDestroyed() && Runtime.Script == nullptr,
 				"ordinary server Script destruction retires the Engine after active Luau returns");
 			Check(ScriptValue->Status == ScriptStatus::Disabled &&
@@ -7145,6 +7154,7 @@ namespace {
 			ScriptValue->SetParent(Game);
 			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
 			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			StartHostFrame(Runtime, ScriptValue);
 			Runtime.Step();
 			Check(!Game->GetDestroyed() && ScriptValue->Status == ScriptStatus::Finished,
 				"server Script registers a simulation callback before destruction");
@@ -7164,6 +7174,7 @@ namespace {
 			ScriptValue->SetParent(Game);
 			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
 			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			StartHostFrame(Runtime, ScriptValue);
 			Runtime.Step();
 			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed(),
 				"host input callback is installed before native event routing");
@@ -7188,6 +7199,7 @@ namespace {
 			Engine Runtime(Game, &Renderer,
 				[&](std::string, std::string Message) { Diagnostics.push_back(std::move(Message)); },
 				EngineProviderConfiguration{.AudioEnabled = false});
+			StartHostFrame(Runtime, ScriptValue);
 			Runtime.Step();
 			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed(),
 				"deferred tasks are queued before direct scheduler stepping");
@@ -7223,6 +7235,7 @@ namespace {
 			ScriptValue->SetParent(Game);
 			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
 			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			StartHostFrame(Runtime, ScriptValue);
 			Runtime.Step();
 			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed() &&
 				WorldRootTestAccess::BodyCount(*WorkspaceValue) == 1,
@@ -7257,6 +7270,7 @@ namespace {
 			ScriptValue->SetParent(Game);
 			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
 			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			StartHostFrame(Runtime, ScriptValue);
 			Runtime.Step();
 			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed(),
 				"property callback is installed before external Main mutation");
