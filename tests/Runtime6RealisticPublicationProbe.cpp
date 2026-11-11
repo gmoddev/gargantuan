@@ -286,12 +286,14 @@ namespace {
 		const auto Baseline = Coordinator.AddPeer(Peer, ReplicationEpoch(1));
 		Require(Baseline.Succeeded() && Baseline.Frame &&
 			Replica.ApplyFrame(*Baseline.Frame).Succeeded(), "replica baseline failed");
-		auto ReplicaRoot = Replica.GetReplicaRoot();
-		Require(ReplicaRoot != nullptr, "replica root is unavailable");
-		const auto ReplicaWorldService = ReplicaRoot->FindService("Workspace");
-		auto ReplicaWorld = ReplicaWorldService
-			? std::dynamic_pointer_cast<Workspace>(*ReplicaWorldService) : nullptr;
-		Require(ReplicaWorld != nullptr, "live replica Workspace is unavailable");
+		auto ReplicaGame = std::dynamic_pointer_cast<DataModel>(Replica.GetReplicaRoot());
+		Require(ReplicaGame != nullptr, "replica root is not a DataModel");
+		// Snapshot loading reconstructs the child hierarchy, not ServiceProvider's
+		// lookup cache. Find the replicated service without creating another one.
+		auto ReplicaWorld = std::dynamic_pointer_cast<Workspace>(
+			ReplicaGame->FindFirstChildOfClass("Workspace", false));
+		Require(ReplicaWorld && ReplicaWorld->GetName() == "Workspace",
+			"live replica Workspace is unavailable");
 		std::vector<ObjectId> LiveIds;
 		LiveIds.reserve(Config.Count);
 		for (const auto &Value : Parts) {
