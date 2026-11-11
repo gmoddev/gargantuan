@@ -8,6 +8,8 @@
 #include "render/sdl/SDLDirectionalCascadePlan.hpp"
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -46,6 +48,7 @@ namespace {
 	std::ofstream EvidenceReceipt;
 	std::string CurrentCase;
 	std::uint64_t EvidenceSerial = 0;
+	bool PointCostMode = false;
 
 	void RecordResult(std::string_view Result, std::string_view Detail) {
 		EvidenceReceipt << "result," << CurrentCase << "," << EvidenceSerial << ",0,,0,0,0,0,0,0," << Result;
@@ -225,6 +228,148 @@ namespace {
 		Camera.ProjectionMatrix = glm::perspectiveRH_ZO(glm::radians(Camera.VerticalFieldOfView),
 			1.0f, Camera.NearPlane, Camera.FarPlane);
 		Camera.ViewProjectionMatrix = Camera.ProjectionMatrix * Camera.ViewMatrix;
+	}
+
+	std::shared_ptr<RenderPublication> PointCostScene(std::uint32_t Layers) {
+		auto Publication = Scene(1, true, true, true);
+		Publication->Frame.Environment.DirectionalShadows.Distance = 1.0f;
+		SetNearPlane(*Publication, 2.0f); // Configured-empty cascades keep directional work out of this comparison.
+		std::vector<RenderVertex> Vertices;
+		for (const glm::vec3 Position : {glm::vec3(-1, -1, -1), glm::vec3(1, -1, -1),
+			glm::vec3(1, 1, -1), glm::vec3(-1, 1, -1), glm::vec3(-1, -1, 1),
+			glm::vec3(1, -1, 1), glm::vec3(1, 1, 1), glm::vec3(-1, 1, 1)})
+			Vertices.push_back({.Position = Position});
+		const std::vector<std::uint32_t> Indices{
+			0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6,
+			0, 5, 1, 0, 4, 5, 3, 2, 6, 3, 6, 7,
+			0, 3, 7, 0, 7, 4, 1, 5, 6, 1, 6, 2,
+		};
+		auto &Mesh = Publication->MeshCreates.back();
+		Mesh.Vertices = std::make_shared<const std::vector<RenderVertex>>(std::move(Vertices));
+		Mesh.Indices = std::make_shared<const std::vector<std::uint32_t>>(Indices);
+		Mesh.Bounds = {{-1, -1, -1}, {1, 1, 1}};
+		auto &Caster = Publication->Creates.back();
+		Caster.Item.ModelMatrix = glm::mat4(1);
+		Caster.Item.InverseModelMatrix = glm::mat4(1);
+		std::vector<RenderLocalLightState> Lights;
+		const std::array CubeFaces{glm::vec3(1, 0, 0), glm::vec3(-1, 0, 0),
+			glm::vec3(0, 1, 0), glm::vec3(0, -1, 0), glm::vec3(0, 0, 1), glm::vec3(0, 0, -1)};
+		const std::array Octants{glm::vec3(1, 1, 1), glm::vec3(1, 1, -1),
+			glm::vec3(1, -1, 1), glm::vec3(1, -1, -1), glm::vec3(-1, 1, 1),
+			glm::vec3(-1, 1, -1), glm::vec3(-1, -1, 1), glm::vec3(-1, -1, -1)};
+		for (std::uint32_t Index = 0; Index < Layers; ++Index) {
+			auto Light = Publication->Frame.Environment.LocalLights->front();
+			Light.Object = {400 + Index, 1};
+			Light.Position = glm::vec3(0);
+			Light.Direction = glm::normalize(Layers == 6 ? CubeFaces[Index] : Octants[Index]);
+			Light.Intensity = 1.0f;
+			Light.Range = 6.0f;
+			Light.InnerConeCosine = 0.8f;
+			Light.OuterConeCosine = 0.70710678f; // 90-degree face cone.
+			Lights.push_back(Light);
+		}
+		Publication->Frame.Environment.LocalLights =
+			std::make_shared<const std::vector<RenderLocalLightState>>(std::move(Lights));
+		return Publication;
+	}
+
+	struct PointCostSample {
+		std::uint64_t ShadowRecordNs = 0;
+		std::uint64_t CpuSubmitNs = 0;
+		std::uint64_t FenceWaitNs = 0;
+		std::uint64_t WallNs = 0;
+	};
+
+	void CheckPointCostGate(const std::filesystem::path &Directory) {
+		constexpr std::uint32_t WarmupFrames = 4;
+		constexpr std::uint32_t MeasuredFrames = 24;
+		struct Workload {
+			std::uint32_t Layers;
+			std::shared_ptr<RenderPublication> Initial;
+			std::unique_ptr<SDLRenderer> Renderer;
+			std::vector<PointCostSample> Samples;
+		};
+		std::array<Workload, 3> Workloads{{{1, PointCostScene(1)},
+			{6, PointCostScene(6)}, {8, PointCostScene(8)}}};
+		const SDLRendererOptions Options{.Offscreen = true, .WaitForGpuCompletion = true,
+			.DebugDevice = false, .EnableHdrScene = false};
+		std::ofstream Manifest(Directory / "point-shadow-cost-manifest.txt", std::ios::trunc);
+		if (!Manifest) throw std::runtime_error("could not open point-shadow cost manifest");
+		Manifest << "one/six/eight production spotlight depth layers, 1024x1024 D32, "
+			"36-index cube, four warmups, 24 measured frames, one transform update per frame\n"
+			<< std::flush;
+		for (auto &Workload : Workloads) {
+			Workload.Renderer = std::make_unique<SDLRenderer>(Vector2(Size, Size), Options);
+			Workload.Renderer->Draw(Workload.Initial);
+			Manifest << Workload.Layers << " layers: " << Workload.Renderer->GetDriverName()
+				<< "\n" << std::flush;
+		}
+		std::ofstream Csv(Directory / "point-shadow-cost.csv", std::ios::trunc);
+		if (!Csv) throw std::runtime_error("could not open point-shadow cost receipt");
+		Csv << "mode,iteration,publication_id,layers,shadow_passes,shadow_caster_draws,shadow_cache_hits,"
+			"upload_operations,uploaded_bytes,"
+			"local_light_upload_bytes,shadow_record_cpu_ns,cpu_submission_ns,fence_wait_ns,wall_ns\n" << std::flush;
+		for (std::uint32_t Iteration = 0; Iteration < WarmupFrames + MeasuredFrames; ++Iteration) {
+			const std::array Order = Iteration % 2 == 0 ? std::array{0u, 1u, 2u}
+				: std::array{2u, 1u, 0u};
+			for (const auto Index : Order) {
+				auto &Workload = Workloads[Index];
+				const auto PublicationId = static_cast<RenderPublicationId>(Iteration + 2);
+				auto Publication = Delta(PublicationId, PublicationId - 1, Workload.Initial->Frame);
+				auto Caster = Workload.Initial->Creates.back();
+				const float Offset = Iteration % 2 == 0 ? 0.02f : -0.02f;
+				Caster.Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(Offset, 0, 0));
+				Caster.Item.InverseModelMatrix = glm::inverse(Caster.Item.ModelMatrix);
+				Publication->Updates.push_back({.Object = CasterObject, .Domains = RenderUpdateDomain::Transform,
+					.Item = Caster.Item, .Mesh = Caster.Mesh, .Material = Caster.Material});
+				const auto Before = Workload.Renderer->GetMetrics();
+				const auto Started = std::chrono::steady_clock::now();
+				Workload.Renderer->Draw(Publication);
+				const auto WallNs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now() - Started).count());
+				const auto After = Workload.Renderer->GetMetrics();
+				const auto Passes = After.ShadowMapPasses - Before.ShadowMapPasses;
+				const auto Draws = After.ShadowCasterDraws - Before.ShadowCasterDraws;
+				Require(After.FramesSubmitted == Before.FramesSubmitted + 1 &&
+					Passes == Workload.Layers && Draws == Workload.Layers,
+					"spotlight and cube-face workloads must issue exactly one cube depth draw per active layer");
+				const auto Mode = Workload.Layers == 1 ? "one-spot" :
+					Workload.Layers == 6 ? "six-face-equivalent" : "eight-spot-atlas";
+				const auto Phase = Iteration < WarmupFrames ? "warmup" : "measured";
+				Csv << Mode << '-' << Phase << ',' << Iteration << ',' << PublicationId << ','
+					<< Workload.Layers << ',' << Passes << ',' << Draws << ','
+					<< After.ShadowCacheHits - Before.ShadowCacheHits << ','
+					<< After.UploadOperations - Before.UploadOperations << ','
+					<< After.UploadedBytes - Before.UploadedBytes << ','
+					<< After.LocalLightUploadBytes - Before.LocalLightUploadBytes << ','
+					<< After.LastShadowRecordingNanoseconds << ',' << After.LastSubmissionNanoseconds << ','
+					<< After.LastGpuCompletionWaitNanoseconds << ',' << WallNs << '\n' << std::flush;
+				if (Iteration >= WarmupFrames) Workload.Samples.push_back({
+					After.LastShadowRecordingNanoseconds, After.LastSubmissionNanoseconds,
+					After.LastGpuCompletionWaitNanoseconds, WallNs});
+			}
+		}
+		const auto Median = [](const std::vector<PointCostSample> &Samples,
+			std::uint64_t PointCostSample::*Field) {
+			std::vector<std::uint64_t> Values;
+			for (const auto &Sample : Samples) Values.push_back(Sample.*Field);
+			std::ranges::sort(Values);
+			return Values[Values.size() / 2];
+		};
+		std::ofstream Summary(Directory / "point-shadow-cost-summary.txt", std::ios::trunc);
+		if (!Summary) throw std::runtime_error("could not open point-shadow cost summary");
+		Summary << "D32 1024x1024 per layer, one submitted 36-index double-sided cube draw per layer.\n"
+			"Six orthogonal 90-degree spot cones approximate cube faces; no production point-shadow path is used.\n"
+			"All workloads allocate the production eight-layer atlas (32 MiB logical); active layers touch 4, 24 or 32 MiB.\n"
+			"CPU recording and submission are host clocks. Fence wait includes the entire rendered frame, not a GPU timestamp.\n";
+		for (const auto &Workload : Workloads)
+			Summary << (Workload.Layers == 1 ? "one-spot" :
+				Workload.Layers == 6 ? "six-face-equivalent" : "eight-spot-atlas")
+				<< " median_shadow_record_cpu_ns=" << Median(Workload.Samples, &PointCostSample::ShadowRecordNs)
+				<< " median_cpu_submission_ns=" << Median(Workload.Samples, &PointCostSample::CpuSubmitNs)
+				<< " median_fence_wait_ns=" << Median(Workload.Samples, &PointCostSample::FenceWaitNs)
+				<< " median_wall_ns=" << Median(Workload.Samples, &PointCostSample::WallNs) << '\n';
+		Summary << std::flush;
 	}
 
 	int RedCenter(const std::vector<std::uint8_t> &Pixels) {
@@ -655,9 +800,20 @@ namespace {
 }
 
 int main(int ArgumentCount, char **Arguments) try {
-	EvidenceDirectory = ArgumentCount > 1 ? std::filesystem::path(Arguments[1])
-		: std::filesystem::path("renderer-shadow-evidence");
+	PointCostMode = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--point-cost";
+	if (PointCostMode && ArgumentCount != 3)
+		throw std::invalid_argument("--point-cost requires an evidence directory");
+	EvidenceDirectory = PointCostMode ? std::filesystem::path(Arguments[2]) :
+		ArgumentCount > 1 ? std::filesystem::path(Arguments[1]) :
+		std::filesystem::path("renderer-shadow-evidence");
 	std::filesystem::create_directories(EvidenceDirectory);
+	if (PointCostMode) {
+		CheckPointCostGate(EvidenceDirectory);
+		std::ofstream(EvidenceDirectory / "point-shadow-cost-status.txt", std::ios::trunc)
+			<< "passed\n";
+		std::cout << "[Render:ShadowGpu] Point-equivalent cost receipt passed\n";
+		return 0;
+	}
 	EvidenceReceipt.open(EvidenceDirectory / "shadow-receipt.csv", std::ios::trunc);
 	if (!EvidenceReceipt) throw std::runtime_error("could not open shadow evidence receipt");
 	EvidenceReceipt << "kind,case,iteration,publication_id,image,width,height,center_red,rgb_fingerprint,shadow_passes,shadow_caster_draws,outcome\n" << std::flush;
@@ -676,6 +832,10 @@ int main(int ArgumentCount, char **Arguments) try {
 	std::cout << "[Render:ShadowGpu] Cascades, spots and temporal pixels passed\n";
 	return 0;
 } catch (const std::exception &Error) {
+	if (PointCostMode && !EvidenceDirectory.empty()) {
+		std::ofstream(EvidenceDirectory / "point-shadow-cost-status.txt", std::ios::trunc)
+			<< "failed: " << Error.what() << '\n';
+	}
 	if (EvidenceReceipt) RecordResult("failed", Error.what());
 	std::cerr << "[Render:ShadowGpu] " << Error.what() << '\n';
 	return 1;

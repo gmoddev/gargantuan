@@ -3,6 +3,8 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 
+#include <array>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 
@@ -121,6 +123,44 @@ int main() try {
 		DistantAtlas.GetAssignments()[0].Matrix == OriginMatrix &&
 		DistantAtlas.GetAssignments()[0].Origin == (*DistantLights)[0].Position,
 		"spot projection remains origin-relative at large coordinates");
+	// Projection accepts every positive outer cosine through one. Keep the
+	// clamped narrow/wide shadow matrices finite and depth ordered at both
+	// legal range limits, including directions nearest the up-axis switch.
+	for (const float Range : {0.101f, 6.0f, 1024.0f}) {
+		for (const float Outer : {0.000001f, 0.01f, 0.8f, 0.9999f, 1.0f}) {
+			for (const glm::vec3 Direction : {glm::vec3(0, 1, 0),
+				glm::normalize(glm::vec3(0.141f, 0.99f, 0)),
+				glm::normalize(glm::vec3(0.140f, 0.9901f, 0)),
+				glm::vec3(0, -1, 0), glm::vec3(0, 0, -1)}) {
+				RenderLocalLightState Extreme = (*Lights)[0];
+				Extreme.Range = Range;
+				Extreme.Direction = Direction;
+				Extreme.OuterConeCosine = Outer;
+				Extreme.InnerConeCosine = 1.0f;
+				Frame.Environment.LocalLights =
+					std::make_shared<const std::vector<RenderLocalLightState>>(
+						std::initializer_list<RenderLocalLightState>{Extreme});
+				Frame.Camera.Position = {0, 0, 0};
+				Frame.Camera.ViewMatrix = glm::lookAt(glm::vec3(0), glm::vec3(0, 0, -1),
+					glm::vec3(0, 1, 0));
+				Frame.Camera.ViewProjectionMatrix = Frame.Camera.ProjectionMatrix * Frame.Camera.ViewMatrix;
+				SDLSpotShadowAtlas ExtremeAtlas;
+				ExtremeAtlas.Prepare(Frame, nullptr);
+				Require(ExtremeAtlas.GetAssignments().size() == 1,
+					"legal spotlight cone and range lost atlas eligibility");
+				const auto &Matrix = ExtremeAtlas.GetAssignments().front().Matrix;
+				for (int Column = 0; Column < 4; ++Column)
+					for (int Row = 0; Row < 4; ++Row)
+						Require(std::isfinite(Matrix[Column][Row]),
+							"legal spotlight cone made a nonfinite depth matrix");
+				const auto Near = Matrix * glm::vec4(Direction * (Range * 0.01f), 1.0f);
+				const auto Far = Matrix * glm::vec4(Direction * Range, 1.0f);
+				Require(Near.w > 0.0f && Far.w > 0.0f &&
+					Near.z / Near.w < Far.z / Far.w,
+					"legal spotlight cone reversed forward depth ordering");
+			}
+		}
+	}
 	std::cout << "[Render:SpotShadowAtlas] Budget, stable assignment and lifetime passed\n";
 	return 0;
 } catch (const std::exception &Error) {

@@ -77,9 +77,28 @@ unshadowed rather than sampling another light's layer.
 The combined optional directional and spotlight depth allocations are at most
 96 MiB of logical texels at the default four 2048-pixel cascades plus eight
 1024-pixel spots. This excludes native padding and in-flight retirement.
-Resource creation failure falls back to the established unshadowed local
-light behavior or the Foundation 4 directional map. The private adapter
+When authored cascades have no valid receiver interval or their array cannot
+be allocated, the configured cascade path has zero layers and directional
+lighting remains unshadowed. Local spotlights can still record. The private adapter
 owns GPU resources; no Instance or backend handle enters publication.
+
+`ShadowFoundation5GpuTests --point-cost <evidence-directory>` is a separate
+bounded cost gate. It uses the production D32 spotlight array and shadow pass
+with one, six, or eight active layers at 1024². The six orthogonal 90-degree
+spot cones model the six depth faces that one point light would require;
+production point shadows are not enabled. A double-sided 36-index cube encloses
+the light origin, so every active layer records one equal caster draw. A small
+published transform change invalidates every layer per frame. Four warmups and
+24 measured frames alternate the workload order. The CSV records actual depth
+passes and caster draws, upload operations/bytes, CPU shadow recording and
+submission clocks, whole-frame GPU fence wait, and wall time for each frame.
+It flushes each row and writes a failure status if a gate aborts. These host
+clocks and whole-frame waits do not isolate GPU shadow time; receiver shading
+and ordinary frame work are included in the fence. All three cases allocate
+the same eight-layer atlas, so their resource allocation is 32 MiB logical
+even though one, six, and eight active layers touch 4, 24, and 32 MiB.
+Measured ratios must be reported per adapter before using this as a point-light
+budget decision.
 
 Qualification still required before default enablement: a same-binary
 feature-on/off GPU run, temporal captures for slow and fast camera movement,
