@@ -15,6 +15,9 @@ namespace gargantuan {
 		enum class Coverage { None, Solid, AlphaTexture };
 
 		Coverage GetCoverage(const RenderMaterialState &Material) {
+			// The depth pass casts Transparent materials as solid geometry for
+			// Foundation 4 compatibility. Authors can opt out with CastShadow.
+			// Glass attenuation and colored transmission are not modeled here.
 			if (Material.OpacityMode != RenderOpacityMode::Masked) return Coverage::Solid;
 			if (Material.BaseColorFactor.a < Material.AlphaCutoff) return Coverage::None;
 			return Material.BaseColorTexture ? Coverage::AlphaTexture : Coverage::Solid;

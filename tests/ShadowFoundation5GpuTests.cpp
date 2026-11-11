@@ -23,6 +23,17 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 
+namespace gargantuan {
+	struct EditorViewportRendererTestAccess {
+		static void InjectPostShadowFailure(EditorViewportRenderer &Renderer) {
+			Renderer.InjectPostShadowFailureForTesting();
+		}
+		static SDLRendererMetrics GetMetrics(const EditorViewportRenderer &Renderer) {
+			return Renderer.GetMetricsForTesting();
+		}
+	};
+}
+
 namespace {
 	using namespace gargantuan;
 	constexpr std::uint32_t Size = 96;
@@ -431,6 +442,43 @@ namespace {
 			"empty directional coverage suppressed a valid local spotlight depth pass");
 	}
 
+	void CheckCanceledShadowCandidate() {
+		CurrentCase = "canceled-shadow-candidate";
+		EditorViewportRenderer Renderer(Size, Size);
+		auto Canceled = Scene(1, true);
+		EditorViewportRendererTestAccess::InjectPostShadowFailure(Renderer);
+		bool AbortedAfterShadow = false;
+		try { (void)Capture(Renderer, Canceled); }
+		catch (const std::runtime_error &Error) {
+			AbortedAfterShadow = std::string_view(Error.what()).find("injected post-shadow failure") !=
+				std::string_view::npos;
+		}
+		Require(AbortedAfterShadow, "GPU fixture did not cancel a recorded cascade command buffer");
+		const auto Attempted = EditorViewportRendererTestAccess::GetMetrics(Renderer);
+		Require(Attempted.ShadowMapPasses == 4,
+			"canceled frame did not attempt all four cascade depth layers");
+		auto Empty = Delta(2, 1, Canceled->Frame);
+		Empty->Frame.Environment.DirectionalShadows.Distance = 1.0f;
+		SetNearPlane(*Empty, 2.0f);
+		Empty->EnvironmentChanged = true;
+		(void)Capture(Renderer, Empty);
+		const auto AfterEmpty = EditorViewportRendererTestAccess::GetMetrics(Renderer);
+		Require(AfterEmpty.ShadowMapPasses == Attempted.ShadowMapPasses,
+			"configured-empty frame recorded unexpected legacy or canceled cascade depth");
+		auto Resumed = Delta(3, 2, Canceled->Frame);
+		Resumed->EnvironmentChanged = true;
+		const auto ResumedPixels = Capture(Renderer, Resumed).RgbPixels;
+		const auto AfterResume = EditorViewportRendererTestAccess::GetMetrics(Renderer);
+		Require(AfterResume.ShadowMapPasses == Attempted.ShadowMapPasses + 4,
+			"resumed frame reused canceled depth instead of rebuilding all cascades");
+		EditorViewportRenderer Fresh(Size, Size);
+		auto FreshScene = Scene(4, true);
+		FreshScene->Frame = Resumed->Frame;
+		const auto FreshPixels = Capture(Fresh, FreshScene).RgbPixels;
+		Require(ResumedPixels == FreshPixels,
+			"resumed cascade pixels differ from a newly submitted reference map");
+	}
+
 	void CheckIncomingDynamicCasters() {
 		CurrentCase = "incoming-dynamic-casters";
 		const auto MoveOutside = [](RenderPublication &Publication) {
@@ -620,6 +668,7 @@ int main(int ArgumentCount, char **Arguments) try {
 	CheckCachedSkinPoseReceipts();
 	CheckLegacyStaticCompatibility();
 	CheckEmptyDirectionalCoverage();
+	CheckCanceledShadowCandidate();
 	CheckIncomingDynamicCasters();
 	CheckAtlasPasses();
 	CheckAtlasEvictionPixels();
