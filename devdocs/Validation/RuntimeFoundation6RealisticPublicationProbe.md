@@ -14,7 +14,12 @@ publishes one initial immutable full resync. Timed steady frames use real
 reimport changes the canonical geometry and must produce one mesh replacement
 and an update for every exact dependent MeshPart. The retained incremental
 `RenderItem` values are compared exactly against a new authoritative full
-resync and a fresh projection. One MeshPart then moves under a nested Folder,
+resync and a fresh projection. The comparison also checks projected mesh
+identity, complete material and primitive state, visibility, and object count
+before resync. Reimport must advance canonical content revision and mesh
+generation, change vertex content, and publish the exact canonical vertex/index
+backing and bounds; the projection and later full resync must retain that
+resource. One MeshPart then moves under a nested Folder,
 outside WorldRoot, and back; it must update, remove, and recreate the same
 generation-safe identity in those respective publications.
 
