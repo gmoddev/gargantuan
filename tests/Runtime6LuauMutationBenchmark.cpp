@@ -96,11 +96,12 @@ namespace {
 		return WireColor3{static_cast<float>(Frame) / 16.0f, 0.25f, 0.5f};
 	}
 
-	void ExportScriptFunction(lua_State *Source, lua_State *Destination, const char *Name) {
-		lua_getglobal(Source, Name);
-		Require(lua_isfunction(Source, -1), "server Script did not export its benchmark function");
-		lua_xmove(Source, Destination, 1);
-		lua_setglobal(Destination, Name);
+	void ExportScriptFunction(lua_State *State, const char *Name) {
+		lua_getglobal(State, "BenchmarkExports");
+		lua_getfield(State, -1, Name);
+		Require(lua_isfunction(State, -1), "server Script did not export its benchmark function");
+		lua_setglobal(State, Name);
+		lua_pop(State, 1);
 	}
 
 	void Call(lua_State *State, const char *Name, int Arguments, int Results,
@@ -193,6 +194,11 @@ namespace {
 			ColorConnection:Disconnect()
 			return table.concat(Order, ","), Failures
 		end
+		BenchmarkExports.RunMutationFrame = RunMutationFrame
+		BenchmarkExports.AttemptDeniedMutation = AttemptDeniedMutation
+		BenchmarkExports.AttemptInvalidMutation = AttemptInvalidMutation
+		BenchmarkExports.AttemptReadOnlyMutation = AttemptReadOnlyMutation
+		BenchmarkExports.RunReentrantMutation = RunReentrantMutation
 	)LUA";
 }
 
@@ -225,19 +231,22 @@ int main(int ArgumentCount, char **Arguments) {
 		lua_setglobal(Engine.L, "BenchmarkProperty");
 		lua_pushinteger(Engine.L, static_cast<lua_Integer>(Config.Listeners));
 		lua_setglobal(Engine.L, "BenchmarkListeners");
+		lua_newtable(Engine.L);
+		lua_setglobal(Engine.L, "BenchmarkExports");
 		TeardownMarker AfterScript{"after-script"};
 		auto ScriptValue = std::make_shared<Script>();
 		ScriptValue->SetName("MutationHarness");
 		ScriptValue->SetSource(std::string(Source));
 		ScriptValue->SetParent(World);
 		Engine.RunBootstrapScript(ScriptValue);
-		Require(ScriptValue->Status == ScriptStatus::Finished && ScriptValue->Thread && Diagnostics.empty(),
+		Require(ScriptValue->Status == ScriptStatus::Finished && ScriptValue->Thread == nullptr &&
+			ScriptValue->ThreadReference == LUA_NOREF && Diagnostics.empty(),
 			"server Script setup failed");
 		for (const char *Name : {"RunMutationFrame", "AttemptDeniedMutation", "AttemptInvalidMutation",
 			"AttemptReadOnlyMutation", "RunReentrantMutation"})
-			ExportScriptFunction(ScriptValue->Thread, Engine.L, Name);
-		// Connection userdata disconnects on GC. Prove the Script retains both
-		// callbacks per Part before the timed loop starts.
+			ExportScriptFunction(Engine.L, Name);
+		// Exported closures retain the Connection userdata after the original
+		// Script coroutine retires. Prove callbacks survive GC before timing.
 		lua_gc(Engine.L, LUA_GCCOLLECT, 0);
 		const auto Scope = Game->GetObjectId();
 		auto &Journal = ChangeJournal::Get();

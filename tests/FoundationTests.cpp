@@ -8,6 +8,7 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
+#include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
@@ -6917,16 +6918,16 @@ namespace {
 		auto Game = std::make_shared<DataModel>();
 		auto ScriptValue = std::make_shared<Script>();
 		ScriptValue->SetName("RegistryRootProbe");
-		ScriptValue->SetSource("local Result = 42");
+		ScriptValue->SetSource("task.wait(60)");
 		ScriptValue->SetParent(Game);
 		{
 			ScriptEngine Engine(Game);
 			lua_pushinteger(Engine.L, 777);
 			const auto IncomingTop = lua_gettop(Engine.L);
 			Engine.RunBootstrapScript(ScriptValue);
-			Check(ScriptValue->Status == ScriptStatus::Finished && ScriptValue->Thread &&
+			Check(ScriptValue->Status == ScriptStatus::Yielded && ScriptValue->Thread &&
 				ScriptValue->ThreadReference != LUA_NOREF,
-				"finished Script retains a rooted coroutine");
+				"yielded Script retains a rooted coroutine");
 			Check(lua_gettop(Engine.L) == IncomingTop && lua_tointeger(Engine.L, -1) == 777,
 				"Script execution preserves the caller's main Luau stack");
 			const auto Thread = ScriptValue->Thread;
@@ -6934,11 +6935,220 @@ namespace {
 			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
 			lua_getref(Engine.L, ScriptValue->ThreadReference);
 			Check(lua_type(Engine.L, -1) == LUA_TTHREAD && lua_tothread(Engine.L, -1) == Thread,
-				"Script coroutine remains registry-rooted after main-stack reset and full GC");
+				"yielded Script coroutine remains registry-rooted after main-stack reset and full GC");
 			lua_pop(Engine.L, 1);
 		}
 		Check(ScriptValue->Thread == nullptr && ScriptValue->ThreadReference == LUA_NOREF,
 			"ScriptEngine teardown releases the rooted coroutine before closing Luau");
+		Game->Destroy();
+	}
+
+	void TestCompletedScriptRootRetirement() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(Game);
+			auto Finished = std::make_shared<Script>();
+			Finished->SetSource("return 42");
+			Finished->SetParent(Game);
+			Engine.RunBootstrapScript(Finished);
+			Check(Finished->Status == ScriptStatus::Finished && Finished->Thread == nullptr &&
+				Finished->ThreadReference == LUA_NOREF,
+				"finished Script retires its own completed coroutine root");
+			Finished->SetParent(std::nullopt);
+			std::weak_ptr<Script> FinishedWeak = Finished;
+			Finished.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(FinishedWeak.expired(),
+				"unparented finished Script releases after external owners leave");
+
+			auto Failed = std::make_shared<Script>();
+			Failed->SetSource("error('retirement probe')");
+			Failed->SetParent(Game);
+			Engine.RunBootstrapScript(Failed);
+			Check(Failed->Status == ScriptStatus::Error && Failed->Thread == nullptr &&
+				Failed->ThreadReference == LUA_NOREF &&
+				Failed->ErrorMessage.find("retirement probe") != std::string::npos,
+				"errored Script retains its diagnostic but retires its coroutine root");
+			Failed->SetParent(std::nullopt);
+			std::weak_ptr<Script> FailedWeak = Failed;
+			Failed.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(FailedWeak.expired(),
+				"unparented errored Script releases after external owners leave");
+
+			auto Waiting = std::make_shared<Script>();
+			Waiting->SetSource("task.wait(0); return 7");
+			Waiting->SetParent(Game);
+			Engine.RunBootstrapScript(Waiting);
+			Check(Waiting->Status == ScriptStatus::Yielded && Waiting->Thread &&
+				Waiting->ThreadReference != LUA_NOREF,
+				"task.wait keeps the original Script coroutine rooted while yielded");
+			Waiting->SetParent(std::nullopt);
+			std::weak_ptr<Script> WaitingWeak = Waiting;
+			Waiting.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(!WaitingWeak.expired(), "yielded Script survives without an external owner");
+			Engine.Threads.Step();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(WaitingWeak.expired(),
+				"task.wait completion retires the original Script root after resume");
+
+			auto WaitingError = std::make_shared<Script>();
+			WaitingError->SetSource("task.wait(0); error('resumed retirement probe')");
+			WaitingError->SetParent(Game);
+			Engine.RunBootstrapScript(WaitingError);
+			Check(WaitingError->Status == ScriptStatus::Yielded,
+				"errored task.wait Script first yields");
+			Engine.Threads.Step();
+			Check(WaitingError->Status == ScriptStatus::Error && WaitingError->Thread == nullptr &&
+				WaitingError->ThreadReference == LUA_NOREF &&
+				WaitingError->ErrorMessage.find("resumed retirement probe") != std::string::npos,
+				"task.wait error records its diagnostic and retires the original root");
+			WaitingError->SetParent(std::nullopt);
+			std::weak_ptr<Script> WaitingErrorWeak = WaitingError;
+			WaitingError.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(WaitingErrorWeak.expired(),
+				"resumed errored Script releases after external owners leave");
+
+			lua_newtable(Engine.L);
+			lua_setglobal(Engine.L, "RetirementCoroutineResults");
+			auto BuiltinResumed = std::make_shared<Script>();
+			BuiltinResumed->SetSource(R"(
+				RetirementCoroutineResults.Target = coroutine.running()
+				coroutine.yield()
+				return 23
+			)");
+			BuiltinResumed->SetParent(Game);
+			Engine.RunBootstrapScript(BuiltinResumed);
+			Check(BuiltinResumed->Status == ScriptStatus::Yielded && BuiltinResumed->Thread,
+				"builtin coroutine resume probe first yields its original Script thread");
+			BuiltinResumed->SetParent(std::nullopt);
+			std::weak_ptr<Script> BuiltinResumedWeak = BuiltinResumed;
+			BuiltinResumed.reset();
+			auto Resumer = std::make_shared<Script>();
+			Resumer->SetSource(R"(
+				local Ok, Value = coroutine.resume(RetirementCoroutineResults.Target)
+				assert(Ok and Value == 23)
+				RetirementCoroutineResults.Target = nil
+			)");
+			Resumer->SetParent(Game);
+			Engine.RunBootstrapScript(Resumer);
+			Check(Resumer->Status == ScriptStatus::Finished,
+				"Luau builtin resumes the original Script thread to completion");
+			Engine.Step();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(BuiltinResumedWeak.expired(),
+				"bounded idle reconciliation retires a Script completed by Luau coroutine.resume");
+			auto BuiltinClosed = std::make_shared<Script>();
+			BuiltinClosed->SetSource(R"(
+				RetirementCoroutineResults.Target = coroutine.running()
+				coroutine.yield()
+				error('closed coroutine should not continue')
+			)");
+			BuiltinClosed->SetParent(Game);
+			Engine.RunBootstrapScript(BuiltinClosed);
+			Check(BuiltinClosed->Status == ScriptStatus::Yielded && BuiltinClosed->Thread,
+				"builtin coroutine close probe first yields its original Script thread");
+			BuiltinClosed->SetParent(std::nullopt);
+			std::weak_ptr<Script> BuiltinClosedWeak = BuiltinClosed;
+			BuiltinClosed.reset();
+			auto Closer = std::make_shared<Script>();
+			Closer->SetSource(R"(
+				assert(coroutine.close(RetirementCoroutineResults.Target))
+				RetirementCoroutineResults.Target = nil
+			)");
+			Closer->SetParent(Game);
+			Engine.RunBootstrapScript(Closer);
+			Check(Closer->Status == ScriptStatus::Finished,
+				"Luau builtin closes the suspended original Script thread");
+			Engine.Step();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(BuiltinClosedWeak.expired(),
+				"bounded idle reconciliation retires a Script closed by Luau coroutine.close");
+
+			auto DisabledWhileResuming = std::make_shared<Script>();
+			DisabledWhileResuming->SetSource("task.wait(0); script.Enabled = false");
+			DisabledWhileResuming->SetParent(Game);
+			Engine.RunBootstrapScript(DisabledWhileResuming);
+			Engine.Threads.Step();
+			Check(DisabledWhileResuming->Status == ScriptStatus::Disabled &&
+				DisabledWhileResuming->Thread == nullptr,
+				"self-disable during task resume cleans up without restoring Finished state");
+			DisabledWhileResuming->Destroy();
+
+			auto DestroyedWhileResuming = std::make_shared<Script>();
+			DestroyedWhileResuming->SetSource("task.wait(0); script:Destroy()");
+			DestroyedWhileResuming->SetParent(Game);
+			Engine.RunBootstrapScript(DestroyedWhileResuming);
+			Engine.Threads.Step();
+			Check(DestroyedWhileResuming->GetDestroyed() && DestroyedWhileResuming->Thread == nullptr &&
+				DestroyedWhileResuming->ThreadReference == LUA_NOREF,
+				"self-destroy during task resume retires original root without UAF");
+
+			auto WaitEvent = std::make_shared<Signal<std::monostate>>();
+			StackValue<std::shared_ptr<Signal<std::monostate>>>::Push(Engine.L, WaitEvent);
+			lua_setglobal(Engine.L, "RetirementWaitSignal");
+			auto SignalWaiter = std::make_shared<Script>();
+			SignalWaiter->SetSource("RetirementWaitSignal:Wait(); return 1");
+			SignalWaiter->SetParent(Game);
+			Engine.RunBootstrapScript(SignalWaiter);
+			Check(SignalWaiter->Status == ScriptStatus::Yielded && SignalWaiter->Thread,
+				"signal waiter keeps its original Script root while waiting");
+			SignalWaiter->SetParent(std::nullopt);
+			std::weak_ptr<Script> SignalWaiterWeak = SignalWaiter;
+			SignalWaiter.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			WaitEvent->Fire({});
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(SignalWaiterWeak.expired(),
+				"signal Wait completion retires original Script root after callback");
+
+			auto Event = std::make_shared<Signal<std::monostate>>();
+			StackValue<std::shared_ptr<Signal<std::monostate>>>::Push(Engine.L, Event);
+			lua_setglobal(Engine.L, "RetirementSignal");
+			lua_newtable(Engine.L);
+			lua_setglobal(Engine.L, "RetirementResults");
+			auto Callback = std::make_shared<Script>();
+			Callback->SetName("RetirementCallbacks");
+			Callback->SetSource(R"(
+				local Self = script
+				RetirementResults.Connection = RetirementSignal:Connect(function()
+					RetirementResults.Signal = script == Self
+				end)
+				task.defer(function()
+					RetirementResults.Deferred = script == Self
+				end)
+			)");
+			Callback->SetParent(Game);
+			Engine.RunBootstrapScript(Callback);
+			Check(Callback->Status == ScriptStatus::Finished && Callback->Thread == nullptr &&
+				Callback->ThreadReference == LUA_NOREF,
+				"callback Script retires its original coroutine before deferred work");
+			Callback->SetParent(std::nullopt);
+			std::weak_ptr<Script> CallbackWeak = Callback;
+			Callback.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(!CallbackWeak.expired(),
+				"independently rooted signal and deferred callbacks retain their Script");
+			Event->Fire({});
+			Engine.Threads.Step();
+			lua_getglobal(Engine.L, "RetirementResults");
+			for (const char *Field : {"Signal", "Deferred"}) {
+				lua_getfield(Engine.L, -1, Field);
+				Check(lua_toboolean(Engine.L, -1),
+					"callback and deferred task keep their originating Script identity after coroutine GC");
+				lua_pop(Engine.L, 1);
+			}
+			Event->DisconnectAll();
+			lua_pushnil(Engine.L);
+			lua_setfield(Engine.L, -2, "Connection");
+			lua_pop(Engine.L, 1);
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(CallbackWeak.expired(),
+				"completed callback Script releases after independent roots retire");
+		}
 		Game->Destroy();
 	}
 
@@ -8004,6 +8214,7 @@ int main() {
 	TestEditorHostPropertyBatch();
 	TestLuauExceptionBoundary();
 	TestScriptCoroutineRegistryRoot();
+	TestCompletedScriptRootRetirement();
 	TestScriptSandboxIdentity();
 	TestManagedScriptRetention();
 	TestScriptSelfCleanupDuringResume();

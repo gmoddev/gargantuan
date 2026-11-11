@@ -813,6 +813,7 @@ namespace gargantuan {
 					PushDecisions(Request.Thread, std::get<std::vector<EntitlementDecision>>(Result));
 				ScriptSecurityScope SecurityScope(std::move(Request.SecurityContext));
 				const auto Status = lua_resume(Request.Thread, Request.Main, 1);
+				ScriptEngine::Get(Request.Main)->CompleteManagedScriptThreadResume(Request.Thread, Status);
 				if (Status != LUA_OK && Status != LUA_YIELD)
 					LOG_ERROR(
 						Lua, "[Backend:Entitlements] async coroutine failed: %s", lua_tostring(Request.Thread, -1)

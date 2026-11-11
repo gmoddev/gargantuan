@@ -289,6 +289,7 @@ namespace gargantuan {
 				try {
 					int argumentCount = signal->LPushArgument(L, value);
 					int status = lua_resume(L, mainState, argumentCount);
+					ScriptEngine::Get(mainState)->CompleteManagedScriptThreadResume(L, status);
 					if (status != LUA_OK && status != LUA_YIELD) {
 						SDL_Log("Failed to resume thread after signal: %s", lua_tostring(L, -1));
 						lua_pop(L, 1);

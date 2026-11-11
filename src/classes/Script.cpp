@@ -34,6 +34,7 @@ namespace gargantuan {
 		}
 		if (Thread && ThreadReference != LUA_NOREF && ThreadReference != LUA_REFNIL) {
 			auto L = lua_mainthread(Thread);
+			ScriptEngine::Get(L)->UntrackManagedScriptThread(Thread);
 			lua_unref(L, ThreadReference);
 		}
 		ThreadReference = LUA_NOREF;
@@ -86,6 +87,14 @@ namespace gargantuan {
 			Cleanup();
 			return Status;
 		}
+		try {
+			scriptEngine->TrackManagedScriptThread(
+				Thread, std::static_pointer_cast<Script>(shared_from_this())
+			);
+		} catch (...) {
+			Cleanup();
+			throw;
+		}
 
 		// Property writes and Destroying callbacks can request cleanup from inside
 		// this coroutine. Keep its registry root until lua_resume has returned.
@@ -126,6 +135,9 @@ namespace gargantuan {
 			Status = ScriptStatus::Error;
 			break;
 		}
+		// A completed coroutine no longer needs Script's registry root. Tasks,
+		// signal callbacks, and Remote requests retain their own Lua references.
+		if (Status == ScriptStatus::Finished || Status == ScriptStatus::Error) Cleanup();
 
 		return Status;
 	}
