@@ -433,6 +433,26 @@ void CheckContiguousInstancing(const std::filesystem::path &Output) {
 			<< " objects=" << Objects << '\n';
 		return Expected;
 	};
+	// Build the order-dependent offset fixture first, while all renderer maps
+	// have the same fresh bucket policy as this independent projection.
+	auto Offset = MakeInstanceScene(Id++, Identity, Identity);
+	for (std::uint32_t Slot = 3; Slot <= 4; ++Slot) {
+		auto Create = Offset.Creates.front();
+		Create.Item.Object = {Slot, 1};
+		Offset.Creates.push_back(Create);
+	}
+	RenderProjection Order;
+	(void)Order.Apply(Offset);
+	const auto &Traversal = Order.GetCompactTraversal();
+	for (std::size_t Position = 2; Position < Traversal.size(); ++Position) {
+		const auto Object = Traversal[Position].Object;
+		auto Create = std::ranges::find_if(Offset.Creates,
+			[&](const RenderObjectCreate &Entry) { return Entry.Item.Object == Object; });
+		Create->Material.DoubleSided = false;
+		Create->Primitives = std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(
+			std::initializer_list<RenderPrimitiveMaterialState>{{0, 6, Create->Material}});
+	}
+	Compare("nonzero-first-instance", Offset, true, 4, 2);
 	Compare("screen-separated", MakeInstanceScene(Id++, Translate(-.045f, 0), Translate(.045f, 0)), true);
 	Compare("depth-separated", MakeInstanceScene(Id++, Identity, Translate(0, -1.5f)), true);
 	Compare("coplanar", MakeInstanceScene(Id++, Identity, Identity), true);
@@ -474,24 +494,6 @@ void CheckContiguousInstancing(const std::filesystem::path &Output) {
 		Dense.Creates.push_back(Create);
 	}
 	Compare("dense-overlap-64", Dense, true, 64);
-	auto Offset = MakeInstanceScene(Id++, Identity, Identity);
-	for (std::uint32_t Slot = 3; Slot <= 4; ++Slot) {
-		auto Create = Offset.Creates.front();
-		Create.Item.Object = {Slot, 1};
-		Offset.Creates.push_back(Create);
-	}
-	RenderProjection Order;
-	(void)Order.Apply(Offset);
-	const auto &Traversal = Order.GetCompactTraversal();
-	for (std::size_t Position = 2; Position < Traversal.size(); ++Position) {
-		const auto Object = Traversal[Position].Object;
-		auto Create = std::ranges::find_if(Offset.Creates,
-			[&](const RenderObjectCreate &Entry) { return Entry.Item.Object == Object; });
-		Create->Material.DoubleSided = false;
-		Create->Primitives = std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(
-			std::initializer_list<RenderPrimitiveMaterialState>{{0, 6, Create->Material}});
-	}
-	Compare("nonzero-first-instance", Offset, true, 4, 2);
 	Compare("multiple-ranges", MakeOrderingScene(Id++, Identity, Identity, false, false, false), false);
 	Compare("masked-material", MakeOrderingScene(Id++, Identity, Identity, false, true, false), false);
 	Compare("separate-meshes", WithoutSharedMesh(MakeInstanceScene(Id++, Identity, Identity)), false);
