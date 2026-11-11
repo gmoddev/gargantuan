@@ -1,5 +1,5 @@
 ---
-status: experimental
+status: qualified-experimental
 owner: rendering
 ---
 
@@ -50,9 +50,10 @@ changes and acknowledges that sequence only after submission. Its 32-bit slot
 indices are bounded by the same 65,536-record limit. The opaque pass records
 real `SDL_DrawGPUIndexedPrimitives` calls with instance count above one and
 reports draw, object, record-byte, and visible-index-byte counts. The shadow
-shader is prepared but not bound. `gl_InstanceIndex`/first-instance behavior,
-exact depth pixels, recovery, and throughput still require physical GPU
-verification before admission.
+shader is prepared but not bound. Physical Vulkan controls now verify
+`gl_InstanceIndex`/first-instance behavior, exact depth pixels and recovery on
+RX 7900 XT and GTX 1650 SUPER. See the final qualification record for their
+source identities and workload-specific throughput admission.
 
 The benchmark records cache application, record upload, and batch preparation
 (including the visible-index upload) as separate coarse CPU phases when the
@@ -71,5 +72,7 @@ The proof-order native test passed exact-pixel and actual two-object draw checks
 on the AMD Vulkan device at source `acf088179`. Its 50K static performance
 regressed despite reducing draw calls, because coverage preparation cost about
 19.80 ms per frame. The contiguous-order, identity-palette shader variant and
-large-scene speedup still require physical GPU qualification before default
-admission.
+large-scene path subsequently passed physical pixel and counterbalanced
+throughput controls on both adapters at `ad58172cbd8516c9f95ba65c223efc123d6330b7`.
+It remains opt-in: static homogeneous scenes improve, while 50K fully dynamic
+frame-time tails regress. This does not qualify default enablement.

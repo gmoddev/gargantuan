@@ -1,5 +1,5 @@
 ---
-status: experimental
+status: qualified-experimental
 owner: rendering
 related_code:
   - src/render/sdl/SDLDirectionalCascadePlan.hpp
@@ -20,8 +20,8 @@ then checks configured-empty coverage followed by a fresh four-cascade rebuild
 and exact reference pixels. Private viewport counters contain engine values,
 without exposing GPU handles through the public editor transport.
 
-The Foundation 4 single world-origin shadow target remains the default until
-the physical GPU path is qualified. The optional cascade path consumes only the
+The Foundation 4 single world-origin shadow target remains the default. The
+physically qualified optional cascade path consumes only the
 immutable render frame and projection. It uses one D32 2D-array texture with at
 most four layers. Published settings permit 512, 1024 or 2048 pixels per layer;
 the numerical planner's wider 256–4096 range is not the publication contract.
@@ -92,8 +92,11 @@ owns GPU resources; no Instance or backend handle enters publication.
 bounded cost gate. It uses the production D32 spotlight array and shadow pass
 with one, six, or eight active layers at 1024². The six orthogonal 90-degree
 spot cones model the six depth faces that one point light would require;
-production point shadows are not enabled. A double-sided 36-index cube encloses
-the light origin, so every active layer records one equal caster draw. A small
+production point shadows are not enabled. By default one double-sided masked
+36-index cube encloses the light origin, so every active layer records one
+equal caster draw. `--casters=N` (1–1024) repeats overlapping cubes and asserts
+exactly layers × N caster draws. The 1000-caster receipts are synthetic maximal
+overlap of alpha-masked geometry, not typical point-light scene cost. A small
 published transform change invalidates every layer per frame. Four warmups and
 24 measured frames alternate the workload order. The CSV records actual depth
 passes and caster draws, upload operations/bytes, CPU shadow recording and
@@ -106,11 +109,16 @@ even though one, six, and eight active layers touch 4, 24, and 32 MiB.
 Measured ratios must be reported per adapter before using this as a point-light
 budget decision.
 
-Qualification still required before default enablement: a same-binary
-feature-on/off GPU run, temporal captures for slow and fast camera movement,
-near/far transition captures, alpha foliage and animated/deformable casters,
-large-coordinate images, atlas saturation and eviction churn, pass/draw counts,
-and Windows/Linux device recovery. Neutral frame positions and transforms
+Physical Windows Vulkan qualification passed on RX 7900 XT and GTX 1650 SUPER:
+same-binary no-shadow controls, temporal slow/fast camera captures, near/far
+transitions, alpha foliage, animated/deformable casters, large-coordinate
+images, atlas saturation/eviction, cache pass/draw counts, cancellation and
+recreation. Final `ad58172cbd8516c9f95ba65c223efc123d6330b7` controls include a
+far receiver at distance 200 and exact warm/fresh/lit comparisons at all three
+published resolutions. Hosted Linux Vulkan/sanitizers are separate lanes;
+physical driver removal and native Linux hardware were not exercised. These
+are optional qualified features, not a default-enablement decision.
+Neutral frame positions and transforms
 remain single-precision; texel snapping and an origin-relative GPU matrix
 cannot recover position detail already lost in publication. The world shading
 path must apply the same cascade origin.
@@ -121,6 +129,6 @@ after camera motion. It exercises split boundaries, distant directional and
 spot coordinates,
 alpha reimport, deformable and newly posed casters, spotlight toggles, atlas
 saturation/eviction, and rejected publications. A paired offscreen runtime
-renderer checks actual depth-pass and caster-draw counters. Physical execution
-results must be attached to this document after the integrated shaders and
-resource hooks run on the target adapters.
+renderer checks actual depth-pass and caster-draw counters. Exact source,
+binary, shader and raw physical capture identities are recorded in
+`../Validation/RendererFoundation5Qualification.md`.

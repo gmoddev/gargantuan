@@ -1,5 +1,5 @@
 ---
-status: experimental
+status: qualified-experimental
 owner: rendering
 ---
 
@@ -117,3 +117,30 @@ mostly-static, dynamic, and mixed scenes. A timing improvement requires
 unchanged cull and draw counters and exact opaque-order pixel controls.
 Neither a quicker isolated CPU walk nor reduced submission alone establishes
 a completed-frame improvement.
+
+## Final physical disposition
+
+The final `ad58172cbd8516c9f95ba65c223efc123d6330b7` A/B/B/A controls
+are recorded in `../Validation/RendererFoundation5Qualification.md`. Compact
+traversal regressed the measured 50K controls on both physical adapters and
+remains off. Its map-order invalidation correction is retained: every reserve
+attempt can reorder an unordered map, even without a bucket-count change.
+
+The accepted candidate preparation removes an extra map-to-vector walk and its
+approximately 1.6 MB/frame allocation, visits the original map directly when
+compact mode is off, reuses conservative cull outcomes, and retains vector
+capacity in compact mode. The instance cache compares the complete proven
+224-byte GPU payload with `memcmp`; it does not use dirty-domain hints to omit
+final material state. The isolated actual-cache probe reduced 50K unchanged
+application from 5.95 to 3.23 ms and transform application from 3.80 to 2.92 ms.
+Those are CPU microprobe observations, separate from final native throughput.
+A dense ObjectId lookup alternative saved only 0.16–0.27 ms in its isolated
+50K kernel and was rejected rather than adding another lookup representation.
+
+Detailed instance candidate substages sample one of every 128 candidates only
+with profiling enabled. Source/pose/bounds, cull, eligibility, slot lookup and
+batch admission samples include clock overhead. Profile-off same-binary paired
+results determine performance admission. The pinned SDL public API supplies no
+GPU execution timestamps; full-frame fence and readback clocks remain host
+measurements. Calling-thread C++ allocation requests use a separate benchmark
+binary and exclude SDL/driver C allocations and other threads.

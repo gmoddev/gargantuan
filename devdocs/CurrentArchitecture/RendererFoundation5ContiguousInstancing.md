@@ -37,8 +37,8 @@ The ordinary rigid vertex shader applies an identity skin palette. The instanced
 variant binds the same identity palette at vertex slot 0, with instance records
 and visible indices at slots 1 and 2, and calls the same `ApplySkinning` function.
 The CPU instance record matches the ordinary part uniform layout and material
-fields, but SSBO versus UBO access and shader optimization still need exact GPU
-pixel qualification.
+fields. Exact GPU pixel controls for SSBO versus UBO access and shader
+optimization passed on both physical adapters at the final test checkpoint.
 
 `RendererDepthTests --contiguous-instancing` compares exact pixels with individual
 draws for separated, overlapping, coplanar, reversed creation, nearly tied depth,
@@ -49,5 +49,12 @@ for multiple ranges, masks, and separate meshes. The nonunit-normal fixture uses
 control, so identical candidate/reference pixels alone cannot mask unused normals.
 The benchmark reports
 `ContiguousInstancedDrawCalls` and `MaximumInstancedBatchSize` with frame raw samples.
-Do not enable by default or claim speedup until the exact pixel, draw-count, and
-counterbalanced physical GPU gates pass.
+At `ad58172cbd8516c9f95ba65c223efc123d6330b7`, exact-pixel, draw-count and
+84-run counterbalanced controls passed independently on RX 7900 XT and GTX
+1650 SUPER. Static 50K world draws fall from 50,000 to 98, with CPU submission
+14.96→12.56 ms on AMD and 21.46→11.86 ms on GTX. Fully dynamic 50K frame P95
+worsens on both adapters; fully culled cases also regress without the separate
+scene envelope. Admission therefore remains explicit and workload-specific.
+See `../Validation/RendererFoundation5Qualification.md` for raw paired tails,
+source/binary/shader identities and rejected experiments. No default change is
+qualified by draw reduction alone.

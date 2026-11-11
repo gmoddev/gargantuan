@@ -1,5 +1,5 @@
 ---
-status: experimental
+status: qualified-experimental
 owner: rendering
 related_adrs:
   - RendererFoundation2C.md
@@ -13,12 +13,14 @@ related_code:
 # Renderer Foundation 5 spatial lighting contracts
 
 This continuation starts at Foundation 4 `94f920485564798742bc22a061cbc3a415034fa3`.
-The qualified implementation remains `adf0acda14e6ce5e57657bf01254f1e840c99868`.
-The first Foundation 5 attribution build is `29b695b52609977323d590ca03b8426fdc5891b4`.
+The preserved Foundation 4 reference is `adf0acda14e6ce5e57657bf01254f1e840c99868`.
+Foundation 5 runtime qualification is at `5250798037753bb9d8998576701b0ec29e78f2f4`,
+with additional final test controls at `ad58172cbd8516c9f95ba65c223efc123d6330b7`.
 Local evidence is under `renderer-foundation5-20261111`; prior Foundation 4
 packages and unsuccessful experiments remain immutable. Native probe rendering
 and layered shadows are implemented experimental paths. Their physical GPU
-qualification remains separate from source/syntax and numerical checks.
+qualification passed on RX 7900 XT and GTX 1650 SUPER; source/syntax,
+numerical and software Vulkan checks remain separately labeled evidence.
 
 ## Probe authority and publication
 
@@ -80,8 +82,8 @@ default change.
 
 Studio's extension branch remains independent. These fields use its existing
 schema/property commands and asset hints. No Studio or LUI files are changed;
-the final qualification record must provide exact source identities and fixtures
-for a later authoring integration.
+`RendererFoundation5StudioHandoff.md` provides exact source identities, schema
+commands, compatibility behavior and fixtures for later authoring integration.
 
 ## Retained UI texture lifetime
 
@@ -135,4 +137,7 @@ parallel rays, large coordinates, priority, empty fallback and unit energy under
 a 1,801-point boundary sweep. Publication tests cover schema persistence, weak
 membership, invalid transforms, finite bounds, stale source revisions, atomic
 rejection and cascade budget rejection. Actual GPU texel and temporal captures
-remain separate gates from these CPU proofs.
+passed on both physical adapters and remain separate gates from these CPU
+proofs. Two independent 4096-frame churn cycles per adapter cover reimport,
+resync, resize, movement and array release. These are bounded runs, not a
+multi-hour soak or universal-device qualification.

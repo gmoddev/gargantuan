@@ -17,7 +17,9 @@ related_code:
 This is the Engine contract for the separate Studio integration campaign.
 The source baseline is Engine Foundation 5 branch `foundation/renderer-5`,
 descended from `94f920485564798742bc22a061cbc3a415034fa3`; the contract was
-reviewed at `525be49a0ee7c05096e2ed7bec346db9af228ddb`. The separate HDR
+reviewed at `525be49a0ee7c05096e2ed7bec346db9af228ddb` and rechecked against
+qualified Engine test checkpoint `ad58172cbd8516c9f95ba65c223efc123d6330b7`.
+The separate HDR
 metadata correction is `fd73aec496c31a078d98555070841ce71712af39`.
 Studio must bind
 against the Engine handshake and schema returned by its running EditorHost,

@@ -1,5 +1,5 @@
 ---
-status: experimental
+status: qualified-experimental
 owner: assets and rendering
 related_code:
   - src/assets/AssetImporter.cpp
@@ -108,3 +108,15 @@ adapters and a defined uncompressed fallback.
 [Khronos KTX guide](https://github.com/KhronosGroup/3D-Formats-Guidelines/blob/main/KTXDeveloperGuide.md)
 and [SDL format query](https://wiki.libsdl.org/SDL3/SDL_GPUTextureSupportsFormat).
 Existing RGBA8 source and material fallback behavior remains.
+
+## Qualification
+
+Focused AssetFoundation and publication tests pass in MSVC Release and hosted
+Linux Vulkan/sanitizer lanes at `ad58172cbd8516c9f95ba65c223efc123d6330b7`.
+Both physical Vulkan adapters pass source-format equivalence, extreme-radiance,
+mip-demand/eviction, probe reimport and renderer-recreation gates. The retained
+decoder audit reproduces 376 accepted truncated prefixes out of 688 using the
+old decoder and zero using the hardened version. Raw receipts and exact source
+identities are in `../Validation/RendererFoundation5Qualification.md`.
+These gates qualify the stated bounded RGBE/source-view contract; compression,
+EXR, arbitrary capture resolutions and complete texture streaming remain deferred.

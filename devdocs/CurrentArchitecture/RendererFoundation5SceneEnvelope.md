@@ -20,7 +20,12 @@ envelope is outside the camera frustum, the ordinary object traversal is skipped
 object is credited to `CameraCulledObjects`. All other frames retain the original map traversal and draw order.
 `EnvelopeRejections`, `EnvelopeBuildNanoseconds`, and `EnvelopeRebuilds` expose admission and lifetime costs.
 
-Qualify with matched `--scenario=culled --culled-percent=100` runs and
-`--sdl-scene-envelope=on|off`; retain the 50% mixed-visibility control and pixel comparisons before
-enabling by default. Authored mesh LOD contracts can be considered separately; no automatic simplification
-or production spatial index is part of this experiment.
+Matched `--scenario=culled --culled-percent=100` and camera-away A/B/B/A runs
+at `ad58172cbd8516c9f95ba65c223efc123d6330b7` passed on both physical adapters.
+After the bounded build, mean submission falls from approximately 3–5 ms to
+0.02–0.06 ms, with 120/120 envelope rejections, zero measured rebuilds, exact
+6,000,000 culled objects and only sky/resolve draws across 120 measured frames.
+Exact-pixel, invalidation and mixed-visibility controls retain ordinary behavior.
+The option remains off by default and explicitly admitted only for its whole
+scene case. Authored mesh LOD contracts can be considered separately; no
+automatic simplification or production spatial index is part of this experiment.

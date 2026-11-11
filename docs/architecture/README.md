@@ -124,6 +124,9 @@ The following documents describe recently implemented, source-verified slices:
 - [Runtime schema](../src/content/docs/developing/runtime-schema.mdx)
 - [Concrete-class property default foundation](../../devdocs/CurrentArchitecture/ConcreteClassPropertyDefaults.md)
 - [Render extraction](../src/content/docs/developing/render-extraction.mdx)
+- [Renderer Foundation 5](../../devdocs/CurrentArchitecture/RendererFoundation5.md)
+  records qualified experimental spatial lighting, shadows, HDR/residency and
+  workload-specific instancing, with separate physical and hosted evidence.
 - [Platform and input boundary](../../devdocs/CurrentArchitecture/PlatformInputBoundary.md)
 - [Player runtime](../../devdocs/CurrentArchitecture/PlayerRuntime.md)
 - [Persistent input actions](../../devdocs/CurrentArchitecture/InputActions.md)
