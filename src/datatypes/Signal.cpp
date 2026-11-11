@@ -167,9 +167,15 @@ namespace gargantuan {
 		// pointers, so a handler that clears Connections outright -- which
 		// Instance::Destroy does -- cannot pull entries out from under the loop.
 		std::vector<SignalConnection::Pointer> NestedSnapshot;
+		SignalConnection::Pointer SingleSnapshot;
+		// Keep one owning pointer for the common top-level case; nested fires and
+		// multiple subscribers retain the existing vector snapshot semantics.
+		const bool SingleSubscriber = FiringDepth == 0 && Connections.size() == 1;
 		auto *ConnectionsToFire = &FiringSnapshot;
 		const auto SnapshotStart = Profile ? SignalClock::now() : SignalClock::time_point{};
-		if (FiringDepth == 0)
+		if (SingleSubscriber)
+			SingleSnapshot = Connections.front();
+		else if (FiringDepth == 0)
 			FiringSnapshot.assign(Connections.begin(), Connections.end());
 		else {
 			NestedSnapshot = Connections;
@@ -180,7 +186,9 @@ namespace gargantuan {
 		FiringDepth++;
 
 		try {
-			for (auto &connection : *ConnectionsToFire) {
+			const auto SnapshotSize = SingleSubscriber ? std::size_t{1} : ConnectionsToFire->size();
+			for (std::size_t Index = 0; Index < SnapshotSize; ++Index) {
+				auto &connection = SingleSubscriber ? SingleSnapshot : (*ConnectionsToFire)[Index];
 				if (Profile) ++CurrentSignalDispatchProfile.ConnectionVisits;
 				if (connection && connection->Connected && connection->Callback) {
 					if (Profile) {
@@ -202,7 +210,10 @@ namespace gargantuan {
 		} catch (...) {
 			const auto CleanupStart = Profile ? SignalClock::now() : SignalClock::time_point{};
 			FiringDepth--;
-			if (FiringDepth == 0) FiringSnapshot.clear();
+			if (FiringDepth == 0) {
+				SingleSnapshot.reset();
+				FiringSnapshot.clear();
+			}
 			if (FiringDepth == 0)
 				std::erase_if(Connections, [](const SignalConnection::Pointer &connection) {
 					return !connection || !connection->Connected;
@@ -216,7 +227,10 @@ namespace gargantuan {
 
 		const auto CleanupStart = Profile ? SignalClock::now() : SignalClock::time_point{};
 		FiringDepth--;
-		if (FiringDepth == 0) FiringSnapshot.clear();
+		if (FiringDepth == 0) {
+			SingleSnapshot.reset();
+			FiringSnapshot.clear();
+		}
 		if (FiringDepth == 0) {
 			std::erase_if(Connections, [](const SignalConnection::Pointer &connection) {
 				return !connection || !connection->Connected;

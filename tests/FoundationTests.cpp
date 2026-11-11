@@ -7,6 +7,7 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
+#include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
@@ -6905,6 +6906,83 @@ namespace {
 		lua_close(L);
 	}
 
+	void TestSingleSubscriberSignalDispatch() {
+		using namespace gargantuan;
+		auto Single = std::make_shared<Signal<std::monostate>>();
+		std::size_t Calls = 0;
+		Single->Connect([&](std::monostate) { ++Calls; });
+		BaseSignal::ResetDispatchProfile();
+		BaseSignal::SetDispatchProfilingEnabled(true);
+		Single->Fire({});
+		BaseSignal::SetDispatchProfilingEnabled(false);
+		const auto Profile = BaseSignal::GetDispatchProfile();
+		Check(Calls == 1 && Single->FiringDepth == 0 && Single->FiringSnapshot.empty() &&
+			Profile.Calls == 1 && Profile.ConnectionVisits == 1 &&
+			Profile.NativeCallbacks == 1 && Profile.ScriptCallbacks == 0,
+			"single-subscriber dispatch preserves callback and profiling counts");
+
+		auto OnceEvent = std::make_shared<Signal<std::monostate>>();
+		std::size_t OnceCalls = 0;
+		OnceEvent->Once([&](std::monostate) {
+			++OnceCalls;
+			OnceEvent->Fire({});
+		});
+		OnceEvent->Fire({});
+		Check(OnceCalls == 1 && OnceEvent->Connections.empty() && OnceEvent->FiringDepth == 0,
+			"one-shot callback is spent before reentrant fire");
+
+		auto Changing = std::make_shared<Signal<std::monostate>>();
+		std::vector<int> Order;
+		SignalConnection::Pointer First;
+		First = Changing->Connect([&](std::monostate) {
+			Order.push_back(1);
+			Changing->Connect([&](std::monostate) { Order.push_back(2); });
+			First->Disconnect();
+		});
+		Changing->Fire({});
+		Changing->Fire({});
+		Check(Order == std::vector<int>{1, 2} && Changing->Connections.size() == 1,
+			"subscriber connected during fire waits until the next fire");
+		auto Multiple = std::make_shared<Signal<std::monostate>>();
+		std::vector<int> MultipleOrder;
+		Multiple->Connect([&](std::monostate) { MultipleOrder.push_back(1); });
+		Multiple->Connect([&](std::monostate) { MultipleOrder.push_back(2); });
+		Multiple->Fire({});
+		Check(MultipleOrder == std::vector<int>{1, 2} && Multiple->FiringDepth == 0,
+			"multiple subscribers keep snapshot ordering");
+
+		auto Clearing = std::make_shared<Signal<std::monostate>>();
+		std::weak_ptr<SignalConnection> WeakConnection;
+		bool AliveInside = false;
+		WeakConnection = Clearing->Connect([Clearing, &WeakConnection, &AliveInside](std::monostate) {
+			Clearing->DisconnectAll();
+			AliveInside = !WeakConnection.expired();
+		});
+		Clearing->Fire({});
+		Check(AliveInside && WeakConnection.expired() && Clearing->FiringDepth == 0,
+			"single subscriber stays alive through callback and releases before cleanup returns");
+		auto PartValue = std::make_shared<Part>();
+		auto NameSignal = PartValue->GetPropertyChangedSignal("Name");
+		auto DestroyConnection = NameSignal->Connect([PartValue](std::monostate) { PartValue->Destroy(); });
+		PartValue->SetName("DestroyFromCallback");
+		Check(PartValue->GetDestroyed() && NameSignal->FiringDepth == 0 &&
+			!DestroyConnection->Connected,
+			"Instance destruction during a property signal preserves callback lifetime");
+
+		auto Throwing = std::make_shared<Signal<std::monostate>>();
+		std::weak_ptr<SignalConnection> ThrowingConnection;
+		ThrowingConnection = Throwing->Connect([Throwing](std::monostate) {
+			Throwing->DisconnectAll();
+			throw std::runtime_error("signal fixture");
+		});
+		bool Caught = false;
+		try { Throwing->Fire({}); }
+		catch (const std::runtime_error &Error) { Caught = std::string_view(Error.what()) == "signal fixture"; }
+		Check(Caught && Throwing->FiringDepth == 0 && Throwing->FiringSnapshot.empty() &&
+			ThrowingConnection.expired(),
+			"single-subscriber exception preserves propagation and dispatch cleanup");
+	}
+
 	void TestLuauEmbeddingCompatibility() {
 		using namespace gargantuan;
 		static_assert(LUA_VECTOR_DOUBLE == 0);
@@ -7360,6 +7438,30 @@ namespace {
 		lua_getglobal(L, "SignalResult");
 		Check(lua_tonumber(L, -1) == 10, "Signal Connect, Once, Fire, and Disconnect preserve callback semantics");
 		lua_settop(L, 0);
+		Check(Load(L, R"(
+			local OnceEvent = Signal.new()
+			local OnceCount = 0
+			OnceEvent:Once(function()
+				OnceCount += 1
+				OnceEvent:Fire()
+			end)
+			OnceEvent:Fire()
+			local Changing = Signal.new()
+			local Order = ""
+			local First, Second
+			First = Changing:Connect(function()
+				Order ..= "a"
+				Second = Changing:Connect(function() Order ..= "b" end)
+				First:Disconnect()
+			end)
+			Changing:Fire()
+			Changing:Fire()
+			SignalFastPathResult = OnceCount == 1 and Order == "ab"
+		)", "luau-signal-single-subscriber") == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK,
+			"Luau single-subscriber Once and connect-during-fire execute");
+		lua_getglobal(L, "SignalFastPathResult");
+		Check(lua_toboolean(L, -1), "Luau single-subscriber callbacks retain reentrant ordering");
+		lua_settop(L, 0);
 	}
 
 	void TestWorldCacheRetirement() {
@@ -7540,6 +7642,7 @@ int main() {
 	TestEditorHostProtocol();
 	TestEditorHostPropertyBatch();
 	TestLuauExceptionBoundary();
+	TestSingleSubscriberSignalDispatch();
 	TestLuauEmbeddingCompatibility();
 	TestPlayDiagnosticBounds();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
