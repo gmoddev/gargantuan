@@ -48,7 +48,8 @@ namespace {
 		SDLRendererMetrics Metrics;
 		SDLTextureCache Cache;
 		SDLImageBasedLighting Lighting;
-		explicit CacheFixture(SDL_GPUDevice *Gpu) : Cache(Gpu, &Metrics), Lighting(Gpu) {}
+		explicit CacheFixture(SDL_GPUDevice *Gpu, std::uint64_t MaterialBudget = 128ull * 1024 * 1024)
+			: Cache(Gpu, &Metrics, MaterialBudget), Lighting(Gpu) {}
 		~CacheFixture() {
 			Lighting.Destroy();
 			Cache.Destroy();
@@ -245,6 +246,27 @@ namespace {
 			const auto HdrDiffuse = ReadTexel(Gpu.get(), HdrLighting.Irradiance.texture, 4, 0, 8, 8);
 			Require(std::isfinite(HdrDiffuse.r) && std::abs(HdrDiffuse.r - 10000.0f) < 25.0f,
 				"HDR diffuse irradiance remains finite at high radiance");
+			RenderPublication ExtremePublication{.FullResync = true};
+			RenderSkyState ExtremeSky{.FaceDimension = FACE_SIZE};
+			for (std::size_t Face = 0; Face < 6; ++Face) {
+				const RenderTextureIdentity Identity{Face + 550, 1};
+				ExtremePublication.TextureCreates.push_back({Identity, 1, FACE_SIZE, FACE_SIZE,
+					RenderTextureFormat::Rgba32Float, HdrFacePixels(1.0e20f)});
+				ExtremeSky.Faces[Face] = {Identity, 1};
+			}
+			Fixture.Cache.ApplyPublication(ExtremePublication);
+			const auto ExtremeLighting = Recreated.Prepare(ExtremeSky, Fixture.Cache, &Fixture.Metrics);
+			Require(ExtremeLighting.Enabled, "finite float32 radiance above half-float range prepares IBL");
+			for (std::uint32_t Level = 0; Level <= 6; ++Level) {
+				const auto Texel = ReadTexel(Gpu.get(), ExtremeLighting.Reflections.texture, 4, Level,
+					std::max(0u, (64u >> Level) / 2), std::max(0u, (64u >> Level) / 2));
+				Require(std::isfinite(Texel.r) && std::isfinite(Texel.g) && std::isfinite(Texel.b) &&
+					std::abs(Texel.r - 65504.0f) < 64.0f && std::abs(Texel.g - 65504.0f) < 64.0f,
+					"extreme canonical radiance clamps before every half-float reflection level");
+			}
+			const auto ExtremeDiffuse = ReadTexel(Gpu.get(), ExtremeLighting.Irradiance.texture, 4, 0, 8, 8);
+			Require(std::isfinite(ExtremeDiffuse.r) && std::abs(ExtremeDiffuse.r - 65504.0f) < 64.0f,
+				"extreme canonical radiance clamps before half-float diffuse convolution");
 		}
 		{
 			constexpr std::uint32_t Dimension = 1024;
@@ -265,6 +287,52 @@ namespace {
 			Require(Resident && Fixture.Cache.Find({600, 1}) == Resident &&
 				Fixture.Cache.GetBaseUploadStagingBytes() <= 16ull * 1024 * 1024,
 				"evicted upload staging is rebuilt without evicting the resident GPU texture");
+		}
+		if (SDL_GPUTextureSupportsFormat(Gpu.get(), SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB,
+			SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
+			constexpr std::uint32_t Dimension = 256;
+			constexpr RenderTextureIdentity A{700, 1}, B{701, 1};
+			CacheFixture Pressure(Gpu.get(), 400000);
+			auto Pixels = std::make_shared<const std::vector<std::uint8_t>>(
+				static_cast<std::size_t>(Dimension) * Dimension * 4, 255);
+			RenderPublication Sources{.FullResync = true};
+			Sources.TextureCreates.push_back({A, 1, Dimension, Dimension, RenderTextureFormat::Rgba8Unorm, Pixels});
+			Sources.TextureCreates.push_back({B, 1, Dimension, Dimension, RenderTextureFormat::Rgba8Unorm, Pixels});
+			Pressure.Cache.ApplyPublication(Sources);
+			auto *BaseA = Pressure.Cache.Find(A);
+			Require(Pressure.Cache.FindMaterialTexture(A, true).Texture == BaseA,
+				"first material demand uses the resident base texture until upload admission");
+			(void)Pressure.Cache.FindMaterialTexture(B, true);
+			Pressure.Cache.ApplyPublication(RenderPublication{});
+			const auto FirstView = Pressure.Cache.FindMaterialTexture(A, true);
+			Require(FirstView.Texture != BaseA && FirstView.NativeSrgb && FirstView.HasMipmaps,
+				"first demanded color view gains native sRGB mips");
+			(void)Pressure.Cache.FindMaterialTexture(B, true);
+			Pressure.Cache.ApplyPublication(RenderPublication{});
+			(void)Pressure.Cache.FindMaterialTexture(B, true);
+			Pressure.Cache.ApplyPublication(RenderPublication{});
+			const auto Evicted = Pressure.Cache.FindMaterialTexture(A, true);
+			const auto SecondView = Pressure.Cache.FindMaterialTexture(B, true);
+			Require(Evicted.Texture == BaseA && !Evicted.NativeSrgb && SecondView.Texture != Pressure.Cache.Find(B) &&
+				SecondView.NativeSrgb && Pressure.Cache.GetMaterialViewEvictions() >= 1 &&
+				Pressure.Cache.GetMaterialViewBytes() <= Pressure.Cache.GetMaterialViewBudget(),
+				"cold view eviction preserves a defined base fallback and admits recent demand");
+			CacheFixture Scheduled(Gpu.get());
+			RenderPublication QueueSources{.FullResync = true};
+			auto SmallPixels = std::make_shared<const std::vector<std::uint8_t>>(4 * 4 * 4, 192);
+			for (std::uint64_t Index = 0; Index < 34; ++Index)
+				QueueSources.TextureCreates.push_back({{800 + Index, 1}, 1, 4, 4,
+					RenderTextureFormat::Rgba8Unorm, SmallPixels});
+			Scheduled.Cache.ApplyPublication(QueueSources);
+			for (std::uint64_t Index = 0; Index < 34; ++Index)
+				(void)Scheduled.Cache.FindMaterialTexture({800 + Index, 1}, true);
+			Scheduled.Cache.ApplyPublication(RenderPublication{});
+			Require(Scheduled.Cache.GetDeferredMaterialViewUploads() == 2,
+				"one publication admits at most 32 material mip views");
+			Scheduled.Cache.ApplyPublication(RenderPublication{});
+			for (std::uint64_t Index = 0; Index < 34; ++Index)
+				Require(Scheduled.Cache.FindMaterialTexture({800 + Index, 1}, true).NativeSrgb,
+					"deferred material views finish on a later publication without losing their base images");
 		}
 		std::cout << "[Render:IBLGpu] " << SDL_GetGPUDeviceDriver(Gpu.get()) << " rough red=" << Rough.r
 			<< " diffuse red=" << Positive.r << '/' << Negative.r << " BRDF=" << Brdf.r + Brdf.g << '\n';

@@ -24,7 +24,8 @@ its right quarter toward `+X`, and its top toward `+Y`.
 
 HDR pixels are scene-linear RGBA32F bytes; no exposure multiplier, sRGB
 decoding, or tone map is baked into the canonical artifact. Import rejects
-non-finite, negative, or greater than 65504 RGB components. Alpha is one.
+non-finite or negative RGB components while retaining finite radiance above
+the half-float range. Alpha is one.
 Nondefault Radiance exposure, primaries, color correction, and gamma metadata
 are rejected rather than silently interpreted. Artifact version 7 is specific
 to float Image assets: existing version 1 and 2 image encodings remain
@@ -41,9 +42,9 @@ the existing identity. The SDL cache uploads float images to sampled
 `R32G32B32A32_FLOAT`. A device without that format rejects the upload through
 the existing full-resync recovery path. Material mip views are RGBA8-only;
 float images retain their linear base level. Sky and IBL source shaders decode
-sRGB only for RGBA8 faces. The latter still preprocesses into bounded RGBA16F
-irradiance and reflection maps. The authored exposure applies only at scene
-resolve.
+sRGB only for RGBA8 faces. Each float texel is clamped to 65504 before
+filtering into RGBA16F targets, so high finite source values cannot overflow
+the derived convolution. The authored exposure applies only at scene resolve.
 
 Base upload transfer buffers keep at most 16 MiB of logical capacity after
 each successful publication. When the cache exceeds that cap, it releases the
@@ -53,6 +54,21 @@ reports retained staging bytes and eviction count. This bounds the long-lived
 upload mirror without altering texture residency or material mip budgets.
 Peak in-flight allocation during a bulk publication is separate and remains
 bounded by the asset and publication limits.
+
+Material mip views have a separate 128 MiB default budget and 128 MiB retained
+source budget. The latter exceeds the canonical asset service's 64 MiB CPU
+limit, so admitted project images keep enough source to rebuild a derived view.
+The cache records demand when a draw falls back to the resident base image.
+The next publication admits at most 32 derived views and 32 MiB of their
+upload bytes, prioritizing recent demand then stable texture identity. An
+unadmitted view stays deferred; color sampling uses the established manual
+sRGB path and data sampling uses the linear base level. If view capacity is
+exhausted, only a view unused during the prior frame can be evicted. Active
+views stay resident until demand changes, avoiding repeated upload churn when
+all visible textures exceed the budget. Eviction occurs before the next frame's
+draw commands are recorded. SDL defers actual texture destruction until safe
+for in-flight GPU work. The cache reports view evictions and deferred uploads.
+[SDL release semantics](https://wiki.libsdl.org/SDL3/SDL_ReleaseGPUTexture)
 
 OpenEXR is deferred because its broader channel, multipart, compression, and
 metadata surfaces require a larger decoder and a separate bounded import
