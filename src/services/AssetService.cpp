@@ -125,7 +125,7 @@ namespace gargantuan {
 			return std::visit([](const auto &Value) -> std::size_t {
 				using T = std::decay_t<decltype(Value)>;
 				if constexpr (std::is_same_v<T, ImportedImage>)
-					return Value.Rgba8 ? Value.Rgba8->size() : 0;
+					return Value.Pixels ? Value.Pixels->size() : 0;
 				else if constexpr (std::is_same_v<T, ImportedFont>)
 					return Value.Bytes ? Value.Bytes->size() : 0;
 				else if constexpr (std::is_same_v<T, ImportedMesh>)
@@ -364,6 +364,7 @@ namespace gargantuan {
 			std::uint64_t Revision = 0;
 			std::uint32_t Width = 0;
 			std::uint32_t Height = 0;
+			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
 			std::shared_ptr<const std::vector<std::uint8_t>> Pixels;
 		};
 
@@ -404,7 +405,7 @@ namespace gargantuan {
 				"engine-package", {}, 1, AssetState::Ready, std::nullopt, {}, Asset, true};
 			Record.SourceGroupId = Id;
 			Records.emplace(Record.Reference.Value, Record);
-			TextureResidency Residency{TextureIdentity(Id), 1, 2, 2, PixelBytes};
+			TextureResidency Residency{TextureIdentity(Id), 1, 2, 2, RenderTextureFormat::Rgba8Unorm, PixelBytes};
 			Textures.emplace(Record.Reference.Value, Residency);
 			CpuBytes += PixelBytes->size();
 			PendingTextures.Creates.push_back({Residency.Identity, 1, 2, 2, RenderTextureFormat::Rgba8Unorm, PixelBytes});
@@ -533,20 +534,22 @@ namespace gargantuan {
 			if (const auto *Image = std::get_if<ImportedImage>(Record.Asset.get())) {
 				auto Existing = Textures.find(Record.Reference.Value);
 				if (Existing == Textures.end()) {
-					TextureResidency Residency{TextureIdentity(Record.Id), Record.ContentRevision, Image->Width, Image->Height, Image->Rgba8};
+					TextureResidency Residency{TextureIdentity(Record.Id), Record.ContentRevision, Image->Width, Image->Height,
+						Image->Format, Image->Pixels};
 					Textures.emplace(Record.Reference.Value, Residency);
 					PendingTextures.Creates.push_back({Residency.Identity, Residency.Revision, Residency.Width, Residency.Height,
-						RenderTextureFormat::Rgba8Unorm, Residency.Pixels});
+						Residency.Format, Residency.Pixels});
 					PendingTextures.UploadBytes += Residency.Pixels->size();
 					return;
 				}
 				auto &Residency = Existing->second;
-				if (Residency.Width == Image->Width && Residency.Height == Image->Height) {
+				if (Residency.Width == Image->Width && Residency.Height == Image->Height &&
+					Residency.Format == Image->Format) {
 					Residency.Revision = std::max(Residency.Revision + 1, Record.ContentRevision);
-					Residency.Pixels = Image->Rgba8;
+					Residency.Pixels = Image->Pixels;
 					PendingTextures.Updates.push_back({Residency.Identity, Residency.Revision, 0, 0,
-						Image->Width, Image->Height, Image->Rgba8});
-					PendingTextures.UploadBytes += Image->Rgba8->size();
+						Image->Width, Image->Height, Image->Pixels});
+					PendingTextures.UploadBytes += Image->Pixels->size();
 					return;
 				}
 				PendingTextures.Removes.push_back({Residency.Identity});
@@ -554,10 +557,11 @@ namespace gargantuan {
 				Residency.Revision = 1;
 				Residency.Width = Image->Width;
 				Residency.Height = Image->Height;
-				Residency.Pixels = Image->Rgba8;
+				Residency.Format = Image->Format;
+				Residency.Pixels = Image->Pixels;
 				PendingTextures.Creates.push_back({Residency.Identity, 1, Image->Width, Image->Height,
-					RenderTextureFormat::Rgba8Unorm, Image->Rgba8});
-				PendingTextures.UploadBytes += Image->Rgba8->size();
+					Image->Format, Image->Pixels});
+				PendingTextures.UploadBytes += Image->Pixels->size();
 				return;
 			}
 			if (const auto *Mesh = std::get_if<ImportedMesh>(Record.Asset.get())) {

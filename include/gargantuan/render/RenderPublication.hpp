@@ -57,7 +57,12 @@ namespace gargantuan {
 		[[nodiscard]] bool IsValid() const { return Slot != 0 && Generation != 0; }
 	};
 
-	enum class RenderTextureFormat : std::uint8_t { Rgba8Unorm };
+	enum class RenderTextureFormat : std::uint8_t { Rgba8Unorm, Rgba32Float };
+
+	[[nodiscard]] constexpr std::uint32_t GetRenderTexturePixelBytes(RenderTextureFormat Format) {
+		return Format == RenderTextureFormat::Rgba8Unorm ? 4u :
+			Format == RenderTextureFormat::Rgba32Float ? 16u : 0u;
+	}
 
 	struct RenderTextureCreate {
 		RenderTextureIdentity Texture;

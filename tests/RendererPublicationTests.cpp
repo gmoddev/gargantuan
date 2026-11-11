@@ -20,6 +20,7 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -267,6 +268,15 @@ namespace {
 			[&] { (void)Projection.Apply(InvalidTexture); },
 			"out-of-range texture updates are rejected atomically"
 		);
+
+		auto InvalidHdrPixels = std::make_shared<std::vector<std::uint8_t>>(16, 0);
+		const auto NanBits = std::bit_cast<std::uint32_t>(std::numeric_limits<float>::quiet_NaN());
+		for (unsigned Byte = 0; Byte < 4; ++Byte)
+			(*InvalidHdrPixels)[Byte] = static_cast<std::uint8_t>(NanBits >> (Byte * 8));
+		RenderPublication InvalidHdr{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
+		InvalidHdr.TextureCreates.push_back({{90, 1}, 1, 1, 1, RenderTextureFormat::Rgba32Float, InvalidHdrPixels});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(InvalidHdr); },
+			"non-finite float texture radiance is rejected before GPU residency");
 
 		RenderPublication TopologyChange{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
 		TopologyChange.MeshRemoves.push_back({{1, 1}});

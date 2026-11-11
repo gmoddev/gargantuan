@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <bit>
 #include <glm/geometric.hpp>
 #include <limits>
 #include <stdexcept>
@@ -142,14 +143,26 @@ namespace gargantuan {
 			return true;
 		}
 
-		bool HasExactRgba8Bytes(
+		bool HasExactTextureBytes(
 			std::uint32_t Width,
 			std::uint32_t Height,
+			RenderTextureFormat Format,
 			const std::shared_ptr<const std::vector<std::uint8_t>> &Pixels
 		) {
-			if (Width == 0 || Height == 0 || !Pixels) return false;
-			const auto Expected = static_cast<std::uint64_t>(Width) * static_cast<std::uint64_t>(Height) * 4u;
-			return Expected <= std::numeric_limits<std::size_t>::max() && Pixels->size() == Expected;
+			const auto PixelBytes = GetRenderTexturePixelBytes(Format);
+			if (Width == 0 || Height == 0 || PixelBytes == 0 || !Pixels) return false;
+			const auto Expected = static_cast<std::uint64_t>(Width) * static_cast<std::uint64_t>(Height) * PixelBytes;
+			if (Expected > std::numeric_limits<std::size_t>::max() || Pixels->size() != Expected) return false;
+			if (Format == RenderTextureFormat::Rgba32Float) {
+				for (std::size_t Offset = 0; Offset < Pixels->size(); Offset += 4) {
+					std::uint32_t Bits = 0;
+					for (unsigned Byte = 0; Byte < 4; ++Byte)
+						Bits |= static_cast<std::uint32_t>((*Pixels)[Offset + Byte]) << (Byte * 8);
+					const auto Value = std::bit_cast<float>(Bits);
+					if (!std::isfinite(Value) || Value < 0.0f || Value > 65504.0f) return false;
+				}
+			}
+			return true;
 		}
 
 		bool ItemsEqual(const RenderItem &Left, const RenderItem &Right) {
@@ -267,14 +280,18 @@ namespace gargantuan {
 				throw std::invalid_argument("Render publication contains an invalid or duplicate texture operation");
 		for (const auto &Create : Publication.TextureCreates) {
 			if (!Create.Texture.IsValid() || Create.Revision == 0 ||
-				Create.Format != RenderTextureFormat::Rgba8Unorm ||
-				!HasExactRgba8Bytes(Create.Width, Create.Height, Create.Pixels) ||
+				!HasExactTextureBytes(Create.Width, Create.Height, Create.Format, Create.Pixels) ||
 				!TouchedTextures.insert(Create.Texture).second)
 				throw std::invalid_argument("Render publication texture creation is invalid");
 		}
 		for (const auto &Update : Publication.TextureUpdates) {
+			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
+			if (const auto Existing = Textures.find(Update.Texture); Existing != Textures.end()) Format = Existing->second.Format;
+			else if (const auto Created = std::ranges::find_if(Publication.TextureCreates, [&](const auto &Create) {
+				return Create.Texture == Update.Texture;
+			}); Created != Publication.TextureCreates.end()) Format = Created->Format;
 			if (!Update.Texture.IsValid() || Update.Revision == 0 ||
-				!HasExactRgba8Bytes(Update.Width, Update.Height, Update.Pixels) ||
+				!HasExactTextureBytes(Update.Width, Update.Height, Format, Update.Pixels) ||
 				!TouchedTextures.insert(Update.Texture).second)
 				throw std::invalid_argument("Render publication texture update is invalid");
 		}

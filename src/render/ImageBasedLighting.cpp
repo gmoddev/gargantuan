@@ -202,11 +202,13 @@ namespace gargantuan {
 			NextReflections = CreateTexture(Gpu, SDL_GPU_TEXTURETYPE_CUBE, IBL_FORMAT, REFLECTION_SIZE, REFLECTION_LEVELS, Metrics);
 			if (!BrdfLut) NextBrdf = CreateTexture(Gpu, SDL_GPU_TEXTURETYPE_2D, IBL_FORMAT, BRDF_SIZE, 1, Metrics);
 			Commands = Acquire(Gpu);
-			const glm::vec4 SourceDimensions(static_cast<float>(SourceSize), 0.0f, 0.0f, 0.0f);
 			for (std::uint32_t Face = 0; Face < 6; ++Face) {
 				auto *Texture = Textures.Find(Key.Faces[Face].first);
 				if (!Texture) throw std::logic_error("Sky source texture lost SDL residency");
 				const SDL_GPUTextureSamplerBinding Binding{.texture = Texture, .sampler = Sampler};
+				const glm::vec4 SourceDimensions(static_cast<float>(SourceSize),
+					Textures.GetFormat(Key.Faces[Face].first) == RenderTextureFormat::Rgba32Float ? 1.0f : 0.0f,
+					0.0f, 0.0f);
 				DrawTarget(Commands, SourceCube, Face, 0, SourceSize, Pipelines[0], &Binding, &SourceDimensions, sizeof(SourceDimensions));
 			}
 			if (SourceLevels > 1) SDL_GenerateMipmapsForGPUTexture(Commands, SourceCube);

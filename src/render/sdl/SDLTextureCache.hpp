@@ -29,6 +29,7 @@ namespace gargantuan {
 		void ApplyPublication(const RenderPublication &Publication);
 		void Destroy();
 		[[nodiscard]] SDL_GPUTexture *Find(RenderTextureIdentity Texture) const;
+		[[nodiscard]] RenderTextureFormat GetFormat(RenderTextureIdentity Texture) const;
 		[[nodiscard]] SDLMaterialTextureBinding FindMaterialTexture(RenderTextureIdentity Texture, bool Srgb) const;
 		[[nodiscard]] SDL_GPUTexture *GetWhiteTexture();
 		[[nodiscard]] std::uint64_t GetResidencyGeneration() const { return ResidencyGeneration; }
@@ -36,6 +37,8 @@ namespace gargantuan {
 		[[nodiscard]] std::uint64_t GetMaterialSourceBytes() const { return MaterialSourceBytes; }
 		[[nodiscard]] std::uint64_t GetMaterialViewFallbacks() const { return MaterialViewFallbacks; }
 		[[nodiscard]] std::uint32_t GetMaterialUploadStagingBytes() const { return MaterialUploadCapacity; }
+		[[nodiscard]] std::uint64_t GetBaseUploadStagingBytes() const { return BaseUploadStagingBytes; }
+		[[nodiscard]] std::uint64_t GetBaseUploadStagingEvictions() const { return BaseUploadStagingEvictions; }
 
 	  private:
 		struct MaterialView {
@@ -51,17 +54,20 @@ namespace gargantuan {
 			std::uint64_t Revision = 0;
 			std::uint32_t Width = 0;
 			std::uint32_t Height = 0;
+			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
 			std::shared_ptr<const std::vector<std::uint8_t>> Source;
 			std::unique_ptr<std::vector<std::uint8_t>> PatchedSource;
 			std::array<MaterialView, 2> Views;
 			std::uint8_t RequestedViews = 0;
 			std::uint8_t PendingViews = 0;
+			std::uint64_t LastUploadSerial = 0;
 			[[nodiscard]] const std::vector<std::uint8_t> *GetSource() const {
 				return PatchedSource ? PatchedSource.get() : Source.get();
 			}
 		};
 
-		Entry CreateEntry(std::uint32_t Width, std::uint32_t Height, std::uint64_t Revision);
+		Entry CreateEntry(std::uint32_t Width, std::uint32_t Height, std::uint64_t Revision,
+			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm);
 		void DestroyView(MaterialView &View);
 		void ForgetSource(Entry &Value);
 		void RetainSource(Entry &Value, const std::shared_ptr<const std::vector<std::uint8_t>> &Pixels);
@@ -72,6 +78,7 @@ namespace gargantuan {
 		void UploadMaterialView(Entry &Value, unsigned Index, SDL_GPUCopyPass *CopyPass, bool &UsedReusableTransfer);
 		void DestroyEntry(Entry &Value);
 		void DestroyResident();
+		void TrimBaseUploadStaging();
 		void Upload(
 			Entry &Value,
 			SDL_GPUCopyPass *CopyPass,
@@ -94,6 +101,9 @@ namespace gargantuan {
 		std::vector<SDL_GPUTransferBuffer *> MaterialStaging;
 		SDL_GPUTransferBuffer *MaterialUploadBuffer = nullptr;
 		std::uint32_t MaterialUploadCapacity = 0;
+		std::uint64_t BaseUploadStagingBytes = 0;
+		std::uint64_t BaseUploadStagingEvictions = 0;
+		std::uint64_t BaseUploadSerial = 0;
 		Entry White;
 	};
 }

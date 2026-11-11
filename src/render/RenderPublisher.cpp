@@ -711,9 +711,10 @@ namespace gargantuan {
 		std::unordered_map<RenderTextureIdentity, RenderTextureUpdate, RenderTextureIdentityHash> LastUpdates;
 		TouchedTextures.reserve(Creates.size() + Updates.size() + Removes.size());
 		for (const auto &Create : Creates) {
-			const auto Expected = static_cast<std::size_t>(Create.Width) * Create.Height * 4;
+			const auto PixelBytes = GetRenderTexturePixelBytes(Create.Format);
+			const auto Expected = static_cast<std::size_t>(Create.Width) * Create.Height * PixelBytes;
 			if (!Create.Texture.IsValid() || Create.Revision == 0 || Create.Width == 0 || Create.Height == 0 ||
-				Create.Format != RenderTextureFormat::Rgba8Unorm || !Create.Pixels || Create.Pixels->size() != Expected ||
+				PixelBytes == 0 || !Create.Pixels || Create.Pixels->size() != Expected ||
 				NextTextures.contains(Create.Texture))
 				throw std::invalid_argument("Render publisher rejects an invalid or duplicate UI texture creation");
 			NextTextures.emplace(Create.Texture, PublishedTexture{
@@ -723,18 +724,19 @@ namespace gargantuan {
 		}
 		for (const auto &Update : Updates) {
 			auto Existing = NextTextures.find(Update.Texture);
-			const auto Expected = static_cast<std::size_t>(Update.Width) * Update.Height * 4;
+			const auto PixelBytes = Existing == NextTextures.end() ? 0u : GetRenderTexturePixelBytes(Existing->second.Format);
+			const auto Expected = static_cast<std::size_t>(Update.Width) * Update.Height * PixelBytes;
 			if (Existing == NextTextures.end() || Update.Revision <= Existing->second.Revision ||
 				Update.X > Existing->second.Width || Update.Y > Existing->second.Height ||
 				Update.Width > Existing->second.Width - Update.X || Update.Height > Existing->second.Height - Update.Y ||
-				!Update.Pixels || Update.Pixels->size() != Expected)
+				PixelBytes == 0 || !Update.Pixels || Update.Pixels->size() != Expected)
 				throw std::invalid_argument("Render publisher rejects an invalid UI texture update");
 			auto Pixels = std::make_shared<std::vector<std::uint8_t>>(*Existing->second.Pixels);
 			for (std::uint32_t Row = 0; Row < Update.Height; ++Row) {
-				const auto SourceOffset = static_cast<std::size_t>(Row) * Update.Width * 4;
+				const auto SourceOffset = static_cast<std::size_t>(Row) * Update.Width * PixelBytes;
 				const auto DestinationOffset =
-					(static_cast<std::size_t>(Update.Y + Row) * Existing->second.Width + Update.X) * 4;
-				std::copy_n(Update.Pixels->data() + SourceOffset, static_cast<std::size_t>(Update.Width) * 4,
+					(static_cast<std::size_t>(Update.Y + Row) * Existing->second.Width + Update.X) * PixelBytes;
+				std::copy_n(Update.Pixels->data() + SourceOffset, static_cast<std::size_t>(Update.Width) * PixelBytes,
 					Pixels->data() + DestinationOffset);
 			}
 			Existing->second.Revision = Update.Revision;

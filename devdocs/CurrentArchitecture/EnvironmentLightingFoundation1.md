@@ -126,7 +126,9 @@ lowest generation-safe `ObjectId` wins and one bounded diagnostic is emitted.
 Nested, disabled, destroyed, or wrong-class objects are inactive.
 
 All six faces of the winner must resolve through AssetService to available Image
-records and resident RGBA8 textures. Each face must be square, all dimensions
+records and resident textures. Foundation 5 also admits scene-linear RGBA32F
+HDR faces; see [HDR environment assets](HdrEnvironmentAssetsFoundation5.md).
+Each face must be square, all dimensions
 must match, and dimensions must be within AssetService's 1024-axis bound. The
 published face order is `+X, -X, +Y, -Y, +Z, -Z`.
 

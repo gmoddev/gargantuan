@@ -81,7 +81,8 @@ namespace gargantuan {
 	struct ImportedImage {
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
-		std::shared_ptr<const std::vector<std::uint8_t>> Rgba8;
+		std::shared_ptr<const std::vector<std::uint8_t>> Pixels;
+		RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
 	};
 
 	struct ImportedMeshPrimitive {

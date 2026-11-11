@@ -22,6 +22,8 @@ namespace gargantuan {
 			glm::vec4 LookExposure;
 			glm::vec4 EnvironmentColorHasSky;
 			glm::vec4 SceneFlags;
+			glm::vec4 LinearFaceFlags0;
+			glm::vec4 LinearFaceFlags1;
 		};
 
 		SkyPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics)
@@ -101,6 +103,10 @@ namespace gargantuan {
 			const auto TanHalfFov = std::tan(glm::radians(Frame.Camera.VerticalFieldOfView) * 0.5f);
 			const auto Aspect = static_cast<float>(Frame.ViewportWidth) / static_cast<float>(Frame.ViewportHeight);
 			const auto EnvironmentAngle = glm::radians(Environment.EnvironmentRotation);
+			std::array<float, 8> LinearFaceFlags{};
+			if (Environment.Sky) for (std::size_t Index = 0; Index < 6; ++Index)
+				LinearFaceFlags[Index] = Context.TextureResources->GetFormat(Environment.Sky->Faces[Index].Texture) ==
+					RenderTextureFormat::Rgba32Float ? 1.0f : 0.0f;
 			Uniforms SkyUniforms{
 				.RightTanAspect = glm::vec4(Frame.Camera.RightDirection, TanHalfFov * Aspect),
 				.UpTan = glm::vec4(Frame.Camera.UpDirection, TanHalfFov),
@@ -109,6 +115,8 @@ namespace gargantuan {
 				.SceneFlags = glm::vec4(Context.HdrSceneTexture ? 1.0f : 0.0f,
 					std::sin(EnvironmentAngle), std::cos(EnvironmentAngle),
 					Environment.ToneMapping == RenderToneMapping::Reinhard ? 1.0f : 0.0f),
+				.LinearFaceFlags0 = glm::vec4(LinearFaceFlags[0], LinearFaceFlags[1], LinearFaceFlags[2], LinearFaceFlags[3]),
+				.LinearFaceFlags1 = glm::vec4(LinearFaceFlags[4], LinearFaceFlags[5], 0.0f, 0.0f),
 			};
 			SDL_PushGPUVertexUniformData(Context.Commands, 0, &SkyUniforms, sizeof(SkyUniforms));
 			SDL_PushGPUFragmentUniformData(Context.Commands, 0, &SkyUniforms, sizeof(SkyUniforms));

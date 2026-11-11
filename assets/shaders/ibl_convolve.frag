@@ -57,5 +57,5 @@ vec3 Specular(vec3 Normal, float Roughness) {
 void main() {
     vec3 Normal = IblCubeDirection(int(Ibl.Target.x), gl_FragCoord.xy / Ibl.Target.y);
     vec3 Radiance = Ibl.Target.w > 0.5 ? Diffuse(Normal) : Specular(Normal, Ibl.Target.z);
-    OutputColor = vec4(Radiance, 1.0);
+    OutputColor = vec4(clamp(Radiance, vec3(0.0), vec3(65504.0)), 1.0);
 }

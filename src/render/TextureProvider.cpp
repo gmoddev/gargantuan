@@ -22,14 +22,19 @@ namespace gargantuan {
 		constexpr std::uint8_t SRGB_VIEW = 2u;
 	}
 	SDLTextureCache::Entry SDLTextureCache::CreateEntry(
-		std::uint32_t Width, std::uint32_t Height, std::uint64_t Revision
+		std::uint32_t Width, std::uint32_t Height, std::uint64_t Revision, RenderTextureFormat Format
 	) {
 		const auto PixelCount = static_cast<std::uint64_t>(Width) * Height;
-		if (PixelCount > std::numeric_limits<std::uint32_t>::max() / 4u)
+		const auto PixelBytes = GetRenderTexturePixelBytes(Format);
+		if (PixelBytes == 0 || PixelCount > std::numeric_limits<std::uint32_t>::max() / PixelBytes)
 			throw std::length_error("Texture exceeds the SDL GPU transfer-buffer size limit");
+		const auto NativeFormat = Format == RenderTextureFormat::Rgba32Float
+			? SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT : SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+		if (!SDL_GPUTextureSupportsFormat(Gpu, NativeFormat, SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER))
+			throw std::runtime_error("[Render:Texture] Required source texture format is unavailable");
 		const SDL_GPUTextureCreateInfo TextureInfo{
 			.type = SDL_GPU_TEXTURETYPE_2D,
-			.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+			.format = NativeFormat,
 			.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER,
 			.width = Width,
 			.height = Height,
@@ -41,19 +46,21 @@ namespace gargantuan {
 			.Revision = Revision,
 			.Width = Width,
 			.Height = Height,
+			.Format = Format,
 		};
 		if (!Value.Texture)
 			throw std::runtime_error(std::format("Failed to create resident texture: {}", SDL_GetError()));
 		if (Metrics) ++Metrics->TextureCreations;
 		const SDL_GPUTransferBufferCreateInfo TransferInfo{
 			.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-			.size = static_cast<std::uint32_t>(PixelCount * 4u),
+			.size = static_cast<std::uint32_t>(PixelCount * PixelBytes),
 		};
 		Value.TransferBuffer = SDL_CreateGPUTransferBuffer(Gpu, &TransferInfo);
 		if (!Value.TransferBuffer) {
 			DestroyEntry(Value);
 			throw std::runtime_error(std::format("Failed to create texture transfer buffer: {}", SDL_GetError()));
 		}
+		BaseUploadStagingBytes += static_cast<std::uint32_t>(PixelCount * PixelBytes);
 		if (Metrics) ++Metrics->TransferBufferCreations;
 		return Value;
 	}
@@ -74,6 +81,7 @@ namespace gargantuan {
 	}
 
 	void SDLTextureCache::RetainSource(Entry &Value, const std::shared_ptr<const std::vector<std::uint8_t>> &Pixels) {
+		if (Value.Format != RenderTextureFormat::Rgba8Unorm) return;
 		if (Pixels->size() > MATERIAL_CHAIN_LIMIT || Pixels->size() > MATERIAL_SOURCE_BUDGET - MaterialSourceBytes)
 			return;
 		Value.Source = Pixels;
@@ -104,6 +112,7 @@ namespace gargantuan {
 	}
 
 	void SDLTextureCache::QueueMaterialViews(Entry &Value, std::uint8_t Requested) {
+		if (Value.Format != RenderTextureFormat::Rgba8Unorm) return;
 		Value.RequestedViews |= Requested;
 		for (unsigned Index = 0; Index < Value.Views.size(); ++Index) {
 			const auto Flag = static_cast<std::uint8_t>(1u << Index);
@@ -263,6 +272,25 @@ namespace gargantuan {
 		if (Value.TransferBuffer) {
 			SDL_ReleaseGPUTransferBuffer(Gpu, Value.TransferBuffer);
 			Value.TransferBuffer = nullptr;
+			BaseUploadStagingBytes -= static_cast<std::uint64_t>(Value.Width) * Value.Height *
+				GetRenderTexturePixelBytes(Value.Format);
+		}
+	}
+
+	void SDLTextureCache::TrimBaseUploadStaging() {
+		constexpr std::uint64_t Budget = 16ull * 1024 * 1024;
+		while (BaseUploadStagingBytes > Budget) {
+			Entry *Oldest = nullptr;
+			for (auto &[Identity, Value] : Textures) {
+				(void)Identity;
+				if (Value.TransferBuffer && (!Oldest || Value.LastUploadSerial < Oldest->LastUploadSerial))
+					Oldest = &Value;
+			}
+			if (!Oldest) break;
+			SDL_ReleaseGPUTransferBuffer(Gpu, std::exchange(Oldest->TransferBuffer, nullptr));
+			BaseUploadStagingBytes -= static_cast<std::uint64_t>(Oldest->Width) * Oldest->Height *
+				GetRenderTexturePixelBytes(Oldest->Format);
+			++BaseUploadStagingEvictions;
 		}
 	}
 
@@ -323,7 +351,19 @@ namespace gargantuan {
 		const std::vector<std::uint8_t> &Pixels,
 		bool Initial
 	) {
-		auto *Mapped = SDL_MapGPUTransferBuffer(Gpu, Value.TransferBuffer, !Initial);
+		bool NewBuffer = false;
+		if (!Value.TransferBuffer) {
+			const auto Size = static_cast<std::uint32_t>(static_cast<std::uint64_t>(Value.Width) * Value.Height *
+				GetRenderTexturePixelBytes(Value.Format));
+			const SDL_GPUTransferBufferCreateInfo Info{.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, .size = Size};
+			Value.TransferBuffer = SDL_CreateGPUTransferBuffer(Gpu, &Info);
+			if (!Value.TransferBuffer)
+				throw std::runtime_error(std::format("Failed to create texture upload staging: {}", SDL_GetError()));
+			BaseUploadStagingBytes += Size;
+			NewBuffer = true;
+			if (Metrics) ++Metrics->TransferBufferCreations;
+		}
+		auto *Mapped = SDL_MapGPUTransferBuffer(Gpu, Value.TransferBuffer, !Initial && !NewBuffer);
 		if (!Mapped) throw std::runtime_error(std::format("Failed to map texture transfer buffer: {}", SDL_GetError()));
 		std::memcpy(Mapped, Pixels.data(), Pixels.size());
 		SDL_UnmapGPUTransferBuffer(Gpu, Value.TransferBuffer);
@@ -343,14 +383,17 @@ namespace gargantuan {
 			.d = 1,
 		};
 		const bool FullReplacement = !Initial && X == 0 && Y == 0 && Width == Value.Width && Height == Value.Height;
-		SDL_UploadToGPUTexture(CopyPass, &Source, &Destination, FullReplacement);
+		SDL_UploadToGPUTexture(CopyPass, &Source, &Destination, FullReplacement && !NewBuffer);
+		Value.LastUploadSerial = ++BaseUploadSerial;
 		if (Metrics) {
 			++Metrics->UploadOperations;
 			Metrics->UploadedBytes += Pixels.size();
 			if (!Initial) {
 				++Metrics->TextureUpdates;
-				++Metrics->BufferCycleRequests;
-				if (FullReplacement) ++Metrics->BufferCycleRequests;
+				if (!NewBuffer) {
+					++Metrics->BufferCycleRequests;
+					if (FullReplacement) ++Metrics->BufferCycleRequests;
+				}
 			}
 		}
 	}
@@ -398,7 +441,7 @@ namespace gargantuan {
 			if (BaseUpload && !BeginCopy())
 				throw std::runtime_error(std::format("Failed to begin texture upload: {}", SDL_GetError()));
 			for (const auto &Create : Publication.TextureCreates) {
-				auto Value = CreateEntry(Create.Width, Create.Height, Create.Revision);
+				auto Value = CreateEntry(Create.Width, Create.Height, Create.Revision, Create.Format);
 				try {
 					Upload(Value, CopyPass, 0, 0, Create.Width, Create.Height, *Create.Pixels, true);
 					const auto [Position, Inserted] = Textures.try_emplace(Create.Texture, std::move(Value));
@@ -446,6 +489,7 @@ namespace gargantuan {
 			}
 			FinishPending(OptionalFailure);
 			ReleaseStaging();
+			TrimBaseUploadStaging();
 		} catch (...) {
 			if (CopyPass) SDL_EndGPUCopyPass(CopyPass);
 			if (Commands) SDL_CancelGPUCommandBuffer(Commands);
@@ -461,10 +505,17 @@ namespace gargantuan {
 		return Found == Textures.end() ? nullptr : Found->second.Texture;
 	}
 
+	RenderTextureFormat SDLTextureCache::GetFormat(RenderTextureIdentity Texture) const {
+		const auto Found = Textures.find(Texture);
+		if (Found == Textures.end()) throw std::out_of_range("[Render:Texture] Texture has no SDL residency");
+		return Found->second.Format;
+	}
+
 	SDLMaterialTextureBinding SDLTextureCache::FindMaterialTexture(RenderTextureIdentity Texture, bool Srgb) const {
 		const auto Found = Textures.find(Texture);
 		if (Found == Textures.end()) return {};
 		const auto &Value = Found->second;
+		if (Value.Format == RenderTextureFormat::Rgba32Float) return {Value.Texture, Srgb, false};
 		const auto &View = Value.Views[Srgb ? 1 : 0];
 		if (!View.Texture || View.AttemptedRevision != Value.Revision) return {Value.Texture, false, false};
 		return {View.Texture, Srgb, View.Levels > 1};

@@ -12,7 +12,9 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -63,6 +65,18 @@ namespace {
 				if (Face == 5) (*Pixels)[Offset + 2] = 128;
 			}
 		}
+		return Pixels;
+	}
+
+	std::shared_ptr<const std::vector<std::uint8_t>> HdrFacePixels(float Radiance) {
+		auto Pixels = std::make_shared<std::vector<std::uint8_t>>();
+		Pixels->reserve(FACE_SIZE * FACE_SIZE * 16);
+		for (std::size_t Pixel = 0; Pixel < FACE_SIZE * FACE_SIZE; ++Pixel)
+			for (const float Channel : {Radiance, Radiance * 0.5f, Radiance * 0.25f, 1.0f}) {
+				const auto Bits = std::bit_cast<std::uint32_t>(Channel);
+				for (unsigned Byte = 0; Byte < 4; ++Byte)
+					Pixels->push_back(static_cast<std::uint8_t>(Bits >> (Byte * 8)));
+			}
 		return Pixels;
 	}
 
@@ -208,6 +222,50 @@ namespace {
 		Require(AfterRestart.Enabled && Fixture.Metrics.IblBuilds == 4, "renderer-owned IBL resources can be recreated from residency");
 		CheckSharp(AfterRestart, 2);
 		CheckLargestSource(Gpu.get(), Fixture, Recreated);
+		if (SDL_GPUTextureSupportsFormat(Gpu.get(), SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT,
+			SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
+			RenderPublication HdrPublication{.FullResync = true};
+			RenderSkyState HdrSky{.FaceDimension = FACE_SIZE};
+			for (std::size_t Face = 0; Face < 6; ++Face) {
+				const RenderTextureIdentity Identity{Face + 500, 1};
+				HdrPublication.TextureCreates.push_back({Identity, 1, FACE_SIZE, FACE_SIZE,
+					RenderTextureFormat::Rgba32Float, HdrFacePixels(10000.0f)});
+				HdrSky.Faces[Face] = {Identity, 1};
+			}
+			Fixture.Cache.ApplyPublication(HdrPublication);
+			const auto HdrLighting = Recreated.Prepare(HdrSky, Fixture.Cache, &Fixture.Metrics);
+			Require(HdrLighting.Enabled, "HDR faces prepare image-based lighting");
+			for (std::uint32_t Level = 0; Level <= 6; ++Level) {
+				const auto Texel = ReadTexel(Gpu.get(), HdrLighting.Reflections.texture, 4, Level,
+					std::max(0u, (64u >> Level) / 2), std::max(0u, (64u >> Level) / 2));
+				Require(std::isfinite(Texel.r) && std::isfinite(Texel.g) && std::isfinite(Texel.b) &&
+					std::abs(Texel.r - 10000.0f) < 25.0f && std::abs(Texel.g - 5000.0f) < 15.0f,
+					"HDR reflection mip retains finite linear radiance above SDR white");
+			}
+			const auto HdrDiffuse = ReadTexel(Gpu.get(), HdrLighting.Irradiance.texture, 4, 0, 8, 8);
+			Require(std::isfinite(HdrDiffuse.r) && std::abs(HdrDiffuse.r - 10000.0f) < 25.0f,
+				"HDR diffuse irradiance remains finite at high radiance");
+		}
+		{
+			constexpr std::uint32_t Dimension = 1024;
+			auto Pixels = std::make_shared<const std::vector<std::uint8_t>>(
+				static_cast<std::size_t>(Dimension) * Dimension * 4, 128);
+			RenderPublication LargeTextures{.FullResync = true};
+			for (std::uint64_t Index = 0; Index < 5; ++Index)
+				LargeTextures.TextureCreates.push_back({{600 + Index, 1}, 1, Dimension, Dimension,
+					RenderTextureFormat::Rgba8Unorm, Pixels});
+			Fixture.Cache.ApplyPublication(LargeTextures);
+			Require(Fixture.Cache.GetBaseUploadStagingBytes() <= 16ull * 1024 * 1024 &&
+				Fixture.Cache.GetBaseUploadStagingEvictions() > 0,
+				"completed bulk upload trims long-lived base staging to the residency budget");
+			auto *Resident = Fixture.Cache.Find({600, 1});
+			RenderPublication ReimportTexture;
+			ReimportTexture.TextureUpdates.push_back({{600, 1}, 2, 0, 0, Dimension, Dimension, Pixels});
+			Fixture.Cache.ApplyPublication(ReimportTexture);
+			Require(Resident && Fixture.Cache.Find({600, 1}) == Resident &&
+				Fixture.Cache.GetBaseUploadStagingBytes() <= 16ull * 1024 * 1024,
+				"evicted upload staging is rebuilt without evicting the resident GPU texture");
+		}
 		std::cout << "[Render:IBLGpu] " << SDL_GetGPUDeviceDriver(Gpu.get()) << " rough red=" << Rough.r
 			<< " diffuse red=" << Positive.r << '/' << Negative.r << " BRDF=" << Brdf.r + Brdf.g << '\n';
 	}

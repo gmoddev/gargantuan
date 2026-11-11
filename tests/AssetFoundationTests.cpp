@@ -127,6 +127,37 @@ namespace {
 		return Bytes;
 	}
 
+	std::vector<std::uint8_t> MakeHdr(std::uint32_t Width, std::uint32_t Height,
+		std::array<std::uint8_t, 4> Rgbe) {
+		const auto Header = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " + std::to_string(Height) +
+			" +X " + std::to_string(Width) + "\n";
+		std::vector<std::uint8_t> Bytes(Header.begin(), Header.end());
+		for (std::uint32_t Y = 0; Y < Height; ++Y) for (std::uint32_t X = 0; X < Width; ++X)
+			Bytes.insert(Bytes.end(), Rgbe.begin(), Rgbe.end());
+		return Bytes;
+	}
+
+	std::vector<std::uint8_t> MakeHdrGradient() {
+		auto Bytes = MakeHdr(8, 4, {0, 0, 0, 0});
+		const auto HeaderBytes = Bytes.size() - 8 * 4 * 4;
+		for (std::uint32_t Y = 0; Y < 4; ++Y) for (std::uint32_t X = 0; X < 8; ++X) {
+			const auto Offset = HeaderBytes + (Y * 8 + X) * 4;
+			Bytes[Offset] = static_cast<std::uint8_t>(32 + X * 16);
+			Bytes[Offset + 1] = static_cast<std::uint8_t>(32 + Y * 32);
+			Bytes[Offset + 2] = 0;
+			Bytes[Offset + 3] = 136;
+		}
+		return Bytes;
+	}
+
+	float ReadHdrChannel(const gargantuan::ImportedImage &Image, std::size_t Pixel, unsigned Channel) {
+		const auto Offset = (Pixel * 4 + Channel) * 4;
+		std::uint32_t Bits = 0;
+		for (unsigned Byte = 0; Byte < 4; ++Byte)
+			Bits |= static_cast<std::uint32_t>((*Image.Pixels)[Offset + Byte]) << (Byte * 8);
+		return std::bit_cast<float>(Bits);
+	}
+
 	std::string EncodeBase64(std::span<const std::uint8_t> Bytes) {
 		static constexpr std::string_view Alphabet =
 			"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -443,6 +474,88 @@ int main() {
 		"stable logical identity remains distinct from deterministic content identity");
 	const auto PersistentImageReference = DuplicateContent.Record->Reference.Value;
 	auto PngImport = Assets->ImportProjectAsset(Mount, "assets/representative.png", AssetKind::Image, "Representative PNG");
+	WriteBytes(Root / "assets" / "uniform.hdr", MakeHdr(4, 2, {128, 64, 32, 137}));
+	auto HdrImport = Assets->ImportProjectAsset(Mount, "assets/uniform.hdr", AssetKind::Image, "HDR Panorama");
+	Check(HdrImport.Ok && HdrImport.Records.size() == 6 && HdrImport.Record &&
+		HdrImport.Record->LogicalKey == "positive-x", "HDR panorama creates six canonical Image assets");
+	std::array<AssetId, 6> HdrIds{};
+	if (HdrImport.Records.size() == 6) {
+		for (std::size_t Index = 0; Index < HdrIds.size(); ++Index) {
+			const auto &Record = HdrImport.Records[Index];
+			HdrIds[Index] = Record.Id;
+			const auto *Image = Record.Asset ? std::get_if<ImportedImage>(Record.Asset.get()) : nullptr;
+			Check(Image && Image->Format == RenderTextureFormat::Rgba32Float && Image->Width == 1 &&
+				Image->Height == 1 && Image->Pixels && Image->Pixels->size() == 16,
+				"HDR cube face retains linear float pixels");
+			if (Image && Image->Pixels && Image->Pixels->size() >= 4) {
+				std::uint32_t Bits = 0;
+				for (unsigned Byte = 0; Byte < 4; ++Byte) Bits |= static_cast<std::uint32_t>((*Image->Pixels)[Byte]) << (Byte * 8);
+				Check(std::abs(std::bit_cast<float>(Bits) - 256.0f) < 0.01f,
+					"HDR source radiance survives import without SDR clipping");
+			}
+		}
+		const auto &Face = std::get<ImportedImage>(*HdrImport.Records[0].Asset);
+		const auto Encoded = EncodeAssetArtifact(Face, AssetKind::Image);
+		if (Encoded) {
+			auto InvalidArtifact = std::vector<std::uint8_t>(**Encoded);
+			const auto NanBits = std::bit_cast<std::uint32_t>(std::numeric_limits<float>::quiet_NaN());
+			for (unsigned Byte = 0; Byte < 4; ++Byte)
+				InvalidArtifact[InvalidArtifact.size() - 16 + Byte] = static_cast<std::uint8_t>(NanBits >> (Byte * 8));
+			const auto Rejected = DecodeAssetArtifact(InvalidArtifact, AssetKind::Image,
+				AssetContentId::Hash(InvalidArtifact));
+			Check(!Rejected && Rejected.error().Code == "InvalidRadiance",
+				"version 7 image artifact rejects non-finite radiance after integrity validation");
+			const auto ExtremeBits = std::bit_cast<std::uint32_t>(1000000.0f);
+			for (unsigned Byte = 0; Byte < 4; ++Byte)
+				InvalidArtifact[InvalidArtifact.size() - 16 + Byte] = static_cast<std::uint8_t>(ExtremeBits >> (Byte * 8));
+			const auto Extreme = DecodeAssetArtifact(InvalidArtifact, AssetKind::Image,
+				AssetContentId::Hash(InvalidArtifact));
+			Check(!Extreme && Extreme.error().Code == "InvalidRadiance",
+				"finite radiance above the bounded half-float preprocessing range is rejected");
+		} else Check(false, "HDR face encodes as a canonical float image artifact");
+	}
+	const auto HdrChanges = Assets->DrainTextureChanges();
+	Check(std::ranges::count_if(HdrChanges.Creates, [](const auto &Create) {
+		return Create.Format == RenderTextureFormat::Rgba32Float;
+	}) == 6, "HDR faces publish explicit float GPU texture format");
+	WriteBytes(Root / "assets" / "gradient.hdr", MakeHdrGradient());
+	const auto GradientImport = Assets->ImportProjectAsset(Mount, "assets/gradient.hdr", AssetKind::Image, "HDR Orientation");
+	if (GradientImport.Ok && GradientImport.Records.size() == 6) {
+		const auto &PositiveX = std::get<ImportedImage>(*GradientImport.Records[0].Asset);
+		const auto &NegativeX = std::get<ImportedImage>(*GradientImport.Records[1].Asset);
+		const auto &PositiveY = std::get<ImportedImage>(*GradientImport.Records[2].Asset);
+		const auto &NegativeY = std::get<ImportedImage>(*GradientImport.Records[3].Asset);
+		Check(ReadHdrChannel(PositiveX, 0, 0) > ReadHdrChannel(NegativeX, 0, 0) + 20.0f &&
+			ReadHdrChannel(PositiveY, 0, 1) < ReadHdrChannel(NegativeY, 0, 1) - 20.0f,
+			"equirectangular import follows the Sky +X and +Y face orientation");
+	} else Check(false, "bounded HDR gradient imports as a six-face panorama");
+	if (HdrImport.Record) {
+		const auto Saved = Assets->CaptureProjectAssets();
+		auto Restarted = std::make_shared<AssetService>();
+		Restarted->LoadProjectAssetSnapshot(Saved);
+		const auto Restored = Restarted->GetAsset(HdrImport.Record->Reference.Value);
+		Check(Restored && Restored->Id == HdrImport.Record->Id && Restored->Asset &&
+			std::get<ImportedImage>(*Restored->Asset).Format == RenderTextureFormat::Rgba32Float,
+			"HDR artifact survives an asset-service restart with stable identity");
+		WriteBytes(Root / "assets" / "uniform.hdr", MakeHdr(4, 2, {64, 32, 16, 137}));
+		const auto Reimported = Assets->ReimportProjectAsset(Mount, HdrImport.Record->Reference.Value);
+		Check(Reimported.Ok && Reimported.Records.size() == 6 &&
+			std::ranges::all_of(Reimported.Records, [&](const auto &Record) {
+				return std::ranges::find(HdrIds, Record.Id) != HdrIds.end() && Record.ContentRevision == 2;
+			}), "HDR panorama reimport keeps all six derived identities");
+	}
+	WriteBytes(Root / "assets" / "invalid-radiance.hdr", MakeHdr(2, 2, {128, 0, 0, 255}));
+	Check(!Assets->ImportProjectAsset(Mount, "assets/invalid-radiance.hdr", AssetKind::Image).Ok,
+		"HDR values beyond the finite linear range are rejected");
+	auto TruncatedHdr = MakeHdr(2, 2, {128, 0, 0, 129});
+	TruncatedHdr.resize(TruncatedHdr.size() - 4);
+	WriteBytes(Root / "assets" / "truncated.hdr", TruncatedHdr);
+	Check(!Assets->ImportProjectAsset(Mount, "assets/truncated.hdr", AssetKind::Image).Ok,
+		"truncated HDR pixel payload is rejected");
+	WriteText(Root / "assets" / "oversized.hdr", "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1024 +X 2048\n");
+	Check(!Assets->ImportProjectAsset(Mount, "assets/oversized.hdr", AssetKind::Image).Ok,
+		"oversized HDR dimensions are rejected before pixel decode");
+	(void)Assets->DrainTextureChanges();
 	Check(PngImport.Ok && PngImport.Record && PngImport.Record->Asset &&
 		std::get<ImportedImage>(*PngImport.Record->Asset).Width == 512,
 		"representative PNG input passes header preflight and canonical RGBA decode");
