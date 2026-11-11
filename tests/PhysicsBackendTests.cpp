@@ -46,6 +46,10 @@ namespace gargantuan {
 		}
 		static std::size_t DynamicBodyCount(const WorldRoot &World) { return World.DynamicBodies.size(); }
 		static std::size_t PendingBodyControlCount(const WorldRoot &World) { return World.PendingBodyControls.size(); }
+		static void ForceCompletePhysicsScan(WorldRoot &World) {
+			World.FullControlScanNeeded = true;
+			World.FullDynamicScanNeeded = true;
+		}
 		static const std::vector<std::shared_ptr<BasePart>> &OrderedParts(const WorldRoot &World) { return World.Parts; }
 		static std::size_t ConstraintCount(const WorldRoot &World) { return World.ConstraintJoints.size(); }
 		static PhysicsBodyId Body(const WorldRoot &World, const BasePart &Part) {
@@ -1355,6 +1359,72 @@ namespace {
 			"replacement admission has a distinct generation-safe compact identity");
 	}
 
+	void TestCompactPhysicsFallbackParity() {
+		struct Outcome {
+			glm::vec3 FirstPosition{};
+			glm::vec3 SecondPosition{};
+			glm::vec3 FirstVelocity{};
+			glm::vec3 SecondVelocity{};
+			std::size_t Events = 0;
+			std::size_t Bodies = 0;
+		};
+		auto Run = [](bool ForceFallback) {
+			Outcome Result;
+			auto Workspace = MakeWorkspace();
+			if (!Workspace) return Result;
+			Workspace->SetGravity(0.0f);
+			auto Static = std::make_shared<Part>();
+			Static->SetAnchored(true);
+			Static->SetCanCollide(false);
+			Static->SetCanTouch(false);
+			Static->SetParent(Workspace);
+			auto First = std::make_shared<Part>();
+			auto Second = std::make_shared<Part>();
+			First->SetCFrame(CFrame(0.0f, 0.0f, 0.0f));
+			Second->SetCFrame(CFrame(6.0f, 0.0f, 0.0f));
+			for (const auto &PartValue : {First, Second}) {
+				PartValue->SetCanCollide(false);
+				PartValue->SetCanTouch(false);
+				PartValue->SetParent(Workspace);
+			}
+			auto FirstConnection = First->GetPropertyChangedSignal("CFrame")->Connect(
+				[&](std::monostate) { ++Result.Events; });
+			auto SecondConnection = Second->GetPropertyChangedSignal("CFrame")->Connect(
+				[&](std::monostate) { ++Result.Events; });
+			for (int Frame = 0; Frame < 3; ++Frame) {
+				First->SetLinearVelocity({0.2f + 0.05f * Frame, 0.0f, 0.0f});
+				Second->ApplyImpulse({0.01f, 0.0f, 0.0f});
+				if (ForceFallback) WorldRootTestAccess::ForceCompletePhysicsScan(*Workspace);
+				Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+				if (Frame == 1) {
+					First->SetParent(nullptr);
+					First->SetParent(Workspace);
+				}
+			}
+			const auto FirstState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *First));
+			const auto SecondState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Second));
+			if (FirstState && SecondState) {
+				Result.FirstPosition = First->GetCFrame().Position;
+				Result.SecondPosition = Second->GetCFrame().Position;
+				Result.FirstVelocity = FirstState->LinearVelocity;
+				Result.SecondVelocity = SecondState->LinearVelocity;
+			}
+			Result.Bodies = WorldRootTestAccess::BodyCount(*Workspace);
+			FirstConnection->Disconnect();
+			SecondConnection->Disconnect();
+			return Result;
+		};
+		const auto Compact = Run(false);
+		const auto Fallback = Run(true);
+		Check(Compact.Bodies == 3 && Fallback.Bodies == 3 && Compact.Events > 0 &&
+			Compact.Events == Fallback.Events &&
+			Near(Compact.FirstPosition.x, Fallback.FirstPosition.x) &&
+			Near(Compact.SecondPosition.x, Fallback.SecondPosition.x) &&
+			Near(Compact.FirstVelocity.x, Fallback.FirstVelocity.x) &&
+			Near(Compact.SecondVelocity.x, Fallback.SecondVelocity.x),
+			"compact and complete-scan fallback preserve controls, readback and events across re-admission");
+	}
+
 	void TestBodyDynamicsAndCollisionGroups() {
 		using namespace gargantuan;
 		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
@@ -2292,6 +2362,7 @@ int main() {
 	TestPhysicsPublicationNestedMutation();
 	TestPhysicsPublicationThrowKeepsAuthoredHistory();
 	TestCompactPhysicsSyncLifecycle();
+	TestCompactPhysicsFallbackParity();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();
