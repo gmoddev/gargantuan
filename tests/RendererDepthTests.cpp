@@ -279,6 +279,11 @@ void CheckInstancingOrdering(const std::filesystem::path &Output) {
 	Compare("shadow-casters", MakeInstanceScene(Next++, First, Second, false, true));
 	auto Frustum = MakeInstanceScene(Next++, Translate(0, 6), Second);
 	Compare("frustum-culled", Frustum);
+	const auto BeforeCulled = MetricsRenderer.GetMetrics();
+	MetricsRenderer.Draw(std::make_shared<const RenderPublication>(Frustum));
+	const auto AfterCulled = MetricsRenderer.GetMetrics();
+	if (AfterCulled.CameraCulledObjects != BeforeCulled.CameraCulledObjects + 1)
+		throw std::runtime_error("Instancing counted a preclassified camera cull more than once");
 
 	const auto Initial = MakeInstanceScene(Next++, First, Second);
 	Compare("before-rehash", Initial);

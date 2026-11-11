@@ -19,6 +19,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <format>
 #include <limits>
 #include <memory>
@@ -31,6 +32,7 @@ namespace gargantuan {
 		using ClipPlanes = std::array<glm::vec4, 6>;
 		constexpr RenderBounds PrimitiveBounds{glm::vec3(-0.5f), glm::vec3(0.5f)};
 		constexpr std::size_t MAX_OPAQUE_BATCH_OBJECTS = 512;
+		constexpr std::int32_t CulledInstanceAction = -3;
 		constexpr std::size_t MAX_OPAQUE_BATCH_RANGES = 8;
 		constexpr unsigned COVERAGE_GRID_SIZE = 128;
 		constexpr unsigned MAX_CELLS_PER_OBJECT = 16;
@@ -498,7 +500,10 @@ namespace gargantuan {
 				const auto &Item = Projected.Item;
 				const auto *Bounds = Projected.Mesh ? Record.MeshBounds : &PrimitiveBounds;
 				if (Bounds && (!Record.Pose || Record.Pose->Mode != RenderAnimationSkinningMode::GpuPalette) &&
-					OutsideView(Planes, Item.ModelMatrix, *Bounds)) continue;
+					OutsideView(Planes, Item.ModelMatrix, *Bounds)) {
+					InstanceActions[Position] = CulledInstanceAction;
+					continue;
+				}
 				const auto *Mesh = Projected.Mesh
 					? Context.MeshResources.Find(*Projected.Mesh) : Context.MeshResources.Find(Item.Geometry);
 				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer || Record.Pose ||
@@ -851,6 +856,11 @@ namespace gargantuan {
 				const RenderAnimationPoseUpdate *CachedPose, const RenderBounds *CachedBounds, bool Cached) {
 				if (Detailed) ++Context.Metrics->CameraVisitedObjects;
 				if (Position < InstanceActions.size() && InstanceActions[Position] != -1) {
+					if (InstanceActions[Position] == CulledInstanceAction) {
+						if (Detailed) ++Context.Metrics->CameraFrustumTests;
+						if (Context.Metrics) ++Context.Metrics->CameraCulledObjects;
+						return;
+					}
 					if (InstanceActions[Position] >= 0) {
 						FlushOpaque();
 						DrawInstanceBatch(InstanceBatches[static_cast<std::size_t>(InstanceActions[Position])]);
