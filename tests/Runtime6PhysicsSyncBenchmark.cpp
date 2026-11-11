@@ -287,9 +287,8 @@ namespace {
 			if (WorldRootTestAccess::BodyCount(*Test.World) != Total ||
 				WorldRootTestAccess::PartCount(*Test.World) != Total || Creates != Destroys)
 				throw std::runtime_error("[Runtime6:PhysicsSync] Body/Part lifecycle mismatch");
-			if (ControlCount != 0 && (Test.CFrameEvents == EventBefore ||
-				(Test.Publisher && RenderUpdated == 0)))
-				throw std::runtime_error("[Runtime6:PhysicsSync] Nonzero controls produced no observed motion");
+			if (ControlCount != 0 && Test.CFrameEvents == EventBefore)
+				throw std::runtime_error("[Runtime6:PhysicsSync] Nonzero controls produced no CFrame motion");
 			double PositionChecksum = 0.0, VelocityChecksum = 0.0;
 			for (std::size_t Index = 0; Index < Total; ++Index) {
 				const auto &Part = Test.Parts[Index];
@@ -299,6 +298,20 @@ namespace {
 					throw std::runtime_error("[Runtime6:PhysicsSync] Authoritative/backend state divergence");
 				PositionChecksum += static_cast<double>(Part->GetCFrame().Position.x) * (Index + 1);
 				VelocityChecksum += static_cast<double>(State->LinearVelocity.x) * (Index + 1);
+			}
+			// A newly created moving Part is published as a Create, not an Update.
+			// Check the projected transform itself so lifecycle overlap cannot hide stale motion.
+			if (Test.Projection) {
+				for (std::size_t Item = 0; Item < ControlCount; ++Item) {
+					const auto Relative = (Iteration * ControlCount + Item) % Configuration.DynamicCount;
+					const auto &Part = Test.Parts[Configuration.StaticCount + Relative];
+					const auto *Projected = Test.Projection->GetItem(Part->GetObjectId());
+					const auto Position = Part->GetCFrame().Position;
+					if (!Projected || std::abs(Projected->ModelMatrix[3].x - Position.x) > 0.001f ||
+						std::abs(Projected->ModelMatrix[3].y - Position.y) > 0.001f ||
+						std::abs(Projected->ModelMatrix[3].z - Position.z) > 0.001f)
+						throw std::runtime_error("[Runtime6:PhysicsSync] Controlled Part render transform is stale");
+				}
 			}
 			const auto ValidateMs = Milliseconds(Clock::now() - ValidateStart);
 			PeakResident = std::max(PeakResident, ResidentBytes());
