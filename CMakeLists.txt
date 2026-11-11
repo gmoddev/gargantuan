@@ -1344,6 +1344,11 @@ if(BUILD_TESTING)
 				--count=16 --changed=4 --frames=2 --mode=both)
 		set_tests_properties(gargantuan_runtime6_realistic_publication_probe_smoke PROPERTIES
 			LABELS "renderer;runtime;headless" TIMEOUT 120)
+		add_test(NAME gargantuan_runtime6_realistic_publication_probe_quiet_smoke
+			COMMAND gargantuan_runtime6_realistic_publication_probe
+				--count=16 --changed=0 --frames=2 --mode=both)
+		set_tests_properties(gargantuan_runtime6_realistic_publication_probe_quiet_smoke PROPERTIES
+			LABELS "renderer;runtime;headless" TIMEOUT 120)
 		add_executable(gargantuan_renderer_foundation2_gpu_benchmark "tests/RendererFoundation2GpuBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_foundation2_gpu_benchmark PRIVATE gargantuan_core)
 		add_dependencies(gargantuan_renderer_foundation2_gpu_benchmark gargantuan_shaders)

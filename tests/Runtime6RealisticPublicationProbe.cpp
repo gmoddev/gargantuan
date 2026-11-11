@@ -222,11 +222,22 @@ namespace {
 			const auto Publication = Publisher.Publish(*World, RenderCameraInput{}, 640, 360);
 			const auto PublishMs = Milliseconds(Clock::now() - PublishStart);
 			Require(!Publication->FullResync && Publication->Creates.empty() &&
-				Publication->Removes.empty() && Publication->Updates.size() == Config.Changed,
+				Publication->Removes.empty() && Publication->Updates.size() == Config.Changed &&
+				Publication->MeshCreates.empty() && Publication->MeshRemoves.empty(),
 				"MeshPart incremental count differs from changed identities");
 			const auto ProjectionStart = Clock::now();
 			(void)Projection.Apply(*Publication);
 			const auto ProjectionMs = Milliseconds(Clock::now() - ProjectionStart);
+			if (Config.Changed == 0) {
+				Require(Projection.GetObjects().size() == LiveIds.size(),
+					"quiet MeshPart frame changed projected object count");
+				for (const auto Object : LiveIds) {
+					const auto Found = Projection.GetObjects().find(Object);
+					Require(Found != Projection.GetObjects().end() && Found->second.Mesh &&
+						*Found->second.Mesh == Initial->MeshCreates.front().Mesh,
+						"quiet MeshPart frame changed a stable resource binding");
+				}
+			}
 			for (const auto &Update : Publication->Updates) {
 				const auto Found = Projection.GetObjects().find(Update.Object);
 				Require(Found != Projection.GetObjects().end() &&
@@ -400,20 +411,41 @@ namespace {
 			const auto ProduceStart = Clock::now();
 			const auto Delta = Coordinator.ProduceIncremental(Peer);
 			const auto ProduceMs = Milliseconds(Clock::now() - ProduceStart);
-			Require(Delta.Succeeded() && Delta.Frame, "replica incremental production failed");
-			const auto ApplyStart = Clock::now();
-			const auto Applied = Replica.ApplyFrame(*Delta.Frame);
-			const auto ApplyMs = Milliseconds(Clock::now() - ApplyStart);
-			Require(Applied.Succeeded(), "replica incremental apply failed");
+			double ApplyMs = 0.0;
+			if (Config.Changed == 0) {
+				Require(!Delta.Succeeded() && !Delta.Frame &&
+					Delta.Error == "No replication changes are available" &&
+					Delta.SelectedTransitions == 0 && Delta.JournalRecordsExamined == 0 &&
+					Delta.EncodedFrame.empty() && !Delta.DeferredForBytes,
+					"quiet replica frame did not return the exact no-change status");
+			} else {
+				Require(Delta.Succeeded() && Delta.Frame, "replica incremental production failed");
+				const auto ApplyStart = Clock::now();
+				const auto Applied = Replica.ApplyFrame(*Delta.Frame);
+				ApplyMs = Milliseconds(Clock::now() - ApplyStart);
+				Require(Applied.Succeeded(), "replica incremental apply failed");
+			}
 			const auto PublishStart = Clock::now();
 			const auto Publication = Publisher.Publish(*ReplicaWorld, RenderCameraInput{}, 640, 360);
 			const auto PublishMs = Milliseconds(Clock::now() - PublishStart);
 			Require(!Publication->FullResync && Publication->Creates.empty() &&
-				Publication->Removes.empty() && Publication->Updates.size() == Config.Changed,
+				Publication->Removes.empty() && Publication->Updates.size() == Config.Changed &&
+				Publication->MeshCreates.empty() && Publication->MeshRemoves.empty(),
 				"receiver publication count differs from network-originated changes");
 			const auto ProjectionStart = Clock::now();
 			(void)Projection.Apply(*Publication);
 			const auto ProjectionMs = Milliseconds(Clock::now() - ProjectionStart);
+			if (Config.Changed == 0) {
+				Require(Projection.GetObjects().size() == LiveIds.size(),
+					"quiet replica frame changed projected object count");
+				for (std::size_t Index = 0; Index < Config.Count; ++Index) {
+					auto ReplicaValue = std::dynamic_pointer_cast<Part>(
+						Replica.Resolve(Parts[Index]->GetObjectId()));
+					Require(ReplicaValue && ReplicaValue->GetObjectId() == LiveIds[Index] &&
+						Projection.GetObjects().contains(LiveIds[Index]),
+						"quiet replica frame changed a stable local identity");
+				}
+			}
 			for (std::size_t Index = 0; Index < Config.Changed; ++Index) {
 				const auto PartIndex = (Frame * Config.Changed + Index) % Config.Count;
 				auto ReplicaValue = std::dynamic_pointer_cast<Part>(Replica.Resolve(Parts[PartIndex]->GetObjectId()));
@@ -491,7 +523,7 @@ int main(int ArgumentCount, char **Arguments) {
 			else if (Argument.starts_with("--mode=")) Config.Mode = Argument.substr(7);
 			else throw std::invalid_argument("unknown realistic publication probe argument");
 		}
-		if (Config.Count == 0 || Config.Changed == 0 || Config.Changed > Config.Count ||
+		if (Config.Count == 0 || Config.Changed > Config.Count ||
 			Config.Frames == 0 || (Config.Mode != "both" && Config.Mode != "mesh" && Config.Mode != "replica"))
 			throw std::invalid_argument("invalid bounded realistic publication workload");
 		gargantuan::BootstrapNativeRuntimeSchema();
