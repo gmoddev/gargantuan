@@ -156,6 +156,7 @@ namespace gargantuan {
 		const auto Object = Part->GetObjectId();
 		if (auto Existing = PartBodies.find(Object); Existing != PartBodies.end()) {
 			if (Physics.IsBodyValid(Existing->second)) return Existing->second;
+			RemoveDynamicReadback(Object);
 			BodyParts.erase(Existing->second);
 			PartBodies.erase(Existing);
 		}
@@ -187,8 +188,102 @@ namespace gargantuan {
 			(void)Physics.DestroyBody(Body);
 			throw;
 		}
-		if (auto State = Physics.GetBodyState(Body)) Part->PublishedPhysicsState = *State;
+		if (auto State = Physics.GetBodyState(Body)) {
+			Part->PublishedPhysicsState = *State;
+			SyncDynamicReadback(Part, Body);
+		} else FullDynamicReadbackNeeded = true;
 		return Body;
+	}
+
+	void WorldRoot::RemoveDynamicReadback(ObjectId Object) {
+		auto Found = DynamicReadbackPositions.find(Object);
+		if (Found == DynamicReadbackPositions.end()) return;
+		const auto Index = Found->second;
+		const auto Last = DynamicReadback.size() - 1;
+		if (Index != Last) {
+			DynamicReadback[Index] = std::move(DynamicReadback[Last]);
+			DynamicReadbackPositions.find(DynamicReadback[Index].Object)->second = Index;
+		}
+		DynamicReadback.pop_back();
+		DynamicReadbackPositions.erase(Found);
+	}
+
+	void WorldRoot::SyncDynamicReadback(const std::shared_ptr<BasePart> &Part, PhysicsBodyId Body) {
+		const auto Object = Part->GetObjectId();
+		if (Part->PublishedPhysicsState.Description.Anchored) {
+			RemoveDynamicReadback(Object);
+			return;
+		}
+		if (auto Found = DynamicReadbackPositions.find(Object); Found != DynamicReadbackPositions.end()) {
+			DynamicReadback[Found->second] = {Object, Body, Part};
+			return;
+		}
+		if (FullDynamicReadbackNeeded) return;
+		try {
+			DynamicReadback.push_back({Object, Body, Part});
+			DynamicReadbackPositions.emplace(Object, DynamicReadback.size() - 1);
+		} catch (...) {
+			// The authoritative body and Part remain committed. Scan them until a
+			// later fixed step can rebuild this derived readback view.
+			DynamicReadback.clear();
+			DynamicReadbackPositions.clear();
+			FullDynamicReadbackNeeded = true;
+		}
+	}
+
+	void WorldRoot::ReadbackDynamicBodies() {
+		if (!FullDynamicReadbackNeeded) {
+			for (const auto &Record : DynamicReadback) {
+				auto Part = Record.Part.lock();
+				if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
+					Part->GetObjectId() != Record.Object) {
+					FullDynamicReadbackNeeded = true;
+					continue;
+				}
+				auto Found = PartBodies.find(Record.Object);
+				if (Found == PartBodies.end() || Found->second != Record.Body) {
+					FullDynamicReadbackNeeded = true;
+					continue;
+				}
+				if (auto State = Physics.GetBodyState(Record.Body)) {
+					Part->PublishedPhysicsState = *State;
+					if (State->Description.Anchored) FullDynamicReadbackNeeded = true;
+				} else FullDynamicReadbackNeeded = true;
+			}
+			return;
+		}
+
+		// Fallback reads the accepted backend state in the original Parts order.
+		// Build a replacement view only after every candidate state was available.
+		std::vector<DynamicReadbackRecord> Rebuilt;
+		std::unordered_map<ObjectId, std::size_t> Positions;
+		bool Complete = true;
+		try {
+			Rebuilt.reserve(DynamicReadback.size());
+			Positions.reserve(DynamicReadback.size());
+		} catch (...) { Complete = false; }
+		for (const auto &Part : Parts) {
+			if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
+				(Part->PublishedPhysicsState.Description.Anchored && Part->GetAnchored())) continue;
+			auto Found = PartBodies.find(Part->GetObjectId());
+			if (Found == PartBodies.end()) { Complete = false; continue; }
+			auto State = Physics.GetBodyState(Found->second);
+			if (!State) { Complete = false; continue; }
+			Part->PublishedPhysicsState = *State;
+			if (State->Description.Anchored || !Complete) continue;
+			try {
+				Rebuilt.push_back({Part->GetObjectId(), Found->second, Part});
+				Positions.emplace(Part->GetObjectId(), Rebuilt.size() - 1);
+			} catch (...) { Complete = false; }
+		}
+		if (Complete) {
+			DynamicReadback.swap(Rebuilt);
+			DynamicReadbackPositions.swap(Positions);
+			FullDynamicReadbackNeeded = false;
+		} else {
+			DynamicReadback.clear();
+			DynamicReadbackPositions.clear();
+		}
 	}
 
 	SoftBodyId WorldRoot::CreateDeformableBody(const std::shared_ptr<DeformableBody> &Body) {
@@ -400,6 +495,7 @@ namespace gargantuan {
 		const auto Object = Part->GetObjectId();
 		erase(Parts, Part);
 		PartMembership.erase(Object);
+		RemoveDynamicReadback(Object);
 		DirtyBodies.erase(Object);
 		FailedMeshUpdatesLogged.erase(Object);
 		TrackedParts.erase(Object);
@@ -604,7 +700,10 @@ namespace gargantuan {
 				(void)MarkPartDirty(Object);
 			} else {
 				FailedMeshUpdatesLogged.erase(Object);
-				if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
+				if (auto State = Physics.GetBodyState(Found->second)) {
+					Part->PublishedPhysicsState = *State;
+					SyncDynamicReadback(Part, Found->second);
+				} else FullDynamicReadbackNeeded = true;
 			}
 		}
 
@@ -788,6 +887,9 @@ namespace gargantuan {
 		LastSoftBodyProfile = {};
 		Parts.clear();
 		PartMembership.clear();
+		DynamicReadback.clear();
+		DynamicReadbackPositions.clear();
+		FullDynamicReadbackNeeded = false;
 		SoftBodies.clear();
 	}
 
@@ -1153,15 +1255,7 @@ namespace gargantuan {
 			ApplyPendingDeformableForces();
 			auto Result = runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsRigidStep,
 				[&] { return Physics.Step({.DeltaTime = STEP_INTERVAL, .SubStepCount = SUB_STEP_COUNT}); });
-			for (const auto &Part : Parts) {
-				if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
-				// Static state changes only at admission or a committed safe-point edit.
-				// Consult accepted state: a failed authored update may leave a dynamic body live.
-				if (Part->PublishedPhysicsState.Description.Anchored) continue;
-				auto Found = PartBodies.find(Part->GetObjectId());
-				if (Found != PartBodies.end())
-					if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
-			}
+			ReadbackDynamicBodies();
 			{
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsEvents);
 			if (Result.EventsTruncated)
