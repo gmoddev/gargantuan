@@ -1,0 +1,173 @@
+// Copyright (c) 2026 Team Fireworks
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+// Diagnostic counterfactual: disconnected modes intentionally omit one physics
+// observer and must never be used to claim game or simulation correctness.
+#include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/services/Workspace.hpp"
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace gargantuan {
+	struct PhysicsListenerProfileSnapshot {
+		std::uint64_t Calls = 0;
+		std::uint64_t NewDirty = 0;
+		std::uint64_t Coalesced = 0;
+		std::uint64_t Suppressed = 0;
+		std::uint64_t Nanoseconds = 0;
+	};
+
+	struct WorldRootTestAccess {
+		static PhysicsWorld DetachPhysics(WorldRoot &World) { return std::move(World.Physics); }
+		static void AppendRendererPart(WorldRoot &World, const std::shared_ptr<BasePart> &Part) {
+			World.Parts.push_back(Part);
+		}
+		static void DisconnectCFramePhysicsListener(WorldRoot &World, const BasePart &Part) {
+			auto Found = World.PhysicsConnections.find(Part.GetObjectId());
+			if (Found == World.PhysicsConnections.end() || Found->second.empty() || !Found->second.front())
+				throw std::runtime_error("[Runtime6:PhysicsListener] Missing native CFrame connection");
+			Found->second.front()->Disconnect();
+		}
+		static void StartCFrameProfile(WorldRoot &World) {
+			World.CFrameDirtyProfile = {};
+			World.ProfileCFrameDirtyCallback = true;
+		}
+		static void StopCFrameProfile(WorldRoot &World) { World.ProfileCFrameDirtyCallback = false; }
+		static PhysicsListenerProfileSnapshot Profile(const WorldRoot &World) {
+			const auto &Value = World.CFrameDirtyProfile;
+			return {Value.Calls, Value.NewDirty, Value.Coalesced, Value.Suppressed, Value.Nanoseconds};
+		}
+		static std::size_t DirtyCount(const WorldRoot &World) { return World.DirtyBodies.size(); }
+		static std::size_t BodyCount(const WorldRoot &World) { return World.PartBodies.size(); }
+	};
+}
+
+namespace {
+	using Clock = std::chrono::steady_clock;
+	using namespace gargantuan;
+
+	struct Options {
+		std::string Mode = "native";
+		std::size_t Count = 1000;
+		std::size_t Changed = 1000;
+		std::size_t Frames = 3;
+	};
+
+	std::size_t ParseBound(std::string_view Text, std::size_t Maximum) {
+		if (Text.empty() || Text.find_first_not_of("0123456789") != std::string_view::npos)
+			throw std::invalid_argument("[Runtime6:PhysicsListener] Expected bounded decimal option");
+		const auto Value = std::stoull(std::string(Text));
+		if (Value == 0 || Value > Maximum)
+			throw std::invalid_argument("[Runtime6:PhysicsListener] Option exceeds bound");
+		return static_cast<std::size_t>(Value);
+	}
+
+	Options ParseOptions(int ArgumentCount, char **Arguments) {
+		Options Result;
+		bool ChangedSpecified = false;
+		for (int Index = 1; Index < ArgumentCount; ++Index) {
+			const std::string_view Option(Arguments[Index]);
+			if (Option.starts_with("--mode=")) Result.Mode = std::string(Option.substr(7));
+			else if (Option.starts_with("--count=")) Result.Count = ParseBound(Option.substr(8), 50000);
+			else if (Option.starts_with("--changed=")) {
+				Result.Changed = ParseBound(Option.substr(10), 50000);
+				ChangedSpecified = true;
+			} else if (Option.starts_with("--frames=")) Result.Frames = ParseBound(Option.substr(9), 12);
+			else throw std::invalid_argument("[Runtime6:PhysicsListener] Unknown option");
+		}
+		if (!ChangedSpecified) Result.Changed = Result.Count;
+		if (Result.Changed > Result.Count ||
+			(Result.Mode != "native" && Result.Mode != "native-no-listener" &&
+				Result.Mode != "renderer-only" && Result.Mode != "renderer-only-no-listener"))
+			throw std::invalid_argument("[Runtime6:PhysicsListener] Invalid mode or changed count");
+		return Result;
+	}
+
+	void Run(const Options &Config) {
+		const bool RendererOnly = Config.Mode.starts_with("renderer-only");
+		const bool WithoutListener = Config.Mode.ends_with("no-listener");
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		if (!World || World->GetReplicationScopeId() != Game->GetObjectId())
+			throw std::runtime_error("[Runtime6:PhysicsListener] Missing authoritative Workspace scope");
+		World->SetGravity(0.0f);
+		std::optional<PhysicsWorld> RetainedPhysics;
+		if (RendererOnly) RetainedPhysics.emplace(WorldRootTestAccess::DetachPhysics(*World));
+		std::vector<std::shared_ptr<Part>> Parts;
+		Parts.reserve(Config.Count);
+		for (std::size_t Index = 0; Index < Config.Count; ++Index) {
+			auto PartValue = std::make_shared<Part>();
+			PartValue->SetAnchored(true);
+			PartValue->SetCanCollide(false);
+			PartValue->SetCanTouch(false);
+			PartValue->SetCFrame(CFrame(static_cast<float>(Index % 256) * 6.0f,
+				static_cast<float>(Index / 256) * 6.0f, 0.0f));
+			PartValue->SetParent(World);
+			if (RendererOnly) WorldRootTestAccess::AppendRendererPart(*World, PartValue);
+			if (WithoutListener) WorldRootTestAccess::DisconnectCFramePhysicsListener(*World, *PartValue);
+			Parts.push_back(std::move(PartValue));
+		}
+		const auto BodyCount = WorldRootTestAccess::BodyCount(*World);
+		if ((RendererOnly && BodyCount != 0) || (!RendererOnly && BodyCount != Config.Count) ||
+			WorldRootTestAccess::DirtyCount(*World) != 0)
+			throw std::runtime_error("[Runtime6:PhysicsListener] Fixture body or initial dirty count mismatch");
+		WorldRootTestAccess::StartCFrameProfile(*World);
+		std::cout << "Mode,Count,Changed,Frame,NativeBodies,ListenerEnabled,SetterNanoseconds,"
+			"ListenerCalls,NewDirty,Coalesced,Suppressed,ListenerNanoseconds,DirtyCount\n";
+		for (std::size_t Frame = 0; Frame < Config.Frames; ++Frame) {
+			const auto Before = WorldRootTestAccess::Profile(*World);
+			const auto Started = Clock::now();
+			for (std::size_t Index = 0; Index < Config.Changed; ++Index) {
+				auto Transform = Parts[Index]->GetCFrame();
+				Transform.Position.z = static_cast<float>(Frame + 1) * 0.01f;
+				Parts[Index]->SetCFrame(Transform);
+			}
+			const auto SetterNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
+				Clock::now() - Started).count();
+			const auto After = WorldRootTestAccess::Profile(*World);
+			const auto Calls = After.Calls - Before.Calls;
+			const auto NewDirty = After.NewDirty - Before.NewDirty;
+			const auto Coalesced = After.Coalesced - Before.Coalesced;
+			if (Calls != (WithoutListener ? 0 : Config.Changed))
+				throw std::runtime_error("[Runtime6:PhysicsListener] Listener call count mismatch");
+			if (NewDirty != (WithoutListener || Frame != 0 ? 0 : Config.Changed) ||
+				Coalesced != (WithoutListener || Frame == 0 ? 0 : Config.Changed))
+				throw std::runtime_error("[Runtime6:PhysicsListener] New/coalesced callback count mismatch");
+			const auto DirtyCount = WorldRootTestAccess::DirtyCount(*World);
+			if (DirtyCount != (WithoutListener ? 0 : Config.Changed))
+				throw std::runtime_error("[Runtime6:PhysicsListener] Dirty coalescing count mismatch");
+			std::cout << Config.Mode << ',' << Config.Count << ',' << Config.Changed << ',' << Frame << ','
+				<< BodyCount << ',' << !WithoutListener << ',' << SetterNanoseconds << ','
+				<< Calls << ',' << NewDirty << ','
+				<< Coalesced << ',' << After.Suppressed - Before.Suppressed << ','
+				<< After.Nanoseconds - Before.Nanoseconds << ',' << DirtyCount << '\n';
+		}
+		WorldRootTestAccess::StopCFrameProfile(*World);
+	}
+}
+
+int main(int ArgumentCount, char **Arguments) {
+	try {
+		gargantuan::BootstrapNativeRuntimeSchema();
+		Run(ParseOptions(ArgumentCount, Arguments));
+		return 0;
+	} catch (const std::exception &Failure) {
+		std::cerr << Failure.what() << '\n';
+		return 1;
+	}
+}
