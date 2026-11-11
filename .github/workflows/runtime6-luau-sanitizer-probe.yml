@@ -1,0 +1,110 @@
+name: Runtime 6 Luau lifetime sanitizer probe
+
+on:
+  push:
+    branches: [experiment/runtime6-evaluation]
+    paths: [.github/workflows/runtime6-luau-sanitizer-probe.yml]
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Exact 40-hex diagnostic source commit
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  lifetime-probe:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PROBE_SOURCE: ${{ inputs.source }}
+      ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1:halt_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      ASAN_SYMBOLIZER_PATH: /usr/bin/llvm-symbolizer-19
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+      - name: Check exact source and install canonical compiler dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PROBE_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          git checkout --detach "$PROBE_SOURCE"
+          test "$(git rev-parse HEAD)" = "$PROBE_SOURCE"
+          git submodule update --init --recursive
+          mkdir lifetime-evidence
+          git rev-parse HEAD > lifetime-evidence/source.txt
+          git submodule status --recursive > lifetime-evidence/submodules.txt
+          if grep -Eq '^[\-+U]' lifetime-evidence/submodules.txt; then exit 1; fi
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 clang-format libclang-rt-19-dev \
+            llvm-19 g++-14 ninja-build glslc libfreetype-dev libx11-dev libxcursor-dev libxext-dev \
+            libxfixes-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev
+          clang++-19 --version > lifetime-evidence/compiler.txt
+          lscpu > lifetime-evidence/cpu.txt
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Generate and build instrumented production core plus lifetime probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          lute tools/classgen -f
+          git diff --binary > lifetime-evidence/generated.patch
+          SanitizerFlags="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          cmake -S . -B build-lifetime -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
+            -DCMAKE_C_FLAGS="$SanitizerFlags" -DCMAKE_CXX_FLAGS="$SanitizerFlags" \
+            -DCMAKE_EXE_LINKER_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -fsanitize=address,undefined" \
+            -DLINKER_SUPPORTS_WL_NO_UNDEFINED=OFF -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+            -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF \
+            -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=OFF -DGARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS=OFF \
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF \
+            -DGARGANTUAN_GLSLC_EXECUTABLE="$(command -v glslc)" 2>&1 | tee lifetime-evidence/configure.log
+          cmake --build build-lifetime --parallel 3 --target gargantuan_runtime6_luau_mutation_benchmark \
+            2>&1 | tee lifetime-evidence/build.log
+          sha256sum build-lifetime/gargantuan_runtime6_luau_mutation_benchmark > lifetime-evidence/binary.sha256
+      - name: Run bounded fresh-process GC and capture lifetime matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, time
+          Root = pathlib.Path("lifetime-evidence")
+          Binary = pathlib.Path("build-lifetime/gargantuan_runtime6_luau_mutation_benchmark").resolve()
+          Receipts = []
+          for Repetition in range(6):
+              for FinalGc in ("off", "on"):
+                  for Disconnect in ("off", "on"):
+                      Name = f"{Repetition:02}-gc-{FinalGc}-disconnect-{Disconnect}"
+                      Command = [str(Binary), "--count=10000", "--frames=12", "--listeners=0",
+                                 "--property=cframe", f"--final-gc={FinalGc}", f"--disconnect-native={Disconnect}"]
+                      Started = time.monotonic()
+                      with (Root / (Name + ".stdout")).open("xb") as Out, (Root / (Name + ".stderr")).open("xb") as Err:
+                          try:
+                              Result = subprocess.run(Command, stdout=Out, stderr=Err, stdin=subprocess.DEVNULL,
+                                                      timeout=180, check=False)
+                              Exit, TimedOut = Result.returncode, False
+                          except subprocess.TimeoutExpired:
+                              Exit, TimedOut = None, True
+                      Receipts.append({"source": os.environ["PROBE_SOURCE"], "command": Command, "exit": Exit,
+                          "timeout": TimedOut, "elapsedSeconds": time.monotonic() - Started,
+                          "stdoutSha256": hashlib.sha256((Root / (Name + ".stdout")).read_bytes()).hexdigest(),
+                          "stderrSha256": hashlib.sha256((Root / (Name + ".stderr")).read_bytes()).hexdigest()})
+                      (Root / "receipts.json").write_text(json.dumps(Receipts, indent=2))
+          raise SystemExit(any(Value["exit"] != 0 or Value["timeout"] for Value in Receipts))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: runtime6-luau-lifetime-sanitizer
+          path: lifetime-evidence/
