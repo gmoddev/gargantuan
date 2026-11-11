@@ -170,9 +170,22 @@ namespace gargantuan {
 			return {};
 		}
 		FailedMeshUpdatesLogged.erase(Object);
-		if (std::find(Parts.begin(), Parts.end(), Part) == Parts.end()) Parts.push_back(Part);
-		PartBodies[Object] = Body;
-		BodyParts[Body] = Part;
+		bool AddedMembership = false;
+		try {
+			AddedMembership = PartMembership.insert(Object).second;
+			if (AddedMembership) Parts.push_back(Part);
+			PartBodies[Object] = Body;
+			BodyParts[Body] = Part;
+		} catch (...) {
+			BodyParts.erase(Body);
+			PartBodies.erase(Object);
+			if (AddedMembership) {
+				erase(Parts, Part);
+				PartMembership.erase(Object);
+			}
+			(void)Physics.DestroyBody(Body);
+			throw;
+		}
 		if (auto State = Physics.GetBodyState(Body)) Part->PublishedPhysicsState = *State;
 		return Body;
 	}
@@ -239,10 +252,14 @@ namespace gargantuan {
 		TrackedParts[Id] = Part;
 		if (PhysicsConnections.contains(Id)) return;
 		auto MarkDirty = [this, Id](std::monostate) {
-			if (!ShuttingDownPhysics && !PublishingPhysicsState && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
+			if (!ShuttingDownPhysics && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
+		};
+		auto MarkCFrameDirty = [this, Id](std::monostate) {
+			if (!ShuttingDownPhysics && PublishingPhysicsPart != Id && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
 		};
 		auto &Connections = PhysicsConnections[Id];
-		for (const std::string_view Name : {"CFrame", "Size", "Anchored", "Kinematic", "CanCollide", "CanTouch",
+		Connections.push_back(Part->GetPropertyChangedSignal("CFrame")->Connect(MarkCFrameDirty));
+		for (const std::string_view Name : {"Size", "Anchored", "Kinematic", "CanCollide", "CanTouch",
 			"CollisionGroup", "CollisionMask", "LinearDamping", "AngularDamping", "GravityScale", "SleepEnabled",
 			"MovingBodyCCD"})
 			Connections.push_back(Part->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
@@ -360,6 +377,7 @@ namespace gargantuan {
 		if (!Part) return;
 		const auto Object = Part->GetObjectId();
 		erase(Parts, Part);
+		PartMembership.erase(Object);
 		DirtyBodies.erase(Object);
 		FailedMeshUpdatesLogged.erase(Object);
 		TrackedParts.erase(Object);
@@ -740,6 +758,7 @@ namespace gargantuan {
 		DeformableStates.clear();
 		LastSoftBodyProfile = {};
 		Parts.clear();
+		PartMembership.clear();
 		SoftBodies.clear();
 	}
 
@@ -1121,14 +1140,20 @@ namespace gargantuan {
 			for (const auto &Motion : Result.Motions) {
 				auto Part = ResolvePart(Motion.Body);
 				if (!Part || Part->GetCFrame().FuzzyEq(Motion.Transform)) continue;
-				PublishingPhysicsState = true;
+				const auto Object = Part->GetObjectId();
+				const auto PreviousPublishingPart = PublishingPhysicsPart;
+				PublishingPhysicsPart = Object;
 				try {
 					Part->SetCFrame(Motion.Transform);
 				} catch (...) {
-					PublishingPhysicsState = false;
+					PublishingPhysicsPart = PreviousPublishingPart;
+					if (!Part->GetDestroyed() && !Part->IsDestroying() && TrackedParts.contains(Object) &&
+						!Part->GetCFrame().FuzzyEq(Motion.Transform)) DirtyBodies.insert(Object);
 					throw;
 				}
-				PublishingPhysicsState = false;
+				PublishingPhysicsPart = PreviousPublishingPart;
+				if (!Part->GetDestroyed() && !Part->IsDestroying() && TrackedParts.contains(Object) &&
+				!Part->GetCFrame().FuzzyEq(Motion.Transform)) DirtyBodies.insert(Object);
 			}
 
 			for (const auto &Contact : Result.Contacts) {
