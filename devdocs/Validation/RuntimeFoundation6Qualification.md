@@ -171,7 +171,19 @@ records `DrawAndWaitMs`, `MutationToCompletionMs`, backend, instancing selection
 headless object/update counts or SDL submitted-frame, resync, draw, upload and
 instance counters. The completion timing is a host wall clock through an SDL
 idle wait, not a GPU timestamp. The SDL gate requires one submitted frame per
-publication and no full resync after the initial frame.
+publication, actual object draws and no full resync after the initial frame.
+An explicit contiguous transform run also requires actual contiguous batches.
+The direct Luau closure fixture separately measures reflected property writes
+and synchronous script callbacks under ServerRuntime capabilities. Its timed
+lua_pcall excludes Script scheduling/resumption and full Engine frame work;
+ordered journal/state, retained connections, denied/invalid/read-only mutation
+and nested callback gates execute outside or around that bounded measurement.
+
+The combined evaluation branch includes the independently measured core,
+dirty-registration cache, default-disabled diagnostics and common script/live
+fixtures. Its production include/src/classgen contents match dirty-drain source
+6f5c63cade57fbcf5f426bd866dae163db8e58c5 exactly. Broader canonical qualification
+of that combined source is required before advancing the primary continuation.
 
 Gameplay comparison [43057067667](https://github.com/gmoddev/gargantuan/actions/runs/43057067667)
 uses identical 512-object content and 18 sample-asset hashes, eight active

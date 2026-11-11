@@ -153,6 +153,16 @@ or another property on the same Part; those edits remain dirty for the next safe
 point. If an observer changes the publishing Part's final CFrame, `WorldRoot`
 marks it dirty after the callback returns so the authored pose reaches the
 backend. The suppression scope is restored on callback failure.
+Tracked Parts also have a private per-registration dirty binding. Every existing
+property callback still runs in connection order, but repeated internal dirty
+marks can reuse the binding flag after the first successful set insertion.
+The flag resets before backend application so reentrant changes remain pending.
+Removal and shutdown deactivate bindings before disconnecting callbacks; a held
+old callback cannot dirty a replacement registration or access a retired world.
+If first insertion fails, a conservative full tracked-Part scan remains pending
+for the next safe point. Building that scan must succeed before its flag clears.
+This derived cache changes neither ordinary mutation history nor the physics
+backend's accepted state, control accumulation, motion order or solver.
 CanTouch changes replace shapes transactionally: the pinned backend copies event
 flags when creating a contact and does not refresh them for an in-place flag write.
 

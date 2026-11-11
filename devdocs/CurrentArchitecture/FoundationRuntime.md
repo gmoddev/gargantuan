@@ -288,3 +288,10 @@ measured ceilings. Streaming, terrain and multiplayer should extend the current
 subsystem-owned projections and admission budgets, with targeted data-oriented
 storage introduced only where complete-path evidence repays its synchronization
 and lifetime costs.
+
+The combined evaluation adds an opt-in Main-owned signal-dispatch profile and
+private WorldRoot listener counters. Disabled profiles take no timing samples.
+These counters are diagnostic and inclusive under reentrancy; callback and
+signal totals must not be added to ordinary setter timings. They expose no Luau
+capability or mutable storage handle. Per-registration physics dirty flags
+coalesce internal work while preserving every existing callback invocation.
