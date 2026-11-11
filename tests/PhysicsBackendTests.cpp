@@ -56,6 +56,14 @@ namespace gargantuan {
 			auto Found = World.TrackedParts.find(Object);
 			return Found != World.TrackedParts.end() && Found->second.Token && Found->second.Token->Active;
 		}
+		static std::shared_ptr<BasePart> TrackedPart(const WorldRoot &World, ObjectId Object) {
+			auto Found = World.TrackedParts.find(Object);
+			return Found == World.TrackedParts.end() ? nullptr : Found->second.Part.lock();
+		}
+		static const void *PartRegistration(const WorldRoot &World, ObjectId Object) {
+			auto Found = World.TrackedParts.find(Object);
+			return Found == World.TrackedParts.end() ? nullptr : Found->second.Token.get();
+		}
 		static SignalConnection::Pointer CFramePhysicsConnection(const WorldRoot &World, ObjectId Object) {
 			auto Found = World.PhysicsConnections.find(Object);
 			return Found == World.PhysicsConnections.end() || Found->second.empty() ? nullptr : Found->second.front();
@@ -1411,6 +1419,7 @@ namespace {
 		PartValue->SetParent(Workspace);
 		const auto Object = PartValue->GetObjectId();
 		auto OldConnection = WorldRootTestAccess::CFramePhysicsConnection(*Workspace, Object);
+		const auto OldRegistration = WorldRootTestAccess::PartRegistration(*Workspace, Object);
 		Check(OldConnection != nullptr, "first Part registration owns a physics CFrame connection");
 		bool Reparented = false;
 		auto ReparentConnection = PartValue->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
@@ -1426,8 +1435,10 @@ namespace {
 		Check(WorldRootTestAccess::DirtyPartCount(*Workspace) == 0,
 			"held stale callback cannot dirty a detached Part");
 		PartValue->SetParent(Workspace);
-		Check(WorldRootTestAccess::BindingActive(*Workspace, Object),
-			"readmission creates an active registration for the same generation");
+		Check(WorldRootTestAccess::BindingActive(*Workspace, Object) &&
+			WorldRootTestAccess::TrackedPart(*Workspace, Object) == PartValue &&
+			WorldRootTestAccess::PartRegistration(*Workspace, Object) != OldRegistration,
+			"readmission creates an active token and direct Part view for the same generation");
 		if (OldConnection) OldConnection->Callback(std::monostate{});
 		Check(WorldRootTestAccess::DirtyPartCount(*Workspace) == 0,
 			"held old registration cannot dirty the readmitted Part");
