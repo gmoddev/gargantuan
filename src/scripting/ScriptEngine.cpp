@@ -214,11 +214,21 @@ namespace gargantuan {
 		auto Found = ManagedScriptThreads.find(Thread);
 		if (Found == ManagedScriptThreads.end()) return;
 		auto ScriptValue = Found->second.lock();
-		if (!ScriptValue || ScriptValue->Thread != Thread || ScriptValue->Status != ScriptStatus::Yielded) {
+		if (!ScriptValue || ScriptValue->Thread != Thread) {
 			ManagedScriptThreads.erase(Found);
 			return;
 		}
-		if (Status == LUA_OK) ScriptValue->Status = ScriptStatus::Finished;
+		// A task.spawn of coroutine.running() can attempt a nested resume of the
+		// active original thread. Its error is not the Script's terminal state.
+		// During the initial Script::Step, the outer resume still owns status.
+		if (ScriptValue->Status == ScriptStatus::Running) return;
+		if (ScriptValue->Status != ScriptStatus::Yielded) {
+			ManagedScriptThreads.erase(Found);
+			return;
+		}
+		const int CoroutineStatus = lua_costatus(L, Thread);
+		if (CoroutineStatus != LUA_COFIN && CoroutineStatus != LUA_COERR) return;
+		if (CoroutineStatus == LUA_COFIN) ScriptValue->Status = ScriptStatus::Finished;
 		else {
 			const auto *Message = lua_tostring(Thread, -1);
 			ScriptValue->ErrorMessage = Message ? Message : "Luau execution failed";

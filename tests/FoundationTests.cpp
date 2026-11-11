@@ -7068,6 +7068,52 @@ namespace {
 			Check(BuiltinClosedWeak.expired(),
 				"bounded idle reconciliation retires a Script closed by Luau coroutine.close");
 
+			auto InitialNested = std::make_shared<Script>();
+			InitialNested->SetSource(R"(
+				local Self = script
+				task.spawn(coroutine.running())
+				RetirementCoroutineResults.InitialNested = script == Self
+				task.wait(0)
+				RetirementCoroutineResults.InitialAfterWait = script == Self
+			)");
+			InitialNested->SetParent(Game);
+			Engine.RunBootstrapScript(InitialNested);
+			Check(InitialNested->Status == ScriptStatus::Yielded && InitialNested->Thread &&
+				InitialNested->ThreadReference != LUA_NOREF,
+				"failed self-resume during initial Script Step keeps its mapped original root");
+			Engine.Threads.Step();
+			Check(InitialNested->Status == ScriptStatus::Finished && InitialNested->Thread == nullptr,
+				"original Script completes normally after initial nested resume fails");
+
+			auto ResumedNested = std::make_shared<Script>();
+			ResumedNested->SetSource(R"(
+				local Self = script
+				task.wait(0)
+				task.spawn(coroutine.running())
+				RetirementCoroutineResults.ResumedNested = script == Self
+				task.wait(0)
+				RetirementCoroutineResults.ResumedAfterWait = script == Self
+			)");
+			ResumedNested->SetParent(Game);
+			Engine.RunBootstrapScript(ResumedNested);
+			Check(ResumedNested->Status == ScriptStatus::Yielded && ResumedNested->Thread,
+				"later nested resume probe first yields");
+			Engine.Threads.Step();
+			Check(ResumedNested->Status == ScriptStatus::Yielded && ResumedNested->Thread &&
+				ResumedNested->ThreadReference != LUA_NOREF,
+				"failed self-resume during task continuation does not retire active Script");
+			Engine.Threads.Step();
+			Check(ResumedNested->Status == ScriptStatus::Finished && ResumedNested->Thread == nullptr,
+				"later genuine task completion retires original Script after nested error");
+			lua_getglobal(Engine.L, "RetirementCoroutineResults");
+			for (const char *Field : {"InitialNested", "InitialAfterWait", "ResumedNested", "ResumedAfterWait"}) {
+				lua_getfield(Engine.L, -1, Field);
+				Check(lua_toboolean(Engine.L, -1),
+					"failed nested resume preserves original Script identity through real completion");
+				lua_pop(Engine.L, 1);
+			}
+			lua_pop(Engine.L, 1);
+
 			auto DisabledWhileResuming = std::make_shared<Script>();
 			DisabledWhileResuming->SetSource("task.wait(0); script.Enabled = false");
 			DisabledWhileResuming->SetParent(Game);
