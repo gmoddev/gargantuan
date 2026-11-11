@@ -94,8 +94,11 @@ Existing
 default (20°, 35°), outer 1–89° and inner 0–outer. The spot points along
 negative local Z.
 
-The engine publishes at most 32 probes, prepares up to 12 resident local
-sources, and blends up to two per pixel. Priority controls selection before
+The engine publishes at most 32 coherent probes after inspecting at most 256
+enabled candidates in ObjectId order, prepares up to 12 resident local sources,
+and blends up to two per pixel. Invalid or incomplete candidates do not consume
+the 32 publication slots; exceeding the inspection limit produces a diagnostic.
+Priority controls selection before
 distance/blend. Budget overflow is an unlit local fallback, not a schema error.
 These limits are renderer behavior, not additional public properties.
 

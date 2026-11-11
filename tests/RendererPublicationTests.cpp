@@ -1295,6 +1295,63 @@ namespace {
 		}
 		Game->Destroy();
 	}
+
+	void TestReflectionProbePublicationBudget() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+		const auto Face = Assets->RegisterMemoryImage("ProbeBudgetFace", 4, 4,
+			std::vector<std::uint8_t>(4 * 4 * 4, 255));
+		std::vector<std::shared_ptr<ReflectionProbe>> Probes;
+		for (std::size_t Index = 0; Index <= MaximumRenderReflectionProbes; ++Index) {
+			auto Probe = std::make_shared<ReflectionProbe>();
+			Probe->SetParent(World);
+			Probes.push_back(std::move(Probe));
+		}
+		const auto Valid = *std::ranges::max_element(Probes, {}, [](const auto &Probe) {
+			return Probe->GetObjectId();
+		});
+		Valid->SetProbePositiveX(Face); Valid->SetProbeNegativeX(Face);
+		Valid->SetProbePositiveY(Face); Valid->SetProbeNegativeY(Face);
+		Valid->SetProbePositiveZ(Face); Valid->SetProbeNegativeZ(Face);
+		RenderPublisher Publisher;
+		auto Changes = Assets->DrainTextureChanges();
+		Publisher.SetUiTextureChanges(std::move(Changes.Creates), std::move(Changes.Updates),
+			std::move(Changes.Removes));
+		const auto Publication = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Publication->Frame.Environment.ReflectionProbes &&
+			Publication->Frame.Environment.ReflectionProbes->size() == 1 &&
+			Publication->Frame.Environment.ReflectionProbes->front().Object == Valid->GetObjectId(),
+			"incomplete probes do not consume the 32 coherent probe publication slots");
+		for (const auto &Probe : Probes) {
+			Probe->SetProbePositiveX(Face); Probe->SetProbeNegativeX(Face);
+			Probe->SetProbePositiveY(Face); Probe->SetProbeNegativeY(Face);
+			Probe->SetProbePositiveZ(Face); Probe->SetProbeNegativeZ(Face);
+		}
+		Publisher.RequestFullResync();
+		const auto Full = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Full->Frame.Environment.ReflectionProbes &&
+			Full->Frame.Environment.ReflectionProbes->size() == MaximumRenderReflectionProbes &&
+			std::ranges::any_of(Full->Diagnostics, [](const auto &Diagnostic) {
+				return Diagnostic.Issue == RenderExtractionIssue::PublicationOverflow &&
+					Diagnostic.Message.find("coherent probe publication limit") != std::string::npos;
+			}), "coherent probe publication stays capped at 32 with a diagnostic");
+		Game->Destroy();
+
+		Game = std::make_shared<DataModel>();
+		World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		for (std::size_t Index = 0; Index <= MaximumRenderReflectionProbes * 8; ++Index)
+			std::make_shared<ReflectionProbe>()->SetParent(World);
+		RenderPublisher BoundedPublisher;
+		const auto Bounded = BoundedPublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(!Bounded->Frame.Environment.ReflectionProbes &&
+			std::ranges::any_of(Bounded->Diagnostics, [](const auto &Diagnostic) {
+				return Diagnostic.Issue == RenderExtractionIssue::PublicationOverflow &&
+					Diagnostic.Message.find("source inspection limit") != std::string::npos;
+			}), "incomplete probe inspection has a finite diagnosed cap");
+		Game->Destroy();
+	}
 }
 
 static_assert(std::is_same_v<gargantuan::RenderPublicationPtr, std::shared_ptr<const gargantuan::RenderPublication>>);
@@ -1314,6 +1371,7 @@ int main() {
 		TestEnvironmentLightingFoundation();
 		TestLocalLights();
 		TestReflectionProbeContracts();
+		TestReflectionProbePublicationBudget();
 		TestRetainedUiTextureLifecycle();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:PublicationTest] unexpected exception: " << Error.what() << '\n';

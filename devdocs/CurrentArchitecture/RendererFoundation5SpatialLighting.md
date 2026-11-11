@@ -24,8 +24,10 @@ qualification remains separate from source/syntax and numerical checks.
 
 `ReflectionProbe` is an ordinary schema-backed Instance. `WorldRoot` maintains
 generation-safe weak descendant membership. `RenderPublisher` resolves existing
-AssetService Image references and projects at most 32 enabled records in ObjectId
-order. It shares equal immutable lists across publications. Nearest-BasePart
+AssetService Image references and publishes at most 32 coherent probes in ObjectId
+order. It inspects at most 256 enabled candidates per extraction; incomplete or
+invalid sources do not consume publication slots, and a source inspection
+overflow is diagnosed. It shares equal immutable lists across publications. Nearest-BasePart
 attachment uses the render CFrame and ignores BasePart size. Owner pose changes
 invalidate environment extraction through the existing render dirty accumulator.
 No resource, source pathname, importer or Instance pointer enters the publication.

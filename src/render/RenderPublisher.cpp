@@ -439,13 +439,16 @@ namespace gargantuan {
 		const auto Assets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr;
 		std::vector<RenderReflectionProbeState> Probes;
 		Probes.reserve(std::min(World.GetReflectionProbes().size(), MaximumRenderReflectionProbes));
-		std::size_t Considered = 0;
+		// Source lookup is bounded even when a world contains many incomplete
+		// authoring placeholders. Only coherent probes consume the publication cap.
+		constexpr std::size_t MaximumInspectedProbes = MaximumRenderReflectionProbes * 8;
+		std::size_t Inspected = 0;
 		for (const auto &[Id, WeakProbe] : World.GetReflectionProbes()) {
 			const auto Probe = WeakProbe.lock();
 			if (!Probe || Probe->GetDestroyed() || Probe->IsDestroying() || !Probe->GetProbeEnabled()) continue;
-			if (Considered++ == MaximumRenderReflectionProbes) {
+			if (Inspected++ == MaximumInspectedProbes) {
 				Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, Id,
-					"[Environment:ReflectionProbe] World exceeds the 32 probe publication limit"});
+					"[Environment:ReflectionProbe] World exceeds the 256 probe source inspection limit"});
 				break;
 			}
 			auto Pose = Probe->GetProbeCFrame();
@@ -480,7 +483,14 @@ namespace gargantuan {
 				State.Source.FaceDimension = Resource->Width;
 				State.Source.Faces[Face] = {Resource->Texture, Resource->ContentRevision};
 			}
-			if (Valid && IsValidReflectionProbe(State)) Probes.push_back(State);
+			if (Valid && IsValidReflectionProbe(State)) {
+				if (Probes.size() == MaximumRenderReflectionProbes) {
+					Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, Id,
+						"[Environment:ReflectionProbe] World exceeds the 32 coherent probe publication limit"});
+					break;
+				}
+				Probes.push_back(State);
+			}
 			else Diagnostics.push_back({RenderExtractionIssue::InvalidEnvironment, Id,
 				"[Environment:ReflectionProbe] Incoherent source or invalid influence pose; using other probes and global Sky"});
 		}
