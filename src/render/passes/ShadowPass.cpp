@@ -190,7 +190,7 @@ namespace gargantuan {
 				try {
 					bool HasCasters = false;
 					const bool AllResident = DrawCasters(Gpu, Pass, Context, Assignment.Matrix, White,
-						std::nullopt, HasCasters, Assignment.Layer);
+						std::nullopt, HasCasters, Assignment.Layer, Assignment.Origin);
 					Atlas.FinishRecording(Assignment.Layer, AllResident, HasCasters);
 				} catch (...) {
 					SDL_EndGPURenderPass(Pass);

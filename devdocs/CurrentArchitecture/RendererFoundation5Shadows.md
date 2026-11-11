@@ -50,7 +50,9 @@ spotlights continue to illuminate without shadows. Point lights cannot
 acquire an atlas layer. A static spotlight map is reused until its light cone,
 target, or relevant caster/mesh/mask publication changes. Recording only
 becomes committed after successful submission. Device recreation and full
-resynchronization invalidate it.
+resynchronization invalidate it. Each spot matrix is relative to its published
+light position, which is subtracted from caster model translations before the
+vertex shader and from receiver positions before shadow lookup.
 
 The combined optional directional and spotlight depth allocations are at most
 96 MiB of logical texels at the default four 2048-pixel cascades plus eight

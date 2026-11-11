@@ -24,6 +24,7 @@ namespace gargantuan {
 		ObjectId Light;
 		std::uint32_t Layer = 0;
 		glm::mat4 Matrix{1.0f};
+		glm::vec3 Origin{0.0f};
 		bool Dirty = true;
 		bool HasCasters = false;
 	};
@@ -45,7 +46,7 @@ namespace gargantuan {
 				const auto Relevant = [&](const auto &Object) {
 					return Object.Visible && Object.Item.CastShadow &&
 						SDLShadowCasterMayAffect(Before, Object.Item, Object.Mesh, Slot.Matrix,
-							SpotlightShadowResolution);
+						SpotlightShadowResolution, Slot.LastLight->Position);
 				};
 				const auto WasRelevant = [&](ObjectId Id) {
 					const auto *Object = Find(Id);
@@ -137,7 +138,8 @@ namespace gargantuan {
 				Slot.LastLight = *Candidate.Light;
 				Slot.Target = Target;
 				Slot.Matrix = Matrix;
-				Assignments.push_back({Candidate.Light->Object, Layer, Matrix, !Slot.Committed, Slot.HasCasters});
+				Assignments.push_back({Candidate.Light->Object, Layer, Matrix, Candidate.Light->Position,
+					!Slot.Committed, Slot.HasCasters});
 			}
 			for (std::uint32_t Index = 0; Index < MaximumShadowedSpotlights; ++Index)
 				if (!Reserved[Index]) Slots[Index] = {};
@@ -147,9 +149,10 @@ namespace gargantuan {
 		[[nodiscard]] std::uint32_t GetDroppedCount() const { return Dropped; }
 		[[nodiscard]] bool MayAffect(const RenderProjection &Projection, const RenderProjectedObject &Object,
 			std::uint32_t Layer) const {
-			return Layer < MaximumShadowedSpotlights && Object.Visible && Object.Item.CastShadow &&
+			return Layer < MaximumShadowedSpotlights && Slots[Layer].LastLight &&
+				Object.Visible && Object.Item.CastShadow &&
 				SDLShadowCasterMayAffect(Projection, Object.Item, Object.Mesh, Slots[Layer].Matrix,
-					SpotlightShadowResolution);
+					SpotlightShadowResolution, Slots[Layer].LastLight->Position);
 		}
 		void BeginRecording(std::uint32_t Layer) {
 			if (Layer >= MaximumShadowedSpotlights) return;
@@ -212,7 +215,7 @@ namespace gargantuan {
 			const auto Fov = 2.0f * std::acos(Outer);
 			const auto Near = std::min(0.1f, Light.Range * 0.01f);
 			return glm::perspectiveRH_ZO(Fov, 1.0f, Near, Light.Range) *
-				glm::lookAt(Light.Position, Light.Position + Direction, Up);
+				glm::lookAt(glm::vec3(0), Direction, Up);
 		}
 		[[nodiscard]] static bool IsVisible(const RenderFrameState &Frame, const RenderLocalLightState &Light) {
 			const auto Rows = glm::transpose(glm::dmat4(Frame.Camera.ViewProjectionMatrix));

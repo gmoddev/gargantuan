@@ -39,6 +39,7 @@ int main() try {
 		"the spotlight budget selects exactly eight visible winners");
 	Require(Atlas.GetAssignments()[0].Light == ObjectId{1, 1},
 		"priority precedes contribution score");
+	const auto OriginMatrix = Atlas.GetAssignments()[0].Matrix;
 	for (const auto &Entry : Atlas.GetAssignments()) {
 		Require(Entry.Dirty && Entry.Layer < MaximumShadowedSpotlights,
 			"first admission requires a bounded layer render");
@@ -70,6 +71,19 @@ int main() try {
 	Atlas.Prepare(Frame, nullptr);
 	for (const auto &Entry : Atlas.GetAssignments())
 		Require(Entry.Light != ObjectId{1, 1}, "point lights cannot acquire spot atlas layers");
+	auto DistantLights = std::make_shared<std::vector<RenderLocalLightState>>(*Lights);
+	const glm::vec3 Offset(900000.0f, 2000.0f, -900000.0f);
+	for (auto &Light : *DistantLights) Light.Position += Offset;
+	Frame.Camera.Position = Offset;
+	Frame.Camera.ViewMatrix = glm::lookAt(Offset, Offset + glm::vec3(0, 0, -1), glm::vec3(0, 1, 0));
+	Frame.Camera.ViewProjectionMatrix = Frame.Camera.ProjectionMatrix * Frame.Camera.ViewMatrix;
+	Frame.Environment.LocalLights = DistantLights;
+	SDLSpotShadowAtlas DistantAtlas;
+	DistantAtlas.Prepare(Frame, nullptr);
+	Require(DistantAtlas.GetAssignments().size() == 8 &&
+		DistantAtlas.GetAssignments()[0].Matrix == OriginMatrix &&
+		DistantAtlas.GetAssignments()[0].Origin == (*DistantLights)[0].Position,
+		"spot projection remains origin-relative at large coordinates");
 	std::cout << "[Render:SpotShadowAtlas] Budget, stable assignment and lifetime passed\n";
 	return 0;
 } catch (const std::exception &Error) {

@@ -53,6 +53,17 @@ int main() try {
 	const auto Stable = MakeSDLDirectionalCascadePlan(SmallMove, Sun, 16.0f / 9.0f, Settings);
 	Require(Stable && Stable->Cascades[0].Matrix == Plan->Cascades[0].Matrix,
 		"subtexel movement changed the matrix");
+	std::uint32_t MatrixChanges = 0;
+	auto LastMatrix = Plan->Cascades[0].Matrix;
+	for (std::uint32_t Step = 1; Step <= 200; ++Step) {
+		auto Moving = Camera;
+		Moving.Position.x += Step * Plan->Cascades[0].WorldUnitsPerTexel * 0.02f;
+		const auto Next = MakeSDLDirectionalCascadePlan(Moving, Sun, 16.0f / 9.0f, Settings);
+		Require(Next.has_value(), "slow motion lost a cascade plan");
+		if (Next->Cascades[0].Matrix != LastMatrix) ++MatrixChanges;
+		LastMatrix = Next->Cascades[0].Matrix;
+	}
+	Require(MatrixChanges < 20, "slow subtexel movement rebuilt the cascade too often");
 	Camera.Position = {900000.0f, 2000.0f, -900000.0f};
 	const auto Distant = MakeSDLDirectionalCascadePlan(Camera, Sun, 16.0f / 9.0f, Settings);
 	Require(Distant.has_value(), "large offset failed");
