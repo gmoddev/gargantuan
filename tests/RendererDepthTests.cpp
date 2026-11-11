@@ -214,6 +214,129 @@ void CheckOpaqueOrdering(const std::filesystem::path &Output) {
 	if (Draw(Restarted, Resync).RgbPixels != Draw(Reference, WithoutSharedMesh(Resync)).RgbPixels)
 		throw std::runtime_error("Opaque ordering changed visible pixels after renderer recreation");
 }
+
+RenderPublication MakeInstanceScene(RenderPublicationId Id, const glm::mat4 &First,
+	const glm::mat4 &Second, bool Reverse = false, bool Shadows = false) {
+	auto Value = MakeOrderingScene(Id, First, Second, Reverse, false, Shadows);
+	Value.TextureCreates.clear();
+	for (auto &Create : Value.Creates) {
+		auto Material = Create.Primitives->front().Material;
+		Create.Material = Material;
+		Create.Primitives = std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(
+			std::initializer_list<RenderPrimitiveMaterialState>{{0, 6, Material}});
+	}
+	return Value;
+}
+
+void CheckInstancingOrdering(const std::filesystem::path &Output) {
+	EditorViewportRenderer Candidate(ORDER_WIDTH, ORDER_HEIGHT, true, true);
+	EditorViewportRenderer Reference(ORDER_WIDTH, ORDER_HEIGHT, true, false);
+	const auto Compare = [&](std::string_view Name, const RenderPublication &Value) {
+		const auto Publication = std::make_shared<const RenderPublication>(Value);
+		const auto Actual = Candidate.Capture(Publication);
+		const auto Expected = Reference.Capture(Publication);
+		if (!Output.empty()) {
+			WriteFrame(Output / (std::string(Name) + "-instanced.ppm"), Actual);
+			WriteFrame(Output / (std::string(Name) + "-individual.ppm"), Expected);
+		}
+		if (Actual.RgbPixels != Expected.RgbPixels)
+			throw std::runtime_error(std::format("Instancing changed visible pixels for {}", Name));
+		if (!std::ranges::any_of(Actual.RgbPixels, [](std::uint8_t Channel) { return Channel > 150; }))
+			throw std::runtime_error(std::format("Instancing fixture {} produced no bright material pixels", Name));
+		const auto CandidatePick = Candidate.Pick(ORDER_WIDTH * 0.5f, ORDER_HEIGHT * 0.5f);
+		const auto ReferencePick = Reference.Pick(ORDER_WIDTH * 0.5f, ORDER_HEIGHT * 0.5f);
+		if (CandidatePick.has_value() != ReferencePick.has_value() ||
+			(CandidatePick && CandidatePick->Object != ReferencePick->Object))
+			throw std::runtime_error(std::format("Instancing changed picking identity for {}", Name));
+	};
+	const glm::mat4 Identity(1.0f);
+	const auto Translate = [&](float X, float Z) { return glm::translate(Identity, glm::vec3(X, 0, Z)); };
+	const auto First = Translate(-.045f, 0);
+	const auto Second = Translate(.045f, 0);
+	const auto Rotation = glm::rotate(Identity, glm::radians(45.0f), glm::vec3(0, 1, 0));
+	RenderPublicationId Next = 1;
+	const auto ScreenSeparated = MakeInstanceScene(Next++, First, Second);
+	Compare("screen-separated", ScreenSeparated);
+	SDLRenderer MetricsRenderer({ORDER_WIDTH, ORDER_HEIGHT}, {
+		.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+		.EnableInstancing = true,
+	});
+	MetricsRenderer.Draw(std::make_shared<const RenderPublication>(ScreenSeparated));
+	const auto Metrics = MetricsRenderer.GetMetrics();
+	const bool Vulkan = MetricsRenderer.GetDriverName() == "vulkan";
+	if (Vulkan && (Metrics.InstancedDrawCalls == 0 || Metrics.InstancedObjects < 2))
+		throw std::runtime_error("Screen-separated fixture did not issue a native instanced draw");
+	std::cout << "[Render:Instancing] driver=" << MetricsRenderer.GetDriverName()
+		<< " nativeDraws=" << Metrics.InstancedDrawCalls << " objects=" << Metrics.InstancedObjects << '\n';
+	Compare("depth-separated", MakeInstanceScene(Next++, Identity, Translate(0, -1.5f)));
+	Compare("coplanar", MakeInstanceScene(Next++, Identity, Identity));
+	Compare("coplanar-reversed", MakeInstanceScene(Next++, Identity, Identity, true));
+	Compare("near-equal", MakeInstanceScene(Next++, Identity, Translate(0, 1e-7f)));
+	Compare("intersecting", MakeInstanceScene(Next++, Identity, Rotation));
+	Compare("multiple-ranges", MakeOrderingScene(Next++, First, Second, false, false, false));
+	Compare("masked-material", MakeOrderingScene(Next++, First, Second, false, true, false));
+	Compare("separate-meshes", WithoutSharedMesh(MakeInstanceScene(Next++, First, Second)));
+	Compare("shadow-casters", MakeInstanceScene(Next++, First, Second, false, true));
+	auto Frustum = MakeInstanceScene(Next++, Translate(0, 6), Second);
+	Compare("frustum-culled", Frustum);
+
+	const auto Initial = MakeInstanceScene(Next++, First, Second);
+	Compare("before-rehash", Initial);
+	RenderPublication VisibilityOff{.Id = Next++, .BaseId = Initial.Id, .Frame = Initial.Frame};
+	const auto &FirstCreate = Initial.Creates.front();
+	VisibilityOff.Updates.push_back({.Object = FirstCreate.Item.Object,
+		.Domains = RenderUpdateDomain::Visibility, .Item = FirstCreate.Item,
+		.Mesh = FirstCreate.Mesh, .Material = FirstCreate.Material, .Visible = false,
+		.Primitives = FirstCreate.Primitives});
+	Compare("visibility-off", VisibilityOff);
+	RenderPublication VisibilityOn{.Id = Next++, .BaseId = VisibilityOff.Id, .Frame = Initial.Frame};
+	VisibilityOn.Updates = VisibilityOff.Updates;
+	VisibilityOn.Updates.front().Visible = true;
+	Compare("visibility-on", VisibilityOn);
+	RenderPublication Insert{.Id = Next++, .BaseId = VisibilityOn.Id, .Frame = Initial.Frame};
+	for (std::uint32_t Slot = 3; Slot <= 82; ++Slot) {
+		auto Create = Initial.Creates.front();
+		Create.Item.Object = {Slot, 1};
+		Create.Item.ModelMatrix = Translate(100.0f + Slot, 0);
+		Create.Item.InverseModelMatrix = glm::inverse(Create.Item.ModelMatrix);
+		Insert.Creates.push_back(Create);
+	}
+	Compare("late-create-rehash", Insert);
+	RenderPublication Sparse{.Id = Next++, .BaseId = Insert.Id, .Frame = Initial.Frame};
+	Sparse.Removes.push_back({{3, 1}});
+	auto Replacement = Initial.Creates.front();
+	Replacement.Item.Object = {3, 2};
+	Replacement.Item.ModelMatrix = Translate(103, 0);
+	Replacement.Item.InverseModelMatrix = glm::inverse(Replacement.Item.ModelMatrix);
+	Sparse.Creates.push_back(Replacement);
+	Compare("remove-recreate-generation", Sparse);
+	RenderPublication MaterialChange{.Id = Next++, .BaseId = Sparse.Id, .Frame = Initial.Frame};
+	RenderObjectUpdate Masked{.Object = Initial.Creates.front().Item.Object,
+		.Domains = RenderUpdateDomain::Material, .Item = Initial.Creates.front().Item,
+		.Mesh = ORDER_MESH, .Material = Initial.Creates.front().Material};
+	Masked.Material.OpacityMode = RenderOpacityMode::Masked;
+	Masked.Primitives = std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(
+		std::initializer_list<RenderPrimitiveMaterialState>{{0, 6, Masked.Material}});
+	MaterialChange.Updates.push_back(Masked);
+	Compare("material-eligibility-transition", MaterialChange);
+	RenderPublication Dense{.Id = Next++, .BaseId = MaterialChange.Id, .Frame = Initial.Frame};
+	for (std::uint32_t Slot = 4; Slot <= 82; ++Slot) {
+		RenderObjectUpdate Update{.Object = {Slot, 1}, .Domains = RenderUpdateDomain::Transform,
+			.Item = Insert.Creates[Slot - 3].Item, .Mesh = ORDER_MESH,
+			.Material = Insert.Creates[Slot - 3].Material,
+			.Primitives = Insert.Creates[Slot - 3].Primitives};
+		Update.Item.ModelMatrix[3].x += 1;
+		Update.Item.InverseModelMatrix = glm::inverse(Update.Item.ModelMatrix);
+		Dense.Updates.push_back(Update);
+	}
+	Compare("dense-update", Dense);
+	Compare("full-resync", MakeInstanceScene(Next++, First, Second));
+	EditorViewportRenderer Restarted(ORDER_WIDTH, ORDER_HEIGHT, true, true);
+	EditorViewportRenderer RestartReference(ORDER_WIDTH, ORDER_HEIGHT, true, false);
+	const auto Restart = std::make_shared<const RenderPublication>(MakeInstanceScene(Next, First, Second));
+	if (Restarted.Capture(Restart).RgbPixels != RestartReference.Capture(Restart).RgbPixels)
+		throw std::runtime_error("Instancing changed visible pixels after renderer recreation");
+}
 }
 
 int main(int Argc, char **Argv) {
@@ -221,7 +344,7 @@ int main(int Argc, char **Argv) {
 	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
 #endif
 	try {
-		bool Observe = false, Extended = false, OpaqueOrdering = false;
+		bool Observe = false, Extended = false, OpaqueOrdering = false, InstancingOrdering = false;
 		float Near = .1f, Far = 100000;
 		std::string Projection = "production";
 		std::filesystem::path Output;
@@ -230,6 +353,7 @@ int main(int Argc, char **Argv) {
 			if (Argument == "--observe") Observe = true;
 			else if (Argument == "--extended") Extended = true;
 			else if (Argument == "--opaque-ordering") OpaqueOrdering = true;
+			else if (Argument == "--instancing-ordering") InstancingOrdering = true;
 			else if (Argument.starts_with("--near=")) Near = std::stof(Argument.substr(7));
 			else if (Argument.starts_with("--far=")) Far = std::stof(Argument.substr(6));
 			else if (Argument.starts_with("--projection=")) Projection = Argument.substr(13);
@@ -239,6 +363,10 @@ int main(int Argc, char **Argv) {
 		if (!Output.empty()) std::filesystem::create_directories(Output);
 		if (OpaqueOrdering) {
 			CheckOpaqueOrdering(Output);
+			return 0;
+		}
+		if (InstancingOrdering) {
+			CheckInstancingOrdering(Output);
 			return 0;
 		}
 		BootstrapNativeRuntimeSchema();

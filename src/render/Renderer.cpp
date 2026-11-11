@@ -4,6 +4,7 @@
 
 #include "gargantuan/Log.hpp"
 #include "render/sdl/SDLDirectionalShadowCache.hpp"
+#include "render/sdl/SDLInstanceGpuCache.hpp"
 #include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
@@ -78,6 +79,7 @@ namespace gargantuan {
 		SDL_GPUSampler *ShadowSampler = nullptr;
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
 		std::unique_ptr<SDLMeshCache> MeshResources;
+		std::unique_ptr<SDLInstanceGpuCache> InstanceResources;
 		std::unique_ptr<SDLTextureCache> TextureResources;
 		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
@@ -135,6 +137,12 @@ namespace gargantuan {
 				State->SwapchainFormat = SDL_GetGPUSwapchainTextureFormat(State->Gpu, State->Window);
 			} else State->SwapchainFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 			State->HdrSceneEnabled = Options.EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
+			if (Options.EnableInstancing) {
+				const auto SceneFormat = State->HdrSceneEnabled ? SDLHdrSceneFormat : State->SwapchainFormat;
+				const float OutputMode = SceneFormat == SDLHdrSceneFormat ? 2.0f :
+					SDLTargetEncodesSrgb(SceneFormat) ? 0.0f : 1.0f;
+				State->InstanceResources = std::make_unique<SDLInstanceGpuCache>(State->Gpu, OutputMode);
+			}
 			State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu, &State->Metrics);
 			State->TextureResources = std::make_unique<SDLTextureCache>(State->Gpu, &State->Metrics);
 			State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(
@@ -204,6 +212,10 @@ namespace gargantuan {
 			State->MeshResources->Destroy();
 			State->MeshResources.reset();
 		}
+		if (State->InstanceResources) {
+			State->InstanceResources->Destroy();
+			State->InstanceResources.reset();
+		}
 		if (State->TextureResources) {
 			State->TextureResources->Destroy();
 			State->TextureResources.reset();
@@ -265,6 +277,9 @@ namespace gargantuan {
 		State->Metrics.LastResolveRecordingNanoseconds = 0;
 		State->Metrics.LastGuiRecordingNanoseconds = 0;
 		State->Metrics.LastGpuSubmitNanoseconds = 0;
+		State->Metrics.LastInstanceApplicationNanoseconds = 0;
+		State->Metrics.LastInstanceUploadNanoseconds = 0;
+		State->Metrics.LastInstancePreparationNanoseconds = 0;
 		State->Metrics.LastCameraTraversalNanoseconds = 0;
 		State->Metrics.LastCameraCullNanoseconds = 0;
 		State->Metrics.LastCameraResidencyNanoseconds = 0;
@@ -282,6 +297,11 @@ namespace gargantuan {
 			State->SpotShadowAtlas.ApplyPublication(State->Projection, *Publication);
 			State->Metrics.LastShadowClassificationNanoseconds = Nanoseconds(Clock::now() - ProjectionStart);
 			const auto Changes = State->Projection.Apply(*Publication);
+			if (State->Options.EnableInstancing && State->InstanceResources) {
+				const auto InstanceStart = Clock::now();
+				(void)State->InstanceResources->Apply(*Publication);
+				State->Metrics.LastInstanceApplicationNanoseconds = Nanoseconds(Clock::now() - InstanceStart);
+			}
 			State->Metrics.LastProjectionValidationNanoseconds = Changes.ValidationNanoseconds;
 			State->Metrics.LastProjectionMutationNanoseconds = Changes.MutationNanoseconds;
 			State->Metrics.EnvironmentApplications += Changes.EnvironmentsUpdated;
@@ -307,6 +327,7 @@ namespace gargantuan {
 		} catch (...) {
 			State->Projection.Clear();
 			State->MeshResources->Destroy();
+			if (State->InstanceResources) State->InstanceResources->Destroy();
 			State->TextureResources->Destroy();
 			State->SkinPalettes->Destroy();
 			State->ShadowCache.Invalidate();
@@ -344,12 +365,16 @@ namespace gargantuan {
 			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
 		Frame.EnableOpaqueGrouping = State->Options.EnableOpaqueGrouping;
 		Frame.ProfileDetailed = State->Options.ProfileDetailed;
+		Frame.UseCompactTraversal = State->Options.UseCompactTraversal;
+		Frame.EnableInstancing = State->Options.EnableInstancing && State->InstanceResources &&
+			State->InstanceResources->GetRecords().IsAvailable();
 		Frame.Commands = Commands;
 		Frame.HdrSceneTexture = State->HdrSceneTexture;
 		Frame.DepthTexture = State->DepthTexture;
 		Frame.ShadowMapTexture = State->ShadowMapTexture;
 		Frame.ShadowSampler = State->ShadowSampler;
 		Frame.TextureResources = State->TextureResources.get();
+		Frame.InstanceResources = State->InstanceResources.get();
 		Frame.MaterialSamplers = &State->MaterialSamplers;
 		Frame.Metrics = &State->Metrics;
 		if (State->Options.Offscreen) {
@@ -378,6 +403,19 @@ namespace gargantuan {
 		}
 		try {
 			State->ShadowResources.PrepareFrame(State->Gpu, Frame, State->SpotShadowAtlas);
+			if (Frame.EnableInstancing) {
+				try {
+					const auto InstanceStart = Clock::now();
+					State->InstanceResources->Upload(Frame.Commands, &State->Metrics);
+					State->Metrics.LastInstanceUploadNanoseconds = Nanoseconds(Clock::now() - InstanceStart);
+				}
+				catch (const std::exception &Error) {
+					LOG_WARN(App, "[Renderer:Instances] Disabled optional instancing: %s", Error.what());
+					State->InstanceResources->OnFrameAborted();
+					State->Options.EnableInstancing = false;
+					Frame.EnableInstancing = false;
+				}
+			}
 			const auto &Definitions = GetSDLRenderPassConstructors();
 			for (std::size_t Index = 0; Index < State->RenderPasses.size(); ++Index) {
 				const auto PassStart = Clock::now();
@@ -392,6 +430,8 @@ namespace gargantuan {
 				}
 			}
 		} catch (...) {
+			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 			if (State->Options.Offscreen) SDL_CancelGPUCommandBuffer(Frame.Commands);
 			else SDL_SubmitGPUCommandBuffer(Frame.Commands);
 			throw;
@@ -401,7 +441,12 @@ namespace gargantuan {
 			auto *Fence = SDL_SubmitGPUCommandBufferAndAcquireFence(Frame.Commands);
 			State->Metrics.LastGpuSubmitNanoseconds = Nanoseconds(Clock::now() - SubmitStart);
 			State->Metrics.LastSubmissionNanoseconds = Nanoseconds(Clock::now() - SubmissionStart);
-			if (!Fence) throw std::runtime_error(std::format("Failed to submit SDL GPU frame: {}", SDL_GetError()));
+			if (!Fence) {
+				if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+				for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
+				throw std::runtime_error(std::format("Failed to submit SDL GPU frame: {}", SDL_GetError()));
+			}
+			if (State->InstanceResources) State->InstanceResources->OnFrameSubmitted();
 			const auto WaitStart = Clock::now();
 			if (!SDL_WaitForGPUFences(State->Gpu, true, &Fence, 1)) {
 				SDL_ReleaseGPUFence(State->Gpu, Fence);
@@ -412,8 +457,12 @@ namespace gargantuan {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
 		} else {
 			const auto SubmitStart = Clock::now();
-			if (!SDL_SubmitGPUCommandBuffer(Frame.Commands))
+			if (!SDL_SubmitGPUCommandBuffer(Frame.Commands)) {
+				if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+				for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 				throw std::runtime_error(std::format("Failed to submit SDL GPU frame: {}", SDL_GetError()));
+			}
+			if (State->InstanceResources) State->InstanceResources->OnFrameSubmitted();
 			State->Metrics.LastGpuSubmitNanoseconds = Nanoseconds(Clock::now() - SubmitStart);
 			State->Metrics.LastSubmissionNanoseconds = Nanoseconds(Clock::now() - SubmissionStart);
 		}

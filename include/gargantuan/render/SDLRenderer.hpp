@@ -22,6 +22,8 @@ namespace gargantuan {
 		bool EnableHdrScene = true;
 		bool EnableOpaqueGrouping = true;
 		bool ProfileDetailed = false;
+		bool UseCompactTraversal = false;
+		bool EnableInstancing = false;
 	};
 
 	struct SDLRendererMetrics {
@@ -85,6 +87,9 @@ namespace gargantuan {
 		std::uint64_t LastResolveRecordingNanoseconds = 0;
 		std::uint64_t LastGuiRecordingNanoseconds = 0;
 		std::uint64_t LastGpuSubmitNanoseconds = 0;
+		std::uint64_t LastInstanceApplicationNanoseconds = 0;
+		std::uint64_t LastInstanceUploadNanoseconds = 0;
+		std::uint64_t LastInstancePreparationNanoseconds = 0;
 		// Fine timings are populated only with ProfileDetailed; clock overhead is
 		// intentionally excluded from normal performance qualification.
 		std::uint64_t LastCameraTraversalNanoseconds = 0;
@@ -101,6 +106,10 @@ namespace gargantuan {
 		std::uint64_t CameraCulledObjects = 0;
 		std::uint64_t WorldGeometryBindings = 0;
 		std::uint64_t WorldMaterialBindings = 0;
+		std::uint64_t InstancedDrawCalls = 0;
+		std::uint64_t InstancedObjects = 0;
+		std::uint64_t InstanceUploadBytes = 0;
+		std::uint64_t VisibleIndexUploadBytes = 0;
 		std::uint64_t HdrSceneBytes = 0;
 		std::uint64_t SceneResolveDraws = 0;
 		std::uint64_t IblBuilds = 0;

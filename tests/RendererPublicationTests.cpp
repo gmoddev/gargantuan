@@ -150,6 +150,76 @@ namespace {
 		Check(Restarted.Apply(Restart).Created == 2 && Restarted.GetSize() == 2, "a renderer restart accepts a deterministic full resync");
 	}
 
+	void TestCompactTraversalOrderAndLifecycle() {
+		using namespace gargantuan;
+		RenderProjection Projection;
+		const auto MirrorsMap = [&] {
+			const auto &Records = Projection.GetCompactTraversal();
+			Check(Records.size() == Projection.GetObjects().size(), "compact traversal covers every projected object");
+			auto Existing = Projection.GetObjects().begin();
+			for (const auto &Record : Records) {
+				if (Existing == Projection.GetObjects().end()) break;
+				Check(Record.Object == Existing->first && Record.Projected == &Existing->second,
+					"compact traversal retains exact map order and entry identity");
+				Check(Record.Pose == Projection.GetAnimationPose(Record.Object),
+					"compact traversal resolves the current animation pose");
+				Check(Record.MeshBounds == (Record.Projected->Mesh ?
+					Projection.GetMeshBounds(*Record.Projected->Mesh) : nullptr),
+					"compact traversal resolves the current mesh bounds");
+				++Existing;
+			}
+		};
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		Initial.Creates = {{MakeItem({10, 1})}, {MakeItem({11, 1})}};
+		(void)Projection.Apply(Initial);
+		MirrorsMap();
+		const auto *StableData = Projection.GetCompactTraversal().data();
+		RenderPublication Move{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
+		Move.Updates.push_back({{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1}, 4.0f)});
+		(void)Projection.Apply(Move);
+		Check(Projection.GetCompactTraversal().data() == StableData &&
+			Projection.GetItem({10, 1})->ModelMatrix[3].x == 4.0f,
+			"in-place transform updates retain compact traversal pointers");
+		MirrorsMap();
+		RenderPublication Grow{.Id = 3, .BaseId = 2, .Frame = MakeFrame()};
+		for (std::uint32_t Slot = 20; Slot < 200; ++Slot) Grow.Creates.push_back({MakeItem({Slot, 1})});
+		(void)Projection.Apply(Grow);
+		MirrorsMap();
+		RenderPublication Remove{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		Remove.Removes.push_back({{10, 1}});
+		(void)Projection.Apply(Remove);
+		MirrorsMap();
+		RenderPublication Invalid{.Id = 5, .BaseId = 4, .Frame = MakeFrame()};
+		Invalid.Updates.push_back({{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1})});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); },
+			"stale update rejects before compact traversal mutation");
+		MirrorsMap();
+		RenderPublication Resync{.Id = 100, .FullResync = true, .Frame = MakeFrame()};
+		Resync.Creates.push_back({MakeItem({90, 2})});
+		(void)Projection.Apply(Resync);
+		MirrorsMap();
+		const RenderMeshIdentity Mesh{7, 1};
+		auto Vertices = std::make_shared<const std::vector<RenderVertex>>(std::vector<RenderVertex>(3));
+		auto Indices = std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0, 1, 2});
+		RenderPublication BindMesh{.Id = 101, .BaseId = 100, .Frame = MakeFrame()};
+		BindMesh.MeshCreates.push_back({Mesh, 1, 1, Vertices, Indices,
+			{glm::vec3(-1.0f), glm::vec3(1.0f)}});
+		BindMesh.Updates.push_back({{90, 2}, RenderUpdateDomain::Geometry, MakeItem({90, 2}), Mesh});
+		(void)Projection.Apply(BindMesh);
+		MirrorsMap();
+		const auto *StableBounds = Projection.GetCompactTraversal().front().MeshBounds;
+		RenderPublication MoveBounds{.Id = 102, .BaseId = 101, .Frame = MakeFrame()};
+		MoveBounds.MeshVertexUpdates.push_back({Mesh, 2, 0,
+			std::make_shared<const std::vector<RenderVertex>>(std::vector<RenderVertex>(1)),
+			{glm::vec3(-2.0f), glm::vec3(2.0f)}});
+		(void)Projection.Apply(MoveBounds);
+		Check(Projection.GetCompactTraversal().front().MeshBounds == StableBounds &&
+			StableBounds->Maximum.x == 2.0f,
+			"in-place mesh bounds updates retain a live compact traversal pointer");
+		Projection.Clear();
+		Check(Projection.GetCompactTraversal().empty(), "clearing projection retires compact traversal pointers");
+	}
+
 	void TestDeformableAndGuiContracts() {
 		using namespace gargantuan;
 		RenderProjection Projection;
@@ -558,6 +628,10 @@ namespace {
 			.Palette = {Skeleton, Palette},
 		});
 		const auto Changes = Projection.Apply(Initial);
+		Check(Projection.GetCompactTraversal().size() == 1 &&
+			Projection.GetCompactTraversal().front().Pose == Projection.GetAnimationPose(Object) &&
+			Projection.GetCompactTraversal().front().MeshBounds == Projection.GetMeshBounds(SourceMesh),
+			"compact traversal caches a coherent pose and source mesh bounds");
 		Check(Changes.AnimationPosesUpdated == 1 &&
 			Changes.PaletteUploadBytes == 2 * sizeof(RenderSkinPaletteEntry) &&
 			Projection.GetAnimationPose(Object) &&
@@ -660,11 +734,21 @@ namespace {
 			.Palette = {Skeleton, DeformedPalette},
 		});
 		(void)Projection.Apply(Deformed);
+		Check(Projection.GetCompactTraversal().size() == 1 &&
+			Projection.GetCompactTraversal().front().Pose == Projection.GetAnimationPose(Object) &&
+			Projection.GetCompactTraversal().front().Pose->PoseRevision == 2,
+			"existing pose updates retain a live compact traversal pointer");
 		Check(
 			Projection.BuildAnimationVisibilityFeedback(VisibleAnimationObjects, 1) &&
 				VisibleAnimationObjects == std::vector<ObjectId>{Object},
 			"GPU visibility bounds conservatively include palette deformation outside the bind-pose bounds"
 		);
+		RenderPublication RemovePose{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		RemovePose.AnimationPoseRemoves.push_back({Object});
+		(void)Projection.Apply(RemovePose);
+		Check(Projection.GetCompactTraversal().size() == 1 &&
+			Projection.GetCompactTraversal().front().Pose == nullptr,
+			"pose removal invalidates compact traversal without retaining a dangling pointer");
 	}
 
 	void TestEnvironmentLightingFoundation() {
@@ -1084,6 +1168,7 @@ int main() {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestCameraDepthConvention();
 		TestProjectionOrderingAndIdentity();
+		TestCompactTraversalOrderAndLifecycle();
 		TestDeformableAndGuiContracts();
 		TestAnimationPaletteContracts();
 		TestIncrementalPublisher();

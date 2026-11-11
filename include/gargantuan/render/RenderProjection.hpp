@@ -20,6 +20,14 @@ namespace gargantuan {
 		std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> Primitives;
 	};
 
+	struct RenderProjectedTraversal {
+		ObjectId Object;
+		const RenderProjectedObject *Projected = nullptr;
+		const RenderAnimationPoseUpdate *Pose = nullptr;
+		// Null denotes a primitive; its bounds remain pass-local.
+		const RenderBounds *MeshBounds = nullptr;
+	};
+
 	struct RenderProjectionChanges {
 		// Publication validation and committed projection mutation are distinct CPU costs.
 		std::uint64_t ValidationNanoseconds = 0;
@@ -69,6 +77,8 @@ namespace gargantuan {
 			return Ui ? *Ui : Empty;
 		}
 		[[nodiscard]] const std::unordered_map<ObjectId, RenderProjectedObject> &GetObjects() const { return Entries; }
+		// Mirrors GetObjects() iteration exactly until a structural publication changes it.
+		[[nodiscard]] const std::vector<RenderProjectedTraversal> &GetCompactTraversal() const;
 		[[nodiscard]] RenderSnapshotPtr BuildCompatibilitySnapshot() const;
 
 	  private:
@@ -96,6 +106,8 @@ namespace gargantuan {
 		std::vector<ObjectId> TouchedObjectScratch;
 		std::vector<RenderProjectedObject *> UpdatedEntryScratch;
 		std::vector<ObjectId> TouchedPoseScratch;
+		mutable std::vector<RenderProjectedTraversal> CompactTraversal;
+		mutable bool CompactTraversalValid = false;
 		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
 		RenderFrameState Frame;
 		std::shared_ptr<const RenderUiFrame> Ui;

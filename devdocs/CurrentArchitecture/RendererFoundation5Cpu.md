@@ -66,3 +66,54 @@ opaque-ordering pixel controls when changing draw order. F4's strict depth
 `LESS` winner is traversal-order dependent for coplanar surfaces; unrelated
 geometry may be reordered only under its conservative pairwise independence
 proof, or the original order must be retained.
+
+## Bounded source-kernel probe, 2026-11-11
+
+`tests/RendererCpuMicroprobe.cpp` copies the exact Foundation 3 and 4
+conservative camera-box test, and the two `PartUniforms` layouts and value
+packing for the untextured 50K fixture. It runs 0/50/100% culled variants in
+alternating kernel order, with no SDL calls. A local MSVC `/O2` build completed
+in 5.5 seconds; the timed run completed in 0.8 seconds. The first two rounds
+were treated as warmup. Each figure below is the median of 14 retained
+observations in milliseconds. The full raw samples, executable, and SHA-256
+hashes are in
+`C:/Users/aiden/.codex/artifacts/renderer-foundation5-20261111/cpu-microprobe`.
+
+| Culled | Cull only | F3 cull + 176-byte uniform | F4 cull + 224-byte uniform |
+| ---: | ---: | ---: | ---: |
+| 0% | 1.55 | 2.10 | 2.40 |
+| 50% | 1.06 | 1.32 | 1.54 |
+| 100% | 0.44 | 0.44 | 0.45 |
+
+The source file SHA-256 was
+`142C07FA5C953BF8D705E0DE22F3B0ABE7381DAD6B95A481C2463111FF33D4AC`;
+the executable SHA-256 was
+`A9DB6F209DF88F8D1B2932D7ED02EC383EA93FCF9ACB69E223EBB5D36C5D2AC4`.
+The extra uniform preparation/copy scales with visible objects and contributes
+roughly 0.22 ms at the 50% median in this local probe. It cannot explain the
+entire physical 1–2 ms F4 submission increase by itself. The real draw path
+also records GPU commands and binds state; those costs require the instrumented
+physical same-binary controls. This probe does not measure GPU execution,
+SDL uniform pushing, texture residency, shadow recording, or allocation.
+
+## Compact traversal experiment
+
+The renderer-owned projection can lazily mirror its `unordered_map` iteration
+order as a vector of object, pose, and mesh-bounds pointers. Existing object,
+pose, and mesh-bounds updates mutate map values in place, so the vector keeps
+its addresses. Structural create/remove, mesh create/remove, pose create/remove,
+full resync, snapshot application, and clear invalidate it. The next enabled
+opaque traversal rebuilds it in the map's current order. An invalid publication
+does not change either projection or traversal. No Engine Instance pointer or
+new authority enters the renderer.
+
+`--sdl-compact-traversal=on|off` is a same-binary experiment. Off uses the
+original map walk, pose lookup, and mesh-bounds lookup. On visits the cached
+records in identical order and retains the same culling, grouping, native
+resource lookup, material, draw, and transparent behavior. The cache is built
+only when enabled; static frames reuse it, while structural churn pays a
+rebuild. Compare alternating on/off rows for 0/50/100% culling, static,
+mostly-static, dynamic, and mixed scenes. A timing improvement requires
+unchanged cull and draw counters and exact opaque-order pixel controls.
+Neither a quicker isolated CPU walk nor reduced submission alone establishes
+a completed-frame improvement.

@@ -52,7 +52,8 @@ namespace gargantuan {
 
 	class EditorViewportRenderer final {
 	  public:
-		EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height, bool EnableHdrScene = true);
+		EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height, bool EnableHdrScene = true,
+			bool EnableInstancing = false);
 		~EditorViewportRenderer();
 
 		EditorViewportRenderer(const EditorViewportRenderer &) = delete;

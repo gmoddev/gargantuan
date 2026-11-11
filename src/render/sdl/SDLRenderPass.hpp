@@ -21,11 +21,14 @@ namespace gargantuan {
 	class SDLTextureCache;
 	class SDLMaterialSamplers;
 	class SDLSpotShadowAtlas;
+	class SDLInstanceGpuCache;
 	struct SDLRendererMetrics;
 
 	struct SDLFrameContext {
 		bool EnableOpaqueGrouping = true;
 		bool ProfileDetailed = false;
+		bool UseCompactTraversal = false;
+		bool EnableInstancing = false;
 		SDLFrameContext(
 			const RenderProjection &RenderState,
 			SDLMeshCache &MeshResourcesValue,
@@ -39,6 +42,7 @@ namespace gargantuan {
 		SDLMeshCache &MeshResources;
 		SDLSkinPaletteCache &SkinPalettes;
 		SDLTextureCache *TextureResources = nullptr;
+		SDLInstanceGpuCache *InstanceResources = nullptr;
 		SDLMaterialSamplers *MaterialSamplers = nullptr;
 		SDLImageBasedLightingBindings EnvironmentLighting;
 		SDLReflectionProbeBindings ReflectionProbes;
@@ -74,8 +78,9 @@ namespace gargantuan {
 
 		virtual ~SDLRenderPass() = default;
 		virtual SDL_GPURenderPass *Draw(SDL_GPUDevice *Gpu, SDLFrameContext &Context) = 0;
-		virtual void Resize(SDL_GPUDevice *, std::uint32_t, std::uint32_t) {}
 		virtual void OnFrameSubmitted() {}
+		virtual void OnFrameAborted() {}
+		virtual void Resize(SDL_GPUDevice *, std::uint32_t, std::uint32_t) {}
 		virtual void Destroy(SDL_GPUDevice *Gpu);
 	};
 

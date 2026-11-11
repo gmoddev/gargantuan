@@ -73,6 +73,8 @@ namespace {
 		std::optional<bool> SdlHdr;
 		bool SdlOpaqueGrouping = true;
 		bool SdlProfileDetailed = false;
+		bool SdlCompactTraversal = false;
+		bool SdlInstancing = false;
 		std::uint32_t CulledPercent = 50;
 		std::optional<std::size_t> Lights;
 		bool StaticLights = false;
@@ -87,6 +89,12 @@ namespace {
 	constexpr std::array<std::string_view, 5> DetailedCounterNames{
 		"CameraVisitedObjects", "CameraHiddenObjects", "CameraFrustumTests",
 		"CameraMeshLookups", "WorldPrimitiveDraws"
+	};
+	constexpr std::array<std::string_view, 4> InstanceCounterNames{
+		"InstancedDrawCalls", "InstancedObjects", "InstanceUploadBytes", "VisibleIndexUploadBytes"
+	};
+	constexpr std::array<std::string_view, 3> InstancePhaseNames{
+		"InstanceApplication", "InstanceUpload", "InstancePreparation"
 	};
 
 	struct ScenarioCase {
@@ -138,6 +146,8 @@ namespace {
 					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--shadows=on|off] "
 					"[--incremental] [--synchronize=on|off|bounded-2] [--capture=path-prefix] [--samples=csv-path] "
 					"[--sdl-hdr=on|off] [--sdl-opaque-grouping=off] [--sdl-profile=on|off] "
+					"[--sdl-compact-traversal=on|off] [--sdl-instancing=on|off] "
+					"[--scenario=culled --culled-percent=0|50|100] "
 					"[--scenario=culled --culled-percent=0|50|100] "
 					"[--scenario=local-lights --lights=N [--static-lights]]\n";
 				std::exit(0);
@@ -154,6 +164,10 @@ namespace {
 			else if (Argument == "--sdl-opaque-grouping=off") ParsedOptions.SdlOpaqueGrouping = false;
 			else if (Argument == "--sdl-profile=on") ParsedOptions.SdlProfileDetailed = true;
 			else if (Argument == "--sdl-profile=off") ParsedOptions.SdlProfileDetailed = false;
+			else if (Argument == "--sdl-compact-traversal=on") ParsedOptions.SdlCompactTraversal = true;
+			else if (Argument == "--sdl-compact-traversal=off") ParsedOptions.SdlCompactTraversal = false;
+			else if (Argument == "--sdl-instancing=on") ParsedOptions.SdlInstancing = true;
+			else if (Argument == "--sdl-instancing=off") ParsedOptions.SdlInstancing = false;
 			else if (auto ParsedValue = Value("--culled-percent=")) {
 				if (*ParsedValue == "0") ParsedOptions.CulledPercent = 0;
 				else if (*ParsedValue == "50") ParsedOptions.CulledPercent = 50;
@@ -190,6 +204,10 @@ namespace {
 			throw std::invalid_argument("--sdl-hdr requires --backend=sdl");
 		if (ParsedOptions.SdlProfileDetailed && (!ParsedOptions.Incremental || ParsedOptions.Backend != "sdl"))
 			throw std::invalid_argument("--sdl-profile requires an incremental SDL timing workload");
+		if (ParsedOptions.SdlCompactTraversal && (!ParsedOptions.Incremental || ParsedOptions.Backend != "sdl"))
+			throw std::invalid_argument("--sdl-compact-traversal requires an incremental SDL timing workload");
+		if (ParsedOptions.SdlInstancing && (!ParsedOptions.Incremental || ParsedOptions.Backend != "sdl"))
+			throw std::invalid_argument("--sdl-instancing requires an incremental SDL timing workload");
 		if (ParsedOptions.CulledPercent != 50 && ParsedOptions.Scenario != "culled")
 			throw std::invalid_argument("--culled-percent requires --scenario=culled");
 #if !defined(GARGANTUAN_WITH_FILAMENT)
@@ -695,6 +713,8 @@ namespace {
 				.EnableHdrScene = Settings.SdlHdr.value_or(true),
 				.EnableOpaqueGrouping = Settings.SdlOpaqueGrouping,
 				.ProfileDetailed = Settings.SdlProfileDetailed,
+				.UseCompactTraversal = Settings.SdlCompactTraversal,
+				.EnableInstancing = Settings.SdlInstancing,
 			});
 			Sdl = Renderer.get();
 			Backend = std::move(Renderer);
@@ -743,9 +763,12 @@ namespace {
 		const auto Baseline = Counters();
 		const auto DetailedBaseline = Sdl ? std::optional(Sdl->GetMetrics()) : std::nullopt;
 		auto DetailedPrevious = DetailedBaseline;
+		auto InstancePrevious = DetailedBaseline;
 		std::vector<double> FixtureTimes, FrameTimes, ProjectionTimes, ApplyTimes, SubmitTimes, WaitTimes;
 		std::array<std::vector<double>, DetailedPhaseNames.size()> DetailedTimes;
 		std::array<std::vector<std::uint64_t>, DetailedCounterNames.size()> DetailedCounts;
+		std::array<std::vector<std::uint64_t>, InstanceCounterNames.size()> InstanceCounts;
+		std::array<std::vector<double>, InstancePhaseNames.size()> InstanceTimes;
 		FixtureTimes.reserve(Settings.Frames);
 		FrameTimes.reserve(Settings.Frames);
 		std::uint64_t LogicalUpdates = 0;
@@ -769,6 +792,25 @@ namespace {
 			if (CompletePairs) WaitTimes.push_back(DrainFrame ? Milliseconds(EndFrame - EndDraw) : 0.0);
 			if (Sdl) {
 				const auto Metrics = Sdl->GetMetrics();
+				if (Settings.SdlInstancing) {
+					const std::array<std::uint64_t, InstancePhaseNames.size()> InstanceNanoseconds{
+						Metrics.LastInstanceApplicationNanoseconds, Metrics.LastInstanceUploadNanoseconds,
+						Metrics.LastInstancePreparationNanoseconds};
+					for (std::size_t Index = 0; Index < InstanceNanoseconds.size(); ++Index)
+						InstanceTimes[Index].push_back(static_cast<double>(InstanceNanoseconds[Index]) / 1'000'000.0);
+				}
+				const std::array<std::uint64_t, InstanceCounterNames.size()> InstanceValues{
+					Metrics.InstancedDrawCalls, Metrics.InstancedObjects,
+					Metrics.InstanceUploadBytes, Metrics.VisibleIndexUploadBytes};
+				const std::array<std::uint64_t, InstanceCounterNames.size()> PreviousInstanceValues{
+					InstancePrevious->InstancedDrawCalls, InstancePrevious->InstancedObjects,
+					InstancePrevious->InstanceUploadBytes, InstancePrevious->VisibleIndexUploadBytes};
+				for (std::size_t Index = 0; Index < InstanceValues.size(); ++Index) {
+					if (InstanceValues[Index] < PreviousInstanceValues[Index])
+						throw std::logic_error("instance counter decreased");
+					InstanceCounts[Index].push_back(InstanceValues[Index] - PreviousInstanceValues[Index]);
+				}
+				InstancePrevious = Metrics;
 				const std::array<std::uint64_t, DetailedPhaseNames.size()> PhaseNanoseconds{
 						Metrics.LastShadowClassificationNanoseconds, Metrics.LastProjectionValidationNanoseconds,
 						Metrics.LastProjectionMutationNanoseconds, Metrics.LastMeshApplicationNanoseconds,
@@ -784,7 +826,7 @@ namespace {
 					// The first twelve clocks are always measured. Object-path
 					// clocks are opt-in and must be NA when profiling is off.
 					if (Index >= 12 && !Settings.SdlProfileDetailed) continue;
-						DetailedTimes[Index].push_back(static_cast<double>(PhaseNanoseconds[Index]) / 1'000'000.0);
+					DetailedTimes[Index].push_back(static_cast<double>(PhaseNanoseconds[Index]) / 1'000'000.0);
 				}
 				if (Settings.SdlProfileDetailed) {
 					const std::array<std::uint64_t, DetailedCounterNames.size()> Counts{
@@ -893,12 +935,19 @@ namespace {
 			std::cout << ',' << CounterDelta(Baseline.DirectionalShadow[Index], Final.DirectionalShadow[Index]);
 		std::cout << ',' << (Sdl ? (Settings.SdlOpaqueGrouping ? "on" : "off") : "NA")
 			<< ',' << (Sdl ? (Settings.SdlProfileDetailed ? "on" : "off") : "NA")
-			<< ',' << (Scenario.Name == "culled" ? std::to_string(Settings.CulledPercent) : "NA");
+			<< ',' << (Scenario.Name == "culled" ? std::to_string(Settings.CulledPercent) : "NA")
+			<< ',' << (Sdl ? (Settings.SdlCompactTraversal ? "on" : "off") : "NA")
+			<< ',' << (Sdl ? (Settings.SdlInstancing ? "on" : "off") : "NA");
 		for (const auto &Times : DetailedTimes) std::cout << ',' << MeanOrNa(Times);
 		for (const auto &Counts : DetailedCounts) {
 			if (Counts.empty()) std::cout << ",NA";
 			else std::cout << ',' << std::accumulate(Counts.begin(), Counts.end(), std::uint64_t{});
 		}
+		for (const auto &Counts : InstanceCounts) {
+			if (Counts.empty()) std::cout << ",NA";
+			else std::cout << ',' << std::accumulate(Counts.begin(), Counts.end(), std::uint64_t{});
+		}
+		for (const auto &Times : InstanceTimes) std::cout << ',' << MeanOrNa(Times);
 		std::cout << '\n';
 		if (Samples) {
 			for (std::size_t Frame = 0; Frame < FrameTimes.size(); ++Frame) {
@@ -920,7 +969,19 @@ namespace {
 					if (Frame < Counts.size()) *Samples << Counts[Frame];
 					else *Samples << "NA";
 				}
-				*Samples << ',' << (Scenario.Name == "culled" ? std::to_string(Settings.CulledPercent) : "NA");
+				for (const auto &Counts : InstanceCounts) {
+					*Samples << ',';
+					if (Frame < Counts.size()) *Samples << Counts[Frame];
+					else *Samples << "NA";
+				}
+				for (const auto &Times : InstanceTimes) {
+					*Samples << ',';
+					if (Frame < Times.size()) *Samples << Times[Frame];
+					else *Samples << "NA";
+				}
+				*Samples << ',' << (Scenario.Name == "culled" ? std::to_string(Settings.CulledPercent) : "NA")
+					<< ',' << (Sdl ? (Settings.SdlCompactTraversal ? "on" : "off") : "NA")
+					<< ',' << (Sdl ? (Settings.SdlInstancing ? "on" : "off") : "NA");
 				*Samples << '\n';
 			}
 			Samples->flush();
@@ -1196,9 +1257,11 @@ int main(int ArgumentCount, char **Arguments) {
 				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs,SdlHdrRequested,SdlHdrActive,SdlHdrSceneBytes,SdlSceneResolveDraws,"
 				"AuthoredLocalLights,LocalLightMovement,LocalLightGridMeanMs,LocalLightUploadBytes,VisibleLocalLights,"
 				"OverBudgetLightTiles,DroppedLightTileIndices,MaterialViewBytes,MaterialSourceBytes,MaterialViewFallbacks,MaterialUploadStagingBytes,"
-				"IblBuilds,IblPreprocessPasses,ShadowMapBuilds,ShadowCacheHits,ShadowMapPasses,ShadowCasterDraws,SdlOpaqueGrouping,SdlProfileDetailed,CulledPercent";
+				"IblBuilds,IblPreprocessPasses,ShadowMapBuilds,ShadowCacheHits,ShadowMapPasses,ShadowCasterDraws,SdlOpaqueGrouping,SdlProfileDetailed,CulledPercent,SdlCompactTraversal,SdlInstancing";
 			for (const auto Name : DetailedPhaseNames) std::cout << ',' << Name << "MeanMs";
 			for (const auto Name : DetailedCounterNames) std::cout << ',' << Name;
+			for (const auto Name : InstanceCounterNames) std::cout << ',' << Name;
+			for (const auto Name : InstancePhaseNames) std::cout << ',' << Name << "MeanMs";
 			std::cout << '\n';
 			std::ofstream Samples;
 			if (BenchmarkOptions.SamplesPath) {
@@ -1210,7 +1273,9 @@ int main(int ArgumentCount, char **Arguments) {
 					"FrameMs,ProjectionMs,ApplyMs,SubmitMs,WaitMs,LocalLightGridMs";
 				for (const auto Name : DetailedPhaseNames) Samples << ',' << Name << "Ms";
 				for (const auto Name : DetailedCounterNames) Samples << ',' << Name;
-				Samples << ",CulledPercent";
+				for (const auto Name : InstanceCounterNames) Samples << ',' << Name;
+				for (const auto Name : InstancePhaseNames) Samples << ',' << Name << "Ms";
+				Samples << ",CulledPercent,SdlCompactTraversal,SdlInstancing";
 				Samples << '\n' << std::setprecision(std::numeric_limits<double>::max_digits10);
 			}
 			for (const auto &Scenario : BuildCases(BenchmarkOptions))

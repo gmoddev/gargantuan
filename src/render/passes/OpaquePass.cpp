@@ -4,6 +4,7 @@
 #include "gargantuan/render/SDLRenderer.hpp"
 #include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLLocalLightGrid.hpp"
+#include "render/sdl/SDLInstanceGpuCache.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
@@ -238,19 +239,31 @@ namespace gargantuan {
 			const RenderAnimationPoseUpdate *Pose;
 			float Depth;
 		};
+		struct InstanceBatch {
+			const SDLGpuMesh *Mesh = nullptr;
+			std::uint32_t FirstIndex = 0;
+			std::uint32_t IndexCount = 0;
+			std::uint32_t FirstInstance = 0;
+			std::uint32_t Count = 0;
+			bool DoubleSided = false;
+		};
 
 		OpaquePass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat, SDLRendererMetrics *Metrics)
-			: LocalLights(gpu) {
+			: LocalLights(gpu), VisibleInstances(gpu) {
 			try {
+				constexpr auto ProbeUsage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+				ProbeArrayShader = SDL_GPUTextureSupportsFormat(gpu, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+					SDL_GPU_TEXTURETYPE_CUBE_ARRAY, ProbeUsage);
 				Shader.VertexFilepath = GetSDLShaderPath("opaque.vert");
 				Shader.VertexUniformBufferCount = 2;
 				Shader.VertexStorageBufferCount = 1;
-				Shader.FragmentFilepath = GetSDLShaderPath("opaque.frag");
+				Shader.FragmentFilepath = GetSDLShaderPath(ProbeArrayShader ? "opaque.frag" : "opaque-portable.frag");
 				Shader.FragmentUniformBufferCount = 1;
 				Shader.FragmentSamplerCount = 13;
 				Shader.FragmentStorageBufferCount = 3;
 				OutputMode = swapchainFormat == SDLHdrSceneFormat ? 2.0f :
 					SDLTargetEncodesSrgb(swapchainFormat) ? 0.0f : 1.0f;
+				InstanceColorFormat = swapchainFormat;
 				Shader.Init(gpu, Metrics);
 				auto Builder = SDLPipelineBuilder()
 					.SetVertexShader(Shader.VertexShader)
@@ -285,6 +298,12 @@ namespace gargantuan {
 
 		void Destroy(SDL_GPUDevice *Gpu) override {
 			LocalLights.Destroy();
+			VisibleInstances.Destroy();
+			if (InstancedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, InstancedPipeline);
+			if (InstancedDoubleSidedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, InstancedDoubleSidedPipeline);
+			InstancedPipeline = nullptr;
+			InstancedDoubleSidedPipeline = nullptr;
+			InstancedShader.Destroy(Gpu);
 			if (DoubleSidedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, DoubleSidedPipeline);
 			if (BlendedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, BlendedPipeline);
 			if (BlendedDoubleSidedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, BlendedDoubleSidedPipeline);
@@ -293,6 +312,9 @@ namespace gargantuan {
 			BlendedDoubleSidedPipeline = nullptr;
 			SDLRenderPass::Destroy(Gpu);
 		}
+
+		void OnFrameSubmitted() override { VisibleInstances.OnFrameSubmitted(); }
+		void OnFrameAborted() override { VisibleInstances.OnFrameAborted(); }
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
 			SDL_GPUColorTargetInfo colorTarget = {
@@ -317,6 +339,26 @@ namespace gargantuan {
 
 			auto *White = context.TextureResources->GetWhiteTexture();
 			LocalLights.Prepare(context.Projection.GetFrame(), context.Metrics, context.SpotShadowAtlas);
+			if (context.EnableInstancing && context.InstanceResources &&
+				context.InstanceResources->GetBuffer() && EnsureInstancedPipeline(gpu, context.Metrics)) {
+				try {
+					const auto InstanceStart = std::chrono::steady_clock::now();
+					PrepareInstanceBatches(context);
+					if (context.Metrics) context.Metrics->LastInstancePreparationNanoseconds =
+						std::chrono::duration_cast<std::chrono::nanoseconds>(
+							std::chrono::steady_clock::now() - InstanceStart).count();
+				}
+				catch (const std::exception &Error) {
+					LOG_WARN(App, "[Renderer:Instances] Disabled optional instancing: %s", Error.what());
+					VisibleInstances.OnFrameAborted();
+					InstancingDisabled = true;
+					InstanceActions.clear();
+					InstanceBatches.clear();
+				}
+			} else {
+				InstanceActions.clear();
+				InstanceBatches.clear();
+			}
 			auto *Pass = SDL_BeginGPURenderPass(context.Commands, &colorTarget, 1, &depthTarget);
 			if (!Pass) throw std::runtime_error("[Renderer:Material] Could not begin the world render pass");
 			try {
@@ -332,6 +374,126 @@ namespace gargantuan {
 		}
 
 	  private:
+		bool EnsureInstancedPipeline(SDL_GPUDevice *Gpu, SDLRendererMetrics *Metrics) {
+			if (InstancingDisabled) return false;
+			if (InstancedPipeline && InstancedDoubleSidedPipeline) return true;
+			if (InstancedPipelineFailed) return false;
+			try {
+				InstancedShader.VertexFilepath = GetSDLShaderPath("opaque-instanced.vert");
+				InstancedShader.VertexUniformBufferCount = 1;
+				InstancedShader.VertexStorageBufferCount = 2;
+				InstancedShader.FragmentFilepath = GetSDLShaderPath(
+					ProbeArrayShader ? "opaque.frag" : "opaque-portable.frag");
+				InstancedShader.FragmentUniformBufferCount = 1;
+				InstancedShader.FragmentSamplerCount = 13;
+				InstancedShader.FragmentStorageBufferCount = 3;
+				InstancedShader.Init(Gpu, Metrics);
+				auto Builder = SDLPipelineBuilder()
+					.SetVertexShader(InstancedShader.VertexShader)
+					.SetFragmentShader(InstancedShader.FragmentShader)
+					.SetColorEnabled(true)
+					.SetColorFormat(InstanceColorFormat)
+					.SetBlendingEnabled(false)
+					.SetDepthEnabled(true)
+					.SetDepthFormat(SDLSceneDepthFormat);
+				InstancedPipeline = Builder.Build(Gpu, Metrics);
+				auto DoubleSided = Builder.BuildInfo();
+				DoubleSided.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+				InstancedDoubleSidedPipeline = SDL_CreateGPUGraphicsPipeline(Gpu, &DoubleSided);
+				if (InstancedDoubleSidedPipeline && Metrics) ++Metrics->PipelineCreations;
+				if (!InstancedPipeline || !InstancedDoubleSidedPipeline)
+					throw std::runtime_error(std::format("Could not create instanced pipelines: {}", SDL_GetError()));
+				return true;
+			} catch (const std::exception &Error) {
+				LOG_WARN(App, "[Renderer:Instances] Disabled optional instancing: %s", Error.what());
+				if (InstancedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, InstancedPipeline);
+				if (InstancedDoubleSidedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, InstancedDoubleSidedPipeline);
+				InstancedPipeline = nullptr;
+				InstancedDoubleSidedPipeline = nullptr;
+				InstancedShader.Destroy(Gpu);
+				InstancedPipelineFailed = true;
+				return false;
+			}
+		}
+
+		void PrepareInstanceBatches(SDLFrameContext &Context) {
+			const auto &Ordered = Context.Projection.GetCompactTraversal();
+			InstanceActions.assign(Ordered.size(), -1);
+			InstanceBatches.clear();
+			InstanceCoverageGrid.Clear();
+			VisibleInstances.BeginFrame();
+			const auto &Frame = Context.Projection.GetFrame();
+			const auto Planes = GetClipPlanes(Frame.Camera);
+			std::optional<CoverageProjector> Projector;
+			if (GroupingSupported && Context.Width && Context.Height) {
+				const glm::dmat4 Projection(Frame.Camera.ProjectionMatrix), View(Frame.Camera.ViewMatrix);
+				if (BoundedMatrix(Projection) && BoundedMatrix(View))
+					Projector = CoverageProjector{Projection * View, Absolute(Projection) * Absolute(View),
+						{0.25 / Context.Width, 0.25 / Context.Height}};
+			}
+			std::vector<std::pair<std::size_t, std::uint32_t>> Pending;
+			Pending.reserve(MAX_OPAQUE_BATCH_OBJECTS);
+			const SDLGpuMesh *PendingMesh = nullptr;
+			std::uint32_t PendingFirst = 0, PendingCount = 0;
+			bool PendingDoubleSided = false;
+			RenderShadingModel PendingShading = RenderShadingModel::Legacy;
+			const auto Flush = [&] {
+				if (Pending.size() > 1) {
+					const auto BatchIndex = static_cast<std::int32_t>(InstanceBatches.size());
+					const auto FirstInstance = static_cast<std::uint32_t>(VisibleInstances.Size());
+					for (const auto &[Position, Slot] : Pending) {
+						InstanceActions[Position] = -2;
+						(void)VisibleInstances.Append(Slot);
+					}
+					InstanceActions[Pending.front().first] = BatchIndex;
+					InstanceBatches.push_back({PendingMesh, PendingFirst, PendingCount, FirstInstance,
+						static_cast<std::uint32_t>(Pending.size()), PendingDoubleSided});
+				}
+				Pending.clear();
+				InstanceCoverageGrid.Clear();
+			};
+			for (std::size_t Position = 0; Position < Ordered.size(); ++Position) {
+				const auto &Record = Ordered[Position];
+				const auto &Projected = *Record.Projected;
+				if (!Projected.Visible) { Flush(); continue; }
+				const auto &Item = Projected.Item;
+				const auto *Bounds = Projected.Mesh ? Record.MeshBounds : &PrimitiveBounds;
+				if (Bounds && (!Record.Pose || Record.Pose->Mode != RenderAnimationSkinningMode::GpuPalette) &&
+					OutsideView(Planes, Item.ModelMatrix, *Bounds)) continue;
+				const auto *Mesh = Projected.Mesh
+					? Context.MeshResources.Find(*Projected.Mesh) : Context.MeshResources.Find(Item.Geometry);
+				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer || Record.Pose || Item.CastShadow ||
+					!Mesh->ImmutablePositionBounds || !Projector ||
+					(Projected.Primitives && Projected.Primitives->size() != 1)) { Flush(); continue; }
+				const auto &Material = Projected.Primitives ? Projected.Primitives->front().Material : Projected.Material;
+				if (Material.OpacityMode != RenderOpacityMode::Opaque || Material.BaseColorTexture ||
+					Material.NormalTexture || Material.MetallicRoughnessTexture || Material.EmissiveTexture ||
+					Material.OcclusionTexture) { Flush(); continue; }
+				const auto Slot = Context.InstanceResources->Find(Record.Object);
+				if (!Slot) { Flush(); continue; }
+				const auto First = Projected.Primitives ? Projected.Primitives->front().FirstIndex : 0;
+				const auto Count = Projected.Primitives ? Projected.Primitives->front().IndexCount : Mesh->IndexCount;
+				const auto Coverage = Projector->Project(Item.ModelMatrix, *Mesh->ImmutablePositionBounds);
+				if (!Coverage || Coverage->CellCount() > MAX_CELLS_PER_OBJECT) { Flush(); continue; }
+				if (!Pending.empty() && (Mesh != PendingMesh || First != PendingFirst || Count != PendingCount ||
+					Material.DoubleSided != PendingDoubleSided || Material.ShadingModel != PendingShading)) Flush();
+				if (Pending.size() == MAX_OPAQUE_BATCH_OBJECTS) Flush();
+				if (!Pending.empty() && InstanceCoverageGrid.Check(*Coverage, nullptr) != OpaqueCoverageGrid::Admission::Safe)
+					Flush();
+				if (Pending.empty()) {
+					PendingMesh = Mesh;
+					PendingFirst = First;
+					PendingCount = Count;
+					PendingDoubleSided = Material.DoubleSided;
+					PendingShading = Material.ShadingModel;
+				}
+				InstanceCoverageGrid.Add(*Coverage, static_cast<std::uint16_t>(Pending.size()));
+				Pending.emplace_back(Position, *Slot);
+			}
+			Flush();
+			if (!InstanceBatches.empty()) VisibleInstances.Upload(Context.Commands, Context.Metrics);
+		}
+
 		void DrawWorld(SDL_GPUDevice *Gpu, SDL_GPURenderPass *Pass, SDLFrameContext &Context, SDL_GPUTextureSamplerBinding ShadowBinding,
 			SDL_GPUTexture *White) {
 			using Clock = std::chrono::steady_clock;
@@ -395,7 +557,9 @@ namespace gargantuan {
 				if (MaterialPipeline != BoundPipeline) {
 					SDL_BindGPUGraphicsPipeline(Pass, MaterialPipeline);
 					const auto LightBuffers = LocalLights.GetBuffers();
-					const std::array<SDL_GPUBuffer *, 3> FragmentBuffers{LightBuffers[0], LightBuffers[1], Context.ReflectionProbes.Records};
+					const std::array<SDL_GPUBuffer *, 3> FragmentBuffers{
+						LightBuffers[0], LightBuffers[1],
+						ProbeArrayShader ? Context.ReflectionProbes.Records : LightBuffers[0]};
 					SDL_BindGPUFragmentStorageBuffers(Pass, 0, FragmentBuffers.data(), FragmentBuffers.size());
 					BoundPipeline = MaterialPipeline;
 					BoundMesh = nullptr;
@@ -465,7 +629,8 @@ namespace gargantuan {
 							{Textures[3], Samplers[3]}, {Textures[4], Samplers[4]}, Context.EnvironmentLighting.Irradiance,
 							Context.EnvironmentLighting.Reflections, Context.EnvironmentLighting.BrdfLut,
 							{Context.CascadeShadowTexture, Context.ShadowSampler}, {Context.LocalShadowTexture, Context.ShadowSampler},
-							Context.ReflectionProbes.Irradiance, Context.ReflectionProbes.Reflections,
+							ProbeArrayShader ? Context.ReflectionProbes.Irradiance : Context.EnvironmentLighting.Irradiance,
+							ProbeArrayShader ? Context.ReflectionProbes.Reflections : Context.EnvironmentLighting.Reflections,
 						}};
 						SDL_BindGPUFragmentSamplers(Pass, 0, Bindings.data(), Bindings.size());
 						BoundTextures = Textures;
@@ -498,6 +663,50 @@ namespace gargantuan {
 						++Context.Metrics->WorldPrimitiveDraws;
 						Context.Metrics->LastWorldDrawRecordingNanoseconds += ElapsedNanoseconds(RecordingStart);
 					}
+				}
+			};
+			const auto DrawInstanceBatch = [&](const InstanceBatch &Batch) {
+				auto *Selected = Batch.DoubleSided ? InstancedDoubleSidedPipeline : InstancedPipeline;
+				SDL_BindGPUGraphicsPipeline(Pass, Selected);
+				const auto LightBuffers = LocalLights.GetBuffers();
+				const std::array<SDL_GPUBuffer *, 3> FragmentBuffers{
+					LightBuffers[0], LightBuffers[1],
+					ProbeArrayShader ? Context.ReflectionProbes.Records : LightBuffers[0]};
+				SDL_BindGPUFragmentStorageBuffers(Pass, 0, FragmentBuffers.data(), FragmentBuffers.size());
+				BoundPipeline = Selected;
+				BoundMesh = nullptr;
+				BoundObject = nullptr;
+				BoundPalette = nullptr;
+				BoundTextures = {};
+				BoundSamplers = {};
+				ResolvedMaterial = nullptr;
+				if (Context.Metrics) ++Context.Metrics->PipelineSwitches;
+				const SDL_GPUBufferBinding VertexBinding{.buffer = Batch.Mesh->VertexBuffer};
+				const SDL_GPUBufferBinding IndexBinding{.buffer = Batch.Mesh->IndexBuffer};
+				SDL_BindGPUVertexBuffers(Pass, 0, &VertexBinding, 1);
+				SDL_BindGPUIndexBuffer(Pass, &IndexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+				if (Context.Metrics) ++Context.Metrics->WorldGeometryBindings;
+				const std::array<SDL_GPUBuffer *, 2> Storage{
+					Context.InstanceResources->GetBuffer(), VisibleInstances.GetBuffer()};
+				SDL_BindGPUVertexStorageBuffers(Pass, 0, Storage.data(), Storage.size());
+				const std::array<SDL_GPUTextureSamplerBinding, 13> Bindings{{
+					ShadowBinding, {White, DefaultSampler}, {White, DefaultSampler}, {White, DefaultSampler},
+					{White, DefaultSampler}, {White, DefaultSampler}, Context.EnvironmentLighting.Irradiance,
+					Context.EnvironmentLighting.Reflections, Context.EnvironmentLighting.BrdfLut,
+					{Context.CascadeShadowTexture, Context.ShadowSampler},
+					{Context.LocalShadowTexture, Context.ShadowSampler},
+					ProbeArrayShader ? Context.ReflectionProbes.Irradiance : Context.EnvironmentLighting.Irradiance,
+					ProbeArrayShader ? Context.ReflectionProbes.Reflections : Context.EnvironmentLighting.Reflections,
+				}};
+				SDL_BindGPUFragmentSamplers(Pass, 0, Bindings.data(), Bindings.size());
+				if (Context.Metrics) ++Context.Metrics->WorldMaterialBindings;
+				SDL_DrawGPUIndexedPrimitives(Pass, Batch.IndexCount, Batch.Count, Batch.FirstIndex, 0,
+					Batch.FirstInstance);
+				if (Context.Metrics) {
+					++Context.Metrics->DrawCalls;
+					++Context.Metrics->InstancedDrawCalls;
+					Context.Metrics->InstancedObjects += Batch.Count;
+					if (Detailed) ++Context.Metrics->WorldPrimitiveDraws;
 				}
 			};
 			auto ForPrimitives = [](const WorldDraw &Draw, auto &&Visit) {
@@ -580,23 +789,32 @@ namespace gargantuan {
 			};
 
 			const auto TraversalStart = Detailed ? Clock::now() : Clock::time_point{};
-			for (const auto &[Object, Projected] : Context.Projection.GetObjects()) {
+			const auto VisitObject = [&](std::size_t Position, ObjectId Object, const RenderProjectedObject &Projected,
+				const RenderAnimationPoseUpdate *CachedPose, const RenderBounds *CachedBounds, bool Cached) {
 				if (Detailed) ++Context.Metrics->CameraVisitedObjects;
+				if (Position < InstanceActions.size() && InstanceActions[Position] != -1) {
+					if (InstanceActions[Position] >= 0) {
+						FlushOpaque();
+						DrawInstanceBatch(InstanceBatches[static_cast<std::size_t>(InstanceActions[Position])]);
+					}
+					return;
+				}
 				if (!Projected.Visible) {
 					if (Detailed) ++Context.Metrics->CameraHiddenObjects;
-					continue;
+					return;
 				}
 				const auto CullStart = Detailed ? Clock::now() : Clock::time_point{};
 				const auto &Item = Projected.Item;
-				const auto *Pose = Context.Projection.GetAnimationPose(Object);
-				const auto *Bounds = Projected.Mesh ? Context.Projection.GetMeshBounds(*Projected.Mesh) : &PrimitiveBounds;
+				const auto *Pose = Cached ? CachedPose : Context.Projection.GetAnimationPose(Object);
+				const auto *Bounds = Projected.Mesh
+					? (Cached ? CachedBounds : Context.Projection.GetMeshBounds(*Projected.Mesh)) : &PrimitiveBounds;
 				const bool TestFrustum = Bounds && (!Pose || Pose->Mode != RenderAnimationSkinningMode::GpuPalette);
 				if (TestFrustum && Detailed) ++Context.Metrics->CameraFrustumTests;
 				const bool Culled = TestFrustum && OutsideView(Planes, Item.ModelMatrix, *Bounds);
 				if (Detailed) Context.Metrics->LastCameraCullNanoseconds += ElapsedNanoseconds(CullStart);
 				if (Culled) {
 					if (Context.Metrics) ++Context.Metrics->CameraCulledObjects;
-					continue;
+					return;
 				}
 				const auto ResidencyStart = Detailed ? Clock::now() : Clock::time_point{};
 				if (Detailed) ++Context.Metrics->CameraMeshLookups;
@@ -606,14 +824,14 @@ namespace gargantuan {
 				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer) {
 					LOG_WARN(App, "[Renderer:Material] Publication %llu skipped ObjectId %u:%u with unavailable GPU geometry",
 						static_cast<unsigned long long>(Context.Projection.GetLastPublicationId()), Object.Slot, Object.Generation);
-					continue;
+					return;
 				}
 
 				WorldDraw Draw{&Projected, Mesh, Pose, 0.0f};
 				const auto GroupingStart = Detailed ? Clock::now() : Clock::time_point{};
 				const bool Batched = TryBatchOpaque(Draw);
 				if (Detailed) Context.Metrics->LastOpaqueGroupingNanoseconds += ElapsedNanoseconds(GroupingStart);
-				if (Batched) continue;
+				if (Batched) return;
 				FlushOpaque();
 				bool HasTransparent = false;
 				ForPrimitives(Draw, [&](std::uint32_t First, std::uint32_t Count, const RenderMaterialState &Material) {
@@ -626,6 +844,15 @@ namespace gargantuan {
 					Draw.Depth = std::isfinite(Depth) ? Depth : 0.0f;
 					TransparentDraws.push_back(Draw);
 				}
+			};
+			if (Context.UseCompactTraversal) {
+				std::size_t Position = 0;
+				for (const auto &Record : Context.Projection.GetCompactTraversal())
+					VisitObject(Position++, Record.Object, *Record.Projected, Record.Pose, Record.MeshBounds, true);
+			} else {
+				std::size_t Position = 0;
+				for (const auto &[Object, Projected] : Context.Projection.GetObjects())
+					VisitObject(Position++, Object, Projected, nullptr, nullptr, false);
 			}
 			FlushOpaque();
 			if (Detailed) Context.Metrics->LastCameraTraversalNanoseconds = ElapsedNanoseconds(TraversalStart);
@@ -647,10 +874,21 @@ namespace gargantuan {
 		SDL_GPUGraphicsPipeline *DoubleSidedPipeline = nullptr;
 		SDL_GPUGraphicsPipeline *BlendedPipeline = nullptr;
 		SDL_GPUGraphicsPipeline *BlendedDoubleSidedPipeline = nullptr;
+		SDLFileShader InstancedShader;
+		SDL_GPUGraphicsPipeline *InstancedPipeline = nullptr;
+		SDL_GPUGraphicsPipeline *InstancedDoubleSidedPipeline = nullptr;
+		bool InstancedPipelineFailed = false;
+		bool InstancingDisabled = false;
+		std::vector<std::int32_t> InstanceActions;
+		std::vector<InstanceBatch> InstanceBatches;
+		OpaqueCoverageGrid InstanceCoverageGrid;
+		SDLVisibleInstanceBuffer VisibleInstances;
 		std::vector<WorldDraw> OpaqueBatch;
 		OpaqueCoverageGrid CoverageGrid;
 		std::vector<WorldDraw> TransparentDraws;
 		float OutputMode = 1.0f;
+		bool ProbeArrayShader = false;
+		SDL_GPUTextureFormat InstanceColorFormat = SDL_GPU_TEXTUREFORMAT_INVALID;
 		bool GroupingSupported = false;
 		SDLLocalLightGrid LocalLights;
 	};

@@ -531,10 +531,15 @@ namespace gargantuan {
 			}
 		}
 
+		const bool InvalidateCompactTraversal = CompactTraversalValid && (Publication.FullResync || !Publication.Creates.empty() ||
+			!Publication.Removes.empty() || !Publication.MeshCreates.empty() || !Publication.MeshRemoves.empty() ||
+			!Publication.AnimationPoseRemoves.empty() || std::ranges::any_of(Publication.AnimationPoseUpdates,
+				[&](const RenderAnimationPoseUpdate &Update) { return !AnimationPoses.contains(Update.Object); }));
 		RenderProjectionChanges Changes;
 		const auto MutationStart = std::chrono::steady_clock::now();
 		Changes.ValidationNanoseconds = static_cast<std::uint64_t>(
 			std::chrono::duration_cast<std::chrono::nanoseconds>(MutationStart - ValidationStart).count());
+		if (InvalidateCompactTraversal) CompactTraversalValid = false;
 		if (Publication.FullResync) {
 			Changes.Removed = Entries.size();
 			Changes.MeshesRemoved = Meshes.size();
@@ -634,6 +639,7 @@ namespace gargantuan {
 		}
 
 		RenderProjectionChanges Changes;
+		CompactTraversalValid = false;
 		Entries.reserve(Snapshot.Items.size());
 		for (const auto &Item : Snapshot.Items) {
 			auto Existing = Entries.find(Item.Object);
@@ -670,6 +676,8 @@ namespace gargantuan {
 
 	void RenderProjection::Clear() noexcept {
 		UpdatedEntryScratch.clear();
+		CompactTraversal.clear();
+		CompactTraversalValid = false;
 		Entries.clear();
 		Meshes.clear();
 		Textures.clear();
@@ -682,6 +690,22 @@ namespace gargantuan {
 	const RenderItem *RenderProjection::GetItem(ObjectId Object) const {
 		const auto Existing = Entries.find(Object);
 		return Existing == Entries.end() ? nullptr : &Existing->second.Item;
+	}
+
+	const std::vector<RenderProjectedTraversal> &RenderProjection::GetCompactTraversal() const {
+		if (CompactTraversalValid) return CompactTraversal;
+		std::vector<RenderProjectedTraversal> Rebuilt;
+		Rebuilt.reserve(Entries.size());
+		for (const auto &[Object, Projected] : Entries) {
+			const auto Pose = AnimationPoses.find(Object);
+			const auto Mesh = Projected.Mesh ? Meshes.find(*Projected.Mesh) : Meshes.end();
+			Rebuilt.push_back({Object, &Projected,
+				Pose == AnimationPoses.end() ? nullptr : &Pose->second,
+				Mesh == Meshes.end() ? nullptr : &Mesh->second.Bounds});
+		}
+		CompactTraversal.swap(Rebuilt);
+		CompactTraversalValid = true;
+		return CompactTraversal;
 	}
 
 	const RenderAnimationPoseUpdate *RenderProjection::GetAnimationPose(ObjectId Object) const {

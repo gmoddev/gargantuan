@@ -4,9 +4,11 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/editor/EditorViewport.hpp"
+#include "gargantuan/Log.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
 
 #include "render/sdl/SDLDirectionalShadowCache.hpp"
+#include "render/sdl/SDLInstanceGpuCache.hpp"
 #include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
@@ -119,6 +121,8 @@ namespace gargantuan {
 		SDL_GPUTransferBuffer *DownloadBuffer = nullptr;
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
 		std::unique_ptr<SDLMeshCache> MeshResources;
+		std::unique_ptr<SDLInstanceGpuCache> InstanceResources;
+		bool EnableInstancing = false;
 		std::unique_ptr<SDLTextureCache> TextureResources;
 		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
@@ -135,6 +139,7 @@ namespace gargantuan {
 		void InvalidatePublication() {
 			RequiresFullResync = true;
 			MeshResources->Destroy();
+			if (InstanceResources) InstanceResources->Destroy();
 			TextureResources->Destroy();
 			SkinPalettes->Destroy();
 			ShadowCache.Invalidate();
@@ -146,6 +151,7 @@ namespace gargantuan {
 		void Destroy() {
 			if (Gpu) SDL_WaitForGPUIdle(Gpu);
 			if (MeshResources) { MeshResources->Destroy(); MeshResources.reset(); }
+			if (InstanceResources) { InstanceResources->Destroy(); InstanceResources.reset(); }
 			if (TextureResources) { TextureResources->Destroy(); TextureResources.reset(); }
 			if (SkinPalettes) { SkinPalettes->Destroy(); SkinPalettes.reset(); }
 			for (auto &Pass : RenderPasses) if (Pass) Pass->Destroy(Gpu);
@@ -210,7 +216,8 @@ namespace gargantuan {
 		}
 	};
 
-	EditorViewportRenderer::EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height, bool EnableHdrScene)
+	EditorViewportRenderer::EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height,
+		bool EnableHdrScene, bool EnableInstancing)
 		: State(std::make_unique<Backend>()) {
 		State->Width = Width;
 		State->Height = Height;
@@ -225,6 +232,13 @@ namespace gargantuan {
 			throw std::runtime_error(std::format("Failed to create viewport GPU device: {}", SDL_GetError()));
 		}
 		State->HdrSceneEnabled = EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
+		State->EnableInstancing = EnableInstancing;
+		if (EnableInstancing) {
+			const auto SceneFormat = State->HdrSceneEnabled ? SDLHdrSceneFormat : ColorFormat;
+			const float OutputMode = SceneFormat == SDLHdrSceneFormat ? 2.0f :
+				SDLTargetEncodesSrgb(SceneFormat) ? 0.0f : 1.0f;
+			State->InstanceResources = std::make_unique<SDLInstanceGpuCache>(State->Gpu, OutputMode);
+		}
 		State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu);
 		State->TextureResources = std::make_unique<SDLTextureCache>(State->Gpu);
 		State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(State->Gpu, nullptr, &State->RemainingPaletteUploadFailures);
@@ -288,6 +302,8 @@ namespace gargantuan {
 			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
 			State->SpotShadowAtlas.ApplyPublication(State->Projection, *Publication);
 			(void)State->Projection.Apply(*Publication);
+			if (State->EnableInstancing && State->InstanceResources)
+				(void)State->InstanceResources->Apply(*Publication);
 			ApplyingNativeResources = true;
 			State->MeshResources->ApplyPublication(*Publication);
 			State->TextureResources->ApplyPublication(*Publication);
@@ -330,14 +346,28 @@ namespace gargantuan {
 		Frame.ShadowMapTexture = State->ShadowMapTexture;
 		Frame.ShadowSampler = State->ShadowSampler;
 		Frame.TextureResources = State->TextureResources.get();
+		Frame.InstanceResources = State->InstanceResources.get();
+		Frame.EnableInstancing = State->EnableInstancing && State->InstanceResources &&
+			State->InstanceResources->GetRecords().IsAvailable();
 		Frame.MaterialSamplers = &State->MaterialSamplers;
 		Frame.Width = State->Width;
 		Frame.Height = State->Height;
 		try {
 			State->ShadowResources.PrepareFrame(State->Gpu, Frame, State->SpotShadowAtlas);
+			if (Frame.EnableInstancing) {
+				try { State->InstanceResources->Upload(Commands, nullptr); }
+				catch (const std::exception &Error) {
+					LOG_WARN(App, "[Renderer:Instances] Disabled optional viewport instancing: %s", Error.what());
+					State->InstanceResources->OnFrameAborted();
+					State->EnableInstancing = false;
+					Frame.EnableInstancing = false;
+				}
+			}
 			for (auto &Pass : State->RenderPasses)
 				if (auto *Recorded = Pass->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
 		} catch (...) {
+			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 			SDL_CancelGPUCommandBuffer(Commands);
 			throw;
 		}
@@ -345,6 +375,8 @@ namespace gargantuan {
 
 		auto *CopyPass = SDL_BeginGPUCopyPass(Commands);
 		if (!CopyPass) {
+			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 			SDL_CancelGPUCommandBuffer(Commands);
 			throw std::runtime_error(std::format("Failed to begin viewport download: {}", SDL_GetError()));
 		}
@@ -355,7 +387,12 @@ namespace gargantuan {
 		SDL_DownloadFromGPUTexture(CopyPass, &Source, &Destination);
 		SDL_EndGPUCopyPass(CopyPass);
 		auto *Fence = SDL_SubmitGPUCommandBufferAndAcquireFence(Commands);
-		if (!Fence) throw std::runtime_error(std::format("Failed to submit viewport frame: {}", SDL_GetError()));
+		if (!Fence) {
+			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
+			throw std::runtime_error(std::format("Failed to submit viewport frame: {}", SDL_GetError()));
+		}
+		if (State->InstanceResources) State->InstanceResources->OnFrameSubmitted();
 		if (!SDL_WaitForGPUFences(State->Gpu, true, &Fence, 1)) {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
 			throw std::runtime_error(std::format("Failed to wait for viewport frame: {}", SDL_GetError()));
