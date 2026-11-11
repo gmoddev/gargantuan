@@ -25,6 +25,7 @@
 #include <lualib.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <format>
@@ -42,6 +43,14 @@
 
 namespace gargantuan {
 	namespace {
+		using MutationClock = std::chrono::steady_clock;
+		thread_local bool CFrameMutationProfilingEnabled = false;
+		thread_local CFrameMutationProfile CurrentCFrameMutationProfile;
+
+		void AddMutationTime(std::uint64_t &Total, MutationClock::time_point Started) {
+			Total += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+				MutationClock::now() - Started).count());
+		}
 		std::string InstanceClassName(const Instance *InstanceValue) {
 			auto *Definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(InstanceValue));
 			if (!Definition) return "Instance";
@@ -416,14 +425,32 @@ namespace gargantuan {
 		if (Destroyed) throw std::runtime_error("Instance is destroyed");
 	}
 
+	void Instance::SetCFrameMutationProfilingEnabled(bool Enabled) {
+		CFrameMutationProfilingEnabled = Enabled;
+	}
+
+	CFrameMutationProfile Instance::GetCFrameMutationProfile() {
+		return CurrentCFrameMutationProfile;
+	}
+
+	void Instance::ResetCFrameMutationProfile() {
+		CurrentCFrameMutationProfile = {};
+	}
+
 	void Instance::NotifyPropertyCommitted(std::string_view propertyName) {
+		const bool Profile = CFrameMutationProfilingEnabled && propertyName == "CFrame";
 		AssertAuthoritativeMutation("Instance property mutation");
+		const auto LookupStart = Profile ? MutationClock::now() : MutationClock::time_point{};
 		auto *property = FindProperty(std::string(propertyName));
+		if (Profile) AddMutationTime(CurrentCFrameMutationProfile.MetadataLookupNanoseconds, LookupStart);
 		if (!property) throw std::runtime_error("Committed property does not exist");
 		const bool replicated = property->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated;
 		const auto Scope = replicated ? GetReplicationScopeId() : ObjectId{};
 		if (!ChangeJournal::DiscardsPayload(Scope)) {
+			const auto EncodingStart = Profile ? MutationClock::now() : MutationClock::time_point{};
 			auto committedValue = EncodeCommittedProperty(this, *property);
+			if (Profile) AddMutationTime(CurrentCFrameMutationProfile.EncodingNanoseconds, EncodingStart);
+			const auto JournalStart = Profile ? MutationClock::now() : MutationClock::time_point{};
 			ChangeJournal::Get().Commit(
 				Scope,
 				GetObjectId(),
@@ -433,10 +460,18 @@ namespace gargantuan {
 					replicated,
 				}
 			);
+			if (Profile) AddMutationTime(CurrentCFrameMutationProfile.JournalNanoseconds, JournalStart);
 		}
+		const auto RevisionStart = Profile ? MutationClock::now() : MutationClock::time_point{};
 		if (propertyName == "Name" || property->PersistencePolicy == InstanceProperty::Persistence::Saved)
 			if (auto dataModel = GetDataModel()) dataModel->AdvanceAuthoritativeRevision();
+		if (Profile) AddMutationTime(CurrentCFrameMutationProfile.RevisionNanoseconds, RevisionStart);
+		const auto SignalStart = Profile ? MutationClock::now() : MutationClock::time_point{};
 		GetPropertyChangedSignal(std::string(propertyName))->Fire({});
+		if (Profile) {
+			AddMutationTime(CurrentCFrameMutationProfile.SignalNanoseconds, SignalStart);
+			++CurrentCFrameMutationProfile.CommittedWrites;
+		}
 	}
 
 	ObjectId Instance::GetReplicationScopeId() const {
@@ -637,11 +672,14 @@ namespace gargantuan {
 	}
 
 	void Instance::ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const {
+		const bool Profile = CFrameMutationProfilingEnabled && propertyName == "CFrame";
+		const auto ValidationStart = Profile ? MutationClock::now() : MutationClock::time_point{};
 		auto *property = const_cast<Instance *>(this)->FindProperty(std::string(propertyName));
 		if (!property) throw std::invalid_argument("Property does not exist");
 		if (!property->IsValueValid(value)) throw std::invalid_argument("Property validation failed");
 		if (propertyName == "Name" || property->PersistencePolicy == InstanceProperty::Persistence::Saved)
 			if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
+		if (Profile) AddMutationTime(CurrentCFrameMutationProfile.ValidationNanoseconds, ValidationStart);
 	}
 
 	MutationStatus Instance::ApplyPropertyMutation(

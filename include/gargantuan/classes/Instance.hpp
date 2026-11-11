@@ -19,6 +19,15 @@
 
 namespace gargantuan {
 	class DataModel;
+	struct CFrameMutationProfile {
+		std::uint64_t ValidationNanoseconds = 0;
+		std::uint64_t MetadataLookupNanoseconds = 0;
+		std::uint64_t EncodingNanoseconds = 0;
+		std::uint64_t JournalNanoseconds = 0;
+		std::uint64_t RevisionNanoseconds = 0;
+		std::uint64_t SignalNanoseconds = 0;
+		std::uint64_t CommittedWrites = 0;
+	};
 	[[nodiscard]] InstanceProperty MakeCustomClassInstanceProperty(
 		SchemaId declaringClassId,
 		std::uint32_t definitionVersion,
@@ -64,6 +73,9 @@ namespace gargantuan {
 		void FireAncestryChanged(std::shared_ptr<Instance> child, std::shared_ptr<Instance> parent);
 		void AssertIsAlive() const;
 		void NotifyPropertyCommitted(std::string_view propertyName);
+		static void SetCFrameMutationProfilingEnabled(bool Enabled);
+		static CFrameMutationProfile GetCFrameMutationProfile();
+		static void ResetCFrameMutationProfile();
 		[[nodiscard]] ObjectId GetReplicationScopeId() const;
 		[[nodiscard]] std::shared_ptr<DataModel> GetDataModel() const;
 		void PublishReplicationSubtree(ObjectId scope);
