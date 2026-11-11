@@ -23,6 +23,10 @@
 
 namespace gargantuan {
 	struct WorldRootTestAccess {
+		static void UseSmallReadbackPolicy(WorldRoot &World) {
+			World.ReadbackPolicy = {.ActivatePartCount = 1, .RetirePartCount = 1,
+				.ActivateDynamicDivisor = 1, .RetireDynamicDivisor = 1};
+		}
 		static bool FullScanNeeded(const WorldRoot &World) { return World.FullDynamicReadbackNeeded; }
 		static std::size_t DynamicCount(const WorldRoot &World) { return World.DynamicReadback.size(); }
 		static void ClearDerivedReadback(WorldRoot &World) {
@@ -32,6 +36,13 @@ namespace gargantuan {
 		}
 		static void AddDynamicReadback(WorldRoot &World, const std::shared_ptr<BasePart> &Part) {
 			World.SyncDynamicReadback(Part, World.PartBodies.at(Part->GetObjectId()));
+		}
+		static void RebuildDynamicReadback(WorldRoot &World) {
+			World.FullDynamicReadbackNeeded = true;
+			World.ReadbackDynamicBodies();
+		}
+		static bool IndexedReadbackActive(const WorldRoot &World) {
+			return World.IndexedDynamicReadbackActive;
 		}
 		static std::optional<PhysicsBodyState> State(const WorldRoot &World, ObjectId Object) {
 			auto Found = World.PartBodies.find(Object);
@@ -87,11 +98,13 @@ int main() {
 		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		if (!World) throw std::runtime_error("Workspace unavailable");
 		World->SetGravity(0.0f);
+		WorldRootTestAccess::UseSmallReadbackPolicy(*World);
 		auto PartValue = std::make_shared<Part>();
 		PartValue->SetCanCollide(false);
 		PartValue->SetCanTouch(false);
 		PartValue->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
 		PartValue->SetParent(World);
+		World->StepPhysics(1.0 / 60.0, std::nullopt);
 		const auto Object = PartValue->GetObjectId();
 		const auto Initial = WorldRootTestAccess::State(*World, Object);
 		if (!Initial || Initial->Description.Anchored || WorldRootTestAccess::DynamicCount(*World) != 1)
@@ -110,6 +123,20 @@ int main() {
 		if (!State || State->LinearVelocity.x < 0.9f || PartValue->GetCFrame().Position.x <= 0.0f ||
 			WorldRootTestAccess::FullScanNeeded(*World) || WorldRootTestAccess::DynamicCount(*World) != 1)
 			throw std::runtime_error("complete-scan fallback lost motion or failed to rebuild readback");
+		// Fail a fresh view construction without failing unrelated step allocations.
+		// Accepted state must remain readable, and the next step must rebuild.
+		FailAllocation = 0;
+		WorldRootTestAccess::RebuildDynamicReadback(*World);
+		FailAllocation = -1;
+		if (!WorldRootTestAccess::FullScanNeeded(*World) ||
+			WorldRootTestAccess::IndexedReadbackActive(*World) ||
+			WorldRootTestAccess::DynamicCount(*World) != 0)
+			throw std::runtime_error("failed rebuild did not retire incomplete derived view");
+		World->StepPhysics(1.0 / 60.0, std::nullopt);
+		if (WorldRootTestAccess::FullScanNeeded(*World) ||
+			!WorldRootTestAccess::IndexedReadbackActive(*World) ||
+			WorldRootTestAccess::DynamicCount(*World) != 1)
+			throw std::runtime_error("failed rebuild did not recover at the next fixed step");
 		PartValue->Destroy();
 		if (WorldRootTestAccess::DynamicCount(*World) != 0)
 			throw std::runtime_error("destroyed generation remained in readback view");

@@ -64,6 +64,15 @@ namespace gargantuan {
 		std::vector<DynamicReadbackRecord> DynamicReadback;
 		std::unordered_map<ObjectId, std::size_t> DynamicReadbackPositions;
 		bool FullDynamicReadbackNeeded = false;
+		bool IndexedDynamicReadbackActive = false;
+		bool AcceptedDynamicBodyCountKnown = true;
+		std::size_t AcceptedDynamicBodyCount = 0;
+		struct DynamicReadbackPolicy {
+			std::size_t ActivatePartCount = 8192;
+			std::size_t RetirePartCount = 4096;
+			std::size_t ActivateDynamicDivisor = 8;
+			std::size_t RetireDynamicDivisor = 4;
+		} ReadbackPolicy;
 		std::vector<std::shared_ptr<DeformableBody>> SoftBodies;
 		std::unordered_map<ObjectId, PhysicsBodyId> PartBodies;
 		std::unordered_map<PhysicsBodyId, std::weak_ptr<BasePart>> BodyParts;
@@ -127,6 +136,9 @@ namespace gargantuan {
 		[[nodiscard]] PhysicsBodyId CreatePartBody(const std::shared_ptr<BasePart> &Part);
 		void SyncDynamicReadback(const std::shared_ptr<BasePart> &Part, PhysicsBodyId Body);
 		void RemoveDynamicReadback(ObjectId Object);
+		void DeactivateDynamicReadback();
+		[[nodiscard]] bool ShouldIndexDynamicReadback() const;
+		void ReadbackOrderedParts(bool RecountAcceptedDynamics);
 		void ReadbackDynamicBodies();
 		[[nodiscard]] SoftBodyId CreateDeformableBody(const std::shared_ptr<DeformableBody> &Body);
 		[[nodiscard]] PhysicsConstraintId CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint);

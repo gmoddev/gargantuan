@@ -155,6 +155,8 @@ namespace gargantuan {
 		const auto Object = Part->GetObjectId();
 		if (auto Existing = PartBodies.find(Object); Existing != PartBodies.end()) {
 			if (Physics.IsBodyValid(Existing->second)) return Existing->second;
+			AcceptedDynamicBodyCountKnown = false;
+			FullDynamicReadbackNeeded = true;
 			RemoveDynamicReadback(Object);
 			BodyParts.erase(Existing->second);
 			PartBodies.erase(Existing);
@@ -189,8 +191,12 @@ namespace gargantuan {
 		}
 		if (auto State = Physics.GetBodyState(Body)) {
 			Part->PublishedPhysicsState = *State;
+			if (AcceptedDynamicBodyCountKnown && !State->Description.Anchored) ++AcceptedDynamicBodyCount;
 			SyncDynamicReadback(Part, Body);
-		} else FullDynamicReadbackNeeded = true;
+		} else {
+			AcceptedDynamicBodyCountKnown = false;
+			FullDynamicReadbackNeeded = true;
+		}
 		return Body;
 	}
 
@@ -208,6 +214,7 @@ namespace gargantuan {
 	}
 
 	void WorldRoot::SyncDynamicReadback(const std::shared_ptr<BasePart> &Part, PhysicsBodyId Body) {
+		if (!IndexedDynamicReadbackActive) return;
 		const auto Object = Part->GetObjectId();
 		if (Part->PublishedPhysicsState.Description.Anchored) {
 			RemoveDynamicReadback(Object);
@@ -230,7 +237,77 @@ namespace gargantuan {
 		}
 	}
 
+	void WorldRoot::DeactivateDynamicReadback() {
+		const bool HadView = IndexedDynamicReadbackActive ||
+			!DynamicReadback.empty() || !DynamicReadbackPositions.empty();
+		IndexedDynamicReadbackActive = false;
+		if (!HadView) return;
+		DynamicReadback.clear();
+		DynamicReadbackPositions.clear();
+		decltype(DynamicReadback) EmptyReadback;
+		DynamicReadback.swap(EmptyReadback);
+		try {
+			decltype(DynamicReadbackPositions) EmptyPositions;
+			DynamicReadbackPositions.swap(EmptyPositions);
+		} catch (...) {
+			// A failed empty-map allocation leaves cleared buckets, not a live view.
+		}
+	}
+
+	bool WorldRoot::ShouldIndexDynamicReadback() const {
+		if (!AcceptedDynamicBodyCountKnown) return false;
+		if (IndexedDynamicReadbackActive)
+			return Parts.size() >= ReadbackPolicy.RetirePartCount &&
+				AcceptedDynamicBodyCount <= Parts.size() / ReadbackPolicy.RetireDynamicDivisor;
+		return Parts.size() >= ReadbackPolicy.ActivatePartCount &&
+			AcceptedDynamicBodyCount <= Parts.size() / ReadbackPolicy.ActivateDynamicDivisor;
+	}
+
+	void WorldRoot::ReadbackOrderedParts(bool RecountAcceptedDynamics) {
+		if (!RecountAcceptedDynamics) {
+			for (const auto &Part : Parts) {
+				if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
+					Part->PublishedPhysicsState.Description.Anchored) continue;
+				auto Found = PartBodies.find(Part->GetObjectId());
+				if (Found == PartBodies.end()) continue;
+				auto State = Physics.GetBodyState(Found->second);
+				if (!State) { AcceptedDynamicBodyCountKnown = false; continue; }
+				if (Part->PublishedPhysicsState.Description.Anchored != State->Description.Anchored)
+					AcceptedDynamicBodyCountKnown = false;
+				Part->PublishedPhysicsState = *State;
+			}
+			return;
+		}
+		std::size_t RecountedDynamics = 0;
+		bool Complete = true;
+		for (const auto &Part : Parts) {
+			if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
+			auto Found = PartBodies.find(Part->GetObjectId());
+			if (Found == PartBodies.end()) continue;
+			auto State = Physics.GetBodyState(Found->second);
+			if (!State) { Complete = false; continue; }
+			Part->PublishedPhysicsState = *State;
+			if (!State->Description.Anchored) ++RecountedDynamics;
+		}
+		AcceptedDynamicBodyCountKnown = Complete;
+		if (Complete) AcceptedDynamicBodyCount = RecountedDynamics;
+	}
+
 	void WorldRoot::ReadbackDynamicBodies() {
+		if (!AcceptedDynamicBodyCountKnown) {
+			DeactivateDynamicReadback();
+			ReadbackOrderedParts(true);
+			FullDynamicReadbackNeeded = !AcceptedDynamicBodyCountKnown;
+			if (!AcceptedDynamicBodyCountKnown) return;
+		}
+		if (!ShouldIndexDynamicReadback()) {
+			const bool RecountAcceptedDynamics = FullDynamicReadbackNeeded;
+			DeactivateDynamicReadback();
+			ReadbackOrderedParts(RecountAcceptedDynamics);
+			FullDynamicReadbackNeeded = !AcceptedDynamicBodyCountKnown;
+			if (!ShouldIndexDynamicReadback()) return;
+		}
+		if (!IndexedDynamicReadbackActive) FullDynamicReadbackNeeded = true;
 		if (!FullDynamicReadbackNeeded) {
 			for (const auto &Record : DynamicReadback) {
 				auto Part = Record.Part.lock();
@@ -245,43 +322,55 @@ namespace gargantuan {
 					continue;
 				}
 				if (auto State = Physics.GetBodyState(Record.Body)) {
+					if (Part->PublishedPhysicsState.Description.Anchored != State->Description.Anchored)
+						AcceptedDynamicBodyCountKnown = false;
 					Part->PublishedPhysicsState = *State;
 					if (State->Description.Anchored) FullDynamicReadbackNeeded = true;
 				} else FullDynamicReadbackNeeded = true;
 			}
 			if (!FullDynamicReadbackNeeded) return;
 		}
+		if (!AcceptedDynamicBodyCountKnown) {
+			DeactivateDynamicReadback();
+			ReadbackOrderedParts(true);
+			FullDynamicReadbackNeeded = !AcceptedDynamicBodyCountKnown;
+			if (!ShouldIndexDynamicReadback()) return;
+		}
 
 		// Fallback reads the accepted backend state in the original Parts order.
 		// Build a replacement view only after every candidate state was available.
 		std::vector<DynamicReadbackRecord> Rebuilt;
-		std::unordered_map<ObjectId, std::size_t> Positions;
+		std::optional<std::unordered_map<ObjectId, std::size_t>> Positions;
 		bool Complete = true;
 		try {
-			Rebuilt.reserve(DynamicReadback.size());
-			Positions.reserve(DynamicReadback.size());
+			Positions.emplace();
+			Rebuilt.reserve(AcceptedDynamicBodyCount);
+			Positions->reserve(AcceptedDynamicBodyCount);
 		} catch (...) { Complete = false; }
 		for (const auto &Part : Parts) {
 			if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
 				(Part->PublishedPhysicsState.Description.Anchored && Part->GetAnchored())) continue;
 			auto Found = PartBodies.find(Part->GetObjectId());
-			if (Found == PartBodies.end()) { Complete = false; continue; }
+			if (Found == PartBodies.end()) continue;
 			auto State = Physics.GetBodyState(Found->second);
 			if (!State) { Complete = false; continue; }
+			if (Part->PublishedPhysicsState.Description.Anchored != State->Description.Anchored)
+				AcceptedDynamicBodyCountKnown = false;
 			Part->PublishedPhysicsState = *State;
 			if (State->Description.Anchored || !Complete) continue;
 			try {
 				Rebuilt.push_back({Part->GetObjectId(), Found->second, Part});
-				Positions.emplace(Part->GetObjectId(), Rebuilt.size() - 1);
+				Positions->emplace(Part->GetObjectId(), Rebuilt.size() - 1);
 			} catch (...) { Complete = false; }
 		}
-		if (Complete) {
+		if (Complete && AcceptedDynamicBodyCountKnown) {
 			DynamicReadback.swap(Rebuilt);
-			DynamicReadbackPositions.swap(Positions);
+			DynamicReadbackPositions.swap(*Positions);
+			IndexedDynamicReadbackActive = true;
 			FullDynamicReadbackNeeded = false;
 		} else {
-			DynamicReadback.clear();
-			DynamicReadbackPositions.clear();
+			DeactivateDynamicReadback();
+			FullDynamicReadbackNeeded = true;
 		}
 	}
 
@@ -482,6 +571,10 @@ namespace gargantuan {
 			PhysicsConnections.erase(Connections);
 		}
 		if (auto Found = PartBodies.find(Object); Found != PartBodies.end()) {
+			if (AcceptedDynamicBodyCountKnown && !Part->PublishedPhysicsState.Description.Anchored) {
+				if (AcceptedDynamicBodyCount > 0) --AcceptedDynamicBodyCount;
+				else AcceptedDynamicBodyCountKnown = false;
+			}
 			BodyParts.erase(Found->second);
 			if (Physics.IsBodyValid(Found->second)) {
 				auto Result = Physics.DestroyBody(Found->second);
@@ -673,9 +766,20 @@ namespace gargantuan {
 			} else {
 				FailedMeshUpdatesLogged.erase(Object);
 				if (auto State = Physics.GetBodyState(Found->second)) {
+					if (AcceptedDynamicBodyCountKnown) {
+						if (!Part->PublishedPhysicsState.Description.Anchored) {
+							if (AcceptedDynamicBodyCount > 0) --AcceptedDynamicBodyCount;
+							else AcceptedDynamicBodyCountKnown = false;
+						}
+						if (AcceptedDynamicBodyCountKnown && !State->Description.Anchored)
+							++AcceptedDynamicBodyCount;
+					}
 					Part->PublishedPhysicsState = *State;
 					SyncDynamicReadback(Part, Found->second);
-				} else FullDynamicReadbackNeeded = true;
+				} else {
+					AcceptedDynamicBodyCountKnown = false;
+					FullDynamicReadbackNeeded = true;
+				}
 			}
 		}
 
@@ -861,6 +965,9 @@ namespace gargantuan {
 		DynamicReadback.clear();
 		DynamicReadbackPositions.clear();
 		FullDynamicReadbackNeeded = false;
+		IndexedDynamicReadbackActive = false;
+		AcceptedDynamicBodyCountKnown = true;
+		AcceptedDynamicBodyCount = 0;
 		SoftBodies.clear();
 	}
 
