@@ -525,17 +525,23 @@ namespace gargantuan {
 				const auto EligibilityStart = Sampled ? Clock::now() : Clock::time_point{};
 				const auto *Mesh = Projected.Mesh
 					? Context.MeshResources.Find(*Projected.Mesh) : Context.MeshResources.Find(Item.Geometry);
-				const bool MeshEligible = Mesh && Mesh->VertexBuffer && Mesh->IndexBuffer && !Pose &&
-					(!Item.CastShadow || ContiguousOrder) && Mesh->ImmutablePositionBounds &&
-					(ContiguousOrder || Projector) &&
-					(!Projected.Primitives || Projected.Primitives->size() == 1);
-				const auto *SelectedMaterial = MeshEligible
-					? &(Projected.Primitives ? Projected.Primitives->front().Material : Projected.Material) : nullptr;
-				const bool MaterialEligible = SelectedMaterial &&
-					SelectedMaterial->OpacityMode == RenderOpacityMode::Opaque && !SelectedMaterial->BaseColorTexture &&
-					!SelectedMaterial->NormalTexture && !SelectedMaterial->MetallicRoughnessTexture &&
-					!SelectedMaterial->EmissiveTexture && !SelectedMaterial->OcclusionTexture;
-				if (!MaterialEligible) {
+				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer || Pose ||
+					(Item.CastShadow && !ContiguousOrder) || !Mesh->ImmutablePositionBounds ||
+					(!ContiguousOrder && !Projector) ||
+					(Projected.Primitives && Projected.Primitives->size() != 1)) {
+					Flush();
+					if (Sampled) {
+						++Context.Metrics->InstanceSampleEligibilityChecks;
+						Context.Metrics->LastInstanceSampleEligibilityNanoseconds += SampleElapsed(EligibilityStart);
+					}
+					return;
+				}
+				// Pose-bearing objects are excluded above. Static casters use the
+				// already-recorded shadow pass and have no GPU-skinned pose receipt.
+				const auto &Material = Projected.Primitives ? Projected.Primitives->front().Material : Projected.Material;
+				if (Material.OpacityMode != RenderOpacityMode::Opaque || Material.BaseColorTexture ||
+					Material.NormalTexture || Material.MetallicRoughnessTexture || Material.EmissiveTexture ||
+					Material.OcclusionTexture) {
 					Flush();
 					if (Sampled) {
 						++Context.Metrics->InstanceSampleEligibilityChecks;
@@ -547,7 +553,6 @@ namespace gargantuan {
 					++Context.Metrics->InstanceSampleEligibilityChecks;
 					Context.Metrics->LastInstanceSampleEligibilityNanoseconds += SampleElapsed(EligibilityStart);
 				}
-				const auto &Material = *SelectedMaterial;
 				const auto SlotStart = Sampled ? Clock::now() : Clock::time_point{};
 				const auto Slot = Context.InstanceResources->Find(Object);
 				if (Sampled) {
