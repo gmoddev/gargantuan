@@ -84,6 +84,9 @@ removes expired entries incrementally during registration and ordinary steps.
 Shutdown cleans the remaining live Scripts in first-registration order before
 closing the VM. Tracking a detached bootstrap Script does not publish its
 ObjectId or add a journal record.
+Each Script binds its `script` global in its own sandbox before loading source.
+Yielded Script coroutines and their deferred tasks keep that binding when
+another Script starts; starting a Script does not overwrite the main VM global.
 
 Engine destruction stops new Script activation, scheduled/deferred task
 admission and tracked Lua handlers before destroying services or descendants.

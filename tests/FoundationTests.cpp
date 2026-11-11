@@ -6936,6 +6936,72 @@ namespace {
 		Game->Destroy();
 	}
 
+	void TestScriptSandboxIdentity() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(Game);
+			auto First = std::make_shared<Script>();
+			First->SetName("FirstSandbox");
+			First->SetSource(R"(
+				task.defer(function()
+					IdentityResults.FirstDeferred = script == FirstIdentity
+					IdentityResults.FirstDeferredDynamic = getfenv(0).script == FirstIdentity
+				end)
+				task.wait(0)
+				IdentityResults.FirstResumed = script == FirstIdentity
+				IdentityResults.FirstResumedDynamic = getfenv(0).script == FirstIdentity
+			)");
+			First->SetParent(Game);
+			auto Second = std::make_shared<Script>();
+			Second->SetName("SecondSandbox");
+			Second->SetSource(R"(
+				task.defer(function()
+					IdentityResults.SecondDeferred = script == SecondIdentity
+					IdentityResults.SecondDeferredDynamic = getfenv(0).script == SecondIdentity
+				end)
+				task.wait(0)
+				IdentityResults.SecondResumed = script == SecondIdentity
+				IdentityResults.SecondResumedDynamic = getfenv(0).script == SecondIdentity
+			)");
+			Second->SetParent(Game);
+			lua_pushstring(Engine.L, "main-script-sentinel");
+			lua_setglobal(Engine.L, "script");
+			StackValue<std::shared_ptr<Instance>>::Push(Engine.L, First);
+			lua_setglobal(Engine.L, "FirstIdentity");
+			StackValue<std::shared_ptr<Instance>>::Push(Engine.L, Second);
+			lua_setglobal(Engine.L, "SecondIdentity");
+			lua_newtable(Engine.L);
+			lua_setglobal(Engine.L, "IdentityResults");
+
+			const auto IncomingTop = lua_gettop(Engine.L);
+			Engine.RunBootstrapScript(First);
+			Engine.RunBootstrapScript(Second);
+			Check(lua_gettop(Engine.L) == IncomingTop,
+				"per-Script sandbox setup preserves the main VM stack height");
+			Check(First->Status == ScriptStatus::Yielded && Second->Status == ScriptStatus::Yielded,
+				"both Script coroutines yield before later task callbacks run");
+			lua_getglobal(Engine.L, "script");
+			Check(lua_type(Engine.L, -1) == LUA_TSTRING &&
+				std::string_view(lua_tostring(Engine.L, -1)) == "main-script-sentinel",
+				"Script activation does not overwrite the main VM script global");
+			lua_pop(Engine.L, 1);
+
+			Engine.Threads.Step();
+			lua_getglobal(Engine.L, "IdentityResults");
+			for (const char *Field : {"FirstDeferred", "FirstDeferredDynamic", "FirstResumed",
+				"FirstResumedDynamic", "SecondDeferred", "SecondDeferredDynamic", "SecondResumed",
+				"SecondResumedDynamic"}) {
+				lua_getfield(Engine.L, -1, Field);
+				Check(lua_toboolean(Engine.L, -1),
+					"deferred and resumed Script callbacks resolve their own Script identity");
+				lua_pop(Engine.L, 1);
+			}
+			lua_pop(Engine.L, 1);
+		}
+		Game->Destroy();
+	}
+
 	void TestManagedScriptRetention() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -7930,6 +7996,7 @@ int main() {
 	TestEditorHostPropertyBatch();
 	TestLuauExceptionBoundary();
 	TestScriptCoroutineRegistryRoot();
+	TestScriptSandboxIdentity();
 	TestManagedScriptRetention();
 	TestScriptSelfCleanupDuringResume();
 	TestScriptQueueReentrantMutation();
