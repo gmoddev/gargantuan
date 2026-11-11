@@ -165,7 +165,26 @@ try {
                 $Hashes[$Relative] = (Get-FileHash -Algorithm SHA256 -LiteralPath $To).Hash.ToLowerInvariant()
             }
         }
-        @{ source = $Source; suite = $Suite; binaries = $Hashes } |
+        $SourceInputs = @{}
+        if ($Suite -eq 'gameplay') {
+            $InputPaths = @(& git ls-files -- samples/FirstCompleteGame)
+            if ($LASTEXITCODE -ne 0 -or $InputPaths.Count -eq 0 -or
+                $InputPaths -notcontains 'samples/FirstCompleteGame/.gargantuan/assets/catalog.json') {
+                throw "[Runtime6:WindowsCompare] Gameplay source inputs are incomplete: $Arm"
+            }
+            foreach ($Relative in $InputPaths) {
+                $From = Join-Path $Workspace $Relative
+                $FrozenRelative = 'source-inputs/' + $Relative
+                $To = Join-Path $ArmRoot $FrozenRelative
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $To) | Out-Null
+                Copy-Item -LiteralPath $From -Destination $To
+                $Digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $To).Hash.ToLowerInvariant()
+                $Hashes[$FrozenRelative] = $Digest
+                $SourceInputs[$Relative] = $Digest
+            }
+        }
+        @{ source = $Source; suite = $Suite; binaries = $Hashes;
+            sourceInputRoot = $Workspace; sourceInputs = $SourceInputs } |
             ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $ArmRoot 'manifest.json')
         $Changed = @(& git diff --name-only)
         if ($LASTEXITCODE -ne 0) { throw "[Runtime6:WindowsCompare] Generated status failed: $Arm" }

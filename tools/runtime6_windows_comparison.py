@@ -122,6 +122,22 @@ def Run(Arm, Label, Binary, Options, Timeout=600, Environment=None):
 
 
 if Args.suite == "gameplay":
+    def CheckGameplayInputs():
+        Expected = Sources["baseline"].get("sourceInputs", {})
+        if not Expected or Sources["candidate"].get("sourceInputs", {}) != Expected:
+            raise RuntimeError("[Runtime6:Compare] Gameplay source assets differ or were not frozen")
+        for Arm in ("baseline", "candidate"):
+            InputRoot = pathlib.Path(Sources[Arm]["sourceInputRoot"])
+            ActualFiles = {File.relative_to(InputRoot).as_posix()
+                           for File in (InputRoot / "samples/FirstCompleteGame").rglob("*") if File.is_file()}
+            if ActualFiles != set(Expected):
+                raise RuntimeError("[Runtime6:Compare] Unexpected or absent gameplay source asset")
+            for Name, Digest in Expected.items():
+                if Hash(InputRoot / Name) != Digest:
+                    raise RuntimeError(f"[Runtime6:Compare] Changed gameplay source asset: {Name}")
+
+    CheckGameplayInputs()
+    (Output / "gameplay-source-inputs.json").write_text(json.dumps(Sources["baseline"]["sourceInputs"], indent=2))
     Fixture = Root / "shared-gameplay-fixture"
     Run("baseline", "gameplay-fixture-512", "gargantuan_game_session_benchmark",
         ["--write-content-scale", str(Fixture), "512"])
@@ -140,8 +156,10 @@ if Args.suite == "gameplay":
         if Trace:
             Environment["GARGANTUAN_CONTENT_TRACE"] = "1"
         for Arm in ("baseline", "candidate", "candidate", "baseline"):
+            CheckGameplayInputs()
             Run(Arm, f"gameplay-32-peers-8-active-trace-{Trace}", "gargantuan_game_session_benchmark",
                 ["--content-differential", str(Fixture), "local", "8", "8", "32"], Environment=Environment)
+            CheckGameplayInputs()
             Current = {File.relative_to(Fixture).as_posix(): Hash(File)
                        for File in Fixture.rglob("*") if File.is_file()}
             if Current != FixtureHashes:
