@@ -175,6 +175,12 @@ actions and remove only bindings they created; developer-authored definitions
 are never overwritten. Movement, jump, orbit, Look and E/ButtonA interaction keep
 the existing controller API and physical pipeline.
 
+Engine shutdown first stops Luau callback admission, so module `Destroying`
+handlers cannot be the final owner of ActionMap cleanup. The native ActionMap
+reset retires every adapter-owned legacy binding handle and its empty owned
+actions before clearing input state. Directly authored InputService definitions
+are outside that handle table and remain under their normal Instance ownership.
+
 Pressed/admitted state, action values, diagnostics and transitions are local,
 transient and absent from authoring revisions, persistence and replication.
 Definition replication does not replicate device state. A client binding firing

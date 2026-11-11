@@ -363,17 +363,25 @@ Witness.Parent = game
 			"Player reset destroys the old character and synchronously assembles a replacement"
 		);
 		auto ReplacementCharacter = *LocalPlayer->GetCharacter();
+		const auto ShutdownProbe = Runtime.ActionMap->BindKey(
+			"ShutdownProbe", Enums::KeyCode::W, 1.0f, 0, false);
+		Check(ShutdownProbe > 0 && Runtime.ActionMap->GetBindingCount() > 0 &&
+			Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
+			"runtime has live facade bindings and default modules before native shutdown");
 		Runtime.Destroy();
 		Check(
 			ReplacementCharacter->GetDestroyed() && !Runtime.Players->GetLocalPlayer() &&
 				Runtime.Players->GetPlayers().empty(),
 			"runtime shutdown deterministically removes character and LocalPlayer lifetimes"
 		);
-		Check(
-			Runtime.ActionMap->GetBindingCount() == 0 &&
-				!Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
-			"default module shutdown releases bindings, signals, and runtime Instances"
-		);
+		Check(Runtime.ActionMap->GetBindingCount() == 0,
+			"native runtime shutdown releases default and extra ActionMap facade bindings after Lua stops");
+		Check(!Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
+			"default module shutdown releases runtime Instances after Lua stops");
+		Runtime.Destroy();
+		Check(Runtime.ActionMap->GetBindingCount() == 0 &&
+			!Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
+			"repeated runtime shutdown leaves bindings and modules retired");
 	}
 
 	void TestCustomControllerPath() {

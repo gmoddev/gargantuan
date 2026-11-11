@@ -348,6 +348,13 @@ namespace gargantuan {
 		GetInput()->EndFrame();
 	}
 	void ActionMap::Reset() {
+		// Engine teardown has already stopped Lua callbacks. Release the native
+		// legacy bindings here; a Script.Destroying cleanup cannot run afterward.
+		std::vector<int> Ids;
+		Ids.reserve(Bindings.size());
+		for (const auto &[Id, Weak] : Bindings) Ids.push_back(Id);
+		std::ranges::sort(Ids);
+		for (const auto Id : Ids) (void)Unbind(Id);
 		GetInput()->Reset();
 	}
 }
