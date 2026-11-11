@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -22,7 +24,17 @@ namespace gargantuan {
 		glm::vec4 MaterialControls{};
 		glm::vec4 ColorSamplerModes{};
 	};
+	static_assert(sizeof(glm::mat4) == 64 && sizeof(glm::vec4) == 16);
 	static_assert(sizeof(SDLInstanceRecord) == 224);
+	static_assert(std::is_trivially_copyable_v<SDLInstanceRecord>);
+	static_assert(offsetof(SDLInstanceRecord, ModelMatrix) == 0);
+	static_assert(offsetof(SDLInstanceRecord, NormalMatrix) == 64);
+	static_assert(offsetof(SDLInstanceRecord, Color) == 128);
+	static_assert(offsetof(SDLInstanceRecord, MaterialValues) == 144);
+	static_assert(offsetof(SDLInstanceRecord, MaterialFlags) == 160);
+	static_assert(offsetof(SDLInstanceRecord, EmissiveOcclusion) == 176);
+	static_assert(offsetof(SDLInstanceRecord, MaterialControls) == 192);
+	static_assert(offsetof(SDLInstanceRecord, ColorSamplerModes) == 208);
 
 	struct SDLInstanceDirtyRange {
 		std::uint32_t First = 0;
@@ -174,10 +186,10 @@ namespace gargantuan {
 		}
 
 		[[nodiscard]] static bool SameRecord(const SDLInstanceRecord &Left, const SDLInstanceRecord &Right) {
-			return Left.ModelMatrix == Right.ModelMatrix && Left.NormalMatrix == Right.NormalMatrix &&
-				Left.Color == Right.Color && Left.MaterialValues == Right.MaterialValues &&
-				Left.MaterialFlags == Right.MaterialFlags && Left.EmissiveOcclusion == Right.EmissiveOcclusion &&
-				Left.MaterialControls == Right.MaterialControls && Left.ColorSamplerModes == Right.ColorSamplerModes;
+			// Pack initializes every byte of this contiguous GPU payload. Equal bytes
+			// imply equal render values; different signed-zero encodings may cause an
+			// extra upload, which still preserves the exact new payload.
+			return std::memcmp(&Left, &Right, sizeof(SDLInstanceRecord)) == 0;
 		}
 	};
 } // namespace gargantuan

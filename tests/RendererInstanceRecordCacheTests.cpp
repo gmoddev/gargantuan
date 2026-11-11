@@ -5,6 +5,7 @@
 
 #include "render/sdl/SDLInstanceRecordCache.hpp"
 
+#include <cmath>
 #include <iostream>
 
 namespace {
@@ -60,6 +61,33 @@ int main() {
 	Cache.MarkUploaded();
 	Check(Cache.Apply(Sparse) && Cache.PlanUpload().Bytes == 0,
 		"repeated equal values do not dirty instance records");
+	RenderPublication MaterialWithTransformDomain{.Id = 20, .BaseId = 2, .Frame = Frame()};
+	auto MaterialChange = Update(37, 4.0f);
+	MaterialChange.Material.BaseColorFactor.x = 0.25f;
+	MaterialWithTransformDomain.Updates.push_back(MaterialChange);
+	Check(Cache.Apply(MaterialWithTransformDomain) && Slot37 &&
+		Cache.PlanUpload().Bytes == sizeof(SDLInstanceRecord) &&
+		Cache.Get(*Slot37)->Color.x == 0.25f,
+		"transform-domain publication still packs all changed material values");
+	Cache.MarkUploaded();
+	Check(Cache.Apply(MaterialWithTransformDomain) && Cache.PlanUpload().Bytes == 0,
+		"bitwise equal full payload stays clean on repeat");
+	RenderPublication PositiveZero{.Id = 21, .BaseId = 20, .Frame = Frame()};
+	auto ZeroScale = Update(39, 8.0f);
+	ZeroScale.Material.NormalScale = 0.0f;
+	PositiveZero.Updates.push_back(ZeroScale);
+	Check(Cache.Apply(PositiveZero), "positive zero update admitted");
+	Cache.MarkUploaded();
+	RenderPublication NegativeZero{.Id = 22, .BaseId = 21, .Frame = Frame()};
+	ZeroScale.Material.NormalScale = -0.0f;
+	NegativeZero.Updates.push_back(ZeroScale);
+	Check(Cache.Apply(NegativeZero) && Slot39 &&
+		Cache.PlanUpload().Bytes == sizeof(SDLInstanceRecord) &&
+		std::signbit(Cache.Get(*Slot39)->MaterialControls.x),
+		"signed-zero byte difference safely uploads the exact new payload");
+	Cache.MarkUploaded();
+	Check(Cache.Apply(NegativeZero) && Cache.PlanUpload().Bytes == 0,
+		"repeating the new signed-zero payload remains clean");
 
 	RenderPublication Replace{.Id = 3, .BaseId = 2, .Frame = Frame()};
 	Replace.Removes.push_back({{37, 1}});
