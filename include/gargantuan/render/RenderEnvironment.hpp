@@ -39,11 +39,13 @@ namespace gargantuan {
 	struct RenderSkyFaceState {
 		RenderTextureIdentity Texture;
 		std::uint64_t ContentRevision = 0;
+		bool operator==(const RenderSkyFaceState &) const = default;
 	};
 
 	struct RenderSkyState {
 		std::uint32_t FaceDimension = 0;
 		std::array<RenderSkyFaceState, 6> Faces{};
+		bool operator==(const RenderSkyState &) const = default;
 	};
 
 	struct RenderFogState {
@@ -58,6 +60,33 @@ namespace gargantuan {
 	inline constexpr float MinimumLocalLightRange = 0.01f;
 	inline constexpr float MaximumLocalLightRange = 1024.0f;
 	inline constexpr float MaximumLocalLightCoordinate = 1.0e6f;
+	inline constexpr std::size_t MaximumRenderReflectionProbes = 32;
+	inline constexpr std::size_t MaximumResidentReflectionProbes = 12;
+
+	struct RenderReflectionProbeState {
+		ObjectId Object;
+		glm::vec3 Position{0.0f};
+		glm::mat3 Rotation{1.0f};
+		glm::vec3 HalfSize{8.0f};
+		glm::vec3 CaptureOffset{0.0f};
+		float BlendDistance = 1.0f;
+		float Intensity = 1.0f;
+		std::int32_t Priority = 0;
+		bool BoxProjection = true;
+		RenderSkyState Source;
+		bool operator==(const RenderReflectionProbeState &) const = default;
+	};
+
+	struct RenderDirectionalShadowSettings {
+		std::uint32_t CascadeCount = 0;
+		std::uint32_t Resolution = 2048;
+		float Distance = 250.0f;
+		float SplitLambda = 0.6f;
+		float TransitionFraction = 0.1f;
+		float DepthBias = 0.0005f;
+		float NormalBias = 0.01f;
+		bool operator==(const RenderDirectionalShadowSettings &) const = default;
+	};
 
 	enum class RenderLocalLightKind : std::uint8_t { Point, Spot };
 	enum class RenderToneMapping : std::uint8_t { Filmic, Reinhard };
@@ -72,6 +101,8 @@ namespace gargantuan {
 		float Range = 16.0f;
 		float InnerConeCosine = 1.0f;
 		float OuterConeCosine = 1.0f;
+		bool ShadowEnabled = false;
+		std::int32_t ShadowPriority = 0;
 
 		bool operator==(const RenderLocalLightState &) const = default;
 	};
@@ -89,5 +120,7 @@ namespace gargantuan {
 		float EnvironmentRotation = 0.0f;
 		float IblIntensity = 1.0f;
 		RenderToneMapping ToneMapping = RenderToneMapping::Filmic;
+		std::shared_ptr<const std::vector<RenderReflectionProbeState>> ReflectionProbes;
+		RenderDirectionalShadowSettings DirectionalShadows;
 	};
 }

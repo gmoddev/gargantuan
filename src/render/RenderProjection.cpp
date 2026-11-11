@@ -4,6 +4,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/render/RenderProjection.hpp"
+#include "gargantuan/environment/ReflectionProbeSemantics.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -88,6 +89,21 @@ namespace gargantuan {
 				!std::isfinite(Environment.IblIntensity) || Environment.IblIntensity < 0.0f || Environment.IblIntensity > 8.0f ||
 				(Environment.ToneMapping != RenderToneMapping::Filmic && Environment.ToneMapping != RenderToneMapping::Reinhard) ||
 				std::abs(glm::length(Environment.SunDirection) - 1.0f) > 1e-4f) return false;
+			const auto &Shadows = Environment.DirectionalShadows;
+			if (Shadows.CascadeCount > 4 || (Shadows.Resolution != 512 && Shadows.Resolution != 1024 && Shadows.Resolution != 2048) ||
+				!std::isfinite(Shadows.Distance) || Shadows.Distance < 1 || Shadows.Distance > 4096 ||
+				!std::isfinite(Shadows.SplitLambda) || Shadows.SplitLambda < 0 || Shadows.SplitLambda > 1 ||
+				!std::isfinite(Shadows.TransitionFraction) || Shadows.TransitionFraction < 0 || Shadows.TransitionFraction > 0.25f ||
+				!std::isfinite(Shadows.DepthBias) || Shadows.DepthBias < 0 || Shadows.DepthBias > 0.01f ||
+				!std::isfinite(Shadows.NormalBias) || Shadows.NormalBias < 0 || Shadows.NormalBias > 1) return false;
+			if (Environment.ReflectionProbes) {
+				if (Environment.ReflectionProbes->size() > MaximumRenderReflectionProbes) return false;
+				ObjectId Previous;
+				for (const auto &Probe : *Environment.ReflectionProbes) {
+					if (!IsValidReflectionProbe(Probe) || (Previous.IsValid() && Probe.Object <= Previous)) return false;
+					Previous = Probe.Object;
+				}
+			}
 			if (!Environment.Sky) return true;
 			if (Environment.Sky->FaceDimension == 0 || Environment.Sky->FaceDimension > 1024) return false;
 			for (const auto &Face : Environment.Sky->Faces)
@@ -119,7 +135,8 @@ namespace gargantuan {
 					!IsFinite(Light.Direction) || std::abs(glm::length(Light.Direction) - 1.0f) > 1.0e-4f ||
 					!IsUnitColor(Light.Color) || !std::isfinite(Light.Intensity) || Light.Intensity < 0.0f ||
 					Light.Intensity > MaximumLocalLightIntensity || !std::isfinite(Light.Range) ||
-					Light.Range < MinimumLocalLightRange || Light.Range > MaximumLocalLightRange) return false;
+					Light.Range < MinimumLocalLightRange || Light.Range > MaximumLocalLightRange ||
+					Light.ShadowPriority < -1024 || Light.ShadowPriority > 1024) return false;
 				Previous = Light.Object;
 			}
 			return true;
@@ -288,6 +305,11 @@ namespace gargantuan {
 			for (const auto &Face : Publication.Frame.Environment.Sky->Faces)
 				if (!TextureMatchesSkyFace(Face, Publication.Frame.Environment.Sky->FaceDimension))
 					throw std::invalid_argument("Render publication Sky references an unavailable or incoherent texture");
+		if (Publication.Frame.Environment.ReflectionProbes)
+			for (const auto &Probe : *Publication.Frame.Environment.ReflectionProbes)
+				for (const auto &Face : Probe.Source.Faces)
+					if (!TextureMatchesSkyFace(Face, Probe.Source.FaceDimension))
+						throw std::invalid_argument("Render publication probe references an unavailable or incoherent texture");
 		const auto MaterialTexturesExist = [&](const RenderMaterialState &Material) {
 			return (!Material.BaseColorTexture || TextureExistsAfterPublication(*Material.BaseColorTexture)) &&
 				(!Material.NormalTexture || TextureExistsAfterPublication(*Material.NormalTexture)) &&

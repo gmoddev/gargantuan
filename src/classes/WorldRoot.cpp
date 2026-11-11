@@ -4,6 +4,7 @@
 #include "gargantuan/classes/JointConstraint.hpp"
 #include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/LocalLight.hpp"
+#include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "gargantuan/Log.hpp"
@@ -793,6 +794,8 @@ namespace gargantuan {
 				(void)CreateConstraintJoint(Constraint);
 			} else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance)) {
 				LocalLights.insert_or_assign(Light->GetObjectId(), Light);
+			} else if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Instance)) {
+				ReflectionProbes.insert_or_assign(Probe->GetObjectId(), Probe);
 			}
 		});
 
@@ -808,6 +811,8 @@ namespace gargantuan {
 				RemoveConstraint(Constraint);
 			else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance))
 				LocalLights.erase(Light->GetObjectId());
+			else if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Instance))
+				ReflectionProbes.erase(Probe->GetObjectId());
 		});
 	}
 

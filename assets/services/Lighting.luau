@@ -6,6 +6,24 @@ return c({
 	since = "0.5.0",
 
 	properties = {
+		ShadowCascadeCount = {
+			description = "Camera-relative directional cascade count; zero retains the existing fixed shadow volume.",
+			type = t.Integer,
+			unmodified = "0",
+			range = { minimum = 0, maximum = 4 },
+			serializable = true,
+			replicated = true,
+			category = "Shadows",
+		},
+		ShadowDistance = {
+			description = "Maximum camera-relative directional shadow coverage in world units.",
+			type = t.Float,
+			unmodified = "250.0f",
+			range = { minimum = 1, maximum = 4096 },
+			serializable = true,
+			replicated = true,
+			category = "Shadows",
+		},
 		Ambient = {
 			description = "Per-channel ambient contribution applied to lit world surfaces.",
 			type = t.Color3,

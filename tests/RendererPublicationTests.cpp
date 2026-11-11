@@ -10,6 +10,7 @@
 #include "gargantuan/classes/PointLight.hpp"
 #include "gargantuan/classes/Sky.hpp"
 #include "gargantuan/classes/SpotLight.hpp"
+#include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/environment/EnvironmentSemantics.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
@@ -855,6 +856,59 @@ namespace {
 		);
 		Game->Destroy();
 	}
+	void TestReflectionProbeContracts() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Probe = std::make_shared<ReflectionProbe>();
+		Probe->SetName("Local Environment Witness");
+		Probe->SetParent(World);
+		Probe->SetProbeSize({20, 10, 12});
+		Probe->SetProbeCFrame(CFrame(10, 2, -5));
+		Probe->SetProbeIntensity(2.0f);
+		Probe->SetProbePriority(3);
+		Check(World->GetReflectionProbes().contains(Probe->GetObjectId()), "probe enters scoped weak membership");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbeCaptureOffset({11, 0, 0}); }, "capture origin must stay inside box");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbeIntensity(std::numeric_limits<float>::quiet_NaN()); },
+			"probe rejects nonfinite radiance multiplier");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbeCFrame(CFrame(glm::vec3(0), glm::mat3(2))); },
+			"probe rejects scaled orientation");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbePositiveX("../local.hdr"); }, "probe source accepts asset references only");
+		const auto Document = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Game);
+		auto Saved = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Document);
+		const auto Restored = Saved.Instance ? std::dynamic_pointer_cast<ReflectionProbe>(
+			Saved.Instance->FindFirstDescendant("Local Environment Witness")) : nullptr;
+		Check(Saved.Ok && Restored && Restored->GetProbeSize() == glm::vec3(20, 10, 12) &&
+			Restored->GetProbePriority() == 3 && Restored->GetProbeIntensity() == 2.0f, "probe generic schema persistence");
+		if (Saved.Instance) Saved.Instance->Destroy();
+		Probe->Destroy();
+		Check(World->GetReflectionProbes().empty(), "probe membership retires before identity reuse");
+		Game->Destroy();
+
+		RenderReflectionProbeState State;
+		State.Object = {7, 1};
+		State.Source.FaceDimension = 1;
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		for (std::size_t Face = 0; Face < 6; ++Face) {
+			const RenderTextureIdentity Texture{Face + 1, 1};
+			State.Source.Faces[Face] = {Texture, 1};
+			Initial.TextureCreates.push_back({Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm,
+				std::make_shared<const std::vector<std::uint8_t>>(std::initializer_list<std::uint8_t>{255, 255, 255, 255})});
+		}
+		Initial.Frame.Environment.ReflectionProbes = std::make_shared<const std::vector<RenderReflectionProbeState>>(1, State);
+		RenderProjection Projection;
+		(void)Projection.Apply(Initial);
+		auto Invalid = Initial;
+		Invalid.Id = 2;
+		State.Source.Faces[0].ContentRevision = 2;
+		Invalid.Frame.Environment.ReflectionProbes = std::make_shared<const std::vector<RenderReflectionProbeState>>(1, State);
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); }, "probe cannot reference incoherent source revision");
+		Check(Projection.GetLastPublicationId() == 1 && Projection.GetFrame().Environment.ReflectionProbes ==
+			Initial.Frame.Environment.ReflectionProbes, "invalid probe preserves last accepted immutable publication");
+		Invalid = Initial; Invalid.Id = 2; Invalid.Frame.Environment.DirectionalShadows.CascadeCount = 5;
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); }, "cascade budget rejects before mutation");
+	}
+
 	void TestLocalLights() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -986,6 +1040,7 @@ int main() {
 		TestDirtyAccumulatorBoundsAndConsumers();
 		TestEnvironmentLightingFoundation();
 		TestLocalLights();
+		TestReflectionProbeContracts();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:PublicationTest] unexpected exception: " << Error.what() << '\n';
 		return 1;

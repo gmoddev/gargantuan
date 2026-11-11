@@ -20,6 +20,7 @@
 namespace gargantuan {
 	class AssetService;
 	class LocalLight;
+	class ReflectionProbe;
 	struct WorldRootTestAccess;
 
 	struct WorldRaycastResult {
@@ -87,6 +88,7 @@ namespace gargantuan {
 		std::weak_ptr<AssetService> CollisionAssets;
 		std::uint64_t CollisionAssetChangeSequence = 0;
 		std::map<ObjectId, std::weak_ptr<LocalLight>> LocalLights;
+		std::map<ObjectId, std::weak_ptr<ReflectionProbe>> ReflectionProbes;
 
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
 		[[nodiscard]] WorldRaycastResult
@@ -105,6 +107,7 @@ namespace gargantuan {
 		[[nodiscard]] std::optional<glm::vec3> GetDeformableVertex(ObjectId Object, std::size_t VertexIndex) const;
 		[[nodiscard]] const SoftBodyStepProfile &GetLastSoftBodyProfile() const { return LastSoftBodyProfile; }
 		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<LocalLight>> &GetLocalLights() const { return LocalLights; }
+		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<ReflectionProbe>> &GetReflectionProbes() const { return ReflectionProbes; }
 
 	  private:
 		[[nodiscard]] WorldRaycastResult ResolveQueryHit(PhysicsRaycastResult Result);
