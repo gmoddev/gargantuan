@@ -500,12 +500,8 @@ namespace gargantuan {
 					(Item.CastShadow && !ContiguousOrder) || !Mesh->ImmutablePositionBounds ||
 					(!ContiguousOrder && !Projector) ||
 					(Projected.Primitives && Projected.Primitives->size() != 1)) { Flush(); continue; }
-				if (Item.CastShadow && Frame.Environment.SunIntensity > 0.0f) {
-					const auto Palette = Context.SkinPalettes.Find(Item.Object, nullptr);
-					const auto ShadowRevision = Context.ShadowPoseRevisions.find(Item.Object);
-					if (ShadowRevision == Context.ShadowPoseRevisions.end() ||
-						ShadowRevision->second != Palette.PoseRevision) { Flush(); continue; }
-				}
+				// Pose-bearing objects are excluded above. Static casters use the
+				// already-recorded shadow pass and have no GPU-skinned pose receipt.
 				const auto &Material = Projected.Primitives ? Projected.Primitives->front().Material : Projected.Material;
 				if (Material.OpacityMode != RenderOpacityMode::Opaque || Material.BaseColorTexture ||
 					Material.NormalTexture || Material.MetallicRoughnessTexture || Material.EmissiveTexture ||
@@ -561,7 +557,7 @@ namespace gargantuan {
 				.CameraPositionFogEnd = glm::vec4(Frame.Camera.Position, Environment.Fog.End),
 				.EnvironmentLighting = glm::vec4(Context.EnvironmentLighting.Enabled ? 1.0f : 0.0f,
 					Context.EnvironmentLighting.ReflectionMaxLod, Environment.IblIntensity,
-					(Context.CascadedShadows ? Context.CascadeHasCasters : !Context.ShadowPoseRevisions.empty()) ? 1.0f : 0.0f),
+					(Context.CascadedShadows ? Context.CascadeHasCasters : Context.LegacyHasCasters) ? 1.0f : 0.0f),
 				.EnvironmentRotationTone = glm::vec4(std::sin(EnvironmentAngle), std::cos(EnvironmentAngle),
 					Environment.ToneMapping == RenderToneMapping::Reinhard ? 1.0f : 0.0f, 0.0f),
 				.LocalLighting = LocalLights.GetUniforms(),
@@ -630,7 +626,8 @@ namespace gargantuan {
 						SDL_BindGPUVertexStorageBuffers(Pass, 0, &PaletteBuffer, 1);
 						BoundPalette = PaletteBuffer;
 					}
-					if (Item.CastShadow && Environment.SunIntensity > 0.0f) {
+					if (Item.CastShadow && Environment.SunIntensity > 0.0f && Palette.GpuSkinned) {
+						if (Context.Metrics) ++Context.Metrics->ShadowPoseChecks;
 						const auto ShadowRevision = Context.ShadowPoseRevisions.find(Item.Object);
 						if (ShadowRevision == Context.ShadowPoseRevisions.end() || ShadowRevision->second != Palette.PoseRevision) {
 							if (Context.Metrics) ++Context.Metrics->MainShadowPoseMismatches;

@@ -56,6 +56,7 @@ namespace gargantuan {
 		SDL_GPUTexture *ShadowMapTexture = nullptr;
 		bool CascadedShadows = false;
 		bool CascadeHasCasters = false;
+		bool LegacyHasCasters = false;
 		SDL_GPUTexture *CascadeShadowTexture = nullptr;
 		SDLDirectionalCascadePlan CascadePlan;
 		SDL_GPUTexture *LocalShadowTexture = nullptr;

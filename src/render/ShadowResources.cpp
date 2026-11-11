@@ -29,7 +29,7 @@ namespace gargantuan {
 		}
 		Frame.CascadeShadowTexture = Fallback;
 		Frame.LocalShadowTexture = Fallback;
-		Frame.CascadedShadows = false;
+		Frame.CascadedShadows = Frame.Projection.GetFrame().Environment.DirectionalShadows.CascadeCount > 0;
 		Frame.SpotShadowAtlas = nullptr;
 		const auto &State = Frame.Projection.GetFrame();
 		const auto &Settings = State.Environment.DirectionalShadows;
@@ -43,7 +43,6 @@ namespace gargantuan {
 			if (Plan && EnsureDirectional(Gpu, Settings.Resolution)) {
 				Frame.CascadePlan = *Plan;
 				Frame.CascadeShadowTexture = Directional;
-				Frame.CascadedShadows = true;
 			}
 		} else if (Directional) {
 			SDL_ReleaseGPUTexture(Gpu, Directional);

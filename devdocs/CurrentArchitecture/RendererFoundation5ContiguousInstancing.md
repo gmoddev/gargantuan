@@ -28,9 +28,10 @@ Only rigid, untextured, immutable-mesh, single-range opaque records sharing mesh
 range, sidedness, and shading model can join. Culled records contribute no draw;
 every other incompatible record flushes the pending batch. Camera draws for static
 shadow casters may join because the shadow pass has already recorded its own
-unchanged caster draw. The candidate verifies the same shadow pose revision guard
-used by individual camera draws before admission. A mismatch falls back to the
-individual path and its existing failure behavior.
+unchanged caster draw. Pose-bearing objects cannot enter this batch. The
+individual path still verifies submitted pose revisions for GPU-skinned casters;
+static casters have no pose receipt, and the frame's separate legacy caster flag
+retains their shadow sampling.
 
 The ordinary rigid vertex shader applies an identity skin palette. The instanced
 variant binds the same identity palette at vertex slot 0, with instance records

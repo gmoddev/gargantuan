@@ -62,6 +62,7 @@ namespace gargantuan {
 		std::uint64_t SkinnedSourceResourceCreations = 0;
 		std::uint64_t CpuSkinnedVertexUploads = 0;
 		std::uint64_t MainShadowPoseMismatches = 0;
+		std::uint64_t ShadowPoseChecks = 0;
 		std::uint64_t CpuProjectionNanoseconds = 0;
 		std::uint64_t CpuVisibilityNanoseconds = 0;
 		std::uint64_t CpuMeshTransferNanoseconds = 0;
