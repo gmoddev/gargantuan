@@ -905,6 +905,12 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_runtime6_physics_listener_probe PRIVATE gargantuan_core)
 	add_test(NAME gargantuan_runtime6_physics_listener_native
 		COMMAND gargantuan_runtime6_physics_listener_probe --mode=native --count=100 --frames=2)
+	add_test(NAME gargantuan_runtime6_physics_listener_native_drain_profiled
+		COMMAND gargantuan_runtime6_physics_listener_probe --mode=native --count=100 --frames=2
+			--drain-physics --profile=on)
+	add_test(NAME gargantuan_runtime6_physics_listener_native_drain_unprofiled
+		COMMAND gargantuan_runtime6_physics_listener_probe --mode=native --count=100 --frames=2
+			--drain-physics --profile=off)
 	add_test(NAME gargantuan_runtime6_physics_listener_renderer
 		COMMAND gargantuan_runtime6_physics_listener_probe --mode=renderer-only --count=100 --frames=2)
 	add_test(NAME gargantuan_runtime6_physics_listener_counterfactual

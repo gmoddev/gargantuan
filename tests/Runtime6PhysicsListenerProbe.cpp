@@ -10,6 +10,7 @@
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <chrono>
@@ -56,6 +57,10 @@ namespace gargantuan {
 		}
 		static std::size_t DirtyCount(const WorldRoot &World) { return World.DirtyBodies.size(); }
 		static std::size_t BodyCount(const WorldRoot &World) { return World.PartBodies.size(); }
+		static std::optional<PhysicsBodyState> State(const WorldRoot &World, const BasePart &Part) {
+			auto Found = World.PartBodies.find(Part.GetObjectId());
+			return Found == World.PartBodies.end() ? std::nullopt : World.Physics.GetBodyState(Found->second);
+		}
 	};
 }
 
@@ -68,19 +73,24 @@ namespace {
 		std::size_t Count = 1000;
 		std::size_t Changed = 1000;
 		std::size_t Frames = 3;
+		bool DrainPhysics = false;
+		bool Profile = true;
 	};
 
 	class ScopedMeasuredProfiles {
 		WorldRoot &World;
+		bool Enabled;
 
 	  public:
-		explicit ScopedMeasuredProfiles(WorldRoot &Value) : World(Value) {
+		explicit ScopedMeasuredProfiles(WorldRoot &Value, bool IsEnabled) : World(Value), Enabled(IsEnabled) {
+			if (!Enabled) return;
 			BaseSignal::SetDispatchProfilingEnabled(false);
 			BaseSignal::ResetDispatchProfile();
 			WorldRootTestAccess::StartCFrameProfile(World);
 			BaseSignal::SetDispatchProfilingEnabled(true);
 		}
 		~ScopedMeasuredProfiles() {
+			if (!Enabled) return;
 			BaseSignal::SetDispatchProfilingEnabled(false);
 			WorldRootTestAccess::StopCFrameProfile(World);
 		}
@@ -103,6 +113,9 @@ namespace {
 		for (int Index = 1; Index < ArgumentCount; ++Index) {
 			const std::string_view Option(Arguments[Index]);
 			if (Option.starts_with("--mode=")) Result.Mode = std::string(Option.substr(7));
+			else if (Option == "--drain-physics") Result.DrainPhysics = true;
+			else if (Option == "--profile=on") Result.Profile = true;
+			else if (Option == "--profile=off") Result.Profile = false;
 			else if (Option.starts_with("--count=")) Result.Count = ParseBound(Option.substr(8), 50000);
 			else if (Option.starts_with("--changed=")) {
 				Result.Changed = ParseBound(Option.substr(10), 50000);
@@ -113,7 +126,8 @@ namespace {
 		if (!ChangedSpecified) Result.Changed = Result.Count;
 		if (Result.Changed > Result.Count ||
 			(Result.Mode != "native" && Result.Mode != "native-no-listener" &&
-				Result.Mode != "renderer-only" && Result.Mode != "renderer-only-no-listener"))
+				Result.Mode != "renderer-only" && Result.Mode != "renderer-only-no-listener") ||
+			(Result.DrainPhysics && Result.Mode != "native"))
 			throw std::invalid_argument("[Runtime6:PhysicsListener] Invalid mode or changed count");
 		return Result;
 	}
@@ -121,6 +135,7 @@ namespace {
 	void Run(const Options &Config) {
 		const bool RendererOnly = Config.Mode.starts_with("renderer-only");
 		const bool WithoutListener = Config.Mode.ends_with("no-listener");
+		BaseSignal::SetDispatchProfilingEnabled(false);
 		auto Game = std::make_shared<DataModel>();
 		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		if (!World || World->GetReplicationScopeId() != Game->GetObjectId())
@@ -150,11 +165,15 @@ namespace {
 			"ListenerCalls,NewDirty,Coalesced,Suppressed,ListenerNanoseconds,DirtyCount,"
 			"FireCalls,ConnectionVisits,NativeCallbacks,ScriptCallbacks,DeferredCalls,"
 			"SnapshotNanoseconds,DispatchCallbackNanoseconds,CleanupNanoseconds,FireTotalNanoseconds,"
-			"CallbackResidualNanoseconds,FireResidualNanoseconds\n";
+			"CallbackResidualNanoseconds,FireResidualNanoseconds,ProfileEnabled,DrainPhysics,"
+			"DrainNanoseconds,JournalDelta,BackendMatches\n";
 		for (std::size_t Frame = 0; Frame < Config.Frames; ++Frame) {
+			const auto Scope = World->GetReplicationScopeId();
+			const auto JournalBefore = Config.DrainPhysics ?
+				ChangeJournal::Get().GetRetentionWindow(Scope).NextSequence : 0;
 			std::int64_t SetterNanoseconds = 0;
 			{
-				ScopedMeasuredProfiles Profiles(*World);
+				ScopedMeasuredProfiles Profiles(*World, Config.Profile);
 				const auto Started = Clock::now();
 				for (std::size_t Index = 0; Index < Config.Changed; ++Index) {
 					auto Transform = Parts[Index]->GetCFrame();
@@ -164,27 +183,51 @@ namespace {
 				SetterNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
 					Clock::now() - Started).count();
 			}
-			const auto After = WorldRootTestAccess::Profile(*World);
-			const auto Dispatch = BaseSignal::GetDispatchProfile();
+			const auto After = Config.Profile ? WorldRootTestAccess::Profile(*World) : PhysicsListenerProfileSnapshot{};
+			const auto Dispatch = Config.Profile ? BaseSignal::GetDispatchProfile() : SignalDispatchProfile{};
 			const auto Calls = After.Calls;
 			const auto NewDirty = After.NewDirty;
 			const auto Coalesced = After.Coalesced;
-			if (Calls != (WithoutListener ? 0 : Config.Changed))
+			if (Config.Profile && Calls != (WithoutListener ? 0 : Config.Changed))
 				throw std::runtime_error("[Runtime6:PhysicsListener] Listener call count mismatch");
-			if (Dispatch.Calls != Config.Changed ||
+			if (Config.Profile && (Dispatch.Calls != Config.Changed ||
 				Dispatch.ConnectionVisits != (WithoutListener ? 0 : Config.Changed) ||
 				Dispatch.NativeCallbacks != (WithoutListener ? 0 : Config.Changed) ||
-				Dispatch.ScriptCallbacks != 0 || Dispatch.DeferredCalls != 0)
+				Dispatch.ScriptCallbacks != 0 || Dispatch.DeferredCalls != 0))
 				throw std::runtime_error("[Runtime6:PhysicsListener] Signal dispatch count mismatch");
-			if (Dispatch.CallbackNanoseconds < After.Nanoseconds ||
-				Dispatch.TotalNanoseconds < After.Nanoseconds)
+			if (Config.Profile && (Dispatch.CallbackNanoseconds < After.Nanoseconds ||
+				Dispatch.TotalNanoseconds < After.Nanoseconds))
 				throw std::runtime_error("[Runtime6:PhysicsListener] Callback timing nesting mismatch");
-			if (NewDirty != (WithoutListener || Frame != 0 ? 0 : Config.Changed) ||
-				Coalesced != (WithoutListener || Frame == 0 ? 0 : Config.Changed))
+			if (Config.Profile && (NewDirty != (WithoutListener ? 0 :
+				(Config.DrainPhysics || Frame == 0 ? Config.Changed : 0)) ||
+				Coalesced != (WithoutListener || Config.DrainPhysics || Frame == 0 ? 0 : Config.Changed)))
 				throw std::runtime_error("[Runtime6:PhysicsListener] New/coalesced callback count mismatch");
 			const auto DirtyCount = WorldRootTestAccess::DirtyCount(*World);
 			if (DirtyCount != (WithoutListener ? 0 : Config.Changed))
 				throw std::runtime_error("[Runtime6:PhysicsListener] Dirty coalescing count mismatch");
+			std::int64_t DrainNanoseconds = 0;
+			std::uint64_t JournalDelta = 0;
+			bool BackendMatches = true;
+			if (Config.DrainPhysics) {
+				const auto DrainStarted = Clock::now();
+				World->StepPhysics(0.0, std::nullopt);
+				DrainNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
+					Clock::now() - DrainStarted).count();
+				if (WorldRootTestAccess::DirtyCount(*World) != 0)
+					throw std::runtime_error("[Runtime6:PhysicsListener] Native dirty marks did not drain");
+				for (std::size_t Index = 0; Index < Config.Changed; ++Index) {
+					const auto State = WorldRootTestAccess::State(*World, *Parts[Index]);
+					if (!State || !State->Transform.FuzzyEq(Parts[Index]->GetCFrame())) {
+						BackendMatches = false;
+						break;
+					}
+				}
+				if (!BackendMatches)
+					throw std::runtime_error("[Runtime6:PhysicsListener] Native backend transform diverged");
+				JournalDelta = ChangeJournal::Get().GetRetentionWindow(Scope).NextSequence - JournalBefore;
+				if (JournalDelta != Config.Changed)
+					throw std::runtime_error("[Runtime6:PhysicsListener] Authored CFrame journal delta mismatch");
+			}
 			std::cout << Config.Mode << ',' << Config.Count << ',' << Config.Changed << ',' << Frame << ','
 				<< BodyCount << ',' << !WithoutListener << ',' << SetterNanoseconds << ','
 				<< Calls << ',' << NewDirty << ','
@@ -195,7 +238,9 @@ namespace {
 				<< Dispatch.SnapshotNanoseconds << ',' << Dispatch.CallbackNanoseconds << ','
 				<< Dispatch.CleanupNanoseconds << ',' << Dispatch.TotalNanoseconds << ','
 				<< Dispatch.CallbackNanoseconds - After.Nanoseconds << ','
-				<< Dispatch.TotalNanoseconds - After.Nanoseconds << '\n';
+				<< Dispatch.TotalNanoseconds - After.Nanoseconds << ','
+				<< Config.Profile << ',' << Config.DrainPhysics << ',' << DrainNanoseconds << ','
+				<< JournalDelta << ',' << BackendMatches << '\n';
 		}
 	}
 }
