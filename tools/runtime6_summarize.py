@@ -194,8 +194,8 @@ def ExecutableName(Command):
     return Name[:-4] if Name.lower().endswith(".exe") else Name
 
 
-def Summarize(Evidence):
-    Comparison = Evidence / "comparison"
+def Summarize(Evidence, ComparisonDirectory="comparison"):
+    Comparison = Evidence / ComparisonDirectory
     Receipts = json.loads((Comparison / "receipts.json").read_text(encoding="utf-8"))
     Sources = json.loads((Comparison / "sources.json").read_text(encoding="utf-8"))
     Runs = []
@@ -330,10 +330,13 @@ def Summarize(Evidence):
 def Main():
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument("--evidence", type=Path, required=True)
+    Parser.add_argument("--comparison-directory", default="comparison")
     Parser.add_argument("--output", type=Path, help="JSON path (default: comparison/summary.json)")
     Args = Parser.parse_args()
-    Result = Summarize(Args.evidence.resolve())
-    Output = Args.output or Args.evidence / "comparison" / "summary.json"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", Args.comparison_directory):
+        Parser.error("comparison directory must be a simple basename")
+    Result = Summarize(Args.evidence.resolve(), Args.comparison_directory)
+    Output = Args.output or Args.evidence / Args.comparison_directory / "summary.json"
     Output.parent.mkdir(parents=True, exist_ok=True)
     Output.write_text(json.dumps(Result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"[Runtime6:Summarize] {Output}: {Result['receiptCount']} receipts, "
