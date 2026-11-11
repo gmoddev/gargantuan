@@ -1332,13 +1332,20 @@ namespace {
 	}
 
 	void TestCompactPhysicsSyncLifecycle() {
-		auto Workspace = MakeWorkspace();
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
 		if (!Workspace) return;
 		Workspace->SetGravity(0.0f);
 		auto Static = std::make_shared<Part>();
 		Static->SetAnchored(true);
+		Static->SetCanCollide(false);
+		Static->SetCanTouch(false);
+		Static->SetCFrame(CFrame(-24.0f, 5.0f, 0.0f));
 		Static->SetParent(Workspace);
 		auto Moving = std::make_shared<Part>();
+		Moving->SetCanCollide(false);
+		Moving->SetCanTouch(false);
+		Moving->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
 		Moving->SetParent(Workspace);
 		Check(WorldRootTestAccess::DynamicBodyCount(*Workspace) == 1,
 			"compact sync records only accepted dynamic bodies");
@@ -1348,9 +1355,13 @@ namespace {
 		Check(WorldRootTestAccess::PendingBodyControlCount(*Workspace) == 2,
 			"body controls coalesce once per generation-bearing Part identity");
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
-		Check(WorldRootTestAccess::PendingBodyControlCount(*Workspace) == 0 &&
-			Moving->GetCFrame().Position.x > 0.0f,
-			"compact pending controls apply at the existing fixed-step boundary");
+		Check(WorldRootTestAccess::PendingBodyControlCount(*Workspace) == 0,
+			"compact pending controls drain at the existing fixed-step boundary");
+		const auto MovingBodyState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Moving));
+		Check(MovingBodyState && MovingBodyState->LinearVelocity.x > 1.0f,
+			"compact pending velocity reaches the accepted backend body");
+		Check(Moving->GetCFrame().Position.x > 0.0f,
+			"compact pending velocity publishes positive motion without contacts");
 		Moving->SetAnchored(true);
 		Workspace->StepPhysics(0.0, std::nullopt);
 		Check(WorldRootTestAccess::DynamicBodyCount(*Workspace) == 0,
