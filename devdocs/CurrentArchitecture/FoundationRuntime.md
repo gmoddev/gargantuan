@@ -205,6 +205,15 @@ runtime teardown before the DataModel destroys its services and descendants.
 Both Engine-first and DataModel-first destruction orders have regression
 coverage, followed by process-level SDL cleanup.
 
+Script activation roots the newly created coroutine from the top of the main
+Lua stack before loading/resuming it and restores the caller's stack height.
+The registry reference remains independent of library tables and temporary
+stack values. Cleanup requested by self-disable or self-destruction waits for
+the active resume to return; it then releases the coroutine and preserves the
+requested disabled/restart state. Activation queue iteration uses an owning
+entry snapshot and checks current queue membership before each turn, so
+callbacks cannot invalidate an iterator. New entries wait until the next Step.
+
 ## Networking and downstream ownership
 
 Snapshot baselines, serialized references, scoped journal records, receiver apply

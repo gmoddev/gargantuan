@@ -54,6 +54,21 @@ or package destination. `PackageBuilder::Capture` obtains project serialization
 and assets synchronously from one authoritative world before asynchronous I/O
 starts.
 
+Content units carry a producer-selected instance schema version in the immutable
+GamePayload. Ordinary capture defaults to the current version 5 writer. A
+trusted native producer may explicitly select supported version 4 for retained
+authored payloads; every unit must declare that exact version, and mixed,
+mismatched or unsupported versions reject before output commit. Snapshot,
+staged content manifests and spatial inspection use the same selected version.
+This does not change the project snapshot writer or consumer acceptance rules.
+
+The Foundation 3L qualified scale producer uses this compatibility path for its
+original 512-object, 273,032-byte v4 workload. It pins the accepted payload and
+manifest digests and checks current deserialization/default controls before
+packaging. General scale fixtures continue to use evolving v5 serialization;
+the qualified producer must not silently rebaseline its byte workload when
+saved properties or document-local NodeIds are added.
+
 The CLI opens the disk project, so its captured and persisted revisions are the
 same. Studio uses EditorHost and can deliberately package a valid unsaved
 revision.
