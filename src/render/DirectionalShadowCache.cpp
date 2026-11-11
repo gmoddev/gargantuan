@@ -165,6 +165,9 @@ namespace gargantuan {
 	bool SDLDirectionalShadowCache::HasCascadeCasters(std::uint32_t Index) const {
 		return Index < MaximumDirectionalCascades && Slots[Index].Committed && Slots[Index].Committed->HasCasters;
 	}
+	bool SDLDirectionalShadowCache::HasLegacyCasters() const {
+		return !Slots[0].CascadeMode && Slots[0].Committed && Slots[0].Committed->HasCasters;
+	}
 
 	void SDLDirectionalShadowCache::BeginRecording() {
 		BeginCascadeRecording(0);

@@ -55,6 +55,7 @@ namespace {
 			Cache.FinishRecording(Environment, nullptr, Matrix, true, true);
 			Require(!Cache.Restore(Environment, nullptr, Restored), "recording cannot publish depth before successful submit");
 			Require(Cache.OnFrameSubmitted(), "complete submitted map becomes reusable");
+			Require(Cache.HasLegacyCasters(), "legacy depth retains its static caster flag independently of skin poses");
 		};
 		const auto CheckUpdate = [&](const RenderPublication &Delta, bool ExpectedReuse, const char *Message) {
 			Prepare();
@@ -133,6 +134,7 @@ namespace {
 		Cache.BeginRecording();
 		Cache.FinishRecording(Environment, nullptr, Matrix, true, false);
 		Require(Cache.OnFrameSubmitted(), "empty depth commits after submission");
+		Require(!Cache.HasLegacyCasters(), "empty legacy depth does not report a caster");
 		Delta.FullResync = false;
 		Delta.Updates = {UpdateObject(Projection, NONCASTER)};
 		Cache.ApplyPublication(Projection, Delta);

@@ -68,6 +68,7 @@ namespace gargantuan {
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
 			context.ShadowPoseRevisions.clear();
+			context.LegacyHasCasters = false;
 			if (context.CascadedShadows) {
 				if (context.CascadePlan.Count > MaximumDirectionalCascades ||
 					(context.CascadePlan.Count > 0 && !context.CascadeShadowTexture))
@@ -78,6 +79,7 @@ namespace gargantuan {
 			}
 			const auto &Environment = context.Projection.GetFrame().Environment;
 			if (context.ShadowCache.Restore(Environment, context.ShadowMapTexture, context.ShadowMatrix)) {
+				context.LegacyHasCasters = context.ShadowCache.HasLegacyCasters();
 				context.ShadowCache.MergeCommittedPoses(0, context.ShadowPoseRevisions);
 				if (context.Metrics) ++context.Metrics->ShadowCacheHits;
 				DrawSpotlights(gpu, context);
@@ -111,6 +113,7 @@ namespace gargantuan {
 				bool HasCasters = false;
 				const bool AllResident = Environment.SunIntensity <= 0.0f ||
 					DrawCasters(gpu, pass, context, shadowMatrix, White, std::nullopt, HasCasters);
+				context.LegacyHasCasters = HasCasters;
 				context.ShadowCache.FinishRecording(Environment, context.ShadowMapTexture, shadowMatrix, AllResident,
 					HasCasters);
 			} catch (...) {

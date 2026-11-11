@@ -32,6 +32,7 @@ namespace gargantuan {
 			const SDL_GPUTexture *Target, const glm::mat4 &ExpectedMatrix, glm::mat4 &Matrix,
 			glm::vec3 Origin = glm::vec3(0.0f)) const;
 		[[nodiscard]] bool HasCascadeCasters(std::uint32_t Index) const;
+		[[nodiscard]] bool HasLegacyCasters() const;
 		void BeginCascadeRecording(std::uint32_t Index);
 		void DependOnMesh(std::uint32_t Index, RenderMeshIdentity Mesh);
 		void DependOnMask(std::uint32_t Index, RenderTextureIdentity Texture);
