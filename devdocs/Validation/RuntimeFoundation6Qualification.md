@@ -334,6 +334,41 @@ reachable game-destruction paths require final combined-source qualification.
 
 ### Canonical package compatibility
 
+### Worker lifecycle, sandbox and fixture qualification
+
+Exact worker source `36988c6ac5701868afae9e92080db50a77522f3f` passes all
+11 focused Release CTests on MSVC 14.51.36231, PCH off, NoGNS. This includes
+Foundation's actual Engine-frame, task, native setter, input and physics-motion
+destruction paths; GUI and remote callbacks; prepared mutation/history,
+publication, physics, dirty-allocation recovery, pinned content fixture and
+package spatial metadata, plus both Luau mutation smokes. The original JUnit,
+binary hashes and log are preserved under
+`WorkerFocused-369-20261111T214208Z`; log SHA-256 is
+`4fe74c5f36d4d2556b760af2a74f91be69cf9e991058c42f143c2e63004fd8d3`.
+This is focused Windows qualification, not complete canonical/GNS/GPU acceptance.
+
+Earlier worker sources c63 and 232 each pass 10/11 gates and fail Foundation;
+both original receipts remain. New Engine fixtures initially left ProcessService
+stopped, so Engine::Step returned without running their Scripts. Startup is now
+explicit, the body setup checks the actual accepted anchored body rather than
+assuming no built-in character bodies, and logical shutdown is observed during
+child retirement rather than after Engine teardown has finished. Assertions and
+real callback paths remain mandatory.
+
+The retention test also exposed a production binding defect. LoadIntoState
+assigned the shared `script` global before luaL_sandboxthread installed its
+private environment. Pinned Luau `3fc82b1071ab387531175869afc4fb528464afa4`
+creates a new environment with fallback to the prior globals; child task threads
+inherit their caller's environment. Assigning `script` after sandbox creation
+prevents cross-Script identity changes and removes the main VM's last-Script
+root. Two-Script yielded/deferred identity, dynamic getfenv lookup, main sentinel,
+stack height, 1000 restarts, transient churn and idle weak-owner retirement all
+pass. No global was cleared merely to satisfy the retention gate.
+
+Fresh exact-source ASan/UBSan and broader acceptance remain separate gates.
+
+### Canonical package compatibility receipts
+
 Manual core Native [43068787823](https://github.com/gmoddev/gargantuan/actions/runs/43068787823)
 passes Windows 146/146 CTests and five Release workloads, then fails the final
 package fixture assertion; Linux ASan/UBSan passes 97/97. Version 5 adds NodeIds
