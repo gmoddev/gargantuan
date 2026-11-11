@@ -53,7 +53,7 @@ that metric. Full process memory is a separate observation.
 | Typed extraction | Reuse validated identity/ancestry; exact-model inverse reuse; full final fields retained | Integrated core; Windows dense publication improves |
 | Storage alternatives | Direct Instance extraction versus synchronized generation-safe SoA versus immutable per-object snapshots | Measured component alternatives; synchronization costs exceed one-consumer benefit |
 | Physics synchronization | Constant-time admission membership and scoped physics-authored callback suppression | Integrated core; focused lifecycle/reentrant callback gates pass |
-| Compact physics view | Derived dynamic readback and ordered pending controls with conservative full-scan fallback | Separate experiment; sparse/dense/churn comparison pending |
+| Compact physics view | Derived dynamic readback and ordered pending controls with conservative full-scan fallback | First representation rejected on total control/lifecycle cost; readback-only alternative under qualification |
 | Replication / F1 | Existing 3I typed catalog and 3J accepted per-peer history remain owners | Source review; no network behavior change justified yet |
 | Typed CFrame setter | Validated property/identity handoff and direct wire encoding | Separate experiment; small setter improvement, no broad stage or allocation win |
 | Signal dispatch / dirty callbacks | One-subscriber lifetime-preserving dispatch; per-registration dirty coalescing | Separate candidates undergoing independent comparisons and fault gates |
@@ -206,22 +206,74 @@ essentially unchanged. This does not support promotion; the source and verified
 artifact remain isolated. Per-registration physics dirty coalescing is a
 different candidate and requires its own regression/fault and performance gates.
 
+## Dirty callback and compact physics experiments
+
+Per-registration dirty-binding comparison
+[43068137180](https://github.com/gmoddev/gargantuan/actions/runs/43068137180)
+compares the same profiling baseline
+a0f33623688b63cc3810c215662cd63f4b0577c7 with candidate
+0bbdd1870b340a3645a65867259d76930302fa80. All 36 processes and mandatory
+regression/allocation-recovery gates pass. The 50K dense off-clock setter mean
+falls 105.013 to 94.850 ms; the four process means are
+105.149/94.712/94.987/104.878 ms. Publication plus projection changes 58.904 to
+60.678 ms. Dense 10K setters change 19.724 to 17.304 ms. At 50K native bodies,
+diagnostic callback time for a new mark falls 18.385 to 9.819 ms and coalesced
+marks fall 13.102 to 1.809 ms. Every expected journal and callback count matches.
+Peak working set increases about 1–3 MiB; allocations are not measured.
+
+That fixture does not drain physics between frames. Its gain does not establish
+a complete simulation-frame result. The separate first-mark comparison
+[43072892853](https://github.com/gmoddev/gargantuan/actions/runs/43072892853)
+adds StepPhysics(0) outside setter/profile timing, then verifies dirty drain,
+backend pose and exact journal delta on every frame. It uses identical fixture
+sources 7e66edb874b446b7410f582d99e15fc39e7e5c86 and
+6f5c63cade57fbcf5f426bd866dae163db8e58c5. That qualification is in progress.
+
+The first compact view passes all 72 processes in
+[43068853213](https://github.com/gmoddev/gargantuan/actions/runs/43068853213),
+sources 19b1ace4014d16435d3cb7166b3c42c16fce0ab4 and
+bae94835d45daf404202957694ebad95bd639e52. The 18 cases cover 900 static/100
+dynamic and 1K dynamic worlds, zero/sparse/dense controls and 0/1/16 lifecycle
+operations per frame, with 30 samples after four warmup frames in A/B/B/A order.
+Step time improves in 14 cases but full frame improves in only four; median
+candidate/baseline ratios are 0.947 for step, 1.246 for full frame and 1.154 for
+frame P95. New per-control ancestry/index work and shifted PartPositions on
+removal overwhelm the readback saving. This representation is rejected for
+integration, with its source and successful correctness evidence retained.
+
+The next readback-only experiment preserves baseline controls, ordered Part
+removal and motion publication, and indexes only accepted dynamic body-state
+reads. Independent review caught a real same-step fallback defect: an invalid
+derived record set a full-scan flag but returned until the next step.
+ca384c6c1e507359fc28cb92eff3414f659b6dae scans immediately and adds a corrupted
+derived-body-ID regression checking same-step published velocity and recovery.
+[43073019344](https://github.com/gmoddev/gargantuan/actions/runs/43073019344)
+qualifies that corrected source against the shared baseline. It remains isolated.
+
 ## Qualification boundaries and unsuccessful evidence
 
 Canonical baseline [43054671698](https://github.com/gmoddev/gargantuan/actions/runs/43054671698)
 passes the complete Windows NativeCI job, including existing GNS/F1 Release
 workloads. It qualifies baseline runtime, not the new integrated runtime.
-Linux Release/ASan/UBSan and GNS sanitizer jobs fail during dependency install:
-Ubuntu mirror DNS prevents fetching required Clang 19 and shader tooling before
+Earlier Linux Release/ASan/UBSan and GNS sanitizer attempts failed during dependency install:
+Ubuntu mirror DNS prevented fetching required Clang 19 and shader tooling before
 engine compilation. The runner's preinstalled Clang 16–18 cannot replace that
 canonical contract. `HostedLinuxInfrastructureFailure.md` preserves the logs
 and exact image identity; no tests are marked passed from those attempts.
+Later exact-source Native/GNS jobs installed dependencies successfully and are
+building. Linux Release comparison 43069269328 then exposed a test-selector
+error: its core suite requested an unbuilt realistic executable after seven
+other gates passed. The selector is corrected without changing engine sources;
+[43072898111](https://github.com/gmoddev/gargantuan/actions/runs/43072898111)
+reruns the original source pair. There is no current blanket Linux DNS blocker.
 
 Earlier fixture failures are retained: a missing stream operator, an incorrect
 DataModel service call, a prematurely released test DataModel, invalid zero-change
 probe arguments, and a colliding compact-view lifecycle fixture were corrected
-before reruns. The compact-view timed comparison still fails independently of
-its passing unit/fault gates and remains experimental. Neither a failed run nor
-its frozen artifact is discarded. Physical GPU, full integrated Windows and
+before reruns. A second compact fixture confused moving Creates with Updates;
+it now checks the final projected transform. The initial live-render fixture
+failed Windows compilation due min/max macros; NOMINMAX corrects both sources.
+The first dirty-drain attempt requested an incorrectly named CTest and ran no
+measurements. All failed artifacts remain preserved. Physical GPU, full integrated Windows and
 Linux/sanitizer acceptance remain outstanding. Production physics algorithms,
 transport wire formats, F1/D03 gates and renderer defaults are unchanged.
