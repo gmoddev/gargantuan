@@ -46,3 +46,22 @@ gates for the revised paths, matched ordinary/contiguous performance controls,
 shadow temporal and failure-recovery runs, bounded lifecycle workloads, and
 independent source/evidence review. Scene-envelope culling, compact traversal,
 and instancing remain opt-in until their individual acceptance gates pass.
+
+CI run `42994327636` at `525be49a0ee7c05096e2ed7bec346db9af228ddb`
+stopped during linking in all three lanes: the spotlight allocation test now
+exercises projection-dependent caster checks but linked only GLM. The target
+now links the existing engine core. Its partial artifact is retained. The
+packaged publication executable passed; the asset executable lacked its
+absolute CI-source font/PNG fixtures and failed before import qualification.
+Those fixtures now ship with the test, with explicit missing-input reporting.
+The partial artifact does not constitute a complete GPU package.
+
+Subsequent integrated corrections cover canceled probe-buffer backing,
+bounded coherent-probe extraction after invalid sources, Radiance header
+assignments, and spotlight cone/pole handling. New native fixtures include
+actual global/local IBL transitions, equivalent mixed HDR/SDR face decoding,
+noon shadows, a bounded one/six/eight-face shadow cost comparison, and optional
+probe residency/reimport/resize churn. A separate opt-in allocation benchmark
+counts calling-thread C++ new requests; it does not instrument production or
+the ordinary performance binary and does not count SDL/driver C allocations.
+All remain subject to the next integrated build and physical gates.

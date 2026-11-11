@@ -10,10 +10,12 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -35,6 +37,7 @@ namespace {
 	constexpr std::uint32_t Width = 256, Height = 192;
 	constexpr RenderMeshIdentity PanelMesh{1, 1};
 	constexpr RenderTextureIdentity RedImage{100, 1}, BlueImage{101, 1};
+	constexpr RenderTextureIdentity LinearRedImage{300, 1}, EncodedRedImage{301, 1};
 
 	void Require(bool Condition, std::string_view Message) {
 		if (!Condition) throw std::runtime_error(std::string(Message));
@@ -72,6 +75,11 @@ namespace {
 	RenderSkyState DirectionalSource() {
 		RenderSkyState Result{.FaceDimension = 8};
 		for (std::size_t Face = 0; Face < 6; ++Face) Result.Faces[Face] = {{200 + Face, 1}, 1};
+		return Result;
+	}
+	RenderSkyState MixedSource(bool Linear) {
+		auto Result = Source(BlueImage, 1);
+		Result.Faces[4] = Result.Faces[5] = {Linear ? LinearRedImage : EncodedRedImage, 1};
 		return Result;
 	}
 
@@ -117,6 +125,7 @@ namespace {
 		}
 
 		std::uint64_t RedRevision = 1;
+		std::optional<RenderSkyState> GlobalOverride;
 
 		EditorViewportFrame Run(std::string_view Name, std::vector<RenderReflectionProbeState> Probes,
 			float CameraX = 0.0f, bool FullResync = false, bool Glossy = false,
@@ -150,7 +159,7 @@ namespace {
 				Environment.AmbientColor = glm::vec3(0);
 				Environment.SunIntensity = 0;
 				Environment.IblIntensity = 1;
-				if (GlobalSky) Environment.Sky = Source(BlueImage, 1);
+				if (GlobalSky) Environment.Sky = GlobalOverride.value_or(Source(BlueImage, 1));
 				Environment.ReflectionProbes = std::make_shared<const std::vector<RenderReflectionProbeState>>(Probes);
 				if (Publication->FullResync) AppendScene(*Publication, Glossy, Shift);
 				if (ReimportRed && Iteration == 0) Publication->TextureUpdates.push_back({RedImage,
@@ -183,7 +192,7 @@ namespace {
 					<< ',' << Right[0] << ',' << Right[1] << ',' << Right[2]
 					<< ',' << Metrics.ResidentReflectionProbes << ',' << Metrics.ProbeArrayBytes
 					<< ',' << Metrics.ProbeUpdates << ',' << Metrics.ProbePreprocessBuilds
-					<< ',' << Metrics.ProbeUploadBytes << '\n';
+					<< ',' << Metrics.ProbeUploadBytes << '\n' << std::flush;
 				Require(Metrics.ResidentReflectionProbes <= MaximumResidentReflectionProbes &&
 					Metrics.ProbeArrayBytes <= 4ull * 1024 * 1024,
 					"[Render:ProbeGpu] Probe array residency exceeded its bound");
@@ -204,6 +213,12 @@ namespace {
 
 	  private:
 		void AppendScene(RenderPublication &Publication, bool Glossy, glm::vec3 Shift) {
+			const std::array<float, 4> Radiance{0.25f, 0.0f, 0.0f, 1.0f};
+			auto LinearPixels = std::make_shared<std::vector<std::uint8_t>>(sizeof(Radiance));
+			std::memcpy(LinearPixels->data(), Radiance.data(), sizeof(Radiance));
+			Publication.TextureCreates.push_back({LinearRedImage, 1, 1, 1, RenderTextureFormat::Rgba32Float, LinearPixels});
+			// sRGB 137/255 decodes to approximately 0.25016 linear.
+			Publication.TextureCreates.push_back({EncodedRedImage, 1, 1, 1, RenderTextureFormat::Rgba8Unorm, Solid(137, 0, 0)});
 			Publication.TextureCreates.push_back({RedImage, RedRevision, 1, 1, RenderTextureFormat::Rgba8Unorm,
 				RedRevision == 1 ? Solid(255, 8, 8) : Solid(0, 255, 0)});
 			Publication.TextureCreates.push_back({BlueImage, 1, 1, 1, RenderTextureFormat::Rgba8Unorm,
@@ -364,6 +379,32 @@ namespace {
 		const auto NearbyColor = Pixel(Nearby, Width / 2, Height / 2);
 		Require(NearbyColor[1] > NearbyColor[2] + 35,
 			"[Render:ProbeGpu] Distant high-priority probes evicted the only nearby probe");
+		const auto Equivalent = [](const EditorViewportFrame &Left, const EditorViewportFrame &Right) {
+			if (Left.Width != Right.Width || Left.Height != Right.Height) return false;
+			for (std::size_t Index = 0; Index < Left.RgbPixels.size(); ++Index)
+				if (std::abs(int(Left.RgbPixels[Index]) - int(Right.RgbPixels[Index])) > 3) return false;
+			return true;
+		};
+		Suite.GlobalOverride = MixedSource(false);
+		const auto EncodedGlobal = Suite.Run("encoded-global-reference", {}, 0, true, true, {}, false, 6, false, true);
+		Suite.GlobalOverride = MixedSource(true);
+		const auto MixedGlobal = Suite.Run("mixed-format-global-ibl", {}, 0, false, true, {}, false, 6, false, true);
+		Require(Equivalent(EncodedGlobal, MixedGlobal),
+			"[Render:ProbeGpu] Float faces did not match equivalent sRGB in global IBL");
+		Suite.GlobalOverride = MixedSource(false);
+		const auto EncodedBackground = Suite.Run("encoded-sky-reference", {}, 8, false, true, {}, false, 6, false, true);
+		Suite.GlobalOverride = MixedSource(true);
+		const auto MixedBackground = Suite.Run("mixed-format-sky-background", {}, 8, false, true, {}, false, 6, false, true);
+		Require(Equivalent(EncodedBackground, MixedBackground),
+			"[Render:ProbeGpu] Float Sky face was not sampled in linear space");
+		Suite.GlobalOverride.reset();
+		auto MixedProbe = Probe({500, 1}, {}, MixedSource(false));
+		MixedProbe.HalfSize = {20, 20, 20};
+		const auto EncodedProbe = Suite.Run("encoded-probe-reference", {MixedProbe}, 0, true, true);
+		MixedProbe.Source = MixedSource(true);
+		const auto LinearProbe = Suite.Run("mixed-format-local-probe", {MixedProbe}, 0, false, true);
+		Require(Equivalent(EncodedProbe, LinearProbe),
+			"[Render:ProbeGpu] Mixed-format local source changed equivalent linear radiance");
 		for (unsigned Index = 0; Index < ChurnFrames; ++Index) {
 			const bool Resized = Index % 37 == 0;
 			const bool Full = Resized || Index % 31 == 0;
