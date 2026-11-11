@@ -14,7 +14,7 @@ on:
       suite:
         description: Missing measurement scope from the frozen binaries
         type: choice
-        options: [attribution, compact_large]
+        options: [attribution, compact_large, cframe_allocation]
         required: true
 
 permissions:
