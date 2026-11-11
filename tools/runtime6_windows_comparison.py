@@ -7,6 +7,7 @@
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -57,7 +58,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic", "gameplay"), default="core")
 Args = Parser.parse_args()
 Root = Args.evidence.resolve()
 Sources = {}
@@ -84,7 +85,7 @@ Output.mkdir(exist_ok=False)
 Receipts = []
 
 
-def Run(Arm, Label, Binary, Options, Timeout=600):
+def Run(Arm, Label, Binary, Options, Timeout=600, Environment=None):
     Executable = Root / Arm / (Binary + ".exe")
     if Executable.name not in Sources[Arm]["binaries"]:
         raise RuntimeError(f"[Runtime6:Compare] Unfrozen executable: {Arm}/{Binary}")
@@ -96,6 +97,7 @@ def Run(Arm, Label, Binary, Options, Timeout=600):
         try:
             Process = subprocess.Popen(Command, cwd=Root / Arm, stdout=Stdout, stderr=Stderr,
                                        stdin=subprocess.DEVNULL,
+                                       env=Environment,
                                        creationflags=subprocess.CREATE_NO_WINDOW)
             Code = Process.wait(timeout=Timeout)
         except subprocess.TimeoutExpired:
@@ -106,6 +108,9 @@ def Run(Arm, Label, Binary, Options, Timeout=600):
         PeakBytes = PeakWorkingSet(Process)
     Receipt = {"arm": Arm, "source": Sources[Arm]["source"], "label": Label,
                "command": Command, "exit": Code, "timeout": TimedOut,
+               "diagnosticEnvironment": {Key: Environment.get(Key) for Key in (
+                   "GARGANTUAN_QUALIFIED_SCALE", "GARGANTUAN_CONTENT_TRACE", "GARGANTUAN_PUBLICATION_LATENCY")}
+                   if Environment is not None else {},
                "memoryStatus": "measured" if PeakBytes is not None else "NA",
                "peakWorkingSetBytes": PeakBytes,
                "elapsedSeconds": time.monotonic() - Start,
@@ -115,6 +120,34 @@ def Run(Arm, Label, Binary, Options, Timeout=600):
     (Output / "receipts.json").write_text(json.dumps(Receipts, indent=2))
     print(json.dumps(Receipt), flush=True)
 
+
+if Args.suite == "gameplay":
+    Fixture = Root / "shared-gameplay-fixture"
+    Run("baseline", "gameplay-fixture-512", "gargantuan_game_session_benchmark",
+        ["--write-content-scale", str(Fixture), "512"])
+    if Receipts[-1]["exit"] != 0 or Receipts[-1]["timeout"]:
+        raise SystemExit(1)
+    FixtureHashes = {File.relative_to(Fixture).as_posix(): Hash(File)
+                     for File in Fixture.rglob("*") if File.is_file()}
+    if not FixtureHashes:
+        raise RuntimeError("[Runtime6:Compare] Empty gameplay fixture")
+    (Output / "gameplay-fixture.json").write_text(json.dumps(FixtureHashes, indent=2))
+    for Trace in (False, True):
+        Environment = os.environ.copy()
+        Environment["GARGANTUAN_QUALIFIED_SCALE"] = "1"
+        for Key in ("GARGANTUAN_CONTENT_TRACE", "GARGANTUAN_PUBLICATION_LATENCY"):
+            Environment.pop(Key, None)
+        if Trace:
+            Environment["GARGANTUAN_CONTENT_TRACE"] = "1"
+        for Arm in ("baseline", "candidate", "candidate", "baseline"):
+            Run(Arm, f"gameplay-32-peers-8-active-trace-{Trace}", "gargantuan_game_session_benchmark",
+                ["--content-differential", str(Fixture), "local", "8", "8", "32"], Environment=Environment)
+            Current = {File.relative_to(Fixture).as_posix(): Hash(File)
+                       for File in Fixture.rglob("*") if File.is_file()}
+            if Current != FixtureHashes:
+                raise RuntimeError("[Runtime6:Compare] Gameplay changed its shared fixture")
+    # Preserve service health and frame/phase health separately in raw output.
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite == "realistic":
     for Count, Changed in ((128, 0), (128, 16), (128, 128), (512, 64)):

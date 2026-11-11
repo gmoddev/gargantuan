@@ -6,7 +6,7 @@
 param(
     [Parameter(Mandatory = $true)][string] $BaselineSource,
     [Parameter(Mandatory = $true)][string] $CandidateSource,
-    [Parameter(Mandatory = $true)][ValidateSet('core', 'cframe', 'compact', 'realistic')][string] $Suite,
+    [Parameter(Mandatory = $true)][ValidateSet('core', 'cframe', 'compact', 'realistic', 'gameplay')][string] $Suite,
     [Parameter(Mandatory = $true)][string] $ShaderCompiler,
     [Parameter(Mandatory = $true)][string] $EvidenceRoot
 )
@@ -102,6 +102,7 @@ try {
         if ($Suite -eq 'compact' -and $Arm -eq 'candidate') {
             $Targets += 'gargantuan_runtime6_physics_sync_fault_tests'
         }
+        if ($Suite -eq 'gameplay') { $Targets += 'gargantuan_game_session_benchmark' }
         Invoke-Checked "$Arm build" (Join-Path $ArmRoot 'build.log') {
             & cmake --build $BuildRoot --config Release --parallel 3 --target @Targets
         }
@@ -131,6 +132,7 @@ try {
                 'gargantuan_asset_foundation_benchmark', 'gargantuan_animation_foundation_benchmark',
                 'gargantuan_soft_body_physics_benchmark', 'gargantuan_replication_benchmark')
         }
+        if ($Suite -eq 'gameplay') { $FreezeTargets += 'gargantuan_game_session_benchmark' }
         $Hashes = @{}
         foreach ($Target in $FreezeTargets) {
             $Name = "$Target.exe"

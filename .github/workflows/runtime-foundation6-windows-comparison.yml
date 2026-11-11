@@ -1,9 +1,6 @@
 name: Runtime Foundation 6 Windows CPU comparison
 
 on:
-  push:
-    branches: [experiment/runtime6-evaluation]
-    paths: [.github/workflows/runtime-foundation6-windows-comparison.yml]
   workflow_dispatch:
     inputs:
       baseline_source:
@@ -17,7 +14,7 @@ on:
       suite:
         description: Bounded comparison workload
         type: choice
-        options: [core, cframe, compact, realistic]
+        options: [core, cframe, compact, realistic, gameplay]
         default: core
 
 permissions:
