@@ -501,6 +501,86 @@ namespace {
 			"depth-limit rejection leaves the detached subtree unowned and unpublished");
 	}
 
+	void TestObservedMutationSignals() {
+		using namespace gargantuan;
+		auto &Journal = ChangeJournal::Get();
+		auto World = std::make_shared<DataModel>();
+		auto WorkspaceValue = World->GetService("Workspace");
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetCFrame(CFrame(glm::vec3(0.0f)));
+		Check(!PartValue->PropertyChangedSignals.contains("CFrame"),
+			"unobserved detached property changes do not allocate property signals");
+		PartValue->SetParent(WorkspaceValue);
+		Check(!PartValue->PropertyChangedSignals.contains("Parent"),
+			"unobserved ancestry changes do not allocate a Parent signal");
+
+		std::vector<float> ObservedPositions;
+		auto CFrameConnection = PartValue->GetPropertyChangedSignal("CFrame")->Connect(
+			[&](std::monostate) {
+				ObservedPositions.push_back(PartValue->GetCFrame().Position.x);
+				if (ObservedPositions.size() == 1)
+					PartValue->SetCFrame(CFrame(glm::vec3(2.0f, 0.0f, 0.0f)));
+			});
+		const auto Cursor = Journal.CreateCursor(World->GetObjectId());
+		PartValue->SetCFrame(CFrame(glm::vec3(1.0f, 0.0f, 0.0f)));
+		PartValue->SetCFrame(CFrame(glm::vec3(2.0f, 0.0f, 0.0f)));
+		Check(ObservedPositions == std::vector<float>{1.0f, 2.0f, 2.0f},
+			"subscribed callbacks observe immediate nested and equal-value native writes");
+		std::vector<float> CommittedPositions;
+		for (const auto &Record : Journal.Read(Cursor).Records)
+			if (const auto *Property = std::get_if<PropertyUpdatedChange>(&Record.Payload);
+				Property && Record.Object == PartValue->GetObjectId() && Property->PropertyName == "CFrame")
+				CommittedPositions.push_back(std::get<WireCFrame>(Property->Value).Components[0]);
+		Check(CommittedPositions == ObservedPositions,
+			"journal preserves the order and intermediate values of reentrant CFrame writes");
+
+		const auto BeforeInvalid = Journal.CreateCursor(World->GetObjectId());
+		CheckThrows<std::invalid_argument>([&] { PartValue->SetTransparency(-1.0f); },
+			"invalid property value remains rejected");
+		Check(Journal.Read(BeforeInvalid).Records.empty() &&
+			!PartValue->PropertyChangedSignals.contains("Transparency"),
+			"rejected mutation emits no journal record or property signal");
+
+		int ParentSignals = 0;
+		auto ParentConnection = PartValue->GetPropertyChangedSignal("Parent")->Connect(
+			[&](std::monostate) {
+				++ParentSignals;
+				Check(!PartValue->GetParent().has_value(),
+					"parent callback sees the committed unparented hierarchy");
+			});
+		PartValue->SetParent(nullptr);
+		Check(ParentSignals == 1, "subscribed Parent signal fires after reparenting");
+
+		int DestroyedSignals = 0;
+		auto DestroyedConnection = PartValue->GetPropertyChangedSignal("Destroyed")->Connect(
+			[&](std::monostate) {
+				++DestroyedSignals;
+				Check(PartValue->GetDestroyed(), "destroy callback observes the committed lifecycle state");
+			});
+		const auto Object = PartValue->GetObjectId();
+		PartValue->Destroy();
+		Check(DestroyedSignals == 1 && !ObjectRegistry::Get().Lookup(Object),
+			"observed destruction fires once after generation-safe identity invalidation");
+
+		auto CallbackVictim = std::make_shared<Folder>();
+		CallbackVictim->SetParent(WorkspaceValue);
+		const auto VictimObject = CallbackVictim->GetObjectId();
+		int VictimSignals = 0;
+		auto VictimConnection = CallbackVictim->GetPropertyChangedSignal("Name")->Connect(
+			[&](std::monostate) {
+				++VictimSignals;
+				CallbackVictim->Destroy();
+			});
+		CallbackVictim->SetName("DestroyedFromCallback");
+		Check(VictimSignals == 1 && CallbackVictim->GetDestroyed() &&
+			!ObjectRegistry::Get().Lookup(VictimObject),
+			"property callback can destroy its own object without losing signal lifetime");
+		(void)CFrameConnection;
+		(void)ParentConnection;
+		(void)DestroyedConnection;
+		(void)VictimConnection;
+	}
+
 	void TestWorldRootConstraintValidation() {
 		using namespace gargantuan;
 		auto game = std::make_shared<DataModel>();
@@ -7425,6 +7505,7 @@ int main() {
 	TestHierarchyAndDestruction();
 	TestServiceProviderSemantics();
 	TestObjectIdsAndChanges();
+	TestObservedMutationSignals();
 	TestWorldRootConstraintValidation();
 	TestCheckedResolutionAndOwnedPaths();
 	TestDiskFilesystemRecursiveHardening();

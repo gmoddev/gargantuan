@@ -88,21 +88,28 @@ namespace gargantuan {
 		const auto ProfileStart = Profile ? ProfileClock::now() : ProfileClock::time_point{};
 		std::scoped_lock lock(Mutex);
 		auto &stream = Streams[scope];
-		auto nextSequence = stream.NextSequence;
-		auto Replacement = stream.Records;
-		for (auto &[object, payload] : changes) {
-			if (nextSequence == std::numeric_limits<std::uint64_t>::max())
-				throw std::overflow_error("Change journal sequence is exhausted");
-			Replacement.push_back(std::make_shared<const ChangeRecord>(
-				ChangeRecord{nextSequence, scope, object, std::move(payload)}));
-			++nextSequence;
+		if (changes.size() > std::numeric_limits<std::uint64_t>::max() - stream.NextSequence)
+			throw std::overflow_error("Change journal sequence is exhausted");
+		const auto nextSequence = stream.NextSequence + changes.size();
+		std::size_t Appended = 0;
+		try {
+			for (auto &[object, payload] : changes) {
+				stream.Records.push_back(std::make_shared<const ChangeRecord>(
+					ChangeRecord{stream.NextSequence + Appended, scope, object, std::move(payload)}));
+				++Appended;
+			}
+		} catch (...) {
+			while (Appended != 0) {
+				stream.Records.pop_back();
+				--Appended;
+			}
+			throw;
 		}
 		std::uint64_t Evicted = 0;
-		while (Replacement.size() > Capacity) {
-			Replacement.pop_front();
+		while (stream.Records.size() > Capacity) {
+			stream.Records.pop_front();
 			++Evicted;
 		}
-		stream.Records.swap(Replacement);
 		stream.NextSequence = nextSequence;
 		if (Profile) {
 			ProfileCommitCount.fetch_add(changes.size(), std::memory_order_relaxed);
