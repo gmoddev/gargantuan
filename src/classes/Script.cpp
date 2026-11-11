@@ -67,19 +67,18 @@ namespace gargantuan {
 		}
 
 		Thread = lua_newthread(L);
+		// lua_newthread leaves the coroutine on the caller's stack. Root that
+		// exact value before it can run or collect, then restore the stack.
+		ThreadReference = lua_ref(L, -1);
+		lua_pop(L, 1);
 
 		auto loadError = LoadIntoState(Thread);
 		if (loadError.has_value()) {
 			Status = ScriptStatus::Error;
 			ErrorMessage = loadError.value();
+			Cleanup();
 			return Status;
 		}
-
-		lua_pushthread(Thread);
-		lua_xmove(Thread, L, 1);
-		ThreadReference = lua_ref(L, 1);
-		// lua_ref keeps the value on the stack
-		lua_pop(L, 1);
 
 		auto status = lua_resume(Thread, L, 0);
 		switch (status) {
