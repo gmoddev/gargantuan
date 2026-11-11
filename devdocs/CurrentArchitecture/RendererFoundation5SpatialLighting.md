@@ -105,6 +105,11 @@ cycle the active backing while recording an upload; canceling that command does
 not restore the previous backing. The next frame uploads even if its records
 equal the last submitted values. A native post-Sky cancellation fixture checks
 that acknowledgement, restored exact pixels, and continued publication order.
+The GPU fixture also uses an actual blue global Sky and a red local source:
+full-weight local influence excludes global radiance, a 16-step camera sequence
+checks monotonic boundary blending, and leaving the volume restores the global
+receiver color. The earlier empty-environment room captures establish a
+different acceptance fact and are retained separately.
 
 Residency chooses the nearest influence volumes first, then priority and stable
 identity. Priority resolves overlapping shading influence, so distant high

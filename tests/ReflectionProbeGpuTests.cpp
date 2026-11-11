@@ -120,7 +120,8 @@ namespace {
 
 		EditorViewportFrame Run(std::string_view Name, std::vector<RenderReflectionProbeState> Probes,
 			float CameraX = 0.0f, bool FullResync = false, bool Glossy = false,
-			glm::vec3 Shift = {}, bool ReimportRed = false, unsigned Frames = 6, bool Cancel = false) {
+			glm::vec3 Shift = {}, bool ReimportRed = false, unsigned Frames = 6, bool Cancel = false,
+			bool GlobalSky = false, bool SaveFrame = true) {
 			EditorViewportFrame Last;
 			for (auto &Value : Probes) Value.Position += Shift;
 			for (unsigned Iteration = 0; Iteration < Frames; ++Iteration) {
@@ -129,8 +130,8 @@ namespace {
 				Publication->BaseId = FullResync && Iteration == 0 ? 0 : PreviousId;
 				Publication->FullResync = FullResync && Iteration == 0;
 				Publication->EnvironmentChanged = true;
-				Publication->Frame.ViewportWidth = Width;
-				Publication->Frame.ViewportHeight = Height;
+				Publication->Frame.ViewportWidth = CurrentWidth;
+				Publication->Frame.ViewportHeight = CurrentHeight;
 				const glm::vec3 Eye = Shift + glm::vec3(CameraX, 0, 8);
 				const glm::vec3 Target = Shift + glm::vec3(CameraX, 0, 0);
 				auto &Camera = Publication->Frame.Camera;
@@ -142,13 +143,14 @@ namespace {
 				Camera.FarPlane = 100.0f;
 				Camera.ViewMatrix = glm::lookAtRH(Eye, Target, Camera.UpDirection);
 				Camera.ProjectionMatrix = glm::perspectiveRH_ZO(glm::radians(45.0f),
-					static_cast<float>(Width) / Height, Camera.NearPlane, Camera.FarPlane);
+					static_cast<float>(CurrentWidth) / CurrentHeight, Camera.NearPlane, Camera.FarPlane);
 				Camera.ViewProjectionMatrix = Camera.ProjectionMatrix * Camera.ViewMatrix;
 				auto &Environment = Publication->Frame.Environment;
 				Environment.EnvironmentColor = glm::vec3(0);
 				Environment.AmbientColor = glm::vec3(0);
 				Environment.SunIntensity = 0;
 				Environment.IblIntensity = 1;
+				if (GlobalSky) Environment.Sky = Source(BlueImage, 1);
 				Environment.ReflectionProbes = std::make_shared<const std::vector<RenderReflectionProbeState>>(Probes);
 				if (Publication->FullResync) AppendScene(*Publication, Glossy, Shift);
 				if (ReimportRed && Iteration == 0) Publication->TextureUpdates.push_back({RedImage,
@@ -172,9 +174,9 @@ namespace {
 				Last = CaptureRenderer.Capture(Publication);
 				MetricsRenderer.Draw(Publication);
 				PreviousId = Publication->Id;
-				const auto Center = Pixel(Last, Width / 2, Height / 2);
-				const auto Left = Pixel(Last, Width / 4, Height / 2);
-				const auto Right = Pixel(Last, Width * 3 / 4, Height / 2);
+				const auto Center = Pixel(Last, Last.Width / 2, Last.Height / 2);
+				const auto Left = Pixel(Last, Last.Width / 4, Last.Height / 2);
+				const auto Right = Pixel(Last, Last.Width * 3 / 4, Last.Height / 2);
 				const auto Metrics = MetricsRenderer.GetMetrics();
 				Csv << Name << ',' << Iteration << ',' << Center[0] << ',' << Center[1] << ',' << Center[2]
 					<< ',' << Left[0] << ',' << Left[1] << ',' << Left[2]
@@ -186,8 +188,13 @@ namespace {
 					Metrics.ProbeArrayBytes <= 4ull * 1024 * 1024,
 					"[Render:ProbeGpu] Probe array residency exceeded its bound");
 			}
-			WriteFrame(Evidence / (std::string(Name) + ".ppm"), Last);
+			if (SaveFrame) WriteFrame(Evidence / (std::string(Name) + ".ppm"), Last);
 			return Last;
+		}
+		void Resize(std::uint32_t NewWidth, std::uint32_t NewHeight) {
+			CaptureRenderer.Resize(NewWidth, NewHeight);
+			MetricsRenderer.Resize(static_cast<int>(NewWidth), static_cast<int>(NewHeight));
+			CurrentWidth = NewWidth; CurrentHeight = NewHeight;
 		}
 
 		[[nodiscard]] SDLRendererMetrics Metrics() const { return MetricsRenderer.GetMetrics(); }
@@ -234,9 +241,10 @@ namespace {
 		SDLRenderer MetricsRenderer;
 		std::ofstream Csv;
 		RenderPublicationId NextId = 1, PreviousId = 0;
+		std::uint32_t CurrentWidth = Width, CurrentHeight = Height;
 	};
 
-	void RunCases(const std::filesystem::path &Evidence) {
+	void RunCases(const std::filesystem::path &Evidence, unsigned ChurnFrames) {
 		ProbeSuite Suite(Evidence);
 		const auto Red = Probe({10, 1}, {-2, 0, 0}, Source(RedImage, 1));
 		const auto Blue = Probe({11, 1}, {2, 0, 0}, Source(BlueImage, 1));
@@ -277,6 +285,27 @@ namespace {
 			"[Render:ProbeGpu] Canceled probe update changed the restored frame");
 		Require(Suite.CaptureMetrics().ProbeUploadBytes >= BytesAfterCancel + 2 * 112,
 			"[Render:ProbeGpu] Canceled upload left the cycled record backing trusted");
+		const auto GlobalOnly = Suite.Run("global-sky-only", {}, 0, false, false, {}, false, 6, false, true);
+		const auto GlobalColor = Pixel(GlobalOnly, Width / 2, Height / 2);
+		Require(GlobalColor[2] > GlobalColor[0] + 35,
+			"[Render:ProbeGpu] Actual global Sky does not illuminate the receiver");
+		auto Inside = PriorityRed;
+		Inside.Position = {};
+		const auto LocalOverGlobal = Suite.Run("local-over-global-sky", {Inside}, 0,
+			false, false, {}, false, 6, false, true);
+		auto PreviousColor = Pixel(LocalOverGlobal, Width / 2, Height / 2);
+		Require(PreviousColor[0] > PreviousColor[2] + 35,
+			"[Render:ProbeGpu] Global Sky leaked through a full-weight local source");
+		for (unsigned Step = 1; Step <= 16; ++Step) {
+			const auto Transition = Suite.Run("local-global-transition-" + std::to_string(Step), {Inside},
+				Step * 0.25f, false, false, {}, false, 1, false, true);
+			const auto CurrentColor = Pixel(Transition, Width / 2, Height / 2);
+			Require(CurrentColor[0] <= PreviousColor[0] + 2 && CurrentColor[2] + 2 >= PreviousColor[2],
+				"[Render:ProbeGpu] Local/global transition reverses while moving out of the volume");
+			PreviousColor = CurrentColor;
+		}
+		Require(Difference(PreviousColor, GlobalColor) <= 8,
+			"[Render:ProbeGpu] Leaving the volume did not restore actual global Sky IBL");
 		Suite.RedRevision = 2;
 		PriorityRed.Source = Source(RedImage, 1, 2);
 		const auto BuildsBeforeReimport = Suite.Metrics().ProbePreprocessBuilds;
@@ -335,8 +364,24 @@ namespace {
 		const auto NearbyColor = Pixel(Nearby, Width / 2, Height / 2);
 		Require(NearbyColor[1] > NearbyColor[2] + 35,
 			"[Render:ProbeGpu] Distant high-priority probes evicted the only nearby probe");
+		for (unsigned Index = 0; Index < ChurnFrames; ++Index) {
+			const bool Resized = Index % 37 == 0;
+			const bool Full = Resized || Index % 31 == 0;
+			if (Resized) Suite.Resize((Index / 37) % 2 ? Width : Width / 2,
+				(Index / 37) % 2 ? Height : Height / 2);
+			const bool Reimport = !Full && Index % 17 == 0;
+			if (Reimport) ++Suite.RedRevision;
+			auto Churn = Many;
+			for (auto &Value : Churn) if (Value.Source.Faces[0].Texture == RedImage)
+				Value.Source = Source(RedImage, 1, Suite.RedRevision);
+			if (Index % 8 == 0) Churn.clear();
+			Suite.Run("churn-" + std::to_string(Index), std::move(Churn),
+				static_cast<float>(static_cast<int>((Index * 7) % 17) - 8), Full, false, {}, Reimport,
+				1, false, true, Index % 64 == 0 || Index + 1 == ChurnFrames);
+		}
 		std::cout << "[Render:ProbeGpu] captures=" << Evidence.string() << " resident="
-			<< Suite.Metrics().ResidentReflectionProbes << " updates=" << Suite.Metrics().ProbeUpdates << '\n';
+			<< Suite.Metrics().ResidentReflectionProbes << " updates=" << Suite.Metrics().ProbeUpdates
+			<< " churn_frames=" << ChurnFrames << '\n';
 	}
 }
 
@@ -344,7 +389,18 @@ int main(int ArgumentCount, char **Arguments) {
 	try {
 		const auto Evidence = ArgumentCount >= 2 ? std::filesystem::path(Arguments[1]) :
 			std::filesystem::current_path() / "ReflectionProbeGpuEvidence";
-		RunCases(Evidence);
+		unsigned ChurnFrames = 0;
+		if (ArgumentCount >= 3) {
+			const auto Argument = std::string_view(Arguments[2]);
+			Require(Argument.starts_with("--churn="), "[Render:ProbeGpu] Expected --churn=N");
+			std::size_t Parsed = 0;
+			const auto Value = std::stoul(std::string(Argument.substr(8)), &Parsed);
+			Require(Parsed == Argument.size() - 8 && Value <= 4096,
+				"[Render:ProbeGpu] Churn frames must be within [0,4096]");
+			ChurnFrames = static_cast<unsigned>(Value);
+		}
+		Require(ArgumentCount <= 3, "[Render:ProbeGpu] Too many arguments");
+		RunCases(Evidence, ChurnFrames);
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:ProbeGpu] " << Error.what() << '\n';
