@@ -39,8 +39,9 @@ namespace gargantuan {
 			return;
 		}
 		ScriptSecurityScope SecurityScope(std::move(securityContext));
+		const int PreResumeStatus = lua_costatus(L, thread);
 		int status = lua_resume(thread, L, argumentCount);
-		ScriptEngine::Get(L)->CompleteManagedScriptThreadResume(thread, status);
+		ScriptEngine::Get(L)->CompleteManagedScriptThreadResume(thread, status, PreResumeStatus);
 		switch (status) {
 		case LUA_OK:
 		case LUA_YIELD:

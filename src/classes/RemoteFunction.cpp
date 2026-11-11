@@ -150,8 +150,9 @@ namespace gargantuan {
 					ArgumentCount = 3;
 				}
 				ScriptSecurityScope SecurityScope(SecurityContext);
+				const int PreResumeStatus = lua_costatus(Main, L);
 				const int Status = lua_resume(L, Main, ArgumentCount);
-				ScriptEngine::Get(Main)->CompleteManagedScriptThreadResume(L, Status);
+				ScriptEngine::Get(Main)->CompleteManagedScriptThreadResume(L, Status, PreResumeStatus);
 				if (!CompleteSuspendedHandler(L, Status) && Status != LUA_OK && Status != LUA_YIELD)
 					LOG_ERROR(Lua, "[Networking:Remote] request coroutine error: %s", lua_tostring(L, -1));
 				lua_unref(Main, ThreadReference);

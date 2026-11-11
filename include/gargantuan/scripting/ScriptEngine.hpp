@@ -80,7 +80,7 @@ namespace gargantuan {
 		void TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function);
 		void TrackManagedScriptThread(lua_State *Thread, const std::shared_ptr<Script> &ScriptValue);
 		void UntrackManagedScriptThread(lua_State *Thread);
-		void CompleteManagedScriptThreadResume(lua_State *Thread, int Status);
+		void CompleteManagedScriptThreadResume(lua_State *Thread, int Status, int PreResumeStatus);
 		void ShutdownRuntime();
 		void RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue);
 		[[nodiscard]] bool CanRunScript(const Script &ScriptValue) const;

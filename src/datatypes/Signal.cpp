@@ -288,8 +288,9 @@ namespace gargantuan {
 				ScriptSecurityScope SecurityScope(SecurityContext);
 				try {
 					int argumentCount = signal->LPushArgument(L, value);
+					const int PreResumeStatus = lua_costatus(mainState, L);
 					int status = lua_resume(L, mainState, argumentCount);
-					ScriptEngine::Get(mainState)->CompleteManagedScriptThreadResume(L, status);
+					ScriptEngine::Get(mainState)->CompleteManagedScriptThreadResume(L, status, PreResumeStatus);
 					if (status != LUA_OK && status != LUA_YIELD) {
 						SDL_Log("Failed to resume thread after signal: %s", lua_tostring(L, -1));
 						lua_pop(L, 1);

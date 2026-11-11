@@ -209,7 +209,7 @@ namespace gargantuan {
 		ManagedScriptThreads.erase(Thread);
 	}
 
-	void ScriptEngine::CompleteManagedScriptThreadResume(lua_State *Thread, int Status) {
+	void ScriptEngine::CompleteManagedScriptThreadResume(lua_State *Thread, int Status, int PreResumeStatus) {
 		if (Status == LUA_YIELD || Status == LUA_BREAK) return;
 		auto Found = ManagedScriptThreads.find(Thread);
 		if (Found == ManagedScriptThreads.end()) return;
@@ -226,9 +226,14 @@ namespace gargantuan {
 			ManagedScriptThreads.erase(Found);
 			return;
 		}
-		const int CoroutineStatus = lua_costatus(L, Thread);
-		if (CoroutineStatus != LUA_COFIN && CoroutineStatus != LUA_COERR) return;
-		if (CoroutineStatus == LUA_COFIN) ScriptValue->Status = ScriptStatus::Finished;
+		// Luau reports a completed coroutine with return values as COSUS until
+		// those values are removed from its stack. Check the state before resume
+		// instead: an active self-resume reports CORUN/CONOR and is not terminal.
+		if (PreResumeStatus != LUA_COSUS) return;
+		// A failed resume_start can return an error without changing a suspended
+		// thread's status. Only a runtime error stored on the thread is terminal.
+		if (Status != LUA_OK && lua_status(Thread) != Status) return;
+		if (Status == LUA_OK) ScriptValue->Status = ScriptStatus::Finished;
 		else {
 			const auto *Message = lua_tostring(Thread, -1);
 			ScriptValue->ErrorMessage = Message ? Message : "Luau execution failed";
@@ -250,7 +255,8 @@ namespace gargantuan {
 				const int CoroutineStatus = lua_costatus(L, ScriptValue->Thread);
 				if (CoroutineStatus == LUA_COFIN || CoroutineStatus == LUA_COERR)
 					CompleteManagedScriptThreadResume(
-						ScriptValue->Thread, CoroutineStatus == LUA_COFIN ? LUA_OK : LUA_ERRRUN
+						ScriptValue->Thread, CoroutineStatus == LUA_COFIN ? LUA_OK : lua_status(ScriptValue->Thread),
+						LUA_COSUS
 					);
 			}
 			if (!Current->second.expired()) continue;
