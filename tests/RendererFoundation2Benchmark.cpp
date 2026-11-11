@@ -248,6 +248,9 @@ namespace {
 				const auto Metrics = Sdl->GetMetrics();
 				if (Metrics.FramesSubmitted != 1 || Metrics.FullResyncs != 1)
 					throw std::runtime_error("[Render:Foundation2Benchmark] Initial SDL submission/resync mismatch");
+				if (Metrics.DrawCalls == 0 || (RuntimeOptions.ContiguousInstancing &&
+					Metrics.ContiguousInstancedDrawCalls == 0))
+					throw std::runtime_error("[Render:Foundation2Benchmark] Initial SDL object draw/contiguous gate failed");
 			} else if (Headless->GetProjection().GetObjects().size() != Count ||
 				Headless->GetLastChanges().Created != Count)
 				throw std::runtime_error("[Render:Foundation2Benchmark] Initial headless draw mismatch");
@@ -343,6 +346,10 @@ namespace {
 					if (After.FramesSubmitted != Before.FramesSubmitted + 1 ||
 						After.FullResyncs != Before.FullResyncs)
 						throw std::runtime_error("[Render:Foundation2Benchmark] SDL frame/resync gate failed");
+					if (After.DrawCalls <= Before.DrawCalls || (RuntimeOptions.ContiguousInstancing &&
+						RuntimeOptions.Property == "transform" &&
+						After.ContiguousInstancedDrawCalls <= Before.ContiguousInstancedDrawCalls))
+						throw std::runtime_error("[Render:Foundation2Benchmark] SDL object draw/contiguous gate failed");
 					Sample.FramesSubmitted = After.FramesSubmitted;
 					Sample.FullResyncs = After.FullResyncs;
 					Sample.DrawCalls = After.DrawCalls - Before.DrawCalls;
