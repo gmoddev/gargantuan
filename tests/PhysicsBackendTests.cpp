@@ -43,6 +43,16 @@ namespace gargantuan {
 		static std::size_t DirtyPartCount(const WorldRoot &World) { return World.DirtyBodies.size(); }
 		static bool FullPartScanNeeded(const WorldRoot &World) { return World.FullPartScanNeeded; }
 		static void ForceFullPartScan(WorldRoot &World) { World.FullPartScanNeeded = true; }
+		static std::size_t DynamicReadbackCount(const WorldRoot &World) { return World.DynamicReadback.size(); }
+		static bool HasDynamicReadback(const WorldRoot &World, ObjectId Object) {
+			return World.DynamicReadbackPositions.contains(Object);
+		}
+		static bool FullDynamicReadbackNeeded(const WorldRoot &World) { return World.FullDynamicReadbackNeeded; }
+		static void ForceFullDynamicReadback(WorldRoot &World) { World.FullDynamicReadbackNeeded = true; }
+		static void SimulateMissedDynamicStateRead(WorldRoot &World, BasePart &Part) {
+			Part.PublishedPhysicsState.Description.Anchored = true;
+			World.FullDynamicReadbackNeeded = true;
+		}
 		static const std::vector<std::shared_ptr<BasePart>> &OrderedParts(const WorldRoot &World) { return World.Parts; }
 		static std::size_t ConstraintCount(const WorldRoot &World) { return World.ConstraintJoints.size(); }
 		static PhysicsBodyId Body(const WorldRoot &World, const BasePart &Part) {
@@ -1396,6 +1406,149 @@ namespace {
 			"destroyed generation cannot update its replacement backend body");
 	}
 
+	void TestDynamicReadbackLifecycle() {
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Static = std::make_shared<Part>();
+		Static->SetAnchored(true);
+		Static->SetCanCollide(false);
+		Static->SetParent(Workspace);
+		auto Moving = std::make_shared<Part>();
+		Moving->SetCFrame(CFrame(6.0f, 5.0f, 0.0f));
+		Moving->SetCanCollide(false);
+		Moving->SetCanTouch(false);
+		Moving->SetParent(Workspace);
+		const auto Object = Moving->GetObjectId();
+		Check(WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 1 &&
+			WorldRootTestAccess::HasDynamicReadback(*Workspace, Object),
+			"readback view indexes the accepted dynamic body only");
+		Moving->SetLinearVelocity({2.0f, 0.0f, 0.0f});
+		Moving->SetAwake(true);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		const auto State = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Moving));
+		Check(State && State->LinearVelocity.x > 1.0f && Moving->GetCFrame().Position.x > 6.0f,
+			"ordinary ordered control scan reaches indexed dynamic body and publishes motion");
+		Moving->SetAnchored(true);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 0,
+			"accepted anchor transition retires readback record");
+		Moving->SetAnchored(false);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 1,
+			"accepted unanchor transition restores readback record");
+		Moving->SetKinematic(true);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 1,
+			"kinematic body remains in accepted nonanchored readback view");
+		Moving->SetParent(nullptr);
+		Check(WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 0 &&
+			WorldRootTestAccess::PartMembershipCount(*Workspace) == 1,
+			"detachment retires readback identity without changing ordered Part membership");
+		Moving->SetKinematic(false);
+		Moving->SetParent(Workspace);
+		Check(WorldRootTestAccess::HasDynamicReadback(*Workspace, Object),
+			"same-generation readmission creates a new accepted readback record");
+		Moving->Destroy();
+		Check(!WorldRootTestAccess::HasDynamicReadback(*Workspace, Object),
+			"destruction retires accepted readback identity");
+		auto Replacement = std::make_shared<Part>();
+		Replacement->SetParent(Workspace);
+		Check(Replacement->GetObjectId() != Object &&
+			WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 1 &&
+			!WorldRootTestAccess::HasDynamicReadback(*Workspace, Object),
+			"replacement generation cannot inherit the retired readback record");
+		Workspace->Destroy();
+		Check(WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 0 &&
+			!WorldRootTestAccess::FullDynamicReadbackNeeded(*Workspace),
+			"world shutdown clears the derived readback view");
+	}
+
+	void TestDynamicReadbackFallbackParity() {
+		struct Outcome {
+			glm::vec3 FirstPosition{};
+			glm::vec3 SecondPosition{};
+			glm::vec3 FirstVelocity{};
+			glm::vec3 SecondVelocity{};
+			std::size_t Events = 0;
+			std::size_t Bodies = 0;
+			bool Recovered = false;
+		};
+		auto Run = [](bool ForceFallback) {
+			Outcome Result;
+			auto Game = std::make_shared<DataModel>();
+			auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+			if (!Workspace) return Result;
+			Workspace->SetGravity(0.0f);
+			auto First = std::make_shared<Part>();
+			auto Second = std::make_shared<Part>();
+			First->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
+			Second->SetCFrame(CFrame(6.0f, 5.0f, 0.0f));
+			for (const auto &PartValue : {First, Second}) {
+				PartValue->SetCanCollide(false);
+				PartValue->SetCanTouch(false);
+				PartValue->SetParent(Workspace);
+			}
+			auto FirstConnection = First->GetPropertyChangedSignal("CFrame")->Connect(
+				[&](std::monostate) { ++Result.Events; });
+			auto SecondConnection = Second->GetPropertyChangedSignal("CFrame")->Connect(
+				[&](std::monostate) { ++Result.Events; });
+			for (int Frame = 0; Frame < 3; ++Frame) {
+				First->SetLinearVelocity({0.2f + 0.05f * Frame, 0.0f, 0.0f});
+				Second->ApplyImpulse({0.01f, 0.0f, 0.0f});
+				if (ForceFallback) WorldRootTestAccess::ForceFullDynamicReadback(*Workspace);
+				Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+				if (Frame == 1) {
+					First->SetParent(nullptr);
+					First->SetParent(Workspace);
+				}
+			}
+			const auto FirstState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *First));
+			const auto SecondState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Second));
+			if (FirstState && SecondState) {
+				Result.FirstPosition = First->GetCFrame().Position;
+				Result.SecondPosition = Second->GetCFrame().Position;
+				Result.FirstVelocity = FirstState->LinearVelocity;
+				Result.SecondVelocity = SecondState->LinearVelocity;
+			}
+			Result.Bodies = WorldRootTestAccess::BodyCount(*Workspace);
+			Result.Recovered = !WorldRootTestAccess::FullDynamicReadbackNeeded(*Workspace) &&
+				WorldRootTestAccess::DynamicReadbackCount(*Workspace) == 2;
+			FirstConnection->Disconnect();
+			SecondConnection->Disconnect();
+			return Result;
+		};
+		const auto Indexed = Run(false);
+		const auto Fallback = Run(true);
+		Check(Indexed.Bodies == 2 && Fallback.Bodies == 2 && Indexed.Events > 0 &&
+			Indexed.Events == Fallback.Events && Indexed.Recovered && Fallback.Recovered &&
+			Near(Indexed.FirstPosition.x, Fallback.FirstPosition.x) &&
+			Near(Indexed.SecondPosition.x, Fallback.SecondPosition.x) &&
+			Near(Indexed.FirstVelocity.x, Fallback.FirstVelocity.x) &&
+			Near(Indexed.SecondVelocity.x, Fallback.SecondVelocity.x),
+			"readback view and rebuilding full-scan fallback preserve controls, motion, and callback order");
+	}
+
+	void TestDynamicReadbackRestoresAcceptedMode() {
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Moving = std::make_shared<Part>();
+		Moving->SetCanCollide(false);
+		Moving->SetParent(Workspace);
+		Moving->SetLinearVelocity({1.0f, 0.0f, 0.0f});
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		WorldRootTestAccess::SimulateMissedDynamicStateRead(*Workspace, *Moving);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		const auto State = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Moving));
+		Check(State && !State->Description.Anchored &&
+			WorldRootTestAccess::HasDynamicReadback(*Workspace, Moving->GetObjectId()) &&
+			!WorldRootTestAccess::FullDynamicReadbackNeeded(*Workspace),
+			"unavailable state fallback restores accepted dynamic mode and rebuilt view");
+	}
+
 	void TestBodyDynamicsAndCollisionGroups() {
 		using namespace gargantuan;
 		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
@@ -2333,6 +2486,9 @@ int main() {
 	TestPhysicsPublicationNestedMutation();
 	TestPhysicsPublicationThrowKeepsAuthoredHistory();
 	TestPhysicsDirtyPartSafePointAndLifecycle();
+	TestDynamicReadbackLifecycle();
+	TestDynamicReadbackFallbackParity();
+	TestDynamicReadbackRestoresAcceptedMode();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();

@@ -57,6 +57,14 @@ namespace gargantuan {
 		float StepAccumulator = 0.0f;
 		std::vector<std::shared_ptr<BasePart>> Parts;
 		std::unordered_set<ObjectId> PartMembership;
+		struct DynamicReadbackRecord {
+			ObjectId Object;
+			PhysicsBodyId Body;
+			std::weak_ptr<BasePart> Part;
+		};
+		std::vector<DynamicReadbackRecord> DynamicReadback;
+		std::unordered_map<ObjectId, std::size_t> DynamicReadbackPositions;
+		bool FullDynamicReadbackNeeded = false;
 		std::vector<std::shared_ptr<DeformableBody>> SoftBodies;
 		std::unordered_map<ObjectId, PhysicsBodyId> PartBodies;
 		std::unordered_map<PhysicsBodyId, std::weak_ptr<BasePart>> BodyParts;
@@ -129,6 +137,9 @@ namespace gargantuan {
 		[[nodiscard]] PhysicsBodyDesc DescribePart(const BasePart &Part);
 		[[nodiscard]] SoftBodyDefinition DescribeDeformable(DeformableBody &Body) const;
 		[[nodiscard]] PhysicsBodyId CreatePartBody(const std::shared_ptr<BasePart> &Part);
+		void SyncDynamicReadback(const std::shared_ptr<BasePart> &Part, PhysicsBodyId Body);
+		void RemoveDynamicReadback(ObjectId Object);
+		void ReadbackDynamicBodies();
 		[[nodiscard]] SoftBodyId CreateDeformableBody(const std::shared_ptr<DeformableBody> &Body);
 		[[nodiscard]] PhysicsConstraintId CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint);
 		void TrackPart(const std::shared_ptr<BasePart> &Part);
