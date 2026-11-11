@@ -73,6 +73,7 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> PhysicsConnections;
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> JointAttachmentConnections;
 		std::unordered_set<ObjectId> DirtyBodies;
+		bool FullPartScanNeeded = false;
 		// Test-only, Main-owned attribution. Normal listener behavior is unchanged when disabled.
 		struct CFrameDirtyCallbackProfile {
 			std::uint64_t Calls = 0;
@@ -131,6 +132,7 @@ namespace gargantuan {
 		[[nodiscard]] SoftBodyId CreateDeformableBody(const std::shared_ptr<DeformableBody> &Body);
 		[[nodiscard]] PhysicsConstraintId CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint);
 		void TrackPart(const std::shared_ptr<BasePart> &Part);
+		bool MarkPartDirty(ObjectId Object);
 		void TrackDeformable(const std::shared_ptr<DeformableBody> &Body);
 		void TrackSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);
 		void TrackSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);

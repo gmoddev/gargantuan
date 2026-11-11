@@ -40,6 +40,9 @@ namespace gargantuan {
 		static std::size_t BodyCount(const WorldRoot &World) { return World.PartBodies.size(); }
 		static std::size_t PartCount(const WorldRoot &World) { return World.Parts.size(); }
 		static std::size_t PartMembershipCount(const WorldRoot &World) { return World.PartMembership.size(); }
+		static std::size_t DirtyPartCount(const WorldRoot &World) { return World.DirtyBodies.size(); }
+		static bool FullPartScanNeeded(const WorldRoot &World) { return World.FullPartScanNeeded; }
+		static void ForceFullPartScan(WorldRoot &World) { World.FullPartScanNeeded = true; }
 		static const std::vector<std::shared_ptr<BasePart>> &OrderedParts(const WorldRoot &World) { return World.Parts; }
 		static std::size_t ConstraintCount(const WorldRoot &World) { return World.ConstraintJoints.size(); }
 		static PhysicsBodyId Body(const WorldRoot &World, const BasePart &Part) {
@@ -1310,6 +1313,89 @@ namespace {
 			"throwing physics observer retains nested authored backend update for the next safe point");
 	}
 
+	void TestPhysicsDirtyPartSafePointAndLifecycle() {
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetAnchored(true);
+		PartValue->SetCanCollide(false);
+		PartValue->SetParent(Workspace);
+		const auto Object = PartValue->GetObjectId();
+		PartValue->SetCFrame(CFrame(1.0f, 5.0f, 0.0f));
+		PartValue->SetCFrame(CFrame(2.0f, 5.0f, 0.0f));
+		Check(WorldRootTestAccess::DirtyPartCount(*Workspace) == 1,
+			"repeated authored CFrame writes queue one final-state body update");
+		Workspace->StepPhysics(0.0, std::nullopt);
+		auto Body = WorldRootTestAccess::Body(*Workspace, *PartValue);
+		auto State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(State && State->Description.Transform.FuzzyEq(PartValue->GetCFrame()) &&
+			WorldRootTestAccess::DirtyPartCount(*Workspace) == 0,
+			"safe point applies the final authored CFrame once");
+
+		bool Reentered = false;
+		auto Nested = PartValue->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+			if (Reentered) return;
+			Reentered = true;
+			Workspace->StepPhysics(0.0, std::nullopt);
+			PartValue->SetCFrame(CFrame(4.0f, 5.0f, 0.0f));
+		});
+		PartValue->SetCFrame(CFrame(3.0f, 5.0f, 0.0f));
+		State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(Reentered && State && Near(State->Description.Transform.Position.x, 3.0f) &&
+			WorldRootTestAccess::DirtyPartCount(*Workspace) == 1,
+			"nested safe point leaves the later reentrant CFrame queued");
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(State && Near(State->Description.Transform.Position.x, 4.0f) &&
+			WorldRootTestAccess::DirtyPartCount(*Workspace) == 0,
+			"following safe point applies the reentrant authored CFrame");
+		Nested->Disconnect();
+
+		WorldRootTestAccess::ForceFullPartScan(*Workspace);
+		PartValue->SetCFrame(CFrame(5.0f, 5.0f, 0.0f));
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(State && Near(State->Description.Transform.Position.x, 5.0f) &&
+			!WorldRootTestAccess::FullPartScanNeeded(*Workspace),
+			"conservative full scan observes authored state and clears its request");
+
+		bool Detached = false;
+		auto Reparent = PartValue->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+			Detached = true;
+			PartValue->SetParent(nullptr);
+		});
+		PartValue->SetCFrame(CFrame(6.0f, 5.0f, 0.0f));
+		Check(Detached && !WorldRootTestAccess::IsBodyValid(*Workspace, Body) &&
+			WorldRootTestAccess::DirtyPartCount(*Workspace) == 0,
+			"nested reparent retires the old body and queued dirty hint");
+		Reparent->Disconnect();
+		PartValue->SetParent(Workspace);
+		Body = WorldRootTestAccess::Body(*Workspace, *PartValue);
+		State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(Body.IsValid() && State && Near(State->Description.Transform.Position.x, 6.0f),
+			"readmission creates a backend body from the live authored CFrame");
+		PartValue->SetCFrame(CFrame(7.0f, 5.0f, 0.0f));
+		Workspace->StepPhysics(0.0, std::nullopt);
+		State = WorldRootTestAccess::State(*Workspace, Body);
+		Check(State && Near(State->Description.Transform.Position.x, 7.0f),
+			"readmitted Part accepts subsequent authored updates");
+
+		PartValue->Destroy();
+		auto Replacement = std::make_shared<Part>();
+		Replacement->SetAnchored(true);
+		Replacement->SetParent(Workspace);
+		Replacement->SetCFrame(CFrame(8.0f, 5.0f, 0.0f));
+		Workspace->StepPhysics(0.0, std::nullopt);
+		const auto ReplacementBody = WorldRootTestAccess::Body(*Workspace, *Replacement);
+		State = WorldRootTestAccess::State(*Workspace, ReplacementBody);
+		Check(Replacement->GetObjectId() != Object &&
+			!WorldRootTestAccess::IsBodyValid(*Workspace, Body) &&
+			State && Near(State->Description.Transform.Position.x, 8.0f),
+			"destroyed generation cannot update its replacement backend body");
+	}
+
 	void TestBodyDynamicsAndCollisionGroups() {
 		using namespace gargantuan;
 		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
@@ -2246,6 +2332,7 @@ int main() {
 	TestSimulationPublicationAndImpulse();
 	TestPhysicsPublicationNestedMutation();
 	TestPhysicsPublicationThrowKeepsAuthoredHistory();
+	TestPhysicsDirtyPartSafePointAndLifecycle();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();

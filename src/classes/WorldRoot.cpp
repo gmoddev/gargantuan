@@ -247,23 +247,33 @@ namespace gargantuan {
 		return Creation.Constraint;
 	}
 
+	bool WorldRoot::MarkPartDirty(ObjectId Object) {
+		try {
+			return DirtyBodies.insert(Object).second;
+		} catch (...) {
+			// A failed dirty hint must not lose the committed Part state.
+			FullPartScanNeeded = true;
+			throw;
+		}
+	}
+
 	void WorldRoot::TrackPart(const std::shared_ptr<BasePart> &Part) {
 		if (!Part || Part->GetDestroyed() || Part->IsDestroying()) return;
 		const auto Id = Part->GetObjectId();
 		TrackedParts[Id] = Part;
 		if (PhysicsConnections.contains(Id)) return;
 		auto MarkDirty = [this, Id](std::monostate) {
-			if (!ShuttingDownPhysics && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
+			if (!ShuttingDownPhysics && TrackedParts.contains(Id)) (void)MarkPartDirty(Id);
 		};
 		auto MarkCFrameDirty = [this, Id](std::monostate) {
 			if (!ProfileCFrameDirtyCallback) {
-				if (!ShuttingDownPhysics && PublishingPhysicsPart != Id && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
+				if (!ShuttingDownPhysics && PublishingPhysicsPart != Id && TrackedParts.contains(Id)) (void)MarkPartDirty(Id);
 				return;
 			}
 			const auto Start = std::chrono::steady_clock::now();
 			++CFrameDirtyProfile.Calls;
 			if (!ShuttingDownPhysics && PublishingPhysicsPart != Id && TrackedParts.contains(Id)) {
-				if (DirtyBodies.insert(Id).second) ++CFrameDirtyProfile.NewDirty;
+				if (MarkPartDirty(Id)) ++CFrameDirtyProfile.NewDirty;
 				else ++CFrameDirtyProfile.Coalesced;
 			} else ++CFrameDirtyProfile.Suppressed;
 			CFrameDirtyProfile.Nanoseconds += static_cast<std::uint64_t>(
@@ -546,14 +556,14 @@ namespace gargantuan {
 		CollisionAssetChangeSequence = Changes.NextSequence;
 		if (Changes.RescanRequired) {
 			for (const auto &[Id, WeakPart] : TrackedParts)
-				if (std::dynamic_pointer_cast<MeshPart>(WeakPart.lock())) DirtyBodies.insert(Id);
+				if (std::dynamic_pointer_cast<MeshPart>(WeakPart.lock())) (void)MarkPartDirty(Id);
 			return;
 		}
 		for (const auto &Change : Changes.Changes) {
 			if (Change.Kind != AssetKind::Mesh) continue;
 			for (const auto &[Id, WeakPart] : TrackedParts) {
 				auto Part = std::dynamic_pointer_cast<MeshPart>(WeakPart.lock());
-				if (Part && Part->GetMesh() == Change.Reference) DirtyBodies.insert(Id);
+				if (Part && Part->GetMesh() == Change.Reference) (void)MarkPartDirty(Id);
 			}
 		}
 	}
@@ -567,8 +577,14 @@ namespace gargantuan {
 			else LOG_ERROR(App, "[Physics:Backend] Gravity update failed: %s", Result.Message.c_str());
 		}
 
-		const auto BodyUpdates = SortedIds(DirtyBodies);
+		std::vector<ObjectId> BodyUpdates;
+		if (FullPartScanNeeded) {
+			BodyUpdates.reserve(TrackedParts.size());
+			for (const auto &[Object, _] : TrackedParts) BodyUpdates.push_back(Object);
+			std::sort(BodyUpdates.begin(), BodyUpdates.end());
+		} else BodyUpdates = SortedIds(DirtyBodies);
 		DirtyBodies.clear();
+		FullPartScanNeeded = false;
 		for (const auto Object : BodyUpdates) {
 			auto Tracked = TrackedParts.find(Object);
 			auto Part = Tracked == TrackedParts.end() ? nullptr : Tracked->second.lock();
@@ -576,7 +592,7 @@ namespace gargantuan {
 				Part->FindFirstAncestorWhichIsA("WorldRoot").get() != this) continue;
 			auto Found = PartBodies.find(Object);
 			if (Found == PartBodies.end() || !Physics.IsBodyValid(Found->second)) {
-				if (!CreatePartBody(Part).IsValid()) DirtyBodies.insert(Object);
+				if (!CreatePartBody(Part).IsValid()) (void)MarkPartDirty(Object);
 				continue;
 			}
 			auto Result = Physics.UpdateBody(Found->second, DescribePart(*Part));
@@ -585,7 +601,7 @@ namespace gargantuan {
 					if (FailedMeshUpdatesLogged.insert(Object).second)
 						LOG_WARN(App, "[Physics:Mesh] Collision update failed for %s: %s", Part->GetFullName().c_str(), Result.Message.c_str());
 				} else LOG_ERROR(App, "[Physics:Backend] Body update failed for %s: %s", Part->GetFullName().c_str(), Result.Message.c_str());
-				DirtyBodies.insert(Object);
+				(void)MarkPartDirty(Object);
 			} else {
 				FailedMeshUpdatesLogged.erase(Object);
 				if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
@@ -752,6 +768,7 @@ namespace gargantuan {
 			for (const auto &Connection : Connections) Connection->Disconnect();
 		JointAttachmentConnections.clear();
 		DirtyBodies.clear();
+		FullPartScanNeeded = false;
 		FailedMeshUpdatesLogged.clear();
 		DirtyDeformables.clear();
 		DirtyConstraints.clear();
@@ -1160,12 +1177,12 @@ namespace gargantuan {
 				} catch (...) {
 					PublishingPhysicsPart = PreviousPublishingPart;
 					if (!Part->GetDestroyed() && !Part->IsDestroying() && TrackedParts.contains(Object) &&
-						!Part->GetCFrame().FuzzyEq(Motion.Transform)) DirtyBodies.insert(Object);
+						!Part->GetCFrame().FuzzyEq(Motion.Transform)) (void)MarkPartDirty(Object);
 					throw;
 				}
 				PublishingPhysicsPart = PreviousPublishingPart;
 				if (!Part->GetDestroyed() && !Part->IsDestroying() && TrackedParts.contains(Object) &&
-				!Part->GetCFrame().FuzzyEq(Motion.Transform)) DirtyBodies.insert(Object);
+					!Part->GetCFrame().FuzzyEq(Motion.Transform)) (void)MarkPartDirty(Object);
 			}
 
 			for (const auto &Contact : Result.Contacts) {

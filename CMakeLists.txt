@@ -898,6 +898,9 @@ if(BUILD_TESTING)
 	endif()
 	add_executable(gargantuan_physics_backend_tests "tests/PhysicsBackendTests.cpp")
 	target_link_libraries(gargantuan_physics_backend_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_runtime6_dirty_insert_fault_tests "tests/Runtime6DirtyInsertFaultTests.cpp")
+	target_link_libraries(gargantuan_runtime6_dirty_insert_fault_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_runtime6_dirty_insert_fault COMMAND gargantuan_runtime6_dirty_insert_fault_tests)
 	add_executable(gargantuan_runtime6_physics_listener_probe "tests/Runtime6PhysicsListenerProbe.cpp")
 	target_link_libraries(gargantuan_runtime6_physics_listener_probe PRIVATE gargantuan_core)
 	add_test(NAME gargantuan_runtime6_physics_listener_native
@@ -1472,6 +1475,7 @@ if(BUILD_TESTING)
 			gargantuan_replicated_storage_session_tests
 			gargantuan_attributes_tags_profile
 			gargantuan_physics_backend_tests
+			gargantuan_runtime6_dirty_insert_fault_tests
 			gargantuan_runtime6_physics_listener_probe
 			gargantuan_physics_query_benchmark
 			gargantuan_physics_activation_benchmark
