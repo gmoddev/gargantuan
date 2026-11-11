@@ -438,6 +438,7 @@ namespace {
 			bool Cutout = false;
 			bool Mirrored = false;
 			bool Spot = false;
+			bool SingleSided = false;
 		};
 		const std::array Cases{
 			Case{"opaque-directional", RenderOpacityMode::Opaque},
@@ -445,6 +446,7 @@ namespace {
 			Case{"masked-solid-directional", RenderOpacityMode::Masked},
 			Case{"masked-cutout-directional", RenderOpacityMode::Masked, true},
 			Case{"mirrored-opaque-spot", RenderOpacityMode::Opaque, false, true, true},
+			Case{"single-sided-mirrored-opaque-spot", RenderOpacityMode::Opaque, false, true, true, true},
 		};
 		int MaskedSolidCenter = -1;
 		int MaskedCutoutCenter = -1;
@@ -452,6 +454,7 @@ namespace {
 			auto Publication = Scene(1, true, true, Test.Spot);
 			auto &Caster = Publication->Creates.back();
 			Caster.Material.OpacityMode = Test.Opacity;
+			Caster.Material.DoubleSided = !Test.SingleSided;
 			if (Test.Opacity != RenderOpacityMode::Masked) Caster.Material.BaseColorTexture.reset();
 			if (Test.Cutout) Publication->TextureCreates.back().Pixels =
 				std::make_shared<const std::vector<std::uint8_t>>(
@@ -485,6 +488,44 @@ namespace {
 		}
 		Require(MaskedCutoutCenter > MaskedSolidCenter + 25,
 			"masked cutout control did not expose the receiver");
+
+		auto Mixed = Scene(1, true, true, true);
+		auto &FirstCaster = Mixed->Creates.back();
+		FirstCaster.Material.OpacityMode = RenderOpacityMode::Opaque;
+		FirstCaster.Material.BaseColorTexture.reset();
+		const auto Clone = FirstCaster;
+		for (std::uint32_t Index = 0; Index < 2; ++Index) {
+			auto Next = Clone;
+			Next.Item.Object = {310u + Index, 1};
+			Mixed->Creates.push_back(std::move(Next));
+		}
+		// RenderProjection's map order is the actual shadow draw order. Mark its
+		// middle caster masked so a single spotlight pass selects solid, mask,
+		// then solid again, independent of unordered_map bucket policy.
+		RenderProjection OrderProbe;
+		(void)OrderProbe.Apply(*Mixed);
+		std::vector<ObjectId> OrderedCasters;
+		for (const auto &[Id, Projected] : OrderProbe.GetObjects())
+			if (Projected.Visible && Projected.Item.CastShadow) OrderedCasters.push_back(Id);
+		Require(OrderedCasters.size() == 3, "mixed shadow pipeline control needs three casters");
+		for (auto &Create : Mixed->Creates) if (Create.Item.Object == OrderedCasters[1]) {
+			Create.Material.OpacityMode = RenderOpacityMode::Masked;
+			Create.Material.BaseColorTexture = Mask;
+		}
+		EditorViewportRenderer OldMixed(Size, Size);
+		EditorViewportRenderer SolidMixed(Size, Size);
+		EditorViewportRendererTestAccess::SetSolidShadowDepthExperiment(SolidMixed, true);
+		CurrentCase = "solid-depth-off-mixed-opaque-mask-opaque";
+		const auto OldMixedPixels = Capture(OldMixed, Mixed);
+		CurrentCase = "solid-depth-on-mixed-opaque-mask-opaque";
+		const auto SolidMixedPixels = Capture(SolidMixed, Mixed);
+		Require(OldMixedPixels.RgbPixels == SolidMixedPixels.RgbPixels,
+			"solid and masked shadow pipeline switches changed exact receiver pixels");
+		const auto OldMixedMetrics = EditorViewportRendererTestAccess::GetMetrics(OldMixed);
+		const auto SolidMixedMetrics = EditorViewportRendererTestAccess::GetMetrics(SolidMixed);
+		Require(OldMixedMetrics.ShadowCasterDraws == 3 && SolidMixedMetrics.ShadowCasterDraws == 3 &&
+			OldMixedMetrics.SolidShadowCasterDraws == 0 && SolidMixedMetrics.SolidShadowCasterDraws == 2,
+			"mixed spotlight control did not record opaque, masked, opaque depth draws");
 	}
 
 	void CheckDirectionalPixels() {
