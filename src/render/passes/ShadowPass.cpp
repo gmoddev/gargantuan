@@ -89,8 +89,8 @@ namespace gargantuan {
 		}
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
-			context.SolidShadowDepthActive = context.UseSolidShadowDepthExperiment &&
-				EnsureSolidPipelines(gpu, context.Metrics);
+			context.SolidShadowDepthAttempted = false;
+			context.SolidShadowDepthActive = false;
 			RecordedCache = &context.ShadowCache;
 			RecordedAtlas = context.SpotShadowAtlas;
 			context.ShadowPoseRevisions.clear();
@@ -326,6 +326,11 @@ namespace gargantuan {
 					const bool AlphaMask = Material.OpacityMode == RenderOpacityMode::Masked;
 					if (AlphaMask && Material.BaseColorFactor.a < Material.AlphaCutoff) return;
 					const bool TexturedMask = AlphaMask && Material.BaseColorTexture.has_value();
+					if (!AlphaMask && context.UseSolidShadowDepthExperiment &&
+						!context.SolidShadowDepthAttempted) {
+						context.SolidShadowDepthAttempted = true;
+						context.SolidShadowDepthActive = EnsureSolidPipelines(Gpu, context.Metrics);
+					}
 					const bool SolidDepth = context.SolidShadowDepthActive && !AlphaMask;
 					if (TexturedMask) {
 						if (CascadeIndex) context.ShadowCache.DependOnMask(*CascadeIndex, *Material.BaseColorTexture);
