@@ -8,6 +8,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
@@ -37,11 +38,12 @@ namespace gargantuan {
 		static void AppendRendererPart(WorldRoot &World, const std::shared_ptr<BasePart> &Part) {
 			World.Parts.push_back(Part);
 		}
-		static void DisconnectCFramePhysicsListener(WorldRoot &World, const BasePart &Part) {
+		static void DisconnectCFramePhysicsListener(WorldRoot &World, BasePart &Part) {
 			auto Found = World.PhysicsConnections.find(Part.GetObjectId());
 			if (Found == World.PhysicsConnections.end() || Found->second.empty() || !Found->second.front())
 				throw std::runtime_error("[Runtime6:PhysicsListener] Missing native CFrame connection");
 			Found->second.front()->Disconnect();
+			Part.GetPropertyChangedSignal("CFrame")->DisconnectAll();
 		}
 		static void StartCFrameProfile(WorldRoot &World) {
 			World.CFrameDirtyProfile = {};
@@ -66,6 +68,24 @@ namespace {
 		std::size_t Count = 1000;
 		std::size_t Changed = 1000;
 		std::size_t Frames = 3;
+	};
+
+	class ScopedMeasuredProfiles {
+		WorldRoot &World;
+
+	  public:
+		explicit ScopedMeasuredProfiles(WorldRoot &Value) : World(Value) {
+			BaseSignal::SetDispatchProfilingEnabled(false);
+			BaseSignal::ResetDispatchProfile();
+			WorldRootTestAccess::StartCFrameProfile(World);
+			BaseSignal::SetDispatchProfilingEnabled(true);
+		}
+		~ScopedMeasuredProfiles() {
+			BaseSignal::SetDispatchProfilingEnabled(false);
+			WorldRootTestAccess::StopCFrameProfile(World);
+		}
+		ScopedMeasuredProfiles(const ScopedMeasuredProfiles &) = delete;
+		ScopedMeasuredProfiles &operator=(const ScopedMeasuredProfiles &) = delete;
 	};
 
 	std::size_t ParseBound(std::string_view Text, std::size_t Maximum) {
@@ -126,25 +146,39 @@ namespace {
 		if ((RendererOnly && BodyCount != 0) || (!RendererOnly && BodyCount != Config.Count) ||
 			WorldRootTestAccess::DirtyCount(*World) != 0)
 			throw std::runtime_error("[Runtime6:PhysicsListener] Fixture body or initial dirty count mismatch");
-		WorldRootTestAccess::StartCFrameProfile(*World);
 		std::cout << "Mode,Count,Changed,Frame,NativeBodies,ListenerEnabled,SetterNanoseconds,"
-			"ListenerCalls,NewDirty,Coalesced,Suppressed,ListenerNanoseconds,DirtyCount\n";
+			"ListenerCalls,NewDirty,Coalesced,Suppressed,ListenerNanoseconds,DirtyCount,"
+			"FireCalls,ConnectionVisits,NativeCallbacks,ScriptCallbacks,DeferredCalls,"
+			"SnapshotNanoseconds,DispatchCallbackNanoseconds,CleanupNanoseconds,FireTotalNanoseconds,"
+			"CallbackResidualNanoseconds,FireResidualNanoseconds\n";
 		for (std::size_t Frame = 0; Frame < Config.Frames; ++Frame) {
-			const auto Before = WorldRootTestAccess::Profile(*World);
-			const auto Started = Clock::now();
-			for (std::size_t Index = 0; Index < Config.Changed; ++Index) {
-				auto Transform = Parts[Index]->GetCFrame();
-				Transform.Position.z = static_cast<float>(Frame + 1) * 0.01f;
-				Parts[Index]->SetCFrame(Transform);
+			std::int64_t SetterNanoseconds = 0;
+			{
+				ScopedMeasuredProfiles Profiles(*World);
+				const auto Started = Clock::now();
+				for (std::size_t Index = 0; Index < Config.Changed; ++Index) {
+					auto Transform = Parts[Index]->GetCFrame();
+					Transform.Position.z = static_cast<float>(Frame + 1) * 0.01f;
+					Parts[Index]->SetCFrame(Transform);
+				}
+				SetterNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
+					Clock::now() - Started).count();
 			}
-			const auto SetterNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
-				Clock::now() - Started).count();
 			const auto After = WorldRootTestAccess::Profile(*World);
-			const auto Calls = After.Calls - Before.Calls;
-			const auto NewDirty = After.NewDirty - Before.NewDirty;
-			const auto Coalesced = After.Coalesced - Before.Coalesced;
+			const auto Dispatch = BaseSignal::GetDispatchProfile();
+			const auto Calls = After.Calls;
+			const auto NewDirty = After.NewDirty;
+			const auto Coalesced = After.Coalesced;
 			if (Calls != (WithoutListener ? 0 : Config.Changed))
 				throw std::runtime_error("[Runtime6:PhysicsListener] Listener call count mismatch");
+			if (Dispatch.Calls != Config.Changed ||
+				Dispatch.ConnectionVisits != (WithoutListener ? 0 : Config.Changed) ||
+				Dispatch.NativeCallbacks != (WithoutListener ? 0 : Config.Changed) ||
+				Dispatch.ScriptCallbacks != 0 || Dispatch.DeferredCalls != 0)
+				throw std::runtime_error("[Runtime6:PhysicsListener] Signal dispatch count mismatch");
+			if (Dispatch.CallbackNanoseconds < After.Nanoseconds ||
+				Dispatch.TotalNanoseconds < After.Nanoseconds)
+				throw std::runtime_error("[Runtime6:PhysicsListener] Callback timing nesting mismatch");
 			if (NewDirty != (WithoutListener || Frame != 0 ? 0 : Config.Changed) ||
 				Coalesced != (WithoutListener || Frame == 0 ? 0 : Config.Changed))
 				throw std::runtime_error("[Runtime6:PhysicsListener] New/coalesced callback count mismatch");
@@ -154,10 +188,15 @@ namespace {
 			std::cout << Config.Mode << ',' << Config.Count << ',' << Config.Changed << ',' << Frame << ','
 				<< BodyCount << ',' << !WithoutListener << ',' << SetterNanoseconds << ','
 				<< Calls << ',' << NewDirty << ','
-				<< Coalesced << ',' << After.Suppressed - Before.Suppressed << ','
-				<< After.Nanoseconds - Before.Nanoseconds << ',' << DirtyCount << '\n';
+				<< Coalesced << ',' << After.Suppressed << ','
+				<< After.Nanoseconds << ',' << DirtyCount << ','
+				<< Dispatch.Calls << ',' << Dispatch.ConnectionVisits << ',' << Dispatch.NativeCallbacks << ','
+				<< Dispatch.ScriptCallbacks << ',' << Dispatch.DeferredCalls << ','
+				<< Dispatch.SnapshotNanoseconds << ',' << Dispatch.CallbackNanoseconds << ','
+				<< Dispatch.CleanupNanoseconds << ',' << Dispatch.TotalNanoseconds << ','
+				<< Dispatch.CallbackNanoseconds - After.Nanoseconds << ','
+				<< Dispatch.TotalNanoseconds - After.Nanoseconds << '\n';
 		}
-		WorldRootTestAccess::StopCFrameProfile(*World);
 	}
 }
 
