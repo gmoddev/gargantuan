@@ -278,6 +278,17 @@ namespace {
 		Require(Suite.Metrics().ProbeArrayBytes <= 4ull * 1024 * 1024 &&
 			Suite.Metrics().ResidentReflectionProbes == MaximumResidentReflectionProbes,
 			"[Render:ProbeGpu] Sixteen authored probes exceeded or failed twelve-slot residency");
+		std::vector<RenderReflectionProbeState> FarPriority;
+		for (std::uint32_t Index = 0; Index < 12; ++Index) {
+			auto Value = Probe({200 + Index, 1}, {1000.0f + 10.0f * Index, 0, 0}, Source(BlueImage, 1));
+			Value.Priority = 10;
+			FarPriority.push_back(Value);
+		}
+		FarPriority.push_back(Probe({220, 1}, {0, 0, 0}, Source(RedImage, 1, Suite.RedRevision)));
+		const auto Nearby = Suite.Run("nearby-over-far-priority-residency", FarPriority, 0, true, false, {}, false, 16);
+		const auto NearbyColor = Pixel(Nearby, Width / 2, Height / 2);
+		Require(NearbyColor[1] > NearbyColor[2] + 35,
+			"[Render:ProbeGpu] Distant high-priority probes evicted the only nearby probe");
 		std::cout << "[Render:ProbeGpu] captures=" << Evidence.string() << " resident="
 			<< Suite.Metrics().ResidentReflectionProbes << " updates=" << Suite.Metrics().ProbeUpdates << '\n';
 	}
