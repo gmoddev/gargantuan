@@ -1,6 +1,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
+#include "skinning.glsl"
 #include "world-uniforms.glsl"
 #include "instance-record.glsl"
 
@@ -25,20 +26,19 @@ layout(location = 10) flat out vec4 FragmentColorSamplerModes;
 
 void main() {
     InstanceRecord Part = InstanceData.Records[VisibleInstances.Slots[gl_InstanceIndex]];
-    // Rigid vertices use the identity skin palette in opaque.vert. Its
-    // ApplySkinning path normalizes the normal and tangent before model space.
-    vec3 RigidNormal = normalize(VertexNormal);
-    vec3 RigidTangent = normalize(VertexTangent.xyz);
-    gl_Position = world.ProjectionMatrix * world.ViewMatrix * Part.ModelMatrix * vec4(VertexPosition, 1.0);
-    FragmentNormal = normalize(mat3(Part.NormalMatrix) * RigidNormal);
+    SkinnedVertex Vertex = ApplySkinning(
+        VertexPosition, VertexNormal, VertexTangent, VertexJoints, VertexWeights
+    );
+    gl_Position = world.ProjectionMatrix * world.ViewMatrix * Part.ModelMatrix * vec4(Vertex.Position, 1.0f);
+    FragmentNormal = normalize(mat3(Part.NormalMatrix) * Vertex.Normal);
     FragmentColor = Part.Color;
-    WorldPosition = Part.ModelMatrix * vec4(VertexPosition, 1.0);
+    WorldPosition = (Part.ModelMatrix * vec4(Vertex.Position, 1.0f)).xyzw;
     ShadowPosition = world.ShadowBiasMatrix * WorldPosition;
     FragmentUV = VertexUV;
     FragmentMaterialValues = Part.MaterialValues;
     mat3 Model = mat3(Part.ModelMatrix);
     float Orientation = determinant(Model) < 0.0 ? -1.0 : 1.0;
-    FragmentTangent = vec4(Model * RigidTangent, Orientation * VertexTangent.w);
+    FragmentTangent = vec4(Model * Vertex.Tangent.xyz, Orientation * Vertex.Tangent.w);
     FragmentMaterialFlags = Part.MaterialFlags;
     FragmentEmissiveOcclusion = Part.EmissiveOcclusion;
     FragmentMaterialControls = Part.MaterialControls;

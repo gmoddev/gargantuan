@@ -412,7 +412,7 @@ namespace gargantuan {
 			try {
 				InstancedShader.VertexFilepath = GetSDLShaderPath("opaque-instanced.vert");
 				InstancedShader.VertexUniformBufferCount = 1;
-				InstancedShader.VertexStorageBufferCount = 2;
+				InstancedShader.VertexStorageBufferCount = 3;
 				InstancedShader.FragmentFilepath = GetSDLShaderPath(
 					ProbeArrayShader ? "opaque.frag" : "opaque-portable.frag");
 				InstancedShader.FragmentUniformBufferCount = 1;
@@ -731,8 +731,9 @@ namespace gargantuan {
 				SDL_BindGPUVertexBuffers(Pass, 0, &VertexBinding, 1);
 				SDL_BindGPUIndexBuffer(Pass, &IndexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
 				if (Context.Metrics) ++Context.Metrics->WorldGeometryBindings;
-				const std::array<SDL_GPUBuffer *, 2> Storage{
-					Context.InstanceResources->GetBuffer(), VisibleInstances.GetBuffer()};
+				const auto IdentityPalette = Context.SkinPalettes.Find({}, nullptr);
+				const std::array<SDL_GPUBuffer *, 3> Storage{
+					IdentityPalette.Buffer, Context.InstanceResources->GetBuffer(), VisibleInstances.GetBuffer()};
 				SDL_BindGPUVertexStorageBuffers(Pass, 0, Storage.data(), Storage.size());
 				const std::array<SDL_GPUTextureSamplerBinding, 13> Bindings{{
 					ShadowBinding, {White, DefaultSampler}, {White, DefaultSampler}, {White, DefaultSampler},

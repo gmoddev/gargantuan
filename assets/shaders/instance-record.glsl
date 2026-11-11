@@ -1,8 +1,8 @@
 #ifndef GARGANTUAN_INSTANCE_RECORD_GLSL
 #define GARGANTUAN_INSTANCE_RECORD_GLSL
 
-// Mirror SDLInstanceRecord exactly. This rigid variant has no skin palette;
-// its two vertex storage buffers occupy consecutive slots 0 and 1.
+// Mirror SDLInstanceRecord exactly. Slot 0 holds the identity skin palette;
+// records and visible indices occupy slots 1 and 2.
 struct InstanceRecord {
     mat4 ModelMatrix;
     mat4 NormalMatrix;
@@ -14,10 +14,10 @@ struct InstanceRecord {
     vec4 ColorSamplerModes;
 };
 
-layout(std430, set = 0, binding = 0) readonly buffer InstanceRecordBuffer {
+layout(std430, set = 0, binding = 1) readonly buffer InstanceRecordBuffer {
     InstanceRecord Records[];
 } InstanceData;
-layout(std430, set = 0, binding = 1) readonly buffer VisibleInstanceIndexBuffer {
+layout(std430, set = 0, binding = 2) readonly buffer VisibleInstanceIndexBuffer {
     uint Slots[];
 } VisibleInstances;
 

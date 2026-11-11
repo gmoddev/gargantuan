@@ -23,11 +23,12 @@ unchanged caster draw. The candidate verifies the same shadow pose revision guar
 used by individual camera draws before admission. A mismatch falls back to the
 individual path and its existing failure behavior.
 
-The ordinary rigid vertex shader applies an identity skin palette. Because its
-`ApplySkinning` normalizes input normals and tangents even for rigid meshes,
-the instanced shader repeats those normalizations. The CPU instance record matches
-the ordinary part uniform layout and material fields, but SSBO versus UBO access
-and shader optimization still need exact GPU pixel qualification.
+The ordinary rigid vertex shader applies an identity skin palette. The instanced
+variant binds the same identity palette at vertex slot 0, with instance records
+and visible indices at slots 1 and 2, and calls the same `ApplySkinning` function.
+The CPU instance record matches the ordinary part uniform layout and material
+fields, but SSBO versus UBO access and shader optimization still need exact GPU
+pixel qualification.
 
 `RendererDepthTests --contiguous-instancing` compares exact pixels with individual
 draws for separated, overlapping, coplanar, reversed creation, nearly tied depth,
