@@ -35,14 +35,15 @@ allocation, transfer mapping, and copy-pass failure are explicit exceptions
 for the caller's renderer recovery path.
 
 The visible-index stream selects slots after camera culling while retaining
-original object order. Batches use Foundation 4's conservative pairwise
-screen/depth independence proof. The first GPU path admits only rigid,
-untextured, single-range, opaque objects sharing one immutable mesh and
-compatible sidedness/shading. It additionally excludes shadow casters until a
-separate shadow instanced path qualifies. Masks, blending, skinning, deformable
-vertices, unavailable residency, and unproven overlap retain individual draws.
-The rigid shader variants consume vertex storage slots 0 and 1 with no skin
-palette binding.
+original object order. Proof mode uses Foundation 4's conservative pairwise
+screen/depth independence test. The optional Vulkan contiguous mode preserves
+single-range instance order and is documented separately. Both admit only
+rigid, untextured, single-range, opaque objects sharing one immutable mesh and
+compatible sidedness/shading. Proof mode excludes shadow casters; contiguous
+mode admits static casters after the unchanged shadow pass. Masks, blending,
+skinning poses, deformable vertices, and unavailable residency retain individual
+draws. The rigid shader variants bind the identity skin palette at vertex
+storage slot 0, instance records at slot 1, and visible indices at slot 2.
 
 The separate compact visible-slot buffer uploads only when its slot sequence
 changes and acknowledges that sequence only after submission. Its 32-bit slot
@@ -66,6 +67,9 @@ run passed on 2026-11-11. `RendererDepthTests --instancing-ordering` compares
 exact viewport pixels against individual draws across separated and overlapping
 depth, material/range exclusions, frustum and visibility changes, rehash,
 generation replacement, sparse and dense updates, full resync, and recreation.
-That native test has passed syntax checks but awaits physical GPU execution.
-Physical upload, draw-count, exact-depth, recovery, and performance
-qualification remain required before integration.
+The proof-order native test passed exact-pixel and actual two-object draw checks
+on the AMD Vulkan device at source `acf088179`. Its 50K static performance
+regressed despite reducing draw calls, because coverage preparation cost about
+19.80 ms per frame. The contiguous-order, identity-palette shader variant and
+large-scene speedup still require physical GPU qualification before default
+admission.
