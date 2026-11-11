@@ -411,7 +411,7 @@ void CheckContiguousInstancing(const std::filesystem::path &Output) {
 		return glm::translate(Identity, glm::vec3(X, 0, Z));
 	};
 	const auto Compare = [&](std::string_view Name, const RenderPublication &Value, bool Eligible,
-		std::uint64_t ExpectedObjects = 2) {
+		std::uint64_t ExpectedObjects = 2, std::uint64_t ExpectedBatches = 1) {
 		const auto Publication = std::make_shared<const RenderPublication>(Value);
 		const auto Actual = Candidate.Capture(Publication);
 		const auto Expected = Reference.Capture(Publication);
@@ -426,10 +426,12 @@ void CheckContiguousInstancing(const std::filesystem::path &Output) {
 		const auto After = MetricsRenderer.GetMetrics();
 		const auto Batches = After.ContiguousInstancedDrawCalls - Before.ContiguousInstancedDrawCalls;
 		const auto Objects = After.InstancedObjects - Before.InstancedObjects;
-		if (Vulkan && (Batches != (Eligible ? 1u : 0u) || Objects != (Eligible ? ExpectedObjects : 0u)))
+		if (Vulkan && (Batches != (Eligible ? ExpectedBatches : 0u) ||
+			Objects != (Eligible ? ExpectedObjects : 0u)))
 			throw std::runtime_error(std::format("Contiguous fixture {} issued {} batches for {} objects", Name, Batches, Objects));
 		std::cout << "[Render:ContiguousInstances] " << Name << " batches=" << Batches
 			<< " objects=" << Objects << '\n';
+		return Expected;
 	};
 	Compare("screen-separated", MakeInstanceScene(Id++, Translate(-.045f, 0), Translate(.045f, 0)), true);
 	Compare("depth-separated", MakeInstanceScene(Id++, Identity, Translate(0, -1.5f)), true);
@@ -440,15 +442,31 @@ void CheckContiguousInstancing(const std::filesystem::path &Output) {
 		glm::rotate(Identity, glm::radians(45.0f), glm::vec3(0, 1, 0))), true);
 	Compare("shadow-casters", MakeInstanceScene(Id++, Identity, Translate(0, -1.5f), false, true), true);
 	auto Nonunit = MakeInstanceScene(Id++, Identity, Translate(0, -1.5f));
+	Nonunit.Frame.Environment.SunIntensity = 3.0f;
+	Nonunit.Frame.Environment.SunDirection = glm::normalize(glm::vec3(0.5f, 0.4f, 1.0f));
+	Nonunit.Frame.Environment.AmbientColor = {0.02f, 0.02f, 0.02f};
 	auto Vertices = std::make_shared<std::vector<RenderVertex>>(*Nonunit.MeshCreates.front().Vertices);
-	for (auto &Vertex : *Vertices) {
-		Vertex.Normal *= 1.7f;
+	const std::array<glm::vec3, 4> NonunitNormals{{{4, 0, 1}, {0, 3, 1}, {-4, 0, 1}, {0, -3, 1}}};
+	for (std::size_t Index = 0; Index < Vertices->size(); ++Index) {
+		auto &Vertex = Vertices->at(Index);
+		Vertex.Position *= 30.0f;
+		Vertex.Normal = NonunitNormals[Index];
 		Vertex.Tangent.x *= 2.3f;
 		Vertex.Tangent.y *= 2.3f;
 		Vertex.Tangent.z *= 2.3f;
 	}
+	auto Flat = Nonunit;
+	auto FlatVertices = std::make_shared<std::vector<RenderVertex>>(*Vertices);
+	for (auto &Vertex : *FlatVertices) Vertex.Normal = {0, 0, 1};
+	Flat.MeshCreates.front().Vertices = FlatVertices;
 	Nonunit.MeshCreates.front().Vertices = Vertices;
-	Compare("nonunit-normal-tangent", Nonunit, true);
+	Nonunit.MeshCreates.front().Bounds = {{-.3f, -.3f, 0}, {.3f, .3f, 0}};
+	Flat.MeshCreates.front().Bounds = Nonunit.MeshCreates.front().Bounds;
+	const auto NonunitPixels = Compare("nonunit-normal-tangent", Nonunit, true);
+	EditorViewportRenderer FlatRenderer(ORDER_WIDTH, ORDER_HEIGHT);
+	const auto FlatPixels = FlatRenderer.Capture(std::make_shared<const RenderPublication>(Flat));
+	if (FlatPixels.RgbPixels == NonunitPixels.RgbPixels)
+		throw std::runtime_error("Nonunit normal fixture did not exercise sun-lit shading");
 	auto Dense = MakeInstanceScene(Id++, Identity, Identity);
 	for (std::uint32_t Slot = 3; Slot <= 64; ++Slot) {
 		auto Create = Dense.Creates.front();
@@ -456,6 +474,24 @@ void CheckContiguousInstancing(const std::filesystem::path &Output) {
 		Dense.Creates.push_back(Create);
 	}
 	Compare("dense-overlap-64", Dense, true, 64);
+	auto Offset = MakeInstanceScene(Id++, Identity, Identity);
+	for (std::uint32_t Slot = 3; Slot <= 4; ++Slot) {
+		auto Create = Offset.Creates.front();
+		Create.Item.Object = {Slot, 1};
+		Offset.Creates.push_back(Create);
+	}
+	RenderProjection Order;
+	(void)Order.Apply(Offset);
+	const auto &Traversal = Order.GetCompactTraversal();
+	for (std::size_t Position = 2; Position < Traversal.size(); ++Position) {
+		const auto Object = Traversal[Position].Object;
+		auto Create = std::ranges::find_if(Offset.Creates,
+			[&](const RenderObjectCreate &Entry) { return Entry.Item.Object == Object; });
+		Create->Material.DoubleSided = false;
+		Create->Primitives = std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(
+			std::initializer_list<RenderPrimitiveMaterialState>{{0, 6, Create->Material}});
+	}
+	Compare("nonzero-first-instance", Offset, true, 4, 2);
 	Compare("multiple-ranges", MakeOrderingScene(Id++, Identity, Identity, false, false, false), false);
 	Compare("masked-material", MakeOrderingScene(Id++, Identity, Identity, false, true, false), false);
 	Compare("separate-meshes", WithoutSharedMesh(MakeInstanceScene(Id++, Identity, Identity)), false);

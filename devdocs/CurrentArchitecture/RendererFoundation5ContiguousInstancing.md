@@ -33,8 +33,11 @@ pixel qualification.
 `RendererDepthTests --contiguous-instancing` compares exact pixels with individual
 draws for separated, overlapping, coplanar, reversed creation, nearly tied depth,
 intersecting, shadow-casting, nonunit normal/tangent, and 64-object dense overlap
-fixtures. It asserts actual native draw/object counts on Vulkan, and checks fallback
-for multiple ranges, masks, and separate meshes. The benchmark reports
+fixtures, plus two consecutive native batches whose second draw has a nonzero
+`first_instance`. It asserts actual native draw/object counts on Vulkan, and checks fallback
+for multiple ranges, masks, and separate meshes. The nonunit-normal fixture uses an angled sun and compares with a flat-normal
+control, so identical candidate/reference pixels alone cannot mask unused normals.
+The benchmark reports
 `ContiguousInstancedDrawCalls` and `MaximumInstancedBatchSize` with frame raw samples.
 Do not enable by default or claim speedup until the exact pixel, draw-count, and
 counterbalanced physical GPU gates pass.
