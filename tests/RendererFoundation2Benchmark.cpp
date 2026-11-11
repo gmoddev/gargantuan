@@ -10,6 +10,10 @@
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "../src/runtime/RuntimeWorkDiagnostics.hpp"
+#ifdef GARGANTUAN_RUNTIME6_ALLOCATION_PROBE
+#include "BenchmarkAllocationProbe.hpp"
+#endif
 
 #include <algorithm>
 #include <charconv>
@@ -96,6 +100,9 @@ namespace {
 		bool DiagnosticMarks
 	) {
 		using namespace gargantuan;
+		runtime_detail::WorkSample Work{};
+		std::optional<runtime_detail::WorkCapture> WorkCapture;
+		if (ProfileEnabled) WorkCapture.emplace(&Work);
 		const auto ScenarioStart = Clock::now();
 		const auto Mark = [&](std::string_view Stage) {
 			if (DiagnosticMarks)
@@ -192,8 +199,16 @@ namespace {
 		std::vector<double> PublisherReconciliation;
 		std::vector<std::uint64_t> JournalRecords;
 		JournalRecords.reserve(Frames);
+		for (auto *Values : {&Accumulation, &Generation, &Application, &DirtyCapture, &DirtyExpansion,
+			&FinalStateExtraction, &PublicationConstruction, &PublisherReconciliation}) Values->reserve(Frames);
+#ifdef GARGANTUAN_RUNTIME6_ALLOCATION_PROBE
+		std::vector<BenchmarkAllocationProbe::Counts> FrameAllocations(Frames);
+#endif
 		std::size_t Creates = 0, Updates = 0, Removes = 0, UploadBytes = 0, FullResyncs = 0;
 		for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
+#ifdef GARGANTUAN_RUNTIME6_ALLOCATION_PROBE
+			BenchmarkAllocationProbe::Scope AllocationScope(FrameAllocations[Frame]);
+#endif
 			++GlobalFrame;
 			const auto JournalBefore = Journal.CreateCursor(Game->GetObjectId()).NextSequence;
 			const auto AccumulationStart = Clock::now();
@@ -273,7 +288,12 @@ namespace {
 					<< Accumulation[Frame] << ',' << Generation[Frame] << ',' << Application[Frame] << ','
 					<< Stage(DirtyCapture, Frame) << ',' << Stage(DirtyExpansion, Frame) << ','
 					<< Stage(FinalStateExtraction, Frame) << ',' << Stage(PublicationConstruction, Frame) << ','
-					<< Stage(PublisherReconciliation, Frame) << ",NA,NA,NA," << JournalRecords[Frame] << '\n';
+					<< Stage(PublisherReconciliation, Frame) << ",NA,NA,NA," << JournalRecords[Frame];
+#ifdef GARGANTUAN_RUNTIME6_ALLOCATION_PROBE
+				*Samples << ',' << FrameAllocations[Frame].Calls << ',' << FrameAllocations[Frame].Bytes << '\n';
+#else
+				*Samples << ",NA,NA\n";
+#endif
 			}
 			Samples->flush();
 			if (!*Samples) throw std::runtime_error("[Render:Foundation2Benchmark] Could not write frame samples");
@@ -283,6 +303,19 @@ namespace {
 		if (RetainedPhysics) World->Physics = std::move(*RetainedPhysics);
 		Game->Destroy();
 		Mark("destroyed");
+		Parts.clear();
+		Groups.clear();
+		World.reset();
+		Game.reset();
+		Mark("released");
+		if (ProfileEnabled) {
+			for (const auto Phase : {runtime_detail::WorkPhase::PhysicsBodyCreate,
+				runtime_detail::WorkPhase::PhysicsBodyDestroy}) {
+				const auto &Entry = Work[static_cast<std::size_t>(Phase)];
+				std::cerr << "[Runtime:Benchmark] phase=" << runtime_detail::WorkPhaseNames[static_cast<std::size_t>(Phase)]
+					<< " calls=" << Entry.Calls << " units=" << Entry.Units << " inclusive_ns=" << Entry.Nanoseconds << '\n';
+			}
+		}
 	}
 
 	void RunDeformable(std::size_t VertexCount, std::size_t Frames) {
@@ -503,7 +536,7 @@ int main(int ArgumentCount, char **Arguments) {
 				throw std::invalid_argument("samples file must not already exist");
 			SamplesFile.open(SamplesPath, std::ios::out | std::ios::trunc);
 			if (!SamplesFile) throw std::runtime_error("could not open samples file");
-			SamplesFile << "Scenario,Elements,Frame,GroupWidth,RendererOnly,ProfileEnabled,ExpectedUpdates,WritesPerObject,DirtyAccumulationMs,PublicationGenerationMs,ProjectionApplyMs,DirtyCaptureMs,DirtyExpansionMs,FinalStateExtractionMs,PublicationConstructionMs,PublisherReconciliationMs,JournalMs,ClassificationMs,AccumulatorMs,JournalRecords\n" << std::flush;
+			SamplesFile << "Scenario,Elements,Frame,GroupWidth,RendererOnly,ProfileEnabled,ExpectedUpdates,WritesPerObject,DirtyAccumulationMs,PublicationGenerationMs,ProjectionApplyMs,DirtyCaptureMs,DirtyExpansionMs,FinalStateExtractionMs,PublicationConstructionMs,PublisherReconciliationMs,JournalMs,ClassificationMs,AccumulatorMs,JournalRecords,FrameCppNewCalls,FrameCppNewBytes\n" << std::flush;
 		}
 		std::ofstream *Samples = SamplesPath.empty() ? nullptr : &SamplesFile;
 		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n" << std::flush;

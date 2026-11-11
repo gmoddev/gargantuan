@@ -1312,6 +1312,10 @@ if(BUILD_TESTING)
 			target_compile_definitions(gargantuan_renderer_allocation_benchmark PRIVATE
 				GARGANTUAN_BENCHMARK_ALLOCATION_PROBE=1)
 			target_link_libraries(gargantuan_renderer_allocation_benchmark PRIVATE gargantuan_core)
+			add_executable(gargantuan_runtime6_allocation_benchmark
+				"tests/RendererFoundation2Benchmark.cpp" "tests/BenchmarkAllocationProbe.cpp")
+			target_compile_definitions(gargantuan_runtime6_allocation_benchmark PRIVATE GARGANTUAN_RUNTIME6_ALLOCATION_PROBE=1)
+			target_link_libraries(gargantuan_runtime6_allocation_benchmark PRIVATE gargantuan_core)
 			add_executable(gargantuan_renderer_allocation_probe_tests
 				"tests/BenchmarkAllocationProbe.cpp" "tests/BenchmarkAllocationProbeTests.cpp")
 			target_compile_features(gargantuan_renderer_allocation_probe_tests PRIVATE cxx_std_17)
