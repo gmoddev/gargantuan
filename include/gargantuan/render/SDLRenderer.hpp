@@ -96,6 +96,18 @@ namespace gargantuan {
 		std::uint64_t LastInstanceTraversalNanoseconds = 0;
 		std::uint64_t LastInstanceCandidateNanoseconds = 0;
 		std::uint64_t LastInstanceVisibleUploadNanoseconds = 0;
+		// ProfileDetailed samples one of every 128 candidate records. These
+		// timings are sampled host work, not whole-frame phase durations.
+		std::uint64_t LastInstanceSampleSourceNanoseconds = 0;
+		std::uint64_t LastInstanceSampleCullNanoseconds = 0;
+		std::uint64_t LastInstanceSampleEligibilityNanoseconds = 0;
+		std::uint64_t LastInstanceSampleSlotNanoseconds = 0;
+		std::uint64_t LastInstanceSampleBatchNanoseconds = 0;
+		std::uint64_t InstanceSampleObjects = 0;
+		std::uint64_t InstanceSampleCullTests = 0;
+		std::uint64_t InstanceSampleEligibilityChecks = 0;
+		std::uint64_t InstanceSampleSlotLookups = 0;
+		std::uint64_t InstanceSampleBatchAdmissions = 0;
 		// Fine timings are populated only with ProfileDetailed; clock overhead is
 		// intentionally excluded from normal performance qualification.
 		std::uint64_t LastCameraTraversalNanoseconds = 0;

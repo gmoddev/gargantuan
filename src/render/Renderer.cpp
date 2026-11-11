@@ -283,6 +283,11 @@ namespace gargantuan {
 		State->Metrics.LastInstanceTraversalNanoseconds = 0;
 		State->Metrics.LastInstanceCandidateNanoseconds = 0;
 		State->Metrics.LastInstanceVisibleUploadNanoseconds = 0;
+		State->Metrics.LastInstanceSampleSourceNanoseconds = 0;
+		State->Metrics.LastInstanceSampleCullNanoseconds = 0;
+		State->Metrics.LastInstanceSampleEligibilityNanoseconds = 0;
+		State->Metrics.LastInstanceSampleSlotNanoseconds = 0;
+		State->Metrics.LastInstanceSampleBatchNanoseconds = 0;
 		State->Metrics.LastCameraTraversalNanoseconds = 0;
 		State->Metrics.LastCameraCullNanoseconds = 0;
 		State->Metrics.LastCameraResidencyNanoseconds = 0;

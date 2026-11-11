@@ -451,6 +451,15 @@ namespace gargantuan {
 
 		void PrepareInstanceBatches(SDLFrameContext &Context) {
 			using Clock = std::chrono::steady_clock;
+			// Rotate the one-in-128 sample across publications so batch boundaries do not
+			// systematically occupy the same sampled position. The clocks stay off
+			// the ordinary benchmark path.
+			const bool SampleDetailed = Context.ProfileDetailed && Context.Metrics;
+			const auto SampleOffset = Context.Projection.GetLastPublicationId() & 127u;
+			const auto SampleElapsed = [](Clock::time_point Start) {
+				return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+					Clock::now() - Start).count());
+			};
 			const auto TraversalStart = Clock::now();
 			// The ordinary camera pass walks GetObjects() in its current map order.
 			// Only request the derived vector when that pass will also use it.
@@ -497,35 +506,69 @@ namespace gargantuan {
 			};
 			const auto VisitCandidate = [&](std::size_t Position, ObjectId Object,
 				const RenderProjectedObject &Projected, const RenderAnimationPoseUpdate *Pose,
-				const RenderBounds *MeshBounds) {
+				const RenderBounds *MeshBounds, bool Sampled) {
+				if (Sampled) ++Context.Metrics->InstanceSampleObjects;
 				if (!Projected.Visible) { Flush(); return; }
 				const auto &Item = Projected.Item;
 				const auto *Bounds = Projected.Mesh ? MeshBounds : &PrimitiveBounds;
-				if (Bounds && (!Pose || Pose->Mode != RenderAnimationSkinningMode::GpuPalette) &&
-					OutsideView(Planes, Item.ModelMatrix, *Bounds)) {
+				const auto CullStart = Sampled ? Clock::now() : Clock::time_point{};
+				const bool TestFrustum = Bounds && (!Pose || Pose->Mode != RenderAnimationSkinningMode::GpuPalette);
+				const bool Culled = TestFrustum && OutsideView(Planes, Item.ModelMatrix, *Bounds);
+				if (Sampled && TestFrustum) {
+					++Context.Metrics->InstanceSampleCullTests;
+					Context.Metrics->LastInstanceSampleCullNanoseconds += SampleElapsed(CullStart);
+				}
+				if (Culled) {
 					InstanceActions[Position] = CulledInstanceAction;
 					return;
 				}
+				const auto EligibilityStart = Sampled ? Clock::now() : Clock::time_point{};
 				const auto *Mesh = Projected.Mesh
 					? Context.MeshResources.Find(*Projected.Mesh) : Context.MeshResources.Find(Item.Geometry);
-				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer || Pose ||
-					(Item.CastShadow && !ContiguousOrder) || !Mesh->ImmutablePositionBounds ||
-					(!ContiguousOrder && !Projector) ||
-					(Projected.Primitives && Projected.Primitives->size() != 1)) { Flush(); return; }
-				// Pose-bearing objects are excluded above. Static casters use the
-				// already-recorded shadow pass and have no GPU-skinned pose receipt.
-				const auto &Material = Projected.Primitives ? Projected.Primitives->front().Material : Projected.Material;
-				if (Material.OpacityMode != RenderOpacityMode::Opaque || Material.BaseColorTexture ||
-					Material.NormalTexture || Material.MetallicRoughnessTexture || Material.EmissiveTexture ||
-					Material.OcclusionTexture) { Flush(); return; }
+				const bool MeshEligible = Mesh && Mesh->VertexBuffer && Mesh->IndexBuffer && !Pose &&
+					(!Item.CastShadow || ContiguousOrder) && Mesh->ImmutablePositionBounds &&
+					(ContiguousOrder || Projector) &&
+					(!Projected.Primitives || Projected.Primitives->size() == 1);
+				const auto *SelectedMaterial = MeshEligible
+					? &(Projected.Primitives ? Projected.Primitives->front().Material : Projected.Material) : nullptr;
+				const bool MaterialEligible = SelectedMaterial &&
+					SelectedMaterial->OpacityMode == RenderOpacityMode::Opaque && !SelectedMaterial->BaseColorTexture &&
+					!SelectedMaterial->NormalTexture && !SelectedMaterial->MetallicRoughnessTexture &&
+					!SelectedMaterial->EmissiveTexture && !SelectedMaterial->OcclusionTexture;
+				if (!MaterialEligible) {
+					Flush();
+					if (Sampled) {
+						++Context.Metrics->InstanceSampleEligibilityChecks;
+						Context.Metrics->LastInstanceSampleEligibilityNanoseconds += SampleElapsed(EligibilityStart);
+					}
+					return;
+				}
+				if (Sampled) {
+					++Context.Metrics->InstanceSampleEligibilityChecks;
+					Context.Metrics->LastInstanceSampleEligibilityNanoseconds += SampleElapsed(EligibilityStart);
+				}
+				const auto &Material = *SelectedMaterial;
+				const auto SlotStart = Sampled ? Clock::now() : Clock::time_point{};
 				const auto Slot = Context.InstanceResources->Find(Object);
+				if (Sampled) {
+					++Context.Metrics->InstanceSampleSlotLookups;
+					Context.Metrics->LastInstanceSampleSlotNanoseconds += SampleElapsed(SlotStart);
+				}
 				if (!Slot) { Flush(); return; }
+				const auto BatchStart = Sampled ? Clock::now() : Clock::time_point{};
 				const auto First = Projected.Primitives ? Projected.Primitives->front().FirstIndex : 0;
 				const auto Count = Projected.Primitives ? Projected.Primitives->front().IndexCount : Mesh->IndexCount;
 				std::optional<OpaqueCoverage> Coverage;
 				if (!ContiguousOrder) {
 					Coverage = Projector->Project(Item.ModelMatrix, *Mesh->ImmutablePositionBounds);
-					if (!Coverage || Coverage->CellCount() > MAX_CELLS_PER_OBJECT) { Flush(); return; }
+					if (!Coverage || Coverage->CellCount() > MAX_CELLS_PER_OBJECT) {
+						Flush();
+						if (Sampled) {
+							++Context.Metrics->InstanceSampleBatchAdmissions;
+							Context.Metrics->LastInstanceSampleBatchNanoseconds += SampleElapsed(BatchStart);
+						}
+						return;
+					}
 				}
 				if (!Pending.empty() && (Mesh != PendingMesh || First != PendingFirst || Count != PendingCount ||
 					Material.DoubleSided != PendingDoubleSided || Material.ShadingModel != PendingShading)) Flush();
@@ -542,19 +585,27 @@ namespace gargantuan {
 				}
 				if (!ContiguousOrder) InstanceCoverageGrid.Add(*Coverage, static_cast<std::uint16_t>(Pending.size()));
 				Pending.emplace_back(Position, *Slot);
+				if (Sampled) {
+					++Context.Metrics->InstanceSampleBatchAdmissions;
+					Context.Metrics->LastInstanceSampleBatchNanoseconds += SampleElapsed(BatchStart);
+				}
 			};
 			if (Ordered) {
 				for (std::size_t Position = 0; Position < Ordered->size(); ++Position) {
 					const auto &Record = (*Ordered)[Position];
-					VisitCandidate(Position, Record.Object, *Record.Projected, Record.Pose, Record.MeshBounds);
+					const bool Sampled = SampleDetailed && (Position & 127u) == SampleOffset;
+					VisitCandidate(Position, Record.Object, *Record.Projected, Record.Pose, Record.MeshBounds, Sampled);
 				}
 			} else {
 				std::size_t Position = 0;
 				for (const auto &[Object, Projected] : Context.Projection.GetObjects()) {
+					const bool Sampled = SampleDetailed && (Position & 127u) == SampleOffset;
+					const auto SourceStart = Sampled ? Clock::now() : Clock::time_point{};
 					const auto *Pose = Context.Projection.GetAnimationPose(Object);
 					const auto *MeshBounds = Projected.Mesh
 						? Context.Projection.GetMeshBounds(*Projected.Mesh) : nullptr;
-					VisitCandidate(Position++, Object, Projected, Pose, MeshBounds);
+					if (Sampled) Context.Metrics->LastInstanceSampleSourceNanoseconds += SampleElapsed(SourceStart);
+					VisitCandidate(Position++, Object, Projected, Pose, MeshBounds, Sampled);
 				}
 			}
 			Flush();

@@ -97,12 +97,16 @@ namespace {
 		"CameraVisitedObjects", "CameraHiddenObjects", "CameraFrustumTests",
 		"CameraMeshLookups", "WorldPrimitiveDraws"
 	};
-	constexpr std::array<std::string_view, 4> InstanceCounterNames{
-		"InstancedDrawCalls", "InstancedObjects", "InstanceUploadBytes", "VisibleIndexUploadBytes"
+	constexpr std::array<std::string_view, 9> InstanceCounterNames{
+		"InstancedDrawCalls", "InstancedObjects", "InstanceUploadBytes", "VisibleIndexUploadBytes",
+		"InstanceSampleObjects", "InstanceSampleCullTests", "InstanceSampleEligibilityChecks",
+		"InstanceSampleSlotLookups", "InstanceSampleBatchAdmissions"
 	};
-	constexpr std::array<std::string_view, 6> InstancePhaseNames{
+	constexpr std::array<std::string_view, 11> InstancePhaseNames{
 		"InstanceApplication", "InstanceUpload", "InstancePreparation",
-		"InstanceTraversal", "InstanceCandidate", "InstanceVisibleUpload"
+		"InstanceTraversal", "InstanceCandidate", "InstanceVisibleUpload",
+		"InstanceSampleSource", "InstanceSampleCull", "InstanceSampleEligibility",
+		"InstanceSampleSlot", "InstanceSampleBatch"
 	};
 
 	struct ScenarioCase {
@@ -879,17 +883,29 @@ namespace {
 					const std::array<std::uint64_t, InstancePhaseNames.size()> InstanceNanoseconds{
 						Metrics.LastInstanceApplicationNanoseconds, Metrics.LastInstanceUploadNanoseconds,
 						Metrics.LastInstancePreparationNanoseconds, Metrics.LastInstanceTraversalNanoseconds,
-						Metrics.LastInstanceCandidateNanoseconds, Metrics.LastInstanceVisibleUploadNanoseconds};
-					for (std::size_t Index = 0; Index < InstanceNanoseconds.size(); ++Index)
+						Metrics.LastInstanceCandidateNanoseconds, Metrics.LastInstanceVisibleUploadNanoseconds,
+						Metrics.LastInstanceSampleSourceNanoseconds, Metrics.LastInstanceSampleCullNanoseconds,
+						Metrics.LastInstanceSampleEligibilityNanoseconds, Metrics.LastInstanceSampleSlotNanoseconds,
+						Metrics.LastInstanceSampleBatchNanoseconds};
+					for (std::size_t Index = 0; Index < InstanceNanoseconds.size(); ++Index) {
+						if (Index >= 6 && !Settings.SdlProfileDetailed) continue;
 						InstanceTimes[Index].push_back(static_cast<double>(InstanceNanoseconds[Index]) / 1'000'000.0);
+					}
 				}
 				const std::array<std::uint64_t, InstanceCounterNames.size()> InstanceValues{
 					Metrics.InstancedDrawCalls, Metrics.InstancedObjects,
-					Metrics.InstanceUploadBytes, Metrics.VisibleIndexUploadBytes};
+					Metrics.InstanceUploadBytes, Metrics.VisibleIndexUploadBytes,
+					Metrics.InstanceSampleObjects, Metrics.InstanceSampleCullTests,
+					Metrics.InstanceSampleEligibilityChecks, Metrics.InstanceSampleSlotLookups,
+					Metrics.InstanceSampleBatchAdmissions};
 				const std::array<std::uint64_t, InstanceCounterNames.size()> PreviousInstanceValues{
 					InstancePrevious->InstancedDrawCalls, InstancePrevious->InstancedObjects,
-					InstancePrevious->InstanceUploadBytes, InstancePrevious->VisibleIndexUploadBytes};
+					InstancePrevious->InstanceUploadBytes, InstancePrevious->VisibleIndexUploadBytes,
+					InstancePrevious->InstanceSampleObjects, InstancePrevious->InstanceSampleCullTests,
+					InstancePrevious->InstanceSampleEligibilityChecks, InstancePrevious->InstanceSampleSlotLookups,
+					InstancePrevious->InstanceSampleBatchAdmissions};
 				for (std::size_t Index = 0; Index < InstanceValues.size(); ++Index) {
+					if (Index >= 4 && !Settings.SdlProfileDetailed) continue;
 					if (InstanceValues[Index] < PreviousInstanceValues[Index])
 						throw std::logic_error("instance counter decreased");
 					InstanceCounts[Index].push_back(InstanceValues[Index] - PreviousInstanceValues[Index]);
