@@ -46,6 +46,8 @@ Global `Lighting` and effective direct-child `Sky` selection retain authority.
 | `ProbePositiveX`, `ProbeNegativeX`, `ProbePositiveY`, `ProbeNegativeY`, `ProbePositiveZ`, `ProbeNegativeZ` | empty | Strict Image asset references in cube-local face order |
 
 The six inputs must resolve coherently to equal square dimensions at most 1024.
+RGBA8 and HDR faces may be mixed; each source face is decoded according to its
+own format before IBL preprocessing.
 Invalid or incomplete authored probes are skipped with bounded diagnostics;
 other probes and global environment remain available. Neutral projection rejects
 invalid identities, order, finite/rigid bounds and incoherent source revisions

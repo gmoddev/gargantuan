@@ -1140,6 +1140,40 @@ namespace {
 			ReimportedProbe->Frame.Environment.ReflectionProbes &&
 			ReimportedProbe->Frame.Environment.ReflectionProbes->front().Source.Faces[0].ContentRevision == 2,
 			"probe source reimport invalidates environment without changing the probe identity");
+		const std::string HdrHeader = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 4 +X 4\n";
+		std::vector<std::uint8_t> HdrBytes(HdrHeader.begin(), HdrHeader.end());
+		for (unsigned Pixel = 0; Pixel < 16; ++Pixel)
+			HdrBytes.insert(HdrBytes.end(), {128, 64, 32, 137});
+		{
+			std::ofstream File(ProbeRoot / "probe.hdr", std::ios::binary);
+			File.write(reinterpret_cast<const char *>(HdrBytes.data()),
+				static_cast<std::streamsize>(HdrBytes.size()));
+			if (!File) throw std::runtime_error("[Render:PublicationTest] Could not write HDR probe fixture");
+		}
+		const auto HdrImport = Assets->ImportProjectAsset(Mount, "probe.hdr", AssetKind::Image, "HDR Probe Face");
+		if (HdrImport.Ok && HdrImport.Record) {
+			const auto HdrReference = HdrImport.Record->Reference.Value;
+			Probe->SetProbePositiveX(HdrReference);
+			auto LightingValue = std::dynamic_pointer_cast<Lighting>(Game->GetService("Lighting"));
+			auto MixedSky = std::make_shared<Sky>();
+			MixedSky->SetSkyboxPositiveX(HdrReference); MixedSky->SetSkyboxNegativeX(ProbeReference);
+			MixedSky->SetSkyboxPositiveY(ProbeReference); MixedSky->SetSkyboxNegativeY(ProbeReference);
+			MixedSky->SetSkyboxPositiveZ(ProbeReference); MixedSky->SetSkyboxNegativeZ(ProbeReference);
+			MixedSky->SetParent(LightingValue);
+			TextureChanges = Assets->DrainTextureChanges();
+			ProbePublisher.SetUiTextureChanges(std::move(TextureChanges.Creates),
+				std::move(TextureChanges.Updates), std::move(TextureChanges.Removes));
+			ProbePublisher.RequestFullResync();
+			const auto Mixed = ProbePublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+			RenderProjection MixedProjection;
+			Check(Mixed->Frame.Environment.Sky && Mixed->Frame.Environment.ReflectionProbes &&
+				Mixed->Frame.Environment.ReflectionProbes->size() == 1 &&
+				std::ranges::any_of(Mixed->TextureCreates, [](const auto &Create) {
+					return Create.Format == RenderTextureFormat::Rgba32Float;
+				}) && MixedProjection.Apply(*Mixed).EnvironmentsUpdated == 1,
+				"mixed RGBA8/HDR cube faces retain their formats through publication and projection");
+			MixedSky->Destroy();
+		} else Check(false, "square HDR face imports for mixed-format cube publication");
 		Game->MarkPersistenceSubtreeArchivable();
 		std::shared_ptr<Instance> GameInstance = Game;
 		const auto Document = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, GameInstance);
