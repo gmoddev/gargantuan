@@ -35,6 +35,8 @@ namespace {
 		std::size_t Frames = 12;
 		std::size_t Listeners = 2;
 		std::string Property = "CFrame";
+		bool FinalGc = false;
+		bool DisconnectNative = false;
 	};
 
 	void Require(bool Condition, std::string_view Message) {
@@ -52,6 +54,7 @@ namespace {
 	Options Parse(int ArgumentCount, char **Arguments) {
 		Options Config;
 		bool SawCount = false, SawFrames = false, SawListeners = false, SawProperty = false;
+		bool SawFinalGc = false, SawDisconnectNative = false;
 		for (int Index = 1; Index < ArgumentCount; ++Index) {
 			const std::string_view Argument(Arguments[Index]);
 			if (Argument.starts_with("--count=") && !SawCount) {
@@ -70,6 +73,16 @@ namespace {
 				if (Value != "cframe" && Value != "color") throw std::invalid_argument("property must be cframe or color");
 				Config.Property = Value == "cframe" ? "CFrame" : "Color";
 				SawProperty = true;
+			} else if (Argument.starts_with("--final-gc=") && !SawFinalGc) {
+				const auto Value = Argument.substr(11);
+				if (Value != "on" && Value != "off") throw std::invalid_argument("final-gc must be on or off");
+				Config.FinalGc = Value == "on";
+				SawFinalGc = true;
+			} else if (Argument.starts_with("--disconnect-native=") && !SawDisconnectNative) {
+				const auto Value = Argument.substr(20);
+				if (Value != "on" && Value != "off") throw std::invalid_argument("disconnect-native must be on or off");
+				Config.DisconnectNative = Value == "on";
+				SawDisconnectNative = true;
 			} else throw std::invalid_argument("unknown or duplicate benchmark option");
 		}
 		return Config;
@@ -314,10 +327,20 @@ int main(int ArgumentCount, char **Arguments) {
 			RejectedSignalCount == 2 &&
 			Journal.CreateCursor(Scope).NextSequence == BeforeNested.NextSequence + 2,
 			"nested script mutation did not append CFrame then Color exactly once");
+		if (Config.DisconnectNative) {
+			CFrameConnection->Disconnect();
+			ColorConnection->Disconnect();
+			Require(!CFrameConnection->Connected && !ColorConnection->Connected,
+				"temporary native callbacks remained connected after validation");
+		}
 		std::cerr << "[Runtime:LuauMutation] validation=pass denied=1 invalid=1 readonly=1 reentrant=1\n";
-		std::cerr << "[Runtime:LuauMutation] teardown=before-final-gc\n" << std::flush;
-		lua_gc(Engine.L, LUA_GCCOLLECT, 0);
-		std::cerr << "[Runtime:LuauMutation] teardown=after-final-gc\n" << std::flush;
+		std::cerr << "[Runtime:LuauMutation] teardown=options final_gc=" << Config.FinalGc
+			<< " disconnect_native=" << Config.DisconnectNative << '\n' << std::flush;
+		if (Config.FinalGc) {
+			std::cerr << "[Runtime:LuauMutation] teardown=before-final-gc\n" << std::flush;
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			std::cerr << "[Runtime:LuauMutation] teardown=after-final-gc\n" << std::flush;
+		}
 		TeardownMarker BeginTeardown{"begin-locals"};
 		return 0;
 	} catch (const std::exception &Error) {
