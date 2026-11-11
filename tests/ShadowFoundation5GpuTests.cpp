@@ -434,6 +434,85 @@ namespace {
 			"large-coordinate warm cascade changed exact pixels");
 	}
 
+	std::shared_ptr<RenderPublication> OutdoorResolutionScene(RenderPublicationId Id, bool Caster,
+		std::uint32_t Resolution) {
+		// Preserve the near fixture's screen-space layout at view depth 200:
+		// the receiver remains under the center pixel while the caster is off
+		// the center camera ray and lies on its sun ray.
+		constexpr float Scale = 200.0f / 3.0f;
+		constexpr float ReceiverZ = 3.0f - 200.0f;
+		auto Publication = Scene(Id, Caster, true, false, {}, ReceiverZ);
+		auto &Camera = Publication->Frame.Camera;
+		Camera.FarPlane = 512.0f;
+		Camera.ProjectionMatrix = glm::perspectiveRH_ZO(glm::radians(Camera.VerticalFieldOfView),
+			1.0f, Camera.NearPlane, Camera.FarPlane);
+		Camera.ViewProjectionMatrix = Camera.ProjectionMatrix * Camera.ViewMatrix;
+		auto &Settings = Publication->Frame.Environment.DirectionalShadows;
+		Settings = RenderDirectionalShadowSettings{};
+		Settings.CascadeCount = 4;
+		if (Resolution != Settings.Resolution) Settings.Resolution = Resolution;
+		auto &Receiver = Publication->Creates.front().Item;
+		Receiver.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(0, 0, ReceiverZ)) *
+			glm::scale(glm::mat4(1), glm::vec3(Scale));
+		Receiver.InverseModelMatrix = glm::inverse(Receiver.ModelMatrix);
+		if (Caster) {
+			auto &Part = Publication->Creates.back().Item;
+			Part.ModelMatrix = glm::translate(glm::mat4(1),
+				glm::vec3(0.5f * Scale, 0, ReceiverZ + Scale)) *
+				glm::scale(glm::mat4(1), glm::vec3(0.16f * Scale));
+			Part.InverseModelMatrix = glm::inverse(Part.ModelMatrix);
+		}
+		return Publication;
+	}
+
+	void CheckOutdoorResolutionCase(std::uint32_t Resolution) {
+		CurrentCase = std::format("outdoor-resolution-{}", Resolution);
+		const RenderDirectionalShadowSettings Defaults{};
+		Require(Defaults.Resolution == 2048 && Defaults.Distance == 250.0f,
+			"outdoor fixture no longer exercises the default shadow extent");
+		auto LitScene = OutdoorResolutionScene(1, false, Resolution);
+		const auto Plan = MakeSDLDirectionalCascadePlan(LitScene->Frame.Camera,
+			LitScene->Frame.Environment.SunDirection, 1.0f, {
+				.Count = 4, .Resolution = Resolution, .MaximumDistance = Defaults.Distance,
+				.SplitLambda = Defaults.SplitLambda, .TransitionFraction = Defaults.TransitionFraction});
+		Require(Plan && Plan->Count == 4 && Plan->Cascades[3].Far >= 200.0f,
+			"outdoor receiver is outside the four-cascade plan");
+		std::vector<std::uint8_t> Shadow;
+		{
+			EditorViewportRenderer Renderer(Size, Size);
+			const auto Lit = Capture(Renderer, LitScene).RgbPixels;
+			auto ShadowScene = OutdoorResolutionScene(2, true, Resolution);
+			const auto &Camera = ShadowScene->Frame.Camera;
+			const auto &Receiver = ShadowScene->Creates.front().Item;
+			const auto &Caster = ShadowScene->Creates.back().Item;
+			const glm::vec4 ReceiverView = Camera.ViewMatrix * Receiver.ModelMatrix * glm::vec4(0, 0, 0, 1);
+			const glm::vec4 CasterLeftClip = Camera.ProjectionMatrix * Camera.ViewMatrix *
+				Caster.ModelMatrix * glm::vec4(-1, 0, 0, 1);
+			const glm::vec3 ShadowRay = glm::normalize(glm::vec3(Caster.ModelMatrix[3] -
+				Receiver.ModelMatrix[3]));
+			Require(std::abs(ReceiverView.z + 200.0f) < 0.02f && CasterLeftClip.w > 0.0f &&
+				CasterLeftClip.x > 0.3f * CasterLeftClip.w &&
+				glm::dot(ShadowRay, ShadowScene->Frame.Environment.SunDirection) > 0.999f,
+				"outdoor fixture no longer isolates a depth-200 receiver from direct caster occlusion");
+			const auto Before = EditorViewportRendererTestAccess::GetMetrics(Renderer);
+			Shadow = Capture(Renderer, ShadowScene).RgbPixels;
+			const auto Cold = EditorViewportRendererTestAccess::GetMetrics(Renderer);
+			Require(RedCenter(Lit) > 100 && RedCenter(Lit) > RedCenter(Shadow) + 25,
+				"outdoor receiver was unlit or its distant caster failed to shadow the center");
+			Require(Cold.ShadowMapPasses == Before.ShadowMapPasses + 4 &&
+				Cold.ShadowCasterDraws > Before.ShadowCasterDraws,
+				"outdoor scene did not build four depth layers with its caster");
+			const auto Warm = Capture(Renderer, Delta(3, 2, ShadowScene->Frame)).RgbPixels;
+			const auto WarmMetrics = EditorViewportRendererTestAccess::GetMetrics(Renderer);
+			Require(Warm == Shadow && WarmMetrics.ShadowMapPasses == Cold.ShadowMapPasses &&
+				WarmMetrics.ShadowCacheHits >= Cold.ShadowCacheHits + 4,
+				"warm outdoor cascades changed pixels or rebuilt static layers");
+		}
+		EditorViewportRenderer FreshRenderer(Size, Size);
+		const auto Fresh = Capture(FreshRenderer, OutdoorResolutionScene(1, true, Resolution)).RgbPixels;
+		Require(Fresh == Shadow, "fresh and warm outdoor shadow pixels differ");
+	}
+
 	std::shared_ptr<RenderPublication> ZenithScene(RenderPublicationId Id, float Hour, bool Caster = true) {
 		auto Publication = Scene(Id, Caster);
 		const float Angle = (Hour - 6.0f) * (2.0f * std::numbers::pi_v<float> / 24.0f);
@@ -910,6 +989,8 @@ int main(int ArgumentCount, char **Arguments) try {
 	if (!EvidenceReceipt) throw std::runtime_error("could not open shadow evidence receipt");
 	EvidenceReceipt << "kind,case,iteration,publication_id,image,width,height,center_red,rgb_fingerprint,shadow_passes,shadow_caster_draws,outcome\n" << std::flush;
 	CheckDirectionalPixels();
+	for (const std::uint32_t Resolution : {256u, 1024u, 2048u})
+		CheckOutdoorResolutionCase(Resolution);
 	CheckSunZenithPixels();
 	CheckMaskAndDeformable();
 	CheckCascadePasses();
