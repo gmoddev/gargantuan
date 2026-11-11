@@ -277,6 +277,15 @@ namespace {
 		InvalidHdr.TextureCreates.push_back({{90, 1}, 1, 1, 1, RenderTextureFormat::Rgba32Float, InvalidHdrPixels});
 		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(InvalidHdr); },
 			"non-finite float texture radiance is rejected before GPU residency");
+		auto ExtremeHdrPixels = std::make_shared<std::vector<std::uint8_t>>(16, 0);
+		const auto ExtremeBits = std::bit_cast<std::uint32_t>(1000000.0f);
+		for (unsigned Byte = 0; Byte < 4; ++Byte)
+			(*ExtremeHdrPixels)[Byte] = static_cast<std::uint8_t>(ExtremeBits >> (Byte * 8));
+		RenderProjection ExtremeProjection;
+		RenderPublication ExtremeHdr{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		ExtremeHdr.TextureCreates.push_back({{91, 1}, 1, 1, 1, RenderTextureFormat::Rgba32Float, ExtremeHdrPixels});
+		Check(ExtremeProjection.Apply(ExtremeHdr).TexturesCreated == 1,
+			"finite float radiance above half-float target range survives neutral projection");
 
 		RenderPublication TopologyChange{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
 		TopologyChange.MeshRemoves.push_back({{1, 1}});
@@ -884,8 +893,37 @@ namespace {
 		CheckThrows<std::invalid_argument>([&] { Probe->SetProbeCFrame(CFrame(glm::vec3(0), glm::mat3(2))); },
 			"probe rejects scaled orientation");
 		CheckThrows<std::invalid_argument>([&] { Probe->SetProbePositiveX("../local.hdr"); }, "probe source accepts asset references only");
-		const auto Document = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Game);
-		auto Saved = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Document);
+		auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+		const std::vector<std::uint8_t> ProbePixels(4 * 4 * 4, 96);
+		const auto ProbeReference = Assets->RegisterMemoryImage("Probe Face", 4, 4, ProbePixels);
+		Probe->SetProbePositiveX(ProbeReference); Probe->SetProbeNegativeX(ProbeReference);
+		Probe->SetProbePositiveY(ProbeReference); Probe->SetProbeNegativeY(ProbeReference);
+		Probe->SetProbePositiveZ(ProbeReference); Probe->SetProbeNegativeZ(ProbeReference);
+		Check(!Assets->DeleteProjectAsset(ProbeReference).Ok,
+			"a probe's image reference prevents deleting its canonical asset group");
+		RenderPublisher ProbePublisher;
+		auto TextureChanges = Assets->DrainTextureChanges();
+		ProbePublisher.SetUiTextureChanges(std::move(TextureChanges.Creates),
+			std::move(TextureChanges.Updates), std::move(TextureChanges.Removes));
+		const auto FirstProbe = ProbePublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(FirstProbe->Frame.Environment.ReflectionProbes &&
+			FirstProbe->Frame.Environment.ReflectionProbes->size() == 1,
+			"probe with six canonical image references publishes one local environment");
+		const std::vector<std::uint8_t> UpdatedPixels(4 * 4 * 4, 128);
+		Check(Assets->RegisterMemoryImage("Probe Face", 4, 4, UpdatedPixels) == ProbeReference,
+			"probe face reimport preserves its image identity");
+		TextureChanges = Assets->DrainTextureChanges();
+		ProbePublisher.SetUiTextureChanges(std::move(TextureChanges.Creates),
+			std::move(TextureChanges.Updates), std::move(TextureChanges.Removes));
+		const auto ReimportedProbe = ProbePublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(ReimportedProbe->EnvironmentChanged && ReimportedProbe->TextureUpdates.size() == 1 &&
+			ReimportedProbe->Frame.Environment.ReflectionProbes &&
+			ReimportedProbe->Frame.Environment.ReflectionProbes->front().Source.Faces[0].ContentRevision == 2,
+			"probe source reimport invalidates environment without changing the probe identity");
+		std::shared_ptr<Instance> GameInstance = Game;
+		const auto Document = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, GameInstance);
+		std::istringstream SavedDocument(Document);
+		auto Saved = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, SavedDocument);
 		const auto Restored = Saved.Instance ? std::dynamic_pointer_cast<ReflectionProbe>(
 			Saved.Instance->FindFirstDescendant("Local Environment Witness")) : nullptr;
 		Check(Saved.Ok && Restored && Restored->GetProbeSize() == glm::vec3(20, 10, 12) &&
@@ -893,6 +931,8 @@ namespace {
 		if (Saved.Instance) Saved.Instance->Destroy();
 		Probe->Destroy();
 		Check(World->GetReflectionProbes().empty(), "probe membership retires before identity reuse");
+		Check(Assets->DeleteProjectAsset(ProbeReference).Ok,
+			"probe image asset becomes deletable after the consumer is destroyed");
 		Game->Destroy();
 
 		RenderReflectionProbeState State;

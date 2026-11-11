@@ -159,7 +159,7 @@ namespace gargantuan {
 					for (unsigned Byte = 0; Byte < 4; ++Byte)
 						Bits |= static_cast<std::uint32_t>((*Pixels)[Offset + Byte]) << (Byte * 8);
 					const auto Value = std::bit_cast<float>(Bits);
-					if (!std::isfinite(Value) || Value < 0.0f || Value > 65504.0f) return false;
+					if (!std::isfinite(Value) || Value < 0.0f) return false;
 				}
 			}
 			return true;

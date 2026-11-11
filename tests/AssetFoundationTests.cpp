@@ -510,8 +510,8 @@ int main() {
 				InvalidArtifact[InvalidArtifact.size() - 16 + Byte] = static_cast<std::uint8_t>(ExtremeBits >> (Byte * 8));
 			const auto Extreme = DecodeAssetArtifact(InvalidArtifact, AssetKind::Image,
 				AssetContentId::Hash(InvalidArtifact));
-			Check(!Extreme && Extreme.error().Code == "InvalidRadiance",
-				"finite radiance above the bounded half-float preprocessing range is rejected");
+			Check(Extreme && std::abs(ReadHdrChannel(std::get<ImportedImage>(Extreme->Asset), 0, 0) - 1000000.0f) < 1.0f,
+				"canonical float artifact preserves finite radiance above the half-float GPU range");
 		} else Check(false, "HDR face encodes as a canonical float image artifact");
 	}
 	const auto HdrChanges = Assets->DrainTextureChanges();
@@ -546,7 +546,12 @@ int main() {
 	}
 	WriteBytes(Root / "assets" / "invalid-radiance.hdr", MakeHdr(2, 2, {128, 0, 0, 255}));
 	Check(!Assets->ImportProjectAsset(Mount, "assets/invalid-radiance.hdr", AssetKind::Image).Ok,
-		"HDR values beyond the finite linear range are rejected");
+		"non-finite HDR radiance is rejected");
+	WriteBytes(Root / "assets" / "extreme.hdr", MakeHdr(2, 2, {128, 0, 0, 145}));
+	const auto ExtremeImport = Assets->ImportProjectAsset(Mount, "assets/extreme.hdr", AssetKind::Image);
+	Check(ExtremeImport.Ok && ExtremeImport.Record && ExtremeImport.Record->Asset &&
+		ReadHdrChannel(std::get<ImportedImage>(*ExtremeImport.Record->Asset), 0, 0) > 65504.0f,
+		"finite HDR radiance above half-float range survives canonical source import");
 	auto TruncatedHdr = MakeHdr(2, 2, {128, 0, 0, 129});
 	TruncatedHdr.resize(TruncatedHdr.size() - 4);
 	WriteBytes(Root / "assets" / "truncated.hdr", TruncatedHdr);

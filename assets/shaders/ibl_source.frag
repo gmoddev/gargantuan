@@ -13,7 +13,9 @@ vec3 DecodeSrgb(vec3 Value) {
 
 vec3 FetchRadiance(ivec2 Position, ivec2 Size) {
     vec3 Value = texelFetch(SkyFace, clamp(Position, ivec2(0), Size - 1), 0).rgb;
-    return Source.Dimensions.y > 0.5 ? Value : DecodeSrgb(Value);
+    // The canonical float image retains its full finite range. The derived
+    // source cube is half float, so bound each texel before filtering.
+    return Source.Dimensions.y > 0.5 ? clamp(Value, vec3(0.0), vec3(65504.0)) : DecodeSrgb(Value);
 }
 
 void main() {

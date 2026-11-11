@@ -40,7 +40,6 @@ namespace gargantuan {
 		constexpr std::uint32_t MaterialTextureArtifactVersion = 5;
 		constexpr std::uint32_t AdvancedMaterialArtifactVersion = 6;
 		constexpr std::uint32_t FloatImageArtifactVersion = 7;
-		constexpr float MaximumHdrRadiance = 65504.0f;
 
 		AssetDiagnostic Error(std::string Code, std::string Message) {
 			if (Message.size() > AssetLimits::MaximumDiagnosticBytes) Message.resize(AssetLimits::MaximumDiagnosticBytes);
@@ -313,9 +312,8 @@ namespace gargantuan {
 				const auto Count = static_cast<std::size_t>(Width) * Height * 4;
 				for (std::size_t Pixel = 0; Pixel < Count; Pixel += 4) {
 					for (unsigned Channel = 0; Channel < 3; ++Channel)
-						if (!std::isfinite(Decoded[Pixel + Channel]) || Decoded[Pixel + Channel] < 0.0f ||
-							Decoded[Pixel + Channel] > MaximumHdrRadiance)
-							return std::unexpected(Error("InvalidRadiance", "HDR radiance is non-finite or exceeds the linear range"));
+						if (!std::isfinite(Decoded[Pixel + Channel]) || Decoded[Pixel + Channel] < 0.0f)
+							return std::unexpected(Error("InvalidRadiance", "HDR radiance must be finite and nonnegative"));
 					Decoded[Pixel + 3] = 1.0f;
 				}
 				if (Cancelled(Context)) return std::unexpected(Error("Cancelled", "HDR import was cancelled before commit"));
@@ -362,7 +360,10 @@ namespace gargantuan {
 						for (unsigned Channel = 0; Channel < 3; ++Channel) {
 							const float Top = std::lerp(Read(X0, Y0, Channel), Read(X0 + 1, Y0, Channel), Fx);
 							const float Bottom = std::lerp(Read(X0, Y0 + 1, Channel), Read(X0 + 1, Y0 + 1, Channel), Fx);
-							FacePixels.push_back(std::lerp(Top, Bottom, Fy));
+							const float Radiance = std::lerp(Top, Bottom, Fy);
+							if (!std::isfinite(Radiance) || Radiance < 0.0f)
+								return std::unexpected(Error("InvalidRadiance", "HDR panorama conversion produced invalid radiance"));
+							FacePixels.push_back(Radiance);
 						}
 						FacePixels.push_back(1.0f);
 					}
@@ -801,7 +802,7 @@ namespace gargantuan {
 				for (std::size_t Offset = 0; Offset < Image->Pixels->size(); Offset += 4) {
 					std::size_t Position = Offset;
 					const auto Value = ReadFloat(*Image->Pixels, Position);
-					if (!Value || *Value < 0.0f || *Value > MaximumHdrRadiance)
+					if (!Value || *Value < 0.0f)
 						return std::unexpected(Error("InvalidRadiance", "Canonical HDR radiance is invalid"));
 				}
 			}
@@ -1103,7 +1104,7 @@ namespace gargantuan {
 			if (Format == RenderTextureFormat::Rgba32Float) for (std::size_t Position = Offset; Position < Artifact.size(); Position += 4) {
 				auto ValueOffset = Position;
 				const auto Value = ReadFloat(Artifact, ValueOffset);
-				if (!Value || *Value < 0.0f || *Value > MaximumHdrRadiance)
+				if (!Value || *Value < 0.0f)
 					return std::unexpected(Error("InvalidRadiance", "Image artifact contains invalid radiance"));
 			}
 			auto Pixels = std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin() + Offset, Artifact.end());

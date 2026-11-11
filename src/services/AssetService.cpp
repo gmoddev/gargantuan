@@ -7,6 +7,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/classes/Sky.hpp"
 #include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/classes/TextLabel.hpp"
@@ -1007,6 +1008,16 @@ namespace gargantuan {
 								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by Sky");
 								break;
 							}
+							if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Object); Probe &&
+								(Probe->GetProbePositiveX() == RemovedReference ||
+								 Probe->GetProbeNegativeX() == RemovedReference ||
+								 Probe->GetProbePositiveY() == RemovedReference ||
+								 Probe->GetProbeNegativeY() == RemovedReference ||
+								 Probe->GetProbePositiveZ() == RemovedReference ||
+								 Probe->GetProbeNegativeZ() == RemovedReference)) {
+								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by ReflectionProbe");
+								break;
+							}
 						}
 					}
 				}
@@ -1132,6 +1143,21 @@ namespace gargantuan {
 							World->GetReplicationScopeId(), SkyValue->GetObjectId(), RenderUpdateDomain::Environment
 						);
 				}
+				for (const auto &Object : World->GetDescendants()) if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Object)) {
+					const std::array References{
+						Probe->GetProbePositiveX(), Probe->GetProbeNegativeX(),
+						Probe->GetProbePositiveY(), Probe->GetProbeNegativeY(),
+						Probe->GetProbePositiveZ(), Probe->GetProbeNegativeZ(),
+					};
+					const bool Changed = std::ranges::any_of(References, [&](const std::string &Reference) {
+						auto Parsed = AssetReference::Parse(Reference);
+						return Parsed && Parsed->ProjectAsset && SemanticallyChanged.contains(*Parsed->ProjectAsset);
+					});
+					if (Changed)
+						RenderDirtyAccumulator::Get().Mark(
+							World->GetReplicationScopeId(), Probe->GetObjectId(), RenderUpdateDomain::Environment
+						);
+				}
 			}
 		}
 		return Operation;
@@ -1184,6 +1210,14 @@ namespace gargantuan {
 						 IsGroupReference(SkyValue->GetSkyboxPositiveZ()) ||
 						 IsGroupReference(SkyValue->GetSkyboxNegativeZ())))
 						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by Sky")};
+					if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Object); Probe &&
+						(IsGroupReference(Probe->GetProbePositiveX()) ||
+						 IsGroupReference(Probe->GetProbeNegativeX()) ||
+						 IsGroupReference(Probe->GetProbePositiveY()) ||
+						 IsGroupReference(Probe->GetProbeNegativeY()) ||
+						 IsGroupReference(Probe->GetProbePositiveZ()) ||
+						 IsGroupReference(Probe->GetProbeNegativeZ())))
+						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by ReflectionProbe")};
 				}
 			}
 			for (auto Removed : Group) {

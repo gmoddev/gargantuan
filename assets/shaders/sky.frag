@@ -35,6 +35,10 @@ vec3 ReadSky(sampler2D FaceTexture, vec2 UV, float LinearSource) {
     if (LinearSource < 0.5) {
         A = SrgbToLinear(A); B = SrgbToLinear(B);
         C = SrgbToLinear(C); D = SrgbToLinear(D);
+    } else {
+        // Preserve float32 source radiance while bounding the half-float scene target.
+        A = clamp(A, vec3(0.0), vec3(65504.0)); B = clamp(B, vec3(0.0), vec3(65504.0));
+        C = clamp(C, vec3(0.0), vec3(65504.0)); D = clamp(D, vec3(0.0), vec3(65504.0));
     }
     return mix(mix(A, B, Weight.x), mix(C, D, Weight.x), Weight.y);
 }
@@ -74,5 +78,5 @@ void main() {
     vec3 color = sky.EnvironmentColorHasSky.w > 0.5
         ? sampleSky(EnvironmentSampleDirection(normalize(ViewRay), sky.SceneFlags.yz)) : sky.EnvironmentColorHasSky.rgb;
     if (sky.SceneFlags.x < 0.5) color = ToneMapScene(color, sky.LookExposure.w, sky.SceneFlags.w > 0.5);
-    OutputColor = vec4(color, 1.0);
+    OutputColor = vec4(clamp(color, vec3(0.0), vec3(65504.0)), 1.0);
 }
