@@ -60,7 +60,9 @@ int main() try {
 	Atlas.Prepare(Frame, nullptr);
 	Require(Atlas.GetAssignments()[0].Layer == RetainedLayer &&
 		!Atlas.GetAssignments()[0].Dirty, "color and intensity edits preserve a static spotlight map");
-	(*ChangedLights)[0].Direction = glm::normalize(glm::vec3(0.2f, 0.0f, -1.0f));
+	auto DirectedLights = std::make_shared<std::vector<RenderLocalLightState>>(*ChangedLights);
+	(*DirectedLights)[0].Direction = glm::normalize(glm::vec3(0.2f, 0.0f, -1.0f));
+	Frame.Environment.LocalLights = DirectedLights;
 	Atlas.Prepare(Frame, nullptr);
 	Require(Atlas.GetAssignments()[0].Dirty, "light direction invalidates its own map");
 	Require(Atlas.OnFrameSubmitted() == 0, "unsubmitted depth never commits");
@@ -73,8 +75,9 @@ int main() try {
 	Atlas.FinishRecording(IncompleteLayer, false, true);
 	Require(!Atlas.GetAssignments().front().Sampleable && Atlas.OnFrameSubmitted() == 0,
 		"missing caster residency cannot publish a sampleable atlas layer");
-	(*ChangedLights)[0].Kind = RenderLocalLightKind::Point;
-	Frame.Environment.LocalLights = ChangedLights;
+	auto PointLights = std::make_shared<std::vector<RenderLocalLightState>>(*DirectedLights);
+	(*PointLights)[0].Kind = RenderLocalLightKind::Point;
+	Frame.Environment.LocalLights = PointLights;
 	Atlas.Prepare(Frame, nullptr);
 	for (const auto &Entry : Atlas.GetAssignments())
 		Require(Entry.Light != ObjectId{1, 1}, "point lights cannot acquire spot atlas layers");

@@ -261,10 +261,10 @@ namespace {
 		const auto Control = Renderer.Capture(Unshadowed).RgbPixels;
 		Require(RedCenter(Control) > RedCenter(Shadow) + 20,
 			"spot shadow toggle did not change the receiver pixel");
-		ShadowScene->Id = 3;
-		const auto Restored = Renderer.Capture(ShadowScene).RgbPixels;
+		auto RestoredScene = Scene(3, true, false, true);
+		const auto Restored = Renderer.Capture(RestoredScene).RgbPixels;
 		Require(Restored == Shadow, "spot shadow toggle did not restore exact pixels");
-		Require(Renderer.Capture(Delta(4, 3, ShadowScene->Frame)).RgbPixels == Shadow,
+		Require(Renderer.Capture(Delta(4, 3, RestoredScene->Frame)).RgbPixels == Shadow,
 			"static spotlight depth changed exact warm pixels");
 		auto Distant = Scene(5, true, false, true, {900000, 2000, -900000});
 		const auto DistantShadow = Renderer.Capture(Distant).RgbPixels;
