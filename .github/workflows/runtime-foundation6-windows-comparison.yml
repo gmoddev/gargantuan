@@ -1,6 +1,9 @@
 name: Runtime Foundation 6 Windows CPU comparison
 
 on:
+  push:
+    branches: [experiment/runtime6-evaluation]
+    paths: [.github/workflows/runtime-foundation6-windows-comparison.yml]
   workflow_dispatch:
     inputs:
       baseline_source:
