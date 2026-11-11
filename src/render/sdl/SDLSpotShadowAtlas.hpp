@@ -37,6 +37,9 @@ namespace gargantuan {
 				Invalidate();
 				return;
 			}
+			if (std::ranges::none_of(Slots, [](const auto &Slot) {
+				return Slot.Light && Slot.Committed;
+			})) return;
 			const auto &Objects = Before.GetObjects();
 			const auto Find = [&](ObjectId Id) -> const RenderProjectedObject * {
 				const auto Found = Objects.find(Id);
