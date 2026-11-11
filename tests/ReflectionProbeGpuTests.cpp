@@ -19,6 +19,17 @@
 #include <string_view>
 #include <vector>
 
+namespace gargantuan {
+	struct EditorViewportRendererTestAccess {
+		static void InjectPostSkyFailure(EditorViewportRenderer &Renderer) {
+			Renderer.InjectPostSkyFailureForTesting();
+		}
+		static SDLRendererMetrics GetMetrics(const EditorViewportRenderer &Renderer) {
+			return Renderer.GetMetricsForTesting();
+		}
+	};
+}
+
 namespace {
 	using namespace gargantuan;
 	constexpr std::uint32_t Width = 256, Height = 192;
@@ -109,7 +120,7 @@ namespace {
 
 		EditorViewportFrame Run(std::string_view Name, std::vector<RenderReflectionProbeState> Probes,
 			float CameraX = 0.0f, bool FullResync = false, bool Glossy = false,
-			glm::vec3 Shift = {}, bool ReimportRed = false, unsigned Frames = 6) {
+			glm::vec3 Shift = {}, bool ReimportRed = false, unsigned Frames = 6, bool Cancel = false) {
 			EditorViewportFrame Last;
 			for (auto &Value : Probes) Value.Position += Shift;
 			for (unsigned Iteration = 0; Iteration < Frames; ++Iteration) {
@@ -142,6 +153,22 @@ namespace {
 				if (Publication->FullResync) AppendScene(*Publication, Glossy, Shift);
 				if (ReimportRed && Iteration == 0) Publication->TextureUpdates.push_back({RedImage,
 					RedRevision, 0, 0, 1, 1, Solid(0, 255, 0)});
+				if (Cancel) {
+					Require(Frames == 1, "[Render:ProbeGpu] Canceled fixture requires one attempted frame");
+					EditorViewportRendererTestAccess::InjectPostSkyFailure(CaptureRenderer);
+					bool Rejected = false;
+					try { (void)CaptureRenderer.Capture(Publication); }
+					catch (const std::exception &Error) {
+						if (std::string_view(Error.what()).find("injected post-sky failure") == std::string_view::npos) throw;
+						Rejected = true;
+					}
+					Require(Rejected, "[Render:ProbeGpu] Post-sky injection did not cancel the frame");
+					MetricsRenderer.Draw(Publication);
+					PreviousId = Publication->Id;
+					Csv << Name << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,"
+						<< CaptureMetrics().ProbeUploadBytes << '\n' << std::flush;
+					return {};
+				}
 				Last = CaptureRenderer.Capture(Publication);
 				MetricsRenderer.Draw(Publication);
 				PreviousId = Publication->Id;
@@ -164,6 +191,9 @@ namespace {
 		}
 
 		[[nodiscard]] SDLRendererMetrics Metrics() const { return MetricsRenderer.GetMetrics(); }
+		[[nodiscard]] SDLRendererMetrics CaptureMetrics() const {
+			return EditorViewportRendererTestAccess::GetMetrics(CaptureRenderer);
+		}
 
 	  private:
 		void AppendScene(RenderPublication &Publication, bool Glossy, glm::vec3 Shift) {
@@ -237,6 +267,16 @@ namespace {
 			"[Render:ProbeGpu] Highest-priority overlapping probe did not dominate");
 		Require(Suite.Metrics().ProbePreprocessBuilds == BuildsAfterAdmission,
 			"[Render:ProbeGpu] Camera movement, blend, or priority needlessly rebuilt a probe source");
+		auto CanceledRed = PriorityRed;
+		CanceledRed.Priority += 1;
+		Suite.Run("canceled-probe-record-upload", {CanceledRed, PriorityBlue}, 0, false, false, {}, false, 1, true);
+		const auto BytesAfterCancel = Suite.CaptureMetrics().ProbeUploadBytes;
+		const auto RestoredPriority = Suite.Run("restored-after-canceled-upload", {PriorityRed, PriorityBlue},
+			0, false, false, {}, false, 1);
+		Require(RestoredPriority.RgbPixels == Priority.RgbPixels,
+			"[Render:ProbeGpu] Canceled probe update changed the restored frame");
+		Require(Suite.CaptureMetrics().ProbeUploadBytes >= BytesAfterCancel + 2 * 112,
+			"[Render:ProbeGpu] Canceled upload left the cycled record backing trusted");
 		Suite.RedRevision = 2;
 		PriorityRed.Source = Source(RedImage, 1, 2);
 		const auto BuildsBeforeReimport = Suite.Metrics().ProbePreprocessBuilds;

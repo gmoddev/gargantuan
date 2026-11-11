@@ -140,6 +140,7 @@ namespace gargantuan {
 		SDL_GPUSampler *Sampler = nullptr;
 	  public:
 		void OnFrameSubmitted() override { ReflectionProbes.OnFrameSubmitted(); }
+		void OnFrameAborted() override { ReflectionProbes.OnFrameAborted(); }
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateSkyPass(

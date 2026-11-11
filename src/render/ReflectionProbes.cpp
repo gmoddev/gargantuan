@@ -103,7 +103,7 @@ namespace gargantuan {
 	void SDLReflectionProbes::UploadRecords(SDLFrameContext &Frame) {
 		const bool Equal = Records.size() == CommittedRecords.size() &&
 			(Records.empty() || std::memcmp(Records.data(), CommittedRecords.data(), Records.size() * sizeof(Records[0])) == 0);
-		if (Equal && FallbackInitialized) return;
+		if (Equal && RecordsValid && FallbackInitialized) return;
 		auto *Mapped = SDL_MapGPUTransferBuffer(Gpu, Transfer, true);
 		if (!Mapped) throw std::runtime_error("[Renderer:Probe] Could not map the record staging");
 		const SDLReflectionProbeRecord Empty{};
@@ -223,11 +223,20 @@ namespace gargantuan {
 
 	void SDLReflectionProbes::OnFrameSubmitted() {
 		if (PendingFallback) FallbackInitialized = true;
-		if (PendingRecords) CommittedRecords = Records;
+		if (PendingRecords) { CommittedRecords = Records; RecordsValid = true; }
 		for (auto &Slot : Slots) if (Slot.PendingSource) {
 			Slot.CopiedSource = Slot.PendingSource; Slot.CopiedGeneration = Slot.PendingGeneration;
 			Slot.PendingSource.reset();
 		}
+	}
+	void SDLReflectionProbes::OnFrameAborted() {
+		// SDL may select a new backing when recording a cycled buffer upload.
+		// Canceling that command does not restore the previous active backing.
+		// Even a return to the last committed values therefore needs an upload.
+		RecordsValid = false;
+		PendingRecords = false;
+		PendingFallback = false;
+		for (auto &Slot : Slots) Slot.PendingSource.reset();
 	}
 	void SDLReflectionProbes::Destroy() {
 		for (auto &Slot : Slots) Slot = {};
@@ -239,7 +248,7 @@ namespace gargantuan {
 		if (Transfer) SDL_ReleaseGPUTransferBuffer(Gpu, Transfer);
 		Irradiance = nullptr; Reflections = nullptr; Fallback = nullptr;
 		Sampler = nullptr; Buffer = nullptr; Transfer = nullptr;
-		FallbackInitialized = false; PendingFallback = false; PendingRecords = false;
+		FallbackInitialized = false; PendingFallback = false; PendingRecords = false; RecordsValid = false;
 		ArraysUnavailable = false;
 		SupportsArrays.reset();
 		PrepareSequence = 0; RetryArraysAfter = 0;

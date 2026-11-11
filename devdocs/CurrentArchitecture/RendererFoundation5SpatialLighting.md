@@ -100,6 +100,11 @@ copies become reusable. A changed residency generation, source identity or
 revision requires preparation. Pose, priority, intensity and camera changes do
 not alter a source key. Array allocation failures retry after 120 preparation
 frames; unsupported format capability remains disabled until recreation.
+Canceled frames invalidate the record-buffer upload acknowledgement. SDL can
+cycle the active backing while recording an upload; canceling that command does
+not restore the previous backing. The next frame uploads even if its records
+equal the last submitted values. A native post-Sky cancellation fixture checks
+that acknowledgement, restored exact pixels, and continued publication order.
 
 Residency chooses the nearest influence volumes first, then priority and stable
 identity. Priority resolves overlapping shading influence, so distant high

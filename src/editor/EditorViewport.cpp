@@ -136,6 +136,7 @@ namespace gargantuan {
 		bool RequiresFullResync = false;
 		std::uint32_t RemainingPaletteUploadFailures = 0;
 		bool PostShadowFailure = false;
+		bool PostSkyFailure = false;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		std::vector<std::uint8_t> BgraPixels;
 
@@ -377,6 +378,10 @@ namespace gargantuan {
 					State->PostShadowFailure = false;
 					throw std::runtime_error("[Renderer:Shadow] injected post-shadow failure");
 				}
+				if (State->PostSkyFailure && Definitions[Index].Phase == SDLPassPhase::Sky) {
+					State->PostSkyFailure = false;
+					throw std::runtime_error("[Renderer:Probe] injected post-sky failure");
+				}
 			}
 		} catch (...) {
 			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
@@ -466,6 +471,9 @@ namespace gargantuan {
 	}
 	void EditorViewportRenderer::InjectPostShadowFailureForTesting() {
 		State->PostShadowFailure = true;
+	}
+	void EditorViewportRenderer::InjectPostSkyFailureForTesting() {
+		State->PostSkyFailure = true;
 	}
 	SDLRendererMetrics EditorViewportRenderer::GetMetricsForTesting() const {
 		return State ? State->Metrics : SDLRendererMetrics{};

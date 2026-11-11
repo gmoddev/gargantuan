@@ -72,6 +72,7 @@ namespace gargantuan {
 		friend struct EditorViewportRendererTestAccess;
 		void InjectPaletteUploadFailureForTesting();
 		void InjectPostShadowFailureForTesting();
+		void InjectPostSkyFailureForTesting();
 		[[nodiscard]] SDLRendererMetrics GetMetricsForTesting() const;
 		struct Backend;
 		std::unique_ptr<Backend> State;

@@ -35,6 +35,7 @@ namespace gargantuan {
 		~SDLReflectionProbes() { Destroy(); }
 		[[nodiscard]] SDLReflectionProbeBindings Prepare(SDLFrameContext &Frame, bool AllowPreprocessing);
 		void OnFrameSubmitted();
+		void OnFrameAborted();
 		void Destroy();
 	  private:
 		struct Slot {
@@ -63,6 +64,7 @@ namespace gargantuan {
 		bool FallbackInitialized = false;
 		bool PendingFallback = false;
 		bool PendingRecords = false;
+		bool RecordsValid = false;
 		bool ArraysUnavailable = false;
 		std::optional<bool> SupportsArrays;
 		std::uint64_t PrepareSequence = 0;
