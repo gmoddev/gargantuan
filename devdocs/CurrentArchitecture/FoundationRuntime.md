@@ -229,6 +229,20 @@ requested disabled/restart state. Activation queue iteration uses an owning
 entry snapshot and checks current queue membership before each turn, so
 callbacks cannot invalidate an iterator. New entries wait until the next Step.
 
+Terminal Script coroutines release their own registry roots after resume returns.
+Native task, signal-wait, Remote and entitlement resumptions identify the original
+Script through a private weak thread association. They capture the coroutine's
+state before resuming: an invalid nested resume is not completion, and a successful
+return can leave results on the coroutine stack. The existing eight-entry idle
+prune pass reconciles completion through Luau's coroutine library. Independently
+rooted tasks and callbacks retain their own lifetime and Script sandbox identity.
+
+Logical shutdown also closes the Engine-owned ActionMap facade to new bindings
+before native teardown callbacks run. It retires only the facade's bounded legacy
+handles through their existing per-ID destruction path. Authored InputService
+definitions remain outside that ownership table. Runtime cleanup cannot depend
+on a Lua Destroying handler after Lua handlers have been disconnected.
+
 ## Networking and downstream ownership
 
 Snapshot baselines, serialized references, scoped journal records, receiver apply
