@@ -50,6 +50,13 @@ namespace gargantuan {
 			World.FullControlScanNeeded = true;
 			World.FullDynamicScanNeeded = true;
 		}
+		static void SimulateMissedDynamicStateRead(WorldRoot &World, BasePart &Part) {
+			Part.PublishedPhysicsState.Description.Anchored = true;
+			World.FullDynamicScanNeeded = true;
+		}
+		static bool PublishedAnchored(const BasePart &Part) {
+			return Part.PublishedPhysicsState.Description.Anchored;
+		}
 		static const std::vector<std::shared_ptr<BasePart>> &OrderedParts(const WorldRoot &World) { return World.Parts; }
 		static std::size_t ConstraintCount(const WorldRoot &World) { return World.ConstraintJoints.size(); }
 		static PhysicsBodyId Body(const WorldRoot &World, const BasePart &Part) {
@@ -1425,6 +1432,26 @@ namespace {
 			"compact and complete-scan fallback preserve controls, readback and events across re-admission");
 	}
 
+	void TestCompactFallbackRecoversStaleAcceptedMode() {
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Moving = std::make_shared<Part>();
+		Moving->SetCanCollide(false);
+		Moving->SetParent(Workspace);
+		Moving->SetLinearVelocity({1.0f, 0.0f, 0.0f});
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		const auto Accepted = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Moving));
+		Check(Accepted && !Accepted->Description.Anchored,
+			"fixture has an accepted dynamic body before the missed readback");
+		WorldRootTestAccess::SimulateMissedDynamicStateRead(*Workspace, *Moving);
+		Check(WorldRootTestAccess::PublishedAnchored(*Moving),
+			"fixture models an unavailable state read after an accepted dynamic update");
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(!WorldRootTestAccess::PublishedAnchored(*Moving),
+			"complete-scan fallback restores accepted dynamic mode after a missed readback");
+	}
+
 	void TestBodyDynamicsAndCollisionGroups() {
 		using namespace gargantuan;
 		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
@@ -2363,6 +2390,7 @@ int main() {
 	TestPhysicsPublicationThrowKeepsAuthoredHistory();
 	TestCompactPhysicsSyncLifecycle();
 	TestCompactPhysicsFallbackParity();
+	TestCompactFallbackRecoversStaleAcceptedMode();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();

@@ -1226,7 +1226,9 @@ namespace gargantuan {
 			if (FullDynamicScanNeeded) {
 				for (const auto &Part : Parts) {
 					if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
-						Part->PublishedPhysicsState.Description.Anchored) continue;
+						(Part->PublishedPhysicsState.Description.Anchored && Part->GetAnchored())) continue;
+					// A successful Anchored edit may precede a failed state read. In that
+					// case the published mode is stale, so consult the authored mode too.
 					auto Found = PartBodies.find(Part->GetObjectId());
 					if (Found != PartBodies.end())
 						if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;

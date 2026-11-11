@@ -10,6 +10,7 @@
 
 namespace gargantuan {
 	class Character;
+	struct WorldRootTestAccess;
 
 	class BasePart : public Instance {
 		I_BasePart;
@@ -28,6 +29,7 @@ namespace gargantuan {
 		[[nodiscard]] virtual PhysicsShapeDesc GetPhysicsShape() const = 0;
 		friend class Character;
 		friend class WorldRoot;
+		friend struct WorldRootTestAccess;
 		void NotifyPendingPhysicsControl();
 		void SetCharacterSimulationCFrame(const gargantuan::CFrame &Value);
 		void SetCharacterPresentationOffset(std::optional<gargantuan::CFrame> Value);
