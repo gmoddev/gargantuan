@@ -56,7 +56,7 @@ that metric. Full process memory is a separate observation.
 | Compact physics view | Derived dynamic readback and ordered pending controls with conservative full-scan fallback | First representation rejected on total control/lifecycle cost; readback-only alternative under qualification |
 | Replication / F1 | Existing 3I typed catalog and 3J accepted per-peer history remain owners | Source review; no network behavior change justified yet |
 | Typed CFrame setter | Validated property/identity handoff and direct wire encoding | Separate experiment; small setter improvement, no broad stage or allocation win |
-| Signal dispatch / dirty callbacks | One-subscriber lifetime-preserving dispatch; per-registration dirty coalescing | Separate candidates undergoing independent comparisons and fault gates |
+| Signal dispatch / dirty callbacks | One-subscriber lifetime-preserving dispatch; registration flags, epochs and hot/cold tokens | Rejected for promotion: callback savings do not improve the complete drained path |
 
 The alternatives probe includes actual authoritative setters, dirty capture,
 cache synchronization and consumer work. It verifies exact dirty identities,
@@ -258,7 +258,30 @@ a complete simulation-frame result. The separate first-mark comparison
 adds StepPhysics(0) outside setter/profile timing, then verifies dirty drain,
 backend pose and exact journal delta on every frame. It uses identical fixture
 sources 7e66edb874b446b7410f582d99e15fc39e7e5c86 and
-6f5c63cade57fbcf5f426bd866dae163db8e58c5. That qualification is in progress.
+6f5c63cade57fbcf5f426bd866dae163db8e58c5. That attempt fails before timing
+because lazy AssetService creation appends legitimate journal records inside
+the first safe point. Identical prewarm correction moves that setup outside
+timing and preserves exact per-frame journal checks.
+
+The corrected [43075408692](https://github.com/gmoddev/gargantuan/actions/runs/43075408692)
+passes all 24 processes. At 50K with clocks off, setter plus physics drain
+changes 181.292 to 184.511 ms (+1.8%); drain alone changes 76.727 to 82.889 ms.
+Removing the reset loop with a registration epoch does not settle the tradeoff:
+[43079909984](https://github.com/gmoddev/gargantuan/actions/runs/43079909984)
+passes 60 processes but the full-drain path is +6.3% at 10K and +0.8% at 50K.
+
+The next hot/cold variant keeps the weak Part directly in the tracked map and
+separates callback tokens, removing an extra dereference during body updates.
+[43085470888](https://github.com/gmoddev/gargantuan/actions/runs/43085470888)
+compares f85d9f37752dbfa2de9ffe33640894d2ab4c2316 with
+cab3aefa90c361f8093a17c203cbc4dfb3541fff. All 60 processes and focused gates
+pass, but 50K setter plus drain worsens 177.103 to 183.560 ms (+3.6%), including
+drain 73.062 to 80.687 ms (+10.4%). Its profiled repeated, undrained callbacks
+improve 10.837 to 2.323 ms; each drained frame instead has 50K new marks.
+The complete-path regression rejects promotion of all three registration
+variants. Their isolated source and correctness evidence remain preserved;
+integration removes the token optimization while retaining conservative
+dirty-insertion failure recovery.
 
 The first compact view passes all 72 processes in
 [43068853213](https://github.com/gmoddev/gargantuan/actions/runs/43068853213),
@@ -282,6 +305,50 @@ derived-body-ID regression checking same-step published velocity and recovery.
 qualifies that corrected source against the shared baseline. It remains isolated.
 
 ## Qualification boundaries and unsuccessful evidence
+
+### Script lifetime corrections
+
+Windows [43072499672](https://github.com/gmoddev/gargantuan/actions/runs/43072499672)
+access-violates after all measured frame rows and semantic validation succeed.
+Linux ASan [43077722014](https://github.com/gmoddev/gargantuan/actions/runs/43077722014)
+reproduces coroutine use-after-free in all 24 GC/disconnect variants. Source
+inspection identifies `Script::Step` rooting stack index 1, a library table,
+instead of the new coroutine. The correction roots the actual top-of-stack
+thread before loading/resuming and restores the incoming stack height.
+
+The same sanitizer matrix
+[43082581701](https://github.com/gmoddev/gargantuan/actions/runs/43082581701)
+passes 24/24. Windows diagnostic
+[43082867443](https://github.com/gmoddev/gargantuan/actions/runs/43082867443)
+passes 96/96; normal Luau/headless
+[43082871987](https://github.com/gmoddev/gargantuan/actions/runs/43082871987)
+passes 44/44 with exact journal/callback counts. Paired 10K Luau CFrame timings
+show no demonstrated mutation speedup. Unrooted timings remain historical.
+
+Source d25a8b3b2e8662d23a20e96317647f6840e91527 also defers cleanup during
+active resume and snapshots activation across nested callbacks.
+[43085516350](https://github.com/gmoddev/gargantuan/actions/runs/43085516350)
+passes Foundation and all 24 stress processes under ASan/UBSan. It does not
+contain later Engine-owned VM lifetime/logical-shutdown corrections; those
+reachable game-destruction paths require final combined-source qualification.
+
+### Canonical package compatibility
+
+Manual core Native [43068787823](https://github.com/gmoddev/gargantuan/actions/runs/43068787823)
+passes Windows 146/146 CTests and five Release workloads, then fails the final
+package fixture assertion; Linux ASan/UBSan passes 97/97. Version 5 adds NodeIds
+and eight default Part controls, expanding the historical 512-object payload
+from 273032 to 399154 bytes. Removing only these additions recovers the version
+4 structure. The old baseline PR job skipped manual-only packaging.
+
+The repaired qualified producer pins and hash-checks the historical version 4
+payload/manifest and verifies authored values plus current loader defaults.
+Normal package capture defaults to version 5; explicit content version selection
+rejects unsupported, mixed and mismatched versions before output commit. Load
+and spatial metadata inspection use the manifest version. Original D03 byte/count
+constants remain unchanged. Targeted fixture/spatial tests and actual manual
+packaging remain required; matching stored bytes does not claim identical
+post-materialization replication bytes.
 
 Canonical baseline [43054671698](https://github.com/gmoddev/gargantuan/actions/runs/43054671698)
 passes the complete Windows NativeCI job, including existing GNS/F1 Release

@@ -14,9 +14,11 @@ The measured core reduces 50K dense publication from 84.203 to 53.352 ms and
 the setter/publication/projection stage sum from 192.806 to 166.031 ms on its
 host, while setter time regresses 98.797 to 103.150 ms. This does not qualify
 50K independently moving objects at a game frame budget. Typed CFrame encoding
-alone has no broad stage or allocation win. Signal dispatch and physics dirty
-callbacks have separate experimental candidates; compact physics still has a
-failing timed workload. Retain exact synchronous observer/journal semantics and
+alone has no broad stage or allocation win. Signal fast-path and registration
+dirty-cache experiments are rejected after complete-path comparisons. The full
+compact physics representation is rejected on control/lifecycle cost; the
+corrected readback-only alternative remains under evaluation. Retain exact
+synchronous observer/journal semantics and
 conservative fallbacks while resolving these measured costs. Full integrated
 Windows, Linux/sanitizer and applicable physical GPU gates remain separate from
 the completed focused Windows comparisons.
