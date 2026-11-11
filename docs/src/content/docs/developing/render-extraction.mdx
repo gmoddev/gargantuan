@@ -59,6 +59,12 @@ times a property was written. Publication reads only the final authoritative
 state: repeated writes become one update, create plus updates becomes one final
 create, create plus destroy disappears, and update plus destroy becomes remove.
 Irrelevant properties do not dirty rendering.
+For an ordinary journal batch whose records all target one `ObjectId`, dirty
+classification still examines every record and unions its render domains into
+one accumulator mark. Mixed-object batches retain per-record marking. This
+coalesces latest-state renderer work only: journal records, their order, and
+authoritative property notifications are not coalesced. A consumer still needs
+to acknowledge a captured dirty version; a later mutation remains pending.
 
 Local light environment state shares an immutable, identity-ordered list of at
 most 512 enabled emitters. The publisher follows WorldRoot light membership

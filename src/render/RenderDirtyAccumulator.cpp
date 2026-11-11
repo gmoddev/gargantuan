@@ -138,6 +138,42 @@ namespace gargantuan {
 		}
 	}
 
+	void RenderDirtyAccumulator::RecordBatch(
+		ObjectId Scope,
+		std::span<const std::pair<ObjectId, ChangePayload>> Changes
+	) noexcept {
+		if (Changes.empty()) return;
+		const auto Object = Changes.front().first;
+		for (const auto &[Candidate, Payload] : Changes) {
+			(void)Payload;
+			if (Candidate != Object) {
+				for (const auto &[RecordObject, RecordPayload] : Changes)
+					RecordChange(Scope, RecordObject, RecordPayload);
+				return;
+			}
+		}
+		const bool Profile = ProfilingEnabled.load(std::memory_order_relaxed);
+		const auto ClassificationStart = Profile ? ProfileClock::now() : ProfileClock::time_point{};
+		auto Domains = RenderUpdateDomain::None;
+		for (const auto &[RecordObject, Payload] : Changes) {
+			(void)RecordObject;
+			Domains = Domains | Classify(Payload);
+		}
+		if (Profile) {
+			ProfileClassificationCalls.fetch_add(Changes.size(), std::memory_order_relaxed);
+			ProfileClassificationNanoseconds.fetch_add(
+				ProfileNanoseconds(ProfileClock::now() - ClassificationStart), std::memory_order_relaxed);
+		}
+		if (Domains == RenderUpdateDomain::None) return;
+		const auto AccumulationStart = Profile ? ProfileClock::now() : ProfileClock::time_point{};
+		Mark(Scope, Object, Domains);
+		if (Profile) {
+			ProfileAccumulationCalls.fetch_add(1, std::memory_order_relaxed);
+			ProfileAccumulationNanoseconds.fetch_add(
+				ProfileNanoseconds(ProfileClock::now() - AccumulationStart), std::memory_order_relaxed);
+		}
+	}
+
 	void RenderDirtyAccumulator::Mark(
 		ObjectId Scope,
 		ObjectId Object,
