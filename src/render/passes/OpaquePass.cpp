@@ -455,8 +455,11 @@ namespace gargantuan {
 			VisibleInstances.BeginFrame();
 			const auto &Frame = Context.Projection.GetFrame();
 			const auto Planes = GetClipPlanes(Frame.Camera);
+			// A single-range instance draw preserves draw-major primitive order only
+			// on Vulkan's strict rasterization path. Proof mode remains the control.
+			const bool ContiguousOrder = Context.UseContiguousInstancing && GroupingSupported;
 			std::optional<CoverageProjector> Projector;
-			if (GroupingSupported && Context.Width && Context.Height) {
+			if (!ContiguousOrder && GroupingSupported && Context.Width && Context.Height) {
 				const glm::dmat4 Projection(Frame.Camera.ProjectionMatrix), View(Frame.Camera.ViewMatrix);
 				if (BoundedMatrix(Projection) && BoundedMatrix(View))
 					Projector = CoverageProjector{Projection * View, Absolute(Projection) * Absolute(View),
@@ -493,9 +496,16 @@ namespace gargantuan {
 					OutsideView(Planes, Item.ModelMatrix, *Bounds)) continue;
 				const auto *Mesh = Projected.Mesh
 					? Context.MeshResources.Find(*Projected.Mesh) : Context.MeshResources.Find(Item.Geometry);
-				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer || Record.Pose || Item.CastShadow ||
-					!Mesh->ImmutablePositionBounds || !Projector ||
+				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer || Record.Pose ||
+					(Item.CastShadow && !ContiguousOrder) || !Mesh->ImmutablePositionBounds ||
+					(!ContiguousOrder && !Projector) ||
 					(Projected.Primitives && Projected.Primitives->size() != 1)) { Flush(); continue; }
+				if (Item.CastShadow && Frame.Environment.SunIntensity > 0.0f) {
+					const auto Palette = Context.SkinPalettes.Find(Item.Object, nullptr);
+					const auto ShadowRevision = Context.ShadowPoseRevisions.find(Item.Object);
+					if (ShadowRevision == Context.ShadowPoseRevisions.end() ||
+						ShadowRevision->second != Palette.PoseRevision) { Flush(); continue; }
+				}
 				const auto &Material = Projected.Primitives ? Projected.Primitives->front().Material : Projected.Material;
 				if (Material.OpacityMode != RenderOpacityMode::Opaque || Material.BaseColorTexture ||
 					Material.NormalTexture || Material.MetallicRoughnessTexture || Material.EmissiveTexture ||
@@ -504,12 +514,16 @@ namespace gargantuan {
 				if (!Slot) { Flush(); continue; }
 				const auto First = Projected.Primitives ? Projected.Primitives->front().FirstIndex : 0;
 				const auto Count = Projected.Primitives ? Projected.Primitives->front().IndexCount : Mesh->IndexCount;
-				const auto Coverage = Projector->Project(Item.ModelMatrix, *Mesh->ImmutablePositionBounds);
-				if (!Coverage || Coverage->CellCount() > MAX_CELLS_PER_OBJECT) { Flush(); continue; }
+				std::optional<OpaqueCoverage> Coverage;
+				if (!ContiguousOrder) {
+					Coverage = Projector->Project(Item.ModelMatrix, *Mesh->ImmutablePositionBounds);
+					if (!Coverage || Coverage->CellCount() > MAX_CELLS_PER_OBJECT) { Flush(); continue; }
+				}
 				if (!Pending.empty() && (Mesh != PendingMesh || First != PendingFirst || Count != PendingCount ||
 					Material.DoubleSided != PendingDoubleSided || Material.ShadingModel != PendingShading)) Flush();
 				if (Pending.size() == MAX_OPAQUE_BATCH_OBJECTS) Flush();
-				if (!Pending.empty() && InstanceCoverageGrid.Check(*Coverage, nullptr) != OpaqueCoverageGrid::Admission::Safe)
+				if (!ContiguousOrder && !Pending.empty() &&
+					InstanceCoverageGrid.Check(*Coverage, nullptr) != OpaqueCoverageGrid::Admission::Safe)
 					Flush();
 				if (Pending.empty()) {
 					PendingMesh = Mesh;
@@ -518,7 +532,7 @@ namespace gargantuan {
 					PendingDoubleSided = Material.DoubleSided;
 					PendingShading = Material.ShadingModel;
 				}
-				InstanceCoverageGrid.Add(*Coverage, static_cast<std::uint16_t>(Pending.size()));
+				if (!ContiguousOrder) InstanceCoverageGrid.Add(*Coverage, static_cast<std::uint16_t>(Pending.size()));
 				Pending.emplace_back(Position, *Slot);
 			}
 			Flush();
@@ -736,6 +750,9 @@ namespace gargantuan {
 				if (Context.Metrics) {
 					++Context.Metrics->DrawCalls;
 					++Context.Metrics->InstancedDrawCalls;
+					if (Context.UseContiguousInstancing) ++Context.Metrics->ContiguousInstancedDrawCalls;
+					Context.Metrics->MaximumInstancedBatchSize =
+						std::max(Context.Metrics->MaximumInstancedBatchSize, static_cast<std::uint64_t>(Batch.Count));
 					Context.Metrics->InstancedObjects += Batch.Count;
 					if (Detailed) ++Context.Metrics->WorldPrimitiveDraws;
 				}

@@ -25,6 +25,7 @@ namespace gargantuan {
 		bool UseCompactTraversal = false;
 		bool EnableInstancing = false;
 		bool EnableSceneEnvelope = false;
+		bool UseContiguousInstancing = false;
 	};
 
 	struct SDLRendererMetrics {
@@ -111,6 +112,8 @@ namespace gargantuan {
 		std::uint64_t WorldGeometryBindings = 0;
 		std::uint64_t WorldMaterialBindings = 0;
 		std::uint64_t InstancedDrawCalls = 0;
+		std::uint64_t ContiguousInstancedDrawCalls = 0;
+		std::uint64_t MaximumInstancedBatchSize = 0;
 		std::uint64_t InstancedObjects = 0;
 		std::uint64_t InstanceUploadBytes = 0;
 		std::uint64_t VisibleIndexUploadBytes = 0;

@@ -75,6 +75,8 @@ namespace {
 		bool SdlProfileDetailed = false;
 		bool SdlCompactTraversal = false;
 		bool SdlInstancing = false;
+		bool SdlContiguousInstancing = false;
+		bool SdlInstancingOrderSpecified = false;
 		bool SdlSceneEnvelope = false;
 		std::uint32_t CulledPercent = 50;
 		bool CameraAway = false;
@@ -149,6 +151,7 @@ namespace {
 					"[--incremental] [--synchronize=on|off|bounded-2] [--capture=path-prefix] [--samples=csv-path] "
 					"[--sdl-hdr=on|off] [--sdl-opaque-grouping=off] [--sdl-profile=on|off] "
 					"[--sdl-compact-traversal=on|off] [--sdl-instancing=on|off] "
+					"[--sdl-instancing-order=proof|contiguous] "
 					"[--sdl-scene-envelope=on|off] [--scenario=culled --culled-percent=0|50|100 [--camera-away]] "
 					"[--scenario=local-lights --lights=N [--static-lights]]\n";
 				std::exit(0);
@@ -169,6 +172,14 @@ namespace {
 			else if (Argument == "--sdl-compact-traversal=off") ParsedOptions.SdlCompactTraversal = false;
 			else if (Argument == "--sdl-instancing=on") ParsedOptions.SdlInstancing = true;
 			else if (Argument == "--sdl-instancing=off") ParsedOptions.SdlInstancing = false;
+			else if (Argument == "--sdl-instancing-order=proof") {
+				ParsedOptions.SdlInstancingOrderSpecified = true;
+				ParsedOptions.SdlContiguousInstancing = false;
+			}
+			else if (Argument == "--sdl-instancing-order=contiguous") {
+				ParsedOptions.SdlInstancingOrderSpecified = true;
+				ParsedOptions.SdlContiguousInstancing = true;
+			}
 			else if (Argument == "--sdl-scene-envelope=on") ParsedOptions.SdlSceneEnvelope = true;
 			else if (Argument == "--sdl-scene-envelope=off") ParsedOptions.SdlSceneEnvelope = false;
 			else if (Argument == "--camera-away") ParsedOptions.CameraAway = true;
@@ -212,6 +223,8 @@ namespace {
 			throw std::invalid_argument("--sdl-compact-traversal requires an incremental SDL timing workload");
 		if (ParsedOptions.SdlInstancing && (!ParsedOptions.Incremental || ParsedOptions.Backend != "sdl"))
 			throw std::invalid_argument("--sdl-instancing requires an incremental SDL timing workload");
+		if (ParsedOptions.SdlInstancingOrderSpecified && !ParsedOptions.SdlInstancing)
+			throw std::invalid_argument("--sdl-instancing-order requires --sdl-instancing=on");
 		if (ParsedOptions.SdlSceneEnvelope && (!ParsedOptions.Incremental || ParsedOptions.Backend != "sdl"))
 			throw std::invalid_argument("--sdl-scene-envelope requires an incremental SDL timing workload");
 		if (ParsedOptions.CulledPercent != 50 && ParsedOptions.Scenario != "culled")
@@ -730,6 +743,7 @@ namespace {
 				.UseCompactTraversal = Settings.SdlCompactTraversal,
 				.EnableInstancing = Settings.SdlInstancing,
 				.EnableSceneEnvelope = Settings.SdlSceneEnvelope,
+				.UseContiguousInstancing = Settings.SdlContiguousInstancing,
 			});
 			Sdl = Renderer.get();
 			Backend = std::move(Renderer);
@@ -786,6 +800,8 @@ namespace {
 		std::array<std::vector<double>, InstancePhaseNames.size()> InstanceTimes;
 		std::array<std::vector<std::uint64_t>, 3> EnvelopeCounts;
 		auto EnvelopePrevious = DetailedBaseline;
+		std::array<std::vector<std::uint64_t>, 2> ContiguousCounts;
+		auto ContiguousPrevious = DetailedBaseline;
 		FixtureTimes.reserve(Settings.Frames);
 		FrameTimes.reserve(Settings.Frames);
 		std::uint64_t LogicalUpdates = 0;
@@ -819,6 +835,12 @@ namespace {
 					EnvelopeCounts[Index].push_back(EnvelopeValues[Index] - PreviousEnvelopeValues[Index]);
 				}
 				EnvelopePrevious = Metrics;
+				if (Metrics.ContiguousInstancedDrawCalls < ContiguousPrevious->ContiguousInstancedDrawCalls)
+					throw std::logic_error("contiguous draw counter decreased");
+				ContiguousCounts[0].push_back(
+					Metrics.ContiguousInstancedDrawCalls - ContiguousPrevious->ContiguousInstancedDrawCalls);
+				ContiguousCounts[1].push_back(Metrics.MaximumInstancedBatchSize);
+				ContiguousPrevious = Metrics;
 				if (Settings.SdlInstancing) {
 					const std::array<std::uint64_t, InstancePhaseNames.size()> InstanceNanoseconds{
 						Metrics.LastInstanceApplicationNanoseconds, Metrics.LastInstanceUploadNanoseconds,
@@ -966,7 +988,9 @@ namespace {
 			<< ',' << (Sdl ? (Settings.SdlCompactTraversal ? "on" : "off") : "NA")
 			<< ',' << (Sdl ? (Settings.SdlInstancing ? "on" : "off") : "NA")
 			<< ',' << (Sdl ? (Settings.SdlSceneEnvelope ? "on" : "off") : "NA")
-			<< ',' << (Settings.CameraAway ? "on" : "off");
+			<< ',' << (Settings.CameraAway ? "on" : "off")
+			<< ',' << (Sdl && Settings.SdlInstancing
+				? (Settings.SdlContiguousInstancing ? "contiguous" : "proof") : "NA");
 		for (const auto &Times : DetailedTimes) std::cout << ',' << MeanOrNa(Times);
 		for (const auto &Counts : DetailedCounts) {
 			if (Counts.empty()) std::cout << ",NA";
@@ -981,6 +1005,9 @@ namespace {
 			if (Counts.empty()) std::cout << ",NA";
 			else std::cout << ',' << std::accumulate(Counts.begin(), Counts.end(), std::uint64_t{});
 		}
+		if (ContiguousCounts[0].empty()) std::cout << ",NA,NA";
+		else std::cout << ',' << std::accumulate(ContiguousCounts[0].begin(), ContiguousCounts[0].end(), std::uint64_t{})
+			<< ',' << ContiguousCounts[1].back();
 		std::cout << '\n';
 		if (Samples) {
 			for (std::size_t Frame = 0; Frame < FrameTimes.size(); ++Frame) {
@@ -1016,8 +1043,15 @@ namespace {
 					<< ',' << (Sdl ? (Settings.SdlCompactTraversal ? "on" : "off") : "NA")
 					<< ',' << (Sdl ? (Settings.SdlInstancing ? "on" : "off") : "NA")
 					<< ',' << (Sdl ? (Settings.SdlSceneEnvelope ? "on" : "off") : "NA")
-					<< ',' << (Settings.CameraAway ? "on" : "off");
+					<< ',' << (Settings.CameraAway ? "on" : "off")
+					<< ',' << (Sdl && Settings.SdlInstancing
+						? (Settings.SdlContiguousInstancing ? "contiguous" : "proof") : "NA");
 				for (const auto &Counts : EnvelopeCounts) {
+					*Samples << ',';
+					if (Frame < Counts.size()) *Samples << Counts[Frame];
+					else *Samples << "NA";
+				}
+				for (const auto &Counts : ContiguousCounts) {
 					*Samples << ',';
 					if (Frame < Counts.size()) *Samples << Counts[Frame];
 					else *Samples << "NA";
@@ -1297,12 +1331,13 @@ int main(int ArgumentCount, char **Arguments) {
 				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs,SdlHdrRequested,SdlHdrActive,SdlHdrSceneBytes,SdlSceneResolveDraws,"
 				"AuthoredLocalLights,LocalLightMovement,LocalLightGridMeanMs,LocalLightUploadBytes,VisibleLocalLights,"
 				"OverBudgetLightTiles,DroppedLightTileIndices,MaterialViewBytes,MaterialSourceBytes,MaterialViewFallbacks,MaterialUploadStagingBytes,"
-				"IblBuilds,IblPreprocessPasses,ShadowMapBuilds,ShadowCacheHits,ShadowMapPasses,ShadowCasterDraws,SdlOpaqueGrouping,SdlProfileDetailed,CulledPercent,SdlCompactTraversal,SdlInstancing,SdlSceneEnvelope,CameraAway";
+				"IblBuilds,IblPreprocessPasses,ShadowMapBuilds,ShadowCacheHits,ShadowMapPasses,ShadowCasterDraws,SdlOpaqueGrouping,SdlProfileDetailed,CulledPercent,SdlCompactTraversal,SdlInstancing,SdlSceneEnvelope,CameraAway,SdlInstancingOrder";
 			for (const auto Name : DetailedPhaseNames) std::cout << ',' << Name << "MeanMs";
 			for (const auto Name : DetailedCounterNames) std::cout << ',' << Name;
 			for (const auto Name : InstanceCounterNames) std::cout << ',' << Name;
 			for (const auto Name : InstancePhaseNames) std::cout << ',' << Name << "MeanMs";
 			std::cout << ",EnvelopeRejections,EnvelopeBuildNs,EnvelopeRebuilds";
+			std::cout << ",ContiguousInstancedDrawCalls,MaximumInstancedBatchSize";
 			std::cout << '\n';
 			std::ofstream Samples;
 			if (BenchmarkOptions.SamplesPath) {
@@ -1316,7 +1351,7 @@ int main(int ArgumentCount, char **Arguments) {
 				for (const auto Name : DetailedCounterNames) Samples << ',' << Name;
 				for (const auto Name : InstanceCounterNames) Samples << ',' << Name;
 				for (const auto Name : InstancePhaseNames) Samples << ',' << Name << "Ms";
-				Samples << ",CulledPercent,SdlCompactTraversal,SdlInstancing,SdlSceneEnvelope,CameraAway,EnvelopeRejections,EnvelopeBuildNs,EnvelopeRebuilds";
+				Samples << ",CulledPercent,SdlCompactTraversal,SdlInstancing,SdlSceneEnvelope,CameraAway,SdlInstancingOrder,EnvelopeRejections,EnvelopeBuildNs,EnvelopeRebuilds,ContiguousInstancedDrawCalls,MaximumInstancedBatchSize";
 				Samples << '\n' << std::setprecision(std::numeric_limits<double>::max_digits10);
 			}
 			for (const auto &Scenario : BuildCases(BenchmarkOptions))

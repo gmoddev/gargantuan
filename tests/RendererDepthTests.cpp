@@ -397,6 +397,69 @@ void CheckSceneEnvelopePixels(const std::filesystem::path &Output) {
 	std::cout << "[Render:SceneEnvelope] rejections=" << Rejected.EnvelopeRejections
 		<< " rebuilds=" << Rejected.EnvelopeRebuilds << " culled=" << Rejected.CameraCulledObjects << '\n';
 }
+
+void CheckContiguousInstancing(const std::filesystem::path &Output) {
+	EditorViewportRenderer Candidate(ORDER_WIDTH, ORDER_HEIGHT, true, true, false, true);
+	EditorViewportRenderer Reference(ORDER_WIDTH, ORDER_HEIGHT);
+	SDLRenderer MetricsRenderer({ORDER_WIDTH, ORDER_HEIGHT}, {
+		.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+		.EnableInstancing = true, .UseContiguousInstancing = true});
+	const bool Vulkan = MetricsRenderer.GetDriverName() == "vulkan";
+	RenderPublicationId Id = 1;
+	const glm::mat4 Identity(1.0f);
+	const auto Translate = [&](float X, float Z) {
+		return glm::translate(Identity, glm::vec3(X, 0, Z));
+	};
+	const auto Compare = [&](std::string_view Name, const RenderPublication &Value, bool Eligible,
+		std::uint64_t ExpectedObjects = 2) {
+		const auto Publication = std::make_shared<const RenderPublication>(Value);
+		const auto Actual = Candidate.Capture(Publication);
+		const auto Expected = Reference.Capture(Publication);
+		if (!Output.empty()) {
+			WriteFrame(Output / (std::string(Name) + "-contiguous.ppm"), Actual);
+			WriteFrame(Output / (std::string(Name) + "-individual.ppm"), Expected);
+		}
+		if (Actual.RgbPixels != Expected.RgbPixels)
+			throw std::runtime_error(std::format("Contiguous instancing changed visible pixels for {}", Name));
+		const auto Before = MetricsRenderer.GetMetrics();
+		MetricsRenderer.Draw(Publication);
+		const auto After = MetricsRenderer.GetMetrics();
+		const auto Batches = After.ContiguousInstancedDrawCalls - Before.ContiguousInstancedDrawCalls;
+		const auto Objects = After.InstancedObjects - Before.InstancedObjects;
+		if (Vulkan && (Batches != (Eligible ? 1u : 0u) || Objects != (Eligible ? ExpectedObjects : 0u)))
+			throw std::runtime_error(std::format("Contiguous fixture {} issued {} batches for {} objects", Name, Batches, Objects));
+		std::cout << "[Render:ContiguousInstances] " << Name << " batches=" << Batches
+			<< " objects=" << Objects << '\n';
+	};
+	Compare("screen-separated", MakeInstanceScene(Id++, Translate(-.045f, 0), Translate(.045f, 0)), true);
+	Compare("depth-separated", MakeInstanceScene(Id++, Identity, Translate(0, -1.5f)), true);
+	Compare("coplanar", MakeInstanceScene(Id++, Identity, Identity), true);
+	Compare("coplanar-reversed", MakeInstanceScene(Id++, Identity, Identity, true), true);
+	Compare("near-equal-depth", MakeInstanceScene(Id++, Identity, Translate(0, 1e-7f)), true);
+	Compare("intersecting", MakeInstanceScene(Id++, Identity,
+		glm::rotate(Identity, glm::radians(45.0f), glm::vec3(0, 1, 0))), true);
+	Compare("shadow-casters", MakeInstanceScene(Id++, Identity, Translate(0, -1.5f), false, true), true);
+	auto Nonunit = MakeInstanceScene(Id++, Identity, Translate(0, -1.5f));
+	auto Vertices = std::make_shared<std::vector<RenderVertex>>(*Nonunit.MeshCreates.front().Vertices);
+	for (auto &Vertex : *Vertices) {
+		Vertex.Normal *= 1.7f;
+		Vertex.Tangent.x *= 2.3f;
+		Vertex.Tangent.y *= 2.3f;
+		Vertex.Tangent.z *= 2.3f;
+	}
+	Nonunit.MeshCreates.front().Vertices = Vertices;
+	Compare("nonunit-normal-tangent", Nonunit, true);
+	auto Dense = MakeInstanceScene(Id++, Identity, Identity);
+	for (std::uint32_t Slot = 3; Slot <= 64; ++Slot) {
+		auto Create = Dense.Creates.front();
+		Create.Item.Object = {Slot, 1};
+		Dense.Creates.push_back(Create);
+	}
+	Compare("dense-overlap-64", Dense, true, 64);
+	Compare("multiple-ranges", MakeOrderingScene(Id++, Identity, Identity, false, false, false), false);
+	Compare("masked-material", MakeOrderingScene(Id++, Identity, Identity, false, true, false), false);
+	Compare("separate-meshes", WithoutSharedMesh(MakeInstanceScene(Id++, Identity, Identity)), false);
+}
 }
 
 int main(int Argc, char **Argv) {
@@ -405,7 +468,7 @@ int main(int Argc, char **Argv) {
 #endif
 	try {
 		bool Observe = false, Extended = false, OpaqueOrdering = false, InstancingOrdering = false,
-			SceneEnvelopePixels = false;
+			SceneEnvelopePixels = false, ContiguousInstancing = false;
 		float Near = .1f, Far = 100000;
 		std::string Projection = "production";
 		std::filesystem::path Output;
@@ -416,6 +479,7 @@ int main(int Argc, char **Argv) {
 			else if (Argument == "--opaque-ordering") OpaqueOrdering = true;
 			else if (Argument == "--instancing-ordering") InstancingOrdering = true;
 			else if (Argument == "--scene-envelope-pixels") SceneEnvelopePixels = true;
+			else if (Argument == "--contiguous-instancing") ContiguousInstancing = true;
 			else if (Argument.starts_with("--near=")) Near = std::stof(Argument.substr(7));
 			else if (Argument.starts_with("--far=")) Far = std::stof(Argument.substr(6));
 			else if (Argument.starts_with("--projection=")) Projection = Argument.substr(13);
@@ -433,6 +497,10 @@ int main(int Argc, char **Argv) {
 		}
 		if (SceneEnvelopePixels) {
 			CheckSceneEnvelopePixels(Output);
+			return 0;
+		}
+		if (ContiguousInstancing) {
+			CheckContiguousInstancing(Output);
 			return 0;
 		}
 		BootstrapNativeRuntimeSchema();

@@ -25,8 +25,12 @@ layout(location = 10) flat out vec4 FragmentColorSamplerModes;
 
 void main() {
     InstanceRecord Part = InstanceData.Records[VisibleInstances.Slots[gl_InstanceIndex]];
+    // Rigid vertices use the identity skin palette in opaque.vert. Its
+    // ApplySkinning path normalizes the normal and tangent before model space.
+    vec3 RigidNormal = normalize(VertexNormal);
+    vec3 RigidTangent = normalize(VertexTangent.xyz);
     gl_Position = world.ProjectionMatrix * world.ViewMatrix * Part.ModelMatrix * vec4(VertexPosition, 1.0);
-    FragmentNormal = normalize(mat3(Part.NormalMatrix) * VertexNormal);
+    FragmentNormal = normalize(mat3(Part.NormalMatrix) * RigidNormal);
     FragmentColor = Part.Color;
     WorldPosition = Part.ModelMatrix * vec4(VertexPosition, 1.0);
     ShadowPosition = world.ShadowBiasMatrix * WorldPosition;
@@ -34,7 +38,7 @@ void main() {
     FragmentMaterialValues = Part.MaterialValues;
     mat3 Model = mat3(Part.ModelMatrix);
     float Orientation = determinant(Model) < 0.0 ? -1.0 : 1.0;
-    FragmentTangent = vec4(Model * VertexTangent.xyz, Orientation * VertexTangent.w);
+    FragmentTangent = vec4(Model * RigidTangent, Orientation * VertexTangent.w);
     FragmentMaterialFlags = Part.MaterialFlags;
     FragmentEmissiveOcclusion = Part.EmissiveOcclusion;
     FragmentMaterialControls = Part.MaterialControls;

@@ -369,6 +369,7 @@ namespace gargantuan {
 		Frame.EnableInstancing = State->Options.EnableInstancing && State->InstanceResources &&
 			State->InstanceResources->GetRecords().IsAvailable();
 		Frame.EnableSceneEnvelope = State->Options.EnableSceneEnvelope;
+		Frame.UseContiguousInstancing = State->Options.UseContiguousInstancing;
 		Frame.Commands = Commands;
 		Frame.HdrSceneTexture = State->HdrSceneTexture;
 		Frame.DepthTexture = State->DepthTexture;
