@@ -833,9 +833,30 @@ namespace {
 	}
 		Require(Rejected && Renderer.GetMetrics().ShadowMapPasses == Alpha.ShadowMapPasses,
 			"rejected publication changed submitted shadow passes");
-		Draw(Renderer, Delta(5, 4, Reimport->Frame));
-		Require(Renderer.GetMetrics().ShadowMapPasses == Alpha.ShadowMapPasses,
-			"valid retry rebuilt committed spotlight layers");
+		bool NeedsResync = false;
+		try { Draw(Renderer, Delta(5, 4, Reimport->Frame)); }
+		catch (const std::logic_error &Error) {
+			NeedsResync = std::string_view(Error.what()).find("requires a full RenderPublication") != std::string_view::npos;
+			if (!NeedsResync) throw;
+		}
+		Require(NeedsResync && Renderer.GetMetrics().FramesSubmitted == Alpha.FramesSubmitted,
+			"runtime projection rejection did not enforce its full-resync recovery contract");
+		auto Recovery = std::make_shared<RenderPublication>(*Initial);
+		Recovery->Id = 6;
+		Recovery->Frame = Reimport->Frame;
+		for (auto &Texture : Recovery->TextureCreates) if (Texture.Texture == Mask) {
+			Texture.Revision = Reimport->TextureUpdates.front().Revision;
+			Texture.Pixels = Reimport->TextureUpdates.front().Pixels;
+		}
+		Draw(Renderer, Recovery);
+		const auto Recovered = Renderer.GetMetrics();
+		Require(Recovered.FramesSubmitted == Alpha.FramesSubmitted + 1 &&
+			Recovered.ShadowMapPasses >= Alpha.ShadowMapPasses + 8 &&
+			Recovered.ShadowMapPasses <= Alpha.ShadowMapPasses + 9,
+			"full resync did not rebuild all spotlight depth after runtime rejection");
+		Draw(Renderer, Delta(7, 6, Recovery->Frame));
+		Require(Renderer.GetMetrics().ShadowMapPasses == Recovered.ShadowMapPasses,
+			"recovered static spotlight layers did not return to cache reuse");
 		std::cout << "[Render:ShadowGpu] passes cold=" << Cold.ShadowMapPasses
 			<< " warm=" << Warm.ShadowMapPasses << " eviction=" << Changed.ShadowMapPasses
 			<< " alpha=" << Alpha.ShadowMapPasses << '\n';
