@@ -92,6 +92,15 @@ namespace gargantuan {
 			return std::nullopt;
 		}
 
+		bool IsInWorld(const Instance &Value, const WorldRoot &World) {
+			auto Parent = Value.ParentReference.lock();
+			while (Parent) {
+				if (auto *Ancestor = dynamic_cast<WorldRoot *>(Parent.get())) return Ancestor == &World;
+				Parent = Parent->ParentReference.lock();
+			}
+			return false;
+		}
+
 		RenderCameraSnapshot BuildCamera(
 			const RenderCameraInput &Input,
 			std::uint32_t ViewportWidth,
@@ -132,13 +141,16 @@ namespace gargantuan {
 			return Result;
 		}
 
-		std::optional<RenderItem> ExtractItem(const std::shared_ptr<Part> &PartValue, RenderExtractionDiagnostic &Diagnostic) {
+		std::optional<RenderItem> ExtractItem(
+			const std::shared_ptr<Part> &PartValue, ObjectId ExpectedObject,
+			RenderExtractionDiagnostic &Diagnostic
+		) {
 			const auto Object = PartValue ? PartValue->GetObjectId() : ObjectId{};
 			if (!PartValue || PartValue->GetDestroyed() || PartValue->IsDestroying()) {
 				Diagnostic = {RenderExtractionIssue::DeadObject, Object, "Skipped a dead renderable object"};
 				return std::nullopt;
 			}
-			if (!Object.IsValid() || ObjectRegistry::Get().Lookup(Object).get() != PartValue.get()) {
+			if (!Object.IsValid() || Object != ExpectedObject) {
 				Diagnostic = {RenderExtractionIssue::StaleObjectId, Object, "Skipped a renderable object with stale identity"};
 				return std::nullopt;
 			}
@@ -188,14 +200,16 @@ namespace gargantuan {
 		std::optional<ExtractedMeshPart> ExtractMeshPart(
 			const WorldRoot &World,
 			const std::shared_ptr<MeshPart> &PartValue,
-			RenderExtractionDiagnostic &Diagnostic
+			RenderExtractionDiagnostic &Diagnostic,
+			std::optional<ObjectId> ValidatedObject = std::nullopt
 		) {
 			const auto Object = PartValue ? PartValue->GetObjectId() : ObjectId{};
 			if (!PartValue || PartValue->GetDestroyed() || PartValue->IsDestroying()) {
 				Diagnostic = {RenderExtractionIssue::DeadObject, Object, "Skipped a dead MeshPart"};
 				return std::nullopt;
 			}
-			if (!Object.IsValid() || ObjectRegistry::Get().Lookup(Object).get() != PartValue.get()) {
+			if (!Object.IsValid() || (ValidatedObject
+				? Object != *ValidatedObject : ObjectRegistry::Get().Lookup(Object).get() != PartValue.get())) {
 				Diagnostic = {RenderExtractionIssue::StaleObjectId, Object, "Skipped a MeshPart with stale identity"};
 				return std::nullopt;
 			}
@@ -1108,7 +1122,7 @@ namespace gargantuan {
 			auto DeformableValue = std::dynamic_pointer_cast<DeformableBody>(InstanceValue);
 			if (DeformableValue) {
 				const bool ShouldRender = !DeformableValue->GetDestroyed() && !DeformableValue->IsDestroying() &&
-					DeformableValue->FindFirstAncestorWhichIsA("WorldRoot").get() == &World;
+					IsInWorld(*DeformableValue, World);
 				RenderExtractionDiagnostic Diagnostic;
 				auto Extracted = ShouldRender ? ExtractDeformable(World, DeformableValue, Diagnostic) : std::nullopt;
 				if (ProfilingEnabled)
@@ -1169,9 +1183,9 @@ namespace gargantuan {
 			}
 			if (MeshPartValue) {
 				const bool ShouldRender = !MeshPartValue->GetDestroyed() && !MeshPartValue->IsDestroying() &&
-					MeshPartValue->FindFirstAncestorWhichIsA("WorldRoot").get() == &World;
+					IsInWorld(*MeshPartValue, World);
 				RenderExtractionDiagnostic Diagnostic;
-				auto Extracted = ShouldRender ? ExtractMeshPart(World, MeshPartValue, Diagnostic) : std::nullopt;
+				auto Extracted = ShouldRender ? ExtractMeshPart(World, MeshPartValue, Diagnostic, Object) : std::nullopt;
 				if (ProfilingEnabled)
 					LastProfile.FinalStateExtractionNanoseconds +=
 						ProfileNanoseconds(ProfileClock::now() - ExtractionStart);
@@ -1201,7 +1215,7 @@ namespace gargantuan {
 				continue;
 			}
 			const bool ShouldRender = PartValue && !PartValue->GetDestroyed() && !PartValue->IsDestroying() &&
-				PartValue->FindFirstAncestorWhichIsA("WorldRoot").get() == &World;
+				IsInWorld(*PartValue, World);
 			if (!ShouldRender) {
 				if (ProfilingEnabled)
 					LastProfile.FinalStateExtractionNanoseconds +=
@@ -1220,7 +1234,7 @@ namespace gargantuan {
 				continue;
 			}
 			RenderExtractionDiagnostic Diagnostic;
-			auto Item = ExtractItem(PartValue, Diagnostic);
+			auto Item = ExtractItem(PartValue, Object, Diagnostic);
 			if (ProfilingEnabled)
 				LastProfile.FinalStateExtractionNanoseconds +=
 					ProfileNanoseconds(ProfileClock::now() - ExtractionStart);
