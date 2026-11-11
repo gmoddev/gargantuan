@@ -7133,6 +7133,46 @@ namespace {
 		{
 			auto Game = std::make_shared<DataModel>();
 			auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+			Check(static_cast<bool>(WorkspaceValue), "physics motion fixture has a Workspace");
+			WorkspaceValue->SetGravity(9.8f);
+			auto Moving = std::make_shared<Part>();
+			Moving->SetName("PhysicsExitPart");
+			Moving->SetAnchored(true);
+			Moving->SetCanCollide(false);
+			Moving->SetCanTouch(false);
+			Moving->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
+			Moving->SetParent(WorkspaceValue);
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameFromPhysicsMotion");
+			ScriptValue->SetSource(R"(
+				local Part = game:GetService('Workspace'):FindFirstChild('PhysicsExitPart')
+				Part:GetPropertyChangedSignal('CFrame'):Connect(function()
+					Part.Name = 'PhysicsMotionCallbackRan'
+					game:Destroy()
+				end)
+			)");
+			ScriptValue->SetParent(Game);
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			Runtime.Step();
+			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed() &&
+				WorldRootTestAccess::BodyCount(*WorkspaceValue) == 1,
+				"physics motion callback is installed while the anchored body is live");
+			std::weak_ptr<ScriptEngine> ScriptWeak = Runtime.Script;
+			Moving->SetAnchored(false);
+			WorkspaceValue->StepPhysics(1.0 / 60.0, std::nullopt);
+			Check(Moving->GetName() == "PhysicsMotionCallbackRan" && Game->GetDestroyed() &&
+				WorkspaceValue->GetDestroyed() && Moving->GetDestroyed() && Runtime.Script == nullptr &&
+				ScriptWeak.expired() && WorldRootTestAccess::BodyCount(*WorkspaceValue) == 0,
+				"real physics publication permits Lua to destroy game and retires the backend body after callback return");
+			Runtime.Step();
+			Check(Moving->GetName() == "PhysicsMotionCallbackRan" &&
+				WorldRootTestAccess::BodyCount(*WorkspaceValue) == 0 && ScriptWeak.expired(),
+				"destroyed Engine cannot resume physics callbacks or recreate bodies");
+		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 			auto Trigger = std::make_shared<Part>();
 			Trigger->SetName("ExternalTrigger");
 			Trigger->SetParent(WorkspaceValue);
