@@ -318,6 +318,48 @@ namespace {
 			Require(RedCenter(Bright) > RedCenter(Dark) + 25,
 				"newly posed outside caster entered without invalidating empty cascade depth");
 		}
+		{
+			EditorViewportRenderer Renderer(Size, Size);
+			auto Initial = Scene(1, true, false, true);
+			auto &Item = Initial->Creates.back().Item;
+			Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(10, 0, 0.75f)) *
+				glm::scale(glm::mat4(1), glm::vec3(0.16f));
+			Item.InverseModelMatrix = glm::inverse(Item.ModelMatrix);
+			const auto Bright = Renderer.Capture(Initial).RgbPixels;
+			auto Moved = Delta(2, 1, Initial->Frame);
+			Moved->MeshVertexUpdates.push_back({.Mesh = CasterMesh, .VertexRevision = 2,
+				.FirstVertex = 0, .Vertices = Quad(-60.9375f),
+				.Bounds = {{-61.9375f, -1, 0}, {-59.9375f, 1, 0}}});
+			const auto Dark = Renderer.Capture(Moved).RgbPixels;
+			Require(RedCenter(Bright) > RedCenter(Dark) + 20,
+				"outside deformable caster entered without invalidating empty spot depth");
+		}
+		{
+			EditorViewportRenderer Renderer(Size, Size);
+			auto Initial = Scene(1, true, false, true);
+			auto &Item = Initial->Creates.back().Item;
+			Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(10, 0, 0.75f)) *
+				glm::scale(glm::mat4(1), glm::vec3(0.16f));
+			Item.InverseModelMatrix = glm::inverse(Item.ModelMatrix);
+			auto &Mesh = Initial->MeshCreates.back();
+			Mesh.Skeleton.Bytes[0] = 1;
+			Mesh.SkeletonJointCount = 1;
+			Mesh.SkinInfluences = std::make_shared<const std::vector<RenderSkinInfluence>>(
+				Mesh.Vertices->size(), RenderSkinInfluence{{0, 0, 0, 0}, {1, 0, 0, 0}});
+			const auto Bright = Renderer.Capture(Initial).RgbPixels;
+			auto Posed = Delta(2, 1, Initial->Frame);
+			RenderSkinPaletteEntry Entry;
+			Entry.PositionMatrix = glm::translate(glm::mat4(1), glm::vec3(-60.9375f, 0, 0));
+			Posed->AnimationPoseUpdates.push_back({
+				.Object = CasterObject, .SourceMesh = CasterMesh, .PoseRevision = 1,
+				.Palette = {Mesh.Skeleton,
+					std::make_shared<const std::vector<RenderSkinPaletteEntry>>(
+						std::initializer_list<RenderSkinPaletteEntry>{Entry})},
+			});
+			const auto Dark = Renderer.Capture(Posed).RgbPixels;
+			Require(RedCenter(Bright) > RedCenter(Dark) + 20,
+				"newly posed outside caster entered without invalidating empty spot depth");
+		}
 	}
 
 	void CheckAtlasPasses() {
