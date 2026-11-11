@@ -72,8 +72,21 @@ namespace {
 		std::optional<std::filesystem::path> SamplesPath;
 		std::optional<bool> SdlHdr;
 		bool SdlOpaqueGrouping = true;
+		bool SdlProfileDetailed = false;
+		std::uint32_t CulledPercent = 50;
 		std::optional<std::size_t> Lights;
 		bool StaticLights = false;
+	};
+	constexpr std::array<std::string_view, 18> DetailedPhaseNames{
+		"ShadowClassification", "ProjectionValidation", "ProjectionMutation", "MeshApplication",
+		"PaletteApplication", "ShadowRecording", "SkyRecording", "OpaqueRecording",
+		"ResolveRecording", "GuiRecording", "GpuSubmit", "CommandAcquire",
+		"CameraTraversal", "CameraCull", "CameraResidency", "OpaqueGrouping",
+		"WorldDrawRecording", "Transparent"
+	};
+	constexpr std::array<std::string_view, 5> DetailedCounterNames{
+		"CameraVisitedObjects", "CameraHiddenObjects", "CameraFrustumTests",
+		"CameraMeshLookups", "WorldPrimitiveDraws"
 	};
 
 	struct ScenarioCase {
@@ -124,7 +137,9 @@ namespace {
 					"[--scenario=all|static|dynamic|mostly-static|mixed|culled|material-check|material-extensions] [--count=N] "
 					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--shadows=on|off] "
 					"[--incremental] [--synchronize=on|off|bounded-2] [--capture=path-prefix] [--samples=csv-path] "
-					"[--sdl-hdr=on|off] [--sdl-opaque-grouping=off] [--scenario=local-lights --lights=N [--static-lights]]\n";
+					"[--sdl-hdr=on|off] [--sdl-opaque-grouping=off] [--sdl-profile=on|off] "
+					"[--scenario=culled --culled-percent=0|50|100] "
+					"[--scenario=local-lights --lights=N [--static-lights]]\n";
 				std::exit(0);
 			} else if (auto ParsedValue = Value("--backend=")) ParsedOptions.Backend = *ParsedValue;
 			else if (auto ParsedValue = Value("--scenario=")) ParsedOptions.Scenario = *ParsedValue;
@@ -137,6 +152,14 @@ namespace {
 			else if (Argument == "--static-lights") ParsedOptions.StaticLights = true;
 			else if (Argument == "--incremental") ParsedOptions.Incremental = true;
 			else if (Argument == "--sdl-opaque-grouping=off") ParsedOptions.SdlOpaqueGrouping = false;
+			else if (Argument == "--sdl-profile=on") ParsedOptions.SdlProfileDetailed = true;
+			else if (Argument == "--sdl-profile=off") ParsedOptions.SdlProfileDetailed = false;
+			else if (auto ParsedValue = Value("--culled-percent=")) {
+				if (*ParsedValue == "0") ParsedOptions.CulledPercent = 0;
+				else if (*ParsedValue == "50") ParsedOptions.CulledPercent = 50;
+				else if (*ParsedValue == "100") ParsedOptions.CulledPercent = 100;
+				else throw std::invalid_argument("culled percent must be 0, 50 or 100");
+			}
 			else if (auto ParsedValue = Value("--capture=")) {
 				if (ParsedValue->empty()) throw std::invalid_argument("capture prefix must not be empty");
 				ParsedOptions.CapturePrefix = std::filesystem::path(*ParsedValue);
@@ -165,6 +188,10 @@ namespace {
 			throw std::invalid_argument("unknown benchmark backend");
 		if (ParsedOptions.SdlHdr && ParsedOptions.Backend != "sdl")
 			throw std::invalid_argument("--sdl-hdr requires --backend=sdl");
+		if (ParsedOptions.SdlProfileDetailed && (!ParsedOptions.Incremental || ParsedOptions.Backend != "sdl"))
+			throw std::invalid_argument("--sdl-profile requires an incremental SDL timing workload");
+		if (ParsedOptions.CulledPercent != 50 && ParsedOptions.Scenario != "culled")
+			throw std::invalid_argument("--culled-percent requires --scenario=culled");
 #if !defined(GARGANTUAN_WITH_FILAMENT)
 		if (ParsedOptions.Backend == "filament" || ParsedOptions.Backend == "filament-headless")
 			throw std::invalid_argument("this benchmark was built without GARGANTUAN_FILAMENT_ROOT");
@@ -538,7 +565,8 @@ namespace {
 			.ShadingModel = RenderShadingModel::MetallicRoughness};
 		Initial.Creates.reserve(Scenario.Count);
 		for (std::size_t Index = 0; Index < Scenario.Count; ++Index) {
-			const bool BehindCamera = Scenario.Name == "culled" && Index % 2 != 0;
+			const bool BehindCamera = Scenario.Name == "culled" &&
+				(Settings.CulledPercent == 100 || (Settings.CulledPercent == 50 && Index % 2 != 0));
 			const glm::vec3 Position{2.0f * static_cast<float>(Index % Side) - (Span - 2.0f) * 0.5f,
 				2.0f * static_cast<float>(Index / Side) - (Span - 2.0f) * 0.5f,
 				BehindCamera ? Distance + 5.0f : 0.0f};
@@ -666,6 +694,7 @@ namespace {
 				.Offscreen = true, .WaitForGpuCompletion = CompleteEachFrame, .DebugDevice = false,
 				.EnableHdrScene = Settings.SdlHdr.value_or(true),
 				.EnableOpaqueGrouping = Settings.SdlOpaqueGrouping,
+				.ProfileDetailed = Settings.SdlProfileDetailed,
 			});
 			Sdl = Renderer.get();
 			Backend = std::move(Renderer);
@@ -712,7 +741,11 @@ namespace {
 		}
 		Drain();
 		const auto Baseline = Counters();
+		const auto DetailedBaseline = Sdl ? std::optional(Sdl->GetMetrics()) : std::nullopt;
+		auto DetailedPrevious = DetailedBaseline;
 		std::vector<double> FixtureTimes, FrameTimes, ProjectionTimes, ApplyTimes, SubmitTimes, WaitTimes;
+		std::array<std::vector<double>, DetailedPhaseNames.size()> DetailedTimes;
+		std::array<std::vector<std::uint64_t>, DetailedCounterNames.size()> DetailedCounts;
 		FixtureTimes.reserve(Settings.Frames);
 		FrameTimes.reserve(Settings.Frames);
 		std::uint64_t LogicalUpdates = 0;
@@ -736,6 +769,35 @@ namespace {
 			if (CompletePairs) WaitTimes.push_back(DrainFrame ? Milliseconds(EndFrame - EndDraw) : 0.0);
 			if (Sdl) {
 				const auto Metrics = Sdl->GetMetrics();
+				if (Settings.SdlProfileDetailed) {
+					const std::array<std::uint64_t, DetailedPhaseNames.size()> PhaseNanoseconds{
+						Metrics.LastShadowClassificationNanoseconds, Metrics.LastProjectionValidationNanoseconds,
+						Metrics.LastProjectionMutationNanoseconds, Metrics.LastMeshApplicationNanoseconds,
+						Metrics.LastPaletteApplicationNanoseconds, Metrics.LastShadowRecordingNanoseconds,
+						Metrics.LastSkyRecordingNanoseconds, Metrics.LastOpaqueRecordingNanoseconds,
+						Metrics.LastResolveRecordingNanoseconds, Metrics.LastGuiRecordingNanoseconds,
+						Metrics.LastGpuSubmitNanoseconds, Metrics.LastCommandAcquireNanoseconds,
+						Metrics.LastCameraTraversalNanoseconds, Metrics.LastCameraCullNanoseconds,
+						Metrics.LastCameraResidencyNanoseconds, Metrics.LastOpaqueGroupingNanoseconds,
+						Metrics.LastWorldDrawRecordingNanoseconds, Metrics.LastTransparentNanoseconds
+					};
+					for (std::size_t Index = 0; Index < PhaseNanoseconds.size(); ++Index)
+						DetailedTimes[Index].push_back(static_cast<double>(PhaseNanoseconds[Index]) / 1'000'000.0);
+					const std::array<std::uint64_t, DetailedCounterNames.size()> Counts{
+						Metrics.CameraVisitedObjects, Metrics.CameraHiddenObjects, Metrics.CameraFrustumTests,
+						Metrics.CameraMeshLookups, Metrics.WorldPrimitiveDraws
+					};
+					const std::array<std::uint64_t, DetailedCounterNames.size()> PreviousCounts{
+						DetailedPrevious->CameraVisitedObjects, DetailedPrevious->CameraHiddenObjects,
+						DetailedPrevious->CameraFrustumTests, DetailedPrevious->CameraMeshLookups,
+						DetailedPrevious->WorldPrimitiveDraws
+					};
+					for (std::size_t Index = 0; Index < Counts.size(); ++Index) {
+						if (Counts[Index] < PreviousCounts[Index]) throw std::logic_error("detailed counter decreased");
+						DetailedCounts[Index].push_back(Counts[Index] - PreviousCounts[Index]);
+					}
+					DetailedPrevious = Metrics;
+				}
 				LightGridTimes.push_back(static_cast<double>(Metrics.LastLocalLightGridNanoseconds) / 1'000'000.0);
 				ProjectionTimes.push_back(static_cast<double>(Metrics.LastProjectionNanoseconds) / 1'000'000.0);
 				ApplyTimes.push_back(static_cast<double>(Metrics.LastMeshTransferNanoseconds +
@@ -763,7 +825,8 @@ namespace {
 		const auto Submitted = CounterDelta(Baseline.Submitted, Final.Submitted);
 		const auto Skipped = CounterDelta(Baseline.Skipped, Final.Skipped);
 		const auto Resyncs = CounterDelta(Baseline.Resyncs, Final.Resyncs);
-		const auto ExpectedCameraCull = Scenario.Name == "culled" ? Settings.Frames * (Scenario.Count / 2) : 0;
+		const auto ExpectedCameraCull = Scenario.Name != "culled" ? 0 : Settings.Frames *
+			(Settings.CulledPercent == 100 ? Scenario.Count : Settings.CulledPercent == 50 ? Scenario.Count / 2 : 0);
 		const auto ObservedCameraCull = CounterDelta(Baseline.CameraCulledObjects, Final.CameraCulledObjects);
 		const bool CullMeasured = ObservedCameraCull != "NA";
 		const bool CullGate = !CullMeasured || ObservedCameraCull == std::to_string(ExpectedCameraCull);
@@ -824,7 +887,14 @@ namespace {
 		} else std::cout << ",NA,NA,NA,NA,NA,NA,NA,NA,NA";
 		for (std::size_t Index = 0; Index < Final.DirectionalShadow.size(); ++Index)
 			std::cout << ',' << CounterDelta(Baseline.DirectionalShadow[Index], Final.DirectionalShadow[Index]);
-		std::cout << ',' << (Sdl ? (Settings.SdlOpaqueGrouping ? "on" : "off") : "NA");
+		std::cout << ',' << (Sdl ? (Settings.SdlOpaqueGrouping ? "on" : "off") : "NA")
+			<< ',' << (Sdl ? (Settings.SdlProfileDetailed ? "on" : "off") : "NA")
+			<< ',' << (Scenario.Name == "culled" ? std::to_string(Settings.CulledPercent) : "NA");
+		for (const auto &Times : DetailedTimes) std::cout << ',' << MeanOrNa(Times);
+		for (const auto &Counts : DetailedCounts) {
+			if (Counts.empty()) std::cout << ",NA";
+			else std::cout << ',' << std::accumulate(Counts.begin(), Counts.end(), std::uint64_t{});
+		}
 		std::cout << '\n';
 		if (Samples) {
 			for (std::size_t Frame = 0; Frame < FrameTimes.size(); ++Frame) {
@@ -836,6 +906,17 @@ namespace {
 					if (Frame < Phase->size()) *Samples << (*Phase)[Frame];
 					else *Samples << "NA";
 				}
+				for (const auto &Times : DetailedTimes) {
+					*Samples << ',';
+					if (Frame < Times.size()) *Samples << Times[Frame];
+					else *Samples << "NA";
+				}
+				for (const auto &Counts : DetailedCounts) {
+					*Samples << ',';
+					if (Frame < Counts.size()) *Samples << Counts[Frame];
+					else *Samples << "NA";
+				}
+				*Samples << ',' << (Scenario.Name == "culled" ? std::to_string(Settings.CulledPercent) : "NA");
 				*Samples << '\n';
 			}
 			Samples->flush();
@@ -1111,7 +1192,10 @@ int main(int ArgumentCount, char **Arguments) {
 				"OpaqueGroupingPairTests,OpaqueGroupingDepthProofs,SdlHdrRequested,SdlHdrActive,SdlHdrSceneBytes,SdlSceneResolveDraws,"
 				"AuthoredLocalLights,LocalLightMovement,LocalLightGridMeanMs,LocalLightUploadBytes,VisibleLocalLights,"
 				"OverBudgetLightTiles,DroppedLightTileIndices,MaterialViewBytes,MaterialSourceBytes,MaterialViewFallbacks,MaterialUploadStagingBytes,"
-				"IblBuilds,IblPreprocessPasses,ShadowMapBuilds,ShadowCacheHits,ShadowMapPasses,ShadowCasterDraws,SdlOpaqueGrouping\n";
+				"IblBuilds,IblPreprocessPasses,ShadowMapBuilds,ShadowCacheHits,ShadowMapPasses,ShadowCasterDraws,SdlOpaqueGrouping,SdlProfileDetailed,CulledPercent";
+			for (const auto Name : DetailedPhaseNames) std::cout << ',' << Name << "MeanMs";
+			for (const auto Name : DetailedCounterNames) std::cout << ',' << Name;
+			std::cout << '\n';
 			std::ofstream Samples;
 			if (BenchmarkOptions.SamplesPath) {
 				if (std::filesystem::exists(*BenchmarkOptions.SamplesPath))
@@ -1119,8 +1203,11 @@ int main(int ArgumentCount, char **Arguments) {
 				Samples.open(*BenchmarkOptions.SamplesPath);
 				if (!Samples) throw std::runtime_error("could not open benchmark sample CSV");
 				Samples << "Scenario,Objects,Backend,Driver,Synchronization,SdlHdrActive,Width,Height,Frame,PublicationId,FixtureMs,"
-					"FrameMs,ProjectionMs,ApplyMs,SubmitMs,WaitMs,LocalLightGridMs\n"
-					<< std::setprecision(std::numeric_limits<double>::max_digits10);
+					"FrameMs,ProjectionMs,ApplyMs,SubmitMs,WaitMs,LocalLightGridMs";
+				for (const auto Name : DetailedPhaseNames) Samples << ',' << Name << "Ms";
+				for (const auto Name : DetailedCounterNames) Samples << ',' << Name;
+				Samples << ",CulledPercent";
+				Samples << '\n' << std::setprecision(std::numeric_limits<double>::max_digits10);
 			}
 			for (const auto &Scenario : BuildCases(BenchmarkOptions))
 				RunIncrementalCase(BenchmarkOptions, Scenario, Samples.is_open() ? &Samples : nullptr);

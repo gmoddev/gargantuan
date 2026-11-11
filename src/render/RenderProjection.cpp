@@ -6,6 +6,7 @@
 #include "gargantuan/render/RenderProjection.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <glm/geometric.hpp>
 #include <limits>
 #include <stdexcept>
@@ -142,6 +143,7 @@ namespace gargantuan {
 	}
 
 	RenderProjectionChanges RenderProjection::Apply(const RenderPublication &Publication) {
+		const auto ValidationStart = std::chrono::steady_clock::now();
 		if (Publication.Id == InvalidRenderPublicationId)
 			throw std::invalid_argument("Render projection requires a valid RenderPublication identity");
 		if (!Publication.FullResync && Publication.BaseId != LastPublicationId)
@@ -491,6 +493,9 @@ namespace gargantuan {
 		}
 
 		RenderProjectionChanges Changes;
+		const auto MutationStart = std::chrono::steady_clock::now();
+		Changes.ValidationNanoseconds = static_cast<std::uint64_t>(
+			std::chrono::duration_cast<std::chrono::nanoseconds>(MutationStart - ValidationStart).count());
 		if (Publication.FullResync) {
 			Changes.Removed = Entries.size();
 			Changes.MeshesRemoved = Meshes.size();
@@ -571,6 +576,8 @@ namespace gargantuan {
 		if (Publication.FullResync || Publication.EnvironmentChanged) ++Changes.EnvironmentsUpdated;
 		Frame = Publication.Frame;
 		LastPublicationId = Publication.Id;
+		Changes.MutationNanoseconds = static_cast<std::uint64_t>(
+			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - MutationStart).count());
 		return Changes;
 	}
 

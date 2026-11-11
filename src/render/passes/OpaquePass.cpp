@@ -15,6 +15,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -344,6 +345,12 @@ namespace gargantuan {
 	  private:
 		void DrawWorld(SDL_GPUDevice *Gpu, SDL_GPURenderPass *Pass, SDLFrameContext &Context, SDL_GPUTextureSamplerBinding ShadowBinding,
 			SDL_GPUTexture *White) {
+			using Clock = std::chrono::steady_clock;
+			const bool Detailed = Context.ProfileDetailed && Context.Metrics;
+			const auto ElapsedNanoseconds = [](Clock::time_point Start) {
+				return static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - Start).count());
+			};
 			const auto &Frame = Context.Projection.GetFrame();
 			const auto &Environment = Frame.Environment;
 			const auto EnvironmentAngle = glm::radians(Environment.EnvironmentRotation);
@@ -388,6 +395,7 @@ namespace gargantuan {
 			};
 			auto DrawPrimitive = [&](const WorldDraw &Draw, std::uint32_t FirstIndex, std::uint32_t IndexCount,
 				const RenderMaterialState &Material) {
+				const auto RecordingStart = Detailed ? Clock::now() : Clock::time_point{};
 				const auto &Item = Draw.Object->Item;
 				const bool Transparent = Material.OpacityMode == RenderOpacityMode::Transparent;
 				auto *MaterialPipeline = Transparent
@@ -490,7 +498,11 @@ namespace gargantuan {
 				};
 				SDL_PushGPUVertexUniformData(Context.Commands, 1, &Part, sizeof(PartUniforms));
 				SDL_DrawGPUIndexedPrimitives(Pass, IndexCount, 1, FirstIndex, 0, 0);
-				if (Context.Metrics) ++Context.Metrics->DrawCalls;
+				if (Context.Metrics) {
+					++Context.Metrics->DrawCalls;
+					++Context.Metrics->WorldPrimitiveDraws;
+					if (Detailed) Context.Metrics->LastWorldDrawRecordingNanoseconds += ElapsedNanoseconds(RecordingStart);
+				}
 			};
 			auto ForPrimitives = [](const WorldDraw &Draw, auto &&Visit) {
 				if (Draw.Object->Primitives) {
@@ -571,18 +583,30 @@ namespace gargantuan {
 				return true;
 			};
 
+			const auto TraversalStart = Detailed ? Clock::now() : Clock::time_point{};
 			for (const auto &[Object, Projected] : Context.Projection.GetObjects()) {
-				if (!Projected.Visible) continue;
+				if (Context.Metrics) ++Context.Metrics->CameraVisitedObjects;
+				if (!Projected.Visible) {
+					if (Context.Metrics) ++Context.Metrics->CameraHiddenObjects;
+					continue;
+				}
+				const auto CullStart = Detailed ? Clock::now() : Clock::time_point{};
 				const auto &Item = Projected.Item;
 				const auto *Pose = Context.Projection.GetAnimationPose(Object);
 				const auto *Bounds = Projected.Mesh ? Context.Projection.GetMeshBounds(*Projected.Mesh) : &PrimitiveBounds;
-				if (Bounds && (!Pose || Pose->Mode != RenderAnimationSkinningMode::GpuPalette) &&
-					OutsideView(Planes, Item.ModelMatrix, *Bounds)) {
+				const bool TestFrustum = Bounds && (!Pose || Pose->Mode != RenderAnimationSkinningMode::GpuPalette);
+				if (TestFrustum && Context.Metrics) ++Context.Metrics->CameraFrustumTests;
+				const bool Culled = TestFrustum && OutsideView(Planes, Item.ModelMatrix, *Bounds);
+				if (Detailed) Context.Metrics->LastCameraCullNanoseconds += ElapsedNanoseconds(CullStart);
+				if (Culled) {
 					if (Context.Metrics) ++Context.Metrics->CameraCulledObjects;
 					continue;
 				}
+				const auto ResidencyStart = Detailed ? Clock::now() : Clock::time_point{};
+				if (Context.Metrics) ++Context.Metrics->CameraMeshLookups;
 				const auto *Mesh = Projected.Mesh
 					? Context.MeshResources.Find(*Projected.Mesh) : Context.MeshResources.Find(Item.Geometry);
+				if (Detailed) Context.Metrics->LastCameraResidencyNanoseconds += ElapsedNanoseconds(ResidencyStart);
 				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer) {
 					LOG_WARN(App, "[Renderer:Material] Publication %llu skipped ObjectId %u:%u with unavailable GPU geometry",
 						static_cast<unsigned long long>(Context.Projection.GetLastPublicationId()), Object.Slot, Object.Generation);
@@ -590,7 +614,10 @@ namespace gargantuan {
 				}
 
 				WorldDraw Draw{&Projected, Mesh, Pose, 0.0f};
-				if (TryBatchOpaque(Draw)) continue;
+				const auto GroupingStart = Detailed ? Clock::now() : Clock::time_point{};
+				const bool Batched = TryBatchOpaque(Draw);
+				if (Detailed) Context.Metrics->LastOpaqueGroupingNanoseconds += ElapsedNanoseconds(GroupingStart);
+				if (Batched) continue;
 				FlushOpaque();
 				bool HasTransparent = false;
 				ForPrimitives(Draw, [&](std::uint32_t First, std::uint32_t Count, const RenderMaterialState &Material) {
@@ -605,7 +632,9 @@ namespace gargantuan {
 				}
 			}
 			FlushOpaque();
+			if (Detailed) Context.Metrics->LastCameraTraversalNanoseconds = ElapsedNanoseconds(TraversalStart);
 
+			const auto TransparentStart = Detailed ? Clock::now() : Clock::time_point{};
 			std::ranges::sort(TransparentDraws, [](const WorldDraw &Left, const WorldDraw &Right) {
 				if (Left.Depth != Right.Depth) return Left.Depth > Right.Depth;
 				return Left.Object->Item.Object < Right.Object->Item.Object;
@@ -616,6 +645,7 @@ namespace gargantuan {
 				});
 			}
 			TransparentDraws.clear();
+			if (Detailed) Context.Metrics->LastTransparentNanoseconds = ElapsedNanoseconds(TransparentStart);
 		}
 
 		SDL_GPUGraphicsPipeline *DoubleSidedPipeline = nullptr;

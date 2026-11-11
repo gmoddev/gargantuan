@@ -21,6 +21,9 @@ namespace gargantuan {
 	};
 
 	struct RenderProjectionChanges {
+		// Publication validation and committed projection mutation are distinct CPU costs.
+		std::uint64_t ValidationNanoseconds = 0;
+		std::uint64_t MutationNanoseconds = 0;
 		std::size_t Created = 0;
 		std::size_t Updated = 0;
 		std::size_t Removed = 0;
