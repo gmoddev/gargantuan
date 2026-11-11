@@ -9,10 +9,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <format>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <glm/ext/matrix_clip_space.hpp>
@@ -26,6 +31,60 @@ namespace {
 	constexpr RenderTextureIdentity Mask{200, 1};
 	constexpr ObjectId ReceiverObject{300, 1};
 	constexpr ObjectId CasterObject{301, 1};
+	std::filesystem::path EvidenceDirectory;
+	std::ofstream EvidenceReceipt;
+	std::string CurrentCase;
+	std::uint64_t EvidenceSerial = 0;
+
+	void RecordResult(std::string_view Result, std::string_view Detail) {
+		EvidenceReceipt << "result," << CurrentCase << "," << EvidenceSerial << ",0,,0,0,0,0,0,0," << Result;
+		if (!Detail.empty()) EvidenceReceipt << ':' << Detail;
+		EvidenceReceipt << '\n' << std::flush;
+	}
+
+	EditorViewportFrame Capture(EditorViewportRenderer &Renderer,
+		const std::shared_ptr<RenderPublication> &Publication) {
+		EditorViewportFrame Frame;
+		try {
+			Frame = Renderer.Capture(Publication);
+		} catch (...) {
+			EvidenceReceipt << "capture-failed," << CurrentCase << ',' << ++EvidenceSerial << ','
+				<< Publication->Id << ",,0,0,0,0,0,0,renderer-capture\n" << std::flush;
+			throw;
+		}
+		const auto Serial = ++EvidenceSerial;
+		const auto Name = std::format("{}-{:04}-publication-{}.ppm", CurrentCase, Serial, Publication->Id);
+		const auto Path = EvidenceDirectory / Name;
+		std::ofstream Output(Path, std::ios::binary | std::ios::trunc);
+		if (!Output) throw std::runtime_error("could not open shadow evidence image");
+		Output << "P6\n" << Frame.Width << ' ' << Frame.Height << "\n255\n";
+		Output.write(reinterpret_cast<const char *>(Frame.RgbPixels.data()),
+			static_cast<std::streamsize>(Frame.RgbPixels.size()));
+		Output.close();
+		if (!Output) throw std::runtime_error("could not write shadow evidence image");
+		std::uint64_t Hash = 14695981039346656037ull;
+		for (const auto Byte : Frame.RgbPixels) Hash = (Hash ^ Byte) * 1099511628211ull;
+		const auto Center = Frame.RgbPixels.at((std::size_t(Frame.Height / 2) * Frame.Width + Frame.Width / 2) * 3);
+		EvidenceReceipt << "capture," << CurrentCase << ',' << Serial << ',' << Publication->Id << ',' << Name
+			<< ',' << Frame.Width << ',' << Frame.Height << ',' << static_cast<unsigned>(Center)
+			<< ',' << Hash << ",0,0,ok\n" << std::flush;
+		return Frame;
+	}
+
+	void Draw(SDLRenderer &Renderer, const std::shared_ptr<RenderPublication> &Publication) {
+		try {
+			Renderer.Draw(Publication);
+		} catch (...) {
+			EvidenceReceipt << "draw-failed," << CurrentCase << ',' << ++EvidenceSerial << ','
+				<< Publication->Id << ",,0,0,0,0," << Renderer.GetMetrics().ShadowMapPasses
+				<< ',' << Renderer.GetMetrics().ShadowCasterDraws << ",renderer-draw\n" << std::flush;
+			throw;
+		}
+		const auto Metrics = Renderer.GetMetrics();
+		EvidenceReceipt << "draw," << CurrentCase << ',' << ++EvidenceSerial << ',' << Publication->Id
+			<< ",,0,0,0,0," << Metrics.ShadowMapPasses << ',' << Metrics.ShadowCasterDraws
+			<< ",cache_hits=" << Metrics.ShadowCacheHits << '\n' << std::flush;
+	}
 
 	void Require(bool Condition, const char *Message) {
 		if (!Condition) throw std::runtime_error(Message);
@@ -142,22 +201,23 @@ namespace {
 	}
 
 	void CheckDirectionalPixels() {
+		CurrentCase = "directional-pixels";
 		EditorViewportRenderer Renderer(Size, Size);
-		const auto Lit = Renderer.Capture(Scene(1, false)).RgbPixels;
+		const auto Lit = Capture(Renderer, Scene(1, false)).RgbPixels;
 		auto ShadowScene = Scene(2, true);
-		const auto Shadow = Renderer.Capture(ShadowScene).RgbPixels;
+		const auto Shadow = Capture(Renderer, ShadowScene).RgbPixels;
 		Require(RedCenter(Lit) > RedCenter(Shadow) + 25,
 			"camera-relative directional caster did not darken the receiver");
-		Require(Renderer.Capture(Delta(3, 2, ShadowScene->Frame)).RgbPixels == Shadow,
+		Require(Capture(Renderer, Delta(3, 2, ShadowScene->Frame)).RgbPixels == Shadow,
 			"static cascaded depth changed exact pixels on a warm publication");
 		RenderPublicationId Base = 3;
 		for (const float X : {0.005f, 0.02f, 0.06f, 0.12f}) {
 			auto Moved = Delta(Base + 1, Base, ShadowScene->Frame);
 			SetCamera(Moved->Frame.Camera, {X, 0, 3});
-			const auto Cached = Renderer.Capture(Moved).RgbPixels;
+			const auto Cached = Capture(Renderer, Moved).RgbPixels;
 			auto Rebuilt = Scene(Base + 2, true);
 			Rebuilt->Frame = Moved->Frame;
-			Require(Renderer.Capture(Rebuilt).RgbPixels == Cached,
+			Require(Capture(Renderer, Rebuilt).RgbPixels == Cached,
 				"camera motion differs between reused and freshly built cascades");
 			Base += 2;
 		}
@@ -169,55 +229,57 @@ namespace {
 		const float Boundary = Plan->Cascades[1].Far;
 		for (const float Distance : {Boundary - 0.03f, Boundary + 0.03f}) {
 			auto BoundaryScene = Scene(++Base, true, true, false, {}, 3.0f - Distance);
-			const auto WithShadow = Renderer.Capture(BoundaryScene).RgbPixels;
+			const auto WithShadow = Capture(Renderer, BoundaryScene).RgbPixels;
 			auto NoCaster = Scene(++Base, false, true, false, {}, 3.0f - Distance);
-			const auto Control = Renderer.Capture(NoCaster).RgbPixels;
+			const auto Control = Capture(Renderer, NoCaster).RgbPixels;
 			Require(RedCenter(Control) > RedCenter(WithShadow) + 12,
 				"cascade transition lost a shadowed receiver");
 		}
 		auto Distant = Scene(++Base, true, true, false, {900000, 2000, -900000});
-		const auto DistantShadow = Renderer.Capture(Distant).RgbPixels;
+		const auto DistantShadow = Capture(Renderer, Distant).RgbPixels;
 		Require(std::abs(RedCenter(DistantShadow) - RedCenter(Shadow)) < 24,
 			"camera-relative cascade changed distant-world receiver lighting");
 		auto DistantWarm = Delta(++Base, Distant->Id, Distant->Frame);
-		Require(Renderer.Capture(DistantWarm).RgbPixels == DistantShadow,
+		Require(Capture(Renderer, DistantWarm).RgbPixels == DistantShadow,
 			"large-coordinate warm cascade changed exact pixels");
 	}
 
 	void CheckMaskAndDeformable() {
+		CurrentCase = "mask-deformable";
 		EditorViewportRenderer Renderer(Size, Size);
 		auto Initial = Scene(1, true);
-		const auto Dark = Renderer.Capture(Initial).RgbPixels;
+		const auto Dark = Capture(Renderer, Initial).RgbPixels;
 		auto Cutout = Delta(2, 1, Initial->Frame);
 		Cutout->TextureUpdates.push_back({Mask, 2, 0, 0, 1, 1,
 			std::make_shared<const std::vector<std::uint8_t>>(
 				std::initializer_list<std::uint8_t>{255, 255, 255, 0})});
-		const auto Bright = Renderer.Capture(Cutout).RgbPixels;
+		const auto Bright = Capture(Renderer, Cutout).RgbPixels;
 		Require(RedCenter(Bright) > RedCenter(Dark) + 25,
 			"alpha reimport left stale cascade depth");
 		auto Restore = Delta(3, 2, Initial->Frame);
 		Restore->TextureUpdates.push_back({Mask, 3, 0, 0, 1, 1,
 			std::make_shared<const std::vector<std::uint8_t>>(
 				std::initializer_list<std::uint8_t>{255, 255, 255, 255})});
-		Require(Renderer.Capture(Restore).RgbPixels == Dark,
+		Require(Capture(Renderer, Restore).RgbPixels == Dark,
 			"restored mask alpha did not restore exact cascade pixels");
 		auto Moved = Delta(4, 3, Initial->Frame);
 		Moved->MeshVertexUpdates.push_back({.Mesh = CasterMesh, .VertexRevision = 2,
 			.FirstVertex = 0, .Vertices = Quad(10.0f), .Bounds = {{9, -1, 0}, {11, 1, 0}}});
-		Require(RedCenter(Renderer.Capture(Moved)) > RedCenter(Dark) + 25,
+		Require(RedCenter(Capture(Renderer, Moved)) > RedCenter(Dark) + 25,
 			"deformable caster vertex update left stale cascade depth");
 	}
 
 	void CheckCascadePasses() {
+		CurrentCase = "cascade-passes";
 		SDLRenderer Renderer(Vector2(Size, Size), {
 			.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
 		});
 		auto Initial = Scene(1, true);
-		Renderer.Draw(Initial);
+		Draw(Renderer, Initial);
 		const auto Cold = Renderer.GetMetrics();
 		Require(Cold.ShadowMapPasses == 4 && Cold.ShadowCasterDraws > 0,
 			"four cascades did not record separate depth passes");
-		Renderer.Draw(Delta(2, 1, Initial->Frame));
+		Draw(Renderer, Delta(2, 1, Initial->Frame));
 		const auto Warm = Renderer.GetMetrics();
 		Require(Warm.ShadowMapPasses == Cold.ShadowMapPasses &&
 			Warm.ShadowCasterDraws == Cold.ShadowCasterDraws &&
@@ -227,7 +289,7 @@ namespace {
 		Alpha->TextureUpdates.push_back({Mask, 2, 0, 0, 1, 1,
 			std::make_shared<const std::vector<std::uint8_t>>(
 				std::initializer_list<std::uint8_t>{255, 255, 255, 0})});
-		Renderer.Draw(Alpha);
+		Draw(Renderer, Alpha);
 		const auto AlphaMetrics = Renderer.GetMetrics();
 		Require(AlphaMetrics.ShadowMapPasses > Warm.ShadowMapPasses &&
 			AlphaMetrics.ShadowMapPasses <= Warm.ShadowMapPasses + 4,
@@ -239,7 +301,7 @@ namespace {
 		Caster.Item.InverseModelMatrix = glm::inverse(Caster.Item.ModelMatrix);
 		Moved->Updates.push_back({.Object = CasterObject, .Domains = RenderUpdateDomain::Transform,
 			.Item = Caster.Item, .Mesh = Caster.Mesh, .Material = Caster.Material});
-		Renderer.Draw(Moved);
+		Draw(Renderer, Moved);
 		const auto MoveMetrics = Renderer.GetMetrics();
 		Require(MoveMetrics.ShadowMapPasses > AlphaMetrics.ShadowMapPasses &&
 			MoveMetrics.ShadowMapPasses <= AlphaMetrics.ShadowMapPasses + 4,
@@ -250,31 +312,33 @@ namespace {
 	}
 
 	void CheckSpotPixels() {
+		CurrentCase = "spot-pixels";
 		EditorViewportRenderer Renderer(Size, Size);
 		auto ShadowScene = Scene(1, true, false, true);
-		const auto Shadow = Renderer.Capture(ShadowScene).RgbPixels;
+		const auto Shadow = Capture(Renderer, ShadowScene).RgbPixels;
 		auto Unshadowed = Scene(2, true, false, true);
 		auto Lights = std::make_shared<std::vector<RenderLocalLightState>>(
 			*Unshadowed->Frame.Environment.LocalLights);
 		Lights->front().ShadowEnabled = false;
 		Unshadowed->Frame.Environment.LocalLights = Lights;
-		const auto Control = Renderer.Capture(Unshadowed).RgbPixels;
+		const auto Control = Capture(Renderer, Unshadowed).RgbPixels;
 		Require(RedCenter(Control) > RedCenter(Shadow) + 20,
 			"spot shadow toggle did not change the receiver pixel");
 		auto RestoredScene = Scene(3, true, false, true);
-		const auto Restored = Renderer.Capture(RestoredScene).RgbPixels;
+		const auto Restored = Capture(Renderer, RestoredScene).RgbPixels;
 		Require(Restored == Shadow, "spot shadow toggle did not restore exact pixels");
-		Require(Renderer.Capture(Delta(4, 3, RestoredScene->Frame)).RgbPixels == Shadow,
+		Require(Capture(Renderer, Delta(4, 3, RestoredScene->Frame)).RgbPixels == Shadow,
 			"static spotlight depth changed exact warm pixels");
 		auto Distant = Scene(5, true, false, true, {900000, 2000, -900000});
-		const auto DistantShadow = Renderer.Capture(Distant).RgbPixels;
+		const auto DistantShadow = Capture(Renderer, Distant).RgbPixels;
 		Require(std::abs(RedCenter(DistantShadow) - RedCenter(Shadow)) < 24,
 			"large-coordinate spotlight altered receiver shadowing");
-		Require(Renderer.Capture(Delta(6, 5, Distant->Frame)).RgbPixels == DistantShadow,
+		Require(Capture(Renderer, Delta(6, 5, Distant->Frame)).RgbPixels == DistantShadow,
 			"large-coordinate spotlight map changed exact warm pixels");
 	}
 
 	void CheckIncomingDynamicCasters() {
+		CurrentCase = "incoming-dynamic-casters";
 		const auto MoveOutside = [](RenderPublication &Publication) {
 			auto &Item = Publication.Creates.back().Item;
 			Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(10, 0, 1)) *
@@ -285,13 +349,13 @@ namespace {
 			EditorViewportRenderer Renderer(Size, Size);
 			auto Initial = Scene(1, true);
 			MoveOutside(*Initial);
-			const auto Bright = Renderer.Capture(Initial).RgbPixels;
+			const auto Bright = Capture(Renderer, Initial).RgbPixels;
 			auto Moved = Delta(2, 1, Initial->Frame);
 			const auto Vertices = Quad(-59.375f);
 			Moved->MeshVertexUpdates.push_back({.Mesh = CasterMesh, .VertexRevision = 2,
 				.FirstVertex = 0, .Vertices = Vertices,
 				.Bounds = {{-60.375f, -1, 0}, {-58.375f, 1, 0}}});
-			const auto Dark = Renderer.Capture(Moved).RgbPixels;
+			const auto Dark = Capture(Renderer, Moved).RgbPixels;
 			Require(RedCenter(Bright) > RedCenter(Dark) + 25,
 				"outside deformable caster entered without invalidating empty cascade depth");
 		}
@@ -304,7 +368,7 @@ namespace {
 			Mesh.SkeletonJointCount = 1;
 			Mesh.SkinInfluences = std::make_shared<const std::vector<RenderSkinInfluence>>(
 				Mesh.Vertices->size(), RenderSkinInfluence{{0, 0, 0, 0}, {1, 0, 0, 0}});
-			const auto Bright = Renderer.Capture(Initial).RgbPixels;
+			const auto Bright = Capture(Renderer, Initial).RgbPixels;
 			auto Posed = Delta(2, 1, Initial->Frame);
 			RenderSkinPaletteEntry Entry;
 			Entry.PositionMatrix = glm::translate(glm::mat4(1), glm::vec3(-59.375f, 0, 0));
@@ -314,7 +378,7 @@ namespace {
 					std::make_shared<const std::vector<RenderSkinPaletteEntry>>(
 						std::initializer_list<RenderSkinPaletteEntry>{Entry})},
 			});
-			const auto Dark = Renderer.Capture(Posed).RgbPixels;
+			const auto Dark = Capture(Renderer, Posed).RgbPixels;
 			Require(RedCenter(Bright) > RedCenter(Dark) + 25,
 				"newly posed outside caster entered without invalidating empty cascade depth");
 		}
@@ -325,12 +389,12 @@ namespace {
 			Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(10, 0, 0.75f)) *
 				glm::scale(glm::mat4(1), glm::vec3(0.16f));
 			Item.InverseModelMatrix = glm::inverse(Item.ModelMatrix);
-			const auto Bright = Renderer.Capture(Initial).RgbPixels;
+			const auto Bright = Capture(Renderer, Initial).RgbPixels;
 			auto Moved = Delta(2, 1, Initial->Frame);
 			Moved->MeshVertexUpdates.push_back({.Mesh = CasterMesh, .VertexRevision = 2,
 				.FirstVertex = 0, .Vertices = Quad(-60.9375f),
 				.Bounds = {{-61.9375f, -1, 0}, {-59.9375f, 1, 0}}});
-			const auto Dark = Renderer.Capture(Moved).RgbPixels;
+			const auto Dark = Capture(Renderer, Moved).RgbPixels;
 			Require(RedCenter(Bright) > RedCenter(Dark) + 20,
 				"outside deformable caster entered without invalidating empty spot depth");
 		}
@@ -346,7 +410,7 @@ namespace {
 			Mesh.SkeletonJointCount = 1;
 			Mesh.SkinInfluences = std::make_shared<const std::vector<RenderSkinInfluence>>(
 				Mesh.Vertices->size(), RenderSkinInfluence{{0, 0, 0, 0}, {1, 0, 0, 0}});
-			const auto Bright = Renderer.Capture(Initial).RgbPixels;
+			const auto Bright = Capture(Renderer, Initial).RgbPixels;
 			auto Posed = Delta(2, 1, Initial->Frame);
 			RenderSkinPaletteEntry Entry;
 			Entry.PositionMatrix = glm::translate(glm::mat4(1), glm::vec3(-60.9375f, 0, 0));
@@ -356,13 +420,14 @@ namespace {
 					std::make_shared<const std::vector<RenderSkinPaletteEntry>>(
 						std::initializer_list<RenderSkinPaletteEntry>{Entry})},
 			});
-			const auto Dark = Renderer.Capture(Posed).RgbPixels;
+			const auto Dark = Capture(Renderer, Posed).RgbPixels;
 			Require(RedCenter(Bright) > RedCenter(Dark) + 20,
 				"newly posed outside caster entered without invalidating empty spot depth");
 		}
 	}
 
 	void CheckAtlasPasses() {
+		CurrentCase = "atlas-passes";
 		SDLRenderer Renderer(Vector2(Size, Size), {
 			.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
 		});
@@ -375,11 +440,11 @@ namespace {
 			Lights->push_back(Light);
 		}
 		Initial->Frame.Environment.LocalLights = Lights;
-		Renderer.Draw(Initial);
+		Draw(Renderer, Initial);
 		const auto Cold = Renderer.GetMetrics();
 		Require(Cold.ShadowMapPasses >= 8 && Cold.ShadowMapPasses <= 9 && Cold.ShadowCasterDraws >= 8,
 			"nine overlapping spots did not produce eight bounded depth layers");
-		Renderer.Draw(Delta(2, 1, Initial->Frame));
+		Draw(Renderer, Delta(2, 1, Initial->Frame));
 		const auto Warm = Renderer.GetMetrics();
 		Require(Warm.ShadowMapPasses == Cold.ShadowMapPasses &&
 			Warm.ShadowCasterDraws == Cold.ShadowCasterDraws,
@@ -389,7 +454,7 @@ namespace {
 		Reprioritized->back().ShadowPriority = 20;
 		Evict->Frame.Environment.LocalLights = Reprioritized;
 		Evict->EnvironmentChanged = true;
-		Renderer.Draw(Evict);
+		Draw(Renderer, Evict);
 		const auto Changed = Renderer.GetMetrics();
 		Require(Changed.ShadowMapPasses == Warm.ShadowMapPasses + 1,
 			"one spotlight eviction rebuilt unrelated atlas layers");
@@ -397,16 +462,21 @@ namespace {
 		Reimport->TextureUpdates.push_back({Mask, 2, 0, 0, 1, 1,
 			std::make_shared<const std::vector<std::uint8_t>>(
 				std::initializer_list<std::uint8_t>{255, 255, 255, 0})});
-		Renderer.Draw(Reimport);
+		Draw(Renderer, Reimport);
 		const auto Alpha = Renderer.GetMetrics();
 		Require(Alpha.ShadowMapPasses == Changed.ShadowMapPasses + 8,
 			"sampled alpha reimport failed to invalidate all eight overlapping spot maps");
 		bool Rejected = false;
 		auto Stale = Delta(5, 2, Reimport->Frame);
-		try { Renderer.Draw(Stale); } catch (const std::invalid_argument &) { Rejected = true; }
+	try { Draw(Renderer, Stale); } catch (const std::invalid_argument &) {
+		Rejected = true;
+		EvidenceReceipt << "rejected," << CurrentCase << ',' << ++EvidenceSerial << ',' << Stale->Id
+			<< ",,0,0,0,0," << Renderer.GetMetrics().ShadowMapPasses
+			<< ',' << Renderer.GetMetrics().ShadowCasterDraws << ",stale-publication\n" << std::flush;
+	}
 		Require(Rejected && Renderer.GetMetrics().ShadowMapPasses == Alpha.ShadowMapPasses,
 			"rejected publication changed submitted shadow passes");
-		Renderer.Draw(Delta(5, 4, Reimport->Frame));
+		Draw(Renderer, Delta(5, 4, Reimport->Frame));
 		Require(Renderer.GetMetrics().ShadowMapPasses == Alpha.ShadowMapPasses,
 			"valid retry rebuilt committed spotlight layers");
 		std::cout << "[Render:ShadowGpu] passes cold=" << Cold.ShadowMapPasses
@@ -415,6 +485,7 @@ namespace {
 	}
 
 	void CheckAtlasEvictionPixels() {
+		CurrentCase = "atlas-eviction-pixels";
 		EditorViewportRenderer Renderer(Size, Size);
 		auto Initial = Scene(1, true, false, true);
 		auto Lights = std::make_shared<std::vector<RenderLocalLightState>>();
@@ -427,21 +498,27 @@ namespace {
 			Lights->push_back(Light);
 		}
 		Initial->Frame.Environment.LocalLights = Lights;
-		const auto Denied = Renderer.Capture(Initial).RgbPixels;
+		const auto Denied = Capture(Renderer, Initial).RgbPixels;
 		auto Evict = Delta(2, 1, Initial->Frame);
 		auto Changed = std::make_shared<std::vector<RenderLocalLightState>>(*Lights);
 		Changed->back().ShadowPriority = 20;
 		Evict->Frame.Environment.LocalLights = Changed;
 		Evict->EnvironmentChanged = true;
-		const auto Allocated = Renderer.Capture(Evict).RgbPixels;
+		const auto Allocated = Capture(Renderer, Evict).RgbPixels;
 		Require(RedCenter(Denied) > RedCenter(Allocated) + 20,
 			"spotlight eviction left stale packed atlas indices or shadowed a denied light");
-		Require(Renderer.Capture(Delta(3, 2, Evict->Frame)).RgbPixels == Allocated,
+		Require(Capture(Renderer, Delta(3, 2, Evict->Frame)).RgbPixels == Allocated,
 			"stable spotlight atlas assignment changed exact warm pixels");
 	}
 }
 
-int main() try {
+int main(int ArgumentCount, char **Arguments) try {
+	EvidenceDirectory = ArgumentCount > 1 ? std::filesystem::path(Arguments[1])
+		: std::filesystem::path("renderer-shadow-evidence");
+	std::filesystem::create_directories(EvidenceDirectory);
+	EvidenceReceipt.open(EvidenceDirectory / "shadow-receipt.csv", std::ios::trunc);
+	if (!EvidenceReceipt) throw std::runtime_error("could not open shadow evidence receipt");
+	EvidenceReceipt << "kind,case,iteration,publication_id,image,width,height,center_red,rgb_fingerprint,shadow_passes,shadow_caster_draws,outcome\n" << std::flush;
 	CheckDirectionalPixels();
 	CheckMaskAndDeformable();
 	CheckCascadePasses();
@@ -449,9 +526,11 @@ int main() try {
 	CheckIncomingDynamicCasters();
 	CheckAtlasPasses();
 	CheckAtlasEvictionPixels();
+	RecordResult("passed", "");
 	std::cout << "[Render:ShadowGpu] Cascades, spots and temporal pixels passed\n";
 	return 0;
 } catch (const std::exception &Error) {
+	if (EvidenceReceipt) RecordResult("failed", Error.what());
 	std::cerr << "[Render:ShadowGpu] " << Error.what() << '\n';
 	return 1;
 }
