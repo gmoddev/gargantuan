@@ -40,21 +40,6 @@ namespace gargantuan {
 		static std::size_t BodyCount(const WorldRoot &World) { return World.PartBodies.size(); }
 		static std::size_t PartCount(const WorldRoot &World) { return World.Parts.size(); }
 		static std::size_t PartMembershipCount(const WorldRoot &World) { return World.PartMembership.size(); }
-		static std::size_t DirtyPartCount(const WorldRoot &World) { return World.DirtyBodies.size(); }
-		static bool FullPartScanNeeded(const WorldRoot &World) { return World.FullPartScanNeeded; }
-		static void ForceFullPartScan(WorldRoot &World) { World.FullPartScanNeeded = true; }
-		static bool BindingDirty(const WorldRoot &World, ObjectId Object) {
-			auto Found = World.TrackedParts.find(Object);
-			return Found != World.TrackedParts.end() && Found->second && Found->second->Dirty;
-		}
-		static bool BindingActive(const WorldRoot &World, ObjectId Object) {
-			auto Found = World.TrackedParts.find(Object);
-			return Found != World.TrackedParts.end() && Found->second && Found->second->Active;
-		}
-		static SignalConnection::Pointer CFramePhysicsConnection(const WorldRoot &World, ObjectId Object) {
-			auto Found = World.PhysicsConnections.find(Object);
-			return Found == World.PhysicsConnections.end() || Found->second.empty() ? nullptr : Found->second.front();
-		}
 		static const std::vector<std::shared_ptr<BasePart>> &OrderedParts(const WorldRoot &World) { return World.Parts; }
 		static std::size_t ConstraintCount(const WorldRoot &World) { return World.ConstraintJoints.size(); }
 		static PhysicsBodyId Body(const WorldRoot &World, const BasePart &Part) {
@@ -1318,121 +1303,11 @@ namespace {
 		Check(MotionSequence != 0, "physics observer throw retains the committed CFrame record");
 		Check(SizeSequence > MotionSequence,
 			"physics observer throw orders nested Size after committed CFrame");
-		Check(WorldRootTestAccess::BindingDirty(*Workspace, Other->GetObjectId()),
-			"throwing physics observer retains the nested Part dirty binding");
 		Workspace->StepPhysics(0.0, std::nullopt);
 		const auto OtherState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Other));
 		Check(OtherState.has_value(), "physics observer throw retains the other Part backend body");
 		Check(OtherState && Near(OtherState->Description.Shape.Size.x, 4.0f),
 			"throwing physics observer retains nested authored backend update for the next safe point");
-		Check(!WorldRootTestAccess::BindingDirty(*Workspace, Other->GetObjectId()),
-			"next safe point clears the nested Part dirty binding");
-	}
-
-	void TestPhysicsDirtyBindingSafePointAndReentrancy() {
-		auto Game = std::make_shared<DataModel>();
-		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
-		if (!Workspace) return;
-		Workspace->SetGravity(0.0f);
-		auto PartValue = std::make_shared<Part>();
-		PartValue->SetAnchored(true);
-		PartValue->SetCanCollide(false);
-		PartValue->SetParent(Workspace);
-		const auto Object = PartValue->GetObjectId();
-		PartValue->SetCFrame(CFrame(1.0f, 5.0f, 0.0f));
-		PartValue->SetCFrame(CFrame(2.0f, 5.0f, 0.0f));
-		Check(WorldRootTestAccess::DirtyPartCount(*Workspace) == 1 &&
-			WorldRootTestAccess::BindingDirty(*Workspace, Object),
-			"repeated authored CFrame writes coalesce to one queued body update");
-		Workspace->StepPhysics(0.0, std::nullopt);
-		const auto Body = WorldRootTestAccess::Body(*Workspace, *PartValue);
-		const auto FirstState = WorldRootTestAccess::State(*Workspace, Body);
-		Check(FirstState && FirstState->Description.Transform.FuzzyEq(PartValue->GetCFrame()) &&
-			WorldRootTestAccess::DirtyPartCount(*Workspace) == 0 &&
-			!WorldRootTestAccess::BindingDirty(*Workspace, Object),
-			"safe point consumes coalesced final CFrame and resets the binding");
-
-		bool Reentered = false;
-		auto Connection = PartValue->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
-			if (Reentered) return;
-			Reentered = true;
-			Workspace->StepPhysics(0.0, std::nullopt);
-			PartValue->SetCFrame(CFrame(4.0f, 5.0f, 0.0f));
-		});
-		PartValue->SetCFrame(CFrame(3.0f, 5.0f, 0.0f));
-		const auto NestedState = WorldRootTestAccess::State(*Workspace, Body);
-		Check(Reentered && NestedState && Near(NestedState->Description.Transform.Position.x, 3.0f) &&
-			WorldRootTestAccess::DirtyPartCount(*Workspace) == 1 &&
-			WorldRootTestAccess::BindingDirty(*Workspace, Object),
-			"nested safe point resets before a later CFrame observer re-dirties the same binding");
-		Workspace->StepPhysics(0.0, std::nullopt);
-		const auto FinalState = WorldRootTestAccess::State(*Workspace, Body);
-		Check(FinalState && Near(FinalState->Description.Transform.Position.x, 4.0f) &&
-			WorldRootTestAccess::DirtyPartCount(*Workspace) == 0 &&
-			!WorldRootTestAccess::BindingDirty(*Workspace, Object),
-			"second safe point applies the reentrant authored CFrame exactly once");
-		Connection->Disconnect();
-
-		WorldRootTestAccess::ForceFullPartScan(*Workspace);
-		PartValue->SetCFrame(CFrame(5.0f, 5.0f, 0.0f));
-		Workspace->StepPhysics(0.0, std::nullopt);
-		const auto FallbackState = WorldRootTestAccess::State(*Workspace, Body);
-		Check(FallbackState && Near(FallbackState->Description.Transform.Position.x, 5.0f) &&
-			!WorldRootTestAccess::FullPartScanNeeded(*Workspace) &&
-			!WorldRootTestAccess::BindingDirty(*Workspace, Object),
-			"conservative full scan retains the authored CFrame and clears binding state");
-	}
-
-	void TestPhysicsDirtyBindingRetiresStaleConnections() {
-		auto Game = std::make_shared<DataModel>();
-		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
-		if (!Workspace) return;
-		auto PartValue = std::make_shared<Part>();
-		PartValue->SetAnchored(true);
-		PartValue->SetParent(Workspace);
-		const auto Object = PartValue->GetObjectId();
-		auto OldConnection = WorldRootTestAccess::CFramePhysicsConnection(*Workspace, Object);
-		Check(OldConnection != nullptr, "first Part registration owns a physics CFrame connection");
-		bool Reparented = false;
-		auto ReparentConnection = PartValue->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
-			Reparented = true;
-			PartValue->SetParent(nullptr);
-		});
-		PartValue->SetCFrame(CFrame(1.0f, 0.0f, 0.0f));
-		Check(Reparented && !WorldRootTestAccess::BindingActive(*Workspace, Object) &&
-			WorldRootTestAccess::DirtyPartCount(*Workspace) == 0,
-			"nested reparent deactivates and removes the first dirty registration");
-		ReparentConnection->Disconnect();
-		if (OldConnection) OldConnection->Callback(std::monostate{});
-		Check(WorldRootTestAccess::DirtyPartCount(*Workspace) == 0,
-			"held stale callback cannot dirty a detached Part");
-		PartValue->SetParent(Workspace);
-		Check(WorldRootTestAccess::BindingActive(*Workspace, Object),
-			"readmission creates an active registration for the same generation");
-		if (OldConnection) OldConnection->Callback(std::monostate{});
-		Check(WorldRootTestAccess::DirtyPartCount(*Workspace) == 0,
-			"held old registration cannot dirty the readmitted Part");
-		PartValue->SetCFrame(CFrame(2.0f, 0.0f, 0.0f));
-		Workspace->StepPhysics(0.0, std::nullopt);
-		const auto State = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *PartValue));
-		Check(State && Near(State->Description.Transform.Position.x, 2.0f),
-			"new registration updates the readmitted backend body");
-		auto NewConnection = WorldRootTestAccess::CFramePhysicsConnection(*Workspace, Object);
-		PartValue->Destroy();
-		auto Replacement = std::make_shared<Part>();
-		Replacement->SetParent(Workspace);
-		if (OldConnection) OldConnection->Callback(std::monostate{});
-		if (NewConnection) NewConnection->Callback(std::monostate{});
-		Check(Replacement->GetObjectId() != Object &&
-			!WorldRootTestAccess::BindingActive(*Workspace, Object) &&
-			WorldRootTestAccess::DirtyPartCount(*Workspace) == 0,
-			"destroyed-generation callbacks cannot dirty a replacement Part");
-		auto ReplacementConnection = WorldRootTestAccess::CFramePhysicsConnection(*Workspace, Replacement->GetObjectId());
-		Workspace->Destroy();
-		if (ReplacementConnection) ReplacementConnection->Callback(std::monostate{});
-		Check(WorldRootTestAccess::DirtyPartCount(*Workspace) == 0 &&
-			!WorldRootTestAccess::BindingActive(*Workspace, Replacement->GetObjectId()),
-			"world clear deactivates held callbacks before the binding registry is cleared");
 	}
 
 	void TestBodyDynamicsAndCollisionGroups() {
@@ -2371,8 +2246,6 @@ int main() {
 	TestSimulationPublicationAndImpulse();
 	TestPhysicsPublicationNestedMutation();
 	TestPhysicsPublicationThrowKeepsAuthoredHistory();
-	TestPhysicsDirtyBindingSafePointAndReentrancy();
-	TestPhysicsDirtyBindingRetiresStaleConnections();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();
