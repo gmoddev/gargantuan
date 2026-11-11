@@ -3,6 +3,8 @@
 #include "gargantuan/Log.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
 #include "render/sdl/SDLDirectionalShadowCache.hpp"
+#include "render/sdl/SDLShadowCasterCoverage.hpp"
+#include "render/sdl/SDLSpotShadowAtlas.hpp"
 #include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLPipelineBuilder.hpp"
@@ -17,6 +19,7 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 
 namespace gargantuan {
@@ -64,9 +67,16 @@ namespace gargantuan {
 		}
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
+			if (context.CascadedShadows && context.CascadeShadowTexture &&
+				context.CascadePlan.Count > 0 && context.CascadePlan.Count <= MaximumDirectionalCascades) {
+				DrawCascades(gpu, context);
+				DrawSpotlights(gpu, context);
+				return nullptr;
+			}
 			const auto &Environment = context.Projection.GetFrame().Environment;
 			if (context.ShadowCache.Restore(Environment, context.ShadowMapTexture, context.ShadowMatrix)) {
 				if (context.Metrics) ++context.Metrics->ShadowCacheHits;
+				DrawSpotlights(gpu, context);
 				return nullptr;
 			}
 			context.ShadowCache.BeginRecording();
@@ -95,19 +105,104 @@ namespace gargantuan {
 			if (!pass) throw std::runtime_error("[Renderer:Shadow] Could not begin the shadow render pass");
 			if (context.Metrics) ++context.Metrics->ShadowMapPasses;
 			try {
-				const bool AllResident = Environment.SunIntensity <= 0.0f || DrawCasters(gpu, pass, context, shadowMatrix, White);
+				bool HasCasters = false;
+				const bool AllResident = Environment.SunIntensity <= 0.0f ||
+					DrawCasters(gpu, pass, context, shadowMatrix, White, std::nullopt, HasCasters);
 				context.ShadowCache.FinishRecording(Environment, context.ShadowMapTexture, shadowMatrix, AllResident,
 					!context.ShadowPoseRevisions.empty());
 			} catch (...) {
 				SDL_EndGPURenderPass(pass);
 				throw;
 			}
+			if (context.SpotShadowAtlas && context.LocalShadowTexture) {
+				SDL_EndGPURenderPass(pass);
+				DrawSpotlights(gpu, context);
+				return nullptr;
+			}
 			return pass;
 		}
 
 	  private:
+		void DrawCascades(SDL_GPUDevice *Gpu, SDLFrameContext &Context) {
+			const auto &Environment = Context.Projection.GetFrame().Environment;
+			Context.CascadeHasCasters = false;
+			Context.ShadowMatrix = Context.CascadePlan.Cascades[0].Matrix;
+			Context.ShadowPoseRevisions.clear();
+			auto *White = Environment.SunIntensity > 0.0f ? Context.TextureResources->GetWhiteTexture() : nullptr;
+			for (std::uint32_t Index = 0; Index < Context.CascadePlan.Count; ++Index) {
+				const auto &Cascade = Context.CascadePlan.Cascades[Index];
+				glm::mat4 Restored;
+				if (Context.ShadowCache.RestoreCascade(Index, Environment, Context.CascadeShadowTexture,
+					Cascade.Matrix, Restored, Cascade.Origin)) {
+					Context.CascadeHasCasters |= Context.ShadowCache.HasCascadeCasters(Index);
+					if (Context.Metrics) ++Context.Metrics->ShadowCacheHits;
+					continue;
+				}
+				Context.ShadowCache.BeginCascadeRecording(Index);
+				SDL_GPUDepthStencilTargetInfo Target{
+					.texture = Context.CascadeShadowTexture,
+					.clear_depth = 1.0f,
+					.load_op = SDL_GPU_LOADOP_CLEAR,
+					.store_op = SDL_GPU_STOREOP_STORE,
+					.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
+					.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
+					.layer = static_cast<Uint8>(Index),
+				};
+				auto *Pass = SDL_BeginGPURenderPass(Context.Commands, nullptr, 0, &Target);
+				if (!Pass) throw std::runtime_error("[Renderer:Shadow] Could not begin cascade render pass");
+				if (Context.Metrics) ++Context.Metrics->ShadowMapPasses;
+				try {
+					bool HasCasters = false;
+					const bool AllResident = Environment.SunIntensity <= 0.0f ||
+						DrawCasters(Gpu, Pass, Context, Cascade.Matrix, White, Index, HasCasters,
+							std::nullopt, Cascade.Origin);
+					Context.CascadeHasCasters |= HasCasters;
+					Context.ShadowCache.FinishCascadeRecording(Index, Environment, Context.CascadeShadowTexture,
+						Cascade.Matrix, AllResident, HasCasters, Cascade.Origin);
+				} catch (...) {
+					SDL_EndGPURenderPass(Pass);
+					throw;
+				}
+				SDL_EndGPURenderPass(Pass);
+			}
+		}
+
+		void DrawSpotlights(SDL_GPUDevice *Gpu, SDLFrameContext &Context) {
+			if (!Context.SpotShadowAtlas || !Context.LocalShadowTexture) return;
+			auto &Atlas = *Context.SpotShadowAtlas;
+			Atlas.Prepare(Context.Projection.GetFrame(), Context.LocalShadowTexture);
+			auto *White = Context.TextureResources->GetWhiteTexture();
+			for (const auto &Assignment : Atlas.GetAssignments()) {
+				if (!Assignment.Dirty) continue;
+				Atlas.BeginRecording(Assignment.Layer);
+				SDL_GPUDepthStencilTargetInfo Target{
+					.texture = Context.LocalShadowTexture,
+					.clear_depth = 1.0f,
+					.load_op = SDL_GPU_LOADOP_CLEAR,
+					.store_op = SDL_GPU_STOREOP_STORE,
+					.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
+					.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
+					.layer = static_cast<Uint8>(Assignment.Layer),
+				};
+				auto *Pass = SDL_BeginGPURenderPass(Context.Commands, nullptr, 0, &Target);
+				if (!Pass) throw std::runtime_error("[Renderer:Shadow] Could not begin spotlight render pass");
+				if (Context.Metrics) ++Context.Metrics->ShadowMapPasses;
+				try {
+					bool HasCasters = false;
+					const bool AllResident = DrawCasters(Gpu, Pass, Context, Assignment.Matrix, White,
+						std::nullopt, HasCasters, Assignment.Layer);
+					Atlas.FinishRecording(Assignment.Layer, AllResident, HasCasters);
+				} catch (...) {
+					SDL_EndGPURenderPass(Pass);
+					throw;
+				}
+				SDL_EndGPURenderPass(Pass);
+			}
+		}
+
 		bool DrawCasters(SDL_GPUDevice *Gpu, SDL_GPURenderPass *Pass, SDLFrameContext &context, const glm::mat4 &ShadowMatrix,
-			SDL_GPUTexture *White) {
+			SDL_GPUTexture *White, std::optional<std::uint32_t> CascadeIndex, bool &HasCasters,
+			std::optional<std::uint32_t> SpotLayer = std::nullopt, glm::vec3 Origin = glm::vec3(0.0f)) {
 			SDL_GPUGraphicsPipeline *BoundPipeline = nullptr;
 			const SDLGpuMesh *BoundMesh = nullptr;
 			SDL_GPUBuffer *BoundPalette = nullptr;
@@ -123,6 +218,10 @@ namespace gargantuan {
 				if (!item.CastShadow) {
 					continue;
 				}
+				if (CascadeIndex && !SDLShadowCasterMayAffect(context.Projection, item, Projected.Mesh,
+					ShadowMatrix, context.CascadePlan.Resolution, Origin)) continue;
+				if (SpotLayer && !context.SpotShadowAtlas->MayAffect(context.Projection, Projected, *SpotLayer)) continue;
+				if (CascadeIndex) context.ShadowCache.DependOnObject(*CascadeIndex, item.Object);
 
 				const auto *mesh = Projected.Mesh
 					? context.MeshResources.Find(*Projected.Mesh) : context.MeshResources.Find(item.Geometry);
@@ -137,9 +236,15 @@ namespace gargantuan {
 					);
 					continue;
 				}
-				if (Projected.Mesh) context.ShadowCache.DependOnMesh(*Projected.Mesh);
+				if (Projected.Mesh) {
+					if (CascadeIndex) context.ShadowCache.DependOnMesh(*CascadeIndex, *Projected.Mesh);
+					else if (SpotLayer) context.SpotShadowAtlas->DependOnMesh(*SpotLayer, *Projected.Mesh);
+					else context.ShadowCache.DependOnMesh(*Projected.Mesh);
+				}
 
-				Uniforms uniforms{.ShadowMatrix = ShadowMatrix, .PartMatrix = item.ModelMatrix};
+				auto RelativeModel = item.ModelMatrix;
+				RelativeModel[3] -= glm::vec4(Origin, 0.0f);
+				Uniforms uniforms{.ShadowMatrix = ShadowMatrix, .PartMatrix = RelativeModel};
 				SDL_PushGPUVertexUniformData(context.Commands, 0, &uniforms, sizeof(Uniforms));
 
 				const auto Palette = context.SkinPalettes.Find(
@@ -151,7 +256,11 @@ namespace gargantuan {
 					const bool AlphaMask = Material.OpacityMode == RenderOpacityMode::Masked;
 					if (AlphaMask && Material.BaseColorFactor.a < Material.AlphaCutoff) return;
 					const bool TexturedMask = AlphaMask && Material.BaseColorTexture.has_value();
-					if (TexturedMask) context.ShadowCache.DependOnMask(*Material.BaseColorTexture);
+					if (TexturedMask) {
+						if (CascadeIndex) context.ShadowCache.DependOnMask(*CascadeIndex, *Material.BaseColorTexture);
+						else if (SpotLayer) context.SpotShadowAtlas->DependOnMask(*SpotLayer, *Material.BaseColorTexture);
+						else context.ShadowCache.DependOnMask(*Material.BaseColorTexture);
+					}
 					auto *Selected = Material.DoubleSided ? DoubleSided : Pipeline;
 					if (Selected != BoundPipeline) {
 						SDL_BindGPUGraphicsPipeline(Pass, Selected);
@@ -189,6 +298,7 @@ namespace gargantuan {
 						BoundAlpha = AlphaFactorCutoff;
 					}
 					SDL_DrawGPUIndexedPrimitives(Pass, Count, 1, First, 0, 0);
+					HasCasters = true;
 					if (context.Metrics) {
 						++context.Metrics->DrawCalls;
 						++context.Metrics->ShadowCasterDraws;

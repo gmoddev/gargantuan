@@ -6,10 +6,12 @@
 #pragma once
 
 #include "gargantuan/render/RenderProjection.hpp"
+#include "render/sdl/SDLDirectionalCascadePlan.hpp"
 
 #include <SDL3/SDL_gpu.h>
 
 #include <optional>
+#include <array>
 #include <unordered_set>
 
 namespace gargantuan {
@@ -25,19 +27,36 @@ namespace gargantuan {
 			const glm::mat4 &Matrix, bool AllCastersResident, bool HasCasters);
 		[[nodiscard]] bool OnFrameSubmitted();
 		void Invalidate();
+		[[nodiscard]] bool RestoreCascade(std::uint32_t Index, const RenderEnvironmentState &Environment,
+			const SDL_GPUTexture *Target, const glm::mat4 &ExpectedMatrix, glm::mat4 &Matrix,
+			glm::vec3 Origin = glm::vec3(0.0f)) const;
+		[[nodiscard]] bool HasCascadeCasters(std::uint32_t Index) const;
+		void BeginCascadeRecording(std::uint32_t Index);
+		void DependOnMesh(std::uint32_t Index, RenderMeshIdentity Mesh);
+		void DependOnMask(std::uint32_t Index, RenderTextureIdentity Texture);
+		void DependOnObject(std::uint32_t Index, ObjectId Object);
+		void FinishCascadeRecording(std::uint32_t Index, const RenderEnvironmentState &Environment,
+			const SDL_GPUTexture *Target, const glm::mat4 &Matrix, bool AllCastersResident, bool HasCasters,
+			glm::vec3 Origin = glm::vec3(0.0f));
 
 	  private:
 		struct CachedMap {
 			const SDL_GPUTexture *Target;
 			glm::vec3 SunDirection;
 			glm::mat4 Matrix;
+			glm::vec3 Origin{0.0f};
 			bool SunEnabled;
 			bool HasCasters;
 		};
-		std::optional<CachedMap> Committed;
-		std::optional<CachedMap> Recorded;
-		std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> Meshes;
-		std::unordered_set<RenderTextureIdentity, RenderTextureIdentityHash> Masks;
-		bool DependenciesOverflow = false;
+		struct Slot {
+			std::optional<CachedMap> Committed;
+			std::optional<CachedMap> Recorded;
+			std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> Meshes;
+			std::unordered_set<RenderTextureIdentity, RenderTextureIdentityHash> Masks;
+			std::unordered_set<ObjectId> Objects;
+			bool DependenciesOverflow = false;
+			bool CascadeMode = false;
+		};
+		std::array<Slot, MaximumDirectionalCascades> Slots;
 	};
 }

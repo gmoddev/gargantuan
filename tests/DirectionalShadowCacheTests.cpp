@@ -4,7 +4,10 @@
 // file, you can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "render/sdl/SDLDirectionalShadowCache.hpp"
+#include "render/sdl/SDLDirectionalCascadePlan.hpp"
 
+#include <cmath>
+#include <glm/ext/matrix_transform.hpp>
 #include <iostream>
 #include <stdexcept>
 
@@ -138,10 +141,100 @@ namespace {
 		Cache.ApplyPublication(Projection, Delta);
 		Require(!Cache.Restore(Environment, nullptr, Restored), "a newly eligible caster invalidates empty depth");
 	}
+
+	void TestCascadePlan() {
+		RenderCameraSnapshot Camera;
+		Camera.Position = {0.0f, 3.0f, 0.0f};
+		const SDLDirectionalCascadeSettings Settings{.Count = 4, .Resolution = 1024,
+			.MaximumDistance = 250.0f, .SplitLambda = 0.6f, .TransitionFraction = 0.1f};
+		const auto Plan = MakeSDLDirectionalCascadePlan(Camera,
+			glm::normalize(glm::vec3(0.3f, 0.8f, 0.2f)), 16.0f / 9.0f, Settings);
+		Require(Plan && Plan->Count == 4 && Plan->Resolution == 1024, "bounded cascade plan builds");
+		float Previous = Camera.NearPlane;
+		for (const auto &Cascade : Plan->Cascades) {
+			Require(Cascade.Near >= Previous && Cascade.Far > Cascade.Near &&
+				Cascade.TransitionStart > Cascade.Near && Cascade.TransitionStart < Cascade.Far,
+				"practical cascade splits and transition intervals are monotonic");
+			Require(Cascade.WorldUnitsPerTexel > 0.0f && std::isfinite(Cascade.Matrix[3].x),
+				"cascade matrix and scale are finite");
+			Require(Cascade.DepthSpan > 0.0f && Cascade.DepthSpan * 0.0005f < 0.6f,
+				"normalized comparison bias maps to a bounded world-space offset");
+			Previous = Cascade.Far;
+		}
+		const auto CheckCorners = [&](const RenderCameraSnapshot &View, const SDLDirectionalCascadePlan &Value) {
+			const double Tangent = std::tan(glm::radians(static_cast<double>(View.VerticalFieldOfView)) * 0.5);
+			for (const auto &Cascade : Value.Cascades) {
+				for (const float Depth : {Cascade.Near, Cascade.Far})
+					for (const float X : {-1.0f, 1.0f}) for (const float Y : {-1.0f, 1.0f}) {
+						const glm::dvec3 World = glm::dvec3(View.Position) + glm::dvec3(View.LookDirection) *
+							static_cast<double>(Depth) + glm::dvec3(View.RightDirection) *
+							(X * Depth * Tangent * 16.0 / 9.0) + glm::dvec3(View.UpDirection) *
+							(Y * Depth * Tangent);
+						const auto Clip = glm::dmat4(Cascade.Matrix) *
+							glm::dvec4(World - glm::dvec3(Cascade.Origin), 1.0);
+						Require(std::abs(Clip.x) <= 1.01 && std::abs(Clip.y) <= 1.01,
+							"all split frustum corners fit the snapped shadow projection");
+					}
+			}
+		};
+		CheckCorners(Camera, *Plan);
+		Require(std::abs(Previous - 250.0f) < 1e-4f, "shadow distance caps a distant camera far plane");
+		auto Moved = Camera;
+		Moved.Position.x += Plan->Cascades[0].WorldUnitsPerTexel * 0.1f;
+		const auto Stable = MakeSDLDirectionalCascadePlan(Moved,
+			glm::normalize(glm::vec3(0.3f, 0.8f, 0.2f)), 16.0f / 9.0f, Settings);
+		Require(Stable && Stable->Cascades[0].Matrix == Plan->Cascades[0].Matrix,
+			"subtexel camera movement preserves the near cascade projection");
+		Moved.Position = glm::vec3(900000.0f, 2000.0f, -900000.0f);
+		const auto Distant = MakeSDLDirectionalCascadePlan(Moved,
+			glm::normalize(glm::vec3(0.3f, 0.8f, 0.2f)), 16.0f / 9.0f, Settings);
+		Require(Distant && std::isfinite(Distant->Cascades[0].Matrix[3].x),
+			"large finite world offsets produce finite cascade matrices");
+		CheckCorners(Moved, *Distant);
+		auto Rotated = Camera;
+		Rotated.LookDirection = glm::normalize(glm::vec3(0.4f, -0.1f, -1.0f));
+		Rotated.RightDirection = glm::normalize(glm::cross(Rotated.LookDirection, glm::vec3(0, 1, 0)));
+		Rotated.UpDirection = glm::normalize(glm::cross(Rotated.RightDirection, Rotated.LookDirection));
+		const auto RotationPlan = MakeSDLDirectionalCascadePlan(Rotated,
+			glm::normalize(glm::vec3(0.3f, 0.8f, 0.2f)), 16.0f / 9.0f, Settings);
+		Require(RotationPlan.has_value(), "rotated camera builds a cascade plan");
+		CheckCorners(Rotated, *RotationPlan);
+		Require(!MakeSDLDirectionalCascadePlan(Camera, {0, 0, 0}, 1.0f, Settings),
+			"a degenerate light direction is rejected");
+		Require(!MakeSDLDirectionalCascadePlan(Camera, {0, 1, 0}, 1.0f,
+			SDLDirectionalCascadeSettings{.Count = 5}), "cascade count is bounded");
+	}
+
+	void TestCascadeIndependence() {
+		RenderProjection Projection;
+		const auto Scene = InitialScene();
+		(void)Projection.Apply(Scene);
+		SDLDirectionalShadowCache Cache;
+		const auto &Environment = Scene.Frame.Environment;
+		const glm::mat4 Near(1.0f);
+		const auto Far = glm::translate(glm::mat4(1.0f), glm::vec3(-10.0f, 0.0f, 0.0f));
+		Cache.BeginCascadeRecording(0);
+		Cache.FinishCascadeRecording(0, Environment, nullptr, Near, true, true);
+		Cache.BeginCascadeRecording(1);
+		Cache.FinishCascadeRecording(1, Environment, nullptr, Far, true, false);
+		Require(Cache.OnFrameSubmitted(), "submitted cascade layers become reusable");
+		RenderPublication Delta{.Id = 2, .BaseId = 1, .Frame = Scene.Frame};
+		Delta.Updates = {UpdateObject(Projection, NONCASTER)};
+		Delta.Updates[0].Item.CastShadow = true;
+		Delta.Updates[0].Item.ModelMatrix[3].x = 10.0f;
+		Cache.ApplyPublication(Projection, Delta);
+		glm::mat4 Restored;
+		Require(Cache.RestoreCascade(0, Environment, nullptr, Near, Restored),
+			"a far caster addition preserves the unrelated near layer");
+		Require(!Cache.RestoreCascade(1, Environment, nullptr, Far, Restored),
+			"a far caster addition invalidates its own layer");
+	}
 }
 
 int main() try {
 	TestCache();
+	TestCascadePlan();
+	TestCascadeIndependence();
 	std::cout << "[Render:ShadowCache] Publication relevance, submission and dependency bounds passed\n";
 	return 0;
 } catch (const std::exception &Error) {
