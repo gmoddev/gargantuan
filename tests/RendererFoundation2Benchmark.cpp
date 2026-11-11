@@ -86,9 +86,18 @@ namespace {
 		bool ProfileEnabled,
 		std::uint32_t GroupWidth,
 		bool RendererOnly,
-		std::ofstream *Samples
+		std::ofstream *Samples,
+		bool DiagnosticMarks
 	) {
 		using namespace gargantuan;
+		const auto ScenarioStart = Clock::now();
+		const auto Mark = [&](std::string_view Stage) {
+			if (DiagnosticMarks)
+				std::cerr << "[Render:Foundation2Benchmark] scenario=" << Name << '-' << Count
+					<< " stage=" << Stage << " elapsed_ms=" << Milliseconds(Clock::now() - ScenarioStart)
+					<< '\n' << std::flush;
+		};
+		Mark("start");
 		ChangeJournal::Get().Clear();
 		RenderDirtyAccumulator::Get().Clear();
 		auto Game = std::make_shared<DataModel>();
@@ -126,6 +135,7 @@ namespace {
 			if (RendererOnly) World->Parts.push_back(Value);
 			Parts.push_back(std::move(Value));
 		}
+		Mark("parts-ready");
 		RenderPublisher Publisher;
 		RenderProjection Projection;
 		const auto Camera = MakeLookAtRenderCameraInput(
@@ -135,6 +145,7 @@ namespace {
 		(void)Projection.Apply(*Initial);
 		if (Initial->Creates.size() != Count || Projection.GetObjects().size() != Count)
 			throw std::runtime_error("[Render:Foundation2Benchmark] Rigid fixture publication/object count mismatch");
+		Mark("initial-ready");
 		auto &Dirty = RenderDirtyAccumulator::Get();
 		auto &Journal = ChangeJournal::Get();
 		Dirty.ResetProfile();
@@ -223,8 +234,10 @@ namespace {
 			Samples->flush();
 			if (!*Samples) throw std::runtime_error("[Render:Foundation2Benchmark] Could not write frame samples");
 		}
+		Mark("measured");
 		if (RetainedPhysics) World->Physics = std::move(*RetainedPhysics);
 		Game->Destroy();
+		Mark("destroyed");
 	}
 
 	void RunDeformable(std::size_t VertexCount, std::size_t Frames) {
@@ -375,14 +388,25 @@ int main(int ArgumentCount, char **Arguments) {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		const std::size_t Frames = ArgumentCount > 1 ? std::stoull(Arguments[1]) : 30;
 		if (Frames == 0 || Frames > 120) throw std::invalid_argument("frame count must be in [1,120]");
-		bool ProfileEnabled = false, RigidOnly = false, RendererOnly = false;
+		bool ProfileEnabled = false, RigidOnly = false, RendererOnly = false, DiagnosticMarks = false;
 		std::uint32_t GroupWidth = 0;
 		std::filesystem::path SamplesPath;
+		std::string_view SelectedScenario;
 		for (int Index = 2; Index < ArgumentCount; ++Index) {
 			const std::string_view Option(Arguments[Index]);
 			if (Option == "--profile") ProfileEnabled = true;
 			else if (Option == "--rigid-only") RigidOnly = true;
 			else if (Option == "--renderer-only") RendererOnly = true;
+			else if (Option == "--diagnostic-marks") DiagnosticMarks = true;
+			else if (Option.starts_with("--scenario=")) {
+				if (!SelectedScenario.empty()) throw std::invalid_argument("scenario may appear only once");
+				SelectedScenario = Option.substr(sizeof("--scenario=") - 1);
+				if (SelectedScenario != "static-1000" && SelectedScenario != "static-10000" &&
+					SelectedScenario != "static-50000" && SelectedScenario != "mostly-static" &&
+					SelectedScenario != "dynamic" && SelectedScenario != "dynamic-redundant")
+					throw std::invalid_argument("unknown rigid scenario");
+				RigidOnly = true;
+			}
 			else if (Option.starts_with("--samples=")) {
 				if (!SamplesPath.empty()) throw std::invalid_argument("samples path may appear only once");
 				const auto Text = Option.substr(sizeof("--samples=") - 1);
@@ -408,10 +432,17 @@ int main(int ArgumentCount, char **Arguments) {
 		}
 		std::ofstream *Samples = SamplesPath.empty() ? nullptr : &SamplesFile;
 		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n" << std::flush;
-		for (const auto Count : {1000u, 10000u, 50000u}) RunRigid("static", Count, 0, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
-		RunRigid("mostly-static", 50000, 500, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
-		RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
-		RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
+		for (const auto Count : {1000u, 10000u, 50000u}) {
+			const auto Scenario = std::string("static-") + std::to_string(Count);
+			if (SelectedScenario.empty() || SelectedScenario == Scenario)
+				RunRigid("static", Count, 0, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples, DiagnosticMarks);
+		}
+		if (SelectedScenario.empty() || SelectedScenario == "mostly-static")
+			RunRigid("mostly-static", 50000, 500, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples, DiagnosticMarks);
+		if (SelectedScenario.empty() || SelectedScenario == "dynamic")
+			RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples, DiagnosticMarks);
+		if (SelectedScenario.empty() || SelectedScenario == "dynamic-redundant")
+			RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples, DiagnosticMarks);
 		if (!RigidOnly) {
 			for (const auto Count : {4096u, 16384u, 65536u}) RunDeformable(Count, Frames);
 			RunGui(10000, Frames);
