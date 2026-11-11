@@ -65,13 +65,16 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, SoftBodyState> DeformableStates;
 		SoftBodyStepProfile LastSoftBodyProfile;
 		std::unordered_map<ObjectId, PhysicsConstraintId> ConstraintJoints;
-		struct TrackedPartBinding {
+		struct TrackedPartToken {
 			ObjectId Object;
-			std::weak_ptr<BasePart> Part;
 			bool Active = true;
 			std::uint64_t LastDirtyEpoch = 0;
 		};
-		std::unordered_map<ObjectId, std::shared_ptr<TrackedPartBinding>> TrackedParts;
+		struct TrackedPartEntry {
+			std::weak_ptr<BasePart> Part;
+			std::shared_ptr<TrackedPartToken> Token;
+		};
+		std::unordered_map<ObjectId, TrackedPartEntry> TrackedParts;
 		std::uint64_t DirtyEpoch = 1;
 		std::unordered_map<ObjectId, std::weak_ptr<DeformableBody>> TrackedDeformables;
 		std::unordered_map<ObjectId, std::weak_ptr<SoftBodyMaterial>> TrackedSoftBodyMaterials;
@@ -140,7 +143,7 @@ namespace gargantuan {
 		[[nodiscard]] PhysicsConstraintId CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint);
 		void TrackPart(const std::shared_ptr<BasePart> &Part);
 		enum class PartDirtyMark { New, Coalesced, Suppressed };
-		PartDirtyMark MarkTrackedPartDirty(TrackedPartBinding &Binding);
+		PartDirtyMark MarkTrackedPartDirty(TrackedPartToken &Token);
 		void AdvanceDirtyEpoch() noexcept;
 		void TrackDeformable(const std::shared_ptr<DeformableBody> &Body);
 		void TrackSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);

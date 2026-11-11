@@ -247,12 +247,12 @@ namespace gargantuan {
 		return Creation.Constraint;
 	}
 
-	WorldRoot::PartDirtyMark WorldRoot::MarkTrackedPartDirty(TrackedPartBinding &Binding) {
-		if (ShuttingDownPhysics || !Binding.Active) return PartDirtyMark::Suppressed;
-		if (Binding.LastDirtyEpoch == DirtyEpoch) return PartDirtyMark::Coalesced;
+	WorldRoot::PartDirtyMark WorldRoot::MarkTrackedPartDirty(TrackedPartToken &Token) {
+		if (ShuttingDownPhysics || !Token.Active) return PartDirtyMark::Suppressed;
+		if (Token.LastDirtyEpoch == DirtyEpoch) return PartDirtyMark::Coalesced;
 		try {
-			const bool Inserted = DirtyBodies.insert(Binding.Object).second;
-			Binding.LastDirtyEpoch = DirtyEpoch;
+			const bool Inserted = DirtyBodies.insert(Token.Object).second;
+			Token.LastDirtyEpoch = DirtyEpoch;
 			return Inserted ? PartDirtyMark::New : PartDirtyMark::Coalesced;
 		} catch (...) {
 			// Preserve the setter's exception while retaining a conservative next-safe-point path.
@@ -265,8 +265,8 @@ namespace gargantuan {
 		if (DirtyEpoch == std::numeric_limits<std::uint64_t>::max()) {
 			// A wrapped epoch must not alias an old registration. This scan is
 			// reached only after 2^64 - 1 completed safe points.
-			for (auto &[_, Binding] : TrackedParts)
-				if (Binding) Binding->LastDirtyEpoch = 0;
+			for (auto &[_, Entry] : TrackedParts)
+				if (Entry.Token) Entry.Token->LastDirtyEpoch = 0;
 			DirtyEpoch = 1;
 		} else ++DirtyEpoch;
 	}
@@ -276,27 +276,27 @@ namespace gargantuan {
 		const auto Id = Part->GetObjectId();
 		auto Found = TrackedParts.find(Id);
 		if (Found == TrackedParts.end()) {
-			auto NewBinding = std::make_shared<TrackedPartBinding>(TrackedPartBinding{Id, Part});
-			Found = TrackedParts.emplace(Id, std::move(NewBinding)).first;
+			auto NewToken = std::make_shared<TrackedPartToken>(TrackedPartToken{Id});
+			Found = TrackedParts.emplace(Id, TrackedPartEntry{Part, std::move(NewToken)}).first;
 		}
-		auto Binding = Found->second;
-		Binding->Part = Part;
-		if (!Binding->Active) Binding->LastDirtyEpoch = 0;
-		Binding->Active = true;
+		auto Token = Found->second.Token;
+		Found->second.Part = Part;
+		if (!Token->Active) Token->LastDirtyEpoch = 0;
+		Token->Active = true;
 		if (PhysicsConnections.contains(Id)) return;
-		auto MarkDirty = [this, Binding](std::monostate) {
-			if (Binding->Active) (void)MarkTrackedPartDirty(*Binding);
+		auto MarkDirty = [this, Token](std::monostate) {
+			if (Token->Active) (void)MarkTrackedPartDirty(*Token);
 		};
-		auto MarkCFrameDirty = [this, Binding](std::monostate) {
-			if (!Binding->Active) return;
+		auto MarkCFrameDirty = [this, Token](std::monostate) {
+			if (!Token->Active) return;
 			if (!ProfileCFrameDirtyCallback) {
-				if (PublishingPhysicsPart != Binding->Object) (void)MarkTrackedPartDirty(*Binding);
+				if (PublishingPhysicsPart != Token->Object) (void)MarkTrackedPartDirty(*Token);
 				return;
 			}
 			const auto Start = std::chrono::steady_clock::now();
 			++CFrameDirtyProfile.Calls;
-			const auto Result = PublishingPhysicsPart == Binding->Object ? PartDirtyMark::Suppressed :
-				MarkTrackedPartDirty(*Binding);
+			const auto Result = PublishingPhysicsPart == Token->Object ? PartDirtyMark::Suppressed :
+				MarkTrackedPartDirty(*Token);
 			if (Result == PartDirtyMark::New) ++CFrameDirtyProfile.NewDirty;
 			else if (Result == PartDirtyMark::Coalesced) ++CFrameDirtyProfile.Coalesced;
 			else ++CFrameDirtyProfile.Suppressed;
@@ -422,8 +422,8 @@ namespace gargantuan {
 	void WorldRoot::RemovePart(const std::shared_ptr<BasePart> &Part) {
 		if (!Part) return;
 		const auto Object = Part->GetObjectId();
-		if (auto Found = TrackedParts.find(Object); Found != TrackedParts.end() && Found->second)
-			Found->second->Active = false;
+		if (auto Found = TrackedParts.find(Object); Found != TrackedParts.end() && Found->second.Token)
+			Found->second.Token->Active = false;
 		erase(Parts, Part);
 		PartMembership.erase(Object);
 		DirtyBodies.erase(Object);
@@ -581,14 +581,14 @@ namespace gargantuan {
 		const auto Changes = Assets->ReadChanges(CollisionAssetChangeSequence);
 		CollisionAssetChangeSequence = Changes.NextSequence;
 		if (Changes.RescanRequired) {
-			for (const auto &[Id, Binding] : TrackedParts)
-				if (Binding && Binding->Active && std::dynamic_pointer_cast<MeshPart>(Binding->Part.lock())) DirtyBodies.insert(Id);
+			for (const auto &[Id, Entry] : TrackedParts)
+				if (std::dynamic_pointer_cast<MeshPart>(Entry.Part.lock())) DirtyBodies.insert(Id);
 			return;
 		}
 		for (const auto &Change : Changes.Changes) {
 			if (Change.Kind != AssetKind::Mesh) continue;
-			for (const auto &[Id, Binding] : TrackedParts) {
-				auto Part = Binding && Binding->Active ? std::dynamic_pointer_cast<MeshPart>(Binding->Part.lock()) : nullptr;
+			for (const auto &[Id, Entry] : TrackedParts) {
+				auto Part = std::dynamic_pointer_cast<MeshPart>(Entry.Part.lock());
 				if (Part && Part->GetMesh() == Change.Reference) DirtyBodies.insert(Id);
 			}
 		}
@@ -606,8 +606,7 @@ namespace gargantuan {
 		std::vector<ObjectId> BodyUpdates;
 		if (FullPartScanNeeded) {
 			BodyUpdates.reserve(TrackedParts.size());
-			for (const auto &[Object, Binding] : TrackedParts)
-				if (Binding && Binding->Active) BodyUpdates.push_back(Object);
+			for (const auto &[Object, _] : TrackedParts) BodyUpdates.push_back(Object);
 			std::sort(BodyUpdates.begin(), BodyUpdates.end());
 		} else BodyUpdates = SortedIds(DirtyBodies);
 		// Finish the epoch only after the body list has been captured. A nested
@@ -618,8 +617,7 @@ namespace gargantuan {
 		FullPartScanNeeded = false;
 		for (const auto Object : BodyUpdates) {
 			auto Tracked = TrackedParts.find(Object);
-			auto Part = Tracked == TrackedParts.end() || !Tracked->second || !Tracked->second->Active ?
-				nullptr : Tracked->second->Part.lock();
+			auto Part = Tracked == TrackedParts.end() ? nullptr : Tracked->second.Part.lock();
 			if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
 				Part->FindFirstAncestorWhichIsA("WorldRoot").get() != this) continue;
 			auto Found = PartBodies.find(Object);
@@ -788,8 +786,8 @@ namespace gargantuan {
 	void WorldRoot::ShutdownPhysics() {
 		if (ShuttingDownPhysics) return;
 		ShuttingDownPhysics = true;
-		for (auto &[_, Binding] : TrackedParts)
-			if (Binding) Binding->Active = false;
+		for (auto &[_, Entry] : TrackedParts)
+			if (Entry.Token) Entry.Token->Active = false;
 		Deformables.Shutdown();
 		if (UnbindDescendants) UnbindDescendants();
 		if (DescendantRemovedConnection) DescendantRemovedConnection->Disconnect();

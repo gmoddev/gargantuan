@@ -49,12 +49,12 @@ namespace gargantuan {
 		static std::uint64_t DirtyEpoch(const WorldRoot &World) { return World.DirtyEpoch; }
 		static bool BindingDirty(const WorldRoot &World, ObjectId Object) {
 			auto Found = World.TrackedParts.find(Object);
-			return Found != World.TrackedParts.end() && Found->second &&
-				Found->second->LastDirtyEpoch == World.DirtyEpoch;
+			return Found != World.TrackedParts.end() && Found->second.Token &&
+				Found->second.Token->LastDirtyEpoch == World.DirtyEpoch;
 		}
 		static bool BindingActive(const WorldRoot &World, ObjectId Object) {
 			auto Found = World.TrackedParts.find(Object);
-			return Found != World.TrackedParts.end() && Found->second && Found->second->Active;
+			return Found != World.TrackedParts.end() && Found->second.Token && Found->second.Token->Active;
 		}
 		static SignalConnection::Pointer CFramePhysicsConnection(const WorldRoot &World, ObjectId Object) {
 			auto Found = World.PhysicsConnections.find(Object);

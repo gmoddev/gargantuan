@@ -28,13 +28,13 @@ namespace gargantuan {
 		static std::uint64_t DirtyEpoch(const WorldRoot &World) { return World.DirtyEpoch; }
 		static bool BindingDirty(const WorldRoot &World, ObjectId Object) {
 			auto Found = World.TrackedParts.find(Object);
-			return Found != World.TrackedParts.end() && Found->second &&
-				Found->second->LastDirtyEpoch == World.DirtyEpoch;
+			return Found != World.TrackedParts.end() && Found->second.Token &&
+				Found->second.Token->LastDirtyEpoch == World.DirtyEpoch;
 		}
 		static void ClearDerivedDirtyState(WorldRoot &World, ObjectId Object) {
 			World.DirtyBodies.clear();
 			auto Found = World.TrackedParts.find(Object);
-			if (Found != World.TrackedParts.end() && Found->second) Found->second->LastDirtyEpoch = 0;
+			if (Found != World.TrackedParts.end() && Found->second.Token) Found->second.Token->LastDirtyEpoch = 0;
 		}
 		static void ApplyPending(WorldRoot &World) { World.ApplyPendingPhysicsChanges(); }
 		static SignalConnection::Pointer CFrameConnection(const WorldRoot &World, ObjectId Object) {
