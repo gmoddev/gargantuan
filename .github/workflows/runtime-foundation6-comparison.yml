@@ -16,7 +16,7 @@ on:
       suite:
         description: Bounded comparison workload
         type: choice
-        options: [core, cframe, compact]
+        options: [core, cframe, compact, realistic]
         default: core
 
 permissions:
@@ -75,14 +75,23 @@ jobs:
               -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON -DGARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE=ON \
               -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF \
               2>&1 | tee "runtime6-evidence/$arm/configure.log"
+            extra_targets=()
+            if [ "$COMPARISON_SUITE" = realistic ]; then
+              extra_targets=(gargantuan_runtime6_realistic_publication_probe gargantuan_asset_foundation_benchmark
+                gargantuan_animation_foundation_benchmark gargantuan_soft_body_physics_benchmark gargantuan_replication_benchmark)
+            fi
+            if [ "$COMPARISON_SUITE" = compact ] && [ "$arm" = candidate ]; then
+              extra_targets+=(gargantuan_runtime6_physics_sync_fault_tests)
+            fi
             cmake --build build-runtime6 --parallel 3 --target \
               gargantuan_runtime_foundation6_benchmark gargantuan_runtime6_extraction_alternatives \
               gargantuan_runtime6_physics_sync_benchmark gargantuan_runtime6_allocation_benchmark \
               gargantuan_foundation_tests gargantuan_prepared_property_tests \
               gargantuan_renderer_publication_tests gargantuan_physics_backend_tests \
+              "${extra_targets[@]}" \
               2>&1 | tee "runtime6-evidence/$arm/build.log"
             SDL_VIDEODRIVER=dummy ctest --test-dir build-runtime6 --output-on-failure \
-              -R '^gargantuan_(foundation|prepared_property|renderer_publication|physics_backend|runtime_foundation6_smoke|runtime6_extraction_alternatives|runtime6_physics_sync_smoke)$' \
+              -R '^gargantuan_(foundation|prepared_property|renderer_publication|physics_backend|runtime_foundation6_smoke|runtime6_extraction_alternatives|runtime6_physics_sync_smoke|runtime6_realistic_publication_probe_smoke|runtime6_physics_sync_fault)$' \
               2>&1 | tee "runtime6-evidence/$arm/tests.log"
             export ARM="$arm" SOURCE="$source"
             python3 - <<'PY'
@@ -91,13 +100,18 @@ jobs:
           names=['gargantuan_runtime_foundation6_benchmark','gargantuan_runtime6_extraction_alternatives',
                  'gargantuan_runtime6_physics_sync_benchmark','gargantuan_runtime6_allocation_benchmark',
                  'gargantuan_prepared_property_tests']
+          if os.environ['COMPARISON_SUITE']=='realistic':
+              names+=['gargantuan_runtime6_realistic_publication_probe','gargantuan_asset_foundation_benchmark',
+                      'gargantuan_animation_foundation_benchmark','gargantuan_soft_body_physics_benchmark',
+                      'gargantuan_replication_benchmark']
           hashes={}
           for name in names:
               target=out/name; shutil.copy2(pathlib.Path('build-runtime6')/name,target)
               hashes[name]=hashlib.sha256(target.read_bytes()).hexdigest()
               with (out/(name+'.libraries.txt')).open('w') as libraries:
                   subprocess.run(['ldd',str(target)],stdout=libraries,check=True)
-          (out/'manifest.json').write_text(json.dumps({'source':os.environ['SOURCE'],'binaries':hashes},indent=2))
+          (out/'manifest.json').write_text(json.dumps({'source':os.environ['SOURCE'],
+              'suite':os.environ['COMPARISON_SUITE'],'binaries':hashes},indent=2))
           PY
             git diff --name-only | while IFS= read -r path; do
               case "$path" in
@@ -109,6 +123,9 @@ jobs:
             git restore -- include/gargantuan/classes/generated/Animator.hpp src/classes/generated/Animator.cpp
           done
       - name: Run source-bound counterbalanced comparisons
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
         run: python3 "$RUNNER_TEMP/runtime6_comparison.py" --evidence runtime6-evidence --suite "$COMPARISON_SUITE"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

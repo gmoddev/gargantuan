@@ -15,7 +15,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic"), default="core")
 Args = Parser.parse_args()
 Root = Args.evidence.resolve()
 Sources = {}
@@ -60,6 +60,20 @@ def Run(Arm, Label, Binary, Options, Timeout=600):
     (Output / "receipts.json").write_text(json.dumps(Receipts, indent=2))
     print(json.dumps(Receipt), flush=True)
 
+
+if Args.suite == "realistic":
+    for Count, Changed in ((128, 0), (128, 16), (128, 128), (512, 64)):
+        for Arm in ("baseline", "candidate", "candidate", "baseline"):
+            Run(Arm, f"realistic-{Count}-{Changed}", "gargantuan_runtime6_realistic_publication_probe",
+                [f"--count={Count}", f"--changed={Changed}", "--frames=12", "--mode=both"])
+    for Label, Binary, Options in (
+            ("asset-lifecycle", "gargantuan_asset_foundation_benchmark", []),
+            ("animation", "gargantuan_animation_foundation_benchmark", ["--quick"]),
+            ("cloth", "gargantuan_soft_body_physics_benchmark", ["--quick"]),
+            ("replication", "gargantuan_replication_benchmark", ["--incremental-scaling"])):
+        for Arm in ("baseline", "candidate", "candidate", "baseline"):
+            Run(Arm, Label, Binary, Options)
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite == "cframe":
     for Count in (1000, 10000, 50000):
