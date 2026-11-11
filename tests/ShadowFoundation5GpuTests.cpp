@@ -465,6 +465,7 @@ namespace {
 			}
 			EditorViewportRenderer Old(Size, Size);
 			EditorViewportRenderer Solid(Size, Size);
+			EditorViewportRendererTestAccess::SetSolidShadowDepthExperiment(Old, false);
 			EditorViewportRendererTestAccess::SetSolidShadowDepthExperiment(Solid, true);
 			CurrentCase = std::string("solid-depth-off-") + Test.Name;
 			const auto OldPixels = Capture(Old, Publication);
@@ -508,12 +509,24 @@ namespace {
 		for (const auto &[Id, Projected] : OrderProbe.GetObjects())
 			if (Projected.Visible && Projected.Item.CastShadow) OrderedCasters.push_back(Id);
 		Require(OrderedCasters.size() == 3, "mixed shadow pipeline control needs three casters");
-		for (auto &Create : Mixed->Creates) if (Create.Item.Object == OrderedCasters[1]) {
-			Create.Material.OpacityMode = RenderOpacityMode::Masked;
-			Create.Material.BaseColorTexture = Mask;
+		const std::array CasterX{-0.15f, 0.25f, 0.65f};
+		for (std::size_t Index = 0; Index < OrderedCasters.size(); ++Index) {
+			for (auto &Create : Mixed->Creates) if (Create.Item.Object == OrderedCasters[Index]) {
+				const float Shift = CasterX[Index] - Create.Item.ModelMatrix[3].x;
+				Create.Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(Shift, 0, 0)) *
+					Create.Item.ModelMatrix;
+				Create.Item.InverseModelMatrix = glm::inverse(Create.Item.ModelMatrix);
+				if (Index == 1) {
+					Create.Material.OpacityMode = RenderOpacityMode::Masked;
+					Create.Material.BaseColorTexture = Mask;
+				}
+			}
 		}
+		Mixed->TextureCreates.back().Pixels = std::make_shared<const std::vector<std::uint8_t>>(
+			std::initializer_list<std::uint8_t>{255, 255, 255, 0});
 		EditorViewportRenderer OldMixed(Size, Size);
 		EditorViewportRenderer SolidMixed(Size, Size);
+		EditorViewportRendererTestAccess::SetSolidShadowDepthExperiment(OldMixed, false);
 		EditorViewportRendererTestAccess::SetSolidShadowDepthExperiment(SolidMixed, true);
 		CurrentCase = "solid-depth-off-mixed-opaque-mask-opaque";
 		const auto OldMixedPixels = Capture(OldMixed, Mixed);
@@ -526,6 +539,26 @@ namespace {
 		Require(OldMixedMetrics.ShadowCasterDraws == 3 && SolidMixedMetrics.ShadowCasterDraws == 3 &&
 			OldMixedMetrics.SolidShadowCasterDraws == 0 && SolidMixedMetrics.SolidShadowCasterDraws == 2,
 			"mixed spotlight control did not record opaque, masked, opaque depth draws");
+
+		auto MaskSolid = std::make_shared<RenderPublication>(*Mixed);
+		MaskSolid->TextureCreates.back().Pixels = std::make_shared<const std::vector<std::uint8_t>>(
+			std::initializer_list<std::uint8_t>{255, 255, 255, 255});
+		EditorViewportRenderer SolidMaskControl(Size, Size);
+		EditorViewportRendererTestAccess::SetSolidShadowDepthExperiment(SolidMaskControl, true);
+		CurrentCase = "solid-depth-on-mixed-middle-mask-solid-control";
+		const auto SolidMaskPixels = Capture(SolidMaskControl, MaskSolid);
+		Require(EditorViewportRendererTestAccess::GetMetrics(SolidMaskControl).SolidShadowCasterDraws == 2,
+			"mixed alpha-one control did not select both solid shadow draws");
+		std::size_t ChangedPixels = 0;
+		for (std::uint32_t Y = Size / 4; Y < Size * 3 / 4; ++Y) {
+			for (std::uint32_t X = Size / 4; X < Size * 3 / 4; ++X) {
+				const auto Pixel = (std::size_t(Y) * Size + X) * 3;
+				if (static_cast<int>(SolidMixedPixels.RgbPixels[Pixel]) -
+					static_cast<int>(SolidMaskPixels.RgbPixels[Pixel]) > 10) ++ChangedPixels;
+			}
+		}
+		Require(RedCenter(SolidMixedPixels) > RedCenter(SolidMaskPixels) + 20 && ChangedPixels > 24,
+			"mixed alpha-zero mask did not expose a distinct bounded receiver region");
 	}
 
 	void CheckDirectionalPixels() {
