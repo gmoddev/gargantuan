@@ -511,7 +511,10 @@ namespace {
 		for (const auto &[Id, Projected] : OrderProbe.GetObjects())
 			if (Projected.Visible && Projected.Item.CastShadow) OrderedCasters.push_back(Id);
 		Require(OrderedCasters.size() == 3, "mixed shadow pipeline control needs three casters");
-		const std::array CasterX{-0.15f, 0.25f, 0.65f};
+		// At z=.75, the camera enlarges each ±.16 caster by about 4/3.
+		// Place the two solid silhouettes away from the center receiver ray;
+		// the masked middle caster at x=.25 lies on the light-to-center ray.
+		const std::array CasterX{-0.30f, 0.25f, 0.75f};
 		for (std::size_t Index = 0; Index < OrderedCasters.size(); ++Index) {
 			for (auto &Create : Mixed->Creates) if (Create.Item.Object == OrderedCasters[Index]) {
 				const float Shift = CasterX[Index] - Create.Item.ModelMatrix[3].x;
