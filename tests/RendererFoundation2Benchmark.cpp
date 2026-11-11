@@ -4,6 +4,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
@@ -11,8 +12,10 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -66,7 +69,7 @@ namespace {
 			<< Breakdown.ClassificationMeanMs << ',' << Breakdown.AccumulatorMeanMs << ','
 			<< Breakdown.DirtyCaptureMeanMs << ',' << Breakdown.DirtyExpansionMeanMs << ','
 			<< Breakdown.FinalStateExtractionMeanMs << ',' << Breakdown.PublicationConstructionMeanMs << ','
-			<< Breakdown.PublisherReconciliationMeanMs << '\n';
+			<< Breakdown.PublisherReconciliationMeanMs << '\n' << std::flush;
 	}
 
 	void RunRigid(
@@ -75,7 +78,8 @@ namespace {
 		std::size_t ChangedPerFrame,
 		std::size_t WritesPerObject,
 		std::size_t Frames,
-		bool ProfileEnabled
+		bool ProfileEnabled,
+		std::uint32_t GroupWidth
 	) {
 		using namespace gargantuan;
 		ChangeJournal::Get().Clear();
@@ -84,13 +88,23 @@ namespace {
 		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		std::vector<std::shared_ptr<Part>> Parts;
 		Parts.reserve(Count);
+		std::vector<std::shared_ptr<Folder>> Groups;
+		if (GroupWidth != 0) {
+			Groups.reserve((Count + GroupWidth - 1) / GroupWidth);
+			for (std::size_t Index = 0; Index < Count; Index += GroupWidth) {
+				auto Group = std::make_shared<Folder>();
+				Group->SetParent(World);
+				Groups.push_back(std::move(Group));
+			}
+		}
 		const auto Side = static_cast<std::size_t>(std::ceil(std::sqrt(static_cast<double>(Count))));
 		for (std::size_t Index = 0; Index < Count; ++Index) {
 			auto Value = std::make_shared<Part>();
 			Value->SetCFrame(CFrame(glm::vec3(
 				static_cast<float>(Index % Side) * 2.0f, static_cast<float>(Index / Side) * 2.0f, 0.0f
 			)));
-			Value->SetParent(World);
+			if (GroupWidth == 0) Value->SetParent(World);
+			else Value->SetParent(Groups[Index / GroupWidth]);
 			Parts.push_back(std::move(Value));
 		}
 		RenderPublisher Publisher;
@@ -320,16 +334,32 @@ int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		const std::size_t Frames = ArgumentCount > 1 ? std::stoull(Arguments[1]) : 30;
-		const bool ProfileEnabled = ArgumentCount > 2 && std::string_view(Arguments[2]) == "--profile";
-		if (Frames == 0) throw std::invalid_argument("frame count must be positive");
-		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n";
-		for (const auto Count : {1000u, 10000u, 50000u}) RunRigid("static", Count, 0, 1, Frames, ProfileEnabled);
-		RunRigid("mostly-static", 50000, 500, 1, Frames, ProfileEnabled);
-		RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled);
-		RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled);
-		for (const auto Count : {4096u, 16384u, 65536u}) RunDeformable(Count, Frames);
-		RunGui(10000, Frames);
-		RunMixed(Frames);
+		if (Frames == 0 || Frames > 120) throw std::invalid_argument("frame count must be in [1,120]");
+		bool ProfileEnabled = false, RigidOnly = false;
+		std::uint32_t GroupWidth = 0;
+		for (int Index = 2; Index < ArgumentCount; ++Index) {
+			const std::string_view Option(Arguments[Index]);
+			if (Option == "--profile") ProfileEnabled = true;
+			else if (Option == "--rigid-only") RigidOnly = true;
+			else if (Option.starts_with("--group-width=")) {
+				if (GroupWidth != 0) throw std::invalid_argument("group width may appear only once");
+				const auto Text = Option.substr(sizeof("--group-width=") - 1);
+				const auto [End, Error] = std::from_chars(Text.data(), Text.data() + Text.size(), GroupWidth);
+				if (Error != std::errc{} || End != Text.data() + Text.size() ||
+					GroupWidth < 64 || GroupWidth > 4096)
+					throw std::invalid_argument("group width must be in [64,4096]");
+			} else throw std::invalid_argument("unknown semantic benchmark option");
+		}
+		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n" << std::flush;
+		for (const auto Count : {1000u, 10000u, 50000u}) RunRigid("static", Count, 0, 1, Frames, ProfileEnabled, GroupWidth);
+		RunRigid("mostly-static", 50000, 500, 1, Frames, ProfileEnabled, GroupWidth);
+		RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled, GroupWidth);
+		RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled, GroupWidth);
+		if (!RigidOnly) {
+			for (const auto Count : {4096u, 16384u, 65536u}) RunDeformable(Count, Frames);
+			RunGui(10000, Frames);
+			RunMixed(Frames);
+		}
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:Foundation2Benchmark] " << Error.what() << '\n';
