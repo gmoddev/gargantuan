@@ -381,6 +381,30 @@ namespace {
 		}
 	}
 
+	void CheckLegacyStaticCompatibility() {
+		CurrentCase = "legacy-static-compatibility";
+		EditorViewportRenderer Viewport(Size, Size);
+		const auto Lit = Capture(Viewport, Scene(1, false, false)).RgbPixels;
+		auto Initial = Scene(2, true, false);
+		const auto Shadow = Capture(Viewport, Initial).RgbPixels;
+		Require(RedCenter(Lit) > RedCenter(Shadow) + 25,
+			"legacy static caster lost its receiver shadow without a skin pose ledger");
+		Require(Capture(Viewport, Delta(3, 2, Initial->Frame)).RgbPixels == Shadow,
+			"legacy static shadow changed exact warm pixels");
+		SDLRenderer Renderer(Vector2(Size, Size), {
+			.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+		});
+		auto PassScene = Scene(1, true, false);
+		Draw(Renderer, PassScene);
+		const auto Cold = Renderer.GetMetrics();
+		Require(Cold.ShadowMapPasses == 1 && Cold.ShadowPoseChecks == 0,
+			"legacy static depth did not record one map without GPU skin checks");
+		Draw(Renderer, Delta(2, 1, PassScene->Frame));
+		const auto Warm = Renderer.GetMetrics();
+		Require(Warm.ShadowMapPasses == Cold.ShadowMapPasses && Warm.ShadowCacheHits > Cold.ShadowCacheHits,
+			"legacy static depth did not reuse its submitted cache");
+	}
+
 	void CheckEmptyDirectionalCoverage() {
 		CurrentCase = "empty-directional-coverage";
 		SDLRenderer Renderer(Vector2(Size, Size), {
@@ -594,6 +618,7 @@ int main(int ArgumentCount, char **Arguments) try {
 	CheckCascadePasses();
 	CheckSpotPixels();
 	CheckCachedSkinPoseReceipts();
+	CheckLegacyStaticCompatibility();
 	CheckEmptyDirectionalCoverage();
 	CheckIncomingDynamicCasters();
 	CheckAtlasPasses();
