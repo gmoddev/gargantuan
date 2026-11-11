@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <random>
 #include <stdexcept>
 
 namespace {
@@ -10,14 +11,14 @@ namespace {
 	}
 
 	void CheckCorners(const gargantuan::RenderCameraSnapshot &Camera,
-		const gargantuan::SDLDirectionalCascadePlan &Plan) {
+		const gargantuan::SDLDirectionalCascadePlan &Plan, double Aspect = 16.0 / 9.0) {
 		const double Tangent = std::tan(glm::radians(double(Camera.VerticalFieldOfView)) * 0.5);
 		for (const auto &Cascade : Plan.Cascades) {
 			for (const float Depth : {Cascade.Near, Cascade.Far})
 				for (const float X : {-1.0f, 1.0f}) for (const float Y : {-1.0f, 1.0f}) {
 					const glm::dvec3 World = glm::dvec3(Camera.Position) +
 						glm::dvec3(Camera.LookDirection) * double(Depth) +
-						glm::dvec3(Camera.RightDirection) * (X * Depth * Tangent * 16.0 / 9.0) +
+						glm::dvec3(Camera.RightDirection) * (X * Depth * Tangent * Aspect) +
 						glm::dvec3(Camera.UpDirection) * (Y * Depth * Tangent);
 					const auto Clip = glm::dmat4(Cascade.Matrix) *
 						glm::dvec4(World - glm::dvec3(Cascade.Origin), 1.0);
@@ -74,6 +75,24 @@ int main() try {
 	const auto Rotated = MakeSDLDirectionalCascadePlan(Camera, Sun, 16.0f / 9.0f, Settings);
 	Require(Rotated.has_value(), "rotated camera failed");
 	CheckCorners(Camera, *Rotated);
+	std::mt19937 Random(0xC45CADEu);
+	std::uniform_real_distribution<float> Unit(-1.0f, 1.0f);
+	std::uniform_real_distribution<float> Coordinate(-900000.0f, 900000.0f);
+	std::uniform_real_distribution<float> FieldOfView(25.0f, 120.0f);
+	std::uniform_real_distribution<float> AspectRatio(0.7f, 2.5f);
+	for (std::uint32_t Trial = 0; Trial < 1024; ++Trial) {
+		RenderCameraSnapshot Fuzz;
+		Fuzz.Position = {Coordinate(Random), Coordinate(Random), Coordinate(Random)};
+		Fuzz.VerticalFieldOfView = FieldOfView(Random);
+		Fuzz.LookDirection = glm::normalize(glm::vec3(Unit(Random), Unit(Random) * 0.7f, -1.0f));
+		Fuzz.RightDirection = glm::normalize(glm::cross(Fuzz.LookDirection, glm::vec3(0, 1, 0)));
+		Fuzz.UpDirection = glm::normalize(glm::cross(Fuzz.RightDirection, Fuzz.LookDirection));
+		const auto FuzzSun = glm::normalize(glm::vec3(Unit(Random), Unit(Random), Unit(Random) + 0.01f));
+		const auto FuzzAspect = AspectRatio(Random);
+		const auto FuzzPlan = MakeSDLDirectionalCascadePlan(Fuzz, FuzzSun, FuzzAspect, Settings);
+		Require(FuzzPlan.has_value(), "finite randomized camera lost cascade plan");
+		CheckCorners(Fuzz, *FuzzPlan, FuzzAspect);
+	}
 	Require(!MakeSDLDirectionalCascadePlan(Camera, {0, 0, 0}, 1.0f, Settings),
 		"degenerate sun direction admitted");
 	std::cout << "[Render:ShadowCascade] Numerical geometry passed\n";
