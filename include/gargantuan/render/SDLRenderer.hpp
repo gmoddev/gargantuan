@@ -93,6 +93,9 @@ namespace gargantuan {
 		std::uint64_t LastInstanceApplicationNanoseconds = 0;
 		std::uint64_t LastInstanceUploadNanoseconds = 0;
 		std::uint64_t LastInstancePreparationNanoseconds = 0;
+		std::uint64_t LastInstanceTraversalNanoseconds = 0;
+		std::uint64_t LastInstanceCandidateNanoseconds = 0;
+		std::uint64_t LastInstanceVisibleUploadNanoseconds = 0;
 		// Fine timings are populated only with ProfileDetailed; clock overhead is
 		// intentionally excluded from normal performance qualification.
 		std::uint64_t LastCameraTraversalNanoseconds = 0;

@@ -100,8 +100,9 @@ namespace {
 	constexpr std::array<std::string_view, 4> InstanceCounterNames{
 		"InstancedDrawCalls", "InstancedObjects", "InstanceUploadBytes", "VisibleIndexUploadBytes"
 	};
-	constexpr std::array<std::string_view, 3> InstancePhaseNames{
-		"InstanceApplication", "InstanceUpload", "InstancePreparation"
+	constexpr std::array<std::string_view, 6> InstancePhaseNames{
+		"InstanceApplication", "InstanceUpload", "InstancePreparation",
+		"InstanceTraversal", "InstanceCandidate", "InstanceVisibleUpload"
 	};
 
 	struct ScenarioCase {
@@ -877,7 +878,8 @@ namespace {
 				if (Settings.SdlInstancing) {
 					const std::array<std::uint64_t, InstancePhaseNames.size()> InstanceNanoseconds{
 						Metrics.LastInstanceApplicationNanoseconds, Metrics.LastInstanceUploadNanoseconds,
-						Metrics.LastInstancePreparationNanoseconds};
+						Metrics.LastInstancePreparationNanoseconds, Metrics.LastInstanceTraversalNanoseconds,
+						Metrics.LastInstanceCandidateNanoseconds, Metrics.LastInstanceVisibleUploadNanoseconds};
 					for (std::size_t Index = 0; Index < InstanceNanoseconds.size(); ++Index)
 						InstanceTimes[Index].push_back(static_cast<double>(InstanceNanoseconds[Index]) / 1'000'000.0);
 				}

@@ -280,6 +280,9 @@ namespace gargantuan {
 		State->Metrics.LastInstanceApplicationNanoseconds = 0;
 		State->Metrics.LastInstanceUploadNanoseconds = 0;
 		State->Metrics.LastInstancePreparationNanoseconds = 0;
+		State->Metrics.LastInstanceTraversalNanoseconds = 0;
+		State->Metrics.LastInstanceCandidateNanoseconds = 0;
+		State->Metrics.LastInstanceVisibleUploadNanoseconds = 0;
 		State->Metrics.LastCameraTraversalNanoseconds = 0;
 		State->Metrics.LastCameraCullNanoseconds = 0;
 		State->Metrics.LastCameraResidencyNanoseconds = 0;

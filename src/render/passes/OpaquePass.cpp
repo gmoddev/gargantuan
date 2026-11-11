@@ -448,7 +448,12 @@ namespace gargantuan {
 		}
 
 		void PrepareInstanceBatches(SDLFrameContext &Context) {
+			using Clock = std::chrono::steady_clock;
+			const auto TraversalStart = Clock::now();
 			const auto &Ordered = Context.Projection.GetCompactTraversal();
+			const auto CandidateStart = Clock::now();
+			if (Context.Metrics) Context.Metrics->LastInstanceTraversalNanoseconds =
+				std::chrono::duration_cast<std::chrono::nanoseconds>(CandidateStart - TraversalStart).count();
 			InstanceActions.assign(Ordered.size(), -1);
 			InstanceBatches.clear();
 			InstanceCoverageGrid.Clear();
@@ -532,7 +537,12 @@ namespace gargantuan {
 				Pending.emplace_back(Position, *Slot);
 			}
 			Flush();
+			const auto UploadStart = Clock::now();
+			if (Context.Metrics) Context.Metrics->LastInstanceCandidateNanoseconds =
+				std::chrono::duration_cast<std::chrono::nanoseconds>(UploadStart - CandidateStart).count();
 			if (!InstanceBatches.empty()) VisibleInstances.Upload(Context.Commands, Context.Metrics);
+			if (Context.Metrics) Context.Metrics->LastInstanceVisibleUploadNanoseconds =
+				std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - UploadStart).count();
 		}
 
 		void DrawWorld(SDL_GPUDevice *Gpu, SDL_GPURenderPass *Pass, SDLFrameContext &Context, SDL_GPUTextureSamplerBinding ShadowBinding,
