@@ -1214,7 +1214,7 @@ namespace {
 
 	void TestPhysicsPublicationNestedMutation() {
 		auto Game = std::make_shared<DataModel>();
-		auto Workspace = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
 		if (!Workspace) return;
 		Check(Workspace->GetReplicationScopeId() == Game->GetObjectId(),
 			"physics callback fixture retains an authoritative DataModel scope");
@@ -1287,7 +1287,7 @@ namespace {
 
 	void TestPhysicsPublicationThrowKeepsAuthoredHistory() {
 		auto Game = std::make_shared<DataModel>();
-		auto Workspace = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
 		if (!Workspace) return;
 		Check(Workspace->GetReplicationScopeId() == Game->GetObjectId(),
 			"throwing physics callback fixture retains an authoritative DataModel scope");
