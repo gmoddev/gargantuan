@@ -509,6 +509,19 @@ namespace {
 			Coalesced->Updates[0].Item.ModelMatrix[3].x == 99.0f,
 			"redundant transform and material writes coalesce into one final-state update"
 		);
+		RenderPublisher ReferencePublisher;
+		const auto Reference = ReferencePublisher.Publish(*World, Camera, 640, 360);
+		Check(Reference->FullResync && Reference->Creates.size() == 1,
+			"independent full resync captures the updated Part");
+		if (Coalesced->Updates.size() == 1 && Reference->Creates.size() == 1) {
+			const auto &Incremental = Coalesced->Updates.front().Item;
+			const auto &Complete = Reference->Creates.front().Item;
+			Check(Incremental.Object == Complete.Object && Incremental.Geometry == Complete.Geometry &&
+				Incremental.ModelMatrix == Complete.ModelMatrix &&
+				Incremental.InverseModelMatrix == Complete.InverseModelMatrix &&
+				Incremental.Color == Complete.Color && Incremental.CastShadow == Complete.CastShadow,
+				"incremental final-state extraction matches independent full resync values");
+		}
 
 		auto CreatedAndUpdated = std::make_shared<Part>();
 		CreatedAndUpdated->SetParent(World);
@@ -566,6 +579,42 @@ namespace {
 			"returning to a prior publication scope retains the consumer and performs a full resync"
 		);
 		SecondGame->Destroy();
+		Game->Destroy();
+	}
+
+	void TestIncrementalWorldMembership() {
+		using namespace gargantuan;
+		ChangeJournal::Get().Clear();
+		RenderDirtyAccumulator::Get().Clear();
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto InWorld = std::make_shared<Folder>();
+		InWorld->SetParent(World);
+		auto Nested = std::make_shared<Folder>();
+		Nested->SetParent(InWorld);
+		auto OutsideWorld = std::make_shared<Folder>();
+		OutsideWorld->SetParent(Game);
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetParent(Nested);
+		const auto Object = PartValue->GetObjectId();
+		RenderPublisher Publisher;
+		const auto Initial = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Initial->FullResync && Initial->Creates.size() == 1 &&
+			Initial->Creates.front().Item.Object == Object,
+			"full resync includes a Part below nested folders in WorldRoot");
+		Nested->SetParent(OutsideWorld);
+		const auto Removed = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(!Removed->FullResync && Removed->Removes.size() == 1 && Removed->Removes.front().Object == Object,
+			"incremental publication removes descendants transferred outside WorldRoot");
+		Nested->SetParent(InWorld);
+		const auto Restored = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(!Restored->FullResync && Restored->Creates.size() == 1 &&
+			Restored->Creates.front().Item.Object == Object,
+			"incremental publication restores the same generation below nested folders");
+		PartValue->Destroy();
+		const auto Destroyed = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Destroyed->Removes.size() == 1 && Destroyed->Removes.front().Object == Object,
+			"destroyed nested Part removes its generation-safe identity");
 		Game->Destroy();
 	}
 
@@ -1487,6 +1536,7 @@ int main() {
 		TestDeformableAndGuiContracts();
 		TestAnimationPaletteContracts();
 		TestIncrementalPublisher();
+		TestIncrementalWorldMembership();
 		TestDirtyAccumulatorBoundsAndConsumers();
 		TestSingleObjectBatchDirtyParity();
 		TestEnvironmentLightingFoundation();
