@@ -10,6 +10,7 @@
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -72,6 +73,16 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> PhysicsConnections;
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> JointAttachmentConnections;
 		std::unordered_set<ObjectId> DirtyBodies;
+		// Test-only, Main-owned attribution. Normal listener behavior is unchanged when disabled.
+		struct CFrameDirtyCallbackProfile {
+			std::uint64_t Calls = 0;
+			std::uint64_t NewDirty = 0;
+			std::uint64_t Coalesced = 0;
+			std::uint64_t Suppressed = 0;
+			std::uint64_t Nanoseconds = 0;
+		};
+		bool ProfileCFrameDirtyCallback = false;
+		CFrameDirtyCallbackProfile CFrameDirtyProfile;
 		std::unordered_set<ObjectId> FailedMeshUpdatesLogged;
 		std::unordered_set<ObjectId> DirtyDeformables;
 		std::unordered_set<ObjectId> DirtyConstraints;

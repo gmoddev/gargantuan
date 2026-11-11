@@ -14,6 +14,7 @@
 #include "gargantuan/scripting/StackValue.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <lua.h>
@@ -255,7 +256,18 @@ namespace gargantuan {
 			if (!ShuttingDownPhysics && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
 		};
 		auto MarkCFrameDirty = [this, Id](std::monostate) {
-			if (!ShuttingDownPhysics && PublishingPhysicsPart != Id && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
+			if (!ProfileCFrameDirtyCallback) {
+				if (!ShuttingDownPhysics && PublishingPhysicsPart != Id && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
+				return;
+			}
+			const auto Start = std::chrono::steady_clock::now();
+			++CFrameDirtyProfile.Calls;
+			if (!ShuttingDownPhysics && PublishingPhysicsPart != Id && TrackedParts.contains(Id)) {
+				if (DirtyBodies.insert(Id).second) ++CFrameDirtyProfile.NewDirty;
+				else ++CFrameDirtyProfile.Coalesced;
+			} else ++CFrameDirtyProfile.Suppressed;
+			CFrameDirtyProfile.Nanoseconds += static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Start).count());
 		};
 		auto &Connections = PhysicsConnections[Id];
 		Connections.push_back(Part->GetPropertyChangedSignal("CFrame")->Connect(MarkCFrameDirty));
