@@ -121,6 +121,9 @@ namespace {
 			)));
 			if (GroupWidth == 0) Value->SetParent(World);
 			else Value->SetParent(Groups[Index / GroupWidth]);
+			// CreatePartBody normally populates World.Parts after native body
+			// admission. The renderer-only fixture must supply that same list.
+			if (RendererOnly) World->Parts.push_back(Value);
 			Parts.push_back(std::move(Value));
 		}
 		RenderPublisher Publisher;
