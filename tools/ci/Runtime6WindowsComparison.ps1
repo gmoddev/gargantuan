@@ -6,7 +6,7 @@
 param(
     [Parameter(Mandatory = $true)][string] $BaselineSource,
     [Parameter(Mandatory = $true)][string] $CandidateSource,
-    [Parameter(Mandatory = $true)][ValidateSet('core', 'cframe', 'compact', 'realistic', 'gameplay', 'signals', 'signals_compare', 'dirty_compare', 'luau')][string] $Suite,
+    [Parameter(Mandatory = $true)][ValidateSet('core', 'cframe', 'compact', 'realistic', 'gameplay', 'signals', 'signals_compare', 'dirty_compare', 'dirty_drain', 'luau')][string] $Suite,
     [Parameter(Mandatory = $true)][string] $ShaderCompiler,
     [Parameter(Mandatory = $true)][string] $EvidenceRoot
 )
@@ -130,8 +130,8 @@ try {
         }
         if ($Suite -eq 'gameplay') { $Targets += 'gargantuan_game_session_benchmark' }
         if ($Suite -eq 'luau') { $Targets += 'gargantuan_runtime6_luau_mutation_benchmark' }
-        if ($Suite -in @('signals', 'signals_compare', 'dirty_compare')) { $Targets += 'gargantuan_runtime6_physics_listener_probe' }
-        if ($Suite -eq 'dirty_compare' -and $Arm -eq 'candidate') {
+        if ($Suite -in @('signals', 'signals_compare', 'dirty_compare', 'dirty_drain')) { $Targets += 'gargantuan_runtime6_physics_listener_probe' }
+        if ($Suite -in @('dirty_compare', 'dirty_drain') -and $Arm -eq 'candidate') {
             $Targets += 'gargantuan_runtime6_dirty_binding_fault_tests'
         }
         Invoke-Checked "$Arm build" (Join-Path $ArmRoot 'build.log') {
@@ -148,8 +148,10 @@ try {
         if ($Suite -eq 'realistic') { $Tests += @('gargantuan_runtime6_realistic_publication_probe_smoke',
             'gargantuan_runtime6_realistic_publication_probe_quiet_smoke') }
         if ($Suite -eq 'compact' -and $Arm -eq 'candidate') { $Tests += 'gargantuan_runtime6_physics_sync_fault' }
-        if ($Suite -eq 'dirty_compare' -and $Arm -eq 'candidate') { $Tests += 'gargantuan_runtime6_dirty_binding_fault' }
-        if ($Suite -in @('signals', 'signals_compare', 'dirty_compare')) {
+        if ($Suite -in @('dirty_compare', 'dirty_drain') -and $Arm -eq 'candidate') { $Tests += 'gargantuan_runtime6_dirty_binding_fault' }
+        if ($Suite -eq 'dirty_drain') { $Tests += @('gargantuan_runtime6_physics_listener_native_drain',
+            'gargantuan_runtime6_physics_listener_native_drain_unprofiled') }
+        if ($Suite -in @('signals', 'signals_compare', 'dirty_compare', 'dirty_drain')) {
             $Tests += @('gargantuan_runtime6_physics_listener_native',
                 'gargantuan_runtime6_physics_listener_renderer', 'gargantuan_runtime6_physics_listener_counterfactual')
         }
@@ -179,7 +181,7 @@ try {
         }
         if ($Suite -eq 'gameplay') { $FreezeTargets += 'gargantuan_game_session_benchmark' }
         if ($Suite -eq 'luau') { $FreezeTargets += 'gargantuan_runtime6_luau_mutation_benchmark' }
-        if ($Suite -in @('signals', 'signals_compare', 'dirty_compare')) { $FreezeTargets += 'gargantuan_runtime6_physics_listener_probe' }
+        if ($Suite -in @('signals', 'signals_compare', 'dirty_compare', 'dirty_drain')) { $FreezeTargets += 'gargantuan_runtime6_physics_listener_probe' }
         $Hashes = @{}
         foreach ($Target in $FreezeTargets) {
             $Name = "$Target.exe"

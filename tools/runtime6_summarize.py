@@ -17,8 +17,10 @@ import statistics
 SCHEMAS = {
     "gargantuan_runtime_foundation6_benchmark": {
         "facets": ("Scenario", "Elements", "GroupWidth", "RendererOnly", "ProfileEnabled",
-                   "CFrameProfileEnabled", "ExpectedUpdates", "WritesPerObject"),
+                   "CFrameProfileEnabled", "ExpectedUpdates", "WritesPerObject",
+                   "DrawBackend", "ContiguousInstancing"),
         "stages": ("DirtyAccumulationMs", "PublicationGenerationMs", "ProjectionApplyMs",
+                   "DrawAndWaitMs", "MutationToCompletionMs",
                    "DirtyCaptureMs", "DirtyExpansionMs", "FinalStateExtractionMs",
                    "PublicationConstructionMs", "PublisherReconciliationMs", "JournalMs",
                    "ClassificationMs", "AccumulatorMs", "JournalRecords", "CFrameCommittedWrites",
@@ -30,8 +32,10 @@ SCHEMAS = {
     },
     "gargantuan_runtime6_allocation_benchmark": {
         "facets": ("Scenario", "Elements", "GroupWidth", "RendererOnly", "ProfileEnabled",
-                   "CFrameProfileEnabled", "ExpectedUpdates", "WritesPerObject"),
+                   "CFrameProfileEnabled", "ExpectedUpdates", "WritesPerObject",
+                   "DrawBackend", "ContiguousInstancing"),
         "stages": ("DirtyAccumulationMs", "PublicationGenerationMs", "ProjectionApplyMs",
+                   "DrawAndWaitMs", "MutationToCompletionMs",
                    "DirtyCaptureMs", "DirtyExpansionMs", "FinalStateExtractionMs",
                    "PublicationConstructionMs", "PublisherReconciliationMs", "JournalMs",
                    "ClassificationMs", "AccumulatorMs", "JournalRecords", "FrameCppNewCalls",
