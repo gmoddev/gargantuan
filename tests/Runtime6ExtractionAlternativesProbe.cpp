@@ -147,12 +147,15 @@ namespace {
 		return Output;
 	}
 
-	using Snapshot = std::unordered_map<ObjectId, RenderItem>;
+	// Each replacement record is immutable after publication; the Main-owned
+	// catalog selects the latest generation-safe record for downstream readers.
+	using Snapshot = std::unordered_map<ObjectId, std::shared_ptr<const RenderItem>>;
 
 	void SynchronizeSnapshot(Snapshot &Items, const std::vector<ObjectId> &Objects) {
 		for (const auto Object : Objects) {
 			auto Value = Resolve(Object);
-			if (Value) Items.insert_or_assign(Object, Project(Object, ReadSource(*Value)));
+			if (Value) Items.insert_or_assign(Object,
+				std::make_shared<const RenderItem>(Project(Object, ReadSource(*Value))));
 			else Items.erase(Object);
 		}
 	}
@@ -164,7 +167,7 @@ namespace {
 		Output.reserve(Objects.size());
 		for (const auto Object : Objects) {
 			const auto Found = Items.find(Object);
-			Output.emplace_back(Found == Items.end() ? std::nullopt : std::optional(Found->second));
+			Output.emplace_back(Found == Items.end() ? std::nullopt : std::optional(*Found->second));
 		}
 		return Output;
 	}
@@ -226,7 +229,7 @@ int main(int ArgCount, char **Args) {
 			const auto Object = Value->GetObjectId();
 			const auto Source = ReadSource(*Value);
 			Slots.Set(Object, Source);
-			Items.emplace(Object, Project(Object, Source));
+			Items.emplace(Object, std::make_shared<const gargantuan::RenderItem>(Project(Object, Source)));
 		}
 		Dirty.Clear();
 		const auto Consumer = Dirty.CreateConsumer();
@@ -333,7 +336,7 @@ int main(int ArgCount, char **Args) {
 			const auto Object = Value->GetObjectId();
 			const auto Source = ReadSource(*Value);
 			FullSlots.Set(Object, Source);
-			FullItems.emplace(Object, Project(Object, Source));
+			FullItems.emplace(Object, std::make_shared<const gargantuan::RenderItem>(Project(Object, Source)));
 		}
 		const auto FullSyncMs = Milliseconds(Clock::now() - FullSyncStart);
 		const auto FullConsumeStart = Clock::now();
