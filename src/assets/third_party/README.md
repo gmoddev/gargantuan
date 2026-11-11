@@ -6,7 +6,8 @@ The file includes its public-domain or MIT license grant. Engine compiles only
 its Radiance HDR decoder, with stdio disabled and dimensions bounded before
 pixel decode.
 
-Local decoder patch: `stbi__hdr_load` checks every four-byte flat pixel,
+Local decoder patch: `stbi__getn` compares remaining bytes before pointer
+arithmetic, and `stbi__hdr_load` checks every four-byte flat pixel,
 four-byte RLE scanline header, run count/value, and literal byte read for EOF.
 Upstream used an unchecked `stbi__getn` for flat pixels and `stbi__get8` for
 RLE bytes; the latter returns zero at EOF. A truncated flat pixel could use
