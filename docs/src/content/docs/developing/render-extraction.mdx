@@ -115,6 +115,12 @@ device-local primitive/dynamic mesh cache and resolves the publication's
 uploaded once and stable-topology deformable publications update only the
 validated vertex range.
 
+Optional SDL instancing derives a primitive mesh's immutable local bounds from
+the exact vertex positions held for GPU upload. Empty, nonfinite, or out-of-range
+positions leave the bounds unavailable and use the ordinary draw path. Imported
+meshes with skin influences and meshes whose vertices change do not retain
+immutable instancing bounds. Native instancing remains opt-in.
+
 Fatal world/camera/viewport errors reject the whole candidate publication.
 Individual invalid items are skipped with explicit extraction diagnostics.
 Unavailable GPU primitive resources are reported and skipped by the renderer.

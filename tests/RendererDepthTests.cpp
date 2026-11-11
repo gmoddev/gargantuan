@@ -3,7 +3,9 @@
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
+#include "gargantuan/render/PrimitiveMeshes.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
+#include "render/sdl/SDLGpuMesh.hpp"
 #include "render/sdl/SDLSceneDepth.hpp"
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -32,6 +34,64 @@
 using namespace gargantuan;
 
 namespace {
+
+void CheckPrimitivePositionBounds() {
+	const auto CheckMesh = [](Mesh Source, const glm::vec3 &Minimum, const glm::vec3 &Maximum) {
+		SDLGpuMesh GpuMesh(std::move(Source));
+		if (!GpuMesh.ImmutablePositionBounds ||
+			!glm::all(glm::equal(GpuMesh.ImmutablePositionBounds->Minimum, Minimum)) ||
+			!glm::all(glm::equal(GpuMesh.ImmutablePositionBounds->Maximum, Maximum)))
+			throw std::runtime_error("Primitive immutable bounds differ from uploaded vertex positions");
+	};
+	CheckMesh(PrimitiveMeshes::Block(), glm::vec3(-0.5f), glm::vec3(0.5f));
+	CheckMesh(PrimitiveMeshes::Wedge(), glm::vec3(-0.5f), glm::vec3(0.5f));
+	SDLGpuMesh Empty(Mesh{});
+	if (Empty.ImmutablePositionBounds)
+		throw std::runtime_error("Empty mesh must not expose immutable instancing bounds");
+	auto Invalid = PrimitiveMeshes::Block();
+	Invalid.Vertices.front().Position.x = std::numeric_limits<float>::infinity();
+	if (SDLGpuMesh(std::move(Invalid)).ImmutablePositionBounds)
+		throw std::runtime_error("Nonfinite mesh must not expose immutable instancing bounds");
+	auto Unbounded = PrimitiveMeshes::Block();
+	Unbounded.Vertices.front().Position.x = 1.0e7f;
+	if (SDLGpuMesh(std::move(Unbounded)).ImmutablePositionBounds)
+		throw std::runtime_error("Out-of-range mesh must not expose immutable instancing bounds");
+}
+
+void CheckPrimitivePartInstancing() {
+	BootstrapNativeRuntimeSchema();
+	auto Game = std::make_shared<DataModel>();
+	auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+	const std::array Shapes{Enums::PartType::Block, Enums::PartType::Ball, Enums::PartType::Cylinder};
+	std::array<std::shared_ptr<Part>, Shapes.size()> Parts;
+	for (std::size_t Index = 0; Index < Shapes.size(); ++Index) {
+		auto Value = std::make_shared<Part>();
+		Value->SetShape(Shapes[Index]);
+		Value->SetAnchored(true);
+		Value->SetCastShadow(false);
+		Value->SetCFrame(CFrame(glm::vec3(static_cast<float>(Index) * 2.0f - 2.0f, 0.0f, 0.0f)));
+		Value->SetParent(World);
+		Parts[Index] = std::move(Value);
+	}
+	RenderPublisher Publisher;
+	auto Publication = Publisher.Publish(*World,
+		MakeLookAtRenderCameraInput({0.0f, 0.0f, 20.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}), 800, 600);
+	if (!Publication->FullResync || Publication->Creates.size() != Parts.size())
+		throw std::runtime_error("Primitive Part publication fixture is incomplete");
+	SDLRenderer Renderer({800, 600}, {.Offscreen = true, .WaitForGpuCompletion = true,
+		.DebugDevice = false, .EnableInstancing = true, .UseContiguousInstancing = true});
+	if (Renderer.GetDriverName() != "vulkan")
+		throw std::runtime_error("Primitive Part instancing physical gate requires Vulkan");
+	Renderer.Draw(Publication);
+	Renderer.WaitForIdle();
+	const auto Metrics = Renderer.GetMetrics();
+	if (Metrics.FramesSubmitted != 1 || Metrics.FullResyncs != 1 ||
+		Metrics.ContiguousInstancedDrawCalls == 0 || Metrics.InstancedObjects < Parts.size())
+		throw std::runtime_error("Block/Ball/Cylinder Parts did not issue a contiguous native instance draw");
+	std::cout << "[Render:PrimitiveInstances] draws=" << Metrics.ContiguousInstancedDrawCalls
+		<< " objects=" << Metrics.InstancedObjects << '\n';
+	Game->Destroy();
+}
 
 struct Box { glm::dvec3 Center; glm::dvec3 Size; };
 const std::array<Box, 2> Scene{{{{-50.125, 0, 74.25}, {205.75, 1, 341}},
@@ -511,7 +571,7 @@ int main(int Argc, char **Argv) {
 #endif
 	try {
 		bool Observe = false, Extended = false, OpaqueOrdering = false, InstancingOrdering = false,
-			SceneEnvelopePixels = false, ContiguousInstancing = false;
+			SceneEnvelopePixels = false, ContiguousInstancing = false, PrimitiveInstancing = false;
 		float Near = .1f, Far = 100000;
 		std::string Projection = "production";
 		std::filesystem::path Output;
@@ -523,6 +583,7 @@ int main(int Argc, char **Argv) {
 			else if (Argument == "--instancing-ordering") InstancingOrdering = true;
 			else if (Argument == "--scene-envelope-pixels") SceneEnvelopePixels = true;
 			else if (Argument == "--contiguous-instancing") ContiguousInstancing = true;
+			else if (Argument == "--primitive-instancing") PrimitiveInstancing = true;
 			else if (Argument.starts_with("--near=")) Near = std::stof(Argument.substr(7));
 			else if (Argument.starts_with("--far=")) Far = std::stof(Argument.substr(6));
 			else if (Argument.starts_with("--projection=")) Projection = Argument.substr(13);
@@ -530,6 +591,11 @@ int main(int Argc, char **Argv) {
 			else throw std::invalid_argument("Unknown depth test argument");
 		}
 		if (!Output.empty()) std::filesystem::create_directories(Output);
+		CheckPrimitivePositionBounds();
+		if (PrimitiveInstancing) {
+			CheckPrimitivePartInstancing();
+			return 0;
+		}
 		if (OpaqueOrdering) {
 			CheckOpaqueOrdering(Output);
 			return 0;
