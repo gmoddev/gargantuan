@@ -70,9 +70,17 @@ jobs:
             -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=OFF -DGARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS=OFF \
             -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF \
             -DGARGANTUAN_GLSLC_EXECUTABLE="$(command -v glslc)" 2>&1 | tee lifetime-evidence/configure.log
-          cmake --build build-lifetime --parallel 3 --target gargantuan_runtime6_luau_mutation_benchmark \
+          cmake --build build-lifetime --parallel 3 --target gargantuan_runtime6_luau_mutation_benchmark gargantuan_foundation_tests \
             2>&1 | tee lifetime-evidence/build.log
           sha256sum build-lifetime/gargantuan_runtime6_luau_mutation_benchmark > lifetime-evidence/binary.sha256
+      - name: Run coroutine root, reentrant lifecycle and activation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-lifetime --output-on-failure --no-tests=error \
+            --timeout 300 -R '^gargantuan_foundation$' \
+            --output-junit "$GITHUB_WORKSPACE/lifetime-evidence/foundation.xml" \
+            2>&1 | tee lifetime-evidence/foundation.log
       - name: Run bounded fresh-process GC and capture lifetime matrix
         shell: bash
         run: |
