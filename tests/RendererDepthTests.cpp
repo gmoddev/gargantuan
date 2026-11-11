@@ -67,15 +67,18 @@ void CheckPrimitivePartInstancing() {
 	for (std::size_t Index = 0; Index < Shapes.size(); ++Index) {
 		auto Value = std::make_shared<Part>();
 		Value->SetShape(Shapes[Index]);
+		Value->SetColor(Index == 0 ? Color3(1.0f, 0.0f, 0.0f)
+			: Index == 1 ? Color3(0.0f, 1.0f, 0.0f) : Color3(0.0f, 0.0f, 1.0f));
 		Value->SetAnchored(true);
 		Value->SetCastShadow(false);
-		Value->SetCFrame(CFrame(glm::vec3(static_cast<float>(Index) * 2.0f - 2.0f, 0.0f, 0.0f)));
+		Value->SetCFrame(CFrame(glm::vec3(static_cast<float>(Index) * 4.0f - 4.0f, 0.0f, 0.0f)));
 		Value->SetParent(World);
 		Parts[Index] = std::move(Value);
 	}
 	RenderPublisher Publisher;
-	auto Publication = Publisher.Publish(*World,
-		MakeLookAtRenderCameraInput({0.0f, 0.0f, 20.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}), 800, 600);
+	const auto Camera = MakeLookAtRenderCameraInput(
+		{0.0f, 0.0f, 20.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+	auto Publication = Publisher.Publish(*World, Camera, 800, 600);
 	if (!Publication->FullResync || Publication->Creates.size() != Parts.size())
 		throw std::runtime_error("Primitive Part publication fixture is incomplete");
 	SDLRenderer Renderer({800, 600}, {.Offscreen = true, .WaitForGpuCompletion = true,
@@ -88,6 +91,23 @@ void CheckPrimitivePartInstancing() {
 	if (Metrics.FramesSubmitted != 1 || Metrics.FullResyncs != 1 ||
 		Metrics.ContiguousInstancedDrawCalls == 0 || Metrics.InstancedObjects < Parts.size())
 		throw std::runtime_error("Block/Ball/Cylinder Parts did not issue a contiguous native instance draw");
+	EditorViewportRenderer Candidate(800, 600, true, true, false, true);
+	EditorViewportRenderer Reference(800, 600);
+	auto PreviousPixels = Candidate.Capture(Publication).RgbPixels;
+	if (PreviousPixels.empty() || PreviousPixels != Reference.Capture(Publication).RgbPixels)
+		throw std::runtime_error("Real primitive Parts changed visible pixels under contiguous instancing");
+	const std::array Names{"Block", "Ball", "Cylinder"};
+	for (std::size_t Index = 0; Index < Parts.size(); ++Index) {
+		Parts[Index]->SetTransparency(1.0f);
+		auto Changed = Publisher.Publish(*World, Camera, 800, 600);
+		auto ActualPixels = Candidate.Capture(Changed).RgbPixels;
+		if (ActualPixels != Reference.Capture(Changed).RgbPixels)
+			throw std::runtime_error(std::string(Names[Index]) +
+				" Part changed visible pixels under contiguous instancing");
+		if (ActualPixels == PreviousPixels)
+			throw std::runtime_error(std::string(Names[Index]) + " Part contributed no visible pixels");
+		PreviousPixels = std::move(ActualPixels);
+	}
 	std::cout << "[Render:PrimitiveInstances] draws=" << Metrics.ContiguousInstancedDrawCalls
 		<< " objects=" << Metrics.InstancedObjects << '\n';
 	Game->Destroy();
