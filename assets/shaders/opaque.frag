@@ -16,19 +16,8 @@ layout(location = 10) flat in vec4 FragmentColorSamplerModes;
 
 layout(location = 0) out vec4 OutputColor;
 
-layout(set = 3, binding = 0) uniform WorldUniforms {
-    mat4 ViewMatrix;
-    mat4 ProjectionMatrix;
-    mat4 ShadowBiasMatrix;
-    vec4 SunDirectionIntensity;
-    vec4 AmbientExposure;
-    vec4 SunColorFogEnabled;
-    vec4 FogColorStart;
-    vec4 CameraPositionFogEnd;
-    vec4 EnvironmentLighting;
-    vec4 EnvironmentRotationTone;
-    vec4 LocalLighting;
-} world;
+#define WORLD_UNIFORM_SET 3
+#include "world-uniforms.glsl"
 
 layout(set = 2, binding = 0) uniform sampler2DShadow ShadowMap;
 layout(set = 2, binding = 1) uniform sampler2D BaseColorTexture;
