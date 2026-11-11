@@ -189,6 +189,42 @@ int main() try {
 	const auto AfterNegativePole = LightPlaneX({-0.000001f, -1, 0});
 	Require(glm::dot(BeforeNegativePole, AfterNegativePole) > 0.999f,
 		"spotlight light plane jumped at the negative Y pole");
+	// A captured float32 camera at a large coordinate. The precombined VP
+	// right plane excludes this 0.101-radius source, while the staged shader
+	// transform puts its center on the visible side of the right clip plane.
+	RenderFrameState LargeFrame;
+	LargeFrame.Camera.Position = {8970941.0f, 8221246.5f, 9602025.0f};
+	LargeFrame.Camera.ProjectionMatrix = glm::mat4(
+		glm::vec4(0.8033333f, 0, 0, 0), glm::vec4(0, 1.428148f, 0, 0),
+		glm::vec4(0, 0, -1.001001f, -1), glm::vec4(0, 0, -0.1001001f, 0));
+	LargeFrame.Camera.ViewMatrix = glm::mat4(
+		glm::vec4(-0.72518361f, -0.56743336f, 0.39003608f, 0),
+		glm::vec4(0, 0.56645548f, 0.82409233f, 0),
+		glm::vec4(-0.68855554f, 0.59761822f, -0.41078421f, 0),
+		glm::vec4(13117107.0f, -5304904.0f, -6329696.5f, 1));
+	LargeFrame.Camera.ViewProjectionMatrix = glm::mat4(
+		glm::vec4(-0.58256412f, -0.81037885f, -0.39042652f, -0.39003608f),
+		glm::vec4(0, 0.80898231f, -0.82491726f, -0.82409233f),
+		glm::vec4(-0.55313957f, 0.85348731f, 0.41119540f, 0.41078421f),
+		glm::vec4(10537409.0f, -7576188.0f, 6336032.5f, 6329696.5f));
+	RenderLocalLightState EdgeLight = (*Lights)[0];
+	EdgeLight.Position = {8970932.0f, 8221241.0f, 9602022.0f};
+	EdgeLight.Range = 0.101f;
+	LargeFrame.Environment.LocalLights = std::make_shared<const std::vector<RenderLocalLightState>>(
+		std::initializer_list<RenderLocalLightState>{EdgeLight});
+	const glm::vec4 Staged = LargeFrame.Camera.ProjectionMatrix *
+		(LargeFrame.Camera.ViewMatrix * glm::vec4(EdgeLight.Position, 1.0f));
+	const auto Rows = glm::transpose(glm::dmat4(LargeFrame.Camera.ViewProjectionMatrix));
+	const auto RightPlane = Rows[3] - Rows[0];
+	const double AggregatedDistance = glm::dot(glm::dvec3(RightPlane),
+		glm::dvec3(EdgeLight.Position)) + RightPlane.w;
+	const double SphereRadius = glm::length(glm::dvec3(RightPlane)) * EdgeLight.Range;
+	Require(Staged.w - Staged.x > 0.5f && AggregatedDistance < -SphereRadius - 0.25,
+		"large-coordinate fixture did not discriminate staged and aggregated frustum tests");
+	SDLSpotShadowAtlas EdgeAtlas;
+	EdgeAtlas.Prepare(LargeFrame, nullptr);
+	Require(EdgeAtlas.GetAssignments().size() == 1,
+		"large-coordinate visible spotlight was rejected by aggregated float VP cancellation");
 	std::cout << "[Render:SpotShadowAtlas] Budget, stable assignment and lifetime passed\n";
 	return 0;
 } catch (const std::exception &Error) {

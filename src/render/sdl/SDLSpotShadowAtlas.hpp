@@ -17,6 +17,7 @@
 #include <cmath>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
+#include <limits>
 #include <optional>
 #include <unordered_set>
 #include <utility>
@@ -290,15 +291,28 @@ namespace gargantuan {
 				glm::lookAt(glm::vec3(0), Direction, Up);
 		}
 		[[nodiscard]] static bool IsVisible(const RenderFrameState &Frame, const RenderLocalLightState &Light) {
-			const auto Rows = glm::transpose(glm::dmat4(Frame.Camera.ViewProjectionMatrix));
+			// Match the world shader's Projection * (View * position) association.
+			// Re-evaluating a precombined float VP plane at a large world coordinate
+			// can cancel differently and reject a light whose center is on screen.
+			const glm::vec4 ViewCenter = Frame.Camera.ViewMatrix * glm::vec4(Light.Position, 1.0f);
+			const glm::vec4 Clip = Frame.Camera.ProjectionMatrix * ViewCenter;
+			if (!std::isfinite(Clip.x) || !std::isfinite(Clip.y) ||
+				!std::isfinite(Clip.z) || !std::isfinite(Clip.w)) return true;
+			const auto Rows = glm::transpose(glm::dmat4(Frame.Camera.ProjectionMatrix) *
+				glm::dmat4(Frame.Camera.ViewMatrix));
 			const std::array Planes{Rows[3] + Rows[0], Rows[3] - Rows[0], Rows[3] + Rows[1],
 				Rows[3] - Rows[1], Rows[2], Rows[3] - Rows[2]};
-			const glm::dvec3 Center(Light.Position);
-			for (const auto &Plane : Planes) {
+			const std::array Distances{Clip.w + Clip.x, Clip.w - Clip.x, Clip.w + Clip.y,
+				Clip.w - Clip.y, Clip.z, Clip.w - Clip.z};
+			const double PositionScale = std::max({1.0, std::abs(double(Light.Position.x)),
+				std::abs(double(Light.Position.y)), std::abs(double(Light.Position.z))});
+			for (std::size_t Index = 0; Index < Planes.size(); ++Index) {
+				const auto &Plane = Planes[Index];
 				const auto Normal = glm::dvec3(Plane);
-				const auto Distance = glm::dot(Normal, Center) + Plane.w;
 				const auto Radius = glm::length(Normal) * Light.Range;
-				if (std::isfinite(Distance) && std::isfinite(Radius) && Distance < -Radius - 1e-5)
+				const double Roundoff = 8.0 * std::numeric_limits<float>::epsilon() *
+					PositionScale * glm::length(Normal);
+				if (std::isfinite(Radius) && double(Distances[Index]) < -Radius - Roundoff - 1e-5)
 					return false;
 			}
 			return true;
