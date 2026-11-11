@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      BASELINE_SOURCE: ${{ inputs.baseline_source || '9fe8ead97759f4f9a639102c3695ba51b0090d57' }}
+      BASELINE_SOURCE: ${{ inputs.baseline_source || '2f4ef8d90126c24a236d52476c769dd199ae99a8' }}
       CANDIDATE_SOURCE: ${{ inputs.candidate_source || github.sha }}
       COMPARISON_SUITE: ${{ inputs.suite || 'core' }}
     steps:

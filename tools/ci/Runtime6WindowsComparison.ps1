@@ -135,6 +135,7 @@ try {
         & sccache --show-stats | Set-Content -LiteralPath (Join-Path $ArmRoot 'sccache-stats.txt')
         if ($LASTEXITCODE -ne 0) { throw "[Runtime6:WindowsCompare] sccache stats unavailable for $Arm" }
         & sccache --stop-server | Set-Content -LiteralPath (Join-Path $ArmRoot 'sccache-stop.txt')
+        if ($LASTEXITCODE -ne 0) { throw "[Runtime6:WindowsCompare] Compilation cache did not stop before testing: $Arm" }
         $Tests = @('gargantuan_foundation', 'gargantuan_prepared_property',
             'gargantuan_renderer_publication', 'gargantuan_physics_backend',
             'gargantuan_runtime_foundation6_smoke', 'gargantuan_runtime6_extraction_alternatives',
