@@ -543,6 +543,8 @@ namespace gargantuan {
 			Metrics.MaterialUploadStagingBytes = State->TextureResources->GetMaterialUploadStagingBytes();
 			Metrics.MaterialViewEvictions = State->TextureResources->GetMaterialViewEvictions();
 			Metrics.DeferredMaterialViewUploads = State->TextureResources->GetDeferredMaterialViewUploads();
+			Metrics.MaterialSourceEvictions = State->TextureResources->GetMaterialSourceEvictions();
+			Metrics.MaterialSourceRehydrates = State->TextureResources->GetMaterialSourceRehydrates();
 		}
 		return Metrics;
 	}

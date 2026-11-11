@@ -144,6 +144,8 @@ namespace gargantuan {
 		std::uint64_t LastProbePreparationNanoseconds = 0;
 		std::uint64_t MaterialViewEvictions = 0;
 		std::uint64_t DeferredMaterialViewUploads = 0;
+		std::uint64_t MaterialSourceEvictions = 0;
+		std::uint64_t MaterialSourceRehydrates = 0;
 	};
 
 	class SDLRenderer final : public BaseRenderer {

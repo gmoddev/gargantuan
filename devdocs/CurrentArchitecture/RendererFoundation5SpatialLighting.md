@@ -112,8 +112,9 @@ integration rather than substituting a white lookup in the absence of Sky.
 
 These probes currently consume authored/imported six-face Image assets. Automatic
 scene capture, authored bake scheduling and geometry-dependent recapture are not
-yet implemented. Array capability/failure fallback beyond the two physical
-qualification adapters still requires a portable shader path and dedicated gates.
+yet implemented. Devices without cube-array support select a shared portable
+material shader that preserves global IBL and shadows. Physical compatibility
+claims still require dedicated adapter gates.
 
 `gargantuan_reflection_probe_tests` checks rotated boxes, capture offsets,
 parallel rays, large coordinates, priority, empty fallback and unit energy under
