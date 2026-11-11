@@ -180,6 +180,10 @@ handlers cannot be the final owner of ActionMap cleanup. The native ActionMap
 reset retires every adapter-owned legacy binding handle and its empty owned
 actions before clearing input state. Directly authored InputService definitions
 are outside that handle table and remain under their normal Instance ownership.
+The adapter marks itself stopping before it fires any native binding destruction
+or action transition callbacks. Reentrant Bind calls then return the invalid
+zero handle without constructing a new definition; repeated reset keeps the
+stopping gate and cannot reopen admission.
 
 Pressed/admitted state, action values, diagnostics and transitions are local,
 transient and absent from authoring revisions, persistence and replication.

@@ -216,6 +216,7 @@ namespace gargantuan {
 	}
 
 	int ActionMap::AddBinding(const std::string &Name, const std::shared_ptr<InputBinding> &Binding, bool Pointer) {
+		if (RuntimeStopping) return 0;
 		RequireInputMutation();
 		AssertCanMutate();
 		if (auto Error = Binding->ValidateDefinition(); !Error.empty()) throw std::invalid_argument(Error);
@@ -244,6 +245,7 @@ namespace gargantuan {
 		return Id;
 	}
 	int ActionMap::BindKey(std::string Name, Enums::KeyCode Key, float Scale, int Priority, bool Consume) {
+		if (RuntimeStopping) return 0;
 		ValidateLegacyBinding(Name, Scale);
 		if (Key == Enums::KeyCode::None) throw std::invalid_argument("[Input:ActionMap] Key binding requires a key");
 		auto Binding = std::make_shared<InputBinding>();
@@ -256,6 +258,7 @@ namespace gargantuan {
 	int ActionMap::BindMouseButton(
 		std::string Name, Enums::UserInputType InputType, float Scale, int Priority, bool Consume
 	) {
+		if (RuntimeStopping) return 0;
 		ValidateLegacyBinding(Name, Scale);
 		if (InputType != Enums::UserInputType::MouseButton1 && InputType != Enums::UserInputType::MouseButton2 &&
 			InputType != Enums::UserInputType::MouseButton3)
@@ -269,6 +272,7 @@ namespace gargantuan {
 		return AddBinding(Name, Binding, false);
 	}
 	int ActionMap::BindPointerDelta(std::string Name, Vector2 Scale, int Priority, bool Consume) {
+		if (RuntimeStopping) return 0;
 		ValidateLegacyBinding(Name, Scale.GetX());
 		if (!std::isfinite(Scale.GetY())) throw std::invalid_argument("[Input:ActionMap] Vector scale must be finite");
 		auto Binding = std::make_shared<InputBinding>();
@@ -350,11 +354,16 @@ namespace gargantuan {
 	void ActionMap::Reset() {
 		// Engine teardown has already stopped Lua callbacks. Release the native
 		// legacy bindings here; a Script.Destroying cleanup cannot run afterward.
-		std::vector<int> Ids;
-		Ids.reserve(Bindings.size());
-		for (const auto &[Id, Weak] : Bindings) Ids.push_back(Id);
-		std::ranges::sort(Ids);
-		for (const auto Id : Ids) (void)Unbind(Id);
+		// Native Destroying/ActionEnded observers can still run synchronously.
+		RuntimeStopping = true;
+		// The adapter admits at most MaximumBindings IDs. Process them in the
+		// previous ascending order without allocating during teardown.
+		for (std::size_t Index = 0; Index < MaximumBindings && !Bindings.empty(); ++Index) {
+			const auto Next = std::min_element(Bindings.begin(), Bindings.end(),
+				[](const auto &Left, const auto &Right) { return Left.first < Right.first; });
+			(void)Unbind(Next->first);
+		}
+		if (!Bindings.empty()) throw std::logic_error("[Input:ActionMap] Shutdown binding bound exceeded");
 		GetInput()->Reset();
 	}
 }

@@ -33,6 +33,9 @@ namespace gargantuan {
 		static void EndFrame(ActionMap &Map) {
 			Map.EndFrame();
 		}
+		static void Reset(ActionMap &Map) {
+			Map.Reset();
+		}
 	};
 }
 
@@ -151,6 +154,17 @@ namespace {
 		Check(Rejected, "ActionMap rejects bindings beyond its explicit native resource bound");
 		BoundedMap->UnbindAction("Bounded");
 		Check(BoundedMap->GetBindingCount() == 0, "bounded binding stress releases without retained action state");
+		auto StoppingMap = std::make_shared<ActionMap>();
+		ActionMapTestAccess::Attach(*StoppingMap, Input);
+		Check(StoppingMap->BindKey("StoppingProbe", Enums::KeyCode::W, 1.0f, 0, false) > 0,
+			"ActionMap accepts a legacy binding before native stop");
+		ActionMapTestAccess::Reset(*StoppingMap);
+		ActionMapTestAccess::Reset(*StoppingMap);
+		Check(StoppingMap->GetBindingCount() == 0 &&
+			StoppingMap->BindKey("LateKey", Enums::KeyCode::W, 1.0f, 0, false) == 0 &&
+			StoppingMap->BindMouseButton("LateButton", Enums::UserInputType::MouseButton1, 1.0f, 0, false) == 0 &&
+			StoppingMap->BindPointerDelta("LateLook", Vector2(1.0f, 1.0f), 0, false) == 0,
+			"repeated ActionMap reset remains closed to every facade bind entry");
 	}
 
 	std::shared_ptr<gargantuan::Part> MakePart(
@@ -365,7 +379,23 @@ Witness.Parent = game
 		auto ReplacementCharacter = *LocalPlayer->GetCharacter();
 		const auto ShutdownProbe = Runtime.ActionMap->BindKey(
 			"ShutdownProbe", Enums::KeyCode::W, 1.0f, 0, false);
+		auto ProbeBinding = Game->FindFirstDescendant("Binding" + std::to_string(ShutdownProbe));
+		int DestroyingAttempts = 0, EndedAttempts = 0;
+		int DestroyingHandle = -1, EndedHandle = -1;
+		auto DestroyingConnection = ProbeBinding ? ProbeBinding->Destroying->Connect([&](auto) {
+			++DestroyingAttempts;
+			DestroyingHandle = Runtime.ActionMap->BindKey(
+				"LateDestroyingBinding", Enums::KeyCode::W, 1.0f, 0, false);
+		}) : nullptr;
+		auto EndedConnection = Runtime.ActionMap->ActionEnded->Connect([&](std::string Name) {
+			if (Name != "ShutdownProbe") return;
+			++EndedAttempts;
+			EndedHandle = Runtime.ActionMap->BindPointerDelta(
+				"LateEndedBinding", Vector2(1.0f, 1.0f), 0, false);
+		});
+		(void)Runtime.ProcessEvent(Key(LogicalKey::W, ButtonState::Pressed));
 		Check(ShutdownProbe > 0 && Runtime.ActionMap->GetBindingCount() > 0 &&
+			ProbeBinding && Runtime.ActionMap->IsDown("ShutdownProbe") &&
 			Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
 			"runtime has live facade bindings and default modules before native shutdown");
 		Runtime.Destroy();
@@ -376,6 +406,11 @@ Witness.Parent = game
 		);
 		Check(Runtime.ActionMap->GetBindingCount() == 0,
 			"native runtime shutdown releases default and extra ActionMap facade bindings after Lua stops");
+		Check(DestroyingAttempts == 1 && EndedAttempts == 1 &&
+			DestroyingHandle == 0 && EndedHandle == 0 &&
+			!Game->FindFirstDescendant("LateDestroyingBinding") &&
+			!Game->FindFirstDescendant("LateEndedBinding"),
+			"native teardown observers cannot admit new ActionMap bindings after shutdown starts");
 		Check(!Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
 			"default module shutdown releases runtime Instances after Lua stops");
 		Runtime.Destroy();
