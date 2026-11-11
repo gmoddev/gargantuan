@@ -1,5 +1,5 @@
 #version 450
 
-// Test-only depth shader for measuring whether the masked shader's discard
-// path prevents fast depth rejection for opaque and transparent casters.
+// Solid casters need only the fixed-function depth result. Keeping alpha
+// testing in a separate shader avoids its fragment resources and discard path.
 void main() {}

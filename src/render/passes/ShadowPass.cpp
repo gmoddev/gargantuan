@@ -171,16 +171,16 @@ namespace gargantuan {
 					.SetDepthFormat(SDL_GPU_TEXTUREFORMAT_D32_FLOAT);
 				SolidPipeline = Builder.Build(Gpu, Metrics);
 				if (!SolidPipeline)
-					throw std::runtime_error("[Renderer:Shadow] Could not create experimental solid depth pipeline");
+					throw std::runtime_error("[Renderer:Shadow] Could not create solid depth pipeline");
 				auto Info = Builder.BuildInfo();
 				Info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
 				SolidDoubleSided = SDL_CreateGPUGraphicsPipeline(Gpu, &Info);
 				if (!SolidDoubleSided)
-					throw std::runtime_error("[Renderer:Shadow] Could not create experimental solid double-sided depth pipeline");
+					throw std::runtime_error("[Renderer:Shadow] Could not create solid double-sided depth pipeline");
 				if (Metrics) ++Metrics->PipelineCreations;
 				return true;
 			} catch (const std::exception &Error) {
-				LOG_WARN(App, "[Renderer:Shadow] Disabled experimental solid depth: %s", Error.what());
+				LOG_WARN(App, "[Renderer:Shadow] Disabled solid depth optimization: %s", Error.what());
 				if (SolidDoubleSided) SDL_ReleaseGPUGraphicsPipeline(Gpu, SolidDoubleSided);
 				SolidDoubleSided = nullptr;
 				if (SolidPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, SolidPipeline);
@@ -326,7 +326,7 @@ namespace gargantuan {
 					const bool AlphaMask = Material.OpacityMode == RenderOpacityMode::Masked;
 					if (AlphaMask && Material.BaseColorFactor.a < Material.AlphaCutoff) return;
 					const bool TexturedMask = AlphaMask && Material.BaseColorTexture.has_value();
-					if (!AlphaMask && context.UseSolidShadowDepthExperiment &&
+					if (!AlphaMask && context.UseSolidShadowDepth &&
 						!context.SolidShadowDepthAttempted) {
 						context.SolidShadowDepthAttempted = true;
 						context.SolidShadowDepthActive = EnsureSolidPipelines(Gpu, context.Metrics);

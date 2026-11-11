@@ -12,6 +12,23 @@ related_code:
 
 # Renderer Foundation 5 shadow prototype
 
+Solid casters use a dedicated fragment shader without alpha-test resources or
+discard. Masked casters keep the established texture/alpha path; transparent
+casters retain the existing solid-shadow policy. Both variants share the same
+vertex shader, palettes, D32 depth/LESS/write and sidedness state. Pipelines are
+created lazily at the first recorded non-masked caster, so shadow-off, reused
+maps and masked-only frames do not allocate the optional pair. Failed creation
+cleans partial resources and falls back to the established shader until renderer
+recreation. This is adapter-owned optimization, with no authored/public switch.
+The private test switch retains matched off/on and allocation-count controls.
+
+Physical A/B/B/A at isolated source `0e717eed5b5af97c4ba8757125c347e9094538a1`
+found lower opaque maximal-overlap cost on both adapters while masked controls
+remained near flat. Exact single/double-sided, mirrored, transparent-as-solid,
+cutout and mixed solid/mask pipeline-switch controls guard depth equivalence.
+This supports splitting solid and masked work; it does not isolate an early-Z
+hardware mechanism because fragment bindings/resources also change.
+
 The runtime and viewport invalidate recorded directional and spotlight candidates
 when command encoding, submission, or fence wait fails. A later frame with no
 shadow work cannot commit depth from a canceled command buffer. The native GPU
