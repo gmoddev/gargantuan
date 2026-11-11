@@ -1019,7 +1019,7 @@ int main(int ArgumentCount, char **Arguments) try {
 	if (!EvidenceReceipt) throw std::runtime_error("could not open shadow evidence receipt");
 	EvidenceReceipt << "kind,case,iteration,publication_id,image,width,height,center_red,rgb_fingerprint,shadow_passes,shadow_caster_draws,outcome\n" << std::flush;
 	CheckDirectionalPixels();
-	for (const std::uint32_t Resolution : {256u, 1024u, 2048u})
+	for (const std::uint32_t Resolution : {512u, 1024u, 2048u})
 		CheckOutdoorResolutionCase(Resolution);
 	CheckSunZenithPixels();
 	CheckMaskAndDeformable();

@@ -23,8 +23,9 @@ without exposing GPU handles through the public editor transport.
 The Foundation 4 single world-origin shadow target remains the default until
 the physical GPU path is qualified. The optional cascade path consumes only the
 immutable render frame and projection. It uses one D32 2D-array texture with at
-most four layers. The current private quality policy permits 256–4096 pixels
-per layer and caps receiver distance. A practical logarithmic/uniform split
+most four layers. Published settings permit 512, 1024 or 2048 pixels per layer;
+the numerical planner's wider 256–4096 range is not the publication contract.
+Receiver distance is capped. A practical logarithmic/uniform split
 places more resolution near the camera. Every split fits a stable frustum-slice
 bounding sphere, reserves a two-texel edge guard, and snaps its light-plane
 center to a texel grid using double-precision calculations. The GPU matrix is
