@@ -14,7 +14,7 @@ on:
       suite:
         description: Bounded comparison workload
         type: choice
-        options: [core, cframe, compact, realistic, gameplay, signals]
+        options: [core, cframe, compact, realistic, gameplay, signals, signals_compare]
         default: core
 
 permissions:

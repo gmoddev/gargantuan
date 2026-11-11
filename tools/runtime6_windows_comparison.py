@@ -58,7 +58,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic", "gameplay", "signals", "attribution", "compact_large", "cframe_allocation"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic", "gameplay", "signals", "signals_compare", "attribution", "compact_large", "cframe_allocation"), default="core")
 Parser.add_argument("--comparison-directory", default="comparison")
 Parser.add_argument("--verify-only", action="store_true")
 Args = Parser.parse_args()
@@ -133,6 +133,19 @@ def Run(Arm, Label, Binary, Options, Timeout=600, Environment=None):
     (Output / "receipts.json").write_text(json.dumps(Receipts, indent=2))
     print(json.dumps(Receipt), flush=True)
 
+
+if Args.suite == "signals_compare":
+    for Count in (1000, 10000, 50000):
+        for Arm in ("baseline", "candidate", "candidate", "baseline"):
+            Samples = Output / f"{len(Receipts):03}-signal-off-{Count}-{Arm}.csv"
+            Run(Arm, f"signal-off-{Count}", "gargantuan_runtime_foundation6_benchmark",
+                ["12", f"--count={Count}", "--density-matrix", "--group-width=256",
+                 "--split-construction", "--diagnostic-marks", f"--samples={Samples}"])
+        for Mode in ("native", "renderer-only"):
+            for Arm in ("baseline", "candidate", "candidate", "baseline"):
+                Run(Arm, f"signal-on-{Count}-{Mode}", "gargantuan_runtime6_physics_listener_probe",
+                    [f"--mode={Mode}", f"--count={Count}", f"--changed={Count}", "--frames=12"])
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite == "signals":
     if Sources["baseline"]["source"] != Sources["candidate"]["source"]:
