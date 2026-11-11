@@ -1348,6 +1348,11 @@ namespace {
 		Moving->Destroy();
 		Check(WorldRootTestAccess::DynamicBodyCount(*Workspace) == 0,
 			"destruction retires compact dynamic record before generation reuse");
+		auto Replacement = std::make_shared<Part>();
+		Replacement->SetParent(Workspace);
+		Check(WorldRootTestAccess::DynamicBodyCount(*Workspace) == 1 &&
+			Replacement->GetObjectId() != Moving->GetObjectId(),
+			"replacement admission has a distinct generation-safe compact identity");
 	}
 
 	void TestBodyDynamicsAndCollisionGroups() {
