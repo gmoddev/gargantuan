@@ -196,14 +196,21 @@ complete boundary inventory in a later hardening pass.
 
 `Engine` owns every DataModel descendant subscription it installs. Teardown
 unbinds the descendant-added callback and disconnects the descendant-removed
-connection before releasing `ScriptEngine`; no Instance signal may retain a raw
-runtime pointer after `Engine::Destroy`. `ScriptEngine` tracks every Script it
+connection before releasing its `ScriptEngine` owner. The Engine-owned VM has
+shared native lifetime; each active Lua entry pins it until that entry unwinds.
+Logical runtime shutdown happens immediately when Engine destruction begins:
+it stops activation, disconnects tracked Lua signal/remote handlers and retires
+queued task references before descendant/service destruction. The active Lua
+call may finish returning or reporting an error; physical `lua_close` waits for
+the final active entry to release its pin. This does not add another DataModel
+authority or change callback security contexts. `ScriptEngine` tracks every Script it
 steps and every Luau-backed signal connection it creates. It retires coroutine
 and callback registry references while the VM is still alive, before
 `lua_close`. A live Engine also observes DataModel destruction and performs this
 runtime teardown before the DataModel destroys its services and descendants.
-Both Engine-first and DataModel-first destruction orders have regression
-coverage, followed by process-level SDL cleanup.
+Engine-first, DataModel-first and callback-triggered destruction have regression
+coverage; qualification status of the latest lifecycle changes is recorded in
+`../Validation/RuntimeFoundation6Qualification.md`.
 
 Script activation roots the newly created coroutine from the top of the main
 Lua stack before loading/resuming it and restores the caller's stack height.
@@ -302,5 +309,6 @@ The combined evaluation adds an opt-in Main-owned signal-dispatch profile and
 private WorldRoot listener counters. Disabled profiles take no timing samples.
 These counters are diagnostic and inclusive under reentrancy; callback and
 signal totals must not be added to ordinary setter timings. They expose no Luau
-capability or mutable storage handle. Per-registration physics dirty flags
-coalesce internal work while preserving every existing callback invocation.
+capability or mutable storage handle. The per-registration dirty-binding, epoch
+and hot/cold variants remain isolated experiments: reduced repeated-callback
+work did not repay their full physics safe-point cost in paired measurements.

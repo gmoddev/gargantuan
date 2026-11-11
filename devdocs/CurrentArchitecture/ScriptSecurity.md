@@ -74,6 +74,13 @@ The Script activation queue snapshots its members at the start of each
 step. A Script removed before its turn is skipped unless it has been requeued
 before that turn; destroying it prevents requeueing.
 
+Engine destruction stops new Script activation, scheduled/deferred task
+admission and tracked Lua handlers before destroying services or descendants.
+Active Lua calls keep the native VM alive through their return/error boundary;
+this lifetime pin grants no capability and does not replace their captured
+security context. A stopped runtime cannot begin another queued callback just
+because its physical VM is still temporarily alive.
+
 The current context is thread-local and defaults to trusted Core for backwards
 compatibility with engine-owned call paths. New untrusted script entry points
 must establish a `ScriptSecurityScope` before dispatch. Treating the default as
