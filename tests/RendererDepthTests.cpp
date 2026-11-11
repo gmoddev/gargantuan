@@ -60,57 +60,63 @@ void CheckPrimitivePositionBounds() {
 
 void CheckPrimitivePartInstancing() {
 	BootstrapNativeRuntimeSchema();
-	auto Game = std::make_shared<DataModel>();
-	auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 	const std::array Shapes{Enums::PartType::Block, Enums::PartType::Ball, Enums::PartType::Cylinder};
-	std::array<std::shared_ptr<Part>, Shapes.size()> Parts;
-	for (std::size_t Index = 0; Index < Shapes.size(); ++Index) {
-		auto Value = std::make_shared<Part>();
-		Value->SetShape(Shapes[Index]);
-		Value->SetColor(Index == 0 ? Color3(1.0f, 0.0f, 0.0f)
-			: Index == 1 ? Color3(0.0f, 1.0f, 0.0f) : Color3(0.0f, 0.0f, 1.0f));
-		Value->SetAnchored(true);
-		Value->SetCastShadow(false);
-		Value->SetCFrame(CFrame(glm::vec3(static_cast<float>(Index) * 4.0f - 4.0f, 0.0f, 0.0f)));
-		Value->SetParent(World);
-		Parts[Index] = std::move(Value);
-	}
-	RenderPublisher Publisher;
-	const auto Camera = MakeLookAtRenderCameraInput(
-		{0.0f, 0.0f, 20.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
-	auto Publication = Publisher.Publish(*World, Camera, 800, 600);
-	if (!Publication->FullResync || Publication->Creates.size() != Parts.size())
-		throw std::runtime_error("Primitive Part publication fixture is incomplete");
-	SDLRenderer Renderer({800, 600}, {.Offscreen = true, .WaitForGpuCompletion = true,
-		.DebugDevice = false, .EnableInstancing = true, .UseContiguousInstancing = true});
-	if (Renderer.GetDriverName() != "vulkan")
-		throw std::runtime_error("Primitive Part instancing physical gate requires Vulkan");
-	Renderer.Draw(Publication);
-	Renderer.WaitForIdle();
-	const auto Metrics = Renderer.GetMetrics();
-	if (Metrics.FramesSubmitted != 1 || Metrics.FullResyncs != 1 ||
-		Metrics.ContiguousInstancedDrawCalls == 0 || Metrics.InstancedObjects < Parts.size())
-		throw std::runtime_error("Block/Ball/Cylinder Parts did not issue a contiguous native instance draw");
-	EditorViewportRenderer Candidate(800, 600, true, true, false, true);
-	EditorViewportRenderer Reference(800, 600);
-	auto PreviousPixels = Candidate.Capture(Publication).RgbPixels;
-	if (PreviousPixels.empty() || PreviousPixels != Reference.Capture(Publication).RgbPixels)
-		throw std::runtime_error("Real primitive Parts changed visible pixels under contiguous instancing");
 	const std::array Names{"Block", "Ball", "Cylinder"};
-	for (std::size_t Index = 0; Index < Parts.size(); ++Index) {
-		Parts[Index]->SetTransparency(1.0f);
-		auto Changed = Publisher.Publish(*World, Camera, 800, 600);
-		auto ActualPixels = Candidate.Capture(Changed).RgbPixels;
-		if (ActualPixels != Reference.Capture(Changed).RgbPixels)
-			throw std::runtime_error(std::string(Names[Index]) +
-				" Part changed visible pixels under contiguous instancing");
-		if (ActualPixels == PreviousPixels)
-			throw std::runtime_error(std::string(Names[Index]) + " Part contributed no visible pixels");
-		PreviousPixels = std::move(ActualPixels);
+	for (std::size_t ShapeIndex = 0; ShapeIndex < Shapes.size(); ++ShapeIndex) {
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		// Both candidates share one mesh and are the only scene objects, so
+		// either map traversal order must form the same two-instance batch.
+		std::array<std::shared_ptr<Part>, 2> Parts;
+		for (std::size_t Index = 0; Index < Parts.size(); ++Index) {
+			auto Value = std::make_shared<Part>();
+			Value->SetShape(Shapes[ShapeIndex]);
+			Value->SetColor(ShapeIndex == 0 ? Color3(1.0f, 0.0f, 0.0f)
+				: ShapeIndex == 1 ? Color3(0.0f, 1.0f, 0.0f) : Color3(0.0f, 0.0f, 1.0f));
+			Value->SetAnchored(true);
+			Value->SetCastShadow(false);
+			Value->SetCFrame(CFrame(glm::vec3(static_cast<float>(Index) * 4.0f - 2.0f, 0.0f, 0.0f)));
+			Value->SetParent(World);
+			Parts[Index] = std::move(Value);
+		}
+		RenderPublisher Publisher;
+		const auto Camera = MakeLookAtRenderCameraInput(
+			{0.0f, 0.0f, 20.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+		auto Publication = Publisher.Publish(*World, Camera, 800, 600);
+		if (!Publication->FullResync || Publication->Creates.size() != Parts.size())
+			throw std::runtime_error(std::string(Names[ShapeIndex]) + " Part publication fixture is incomplete");
+		SDLRenderer Renderer({800, 600}, {.Offscreen = true, .WaitForGpuCompletion = true,
+			.DebugDevice = false, .EnableInstancing = true, .UseContiguousInstancing = true});
+		if (Renderer.GetDriverName() != "vulkan")
+			throw std::runtime_error("Primitive Part instancing physical gate requires Vulkan");
+		Renderer.Draw(Publication);
+		Renderer.WaitForIdle();
+		const auto Metrics = Renderer.GetMetrics();
+		if (Metrics.FramesSubmitted != 1 || Metrics.FullResyncs != 1 ||
+			Metrics.ContiguousInstancedDrawCalls < 1 || Metrics.InstancedObjects < Parts.size())
+			throw std::runtime_error(std::string(Names[ShapeIndex]) + " Parts did not form a native instance batch");
+		EditorViewportRenderer Candidate(800, 600, true, true, false, true);
+		EditorViewportRenderer Reference(800, 600);
+		auto PreviousPixels = Candidate.Capture(Publication).RgbPixels;
+		if (PreviousPixels.empty() || PreviousPixels != Reference.Capture(Publication).RgbPixels)
+			throw std::runtime_error(std::string(Names[ShapeIndex]) +
+				" Parts changed visible pixels under contiguous instancing");
+		for (const auto &PartValue : Parts) {
+			PartValue->SetTransparency(1.0f);
+			auto Changed = Publisher.Publish(*World, Camera, 800, 600);
+			auto ActualPixels = Candidate.Capture(Changed).RgbPixels;
+			if (ActualPixels != Reference.Capture(Changed).RgbPixels)
+				throw std::runtime_error(std::string(Names[ShapeIndex]) +
+					" Part update changed visible pixels under contiguous instancing");
+			if (ActualPixels == PreviousPixels)
+				throw std::runtime_error(std::string(Names[ShapeIndex]) + " Part contributed no visible pixels");
+			PreviousPixels = std::move(ActualPixels);
+		}
+		std::cout << "[Render:PrimitiveInstances] shape=" << Names[ShapeIndex]
+			<< " draws=" << Metrics.ContiguousInstancedDrawCalls
+			<< " objects=" << Metrics.InstancedObjects << '\n';
+		Game->Destroy();
 	}
-	std::cout << "[Render:PrimitiveInstances] draws=" << Metrics.ContiguousInstancedDrawCalls
-		<< " objects=" << Metrics.InstancedObjects << '\n';
-	Game->Destroy();
 }
 
 struct Box { glm::dvec3 Center; glm::dvec3 Size; };
