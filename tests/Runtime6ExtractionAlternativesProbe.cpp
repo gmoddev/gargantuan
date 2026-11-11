@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -241,6 +242,12 @@ int main(int ArgCount, char **Args) {
 			"soa_sync_ms,soa_consume_ms,snapshot_sync_ms,snapshot_consume_ms,verify_ms\n";
 		for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
 			if (RandomOrder) std::shuffle(Selection.begin(), Selection.end(), Random);
+			std::unordered_set<gargantuan::ObjectId> ExpectedTouched;
+			ExpectedTouched.reserve(Changed + 2 * Lifecycle);
+			for (std::size_t Index = 0; Index < Changed; ++Index)
+				ExpectedTouched.insert(Parts[Selection[Index]]->GetObjectId());
+			for (std::size_t Index = 0; Index < Lifecycle; ++Index)
+				ExpectedTouched.insert(Parts[Selection[Count - Index - 1]]->GetObjectId());
 			const auto SetterStart = Clock::now();
 			for (std::size_t Index = 0; Index < Changed; ++Index) {
 				auto &Value = Parts[Selection[Index]];
@@ -268,11 +275,18 @@ int main(int ArgCount, char **Args) {
 					throw std::runtime_error("[Runtime6:ExtractionProbe] Retired generation still resolves");
 			}
 			const auto SetterMs = Milliseconds(Clock::now() - SetterStart);
+			for (std::size_t Index = 0; Index < Lifecycle; ++Index)
+				ExpectedTouched.insert(Parts[Selection[Count - Index - 1]]->GetObjectId());
 			const auto CaptureStart = Clock::now();
 			const auto Batch = Dirty.Capture(World->GetReplicationScopeId(), Consumer);
 			const auto CaptureMs = Milliseconds(Clock::now() - CaptureStart);
 			if (Batch.FullResyncRequired)
 				throw std::runtime_error("[Runtime6:ExtractionProbe] Unexpected dirty full-resync");
+			std::unordered_set<gargantuan::ObjectId> ActualTouched;
+			ActualTouched.reserve(Batch.Records.size());
+			for (const auto &Record : Batch.Records) ActualTouched.insert(Record.Object);
+			if (ActualTouched != ExpectedTouched || ActualTouched.size() != Batch.Records.size())
+				throw std::runtime_error("[Runtime6:ExtractionProbe] Dirty identities differ from committed mutations");
 			std::vector<gargantuan::ObjectId> Objects;
 			Objects.reserve(Batch.Records.size());
 			for (const auto &Record : Batch.Records) Objects.push_back(Record.Object);
@@ -328,6 +342,10 @@ int main(int ArgCount, char **Args) {
 		const auto FullDirectStart = Clock::now();
 		const auto FullExpected = Direct(CurrentIds);
 		const auto FullDirectMs = Milliseconds(Clock::now() - FullDirectStart);
+		const auto RetainedVerifyStart = Clock::now();
+		Verify(FullExpected, ConsumeSoA(Slots, CurrentIds));
+		Verify(FullExpected, ConsumeSnapshot(Items, CurrentIds));
+		const auto RetainedVerifyMs = Milliseconds(Clock::now() - RetainedVerifyStart);
 		SoASlots FullSlots;
 		Snapshot FullItems;
 		FullItems.reserve(Count);
@@ -346,6 +364,7 @@ int main(int ArgCount, char **Args) {
 		std::cerr << "[Runtime6:ExtractionProbe] full_resync_count=" << Count
 			<< " reused_slots=" << ReusedSlots
 			<< " direct_ms=" << FullDirectMs << " dual_cache_sync_ms=" << FullSyncMs
+			<< " retained_full_verify_ms=" << RetainedVerifyMs
 			<< " dual_cache_consume_verify_ms=" << FullConsumeMs
 			<< " soa_logical_bytes="
 			<< FullSlots.Generations.capacity() * sizeof(std::uint32_t) +
