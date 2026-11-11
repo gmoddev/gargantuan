@@ -43,6 +43,30 @@ namespace gargantuan {
 		std::uint32_t Resolution = 0;
 	};
 
+	struct SDLDirectionalLightBasis {
+		glm::dvec3 X;
+		glm::dvec3 Y;
+	};
+
+	// Frisvad's minimal rotation of +Z to a unit direction is continuous away
+	// from -Z. The authored sun travels in the XY plane, so that singularity
+	// stays outside its entire 24-hour arc, including both zeniths. Near -Z,
+	// 1+n.z is evaluated through the unit-length identity to avoid cancellation.
+	// An exact frame at the opposite pole has no unique azimuth; its fallback
+	// is deterministic and right-handed. The discontinuity is confined to -Z.
+	// Frisvad, Journal of Graphics Tools 16(3), 2012, equations 4-6.
+	[[nodiscard]] inline SDLDirectionalLightBasis MakeSDLDirectionalLightBasis(const glm::dvec3 &UnitDirection) {
+		const double TransverseSquared = UnitDirection.x * UnitDirection.x +
+			UnitDirection.y * UnitDirection.y;
+		if (UnitDirection.z < 0.0 && TransverseSquared == 0.0)
+			return {{-1, 0, 0}, {0, 1, 0}};
+		const double A = UnitDirection.z < 0.0 ?
+			(1.0 - UnitDirection.z) / TransverseSquared : 1.0 / (1.0 + UnitDirection.z);
+		const double B = -UnitDirection.x * UnitDirection.y * A;
+		return {{1.0 - UnitDirection.x * UnitDirection.x * A, B, -UnitDirection.x},
+			{B, 1.0 - UnitDirection.y * UnitDirection.y * A, -UnitDirection.y}};
+	}
+
 	// The split sphere has a fixed radius for each split and FOV. Its center moves
 	// on the light plane only at texel boundaries. All arithmetic up to the final
 	// GPU matrix uses double precision so a distant camera does not quantize the
@@ -67,11 +91,9 @@ namespace gargantuan {
 		if (Far <= Near) return std::nullopt;
 		const glm::dvec3 Direction = glm::normalize(glm::dvec3(SunDirection));
 		const glm::dvec3 Look = glm::normalize(glm::dvec3(Camera.LookDirection));
-		// Preserve a continuous light-plane basis through ordinary sun motion.
-		// Switch axes only inside the narrow numerical pole neighborhood.
-		const glm::dvec3 Up = std::abs(Direction.y) > 0.9999 ? glm::dvec3(0, 0, 1) : glm::dvec3(0, 1, 0);
-		const glm::dvec3 LightX = glm::normalize(glm::cross(Up, Direction));
-		const glm::dvec3 LightY = glm::cross(Direction, LightX);
+		const auto Basis = MakeSDLDirectionalLightBasis(Direction);
+		const glm::dvec3 LightX = Basis.X;
+		const glm::dvec3 LightY = Basis.Y;
 		const glm::dvec3 CameraPosition(Camera.Position);
 		const glm::dvec3 Origin = glm::floor(CameraPosition / 1024.0) * 1024.0;
 		const double TanHalf = std::tan(glm::radians(static_cast<double>(Camera.VerticalFieldOfView)) * 0.5);

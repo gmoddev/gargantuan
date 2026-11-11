@@ -1,7 +1,9 @@
 #include "render/sdl/SDLDirectionalCascadePlan.hpp"
 
+#include <array>
 #include <cmath>
 #include <iostream>
+#include <numbers>
 #include <random>
 #include <stdexcept>
 
@@ -28,6 +30,22 @@ namespace {
 						"frustum corner escaped snapped cascade");
 				}
 		}
+	}
+
+	void CheckLightBasis(const glm::dvec3 &Direction, double Tolerance = 1.0e-10) {
+		const auto Basis = gargantuan::MakeSDLDirectionalLightBasis(Direction);
+		Require(std::abs(glm::length(Basis.X) - 1.0) < Tolerance &&
+			std::abs(glm::length(Basis.Y) - 1.0) < Tolerance &&
+			std::abs(glm::dot(Basis.X, Basis.Y)) < Tolerance &&
+			std::abs(glm::dot(Basis.X, Direction)) < Tolerance &&
+			std::abs(glm::dot(Basis.Y, Direction)) < Tolerance &&
+			glm::dot(glm::cross(Basis.X, Basis.Y), Direction) > 1.0 - Tolerance,
+			"directional light basis lost right-handed orthonormality");
+	}
+
+	glm::vec3 CanonicalSun(float ClockTime) {
+		const float Angle = (ClockTime - 6.0f) * (2.0f * std::numbers::pi_v<float> / 24.0f);
+		return glm::normalize(glm::vec3(std::cos(Angle), std::sin(Angle), 0.0f));
 	}
 }
 
@@ -77,20 +95,46 @@ int main() try {
 	const auto Rotated = MakeSDLDirectionalCascadePlan(Camera, Sun, 16.0f / 9.0f, Settings);
 	Require(Rotated.has_value(), "rotated camera failed");
 	CheckCorners(Camera, *Rotated);
-	const auto AlmostVertical = [](float Y) {
-		return glm::normalize(glm::vec3(std::sqrt(1.0f - Y * Y), Y, 0.0f));
-	};
-	const auto BelowOldSwitch = MakeSDLDirectionalCascadePlan(Camera, AlmostVertical(0.989f),
-		16.0f / 9.0f, Settings);
-	const auto AboveOldSwitch = MakeSDLDirectionalCascadePlan(Camera, AlmostVertical(0.991f),
-		16.0f / 9.0f, Settings);
-	Require(BelowOldSwitch && AboveOldSwitch, "near-vertical sun failed");
 	const auto LightPlaneX = [](const glm::mat4 &Matrix) {
 		return glm::normalize(glm::vec3(Matrix[0][0], Matrix[1][0], Matrix[2][0]));
 	};
-	Require(glm::dot(LightPlaneX(BelowOldSwitch->Cascades[0].Matrix),
-		LightPlaneX(AboveOldSwitch->Cascades[0].Matrix)) > 0.95f,
-		"small near-vertical sun motion rotated the cascade light plane");
+	for (const auto Hours : {std::array{11.99f, 12.0f, 12.01f},
+		std::array{23.99f, 0.0f, 0.01f}}) {
+		std::optional<SDLDirectionalCascadePlan> PreviousPlan;
+		for (const float Hour : Hours) {
+			const auto SunAtHour = CanonicalSun(Hour);
+			CheckLightBasis(glm::normalize(glm::dvec3(SunAtHour)));
+			const auto CurrentPlan = MakeSDLDirectionalCascadePlan(Camera, SunAtHour,
+				16.0f / 9.0f, Settings);
+			Require(CurrentPlan.has_value(), "canonical zenith lost a cascade plan");
+			CheckCorners(Camera, *CurrentPlan);
+			if (PreviousPlan)
+				Require(glm::dot(LightPlaneX(PreviousPlan->Cascades[0].Matrix),
+					LightPlaneX(CurrentPlan->Cascades[0].Matrix)) > 0.9999f,
+					"canonical zenith rotated the cascade light plane abruptly");
+			PreviousPlan = CurrentPlan;
+		}
+	}
+	std::optional<SDLDirectionalLightBasis> PreviousBasis;
+	for (std::uint32_t Minute = 0; Minute <= 24 * 60; ++Minute) {
+		const auto Direction = glm::normalize(glm::dvec3(CanonicalSun((Minute % (24 * 60)) / 60.0f)));
+		CheckLightBasis(Direction);
+		const auto CurrentBasis = MakeSDLDirectionalLightBasis(Direction);
+		if (PreviousBasis)
+			Require(glm::dot(PreviousBasis->X, CurrentBasis.X) > 0.9999,
+				"canonical 24-hour sun arc contains a light-plane basis jump");
+		PreviousBasis = CurrentBasis;
+	}
+	for (const glm::dvec3 Direction : {glm::dvec3(1e-7, 1, 0), glm::dvec3(-1e-7, 1, 0),
+		glm::dvec3(1e-7, -1, 0), glm::dvec3(-1e-7, -1, 0),
+		glm::dvec3(1e-7, 2e-7, -1), glm::dvec3(0, 0, -1)})
+		CheckLightBasis(glm::normalize(Direction));
+	for (const glm::vec3 Pole : {glm::vec3(1e-7f, 2e-7f, -1), glm::vec3(0, 0, -1)}) {
+		const auto PolePlan = MakeSDLDirectionalCascadePlan(Camera, glm::normalize(Pole),
+			16.0f / 9.0f, Settings);
+		Require(PolePlan.has_value(), "opposite-pole sun lost a cascade plan");
+		CheckCorners(Camera, *PolePlan);
+	}
 	std::mt19937 Random(0xC45CADEu);
 	std::uniform_real_distribution<float> Unit(-1.0f, 1.0f);
 	std::uniform_real_distribution<float> Coordinate(-900000.0f, 900000.0f);
@@ -104,6 +148,7 @@ int main() try {
 		Fuzz.RightDirection = glm::normalize(glm::cross(Fuzz.LookDirection, glm::vec3(0, 1, 0)));
 		Fuzz.UpDirection = glm::normalize(glm::cross(Fuzz.RightDirection, Fuzz.LookDirection));
 		const auto FuzzSun = glm::normalize(glm::vec3(Unit(Random), Unit(Random), Unit(Random) + 0.01f));
+		CheckLightBasis(glm::normalize(glm::dvec3(FuzzSun)));
 		const auto FuzzAspect = AspectRatio(Random);
 		const auto FuzzPlan = MakeSDLDirectionalCascadePlan(Fuzz, FuzzSun, FuzzAspect, Settings);
 		Require(FuzzPlan.has_value(), "finite randomized camera lost cascade plan");
