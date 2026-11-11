@@ -1,3 +1,8 @@
+// Copyright (c) 2026 Team Fireworks
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
@@ -19,6 +24,8 @@ namespace gargantuan {
 	struct WorldRootTestAccess {
 		static bool CompleteControlScanNeeded(const WorldRoot &World) { return World.FullControlScanNeeded; }
 		static std::size_t PendingControls(const WorldRoot &World) { return World.PendingBodyControls.size(); }
+		static void ClearPendingControls(WorldRoot &World) { World.PendingBodyControls.clear(); }
+		static void QueueControl(WorldRoot &World, const BasePart &Part) { World.QueuePendingBodyControl(Part); }
 		static std::size_t DynamicBodies(const WorldRoot &World) { return World.DynamicBodies.size(); }
 		static bool HasDynamicObject(const WorldRoot &World, ObjectId Object) {
 			return World.DynamicPositions.contains(Object);
@@ -66,6 +73,8 @@ void operator delete(void *Value, std::size_t, std::align_val_t) noexcept { Free
 void operator delete[](void *Value, std::size_t, std::align_val_t) noexcept { Free(Value); }
 void operator delete(void *Value, const std::nothrow_t &) noexcept { Free(Value); }
 void operator delete[](void *Value, const std::nothrow_t &) noexcept { Free(Value); }
+void operator delete(void *Value, std::align_val_t, const std::nothrow_t &) noexcept { Free(Value); }
+void operator delete[](void *Value, std::align_val_t, const std::nothrow_t &) noexcept { Free(Value); }
 
 int main() {
 	using namespace gargantuan;
@@ -83,8 +92,12 @@ int main() {
 		if (WorldRootTestAccess::DynamicBodies(*World) != 1 ||
 			WorldRootTestAccess::PendingControls(*World) != 0)
 			throw std::runtime_error("initial compact body/control state mismatch");
-		FailAllocation = 0;
 		PartValue->SetLinearVelocity({0.5f, 0.0f, 0.0f});
+		if (WorldRootTestAccess::PendingControls(*World) != 1)
+			throw std::runtime_error("authored velocity did not queue one pending control");
+		WorldRootTestAccess::ClearPendingControls(*World);
+		FailAllocation = 0;
+		WorldRootTestAccess::QueueControl(*World, *PartValue);
 		FailAllocation = -1;
 		if (!WorldRootTestAccess::CompleteControlScanNeeded(*World) ||
 			WorldRootTestAccess::PendingControls(*World) != 0)
