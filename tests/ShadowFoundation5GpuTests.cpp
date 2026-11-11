@@ -266,6 +266,12 @@ namespace {
 		Require(Restored == Shadow, "spot shadow toggle did not restore exact pixels");
 		Require(Renderer.Capture(Delta(4, 3, ShadowScene->Frame)).RgbPixels == Shadow,
 			"static spotlight depth changed exact warm pixels");
+		auto Distant = Scene(5, true, false, true, {900000, 2000, -900000});
+		const auto DistantShadow = Renderer.Capture(Distant).RgbPixels;
+		Require(std::abs(RedCenter(DistantShadow) - RedCenter(Shadow)) < 24,
+			"large-coordinate spotlight altered receiver shadowing");
+		Require(Renderer.Capture(Delta(6, 5, Distant->Frame)).RgbPixels == DistantShadow,
+			"large-coordinate spotlight map changed exact warm pixels");
 	}
 
 	void CheckIncomingDynamicCasters() {

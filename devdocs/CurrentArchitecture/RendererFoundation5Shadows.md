@@ -84,7 +84,8 @@ path must apply the same cascade origin.
 
 The focused GPU fixture in `tests/ShadowFoundation5GpuTests.cpp` compares
 actual viewport pixels against no-shadow controls and fresh full publications
-after camera motion. It exercises split boundaries, distant coordinates,
+after camera motion. It exercises split boundaries, distant directional and
+spot coordinates,
 alpha reimport, deformable and newly posed casters, spotlight toggles, atlas
 saturation/eviction, and rejected publications. A paired offscreen runtime
 renderer checks actual depth-pass and caster-draw counters. Physical execution
