@@ -26,6 +26,7 @@ namespace gargantuan {
 	};
 	static_assert(sizeof(glm::mat4) == 64 && sizeof(glm::vec4) == 16);
 	static_assert(sizeof(SDLInstanceRecord) == 224);
+	static_assert(std::is_standard_layout_v<SDLInstanceRecord>);
 	static_assert(std::is_trivially_copyable_v<SDLInstanceRecord>);
 	static_assert(offsetof(SDLInstanceRecord, ModelMatrix) == 0);
 	static_assert(offsetof(SDLInstanceRecord, NormalMatrix) == 64);
