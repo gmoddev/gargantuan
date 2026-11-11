@@ -23,7 +23,7 @@ layout(set = 2, binding = 4) uniform sampler2D PositiveZ;
 layout(set = 2, binding = 5) uniform sampler2D NegativeZ;
 
 vec3 ReadSky(sampler2D FaceTexture, vec2 UV, float LinearSource) {
-    if (sky.SceneFlags.x < 0.5) return texture(FaceTexture, UV).rgb;
+    if (sky.SceneFlags.x < 0.5 && LinearSource < 0.5) return texture(FaceTexture, UV).rgb;
     ivec2 MaxPixel = textureSize(FaceTexture, 0) - 1;
     vec2 Pixel = UV * vec2(MaxPixel + 1) - 0.5;
     ivec2 Corner = ivec2(floor(Pixel));
