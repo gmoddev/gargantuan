@@ -212,6 +212,12 @@ Engine-first, DataModel-first and callback-triggered destruction have regression
 coverage; qualification status of the latest lifecycle changes is recorded in
 `../Validation/RuntimeFoundation6Qualification.md`.
 
+Active Engine event/frame calls also retain `GuiRuntime` while routed callbacks
+unwind. Destruction still clears transient GUI state and drops the Engine's
+owner immediately. Transient-state clearing guards nested calls and snapshots
+focus/editing entries before callbacks, preventing callback-triggered teardown
+from invalidating iteration. Neither resource pin changes scene authority.
+
 Script activation roots the newly created coroutine from the top of the main
 Lua stack before loading/resuming it and restores the caller's stack height.
 The registry reference remains independent of library tables and temporary
