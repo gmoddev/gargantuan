@@ -1338,9 +1338,12 @@ if(BUILD_TESTING)
 			LABELS "renderer;runtime;headless" TIMEOUT 120)
 		add_test(NAME gargantuan_runtime6_live_render_invalid_backend
 			COMMAND gargantuan_runtime_foundation6_benchmark 1 --count=1 --draw-backend=invalid)
+		add_test(NAME gargantuan_runtime6_live_render_missing_backend
+			COMMAND gargantuan_runtime_foundation6_benchmark 1 --count=1 --draw-backend=)
 		add_test(NAME gargantuan_runtime6_live_render_invalid_instancing
 			COMMAND gargantuan_runtime_foundation6_benchmark 1 --count=1 --draw-instancing=contiguous)
 		set_tests_properties(gargantuan_runtime6_live_render_invalid_backend
+			gargantuan_runtime6_live_render_missing_backend
 			gargantuan_runtime6_live_render_invalid_instancing PROPERTIES
 			WILL_FAIL TRUE LABELS "renderer;runtime;argument-rejection" TIMEOUT 20)
 		add_executable(gargantuan_runtime6_extraction_alternatives "tests/Runtime6ExtractionAlternativesProbe.cpp")
