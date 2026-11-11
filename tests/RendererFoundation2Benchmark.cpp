@@ -31,6 +31,12 @@
 
 namespace {
 	using Clock = std::chrono::steady_clock;
+	struct RuntimeExperimentOptions {
+		bool DensityMatrix = false;
+		bool SplitConstruction = false;
+		std::string_view Property = "transform";
+	};
+	RuntimeExperimentOptions RuntimeOptions;
 
 	double Milliseconds(Clock::duration Duration) {
 		return std::chrono::duration<double, std::milli>(Duration).count();
@@ -102,6 +108,7 @@ namespace {
 		RenderDirtyAccumulator::Get().Clear();
 		auto Game = std::make_shared<DataModel>();
 		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		Mark("world-ready");
 		// This benchmark variant measures renderer publication without constructing
 		// native rigid bodies during scene setup. Keep the existing backend alive
 		// locally; WorldRoot::CreatePartBody declines while Physics is moved from.
@@ -122,18 +129,31 @@ namespace {
 				Groups.push_back(std::move(Group));
 			}
 		}
+		Mark("groups-ready");
 		const auto Side = static_cast<std::size_t>(std::ceil(std::sqrt(static_cast<double>(Count))));
-		for (std::size_t Index = 0; Index < Count; ++Index) {
-			auto Value = std::make_shared<Part>();
+		const auto Initialize = [&](const std::shared_ptr<Part> &Value, std::size_t Index) {
 			Value->SetCFrame(CFrame(glm::vec3(
-				static_cast<float>(Index % Side) * 2.0f, static_cast<float>(Index / Side) * 2.0f, 0.0f
-			)));
+				static_cast<float>(Index % Side) * 2.0f, static_cast<float>(Index / Side) * 2.0f, 0.0f)));
+		};
+		const auto Adopt = [&](const std::shared_ptr<Part> &Value, std::size_t Index) {
 			if (GroupWidth == 0) Value->SetParent(World);
 			else Value->SetParent(Groups[Index / GroupWidth]);
-			// CreatePartBody normally populates World.Parts after native body
-			// admission. The renderer-only fixture must supply that same list.
 			if (RendererOnly) World->Parts.push_back(Value);
+		};
+		for (std::size_t Index = 0; Index < Count; ++Index) {
+			auto Value = std::make_shared<Part>();
+			if (!RuntimeOptions.SplitConstruction) {
+				Initialize(Value, Index);
+				Adopt(Value, Index);
+			}
 			Parts.push_back(std::move(Value));
+		}
+		Mark(RuntimeOptions.SplitConstruction ? "parts-allocated" : "interleaved-ready");
+		if (RuntimeOptions.SplitConstruction) {
+			for (std::size_t Index = 0; Index < Count; ++Index) Initialize(Parts[Index], Index);
+			Mark("detached-transforms");
+			for (std::size_t Index = 0; Index < Count; ++Index) Adopt(Parts[Index], Index);
+			Mark("parts-adopted");
 		}
 		Mark("parts-ready");
 		RenderPublisher Publisher;
@@ -146,6 +166,15 @@ namespace {
 		if (Initial->Creates.size() != Count || Projection.GetObjects().size() != Count)
 			throw std::runtime_error("[Render:Foundation2Benchmark] Rigid fixture publication/object count mismatch");
 		Mark("initial-ready");
+		const auto PhaseChanges = RuntimeOptions.DensityMatrix
+			? std::vector<std::size_t>{0, std::max<std::size_t>(1, Count / 1000),
+				std::max<std::size_t>(1, Count / 100), Count / 10, Count / 2, Count}
+			: std::vector<std::size_t>{ChangedPerFrame};
+		std::size_t GlobalFrame = 0;
+		for (const auto PhaseChanged : PhaseChanges) {
+		ChangedPerFrame = PhaseChanged;
+		const auto PhaseName = std::string(Name) + (RuntimeOptions.DensityMatrix
+			? "-changed-" + std::to_string(ChangedPerFrame) : "");
 		auto &Dirty = RenderDirtyAccumulator::Get();
 		auto &Journal = ChangeJournal::Get();
 		Dirty.ResetProfile();
@@ -161,18 +190,33 @@ namespace {
 		std::vector<double> FinalStateExtraction;
 		std::vector<double> PublicationConstruction;
 		std::vector<double> PublisherReconciliation;
+		std::vector<std::uint64_t> JournalRecords;
+		JournalRecords.reserve(Frames);
 		std::size_t Creates = 0, Updates = 0, Removes = 0, UploadBytes = 0, FullResyncs = 0;
 		for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
+			++GlobalFrame;
+			const auto JournalBefore = Journal.CreateCursor(Game->GetObjectId()).NextSequence;
 			const auto AccumulationStart = Clock::now();
 			for (std::size_t Index = 0; Index < ChangedPerFrame; ++Index) {
 				const auto ObjectIndex = (Index + Frame * ChangedPerFrame) % Count;
 				for (std::size_t Write = 0; Write < WritesPerObject; ++Write) {
-					auto Current = Parts[ObjectIndex]->GetCFrame();
-					Current.Position.z = static_cast<float>(Frame + 1) * 0.01f + static_cast<float>(Write) * 0.000001f;
-					Parts[ObjectIndex]->SetCFrame(Current);
+					if (RuntimeOptions.Property != "material") {
+						auto Current = Parts[ObjectIndex]->GetCFrame();
+						Current.Position.z = static_cast<float>(GlobalFrame) * 0.01f + static_cast<float>(Write) * 0.000001f;
+						Parts[ObjectIndex]->SetCFrame(Current);
+					}
+					if (RuntimeOptions.Property != "transform")
+						Parts[ObjectIndex]->SetTransparency(0.1f + static_cast<float>(GlobalFrame) * 0.0001f +
+							static_cast<float>(Write) * 0.0000001f);
 				}
 			}
 			Accumulation.push_back(Milliseconds(Clock::now() - AccumulationStart));
+			const auto CommittedRecords = Journal.CreateCursor(Game->GetObjectId()).NextSequence - JournalBefore;
+			const auto ExpectedRecords = ChangedPerFrame * WritesPerObject *
+				(RuntimeOptions.Property == "mixed" ? 2 : 1);
+			if (CommittedRecords != ExpectedRecords)
+				throw std::runtime_error("[Runtime:Benchmark] Authoritative journal count mismatch");
+			JournalRecords.push_back(CommittedRecords);
 			const auto GenerationStart = Clock::now();
 			auto Publication = Publisher.Publish(*World, Camera, 1280, 720);
 			Generation.push_back(Milliseconds(Clock::now() - GenerationStart));
@@ -217,22 +261,23 @@ namespace {
 				Mean(Accumulation) - Breakdown.JournalMeanMs - Breakdown.ClassificationMeanMs - Breakdown.AccumulatorMeanMs
 			);
 		}
-		Print(Name, Count, Frames, Accumulation, Generation, Application, Creates, Updates, Removes, UploadBytes, Count,
+		Print(PhaseName, Count, Frames, Accumulation, Generation, Application, Creates, Updates, Removes, UploadBytes, Count,
 			FullResyncs, Breakdown);
 		if (Samples) {
 			const auto Stage = [ProfileEnabled](const std::vector<double> &Values, std::size_t Frame) {
 				return ProfileEnabled ? std::to_string(Values[Frame]) : std::string("NA");
 			};
 			for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
-				*Samples << Name << ',' << Count << ',' << Frame << ',' << GroupWidth << ','
+				*Samples << PhaseName << ',' << Count << ',' << Frame << ',' << GroupWidth << ','
 					<< RendererOnly << ',' << ProfileEnabled << ',' << ChangedPerFrame << ',' << WritesPerObject << ','
 					<< Accumulation[Frame] << ',' << Generation[Frame] << ',' << Application[Frame] << ','
 					<< Stage(DirtyCapture, Frame) << ',' << Stage(DirtyExpansion, Frame) << ','
 					<< Stage(FinalStateExtraction, Frame) << ',' << Stage(PublicationConstruction, Frame) << ','
-					<< Stage(PublisherReconciliation, Frame) << ",NA,NA,NA\n";
+					<< Stage(PublisherReconciliation, Frame) << ",NA,NA,NA," << JournalRecords[Frame] << '\n';
 			}
 			Samples->flush();
 			if (!*Samples) throw std::runtime_error("[Render:Foundation2Benchmark] Could not write frame samples");
+		}
 		}
 		Mark("measured");
 		if (RetainedPhysics) World->Physics = std::move(*RetainedPhysics);
@@ -392,12 +437,30 @@ int main(int ArgumentCount, char **Arguments) {
 		std::uint32_t GroupWidth = 0;
 		std::filesystem::path SamplesPath;
 		std::string_view SelectedScenario;
+		std::optional<std::size_t> SelectedCount, SelectedChanges, SelectedWrites;
+		const auto ParseBound = [](std::string_view Text, std::size_t Minimum, std::size_t Maximum) {
+			std::size_t Value = 0;
+			const auto [End, Error] = std::from_chars(Text.data(), Text.data() + Text.size(), Value);
+			if (Error != std::errc{} || End != Text.data() + Text.size() || Value < Minimum || Value > Maximum)
+				throw std::invalid_argument("[Runtime:Benchmark] Numeric option outside its bound");
+			return Value;
+		};
 		for (int Index = 2; Index < ArgumentCount; ++Index) {
 			const std::string_view Option(Arguments[Index]);
 			if (Option == "--profile") ProfileEnabled = true;
 			else if (Option == "--rigid-only") RigidOnly = true;
 			else if (Option == "--renderer-only") RendererOnly = true;
 			else if (Option == "--diagnostic-marks") DiagnosticMarks = true;
+			else if (Option == "--density-matrix") RuntimeOptions.DensityMatrix = true;
+			else if (Option == "--split-construction") RuntimeOptions.SplitConstruction = true;
+			else if (Option.starts_with("--count=")) SelectedCount = ParseBound(Option.substr(8), 1, 65536);
+			else if (Option.starts_with("--changes=")) SelectedChanges = ParseBound(Option.substr(10), 0, 65536);
+			else if (Option.starts_with("--writes=")) SelectedWrites = ParseBound(Option.substr(9), 1, 16);
+			else if (Option.starts_with("--property=")) {
+				RuntimeOptions.Property = Option.substr(11);
+				if (RuntimeOptions.Property != "transform" && RuntimeOptions.Property != "material" &&
+					RuntimeOptions.Property != "mixed") throw std::invalid_argument("unknown property workload");
+			}
 			else if (Option.starts_with("--scenario=")) {
 				if (!SelectedScenario.empty()) throw std::invalid_argument("scenario may appear only once");
 				SelectedScenario = Option.substr(sizeof("--scenario=") - 1);
@@ -422,16 +485,32 @@ int main(int ArgumentCount, char **Arguments) {
 					throw std::invalid_argument("group width must be in [64,4096]");
 			} else throw std::invalid_argument("unknown semantic benchmark option");
 		}
+		if ((RuntimeOptions.DensityMatrix || SelectedChanges || SelectedWrites) && !SelectedCount)
+			throw std::invalid_argument("[Runtime:Benchmark] Runtime options require --count");
+		if (RuntimeOptions.Property != "transform" && !SelectedCount)
+			throw std::invalid_argument("[Runtime:Benchmark] Property workloads require --count");
+		if (RuntimeOptions.DensityMatrix && SelectedChanges)
+			throw std::invalid_argument("[Runtime:Benchmark] Density matrix and explicit changes are exclusive");
+		if (SelectedCount && SelectedChanges.value_or(0) > *SelectedCount)
+			throw std::invalid_argument("[Runtime:Benchmark] Changes exceed object count");
+		if (SelectedCount) RigidOnly = true;
+		if (DiagnosticMarks) std::cerr << "[Runtime:Benchmark] property=" << RuntimeOptions.Property
+			<< " split_construction=" << RuntimeOptions.SplitConstruction
+			<< " density_matrix=" << RuntimeOptions.DensityMatrix << '\n';
 		std::ofstream SamplesFile;
 		if (!SamplesPath.empty()) {
 			if (std::filesystem::exists(SamplesPath))
 				throw std::invalid_argument("samples file must not already exist");
 			SamplesFile.open(SamplesPath, std::ios::out | std::ios::trunc);
 			if (!SamplesFile) throw std::runtime_error("could not open samples file");
-			SamplesFile << "Scenario,Elements,Frame,GroupWidth,RendererOnly,ProfileEnabled,ExpectedUpdates,WritesPerObject,DirtyAccumulationMs,PublicationGenerationMs,ProjectionApplyMs,DirtyCaptureMs,DirtyExpansionMs,FinalStateExtractionMs,PublicationConstructionMs,PublisherReconciliationMs,JournalMs,ClassificationMs,AccumulatorMs\n" << std::flush;
+			SamplesFile << "Scenario,Elements,Frame,GroupWidth,RendererOnly,ProfileEnabled,ExpectedUpdates,WritesPerObject,DirtyAccumulationMs,PublicationGenerationMs,ProjectionApplyMs,DirtyCaptureMs,DirtyExpansionMs,FinalStateExtractionMs,PublicationConstructionMs,PublisherReconciliationMs,JournalMs,ClassificationMs,AccumulatorMs,JournalRecords\n" << std::flush;
 		}
 		std::ofstream *Samples = SamplesPath.empty() ? nullptr : &SamplesFile;
 		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n" << std::flush;
+		if (SelectedCount) {
+			RunRigid(RuntimeOptions.Property, *SelectedCount, SelectedChanges.value_or(*SelectedCount),
+				SelectedWrites.value_or(1), Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples, DiagnosticMarks);
+		} else {
 		for (const auto Count : {1000u, 10000u, 50000u}) {
 			const auto Scenario = std::string("static-") + std::to_string(Count);
 			if (SelectedScenario.empty() || SelectedScenario == Scenario)
@@ -443,6 +522,7 @@ int main(int ArgumentCount, char **Arguments) {
 			RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples, DiagnosticMarks);
 		if (SelectedScenario.empty() || SelectedScenario == "dynamic-redundant")
 			RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples, DiagnosticMarks);
+		}
 		if (!RigidOnly) {
 			for (const auto Count : {4096u, 16384u, 65536u}) RunDeformable(Count, Frames);
 			RunGui(10000, Frames);
