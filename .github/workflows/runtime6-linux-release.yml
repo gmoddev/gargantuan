@@ -1,9 +1,6 @@
 name: Runtime 6 Linux Release qualification
 
 on:
-  push:
-    branches: [experiment/runtime6-evaluation]
-    paths: [.github/workflows/runtime6-linux-release.yml]
   workflow_dispatch:
     inputs:
       source:
