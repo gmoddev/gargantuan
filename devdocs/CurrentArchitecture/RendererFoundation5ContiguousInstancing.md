@@ -4,6 +4,15 @@
 `--sdl-instancing=on`. The default is `proof`; both native instancing and contiguous
 admission remain opt-in. The contiguous variant is gated to SDL's Vulkan driver.
 
+The counterbalanced AMD reference at source `acf088179` is retained in
+`C:/Users/aiden/.codex/artifacts/renderer-foundation5-20261111/AMD-acf-instance-compact-ABBA/`.
+At 50K static objects, proof instancing reduced actual camera draws from 50,000
+to 98 per frame but raised CPU submission from 16.56–17.16 ms to 24.39–24.58 ms.
+Detailed profiling attributed 19.80 ms to instance preparation, dominated by
+per-object coverage and pairwise proof. The dynamic 50K case also uploaded
+11.2 MB of instance records per frame. This is a failed proof-mode performance
+experiment, not a throughput qualification for contiguous admission.
+
 The [Vulkan primitive order specification](https://docs.vulkan.org/spec/latest/chapters/drawing.html#drawing-primitive-order)
 orders drawing commands by submission, then instances from lower to higher, then
 indexed primitives by lower index-buffer address. The [rasterization order specification](https://docs.vulkan.org/spec/latest/chapters/primsrast.html#primsrast-order)
