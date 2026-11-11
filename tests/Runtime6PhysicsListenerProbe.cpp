@@ -190,9 +190,14 @@ namespace {
 				SetterNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
 					Clock::now() - Started).count();
 			}
-			if (Config.DrainPhysics &&
-				ChangeJournal::Get().GetRetentionWindow(Scope).NextSequence - JournalBefore != Config.Changed)
-				throw std::runtime_error("[Runtime6:PhysicsListener] Authored CFrame setter journal delta mismatch");
+			if (Config.DrainPhysics) {
+				const auto SetterJournalDelta =
+					ChangeJournal::Get().GetRetentionWindow(Scope).NextSequence - JournalBefore;
+				if (SetterJournalDelta != Config.Changed)
+					throw std::runtime_error("[Runtime6:PhysicsListener] Authored CFrame setter journal delta mismatch frame=" +
+						std::to_string(Frame) + " observed=" + std::to_string(SetterJournalDelta) +
+						" expected=" + std::to_string(Config.Changed));
+			}
 			const auto After = Config.Profile ? WorldRootTestAccess::Profile(*World) : PhysicsListenerProfileSnapshot{};
 			const auto Dispatch = Config.Profile ? BaseSignal::GetDispatchProfile() : SignalDispatchProfile{};
 			const auto Calls = After.Calls;
@@ -236,7 +241,9 @@ namespace {
 					throw std::runtime_error("[Runtime6:PhysicsListener] Native backend transform diverged");
 				JournalDelta = ChangeJournal::Get().GetRetentionWindow(Scope).NextSequence - JournalBefore;
 				if (JournalDelta != Config.Changed)
-					throw std::runtime_error("[Runtime6:PhysicsListener] Authored CFrame journal delta mismatch");
+					throw std::runtime_error("[Runtime6:PhysicsListener] Authored CFrame journal delta mismatch frame=" +
+						std::to_string(Frame) + " observed=" + std::to_string(JournalDelta) +
+						" expected=" + std::to_string(Config.Changed));
 			}
 			std::cout << Config.Mode << ',' << Config.Count << ',' << Config.Changed << ',' << Frame << ','
 				<< BodyCount << ',' << !WithoutListener << ',' << SetterNanoseconds << ','
