@@ -1,0 +1,99 @@
+name: Runtime Foundation 6 CPU comparison
+
+on:
+  push:
+    branches: [experiment/runtime6-evaluation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-comparison:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      BASELINE_SOURCE: 676a952b0cee5eb78ffd27df97b1876393ae6f1f
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Prepare independent hosted CPU evidence
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 clang-format g++-14 ninja-build glslc \
+            libfreetype-dev libx11-dev libxcursor-dev libxext-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev
+          mkdir -p runtime6-evidence
+          cp tools/runtime6_comparison.py "$RUNNER_TEMP/runtime6_comparison.py"
+          lscpu > runtime6-evidence/cpu.txt
+          uname -a > runtime6-evidence/platform.txt
+          cmake --version > runtime6-evidence/cmake.txt
+          clang++-19 --version > runtime6-evidence/compiler.txt
+          git submodule status --recursive > runtime6-evidence/submodules.txt
+      - name: Build and freeze both exact sources
+        run: |
+          set -euo pipefail
+          candidate="$GITHUB_SHA"
+          for arm in baseline candidate; do
+            source="$candidate"
+            if [ "$arm" = baseline ]; then source="$BASELINE_SOURCE"; fi
+            git checkout --detach "$source"
+            test "$(git rev-parse HEAD)" = "$source"
+            mkdir -p "runtime6-evidence/$arm"
+            lute tools/classgen -f
+            git diff --binary > "runtime6-evidence/$arm/generated.patch"
+            cmake -S . -B build-runtime6 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
+              -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+              -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DBUILD_TESTING=ON \
+              -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF \
+              -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON -DGARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE=ON \
+              -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF \
+              2>&1 | tee "runtime6-evidence/$arm/configure.log"
+            cmake --build build-runtime6 --parallel 3 --target \
+              gargantuan_runtime_foundation6_benchmark gargantuan_runtime6_extraction_alternatives \
+              gargantuan_runtime6_physics_sync_benchmark gargantuan_runtime6_allocation_benchmark \
+              gargantuan_foundation_tests gargantuan_prepared_property_tests \
+              gargantuan_renderer_publication_tests gargantuan_physics_backend_tests \
+              2>&1 | tee "runtime6-evidence/$arm/build.log"
+            SDL_VIDEODRIVER=dummy ctest --test-dir build-runtime6 --output-on-failure \
+              -R '^gargantuan_(foundation|prepared_property|renderer_publication|physics_backend|runtime_foundation6_smoke|runtime6_extraction_alternatives|runtime6_physics_sync_smoke)$' \
+              2>&1 | tee "runtime6-evidence/$arm/tests.log"
+            export ARM="$arm" SOURCE="$source"
+            python3 - <<'PY'
+          import hashlib,json,os,pathlib,shutil,subprocess
+          out=pathlib.Path('runtime6-evidence')/os.environ['ARM']
+          names=['gargantuan_runtime_foundation6_benchmark','gargantuan_runtime6_extraction_alternatives',
+                 'gargantuan_runtime6_physics_sync_benchmark','gargantuan_runtime6_allocation_benchmark',
+                 'gargantuan_prepared_property_tests']
+          hashes={}
+          for name in names:
+              target=out/name; shutil.copy2(pathlib.Path('build-runtime6')/name,target)
+              hashes[name]=hashlib.sha256(target.read_bytes()).hexdigest()
+              with (out/(name+'.libraries.txt')).open('w') as libraries:
+                  subprocess.run(['ldd',str(target)],stdout=libraries,check=True)
+          (out/'manifest.json').write_text(json.dumps({'source':os.environ['SOURCE'],'binaries':hashes},indent=2))
+          PY
+            git diff --name-only | while IFS= read -r path; do
+              case "$path" in
+                include/gargantuan/classes/generated/Animator.hpp|src/classes/generated/Animator.cpp) ;;
+                '') ;;
+                *) echo "Unexpected generated tracked change: $path"; exit 1 ;;
+              esac
+            done
+            git restore -- include/gargantuan/classes/generated/Animator.hpp src/classes/generated/Animator.cpp
+          done
+      - name: Run source-bound counterbalanced comparisons
+        run: python3 "$RUNNER_TEMP/runtime6_comparison.py" --evidence runtime6-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: runtime6-hosted-cpu-comparison
+          path: runtime6-evidence/
