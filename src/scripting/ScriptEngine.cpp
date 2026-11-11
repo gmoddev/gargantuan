@@ -247,10 +247,13 @@ namespace gargantuan {
 	void ScriptEngine::Step() {
 		Threads.Step();
 
-		for (auto it = ScriptQueue.begin(); it != ScriptQueue.end();) {
-			auto script = *it;
+		// Script callbacks may add or remove queue entries, including the running
+		// Script. Snapshot owners for this pass and admit new entries next Step.
+		const std::vector<std::shared_ptr<Script>> Pending(ScriptQueue.begin(), ScriptQueue.end());
+		for (const auto &script : Pending) {
+			if (!ScriptQueue.contains(script)) continue;
 			if (!CanRunScript(*script)) {
-				it = ScriptQueue.erase(it);
+				ScriptQueue.erase(script);
 				continue;
 			}
 			ManagedScripts.emplace_back(script);
@@ -271,11 +274,10 @@ namespace gargantuan {
 			case ScriptStatus::Disabled:
 			case ScriptStatus::Yielded:
 			case ScriptStatus::Running:
-				it = ScriptQueue.erase(it);
+				ScriptQueue.erase(script);
 				break;
 
 			default:
-				++it;
 				break;
 			}
 		}

@@ -6989,6 +6989,60 @@ namespace {
 		Game->Destroy();
 	}
 
+	void TestScriptQueueReentrantMutation() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(Game);
+			auto Unbind = Game->BindDescendants([&](const std::shared_ptr<Instance> &Value) {
+				if (auto ScriptValue = std::dynamic_pointer_cast<Script>(Value))
+					Engine.ScriptQueue.insert(ScriptValue);
+			});
+			auto Removed = Game->DescendantRemoved->Connect([&](const std::shared_ptr<Instance> &Value) {
+				if (auto ScriptValue = std::dynamic_pointer_cast<Script>(Value))
+					Engine.ScriptQueue.erase(ScriptValue);
+			});
+			auto First = std::make_shared<Script>();
+			First->SetName("FirstQueued");
+			First->SetSource("script.Name = 'UnexpectedEarlyRun'");
+			First->SetParent(Game);
+			auto Second = std::make_shared<Script>();
+			Second->SetName("SecondQueued");
+			Second->SetSource("script.Name = 'UnexpectedEarlyRun'");
+			Second->SetParent(Game);
+			auto Late = std::make_shared<Script>();
+			Late->SetName("LateQueued");
+			Late->SetSource("script.Name = 'LateRan'");
+			Check(Engine.ScriptQueue.size() == 2,
+				"descendant binding queues the two initial Scripts");
+			const auto Driver = *Engine.ScriptQueue.begin();
+			const auto Victim = Driver == First ? Second : First;
+			StackValue<std::shared_ptr<Instance>>::Push(Engine.L, Victim);
+			lua_setglobal(Engine.L, "VictimScript");
+			StackValue<std::shared_ptr<Instance>>::Push(Engine.L, Late);
+			lua_setglobal(Engine.L, "LateScript");
+			Driver->SetSource(R"(
+				VictimScript:Destroy()
+				LateScript.Parent = game
+				script:Destroy()
+			)");
+
+			Engine.Step();
+			Check(Driver->GetDestroyed() && Victim->GetDestroyed() &&
+				Victim->GetName() != "UnexpectedEarlyRun" &&
+				Late->GetParent() == Game && Late->GetName() == "LateQueued" &&
+				Engine.ScriptQueue.contains(Late),
+				"self-destroy and removal skip queued victim while new Script waits until next Step");
+			Engine.Step();
+			Check(Late->Status == ScriptStatus::Finished && Late->GetName() == "LateRan" &&
+				Engine.ScriptQueue.empty(),
+				"newly parented Script runs once on the following Step");
+			Removed->Disconnect();
+			Unbind();
+		}
+		Game->Destroy();
+	}
+
 	void TestLuauEmbeddingCompatibility() {
 		using namespace gargantuan;
 		static_assert(LUA_VECTOR_DOUBLE == 0);
@@ -7626,6 +7680,7 @@ int main() {
 	TestLuauExceptionBoundary();
 	TestScriptCoroutineRegistryRoot();
 	TestScriptSelfCleanupDuringResume();
+	TestScriptQueueReentrantMutation();
 	TestLuauEmbeddingCompatibility();
 	TestPlayDiagnosticBounds();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
