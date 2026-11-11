@@ -17,9 +17,11 @@
 #include <format>
 #include <iostream>
 #include <memory>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <glm/ext/matrix_clip_space.hpp>
@@ -424,6 +426,66 @@ namespace {
 			"large-coordinate warm cascade changed exact pixels");
 	}
 
+	std::shared_ptr<RenderPublication> ZenithScene(RenderPublicationId Id, float Hour, bool Caster = true) {
+		auto Publication = Scene(Id, Caster);
+		const float Angle = (Hour - 6.0f) * (2.0f * std::numbers::pi_v<float> / 24.0f);
+		Publication->Frame.Environment.SunDirection =
+			glm::normalize(glm::vec3(std::cos(Angle), std::sin(Angle), 0.0f));
+		const auto Ground = std::make_shared<const std::vector<RenderVertex>>(
+			std::initializer_list<RenderVertex>{
+				{{-1, 0, -1}, {0, 1, 0}, {1, 0, 0, 1}, {0, 0}},
+				{{-1, 0,  1}, {0, 1, 0}, {1, 0, 0, 1}, {0, 1}},
+				{{ 1, 0,  1}, {0, 1, 0}, {1, 0, 0, 1}, {1, 1}},
+				{{ 1, 0, -1}, {0, 1, 0}, {1, 0, 0, 1}, {1, 0}},
+			});
+		for (auto &Mesh : Publication->MeshCreates) {
+			Mesh.Vertices = Ground;
+			Mesh.Bounds = {{-1, 0, -1}, {1, 0, 1}};
+		}
+		Publication->Creates.front().Item.ModelMatrix = glm::mat4(1);
+		Publication->Creates.front().Item.InverseModelMatrix = glm::mat4(1);
+		if (Caster) {
+			auto &Item = Publication->Creates.back().Item;
+			Item.ModelMatrix = glm::translate(glm::mat4(1), glm::vec3(0, 0.75f, 0)) *
+				glm::scale(glm::mat4(1), glm::vec3(0.3f));
+			Item.InverseModelMatrix = glm::inverse(Item.ModelMatrix);
+		}
+		auto &Camera = Publication->Frame.Camera;
+		Camera.Position = {0, 2, 3};
+		Camera.LookDirection = glm::normalize(-Camera.Position);
+		Camera.RightDirection = glm::normalize(glm::cross(Camera.LookDirection, glm::vec3(0, 1, 0)));
+		Camera.UpDirection = glm::normalize(glm::cross(Camera.RightDirection, Camera.LookDirection));
+		Camera.ViewMatrix = glm::lookAtRH(Camera.Position, glm::vec3(0), Camera.UpDirection);
+		Camera.ViewProjectionMatrix = Camera.ProjectionMatrix * Camera.ViewMatrix;
+		return Publication;
+	}
+
+	void CheckSunZenithPixels() {
+		CurrentCase = "sun-zenith-pixels";
+		EditorViewportRenderer WarmRenderer(Size, Size);
+		EditorViewportRenderer FreshRenderer(Size, Size);
+		std::vector<int> Centers;
+		for (const auto [Index, Hour] : {std::pair{1u, 11.99f}, std::pair{2u, 12.0f},
+			std::pair{3u, 12.01f}}) {
+			auto Fresh = ZenithScene(Index, Hour);
+			std::shared_ptr<RenderPublication> Warm = Fresh;
+			if (Index > 1) {
+				Warm = Delta(Index, Index - 1, Fresh->Frame);
+				Warm->EnvironmentChanged = true;
+			}
+			const auto CachedPixels = Capture(WarmRenderer, Warm).RgbPixels;
+			Require(CachedPixels == Capture(FreshRenderer, Fresh).RgbPixels,
+				"noon sun motion differs between warm and freshly built cascades");
+			Centers.push_back(RedCenter(CachedPixels));
+		}
+		const auto Control = Capture(FreshRenderer, ZenithScene(4, 12.0f, false));
+		Require(RedCenter(Control) > Centers[1] + 15,
+			"noon pixel control did not show the overhead caster shadow");
+		Require(std::abs(Centers[0] - Centers[1]) <= 12 &&
+			std::abs(Centers[1] - Centers[2]) <= 12,
+			"canonical noon motion caused a discontinuous shadow pixel");
+	}
+
 	void CheckMaskAndDeformable() {
 		CurrentCase = "mask-deformable";
 		EditorViewportRenderer Renderer(Size, Size);
@@ -818,6 +880,7 @@ int main(int ArgumentCount, char **Arguments) try {
 	if (!EvidenceReceipt) throw std::runtime_error("could not open shadow evidence receipt");
 	EvidenceReceipt << "kind,case,iteration,publication_id,image,width,height,center_red,rgb_fingerprint,shadow_passes,shadow_caster_draws,outcome\n" << std::flush;
 	CheckDirectionalPixels();
+	CheckSunZenithPixels();
 	CheckMaskAndDeformable();
 	CheckCascadePasses();
 	CheckSpotPixels();
