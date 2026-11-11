@@ -51,6 +51,9 @@ a flush that records primitives. Treat these fields as attribution clues,
 not additive components. Detailed clocks are enabled only by
 `--sdl-profile=on`; unmeasured fields are `NA` in benchmark output.
 Whole-pass and projection validation/mutation clocks are coarse boundaries.
+The first twelve phase columns (shadow classification through command acquire)
+are populated with profiling on and off. Only the six nested object-path
+columns and object counters require `--sdl-profile=on`.
 The projection remains renderer-owned derived state, and failed publication
 preflight still leaves it unchanged.
 

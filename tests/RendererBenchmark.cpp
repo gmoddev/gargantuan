@@ -769,8 +769,7 @@ namespace {
 			if (CompletePairs) WaitTimes.push_back(DrainFrame ? Milliseconds(EndFrame - EndDraw) : 0.0);
 			if (Sdl) {
 				const auto Metrics = Sdl->GetMetrics();
-				if (Settings.SdlProfileDetailed) {
-					const std::array<std::uint64_t, DetailedPhaseNames.size()> PhaseNanoseconds{
+				const std::array<std::uint64_t, DetailedPhaseNames.size()> PhaseNanoseconds{
 						Metrics.LastShadowClassificationNanoseconds, Metrics.LastProjectionValidationNanoseconds,
 						Metrics.LastProjectionMutationNanoseconds, Metrics.LastMeshApplicationNanoseconds,
 						Metrics.LastPaletteApplicationNanoseconds, Metrics.LastShadowRecordingNanoseconds,
@@ -780,9 +779,14 @@ namespace {
 						Metrics.LastCameraTraversalNanoseconds, Metrics.LastCameraCullNanoseconds,
 						Metrics.LastCameraResidencyNanoseconds, Metrics.LastOpaqueGroupingNanoseconds,
 						Metrics.LastWorldDrawRecordingNanoseconds, Metrics.LastTransparentNanoseconds
-					};
-					for (std::size_t Index = 0; Index < PhaseNanoseconds.size(); ++Index)
+				};
+				for (std::size_t Index = 0; Index < PhaseNanoseconds.size(); ++Index) {
+					// The first twelve clocks are always measured. Object-path
+					// clocks are opt-in and must be NA when profiling is off.
+					if (Index >= 12 && !Settings.SdlProfileDetailed) continue;
 						DetailedTimes[Index].push_back(static_cast<double>(PhaseNanoseconds[Index]) / 1'000'000.0);
+				}
+				if (Settings.SdlProfileDetailed) {
 					const std::array<std::uint64_t, DetailedCounterNames.size()> Counts{
 						Metrics.CameraVisitedObjects, Metrics.CameraHiddenObjects, Metrics.CameraFrustumTests,
 						Metrics.CameraMeshLookups, Metrics.WorldPrimitiveDraws
