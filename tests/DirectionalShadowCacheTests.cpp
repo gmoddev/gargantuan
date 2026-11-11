@@ -24,12 +24,18 @@ namespace {
 
 	RenderPublication InitialScene() {
 		RenderPublication Scene{.Id = 1, .FullResync = true, .Frame = {.ViewportWidth = 64, .ViewportHeight = 64}};
+		Scene.MeshCreates.push_back({.Mesh = CASTER_MESH, .TopologyRevision = 1, .VertexRevision = 1,
+			.Vertices = std::make_shared<const std::vector<RenderVertex>>(
+				std::initializer_list<RenderVertex>{{{-0.5f, -0.5f, 0}}, {{0.5f, -0.5f, 0}}, {{0, 0.5f, 0}}}),
+			.Indices = std::make_shared<const std::vector<std::uint32_t>>(
+				std::initializer_list<std::uint32_t>{0, 1, 2}),
+			.Bounds = {{-0.5f, -0.5f, 0}, {0.5f, 0.5f, 0}}});
 		Scene.TextureCreates.push_back({MASK, 1, 1, 1, RenderTextureFormat::Rgba8Unorm,
 			std::make_shared<const std::vector<std::uint8_t>>(4, 255)});
 		RenderMaterialState Masked;
 		Masked.OpacityMode = RenderOpacityMode::Masked;
 		Masked.BaseColorTexture = MASK;
-		Scene.Creates.push_back({.Item = {.Object = CASTER}, .Material = Masked});
+		Scene.Creates.push_back({.Item = {.Object = CASTER}, .Mesh = CASTER_MESH, .Material = Masked});
 		Scene.Creates.push_back({.Item = {.Object = NONCASTER, .CastShadow = false}});
 		return Scene;
 	}
@@ -103,7 +109,10 @@ namespace {
 		Delta.TextureUpdates = {{.Texture = MASK}};
 		CheckUpdate(Delta, false, "a rectangle in a sampled alpha-mask texture invalidates depth");
 		Delta.TextureUpdates.clear();
-		Delta.MeshVertexUpdates = {{.Mesh = CASTER_MESH}};
+		Delta.MeshVertexUpdates = {{.Mesh = CASTER_MESH, .VertexRevision = 2, .FirstVertex = 0,
+			.Vertices = std::make_shared<const std::vector<RenderVertex>>(
+				std::initializer_list<RenderVertex>{{{-0.25f, -0.5f, 0}}}),
+			.Bounds = {{-0.25f, -0.5f, 0}, {0.5f, 0.5f, 0}}}};
 		CheckUpdate(Delta, false, "deformable vertex edits on a drawn caster invalidate depth");
 		Delta.MeshVertexUpdates.clear();
 		Delta.AnimationPoseUpdates = {{.Object = CASTER}};
@@ -139,6 +148,13 @@ namespace {
 		Delta.Updates = {UpdateObject(Projection, NONCASTER)};
 		Cache.ApplyPublication(Projection, Delta);
 		Require(Cache.Restore(Environment, nullptr, Restored), "empty depth is reused for noncaster edits");
+		Delta.Updates.clear();
+		Delta.MeshVertexUpdates = {{.Mesh = CASTER_MESH}};
+		Cache.ApplyPublication(Projection, Delta);
+		Require(Cache.Restore(Environment, nullptr, Restored),
+			"empty depth ignores deformable edits when no caster references the mesh");
+		Delta.MeshVertexUpdates.clear();
+		Delta.Updates = {UpdateObject(Projection, NONCASTER)};
 		Delta.Updates.front().Item.CastShadow = true;
 		Cache.ApplyPublication(Projection, Delta);
 		Require(!Cache.Restore(Environment, nullptr, Restored), "a newly eligible caster invalidates empty depth");
@@ -236,13 +252,6 @@ namespace {
 
 	void TestUnboundedCasterMotion() {
 		auto Scene = InitialScene();
-		Scene.MeshCreates.push_back({.Mesh = CASTER_MESH, .TopologyRevision = 1, .VertexRevision = 1,
-			.Vertices = std::make_shared<const std::vector<RenderVertex>>(
-				std::initializer_list<RenderVertex>{{{-0.5f, -0.5f, 0}}, {{0.5f, -0.5f, 0}}, {{0, 0.5f, 0}}}),
-			.Indices = std::make_shared<const std::vector<std::uint32_t>>(
-				std::initializer_list<std::uint32_t>{0, 1, 2}),
-			.Bounds = {{-0.5f, -0.5f, 0}, {0.5f, 0.5f, 0}}});
-		Scene.Creates.front().Mesh = CASTER_MESH;
 		RenderProjection Projection;
 		(void)Projection.Apply(Scene);
 		SDLDirectionalShadowCache Cache;
