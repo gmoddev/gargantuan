@@ -78,6 +78,9 @@ namespace gargantuan {
 		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const;
 		void TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection);
 		void TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function);
+		void TrackManagedScriptThread(lua_State *Thread, const std::shared_ptr<Script> &ScriptValue);
+		void UntrackManagedScriptThread(lua_State *Thread);
+		void CompleteManagedScriptThreadResume(lua_State *Thread, int Status);
 		void ShutdownRuntime();
 		void RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue);
 		[[nodiscard]] bool CanRunScript(const Script &ScriptValue) const;
@@ -92,6 +95,7 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, ManagedScriptIterator> ManagedScriptIds;
 		std::map<std::weak_ptr<Script>, ManagedScriptIterator, std::owner_less<std::weak_ptr<Script>>>
 			DetachedManagedScripts;
+		std::unordered_map<lua_State *, std::weak_ptr<Script>> ManagedScriptThreads;
 		ManagedScriptIterator ManagedScriptPruneCursor = ManagedScripts.end();
 		void TrackManagedScript(const std::shared_ptr<Script> &ScriptValue);
 		void PruneExpiredManagedScripts();

@@ -197,7 +197,34 @@ namespace gargantuan {
 		ManagedScripts.clear();
 		ManagedScriptIds.clear();
 		DetachedManagedScripts.clear();
+		ManagedScriptThreads.clear();
 		ManagedScriptPruneCursor = ManagedScripts.end();
+	}
+
+	void ScriptEngine::TrackManagedScriptThread(lua_State *Thread, const std::shared_ptr<Script> &ScriptValue) {
+		ManagedScriptThreads.insert_or_assign(Thread, ScriptValue);
+	}
+
+	void ScriptEngine::UntrackManagedScriptThread(lua_State *Thread) {
+		ManagedScriptThreads.erase(Thread);
+	}
+
+	void ScriptEngine::CompleteManagedScriptThreadResume(lua_State *Thread, int Status) {
+		if (Status == LUA_YIELD || Status == LUA_BREAK) return;
+		auto Found = ManagedScriptThreads.find(Thread);
+		if (Found == ManagedScriptThreads.end()) return;
+		auto ScriptValue = Found->second.lock();
+		if (!ScriptValue || ScriptValue->Thread != Thread || ScriptValue->Status != ScriptStatus::Yielded) {
+			ManagedScriptThreads.erase(Found);
+			return;
+		}
+		if (Status == LUA_OK) ScriptValue->Status = ScriptStatus::Finished;
+		else {
+			const auto *Message = lua_tostring(Thread, -1);
+			ScriptValue->ErrorMessage = Message ? Message : "Luau execution failed";
+			ScriptValue->Status = ScriptStatus::Error;
+		}
+		ScriptValue->Cleanup();
 	}
 
 	void ScriptEngine::PruneExpiredManagedScripts() {
@@ -206,6 +233,16 @@ namespace gargantuan {
 		for (std::size_t Index = 0; Index < Count; ++Index) {
 			if (ManagedScriptPruneCursor == ManagedScripts.end()) ManagedScriptPruneCursor = ManagedScripts.begin();
 			auto Current = ManagedScriptPruneCursor++;
+			if (auto ScriptValue = Current->second.lock(); ScriptValue && ScriptValue->Thread &&
+				ScriptValue->Status == ScriptStatus::Yielded) {
+				// Luau's coroutine.resume/close can terminate the original thread
+				// without passing through a native resume completion boundary.
+				const int CoroutineStatus = lua_costatus(L, ScriptValue->Thread);
+				if (CoroutineStatus == LUA_COFIN || CoroutineStatus == LUA_COERR)
+					CompleteManagedScriptThreadResume(
+						ScriptValue->Thread, CoroutineStatus == LUA_COFIN ? LUA_OK : LUA_ERRRUN
+					);
+			}
 			if (!Current->second.expired()) continue;
 			if (Current->first.IsValid()) ManagedScriptIds.erase(Current->first);
 			else DetachedManagedScripts.erase(Current->second);

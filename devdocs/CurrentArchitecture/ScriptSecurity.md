@@ -87,6 +87,15 @@ ObjectId or add a journal record.
 Each Script binds its `script` global in its own sandbox before loading source.
 Yielded Script coroutines and their deferred tasks keep that binding when
 another Script starts; starting a Script does not overwrite the main VM global.
+After a finish or error, Script releases its own coroutine root after the
+current `lua_resume` returns. Task, signal, Remote and entitlement completion
+paths notify the owning Script when its yielded original thread terminates.
+The bounded managed-Script pruning pass also retires threads completed or
+closed through Luau's own coroutine functions after their terminal state is
+observed on an engine Step.
+Deferred tasks, signal callbacks and Remote requests retain their separate Lua
+roots; completing the initial Script does not cancel them. A still-yielded
+Script keeps its own root until completion or explicit cleanup.
 
 Engine destruction stops new Script activation, scheduled/deferred task
 admission and tracked Lua handlers before destroying services or descendants.

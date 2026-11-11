@@ -40,6 +40,7 @@ namespace gargantuan {
 		}
 		ScriptSecurityScope SecurityScope(std::move(securityContext));
 		int status = lua_resume(thread, L, argumentCount);
+		ScriptEngine::Get(L)->CompleteManagedScriptThreadResume(thread, status);
 		switch (status) {
 		case LUA_OK:
 		case LUA_YIELD:

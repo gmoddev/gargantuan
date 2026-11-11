@@ -151,6 +151,7 @@ namespace gargantuan {
 				}
 				ScriptSecurityScope SecurityScope(SecurityContext);
 				const int Status = lua_resume(L, Main, ArgumentCount);
+				ScriptEngine::Get(Main)->CompleteManagedScriptThreadResume(L, Status);
 				if (!CompleteSuspendedHandler(L, Status) && Status != LUA_OK && Status != LUA_YIELD)
 					LOG_ERROR(Lua, "[Networking:Remote] request coroutine error: %s", lua_tostring(L, -1));
 				lua_unref(Main, ThreadReference);
