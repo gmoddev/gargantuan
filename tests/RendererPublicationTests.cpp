@@ -174,14 +174,24 @@ namespace {
 		(void)Projection.Apply(Initial);
 		MirrorsMap();
 		const auto *StableData = Projection.GetCompactTraversal().data();
-		const auto StableBuckets = Projection.GetObjects().bucket_count();
+		std::unordered_map<ObjectId, RenderProjectedObject> LegacyOrder;
+		LegacyOrder.reserve(2);
+		LegacyOrder.emplace(ObjectId{10, 1}, RenderProjectedObject{MakeItem({10, 1})});
+		LegacyOrder.emplace(ObjectId{11, 1}, RenderProjectedObject{MakeItem({11, 1})});
+		LegacyOrder.reserve(LegacyOrder.size());
 		RenderPublication Move{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
 		Move.Updates.push_back({{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1}, 4.0f)});
 		(void)Projection.Apply(Move);
-		Check(Projection.GetObjects().bucket_count() == StableBuckets &&
-			Projection.GetCompactTraversal().data() == StableData &&
+		Check(Projection.GetObjects().bucket_count() == LegacyOrder.bucket_count() &&
+			Projection.GetCompactTraversal().data() != StableData &&
 			Projection.GetItem({10, 1})->ModelMatrix[3].x == 4.0f,
-			"in-place transform updates retain map order and compact traversal pointers");
+			"in-place transform updates follow legacy reserve and refresh positional traversal");
+		{
+			auto Actual = Projection.GetObjects().begin();
+			for (auto Expected = LegacyOrder.begin(); Expected != LegacyOrder.end(); ++Expected, ++Actual)
+				Check(Actual != Projection.GetObjects().end() && Actual->first == Expected->first,
+					"compact traversal preserves Foundation 4 map iteration after reserve");
+		}
 		MirrorsMap();
 		RenderPublication Grow{.Id = 3, .BaseId = 2, .Frame = MakeFrame()};
 		for (std::uint32_t Slot = 20; Slot < 200; ++Slot) Grow.Creates.push_back({MakeItem({Slot, 1})});

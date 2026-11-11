@@ -562,9 +562,11 @@ namespace gargantuan {
 		}
 		for (const auto &Remove : Publication.Removes) { Entries.erase(Remove.Object); ++Changes.Removed; }
 		for (const auto &Remove : Publication.MeshRemoves) { Meshes.erase(Remove.Mesh); ++Changes.MeshesRemoved; }
-		// reserve(size) may shrink and rehash an unchanged map on libstdc++.
-		// The compact traversal mirrors map iteration and is retained on value-only updates.
-		if (!Publication.Creates.empty()) Entries.reserve(Entries.size() + Publication.Creates.size());
+		// Preserve Foundation 4's reserve(size) call and its map iteration policy.
+		// Some standard libraries reorder nodes even when the bucket count stays
+		// the same. Node addresses survive, but the positional traversal does not.
+		Entries.reserve(Entries.size() + Publication.Creates.size());
+		CompactTraversalValid = false;
 		for (const auto &Create : Publication.Creates) {
 			Entries.emplace(Create.Item.Object, RenderProjectedObject{
 				Create.Item, Create.Mesh, Create.Material, Create.Visible, Create.Primitives
