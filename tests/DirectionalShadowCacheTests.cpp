@@ -163,8 +163,10 @@ namespace {
 		}
 		const auto CheckCorners = [&](const RenderCameraSnapshot &View, const SDLDirectionalCascadePlan &Value) {
 			const double Tangent = std::tan(glm::radians(static_cast<double>(View.VerticalFieldOfView)) * 0.5);
-			for (const auto &Cascade : Value.Cascades) {
-				for (const float Depth : {Cascade.Near, Cascade.Far})
+			for (std::uint32_t Index = 0; Index < Value.Count; ++Index) {
+				const auto &Cascade = Value.Cascades[Index];
+				const float CoverageNear = Index == 0 ? Cascade.Near : Value.Cascades[Index - 1].TransitionStart;
+				for (const float Depth : {CoverageNear, Cascade.Far})
 					for (const float X : {-1.0f, 1.0f}) for (const float Y : {-1.0f, 1.0f}) {
 						const glm::dvec3 World = glm::dvec3(View.Position) + glm::dvec3(View.LookDirection) *
 							static_cast<double>(Depth) + glm::dvec3(View.RightDirection) *
@@ -229,12 +231,47 @@ namespace {
 		Require(!Cache.RestoreCascade(1, Environment, nullptr, Far, Restored),
 			"a far caster addition invalidates its own layer");
 	}
+
+	void TestUnboundedCasterMotion() {
+		auto Scene = InitialScene();
+		Scene.MeshCreates.push_back({.Mesh = CASTER_MESH, .TopologyRevision = 1, .VertexRevision = 1,
+			.Vertices = std::make_shared<const std::vector<RenderVertex>>(
+				std::initializer_list<RenderVertex>{{{-0.5f, -0.5f, 0}}, {{0.5f, -0.5f, 0}}, {{0, 0.5f, 0}}}),
+			.Indices = std::make_shared<const std::vector<std::uint32_t>>(
+				std::initializer_list<std::uint32_t>{0, 1, 2}),
+			.Bounds = {{-0.5f, -0.5f, 0}, {0.5f, 0.5f, 0}}});
+		Scene.Creates.front().Mesh = CASTER_MESH;
+		RenderProjection Projection;
+		(void)Projection.Apply(Scene);
+		SDLDirectionalShadowCache Cache;
+		const auto &Environment = Scene.Frame.Environment;
+		const auto Far = glm::translate(glm::mat4(1.0f), glm::vec3(-10.0f, 0.0f, 0.0f));
+		const auto PrepareEmpty = [&] {
+			Cache.BeginCascadeRecording(1);
+			Cache.FinishCascadeRecording(1, Environment, nullptr, Far, true, false);
+			Require(Cache.OnFrameSubmitted(), "empty far layer commits after submission");
+		};
+		glm::mat4 Restored;
+		PrepareEmpty();
+		RenderPublication Pose{.Id = 2, .BaseId = 1, .Frame = Scene.Frame};
+		Pose.AnimationPoseUpdates.push_back({.Object = CASTER});
+		Cache.ApplyPublication(Projection, Pose);
+		Require(!Cache.RestoreCascade(1, Environment, nullptr, Far, Restored),
+			"a newly posed outside caster can enter an empty cascade");
+		PrepareEmpty();
+		RenderPublication Deform{.Id = 3, .BaseId = 1, .Frame = Scene.Frame};
+		Deform.MeshVertexUpdates.push_back({.Mesh = CASTER_MESH});
+		Cache.ApplyPublication(Projection, Deform);
+		Require(!Cache.RestoreCascade(1, Environment, nullptr, Far, Restored),
+			"new deformable bounds can enter an empty cascade");
+	}
 }
 
 int main() try {
 	TestCache();
 	TestCascadePlan();
 	TestCascadeIndependence();
+	TestUnboundedCasterMotion();
 	std::cout << "[Render:ShadowCache] Publication relevance, submission and dependency bounds passed\n";
 	return 0;
 } catch (const std::exception &Error) {

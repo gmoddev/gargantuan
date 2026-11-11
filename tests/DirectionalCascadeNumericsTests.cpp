@@ -13,8 +13,10 @@ namespace {
 	void CheckCorners(const gargantuan::RenderCameraSnapshot &Camera,
 		const gargantuan::SDLDirectionalCascadePlan &Plan, double Aspect = 16.0 / 9.0) {
 		const double Tangent = std::tan(glm::radians(double(Camera.VerticalFieldOfView)) * 0.5);
-		for (const auto &Cascade : Plan.Cascades) {
-			for (const float Depth : {Cascade.Near, Cascade.Far})
+		for (std::uint32_t Index = 0; Index < Plan.Count; ++Index) {
+			const auto &Cascade = Plan.Cascades[Index];
+			const float CoverageNear = Index == 0 ? Cascade.Near : Plan.Cascades[Index - 1].TransitionStart;
+			for (const float Depth : {CoverageNear, Cascade.Far})
 				for (const float X : {-1.0f, 1.0f}) for (const float Y : {-1.0f, 1.0f}) {
 					const glm::dvec3 World = glm::dvec3(Camera.Position) +
 						glm::dvec3(Camera.LookDirection) * double(Depth) +

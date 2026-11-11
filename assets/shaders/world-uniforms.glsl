@@ -15,5 +15,13 @@ layout(set = WORLD_UNIFORM_SET, binding = 0) uniform WorldUniforms {
     vec4 EnvironmentLighting;
     vec4 EnvironmentRotationTone;
     vec4 LocalLighting;
+    vec4 ShadowControls;
+    mat4 CascadeShadowMatrices[4];
+    vec4 CascadeShadowOrigins[4];
+    vec4 CascadeShadowSplits[4];
+    vec4 CascadeShadowMetrics[4];
+    vec4 SpotShadowControls;
+    mat4 SpotShadowMatrices[8];
+    vec4 SpotShadowOrigins[8];
 } world;
 #endif

@@ -35,10 +35,10 @@ struct LocalLight {
     vec4 ColorIntensity;
     vec4 ShapeInner;
 };
-layout(std430, set = 2, binding = 9) readonly buffer LocalLightBuffer {
+layout(std430, set = 2, binding = 13) readonly buffer LocalLightBuffer {
     LocalLight LocalLights[];
 };
-layout(std430, set = 2, binding = 10) readonly buffer LightTileBuffer {
+layout(std430, set = 2, binding = 14) readonly buffer LightTileBuffer {
     uint TileWords[];
 };
 const uint TileLightLimit = 24u;
@@ -52,6 +52,8 @@ vec2 POISSON_DISK[4] = vec2[](
         vec2(-0.094184101, -0.92938870),
         vec2(0.34495938, 0.29387760)
     );
+
+#include "shadow-sampling.glsl"
 
 const float Pi = 3.141592653589793;
 
@@ -174,6 +176,7 @@ vec3 EvaluateLocalLights(vec3 Base, vec3 Normal, vec3 View, float Metallic, floa
         float RelativeSquared = DistanceSquared / RangeSquared;
         float Falloff = max(0.0, 1.0 - RelativeSquared * RelativeSquared);
         float Irradiance = Source.ColorIntensity.w * Cone * Falloff * Falloff / max(DistanceSquared, 0.01);
+        Irradiance *= EvaluateSpotShadow(Source.ShapeInner.z, Normal, NormalDotLight);
         vec3 Response = Physical ? EvaluateDirect(Base, Normal, Light, View, Metallic, Roughness)
             : Base * NormalDotLight;
         Result += Source.ColorIntensity.rgb * Irradiance * Response;
@@ -183,6 +186,8 @@ vec3 EvaluateLocalLights(vec3 Base, vec3 Normal, vec3 View, float Metallic, floa
 
 float EvaluateShadow(float NormalDotLight) {
     if (world.SunDirectionIntensity.w <= 0.0 || world.EnvironmentLighting.w < 0.5) return 1.0;
+    if (world.ShadowControls.x > 0.5)
+        return EvaluateDirectionalCascades(SafeDirection(FragmentNormal, vec3(0, 1, 0)), NormalDotLight);
     vec3 shadowCoordinate = ShadowPosition.xyz / ShadowPosition.w;
     float bias = max(0.003 * (1.0 - NormalDotLight), 0.0005);
     float currentDepth = shadowCoordinate.z - bias;

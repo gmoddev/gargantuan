@@ -67,6 +67,34 @@ namespace gargantuan {
 			const auto Found = Objects.find(Object);
 			return Found == Objects.end() ? nullptr : &Found->second;
 		};
+		const auto IncomingCaster = [&](ObjectId Id) {
+			return std::ranges::any_of(Publication.Creates,
+				[&](const auto &Create) { return Create.Item.Object == Id && IsCaster(Create); }) ||
+				std::ranges::any_of(Publication.Updates,
+					[&](const auto &Update) { return Update.Object == Id && IsCaster(Update); });
+		};
+		const bool PoseCasterChanged = std::ranges::any_of(Publication.AnimationPoseUpdates,
+			[&](const auto &Pose) {
+				const auto *Previous = Find(Pose.Object);
+				return (Previous && IsCaster(*Previous)) || IncomingCaster(Pose.Object);
+			}) || std::ranges::any_of(Publication.AnimationPoseRemoves,
+			[&](const auto &Pose) {
+				const auto *Previous = Find(Pose.Object);
+				return Previous && IsCaster(*Previous);
+			});
+		bool DeformableCasterChanged = false;
+		if (!Publication.MeshVertexUpdates.empty()) {
+			std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> EditedMeshes;
+			for (const auto &Update : Publication.MeshVertexUpdates) EditedMeshes.insert(Update.Mesh);
+			DeformableCasterChanged = std::ranges::any_of(Objects, [&](const auto &Entry) {
+				return IsCaster(Entry.second) && Entry.second.Mesh && EditedMeshes.contains(*Entry.second.Mesh);
+			}) || std::ranges::any_of(Publication.Creates, [&](const auto &Create) {
+				return IsCaster(Create) && Create.Mesh && EditedMeshes.contains(*Create.Mesh);
+			}) || std::ranges::any_of(Publication.Updates, [&](const auto &Update) {
+				return IsCaster(Update) && Update.Mesh && EditedMeshes.contains(*Update.Mesh);
+			});
+		}
+		const bool UnboundedCasterChange = PoseCasterChanged || DeformableCasterChanged;
 		for (auto &Slot : Slots) {
 			if (!Slot.Committed || !Slot.Committed->SunEnabled) continue;
 			const auto &Matrix = Slot.Committed->Matrix;
@@ -80,22 +108,16 @@ namespace gargantuan {
 				return Previous && Relevant(*Previous);
 			};
 			if (!Slot.Committed->HasCasters) {
-				if (std::ranges::any_of(Publication.Creates, Relevant) ||
+				if (UnboundedCasterChange || std::ranges::any_of(Publication.Creates, Relevant) ||
 					std::ranges::any_of(Publication.Updates, Relevant)) Slot.Committed.reset();
 				continue;
 			}
-			const bool Changed = std::ranges::any_of(Publication.Creates, Relevant) ||
+			const bool Changed = UnboundedCasterChange || std::ranges::any_of(Publication.Creates, Relevant) ||
 				std::ranges::any_of(Publication.Removes, [&](const auto &Remove) { return WasRelevant(Remove.Object); }) ||
 				std::ranges::any_of(Publication.Updates, [&](const auto &Update) {
 					return ShadowObjectChanged(Find(Update.Object), Update) &&
 						(WasRelevant(Update.Object) || Relevant(Update));
 				}) ||
-				std::ranges::any_of(Publication.AnimationPoseUpdates,
-					[&](const auto &Pose) { return WasRelevant(Pose.Object); }) ||
-				std::ranges::any_of(Publication.AnimationPoseRemoves,
-					[&](const auto &Pose) { return WasRelevant(Pose.Object); }) ||
-				std::ranges::any_of(Publication.MeshVertexUpdates,
-					[&](const auto &Update) { return Slot.Meshes.contains(Update.Mesh); }) ||
 				std::ranges::any_of(Publication.MeshRemoves,
 					[&](const auto &Remove) { return Slot.Meshes.contains(Remove.Mesh); }) ||
 				std::ranges::any_of(Publication.TextureUpdates,

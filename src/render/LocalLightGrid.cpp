@@ -1,4 +1,5 @@
 #include "render/sdl/SDLLocalLightGrid.hpp"
+#include "render/sdl/SDLSpotShadowAtlas.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
 
 #include <SDL3/SDL.h>
@@ -71,6 +72,7 @@ namespace gargantuan {
 		Release(Lights);
 		Release(Tiles);
 		LastLights.reset();
+		LastShadowBindings = {};
 		Valid = false;
 	}
 
@@ -107,13 +109,23 @@ namespace gargantuan {
 		}
 	}
 
-	void SDLLocalLightGrid::Prepare(const RenderFrameState &Frame, SDLRendererMetrics *Metrics) {
+	void SDLLocalLightGrid::Prepare(const RenderFrameState &Frame, SDLRendererMetrics *Metrics,
+		const SDLSpotShadowAtlas *Atlas) {
 		const auto Start = std::chrono::steady_clock::now();
+		std::array<ShadowBinding, MaximumShadowedSpotlights> ShadowBindings{};
+		if (Atlas) {
+			std::size_t Count = 0;
+			for (const auto &Assignment : Atlas->GetAssignments()) {
+				if (!Assignment.Sampleable) continue;
+				ShadowBindings[Count++] = {Assignment.Light, Assignment.Layer + 1};
+			}
+		}
 		const auto &Source = Frame.Environment.LocalLights;
 		const bool HasLights = Source && !Source->empty();
 		const auto ClipMatrix = HasLights
 			? glm::dmat4(Frame.Camera.ProjectionMatrix) * glm::dmat4(Frame.Camera.ViewMatrix) : glm::dmat4(1.0);
-		if (Valid && Source == LastLights && (!HasLights || (LastClip == ClipMatrix && LastCamera == Frame.Camera.Position &&
+		if (Valid && Source == LastLights && ShadowBindings == LastShadowBindings &&
+			(!HasLights || (LastClip == ClipMatrix && LastCamera == Frame.Camera.Position &&
 			Width == Frame.ViewportWidth && Height == Frame.ViewportHeight))) {
 			if (Metrics) Metrics->LastLocalLightGridNanoseconds = 0;
 			return;
@@ -151,10 +163,16 @@ namespace gargantuan {
 		TileWords.assign(Visible.empty() ? 1u : Rows * Columns * TileStride, 0);
 		for (const auto &Entry : Visible) {
 			const auto &Light = *Entry.Light;
+			std::uint32_t LayerPlusOne = 0;
+			for (const auto &Binding : ShadowBindings) if (Binding.Light == Light.Object) {
+				LayerPlusOne = Binding.LayerPlusOne;
+				break;
+			}
 			const auto Index = static_cast<std::uint32_t>(PackedLights.size());
 			PackedLights.push_back({
 				{Light.Position, Light.Range}, {Light.Direction, Light.OuterConeCosine}, {Light.Color, Light.Intensity},
-				{Light.InnerConeCosine, Light.Kind == RenderLocalLightKind::Spot ? 1.0f : 0.0f, 0.0f, 0.0f},
+				{Light.InnerConeCosine, Light.Kind == RenderLocalLightKind::Spot ? 1.0f : 0.0f,
+					static_cast<float>(LayerPlusOne), 0.0f},
 			});
 			for (auto Y = Entry.Rect.Top; Y <= Entry.Rect.Bottom; ++Y) for (auto X = Entry.Rect.Left; X <= Entry.Rect.Right; ++X) {
 				const auto Offset = (Y * Columns + X) * TileStride;
@@ -185,6 +203,7 @@ namespace gargantuan {
 		SDL_EndGPUCopyPass(Pass);
 		if (!SDL_SubmitGPUCommandBuffer(Commands)) throw std::runtime_error("[Renderer:LocalLights] Could not submit light uploads");
 		LastLights = Source;
+		LastShadowBindings = ShadowBindings;
 		LastClip = ClipMatrix;
 		LastCamera = Frame.Camera.Position;
 		Valid = true;

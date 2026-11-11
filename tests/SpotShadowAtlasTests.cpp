@@ -41,15 +41,17 @@ int main() try {
 		"priority precedes contribution score");
 	const auto OriginMatrix = Atlas.GetAssignments()[0].Matrix;
 	for (const auto &Entry : Atlas.GetAssignments()) {
-		Require(Entry.Dirty && Entry.Layer < MaximumShadowedSpotlights,
+		Require(Entry.Dirty && !Entry.Sampleable && Entry.Layer < MaximumShadowedSpotlights,
 			"first admission requires a bounded layer render");
 		Atlas.BeginRecording(Entry.Layer);
 		Atlas.FinishRecording(Entry.Layer, true, false);
 	}
+	for (const auto &Entry : Atlas.GetAssignments())
+		Require(Entry.Sampleable, "a complete first-frame map is sampleable after its depth pass");
 	Require(Atlas.OnFrameSubmitted() == 8, "all eight submitted maps commit");
 	Atlas.Prepare(Frame, nullptr);
 	for (const auto &Entry : Atlas.GetAssignments())
-		Require(!Entry.Dirty, "unchanged lights reuse their depth layers");
+		Require(!Entry.Dirty && Entry.Sampleable, "unchanged lights reuse their depth layers");
 	const auto RetainedLayer = Atlas.GetAssignments()[0].Layer;
 	auto ChangedLights = std::make_shared<std::vector<RenderLocalLightState>>(*Lights);
 	(*ChangedLights)[0].Intensity = 1.5f;
@@ -66,6 +68,11 @@ int main() try {
 	Atlas.Prepare(Frame, nullptr);
 	for (const auto &Entry : Atlas.GetAssignments())
 		Require(Entry.Dirty, "device recreation invalidates every selected map");
+	const auto IncompleteLayer = Atlas.GetAssignments().front().Layer;
+	Atlas.BeginRecording(IncompleteLayer);
+	Atlas.FinishRecording(IncompleteLayer, false, true);
+	Require(!Atlas.GetAssignments().front().Sampleable && Atlas.OnFrameSubmitted() == 0,
+		"missing caster residency cannot publish a sampleable atlas layer");
 	(*ChangedLights)[0].Kind = RenderLocalLightKind::Point;
 	Frame.Environment.LocalLights = ChangedLights;
 	Atlas.Prepare(Frame, nullptr);

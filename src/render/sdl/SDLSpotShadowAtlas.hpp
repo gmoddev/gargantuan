@@ -27,6 +27,7 @@ namespace gargantuan {
 		glm::vec3 Origin{0.0f};
 		bool Dirty = true;
 		bool HasCasters = false;
+		bool Sampleable = false;
 	};
 
 	class SDLSpotShadowAtlas final {
@@ -41,6 +42,38 @@ namespace gargantuan {
 				const auto Found = Objects.find(Id);
 				return Found == Objects.end() ? nullptr : &Found->second;
 			};
+			const auto IncomingCaster = [&](ObjectId Id) {
+				return std::ranges::any_of(Publication.Creates,
+					[&](const auto &Create) {
+						return Create.Item.Object == Id && Create.Visible && Create.Item.CastShadow;
+					}) || std::ranges::any_of(Publication.Updates,
+						[&](const auto &Update) {
+							return Update.Object == Id && Update.Visible && Update.Item.CastShadow;
+						});
+			};
+			const bool PoseCasterChanged = std::ranges::any_of(Publication.AnimationPoseUpdates,
+				[&](const auto &Pose) {
+					const auto *Object = Find(Pose.Object);
+					return (Object && Object->Visible && Object->Item.CastShadow) || IncomingCaster(Pose.Object);
+				}) || std::ranges::any_of(Publication.AnimationPoseRemoves,
+				[&](const auto &Pose) {
+					const auto *Object = Find(Pose.Object);
+					return Object && Object->Visible && Object->Item.CastShadow;
+				});
+			bool DeformableCasterChanged = false;
+			if (!Publication.MeshVertexUpdates.empty()) {
+				std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> EditedMeshes;
+				for (const auto &Update : Publication.MeshVertexUpdates) EditedMeshes.insert(Update.Mesh);
+				DeformableCasterChanged = std::ranges::any_of(Objects, [&](const auto &Entry) {
+					return Entry.second.Visible && Entry.second.Item.CastShadow && Entry.second.Mesh &&
+						EditedMeshes.contains(*Entry.second.Mesh);
+				}) || std::ranges::any_of(Publication.Creates, [&](const auto &Create) {
+					return Create.Visible && Create.Item.CastShadow && Create.Mesh && EditedMeshes.contains(*Create.Mesh);
+				}) || std::ranges::any_of(Publication.Updates, [&](const auto &Update) {
+					return Update.Visible && Update.Item.CastShadow && Update.Mesh && EditedMeshes.contains(*Update.Mesh);
+				});
+			}
+			const bool UnboundedCasterChange = PoseCasterChanged || DeformableCasterChanged;
 			for (auto &Slot : Slots) {
 				if (!Slot.Light || !Slot.Committed) continue;
 				const auto Relevant = [&](const auto &Object) {
@@ -52,18 +85,12 @@ namespace gargantuan {
 					const auto *Object = Find(Id);
 					return Object && Relevant(*Object);
 				};
-				if (std::ranges::any_of(Publication.Creates, Relevant) ||
+				if (UnboundedCasterChange || std::ranges::any_of(Publication.Creates, Relevant) ||
 					std::ranges::any_of(Publication.Removes,
 						[&](const auto &Remove) { return WasRelevant(Remove.Object); }) ||
 					std::ranges::any_of(Publication.Updates, [&](const auto &Update) {
 						return WasRelevant(Update.Object) || Relevant(Update);
 					}) ||
-					std::ranges::any_of(Publication.AnimationPoseUpdates,
-						[&](const auto &Pose) { return WasRelevant(Pose.Object); }) ||
-					std::ranges::any_of(Publication.AnimationPoseRemoves,
-						[&](const auto &Pose) { return WasRelevant(Pose.Object); }) ||
-					std::ranges::any_of(Publication.MeshVertexUpdates,
-						[&](const auto &Update) { return Slot.Meshes.contains(Update.Mesh); }) ||
 					std::ranges::any_of(Publication.MeshRemoves,
 						[&](const auto &Remove) { return Slot.Meshes.contains(Remove.Mesh); }) ||
 					std::ranges::any_of(Publication.TextureUpdates,
@@ -139,7 +166,7 @@ namespace gargantuan {
 				Slot.Target = Target;
 				Slot.Matrix = Matrix;
 				Assignments.push_back({Candidate.Light->Object, Layer, Matrix, Candidate.Light->Position,
-					!Slot.Committed, Slot.HasCasters});
+					!Slot.Committed, Slot.HasCasters, Slot.Committed});
 			}
 			for (std::uint32_t Index = 0; Index < MaximumShadowedSpotlights; ++Index)
 				if (!Reserved[Index]) Slots[Index] = {};
@@ -173,6 +200,11 @@ namespace gargantuan {
 			auto &Slot = Slots[Layer];
 			Slot.HasCasters = HasCasters;
 			Slot.Recorded = AllResident && !Slot.Overflow;
+			for (auto &Assignment : Assignments) if (Assignment.Layer == Layer) {
+				Assignment.HasCasters = HasCasters;
+				Assignment.Sampleable = Slot.Recorded;
+				break;
+			}
 		}
 		[[nodiscard]] std::uint32_t OnFrameSubmitted() {
 			std::uint32_t Built = 0;

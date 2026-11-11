@@ -77,14 +77,17 @@ namespace gargantuan {
 		Plan.Count = Settings.Count;
 		Plan.Resolution = Settings.Resolution;
 		double Start = Near;
+		double PreviousTransitionStart = Near;
 		for (std::uint32_t Index = 0; Index < Settings.Count; ++Index) {
 			const double Fraction = static_cast<double>(Index + 1) / Settings.Count;
 			const double Logarithmic = Near * std::pow(Far / Near, Fraction);
 			const double Uniform = Near + (Far - Near) * Fraction;
 			const double End = Index + 1 == Settings.Count ? Far :
 				Settings.SplitLambda * Logarithmic + (1.0 - Settings.SplitLambda) * Uniform;
-			const double HalfDepth = (End - Start) * 0.5;
-			const double CenterDepth = (Start + End) * 0.5;
+			// The next map must contain the prior map's entire blend band.
+			const double FitStart = Index == 0 ? Start : PreviousTransitionStart;
+			const double HalfDepth = (End - FitStart) * 0.5;
+			const double CenterDepth = (FitStart + End) * 0.5;
 			const double CornerRadius = End * TanHalf * std::sqrt(1.0 + static_cast<double>(Aspect) * Aspect);
 			// A bounding sphere around the whole slice has a view-independent XY extent.
 			// Snapping can displace the light-plane center by half a texel on
@@ -121,6 +124,7 @@ namespace gargantuan {
 			Cascade.WorldUnitsPerTexel = static_cast<float>(Texel);
 			Cascade.DepthSpan = static_cast<float>(2.0 * DepthExtent);
 			Start = End;
+			PreviousTransitionStart = Cascade.TransitionStart;
 		}
 		return Plan;
 	}
