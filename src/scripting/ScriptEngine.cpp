@@ -245,6 +245,9 @@ namespace gargantuan {
 	}
 
 	void ScriptEngine::Step() {
+		// Engine::Destroy may release its owner from a Lua callback. Keep the
+		// VM and this queue alive through the current step.
+		[[maybe_unused]] auto KeepAlive = weak_from_this().lock();
 		Threads.Step();
 
 		// Script callbacks may add or remove queue entries, including the running
@@ -291,6 +294,7 @@ namespace gargantuan {
 	}
 
 	void ScriptEngine::RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue) {
+		[[maybe_unused]] auto KeepAlive = weak_from_this().lock();
 		if (!ScriptValue || ScriptValue->GetDestroyed() || ScriptValue->IsDestroying() || !CanRunScript(*ScriptValue))
 			return;
 		ManagedScripts.emplace_back(ScriptValue);

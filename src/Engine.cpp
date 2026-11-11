@@ -38,7 +38,7 @@ namespace gargantuan {
 		EngineProviderConfiguration ProviderConfiguration
 	)
 		: DataModel(game), Renderer(renderer),
-		  Script(std::make_unique<class ScriptEngine>(game, std::move(RuntimeDiagnostic), ProviderConfiguration.Mode)),
+		  Script(std::make_shared<class ScriptEngine>(game, std::move(RuntimeDiagnostic), ProviderConfiguration.Mode)),
 		  Workspace(GetService<gargantuan::Workspace>()),
 		  WorldRoot(std::static_pointer_cast<gargantuan::WorldRoot>(Workspace)),
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
@@ -179,6 +179,10 @@ namespace gargantuan {
 		}
 
 		Script->RunBootstrapScript(Players->StartDefaultRuntime(ProviderConfiguration.Mode));
+		if (Destroyed) {
+			Construction.Complete = true;
+			return;
+		}
 		Interaction->StartDefaultRuntime();
 
 		LOG_INFO(App, "Constructed engine");
@@ -230,6 +234,7 @@ namespace gargantuan {
 			Entitlements->DetachAsyncRuntime();
 			Entitlements->ShutdownProviderRuntime();
 		}
+		if (Script) Script->ScriptQueue.clear();
 		Script.reset();
 	}
 
@@ -302,7 +307,11 @@ namespace gargantuan {
 	void Engine::Step() {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineStep);
 		if (Destroyed || !ProcessService->Alive) return;
+		// A server callback can destroy game during any Luau resume in this
+		// frame. Keep the VM alive until every active callback has unwound.
+		auto ScriptRuntime = Script;
 		Mutations.Drain();
+		if (Destroyed) return;
 		if (Content) {
 			if (ResidencyPolicy && !Content->IsManifestAvailable()) {
 				ResidencyPolicy->Stop(Content.get());
@@ -357,6 +366,7 @@ namespace gargantuan {
 			} else Content->Step();
 		}
 
+		if (Destroyed) return;
 		CurrentTick = std::chrono::steady_clock::now();
 		if (LastTick.time_since_epoch().count() == 0) LastTick = CurrentTick;
 		float deltaTime = GetDeltaTime();
@@ -370,15 +380,20 @@ namespace gargantuan {
 			{
 				G_PROFILE("Simulation");
 				RunService->PreSimulation->Fire(deltaTime);
+				if (Destroyed) return;
 				runtime_detail::MeasureWork(runtime_detail::WorkPhase::Physics,
 					[&] { WorldRoot->StepPhysics(deltaTime, std::nullopt); });
+				if (Destroyed) return;
 				Workspace->GetCurrentCamera()->Step(deltaTime);
+				if (Destroyed) return;
 				RunService->PostSimulation->Fire(deltaTime);
+				if (Destroyed) return;
 			}
 
 			{
 				G_PROFILE("PreRender");
 				RunService->PreRender->Fire(deltaTime);
+				if (Destroyed) return;
 				if (Spatial) Spatial->PrepareAnimationRequirements();
 				if (Animation) {
 					AnimationUpdateContext UpdateContext;
@@ -402,6 +417,7 @@ namespace gargantuan {
 					}
 					runtime_detail::MeasureWork(runtime_detail::WorkPhase::Animation,
 						[&] { Animation->Step(deltaTime, UpdateContext); });
+					if (Destroyed) return;
 					for (const auto &Request : Animation->GetRootMotionRequests()) {
 						runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RootMotion);
 						const auto AdmissionStarted = std::chrono::steady_clock::now();
@@ -433,6 +449,7 @@ namespace gargantuan {
 								.LocalSpace = true,
 							}
 						);
+						if (Destroyed) return;
 						RootMotionMetrics.PhysicsCpuNanoseconds += Result.PhysicsCpuNanoseconds;
 						if (!Result.Succeeded())
 							++RootMotionMetrics.Rejected;
@@ -450,11 +467,13 @@ namespace gargantuan {
 								.count()
 						);
 					}
+					if (Destroyed) return;
 					RenderPublishing.SetAnimationPoseChanges(Animation->GetPoseUpdates(), Animation->GetPoseRemoves());
 					Animation->ClearChanges();
 				}
 				if (Spatial) Spatial->Step();
 				Interaction->Step(CurrentTick);
+				if (Destroyed) return;
 				if (Gui) {
 					auto MeshChanges = Assets->DrainMeshChanges();
 					if (!MeshChanges.Creates.empty() || !MeshChanges.Removes.empty())
@@ -464,6 +483,7 @@ namespace gargantuan {
 					(void)Gui->Reconcile();
 					Gui->Publish(RenderPublishing);
 				}
+				if (Destroyed) return;
 			}
 
 			Input->EndFrame();
@@ -482,12 +502,15 @@ namespace gargantuan {
 					RenderPublishing.RequestFullResync();
 					throw;
 				}
+				if (Destroyed) return;
 			}
 
 			{
 				G_PROFILE("Scripts");
 				if (Entitlements) (void)Entitlements->PumpAsyncCompletions();
-				Script->Step();
+				if (Destroyed) return;
+				ScriptRuntime->Step();
+				if (Destroyed) return;
 				if (Audio) Audio->Step(Workspace->GetCurrentCamera()->GetCFrame());
 			}
 		}

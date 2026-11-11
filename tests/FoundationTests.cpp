@@ -1,4 +1,5 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/FileLink.hpp"
 #include "gargantuan/classes/Folder.hpp"
@@ -7043,6 +7044,47 @@ namespace {
 		Game->Destroy();
 	}
 
+	void TestServerScriptDestroysEngineDataModel() {
+		using namespace gargantuan;
+		for (const bool DirectScriptStep : {false, true}) {
+			auto Game = std::make_shared<DataModel>();
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameDuringResume");
+			ScriptValue->SetSource("game:Destroy(); error('after-game-destroy')");
+			ScriptValue->SetParent(Game);
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			if (DirectScriptStep) Runtime.Script->Step();
+			else Runtime.Step();
+			Check(Game->GetDestroyed() && ScriptValue->GetDestroyed() && Runtime.Script == nullptr,
+				"ordinary server Script destruction retires the Engine after active Luau returns");
+			Check(ScriptValue->Status == ScriptStatus::Disabled &&
+				ScriptValue->ErrorMessage.find("after-game-destroy") != std::string::npos,
+				"destroying game preserves the running Script error and disabled state");
+			Runtime.Step();
+		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameFromSimulationSignal");
+			ScriptValue->SetSource(R"(
+				game:GetService('RunService').PreSimulation:Connect(function()
+					game:Destroy()
+					error('after-event-destroy')
+				end)
+			)");
+			ScriptValue->SetParent(Game);
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			Runtime.Step();
+			Check(!Game->GetDestroyed() && ScriptValue->Status == ScriptStatus::Finished,
+				"server Script registers a simulation callback before destruction");
+			Runtime.Step();
+			Check(Game->GetDestroyed() && Runtime.Script == nullptr,
+				"simulation signal destroys game without closing the active Luau VM");
+		}
+	}
+
 	void TestLuauEmbeddingCompatibility() {
 		using namespace gargantuan;
 		static_assert(LUA_VECTOR_DOUBLE == 0);
@@ -7681,6 +7723,7 @@ int main() {
 	TestScriptCoroutineRegistryRoot();
 	TestScriptSelfCleanupDuringResume();
 	TestScriptQueueReentrantMutation();
+	TestServerScriptDestroysEngineDataModel();
 	TestLuauEmbeddingCompatibility();
 	TestPlayDiagnosticBounds();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";

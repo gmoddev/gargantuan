@@ -53,7 +53,7 @@ namespace gargantuan {
 	  public:
 		std::shared_ptr<DataModel> DataModel;
 		BaseRenderer *Renderer;
-		std::unique_ptr<ScriptEngine> Script;
+		std::shared_ptr<ScriptEngine> Script;
 		MutationGateway Mutations;
 		RenderPublisher RenderPublishing;
 		std::unique_ptr<GuiRuntime> Gui;

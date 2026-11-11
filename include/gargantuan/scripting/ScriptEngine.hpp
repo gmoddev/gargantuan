@@ -48,7 +48,7 @@ namespace gargantuan {
 	int OpenLibVector2(lua_State *L);
 	int OpenLibVector3(lua_State *L);
 
-	class ScriptEngine {
+	class ScriptEngine : public std::enable_shared_from_this<ScriptEngine> {
 	  public:
 		ScriptEngine(
 			std::shared_ptr<DataModel> game,
