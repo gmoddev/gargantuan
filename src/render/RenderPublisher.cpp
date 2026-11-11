@@ -145,12 +145,12 @@ namespace gargantuan {
 			const std::shared_ptr<Part> &PartValue, ObjectId ExpectedObject,
 			RenderExtractionDiagnostic &Diagnostic, const RenderItem *Previous
 		) {
-			const auto Object = PartValue ? PartValue->GetObjectId() : ObjectId{};
+			const auto Object = ExpectedObject;
 			if (!PartValue || PartValue->GetDestroyed() || PartValue->IsDestroying()) {
 				Diagnostic = {RenderExtractionIssue::DeadObject, Object, "Skipped a dead renderable object"};
 				return std::nullopt;
 			}
-			if (!Object.IsValid() || Object != ExpectedObject) {
+			if (!Object.IsValid()) {
 				Diagnostic = {RenderExtractionIssue::StaleObjectId, Object, "Skipped a renderable object with stale identity"};
 				return std::nullopt;
 			}
@@ -205,13 +205,14 @@ namespace gargantuan {
 			std::optional<ObjectId> ValidatedObject = std::nullopt,
 			const RenderItem *Previous = nullptr
 		) {
-			const auto Object = PartValue ? PartValue->GetObjectId() : ObjectId{};
+			const auto Object = ValidatedObject ? *ValidatedObject :
+				(PartValue ? PartValue->GetObjectId() : ObjectId{});
 			if (!PartValue || PartValue->GetDestroyed() || PartValue->IsDestroying()) {
 				Diagnostic = {RenderExtractionIssue::DeadObject, Object, "Skipped a dead MeshPart"};
 				return std::nullopt;
 			}
-			if (!Object.IsValid() || (ValidatedObject
-				? Object != *ValidatedObject : ObjectRegistry::Get().Lookup(Object).get() != PartValue.get())) {
+			if (!Object.IsValid() ||
+				(!ValidatedObject && ObjectRegistry::Get().Lookup(Object).get() != PartValue.get())) {
 				Diagnostic = {RenderExtractionIssue::StaleObjectId, Object, "Skipped a MeshPart with stale identity"};
 				return std::nullopt;
 			}
