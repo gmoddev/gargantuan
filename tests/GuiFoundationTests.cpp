@@ -27,6 +27,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -942,6 +943,38 @@ Button.Activated:Connect(function() end)
 		Check(!AfterDestroy.Command && !AfterDestroy.Consumed,
 			"destroyed Engine ignores later host input without reading retired GUI state");
 	}
+
+	void TestFocusClearDestroysEngine() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(800.0f, 600.0f));
+		Engine Runtime(Game, &Renderer);
+		auto Tree = BuildTree(Game);
+		auto Input = std::make_shared<TextBox>();
+		Input->SetName("FocusExitBox");
+		Input->SetSize(UDim2::fromOffset(180, 32));
+		Input->SetPosition(UDim2::fromOffset(12, 60));
+		Input->SetParent(Tree.Root);
+		(void)Runtime.Gui->Reconcile();
+		Input->CaptureFocus();
+		int FocusLostCalls = 0;
+		auto Observer = Input->FocusLost->Connect([&](std::monostate) { ++FocusLostCalls; });
+		auto Source = std::make_shared<Script>();
+		Source->SetName("DestroyGameOnFocusLost");
+		Source->SetSource(R"(
+			local Input = game:FindFirstChild('FocusExitBox', true)
+			Input.FocusLost:Connect(function() game:Destroy() end)
+		)");
+		Source->SetParent(Game);
+		Runtime.Script->Step();
+		Check(Source->Status == ScriptStatus::Finished && !Game->GetDestroyed(),
+			"focused GUI installs a FocusLost destruction callback");
+		(void)Runtime.ProcessEvent(FocusEvent{false});
+		Check(Game->GetDestroyed() && Input->GetDestroyed() && FocusLostCalls == 1 &&
+			!Runtime.Gui && !Runtime.Script,
+			"nested GUI teardown sends FocusLost exactly once and clears focus safely");
+		Observer->Disconnect();
+	}
 }
 
 int main() {
@@ -960,6 +993,7 @@ int main() {
 		RunTest("LuauVerticalSlice", TestLuauVerticalSlice);
 		RunTest("DataModelBeforeEngineTeardown", TestDataModelBeforeEngineTeardown);
 		RunTest("GuiEventDestroysEngine", TestGuiEventDestroysEngine);
+		RunTest("FocusClearDestroysEngine", TestFocusClearDestroysEngine);
 	} catch (const std::exception &Exception) {
 		std::cerr << "[Gui:FoundationTest] unexpected exception: " << Exception.what() << '\n';
 		return 1;
