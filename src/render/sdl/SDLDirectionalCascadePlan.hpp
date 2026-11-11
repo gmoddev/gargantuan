@@ -67,7 +67,9 @@ namespace gargantuan {
 		if (Far <= Near) return std::nullopt;
 		const glm::dvec3 Direction = glm::normalize(glm::dvec3(SunDirection));
 		const glm::dvec3 Look = glm::normalize(glm::dvec3(Camera.LookDirection));
-		const glm::dvec3 Up = std::abs(Direction.y) > 0.99 ? glm::dvec3(0, 0, 1) : glm::dvec3(0, 1, 0);
+		// Preserve a continuous light-plane basis through ordinary sun motion.
+		// Switch axes only inside the narrow numerical pole neighborhood.
+		const glm::dvec3 Up = std::abs(Direction.y) > 0.9999 ? glm::dvec3(0, 0, 1) : glm::dvec3(0, 1, 0);
 		const glm::dvec3 LightX = glm::normalize(glm::cross(Up, Direction));
 		const glm::dvec3 LightY = glm::cross(Direction, LightX);
 		const glm::dvec3 CameraPosition(Camera.Position);

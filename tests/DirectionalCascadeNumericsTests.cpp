@@ -77,6 +77,20 @@ int main() try {
 	const auto Rotated = MakeSDLDirectionalCascadePlan(Camera, Sun, 16.0f / 9.0f, Settings);
 	Require(Rotated.has_value(), "rotated camera failed");
 	CheckCorners(Camera, *Rotated);
+	const auto AlmostVertical = [](float Y) {
+		return glm::normalize(glm::vec3(std::sqrt(1.0f - Y * Y), Y, 0.0f));
+	};
+	const auto BelowOldSwitch = MakeSDLDirectionalCascadePlan(Camera, AlmostVertical(0.989f),
+		16.0f / 9.0f, Settings);
+	const auto AboveOldSwitch = MakeSDLDirectionalCascadePlan(Camera, AlmostVertical(0.991f),
+		16.0f / 9.0f, Settings);
+	Require(BelowOldSwitch && AboveOldSwitch, "near-vertical sun failed");
+	const auto LightPlaneX = [](const glm::mat4 &Matrix) {
+		return glm::normalize(glm::vec3(Matrix[0][0], Matrix[1][0], Matrix[2][0]));
+	};
+	Require(glm::dot(LightPlaneX(BelowOldSwitch->Cascades[0].Matrix),
+		LightPlaneX(AboveOldSwitch->Cascades[0].Matrix)) > 0.95f,
+		"small near-vertical sun motion rotated the cascade light plane");
 	std::mt19937 Random(0xC45CADEu);
 	std::uniform_real_distribution<float> Unit(-1.0f, 1.0f);
 	std::uniform_real_distribution<float> Coordinate(-900000.0f, 900000.0f);
