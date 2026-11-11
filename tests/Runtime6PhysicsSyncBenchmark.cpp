@@ -5,6 +5,7 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -323,6 +324,7 @@ namespace {
 
 int main(int ArgumentCount, char **Arguments) {
 	try {
+		gargantuan::BootstrapNativeRuntimeSchema();
 		Run(ParseOptions(ArgumentCount, Arguments));
 		return 0;
 	} catch (const std::exception &Failure) {
