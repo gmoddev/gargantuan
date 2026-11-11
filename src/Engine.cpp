@@ -114,6 +114,7 @@ namespace gargantuan {
 		if (DataModel->Filesystem) ProjectSources = std::make_unique<SourceMount>(*DataModel->Filesystem);
 
 		UnbindDescendants = DataModel->BindDescendants([this](std::shared_ptr<Instance> inst) {
+			if (Destroyed || !Script || Script->IsStopping()) return;
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineActivation);
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst)) {
 				this->Script->ScriptQueue.insert(script);
@@ -145,6 +146,7 @@ namespace gargantuan {
 		});
 
 		DescendantRemovedConnection = DataModel->DescendantRemoved->Connect([this](std::shared_ptr<Instance> inst) {
+			if (!Script || Script->IsStopping()) return;
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst);
 				script && Script->ScriptQueue.contains(script)) {
 				Script->ScriptQueue.erase(script);
@@ -197,6 +199,19 @@ namespace gargantuan {
 		if (Destroyed) return;
 		Destroyed = true;
 		LOG_INFO(App, "Destroying engine");
+		if (DataModelDestroyingConnection) {
+			DataModelDestroyingConnection->Disconnect();
+			DataModelDestroyingConnection.reset();
+		}
+		if (UnbindDescendants) {
+			UnbindDescendants();
+			UnbindDescendants = {};
+		}
+		if (DescendantRemovedConnection) {
+			DescendantRemovedConnection->Disconnect();
+			DescendantRemovedConnection.reset();
+		}
+		if (Script) Script->ShutdownRuntime();
 		if (ResidencyPolicy) ResidencyPolicy->Stop(Content.get());
 		ResidencyPolicy.reset();
 		// Preparation owns immutable metadata only. Join before Engine teardown;
@@ -207,10 +222,6 @@ namespace gargantuan {
 		}
 		ResidencyPolicyManifest.reset();
 		if (Content) Content->Stop();
-		if (DataModelDestroyingConnection) {
-			DataModelDestroyingConnection->Disconnect();
-			DataModelDestroyingConnection.reset();
-		}
 		if (Interaction && !Interaction->GetDestroyed()) Interaction->ShutdownRuntime();
 		if (Players && !Players->GetDestroyed()) Players->ShutdownRuntime();
 		if (CharacterControl && !CharacterControl->GetDestroyed()) CharacterControl->DetachRuntime();
@@ -222,19 +233,10 @@ namespace gargantuan {
 		Gui.reset();
 		if (Renderer) Renderer->Destroy();
 		if (WorldRoot && !WorldRoot->GetDestroyed()) WorldRoot->Destroy();
-		if (UnbindDescendants) {
-			UnbindDescendants();
-			UnbindDescendants = {};
-		}
-		if (DescendantRemovedConnection) {
-			DescendantRemovedConnection->Disconnect();
-			DescendantRemovedConnection.reset();
-		}
 		if (Entitlements && !Entitlements->GetDestroyed()) {
 			Entitlements->DetachAsyncRuntime();
 			Entitlements->ShutdownProviderRuntime();
 		}
-		if (Script) Script->ScriptQueue.clear();
 		Script.reset();
 	}
 

@@ -70,10 +70,12 @@ namespace gargantuan {
 		std::vector<std::weak_ptr<SignalConnection>> SignalConnections;
 		std::vector<std::weak_ptr<RemoteFunction>> RemoteFunctions;
 		RuntimeMode Mode = RuntimeMode::Offline;
+		[[nodiscard]] bool IsStopping() const { return Stopping; }
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
 		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const;
 		void TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection);
 		void TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function);
+		void ShutdownRuntime();
 		void RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue);
 		[[nodiscard]] bool CanRunScript(const Script &ScriptValue) const;
 
@@ -81,5 +83,8 @@ namespace gargantuan {
 
 		static ScriptEngine *Get(lua_State *L);
 		static void DumpStack(lua_State *L);
+
+	  private:
+		bool Stopping = false;
 	};
 }

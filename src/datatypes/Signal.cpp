@@ -284,6 +284,7 @@ namespace gargantuan {
 		const auto SecurityContext = GetCurrentScriptSecurityContext();
 		auto Connection = signal->Once(
 			[L, mainState, threadReference, signal, SecurityContext](CallbackArgument value) {
+				[[maybe_unused]] auto KeepAlive = ScriptEngine::Get(mainState)->weak_from_this().lock();
 				ScriptSecurityScope SecurityScope(SecurityContext);
 				try {
 					int argumentCount = signal->LPushArgument(L, value);
@@ -368,6 +369,7 @@ namespace gargantuan {
 	}
 
 	void BaseSignal::LRunCallback(lua_State *mainState, BaseSignal *signal, int callbackReference, std::any value) {
+		[[maybe_unused]] auto KeepAlive = ScriptEngine::Get(mainState)->weak_from_this().lock();
 		if (callbackReference == LUA_NOREF || callbackReference == LUA_REFNIL) {
 			return;
 		}

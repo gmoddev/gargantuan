@@ -7083,6 +7083,45 @@ namespace {
 			Check(Game->GetDestroyed() && Runtime.Script == nullptr,
 				"simulation signal destroys game without closing the active Luau VM");
 		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+			auto Trigger = std::make_shared<Part>();
+			Trigger->SetName("ExternalTrigger");
+			Trigger->SetParent(WorkspaceValue);
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameFromPropertySignal");
+			ScriptValue->SetSource(R"(
+				local Part = game:GetService('Workspace'):FindFirstChild('ExternalTrigger')
+				Part:GetPropertyChangedSignal('Name'):Connect(function()
+					game:Destroy()
+					error('after-external-setter-destroy')
+				end)
+			)");
+			ScriptValue->SetParent(Game);
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			Runtime.Step();
+			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed(),
+				"property callback is installed before external Main mutation");
+			std::weak_ptr<ScriptEngine> ScriptWeak = Runtime.Script;
+			std::vector<SignalConnection::Pointer> Connections;
+			for (const auto &WeakConnection : Runtime.Script->SignalConnections)
+				if (auto Connection = WeakConnection.lock()) Connections.push_back(Connection);
+			Check(!Connections.empty(), "Engine tracks the property callback for logical shutdown");
+			bool DestroyingObservedLogicalStop = false;
+			auto Observer = Game->Destroying->Connect([&](std::monostate) {
+				auto ActiveVm = ScriptWeak.lock();
+				DestroyingObservedLogicalStop = ActiveVm && ActiveVm->IsStopping() && !Trigger->GetDestroyed() &&
+					std::ranges::all_of(Connections, [](const auto &Connection) { return !Connection->Connected; }) &&
+					!ActiveVm->Threads.QueueDeferredTask(ActiveVm->L, 0);
+			});
+			Trigger->SetName("ExternalTriggerChanged");
+			Check(Game->GetDestroyed() && Runtime.Script == nullptr && ScriptWeak.expired() &&
+				DestroyingObservedLogicalStop,
+				"external Main setter keeps the active Lua callback alive while logical stop disconnects it");
+			Observer->Disconnect();
+		}
 	}
 
 	void TestLuauEmbeddingCompatibility() {

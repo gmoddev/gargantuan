@@ -1,4 +1,5 @@
 #include "gargantuan/scripting/ThreadEngine.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/Log.hpp"
 
 #include <SDL3/SDL_log.h>
@@ -32,6 +33,11 @@ namespace gargantuan {
 		int argumentCount,
 		ScriptSecurityContext securityContext
 	) {
+		[[maybe_unused]] auto KeepAlive = ScriptEngine::Get(L)->weak_from_this().lock();
+		if (Stopping) {
+			lua_unref(L, threadReference);
+			return;
+		}
 		ScriptSecurityScope SecurityScope(std::move(securityContext));
 		int status = lua_resume(thread, L, argumentCount);
 		lua_unref(L, threadReference);
@@ -45,9 +51,20 @@ namespace gargantuan {
 		}
 	}
 
+	void ThreadEngine::ShutdownRuntime() {
+		if (Stopping) return;
+		Stopping = true;
+		while (!ScheduledQueue.empty()) {
+			lua_unref(L, ScheduledQueue.top().ThreadReference);
+			ScheduledQueue.pop();
+		}
+		for (const auto &Task : DeferredQueue) lua_unref(L, Task.ThreadReference);
+		DeferredQueue.clear();
+	}
+
 	void ThreadEngine::Step() {
 		auto currentTime = GetCurrentTime();
-		while (!ScheduledQueue.empty() && ScheduledQueue.top().WakeTime <= currentTime) {
+		while (!Stopping && !ScheduledQueue.empty() && ScheduledQueue.top().WakeTime <= currentTime) {
 			auto task = ScheduledQueue.top();
 			ScheduledQueue.pop();
 
@@ -67,11 +84,15 @@ namespace gargantuan {
 			}
 		}
 
-		while (!DeferredQueue.empty()) {
+		while (!Stopping && !DeferredQueue.empty()) {
 			std::vector<DeferredTask> currentBatch;
 			currentBatch.swap(DeferredQueue);
 
 			for (auto &task : currentBatch) {
+				if (Stopping) {
+					lua_unref(L, task.ThreadReference);
+					continue;
+				}
 				ResumeThreadWithContext(
 					task.Thread, task.ThreadReference, task.ArgumentCount, std::move(task.SecurityContext)
 				);
@@ -82,7 +103,7 @@ namespace gargantuan {
 	bool ThreadEngine::QueueScheduledTask(
 		lua_State *thread, ScheduledTask::Type type, double delaySeconds, int argumentCount
 	) {
-		if (ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
+		if (Stopping || ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
 		ScheduledQueue.push({
 			.type = type,
 			.Thread = thread,
@@ -96,7 +117,7 @@ namespace gargantuan {
 	}
 
 	bool ThreadEngine::QueueDeferredTask(lua_State *thread, int argumentCount) {
-		if (ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
+		if (Stopping || ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
 		DeferredQueue.push_back({
 			.Thread = thread,
 			.ThreadReference = TakeThreadReference(thread),

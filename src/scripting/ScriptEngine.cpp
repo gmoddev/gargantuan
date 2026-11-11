@@ -174,23 +174,35 @@ namespace gargantuan {
 
 	ScriptEngine::~ScriptEngine() {
 		if (L) {
-			for (auto &WeakFunction : RemoteFunctions)
-				if (auto Function = WeakFunction.lock()) Function->ClearHandlers();
-			RemoteFunctions.clear();
-			for (auto &WeakScript : ManagedScripts)
-				if (auto ScriptValue = WeakScript.lock()) ScriptValue->Cleanup();
-			ManagedScripts.clear();
-			for (auto &WeakConnection : SignalConnections)
-				if (auto Connection = WeakConnection.lock()) Connection->Disconnect();
-			SignalConnections.clear();
+			ShutdownRuntime();
 			lua_close(L);
 			L = nullptr;
 			CurrentState = nullptr;
 		}
 	}
 
+	void ScriptEngine::ShutdownRuntime() {
+		if (Stopping) return;
+		Stopping = true;
+		ScriptQueue.clear();
+		Threads.ShutdownRuntime();
+		for (auto &WeakFunction : RemoteFunctions)
+			if (auto Function = WeakFunction.lock()) Function->ClearHandlers();
+		RemoteFunctions.clear();
+		for (auto &WeakConnection : SignalConnections)
+			if (auto Connection = WeakConnection.lock()) Connection->Disconnect();
+		SignalConnections.clear();
+		for (auto &WeakScript : ManagedScripts)
+			if (auto ScriptValue = WeakScript.lock()) ScriptValue->Cleanup();
+		ManagedScripts.clear();
+	}
+
 	void ScriptEngine::TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection) {
 		if (!Connection) return;
+		if (Stopping) {
+			Connection->Disconnect();
+			return;
+		}
 		if (SignalConnections.size() >= 256 && SignalConnections.size() % 256 == 0)
 			std::erase_if(SignalConnections, [](const auto &WeakConnection) {
 				auto Existing = WeakConnection.lock();
@@ -201,6 +213,10 @@ namespace gargantuan {
 
 	void ScriptEngine::TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function) {
 		if (!Function) return;
+		if (Stopping) {
+			Function->ClearHandlers();
+			return;
+		}
 		std::erase_if(RemoteFunctions, [](const auto &WeakFunction) { return WeakFunction.expired(); });
 		if (std::ranges::any_of(RemoteFunctions, [&](const auto &WeakFunction) {
 				return WeakFunction.lock() == Function;
@@ -248,12 +264,15 @@ namespace gargantuan {
 		// Engine::Destroy may release its owner from a Lua callback. Keep the
 		// VM and this queue alive through the current step.
 		[[maybe_unused]] auto KeepAlive = weak_from_this().lock();
+		if (Stopping) return;
 		Threads.Step();
+		if (Stopping) return;
 
 		// Script callbacks may add or remove queue entries, including the running
 		// Script. Snapshot owners for this pass and admit new entries next Step.
 		const std::vector<std::shared_ptr<Script>> Pending(ScriptQueue.begin(), ScriptQueue.end());
 		for (const auto &script : Pending) {
+			if (Stopping) return;
 			if (!ScriptQueue.contains(script)) continue;
 			if (!CanRunScript(*script)) {
 				ScriptQueue.erase(script);
@@ -261,6 +280,7 @@ namespace gargantuan {
 			}
 			ManagedScripts.emplace_back(script);
 			auto status = script->Step(L);
+			if (Stopping) return;
 
 			switch (status) {
 			case ScriptStatus::Error:
@@ -295,10 +315,12 @@ namespace gargantuan {
 
 	void ScriptEngine::RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue) {
 		[[maybe_unused]] auto KeepAlive = weak_from_this().lock();
+		if (Stopping) return;
 		if (!ScriptValue || ScriptValue->GetDestroyed() || ScriptValue->IsDestroying() || !CanRunScript(*ScriptValue))
 			return;
 		ManagedScripts.emplace_back(ScriptValue);
 		const auto Status = ScriptValue->Step(L);
+		if (Stopping) return;
 		if (Status == ScriptStatus::Error) {
 			LOG_CRITICAL(
 				Lua, "[Runtime:Luau] [%s] %s", ScriptValue->GetFullName().c_str(), ScriptValue->ErrorMessage.c_str()
