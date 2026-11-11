@@ -1345,8 +1345,21 @@ if(BUILD_TESTING)
 		target_link_libraries(gargantuan_renderer_foundation2_benchmark PRIVATE gargantuan_core)
 		add_executable(gargantuan_runtime_foundation6_benchmark "tests/RendererFoundation2Benchmark.cpp")
 		target_link_libraries(gargantuan_runtime_foundation6_benchmark PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_runtime_foundation6_benchmark gargantuan_shaders)
 		add_test(NAME gargantuan_runtime_foundation6_smoke COMMAND gargantuan_runtime_foundation6_benchmark
 			1 --count=1000 --density-matrix --group-width=256 --split-construction --diagnostic-marks)
+		add_test(NAME gargantuan_runtime6_live_render_headless_smoke
+			COMMAND gargantuan_runtime_foundation6_benchmark
+				3 --count=1000 --changes=1000 --draw-backend=headless)
+		set_tests_properties(gargantuan_runtime6_live_render_headless_smoke PROPERTIES
+			LABELS "renderer;runtime;headless" TIMEOUT 120)
+		add_test(NAME gargantuan_runtime6_live_render_invalid_backend
+			COMMAND gargantuan_runtime_foundation6_benchmark 1 --count=1 --draw-backend=invalid)
+		add_test(NAME gargantuan_runtime6_live_render_invalid_instancing
+			COMMAND gargantuan_runtime_foundation6_benchmark 1 --count=1 --draw-instancing=contiguous)
+		set_tests_properties(gargantuan_runtime6_live_render_invalid_backend
+			gargantuan_runtime6_live_render_invalid_instancing PROPERTIES
+			WILL_FAIL TRUE LABELS "renderer;runtime;argument-rejection" TIMEOUT 20)
 		add_executable(gargantuan_runtime6_extraction_alternatives "tests/Runtime6ExtractionAlternativesProbe.cpp")
 		target_link_libraries(gargantuan_runtime6_extraction_alternatives PRIVATE gargantuan_core)
 		add_test(NAME gargantuan_runtime6_extraction_alternatives COMMAND gargantuan_runtime6_extraction_alternatives
@@ -1567,6 +1580,7 @@ if(BUILD_TESTING)
 			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS
 				gargantuan_renderer_benchmark
 				gargantuan_renderer_foundation2_benchmark
+				gargantuan_runtime_foundation6_benchmark
 				gargantuan_renderer_foundation2_gpu_benchmark
 				gargantuan_first_complete_game_gpu_tests
 				gargantuan_editor_viewport_smoke
