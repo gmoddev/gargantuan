@@ -58,7 +58,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "luau", "attribution", "compact_large", "cframe_allocation"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "luau", "attribution", "compact_large", "readback_large", "cframe_allocation"), default="core")
 Parser.add_argument("--comparison-directory", default="comparison")
 Parser.add_argument("--verify-only", action="store_true")
 Args = Parser.parse_args()
@@ -66,7 +66,7 @@ Root = Args.evidence.resolve()
 if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", Args.comparison_directory) or \
         Args.comparison_directory in ("baseline", "candidate"):
     raise RuntimeError("[Runtime6:Compare] Comparison directory must be a fresh simple basename")
-ManifestSuite = {"attribution": "core", "compact_large": "compact", "cframe_allocation": "cframe"}.get(Args.suite, Args.suite)
+ManifestSuite = {"attribution": "core", "compact_large": "compact", "readback_large": "readback", "cframe_allocation": "cframe"}.get(Args.suite, Args.suite)
 Sources = {}
 for Arm in ("baseline", "candidate"):
     Directory = Root / Arm
@@ -244,7 +244,7 @@ if Args.suite == "attribution":
                  f"--samples={Samples}"])
     raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
-if Args.suite == "compact_large":
+if Args.suite in ("compact_large", "readback_large"):
     for Static in (9872, 49872):
         for Density in ("0", "0.01", "1"):
             for Lifecycle in (0, 1, 16):
