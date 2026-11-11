@@ -6,6 +6,7 @@
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
 #include "render/sdl/SDLDirectionalCascadePlan.hpp"
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <array>
@@ -40,6 +41,13 @@ namespace gargantuan {
 
 namespace {
 	using namespace gargantuan;
+	struct SDLVideoReference {
+		SDLVideoReference() {
+			if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+				throw std::runtime_error(std::string("could not initialize shadow fixture video: ") + SDL_GetError());
+		}
+		~SDLVideoReference() { SDL_QuitSubSystem(SDL_INIT_VIDEO); }
+	};
 	constexpr std::uint32_t Size = 96;
 	constexpr RenderMeshIdentity ReceiverMesh{100, 1};
 	constexpr RenderMeshIdentity CasterMesh{101, 1};
@@ -862,6 +870,7 @@ namespace {
 }
 
 int main(int ArgumentCount, char **Arguments) try {
+	const SDLVideoReference Video;
 	PointCostMode = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--point-cost";
 	if (PointCostMode && ArgumentCount != 3)
 		throw std::invalid_argument("--point-cost requires an evidence directory");
