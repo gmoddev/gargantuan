@@ -58,16 +58,22 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic", "gameplay"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic", "gameplay", "attribution", "compact_large"), default="core")
+Parser.add_argument("--comparison-directory", default="comparison")
+Parser.add_argument("--verify-only", action="store_true")
 Args = Parser.parse_args()
 Root = Args.evidence.resolve()
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", Args.comparison_directory) or \
+        Args.comparison_directory in ("baseline", "candidate"):
+    raise RuntimeError("[Runtime6:Compare] Comparison directory must be a fresh simple basename")
+ManifestSuite = {"attribution": "core", "compact_large": "compact"}.get(Args.suite, Args.suite)
 Sources = {}
 for Arm in ("baseline", "candidate"):
     Directory = Root / Arm
     Manifest = json.loads((Directory / "manifest.json").read_text())
     if not re.fullmatch(r"[0-9a-f]{40}", Manifest["source"]):
         raise RuntimeError(f"[Runtime6:Compare] Invalid source identity: {Arm}")
-    if Manifest["suite"] != Args.suite:
+    if Manifest["suite"] != ManifestSuite:
         raise RuntimeError(f"[Runtime6:Compare] Suite mismatch: {Arm}")
     if not Manifest["binaries"] or not any(Name.lower() == "sdl3.dll" for Name in Manifest["binaries"]):
         raise RuntimeError(f"[Runtime6:Compare] Missing frozen SDL3 runtime: {Arm}")
@@ -75,11 +81,18 @@ for Arm in ("baseline", "candidate"):
         Relative = pathlib.PurePosixPath(Name)
         if Relative.is_absolute() or ".." in Relative.parts or "\\" in Name:
             raise RuntimeError(f"[Runtime6:Compare] Invalid frozen path: {Arm}/{Name}")
-        if Hash(Directory / Name) != Digest:
+        File = Directory / Name
+        if not re.fullmatch(r"[0-9a-f]{64}", Digest) or not File.is_file() or File.is_symlink() or Hash(File) != Digest:
             raise RuntimeError(f"[Runtime6:Compare] Changed binary: {Arm}/{Name}")
     Sources[Arm] = Manifest
 
-Output = Root / "comparison"
+if Args.verify_only:
+    print(json.dumps({"verified": True, "suite": Args.suite,
+                      "manifestSuite": ManifestSuite,
+                      "sources": {Arm: Sources[Arm]["source"] for Arm in Sources}}), flush=True)
+    raise SystemExit(0)
+
+Output = Root / Args.comparison_directory
 Output.mkdir(exist_ok=False)
 (Output / "sources.json").write_text(json.dumps(Sources, indent=2))
 Receipts = []
@@ -165,6 +178,28 @@ if Args.suite == "gameplay":
             if Current != FixtureHashes:
                 raise RuntimeError("[Runtime6:Compare] Gameplay changed its shared fixture")
     # Preserve service health and frame/phase health separately in raw output.
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
+
+if Args.suite == "attribution":
+    for Count in (1000, 10000, 50000):
+        for Arm in ("baseline", "candidate", "candidate", "baseline"):
+            Samples = Output / f"{len(Receipts):03}-attribution-{Count}-{Arm}.csv"
+            Run(Arm, f"attribution-{Count}", "gargantuan_runtime_foundation6_benchmark",
+                ["12", f"--count={Count}", "--density-matrix", "--group-width=256",
+                 "--split-construction", "--diagnostic-marks", "--profile",
+                 f"--samples={Samples}"])
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
+
+if Args.suite == "compact_large":
+    for Static in (9872, 49872):
+        for Density in ("0", "0.01", "1"):
+            for Lifecycle in (0, 1, 16):
+                for Arm in ("baseline", "candidate", "candidate", "baseline"):
+                    Run(Arm, f"compact-large-{Static + 128}-{Density}-{Lifecycle}",
+                        "gargantuan_runtime6_physics_sync_benchmark",
+                        ["--static-count", str(Static), "--dynamic-count", "128", "--frames", "30",
+                         "--warmup", "4", "--control-density", Density,
+                         "--lifecycle-per-frame", str(Lifecycle), "--publication"])
     raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite == "realistic":

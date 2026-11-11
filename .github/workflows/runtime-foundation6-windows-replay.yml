@@ -1,0 +1,192 @@
+name: Runtime Foundation 6 Windows artifact replay
+
+# Push only registers the manual route; its sole job is dispatch-gated.
+on:
+  push:
+    branches: [experiment/runtime6-evaluation]
+    paths: [.github/workflows/runtime-foundation6-windows-replay.yml]
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Completed Runtime Foundation 6 Windows CPU comparison run ID
+        type: string
+        required: true
+      suite:
+        description: Missing measurement scope from the frozen binaries
+        type: choice
+        options: [attribution, compact_large]
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  replay:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      REPLAY_SUITE: ${{ inputs.suite }}
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - name: Checkout replay driver only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download completed Windows comparison artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_RUN_ID -notmatch '^[1-9][0-9]{0,17}$') {
+            throw '[Runtime6:Replay] Source run ID must be a positive decimal GitHub run ID'
+          }
+          $Run = & gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $Run -or $Run.status -cne 'completed' -or
+              $Run.name -cne 'Runtime Foundation 6 Windows CPU comparison' -or
+              $Run.repository.full_name -cne $env:GITHUB_REPOSITORY) {
+            throw '[Runtime6:Replay] Source is not a completed comparison run in this repository'
+          }
+          $Evidence = Join-Path $env:RUNNER_TEMP 'runtime6-replay-evidence'
+          if (Test-Path -LiteralPath $Evidence) { throw '[Runtime6:Replay] Replay evidence directory already exists' }
+          & gh run download $env:SOURCE_RUN_ID --name runtime6-hosted-windows-cpu-comparison --dir $Evidence
+          if ($LASTEXITCODE -ne 0) { throw '[Runtime6:Replay] Exact source artifact download failed' }
+          $Original = Join-Path $Evidence 'comparison'
+          if (-not (Test-Path -LiteralPath (Join-Path $Original 'receipts.json') -PathType Leaf)) {
+            throw '[Runtime6:Replay] Source artifact has no original comparison receipts'
+          }
+          $Files = @(Get-ChildItem -LiteralPath $Original -Recurse -File | Sort-Object FullName)
+          $OriginalHashes = @($Files | ForEach-Object {
+            @{ path = [IO.Path]::GetRelativePath($Original, $_.FullName);
+               sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant() }
+          })
+          $OriginalHashes | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Evidence 'original-comparison-hashes.json')
+          @{
+            sourceRunId = $env:SOURCE_RUN_ID
+            sourceRunConclusion = $Run.conclusion
+            sourceRunHeadSha = $Run.head_sha
+            sourceWorkflow = $Run.name
+            replayRunId = $env:GITHUB_RUN_ID
+            replayWorkflowSha = $env:GITHUB_SHA
+            replaySuite = $env:REPLAY_SUITE
+            replayStartedUtc = [DateTime]::UtcNow.ToString('o')
+            runner = $env:RUNNER_NAME
+            os = [Runtime.InteropServices.RuntimeInformation]::OSDescription
+            framework = [Runtime.InteropServices.RuntimeInformation]::FrameworkDescription
+            processor = $env:PROCESSOR_IDENTIFIER
+            logicalProcessors = [Environment]::ProcessorCount
+            driverSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath tools/runtime6_windows_comparison.py).Hash.ToLowerInvariant()
+          } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Evidence 'replay-origin.json')
+
+      - name: Verify all frozen source manifests before timing
+        shell: pwsh
+        run: |
+          $Evidence = Join-Path $env:RUNNER_TEMP 'runtime6-replay-evidence'
+          python tools/runtime6_windows_comparison.py --evidence $Evidence --suite $env:REPLAY_SUITE --verify-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Quiesce hosted compatibility appraisal
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:RUNNER_OS -cne 'Windows') { throw 'Appraiser preparation requires the GitHub-owned ephemeral Windows runner' }
+          Write-Host "[CI:HostResources] pwsh_version=$($PSVersionTable.PSVersion) framework=$([Runtime.InteropServices.RuntimeInformation]::FrameworkDescription)"
+          $TaskPath = '\Microsoft\Windows\Application Experience\'
+          $TaskName = 'Microsoft Compatibility Appraiser'
+          $TaskState = 'NOT_REGISTERED'
+          $Tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+            $_.TaskPath -ceq $TaskPath -and $_.TaskName -ceq $TaskName
+          })
+          if ($Tasks.Count -gt 1) { throw 'Duplicate exact compatibility appraisal tasks' }
+          if ($Tasks.Count -eq 1) {
+            Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+            Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+            $TaskState = 'Disabled'
+            $Tasks = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop)
+            if ($Tasks.Count -ne 1 -or $Tasks[0].TaskPath -cne $TaskPath -or $Tasks[0].TaskName -cne $TaskName -or
+                [string]$Tasks[0].State -cne 'Disabled') { throw 'Compatibility appraisal task did not remain Disabled' }
+          }
+          $Watch = [Diagnostics.Stopwatch]::StartNew()
+          $ExpectedImage = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'System32\CompatTelRunner.exe'))
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          foreach ($Row in $Processes) {
+            if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded' }
+            if ($Row.Name -ine 'CompatTelRunner.exe' -or ($Row.ProcessId -isnot [uint32] -and $Row.ProcessId -isnot [int]) -or
+                $Row.ProcessId -le 0 -or $Row.ProcessId -gt [int]::MaxValue -or $Row.CreationDate -isnot [datetime] -or
+                [string]::IsNullOrWhiteSpace($Row.ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Row.ExecutablePath) -or
+                [IO.Path]::GetFullPath($Row.ExecutablePath) -ine $ExpectedImage) { throw 'Unexpected compatibility appraisal process identity' }
+            $AppraiserPid = [int]$Row.ProcessId
+            $Birth = $Row.CreationDate.ToUniversalTime()
+            $Process = Get-Process -Id $AppraiserPid -ErrorAction Stop
+            try {
+              if ($Process.Id -ne $AppraiserPid) { throw 'Compatibility appraisal process object PID differs' }
+              $HeldHandle = $Process.Handle
+              if ($null -eq $HeldHandle -or $HeldHandle -eq [IntPtr]::Zero) { throw 'Compatibility appraisal process handle unavailable' }
+              $Current = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$AppraiserPid" -ErrorAction Stop)
+              if ($Current.Count -eq 0) {
+                Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage state=DISAPPEARED_AFTER_HANDLE_OPEN"
+                continue
+              }
+              if ($Current.Count -ne 1 -or $Current[0].ProcessId -ne $AppraiserPid -or $Current[0].Name -ine 'CompatTelRunner.exe' -or
+                  $Current[0].CreationDate -isnot [datetime] -or $Current[0].CreationDate.ToUniversalTime() -ne $Birth -or
+                  [string]::IsNullOrWhiteSpace($Current[0].ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Current[0].ExecutablePath) -or
+                  [IO.Path]::GetFullPath($Current[0].ExecutablePath) -ine $ExpectedImage) { throw 'Compatibility appraisal identity changed after handle open' }
+              if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded before stop' }
+              Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage action=HELD_IDENTITY_CHECKED_STOP"
+              $Process.Kill()
+              $RemainingMs = [int][Math]::Floor(15000 - $Watch.Elapsed.TotalMilliseconds)
+              if ($RemainingMs -le 0 -or -not $Process.WaitForExit($RemainingMs)) { throw 'Compatibility appraisal process did not exit within remaining 15-second budget' }
+            } finally { $Process.Dispose() }
+          }
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          if ($Watch.Elapsed.TotalSeconds -gt 15) { throw 'Compatibility appraisal final census exceeded 15 seconds' }
+          if ($Processes.Count -ne 0) { throw "Compatibility appraisal process persisted or reappeared; process_count=$($Processes.Count)" }
+          if ($TaskState -eq 'Disabled') {
+            $Tasks = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop)
+            if ($Tasks.Count -ne 1 -or $Tasks[0].TaskPath -cne $TaskPath -or $Tasks[0].TaskName -cne $TaskName -or
+                [string]$Tasks[0].State -cne 'Disabled') { throw 'Compatibility appraisal task did not remain Disabled' }
+          }
+          Write-Host "[CI:HostResources] task_path=$TaskPath task_name=$TaskName task_state=$TaskState process_count=0"
+
+      - name: Measure missing scope from frozen binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Evidence = Join-Path $env:RUNNER_TEMP 'runtime6-replay-evidence'
+          $Directory = 'replay-' + $env:REPLAY_SUITE
+          python tools/runtime6_windows_comparison.py --evidence $Evidence --suite $env:REPLAY_SUITE --comparison-directory $Directory
+          $Result = $LASTEXITCODE
+          $Original = Join-Path $Evidence 'comparison'
+          $Before = @(Get-Content -Raw -LiteralPath (Join-Path $Evidence 'original-comparison-hashes.json') | ConvertFrom-Json)
+          $Now = @(Get-ChildItem -LiteralPath $Original -Recurse -File)
+          if ($Now.Count -ne $Before.Count) { throw '[Runtime6:Replay] Original comparison file count changed' }
+          foreach ($Entry in $Before) {
+            $File = Join-Path $Original $Entry.path
+            if (-not (Test-Path -LiteralPath $File -PathType Leaf) -or
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $File).Hash.ToLowerInvariant() -cne $Entry.sha256) {
+              throw "[Runtime6:Replay] Original comparison changed: $($Entry.path)"
+            }
+          }
+          $ReplayOutput = Join-Path $Evidence $Directory
+          if (Test-Path -LiteralPath $ReplayOutput -PathType Container) {
+            Copy-Item -LiteralPath (Join-Path $Evidence 'replay-origin.json') -Destination (Join-Path $ReplayOutput 'replay-origin.json')
+          }
+          if ($Result -ne 0) { exit $Result }
+          if (-not (Test-Path -LiteralPath (Join-Path $ReplayOutput 'receipts.json') -PathType Leaf)) {
+            throw '[Runtime6:Replay] Replay completed without measurement receipts'
+          }
+
+      - name: Upload frozen-source replay evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: runtime6-hosted-windows-cpu-replay
+          path: ${{ runner.temp }}/runtime6-replay-evidence/
