@@ -194,7 +194,10 @@ int main(int ArgCount, char **Args) {
 		const auto Count = Parse(Args[1]);
 		const auto Changed = Parse(Args[2]);
 		const auto Frames = Parse(Args[3]);
-		const bool RandomOrder = ArgCount >= 5 && std::string(Args[4]) == "random";
+		const auto Order = ArgCount >= 5 ? std::string(Args[4]) : std::string("sequential");
+		if (Order != "random" && Order != "sequential")
+			throw std::invalid_argument("Probe order must be random or sequential");
+		const bool RandomOrder = Order == "random";
 		const auto Lifecycle = ArgCount >= 6 ? Parse(Args[5]) : 0;
 		if (Count == 0 || Frames == 0 || Changed > Count || Lifecycle > Count ||
 			Lifecycle > 1024 || Frames > 100)
@@ -231,7 +234,7 @@ int main(int ArgCount, char **Args) {
 		std::iota(Selection.begin(), Selection.end(), 0);
 		std::mt19937_64 Random(0x8d145c9fU);
 		std::size_t ReusedSlots = 0;
-		std::cout << "frame,count,changed,lifecycle,dirty,setter_ms,capture_ms,direct_ms,"
+		std::cout << "frame,count,changed,lifecycle,order,dirty,setter_ms,capture_ms,direct_ms,"
 			"soa_sync_ms,soa_consume_ms,snapshot_sync_ms,snapshot_consume_ms,verify_ms\n";
 		for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
 			if (RandomOrder) std::shuffle(Selection.begin(), Selection.end(), Random);
@@ -310,7 +313,8 @@ int main(int ArgCount, char **Args) {
 					throw std::runtime_error("[Runtime6:ExtractionProbe] Retired generation survived in derived state");
 			const auto VerifyMs = Milliseconds(Clock::now() - VerifyStart);
 			Dirty.Acknowledge(Batch);
-			std::cout << Frame << ',' << Count << ',' << Changed << ',' << Lifecycle << ',' << Objects.size()
+			std::cout << Frame << ',' << Count << ',' << Changed << ',' << Lifecycle << ',' << Order << ','
+				Objects.size()
 				<< ',' << std::fixed << std::setprecision(6) << SetterMs << ',' << CaptureMs << ','
 				<< DirectMs << ',' << SoASyncMs << ',' << SoAConsumeMs << ','
 				<< SnapshotSyncMs << ',' << SnapshotConsumeMs << ',' << VerifyMs << '\n' << std::flush;
