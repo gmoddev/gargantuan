@@ -88,8 +88,15 @@ jobs:
               gargantuan_renderer_publication_tests gargantuan_physics_backend_tests \
               "${extra_targets[@]}" \
               2>&1 | tee "runtime6-evidence/$arm/build.log"
+            focused_tests='foundation|prepared_property|renderer_publication|physics_backend|runtime_foundation6_smoke|runtime6_extraction_alternatives|runtime6_physics_sync_smoke'
+            if [ "$COMPARISON_SUITE" = realistic ]; then
+              focused_tests+='|runtime6_realistic_publication_probe_smoke'
+            fi
+            if [ "$COMPARISON_SUITE" = compact ] && [ "$arm" = candidate ]; then
+              focused_tests+='|runtime6_physics_sync_fault'
+            fi
             SDL_VIDEODRIVER=dummy ctest --test-dir build-runtime6 --output-on-failure \
-              -R '^gargantuan_(foundation|prepared_property|renderer_publication|physics_backend|runtime_foundation6_smoke|runtime6_extraction_alternatives|runtime6_physics_sync_smoke|runtime6_realistic_publication_probe_smoke|runtime6_physics_sync_fault)$' \
+              -R "^gargantuan_(${focused_tests})$" \
               2>&1 | tee "runtime6-evidence/$arm/tests.log"
             export ARM="$arm" SOURCE="$source"
             python3 - <<'PY'
