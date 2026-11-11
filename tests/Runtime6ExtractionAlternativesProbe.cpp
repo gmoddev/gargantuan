@@ -230,6 +230,7 @@ int main(int ArgCount, char **Args) {
 		std::vector<std::size_t> Selection(Count);
 		std::iota(Selection.begin(), Selection.end(), 0);
 		std::mt19937_64 Random(0x8d145c9fU);
+		std::size_t ReusedSlots = 0;
 		std::cout << "frame,count,changed,lifecycle,dirty,setter_ms,capture_ms,direct_ms,"
 			"soa_sync_ms,soa_consume_ms,snapshot_sync_ms,snapshot_consume_ms,verify_ms\n";
 		for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
@@ -248,6 +249,14 @@ int main(int ArgCount, char **Args) {
 				Value->Destroy();
 				auto Replacement = std::make_shared<gargantuan::Part>();
 				Replacement->SetParent(World);
+				const auto NewObject = Replacement->GetObjectId();
+				if (NewObject == Retired.back())
+					throw std::runtime_error("[Runtime6:ExtractionProbe] Replacement reused a stale identity");
+				if (NewObject.Slot == Retired.back().Slot) {
+					if (NewObject.Generation <= Retired.back().Generation)
+						throw std::runtime_error("[Runtime6:ExtractionProbe] Slot generation did not advance");
+					++ReusedSlots;
+				}
 				Value = std::move(Replacement);
 				if (gargantuan::ObjectRegistry::Get().Lookup(Retired.back()))
 					throw std::runtime_error("[Runtime6:ExtractionProbe] Retired generation still resolves");
@@ -328,6 +337,7 @@ int main(int ArgCount, char **Args) {
 		Verify(FullExpected, ConsumeSnapshot(FullItems, CurrentIds));
 		const auto FullConsumeMs = Milliseconds(Clock::now() - FullConsumeStart);
 		std::cerr << "[Runtime6:ExtractionProbe] full_resync_count=" << Count
+			<< " reused_slots=" << ReusedSlots
 			<< " direct_ms=" << FullDirectMs << " dual_cache_sync_ms=" << FullSyncMs
 			<< " dual_cache_consume_verify_ms=" << FullConsumeMs
 			<< " soa_logical_bytes="
