@@ -161,6 +161,13 @@ namespace {
 		if ((RendererOnly && BodyCount != 0) || (!RendererOnly && BodyCount != Config.Count) ||
 			WorldRootTestAccess::DirtyCount(*World) != 0)
 			throw std::runtime_error("[Runtime6:PhysicsListener] Fixture body or initial dirty count mismatch");
+		if (Config.DrainPhysics) {
+			// The first safe point may establish AssetService and author its
+			// creation. Keep that setup outside the measured journal interval.
+			World->StepPhysics(0.0, std::nullopt);
+			if (WorldRootTestAccess::DirtyCount(*World) != 0)
+				throw std::runtime_error("[Runtime6:PhysicsListener] Setup safe point left dirty marks");
+		}
 		std::cout << "Mode,Count,Changed,Frame,NativeBodies,ListenerEnabled,SetterNanoseconds,"
 			"ListenerCalls,NewDirty,Coalesced,Suppressed,ListenerNanoseconds,DirtyCount,"
 			"FireCalls,ConnectionVisits,NativeCallbacks,ScriptCallbacks,DeferredCalls,"
@@ -183,6 +190,9 @@ namespace {
 				SetterNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
 					Clock::now() - Started).count();
 			}
+			if (Config.DrainPhysics &&
+				ChangeJournal::Get().GetRetentionWindow(Scope).NextSequence - JournalBefore != Config.Changed)
+				throw std::runtime_error("[Runtime6:PhysicsListener] Authored CFrame setter journal delta mismatch");
 			const auto After = Config.Profile ? WorldRootTestAccess::Profile(*World) : PhysicsListenerProfileSnapshot{};
 			const auto Dispatch = Config.Profile ? BaseSignal::GetDispatchProfile() : SignalDispatchProfile{};
 			const auto Calls = After.Calls;
