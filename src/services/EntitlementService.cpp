@@ -4,6 +4,7 @@
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
 
 #include <lua.h>
@@ -407,6 +408,8 @@ namespace gargantuan {
 		) {
 			lua_State *Main = lua_mainthread(L);
 			if (L == Main) throw std::runtime_error("Entitlement async checks require a yieldable Luau coroutine");
+			if (ScriptEngine::Get(Main)->IsStopping())
+				throw std::runtime_error("Entitlement runtime is stopping");
 			lua_pushthread(L);
 			lua_xmove(L, Main, 1);
 			const auto ThreadReference = lua_ref(Main, -1);
@@ -775,6 +778,7 @@ namespace gargantuan {
 	}
 
 	std::size_t EntitlementService::PumpAsyncCompletions() {
+		[[maybe_unused]] auto KeepServiceAlive = shared_from_this();
 		std::vector<std::pair<State::PendingLuaRequest, State::LuaResult>> Ready;
 		{
 			std::scoped_lock Lock(Runtime->LuaMutex);
@@ -788,7 +792,20 @@ namespace gargantuan {
 				Runtime->PendingLuaRequests.erase(Pending);
 			}
 		}
+		// Every request belongs to the one attached VM. Retain it across the
+		// whole extracted batch: a first completion can destroy the Engine.
+		[[maybe_unused]] auto KeepRuntimeAlive = Ready.empty() ? std::shared_ptr<ScriptEngine>{}
+			: ScriptEngine::Get(Ready.front().first.Main)->weak_from_this().lock();
 		for (auto &[Request, Result] : Ready) {
+			bool Attached = false;
+			{
+				std::scoped_lock Lock(Runtime->LuaMutex);
+				Attached = Runtime->LuaAttached && Request.RuntimeGeneration == Runtime->LuaRuntimeGeneration;
+			}
+			if (!Attached || (KeepRuntimeAlive && KeepRuntimeAlive->IsStopping())) {
+				lua_unref(Request.Main, Request.ThreadReference);
+				continue;
+			}
 			try {
 				if (auto *Decision = std::get_if<EntitlementDecision>(&Result))
 					PushDecision(Request.Thread, *Decision);

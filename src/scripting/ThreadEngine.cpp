@@ -40,7 +40,6 @@ namespace gargantuan {
 		}
 		ScriptSecurityScope SecurityScope(std::move(securityContext));
 		int status = lua_resume(thread, L, argumentCount);
-		lua_unref(L, threadReference);
 		switch (status) {
 		case LUA_OK:
 		case LUA_YIELD:
@@ -49,6 +48,7 @@ namespace gargantuan {
 		default:
 			LOG_ERROR(Lua, "Thread error: %s", lua_tostring(thread, -1));
 		}
+		lua_unref(L, threadReference);
 	}
 
 	void ThreadEngine::ShutdownRuntime() {
@@ -63,6 +63,9 @@ namespace gargantuan {
 	}
 
 	void ThreadEngine::Step() {
+		// A task can destroy the Engine while a swapped deferred batch still
+		// owns coroutine references that must be released before the VM closes.
+		[[maybe_unused]] auto KeepAlive = ScriptEngine::Get(L)->weak_from_this().lock();
 		auto currentTime = GetCurrentTime();
 		while (!Stopping && !ScheduledQueue.empty() && ScheduledQueue.top().WakeTime <= currentTime) {
 			auto task = ScheduledQueue.top();

@@ -56,7 +56,8 @@ namespace gargantuan {
 		std::shared_ptr<ScriptEngine> Script;
 		MutationGateway Mutations;
 		RenderPublisher RenderPublishing;
-		std::unique_ptr<GuiRuntime> Gui;
+		// A GUI signal can destroy the Engine while GUI dispatch is on the stack.
+		std::shared_ptr<GuiRuntime> Gui;
 		std::unique_ptr<SourceMount> ProjectSources;
 
 		std::shared_ptr<Workspace> Workspace;

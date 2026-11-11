@@ -7085,6 +7085,53 @@ namespace {
 		}
 		{
 			auto Game = std::make_shared<DataModel>();
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameFromHostInput");
+			ScriptValue->SetSource(R"(
+				game:GetService('UserInputService').WindowFocused:Connect(function()
+					game:Destroy()
+				end)
+			)");
+			ScriptValue->SetParent(Game);
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			Runtime.Step();
+			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed(),
+				"host input callback is installed before native event routing");
+			(void)Runtime.ProcessEvent(FocusEvent{true});
+			Check(Game->GetDestroyed() && Runtime.Script == nullptr,
+				"host input callback destroys Engine before later event routing reads retired services");
+			const auto AfterDestroy = Runtime.ProcessEvent(FocusEvent{true});
+			Check(!AfterDestroy.Command && !AfterDestroy.Consumed,
+				"destroyed Engine ignores subsequent host events");
+		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameFromDeferredBatch");
+			ScriptValue->SetSource(R"(
+				task.defer(function() game:Destroy() end)
+				task.defer(function() print('deferred-after-destroy') end)
+			)");
+			ScriptValue->SetParent(Game);
+			std::vector<std::string> Diagnostics;
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer,
+				[&](std::string, std::string Message) { Diagnostics.push_back(std::move(Message)); },
+				EngineProviderConfiguration{.AudioEnabled = false});
+			Runtime.Step();
+			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed(),
+				"deferred tasks are queued before direct scheduler stepping");
+			std::weak_ptr<ScriptEngine> ScriptWeak = Runtime.Script;
+			Runtime.Script->Threads.Step();
+			Check(Game->GetDestroyed() && Runtime.Script == nullptr && ScriptWeak.expired() &&
+				std::ranges::none_of(Diagnostics, [](const std::string &Message) {
+					return Message.find("deferred-after-destroy") != std::string::npos;
+				}),
+				"direct scheduler step retains the VM and cancels the remaining deferred batch");
+		}
+		{
+			auto Game = std::make_shared<DataModel>();
 			auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 			auto Trigger = std::make_shared<Part>();
 			Trigger->SetName("ExternalTrigger");

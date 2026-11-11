@@ -55,6 +55,7 @@ namespace gargantuan {
 	}
 
 	ScriptStatus Script::Step(lua_State *L) {
+		[[maybe_unused]] auto KeepScriptAlive = weak_from_this().lock();
 		if (!ShouldStep() || Thread) return Status;
 		Status = ScriptStatus::Running;
 
@@ -64,6 +65,7 @@ namespace gargantuan {
 		);
 
 		auto scriptEngine = ScriptEngine::Get(L);
+		[[maybe_unused]] auto KeepRuntimeAlive = scriptEngine->weak_from_this().lock();
 		CompileBytecode(&scriptEngine->CompileOptions);
 		if (BytecodeCompileStatus != BytecodeCompileStatus::Success) {
 			Status = ScriptStatus::Error;

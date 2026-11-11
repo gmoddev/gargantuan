@@ -106,7 +106,7 @@ namespace gargantuan {
 			DataModel, Players, ActionMap, Spatial, Renderer && dynamic_cast<HeadlessRenderer *>(Renderer) == nullptr
 		);
 		Assets->ConfigureBuiltInFont(DefaultGuiFont);
-		Gui = std::make_unique<GuiRuntime>(DataModel, DefaultGuiFont);
+		Gui = std::make_shared<GuiRuntime>(DataModel, DefaultGuiFont);
 		if (Renderer) {
 			const auto [Width, Height] = Renderer->GetViewportSize();
 			Gui->SetViewport({Width, Height, 1.0f, {}});
@@ -246,10 +246,15 @@ namespace gargantuan {
 
 	HostEventResult Engine::ProcessEvent(const HostEvent &Event) {
 		HostEventResult Result;
+		if (Destroyed) return Result;
+		// GUI callbacks can destroy the Engine from inside ProcessEvent.
+		auto ActiveGui = Gui;
 		if (const auto *Resize = std::get_if<WindowResizeEvent>(&Event)) {
 			Renderer->Resize(static_cast<int>(Resize->Width), static_cast<int>(Resize->Height));
+			if (Destroyed) return Result;
 			RenderPublishing.RequestFullResync();
-			if (Gui) Gui->SetViewport({Resize->Width, Resize->Height, 1.0f, {}});
+			if (ActiveGui) ActiveGui->SetViewport({Resize->Width, Resize->Height, 1.0f, {}});
+			if (Destroyed) return Result;
 			Workspace->GetCurrentCamera()->SetViewportSize(Vector2(Resize->Width, Resize->Height));
 			return Result;
 		}
@@ -260,14 +265,22 @@ namespace gargantuan {
 		}
 		if (const auto *Focus = std::get_if<FocusEvent>(&Event); Focus && !Focus->Focused && Interaction)
 			Interaction->CancelInput();
+		if (Destroyed) return Result;
 
 		Result.Consumed = UserInputService->ProcessEvent(Event);
-		const bool GuiConsumed = Gui && Gui->ProcessEvent(Event);
-		Result.Consumed = Input->ProcessEvent(Event, GuiConsumed) || GuiConsumed || Result.Consumed;
+		if (Destroyed) return Result;
+		const bool GuiConsumed = ActiveGui && ActiveGui->ProcessEvent(Event);
+		Result.Consumed = GuiConsumed || Result.Consumed;
+		if (Destroyed) return Result;
+		Result.Consumed = Input->ProcessEvent(Event, GuiConsumed) || Result.Consumed;
+		if (Destroyed) return Result;
 		if (!Result.Consumed) Result.Command = Workspace->GetCurrentCamera()->ProcessEvent(Event);
+		if (Destroyed) { Result.Command.reset(); return Result; }
 		if (auto InputCommand = UserInputService->SynchronizeMouseBehavior()) Result.Command = InputCommand;
-		if (Gui)
-			if (auto TextInputCommand = Gui->SynchronizeTextInput()) Result.Command = TextInputCommand;
+		if (Destroyed) { Result.Command.reset(); return Result; }
+		if (ActiveGui)
+			if (auto TextInputCommand = ActiveGui->SynchronizeTextInput()) Result.Command = TextInputCommand;
+		if (Destroyed) Result.Command.reset();
 		return Result;
 	}
 
@@ -312,6 +325,7 @@ namespace gargantuan {
 		// A server callback can destroy game during any Luau resume in this
 		// frame. Keep the VM alive until every active callback has unwound.
 		auto ScriptRuntime = Script;
+		auto ActiveGui = Gui;
 		Mutations.Drain();
 		if (Destroyed) return;
 		if (Content) {
@@ -476,20 +490,23 @@ namespace gargantuan {
 				if (Spatial) Spatial->Step();
 				Interaction->Step(CurrentTick);
 				if (Destroyed) return;
-				if (Gui) {
+				if (ActiveGui) {
 					auto MeshChanges = Assets->DrainMeshChanges();
 					if (!MeshChanges.Creates.empty() || !MeshChanges.Removes.empty())
 						RenderPublishing.SetAssetMeshChanges(
 							std::move(MeshChanges.Creates), std::move(MeshChanges.Removes)
 						);
-					(void)Gui->Reconcile();
-					Gui->Publish(RenderPublishing);
+					(void)ActiveGui->Reconcile();
+					if (Destroyed) return;
+					ActiveGui->Publish(RenderPublishing);
 				}
 				if (Destroyed) return;
 			}
 
 			Input->EndFrame();
+			if (Destroyed) return;
 			UserInputService->EndFrame();
+			if (Destroyed) return;
 
 			{
 				G_PROFILE("Draw");

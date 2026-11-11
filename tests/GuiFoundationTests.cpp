@@ -915,6 +915,33 @@ Button.Activated:Connect(function() end)
 			"DataModel-first teardown retires Luau signal subscriptions while GuiRuntime is alive");
 		Runtime.Destroy();
 	}
+
+	void TestGuiEventDestroysEngine() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(800.0f, 600.0f));
+		Engine Runtime(Game, &Renderer);
+		auto Tree = BuildTree(Game);
+		auto Source = std::make_shared<Script>();
+		Source->SetName("DestroyGameFromGuiEvent");
+		Source->SetSource(R"(
+			local Button = game:FindFirstChild('PlayButton', true)
+			Button.Activated:Connect(function() game:Destroy() end)
+		)");
+		Source->SetParent(Game);
+		Runtime.Script->Step();
+		(void)Runtime.Gui->Reconcile();
+		const Vector2 Center(Tree.Button->GetAbsolutePosition() + Tree.Button->GetAbsoluteSize() / 2.0f);
+		(void)Runtime.ProcessEvent(PointerButtonEvent{{2}, PointerButton::Left, ButtonState::Pressed,
+			{Center.GetX(), Center.GetY()}});
+		(void)Runtime.ProcessEvent(PointerButtonEvent{{2}, PointerButton::Left, ButtonState::Released,
+			{Center.GetX(), Center.GetY()}});
+		Check(Game->GetDestroyed() && Tree.Button->GetDestroyed() && !Runtime.Gui && !Runtime.Script,
+			"GUI callback destroys Engine without releasing active event routing state");
+		const auto AfterDestroy = Runtime.ProcessEvent(FocusEvent{true});
+		Check(!AfterDestroy.Command && !AfterDestroy.Consumed,
+			"destroyed Engine ignores later host input without reading retired GUI state");
+	}
 }
 
 int main() {
@@ -932,6 +959,7 @@ int main() {
 		RunTest("ScrollingAndEditableText", TestScrollingAndEditableText);
 		RunTest("LuauVerticalSlice", TestLuauVerticalSlice);
 		RunTest("DataModelBeforeEngineTeardown", TestDataModelBeforeEngineTeardown);
+		RunTest("GuiEventDestroysEngine", TestGuiEventDestroysEngine);
 	} catch (const std::exception &Exception) {
 		std::cerr << "[Gui:FoundationTest] unexpected exception: " << Exception.what() << '\n';
 		return 1;
