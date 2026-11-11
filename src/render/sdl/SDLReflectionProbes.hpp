@@ -64,6 +64,7 @@ namespace gargantuan {
 		bool PendingFallback = false;
 		bool PendingRecords = false;
 		bool ArraysUnavailable = false;
+		std::optional<bool> SupportsArrays;
 		std::uint64_t PrepareSequence = 0;
 		std::uint64_t RetryArraysAfter = 0;
 		std::optional<std::size_t> PreparingSlot;

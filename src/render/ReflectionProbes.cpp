@@ -122,6 +122,10 @@ namespace gargantuan {
 
 	SDLReflectionProbeBindings SDLReflectionProbes::Prepare(SDLFrameContext &Frame, bool AllowPreprocessing) {
 		const auto Start = std::chrono::steady_clock::now();
+		if (!SupportsArrays) SupportsArrays = SDL_GPUTextureSupportsFormat(Gpu,
+			SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTURETYPE_CUBE_ARRAY,
+			SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+		if (!*SupportsArrays) return {};
 		++PrepareSequence;
 		PendingFallback = false; PendingRecords = false;
 		for (auto &Slot : Slots) Slot.PendingSource.reset();
@@ -237,6 +241,7 @@ namespace gargantuan {
 		Sampler = nullptr; Buffer = nullptr; Transfer = nullptr;
 		FallbackInitialized = false; PendingFallback = false; PendingRecords = false;
 		ArraysUnavailable = false;
+		SupportsArrays.reset();
 		PrepareSequence = 0; RetryArraysAfter = 0;
 		CommittedRecords.clear(); Records.clear(); PreparingSlot.reset();
 	}
