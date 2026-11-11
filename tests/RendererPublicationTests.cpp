@@ -12,6 +12,8 @@
 #include "gargantuan/classes/SpotLight.hpp"
 #include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/environment/EnvironmentSemantics.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
@@ -22,6 +24,8 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -1068,8 +1072,48 @@ namespace {
 			"probe rejects scaled orientation");
 		CheckThrows<std::invalid_argument>([&] { Probe->SetProbePositiveX("../local.hdr"); }, "probe source accepts asset references only");
 		auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
-		const std::vector<std::uint8_t> ProbePixels(4 * 4 * 4, 96);
-		const auto ProbeReference = Assets->RegisterMemoryImage("Probe Face", 4, 4, ProbePixels);
+		const auto ProbeRoot = std::filesystem::temp_directory_path() /
+			("gargantuan-probe-publication-" + AssetId::New().ToString());
+		struct ProbeFixtureRoot final {
+			std::filesystem::path Path;
+			~ProbeFixtureRoot() {
+				std::error_code Error;
+				std::filesystem::remove_all(Path, Error);
+			}
+		} FixtureRoot{ProbeRoot};
+		std::filesystem::create_directories(ProbeRoot);
+		DiskFilesystem Filesystem(ProbeRoot);
+		SourceMount Mount(Filesystem);
+		const auto WriteProbeImage = [&](std::uint8_t Channel) {
+			std::vector<std::uint8_t> Bytes(54 + 4 * 4 * 4, 0);
+			const auto Write16 = [&](std::size_t Offset, std::uint16_t Value) {
+				for (unsigned Byte = 0; Byte < 2; ++Byte)
+					Bytes[Offset + Byte] = static_cast<std::uint8_t>(Value >> (Byte * 8));
+			};
+			const auto Write32 = [&](std::size_t Offset, std::uint32_t Value) {
+				for (unsigned Byte = 0; Byte < 4; ++Byte)
+					Bytes[Offset + Byte] = static_cast<std::uint8_t>(Value >> (Byte * 8));
+			};
+			Bytes[0] = 'B'; Bytes[1] = 'M';
+			Write32(2, static_cast<std::uint32_t>(Bytes.size()));
+			Write32(10, 54); Write32(14, 40); Write32(18, 4); Write32(22, 4);
+			Write16(26, 1); Write16(28, 32); Write32(34, 4 * 4 * 4);
+			for (std::size_t Pixel = 54; Pixel < Bytes.size(); Pixel += 4) {
+				Bytes[Pixel] = Channel; Bytes[Pixel + 1] = Channel;
+				Bytes[Pixel + 2] = Channel; Bytes[Pixel + 3] = 255;
+			}
+			std::ofstream File(ProbeRoot / "probe.bmp", std::ios::binary);
+			File.write(reinterpret_cast<const char *>(Bytes.data()), static_cast<std::streamsize>(Bytes.size()));
+			if (!File) throw std::runtime_error("[Render:PublicationTest] Could not write probe image fixture");
+		};
+		WriteProbeImage(96);
+		const auto ProbeImport = Assets->ImportProjectAsset(Mount, "probe.bmp", AssetKind::Image, "Probe Face");
+		if (!ProbeImport.Ok || !ProbeImport.Record) {
+			Check(false, "probe fixture imports a project image");
+			Game->Destroy();
+			return;
+		}
+		const auto ProbeReference = ProbeImport.Record->Reference.Value;
 		Probe->SetProbePositiveX(ProbeReference); Probe->SetProbeNegativeX(ProbeReference);
 		Probe->SetProbePositiveY(ProbeReference); Probe->SetProbeNegativeY(ProbeReference);
 		Probe->SetProbePositiveZ(ProbeReference); Probe->SetProbeNegativeZ(ProbeReference);
@@ -1083,8 +1127,10 @@ namespace {
 		Check(FirstProbe->Frame.Environment.ReflectionProbes &&
 			FirstProbe->Frame.Environment.ReflectionProbes->size() == 1,
 			"probe with six canonical image references publishes one local environment");
-		const std::vector<std::uint8_t> UpdatedPixels(4 * 4 * 4, 128);
-		Check(Assets->RegisterMemoryImage("Probe Face", 4, 4, UpdatedPixels) == ProbeReference,
+		WriteProbeImage(128);
+		const auto ReimportedImage = Assets->ReimportProjectAsset(Mount, ProbeReference);
+		Check(ReimportedImage.Ok && ReimportedImage.Record &&
+			ReimportedImage.Record->Reference.Value == ProbeReference,
 			"probe face reimport preserves its image identity");
 		TextureChanges = Assets->DrainTextureChanges();
 		ProbePublisher.SetUiTextureChanges(std::move(TextureChanges.Creates),
@@ -1094,6 +1140,7 @@ namespace {
 			ReimportedProbe->Frame.Environment.ReflectionProbes &&
 			ReimportedProbe->Frame.Environment.ReflectionProbes->front().Source.Faces[0].ContentRevision == 2,
 			"probe source reimport invalidates environment without changing the probe identity");
+		Game->MarkPersistenceSubtreeArchivable();
 		std::shared_ptr<Instance> GameInstance = Game;
 		const auto Document = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, GameInstance);
 		std::istringstream SavedDocument(Document);

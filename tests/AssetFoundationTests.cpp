@@ -567,12 +567,16 @@ int main() {
 	WriteBytes(Root / "assets" / "gradient.hdr", MakeHdrGradient());
 	const auto GradientImport = Assets->ImportProjectAsset(Mount, "assets/gradient.hdr", AssetKind::Image, "HDR Orientation");
 	if (GradientImport.Ok && GradientImport.Records.size() == 6) {
-		const auto &PositiveX = std::get<ImportedImage>(*GradientImport.Records[0].Asset);
-		const auto &NegativeX = std::get<ImportedImage>(*GradientImport.Records[1].Asset);
-		const auto &PositiveY = std::get<ImportedImage>(*GradientImport.Records[2].Asset);
-		const auto &NegativeY = std::get<ImportedImage>(*GradientImport.Records[3].Asset);
-		Check(ReadHdrChannel(PositiveX, 0, 0) > ReadHdrChannel(NegativeX, 0, 0) + 20.0f &&
-			ReadHdrChannel(PositiveY, 0, 1) < ReadHdrChannel(NegativeY, 0, 1) - 20.0f,
+		const auto Face = [&](std::string_view Key) -> const ImportedImage * {
+			const auto Record = std::ranges::find(GradientImport.Records, Key, &AssetRecord::LogicalKey);
+			return Record == GradientImport.Records.end() || !Record->Asset
+				? nullptr : std::get_if<ImportedImage>(Record->Asset.get());
+		};
+		const auto *PositiveX = Face("positive-x"), *NegativeX = Face("negative-x");
+		const auto *PositiveY = Face("positive-y"), *NegativeY = Face("negative-y");
+		Check(PositiveX && NegativeX && PositiveY && NegativeY &&
+			ReadHdrChannel(*PositiveX, 0, 0) > ReadHdrChannel(*NegativeX, 0, 0) + 20.0f &&
+			ReadHdrChannel(*PositiveY, 0, 1) < ReadHdrChannel(*NegativeY, 0, 1) - 20.0f,
 			"equirectangular import follows the Sky +X and +Y face orientation");
 	} else Check(false, "bounded HDR gradient imports as a six-face panorama");
 	if (HdrImport.Record) {
@@ -590,9 +594,14 @@ int main() {
 				return std::ranges::find(HdrIds, Record.Id) != HdrIds.end() && Record.ContentRevision == 2;
 			}), "HDR panorama reimport keeps all six derived identities");
 	}
-	WriteBytes(Root / "assets" / "invalid-radiance.hdr", MakeHdr(2, 2, {128, 0, 0, 255}));
-	Check(!Assets->ImportProjectAsset(Mount, "assets/invalid-radiance.hdr", AssetKind::Image).Ok,
-		"non-finite HDR radiance is rejected");
+	// The largest RGBE exponent and mantissa still encode finite float32 radiance.
+	// NaN rejection is exercised through the canonical artifact above.
+	WriteBytes(Root / "assets" / "max-rgbe.hdr", MakeHdr(2, 2, {255, 255, 255, 255}));
+	const auto MaximumRgbe = Assets->ImportProjectAsset(Mount, "assets/max-rgbe.hdr", AssetKind::Image);
+	Check(MaximumRgbe.Ok && MaximumRgbe.Record && MaximumRgbe.Record->Asset &&
+		std::isfinite(ReadHdrChannel(std::get<ImportedImage>(*MaximumRgbe.Record->Asset), 0, 0)) &&
+		ReadHdrChannel(std::get<ImportedImage>(*MaximumRgbe.Record->Asset), 0, 0) > 1.0e38f,
+		"maximum RGBE source radiance remains finite in the canonical image");
 	WriteBytes(Root / "assets" / "extreme.hdr", MakeHdr(2, 2, {128, 0, 0, 145}));
 	const auto ExtremeImport = Assets->ImportProjectAsset(Mount, "assets/extreme.hdr", AssetKind::Image);
 	Check(ExtremeImport.Ok && ExtremeImport.Record && ExtremeImport.Record->Asset &&
