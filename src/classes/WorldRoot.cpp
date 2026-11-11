@@ -172,8 +172,11 @@ namespace gargantuan {
 		FailedMeshUpdatesLogged.erase(Object);
 		bool AddedMembership = false;
 		try {
-			AddedMembership = PartMembership.insert(Object).second;
-			if (AddedMembership) Parts.push_back(Part);
+			AddedMembership = !PartPositions.contains(Object);
+			if (AddedMembership) {
+				Parts.push_back(Part);
+				PartPositions.emplace(Object, Parts.size() - 1);
+			}
 			PartBodies[Object] = Body;
 			BodyParts[Body] = Part;
 		} catch (...) {
@@ -181,13 +184,65 @@ namespace gargantuan {
 			PartBodies.erase(Object);
 			if (AddedMembership) {
 				erase(Parts, Part);
-				PartMembership.erase(Object);
+				PartPositions.erase(Object);
 			}
 			(void)Physics.DestroyBody(Body);
 			throw;
 		}
-		if (auto State = Physics.GetBodyState(Body)) Part->PublishedPhysicsState = *State;
+		if (auto State = Physics.GetBodyState(Body)) {
+			Part->PublishedPhysicsState = *State;
+			SyncDynamicBody(Part, Body);
+		} else FullDynamicScanNeeded = true;
+		if (Part->PendingLinearVelocity || Part->PendingAngularVelocity || Part->PendingAwake ||
+			HasImpulse(Part->AccumulatedImpulse) || HasImpulse(Part->AccumulatedAngularImpulse) ||
+			!Part->AccumulatedPointImpulses.empty() || HasImpulse(Part->AccumulatedForce) ||
+			HasImpulse(Part->AccumulatedTorque)) QueuePendingBodyControl(*Part);
 		return Body;
+	}
+
+	void WorldRoot::QueuePendingBodyControl(const BasePart &Part) {
+		if (ShuttingDownPhysics) return;
+		const auto Object = Part.GetObjectId();
+		if (!PartPositions.contains(Object)) return;
+		try {
+			PendingBodyControls.insert(Object);
+		} catch (...) {
+			FullControlScanNeeded = true;
+		}
+	}
+
+	void WorldRoot::RemoveDynamicBody(ObjectId Object) {
+		auto Found = DynamicPositions.find(Object);
+		if (Found == DynamicPositions.end()) return;
+		const auto Index = Found->second;
+		const auto Last = DynamicBodies.size() - 1;
+		if (Index != Last) {
+			DynamicBodies[Index] = std::move(DynamicBodies[Last]);
+			DynamicPositions[DynamicBodies[Index].Object] = Index;
+		}
+		DynamicBodies.pop_back();
+		DynamicPositions.erase(Found);
+	}
+
+	void WorldRoot::SyncDynamicBody(const std::shared_ptr<BasePart> &Part, PhysicsBodyId Body) {
+		const auto Object = Part->GetObjectId();
+		if (Part->PublishedPhysicsState.Description.Anchored) {
+			RemoveDynamicBody(Object);
+			return;
+		}
+		if (auto Found = DynamicPositions.find(Object); Found != DynamicPositions.end()) {
+			DynamicBodies[Found->second] = {Object, Body, Part};
+			return;
+		}
+		if (FullDynamicScanNeeded) return;
+		try {
+			DynamicBodies.push_back({Object, Body, Part});
+			DynamicPositions.emplace(Object, DynamicBodies.size() - 1);
+		} catch (...) {
+			DynamicBodies.clear();
+			DynamicPositions.clear();
+			FullDynamicScanNeeded = true;
+		}
 	}
 
 	SoftBodyId WorldRoot::CreateDeformableBody(const std::shared_ptr<DeformableBody> &Body) {
@@ -376,8 +431,16 @@ namespace gargantuan {
 	void WorldRoot::RemovePart(const std::shared_ptr<BasePart> &Part) {
 		if (!Part) return;
 		const auto Object = Part->GetObjectId();
-		erase(Parts, Part);
-		PartMembership.erase(Object);
+		if (auto Found = PartPositions.find(Object); Found != PartPositions.end() &&
+			Found->second < Parts.size() && Parts[Found->second] == Part) {
+			const auto Index = Found->second;
+			Parts.erase(Parts.begin() + static_cast<std::ptrdiff_t>(Index));
+			for (std::size_t Position = Index; Position < Parts.size(); ++Position)
+				PartPositions[Parts[Position]->GetObjectId()] = Position;
+		} else erase(Parts, Part);
+		PartPositions.erase(Object);
+		PendingBodyControls.erase(Object);
+		RemoveDynamicBody(Object);
 		DirtyBodies.erase(Object);
 		FailedMeshUpdatesLogged.erase(Object);
 		TrackedParts.erase(Object);
@@ -576,7 +639,10 @@ namespace gargantuan {
 				DirtyBodies.insert(Object);
 			} else {
 				FailedMeshUpdatesLogged.erase(Object);
-				if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
+				if (auto State = Physics.GetBodyState(Found->second)) {
+					Part->PublishedPhysicsState = *State;
+					SyncDynamicBody(Part, Found->second);
+				} else FullDynamicScanNeeded = true;
 			}
 		}
 
@@ -628,14 +694,14 @@ namespace gargantuan {
 	}
 
 	void WorldRoot::ApplyPendingImpulses() {
-		for (const auto &Part : Parts) {
-			if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
+		auto ApplyPart = [this](const std::shared_ptr<BasePart> &Part) {
+			if (!Part || Part->GetDestroyed() || Part->IsDestroying()) return;
 			if (!Part->PendingLinearVelocity && !Part->PendingAngularVelocity && !Part->PendingAwake &&
 				!HasImpulse(Part->AccumulatedImpulse) && !HasImpulse(Part->AccumulatedAngularImpulse) &&
 				Part->AccumulatedPointImpulses.empty() && !HasImpulse(Part->AccumulatedForce) &&
-				!HasImpulse(Part->AccumulatedTorque)) continue;
+				!HasImpulse(Part->AccumulatedTorque)) return;
 			auto Found = PartBodies.find(Part->GetObjectId());
-			if (Found == PartBodies.end()) continue;
+			if (Found == PartBodies.end()) return;
 			const auto Body = Found->second;
 			if (Part->PendingLinearVelocity) {
 				(void)Physics.SetLinearVelocity(Body, *Part->PendingLinearVelocity);
@@ -668,7 +734,37 @@ namespace gargantuan {
 				(void)Physics.ApplyTorque(Body, Part->AccumulatedTorque);
 				Part->AccumulatedTorque = {};
 			}
+		};
+		if (FullControlScanNeeded) {
+			for (const auto &Part : Parts) ApplyPart(Part);
+			PendingBodyControls.clear();
+			FullControlScanNeeded = false;
+			return;
 		}
+		std::vector<std::pair<std::size_t, ObjectId>> Ordered;
+		try {
+			Ordered.reserve(PendingBodyControls.size());
+			for (const auto Object : PendingBodyControls) {
+				auto Found = PartPositions.find(Object);
+				if (Found == PartPositions.end()) {
+					FullControlScanNeeded = true;
+					break;
+				}
+				Ordered.emplace_back(Found->second, Object);
+			}
+			if (!FullControlScanNeeded) std::sort(Ordered.begin(), Ordered.end());
+		} catch (...) {
+			FullControlScanNeeded = true;
+		}
+		if (FullControlScanNeeded) {
+			for (const auto &Part : Parts) ApplyPart(Part);
+		} else {
+			for (const auto &[Position, Object] : Ordered)
+				if (Position < Parts.size() && Parts[Position] && Parts[Position]->GetObjectId() == Object)
+					ApplyPart(Parts[Position]);
+		}
+		PendingBodyControls.clear();
+		FullControlScanNeeded = false;
 	}
 
 	void WorldRoot::ApplyPendingDeformableForces() {
@@ -758,7 +854,10 @@ namespace gargantuan {
 		DeformableStates.clear();
 		LastSoftBodyProfile = {};
 		Parts.clear();
-		PartMembership.clear();
+		PartPositions.clear();
+		DynamicBodies.clear();
+		DynamicPositions.clear();
+		PendingBodyControls.clear();
 		SoftBodies.clear();
 	}
 
@@ -1124,14 +1223,23 @@ namespace gargantuan {
 			ApplyPendingDeformableForces();
 			auto Result = runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsRigidStep,
 				[&] { return Physics.Step({.DeltaTime = STEP_INTERVAL, .SubStepCount = SUB_STEP_COUNT}); });
-			for (const auto &Part : Parts) {
-				if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
-				// Static state changes only at admission or a committed safe-point edit.
-				// Consult accepted state: a failed authored update may leave a dynamic body live.
-				if (Part->PublishedPhysicsState.Description.Anchored) continue;
-				auto Found = PartBodies.find(Part->GetObjectId());
-				if (Found != PartBodies.end())
-					if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
+			if (FullDynamicScanNeeded) {
+				for (const auto &Part : Parts) {
+					if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
+						Part->PublishedPhysicsState.Description.Anchored) continue;
+					auto Found = PartBodies.find(Part->GetObjectId());
+					if (Found != PartBodies.end())
+						if (auto State = Physics.GetBodyState(Found->second)) Part->PublishedPhysicsState = *State;
+				}
+			} else {
+				for (const auto &Record : DynamicBodies) {
+					auto Part = Record.Part.lock();
+					if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
+						Part->GetObjectId() != Record.Object) continue;
+					auto Found = PartBodies.find(Record.Object);
+					if (Found == PartBodies.end() || Found->second != Record.Body) continue;
+					if (auto State = Physics.GetBodyState(Record.Body)) Part->PublishedPhysicsState = *State;
+				}
 			}
 			{
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsEvents);

@@ -156,6 +156,26 @@ backend. The suppression scope is restored on callback failure.
 CanTouch changes replace shapes transactionally: the pinned backend copies event
 flags when creating a contact and does not refresh them for an in-place flag write.
 
+### Runtime Foundation 6 compact synchronization candidate
+
+The isolated Foundation 6 candidate keeps a Main-owned, generation-keyed index
+of successful Part admissions and a compact vector of accepted dynamic bodies.
+Each fixed step reads back only accepted dynamic records. Failed authored
+Anchored updates leave the previously accepted dynamic record live. A failed
+buffer allocation reverts to the prior complete Part scan. No native body handle
+or mutable Instance state crosses to a worker.
+
+BasePart body-control methods mark one pending ObjectId per admitted Part. At the
+fixed step, `WorldRoot` sorts those IDs by current Part admission position and
+applies controls in the same order as the prior complete scan. A control written
+while detached remains on the Part and is queued when a body is later admitted.
+Allocation failure or a missing position uses the complete scan. Removal clears
+pending, position and dynamic records; shutdown clears all derived indexes.
+The existing neutral PhysicsWorld API, validation, signal, journal and motion
+publication paths are unchanged. This candidate still requires native and
+cross-platform qualification and matched end-to-end cost measurement before
+integration.
+
 An unsuccessful shape replacement leaves the previous backend shape and neutral
 identity intact. The update reports failure, `WorldRoot` logs it with the
 `[Physics:Backend]` or bounded `[Physics:Mesh]` prefix, and the dirty update

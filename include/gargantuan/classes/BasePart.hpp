@@ -28,6 +28,7 @@ namespace gargantuan {
 		[[nodiscard]] virtual PhysicsShapeDesc GetPhysicsShape() const = 0;
 		friend class Character;
 		friend class WorldRoot;
+		void NotifyPendingPhysicsControl();
 		void SetCharacterSimulationCFrame(const gargantuan::CFrame &Value);
 		void SetCharacterPresentationOffset(std::optional<gargantuan::CFrame> Value);
 

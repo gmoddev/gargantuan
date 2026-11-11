@@ -39,7 +39,9 @@ namespace gargantuan {
 	struct WorldRootTestAccess {
 		static std::size_t BodyCount(const WorldRoot &World) { return World.PartBodies.size(); }
 		static std::size_t PartCount(const WorldRoot &World) { return World.Parts.size(); }
-		static std::size_t PartMembershipCount(const WorldRoot &World) { return World.PartMembership.size(); }
+		static std::size_t PartMembershipCount(const WorldRoot &World) { return World.PartPositions.size(); }
+		static std::size_t DynamicBodyCount(const WorldRoot &World) { return World.DynamicBodies.size(); }
+		static std::size_t PendingBodyControlCount(const WorldRoot &World) { return World.PendingBodyControls.size(); }
 		static const std::vector<std::shared_ptr<BasePart>> &OrderedParts(const WorldRoot &World) { return World.Parts; }
 		static std::size_t ConstraintCount(const WorldRoot &World) { return World.ConstraintJoints.size(); }
 		static PhysicsBodyId Body(const WorldRoot &World, const BasePart &Part) {
@@ -1295,6 +1297,51 @@ namespace {
 			"throwing physics observer retains nested authored backend update for the next safe point");
 	}
 
+	void TestCompactPhysicsSyncLifecycle() {
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Static = std::make_shared<Part>();
+		Static->SetAnchored(true);
+		Static->SetParent(Workspace);
+		auto Moving = std::make_shared<Part>();
+		Moving->SetParent(Workspace);
+		Check(WorldRootTestAccess::DynamicBodyCount(*Workspace) == 1,
+			"compact sync records only accepted dynamic bodies");
+		Moving->SetLinearVelocity({2.0f, 0.0f, 0.0f});
+		Moving->SetAwake(true);
+		Static->ApplyImpulse({1.0f, 0.0f, 0.0f});
+		Check(WorldRootTestAccess::PendingBodyControlCount(*Workspace) == 2,
+			"body controls coalesce once per generation-bearing Part identity");
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::PendingBodyControlCount(*Workspace) == 0 &&
+			Moving->GetCFrame().Position.x > 0.0f,
+			"compact pending controls apply at the existing fixed-step boundary");
+		Moving->SetAnchored(true);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::DynamicBodyCount(*Workspace) == 0,
+			"accepted anchor transition removes dynamic readback record");
+		Moving->SetAnchored(false);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::DynamicBodyCount(*Workspace) == 1,
+			"accepted dynamic transition restores readback record");
+		Moving->SetParent(nullptr);
+		Check(WorldRootTestAccess::DynamicBodyCount(*Workspace) == 0 &&
+			WorldRootTestAccess::PendingBodyControlCount(*Workspace) == 0,
+			"detachment retires compact sync identity");
+		Moving->SetLinearVelocity({4.0f, 0.0f, 0.0f});
+		Moving->SetParent(Workspace);
+		Check(WorldRootTestAccess::DynamicBodyCount(*Workspace) == 1 &&
+			WorldRootTestAccess::PendingBodyControlCount(*Workspace) == 1,
+			"readmission restores detached body control and dynamic identity");
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::PendingBodyControlCount(*Workspace) == 0,
+			"readmitted body control drains once");
+		Moving->Destroy();
+		Check(WorldRootTestAccess::DynamicBodyCount(*Workspace) == 0,
+			"destruction retires compact dynamic record before generation reuse");
+	}
+
 	void TestBodyDynamicsAndCollisionGroups() {
 		using namespace gargantuan;
 		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
@@ -2231,6 +2278,7 @@ int main() {
 	TestSimulationPublicationAndImpulse();
 	TestPhysicsPublicationNestedMutation();
 	TestPhysicsPublicationThrowKeepsAuthoredHistory();
+	TestCompactPhysicsSyncLifecycle();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();

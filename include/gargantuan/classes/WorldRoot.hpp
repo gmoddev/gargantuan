@@ -55,7 +55,17 @@ namespace gargantuan {
 		SoftBodyWorld Deformables;
 		float StepAccumulator = 0.0f;
 		std::vector<std::shared_ptr<BasePart>> Parts;
-		std::unordered_set<ObjectId> PartMembership;
+		std::unordered_map<ObjectId, std::size_t> PartPositions;
+		struct DynamicBodyRecord {
+			ObjectId Object;
+			PhysicsBodyId Body;
+			std::weak_ptr<BasePart> Part;
+		};
+		std::vector<DynamicBodyRecord> DynamicBodies;
+		std::unordered_map<ObjectId, std::size_t> DynamicPositions;
+		std::unordered_set<ObjectId> PendingBodyControls;
+		bool FullControlScanNeeded = false;
+		bool FullDynamicScanNeeded = false;
 		std::vector<std::shared_ptr<DeformableBody>> SoftBodies;
 		std::unordered_map<ObjectId, PhysicsBodyId> PartBodies;
 		std::unordered_map<PhysicsBodyId, std::weak_ptr<BasePart>> BodyParts;
@@ -114,6 +124,10 @@ namespace gargantuan {
 		[[nodiscard]] WorldRaycastResult ResolveQueryHit(PhysicsRaycastResult Result);
 		static int RunShapeQuery(lua_State *L, Instance *Value, PhysicsQueryShapeKind Kind, bool IsOverlap);
 		friend struct WorldRootTestAccess;
+		friend class BasePart;
+		void QueuePendingBodyControl(const BasePart &Part);
+		void SyncDynamicBody(const std::shared_ptr<BasePart> &Part, PhysicsBodyId Body);
+		void RemoveDynamicBody(ObjectId Object);
 		[[nodiscard]] PhysicsBodyDesc DescribePart(const BasePart &Part);
 		[[nodiscard]] SoftBodyDefinition DescribeDeformable(DeformableBody &Body) const;
 		[[nodiscard]] PhysicsBodyId CreatePartBody(const std::shared_ptr<BasePart> &Part);

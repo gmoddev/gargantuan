@@ -1,12 +1,14 @@
 #define GLM_ENABLE_EXPERIMENTAL
 
 #include "gargantuan/classes/BasePart.hpp"
+#include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 
 #include <glm/gtx/euler_angles.hpp>
 #include <cmath>
+#include <memory>
 #include <stdexcept>
 
 namespace gargantuan {
@@ -49,14 +51,20 @@ namespace gargantuan {
 		AssertCanMutate();
 		RequirePhysicsWriteCapability();
 		const auto Candidate = AccumulatedImpulse + Impulse;
-		if (ValidPhysicsVector(Impulse) && ValidPhysicsVector(Candidate)) AccumulatedImpulse = Candidate;
+		if (ValidPhysicsVector(Impulse) && ValidPhysicsVector(Candidate)) {
+			AccumulatedImpulse = Candidate;
+			NotifyPendingPhysicsControl();
+		}
 	}
 
 	void BasePart::ApplyAngularImpulse(glm::vec3 Impulse) {
 		AssertCanMutate();
 		RequirePhysicsWriteCapability();
 		const auto Candidate = AccumulatedAngularImpulse + Impulse;
-		if (ValidPhysicsVector(Impulse) && ValidPhysicsVector(Candidate)) AccumulatedAngularImpulse = Candidate;
+		if (ValidPhysicsVector(Impulse) && ValidPhysicsVector(Candidate)) {
+			AccumulatedAngularImpulse = Candidate;
+			NotifyPendingPhysicsControl();
+		}
 	}
 
 	void BasePart::ApplyImpulseAtPosition(glm::vec3 Impulse, glm::vec3 Position) {
@@ -65,38 +73,57 @@ namespace gargantuan {
 		if (!ValidPhysicsVector(Impulse) || !ValidPhysicsVector(Position) ||
 			AccumulatedPointImpulses.size() >= MaximumPointImpulsesPerStep) return;
 		AccumulatedPointImpulses.emplace_back(Impulse, Position);
+		NotifyPendingPhysicsControl();
 	}
 
 	void BasePart::ApplyForce(glm::vec3 Force) {
 		AssertCanMutate();
 		RequirePhysicsWriteCapability();
 		const auto Candidate = AccumulatedForce + Force;
-		if (ValidPhysicsVector(Force) && ValidPhysicsVector(Candidate)) AccumulatedForce = Candidate;
+		if (ValidPhysicsVector(Force) && ValidPhysicsVector(Candidate)) {
+			AccumulatedForce = Candidate;
+			NotifyPendingPhysicsControl();
+		}
 	}
 
 	void BasePart::ApplyTorque(glm::vec3 Torque) {
 		AssertCanMutate();
 		RequirePhysicsWriteCapability();
 		const auto Candidate = AccumulatedTorque + Torque;
-		if (ValidPhysicsVector(Torque) && ValidPhysicsVector(Candidate)) AccumulatedTorque = Candidate;
+		if (ValidPhysicsVector(Torque) && ValidPhysicsVector(Candidate)) {
+			AccumulatedTorque = Candidate;
+			NotifyPendingPhysicsControl();
+		}
 	}
 
 	void BasePart::SetLinearVelocity(glm::vec3 Velocity) {
 		AssertCanMutate();
 		RequirePhysicsWriteCapability();
-		if (ValidPhysicsVector(Velocity)) PendingLinearVelocity = Velocity;
+		if (ValidPhysicsVector(Velocity)) {
+			PendingLinearVelocity = Velocity;
+			NotifyPendingPhysicsControl();
+		}
 	}
 
 	void BasePart::SetAngularVelocity(glm::vec3 Velocity) {
 		AssertCanMutate();
 		RequirePhysicsWriteCapability();
-		if (ValidPhysicsVector(Velocity)) PendingAngularVelocity = Velocity;
+		if (ValidPhysicsVector(Velocity)) {
+			PendingAngularVelocity = Velocity;
+			NotifyPendingPhysicsControl();
+		}
 	}
 
 	void BasePart::SetAwake(bool Awake) {
 		AssertCanMutate();
 		RequirePhysicsWriteCapability();
 		PendingAwake = Awake;
+		NotifyPendingPhysicsControl();
+	}
+
+	void BasePart::NotifyPendingPhysicsControl() {
+		auto World = std::dynamic_pointer_cast<WorldRoot>(FindFirstAncestorWhichIsA("WorldRoot"));
+		if (World) World->QueuePendingBodyControl(*this);
 	}
 
 	glm::vec3 BasePart::GetLinearVelocity() {
