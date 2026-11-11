@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <chrono>
+#include <charconv>
 #include <algorithm>
 #include <atomic>
 #include <limits>
@@ -219,6 +220,43 @@ namespace {
 		Snapshot NoOp(F);
 		Require(F.Apply().Status == MutationStatus::Success, "no-op failed");
 		NoOp.Unchanged(F);
+	}
+
+	void TestOrdinaryAndPreparedVisibility() {
+		Fixture F;
+		const auto OriginalB = F.B->GetName();
+		bool BatchPhase = false;
+		std::string ObservedB;
+		F.A->GetPropertyChangedSignal("Name")->Connect([&](std::monostate) {
+			ObservedB = F.B->GetName();
+			if (BatchPhase) F.A->SetTransparency(0.5f);
+		});
+		F.A->SetName("OrdinaryA");
+		Require(ObservedB == OriginalB, "ordinary callback lost intermediate visibility");
+		F.B->SetName("OrdinaryB");
+		F.Writes = {Write(F.A, "Name", std::string("PreparedA")),
+			Write(F.B, "Name", std::string("PreparedB"))};
+		const auto Before = F.World->GetAuthoritativeRevision();
+		const auto Cursor = ChangeJournal::Get().CreateCursor(F.World->GetObjectId());
+		BatchPhase = true;
+		const auto Result = F.Apply();
+		Require(Result.Status == MutationStatus::Success && Result.ChangedWrites == 2 &&
+			Result.ResultingRevision == Before + 1 && F.World->GetAuthoritativeRevision() == Before + 2 &&
+			ObservedB == "PreparedB" && F.A->GetTransparency() == 0.5f,
+			"prepared observer did not see complete batch before a later nested ordinary write");
+		const auto Records = ChangeJournal::Get().Read(Cursor).Records;
+		Require(Records.size() == 3 &&
+			std::get<PropertyUpdatedChange>(Records[0].Payload).PropertyName == "Name" &&
+			std::get<PropertyUpdatedChange>(Records[1].Payload).PropertyName == "Name" &&
+			std::get<PropertyUpdatedChange>(Records[2].Payload).PropertyName == "Transparency",
+			"nested ordinary mutation followed the complete prepared journal batch");
+		BatchPhase = false;
+		MutationGateway Gateway;
+		Require(Gateway.Undo(*F.World, Security).Succeeded() && F.A->GetName() == "OrdinaryA" &&
+			F.B->GetName() == "OrdinaryB" && F.A->GetTransparency() == 0.5f,
+			"prepared Undo preserved later nested ordinary mutation");
+		Require(Gateway.Redo(*F.World, Security).Succeeded() && F.A->GetName() == "PreparedA" &&
+			F.B->GetName() == "PreparedB", "prepared Redo restored both values");
 	}
 
 	PreparedPropertyStage FailureStage;
@@ -599,9 +637,113 @@ namespace {
 			"missing capability accepted");
 		Before.Unchanged(F);
 	}
+
+	std::size_t ParseCompareCount(const char *Text, std::size_t Maximum) {
+		std::size_t Value = 0;
+		const auto Length = std::char_traits<char>::length(Text);
+		const auto [End, Error] = std::from_chars(Text, Text + Length, Value);
+		if (Error != std::errc{} || End != Text + Length || Value == 0 || Value > Maximum)
+			throw std::invalid_argument("[Runtime:MutationBench] invalid bounded argument");
+		return Value;
+	}
+
+	void CompareOrdinaryAndPrepared(std::size_t PartCount, std::size_t Samples) {
+		using Clock = std::chrono::steady_clock;
+		auto &Journal = ChangeJournal::Get();
+		auto World = std::make_shared<DataModel>();
+		auto WorkspaceValue = World->GetService("Workspace");
+		std::vector<std::shared_ptr<Part>> Parts;
+		Parts.reserve(PartCount);
+		const auto ConstructionStart = Clock::now();
+		for (std::size_t Index = 0; Index < PartCount; ++Index) Parts.push_back(std::make_shared<Part>());
+		const auto ConstructionEnd = Clock::now();
+		for (const auto &PartValue : Parts) PartValue->SetParent(WorkspaceValue);
+		const auto AdoptionEnd = Clock::now();
+		std::size_t ObservedEvents = 0;
+		for (const auto &PartValue : Parts)
+			PartValue->GetPropertyChangedSignal("CFrame")->Connect(
+				[&](std::monostate) { ++ObservedEvents; });
+		const auto Scope = World->GetObjectId();
+		std::cout << "[Runtime:MutationBench] parts=" << PartCount << " samples=" << Samples
+			<< " constructionNs=" << std::chrono::duration_cast<std::chrono::nanoseconds>(ConstructionEnd - ConstructionStart).count()
+			<< " adoptionNs=" << std::chrono::duration_cast<std::chrono::nanoseconds>(AdoptionEnd - ConstructionEnd).count()
+			<< " batchLimit=" << MaximumPreparedPropertyWrites << '\n';
+		MutationGateway Gateway;
+		for (std::size_t Sample = 0; Sample < Samples; ++Sample) {
+			const auto OrdinaryX = static_cast<float>(Sample + 1);
+			const auto PreparedX = -OrdinaryX;
+			const CFrame OrdinaryValue(glm::vec3(OrdinaryX, 0.0f, 0.0f));
+			const auto PreparedValue = *EncodeNativeWireValue(CFrame(glm::vec3(PreparedX, 0.0f, 0.0f)));
+			std::vector<PreparedPropertyWrite> Writes;
+			Writes.reserve(PartCount);
+			for (const auto &PartValue : Parts) Writes.push_back(Write(PartValue, "CFrame", PreparedValue));
+
+			Journal.Clear();
+			ObservedEvents = 0;
+			const auto OrdinaryCursor = Journal.CreateCursor(Scope);
+			const auto OrdinaryRevision = World->GetAuthoritativeRevision();
+			const auto OrdinaryAllocations = AllocationCount;
+			const auto OrdinaryBytes = AllocationBytes;
+			const auto OrdinaryStart = Clock::now();
+			for (const auto &PartValue : Parts) PartValue->SetCFrame(OrdinaryValue);
+			const auto OrdinaryEnd = Clock::now();
+			const auto OrdinaryRecords = Journal.CreateCursor(Scope).NextSequence - OrdinaryCursor.NextSequence;
+			Require(ObservedEvents == PartCount && OrdinaryRecords == PartCount &&
+				World->GetAuthoritativeRevision() - OrdinaryRevision == PartCount,
+				"ordinary comparison lost immediate notifications, journal records, or revisions");
+
+			Journal.Clear();
+			ObservedEvents = 0;
+			const auto PreparedCursor = Journal.CreateCursor(Scope);
+			const auto PreparedRevision = World->GetAuthoritativeRevision();
+			const auto PreparedAllocations = AllocationCount;
+			const auto PreparedBytes = AllocationBytes;
+			const auto PreparedStart = Clock::now();
+			std::size_t ChangedWrites = 0;
+			std::size_t BatchCount = 0;
+			for (std::size_t Offset = 0; Offset < Writes.size(); Offset += MaximumPreparedPropertyWrites) {
+				const auto Count = std::min(MaximumPreparedPropertyWrites, Writes.size() - Offset);
+				const auto Result = PreparedPropertyCommit::Apply(*World, World->GetAuthoritativeRevision(),
+					std::span<const PreparedPropertyWrite>(Writes.data() + Offset, Count), Security);
+				Require(Result.Status == MutationStatus::Success && Result.NotificationFailures == 0 &&
+					Result.ChangedWrites == Count, "prepared comparison batch rejected or missed writes");
+				ChangedWrites += Result.ChangedWrites;
+				++BatchCount;
+			}
+			const auto PreparedEnd = Clock::now();
+			const auto PreparedRecords = Journal.CreateCursor(Scope).NextSequence - PreparedCursor.NextSequence;
+			Require(ChangedWrites == PartCount && ObservedEvents == PartCount && PreparedRecords == PartCount &&
+				World->GetAuthoritativeRevision() - PreparedRevision == BatchCount,
+				"prepared comparison lost committed values, notifications, journal records, or grouped revisions");
+			Require(Parts.front()->GetCFrame().Position.x == PreparedX &&
+				Parts.back()->GetCFrame().Position.x == PreparedX,
+				"prepared comparison did not publish both ends of the world");
+			std::cout << "[Runtime:MutationBench] sample=" << Sample << " parts=" << PartCount
+				<< " ordinaryNs=" << std::chrono::duration_cast<std::chrono::nanoseconds>(OrdinaryEnd - OrdinaryStart).count()
+				<< " ordinaryAllocations=" << PreparedAllocations - OrdinaryAllocations
+				<< " ordinaryBytes=" << PreparedBytes - OrdinaryBytes
+				<< " preparedNs=" << std::chrono::duration_cast<std::chrono::nanoseconds>(PreparedEnd - PreparedStart).count()
+				<< " preparedAllocations=" << AllocationCount - PreparedAllocations
+				<< " preparedBytes=" << AllocationBytes - PreparedBytes
+				<< " ordinaryRecords=" << OrdinaryRecords << " preparedRecords=" << PreparedRecords
+				<< " ordinaryRevisions=" << PartCount << " preparedRevisions=" << BatchCount << '\n';
+
+			const auto ReplayCount = std::min(BatchCount, MaximumRetainedTransactions);
+			const auto UndoStart = Clock::now();
+			for (std::size_t Index = 0; Index < ReplayCount; ++Index)
+				Require(Gateway.Undo(*World, Security).Succeeded(), "prepared comparison undo failed");
+			const auto UndoEnd = Clock::now();
+			for (std::size_t Index = 0; Index < ReplayCount; ++Index)
+				Require(Gateway.Redo(*World, Security).Succeeded(), "prepared comparison redo failed");
+			const auto RedoEnd = Clock::now();
+			std::cout << "[Runtime:MutationBench] sample=" << Sample << " replayActions=" << ReplayCount
+				<< " undoNs=" << std::chrono::duration_cast<std::chrono::nanoseconds>(UndoEnd - UndoStart).count()
+				<< " redoNs=" << std::chrono::duration_cast<std::chrono::nanoseconds>(RedoEnd - UndoEnd).count() << '\n';
+		}
+	}
 }
 
-int main() {
+int main(int argc, char **argv) {
 	std::set_terminate([] {
 		std::fprintf(stderr, "[Prepared:Terminate] boundary=%d sweep=%lld remaining=%lld\n", RejectAllocations, SweepIndex, FailAllocation);
 		std::_Exit(3);
@@ -613,7 +755,13 @@ int main() {
 	try {
 		std::cerr << "[Prepared:Test] bootstrap\n";
 		gargantuan::BootstrapNativeRuntimeSchema();
+		if (argc >= 2 && std::string_view(argv[1]) == "--compare") {
+			if (argc != 4) throw std::invalid_argument("[Runtime:MutationBench] expected --compare Parts Samples");
+			CompareOrdinaryAndPrepared(ParseCompareCount(argv[2], 50'000), ParseCompareCount(argv[3], 16));
+			return 0;
+		}
 		std::cerr << "[Prepared:Test] commit/replay\n"; TestCommitReplay();
+		TestOrdinaryAndPreparedVisibility();
 		std::cerr << "[Prepared:Test] stages\n"; TestStageFailures();
 		std::cerr << "[Prepared:Test] allocations\n"; TestEveryAllocation();
 		std::cerr << "[Prepared:Test] denials\n"; TestDenialsAndNotifications();
