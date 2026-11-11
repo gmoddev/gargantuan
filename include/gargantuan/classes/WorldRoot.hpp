@@ -55,6 +55,7 @@ namespace gargantuan {
 		SoftBodyWorld Deformables;
 		float StepAccumulator = 0.0f;
 		std::vector<std::shared_ptr<BasePart>> Parts;
+		std::unordered_set<ObjectId> PartMembership;
 		std::vector<std::shared_ptr<DeformableBody>> SoftBodies;
 		std::unordered_map<ObjectId, PhysicsBodyId> PartBodies;
 		std::unordered_map<PhysicsBodyId, std::weak_ptr<BasePart>> BodyParts;
@@ -80,7 +81,7 @@ namespace gargantuan {
 		SignalConnection::Pointer DescendantRemovedConnection;
 		std::function<void()> UnbindDescendants;
 		bool GravityDirty = false;
-		bool PublishingPhysicsState = false;
+		ObjectId PublishingPhysicsPart;
 		bool ShuttingDownPhysics = false;
 		bool RaycastFailureLogged = false;
 		bool DynamicMeshFallbackLogged = false;

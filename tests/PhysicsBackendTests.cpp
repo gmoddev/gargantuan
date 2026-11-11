@@ -37,6 +37,9 @@
 namespace gargantuan {
 	struct WorldRootTestAccess {
 		static std::size_t BodyCount(const WorldRoot &World) { return World.PartBodies.size(); }
+		static std::size_t PartCount(const WorldRoot &World) { return World.Parts.size(); }
+		static std::size_t PartMembershipCount(const WorldRoot &World) { return World.PartMembership.size(); }
+		static const std::vector<std::shared_ptr<BasePart>> &OrderedParts(const WorldRoot &World) { return World.Parts; }
 		static std::size_t ConstraintCount(const WorldRoot &World) { return World.ConstraintJoints.size(); }
 		static PhysicsBodyId Body(const WorldRoot &World, const BasePart &Part) {
 			auto Found = World.PartBodies.find(Part.GetObjectId());
@@ -859,6 +862,39 @@ namespace {
 			"repeated toggles restore anchored collision and touch semantics");
 	}
 
+	void TestPartAdmissionMembership() {
+		auto Workspace = MakeWorkspace();
+		Check(Workspace != nullptr, "part membership fixture obtains Workspace");
+		if (!Workspace) return;
+		auto First = std::make_shared<Part>();
+		auto Second = std::make_shared<Part>();
+		First->SetParent(Workspace);
+		Second->SetParent(Workspace);
+		Check(WorldRootTestAccess::PartCount(*Workspace) == 2 &&
+			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2 &&
+			WorldRootTestAccess::OrderedParts(*Workspace) == std::vector<std::shared_ptr<BasePart>>{First, Second},
+			"successful admissions preserve unique ordered Part traversal");
+		First->SetSize({2.0f, 2.0f, 2.0f});
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::PartCount(*Workspace) == 2 &&
+			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2,
+			"safe-point updates do not duplicate Part admission");
+		First->SetParent(nullptr);
+		Check(WorldRootTestAccess::PartCount(*Workspace) == 1 &&
+			WorldRootTestAccess::PartMembershipCount(*Workspace) == 1 &&
+			WorldRootTestAccess::OrderedParts(*Workspace).front() == Second,
+			"removal retires ordered and indexed Part membership");
+		First->SetParent(Workspace);
+		Check(WorldRootTestAccess::PartCount(*Workspace) == 2 &&
+			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2 &&
+			WorldRootTestAccess::OrderedParts(*Workspace) == std::vector<std::shared_ptr<BasePart>>{Second, First},
+			"readmission appends once in established traversal order");
+		Second->Destroy();
+		Check(WorldRootTestAccess::PartCount(*Workspace) == 1 &&
+			WorldRootTestAccess::PartMembershipCount(*Workspace) == 1,
+			"destruction retires Part membership before slot reuse");
+	}
+
 	void TestMeshPartCollisionFallback() {
 		using namespace gargantuan;
 		auto Workspace = MakeWorkspace();
@@ -1152,6 +1188,57 @@ namespace {
 		auto State = WorldRootTestAccess::State(*Workspace, Body);
 		Check(State && State->Description.Transform.FuzzyEq(Part->GetCFrame()),
 			"physics publication does not create a transform feedback update");
+	}
+
+	void TestPhysicsPublicationNestedMutation() {
+		auto Workspace = MakeWorkspace();
+		if (!Workspace) return;
+		Workspace->SetGravity(0.0f);
+		auto Moving = std::make_shared<Part>();
+		auto Other = std::make_shared<Part>();
+		Moving->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
+		Moving->SetParent(Workspace);
+		Other->SetAnchored(true);
+		Other->SetParent(Workspace);
+		bool Mutated = false;
+		auto Connection = Moving->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+			if (Mutated) return;
+			Mutated = true;
+			Moving->SetCanCollide(false);
+			Other->SetSize({3.0f, 3.0f, 3.0f});
+			Moving->SetCFrame(CFrame(8.0f, 5.0f, 0.0f));
+		});
+		Moving->ApplyImpulse({10.0f, 0.0f, 0.0f});
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(Mutated, "physics publication invokes synchronous CFrame observers");
+		Workspace->StepPhysics(0.0, std::nullopt);
+		const auto MovingState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Moving));
+		const auto OtherState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Other));
+		Check(MovingState && !MovingState->Description.CanCollide &&
+			MovingState->Description.Transform.FuzzyEq(Moving->GetCFrame()),
+			"same-Part nested collision and CFrame edits reach the next physics safe point");
+		Check(OtherState && Near(OtherState->Description.Shape.Size.x, 3.0f) &&
+			Near(OtherState->Description.Shape.Size.y, 3.0f) && Near(OtherState->Description.Shape.Size.z, 3.0f),
+			"other-Part nested shape edit reaches the next physics safe point");
+		Connection->Disconnect();
+		auto DestroyedDuringPublication = std::make_shared<Part>();
+		DestroyedDuringPublication->SetCFrame(CFrame(0.0f, 8.0f, 0.0f));
+		DestroyedDuringPublication->SetParent(Workspace);
+		bool Destroyed = false;
+		auto DestroyConnection = DestroyedDuringPublication->GetPropertyChangedSignal("CFrame")->Connect(
+			[&](std::monostate) {
+				if (Destroyed) return;
+				Destroyed = true;
+				DestroyedDuringPublication->Destroy();
+			});
+		DestroyedDuringPublication->ApplyImpulse({10.0f, 0.0f, 0.0f});
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(Destroyed && !WorldRootTestAccess::Body(*Workspace, *DestroyedDuringPublication).IsValid() &&
+			WorldRootTestAccess::PartCount(*Workspace) == 2 &&
+			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2,
+			"destruction in physics publication retires body and indexed membership");
+		Workspace->StepPhysics(0.0, std::nullopt);
+		DestroyConnection->Disconnect();
 	}
 
 	void TestBodyDynamicsAndCollisionGroups() {
@@ -2082,11 +2169,13 @@ int main() {
 	TestMeshCollisionResidencyLimits();
 	TestKinematicWorldQueries();
 	TestCommittedBodyUpdates();
+	TestPartAdmissionMembership();
 	TestMeshPartCollisionFallback();
 	TestConstraintAndPendingDestroy();
 	TestAuthoredJointLifecycle();
 	TestGameplayLuauJointAssembly();
 	TestSimulationPublicationAndImpulse();
+	TestPhysicsPublicationNestedMutation();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();

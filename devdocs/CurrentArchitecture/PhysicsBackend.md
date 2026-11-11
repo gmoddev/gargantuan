@@ -142,6 +142,17 @@ Invalid direct neutral mesh descriptions fail closed before Box3D admission.
 builds a `PhysicsBodyDesc` from committed Part state. The backend chooses whether
 an update is an in-place transform/body-type change or a
 private shape replacement.
+`WorldRoot` keeps its successful Part admissions in traversal order and indexes
+membership by the generation-bearing `ObjectId`. Repeated safe-point admission
+does not append the same Part again; removal and shutdown retire the index with
+the ordered entry. This avoids scanning all previously admitted Parts for each
+new body while preserving the existing traversal order.
+Post-step physics-authored CFrame publication suppresses feedback only for that
+Part's own CFrame notification. A synchronous observer can author another Part
+or another property on the same Part; those edits remain dirty for the next safe
+point. If an observer changes the publishing Part's final CFrame, `WorldRoot`
+marks it dirty after the callback returns so the authored pose reaches the
+backend. The suppression scope is restored on callback failure.
 CanTouch changes replace shapes transactionally: the pinned backend copies event
 flags when creating a contact and does not refresh them for an in-place flag write.
 
