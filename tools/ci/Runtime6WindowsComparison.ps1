@@ -153,7 +153,7 @@ try {
         if ($Suite -eq 'compact' -and $Arm -eq 'candidate') { $Tests += 'gargantuan_runtime6_physics_sync_fault' }
         if ($Suite -eq 'readback' -and $Arm -eq 'candidate') { $Tests += 'gargantuan_runtime6_readback_fault' }
         if ($Suite -in @('dirty_compare', 'dirty_drain') -and $Arm -eq 'candidate') { $Tests += 'gargantuan_runtime6_dirty_binding_fault' }
-        if ($Suite -eq 'dirty_drain') { $Tests += @('gargantuan_runtime6_physics_listener_native_drain',
+        if ($Suite -eq 'dirty_drain') { $Tests += @('gargantuan_runtime6_physics_listener_native_drain_profiled',
             'gargantuan_runtime6_physics_listener_native_drain_unprofiled') }
         if ($Suite -in @('signals', 'signals_compare', 'dirty_compare', 'dirty_drain')) {
             $Tests += @('gargantuan_runtime6_physics_listener_native',
