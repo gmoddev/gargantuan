@@ -82,8 +82,7 @@ namespace gargantuan {
 				CapturedRecords->push_back({scope, object, std::move(payload)});
 			return;
 		}
-		for (const auto &[Object, Payload] : changes)
-			RenderDirtyAccumulator::Get().RecordChange(scope, Object, Payload);
+		RenderDirtyAccumulator::Get().RecordBatch(scope, changes);
 		const bool Profile = ProfilingEnabled.load(std::memory_order_relaxed);
 		const auto ProfileStart = Profile ? ProfileClock::now() : ProfileClock::time_point{};
 		std::scoped_lock lock(Mutex);

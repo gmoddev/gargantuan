@@ -669,6 +669,92 @@ namespace {
 		Accumulator.ReleaseConsumer(SecondConsumer);
 	}
 
+	void TestSingleObjectBatchDirtyParity() {
+		using namespace gargantuan;
+		RenderDirtyAccumulator Ordinary;
+		RenderDirtyAccumulator Batched;
+		const ObjectId Scope{900, 1};
+		const ObjectId Object{901, 1};
+		const auto OrdinaryFast = Ordinary.CreateConsumer();
+		const auto OrdinarySlow = Ordinary.CreateConsumer();
+		const auto BatchedFast = Batched.CreateConsumer();
+		const auto BatchedSlow = Batched.CreateConsumer();
+		std::vector<std::pair<ObjectId, ChangePayload>> Changes{
+			{Object, ObjectCreatedChange{"Part"}},
+			{Object, PropertyUpdatedChange{"CFrame", WireCFrame{{0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1}}, true}},
+			{Object, PropertyUpdatedChange{"Color", WireColor3{1, 0, 0}, true}},
+			{Object, ObjectReparentedChange{ObjectId{902, 1}}},
+			{Object, ObjectDestroyedChange{}},
+		};
+		for (const auto &[RecordObject, Payload] : Changes) Ordinary.RecordChange(Scope, RecordObject, Payload);
+		Batched.SetProfilingEnabled(true);
+		Batched.RecordBatch(Scope, Changes);
+		const auto Profile = Batched.GetProfile();
+		Check(Profile.ClassificationCalls == Changes.size() && Profile.AccumulationCalls == 1,
+			"single-object batch classifies every event and performs one dirty accumulation");
+		const auto OrdinaryFirst = Ordinary.Capture(Scope, OrdinaryFast);
+		const auto OrdinarySecond = Ordinary.Capture(Scope, OrdinarySlow);
+		const auto BatchedFirst = Batched.Capture(Scope, BatchedFast);
+		const auto BatchedSecond = Batched.Capture(Scope, BatchedSlow);
+		Check(OrdinaryFirst.Records.size() == 1 && OrdinarySecond.Records.size() == 1 &&
+			BatchedFirst.Records.size() == 1 && BatchedSecond.Records.size() == 1 &&
+			OrdinaryFirst.Records[0].Object == BatchedFirst.Records[0].Object &&
+			OrdinaryFirst.Records[0].Domains == BatchedFirst.Records[0].Domains &&
+			OrdinarySecond.Records[0].Domains == BatchedSecond.Records[0].Domains &&
+			!OrdinaryFirst.FullResyncRequired && !BatchedFirst.FullResyncRequired,
+			"create, property, reparent, and destroy union to the same final render domains");
+		Ordinary.Acknowledge(OrdinaryFirst);
+		Batched.Acknowledge(BatchedFirst);
+		Check(Ordinary.GetPendingObjectCount(Scope) == 1 && Batched.GetPendingObjectCount(Scope) == 1,
+			"fast consumer acknowledgement retains work for a slow consumer");
+		Ordinary.RecordChange(Scope, Object, PropertyUpdatedChange{"CFrame", WireCFrame{}, true});
+		Batched.RecordChange(Scope, Object, PropertyUpdatedChange{"CFrame", WireCFrame{}, true});
+		Ordinary.Acknowledge(OrdinarySecond);
+		Batched.Acknowledge(BatchedSecond);
+		const auto OrdinaryAgain = Ordinary.Capture(Scope, OrdinaryFast);
+		const auto BatchedAgain = Batched.Capture(Scope, BatchedFast);
+		Check(OrdinaryAgain.Records.size() == 1 && BatchedAgain.Records.size() == 1 &&
+			OrdinaryAgain.Records[0].Domains == BatchedAgain.Records[0].Domains,
+			"later dirty publication survives acknowledgement of an older batch capture");
+		Ordinary.Acknowledge(OrdinaryAgain);
+		Batched.Acknowledge(BatchedAgain);
+		Ordinary.Acknowledge(Ordinary.Capture(Scope, OrdinarySlow));
+		Batched.Acknowledge(Batched.Capture(Scope, BatchedSlow));
+		Check(Ordinary.GetPendingObjectCount(Scope) == 0 && Batched.GetPendingObjectCount(Scope) == 0,
+			"both consumers acknowledge the latest version and release pending dirty state");
+
+		const ObjectId Other{903, 1};
+		std::vector<std::pair<ObjectId, ChangePayload>> Mixed{
+			{Object, PropertyUpdatedChange{"CFrame", WireCFrame{}, true}},
+			{Other, PropertyUpdatedChange{"Color", WireColor3{0, 1, 0}, true}},
+		};
+		for (const auto &[RecordObject, Payload] : Mixed) Ordinary.RecordChange(Scope, RecordObject, Payload);
+		Batched.RecordBatch(Scope, Mixed);
+		const auto OrdinaryMixed = Ordinary.Capture(Scope, OrdinaryFast);
+		const auto BatchedMixed = Batched.Capture(Scope, BatchedFast);
+		Check(OrdinaryMixed.Records.size() == 2 && BatchedMixed.Records.size() == 2 &&
+			OrdinaryMixed.Records[0].Object == BatchedMixed.Records[0].Object &&
+			OrdinaryMixed.Records[0].Domains == BatchedMixed.Records[0].Domains &&
+			OrdinaryMixed.Records[1].Object == BatchedMixed.Records[1].Object &&
+			OrdinaryMixed.Records[1].Domains == BatchedMixed.Records[1].Domains,
+			"mixed-object batch retains ordinary per-object dirty capture semantics");
+		RenderDirtyAccumulator Scoped;
+		const auto ScopedConsumer = Scoped.CreateConsumer();
+		const ObjectId OtherScope{904, 1};
+		Scoped.RecordBatch(Scope, Changes);
+		Scoped.RecordBatch(OtherScope, Changes);
+		const auto FirstScope = Scoped.Capture(Scope, ScopedConsumer);
+		const auto SecondScope = Scoped.Capture(OtherScope, ScopedConsumer);
+		Check(FirstScope.Records.size() == 1 && SecondScope.Records.size() == 1 &&
+			FirstScope.Records[0].Domains == SecondScope.Records[0].Domains,
+			"batch dirty domains remain scoped to each authoritative world");
+		Scoped.Acknowledge(FirstScope);
+		Check(Scoped.GetPendingObjectCount(Scope) == 0 &&
+			Scoped.GetPendingObjectCount(OtherScope) == 1,
+			"one scope acknowledgement cannot retire another scope's pending batch");
+		Scoped.Acknowledge(SecondScope);
+	}
+
 	void TestAnimationPaletteContracts() {
 		using namespace gargantuan;
 		const ObjectId Object{30, 1};
@@ -1402,6 +1488,7 @@ int main() {
 		TestAnimationPaletteContracts();
 		TestIncrementalPublisher();
 		TestDirtyAccumulatorBoundsAndConsumers();
+		TestSingleObjectBatchDirtyParity();
 		TestEnvironmentLightingFoundation();
 		TestLocalLights();
 		TestReflectionProbeContracts();
