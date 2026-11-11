@@ -1,0 +1,197 @@
+name: Runtime Foundation 6 Windows CPU comparison
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_source:
+        description: Exact baseline commit (empty uses the corrected Foundation 6 baseline)
+        type: string
+        default: ''
+      candidate_source:
+        description: Exact candidate commit (empty uses this workflow source)
+        type: string
+        default: ''
+      suite:
+        description: Bounded comparison workload
+        type: choice
+        options: [core, cframe, compact, realistic]
+        default: core
+
+permissions:
+  contents: read
+
+jobs:
+  windows-comparison:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 180
+    env:
+      BASELINE_SOURCE: ${{ inputs.baseline_source || '9fe8ead97759f4f9a639102c3695ba51b0090d57' }}
+      CANDIDATE_SOURCE: ${{ inputs.candidate_source || github.sha }}
+      COMPARISON_SUITE: ${{ inputs.suite || 'core' }}
+      VULKAN_SDK_CHOCOLATEY_VERSION: 1.4.350
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - name: Checkout both exact sources and recursive dependencies
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Quiesce hosted compatibility appraisal
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:RUNNER_OS -cne 'Windows') { throw 'Appraiser preparation requires the GitHub-owned ephemeral Windows runner' }
+          Write-Host "[CI:HostResources] pwsh_version=$($PSVersionTable.PSVersion) framework=$([Runtime.InteropServices.RuntimeInformation]::FrameworkDescription)"
+          $TaskPath = '\Microsoft\Windows\Application Experience\'
+          $TaskName = 'Microsoft Compatibility Appraiser'
+          $TaskState = 'NOT_REGISTERED'
+          $Tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+            $_.TaskPath -ceq $TaskPath -and $_.TaskName -ceq $TaskName
+          })
+          if ($Tasks.Count -gt 1) { throw 'Duplicate exact compatibility appraisal tasks' }
+          if ($Tasks.Count -eq 1) {
+            Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+            Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+            $TaskState = 'Disabled'
+            $Tasks = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop)
+            if ($Tasks.Count -ne 1 -or $Tasks[0].TaskPath -cne $TaskPath -or $Tasks[0].TaskName -cne $TaskName -or
+                [string]$Tasks[0].State -cne 'Disabled') { throw 'Compatibility appraisal task did not remain Disabled' }
+          }
+          $Watch = [Diagnostics.Stopwatch]::StartNew()
+          $ExpectedImage = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'System32\CompatTelRunner.exe'))
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          foreach ($Row in $Processes) {
+            if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded' }
+            if ($Row.Name -ine 'CompatTelRunner.exe' -or ($Row.ProcessId -isnot [uint32] -and $Row.ProcessId -isnot [int]) -or
+                $Row.ProcessId -le 0 -or $Row.ProcessId -gt [int]::MaxValue -or $Row.CreationDate -isnot [datetime] -or
+                [string]::IsNullOrWhiteSpace($Row.ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Row.ExecutablePath) -or
+                [IO.Path]::GetFullPath($Row.ExecutablePath) -ine $ExpectedImage) { throw 'Unexpected compatibility appraisal process identity' }
+            $AppraiserPid = [int]$Row.ProcessId
+            $Birth = $Row.CreationDate.ToUniversalTime()
+            $Process = Get-Process -Id $AppraiserPid -ErrorAction Stop
+            try {
+              if ($Process.Id -ne $AppraiserPid) { throw 'Compatibility appraisal process object PID differs' }
+              $HeldHandle = $Process.Handle
+              if ($null -eq $HeldHandle -or $HeldHandle -eq [IntPtr]::Zero) { throw 'Compatibility appraisal process handle unavailable' }
+              $Current = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$AppraiserPid" -ErrorAction Stop)
+              if ($Current.Count -eq 0) {
+                Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage state=DISAPPEARED_AFTER_HANDLE_OPEN"
+                continue
+              }
+              if ($Current.Count -ne 1 -or $Current[0].ProcessId -ne $AppraiserPid -or $Current[0].Name -ine 'CompatTelRunner.exe' -or
+                  $Current[0].CreationDate -isnot [datetime] -or $Current[0].CreationDate.ToUniversalTime() -ne $Birth -or
+                  [string]::IsNullOrWhiteSpace($Current[0].ExecutablePath) -or -not [IO.Path]::IsPathFullyQualified($Current[0].ExecutablePath) -or
+                  [IO.Path]::GetFullPath($Current[0].ExecutablePath) -ine $ExpectedImage) { throw 'Compatibility appraisal identity changed after handle open' }
+              if ($Watch.Elapsed.TotalSeconds -ge 15) { throw 'Compatibility appraisal quiescence deadline exceeded before stop' }
+              Write-Host "[CI:HostResources] process_id=$AppraiserPid creation_utc=$($Birth.ToString('o')) image=$ExpectedImage action=HELD_IDENTITY_CHECKED_STOP"
+              $Process.Kill()
+              $RemainingMs = [int][Math]::Floor(15000 - $Watch.Elapsed.TotalMilliseconds)
+              if ($RemainingMs -le 0 -or -not $Process.WaitForExit($RemainingMs)) { throw 'Compatibility appraisal process did not exit within remaining 15-second budget' }
+            } finally { $Process.Dispose() }
+          }
+          $Processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='CompatTelRunner.exe'" -ErrorAction Stop)
+          if ($Watch.Elapsed.TotalSeconds -gt 15) { throw 'Compatibility appraisal final census exceeded 15 seconds' }
+          if ($Processes.Count -ne 0) { throw "Compatibility appraisal process persisted or reappeared; process_count=$($Processes.Count)" }
+          if ($TaskState -eq 'Disabled') {
+            $Tasks = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop)
+            if ($Tasks.Count -ne 1 -or $Tasks[0].TaskPath -cne $TaskPath -or $Tasks[0].TaskName -cne $TaskName -or
+                [string]$Tasks[0].State -cne 'Disabled') { throw 'Compatibility appraisal task did not remain Disabled' }
+          }
+          Write-Host "[CI:HostResources] task_path=$TaskPath task_name=$TaskName task_state=$TaskState process_count=0"
+
+      - name: Install pinned repository tools
+        uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908 # v3
+        with:
+          version: 1.2.0
+          cache: true
+
+      - name: Locate class-generator formatter
+        shell: pwsh
+        run: |
+          $ClangFormatCommand = Get-Command clang-format.exe -ErrorAction SilentlyContinue
+          $ClangFormatPath = if ($ClangFormatCommand) { $ClangFormatCommand.Source } else { $null }
+          if (-not $ClangFormatPath) {
+            $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (Test-Path -LiteralPath $VsWhere -PathType Leaf) {
+              $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+              $VisualStudioLlvm = if ($Installation) { Join-Path $Installation 'VC\Tools\Llvm' } else { $null }
+              if ($VisualStudioLlvm -and (Test-Path -LiteralPath $VisualStudioLlvm)) {
+                $ClangFormatPath = Get-ChildItem -LiteralPath $VisualStudioLlvm -Filter clang-format.exe -File -Recurse |
+                  Select-Object -First 1 -ExpandProperty FullName
+              }
+            }
+          }
+          if (-not $ClangFormatPath) { throw 'clang-format required by pinned class generator was not found' }
+          (Split-Path -Parent $ClangFormatPath) | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $ClangFormatPath --version
+          if ($LASTEXITCODE -ne 0) { throw 'clang-format version check failed' }
+
+      - name: Install pinned shader compiler
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=$env:VULKAN_SDK_CHOCOLATEY_VERSION --yes --no-progress
+          if ($LASTEXITCODE -notin @(0, 1641, 3010)) { throw 'Pinned Vulkan SDK installation failed' }
+          $Glslc = Get-ChildItem -LiteralPath 'C:\VulkanSDK' -Filter glslc.exe -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.DirectoryName -match '[\\/]Bin$' } |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $Glslc) { throw 'Pinned Vulkan SDK has no glslc.exe' }
+          & $Glslc.FullName --version
+          if ($LASTEXITCODE -ne 0) { throw 'glslc version check failed' }
+          "GLSLC_EXECUTABLE=$($Glslc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Locate supported MSVC toolchain
+        shell: pwsh
+        run: |
+          $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path -LiteralPath $VsWhere -PathType Leaf)) { throw 'vswhere.exe is missing' }
+          $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $Installation) { throw 'Supported MSVC C++ toolchain is missing' }
+          $DevCmd = Join-Path $Installation 'Common7\Tools\VsDevCmd.bat'
+          if (-not (Test-Path -LiteralPath $DevCmd -PathType Leaf)) { throw 'VsDevCmd.bat is missing' }
+          "VSDEVCMD=$DevCmd" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Preserve comparison tools before source switching
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item -LiteralPath tools/ci/Runtime6WindowsComparison.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'Runtime6WindowsComparison.ps1')
+          Copy-Item -LiteralPath tools/runtime6_windows_comparison.py -Destination (Join-Path $env:RUNNER_TEMP 'runtime6_windows_comparison.py')
+
+      - name: Build, test, and freeze both sources on one MSVC host
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          where cl || exit /b 1
+          where cmake || exit /b 1
+          where ninja || exit /b 1
+          cl /Bv
+          cmake --version
+          ninja --version
+          pwsh -NoLogo -NoProfile -NonInteractive -File "%RUNNER_TEMP%\Runtime6WindowsComparison.ps1" -BaselineSource "%BASELINE_SOURCE%" -CandidateSource "%CANDIDATE_SOURCE%" -Suite "%COMPARISON_SUITE%" -ShaderCompiler "%GLSLC_EXECUTABLE%" -EvidenceRoot "%RUNNER_TEMP%\runtime6-evidence"
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Run counterbalanced comparisons from frozen files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Evidence = Join-Path $env:RUNNER_TEMP 'runtime6-evidence'
+          foreach ($Name in @('Runtime6WindowsComparison.ps1', 'runtime6_windows_comparison.py')) {
+            $File = Join-Path $env:RUNNER_TEMP $Name
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $File).Hash.ToLowerInvariant() |
+              Set-Content -LiteralPath (Join-Path $Evidence "$Name.sha256")
+          }
+          python (Join-Path $env:RUNNER_TEMP 'runtime6_windows_comparison.py') --evidence $Evidence --suite $env:COMPARISON_SUITE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload source-bound comparison evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: runtime6-hosted-windows-cpu-comparison
+          path: ${{ runner.temp }}/runtime6-evidence/
