@@ -247,25 +247,48 @@ namespace gargantuan {
 		return Creation.Constraint;
 	}
 
+	WorldRoot::PartDirtyMark WorldRoot::MarkTrackedPartDirty(TrackedPartBinding &Binding) {
+		if (ShuttingDownPhysics || !Binding.Active) return PartDirtyMark::Suppressed;
+		if (Binding.Dirty) return PartDirtyMark::Coalesced;
+		try {
+			const bool Inserted = DirtyBodies.insert(Binding.Object).second;
+			Binding.Dirty = true;
+			return Inserted ? PartDirtyMark::New : PartDirtyMark::Coalesced;
+		} catch (...) {
+			// Preserve the setter's exception while retaining a conservative next-safe-point path.
+			FullPartScanNeeded = true;
+			throw;
+		}
+	}
+
 	void WorldRoot::TrackPart(const std::shared_ptr<BasePart> &Part) {
 		if (!Part || Part->GetDestroyed() || Part->IsDestroying()) return;
 		const auto Id = Part->GetObjectId();
-		TrackedParts[Id] = Part;
+		auto Found = TrackedParts.find(Id);
+		if (Found == TrackedParts.end()) {
+			auto NewBinding = std::make_shared<TrackedPartBinding>(TrackedPartBinding{Id, Part});
+			Found = TrackedParts.emplace(Id, std::move(NewBinding)).first;
+		}
+		auto Binding = Found->second;
+		Binding->Part = Part;
+		Binding->Active = true;
 		if (PhysicsConnections.contains(Id)) return;
-		auto MarkDirty = [this, Id](std::monostate) {
-			if (!ShuttingDownPhysics && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
+		auto MarkDirty = [this, Binding](std::monostate) {
+			if (Binding->Active) (void)MarkTrackedPartDirty(*Binding);
 		};
-		auto MarkCFrameDirty = [this, Id](std::monostate) {
+		auto MarkCFrameDirty = [this, Binding](std::monostate) {
+			if (!Binding->Active) return;
 			if (!ProfileCFrameDirtyCallback) {
-				if (!ShuttingDownPhysics && PublishingPhysicsPart != Id && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
+				if (PublishingPhysicsPart != Binding->Object) (void)MarkTrackedPartDirty(*Binding);
 				return;
 			}
 			const auto Start = std::chrono::steady_clock::now();
 			++CFrameDirtyProfile.Calls;
-			if (!ShuttingDownPhysics && PublishingPhysicsPart != Id && TrackedParts.contains(Id)) {
-				if (DirtyBodies.insert(Id).second) ++CFrameDirtyProfile.NewDirty;
-				else ++CFrameDirtyProfile.Coalesced;
-			} else ++CFrameDirtyProfile.Suppressed;
+			const auto Result = PublishingPhysicsPart == Binding->Object ? PartDirtyMark::Suppressed :
+				MarkTrackedPartDirty(*Binding);
+			if (Result == PartDirtyMark::New) ++CFrameDirtyProfile.NewDirty;
+			else if (Result == PartDirtyMark::Coalesced) ++CFrameDirtyProfile.Coalesced;
+			else ++CFrameDirtyProfile.Suppressed;
 			CFrameDirtyProfile.Nanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Start).count());
 		};
@@ -388,6 +411,8 @@ namespace gargantuan {
 	void WorldRoot::RemovePart(const std::shared_ptr<BasePart> &Part) {
 		if (!Part) return;
 		const auto Object = Part->GetObjectId();
+		if (auto Found = TrackedParts.find(Object); Found != TrackedParts.end() && Found->second)
+			Found->second->Active = false;
 		erase(Parts, Part);
 		PartMembership.erase(Object);
 		DirtyBodies.erase(Object);
@@ -545,14 +570,14 @@ namespace gargantuan {
 		const auto Changes = Assets->ReadChanges(CollisionAssetChangeSequence);
 		CollisionAssetChangeSequence = Changes.NextSequence;
 		if (Changes.RescanRequired) {
-			for (const auto &[Id, WeakPart] : TrackedParts)
-				if (std::dynamic_pointer_cast<MeshPart>(WeakPart.lock())) DirtyBodies.insert(Id);
+			for (const auto &[Id, Binding] : TrackedParts)
+				if (Binding && Binding->Active && std::dynamic_pointer_cast<MeshPart>(Binding->Part.lock())) DirtyBodies.insert(Id);
 			return;
 		}
 		for (const auto &Change : Changes.Changes) {
 			if (Change.Kind != AssetKind::Mesh) continue;
-			for (const auto &[Id, WeakPart] : TrackedParts) {
-				auto Part = std::dynamic_pointer_cast<MeshPart>(WeakPart.lock());
+			for (const auto &[Id, Binding] : TrackedParts) {
+				auto Part = Binding && Binding->Active ? std::dynamic_pointer_cast<MeshPart>(Binding->Part.lock()) : nullptr;
 				if (Part && Part->GetMesh() == Change.Reference) DirtyBodies.insert(Id);
 			}
 		}
@@ -567,11 +592,24 @@ namespace gargantuan {
 			else LOG_ERROR(App, "[Physics:Backend] Gravity update failed: %s", Result.Message.c_str());
 		}
 
-		const auto BodyUpdates = SortedIds(DirtyBodies);
+		std::vector<ObjectId> BodyUpdates;
+		if (FullPartScanNeeded) {
+			BodyUpdates.reserve(TrackedParts.size());
+			for (const auto &[Object, Binding] : TrackedParts)
+				if (Binding && Binding->Active) BodyUpdates.push_back(Object);
+			std::sort(BodyUpdates.begin(), BodyUpdates.end());
+		} else BodyUpdates = SortedIds(DirtyBodies);
+		// Clear the per-registration flag before any backend update can invoke a
+		// callback. A nested edit then creates a fresh next-safe-point dirty mark.
+		for (const auto Object : BodyUpdates)
+			if (auto Found = TrackedParts.find(Object); Found != TrackedParts.end() && Found->second)
+				Found->second->Dirty = false;
 		DirtyBodies.clear();
+		FullPartScanNeeded = false;
 		for (const auto Object : BodyUpdates) {
 			auto Tracked = TrackedParts.find(Object);
-			auto Part = Tracked == TrackedParts.end() ? nullptr : Tracked->second.lock();
+			auto Part = Tracked == TrackedParts.end() || !Tracked->second || !Tracked->second->Active ?
+				nullptr : Tracked->second->Part.lock();
 			if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
 				Part->FindFirstAncestorWhichIsA("WorldRoot").get() != this) continue;
 			auto Found = PartBodies.find(Object);
@@ -740,6 +778,8 @@ namespace gargantuan {
 	void WorldRoot::ShutdownPhysics() {
 		if (ShuttingDownPhysics) return;
 		ShuttingDownPhysics = true;
+		for (auto &[_, Binding] : TrackedParts)
+			if (Binding) Binding->Active = false;
 		Deformables.Shutdown();
 		if (UnbindDescendants) UnbindDescendants();
 		if (DescendantRemovedConnection) DescendantRemovedConnection->Disconnect();
@@ -752,6 +792,7 @@ namespace gargantuan {
 			for (const auto &Connection : Connections) Connection->Disconnect();
 		JointAttachmentConnections.clear();
 		DirtyBodies.clear();
+		FullPartScanNeeded = false;
 		FailedMeshUpdatesLogged.clear();
 		DirtyDeformables.clear();
 		DirtyConstraints.clear();

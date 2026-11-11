@@ -65,7 +65,13 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, SoftBodyState> DeformableStates;
 		SoftBodyStepProfile LastSoftBodyProfile;
 		std::unordered_map<ObjectId, PhysicsConstraintId> ConstraintJoints;
-		std::unordered_map<ObjectId, std::weak_ptr<BasePart>> TrackedParts;
+		struct TrackedPartBinding {
+			ObjectId Object;
+			std::weak_ptr<BasePart> Part;
+			bool Active = true;
+			bool Dirty = false;
+		};
+		std::unordered_map<ObjectId, std::shared_ptr<TrackedPartBinding>> TrackedParts;
 		std::unordered_map<ObjectId, std::weak_ptr<DeformableBody>> TrackedDeformables;
 		std::unordered_map<ObjectId, std::weak_ptr<SoftBodyMaterial>> TrackedSoftBodyMaterials;
 		std::unordered_map<ObjectId, ObjectId> SoftBodyAttachmentOwners;
@@ -73,6 +79,7 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> PhysicsConnections;
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> JointAttachmentConnections;
 		std::unordered_set<ObjectId> DirtyBodies;
+		bool FullPartScanNeeded = false;
 		// Test-only, Main-owned attribution. Normal listener behavior is unchanged when disabled.
 		struct CFrameDirtyCallbackProfile {
 			std::uint64_t Calls = 0;
@@ -131,6 +138,8 @@ namespace gargantuan {
 		[[nodiscard]] SoftBodyId CreateDeformableBody(const std::shared_ptr<DeformableBody> &Body);
 		[[nodiscard]] PhysicsConstraintId CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint);
 		void TrackPart(const std::shared_ptr<BasePart> &Part);
+		enum class PartDirtyMark { New, Coalesced, Suppressed };
+		PartDirtyMark MarkTrackedPartDirty(TrackedPartBinding &Binding);
 		void TrackDeformable(const std::shared_ptr<DeformableBody> &Body);
 		void TrackSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);
 		void TrackSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);
