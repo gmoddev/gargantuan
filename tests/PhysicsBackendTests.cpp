@@ -1213,8 +1213,11 @@ namespace {
 	}
 
 	void TestPhysicsPublicationNestedMutation() {
-		auto Workspace = MakeWorkspace();
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		if (!Workspace) return;
+		Check(Workspace->GetReplicationScopeId() == Game->GetObjectId(),
+			"physics callback fixture retains an authoritative DataModel scope");
 		Workspace->SetGravity(0.0f);
 		auto Moving = std::make_shared<Part>();
 		auto Other = std::make_shared<Part>();
@@ -1266,19 +1269,28 @@ namespace {
 			if (std::holds_alternative<ObjectDestroyedChange>(Record.Payload))
 				DestroyedObjectSequence = Record.Sequence;
 		}
-		Check(Destroyed && !WorldRootTestAccess::Body(*Workspace, *DestroyedDuringPublication).IsValid() &&
-			WorldRootTestAccess::PartCount(*Workspace) == 2 &&
-			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2 &&
-			!ObjectRegistry::Get().Lookup(DestroyedObject) && DestroyedPropertySequence != 0 &&
-			DestroyedObjectSequence > DestroyedPropertySequence,
-			"destruction in physics publication retires body and indexed membership");
+		Check(Destroyed, "destruction callback fired during physics publication");
+		Check(!WorldRootTestAccess::Body(*Workspace, *DestroyedDuringPublication).IsValid(),
+			"destruction in physics publication retires backend body");
+		Check(WorldRootTestAccess::PartCount(*Workspace) == 2 &&
+			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2,
+			"destruction in physics publication retires indexed Part membership");
+		Check(!ObjectRegistry::Get().Lookup(DestroyedObject),
+			"destruction in physics publication invalidates registry identity");
+		Check(DestroyedPropertySequence != 0,
+			"destruction in physics publication commits Destroyed in the live scope");
+		Check(DestroyedObjectSequence > DestroyedPropertySequence,
+			"destruction in physics publication orders ObjectDestroyed after Destroyed");
 		Workspace->StepPhysics(0.0, std::nullopt);
 		DestroyConnection->Disconnect();
 	}
 
 	void TestPhysicsPublicationThrowKeepsAuthoredHistory() {
-		auto Workspace = MakeWorkspace();
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		if (!Workspace) return;
+		Check(Workspace->GetReplicationScopeId() == Game->GetObjectId(),
+			"throwing physics callback fixture retains an authoritative DataModel scope");
 		Workspace->SetGravity(0.0f);
 		auto Moving = std::make_shared<Part>();
 		auto Other = std::make_shared<Part>();
@@ -1308,10 +1320,13 @@ namespace {
 			if (Record.Object == Other->GetObjectId() && Property->PropertyName == "Size")
 				SizeSequence = Record.Sequence;
 		}
-		Check(Threw && MotionSequence != 0 && SizeSequence > MotionSequence,
-			"throwing physics observer preserves committed CFrame then nested Size journal order");
+		Check(Threw, "physics observer throw reaches the caller");
+		Check(MotionSequence != 0, "physics observer throw retains the committed CFrame record");
+		Check(SizeSequence > MotionSequence,
+			"physics observer throw orders nested Size after committed CFrame");
 		Workspace->StepPhysics(0.0, std::nullopt);
 		const auto OtherState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Other));
+		Check(OtherState.has_value(), "physics observer throw retains the other Part backend body");
 		Check(OtherState && Near(OtherState->Description.Shape.Size.x, 4.0f),
 			"throwing physics observer retains nested authored backend update for the next safe point");
 	}
