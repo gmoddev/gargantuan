@@ -379,6 +379,16 @@ namespace {
 int main() {
 	using namespace gargantuan;
 	struct SdlProcessCleanup final { ~SdlProcessCleanup() { SDL_Quit(); } } SdlCleanup;
+	const auto *ExecutableBase = SDL_GetBasePath();
+	if (!ExecutableBase) { std::cerr << "[Asset:Test] Could not locate packaged fixtures\n"; return 1; }
+	const auto PackagedFixtures = std::filesystem::path(ExecutableBase) / "test-fixtures";
+	const auto FontFixture = std::filesystem::exists(GARGANTUAN_ASSET_TEST_FONT_PATH) ?
+		std::filesystem::path(GARGANTUAN_ASSET_TEST_FONT_PATH) : PackagedFixtures / "Roboto-Regular.ttf";
+	const auto PngFixture = std::filesystem::exists(GARGANTUAN_ASSET_TEST_PNG_PATH) ?
+		std::filesystem::path(GARGANTUAN_ASSET_TEST_PNG_PATH) : PackagedFixtures / "ross.png";
+	if (!std::filesystem::is_regular_file(FontFixture) || !std::filesystem::is_regular_file(PngFixture)) {
+		std::cerr << "[Asset:Test] Missing required font or PNG fixture\n"; return 1;
+	}
 	BootstrapNativeRuntimeSchema();
 	CheckMaterialArtifactVersions();
 
@@ -444,9 +454,9 @@ int main() {
 	WriteText(Root / "assets" / "extreme.obj", "v 0 0 0\nv 1000001 0 0\nv 0 1 0\nf 1 2 3\n");
 	WriteText(Root / "assets" / "bad.png", "not a png");
 	WriteText(Root / "assets" / "bad.ttf", "not a font");
-	std::filesystem::copy_file(std::filesystem::path(GARGANTUAN_ASSET_TEST_FONT_PATH),
+	std::filesystem::copy_file(FontFixture,
 		Root / "assets" / "font.ttf", std::filesystem::copy_options::overwrite_existing);
-	std::filesystem::copy_file(std::filesystem::path(GARGANTUAN_ASSET_TEST_PNG_PATH),
+	std::filesystem::copy_file(PngFixture,
 		Root / "assets" / "representative.png", std::filesystem::copy_options::overwrite_existing);
 	auto CompoundFixture = MakeGltfFixture(91);
 	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(CompoundFixture));

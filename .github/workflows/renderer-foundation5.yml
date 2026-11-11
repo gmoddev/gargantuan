@@ -150,7 +150,8 @@ jobs:
             'gargantuan_ibl_gpu_tests.exe', 'gargantuan_renderer_foundation2_benchmark.exe',
             'gargantuan_reflection_probe_gpu_tests.exe', 'gargantuan_shadow_foundation5_gpu_tests.exe',
             'gargantuan_renderer_publication_tests.exe', 'gargantuan_asset_foundation_tests.exe',
-            'gargantuan_directional_shadow_cache_tests.exe', 'gargantuan_renderer_allocation_benchmark.exe', 'SDL3.dll')
+            'gargantuan_directional_shadow_cache_tests.exe', 'gargantuan_renderer_allocation_benchmark.exe', 'SDL3.dll',
+            'test-fixtures/Roboto-Regular.ttf', 'test-fixtures/ross.png')
           $ShaderFiles = Get-ChildItem -LiteralPath build-renderer/shaders -File -Filter '*.spv'
           $Names += $ShaderFiles | ForEach-Object { "shaders/$($_.Name)" }
           $Members = foreach ($Name in $Names) {
@@ -191,6 +192,7 @@ jobs:
             build-renderer/gargantuan_directional_shadow_cache_tests.exe
             build-renderer/*.dll
             build-renderer/runtime/
+            build-renderer/test-fixtures/
             build-renderer/shaders/
 
   linux-sanitizers:
