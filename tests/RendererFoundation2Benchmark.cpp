@@ -9,8 +9,13 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
+#include <SDL3/SDL.h>
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 #ifdef GARGANTUAN_RUNTIME6_ALLOCATION_PROBE
 #include "BenchmarkAllocationProbe.hpp"
 #endif
@@ -36,11 +41,50 @@
 namespace {
 	using Clock = std::chrono::steady_clock;
 	struct RuntimeExperimentOptions {
+		enum class DrawBackend { None, Headless, Sdl };
 		bool DensityMatrix = false;
 		bool SplitConstruction = false;
 		std::string_view Property = "transform";
+		DrawBackend Backend = DrawBackend::None;
+		bool ContiguousInstancing = false;
 	};
 	RuntimeExperimentOptions RuntimeOptions;
+
+	std::string_view BackendName() {
+		switch (RuntimeOptions.Backend) {
+		case RuntimeExperimentOptions::DrawBackend::Headless: return "headless";
+		case RuntimeExperimentOptions::DrawBackend::Sdl: return "sdl";
+		default: return "none";
+		}
+	}
+
+	struct SDLGuard {
+		SDLGuard() {
+			if (!SDL_Init(SDL_INIT_VIDEO))
+				throw std::runtime_error(std::string("[Render:Foundation2Benchmark] SDL video initialization failed: ") + SDL_GetError());
+		}
+		~SDLGuard() { SDL_Quit(); }
+	};
+
+	struct DrawFrameSample {
+		double DrawAndWaitMs = 0.0;
+		double MutationToCompletionMs = 0.0;
+		std::uint64_t ProjectedObjects = 0;
+		std::uint64_t ProjectedUpdates = 0;
+		std::uint64_t FramesSubmitted = 0;
+		std::uint64_t FullResyncs = 0;
+		std::uint64_t DrawCalls = 0;
+		std::uint64_t UploadedBytes = 0;
+		std::uint64_t InstanceUploadBytes = 0;
+		std::uint64_t InstancedDrawCalls = 0;
+		std::uint64_t ContiguousInstancedDrawCalls = 0;
+		std::uint64_t CameraVisitedObjects = 0;
+		std::uint64_t InstancedObjects = 0;
+		std::uint64_t ProjectionNs = 0;
+		std::uint64_t InstanceApplicationNs = 0;
+		std::uint64_t InstanceUploadNs = 0;
+		std::uint64_t CompletionWaitNs = 0;
+	};
 
 	double Milliseconds(Clock::duration Duration) {
 		return std::chrono::duration<double, std::milli>(Duration).count();
@@ -75,7 +119,8 @@ namespace {
 		std::size_t UploadBytes,
 		std::size_t Draws,
 		std::size_t FullResyncs,
-		const PipelineBreakdown &Breakdown = {}
+		const PipelineBreakdown &Breakdown = {},
+		const std::vector<DrawFrameSample> *DrawSamples = nullptr
 	) {
 		std::cout << Scenario << ',' << Elements << ',' << Frames << ',' << std::fixed << std::setprecision(4)
 			<< Mean(Accumulation) << ',' << Mean(Generation) << ',' << Mean(Application) << ',' << Creates << ',' << Updates << ',' << Removes << ','
@@ -84,7 +129,14 @@ namespace {
 			<< Breakdown.ClassificationMeanMs << ',' << Breakdown.AccumulatorMeanMs << ','
 			<< Breakdown.DirtyCaptureMeanMs << ',' << Breakdown.DirtyExpansionMeanMs << ','
 			<< Breakdown.FinalStateExtractionMeanMs << ',' << Breakdown.PublicationConstructionMeanMs << ','
-			<< Breakdown.PublisherReconciliationMeanMs << '\n' << std::flush;
+			<< Breakdown.PublisherReconciliationMeanMs << ',' << BackendName() << ','
+			<< (DrawSamples && !DrawSamples->empty() ? std::to_string(std::accumulate(
+				DrawSamples->begin(), DrawSamples->end(), 0.0,
+				[](double Sum, const DrawFrameSample &Sample) { return Sum + Sample.DrawAndWaitMs; }) / DrawSamples->size()) : "NA")
+			<< ',' << (DrawSamples && !DrawSamples->empty() ? std::to_string(std::accumulate(
+				DrawSamples->begin(), DrawSamples->end(), 0.0,
+				[](double Sum, const DrawFrameSample &Sample) { return Sum + Sample.MutationToCompletionMs; }) / DrawSamples->size()) : "NA")
+			<< ',' << RuntimeOptions.ContiguousInstancing << '\n' << std::flush;
 	}
 
 	void RunRigid(
@@ -165,10 +217,41 @@ namespace {
 		Mark("parts-ready");
 		RenderPublisher Publisher;
 		RenderProjection Projection;
+		std::optional<SDLGuard> Video;
+		std::unique_ptr<BaseRenderer> DrawRenderer;
+		SDLRenderer *Sdl = nullptr;
+		HeadlessRenderer *Headless = nullptr;
+		if (RuntimeOptions.Backend == RuntimeExperimentOptions::DrawBackend::Sdl) {
+			Video.emplace();
+			auto Renderer = std::make_unique<SDLRenderer>(Vector2(1280.0f, 720.0f), SDLRendererOptions{
+				.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+				.EnableInstancing = RuntimeOptions.ContiguousInstancing,
+				.UseContiguousInstancing = RuntimeOptions.ContiguousInstancing,
+			});
+			Sdl = Renderer.get();
+			std::cerr << "[Render:Foundation2Benchmark] backend=sdl driver=" << Sdl->GetDriverName()
+				<< " instancing=" << RuntimeOptions.ContiguousInstancing << '\n';
+			DrawRenderer = std::move(Renderer);
+		} else if (RuntimeOptions.Backend == RuntimeExperimentOptions::DrawBackend::Headless) {
+			auto Renderer = std::make_unique<HeadlessRenderer>(Vector2(1280.0f, 720.0f));
+			Headless = Renderer.get();
+			DrawRenderer = std::move(Renderer);
+		}
 		const auto Camera = MakeLookAtRenderCameraInput(
 			glm::vec3(0.0f, 0.0f, 1000.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f)
 		);
 		auto Initial = Publisher.Publish(*World, Camera, 1280, 720);
+		if (DrawRenderer) {
+			DrawRenderer->Draw(Initial);
+			if (Sdl) {
+				Sdl->WaitForIdle();
+				const auto Metrics = Sdl->GetMetrics();
+				if (Metrics.FramesSubmitted != 1 || Metrics.FullResyncs != 1)
+					throw std::runtime_error("[Render:Foundation2Benchmark] Initial SDL submission/resync mismatch");
+			} else if (Headless->GetProjection().GetObjects().size() != Count ||
+				Headless->GetLastChanges().Created != Count)
+				throw std::runtime_error("[Render:Foundation2Benchmark] Initial headless draw mismatch");
+		}
 		(void)Projection.Apply(*Initial);
 		if (Initial->Creates.size() != Count || Projection.GetObjects().size() != Count)
 			throw std::runtime_error("[Render:Foundation2Benchmark] Rigid fixture publication/object count mismatch");
@@ -198,6 +281,8 @@ namespace {
 		std::vector<double> PublicationConstruction;
 		std::vector<double> PublisherReconciliation;
 		std::vector<std::uint64_t> JournalRecords;
+		std::vector<DrawFrameSample> DrawSamples;
+		if (DrawRenderer) DrawSamples.reserve(Frames);
 		JournalRecords.reserve(Frames);
 		for (auto *Values : {&Accumulation, &Generation, &Application, &DirtyCapture, &DirtyExpansion,
 			&FinalStateExtraction, &PublicationConstruction, &PublisherReconciliation}) Values->reserve(Frames);
@@ -243,6 +328,43 @@ namespace {
 				PublicationConstruction.push_back(static_cast<double>(PublisherProfile.PublicationConstructionNanoseconds) / 1'000'000.0);
 				PublisherReconciliation.push_back(static_cast<double>(PublisherProfile.StateCacheReconciliationNanoseconds) / 1'000'000.0);
 			}
+			if (DrawRenderer) {
+				const auto Before = Sdl ? Sdl->GetMetrics() : SDLRendererMetrics{};
+				const auto DrawStart = Clock::now();
+				DrawRenderer->Draw(Publication);
+				if (Sdl) Sdl->WaitForIdle();
+				const auto Completed = Clock::now();
+				DrawFrameSample Sample{
+					.DrawAndWaitMs = Milliseconds(Completed - DrawStart),
+					.MutationToCompletionMs = Milliseconds(Completed - AccumulationStart),
+				};
+				if (Sdl) {
+					const auto After = Sdl->GetMetrics();
+					if (After.FramesSubmitted != Before.FramesSubmitted + 1 ||
+						After.FullResyncs != Before.FullResyncs)
+						throw std::runtime_error("[Render:Foundation2Benchmark] SDL frame/resync gate failed");
+					Sample.FramesSubmitted = After.FramesSubmitted;
+					Sample.FullResyncs = After.FullResyncs;
+					Sample.DrawCalls = After.DrawCalls - Before.DrawCalls;
+					Sample.UploadedBytes = After.UploadedBytes - Before.UploadedBytes;
+					Sample.InstanceUploadBytes = After.InstanceUploadBytes - Before.InstanceUploadBytes;
+					Sample.InstancedDrawCalls = After.InstancedDrawCalls - Before.InstancedDrawCalls;
+					Sample.ContiguousInstancedDrawCalls = After.ContiguousInstancedDrawCalls - Before.ContiguousInstancedDrawCalls;
+					Sample.CameraVisitedObjects = After.CameraVisitedObjects - Before.CameraVisitedObjects;
+					Sample.InstancedObjects = After.InstancedObjects - Before.InstancedObjects;
+					Sample.ProjectionNs = After.LastProjectionNanoseconds;
+					Sample.InstanceApplicationNs = After.LastInstanceApplicationNanoseconds;
+					Sample.InstanceUploadNs = After.LastInstanceUploadNanoseconds;
+					Sample.CompletionWaitNs = After.LastGpuCompletionWaitNanoseconds;
+				} else {
+					Sample.ProjectedObjects = Headless->GetProjection().GetObjects().size();
+					Sample.ProjectedUpdates = Headless->GetLastChanges().Updated;
+					if (Sample.ProjectedObjects != Count || Sample.ProjectedUpdates != ChangedPerFrame ||
+						Headless->GetLastChanges().Created != 0 || Headless->GetLastChanges().Removed != 0)
+						throw std::runtime_error("[Render:Foundation2Benchmark] Headless draw delta gate failed");
+				}
+				DrawSamples.push_back(Sample);
+			}
 			const auto ApplyStart = Clock::now();
 			const auto Changes = Projection.Apply(*Publication);
 			Application.push_back(Milliseconds(Clock::now() - ApplyStart));
@@ -277,7 +399,7 @@ namespace {
 			);
 		}
 		Print(PhaseName, Count, Frames, Accumulation, Generation, Application, Creates, Updates, Removes, UploadBytes, Count,
-			FullResyncs, Breakdown);
+			FullResyncs, Breakdown, DrawRenderer ? &DrawSamples : nullptr);
 		if (Samples) {
 			const auto Stage = [ProfileEnabled](const std::vector<double> &Values, std::size_t Frame) {
 				return ProfileEnabled ? std::to_string(Values[Frame]) : std::string("NA");
@@ -290,16 +412,42 @@ namespace {
 					<< Stage(FinalStateExtraction, Frame) << ',' << Stage(PublicationConstruction, Frame) << ','
 					<< Stage(PublisherReconciliation, Frame) << ",NA,NA,NA," << JournalRecords[Frame];
 #ifdef GARGANTUAN_RUNTIME6_ALLOCATION_PROBE
-				*Samples << ',' << FrameAllocations[Frame].Calls << ',' << FrameAllocations[Frame].Bytes << '\n';
+				*Samples << ',' << FrameAllocations[Frame].Calls << ',' << FrameAllocations[Frame].Bytes;
 #else
-				*Samples << ",NA,NA\n";
+				*Samples << ",NA,NA";
 #endif
+				*Samples << ',' << BackendName() << ',' << RuntimeOptions.ContiguousInstancing;
+				if (DrawRenderer) {
+					const auto &Draw = DrawSamples[Frame];
+					*Samples << ',' << Draw.DrawAndWaitMs << ',' << Draw.MutationToCompletionMs;
+					if (Headless) *Samples << ',' << Draw.ProjectedObjects << ',' << Draw.ProjectedUpdates;
+					else *Samples << ",NA,NA";
+					if (Sdl) {
+						*Samples << ',' << Draw.FramesSubmitted << ',' << Draw.FullResyncs << ','
+							<< Draw.DrawCalls << ',' << Draw.UploadedBytes << ',' << Draw.InstanceUploadBytes << ','
+							<< Draw.InstancedDrawCalls << ',' << Draw.ContiguousInstancedDrawCalls << ','
+							<< Draw.CameraVisitedObjects << ',' << Draw.InstancedObjects << ','
+							<< Draw.ProjectionNs << ',' << Draw.InstanceApplicationNs << ','
+							<< Draw.InstanceUploadNs << ',' << Draw.CompletionWaitNs;
+					} else *Samples << ",NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA";
+				} else *Samples << ",NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA";
+				*Samples << '\n';
 			}
 			Samples->flush();
 			if (!*Samples) throw std::runtime_error("[Render:Foundation2Benchmark] Could not write frame samples");
 		}
 		}
 		Mark("measured");
+		if (Sdl) {
+			const auto Metrics = Sdl->GetMetrics();
+			if (Metrics.FramesSubmitted != GlobalFrame + 1 || Metrics.FullResyncs != 1)
+				throw std::runtime_error("[Render:Foundation2Benchmark] Final SDL submission/resync mismatch");
+			std::cerr << "[Render:Foundation2Benchmark] backend=sdl driver=" << Sdl->GetDriverName()
+				<< " frames_submitted=" << Metrics.FramesSubmitted
+				<< " full_resyncs=" << Metrics.FullResyncs << '\n';
+		}
+		DrawRenderer.reset();
+		Video.reset();
 		if (RetainedPhysics) World->Physics = std::move(*RetainedPhysics);
 		Game->Destroy();
 		Mark("destroyed");
@@ -462,6 +610,9 @@ namespace {
 }
 
 int main(int ArgumentCount, char **Arguments) {
+#ifdef _WIN32
+	SetErrorMode(0x8003u);
+#endif
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		const std::size_t Frames = ArgumentCount > 1 ? std::stoull(Arguments[1]) : 30;
@@ -471,6 +622,7 @@ int main(int ArgumentCount, char **Arguments) {
 		std::filesystem::path SamplesPath;
 		std::string_view SelectedScenario;
 		std::optional<std::size_t> SelectedCount, SelectedChanges, SelectedWrites;
+		bool DrawBackendSpecified = false, DrawInstancingSpecified = false;
 		const auto ParseBound = [](std::string_view Text, std::size_t Minimum, std::size_t Maximum) {
 			std::size_t Value = 0;
 			const auto [End, Error] = std::from_chars(Text.data(), Text.data() + Text.size(), Value);
@@ -486,6 +638,21 @@ int main(int ArgumentCount, char **Arguments) {
 			else if (Option == "--diagnostic-marks") DiagnosticMarks = true;
 			else if (Option == "--density-matrix") RuntimeOptions.DensityMatrix = true;
 			else if (Option == "--split-construction") RuntimeOptions.SplitConstruction = true;
+			else if (Option.starts_with("--draw-backend=")) {
+				if (DrawBackendSpecified) throw std::invalid_argument("draw backend may appear only once");
+				DrawBackendSpecified = true;
+				const auto Value = Option.substr(sizeof("--draw-backend=") - 1);
+				if (Value == "headless") RuntimeOptions.Backend = RuntimeExperimentOptions::DrawBackend::Headless;
+				else if (Value == "sdl") RuntimeOptions.Backend = RuntimeExperimentOptions::DrawBackend::Sdl;
+				else throw std::invalid_argument("draw backend must be headless or sdl");
+			}
+			else if (Option.starts_with("--draw-instancing=")) {
+				if (DrawInstancingSpecified) throw std::invalid_argument("draw instancing may appear only once");
+				DrawInstancingSpecified = true;
+				if (Option.substr(sizeof("--draw-instancing=") - 1) != "contiguous")
+					throw std::invalid_argument("draw instancing must be contiguous");
+				RuntimeOptions.ContiguousInstancing = true;
+			}
 			else if (Option.starts_with("--count=")) SelectedCount = ParseBound(Option.substr(8), 1, 65536);
 			else if (Option.starts_with("--changes=")) SelectedChanges = ParseBound(Option.substr(10), 0, 65536);
 			else if (Option.starts_with("--writes=")) SelectedWrites = ParseBound(Option.substr(9), 1, 16);
@@ -527,6 +694,11 @@ int main(int ArgumentCount, char **Arguments) {
 		if (SelectedCount && SelectedChanges.value_or(0) > *SelectedCount)
 			throw std::invalid_argument("[Runtime:Benchmark] Changes exceed object count");
 		if (SelectedCount) RigidOnly = true;
+		if (RuntimeOptions.ContiguousInstancing && RuntimeOptions.Backend != RuntimeExperimentOptions::DrawBackend::Sdl)
+			throw std::invalid_argument("contiguous draw instancing requires --draw-backend=sdl");
+		if (RuntimeOptions.Backend != RuntimeExperimentOptions::DrawBackend::None &&
+			!SelectedCount && SelectedScenario.empty())
+			throw std::invalid_argument("draw backend requires --count or --scenario");
 		if (DiagnosticMarks) std::cerr << "[Runtime:Benchmark] property=" << RuntimeOptions.Property
 			<< " split_construction=" << RuntimeOptions.SplitConstruction
 			<< " density_matrix=" << RuntimeOptions.DensityMatrix << '\n';
@@ -536,10 +708,10 @@ int main(int ArgumentCount, char **Arguments) {
 				throw std::invalid_argument("samples file must not already exist");
 			SamplesFile.open(SamplesPath, std::ios::out | std::ios::trunc);
 			if (!SamplesFile) throw std::runtime_error("could not open samples file");
-			SamplesFile << "Scenario,Elements,Frame,GroupWidth,RendererOnly,ProfileEnabled,ExpectedUpdates,WritesPerObject,DirtyAccumulationMs,PublicationGenerationMs,ProjectionApplyMs,DirtyCaptureMs,DirtyExpansionMs,FinalStateExtractionMs,PublicationConstructionMs,PublisherReconciliationMs,JournalMs,ClassificationMs,AccumulatorMs,JournalRecords,FrameCppNewCalls,FrameCppNewBytes\n" << std::flush;
+			SamplesFile << "Scenario,Elements,Frame,GroupWidth,RendererOnly,ProfileEnabled,ExpectedUpdates,WritesPerObject,DirtyAccumulationMs,PublicationGenerationMs,ProjectionApplyMs,DirtyCaptureMs,DirtyExpansionMs,FinalStateExtractionMs,PublicationConstructionMs,PublisherReconciliationMs,JournalMs,ClassificationMs,AccumulatorMs,JournalRecords,FrameCppNewCalls,FrameCppNewBytes,DrawBackend,ContiguousInstancing,DrawAndWaitMs,MutationToCompletionMs,DrawProjectedObjects,DrawProjectedUpdates,SdlFramesSubmitted,SdlFullResyncs,SdlDrawCalls,SdlUploadedBytes,SdlInstanceUploadBytes,SdlInstancedDrawCalls,SdlContiguousInstancedDrawCalls,SdlCameraVisitedObjects,SdlInstancedObjects,SdlProjectionNs,SdlInstanceApplicationNs,SdlInstanceUploadNs,SdlCompletionWaitNs\n" << std::flush;
 		}
 		std::ofstream *Samples = SamplesPath.empty() ? nullptr : &SamplesFile;
-		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n" << std::flush;
+		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs,DrawBackend,DrawAndWaitMeanMs,MutationToCompletionMeanMs,ContiguousInstancing\n" << std::flush;
 		if (SelectedCount) {
 			RunRigid(RuntimeOptions.Property, *SelectedCount, SelectedChanges.value_or(*SelectedCount),
 				SelectedWrites.value_or(1), Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples, DiagnosticMarks);
