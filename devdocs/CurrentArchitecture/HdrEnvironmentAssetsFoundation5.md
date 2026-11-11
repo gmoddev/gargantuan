@@ -26,8 +26,18 @@ HDR pixels are scene-linear RGBA32F bytes; no exposure multiplier, sRGB
 decoding, or tone map is baked into the canonical artifact. Import rejects
 non-finite or negative RGB components while retaining finite radiance above
 the half-float range. Alpha is one.
-Nondefault Radiance exposure, primaries, color correction, and gamma metadata
-are rejected rather than silently interpreted. Artifact version 7 is specific
+The bounded decoder requires exactly one `FORMAT=32-bit_rle_rgbe` assignment and
+the standard `-Y ... +X ...` raster orientation. Neutral `EXPOSURE=1` and
+`PIXASPECT=1` are accepted. Nonunity exposure or pixel aspect, and any explicit
+`PRIMARIES`, `COLORCORR`, or `GAMMA` assignment are rejected rather than silently
+changing radiance or aspect. Unrecognized bounded header metadata and comments
+remain accepted; only line-start assignments are interpreted. Radiance's
+[picture format specification](https://floyd.lbl.gov/radiance/refer/filefmts.pdf)
+defines cumulative exposure, color correction, primaries, and pixel aspect,
+which the canonical converter does not apply. The 8 MiB source cap and square
+512-pixel / panorama 1024 × 512 limits bound decode and six-face conversion;
+larger capture files need a separately budgeted import contract.
+Artifact version 7 is specific
 to float Image assets: existing version 1 and 2 image encodings remain
 unchanged. Version 7 stores width and height as little-endian 32-bit integers,
 the format tag `Rgba32Float` as a little-endian 32-bit integer, then tightly
