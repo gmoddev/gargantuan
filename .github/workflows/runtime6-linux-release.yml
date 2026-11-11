@@ -1,0 +1,180 @@
+name: Runtime 6 Linux Release qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Exact 40-hex source commit to qualify
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      QUALIFIED_SOURCE: ${{ inputs.source }}
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - name: Checkout recursive source dependencies
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Verify exact source and pinned submodules
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runtime6-linux-release-evidence
+          [[ "$QUALIFIED_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          git checkout --detach "$QUALIFIED_SOURCE"
+          test "$(git rev-parse HEAD)" = "$QUALIFIED_SOURCE"
+          git submodule update --init --recursive
+          git rev-parse HEAD > runtime6-linux-release-evidence/source.txt
+          git submodule status --recursive > runtime6-linux-release-evidence/submodules.txt
+          if grep -Eq '^[\-+U]' runtime6-linux-release-evidence/submodules.txt; then
+            echo 'Submodules differ from pinned source gitlinks'
+            exit 1
+          fi
+
+      - name: Install canonical Linux compiler and build dependencies
+        id: dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends \
+              clang-19 clang-format cmake glslc libfreetype-dev \
+              libx11-dev libxcursor-dev libxext-dev libxfixes-dev libxi-dev \
+              libxrandr-dev libxss-dev libxtst-dev libclang-rt-19-dev \
+              g++-14 llvm-19 ninja-build
+            clang-19 --version
+            clang++-19 --version
+            g++-14 --version
+            test -d /usr/lib/gcc/x86_64-linux-gnu/14
+            clang++-19 --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -v -E -x c++ /dev/null
+            cmake --version
+            ninja --version
+            glslc --version
+          } 2>&1 | tee runtime6-linux-release-evidence/dependencies.log
+          clang++-19 --version > runtime6-linux-release-evidence/compiler.txt
+          g++-14 --version >> runtime6-linux-release-evidence/compiler.txt
+
+      - name: Install pinned repository tools
+        uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908 # v3
+        with:
+          version: 1.2.0
+          cache: true
+
+      - name: Regenerate native class and reflection sources
+        id: generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            lute tools/classgen -f
+            lute tools/tests/DefaultOverrides
+            test -f include/gargantuan/classes/generated/Instance.hpp
+            test -f src/classes/generated/Instance.cpp
+            test -f include/gargantuan/services/generated/Workspace.hpp
+            test -f src/services/generated/Workspace.cpp
+          } 2>&1 | tee runtime6-linux-release-evidence/generation.log
+          git diff --binary > runtime6-linux-release-evidence/generated.patch
+
+      - name: Configure complete Linux Release build
+        id: configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-runtime6-release -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
+            -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+            -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+            -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF \
+            -DGARGANTUAN_WITH_GNS=OFF \
+            -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON \
+            -DGARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS=ON \
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF \
+            -DGARGANTUAN_GLSLC_EXECUTABLE="$(command -v glslc)" \
+            2>&1 | tee runtime6-linux-release-evidence/configure.log
+
+      - name: Build all native Release targets
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build-runtime6-release --parallel 3 \
+            2>&1 | tee runtime6-linux-release-evidence/build.log
+
+      - name: Run complete Linux Release CTest contract
+        id: test
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'POOLED_CORRECTNESS_V1\n' > runtime6-linux-release-evidence/qualification-contract.txt
+          ctest --test-dir build-runtime6-release --parallel 2 --timeout 300 \
+            --output-on-failure --no-tests=error \
+            --output-junit "$GITHUB_WORKSPACE/runtime6-linux-release-evidence/ctest-results.xml" \
+            2>&1 | tee runtime6-linux-release-evidence/ctest.log
+          test -s runtime6-linux-release-evidence/ctest-results.xml
+
+      - name: Record Release evidence manifest
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
+          GENERATION_OUTCOME: ${{ steps.generation.outcome }}
+          CONFIGURE_OUTCOME: ${{ steps.configure.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p runtime6-linux-release-evidence
+          if ! test -f runtime6-linux-release-evidence/generated.patch; then
+            git diff --binary > runtime6-linux-release-evidence/generated.patch || true
+          fi
+          for Name in CMakeCache.txt CMakeFiles/CMakeConfigureLog.yaml Testing/Temporary/LastTest.log; do
+            if test -f "build-runtime6-release/$Name"; then
+              cp "build-runtime6-release/$Name" "runtime6-linux-release-evidence/$(basename "$Name")"
+            fi
+          done
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          Root = pathlib.Path('runtime6-linux-release-evidence')
+          Files = {}
+          for File in sorted(Root.iterdir()):
+              if File.is_file() and File.name != 'manifest.json':
+                  Data = File.read_bytes()
+                  Files[File.name] = {'bytes': len(Data), 'sha256': hashlib.sha256(Data).hexdigest()}
+          Manifest = {
+              'schema': 1, 'requestedSource': os.environ.get('QUALIFIED_SOURCE'),
+              'checkedOutSource': (Root / 'source.txt').read_text().strip() if (Root / 'source.txt').is_file() else None,
+              'workflowSource': os.environ.get('GITHUB_SHA'),
+              'configuration': {'buildType': 'Release', 'compiler': 'Clang 19 / GCC 14',
+                                'pch': False, 'gns': False, 'rendererBenchmarks': True,
+                                'allNativeTargets': True, 'fullCTest': True},
+              'stepOutcomes': {Key: os.environ.get(Key + '_OUTCOME') for Key in
+                               ('VERIFY', 'DEPENDENCIES', 'GENERATION', 'CONFIGURE', 'BUILD', 'TEST')},
+              'files': Files,
+          }
+          (Root / 'manifest.json').write_text(json.dumps(Manifest, indent=2, sort_keys=True) + '\n')
+          PY
+
+      - name: Upload Linux Release evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: runtime6-linux-release-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: runtime6-linux-release-evidence/
