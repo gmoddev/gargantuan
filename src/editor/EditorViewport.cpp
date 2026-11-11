@@ -135,6 +135,7 @@ namespace gargantuan {
 		SDLRendererMetrics Metrics;
 		bool RequiresFullResync = false;
 		std::uint32_t RemainingPaletteUploadFailures = 0;
+		bool PostShadowFailure = false;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		std::vector<std::uint8_t> BgraPixels;
 
@@ -369,8 +370,14 @@ namespace gargantuan {
 					Frame.EnableInstancing = false;
 				}
 			}
-			for (auto &Pass : State->RenderPasses)
-				if (auto *Recorded = Pass->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
+			const auto &Definitions = GetSDLRenderPassConstructors();
+			for (std::size_t Index = 0; Index < State->RenderPasses.size(); ++Index) {
+				if (auto *Recorded = State->RenderPasses[Index]->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
+				if (State->PostShadowFailure && Definitions[Index].Phase == SDLPassPhase::Shadow) {
+					State->PostShadowFailure = false;
+					throw std::runtime_error("[Renderer:Shadow] injected post-shadow failure");
+				}
+			}
 		} catch (...) {
 			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
 			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
@@ -398,13 +405,16 @@ namespace gargantuan {
 			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 			throw std::runtime_error(std::format("Failed to submit viewport frame: {}", SDL_GetError()));
 		}
-		if (State->InstanceResources) State->InstanceResources->OnFrameSubmitted();
 		if (!SDL_WaitForGPUFences(State->Gpu, true, &Fence, 1)) {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
+			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 			throw std::runtime_error(std::format("Failed to wait for viewport frame: {}", SDL_GetError()));
 		}
+		if (State->InstanceResources) State->InstanceResources->OnFrameSubmitted();
 		const auto ReadbackComplete = std::chrono::steady_clock::now();
-		(void)State->ShadowCache.OnFrameSubmitted();
+		if (State->ShadowCache.OnFrameSubmitted()) ++State->Metrics.ShadowMapBuilds;
+		++State->Metrics.FramesSubmitted;
 		State->ShadowResources.OnFrameSubmitted();
 		for (auto &Pass : State->RenderPasses) Pass->OnFrameSubmitted();
 		(void)State->SpotShadowAtlas.OnFrameSubmitted();
@@ -453,5 +463,11 @@ namespace gargantuan {
 
 	void EditorViewportRenderer::InjectPaletteUploadFailureForTesting() {
 		State->RemainingPaletteUploadFailures = 1;
+	}
+	void EditorViewportRenderer::InjectPostShadowFailureForTesting() {
+		State->PostShadowFailure = true;
+	}
+	SDLRendererMetrics EditorViewportRenderer::GetMetricsForTesting() const {
+		return State ? State->Metrics : SDLRendererMetrics{};
 	}
 }

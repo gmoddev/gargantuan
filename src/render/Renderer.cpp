@@ -448,12 +448,14 @@ namespace gargantuan {
 				for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 				throw std::runtime_error(std::format("Failed to submit SDL GPU frame: {}", SDL_GetError()));
 			}
-			if (State->InstanceResources) State->InstanceResources->OnFrameSubmitted();
 			const auto WaitStart = Clock::now();
 			if (!SDL_WaitForGPUFences(State->Gpu, true, &Fence, 1)) {
 				SDL_ReleaseGPUFence(State->Gpu, Fence);
+				if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+				for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 				throw std::runtime_error(std::format("Failed to wait for SDL GPU frame: {}", SDL_GetError()));
 			}
+			if (State->InstanceResources) State->InstanceResources->OnFrameSubmitted();
 			State->Metrics.LastGpuCompletionWaitNanoseconds = Nanoseconds(Clock::now() - WaitStart);
 			State->Metrics.GpuCompletionWaitNanoseconds += State->Metrics.LastGpuCompletionWaitNanoseconds;
 			SDL_ReleaseGPUFence(State->Gpu, Fence);

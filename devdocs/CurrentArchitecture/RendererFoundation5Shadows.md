@@ -12,6 +12,14 @@ related_code:
 
 # Renderer Foundation 5 shadow prototype
 
+The runtime and viewport invalidate recorded directional and spotlight candidates
+when command encoding, submission, or fence wait fails. A later frame with no
+shadow work cannot commit depth from a canceled command buffer. The native GPU
+fixture injects a one-shot post-shadow failure through a private test hook,
+then checks configured-empty coverage followed by a fresh four-cascade rebuild
+and exact reference pixels. Private viewport counters contain engine values,
+without exposing GPU handles through the public editor transport.
+
 The Foundation 4 single world-origin shadow target remains the default until
 the physical GPU path is qualified. The optional cascade path consumes only the
 immutable render frame and projection. It uses one D32 2D-array texture with at

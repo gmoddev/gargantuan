@@ -18,6 +18,7 @@
 #include <vector>
 
 namespace gargantuan {
+	struct SDLRendererMetrics;
 	struct EditorViewportFrame {
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
@@ -70,6 +71,8 @@ namespace gargantuan {
 	  private:
 		friend struct EditorViewportRendererTestAccess;
 		void InjectPaletteUploadFailureForTesting();
+		void InjectPostShadowFailureForTesting();
+		[[nodiscard]] SDLRendererMetrics GetMetricsForTesting() const;
 		struct Backend;
 		std::unique_ptr<Backend> State;
 	};

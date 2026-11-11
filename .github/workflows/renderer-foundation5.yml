@@ -65,6 +65,10 @@ jobs:
             --opaque-ordering --output=../renderer-evidence/opaque-ordering) 2>&1 | tee renderer-evidence/opaque-ordering.log || failed=1
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
             --instancing-ordering --output=../renderer-evidence/instancing-ordering) 2>&1 | tee renderer-evidence/instancing-ordering.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
+            --contiguous-instancing --output=../renderer-evidence/contiguous-instancing) 2>&1 | tee renderer-evidence/contiguous-instancing.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
+            --scene-envelope-pixels --output=../renderer-evidence/scene-envelope) 2>&1 | tee renderer-evidence/scene-envelope.log || failed=1
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_ibl_gpu_tests) \
             2>&1 | tee renderer-evidence/ibl.log || failed=1
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_reflection_probe_gpu_tests ../renderer-evidence/probes) \
@@ -132,13 +136,17 @@ jobs:
             'gargantuan_ibl_gpu_tests', 'gargantuan_foundation_tests', 'gargantuan_renderer_foundation2_benchmark',
             'gargantuan_reflection_probe_tests', 'gargantuan_directional_cascade_numerics_tests',
             'gargantuan_spot_shadow_atlas_tests', 'gargantuan_reflection_probe_gpu_tests', 'gargantuan_shadow_foundation5_gpu_tests',
-            'gargantuan_renderer_instance_record_tests')
+            'gargantuan_renderer_instance_record_tests', 'gargantuan_renderer_publication_tests',
+            'gargantuan_asset_foundation_tests', 'gargantuan_directional_shadow_cache_tests',
+            'gargantuan_ibl_reference_tests', 'gargantuan_renderer_material_mip_tests')
           cmake --build build-renderer --parallel 3 --target @Targets 2>&1 | Tee-Object -FilePath renderer-evidence/build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $Names = @('gargantuan.exe', 'gargantuan_editor_viewport_smoke.exe', 'gargantuan_renderer_benchmark.exe',
             'gargantuan_renderer_depth_tests.exe', 'gargantuan_renderer_foundation2_gpu_benchmark.exe',
             'gargantuan_ibl_gpu_tests.exe', 'gargantuan_renderer_foundation2_benchmark.exe',
-            'gargantuan_reflection_probe_gpu_tests.exe', 'gargantuan_shadow_foundation5_gpu_tests.exe', 'SDL3.dll')
+            'gargantuan_reflection_probe_gpu_tests.exe', 'gargantuan_shadow_foundation5_gpu_tests.exe',
+            'gargantuan_renderer_publication_tests.exe', 'gargantuan_asset_foundation_tests.exe',
+            'gargantuan_directional_shadow_cache_tests.exe', 'SDL3.dll')
           $ShaderFiles = Get-ChildItem -LiteralPath build-renderer/shaders -File -Filter '*.spv'
           $Names += $ShaderFiles | ForEach-Object { "shaders/$($_.Name)" }
           $Members = foreach ($Name in $Names) {
@@ -155,7 +163,7 @@ jobs:
             ConvertTo-Json -Depth 5 | Set-Content -LiteralPath renderer-evidence/renderer-package.json
           $env:SDL_VIDEODRIVER = 'dummy'
           $env:SDL_AUDIODRIVER = 'dummy'
-          ctest --test-dir build-renderer --output-on-failure -R '^gargantuan_(foundation|reflection_probe_reference|directional_cascade_numerics|spot_shadow_atlas|renderer_instance_records)$' 2>&1 |
+          ctest --test-dir build-renderer --output-on-failure -R '^gargantuan_(foundation|renderer_publication|asset_foundation|directional_shadow_cache|ibl_reference|renderer_material_mips|reflection_probe_reference|directional_cascade_numerics|spot_shadow_atlas|renderer_instance_records)$' 2>&1 |
             Tee-Object -FilePath renderer-evidence/ctest.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -173,6 +181,9 @@ jobs:
             build-renderer/gargantuan_ibl_gpu_tests.exe
             build-renderer/gargantuan_reflection_probe_gpu_tests.exe
             build-renderer/gargantuan_shadow_foundation5_gpu_tests.exe
+            build-renderer/gargantuan_renderer_publication_tests.exe
+            build-renderer/gargantuan_asset_foundation_tests.exe
+            build-renderer/gargantuan_directional_shadow_cache_tests.exe
             build-renderer/*.dll
             build-renderer/runtime/
             build-renderer/shaders/

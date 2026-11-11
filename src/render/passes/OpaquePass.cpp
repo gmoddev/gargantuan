@@ -626,12 +626,14 @@ namespace gargantuan {
 						SDL_BindGPUVertexStorageBuffers(Pass, 0, &PaletteBuffer, 1);
 						BoundPalette = PaletteBuffer;
 					}
-					if (Item.CastShadow && Environment.SunIntensity > 0.0f && Palette.GpuSkinned) {
-						if (Context.Metrics) ++Context.Metrics->ShadowPoseChecks;
+					if (Palette.GpuSkinned) {
 						const auto ShadowRevision = Context.ShadowPoseRevisions.find(Item.Object);
-						if (ShadowRevision == Context.ShadowPoseRevisions.end() || ShadowRevision->second != Palette.PoseRevision) {
-							if (Context.Metrics) ++Context.Metrics->MainShadowPoseMismatches;
-							throw std::logic_error("[Renderer:Material] World and shadow passes resolved different animation poses");
+						if (ShadowRevision != Context.ShadowPoseRevisions.end()) {
+							if (Context.Metrics) ++Context.Metrics->ShadowPoseChecks;
+							if (ShadowRevision->second != Palette.PoseRevision) {
+								if (Context.Metrics) ++Context.Metrics->MainShadowPoseMismatches;
+								throw std::logic_error("[Renderer:Material] World and shadow passes resolved different animation poses");
+							}
 						}
 					}
 					BoundObject = Draw.Object;
