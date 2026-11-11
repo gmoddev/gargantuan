@@ -444,11 +444,33 @@ namespace gargantuan {
 		auto *property = FindProperty(std::string(propertyName));
 		if (Profile) AddMutationTime(CurrentCFrameMutationProfile.MetadataLookupNanoseconds, LookupStart);
 		if (!property) throw std::runtime_error("Committed property does not exist");
+		NotifyPropertyCommittedImpl(propertyName, *property, nullptr);
+	}
+
+	void Instance::NotifyValidatedCFramePropertyCommitted(const InstanceProperty &Property, const CFrame &Value) {
+		AssertAuthoritativeMutation("Instance property mutation");
+		NotifyPropertyCommittedImpl("CFrame", Property, &Value);
+	}
+
+	void Instance::NotifyPropertyCommittedImpl(
+		std::string_view propertyName, const InstanceProperty &Property, const CFrame *TypedValue
+	) {
+		const bool Profile = CFrameMutationProfilingEnabled && propertyName == "CFrame";
+		const auto *property = &Property;
 		const bool replicated = property->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated;
 		const auto Scope = replicated ? GetReplicationScopeId() : ObjectId{};
 		if (!ChangeJournal::DiscardsPayload(Scope)) {
 			const auto EncodingStart = Profile ? MutationClock::now() : MutationClock::time_point{};
-			auto committedValue = EncodeCommittedProperty(this, *property);
+			bool NativeBasePartCFrame = false;
+			if (TypedValue) {
+				static const auto BasePartSchemaId = SchemaId::FromNativeName("Engine", "BasePart");
+				NativeBasePartCFrame = property->Name == "CFrame" &&
+					property->SemanticType == InstanceProperty::DataType::CFrame &&
+					property->DeclaringSchemaId == BasePartSchemaId &&
+					property->Read && !property->ReadObjectReference && !property->ReadEnumValue;
+			}
+			WireValue committedValue = NativeBasePartCFrame
+				? WireValue(EncodeCFrameWireValue(*TypedValue)) : EncodeCommittedProperty(this, *property);
 			if (Profile) AddMutationTime(CurrentCFrameMutationProfile.EncodingNanoseconds, EncodingStart);
 			const auto JournalStart = Profile ? MutationClock::now() : MutationClock::time_point{};
 			ChangeJournal::Get().Commit(
@@ -671,7 +693,9 @@ namespace gargantuan {
 			throw std::runtime_error("[Storage:Authority] Replicated service state is server-authoritative");
 	}
 
-	void Instance::ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const {
+	const InstanceProperty *Instance::ValidatePropertyMutation(
+		std::string_view propertyName, const std::any &value
+	) const {
 		const bool Profile = CFrameMutationProfilingEnabled && propertyName == "CFrame";
 		const auto ValidationStart = Profile ? MutationClock::now() : MutationClock::time_point{};
 		auto *property = const_cast<Instance *>(this)->FindProperty(std::string(propertyName));
@@ -680,6 +704,7 @@ namespace gargantuan {
 		if (propertyName == "Name" || property->PersistencePolicy == InstanceProperty::Persistence::Saved)
 			if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
 		if (Profile) AddMutationTime(CurrentCFrameMutationProfile.ValidationNanoseconds, ValidationStart);
+		return property;
 	}
 
 	MutationStatus Instance::ApplyPropertyMutation(

@@ -155,9 +155,20 @@ const function assembleProperties(state: GenerationState)
 					:line(`void {setIdentifier}({property.type.cType} value) \{`)
 					:tab()
 					:line(`AssertCanMutate();`)
-					:line(`ValidatePropertyMutation({keyString}, value);`)
-					:line(`{key} = value;`)
-					:line(`NotifyPropertyCommitted({keyString});`)
+				if state.class.name == "BasePart" and key == "CFrame" then
+					-- The descriptor is resolved and validated for this one synchronous
+					-- setter call. Never retain it across schema registry lifetimes.
+					state.publicBody
+						:line(`const auto *Property = ValidatePropertyMutation({keyString}, value);`)
+						:line(`{key} = value;`)
+						:line(`NotifyValidatedCFramePropertyCommitted(*Property, {key});`)
+				else
+					state.publicBody
+						:line(`ValidatePropertyMutation({keyString}, value);`)
+						:line(`{key} = value;`)
+						:line(`NotifyPropertyCommitted({keyString});`)
+				end
+				state.publicBody
 					:untab()
 					:line(`}`)
 					:newline()

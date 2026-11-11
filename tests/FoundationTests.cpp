@@ -2145,6 +2145,104 @@ namespace {
 		jobs.Shutdown(true);
 	}
 
+	void TestCFrameCommitParity() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		Check(WorkspaceValue != nullptr, "CFrame parity fixture creates a live Workspace");
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetParent(WorkspaceValue);
+		auto &Journal = ChangeJournal::Get();
+		const auto Scope = World->GetObjectId();
+		const auto PartId = PartValue->GetObjectId();
+		const CFrame First(glm::vec3(1.0f, 2.0f, 3.0f), glm::mat3(
+			glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)));
+		const CFrame Nested(glm::vec3(4.0f, 5.0f, 6.0f));
+		const auto Expected = [](const CFrame &Value) -> WireValue {
+			return *EncodeNativeWireValue(std::any(Value));
+		};
+		Check(WireValue(EncodeCFrameWireValue(First)) == Expected(First),
+			"typed CFrame wire encoding matches the reflected codec");
+		Check(EncodeCFrameWireValue(First) == WireCFrame{{1, 2, 3, 0, 1, 0, -1, 0, 0, 0, 0, 1}},
+			"typed CFrame codec preserves the twelve canonical position and rotation components");
+		std::vector<CFrame> Observed;
+		bool Reentered = false;
+		PartValue->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+			Observed.push_back(PartValue->GetCFrame());
+			if (!Reentered) { Reentered = true; PartValue->SetCFrame(Nested); }
+		});
+		auto Cursor = Journal.CreateCursor(Scope);
+		Instance::ResetCFrameMutationProfile();
+		Instance::SetCFrameMutationProfilingEnabled(true);
+		PartValue->SetCFrame(First);
+		Instance::SetCFrameMutationProfilingEnabled(false);
+		Check(Instance::GetCFrameMutationProfile().CommittedWrites == 2,
+			"CFrame profile counts both ordinary and nested committed writes");
+		auto Records = Journal.Read(Cursor).Records;
+		Check(Records.size() == 2 && Observed.size() == 2 &&
+			Observed[0].FuzzyEq(First) && Observed[1].FuzzyEq(Nested),
+			"ordinary CFrame callback sees each intermediate value and may reenter");
+		Check(std::get<PropertyUpdatedChange>(Records[0].Payload).Value == Expected(First) &&
+			std::get<PropertyUpdatedChange>(Records[1].Payload).Value == Expected(Nested),
+			"reentrant CFrame journal records retain exact committed order and wire values");
+		PartValue->GetPropertyChangedSignal("CFrame")->DisconnectAll();
+
+		const CFrame Reflected(glm::vec3(7.0f, 8.0f, 9.0f));
+		Cursor = Journal.CreateCursor(Scope);
+		Check(PartValue->ApplyPropertyMutation("CFrame", std::any(Reflected), Enums::Permission::Engine) ==
+			MutationStatus::Success, "reflected native CFrame write succeeds");
+		Records = Journal.Read(Cursor).Records;
+		Check(Records.size() == 1 && std::get<PropertyUpdatedChange>(Records[0].Payload).Value == Expected(Reflected),
+			"reflected CFrame write has the same wire representation");
+
+		const auto *Property = PartValue->FindProperty("CFrame");
+		auto *MutableProperty = const_cast<InstanceProperty *>(Property);
+		const auto OriginalValidator = MutableProperty->Validate;
+		MutableProperty->Validate = [](const std::any &Value) {
+			return std::any_cast<CFrame>(&Value) == nullptr;
+		};
+		Cursor = Journal.CreateCursor(Scope);
+		const auto Revision = World->GetAuthoritativeRevision();
+		bool Rejected = false;
+		try { PartValue->SetCFrame(First); }
+		catch (const std::invalid_argument &) { Rejected = true; }
+		MutableProperty->Validate = OriginalValidator;
+		Check(Rejected && PartValue->GetCFrame().FuzzyEq(Reflected) &&
+			World->GetAuthoritativeRevision() == Revision && Journal.Read(Cursor).Records.empty(),
+			"native CFrame validator rejection leaves value, revision, and journal unchanged");
+
+		MutationGateway Gateway;
+		const CFrame Queued(glm::vec3(10.0f, 11.0f, 12.0f));
+		Cursor = Journal.CreateCursor(Scope);
+		auto Completion = Gateway.Submit(UpdatePropertyCommand{PartId, "CFrame", std::any(Queued)});
+		Check(PartValue->GetCFrame().FuzzyEq(Reflected), "queued CFrame write is not visible before Main drain");
+		Check(Gateway.Drain() == 1 && Completion->Wait().Succeeded(), "Main applies queued CFrame write");
+		Records = Journal.Read(Cursor).Records;
+		Check(Records.size() == 1 && std::get<PropertyUpdatedChange>(Records[0].Payload).Value == Expected(Queued),
+			"queued CFrame write emits one exact wire record");
+
+		const CFrame Prepared(glm::vec3(16.0f, 17.0f, 18.0f));
+		const CFrame Later(glm::vec3(19.0f, 20.0f, 21.0f));
+		const std::vector<PreparedPropertyWrite> Writes{{PartId, Property->DeclaringSchemaId,
+			Property->DeclaringDefinitionVersion, "CFrame", Expected(Prepared)}};
+		bool SawPrepared = false;
+		PartValue->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+			if (SawPrepared) return;
+			SawPrepared = PartValue->GetCFrame().FuzzyEq(Prepared);
+			PartValue->SetCFrame(Later);
+		});
+		Cursor = Journal.CreateCursor(Scope);
+		const auto PreparedResult = PreparedPropertyCommit::Apply(
+			*World, World->GetAuthoritativeRevision(), Writes, ScriptSecurityContext::CoreTrusted());
+		Records = Journal.Read(Cursor).Records;
+		Check(PreparedResult.Status == MutationStatus::Success && SawPrepared && Records.size() == 2 &&
+			std::get<PropertyUpdatedChange>(Records[0].Payload).Value == Expected(Prepared) &&
+			std::get<PropertyUpdatedChange>(Records[1].Payload).Value == Expected(Later),
+			"prepared CFrame callback sees committed batch and nested ordinary CFrame follows it");
+		PartValue->GetPropertyChangedSignal("CFrame")->DisconnectAll();
+		World->Destroy();
+	}
+
 	void TestBoundedJournalCursor() {
 		using namespace gargantuan;
 		auto &journal = ChangeJournal::Get();
@@ -6980,6 +7078,19 @@ namespace {
 		);
 		Check(AdoptedPart && std::ranges::contains(RuntimeSnapshot->Items, AdoptedPart->GetObjectId(), &RenderItem::Object),
 			"first-adopted Part enters runtime render extraction with stable identity");
+		const auto LuauCFrameCursor = ChangeJournal::Get().CreateCursor(game->GetObjectId());
+		lua_settop(L, 0);
+		Check(Load(L, R"(
+			local PartValue = game.Workspace:FindFirstDescendant("RuntimePart")
+			assert(PartValue ~= nil)
+			PartValue.CFrame = CFrame.new(13, 14, 15)
+		)", "luau-live-cframe") == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK,
+			"live Luau CFrame property assignment uses the authoritative setter");
+		const auto LuauCFrameRecords = ChangeJournal::Get().Read(LuauCFrameCursor).Records;
+		Check(LuauCFrameRecords.size() == 1 &&
+			std::get<PropertyUpdatedChange>(LuauCFrameRecords[0].Payload).Value ==
+				WireValue(EncodeCFrameWireValue(std::dynamic_pointer_cast<Part>(AdoptedPart)->GetCFrame())),
+			"live Luau CFrame assignment emits the exact typed wire value");
 
 		lua_settop(L, 0);
 		const auto CloneLoadStatus = Load(L, R"(
@@ -7439,6 +7550,7 @@ int main() {
 	TestRenderBackendBoundary();
 	TestScriptSecurityModel();
 	TestMutationGateway();
+	TestCFrameCommitParity();
 	TestInstanceAttributes();
 	TestInstanceTags();
 	TestBoundedJournalCursor();

@@ -11,6 +11,7 @@
 
 namespace gargantuan {
 	class RuntimeSchemaRegistry;
+	class CFrame;
 	struct SchemaEnumItem;
 	SerializationResult<std::string> EncodeWireObjectIdJson(WireObjectId Id);
 	SerializationResult<WireObjectId> DecodeWireObjectIdJson(std::string_view Encoded);
@@ -18,6 +19,7 @@ namespace gargantuan {
 	SerializationResult<WireValue> DecodeWireValueJson(std::string_view Encoded);
 	std::size_t MeasureWireValueJsonBytes(const WireValue &Value);
 	std::optional<WireValue> EncodeNativeWireValue(const std::any &value);
+	WireCFrame EncodeCFrameWireValue(const CFrame &Value) noexcept;
 	std::optional<std::any> DecodeNativeWireValue(const WireValue &value);
 	const SchemaEnumItem &ValidateSchemaEnumValue(
 		const WireSchemaEnumValue &value,

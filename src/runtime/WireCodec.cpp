@@ -92,6 +92,15 @@ namespace gargantuan {
 		return result.IsValid() ? std::optional(result) : std::nullopt;
 	}
 
+	WireCFrame EncodeCFrameWireValue(const CFrame &Value) noexcept {
+		return WireCFrame{{
+			Value.Position.x, Value.Position.y, Value.Position.z,
+			Value.Rotation[0][0], Value.Rotation[0][1], Value.Rotation[0][2],
+			Value.Rotation[1][0], Value.Rotation[1][1], Value.Rotation[1][2],
+			Value.Rotation[2][0], Value.Rotation[2][1], Value.Rotation[2][2],
+		}};
+	}
+
 	std::optional<WireValue> EncodeNativeWireValue(const std::any &value) {
 		if (auto *typed = std::any_cast<bool>(&value)) return *typed;
 		if (auto *typed = std::any_cast<int>(&value)) return *typed;
@@ -105,14 +114,7 @@ namespace gargantuan {
 		if (auto *typed = std::any_cast<UDim>(&value)) return WireUDim{typed->Scale, typed->Offset};
 		if (auto *typed = std::any_cast<UDim2>(&value))
 			return WireUDim2{{typed->X.Scale, typed->X.Offset}, {typed->Y.Scale, typed->Y.Offset}};
-		if (auto *typed = std::any_cast<CFrame>(&value)) {
-			return WireCFrame{{
-				typed->Position.x, typed->Position.y, typed->Position.z,
-				typed->Rotation[0][0], typed->Rotation[0][1], typed->Rotation[0][2],
-				typed->Rotation[1][0], typed->Rotation[1][1], typed->Rotation[1][2],
-				typed->Rotation[2][0], typed->Rotation[2][1], typed->Rotation[2][2],
-			}};
-		}
+		if (auto *typed = std::any_cast<CFrame>(&value)) return EncodeCFrameWireValue(*typed);
 		if (auto *typed = std::any_cast<EnumItem>(&value)) {
 			if (!typed->EnumType) return std::nullopt;
 			return WireEnumItem{std::string(typed->EnumType->Name), std::string(typed->Name)};

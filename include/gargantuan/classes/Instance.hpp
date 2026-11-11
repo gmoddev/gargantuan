@@ -9,6 +9,7 @@
 #include "gargantuan/scripting/Userdata.hpp"
 
 #include <memory>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <string>
@@ -19,6 +20,7 @@
 
 namespace gargantuan {
 	class DataModel;
+	class CFrame;
 	struct CFrameMutationProfile {
 		std::uint64_t ValidationNanoseconds = 0;
 		std::uint64_t MetadataLookupNanoseconds = 0;
@@ -73,6 +75,12 @@ namespace gargantuan {
 		void FireAncestryChanged(std::shared_ptr<Instance> child, std::shared_ptr<Instance> parent);
 		void AssertIsAlive() const;
 		void NotifyPropertyCommitted(std::string_view propertyName);
+	  protected:
+		void NotifyValidatedCFramePropertyCommitted(const InstanceProperty &Property, const CFrame &Value);
+	  private:
+		void NotifyPropertyCommittedImpl(
+			std::string_view PropertyName, const InstanceProperty &Property, const CFrame *TypedValue);
+	  public:
 		static void SetCFrameMutationProfilingEnabled(bool Enabled);
 		static CFrameMutationProfile GetCFrameMutationProfile();
 		static void ResetCFrameMutationProfile();
@@ -83,7 +91,8 @@ namespace gargantuan {
 		void SetDetachedTagsForAdoption(std::vector<std::string> Tags);
 		[[nodiscard]] const std::vector<std::string> &GetDetachedTagsForAdoption() const { return DetachedTags; }
 		void AssertCanMutate() const;
-		void ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const;
+		const InstanceProperty *ValidatePropertyMutation(
+			std::string_view propertyName, const std::any &value) const;
 		MutationStatus ApplyPropertyMutation(
 			std::string_view propertyName,
 			const std::any &value,

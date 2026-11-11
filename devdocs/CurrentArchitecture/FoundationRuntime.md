@@ -124,6 +124,17 @@ incremental replication now consume `FutureReplicated` explicitly; persistence
 consumes that same canonical property policy. Main-domain authority,
 read-only state, and validation are checked on wired mutation paths.
 
+The generated `BasePart::SetCFrame` retains its resolved property descriptor only
+for the duration of that synchronous setter call. Validation still uses the
+descriptor's live validator and revision gate before assignment. After assignment,
+the ordinary journal path uses the same twelve-component `WireCFrame` encoder as
+reflection, then advances revision and fires the ordinary synchronous signal.
+Discarded journal scopes still skip encoding. No descriptor is cached across a
+schema registry lifetime, and callbacks can still start subsequent writes. The
+opt-in, per-thread CFrame mutation profile separates validation, metadata lookup,
+wire encoding, journal commit, revision advance, and signal dispatch; profiling
+is disabled for production calls by default.
+
 Project custom classes reuse this canonical class model. Their actual runtime
 schema identity is stored separately from the native C++ implementation host,
 so `ClassName`, `IsA`, reflection, persistence, and replication see the custom
