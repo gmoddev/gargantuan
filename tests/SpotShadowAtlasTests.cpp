@@ -82,12 +82,17 @@ int main() try {
 	Atlas.BeginRecording(CanceledLayer);
 	Atlas.RecordPose(CanceledLayer, {100, 1}, 7);
 	Atlas.FinishRecording(CanceledLayer, true, true);
+	const auto IncompleteCanceledLayer = Atlas.GetAssignments()[1].Layer;
+	Atlas.BeginRecording(IncompleteCanceledLayer);
+	Atlas.RecordPose(IncompleteCanceledLayer, {101, 1}, 7);
+	Atlas.FinishRecording(IncompleteCanceledLayer, false, true);
 	Atlas.ApplyPublication(RenderProjection{}, RenderPublication{});
 	Atlas.Invalidate(); // A later render pass canceled this command buffer.
 	Require(Atlas.OnFrameSubmitted() == 0,
-		"a successful empty frame cannot commit a canceled spotlight candidate");
+		"a successful empty frame cannot commit any partially canceled spotlight candidate");
 	CachedPoses.clear();
 	Atlas.MergeCommittedPoses(CanceledLayer, CachedPoses);
+	Atlas.MergeCommittedPoses(IncompleteCanceledLayer, CachedPoses);
 	Require(CachedPoses.empty(), "canceled spotlight depth cannot restore a skin receipt");
 	Atlas.Prepare(Frame, nullptr);
 	Require(Atlas.GetAssignments().front().Dirty,
