@@ -203,7 +203,9 @@ it stops activation, disconnects tracked Lua signal/remote handlers and retires
 queued task references before descendant/service destruction. The active Lua
 call may finish returning or reporting an error; physical `lua_close` waits for
 the final active entry to release its pin. This does not add another DataModel
-authority or change callback security contexts. `ScriptEngine` tracks every Script it
+authority or change callback security contexts. VM entry, shutdown and mutable
+runtime work remain Main-owned; shared lifetime does not permit concurrent Lua
+execution. `ScriptEngine` tracks every Script it
 steps and every Luau-backed signal connection it creates. It retires coroutine
 and callback registry references while the VM is still alive, before
 `lua_close`. A live Engine also observes DataModel destruction and performs this
