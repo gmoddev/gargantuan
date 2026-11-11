@@ -79,6 +79,14 @@ schema/property commands and asset hints. No Studio or LUI files are changed;
 the final qualification record must provide exact source identities and fixtures
 for a later authoring integration.
 
+## Retained UI texture lifetime
+
+Projection preflight rejects removal of a texture still referenced by retained
+UI when the delta has no UI update. An explicit UI replacement or teardown may
+remove that reference and the texture in the same atomic publication. A failed
+removal retains the accepted UI, texture and publication identity. This closes
+an independently reproduced lifetime gap before any native GUI command records.
+
 ## Reference verification
 
 The SDL Sky pass owns the local prefilters and two cube arrays (12 resident

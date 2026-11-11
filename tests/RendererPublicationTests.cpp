@@ -959,6 +959,30 @@ namespace {
 		);
 		Game->Destroy();
 	}
+	void TestRetainedUiTextureLifecycle() {
+		using namespace gargantuan;
+		const RenderTextureIdentity Texture{90, 1};
+		RenderUiBatch Batch;
+		Batch.Texture = Texture; Batch.Vertices.resize(3); Batch.Indices = {0, 1, 2};
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(), .UiChanged = true};
+		Initial.TextureCreates.push_back({Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm,
+			std::make_shared<const std::vector<std::uint8_t>>(4, 255)});
+		Initial.SharedUi = std::make_shared<const RenderUiFrame>(RenderUiFrame{640, 360, 1.0f, {Batch}});
+		RenderProjection Projection;
+		(void)Projection.Apply(Initial);
+		RenderPublication Remove{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
+		Remove.TextureRemoves.push_back({Texture});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Remove); },
+			"texture removal cannot strand a retained UI batch");
+		Check(Projection.GetLastPublicationId() == 1 && Projection.GetTextureCount() == 1 &&
+			Projection.GetUi().Batches.size() == 1, "rejected UI texture removal is atomic");
+		Remove.UiChanged = true;
+		Remove.Ui = {640, 360, 1.0f, {}};
+		(void)Projection.Apply(Remove);
+		Check(Projection.GetTextureCount() == 0 && Projection.GetUi().Batches.empty(),
+			"explicit UI teardown and texture removal commit together");
+	}
+
 	void TestReflectionProbeContracts() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -1176,6 +1200,7 @@ int main() {
 		TestEnvironmentLightingFoundation();
 		TestLocalLights();
 		TestReflectionProbeContracts();
+		TestRetainedUiTextureLifecycle();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:PublicationTest] unexpected exception: " << Error.what() << '\n';
 		return 1;

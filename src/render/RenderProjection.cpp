@@ -345,6 +345,9 @@ namespace gargantuan {
 		for (const auto &Update : Publication.Updates) if (!ObjectTexturesExist(Update))
 			throw std::invalid_argument("Render publication material references a texture without residency");
 		if (!Publication.FullResync && !Publication.TextureRemoves.empty()) {
+			if (!HasUiUpdate && Ui) for (const auto &Batch : Ui->Batches)
+				if (Batch.Texture && !TextureExistsAfterPublication(*Batch.Texture))
+					throw std::invalid_argument("Render publication removes a texture that remains referenced by retained UI");
 			for (const auto &[Object, Existing] : Entries) {
 				if (std::ranges::binary_search(TouchedObjectScratch, Object)) continue;
 				if (!MaterialTexturesExist(Existing.Material) ||
