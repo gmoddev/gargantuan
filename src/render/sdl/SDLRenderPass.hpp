@@ -22,6 +22,7 @@ namespace gargantuan {
 
 	struct SDLFrameContext {
 		bool EnableOpaqueGrouping = true;
+		bool ProfileDetailed = false;
 		SDLFrameContext(
 			const RenderProjection &RenderState,
 			SDLMeshCache &MeshResourcesValue,
@@ -80,9 +81,11 @@ namespace gargantuan {
 	using SDLRenderPassConstructor =
 		std::function<std::unique_ptr<SDLRenderPass>(SDL_GPUDevice *, SDL_GPUTextureFormat, SDLRendererMetrics *)>;
 	enum class SDLPassTarget { Scene, Output, Resolve };
+	enum class SDLPassPhase { Shadow, Sky, Opaque, Resolve, Gui };
 	struct SDLRenderPassDefinition {
 		SDLRenderPassConstructor Construct;
 		SDLPassTarget Target;
+		SDLPassPhase Phase;
 	};
 	[[nodiscard]] const std::vector<SDLRenderPassDefinition> &GetSDLRenderPassConstructors();
 }

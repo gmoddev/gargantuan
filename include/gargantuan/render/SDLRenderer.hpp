@@ -21,6 +21,7 @@ namespace gargantuan {
 		std::uint32_t InjectPipelineCreationFailures = 0;
 		bool EnableHdrScene = true;
 		bool EnableOpaqueGrouping = true;
+		bool ProfileDetailed = false;
 	};
 
 	struct SDLRendererMetrics {
@@ -71,6 +72,32 @@ namespace gargantuan {
 		std::uint64_t LastUiPreparationNanoseconds = 0;
 		std::uint64_t LastSubmissionNanoseconds = 0;
 		std::uint64_t LastGpuCompletionWaitNanoseconds = 0;
+		// Inclusive CPU recording phases. These are host clocks, never GPU timestamps.
+		std::uint64_t LastShadowClassificationNanoseconds = 0;
+		std::uint64_t LastProjectionValidationNanoseconds = 0;
+		std::uint64_t LastProjectionMutationNanoseconds = 0;
+		std::uint64_t LastMeshApplicationNanoseconds = 0;
+		std::uint64_t LastPaletteApplicationNanoseconds = 0;
+		std::uint64_t LastCommandAcquireNanoseconds = 0;
+		std::uint64_t LastShadowRecordingNanoseconds = 0;
+		std::uint64_t LastSkyRecordingNanoseconds = 0;
+		std::uint64_t LastOpaqueRecordingNanoseconds = 0;
+		std::uint64_t LastResolveRecordingNanoseconds = 0;
+		std::uint64_t LastGuiRecordingNanoseconds = 0;
+		std::uint64_t LastGpuSubmitNanoseconds = 0;
+		// Fine timings are populated only with ProfileDetailed; clock overhead is
+		// intentionally excluded from normal performance qualification.
+		std::uint64_t LastCameraTraversalNanoseconds = 0;
+		std::uint64_t LastCameraCullNanoseconds = 0;
+		std::uint64_t LastCameraResidencyNanoseconds = 0;
+		std::uint64_t LastOpaqueGroupingNanoseconds = 0;
+		std::uint64_t LastWorldDrawRecordingNanoseconds = 0;
+		std::uint64_t LastTransparentNanoseconds = 0;
+		std::uint64_t CameraVisitedObjects = 0;
+		std::uint64_t CameraHiddenObjects = 0;
+		std::uint64_t CameraFrustumTests = 0;
+		std::uint64_t CameraMeshLookups = 0;
+		std::uint64_t WorldPrimitiveDraws = 0;
 		std::uint64_t CameraCulledObjects = 0;
 		std::uint64_t WorldGeometryBindings = 0;
 		std::uint64_t WorldMaterialBindings = 0;

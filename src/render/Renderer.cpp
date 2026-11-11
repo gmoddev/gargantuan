@@ -95,11 +95,11 @@ namespace gargantuan {
 
 	const std::vector<SDLRenderPassDefinition> &GetSDLRenderPassConstructors() {
 		static const std::vector<SDLRenderPassDefinition> Constructors{
-			{CreateShadowPass, SDLPassTarget::Scene},
-			{CreateSkyPass, SDLPassTarget::Scene},
-			{CreateOpaquePass, SDLPassTarget::Scene},
-			{CreateSceneResolvePass, SDLPassTarget::Resolve},
-			{CreateGuiPass, SDLPassTarget::Output},
+			{CreateShadowPass, SDLPassTarget::Scene, SDLPassPhase::Shadow},
+			{CreateSkyPass, SDLPassTarget::Scene, SDLPassPhase::Sky},
+			{CreateOpaquePass, SDLPassTarget::Scene, SDLPassPhase::Opaque},
+			{CreateSceneResolvePass, SDLPassTarget::Resolve, SDLPassPhase::Resolve},
+			{CreateGuiPass, SDLPassTarget::Output, SDLPassPhase::Gui},
 		};
 		return Constructors;
 	}
@@ -248,6 +248,24 @@ namespace gargantuan {
 		State->Metrics.LastUiPreparationNanoseconds = 0;
 		State->Metrics.LastSubmissionNanoseconds = 0;
 		State->Metrics.LastGpuCompletionWaitNanoseconds = 0;
+		State->Metrics.LastShadowClassificationNanoseconds = 0;
+		State->Metrics.LastProjectionValidationNanoseconds = 0;
+		State->Metrics.LastProjectionMutationNanoseconds = 0;
+		State->Metrics.LastMeshApplicationNanoseconds = 0;
+		State->Metrics.LastPaletteApplicationNanoseconds = 0;
+		State->Metrics.LastCommandAcquireNanoseconds = 0;
+		State->Metrics.LastShadowRecordingNanoseconds = 0;
+		State->Metrics.LastSkyRecordingNanoseconds = 0;
+		State->Metrics.LastOpaqueRecordingNanoseconds = 0;
+		State->Metrics.LastResolveRecordingNanoseconds = 0;
+		State->Metrics.LastGuiRecordingNanoseconds = 0;
+		State->Metrics.LastGpuSubmitNanoseconds = 0;
+		State->Metrics.LastCameraTraversalNanoseconds = 0;
+		State->Metrics.LastCameraCullNanoseconds = 0;
+		State->Metrics.LastCameraResidencyNanoseconds = 0;
+		State->Metrics.LastOpaqueGroupingNanoseconds = 0;
+		State->Metrics.LastWorldDrawRecordingNanoseconds = 0;
+		State->Metrics.LastTransparentNanoseconds = 0;
 		try {
 			if (!Publication->FullResync) for (const auto &Update : Publication->AnimationPoseUpdates) {
 				const auto *Existing = State->Projection.GetAnimationPose(Update.Object);
@@ -256,14 +274,20 @@ namespace gargantuan {
 			}
 			const auto ProjectionStart = Clock::now();
 			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
+			State->Metrics.LastShadowClassificationNanoseconds = Nanoseconds(Clock::now() - ProjectionStart);
 			const auto Changes = State->Projection.Apply(*Publication);
+			State->Metrics.LastProjectionValidationNanoseconds = Changes.ValidationNanoseconds;
+			State->Metrics.LastProjectionMutationNanoseconds = Changes.MutationNanoseconds;
 			State->Metrics.EnvironmentApplications += Changes.EnvironmentsUpdated;
 			State->Metrics.LastProjectionNanoseconds = Nanoseconds(Clock::now() - ProjectionStart);
 			State->Metrics.CpuProjectionNanoseconds += State->Metrics.LastProjectionNanoseconds;
 			const auto MeshStart = Clock::now();
 			State->MeshResources->ApplyPublication(*Publication);
 			State->MeshResources->UploadToGpu();
+			State->Metrics.LastMeshApplicationNanoseconds = Nanoseconds(Clock::now() - MeshStart);
+			const auto PaletteStart = Clock::now();
 			State->SkinPalettes->ApplyPublication(*Publication);
+			State->Metrics.LastPaletteApplicationNanoseconds = Nanoseconds(Clock::now() - PaletteStart);
 			State->Metrics.LastMeshTransferNanoseconds = Nanoseconds(Clock::now() - MeshStart);
 			State->Metrics.CpuMeshTransferNanoseconds += State->Metrics.LastMeshTransferNanoseconds;
 			const auto TextureStart = Clock::now();
@@ -297,6 +321,7 @@ namespace gargantuan {
 
 		const auto SubmissionStart = Clock::now();
 		auto *Commands = SDL_AcquireGPUCommandBuffer(State->Gpu);
+		State->Metrics.LastCommandAcquireNanoseconds = Nanoseconds(Clock::now() - SubmissionStart);
 		if (!Commands) {
 			LOG_ERROR(App, "[Render:SDL] Failed to acquire command buffer: %s", SDL_GetError());
 			return;
@@ -311,6 +336,7 @@ namespace gargantuan {
 		SDLFrameContext Frame(
 			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
 		Frame.EnableOpaqueGrouping = State->Options.EnableOpaqueGrouping;
+		Frame.ProfileDetailed = State->Options.ProfileDetailed;
 		Frame.Commands = Commands;
 		Frame.HdrSceneTexture = State->HdrSceneTexture;
 		Frame.DepthTexture = State->DepthTexture;
@@ -344,15 +370,28 @@ namespace gargantuan {
 			return;
 		}
 		try {
-			for (auto &Pass : State->RenderPasses)
-				if (auto *Recorded = Pass->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
+			const auto &Definitions = GetSDLRenderPassConstructors();
+			for (std::size_t Index = 0; Index < State->RenderPasses.size(); ++Index) {
+				const auto PassStart = Clock::now();
+				if (auto *Recorded = State->RenderPasses[Index]->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
+				const auto Elapsed = Nanoseconds(Clock::now() - PassStart);
+				switch (Definitions[Index].Phase) {
+					case SDLPassPhase::Shadow: State->Metrics.LastShadowRecordingNanoseconds += Elapsed; break;
+					case SDLPassPhase::Sky: State->Metrics.LastSkyRecordingNanoseconds += Elapsed; break;
+					case SDLPassPhase::Opaque: State->Metrics.LastOpaqueRecordingNanoseconds += Elapsed; break;
+					case SDLPassPhase::Resolve: State->Metrics.LastResolveRecordingNanoseconds += Elapsed; break;
+					case SDLPassPhase::Gui: State->Metrics.LastGuiRecordingNanoseconds += Elapsed; break;
+				}
+			}
 		} catch (...) {
 			if (State->Options.Offscreen) SDL_CancelGPUCommandBuffer(Frame.Commands);
 			else SDL_SubmitGPUCommandBuffer(Frame.Commands);
 			throw;
 		}
 		if (State->Options.WaitForGpuCompletion) {
+			const auto SubmitStart = Clock::now();
 			auto *Fence = SDL_SubmitGPUCommandBufferAndAcquireFence(Frame.Commands);
+			State->Metrics.LastGpuSubmitNanoseconds = Nanoseconds(Clock::now() - SubmitStart);
 			State->Metrics.LastSubmissionNanoseconds = Nanoseconds(Clock::now() - SubmissionStart);
 			if (!Fence) throw std::runtime_error(std::format("Failed to submit SDL GPU frame: {}", SDL_GetError()));
 			const auto WaitStart = Clock::now();
@@ -364,8 +403,10 @@ namespace gargantuan {
 			State->Metrics.GpuCompletionWaitNanoseconds += State->Metrics.LastGpuCompletionWaitNanoseconds;
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
 		} else {
+			const auto SubmitStart = Clock::now();
 			if (!SDL_SubmitGPUCommandBuffer(Frame.Commands))
 				throw std::runtime_error(std::format("Failed to submit SDL GPU frame: {}", SDL_GetError()));
+			State->Metrics.LastGpuSubmitNanoseconds = Nanoseconds(Clock::now() - SubmitStart);
 			State->Metrics.LastSubmissionNanoseconds = Nanoseconds(Clock::now() - SubmissionStart);
 		}
 		State->Metrics.CpuSubmissionNanoseconds += State->Metrics.LastSubmissionNanoseconds;
