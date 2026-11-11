@@ -16,6 +16,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -83,7 +85,8 @@ namespace {
 		std::size_t Frames,
 		bool ProfileEnabled,
 		std::uint32_t GroupWidth,
-		bool RendererOnly
+		bool RendererOnly,
+		std::ofstream *Samples
 	) {
 		using namespace gargantuan;
 		ChangeJournal::Get().Clear();
@@ -202,6 +205,21 @@ namespace {
 		}
 		Print(Name, Count, Frames, Accumulation, Generation, Application, Creates, Updates, Removes, UploadBytes, Count,
 			FullResyncs, Breakdown);
+		if (Samples) {
+			const auto Stage = [ProfileEnabled](const std::vector<double> &Values, std::size_t Frame) {
+				return ProfileEnabled ? std::to_string(Values[Frame]) : std::string("NA");
+			};
+			for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
+				*Samples << Name << ',' << Count << ',' << Frame << ',' << GroupWidth << ','
+					<< RendererOnly << ',' << ProfileEnabled << ',' << ChangedPerFrame << ',' << WritesPerObject << ','
+					<< Accumulation[Frame] << ',' << Generation[Frame] << ',' << Application[Frame] << ','
+					<< Stage(DirtyCapture, Frame) << ',' << Stage(DirtyExpansion, Frame) << ','
+					<< Stage(FinalStateExtraction, Frame) << ',' << Stage(PublicationConstruction, Frame) << ','
+					<< Stage(PublisherReconciliation, Frame) << ",NA,NA,NA\n";
+			}
+			Samples->flush();
+		}
+		if (RetainedPhysics) World->Physics = std::move(*RetainedPhysics);
 		Game->Destroy();
 	}
 
@@ -355,12 +373,19 @@ int main(int ArgumentCount, char **Arguments) {
 		if (Frames == 0 || Frames > 120) throw std::invalid_argument("frame count must be in [1,120]");
 		bool ProfileEnabled = false, RigidOnly = false, RendererOnly = false;
 		std::uint32_t GroupWidth = 0;
+		std::filesystem::path SamplesPath;
 		for (int Index = 2; Index < ArgumentCount; ++Index) {
 			const std::string_view Option(Arguments[Index]);
 			if (Option == "--profile") ProfileEnabled = true;
 			else if (Option == "--rigid-only") RigidOnly = true;
 			else if (Option == "--renderer-only") RendererOnly = true;
-			else if (Option.starts_with("--group-width=")) {
+			else if (Option.starts_with("--samples=")) {
+				if (!SamplesPath.empty()) throw std::invalid_argument("samples path may appear only once");
+				const auto Text = Option.substr(sizeof("--samples=") - 1);
+				if (Text.empty() || Text.size() > 240)
+					throw std::invalid_argument("samples path is empty or too long");
+				SamplesPath = std::filesystem::path(std::string(Text));
+			} else if (Option.starts_with("--group-width=")) {
 				if (GroupWidth != 0) throw std::invalid_argument("group width may appear only once");
 				const auto Text = Option.substr(sizeof("--group-width=") - 1);
 				const auto [End, Error] = std::from_chars(Text.data(), Text.data() + Text.size(), GroupWidth);
@@ -369,11 +394,20 @@ int main(int ArgumentCount, char **Arguments) {
 					throw std::invalid_argument("group width must be in [64,4096]");
 			} else throw std::invalid_argument("unknown semantic benchmark option");
 		}
+		std::ofstream SamplesFile;
+		if (!SamplesPath.empty()) {
+			if (std::filesystem::exists(SamplesPath))
+				throw std::invalid_argument("samples file must not already exist");
+			SamplesFile.open(SamplesPath, std::ios::out | std::ios::trunc);
+			if (!SamplesFile) throw std::runtime_error("could not open samples file");
+			SamplesFile << "Scenario,Elements,Frame,GroupWidth,RendererOnly,ProfileEnabled,ExpectedUpdates,WritesPerObject,DirtyAccumulationMs,PublicationGenerationMs,ProjectionApplyMs,DirtyCaptureMs,DirtyExpansionMs,FinalStateExtractionMs,PublicationConstructionMs,PublisherReconciliationMs,JournalMs,ClassificationMs,AccumulatorMs\n" << std::flush;
+		}
+		std::ofstream *Samples = SamplesPath.empty() ? nullptr : &SamplesFile;
 		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n" << std::flush;
-		for (const auto Count : {1000u, 10000u, 50000u}) RunRigid("static", Count, 0, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly);
-		RunRigid("mostly-static", 50000, 500, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly);
-		RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly);
-		RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled, GroupWidth, RendererOnly);
+		for (const auto Count : {1000u, 10000u, 50000u}) RunRigid("static", Count, 0, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
+		RunRigid("mostly-static", 50000, 500, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
+		RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
+		RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
 		if (!RigidOnly) {
 			for (const auto Count : {4096u, 16384u, 65536u}) RunDeformable(Count, Frames);
 			RunGui(10000, Frames);
