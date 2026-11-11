@@ -154,6 +154,25 @@ reports identical dense 50K counts in both arms: about 100,016 C++ new calls and
 
 ## Realistic and full-engine evidence
 
+The optional live renderer path in `gargantuan_runtime_foundation6_benchmark`
+uses the same authoritative Part setters, journal count, typed publication and
+projection delta gates as the ordinary rigid fixture. For a bounded offscreen
+SDL run on a machine with an SDL GPU device:
+
+```powershell
+.\gargantuan_runtime_foundation6_benchmark.exe 3 --count=1000 --changes=1000 --draw-backend=sdl --draw-instancing=contiguous --samples=runtime6-live.csv
+```
+
+`--draw-backend=headless` runs the same path without SDL GPU submission.
+The default backend remains `none`. The draw path first submits and drains the
+initial full publication. Each measured frame mutates live Parts, publishes,
+draws, and waits for idle before the separate test projection apply. Raw CSV
+records `DrawAndWaitMs`, `MutationToCompletionMs`, backend, instancing selection,
+headless object/update counts or SDL submitted-frame, resync, draw, upload and
+instance counters. The completion timing is a host wall clock through an SDL
+idle wait, not a GPU timestamp. The SDL gate requires one submitted frame per
+publication and no full resync after the initial frame.
+
 Gameplay comparison [43057067667](https://github.com/gmoddev/gargantuan/actions/runs/43057067667)
 uses identical 512-object content and 18 sample-asset hashes, eight active
 characters and 32 simulated peers (one full client, 31 observer transports).
