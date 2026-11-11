@@ -332,8 +332,6 @@ passes Foundation and all 24 stress processes under ASan/UBSan. It does not
 contain later Engine-owned VM lifetime/logical-shutdown corrections; those
 reachable game-destruction paths require final combined-source qualification.
 
-### Canonical package compatibility
-
 ### Worker lifecycle, sandbox and fixture qualification
 
 Exact worker source `36988c6ac5701868afae9e92080db50a77522f3f` passes all
