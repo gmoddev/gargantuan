@@ -387,6 +387,11 @@ void CheckSceneEnvelopePixels(const std::filesystem::path &Output) {
 	Near.Updates[0].Item.ModelMatrix = Translate(0, 2.9f);
 	Near.Updates[0].Item.InverseModelMatrix = glm::inverse(Near.Updates[0].Item.ModelMatrix);
 	CaptureEqual("near-plane", Near);
+	for (int Index = 0; Index < 3; ++Index) {
+		RenderPublication Quiet{.Id = Id, .BaseId = Id - 1, .Frame = Initial.Frame};
+		++Id;
+		CaptureEqual("near-plane-cached-" + std::to_string(Index), Quiet);
+	}
 	auto Resync = MakeInstanceScene(Id, Translate(1'000'000.0f, 0), Translate(1'000'002.0f, 0));
 	CaptureEqual("full-resync", Resync);
 	std::cout << "[Render:SceneEnvelope] rejections=" << Rejected.EnvelopeRejections
