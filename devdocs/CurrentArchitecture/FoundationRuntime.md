@@ -40,6 +40,10 @@ Hierarchy mutation is committed before ancestry notifications run. Callbacks
 therefore observe the new parent/child collections rather than a half-applied
 operation. Callbacks remain synchronous and can initiate a later mutation; a
 broader transaction/notification queue is future work.
+Per-property signals are allocated when requested through
+`GetPropertyChangedSignal`. An unobserved property or ancestry change does not
+allocate a signal; an existing subscription still fires synchronously after
+the committed change, including during nested mutation.
 
 Destruction has a monotonic lifecycle:
 
@@ -138,6 +142,10 @@ holding its journal lock. Its payload model represents object creation,
 reflected/extension/attribute updates, tag changes, reparenting, and destruction.
 First adoption publishes a detached subtree into one scope. Moving an already
 adopted subtree between DataModel scopes is rejected.
+Ordinary batch commits append under that lock and roll back any appended tail
+if allocation fails. They evict the oldest retained records only after the
+whole batch has appended, so failed batches do not consume sequence numbers
+or partially evict history.
 
 Records remain an in-process prototype. Retention is bounded per scope and cursor reads
 detect eviction with `ResnapshotRequired`; the current default capacity is 16,384.
