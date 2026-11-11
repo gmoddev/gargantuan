@@ -4,6 +4,20 @@ on:
   push:
     branches: [experiment/runtime6-evaluation]
   workflow_dispatch:
+    inputs:
+      baseline_source:
+        description: Exact baseline commit (empty uses the frozen Foundation 6 baseline)
+        type: string
+        default: ''
+      candidate_source:
+        description: Exact candidate commit (empty uses this workflow source)
+        type: string
+        default: ''
+      suite:
+        description: Bounded comparison workload
+        type: choice
+        options: [core, cframe, compact]
+        default: core
 
 permissions:
   contents: read
@@ -13,7 +27,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      BASELINE_SOURCE: 676a952b0cee5eb78ffd27df97b1876393ae6f1f
+      BASELINE_SOURCE: ${{ inputs.baseline_source || '676a952b0cee5eb78ffd27df97b1876393ae6f1f' }}
+      CANDIDATE_SOURCE: ${{ inputs.candidate_source || github.sha }}
+      COMPARISON_SUITE: ${{ inputs.suite || 'core' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -40,7 +56,9 @@ jobs:
       - name: Build and freeze both exact sources
         run: |
           set -euo pipefail
-          candidate="$GITHUB_SHA"
+          candidate="$CANDIDATE_SOURCE"
+          [[ "$BASELINE_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]]
           for arm in baseline candidate; do
             source="$candidate"
             if [ "$arm" = baseline ]; then source="$BASELINE_SOURCE"; fi
@@ -91,7 +109,7 @@ jobs:
             git restore -- include/gargantuan/classes/generated/Animator.hpp src/classes/generated/Animator.cpp
           done
       - name: Run source-bound counterbalanced comparisons
-        run: python3 "$RUNNER_TEMP/runtime6_comparison.py" --evidence runtime6-evidence
+        run: python3 "$RUNNER_TEMP/runtime6_comparison.py" --evidence runtime6-evidence --suite "$COMPARISON_SUITE"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

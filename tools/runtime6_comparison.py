@@ -15,6 +15,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
+Parser.add_argument("--suite", choices=("core", "cframe", "compact"), default="core")
 Args = Parser.parse_args()
 Root = Args.evidence.resolve()
 Sources = {}
@@ -58,6 +59,37 @@ def Run(Arm, Label, Binary, Options, Timeout=600):
     Receipts.append(Receipt)
     (Output / "receipts.json").write_text(json.dumps(Receipts, indent=2))
     print(json.dumps(Receipt), flush=True)
+
+
+if Args.suite == "cframe":
+    for Count in (1000, 10000, 50000):
+        # Stage clocks remain off in the performance comparison.
+        for Profile in (False, True):
+            for Arm in ("baseline", "candidate", "candidate", "baseline"):
+                Samples = Output / f"{len(Receipts):03}-cframe-{Count}-{Profile}-{Arm}.csv"
+                Options = ["12", f"--count={Count}", "--density-matrix", "--group-width=256",
+                           "--split-construction", "--diagnostic-marks", f"--samples={Samples}"]
+                if Profile:
+                    Options.append("--profile-cframe")
+                Run(Arm, f"cframe-{Count}-profile-{Profile}", "gargantuan_runtime_foundation6_benchmark", Options)
+    for Arm in ("baseline", "candidate", "candidate", "baseline"):
+        Samples = Output / f"{len(Receipts):03}-cframe-material-control-{Arm}.csv"
+        Run(Arm, "cframe-material-control", "gargantuan_runtime_foundation6_benchmark",
+            ["12", "--count=1000", "--density-matrix", "--property=material", "--profile-cframe",
+             "--split-construction", "--diagnostic-marks", f"--samples={Samples}"])
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
+
+if Args.suite == "compact":
+    for Static, Dynamic in ((900, 100), (0, 1000)):
+        for Density in ("0", "0.01", "1"):
+            for Lifecycle in (0, 1, 16):
+                for Arm in ("baseline", "candidate", "candidate", "baseline"):
+                    Run(Arm, f"compact-{Static}-{Dynamic}-{Density}-{Lifecycle}",
+                        "gargantuan_runtime6_physics_sync_benchmark",
+                        ["--static-count", str(Static), "--dynamic-count", str(Dynamic), "--frames", "30",
+                         "--warmup", "4", "--control-density", Density,
+                         "--lifecycle-per-frame", str(Lifecycle), "--publication"])
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 
 # A/B/B/A after both builds are complete; no compilation overlaps measurements.
