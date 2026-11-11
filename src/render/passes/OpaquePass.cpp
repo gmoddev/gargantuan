@@ -500,8 +500,10 @@ namespace gargantuan {
 				SDL_DrawGPUIndexedPrimitives(Pass, IndexCount, 1, FirstIndex, 0, 0);
 				if (Context.Metrics) {
 					++Context.Metrics->DrawCalls;
-					++Context.Metrics->WorldPrimitiveDraws;
-					if (Detailed) Context.Metrics->LastWorldDrawRecordingNanoseconds += ElapsedNanoseconds(RecordingStart);
+					if (Detailed) {
+						++Context.Metrics->WorldPrimitiveDraws;
+						Context.Metrics->LastWorldDrawRecordingNanoseconds += ElapsedNanoseconds(RecordingStart);
+					}
 				}
 			};
 			auto ForPrimitives = [](const WorldDraw &Draw, auto &&Visit) {
@@ -585,9 +587,9 @@ namespace gargantuan {
 
 			const auto TraversalStart = Detailed ? Clock::now() : Clock::time_point{};
 			for (const auto &[Object, Projected] : Context.Projection.GetObjects()) {
-				if (Context.Metrics) ++Context.Metrics->CameraVisitedObjects;
+				if (Detailed) ++Context.Metrics->CameraVisitedObjects;
 				if (!Projected.Visible) {
-					if (Context.Metrics) ++Context.Metrics->CameraHiddenObjects;
+					if (Detailed) ++Context.Metrics->CameraHiddenObjects;
 					continue;
 				}
 				const auto CullStart = Detailed ? Clock::now() : Clock::time_point{};
@@ -595,7 +597,7 @@ namespace gargantuan {
 				const auto *Pose = Context.Projection.GetAnimationPose(Object);
 				const auto *Bounds = Projected.Mesh ? Context.Projection.GetMeshBounds(*Projected.Mesh) : &PrimitiveBounds;
 				const bool TestFrustum = Bounds && (!Pose || Pose->Mode != RenderAnimationSkinningMode::GpuPalette);
-				if (TestFrustum && Context.Metrics) ++Context.Metrics->CameraFrustumTests;
+				if (TestFrustum && Detailed) ++Context.Metrics->CameraFrustumTests;
 				const bool Culled = TestFrustum && OutsideView(Planes, Item.ModelMatrix, *Bounds);
 				if (Detailed) Context.Metrics->LastCameraCullNanoseconds += ElapsedNanoseconds(CullStart);
 				if (Culled) {
@@ -603,7 +605,7 @@ namespace gargantuan {
 					continue;
 				}
 				const auto ResidencyStart = Detailed ? Clock::now() : Clock::time_point{};
-				if (Context.Metrics) ++Context.Metrics->CameraMeshLookups;
+				if (Detailed) ++Context.Metrics->CameraMeshLookups;
 				const auto *Mesh = Projected.Mesh
 					? Context.MeshResources.Find(*Projected.Mesh) : Context.MeshResources.Find(Item.Geometry);
 				if (Detailed) Context.Metrics->LastCameraResidencyNanoseconds += ElapsedNanoseconds(ResidencyStart);
