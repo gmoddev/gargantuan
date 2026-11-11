@@ -58,7 +58,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "luau", "attribution", "compact_large", "readback_large", "cframe_allocation"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "luau", "luau_diag", "attribution", "compact_large", "readback_large", "cframe_allocation"), default="core")
 Parser.add_argument("--comparison-directory", default="comparison")
 Parser.add_argument("--verify-only", action="store_true")
 Args = Parser.parse_args()
@@ -133,6 +133,17 @@ def Run(Arm, Label, Binary, Options, Timeout=600, Environment=None):
     (Output / "receipts.json").write_text(json.dumps(Receipts, indent=2))
     print(json.dumps(Receipt), flush=True)
 
+
+if Args.suite == "luau_diag":
+    for Repetition in range(6):
+        for FinalGc in ("off", "on"):
+            for Disconnect in ("off", "on"):
+                for Arm in ("baseline", "candidate", "candidate", "baseline"):
+                    Run(Arm, f"luau-diag-{Repetition}-gc-{FinalGc}-disconnect-{Disconnect}",
+                        "gargantuan_runtime6_luau_mutation_benchmark",
+                        ["--count=10000", "--frames=12", "--listeners=0", "--property=cframe",
+                         f"--final-gc={FinalGc}", f"--disconnect-native={Disconnect}"])
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite == "dirty_drain":
     for Count in (1000, 10000, 50000):

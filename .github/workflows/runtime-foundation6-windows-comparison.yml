@@ -14,7 +14,7 @@ on:
       suite:
         description: Bounded comparison workload
         type: choice
-        options: [core, cframe, compact, readback, realistic, gameplay, signals, signals_compare, dirty_compare, dirty_drain, luau]
+        options: [core, cframe, compact, readback, realistic, gameplay, signals, signals_compare, dirty_compare, dirty_drain, luau, luau_diag]
         default: core
 
 permissions:
