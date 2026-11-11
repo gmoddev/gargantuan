@@ -58,7 +58,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic", "gameplay", "attribution", "compact_large"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic", "gameplay", "signals", "attribution", "compact_large"), default="core")
 Parser.add_argument("--comparison-directory", default="comparison")
 Parser.add_argument("--verify-only", action="store_true")
 Args = Parser.parse_args()
@@ -133,6 +133,23 @@ def Run(Arm, Label, Binary, Options, Timeout=600, Environment=None):
     (Output / "receipts.json").write_text(json.dumps(Receipts, indent=2))
     print(json.dumps(Receipt), flush=True)
 
+
+if Args.suite == "signals":
+    if Sources["baseline"]["source"] != Sources["candidate"]["source"]:
+        raise RuntimeError("[Runtime6:Compare] Signal attribution requires one common source")
+    # Counterfactual listener modes are diagnostics, not candidate engine wins.
+    for Count in (1000, 10000, 50000):
+        for Changed in (max(1, Count // 100), Count):
+            for Enabled, Disabled in (("native", "native-no-listener"),
+                                      ("renderer-only", "renderer-only-no-listener")):
+                for Mode in (Enabled, Disabled, Disabled, Enabled):
+                    Run("candidate", f"signal-{Count}-{Changed}-{Mode}",
+                        "gargantuan_runtime6_physics_listener_probe",
+                        [f"--mode={Mode}", f"--count={Count}", f"--changed={Changed}", "--frames=12"])
+    for Changed in (0, 100, 10000):
+        Run("candidate", f"signal-alternatives-{Changed}", "gargantuan_runtime6_extraction_alternatives",
+            ["10000", str(Changed), "12", "sequential", "0", "profile-signals"])
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite == "gameplay":
     def CheckGameplayInputs():

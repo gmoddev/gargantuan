@@ -6,7 +6,7 @@
 param(
     [Parameter(Mandatory = $true)][string] $BaselineSource,
     [Parameter(Mandatory = $true)][string] $CandidateSource,
-    [Parameter(Mandatory = $true)][ValidateSet('core', 'cframe', 'compact', 'realistic', 'gameplay')][string] $Suite,
+    [Parameter(Mandatory = $true)][ValidateSet('core', 'cframe', 'compact', 'realistic', 'gameplay', 'signals')][string] $Suite,
     [Parameter(Mandatory = $true)][string] $ShaderCompiler,
     [Parameter(Mandatory = $true)][string] $EvidenceRoot
 )
@@ -129,6 +129,7 @@ try {
             $Targets += 'gargantuan_runtime6_physics_sync_fault_tests'
         }
         if ($Suite -eq 'gameplay') { $Targets += 'gargantuan_game_session_benchmark' }
+        if ($Suite -eq 'signals') { $Targets += 'gargantuan_runtime6_physics_listener_probe' }
         Invoke-Checked "$Arm build" (Join-Path $ArmRoot 'build.log') {
             & cmake --build $BuildRoot --config Release --parallel 3 --target @Targets
         }
@@ -142,6 +143,10 @@ try {
             'gargantuan_runtime6_physics_sync_smoke')
         if ($Suite -eq 'realistic') { $Tests += 'gargantuan_runtime6_realistic_publication_probe_smoke' }
         if ($Suite -eq 'compact' -and $Arm -eq 'candidate') { $Tests += 'gargantuan_runtime6_physics_sync_fault' }
+        if ($Suite -eq 'signals') {
+            $Tests += @('gargantuan_runtime6_physics_listener_native',
+                'gargantuan_runtime6_physics_listener_renderer', 'gargantuan_runtime6_physics_listener_counterfactual')
+        }
         $TestCatalog = & ctest --test-dir $BuildRoot --show-only=json-v1 | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0) { throw "[Runtime6:WindowsCompare] CTest catalog failed: $Arm" }
         $Listed = @($TestCatalog.tests | ForEach-Object { $_.name })
@@ -163,6 +168,7 @@ try {
                 'gargantuan_soft_body_physics_benchmark', 'gargantuan_replication_benchmark')
         }
         if ($Suite -eq 'gameplay') { $FreezeTargets += 'gargantuan_game_session_benchmark' }
+        if ($Suite -eq 'signals') { $FreezeTargets += 'gargantuan_runtime6_physics_listener_probe' }
         $Hashes = @{}
         foreach ($Target in $FreezeTargets) {
             $Name = "$Target.exe"
