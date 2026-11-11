@@ -69,6 +69,11 @@ runtime Script registered. Signal Wait uses the same rule. `ProcessService`
 checks `ProcessControl` for exit and stdout operations; ordinary player/runtime
 profiles do not receive it.
 
+The Script activation queue snapshots its members at the start of each
+`ScriptEngine::Step`. A Script parented during another Script's callback is
+eligible on the next step. Removing or destroying a queued Script during a
+callback prevents its execution in the current snapshot.
+
 The current context is thread-local and defaults to trusted Core for backwards
 compatibility with engine-owned call paths. New untrusted script entry points
 must establish a `ScriptSecurityScope` before dispatch. Treating the default as
