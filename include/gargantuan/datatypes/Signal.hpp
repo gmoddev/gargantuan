@@ -7,6 +7,7 @@
 #include <SDL3/SDL_log.h>
 #include <any>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <lua.h>
 #include <lualib.h>
@@ -18,6 +19,20 @@
 
 namespace gargantuan {
 	G_ENUM(SignalType, Engine, User);
+
+	// Main-thread, opt-in diagnostic counters. Timings are inclusive under
+	// reentrant Fire calls; callback time includes native and script subscribers.
+	struct SignalDispatchProfile {
+		std::uint64_t Calls = 0;
+		std::uint64_t DeferredCalls = 0;
+		std::uint64_t ConnectionVisits = 0;
+		std::uint64_t NativeCallbacks = 0;
+		std::uint64_t ScriptCallbacks = 0;
+		std::uint64_t SnapshotNanoseconds = 0;
+		std::uint64_t CallbackNanoseconds = 0;
+		std::uint64_t CleanupNanoseconds = 0;
+		std::uint64_t TotalNanoseconds = 0;
+	};
 
 	class ScopedSignalDeferral {
 	  public:
@@ -74,6 +89,9 @@ namespace gargantuan {
 
 		void Fire(CallbackArgument argument);
 		void DisconnectAll();
+		static void SetDispatchProfilingEnabled(bool Enabled);
+		static void ResetDispatchProfile();
+		[[nodiscard]] static SignalDispatchProfile GetDispatchProfile();
 
 		virtual int LPushArgument(lua_State *L, CallbackArgument value) = 0;
 

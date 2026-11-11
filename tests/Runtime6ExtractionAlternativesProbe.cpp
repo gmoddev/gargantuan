@@ -5,6 +5,7 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -20,9 +21,11 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <glm/ext/matrix_transform.hpp>
@@ -188,13 +191,50 @@ namespace {
 		if (Result > 50000) throw std::invalid_argument("Probe count exceeds its 50K bound");
 		return static_cast<std::size_t>(Result);
 	}
+
+	void VerifySignalProfileContract() {
+		auto Event = std::make_shared<Signal<std::monostate>>();
+		std::size_t Calls = 0;
+		auto Connection = Event->Connect([&](std::monostate) { ++Calls; });
+		BaseSignal::ResetDispatchProfile();
+		BaseSignal::SetDispatchProfilingEnabled(true);
+		Event->Fire({});
+		{
+			ScopedSignalDeferral Deferred;
+			Event->Fire({});
+			if (Calls != 1)
+				throw std::runtime_error("[Runtime6:ExtractionProbe] Deferred signal fired early");
+			Deferred.Commit();
+		}
+		Connection->Disconnect();
+		Event->Fire({});
+		BaseSignal::SetDispatchProfilingEnabled(false);
+		const auto Profile = BaseSignal::GetDispatchProfile();
+		if (Calls != 2 || Profile.Calls != 4 || Profile.DeferredCalls != 1 ||
+			Profile.NativeCallbacks != 2 || Profile.ScriptCallbacks != 0 ||
+			Profile.ConnectionVisits != 3 || Profile.TotalNanoseconds < Profile.CallbackNanoseconds)
+			throw std::runtime_error("[Runtime6:ExtractionProbe] Signal profile changed callback or deferral semantics");
+		auto Reentrant = std::make_shared<Signal<std::monostate>>();
+		std::size_t NestedCalls = 0;
+		Reentrant->Connect([&](std::monostate) {
+			if (++NestedCalls == 1) Reentrant->Fire({});
+		});
+		BaseSignal::ResetDispatchProfile();
+		BaseSignal::SetDispatchProfilingEnabled(true);
+		Reentrant->Fire({});
+		BaseSignal::SetDispatchProfilingEnabled(false);
+		const auto ReentrantProfile = BaseSignal::GetDispatchProfile();
+		if (NestedCalls != 2 || Reentrant->FiringDepth != 0 ||
+			ReentrantProfile.Calls != 2 || ReentrantProfile.NativeCallbacks != 2)
+			throw std::runtime_error("[Runtime6:ExtractionProbe] Signal profile changed reentrant dispatch");
+	}
 }
 
 int main(int ArgCount, char **Args) {
 	try {
-		if (ArgCount < 4 || ArgCount > 6)
+		if (ArgCount < 4 || ArgCount > 7)
 			throw std::invalid_argument(
-				"Usage: probe count changed-per-frame frames [random|sequential] [lifecycle-count]");
+				"Usage: probe count changed-per-frame frames [random|sequential] [lifecycle-count] [profile-signals]");
 		const auto Count = Parse(Args[1]);
 		const auto Changed = Parse(Args[2]);
 		const auto Frames = Parse(Args[3]);
@@ -203,10 +243,14 @@ int main(int ArgCount, char **Args) {
 			throw std::invalid_argument("Probe order must be random or sequential");
 		const bool RandomOrder = Order == "random";
 		const auto Lifecycle = ArgCount >= 6 ? Parse(Args[5]) : 0;
+		const bool ProfileSignals = ArgCount == 7 && std::string_view(Args[6]) == "profile-signals";
+		if (ArgCount == 7 && !ProfileSignals)
+			throw std::invalid_argument("Last probe argument must be profile-signals");
 		if (Count == 0 || Frames == 0 || Changed > Count || Lifecycle > Count ||
 			Lifecycle > 1024 || Frames > 100)
 			throw std::invalid_argument("Probe arguments exceed bounded workload limits");
 		gargantuan::BootstrapNativeRuntimeSchema();
+		if (ProfileSignals) VerifySignalProfileContract();
 		auto &Dirty = gargantuan::RenderDirtyAccumulator::Get();
 		gargantuan::ChangeJournal::Get().Clear();
 		Dirty.Clear();
@@ -238,8 +282,10 @@ int main(int ArgCount, char **Args) {
 		std::iota(Selection.begin(), Selection.end(), 0);
 		std::mt19937_64 Random(0x8d145c9fU);
 		std::size_t ReusedSlots = 0;
-		std::cout << "frame,count,changed,lifecycle,order,dirty,setter_ms,capture_ms,direct_ms,"
-			"soa_sync_ms,soa_consume_ms,snapshot_sync_ms,snapshot_consume_ms,verify_ms\n";
+		std::cout << "frame,count,changed,lifecycle,order,signal_profile_enabled,dirty,setter_ms,capture_ms,direct_ms,"
+			"soa_sync_ms,soa_consume_ms,snapshot_sync_ms,snapshot_consume_ms,verify_ms,"
+			"signal_calls,signal_deferred_calls,signal_connection_visits,signal_native_callbacks,"
+			"signal_script_callbacks,signal_total_ns,signal_snapshot_ns,signal_callback_ns,signal_cleanup_ns\n";
 		for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
 			if (RandomOrder) std::shuffle(Selection.begin(), Selection.end(), Random);
 			std::unordered_set<gargantuan::ObjectId> ExpectedTouched;
@@ -248,6 +294,10 @@ int main(int ArgCount, char **Args) {
 				ExpectedTouched.insert(Parts[Selection[Index]]->GetObjectId());
 			for (std::size_t Index = 0; Index < Lifecycle; ++Index)
 				ExpectedTouched.insert(Parts[Selection[Count - Index - 1]]->GetObjectId());
+			if (ProfileSignals) {
+				BaseSignal::ResetDispatchProfile();
+				BaseSignal::SetDispatchProfilingEnabled(true);
+			}
 			const auto SetterStart = Clock::now();
 			for (std::size_t Index = 0; Index < Changed; ++Index) {
 				auto &Value = Parts[Selection[Index]];
@@ -275,6 +325,10 @@ int main(int ArgCount, char **Args) {
 					throw std::runtime_error("[Runtime6:ExtractionProbe] Retired generation still resolves");
 			}
 			const auto SetterMs = Milliseconds(Clock::now() - SetterStart);
+			if (ProfileSignals) BaseSignal::SetDispatchProfilingEnabled(false);
+			const auto DispatchProfile = ProfileSignals ? BaseSignal::GetDispatchProfile() : SignalDispatchProfile{};
+			if (ProfileSignals && Lifecycle == 0 && DispatchProfile.Calls != Changed)
+				throw std::runtime_error("[Runtime6:ExtractionProbe] CFrame signal dispatch count mismatch");
 			for (std::size_t Index = 0; Index < Lifecycle; ++Index)
 				ExpectedTouched.insert(Parts[Selection[Count - Index - 1]]->GetObjectId());
 			const auto CaptureStart = Clock::now();
@@ -331,10 +385,19 @@ int main(int ArgCount, char **Args) {
 			const auto VerifyMs = Milliseconds(Clock::now() - VerifyStart);
 			Dirty.Acknowledge(Batch);
 			std::cout << Frame << ',' << Count << ',' << Changed << ',' << Lifecycle << ',' << Order << ','
+				<< ProfileSignals << ','
 				<< Objects.size()
 				<< ',' << std::fixed << std::setprecision(6) << SetterMs << ',' << CaptureMs << ','
 				<< DirectMs << ',' << SoASyncMs << ',' << SoAConsumeMs << ','
-				<< SnapshotSyncMs << ',' << SnapshotConsumeMs << ',' << VerifyMs << '\n' << std::flush;
+				<< SnapshotSyncMs << ',' << SnapshotConsumeMs << ',' << VerifyMs;
+			if (ProfileSignals)
+				std::cout << ',' << DispatchProfile.Calls << ',' << DispatchProfile.DeferredCalls
+					<< ',' << DispatchProfile.ConnectionVisits << ',' << DispatchProfile.NativeCallbacks
+					<< ',' << DispatchProfile.ScriptCallbacks << ',' << DispatchProfile.TotalNanoseconds
+					<< ',' << DispatchProfile.SnapshotNanoseconds << ',' << DispatchProfile.CallbackNanoseconds
+					<< ',' << DispatchProfile.CleanupNanoseconds;
+			else std::cout << ",NA,NA,NA,NA,NA,NA,NA,NA,NA";
+			std::cout << '\n' << std::flush;
 		}
 		std::vector<gargantuan::ObjectId> CurrentIds;
 		CurrentIds.reserve(Count);
