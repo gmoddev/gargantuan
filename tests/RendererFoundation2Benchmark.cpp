@@ -218,6 +218,7 @@ namespace {
 					<< Stage(PublisherReconciliation, Frame) << ",NA,NA,NA\n";
 			}
 			Samples->flush();
+			if (!*Samples) throw std::runtime_error("[Render:Foundation2Benchmark] Could not write frame samples");
 		}
 		if (RetainedPhysics) World->Physics = std::move(*RetainedPhysics);
 		Game->Destroy();

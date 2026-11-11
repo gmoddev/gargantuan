@@ -50,9 +50,13 @@ jobs:
             gargantuan_spot_shadow_atlas_tests gargantuan_reflection_probe_gpu_tests gargantuan_shadow_foundation5_gpu_tests \
             gargantuan_renderer_instance_record_tests gargantuan_renderer_allocation_benchmark \
             gargantuan_renderer_allocation_probe_tests
+          cmake --build build-renderer --parallel 3 --target gargantuan_renderer_foundation2_benchmark
           SDL_VIDEODRIVER=dummy ctest --test-dir build-renderer --output-on-failure \
             -R '^gargantuan_(renderer_publication|asset_foundation|packaged_shaders|ibl_reference|renderer_material_mips|directional_shadow_cache|reflection_probe_reference|directional_cascade_numerics|spot_shadow_atlas|renderer_instance_records|renderer_allocation_probe)$' \
             | tee renderer-evidence/ctest.log
+          SDL_VIDEODRIVER=dummy ./build-renderer/gargantuan_renderer_foundation2_benchmark 1 \
+            --renderer-only --group-width=256 --rigid-only --samples=renderer-evidence/semantic-frames.csv \
+            | tee renderer-evidence/semantic.csv
           SDL_VIDEODRIVER=dummy ctest --test-dir build-renderer --output-on-failure -R '^gargantuan_renderer_instance_records$' \
             | tee renderer-evidence/instance-records.log
           for shader in build-renderer/shaders/*.spv; do spirv-val "$shader"; done
@@ -171,6 +175,9 @@ jobs:
           ctest --test-dir build-renderer --output-on-failure -R '^gargantuan_(foundation|renderer_publication|asset_foundation|directional_shadow_cache|ibl_reference|renderer_material_mips|reflection_probe_reference|directional_cascade_numerics|spot_shadow_atlas|renderer_instance_records|renderer_allocation_probe)$' 2>&1 |
             Tee-Object -FilePath renderer-evidence/ctest.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build-renderer/gargantuan_renderer_foundation2_benchmark.exe 1 --renderer-only --group-width=256 --rigid-only --samples=renderer-evidence/semantic-frames.csv 2>&1 |
+            Tee-Object -FilePath renderer-evidence/semantic.csv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -226,15 +233,19 @@ jobs:
             '-DCMAKE_EXE_LINKER_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -fsanitize=address,undefined' \
             -DLINKER_SUPPORTS_WL_NO_UNDEFINED=OFF \
             -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF \
-            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON
           cmake --build build-sanitized --parallel 3 --target gargantuan_renderer_publication_tests \
             gargantuan_asset_foundation_tests gargantuan_ibl_reference_tests gargantuan_renderer_material_mip_tests \
             gargantuan_directional_shadow_cache_tests gargantuan_reflection_probe_tests \
             gargantuan_directional_cascade_numerics_tests gargantuan_spot_shadow_atlas_tests \
             gargantuan_renderer_instance_record_tests
+          cmake --build build-sanitized --parallel 3 --target gargantuan_renderer_foundation2_benchmark
           SDL_VIDEODRIVER=dummy ctest --test-dir build-sanitized --output-on-failure \
             -R '^gargantuan_(renderer_publication|asset_foundation|ibl_reference|renderer_material_mips|directional_shadow_cache|reflection_probe_reference|directional_cascade_numerics|spot_shadow_atlas|renderer_instance_records)$' \
             | tee renderer-evidence/sanitizers.log
+          SDL_VIDEODRIVER=dummy ./build-sanitized/gargantuan_renderer_foundation2_benchmark 1 \
+            --renderer-only --group-width=256 --rigid-only --samples=renderer-evidence/semantic-frames.csv \
+            | tee renderer-evidence/semantic.csv
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
