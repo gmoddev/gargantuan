@@ -14,6 +14,9 @@
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include <SDL3/SDL.h>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <Windows.h>
 #endif
 #ifdef GARGANTUAN_RUNTIME6_ALLOCATION_PROBE
