@@ -6,7 +6,7 @@
 param(
     [Parameter(Mandatory = $true)][string] $BaselineSource,
     [Parameter(Mandatory = $true)][string] $CandidateSource,
-    [Parameter(Mandatory = $true)][ValidateSet('core', 'cframe', 'compact', 'realistic', 'gameplay', 'signals', 'signals_compare', 'dirty_compare')][string] $Suite,
+    [Parameter(Mandatory = $true)][ValidateSet('core', 'cframe', 'compact', 'realistic', 'gameplay', 'signals', 'signals_compare', 'dirty_compare', 'luau')][string] $Suite,
     [Parameter(Mandatory = $true)][string] $ShaderCompiler,
     [Parameter(Mandatory = $true)][string] $EvidenceRoot
 )
@@ -129,6 +129,7 @@ try {
             $Targets += 'gargantuan_runtime6_physics_sync_fault_tests'
         }
         if ($Suite -eq 'gameplay') { $Targets += 'gargantuan_game_session_benchmark' }
+        if ($Suite -eq 'luau') { $Targets += 'gargantuan_runtime6_luau_mutation_benchmark' }
         if ($Suite -in @('signals', 'signals_compare', 'dirty_compare')) { $Targets += 'gargantuan_runtime6_physics_listener_probe' }
         if ($Suite -eq 'dirty_compare' -and $Arm -eq 'candidate') {
             $Targets += 'gargantuan_runtime6_dirty_binding_fault_tests'
@@ -152,6 +153,10 @@ try {
             $Tests += @('gargantuan_runtime6_physics_listener_native',
                 'gargantuan_runtime6_physics_listener_renderer', 'gargantuan_runtime6_physics_listener_counterfactual')
         }
+        if ($Suite -eq 'luau') { $Tests += @('gargantuan_runtime6_luau_mutation_cframe_smoke',
+            'gargantuan_runtime6_luau_mutation_color_smoke', 'gargantuan_runtime6_live_render_headless_smoke',
+            'gargantuan_runtime6_live_render_invalid_backend', 'gargantuan_runtime6_live_render_missing_backend',
+            'gargantuan_runtime6_live_render_invalid_instancing') }
         $TestCatalog = & ctest --test-dir $BuildRoot --show-only=json-v1 | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0) { throw "[Runtime6:WindowsCompare] CTest catalog failed: $Arm" }
         $Listed = @($TestCatalog.tests | ForEach-Object { $_.name })
@@ -173,6 +178,7 @@ try {
                 'gargantuan_soft_body_physics_benchmark', 'gargantuan_replication_benchmark')
         }
         if ($Suite -eq 'gameplay') { $FreezeTargets += 'gargantuan_game_session_benchmark' }
+        if ($Suite -eq 'luau') { $FreezeTargets += 'gargantuan_runtime6_luau_mutation_benchmark' }
         if ($Suite -in @('signals', 'signals_compare', 'dirty_compare')) { $FreezeTargets += 'gargantuan_runtime6_physics_listener_probe' }
         $Hashes = @{}
         foreach ($Target in $FreezeTargets) {

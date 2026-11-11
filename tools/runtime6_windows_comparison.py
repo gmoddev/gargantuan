@@ -58,7 +58,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "attribution", "compact_large", "cframe_allocation"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "luau", "attribution", "compact_large", "cframe_allocation"), default="core")
 Parser.add_argument("--comparison-directory", default="comparison")
 Parser.add_argument("--verify-only", action="store_true")
 Args = Parser.parse_args()
@@ -133,6 +133,21 @@ def Run(Arm, Label, Binary, Options, Timeout=600, Environment=None):
     (Output / "receipts.json").write_text(json.dumps(Receipts, indent=2))
     print(json.dumps(Receipt), flush=True)
 
+
+if Args.suite == "luau":
+    for Count in (1000, 10000, 50000):
+        for Arm in ("baseline", "candidate", "candidate", "baseline"):
+            Samples = Output / f"{len(Receipts):03}-live-headless-{Count}-{Arm}.csv"
+            Run(Arm, f"live-headless-{Count}", "gargantuan_runtime_foundation6_benchmark",
+                ["12", f"--count={Count}", "--density-matrix", "--group-width=256",
+                 "--split-construction", "--draw-backend=headless", f"--samples={Samples}"])
+    for Count in (1000, 10000):
+        for Property in ("cframe", "color"):
+            for Listeners in (0, 2):
+                for Arm in ("baseline", "candidate", "candidate", "baseline"):
+                    Run(Arm, f"luau-{Count}-{Property}-{Listeners}", "gargantuan_runtime6_luau_mutation_benchmark",
+                        [f"--count={Count}", "--frames=12", f"--listeners={Listeners}", f"--property={Property}"])
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite in ("signals_compare", "dirty_compare"):
     for Count in (1000, 10000, 50000):
