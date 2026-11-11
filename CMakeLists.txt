@@ -985,9 +985,14 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_qualified_scale_package PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_qualified_scale_package PRIVATE
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+		GARGANTUAN_QUALIFIED_SCALE_FIXTURE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/Foundation3LQualifiedScale"
 	)
 	add_dependencies(gargantuan_qualified_scale_package
 		gargantuan_runtime_distribution gargantuan_server_runtime_distribution)
+	add_test(NAME gargantuan_qualified_scale_fixture
+		COMMAND gargantuan_qualified_scale_package --verify-fixture)
+	set_tests_properties(gargantuan_qualified_scale_fixture PROPERTIES
+		LABELS "content;package;foundation3l" TIMEOUT 120)
 	if(WIN32)
 		find_program(GARGANTUAN_PWSH_EXECUTABLE NAMES pwsh)
 		find_program(GARGANTUAN_GO_EXECUTABLE NAMES go)
@@ -1490,6 +1495,7 @@ if(BUILD_TESTING)
 			gargantuan_packaging_tests
 			gargantuan_packaging_editor_host_tests
 			gargantuan_packaging_benchmark
+			gargantuan_qualified_scale_package
 			gargantuan_gui_foundation_benchmark
 			gargantuan_networking_contract_tests
 			gargantuan_simulated_transport_tests

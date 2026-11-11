@@ -7,6 +7,9 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
 #include <SDL3/SDL.h>
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
@@ -17,6 +20,7 @@
 #include <nlohmann/json.hpp>
 #include <ranges>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -29,6 +33,10 @@ namespace {
 
 	constexpr std::size_t QualifiedScaleObjects = 512;
 	constexpr std::size_t QualifiedScaleBytes = 273'032;
+	constexpr std::string_view QualifiedScaleDigest =
+		"c4f5af6f55981de25acc92e9b6ac7247c8e35b67b6e047519b5d59d35d5ec5f0";
+	constexpr std::string_view QualifiedSourceManifestDigest =
+		"d2d32c7d7e5ae93ea0693caa05e66c87c0f70e96047fa858619e44b1d3ef41a6";
 	constexpr std::uint32_t QualifiedProducerPlayerId = 1;
 
 	void Require(bool Condition, std::string_view Message) {
@@ -39,6 +47,74 @@ namespace {
 		std::ifstream Input(Path, std::ios::binary);
 		if (!Input) throw std::runtime_error("Could not open scale package input");
 		return {std::istreambuf_iterator<char>(Input), std::istreambuf_iterator<char>()};
+	}
+
+	void WriteText(const Filesystem::path &Path, std::string_view Value) {
+		std::ofstream Output(Path, std::ios::binary | std::ios::trunc);
+		Output.write(Value.data(), static_cast<std::streamsize>(Value.size()));
+		Require(static_cast<bool>(Output), "Could not write pinned scale fixture");
+	}
+
+	void CheckPinnedScaleSemantics(std::string_view Encoded) {
+		std::istringstream Input{std::string(Encoded)};
+		auto Loaded = InstanceSerialization::DeserializeDetached(
+			InstanceSerialization::InstanceFormat::Json, Input);
+		auto Root = Loaded.Ok ? std::dynamic_pointer_cast<Folder>(Loaded.Instance) : nullptr;
+		Require(Root && Loaded.FormatVersion == 4 && Loaded.ObjectsDecoded == QualifiedScaleObjects &&
+			Root->GetName() == test::ScaleRootName,
+			"Pinned scale fixture is incompatible with the active Instance schema");
+		const auto Children = Root->GetChildren();
+		Require(Children.size() + 1 == QualifiedScaleObjects,
+			"Pinned scale fixture changed its qualified object count");
+		for (std::size_t Index = 1; Index < QualifiedScaleObjects; ++Index) {
+			auto PartValue = std::dynamic_pointer_cast<Part>(Children[Index - 1]);
+			Require(PartValue && PartValue->GetName() == "ContentScalePart" + std::to_string(Index) &&
+				PartValue->GetAnchored() && !PartValue->GetCanCollide() && PartValue->GetCanTouch() &&
+				PartValue->GetSize() == glm::vec3(2.0f, 1.0f, 3.0f) &&
+				PartValue->GetCFrame().Position == glm::vec3(
+					static_cast<float>(Index % 32), 2.0f, static_cast<float>(Index / 32)) &&
+				!PartValue->GetKinematic() && PartValue->GetCollisionGroup() == 0 &&
+				PartValue->GetCollisionMask() == 65535 && PartValue->GetLinearDamping() == 0.0f &&
+				PartValue->GetAngularDamping() == 0.0f && PartValue->GetGravityScale() == 1.0f &&
+				PartValue->GetSleepEnabled() && !PartValue->GetMovingBodyCCD(),
+				"Pinned scale fixture changed authored values or current default controls");
+		}
+	}
+
+	struct PinnedScaleFixture {
+		PackageContentEntry Entry;
+		std::string Payload;
+		std::string Manifest;
+	};
+
+	PinnedScaleFixture ReadPinnedScaleFixture() {
+		const auto Pinned = Filesystem::path(GARGANTUAN_QUALIFIED_SCALE_FIXTURE_ROOT);
+		auto SourceBytes = ReadText(Pinned / "scale.instance.json");
+		auto SourceManifestText = ReadText(Pinned / "content.manifest.json");
+		const auto ExpectedDigest = AssetContentId::Parse(QualifiedScaleDigest);
+		const auto ExpectedManifestDigest = AssetContentId::Parse(QualifiedSourceManifestDigest);
+		Require(ExpectedDigest && ExpectedManifestDigest && SourceBytes.size() == QualifiedScaleBytes &&
+			AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(SourceBytes.data()),
+				SourceBytes.size())) == *ExpectedDigest &&
+			AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(SourceManifestText.data()),
+				SourceManifestText.size())) == *ExpectedManifestDigest,
+			"Pinned Foundation 3L scale fixture digest or byte count differs from acceptance");
+		CheckPinnedScaleSemantics(SourceBytes);
+		auto SourceManifest = ParsePackageContentManifest(SourceManifestText);
+		Require(SourceManifest.has_value() && SourceManifest->Entries.size() == 1,
+			"Canonical scale fixture did not produce one content unit");
+		const auto &SourceEntry = SourceManifest->Entries.front();
+		Require(SourceManifest->InstanceSchemaVersion == 4 &&
+			SourceManifest->Package.Project == *ProjectId::Parse("0123456789abcdef0123456789abcdef") &&
+			SourceManifest->Package.PackageVersion == 17 && SourceEntry.Key == test::ScaleContentKey &&
+			SourceEntry.BlobReference == "content/regions/scale.instance.json" &&
+			SourceEntry.ObjectCount == QualifiedScaleObjects && SourceEntry.Digest == *ExpectedDigest &&
+			SourceEntry.CompressedBytes == QualifiedScaleBytes &&
+			SourceEntry.UncompressedBytes == QualifiedScaleBytes &&
+			SourceEntry.Dependencies.empty() && SourceEntry.PackageSpaceKey == "default" &&
+			SourceEntry.Flags == PackageContentFlags::ImmutableBaseline,
+			"Canonical scale fixture differs from the qualified 512-object/273032-byte unit");
+		return {SourceEntry, std::move(SourceBytes), std::move(SourceManifestText)};
 	}
 
 	bool HasError(const std::vector<PackageDiagnostic> &Diagnostics) {
@@ -61,6 +137,7 @@ namespace {
 			"Qualified scale package identity differs from its content manifest");
 		const auto &Entry = Manifest->Entries.front();
 		Require(Entry.Key == Expected.Entry.Key && Entry.BlobReference == Expected.Entry.BlobReference &&
+			Manifest->InstanceSchemaVersion == 4 &&
 			Entry.ObjectCount == QualifiedScaleObjects && Entry.CompressedBytes == QualifiedScaleBytes &&
 			Entry.UncompressedBytes == QualifiedScaleBytes && Entry.Digest == Expected.Entry.Digest &&
 			ReadText(Root / Entry.BlobReference) == Expected.Payload,
@@ -81,18 +158,10 @@ namespace {
 		BootstrapProjectRuntimeSchema(ProjectRoot);
 
 		const auto Fixture = Output / "fixture";
-		test::WriteScalePackage(Fixture, QualifiedScaleObjects);
-		auto SourceManifest = ParsePackageContentManifest(ReadText(Fixture / test::ScaleManifestReference));
-		Require(SourceManifest.has_value() && SourceManifest->Entries.size() == 1,
-			"Canonical scale fixture did not produce one content unit");
-		const auto &SourceEntry = SourceManifest->Entries.front();
-		auto SourceBytes = ReadText(Fixture / SourceEntry.BlobReference);
-		Require(SourceEntry.Key == test::ScaleContentKey && SourceEntry.ObjectCount == QualifiedScaleObjects &&
-			SourceBytes.size() == QualifiedScaleBytes && SourceEntry.CompressedBytes == QualifiedScaleBytes &&
-			SourceEntry.UncompressedBytes == QualifiedScaleBytes &&
-			AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(SourceBytes.data()),
-				SourceBytes.size())) == SourceEntry.Digest,
-			"Canonical scale fixture differs from the qualified 512-object/273032-byte unit");
+		auto Source = ReadPinnedScaleFixture();
+		Filesystem::create_directories(Fixture / "content/regions");
+		WriteText(Fixture / "content/regions/scale.instance.json", Source.Payload);
+		WriteText(Fixture / test::ScaleManifestReference, Source.Manifest);
 
 		DiskFilesystem ProjectFilesystem(ProjectRoot);
 		auto ProjectValue = Project::fromExisting(&ProjectFilesystem);
@@ -107,7 +176,8 @@ namespace {
 		const auto Revision = World->GetAuthoritativeRevision();
 		auto Payload = PackageBuilder::Capture(ProjectValue, World, Revision, Revision);
 		Require(Payload.ContentUnits.empty(), "Qualified scale bootstrap unexpectedly generated another content unit");
-		Payload.ContentUnits.push_back({.Entry = SourceEntry, .Payload = std::move(SourceBytes)});
+		Payload.ContentInstanceSchemaVersion = 4;
+		Payload.ContentUnits.push_back({.Entry = Source.Entry, .Payload = std::move(Source.Payload)});
 		Require(Payload.ContentUnits.size() == 1 && Payload.Identity.IsValid() && Payload.AuthoritativeRevision != 0,
 			"Qualified scale package identity or content unit is invalid");
 		const auto Expected = Payload.ContentUnits.front();
@@ -164,8 +234,12 @@ namespace {
 }
 
 int main(int Count, char **Arguments) {
-	if (Count != 4) {
-		std::cerr << "[Content:ScalePackage] Usage: QualifiedScalePackage <new-output-root> <player-runtime-distribution> <server-runtime-distribution>\n";
+#ifdef _WIN32
+	SetErrorMode(0x8003u);
+#endif
+	const bool VerifyFixtureOnly = Count == 2 && std::string_view(Arguments[1]) == "--verify-fixture";
+	if (!VerifyFixtureOnly && Count != 4) {
+		std::cerr << "[Content:ScalePackage] Usage: QualifiedScalePackage --verify-fixture | <new-output-root> <player-runtime-distribution> <server-runtime-distribution>\n";
 		return 2;
 	}
 	if (!SDL_Init(0)) {
@@ -173,7 +247,12 @@ int main(int Count, char **Arguments) {
 		return 3;
 	}
 	try {
-		BuildPair(Filesystem::path(Arguments[1]), Filesystem::path(Arguments[2]), Filesystem::path(Arguments[3]));
+		if (VerifyFixtureOnly) {
+			BootstrapProjectRuntimeSchema(Filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT));
+			const auto Fixture = ReadPinnedScaleFixture();
+			std::cout << "[Content:ScalePackage] fixture=pass objects=" << QualifiedScaleObjects
+				<< " bytes=" << Fixture.Payload.size() << " digest=" << Fixture.Entry.Digest.ToString() << '\n';
+		} else BuildPair(Filesystem::path(Arguments[1]), Filesystem::path(Arguments[2]), Filesystem::path(Arguments[3]));
 		SDL_Quit();
 		return 0;
 	} catch (const std::exception &Error) {

@@ -80,6 +80,9 @@ namespace gargantuan {
 			std::string Payload;
 		};
 		std::vector<ContentUnit> ContentUnits;
+		// Captured units use the current schema. A qualified legacy payload may
+		// select version 4 only when every content unit matches that version.
+		std::uint32_t ContentInstanceSchemaVersion = PackageContentInstanceSchemaVersion;
 	};
 
 	struct PackageSizeBreakdown {
