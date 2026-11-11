@@ -76,6 +76,12 @@ namespace gargantuan {
 	struct WorldRootTestAccess {
 		static std::size_t BodyCount(const WorldRoot &world) { return world.PartBodies.size(); }
 		static std::size_t JointCount(const WorldRoot &world) { return world.ConstraintJoints.size(); }
+		static bool HasAcceptedAnchoredBody(const WorldRoot &World, const BasePart &Part) {
+			auto Found = World.PartBodies.find(Part.GetObjectId());
+			if (Found == World.PartBodies.end()) return false;
+			auto State = World.Physics.GetBodyState(Found->second);
+			return State && State->Description.Anchored;
+		}
 	};
 }
 
@@ -7304,7 +7310,7 @@ namespace {
 			StartHostFrame(Runtime, ScriptValue);
 			Runtime.Step();
 			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed() &&
-				WorldRootTestAccess::BodyCount(*WorkspaceValue) == 1,
+				WorldRootTestAccess::HasAcceptedAnchoredBody(*WorkspaceValue, *Moving),
 				"physics motion callback is installed while the anchored body is live");
 			std::weak_ptr<ScriptEngine> ScriptWeak = Runtime.Script;
 			Moving->SetAnchored(false);
@@ -7346,15 +7352,17 @@ namespace {
 				if (auto Connection = WeakConnection.lock()) Connections.push_back(Connection);
 			Check(!Connections.empty(), "Engine tracks the property callback for logical shutdown");
 			bool DestroyingObservedLogicalStop = false;
-			auto Observer = Game->Destroying->Connect([&](std::monostate) {
+			std::size_t TriggerDestroyingCalls = 0;
+			auto Observer = Trigger->Destroying->Connect([&](std::monostate) {
+				++TriggerDestroyingCalls;
 				auto ActiveVm = ScriptWeak.lock();
-				DestroyingObservedLogicalStop = ActiveVm && ActiveVm->IsStopping() && !Trigger->GetDestroyed() &&
+				DestroyingObservedLogicalStop = ActiveVm && ActiveVm->IsStopping() &&
 					std::ranges::all_of(Connections, [](const auto &Connection) { return !Connection->Connected; }) &&
 					!ActiveVm->Threads.QueueDeferredTask(ActiveVm->L, 0);
 			});
 			Trigger->SetName("ExternalTriggerChanged");
 			Check(Game->GetDestroyed() && Runtime.Script == nullptr && ScriptWeak.expired() &&
-				DestroyingObservedLogicalStop,
+				TriggerDestroyingCalls == 1 && DestroyingObservedLogicalStop,
 				"external Main setter keeps the active Lua callback alive while logical stop disconnects it");
 			Observer->Disconnect();
 		}
