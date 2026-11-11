@@ -141,6 +141,14 @@ namespace {
 		return Bytes;
 	}
 
+	std::vector<std::uint8_t> MakeHdrWithMetadata(std::string_view Lines) {
+		const auto Flat = MakeHdr(2, 2, {128, 64, 32, 137});
+		const auto Header = "#?RADIANCE\n" + std::string(Lines) + "\n-Y 2 +X 2\n";
+		std::vector<std::uint8_t> Bytes(Header.begin(), Header.end());
+		Bytes.insert(Bytes.end(), Flat.begin() + static_cast<std::ptrdiff_t>(MakeHdrHeader(2, 2).size()), Flat.end());
+		return Bytes;
+	}
+
 	std::vector<std::uint8_t> MakeHdrRle(bool Literal) {
 		auto Bytes = MakeHdrHeader(8, 8);
 		constexpr std::array<std::uint8_t, 4> Rgbe{128, 64, 32, 137};
@@ -602,6 +610,26 @@ int main() {
 		std::isfinite(ReadHdrChannel(std::get<ImportedImage>(*MaximumRgbe.Record->Asset), 0, 0)) &&
 		ReadHdrChannel(std::get<ImportedImage>(*MaximumRgbe.Record->Asset), 0, 0) > 1.0e38f,
 		"maximum RGBE source radiance remains finite in the canonical image");
+	const auto CheckHdrMetadata = [&](std::string_view Name, std::string_view Lines, bool Accepted,
+		std::string_view Diagnostic) {
+		const auto Path = "assets/" + std::string(Name) + ".hdr";
+		WriteBytes(Root / Path, MakeHdrWithMetadata(Lines));
+		const auto Result = Assets->ImportProjectAsset(Mount, Path, AssetKind::Image);
+		Check(Result.Ok == Accepted && (Accepted || Result.Diagnostic.Code == Diagnostic),
+			"HDR metadata is admitted only with unambiguous linear RGBE interpretation");
+	};
+	CheckHdrMetadata("duplicate-format", "FORMAT=32-bit_rle_rgbe\nFORMAT=32-bit_rle_rgbe\n",
+		false, "MalformedImage");
+	CheckHdrMetadata("mixed-format", "FORMAT=32-bit_rle_xyze\nFORMAT=32-bit_rle_rgbe\n",
+		false, "UnsupportedColorSpace");
+	CheckHdrMetadata("nonunit-pixel-aspect", "FORMAT=32-bit_rle_rgbe\nPIXASPECT=2\n",
+		false, "UnsupportedPixelAspect");
+	CheckHdrMetadata("nonunit-exposure", "FORMAT=32-bit_rle_rgbe\nEXPOSURE=2\n",
+		false, "UnsupportedExposure");
+	CheckHdrMetadata("explicit-correction", "FORMAT=32-bit_rle_rgbe\nCOLORCORR=1 1 1\n",
+		false, "UnsupportedColorSpace");
+	CheckHdrMetadata("neutral-metadata", "# tool note EXPOSURE=2\nCUSTOM=kept\nFORMAT=32-bit_rle_rgbe\nEXPOSURE= +1\nPIXASPECT=1\n",
+		true, "");
 	WriteBytes(Root / "assets" / "extreme.hdr", MakeHdr(2, 2, {128, 0, 0, 145}));
 	const auto ExtremeImport = Assets->ImportProjectAsset(Mount, "assets/extreme.hdr", AssetKind::Image);
 	Check(ExtremeImport.Ok && ExtremeImport.Record && ExtremeImport.Record->Asset &&

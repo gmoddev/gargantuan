@@ -283,20 +283,37 @@ namespace gargantuan {
 				if (HeaderEnd == Source.end() || HeaderEnd - Source.begin() > 4096)
 					return std::unexpected(Error("MalformedImage", "Radiance HDR header is missing or oversized"));
 				const std::string_view Header(reinterpret_cast<const char *>(Source.data()), HeaderEnd - Source.begin());
-				for (const auto Metadata : {"PRIMARIES=", "COLORCORR=", "GAMMA="})
-					if (Header.find(Metadata) != std::string_view::npos)
-						return std::unexpected(Error("UnsupportedColorSpace", "HDR color-space metadata is unsupported"));
-				for (auto Exposure = Header.find("EXPOSURE="); Exposure != std::string_view::npos;
-					Exposure = Header.find("EXPOSURE=", Exposure + 1)) {
-					const auto End = Header.find('\n', Exposure);
+				const auto IsUnity = [](std::string_view Text) {
+					while (!Text.empty() && (Text.front() == ' ' || Text.front() == '\t')) Text.remove_prefix(1);
+					while (!Text.empty() && (Text.back() == ' ' || Text.back() == '\t')) Text.remove_suffix(1);
+					if (Text.starts_with('+')) Text.remove_prefix(1);
 					float Value = 0.0f;
-					const auto Start = Header.data() + Exposure + sizeof("EXPOSURE=") - 1;
-					auto Stop = Header.data() + (End == std::string_view::npos ? Header.size() : End);
-					if (Stop > Start && Stop[-1] == '\r') --Stop;
-					const auto Parsed = std::from_chars(Start, Stop, Value);
-					if (Parsed.ec != std::errc{} || Parsed.ptr != Stop || Value != 1.0f)
-						return std::unexpected(Error("UnsupportedExposure", "HDR source exposure metadata must be unity"));
+					const auto Parsed = std::from_chars(Text.data(), Text.data() + Text.size(), Value);
+					return Parsed.ec == std::errc{} && Parsed.ptr == Text.data() + Text.size() && Value == 1.0f;
+				};
+				unsigned FormatCount = 0;
+				for (std::size_t Offset = 0; Offset < Header.size();) {
+					const auto End = Header.find('\n', Offset);
+					auto Line = Header.substr(Offset, End == std::string_view::npos ? End : End - Offset);
+					if (Line.ends_with('\r')) Line.remove_suffix(1);
+					if (Line.starts_with("FORMAT=")) {
+						++FormatCount;
+						if (Line != "FORMAT=32-bit_rle_rgbe")
+							return std::unexpected(Error("UnsupportedColorSpace", "HDR source must use RGBE format"));
+					} else if (Line.starts_with("PRIMARIES=") || Line.starts_with("COLORCORR=") ||
+						Line.starts_with("GAMMA=")) {
+						return std::unexpected(Error("UnsupportedColorSpace", "HDR color-space metadata is unsupported"));
+					} else if (Line.starts_with("EXPOSURE=")) {
+						if (!IsUnity(Line.substr(sizeof("EXPOSURE=") - 1)))
+							return std::unexpected(Error("UnsupportedExposure", "HDR source exposure metadata must be unity"));
+					} else if (Line.starts_with("PIXASPECT=")) {
+						if (!IsUnity(Line.substr(sizeof("PIXASPECT=") - 1)))
+							return std::unexpected(Error("UnsupportedPixelAspect", "HDR source pixels must have unit aspect"));
+					}
+					Offset = End == std::string_view::npos ? Header.size() : End + 1;
 				}
+				if (FormatCount != 1)
+					return std::unexpected(Error("MalformedImage", "Radiance HDR requires exactly one FORMAT assignment"));
 				if (Source.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
 					!stbi_is_hdr_from_memory(Source.data(), static_cast<int>(Source.size())))
 					return std::unexpected(Error("MalformedImage", "Radiance HDR signature is invalid"));
