@@ -69,9 +69,10 @@ namespace gargantuan {
 			ObjectId Object;
 			std::weak_ptr<BasePart> Part;
 			bool Active = true;
-			bool Dirty = false;
+			std::uint64_t LastDirtyEpoch = 0;
 		};
 		std::unordered_map<ObjectId, std::shared_ptr<TrackedPartBinding>> TrackedParts;
+		std::uint64_t DirtyEpoch = 1;
 		std::unordered_map<ObjectId, std::weak_ptr<DeformableBody>> TrackedDeformables;
 		std::unordered_map<ObjectId, std::weak_ptr<SoftBodyMaterial>> TrackedSoftBodyMaterials;
 		std::unordered_map<ObjectId, ObjectId> SoftBodyAttachmentOwners;
@@ -140,6 +141,7 @@ namespace gargantuan {
 		void TrackPart(const std::shared_ptr<BasePart> &Part);
 		enum class PartDirtyMark { New, Coalesced, Suppressed };
 		PartDirtyMark MarkTrackedPartDirty(TrackedPartBinding &Binding);
+		void AdvanceDirtyEpoch() noexcept;
 		void TrackDeformable(const std::shared_ptr<DeformableBody> &Body);
 		void TrackSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);
 		void TrackSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);

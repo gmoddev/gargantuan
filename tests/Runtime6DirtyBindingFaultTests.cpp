@@ -25,15 +25,18 @@ namespace gargantuan {
 	struct WorldRootTestAccess {
 		static bool FullPartScanNeeded(const WorldRoot &World) { return World.FullPartScanNeeded; }
 		static std::size_t DirtyCount(const WorldRoot &World) { return World.DirtyBodies.size(); }
+		static std::uint64_t DirtyEpoch(const WorldRoot &World) { return World.DirtyEpoch; }
 		static bool BindingDirty(const WorldRoot &World, ObjectId Object) {
 			auto Found = World.TrackedParts.find(Object);
-			return Found != World.TrackedParts.end() && Found->second && Found->second->Dirty;
+			return Found != World.TrackedParts.end() && Found->second &&
+				Found->second->LastDirtyEpoch == World.DirtyEpoch;
 		}
 		static void ClearDerivedDirtyState(WorldRoot &World, ObjectId Object) {
 			World.DirtyBodies.clear();
 			auto Found = World.TrackedParts.find(Object);
-			if (Found != World.TrackedParts.end() && Found->second) Found->second->Dirty = false;
+			if (Found != World.TrackedParts.end() && Found->second) Found->second->LastDirtyEpoch = 0;
 		}
+		static void ApplyPending(WorldRoot &World) { World.ApplyPendingPhysicsChanges(); }
 		static SignalConnection::Pointer CFrameConnection(const WorldRoot &World, ObjectId Object) {
 			auto Found = World.PhysicsConnections.find(Object);
 			return Found == World.PhysicsConnections.end() || Found->second.empty() ? nullptr : Found->second.front();
@@ -110,12 +113,14 @@ int main() {
 		// Test-only fault injection models a consumed derived hint just before a new first mark.
 		// The authored Part state stays authoritative and must survive insertion failure.
 		WorldRootTestAccess::ClearDerivedDirtyState(*World, Object);
+		const auto BeforeInsertionEpoch = WorldRootTestAccess::DirtyEpoch(*World);
 		bool Threw = false;
 		FailAllocation = 0;
 		try { Connection->Callback(std::monostate{}); }
 		catch (const std::bad_alloc &) { Threw = true; }
 		FailAllocation = -1;
-		if (!Threw || !WorldRootTestAccess::FullPartScanNeeded(*World) ||
+		if (!Threw || WorldRootTestAccess::DirtyEpoch(*World) != BeforeInsertionEpoch ||
+			!WorldRootTestAccess::FullPartScanNeeded(*World) ||
 			WorldRootTestAccess::DirtyCount(*World) != 0 ||
 			WorldRootTestAccess::BindingDirty(*World, Object))
 			throw std::runtime_error("failed first dirty insertion did not retain conservative scan");
@@ -131,6 +136,27 @@ int main() {
 		if (!Recovered || Recovered->Description.Transform.Position.x != 4.0f ||
 			WorldRootTestAccess::DirtyCount(*World) != 0)
 			throw std::runtime_error("dirty binding did not resume after allocation recovery");
+		PartValue->SetCFrame(CFrame(5.0f, 5.0f, 0.0f));
+		const auto BeforeCaptureEpoch = WorldRootTestAccess::DirtyEpoch(*World);
+		Threw = false;
+		// AssetService is already initialized by the earlier safe points. The
+		// next allocation copies DirtyBodies into the sorted update capture.
+		FailAllocation = 0;
+		try { WorldRootTestAccess::ApplyPending(*World); }
+		catch (const std::bad_alloc &) { Threw = true; }
+		FailAllocation = -1;
+		const auto BeforeRetry = WorldRootTestAccess::State(*World, Object);
+		if (!Threw || WorldRootTestAccess::DirtyEpoch(*World) != BeforeCaptureEpoch ||
+			WorldRootTestAccess::DirtyCount(*World) != 1 ||
+			!WorldRootTestAccess::BindingDirty(*World, Object) || !BeforeRetry ||
+			BeforeRetry->Description.Transform.Position.x != 4.0f)
+			throw std::runtime_error("failed sorted update capture consumed the dirty epoch");
+		WorldRootTestAccess::ApplyPending(*World);
+		const auto AfterRetry = WorldRootTestAccess::State(*World, Object);
+		if (!AfterRetry || AfterRetry->Description.Transform.Position.x != 5.0f ||
+			WorldRootTestAccess::DirtyCount(*World) != 0 ||
+			WorldRootTestAccess::BindingDirty(*World, Object))
+			throw std::runtime_error("retry after sorted capture fault lost authored control");
 		std::cout << "[Runtime6:PhysicsDirtyBindingFault] PASS\n";
 		return 0;
 	} catch (const std::exception &Failure) {

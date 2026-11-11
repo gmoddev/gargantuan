@@ -249,16 +249,26 @@ namespace gargantuan {
 
 	WorldRoot::PartDirtyMark WorldRoot::MarkTrackedPartDirty(TrackedPartBinding &Binding) {
 		if (ShuttingDownPhysics || !Binding.Active) return PartDirtyMark::Suppressed;
-		if (Binding.Dirty) return PartDirtyMark::Coalesced;
+		if (Binding.LastDirtyEpoch == DirtyEpoch) return PartDirtyMark::Coalesced;
 		try {
 			const bool Inserted = DirtyBodies.insert(Binding.Object).second;
-			Binding.Dirty = true;
+			Binding.LastDirtyEpoch = DirtyEpoch;
 			return Inserted ? PartDirtyMark::New : PartDirtyMark::Coalesced;
 		} catch (...) {
 			// Preserve the setter's exception while retaining a conservative next-safe-point path.
 			FullPartScanNeeded = true;
 			throw;
 		}
+	}
+
+	void WorldRoot::AdvanceDirtyEpoch() noexcept {
+		if (DirtyEpoch == std::numeric_limits<std::uint64_t>::max()) {
+			// A wrapped epoch must not alias an old registration. This scan is
+			// reached only after 2^64 - 1 completed safe points.
+			for (auto &[_, Binding] : TrackedParts)
+				if (Binding) Binding->LastDirtyEpoch = 0;
+			DirtyEpoch = 1;
+		} else ++DirtyEpoch;
 	}
 
 	void WorldRoot::TrackPart(const std::shared_ptr<BasePart> &Part) {
@@ -271,6 +281,7 @@ namespace gargantuan {
 		}
 		auto Binding = Found->second;
 		Binding->Part = Part;
+		if (!Binding->Active) Binding->LastDirtyEpoch = 0;
 		Binding->Active = true;
 		if (PhysicsConnections.contains(Id)) return;
 		auto MarkDirty = [this, Binding](std::monostate) {
@@ -599,11 +610,10 @@ namespace gargantuan {
 				if (Binding && Binding->Active) BodyUpdates.push_back(Object);
 			std::sort(BodyUpdates.begin(), BodyUpdates.end());
 		} else BodyUpdates = SortedIds(DirtyBodies);
-		// Clear the per-registration flag before any backend update can invoke a
-		// callback. A nested edit then creates a fresh next-safe-point dirty mark.
-		for (const auto Object : BodyUpdates)
-			if (auto Found = TrackedParts.find(Object); Found != TrackedParts.end() && Found->second)
-				Found->second->Dirty = false;
+		// Finish the epoch only after the body list has been captured. A nested
+		// edit during backend work then marks the next safe point without a
+		// second TrackedParts lookup for every body update.
+		AdvanceDirtyEpoch();
 		DirtyBodies.clear();
 		FullPartScanNeeded = false;
 		for (const auto Object : BodyUpdates) {

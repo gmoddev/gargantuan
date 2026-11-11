@@ -20,8 +20,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -43,9 +45,12 @@ namespace gargantuan {
 		static std::size_t DirtyPartCount(const WorldRoot &World) { return World.DirtyBodies.size(); }
 		static bool FullPartScanNeeded(const WorldRoot &World) { return World.FullPartScanNeeded; }
 		static void ForceFullPartScan(WorldRoot &World) { World.FullPartScanNeeded = true; }
+		static void ForceDirtyEpoch(WorldRoot &World, std::uint64_t Epoch) { World.DirtyEpoch = Epoch; }
+		static std::uint64_t DirtyEpoch(const WorldRoot &World) { return World.DirtyEpoch; }
 		static bool BindingDirty(const WorldRoot &World, ObjectId Object) {
 			auto Found = World.TrackedParts.find(Object);
-			return Found != World.TrackedParts.end() && Found->second && Found->second->Dirty;
+			return Found != World.TrackedParts.end() && Found->second &&
+				Found->second->LastDirtyEpoch == World.DirtyEpoch;
 		}
 		static bool BindingActive(const WorldRoot &World, ObjectId Object) {
 			auto Found = World.TrackedParts.find(Object);
@@ -1381,6 +1386,20 @@ namespace {
 			!WorldRootTestAccess::FullPartScanNeeded(*Workspace) &&
 			!WorldRootTestAccess::BindingDirty(*Workspace, Object),
 			"conservative full scan retains the authored CFrame and clears binding state");
+		WorldRootTestAccess::ForceDirtyEpoch(*Workspace, std::numeric_limits<std::uint64_t>::max());
+		PartValue->SetCFrame(CFrame(6.0f, 5.0f, 0.0f));
+		Check(WorldRootTestAccess::BindingDirty(*Workspace, Object),
+			"maximum epoch still records the first authored mark");
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(WorldRootTestAccess::DirtyEpoch(*Workspace) == 1 &&
+			!WorldRootTestAccess::BindingDirty(*Workspace, Object),
+			"safe point resets registration epochs before wraparound reuse");
+		PartValue->SetCFrame(CFrame(7.0f, 5.0f, 0.0f));
+		Workspace->StepPhysics(0.0, std::nullopt);
+		const auto WrappedState = WorldRootTestAccess::State(*Workspace, Body);
+		Check(WrappedState && Near(WrappedState->Description.Transform.Position.x, 7.0f) &&
+			WorldRootTestAccess::DirtyPartCount(*Workspace) == 0,
+			"authored control after wraparound reaches the backend exactly once");
 	}
 
 	void TestPhysicsDirtyBindingRetiresStaleConnections() {
