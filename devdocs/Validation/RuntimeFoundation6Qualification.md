@@ -173,7 +173,38 @@ passes at fixture-only baseline `8831e09f39ecd103585342eab0193570737614f2` versu
 core candidate `9be409347e971a88d338ddb41446b781ea8d9358`.
 It includes canonical MeshPart reimport/resource parity, hierarchy changes,
 actual ReplicaApplier updates, animation, soft-body and replication fixtures.
-Its performance interpretation is still under independent review.
+Independent review verifies the ZIP digest, extraction bounds and all 64
+stdout/stderr hashes. All 32 processes exit zero. For 512 MeshParts with 64
+changed, steady publication mean is 0.1266 to 0.0871 ms; receiver publication
+after actual ReplicaApplier mutation is 0.0982 to 0.0614 ms. Receiver apply
+remains 16.928 to 16.016 ms (P95 19.648 to 16.426 ms), a much larger cost than
+publication. Reimport of 512 dependents produces exactly 512 updates, one mesh
+create/remove and no full resync. Its publication A/B/B/A observations are
+0.8344/0.5706/0.5844/0.7815 ms. Hierarchy and receiver generation-replacement
+gates pass. The 128/0 quiet case is near measurement noise.
+
+The shared-asset 1K MeshPart adoption observations are
+629.463/30.684/30.785/620.692 ms; asset full resync shows no gain. The 100-rig
+animation total is about 1.281 to 1.245 ms, 500-root-motion total stays around
+3.6 ms, and 1,024-vertex cloth has no meaningful delta or stale/drop events.
+The 8,193-object replication preflight remains about 109–113 ms. These measured
+limits do not justify a new replication authority or global dirty bus.
+
+## Rejected signal-container optimization
+
+The one-subscriber fast path at `1385d1ec3abdb2c5d0ad0f517959d7b7c06a1027`
+is compared with common profiling baseline
+`a0f33623688b63cc3810c215662cd63f4b0577c7` in
+[43065688927](https://github.com/gmoddev/gargantuan/actions/runs/43065688927).
+Both 10-test regression sets and all 36 processes pass. It preserves owning
+connection lifetime, recursion, deferral and cleanup ordering, but does not
+remove the required shared ownership copy or callback. Unprofiled steady dense
+10K stage sums worsen 27.128 to 27.577 ms; 50K worsens 160.605 to 161.819 ms.
+Profiled 50K native signal time changes 38.674 to 38.310 ms, while renderer-only
+time worsens 37.195 to 37.701 ms. Counts match and the snapshot timer remains
+essentially unchanged. This does not support promotion; the source and verified
+artifact remain isolated. Per-registration physics dirty coalescing is a
+different candidate and requires its own regression/fault and performance gates.
 
 ## Qualification boundaries and unsuccessful evidence
 

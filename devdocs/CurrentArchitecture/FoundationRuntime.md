@@ -42,9 +42,11 @@ therefore observe the new parent/child collections rather than a half-applied
 operation. Callbacks remain synchronous and can initiate a later mutation; a
 broader transaction/notification queue is future work.
 Per-property signals are allocated when requested through
-`GetPropertyChangedSignal`. An unobserved property or ancestry change does not
-allocate a signal; an existing subscription still fires synchronously after
-the committed change, including during nested mutation.
+`GetPropertyChangedSignal`. Ordinary reflected property, Parent and Destroyed
+notifications do not allocate per-property signals unless requested. Existing
+subscriptions still fire synchronously after the committed change, including
+during nested mutation. The separate custom-schema property path still creates
+its notification signal on commit.
 
 Destruction has a monotonic lifecycle:
 
@@ -215,3 +217,74 @@ Render dirty coalescing never rewrites those reliable histories. See
 `RuntimeFoundation6Qualification.md` in `devdocs/Validation/` for exact source,
 measured improvements and remaining qualification limits. Durable persistence
 identity and schema migration remain separate future work.
+
+## Runtime Foundation 6 storage and change-distribution disposition
+
+The integrated continuation retains ordinary Instance fields as authoritative
+storage. Main still validates and commits each ordinary mutation, records its
+ordered history and invokes existing observers synchronously. The measured
+changes optimize implementation overhead: journal batch append/rollback,
+unobserved ordinary notifications, same-object render-domain accumulation,
+typed incremental extraction, unchanged-model inverse reuse and indexed physics
+admission. No script API, object identity, wire format or scheduling authority
+changes. Qualification scope is recorded in
+`../Validation/RuntimeFoundation6Qualification.md`.
+
+The current architectural choice is optimized Instance authority plus
+consumer-owned immutable or compact derivatives. A bounded direct/SoA/snapshot
+experiment includes setter, dirty capture and synchronization costs. Its one
+consumer does not repay the extra SoA synchronization, and per-object immutable
+snapshot allocation costs more again. Consequently this continuation does not
+move authoritative transforms, velocity, visibility or hierarchy into an ECS,
+add native storage handles to Luau, or create a general component registry.
+These measurements do not rule out a future many-consumer or narrowly scoped
+system experiment; that requires its own complete authority/synchronization
+comparison and lifecycle gates.
+
+Physics derives backend descriptions and consumes authored changes at existing
+Main safe points. Post-step simulation publishes through ordinary Instance
+setters, with suppression limited to its own redundant CFrame feedback. The
+separate compact dynamic-body/control view remains an experiment until its
+timed sparse/dense/churn and allocation-fallback gates pass. Body handles stay
+private derived resources, tied to complete ObjectId generations. This storage
+work neither replaces Box3D/XPBD nor changes qualified solver behavior.
+
+Rendering consumes immutable RenderPublication and owns its disposable
+RenderProjection. The publisher validates live generation and WorldRoot ancestry
+before incremental extraction, and still emits complete final-state values.
+For recognized render-affecting changes, a domain hint cannot mask other final
+fields. New render dependencies must be classified or request full resync.
+Exact model equality may reuse the cached inverse. A lost publication base
+rejects the delta; the caller must request a full resync, after which the
+publisher rebuilds complete state.
+Renderer instancing remains independently opt-in. Fewer CPU publication
+milliseconds do not qualify native GPU execution or change its defaults.
+
+Replication retains the 3I revisioned immutable template catalog and 3J/3L
+per-peer planning/accepted history. The existing scoped journal is already a
+typed committed input. A second global event bus would duplicate classification,
+bounded cursors and recovery without measured benefit here. Final renderer state
+and redundant internal physics dirty work may coalesce. Required callbacks,
+ordinary journal records, transaction boundaries, create/destroy/reparent and
+reference dependencies, and accepted reliable transport ownership retain their
+existing ordering. Explicit prepared mutation keeps its distinct atomic observer
+contract and is not substituted for ordinary setters based on throughput.
+
+Creation and retirement retain DataModel admission, monotonic destruction and
+slot-plus-generation identity. Indexed physics membership reduces repeated
+admission searches without changing traversal order or inventing deferred
+script-visible lifecycle. Existing 3L content activation, materialization and
+retirement remain the large-world owners. New caches must remain disposable,
+bounded by their subsystem and reconstructible after full resync; a stale slot
+must never alias a replacement Instance.
+
+This continuation does not parallelize mutable graph traversal or mutation.
+Existing bounded JobSystem computation returns results to Main; immutable
+renderer/network projections retain their accepted thread boundaries. The
+single-consumer snapshot/SoA results do not justify new cross-thread queues or
+moving live Instance work to a worker. Dense setters, full rebuilds, replica
+application, replication preflight and occasional full-engine tails remain
+measured ceilings. Streaming, terrain and multiplayer should extend the current
+subsystem-owned projections and admission budgets, with targeted data-oriented
+storage introduced only where complete-path evidence repays its synchronization
+and lifetime costs.
