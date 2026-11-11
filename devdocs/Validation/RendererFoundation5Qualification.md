@@ -9,8 +9,12 @@ on `foundation/renderer-5`, stacked on Foundation 4 at
 
 Draft continuation: [PR 22](https://github.com/gmoddev/gargantuan/pull/22), base
 `foundation/renderer-4`. Foundation 4 PR 21 and its raw evidence remain intact.
-The runtime checkpoint is `5250798037753bb9d8998576701b0ec29e78f2f4`;
-`ad58172cbd8516c9f95ba65c223efc123d6330b7` adds final test controls and documentation.
+The final runtime checkpoint is `7f3d84e12dee9d56faa659a47dbf8f18ba4df25d`.
+The instance-record optimization is `5250798037753bb9d8998576701b0ec29e78f2f4`;
+the final matched instancing controls use `ad58172cbd8516c9f95ba65c223efc123d6330b7`.
+Subsequent source `17fbb658f34f3799ffc8e096497c8c95e9c61e7a` changes benchmark
+fixtures and their CI coverage only. The native rendering code/shaders are
+unchanged after `7f3d84e12`.
 No Studio, LUI, Node or production physics files were changed.
 
 | Area | Disposition and boundary |
@@ -37,6 +41,15 @@ at exact `ad58172cbd8516c9f95ba65c223efc123d6330b7` passed Windows Release,
 Linux Vulkan and Linux sanitizer lanes. Sanitizer, software Vulkan and physical
 Windows Vulkan evidence have distinct acceptance scopes.
 
+Final runtime run [43018500754](https://github.com/gmoddev/gargantuan/actions/runs/43018500754)
+at `7f3d84e12dee9d56faa659a47dbf8f18ba4df25d` also passed all three lanes,
+including the admitted solid-caster shader and corrected mixed-material fixture.
+Benchmark follow-up [43021058515](https://github.com/gmoddev/gargantuan/actions/runs/43021058515)
+at `17fbb658f34f3799ffc8e096497c8c95e9c61e7a` passed Windows Release,
+Linux Vulkan and ASan/UBSan, including the explicit candidate fixture and raw
+sample writer. Its one-frame six-scenario semantic run is a functional/count
+gate, not a physical CPU performance percentile.
+
 The persistent MSVC Release worker package passed all 11 focused CPU gates.
 Native coverage is cumulative across the recorded checkpoints: unchanged
 HDR/probe/residency paths retain their earlier native gates, and changed opaque
@@ -50,6 +63,12 @@ Native broad controls execute 21 scenarios with synchronization on and off
 (42 rows per adapter). All required stable-resource, skinning and restart gates
 pass or are explicitly inapplicable. Scenarios include cloth/deformable topology,
 GUI plus 3D, texture/environment scenes, 1/10/100/500 rigs and 16–256-bone palettes.
+The final solid-depth runtime then passes the complete 11-gate AMD set at
+`7f3d84e12`, plus the 42-scenario broad set on AMD at that source and GTX at
+`81b36b13442a3058e56138fcef1d1d971947b972` (same runtime/shader code). GTX's
+ten other native gates pass at `81b36b1`; its newly strengthened shadow fixture
+passes at `7f3d84e12` after the geometry correction. The earlier failed fixture
+remains failed in its original receipt.
 Exact-pixel gates additionally cover coplanar/reversed/near-tied order, overlap,
 nonunit normals, positive first-instance offsets, mask/range/mesh fallbacks,
 HDR/SDR source equivalence, actual global/local IBL transition, shadow foliage,
@@ -70,6 +89,7 @@ soak. Old failed captures, timeouts and unsuccessful hypotheses remain present.
 | Broad 42 scenarios | `6363bb47978e6692d33d862f8250d61853bea2c3` | `5250798037753bb9d8998576701b0ec29e78f2f4` |
 | Two 4096-frame probe churn cycles | `15d20fb6eae3780d8ccf879ef060f106d97c6300` | `5250798037753bb9d8998576701b0ec29e78f2f4` |
 | Final focused depth/envelope/shadows and 84-run A/B/B/A | `ad58172cbd8516c9f95ba65c223efc123d6330b7` | Same source and package |
+| Admitted solid-depth runtime | Full 11 gates + broad 42 at `7f3d84e12` | Ten gates + broad 42 at `81b36b1`, corrected full shadow gate at `7f3d84e12` |
 
 Additional `ad581` local-light controls publish 512 lights (448 visible under
 the existing bounded selection), including static and moving cases. On GTX,
@@ -150,6 +170,110 @@ are a cost proxy, not implemented point shadows or typical scene cost. All
 cases allocate the same 32 MiB atlas and touch 4/24/32 MiB. Whole-frame fence
 latency includes receiver and frame work. Point shadow admission remains gated.
 
+### Solid-caster depth correction
+
+The isolated `0e717eed5b5af97c4ba8757125c347e9094538a1` experiment splits
+nonmasked depth rendering from the alpha-test shader. Both share vertex/palette,
+D32, strict LESS/write and sidedness state. Sixteen same-binary runs cover
+opaque and masked 1000-caster off/on/on/off on both adapters, four warmups and
+24 measured frames per layer workload in each run. Each arm/layer has 48
+measured samples. The table uses the native fixture's upper median; means,
+P95 and ordinary statistical median artifacts are also retained.
+
+| Adapter / layers | Opaque fence off → on, ms | Masked fence off → on, ms |
+| --- | ---: | ---: |
+| RX 7900 XT / 1 | 2.870 → 2.060 | 2.811 → 2.896 |
+| RX 7900 XT / 6 | 11.989 → 7.011 | 12.107 → 12.120 |
+| RX 7900 XT / 8 | 16.088 → 8.973 | 15.872 → 15.913 |
+| GTX 1650 SUPER / 1 | 21.279 → 17.485 | 22.061 → 21.331 |
+| GTX 1650 SUPER / 6 | 77.536 → 33.681 | 77.867 → 77.810 |
+| GTX 1650 SUPER / 8 | 138.840 → 106.207 | 138.991 → 139.189 |
+
+The opaque six-layer wall upper median falls from 13.663 to 8.191 ms on AMD and
+80.310 to 36.309 ms on GTX. Opaque on records exactly 1000/6000/8000 solid draws;
+masked and opaque off record zero. These are synthetic maximal-overlap whole
+frame observations. Not every tail improves: AMD one-layer wall P95 rises from
+4.579 to 5.241 ms, and low-cost masked tails vary. Splitting the shader is a
+justified solid-caster optimization, not a universal per-frame latency promise.
+Reduced fragment bindings/resources and changed discard behavior occur together;
+the data does not uniquely identify early-Z as the hardware mechanism.
+
+The integrated adapter enables this solid path, creates its optional pipelines
+only when an eligible caster actually records, and falls back after allocation
+failure. It does not add a DataModel setting or change masked/transparent shadow
+semantics. Additional parity controls include the legacy directional path and
+single-sided/mirrored and solid→mask→solid switches. An initial mixed fixture
+failed because a flanking opaque caster lay across the camera's center ray;
+alpha changes affected its visible silhouette but not the sampled receiver.
+`7f3d84e12dee9d56faa659a47dbf8f18ba4df25d` moves those solids off that ray while
+retaining the original center and bounded-region acceptance thresholds. Failed
+images and receipt remain in `GTX-worker-qualification/GTX-81b36-all-gates`.
+
+## Engine semantic attribution
+
+The original physics-backed aggregate semantic benchmark timed out at its
+240-second bound; a grouped-parent variant also timed out after emitting valid
+individual rows. Those process verdicts remain failures. The fixture constructs
+and tears down separate live DataModels as well as timing mutations, publication
+and projection; process duration cannot be attributed to the renderer loop.
+
+The explicit `--renderer-only --group-width=256` candidate fixture at `17fbb658`
+retains real Parts, authoritative setters, journal/dirty capture, publisher and
+projection. It excludes native body construction and supplies the existing
+World.Parts candidate list that body admission normally populates. Exact initial
+object and per-frame update counts are mandatory. This is a controlled candidate
+fixture, not normal physics admission or a second production scene authority.
+Physics dirty-signal bookkeeping still contributes to setter timing. Raw rows
+encode fixture shape and profile mode; aggregate rows require their invocation
+manifest. Per-frame journal/classification/accumulator values are explicitly NA
+because those counters expose only aggregate attribution.
+
+The 12-frame profile-off aggregate run reached its bound after five completed
+scenarios and flushed 60 raw frames. Its first three static 1K/10K/50K cases
+have approximately 0.001–0.002 ms incremental publication and projection means.
+The following are valid bounded measurements from its complete timed rows,
+not a claim that the aggregate process passed:
+
+| Live Part workload | Setter/dirty mean / P95, ms | Publication mean / P95, ms | Projection mean / P95, ms |
+| --- | ---: | ---: | ---: |
+| 50K, 500 changed/frame | 1.207 / 1.316 | 0.828 / 0.930 | 0.087 / 0.111 |
+| 50K, every Part changed/frame | 110.079 / 118.101 | 89.288 / 96.039 | 11.822 / 13.141 |
+
+Each row has twelve samples, not a production percentile guarantee. The
+profile-on combined run was stopped at worker lease expiry and retains its
+three static rows/36 raw samples without a completed-process receipt. The
+earlier physics-backed two-frame profiled run supplies separately labeled
+aggregate stage attribution. These are not matched on/off speedup controls.
+
+A private, unmerged scenario selector and lifecycle-marker probe at
+`4a1ffd5f96be32d1d36bd06f68ff47687a62c051` then completes both focused dynamic
+runs. Each process has twelve raw frames, exactly 600,000 updates and no
+create/remove/resync operations. Profile-off mean setter/publication/projection
+is 107.884/95.096/11.370 ms; profile-on is 116.596/95.438/11.733 ms. Profiling is
+attribution overhead, not a candidate optimization.
+
+Markers isolate 69.8–69.9 seconds constructing/adopting Parts, about 76 ms in
+initial publication, 2.59–2.70 seconds measuring twelve frames, and 0.55 seconds
+in teardown. Repeating the aggregate fixture's four 50K worlds plus 1K/10K worlds
+exceeds the 240-second process bound. The timeout was a workload-sizing issue;
+neither teardown nor native body construction alone explains it. A moved-out
+native backend does not remove live Part construction/adoption costs.
+
+The profiled publication includes 73.757 ms final-state extraction, 4.944 ms
+dirty capture, 0.271 ms dirty expansion, 5.834 ms construction and 2.929 ms
+state-cache reconciliation. These are nested/partial attribution, not a promise
+that their sum exhausts the phase. Setter aggregate attribution reports
+16.944 ms journal, 1.685 ms classification, 13.070 ms accumulator and 84.897 ms
+remaining setter work. The remainder is not attributed exclusively to one
+implementation mechanism.
+
+The large fully dynamic live-Instance cost is upstream of native GPU draw
+submission. Instancing's draw reduction does not remove setters or final-state
+publication. The renderer can support large mostly static environments while
+50K independently changed Parts per frame remain outside a qualified real-time
+end-to-end envelope. Keep typed incremental extraction/coalescing and source
+mutation costs ahead of a broad temporal/post stack in the investment order.
+
 ## Evidence and reproduction
 
 All task evidence is rooted at
@@ -163,12 +287,16 @@ Prior Foundation 4 evidence is in sibling `renderer-foundation4-20261110`.
 | Final AMD / GTX A/B/B/A | `contiguous-qualification/AMD-ad581-final-abba`, `contiguous-qualification/GTX-ad581-final-abba` |
 | Paired analysis and input hashes | `FinalAbbaAnalysis/paired-means.csv` |
 | AMD final focused depth/envelope/shadow gates | `AMD-ad581-final-focused` |
+| Admitted solid-depth runtime native gates/broad | `AMD-7f3d8-all-gates`, `AMD-7f3d8-broad`, `GTX-worker-qualification/GTX-81b36-all-gates`, `GTX-worker-qualification/GTX-7f3d8-shadows` |
 | Hundreds of local lights | `AMD-ad581-many-lights`, `GTX-worker-qualification/GTX-ad581-local-lights-v2` |
+| Engine semantic raw/failed combined run | `GTX-worker-qualification/Worker-17fbb-semantic-final`, `GTX-worker-qualification/Worker-81b36-grouped-semantic` |
+| Completed isolated semantic attribution | `semantic-case-isolation/Worker-4a1-dynamic-semantic`, `semantic-case-isolation/semantic-case-4a1ffd5f.bundle` |
 | Complete GTX focused/broad/churn/profile receipts | `GTX-worker-qualification` |
 | AMD broad/churn/profile receipts | `AMD-6363-broad`, `AMD-15d-probe-churn`, `AMD-525079-profile-controls` |
 | Record equality / rejected dense lookup | `instance-apply-microprobe`, `instance-lookup-microprobe` |
+| Solid-depth raw paired reduction and hashes | `SolidDepthCostPooled-v2`, `AMD-0e717-opaque-cost-*`, `AMD-0e717-masked-cost-*`, `GTX-worker-qualification/GTX-0e717-solid-depth-cost` |
 | Rejected BVH / proof batching | `visibility-probe`, `AMD-acf-instance-compact-ABBA` |
-| Independent source reviews | `FinalIndependentReview-ad581.md`, `M15-independent-review-0dd942b94.md`, `ShadowM5M6IndependentReview-0dd942b.md` |
+| Independent source reviews | `FinalIndependentReview-ad581.md`, `FinalIndependentReview-81b36.md`, `M15-independent-review-0dd942b94.md`, `ShadowM5M6IndependentReview-0dd942b.md` |
 | Corrected spotlight/opaque culling checks | `ValidSpotSearch-100k.txt`, `OpaqueCullingCrosscheck-525079.md` |
 
 Final source is `ad58172cbd8516c9f95ba65c223efc123d6330b7`;
@@ -177,6 +305,18 @@ manifest SHA-256 is `EF7FA15991841615D2C3DCBF9B22D0CA00D3626A9B07727617AB50325D2
 Each adapter's `source.json` stores every shader hash and Vulkan loader stderr
 identifies the physical adapter/driver DLL actually used. No software adapter
 is counted as physical evidence.
+
+The final native runtime/benchmark follow-up package is `Worker-17fbb`:
+54 members, source `17fbb658f34f3799ffc8e096497c8c95e9c61e7a`, manifest SHA-256
+`1885E269844F0AC76451FE11E1F2B8D13B6DD2071E5157DED96F91DF356E8FD4`.
+Its renderer benchmark SHA-256 is
+`BBA91C1EF12636B330D415C1620F6B6875EC930A2F739A2CB0653EAA30E84BF4`,
+semantic benchmark SHA-256 is
+`7ACAD732B58FBB6D07CD2E7A6FF075392292C4797D044518ECDB1E286E644B9B`,
+and solid-depth fragment SPIR-V SHA-256 is
+`D3A2D3F4239115D2744FC926736DF58C11AB517E1522946D23E28408A821CCD9`.
+The earlier `ad581` package remains the matched A/B/B/A package, not this later
+binary. Hosted status is also retained locally in `FinalHostedStatus-17fbb.json`.
 
 From E, with a fresh output child name, reproduce final matched controls with:
 
@@ -200,6 +340,14 @@ The cache disables precompiled headers because MSVC path mapping broke SDL's
 PCH path; this is a worker build setting, not a source workaround. Every package
 records the small Animator formatting diff produced by classgen and its hash.
 The worker lease is released only after all task-owned workloads are idle.
+
+Both worker leases are now released after an idle-process census; public
+receipts are `worker-release-106.json` and `worker-release-107.json`. Lease 106
+became overdue during an idle continuation pause; no new work was admitted
+under it. Its incomplete profiled run was stopped, reconciled and released.
+The final isolated probe used fresh generation 107. The worker checkout is
+restored to `17fbb658f`; incremental caches remain, and no task-owned process
+continues. Private probe source/binary and unsuccessful evidence remain archived.
 
 ## Historical checkpoints and failures
 

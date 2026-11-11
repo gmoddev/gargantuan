@@ -75,8 +75,8 @@ system, authored mesh LOD chain or destructive simplifier is claimed.
 
 ## Qualification and admission
 
-Runtime checkpoint `5250798037753bb9d8998576701b0ec29e78f2f4` and test checkpoint
-`ad58172cbd8516c9f95ba65c223efc123d6330b7` have physical Windows Vulkan evidence
+Runtime checkpoint `7f3d84e12dee9d56faa659a47dbf8f18ba4df25d` and matched
+performance checkpoint `ad58172cbd8516c9f95ba65c223efc123d6330b7` have physical Windows Vulkan evidence
 on RX 7900 XT and GTX 1650 SUPER. CPU tests, shader/software Vulkan and sanitizer
 lanes are recorded separately in the qualification document. Exact-pixel
 controls cover ordering, nonunit normals, positive first-instance offsets,
@@ -86,6 +86,17 @@ reimport and recovery. Two independent 4096-frame probe churn cycles per adapter
 exercise source changes, camera movement, resync, resizing and resource retirement.
 These are bounded qualification runs, not a multi-hour or universal-device claim.
 
+Solid casters now use a dedicated depth fragment shader without alpha-test
+resources. Masked casters retain alpha testing; vertex/palette, strict LESS,
+sidedness and the existing transparent-as-solid policy are shared. Native
+legacy/cascade/spot, single/double-sided, mirrored and mixed shader-switch
+comparisons preserve exact pixels. Pipelines are lazy and failed creation
+falls back to the established shader. On a synthetic 1000-caster six-layer
+opaque stress fixture, wall upper median falls from 13.66 to 8.19 ms on AMD and
+80.31 to 36.31 ms on GTX. Masked controls remain near flat. These are whole-frame
+stress measurements; the combined shader/resource change does not isolate an
+early-Z hardware mechanism or qualify point cube shadows.
+
 Final 84-run controls per adapter use A/B/B/A, 120 measured frames and 30 warmup
 frames at 1280x720 HDR with two frames admitted. At 50K static objects, contiguous
 batching records 98 world draws instead of 50,000. Mean CPU submission across
@@ -93,6 +104,15 @@ the two runs per arm falls from 14.96 to 12.56 ms on AMD and 21.46 to 11.86 ms o
 GTX. Mean per-run frame P95 falls from 21.03 to 18.43 ms and 28.99 to 17.07 ms,
 respectively. The frame P95 for 50K fully dynamic objects worsens on both
 adapters; fewer draws alone do not qualify a speedup.
+
+Separate live-Part semantic measurements also expose a backend-independent
+limit: changing all 50K Parts costs roughly 110 ms in setters/dirty callbacks,
+89 ms in publication and 12 ms in projection in a bounded candidate fixture.
+Changing 500 of those Parts is about 1.21/0.83/0.09 ms. These CPU measurements
+are separate from native draw submission and exclude native body construction;
+the fixture's count gates and timeout scope are recorded in the qualification
+ledger. Large fully dynamic live-Instance authoring is not a qualified real-time
+use case simply because static draws batch efficiently.
 
 Instancing remains opt-in. It is a qualified foundation for selected homogeneous
 rigid workloads, not a universal default. The first coverage-proof approach is

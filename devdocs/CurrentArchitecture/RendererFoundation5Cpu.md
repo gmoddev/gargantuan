@@ -144,3 +144,30 @@ results determine performance admission. The pinned SDL public API supplies no
 GPU execution timestamps; full-frame fence and readback clocks remain host
 measurements. Calling-thread C++ allocation requests use a separate benchmark
 binary and exclude SDL/driver C allocations and other threads.
+
+## Live semantic envelope
+
+Backend submission controls deliberately start from immutable publications.
+They do not include the cost of changing live Instances. The separately tagged
+Engine fixture at `17fbb658f34f3799ffc8e096497c8c95e9c61e7a` measures real setters,
+journal/dirty capture, publisher and projection with exact object/update gates.
+Its renderer-only candidate mode excludes native body construction while
+preserving physics dirty callbacks; it is not a physics-admission test.
+
+Twelve completed raw frames of 50K Parts with 500 changes/frame measure roughly
+1.21 ms setter/dirty, 0.83 ms publication and 0.09 ms projection. Changing all
+50K measures roughly 110.08, 89.29 and 11.82 ms respectively. The aggregate
+process timed out outside the already flushed measurements; its process verdict
+remains failed. Full source/fixture tags, bounded percentiles and separate
+profile attribution are in `../Validation/RendererFoundation5Qualification.md`.
+These costs prevent treating the native 50K draw win as a real-time guarantee
+for 50K live independently changed Parts.
+
+The subsequently completed private scenario-isolation probe at `4a1ffd5f`
+corroborates the dynamic limit with twelve successful frames per profile arm:
+107.88 ms setter/dirty, 95.10 ms publication and 11.37 ms projection with
+profiling off. Profile attribution measures 73.76 ms final-state extraction.
+Lifecycle markers identify about 70 seconds constructing/adopting each 50K
+fixture and only 0.55 seconds tearing it down. Repeated setup exceeds the
+aggregate runner's 240-second bound; no production physics change is justified
+by that timeout. The selector/markers stay in a reproducible private probe.
