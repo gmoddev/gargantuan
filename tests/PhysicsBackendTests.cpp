@@ -50,6 +50,11 @@ namespace gargantuan {
 			Part.PublishedPhysicsState.Description.Anchored = true;
 			World.FullDynamicReadbackNeeded = true;
 		}
+		static void InvalidateDynamicReadbackBody(WorldRoot &World, ObjectId Object) {
+			auto Found = World.DynamicReadbackPositions.find(Object);
+			if (Found != World.DynamicReadbackPositions.end())
+				World.DynamicReadback[Found->second].Body = {};
+		}
 		static const std::vector<std::shared_ptr<BasePart>> &OrderedParts(const WorldRoot &World) { return World.Parts; }
 		static std::size_t ConstraintCount(const WorldRoot &World) { return World.ConstraintJoints.size(); }
 		static PhysicsBodyId Body(const WorldRoot &World, const BasePart &Part) {
@@ -1463,6 +1468,32 @@ namespace {
 			"unavailable state fallback restores accepted dynamic mode and rebuilt view");
 	}
 
+	void TestDynamicReadbackRepairsDetectedMismatchSameStep() {
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+		if (!Workspace) return;
+		Workspace->SetGravity(9.8f);
+		auto Moving = std::make_shared<Part>();
+		Moving->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
+		Moving->SetCanCollide(false);
+		Moving->SetCanTouch(false);
+		Moving->SetParent(Workspace);
+		Moving->SetAwake(true);
+		Workspace->StepPhysics(0.0, std::nullopt);
+		const auto Object = Moving->GetObjectId();
+		Check(WorldRootTestAccess::HasDynamicReadback(*Workspace, Object),
+			"dynamic body is indexed before mismatch injection");
+		WorldRootTestAccess::InvalidateDynamicReadbackBody(*Workspace, Object);
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		const auto State = WorldRootTestAccess::State(*Workspace,
+			WorldRootTestAccess::Body(*Workspace, *Moving));
+		Check(State && State->LinearVelocity.y < -0.01f &&
+			Near(Moving->GetLinearVelocity().y, State->LinearVelocity.y) &&
+			WorldRootTestAccess::HasDynamicReadback(*Workspace, Object) &&
+			!WorldRootTestAccess::FullDynamicReadbackNeeded(*Workspace),
+			"detected readback mismatch refreshes script-visible state and index in the same fixed step");
+	}
+
 	void TestBodyDynamicsAndCollisionGroups() {
 		using namespace gargantuan;
 		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
@@ -2402,6 +2433,7 @@ int main() {
 	TestDynamicReadbackLifecycle();
 	TestDynamicReadbackFallbackParity();
 	TestDynamicReadbackRestoresAcceptedMode();
+	TestDynamicReadbackRepairsDetectedMismatchSameStep();
 	TestBodyDynamicsAndCollisionGroups();
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();

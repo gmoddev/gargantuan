@@ -249,7 +249,7 @@ namespace gargantuan {
 					if (State->Description.Anchored) FullDynamicReadbackNeeded = true;
 				} else FullDynamicReadbackNeeded = true;
 			}
-			return;
+			if (!FullDynamicReadbackNeeded) return;
 		}
 
 		// Fallback reads the accepted backend state in the original Parts order.
