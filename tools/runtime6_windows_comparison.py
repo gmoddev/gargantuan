@@ -58,7 +58,7 @@ def Hash(File):
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "dirty_epoch", "luau", "luau_diag", "attribution", "compact_large", "readback_large", "readback_recheck", "cframe_allocation"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "readback_selective", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "dirty_epoch", "luau", "luau_diag", "attribution", "compact_large", "readback_large", "readback_recheck", "cframe_allocation"), default="core")
 Parser.add_argument("--comparison-directory", default="comparison")
 Parser.add_argument("--verify-only", action="store_true")
 Args = Parser.parse_args()
@@ -254,6 +254,24 @@ if Args.suite == "attribution":
                 ["12", f"--count={Count}", "--density-matrix", "--group-width=256",
                  "--split-construction", "--diagnostic-marks", "--profile",
                  f"--samples={Samples}"])
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
+
+if Args.suite == "readback_selective":
+    # Include the observed dense-churn loss, sparse-world wins and both sides
+    # of the candidate's activation boundary, without changing any fixture.
+    Cases = [(Static, Dynamic, Density, Lifecycle)
+             for Static, Dynamic in ((0, 1000), (900, 100), (9872, 128), (49872, 128))
+             for Density in ("0", "0.01", "1") for Lifecycle in (0, 1, 16)]
+    Cases += [(8063, 128, "1", 1), (8064, 128, "1", 1),
+              (7168, 1024, "1", 16), (7167, 1025, "1", 16),
+              (0, 8192, "1", 16)]
+    for Static, Dynamic, Density, Lifecycle in Cases:
+        for Arm in ("baseline", "candidate", "candidate", "baseline"):
+            Run(Arm, f"readback-selective-{Static}-{Dynamic}-{Density}-{Lifecycle}",
+                "gargantuan_runtime6_physics_sync_benchmark",
+                ["--static-count", str(Static), "--dynamic-count", str(Dynamic),
+                 "--frames", "30", "--warmup", "4", "--control-density", Density,
+                 "--lifecycle-per-frame", str(Lifecycle), "--publication"])
     raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite == "readback_recheck":
