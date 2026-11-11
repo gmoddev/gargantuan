@@ -51,6 +51,15 @@ New-Item -ItemType Directory -Path $EvidenceRoot | Out-Null
 & cl /Bv 2>&1 | Set-Content -LiteralPath (Join-Path $EvidenceRoot 'compiler.txt')
 & cmake --version | Set-Content -LiteralPath (Join-Path $EvidenceRoot 'cmake.txt')
 & ninja --version | Set-Content -LiteralPath (Join-Path $EvidenceRoot 'ninja.txt')
+if ($env:SCCACHE_GHA_ENABLED -cne 'on' -or -not (Get-Command sccache.exe -ErrorAction SilentlyContinue)) {
+    throw '[Runtime6:WindowsCompare] Pinned sccache action was not initialized'
+}
+$CompilerDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Get-Command cl.exe).Source).Hash.ToLowerInvariant()
+$ImageIdentity = if ($env:ImageVersion) { $env:ImageVersion } else {
+    [Runtime.InteropServices.RuntimeInformation]::OSDescription
+}
+& sccache --version | Set-Content -LiteralPath (Join-Path $EvidenceRoot 'sccache-version.txt')
+if ($LASTEXITCODE -ne 0) { throw '[Runtime6:WindowsCompare] Pinned sccache is unavailable' }
 
 function Invoke-Checked([string] $Label, [string] $Log, [scriptblock] $Command) {
     Write-Host "[Runtime6:WindowsCompare] $Label"
@@ -77,6 +86,22 @@ try {
             throw "[Runtime6:WindowsCompare] Inexact submodule state: $Arm"
         }
         $Submodules | Set-Content -LiteralPath (Join-Path $ArmRoot 'submodules.txt')
+        # The GHA cache stores compiler outputs, never build trees. The digest keeps
+        # a compiler/image/dependency/profile namespace stable across source edits.
+        $CacheMaterial = (@('runtime6-win25-vs2026-msvc-release-pch-off-gns-off-v1',
+            $ImageIdentity, $CompilerDigest, $Workspace) + $Submodules) -join "`n"
+        $CacheDigest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+            [Text.Encoding]::UTF8.GetBytes($CacheMaterial))).ToLowerInvariant()
+        $env:SCCACHE_GHA_VERSION = "runtime6-win25-msvc-$($CacheDigest.Substring(0, 32))"
+        # A daemon reads its backend configuration at startup. Give each arm a
+        # separate local endpoint even when their dependency revisions differ.
+        $env:SCCACHE_SERVER_PORT = if ($Arm -eq 'baseline') { '4246' } else { '4247' }
+        $env:SCCACHE_BASEDIRS = $Workspace
+        $env:SCCACHE_CACHE_READ_TIMEOUT_SECS = '15'
+        "image=$ImageIdentity`ncompilerSha256=$CompilerDigest`nnamespace=$env:SCCACHE_GHA_VERSION`nprofile=Release;PCH=OFF;GNS=OFF" |
+            Set-Content -LiteralPath (Join-Path $ArmRoot 'sccache-namespace.txt')
+        & sccache --zero-stats | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "[Runtime6:WindowsCompare] sccache did not start for $Arm" }
         Invoke-Checked "$Arm classgen" (Join-Path $ArmRoot 'classgen.log') { & lute tools/classgen -f }
         & git diff --binary | Set-Content -LiteralPath (Join-Path $ArmRoot 'generated.patch')
         if ($LASTEXITCODE -ne 0) { throw "[Runtime6:WindowsCompare] Generated diff failed: $Arm" }
@@ -86,6 +111,7 @@ try {
             '-DGARGANTUAN_WITH_GNS=OFF', '-DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON',
             '-DGARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE=ON',
             '-DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF',
+            '-DCMAKE_C_COMPILER_LAUNCHER=sccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache',
             "-DGARGANTUAN_GLSLC_EXECUTABLE=$ShaderCompiler")
         Invoke-Checked "$Arm configure" (Join-Path $ArmRoot 'configure.log') { & cmake @Configure }
         $Targets = @('gargantuan_runtime_foundation6_benchmark',
@@ -106,6 +132,9 @@ try {
         Invoke-Checked "$Arm build" (Join-Path $ArmRoot 'build.log') {
             & cmake --build $BuildRoot --config Release --parallel 3 --target @Targets
         }
+        & sccache --show-stats | Set-Content -LiteralPath (Join-Path $ArmRoot 'sccache-stats.txt')
+        if ($LASTEXITCODE -ne 0) { throw "[Runtime6:WindowsCompare] sccache stats unavailable for $Arm" }
+        & sccache --stop-server | Set-Content -LiteralPath (Join-Path $ArmRoot 'sccache-stop.txt')
         $Tests = @('gargantuan_foundation', 'gargantuan_prepared_property',
             'gargantuan_renderer_publication', 'gargantuan_physics_backend',
             'gargantuan_runtime_foundation6_smoke', 'gargantuan_runtime6_extraction_alternatives',
