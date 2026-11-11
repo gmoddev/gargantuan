@@ -1,8 +1,6 @@
 name: Runtime Foundation 6 CPU comparison
 
 on:
-  push:
-    branches: [experiment/runtime6-evaluation]
   workflow_dispatch:
     inputs:
       baseline_source:
@@ -27,7 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      BASELINE_SOURCE: ${{ inputs.baseline_source || '676a952b0cee5eb78ffd27df97b1876393ae6f1f' }}
+      BASELINE_SOURCE: ${{ inputs.baseline_source || '9fe8ead97759f4f9a639102c3695ba51b0090d57' }}
       CANDIDATE_SOURCE: ${{ inputs.candidate_source || github.sha }}
       COMPARISON_SUITE: ${{ inputs.suite || 'core' }}
     steps:
