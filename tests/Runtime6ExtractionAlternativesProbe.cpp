@@ -331,7 +331,7 @@ int main(int ArgCount, char **Args) {
 			const auto VerifyMs = Milliseconds(Clock::now() - VerifyStart);
 			Dirty.Acknowledge(Batch);
 			std::cout << Frame << ',' << Count << ',' << Changed << ',' << Lifecycle << ',' << Order << ','
-				Objects.size()
+				<< Objects.size()
 				<< ',' << std::fixed << std::setprecision(6) << SetterMs << ',' << CaptureMs << ','
 				<< DirectMs << ',' << SoASyncMs << ',' << SoAConsumeMs << ','
 				<< SnapshotSyncMs << ',' << SnapshotConsumeMs << ',' << VerifyMs << '\n' << std::flush;
