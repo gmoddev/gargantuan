@@ -185,6 +185,10 @@ int main() try {
 	const auto AfterPole = LightPlaneX({-0.000001f, 1, 0});
 	Require(glm::dot(BeforePole, AfterPole) > 0.999f,
 		"spotlight light plane jumped at the positive Y pole");
+	const auto BeforeNegativePole = LightPlaneX({0.000001f, -1, 0});
+	const auto AfterNegativePole = LightPlaneX({-0.000001f, -1, 0});
+	Require(glm::dot(BeforeNegativePole, AfterNegativePole) > 0.999f,
+		"spotlight light plane jumped at the negative Y pole");
 	std::cout << "[Render:SpotShadowAtlas] Budget, stable assignment and lifetime passed\n";
 	return 0;
 } catch (const std::exception &Error) {
