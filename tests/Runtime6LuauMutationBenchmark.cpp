@@ -25,6 +25,10 @@
 namespace {
 	using namespace gargantuan;
 	using Clock = std::chrono::steady_clock;
+	struct TeardownMarker {
+		const char *Phase;
+		~TeardownMarker() { std::cerr << "[Runtime:LuauMutation] teardown=" << Phase << '\n' << std::flush; }
+	};
 
 	struct Options {
 		std::size_t Count = 1000;
@@ -183,11 +187,13 @@ int main(int ArgumentCount, char **Arguments) {
 	try {
 		const auto Config = Parse(ArgumentCount, Arguments);
 		BootstrapNativeRuntimeSchema();
+		TeardownMarker AfterGame{"after-game"};
 		auto Game = std::make_shared<DataModel>();
 		auto World = Game->GetService("Workspace");
 		auto FolderValue = std::make_shared<Folder>();
 		FolderValue->SetName("MutationParts");
 		FolderValue->SetParent(World);
+		TeardownMarker AfterParts{"after-parts"};
 		std::vector<std::shared_ptr<Part>> Parts;
 		Parts.reserve(Config.Count);
 		for (std::size_t Index = 1; Index <= Config.Count; ++Index) {
@@ -198,6 +204,7 @@ int main(int ArgumentCount, char **Arguments) {
 			Parts.push_back(std::move(Value));
 		}
 		std::vector<std::string> Diagnostics;
+		TeardownMarker AfterEngine{"after-engine"};
 		ScriptEngine Engine(Game, [&](std::string Severity, std::string Message) {
 			if (Severity == "Error") Diagnostics.push_back(std::move(Message));
 		});
@@ -205,6 +212,7 @@ int main(int ArgumentCount, char **Arguments) {
 		lua_setglobal(Engine.L, "BenchmarkProperty");
 		lua_pushinteger(Engine.L, static_cast<lua_Integer>(Config.Listeners));
 		lua_setglobal(Engine.L, "BenchmarkListeners");
+		TeardownMarker AfterScript{"after-script"};
 		auto ScriptValue = std::make_shared<Script>();
 		ScriptValue->SetName("MutationHarness");
 		ScriptValue->SetSource(std::string(Source));
@@ -259,6 +267,7 @@ int main(int ArgumentCount, char **Arguments) {
 		const auto BeforeValue = Parts.front()->ReadPropertyWireValue(Config.Property);
 		const auto BeforeCFrame = Parts.front()->ReadPropertyWireValue("CFrame");
 		std::size_t RejectedSignalCount = 0;
+		TeardownMarker AfterConnections{"after-native-connections"};
 		auto CFrameConnection = Parts.front()->GetPropertyChangedSignal("CFrame")->Connect(
 			[&](std::monostate) { ++RejectedSignalCount; });
 		auto ColorConnection = Parts.front()->GetPropertyChangedSignal("Color")->Connect(
@@ -306,6 +315,10 @@ int main(int ArgumentCount, char **Arguments) {
 			Journal.CreateCursor(Scope).NextSequence == BeforeNested.NextSequence + 2,
 			"nested script mutation did not append CFrame then Color exactly once");
 		std::cerr << "[Runtime:LuauMutation] validation=pass denied=1 invalid=1 readonly=1 reentrant=1\n";
+		std::cerr << "[Runtime:LuauMutation] teardown=before-final-gc\n" << std::flush;
+		lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+		std::cerr << "[Runtime:LuauMutation] teardown=after-final-gc\n" << std::flush;
+		TeardownMarker BeginTeardown{"begin-locals"};
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Runtime:LuauMutation] " << Error.what() << '\n';
