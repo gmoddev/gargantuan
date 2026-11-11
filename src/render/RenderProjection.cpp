@@ -534,7 +534,14 @@ namespace gargantuan {
 			}
 		}
 
-		const bool InvalidateCompactTraversal = CompactTraversalValid && (Publication.FullResync || !Publication.Creates.empty() ||
+		bool MeshBindingChanged = false;
+		if (CompactTraversalValid) for (std::size_t Index = 0; Index < Publication.Updates.size(); ++Index)
+			if (UpdatedEntryScratch[Index]->Mesh != Publication.Updates[Index].Mesh) {
+				MeshBindingChanged = true;
+				break;
+			}
+		const bool InvalidateCompactTraversal = CompactTraversalValid && (MeshBindingChanged ||
+			Publication.FullResync || !Publication.Creates.empty() ||
 			!Publication.Removes.empty() || !Publication.MeshCreates.empty() || !Publication.MeshRemoves.empty() ||
 			!Publication.AnimationPoseRemoves.empty() || std::ranges::any_of(Publication.AnimationPoseUpdates,
 				[&](const RenderAnimationPoseUpdate &Update) { return !AnimationPoses.contains(Update.Object); }));
@@ -555,7 +562,9 @@ namespace gargantuan {
 		}
 		for (const auto &Remove : Publication.Removes) { Entries.erase(Remove.Object); ++Changes.Removed; }
 		for (const auto &Remove : Publication.MeshRemoves) { Meshes.erase(Remove.Mesh); ++Changes.MeshesRemoved; }
-		Entries.reserve(Entries.size() + Publication.Creates.size());
+		// reserve(size) may shrink and rehash an unchanged map on libstdc++.
+		// The compact traversal mirrors map iteration and is retained on value-only updates.
+		if (!Publication.Creates.empty()) Entries.reserve(Entries.size() + Publication.Creates.size());
 		for (const auto &Create : Publication.Creates) {
 			Entries.emplace(Create.Item.Object, RenderProjectedObject{
 				Create.Item, Create.Mesh, Create.Material, Create.Visible, Create.Primitives

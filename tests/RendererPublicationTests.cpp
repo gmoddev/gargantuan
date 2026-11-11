@@ -174,12 +174,14 @@ namespace {
 		(void)Projection.Apply(Initial);
 		MirrorsMap();
 		const auto *StableData = Projection.GetCompactTraversal().data();
+		const auto StableBuckets = Projection.GetObjects().bucket_count();
 		RenderPublication Move{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
 		Move.Updates.push_back({{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1}, 4.0f)});
 		(void)Projection.Apply(Move);
-		Check(Projection.GetCompactTraversal().data() == StableData &&
+		Check(Projection.GetObjects().bucket_count() == StableBuckets &&
+			Projection.GetCompactTraversal().data() == StableData &&
 			Projection.GetItem({10, 1})->ModelMatrix[3].x == 4.0f,
-			"in-place transform updates retain compact traversal pointers");
+			"in-place transform updates retain map order and compact traversal pointers");
 		MirrorsMap();
 		RenderPublication Grow{.Id = 3, .BaseId = 2, .Frame = MakeFrame()};
 		for (std::uint32_t Slot = 20; Slot < 200; ++Slot) Grow.Creates.push_back({MakeItem({Slot, 1})});
@@ -216,6 +218,16 @@ namespace {
 		Check(Projection.GetCompactTraversal().front().MeshBounds == StableBounds &&
 			StableBounds->Maximum.x == 2.0f,
 			"in-place mesh bounds updates retain a live compact traversal pointer");
+		const RenderMeshIdentity OtherMesh{8, 1};
+		RenderPublication Rebind{.Id = 103, .BaseId = 102, .Frame = MakeFrame()};
+		Rebind.MeshCreates.push_back({OtherMesh, 1, 1, Vertices, Indices,
+			{glm::vec3(-4.0f), glm::vec3(4.0f)}});
+		Rebind.Updates.push_back({{90, 2}, RenderUpdateDomain::Geometry, MakeItem({90, 2}), OtherMesh});
+		(void)Projection.Apply(Rebind);
+		MirrorsMap();
+		Check(Projection.GetCompactTraversal().front().MeshBounds == Projection.GetMeshBounds(OtherMesh) &&
+			Projection.GetCompactTraversal().front().MeshBounds->Maximum.x == 4.0f,
+			"mesh rebinding refreshes cached bounds identity");
 		Projection.Clear();
 		Check(Projection.GetCompactTraversal().empty(), "clearing projection retires compact traversal pointers");
 	}
