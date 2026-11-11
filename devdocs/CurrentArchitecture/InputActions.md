@@ -183,7 +183,12 @@ are outside that handle table and remain under their normal Instance ownership.
 The adapter marks itself stopping before it fires any native binding destruction
 or action transition callbacks. Reentrant Bind calls then return the invalid
 zero handle without constructing a new definition; repeated reset keeps the
-stopping gate and cannot reopen admission.
+stopping gate. A later Engine attachment to the same live DataModel reopens
+facade admission only after the previous binding table is empty and the
+canonical input state has been reset and seeded from physical input. An
+interrupted teardown with remaining handles rejects attachment. New handles
+continue the previous ID sequence, so a retired handle cannot name a binding
+from a later Engine. Directly authored definitions remain under InputService.
 
 Pressed/admitted state, action values, diagnostics and transitions are local,
 transient and absent from authoring revisions, persistence and replication.

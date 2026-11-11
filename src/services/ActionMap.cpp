@@ -66,35 +66,42 @@ namespace gargantuan {
 		return Service;
 	}
 	void ActionMap::AttachInputService(const std::shared_ptr<UserInputService> &Physical) {
+		const bool Reopening = RuntimeStopping;
+		if (Reopening && !Bindings.empty())
+			throw std::logic_error("[Input:ActionMap] Cannot attach after incomplete runtime shutdown");
 		auto Service = GetInput();
 		Service->Reset();
-		if (!Physical) return;
 		// Seed the existing physical authority once. Marking these samples consumed
 		// records held state without inventing a fresh press for authored actions.
-		for (const auto &Input : Physical->GetKeysPressed()) {
-			if (!Input) continue;
-			(void)Service->ProcessEvent(
-				KeyEvent{.Logical = static_cast<LogicalKey>(Input->GetKeyCode()), .State = ButtonState::Pressed}, true
-			);
-		}
-		for (const auto &Input : Physical->GetMouseButtonsPressed()) {
-			if (!Input) continue;
-			PointerButton Button;
-			switch (Input->GetUserInputType()) {
-			case Enums::UserInputType::MouseButton1:
-				Button = PointerButton::Left;
-				break;
-			case Enums::UserInputType::MouseButton2:
-				Button = PointerButton::Right;
-				break;
-			case Enums::UserInputType::MouseButton3:
-				Button = PointerButton::Middle;
-				break;
-			default:
-				continue;
+		if (Physical) {
+			for (const auto &Input : Physical->GetKeysPressed()) {
+				if (!Input) continue;
+				(void)Service->ProcessEvent(
+					KeyEvent{.Logical = static_cast<LogicalKey>(Input->GetKeyCode()), .State = ButtonState::Pressed}, true
+				);
 			}
-			(void)Service->ProcessEvent(PointerButtonEvent{.Button = Button, .State = ButtonState::Pressed}, true);
+			for (const auto &Input : Physical->GetMouseButtonsPressed()) {
+				if (!Input) continue;
+				PointerButton Button;
+				switch (Input->GetUserInputType()) {
+				case Enums::UserInputType::MouseButton1:
+					Button = PointerButton::Left;
+					break;
+				case Enums::UserInputType::MouseButton2:
+					Button = PointerButton::Right;
+					break;
+				case Enums::UserInputType::MouseButton3:
+					Button = PointerButton::Middle;
+					break;
+				default:
+					continue;
+				}
+				(void)Service->ProcessEvent(PointerButtonEvent{.Button = Button, .State = ButtonState::Pressed}, true);
+			}
 		}
+		// Keep teardown admission closed through reset and native transition
+		// callbacks. Only a completely retired adapter can start a new runtime.
+		if (Reopening) RuntimeStopping = false;
 	}
 
 	std::shared_ptr<InputContext> ActionMap::GetLegacyContext() {
