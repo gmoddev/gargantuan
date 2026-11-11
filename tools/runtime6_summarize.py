@@ -185,8 +185,13 @@ def GroupRows(Rows, Binary):
 
 
 def FileByBasename(Comparison, Name):
-    File = Comparison / Path(Name).name
+    File = Comparison / str(Name).replace("\\", "/").rsplit("/", 1)[-1]
     return File if File.is_file() else None
+
+
+def ExecutableName(Command):
+    Name = str(Command).replace("\\", "/").rsplit("/", 1)[-1]
+    return Name[:-4] if Name.lower().endswith(".exe") else Name
 
 
 def Summarize(Evidence):
@@ -201,7 +206,7 @@ def Summarize(Evidence):
         Source = Sources[Arm]["source"]
         if Receipt["source"] != Source:
             raise ValueError(f"[Runtime6:Summarize] Source mismatch at receipt {Index}")
-        Binary = Path(Receipt["command"][0]).name
+        Binary = ExecutableName(Receipt["command"][0])
         Status = "timeout" if Receipt["timeout"] else ("ok" if Receipt["exit"] == 0 else "failed")
         Run = {"receiptIndex": Index, "label": Label, "arm": Arm, "source": Source,
                "binary": Binary, "command": Receipt["command"], "status": Status,
@@ -213,6 +218,12 @@ def Summarize(Evidence):
                               ResourceFile.read_text(encoding="utf-8", errors="replace"))
             if Match:
                 Run["resources"]["maxResidentKiB"] = int(Match.group(1))
+        if "memoryStatus" in Receipt:
+            Run["resources"]["memoryStatus"] = Receipt["memoryStatus"]
+        PeakBytes = Receipt.get("peakWorkingSetBytes")
+        if (Receipt.get("memoryStatus") == "measured" and isinstance(PeakBytes, (int, float))
+                and not isinstance(PeakBytes, bool) and math.isfinite(PeakBytes) and PeakBytes > 0):
+            Run["resources"]["peakWorkingSetKiB"] = PeakBytes / 1024.0
         if Status != "ok":
             Failures[(Label, Arm, Status)] = Failures.get((Label, Arm, Status), 0) + 1
             Runs.append(Run)
@@ -276,9 +287,14 @@ def Summarize(Evidence):
                   for Group in Combined.values()]
     Memory = {}
     for Run in Runs:
-        Value = Run["resources"].get("maxResidentKiB")
-        if Run["status"] == "ok" and Value is not None:
-            Group = Memory.setdefault((Run["label"], Run["arm"]), {"receiptIndices": [], "values": []})
+        if Run["status"] != "ok":
+            continue
+        for Metric in ("maxResidentKiB", "peakWorkingSetKiB"):
+            Value = Run["resources"].get(Metric)
+            if Value is None:
+                continue
+            Group = Memory.setdefault((Run["label"], Run["arm"], Metric),
+                                      {"receiptIndices": [], "values": []})
             Group["receiptIndices"].append(Run["receiptIndex"])
             Group["values"].append(Value)
     Abba = []
@@ -304,9 +320,9 @@ def Summarize(Evidence):
                      "statuses": [Run["status"] for Run in Quartet], "drift": Drift})
     return {"format": "runtime6-summary-v1", "sources": Sources, "receiptCount": len(Receipts),
             "runs": Runs, "aggregates": Aggregates,
-            "memoryKiB": [{"label": Label, "arm": Arm,
+            "memoryKiB": [{"label": Label, "arm": Arm, "metric": Metric,
                            "receiptIndices": Group["receiptIndices"], "stats": Stats(Group["values"])}
-                          for (Label, Arm), Group in sorted(Memory.items())],
+                          for (Label, Arm, Metric), Group in sorted(Memory.items())],
             "failures": [{"label": Label, "arm": Arm, "status": Status, "count": Count}
                          for (Label, Arm, Status), Count in sorted(Failures.items())], "abba": Abba}
 
