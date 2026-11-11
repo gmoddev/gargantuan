@@ -409,7 +409,7 @@ namespace {
 			<< " 36-index double-sided cube draws per layer.\n"
 			<< "caster_material=" << (OpaqueMaterial ? "opaque" : "masked") << '\n'
 			<< "solid_depth_experiment=" << (SolidDepthExperiment ? "on" : "off") << '\n'
-			"Six orthogonal 90-degree spot cones approximate cube faces; no production point-shadow path is used.\n"
+			<< "Six orthogonal 90-degree spot cones approximate cube faces; no production point-shadow path is used.\n"
 			"All cube casters overlap the light origin: synthetic maximal per-face geometry workload, not a typical scene.\n"
 			"All workloads allocate the production eight-layer atlas (32 MiB logical); active layers touch 4, 24 or 32 MiB.\n"
 			"CPU recording and submission are host clocks. Fence wait includes the entire rendered frame, not a GPU timestamp.\n";
