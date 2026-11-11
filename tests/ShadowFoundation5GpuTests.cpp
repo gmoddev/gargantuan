@@ -439,9 +439,11 @@ namespace {
 			bool Mirrored = false;
 			bool Spot = false;
 			bool SingleSided = false;
+			bool Cascades = true;
 		};
 		const std::array Cases{
 			Case{"opaque-directional", RenderOpacityMode::Opaque},
+			Case{"opaque-legacy-directional", RenderOpacityMode::Opaque, false, false, false, false, false},
 			Case{"transparent-solid-directional", RenderOpacityMode::Transparent},
 			Case{"masked-solid-directional", RenderOpacityMode::Masked},
 			Case{"masked-cutout-directional", RenderOpacityMode::Masked, true},
@@ -451,7 +453,7 @@ namespace {
 		int MaskedSolidCenter = -1;
 		int MaskedCutoutCenter = -1;
 		for (const auto &Test : Cases) {
-			auto Publication = Scene(1, true, true, Test.Spot);
+			auto Publication = Scene(1, true, Test.Cascades, Test.Spot);
 			auto &Caster = Publication->Creates.back();
 			Caster.Material.OpacityMode = Test.Opacity;
 			Caster.Material.DoubleSided = !Test.SingleSided;
