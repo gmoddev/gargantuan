@@ -6905,6 +6905,36 @@ namespace {
 		lua_close(L);
 	}
 
+	void TestScriptCoroutineRegistryRoot() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto ScriptValue = std::make_shared<Script>();
+		ScriptValue->SetName("RegistryRootProbe");
+		ScriptValue->SetSource("local Result = 42");
+		ScriptValue->SetParent(Game);
+		{
+			ScriptEngine Engine(Game);
+			lua_pushinteger(Engine.L, 777);
+			const auto IncomingTop = lua_gettop(Engine.L);
+			Engine.RunBootstrapScript(ScriptValue);
+			Check(ScriptValue->Status == ScriptStatus::Finished && ScriptValue->Thread &&
+				ScriptValue->ThreadReference != LUA_NOREF,
+				"finished Script retains a rooted coroutine");
+			Check(lua_gettop(Engine.L) == IncomingTop && lua_tointeger(Engine.L, -1) == 777,
+				"Script execution preserves the caller's main Luau stack");
+			const auto Thread = ScriptValue->Thread;
+			lua_settop(Engine.L, 0);
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			lua_getref(Engine.L, ScriptValue->ThreadReference);
+			Check(lua_type(Engine.L, -1) == LUA_TTHREAD && lua_tothread(Engine.L, -1) == Thread,
+				"Script coroutine remains registry-rooted after main-stack reset and full GC");
+			lua_pop(Engine.L, 1);
+		}
+		Check(ScriptValue->Thread == nullptr && ScriptValue->ThreadReference == LUA_NOREF,
+			"ScriptEngine teardown releases the rooted coroutine before closing Luau");
+		Game->Destroy();
+	}
+
 	void TestLuauEmbeddingCompatibility() {
 		using namespace gargantuan;
 		static_assert(LUA_VECTOR_DOUBLE == 0);
@@ -7540,6 +7570,7 @@ int main() {
 	TestEditorHostProtocol();
 	TestEditorHostPropertyBatch();
 	TestLuauExceptionBoundary();
+	TestScriptCoroutineRegistryRoot();
 	TestLuauEmbeddingCompatibility();
 	TestPlayDiagnosticBounds();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
