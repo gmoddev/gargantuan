@@ -28,12 +28,17 @@ namespace gargantuan {
 	}
 
 	void Script::Cleanup() {
+		if (Resuming) {
+			CleanupAfterResume = true;
+			return;
+		}
 		if (Thread && ThreadReference != LUA_NOREF && ThreadReference != LUA_REFNIL) {
 			auto L = lua_mainthread(Thread);
 			lua_unref(L, ThreadReference);
 		}
 		ThreadReference = LUA_NOREF;
 		Thread = nullptr;
+		CleanupAfterResume = false;
 	}
 
 	bool Script::ShouldStep() {
@@ -80,7 +85,31 @@ namespace gargantuan {
 			return Status;
 		}
 
-		auto status = lua_resume(Thread, L, 0);
+		// Property writes and Destroying callbacks can request cleanup from inside
+		// this coroutine. Keep its registry root until lua_resume has returned.
+		auto *RunningThread = Thread;
+		Resuming = true;
+		int status;
+		try {
+			status = lua_resume(RunningThread, L, 0);
+		} catch (...) {
+			Resuming = false;
+			if (CleanupAfterResume) Cleanup();
+			throw;
+		}
+		Resuming = false;
+		if (status != LUA_YIELD && status != LUA_BREAK && status != LUA_OK) {
+			const auto *Message = lua_tostring(RunningThread, -1);
+			ErrorMessage = Message ? Message : "Luau execution failed";
+		}
+		if (CleanupAfterResume) {
+			// A disable followed by enable requests a fresh Idle run. A destroyed
+			// Script cannot restart, even if it completed before cleanup.
+			if (GetDestroyed() || IsDestroying() || Status == ScriptStatus::Running)
+				Status = ScriptStatus::Disabled;
+			Cleanup();
+			return Status;
+		}
 		switch (status) {
 		case LUA_YIELD:
 		case LUA_BREAK:
@@ -93,7 +122,6 @@ namespace gargantuan {
 
 		default:
 			Status = ScriptStatus::Error;
-			ErrorMessage = lua_tostring(Thread, -1);
 			break;
 		}
 
