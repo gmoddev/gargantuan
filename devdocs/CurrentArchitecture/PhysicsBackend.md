@@ -263,6 +263,20 @@ result is published through the ordinary authoritative `SetCFrame` path. A
 narrow publication guard prevents that physics-authored write from being queued
 back into the backend. Fuzzy equality suppresses no-op publication.
 
+The experimental selective readback path retains the ordered Part list and
+authoritative backend state. `WorldRoot` counts tracked bodies from accepted
+create/update state and removal, without a new backend API. An unavailable
+state makes that count unknown and selects an ordered backend read to recover
+it. At a fixed-step safe point, a world with at least 8,192 Parts and no more
+than one-eighth accepted dynamic bodies may build a derived dynamic-only
+readback view. Once active, it retires that view below 4,096 Parts or above
+one-quarter dynamic bodies; smaller or denser worlds use ordered readback and
+retain no derived index. The gap limits threshold flapping. Identity, body
+generation, weak lifetime, and accepted motion mode are checked before using
+each entry. A mismatch or allocation failure falls back to an ordered read in
+the same step and retries rebuilding later. These thresholds are provisional
+benchmark policy, not an engine guarantee or solver behavior change.
+
 This is the current authoritative transform model. It does not yet distinguish
 server physics, replicated transforms, prediction, or developer ownership.
 
