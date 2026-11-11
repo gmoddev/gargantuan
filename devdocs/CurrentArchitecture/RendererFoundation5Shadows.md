@@ -68,6 +68,11 @@ becomes committed after successful submission. Device recreation and full
 resynchronization invalidate it. Each spot matrix is relative to its published
 light position, which is subtracted from caster model translations before the
 vertex shader and from receiver positions before shadow lookup.
+The authored spotlight half-angle stops at 89° (outer cosine about 0.01745).
+Direct render publications with an outer cosine below 0.01 remain fully
+unshadowed, since the finite atlas projection cannot cover their wider rim.
+The spotlight light-plane basis is continuous through both vertical directions
+and the default -Z direction; its unavoidable singularity is at +Z.
 An atlas assignment is sampleable on its first frame only after all caster
 resources are resident and the layer pass has completed. The local-light grid
 packs a one-based layer index for sampleable assignments and includes this

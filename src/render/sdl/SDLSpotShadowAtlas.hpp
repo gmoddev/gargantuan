@@ -6,6 +6,7 @@
 #pragma once
 
 #include "gargantuan/render/RenderProjection.hpp"
+#include "render/sdl/SDLDirectionalCascadePlan.hpp"
 #include "render/sdl/SDLShadowCasterCoverage.hpp"
 #include "render/sdl/SDLShadowPoseLedger.hpp"
 #include "render/sdl/SDLShadowResources.hpp"
@@ -116,8 +117,13 @@ namespace gargantuan {
 			std::vector<Candidate> Candidates;
 			if (Frame.Environment.LocalLights) {
 				for (const auto &Light : *Frame.Environment.LocalLights) {
+					// Authored half-angles stop at 89 degrees (cosine 0.01745).
+					// A direct publication may be wider. Its depth projection cannot
+					// cover that rim at this atlas quality, so leave the entire light
+					// unshadowed instead of mixing a shadowed core with a bright ring.
 					if (Light.Kind != RenderLocalLightKind::Spot || !Light.ShadowEnabled ||
-						Light.Intensity <= 0.0f || Light.Range <= 0.1f || !IsVisible(Frame, Light)) continue;
+						Light.Intensity <= 0.0f || Light.Range <= 0.1f ||
+						Light.OuterConeCosine < 0.01f || !IsVisible(Frame, Light)) continue;
 					const double Distance = glm::length(glm::dvec3(Light.Position) -
 						glm::dvec3(Frame.Camera.Position));
 					const double Nearest = std::max(1.0, Distance - Light.Range);
@@ -272,7 +278,11 @@ namespace gargantuan {
 		}
 		[[nodiscard]] static glm::mat4 MakeMatrix(const RenderLocalLightState &Light) {
 			const auto Direction = glm::normalize(Light.Direction);
-			const auto Up = std::abs(Direction.y) > 0.99f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+			// The minimal-rotation frame is continuous through both Y poles and
+			// around the default -Z direction. Its unavoidable singularity is at
+			// +Z, away from the common spotlight direction.
+			const auto Basis = MakeSDLDirectionalLightBasis(-glm::normalize(glm::dvec3(Direction)));
+			const auto Up = glm::vec3(Basis.Y);
 			const auto Outer = std::clamp(Light.OuterConeCosine, 0.01f, 0.9999f);
 			const auto Fov = 2.0f * std::acos(Outer);
 			const auto Near = std::min(0.1f, Light.Range * 0.01f);

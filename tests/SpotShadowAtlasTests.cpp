@@ -3,7 +3,6 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 
-#include <array>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -123,14 +122,14 @@ int main() try {
 		DistantAtlas.GetAssignments()[0].Matrix == OriginMatrix &&
 		DistantAtlas.GetAssignments()[0].Origin == (*DistantLights)[0].Position,
 		"spot projection remains origin-relative at large coordinates");
-	// Projection accepts every positive outer cosine through one. Keep the
-	// clamped narrow/wide shadow matrices finite and depth ordered at both
-	// legal range limits, including directions nearest the up-axis switch.
+	// Projection accepts every positive outer cosine through one. Direct
+	// publications wider than the atlas quality limit must be entirely
+	// unshadowed, while supported cones stay finite and depth ordered.
 	for (const float Range : {0.101f, 6.0f, 1024.0f}) {
 		for (const float Outer : {0.000001f, 0.01f, 0.8f, 0.9999f, 1.0f}) {
 			for (const glm::vec3 Direction : {glm::vec3(0, 1, 0),
-				glm::normalize(glm::vec3(0.141f, 0.99f, 0)),
-				glm::normalize(glm::vec3(0.140f, 0.9901f, 0)),
+				glm::vec3(std::sqrt(1.0f - 0.9899f * 0.9899f), 0.9899f, 0),
+				glm::vec3(std::sqrt(1.0f - 0.9901f * 0.9901f), 0.9901f, 0),
 				glm::vec3(0, -1, 0), glm::vec3(0, 0, -1)}) {
 				RenderLocalLightState Extreme = (*Lights)[0];
 				Extreme.Range = Range;
@@ -146,8 +145,13 @@ int main() try {
 				Frame.Camera.ViewProjectionMatrix = Frame.Camera.ProjectionMatrix * Frame.Camera.ViewMatrix;
 				SDLSpotShadowAtlas ExtremeAtlas;
 				ExtremeAtlas.Prepare(Frame, nullptr);
+				if (Outer < 0.01f) {
+					Require(ExtremeAtlas.GetAssignments().empty(),
+						"unsupported wide spotlight admitted a partially covered shadow layer");
+					continue;
+				}
 				Require(ExtremeAtlas.GetAssignments().size() == 1,
-					"legal spotlight cone and range lost atlas eligibility");
+					"supported spotlight cone and range lost atlas eligibility");
 				const auto &Matrix = ExtremeAtlas.GetAssignments().front().Matrix;
 				for (int Column = 0; Column < 4; ++Column)
 					for (int Row = 0; Row < 4; ++Row)
@@ -161,6 +165,26 @@ int main() try {
 			}
 		}
 	}
+	const auto LightPlaneX = [&Frame, &Lights](glm::vec3 Direction) {
+		RenderLocalLightState Light = (*Lights)[0];
+		Light.Direction = glm::normalize(Direction);
+		Frame.Environment.LocalLights = std::make_shared<const std::vector<RenderLocalLightState>>(
+			std::initializer_list<RenderLocalLightState>{Light});
+		SDLSpotShadowAtlas PoleAtlas;
+		PoleAtlas.Prepare(Frame, nullptr);
+		Require(PoleAtlas.GetAssignments().size() == 1,
+			"spotlight pole continuity fixture lost its atlas layer");
+		const auto &Matrix = PoleAtlas.GetAssignments().front().Matrix;
+		return glm::normalize(glm::vec3(Matrix[0][0], Matrix[1][0], Matrix[2][0]));
+	};
+	const auto BeforeSwitch = LightPlaneX({std::sqrt(1.0f - 0.9899f * 0.9899f), 0.9899f, 0});
+	const auto AfterSwitch = LightPlaneX({std::sqrt(1.0f - 0.9901f * 0.9901f), 0.9901f, 0});
+	Require(glm::dot(BeforeSwitch, AfterSwitch) > 0.999f,
+		"spotlight light plane jumped while crossing the old up-axis threshold");
+	const auto BeforePole = LightPlaneX({0.000001f, 1, 0});
+	const auto AfterPole = LightPlaneX({-0.000001f, 1, 0});
+	Require(glm::dot(BeforePole, AfterPole) > 0.999f,
+		"spotlight light plane jumped at the positive Y pole");
 	std::cout << "[Render:SpotShadowAtlas] Budget, stable assignment and lifetime passed\n";
 	return 0;
 } catch (const std::exception &Error) {
