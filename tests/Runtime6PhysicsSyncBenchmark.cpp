@@ -129,6 +129,9 @@ namespace {
 #endif
 		return 0;
 	}
+	std::string MemoryMetric(std::uint64_t Bytes) {
+		return Bytes == 0 ? "NA" : std::to_string(Bytes);
+	}
 
 	struct Fixture {
 		Options Configuration;
@@ -228,7 +231,7 @@ namespace {
 			<< WorldRootTestAccess::PartCount(*Test.World) << ','
 			<< WorldRootTestAccess::DirtyBodyCount(*Test.World) << ','
 			<< (Test.Projection ? Test.Projection->GetObjects().size() : 0)
-			<< ",0,0,0,0," << PeakResident << ',' << PeakResident << ",0,0\n" << std::flush;
+			<< ",0,0,0,0," << MemoryMetric(PeakResident) << ',' << MemoryMetric(PeakResident) << ",0,0\n" << std::flush;
 		for (std::size_t Iteration = 0; Iteration < Configuration.Warmup + Configuration.Frames; ++Iteration) {
 			const bool Warmup = Iteration < Configuration.Warmup;
 			const auto Frame = Warmup ? Iteration : Iteration - Configuration.Warmup;
@@ -283,6 +286,9 @@ namespace {
 			if (WorldRootTestAccess::BodyCount(*Test.World) != Total ||
 				WorldRootTestAccess::PartCount(*Test.World) != Total || Creates != Destroys)
 				throw std::runtime_error("[Runtime6:PhysicsSync] Body/Part lifecycle mismatch");
+			if (ControlCount != 0 && (Test.CFrameEvents == EventBefore ||
+				(Test.Publisher && RenderUpdated == 0)))
+				throw std::runtime_error("[Runtime6:PhysicsSync] Nonzero controls produced no observed motion");
 			double PositionChecksum = 0.0, VelocityChecksum = 0.0;
 			for (std::size_t Index = 0; Index < Total; ++Index) {
 				const auto &Part = Test.Parts[Index];
@@ -309,7 +315,7 @@ namespace {
 				<< WorldRootTestAccess::DirtyBodyCount(*Test.World) << ','
 				<< (Test.Projection ? Test.Projection->GetObjects().size() : 0) << ','
 				<< RenderCreated << ',' << RenderUpdated << ',' << RenderRemoved << ','
-				<< Test.CFrameEvents - EventBefore << ',' << ResidentBytes() << ',' << PeakResident << ','
+				<< Test.CFrameEvents - EventBefore << ',' << MemoryMetric(ResidentBytes()) << ',' << MemoryMetric(PeakResident) << ','
 				<< PositionChecksum << ',' << VelocityChecksum << '\n' << std::flush;
 		}
 	}

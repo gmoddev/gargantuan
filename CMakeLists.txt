@@ -1335,7 +1335,7 @@ if(BUILD_TESTING)
 		add_executable(gargantuan_runtime6_physics_sync_benchmark "tests/Runtime6PhysicsSyncBenchmark.cpp")
 		target_link_libraries(gargantuan_runtime6_physics_sync_benchmark PRIVATE gargantuan_core)
 		add_test(NAME gargantuan_runtime6_physics_sync_smoke COMMAND gargantuan_runtime6_physics_sync_benchmark
-			--static-count 128 --dynamic-count 16 --frames 3 --warmup 1 --control-density 0.25 --publication)
+			--static-count 128 --dynamic-count 16 --frames 3 --warmup 1 --control-density 0.25 --lifecycle-per-frame 1 --publication)
 		add_executable(gargantuan_renderer_foundation2_gpu_benchmark "tests/RendererFoundation2GpuBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_foundation2_gpu_benchmark PRIVATE gargantuan_core)
 		add_dependencies(gargantuan_renderer_foundation2_gpu_benchmark gargantuan_shaders)
