@@ -1179,6 +1179,8 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_remote_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_remote_luau_tests "tests/RemoteLuauTests.cpp")
 	target_link_libraries(gargantuan_remote_luau_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_runtime6_luau_mutation_benchmark "tests/Runtime6LuauMutationBenchmark.cpp")
+	target_link_libraries(gargantuan_runtime6_luau_mutation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_character_networking_tests "tests/CharacterNetworkingTests.cpp")
 	target_link_libraries(gargantuan_character_networking_tests PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_game_session_tests "tests/GameSessionTests.cpp")
@@ -1460,6 +1462,7 @@ if(BUILD_TESTING)
 			gargantuan_replication_tests
 			gargantuan_remote_tests
 			gargantuan_remote_luau_tests
+			gargantuan_runtime6_luau_mutation_benchmark
 			gargantuan_character_networking_tests
 			gargantuan_character_networking_benchmark
 			gargantuan_content_availability_tests
@@ -1625,6 +1628,12 @@ if(BUILD_TESTING)
 		COMMAND gargantuan_spatial_region_index_benchmark --quick)
 	add_test(NAME gargantuan_remote COMMAND gargantuan_remote_tests)
 	add_test(NAME gargantuan_remote_luau COMMAND gargantuan_remote_luau_tests)
+	add_test(NAME gargantuan_runtime6_luau_mutation_cframe_smoke
+		COMMAND gargantuan_runtime6_luau_mutation_benchmark --count=16 --frames=2 --listeners=2 --property=cframe)
+	add_test(NAME gargantuan_runtime6_luau_mutation_color_smoke
+		COMMAND gargantuan_runtime6_luau_mutation_benchmark --count=16 --frames=2 --listeners=2 --property=color)
+	set_tests_properties(gargantuan_runtime6_luau_mutation_cframe_smoke gargantuan_runtime6_luau_mutation_color_smoke
+		PROPERTIES LABELS "runtime;script;headless" TIMEOUT 120)
 	add_test(NAME gargantuan_character_networking COMMAND gargantuan_character_networking_tests)
 	add_test(NAME gargantuan_character_networking_benchmark_smoke COMMAND gargantuan_character_networking_benchmark)
 	add_test(NAME gargantuan_content_availability_benchmark_smoke
