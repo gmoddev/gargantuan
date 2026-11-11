@@ -40,12 +40,22 @@ namespace gargantuan {
 			auto &Journal = ChangeJournal::Get(); std::scoped_lock Lock(Journal.Mutex);
 			Journal.Streams.at(Scope).NextSequence = Sequence;
 		}
+		// Called only by the single-threaded failing allocator while CommitBatch
+		// may already hold Journal.Mutex. Do not lock or allocate here.
+		static std::size_t RetainedCountAtAllocation(ObjectId Scope) {
+			auto &Journal = ChangeJournal::Get();
+			const auto Found = Journal.Streams.find(Scope);
+			return Found == Journal.Streams.end() ? 0 : Found->second.Records.size();
+		}
 	};
 }
 
 namespace {
 	thread_local bool RejectAllocations = false;
 	thread_local long long FailAllocation = -1;
+	thread_local bool ObserveJournalAppend = false;
+	thread_local gargantuan::ObjectId JournalProbeScope{};
+	thread_local std::size_t RetainedAtFailure = 0;
 	thread_local std::size_t AllocationCount = 0;
 	thread_local std::size_t AllocationBytes = 0;
 	long long SweepIndex = -1;
@@ -57,7 +67,12 @@ namespace {
 			std::fputs("[Prepared:AllocationAfterBoundary] unexpected operator new\n", stderr);
 			throw std::bad_alloc();
 		}
-		if (FailAllocation == 0) throw std::bad_alloc();
+		if (FailAllocation == 0) {
+			if (ObserveJournalAppend)
+				RetainedAtFailure = std::max(RetainedAtFailure,
+					gargantuan::PreparedPropertyTestAccess::RetainedCountAtAllocation(JournalProbeScope));
+			throw std::bad_alloc();
+		}
 		if (FailAllocation > 0) --FailAllocation;
 		++AllocationCount;
 		AllocationBytes += Bytes;
@@ -314,6 +329,93 @@ namespace {
 			Require(Rejections > 10 && Rejections < 19999, "allocation sweep failed to reach successful commit");
 			std::cout << "[Prepared:Allocation] mode=" << Mode << " rejected=" << Rejections << '\n';
 		}
+	}
+
+	void TestOrdinaryJournalBatchAllocationRollback() {
+		auto World = std::make_shared<DataModel>();
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetParent(World);
+		auto &Journal = ChangeJournal::Get();
+		const auto Scope = World->GetObjectId();
+		const auto Object = PartValue->GetObjectId();
+		const auto OriginalCapacity = Journal.GetCapacity();
+		struct Restore {
+			ChangeJournal &Journal;
+			std::size_t Capacity;
+			~Restore() {
+				FailAllocation = -1;
+				ObserveJournalAppend = false;
+				Journal.SetProfilingEnabled(false);
+				Journal.SetCapacity(Capacity);
+			}
+		} RestoreState{Journal, OriginalCapacity};
+		Journal.Clear();
+		Journal.SetCapacity(3);
+		for (const auto *Name : {"A", "B", "C"})
+			Journal.Commit(Scope, Object, TagAddedChange{Name});
+		const auto BeforeWindow = Journal.GetRetentionWindow(Scope);
+		const auto Before = Journal.ReadPinned({Scope, BeforeWindow.OldestSequence});
+		Require(Before.Status == ChangeReadStatus::Available && Before.Records.size() == 3,
+			"ordinary journal rollback fixture retains three immutable records");
+		Journal.ResetProfile();
+		Journal.SetProfilingEnabled(true);
+
+		bool SawPostAppendFailure = false;
+		bool Succeeded = false;
+		std::size_t FailedAttempts = 0;
+		for (long long FailureIndex = 0; FailureIndex < 1024; ++FailureIndex) {
+			std::vector<std::pair<ObjectId, ChangePayload>> Changes;
+			Changes.emplace_back(Object, TagAddedChange{"D"});
+			Changes.emplace_back(Object, TagAddedChange{"E"});
+			JournalProbeScope = Scope;
+			RetainedAtFailure = 0;
+			ObserveJournalAppend = true;
+			FailAllocation = FailureIndex;
+			SweepIndex = FailureIndex;
+			try {
+				Journal.CommitBatch(Scope, std::move(Changes));
+				Succeeded = true;
+			} catch (const std::bad_alloc &) {
+				++FailedAttempts;
+			}
+			FailAllocation = -1;
+			ObserveJournalAppend = false;
+			if (Succeeded) break;
+			SawPostAppendFailure |= RetainedAtFailure > BeforeWindow.RetainedRecords;
+			const auto Window = Journal.GetRetentionWindow(Scope);
+			const auto Retained = Journal.ReadPinned({Scope, BeforeWindow.OldestSequence});
+			Require(Window.OldestSequence == BeforeWindow.OldestSequence &&
+				Window.NextSequence == BeforeWindow.NextSequence &&
+				Window.RetainedRecords == BeforeWindow.RetainedRecords &&
+				Retained.Status == ChangeReadStatus::Available && Retained.Records.size() == Before.Records.size(),
+				"failed ordinary batch changes neither retention nor sequence");
+			for (std::size_t Index = 0; Index < Before.Records.size(); ++Index)
+				Require(Retained.Records[Index] == Before.Records[Index],
+					"failed ordinary batch preserves each immutable retained handle");
+			const auto Profile = Journal.GetProfile();
+			Require(Profile.CommitCount == 0 && Profile.EvictedRecordCount == 0,
+				"failed ordinary batch records no successful journal commit or eviction");
+		}
+		Require(Succeeded && SawPostAppendFailure && FailedAttempts > 1,
+			"ordinary batch allocation sweep reaches an append-then-rollback failure and later success");
+		const auto AfterWindow = Journal.GetRetentionWindow(Scope);
+		const auto After = Journal.ReadPinned({Scope, BeforeWindow.OldestSequence + 2});
+		Require(AfterWindow.OldestSequence == BeforeWindow.OldestSequence + 2 &&
+			AfterWindow.NextSequence == BeforeWindow.NextSequence + 2 &&
+			AfterWindow.RetainedRecords == 3 && After.Status == ChangeReadStatus::Available &&
+			After.Records.size() == 3 && After.Records[0] == Before.Records[2],
+			"successful ordinary batch evicts only the old prefix and retains exact sequence order");
+		Require(After.Records[1]->Sequence == BeforeWindow.NextSequence &&
+			After.Records[2]->Sequence == BeforeWindow.NextSequence + 1 &&
+			std::get<TagAddedChange>(After.Records[1]->Payload).TagName == "D" &&
+			std::get<TagAddedChange>(After.Records[2]->Payload).TagName == "E",
+			"successful ordinary batch appends both ordered payloads exactly once");
+		Require(std::get<TagAddedChange>(Before.Records[0]->Payload).TagName == "A" &&
+			std::get<TagAddedChange>(Before.Records[1]->Payload).TagName == "B" &&
+			std::get<TagAddedChange>(Before.Records[2]->Payload).TagName == "C" &&
+			Journal.GetProfile().CommitCount == 2 && Journal.GetProfile().EvictedRecordCount == 2,
+			"old pinned records survive eviction and profiling counts only the successful batch");
+		std::cout << "[Prepared:OrdinaryJournalRollback] rejected=" << FailedAttempts << '\n';
 	}
 
 	void TestDenialsAndNotifications() {
@@ -764,6 +866,7 @@ int main(int argc, char **argv) {
 		TestOrdinaryAndPreparedVisibility();
 		std::cerr << "[Prepared:Test] stages\n"; TestStageFailures();
 		std::cerr << "[Prepared:Test] allocations\n"; TestEveryAllocation();
+		TestOrdinaryJournalBatchAllocationRollback();
 		std::cerr << "[Prepared:Test] denials\n"; TestDenialsAndNotifications();
 		std::cerr << "[Prepared:Test] bounds/costs\n"; TestBoundsAndCosts();
 		TestFinalValidationAndRetention();
