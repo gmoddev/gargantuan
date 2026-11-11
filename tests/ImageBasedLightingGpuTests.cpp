@@ -48,8 +48,9 @@ namespace {
 		SDLRendererMetrics Metrics;
 		SDLTextureCache Cache;
 		SDLImageBasedLighting Lighting;
-		explicit CacheFixture(SDL_GPUDevice *Gpu, std::uint64_t MaterialBudget = 128ull * 1024 * 1024)
-			: Cache(Gpu, &Metrics, MaterialBudget), Lighting(Gpu) {}
+		explicit CacheFixture(SDL_GPUDevice *Gpu, std::uint64_t MaterialBudget = 128ull * 1024 * 1024,
+			std::uint64_t SourceBudget = 128ull * 1024 * 1024)
+			: Cache(Gpu, &Metrics, MaterialBudget, SourceBudget), Lighting(Gpu) {}
 		~CacheFixture() {
 			Lighting.Destroy();
 			Cache.Destroy();
@@ -290,6 +291,83 @@ namespace {
 		}
 		if (SDL_GPUTextureSupportsFormat(Gpu.get(), SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB,
 			SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
+			constexpr std::uint32_t SourceDimension = 256;
+			constexpr std::uint64_t SourceBytes = SourceDimension * SourceDimension * 4ull;
+			constexpr RenderTextureIdentity FirstSource{900, 1}, LateSource{932, 1};
+			CacheFixture SourcePressure(Gpu.get(), 128ull * 1024 * 1024, 32 * SourceBytes);
+			RenderPublication BulkSources{.FullResync = true};
+			for (std::uint64_t Index = 0; Index < 33; ++Index)
+				BulkSources.TextureCreates.push_back({{900 + Index, 1}, 1, SourceDimension, SourceDimension,
+					RenderTextureFormat::Rgba8Unorm,
+					std::make_shared<const std::vector<std::uint8_t>>(SourceBytes, static_cast<std::uint8_t>(Index))});
+			SourcePressure.Cache.ApplyPublication(BulkSources);
+			Require(SourcePressure.Cache.GetMaterialSourceBytes() == SourcePressure.Cache.GetMaterialSourceBudget() &&
+				SourcePressure.Cache.GetMaterialSourceRehydrates() == 0,
+				"thirty-three full images initially retain exactly thirty-two sources under the scaled source budget");
+			auto *LateBase = SourcePressure.Cache.Find(LateSource);
+			Require(SourcePressure.Cache.FindMaterialTexture(LateSource, true).Texture == LateBase,
+				"late material demand samples its resident base until source promotion and mip upload");
+			SourcePressure.Cache.ApplyPublication(RenderPublication{});
+			const auto LateView = SourcePressure.Cache.FindMaterialTexture(LateSource, true);
+			Require(LateView.Texture != LateBase && LateView.NativeSrgb && LateView.HasMipmaps &&
+				SourcePressure.Cache.GetMaterialSourceEvictions() == 1 &&
+				SourcePressure.Cache.GetMaterialSourceRehydrates() == 1 &&
+				SourcePressure.Cache.GetMaterialSourceBytes() == SourcePressure.Cache.GetMaterialSourceBudget(),
+				"late visible image displaces an undemanded source and gains a bounded native mip view");
+			BulkSources.TextureCreates.clear(); // The evicted first backing now expires.
+			const auto RehydratesBeforePartial = SourcePressure.Cache.GetMaterialSourceRehydrates();
+			RenderPublication PartialSource;
+			PartialSource.TextureUpdates.push_back({FirstSource, 2, 0, 0, 1, 1,
+				std::make_shared<const std::vector<std::uint8_t>>(
+					std::initializer_list<std::uint8_t>{0, 0, 255, 255})});
+			SourcePressure.Cache.ApplyPublication(PartialSource);
+			Require(SourcePressure.Cache.FindMaterialTexture(FirstSource, true).Texture ==
+				SourcePressure.Cache.Find(FirstSource) &&
+				SourcePressure.Cache.GetMaterialSourceRehydrates() == RehydratesBeforePartial,
+				"partial update never reconstructs a new revision from expired old source bytes");
+			RenderPublication FullSource;
+			FullSource.TextureUpdates.push_back({FirstSource, 3, 0, 0, SourceDimension, SourceDimension,
+				std::make_shared<const std::vector<std::uint8_t>>(SourceBytes, 192)});
+			SourcePressure.Cache.ApplyPublication(FullSource);
+			(void)SourcePressure.Cache.FindMaterialTexture(FirstSource, true);
+			SourcePressure.Cache.ApplyPublication(RenderPublication{});
+			Require(SourcePressure.Cache.FindMaterialTexture(FirstSource, true).Texture !=
+				SourcePressure.Cache.Find(FirstSource) &&
+				SourcePressure.Cache.GetMaterialSourceBytes() <= SourcePressure.Cache.GetMaterialSourceBudget(),
+				"complete source replacement restores mips after an unrehydratable partial update");
+			CacheFixture PartialPressure(Gpu.get(), 128ull * 1024 * 1024, SourceBytes);
+			constexpr RenderTextureIdentity PartialA{940, 1}, PartialB{941, 1};
+			RenderPublication RetainedBacking{.FullResync = true};
+			RetainedBacking.TextureCreates.push_back({PartialA, 1, SourceDimension, SourceDimension,
+				RenderTextureFormat::Rgba8Unorm,
+				std::make_shared<const std::vector<std::uint8_t>>(SourceBytes, 64)});
+			RetainedBacking.TextureCreates.push_back({PartialB, 1, SourceDimension, SourceDimension,
+				RenderTextureFormat::Rgba8Unorm,
+				std::make_shared<const std::vector<std::uint8_t>>(SourceBytes, 128)});
+			PartialPressure.Cache.ApplyPublication(RetainedBacking);
+			(void)PartialPressure.Cache.FindMaterialTexture(PartialB, true);
+			PartialPressure.Cache.ApplyPublication(RenderPublication{});
+			PartialPressure.Cache.ApplyPublication(RenderPublication{});
+			RenderPublication PatchRetained;
+			PatchRetained.TextureUpdates.push_back({PartialA, 2, 0, 0, 1, 1,
+				std::make_shared<const std::vector<std::uint8_t>>(
+					std::initializer_list<std::uint8_t>{255, 0, 0, 255})});
+			PartialPressure.Cache.ApplyPublication(PatchRetained);
+			(void)PartialPressure.Cache.FindMaterialTexture(PartialA, true);
+			PartialPressure.Cache.ApplyPublication(RenderPublication{});
+			Require(PartialPressure.Cache.FindMaterialTexture(PartialA, true).Texture !=
+				PartialPressure.Cache.Find(PartialA) &&
+				PartialPressure.Cache.GetMaterialSourceRehydrates() >= 2 &&
+				PartialPressure.Cache.GetMaterialSourceBytes() <= PartialPressure.Cache.GetMaterialSourceBudget(),
+				"partial update rebuilds from a live exact-revision backing without crossing the source budget");
+			RenderPublication SourceResync{.FullResync = true};
+			SourceResync.TextureCreates.push_back({{942, 1}, 1, SourceDimension, SourceDimension,
+				RenderTextureFormat::Rgba8Unorm,
+				std::make_shared<const std::vector<std::uint8_t>>(SourceBytes, 192)});
+			PartialPressure.Cache.ApplyPublication(SourceResync);
+			Require(!PartialPressure.Cache.Find(PartialA) && !PartialPressure.Cache.Find(PartialB) &&
+				PartialPressure.Cache.GetMaterialSourceBytes() == SourceBytes,
+				"full resync releases old source handles and resets exact source byte accounting");
 			constexpr std::uint32_t Dimension = 256;
 			constexpr RenderTextureIdentity A{700, 1}, B{701, 1};
 			CacheFixture Pressure(Gpu.get(), 400000);

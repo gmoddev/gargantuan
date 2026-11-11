@@ -56,8 +56,24 @@ Peak in-flight allocation during a bulk publication is separate and remains
 bounded by the asset and publication limits.
 
 Material mip views have a separate 128 MiB default budget and 128 MiB retained
-source budget. The latter exceeds the canonical asset service's 64 MiB CPU
-limit, so admitted project images keep enough source to rebuild a derived view.
+source budget. The source budget counts strong CPU references or patched copies
+held by the SDL cache; an exact-revision weak handle to an immutable published
+full image does not pin its bytes. The cache evicts the least recently demanded
+cold source when a late visible image needs space. If the publication or asset
+owner still holds that full image, demand can relock it without copying or
+changing texture identity. An expired backing stays on the resident base GPU
+texture until a complete replacement arrives. A partial update may rebuild
+the current source only while the exact previous-revision backing is still
+available; otherwise it invalidates the weak handle and cannot combine stale
+old pixels with the patch. Patched copies are budgeted and may also be evicted,
+after which a complete replacement is required to rebuild mips. The cache
+reports retained source bytes, source evictions, and rehydrates. The normal
+asset service's 64 MiB CPU cap sits below the source default, while direct
+renderer publications are also bounded by the demand policy.
+Source promotion occurs only when a mip view reaches the per-publication
+upload admission loop; a large deferred queue cannot repeatedly evict sources
+before the 32-view and 32 MiB limits are applied.
+
 The cache records demand when a draw falls back to the resident base image.
 The next publication admits at most 32 derived views and 32 MiB of their
 upload bytes, prioritizing recent demand then stable texture identity. An
