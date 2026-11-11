@@ -4,6 +4,23 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-RUN-001: Dense authoritative mutation remains a CPU scalability ceiling
+
+- Status: Verified measured limitation; core optimization qualification in progress.
+- Area: Ordinary Part mutation, synchronous signals, journal and publication.
+- Evidence: [Runtime Foundation 6 qualification](devdocs/Validation/RuntimeFoundation6Qualification.md).
+
+The measured core reduces 50K dense publication from 84.203 to 53.352 ms and
+the setter/publication/projection stage sum from 192.806 to 166.031 ms on its
+host, while setter time regresses 98.797 to 103.150 ms. This does not qualify
+50K independently moving objects at a game frame budget. Typed CFrame encoding
+alone has no broad stage or allocation win. Signal dispatch and physics dirty
+callbacks have separate experimental candidates; compact physics still has a
+failing timed workload. Retain exact synchronous observer/journal semantics and
+conservative fallbacks while resolving these measured costs. Full integrated
+Windows, Linux/sanitizer and applicable physical GPU gates remain separate from
+the completed focused Windows comparisons.
+
 ## KI-RND-001: Optional instancing has workload-dependent CPU and frame tails
 
 - Status: Verified experimental limitation; ordinary drawing remains default.

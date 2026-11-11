@@ -1,6 +1,7 @@
 # Runtime Foundation 6 qualification
 
-Status: implementation and comparison in progress. This isolated continuation
+Status: core implementation measured and integrated; broader qualification and
+separate optimization experiments remain in progress. This isolated continuation
 starts from qualified Foundation 5 head
 `da902ea481e627d7c4d789033076b3be7dc38334`, stacked on `foundation/renderer-5`.
 Main remains `5b6782e35c4e24fd80bc8d5526104c615c72d84d` at reconciliation.
@@ -9,9 +10,9 @@ source belongs to this campaign.
 
 ## Baseline and comparison contract
 
-The first checkpoint changes benchmark fixtures and CMake only. It preserves
-the Foundation 5 runtime, so candidate runtime changes can be measured against
-the identical fixture before promotion. Existing Foundation 5 raw evidence is
+The baseline checkpoint `2f4ef8d90126c24a236d52476c769dd199ae99a8` changes
+benchmark fixtures and CMake only and preserves the Foundation 5 runtime.
+Candidate runtime changes are measured against identical fixtures. Existing Foundation 5 raw evidence is
 retained in `C:/Users/aiden/.codex/artifacts/renderer-foundation5-20261111`.
 New evidence belongs to sibling `runtime-foundation6-20261111`.
 
@@ -46,14 +47,16 @@ that metric. Full process memory is a separate observation.
 
 | Workstream | Candidate / gate | Present state |
 | --- | --- | --- |
-| Ordinary mutation/lifecycle | Retained journal append/rollback, unobserved signal allocation; preserve nested/destructive observers and exact journal/history | Source candidate, native comparison pending |
-| Explicit batching | Existing prepared-property contract; atomic observer visibility differs from ordinary setters and remains explicit | Semantic tests and comparison candidate |
-| Dirty distribution | Single-object journal batch unions renderer-final-state domains; reliable records remain uncoalesced | Source candidate, capture/ack parity tests pending |
-| Typed extraction | Reuse validated identity/ancestry; exact-model inverse reuse; full final fields retained | Source candidate, native comparison pending |
-| Storage alternatives | Direct Instance extraction versus synchronized generation-safe SoA versus immutable per-object snapshots | Component probe, unqualified until native runs |
-| Physics synchronization | Constant-time admission membership and scoped physics-authored callback suppression | Source candidate, correctness tests pending |
+| Ordinary mutation/lifecycle | Retained journal append/rollback, unobserved signal allocation; preserve nested/destructive observers and exact journal/history | Integrated core; focused Windows regression and comparison pass |
+| Explicit batching | Existing prepared-property contract; atomic observer visibility differs from ordinary setters and remains explicit | Semantic and allocation-rollback gates pass; no general throughput advantage demonstrated |
+| Dirty distribution | Single-object journal batch unions renderer-final-state domains; reliable records remain uncoalesced | Integrated core; capture/ack parity gates pass |
+| Typed extraction | Reuse validated identity/ancestry; exact-model inverse reuse; full final fields retained | Integrated core; Windows dense publication improves |
+| Storage alternatives | Direct Instance extraction versus synchronized generation-safe SoA versus immutable per-object snapshots | Measured component alternatives; synchronization costs exceed one-consumer benefit |
+| Physics synchronization | Constant-time admission membership and scoped physics-authored callback suppression | Integrated core; focused lifecycle/reentrant callback gates pass |
 | Compact physics view | Derived dynamic readback and ordered pending controls with conservative full-scan fallback | Separate experiment; sparse/dense/churn comparison pending |
 | Replication / F1 | Existing 3I typed catalog and 3J accepted per-peer history remain owners | Source review; no network behavior change justified yet |
+| Typed CFrame setter | Validated property/identity handoff and direct wire encoding | Separate experiment; small setter improvement, no broad stage or allocation win |
+| Signal dispatch / dirty callbacks | One-subscriber lifetime-preserving dispatch; per-registration dirty coalescing | Separate candidates undergoing independent comparisons and fault gates |
 
 The alternatives probe includes actual authoritative setters, dirty capture,
 cache synchronization and consumer work. It verifies exact dirty identities,
@@ -75,3 +78,119 @@ after a fresh cooperative lease and explicit ownership handoff; frozen Foundatio
 5 packages remain immutable. Full networking/F1 and cross-platform qualification
 use the existing canonical suites and acceptance contracts, without new targets
 or exemptions. No source candidate is qualified by this document alone.
+
+## Measured core checkpoint
+
+Windows comparison [43056868901](https://github.com/gmoddev/gargantuan/actions/runs/43056868901)
+compares baseline `2f4ef8d90126c24a236d52476c769dd199ae99a8` with
+`fbd0ae9026a43f6a5e263c98e1aaf3953dd2318e` on the same hosted Windows machine.
+The integrated core at `6c9145c74fe77fad31d6c3c4c5128999b749def7` has identical
+`include/`, `src/` and `tools/classgen/` contents to that candidate; its additional
+fixture correction does not alter the runtime. Full canonical qualification of
+the integrated checkpoint remains a separate gate.
+
+Host: AMD64 Family 25 Model 1, four logical processors, Windows 10.0.26100,
+MSVC 19.51, Release, PCH off, NoGNS. Both exact sources build and pass the
+foundation, prepared-property, publication, physics and fixture gates before
+frozen binaries are measured. All 66 measured processes exit zero. Each reported
+ordinary phase pools 24 raw frames per arm across two processes in A/B/B/A order.
+Profile clocks and allocation counting use separate executions. Process receipts,
+EXE/DLL hashes, compiler output, raw CSV, stdout/stderr and source manifests are in
+`C:/Users/aiden/.codex/artifacts/runtime-foundation6-20261111/HostedWindowsCore-43056868901`.
+
+| Workload | Baseline mean ms | Core mean ms | Interpretation |
+| --- | ---: | ---: | --- |
+| 50K native Parts, all changed: setters | 98.797 | 103.150 | 4.4% regression remains under investigation |
+| Same: immutable publication | 84.203 | 53.352 | 36.6% lower |
+| Same: projection apply | 9.806 | 9.529 | Small change |
+| Same: sum of these component stages | 192.806 | 166.031 | 13.9% lower; not whole-engine or GPU frame time |
+| 50K native Parts, 500 changed: stage sum | 1.775 | 1.472 | 17.1% lower |
+| 1K native Parts, all changed: stage sum | 2.221 | 1.690 | Lower in this fixture |
+| 10K native Parts, all changed: stage sum | 36.742 | 29.907 | Lower in this fixture |
+| 25K native Parts, all changed: stage sum | 96.257 | 80.752 | Lower in this fixture |
+| 50K initial adoption, excluding detached transform initialization | 56,146 | 1,326 | Combined journal/admission change; not isolated attribution |
+
+Part allocation is about 80 ms in both arms. Initial full publication is about
+69 versus 71 ms; unchanged-state inverse reuse does not optimize every full
+build. Peak process working set is 720,426 versus 687,620 KiB. Dense 10K
+calling-thread C++ new counts and requested bytes do not decrease. Neither the
+working-set observation nor the combined lifecycle result identifies a single
+optimization as its sole cause. Zero-change times near 0.003 ms are noise-scale.
+
+The separate same-source attribution replay
+[43062292991](https://github.com/gmoddev/gargantuan/actions/runs/43062292991)
+reduces 50K final-state extraction from 63.841 to 36.917 ms on its host;
+publication is 87.257 to 58.511 ms and setter/dirty time is 107.184 to 110.267 ms.
+Inclusive diagnostic timers are not additive predictions for an unprofiled run.
+
+## Alternative architecture evidence
+
+At 10K Parts, one sequential consumer costs 2.849 ms with direct Instance
+extraction, 2.889 ms with synchronized selective SoA, and 5.093 ms with
+immutable per-object snapshots. Random access costs 3.275, 3.319 and 6.225 ms.
+The SoA logical payload is 995,316 bytes and snapshot values are 1.6 MB, excluding
+container/allocator overhead. These are bounded component results including
+authority synchronization, not a universal rejection of derived storage or
+immutable renderer publications. An authoritative ECS replacement is unsupported.
+
+Existing explicit prepared mutation preserves its separate atomic observer
+contract. A warmed 1K comparison costs about 1.5 ms and 860 KiB versus ordinary
+mutation around 0.85 ms and 224 KiB. It produces four actions/revisions versus
+1K ordinary changes while preserving required records. That semantic difference
+prevents treating it as a transparent faster ordinary-setter replacement.
+
+The isolated typed CFrame comparison
+[43048909412](https://github.com/gmoddev/gargantuan/actions/runs/43048909412)
+uses instrumentation baseline `2d7806492734090f58211ccf049e3df6350d7b82` and
+typed candidate `795c2d28c2252c54a148e846d2ed54b1e5c80794`.
+It removes the measured second lookup and reduces encoding time, but dense 50K
+setter time changes only 101.234 to 98.881 ms and component stage sum changes
+176.148 to 177.157 ms. The four setter observations drift from baseline 105.795,
+candidate 100.335, candidate 97.427 to baseline 96.673 ms. Sparse 50K stage sums
+regress 1.9–4.8%. The allocation replay
+[43059877450](https://github.com/gmoddev/gargantuan/actions/runs/43059877450)
+reports identical dense 50K counts in both arms: about 100,016 C++ new calls and
+36,235,398 requested bytes per frame. This candidate remains experimental.
+
+## Realistic and full-engine evidence
+
+Gameplay comparison [43057067667](https://github.com/gmoddev/gargantuan/actions/runs/43057067667)
+uses identical 512-object content and 18 sample-asset hashes, eight active
+characters and 32 simulated peers (one full client, 31 observer transports).
+All eight processes and 40 phases report healthy service and phase gates;
+root-motion commits, eviction/reload and eventual backlog drain remain correct.
+It is a real GameSession simulation, not 32 physical network clients.
+Trace-off frame-work P95 during load is 3.424/2.562/2.556/3.155 ms in A/B/B/A
+order; reload is 3.163/2.271/2.248/2.930 ms. These support a directional gain,
+not precise mutation attribution. Load maxima remain 46–119 ms, reload maxima
+50–114 ms, and load convergence P95 264–321 ms. Healthy service does not mean
+every frame meets 16.667 ms. Tick cadence changes journal volume; the input
+fixture is identical but its dynamic mutation stream is not byte-identical.
+
+Corrected realistic comparison
+[43065693718](https://github.com/gmoddev/gargantuan/actions/runs/43065693718)
+passes at fixture-only baseline `8831e09f39ecd103585342eab0193570737614f2` versus
+core candidate `9be409347e971a88d338ddb41446b781ea8d9358`.
+It includes canonical MeshPart reimport/resource parity, hierarchy changes,
+actual ReplicaApplier updates, animation, soft-body and replication fixtures.
+Its performance interpretation is still under independent review.
+
+## Qualification boundaries and unsuccessful evidence
+
+Canonical baseline [43054671698](https://github.com/gmoddev/gargantuan/actions/runs/43054671698)
+passes the complete Windows NativeCI job, including existing GNS/F1 Release
+workloads. It qualifies baseline runtime, not the new integrated runtime.
+Linux Release/ASan/UBSan and GNS sanitizer jobs fail during dependency install:
+Ubuntu mirror DNS prevents fetching required Clang 19 and shader tooling before
+engine compilation. The runner's preinstalled Clang 16–18 cannot replace that
+canonical contract. `HostedLinuxInfrastructureFailure.md` preserves the logs
+and exact image identity; no tests are marked passed from those attempts.
+
+Earlier fixture failures are retained: a missing stream operator, an incorrect
+DataModel service call, a prematurely released test DataModel, invalid zero-change
+probe arguments, and a colliding compact-view lifecycle fixture were corrected
+before reruns. The compact-view timed comparison still fails independently of
+its passing unit/fault gates and remains experimental. Neither a failed run nor
+its frozen artifact is discarded. Physical GPU, full integrated Windows and
+Linux/sanitizer acceptance remain outstanding. Production physics algorithms,
+transport wire formats, F1/D03 gates and renderer defaults are unchanged.

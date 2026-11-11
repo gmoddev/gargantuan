@@ -2,9 +2,10 @@
 
 ## Status and scope
 
-This document describes the foundation implemented in the first post-audit pass.
-It is a runtime contract, not a claim that networking, persistence, parallel
-simulation, or Studio are implemented.
+This document describes the runtime authority and lifecycle contract, including
+the measured Runtime Foundation 6 core changes. Subsystem completeness and
+qualification belong to their current architecture documents and acceptance
+records; this document does not certify parallel simulation or product capacity.
 
 The governing rule is:
 
@@ -202,10 +203,15 @@ runtime teardown before the DataModel destroys its services and descendants.
 Both Engine-first and DataModel-first destruction orders have regression
 coverage, followed by process-level SDL cleanup.
 
-## Remaining blockers before network replication
+## Networking and downstream ownership
 
-Snapshot baseline, serialized references, scoped journal records, isolated
-in-process receiver apply, and the reusable protocol-input hardening boundary
-are implemented. See `ProtocolInputHardening.md`. Durable world IDs, schema
-migration, peer authentication, networking contracts, and transport negotiation
-remain later work.
+Snapshot baselines, serialized references, scoped journal records, receiver apply
+and protocol-input hardening are implemented. Runtime changes retain the current
+networking owners: `ReplicationFoundation3I.md` owns immutable revisioned object
+templates; `ReplicationFoundation3J.md` owns scheduler-accepted per-peer history;
+`ContentAvailabilityFoundation3L_3.md` owns bounded dependency planning. D03's
+`POOLED_CORRECTNESS_V1` remains the accepted service qualification contract.
+Render dirty coalescing never rewrites those reliable histories. See
+`RuntimeFoundation6Qualification.md` in `devdocs/Validation/` for exact source,
+measured improvements and remaining qualification limits. Durable persistence
+identity and schema migration remain separate future work.
