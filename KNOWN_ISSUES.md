@@ -28,6 +28,14 @@ also shows a dense ceiling: publication improves from 48.436 to 40.892 ms, but
 50K dense mutation-to-completion wall time changes from 153.801 to 156.665 ms.
 The 10K dense and 50K sparse fixtures improve; this is not a universal frame win.
 
+The rooted 512-object, 32-simulated-peer gameplay replay also exposes a shared
+load/reload service ceiling: five of eight processes per arm miss the existing
+250 ms Event-ACK gap target. Content, Remote completion and service accounting
+remain correct. Atomic admission, server selection and client replica apply
+produce large Main intervals on both sources. This does not establish an R6
+regression or qualify gameplay timing; activation and replica-apply bursts must
+remain part of complete-path capacity evaluation.
+
 ## KI-RND-001: Optional instancing has workload-dependent CPU and frame tails
 
 - Status: Verified experimental limitation; ordinary drawing remains default.

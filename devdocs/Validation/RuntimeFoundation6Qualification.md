@@ -599,4 +599,27 @@ Frozen-binary diagnostic replay
 [43128734144](https://github.com/gmoddev/gargantuan/actions/runs/43128734144)
 executes four complete untraced A/B/B/A quartets with owned-process CPU, host CPU,
 page-fault and working-set sampling. Every failed outcome is retained and the
-health gate is unchanged. That separately instrumented replay remains pending.
+health gate is unchanged. Its verified archive SHA-256 is
+`5f85353590a5d743fb1eae060c9f9754beb80850998f9a6176b90ccadff3db3f`.
+All 16 process/stream/resource receipts, 22 original-comparison hashes and both
+fixture files verify. The upload omits 22 hidden frozen input files; their exact
+manifest hashes and bytes are independently cross-checked against the original
+archive, and the replay job verifies them before execution. The future upload
+now explicitly includes hidden files; no timing outcome is replaced.
+
+Five of eight processes in each arm fail, with six failed phases per arm
+(four load, two reload). Every miss exceeds the existing 250 ms ACK-gap gate.
+All 16 retain complete service accounting, content convergence, 100 completed
+Remote calls with zero errors, and no action or scheduler rejection. The live
+replay CPU is AMD Family 25 Model 1, while the original is Model 17; both expose
+four logical processors. The copied original `host.json` is not the replay's
+live hardware receipt. Both arms have median peak reload frame-work near
+142 ms, with admission, server selection and client replica-apply intervals;
+their externally sampled CPU/wall behavior is similar. The 50 ms sampler and
+phase-end output do not locate each individual callback's delay.
+
+This is reproducible evidence of shared near-threshold load/reload capacity on
+the replay hardware, rather than a demonstrated candidate-specific regression.
+It does not establish the exact cause of the original isolated outlier or
+qualify 32-peer service timing. `HostedGameplayReplay-43128734144/ReplayReview.md`
+and `replay-analysis.json` preserve all unsuccessful outcomes and limits.
