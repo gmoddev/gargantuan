@@ -14,7 +14,7 @@ on:
       suite:
         description: Missing measurement scope from the frozen binaries
         type: choice
-        options: [attribution, compact_large, readback_large, readback_recheck, cframe_allocation]
+        options: [attribution, compact_large, readback_large, readback_recheck, cframe_allocation, gameplay_recheck]
         required: true
 
 permissions:

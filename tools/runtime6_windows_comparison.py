@@ -12,6 +12,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import threading
 import time
 
 if sys.platform != "win32":
@@ -31,12 +32,31 @@ class ProcessMemoryCounters(ctypes.Structure):
                 ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
 
 
+class FileTime(ctypes.Structure):
+    _fields_ = [("Low", wintypes.DWORD), ("High", wintypes.DWORD)]
+
+
 try:
     GetProcessMemoryInfo = ctypes.windll.psapi.GetProcessMemoryInfo
     GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessMemoryCounters), wintypes.DWORD]
     GetProcessMemoryInfo.restype = wintypes.BOOL
 except (AttributeError, OSError):
     GetProcessMemoryInfo = None
+
+try:
+    GetProcessTimes = ctypes.windll.kernel32.GetProcessTimes
+    GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(FileTime), ctypes.POINTER(FileTime),
+                                ctypes.POINTER(FileTime), ctypes.POINTER(FileTime)]
+    GetProcessTimes.restype = wintypes.BOOL
+except (AttributeError, OSError):
+    GetProcessTimes = None
+
+try:
+    GetSystemTimes = ctypes.windll.kernel32.GetSystemTimes
+    GetSystemTimes.argtypes = [ctypes.POINTER(FileTime), ctypes.POINTER(FileTime), ctypes.POINTER(FileTime)]
+    GetSystemTimes.restype = wintypes.BOOL
+except (AttributeError, OSError):
+    GetSystemTimes = None
 
 
 def PeakWorkingSet(Process):
@@ -52,13 +72,51 @@ def PeakWorkingSet(Process):
     return None
 
 
+def ResourceSnapshot(Process, Started, StdoutPath):
+    Sample = {"wallSinceLaunchMs": (time.monotonic() - Started) * 1000}
+    def Ticks(Value):
+        return (Value.High << 32) | Value.Low
+    if GetProcessTimes is not None:
+        try:
+            Created, Exited, Kernel, User = FileTime(), FileTime(), FileTime(), FileTime()
+            if GetProcessTimes(int(Process._handle), ctypes.byref(Created), ctypes.byref(Exited),
+                               ctypes.byref(Kernel), ctypes.byref(User)):
+                Sample["processCpuMs"] = (Ticks(Kernel) + Ticks(User)) / 10000
+        except (AttributeError, OSError, TypeError, ValueError):
+            pass
+    if GetSystemTimes is not None:
+        try:
+            Idle, Kernel, User = FileTime(), FileTime(), FileTime()
+            if GetSystemTimes(ctypes.byref(Idle), ctypes.byref(Kernel), ctypes.byref(User)):
+                Sample["hostIdleCpuMs"] = Ticks(Idle) / 10000
+                Sample["hostKernelCpuMs"] = Ticks(Kernel) / 10000
+                Sample["hostUserCpuMs"] = Ticks(User) / 10000
+        except (AttributeError, OSError, TypeError, ValueError):
+            pass
+    if GetProcessMemoryInfo is not None:
+        try:
+            Counters = ProcessMemoryCounters()
+            Counters.cb = ctypes.sizeof(Counters)
+            if GetProcessMemoryInfo(int(Process._handle), ctypes.byref(Counters), Counters.cb):
+                Sample["pageFaultCount"] = Counters.PageFaultCount
+                Sample["workingSetBytes"] = Counters.WorkingSetSize
+                Sample["peakWorkingSetBytes"] = Counters.PeakWorkingSetSize
+        except (AttributeError, OSError, TypeError, ValueError):
+            pass
+    try:
+        Sample["stdoutBytes"] = StdoutPath.stat().st_size
+    except OSError:
+        pass
+    return Sample
+
+
 def Hash(File):
     return hashlib.sha256(File.read_bytes()).hexdigest()
 
 
 Parser = argparse.ArgumentParser()
 Parser.add_argument("--evidence", type=pathlib.Path, required=True)
-Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "readback_selective", "realistic", "gameplay", "signals", "signals_compare", "dirty_compare", "dirty_drain", "dirty_epoch", "luau", "luau_diag", "attribution", "compact_large", "readback_large", "readback_recheck", "cframe_allocation"), default="core")
+Parser.add_argument("--suite", choices=("core", "cframe", "compact", "readback", "readback_selective", "realistic", "gameplay", "gameplay_recheck", "signals", "signals_compare", "dirty_compare", "dirty_drain", "dirty_epoch", "luau", "luau_diag", "attribution", "compact_large", "readback_large", "readback_recheck", "cframe_allocation"), default="core")
 Parser.add_argument("--comparison-directory", default="comparison")
 Parser.add_argument("--verify-only", action="store_true")
 Args = Parser.parse_args()
@@ -66,7 +124,7 @@ Root = Args.evidence.resolve()
 if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", Args.comparison_directory) or \
         Args.comparison_directory in ("baseline", "candidate"):
     raise RuntimeError("[Runtime6:Compare] Comparison directory must be a fresh simple basename")
-ManifestSuite = {"attribution": "core", "compact_large": "compact", "readback_large": "readback", "readback_recheck": "readback", "cframe_allocation": "cframe"}.get(Args.suite, Args.suite)
+ManifestSuite = {"attribution": "core", "compact_large": "compact", "readback_large": "readback", "readback_recheck": "readback", "cframe_allocation": "cframe", "gameplay_recheck": "gameplay"}.get(Args.suite, Args.suite)
 Sources = {}
 for Arm in ("baseline", "candidate"):
     Directory = Root / Arm
@@ -98,7 +156,7 @@ Output.mkdir(exist_ok=False)
 Receipts = []
 
 
-def Run(Arm, Label, Binary, Options, Timeout=600, Environment=None):
+def Run(Arm, Label, Binary, Options, Timeout=600, Environment=None, ResourceTrace=False):
     Executable = Root / Arm / (Binary + ".exe")
     if Executable.name not in Sources[Arm]["binaries"]:
         raise RuntimeError(f"[Runtime6:Compare] Unfrozen executable: {Arm}/{Binary}")
@@ -106,18 +164,33 @@ def Run(Arm, Label, Binary, Options, Timeout=600, Environment=None):
     Command = [str(Executable), *Options]
     Start = time.monotonic()
     Code, TimedOut, PeakBytes = None, False, None
-    with (Output / (Name + ".stdout")).open("xb") as Stdout, (Output / (Name + ".stderr")).open("xb") as Stderr:
+    StdoutPath = Output / (Name + ".stdout")
+    Samples = []
+    with StdoutPath.open("xb") as Stdout, (Output / (Name + ".stderr")).open("xb") as Stderr:
+        Process = subprocess.Popen(Command, cwd=Root / Arm, stdout=Stdout, stderr=Stderr,
+                                   stdin=subprocess.DEVNULL,
+                                   env=Environment,
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
+        Stop = threading.Event()
+        if ResourceTrace:
+            def SampleResources():
+                while not Stop.is_set():
+                    Samples.append(ResourceSnapshot(Process, Start, StdoutPath))
+                    Stop.wait(0.05)
+            Monitor = threading.Thread(target=SampleResources, name="Runtime6OwnedProcessResources", daemon=True)
+            Monitor.start()
         try:
-            Process = subprocess.Popen(Command, cwd=Root / Arm, stdout=Stdout, stderr=Stderr,
-                                       stdin=subprocess.DEVNULL,
-                                       env=Environment,
-                                       creationflags=subprocess.CREATE_NO_WINDOW)
             Code = Process.wait(timeout=Timeout)
         except subprocess.TimeoutExpired:
             TimedOut = True
             # Popen owns this exact process handle; do not terminate by image name or scan other PIDs.
             Process.kill()
             Process.wait()
+        finally:
+            if ResourceTrace:
+                Stop.set()
+                Monitor.join()
+                Samples.append(ResourceSnapshot(Process, Start, StdoutPath))
         PeakBytes = PeakWorkingSet(Process)
     Receipt = {"arm": Arm, "source": Sources[Arm]["source"], "label": Label,
                "command": Command, "exit": Code, "timeout": TimedOut,
@@ -129,6 +202,11 @@ def Run(Arm, Label, Binary, Options, Timeout=600, Environment=None):
                "elapsedSeconds": time.monotonic() - Start,
                "stdoutSha256": Hash(Output / (Name + ".stdout")),
                "stderrSha256": Hash(Output / (Name + ".stderr"))}
+    if ResourceTrace:
+        ResourceFile = Output / (Name + ".resources.json")
+        ResourceFile.write_text(json.dumps({"intervalRequestedMs": 50, "samples": Samples}, indent=2))
+        Receipt["resourceTraceSha256"] = Hash(ResourceFile)
+        Receipt["resourceTraceSamples"] = len(Samples)
     Receipts.append(Receipt)
     (Output / "receipts.json").write_text(json.dumps(Receipts, indent=2))
     print(json.dumps(Receipt), flush=True)
@@ -244,6 +322,34 @@ if Args.suite == "gameplay":
             if Current != FixtureHashes:
                 raise RuntimeError("[Runtime6:Compare] Gameplay changed its shared fixture")
     # Preserve service health and frame/phase health separately in raw output.
+    raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
+
+if Args.suite == "gameplay_recheck":
+    ExpectedInputs = Sources["baseline"].get("sourceInputs", {})
+    if not ExpectedInputs or Sources["candidate"].get("sourceInputs", {}) != ExpectedInputs:
+        raise RuntimeError("[Runtime6:Compare] Frozen gameplay source inputs differ")
+    for Arm in ("baseline", "candidate"):
+        for Name, Digest in ExpectedInputs.items():
+            if Hash(Root / Arm / "source-inputs" / Name) != Digest:
+                raise RuntimeError(f"[Runtime6:Compare] Frozen gameplay source input differs: {Arm}/{Name}")
+    Fixture = Root / "shared-gameplay-fixture"
+    FixtureHashes = json.loads((Root / "comparison" / "gameplay-fixture.json").read_text())
+    if not FixtureHashes or {File.relative_to(Fixture).as_posix(): Hash(File)
+                             for File in Fixture.rglob("*") if File.is_file()} != FixtureHashes:
+        raise RuntimeError("[Runtime6:Compare] Frozen gameplay fixture changed")
+    Environment = os.environ.copy()
+    Environment["GARGANTUAN_QUALIFIED_SCALE"] = "1"
+    for Key in ("GARGANTUAN_CONTENT_TRACE", "GARGANTUAN_PUBLICATION_LATENCY"):
+        Environment.pop(Key, None)
+    for Repetition in range(4):
+        for Arm in ("baseline", "candidate", "candidate", "baseline"):
+            Run(Arm, f"gameplay-recheck-{Repetition}-32-peers-8-active-untraced",
+                "gargantuan_game_session_benchmark",
+                ["--content-differential", str(Fixture), "local", "8", "8", "32"],
+                Environment=Environment, ResourceTrace=True)
+            if {File.relative_to(Fixture).as_posix(): Hash(File)
+                    for File in Fixture.rglob("*") if File.is_file()} != FixtureHashes:
+                raise RuntimeError("[Runtime6:Compare] Replay changed the shared gameplay fixture")
     raise SystemExit(any(Entry["exit"] != 0 or Entry["timeout"] for Entry in Receipts))
 
 if Args.suite == "attribution":
