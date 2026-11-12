@@ -784,7 +784,26 @@ Write-Output ('HOST_BOUNDARY_RESULT=' + ([ordered]@{Failed=$Failed;Reason=$Reaso
         self.assertIn('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }', Step)
         self.assertIn('inputs.scheduler_trace && inputs.scheduler_ack_cycle_diagnostic', Workflow)
         self.assertIn('inputs.scheduler_pair_diagnostic && inputs.scheduler_ack_cycle_diagnostic', Workflow)
-        self.assertEqual(Workflow.count('!inputs.scheduler_pair_diagnostic && !inputs.scheduler_ack_cycle_diagnostic'), 2)
+        QualificationGuard = (
+            "if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && "
+            '!inputs.scheduler_pair_diagnostic && !inputs.scheduler_ack_cycle_diagnostic'
+        )
+        for StepName in (
+            'Freeze Runtime6 physical GPU probes',
+            'Upload Runtime6 physical GPU probes',
+            'Package qualified 32-client physical candidate',
+            'Upload qualified 32-client physical candidate',
+        ):
+            Marker = f'      - name: {StepName}'
+            self.assertEqual(Workflow.count(Marker), 1)
+            StepStart = Workflow.index(Marker)
+            StepEnd = Workflow.find('      - name:', StepStart + len(Marker))
+            GuardedStep = Workflow[StepStart:StepEnd if StepEnd >= 0 else None]
+            self.assertIn(QualificationGuard, GuardedStep)
+        for StepName in ('Freeze Runtime6 physical GPU probes', 'Upload Runtime6 physical GPU probes'):
+            StepStart = Workflow.index(f'      - name: {StepName}')
+            StepEnd = Workflow.find('      - name:', StepStart + len(StepName))
+            self.assertIn('continue-on-error: true', Workflow[StepStart:StepEnd])
         self.assertIn('build-ci/scheduler-trace-ack-cycle-funded/', Workflow)
         self.assertIn('build-ci/gargantuan_real_transport_tests.exe', Workflow)
         Wrapper = (ROOT / 'tools/ci/SchedulerTrace.ps1').read_text()
