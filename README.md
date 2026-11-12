@@ -15,7 +15,9 @@
 
 Gargantuan is a C++23 game engine centered on Luau scripting and an Instance/DataModel programming model familiar to Roblox developers, but with its own runtime, authority, networking, persistence, editor, security, and platform semantics.
 
-This repository was originally forked from [Team Fireworks' Gargantuan](https://github.com/teamfireworks/gargantuan). It has since diverged substantially in architecture and scope and should no longer be treated as an alternate branch of the upstream project. The original project remains the source of the codebase's provenance; this repository now follows an independent design direction.
+This project is an independently developed continuation of Team Fireworks' discontinued Gargantuan game engine, with a substantially expanded architecture, scope, and feature set.
+
+Originally forked from [Team Fireworks' Gargantuan](https://github.com/teamfireworks/gargantuan), this repository has since evolved into a separately maintained project with its own architecture, engineering priorities, and development roadmap. While the original project remains the source of the codebase's provenance, this continuation is not an official successor or an alternate development branch of the original project.
 
 Gargantuan is not intended to be a drop-in Roblox runtime. Familiar names and concepts are retained where useful, but compatibility does not take precedence over engine-defined behavior.
 
