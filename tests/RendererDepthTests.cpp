@@ -59,6 +59,14 @@ void CheckPrimitivePositionBounds() {
 }
 
 void CheckPrimitivePartInstancing() {
+	struct VideoGuard {
+		VideoGuard() {
+			if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+				throw std::runtime_error(std::string("[Render:Depth] SDL video initialization failed: ") + SDL_GetError());
+		}
+		~VideoGuard() { SDL_QuitSubSystem(SDL_INIT_VIDEO); }
+	};
+	const VideoGuard Video;
 	BootstrapNativeRuntimeSchema();
 	const std::array Shapes{Enums::PartType::Block, Enums::PartType::Ball, Enums::PartType::Cylinder};
 	const std::array Names{"Block", "Ball", "Cylinder"};
