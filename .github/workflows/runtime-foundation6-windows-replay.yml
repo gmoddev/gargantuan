@@ -189,4 +189,5 @@ jobs:
         if: always()
         with:
           name: runtime6-hosted-windows-cpu-replay
+          include-hidden-files: true
           path: ${{ runner.temp }}/runtime6-replay-evidence/
