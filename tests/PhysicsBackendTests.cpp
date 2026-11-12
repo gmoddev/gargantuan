@@ -1074,12 +1074,13 @@ namespace {
 			"returning endpoint reconciles a new joint generation");
 	}
 
-	void TestGameplayLuauJointAssembly() {
+	void TestGameplayLuauJointAssembly(bool UseIndexedReadback) {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
 		Game->SetArchivable(true);
 		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		if (!WorkspaceValue) return;
+		if (UseIndexedReadback) WorldRootTestAccess::UseSmallReadbackPolicy(*WorkspaceValue);
 		WorkspaceValue->SetGravity(0.0f);
 		ScriptEngine Engine(Game);
 		const std::string Source = R"(
@@ -1168,6 +1169,12 @@ namespace {
 			"Luau-created attachments resolve to active WorldRoot joints");
 		if (!Door || !Slide || !Weight || !Hinge || !Slider || !Spring) return;
 		for (int Index = 0; Index < 120; ++Index) WorkspaceValue->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(WorldRootTestAccess::IndexedDynamicReadbackActive(*WorkspaceValue) == UseIndexedReadback &&
+			WorldRootTestAccess::DynamicReadbackCount(*WorkspaceValue) == (UseIndexedReadback ? 3 : 0) &&
+			WorldRootTestAccess::HasDynamicReadback(*WorkspaceValue, Door->GetObjectId()) == UseIndexedReadback &&
+			WorldRootTestAccess::HasDynamicReadback(*WorkspaceValue, Slide->GetObjectId()) == UseIndexedReadback &&
+			WorldRootTestAccess::HasDynamicReadback(*WorkspaceValue, Weight->GetObjectId()) == UseIndexedReadback,
+			"gameplay-authored joints step under the selected ordered or indexed readback policy");
 		const auto &DoorPose = Door->GetCFrame();
 		const auto DoorAngle = std::atan2(DoorPose.Rotation[0][1], DoorPose.Rotation[0][0]);
 		Check(std::abs(DoorAngle) > 0.05f && std::abs(DoorAngle) < 0.7f,
@@ -1221,10 +1228,11 @@ namespace {
 			"physics publication does not create a transform feedback update");
 	}
 
-	void TestPhysicsPublicationNestedMutation() {
+	void TestPhysicsPublicationNestedMutation(bool UseIndexedReadback) {
 		auto Game = std::make_shared<DataModel>();
 		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
 		if (!Workspace) return;
+		if (UseIndexedReadback) WorldRootTestAccess::UseSmallReadbackPolicy(*Workspace);
 		Check(Workspace->GetReplicationScopeId() == Game->GetObjectId(),
 			"physics callback fixture retains an authoritative DataModel scope");
 		Workspace->SetGravity(0.0f);
@@ -1245,6 +1253,15 @@ namespace {
 		Moving->ApplyImpulse({10.0f, 0.0f, 0.0f});
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
 		Check(Mutated, "physics publication invokes synchronous CFrame observers");
+		const auto InitialMovingState = WorldRootTestAccess::State(
+			*Workspace, WorldRootTestAccess::Body(*Workspace, *Moving));
+		Check(InitialMovingState && InitialMovingState->LinearVelocity.x > 0.0f &&
+			Near(Moving->GetLinearVelocity().x, InitialMovingState->LinearVelocity.x) &&
+			Near(Moving->GetCFrame().Position.x, 8.0f),
+			"physics readback publishes velocity before nested authored CFrame wins the callback");
+		Check(WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) == UseIndexedReadback &&
+			WorldRootTestAccess::HasDynamicReadback(*Workspace, Moving->GetObjectId()) == UseIndexedReadback,
+			"motion callback runs with the selected ordered or indexed readback policy");
 		Workspace->StepPhysics(0.0, std::nullopt);
 		const auto MovingState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Moving));
 		const auto OtherState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Other));
@@ -1284,6 +1301,9 @@ namespace {
 		Check(WorldRootTestAccess::PartCount(*Workspace) == 2 &&
 			WorldRootTestAccess::PartMembershipCount(*Workspace) == 2,
 			"destruction in physics publication retires indexed Part membership");
+		Check(WorldRootTestAccess::HasDynamicReadback(*Workspace, DestroyedObject) == false &&
+			WorldRootTestAccess::HasDynamicReadback(*Workspace, Moving->GetObjectId()) == UseIndexedReadback,
+			"nested destruction removes only the retired readback identity");
 		Check(!ObjectRegistry::Get().Lookup(DestroyedObject),
 			"destruction in physics publication invalidates registry identity");
 		Check(DestroyedPropertySequence != 0,
@@ -2128,10 +2148,11 @@ namespace {
 			"dynamic transition restores authored CCD request");
 	}
 
-	void TestTouchAndSensorUpdates() {
+	void TestTouchAndSensorUpdates(bool UseIndexedReadback) {
 		using namespace gargantuan;
 		auto Workspace = MakeWorkspace();
 		if (!Workspace) return;
+		if (UseIndexedReadback) WorldRootTestAccess::UseSmallReadbackPolicy(*Workspace);
 		Workspace->SetGravity(0.0f);
 		auto Sensor = std::make_shared<Part>();
 		Sensor->SetAnchored(true);
@@ -2146,10 +2167,21 @@ namespace {
 		Visitor->SetCFrame(CFrame(0.0f, 0.0f, 0.0f));
 		Sensor->SetParent(Workspace);
 		Visitor->SetParent(Workspace);
-		int Touches = 0;
-		Sensor->Touched->Connect([&](std::shared_ptr<BasePart>) { ++Touches; });
+		int Touches = 0, Ends = 0;
+		std::vector<std::string> ContactOrder;
+		Sensor->Touched->Connect([&](std::shared_ptr<BasePart>) {
+			++Touches;
+			ContactOrder.emplace_back("Began");
+		});
+		Sensor->TouchEnded->Connect([&](std::shared_ptr<BasePart>) {
+			++Ends;
+			ContactOrder.emplace_back("Ended");
+		});
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
 		Check(Touches == 0, "sensor mask rejects a disallowed group before event publication");
+		Check(WorldRootTestAccess::IndexedDynamicReadbackActive(*Workspace) == UseIndexedReadback &&
+			WorldRootTestAccess::HasDynamicReadback(*Workspace, Visitor->GetObjectId()) == UseIndexedReadback,
+			"sensor contact fixture runs with the selected ordered or indexed readback policy");
 		Sensor->SetCollisionMask(std::uint16_t{1} << 3);
 		Visitor->SetCFrame(CFrame(20.0f, 0.0f, 0.0f));
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
@@ -2159,10 +2191,14 @@ namespace {
 
 		Visitor->SetCFrame(CFrame(20.0f, 0.0f, 0.0f));
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(Ends == 1 && ContactOrder == std::vector<std::string>{"Began", "Ended"},
+			"sensor begin and end callbacks retain solver contact order under readback");
 		Sensor->SetCanTouch(false);
 		Visitor->SetCFrame(CFrame(0.0f, 0.0f, 0.0f));
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
-		Check(Touches == 1, "committed CanTouch false disables later sensor events");
+		Check(Touches == 1 && Ends == 1 &&
+			ContactOrder == std::vector<std::string>{"Began", "Ended"},
+			"committed CanTouch false disables later sensor events");
 	}
 
 	void TestStaticWorldStepReference() {
@@ -2653,9 +2689,11 @@ int main() {
 	TestMeshPartCollisionFallback();
 	TestConstraintAndPendingDestroy();
 	TestAuthoredJointLifecycle();
-	TestGameplayLuauJointAssembly();
+	TestGameplayLuauJointAssembly(false);
+	TestGameplayLuauJointAssembly(true);
 	TestSimulationPublicationAndImpulse();
-	TestPhysicsPublicationNestedMutation();
+	TestPhysicsPublicationNestedMutation(false);
+	TestPhysicsPublicationNestedMutation(true);
 	TestPhysicsPublicationThrowKeepsAuthoredHistory();
 	TestPhysicsDirtyPartSafePointAndLifecycle();
 	TestDynamicReadbackLifecycle();
@@ -2672,7 +2710,8 @@ int main() {
 	TestBodyControlPersistence();
 	TestContinuousCollisionPolicy();
 	TestWorldRootContinuousCollisionProjection();
-	TestTouchAndSensorUpdates();
+	TestTouchAndSensorUpdates(false);
+	TestTouchAndSensorUpdates(true);
 	TestStaticWorldStepReference();
 	TestSemanticRaycastContract();
 	TestPrimitiveRaycastsAndDeterministicTie();
