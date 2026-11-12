@@ -189,6 +189,8 @@ qualification must not be inferred from the historical dirty-drain source.
 Gameplay comparison [43057067667](https://github.com/gmoddev/gargantuan/actions/runs/43057067667)
 uses identical 512-object content and 18 sample-asset hashes, eight active
 characters and 32 simulated peers (one full client, 31 observer transports).
+It predates the coroutine-root correction and is retained as historical timing,
+not final-source gameplay qualification.
 All eight processes and 40 phases report healthy service and phase gates;
 root-motion commits, eviction/reload and eventual backlog drain remain correct.
 It is a real GameSession simulation, not 32 physical network clients.
@@ -580,3 +582,21 @@ Linux Release [43125606876](https://github.com/gmoddev/gargantuan/actions/runs/4
 and GNS sanitizer [43125606681](https://github.com/gmoddev/gargantuan/actions/runs/43125606681)
 qualification is in progress. No final combined-source pass is inferred from
 the earlier checkpoints.
+
+The fresh rooted-baseline gameplay comparison
+[43120502674](https://github.com/gmoddev/gargantuan/actions/runs/43120502674)
+compares dfeb with 9c on identical frozen content and 18 authored asset inputs.
+One candidate untraced reload fails the existing 250 ms Event-ACK gap gate at
+276.697 ms; its other untraced process and both baselines pass. Content converges,
+100 Remote calls finish with zero errors, and no protocol mismatch is observed.
+The failed process reports frame-work maximum 159.326 ms and root wall-gap
+321.947 ms. Traced processes in both arms show atomic content admission,
+structural selection, replica preflight/live apply and client physics bursts;
+their passing results cannot locate the untraced outlier. This comparison is
+unqualified. Its archive SHA-256 is
+`4d76236900a672eef336bec6e716b5c46c887b77e9ca80d6cdd80e2298310d98`.
+Frozen-binary diagnostic replay
+[43128734144](https://github.com/gmoddev/gargantuan/actions/runs/43128734144)
+executes four complete untraced A/B/B/A quartets with owned-process CPU, host CPU,
+page-fault and working-set sampling. Every failed outcome is retained and the
+health gate is unchanged. That separately instrumented replay remains pending.
