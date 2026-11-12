@@ -282,8 +282,15 @@ comparison and lifecycle gates.
 Physics derives backend descriptions and consumes authored changes at existing
 Main safe points. Post-step simulation publishes through ordinary Instance
 setters, with suppression limited to its own redundant CFrame feedback. The
-separate compact dynamic-body/control view remains an experiment until its
-timed sparse/dense/churn and allocation-fallback gates pass. Body handles stay
+combined compact control/readback representation was rejected on complete-path
+cost. The continuation instead includes a selective dynamic readback index for
+large, predominantly static worlds, following paired Windows and Linux sparse,
+dense, lifecycle and boundary comparisons. It activates at 8192 Parts with at
+most one eighth accepted dynamic bodies and retires below 4096 Parts or above
+one quarter dynamic bodies. These measured private thresholds are not asserted
+optimal. Ordered controls and publication remain unchanged; unknown accounting,
+invalid identities and failed index allocation use ordered full readback in the
+same step. Final combined-source acceptance remains a separate gate. Body handles stay
 private derived resources, tied to complete ObjectId generations. This storage
 work neither replaces Box3D/XPBD nor changes qualified solver behavior.
 

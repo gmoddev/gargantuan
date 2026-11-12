@@ -17,7 +17,9 @@ host, while setter time regresses 98.797 to 103.150 ms. This does not qualify
 alone has no broad stage or allocation win. Signal fast-path and registration
 dirty-cache experiments are rejected after complete-path comparisons. The full
 compact physics representation is rejected on control/lifecycle cost; the
-corrected readback-only alternative remains under evaluation. Retain exact
+selective readback alternative has consistent large-sparse Windows/Linux gains
+and is included pending final combined-source qualification. Its density-limit
+case is neutral and it does not improve every full-frame tail. Retain exact
 synchronous observer/journal semantics and
 conservative fallbacks while resolving these measured costs. Full integrated
 Windows, Linux/sanitizer and applicable physical GPU gates remain separate from

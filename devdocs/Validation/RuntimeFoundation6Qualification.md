@@ -53,8 +53,8 @@ that metric. Full process memory is a separate observation.
 | Typed extraction | Reuse validated identity/ancestry; exact-model inverse reuse; full final fields retained | Integrated core; Windows dense publication improves |
 | Storage alternatives | Direct Instance extraction versus synchronized generation-safe SoA versus immutable per-object snapshots | Measured component alternatives; synchronization costs exceed one-consumer benefit |
 | Physics synchronization | Constant-time admission membership and scoped physics-authored callback suppression | Integrated core; focused lifecycle/reentrant callback gates pass |
-| Compact physics view | Derived dynamic readback and ordered pending controls with conservative full-scan fallback | First representation rejected; selective readback remains isolated after unstable worker timings, with fresh hosted comparisons pending |
-| Replication / F1 | Existing 3I typed catalog and 3J accepted per-peer history remain owners | GNS sanitizer transport/admission gates pass at 30fc; consolidated Release/F1 acceptance remains separate |
+| Compact physics view | Selective derived dynamic readback with unchanged ordered controls and same-step full-scan fallback | Combined control/readback rejected; selective policy has paired Windows/Linux evidence and is included pending final combined-source qualification |
+| Replication / F1 | Existing 3I typed catalog and 3J accepted per-peer history remain owners | GNS sanitizer transport/admission gates pass at 9c; consolidated Release/F1 acceptance remains separate |
 | Typed CFrame setter | Validated property/identity handoff and direct wire encoding | Separate experiment; small setter improvement, no broad stage or allocation win |
 | Signal dispatch / dirty callbacks | One-subscriber lifetime-preserving dispatch; registration flags, epochs and hot/cold tokens | Rejected for promotion: callback savings do not improve the complete drained path |
 
@@ -182,8 +182,8 @@ and nested callback gates execute outside or around that bounded measurement.
 The historical dirty-drain comparison includes the core, registration cache and
 common fixtures at 6f5c63cade57fbcf5f426bd866dae163db8e58c5. The registration
 cache was subsequently rejected and removed. The consolidated candidate retains
-the measured core and disabled diagnostics, adds lifecycle corrections, and does
-not include the experimental selective dynamic readback view. Its broader
+the measured core and disabled diagnostics, adds lifecycle corrections, and now
+includes the separately measured selective dynamic readback view. Its broader
 qualification must not be inferred from the historical dirty-drain source.
 
 Gameplay comparison [43057067667](https://github.com/gmoddev/gargantuan/actions/runs/43057067667)
@@ -364,7 +364,9 @@ root. Two-Script yielded/deferred identity, dynamic getfenv lookup, main sentine
 stack height, 1000 restarts, transient churn and idle weak-owner retirement all
 pass. No global was cleared merely to satisfy the retention gate.
 
-Fresh exact-source ASan/UBSan and broader acceptance remain separate gates.
+The later 9c consolidated checkpoint passes full Linux Release and sanitizer
+CTest as recorded below. Fresh qualification of its composition with selective
+readback and the input reattachment correction remains a separate gate.
 
 ### Canonical package compatibility receipts
 
@@ -406,8 +408,9 @@ before reruns. A second compact fixture confused moving Creates with Updates;
 it now checks the final projected transform. The initial live-render fixture
 failed Windows compilation due min/max macros; NOMINMAX corrects both sources.
 The first dirty-drain attempt requested an incorrectly named CTest and ran no
-measurements. All failed artifacts remain preserved. Physical GPU, full integrated Windows and
-Linux/sanitizer acceptance remain outstanding. Production physics algorithms,
+measurements. All failed artifacts remain preserved. Later physical ordinary
+rendering and consolidated CTest results are recorded below; complete final
+combined-source acceptance remains outstanding. Production physics algorithms,
 transport wire formats, F1/D03 gates and renderer defaults are unchanged.
 
 ## Physical ordinary rendering: source-bound complete-path limits
@@ -504,5 +507,76 @@ established, and they are left untouched. Worker disk also falls below the named
 build reserve. These observations invalidate timing attribution; they do not
 prove the index itself caused the loss or that affinity fixes it. Failed runs,
 exact hashes and telemetry remain in `WorkerReadback-369-30fc-20261111`.
-The final candidate excludes this view while fresh same-source-pair hosted
-Windows and Linux comparisons run. Production solver behavior is unchanged.
+Fresh same-source-pair hosted Windows and Linux comparisons then resolve the
+promotion question as recorded below. The failed worker evidence remains
+available. Production solver behavior is unchanged.
+
+## Selective readback: stable hosted decision
+
+Windows [43117706743](https://github.com/gmoddev/gargantuan/actions/runs/43117706743)
+and Linux Release [43117706942](https://github.com/gmoddev/gargantuan/actions/runs/43117706942)
+compare exact baseline `36988c6ac5701868afae9e92080db50a77522f3f` with
+`30fcadbe31958f4495c66604c1935553c32f7664`. Each passes 164 fresh processes,
+41 A/B/B/A cases and all 20 corresponding semantic fields in setup, warmup
+and measured rows. Independent review verifies all frozen files and 328 raw
+stdout/stderr hashes per OS, plus Linux process resource receipts. Archive
+SHA-256 values are respectively
+`389602618e42bc0eb0878ad40f084952d8b9a0d787298eca6eb6c167e9a064d1` and
+`3b9a567b42ddbb73045c58a64820a45835ab4b601257002dd874b9b4fe5ac877`.
+`HostedSelectiveFinalReview.md` and per-OS `selective-readback-analysis.json`
+under the campaign evidence root preserve the complete analysis.
+
+The measured-stage sum includes creation, controls, physics step, publication
+and projection; full frame also includes the fixture validator. All nine
+10K/128-dynamic cases improve measured stages on both OSes. At 50K/128, nine
+Windows and eight Linux cases improve. Representative idle measured stages
+change 5.137 to 4.687 ms on Windows and 5.188 to 4.756 ms on Linux. The stricter
+requirement that both candidate process means beat both baseline means holds
+for 9/9 and 8/9 large cases on Windows, and 6/9 and 8/9 on Linux. Setup is near
+parity, and working-set/RSS receipts show no large process-memory penalty.
+
+The 8192/128 activation case improves measured stages by about 9.6%/9.8%.
+The inclusive 8192/1024 density edge is neutral (ratios .988/1.005), with Linux
+full frame 5.6% slower; the tested one-eighth threshold is not claimed optimal.
+At 50K idle, full-frame P95 worsens about 3.5% on both OSes despite lower mean;
+validator and process variation limit tail attribution. Dense small worlds
+keep the original path. These results justify the exact selective derivative,
+not a general authoritative SoA or solver rewrite. The final continuation
+includes the tested implementation, with combined-source correctness still
+required before promotion.
+
+## Consolidated source and canonical acceptance
+
+Checkpoint `9c0545b9c6085049d4ea34d16880170957c194c1` contains corrected terminal
+Script root retirement, native ActionMap shutdown and immutable primitive GPU
+bounds. Full Linux Release
+[43118503566](https://github.com/gmoddev/gargantuan/actions/runs/43118503566)
+passes 117/117 CTests; Native
+[43117520617](https://github.com/gmoddev/gargantuan/actions/runs/43117520617)
+passes 159/159 Windows and 106/106 Linux ASan/UBSan/LSan CTests. The Windows
+job subsequently fails a stale Python workflow assertion: physical artifact
+capture adds two guarded steps, while the test counts only the original two.
+The correction checks each physical-probe and qualified-package step's guard
+directly and preserves the diagnostic exclusion. All 45 scheduler tooling
+tests pass locally, with eight expected native-helper skips. Qualified package
+execution/upload were skipped after that failure and are not certified.
+
+The 9c GNS sanitizer
+[43117520553](https://github.com/gmoddev/gargantuan/actions/runs/43117520553)
+passes 11 selected CTests and all 12 byte-admission cases, delivering all
+1,470,700 submitted bytes per case with exact message counts. Pooled ownership
+is 6635 = 6635 retired + 0 terminal, outstanding zero. This differs from the
+historical 30fc retirement split. Three sanitizer wall-clock peer targets fail;
+`safe_to_enable=0` and `physical_f1_qualified=0` remain unchanged. These are
+safety results under unchanged D03, not physical deployment qualification.
+
+Combined runtime/test checkpoint
+`544e36eb8deed62e083288eda9755878bf5ea59b` adds the exact tested selective
+readback, successful ActionMap reattachment, indexed contact/joint/reentrant
+tests and SDL video initialization for the real-Part pixel probe. Descendant
+`f686a4fbce5c21d6cec89bbb08499586b1893378` changes only the stale tooling test.
+Full Native [43127586705](https://github.com/gmoddev/gargantuan/actions/runs/43127586705),
+Linux Release [43125606876](https://github.com/gmoddev/gargantuan/actions/runs/43125606876)
+and GNS sanitizer [43125606681](https://github.com/gmoddev/gargantuan/actions/runs/43125606681)
+qualification is in progress. No final combined-source pass is inferred from
+the earlier checkpoints.
