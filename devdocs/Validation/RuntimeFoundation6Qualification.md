@@ -577,11 +577,37 @@ Combined runtime/test checkpoint
 readback, successful ActionMap reattachment, indexed contact/joint/reentrant
 tests and SDL video initialization for the real-Part pixel probe. Descendant
 `f686a4fbce5c21d6cec89bbb08499586b1893378` changes only the stale tooling test.
-Full Native [43127586705](https://github.com/gmoddev/gargantuan/actions/runs/43127586705),
 Linux Release [43125606876](https://github.com/gmoddev/gargantuan/actions/runs/43125606876)
-and GNS sanitizer [43125606681](https://github.com/gmoddev/gargantuan/actions/runs/43125606681)
-qualification is in progress. No final combined-source pass is inferred from
-the earlier checkpoints.
+passes 118/118 unfiltered CTests after the all-target build. Its archive SHA-256
+is `febb1cee2a44a42249685542b30dae750c696012a8fe85b3d27744861bb3a9e7`.
+All 14 manifest files verify; 35 submodule entries are clean and all 11
+top-level pins match the source. The only generated tracked changes are the
+2199-byte Animator formatting patch. This is Clang 19/GCC 14 Release, PCH off,
+GNS off, with renderer and serialization benchmarks enabled.
+
+Native [43125606814](https://github.com/gmoddev/gargantuan/actions/runs/43125606814)
+passes 107/107 unfiltered Linux ASan/UBSan/LSan CTests at 544e, without skips or
+sanitizer findings. Its archive SHA-256 is
+`5f2bbd869c235d3bdeb5c6620dcd48df98914f2768478adc53302873c1823c3c`.
+The archived source, leak/halt options and compile/link sanitizer flags verify.
+
+The pinned f686 GNS sanitizer
+[43129524984](https://github.com/gmoddev/gargantuan/actions/runs/43129524984)
+passes 11/11 CTests, both reliable/pooled profiles and all 12 admission cases.
+Archive SHA-256 is
+`7202de9b69959692bf95f337e33c4e0d5995f2f3994e5167fac2933ee8afb91d`.
+Pooled ownership is 6635 created/retired, zero terminal/outstanding. The two
+capacity-compatible 8 MiB/s cases meet their raw service targets; three lower-rate
+large-chunk cases miss selected timing targets and are explicitly capacity
+incompatible. F1 remains `SANITIZER_SAFETY_V1`, not physical F1 qualification.
+Independent reviews and original archives are under the corresponding
+`HostedLinuxReleaseCombined`, `HostedLinuxSanCombined` and `HostedGNSFinal-f686`
+directories in the campaign artifact root.
+
+Full exact-source Native
+[43127586705](https://github.com/gmoddev/gargantuan/actions/runs/43127586705)
+remains in progress. Final Windows Release/F1 workload and package acceptance
+are not inferred from the completed Linux and GNS gates.
 
 The fresh rooted-baseline gameplay comparison
 [43120502674](https://github.com/gmoddev/gargantuan/actions/runs/43120502674)
@@ -623,3 +649,42 @@ the replay hardware, rather than a demonstrated candidate-specific regression.
 It does not establish the exact cause of the original isolated outlier or
 qualify 32-peer service timing. `HostedGameplayReplay-43128734144/ReplayReview.md`
 and `replay-analysis.json` preserve all unsuccessful outcomes and limits.
+
+## Real-Part contiguous rendering qualification
+
+The combined 544e Windows build freezes two native probes, five DLLs and 18
+SPIR-V outputs before CTest. Artifact `13905746343` from Native run 43125606814
+has SHA-256 `ea869ef23bc0bdcc56e89fdca7e18e2ac54ac449560fc1a1f575021589d31fc0`.
+Independent verification checks all 34 ZIP entries, manifest/receipt links,
+binary and shader hashes, top-level gitlinks and all 26 shader input hashes
+against the exact Windows CRLF checkout of the Git blobs. The recorded compiler
+and glslc hashes identify the build tools; their executable bytes are not bundled.
+
+On the physical RX 7900 XT/Vulkan device, the corrected SDL video initialization
+allows the mandatory real Block, Ball and Cylinder probe to execute. For each
+shape, two actual Parts create a positive instanced batch, ordinary/contiguous
+RGB bytes match, and moving either Part changes visible pixels. Both 1K smoke
+modes and all 16 subsequent A/B/B/A processes pass. Frozen binaries, all 48 raw
+stream hashes, exact per-frame journal/publication counters and physical-device
+identity verify. Each process has 34 frames; four warmup frames are excluded.
+`PhysicalRX7900XT-Modes-544e-20261112/PhysicalModesReview.md` records the complete
+per-process/tail review and `physical-ordinary-analysis.json` retains samples.
+This compares two modes of one identical executable, not two engine revisions.
+
+| Actual Parts / changed per frame | Completion mean ms, ordinary to contiguous | Draw/wait mean ms, ordinary to contiguous |
+| --- | ---: | ---: |
+| 1K / 1K | 1.519 to 1.441 | 0.561 to 0.515 |
+| 10K / 10K | 23.454 to 24.203 | 4.308 to 4.710 |
+| 50K / 500 | 24.441 to 22.717 | 23.086 to 21.172 |
+| 50K / 50K | 155.307 to 149.878 | 32.370 to 34.054 |
+
+Both contiguous 50K-dense processes have worse draw/wait means, and its draw/wait
+P99 rises 44.661 to 53.456 ms. Setter/publication differences between identical
+executables are run drift, not a source optimization. In the default shadowed
+50K scene, ordinary mode records 100,002 total draws and contiguous records
+50,100: 50,000 individual shadow casters, 98 opaque instanced batches and two
+other draws. The earlier synthetic 98-draw result is not this live scene's total.
+The primitive bounds/eligibility correction is qualified for this physical RX
+fixture; instancing remains opt-in and no default performance promotion follows.
+GTX 1650 SUPER real-Part execution is unavailable under the other campaign's
+active worker lease and is not certified by the RX result.

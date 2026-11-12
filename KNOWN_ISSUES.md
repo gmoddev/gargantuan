@@ -52,10 +52,15 @@ lifetime gates and independently improves the affected native frame tails.
 
 The Runtime 6 real-Part probe exposed an additional eligibility gap: built-in
 GPU meshes lacked immutable position bounds, so ordinary Parts could not enter
-the optional instance path. The isolated correction derives bounds from uploaded
-vertices. Its real Block/Ball/Cylinder Vulkan draw and pixel parity gates require
-physical execution before claiming that correction qualified. The historical
-resident-mesh fixture does not establish this real-Part coverage.
+the optional instance path. The correction derives bounds from uploaded vertices.
+The combined 544e physical RX 7900 XT run passes real Block/Ball/Cylinder draw,
+pixel parity and per-Part visible-update gates, plus all 16 mode-comparison
+processes. The 10K dense path regresses and 50K dense draw/wait P99 rises from
+44.661 to 53.456 ms. Its 50K scene still has 50,100 total draws, including
+50,000 individual shadow casters and 98 instanced opaque batches. Keep this
+mode opt-in; GTX real-Part coverage remains unavailable under the shared
+worker's other active lease. The historical resident-mesh fixture does not
+establish this real-Part coverage or total live-scene draw count.
 
 ## KI-PHY-001: Legacy WeldConstraint does not capture endpoint offsets
 
