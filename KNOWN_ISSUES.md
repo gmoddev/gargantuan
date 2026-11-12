@@ -6,7 +6,7 @@ open until its resolution criteria are implemented and verified.
 
 ## KI-RUN-001: Dense authoritative mutation remains a CPU scalability ceiling
 
-- Status: Verified measured limitation; core optimization qualification in progress.
+- Status: Verified measured limitation; bounded Runtime 6 integration qualified.
 - Area: Ordinary Part mutation, synchronous signals, journal and publication.
 - Evidence: [Runtime Foundation 6 qualification](devdocs/Validation/RuntimeFoundation6Qualification.md).
 

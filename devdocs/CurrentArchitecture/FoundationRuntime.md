@@ -290,7 +290,8 @@ most one eighth accepted dynamic bodies and retires below 4096 Parts or above
 one quarter dynamic bodies. These measured private thresholds are not asserted
 optimal. Ordered controls and publication remain unchanged; unknown accounting,
 invalid identities and failed index allocation use ordered full readback in the
-same step. Final combined-source acceptance remains a separate gate. Body handles stay
+same step. Final canonical gates qualify this composition; performance coverage
+remains limited to the regimes recorded in the qualification report. Body handles stay
 private derived resources, tied to complete ObjectId generations. This storage
 work neither replaces Box3D/XPBD nor changes qualified solver behavior.
 

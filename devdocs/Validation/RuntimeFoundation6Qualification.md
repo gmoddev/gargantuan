@@ -1,7 +1,9 @@
 # Runtime Foundation 6 qualification
 
-Status: core implementation measured and integrated; broader qualification and
-separate optimization experiments remain in progress. This isolated continuation
+Status: bounded Runtime Foundation 6 implementation and canonical qualification
+complete at `f686a4fbce5c21d6cec89bbb08499586b1893378`; later documentation commits
+do not change runtime, native tests or build recipes. Measured capacity limits
+and unqualified slices remain explicit below. This isolated continuation
 starts from qualified Foundation 5 head
 `da902ea481e627d7c4d789033076b3be7dc38334`, stacked on `foundation/renderer-5`.
 Main remains `5b6782e35c4e24fd80bc8d5526104c615c72d84d` at reconciliation.
@@ -53,8 +55,8 @@ that metric. Full process memory is a separate observation.
 | Typed extraction | Reuse validated identity/ancestry; exact-model inverse reuse; full final fields retained | Integrated core; Windows dense publication improves |
 | Storage alternatives | Direct Instance extraction versus synchronized generation-safe SoA versus immutable per-object snapshots | Measured component alternatives; synchronization costs exceed one-consumer benefit |
 | Physics synchronization | Constant-time admission membership and scoped physics-authored callback suppression | Integrated core; focused lifecycle/reentrant callback gates pass |
-| Compact physics view | Selective derived dynamic readback with unchanged ordered controls and same-step full-scan fallback | Combined control/readback rejected; selective policy has paired Windows/Linux evidence and is included pending final combined-source qualification |
-| Replication / F1 | Existing 3I typed catalog and 3J accepted per-peer history remain owners | GNS sanitizer transport/admission gates pass at 9c; consolidated Release/F1 acceptance remains separate |
+| Compact physics view | Selective derived dynamic readback with unchanged ordered controls and same-step full-scan fallback | Combined control/readback rejected; exact selective policy has paired Windows/Linux performance evidence and combined-source canonical correctness qualification |
+| Replication / F1 | Existing 3I typed catalog and 3J accepted per-peer history remain owners | Final f686 GNS sanitizer, five Windows Release workloads and package validation pass; physical/provider F1 remains unqualified |
 | Typed CFrame setter | Validated property/identity handoff and direct wire encoding | Separate experiment; small setter improvement, no broad stage or allocation win |
 | Signal dispatch / dirty callbacks | One-subscriber lifetime-preserving dispatch; registration flags, epochs and hot/cold tokens | Rejected for promotion: callback savings do not improve the complete drained path |
 
@@ -459,7 +461,8 @@ The consolidated correction closes native ActionMap facade admission and
 retires its owned handles during Engine teardown. Direct authored InputService
 definitions remain outside that table. Native Destroying/ActionEnded reentry
 and repeated teardown have explicit regressions. Full qualification of this
-correction is required; the failed historical run is retained.
+correction is recorded in the final f686 gates below; the failed historical run
+is retained.
 
 Completed Scripts also exposed a native/Luau retention cycle through their
 own registry-rooted coroutine and sandbox `script` userdata. The correction
@@ -606,8 +609,30 @@ directories in the campaign artifact root.
 
 Full exact-source Native
 [43127586705](https://github.com/gmoddev/gargantuan/actions/runs/43127586705)
-remains in progress. Final Windows Release/F1 workload and package acceptance
-are not inferred from the completed Linux and GNS gates.
+passes 160/160 Windows CTests and 107/107 Linux sanitizer CTests, with zero
+skips or failures. The exact f686 Linux archive SHA-256 is
+`a111acf1941030b2c96df74ec69f28f712d73c4f4d006502803cfd143dc2c0d4`.
+The corrected Windows Farm32/evidence tooling passes, followed by all five
+Release workloads: pooled reliable timing, pooled structural32,
+FULL_RESERVATION, ordinary32 and structural32. Each reports completed native
+correctness with zero failures under its recorded `POOLED_CORRECTNESS_V1` or
+`FULL_RESERVATION` mode; their contract identities are unchanged.
+The diagnostics archive SHA-256 is
+`bcd0598cf6bf17b38422a838a6f3f36aacc76510115e04eb72efae1e9f7ae2b9`.
+
+Manual package generation, both native runtime-projection validations and
+upload pass. The qualified-scale archive SHA-256 is
+`84f021ff112a927fba355e8ce3229e7ad7201a000795cff36b8b707b0e9b42c1`.
+Independent review verifies the source-pinned fixture payload/manifest, schema-v4
+Player and Server manifests, matching 512-object/273032-byte blobs and their
+deployment/package per-file records. The producer uses revision 8 and Player 1;
+the stored payload retains SHA-256
+`c4f5af6f55981de25acc92e9b6ac7247c8e35b67b6e047519b5d59d35d5ec5f0`.
+`HostedWindowsFinal-f686-43127586705/NativeWindowsReview.md` preserves original
+ZIPs, the full job log and raw verification. Native-helper skips in the separate
+Python tooling suite do not change the 160/160 unfiltered native CTest result.
+This proves native package compatibility and its pinned stored bytes, not
+post-materialization wire-byte identity or physical/provider F1 deployment.
 
 The fresh rooted-baseline gameplay comparison
 [43120502674](https://github.com/gmoddev/gargantuan/actions/runs/43120502674)
@@ -680,7 +705,8 @@ This compares two modes of one identical executable, not two engine revisions.
 
 Both contiguous 50K-dense processes have worse draw/wait means, and its draw/wait
 P99 rises 44.661 to 53.456 ms. Setter/publication differences between identical
-executables are run drift, not a source optimization. In the default shadowed
+executables do not identify a source optimization; run order and mode-dependent
+cache effects are not separated by this capture. In the default shadowed
 50K scene, ordinary mode records 100,002 total draws and contiguous records
 50,100: 50,000 individual shadow casters, 98 opaque instanced batches and two
 other draws. The earlier synthetic 98-draw result is not this live scene's total.
@@ -688,3 +714,33 @@ The primitive bounds/eligibility correction is qualified for this physical RX
 fixture; instancing remains opt-in and no default performance promotion follows.
 GTX 1650 SUPER real-Part execution is unavailable under the other campaign's
 active worker lease and is not certified by the RX result.
+
+## Final disposition and architecture decision
+
+| Slice | Disposition | Evidence and boundary |
+| --- | --- | --- |
+| Journal/ordinary signals, render dirty accumulation, typed publication, indexed admission | Qualified | Source-bound core/realistic comparisons plus final canonical native and sanitizer gates; exact callbacks, history and identities retained |
+| Selective dynamic readback | Qualified in measured regimes | 41-case ABBA comparisons per OS; large-sparse gains, same-step fallback/fault and lifecycle gates; tested hysteresis retained, density-edge/tail limits explicit |
+| Script/VM/GUI/input lifetime and lifecycle capability checks | Qualified | Final Windows 160/160, Linux sanitizer 107/107, focused GC/resume/destructive callback histories and independent source review |
+| GNS and package continuation | Qualified native scope | Exact f686 three-job canonical source, five Release workloads and both runtime package projections; D03/F1 boundaries unchanged |
+| Complete-game scalability | Partially implemented | Actual mutation/extraction/admission costs improved; dense setters, atomic activation, replica apply and frame tails remain measured ceilings; strict 32-simulated-peer service timing is unqualified |
+| Contiguous native instancing | Experimental, opt-in | Physical RX pixel/draw correctness passes; 10K and dense 50K draw/wait regressions prevent default promotion |
+| GTX real-Part physical qualification | Blocked | Other campaign's worker lease is active at final read; no worker interference or inferred Nvidia result |
+| Combined compact control/readback, signal/dirty-registration variants | Rejected | Their complete-path comparisons fail to repay maintenance/drain costs; source and unsuccessful evidence retained |
+| Authoritative SoA/ECS replacement, global dirty bus, parallel mutable graph | Deferred | The synchronized one-consumer alternatives do not justify replacing existing authority or adding a cross-thread ownership system |
+
+Retain optimized Main-owned Instance/DataModel storage with bounded, disposable
+consumer projections. Adopt the exact selective readback derivative for its
+demonstrated sparse regimes; retain typed immutable RenderPublication and the
+existing 3I/3J/3L replication/admission owners. Ordinary callbacks and committed
+history remain exact; only consumer final-state work coalesces. A general SoA/ECS
+authority replacement has no measured complete-path justification here.
+
+The current FoundationRuntime disposition answers all 14 campaign architecture
+questions. Independent reviews checked ownership, mutation/capability boundaries,
+lifecycle, full generation identity, ordering and performance attribution. Future
+streaming, terrain and multiplayer work should extend the existing admission and
+consumer-owned projection budgets and measure atomic commit/apply bursts. Faster
+primitive iteration alone does not remove those costs. This is a qualified
+isolated draft continuation, not a mainline merge, release or universal capacity
+certification.
