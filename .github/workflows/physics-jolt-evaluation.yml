@@ -1,0 +1,118 @@
+name: Experimental physics comparison
+
+on:
+  pull_request:
+    paths:
+      - 'experiments/PhysicsJoltEvaluation/**'
+      - '.github/workflows/physics-jolt-evaluation.yml'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: physics-evaluation-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux-release-comparison:
+    name: Ubuntu Release / experimental quality and timing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      SDL_VIDEODRIVER: dummy
+    steps:
+      - name: Checkout recursive Engine dependencies
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+      - name: Checkout pinned Jolt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: jrouwe/JoltPhysics
+          ref: e77f175595e64cb44218cc9d9d56fc365ad0e36a
+          path: .evaluation-jolt
+          persist-credentials: false
+      - name: Verify source and merged-main qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir evaluation-evidence
+          git rev-parse HEAD > evaluation-evidence/executed-source.txt
+          git rev-parse 'HEAD^{tree}' > evaluation-evidence/executed-tree.txt
+          git submodule status --recursive > evaluation-evidence/submodules.txt
+          if grep -Eq '^[\-+U]' evaluation-evidence/submodules.txt; then exit 1; fi
+          git merge-base --is-ancestor 5b6782e35c4e24fd80bc8d5526104c615c72d84d HEAD
+          for Run in 42376227131 42376227145; do
+            gh api "repos/gmoddev/gargantuan/actions/runs/$Run" > "evaluation-evidence/main-prerequisite-$Run.json"
+          done
+          python3 - <<'PY'
+          import json, pathlib
+          for Path in pathlib.Path('evaluation-evidence').glob('main-prerequisite-*.json'):
+              Run = json.loads(Path.read_text())
+              assert Run['head_sha'] == '5b6782e35c4e24fd80bc8d5526104c615c72d84d'
+              assert Run['status'] == 'completed' and Run['conclusion'] == 'success', 'Exact merged-main qualification is not complete'
+          PY
+      - name: Install controlled Release dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 clang-format g++-14 cmake ninja-build \
+            libfreetype-dev libx11-dev libxcursor-dev libxext-dev libxfixes-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev
+          clang++-19 --version > evaluation-evidence/compiler.txt
+          lscpu > evaluation-evidence/cpu.txt
+      - name: Install pinned repository tools
+        uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908 # v3
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Generate current reflection sources
+        run: lute tools/classgen
+      - name: Configure Release comparison
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-evaluation -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
+            -DCMAKE_C_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+            -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+            -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DGARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION=ON \
+            -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF -DBUILD_TESTING=ON \
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF \
+            -DGARGANTUAN_BUILD_PHYSICS_JOLT_EVALUATION=ON \
+            -DPHYSICS_EVALUATION_JOLT_ROOT="$GITHUB_WORKSPACE/.evaluation-jolt" \
+            2>&1 | tee evaluation-evidence/configure.log
+      - name: Build finite comparison targets
+        id: build
+        run: |
+          set -euo pipefail
+          cmake --build build-evaluation --parallel 2 --target \
+            PhysicsJoltRigidEvaluation PhysicsJoltSoftEvaluation PhysicsJoltCouplingEvaluation \
+            PhysicsJoltRigidEvaluationAllocations PhysicsJoltSoftEvaluationAllocations PhysicsJoltCouplingEvaluationAllocations \
+            2>&1 | tee evaluation-evidence/build.log
+      - name: Collect three-process Release measurements and quality gates
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          python3 experiments/PhysicsJoltEvaluation/RunEvaluation.py --build build-evaluation \
+            --jolt .evaluation-jolt --output evaluation-evidence/Release --mode full --repeats 3
+      - name: Collect separate allocation pass
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          python3 experiments/PhysicsJoltEvaluation/RunEvaluation.py --build build-evaluation \
+            --jolt .evaluation-jolt --output evaluation-evidence/Allocations --mode allocations
+      - name: Retain raw successes and failures
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: experimental-physics-linux-evidence
+          if-no-files-found: error
+          path: |
+            evaluation-evidence/
+            build-evaluation/CMakeCache.txt
+            build-evaluation/compile_commands.json
+            build-evaluation/CMakeFiles/CMakeConfigureLog.yaml

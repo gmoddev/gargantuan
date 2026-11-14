@@ -8,6 +8,10 @@ option(GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION
 	"Configure focused native geometry/asset/physics tests without shader tooling; graphical/package targets fail closed"
 	OFF)
 
+option(GARGANTUAN_BUILD_PHYSICS_JOLT_EVALUATION
+	"Build isolated experimental physics comparators; never changes production backend selection"
+	OFF)
+
 # On Windows, vcpkg appends z-applocal to each Ninja link rule. Those commands
 # copy dependencies into the same output directory, so parallel links can race
 # on a DLL even when the link inputs themselves are independent. Keep compile
@@ -1690,6 +1694,10 @@ add_custom_command(TARGET gargantuan POST_BUILD
 		"$<TARGET_FILE_DIR:gargantuan>/runtime"
 	COMMENT "Copying engine-shipped Luau runtime modules next to Gargantuan"
 )
+
+if(GARGANTUAN_BUILD_PHYSICS_JOLT_EVALUATION)
+	add_subdirectory(experiments/PhysicsJoltEvaluation)
+endif()
 
 if(WIN32 AND NOT BUILD_TESTING)
 	add_custom_command(TARGET gargantuan POST_BUILD
