@@ -44,7 +44,19 @@ class DocumentationTests(unittest.TestCase):
             with mock.patch.object(Documentation, "Content", Content):
                 self.assertEqual(Documentation.Resolve(Source, "./api/"), (Content / "api/index.mdx").resolve())
 
-    def test_missing_links_anchors_and_code_examples(self):
+    def test_route_relative_link_normalizes_virtual_directory(self):
+        # The page's route directory does not physically exist. This catches
+        # the POSIX traversal failure masked by Windows' path normalization.
+        with tempfile.TemporaryDirectory() as Temporary:
+            Content = pathlib.Path(Temporary)
+            (Content / "guides").mkdir()
+            Target = Content / "guides/first.mdx"
+            Target.write_text("# First", encoding="utf8")
+            Source = Content / "guides/other.mdx"
+            with mock.patch.object(Documentation, "Content", Content):
+                self.assertEqual(Documentation.Resolve(Source, "../first/"), Target.resolve())
+
+    def test_missing_links_anchors_and_code_examples_are_reported(self):
         with tempfile.TemporaryDirectory() as Temporary:
             Folder = pathlib.Path(Temporary)
             Source = Folder / "a.md"

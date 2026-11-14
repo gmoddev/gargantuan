@@ -65,7 +65,7 @@ reviewable documentation branch and draft PR, not a completed mainline merge.
   unverified. Unknown historical review dates remain unknown.
 - Declaration catalog: 67 classes/services, 440 members and 214 native header
   entries. Source hashes use canonical UTF-8/LF text so Windows and Linux agree.
-- Six Python checker regressions and five Node link-transformer regressions pass.
+- Seven Python checker regressions and five Node link-transformer regressions pass.
 - A real Luau compiler accepts all five standalone files and three current
   document examples (eight total), without executing gameplay.
 - Locked Bun 1.3.13 / Node 24 / Astro build produces 34 pages; the generated-site
@@ -79,3 +79,11 @@ reviewable documentation branch and draft PR, not a completed mainline merge.
 Documentation PR CI must also pass at the published head. Syntax and source
 review do not establish full Engine typechecking, runtime gameplay execution,
 new graphics support or physical/provider/network performance qualification.
+
+The first documentation PR run
+[`43595624171`](https://github.com/gmoddev/gargantuan/actions/runs/43595624171)
+failed at head `58ca102b03297b3ec6fb968f64e57abfc30c3130`: its Linux checker
+traversed nonexistent virtual route directories before normalizing `..`.
+Windows had masked that filesystem difference. The follow-up normalizes
+candidates first and adds the corresponding cross-platform regression; the
+original failed run remains failed evidence.

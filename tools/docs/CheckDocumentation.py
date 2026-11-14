@@ -86,6 +86,10 @@ def Resolve(Document: pathlib.Path, Target: str) -> pathlib.Path | None:
     if Document.is_relative_to(Content) and not Path.startswith("/"):
         Route = Document.parent if Document.stem == "index" else Document.with_suffix("")
         Candidates.append(Route / Path)
+    # A virtual page directory does not exist on disk. Normalize '..' before
+    # asking the OS about it; POSIX otherwise tries to traverse that missing
+    # directory while Windows normalizes the same path implicitly.
+    Candidates = [Candidate.resolve() for Candidate in Candidates]
     for Candidate in Candidates:
         for Option in (Candidate, Candidate.with_suffix(".mdx"), Candidate.with_suffix(".md"),
                        Candidate / "index.mdx", Candidate / "index.md"):
