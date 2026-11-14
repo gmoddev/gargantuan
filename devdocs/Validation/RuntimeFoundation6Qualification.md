@@ -1,0 +1,746 @@
+# Runtime Foundation 6 qualification
+
+Status: bounded Runtime Foundation 6 implementation and canonical qualification
+complete at `f686a4fbce5c21d6cec89bbb08499586b1893378`; later documentation commits
+do not change runtime, native tests or build recipes. Measured capacity limits
+and unqualified slices remain explicit below. This isolated continuation
+starts from qualified Foundation 5 head
+`da902ea481e627d7c4d789033076b3be7dc38334`, stacked on `foundation/renderer-5`.
+Main remains `5b6782e35c4e24fd80bc8d5526104c615c72d84d` at reconciliation.
+PR 21 and PR 22 remain separate, open draft foundations. No Node, Studio or LUI
+source belongs to this campaign.
+
+## Baseline and comparison contract
+
+The baseline checkpoint `2f4ef8d90126c24a236d52476c769dd199ae99a8` changes
+benchmark fixtures and CMake only and preserves the Foundation 5 runtime.
+Candidate runtime changes are measured against identical fixtures. Existing Foundation 5 raw evidence is
+retained in `C:/Users/aiden/.codex/artifacts/renderer-foundation5-20261111`.
+New evidence belongs to sibling `runtime-foundation6-20261111`.
+
+`gargantuan_runtime_foundation6_benchmark` extends the existing semantic fixture.
+`--count=N --density-matrix` constructs one world, then measures 0%, 0.1%, 1%,
+10%, 50% and 100% changes without reconstructing that world between densities.
+`--split-construction --diagnostic-marks` separates world setup, group setup,
+Part allocation, detached transform initialization, adoption, initial publication,
+measurement, semantic destruction and final object/resource release.
+Every measured frame checks the exact journal sequence delta, projected update
+count, no create/remove/resync, and retained object count. Ordinary native body
+admission is the default. The explicitly tagged renderer-only mode remains a
+controlled candidate-list fixture, not a physics admission test.
+
+Examples, each with a fresh raw sample path:
+
+```text
+gargantuan_runtime_foundation6_benchmark 12 --count=10000 --density-matrix --group-width=256 --split-construction --diagnostic-marks --samples=<fresh.csv>
+gargantuan_runtime_foundation6_benchmark 12 --count=10000 --density-matrix --property=material --group-width=256 --split-construction --diagnostic-marks --samples=<fresh.csv>
+```
+
+`--property=mixed` measures both transform and material changes. `--writes=N`
+performs distinct repeated writes while publication coalesces final object state;
+the journal must still contain every required ordinary mutation. Raw frame rows
+and invocation receipts preserve count, writes, property mode, density, native
+physics state, group layout and profiling state. Profile clocks are attribution,
+not a performance candidate. A separate allocation binary counts calling-thread
+C++ new requests; C allocations, driver allocations and other threads are outside
+that metric. Full process memory is a separate observation.
+
+## Competing experiments
+
+| Workstream | Candidate / gate | Present state |
+| --- | --- | --- |
+| Ordinary mutation/lifecycle | Retained journal append/rollback, unobserved signal allocation; preserve nested/destructive observers and exact journal/history | Integrated core; focused Windows regression and comparison pass |
+| Explicit batching | Existing prepared-property contract; atomic observer visibility differs from ordinary setters and remains explicit | Semantic and allocation-rollback gates pass; no general throughput advantage demonstrated |
+| Dirty distribution | Single-object journal batch unions renderer-final-state domains; reliable records remain uncoalesced | Integrated core; capture/ack parity gates pass |
+| Typed extraction | Reuse validated identity/ancestry; exact-model inverse reuse; full final fields retained | Integrated core; Windows dense publication improves |
+| Storage alternatives | Direct Instance extraction versus synchronized generation-safe SoA versus immutable per-object snapshots | Measured component alternatives; synchronization costs exceed one-consumer benefit |
+| Physics synchronization | Constant-time admission membership and scoped physics-authored callback suppression | Integrated core; focused lifecycle/reentrant callback gates pass |
+| Compact physics view | Selective derived dynamic readback with unchanged ordered controls and same-step full-scan fallback | Combined control/readback rejected; exact selective policy has paired Windows/Linux performance evidence and combined-source canonical correctness qualification |
+| Replication / F1 | Existing 3I typed catalog and 3J accepted per-peer history remain owners | Final f686 GNS sanitizer, five Windows Release workloads and package validation pass; physical/provider F1 remains unqualified |
+| Typed CFrame setter | Validated property/identity handoff and direct wire encoding | Separate experiment; small setter improvement, no broad stage or allocation win |
+| Signal dispatch / dirty callbacks | One-subscriber lifetime-preserving dispatch; registration flags, epochs and hot/cold tokens | Rejected for promotion: callback savings do not improve the complete drained path |
+
+The alternatives probe includes actual authoritative setters, dirty capture,
+cache synchronization and consumer work. It verifies exact dirty identities,
+incremental retained-state parity, stale generation retirement and full rebuild.
+It does not qualify physics, networking, asset-backed MeshParts or production
+capacity from primitive extraction alone.
+
+## Ownership and admission
+
+Instance/DataModel remain authority on Main. Ordinary callbacks remain
+synchronous. Render-final-state coalescing is distinct from reliable journal
+delivery and explicit prepared authoring batches. No alternative becomes an
+authoritative writer or exposes native storage to Luau.
+
+The shared worker was occupied by `LuiSdkRecovery20261111` during initial source
+work. No compilation or benchmark was admitted under that lease. Component
+builds may reuse this campaign's validated Foundation 5 source/build caches only
+after a fresh cooperative lease and explicit ownership handoff; frozen Foundation
+5 packages remain immutable. Full networking/F1 and cross-platform qualification
+use the existing canonical suites and acceptance contracts, without new targets
+or exemptions. No source candidate is qualified by this document alone.
+
+## Measured core checkpoint
+
+Windows comparison [43056868901](https://github.com/gmoddev/gargantuan/actions/runs/43056868901)
+compares baseline `2f4ef8d90126c24a236d52476c769dd199ae99a8` with
+`fbd0ae9026a43f6a5e263c98e1aaf3953dd2318e` on the same hosted Windows machine.
+The integrated core at `6c9145c74fe77fad31d6c3c4c5128999b749def7` has identical
+`include/`, `src/` and `tools/classgen/` contents to that candidate; its additional
+fixture correction does not alter the runtime. Full canonical qualification of
+the integrated checkpoint remains a separate gate.
+
+Host: AMD64 Family 25 Model 1, four logical processors, Windows 10.0.26100,
+MSVC 19.51, Release, PCH off, NoGNS. Both exact sources build and pass the
+foundation, prepared-property, publication, physics and fixture gates before
+frozen binaries are measured. All 66 measured processes exit zero. Each reported
+ordinary phase pools 24 raw frames per arm across two processes in A/B/B/A order.
+Profile clocks and allocation counting use separate executions. Process receipts,
+EXE/DLL hashes, compiler output, raw CSV, stdout/stderr and source manifests are in
+`C:/Users/aiden/.codex/artifacts/runtime-foundation6-20261111/HostedWindowsCore-43056868901`.
+
+| Workload | Baseline mean ms | Core mean ms | Interpretation |
+| --- | ---: | ---: | --- |
+| 50K native Parts, all changed: setters | 98.797 | 103.150 | 4.4% regression remains under investigation |
+| Same: immutable publication | 84.203 | 53.352 | 36.6% lower |
+| Same: projection apply | 9.806 | 9.529 | Small change |
+| Same: sum of these component stages | 192.806 | 166.031 | 13.9% lower; not whole-engine or GPU frame time |
+| 50K native Parts, 500 changed: stage sum | 1.775 | 1.472 | 17.1% lower |
+| 1K native Parts, all changed: stage sum | 2.221 | 1.690 | Lower in this fixture |
+| 10K native Parts, all changed: stage sum | 36.742 | 29.907 | Lower in this fixture |
+| 25K native Parts, all changed: stage sum | 96.257 | 80.752 | Lower in this fixture |
+| 50K initial adoption, excluding detached transform initialization | 56,146 | 1,326 | Combined journal/admission change; not isolated attribution |
+
+Part allocation is about 80 ms in both arms. Initial full publication is about
+69 versus 71 ms; unchanged-state inverse reuse does not optimize every full
+build. Peak process working set is 720,426 versus 687,620 KiB. Dense 10K
+calling-thread C++ new counts and requested bytes do not decrease. Neither the
+working-set observation nor the combined lifecycle result identifies a single
+optimization as its sole cause. Zero-change times near 0.003 ms are noise-scale.
+
+The separate same-source attribution replay
+[43062292991](https://github.com/gmoddev/gargantuan/actions/runs/43062292991)
+reduces 50K final-state extraction from 63.841 to 36.917 ms on its host;
+publication is 87.257 to 58.511 ms and setter/dirty time is 107.184 to 110.267 ms.
+Inclusive diagnostic timers are not additive predictions for an unprofiled run.
+
+## Alternative architecture evidence
+
+At 10K Parts, one sequential consumer costs 2.849 ms with direct Instance
+extraction, 2.889 ms with synchronized selective SoA, and 5.093 ms with
+immutable per-object snapshots. Random access costs 3.275, 3.319 and 6.225 ms.
+The SoA logical payload is 995,316 bytes and snapshot values are 1.6 MB, excluding
+container/allocator overhead. These are bounded component results including
+authority synchronization, not a universal rejection of derived storage or
+immutable renderer publications. An authoritative ECS replacement is unsupported.
+
+Existing explicit prepared mutation preserves its separate atomic observer
+contract. A warmed 1K comparison costs about 1.5 ms and 860 KiB versus ordinary
+mutation around 0.85 ms and 224 KiB. It produces four actions/revisions versus
+1K ordinary changes while preserving required records. That semantic difference
+prevents treating it as a transparent faster ordinary-setter replacement.
+
+The isolated typed CFrame comparison
+[43048909412](https://github.com/gmoddev/gargantuan/actions/runs/43048909412)
+uses instrumentation baseline `2d7806492734090f58211ccf049e3df6350d7b82` and
+typed candidate `795c2d28c2252c54a148e846d2ed54b1e5c80794`.
+It removes the measured second lookup and reduces encoding time, but dense 50K
+setter time changes only 101.234 to 98.881 ms and component stage sum changes
+176.148 to 177.157 ms. The four setter observations drift from baseline 105.795,
+candidate 100.335, candidate 97.427 to baseline 96.673 ms. Sparse 50K stage sums
+regress 1.9–4.8%. The allocation replay
+[43059877450](https://github.com/gmoddev/gargantuan/actions/runs/43059877450)
+reports identical dense 50K counts in both arms: about 100,016 C++ new calls and
+36,235,398 requested bytes per frame. This candidate remains experimental.
+
+## Realistic and full-engine evidence
+
+The optional live renderer path in `gargantuan_runtime_foundation6_benchmark`
+uses the same authoritative Part setters, journal count, typed publication and
+projection delta gates as the ordinary rigid fixture. For a bounded offscreen
+SDL run on a machine with an SDL GPU device:
+
+```powershell
+.\gargantuan_runtime_foundation6_benchmark.exe 3 --count=1000 --changes=1000 --draw-backend=sdl --draw-instancing=contiguous --samples=runtime6-live.csv
+```
+
+`--draw-backend=headless` runs the same path without SDL GPU submission.
+The default backend remains `none`. The draw path first submits and drains the
+initial full publication. Each measured frame mutates live Parts, publishes,
+draws, and waits for idle before the separate test projection apply. Raw CSV
+records `DrawAndWaitMs`, `MutationToCompletionMs`, backend, instancing selection,
+headless object/update counts or SDL submitted-frame, resync, draw, upload and
+instance counters. The completion timing is a host wall clock through an SDL
+idle wait, not a GPU timestamp. The SDL gate requires one submitted frame per
+publication, actual object draws and no full resync after the initial frame.
+An explicit contiguous transform run also requires actual contiguous batches.
+The direct Luau closure fixture separately measures reflected property writes
+and synchronous script callbacks under ServerRuntime capabilities. Its timed
+lua_pcall excludes Script scheduling/resumption and full Engine frame work;
+ordered journal/state, retained connections, denied/invalid/read-only mutation
+and nested callback gates execute outside or around that bounded measurement.
+
+The historical dirty-drain comparison includes the core, registration cache and
+common fixtures at 6f5c63cade57fbcf5f426bd866dae163db8e58c5. The registration
+cache was subsequently rejected and removed. The consolidated candidate retains
+the measured core and disabled diagnostics, adds lifecycle corrections, and now
+includes the separately measured selective dynamic readback view. Its broader
+qualification must not be inferred from the historical dirty-drain source.
+
+Gameplay comparison [43057067667](https://github.com/gmoddev/gargantuan/actions/runs/43057067667)
+uses identical 512-object content and 18 sample-asset hashes, eight active
+characters and 32 simulated peers (one full client, 31 observer transports).
+It predates the coroutine-root correction and is retained as historical timing,
+not final-source gameplay qualification.
+All eight processes and 40 phases report healthy service and phase gates;
+root-motion commits, eviction/reload and eventual backlog drain remain correct.
+It is a real GameSession simulation, not 32 physical network clients.
+Trace-off frame-work P95 during load is 3.424/2.562/2.556/3.155 ms in A/B/B/A
+order; reload is 3.163/2.271/2.248/2.930 ms. These support a directional gain,
+not precise mutation attribution. Load maxima remain 46–119 ms, reload maxima
+50–114 ms, and load convergence P95 264–321 ms. Healthy service does not mean
+every frame meets 16.667 ms. Tick cadence changes journal volume; the input
+fixture is identical but its dynamic mutation stream is not byte-identical.
+
+Corrected realistic comparison
+[43065693718](https://github.com/gmoddev/gargantuan/actions/runs/43065693718)
+passes at fixture-only baseline `8831e09f39ecd103585342eab0193570737614f2` versus
+core candidate `9be409347e971a88d338ddb41446b781ea8d9358`.
+It includes canonical MeshPart reimport/resource parity, hierarchy changes,
+actual ReplicaApplier updates, animation, soft-body and replication fixtures.
+Independent review verifies the ZIP digest, extraction bounds and all 64
+stdout/stderr hashes. All 32 processes exit zero. For 512 MeshParts with 64
+changed, steady publication mean is 0.1266 to 0.0871 ms; receiver publication
+after actual ReplicaApplier mutation is 0.0982 to 0.0614 ms. Receiver apply
+remains 16.928 to 16.016 ms (P95 19.648 to 16.426 ms), a much larger cost than
+publication. Reimport of 512 dependents produces exactly 512 updates, one mesh
+create/remove and no full resync. Its publication A/B/B/A observations are
+0.8344/0.5706/0.5844/0.7815 ms. Hierarchy and receiver generation-replacement
+gates pass. The 128/0 quiet case is near measurement noise.
+
+The shared-asset 1K MeshPart adoption observations are
+629.463/30.684/30.785/620.692 ms; asset full resync shows no gain. The 100-rig
+animation total is about 1.281 to 1.245 ms, 500-root-motion total stays around
+3.6 ms, and 1,024-vertex cloth has no meaningful delta or stale/drop events.
+The 8,193-object replication preflight remains about 109–113 ms. These measured
+limits do not justify a new replication authority or global dirty bus.
+
+## Rejected signal-container optimization
+
+The one-subscriber fast path at `1385d1ec3abdb2c5d0ad0f517959d7b7c06a1027`
+is compared with common profiling baseline
+`a0f33623688b63cc3810c215662cd63f4b0577c7` in
+[43065688927](https://github.com/gmoddev/gargantuan/actions/runs/43065688927).
+Both 10-test regression sets and all 36 processes pass. It preserves owning
+connection lifetime, recursion, deferral and cleanup ordering, but does not
+remove the required shared ownership copy or callback. Unprofiled steady dense
+10K stage sums worsen 27.128 to 27.577 ms; 50K worsens 160.605 to 161.819 ms.
+Profiled 50K native signal time changes 38.674 to 38.310 ms, while renderer-only
+time worsens 37.195 to 37.701 ms. Counts match and the snapshot timer remains
+essentially unchanged. This does not support promotion; the source and verified
+artifact remain isolated. Per-registration physics dirty coalescing is a
+different candidate and requires its own regression/fault and performance gates.
+
+## Dirty callback and compact physics experiments
+
+Per-registration dirty-binding comparison
+[43068137180](https://github.com/gmoddev/gargantuan/actions/runs/43068137180)
+compares the same profiling baseline
+a0f33623688b63cc3810c215662cd63f4b0577c7 with candidate
+0bbdd1870b340a3645a65867259d76930302fa80. All 36 processes and mandatory
+regression/allocation-recovery gates pass. The 50K dense off-clock setter mean
+falls 105.013 to 94.850 ms; the four process means are
+105.149/94.712/94.987/104.878 ms. Publication plus projection changes 58.904 to
+60.678 ms. Dense 10K setters change 19.724 to 17.304 ms. At 50K native bodies,
+diagnostic callback time for a new mark falls 18.385 to 9.819 ms and coalesced
+marks fall 13.102 to 1.809 ms. Every expected journal and callback count matches.
+Peak working set increases about 1–3 MiB; allocations are not measured.
+
+That fixture does not drain physics between frames. Its gain does not establish
+a complete simulation-frame result. The separate first-mark comparison
+[43072892853](https://github.com/gmoddev/gargantuan/actions/runs/43072892853)
+adds StepPhysics(0) outside setter/profile timing, then verifies dirty drain,
+backend pose and exact journal delta on every frame. It uses identical fixture
+sources 7e66edb874b446b7410f582d99e15fc39e7e5c86 and
+6f5c63cade57fbcf5f426bd866dae163db8e58c5. That attempt fails before timing
+because lazy AssetService creation appends legitimate journal records inside
+the first safe point. Identical prewarm correction moves that setup outside
+timing and preserves exact per-frame journal checks.
+
+The corrected [43075408692](https://github.com/gmoddev/gargantuan/actions/runs/43075408692)
+passes all 24 processes. At 50K with clocks off, setter plus physics drain
+changes 181.292 to 184.511 ms (+1.8%); drain alone changes 76.727 to 82.889 ms.
+Removing the reset loop with a registration epoch does not settle the tradeoff:
+[43079909984](https://github.com/gmoddev/gargantuan/actions/runs/43079909984)
+passes 60 processes but the full-drain path is +6.3% at 10K and +0.8% at 50K.
+
+The next hot/cold variant keeps the weak Part directly in the tracked map and
+separates callback tokens, removing an extra dereference during body updates.
+[43085470888](https://github.com/gmoddev/gargantuan/actions/runs/43085470888)
+compares f85d9f37752dbfa2de9ffe33640894d2ab4c2316 with
+cab3aefa90c361f8093a17c203cbc4dfb3541fff. All 60 processes and focused gates
+pass, but 50K setter plus drain worsens 177.103 to 183.560 ms (+3.6%), including
+drain 73.062 to 80.687 ms (+10.4%). Its profiled repeated, undrained callbacks
+improve 10.837 to 2.323 ms; each drained frame instead has 50K new marks.
+The complete-path regression rejects promotion of all three registration
+variants. Their isolated source and correctness evidence remain preserved;
+integration removes the token optimization while retaining conservative
+dirty-insertion failure recovery.
+
+The first compact view passes all 72 processes in
+[43068853213](https://github.com/gmoddev/gargantuan/actions/runs/43068853213),
+sources 19b1ace4014d16435d3cb7166b3c42c16fce0ab4 and
+bae94835d45daf404202957694ebad95bd639e52. The 18 cases cover 900 static/100
+dynamic and 1K dynamic worlds, zero/sparse/dense controls and 0/1/16 lifecycle
+operations per frame, with 30 samples after four warmup frames in A/B/B/A order.
+Step time improves in 14 cases but full frame improves in only four; median
+candidate/baseline ratios are 0.947 for step, 1.246 for full frame and 1.154 for
+frame P95. New per-control ancestry/index work and shifted PartPositions on
+removal overwhelm the readback saving. This representation is rejected for
+integration, with its source and successful correctness evidence retained.
+
+The next readback-only experiment preserves baseline controls, ordered Part
+removal and motion publication, and indexes only accepted dynamic body-state
+reads. Independent review caught a real same-step fallback defect: an invalid
+derived record set a full-scan flag but returned until the next step.
+ca384c6c1e507359fc28cb92eff3414f659b6dae scans immediately and adds a corrupted
+derived-body-ID regression checking same-step published velocity and recovery.
+[43073019344](https://github.com/gmoddev/gargantuan/actions/runs/43073019344)
+qualifies that corrected source against the shared baseline. It remains isolated.
+
+## Qualification boundaries and unsuccessful evidence
+
+### Script lifetime corrections
+
+Windows [43072499672](https://github.com/gmoddev/gargantuan/actions/runs/43072499672)
+access-violates after all measured frame rows and semantic validation succeed.
+Linux ASan [43077722014](https://github.com/gmoddev/gargantuan/actions/runs/43077722014)
+reproduces coroutine use-after-free in all 24 GC/disconnect variants. Source
+inspection identifies `Script::Step` rooting stack index 1, a library table,
+instead of the new coroutine. The correction roots the actual top-of-stack
+thread before loading/resuming and restores the incoming stack height.
+
+The same sanitizer matrix
+[43082581701](https://github.com/gmoddev/gargantuan/actions/runs/43082581701)
+passes 24/24. Windows diagnostic
+[43082867443](https://github.com/gmoddev/gargantuan/actions/runs/43082867443)
+passes 96/96; normal Luau/headless
+[43082871987](https://github.com/gmoddev/gargantuan/actions/runs/43082871987)
+passes 44/44 with exact journal/callback counts. Paired 10K Luau CFrame timings
+show no demonstrated mutation speedup. Unrooted timings remain historical.
+
+Source d25a8b3b2e8662d23a20e96317647f6840e91527 also defers cleanup during
+active resume and snapshots activation across nested callbacks.
+[43085516350](https://github.com/gmoddev/gargantuan/actions/runs/43085516350)
+passes Foundation and all 24 stress processes under ASan/UBSan. It does not
+contain later Engine-owned VM lifetime/logical-shutdown corrections; those
+reachable game-destruction paths require final combined-source qualification.
+
+### Worker lifecycle, sandbox and fixture qualification
+
+Exact worker source `36988c6ac5701868afae9e92080db50a77522f3f` passes all
+11 focused Release CTests on MSVC 14.51.36231, PCH off, NoGNS. This includes
+Foundation's actual Engine-frame, task, native setter, input and physics-motion
+destruction paths; GUI and remote callbacks; prepared mutation/history,
+publication, physics, dirty-allocation recovery, pinned content fixture and
+package spatial metadata, plus both Luau mutation smokes. The original JUnit,
+binary hashes and log are preserved under
+`WorkerFocused-369-20261111T214208Z`; log SHA-256 is
+`4fe74c5f36d4d2556b760af2a74f91be69cf9e991058c42f143c2e63004fd8d3`.
+This is focused Windows qualification, not complete canonical/GNS/GPU acceptance.
+
+Earlier worker sources c63 and 232 each pass 10/11 gates and fail Foundation;
+both original receipts remain. New Engine fixtures initially left ProcessService
+stopped, so Engine::Step returned without running their Scripts. Startup is now
+explicit, the body setup checks the actual accepted anchored body rather than
+assuming no built-in character bodies, and logical shutdown is observed during
+child retirement rather than after Engine teardown has finished. Assertions and
+real callback paths remain mandatory.
+
+The retention test also exposed a production binding defect. LoadIntoState
+assigned the shared `script` global before luaL_sandboxthread installed its
+private environment. Pinned Luau `3fc82b1071ab387531175869afc4fb528464afa4`
+creates a new environment with fallback to the prior globals; child task threads
+inherit their caller's environment. Assigning `script` after sandbox creation
+prevents cross-Script identity changes and removes the main VM's last-Script
+root. Two-Script yielded/deferred identity, dynamic getfenv lookup, main sentinel,
+stack height, 1000 restarts, transient churn and idle weak-owner retirement all
+pass. No global was cleared merely to satisfy the retention gate.
+
+The later 9c consolidated checkpoint passes full Linux Release and sanitizer
+CTest as recorded below. Fresh qualification of its composition with selective
+readback and the input reattachment correction remains a separate gate.
+
+### Canonical package compatibility receipts
+
+Manual core Native [43068787823](https://github.com/gmoddev/gargantuan/actions/runs/43068787823)
+passes Windows 146/146 CTests and five Release workloads, then fails the final
+package fixture assertion; Linux ASan/UBSan passes 97/97. Version 5 adds NodeIds
+and eight default Part controls, expanding the historical 512-object payload
+from 273032 to 399154 bytes. Removing only these additions recovers the version
+4 structure. The old baseline PR job skipped manual-only packaging.
+
+The repaired qualified producer pins and hash-checks the historical version 4
+payload/manifest and verifies authored values plus current loader defaults.
+Normal package capture defaults to version 5; explicit content version selection
+rejects unsupported, mixed and mismatched versions before output commit. Load
+and spatial metadata inspection use the manifest version. Original D03 byte/count
+constants remain unchanged. Targeted fixture/spatial tests and actual manual
+packaging remain required; matching stored bytes does not claim identical
+post-materialization replication bytes.
+
+Canonical baseline [43054671698](https://github.com/gmoddev/gargantuan/actions/runs/43054671698)
+passes the complete Windows NativeCI job, including existing GNS/F1 Release
+workloads. It qualifies baseline runtime, not the new integrated runtime.
+Earlier Linux Release/ASan/UBSan and GNS sanitizer attempts failed during dependency install:
+Ubuntu mirror DNS prevented fetching required Clang 19 and shader tooling before
+engine compilation. The runner's preinstalled Clang 16–18 cannot replace that
+canonical contract. `HostedLinuxInfrastructureFailure.md` preserves the logs
+and exact image identity; no tests are marked passed from those attempts.
+Later exact-source Native/GNS jobs installed dependencies successfully and are
+building. Linux Release comparison 43069269328 then exposed a test-selector
+error: its core suite requested an unbuilt realistic executable after seven
+other gates passed. The selector is corrected without changing engine sources;
+[43072898111](https://github.com/gmoddev/gargantuan/actions/runs/43072898111)
+reruns the original source pair. There is no current blanket Linux DNS blocker.
+
+Earlier fixture failures are retained: a missing stream operator, an incorrect
+DataModel service call, a prematurely released test DataModel, invalid zero-change
+probe arguments, and a colliding compact-view lifecycle fixture were corrected
+before reruns. A second compact fixture confused moving Creates with Updates;
+it now checks the final projected transform. The initial live-render fixture
+failed Windows compilation due min/max macros; NOMINMAX corrects both sources.
+The first dirty-drain attempt requested an incorrectly named CTest and ran no
+measurements. All failed artifacts remain preserved. Later physical ordinary
+rendering and consolidated CTest results are recorded below; complete final
+combined-source acceptance remains outstanding. Production physics algorithms,
+transport wire formats, F1/D03 gates and renderer defaults are unchanged.
+
+## Physical ordinary rendering: source-bound complete-path limits
+
+The physical RX 7900 XT comparison freezes baseline
+`dfeb595268020ac62e56b1a604218e122f6dc714` (Foundation 5 runtime plus the
+coroutine-root correction) and candidate
+`30fcadbe31958f4495c66604c1935553c32f7664`. Both arms use one identical SDL DLL
+and 18 shader outputs. Canonical shader blobs and the 26 actual checkout input
+hashes match; the receipts distinguish Git CRLF conversion from source changes.
+The donor glslc executable, version, recipe and output hashes are retained.
+
+All 16 fresh A/B/B/A processes pass the authoritative journal, publication,
+object/draw, submitted-frame, resync and selected Vulkan-device gates. Each has
+34 frames; analysis excludes the first four, leaving 60 samples per arm/case.
+Independent verification checks 20 frozen files per arm and all 48 CSV/stdout/
+stderr hashes. The host is Ryzen 9 7950X3D, 32 logical processors, AMD Radeon
+RX 7900 XT, AMD Vulkan 26.10.1; starting physical memory load is about 80% with
+6.5 GB available. Evidence and the independent per-process/tail review are in
+`PhysicalRX7900XT-Ordinary-dfeb-30fc-20261111` under the campaign artifact root.
+
+| Actual Parts / changed per frame | Publication mean ms, baseline to candidate | Mutation to completion mean ms | Completion P95 ms |
+| --- | ---: | ---: | ---: |
+| 1K / 1K | 0.421 to 0.296 | 1.704 to 1.631 | 1.982 to 2.149 |
+| 10K / 10K | 10.391 to 6.697 | 32.094 to 25.221 | 40.491 to 27.040 |
+| 50K / 500 | 0.473 to 0.328 | 24.374 to 22.666 | 31.251 to 28.831 |
+| 50K / 50K | 48.436 to 40.892 | 153.801 to 156.665 | 176.081 to 180.336 |
+
+Every candidate process improves publication. At 50K dense updates, however,
+setter time increases from 76.401 to 83.353 ms and draw/wait from 28.963 to
+32.418 ms, offsetting that saving. The 1K result is mixed; sparse 50K also has
+process-order drift. These are offscreen mutation-through-SDL-idle wall times,
+not GPU timestamps, a complete Engine frame, or multiplayer capacity. Ordinary
+drawing remains the reference; no universal frame improvement is claimed.
+
+## Consolidated lifetime and input teardown qualification
+
+The selective candidate 30fc passes 12 focused worker CTests. Its full manual
+Native run [43109060352](https://github.com/gmoddev/gargantuan/actions/runs/43109060352)
+then passes 159/160 Windows tests and 106/107 Linux sanitizer tests. Both fail
+only `gargantuan_player_runtime`: early logical Lua shutdown disconnects the
+default Script Destroying callback before it can unbind legacy input handles.
+The consolidated correction closes native ActionMap facade admission and
+retires its owned handles during Engine teardown. Direct authored InputService
+definitions remain outside that table. Native Destroying/ActionEnded reentry
+and repeated teardown have explicit regressions. Full qualification of this
+correction is recorded in the final f686 gates below; the failed historical run
+is retained.
+
+Completed Scripts also exposed a native/Luau retention cycle through their
+own registry-rooted coroutine and sandbox `script` userdata. The correction
+retires terminal roots while retaining independently rooted tasks, callbacks
+and Remote requests. It covers native later-resume boundaries and bounded
+reconciliation of Luau coroutine.resume/close. An initial attempt falsely
+treated failed nested self-resume as completion; a later guard mistook returned
+values for a still-suspended coroutine. Worker 08cf passes 11/12 focused tests
+but fails the two success-with-return-value retirement checks. The consolidated
+implementation captures pre-resume coroutine state, distinguishes actual errors
+from resume preflight failures, and retains all reproductions. These changes
+are correctness work, with no asserted Lua mutation speedup.
+
+The earlier baseline 36988c6 sanitizer
+[43105610779](https://github.com/gmoddev/gargantuan/actions/runs/43105610779)
+passes three lifecycle CTests and all 24 GC/disconnect stress processes. Its
+archive SHA-256 is
+`663d086651c31ae5c606e1f531ae12d7b75f918fd5ca6dbde62adc962c5d4ecd`.
+It qualifies that exact source, not the later retirement or input corrections.
+
+GNS sanitizer [43109099942](https://github.com/gmoddev/gargantuan/actions/runs/43109099942)
+qualifies 30fc with 11/11 selected gates and all 12 byte-admission cases. Each
+eventually delivers all 1,470,700 submitted bytes with matching message counts;
+pooled conservation is 6635 = 5925 + 710, outstanding zero. Its archive SHA-256
+is `1a9046aca802edf5ddd0e03230852866e602fd3a7a5cea6bd31b41b3d3995d28`.
+The low-rate large-chunk case still has 187,930 bytes pending at offer end and
+P95 875.143 ms. These are sanitizer safety results: `safe_to_enable=0` and
+`physical_f1_qualified=0` remain unchanged.
+
+## Selective readback: retained unsuccessful timing evidence
+
+The full 41-case worker comparison verifies all 44 frozen-file hashes, all
+328 raw-stream hashes and 164 successful processes. Twenty semantic fields
+match in every setup, warmup and sampled frame. Its timings are unsuitable for
+promotion: one 50K idle quartet slows in adoption before activation, physics
+and validation, while an adjacent case improves. A second 20-process capture
+pins both arms to the same logical processor and records CPU time, page faults,
+working set and host counters. Its two identical idle quartets reverse direction.
+The index-inactive fully dynamic guard also slows, and validator time sometimes
+masks a loss in measured production stages.
+
+Host counters show near-total CPU occupancy and the pinned child executes for
+only about half its wall duration. A separate bounded process sample finds
+multiple older sshd processes consuming CPU. A newly created, provenance-tracked
+diagnostic SSH session exits normally; ownership of the older sessions is not
+established, and they are left untouched. Worker disk also falls below the named
+build reserve. These observations invalidate timing attribution; they do not
+prove the index itself caused the loss or that affinity fixes it. Failed runs,
+exact hashes and telemetry remain in `WorkerReadback-369-30fc-20261111`.
+Fresh same-source-pair hosted Windows and Linux comparisons then resolve the
+promotion question as recorded below. The failed worker evidence remains
+available. Production solver behavior is unchanged.
+
+## Selective readback: stable hosted decision
+
+Windows [43117706743](https://github.com/gmoddev/gargantuan/actions/runs/43117706743)
+and Linux Release [43117706942](https://github.com/gmoddev/gargantuan/actions/runs/43117706942)
+compare exact baseline `36988c6ac5701868afae9e92080db50a77522f3f` with
+`30fcadbe31958f4495c66604c1935553c32f7664`. Each passes 164 fresh processes,
+41 A/B/B/A cases and all 20 corresponding semantic fields in setup, warmup
+and measured rows. Independent review verifies all frozen files and 328 raw
+stdout/stderr hashes per OS, plus Linux process resource receipts. Archive
+SHA-256 values are respectively
+`389602618e42bc0eb0878ad40f084952d8b9a0d787298eca6eb6c167e9a064d1` and
+`3b9a567b42ddbb73045c58a64820a45835ab4b601257002dd874b9b4fe5ac877`.
+`HostedSelectiveFinalReview.md` and per-OS `selective-readback-analysis.json`
+under the campaign evidence root preserve the complete analysis.
+
+The measured-stage sum includes creation, controls, physics step, publication
+and projection; full frame also includes the fixture validator. All nine
+10K/128-dynamic cases improve measured stages on both OSes. At 50K/128, nine
+Windows and eight Linux cases improve. Representative idle measured stages
+change 5.137 to 4.687 ms on Windows and 5.188 to 4.756 ms on Linux. The stricter
+requirement that both candidate process means beat both baseline means holds
+for 9/9 and 8/9 large cases on Windows, and 6/9 and 8/9 on Linux. Setup is near
+parity, and working-set/RSS receipts show no large process-memory penalty.
+
+The 8192/128 activation case improves measured stages by about 9.6%/9.8%.
+The inclusive 8192/1024 density edge is neutral (ratios .988/1.005), with Linux
+full frame 5.6% slower; the tested one-eighth threshold is not claimed optimal.
+At 50K idle, full-frame P95 worsens about 3.5% on both OSes despite lower mean;
+validator and process variation limit tail attribution. Dense small worlds
+keep the original path. These results justify the exact selective derivative,
+not a general authoritative SoA or solver rewrite. The final continuation
+includes the tested implementation, with combined-source correctness still
+required before promotion.
+
+## Consolidated source and canonical acceptance
+
+Checkpoint `9c0545b9c6085049d4ea34d16880170957c194c1` contains corrected terminal
+Script root retirement, native ActionMap shutdown and immutable primitive GPU
+bounds. Full Linux Release
+[43118503566](https://github.com/gmoddev/gargantuan/actions/runs/43118503566)
+passes 117/117 CTests; Native
+[43117520617](https://github.com/gmoddev/gargantuan/actions/runs/43117520617)
+passes 159/159 Windows and 106/106 Linux ASan/UBSan/LSan CTests. The Windows
+job subsequently fails a stale Python workflow assertion: physical artifact
+capture adds two guarded steps, while the test counts only the original two.
+The correction checks each physical-probe and qualified-package step's guard
+directly and preserves the diagnostic exclusion. All 45 scheduler tooling
+tests pass locally, with eight expected native-helper skips. Qualified package
+execution/upload were skipped after that failure and are not certified.
+
+The 9c GNS sanitizer
+[43117520553](https://github.com/gmoddev/gargantuan/actions/runs/43117520553)
+passes 11 selected CTests and all 12 byte-admission cases, delivering all
+1,470,700 submitted bytes per case with exact message counts. Pooled ownership
+is 6635 = 6635 retired + 0 terminal, outstanding zero. This differs from the
+historical 30fc retirement split. Three sanitizer wall-clock peer targets fail;
+`safe_to_enable=0` and `physical_f1_qualified=0` remain unchanged. These are
+safety results under unchanged D03, not physical deployment qualification.
+
+Combined runtime/test checkpoint
+`544e36eb8deed62e083288eda9755878bf5ea59b` adds the exact tested selective
+readback, successful ActionMap reattachment, indexed contact/joint/reentrant
+tests and SDL video initialization for the real-Part pixel probe. Descendant
+`f686a4fbce5c21d6cec89bbb08499586b1893378` changes only the stale tooling test.
+Linux Release [43125606876](https://github.com/gmoddev/gargantuan/actions/runs/43125606876)
+passes 118/118 unfiltered CTests after the all-target build. Its archive SHA-256
+is `febb1cee2a44a42249685542b30dae750c696012a8fe85b3d27744861bb3a9e7`.
+All 14 manifest files verify; 35 submodule entries are clean and all 11
+top-level pins match the source. The only generated tracked changes are the
+2199-byte Animator formatting patch. This is Clang 19/GCC 14 Release, PCH off,
+GNS off, with renderer and serialization benchmarks enabled.
+
+Native [43125606814](https://github.com/gmoddev/gargantuan/actions/runs/43125606814)
+passes 107/107 unfiltered Linux ASan/UBSan/LSan CTests at 544e, without skips or
+sanitizer findings. Its archive SHA-256 is
+`5f2bbd869c235d3bdeb5c6620dcd48df98914f2768478adc53302873c1823c3c`.
+The archived source, leak/halt options and compile/link sanitizer flags verify.
+
+The pinned f686 GNS sanitizer
+[43129524984](https://github.com/gmoddev/gargantuan/actions/runs/43129524984)
+passes 11/11 CTests, both reliable/pooled profiles and all 12 admission cases.
+Archive SHA-256 is
+`7202de9b69959692bf95f337e33c4e0d5995f2f3994e5167fac2933ee8afb91d`.
+Pooled ownership is 6635 created/retired, zero terminal/outstanding. The two
+capacity-compatible 8 MiB/s cases meet their raw service targets; three lower-rate
+large-chunk cases miss selected timing targets and are explicitly capacity
+incompatible. F1 remains `SANITIZER_SAFETY_V1`, not physical F1 qualification.
+Independent reviews and original archives are under the corresponding
+`HostedLinuxReleaseCombined`, `HostedLinuxSanCombined` and `HostedGNSFinal-f686`
+directories in the campaign artifact root.
+
+Full exact-source Native
+[43127586705](https://github.com/gmoddev/gargantuan/actions/runs/43127586705)
+passes 160/160 Windows CTests and 107/107 Linux sanitizer CTests, with zero
+skips or failures. The exact f686 Linux archive SHA-256 is
+`a111acf1941030b2c96df74ec69f28f712d73c4f4d006502803cfd143dc2c0d4`.
+The corrected Windows Farm32/evidence tooling passes, followed by all five
+Release workloads: pooled reliable timing, pooled structural32,
+FULL_RESERVATION, ordinary32 and structural32. Each reports completed native
+correctness with zero failures under its recorded `POOLED_CORRECTNESS_V1` or
+`FULL_RESERVATION` mode; their contract identities are unchanged.
+The diagnostics archive SHA-256 is
+`bcd0598cf6bf17b38422a838a6f3f36aacc76510115e04eb72efae1e9f7ae2b9`.
+
+Manual package generation, both native runtime-projection validations and
+upload pass. The qualified-scale archive SHA-256 is
+`84f021ff112a927fba355e8ce3229e7ad7201a000795cff36b8b707b0e9b42c1`.
+Independent review verifies the source-pinned fixture payload/manifest, schema-v4
+Player and Server manifests, matching 512-object/273032-byte blobs and their
+deployment/package per-file records. The producer uses revision 8 and Player 1;
+the stored payload retains SHA-256
+`c4f5af6f55981de25acc92e9b6ac7247c8e35b67b6e047519b5d59d35d5ec5f0`.
+`HostedWindowsFinal-f686-43127586705/NativeWindowsReview.md` preserves original
+ZIPs, the full job log and raw verification. Native-helper skips in the separate
+Python tooling suite do not change the 160/160 unfiltered native CTest result.
+This proves native package compatibility and its pinned stored bytes, not
+post-materialization wire-byte identity or physical/provider F1 deployment.
+
+The fresh rooted-baseline gameplay comparison
+[43120502674](https://github.com/gmoddev/gargantuan/actions/runs/43120502674)
+compares dfeb with 9c on identical frozen content and 18 authored asset inputs.
+One candidate untraced reload fails the existing 250 ms Event-ACK gap gate at
+276.697 ms; its other untraced process and both baselines pass. Content converges,
+100 Remote calls finish with zero errors, and no protocol mismatch is observed.
+The failed process reports frame-work maximum 159.326 ms and root wall-gap
+321.947 ms. Traced processes in both arms show atomic content admission,
+structural selection, replica preflight/live apply and client physics bursts;
+their passing results cannot locate the untraced outlier. This comparison is
+unqualified. Its archive SHA-256 is
+`4d76236900a672eef336bec6e716b5c46c887b77e9ca80d6cdd80e2298310d98`.
+Frozen-binary diagnostic replay
+[43128734144](https://github.com/gmoddev/gargantuan/actions/runs/43128734144)
+executes four complete untraced A/B/B/A quartets with owned-process CPU, host CPU,
+page-fault and working-set sampling. Every failed outcome is retained and the
+health gate is unchanged. Its verified archive SHA-256 is
+`5f85353590a5d743fb1eae060c9f9754beb80850998f9a6176b90ccadff3db3f`.
+All 16 process/stream/resource receipts, 22 original-comparison hashes and both
+fixture files verify. The upload omits 22 hidden frozen input files; their exact
+manifest hashes and bytes are independently cross-checked against the original
+archive, and the replay job verifies them before execution. The future upload
+now explicitly includes hidden files; no timing outcome is replaced.
+
+Five of eight processes in each arm fail, with six failed phases per arm
+(four load, two reload). Every miss exceeds the existing 250 ms ACK-gap gate.
+All 16 retain complete service accounting, content convergence, 100 completed
+Remote calls with zero errors, and no action or scheduler rejection. The live
+replay CPU is AMD Family 25 Model 1, while the original is Model 17; both expose
+four logical processors. The copied original `host.json` is not the replay's
+live hardware receipt. Both arms have median peak reload frame-work near
+142 ms, with admission, server selection and client replica-apply intervals;
+their externally sampled CPU/wall behavior is similar. The 50 ms sampler and
+phase-end output do not locate each individual callback's delay.
+
+This is reproducible evidence of shared near-threshold load/reload capacity on
+the replay hardware, rather than a demonstrated candidate-specific regression.
+It does not establish the exact cause of the original isolated outlier or
+qualify 32-peer service timing. `HostedGameplayReplay-43128734144/ReplayReview.md`
+and `replay-analysis.json` preserve all unsuccessful outcomes and limits.
+
+## Real-Part contiguous rendering qualification
+
+The combined 544e Windows build freezes two native probes, five DLLs and 18
+SPIR-V outputs before CTest. Artifact `13905746343` from Native run 43125606814
+has SHA-256 `ea869ef23bc0bdcc56e89fdca7e18e2ac54ac449560fc1a1f575021589d31fc0`.
+Independent verification checks all 34 ZIP entries, manifest/receipt links,
+binary and shader hashes, top-level gitlinks and all 26 shader input hashes
+against the exact Windows CRLF checkout of the Git blobs. The recorded compiler
+and glslc hashes identify the build tools; their executable bytes are not bundled.
+
+On the physical RX 7900 XT/Vulkan device, the corrected SDL video initialization
+allows the mandatory real Block, Ball and Cylinder probe to execute. For each
+shape, two actual Parts create a positive instanced batch, ordinary/contiguous
+RGB bytes match, and moving either Part changes visible pixels. Both 1K smoke
+modes and all 16 subsequent A/B/B/A processes pass. Frozen binaries, all 48 raw
+stream hashes, exact per-frame journal/publication counters and physical-device
+identity verify. Each process has 34 frames; four warmup frames are excluded.
+`PhysicalRX7900XT-Modes-544e-20261112/PhysicalModesReview.md` records the complete
+per-process/tail review and `physical-ordinary-analysis.json` retains samples.
+This compares two modes of one identical executable, not two engine revisions.
+
+| Actual Parts / changed per frame | Completion mean ms, ordinary to contiguous | Draw/wait mean ms, ordinary to contiguous |
+| --- | ---: | ---: |
+| 1K / 1K | 1.519 to 1.441 | 0.561 to 0.515 |
+| 10K / 10K | 23.454 to 24.203 | 4.308 to 4.710 |
+| 50K / 500 | 24.441 to 22.717 | 23.086 to 21.172 |
+| 50K / 50K | 155.307 to 149.878 | 32.370 to 34.054 |
+
+Both contiguous 50K-dense processes have worse draw/wait means, and its draw/wait
+P99 rises 44.661 to 53.456 ms. Setter/publication differences between identical
+executables do not identify a source optimization; run order and mode-dependent
+cache effects are not separated by this capture. In the default shadowed
+50K scene, ordinary mode records 100,002 total draws and contiguous records
+50,100: 50,000 individual shadow casters, 98 opaque instanced batches and two
+other draws. The earlier synthetic 98-draw result is not this live scene's total.
+The primitive bounds/eligibility correction is qualified for this physical RX
+fixture; instancing remains opt-in and no default performance promotion follows.
+GTX 1650 SUPER real-Part execution is unavailable under the other campaign's
+active worker lease and is not certified by the RX result.
+
+## Final disposition and architecture decision
+
+| Slice | Disposition | Evidence and boundary |
+| --- | --- | --- |
+| Journal/ordinary signals, render dirty accumulation, typed publication, indexed admission | Qualified | Source-bound core/realistic comparisons plus final canonical native and sanitizer gates; exact callbacks, history and identities retained |
+| Selective dynamic readback | Qualified in measured regimes | 41-case ABBA comparisons per OS; large-sparse gains, same-step fallback/fault and lifecycle gates; tested hysteresis retained, density-edge/tail limits explicit |
+| Script/VM/GUI/input lifetime and lifecycle capability checks | Qualified | Final Windows 160/160, Linux sanitizer 107/107, focused GC/resume/destructive callback histories and independent source review |
+| GNS and package continuation | Qualified native scope | Exact f686 three-job canonical source, five Release workloads and both runtime package projections; D03/F1 boundaries unchanged |
+| Complete-game scalability | Partially implemented | Actual mutation/extraction/admission costs improved; dense setters, atomic activation, replica apply and frame tails remain measured ceilings; strict 32-simulated-peer service timing is unqualified |
+| Contiguous native instancing | Experimental, opt-in | Physical RX pixel/draw correctness passes; 10K and dense 50K draw/wait regressions prevent default promotion |
+| GTX real-Part physical qualification | Blocked | Other campaign's worker lease is active at final read; no worker interference or inferred Nvidia result |
+| Combined compact control/readback, signal/dirty-registration variants | Rejected | Their complete-path comparisons fail to repay maintenance/drain costs; source and unsuccessful evidence retained |
+| Authoritative SoA/ECS replacement, global dirty bus, parallel mutable graph | Deferred | The synchronized one-consumer alternatives do not justify replacing existing authority or adding a cross-thread ownership system |
+
+Retain optimized Main-owned Instance/DataModel storage with bounded, disposable
+consumer projections. Adopt the exact selective readback derivative for its
+demonstrated sparse regimes; retain typed immutable RenderPublication and the
+existing 3I/3J/3L replication/admission owners. Ordinary callbacks and committed
+history remain exact; only consumer final-state work coalesces. A general SoA/ECS
+authority replacement has no measured complete-path justification here.
+
+The current FoundationRuntime disposition answers all 14 campaign architecture
+questions. Independent reviews checked ownership, mutation/capability boundaries,
+lifecycle, full generation identity, ordering and performance attribution. Future
+streaming, terrain and multiplayer work should extend the existing admission and
+consumer-owned projection budgets and measure atomic commit/apply bursts. Faster
+primitive iteration alone does not remove those costs. This is a qualified
+isolated draft continuation, not a mainline merge, release or universal capacity
+certification.

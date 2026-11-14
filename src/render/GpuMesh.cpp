@@ -1,6 +1,7 @@
 #include "render/sdl/SDLGpuMesh.hpp"
 #include "gargantuan/render/Mesh.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -8,6 +9,23 @@
 
 namespace gargantuan {
 	namespace {
+		std::optional<RenderBounds> GetImmutablePositionBounds(const std::vector<Vertex> &Vertices) {
+			// Match the conservative local-coordinate limit used by opaque coverage.
+			// An unsupported mesh may still use ordinary drawing; it cannot instance.
+			constexpr float MaximumLocalCoordinate = 1.0e6f;
+			if (Vertices.empty()) return std::nullopt;
+			RenderBounds Bounds{Vertices.front().Position, Vertices.front().Position};
+			for (const auto &VertexValue : Vertices) {
+				const auto Position = VertexValue.Position;
+				if (!std::isfinite(Position.x) || !std::isfinite(Position.y) || !std::isfinite(Position.z) ||
+					glm::any(glm::greaterThan(glm::abs(Position), glm::vec3(MaximumLocalCoordinate))))
+					return std::nullopt;
+				Bounds.Minimum = glm::min(Bounds.Minimum, Position);
+				Bounds.Maximum = glm::max(Bounds.Maximum, Position);
+			}
+			return Bounds;
+		}
+
 		Mesh ConvertMesh(const RenderMeshCreate &MeshData) {
 			Mesh Result;
 			Result.Vertices.reserve(MeshData.Vertices->size());
@@ -43,19 +61,13 @@ namespace gargantuan {
 		this->VertexBufferSize = static_cast<std::uint32_t>(VertexBytes);
 		this->IndexCount = static_cast<std::uint32_t>(Indices.size());
 		this->IndexBufferSize = static_cast<std::uint32_t>(IndexBytes);
+		ImmutablePositionBounds = GetImmutablePositionBounds(Vertices);
 	}
 
 	SDLGpuMesh::SDLGpuMesh(const RenderMeshCreate &MeshData, SDLRendererMetrics *MetricsValue)
 		: SDLGpuMesh(ConvertMesh(MeshData), MetricsValue) {
 		if (Metrics && MeshData.SkinInfluences) ++Metrics->SkinnedSourceResourceCreations;
-		if (!MeshData.SkinInfluences && !Vertices.empty()) {
-			RenderBounds Bounds{Vertices.front().Position, Vertices.front().Position};
-			for (const auto &Value : Vertices) {
-				Bounds.Minimum = glm::min(Bounds.Minimum, Value.Position);
-				Bounds.Maximum = glm::max(Bounds.Maximum, Value.Position);
-			}
-			ImmutablePositionBounds = Bounds;
-		}
+		if (MeshData.SkinInfluences) ImmutablePositionBounds.reset();
 	}
 
 	SDL_GPUBuffer *SDLGpuMesh::CreateVertexBuffer(SDL_GPUDevice *gpu) {

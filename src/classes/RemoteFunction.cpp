@@ -102,15 +102,25 @@ namespace gargantuan {
 		) {
 			lua_State *Main = lua_mainthread(L);
 			if (L == Main) throw std::runtime_error("RemoteFunction invocation requires a yieldable Luau coroutine");
+			if (ScriptEngine::Get(Main)->IsStopping())
+				throw std::runtime_error("RemoteFunction runtime is stopping");
 			lua_pushthread(L);
 			lua_xmove(L, Main, 1);
 			const int ThreadReference = lua_ref(Main, -1);
 			lua_pop(Main, 1);
+			auto RuntimeWeak = ScriptEngine::Get(Main)->weak_from_this();
+			const bool ManagedRuntime = !RuntimeWeak.expired();
 			auto *Manager = Function->GetRemoteManager();
 			const auto SecurityContext = GetCurrentScriptSecurityContext();
-			auto Completion = [L, Main, ThreadReference, Manager, SecurityContext](
+			auto Completion = [L, Main, ThreadReference, Manager, SecurityContext, RuntimeWeak, ManagedRuntime](
 								  network::RemoteRequestResult Result
 							  ) {
+				auto Runtime = RuntimeWeak.lock();
+				if (ManagedRuntime && !Runtime) return;
+				if (Runtime && Runtime->IsStopping()) {
+					lua_unref(Main, ThreadReference);
+					return;
+				}
 				int ArgumentCount = 0;
 				try {
 					if (Result.Outcome.Status == network::RemoteRequestTerminalStatus::Success) {
@@ -140,7 +150,9 @@ namespace gargantuan {
 					ArgumentCount = 3;
 				}
 				ScriptSecurityScope SecurityScope(SecurityContext);
+				const int PreResumeStatus = lua_costatus(Main, L);
 				const int Status = lua_resume(L, Main, ArgumentCount);
+				ScriptEngine::Get(Main)->CompleteManagedScriptThreadResume(L, Status, PreResumeStatus);
 				if (!CompleteSuspendedHandler(L, Status) && Status != LUA_OK && Status != LUA_YIELD)
 					LOG_ERROR(Lua, "[Networking:Remote] request coroutine error: %s", lua_tostring(L, -1));
 				lua_unref(Main, ThreadReference);
@@ -185,18 +197,31 @@ namespace gargantuan {
 
 	void RemoteFunction::BindRequestHandler() {
 		if (!Manager) return;
+		std::weak_ptr<RemoteFunction> WeakSelf = std::dynamic_pointer_cast<RemoteFunction>(shared_from_this());
 		Manager->SetRequestHandler(
 			GetNetworkObjectId(),
-			[this](const network::RemoteInvocation &Invocation, network::RemoteManager::RequestReply Reply) {
-				auto *BoundManager = GetRemoteManager();
+			[WeakSelf](const network::RemoteInvocation &Invocation, network::RemoteManager::RequestReply Reply) {
+				auto Self = WeakSelf.lock();
+				if (!Self || Self->GetDestroyed() || Self->IsDestroying()) {
+					Reply({}, network::StructuredRemoteError{"remote_unavailable", "Remote is unavailable"});
+					return;
+				}
+				auto *Function = Self.get();
+				auto *BoundManager = Function->GetRemoteManager();
 				if (!BoundManager) {
 					Reply({}, network::StructuredRemoteError{"remote_unavailable", "Remote is unavailable"});
 					return;
 				}
-				const auto BoundManagerLifetime = ManagerLifetime;
+				const auto BoundManagerLifetime = Function->ManagerLifetime;
 				const bool Server = BoundManager->GetRole() == network::RemoteManagerRole::Server;
-				const int Reference = Server ? ServerHandlerReference : ClientHandlerReference;
+				const int Reference = Server ? Function->ServerHandlerReference : Function->ClientHandlerReference;
+				lua_State *HandlerState = Function->HandlerState;
 				if (!HandlerState || Reference == LUA_NOREF) {
+					Reply({}, network::StructuredRemoteError{"no_handler", "Remote request has no Luau handler"});
+					return;
+				}
+				auto Runtime = ScriptEngine::Get(HandlerState)->weak_from_this().lock();
+				if (Runtime && Runtime->IsStopping()) {
 					Reply({}, network::StructuredRemoteError{"no_handler", "Remote request has no Luau handler"});
 					return;
 				}
@@ -252,10 +277,10 @@ namespace gargantuan {
 						);
 					}
 				} else if (Status == LUA_YIELD && !BoundManagerLifetime.expired() &&
-						   GetRemoteManager() == BoundManager &&
+						   Function->GetRemoteManager() == BoundManager &&
 						   BoundManager->GetMetrics().InFlightRequests > PendingBefore) {
 					SuspendedHandlers().emplace(
-						Thread, SuspendedHandler{this, HandlerState, ThreadReference, std::move(Reply)}
+						Thread, SuspendedHandler{Function, HandlerState, ThreadReference, std::move(Reply)}
 					);
 					return;
 				} else {

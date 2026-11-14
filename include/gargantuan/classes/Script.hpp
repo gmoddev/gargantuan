@@ -26,6 +26,8 @@ namespace gargantuan {
 		std::string ErrorMessage = "";
 		lua_State *Thread = nullptr;
 		int ThreadReference = LUA_NOREF;
+		bool Resuming = false;
+		bool CleanupAfterResume = false;
 
 		void Cleanup();
 		bool ShouldStep();

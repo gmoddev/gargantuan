@@ -1,4 +1,5 @@
 #include "gargantuan/scripting/ThreadEngine.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/Log.hpp"
 
 #include <SDL3/SDL_log.h>
@@ -32,9 +33,15 @@ namespace gargantuan {
 		int argumentCount,
 		ScriptSecurityContext securityContext
 	) {
+		[[maybe_unused]] auto KeepAlive = ScriptEngine::Get(L)->weak_from_this().lock();
+		if (Stopping) {
+			lua_unref(L, threadReference);
+			return;
+		}
 		ScriptSecurityScope SecurityScope(std::move(securityContext));
+		const int PreResumeStatus = lua_costatus(L, thread);
 		int status = lua_resume(thread, L, argumentCount);
-		lua_unref(L, threadReference);
+		ScriptEngine::Get(L)->CompleteManagedScriptThreadResume(thread, status, PreResumeStatus);
 		switch (status) {
 		case LUA_OK:
 		case LUA_YIELD:
@@ -43,11 +50,26 @@ namespace gargantuan {
 		default:
 			LOG_ERROR(Lua, "Thread error: %s", lua_tostring(thread, -1));
 		}
+		lua_unref(L, threadReference);
+	}
+
+	void ThreadEngine::ShutdownRuntime() {
+		if (Stopping) return;
+		Stopping = true;
+		while (!ScheduledQueue.empty()) {
+			lua_unref(L, ScheduledQueue.top().ThreadReference);
+			ScheduledQueue.pop();
+		}
+		for (const auto &Task : DeferredQueue) lua_unref(L, Task.ThreadReference);
+		DeferredQueue.clear();
 	}
 
 	void ThreadEngine::Step() {
+		// A task can destroy the Engine while a swapped deferred batch still
+		// owns coroutine references that must be released before the VM closes.
+		[[maybe_unused]] auto KeepAlive = ScriptEngine::Get(L)->weak_from_this().lock();
 		auto currentTime = GetCurrentTime();
-		while (!ScheduledQueue.empty() && ScheduledQueue.top().WakeTime <= currentTime) {
+		while (!Stopping && !ScheduledQueue.empty() && ScheduledQueue.top().WakeTime <= currentTime) {
 			auto task = ScheduledQueue.top();
 			ScheduledQueue.pop();
 
@@ -67,11 +89,15 @@ namespace gargantuan {
 			}
 		}
 
-		while (!DeferredQueue.empty()) {
+		while (!Stopping && !DeferredQueue.empty()) {
 			std::vector<DeferredTask> currentBatch;
 			currentBatch.swap(DeferredQueue);
 
 			for (auto &task : currentBatch) {
+				if (Stopping) {
+					lua_unref(L, task.ThreadReference);
+					continue;
+				}
 				ResumeThreadWithContext(
 					task.Thread, task.ThreadReference, task.ArgumentCount, std::move(task.SecurityContext)
 				);
@@ -82,7 +108,7 @@ namespace gargantuan {
 	bool ThreadEngine::QueueScheduledTask(
 		lua_State *thread, ScheduledTask::Type type, double delaySeconds, int argumentCount
 	) {
-		if (ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
+		if (Stopping || ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
 		ScheduledQueue.push({
 			.type = type,
 			.Thread = thread,
@@ -96,7 +122,7 @@ namespace gargantuan {
 	}
 
 	bool ThreadEngine::QueueDeferredTask(lua_State *thread, int argumentCount) {
-		if (ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
+		if (Stopping || ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
 		DeferredQueue.push_back({
 			.Thread = thread,
 			.ThreadReference = TakeThreadReference(thread),

@@ -4,19 +4,63 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-RUN-001: Dense authoritative mutation remains a CPU scalability ceiling
+
+- Status: Verified measured limitation; bounded Runtime 6 integration qualified.
+- Area: Ordinary Part mutation, synchronous signals, journal and publication.
+- Evidence: [Runtime Foundation 6 qualification](devdocs/Validation/RuntimeFoundation6Qualification.md).
+
+The measured core reduces 50K dense publication from 84.203 to 53.352 ms and
+the setter/publication/projection stage sum from 192.806 to 166.031 ms on its
+host, while setter time regresses 98.797 to 103.150 ms. This does not qualify
+50K independently moving objects at a game frame budget. Typed CFrame encoding
+alone has no broad stage or allocation win. Signal fast-path and registration
+dirty-cache experiments are rejected after complete-path comparisons. The full
+compact physics representation is rejected on control/lifecycle cost; the
+selective readback alternative has consistent large-sparse Windows/Linux gains
+and is included pending final combined-source qualification. Its density-limit
+case is neutral and it does not improve every full-frame tail. Retain exact
+synchronous observer/journal semantics and
+conservative fallbacks while resolving these measured costs. Full integrated
+Windows, Linux/sanitizer and applicable physical GPU gates remain separate from
+the completed focused Windows comparisons. Physical RX 7900 XT ordinary drawing
+also shows a dense ceiling: publication improves from 48.436 to 40.892 ms, but
+50K dense mutation-to-completion wall time changes from 153.801 to 156.665 ms.
+The 10K dense and 50K sparse fixtures improve; this is not a universal frame win.
+
+The rooted 512-object, 32-simulated-peer gameplay replay also exposes a shared
+load/reload service ceiling: five of eight processes per arm miss the existing
+250 ms Event-ACK gap target. Content, Remote completion and service accounting
+remain correct. Atomic admission, server selection and client replica apply
+produce large Main intervals on both sources. This does not establish an R6
+regression or qualify gameplay timing; activation and replica-apply bursts must
+remain part of complete-path capacity evaluation.
+
 ## KI-RND-001: Optional instancing has workload-dependent CPU and frame tails
 
 - Status: Verified experimental limitation; ordinary drawing remains default.
 - Area: `src/render/passes/OpaquePass.cpp`, instance record/update preparation.
 - Evidence: [Foundation 5 qualification](devdocs/Validation/RendererFoundation5Qualification.md).
 
-Final same-binary physical A/B/B/A controls reduce static 50K world draws to 98
+Final same-binary physical A/B/B/A controls reduce static 50K resident-mesh fixture draws to 98
 and improve submission on both adapters. Fully dynamic 50K frame P95 worsens on
 both; AMD half-culled and several fallback cases also regress. Neither draw
 reduction nor an isolated cache microprobe establishes universal performance.
 Keep native instancing opt-in with conservative fallback. Default promotion
 requires a revised candidate/update path that preserves exact ordering and
 lifetime gates and independently improves the affected native frame tails.
+
+The Runtime 6 real-Part probe exposed an additional eligibility gap: built-in
+GPU meshes lacked immutable position bounds, so ordinary Parts could not enter
+the optional instance path. The correction derives bounds from uploaded vertices.
+The combined 544e physical RX 7900 XT run passes real Block/Ball/Cylinder draw,
+pixel parity and per-Part visible-update gates, plus all 16 mode-comparison
+processes. The 10K dense path regresses and 50K dense draw/wait P99 rises from
+44.661 to 53.456 ms. Its 50K scene still has 50,100 total draws, including
+50,000 individual shadow casters and 98 instanced opaque batches. Keep this
+mode opt-in; GTX real-Part coverage remains unavailable under the shared
+worker's other active lease. The historical resident-mesh fixture does not
+establish this real-Part coverage or total live-scene draw count.
 
 ## KI-PHY-001: Legacy WeldConstraint does not capture endpoint offsets
 

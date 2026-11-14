@@ -66,35 +66,42 @@ namespace gargantuan {
 		return Service;
 	}
 	void ActionMap::AttachInputService(const std::shared_ptr<UserInputService> &Physical) {
+		const bool Reopening = RuntimeStopping;
+		if (Reopening && !Bindings.empty())
+			throw std::logic_error("[Input:ActionMap] Cannot attach after incomplete runtime shutdown");
 		auto Service = GetInput();
 		Service->Reset();
-		if (!Physical) return;
 		// Seed the existing physical authority once. Marking these samples consumed
 		// records held state without inventing a fresh press for authored actions.
-		for (const auto &Input : Physical->GetKeysPressed()) {
-			if (!Input) continue;
-			(void)Service->ProcessEvent(
-				KeyEvent{.Logical = static_cast<LogicalKey>(Input->GetKeyCode()), .State = ButtonState::Pressed}, true
-			);
-		}
-		for (const auto &Input : Physical->GetMouseButtonsPressed()) {
-			if (!Input) continue;
-			PointerButton Button;
-			switch (Input->GetUserInputType()) {
-			case Enums::UserInputType::MouseButton1:
-				Button = PointerButton::Left;
-				break;
-			case Enums::UserInputType::MouseButton2:
-				Button = PointerButton::Right;
-				break;
-			case Enums::UserInputType::MouseButton3:
-				Button = PointerButton::Middle;
-				break;
-			default:
-				continue;
+		if (Physical) {
+			for (const auto &Input : Physical->GetKeysPressed()) {
+				if (!Input) continue;
+				(void)Service->ProcessEvent(
+					KeyEvent{.Logical = static_cast<LogicalKey>(Input->GetKeyCode()), .State = ButtonState::Pressed}, true
+				);
 			}
-			(void)Service->ProcessEvent(PointerButtonEvent{.Button = Button, .State = ButtonState::Pressed}, true);
+			for (const auto &Input : Physical->GetMouseButtonsPressed()) {
+				if (!Input) continue;
+				PointerButton Button;
+				switch (Input->GetUserInputType()) {
+				case Enums::UserInputType::MouseButton1:
+					Button = PointerButton::Left;
+					break;
+				case Enums::UserInputType::MouseButton2:
+					Button = PointerButton::Right;
+					break;
+				case Enums::UserInputType::MouseButton3:
+					Button = PointerButton::Middle;
+					break;
+				default:
+					continue;
+				}
+				(void)Service->ProcessEvent(PointerButtonEvent{.Button = Button, .State = ButtonState::Pressed}, true);
+			}
 		}
+		// Keep teardown admission closed through reset and native transition
+		// callbacks. Only a completely retired adapter can start a new runtime.
+		if (Reopening) RuntimeStopping = false;
 	}
 
 	std::shared_ptr<InputContext> ActionMap::GetLegacyContext() {
@@ -216,6 +223,7 @@ namespace gargantuan {
 	}
 
 	int ActionMap::AddBinding(const std::string &Name, const std::shared_ptr<InputBinding> &Binding, bool Pointer) {
+		if (RuntimeStopping) return 0;
 		RequireInputMutation();
 		AssertCanMutate();
 		if (auto Error = Binding->ValidateDefinition(); !Error.empty()) throw std::invalid_argument(Error);
@@ -244,6 +252,7 @@ namespace gargantuan {
 		return Id;
 	}
 	int ActionMap::BindKey(std::string Name, Enums::KeyCode Key, float Scale, int Priority, bool Consume) {
+		if (RuntimeStopping) return 0;
 		ValidateLegacyBinding(Name, Scale);
 		if (Key == Enums::KeyCode::None) throw std::invalid_argument("[Input:ActionMap] Key binding requires a key");
 		auto Binding = std::make_shared<InputBinding>();
@@ -256,6 +265,7 @@ namespace gargantuan {
 	int ActionMap::BindMouseButton(
 		std::string Name, Enums::UserInputType InputType, float Scale, int Priority, bool Consume
 	) {
+		if (RuntimeStopping) return 0;
 		ValidateLegacyBinding(Name, Scale);
 		if (InputType != Enums::UserInputType::MouseButton1 && InputType != Enums::UserInputType::MouseButton2 &&
 			InputType != Enums::UserInputType::MouseButton3)
@@ -269,6 +279,7 @@ namespace gargantuan {
 		return AddBinding(Name, Binding, false);
 	}
 	int ActionMap::BindPointerDelta(std::string Name, Vector2 Scale, int Priority, bool Consume) {
+		if (RuntimeStopping) return 0;
 		ValidateLegacyBinding(Name, Scale.GetX());
 		if (!std::isfinite(Scale.GetY())) throw std::invalid_argument("[Input:ActionMap] Vector scale must be finite");
 		auto Binding = std::make_shared<InputBinding>();
@@ -348,6 +359,18 @@ namespace gargantuan {
 		GetInput()->EndFrame();
 	}
 	void ActionMap::Reset() {
+		// Engine teardown has already stopped Lua callbacks. Release the native
+		// legacy bindings here; a Script.Destroying cleanup cannot run afterward.
+		// Native Destroying/ActionEnded observers can still run synchronously.
+		RuntimeStopping = true;
+		// The adapter admits at most MaximumBindings IDs. Process them in the
+		// previous ascending order without allocating during teardown.
+		for (std::size_t Index = 0; Index < MaximumBindings && !Bindings.empty(); ++Index) {
+			const auto Next = std::min_element(Bindings.begin(), Bindings.end(),
+				[](const auto &Left, const auto &Right) { return Left.first < Right.first; });
+			(void)Unbind(Next->first);
+		}
+		if (!Bindings.empty()) throw std::logic_error("[Input:ActionMap] Shutdown binding bound exceeded");
 		GetInput()->Reset();
 	}
 }

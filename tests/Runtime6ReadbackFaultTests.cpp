@@ -1,0 +1,237 @@
+// Copyright (c) 2026 Team Fireworks
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+#include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/services/Workspace.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <new>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <variant>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <Windows.h>
+#endif
+
+namespace gargantuan {
+	struct WorldRootTestAccess {
+		static void UseSmallReadbackPolicy(WorldRoot &World) {
+			World.ReadbackPolicy = {.ActivatePartCount = 1, .RetirePartCount = 1,
+				.ActivateDynamicDivisor = 1, .RetireDynamicDivisor = 1};
+		}
+		static bool FullScanNeeded(const WorldRoot &World) { return World.FullDynamicReadbackNeeded; }
+		static std::size_t DynamicCount(const WorldRoot &World) { return World.DynamicReadback.size(); }
+		static void ClearDerivedReadback(WorldRoot &World) {
+			decltype(World.DynamicReadback) Empty;
+			World.DynamicReadback.swap(Empty);
+			World.DynamicReadbackPositions.clear();
+		}
+		static void AddDynamicReadback(WorldRoot &World, const std::shared_ptr<BasePart> &Part) {
+			World.SyncDynamicReadback(Part, World.PartBodies.at(Part->GetObjectId()));
+		}
+		static void RebuildDynamicReadback(WorldRoot &World) {
+			World.FullDynamicReadbackNeeded = true;
+			World.ReadbackDynamicBodies();
+		}
+		static void RequireNextReadbackRebuild(WorldRoot &World) {
+			World.FullDynamicReadbackNeeded = true;
+		}
+		static bool IndexedReadbackActive(const WorldRoot &World) {
+			return World.IndexedDynamicReadbackActive;
+		}
+		static std::optional<PhysicsBodyState> State(const WorldRoot &World, ObjectId Object) {
+			auto Found = World.PartBodies.find(Object);
+			return Found == World.PartBodies.end() ? std::nullopt : World.Physics.GetBodyState(Found->second);
+		}
+	};
+}
+
+namespace {
+	thread_local long long FailAllocation = -1;
+	thread_local bool FailureTriggered = false;
+	thread_local std::size_t AllocationRequests = 0;
+	void *Allocate(std::size_t Bytes, std::size_t Alignment) {
+		++AllocationRequests;
+		if (FailAllocation == 0) {
+			FailureTriggered = true;
+			FailAllocation = -1;
+			throw std::bad_alloc();
+		}
+		if (FailAllocation > 0) --FailAllocation;
+		Alignment = std::max(Alignment, alignof(void *));
+		if (Bytes > std::numeric_limits<std::size_t>::max() - Alignment - sizeof(void *)) throw std::bad_alloc();
+		void *Raw = std::malloc(Bytes + Alignment + sizeof(void *));
+		if (!Raw) throw std::bad_alloc();
+		const auto Start = reinterpret_cast<std::uintptr_t>(Raw) + sizeof(void *);
+		const auto Address = (Start + Alignment - 1) & ~(static_cast<std::uintptr_t>(Alignment) - 1);
+		auto Result = reinterpret_cast<void **>(Address);
+		Result[-1] = Raw;
+		return Result;
+	}
+	void Free(void *Value) noexcept { if (Value) std::free(static_cast<void **>(Value)[-1]); }
+
+	void TestRealFixedStepAllocationFallback() {
+		using namespace gargantuan;
+		std::size_t EscapedFailures = 0;
+		std::size_t OtherTriggeredFailures = 0;
+		std::size_t LargestObservedRequestCount = 0;
+		bool Qualified = false;
+		for (long long Site = 0; Site < 64 && !Qualified; ++Site) {
+			auto Game = std::make_shared<DataModel>();
+			auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+			if (!World) throw std::runtime_error("Workspace unavailable in fixed-step fault sweep");
+			World->SetGravity(0.0f);
+			WorldRootTestAccess::UseSmallReadbackPolicy(*World);
+			auto PartValue = std::make_shared<Part>();
+			PartValue->SetCanCollide(false);
+			PartValue->SetCanTouch(false);
+			PartValue->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
+			PartValue->SetParent(World);
+			World->StepPhysics(1.0 / 60.0, std::nullopt);
+			PartValue->SetLinearVelocity({1.0f, 0.0f, 0.0f});
+			PartValue->SetAwake(true);
+			World->StepPhysics(0.0, std::nullopt);
+			if (!WorldRootTestAccess::IndexedReadbackActive(*World) ||
+				WorldRootTestAccess::DynamicCount(*World) != 1)
+				throw std::runtime_error("fixed-step fault fixture failed to activate readback");
+			const auto BeforeX = PartValue->GetCFrame().Position.x;
+			WorldRootTestAccess::RequireNextReadbackRebuild(*World);
+			AllocationRequests = 0;
+			FailureTriggered = false;
+			FailAllocation = Site;
+			bool StepReturned = false;
+			try {
+				World->StepPhysics(1.0 / 60.0, std::nullopt);
+				StepReturned = true;
+			} catch (...) {
+				++EscapedFailures;
+			}
+			FailAllocation = -1;
+			LargestObservedRequestCount = std::max(LargestObservedRequestCount, AllocationRequests);
+			if (!FailureTriggered || !StepReturned) continue;
+			if (!WorldRootTestAccess::FullScanNeeded(*World) ||
+				WorldRootTestAccess::IndexedReadbackActive(*World) ||
+				WorldRootTestAccess::DynamicCount(*World) != 0) {
+				++OtherTriggeredFailures;
+				continue;
+			}
+			const auto State = WorldRootTestAccess::State(*World, PartValue->GetObjectId());
+			if (!State || State->LinearVelocity.x < 0.9f ||
+				std::abs(PartValue->GetLinearVelocity().x - State->LinearVelocity.x) > 0.001f ||
+				!PartValue->GetCFrame().FuzzyEq(State->Transform) ||
+				PartValue->GetCFrame().Position.x <= BeforeX)
+				throw std::runtime_error("real fixed-step fallback lost accepted motion in the failed rebuild step");
+			World->StepPhysics(1.0 / 60.0, std::nullopt);
+			if (WorldRootTestAccess::FullScanNeeded(*World) ||
+				!WorldRootTestAccess::IndexedReadbackActive(*World) ||
+				WorldRootTestAccess::DynamicCount(*World) != 1)
+				throw std::runtime_error("real fixed-step fallback did not rebuild at the next safe point");
+			Qualified = true;
+			std::cout << "[Runtime6:PhysicsReadbackFault] fixed-step allocation site " << Site
+				<< " recovered; earlier escaped=" << EscapedFailures
+				<< " other-triggered=" << OtherTriggeredFailures << '\n';
+		}
+		if (!Qualified)
+			throw std::runtime_error("no real fixed-step readback rebuild failure in 64 allocation sites; largest requests=" +
+				std::to_string(LargestObservedRequestCount));
+	}
+}
+
+void *operator new(std::size_t Bytes) { return Allocate(Bytes, alignof(std::max_align_t)); }
+void *operator new[](std::size_t Bytes) { return Allocate(Bytes, alignof(std::max_align_t)); }
+void *operator new(std::size_t Bytes, std::align_val_t Align) { return Allocate(Bytes, static_cast<std::size_t>(Align)); }
+void *operator new[](std::size_t Bytes, std::align_val_t Align) { return Allocate(Bytes, static_cast<std::size_t>(Align)); }
+void *operator new(std::size_t Bytes, const std::nothrow_t &) noexcept { try { return ::operator new(Bytes); } catch (...) { return nullptr; } }
+void *operator new[](std::size_t Bytes, const std::nothrow_t &) noexcept { try { return ::operator new[](Bytes); } catch (...) { return nullptr; } }
+void *operator new(std::size_t Bytes, std::align_val_t Align, const std::nothrow_t &) noexcept { try { return ::operator new(Bytes, Align); } catch (...) { return nullptr; } }
+void *operator new[](std::size_t Bytes, std::align_val_t Align, const std::nothrow_t &) noexcept { try { return ::operator new[](Bytes, Align); } catch (...) { return nullptr; } }
+void operator delete(void *Value) noexcept { Free(Value); }
+void operator delete[](void *Value) noexcept { Free(Value); }
+void operator delete(void *Value, std::size_t) noexcept { Free(Value); }
+void operator delete[](void *Value, std::size_t) noexcept { Free(Value); }
+void operator delete(void *Value, std::align_val_t) noexcept { Free(Value); }
+void operator delete[](void *Value, std::align_val_t) noexcept { Free(Value); }
+void operator delete(void *Value, std::size_t, std::align_val_t) noexcept { Free(Value); }
+void operator delete[](void *Value, std::size_t, std::align_val_t) noexcept { Free(Value); }
+void operator delete(void *Value, const std::nothrow_t &) noexcept { Free(Value); }
+void operator delete[](void *Value, const std::nothrow_t &) noexcept { Free(Value); }
+void operator delete(void *Value, std::align_val_t, const std::nothrow_t &) noexcept { Free(Value); }
+void operator delete[](void *Value, std::align_val_t, const std::nothrow_t &) noexcept { Free(Value); }
+
+int main() {
+	using namespace gargantuan;
+	try {
+#ifdef _WIN32
+		SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#endif
+		BootstrapNativeRuntimeSchema();
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		if (!World) throw std::runtime_error("Workspace unavailable");
+		World->SetGravity(0.0f);
+		WorldRootTestAccess::UseSmallReadbackPolicy(*World);
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetCanCollide(false);
+		PartValue->SetCanTouch(false);
+		PartValue->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
+		PartValue->SetParent(World);
+		World->StepPhysics(1.0 / 60.0, std::nullopt);
+		const auto Object = PartValue->GetObjectId();
+		const auto Initial = WorldRootTestAccess::State(*World, Object);
+		if (!Initial || Initial->Description.Anchored || WorldRootTestAccess::DynamicCount(*World) != 1)
+			throw std::runtime_error("initial accepted dynamic body or readback record unavailable");
+		// Test-only fault injection removes only derived storage, then fails its
+		// first vector allocation. The Part/backend body remain authoritative.
+		WorldRootTestAccess::ClearDerivedReadback(*World);
+		FailAllocation = 0;
+		WorldRootTestAccess::AddDynamicReadback(*World, PartValue);
+		FailAllocation = -1;
+		if (!WorldRootTestAccess::FullScanNeeded(*World) || WorldRootTestAccess::DynamicCount(*World) != 0)
+			throw std::runtime_error("failed readback allocation did not select complete scan");
+		PartValue->SetLinearVelocity({1.0f, 0.0f, 0.0f});
+		World->StepPhysics(1.0 / 60.0, std::nullopt);
+		const auto State = WorldRootTestAccess::State(*World, Object);
+		if (!State || State->LinearVelocity.x < 0.9f || PartValue->GetCFrame().Position.x <= 0.0f ||
+			WorldRootTestAccess::FullScanNeeded(*World) || WorldRootTestAccess::DynamicCount(*World) != 1)
+			throw std::runtime_error("complete-scan fallback lost motion or failed to rebuild readback");
+		// Fail a fresh view construction without failing unrelated step allocations.
+		// Accepted state must remain readable, and the next step must rebuild.
+		FailAllocation = 0;
+		WorldRootTestAccess::RebuildDynamicReadback(*World);
+		FailAllocation = -1;
+		if (!WorldRootTestAccess::FullScanNeeded(*World) ||
+			WorldRootTestAccess::IndexedReadbackActive(*World) ||
+			WorldRootTestAccess::DynamicCount(*World) != 0)
+			throw std::runtime_error("failed rebuild did not retire incomplete derived view");
+		World->StepPhysics(1.0 / 60.0, std::nullopt);
+		if (WorldRootTestAccess::FullScanNeeded(*World) ||
+			!WorldRootTestAccess::IndexedReadbackActive(*World) ||
+			WorldRootTestAccess::DynamicCount(*World) != 1)
+			throw std::runtime_error("failed rebuild did not recover at the next fixed step");
+		PartValue->Destroy();
+		if (WorldRootTestAccess::DynamicCount(*World) != 0)
+			throw std::runtime_error("destroyed generation remained in readback view");
+		TestRealFixedStepAllocationFallback();
+		std::cout << "[Runtime6:PhysicsReadbackFault] PASS\n";
+		return 0;
+	} catch (const std::exception &Failure) {
+		FailAllocation = -1;
+		std::cerr << "[Runtime6:PhysicsReadbackFault] " << Failure.what() << '\n';
+		return 1;
+	}
+}
