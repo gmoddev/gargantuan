@@ -65,7 +65,7 @@ reviewable documentation branch and draft PR, not a completed mainline merge.
   unverified. Unknown historical review dates remain unknown.
 - Declaration catalog: 67 classes/services, 440 members and 214 native header
   entries. Source hashes use canonical UTF-8/LF text so Windows and Linux agree.
-- Seven Python checker regressions and five Node link-transformer regressions pass.
+- Eight Python checker regressions and five Node link-transformer regressions pass.
 - A real Luau compiler accepts all five standalone files and three current
   document examples (eight total), without executing gameplay.
 - Locked Bun 1.3.13 / Node 24 / Astro build produces 34 pages; the generated-site
@@ -87,3 +87,10 @@ traversed nonexistent virtual route directories before normalizing `..`.
 Windows had masked that filesystem difference. The follow-up normalizes
 candidates first and adds the corresponding cross-platform regression; the
 original failed run remains failed evidence.
+
+The next Linux run exposed root Git routing aliases: Linux follows their
+symlinks, while Windows checks out one-line link text. Parsing target content
+relative to the root alias produced 49 false historical-link findings. Alias
+targets are now validated separately and canonical documents are checked at
+their own paths. Inventory alias metadata also uses the link target on both
+platforms, with a regression covering both filesystem representations.

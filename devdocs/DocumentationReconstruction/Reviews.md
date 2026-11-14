@@ -51,6 +51,10 @@ combined patch. These are source reviews, not additional native qualification.
   checkout contract. Two silent coverage gaps were corrected: every content
   page must be emitted, and historical-link report drift requires review.
   Catalog source hashes normalize checkout newlines for Windows/Linux agreement.
+- Real Linux CI exposed two filesystem differences hidden by Windows: virtual
+  route normalization and Git symlink routing aliases. Both received focused
+  fixes and regression coverage; aliases remain inventoried and their canonical
+  targets remain independently checked. Failed CI attempts retain their verdicts.
 
 No unresolved concrete source-review finding is accepted as current guidance.
 Legacy documents classified Unverified retain that status; the inventory does

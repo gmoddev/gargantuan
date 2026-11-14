@@ -16,7 +16,7 @@
   "Documents": [
     {
       "Path": "AGENTS.md",
-      "Purpose": "docs/src/content/docs/meta/agents.mdx",
+      "Purpose": "Routing alias to docs/src/content/docs/meta/agents.mdx",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
         "Sha": "4bd63a1f8c7a34f05ed7862a248a12d89270865e",
@@ -24,7 +24,7 @@
         "Subject": "chore: symlink some documents"
       },
       "RelevantSourceSubsystem": [
-        "src/content/docs/meta/agents.mdx"
+        "Canonical document: docs/src/content/docs/meta/agents.mdx"
       ],
       "Status": "Duplicated",
       "StatusLabel": "Duplicated",
@@ -52,7 +52,7 @@
     },
     {
       "Path": "CLAUDE.md",
-      "Purpose": "docs/src/content/docs/meta/agents.mdx",
+      "Purpose": "Routing alias to docs/src/content/docs/meta/agents.mdx",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
         "Sha": "4bd63a1f8c7a34f05ed7862a248a12d89270865e",
@@ -60,7 +60,7 @@
         "Subject": "chore: symlink some documents"
       },
       "RelevantSourceSubsystem": [
-        "src/content/docs/meta/agents.mdx"
+        "Canonical document: docs/src/content/docs/meta/agents.mdx"
       ],
       "Status": "Duplicated",
       "StatusLabel": "Duplicated",
@@ -69,7 +69,7 @@
     },
     {
       "Path": "CONTRIBUTING.md",
-      "Purpose": "docs/src/content/docs/developing/contributing-to-gargantuan.mdx",
+      "Purpose": "Routing alias to docs/src/content/docs/developing/contributing-to-gargantuan.mdx",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
         "Sha": "4bd63a1f8c7a34f05ed7862a248a12d89270865e",
@@ -77,7 +77,7 @@
         "Subject": "chore: symlink some documents"
       },
       "RelevantSourceSubsystem": [
-        "src/content/docs/developing/contributing-to-gargantuan.mdx"
+        "Canonical document: docs/src/content/docs/developing/contributing-to-gargantuan.mdx"
       ],
       "Status": "Duplicated",
       "StatusLabel": "Duplicated",
@@ -86,7 +86,7 @@
     },
     {
       "Path": "GEMINI.md",
-      "Purpose": "docs/src/content/docs/meta/agents.mdx",
+      "Purpose": "Routing alias to docs/src/content/docs/meta/agents.mdx",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
         "Sha": "4bd63a1f8c7a34f05ed7862a248a12d89270865e",
@@ -94,7 +94,7 @@
         "Subject": "chore: symlink some documents"
       },
       "RelevantSourceSubsystem": [
-        "src/content/docs/meta/agents.mdx"
+        "Canonical document: docs/src/content/docs/meta/agents.mdx"
       ],
       "Status": "Duplicated",
       "StatusLabel": "Duplicated",
@@ -135,7 +135,7 @@
     },
     {
       "Path": "LICENSE.md",
-      "Purpose": "docs/src/content/docs/meta/license.mdx",
+      "Purpose": "Routing alias to docs/src/content/docs/meta/license.mdx",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
         "Sha": "4bd63a1f8c7a34f05ed7862a248a12d89270865e",
@@ -143,7 +143,7 @@
         "Subject": "chore: symlink some documents"
       },
       "RelevantSourceSubsystem": [
-        "src/content/docs/meta/license.mdx"
+        "Canonical document: docs/src/content/docs/meta/license.mdx"
       ],
       "Status": "Duplicated",
       "StatusLabel": "Duplicated",

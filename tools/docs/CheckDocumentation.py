@@ -18,6 +18,7 @@ Content = Root / "docs/src/content/docs"
 Artifacts = Root / "devdocs/DocumentationReconstruction"
 ApiPath = Root / "docs/src/data/PublicApi.json"
 BaseSource = "2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f"
+RoutingAliases = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONTRIBUTING.md", "LICENSE.md"}
 Categories = {
     "Current": "Current and authoritative",
     "Incomplete": "Current but incomplete",
@@ -51,6 +52,12 @@ def SourceHash(Path: pathlib.Path) -> str:
     # Git's text checkout policy can use CRLF on Windows. Hash canonical text,
     # not platform-specific worktree bytes; qualification binary hashes are separate.
     return hashlib.sha256(Read(Path).encode("utf-8")).hexdigest()
+
+
+def AliasTarget(Path: pathlib.Path) -> str:
+    # Git materializes mode-120000 files as symlinks on Linux and as their
+    # one-line link text under Windows core.symlinks=false.
+    return Path.readlink().as_posix() if Path.is_symlink() else Read(Path).strip()
 
 
 def WithoutCode(Text: str) -> str:
@@ -102,6 +109,12 @@ def Resolve(Document: pathlib.Path, Target: str) -> pathlib.Path | None:
 
 
 def Links(Document: pathlib.Path) -> list[dict[str, str]]:
+    if Document.relative_to(Root).as_posix() in RoutingAliases:
+        Target = AliasTarget(Document)
+        if not (Document.parent / Target).is_file():
+            return [{"Path": Document.relative_to(Root).as_posix(), "Target": Target, "Reason": "Missing canonical routing target"}]
+        # The target is checked in its own directory, not relative to this alias.
+        return []
     Text = WithoutCode(Read(Document))
     Targets = re.findall(r"\]\(<?([^\s)>]+)>?(?:\s+[\"'][^\n]*?[\"'])?\)", Text)
     Targets += re.findall(r"(?m)^\s*\[[^]]+\]:\s*<?([^\s>]+)>?", Text)
@@ -218,7 +231,7 @@ def Classify(Path: str, Text: str) -> tuple[str, str]:
         if re.search(r"^status:\s*historical", Text, re.M):
             return "Historical", "Preserve superseded proposal and follow accepted D03 amendments"
         return "Current", "Preserve accepted decision authority and explicit amendments; acceptance is not implementation proof"
-    if Path in {"AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONTRIBUTING.md", "LICENSE.md"}:
+    if Path in RoutingAliases:
         return "Duplicated", "Preserve routing alias to canonical policy/license"
     if Path.startswith(("devdocs/Validation/", "cmake/notices/", "vendor/")) or re.search(
             r"(Validation|Qualification|Preflight|Attribution|Evidence|Checkpoint|Audit|WorkerCoordination|Proof|GateReview|Stage1Plan)", Path):
@@ -247,17 +260,18 @@ def Inventory(Paths: list[pathlib.Path]) -> dict:
     Records = []
     for Path in Paths:
         Relative = Path.relative_to(Root).as_posix()
-        Text = Read(Path)
+        Alias = AliasTarget(Path) if Relative in RoutingAliases else None
+        Text = Alias if Alias is not None else Read(Path)
         Title = re.search(r"(?m)^title:\s*(.+)$|^#\s+(.+)$", Text)
         Status, Action = Classify(Relative, Text)
         Sources = sorted(set(re.findall(r"(?:include/gargantuan|src|assets|tests|tools|cmake)/[\w./-]+", Text)))
         Last = Git("log", "-1", "--format=%H%x09%cI%x09%s", BaseSource, "--", Relative).strip()
         Parts = Last.split("\t", 2) if Last else []
         Verified = re.search(r"(?m)^(?:last_verified|reviewed):\s*(\d{4}-\d{2}-\d{2})", Text)
-        Records.append({"Path": Relative, "Purpose": next((Group for Group in Title.groups() if Group), Relative) if Title else Text.splitlines()[0] if Text else "Empty document",
+        Records.append({"Path": Relative, "Purpose": f"Routing alias to {Alias}" if Alias is not None else next((Group for Group in Title.groups() if Group), Relative) if Title else Text.splitlines()[0] if Text else "Empty document",
                         "LastMeaningfulUpdate": {"Date": Verified[1], "Basis": "Document-declared verification/review date; scope remains revision-specific"} if Verified else None,
                         "LastPathCommit": {"Sha": Parts[0], "Date": Parts[1], "Subject": Parts[2]} if len(Parts) == 3 else None,
-                        "RelevantSourceSubsystem": Sources[:16] or ["Owning source not established; consult traceability matrix"],
+                        "RelevantSourceSubsystem": [f"Canonical document: {Alias}"] if Alias is not None else Sources[:16] or ["Owning source not established; consult traceability matrix"],
                         "Status": Status, "StatusLabel": Categories[Status], "ProposedAction": Action,
                         "ObsoleteTermMentions": sorted(set(re.findall(r"Avalonia|OpenGL|Filament|InstanceClass|compat-roblox|Chromium", Text, re.I)))})
     return {"SchemaVersion": 1, "IntegratedEngineSource": BaseSource,

@@ -10,6 +10,22 @@ Spec.loader.exec_module(Documentation)
 
 
 class DocumentationTests(unittest.TestCase):
+    def test_routing_aliases_keep_target_context_on_windows_and_linux(self):
+        with tempfile.TemporaryDirectory() as Temporary:
+            Folder = pathlib.Path(Temporary)
+            (Folder / "docs").mkdir()
+            Target = Folder / "docs/policy.mdx"
+            Target.write_text("# Policy\n[bad](missing.md)\n", encoding="utf8")
+            Alias = Folder / "AGENTS.md"
+            Alias.write_text("docs/policy.mdx", encoding="utf8")
+            LinuxLink = mock.Mock(spec=pathlib.Path)
+            LinuxLink.is_symlink.return_value = True
+            LinuxLink.readlink.return_value = pathlib.Path("docs/policy.mdx")
+            self.assertEqual(Documentation.AliasTarget(Alias), Documentation.AliasTarget(LinuxLink))
+            with mock.patch.object(Documentation, "Root", Folder):
+                self.assertEqual(Documentation.Links(Alias), [])
+                self.assertEqual(Documentation.Links(Target)[0]["Reason"], "Missing target")
+
     def test_source_hash_is_independent_of_checkout_newlines(self):
         with tempfile.TemporaryDirectory() as Temporary:
             Folder = pathlib.Path(Temporary)

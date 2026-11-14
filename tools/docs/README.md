@@ -37,6 +37,9 @@ tests and vendored notices. Git submodule internals retain their own ownership.
 claim that its author reverified architecture. `LastMeaningfulUpdate` stays
 unknown where there is no evidence of such review. Classification rules are in
 the checker; the seven possible statuses do not imply every class is populated.
+Root Git routing aliases use link-target metadata consistently for Linux symlinks
+and Windows link-text checkouts. The checker validates alias destinations and
+checks canonical document links relative to the canonical document itself.
 
 The fast check fails missing current links/anchors, navigation targets, literal
 source paths, inventory coverage/classification and declaration-catalog drift.
