@@ -69,6 +69,9 @@ namespace gargantuan {
 		std::uint64_t LastUiPreparationNanoseconds = 0;
 		std::uint64_t LastSubmissionNanoseconds = 0;
 		std::uint64_t LastGpuCompletionWaitNanoseconds = 0;
+		std::uint64_t CameraCulledObjects = 0;
+		std::uint64_t WorldGeometryBindings = 0;
+		std::uint64_t WorldMaterialBindings = 0;
 	};
 
 	class SDLRenderer final : public BaseRenderer {

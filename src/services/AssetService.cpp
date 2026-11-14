@@ -204,7 +204,8 @@ namespace gargantuan {
 						(Node.Kind != AssetKind::Mesh || Kinds.at(Binding.LogicalKey) != AssetKind::Material))
 						return std::unexpected(Error("InvalidDependency", "Mesh primitive dependency must target a Material asset"));
 					if ((Binding.Kind == AssetImportBindingKind::MaterialBaseColorTexture ||
-						Binding.Kind == AssetImportBindingKind::MaterialNormalTexture) &&
+						Binding.Kind == AssetImportBindingKind::MaterialNormalTexture ||
+						Binding.Kind == AssetImportBindingKind::MaterialMetallicRoughnessTexture) &&
 						(Node.Kind != AssetKind::Material || Kinds.at(Binding.LogicalKey) != AssetKind::Image))
 						return std::unexpected(Error("InvalidDependency", "Material texture dependency must target an Image asset"));
 					if (Binding.Kind == AssetImportBindingKind::AnimationSkeletonMesh &&
@@ -262,7 +263,9 @@ namespace gargantuan {
 						if (!Material) return std::unexpected(Error("InvalidDependency", "Material texture binding target is invalid"));
 						if (Binding.Kind == AssetImportBindingKind::MaterialBaseColorTexture)
 							Material->BaseColorTexture = DependencyId;
-						else Material->NormalTexture = DependencyId;
+						else if (Binding.Kind == AssetImportBindingKind::MaterialNormalTexture)
+							Material->NormalTexture = DependencyId;
+						else Material->MetallicRoughnessTexture = DependencyId;
 					}
 				}
 				auto Artifact = EncodeAssetArtifact(Node.Asset, Node.Kind);
@@ -756,9 +759,14 @@ namespace gargantuan {
 				std::vector<AssetId> SemanticDependencies;
 				if (Record->Asset) {
 					if (const auto *Material = std::get_if<ImportedMaterial>(Record->Asset.get())) {
-						if (Material->BaseColorTexture) SemanticDependencies.push_back(*Material->BaseColorTexture);
-						if (Material->NormalTexture && !std::ranges::contains(SemanticDependencies, *Material->NormalTexture))
-							SemanticDependencies.push_back(*Material->NormalTexture);
+						for (const auto &Texture : {Material->BaseColorTexture, Material->NormalTexture,
+							Material->MetallicRoughnessTexture}) {
+							if (!Texture || std::ranges::contains(SemanticDependencies, *Texture)) continue;
+							const auto Dependency = ById.find(*Texture);
+							if (Dependency == ById.end() || Dependency->second->Kind != AssetKind::Image)
+								throw std::runtime_error("Material artifact texture must target an Image asset");
+							SemanticDependencies.push_back(*Texture);
+						}
 					} else if (const auto *Mesh = std::get_if<ImportedMesh>(Record->Asset.get()); Mesh && Mesh->Primitives) {
 						for (const auto &Primitive : *Mesh->Primitives) if (Primitive.Material &&
 							!std::ranges::contains(SemanticDependencies, *Primitive.Material)) SemanticDependencies.push_back(*Primitive.Material);
@@ -1268,6 +1276,7 @@ namespace gargantuan {
 		Render.Roughness = Material->RoughnessFactor;
 		Render.AlphaCutoff = Material->AlphaCutoff;
 		Render.DoubleSided = Material->DoubleSided;
+		if (Record->first != DefaultMaterialReference) Render.ShadingModel = RenderShadingModel::MetallicRoughness;
 		switch (Material->AlphaMode) {
 			case AssetMaterialAlphaMode::Opaque: Render.OpacityMode = RenderOpacityMode::Opaque; break;
 			case AssetMaterialAlphaMode::Mask: Render.OpacityMode = RenderOpacityMode::Masked; break;
@@ -1280,6 +1289,7 @@ namespace gargantuan {
 		};
 		Render.BaseColorTexture = ResolveTexture(Material->BaseColorTexture);
 		Render.NormalTexture = ResolveTexture(Material->NormalTexture);
+		Render.MetallicRoughnessTexture = ResolveTexture(Material->MetallicRoughnessTexture);
 		return AssetMaterialResource{*Material, Render, Record->second.ContentRevision};
 	}
 

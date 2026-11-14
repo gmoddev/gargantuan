@@ -30,6 +30,7 @@ namespace gargantuan {
 		constexpr std::uint32_t ArtifactVersion2 = 2;
 		constexpr std::uint32_t ArtifactVersion3 = 3;
 		constexpr std::uint32_t ArtifactVersion4 = 4;
+		constexpr std::uint32_t MaterialTextureArtifactVersion = 5;
 
 		AssetDiagnostic Error(std::string Code, std::string Message) {
 			if (Message.size() > AssetLimits::MaximumDiagnosticBytes) Message.resize(AssetLimits::MaximumDiagnosticBytes);
@@ -630,9 +631,11 @@ namespace gargantuan {
 		const auto *MeshValue = std::get_if<ImportedMesh>(&Asset);
 		if (MeshValue && MeshValue->Skeleton && MeshValue->CollisionAsset)
 			return std::unexpected(Error("UnsupportedCollision", "Skinned meshes cannot have static triangle collision"));
-		const auto Version = Kind == AssetKind::Collision || (MeshValue && MeshValue->CollisionAsset)
-			? ArtifactVersion4 : Kind == AssetKind::Animation || (MeshValue && MeshValue->Skeleton)
-				? ArtifactVersion3 : ArtifactVersion2;
+		const auto *MaterialValue = std::get_if<ImportedMaterial>(&Asset);
+		auto Version = ArtifactVersion2;
+		if (MaterialValue && MaterialValue->MetallicRoughnessTexture) Version = MaterialTextureArtifactVersion;
+		else if (Kind == AssetKind::Collision || (MeshValue && MeshValue->CollisionAsset)) Version = ArtifactVersion4;
+		else if (Kind == AssetKind::Animation || (MeshValue && MeshValue->Skeleton)) Version = ArtifactVersion3;
 		auto Artifact = BeginArtifact(Kind, Version);
 		if (const auto *Image = std::get_if<ImportedImage>(&Asset)) {
 			if (!Image->Rgba8 || Image->Width == 0 || Image->Height == 0 ||
@@ -778,6 +781,7 @@ namespace gargantuan {
 			Artifact.push_back(static_cast<std::uint8_t>(Material->AlphaMode));
 			AppendFloat(Artifact, Material->AlphaCutoff);
 			Artifact.push_back(Material->DoubleSided ? 1 : 0);
+			if (Version == MaterialTextureArtifactVersion) AppendReference(Material->MetallicRoughnessTexture);
 		} else if (const auto *Audio = std::get_if<ImportedAudio>(&Asset)) {
 			const auto SampleCount = static_cast<std::uint64_t>(Audio->FrameCount) * Audio->Channels;
 			if (!Audio->Pcm16 || Audio->Channels == 0 || Audio->Channels > AssetLimits::MaximumAudioChannels ||
@@ -891,7 +895,9 @@ namespace gargantuan {
 		std::size_t Offset = ArtifactMagic.size();
 		auto Version = ReadU32(Artifact, Offset);
 		if (!Version || (*Version != ArtifactVersion1 && *Version != ArtifactVersion2 &&
-			*Version != ArtifactVersion3 && *Version != ArtifactVersion4) || Offset >= Artifact.size() ||
+			*Version != ArtifactVersion3 && *Version != ArtifactVersion4 &&
+			!(*Version == MaterialTextureArtifactVersion && ExpectedKind == AssetKind::Material)) ||
+			Offset >= Artifact.size() ||
 			Artifact[Offset++] != static_cast<std::uint8_t>(ExpectedKind))
 			return std::unexpected(Error("UnsupportedArtifact", "Asset artifact version or kind is unsupported"));
 
@@ -919,8 +925,8 @@ namespace gargantuan {
 		}
 
 		if (ExpectedKind == AssetKind::Material) {
-			if (*Version != ArtifactVersion2)
-				return std::unexpected(Error("UnsupportedArtifact", "Material assets require artifact version 2"));
+			if (*Version != ArtifactVersion2 && *Version != MaterialTextureArtifactVersion)
+				return std::unexpected(Error("UnsupportedArtifact", "Unsupported material artifact version"));
 			ImportedMaterial Material;
 			std::array<float *, 6> Factors{&Material.BaseColorFactor.x, &Material.BaseColorFactor.y,
 				&Material.BaseColorFactor.z, &Material.BaseColorFactor.w, &Material.MetallicFactor,
@@ -953,6 +959,13 @@ namespace gargantuan {
 				return std::unexpected(Error("MalformedArtifact", "Material artifact alpha state is invalid"));
 			Material.AlphaCutoff = *AlphaCutoff;
 			Material.DoubleSided = Artifact[Offset++] != 0;
+			if (*Version == MaterialTextureArtifactVersion) {
+				auto MetallicRoughnessTexture = ReadReference();
+				if (!MetallicRoughnessTexture) return std::unexpected(MetallicRoughnessTexture.error());
+				if (!*MetallicRoughnessTexture)
+					return std::unexpected(Error("MalformedArtifact", "Material artifact requires a metallic-roughness image"));
+				Material.MetallicRoughnessTexture = *MetallicRoughnessTexture;
+			}
 			if (Offset != Artifact.size())
 				return std::unexpected(Error("MalformedArtifact", "Material artifact has trailing bytes"));
 			return AssetImportCandidate{Material,

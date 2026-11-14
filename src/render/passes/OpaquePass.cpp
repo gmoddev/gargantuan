@@ -10,13 +10,44 @@
 #include "render/sdl/SDLTextureCache.hpp"
 
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <array>
-#include <cstring>
+#include <cmath>
 #include <format>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace gargantuan {
+	namespace {
+		using ClipPlanes = std::array<glm::vec4, 6>;
+		constexpr RenderBounds PrimitiveBounds{glm::vec3(-0.5f), glm::vec3(0.5f)};
+
+		ClipPlanes GetClipPlanes(const RenderCameraSnapshot &Camera) {
+			const auto Rows = glm::transpose(Camera.ProjectionMatrix * Camera.ViewMatrix);
+			return {Rows[3] + Rows[0], Rows[3] - Rows[0], Rows[3] + Rows[1], Rows[3] - Rows[1],
+				Rows[2], Rows[3] - Rows[2]};
+		}
+
+		bool OutsideView(const ClipPlanes &Planes, const glm::mat4 &Model, const RenderBounds &Bounds) {
+			const auto Center = Bounds.Minimum * 0.5f + Bounds.Maximum * 0.5f;
+			const auto Extent = Bounds.Maximum * 0.5f - Bounds.Minimum * 0.5f;
+			const auto ToLocal = glm::transpose(Model);
+			for (const auto &Plane : Planes) {
+				const auto LocalPlane = ToLocal * Plane;
+				const auto Normal = glm::vec3(LocalPlane);
+				const auto AbsoluteNormal = glm::abs(Normal);
+				const auto Radius = glm::dot(AbsoluteNormal, Extent);
+				const auto Distance = glm::dot(Normal, Center) + LocalPlane.w;
+				const auto Margin = 1e-5f * (1.0f + glm::dot(AbsoluteNormal, glm::abs(Center)) +
+					std::abs(LocalPlane.w) + Radius);
+				if (std::isfinite(Distance) && std::isfinite(Radius) && Distance + Radius < -Margin)
+					return true;
+			}
+			return false;
+		}
+	}
+
 	static const glm::mat4 SHADOW_BIAS_MATRIX{
 		//
 		0.5f,
@@ -60,6 +91,14 @@ namespace gargantuan {
 			glm::mat4 NormalMatrix;
 			glm::vec4 Color;
 			glm::vec4 MaterialValues;
+			glm::vec4 MaterialFlags;
+		};
+
+		struct WorldDraw {
+			const RenderProjectedObject *Object;
+			const SDLGpuMesh *Mesh;
+			const RenderAnimationPoseUpdate *Pose;
+			float Depth;
 		};
 
 		OpaquePass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat, SDLRendererMetrics *Metrics) {
@@ -69,14 +108,16 @@ namespace gargantuan {
 				Shader.VertexStorageBufferCount = 1;
 				Shader.FragmentFilepath = GetSDLShaderPath("opaque.frag");
 				Shader.FragmentUniformBufferCount = 1;
-				Shader.FragmentSamplerCount = 2;
+				Shader.FragmentSamplerCount = 4;
+				EncodeSrgbOutput = swapchainFormat != SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB &&
+					swapchainFormat != SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB;
 				Shader.Init(gpu, Metrics);
 				auto Builder = SDLPipelineBuilder()
 					.SetVertexShader(Shader.VertexShader)
 					.SetFragmentShader(Shader.FragmentShader)
 					.SetColorEnabled(true)
 					.SetColorFormat(swapchainFormat)
-					.SetBlendingEnabled(true)
+					.SetBlendingEnabled(false)
 					.SetDepthEnabled(true)
 					.SetDepthFormat(SDLSceneDepthFormat);
 				Pipeline = Builder.Build(gpu, Metrics);
@@ -84,6 +125,14 @@ namespace gargantuan {
 				DoubleSidedInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
 				DoubleSidedPipeline = SDL_CreateGPUGraphicsPipeline(gpu, &DoubleSidedInfo);
 				if (DoubleSidedPipeline && Metrics) ++Metrics->PipelineCreations;
+				Builder.SetBlendingEnabled(true);
+				auto BlendedInfo = Builder.BuildInfo();
+				BlendedInfo.depth_stencil_state.enable_depth_write = false;
+				BlendedPipeline = SDL_CreateGPUGraphicsPipeline(gpu, &BlendedInfo);
+				if (BlendedPipeline && Metrics) ++Metrics->PipelineCreations;
+				BlendedInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+				BlendedDoubleSidedPipeline = SDL_CreateGPUGraphicsPipeline(gpu, &BlendedInfo);
+				if (BlendedDoubleSidedPipeline && Metrics) ++Metrics->PipelineCreations;
 				SDL_GPUSamplerCreateInfo SamplerInfo{
 					.min_filter = SDL_GPU_FILTER_LINEAR,
 					.mag_filter = SDL_GPU_FILTER_LINEAR,
@@ -93,7 +142,7 @@ namespace gargantuan {
 					.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
 				};
 				MaterialSampler = SDL_CreateGPUSampler(gpu, &SamplerInfo);
-				if (!Pipeline || !DoubleSidedPipeline || !MaterialSampler)
+				if (!Pipeline || !DoubleSidedPipeline || !BlendedPipeline || !BlendedDoubleSidedPipeline || !MaterialSampler)
 					throw std::runtime_error(std::format("Failed to create material rendering resources: {}", SDL_GetError()));
 			} catch (...) {
 				Destroy(gpu);
@@ -103,17 +152,18 @@ namespace gargantuan {
 
 		void Destroy(SDL_GPUDevice *Gpu) override {
 			if (DoubleSidedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, DoubleSidedPipeline);
-			if (WhiteTexture) SDL_ReleaseGPUTexture(Gpu, WhiteTexture);
-			if (WhiteTransferBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, WhiteTransferBuffer);
+			if (BlendedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, BlendedPipeline);
+			if (BlendedDoubleSidedPipeline) SDL_ReleaseGPUGraphicsPipeline(Gpu, BlendedDoubleSidedPipeline);
 			if (MaterialSampler) SDL_ReleaseGPUSampler(Gpu, MaterialSampler);
 			DoubleSidedPipeline = nullptr;
-			WhiteTexture = nullptr;
-			WhiteTransferBuffer = nullptr;
+			BlendedPipeline = nullptr;
+			BlendedDoubleSidedPipeline = nullptr;
 			MaterialSampler = nullptr;
 			SDLRenderPass::Destroy(Gpu);
 		}
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
+			(void)gpu;
 			SDL_GPUColorTargetInfo colorTarget = {
 				.texture = context.SwapchainTexture,
 				.load_op = SDL_GPU_LOADOP_LOAD,
@@ -134,140 +184,174 @@ namespace gargantuan {
 				.sampler = context.ShadowSampler,
 			};
 
-			auto pass = SDL_BeginGPURenderPass(context.Commands, &colorTarget, 1, &depthTarget);
-			EnsureWhiteTexture(gpu, context.Metrics);
-			SDL_BindGPUGraphicsPipeline(pass, Pipeline);
-			if (context.Metrics) ++context.Metrics->PipelineSwitches;
+			auto *White = context.TextureResources->GetWhiteTexture();
+			auto *Pass = SDL_BeginGPURenderPass(context.Commands, &colorTarget, 1, &depthTarget);
+			if (!Pass) throw std::runtime_error("[Renderer:Material] Could not begin the world render pass");
+			try {
+				DrawWorld(Pass, context, shadowBinding, White);
+			} catch (...) {
+				TransparentDraws.clear();
+				SDL_EndGPURenderPass(Pass);
+				throw;
+			}
+			return Pass;
+		}
 
-			const auto &Frame = context.Projection.GetFrame();
+	  private:
+		void DrawWorld(SDL_GPURenderPass *Pass, SDLFrameContext &Context, SDL_GPUTextureSamplerBinding ShadowBinding,
+			SDL_GPUTexture *White) {
+			const auto &Frame = Context.Projection.GetFrame();
 			const auto &Environment = Frame.Environment;
-			WorldUniforms worldUniforms{
+			const WorldUniforms Uniforms{
 				.ViewMatrix = Frame.Camera.ViewMatrix,
 				.ProjectionMatrix = Frame.Camera.ProjectionMatrix,
-				.ShadowBiasMatrix = SHADOW_BIAS_MATRIX * context.ShadowMatrix,
+				.ShadowBiasMatrix = SHADOW_BIAS_MATRIX * Context.ShadowMatrix,
 				.SunDirectionIntensity = glm::vec4(Environment.SunDirection, Environment.SunIntensity),
 				.AmbientExposure = glm::vec4(Environment.AmbientColor, Environment.ExposureMultiplier),
 				.SunColorFogEnabled = glm::vec4(Environment.SunColor, Environment.Fog.Enabled ? 1.0f : 0.0f),
 				.FogColorStart = glm::vec4(Environment.Fog.Color, Environment.Fog.Start),
 				.CameraPositionFogEnd = glm::vec4(Frame.Camera.Position, Environment.Fog.End),
 			};
-			SDL_PushGPUVertexUniformData(context.Commands, 0, &worldUniforms, sizeof(WorldUniforms));
-			SDL_PushGPUFragmentUniformData(context.Commands, 0, &worldUniforms, sizeof(WorldUniforms));
+			SDL_PushGPUVertexUniformData(Context.Commands, 0, &Uniforms, sizeof(Uniforms));
+			SDL_PushGPUFragmentUniformData(Context.Commands, 0, &Uniforms, sizeof(Uniforms));
 
-			for (const auto &[Object, Projected] : context.Projection.GetObjects()) {
-				(void)Object;
+			const auto Planes = GetClipPlanes(Frame.Camera);
+			SDL_GPUGraphicsPipeline *BoundPipeline = nullptr;
+			const SDLGpuMesh *BoundMesh = nullptr;
+			const RenderProjectedObject *BoundObject = nullptr;
+			SDL_GPUBuffer *BoundPalette = nullptr;
+			std::array<SDL_GPUTexture *, 3> BoundTextures{};
+			TransparentDraws.clear();
+
+			auto ResolveTexture = [&](const std::optional<RenderTextureIdentity> &Identity) {
+				return Identity ? Context.TextureResources->Find(*Identity) : White;
+			};
+			auto DrawPrimitive = [&](const WorldDraw &Draw, std::uint32_t FirstIndex, std::uint32_t IndexCount,
+				const RenderMaterialState &Material) {
+				const auto &Item = Draw.Object->Item;
+				const bool Transparent = Material.OpacityMode == RenderOpacityMode::Transparent;
+				auto *MaterialPipeline = Transparent
+					? (Material.DoubleSided ? BlendedDoubleSidedPipeline : BlendedPipeline)
+					: (Material.DoubleSided ? DoubleSidedPipeline : Pipeline);
+				if (MaterialPipeline != BoundPipeline) {
+					SDL_BindGPUGraphicsPipeline(Pass, MaterialPipeline);
+					BoundPipeline = MaterialPipeline;
+					BoundMesh = nullptr;
+					BoundObject = nullptr;
+					BoundPalette = nullptr;
+					BoundTextures = {};
+					if (Context.Metrics) ++Context.Metrics->PipelineSwitches;
+				}
+				if (Draw.Mesh != BoundMesh) {
+					const SDL_GPUBufferBinding VertexBinding{.buffer = Draw.Mesh->VertexBuffer, .offset = 0};
+					const SDL_GPUBufferBinding IndexBinding{.buffer = Draw.Mesh->IndexBuffer, .offset = 0};
+					SDL_BindGPUVertexBuffers(Pass, 0, &VertexBinding, 1);
+					SDL_BindGPUIndexBuffer(Pass, &IndexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+					BoundMesh = Draw.Mesh;
+					if (Context.Metrics) ++Context.Metrics->WorldGeometryBindings;
+				}
+				if (Draw.Object != BoundObject) {
+					const auto Palette = Context.SkinPalettes.Find(Item.Object, Draw.Pose);
+					if (Palette.Buffer != BoundPalette) {
+						auto *PaletteBuffer = Palette.Buffer;
+						SDL_BindGPUVertexStorageBuffers(Pass, 0, &PaletteBuffer, 1);
+						BoundPalette = PaletteBuffer;
+					}
+					if (Item.CastShadow && Environment.SunIntensity > 0.0f) {
+						const auto ShadowRevision = Context.ShadowPoseRevisions.find(Item.Object);
+						if (ShadowRevision == Context.ShadowPoseRevisions.end() || ShadowRevision->second != Palette.PoseRevision) {
+							if (Context.Metrics) ++Context.Metrics->MainShadowPoseMismatches;
+							throw std::logic_error("[Renderer:Material] World and shadow passes resolved different animation poses");
+						}
+					}
+					BoundObject = Draw.Object;
+				}
+				const std::array Textures{
+					ResolveTexture(Material.BaseColorTexture), ResolveTexture(Material.NormalTexture),
+					ResolveTexture(Material.MetallicRoughnessTexture),
+				};
+				if (std::ranges::find(Textures, nullptr) != Textures.end())
+					throw std::logic_error("[Renderer:Material] A material texture has no SDL residency");
+				if (Textures != BoundTextures) {
+					const std::array<SDL_GPUTextureSamplerBinding, 4> Bindings{{
+						ShadowBinding, {Textures[0], MaterialSampler}, {Textures[1], MaterialSampler}, {Textures[2], MaterialSampler},
+					}};
+					SDL_BindGPUFragmentSamplers(Pass, 0, Bindings.data(), Bindings.size());
+					BoundTextures = Textures;
+					if (Context.Metrics) ++Context.Metrics->WorldMaterialBindings;
+				}
+				const float Shading = Material.MetallicRoughnessTexture ? 2.0f :
+					Material.ShadingModel == RenderShadingModel::MetallicRoughness ? 1.0f : 0.0f;
+				const PartUniforms Part{
+					.ModelMatrix = Item.ModelMatrix,
+					.NormalMatrix = glm::transpose(Item.InverseModelMatrix),
+					.Color = Material.BaseColorFactor,
+					.MaterialValues = {Material.AlphaCutoff, static_cast<float>(Material.OpacityMode),
+						Material.Metallic, Material.Roughness},
+					.MaterialFlags = {Shading, Material.BaseColorTexture ? 1.0f : 0.0f,
+						Material.NormalTexture ? 1.0f : 0.0f, EncodeSrgbOutput ? 1.0f : 0.0f},
+				};
+				SDL_PushGPUVertexUniformData(Context.Commands, 1, &Part, sizeof(PartUniforms));
+				SDL_DrawGPUIndexedPrimitives(Pass, IndexCount, 1, FirstIndex, 0, 0);
+				if (Context.Metrics) ++Context.Metrics->DrawCalls;
+			};
+			auto ForPrimitives = [](const WorldDraw &Draw, auto &&Visit) {
+				if (Draw.Object->Primitives) {
+					for (const auto &Primitive : *Draw.Object->Primitives)
+						Visit(Primitive.FirstIndex, Primitive.IndexCount, Primitive.Material);
+				} else Visit(0, Draw.Mesh->IndexCount, Draw.Object->Material);
+			};
+
+			for (const auto &[Object, Projected] : Context.Projection.GetObjects()) {
 				if (!Projected.Visible) continue;
-				const auto &item = Projected.Item;
-				const auto *mesh = Projected.Mesh
-					? context.MeshResources.Find(*Projected.Mesh) : context.MeshResources.Find(item.Geometry);
-				if (!mesh || !mesh->VertexBuffer || !mesh->IndexBuffer) {
-					LOG_WARN(
-						App,
-						"RenderPublication %llu skipped ObjectId %u:%u because its GPU resource is unavailable",
-						static_cast<unsigned long long>(context.Projection.GetLastPublicationId()),
-						item.Object.Slot,
-						item.Object.Generation
-					);
+				const auto &Item = Projected.Item;
+				const auto *Pose = Context.Projection.GetAnimationPose(Object);
+				const auto *Bounds = Projected.Mesh ? Context.Projection.GetMeshBounds(*Projected.Mesh) : &PrimitiveBounds;
+				if (Bounds && (!Pose || Pose->Mode != RenderAnimationSkinningMode::GpuPalette) &&
+					OutsideView(Planes, Item.ModelMatrix, *Bounds)) {
+					if (Context.Metrics) ++Context.Metrics->CameraCulledObjects;
+					continue;
+				}
+				const auto *Mesh = Projected.Mesh
+					? Context.MeshResources.Find(*Projected.Mesh) : Context.MeshResources.Find(Item.Geometry);
+				if (!Mesh || !Mesh->VertexBuffer || !Mesh->IndexBuffer) {
+					LOG_WARN(App, "[Renderer:Material] Publication %llu skipped ObjectId %u:%u with unavailable GPU geometry",
+						static_cast<unsigned long long>(Context.Projection.GetLastPublicationId()), Object.Slot, Object.Generation);
 					continue;
 				}
 
-				SDL_GPUBufferBinding vertexBinding{.buffer = mesh->VertexBuffer, .offset = 0};
-				SDL_BindGPUVertexBuffers(pass, 0, &vertexBinding, 1);
-
-				SDL_GPUBufferBinding indexBinding{.buffer = mesh->IndexBuffer, .offset = 0};
-				SDL_BindGPUIndexBuffer(pass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-				const auto Palette = context.SkinPalettes.Find(
-					item.Object, context.Projection.GetAnimationPose(item.Object));
-				auto *PaletteBuffer = Palette.Buffer;
-				SDL_BindGPUVertexStorageBuffers(pass, 0, &PaletteBuffer, 1);
-				if (item.CastShadow && Environment.SunIntensity > 0.0f) {
-					const auto ShadowRevision = context.ShadowPoseRevisions.find(item.Object);
-					if (ShadowRevision == context.ShadowPoseRevisions.end() ||
-						ShadowRevision->second != Palette.PoseRevision) {
-						if (context.Metrics) ++context.Metrics->MainShadowPoseMismatches;
-						throw std::logic_error("Opaque and shadow passes resolved different animation pose revisions");
-					}
+				WorldDraw Draw{&Projected, Mesh, Pose, 0.0f};
+				bool HasTransparent = false;
+				ForPrimitives(Draw, [&](std::uint32_t First, std::uint32_t Count, const RenderMaterialState &Material) {
+					if (Material.OpacityMode == RenderOpacityMode::Transparent) HasTransparent = true;
+					else DrawPrimitive(Draw, First, Count, Material);
+				});
+				if (HasTransparent) {
+					const auto Center = Bounds ? Bounds->Minimum * 0.5f + Bounds->Maximum * 0.5f : glm::vec3(0.0f);
+					const auto Depth = -(Frame.Camera.ViewMatrix * Item.ModelMatrix * glm::vec4(Center, 1.0f)).z;
+					Draw.Depth = std::isfinite(Depth) ? Depth : 0.0f;
+					TransparentDraws.push_back(Draw);
 				}
-
-				auto DrawPrimitive = [&](std::uint32_t FirstIndex, std::uint32_t IndexCount,
-					const RenderMaterialState &Material) {
-					auto *MaterialPipeline = Material.DoubleSided ? DoubleSidedPipeline : Pipeline;
-					SDL_BindGPUGraphicsPipeline(pass, MaterialPipeline);
-					if (context.Metrics) ++context.Metrics->PipelineSwitches;
-					auto *BaseColorTexture = Material.BaseColorTexture && context.TextureResources ?
-						context.TextureResources->Find(*Material.BaseColorTexture) : WhiteTexture;
-					if (!BaseColorTexture) throw std::logic_error("Material references a texture without SDL residency");
-					const std::array<SDL_GPUTextureSamplerBinding, 2> TextureBindings{{
-						shadowBinding,
-						{.texture = BaseColorTexture, .sampler = MaterialSampler},
-					}};
-					SDL_BindGPUFragmentSamplers(pass, 0, TextureBindings.data(), TextureBindings.size());
-					PartUniforms Uniforms{
-						.ModelMatrix = item.ModelMatrix,
-						.NormalMatrix = glm::transpose(item.InverseModelMatrix),
-						.Color = Material.BaseColorFactor,
-						.MaterialValues = {Material.AlphaCutoff, static_cast<float>(Material.OpacityMode),
-							Material.Metallic, Material.Roughness},
-					};
-					SDL_PushGPUVertexUniformData(context.Commands, 1, &Uniforms, sizeof(PartUniforms));
-					SDL_DrawGPUIndexedPrimitives(pass, IndexCount, 1, FirstIndex, 0, 0);
-					if (context.Metrics) ++context.Metrics->DrawCalls;
-				};
-				if (Projected.Primitives) {
-					for (const auto &Primitive : *Projected.Primitives)
-						DrawPrimitive(Primitive.FirstIndex, Primitive.IndexCount, Primitive.Material);
-				} else DrawPrimitive(0, mesh->IndexCount, Projected.Material);
 			}
 
-			return pass;
-		};
-
-	  private:
-		void EnsureWhiteTexture(SDL_GPUDevice *Gpu, SDLRendererMetrics *Metrics) {
-			if (WhiteTexture) return;
-			SDL_GPUTextureCreateInfo TextureInfo{
-				.type = SDL_GPU_TEXTURETYPE_2D,
-				.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-				.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER,
-				.width = 1,
-				.height = 1,
-				.layer_count_or_depth = 1,
-				.num_levels = 1,
-			};
-			WhiteTexture = SDL_CreateGPUTexture(Gpu, &TextureInfo);
-			SDL_GPUTransferBufferCreateInfo TransferInfo{.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, .size = 4};
-			WhiteTransferBuffer = SDL_CreateGPUTransferBuffer(Gpu, &TransferInfo);
-			if (!WhiteTexture || !WhiteTransferBuffer)
-				throw std::runtime_error(std::format("Failed to create the material white texture: {}", SDL_GetError()));
-			auto *Mapped = static_cast<std::uint8_t *>(SDL_MapGPUTransferBuffer(Gpu, WhiteTransferBuffer, false));
-			if (!Mapped) throw std::runtime_error(std::format("Failed to map the material white texture: {}", SDL_GetError()));
-			std::memset(Mapped, 0xff, 4);
-			SDL_UnmapGPUTransferBuffer(Gpu, WhiteTransferBuffer);
-			auto *Commands = SDL_AcquireGPUCommandBuffer(Gpu);
-			if (!Commands) throw std::runtime_error(std::format("Failed to acquire material texture commands: {}", SDL_GetError()));
-			auto *CopyPass = SDL_BeginGPUCopyPass(Commands);
-			if (!CopyPass) {
-				SDL_CancelGPUCommandBuffer(Commands);
-				throw std::runtime_error(std::format("Failed to begin material texture upload: {}", SDL_GetError()));
+			std::ranges::sort(TransparentDraws, [](const WorldDraw &Left, const WorldDraw &Right) {
+				if (Left.Depth != Right.Depth) return Left.Depth > Right.Depth;
+				return Left.Object->Item.Object < Right.Object->Item.Object;
+			});
+			for (const auto &Draw : TransparentDraws) {
+				ForPrimitives(Draw, [&](std::uint32_t First, std::uint32_t Count, const RenderMaterialState &Material) {
+					if (Material.OpacityMode == RenderOpacityMode::Transparent) DrawPrimitive(Draw, First, Count, Material);
+				});
 			}
-			SDL_GPUTextureTransferInfo Source{.transfer_buffer = WhiteTransferBuffer, .pixels_per_row = 1, .rows_per_layer = 1};
-			SDL_GPUTextureRegion Destination{.texture = WhiteTexture, .w = 1, .h = 1, .d = 1};
-			SDL_UploadToGPUTexture(CopyPass, &Source, &Destination, false);
-			SDL_EndGPUCopyPass(CopyPass);
-			if (!SDL_SubmitGPUCommandBuffer(Commands))
-				throw std::runtime_error(std::format("Failed to upload the material white texture: {}", SDL_GetError()));
-			if (Metrics) {
-				++Metrics->TextureCreations;
-				++Metrics->TransferBufferCreations;
-				++Metrics->UploadOperations;
-				Metrics->UploadedBytes += 4;
-			}
+			TransparentDraws.clear();
 		}
 
 		SDL_GPUGraphicsPipeline *DoubleSidedPipeline = nullptr;
-		SDL_GPUTexture *WhiteTexture = nullptr;
-		SDL_GPUTransferBuffer *WhiteTransferBuffer = nullptr;
+		SDL_GPUGraphicsPipeline *BlendedPipeline = nullptr;
+		SDL_GPUGraphicsPipeline *BlendedDoubleSidedPipeline = nullptr;
+		std::vector<WorldDraw> TransparentDraws;
 		SDL_GPUSampler *MaterialSampler = nullptr;
+		bool EncodeSrgbOutput = true;
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateOpaquePass(

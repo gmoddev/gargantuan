@@ -21,6 +21,7 @@ namespace gargantuan {
 		void ApplyPublication(const RenderPublication &Publication);
 		void Destroy();
 		[[nodiscard]] SDL_GPUTexture *Find(RenderTextureIdentity Texture) const;
+		[[nodiscard]] SDL_GPUTexture *GetWhiteTexture();
 
 	  private:
 		struct Entry {
@@ -31,7 +32,9 @@ namespace gargantuan {
 			std::uint32_t Height = 0;
 		};
 
+		Entry CreateEntry(std::uint32_t Width, std::uint32_t Height, std::uint64_t Revision);
 		void DestroyEntry(Entry &Value);
+		void DestroyResident();
 		void Upload(
 			Entry &Value,
 			SDL_GPUCopyPass *CopyPass,
@@ -46,5 +49,6 @@ namespace gargantuan {
 		SDL_GPUDevice *Gpu = nullptr;
 		SDLRendererMetrics *Metrics = nullptr;
 		std::unordered_map<RenderTextureIdentity, Entry, RenderTextureIdentityHash> Textures;
+		Entry White;
 	};
 }

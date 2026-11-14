@@ -81,6 +81,7 @@ namespace gargantuan {
 	struct RenderTextureRemove { RenderTextureIdentity Texture; };
 
 	enum class RenderOpacityMode : std::uint8_t { Opaque, Masked, Transparent };
+	enum class RenderShadingModel : std::uint8_t { Legacy, MetallicRoughness };
 
 	struct RenderMaterialState {
 		std::uint64_t Revision = 1;
@@ -92,6 +93,8 @@ namespace gargantuan {
 		RenderOpacityMode OpacityMode = RenderOpacityMode::Opaque;
 		float AlphaCutoff = 0.5f;
 		bool DoubleSided = false;
+		RenderShadingModel ShadingModel = RenderShadingModel::Legacy;
+		std::optional<RenderTextureIdentity> MetallicRoughnessTexture;
 	};
 
 	struct RenderPrimitiveMaterialState {
