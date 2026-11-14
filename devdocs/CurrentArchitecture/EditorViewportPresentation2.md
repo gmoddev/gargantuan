@@ -84,10 +84,13 @@ Edit and Play use the same mailbox and offscreen renderer. Play presented an
 additional issue exposed by the new independent cadences: `HeadlessRenderer`
 formerly retained only the newest semantic publication. At a faster simulation
 cadence, presentation could skip a required incremental base publication.
-`PlaySession` now retains a bounded queue of 32 semantic deltas. EditorHost
-applies every ordered delta but reads back only the newest visual result. Queue
-overflow clears the queue and requests a full resync. Thus semantic renderer
-ordering is preserved without turning visual frames into a backlog.
+`PlaySession` retains a bounded queue of 32 semantic deltas. EditorHost applies
+every ordered delta to both its CPU projection and the native viewport renderer.
+The mailbox and explicit `CaptureViewport` then read back only the latest applied
+publication. A new renderer waits for a full publication if the CPU projection
+already advanced without a native sink. Queue overflow or a generation change
+that clears the active Play projection requests a full resync. Completed visual
+frames remain replaceable independently of the publication sequence.
 
 Camera commands carry a monotonic camera revision. Studio coalesces pointer
 updates and EditorHost rejects older revisions. Camera transport is independent

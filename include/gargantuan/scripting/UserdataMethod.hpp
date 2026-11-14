@@ -42,8 +42,11 @@ namespace gargantuan {
 			}};
 		}
 
-		template <auto MethodPointer> static UserdataMethod fromMember() {
-			return fromMember<MethodPointer>(MethodPointer);
+		template <auto MethodPointer>
+		static UserdataMethod fromMember(ScriptCapability Required = ScriptCapability::None) {
+			auto Method = fromMember<MethodPointer>(MethodPointer);
+			Method.RequiredCapability = Required;
+			return Method;
 		}
 
 		template <auto MethodPointer, typename Class, typename Returns, typename... Arguments>

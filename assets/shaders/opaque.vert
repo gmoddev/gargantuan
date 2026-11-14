@@ -10,22 +10,17 @@ layout(location = 3) in vec2 VertexUV;
 layout(location = 4) in uvec4 VertexJoints;
 layout(location = 5) in vec4 VertexWeights;
 
-layout(set = 1, binding = 0) uniform WorldUniforms {
-    mat4 ViewMatrix;
-    mat4 ProjectionMatrix;
-    mat4 ShadowBiasMatrix;
-    vec4 SunDirectionIntensity;
-    vec4 AmbientExposure;
-    vec4 SunColorFogEnabled;
-    vec4 FogColorStart;
-    vec4 CameraPositionFogEnd;
-} world;
+#include "world-uniforms.glsl"
 
 layout(set = 1, binding = 1) uniform PartUniforms {
     mat4 ModelMatrix;
     mat4 NormalMatrix;
     vec4 Color;
     vec4 MaterialValues;
+    vec4 MaterialFlags;
+    vec4 EmissiveOcclusion;
+    vec4 MaterialControls;
+    vec4 ColorSamplerModes;
 } part;
 
 layout(location = 0) out vec3 FragmentNormal;
@@ -34,6 +29,11 @@ layout(location = 2) out vec4 WorldPosition;
 layout(location = 3) out vec4 ShadowPosition;
 layout(location = 4) out vec2 FragmentUV;
 layout(location = 5) out vec4 FragmentMaterialValues;
+layout(location = 6) out vec4 FragmentTangent;
+layout(location = 7) flat out vec4 FragmentMaterialFlags;
+layout(location = 8) flat out vec4 FragmentEmissiveOcclusion;
+layout(location = 9) flat out vec4 FragmentMaterialControls;
+layout(location = 10) flat out vec4 FragmentColorSamplerModes;
 
 void main() {
 	SkinnedVertex Vertex = ApplySkinning(
@@ -49,4 +49,11 @@ void main() {
     ShadowPosition = world.ShadowBiasMatrix * WorldPosition;
     FragmentUV = VertexUV;
     FragmentMaterialValues = part.MaterialValues;
+    mat3 Model = mat3(part.ModelMatrix);
+    float Orientation = determinant(Model) < 0.0 ? -1.0 : 1.0;
+    FragmentTangent = vec4(Model * Vertex.Tangent.xyz, Orientation * Vertex.Tangent.w);
+    FragmentMaterialFlags = part.MaterialFlags;
+    FragmentEmissiveOcclusion = part.EmissiveOcclusion;
+    FragmentMaterialControls = part.MaterialControls;
+    FragmentColorSamplerModes = part.ColorSamplerModes;
 }

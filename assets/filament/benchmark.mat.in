@@ -1,0 +1,40 @@
+material {
+    name : @FILAMENT_MATERIAL_NAME@,
+    shadingModel : lit,
+    blending : @FILAMENT_BLEND_MODE@,
+    requires : [ uv0 ],
+    flipUV : false,
+    doubleSided : true,
+    parameters : [
+        {
+            type : float4,
+            name : baseColorFactor
+        },
+        { type : float, name : metallicFactor },
+        { type : float, name : roughnessFactor },
+        { type : bool, name : hasNormalMap },
+        { type : bool, name : hasMetallicRoughnessMap },
+        { type : sampler2d, name : baseColorMap },
+        { type : sampler2d, name : normalMap },
+        { type : sampler2d, name : metallicRoughnessMap }
+    ],
+    culling : back,
+    colorWrite : true,
+    depthCulling : true
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        if (materialParams.hasNormalMap) {
+            vec3 normal = texture(materialParams_normalMap, getUV0()).xyz * 2.0 - 1.0;
+            if (dot(normal, normal) > 0.00001) material.normal = normalize(normal);
+        }
+        prepareMaterial(material);
+        material.baseColor = materialParams.baseColorFactor * texture(materialParams_baseColorMap, getUV0());
+        @FILAMENT_PREMULTIPLY@
+        vec2 packedFactors = materialParams.hasMetallicRoughnessMap
+            ? texture(materialParams_metallicRoughnessMap, getUV0()).gb : vec2(1.0);
+        material.roughness = materialParams.roughnessFactor * packedFactors.x;
+        material.metallic = materialParams.metallicFactor * packedFactors.y;
+    }
+}

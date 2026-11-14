@@ -18,6 +18,7 @@
 #include <vector>
 
 namespace gargantuan {
+	struct SDLRendererMetrics;
 	struct EditorViewportFrame {
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
@@ -52,7 +53,9 @@ namespace gargantuan {
 
 	class EditorViewportRenderer final {
 	  public:
-		EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height);
+		EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height, bool EnableHdrScene = true,
+			bool EnableInstancing = false, bool EnableSceneEnvelope = false,
+			bool UseContiguousInstancing = false);
 		~EditorViewportRenderer();
 
 		EditorViewportRenderer(const EditorViewportRenderer &) = delete;
@@ -62,9 +65,16 @@ namespace gargantuan {
 		void ApplyPublication(RenderPublicationPtr Publication);
 		[[nodiscard]] EditorViewportCaptureView CaptureBgra(RenderPublicationPtr Publication);
 		[[nodiscard]] EditorViewportFrame Capture(RenderPublicationPtr Publication);
+		[[nodiscard]] bool UsesHdrScene() const;
 		[[nodiscard]] std::optional<EditorViewportPick> Pick(float X, float Y) const;
 
 	  private:
+		friend struct EditorViewportRendererTestAccess;
+		void SetSolidShadowDepthExperimentForTesting(bool Enabled);
+		void InjectPaletteUploadFailureForTesting();
+		void InjectPostShadowFailureForTesting();
+		void InjectPostSkyFailureForTesting();
+		[[nodiscard]] SDLRendererMetrics GetMetricsForTesting() const;
 		struct Backend;
 		std::unique_ptr<Backend> State;
 	};

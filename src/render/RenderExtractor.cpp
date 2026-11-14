@@ -121,6 +121,10 @@ namespace gargantuan {
 			Result.SunIntensity = Sun.Intensity;
 			Result.ExposureMultiplier = ComputeEnvironmentExposure(LightingValue->GetExposureCompensation());
 			Result.EnvironmentColor = static_cast<glm::vec3>(LightingValue->GetEnvironmentColor());
+			Result.EnvironmentRotation = LightingValue->GetEnvironmentRotation();
+			Result.IblIntensity = LightingValue->GetIblIntensity();
+			Result.ToneMapping = LightingValue->GetToneMapping() == Enums::ToneMappingMode::Reinhard ?
+				RenderToneMapping::Reinhard : RenderToneMapping::Filmic;
 			Result.Fog = {
 				.Enabled = LightingValue->GetFogEnabled(),
 				.Color = static_cast<glm::vec3>(LightingValue->GetFogColor()),

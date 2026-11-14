@@ -113,6 +113,8 @@ Unknown file suffixes remain ignored.
 Asset Foundation 1 separately uses the same boundary for explicit PNG, BMP, OBJ,
 TTF, and OTF import/reimport. Its canonical artifacts are loaded for runtime
 consumption; source access is required only for trusted authoring reimport.
+Renderer Foundation 5 also admits bounded Radiance HDR Image sources through
+this same boundary and stores their derived cube faces as canonical artifacts.
 
 This boundary does not add filesystem watching, two-way synchronization,
 incremental diffs, rename tracking, conflict resolution, collaboration,

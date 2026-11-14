@@ -1,9 +1,11 @@
+#include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
@@ -15,7 +17,9 @@
 #include <iostream>
 #include <memory>
 #include <set>
+#include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -103,6 +107,45 @@ int main() {
 
 	auto Game = std::make_shared<DataModel>();
 	ScriptEngine Engine(Game);
+	auto CheckLifecycleMethods = [&](ScriptSecurityContext Context, bool Allowed,
+		const char *ClearMessage, const char *DestroyMessage) {
+		auto Parent = std::make_shared<Folder>();
+		auto Child = std::make_shared<Folder>();
+		Child->SetParent(Parent);
+		PushGlobal(Engine.L, "LifecycleParent", Parent);
+		{
+			ScriptSecurityScope Scope(std::move(Context));
+			const int ClearStatus = Run(Engine,
+				"return pcall(function() LifecycleParent:ClearAllChildren() end)", 2);
+			const bool ClearAllowed = ClearStatus == LUA_OK && lua_toboolean(Engine.L, -2);
+			const auto *ClearError = ClearStatus == LUA_OK ? lua_tostring(Engine.L, -1) : nullptr;
+			Check(ClearAllowed == Allowed && Child->GetDestroyed() == Allowed &&
+				(Allowed || (ClearError && std::string_view(ClearError).find("cannot invoke method") != std::string_view::npos)),
+				ClearMessage);
+			lua_settop(Engine.L, 0);
+			const int DestroyStatus = Run(Engine,
+				"return pcall(function() LifecycleParent:Destroy() end)", 2);
+			const bool DestroyAllowed = DestroyStatus == LUA_OK && lua_toboolean(Engine.L, -2);
+			const auto *DestroyError = DestroyStatus == LUA_OK ? lua_tostring(Engine.L, -1) : nullptr;
+			Check(DestroyAllowed == Allowed && Parent->GetDestroyed() == Allowed &&
+				(Allowed || (DestroyError && std::string_view(DestroyError).find("cannot invoke method") != std::string_view::npos)),
+				DestroyMessage);
+			lua_settop(Engine.L, 0);
+		}
+		if (!Parent->GetDestroyed()) Parent->Destroy();
+	};
+	CheckLifecycleMethods(
+		{ScriptExecutionDomain::Server, {ScriptCapability::NetworkSend, ScriptCapability::NetworkReceive}},
+		false, "network-only server handler cannot clear children", "network-only server handler cannot destroy Instance"
+	);
+	CheckLifecycleMethods(
+		{ScriptExecutionDomain::Client, {ScriptCapability::NetworkSend, ScriptCapability::NetworkReceive}},
+		false, "network-only client handler cannot clear children", "network-only client handler cannot destroy Instance"
+	);
+	CheckLifecycleMethods(ScriptSecurityContext::ServerRuntime(), true,
+		"ordinary server runtime can clear children", "ordinary server runtime can destroy Instance");
+	CheckLifecycleMethods(ScriptSecurityContext::ClientRuntime(), true,
+		"ordinary client runtime can clear detached children", "ordinary client runtime can destroy detached Instance");
 	lua_pushcfunction(Engine.L, HasMutateDataModel, "HasMutateDataModel");
 	lua_setglobal(Engine.L, "HasMutateDataModel");
 	RecordingScheduler Scheduler;
@@ -481,6 +524,90 @@ int main() {
 		LifetimeEngine.reset();
 		LifetimeFunction.reset();
 		Check(true, "RemoteFunction can outlive its ScriptEngine without accessing a closed Luau VM");
+	}
+	{
+		auto ReentryGame = std::make_shared<DataModel>();
+		auto ManagedRuntime = std::make_shared<ScriptEngine>(ReentryGame);
+		auto ReentryFunction = std::make_shared<RemoteFunction>();
+		ReentryFunction->SetParent(ReentryGame);
+		Visible.insert(ReentryFunction->GetObjectId());
+		Check(ReentryFunction->BindRemoteManager(&Server) &&
+			Server.PublishRemote(Connection, ReentryFunction->GetObjectId()),
+			"reentrant RemoteFunction is bound and visible");
+		PushGlobal(ManagedRuntime->L, "ReentryFunction", ReentryFunction);
+		{
+			ScriptSecurityScope Scope(ScriptSecurityContext::ServerRuntime());
+			Check(Run(*ManagedRuntime,
+				"ReentryFunction:SetServerHandler(function(Peer) "
+				"local Ok = pcall(function() game:Destroy() end); "
+				"return Ok and 'unexpected_allow' or 'denied' end)") == LUA_OK,
+				"restricted RemoteFunction installs a server handler");
+		}
+		std::weak_ptr<ScriptEngine> RuntimeWeak = ManagedRuntime;
+		RemoteMessage ReentryRequest{
+			.Kind = RemoteMessageKind::Request,
+			.Remote = ReentryFunction->GetObjectId(),
+			.Request = RemoteRequestId(9001),
+			.Deadline = 1s,
+		};
+		Check(Server.HandleTransportEvent(Incoming(Connection, ReentryRequest)) && Server.Pump() == 1,
+			"network pump resumes a restricted server handler");
+		bool DeniedResponse = false;
+		if (!ServerScheduler.Messages.empty()) {
+			const auto Reply = DecodeRemoteMessage(ServerScheduler.Messages.back().Payload());
+			DeniedResponse = Reply && Reply->Kind == RemoteMessageKind::Response && Reply->Arguments.size() == 1 &&
+				std::holds_alternative<std::string>(Reply->Arguments.front()) &&
+				std::get<std::string>(Reply->Arguments.front()) == "denied";
+		}
+		Check(DeniedResponse &&
+			!ReentryGame->GetDestroyed() && ManagedRuntime && !RuntimeWeak.expired(),
+			"network-only handler cannot destroy game and leaves its runtime alive");
+		ManagedRuntime.reset();
+		Check(RuntimeWeak.expired(), "server handler VM closes after ordinary owner release");
+	}
+	{
+		RecordingScheduler OutboundScheduler;
+		std::set<ObjectId> OutboundVisible;
+		auto OutboundTime = std::chrono::steady_clock::time_point{};
+		RemoteManager OutboundManager(
+			RemoteManagerRole::Client, OutboundScheduler,
+			[&](ConnectionId, ObjectId Object) { return OutboundVisible.contains(Object); },
+			[](ObjectId Object) { return ObjectRegistry::Get().Lookup(Object); },
+			[&] { return OutboundTime; }
+		);
+		Check(OutboundManager.AddPeer(Connection, ReplicationEpoch(17), Limits()),
+			"outbound lifetime peer is admitted");
+		auto OutboundGame = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+		gargantuan::Engine Runtime(OutboundGame, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+		auto OutboundFunction = std::make_shared<RemoteFunction>();
+		OutboundVisible.insert(OutboundFunction->GetObjectId());
+		Check(OutboundFunction->BindRemoteManager(&OutboundManager, Connection) &&
+			OutboundManager.PublishRemote(Connection, OutboundFunction->GetObjectId()),
+			"outbound lifetime RemoteFunction is published");
+		PushGlobal(Runtime.Script->L, "OutboundFunction", OutboundFunction);
+		{
+			ScriptSecurityScope Scope(
+				{ScriptExecutionDomain::Client, {ScriptCapability::NetworkSend, ScriptCapability::NetworkReceive}}
+			);
+			Check(Run(*Runtime.Script, R"(
+				local Thread = coroutine.create(function()
+					OutboundFunction:InvokeServerWithTimeout(0.1)
+				end)
+				return coroutine.resume(Thread)
+			)", 1) == LUA_OK && lua_toboolean(Runtime.Script->L, -1),
+				"outbound request suspends a managed Luau coroutine");
+			lua_settop(Runtime.Script->L, 0);
+		}
+		Check(OutboundManager.GetMetrics().InFlightRequests == 1,
+			"outbound request remains pending before Engine destruction");
+		std::weak_ptr<ScriptEngine> RuntimeWeak = Runtime.Script;
+		Runtime.Destroy();
+		Check(RuntimeWeak.expired(), "Engine destruction closes the pending request VM");
+		OutboundTime += 1s;
+		(void)OutboundManager.Pump();
+		Check(OutboundManager.GetMetrics().InFlightRequests == 0,
+			"timeout retires the outstanding request after its VM has closed");
 	}
 
 	ServerEvent->Destroy();

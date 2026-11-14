@@ -232,6 +232,10 @@ int main() {
 			"package size breakdown does not sum to total bytes"
 		);
 		Require(!HasError(PackageBuilder::Validate(ReleaseA)), "fresh package did not validate");
+		for (const auto Shader : {"opaque-portable.frag.spv", "opaque-instanced.vert.spv", "shadow-instanced.vert.spv"}) {
+			Require(std::filesystem::is_regular_file(ReleaseA / "shaders" / Shader),
+				"foundation renderer shader is absent from the published package");
+		}
 		RequireNoPrivateBackendArtifacts(ReleaseA);
 		std::vector<PackageDiagnostic> LoadDiagnostics;
 		auto Loaded = PackageBuilder::Load(ReleaseA, LoadDiagnostics);
@@ -474,6 +478,17 @@ int main() {
 			!MissingResult.Ok && HasDiagnostic(MissingResult.Diagnostics, "InvalidDistribution"),
 			"missing required runtime shader was not diagnosed before publication"
 		);
+		for (const auto Shader : {"opaque-portable.frag.spv", "opaque-instanced.vert.spv", "shadow-instanced.vert.spv"}) {
+			const auto RemovedShader = MissingRuntime / "shaders" / Shader;
+			std::filesystem::copy_file(Runtime / "shaders/gui.frag.spv", MissingRuntime / "shaders/gui.frag.spv",
+				std::filesystem::copy_options::overwrite_existing);
+			std::filesystem::remove(RemovedShader);
+			const auto Rejected = Build(Payload, MissingRuntime, Workspace.Root / "MissingFoundationOutput");
+			Require(!Rejected.Ok && HasDiagnostic(Rejected.Diagnostics, "InvalidDistribution") &&
+				!std::filesystem::exists(Workspace.Root / "MissingFoundationOutput"),
+				"missing foundation shader was accepted or published a partial package");
+			std::filesystem::copy_file(Runtime / "shaders" / Shader, RemovedShader);
+		}
 
 		auto StalePayload = Payload;
 		auto StaleCatalog = Json::parse(StalePayload.Assets.CatalogJson);

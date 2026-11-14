@@ -7,6 +7,12 @@
 #include <SDL3_image/SDL_image.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_HDR
+#define STBI_NO_STDIO
+#define STBI_MAX_DIMENSIONS 1024
+#include "third_party/stb_image.h"
+
 #include <algorithm>
 #include <bit>
 #include <charconv>
@@ -14,6 +20,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <numbers>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -30,6 +37,9 @@ namespace gargantuan {
 		constexpr std::uint32_t ArtifactVersion2 = 2;
 		constexpr std::uint32_t ArtifactVersion3 = 3;
 		constexpr std::uint32_t ArtifactVersion4 = 4;
+		constexpr std::uint32_t MaterialTextureArtifactVersion = 5;
+		constexpr std::uint32_t AdvancedMaterialArtifactVersion = 6;
+		constexpr std::uint32_t FloatImageArtifactVersion = 7;
 
 		AssetDiagnostic Error(std::string Code, std::string Message) {
 			if (Message.size() > AssetLimits::MaximumDiagnosticBytes) Message.resize(AssetLimits::MaximumDiagnosticBytes);
@@ -84,6 +94,23 @@ namespace gargantuan {
 			if (!Value) return std::nullopt;
 			const auto Result = std::bit_cast<float>(*Value);
 			return std::isfinite(Result) ? std::optional(Result) : std::nullopt;
+		}
+
+		bool ValidAdvancedMaterial(const ImportedMaterial &Material) {
+			const auto Unit = [](float Value) { return std::isfinite(Value) && Value >= 0.0f && Value <= 1.0f; };
+			for (const auto Value : {Material.EmissiveFactor.x, Material.EmissiveFactor.y, Material.EmissiveFactor.z,
+				Material.OcclusionStrength}) if (!Unit(Value)) return false;
+			if (!std::isfinite(Material.NormalScale) || std::abs(Material.NormalScale) > MaximumRenderNormalScale ||
+				(!Material.NormalTexture && Material.NormalScale != 1.0f) ||
+				(!Material.OcclusionTexture && Material.OcclusionStrength != 1.0f)) return false;
+			const std::array Textures{Material.BaseColorTexture, Material.NormalTexture, Material.MetallicRoughnessTexture,
+				Material.EmissiveTexture, Material.OcclusionTexture};
+			for (std::size_t Index = 0; Index < Textures.size(); ++Index) {
+				const auto &Sampler = Material.TextureSamplers[Index];
+				if (!Sampler.IsValid() || (Textures[Index] ? !Textures[Index]->IsValid() : Sampler != RenderSamplerState{}))
+					return false;
+			}
+			return true;
 		}
 
 		std::optional<AssetDiagnostic> ValidateCollision(const ImportedCollision &Collision) {
@@ -222,6 +249,147 @@ namespace gargantuan {
 				return AssetImportCandidate{
 					ImportedImage{Width, Height, Pixels}, ImmutableArtifact, AssetContentId::Hash(*ImmutableArtifact)
 				};
+			}
+		};
+
+		std::shared_ptr<const std::vector<std::uint8_t>> EncodeHdrPixels(std::span<const float> Values) {
+			auto Bytes = std::make_shared<std::vector<std::uint8_t>>();
+			Bytes->reserve(Values.size() * sizeof(float));
+			for (const float Value : Values) AppendFloat(*Bytes, Value);
+			return Bytes;
+		}
+
+		class HdrImageImporter final : public IAssetImporter {
+		  public:
+			AssetKind GetKind() const override { return AssetKind::Image; }
+			bool SupportsExtension(std::string_view Extension) const override { return Extension == ".hdr"; }
+			bool IsCompound() const override { return true; }
+			std::expected<AssetImportCandidate, AssetDiagnostic> Import(
+				std::span<const std::uint8_t>, const AssetImportContext &
+			) const override {
+				return std::unexpected(Error("CompoundImportRequired", "HDR images require graph import"));
+			}
+			std::expected<AssetImportGraphCandidate, AssetDiagnostic> ImportGraph(
+				std::span<const std::uint8_t> Source, const AssetImportContext &Context
+			) const override {
+				if (Cancelled(Context)) return std::unexpected(Error("Cancelled", "HDR import was cancelled or exceeded its deadline"));
+				constexpr std::array<std::uint8_t, 2> HeaderTerminator{'\n', '\n'};
+				constexpr std::array<std::uint8_t, 4> CrLfHeaderTerminator{'\r', '\n', '\r', '\n'};
+				auto HeaderEnd = std::search(Source.begin(), Source.end(),
+					HeaderTerminator.begin(), HeaderTerminator.end());
+				const auto CrLfEnd = std::search(Source.begin(), Source.end(),
+					CrLfHeaderTerminator.begin(), CrLfHeaderTerminator.end());
+				if (CrLfEnd < HeaderEnd) HeaderEnd = CrLfEnd;
+				if (HeaderEnd == Source.end() || HeaderEnd - Source.begin() > 4096)
+					return std::unexpected(Error("MalformedImage", "Radiance HDR header is missing or oversized"));
+				const std::string_view Header(reinterpret_cast<const char *>(Source.data()), HeaderEnd - Source.begin());
+				const auto IsUnity = [](std::string_view Text) {
+					while (!Text.empty() && (Text.front() == ' ' || Text.front() == '\t')) Text.remove_prefix(1);
+					while (!Text.empty() && (Text.back() == ' ' || Text.back() == '\t')) Text.remove_suffix(1);
+					if (Text.starts_with('+')) Text.remove_prefix(1);
+					float Value = 0.0f;
+					const auto Parsed = std::from_chars(Text.data(), Text.data() + Text.size(), Value);
+					return Parsed.ec == std::errc{} && Parsed.ptr == Text.data() + Text.size() && Value == 1.0f;
+				};
+				unsigned FormatCount = 0;
+				for (std::size_t Offset = 0; Offset < Header.size();) {
+					const auto End = Header.find('\n', Offset);
+					auto Line = Header.substr(Offset, End == std::string_view::npos ? End : End - Offset);
+					if (Line.ends_with('\r')) Line.remove_suffix(1);
+					if (Line.starts_with("FORMAT=")) {
+						++FormatCount;
+						if (Line != "FORMAT=32-bit_rle_rgbe")
+							return std::unexpected(Error("UnsupportedColorSpace", "HDR source must use RGBE format"));
+					} else if (Line.starts_with("PRIMARIES=") || Line.starts_with("COLORCORR=") ||
+						Line.starts_with("GAMMA=")) {
+						return std::unexpected(Error("UnsupportedColorSpace", "HDR color-space metadata is unsupported"));
+					} else if (Line.starts_with("EXPOSURE=")) {
+						if (!IsUnity(Line.substr(sizeof("EXPOSURE=") - 1)))
+							return std::unexpected(Error("UnsupportedExposure", "HDR source exposure metadata must be unity"));
+					} else if (Line.starts_with("PIXASPECT=")) {
+						if (!IsUnity(Line.substr(sizeof("PIXASPECT=") - 1)))
+							return std::unexpected(Error("UnsupportedPixelAspect", "HDR source pixels must have unit aspect"));
+					}
+					Offset = End == std::string_view::npos ? Header.size() : End + 1;
+				}
+				if (FormatCount != 1)
+					return std::unexpected(Error("MalformedImage", "Radiance HDR requires exactly one FORMAT assignment"));
+				if (Source.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+					!stbi_is_hdr_from_memory(Source.data(), static_cast<int>(Source.size())))
+					return std::unexpected(Error("MalformedImage", "Radiance HDR signature is invalid"));
+				int Width = 0, Height = 0, Channels = 0;
+				if (!stbi_info_from_memory(Source.data(), static_cast<int>(Source.size()), &Width, &Height, &Channels) ||
+					Width <= 0 || Height <= 0 || Channels != 3 || Width > 1024 || Height > 512 ||
+					!(Width == Height || Width == Height * 2))
+					return std::unexpected(Error("ImageLimit", "HDR image must be a bounded square face or 2:1 panorama"));
+				float *Decoded = stbi_loadf_from_memory(Source.data(), static_cast<int>(Source.size()),
+					&Width, &Height, &Channels, 4);
+				if (!Decoded) return std::unexpected(Error("ImageDecode", "Radiance HDR pixel decode failed"));
+				const std::unique_ptr<float, decltype(&stbi_image_free)> Storage(Decoded, &stbi_image_free);
+				const auto Count = static_cast<std::size_t>(Width) * Height * 4;
+				for (std::size_t Pixel = 0; Pixel < Count; Pixel += 4) {
+					for (unsigned Channel = 0; Channel < 3; ++Channel)
+						if (!std::isfinite(Decoded[Pixel + Channel]) || Decoded[Pixel + Channel] < 0.0f)
+							return std::unexpected(Error("InvalidRadiance", "HDR radiance must be finite and nonnegative"));
+					Decoded[Pixel + 3] = 1.0f;
+				}
+				if (Cancelled(Context)) return std::unexpected(Error("Cancelled", "HDR import was cancelled before commit"));
+				AssetImportGraphCandidate Graph;
+				if (Width == Height) {
+					Graph.PrimaryLogicalKey = "asset";
+					Graph.Nodes.push_back({"asset", AssetKind::Image, "HDR Face",
+						ImportedImage{static_cast<std::uint32_t>(Width), static_cast<std::uint32_t>(Height),
+							EncodeHdrPixels({Decoded, Count}), RenderTextureFormat::Rgba32Float}});
+					return Graph;
+				}
+				const auto FaceSize = static_cast<std::uint32_t>(Height / 2);
+				if (!FaceSize) return std::unexpected(Error("ImageLimit", "HDR panorama is too small"));
+				constexpr std::array<std::string_view, 6> Keys{
+					"positive-x", "negative-x", "positive-y", "negative-y", "positive-z", "negative-z"};
+				Graph.PrimaryLogicalKey = std::string(Keys.front());
+				for (std::uint32_t Face = 0; Face < Keys.size(); ++Face) {
+					std::vector<float> FacePixels;
+					FacePixels.reserve(static_cast<std::size_t>(FaceSize) * FaceSize * 4);
+					for (std::uint32_t Y = 0; Y < FaceSize; ++Y) for (std::uint32_t X = 0; X < FaceSize; ++X) {
+						const float U = (static_cast<float>(X) + 0.5f) * (2.0f / FaceSize) - 1.0f;
+						const float V = (static_cast<float>(Y) + 0.5f) * (2.0f / FaceSize) - 1.0f;
+						glm::vec3 Direction;
+						switch (Face) {
+						case 0: Direction = {1.0f, -V, -U}; break;
+						case 1: Direction = {-1.0f, -V, U}; break;
+						case 2: Direction = {U, 1.0f, V}; break;
+						case 3: Direction = {U, -1.0f, -V}; break;
+						case 4: Direction = {U, -V, 1.0f}; break;
+						default: Direction = {-U, -V, -1.0f}; break;
+						}
+						Direction = glm::normalize(Direction);
+						const float Longitude = std::atan2(Direction.x, Direction.z) / (2.0f * std::numbers::pi_v<float>) + 0.5f;
+						const float Latitude = std::acos(std::clamp(Direction.y, -1.0f, 1.0f)) / std::numbers::pi_v<float>;
+						const float SampleX = Longitude * Width - 0.5f;
+						const float SampleY = Latitude * Height - 0.5f;
+						const int X0 = static_cast<int>(std::floor(SampleX)), Y0 = static_cast<int>(std::floor(SampleY));
+						const float Fx = SampleX - std::floor(SampleX), Fy = SampleY - std::floor(SampleY);
+						const auto Read = [&](int Px, int Py, unsigned Channel) {
+							Px = (Px % Width + Width) % Width;
+							Py = std::clamp(Py, 0, Height - 1);
+							return Decoded[(static_cast<std::size_t>(Py) * Width + Px) * 4 + Channel];
+						};
+						for (unsigned Channel = 0; Channel < 3; ++Channel) {
+							const float Top = std::lerp(Read(X0, Y0, Channel), Read(X0 + 1, Y0, Channel), Fx);
+							const float Bottom = std::lerp(Read(X0, Y0 + 1, Channel), Read(X0 + 1, Y0 + 1, Channel), Fx);
+							const float Radiance = std::lerp(Top, Bottom, Fy);
+							if (!std::isfinite(Radiance) || Radiance < 0.0f)
+								return std::unexpected(Error("InvalidRadiance", "HDR panorama conversion produced invalid radiance"));
+							FacePixels.push_back(Radiance);
+						}
+						FacePixels.push_back(1.0f);
+					}
+					Graph.Nodes.push_back({std::string(Keys[Face]), AssetKind::Image,
+						"HDR " + std::string(Keys[Face]), ImportedImage{FaceSize, FaceSize,
+							EncodeHdrPixels(FacePixels), RenderTextureFormat::Rgba32Float}});
+					if (Cancelled(Context)) return std::unexpected(Error("Cancelled", "HDR conversion was cancelled"));
+				}
+				return Graph;
 			}
 		};
 
@@ -606,6 +774,7 @@ namespace gargantuan {
 	std::vector<std::unique_ptr<IAssetImporter>> CreateFoundationAssetImporters() {
 		std::vector<std::unique_ptr<IAssetImporter>> Result;
 		Result.push_back(std::make_unique<ImageImporter>());
+		Result.push_back(std::make_unique<HdrImageImporter>());
 		Result.push_back(std::make_unique<MeshImporter>());
 		Result.push_back(std::make_unique<FontImporter>());
 		Result.push_back(std::make_unique<WaveImporter>());
@@ -630,17 +799,35 @@ namespace gargantuan {
 		const auto *MeshValue = std::get_if<ImportedMesh>(&Asset);
 		if (MeshValue && MeshValue->Skeleton && MeshValue->CollisionAsset)
 			return std::unexpected(Error("UnsupportedCollision", "Skinned meshes cannot have static triangle collision"));
-		const auto Version = Kind == AssetKind::Collision || (MeshValue && MeshValue->CollisionAsset)
-			? ArtifactVersion4 : Kind == AssetKind::Animation || (MeshValue && MeshValue->Skeleton)
-				? ArtifactVersion3 : ArtifactVersion2;
+		const auto *MaterialValue = std::get_if<ImportedMaterial>(&Asset);
+		auto Version = ArtifactVersion2;
+		if (const auto *Image = std::get_if<ImportedImage>(&Asset); Image &&
+			Image->Format == RenderTextureFormat::Rgba32Float) Version = FloatImageArtifactVersion;
+		else if (MaterialValue && MaterialValue->HasAdvancedInputs()) Version = AdvancedMaterialArtifactVersion;
+		else if (MaterialValue && MaterialValue->MetallicRoughnessTexture) Version = MaterialTextureArtifactVersion;
+		else if (Kind == AssetKind::Collision || (MeshValue && MeshValue->CollisionAsset)) Version = ArtifactVersion4;
+		else if (Kind == AssetKind::Animation || (MeshValue && MeshValue->Skeleton)) Version = ArtifactVersion3;
 		auto Artifact = BeginArtifact(Kind, Version);
 		if (const auto *Image = std::get_if<ImportedImage>(&Asset)) {
-			if (!Image->Rgba8 || Image->Width == 0 || Image->Height == 0 ||
-				Image->Rgba8->size() != static_cast<std::size_t>(Image->Width) * Image->Height * 4)
+			const auto PixelBytes = GetRenderTexturePixelBytes(Image->Format);
+			if (!Image->Pixels || Image->Width == 0 || Image->Height == 0 ||
+				Image->Width > AssetLimits::MaximumImageDimension || Image->Height > AssetLimits::MaximumImageDimension ||
+				PixelBytes == 0 || Image->Pixels->size() != static_cast<std::size_t>(Image->Width) * Image->Height * PixelBytes ||
+				Image->Pixels->size() > AssetLimits::MaximumImageBytes)
 				return std::unexpected(Error("MalformedImage", "Canonical image value is invalid"));
+			if (Image->Format == RenderTextureFormat::Rgba32Float) {
+				for (std::size_t Offset = 0; Offset < Image->Pixels->size(); Offset += 4) {
+					std::size_t Position = Offset;
+					const auto Value = ReadFloat(*Image->Pixels, Position);
+					if (!Value || *Value < 0.0f)
+						return std::unexpected(Error("InvalidRadiance", "Canonical HDR radiance is invalid"));
+				}
+			}
 			AppendU32(Artifact, Image->Width);
 			AppendU32(Artifact, Image->Height);
-			Artifact.insert(Artifact.end(), Image->Rgba8->begin(), Image->Rgba8->end());
+			if (Image->Format == RenderTextureFormat::Rgba32Float)
+				AppendU32(Artifact, static_cast<std::uint32_t>(Image->Format));
+			Artifact.insert(Artifact.end(), Image->Pixels->begin(), Image->Pixels->end());
 		} else if (const auto *Font = std::get_if<ImportedFont>(&Asset)) {
 			if (!Font->Bytes || Font->Bytes->empty() || Font->Bytes->size() > AssetLimits::MaximumFontBytes ||
 				Font->FaceCount == 0 || Font->FaceCount > 64)
@@ -778,6 +965,23 @@ namespace gargantuan {
 			Artifact.push_back(static_cast<std::uint8_t>(Material->AlphaMode));
 			AppendFloat(Artifact, Material->AlphaCutoff);
 			Artifact.push_back(Material->DoubleSided ? 1 : 0);
+			if (Version >= MaterialTextureArtifactVersion) AppendReference(Material->MetallicRoughnessTexture);
+			if (Version == AdvancedMaterialArtifactVersion) {
+				if (!ValidAdvancedMaterial(*Material))
+					return std::unexpected(Error("MalformedMaterial", "Advanced material factors, references, or samplers are invalid"));
+				for (const auto Value : {Material->EmissiveFactor.x, Material->EmissiveFactor.y, Material->EmissiveFactor.z})
+					AppendFloat(Artifact, Value);
+				AppendReference(Material->EmissiveTexture);
+				AppendReference(Material->OcclusionTexture);
+				AppendFloat(Artifact, Material->OcclusionStrength);
+				AppendFloat(Artifact, Material->NormalScale);
+				for (const auto &Sampler : Material->TextureSamplers) {
+					Artifact.push_back(static_cast<std::uint8_t>(Sampler.MinFilter));
+					Artifact.push_back(static_cast<std::uint8_t>(Sampler.MagFilter));
+					Artifact.push_back(static_cast<std::uint8_t>(Sampler.WrapU));
+					Artifact.push_back(static_cast<std::uint8_t>(Sampler.WrapV));
+				}
+			}
 		} else if (const auto *Audio = std::get_if<ImportedAudio>(&Asset)) {
 			const auto SampleCount = static_cast<std::uint64_t>(Audio->FrameCount) * Audio->Channels;
 			if (!Audio->Pcm16 || Audio->Channels == 0 || Audio->Channels > AssetLimits::MaximumAudioChannels ||
@@ -891,7 +1095,11 @@ namespace gargantuan {
 		std::size_t Offset = ArtifactMagic.size();
 		auto Version = ReadU32(Artifact, Offset);
 		if (!Version || (*Version != ArtifactVersion1 && *Version != ArtifactVersion2 &&
-			*Version != ArtifactVersion3 && *Version != ArtifactVersion4) || Offset >= Artifact.size() ||
+			*Version != ArtifactVersion3 && *Version != ArtifactVersion4 &&
+			!(*Version == FloatImageArtifactVersion && ExpectedKind == AssetKind::Image) &&
+			!((*Version == MaterialTextureArtifactVersion || *Version == AdvancedMaterialArtifactVersion) &&
+				ExpectedKind == AssetKind::Material)) ||
+			Offset >= Artifact.size() ||
 			Artifact[Offset++] != static_cast<std::uint8_t>(ExpectedKind))
 			return std::unexpected(Error("UnsupportedArtifact", "Asset artifact version or kind is unsupported"));
 
@@ -900,11 +1108,24 @@ namespace gargantuan {
 			if (!Width || !Height || *Width == 0 || *Height == 0 || *Width > AssetLimits::MaximumImageDimension ||
 				*Height > AssetLimits::MaximumImageDimension)
 				return std::unexpected(Error("MalformedArtifact", "Image artifact dimensions are invalid"));
-			const auto Bytes = static_cast<std::size_t>(*Width) * *Height * 4;
+			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
+			if (*Version == FloatImageArtifactVersion) {
+				const auto Encoded = ReadU32(Artifact, Offset);
+				if (!Encoded || *Encoded != static_cast<std::uint32_t>(RenderTextureFormat::Rgba32Float))
+					return std::unexpected(Error("UnsupportedArtifact", "Image artifact pixel format is unsupported"));
+				Format = RenderTextureFormat::Rgba32Float;
+			}
+			const auto Bytes = static_cast<std::size_t>(*Width) * *Height * GetRenderTexturePixelBytes(Format);
 			if (Bytes > AssetLimits::MaximumImageBytes || Offset > Artifact.size() || Artifact.size() - Offset != Bytes)
 				return std::unexpected(Error("MalformedArtifact", "Image artifact payload length is invalid"));
+			if (Format == RenderTextureFormat::Rgba32Float) for (std::size_t Position = Offset; Position < Artifact.size(); Position += 4) {
+				auto ValueOffset = Position;
+				const auto Value = ReadFloat(Artifact, ValueOffset);
+				if (!Value || *Value < 0.0f)
+					return std::unexpected(Error("InvalidRadiance", "Image artifact contains invalid radiance"));
+			}
 			auto Pixels = std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin() + Offset, Artifact.end());
-			return AssetImportCandidate{ImportedImage{*Width, *Height, Pixels},
+			return AssetImportCandidate{ImportedImage{*Width, *Height, Pixels, Format},
 				std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()), ExpectedContentId};
 		}
 
@@ -919,8 +1140,9 @@ namespace gargantuan {
 		}
 
 		if (ExpectedKind == AssetKind::Material) {
-			if (*Version != ArtifactVersion2)
-				return std::unexpected(Error("UnsupportedArtifact", "Material assets require artifact version 2"));
+			if (*Version != ArtifactVersion2 && *Version != MaterialTextureArtifactVersion &&
+				*Version != AdvancedMaterialArtifactVersion)
+				return std::unexpected(Error("UnsupportedArtifact", "Unsupported material artifact version"));
 			ImportedMaterial Material;
 			std::array<float *, 6> Factors{&Material.BaseColorFactor.x, &Material.BaseColorFactor.y,
 				&Material.BaseColorFactor.z, &Material.BaseColorFactor.w, &Material.MetallicFactor,
@@ -953,6 +1175,39 @@ namespace gargantuan {
 				return std::unexpected(Error("MalformedArtifact", "Material artifact alpha state is invalid"));
 			Material.AlphaCutoff = *AlphaCutoff;
 			Material.DoubleSided = Artifact[Offset++] != 0;
+			if (*Version >= MaterialTextureArtifactVersion) {
+				auto MetallicRoughnessTexture = ReadReference();
+				if (!MetallicRoughnessTexture) return std::unexpected(MetallicRoughnessTexture.error());
+				if (*Version == MaterialTextureArtifactVersion && !*MetallicRoughnessTexture)
+					return std::unexpected(Error("MalformedArtifact", "Material artifact requires a metallic-roughness image"));
+				Material.MetallicRoughnessTexture = *MetallicRoughnessTexture;
+			}
+			if (*Version == AdvancedMaterialArtifactVersion) {
+				for (auto *Component : {&Material.EmissiveFactor.x, &Material.EmissiveFactor.y, &Material.EmissiveFactor.z}) {
+					const auto Value = ReadFloat(Artifact, Offset);
+					if (!Value) return std::unexpected(Error("MalformedArtifact", "Material emissive factor is invalid"));
+					*Component = *Value;
+				}
+				auto EmissiveTexture = ReadReference();
+				if (!EmissiveTexture) return std::unexpected(EmissiveTexture.error());
+				Material.EmissiveTexture = *EmissiveTexture;
+				auto OcclusionTexture = ReadReference();
+				if (!OcclusionTexture) return std::unexpected(OcclusionTexture.error());
+				Material.OcclusionTexture = *OcclusionTexture;
+				const auto OcclusionStrength = ReadFloat(Artifact, Offset), NormalScale = ReadFloat(Artifact, Offset);
+				if (!OcclusionStrength || !NormalScale || Artifact.size() - Offset != 4 * Material.TextureSamplers.size())
+					return std::unexpected(Error("MalformedArtifact", "Material advanced factor or sampler payload is invalid"));
+				Material.OcclusionStrength = *OcclusionStrength;
+				Material.NormalScale = *NormalScale;
+				for (auto &Sampler : Material.TextureSamplers) {
+					Sampler.MinFilter = static_cast<RenderTextureMinFilter>(Artifact[Offset++]);
+					Sampler.MagFilter = static_cast<RenderTextureMagFilter>(Artifact[Offset++]);
+					Sampler.WrapU = static_cast<RenderTextureWrap>(Artifact[Offset++]);
+					Sampler.WrapV = static_cast<RenderTextureWrap>(Artifact[Offset++]);
+				}
+				if (!Material.HasAdvancedInputs() || !ValidAdvancedMaterial(Material))
+					return std::unexpected(Error("MalformedArtifact", "Advanced material factors, references, or samplers are invalid"));
+			}
 			if (Offset != Artifact.size())
 				return std::unexpected(Error("MalformedArtifact", "Material artifact has trailing bytes"));
 			return AssetImportCandidate{Material,

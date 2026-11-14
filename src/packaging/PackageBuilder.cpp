@@ -1140,7 +1140,8 @@ namespace gargantuan {
 
 		std::optional<ResidencyUnitBoundsMetadata> InspectSpatialContentUnit(std::string_view Payload,
 			const PackageContentEntry &Entry, PackageSpatialMeshResolver &Meshes,
-			std::shared_ptr<const RuntimeSchemaRegistry> SchemaSnapshot = {}) {
+			std::shared_ptr<const RuntimeSchemaRegistry> SchemaSnapshot = {},
+			std::uint32_t ExpectedSchemaVersion = PackageContentInstanceSchemaVersion) {
 			if (Entry.PackageSpaceKey != "default" || Payload.empty() ||
 				Payload.size() > MaximumPackageContentPayloadBytes)
 				throw std::runtime_error("Package content unit has no qualified default-space bounds");
@@ -1151,8 +1152,8 @@ namespace gargantuan {
 				Prepared.error());
 			auto Parsed = JsonCodec::Parse(Payload, MaximumPackageContentPayloadBytes, "package spatial content unit");
 			if (!Parsed || !Parsed->is_object() ||
-				(Parsed->value("Version", 0u) != 4 &&
-					Parsed->value("Version", 0u) != PackageContentInstanceSchemaVersion) ||
+				(ExpectedSchemaVersion != 4 && ExpectedSchemaVersion != PackageContentInstanceSchemaVersion) ||
+				Parsed->value("Version", 0u) != ExpectedSchemaVersion ||
 				Parsed->value("ClassName", "") == "DataModel")
 				throw std::runtime_error("Package spatial content unit is malformed");
 			const auto Inspection = InspectSerializedSubtree(*Parsed, Meshes);
@@ -1424,11 +1425,14 @@ namespace gargantuan {
 					Request.Payload.ProjectJson.empty() ||
 					Request.Payload.ProjectJson.size() > MaximumProjectSnapshotBytes ||
 					Request.Payload.Assets.CatalogJson.size() > 1024 * 1024 ||
-					Request.Payload.ContentUnits.size() > MaximumPackageContentUnits)
+					Request.Payload.ContentUnits.size() > MaximumPackageContentUnits ||
+					(Request.Payload.ContentInstanceSchemaVersion != 4 &&
+						Request.Payload.ContentInstanceSchemaVersion != PackageContentInstanceSchemaVersion) ||
+					(Request.Payload.ContentInstanceSchemaVersion == 4 && Request.Payload.ContentUnits.empty()))
 					throw std::runtime_error("Package payload snapshot is invalid or exceeds its bounds");
 				PackageContentManifest ContentManifest{
 					.Package = {Request.Payload.Identity, Request.Payload.AuthoritativeRevision},
-					.InstanceSchemaVersion = PackageContentInstanceSchemaVersion,
+					.InstanceSchemaVersion = Request.Payload.ContentInstanceSchemaVersion,
 				};
 				auto Meshes = SnapshotSpatialMeshes(Request.Payload.Assets);
 				ResidencySpatialMetadata Metadata{ResidencySpatialMetadataVersion, ContentManifest.Package, {}};
@@ -1441,7 +1445,8 @@ namespace gargantuan {
 						throw std::runtime_error("Package content unit does not match its immutable metadata");
 					ContentManifest.Entries.push_back(Unit.Entry);
 					if (auto Spatial = InspectSpatialContentUnit(
-						Unit.Payload, Unit.Entry, Meshes, Request.Payload.SchemaSnapshot))
+						Unit.Payload, Unit.Entry, Meshes, Request.Payload.SchemaSnapshot,
+						Request.Payload.ContentInstanceSchemaVersion))
 						Metadata.Units.push_back(std::move(*Spatial));
 				}
 				(void)ParsePackageContentManifest(EncodePackageContentManifest(ContentManifest)).value();
@@ -1500,7 +1505,7 @@ namespace gargantuan {
 				AddText("content/game.instance.json", "Project", Request.Payload.ProjectJson);
 				PackageContentManifest ContentManifest{
 					.Package = {Request.Payload.Identity, Request.Payload.AuthoritativeRevision},
-					.InstanceSchemaVersion = PackageContentInstanceSchemaVersion,
+					.InstanceSchemaVersion = Request.Payload.ContentInstanceSchemaVersion,
 				};
 				for (const auto &Unit : Request.Payload.ContentUnits) {
 					ContentManifest.Entries.push_back(Unit.Entry);
@@ -1687,7 +1692,8 @@ namespace gargantuan {
 					const auto UnitText = ReadBoundedText(*UnitPath, MaximumPackageContentPayloadBytes);
 					if (HashText(UnitText) != Unit.Digest.ToString())
 						throw std::runtime_error("Package spatial unit changed after content verification");
-					if (auto Spatial = InspectSpatialContentUnit(UnitText, Unit, Meshes))
+					if (auto Spatial = InspectSpatialContentUnit(UnitText, Unit, Meshes, {},
+						Parsed->InstanceSchemaVersion))
 						Metadata.Units.push_back(std::move(*Spatial));
 				}
 				CheckSpatialProof(*Parsed, Metadata);

@@ -142,6 +142,27 @@ Invalid direct neutral mesh descriptions fail closed before Box3D admission.
 builds a `PhysicsBodyDesc` from committed Part state. The backend chooses whether
 an update is an in-place transform/body-type change or a
 private shape replacement.
+`WorldRoot` keeps its successful Part admissions in traversal order and indexes
+membership by the generation-bearing `ObjectId`. Repeated safe-point admission
+does not append the same Part again; removal and shutdown retire the index with
+the ordered entry. This avoids scanning all previously admitted Parts for each
+new body while preserving the existing traversal order.
+Post-step physics-authored CFrame publication suppresses feedback only for that
+Part's own CFrame notification. A synchronous observer can author another Part
+or another property on the same Part; those edits remain dirty for the next safe
+point. If an observer changes the publishing Part's final CFrame, `WorldRoot`
+marks it dirty after the callback returns so the authored pose reaches the
+backend. The suppression scope is restored on callback failure.
+Tracked Parts also have a private per-registration dirty binding. Every existing
+property callback still runs in connection order, but repeated internal dirty
+marks can reuse the binding flag after the first successful set insertion.
+The flag resets before backend application so reentrant changes remain pending.
+Removal and shutdown deactivate bindings before disconnecting callbacks; a held
+old callback cannot dirty a replacement registration or access a retired world.
+If first insertion fails, a conservative full tracked-Part scan remains pending
+for the next safe point. Building that scan must succeed before its flag clears.
+This derived cache changes neither ordinary mutation history nor the physics
+backend's accepted state, control accumulation, motion order or solver.
 CanTouch changes replace shapes transactionally: the pinned backend copies event
 flags when creating a contact and does not refresh them for an in-place flag write.
 
@@ -241,6 +262,20 @@ Dynamic body motion is resolved from `PhysicsBodyId` to a live tracked Part. The
 result is published through the ordinary authoritative `SetCFrame` path. A
 narrow publication guard prevents that physics-authored write from being queued
 back into the backend. Fuzzy equality suppresses no-op publication.
+
+The experimental selective readback path retains the ordered Part list and
+authoritative backend state. `WorldRoot` counts tracked bodies from accepted
+create/update state and removal, without a new backend API. An unavailable
+state makes that count unknown and selects an ordered backend read to recover
+it. At a fixed-step safe point, a world with at least 8,192 Parts and no more
+than one-eighth accepted dynamic bodies may build a derived dynamic-only
+readback view. Once active, it retires that view below 4,096 Parts or above
+one-quarter dynamic bodies; smaller or denser worlds use ordered readback and
+retain no derived index. The gap limits threshold flapping. Identity, body
+generation, weak lifetime, and accepted motion mode are checked before using
+each entry. A mismatch or allocation failure falls back to an ordered read in
+the same step and retries rebuilding later. These thresholds are provisional
+benchmark policy, not an engine guarantee or solver behavior change.
 
 This is the current authoritative transform model. It does not yet distinguish
 server physics, replicated transforms, prediction, or developer ownership.

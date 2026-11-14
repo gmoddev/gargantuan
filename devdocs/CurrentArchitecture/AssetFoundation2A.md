@@ -24,6 +24,43 @@ MeshPart CollisionMode, mesh/collision artifact v4 and shared physics residency.
 [Geometry 1A](SolidGeometryFoundation1A.md) adds the transactional `.solid` importer.
 Those extensions do not change the render/material semantics below.
 
+## Renderer Foundation 4 material extension
+
+The material graph additionally carries linear RGB emissive factors and an
+optional sRGB emissive image. An optional occlusion image uses its linear red
+channel and a strength in `[0,1]`. Normal texture scale is finite and bounded to
+`[-64,64]` for tangent-space XY. Defaults are zero emissive factor, no
+additional images, unit occlusion strength, and unit normal scale.
+
+glTF texture bindings may name one of at most 1,024 core samplers. Five fixed
+material slots store independent minification, magnification, U and V wrapping
+preferences. Supported filters cover nearest and linear with each core mip
+combination. Repeat, mirrored repeat and clamp-to-edge are supported wrapping
+preferences. Omitted filters defer to the renderer default and omitted wrap
+modes are repeat. Only UV0 is admitted. Other UV sets, texture transforms,
+sampler extensions and other material extensions retain explicit rejection.
+
+The stored image remains one canonical RGBA8 record. Material sampling and
+color/data intent travel in the binding and do not create image records or
+persist renderer state. Adding emissive or occlusion uses does not participate
+in the existing image key selection, including the index fallback for an
+embedded image without a legacy use. AssetService validates, deduplicates and
+persists both new image dependency edges in the source-group transaction.
+Missing image residency resolves to absent texture identities. Publication
+validation covers both new texture identities and the bounded scalar and
+sampler values.
+
+Canonical material v6 is selected only for nondefault new input. Its payload
+is the v2 fields followed by the optional packed metallic-roughness reference,
+emissive RGB floats, optional emissive and occlusion references, occlusion
+strength and normal scale floats, then four enum bytes per slot. Slot order is
+BaseColor, Normal, MetallicRoughness, Emissive, Occlusion. Each slot stores min
+filter, mag filter, U wrap and V wrap in that order. Canonical v2 and v5 bytes
+remain unchanged for materials with default new inputs, and both versions
+decode to those defaults. The persisted catalog remains version 2. See the
+[EditorHost opt-in contract](EditorHostProtocol.md#advanced-material-catalog-metadata)
+for creator-facing inspection.
+
 ## Decision and asset kinds
 
 Foundation 2A extends the single schema-backed `AssetService`; it does not add

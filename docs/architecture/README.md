@@ -124,6 +124,9 @@ The following documents describe recently implemented, source-verified slices:
 - [Runtime schema](../src/content/docs/developing/runtime-schema.mdx)
 - [Concrete-class property default foundation](../../devdocs/CurrentArchitecture/ConcreteClassPropertyDefaults.md)
 - [Render extraction](../src/content/docs/developing/render-extraction.mdx)
+- [Renderer Foundation 5](../../devdocs/CurrentArchitecture/RendererFoundation5.md)
+  records qualified experimental spatial lighting, shadows, HDR/residency and
+  workload-specific instancing, with separate physical and hosted evidence.
 - [Platform and input boundary](../../devdocs/CurrentArchitecture/PlatformInputBoundary.md)
 - [Player runtime](../../devdocs/CurrentArchitecture/PlayerRuntime.md)
 - [Persistent input actions](../../devdocs/CurrentArchitecture/InputActions.md)
@@ -132,6 +135,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Renderer backend boundary](../../devdocs/CurrentArchitecture/RendererBackendBoundary.md)
 - [Renderer Foundation 2 accepted architecture](../../devdocs/CurrentArchitecture/RendererFoundation2.md)
 - [Renderer Foundation 2C final backend decision](../../devdocs/CurrentArchitecture/RendererFoundation2C.md)
+- [Renderer Foundation 3 experiment and qualification](../../devdocs/CurrentArchitecture/RendererFoundation3.md)
 - [Physics backend](../../devdocs/CurrentArchitecture/PhysicsBackend.md)
 - [Asset collision and solid compiler decisions](../../devdocs/CurrentArchitecture/AssetCollisionGeometryDecisions.md)
 - [Canonical mesh collision](../../devdocs/CurrentArchitecture/AssetCollisionFoundation2B.md)

@@ -594,23 +594,33 @@ target_include_directories(gargantuan_core PUBLIC
 
 if(GARGANTUAN_WITH_FILAMENT)
 	set(FILAMENT_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/filament")
-	set(FILAMENT_GENERATED_MATERIAL "${FILAMENT_GENERATED_DIR}/GargantuanBenchmarkMaterial.h")
 	file(MAKE_DIRECTORY "${FILAMENT_GENERATED_DIR}")
-	add_custom_command(
-		OUTPUT "${FILAMENT_GENERATED_MATERIAL}"
-		COMMAND "${GARGANTUAN_FILAMENT_ROOT}/bin/matc.exe"
-			--platform desktop
-			--api opengl
-			--api vulkan
-			--variant-filter=dynamicLighting,shadowReceiver,skinning,vsm,fog,ssr,stereo
-			--output-format header
-			--output "${FILAMENT_GENERATED_MATERIAL}"
-			"${CMAKE_CURRENT_SOURCE_DIR}/assets/filament/benchmark.mat"
-		MAIN_DEPENDENCY "${CMAKE_CURRENT_SOURCE_DIR}/assets/filament/benchmark.mat"
-		COMMENT "Compiling the experimental Filament benchmark material"
-		VERBATIM
-	)
-	target_sources(gargantuan_core PRIVATE "${FILAMENT_GENERATED_MATERIAL}")
+	function(gargantuan_filament_material FILAMENT_MATERIAL_NAME FILAMENT_BLEND_MODE)
+		set(FILAMENT_PREMULTIPLY "")
+		if(FILAMENT_BLEND_MODE STREQUAL "transparent")
+			set(FILAMENT_PREMULTIPLY "material.baseColor.rgb *= material.baseColor.a;")
+		endif()
+		set(MaterialInput "${FILAMENT_GENERATED_DIR}/${FILAMENT_MATERIAL_NAME}.mat")
+		set(MaterialHeader "${FILAMENT_GENERATED_DIR}/${FILAMENT_MATERIAL_NAME}.h")
+		configure_file("${CMAKE_CURRENT_SOURCE_DIR}/assets/filament/benchmark.mat.in" "${MaterialInput}" @ONLY)
+		add_custom_command(
+			OUTPUT "${MaterialHeader}"
+			COMMAND "${GARGANTUAN_FILAMENT_ROOT}/bin/matc.exe"
+				--platform desktop
+				--api vulkan
+				--variant-filter=dynamicLighting,skinning,vsm,fog,ssr,stereo
+				--output-format header
+				--output "${MaterialHeader}"
+				"${MaterialInput}"
+			DEPENDS "${MaterialInput}" "${GARGANTUAN_FILAMENT_ROOT}/bin/matc.exe"
+			COMMENT "Compiling the experimental Filament ${FILAMENT_BLEND_MODE} material"
+			VERBATIM
+		)
+		target_sources(gargantuan_core PRIVATE "${MaterialHeader}")
+	endfunction()
+	gargantuan_filament_material(GargantuanBenchmarkMaterial opaque)
+	gargantuan_filament_material(GargantuanMaskedMaterial masked)
+	gargantuan_filament_material(GargantuanTransparentMaterial transparent)
 	target_include_directories(gargantuan_core SYSTEM PRIVATE
 		"${GARGANTUAN_FILAMENT_ROOT}/include"
 		"${FILAMENT_GENERATED_DIR}"
@@ -714,6 +724,20 @@ if(BUILD_TESTING)
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyRuntimeShaders.cmake
 	)
 	set_tests_properties(gargantuan_packaged_shaders PROPERTIES LABELS "build;shader;packaging")
+	add_test(NAME gargantuan_distribution_shaders
+		COMMAND ${CMAKE_COMMAND}
+			-DGARGANTUAN_SHADER_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
+			-DGARGANTUAN_SHADER_RUNTIME_DIR=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution/shaders
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyRuntimeShaders.cmake
+	)
+	set_tests_properties(gargantuan_distribution_shaders PROPERTIES LABELS "build;shader;packaging")
+	add_test(NAME gargantuan_server_distribution_shaders
+		COMMAND ${CMAKE_COMMAND}
+			-DGARGANTUAN_SHADER_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
+			-DGARGANTUAN_SHADER_RUNTIME_DIR=$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution/shaders
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyRuntimeShaders.cmake
+	)
+	set_tests_properties(gargantuan_server_distribution_shaders PROPERTIES LABELS "build;shader;packaging")
 	if(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE)
 		if(MSVC AND MSVC_VERSION LESS 1950)
 			message(FATAL_ERROR "The pinned Glaze prototype requires MSVC 19.50 or newer")
@@ -809,6 +833,14 @@ if(BUILD_TESTING)
 		GARGANTUAN_ASSET_TEST_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"
 		GARGANTUAN_ASSET_TEST_PNG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/github/ross.png"
 	)
+	add_custom_command(TARGET gargantuan_asset_foundation_tests POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:gargantuan_asset_foundation_tests>/test-fixtures"
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"
+			"$<TARGET_FILE_DIR:gargantuan_asset_foundation_tests>/test-fixtures/Roboto-Regular.ttf"
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/assets/github/ross.png"
+			"$<TARGET_FILE_DIR:gargantuan_asset_foundation_tests>/test-fixtures/ross.png"
+	)
 	add_executable(gargantuan_asset_foundation_benchmark "tests/AssetFoundationBenchmark.cpp")
 	target_link_libraries(gargantuan_asset_foundation_benchmark PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_asset_foundation_benchmark PRIVATE
@@ -828,8 +860,39 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_audio_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_renderer_publication_tests "tests/RendererPublicationTests.cpp")
 	target_link_libraries(gargantuan_renderer_publication_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_renderer_instance_record_tests "tests/RendererInstanceRecordCacheTests.cpp")
+	target_include_directories(gargantuan_renderer_instance_record_tests PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_link_libraries(gargantuan_renderer_instance_record_tests PRIVATE glm::glm)
+	add_test(NAME gargantuan_renderer_instance_records COMMAND gargantuan_renderer_instance_record_tests)
+	set_tests_properties(gargantuan_renderer_instance_records PROPERTIES LABELS "renderer;runtime;headless" TIMEOUT 30)
 	add_executable(gargantuan_environment_lighting_benchmark "tests/EnvironmentLightingBenchmark.cpp")
 	target_link_libraries(gargantuan_environment_lighting_benchmark PRIVATE gargantuan_core)
+	add_executable(gargantuan_ibl_reference_tests "tests/EnvironmentLightingReferenceTests.cpp")
+	add_executable(gargantuan_reflection_probe_tests "tests/ReflectionProbeSemanticsTests.cpp")
+	target_link_libraries(gargantuan_reflection_probe_tests PRIVATE glm::glm)
+	target_include_directories(gargantuan_reflection_probe_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+	add_test(NAME gargantuan_reflection_probe_reference COMMAND gargantuan_reflection_probe_tests)
+	add_executable(gargantuan_directional_cascade_numerics_tests "tests/DirectionalCascadeNumericsTests.cpp")
+	target_link_libraries(gargantuan_directional_cascade_numerics_tests PRIVATE glm::glm)
+	target_include_directories(gargantuan_directional_cascade_numerics_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	add_test(NAME gargantuan_directional_cascade_numerics COMMAND gargantuan_directional_cascade_numerics_tests)
+	add_executable(gargantuan_spot_shadow_atlas_tests "tests/SpotShadowAtlasTests.cpp")
+	target_link_libraries(gargantuan_spot_shadow_atlas_tests PRIVATE gargantuan_core)
+	target_include_directories(gargantuan_spot_shadow_atlas_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl/include")
+	add_test(NAME gargantuan_spot_shadow_atlas COMMAND gargantuan_spot_shadow_atlas_tests)
+	set_tests_properties(gargantuan_reflection_probe_reference PROPERTIES LABELS "renderer;environment")
+	target_link_libraries(gargantuan_ibl_reference_tests PRIVATE glm::glm)
+	add_test(NAME gargantuan_ibl_reference COMMAND gargantuan_ibl_reference_tests)
+	set_tests_properties(gargantuan_ibl_reference PROPERTIES LABELS "renderer;environment")
+	add_executable(gargantuan_renderer_material_mip_tests "tests/RendererMaterialMipTests.cpp")
+	target_include_directories(gargantuan_renderer_material_mip_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	add_test(NAME gargantuan_renderer_material_mips COMMAND gargantuan_renderer_material_mip_tests)
+	set_tests_properties(gargantuan_renderer_material_mips PROPERTIES LABELS "renderer;assets")
+	add_executable(gargantuan_directional_shadow_cache_tests "tests/DirectionalShadowCacheTests.cpp")
+	target_link_libraries(gargantuan_directional_shadow_cache_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_directional_shadow_cache COMMAND gargantuan_directional_shadow_cache_tests)
+	set_tests_properties(gargantuan_directional_shadow_cache PROPERTIES LABELS "renderer;environment")
 	add_library(gargantuan_fake_telemetry SHARED "tests/telemetry/FakeTelemetryLibrary.cpp")
 	target_include_directories(gargantuan_fake_telemetry PRIVATE "src")
 	add_library(gargantuan_fake_telemetry_missing_export SHARED "tests/telemetry/FakeTelemetryMissingExport.cpp")
@@ -849,6 +912,26 @@ if(BUILD_TESTING)
 	endif()
 	add_executable(gargantuan_physics_backend_tests "tests/PhysicsBackendTests.cpp")
 	target_link_libraries(gargantuan_physics_backend_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_runtime6_readback_fault_tests "tests/Runtime6ReadbackFaultTests.cpp")
+	target_link_libraries(gargantuan_runtime6_readback_fault_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_runtime6_readback_fault COMMAND gargantuan_runtime6_readback_fault_tests)
+	add_executable(gargantuan_runtime6_dirty_insert_fault_tests "tests/Runtime6DirtyInsertFaultTests.cpp")
+	target_link_libraries(gargantuan_runtime6_dirty_insert_fault_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_runtime6_dirty_insert_fault COMMAND gargantuan_runtime6_dirty_insert_fault_tests)
+	add_executable(gargantuan_runtime6_physics_listener_probe "tests/Runtime6PhysicsListenerProbe.cpp")
+	target_link_libraries(gargantuan_runtime6_physics_listener_probe PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_runtime6_physics_listener_native
+		COMMAND gargantuan_runtime6_physics_listener_probe --mode=native --count=100 --frames=2)
+	add_test(NAME gargantuan_runtime6_physics_listener_native_drain_profiled
+		COMMAND gargantuan_runtime6_physics_listener_probe --mode=native --count=100 --frames=2
+			--drain-physics --profile=on)
+	add_test(NAME gargantuan_runtime6_physics_listener_native_drain_unprofiled
+		COMMAND gargantuan_runtime6_physics_listener_probe --mode=native --count=100 --frames=2
+			--drain-physics --profile=off)
+	add_test(NAME gargantuan_runtime6_physics_listener_renderer
+		COMMAND gargantuan_runtime6_physics_listener_probe --mode=renderer-only --count=100 --frames=2)
+	add_test(NAME gargantuan_runtime6_physics_listener_counterfactual
+		COMMAND gargantuan_runtime6_physics_listener_probe --mode=renderer-only-no-listener --count=100 --frames=2)
 	add_executable(gargantuan_physics_imported_mesh_tests "tests/PhysicsImportedMeshTests.cpp")
 	target_link_libraries(gargantuan_physics_imported_mesh_tests PRIVATE gargantuan_core)
 	add_test(NAME gargantuan_physics_imported_mesh COMMAND gargantuan_physics_imported_mesh_tests)
@@ -919,9 +1002,14 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_qualified_scale_package PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_qualified_scale_package PRIVATE
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+		GARGANTUAN_QUALIFIED_SCALE_FIXTURE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/Foundation3LQualifiedScale"
 	)
 	add_dependencies(gargantuan_qualified_scale_package
 		gargantuan_runtime_distribution gargantuan_server_runtime_distribution)
+	add_test(NAME gargantuan_qualified_scale_fixture
+		COMMAND gargantuan_qualified_scale_package --verify-fixture)
+	set_tests_properties(gargantuan_qualified_scale_fixture PROPERTIES
+		LABELS "content;package;foundation3l" TIMEOUT 120)
 	if(WIN32)
 		find_program(GARGANTUAN_PWSH_EXECUTABLE NAMES pwsh)
 		find_program(GARGANTUAN_GO_EXECUTABLE NAMES go)
@@ -1130,6 +1218,8 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_remote_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_remote_luau_tests "tests/RemoteLuauTests.cpp")
 	target_link_libraries(gargantuan_remote_luau_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_runtime6_luau_mutation_benchmark "tests/Runtime6LuauMutationBenchmark.cpp")
+	target_link_libraries(gargantuan_runtime6_luau_mutation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_character_networking_tests "tests/CharacterNetworkingTests.cpp")
 	target_link_libraries(gargantuan_character_networking_tests PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_game_session_tests "tests/GameSessionTests.cpp")
@@ -1256,8 +1346,66 @@ if(BUILD_TESTING)
 	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 		add_executable(gargantuan_renderer_benchmark "tests/RendererBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_benchmark PRIVATE gargantuan_core)
+		option(GARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE "Build opt-in renderer C++ allocation attribution executable" OFF)
+		if(GARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE)
+			add_executable(gargantuan_renderer_allocation_benchmark
+				"tests/RendererBenchmark.cpp" "tests/BenchmarkAllocationProbe.cpp")
+			target_compile_definitions(gargantuan_renderer_allocation_benchmark PRIVATE
+				GARGANTUAN_BENCHMARK_ALLOCATION_PROBE=1)
+			target_link_libraries(gargantuan_renderer_allocation_benchmark PRIVATE gargantuan_core)
+			add_executable(gargantuan_runtime6_allocation_benchmark
+				"tests/RendererFoundation2Benchmark.cpp" "tests/BenchmarkAllocationProbe.cpp")
+			target_compile_definitions(gargantuan_runtime6_allocation_benchmark PRIVATE GARGANTUAN_RUNTIME6_ALLOCATION_PROBE=1)
+			target_link_libraries(gargantuan_runtime6_allocation_benchmark PRIVATE gargantuan_core)
+			add_executable(gargantuan_renderer_allocation_probe_tests
+				"tests/BenchmarkAllocationProbe.cpp" "tests/BenchmarkAllocationProbeTests.cpp")
+			target_compile_features(gargantuan_renderer_allocation_probe_tests PRIVATE cxx_std_17)
+			add_test(NAME gargantuan_renderer_allocation_probe
+				COMMAND gargantuan_renderer_allocation_probe_tests)
+		endif()
 		add_executable(gargantuan_renderer_foundation2_benchmark "tests/RendererFoundation2Benchmark.cpp")
 		target_link_libraries(gargantuan_renderer_foundation2_benchmark PRIVATE gargantuan_core)
+		add_executable(gargantuan_runtime_foundation6_benchmark "tests/RendererFoundation2Benchmark.cpp")
+		target_link_libraries(gargantuan_runtime_foundation6_benchmark PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_runtime_foundation6_benchmark gargantuan_shaders)
+		add_test(NAME gargantuan_runtime_foundation6_smoke COMMAND gargantuan_runtime_foundation6_benchmark
+			1 --count=1000 --density-matrix --group-width=256 --split-construction --diagnostic-marks)
+		add_test(NAME gargantuan_runtime6_live_render_headless_smoke
+			COMMAND gargantuan_runtime_foundation6_benchmark
+				3 --count=1000 --changes=1000 --draw-backend=headless)
+		set_tests_properties(gargantuan_runtime6_live_render_headless_smoke PROPERTIES
+			LABELS "renderer;runtime;headless" TIMEOUT 120)
+		add_test(NAME gargantuan_runtime6_live_render_invalid_backend
+			COMMAND gargantuan_runtime_foundation6_benchmark 1 --count=1 --draw-backend=invalid)
+		add_test(NAME gargantuan_runtime6_live_render_missing_backend
+			COMMAND gargantuan_runtime_foundation6_benchmark 1 --count=1 --draw-backend=)
+		add_test(NAME gargantuan_runtime6_live_render_invalid_instancing
+			COMMAND gargantuan_runtime_foundation6_benchmark 1 --count=1 --draw-instancing=contiguous)
+		set_tests_properties(gargantuan_runtime6_live_render_invalid_backend
+			gargantuan_runtime6_live_render_missing_backend
+			gargantuan_runtime6_live_render_invalid_instancing PROPERTIES
+			WILL_FAIL TRUE LABELS "renderer;runtime;argument-rejection" TIMEOUT 20)
+		add_executable(gargantuan_runtime6_extraction_alternatives "tests/Runtime6ExtractionAlternativesProbe.cpp")
+		target_link_libraries(gargantuan_runtime6_extraction_alternatives PRIVATE gargantuan_core)
+		add_test(NAME gargantuan_runtime6_extraction_alternatives COMMAND gargantuan_runtime6_extraction_alternatives
+			128 32 2 random 1)
+		add_executable(gargantuan_runtime6_physics_sync_benchmark "tests/Runtime6PhysicsSyncBenchmark.cpp")
+		target_link_libraries(gargantuan_runtime6_physics_sync_benchmark PRIVATE gargantuan_core)
+		add_test(NAME gargantuan_runtime6_physics_sync_smoke COMMAND gargantuan_runtime6_physics_sync_benchmark
+			--static-count 128 --dynamic-count 16 --frames 3 --warmup 1 --control-density 0.25 --lifecycle-per-frame 1 --publication)
+		add_executable(gargantuan_runtime6_realistic_publication_probe
+			"tests/Runtime6RealisticPublicationProbe.cpp")
+		target_link_libraries(gargantuan_runtime6_realistic_publication_probe PRIVATE gargantuan_core)
+		add_test(NAME gargantuan_runtime6_realistic_publication_probe_smoke
+			COMMAND gargantuan_runtime6_realistic_publication_probe
+				--count=16 --changed=4 --frames=2 --mode=both)
+		set_tests_properties(gargantuan_runtime6_realistic_publication_probe_smoke PROPERTIES
+			LABELS "renderer;runtime;headless" TIMEOUT 120)
+		add_test(NAME gargantuan_runtime6_realistic_publication_probe_quiet_smoke
+			COMMAND gargantuan_runtime6_realistic_publication_probe
+				--count=16 --changed=0 --frames=2 --mode=both)
+		set_tests_properties(gargantuan_runtime6_realistic_publication_probe_quiet_smoke PROPERTIES
+			LABELS "renderer;runtime;headless" TIMEOUT 120)
 		add_executable(gargantuan_renderer_foundation2_gpu_benchmark "tests/RendererFoundation2GpuBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_foundation2_gpu_benchmark PRIVATE gargantuan_core)
 		add_dependencies(gargantuan_renderer_foundation2_gpu_benchmark gargantuan_shaders)
@@ -1270,6 +1418,15 @@ if(BUILD_TESTING)
 		add_dependencies(gargantuan_first_complete_game_gpu_tests
 			gargantuan_shaders gargantuan_packager gargantuan_runtime_distribution)
 		add_executable(gargantuan_editor_viewport_smoke "tests/EditorViewportSmoke.cpp")
+		add_executable(gargantuan_ibl_gpu_tests "tests/ImageBasedLightingGpuTests.cpp")
+		add_executable(gargantuan_reflection_probe_gpu_tests "tests/ReflectionProbeGpuTests.cpp")
+		target_link_libraries(gargantuan_reflection_probe_gpu_tests PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_reflection_probe_gpu_tests gargantuan_shaders)
+		add_executable(gargantuan_shadow_foundation5_gpu_tests "tests/ShadowFoundation5GpuTests.cpp")
+		target_link_libraries(gargantuan_shadow_foundation5_gpu_tests PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_shadow_foundation5_gpu_tests gargantuan_shaders)
+		target_link_libraries(gargantuan_ibl_gpu_tests PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_ibl_gpu_tests gargantuan_shaders)
 		add_executable(gargantuan_renderer_depth_tests "tests/RendererDepthTests.cpp")
 		target_link_libraries(gargantuan_renderer_depth_tests PRIVATE gargantuan_core)
 		add_dependencies(gargantuan_renderer_depth_tests gargantuan_shaders)
@@ -1335,6 +1492,9 @@ if(BUILD_TESTING)
 			gargantuan_replicated_storage_session_tests
 			gargantuan_attributes_tags_profile
 			gargantuan_physics_backend_tests
+			gargantuan_runtime6_readback_fault_tests
+			gargantuan_runtime6_dirty_insert_fault_tests
+			gargantuan_runtime6_physics_listener_probe
 			gargantuan_physics_query_benchmark
 			gargantuan_physics_activation_benchmark
 			gargantuan_soft_body_physics_tests
@@ -1353,6 +1513,7 @@ if(BUILD_TESTING)
 			gargantuan_packaging_tests
 			gargantuan_packaging_editor_host_tests
 			gargantuan_packaging_benchmark
+			gargantuan_qualified_scale_package
 			gargantuan_gui_foundation_benchmark
 			gargantuan_networking_contract_tests
 			gargantuan_simulated_transport_tests
@@ -1360,6 +1521,7 @@ if(BUILD_TESTING)
 			gargantuan_replication_tests
 			gargantuan_remote_tests
 			gargantuan_remote_luau_tests
+			gargantuan_runtime6_luau_mutation_benchmark
 			gargantuan_character_networking_tests
 			gargantuan_character_networking_benchmark
 			gargantuan_content_availability_tests
@@ -1445,9 +1607,11 @@ if(BUILD_TESTING)
 			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS
 				gargantuan_renderer_benchmark
 				gargantuan_renderer_foundation2_benchmark
+				gargantuan_runtime_foundation6_benchmark
 				gargantuan_renderer_foundation2_gpu_benchmark
 				gargantuan_first_complete_game_gpu_tests
 				gargantuan_editor_viewport_smoke
+				gargantuan_ibl_gpu_tests
 				gargantuan_renderer_depth_tests
 				gargantuan_editor_viewport_presentation_benchmark
 			)
@@ -1524,6 +1688,12 @@ if(BUILD_TESTING)
 		COMMAND gargantuan_spatial_region_index_benchmark --quick)
 	add_test(NAME gargantuan_remote COMMAND gargantuan_remote_tests)
 	add_test(NAME gargantuan_remote_luau COMMAND gargantuan_remote_luau_tests)
+	add_test(NAME gargantuan_runtime6_luau_mutation_cframe_smoke
+		COMMAND gargantuan_runtime6_luau_mutation_benchmark --count=16 --frames=2 --listeners=2 --property=cframe)
+	add_test(NAME gargantuan_runtime6_luau_mutation_color_smoke
+		COMMAND gargantuan_runtime6_luau_mutation_benchmark --count=16 --frames=2 --listeners=2 --property=color)
+	set_tests_properties(gargantuan_runtime6_luau_mutation_cframe_smoke gargantuan_runtime6_luau_mutation_color_smoke
+		PROPERTIES LABELS "runtime;script;headless" TIMEOUT 120)
 	add_test(NAME gargantuan_character_networking COMMAND gargantuan_character_networking_tests)
 	add_test(NAME gargantuan_character_networking_benchmark_smoke COMMAND gargantuan_character_networking_benchmark)
 	add_test(NAME gargantuan_content_availability_benchmark_smoke

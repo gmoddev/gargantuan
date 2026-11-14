@@ -23,6 +23,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
@@ -438,11 +439,42 @@ namespace gargantuan {
 				Buffers[*BufferIndex].begin() + *Offset + *Length);
 		}
 
-		std::optional<std::size_t> TextureImageIndex(const Json &Root, std::size_t TextureIndex) {
-			if (!Root.contains("textures") || !Root["textures"].is_array() ||
-				TextureIndex >= Root["textures"].size() || !Root["textures"][TextureIndex].is_object() ||
-				!Root["textures"][TextureIndex].contains("source")) return std::nullopt;
-			return Unsigned(Root["textures"][TextureIndex]["source"]);
+		std::expected<RenderSamplerState, AssetDiagnostic> ParseSampler(const Json &Source) {
+			if (!Source.is_object() || (Source.contains("extensions") && !Source["extensions"].empty()))
+				return std::unexpected(Error("UnsupportedSampler", "glTF sampler must be an object without extensions"));
+			RenderSamplerState Sampler;
+			if (Source.contains("minFilter")) {
+				const auto Filter = Unsigned(Source["minFilter"]);
+				switch (Filter.value_or(0)) {
+					case 9728: Sampler.MinFilter = RenderTextureMinFilter::Nearest; break;
+					case 9729: Sampler.MinFilter = RenderTextureMinFilter::Linear; break;
+					case 9984: Sampler.MinFilter = RenderTextureMinFilter::NearestMipmapNearest; break;
+					case 9985: Sampler.MinFilter = RenderTextureMinFilter::LinearMipmapNearest; break;
+					case 9986: Sampler.MinFilter = RenderTextureMinFilter::NearestMipmapLinear; break;
+					case 9987: Sampler.MinFilter = RenderTextureMinFilter::LinearMipmapLinear; break;
+					default: return std::unexpected(Error("InvalidSampler", "glTF minFilter is invalid"));
+				}
+			}
+			if (Source.contains("magFilter")) {
+				const auto Filter = Unsigned(Source["magFilter"]);
+				switch (Filter.value_or(0)) {
+					case 9728: Sampler.MagFilter = RenderTextureMagFilter::Nearest; break;
+					case 9729: Sampler.MagFilter = RenderTextureMagFilter::Linear; break;
+					default: return std::unexpected(Error("InvalidSampler", "glTF magFilter is invalid"));
+				}
+			}
+			for (const auto &[Name, Destination] :
+				{std::pair{"wrapS", &Sampler.WrapU}, std::pair{"wrapT", &Sampler.WrapV}}) {
+				if (!Source.contains(Name)) continue;
+				const auto Wrap = Unsigned(Source[Name]);
+				switch (Wrap.value_or(0)) {
+					case 10497: *Destination = RenderTextureWrap::Repeat; break;
+					case 33648: *Destination = RenderTextureWrap::MirroredRepeat; break;
+					case 33071: *Destination = RenderTextureWrap::ClampToEdge; break;
+					default: return std::unexpected(Error("InvalidSampler", "glTF texture wrapping mode is invalid"));
+				}
+			}
+			return Sampler;
 		}
 
 		std::expected<AssetImportGraphCandidate, AssetDiagnostic> ImportDocument(
@@ -460,6 +492,8 @@ namespace gargantuan {
 				return std::unexpected(Error("GltfLimit", "glTF images array exceeds its limit"));
 			if (Root.contains("textures") && (!Root["textures"].is_array() || Root["textures"].size() > AssetLimits::MaximumGltfTextures))
 				return std::unexpected(Error("GltfLimit", "glTF textures array exceeds its limit"));
+			if (Root.contains("samplers") && (!Root["samplers"].is_array() || Root["samplers"].size() > AssetLimits::MaximumGltfTextures))
+				return std::unexpected(Error("GltfLimit", "glTF samplers array exceeds its limit"));
 			if (Root.contains("nodes") && (!Root["nodes"].is_array() || Root["nodes"].size() > AssetLimits::MaximumGltfNodes))
 				return std::unexpected(Error("GltfLimit", "glTF nodes array is invalid or exceeds its limit"));
 			if (Root.contains("skins") && (!Root["skins"].is_array() || Root["skins"].size() > AssetLimits::MaximumGltfSkins))
@@ -467,11 +501,31 @@ namespace gargantuan {
 			if (Root.contains("animations") && (!Root["animations"].is_array() ||
 				Root["animations"].size() > AssetLimits::MaximumGltfAnimations))
 				return std::unexpected(Error("GltfLimit", "glTF animations array is invalid or exceeds its limit"));
+			std::vector<RenderSamplerState> Samplers;
+			if (Root.contains("samplers")) for (const auto &Source : Root["samplers"]) {
+				auto Sampler = ParseSampler(Source);
+				if (!Sampler) return std::unexpected(Sampler.error());
+				Samplers.push_back(*Sampler);
+			}
+			struct TextureBinding { std::size_t ImageIndex; RenderSamplerState Sampler; };
+			std::vector<TextureBinding> Textures;
+			const auto ImageCount = Root.contains("images") ? Root["images"].size() : 0;
 			if (Root.contains("textures")) for (const auto &Texture : Root["textures"]) {
 				if (!Texture.is_object() || !Texture.contains("source"))
 					return std::unexpected(Error("MalformedGltf", "glTF texture must contain an image source"));
-				if (Texture.contains("sampler") || (Texture.contains("extensions") && !Texture["extensions"].empty()))
-					return std::unexpected(Error("UnsupportedGltfFeature", "Explicit texture samplers and texture extensions are not represented in Foundation 2A"));
+				if (Texture.contains("extensions") && !Texture["extensions"].empty())
+					return std::unexpected(Error("UnsupportedGltfFeature", "glTF texture extensions are unsupported"));
+				const auto Image = Unsigned(Texture["source"]);
+				if (!Image || *Image >= ImageCount)
+					return std::unexpected(Error("InvalidTexture", "glTF texture source image is invalid"));
+				RenderSamplerState Sampler;
+				if (Texture.contains("sampler")) {
+					const auto Index = Unsigned(Texture["sampler"]);
+					if (!Index || *Index >= Samplers.size())
+						return std::unexpected(Error("InvalidSampler", "glTF texture sampler index is invalid"));
+					Sampler = Samplers[*Index];
+				}
+				Textures.push_back({*Image, Sampler});
 			}
 			auto Buffers = LoadBuffers(Document, Context);
 			if (!Buffers) return std::unexpected(Buffers.error());
@@ -932,20 +986,23 @@ namespace gargantuan {
 				MaterialKeys[Index] = Rank == 0 ? Base : Base + "/" + std::to_string(Rank);
 			}
 
-			const auto ImageCount = Root.contains("images") ? Root["images"].size() : 0;
 			std::vector<std::vector<std::string>> ImageUses(ImageCount);
-			auto AddTextureUse = [&](const Json &TextureInfo, std::string Use) -> std::expected<void, AssetDiagnostic> {
+			std::vector<std::vector<std::string>> MetallicRoughnessUses(ImageCount);
+			const auto ReadTexture = [&](const Json &TextureInfo) -> std::expected<TextureBinding, AssetDiagnostic> {
 				if (!TextureInfo.is_object() || !TextureInfo.contains("index") ||
 					(TextureInfo.contains("texCoord") && TextureInfo["texCoord"] != 0) ||
 					(TextureInfo.contains("extensions") && !TextureInfo["extensions"].empty()))
 					return std::unexpected(Error("UnsupportedGltfFeature", "Only TEXCOORD_0 material textures are supported"));
 				auto TextureIndex = Unsigned(TextureInfo["index"]);
-				if (!TextureIndex || *TextureIndex >= (Root.contains("textures") ? Root["textures"].size() : 0))
+				if (!TextureIndex || *TextureIndex >= Textures.size())
 					return std::unexpected(Error("InvalidTexture", "glTF material texture index is invalid"));
-				auto ImageIndex = TextureImageIndex(Root, *TextureIndex);
-				if (!ImageIndex || *ImageIndex >= ImageCount)
-					return std::unexpected(Error("InvalidTexture", "glTF texture source image is invalid"));
-				ImageUses[*ImageIndex].push_back(std::move(Use));
+				return Textures[*TextureIndex];
+			};
+			auto AddTextureUse = [&](const Json &TextureInfo, std::string Use,
+				std::vector<std::vector<std::string>> &Uses) -> std::expected<void, AssetDiagnostic> {
+				const auto Texture = ReadTexture(TextureInfo);
+				if (!Texture) return std::unexpected(Texture.error());
+				Uses[Texture->ImageIndex].push_back(std::move(Use));
 				return {};
 			};
 			for (std::size_t Index = 0; Index < MaterialCount; ++Index) {
@@ -956,12 +1013,17 @@ namespace gargantuan {
 				if (Material.contains("pbrMetallicRoughness") && Material["pbrMetallicRoughness"].is_object()) {
 					const auto &Pbr = Material["pbrMetallicRoughness"];
 					if (Pbr.contains("baseColorTexture")) {
-						auto Result = AddTextureUse(Pbr["baseColorTexture"], MaterialKeys[Index] + "/base-color");
+						auto Result = AddTextureUse(Pbr["baseColorTexture"], MaterialKeys[Index] + "/base-color", ImageUses);
+						if (!Result) return std::unexpected(Result.error());
+					}
+					if (Pbr.contains("metallicRoughnessTexture")) {
+						auto Result = AddTextureUse(Pbr["metallicRoughnessTexture"], MaterialKeys[Index] + "/metallic-roughness",
+							MetallicRoughnessUses);
 						if (!Result) return std::unexpected(Result.error());
 					}
 				}
 				if (Material.contains("normalTexture")) {
-					auto Result = AddTextureUse(Material["normalTexture"], MaterialKeys[Index] + "/normal");
+					auto Result = AddTextureUse(Material["normalTexture"], MaterialKeys[Index] + "/normal", ImageUses);
 					if (!Result) return std::unexpected(Result.error());
 				}
 			}
@@ -976,8 +1038,10 @@ namespace gargantuan {
 				if (Image.contains("uri") && Image["uri"].is_string() && !Image["uri"].get_ref<const std::string &>().starts_with("data:"))
 					Identity = "uri/" + Image["uri"].get<std::string>();
 				else {
-					std::ranges::sort(ImageUses[Index]);
-					Identity = ImageUses[Index].empty() ? std::string("embedded/") + std::to_string(Index) : ImageUses[Index].front();
+					// Emissive, occlusion, and samplers do not change existing embedded image keys.
+					auto &Uses = ImageUses[Index].empty() ? MetallicRoughnessUses[Index] : ImageUses[Index];
+					std::ranges::sort(Uses);
+					Identity = Uses.empty() ? std::string("embedded/") + std::to_string(Index) : Uses.front();
 				}
 				auto Base = KeyHash("image/", Identity);
 				const auto Rank = DuplicateImageKeys[Base]++;
@@ -1033,44 +1097,74 @@ namespace gargantuan {
 							return std::unexpected(Error("MalformedMaterial", "glTF base color factor is out of range"));
 					}
 				}
-			auto ReadUnitFactor = [&](std::string_view Name, float Default) -> std::expected<float, AssetDiagnostic> {
-					if (!Pbr.contains(Name)) return Default;
-					if (!Pbr[Name].is_number()) return std::unexpected(Error("MalformedMaterial", "glTF material factor must be numeric"));
-					const auto Value = Pbr[Name].get<float>();
-					if (!std::isfinite(Value) || Value < 0.0f || Value > 1.0f)
+				const auto ReadFactor = [](const Json &Source, std::string_view Name, float Default, float Minimum, float Maximum)
+					-> std::expected<float, AssetDiagnostic> {
+					if (!Source.contains(Name)) return Default;
+					if (!Source[Name].is_number()) return std::unexpected(Error("MalformedMaterial", "glTF material factor must be numeric"));
+					const auto Value = Source[Name].get<float>();
+					if (!std::isfinite(Value) || Value < Minimum || Value > Maximum)
 						return std::unexpected(Error("MalformedMaterial", "glTF material factor is out of range"));
 					return Value;
 				};
-				auto Metallic = ReadUnitFactor("metallicFactor", 1.0f), Roughness = ReadUnitFactor("roughnessFactor", 1.0f);
+				const auto Metallic = ReadFactor(Pbr, "metallicFactor", 1.0f, 0.0f, 1.0f);
+				const auto Roughness = ReadFactor(Pbr, "roughnessFactor", 1.0f, 0.0f, 1.0f);
 				if (!Metallic) return std::unexpected(Metallic.error());
 				if (!Roughness) return std::unexpected(Roughness.error());
 				Material.MetallicFactor = *Metallic;
 				Material.RoughnessFactor = *Roughness;
-				if (Pbr.contains("metallicRoughnessTexture") || SourceMaterial.contains("occlusionTexture") ||
-					SourceMaterial.contains("emissiveTexture") || SourceMaterial.contains("emissiveFactor"))
-					return std::unexpected(Error("UnsupportedMaterialFeature", "Metallic-roughness textures, occlusion, and emissive inputs are not represented in Foundation 2A"));
-				auto BindTexture = [&](const Json &Info, AssetImportBindingKind Kind) -> std::expected<void, AssetDiagnostic> {
-					auto TextureIndex = Unsigned(Info["index"]);
-					auto ImageIndex = TextureIndex ? TextureImageIndex(Root, *TextureIndex) : std::nullopt;
-					if (!ImageIndex || *ImageIndex >= ImageKeys.size()) return std::unexpected(Error("InvalidTexture", "glTF texture source is invalid"));
-					Bindings.push_back({Kind, 0, ImageKeys[*ImageIndex]});
+				if (SourceMaterial.contains("emissiveFactor")) {
+					const auto &Factor = SourceMaterial["emissiveFactor"];
+					if (!Factor.is_array() || Factor.size() != 3)
+						return std::unexpected(Error("MalformedMaterial", "glTF emissiveFactor must contain three values"));
+					for (glm::length_t Component = 0; Component < 3; ++Component) {
+						const auto &Input = Factor[static_cast<std::size_t>(Component)];
+						if (!Input.is_number())
+							return std::unexpected(Error("MalformedMaterial", "glTF emissive factor must be numeric"));
+						const auto Value = Input.get<float>();
+						if (!std::isfinite(Value) || Value < 0.0f || Value > 1.0f)
+							return std::unexpected(Error("MalformedMaterial", "glTF emissive factor is out of range"));
+						Material.EmissiveFactor[Component] = Value;
+					}
+				}
+				const auto BindTexture = [&](const Json &Info, AssetImportBindingKind Kind, RenderMaterialTextureSlot Slot)
+					-> std::expected<void, AssetDiagnostic> {
+					const auto Texture = ReadTexture(Info);
+					if (!Texture) return std::unexpected(Texture.error());
+					Bindings.push_back({Kind, 0, ImageKeys[Texture->ImageIndex]});
+					Material.TextureSamplers[static_cast<std::size_t>(Slot)] = Texture->Sampler;
 					return {};
 				};
 				if (Pbr.contains("baseColorTexture")) {
-					auto Bound = BindTexture(Pbr["baseColorTexture"], AssetImportBindingKind::MaterialBaseColorTexture);
+					auto Bound = BindTexture(Pbr["baseColorTexture"], AssetImportBindingKind::MaterialBaseColorTexture,
+						RenderMaterialTextureSlot::BaseColor);
 					if (!Bound) return std::unexpected(Bound.error());
 				}
 				if (SourceMaterial.contains("normalTexture")) {
-					if (!SourceMaterial["normalTexture"].is_object())
-						return std::unexpected(Error("MalformedMaterial", "glTF normalTexture must be an object"));
-					if (SourceMaterial["normalTexture"].contains("scale")) {
-						if (!SourceMaterial["normalTexture"]["scale"].is_number() ||
-							!std::isfinite(SourceMaterial["normalTexture"]["scale"].get<float>()) ||
-							SourceMaterial["normalTexture"]["scale"].get<float>() != 1.0f)
-							return std::unexpected(Error("UnsupportedMaterialFeature", "Scaled normal textures are not represented in Foundation 2A"));
-					}
-					auto Bound = BindTexture(SourceMaterial["normalTexture"], AssetImportBindingKind::MaterialNormalTexture);
+					const auto &Normal = SourceMaterial["normalTexture"];
+					auto Bound = BindTexture(Normal, AssetImportBindingKind::MaterialNormalTexture, RenderMaterialTextureSlot::Normal);
 					if (!Bound) return std::unexpected(Bound.error());
+					const auto Scale = ReadFactor(Normal, "scale", 1.0f, -MaximumRenderNormalScale, MaximumRenderNormalScale);
+					if (!Scale) return std::unexpected(Scale.error());
+					Material.NormalScale = *Scale;
+				}
+				if (Pbr.contains("metallicRoughnessTexture")) {
+					auto Bound = BindTexture(Pbr["metallicRoughnessTexture"], AssetImportBindingKind::MaterialMetallicRoughnessTexture,
+						RenderMaterialTextureSlot::MetallicRoughness);
+					if (!Bound) return std::unexpected(Bound.error());
+				}
+				if (SourceMaterial.contains("emissiveTexture")) {
+					auto Bound = BindTexture(SourceMaterial["emissiveTexture"], AssetImportBindingKind::MaterialEmissiveTexture,
+						RenderMaterialTextureSlot::Emissive);
+					if (!Bound) return std::unexpected(Bound.error());
+				}
+				if (SourceMaterial.contains("occlusionTexture")) {
+					const auto &Occlusion = SourceMaterial["occlusionTexture"];
+					auto Bound = BindTexture(Occlusion, AssetImportBindingKind::MaterialOcclusionTexture,
+						RenderMaterialTextureSlot::Occlusion);
+					if (!Bound) return std::unexpected(Bound.error());
+					const auto Strength = ReadFactor(Occlusion, "strength", 1.0f, 0.0f, 1.0f);
+					if (!Strength) return std::unexpected(Strength.error());
+					Material.OcclusionStrength = *Strength;
 				}
 				if (SourceMaterial.contains("alphaMode") && !SourceMaterial["alphaMode"].is_string())
 					return std::unexpected(Error("MalformedMaterial", "glTF alphaMode must be a string"));
@@ -1246,7 +1340,9 @@ namespace gargantuan {
 						const auto &SourceMaterial = Root["materials"][*MaterialIndex];
 						const auto &Pbr = SourceMaterial.contains("pbrMetallicRoughness") ?
 							SourceMaterial["pbrMetallicRoughness"] : Json::object();
-						RequiresTextureCoordinates = Pbr.contains("baseColorTexture") || SourceMaterial.contains("normalTexture");
+						RequiresTextureCoordinates = Pbr.contains("baseColorTexture") ||
+							Pbr.contains("metallicRoughnessTexture") || SourceMaterial.contains("normalTexture") ||
+							SourceMaterial.contains("emissiveTexture") || SourceMaterial.contains("occlusionTexture");
 						RequiresTangentSpace = SourceMaterial.contains("normalTexture");
 					}
 					if (RequiresTextureCoordinates && !TextureCoordinates)

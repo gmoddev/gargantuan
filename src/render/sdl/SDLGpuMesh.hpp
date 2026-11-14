@@ -6,6 +6,7 @@
 #include <SDL3/SDL_gpu.h>
 
 #include <cstdint>
+#include <optional>
 
 namespace gargantuan {
 	struct SDLRendererMetrics;
@@ -19,6 +20,7 @@ namespace gargantuan {
 		std::uint32_t IndexBufferSize = 0;
 		SDL_GPUTransferBuffer *TransferBuffer = nullptr;
 		SDLRendererMetrics *Metrics = nullptr;
+		std::optional<RenderBounds> ImmutablePositionBounds;
 
 		explicit SDLGpuMesh(Mesh MeshData, SDLRendererMetrics *MetricsValue = nullptr);
 		explicit SDLGpuMesh(const RenderMeshCreate &MeshData, SDLRendererMetrics *MetricsValue = nullptr);

@@ -140,6 +140,29 @@ namespace {
 	void CheckProducerDenials(Fixture &Test) {
 		Test.CheckSnapshot(Test.Baseline, true, "qualified captured snapshot failed before runtime validation");
 		auto Changed = Test.Baseline;
+		Changed.ContentInstanceSchemaVersion = 4;
+		Test.CheckSnapshot(Changed, false, "version 5 content was accepted under a version 4 manifest");
+		Changed = Test.Baseline;
+		Changed.ContentInstanceSchemaVersion = 6;
+		Test.CheckSnapshot(Changed, false, "unsupported content schema version reached package staging");
+		Changed = Test.Baseline;
+		auto LegacyDocument = Json::parse(Changed.ContentUnits[0].Payload);
+		auto RemoveNodeIds = [&](auto &&Self, Json &Node) -> void {
+			Node.erase("NodeId");
+			for (auto &Child : Node["Children"]) Self(Self, Child);
+		};
+		RemoveNodeIds(RemoveNodeIds, LegacyDocument);
+		LegacyDocument["Version"] = 4;
+		SetPayload(Changed.ContentUnits[0], LegacyDocument);
+		Test.CheckSnapshot(Changed, false, "version 4 content was accepted under the default version 5 manifest");
+		Changed.ContentInstanceSchemaVersion = 4;
+		Test.CheckSnapshot(Changed, true, "compatible version 4 content failed the explicit legacy path");
+		auto ModernUnit = Test.Baseline.ContentUnits[0];
+		ModernUnit.Entry.Key = "zz/mixed-schema";
+		ModernUnit.Entry.BlobReference = "content/mixed-schema.instance.json";
+		Changed.ContentUnits.push_back(std::move(ModernUnit));
+		Test.CheckSnapshot(Changed, false, "mixed version 4 and 5 content reached package staging");
+		Changed = Test.Baseline;
 		Changed.ContentUnits[0].Entry.CoarseBounds = PackageCoarseBounds{{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}};
 		Test.CheckSnapshot(Changed, false, "underbounded mixed geometry reached package staging");
 		Changed = Test.Baseline;

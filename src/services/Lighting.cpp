@@ -78,6 +78,38 @@ namespace gargantuan {
 		NotifyPropertyCommitted("EnvironmentColor");
 	}
 
+	float Lighting::GetEnvironmentRotation() const { return EnvironmentRotation; }
+
+	void Lighting::SetEnvironmentRotation(float Value) {
+		AssertCanMutate();
+		ValidatePropertyMutation("EnvironmentRotation", Value);
+		if (EnvironmentRotation == Value) return;
+		EnvironmentRotation = Value;
+		NotifyPropertyCommitted("EnvironmentRotation");
+	}
+
+	float Lighting::GetIblIntensity() const { return IblIntensity; }
+
+	void Lighting::SetIblIntensity(float Value) {
+		AssertCanMutate();
+		ValidatePropertyMutation("IblIntensity", Value);
+		if (IblIntensity == Value) return;
+		IblIntensity = Value;
+		NotifyPropertyCommitted("IblIntensity");
+	}
+
+	Enums::ToneMappingMode Lighting::GetToneMapping() const { return ToneMapping; }
+
+	void Lighting::SetToneMapping(Enums::ToneMappingMode Value) {
+		AssertCanMutate();
+		if (Value != Enums::ToneMappingMode::Filmic && Value != Enums::ToneMappingMode::Reinhard)
+			throw std::invalid_argument("[Environment:Lighting] ToneMapping must be Filmic or Reinhard");
+		ValidatePropertyMutation("ToneMapping", Value);
+		if (ToneMapping == Value) return;
+		ToneMapping = Value;
+		NotifyPropertyCommitted("ToneMapping");
+	}
+
 	bool Lighting::GetFogEnabled() const {
 		return FogEnabled;
 	}

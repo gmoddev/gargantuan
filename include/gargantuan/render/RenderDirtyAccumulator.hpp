@@ -12,8 +12,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <span>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace gargantuan {
@@ -63,6 +65,7 @@ namespace gargantuan {
 		static RenderDirtyAccumulator &Get();
 
 		void RecordChange(ObjectId Scope, ObjectId Object, const ChangePayload &Payload) noexcept;
+		void RecordBatch(ObjectId Scope, std::span<const std::pair<ObjectId, ChangePayload>> Changes) noexcept;
 		void Mark(
 			ObjectId Scope,
 			ObjectId Object,

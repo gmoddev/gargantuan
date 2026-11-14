@@ -1,4 +1,5 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/FileLink.hpp"
 #include "gargantuan/classes/Folder.hpp"
@@ -7,6 +8,7 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
+#include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
@@ -75,6 +77,12 @@ namespace gargantuan {
 	struct WorldRootTestAccess {
 		static std::size_t BodyCount(const WorldRoot &world) { return world.PartBodies.size(); }
 		static std::size_t JointCount(const WorldRoot &world) { return world.ConstraintJoints.size(); }
+		static bool HasAcceptedAnchoredBody(const WorldRoot &World, const BasePart &Part) {
+			auto Found = World.PartBodies.find(Part.GetObjectId());
+			if (Found == World.PartBodies.end()) return false;
+			auto State = World.Physics.GetBodyState(Found->second);
+			return State && State->Description.Anchored;
+		}
 	};
 }
 
@@ -499,6 +507,86 @@ namespace {
 			"first adoption rejects a subtree that exceeds the hierarchy depth limit");
 		Check(!deepRoot->GetParent() && !deepRoot->GetDataModel(),
 			"depth-limit rejection leaves the detached subtree unowned and unpublished");
+	}
+
+	void TestObservedMutationSignals() {
+		using namespace gargantuan;
+		auto &Journal = ChangeJournal::Get();
+		auto World = std::make_shared<DataModel>();
+		auto WorkspaceValue = World->GetService("Workspace");
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetCFrame(CFrame(glm::vec3(0.0f)));
+		Check(!PartValue->PropertyChangedSignals.contains("CFrame"),
+			"unobserved detached property changes do not allocate property signals");
+		PartValue->SetParent(WorkspaceValue);
+		Check(!PartValue->PropertyChangedSignals.contains("Parent"),
+			"unobserved ancestry changes do not allocate a Parent signal");
+
+		std::vector<float> ObservedPositions;
+		auto CFrameConnection = PartValue->GetPropertyChangedSignal("CFrame")->Connect(
+			[&](std::monostate) {
+				ObservedPositions.push_back(PartValue->GetCFrame().Position.x);
+				if (ObservedPositions.size() == 1)
+					PartValue->SetCFrame(CFrame(glm::vec3(2.0f, 0.0f, 0.0f)));
+			});
+		const auto Cursor = Journal.CreateCursor(World->GetObjectId());
+		PartValue->SetCFrame(CFrame(glm::vec3(1.0f, 0.0f, 0.0f)));
+		PartValue->SetCFrame(CFrame(glm::vec3(2.0f, 0.0f, 0.0f)));
+		Check(ObservedPositions == std::vector<float>{1.0f, 2.0f, 2.0f},
+			"subscribed callbacks observe immediate nested and equal-value native writes");
+		std::vector<float> CommittedPositions;
+		for (const auto &Record : Journal.Read(Cursor).Records)
+			if (const auto *Property = std::get_if<PropertyUpdatedChange>(&Record.Payload);
+				Property && Record.Object == PartValue->GetObjectId() && Property->PropertyName == "CFrame")
+				CommittedPositions.push_back(std::get<WireCFrame>(Property->Value).Components[0]);
+		Check(CommittedPositions == ObservedPositions,
+			"journal preserves the order and intermediate values of reentrant CFrame writes");
+
+		const auto BeforeInvalid = Journal.CreateCursor(World->GetObjectId());
+		CheckThrows<std::invalid_argument>([&] { PartValue->SetTransparency(-1.0f); },
+			"invalid property value remains rejected");
+		Check(Journal.Read(BeforeInvalid).Records.empty() &&
+			!PartValue->PropertyChangedSignals.contains("Transparency"),
+			"rejected mutation emits no journal record or property signal");
+
+		int ParentSignals = 0;
+		auto ParentConnection = PartValue->GetPropertyChangedSignal("Parent")->Connect(
+			[&](std::monostate) {
+				++ParentSignals;
+				Check(!PartValue->GetParent().has_value(),
+					"parent callback sees the committed unparented hierarchy");
+			});
+		PartValue->SetParent(nullptr);
+		Check(ParentSignals == 1, "subscribed Parent signal fires after reparenting");
+
+		int DestroyedSignals = 0;
+		auto DestroyedConnection = PartValue->GetPropertyChangedSignal("Destroyed")->Connect(
+			[&](std::monostate) {
+				++DestroyedSignals;
+				Check(PartValue->GetDestroyed(), "destroy callback observes the committed lifecycle state");
+			});
+		const auto Object = PartValue->GetObjectId();
+		PartValue->Destroy();
+		Check(DestroyedSignals == 1 && !ObjectRegistry::Get().Lookup(Object),
+			"observed destruction fires once after generation-safe identity invalidation");
+
+		auto CallbackVictim = std::make_shared<Folder>();
+		CallbackVictim->SetParent(WorkspaceValue);
+		const auto VictimObject = CallbackVictim->GetObjectId();
+		int VictimSignals = 0;
+		auto VictimConnection = CallbackVictim->GetPropertyChangedSignal("Name")->Connect(
+			[&](std::monostate) {
+				++VictimSignals;
+				CallbackVictim->Destroy();
+			});
+		CallbackVictim->SetName("DestroyedFromCallback");
+		Check(VictimSignals == 1 && CallbackVictim->GetDestroyed() &&
+			!ObjectRegistry::Get().Lookup(VictimObject),
+			"property callback can destroy its own object without losing signal lifetime");
+		(void)CFrameConnection;
+		(void)ParentConnection;
+		(void)DestroyedConnection;
+		(void)VictimConnection;
 	}
 
 	void TestWorldRootConstraintValidation() {
@@ -6628,8 +6716,18 @@ namespace {
 				"coalesced camera state cannot be replaced by an older revision"
 			);
 			std::vector<std::uint8_t> TestPresentationPixels;
+			RenderProjection TestViewportProjection;
+			std::vector<RenderPublicationId> PlayApplied;
+			std::vector<RenderPublicationId> PlayCaptured;
+			std::size_t PlayFullPublications = 0;
+			bool CheckPlayPublicationOrder = false;
 			host.SetViewportCaptureForTesting([&](RenderPublicationPtr Publication) {
 				if (!Publication) throw std::invalid_argument("test viewport capture requires a publication");
+				if (CheckPlayPublicationOrder) {
+					if (TestViewportProjection.GetLastPublicationId() != Publication->Id)
+						throw std::logic_error("test capture missed one or more Play publications");
+					PlayCaptured.push_back(Publication->Id);
+				}
 				const auto Width = Publication->Frame.ViewportWidth;
 				const auto Height = Publication->Frame.ViewportHeight;
 				TestPresentationPixels.assign(static_cast<std::size_t>(Width) * Height * 4, 0x7f);
@@ -6642,6 +6740,11 @@ namespace {
 					.CpuExtraction = std::chrono::microseconds(5),
 					.Total = std::chrono::microseconds(23),
 				};
+			}, [&](RenderPublicationPtr Publication) {
+				if (!CheckPlayPublicationOrder) return;
+				(void)TestViewportProjection.Apply(*Publication);
+				PlayApplied.push_back(Publication->Id);
+				PlayFullPublications += Publication->FullResync;
 			});
 			auto InvalidCadence = call("StartViewportPresentation", {{"FrameRateMode", "20"}}, "test-token");
 			Check(
@@ -6724,7 +6827,16 @@ namespace {
 			const auto FailuresBeforePlay = RecoveryState["Result"]["PresentationFailures"];
 			auto PresentationPlay = call("StartPlaySession", Json::object(), "test-token");
 			const auto PresentationPlayId = PresentationPlay["Result"]["PlaySessionId"];
-			for (int Step = 0; Step < 8; ++Step) host.PumpPlaySessionForTesting();
+			CheckPlayPublicationOrder = true;
+			host.PumpViewportPresentationForTesting();
+			Check(!PlayApplied.empty() && PlayFullPublications == 1 && PlayCaptured.size() == 1 &&
+				PlayCaptured.back() == PlayApplied.back(),
+				"first Play capture applies the full publication and all queued deltas");
+			const auto AppliedBefore = PlayApplied.size();
+			const auto CapturedBefore = PlayCaptured.size();
+			const auto PriorPublication = PlayCaptured.empty() ? InvalidRenderPublicationId : PlayCaptured.back();
+			host.PumpPlaySessionForTesting();
+			// The presentation pump performs one additional Play step before drawing.
 			host.PumpViewportPresentationForTesting();
 			auto BatchedPlayPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
 			Check(
@@ -6732,12 +6844,17 @@ namespace {
 					BatchedPlayPresentationState["Result"]["Mode"] == "Play" &&
 					BatchedPlayPresentationState["Result"]["PlaySessionId"] == PresentationPlayId &&
 					BatchedPlayPresentationState["Result"]["PresentationFailures"] == FailuresBeforePlay &&
-					BatchedPlayPresentationState["Result"]["LastFailure"].is_null(),
-				"Play simulation publications remain ordered when presentation consumes only the newest visual frame"
+					BatchedPlayPresentationState["Result"]["LastFailure"].is_null() &&
+					PlayApplied.size() == AppliedBefore + 2 && PlayFullPublications == 1 &&
+					PlayCaptured.size() == CapturedBefore + 1 &&
+					PlayApplied[AppliedBefore] == PriorPublication + 1 && PlayApplied.back() == PriorPublication + 2 &&
+					PlayCaptured.back() == PlayApplied.back(),
+				"two Play deltas apply in order before one newest-frame capture"
 			);
 			auto PresentationStop = call(
 				"StopPlaySession", {{"PlaySessionId", PresentationPlayId}}, "test-token"
 			);
+			CheckPlayPublicationOrder = false;
 			host.PumpViewportPresentationForTesting();
 			auto EditAfterPlayPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
 			Check(
@@ -6794,6 +6911,717 @@ namespace {
 		Check(status != LUA_OK, "existing Luau errors pass through the native guard");
 		Check(std::string(lua_tostring(L, -1)) == "direct Luau error", "native guard preserves Luau diagnostics");
 		lua_close(L);
+	}
+
+	void TestScriptCoroutineRegistryRoot() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto ScriptValue = std::make_shared<Script>();
+		ScriptValue->SetName("RegistryRootProbe");
+		ScriptValue->SetSource("task.wait(60)");
+		ScriptValue->SetParent(Game);
+		{
+			ScriptEngine Engine(Game);
+			lua_pushinteger(Engine.L, 777);
+			const auto IncomingTop = lua_gettop(Engine.L);
+			Engine.RunBootstrapScript(ScriptValue);
+			Check(ScriptValue->Status == ScriptStatus::Yielded && ScriptValue->Thread &&
+				ScriptValue->ThreadReference != LUA_NOREF,
+				"yielded Script retains a rooted coroutine");
+			Check(lua_gettop(Engine.L) == IncomingTop && lua_tointeger(Engine.L, -1) == 777,
+				"Script execution preserves the caller's main Luau stack");
+			const auto Thread = ScriptValue->Thread;
+			lua_settop(Engine.L, 0);
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			lua_getref(Engine.L, ScriptValue->ThreadReference);
+			Check(lua_type(Engine.L, -1) == LUA_TTHREAD && lua_tothread(Engine.L, -1) == Thread,
+				"yielded Script coroutine remains registry-rooted after main-stack reset and full GC");
+			lua_pop(Engine.L, 1);
+		}
+		Check(ScriptValue->Thread == nullptr && ScriptValue->ThreadReference == LUA_NOREF,
+			"ScriptEngine teardown releases the rooted coroutine before closing Luau");
+		Game->Destroy();
+	}
+
+	void TestCompletedScriptRootRetirement() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(Game);
+			auto Finished = std::make_shared<Script>();
+			Finished->SetSource("return 42");
+			Finished->SetParent(Game);
+			Engine.RunBootstrapScript(Finished);
+			Check(Finished->Status == ScriptStatus::Finished && Finished->Thread == nullptr &&
+				Finished->ThreadReference == LUA_NOREF,
+				"finished Script retires its own completed coroutine root");
+			Finished->SetParent(std::nullopt);
+			std::weak_ptr<Script> FinishedWeak = Finished;
+			Finished.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(FinishedWeak.expired(),
+				"unparented finished Script releases after external owners leave");
+
+			auto Failed = std::make_shared<Script>();
+			Failed->SetSource("error('retirement probe')");
+			Failed->SetParent(Game);
+			Engine.RunBootstrapScript(Failed);
+			Check(Failed->Status == ScriptStatus::Error && Failed->Thread == nullptr &&
+				Failed->ThreadReference == LUA_NOREF &&
+				Failed->ErrorMessage.find("retirement probe") != std::string::npos,
+				"errored Script retains its diagnostic but retires its coroutine root");
+			Failed->SetParent(std::nullopt);
+			std::weak_ptr<Script> FailedWeak = Failed;
+			Failed.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(FailedWeak.expired(),
+				"unparented errored Script releases after external owners leave");
+
+			auto Waiting = std::make_shared<Script>();
+			Waiting->SetSource("task.wait(0); return 7");
+			Waiting->SetParent(Game);
+			Engine.RunBootstrapScript(Waiting);
+			Check(Waiting->Status == ScriptStatus::Yielded && Waiting->Thread &&
+				Waiting->ThreadReference != LUA_NOREF,
+				"task.wait keeps the original Script coroutine rooted while yielded");
+			Waiting->SetParent(std::nullopt);
+			std::weak_ptr<Script> WaitingWeak = Waiting;
+			Waiting.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(!WaitingWeak.expired(), "yielded Script survives without an external owner");
+			Engine.Threads.Step();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(WaitingWeak.expired(),
+				"task.wait completion retires the original Script root after resume");
+
+			auto WaitingError = std::make_shared<Script>();
+			WaitingError->SetSource("task.wait(0); error('resumed retirement probe')");
+			WaitingError->SetParent(Game);
+			Engine.RunBootstrapScript(WaitingError);
+			Check(WaitingError->Status == ScriptStatus::Yielded,
+				"errored task.wait Script first yields");
+			Engine.Threads.Step();
+			Check(WaitingError->Status == ScriptStatus::Error && WaitingError->Thread == nullptr &&
+				WaitingError->ThreadReference == LUA_NOREF &&
+				WaitingError->ErrorMessage.find("resumed retirement probe") != std::string::npos,
+				"task.wait error records its diagnostic and retires the original root");
+			WaitingError->SetParent(std::nullopt);
+			std::weak_ptr<Script> WaitingErrorWeak = WaitingError;
+			WaitingError.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(WaitingErrorWeak.expired(),
+				"resumed errored Script releases after external owners leave");
+
+			lua_newtable(Engine.L);
+			lua_setglobal(Engine.L, "RetirementCoroutineResults");
+			auto BuiltinResumed = std::make_shared<Script>();
+			BuiltinResumed->SetSource(R"(
+				RetirementCoroutineResults.Target = coroutine.running()
+				coroutine.yield()
+				return 23
+			)");
+			BuiltinResumed->SetParent(Game);
+			Engine.RunBootstrapScript(BuiltinResumed);
+			Check(BuiltinResumed->Status == ScriptStatus::Yielded && BuiltinResumed->Thread,
+				"builtin coroutine resume probe first yields its original Script thread");
+			BuiltinResumed->SetParent(std::nullopt);
+			std::weak_ptr<Script> BuiltinResumedWeak = BuiltinResumed;
+			BuiltinResumed.reset();
+			auto Resumer = std::make_shared<Script>();
+			Resumer->SetSource(R"(
+				local Ok, Value = coroutine.resume(RetirementCoroutineResults.Target)
+				assert(Ok and Value == 23)
+				RetirementCoroutineResults.Target = nil
+			)");
+			Resumer->SetParent(Game);
+			Engine.RunBootstrapScript(Resumer);
+			Check(Resumer->Status == ScriptStatus::Finished,
+				"Luau builtin resumes the original Script thread to completion");
+			Engine.Step();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(BuiltinResumedWeak.expired(),
+				"bounded idle reconciliation retires a Script completed by Luau coroutine.resume");
+			auto BuiltinClosed = std::make_shared<Script>();
+			BuiltinClosed->SetSource(R"(
+				RetirementCoroutineResults.Target = coroutine.running()
+				coroutine.yield()
+				error('closed coroutine should not continue')
+			)");
+			BuiltinClosed->SetParent(Game);
+			Engine.RunBootstrapScript(BuiltinClosed);
+			Check(BuiltinClosed->Status == ScriptStatus::Yielded && BuiltinClosed->Thread,
+				"builtin coroutine close probe first yields its original Script thread");
+			BuiltinClosed->SetParent(std::nullopt);
+			std::weak_ptr<Script> BuiltinClosedWeak = BuiltinClosed;
+			BuiltinClosed.reset();
+			auto Closer = std::make_shared<Script>();
+			Closer->SetSource(R"(
+				assert(coroutine.close(RetirementCoroutineResults.Target))
+				RetirementCoroutineResults.Target = nil
+			)");
+			Closer->SetParent(Game);
+			Engine.RunBootstrapScript(Closer);
+			Check(Closer->Status == ScriptStatus::Finished,
+				"Luau builtin closes the suspended original Script thread");
+			Engine.Step();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(BuiltinClosedWeak.expired(),
+				"bounded idle reconciliation retires a Script closed by Luau coroutine.close");
+
+			auto InitialNested = std::make_shared<Script>();
+			InitialNested->SetSource(R"(
+				local Self = script
+				task.spawn(coroutine.running())
+				RetirementCoroutineResults.InitialNested = script == Self
+				task.wait(0)
+				RetirementCoroutineResults.InitialAfterWait = script == Self
+			)");
+			InitialNested->SetParent(Game);
+			Engine.RunBootstrapScript(InitialNested);
+			Check(InitialNested->Status == ScriptStatus::Yielded && InitialNested->Thread &&
+				InitialNested->ThreadReference != LUA_NOREF,
+				"failed self-resume during initial Script Step keeps its mapped original root");
+			Engine.Threads.Step();
+			Check(InitialNested->Status == ScriptStatus::Finished && InitialNested->Thread == nullptr,
+				"original Script completes normally after initial nested resume fails");
+
+			auto ResumedNested = std::make_shared<Script>();
+			ResumedNested->SetSource(R"(
+				local Self = script
+				task.wait(0)
+				task.spawn(coroutine.running())
+				RetirementCoroutineResults.ResumedNested = script == Self
+				task.wait(0)
+				RetirementCoroutineResults.ResumedAfterWait = script == Self
+			)");
+			ResumedNested->SetParent(Game);
+			Engine.RunBootstrapScript(ResumedNested);
+			Check(ResumedNested->Status == ScriptStatus::Yielded && ResumedNested->Thread,
+				"later nested resume probe first yields");
+			Engine.Threads.Step();
+			Check(ResumedNested->Status == ScriptStatus::Yielded && ResumedNested->Thread &&
+				ResumedNested->ThreadReference != LUA_NOREF,
+				"failed self-resume during task continuation does not retire active Script");
+			Engine.Threads.Step();
+			Check(ResumedNested->Status == ScriptStatus::Finished && ResumedNested->Thread == nullptr,
+				"later genuine task completion retires original Script after nested error");
+			lua_getglobal(Engine.L, "RetirementCoroutineResults");
+			for (const char *Field : {"InitialNested", "InitialAfterWait", "ResumedNested", "ResumedAfterWait"}) {
+				lua_getfield(Engine.L, -1, Field);
+				Check(lua_toboolean(Engine.L, -1),
+					"failed nested resume preserves original Script identity through real completion");
+				lua_pop(Engine.L, 1);
+			}
+			lua_pop(Engine.L, 1);
+
+			auto DisabledWhileResuming = std::make_shared<Script>();
+			DisabledWhileResuming->SetSource("task.wait(0); script.Enabled = false");
+			DisabledWhileResuming->SetParent(Game);
+			Engine.RunBootstrapScript(DisabledWhileResuming);
+			Engine.Threads.Step();
+			Check(DisabledWhileResuming->Status == ScriptStatus::Disabled &&
+				DisabledWhileResuming->Thread == nullptr,
+				"self-disable during task resume cleans up without restoring Finished state");
+			DisabledWhileResuming->Destroy();
+
+			auto DestroyedWhileResuming = std::make_shared<Script>();
+			DestroyedWhileResuming->SetSource("task.wait(0); script:Destroy()");
+			DestroyedWhileResuming->SetParent(Game);
+			Engine.RunBootstrapScript(DestroyedWhileResuming);
+			Engine.Threads.Step();
+			Check(DestroyedWhileResuming->GetDestroyed() && DestroyedWhileResuming->Thread == nullptr &&
+				DestroyedWhileResuming->ThreadReference == LUA_NOREF,
+				"self-destroy during task resume retires original root without UAF");
+
+			auto WaitEvent = std::make_shared<Signal<std::monostate>>();
+			StackValue<std::shared_ptr<Signal<std::monostate>>>::Push(Engine.L, WaitEvent);
+			lua_setglobal(Engine.L, "RetirementWaitSignal");
+			auto SignalWaiter = std::make_shared<Script>();
+			SignalWaiter->SetSource("RetirementWaitSignal:Wait(); return 1");
+			SignalWaiter->SetParent(Game);
+			Engine.RunBootstrapScript(SignalWaiter);
+			Check(SignalWaiter->Status == ScriptStatus::Yielded && SignalWaiter->Thread,
+				"signal waiter keeps its original Script root while waiting");
+			SignalWaiter->SetParent(std::nullopt);
+			std::weak_ptr<Script> SignalWaiterWeak = SignalWaiter;
+			SignalWaiter.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			WaitEvent->Fire({});
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(SignalWaiterWeak.expired(),
+				"signal Wait completion retires original Script root after callback");
+
+			auto Event = std::make_shared<Signal<std::monostate>>();
+			StackValue<std::shared_ptr<Signal<std::monostate>>>::Push(Engine.L, Event);
+			lua_setglobal(Engine.L, "RetirementSignal");
+			lua_newtable(Engine.L);
+			lua_setglobal(Engine.L, "RetirementResults");
+			auto Callback = std::make_shared<Script>();
+			Callback->SetName("RetirementCallbacks");
+			Callback->SetSource(R"(
+				local Self = script
+				RetirementResults.Connection = RetirementSignal:Connect(function()
+					RetirementResults.Signal = script == Self
+				end)
+				task.defer(function()
+					RetirementResults.Deferred = script == Self
+				end)
+			)");
+			Callback->SetParent(Game);
+			Engine.RunBootstrapScript(Callback);
+			Check(Callback->Status == ScriptStatus::Finished && Callback->Thread == nullptr &&
+				Callback->ThreadReference == LUA_NOREF,
+				"callback Script retires its original coroutine before deferred work");
+			Callback->SetParent(std::nullopt);
+			std::weak_ptr<Script> CallbackWeak = Callback;
+			Callback.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(!CallbackWeak.expired(),
+				"independently rooted signal and deferred callbacks retain their Script");
+			Event->Fire({});
+			Engine.Threads.Step();
+			lua_getglobal(Engine.L, "RetirementResults");
+			for (const char *Field : {"Signal", "Deferred"}) {
+				lua_getfield(Engine.L, -1, Field);
+				Check(lua_toboolean(Engine.L, -1),
+					"callback and deferred task keep their originating Script identity after coroutine GC");
+				lua_pop(Engine.L, 1);
+			}
+			Event->DisconnectAll();
+			lua_pushnil(Engine.L);
+			lua_setfield(Engine.L, -2, "Connection");
+			lua_pop(Engine.L, 1);
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			Check(CallbackWeak.expired(),
+				"completed callback Script releases after independent roots retire");
+		}
+		Game->Destroy();
+	}
+
+	void TestScriptSandboxIdentity() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(Game);
+			auto First = std::make_shared<Script>();
+			First->SetName("FirstSandbox");
+			First->SetSource(R"(
+				task.defer(function()
+					IdentityResults.FirstDeferred = script == FirstIdentity
+					IdentityResults.FirstDeferredDynamic = getfenv(0).script == FirstIdentity
+				end)
+				task.wait(0)
+				IdentityResults.FirstResumed = script == FirstIdentity
+				IdentityResults.FirstResumedDynamic = getfenv(0).script == FirstIdentity
+			)");
+			First->SetParent(Game);
+			auto Second = std::make_shared<Script>();
+			Second->SetName("SecondSandbox");
+			Second->SetSource(R"(
+				task.defer(function()
+					IdentityResults.SecondDeferred = script == SecondIdentity
+					IdentityResults.SecondDeferredDynamic = getfenv(0).script == SecondIdentity
+				end)
+				task.wait(0)
+				IdentityResults.SecondResumed = script == SecondIdentity
+				IdentityResults.SecondResumedDynamic = getfenv(0).script == SecondIdentity
+			)");
+			Second->SetParent(Game);
+			lua_pushstring(Engine.L, "main-script-sentinel");
+			lua_setglobal(Engine.L, "script");
+			StackValue<std::shared_ptr<Instance>>::Push(Engine.L, First);
+			lua_setglobal(Engine.L, "FirstIdentity");
+			StackValue<std::shared_ptr<Instance>>::Push(Engine.L, Second);
+			lua_setglobal(Engine.L, "SecondIdentity");
+			lua_newtable(Engine.L);
+			lua_setglobal(Engine.L, "IdentityResults");
+
+			const auto IncomingTop = lua_gettop(Engine.L);
+			Engine.RunBootstrapScript(First);
+			Engine.RunBootstrapScript(Second);
+			Check(lua_gettop(Engine.L) == IncomingTop,
+				"per-Script sandbox setup preserves the main VM stack height");
+			Check(First->Status == ScriptStatus::Yielded && Second->Status == ScriptStatus::Yielded,
+				"both Script coroutines yield before later task callbacks run");
+			lua_getglobal(Engine.L, "script");
+			Check(lua_type(Engine.L, -1) == LUA_TSTRING &&
+				std::string_view(lua_tostring(Engine.L, -1)) == "main-script-sentinel",
+				"Script activation does not overwrite the main VM script global");
+			lua_pop(Engine.L, 1);
+
+			Engine.Threads.Step();
+			lua_getglobal(Engine.L, "IdentityResults");
+			for (const char *Field : {"FirstDeferred", "FirstDeferredDynamic", "FirstResumed",
+				"FirstResumedDynamic", "SecondDeferred", "SecondDeferredDynamic", "SecondResumed",
+				"SecondResumedDynamic"}) {
+				lua_getfield(Engine.L, -1, Field);
+				Check(lua_toboolean(Engine.L, -1),
+					"deferred and resumed Script callbacks resolve their own Script identity");
+				lua_pop(Engine.L, 1);
+			}
+			lua_pop(Engine.L, 1);
+		}
+		Game->Destroy();
+	}
+
+	void TestManagedScriptRetention() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(Game);
+			auto Detached = std::make_shared<Script>();
+			Engine.RunBootstrapScript(Detached);
+			Check(!Detached->Id.IsValid() && Engine.ManagedScripts.size() == 1,
+				"tracking a detached bootstrap Script does not publish ObjectId or duplicate ownership");
+			Detached->SetParent(Game);
+			Detached->SetEnabled(false);
+			Detached->SetEnabled(true);
+			Engine.RunBootstrapScript(Detached);
+			Check(Engine.ManagedScripts.size() == 1,
+				"adoption migrates detached Script tracking without another retained weak owner");
+			Detached->Destroy();
+			Detached.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+
+			auto Reused = std::make_shared<Script>();
+			Reused->SetSource("return 1");
+			Reused->SetParent(Game);
+			for (int Index = 0; Index < 1000; ++Index) {
+				if (Index != 0) {
+					Reused->SetEnabled(false);
+					Reused->SetEnabled(true);
+				}
+				Engine.RunBootstrapScript(Reused);
+			}
+			Check(Reused->Status == ScriptStatus::Finished && Engine.ManagedScripts.size() == 1,
+				"one Script restarted a thousand times has one tracked cleanup entry");
+			Reused->Destroy();
+			Reused.reset();
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+
+			std::weak_ptr<Script> FirstTransient;
+			for (int Index = 0; Index < 512; ++Index) {
+				auto Transient = std::make_shared<Script>();
+				Transient->SetSource("return 1");
+				Transient->SetParent(Game);
+				if (Index == 0) FirstTransient = Transient;
+				Engine.RunBootstrapScript(Transient);
+				Transient->Destroy();
+				Transient.reset();
+				if (Index % 16 == 15) lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			}
+			Check(FirstTransient.expired() && Engine.ManagedScripts.size() <= 32,
+				"incremental pruning bounds expired Script weak owners during transient churn");
+			lua_gc(Engine.L, LUA_GCCOLLECT, 0);
+			for (int Index = 0; Index < 8; ++Index) Engine.Step();
+			Check(Engine.ManagedScripts.empty(),
+				"idle VM steps prune expired Script owners without new registrations");
+
+			auto Survivor = std::make_shared<Script>();
+			Survivor->SetSource("return 1");
+			Survivor->SetParent(Game);
+			for (int Index = 0; Index < 32; ++Index) {
+				if (Index != 0) {
+					Survivor->SetEnabled(false);
+					Survivor->SetEnabled(true);
+				}
+				Engine.RunBootstrapScript(Survivor);
+			}
+			Check(Engine.ManagedScripts.size() == 1 && Engine.ManagedScripts.front().second.lock() == Survivor,
+				"incremental pruning removes expired owners and retains the live Script once");
+		}
+		Game->Destroy();
+	}
+
+	void TestScriptSelfCleanupDuringResume() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(Game);
+			lua_pushcfunction(Engine.L, [](lua_State *L) {
+				lua_gc(L, LUA_GCCOLLECT, 0);
+				return 0;
+			}, "ForceFullGc");
+			lua_setglobal(Engine.L, "ForceFullGc");
+
+			auto Run = [&](std::string_view Name, std::string_view Source) {
+				auto Value = std::make_shared<Script>();
+				Value->SetName(std::string(Name));
+				Value->SetSource(std::string(Source));
+				Value->SetParent(Game);
+				const auto IncomingTop = lua_gettop(Engine.L);
+				Engine.RunBootstrapScript(Value);
+				Check(lua_gettop(Engine.L) == IncomingTop,
+					"self-cleaning Script preserves the main Luau stack");
+				Check(Value->Thread == nullptr && Value->ThreadReference == LUA_NOREF,
+					"self-cleaning Script releases its coroutine only after resume");
+				return Value;
+			};
+
+			auto Disabled = Run("SelfDisable", R"(
+				script.Enabled = false
+				ForceFullGc()
+				error("after-disable")
+			)");
+			Check(Disabled->Status == ScriptStatus::Disabled && !Disabled->GetEnabled() &&
+				Disabled->ErrorMessage.find("after-disable") != std::string::npos,
+				"self-disable retains Disabled state and captures an error after forced GC");
+
+			auto Restart = Run("SelfRestart", R"(
+				script.Enabled = false
+				script.Enabled = true
+				ForceFullGc()
+			)");
+			Check(Restart->Status == ScriptStatus::Idle && Restart->GetEnabled(),
+				"self-disable followed by enable preserves the requested Idle restart");
+
+			auto Destroyed = Run("SelfDestroy", R"(
+				script:Destroy()
+				ForceFullGc()
+				error("after-destroy")
+			)");
+			Check(Destroyed->GetDestroyed() && Destroyed->Status == ScriptStatus::Disabled &&
+				Destroyed->ErrorMessage.find("after-destroy") != std::string::npos,
+				"self-destroy retains destroyed state and captures an error after forced GC");
+		}
+		Game->Destroy();
+	}
+
+	void TestScriptQueueReentrantMutation() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(Game);
+			auto Unbind = Game->BindDescendants([&](const std::shared_ptr<Instance> &Value) {
+				if (auto ScriptValue = std::dynamic_pointer_cast<Script>(Value))
+					Engine.ScriptQueue.insert(ScriptValue);
+			});
+			auto Removed = Game->DescendantRemoved->Connect([&](const std::shared_ptr<Instance> &Value) {
+				if (auto ScriptValue = std::dynamic_pointer_cast<Script>(Value))
+					Engine.ScriptQueue.erase(ScriptValue);
+			});
+			auto First = std::make_shared<Script>();
+			First->SetName("FirstQueued");
+			First->SetSource("script.Name = 'UnexpectedEarlyRun'");
+			First->SetParent(Game);
+			auto Second = std::make_shared<Script>();
+			Second->SetName("SecondQueued");
+			Second->SetSource("script.Name = 'UnexpectedEarlyRun'");
+			Second->SetParent(Game);
+			auto Late = std::make_shared<Script>();
+			Late->SetName("LateQueued");
+			Late->SetSource("script.Name = 'LateRan'");
+			Check(Engine.ScriptQueue.size() == 2,
+				"descendant binding queues the two initial Scripts");
+			const auto Driver = *Engine.ScriptQueue.begin();
+			const auto Victim = Driver == First ? Second : First;
+			StackValue<std::shared_ptr<Instance>>::Push(Engine.L, Victim);
+			lua_setglobal(Engine.L, "VictimScript");
+			StackValue<std::shared_ptr<Instance>>::Push(Engine.L, Late);
+			lua_setglobal(Engine.L, "LateScript");
+			Driver->SetSource(R"(
+				VictimScript:Destroy()
+				LateScript.Parent = game
+				script:Destroy()
+			)");
+
+			Engine.Step();
+			Check(Driver->GetDestroyed() && Victim->GetDestroyed() &&
+				Victim->GetName() != "UnexpectedEarlyRun" &&
+				Late->GetParent() == Game && Late->GetName() == "LateQueued" &&
+				Engine.ScriptQueue.contains(Late),
+				"self-destroy and removal skip queued victim while new Script waits until next Step");
+			Engine.Step();
+			Check(Late->Status == ScriptStatus::Finished && Late->GetName() == "LateRan" &&
+				Engine.ScriptQueue.empty(),
+				"newly parented Script runs once on the following Step");
+			Removed->Disconnect();
+			Unbind();
+		}
+		Game->Destroy();
+	}
+
+	void TestServerScriptDestroysEngineDataModel() {
+		using namespace gargantuan;
+		const auto StartHostFrame = [](Engine &Runtime, const std::shared_ptr<Script> &ScriptValue) {
+			Runtime.ProcessService->Alive = true;
+			Check(Runtime.ProcessService->Alive && Runtime.Script &&
+				Runtime.Script->ScriptQueue.contains(ScriptValue),
+				"host frame starts with ProcessService alive and server Script admitted");
+		};
+		for (const bool DirectScriptStep : {false, true}) {
+			auto Game = std::make_shared<DataModel>();
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameDuringResume");
+			ScriptValue->SetSource("game:Destroy(); error('after-game-destroy')");
+			ScriptValue->SetParent(Game);
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			if (DirectScriptStep) Runtime.Script->Step();
+			else {
+				StartHostFrame(Runtime, ScriptValue);
+				Runtime.Step();
+			}
+			Check(Game->GetDestroyed() && ScriptValue->GetDestroyed() && Runtime.Script == nullptr,
+				"ordinary server Script destruction retires the Engine after active Luau returns");
+			Check(ScriptValue->Status == ScriptStatus::Disabled &&
+				ScriptValue->ErrorMessage.find("after-game-destroy") != std::string::npos,
+				"destroying game preserves the running Script error and disabled state");
+			Runtime.Step();
+		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameFromSimulationSignal");
+			ScriptValue->SetSource(R"(
+				game:GetService('RunService').PreSimulation:Connect(function()
+					game:Destroy()
+					error('after-event-destroy')
+				end)
+			)");
+			ScriptValue->SetParent(Game);
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			StartHostFrame(Runtime, ScriptValue);
+			Runtime.Step();
+			Check(!Game->GetDestroyed() && ScriptValue->Status == ScriptStatus::Finished,
+				"server Script registers a simulation callback before destruction");
+			Runtime.Step();
+			Check(Game->GetDestroyed() && Runtime.Script == nullptr,
+				"simulation signal destroys game without closing the active Luau VM");
+		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameFromHostInput");
+			ScriptValue->SetSource(R"(
+				game:GetService('UserInputService').WindowFocused:Connect(function()
+					game:Destroy()
+				end)
+			)");
+			ScriptValue->SetParent(Game);
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			StartHostFrame(Runtime, ScriptValue);
+			Runtime.Step();
+			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed(),
+				"host input callback is installed before native event routing");
+			(void)Runtime.ProcessEvent(FocusEvent{true});
+			Check(Game->GetDestroyed() && Runtime.Script == nullptr,
+				"host input callback destroys Engine before later event routing reads retired services");
+			const auto AfterDestroy = Runtime.ProcessEvent(FocusEvent{true});
+			Check(!AfterDestroy.Command && !AfterDestroy.Consumed,
+				"destroyed Engine ignores subsequent host events");
+		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameFromDeferredBatch");
+			ScriptValue->SetSource(R"(
+				task.defer(function() game:Destroy() end)
+				task.defer(function() print('deferred-after-destroy') end)
+			)");
+			ScriptValue->SetParent(Game);
+			std::vector<std::string> Diagnostics;
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer,
+				[&](std::string, std::string Message) { Diagnostics.push_back(std::move(Message)); },
+				EngineProviderConfiguration{.AudioEnabled = false});
+			StartHostFrame(Runtime, ScriptValue);
+			Runtime.Step();
+			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed(),
+				"deferred tasks are queued before direct scheduler stepping");
+			std::weak_ptr<ScriptEngine> ScriptWeak = Runtime.Script;
+			Runtime.Script->Threads.Step();
+			Check(Game->GetDestroyed() && Runtime.Script == nullptr && ScriptWeak.expired() &&
+				std::ranges::none_of(Diagnostics, [](const std::string &Message) {
+					return Message.find("deferred-after-destroy") != std::string::npos;
+				}),
+				"direct scheduler step retains the VM and cancels the remaining deferred batch");
+		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+			Check(static_cast<bool>(WorkspaceValue), "physics motion fixture has a Workspace");
+			WorkspaceValue->SetGravity(9.8f);
+			auto Moving = std::make_shared<Part>();
+			Moving->SetName("PhysicsExitPart");
+			Moving->SetAnchored(true);
+			Moving->SetCanCollide(false);
+			Moving->SetCanTouch(false);
+			Moving->SetCFrame(CFrame(0.0f, 5.0f, 0.0f));
+			Moving->SetParent(WorkspaceValue);
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameFromPhysicsMotion");
+			ScriptValue->SetSource(R"(
+				local Part = game:GetService('Workspace'):FindFirstChild('PhysicsExitPart')
+				Part:GetPropertyChangedSignal('CFrame'):Connect(function()
+					Part.Name = 'PhysicsMotionCallbackRan'
+					game:Destroy()
+				end)
+			)");
+			ScriptValue->SetParent(Game);
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			StartHostFrame(Runtime, ScriptValue);
+			Runtime.Step();
+			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed() &&
+				WorldRootTestAccess::HasAcceptedAnchoredBody(*WorkspaceValue, *Moving),
+				"physics motion callback is installed while the anchored body is live");
+			std::weak_ptr<ScriptEngine> ScriptWeak = Runtime.Script;
+			Moving->SetAnchored(false);
+			WorkspaceValue->StepPhysics(1.0 / 60.0, std::nullopt);
+			Check(Moving->GetName() == "PhysicsMotionCallbackRan" && Game->GetDestroyed() &&
+				WorkspaceValue->GetDestroyed() && Moving->GetDestroyed() && Runtime.Script == nullptr &&
+				ScriptWeak.expired() && WorldRootTestAccess::BodyCount(*WorkspaceValue) == 0,
+				"real physics publication permits Lua to destroy game and retires the backend body after callback return");
+			Runtime.Step();
+			Check(Moving->GetName() == "PhysicsMotionCallbackRan" &&
+				WorldRootTestAccess::BodyCount(*WorkspaceValue) == 0 && ScriptWeak.expired(),
+				"destroyed Engine cannot resume physics callbacks or recreate bodies");
+		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+			auto Trigger = std::make_shared<Part>();
+			Trigger->SetName("ExternalTrigger");
+			Trigger->SetParent(WorkspaceValue);
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName("DestroyGameFromPropertySignal");
+			ScriptValue->SetSource(R"(
+				local Part = game:GetService('Workspace'):FindFirstChild('ExternalTrigger')
+				Part:GetPropertyChangedSignal('Name'):Connect(function()
+					game:Destroy()
+					error('after-external-setter-destroy')
+				end)
+			)");
+			ScriptValue->SetParent(Game);
+			HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+			Engine Runtime(Game, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+			StartHostFrame(Runtime, ScriptValue);
+			Runtime.Step();
+			Check(ScriptValue->Status == ScriptStatus::Finished && !Game->GetDestroyed(),
+				"property callback is installed before external Main mutation");
+			std::weak_ptr<ScriptEngine> ScriptWeak = Runtime.Script;
+			std::vector<SignalConnection::Pointer> Connections;
+			for (const auto &WeakConnection : Runtime.Script->SignalConnections)
+				if (auto Connection = WeakConnection.lock()) Connections.push_back(Connection);
+			Check(!Connections.empty(), "Engine tracks the property callback for logical shutdown");
+			bool DestroyingObservedLogicalStop = false;
+			std::size_t TriggerDestroyingCalls = 0;
+			auto Observer = Trigger->Destroying->Connect([&](std::monostate) {
+				++TriggerDestroyingCalls;
+				auto ActiveVm = ScriptWeak.lock();
+				DestroyingObservedLogicalStop = ActiveVm && ActiveVm->IsStopping() &&
+					std::ranges::all_of(Connections, [](const auto &Connection) { return !Connection->Connected; }) &&
+					!ActiveVm->Threads.QueueDeferredTask(ActiveVm->L, 0);
+			});
+			Trigger->SetName("ExternalTriggerChanged");
+			Check(Game->GetDestroyed() && Runtime.Script == nullptr && ScriptWeak.expired() &&
+				TriggerDestroyingCalls == 1 && DestroyingObservedLogicalStop,
+				"external Main setter keeps the active Lua callback alive while logical stop disconnects it");
+			Observer->Disconnect();
+		}
 	}
 
 	void TestLuauEmbeddingCompatibility() {
@@ -7396,6 +8224,7 @@ int main() {
 	TestHierarchyAndDestruction();
 	TestServiceProviderSemantics();
 	TestObjectIdsAndChanges();
+	TestObservedMutationSignals();
 	TestWorldRootConstraintValidation();
 	TestCheckedResolutionAndOwnedPaths();
 	TestDiskFilesystemRecursiveHardening();
@@ -7430,6 +8259,13 @@ int main() {
 	TestEditorHostProtocol();
 	TestEditorHostPropertyBatch();
 	TestLuauExceptionBoundary();
+	TestScriptCoroutineRegistryRoot();
+	TestCompletedScriptRootRetirement();
+	TestScriptSandboxIdentity();
+	TestManagedScriptRetention();
+	TestScriptSelfCleanupDuringResume();
+	TestScriptQueueReentrantMutation();
+	TestServerScriptDestroysEngineDataModel();
 	TestLuauEmbeddingCompatibility();
 	TestPlayDiagnosticBounds();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";

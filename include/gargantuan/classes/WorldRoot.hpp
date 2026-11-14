@@ -10,7 +10,9 @@
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 
+#include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -18,6 +20,8 @@
 
 namespace gargantuan {
 	class AssetService;
+	class LocalLight;
+	class ReflectionProbe;
 	struct WorldRootTestAccess;
 
 	struct WorldRaycastResult {
@@ -52,6 +56,24 @@ namespace gargantuan {
 		SoftBodyWorld Deformables;
 		float StepAccumulator = 0.0f;
 		std::vector<std::shared_ptr<BasePart>> Parts;
+		std::unordered_set<ObjectId> PartMembership;
+		struct DynamicReadbackRecord {
+			ObjectId Object;
+			PhysicsBodyId Body;
+			std::weak_ptr<BasePart> Part;
+		};
+		std::vector<DynamicReadbackRecord> DynamicReadback;
+		std::unordered_map<ObjectId, std::size_t> DynamicReadbackPositions;
+		bool FullDynamicReadbackNeeded = false;
+		bool IndexedDynamicReadbackActive = false;
+		bool AcceptedDynamicBodyCountKnown = true;
+		std::size_t AcceptedDynamicBodyCount = 0;
+		struct DynamicReadbackPolicy {
+			std::size_t ActivatePartCount = 8192;
+			std::size_t RetirePartCount = 4096;
+			std::size_t ActivateDynamicDivisor = 8;
+			std::size_t RetireDynamicDivisor = 4;
+		} ReadbackPolicy;
 		std::vector<std::shared_ptr<DeformableBody>> SoftBodies;
 		std::unordered_map<ObjectId, PhysicsBodyId> PartBodies;
 		std::unordered_map<PhysicsBodyId, std::weak_ptr<BasePart>> BodyParts;
@@ -68,6 +90,17 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> PhysicsConnections;
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> JointAttachmentConnections;
 		std::unordered_set<ObjectId> DirtyBodies;
+		bool FullPartScanNeeded = false;
+		// Test-only, Main-owned attribution. Normal listener behavior is unchanged when disabled.
+		struct CFrameDirtyCallbackProfile {
+			std::uint64_t Calls = 0;
+			std::uint64_t NewDirty = 0;
+			std::uint64_t Coalesced = 0;
+			std::uint64_t Suppressed = 0;
+			std::uint64_t Nanoseconds = 0;
+		};
+		bool ProfileCFrameDirtyCallback = false;
+		CFrameDirtyCallbackProfile CFrameDirtyProfile;
 		std::unordered_set<ObjectId> FailedMeshUpdatesLogged;
 		std::unordered_set<ObjectId> DirtyDeformables;
 		std::unordered_set<ObjectId> DirtyConstraints;
@@ -77,13 +110,15 @@ namespace gargantuan {
 		SignalConnection::Pointer DescendantRemovedConnection;
 		std::function<void()> UnbindDescendants;
 		bool GravityDirty = false;
-		bool PublishingPhysicsState = false;
+		ObjectId PublishingPhysicsPart;
 		bool ShuttingDownPhysics = false;
 		bool RaycastFailureLogged = false;
 		bool DynamicMeshFallbackLogged = false;
 		bool MeshScaleFallbackLogged = false;
 		std::weak_ptr<AssetService> CollisionAssets;
 		std::uint64_t CollisionAssetChangeSequence = 0;
+		std::map<ObjectId, std::weak_ptr<LocalLight>> LocalLights;
+		std::map<ObjectId, std::weak_ptr<ReflectionProbe>> ReflectionProbes;
 
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
 		[[nodiscard]] WorldRaycastResult
@@ -101,6 +136,8 @@ namespace gargantuan {
 		[[nodiscard]] std::optional<SoftBodyInspection> GetDeformableInspection(ObjectId Object) const;
 		[[nodiscard]] std::optional<glm::vec3> GetDeformableVertex(ObjectId Object, std::size_t VertexIndex) const;
 		[[nodiscard]] const SoftBodyStepProfile &GetLastSoftBodyProfile() const { return LastSoftBodyProfile; }
+		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<LocalLight>> &GetLocalLights() const { return LocalLights; }
+		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<ReflectionProbe>> &GetReflectionProbes() const { return ReflectionProbes; }
 
 	  private:
 		[[nodiscard]] WorldRaycastResult ResolveQueryHit(PhysicsRaycastResult Result);
@@ -109,9 +146,16 @@ namespace gargantuan {
 		[[nodiscard]] PhysicsBodyDesc DescribePart(const BasePart &Part);
 		[[nodiscard]] SoftBodyDefinition DescribeDeformable(DeformableBody &Body) const;
 		[[nodiscard]] PhysicsBodyId CreatePartBody(const std::shared_ptr<BasePart> &Part);
+		void SyncDynamicReadback(const std::shared_ptr<BasePart> &Part, PhysicsBodyId Body);
+		void RemoveDynamicReadback(ObjectId Object);
+		void DeactivateDynamicReadback();
+		[[nodiscard]] bool ShouldIndexDynamicReadback() const;
+		void ReadbackOrderedParts(bool RecountAcceptedDynamics);
+		void ReadbackDynamicBodies();
 		[[nodiscard]] SoftBodyId CreateDeformableBody(const std::shared_ptr<DeformableBody> &Body);
 		[[nodiscard]] PhysicsConstraintId CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint);
 		void TrackPart(const std::shared_ptr<BasePart> &Part);
+		bool MarkPartDirty(ObjectId Object);
 		void TrackDeformable(const std::shared_ptr<DeformableBody> &Body);
 		void TrackSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);
 		void TrackSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);

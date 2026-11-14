@@ -174,23 +174,147 @@ namespace gargantuan {
 
 	ScriptEngine::~ScriptEngine() {
 		if (L) {
-			for (auto &WeakFunction : RemoteFunctions)
-				if (auto Function = WeakFunction.lock()) Function->ClearHandlers();
-			RemoteFunctions.clear();
-			for (auto &WeakScript : ManagedScripts)
-				if (auto ScriptValue = WeakScript.lock()) ScriptValue->Cleanup();
-			ManagedScripts.clear();
-			for (auto &WeakConnection : SignalConnections)
-				if (auto Connection = WeakConnection.lock()) Connection->Disconnect();
-			SignalConnections.clear();
+			ShutdownRuntime();
 			lua_close(L);
 			L = nullptr;
 			CurrentState = nullptr;
 		}
 	}
 
+	void ScriptEngine::ShutdownRuntime() {
+		if (Stopping) return;
+		Stopping = true;
+		ScriptQueue.clear();
+		Threads.ShutdownRuntime();
+		for (auto &WeakFunction : RemoteFunctions)
+			if (auto Function = WeakFunction.lock()) Function->ClearHandlers();
+		RemoteFunctions.clear();
+		for (auto &WeakConnection : SignalConnections)
+			if (auto Connection = WeakConnection.lock()) Connection->Disconnect();
+		SignalConnections.clear();
+		for (auto &[Id, WeakScript] : ManagedScripts)
+			if (auto ScriptValue = WeakScript.lock()) ScriptValue->Cleanup();
+		ManagedScripts.clear();
+		ManagedScriptIds.clear();
+		DetachedManagedScripts.clear();
+		ManagedScriptThreads.clear();
+		ManagedScriptPruneCursor = ManagedScripts.end();
+	}
+
+	void ScriptEngine::TrackManagedScriptThread(lua_State *Thread, const std::shared_ptr<Script> &ScriptValue) {
+		ManagedScriptThreads.insert_or_assign(Thread, ScriptValue);
+	}
+
+	void ScriptEngine::UntrackManagedScriptThread(lua_State *Thread) {
+		ManagedScriptThreads.erase(Thread);
+	}
+
+	void ScriptEngine::CompleteManagedScriptThreadResume(lua_State *Thread, int Status, int PreResumeStatus) {
+		if (Status == LUA_YIELD || Status == LUA_BREAK) return;
+		auto Found = ManagedScriptThreads.find(Thread);
+		if (Found == ManagedScriptThreads.end()) return;
+		auto ScriptValue = Found->second.lock();
+		if (!ScriptValue || ScriptValue->Thread != Thread) {
+			ManagedScriptThreads.erase(Found);
+			return;
+		}
+		// A task.spawn of coroutine.running() can attempt a nested resume of the
+		// active original thread. Its error is not the Script's terminal state.
+		// During the initial Script::Step, the outer resume still owns status.
+		if (ScriptValue->Status == ScriptStatus::Running) return;
+		if (ScriptValue->Status != ScriptStatus::Yielded) {
+			ManagedScriptThreads.erase(Found);
+			return;
+		}
+		// Luau reports a completed coroutine with return values as COSUS until
+		// those values are removed from its stack. Check the state before resume
+		// instead: an active self-resume reports CORUN/CONOR and is not terminal.
+		if (PreResumeStatus != LUA_COSUS) return;
+		// A failed resume_start can return an error without changing a suspended
+		// thread's status. Only a runtime error stored on the thread is terminal.
+		if (Status != LUA_OK && lua_status(Thread) != Status) return;
+		if (Status == LUA_OK) ScriptValue->Status = ScriptStatus::Finished;
+		else {
+			const auto *Message = lua_tostring(Thread, -1);
+			ScriptValue->ErrorMessage = Message ? Message : "Luau execution failed";
+			ScriptValue->Status = ScriptStatus::Error;
+		}
+		ScriptValue->Cleanup();
+	}
+
+	void ScriptEngine::PruneExpiredManagedScripts() {
+		constexpr std::size_t PruneBudget = 8;
+		const auto Count = std::min(PruneBudget, ManagedScripts.size());
+		for (std::size_t Index = 0; Index < Count; ++Index) {
+			if (ManagedScriptPruneCursor == ManagedScripts.end()) ManagedScriptPruneCursor = ManagedScripts.begin();
+			auto Current = ManagedScriptPruneCursor++;
+			if (auto ScriptValue = Current->second.lock(); ScriptValue && ScriptValue->Thread &&
+				ScriptValue->Status == ScriptStatus::Yielded) {
+				// Luau's coroutine.resume/close can terminate the original thread
+				// without passing through a native resume completion boundary.
+				const int CoroutineStatus = lua_costatus(L, ScriptValue->Thread);
+				if (CoroutineStatus == LUA_COFIN || CoroutineStatus == LUA_COERR)
+					CompleteManagedScriptThreadResume(
+						ScriptValue->Thread, CoroutineStatus == LUA_COFIN ? LUA_OK : lua_status(ScriptValue->Thread),
+						LUA_COSUS
+					);
+			}
+			if (!Current->second.expired()) continue;
+			if (Current->first.IsValid()) ManagedScriptIds.erase(Current->first);
+			else DetachedManagedScripts.erase(Current->second);
+			ManagedScripts.erase(Current);
+		}
+		if (ManagedScripts.empty()) ManagedScriptPruneCursor = ManagedScripts.end();
+	}
+
+	void ScriptEngine::TrackManagedScript(const std::shared_ptr<Script> &ScriptValue) {
+		ObjectId Id;
+		{
+			// GetObjectId would publish identity and an ObjectCreated record for a
+			// detached bootstrap Script. Read only an identity already published.
+			std::scoped_lock Lock(ScriptValue->IdentityMutex);
+			Id = ScriptValue->Id;
+		}
+		const std::weak_ptr<Script> WeakScript = ScriptValue;
+		if (auto Detached = DetachedManagedScripts.find(WeakScript); Detached != DetachedManagedScripts.end()) {
+			if (Id.IsValid()) {
+				if (ManagedScriptIds.emplace(Id, Detached->second).second) {
+					Detached->second->first = Id;
+					DetachedManagedScripts.erase(Detached);
+				}
+			}
+			PruneExpiredManagedScripts();
+			return;
+		}
+		if (Id.IsValid() && ManagedScriptIds.contains(Id)) {
+			PruneExpiredManagedScripts();
+			return;
+		}
+
+		auto Added = ManagedScripts.emplace(ManagedScripts.end(), Id, WeakScript);
+		bool Indexed = false;
+		try {
+			if (Id.IsValid()) Indexed = ManagedScriptIds.emplace(Id, Added).second;
+			else Indexed = DetachedManagedScripts.emplace(WeakScript, Added).second;
+		} catch (...) {
+			ManagedScripts.erase(Added);
+			throw;
+		}
+		if (!Indexed) {
+			ManagedScripts.erase(Added);
+			PruneExpiredManagedScripts();
+			return;
+		}
+		if (ManagedScriptPruneCursor == ManagedScripts.end()) ManagedScriptPruneCursor = Added;
+		PruneExpiredManagedScripts();
+	}
+
 	void ScriptEngine::TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection) {
 		if (!Connection) return;
+		if (Stopping) {
+			Connection->Disconnect();
+			return;
+		}
 		if (SignalConnections.size() >= 256 && SignalConnections.size() % 256 == 0)
 			std::erase_if(SignalConnections, [](const auto &WeakConnection) {
 				auto Existing = WeakConnection.lock();
@@ -201,6 +325,10 @@ namespace gargantuan {
 
 	void ScriptEngine::TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function) {
 		if (!Function) return;
+		if (Stopping) {
+			Function->ClearHandlers();
+			return;
+		}
 		std::erase_if(RemoteFunctions, [](const auto &WeakFunction) { return WeakFunction.expired(); });
 		if (std::ranges::any_of(RemoteFunctions, [&](const auto &WeakFunction) {
 				return WeakFunction.lock() == Function;
@@ -245,16 +373,27 @@ namespace gargantuan {
 	}
 
 	void ScriptEngine::Step() {
+		// Engine::Destroy may release its owner from a Lua callback. Keep the
+		// VM and this queue alive through the current step.
+		[[maybe_unused]] auto KeepAlive = weak_from_this().lock();
+		if (Stopping) return;
 		Threads.Step();
+		if (Stopping) return;
+		PruneExpiredManagedScripts();
 
-		for (auto it = ScriptQueue.begin(); it != ScriptQueue.end();) {
-			auto script = *it;
+		// Script callbacks may add or remove queue entries, including the running
+		// Script. Snapshot owners for this pass and admit new entries next Step.
+		const std::vector<std::shared_ptr<Script>> Pending(ScriptQueue.begin(), ScriptQueue.end());
+		for (const auto &script : Pending) {
+			if (Stopping) return;
+			if (!ScriptQueue.contains(script)) continue;
 			if (!CanRunScript(*script)) {
-				it = ScriptQueue.erase(it);
+				ScriptQueue.erase(script);
 				continue;
 			}
-			ManagedScripts.emplace_back(script);
+			TrackManagedScript(script);
 			auto status = script->Step(L);
+			if (Stopping) return;
 
 			switch (status) {
 			case ScriptStatus::Error:
@@ -271,11 +410,10 @@ namespace gargantuan {
 			case ScriptStatus::Disabled:
 			case ScriptStatus::Yielded:
 			case ScriptStatus::Running:
-				it = ScriptQueue.erase(it);
+				ScriptQueue.erase(script);
 				break;
 
 			default:
-				++it;
 				break;
 			}
 		}
@@ -289,10 +427,13 @@ namespace gargantuan {
 	}
 
 	void ScriptEngine::RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue) {
+		[[maybe_unused]] auto KeepAlive = weak_from_this().lock();
+		if (Stopping) return;
 		if (!ScriptValue || ScriptValue->GetDestroyed() || ScriptValue->IsDestroying() || !CanRunScript(*ScriptValue))
 			return;
-		ManagedScripts.emplace_back(ScriptValue);
+		TrackManagedScript(ScriptValue);
 		const auto Status = ScriptValue->Step(L);
+		if (Stopping) return;
 		if (Status == ScriptStatus::Error) {
 			LOG_CRITICAL(
 				Lua, "[Runtime:Luau] [%s] %s", ScriptValue->GetFullName().c_str(), ScriptValue->ErrorMessage.c_str()

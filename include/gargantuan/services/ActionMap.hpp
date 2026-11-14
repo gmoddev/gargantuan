@@ -41,6 +41,7 @@ namespace gargantuan {
 		std::uint64_t CachedDefinitionRevision = 0;
 		bool NamesNeedPublication = false;
 		bool RefreshingNames = false;
+		bool RuntimeStopping = false;
 		int NextBindingId = 1;
 		friend class Engine;
 		friend struct ActionMapTestAccess;
