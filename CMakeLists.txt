@@ -840,6 +840,18 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_renderer_publication_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_environment_lighting_benchmark "tests/EnvironmentLightingBenchmark.cpp")
 	target_link_libraries(gargantuan_environment_lighting_benchmark PRIVATE gargantuan_core)
+	add_executable(gargantuan_ibl_reference_tests "tests/EnvironmentLightingReferenceTests.cpp")
+	target_link_libraries(gargantuan_ibl_reference_tests PRIVATE glm::glm)
+	add_test(NAME gargantuan_ibl_reference COMMAND gargantuan_ibl_reference_tests)
+	set_tests_properties(gargantuan_ibl_reference PROPERTIES LABELS "renderer;environment")
+	add_executable(gargantuan_renderer_material_mip_tests "tests/RendererMaterialMipTests.cpp")
+	target_include_directories(gargantuan_renderer_material_mip_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	add_test(NAME gargantuan_renderer_material_mips COMMAND gargantuan_renderer_material_mip_tests)
+	set_tests_properties(gargantuan_renderer_material_mips PROPERTIES LABELS "renderer;assets")
+	add_executable(gargantuan_directional_shadow_cache_tests "tests/DirectionalShadowCacheTests.cpp")
+	target_link_libraries(gargantuan_directional_shadow_cache_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_directional_shadow_cache COMMAND gargantuan_directional_shadow_cache_tests)
+	set_tests_properties(gargantuan_directional_shadow_cache PROPERTIES LABELS "renderer;environment")
 	add_library(gargantuan_fake_telemetry SHARED "tests/telemetry/FakeTelemetryLibrary.cpp")
 	target_include_directories(gargantuan_fake_telemetry PRIVATE "src")
 	add_library(gargantuan_fake_telemetry_missing_export SHARED "tests/telemetry/FakeTelemetryMissingExport.cpp")
@@ -1280,6 +1292,9 @@ if(BUILD_TESTING)
 		add_dependencies(gargantuan_first_complete_game_gpu_tests
 			gargantuan_shaders gargantuan_packager gargantuan_runtime_distribution)
 		add_executable(gargantuan_editor_viewport_smoke "tests/EditorViewportSmoke.cpp")
+		add_executable(gargantuan_ibl_gpu_tests "tests/ImageBasedLightingGpuTests.cpp")
+		target_link_libraries(gargantuan_ibl_gpu_tests PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_ibl_gpu_tests gargantuan_shaders)
 		add_executable(gargantuan_renderer_depth_tests "tests/RendererDepthTests.cpp")
 		target_link_libraries(gargantuan_renderer_depth_tests PRIVATE gargantuan_core)
 		add_dependencies(gargantuan_renderer_depth_tests gargantuan_shaders)
@@ -1458,6 +1473,7 @@ if(BUILD_TESTING)
 				gargantuan_renderer_foundation2_gpu_benchmark
 				gargantuan_first_complete_game_gpu_tests
 				gargantuan_editor_viewport_smoke
+				gargantuan_ibl_gpu_tests
 				gargantuan_renderer_depth_tests
 				gargantuan_editor_viewport_presentation_benchmark
 			)

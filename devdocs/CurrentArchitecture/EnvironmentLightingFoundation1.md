@@ -61,6 +61,47 @@ empty string is allowed as incomplete authoring state, but it cannot become an
 active rendered Sky. Generic AssetReference editor hints filter every face to
 Image assets.
 
+## Renderer Foundation 4 local lights
+
+`PointLight` and `SpotLight` are native Instances derived from the abstract
+`LocalLight` class. Their properties use the existing schema, mutation and
+serialization paths. `LightEnabled` defaults true. `LightColor` defaults
+linear white and accepts channels in `[0,1]`. `LightIntensity` defaults 16
+and accepts `[0,4096]` in candela-like inverse-square units. `LightRange`
+defaults 16 and accepts `[0.01,1024]` world units. This radius is the outer
+limit of the light's contribution.
+
+`LightCFrame` defaults to identity and accepts a finite rigid transform with
+coordinates in `[-1e6,1e6]`. The nearest BasePart ancestor in the same WorldRoot
+supplies its render CFrame, including presentation offsets. BasePart size
+does not affect the local offset. A light with no BasePart ancestor is world-relative.
+Lights outside the rendered WorldRoot are inactive. A spotlight emits along
+local negative Z. `LightConeAngles` is one Vector2 write for its inner and
+outer half angles in degrees, default `(20,35)`. The inner angle is in
+`[0,outer]` and the outer angle in `[1,89]`. Equal angles define a hard cone
+edge. Local lights currently declare no shadow settings.
+
+WorldRoot tracks light descendants with generation-safe IDs and weak membership.
+RenderPublisher visits that membership on environment edits or tracked owner
+transform changes, without rescanning scene geometry. It takes up to 512
+enabled nonzero-intensity lights in ascending ObjectId order. Invalid world
+transforms within that selection are skipped with a bounded diagnostic.
+The resulting immutable `LocalLights` vector contains IDs, world positions,
+unit directions, linear colors, intensities, ranges and cone cosines.
+An unchanged vector is shared across publications. RenderProjection validates
+new payloads, including size, order, uniqueness and numeric bounds. The
+directional sun and Sky remain independent of local light membership.
+
+Renderer Foundation 4 also adds three saved and replicated fields to the
+existing Lighting service. `EnvironmentRotation` is yaw in degrees around
+world +Y, defaults to 0 and is limited to `[-180,180]`. It orients the
+visible Sky and its environment-light sampling together. `IblIntensity`
+scales diffuse and specular image-based lighting in linear space, defaults to
+1 and accepts `[0,8]`. `ToneMapping` uses the schema enum
+`ToneMappingMode` with default `Filmic` and alternative `Reinhard`.
+It selects the world color transform after exposure and before GUI.
+All three values are published through the same environment dirty domain.
+
 ## Sun and exposure semantics
 
 World coordinates use `+Y` up. `SunDirection` points from the world toward the

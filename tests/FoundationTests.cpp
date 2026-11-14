@@ -6628,8 +6628,18 @@ namespace {
 				"coalesced camera state cannot be replaced by an older revision"
 			);
 			std::vector<std::uint8_t> TestPresentationPixels;
+			RenderProjection TestViewportProjection;
+			std::vector<RenderPublicationId> PlayApplied;
+			std::vector<RenderPublicationId> PlayCaptured;
+			std::size_t PlayFullPublications = 0;
+			bool CheckPlayPublicationOrder = false;
 			host.SetViewportCaptureForTesting([&](RenderPublicationPtr Publication) {
 				if (!Publication) throw std::invalid_argument("test viewport capture requires a publication");
+				if (CheckPlayPublicationOrder) {
+					if (TestViewportProjection.GetLastPublicationId() != Publication->Id)
+						throw std::logic_error("test capture missed one or more Play publications");
+					PlayCaptured.push_back(Publication->Id);
+				}
 				const auto Width = Publication->Frame.ViewportWidth;
 				const auto Height = Publication->Frame.ViewportHeight;
 				TestPresentationPixels.assign(static_cast<std::size_t>(Width) * Height * 4, 0x7f);
@@ -6642,6 +6652,11 @@ namespace {
 					.CpuExtraction = std::chrono::microseconds(5),
 					.Total = std::chrono::microseconds(23),
 				};
+			}, [&](RenderPublicationPtr Publication) {
+				if (!CheckPlayPublicationOrder) return;
+				(void)TestViewportProjection.Apply(*Publication);
+				PlayApplied.push_back(Publication->Id);
+				PlayFullPublications += Publication->FullResync;
 			});
 			auto InvalidCadence = call("StartViewportPresentation", {{"FrameRateMode", "20"}}, "test-token");
 			Check(
@@ -6724,7 +6739,16 @@ namespace {
 			const auto FailuresBeforePlay = RecoveryState["Result"]["PresentationFailures"];
 			auto PresentationPlay = call("StartPlaySession", Json::object(), "test-token");
 			const auto PresentationPlayId = PresentationPlay["Result"]["PlaySessionId"];
-			for (int Step = 0; Step < 8; ++Step) host.PumpPlaySessionForTesting();
+			CheckPlayPublicationOrder = true;
+			host.PumpViewportPresentationForTesting();
+			Check(!PlayApplied.empty() && PlayFullPublications == 1 && PlayCaptured.size() == 1 &&
+				PlayCaptured.back() == PlayApplied.back(),
+				"first Play capture applies the full publication and all queued deltas");
+			const auto AppliedBefore = PlayApplied.size();
+			const auto CapturedBefore = PlayCaptured.size();
+			const auto PriorPublication = PlayCaptured.empty() ? InvalidRenderPublicationId : PlayCaptured.back();
+			host.PumpPlaySessionForTesting();
+			// The presentation pump performs one additional Play step before drawing.
 			host.PumpViewportPresentationForTesting();
 			auto BatchedPlayPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
 			Check(
@@ -6732,12 +6756,17 @@ namespace {
 					BatchedPlayPresentationState["Result"]["Mode"] == "Play" &&
 					BatchedPlayPresentationState["Result"]["PlaySessionId"] == PresentationPlayId &&
 					BatchedPlayPresentationState["Result"]["PresentationFailures"] == FailuresBeforePlay &&
-					BatchedPlayPresentationState["Result"]["LastFailure"].is_null(),
-				"Play simulation publications remain ordered when presentation consumes only the newest visual frame"
+					BatchedPlayPresentationState["Result"]["LastFailure"].is_null() &&
+					PlayApplied.size() == AppliedBefore + 2 && PlayFullPublications == 1 &&
+					PlayCaptured.size() == CapturedBefore + 1 &&
+					PlayApplied[AppliedBefore] == PriorPublication + 1 && PlayApplied.back() == PriorPublication + 2 &&
+					PlayCaptured.back() == PlayApplied.back(),
+				"two Play deltas apply in order before one newest-frame capture"
 			);
 			auto PresentationStop = call(
 				"StopPlaySession", {{"PlaySessionId", PresentationPlayId}}, "test-token"
 			);
+			CheckPlayPublicationOrder = false;
 			host.PumpViewportPresentationForTesting();
 			auto EditAfterPlayPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
 			Check(

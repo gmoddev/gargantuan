@@ -46,7 +46,7 @@ namespace gargantuan {
 	  public:
 		[[nodiscard]] RenderProjectionChanges Apply(const RenderSnapshot &Snapshot);
 		[[nodiscard]] RenderProjectionChanges Apply(const RenderPublication &Publication);
-		void Clear();
+		void Clear() noexcept;
 
 		[[nodiscard]] const RenderItem *GetItem(ObjectId Object) const;
 		[[nodiscard]] const RenderAnimationPoseUpdate *GetAnimationPose(ObjectId Object) const;
@@ -61,7 +61,10 @@ namespace gargantuan {
 		[[nodiscard]] std::size_t GetTextureCount() const { return Textures.size(); }
 		[[nodiscard]] RenderPublicationId GetLastPublicationId() const { return LastPublicationId; }
 		[[nodiscard]] const RenderFrameState &GetFrame() const { return Frame; }
-		[[nodiscard]] const RenderUiFrame &GetUi() const { return *Ui; }
+		[[nodiscard]] const RenderUiFrame &GetUi() const {
+			static const RenderUiFrame Empty;
+			return Ui ? *Ui : Empty;
+		}
 		[[nodiscard]] const std::unordered_map<ObjectId, RenderProjectedObject> &GetObjects() const { return Entries; }
 		[[nodiscard]] RenderSnapshotPtr BuildCompatibilitySnapshot() const;
 
@@ -86,11 +89,12 @@ namespace gargantuan {
 		};
 		std::unordered_map<RenderTextureIdentity, TextureEntry, RenderTextureIdentityHash> Textures;
 		std::unordered_map<ObjectId, RenderAnimationPoseUpdate> AnimationPoses;
-		// Validation scratch is retained so a steady pose-only publication does not
-		// allocate merely to detect duplicate pose operations.
+		// Retain validation scratch across publications to avoid per-operation allocation.
+		std::vector<ObjectId> TouchedObjectScratch;
+		std::vector<RenderProjectedObject *> UpdatedEntryScratch;
 		std::vector<ObjectId> TouchedPoseScratch;
 		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
 		RenderFrameState Frame;
-		std::shared_ptr<const RenderUiFrame> Ui = std::make_shared<const RenderUiFrame>();
+		std::shared_ptr<const RenderUiFrame> Ui;
 	};
 } // namespace gargantuan

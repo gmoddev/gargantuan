@@ -4,8 +4,12 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/PointLight.hpp"
 #include "gargantuan/classes/Sky.hpp"
+#include "gargantuan/classes/SpotLight.hpp"
 #include "gargantuan/environment/EnvironmentSemantics.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
@@ -19,6 +23,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <type_traits>
 
 namespace {
@@ -113,6 +118,28 @@ namespace {
 		};
 		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Duplicate); }, "duplicate updates are rejected atomically");
 		Check(Projection.GetItem({10, 1})->ModelMatrix[3].x == 4.0f, "rejected updates do not mutate the projection");
+
+		RenderPublication Mixed{.Id = 3, .BaseId = 2, .Frame = MakeFrame()};
+		Mixed.Updates = {
+			{{11, 2}, RenderUpdateDomain::Transform, MakeItem({11, 2}, 6.0f)},
+			{{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1}, 8.0f)},
+		};
+		auto Conflicting = Mixed;
+		Conflicting.Removes = {{{10, 1}}};
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Conflicting); },
+			"an object cannot be removed and updated in the same publication");
+		auto StaleUpdate = Mixed;
+		StaleUpdate.Updates[1] = {{11, 1}, RenderUpdateDomain::Transform, MakeItem({11, 1}, 8.0f)};
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(StaleUpdate); },
+			"an update to a removed generation rejects the entire publication");
+		Check(Projection.GetLastPublicationId() == 2 && Projection.GetItem({11, 2})->ModelMatrix[3].x == 0.0f,
+			"the valid prefix of a rejected publication does not mutate the projection");
+		for (std::uint32_t Index = 20; Index < 100; ++Index) Mixed.Creates.push_back({MakeItem({Index, 1})});
+		Changes = Projection.Apply(Mixed);
+		Check(Changes.Created == 80 && Changes.Updated == 2 &&
+			Projection.GetItem({10, 1})->ModelMatrix[3].x == 8.0f &&
+			Projection.GetItem({11, 2})->ModelMatrix[3].x == 6.0f,
+			"unsorted updates apply to the correct identities when new entries grow the projection");
 
 		RenderProjection Restarted;
 		auto Restart = Initial;
@@ -635,6 +662,8 @@ namespace {
 		const Color3 DefaultAmbient = LightingValue->GetAmbient();
 		Check(
 			LightingValue->GetClockTime() == 12.0f && LightingValue->GetBrightness() == 1.0f &&
+				LightingValue->GetEnvironmentRotation() == 0.0f && LightingValue->GetIblIntensity() == 1.0f &&
+				LightingValue->GetToneMapping() == Enums::ToneMappingMode::Filmic &&
 				DefaultAmbient.R == 0.2f && DefaultAmbient.G == 0.2f && DefaultAmbient.B == 0.2f,
 			"Lighting defaults are deterministic"
 		);
@@ -651,6 +680,12 @@ namespace {
 		CheckThrows<std::invalid_argument>(
 			[&] { LightingValue->SetFogStart(1001.0f); }, "FogStart rejects an inverted fog interval"
 		);
+		CheckThrows<std::invalid_argument>([&] { LightingValue->SetEnvironmentRotation(181.0f); },
+			"environment yaw rejects out-of-range values");
+		CheckThrows<std::invalid_argument>([&] { LightingValue->SetIblIntensity(-0.1f); },
+			"image-based light intensity rejects negative values");
+		CheckThrows<std::invalid_argument>([&] { LightingValue->SetToneMapping(static_cast<Enums::ToneMappingMode>(2)); },
+			"unregistered tone-mapping mode cannot commit");
 
 		const auto Sunrise = ComputeEnvironmentSunState(6.0f, 2.0f, Color3(1.0f, 0.5f, 0.25f));
 		const auto Noon = ComputeEnvironmentSunState(12.0f, 2.0f, Color3(1.0f, 0.5f, 0.25f));
@@ -702,6 +737,9 @@ namespace {
 			LightingValue->SetClockTime(static_cast<float>(Index % 24));
 		LightingValue->SetAmbient(Color3(0.1f, 0.15f, 0.2f));
 		LightingValue->SetExposureCompensation(1.0f);
+		LightingValue->SetEnvironmentRotation(-90.0f);
+		LightingValue->SetIblIntensity(0.25f);
+		LightingValue->SetToneMapping(Enums::ToneMappingMode::Reinhard);
 		LightingValue->SetFogEnabled(true);
 		LightingValue->SetFogStart(10.0f);
 		LightingValue->SetFogEnd(100.0f);
@@ -709,10 +747,18 @@ namespace {
 		Check(
 			Animated->EnvironmentChanged && Animated->Creates.empty() && Animated->Updates.empty() &&
 				Animated->Removes.empty() && Animated->Frame.Environment.ExposureMultiplier == 2.0f &&
-				Animated->Frame.Environment.Fog.Enabled,
+				Animated->Frame.Environment.Fog.Enabled && Animated->Frame.Environment.EnvironmentRotation == -90.0f &&
+				Animated->Frame.Environment.IblIntensity == 0.25f &&
+				Animated->Frame.Environment.ToneMapping == RenderToneMapping::Reinhard,
 			"many environment edits coalesce into one environment-only final-state publication"
 		);
 		(void)Projection.Apply(*Animated);
+		auto InvalidEnvironment = *Animated;
+		InvalidEnvironment.BaseId = Animated->Id;
+		++InvalidEnvironment.Id;
+		InvalidEnvironment.Frame.Environment.IblIntensity = 9.0f;
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(InvalidEnvironment); },
+			"projection rejects an invalid IBL multiplier in a neutral environment payload");
 		auto Static = Publisher.Publish(*World, Camera, 640, 360);
 		Check(
 			!Static->EnvironmentChanged && Static->Creates.empty() && Static->Updates.empty(),
@@ -809,6 +855,121 @@ namespace {
 		);
 		Game->Destroy();
 	}
+	void TestLocalLights() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Owner = std::make_shared<Part>();
+		Owner->SetAnchored(true);
+		Owner->SetCFrame(CFrame(3, 0, 0));
+		Owner->SetParent(World);
+		auto Holder = std::make_shared<Folder>();
+		Holder->SetParent(Owner);
+		auto Point = std::make_shared<PointLight>();
+		Point->SetName("Point Witness");
+		Point->SetLightColor({.25f, .5f, 1.0f});
+		Point->SetLightRange(12.0f);
+		Point->SetParent(World);
+		auto Spot = std::make_shared<SpotLight>();
+		Spot->SetName("Spot Witness");
+		Spot->SetLightIntensity(42.0f);
+		Spot->SetLightConeAngles({10.0f, 32.0f});
+		Spot->SetLightCFrame(CFrame(0, 0, 2));
+		Spot->SetParent(Holder);
+		CheckThrows<std::invalid_argument>([&] { Spot->SetLightConeAngles({40.0f, 32.0f}); },
+			"inverted spot cone does not commit");
+		CheckThrows<std::invalid_argument>([&] { Spot->SetLightRange(0.0f); }, "zero light range is rejected");
+		CheckThrows<std::invalid_argument>([&] { Point->SetLightIntensity(std::numeric_limits<float>::infinity()); },
+			"non-finite intensity is rejected");
+		CheckThrows<std::invalid_argument>([&] { Spot->SetLightCFrame(CFrame(glm::vec3(0), glm::mat3(2))); },
+			"local light pose rejects a scaled rotation");
+
+		RenderPublisher Publisher;
+		RenderProjection Projection;
+		const auto Publish = [&] { return Publisher.Publish(*World, RenderCameraInput{}, 640, 360); };
+		const auto First = Publish();
+		const auto FirstLights = First->Frame.Environment.LocalLights;
+		const auto SpotId = Spot->GetObjectId();
+		const auto PointId = Point->GetObjectId();
+		const auto Find = [](const RenderPublicationPtr &Publication, ObjectId Id) -> const RenderLocalLightState * {
+			const auto &Lights = Publication->Frame.Environment.LocalLights;
+			if (!Lights) return nullptr;
+			const auto Found = std::ranges::find(*Lights, Id, &RenderLocalLightState::Object);
+			return Found != Lights->end() ? &*Found : nullptr;
+		};
+		const auto *FirstPoint = Find(First, PointId);
+		const auto *FirstSpot = Find(First, SpotId);
+		Check(FirstLights && FirstLights->size() == 2 && FirstPoint && FirstSpot &&
+			FirstPoint->Kind == RenderLocalLightKind::Point && FirstPoint->Range == 12.0f &&
+			FirstPoint->Color == glm::vec3(.25f, .5f, 1.0f) && FirstSpot->Kind == RenderLocalLightKind::Spot &&
+			FirstSpot->Position == glm::vec3(3, 0, 2) && FirstSpot->Direction == glm::vec3(0, 0, -1) &&
+			FirstSpot->InnerConeCosine > FirstSpot->OuterConeCosine && FirstSpot->Intensity == 42.0f,
+			"PointLight and SpotLight publish stable, scoped identities and effective rigid world poses");
+		(void)Projection.Apply(*First);
+		const auto Quiet = Publish();
+		Check(!Quiet->EnvironmentChanged && Quiet->Frame.Environment.LocalLights == FirstLights,
+			"unchanged publication retains the same immutable light payload");
+		(void)Projection.Apply(*Quiet);
+
+		Owner->SetCFrame(CFrame(glm::vec3(10, 1, 0), glm::mat3(glm::vec3(0, 0, -1),
+			glm::vec3(0, 1, 0), glm::vec3(1, 0, 0))));
+		const auto Moved = Publish();
+		const auto *MovedSpot = Find(Moved, SpotId);
+		Check(Moved->EnvironmentChanged && MovedSpot && MovedSpot->Position == glm::vec3(12, 1, 0) &&
+			MovedSpot->Direction == glm::vec3(-1, 0, 0) && FirstSpot && FirstSpot->Position == glm::vec3(3, 0, 2),
+			"owner-only transform invalidates its descendant light without altering old publications");
+		(void)Projection.Apply(*Moved);
+		Holder->SetParent(World);
+		const auto Reparented = Publish();
+		const auto *DetachedSpot = Find(Reparented, SpotId);
+		Check(Reparented->EnvironmentChanged && DetachedSpot && DetachedSpot->Position == glm::vec3(0, 0, 2),
+			"same-world ancestor reparent refreshes the nearest BasePart binding");
+		(void)Projection.Apply(*Reparented);
+
+		Game->MarkPersistenceSubtreeArchivable();
+		std::shared_ptr<Instance> SaveRoot = Game;
+		std::istringstream Document(InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, SaveRoot));
+		auto Saved = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Document);
+		const auto SavedSpot = Saved.Instance ?
+			std::dynamic_pointer_cast<SpotLight>(Saved.Instance->FindFirstDescendant("Spot Witness")) : nullptr;
+		Check(Saved.Ok && SavedSpot && SavedSpot->GetLightConeAngles() == Vector2(10, 32) &&
+			SavedSpot->GetLightIntensity() == 42.0f && SavedSpot->GetLightCFrame().Position == glm::vec3(0, 0, 2),
+			"generated local light schema restores authored cone, transform, and intensity");
+		if (Saved.Instance) Saved.Instance->Destroy();
+
+		Spot->SetParent(Game->GetService("ReplicatedStorage"));
+		Point->SetLightEnabled(false);
+		const auto Empty = Publish();
+		Check(Empty->EnvironmentChanged && !Empty->Frame.Environment.LocalLights && World->GetLocalLights().size() == 1,
+			"disabled and out-of-WorldRoot lights do not contribute");
+		(void)Projection.Apply(*Empty);
+		Point->Destroy();
+		Check(World->GetLocalLights().empty(), "destroyed lights retire WorldRoot membership");
+
+		for (std::size_t Index = 0; Index < MaximumRenderLocalLights + 2; ++Index)
+			std::make_shared<PointLight>()->SetParent(World);
+		Publisher.RequestFullResync();
+		const auto Bounded = Publish();
+		const auto BoundedLights = Bounded->Frame.Environment.LocalLights;
+		Check(BoundedLights && BoundedLights->size() == MaximumRenderLocalLights &&
+			std::ranges::is_sorted(*BoundedLights, {}, &RenderLocalLightState::Object) &&
+			std::ranges::any_of(Bounded->Diagnostics, [](const auto &Diagnostic) {
+				return Diagnostic.Issue == RenderExtractionIssue::PublicationOverflow;
+			}), "local light capacity publishes the first sorted eligible IDs with an overflow diagnostic");
+		(void)Projection.Apply(*Bounded);
+		if (BoundedLights && !BoundedLights->empty()) {
+			auto Invalid = *Bounded;
+			++Invalid.Id;
+			auto Duplicate = std::make_shared<std::vector<RenderLocalLightState>>(*BoundedLights);
+			Duplicate->at(1).Object = Duplicate->front().Object;
+			Invalid.Frame.Environment.LocalLights = std::move(Duplicate);
+			CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); },
+				"projection rejects duplicate local light identities before mutation");
+			Check(Projection.GetFrame().Environment.LocalLights == BoundedLights,
+				"projection retains the previous immutable light list after rejection");
+		}
+		Game->Destroy();
+	}
 }
 
 static_assert(std::is_same_v<gargantuan::RenderPublicationPtr, std::shared_ptr<const gargantuan::RenderPublication>>);
@@ -824,6 +985,7 @@ int main() {
 		TestIncrementalPublisher();
 		TestDirtyAccumulatorBoundsAndConsumers();
 		TestEnvironmentLightingFoundation();
+		TestLocalLights();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:PublicationTest] unexpected exception: " << Error.what() << '\n';
 		return 1;

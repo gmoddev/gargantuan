@@ -11,6 +11,7 @@
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -18,6 +19,7 @@
 
 namespace gargantuan {
 	class AssetService;
+	class LocalLight;
 	struct WorldRootTestAccess;
 
 	struct WorldRaycastResult {
@@ -84,6 +86,7 @@ namespace gargantuan {
 		bool MeshScaleFallbackLogged = false;
 		std::weak_ptr<AssetService> CollisionAssets;
 		std::uint64_t CollisionAssetChangeSequence = 0;
+		std::map<ObjectId, std::weak_ptr<LocalLight>> LocalLights;
 
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
 		[[nodiscard]] WorldRaycastResult
@@ -101,6 +104,7 @@ namespace gargantuan {
 		[[nodiscard]] std::optional<SoftBodyInspection> GetDeformableInspection(ObjectId Object) const;
 		[[nodiscard]] std::optional<glm::vec3> GetDeformableVertex(ObjectId Object, std::size_t VertexIndex) const;
 		[[nodiscard]] const SoftBodyStepProfile &GetLastSoftBodyProfile() const { return LastSoftBodyProfile; }
+		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<LocalLight>> &GetLocalLights() const { return LocalLights; }
 
 	  private:
 		[[nodiscard]] WorldRaycastResult ResolveQueryHit(PhysicsRaycastResult Result);

@@ -31,6 +31,7 @@ namespace gargantuan {
 		constexpr std::uint32_t ArtifactVersion3 = 3;
 		constexpr std::uint32_t ArtifactVersion4 = 4;
 		constexpr std::uint32_t MaterialTextureArtifactVersion = 5;
+		constexpr std::uint32_t AdvancedMaterialArtifactVersion = 6;
 
 		AssetDiagnostic Error(std::string Code, std::string Message) {
 			if (Message.size() > AssetLimits::MaximumDiagnosticBytes) Message.resize(AssetLimits::MaximumDiagnosticBytes);
@@ -85,6 +86,23 @@ namespace gargantuan {
 			if (!Value) return std::nullopt;
 			const auto Result = std::bit_cast<float>(*Value);
 			return std::isfinite(Result) ? std::optional(Result) : std::nullopt;
+		}
+
+		bool ValidAdvancedMaterial(const ImportedMaterial &Material) {
+			const auto Unit = [](float Value) { return std::isfinite(Value) && Value >= 0.0f && Value <= 1.0f; };
+			for (const auto Value : {Material.EmissiveFactor.x, Material.EmissiveFactor.y, Material.EmissiveFactor.z,
+				Material.OcclusionStrength}) if (!Unit(Value)) return false;
+			if (!std::isfinite(Material.NormalScale) || std::abs(Material.NormalScale) > MaximumRenderNormalScale ||
+				(!Material.NormalTexture && Material.NormalScale != 1.0f) ||
+				(!Material.OcclusionTexture && Material.OcclusionStrength != 1.0f)) return false;
+			const std::array Textures{Material.BaseColorTexture, Material.NormalTexture, Material.MetallicRoughnessTexture,
+				Material.EmissiveTexture, Material.OcclusionTexture};
+			for (std::size_t Index = 0; Index < Textures.size(); ++Index) {
+				const auto &Sampler = Material.TextureSamplers[Index];
+				if (!Sampler.IsValid() || (Textures[Index] ? !Textures[Index]->IsValid() : Sampler != RenderSamplerState{}))
+					return false;
+			}
+			return true;
 		}
 
 		std::optional<AssetDiagnostic> ValidateCollision(const ImportedCollision &Collision) {
@@ -633,7 +651,8 @@ namespace gargantuan {
 			return std::unexpected(Error("UnsupportedCollision", "Skinned meshes cannot have static triangle collision"));
 		const auto *MaterialValue = std::get_if<ImportedMaterial>(&Asset);
 		auto Version = ArtifactVersion2;
-		if (MaterialValue && MaterialValue->MetallicRoughnessTexture) Version = MaterialTextureArtifactVersion;
+		if (MaterialValue && MaterialValue->HasAdvancedInputs()) Version = AdvancedMaterialArtifactVersion;
+		else if (MaterialValue && MaterialValue->MetallicRoughnessTexture) Version = MaterialTextureArtifactVersion;
 		else if (Kind == AssetKind::Collision || (MeshValue && MeshValue->CollisionAsset)) Version = ArtifactVersion4;
 		else if (Kind == AssetKind::Animation || (MeshValue && MeshValue->Skeleton)) Version = ArtifactVersion3;
 		auto Artifact = BeginArtifact(Kind, Version);
@@ -781,7 +800,23 @@ namespace gargantuan {
 			Artifact.push_back(static_cast<std::uint8_t>(Material->AlphaMode));
 			AppendFloat(Artifact, Material->AlphaCutoff);
 			Artifact.push_back(Material->DoubleSided ? 1 : 0);
-			if (Version == MaterialTextureArtifactVersion) AppendReference(Material->MetallicRoughnessTexture);
+			if (Version >= MaterialTextureArtifactVersion) AppendReference(Material->MetallicRoughnessTexture);
+			if (Version == AdvancedMaterialArtifactVersion) {
+				if (!ValidAdvancedMaterial(*Material))
+					return std::unexpected(Error("MalformedMaterial", "Advanced material factors, references, or samplers are invalid"));
+				for (const auto Value : {Material->EmissiveFactor.x, Material->EmissiveFactor.y, Material->EmissiveFactor.z})
+					AppendFloat(Artifact, Value);
+				AppendReference(Material->EmissiveTexture);
+				AppendReference(Material->OcclusionTexture);
+				AppendFloat(Artifact, Material->OcclusionStrength);
+				AppendFloat(Artifact, Material->NormalScale);
+				for (const auto &Sampler : Material->TextureSamplers) {
+					Artifact.push_back(static_cast<std::uint8_t>(Sampler.MinFilter));
+					Artifact.push_back(static_cast<std::uint8_t>(Sampler.MagFilter));
+					Artifact.push_back(static_cast<std::uint8_t>(Sampler.WrapU));
+					Artifact.push_back(static_cast<std::uint8_t>(Sampler.WrapV));
+				}
+			}
 		} else if (const auto *Audio = std::get_if<ImportedAudio>(&Asset)) {
 			const auto SampleCount = static_cast<std::uint64_t>(Audio->FrameCount) * Audio->Channels;
 			if (!Audio->Pcm16 || Audio->Channels == 0 || Audio->Channels > AssetLimits::MaximumAudioChannels ||
@@ -896,7 +931,8 @@ namespace gargantuan {
 		auto Version = ReadU32(Artifact, Offset);
 		if (!Version || (*Version != ArtifactVersion1 && *Version != ArtifactVersion2 &&
 			*Version != ArtifactVersion3 && *Version != ArtifactVersion4 &&
-			!(*Version == MaterialTextureArtifactVersion && ExpectedKind == AssetKind::Material)) ||
+			!((*Version == MaterialTextureArtifactVersion || *Version == AdvancedMaterialArtifactVersion) &&
+				ExpectedKind == AssetKind::Material)) ||
 			Offset >= Artifact.size() ||
 			Artifact[Offset++] != static_cast<std::uint8_t>(ExpectedKind))
 			return std::unexpected(Error("UnsupportedArtifact", "Asset artifact version or kind is unsupported"));
@@ -925,7 +961,8 @@ namespace gargantuan {
 		}
 
 		if (ExpectedKind == AssetKind::Material) {
-			if (*Version != ArtifactVersion2 && *Version != MaterialTextureArtifactVersion)
+			if (*Version != ArtifactVersion2 && *Version != MaterialTextureArtifactVersion &&
+				*Version != AdvancedMaterialArtifactVersion)
 				return std::unexpected(Error("UnsupportedArtifact", "Unsupported material artifact version"));
 			ImportedMaterial Material;
 			std::array<float *, 6> Factors{&Material.BaseColorFactor.x, &Material.BaseColorFactor.y,
@@ -959,12 +996,38 @@ namespace gargantuan {
 				return std::unexpected(Error("MalformedArtifact", "Material artifact alpha state is invalid"));
 			Material.AlphaCutoff = *AlphaCutoff;
 			Material.DoubleSided = Artifact[Offset++] != 0;
-			if (*Version == MaterialTextureArtifactVersion) {
+			if (*Version >= MaterialTextureArtifactVersion) {
 				auto MetallicRoughnessTexture = ReadReference();
 				if (!MetallicRoughnessTexture) return std::unexpected(MetallicRoughnessTexture.error());
-				if (!*MetallicRoughnessTexture)
+				if (*Version == MaterialTextureArtifactVersion && !*MetallicRoughnessTexture)
 					return std::unexpected(Error("MalformedArtifact", "Material artifact requires a metallic-roughness image"));
 				Material.MetallicRoughnessTexture = *MetallicRoughnessTexture;
+			}
+			if (*Version == AdvancedMaterialArtifactVersion) {
+				for (auto *Component : {&Material.EmissiveFactor.x, &Material.EmissiveFactor.y, &Material.EmissiveFactor.z}) {
+					const auto Value = ReadFloat(Artifact, Offset);
+					if (!Value) return std::unexpected(Error("MalformedArtifact", "Material emissive factor is invalid"));
+					*Component = *Value;
+				}
+				auto EmissiveTexture = ReadReference();
+				if (!EmissiveTexture) return std::unexpected(EmissiveTexture.error());
+				Material.EmissiveTexture = *EmissiveTexture;
+				auto OcclusionTexture = ReadReference();
+				if (!OcclusionTexture) return std::unexpected(OcclusionTexture.error());
+				Material.OcclusionTexture = *OcclusionTexture;
+				const auto OcclusionStrength = ReadFloat(Artifact, Offset), NormalScale = ReadFloat(Artifact, Offset);
+				if (!OcclusionStrength || !NormalScale || Artifact.size() - Offset != 4 * Material.TextureSamplers.size())
+					return std::unexpected(Error("MalformedArtifact", "Material advanced factor or sampler payload is invalid"));
+				Material.OcclusionStrength = *OcclusionStrength;
+				Material.NormalScale = *NormalScale;
+				for (auto &Sampler : Material.TextureSamplers) {
+					Sampler.MinFilter = static_cast<RenderTextureMinFilter>(Artifact[Offset++]);
+					Sampler.MagFilter = static_cast<RenderTextureMagFilter>(Artifact[Offset++]);
+					Sampler.WrapU = static_cast<RenderTextureWrap>(Artifact[Offset++]);
+					Sampler.WrapV = static_cast<RenderTextureWrap>(Artifact[Offset++]);
+				}
+				if (!Material.HasAdvancedInputs() || !ValidAdvancedMaterial(Material))
+					return std::unexpected(Error("MalformedArtifact", "Advanced material factors, references, or samplers are invalid"));
 			}
 			if (Offset != Artifact.size())
 				return std::unexpected(Error("MalformedArtifact", "Material artifact has trailing bytes"));

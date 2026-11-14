@@ -578,7 +578,7 @@ namespace gargantuan {
 			};
 		}
 
-		Json EncodeAssetRecord(const AssetRecord &Record) {
+		Json EncodeAssetRecord(const AssetRecord &Record, bool IncludeAdvancedMaterials = false) {
 			Json Diagnostic = nullptr;
 			if (Record.Diagnostic)
 				Diagnostic = {{"Code", Record.Diagnostic->Code}, {"Message", Record.Diagnostic->Message}};
@@ -646,6 +646,31 @@ namespace gargantuan {
 						Asset.AlphaMode == AssetMaterialAlphaMode::Mask ? "Mask" : "Blend";
 					Metadata["AlphaCutoff"] = Asset.AlphaCutoff;
 					Metadata["DoubleSided"] = Asset.DoubleSided;
+					if (IncludeAdvancedMaterials && Asset.HasAdvancedInputs()) {
+						constexpr std::array Slots{"BaseColor", "Normal", "MetallicRoughness", "Emissive", "Occlusion"};
+						constexpr std::array MinFilters{"Default", "Nearest", "Linear", "NearestMipmapNearest",
+							"LinearMipmapNearest", "NearestMipmapLinear", "LinearMipmapLinear"};
+						constexpr std::array MagFilters{"Default", "Nearest", "Linear"};
+						constexpr std::array WrapModes{"Repeat", "MirroredRepeat", "ClampToEdge"};
+						Json Samplers = Json::object();
+						for (std::size_t Index = 0; Index < Slots.size(); ++Index) {
+							const auto &Sampler = Asset.TextureSamplers[Index];
+							if (Sampler == RenderSamplerState{}) continue;
+							Samplers[Slots[Index]] = {
+								{"MinFilter", MinFilters[static_cast<std::size_t>(Sampler.MinFilter)]},
+								{"MagFilter", MagFilters[static_cast<std::size_t>(Sampler.MagFilter)]},
+								{"WrapU", WrapModes[static_cast<std::size_t>(Sampler.WrapU)]},
+								{"WrapV", WrapModes[static_cast<std::size_t>(Sampler.WrapV)]},
+							};
+						}
+						Metadata["AdvancedMaterial"] = {
+							{"EmissiveFactor", {Asset.EmissiveFactor.x, Asset.EmissiveFactor.y, Asset.EmissiveFactor.z}},
+							{"EmissiveTexture", Asset.EmissiveTexture ? Json(Asset.EmissiveTexture->ToString()) : Json(nullptr)},
+							{"OcclusionTexture", Asset.OcclusionTexture ? Json(Asset.OcclusionTexture->ToString()) : Json(nullptr)},
+							{"OcclusionStrength", Asset.OcclusionStrength}, {"NormalScale", Asset.NormalScale},
+							{"TextureSamplers", std::move(Samplers)},
+						};
+					}
 				}
 			}, *Record.Asset);
 			return {
@@ -915,10 +940,28 @@ namespace gargantuan {
 		LastViewportPublication.reset();
 		ViewportProjection.Clear();
 		ViewportPublisher.RequestFullResync();
+		if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running)
+			ActivePlaySession->RequestRenderFullResync();
 		NextViewportFrame = std::chrono::steady_clock::now();
 	}
 
-	void EditorHost::ConsumePlayRenderPublications() {
+	void EditorHost::EnsureViewportRenderer() {
+		if (ViewportRenderer) return;
+		ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
+		if (!ActivePlaySession || ActivePlaySession->GetState() != PlaySessionState::Running) {
+			ViewportPublisher.RequestFullResync();
+			return;
+		}
+		// A CPU-only consumer may have advanced past the full publication before
+		// native capture was enabled. A new native renderer cannot start mid-chain.
+		if (ViewportProjection.GetLastPublicationId() != InvalidRenderPublicationId) {
+			LastViewportPublication.reset();
+			ViewportProjection.Clear();
+			ActivePlaySession->RequestRenderFullResync();
+		}
+	}
+
+	void EditorHost::ConsumePlayRenderPublications(EditorViewportRenderer *Renderer) {
 		if (!ActivePlaySession || ActivePlaySession->GetState() != PlaySessionState::Running ||
 			ViewportWidth == 0 || ViewportHeight == 0) return;
 		auto Publications = ActivePlaySession->TakeRenderPublications();
@@ -927,6 +970,8 @@ namespace gargantuan {
 			if (!Publication) continue;
 			if (ViewportProjection.GetLastPublicationId() != Publication->Id)
 				(void)ViewportProjection.Apply(*Publication);
+			if (Renderer) Renderer->ApplyPublication(Publication);
+			else if (ViewportApplyForTesting) ViewportApplyForTesting(Publication);
 			LastViewportPublication = std::move(Publication);
 		}
 	}
@@ -937,8 +982,11 @@ namespace gargantuan {
 		if (NextPlayStep != std::chrono::steady_clock::time_point{} && Now < NextPlayStep) return;
 		NextPlayStep = Now + std::chrono::microseconds(8333);
 		ActivePlaySession->Step();
-		if (ActivePlaySession->GetState() != PlaySessionState::Running)
+		if (ActivePlaySession->GetState() != PlaySessionState::Running) {
 			LastPlaySessionState = ActivePlaySession->GetState();
+			AdvanceViewportGeneration();
+			ViewportRenderer.reset();
+		}
 	}
 
 	void EditorHost::PumpViewportPresentation() {
@@ -950,16 +998,13 @@ namespace gargantuan {
 		try {
 			if (ViewportPresentationCheckpointForTesting)
 				ViewportPresentationCheckpointForTesting("BeforeCapture");
-			if (!ViewportCaptureForTesting && !ViewportRenderer) {
-				ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
-				ViewportPublisher.RequestFullResync();
-			}
+			if (!ViewportCaptureForTesting) EnsureViewportRenderer();
 			auto WorkspaceService = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
 			if (!WorkspaceService) throw std::runtime_error("Project has no Workspace for viewport presentation");
 
 			LatestViewportFrameMetadata Metadata{.Generation = ViewportGeneration};
 			if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running) {
-				ConsumePlayRenderPublications();
+				ConsumePlayRenderPublications(ViewportCaptureForTesting ? nullptr : ViewportRenderer.get());
 				if (!LastViewportPublication) return;
 				Metadata.Mode = LatestFrameMailboxLayout::Mode::Play;
 				Metadata.PlaySessionId = ActivePlaySession->GetId().Value;
@@ -1115,6 +1160,7 @@ namespace gargantuan {
 					"CustomServiceDeclarations", "ReplicatedStorage",
 					"PlaySession", "DiagnosticStream", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
+					"AdvancedMaterialMetadata",
 					"AnimationRig", "AnimationPreview",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
@@ -1393,18 +1439,18 @@ namespace gargantuan {
 				const auto Id = PlaySessionId{NextPlaySessionId++};
 				try {
 					auto Snapshot = CurrentProject->CaptureGame(World, World->GetAuthoritativeRevision());
-					ActivePlaySession = std::make_unique<PlaySession>(
+					auto NewPlaySession = std::make_unique<PlaySession>(
 						Id, std::move(Snapshot.Contents), CurrentProject->InstanceFileFormat,
 						CurrentProject->Root, ViewportWidth == 0 ? 720 : ViewportWidth,
 						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision, std::move(Snapshot.Assets),
 						AudioEnabled
 					);
+					AdvanceViewportGeneration();
+					ActivePlaySession = std::move(NewPlaySession);
 					LastPlaySessionId = Id;
 					LastPlaySessionState = ActivePlaySession->GetState();
-					AdvanceViewportGeneration();
 					NextPlayStep = std::chrono::steady_clock::now();
 					ViewportRenderer.reset();
-					if (ViewportWidth != 0 && ViewportHeight != 0) ConsumePlayRenderPublications();
 					return SerializeBoundedResponse(SuccessResponse(requestId, {
 						{"PlaySessionId", std::to_string(Id.Value)},
 						{"State", GetPlaySessionStateName(LastPlaySessionState)},
@@ -2112,10 +2158,11 @@ namespace gargantuan {
 			}
 
 			if (method == "GetAssetCatalog") {
-				if (!HasOnlyFields(parameters, {"IncludeBuiltIns"}) ||
-					(parameters.contains("IncludeBuiltIns") && !parameters["IncludeBuiltIns"].is_boolean()))
+				if (!HasOnlyFields(parameters, {"IncludeBuiltIns", "IncludeAdvancedMaterials"}) ||
+					(parameters.contains("IncludeBuiltIns") && !parameters["IncludeBuiltIns"].is_boolean()) ||
+					(parameters.contains("IncludeAdvancedMaterials") && !parameters["IncludeAdvancedMaterials"].is_boolean()))
 					return SerializeBoundedResponse(ErrorResponse(
-						requestId, "MalformedRequest", "GetAssetCatalog accepts only optional IncludeBuiltIns"
+						requestId, "MalformedRequest", "GetAssetCatalog accepts optional IncludeBuiltIns and IncludeAdvancedMaterials booleans"
 					));
 				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(
@@ -2127,8 +2174,9 @@ namespace gargantuan {
 				if (!Assets)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "AssetServiceFailure", "AssetService is unavailable"));
 				Json Records = Json::array();
+				const bool IncludeAdvancedMaterials = parameters.value("IncludeAdvancedMaterials", false);
 				for (const auto &Record : Assets->GetCatalog(parameters.value("IncludeBuiltIns", true)))
-					Records.push_back(EncodeAssetRecord(Record));
+					Records.push_back(EncodeAssetRecord(Record, IncludeAdvancedMaterials));
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"CatalogVersion", 2}, {"Assets", std::move(Records)},
 					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
@@ -2718,18 +2766,19 @@ namespace gargantuan {
 				if (ViewportWidth == 0 || ViewportHeight == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
 				try {
-					if (!ViewportRenderer) {
-						ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
-						ViewportPublisher.RequestFullResync();
-					}
+					EnsureViewportRenderer();
 					Json PlayIdentity = nullptr;
 					const char *Mode = "Edit";
 					if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running) {
-						ConsumePlayRenderPublications();
+						ConsumePlayRenderPublications(ViewportRenderer.get());
 						ActivePlaySession->Step();
-						if (ActivePlaySession->GetState() != PlaySessionState::Running)
+						if (ActivePlaySession->GetState() != PlaySessionState::Running) {
+							LastPlaySessionState = ActivePlaySession->GetState();
+							AdvanceViewportGeneration();
+							ViewportRenderer.reset();
 							return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionExited", "Runtime exited while capturing the viewport"));
-						ConsumePlayRenderPublications();
+						}
+						ConsumePlayRenderPublications(ViewportRenderer.get());
 						if (!LastViewportPublication)
 							return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionFailed", "Runtime produced no render publication"));
 						PlayIdentity = std::to_string(ActivePlaySession->GetId().Value);
@@ -2765,6 +2814,7 @@ namespace gargantuan {
 						{"Mode", Mode}, {"PlaySessionId", PlayIdentity},
 					}));
 				} catch (const std::exception &error) {
+					ViewportRenderer.reset();
 					ViewportPublisher.RequestFullResync();
 					LastViewportPublication.reset();
 					ViewportProjection.Clear();

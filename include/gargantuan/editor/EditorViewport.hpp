@@ -52,7 +52,7 @@ namespace gargantuan {
 
 	class EditorViewportRenderer final {
 	  public:
-		EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height);
+		EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height, bool EnableHdrScene = true);
 		~EditorViewportRenderer();
 
 		EditorViewportRenderer(const EditorViewportRenderer &) = delete;
@@ -62,9 +62,12 @@ namespace gargantuan {
 		void ApplyPublication(RenderPublicationPtr Publication);
 		[[nodiscard]] EditorViewportCaptureView CaptureBgra(RenderPublicationPtr Publication);
 		[[nodiscard]] EditorViewportFrame Capture(RenderPublicationPtr Publication);
+		[[nodiscard]] bool UsesHdrScene() const;
 		[[nodiscard]] std::optional<EditorViewportPick> Pick(float X, float Y) const;
 
 	  private:
+		friend struct EditorViewportRendererTestAccess;
+		void InjectPaletteUploadFailureForTesting();
 		struct Backend;
 		std::unique_ptr<Backend> State;
 	};

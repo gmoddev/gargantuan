@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "scene-color.glsl"
 
 layout(location = 0) in vec3 FragmentNormal;
 layout(location = 1) in vec4 FragmentColor;
@@ -8,6 +10,9 @@ layout(location = 4) in vec2 FragmentUV;
 layout(location = 5) in vec4 FragmentMaterialValues;
 layout(location = 6) in vec4 FragmentTangent;
 layout(location = 7) flat in vec4 FragmentMaterialFlags;
+layout(location = 8) flat in vec4 FragmentEmissiveOcclusion;
+layout(location = 9) flat in vec4 FragmentMaterialControls;
+layout(location = 10) flat in vec4 FragmentColorSamplerModes;
 
 layout(location = 0) out vec4 OutputColor;
 
@@ -20,12 +25,35 @@ layout(set = 3, binding = 0) uniform WorldUniforms {
     vec4 SunColorFogEnabled;
     vec4 FogColorStart;
     vec4 CameraPositionFogEnd;
+    vec4 EnvironmentLighting;
+    vec4 EnvironmentRotationTone;
+    vec4 LocalLighting;
 } world;
 
 layout(set = 2, binding = 0) uniform sampler2DShadow ShadowMap;
 layout(set = 2, binding = 1) uniform sampler2D BaseColorTexture;
 layout(set = 2, binding = 2) uniform sampler2D NormalTexture;
 layout(set = 2, binding = 3) uniform sampler2D MetallicRoughnessTexture;
+layout(set = 2, binding = 4) uniform sampler2D EmissiveTexture;
+layout(set = 2, binding = 5) uniform sampler2D OcclusionTexture;
+layout(set = 2, binding = 6) uniform samplerCube EnvironmentIrradiance;
+layout(set = 2, binding = 7) uniform samplerCube EnvironmentReflections;
+layout(set = 2, binding = 8) uniform sampler2D EnvironmentBrdf;
+
+struct LocalLight {
+    vec4 PositionRange;
+    vec4 DirectionOuter;
+    vec4 ColorIntensity;
+    vec4 ShapeInner;
+};
+layout(std430, set = 2, binding = 9) readonly buffer LocalLightBuffer {
+    LocalLight LocalLights[];
+};
+layout(std430, set = 2, binding = 10) readonly buffer LightTileBuffer {
+    uint TileWords[];
+};
+const uint TileLightLimit = 24u;
+const uint TileStride = TileLightLimit + 1u;
 
 float SHADOW_SPREAD = 2.0;
 vec2 SHADOW_TEXEL_SIZE = vec2(1.0 / 2048.0);
@@ -38,32 +66,43 @@ vec2 POISSON_DISK[4] = vec2[](
 
 const float Pi = 3.141592653589793;
 
-vec3 SrgbToLinear(vec3 Encoded) {
-    return mix(pow((Encoded + 0.055) / 1.055, vec3(2.4)), Encoded / 12.92,
-        lessThanEqual(Encoded, vec3(0.04045)));
+int AddressTexel(int Pixel, int Size, int Wrap) {
+    if (Wrap == 2) return clamp(Pixel, 0, Size - 1);
+    if (Wrap == 1) {
+        int Period = 2 * Size;
+        int Address = (Pixel % Period + Period) % Period;
+        return min(Address, Period - 1 - Address);
+    }
+    return (Pixel % Size + Size) % Size;
 }
 
-vec3 LinearToSrgb(vec3 Linear) {
-    return mix(1.055 * pow(Linear, vec3(1.0 / 2.4)) - 0.055, Linear * 12.92,
-        lessThanEqual(Linear, vec3(0.0031308)));
-}
-
-vec4 ReadColorTexel(ivec2 Pixel, ivec2 Dimensions) {
-    vec4 Texel = texelFetch(BaseColorTexture, (Pixel + Dimensions) % Dimensions, 0);
+vec4 ReadColorTexel(sampler2D Map, ivec2 Pixel, ivec2 Dimensions, ivec2 Wrap) {
+    ivec2 Address = ivec2(AddressTexel(Pixel.x, Dimensions.x, Wrap.x),
+        AddressTexel(Pixel.y, Dimensions.y, Wrap.y));
+    vec4 Texel = texelFetch(Map, Address, 0);
     return vec4(SrgbToLinear(Texel.rgb), Texel.a);
 }
 
-vec4 SampleLinearBaseColor(vec2 UV) {
-    // One image can serve both color and data slots under the same residency.
-    // Decode color texels before filtering and leave alpha in its linear range.
-    ivec2 Dimensions = textureSize(BaseColorTexture, 0);
-    if (all(equal(Dimensions, ivec2(1)))) return ReadColorTexel(ivec2(0), Dimensions);
-    vec2 Pixel = fract(UV) * vec2(Dimensions) - 0.5;
+vec4 SampleLinearColor(sampler2D Map, vec2 UV, bool NativeSrgb, int WrapMode, int FilterMode) {
+    if (NativeSrgb) return texture(Map, UV);
+    // Budget or capability fallback decodes level-zero color before interpolation.
+    ivec2 Dimensions = textureSize(Map, 0);
+    ivec2 Wrap = ivec2(WrapMode % 3, WrapMode / 3);
+    if (all(equal(Dimensions, ivec2(1)))) return ReadColorTexel(Map, ivec2(0), Dimensions, Wrap);
+    vec2 FootprintX = dFdx(UV) * vec2(Dimensions);
+    vec2 FootprintY = dFdy(UV) * vec2(Dimensions);
+    bool Minified = max(dot(FootprintX, FootprintX), dot(FootprintY, FootprintY)) > 1.0;
+    bool Nearest = (FilterMode & (Minified ? 1 : 2)) != 0;
+    vec2 Address = mix(fract(UV), mod(UV, 2.0), equal(Wrap, ivec2(1)));
+    Address = mix(Address, clamp(UV, 0.0, 1.0), equal(Wrap, ivec2(2)));
+    vec2 Pixel = Address * vec2(Dimensions);
+    if (Nearest) return ReadColorTexel(Map, ivec2(floor(Pixel)), Dimensions, Wrap);
+    Pixel -= 0.5;
     ivec2 Lower = ivec2(floor(Pixel));
     vec2 Weight = fract(Pixel);
     return mix(
-        mix(ReadColorTexel(Lower, Dimensions), ReadColorTexel(Lower + ivec2(1, 0), Dimensions), Weight.x),
-        mix(ReadColorTexel(Lower + ivec2(0, 1), Dimensions), ReadColorTexel(Lower + 1, Dimensions), Weight.x),
+        mix(ReadColorTexel(Map, Lower, Dimensions, Wrap), ReadColorTexel(Map, Lower + ivec2(1, 0), Dimensions, Wrap), Weight.x),
+        mix(ReadColorTexel(Map, Lower + ivec2(0, 1), Dimensions, Wrap), ReadColorTexel(Map, Lower + 1, Dimensions, Wrap), Weight.x),
         Weight.y);
 }
 
@@ -79,10 +118,27 @@ vec3 MaterialNormal(vec3 Normal) {
             Tangent = normalize(Tangent);
             vec3 Bitangent = cross(Normal, Tangent) * (FragmentTangent.w < 0.0 ? -1.0 : 1.0);
             vec3 Sampled = texture(NormalTexture, FragmentUV).xyz * 2.0 - 1.0;
+            Sampled.xy *= FragmentMaterialControls.x;
             Normal = SafeDirection(mat3(Tangent, Bitangent, Normal) * Sampled, Normal);
         }
     }
     return gl_FrontFacing ? Normal : -Normal;
+}
+
+vec3 EvaluateEnvironment(vec3 Base, vec3 Normal, vec3 View, float Metallic, float Roughness) {
+    vec3 Ambient = Base * (1.0 - Metallic) * world.AmbientExposure.rgb;
+    if (world.EnvironmentLighting.x < 0.5 || world.EnvironmentLighting.z <= 0.0) return Ambient;
+    float NoV = clamp(dot(Normal, View), 0.0, 1.0);
+    vec3 F0 = mix(vec3(0.04), Base, Metallic);
+    vec3 GrazingFresnel = max(vec3(1.0 - Roughness), F0);
+    vec3 Fresnel = F0 + (GrazingFresnel - F0) * pow(1.0 - NoV, 5.0);
+    vec3 Diffuse = texture(EnvironmentIrradiance, EnvironmentSampleDirection(Normal, world.EnvironmentRotationTone.xy)).rgb *
+        Base * (1.0 - Fresnel) * (1.0 - Metallic);
+    vec3 ReflectionRay = EnvironmentSampleDirection(reflect(-View, Normal), world.EnvironmentRotationTone.xy);
+    vec3 Radiance = textureLod(EnvironmentReflections, ReflectionRay,
+        Roughness * world.EnvironmentLighting.y).rgb;
+    vec2 Brdf = texture(EnvironmentBrdf, vec2(NoV, Roughness)).rg;
+    return Ambient + world.EnvironmentLighting.z * (Diffuse + Radiance * (F0 * Brdf.x + Brdf.y));
 }
 
 vec3 EvaluateDirect(vec3 Base, vec3 Normal, vec3 Light, vec3 View, float Metallic, float Roughness) {
@@ -104,8 +160,40 @@ vec3 EvaluateDirect(vec3 Base, vec3 Normal, vec3 Light, vec3 View, float Metalli
     return (Diffuse + Distribution * Visibility * Fresnel) * NoL;
 }
 
+vec3 EvaluateLocalLights(vec3 Base, vec3 Normal, vec3 View, float Metallic, float Roughness, bool Physical) {
+    if (world.LocalLighting.x < 0.5) return vec3(0.0);
+    uvec2 Tile = uvec2(gl_FragCoord.xy) / uint(world.LocalLighting.z);
+    uint Offset = (Tile.y * uint(world.LocalLighting.y) + Tile.x) * TileStride;
+    uint Count = min(TileWords[Offset], TileLightLimit);
+    vec3 Result = vec3(0.0);
+    for (uint Index = 0u; Index < Count; ++Index) {
+        LocalLight Source = LocalLights[TileWords[Offset + 1u + Index]];
+        vec3 Delta = Source.PositionRange.xyz - WorldPosition.xyz;
+        float DistanceSquared = dot(Delta, Delta);
+        float RangeSquared = Source.PositionRange.w * Source.PositionRange.w;
+        if (DistanceSquared >= RangeSquared) continue;
+        vec3 Light = SafeDirection(Delta, Normal);
+        float NormalDotLight = max(dot(Normal, Light), 0.0);
+        if (NormalDotLight <= 0.0) continue;
+        float Cone = 1.0;
+        if (Source.ShapeInner.y > 0.5) {
+            float Cosine = dot(Source.DirectionOuter.xyz, -Light);
+            float Outer = Source.DirectionOuter.w;
+            float Inner = Source.ShapeInner.x;
+            Cone = Inner > Outer ? smoothstep(Outer, Inner, Cosine) : step(Outer, Cosine);
+        }
+        float RelativeSquared = DistanceSquared / RangeSquared;
+        float Falloff = max(0.0, 1.0 - RelativeSquared * RelativeSquared);
+        float Irradiance = Source.ColorIntensity.w * Cone * Falloff * Falloff / max(DistanceSquared, 0.01);
+        vec3 Response = Physical ? EvaluateDirect(Base, Normal, Light, View, Metallic, Roughness)
+            : Base * NormalDotLight;
+        Result += Source.ColorIntensity.rgb * Irradiance * Response;
+    }
+    return Result;
+}
+
 float EvaluateShadow(float NormalDotLight) {
-    if (world.SunDirectionIntensity.w <= 0.0) return 1.0;
+    if (world.SunDirectionIntensity.w <= 0.0 || world.EnvironmentLighting.w < 0.5) return 1.0;
     vec3 shadowCoordinate = ShadowPosition.xyz / ShadowPosition.w;
     float bias = max(0.003 * (1.0 - NormalDotLight), 0.0005);
     float currentDepth = shadowCoordinate.z - bias;
@@ -129,7 +217,8 @@ void main() {
     bool Physical = FragmentMaterialFlags.x > 0.5;
     vec4 baseColor = FragmentColor;
     if (FragmentMaterialFlags.y > 0.5) {
-        baseColor *= Physical ? SampleLinearBaseColor(FragmentUV) : texture(BaseColorTexture, FragmentUV);
+        baseColor *= Physical ? SampleLinearColor(BaseColorTexture, FragmentUV, FragmentMaterialControls.z > 0.5,
+            int(FragmentColorSamplerModes.x), int(FragmentColorSamplerModes.z)) : texture(BaseColorTexture, FragmentUV);
     }
     if (FragmentMaterialValues.y == 1.0 && baseColor.a < FragmentMaterialValues.x) discard;
     if (FragmentMaterialValues.y != 2.0) baseColor.a = 1.0;
@@ -149,10 +238,18 @@ void main() {
             Roughness *= RoughnessMetallic.x;
         }
         vec3 Base = clamp(baseColor.rgb, 0.0, 1.0);
-        color = Base * (1.0 - Metallic) * world.AmbientExposure.rgb;
+        float Occlusion = FragmentEmissiveOcclusion.w > 0.0 ?
+            mix(1.0, texture(OcclusionTexture, FragmentUV).r, FragmentEmissiveOcclusion.w) : 1.0;
+        color = EvaluateEnvironment(Base, Normal, View, Metallic, Roughness) * Occlusion;
         color += Sun * EvaluateDirect(Base, Normal, Light, View, Metallic, Roughness);
+        color += EvaluateLocalLights(Base, Normal, View, Metallic, Roughness, true);
+        vec3 Emissive = FragmentEmissiveOcclusion.rgb;
+        if (FragmentMaterialControls.y > 0.5) Emissive *= SampleLinearColor(EmissiveTexture, FragmentUV,
+            FragmentMaterialControls.w > 0.5, int(FragmentColorSamplerModes.y), int(FragmentColorSamplerModes.w)).rgb;
+        color += Emissive;
     } else {
         color = baseColor.rgb * (world.AmbientExposure.rgb + Sun * NormalDotLight);
+        color += EvaluateLocalLights(baseColor.rgb, GeometricNormal, GeometricNormal, 0.0, 1.0, false);
     }
     if (world.SunColorFogEnabled.w > 0.5) {
         float distanceToCamera = length(WorldPosition.xyz - world.CameraPositionFogEnd.xyz);
@@ -160,8 +257,11 @@ void main() {
         float fogFactor = clamp((distanceToCamera - world.FogColorStart.w) / fogRange, 0.0, 1.0);
         color = mix(color, world.FogColorStart.rgb, fogFactor);
     }
-    color *= world.AmbientExposure.w;
-    color = clamp((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
+    if (FragmentMaterialFlags.w > 1.5) {
+        OutputColor = vec4(FiniteSceneColor(color), baseColor.a);
+        return;
+    }
+    color = ToneMapScene(color, world.AmbientExposure.w, world.EnvironmentRotationTone.z > 0.5);
     if (Physical && FragmentMaterialFlags.w > 0.5) color = LinearToSrgb(color);
     OutputColor = vec4(color, baseColor.a);
 }

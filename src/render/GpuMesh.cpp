@@ -48,6 +48,14 @@ namespace gargantuan {
 	SDLGpuMesh::SDLGpuMesh(const RenderMeshCreate &MeshData, SDLRendererMetrics *MetricsValue)
 		: SDLGpuMesh(ConvertMesh(MeshData), MetricsValue) {
 		if (Metrics && MeshData.SkinInfluences) ++Metrics->SkinnedSourceResourceCreations;
+		if (!MeshData.SkinInfluences && !Vertices.empty()) {
+			RenderBounds Bounds{Vertices.front().Position, Vertices.front().Position};
+			for (const auto &Value : Vertices) {
+				Bounds.Minimum = glm::min(Bounds.Minimum, Value.Position);
+				Bounds.Maximum = glm::max(Bounds.Maximum, Value.Position);
+			}
+			ImmutablePositionBounds = Bounds;
+		}
 	}
 
 	SDL_GPUBuffer *SDLGpuMesh::CreateVertexBuffer(SDL_GPUDevice *gpu) {
@@ -138,6 +146,7 @@ namespace gargantuan {
 			throw std::out_of_range("Dynamic mesh vertex update exceeds its persistent buffer");
 		if (UpdatedVertices.size() > std::numeric_limits<std::uint32_t>::max() / sizeof(Vertex))
 			throw std::length_error("Dynamic mesh vertex update exceeds the SDL transfer limit");
+		ImmutablePositionBounds.reset();
 		for (std::size_t Index = 0; Index < UpdatedVertices.size(); ++Index) {
 			const auto &Source = UpdatedVertices[Index];
 			auto &Destination = Vertices[FirstVertex + Index];

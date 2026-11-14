@@ -19,6 +19,8 @@ namespace gargantuan {
 		std::uint32_t InjectPaletteUploadFailures = 0;
 		std::uint32_t InjectShaderCreationFailures = 0;
 		std::uint32_t InjectPipelineCreationFailures = 0;
+		bool EnableHdrScene = true;
+		bool EnableOpaqueGrouping = true;
 	};
 
 	struct SDLRendererMetrics {
@@ -72,6 +74,32 @@ namespace gargantuan {
 		std::uint64_t CameraCulledObjects = 0;
 		std::uint64_t WorldGeometryBindings = 0;
 		std::uint64_t WorldMaterialBindings = 0;
+		std::uint64_t HdrSceneBytes = 0;
+		std::uint64_t SceneResolveDraws = 0;
+		std::uint64_t IblBuilds = 0;
+		std::uint64_t IblCacheHits = 0;
+		std::uint64_t IblPreprocessPasses = 0;
+		std::uint64_t IblLastPrepareNanoseconds = 0;
+		std::uint64_t OpaqueGroupingCandidates = 0;
+		std::uint64_t OpaqueGroupedObjects = 0;
+		std::uint64_t OpaqueGroupingUnprovenBounds = 0;
+		std::uint64_t OpaqueGroupingConflictBarriers = 0;
+		std::uint64_t OpaqueGroupingBudgetBarriers = 0;
+		std::uint64_t OpaqueGroupingPairTests = 0;
+		std::uint64_t OpaqueGroupingDepthProofs = 0;
+		std::uint64_t VisibleLocalLights = 0;
+		std::uint64_t OverBudgetLightTiles = 0;
+		std::uint64_t DroppedLightTileIndices = 0;
+		std::uint64_t LocalLightUploadBytes = 0;
+		std::uint64_t LastLocalLightGridNanoseconds = 0;
+		std::uint64_t MaterialViewBytes = 0;
+		std::uint64_t MaterialSourceBytes = 0;
+		std::uint64_t MaterialViewFallbacks = 0;
+		std::uint64_t MaterialUploadStagingBytes = 0;
+		std::uint64_t ShadowMapBuilds = 0;
+		std::uint64_t ShadowCacheHits = 0;
+		std::uint64_t ShadowMapPasses = 0;
+		std::uint64_t ShadowCasterDraws = 0;
 	};
 
 	class SDLRenderer final : public BaseRenderer {

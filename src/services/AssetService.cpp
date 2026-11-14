@@ -48,6 +48,17 @@ namespace gargantuan {
 		constexpr std::string_view RuntimeCatalogFormat = "GargantuanRuntimeAssets";
 		constexpr std::uint32_t RuntimeCatalogVersion = 1;
 
+		std::optional<AssetId> ImportedMaterial::*MaterialTextureBinding(AssetImportBindingKind Kind) {
+			switch (Kind) {
+				case AssetImportBindingKind::MaterialBaseColorTexture: return &ImportedMaterial::BaseColorTexture;
+				case AssetImportBindingKind::MaterialNormalTexture: return &ImportedMaterial::NormalTexture;
+				case AssetImportBindingKind::MaterialMetallicRoughnessTexture: return &ImportedMaterial::MetallicRoughnessTexture;
+				case AssetImportBindingKind::MaterialEmissiveTexture: return &ImportedMaterial::EmissiveTexture;
+				case AssetImportBindingKind::MaterialOcclusionTexture: return &ImportedMaterial::OcclusionTexture;
+				default: return nullptr;
+			}
+		}
+
 		struct AssetImportThreadCleanup final {
 			~AssetImportThreadCleanup() { SDL_CleanupTLS(); }
 		};
@@ -203,9 +214,7 @@ namespace gargantuan {
 					if (Binding.Kind == AssetImportBindingKind::MeshPrimitiveMaterial &&
 						(Node.Kind != AssetKind::Mesh || Kinds.at(Binding.LogicalKey) != AssetKind::Material))
 						return std::unexpected(Error("InvalidDependency", "Mesh primitive dependency must target a Material asset"));
-					if ((Binding.Kind == AssetImportBindingKind::MaterialBaseColorTexture ||
-						Binding.Kind == AssetImportBindingKind::MaterialNormalTexture ||
-						Binding.Kind == AssetImportBindingKind::MaterialMetallicRoughnessTexture) &&
+					if (MaterialTextureBinding(Binding.Kind) &&
 						(Node.Kind != AssetKind::Material || Kinds.at(Binding.LogicalKey) != AssetKind::Image))
 						return std::unexpected(Error("InvalidDependency", "Material texture dependency must target an Image asset"));
 					if (Binding.Kind == AssetImportBindingKind::AnimationSkeletonMesh &&
@@ -260,12 +269,10 @@ namespace gargantuan {
 						Animation->SkeletonAsset = DependencyId;
 					} else {
 						auto *Material = std::get_if<ImportedMaterial>(&Node.Asset);
-						if (!Material) return std::unexpected(Error("InvalidDependency", "Material texture binding target is invalid"));
-						if (Binding.Kind == AssetImportBindingKind::MaterialBaseColorTexture)
-							Material->BaseColorTexture = DependencyId;
-						else if (Binding.Kind == AssetImportBindingKind::MaterialNormalTexture)
-							Material->NormalTexture = DependencyId;
-						else Material->MetallicRoughnessTexture = DependencyId;
+						const auto Target = MaterialTextureBinding(Binding.Kind);
+						if (!Material || !Target || Material->*Target)
+							return std::unexpected(Error("InvalidDependency", "Material texture binding is invalid or duplicated"));
+						Material->*Target = DependencyId;
 					}
 				}
 				auto Artifact = EncodeAssetArtifact(Node.Asset, Node.Kind);
@@ -760,7 +767,7 @@ namespace gargantuan {
 				if (Record->Asset) {
 					if (const auto *Material = std::get_if<ImportedMaterial>(Record->Asset.get())) {
 						for (const auto &Texture : {Material->BaseColorTexture, Material->NormalTexture,
-							Material->MetallicRoughnessTexture}) {
+							Material->MetallicRoughnessTexture, Material->EmissiveTexture, Material->OcclusionTexture}) {
 							if (!Texture || std::ranges::contains(SemanticDependencies, *Texture)) continue;
 							const auto Dependency = ById.find(*Texture);
 							if (Dependency == ById.end() || Dependency->second->Kind != AssetKind::Image)
@@ -1276,6 +1283,10 @@ namespace gargantuan {
 		Render.Roughness = Material->RoughnessFactor;
 		Render.AlphaCutoff = Material->AlphaCutoff;
 		Render.DoubleSided = Material->DoubleSided;
+		Render.EmissiveFactor = Material->EmissiveFactor;
+		Render.OcclusionStrength = Material->OcclusionStrength;
+		Render.NormalScale = Material->NormalScale;
+		Render.TextureSamplers = Material->TextureSamplers;
 		if (Record->first != DefaultMaterialReference) Render.ShadingModel = RenderShadingModel::MetallicRoughness;
 		switch (Material->AlphaMode) {
 			case AssetMaterialAlphaMode::Opaque: Render.OpacityMode = RenderOpacityMode::Opaque; break;
@@ -1290,6 +1301,8 @@ namespace gargantuan {
 		Render.BaseColorTexture = ResolveTexture(Material->BaseColorTexture);
 		Render.NormalTexture = ResolveTexture(Material->NormalTexture);
 		Render.MetallicRoughnessTexture = ResolveTexture(Material->MetallicRoughnessTexture);
+		Render.EmissiveTexture = ResolveTexture(Material->EmissiveTexture);
+		Render.OcclusionTexture = ResolveTexture(Material->OcclusionTexture);
 		return AssetMaterialResource{*Material, Render, Record->second.ContentRevision};
 	}
 

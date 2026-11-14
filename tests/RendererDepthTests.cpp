@@ -9,6 +9,7 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -20,6 +21,13 @@
 #include <limits>
 #include <string>
 #include <tuple>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 using namespace gargantuan;
 
@@ -75,11 +83,145 @@ void WriteFrame(const std::filesystem::path &Path, const EditorViewportFrame &Fr
 	File.write(reinterpret_cast<const char *>(Frame.RgbPixels.data()), Frame.RgbPixels.size());
 	if (!File) throw std::runtime_error("Could not write raw frame");
 }
+
+constexpr std::uint32_t ORDER_WIDTH = 640;
+constexpr std::uint32_t ORDER_HEIGHT = 480;
+constexpr RenderMeshIdentity ORDER_MESH{1, 1};
+
+RenderPublication MakeOrderingScene(RenderPublicationId Id, const glm::mat4 &First, const glm::mat4 &Second,
+	bool Reverse, bool Masked, bool Shadows) {
+	RenderPublication Value{.Id = Id, .FullResync = true,
+		.Frame = {.ViewportWidth = ORDER_WIDTH, .ViewportHeight = ORDER_HEIGHT}};
+	auto &Camera = Value.Frame.Camera;
+	Camera.Position = {0, 0, 3};
+	Camera.VerticalFieldOfView = 45;
+	Camera.FarPlane = 10;
+	Camera.ViewMatrix = glm::lookAtRH(Camera.Position, glm::vec3(0), Camera.UpDirection);
+	Camera.ProjectionMatrix = glm::perspectiveRH_ZO(glm::radians(Camera.VerticalFieldOfView),
+		static_cast<float>(ORDER_WIDTH) / ORDER_HEIGHT, Camera.NearPlane, Camera.FarPlane);
+	Camera.ViewProjectionMatrix = Camera.ProjectionMatrix * Camera.ViewMatrix;
+	Value.Frame.Environment.SunDirection = {0, 0, 1};
+	Value.Frame.Environment.SunIntensity = Shadows ? 1.0f : 0.0f;
+	Value.Frame.Environment.AmbientColor = {0.7f, 0.7f, 0.7f};
+	Value.MeshCreates.push_back({ORDER_MESH, 1, 1,
+		std::make_shared<const std::vector<RenderVertex>>(std::initializer_list<RenderVertex>{
+			{{-.01f, -.01f, 0}, {0, 0, 1}}, {{.01f, -.01f, 0}, {0, 0, 1}},
+			{{.01f, .01f, 0}, {0, 0, 1}}, {{-.01f, .01f, 0}, {0, 0, 1}},
+		}),
+		std::make_shared<const std::vector<std::uint32_t>>(std::initializer_list<std::uint32_t>{0, 1, 2, 0, 2, 3}),
+		{{-.01f, -.01f, 0}, {.01f, .01f, 0}},
+	});
+	const auto Append = [&](ObjectId Id, const glm::mat4 &Matrix, const glm::vec4 &Color) {
+		RenderMaterialState FirstMaterial{.BaseColorFactor = Color, .DoubleSided = true};
+		RenderMaterialState SecondMaterial{.BaseColorFactor = {0, 0, 1, 1}, .DoubleSided = true};
+		constexpr RenderTextureIdentity Texture{1, 1};
+		SecondMaterial.BaseColorTexture = Texture;
+		if (Value.TextureCreates.empty()) Value.TextureCreates.push_back({Texture, 1, 1, 1,
+			RenderTextureFormat::Rgba8Unorm,
+			std::make_shared<const std::vector<std::uint8_t>>(std::initializer_list<std::uint8_t>{255, 255, 255, 255})});
+		if (Masked) FirstMaterial.OpacityMode = RenderOpacityMode::Masked;
+		Value.Creates.push_back({.Item = {.Object = Id, .ModelMatrix = Matrix, .InverseModelMatrix = glm::inverse(Matrix),
+			.CastShadow = Shadows}, .Mesh = ORDER_MESH,
+			.Primitives = std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(
+				std::initializer_list<RenderPrimitiveMaterialState>{{0, 3, FirstMaterial}, {3, 3, SecondMaterial}})});
+	};
+	Append({1, 1}, First, {1, 0, 0, 1});
+	Append({2, 1}, Second, {0, 1, 0, 1});
+	if (Reverse) std::swap(Value.Creates[0], Value.Creates[1]);
+	return Value;
+}
+
+RenderPublication WithoutSharedMesh(RenderPublication Value) {
+	auto Separate = Value.MeshCreates.front();
+	Separate.Mesh = {2, 1};
+	Value.MeshCreates.push_back(Separate);
+	Value.Creates[1].Mesh = Separate.Mesh;
+	return Value;
+}
+
+void CheckOpaqueOrdering(const std::filesystem::path &Output) {
+	EditorViewportRenderer Candidate(ORDER_WIDTH, ORDER_HEIGHT);
+	EditorViewportRenderer Reference(ORDER_WIDTH, ORDER_HEIGHT);
+	SDLRenderer MetricsRenderer({ORDER_WIDTH, ORDER_HEIGHT}, {
+		.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false,
+	});
+	const bool Vulkan = MetricsRenderer.GetDriverName() == "vulkan";
+	const auto Draw = [](auto &Renderer, const RenderPublication &Publication) {
+		return Renderer.Capture(std::make_shared<const RenderPublication>(Publication));
+	};
+	const auto CheckPixels = [&](std::string_view Name, const RenderPublication &Shared, const RenderPublication &Control) {
+		const auto Actual = Draw(Candidate, Shared);
+		if (!Output.empty()) WriteFrame(Output / (std::string(Name) + "-candidate.ppm"), Actual);
+		const auto Expected = Draw(Reference, Control);
+		if (!Output.empty()) WriteFrame(Output / (std::string(Name) + "-legacy-order.ppm"), Expected);
+		if (Actual.RgbPixels != Expected.RgbPixels)
+			throw std::runtime_error(std::format("Opaque ordering changed visible pixels for {}", Name));
+		if (!std::ranges::any_of(Actual.RgbPixels, [](std::uint8_t Channel) { return Channel > 150; }))
+			throw std::runtime_error(std::format("Opaque ordering fixture {} produced no bright material pixels", Name));
+	};
+	const glm::mat4 Identity(1.0f);
+	const auto Translate = [&](float X, float Z) { return glm::translate(Identity, glm::vec3(X, 0, Z)); };
+	const auto First = Translate(-.045f, 0);
+	const auto Second = Translate(.045f, 0);
+	const auto Rotation = glm::rotate(Identity, glm::radians(45.0f), glm::vec3(0, 1, 0));
+	const auto Large = glm::scale(Identity, glm::vec3(12));
+	RenderPublicationId Next = 1;
+	const auto Check = [&](std::string_view Name, const glm::mat4 &A, const glm::mat4 &B, bool Grouped,
+		bool Conflict = false, bool Depth = false, bool Budget = false, bool Reverse = false,
+		bool Mask = false, bool Shadow = false) {
+		const auto Value = MakeOrderingScene(Next++, A, B, Reverse, Mask, Shadow);
+		CheckPixels(Name, Value, WithoutSharedMesh(Value));
+		const auto Before = MetricsRenderer.GetMetrics();
+		MetricsRenderer.Draw(std::make_shared<const RenderPublication>(Value));
+		const auto After = MetricsRenderer.GetMetrics();
+		const auto GroupedCount = After.OpaqueGroupedObjects - Before.OpaqueGroupedObjects;
+		const auto Conflicts = After.OpaqueGroupingConflictBarriers - Before.OpaqueGroupingConflictBarriers;
+		const auto DepthProofs = After.OpaqueGroupingDepthProofs - Before.OpaqueGroupingDepthProofs;
+		const auto Budgets = After.OpaqueGroupingBudgetBarriers - Before.OpaqueGroupingBudgetBarriers;
+		const auto Binds = After.WorldMaterialBindings - Before.WorldMaterialBindings;
+		std::cout << "[Render:OpaqueOrdering] " << Name << " grouped=" << GroupedCount << " conflicts=" << Conflicts
+			<< " depthProofs=" << DepthProofs << " budgets=" << Budgets << " binds=" << Binds << '\n';
+		if (GroupedCount != (Vulkan && Grouped ? 2 : 0) || (Conflicts > 0) != (Vulkan && Conflict) ||
+			(DepthProofs > 0) != (Vulkan && Depth) || (Budgets > 0) != (Vulkan && Budget) ||
+			Binds != (Vulkan && Grouped ? 2 : 4))
+			throw std::runtime_error(std::format("Unexpected grouping or material bindings for {}", Name));
+	};
+	Check("screen-separated", First, Second, true);
+	Check("depth-separated", Identity, Translate(0, -1.5f), true, false, true);
+	Check("coplanar", Identity, Identity, false, true);
+	Check("coplanar-reversed", Identity, Identity, false, true, false, false, true);
+	Check("near-equal", Identity, Translate(0, 1e-7f), false, true);
+	Check("intersecting", Identity, Rotation, false, true);
+	Check("coverage-budget", Large, Large, false, false, false, true);
+	Check("alpha-mask", First, Second, false, false, false, false, false, true);
+	Check("shadow-casters", First, Second, true, false, false, false, false, false, true);
+
+	const auto Initial = MakeOrderingScene(Next++, First, Second, false, false, false);
+	const auto Control = WithoutSharedMesh(Initial);
+	CheckPixels("before-moving-overlap", Initial, Control);
+	RenderPublication Move{.Id = Next++, .BaseId = Initial.Id, .Frame = Initial.Frame};
+	const auto &Object = Initial.Creates[1];
+	Move.Updates.push_back({.Object = Object.Item.Object, .Domains = RenderUpdateDomain::Transform,
+		.Item = Object.Item, .Mesh = Object.Mesh, .Primitives = Object.Primitives});
+	Move.Updates[0].Item.ModelMatrix = First;
+	Move.Updates[0].Item.InverseModelMatrix = glm::inverse(First);
+	auto ControlMove = Move;
+	ControlMove.Updates[0].Mesh = Control.Creates[1].Mesh;
+	CheckPixels("moving-overlap", Move, ControlMove);
+
+	EditorViewportRenderer Restarted(ORDER_WIDTH, ORDER_HEIGHT);
+	const auto Resync = MakeOrderingScene(Next, First, First, false, false, false);
+	if (Draw(Restarted, Resync).RgbPixels != Draw(Reference, WithoutSharedMesh(Resync)).RgbPixels)
+		throw std::runtime_error("Opaque ordering changed visible pixels after renderer recreation");
+}
 }
 
 int main(int Argc, char **Argv) {
+#ifdef _WIN32
+	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#endif
 	try {
-		bool Observe = false, Extended = false;
+		bool Observe = false, Extended = false, OpaqueOrdering = false;
 		float Near = .1f, Far = 100000;
 		std::string Projection = "production";
 		std::filesystem::path Output;
@@ -87,6 +229,7 @@ int main(int Argc, char **Argv) {
 			const std::string Argument = Argv[Index];
 			if (Argument == "--observe") Observe = true;
 			else if (Argument == "--extended") Extended = true;
+			else if (Argument == "--opaque-ordering") OpaqueOrdering = true;
 			else if (Argument.starts_with("--near=")) Near = std::stof(Argument.substr(7));
 			else if (Argument.starts_with("--far=")) Far = std::stof(Argument.substr(6));
 			else if (Argument.starts_with("--projection=")) Projection = Argument.substr(13);
@@ -94,6 +237,10 @@ int main(int Argc, char **Argv) {
 			else throw std::invalid_argument("Unknown depth test argument");
 		}
 		if (!Output.empty()) std::filesystem::create_directories(Output);
+		if (OpaqueOrdering) {
+			CheckOpaqueOrdering(Output);
+			return 0;
+		}
 		BootstrapNativeRuntimeSchema();
 		auto Game = std::make_shared<DataModel>();
 		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));

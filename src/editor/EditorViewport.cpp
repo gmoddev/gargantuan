@@ -5,8 +5,11 @@
 
 #include "gargantuan/editor/EditorViewport.hpp"
 
+#include "render/sdl/SDLDirectionalShadowCache.hpp"
+#include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSceneColor.hpp"
 #include "render/sdl/SDLSceneDepth.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
@@ -105,6 +108,8 @@ namespace gargantuan {
 		std::uint32_t Height = 0;
 		SDL_GPUDevice *Gpu = nullptr;
 		SDL_GPUTexture *ColorTexture = nullptr;
+		SDL_GPUTexture *HdrSceneTexture = nullptr;
+		bool HdrSceneEnabled = false;
 		SDL_GPUTexture *DepthTexture = nullptr;
 		SDL_GPUTexture *ShadowMapTexture = nullptr;
 		SDL_GPUSampler *ShadowSampler = nullptr;
@@ -112,10 +117,24 @@ namespace gargantuan {
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
 		std::unique_ptr<SDLMeshCache> MeshResources;
 		std::unique_ptr<SDLTextureCache> TextureResources;
+		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
+		SDLDirectionalShadowCache ShadowCache;
+		bool RequiresFullResync = false;
+		std::uint32_t RemainingPaletteUploadFailures = 0;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		std::vector<std::uint8_t> BgraPixels;
+
+		void InvalidatePublication() {
+			RequiresFullResync = true;
+			MeshResources->Destroy();
+			TextureResources->Destroy();
+			SkinPalettes->Destroy();
+			ShadowCache.Invalidate();
+			ShadowPoseRevisions.clear();
+			Projection.Clear();
+		}
 
 		void Destroy() {
 			if (Gpu) SDL_WaitForGPUIdle(Gpu);
@@ -124,13 +143,16 @@ namespace gargantuan {
 			if (SkinPalettes) { SkinPalettes->Destroy(); SkinPalettes.reset(); }
 			for (auto &Pass : RenderPasses) if (Pass) Pass->Destroy(Gpu);
 			RenderPasses.clear();
+			if (Gpu) MaterialSamplers.Destroy(Gpu);
 			if (DownloadBuffer && Gpu) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
 			if (ColorTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, ColorTexture);
+			if (HdrSceneTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, HdrSceneTexture);
 			if (DepthTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, DepthTexture);
 			if (ShadowMapTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, ShadowMapTexture);
 			if (ShadowSampler && Gpu) SDL_ReleaseGPUSampler(Gpu, ShadowSampler);
 			DownloadBuffer = nullptr;
 			ColorTexture = nullptr;
+			HdrSceneTexture = nullptr;
 			DepthTexture = nullptr;
 			ShadowMapTexture = nullptr;
 			ShadowSampler = nullptr;
@@ -147,6 +169,7 @@ namespace gargantuan {
 			const auto DownloadBytes = static_cast<std::uint64_t>(Width) * Height * 4;
 			if (DownloadBytes > std::numeric_limits<std::uint32_t>::max())
 				throw std::invalid_argument("Viewport dimensions exceed the GPU download buffer size limit");
+			std::vector<std::uint8_t> ReplacementPixels(static_cast<std::size_t>(DownloadBytes));
 			SDL_WaitForGPUIdle(Gpu);
 			SDL_GPUTextureCreateInfo ColorInfo{
 				.type = SDL_GPU_TEXTURETYPE_2D, .format = ColorFormat, .usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
@@ -158,24 +181,28 @@ namespace gargantuan {
 			};
 			auto *ReplacementColor = SDL_CreateGPUTexture(Gpu, &ColorInfo);
 			auto *ReplacementDepth = SDL_CreateGPUTexture(Gpu, &DepthInfo);
+			auto *ReplacementHdr = HdrSceneEnabled ? CreateSDLHdrScene(Gpu, Width, Height) : nullptr;
 			auto *ReplacementDownload = SDL_CreateGPUTransferBuffer(Gpu, &DownloadInfo);
-			if (!ReplacementColor || !ReplacementDepth || !ReplacementDownload) {
+			if (!ReplacementColor || !ReplacementDepth || !ReplacementDownload || (HdrSceneEnabled && !ReplacementHdr)) {
 				if (ReplacementDownload) SDL_ReleaseGPUTransferBuffer(Gpu, ReplacementDownload);
 				if (ReplacementColor) SDL_ReleaseGPUTexture(Gpu, ReplacementColor);
 				if (ReplacementDepth) SDL_ReleaseGPUTexture(Gpu, ReplacementDepth);
+				if (ReplacementHdr) SDL_ReleaseGPUTexture(Gpu, ReplacementHdr);
 				throw std::runtime_error(std::format("Failed to create viewport targets: {}", SDL_GetError()));
 			}
 			if (DownloadBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
 			if (ColorTexture) SDL_ReleaseGPUTexture(Gpu, ColorTexture);
+			if (HdrSceneTexture) SDL_ReleaseGPUTexture(Gpu, HdrSceneTexture);
 			if (DepthTexture) SDL_ReleaseGPUTexture(Gpu, DepthTexture);
 			ColorTexture = ReplacementColor;
+			HdrSceneTexture = ReplacementHdr;
 			DepthTexture = ReplacementDepth;
 			DownloadBuffer = ReplacementDownload;
-			BgraPixels.resize(static_cast<std::size_t>(Width) * Height * 4);
+			BgraPixels = std::move(ReplacementPixels);
 		}
 	};
 
-	EditorViewportRenderer::EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height)
+	EditorViewportRenderer::EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height, bool EnableHdrScene)
 		: State(std::make_unique<Backend>()) {
 		State->Width = Width;
 		State->Height = Height;
@@ -189,9 +216,10 @@ namespace gargantuan {
 			State->Destroy();
 			throw std::runtime_error(std::format("Failed to create viewport GPU device: {}", SDL_GetError()));
 		}
+		State->HdrSceneEnabled = EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
 		State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu);
 		State->TextureResources = std::make_unique<SDLTextureCache>(State->Gpu);
-		State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(State->Gpu);
+		State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(State->Gpu, nullptr, &State->RemainingPaletteUploadFailures);
 
 		SDL_GPUTextureCreateInfo ShadowInfo{
 			.type = SDL_GPU_TEXTURETYPE_2D, .format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT,
@@ -214,8 +242,12 @@ namespace gargantuan {
 		}
 		try {
 			State->RecreateTargets();
-			for (const auto &Constructor : GetSDLRenderPassConstructors())
-				State->RenderPasses.push_back(Constructor(State->Gpu, ColorFormat, nullptr));
+			for (const auto &Definition : GetSDLRenderPassConstructors()) {
+				if (Definition.Target == SDLPassTarget::Resolve && !State->HdrSceneEnabled) continue;
+				const auto Format = State->HdrSceneEnabled && Definition.Target == SDLPassTarget::Scene
+					? SDLHdrSceneFormat : ColorFormat;
+				State->RenderPasses.push_back(Definition.Construct(State->Gpu, Format, nullptr));
+			}
 		} catch (...) {
 			State->Destroy();
 			throw;
@@ -224,24 +256,42 @@ namespace gargantuan {
 
 	EditorViewportRenderer::~EditorViewportRenderer() { if (State) State->Destroy(); }
 
+	bool EditorViewportRenderer::UsesHdrScene() const { return State && State->HdrSceneEnabled; }
+
 	void EditorViewportRenderer::Resize(std::uint32_t Width, std::uint32_t Height) {
 		if (!State || (Width == State->Width && Height == State->Height)) return;
 		const auto PreviousWidth = State->Width;
 		const auto PreviousHeight = State->Height;
 		State->Width = Width;
 		State->Height = Height;
-		try { State->RecreateTargets(); State->Projection.Clear(); }
+		try { State->RecreateTargets(); }
 		catch (...) { State->Width = PreviousWidth; State->Height = PreviousHeight; throw; }
+		State->Projection.Clear();
 	}
 
 	void EditorViewportRenderer::ApplyPublication(RenderPublicationPtr Publication) {
 		if (!State || !State->Gpu) throw std::logic_error("Viewport renderer is not initialized");
 		if (!Publication) throw std::invalid_argument("Viewport requires an immutable RenderPublication");
-		if (State->Projection.GetLastPublicationId() == Publication->Id) return;
-		(void)State->Projection.Apply(*Publication);
-		State->MeshResources->ApplyPublication(*Publication);
-		State->TextureResources->ApplyPublication(*Publication);
-		State->SkinPalettes->ApplyPublication(*Publication);
+		if (State->RequiresFullResync && !Publication->FullResync)
+			throw std::logic_error("Viewport renderer requires a full RenderPublication after resource recovery");
+		if (Publication->Id != InvalidRenderPublicationId && State->Projection.GetLastPublicationId() == Publication->Id) return;
+		bool ApplyingNativeResources = false;
+		try {
+			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
+			(void)State->Projection.Apply(*Publication);
+			ApplyingNativeResources = true;
+			State->MeshResources->ApplyPublication(*Publication);
+			State->TextureResources->ApplyPublication(*Publication);
+			State->SkinPalettes->ApplyPublication(*Publication);
+		} catch (const std::invalid_argument &) {
+			// Neutral validation rejects before changing the last accepted projection.
+			if (ApplyingNativeResources) State->InvalidatePublication();
+			throw;
+		} catch (...) {
+			State->InvalidatePublication();
+			throw;
+		}
+		State->RequiresFullResync = false;
 		if (Publication->FullResync) State->ShadowPoseRevisions.clear();
 		for (const auto &Remove : Publication->Removes)
 			State->ShadowPoseRevisions.erase(Remove.Object);
@@ -253,20 +303,33 @@ namespace gargantuan {
 		const auto &FrameState = State->Projection.GetFrame();
 		if (FrameState.ViewportWidth != State->Width || FrameState.ViewportHeight != State->Height)
 			throw std::invalid_argument("RenderPublication dimensions do not match the viewport target");
-		State->MeshResources->UploadToGpu();
+		try {
+			State->MeshResources->UploadToGpu();
+		} catch (...) {
+			State->InvalidatePublication();
+			throw;
+		}
 		auto *Commands = SDL_AcquireGPUCommandBuffer(State->Gpu);
 		if (!Commands) throw std::runtime_error(std::format("Failed to acquire viewport command buffer: {}", SDL_GetError()));
 		SDLFrameContext Frame(
-			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowPoseRevisions);
+			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
 		Frame.Commands = Commands;
 		Frame.SwapchainTexture = State->ColorTexture;
+		Frame.HdrSceneTexture = State->HdrSceneTexture;
 		Frame.DepthTexture = State->DepthTexture;
 		Frame.ShadowMapTexture = State->ShadowMapTexture;
 		Frame.ShadowSampler = State->ShadowSampler;
 		Frame.TextureResources = State->TextureResources.get();
+		Frame.MaterialSamplers = &State->MaterialSamplers;
 		Frame.Width = State->Width;
 		Frame.Height = State->Height;
-		for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
+		try {
+			for (auto &Pass : State->RenderPasses)
+				if (auto *Recorded = Pass->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
+		} catch (...) {
+			SDL_CancelGPUCommandBuffer(Commands);
+			throw;
+		}
 		const auto RenderSubmitted = std::chrono::steady_clock::now();
 
 		auto *CopyPass = SDL_BeginGPUCopyPass(Commands);
@@ -287,6 +350,7 @@ namespace gargantuan {
 			throw std::runtime_error(std::format("Failed to wait for viewport frame: {}", SDL_GetError()));
 		}
 		const auto ReadbackComplete = std::chrono::steady_clock::now();
+		(void)State->ShadowCache.OnFrameSubmitted();
 		auto *Rgba = static_cast<const std::uint8_t *>(SDL_MapGPUTransferBuffer(State->Gpu, State->DownloadBuffer, false));
 		if (!Rgba) {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
@@ -326,7 +390,11 @@ namespace gargantuan {
 	}
 
 	std::optional<EditorViewportPick> EditorViewportRenderer::Pick(float X, float Y) const {
-		if (!State) return std::nullopt;
+		if (!State || State->RequiresFullResync) return std::nullopt;
 		return PickEditorViewport(State->Projection, X, Y);
+	}
+
+	void EditorViewportRenderer::InjectPaletteUploadFailureForTesting() {
+		State->RemainingPaletteUploadFailures = 1;
 	}
 }

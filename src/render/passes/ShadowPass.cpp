@@ -2,6 +2,8 @@
 
 #include "gargantuan/Log.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
+#include "render/sdl/SDLDirectionalShadowCache.hpp"
+#include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
@@ -49,16 +51,6 @@ namespace gargantuan {
 				DoubleSided = SDL_CreateGPUGraphicsPipeline(gpu, &Info);
 				if (!DoubleSided) throw std::runtime_error("[Renderer:Shadow] Could not create the double-sided pipeline");
 				if (Metrics) ++Metrics->PipelineCreations;
-				const SDL_GPUSamplerCreateInfo Sampler{
-					.min_filter = SDL_GPU_FILTER_LINEAR,
-					.mag_filter = SDL_GPU_FILTER_LINEAR,
-					.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
-					.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-					.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-					.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-				};
-				MaterialSampler = SDL_CreateGPUSampler(gpu, &Sampler);
-				if (!MaterialSampler) throw std::runtime_error("[Renderer:Shadow] Could not create the shadow material sampler");
 			} catch (...) {
 				Destroy(gpu);
 				throw;
@@ -67,15 +59,18 @@ namespace gargantuan {
 
 		void Destroy(SDL_GPUDevice *Gpu) override {
 			if (DoubleSided) SDL_ReleaseGPUGraphicsPipeline(Gpu, DoubleSided);
-			if (MaterialSampler) SDL_ReleaseGPUSampler(Gpu, MaterialSampler);
 			DoubleSided = nullptr;
-			MaterialSampler = nullptr;
 			SDLRenderPass::Destroy(Gpu);
 		}
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
-			(void)gpu;
 			const auto &Environment = context.Projection.GetFrame().Environment;
+			if (context.ShadowCache.Restore(Environment, context.ShadowMapTexture, context.ShadowMatrix)) {
+				if (context.Metrics) ++context.Metrics->ShadowCacheHits;
+				return nullptr;
+			}
+			context.ShadowCache.BeginRecording();
+			context.ShadowPoseRevisions.clear();
 			glm::mat4 shadowProjection = glm::ortho<float>(-30.0f, 30.0f, -30.0f, 30.0f, -50.0f, 150.0f);
 			const auto SunDirection = glm::normalize(Environment.SunDirection);
 			const auto Up = std::abs(glm::dot(SunDirection, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.99f
@@ -98,9 +93,11 @@ namespace gargantuan {
 			auto *White = Environment.SunIntensity > 0.0f ? context.TextureResources->GetWhiteTexture() : nullptr;
 			SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(context.Commands, nullptr, 0, &depthTarget);
 			if (!pass) throw std::runtime_error("[Renderer:Shadow] Could not begin the shadow render pass");
-			if (Environment.SunIntensity <= 0.0f) return pass;
+			if (context.Metrics) ++context.Metrics->ShadowMapPasses;
 			try {
-				DrawCasters(pass, context, shadowMatrix, White);
+				const bool AllResident = Environment.SunIntensity <= 0.0f || DrawCasters(gpu, pass, context, shadowMatrix, White);
+				context.ShadowCache.FinishRecording(Environment, context.ShadowMapTexture, shadowMatrix, AllResident,
+					!context.ShadowPoseRevisions.empty());
 			} catch (...) {
 				SDL_EndGPURenderPass(pass);
 				throw;
@@ -109,12 +106,15 @@ namespace gargantuan {
 		}
 
 	  private:
-		void DrawCasters(SDL_GPURenderPass *Pass, SDLFrameContext &context, const glm::mat4 &ShadowMatrix,
+		bool DrawCasters(SDL_GPUDevice *Gpu, SDL_GPURenderPass *Pass, SDLFrameContext &context, const glm::mat4 &ShadowMatrix,
 			SDL_GPUTexture *White) {
 			SDL_GPUGraphicsPipeline *BoundPipeline = nullptr;
 			const SDLGpuMesh *BoundMesh = nullptr;
 			SDL_GPUBuffer *BoundPalette = nullptr;
 			SDL_GPUTexture *BoundTexture = nullptr;
+			SDL_GPUSampler *BoundSampler = nullptr;
+			auto *DefaultSampler = context.MaterialSamplers->Get(Gpu, {}, false);
+			bool AllResident = true;
 			glm::vec4 BoundAlpha(-1.0f);
 			for (const auto &[Object, Projected] : context.Projection.GetObjects()) {
 				(void)Object;
@@ -127,6 +127,7 @@ namespace gargantuan {
 				const auto *mesh = Projected.Mesh
 					? context.MeshResources.Find(*Projected.Mesh) : context.MeshResources.Find(item.Geometry);
 				if (!mesh || !mesh->VertexBuffer || !mesh->IndexBuffer) {
+					AllResident = false;
 					LOG_WARN(
 						App,
 						"RenderPublication %llu shadow skipped ObjectId %u:%u because its GPU resource is unavailable",
@@ -136,6 +137,7 @@ namespace gargantuan {
 					);
 					continue;
 				}
+				if (Projected.Mesh) context.ShadowCache.DependOnMesh(*Projected.Mesh);
 
 				Uniforms uniforms{.ShadowMatrix = ShadowMatrix, .PartMatrix = item.ModelMatrix};
 				SDL_PushGPUVertexUniformData(context.Commands, 0, &uniforms, sizeof(Uniforms));
@@ -149,6 +151,7 @@ namespace gargantuan {
 					const bool AlphaMask = Material.OpacityMode == RenderOpacityMode::Masked;
 					if (AlphaMask && Material.BaseColorFactor.a < Material.AlphaCutoff) return;
 					const bool TexturedMask = AlphaMask && Material.BaseColorTexture.has_value();
+					if (TexturedMask) context.ShadowCache.DependOnMask(*Material.BaseColorTexture);
 					auto *Selected = Material.DoubleSided ? DoubleSided : Pipeline;
 					if (Selected != BoundPipeline) {
 						SDL_BindGPUGraphicsPipeline(Pass, Selected);
@@ -171,10 +174,13 @@ namespace gargantuan {
 					}
 					auto *Texture = TexturedMask ? context.TextureResources->Find(*Material.BaseColorTexture) : White;
 					if (!Texture) throw std::logic_error("[Renderer:Shadow] A mask image has no SDL residency");
-					if (Texture != BoundTexture) {
-						const SDL_GPUTextureSamplerBinding Binding{Texture, MaterialSampler};
+					auto *Sampler = TexturedMask ? context.MaterialSamplers->Get(Gpu, Material.TextureSamplers[0], false)
+						: DefaultSampler;
+					if (Texture != BoundTexture || Sampler != BoundSampler) {
+						const SDL_GPUTextureSamplerBinding Binding{Texture, Sampler};
 						SDL_BindGPUFragmentSamplers(Pass, 0, &Binding, 1);
 						BoundTexture = Texture;
+						BoundSampler = Sampler;
 					}
 					const auto AlphaFactorCutoff = TexturedMask
 						? glm::vec4(Material.BaseColorFactor.a, Material.AlphaCutoff, 1, 0) : glm::vec4(0);
@@ -183,17 +189,20 @@ namespace gargantuan {
 						BoundAlpha = AlphaFactorCutoff;
 					}
 					SDL_DrawGPUIndexedPrimitives(Pass, Count, 1, First, 0, 0);
-					if (context.Metrics) ++context.Metrics->DrawCalls;
+					if (context.Metrics) {
+						++context.Metrics->DrawCalls;
+						++context.Metrics->ShadowCasterDraws;
+					}
 				};
 				if (Projected.Primitives) {
 					for (const auto &Primitive : *Projected.Primitives)
 						DrawPrimitive(Primitive.FirstIndex, Primitive.IndexCount, Primitive.Material);
 				} else DrawPrimitive(0, mesh->IndexCount, Projected.Material);
 			}
+			return AllResident;
 		}
 
 		SDL_GPUGraphicsPipeline *DoubleSided = nullptr;
-		SDL_GPUSampler *MaterialSampler = nullptr;
 	};
 
 	std::unique_ptr<SDLRenderPass> CreateShadowPass(

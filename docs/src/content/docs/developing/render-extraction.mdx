@@ -60,6 +60,12 @@ state: repeated writes become one update, create plus updates becomes one final
 create, create plus destroy disappears, and update plus destroy becomes remove.
 Irrelevant properties do not dirty rendering.
 
+Local light environment state shares an immutable, identity-ordered list of at
+most 512 enabled emitters. The publisher follows WorldRoot light membership
+and invalidates that list for authored changes or changes to an attached
+BasePart's render transform. Unrelated transform and camera changes preserve
+the light payload.
+
 Character Networking Foundation 3C adds one transient exception to committed
 property dirtiness: a Character RootPart may carry an engine-only presentation
 offset. `BasePart::GetCFrame` remains semantic, while render extraction consumes

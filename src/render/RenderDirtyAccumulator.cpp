@@ -35,7 +35,8 @@ namespace gargantuan {
 
 	RenderUpdateDomain RenderDirtyAccumulator::Classify(const ChangePayload &Payload) {
 		if (const auto *Created = std::get_if<ObjectCreatedChange>(&Payload)) {
-			if (Created->ClassName == "Lighting" || Created->ClassName == "Sky")
+			if (Created->ClassName == "Lighting" || Created->ClassName == "Sky" ||
+				Created->ClassName == "PointLight" || Created->ClassName == "SpotLight")
 				return RenderUpdateDomain::Environment | RenderUpdateDomain::Hierarchy;
 			return RenderUpdateDomain::Transform | RenderUpdateDomain::Material | RenderUpdateDomain::Visibility |
 				RenderUpdateDomain::Geometry | RenderUpdateDomain::Hierarchy;
@@ -58,9 +59,14 @@ namespace gargantuan {
 		if (Property->PropertyName == "Ambient" || Property->PropertyName == "SunColor" ||
 			Property->PropertyName == "Brightness" || Property->PropertyName == "ClockTime" ||
 			Property->PropertyName == "ExposureCompensation" || Property->PropertyName == "EnvironmentColor" ||
+			Property->PropertyName == "EnvironmentRotation" || Property->PropertyName == "IblIntensity" ||
+			Property->PropertyName == "ToneMapping" ||
 			Property->PropertyName == "FogEnabled" || Property->PropertyName == "FogColor" ||
 			Property->PropertyName == "FogStart" || Property->PropertyName == "FogEnd" ||
-			Property->PropertyName == "Enabled" || Property->PropertyName.starts_with("Skybox"))
+			Property->PropertyName == "Enabled" || Property->PropertyName.starts_with("Skybox") ||
+			Property->PropertyName == "LightEnabled" || Property->PropertyName == "LightColor" ||
+			Property->PropertyName == "LightIntensity" || Property->PropertyName == "LightRange" ||
+			Property->PropertyName == "LightCFrame" || Property->PropertyName == "LightConeAngles")
 			return RenderUpdateDomain::Environment;
 		return RenderUpdateDomain::None;
 	}

@@ -3,8 +3,11 @@
 #include "gargantuan/render/SDLRenderer.hpp"
 
 #include "gargantuan/Log.hpp"
+#include "render/sdl/SDLDirectionalShadowCache.hpp"
+#include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSceneColor.hpp"
 #include "render/sdl/SDLSceneDepth.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
@@ -66,18 +69,22 @@ namespace gargantuan {
 		SDLRendererOptions Options;
 		bool WindowClaimed = false;
 		SDL_GPUTexture *ColorTexture = nullptr;
+		SDL_GPUTexture *HdrSceneTexture = nullptr;
+		bool HdrSceneEnabled = false;
 		SDL_GPUTexture *DepthTexture = nullptr;
 		SDL_GPUTexture *ShadowMapTexture = nullptr;
 		SDL_GPUSampler *ShadowSampler = nullptr;
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
 		std::unique_ptr<SDLMeshCache> MeshResources;
 		std::unique_ptr<SDLTextureCache> TextureResources;
+		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
 		std::vector<ObjectId> VisibleAnimationObjects;
 		std::uint64_t VisibilityGeneration = 0;
 		RenderPublicationId VisibilityPublication = InvalidRenderPublicationId;
 		bool VisibilityComplete = false;
+		SDLDirectionalShadowCache ShadowCache;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		SDLRendererMetrics Metrics;
 		std::uint32_t RemainingPaletteUploadFailures = 0;
@@ -86,12 +93,13 @@ namespace gargantuan {
 		bool RequiresFullResync = false;
 	};
 
-	const std::vector<SDLRenderPassConstructor> &GetSDLRenderPassConstructors() {
-		static const std::vector<SDLRenderPassConstructor> Constructors{
-			CreateShadowPass,
-			CreateSkyPass,
-			CreateOpaquePass,
-			CreateGuiPass,
+	const std::vector<SDLRenderPassDefinition> &GetSDLRenderPassConstructors() {
+		static const std::vector<SDLRenderPassDefinition> Constructors{
+			{CreateShadowPass, SDLPassTarget::Scene},
+			{CreateSkyPass, SDLPassTarget::Scene},
+			{CreateOpaquePass, SDLPassTarget::Scene},
+			{CreateSceneResolvePass, SDLPassTarget::Resolve},
+			{CreateGuiPass, SDLPassTarget::Output},
 		};
 		return Constructors;
 	}
@@ -122,6 +130,7 @@ namespace gargantuan {
 				State->WindowClaimed = true;
 				State->SwapchainFormat = SDL_GetGPUSwapchainTextureFormat(State->Gpu, State->Window);
 			} else State->SwapchainFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+			State->HdrSceneEnabled = Options.EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
 			State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu, &State->Metrics);
 			State->TextureResources = std::make_unique<SDLTextureCache>(State->Gpu, &State->Metrics);
 			State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(
@@ -157,12 +166,15 @@ namespace gargantuan {
 				throw std::runtime_error(std::format("Failed to query renderer window size: {}", SDL_GetError()));
 			Resize(InitialWidth, InitialHeight);
 
-			for (const auto &Constructor : GetSDLRenderPassConstructors()) {
+			for (const auto &Definition : GetSDLRenderPassConstructors()) {
+				if (Definition.Target == SDLPassTarget::Resolve && !State->HdrSceneEnabled) continue;
 				if (State->RemainingShaderCreationFailures > 0) {
 					--State->RemainingShaderCreationFailures;
 					throw std::runtime_error("[Render:Shader] injected shader creation failure");
 				}
-				auto Pass = Constructor(State->Gpu, State->SwapchainFormat, &State->Metrics);
+				const auto Format = State->HdrSceneEnabled && Definition.Target == SDLPassTarget::Scene
+					? SDLHdrSceneFormat : State->SwapchainFormat;
+				auto Pass = Definition.Construct(State->Gpu, Format, &State->Metrics);
 				if (!Pass) throw std::runtime_error("Failed to construct renderer pass");
 				if (State->RemainingPipelineCreationFailures > 0) {
 					--State->RemainingPipelineCreationFailures;
@@ -198,11 +210,15 @@ namespace gargantuan {
 		}
 		for (auto &Pass : State->RenderPasses) if (Pass) Pass->Destroy(State->Gpu);
 		State->RenderPasses.clear();
+		if (State->Gpu) State->MaterialSamplers.Destroy(State->Gpu);
 		if (State->ColorTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->ColorTexture);
+		if (State->HdrSceneTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->HdrSceneTexture);
 		if (State->DepthTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->DepthTexture);
 		if (State->ShadowMapTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->ShadowMapTexture);
 		if (State->ShadowSampler && State->Gpu) SDL_ReleaseGPUSampler(State->Gpu, State->ShadowSampler);
 		State->ColorTexture = nullptr;
+		State->HdrSceneTexture = nullptr;
+		State->Metrics.HdrSceneBytes = 0;
 		State->DepthTexture = nullptr;
 		State->ShadowMapTexture = nullptr;
 		State->ShadowSampler = nullptr;
@@ -239,6 +255,7 @@ namespace gargantuan {
 					++State->Metrics.StalePoseDrops;
 			}
 			const auto ProjectionStart = Clock::now();
+			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
 			const auto Changes = State->Projection.Apply(*Publication);
 			State->Metrics.EnvironmentApplications += Changes.EnvironmentsUpdated;
 			State->Metrics.LastProjectionNanoseconds = Nanoseconds(Clock::now() - ProjectionStart);
@@ -262,6 +279,7 @@ namespace gargantuan {
 			State->MeshResources->Destroy();
 			State->TextureResources->Destroy();
 			State->SkinPalettes->Destroy();
+			State->ShadowCache.Invalidate();
 			State->ShadowPoseRevisions.clear();
 			State->VisibilityComplete = false;
 			State->VisibleAnimationObjects.clear();
@@ -291,12 +309,15 @@ namespace gargantuan {
 			if (Pose.Mode == RenderAnimationSkinningMode::CpuFallback) ++State->Metrics.CpuFallbackRigs;
 		}
 		SDLFrameContext Frame(
-			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowPoseRevisions);
+			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
+		Frame.EnableOpaqueGrouping = State->Options.EnableOpaqueGrouping;
 		Frame.Commands = Commands;
+		Frame.HdrSceneTexture = State->HdrSceneTexture;
 		Frame.DepthTexture = State->DepthTexture;
 		Frame.ShadowMapTexture = State->ShadowMapTexture;
 		Frame.ShadowSampler = State->ShadowSampler;
 		Frame.TextureResources = State->TextureResources.get();
+		Frame.MaterialSamplers = &State->MaterialSamplers;
 		Frame.Metrics = &State->Metrics;
 		if (State->Options.Offscreen) {
 			Frame.SwapchainTexture = State->ColorTexture;
@@ -312,13 +333,24 @@ namespace gargantuan {
 			SDL_CancelGPUCommandBuffer(Frame.Commands);
 			return;
 		}
-		if (Frame.Width != State->Projection.GetFrame().ViewportWidth ||
+		if (Frame.Width != static_cast<std::uint32_t>(State->Width) ||
+			Frame.Height != static_cast<std::uint32_t>(State->Height) ||
+			Frame.Width != State->Projection.GetFrame().ViewportWidth ||
 			Frame.Height != State->Projection.GetFrame().ViewportHeight) {
-			SDL_CancelGPUCommandBuffer(Frame.Commands);
+			if (State->Options.Offscreen) SDL_CancelGPUCommandBuffer(Frame.Commands);
+			else if (!SDL_SubmitGPUCommandBuffer(Frame.Commands))
+				LOG_ERROR(App, "[Render:SDL] Failed to retire the resized swapchain image: %s", SDL_GetError());
 			LOG_TRACE(App, "[Render:SDL] RenderPublication viewport does not match the acquired target");
 			return;
 		}
-		for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
+		try {
+			for (auto &Pass : State->RenderPasses)
+				if (auto *Recorded = Pass->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
+		} catch (...) {
+			if (State->Options.Offscreen) SDL_CancelGPUCommandBuffer(Frame.Commands);
+			else SDL_SubmitGPUCommandBuffer(Frame.Commands);
+			throw;
+		}
 		if (State->Options.WaitForGpuCompletion) {
 			auto *Fence = SDL_SubmitGPUCommandBufferAndAcquireFence(Frame.Commands);
 			State->Metrics.LastSubmissionNanoseconds = Nanoseconds(Clock::now() - SubmissionStart);
@@ -337,6 +369,7 @@ namespace gargantuan {
 			State->Metrics.LastSubmissionNanoseconds = Nanoseconds(Clock::now() - SubmissionStart);
 		}
 		State->Metrics.CpuSubmissionNanoseconds += State->Metrics.LastSubmissionNanoseconds;
+		if (State->ShadowCache.OnFrameSubmitted()) ++State->Metrics.ShadowMapBuilds;
 		++State->Metrics.FramesSubmitted;
 		if (Publication->FullResync) ++State->Metrics.FullResyncs;
 	}
@@ -371,9 +404,23 @@ namespace gargantuan {
 			if (ReplacementColor) SDL_ReleaseGPUTexture(State->Gpu, ReplacementColor);
 			throw std::runtime_error(std::format("Failed to create renderer depth target: {}", SDL_GetError()));
 		}
+		SDL_GPUTexture *ReplacementHdr = nullptr;
+		if (State->HdrSceneEnabled) {
+			ReplacementHdr = CreateSDLHdrScene(State->Gpu, static_cast<std::uint32_t>(WidthValue),
+				static_cast<std::uint32_t>(HeightValue));
+			if (!ReplacementHdr) {
+				SDL_ReleaseGPUTexture(State->Gpu, ReplacementDepth);
+				if (ReplacementColor) SDL_ReleaseGPUTexture(State->Gpu, ReplacementColor);
+				throw std::runtime_error(std::format("[Renderer:HDR] Could not allocate scene color: {}", SDL_GetError()));
+			}
+		}
 		if (State->ColorTexture) SDL_ReleaseGPUTexture(State->Gpu, State->ColorTexture);
+		if (State->HdrSceneTexture) SDL_ReleaseGPUTexture(State->Gpu, State->HdrSceneTexture);
 		if (State->DepthTexture) SDL_ReleaseGPUTexture(State->Gpu, State->DepthTexture);
 		State->ColorTexture = ReplacementColor;
+		State->HdrSceneTexture = ReplacementHdr;
+		State->Metrics.HdrSceneBytes = ReplacementHdr ?
+			static_cast<std::uint64_t>(WidthValue) * static_cast<std::uint64_t>(HeightValue) * 8u : 0;
 		State->DepthTexture = ReplacementDepth;
 		State->Width = WidthValue;
 		State->Height = HeightValue;
@@ -386,7 +433,15 @@ namespace gargantuan {
 	}
 
 	SDLRendererMetrics SDLRenderer::GetMetrics() const {
-		return State ? State->Metrics : SDLRendererMetrics{};
+		if (!State) return {};
+		auto Metrics = State->Metrics;
+		if (State->TextureResources) {
+			Metrics.MaterialViewBytes = State->TextureResources->GetMaterialViewBytes();
+			Metrics.MaterialSourceBytes = State->TextureResources->GetMaterialSourceBytes();
+			Metrics.MaterialViewFallbacks = State->TextureResources->GetMaterialViewFallbacks();
+			Metrics.MaterialUploadStagingBytes = State->TextureResources->GetMaterialUploadStagingBytes();
+		}
+		return Metrics;
 	}
 
 	RenderAnimationVisibilityFeedback SDLRenderer::GetAnimationVisibilityFeedback() const {
