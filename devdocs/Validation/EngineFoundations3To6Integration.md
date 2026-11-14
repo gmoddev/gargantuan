@@ -49,6 +49,9 @@ The first four commits are the entire accepted deltas for each foundation:
 6. Record the source-bound qualification evidence and explicit core versus
    device-certification acceptance policy. This documentation-only follow-up
    preserves the fifth commit's executable/build/test/shader source tree.
+7. Keep phase attribution stateless after investigating the metadata-vector
+   variant's reproducible Linux CPU concern. Retain the prior variant's receipts
+   and require fresh source-bound comparison and rendering gates before promotion.
 
 The four intermediate trees each equal their respective accepted source plus
 the mainline README. Original attribution is retained in coauthor trailers;
@@ -83,8 +86,10 @@ and fail-closed rejection before output publication. Existing package schemas,
 historical qualified schema-v4 fixture and ordinary schema-v5 capture remain.
 
 The renderer review found forced-SDR GUI timing assigned to the omitted HDR
-resolve phase. Retain each constructed pass's phase alongside its lifetime;
-pass order and Draw calls remain unchanged. Real Block/Ball/Cylinder tests now
+resolve phase. Walk the immutable constructor definitions with the same HDR
+filter used during construction; pass order and Draw calls remain unchanged.
+No extra phase vector, backend layout or metadata allocation is introduced.
+Real Block/Ball/Cylinder tests now
 assert HDR/fallback and forced-SDR phase attribution, and execute in software
 Vulkan as well as physical qualification. Shader semantics, depth comparison,
 GPU resources and renderer defaults are unchanged. This timing correction
@@ -172,6 +177,25 @@ The selected unshadowed static AMD fixture still records 50,000 to 98 opaque
 world draws, with two additional non-world draws per frame. Dense 50K dynamic
 instancing regresses whole-frame tails; fewer draws do not promote the option.
 These are comparisons of modes of one executable, not source-revision speedups.
+
+### Stateless phase-attribution follow-up
+
+Both retained Linux cohorts (`43592356339`, `43594510430`) run the same frozen
+Runtime 6 / metadata-vector binary pair on different Xeon hosts. Counts, checksums
+and receipts match, but high-density publication is consistently about 3–5%
+slower and the allocation-probed dense dirty path about 9–11% slower in the
+candidate. The affected headless benchmark does not execute SDL pass recording.
+Selected runtime/benchmark methods have matching normalized instructions while
+linked placement changes, so an indirect layout effect is plausible, not proven.
+These results remain a performance concern, not a correctness or F1 failure.
+
+The bounded follow-up removes the extra backend phase vector and its associated
+layout, template and allocation changes. Phase lookup instead walks the existing
+immutable definitions using construction's HDR filter. It preserves all metric,
+pixel, ordering, lifetime and negative controls. Fresh matched CPU and renderer
+execution must evaluate this source before promotion; the integration PR owns
+the exact resulting source identity and disposition. Neither earlier cohort is
+deleted, relabeled as passing parity, or treated as final-head execution.
 
 Historical counts (Windows 160, Linux Release 118, Linux sanitizers 107, GNS 11)
 describe their original sources. New distribution tests may change current

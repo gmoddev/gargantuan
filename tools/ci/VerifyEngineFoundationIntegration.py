@@ -19,7 +19,7 @@ Differences = {
     "CMakeLists.txt": "Verify player/server distribution shader completeness",
     "cmake/StageRuntimeDistribution.cmake": "Stage all 18 foundation shaders",
     "tests/PackagingTests.cpp": "Package presence and missing-shader rejection controls",
-    "src/render/Renderer.cpp": "Retain constructed pass phases for correct SDR metric attribution",
+    "src/render/Renderer.cpp": "Use the construction phase filter for correct stateless SDR metric attribution",
     "tests/RendererDepthTests.cpp": "HDR/SDR pass metric assertions in real-Part GPU fixture",
     ".github/workflows/renderer-foundation5.yml": "Execute real-Part fixture on software Vulkan too",
     "devdocs/CurrentArchitecture/StandalonePackagingFoundation1.md": "Document complete shader packaging",
