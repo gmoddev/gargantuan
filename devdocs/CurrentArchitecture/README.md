@@ -1,5 +1,11 @@
 # Current architecture
 
+Start with the [source-verified Engine overview](../../docs/src/content/docs/developing/engine-architecture.mdx)
+and [developer entry points](../../docs/src/content/docs/index.mdx). This directory
+contains current contracts **and historical receipts**. The
+[complete inventory](../DocumentationReconstruction/Inventory.json) classifies
+each file; unverified legacy prose is not promoted by this directory name.
+
 - [Trusted residency demand Foundation 3M](TrustedResidencyDemandFoundation3M.md)
   defines Engine-owned default-space policy, bounded resumable queries,
   deterministic priorities, revision-safe demand and its existing 3L integration.

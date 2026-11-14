@@ -10,6 +10,13 @@ This index classifies Gargantuan's engineering documentation and routes readers
 to the smallest relevant set. It establishes documentation authority; it is not
 a complete description of every subsystem.
 
+The [developer entry point](../src/content/docs/index.mdx),
+[Engine overview](../src/content/docs/developing/engine-architecture.mdx) and
+[complete inventory](../../devdocs/DocumentationReconstruction/Inventory.json)
+target integrated Engine `2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`.
+[Reconciliation](../../devdocs/DocumentationReconstruction/AccuracyReport.md)
+keeps pending Renderer 3–5/Runtime 6 and separate Studio/Node sources explicit.
+
 ## Documentation authority
 
 ### Current architecture
@@ -190,7 +197,9 @@ a goal; each migration must verify claims against current code and tests.
   is a non-normative, evidence-backed risk register for the five-repository system.
 - [Game networking architecture](../src/content/docs/developing/networking-architecture.mdx)
   records accepted boundaries and the evidence-backed GNS transport selection;
-  gameplay networking layers remain deferred.
+  read its original future scope alongside the implemented
+  [current networking](../src/content/docs/developing/current-networking.mdx)
+  and D03 qualification contracts.
 - [Roadmap](../src/content/docs/developing/roadmap.mdx) is non-normative ordering.
 - [Architectural discipline and subsystem boundaries](../../devdocs/FutureArchitecture/ArchitecturalDisciplineAndSubsystemBoundaries.md)
   is future design input for dependency enforcement, admission, service/resource

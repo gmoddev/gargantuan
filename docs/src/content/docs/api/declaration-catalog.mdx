@@ -1,0 +1,25 @@
+---
+title: Class and service declaration catalog
+description: Mechanically extracted members and metadata, with native behavior limits.
+---
+
+import ApiCatalog from "../../../components/ApiCatalog.astro";
+
+The catalog is generated directly from every `assets/classes/*.luau` and
+`assets/services/*.luau` declaration. Commented-out members are excluded. Each
+record includes ownership, description, declared parameters/returns or Luau
+signature, permissions, replication/persistence fields and source hash where
+declared. Raw `t.*` expressions are generator type expressions.
+
+Read the [behavior guides](/gargantuan/api/) for errors, capability/thread restrictions,
+lifecycle and examples. A method's presence is not a promise that any Script
+context can call it. Missing metadata means the declaration does not specify
+that fact; consult `tools/libs/classes.luau`, the generator and native bindings
+for defaults. Generated metadata cannot prove implementation or grant authority.
+
+<ApiCatalog />
+
+The [machine-readable catalog](../../../data/PublicApi.json) also
+indexes native headers. Global constructors, userdata and libraries implemented
+directly in `src/scripting/Lib*.cpp` are outside class-declaration extraction;
+their owning binding source is linked from the [API overview](/gargantuan/api/).

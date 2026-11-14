@@ -1,0 +1,110 @@
+---
+title: Engine architecture
+description: Integrated authority, lifecycle and consumer boundaries.
+---
+
+This overview is verified against integrated Engine source
+`2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`. Detailed invariants are in
+[Core](../../../../../docs/invariants/Core.md); the
+[traceability matrix](../../../../../devdocs/DocumentationReconstruction/Traceability.json)
+maps each boundary to implementation and tests.
+
+## Authority and identity
+
+`DataModel` owns the live Instance graph, schema association, scope and committed
+history. Main owns authoritative mutation. External commands validate bounds,
+capabilities, scope, identity and expected state before committing through the
+mutation path. A rejected command cannot publish partial committed state.
+
+`ObjectId` contains a 32-bit slot and generation, both nonzero for valid identity.
+Lookup checks the complete generation; destruction invalidates the registry
+before callbacks, and exhausted generations retire rather than wrap. Names and
+hierarchy paths are display data. IDs are scope-bound native/wire identities,
+not a gameplay Luau object-reference replacement. Source document bindings,
+package content keys and transport peers have distinct identities.
+
+Parents own children; parent links are weak. A detached hierarchy can first
+adopt into a DataModel after bounded validation. Unparenting an adopted object
+retains its scope; cross-DataModel migration is rejected. `Destroy` is monotonic
+and reentrant-safe. See [runtime foundation](../../../../../devdocs/CurrentArchitecture/FoundationRuntime.md),
+[mutation gateway](../../../../../devdocs/CurrentArchitecture/MutationGateway.md)
+and [Instance APIs](../../api/instances-and-services/).
+
+## Runtime composition and frame lifecycle
+
+The development host (`src/Main.cpp`), official offline/client Player and
+dedicated Server select explicit native runtime roles. Engine owns semantics;
+hosts select composition and providers. A dedicated Server initializes no
+graphical presentation, input or audio output. Its binary dependencies alone
+do not imply graphical runtime initialization.
+
+`Engine::Step` consumes bounded content work, advances simulation tick, fires
+`PreSimulation`, steps physics and camera, then fires `PostSimulation`.
+`PreRender` precedes animation, semantic/spatial updates and GUI reconciliation.
+Input end-of-frame handling and immutable render publication precede draw;
+the scheduled script step and audio update follow. This is the implemented
+order at the pinned source, not a proposed parallel frame graph.
+
+Services are canonical DataModel-owned Instances with declared construction and
+access policy. `GetService` does not give every context access to every service.
+The JobSystem owns bounded worker execution and returns computation to Main;
+the live graph is not generally thread-safe. A worker failure is captured at its
+boundary, not converted into permission to mutate state from that worker.
+
+## Schema and scripting
+
+Schema bootstraps native/core registration, narrowly sandboxed PreRun,
+validation, freeze and runtime. Candidate publication is transactional and
+immutable. Attributes/tags are bounded Instance state, not schema extensions.
+Custom classes and extensions use the existing frozen registry and allowed
+engine-owned data-only host. Metadata describes access requirements; it grants
+no privilege by name or namespace.
+
+Luau is the scripting runtime. Script contexts carry explicit capabilities;
+task/signal execution retains the registering context, and native reflection
+and boundary functions enforce it. Runtime game scripts do not acquire project
+filesystem, process, EditorHost or schema-definition authority. See
+[schema](../runtime-schema/), [script security](../../../../../devdocs/CurrentArchitecture/ScriptSecurity.md)
+and [API organization](../../api/).
+
+## Projections and backend owners
+
+| Boundary | Producer/consumer ownership |
+| --- | --- |
+| ChangeJournal | Ordered committed per-scope history; snapshots, Studio and replication consume it with their own cursors |
+| RenderPublication → RenderProjection | Immutable value publication; renderer owns projection and GPU resources, with no retained live Instance pointers |
+| Rigid/deformable physics | WorldRoot synchronizes at safe points; Box3D and XPBD adapters own native storage and return owned results/events |
+| Replication | Server owns intent/relevance; per-peer materialization advances only after scheduler acceptance; transport identity is not Player identity |
+| Assets/content | Canonical asset identities and immutable artifacts; provider acquisition is separate from authoritative Instance admission |
+| EditorHost → Studio | Versioned DTOs, IDs, journals, commands and pixels; Studio remains a non-authoritative document projection |
+
+Use the [renderer](../renderer/), [physics](../physics/),
+[networking](../current-networking/) and [EditorHost](../editor-host/) references
+for limits. Journal sequence is neither a universal network sequence nor a
+render/packet/RPC acknowledgement.
+
+## Assets, persistence and failure
+
+Asset import validates project-root-confined source data into bounded canonical
+artifacts/catalog state. Runtime `AssetService` resolves asset identity; gameplay
+does not receive arbitrary disk paths. Package namespace/key/digest differ from
+live ObjectId. Local and optional Node providers supply immutable bytes to the
+same validation, detached preparation and single authoritative adoption path.
+Availability, residency, peer relevance and accepted materialization are distinct.
+
+EditorHost owns project revisions, dirty state, transactions, Undo/Redo and
+atomic persistence. Current Instance serialization writes version 5 and accepts
+the versions explicitly listed by its reader. Protocol, package, source binding
+and Instance document version numbers are separate contracts.
+
+Shutdown stops residency/provider work, joins preparation/completion ownership,
+disconnects callbacks, shuts down runtime services and clears VM-owned handlers
+in their required lifetime order. The borrowed renderer must outlive Engine;
+borrowing GameSessions must retire before Engine. Late asynchronous work cannot
+enter a replacement generation. Render draw failure requests a full resync and
+propagates to its host; this is not a promise that every GPU loss is recoverable.
+Host fatal paths use controlled logging/exit. Optional telemetry is consented,
+bounded and fail-open, with no new state authority.
+
+Renderer Foundations 3–5 and Runtime 6 remain [pending integration](../renderer/).
+Their measurements and optimized internals do not silently redefine this baseline.

@@ -232,14 +232,16 @@ Future CI should cover, with pinned dependencies:
 
 ### Supported Studio runtime
 
-**Validation: Confirmed and already documented.** Studio targets framework-
-dependent `net7.0`, which is end-of-support. This is a distribution and security
-maintenance risk, not an architectural failure.
+**Validation: Historical Avalonia concern; reassess on LUI source.** The
+previous Studio host targeted framework-dependent `net7.0`. LUI is now the
+primary Studio UI, so that older runtime claim does not establish the active
+application's distribution status.
 
-Move to a supported .NET target before treating Studio as a supported
-distribution. Validate Avalonia, Luau hosting, native telemetry loading,
-single-file or framework-dependent packaging choices, and clean-machine launch
-behavior as part of that milestone.
+For a supported distribution, verify the current LUI Host and framework runtime,
+Luau hosting, native telemetry loading, package contents, and clean-machine
+launch against the exact release source and binaries. Studio's own
+[mainline native receipt](https://github.com/GantriaEngine/gargantuan-studio/blob/main/devdocs/Validation/MainlineNative20261107.json)
+is source-bound and does not cover every distribution environment.
 
 ### Reliable backlog budget
 

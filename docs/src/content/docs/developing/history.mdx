@@ -1,0 +1,32 @@
+---
+title: History, decisions and qualification
+description: Find original evidence without confusing it with current behavior.
+---
+
+Use the current guides for implemented behavior, [invariants](../../../../../docs/invariants/Core.md)
+for required properties and accepted decisions for constraints. Historical
+audits, proposals and receipts are evidence about their recorded revisions.
+Age and directory names do not establish authority.
+
+| Collection | Interpretation |
+| --- | --- |
+| [Complete document inventory](../../../../../devdocs/DocumentationReconstruction/Inventory.json) | Every tracked document/license/README, provenance, source routing, seven-way status and proposed action |
+| [Traceability matrix](../../../../../devdocs/DocumentationReconstruction/Traceability.json) | Current guide claims mapped to owning source and tests |
+| [Accepted decisions](../../../../../docs/adr/) | D01–D04 retain their original decisions, supersession and service/source-identity constraints |
+| [Historical engineering audit](../../../../../devdocs/README.md) | August 12, 2026 snapshot at `e4fca3575cc84c0d5fa4a946b88bf528aac2223b`; later features do not retroactively change it |
+| [Qualification receipts](../../../../../devdocs/Validation/) | Exact source, configuration, raw evidence, failures, limitations and outcomes remain attached to their original runs |
+| [Networking acceptance](../../../../../tests/Foundation3LFinalAcceptance.md) | Integrated D03 core correctness differs from physical/provider and historical F1 scopes |
+| [Future design](../future-architecture/) and [roadmap](../roadmap/) | Non-current intent unless a section has been independently reconciled with source |
+| [Accuracy and reconciliation report](../../../../../devdocs/DocumentationReconstruction/AccuracyReport.md) | Current pins, reviews, checks and pending Engine integration gate |
+
+The reconstruction keeps historical documents at their established paths so
+existing links and receipts retain meaning. Documents not fully reverified
+remain **Unverified** in the inventory; they are not promoted simply because
+they live under `CurrentArchitecture`. New source-backed guides provide the
+entry point while those subsystem contracts continue to preserve detail.
+
+The [integrity tool](../../../../../tools/docs/README.md) fails current guidance
+for missing targets and stale declarations, and reports any historical link debt
+separately. Repaired sibling links retain their original recorded source SHAs.
+References to obsolete UI systems are legitimate in dated history;
+they must not describe the current primary Studio UI.

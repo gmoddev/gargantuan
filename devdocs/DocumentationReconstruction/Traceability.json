@@ -1,0 +1,205 @@
+{
+  "SchemaVersion": 1,
+  "IntegratedEngineSource": "2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f",
+  "ProspectiveEngineSource": "4b32a822a26492907005ce18c3b1045550bfce86",
+  "StudioSource": "6ae8f3dc427bc5221e978ae627eab6224e5ccea6",
+  "NodeInspectedSource": "f4440423c0701ff396f589fd51b6ce41edc63539",
+  "Claims": [
+    {
+      "Subsystem": "Authority, identity and mutation",
+      "Document": "docs/src/content/docs/developing/engine-architecture.mdx",
+      "Source": [
+        "include/gargantuan/runtime/ObjectId.hpp",
+        "src/runtime/ObjectId.cpp",
+        "src/classes/Instance.cpp",
+        "src/classes/DataModel.cpp",
+        "src/runtime/MutationGateway.cpp"
+      ],
+      "Tests": [
+        "tests/FoundationTests.cpp",
+        "tests/PreparedPropertyTests.cpp"
+      ],
+      "Invariant": "Main owns state; full generations and scope; rejection is atomic.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "Frame lifecycle and shutdown",
+      "Document": "docs/src/content/docs/developing/engine-architecture.mdx",
+      "Source": [
+        "src/Engine.cpp",
+        "src/Main.cpp",
+        "src/player/PlayerMain.cpp",
+        "src/server/ServerMain.cpp"
+      ],
+      "Tests": [
+        "tests/PlayerRuntimeTests.cpp",
+        "tests/GameSessionTests.cpp"
+      ],
+      "Invariant": "Host roles differ; borrowed renderer and session lifetimes remain explicit.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "Schema and scripting",
+      "Document": "docs/src/content/docs/developing/runtime-schema.mdx",
+      "Source": [
+        "src/reflection/RuntimeSchemaLifecycle.cpp",
+        "src/scripting/ScriptEngine.cpp",
+        "tools/classgen.luau",
+        "tools/libs/classes.luau"
+      ],
+      "Tests": [
+        "tests/PreRunBootstrapTests.cpp",
+        "tests/PreRunEditorHostTests.cpp"
+      ],
+      "Invariant": "Transactional frozen registry, explicit capabilities and VM contexts.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "Luau public API",
+      "Document": "docs/src/content/docs/api/index.mdx",
+      "Source": [
+        "assets/classes",
+        "assets/services",
+        "src/scripting",
+        "src/classes",
+        "src/services"
+      ],
+      "Tests": [
+        "tests/FoundationTests.cpp",
+        "tests/RemoteLuauTests.cpp",
+        "tests/GuiFoundationTests.cpp"
+      ],
+      "Invariant": "Declared metadata plus native behavior; no blanket Roblox parity.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "SDL rendering",
+      "Document": "docs/src/content/docs/developing/renderer.mdx",
+      "Source": [
+        "src/render",
+        "include/gargantuan/render",
+        "src/Engine.cpp"
+      ],
+      "Tests": [
+        "tests/RendererPublicationTests.cpp",
+        "tests/RendererDepthTests.cpp"
+      ],
+      "Invariant": "Immutable publication, renderer projection, SDL GPU; later Foundations pending.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "Rigid and deformable physics",
+      "Document": "docs/src/content/docs/developing/physics.mdx",
+      "Source": [
+        "src/classes/WorldRoot.cpp",
+        "src/classes/WorldRootQueries.cpp",
+        "src/physics"
+      ],
+      "Tests": [
+        "tests/PhysicsBackendTests.cpp",
+        "tests/PhysicsImportedMeshTests.cpp",
+        "tests/SoftBodyPhysicsTests.cpp"
+      ],
+      "Invariant": "Box3D/XPBD backend ownership, safe-point sync and owned results.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "Replication, transport and F1",
+      "Document": "docs/src/content/docs/developing/current-networking.mdx",
+      "Source": [
+        "src/network",
+        "include/gargantuan/network",
+        "docs/adr/D03-hybrid-pooled-service-and-permit-ownership.md"
+      ],
+      "Tests": [
+        "tests/Foundation3LFinalAcceptance.md",
+        "tests/Foundation3LCoreAcceptance20261021.json",
+        "tests/GameSessionTests.cpp",
+        "tests/NetworkingContractsTests.cpp"
+      ],
+      "Invariant": "Core correctness and historical physical/provider scopes stay separate.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "EditorHost and durable source",
+      "Document": "docs/src/content/docs/developing/editor-host.mdx",
+      "Source": [
+        "src/editor/EditorHost.cpp",
+        "include/gargantuan/editor/EditorHost.hpp",
+        "src/assets/InstanceSerialization.cpp",
+        "docs/adr/D04-durable-script-resource-bindings.md"
+      ],
+      "Tests": [
+        "tests/ScriptDocumentBindingTests.cpp",
+        "tests/PreRunEditorHostTests.cpp",
+        "tests/PackagingEditorHostTests.cpp"
+      ],
+      "Invariant": "Engine owns source, project revisions/history; Studio is projection.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "Assets, animation, audio and GUI",
+      "Document": "docs/src/content/docs/api/input-gui-and-media.mdx",
+      "Source": [
+        "src/services/AssetService.cpp",
+        "src/animation",
+        "src/audio",
+        "src/gui"
+      ],
+      "Tests": [
+        "tests/AssetFoundationTests.cpp",
+        "tests/AnimationFoundationTests.cpp",
+        "tests/AudioFoundationTests.cpp",
+        "tests/GuiFoundationTests.cpp"
+      ],
+      "Invariant": "Canonical asset identity, bounded native lifecycles and capabilities.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "Build and CI",
+      "Document": "devdocs/Compiling.md",
+      "Source": [
+        "CMakeLists.txt",
+        ".justfile",
+        "rokit.toml",
+        ".github/workflows/native-ci.yml",
+        ".github/workflows/gns-sanitizers.yml"
+      ],
+      "Tests": [
+        "tests/test_ci_junit_output.py",
+        "tests/cmake"
+      ],
+      "Invariant": "Generation precedes configure; Windows Release/Linux sanitizers; no new GPU certification.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "Project creation and packaging",
+      "Document": "docs/src/content/docs/guides/first-project.mdx",
+      "Source": [
+        "src/editor/EditorHost.cpp",
+        "src/packaging/PackageBuilder.cpp",
+        "tools/PackagerMain.cpp"
+      ],
+      "Tests": [
+        "tests/PackagingTests.cpp",
+        "tests/FirstCompleteGameTests.cpp",
+        "samples/FirstCompleteGame/README.md"
+      ],
+      "Invariant": "Nonexistent destination, authoritative adoption and isolated Play; package validation scope.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    },
+    {
+      "Subsystem": "Studio and Node separation",
+      "Document": "docs/src/content/docs/developing/engine-studio-node.mdx",
+      "Source": [
+        "devdocs/DocumentationReconstruction/NetworkStudioAudit.md",
+        "src/host/server/NodeContentProvider.cpp"
+      ],
+      "Tests": [
+        "tests/ContentAvailabilityTests.cpp"
+      ],
+      "Invariant": "LUI/UI, native resources/IPC, Engine authority and private provider delivery are distinct.",
+      "Verification": "Source and existing tests inspected; no new native qualification executed"
+    }
+  ]
+}

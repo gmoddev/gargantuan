@@ -1,5 +1,10 @@
 # Gargantuan engineering audit
 
+> **Historical snapshot.** The findings below retain their August 12 source and
+> outcomes. Start with the [developer reference](../docs/src/content/docs/index.mdx)
+> for integrated behavior and the [inventory](DocumentationReconstruction/Inventory.json)
+> for per-document authority. Later implementation does not rewrite this audit.
+
 This directory is an implementation-grounded snapshot of Gargantuan at commit
 `e4fca3575cc84c0d5fa4a946b88bf528aac2223b` (2026-08-12 checkout). It is not a
 promise that every named class, roadmap checkbox, or public API works. Current
@@ -12,8 +17,9 @@ project scaffold.
 - [Physical agent coordination ownership](CurrentArchitecture/PhysicalAgentCoordination.md)
   routes qualification tooling to the standalone pinned GantriaEngine project.
 
-- [Current architecture](CurrentArchitecture/README.md) explains the engine that
-  exists today.
+- [Subsystem document index](CurrentArchitecture/README.md) routes later
+  contracts and revision-specific records; directory membership alone is not
+  current authority.
 - [Subsystem audit](CurrentArchitecture/SubsystemAudit.md) records what works,
   what is partial, what is a stub, and what blocks real games.
 - [Implementation gaps](CurrentArchitecture/ImplementationGaps.md) is the

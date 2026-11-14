@@ -1,0 +1,43 @@
+---
+title: Instances and services
+description: Runtime hierarchy, service lookup, lifecycle, attributes, tags, and signals.
+---
+
+## `game` and services
+
+`game` is the current `DataModel`, which inherits `ServiceProvider`. `game:GetService(ServiceName: string) -> Instance` resolves a registered singleton and constructs it if needed. `game:FindService(ServiceName: string) -> Instance?` only looks up an existing service. Canonical direct access such as `game.Workspace` uses the same singleton lookup. A service's visible `Name` does not define its registration identity. An unknown service name is not a request to create an arbitrary child.
+
+Common registered services include `Workspace`, `RunService`, `Players`, `UserInputService`, `InputService`, `ActionMap`, `AssetService`, `Lighting`, `ReplicatedStorage`, and `Tags`. Service lifetime belongs to the `DataModel`, and an authoring model need not contain the same runtime-only state as Play.
+
+## Construct and traverse
+
+| API | Parameters and result | Behavior |
+| --- | --- | --- |
+| `Instance.new(ClassName)` | constructible class name → detached `Instance` | Protected, abstract, and unknown classes fail. Set `Parent` to adopt a subtree. |
+| `Instance:Clone()` | no arguments → detached `Instance` | Copies an eligible archivable subtree and supported semantic state; new objects have new identity. |
+| `Instance:Destroy()` | no arguments → `()` | Idempotent; invalidates identity and destroys descendants. `Destroyed` is read-only. |
+| `Instance:GetChildren()` / `GetDescendants()` | no arguments → `{Instance}` | Returns a snapshot array, not a live collection. |
+| `Instance:FindFirstChild(Name, Recursive?)` | string, optional boolean → `Instance?` | Direct child by default; analogous `OfClass`, `WhichIsA`, descendant, and ancestor families exist. |
+| `Instance:IsA(ClassName)` | string → boolean | Tests class inheritance. `ClassName` is read-only identity. |
+| `Instance:GetFullName()` | no arguments → string | A display path; do not use it as stable identity. |
+| `Instance:GetPropertyChangedSignal(PropertyName)` | string → `Signal` | Fires for a committed change to that property. |
+
+`Parent = nil` detaches an adopted object while retaining its DataModel association. It cannot later migrate to another DataModel. `Parent` rejects cycles and invalid adoption; an eligible detached subtree is adopted atomically. `ClearAllChildren()` calls `Destroy()` on each direct child, which recursively destroys each child's descendants. `Destroying` runs after `Destroyed` becomes true and identity is invalidated. `ChildAdded`, `ChildRemoved`, `DescendantAdded`, `DescendantRemoved`, and `AncestryChanged` observe committed hierarchy state; callbacks may initiate a later mutation.
+
+`Archivable` controls clone/save eligibility. `Clone()` does not copy signal subscribers, running threads, physics bodies, GPU resources, or network session state. `IsPropertyModified()` currently always returns true and must not be used for default-state detection. `ResetPropertyToDefault(PropertyName)` is declared but should be used only with a valid writable property; validation failures surface as script errors.
+
+## Signals
+
+A signal supports `:Connect(Callback)`, `:Once(Callback)`, and `:Wait()`. Keep the connection returned by `Connect` when you need to disconnect it. Callbacks and waiting continuations retain their original script capability context. Do not assume a signal callback is a worker thread or can mutate outside Main. `RunService` events are described under [world and rendering](../world-and-rendering/).
+
+## Attributes and tags
+
+`Instance:SetAttribute(Name: string, Value: AttributeValue?) -> ()` creates, replaces, or removes (`nil`) a bounded dynamic value. The supported value set is boolean, finite number, UTF-8 string, `Vector2`, `Vector3`, `Color3`, `UDim`, `UDim2`, and `CFrame`. `GetAttribute(Name) -> AttributeValue?` returns nil when absent; `GetAttributes() -> {[string]: AttributeValue}` returns a copy; `GetAttributeChangedSignal(Name) -> Signal` reports committed changes. Names, counts, value size, and total bytes are bounded. Invalid values or denied mutation raise a script error without a partial write.
+
+`Tags` exposes `Add(Instance, Tag)`, `Remove(Instance, Tag)`, `Has(Instance, Tag) -> boolean`, `GetTags(Instance) -> {string}`, `GetTagged(Tag) -> {Instance}`, and `GetTaggedAll({Tag}) -> {Instance}`. Queries return live Instances in stable identity order; tag names and membership are bounded. Tags and attributes are runtime state, not new schema members. See [the server example](https://github.com/gmoddev/Gargantuan/blob/main/docs/examples/part-and-tags.luau).
+
+Schema-defined extension properties use `GetExtensionProperty(Extension, Property)` and `SetExtensionProperty(Extension, Property, Value)` with boolean, number, or string values. They require an actual frozen extension definition and normal capability/authority checks. They are distinct from Attributes and Tags.
+
+## Script lifetime
+
+`Script.Enabled` and `Script.RunContext` are declared properties. Source is authored through Studio; regular runtime code has no generic Source read/write permission. `ModuleScript` can be loaded with `require` through the instance-backed resolver. A runtime clone can preserve source as semantic data while resetting execution state; it does not copy an active coroutine. `ObjectId` is native and scope-bound, not a Luau property. Do not store hierarchy paths or instance wrappers as durable identity outside the current DataModel.

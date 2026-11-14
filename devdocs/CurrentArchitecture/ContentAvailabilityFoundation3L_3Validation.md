@@ -246,7 +246,7 @@ Windows 96+387 each, Linux 53 each and GNS 11 each, zero failures/skips.
 
 ## Post-wake decision A: native candidate qualified, provider evidence pending (2026-10-06)
 
-The [decision receipt](PooledPhysicalQualification3L.md#post-wake-decision-a-keep-f1-strict-2026-10-06)
+The [decision receipt](PooledPhysicalQualification3L.md#post-wake-decision-a--keep-f1-strict-2026-10-06)
 adopts KEEP F1 STRICT on native source `c916b7d4f`: old-fail/new-pass wake
 regressions, native 13/13, fixed clean 14/14 and all six original hosted jobs
 pass. Windows passes 96 native +382 Python each; Linux 53 each; GNS 11 each,

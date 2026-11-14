@@ -1,0 +1,45 @@
+---
+title: Datatypes and globals
+description: Native Luau constructors, returned value types, task, require, and diagnostics.
+---
+
+`src/scripting/ScriptEngine.cpp` registers the following libraries and userdata for each runtime Luau VM. `luaL_openlibs` also opens that VM's sandboxed standard Luau libraries. The table routes you to the native binding rather than guessing full Roblox datatype compatibility. A registered userdata **without** an `OpenLib...` entry has no separate constructor global.
+
+| Runtime name | Global constructor or entry point | Binding source / role |
+| --- | --- | --- |
+| `Axes` | `Axes.new(...)` | `src/scripting/LibAxes.cpp`, `src/datatypes/Axes.cpp` |
+| `CFrame` | `CFrame.new(...)`, `CFrame.Angles(...)` | `LibCFrame.cpp`, `src/datatypes/CFrame.cpp`; transforms |
+| `Color3` | `Color3.new(...)` and native helpers | `LibColor3.cpp`, `src/datatypes/Color3.cpp`; colors |
+| `Enum` | `Enum.Type.Item` access | `LibEnum.cpp`, `src/datatypes/Enum.cpp`; registered enums |
+| `EnumItem` | Returned by `Enum` or properties; no constructor global | `src/datatypes/Enum.cpp` |
+| `Instance` | `Instance.new(ClassName)` | `LibInstance.cpp`, class bindings; detached objects |
+| `Random` | `Random.new(Seed?)` | `LibRandom.cpp`, `src/datatypes/Random.cpp` |
+| `RaycastParams` | `RaycastParams.new()` | `LibRaycastParams.cpp`, `src/datatypes/RaycastParams.cpp` |
+| `Rect` | Returned value only; no constructor global | `src/datatypes/Rect.cpp` |
+| `UDim`, `UDim2` | `UDim.new(...)`, `UDim2.new(...)` | `LibUDim.cpp`, `LibUDim2.cpp`, corresponding datatype bindings |
+| `Signal` | `Signal.new()` | `LibSignal.cpp`, `src/datatypes/Signal.cpp`; user-created signal |
+| `SignalConnection` | Returned by `Signal:Connect` / `:Once`; no constructor global | `src/datatypes/Signal.cpp` |
+| `TweenInfo` | `TweenInfo.new(...)` | `LibTweenInfo.cpp`, `src/datatypes/TweenInfo.cpp` |
+| `Vector2`, `Vector3` | `Vector2.new(X?, Y?)`, `Vector3.new(X?, Y?, Z?)` | `LibVector2.cpp`, `LibVector3.cpp`, vector bindings |
+| `AnimationTrack` | Returned by `Animator:LoadAnimation`; no constructor global | `src/animation/AnimationTrack.cpp` |
+| Base globals | `game`, `print(...)`, `warn(...)`, `_RUNTIME` | `LibBase.cpp` |
+| Module loader | `require(...)` | `LibRequire.cpp`, `ModuleResolution.cpp` |
+| Task scheduler | `task.spawn`, `defer`, `delay`, `wait` | `LibTask.cpp`, `ThreadEngine.cpp` |
+
+## Verified construction and use
+
+`Vector3.new(1, 2, 3)` returns Gargantuan's three-component Luau vector; `Vector2.new(1, 2)` returns native `Vector2` userdata. `Vector3.zero`, `Vector3.one`, axis constants, `Magnitude`, `Unit`, `:Dot`, `:Cross`, and `:Lerp` are implemented in `LibVector3.cpp`. `CFrame.new()` is identity; supported overloads take one position vector, two position/target vectors, or three numeric position components. Other argument counts raise `unsupported constructor`. `CFrame.Angles(Rx, Ry, Rz)` takes three numeric rotations. `Random.new()` or `Random.new(Seed)` constructs a VM value; check its binding for the exact method set before porting Roblox code.
+
+`RaycastParams.new()` creates mutable VM-local userdata. Its fields are `FilterType` (`Enum.RaycastFilterType.Exclude` by default), `FilterDescendantsInstances` (a copied array of live Instance roots), `CollisionGroup` (0–15), and `CollisionMask` (0–65535). Filter assignment rejects holes, nonnumeric keys, dead/non-Instance values, and more than 128 roots. A query can also reject a root from another `WorldRoot`. The value is not an Instance and is not saved or replicated. See [world queries](../world-and-rendering/) and the [math/filter/signal example](https://github.com/gmoddev/Gargantuan/blob/main/docs/examples/math-filter-signal.luau).
+
+`Signal.new()` creates a user signal. `:Connect(Callback)` and `:Once(Callback)` return a `SignalConnection` with read-only `Connected` and `:Disconnect()`. `:Wait()` suspends the caller until fired, where yielding is allowed. `:Fire(...)` works on a **user-created** signal; trying to fire an engine event raises an error. The connection and callback are VM-lifetime state, not persisted data. Signal callbacks and waits restore the context in which they were registered, even when an engine event fires later.
+
+`Animator:LoadAnimation` returns an `AnimationTrack` value with playback controls and `Ended`; it cannot be constructed by naming a class with `Instance.new`. Destroying its owner invalidates retained tracks. [Input, GUI, and media](../input-gui-and-media/) covers the asset and owner requirements.
+
+## Globals, scheduling, and failure
+
+`game` is this VM's `DataModel`. `print(...)` and `warn(...)` produce one bounded diagnostic record per call: at most 64 arguments, 512 UTF-8 bytes per formatted argument, and 2,048 bytes per record with truncation. Formatting does not call your userdata's `__tostring`; messages may be dropped from bounded Play/Studio output queues under pressure.
+
+`require` resolves instance-backed `ModuleScript` source through the requiring Instance path, with the engine's `@game` alias. Missing modules, invalid module targets, compile failures, and module errors raise Luau errors. It does not grant arbitrary filesystem access or a general project alias system. Use `pcall` when an optional module can be absent.
+
+`task.spawn`, `task.defer`, `task.delay`, and `task.wait` use the runtime scheduler and retain the originating script security context. Deferred/scheduled work has queue limits; `task.wait` can reject a handler context that disallows yielding. `task.cancel`, `task.synchronize`, and `task.desynchronize` are registered names but currently raise `not yet implemented` in `LibTask.cpp`; do not build game control flow around them. Native type errors, invalid values, permission denials, and resource limits are Luau errors; `pcall` is the recovery boundary when failure is expected.

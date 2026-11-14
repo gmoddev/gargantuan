@@ -44,16 +44,18 @@ container pointers. They are published as const shared ownership, so later
 runtime mutation or destruction cannot change or invalidate a frame already
 being rendered.
 
-The renderer applies each publication atomically to a disposable persistent
+The renderer validates and applies each publication to a disposable persistent
 projection. Incremental bases must be exact; a full-resync publication can
-reconstruct that projection independently. The same projected `ObjectId` is
-used for viewport picking. Normal `ObjectRegistry` lookup rejects an identity
-whose generation is stale.
+reconstruct that projection independently. If projection or resource application
+fails, the SDL renderer clears its derived state and requires a full resync before
+another delta. The same projected `ObjectId` is used for viewport picking.
+Normal `ObjectRegistry` lookup rejects an identity whose generation is stale.
 
 ## Dirty accumulation and coalescing
 
 Committed authoritative mutations are classified into transform, material,
-visibility, geometry, deformable, hierarchy/render-presence, and environment domains. One
+visibility, geometry, deformable, hierarchy/render-presence, environment, and
+animation-pose domains. One
 bounded accumulator entry exists per dirty `ObjectId`, regardless of how many
 times a property was written. Publication reads only the final authoritative
 state: repeated writes become one update, create plus updates becomes one final
@@ -124,8 +126,12 @@ not introduce `RenderDevice`, a generic graphics API, backend selection, or
 render threading. Foundation 2C adds renderer-neutral material/texture
 lifecycle values and an SDL-private GUI pipeline with persistent buffers,
 scissors, alpha blending, and atlas sampling. See
-`devdocs/CurrentArchitecture/RendererBackendBoundary.md` for the verified
-ownership and leakage audit.
+[`RendererBackendBoundary.md`](../../../../../devdocs/CurrentArchitecture/RendererBackendBoundary.md)
+for the verified ownership and leakage audit. The present SDL fragment shader
+samples base color and applies simple ambient/sun lighting, fog, and an ACES
+approximation. Material values also carry normal texture and metallic/roughness
+fields, but this shader does not consume them for normal mapping or PBR. See
+[Renderer](../renderer/) for the exact integrated feature boundary.
 
 The hard soft-body flow is solver-owned simulation to engine-owned deformable
 render values to `RenderDirtyAccumulator` and immutable `RenderPublication`,

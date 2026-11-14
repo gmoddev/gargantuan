@@ -220,7 +220,7 @@ Source-extracted old-fail/new-pass regressions, 13 native compatibility tests,
 the observed 32-peer F1 development workload, a fixed 14-child clean batch and
 all six original hosted jobs pass. An independent review challenged the
 platform assumptions and supports retaining the strict requirement on this
-evidence. The [decision receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-wake-decision-a-keep-f1-strict-2026-10-06)
+evidence. The [decision receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-wake-decision-a--keep-f1-strict-2026-10-06)
 records counts, source scopes, alternatives and limitations.
 
 F1 remains a strict deployment-qualification and runtime-health requirement.

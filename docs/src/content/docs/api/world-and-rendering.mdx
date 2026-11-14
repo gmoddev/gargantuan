@@ -1,0 +1,38 @@
+---
+title: World and rendering
+description: Parts, physics operations and queries, frame signals, camera, and lighting.
+---
+
+`Workspace` inherits `WorldRoot` and is the session's physical 3D world. A `Part` is a concrete `BasePart`; `MeshPart` renders a catalog mesh and has its own collision mode. Changes to live parts commit through the DataModel mutation path on Main. Physics consumes committed intents at safe points, then publishes owned results. The renderer consumes immutable extracted state, so a script does not hold or edit GPU objects.
+
+## Parts and motion
+
+`BasePart` declares `Anchored`, `CanCollide`, `CanTouch`, `CastShadow`, `Kinematic`, `CFrame`, `Position`, `Rotation`, `Size`, `Color`, `Transparency`, `CollisionGroup` (0–15), `CollisionMask` (16 bits), damping, `GravityScale`, `SleepEnabled`, and `MovingBodyCCD`. `Part.Shape` selects a primitive. `MeshPart.Mesh` is a strict Mesh asset reference, `Material` an optional Material override, and `CollisionMode` selects box or eligible anchored static mesh collision. Unanchored MeshParts use box collision. `Workspace.Gravity` defaults to 196.2 in the declaration.
+
+`BasePart:ApplyImpulse(Impulse: Vector3)`, `ApplyAngularImpulse`, `ApplyImpulseAtPosition(Impulse, Position)`, `ApplyForce`, `ApplyTorque`, `SetLinearVelocity`, `SetAngularVelocity`, and `SetAwake` queue physical controls for a safe point or fixed step. `GetLinearVelocity()`, `GetAngularVelocity()`, `GetMass()`, `GetLocalInertia()`, and `GetAwake()` read the latest published state; mass is zero before body admission. `Touched(OtherPart)` and `TouchEnded(OtherPart)` are signals, not collision callbacks that authorize arbitrary cross-thread graph mutation. Rigid bodies and constraint handles are engine-owned; script identity is the Instance.
+
+## World queries
+
+These `WorldRoot` methods are available on `Workspace` and require `ReadDataModel`. Results are owned values. A cast with no hit returns `nil`; an overlap with no matches returns a read-only `{ Parts = {}, Truncated = false }` result. Invalid dimensions, non-finite inputs, or resource limits can raise an error. `RaycastParams?` is optional. Query filters and detailed limits are implemented in `src/classes/WorldRootQueries.cpp` and `src/datatypes/RaycastParams.cpp`.
+
+| Method | Parameters | Result |
+| --- | --- | --- |
+| `Raycast` | `Origin: Vector3, Direction: Vector3, Params: RaycastParams?` | Hit or nil. Direction magnitude is maximum distance. |
+| `SphereCast` | `Origin: Vector3, Radius: number, Direction: Vector3, Params?` | Hit or nil; initial overlaps are ignored. |
+| `CapsuleCast` | `Transform: CFrame, Radius: number, Height: number, Direction: Vector3, Params?` | Hit or nil; local Y axis, height includes caps. |
+| `BoxCast` | `Transform: CFrame, Size: Vector3, Direction: Vector3, Params?` | Hit or nil. |
+| `GetPartsInSphere` | `Origin, Radius, Params?, MaxResults?` | `{ Parts: {BasePart}, Truncated: boolean }`. |
+| `GetPartsInCapsule` | `Transform, Radius, Height, Params?, MaxResults?` | Same overlap result. |
+| `GetPartsInBox` | `Transform, Size, Params?, MaxResults?` | Same overlap result. |
+
+A hit contains `Instance: BasePart`, `Position: Vector3`, `Normal: Vector3`, and `Distance: number`. `MaxResults` for overlaps is 1–256; test `Truncated` before treating the returned set as complete. Parts are returned in stable identity order. `MoveKinematicCapsule(Position, Radius, Height, Translation, Velocity)` returns a bounded collision-resolution table with `Position`, `AppliedTranslation`, `Velocity`, `ContactNormal`, `FloorNormal`, `Collided`, `HasFloor`, and `PlanesTruncated`. It is the primitive used by replaceable character movement policy, not a full character controller. See [the query example](https://github.com/gmoddev/Gargantuan/blob/main/docs/examples/world-query.luau).
+
+`WorldRoot:StepPhysics(DeltaTime: number, Instances: {Instance}?) -> ()` is a generated Luau binding for advancing physics. It requires `MutateDataModel` and Main-domain mutation authority; a read-only script call raises an error. The current implementation ignores `Instances` and steps the world. Normal engine frames already step world physics, so gameplay code should avoid adding an unintended extra step. Deformable inspection methods `GetDeformableInfo(Body)`, `GetDeformableVertex(Body, VertexIndex)`, and `GetSoftBodyStepInfo()` return bounded read-only snapshots or nil. `VertexIndex` is zero based; inspection does not mutate a cloth or rubber body.
+
+## Frame timing and visible state
+
+`RunService.PreSimulation(DeltaTime)`, `PostSimulation(DeltaTime)`, and `PreRender(DeltaTime)` are signals. `PreRender` runs before extraction/publication; a committed camera or visual change made there can affect the next publication. This is not a general render-thread callback. Keep handlers bounded, and disconnect connections when their owning gameplay object is removed.
+
+`Workspace.CurrentCamera` is a read-only reference managed by the engine. `Camera.CFrame` and vertical `FieldOfView` (1–120 degrees) are script-facing authored view state; `ViewportSize` is engine-written. `Lighting` has authored `Ambient`, `SunColor`, `Brightness`, `ClockTime`, `ExposureCompensation`, `EnvironmentColor`, `FogEnabled`, `FogColor`, `FogStart`, and `FogEnd`. These values are extracted for rendering; backend shader APIs and GPU handles are not Luau members. A `Sky` or `MeshPart` needs valid catalog assets for its intended visual result.
+
+The rendered result can lag live authoritative state by a publication/frame boundary. An unmerged renderer branch does not add a current script API here.

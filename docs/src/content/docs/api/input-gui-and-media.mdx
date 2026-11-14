@@ -1,0 +1,36 @@
+---
+title: Input, GUI, and media
+description: Local player and actions, screen controls, asset lookup, sound, and animation tracks.
+---
+
+## Player and input ownership
+
+`Players` owns gameplay `Player` lifetimes in the current DataModel. `Players.LocalPlayer` is nullable; it exists in a suitable local runtime, not an authoring DataModel or every server context. `Players:GetPlayers() -> {Player}` returns current players in deterministic `PlayerId` order. `Player.Character` is nullable, with `CharacterAdded`, `CharacterRemoving`, and `CharacterSpawnRequested` signals and `LoadCharacter()`, `ResetCharacter()`, and `RemoveCharacter()` methods. `PlayerId` is gameplay identity, not a connection slot or an authentication claim. `Players.CharacterAutoLoads`, `DefaultControllerEnabled`, and `DefaultCameraEnabled` configure shipped policy.
+
+`UserInputService` is local physical device state. `InputBegan(InputObject, Handled)`, `InputChanged`, and `InputEnded` expose device events; `IsKeyDown(KeyCode)`, `GetKeysPressed()`, `GetMouseDelta()`, `GetMouseLocation()`, and `GetLastInputType()` read local state. Device availability and focus matter. Do not use this service on a headless server to infer a player's intent. The declaration also lists touch and device signals, but host hardware/support determines whether they fire.
+
+`InputService` owns persistent `InputContext`, `InputAction`, and `InputBinding` definitions and a local derived evaluator. `AddContext(Name, Options?) -> InputContext` validates and parents a context; `GetRuntimeSnapshot() -> table` returns bounded diagnostics. `ActionMap` is a compatibility facade over that evaluator:
+
+| API | Parameters / result | Notes |
+| --- | --- | --- |
+| `BindKey` | `ActionName, KeyCode, Scale, Priority, Consume` → positive binding ID | Keyboard or normalized gamepad button. |
+| `BindMouseButton` | `ActionName, InputType, Scale, Priority, Consume` → ID | Supported mouse buttons only. |
+| `BindPointerDelta` | `ActionName, Scale: Vector2, Priority, Consume` → ID | Frame-accumulated relative pointer motion. |
+| `Unbind` / `UnbindAction` | ID → boolean / name → `()` | Removes facade-owned bindings; authored definitions remain. |
+| `IsDown` / `GetValue` / `GetVector` | action name → boolean / number / `Vector2` | Local digital, scalar, or transient vector state. |
+
+`ActionBegan(Name)`, `ActionChanged(Name, Value: Vector2)`, and `ActionEnded(Name)` report semantic transitions. Focus loss clears active actions; pointer vectors reset at the frame boundary. The facade permits up to 128 action names and 512 bindings, with 64 UTF-8 bytes per name. Canonical authored input graph limits differ. Mutating bindings requires `MutateDataModel`. Shipped modules supply default move, jump, look, and interaction bindings, but game-authored policy may replace them. See `devdocs/CurrentArchitecture/PlayerRuntime.md` and `InputActions.md` for conflict and consumption rules.
+
+## Screen GUI
+
+`ScreenGui` is a screen-space root; `Frame`, `TextLabel`, `TextButton`, `TextBox`, `ImageLabel`, and `ScrollingFrame` are concrete GUI classes. `GuiObject` defines `Position` and `Size` as `UDim2`, plus `AnchorPoint`, background, visibility, clipping, ordering, focus, interaction, and input-sink properties. `AbsolutePosition` and `AbsoluteSize` are read-only calculated values. `TextButton` inherits text and GUI properties; its defaults make it interactive and selectable. `GuiBase2d.Activated`, `Focused`, `FocusLost`, `PointerDown`, `PointerUp`, `PointerEnter`, `PointerLeave`, and `PointerMoved` are routed signals. `GuiObject:CaptureFocus()`, `ReleaseFocus()`, `CapturePointer(PointerId)`, and `ReleasePointer(PointerId)` request or release local input ownership; they do not grant system input privileges.
+
+The GUI runtime resolves screen roots against viewport and safe area, routes pointer events, and publishes render data. A server can author replicated GUI state, but activation and device focus are local presentation facts. The shipped interaction overlay in `assets/runtime/DefaultInteractionRuntime.luau` is a useful real usage reference.
+
+## Assets, animation, and sound
+
+`AssetService:ResolveAsset(Reference: string) -> string?` returns the same valid `asset://` or `builtin://` reference when currently available, otherwise nil. `IsAssetAvailable(Reference) -> boolean` checks the valid last-known-good catalog entry. `GetAssetMetadata(Reference) -> table?` returns a bounded semantic copy with common fields such as `Reference`, `AssetId`, `Kind`, `State`, `ContentRevision`, and `Available`; kind-specific fields can include dimensions, mesh counts, audio duration, or animation duration/track count. A syntactically invalid or unknown reference returns nil for `ResolveAsset` and `GetAssetMetadata`, or false for `IsAssetAvailable`. A non-string argument or reference longer than 256 bytes raises a script error. These calls do not expose raw asset bytes or filesystem paths. Use the result to decide whether to attach a `MeshPart.Mesh`, `ImageLabel.Image`, `Sound.SoundId`, or animation clip.
+
+`Animator:LoadAnimation(AnimationId: string) -> AnimationTrack` requires a strict available Animation asset. The `Animator` must be a direct child of a live `MeshPart` with a compatible skinned mesh. Missing assets, incompatible skeletons, and track capacity errors raise script errors; wrap optional content loads with `pcall`. The returned `AnimationTrack` is runtime-only userdata, with `Play()`, `Pause()`, `Resume()`, `Stop()`, `AdjustSpeed()`, and `AdjustWeight()`, plus `Duration`, `Ended`, `Looped`, `PlaybackState`, `RootMotionEnabled`, `Speed`, `TimePosition`, and `Weight`. `Speed` is finite 0–16; `Weight` is finite 0–1. Destroying the owner invalidates retained tracks. Clips and tracks are not themselves persisted Instances.
+
+`Sound` is an Instance with `Play()`, `Pause()`, `Resume()`, `Stop()`, `Ended`, and authored audio properties. Playback is a runtime voice; saving the Instance does not save an active voice or its device handle. `Sound` and animation content availability may vary by packaged asset catalog. For an optional clip, inspect metadata then handle `LoadAnimation` failure without assuming availability guarantees every compatibility condition.

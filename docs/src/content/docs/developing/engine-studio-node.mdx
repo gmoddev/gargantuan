@@ -1,0 +1,24 @@
+---
+title: Engine, Studio, and Node
+description: Current cross-repository ownership and developer entry points.
+---
+
+Gargantuan spans separate owners. This page pins Engine integrated `origin/main` at `2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f` and the Studio `origin/main` ref inspected at `6ae8f3dc427bc5221e978ae627eab6224e5ccea6` on 2026-11-14. The local Studio checkout was older (`23bc08a87be25f7f84a9513fe0a9efb6402f0460`, 29 commits behind its remote); the local Node checkout was `f4440423c0701ff396f589fd51b6ce41edc63539` with dirty integration files. These are separate source states, not one qualified executable.
+
+| Owner | Current responsibility | Boundary |
+| --- | --- | --- |
+| [Engine](https://github.com/gmoddev/gargantuan) | Authoritative `DataModel`, schema, mutation/history, project persistence, assets, runtime, game networking, and versioned EditorHost | Studio receives DTOs, stable IDs, and pixels, never engine pointers or DataModel authority. |
+| [Studio](https://github.com/GantriaEngine/gargantuan-studio) | Editor application, document and source buffers, selection, commands, docking, and presentation | LUI is the primary UI framework; Luau owns workflows, the Host owns windows/processes/IPC/frame lifetimes. Commits return through EditorHost. |
+| [Node](https://github.com/gmoddev/gargantuan-node) | Private hosted discovery/authentication/platform services and optional immutable package content delivery | Node is server infrastructure. It cannot mutate the per-frame game world or grant client content authority. |
+
+## Authoring path
+
+Studio launches an Engine EditorHost child and negotiates the bounded, versioned local protocol. The Engine opens or creates the project, freezes schema, returns snapshots, then publishes ordered journal changes. Studio reconciles a document projection and submits revision-aware commands; Engine owns the accepted mutation, authoring history, and saved revision. Local Play is an explicit isolated runtime from current in-memory state, with separate scope and identity. See [EditorHost](./editor-host/) and the [Studio owner architecture](https://github.com/GantriaEngine/gargantuan-studio/blob/main/ARCHITECTURE.md).
+
+Source tabs hold local drafts until `SetScriptSource` commits against the expected `SourceVersion`; text is not a generic replicated property. Project dirty state derives from Engine authoritative versus persisted revision. Engine Undo/Redo traverses engine history and Studio reconciles the resulting journal; text editor undo is local to the buffer. Asset import and catalog persistence belong to the Engine project; Studio presents selection, import, and references through bounded commands. Engine `SourceMount` confines project-relative FileLink and asset-source reads; it is a compatibility importer, not a general two-way external sync service. Third-party plugin work and generalized external source synchronization have separate trust and lifecycle contracts and must not be assumed from first-party tools.
+
+The Studio `origin/main` tree points to `experiments/LuiStudio` as the active LUI application. Its own [README](https://github.com/GantriaEngine/gargantuan-studio/blob/main/README.md), [LUI document contract](https://github.com/GantriaEngine/gargantuan-studio/blob/main/devdocs/CurrentArchitecture/LuiDocuments.md), and [accepted migration](https://github.com/GantriaEngine/gargantuan-studio/blob/main/devdocs/AcceptedArchitecture/LuiPrimaryMigration.md) own exact build, launch, qualification, and feature status. The frozen Avalonia implementation is historical; its surviving documents and the older local checkout do not define the primary UI. The [LUI mainline native receipt](https://github.com/GantriaEngine/gargantuan-studio/blob/main/devdocs/Validation/MainlineNative20261107.json) is source-bound; physical input, IME, gameplay and display latency remain outside those native UI receipts.
+
+## Runtime content path
+
+An official server can choose a local or private Node content provider. Both provide immutable package bytes to the same Engine validation, detached preparation, and authoritative admission path. Content availability does not choose peer relevance or 3J structural publication. The Node [ContentStreaming v1 contract](https://github.com/gmoddev/gargantuan-node/blob/master/docs/content-streaming-v1.md) owns its gRPC method, tenant/capability, filesystem provider, and provider-failure details. Engine owns package identity, residency, live Instances, and downstream networking. See [current networking](./current-networking/) for qualification limits.

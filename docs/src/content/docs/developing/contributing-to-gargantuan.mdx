@@ -1,89 +1,61 @@
 ---
 title: Contribute to Gargantuan
-description: Guide for contributing changes to Gargantuan.
+description: Ownership, conventions, review and evidence requirements.
 ---
 
-We have a [code of conduct](./code-of-conduct) that we all must follow. Be
-polite to everyone. If you are not in your best day, take a deep breath and try
-again.
+Read the [code of conduct](../code-of-conduct/), authoritative
+[contribution policy](../../meta/agents/), [architecture index](../../../../../docs/architecture/README.md)
+and [core invariants](../../../../../docs/invariants/Core.md). AI assistance is
+allowed; contributors remain responsible for explaining and validating results.
 
-## Before You Start
+## Find the owner
 
-### General
+| Paths | Responsibility |
+| --- | --- |
+| `src/classes`, `src/services`, `include/gargantuan` | Native Instance, service and boundary implementation |
+| `assets/classes`, `assets/services`, `tools/classgen.luau` | Canonical declarations and generated reflection |
+| `src/runtime`, `src/reflection` | Identity, mutation, journal, jobs and schema lifecycle |
+| `src/scripting`, `assets/runtime`, `assets/stdlib` | Luau integration and Engine-shipped policy |
+| `src/render`, `src/physics`, `src/network` | Consumer and backend boundaries |
+| `src/editor` | Engine-owned EditorHost protocol and authoring state |
+| `tests`, `.github/workflows` | Regression, workloads and qualification contracts |
+| `docs/src/content/docs`, `devdocs`, `docs/adr` | User guides, contracts and decisions |
 
-- There is a separate guide for [working on Gargantuan.](../working-on-gargantuan)
-- Do not use AI to generate issue or PR descriptions. You will get banned for
-  spam without review. We want contributions from people, not bots.
-- Likewise, do not use AI to generate documentation, models, artwork, etc. AI
-  usage must be constrained to only code.
+The [Engine, Studio and Node map](../engine-studio-node/) identifies repository
+owners. Start with existing issues and accepted decisions for substantial
+architecture work. Check [known issues](../../../../../KNOWN_ISSUES.md) before
+claiming a fix.
 
-### Codebase Overview
+## Coding and change conventions
 
-Gargantuan comprises multiple components:
+Use **PascalCase** for applicable new identifiers. Preserve existing public API
+spelling and established local conventions; `self = setmetatable({}, ...)` is
+the narrow project exception. Name get-or-create helpers `GetFolder` or
+`GetObj`. Prefer log prefixes such as `[Combat:MedicalSys]`.
 
-- `classes` and `services`, which implement instance classes with the `Instance` base class.
-- `datatypes`, which implement the runtime types including the `Instance`.
-- `scripting`, which provides the runtime alongside `Userdata` and the global libraries in Luau.
-- `reflection`, which provides registries for instance classes and enums.
-- `render`, which implements the `Renderer` and related classes.
-- Other components are self-explanatory.
+Preserve Main-owned mutation, generation-safe identity, immutable publication,
+capability checks, bounded failure and subsystem ownership. Explain non-obvious
+invariants in useful comments. New authority, protocols or registries require
+explicit architectural review. Update current contracts and usually an ADR
+alongside architecture changes.
 
-### Issues
+Use isolated worktrees for concurrent campaigns. Preserve unrelated edits and
+stage explicit intended paths. Follow cooperative worker policy for heavy
+builds; documentation-only checks do not reserve native workers.
 
-- Search existing issues before opening a new bug report or feature request.
-- When creating an issue, please be as specific as possible.
-- Please do not create duplicate issues. Team Fireworks reserves the right to
-  ban you for repeatedly wasting our time through ignorance.
+## Verify and submit
 
-### Contributions
+Use the [build guide](../working-on-gargantuan/). Run focused tests covering
+behavior, rejection, bounds and lifecycle. Required native CI runs the complete
+configured matrix. Documentation checks cover links, navigation, source paths,
+declarations and example syntax.
 
-- For non-trivial changes, start with an issue and wait until a maintainer
-  confirms the bug or agrees that the feature should be implemented.
-- If an issue you want to work on is stale, mention an active maintainer and
-  show your intent to contribute. Please don't waste time on features that will
-  not be implemented into Gargantuan.
-- To make code review and CI easier, please keep changes minimal and focused.
-  You may break up large changes into multiple pull requests. [Please don't be
-  like Spook.](https://github.com/teamfireworks/gargantuan/pull/9)
+Performance claims need exact source/binary/fixture identities, configuration,
+raw distributions and the existing acceptance contract. Headless or simulated
+PASS does not certify a physical GPU, provider deployment or F1. Keep failed
+measurements under their original identity.
 
-## Code Style & Conventions
-
-- [Follow conventional commits.](https://www.conventionalcommits.org/en/v1.0.0/)
-- [Don't write comments. Code should be self-documenting, and Gargantuan already has API documentation.](https://www.youtube.com/watch?v=Bf7vDBBOBUA&t=332s)
-- Proofread surrounding code before submitting.
-- Naming conventions:
-  - `camelCase` for local variables and parameters.
-  - `LOUD_SNAKE_CASE` for constants.
-  - `PascalCase` for everything else.
-
-## Implementation Guides
-
-### Implementing New Data Types
-
-1. Add a header file and implement a class using the `G_USERDATA_DECL` macros.
-2. Add a source file and define the userdata with the `G_USERDATA_IMPL` macro.
-3. Implement your data type.
-4. Open `ScriptEngine`'s header file to add a matching `OpenLib` static function.
-5. Implement a `Lib` and the matching `OpenLib` function for your data type.
-6. Write unit tests & polish!
-
-### Implementing New Instances
-
-1. Add a header file and implement a class that extends the `Instance` class; include `G_INSTANCE_DECL` in the instance's body.
-2. Add a source file and define the instance with the `G_INSTANCE_IMPL` macro.
-3. Implement your instance with whatever modules you need.
-4. Write unit tests & polish!
-
-## Pull Requests
-
-Before opening a pull request, make sure that:
-
-- The change is tied to an approved feature request or confirmed bug.
-- The branch builds and runs without issues and has been thoroughly tested.
-  Otherwise, the pull request is marked as draft.
-- The pull request description clearly explains the change scope. The
-  description includes visuals (screenshots, videos) if applicable.
-- You mention which platforms you tested on.
-- The branch is rebased on main, or at least the latest Chromium milestone.
-- Small and focused pull requests are much easier to review. Please split your
-  changes into several follow-up PRs if necessary.
+Describe concrete behavior, ownership/lifecycle impact, API/wire compatibility,
+security/capabilities, affected decisions/docs, tests and limits. Draft
+incomplete or unqualified work. This documentation campaign requires the pending
+Engine integration to be reconciled at its exact `main` SHA before merge.

@@ -8,7 +8,7 @@ Gargantuan through the public, versioned EditorHost protocol instead of linking
 against private engine internals.
 
 The accepted Studio product model is maintained in the private Studio-owned
-[Gargantuan Studio Authoring and UX Architecture](https://github.com/gmoddev/gargantuan-studio/blob/docs/studio-authoring-ux-architecture/devdocs/AcceptedArchitecture/StudioAuthoringAndUXArchitecture.md).
+[Gargantuan Studio Authoring and UX Architecture](https://github.com/GantriaEngine/gargantuan-studio/blob/docs/studio-authoring-ux-architecture/devdocs/AcceptedArchitecture/StudioAuthoringAndUXArchitecture.md).
 It defines resource-bound documents, first-party tools, selection, settings and
 future TestSession boundaries; acceptance is not feature completion. See the
 [public Studio checkpoint](../roadmap/#studio-authoring-checkpoint) for delivered,
@@ -88,11 +88,14 @@ ObjectIds remain separate from authoring identity; this read operation grants no
 authoring or server gameplay authority. Clients must capability-gate the method
 and discard stale session/scope responses.
 
-The handshake advertises supported viewport transports. On Windows, Studio can
-explicitly negotiate shared-memory ring version 1 for RGB8 frames. The ring has
-three fixed-capacity slots; EditorHost overwrites old slots instead of waiting
-or growing memory, and Studio consumes the newest complete frame. Platforms
-without that capability use the bounded Base64 fallback.
+The handshake advertises supported viewport transports. On supported Windows
+hosts, `LatestFrameMailbox` version 2 with BGRA8 frames is the primary
+latest-frame path. Studio negotiates it explicitly; EditorHost owns the mapping
+and frame lifetime. `SharedMemoryRing` version 1 with RGB8 frames remains a
+compatibility transport with three fixed-capacity slots that overwrite older
+frames. Hosts without a shared-memory capability use the bounded Base64
+fallback. Clients must select an advertised transport, version, and pixel
+format rather than assuming either mapping is available.
 
 Opening a project does not initialize rendering, execute gameplay scripts, step
 the simulation, or synchronize `FileLink` objects. Unknown protocol versions,
@@ -125,11 +128,12 @@ frame sequence/dimensions, and picked stable IDs. Shared-memory names and
 handles, RGB buffers, renderer objects, and IPC streams remain in the native
 host layer.
 
-The long-term Studio UI is intended to be Luau-authored. A small native shell
-will own process lifecycle, IPC, windows, viewport presentation, filesystem
-dialogs, and Luau runtime bootstrap. Explorer, Properties, selection, commands,
-settings, and most workflows should consume explicit `DocumentService`,
-`SelectionService`, `ViewportService`, and `CommandService` APIs from Luau.
+The Studio `origin/main` application uses LUI as its primary UI framework.
+Luau owns editor workflows and document/buffer policy; the Studio Host owns
+windows, process lifecycle, IPC, frame transport, and native resource lifetimes.
+See the [cross-repository ownership map](./engine-studio-node/) and the
+[Studio-owned current architecture](https://github.com/GantriaEngine/gargantuan-studio/blob/main/ARCHITECTURE.md)
+for exact LUI source and qualification pins.
 Current Studio supports schema-constrained object-reference editing through
 the authoritative property path. Minimal Play sessions are
 implemented with a separate runtime DataModel and VM; multiplayer, debugging,
@@ -137,8 +141,8 @@ live-edit synchronization, and applying runtime changes back remain deferred.
 Structural editing, grouped transactions, Undo/Redo, and dedicated Script/
 ModuleScript Source authoring are implemented. Save and Save As persist an
 engine-captured project snapshot; Studio never serializes its document cache.
-The current private proof now uses an Avalonia C# host to bootstrap a restricted
-Studio-domain Luau VM. The public boundary exposes only stable IDs, schema,
+The older Avalonia C# host is frozen historical Studio source, not the primary
+application. The public boundary exposes only stable IDs, schema,
 snapshot/journal data, structured commands, and viewport pixels. Script domains
 (`Core`, `PreRun`, `Studio`, `Server`, and `Client`) are contexts rather than a privilege
 ordering; native dispatch authorizes explicit capabilities. Studio's baseline
@@ -161,7 +165,7 @@ snapshot/journal version 6, and the authoritative mutation gateway. Project defi
 by the engine's bounded PreRun candidate lifecycle. Studio receives neither
 the `DefineSchema` capability nor the registration facade.
 
-Script Source is saved project-v4 state but is not an ordinary replicated
+Script Source is saved in the current project Instance format (v5) but is not an ordinary replicated
 property. `GetScriptSource` and token-checked `SetScriptSource` require the
 trusted EditorHost grant and a live project-scoped ObjectId. Journal/snapshot
 traffic carries only the transient SourceVersion invalidation token; source

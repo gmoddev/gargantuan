@@ -1,0 +1,104 @@
+---
+title: Physics
+description: Integrated rigid and deformable physics ownership and public boundaries.
+---
+
+This page describes integrated main
+`2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`. `WorldRoot` coordinates two
+separate engine-owned worlds at Main-domain safe points:
+
+```text
+BasePart / constraints -> PhysicsWorld -> IPhysicsBackend -> Box3D adapter
+Cloth / RubberBody    -> SoftBodyWorld -> ISoftBodyBackend -> CPU XPBD
+```
+
+The rigid backend owns Box3D bodies, shapes, joints, and native handles. The
+deformable backend owns solver particles and jobs. Neither native representation
+is an Instance identity or a renderer contract. `PhysicsBodyId`,
+`PhysicsConstraintId`, and `SoftBodyId` are separate generation-safe values;
+`WorldRoot` maps them to live semantic objects. See the
+[physics backend contract](../../../../../devdocs/CurrentArchitecture/PhysicsBackend.md),
+[`WorldRoot.hpp`](../../../../../include/gargantuan/classes/WorldRoot.hpp), and
+[Core invariants](../../../../../docs/invariants/Core.md).
+
+## Rigid bodies and safe points
+
+`WorldRoot` builds neutral descriptions from committed Part state. Setters mark
+dirty intent; before a query or fixed step, Main applies changes in stable
+`ObjectId` order. Dynamic motion returns as owned post-step results and is
+published through the ordinary authoritative `SetCFrame` path with a guard
+against feedback into the backend. The engine steps at 60 Hz with four solver
+substeps and at most four fixed steps per frame. Contact and sensor transitions
+become `Touched`/`TouchEnded` only after generation-safe resolution to live
+Parts. Result and event collections have explicit caps; truncation is reported.
+
+Supported Part primitives are box, ball, cylinder, wedge, and corner wedge.
+`MeshPart` has inherited box collision by default. `StaticMesh` uses a separate
+canonical collision asset only while anchored; a dynamic request falls back to
+box. Native mesh chunks are bounded and shared by asset revision, with
+per-world residency accounting. Render mesh triangles are not collision input.
+See the [canonical collision contract](../../../../../devdocs/CurrentArchitecture/AssetCollisionFoundation2B.md)
+and [known issues](../../../../../KNOWN_ISSUES.md).
+
+Authored body controls include static/kinematic/dynamic mode, groups and masks,
+damping, gravity scale, sleep, and optional moving-body CCD. Runtime APIs set
+velocities/awake state or queue forces, torques, and impulses for the next fixed
+step. The existing Box3D default sweeps fast dynamic bodies against static
+bodies; the opt-in flag extends a bounded moving-target policy. Teleports are
+not swept, and the policy is not a general projectile guarantee. Exact semantics
+are in [body controls](../../../../../devdocs/CurrentArchitecture/PhysicsFoundationBodyControls.md)
+and [CCD policy](../../../../../devdocs/CurrentArchitecture/PhysicsFoundationContinuousCollision.md).
+
+## Constraints and queries
+
+Legacy `WeldConstraint` and attachment-authored `JointConstraint` resolve their
+endpoints into neutral body IDs. The latter supports ball socket, hinge, slider,
+and distance joints with validated limit, motor, and spring combinations.
+Creation/replacement happens at the pre-step safe point; failure retains the
+previous coherent joint. A world admits at most 4,096 native joints. Legacy
+Weld currently joins centers rather than preserving an authored endpoint
+offset; see [KI-PHY-001](../../../../../KNOWN_ISSUES.md#ki-phy-001-legacy-weldconstraint-does-not-capture-endpoint-offsets)
+and the [constraint contract](../../../../../devdocs/CurrentArchitecture/PhysicsFoundationConstraints.md).
+
+`Workspace` exposes `Raycast`, `SphereCast`, `CapsuleCast`, `BoxCast`,
+`GetPartsInSphere`, `GetPartsInCapsule`, `GetPartsInBox`, and the bounded
+`MoveKinematicCapsule` primitive. Queries are synchronous after pending body
+changes flush. Casts translate a fixed orientation and ignore initial overlap;
+overlap calls cover initial intersections. Filters resolve semantic Instance
+roots into neutral body IDs, and results are copied, bounded, and resolved back
+to live same-world Parts. Only collidable rigid bodies participate. Query APIs,
+ordering, and hard limits are specified in
+[Physics Query Foundation 1](../../../../../devdocs/CurrentArchitecture/PhysicsQueryFoundation1.md)
+and implemented by [`WorldRoot.cpp`](../../../../../src/classes/WorldRoot.cpp)
+and [`Box3DAdvancedQueries.inl`](../../../../../src/physics/Box3DAdvancedQueries.inl).
+Controller movement policy stays in engine-shipped Luau.
+
+## Deformable simulation
+
+The sibling CPU XPBD backend simulates fixed-topology cloth and gameplay rubber
+with materials, quality tiers, and attachment pins. `WorldRoot` snapshots rigid
+primitive colliders after the Box3D step. XPBD workers consume those immutable
+snapshots, one job per independent body, then Main merges generation- and
+revision-checked owned results in identity order. Admission, queued result
+bytes, vertices, constraints, attachments, and colliders have hard bounds;
+backpressure and stale results are visible in step diagnostics. Solver storage
+never enters `RenderPublication`: only copied mesh topology and vertex updates
+cross into the [render boundary](../render-extraction/).
+
+`GetDeformableInfo`, `GetDeformableVertex`, and `GetSoftBodyStepInfo` expose
+bounded read-only inspection without writable particles. The rigid-to-soft
+collision bridge is one-way and supports rigid primitives; cloth/rubber do not
+push rigid bodies. Soft/soft contact, cloth self-collision, topology tearing,
+arbitrary-mesh FEM, and soft query participation are outside this integrated
+contract. See [Soft-body Foundation 1](../../../../../devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation.md),
+[Foundation 2](../../../../../devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation2.md),
+and [soft control](../../../../../devdocs/CurrentArchitecture/PhysicsFoundationSoftControl.md).
+The Jolt comparison is a proposed experiment, not an integrated backend.
+The [November 7 expansion inventory](../../../../../devdocs/Validation/PhysicsFoundationExpansion20261107.json)
+recorded final-source hosted qualification as pending at its checkpoint; API
+presence here is not a new platform qualification result.
+
+Start verification with
+[`PhysicsBackendTests.cpp`](../../../../../tests/PhysicsBackendTests.cpp),
+[`SoftBodyPhysicsTests.cpp`](../../../../../tests/SoftBodyPhysicsTests.cpp),
+and [`PhysicsImportedMeshTests.cpp`](../../../../../tests/PhysicsImportedMeshTests.cpp).

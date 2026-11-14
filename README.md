@@ -23,7 +23,10 @@ Gargantuan is not intended to be a drop-in Roblox runtime. Familiar names and co
 
 ## Current Status
 
-Gargantuan is still experimental, but it is beyond a rendering or scripting proof of concept. The current engine and Studio support an end-to-end local creator loop:
+Gargantuan is experimental. Engine implements the authoring and isolated Play
+boundaries for this local creator loop. Running it in Studio requires a
+source-matched Native Host build and Studio's own exact-source launch
+qualification; independent repository heads are not a combined release:
 
 ```text
 Create/Open Project
@@ -91,22 +94,24 @@ For the current invariant and subsystem map, start with [`AICONTEXT.md`](./AICON
 
 ## Gargantuan Studio
 
-[Gargantuan Studio](https://github.com/gmoddev/gargantuan-studio) is a separate C#/Avalonia editor application. It does not link against private engine internals; it launches the public EditorHost and communicates through its versioned local protocol.
+[Gargantuan Studio](https://github.com/GantriaEngine/gargantuan-studio) is a separate
+editor whose primary UI is LUI with Luau-owned workflows. Its Native Host owns
+windows, processes, IPC and frame lifetimes. Engine's public EditorHost owns
+authoritative project state, source commits, revisions, persistence and Undo/Redo.
+Studio does not link against private engine internals.
 
-The current Studio supports, among other things:
+Studio presents project, document, source, asset and viewport tools through
+bounded commands and non-authoritative projections. Its owning
+[architecture](https://github.com/GantriaEngine/gargantuan-studio/blob/main/ARCHITECTURE.md)
+and [LUI integration record](https://github.com/GantriaEngine/gargantuan-studio/blob/main/experiments/LuiStudio/README.md)
+define workflow support, source pins and UI qualification limits. Avalonia is
+a frozen historical reference.
 
-- New/Open/Save/Save As;
-- authoritative dirty state, Undo, and Redo;
-- Explorer and schema-driven Properties editing;
-- create/delete/duplicate/reparent operations;
-- Script and ModuleScript source editing with Luau diagnostics;
-- viewport rendering, picking, orbit/pan/zoom, focus, and Move/Rotate/Scale gizmos;
-- dockable/floating editor workspaces and persisted per-user layouts;
-- Assets and Output tools;
-- isolated local Play/Stop sessions;
-- an opt-in bounded local bridge for Gargantuan MCP tooling.
-
-Studio maintains a non-authoritative document projection and submits edits back through the engine's normal mutation path.
+This reconstruction targets integrated Engine main
+`2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`. Renderer Foundations 3–5 and Runtime 6
+remain pending integration. Read the
+[source reconciliation report](devdocs/DocumentationReconstruction/AccuracyReport.md)
+before combining independently evolving Engine, Studio and Node builds.
 
 ## Related Repositories
 
@@ -115,7 +120,7 @@ The wider Gargantuan project is split across several repositories:
 | Repository | Purpose |
 | --- | --- |
 | [`gargantuan`](https://github.com/gmoddev/gargantuan) | Core engine, runtime, EditorHost, networking, packaging, rendering and physics boundaries |
-| [`gargantuan-studio`](https://github.com/gmoddev/gargantuan-studio) | C#/Avalonia authoring environment and Studio-side tooling boundary |
+| [`gargantuan-studio`](https://github.com/GantriaEngine/gargantuan-studio) | LUI authoring environment, Native Host and Studio-side tooling boundary |
 | [`gargantuan-node`](https://github.com/gmoddev/gargantuan-node) | Go backend-service foundation for Core discovery, DataStore, player authentication, entitlements and diagnostics |
 | [`gargantuan-mcp`](https://github.com/gmoddev/gargantuan-mcp) | Conservative MCP server for bounded Studio-backed inspection and opt-in authoring operations |
 | [`gargantuan-telemetry`](https://github.com/gmoddev/gargantuan-telemetry) | Optional replaceable Rust telemetry library and C ABI for crash/performance reporting |
@@ -151,14 +156,14 @@ The build produces the engine executable as well as separate player and packagin
 ```lua
 local Workspace = game:GetService("Workspace")
 
-local part = Instance.new("Part")
-part.Name = "RuntimePart"
-part.Size = Vector3.new(4, 1, 4)
-part.CFrame = CFrame.new(0, 3, 0)
-part.Anchored = true
-part.Parent = Workspace
+local Part = Instance.new("Part")
+Part.Name = "RuntimePart"
+Part.Size = Vector3.new(4, 1, 4)
+Part.CFrame = CFrame.new(0, 3, 0)
+Part.Anchored = true
+Part.Parent = Workspace
 
-print("created", part:GetFullName())
+print("[Gameplay:Spawn]", Part:GetFullName())
 ```
 
 Code executed during Play operates on the isolated runtime DataModel. Stopping the session destroys runtime-only state and returns Studio to the authoring project rather than merging gameplay mutations back into it.
@@ -217,6 +222,8 @@ The repository contains both current and historical/future design material. When
 
 Useful entry points:
 
+- [Developer reference](docs/src/content/docs/index.mdx) — getting started, architecture, APIs and subsystem guides;
+- [Inventory and reconciliation](devdocs/DocumentationReconstruction/AccuracyReport.md) — source pins, independent review and integration gate;
 - [`AICONTEXT.md`](./AICONTEXT.md) — compact architecture and subsystem routing map;
 - [`docs/architecture/README.md`](./docs/architecture/README.md) — architectural authority and documentation structure;
 - [`docs/invariants/Core.md`](./docs/invariants/Core.md) — core invariants;

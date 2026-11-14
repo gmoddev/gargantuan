@@ -1158,7 +1158,7 @@ Cleanup passes; failure evidence is retained. See the
 2026-10-06 native `c916b7d4f` qualifies both known wake defects: source
 regressions, native 13/13, fixed clean 14/14 and all six original hosted jobs
 pass (Windows 96+382 each, Linux 53 each, GNS 11 each; zero failures/skips).
-The independently challenged [post-wake decision](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-wake-decision-a-keep-f1-strict-2026-10-06)
+The independently challenged [post-wake decision](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-wake-decision-a--keep-f1-strict-2026-10-06)
 retains strict F1 unchanged, without a universal OS dispatch promise or
 retrospective attribution of the old gap. The exact-source package verifies;
 fresh Local32/Node32 and final gates remain required. **KI-006 OPEN; Foundation
