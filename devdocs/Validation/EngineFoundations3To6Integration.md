@@ -3,7 +3,8 @@
 This is the integration ledger, not a replacement for source-bound historical
 qualification. Fresh execution results are attached to the integration PR and
 its exact-source Actions artifacts. Pending, failed, blocked and unmeasured
-gates are not passes. A draft PR must remain unmerged while mandatory gates fail.
+gates are not passes. A draft PR must remain unmerged while mandatory core gates
+fail. Device-specific certification has the explicit scope defined below.
 
 ## Baseline and mainline reconciliation
 
@@ -45,6 +46,9 @@ The first four commits are the entire accepted deltas for each foundation:
 3. Apply the identical process for `<Renderer4> <Renderer5>`, then commit.
 4. Apply the identical process for `<Renderer5> <Runtime6>`, then commit.
 5. Commit the bounded integration compatibility, checks and ledger changes.
+6. Record the source-bound qualification evidence and explicit core versus
+   device-certification acceptance policy. This documentation-only follow-up
+   preserves the fifth commit's executable/build/test/shader source tree.
 
 The four intermediate trees each equal their respective accepted source plus
 the mainline README. Original attribution is retained in coauthor trailers;
@@ -93,7 +97,7 @@ transaction redesign.
 
 ## Acceptance gates and evidence ownership
 
-Required fresh qualification for the consolidated source:
+Mandatory fresh core qualification for the consolidated source:
 
 - Default exact-source manual Native CI: full Windows Release CTest, scripting,
   VM/GUI/input lifetime, networking/admission, physics, EditorHost, serialization,
@@ -105,13 +109,69 @@ Required fresh qualification for the consolidated source:
 - Native Linux ASan/UBSan/LSan and Renderer 5's sanitizer matrix, separately.
 - Exact-source Renderer 5 software Vulkan material/HDR/SDR, probe/shadow,
   depth/order, residency/recovery, real-Part eligibility and shader validation.
-- Physical AMD and NVIDIA: identify device, driver, binary/shader/fixture hashes;
-  run the retained correctness, lifetime and real-Part controls on each available
-  adapter. An unavailable required device is a named blocked gate. Software
-  Vulkan and AMD never qualify NVIDIA. Preserve raw failures and aborts.
+- Available physical default-path validation: identify device, driver and
+  binary/shader/fixture hashes, then run the retained correctness, lifetime and
+  real-Part controls. The available RX 7900 XT supplies the AMD evidence here.
+  Run the corresponding GTX controls when worker admission is available;
+  unavailable NVIDIA execution remains a named blocked per-device certification.
+  Software Vulkan and AMD never qualify NVIDIA. Preserve raw failures and aborts.
 - PR merge-checkout CI and the exact candidate's source markers/artifacts must
   be terminal green before supported merge; post-merge main CI and smoke remain
   separate obligations. No admin bypass or check weakening is authorized.
+
+### Explicit core integration acceptance policy
+
+The standing build contract in `ContinuousIntegration.md` defines Native/GNS
+required checks and places hardware GPU execution outside the headless gate.
+Renderer Foundation 3 distinguishes functional software Vulkan from matched
+physical hardware rankings. Renderer Foundation 5's earlier "both physical
+GPUs" pending statements are explicitly historical checkpoints, superseded by
+its recorded source-bound final evidence. Runtime 6's accepted disposition
+retains GTX real-Part qualification as blocked while qualifying its bounded
+implementation and keeping instancing opt-in. None establishes a standing fresh
+NVIDIA prerequisite for every core source integration. D03's separate physical/
+provider networking policy is not a renderer waiver.
+
+For this consolidation, core mainline acceptance requires all mandatory exact-
+source and PR CI above, complete Linux Release, renderer software/sanitizer
+validation, available AMD physical correctness, source equivalence and independent
+review, plus disposition of meaningful performance differences. A blocked NVIDIA
+lane does not prevent that scoped core merge. It does prevent any claim of fresh
+NVIDIA parity, performance, real-Part eligibility or device certification.
+Unchanged shader behavior and renderer defaults do not transform historical GTX
+receipts into current-source execution. Instancing remains opt-in; no unsupported
+feature, physical/provider release or universal-device claim is promoted.
+
+This is an explicit scope correction, reviewed independently against the user's
+"where required and available" and "or documented acceptance policy" directives.
+The first version of this ledger accidentally imposed a stronger fresh-both-
+adapters requirement than the existing core policy. That wording is superseded
+by this section; no actual result, threshold, required CI job or invariant changes.
+
+### Source-bound fifth-commit evidence
+
+The following fresh runs execute compatibility checkpoint
+`6e1197240eb107d1cc7b7eb904054858c378a4ab`; their identities are not relabeled
+as qualification of later documentation-only heads. Fresh final-head CI and
+receipts remain required. The integration PR retains original metadata, ZIP
+digests, source markers, raw samples, independent reviews and final disposition.
+
+| Checkpoint evidence | Result / boundary |
+| --- | --- |
+| GNS sanitizer run `43592337572` | 11/11 CTests, production admission matrix; exact source marker |
+| Full Linux Release run `43592342380` | 120/120 unfiltered, no failures/skips; both new distribution tests executed |
+| Native Linux sanitizer job in `43592335284` | 109/109 unfiltered, no failures/skips; exact source marker |
+| Renderer run `43592339907` | Software Vulkan, Windows package/focused tests and renderer sanitizers pass |
+| Physical RX 7900 XT | 13/13 correctness/lifetime cases, including HDR/SDR metrics and two ordered 4096-frame churn cycles; 16/16 matched draw-mode processes |
+| Windows core comparison `43592354376` | 66/66 process receipts; 50K dense publication 53.683 to 54.345 ms, adoption 1434.363 to 1472.850 ms, counts/checksums equal |
+| Linux core comparison `43592356339` | First cohort has 3–8% dense-path timing differences; no hot-path source change; normalized selected instructions match but linked layout differs |
+| Linux matched follow-up `43594510430` | Requested to investigate that first-cohort difference; preserve both cohorts regardless of result |
+| GTX execution | Not started: another campaign holds the cooperative worker lease; no inferred result |
+
+The selected unshadowed static AMD fixture still records 50,000 to 98 opaque
+world draws, with two additional non-world draws per frame. Dense 50K dynamic
+instancing regresses whole-frame tails; fewer draws do not promote the option.
+These are comparisons of modes of one executable, not source-revision speedups.
 
 Historical counts (Windows 160, Linux Release 118, Linux sanitizers 107, GNS 11)
 describe their original sources. New distribution tests may change current
